@@ -16,16 +16,19 @@ module {
     x86.mov ecx, 3
     x86.xor edx, edx
     x86.mov ebx, 8
+    x86.lea_func esi, [__destruct___ManagedMemory]
+    x86.mov rdi, rsi
+    x86.mov rdx, rdi
     x86.mov rcx, 32
-    x86.xor rdx, rdx
+    x86.mov r8, 1
     x86.call mm_alloc
     x86.mov [rbp-8], eax
-    x86.mov esi, [rbp-8]
-    x86.xor edi, edi
-    x86.mov [esi+0], edi
     x86.mov r8, [rbp-8]
-    x86.mov r9, 3
-    x86.mov [r8+8], r9
+    x86.xor r9, r9
+    x86.mov [r8+0], r9
+    x86.mov eax, [rbp-8]
+    x86.mov ecx, 3
+    x86.mov [eax+8], ecx
     x86.mov eax, [rbp-8]
     x86.xor ecx, ecx
     x86.mov [eax+16], ecx
@@ -33,8 +36,10 @@ module {
     x86.mov ecx, 8
     x86.mov [eax+24], ecx
     x86.xor eax, eax
+    x86.lea_func ecx, [__destruct___Array_i64]
+    x86.mov rdx, rcx
     x86.mov rcx, 16
-    x86.xor rdx, rdx
+    x86.mov r8, 2
     x86.call mm_alloc
     x86.mov [rbp-16], eax
     x86.mov eax, [rbp-16]
@@ -89,19 +94,46 @@ module {
     x86.mov eax, [rbp-40]
     x86.mov ecx, [rbp-16]
     x86.test ecx, ecx
-    x86.jz __destruct_nullguard_0
-    x86.call mm_decref_check
-    x86.test eax, eax
-    x86.jnz __destruct_skip_1
-    x86.mov ecx, [rbp-16]
-    x86.mov edx, [ecx+8]
-    x86.mov rcx, rdx
+    x86.jz __nonnull_skip_0
     x86.call mm_decref
-    x86.mov rcx, [rbp-16]
-    x86.call mm_free
-    x86.label __destruct_skip_1
-    x86.label __destruct_nullguard_0
+    x86.label __nonnull_skip_0
     x86.mov eax, [rbp-40]
+    x86.epilogue
+    x86.ret
+  }
+  func @__destruct___ManagedMemory(ptr: i64) {
+  entry:
+    x86.prologue stack_size=16
+    x86.mov [rbp-8], ecx
+    x86.mov eax, [rbp-8]
+    x86.mov ecx, [eax+16]
+    x86.xor edx, edx
+    x86.cmp ecx, edx
+    x86.je __destruct___ManagedMemory.skip_buf_0
+  free_buf_0:
+    x86.mov eax, [rbp-8]
+    x86.mov ecx, [eax+0]
+    x86.call mm_raw_free
+    x86.jmp __destruct___ManagedMemory.skip_buf_0
+  skip_buf_0:
+    x86.jmp __destruct___ManagedMemory.done
+  done:
+    x86.epilogue
+    x86.ret
+  }
+  func @__destruct___Array_i64(ptr: i64) {
+  entry:
+    x86.prologue stack_size=16
+    x86.mov [rbp-8], ecx
+    x86.mov eax, [rbp-8]
+    x86.mov ecx, [eax+8]
+    x86.mov [rbp-16], ecx
+    x86.test ecx, ecx
+    x86.jz __nonnull_skip_1
+    x86.call mm_decref
+    x86.label __nonnull_skip_1
+    x86.jmp __destruct___Array_i64.done
+  done:
     x86.epilogue
     x86.ret
   }

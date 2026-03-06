@@ -368,9 +368,9 @@ incref Inner #1 rc=2 [ownership-edge-cases.main]
 incref Outer #2 rc=1 [ownership-edge-cases.main]
 decref Inner #1 rc=1 [ownership-edge-cases.main]
 decref Outer #2 rc=0 [ownership-edge-cases.main]
-decref Inner #1 rc=0 [ownership-edge-cases.main]
+decref Inner #1 rc=0 [~Outer]
   free Inner #1
-free Outer #2 [ownership-edge-cases.main]
+  free Outer #2
 ```
 
 <!-- test: rc-nested-struct-deep-freed -->
@@ -407,11 +407,11 @@ alloc C #3 rc=0 [ownership-edge-cases.main]
 incref B #2 rc=1 [ownership-edge-cases.main]
 incref C #3 rc=1 [ownership-edge-cases.main]
 decref C #3 rc=0 [ownership-edge-cases.main]
-decref B #2 rc=0 [ownership-edge-cases.main]
-decref A #1 rc=0 [ownership-edge-cases.main]
+decref B #2 rc=0 [~C]
+decref A #1 rc=0 [~B]
   free A #1
-free B #2 [ownership-edge-cases.main]
-free C #3 [ownership-edge-cases.main]
+  free B #2
+  free C #3
 ```
 
 <!-- test: rc-field-overwrite-decrefs-old -->
@@ -455,8 +455,8 @@ incref Payload #3 rc=2 [Container.setPayload]
 decref Payload #1 rc=0 [ownership-edge-cases.main]
   free Payload #1
 decref Container #2 rc=0 [ownership-edge-cases.main]
-decref Payload #3 rc=1 [ownership-edge-cases.main]
-free Container #2 [ownership-edge-cases.main]
+decref Payload #3 rc=1 [~Container]
+  free Container #2
 decref Payload #3 rc=0 [ownership-edge-cases.main]
   free Payload #3
 ```
@@ -509,8 +509,8 @@ incref Val #5 rc=1 [ownership-edge-cases.main]
 decref Val #4 rc=1 [Holder.set]
 incref Val #5 rc=2 [Holder.set]
 decref Holder #2 rc=0 [ownership-edge-cases.main]
-decref Val #5 rc=1 [ownership-edge-cases.main]
-free Holder #2 [ownership-edge-cases.main]
+decref Val #5 rc=1 [~Holder]
+  free Holder #2
 decref Val #3 rc=0 [ownership-edge-cases.main]
   free Val #3
 decref Val #4 rc=0 [ownership-edge-cases.main]
@@ -551,14 +551,15 @@ incref ElementMemory #1 rc=1 [ownership-edge-cases.main]
 incref NodeArray #2 rc=1 [ownership-edge-cases.main]
 alloc Node #3 rc=0 [ownership-edge-cases.main]
 incref Node #3 rc=1 [ownership-edge-cases.main]
-alloc_in Buffer
 incref Node #3 rc=2 [NodeArray.push]
 decref Node #3 rc=1 [ownership-edge-cases.main]
 incref Node #3 rc=2 [NodeArray.get]
+incref Node #3 rc=3 [ownership-edge-cases.main]
 decref NodeArray #2 rc=0 [ownership-edge-cases.main]
-decref ElementMemory #1 rc=0 [ownership-edge-cases.main]
+decref ElementMemory #1 rc=0 [~NodeArray]
   free ElementMemory #1
-free NodeArray #2 [ownership-edge-cases.main]
+  free NodeArray #2
+decref Node #3 rc=1 [ownership-edge-cases.main]
 decref Node #3 rc=0 [ownership-edge-cases.main]
   free Node #3
 ```
@@ -595,21 +596,24 @@ incref ElementMemory #1 rc=1 [ownership-edge-cases.main]
 incref NodeArray #2 rc=1 [ownership-edge-cases.main]
 alloc Node #3 rc=0 [ownership-edge-cases.main]
 incref Node #3 rc=1 [ownership-edge-cases.main]
-alloc_in Buffer
 incref Node #3 rc=2 [NodeArray.push]
-alloc Node #5 rc=0 [ownership-edge-cases.main]
-incref Node #5 rc=1 [ownership-edge-cases.main]
-incref Node #5 rc=2 [NodeArray.push]
-transfer Node #5 rc=2 [NodeArray.remove]
+alloc Node #4 rc=0 [ownership-edge-cases.main]
+incref Node #4 rc=1 [ownership-edge-cases.main]
+incref Node #4 rc=2 [NodeArray.push]
+incref Node #4 rc=3 [NodeArray.remove]
+transfer Node #4 rc=3 [NodeArray.remove]
+decref Node #4 rc=2 [NodeArray.remove]
+incref Node #4 rc=3 [ownership-edge-cases.main]
 decref NodeArray #2 rc=0 [ownership-edge-cases.main]
-decref ElementMemory #1 rc=0 [ownership-edge-cases.main]
+decref ElementMemory #1 rc=0 [~NodeArray]
   free ElementMemory #1
-free NodeArray #2 [ownership-edge-cases.main]
-decref Node #5 rc=1 [ownership-edge-cases.main]
+  free NodeArray #2
+decref Node #4 rc=2 [ownership-edge-cases.main]
+decref Node #4 rc=1 [ownership-edge-cases.main]
 decref Node #3 rc=0 [ownership-edge-cases.main]
   free Node #3
-decref Node #5 rc=0 [ownership-edge-cases.main]
-  free Node #5
+decref Node #4 rc=0 [ownership-edge-cases.main]
+  free Node #4
 ```
 
 <!-- test: rc-container-overwrite-decrefs-old -->
@@ -642,22 +646,23 @@ incref ElementMemory #1 rc=1 [ownership-edge-cases.main]
 incref ItemArray #2 rc=1 [ownership-edge-cases.main]
 alloc Item #3 rc=0 [ownership-edge-cases.main]
 incref Item #3 rc=1 [ownership-edge-cases.main]
-alloc_in Buffer
 incref Item #3 rc=2 [ItemArray.push]
-alloc Item #5 rc=0 [ownership-edge-cases.main]
-incref Item #5 rc=1 [ownership-edge-cases.main]
+alloc Item #4 rc=0 [ownership-edge-cases.main]
+incref Item #4 rc=1 [ownership-edge-cases.main]
 decref Item #3 rc=1 [ItemArray.set]
-incref Item #5 rc=2 [ItemArray.set]
-incref Item #5 rc=3 [ItemArray.get]
+incref Item #4 rc=2 [ItemArray.set]
+incref Item #4 rc=3 [ItemArray.get]
+incref Item #4 rc=4 [ownership-edge-cases.main]
 decref ItemArray #2 rc=0 [ownership-edge-cases.main]
-decref ElementMemory #1 rc=0 [ownership-edge-cases.main]
+decref ElementMemory #1 rc=0 [~ItemArray]
   free ElementMemory #1
-free ItemArray #2 [ownership-edge-cases.main]
-decref Item #5 rc=1 [ownership-edge-cases.main]
+  free ItemArray #2
+decref Item #4 rc=2 [ownership-edge-cases.main]
+decref Item #4 rc=1 [ownership-edge-cases.main]
 decref Item #3 rc=0 [ownership-edge-cases.main]
   free Item #3
-decref Item #5 rc=0 [ownership-edge-cases.main]
-  free Item #5
+decref Item #4 rc=0 [ownership-edge-cases.main]
+  free Item #4
 ```
 
 <!-- test: rc-container-clear-decrefs-all -->
@@ -691,24 +696,23 @@ incref ElementMemory #1 rc=1 [ownership-edge-cases.main]
 incref ItemArray #2 rc=1 [ownership-edge-cases.main]
 alloc Item #3 rc=0 [ownership-edge-cases.main]
 incref Item #3 rc=1 [ownership-edge-cases.main]
-alloc_in Buffer
 incref Item #3 rc=2 [ItemArray.push]
+alloc Item #4 rc=0 [ownership-edge-cases.main]
+incref Item #4 rc=1 [ownership-edge-cases.main]
+incref Item #4 rc=2 [ItemArray.push]
 alloc Item #5 rc=0 [ownership-edge-cases.main]
 incref Item #5 rc=1 [ownership-edge-cases.main]
 incref Item #5 rc=2 [ItemArray.push]
-alloc Item #6 rc=0 [ownership-edge-cases.main]
-incref Item #6 rc=1 [ownership-edge-cases.main]
-incref Item #6 rc=2 [ItemArray.push]
 decref ItemArray #2 rc=0 [ownership-edge-cases.main]
-decref ElementMemory #1 rc=0 [ownership-edge-cases.main]
+decref ElementMemory #1 rc=0 [~ItemArray]
   free ElementMemory #1
-free ItemArray #2 [ownership-edge-cases.main]
+  free ItemArray #2
 decref Item #3 rc=0 [ownership-edge-cases.main]
   free Item #3
+decref Item #4 rc=0 [ownership-edge-cases.main]
+  free Item #4
 decref Item #5 rc=0 [ownership-edge-cases.main]
   free Item #5
-decref Item #6 rc=0 [ownership-edge-cases.main]
-  free Item #6
 ```
 
 <!-- test: rc-container-scope-exit-decrefs-elements -->
@@ -746,24 +750,23 @@ incref ElementMemory #1 rc=1 [ownership-edge-cases.fill]
 incref ItemArray #2 rc=1 [ownership-edge-cases.fill]
 alloc Item #3 rc=0 [ownership-edge-cases.fill]
 incref Item #3 rc=1 [ownership-edge-cases.fill]
-alloc_in Buffer
 incref Item #3 rc=2 [ItemArray.push]
+alloc Item #4 rc=0 [ownership-edge-cases.fill]
+incref Item #4 rc=1 [ownership-edge-cases.fill]
+incref Item #4 rc=2 [ItemArray.push]
 alloc Item #5 rc=0 [ownership-edge-cases.fill]
 incref Item #5 rc=1 [ownership-edge-cases.fill]
 incref Item #5 rc=2 [ItemArray.push]
-alloc Item #6 rc=0 [ownership-edge-cases.fill]
-incref Item #6 rc=1 [ownership-edge-cases.fill]
-incref Item #6 rc=2 [ItemArray.push]
 decref ItemArray #2 rc=0 [ownership-edge-cases.fill]
-decref ElementMemory #1 rc=0 [ownership-edge-cases.fill]
+decref ElementMemory #1 rc=0 [~ItemArray]
   free ElementMemory #1
-free ItemArray #2 [ownership-edge-cases.fill]
+  free ItemArray #2
 decref Item #3 rc=0 [ownership-edge-cases.fill]
   free Item #3
+decref Item #4 rc=0 [ownership-edge-cases.fill]
+  free Item #4
 decref Item #5 rc=0 [ownership-edge-cases.fill]
   free Item #5
-decref Item #6 rc=0 [ownership-edge-cases.fill]
-  free Item #6
 ```
 
 <!-- test: rc-insert-then-remove-no-leak -->
@@ -805,9 +808,12 @@ incref ElementMemory #1 rc=1 [ownership-edge-cases.main]
 incref EntryArray #2 rc=1 [ownership-edge-cases.main]
 alloc Entry #3 rc=0 [ownership-edge-cases.main]
 incref Entry #3 rc=1 [ownership-edge-cases.main]
-alloc_in Buffer
 incref Entry #3 rc=2 [EntryArray.push]
 decref Entry #3 rc=1 [ownership-edge-cases.main]
+alloc Entry #4 rc=0 [ownership-edge-cases.main]
+incref Entry #4 rc=1 [ownership-edge-cases.main]
+incref Entry #4 rc=2 [EntryArray.push]
+decref Entry #4 rc=1 [ownership-edge-cases.main]
 alloc Entry #5 rc=0 [ownership-edge-cases.main]
 incref Entry #5 rc=1 [ownership-edge-cases.main]
 incref Entry #5 rc=2 [EntryArray.push]
@@ -820,29 +826,45 @@ alloc Entry #7 rc=0 [ownership-edge-cases.main]
 incref Entry #7 rc=1 [ownership-edge-cases.main]
 incref Entry #7 rc=2 [EntryArray.push]
 decref Entry #7 rc=1 [ownership-edge-cases.main]
-alloc Entry #8 rc=0 [ownership-edge-cases.main]
-incref Entry #8 rc=1 [ownership-edge-cases.main]
-incref Entry #8 rc=2 [EntryArray.push]
-decref Entry #8 rc=1 [ownership-edge-cases.main]
-transfer Entry #3 rc=1 [EntryArray.remove]
+incref Entry #3 rc=2 [EntryArray.remove]
+transfer Entry #3 rc=2 [EntryArray.remove]
+decref Entry #3 rc=1 [EntryArray.remove]
+incref Entry #3 rc=2 [ownership-edge-cases.main]
+decref Entry #3 rc=1 [ownership-edge-cases.main]
 decref Entry #3 rc=0 [ownership-edge-cases.main]
   free Entry #3
-transfer Entry #5 rc=1 [EntryArray.remove]
+incref Entry #4 rc=2 [EntryArray.remove]
+transfer Entry #4 rc=2 [EntryArray.remove]
+decref Entry #4 rc=1 [EntryArray.remove]
+incref Entry #4 rc=2 [ownership-edge-cases.main]
+decref Entry #4 rc=1 [ownership-edge-cases.main]
+decref Entry #4 rc=0 [ownership-edge-cases.main]
+  free Entry #4
+incref Entry #5 rc=2 [EntryArray.remove]
+transfer Entry #5 rc=2 [EntryArray.remove]
+decref Entry #5 rc=1 [EntryArray.remove]
+incref Entry #5 rc=2 [ownership-edge-cases.main]
+decref Entry #5 rc=1 [ownership-edge-cases.main]
 decref Entry #5 rc=0 [ownership-edge-cases.main]
   free Entry #5
-transfer Entry #6 rc=1 [EntryArray.remove]
+incref Entry #6 rc=2 [EntryArray.remove]
+transfer Entry #6 rc=2 [EntryArray.remove]
+decref Entry #6 rc=1 [EntryArray.remove]
+incref Entry #6 rc=2 [ownership-edge-cases.main]
+decref Entry #6 rc=1 [ownership-edge-cases.main]
 decref Entry #6 rc=0 [ownership-edge-cases.main]
   free Entry #6
-transfer Entry #7 rc=1 [EntryArray.remove]
+incref Entry #7 rc=2 [EntryArray.remove]
+transfer Entry #7 rc=2 [EntryArray.remove]
+decref Entry #7 rc=1 [EntryArray.remove]
+incref Entry #7 rc=2 [ownership-edge-cases.main]
+decref Entry #7 rc=1 [ownership-edge-cases.main]
 decref Entry #7 rc=0 [ownership-edge-cases.main]
   free Entry #7
-transfer Entry #8 rc=1 [EntryArray.remove]
-decref Entry #8 rc=0 [ownership-edge-cases.main]
-  free Entry #8
 decref EntryArray #2 rc=0 [ownership-edge-cases.main]
-decref ElementMemory #1 rc=0 [ownership-edge-cases.main]
+decref ElementMemory #1 rc=0 [~EntryArray]
   free ElementMemory #1
-free EntryArray #2 [ownership-edge-cases.main]
+  free EntryArray #2
 ```
 
 <!-- test: rc-insert-in-middle-no-leak -->
@@ -878,30 +900,35 @@ incref ElementMemory #1 rc=1 [ownership-edge-cases.main]
 incref ValArray #2 rc=1 [ownership-edge-cases.main]
 alloc Val #3 rc=0 [ownership-edge-cases.main]
 incref Val #3 rc=1 [ownership-edge-cases.main]
-alloc_in Buffer
 incref Val #3 rc=2 [ValArray.push]
+alloc Val #4 rc=0 [ownership-edge-cases.main]
+incref Val #4 rc=1 [ownership-edge-cases.main]
+incref Val #4 rc=2 [ValArray.push]
 alloc Val #5 rc=0 [ownership-edge-cases.main]
 incref Val #5 rc=1 [ownership-edge-cases.main]
-incref Val #5 rc=2 [ValArray.push]
-alloc Val #6 rc=0 [ownership-edge-cases.main]
-incref Val #6 rc=1 [ownership-edge-cases.main]
-incref Val #6 rc=2 [ValArray.insert]
+incref Val #5 rc=2 [ValArray.insert]
 incref Val #3 rc=3 [ValArray.get]
-incref Val #6 rc=3 [ValArray.get]
+incref Val #3 rc=4 [ownership-edge-cases.main]
 incref Val #5 rc=3 [ValArray.get]
+incref Val #5 rc=4 [ownership-edge-cases.main]
+incref Val #4 rc=3 [ValArray.get]
+incref Val #4 rc=4 [ownership-edge-cases.main]
 decref ValArray #2 rc=0 [ownership-edge-cases.main]
-decref ElementMemory #1 rc=0 [ownership-edge-cases.main]
+decref ElementMemory #1 rc=0 [~ValArray]
   free ElementMemory #1
-free ValArray #2 [ownership-edge-cases.main]
+  free ValArray #2
+decref Val #3 rc=2 [ownership-edge-cases.main]
+decref Val #5 rc=2 [ownership-edge-cases.main]
+decref Val #4 rc=2 [ownership-edge-cases.main]
 decref Val #3 rc=1 [ownership-edge-cases.main]
-decref Val #6 rc=1 [ownership-edge-cases.main]
 decref Val #5 rc=1 [ownership-edge-cases.main]
+decref Val #4 rc=1 [ownership-edge-cases.main]
 decref Val #3 rc=0 [ownership-edge-cases.main]
   free Val #3
+decref Val #4 rc=0 [ownership-edge-cases.main]
+  free Val #4
 decref Val #5 rc=0 [ownership-edge-cases.main]
   free Val #5
-decref Val #6 rc=0 [ownership-edge-cases.main]
-  free Val #6
 ```
 
 <!-- test: rc-remove-middle-no-double-free -->
@@ -937,26 +964,29 @@ incref ElementMemory #1 rc=1 [ownership-edge-cases.main]
 incref ValArray #2 rc=1 [ownership-edge-cases.main]
 alloc Val #3 rc=0 [ownership-edge-cases.main]
 incref Val #3 rc=1 [ownership-edge-cases.main]
-alloc_in Buffer
 incref Val #3 rc=2 [ValArray.push]
+alloc Val #4 rc=0 [ownership-edge-cases.main]
+incref Val #4 rc=1 [ownership-edge-cases.main]
+incref Val #4 rc=2 [ValArray.push]
 alloc Val #5 rc=0 [ownership-edge-cases.main]
 incref Val #5 rc=1 [ownership-edge-cases.main]
 incref Val #5 rc=2 [ValArray.push]
-alloc Val #6 rc=0 [ownership-edge-cases.main]
-incref Val #6 rc=1 [ownership-edge-cases.main]
-incref Val #6 rc=2 [ValArray.push]
-transfer Val #5 rc=2 [ValArray.remove]
+incref Val #4 rc=3 [ValArray.remove]
+transfer Val #4 rc=3 [ValArray.remove]
+decref Val #4 rc=2 [ValArray.remove]
+incref Val #4 rc=3 [ownership-edge-cases.main]
 decref ValArray #2 rc=0 [ownership-edge-cases.main]
-decref ElementMemory #1 rc=0 [ownership-edge-cases.main]
+decref ElementMemory #1 rc=0 [~ValArray]
   free ElementMemory #1
-free ValArray #2 [ownership-edge-cases.main]
-decref Val #5 rc=1 [ownership-edge-cases.main]
+  free ValArray #2
+decref Val #4 rc=2 [ownership-edge-cases.main]
+decref Val #4 rc=1 [ownership-edge-cases.main]
 decref Val #3 rc=0 [ownership-edge-cases.main]
   free Val #3
+decref Val #4 rc=0 [ownership-edge-cases.main]
+  free Val #4
 decref Val #5 rc=0 [ownership-edge-cases.main]
   free Val #5
-decref Val #6 rc=0 [ownership-edge-cases.main]
-  free Val #6
 ```
 
 <!-- test: rc-nested-container-freed -->
@@ -994,25 +1024,24 @@ alloc Inner #3 rc=0 [ownership-edge-cases.main]
 alloc Wrapper #4 rc=0 [ownership-edge-cases.main]
 incref Inner #3 rc=1 [ownership-edge-cases.main]
 incref Wrapper #4 rc=1 [ownership-edge-cases.main]
-alloc_in Buffer
 incref Wrapper #4 rc=2 [WrapperArray.push]
-alloc Inner #6 rc=0 [ownership-edge-cases.main]
-alloc Wrapper #7 rc=0 [ownership-edge-cases.main]
-incref Inner #6 rc=1 [ownership-edge-cases.main]
-incref Wrapper #7 rc=1 [ownership-edge-cases.main]
-incref Wrapper #7 rc=2 [WrapperArray.push]
+alloc Inner #5 rc=0 [ownership-edge-cases.main]
+alloc Wrapper #6 rc=0 [ownership-edge-cases.main]
+incref Inner #5 rc=1 [ownership-edge-cases.main]
+incref Wrapper #6 rc=1 [ownership-edge-cases.main]
+incref Wrapper #6 rc=2 [WrapperArray.push]
 decref WrapperArray #2 rc=0 [ownership-edge-cases.main]
-decref ElementMemory #1 rc=0 [ownership-edge-cases.main]
+decref ElementMemory #1 rc=0 [~WrapperArray]
   free ElementMemory #1
-free WrapperArray #2 [ownership-edge-cases.main]
+  free WrapperArray #2
 decref Wrapper #4 rc=0 [ownership-edge-cases.main]
-decref Inner #3 rc=0 [ownership-edge-cases.main]
+decref Inner #3 rc=0 [~Wrapper]
   free Inner #3
-free Wrapper #4 [ownership-edge-cases.main]
-decref Wrapper #7 rc=0 [ownership-edge-cases.main]
-decref Inner #6 rc=0 [ownership-edge-cases.main]
-  free Inner #6
-free Wrapper #7 [ownership-edge-cases.main]
+  free Wrapper #4
+decref Wrapper #6 rc=0 [ownership-edge-cases.main]
+decref Inner #5 rc=0 [~Wrapper]
+  free Inner #5
+  free Wrapper #6
 ```
 
 <!-- test: rc-return-from-inner-block-cleanup -->
@@ -1086,14 +1115,15 @@ incref ElementMemory #1 rc=1 [ownership-edge-cases.main]
 incref ItemArray #2 rc=1 [ownership-edge-cases.main]
 alloc Item #3 rc=0 [ownership-edge-cases.main]
 incref Item #3 rc=1 [ownership-edge-cases.main]
-alloc_in Buffer
 incref Item #3 rc=2 [ItemArray.push]
 incref Item #3 rc=3 [ItemArray.get]
-transfer Item #3 rc=3 [ownership-edge-cases.getFirst]
+incref Item #3 rc=4 [ownership-edge-cases.getFirst]
+transfer Item #3 rc=4 [ownership-edge-cases.getFirst]
+decref Item #3 rc=3 [ownership-edge-cases.getFirst]
 decref ItemArray #2 rc=0 [ownership-edge-cases.main]
-decref ElementMemory #1 rc=0 [ownership-edge-cases.main]
+decref ElementMemory #1 rc=0 [~ItemArray]
   free ElementMemory #1
-free ItemArray #2 [ownership-edge-cases.main]
+  free ItemArray #2
 decref Item #3 rc=1 [ownership-edge-cases.main]
 decref Item #3 rc=0 [ownership-edge-cases.main]
   free Item #3
@@ -1268,8 +1298,8 @@ incref Body #1 rc=3 [ownership-edge-cases.massOf]
 decref Body #1 rc=2 [ownership-edge-cases.massOf]
 decref Shape #2 rc=1 [ownership-edge-cases.massOf]
 decref Shape #2 rc=0 [ownership-edge-cases.main]
-decref Body #1 rc=1 [ownership-edge-cases.main]
-free Shape #2 [ownership-edge-cases.main]
+decref Body #1 rc=1 [~Shape]
+  free Shape #2
 decref Body #1 rc=0 [ownership-edge-cases.main]
   free Body #1
 ```
@@ -1362,10 +1392,12 @@ incref ElementMemory #1 rc=1 [ownership-edge-cases.main]
 incref ItemArray #2 rc=1 [ownership-edge-cases.main]
 alloc Item #3 rc=0 [ownership-edge-cases.main]
 incref Item #3 rc=1 [ownership-edge-cases.main]
+incref Item #3 rc=2 [ownership-edge-cases.main]
 decref ItemArray #2 rc=0 [ownership-edge-cases.main]
-decref ElementMemory #1 rc=0 [ownership-edge-cases.main]
+decref ElementMemory #1 rc=0 [~ItemArray]
   free ElementMemory #1
-free ItemArray #2 [ownership-edge-cases.main]
+  free ItemArray #2
+decref Item #3 rc=1 [ownership-edge-cases.main]
 decref Item #3 rc=0 [ownership-edge-cases.main]
   free Item #3
 ```
@@ -1393,16 +1425,17 @@ end 'main'
 7
 ```
 ```stderr
-alloc __Chain #1 rc=0 [ownership-edge-cases.main]
-incref __Chain #1 rc=1 [ownership-edge-cases.main]
+alloc TokenChain #1 rc=0 [ownership-edge-cases.main]
+incref TokenChain #1 rc=1 [ownership-edge-cases.main]
 alloc Token #2 rc=0 [ownership-edge-cases.main]
 incref Token #2 rc=1 [ownership-edge-cases.main]
-alloc_in __ChainNode
+alloc __ChainNode #3 rc=0 [ownership-edge-cases.main]
 incref Token #2 rc=2 [ownership-edge-cases.main]
-incref __ChainNode #3 rc=1 [ownership-edge-cases.main]
-decref __Chain #1 rc=0 [ownership-edge-cases.main]
+incref __ChainNode #3 rc=2 [ownership-edge-cases.main]
+decref TokenChain #1 rc=0 [ownership-edge-cases.main]
 decref Token #2 rc=1
-free __Chain #1 [ownership-edge-cases.main]
+decref __ChainNode #3 rc=1
+  free TokenChain #1
 decref Token #2 rc=0 [ownership-edge-cases.main]
   free Token #2
 decref __ChainNode #3 rc=0 [ownership-edge-cases.main]
@@ -1432,16 +1465,20 @@ end 'main'
 9
 ```
 ```stderr
-alloc __Chain #1 rc=0 [ownership-edge-cases.main]
-incref __Chain #1 rc=1 [ownership-edge-cases.main]
+alloc TokenChain #1 rc=0 [ownership-edge-cases.main]
+incref TokenChain #1 rc=1 [ownership-edge-cases.main]
 alloc Token #2 rc=0 [ownership-edge-cases.main]
 incref Token #2 rc=1 [ownership-edge-cases.main]
-alloc_in __ChainNode
+alloc __ChainNode #3 rc=0 [ownership-edge-cases.main]
 incref Token #2 rc=2 [ownership-edge-cases.main]
-incref __ChainNode #3 rc=1 [ownership-edge-cases.main]
+incref __ChainNode #3 rc=2 [ownership-edge-cases.main]
+decref __ChainNode #3 rc=1 [ownership-edge-cases.main]
+decref Token #2 rc=1 [ownership-edge-cases.main]
+decref __ChainNode #3 rc=0 [ownership-edge-cases.main]
   free __ChainNode #3
-decref __Chain #1 rc=0 [ownership-edge-cases.main]
-free __Chain #1 [ownership-edge-cases.main]
+incref Token #2 rc=2 [ownership-edge-cases.main]
+decref TokenChain #1 rc=0 [ownership-edge-cases.main]
+  free TokenChain #1
 decref Token #2 rc=1 [ownership-edge-cases.main]
 decref Token #2 rc=0 [ownership-edge-cases.main]
   free Token #2
@@ -1472,28 +1509,31 @@ end 'main'
 0
 ```
 ```stderr
-alloc __Chain #1 rc=0 [ownership-edge-cases.main]
-incref __Chain #1 rc=1 [ownership-edge-cases.main]
+alloc TokenChain #1 rc=0 [ownership-edge-cases.main]
+incref TokenChain #1 rc=1 [ownership-edge-cases.main]
 alloc Token #2 rc=0 [ownership-edge-cases.main]
 incref Token #2 rc=1 [ownership-edge-cases.main]
-alloc_in __ChainNode
+alloc __ChainNode #3 rc=0 [ownership-edge-cases.main]
 incref Token #2 rc=2 [ownership-edge-cases.main]
 alloc Token #4 rc=0 [ownership-edge-cases.main]
 incref Token #4 rc=1 [ownership-edge-cases.main]
-alloc_in __ChainNode
+alloc __ChainNode #5 rc=0 [ownership-edge-cases.main]
 incref Token #4 rc=2 [ownership-edge-cases.main]
 alloc Token #6 rc=0 [ownership-edge-cases.main]
 incref Token #6 rc=1 [ownership-edge-cases.main]
-alloc_in __ChainNode
+alloc __ChainNode #7 rc=0 [ownership-edge-cases.main]
 incref Token #6 rc=2 [ownership-edge-cases.main]
 decref Token #2 rc=1
+decref __ChainNode #3 rc=0
   free __ChainNode #3
 decref Token #4 rc=1
+decref __ChainNode #5 rc=0
   free __ChainNode #5
 decref Token #6 rc=1
+decref __ChainNode #7 rc=0
   free __ChainNode #7
-decref __Chain #1 rc=0 [ownership-edge-cases.main]
-free __Chain #1 [ownership-edge-cases.main]
+decref TokenChain #1 rc=0 [ownership-edge-cases.main]
+  free TokenChain #1
 decref Token #2 rc=0 [ownership-edge-cases.main]
   free Token #2
 decref Token #4 rc=0 [ownership-edge-cases.main]
@@ -1525,20 +1565,21 @@ end 'main'
 99
 ```
 ```stderr
-alloc __Chain #1 rc=0 [ownership-edge-cases.main]
-incref __Chain #1 rc=1 [ownership-edge-cases.main]
+alloc TokenChain #1 rc=0 [ownership-edge-cases.main]
+incref TokenChain #1 rc=1 [ownership-edge-cases.main]
 alloc Token #2 rc=0 [ownership-edge-cases.main]
 incref Token #2 rc=1 [ownership-edge-cases.main]
-alloc_in __ChainNode
+alloc __ChainNode #3 rc=0 [ownership-edge-cases.main]
 incref Token #2 rc=2 [ownership-edge-cases.main]
-incref __ChainNode #3 rc=1 [ownership-edge-cases.main]
+incref __ChainNode #3 rc=2 [ownership-edge-cases.main]
 alloc Token #4 rc=0 [ownership-edge-cases.main]
 incref Token #4 rc=1 [ownership-edge-cases.main]
 decref Token #2 rc=1 [ownership-edge-cases.main]
 incref Token #4 rc=2 [ownership-edge-cases.main]
-decref __Chain #1 rc=0 [ownership-edge-cases.main]
+decref TokenChain #1 rc=0 [ownership-edge-cases.main]
 decref Token #4 rc=1
-free __Chain #1 [ownership-edge-cases.main]
+decref __ChainNode #3 rc=1
+  free TokenChain #1
 decref __ChainNode #3 rc=0 [ownership-edge-cases.main]
   free __ChainNode #3
 decref Token #2 rc=0 [ownership-edge-cases.main]
@@ -1581,35 +1622,40 @@ incref ElementMemory #1 rc=1 [ownership-edge-cases.main]
 incref ScoreArray #2 rc=1 [ownership-edge-cases.main]
 alloc Score #3 rc=0 [ownership-edge-cases.main]
 incref Score #3 rc=1 [ownership-edge-cases.main]
-alloc_in Buffer
 incref Score #3 rc=2 [ScoreArray.push]
+alloc Score #4 rc=0 [ownership-edge-cases.main]
+incref Score #4 rc=1 [ownership-edge-cases.main]
+incref Score #4 rc=2 [ScoreArray.push]
 alloc Score #5 rc=0 [ownership-edge-cases.main]
 incref Score #5 rc=1 [ownership-edge-cases.main]
 incref Score #5 rc=2 [ScoreArray.push]
-alloc Score #6 rc=0 [ownership-edge-cases.main]
-incref Score #6 rc=1 [ownership-edge-cases.main]
-incref Score #6 rc=2 [ScoreArray.push]
 incref ScoreArray #2 rc=2 [ownership-edge-cases.main]
 incref Score #3 rc=3 [ScoreArray.next]
 transfer Score #3 rc=3 [ScoreArray.next]
+incref Score #3 rc=4 [ownership-edge-cases.main]
+decref Score #3 rc=3 [ownership-edge-cases.main]
 decref Score #3 rc=2 [ownership-edge-cases.main]
 decref Score #3 rc=1 [ownership-edge-cases.main]
+decref Score #4 rc=1 [ownership-edge-cases.main]
 decref Score #5 rc=1 [ownership-edge-cases.main]
-decref Score #6 rc=1 [ownership-edge-cases.main]
+incref Score #4 rc=2 [ScoreArray.next]
+transfer Score #4 rc=2 [ScoreArray.next]
+incref Score #4 rc=3 [ownership-edge-cases.main]
+decref Score #4 rc=2 [ownership-edge-cases.main]
+decref Score #4 rc=1 [ownership-edge-cases.main]
 incref Score #5 rc=2 [ScoreArray.next]
 transfer Score #5 rc=2 [ScoreArray.next]
+incref Score #5 rc=3 [ownership-edge-cases.main]
+decref Score #5 rc=2 [ownership-edge-cases.main]
 decref Score #5 rc=1 [ownership-edge-cases.main]
-incref Score #6 rc=2 [ScoreArray.next]
-transfer Score #6 rc=2 [ScoreArray.next]
-decref Score #6 rc=1 [ownership-edge-cases.main]
 decref ScoreArray #2 rc=1 [ownership-edge-cases.main]
 decref ScoreArray #2 rc=0 [ownership-edge-cases.main]
+decref ElementMemory #1 rc=0 [~ScoreArray]
   free Score #3
+  free Score #4
   free Score #5
-  free Score #6
-decref ElementMemory #1 rc=0 [ownership-edge-cases.main]
   free ElementMemory #1
-free ScoreArray #2 [ownership-edge-cases.main]
+  free ScoreArray #2
 ```
 
 <!-- test: rc-multiple-aliases-freed-once -->
@@ -1682,40 +1728,37 @@ incref ElementMemory #3 rc=1 [ownership-edge-cases.main]
 incref CellArray #4 rc=1 [ownership-edge-cases.main]
 alloc Cell #5 rc=0 [ownership-edge-cases.main]
 incref Cell #5 rc=1 [ownership-edge-cases.main]
-alloc_in Buffer
 incref Cell #5 rc=2 [CellArray.push]
-alloc Cell #7 rc=0 [ownership-edge-cases.main]
-incref Cell #7 rc=1 [ownership-edge-cases.main]
-incref Cell #7 rc=2 [CellArray.push]
-alloc ElementMemory #8 rc=0 [ownership-edge-cases.main]
-alloc CellArray #9 rc=0 [ownership-edge-cases.main]
-incref ElementMemory #8 rc=1 [ownership-edge-cases.main]
-incref CellArray #9 rc=1 [ownership-edge-cases.main]
-alloc Cell #10 rc=0 [ownership-edge-cases.main]
-incref Cell #10 rc=1 [ownership-edge-cases.main]
-alloc_in Buffer
-incref Cell #10 rc=2 [CellArray.push]
-alloc_in Buffer
+alloc Cell #6 rc=0 [ownership-edge-cases.main]
+incref Cell #6 rc=1 [ownership-edge-cases.main]
+incref Cell #6 rc=2 [CellArray.push]
+alloc ElementMemory #7 rc=0 [ownership-edge-cases.main]
+alloc CellArray #8 rc=0 [ownership-edge-cases.main]
+incref ElementMemory #7 rc=1 [ownership-edge-cases.main]
+incref CellArray #8 rc=1 [ownership-edge-cases.main]
+alloc Cell #9 rc=0 [ownership-edge-cases.main]
+incref Cell #9 rc=1 [ownership-edge-cases.main]
+incref Cell #9 rc=2 [CellArray.push]
 incref CellArray #4 rc=2 [Grid.push]
-incref CellArray #9 rc=2 [Grid.push]
+incref CellArray #8 rc=2 [Grid.push]
 decref Grid #2 rc=0 [ownership-edge-cases.main]
-decref ElementMemory #1 rc=0 [ownership-edge-cases.main]
+decref ElementMemory #1 rc=0 [~Grid]
   free ElementMemory #1
-free Grid #2 [ownership-edge-cases.main]
+  free Grid #2
 decref CellArray #4 rc=0 [ownership-edge-cases.main]
-decref ElementMemory #3 rc=0 [ownership-edge-cases.main]
+decref ElementMemory #3 rc=0 [~CellArray]
   free ElementMemory #3
-free CellArray #4 [ownership-edge-cases.main]
-decref CellArray #9 rc=0 [ownership-edge-cases.main]
-decref ElementMemory #8 rc=0 [ownership-edge-cases.main]
-  free ElementMemory #8
-free CellArray #9 [ownership-edge-cases.main]
+  free CellArray #4
+decref CellArray #8 rc=0 [ownership-edge-cases.main]
+decref ElementMemory #7 rc=0 [~CellArray]
+  free ElementMemory #7
+  free CellArray #8
 decref Cell #5 rc=0 [ownership-edge-cases.main]
   free Cell #5
-decref Cell #7 rc=0 [ownership-edge-cases.main]
-  free Cell #7
-decref Cell #10 rc=0 [ownership-edge-cases.main]
-  free Cell #10
+decref Cell #6 rc=0 [ownership-edge-cases.main]
+  free Cell #6
+decref Cell #9 rc=0 [ownership-edge-cases.main]
+  free Cell #9
 ```
 
 <!-- test: rc-struct-with-array-field-freed -->
@@ -1757,21 +1800,20 @@ incref EntryArray #2 rc=1 [ownership-edge-cases.fill]
 incref Bucket #3 rc=1 [ownership-edge-cases.fill]
 alloc Entry #4 rc=0 [ownership-edge-cases.fill]
 incref Entry #4 rc=1 [ownership-edge-cases.fill]
-alloc_in Buffer
 incref Entry #4 rc=2 [EntryArray.push]
-alloc Entry #6 rc=0 [ownership-edge-cases.fill]
-incref Entry #6 rc=1 [ownership-edge-cases.fill]
-incref Entry #6 rc=2 [EntryArray.push]
+alloc Entry #5 rc=0 [ownership-edge-cases.fill]
+incref Entry #5 rc=1 [ownership-edge-cases.fill]
+incref Entry #5 rc=2 [EntryArray.push]
 decref Bucket #3 rc=0 [ownership-edge-cases.fill]
-decref EntryArray #2 rc=0 [ownership-edge-cases.fill]
-decref ElementMemory #1 rc=0 [ownership-edge-cases.fill]
+decref EntryArray #2 rc=0 [~Bucket]
+decref ElementMemory #1 rc=0 [~EntryArray]
   free ElementMemory #1
-free EntryArray #2 [ownership-edge-cases.fill]
-free Bucket #3 [ownership-edge-cases.fill]
+  free EntryArray #2
+  free Bucket #3
 decref Entry #4 rc=0 [ownership-edge-cases.fill]
   free Entry #4
-decref Entry #6 rc=0 [ownership-edge-cases.fill]
-  free Entry #6
+decref Entry #5 rc=0 [ownership-edge-cases.fill]
+  free Entry #5
 ```
 
 <!-- test: rc-return-struct-literal -->
@@ -1845,9 +1887,9 @@ incref Wrapper #2 rc=1 [ownership-edge-cases.wrap]
 transfer Wrapper #2 rc=1 [ownership-edge-cases.wrap]
 decref Inner #1 rc=1 [ownership-edge-cases.main]
 decref Wrapper #2 rc=0 [ownership-edge-cases.main]
-decref Inner #1 rc=0 [ownership-edge-cases.main]
+decref Inner #1 rc=0 [~Wrapper]
   free Inner #1
-free Wrapper #2 [ownership-edge-cases.main]
+  free Wrapper #2
 ```
 
 <!-- test: rc-list-scope-cleanup -->
@@ -1871,17 +1913,22 @@ alloc StringList #2 rc=0 [ownership-edge-cases.main]
 incref EChain #1 rc=1 [ownership-edge-cases.main]
 incref StringList #2 rc=1 [ownership-edge-cases.main]
 alloc String #3 rc=0 [ownership-edge-cases.main]
-alloc_in __ManagedMemory
+alloc __ManagedMemory #4 rc=0 [ownership-edge-cases.main]
+incref __ManagedMemory #4 rc=1 [ownership-edge-cases.main]
 incref String #3 rc=1 [ownership-edge-cases.main]
-alloc_in __ChainNode
+alloc __ChainNode #5 rc=0 [StringList.append]
 incref String #3 rc=2 [StringList.append]
 decref StringList #2 rc=0 [ownership-edge-cases.main]
-decref EChain #1 rc=0 [ownership-edge-cases.main]
+decref EChain #1 rc=0 [~StringList]
 decref String #3 rc=1
-free EChain #1 [ownership-edge-cases.main]
-free StringList #2 [ownership-edge-cases.main]
+decref __ChainNode #5 rc=0
+  free __ChainNode #5
+  free EChain #1
+  free StringList #2
 decref String #3 rc=0 [ownership-edge-cases.main]
-free String #3 [ownership-edge-cases.main]
+decref __ManagedMemory #4 rc=0 [~String]
+  free __ManagedMemory #4
+  free String #3
 ```
 
 <!-- test: match-string-pattern-cleanup -->
@@ -1902,17 +1949,25 @@ end 'main'
 ```
 ```stderr
 alloc String #1 rc=0 [ownership-edge-cases.main]
-alloc_in __ManagedMemory
+alloc __ManagedMemory #2 rc=0 [ownership-edge-cases.main]
+incref __ManagedMemory #2 rc=1 [ownership-edge-cases.main]
 incref String #1 rc=1 [ownership-edge-cases.main]
 incref String #1 rc=2 [ownership-edge-cases.main]
+incref String #1 rc=3 [ownership-edge-cases.main]
 alloc String #3 rc=0 [ownership-edge-cases.main]
-alloc_in __ManagedMemory
+alloc __ManagedMemory #4 rc=0 [ownership-edge-cases.main]
+incref __ManagedMemory #4 rc=1 [ownership-edge-cases.main]
 incref String #3 rc=1 [ownership-edge-cases.main]
 decref String #3 rc=0 [ownership-edge-cases.main]
-free String #3 [ownership-edge-cases.main]
+decref __ManagedMemory #4 rc=0 [~String]
+  free __ManagedMemory #4
+  free String #3
+decref String #1 rc=2 [ownership-edge-cases.main]
 decref String #1 rc=1 [ownership-edge-cases.main]
 decref String #1 rc=0 [ownership-edge-cases.main]
-free String #1 [ownership-edge-cases.main]
+decref __ManagedMemory #2 rc=0 [~String]
+  free __ManagedMemory #2
+  free String #1
 ```
 
 <!-- test: rc-char-single-alloc-freed -->
@@ -1929,10 +1984,15 @@ end 'main'
 ```
 ```stderr
 alloc Character #1 rc=0 [ownership-edge-cases.main]
-alloc_in __ManagedMemory
+alloc __ManagedMemory #2 rc=0 [ownership-edge-cases.main]
+incref __ManagedMemory #2 rc=1 [ownership-edge-cases.main]
 incref Character #1 rc=1 [ownership-edge-cases.main]
+incref Character #1 rc=2 [ownership-edge-cases.main]
+decref Character #1 rc=1 [ownership-edge-cases.main]
 decref Character #1 rc=0 [ownership-edge-cases.main]
-free Character #1 [ownership-edge-cases.main]
+decref __ManagedMemory #2 rc=0 [~Character]
+  free __ManagedMemory #2
+  free Character #1
 ```
 
 <!-- test: rc-char-alias-incref -->
@@ -1950,12 +2010,17 @@ end 'main'
 ```
 ```stderr
 alloc Character #1 rc=0 [ownership-edge-cases.main]
-alloc_in __ManagedMemory
+alloc __ManagedMemory #2 rc=0 [ownership-edge-cases.main]
+incref __ManagedMemory #2 rc=1 [ownership-edge-cases.main]
 incref Character #1 rc=1 [ownership-edge-cases.main]
 incref Character #1 rc=2 [ownership-edge-cases.main]
+incref Character #1 rc=3 [ownership-edge-cases.main]
+decref Character #1 rc=2 [ownership-edge-cases.main]
 decref Character #1 rc=1 [ownership-edge-cases.main]
 decref Character #1 rc=0 [ownership-edge-cases.main]
-free Character #1 [ownership-edge-cases.main]
+decref __ManagedMemory #2 rc=0 [~Character]
+  free __ManagedMemory #2
+  free Character #1
 ```
 
 <!-- test: rc-char-reassign-decrefs-old -->
@@ -1973,15 +2038,25 @@ end 'main'
 ```
 ```stderr
 alloc Character #1 rc=0 [ownership-edge-cases.main]
-alloc_in __ManagedMemory
+alloc __ManagedMemory #2 rc=0 [ownership-edge-cases.main]
+incref __ManagedMemory #2 rc=1 [ownership-edge-cases.main]
 incref Character #1 rc=1 [ownership-edge-cases.main]
+incref Character #1 rc=2 [ownership-edge-cases.main]
 alloc Character #3 rc=0 [ownership-edge-cases.main]
-alloc_in __ManagedMemory
+alloc __ManagedMemory #4 rc=0 [ownership-edge-cases.main]
+incref __ManagedMemory #4 rc=1 [ownership-edge-cases.main]
 incref Character #3 rc=1 [ownership-edge-cases.main]
+decref Character #1 rc=1 [ownership-edge-cases.main]
+incref Character #3 rc=2 [ownership-edge-cases.main]
+decref Character #3 rc=1 [ownership-edge-cases.main]
 decref Character #1 rc=0 [ownership-edge-cases.main]
-free Character #1 [ownership-edge-cases.main]
+decref __ManagedMemory #2 rc=0 [~Character]
+  free __ManagedMemory #2
+  free Character #1
 decref Character #3 rc=0 [ownership-edge-cases.main]
-free Character #3 [ownership-edge-cases.main]
+decref __ManagedMemory #4 rc=0 [~Character]
+  free __ManagedMemory #4
+  free Character #3
 ```
 
 <!-- test: rc-char-return-transfers-ownership -->
@@ -2002,11 +2077,14 @@ end 'main'
 ```
 ```stderr
 alloc Character #1 rc=0 [ownership-edge-cases.makeChar]
-alloc_in __ManagedMemory
+alloc __ManagedMemory #2 rc=0 [ownership-edge-cases.makeChar]
+incref __ManagedMemory #2 rc=1 [ownership-edge-cases.makeChar]
 incref Character #1 rc=1 [ownership-edge-cases.makeChar]
 transfer Character #1 rc=1 [ownership-edge-cases.makeChar]
 decref Character #1 rc=0 [ownership-edge-cases.main]
-free Character #1 [ownership-edge-cases.main]
+decref __ManagedMemory #2 rc=0 [~Character]
+  free __ManagedMemory #2
+  free Character #1
 ```
 
 <!-- test: rc-char-inner-block-freed -->
@@ -2027,10 +2105,15 @@ end 'main'
 ```
 ```stderr
 alloc Character #1 rc=0 [ownership-edge-cases.main]
-alloc_in __ManagedMemory
+alloc __ManagedMemory #2 rc=0 [ownership-edge-cases.main]
+incref __ManagedMemory #2 rc=1 [ownership-edge-cases.main]
 incref Character #1 rc=1 [ownership-edge-cases.main]
+incref Character #1 rc=2 [ownership-edge-cases.main]
+decref Character #1 rc=1 [ownership-edge-cases.main]
 decref Character #1 rc=0 [ownership-edge-cases.main]
-free Character #1 [ownership-edge-cases.main]
+decref __ManagedMemory #2 rc=0 [~Character]
+  free __ManagedMemory #2
+  free Character #1
 ```
 
 <!-- test: rc-tuple-primitive-freed -->
@@ -2114,16 +2197,19 @@ end 'main'
 ```
 ```stderr
 alloc String #1 rc=0 [ownership-edge-cases.main]
-alloc_in __ManagedMemory
+alloc __ManagedMemory #2 rc=0 [ownership-edge-cases.main]
+incref __ManagedMemory #2 rc=1 [ownership-edge-cases.main]
 incref String #1 rc=1 [ownership-edge-cases.main]
 alloc __Tuple_i64_String #3 rc=0 [ownership-edge-cases.main]
 incref String #1 rc=2 [ownership-edge-cases.main]
 incref __Tuple_i64_String #3 rc=1 [ownership-edge-cases.main]
 decref __Tuple_i64_String #3 rc=0 [ownership-edge-cases.main]
-decref String #1 rc=1 [ownership-edge-cases.main]
-free __Tuple_i64_String #3 [ownership-edge-cases.main]
+decref String #1 rc=1 [~__Tuple_i64_String]
+  free __Tuple_i64_String #3
 decref String #1 rc=0 [ownership-edge-cases.main]
-free String #1 [ownership-edge-cases.main]
+decref __ManagedMemory #2 rc=0 [~String]
+  free __ManagedMemory #2
+  free String #1
 ```
 
 <!-- test: rc-tuple-return-transfers-ownership -->
@@ -2199,9 +2285,9 @@ alloc __Tuple_i64_Point #2 rc=0 [ownership-edge-cases.main]
 incref Point #1 rc=1 [ownership-edge-cases.main]
 incref __Tuple_i64_Point #2 rc=1 [ownership-edge-cases.main]
 decref __Tuple_i64_Point #2 rc=0 [ownership-edge-cases.main]
-decref Point #1 rc=0 [ownership-edge-cases.main]
+decref Point #1 rc=0 [~__Tuple_i64_Point]
   free Point #1
-free __Tuple_i64_Point #2 [ownership-edge-cases.main]
+  free __Tuple_i64_Point #2
 ```
 
 <!-- test: rc-struct-literal-as-function-arg -->
@@ -2544,7 +2630,7 @@ end 'main'
 5
 ```
 
-<!-- disabled-test: rc-string-slice-no-leak -->
+<!-- test: rc-string-slice-no-leak -->
 String.slice must not leak internal allocations. The slice operation creates managed memory that must be properly tracked and freed.
 ```maxon
 function main() returns ExitCode
@@ -2563,7 +2649,7 @@ end 'main'
 hello
 ```
 
-<!-- disabled-test: rc-enum-name-no-leak -->
+<!-- test: rc-enum-name-no-leak -->
 Accessing enum .name must not leak. The getName function allocates a String wrapper around the name data; both the wrapper and its managed memory must be freed.
 ```maxon
 enum Color
@@ -2584,7 +2670,7 @@ end 'main'
 1
 ```
 
-<!-- disabled-test: rc-enum-name-reassign-no-leak -->
+<!-- test: rc-enum-name-reassign-no-leak -->
 Accessing enum .name after reassignment must not leak. Both the old and new enum name string allocations must be properly freed.
 ```maxon
 enum Status
@@ -2606,7 +2692,7 @@ end 'main'
 1
 ```
 
-<!-- disabled-test: rc-array-of-structs-get-no-leak -->
+<!-- test: rc-array-of-structs-get-no-leak -->
 Getting a struct from an array via try/otherwise must not leak. When the array is freed, its element destructors must decref all contained structs.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -2627,7 +2713,7 @@ end 'main'
 30
 ```
 
-<!-- disabled-test: rc-array-of-structs-literal-no-leak -->
+<!-- test: rc-array-of-structs-literal-no-leak -->
 Creating an array literal of structs must not leak. All struct elements must be decreffed when the array is freed.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -2650,7 +2736,7 @@ end 'main'
 5
 ```
 
-<!-- disabled-test: rc-global-array-push-local-no-leak -->
+<!-- test: rc-global-array-push-local-no-leak -->
 Pushing a local struct into a global array must not leak. When the global array is cleaned up, all elements (including those pushed from other function scopes) must be freed.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -2678,7 +2764,7 @@ end 'main'
 123
 ```
 
-<!-- disabled-test: rc-global-array-push-remove-loop-no-leak -->
+<!-- test: rc-global-array-push-remove-loop-no-leak -->
 Pushing many structs into a global array and then removing them all must not leak. Each removed element must be properly decreffed.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -2712,7 +2798,7 @@ end 'main'
 45
 ```
 
-<!-- disabled-test: rc-struct-field-overwrite-in-if-no-leak -->
+<!-- test: rc-struct-field-overwrite-in-if-no-leak -->
 Assigning a new struct to a struct field inside an if block must decref the old value and not leak the old struct's managed children (e.g., arrays).
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -2748,7 +2834,7 @@ end 'main'
 3
 ```
 
-<!-- disabled-test: rc-map-string-keys-no-leak -->
+<!-- test: rc-map-string-keys-no-leak -->
 A map with string keys must free all string key allocations when the map is destroyed. The string used as a key is increffed into the map's key array; when the map is freed, these strings must be decreffed.
 ```maxon
 function main() returns ExitCode
@@ -2760,7 +2846,7 @@ end 'main'
 42
 ```
 
-<!-- disabled-test: rc-map-string-keys-multiple-no-leak -->
+<!-- test: rc-map-string-keys-multiple-no-leak -->
 A map with multiple string keys must free all key and value allocations. Each insert increfs the key string; the map destructor must decref all of them.
 ```maxon
 function main() returns ExitCode
@@ -2798,7 +2884,7 @@ end 'main'
 hello
 ```
 
-<!-- disabled-test: rc-chain-remove-single-no-leak -->
+<!-- test: rc-chain-remove-single-no-leak -->
 Removing a node from a chain must properly decref the node's value. The chain node itself and the stored value must both be freed.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -2820,7 +2906,7 @@ end 'main'
 0
 ```
 
-<!-- disabled-test: rc-module-level-struct-nested-field-assign -->
+<!-- test: rc-module-level-struct-nested-field-assign -->
 Assigning to a nested field of a module-level struct variable must not leak. The struct access chain must properly manage refcounts for intermediate accesses.
 ```maxon
 typealias SmallInt = int(0 to 255)
@@ -2844,7 +2930,7 @@ end 'main'
 99
 ```
 
-<!-- disabled-test: rc-top-level-array-literal-no-leak -->
+<!-- test: rc-top-level-array-literal-no-leak -->
 A module-level array literal must not leak. The array and its element storage must be freed during global cleanup.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -2863,7 +2949,7 @@ end 'main'
 60
 ```
 
-<!-- disabled-test: rc-array-append-no-leak -->
+<!-- test: rc-array-append-no-leak -->
 Array.append must not leak. Appending one array to another must properly manage the element storage and not leak the source array's data.
 ```maxon
 function main() returns ExitCode
@@ -2883,7 +2969,7 @@ end 'main'
 21
 ```
 
-<!-- disabled-test: rc-struct-with-string-union-in-array -->
+<!-- test: rc-struct-with-string-union-in-array -->
 Pushing structs that contain unions with string payloads into an array must not leak. The union destructors must handle string payload cleanup during array destruction.
 ```maxon
 export union QueryKey
@@ -2909,7 +2995,7 @@ end 'main'
 3
 ```
 
-<!-- disabled-test: rc-custom-hashable-map-key-no-leak -->
+<!-- test: rc-custom-hashable-map-key-no-leak -->
 A map using a custom Hashable struct as key must not leak. The map's internal arrays (keys, values, states) and all managed elements must be freed.
 ```maxon
 typealias Integer = int(i64.min to i64.max)

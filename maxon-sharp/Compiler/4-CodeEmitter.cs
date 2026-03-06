@@ -85,7 +85,7 @@ public class CodeEmitter {
 
     // Runtime helpers must be emitted before user code so call targets are resolved
     emitter.EmitRuntimeFunctions();
-    emitter.EmitMemoryManagerFunctions();
+    emitter.EmitMemoryManagerFunctions(module.TagTable);
 
     // Patch all __chkstk call sites
     emitter.PatchChkstkCalls();

@@ -95,8 +95,10 @@ module {
     x86.mov edi, 3
     x86.xor r8, r8
     x86.mov r9, 8
+    x86.lea_func ecx, [__destruct___ManagedMemory]
+    x86.mov rdx, rcx
     x86.mov rcx, 32
-    x86.xor rdx, rdx
+    x86.mov r8, 1
     x86.call mm_alloc
     x86.mov [rbp-32], eax
     x86.mov eax, [rbp-32]
@@ -111,8 +113,11 @@ module {
     x86.mov eax, [rbp-32]
     x86.mov ecx, 8
     x86.mov [eax+24], ecx
+    x86.lea_func eax, [__destruct_Vec3]
+    x86.mov rcx, rax
+    x86.mov rdx, rcx
     x86.mov rcx, 16
-    x86.xor rdx, rdx
+    x86.mov r8, 2
     x86.call mm_alloc
     x86.mov [rbp-40], eax
     x86.mov eax, [rbp-40]
@@ -169,19 +174,46 @@ module {
     x86.mov eax, [rbp-48]
     x86.mov ecx, [rbp-40]
     x86.test ecx, ecx
-    x86.jz __destruct_nullguard_0
-    x86.call mm_decref_check
-    x86.test eax, eax
-    x86.jnz __destruct_skip_1
-    x86.mov ecx, [rbp-40]
-    x86.mov edx, [ecx+8]
-    x86.mov rcx, rdx
+    x86.jz __nonnull_skip_0
     x86.call mm_decref
-    x86.mov rcx, [rbp-40]
-    x86.call mm_free
-    x86.label __destruct_skip_1
-    x86.label __destruct_nullguard_0
+    x86.label __nonnull_skip_0
     x86.mov eax, [rbp-48]
+    x86.epilogue
+    x86.ret
+  }
+  func @__destruct___ManagedMemory(ptr: i64) {
+  entry:
+    x86.prologue stack_size=16
+    x86.mov [rbp-8], ecx
+    x86.mov eax, [rbp-8]
+    x86.mov ecx, [eax+16]
+    x86.xor edx, edx
+    x86.cmp ecx, edx
+    x86.je __destruct___ManagedMemory.skip_buf_0
+  free_buf_0:
+    x86.mov eax, [rbp-8]
+    x86.mov ecx, [eax+0]
+    x86.call mm_raw_free
+    x86.jmp __destruct___ManagedMemory.skip_buf_0
+  skip_buf_0:
+    x86.jmp __destruct___ManagedMemory.done
+  done:
+    x86.epilogue
+    x86.ret
+  }
+  func @__destruct_Vec3(ptr: i64) {
+  entry:
+    x86.prologue stack_size=16
+    x86.mov [rbp-8], ecx
+    x86.mov eax, [rbp-8]
+    x86.mov ecx, [eax+8]
+    x86.mov [rbp-16], ecx
+    x86.test ecx, ecx
+    x86.jz __nonnull_skip_1
+    x86.call mm_decref
+    x86.label __nonnull_skip_1
+    x86.jmp __destruct_Vec3.done
+  done:
     x86.epilogue
     x86.ret
   }

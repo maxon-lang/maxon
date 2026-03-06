@@ -16,17 +16,18 @@ public static partial class MaxonToStandardConversion {
   [ThreadStatic] private static bool _rdataStdlibPhase;
   [ThreadStatic] private static string? _currentFuncName;
   [ThreadStatic] private static Dictionary<string, string>? _symdataContextCache;
-  // Tracks element destructor functions that need to be generated.
-  // Key: function name, Value: (element struct type, managed fields, element type name)
-  [ThreadStatic] private static Dictionary<string, ElementDestructorRequest>? _elementDestructorRequests;
+  // Tracks type destructor functions that need to be generated (one per concrete type).
+  [ThreadStatic] private static Dictionary<string, DestructorRequest>? _destructorRequests;
   private static string NextRdataId() =>
     _rdataStdlibPhase ? $"s{_nextStdlibRdataId++}" : $"{_nextRdataId++}";
 
   public static MlirModule<StandardOp> Run(MlirModule<MaxonOp> module) {
     _rdataStringCache = [];
     _symdataTagCache = [];
+    _tagIndexMap = [];
+    _nextTagIndex = 1;
     _symdataContextCache = [];
-    _elementDestructorRequests = [];
+    _destructorRequests = [];
     _rdataStdlibPhase = true;
     _nextStdlibRdataId = 0;
     _nextRdataId = 0;
@@ -35,6 +36,7 @@ public static partial class MaxonToStandardConversion {
     result.RdataEntries.AddRange(module.RdataEntries);
     result.Globals.AddRange(module.Globals);
     foreach (var (k, v) in module.TypeDefs) result.TypeDefs[k] = v;
+    foreach (var (k, v) in module.TypeAliasSources) result.TypeAliasSources.TryAdd(k, v);
 
     // Resolve ranged primitive types so lowering sees base types (i64/f64/i8)
     foreach (var (_, typeDef) in module.TypeDefs) {
@@ -271,6 +273,24 @@ public static partial class MaxonToStandardConversion {
             && assign.Value.Id == lit.Result.Id
             && assign.IsDeclaration) {
             structLiteralTargets[lit.Result.Id] = assign.VarName;
+          }
+        }
+
+        // Pre-scan: find managed memory ops (slice, concat) immediately consumed by
+        // declaration assigns so they can store directly into the target variable,
+        // avoiding a temp that would cause double-decref at scope end.
+        var managedOpTargets = new Dictionary<int, string>();
+        for (int oi = 0; oi < block.Operations.Count - 1; oi++) {
+          int? resultId = block.Operations[oi] switch {
+            MaxonManagedMemSliceOp s => s.Result.Id,
+            MaxonManagedMemConcatOp c => c.Result.Id,
+            _ => null
+          };
+          if (resultId != null
+            && block.Operations[oi + 1] is MaxonAssignOp assign2
+            && assign2.Value.Id == resultId
+            && assign2.IsDeclaration) {
+            managedOpTargets[resultId.Value] = assign2.VarName;
           }
         }
 
@@ -582,12 +602,10 @@ public static partial class MaxonToStandardConversion {
               int byteOffset = 8 + payloadAssign.PayloadIndex * 8;
 
               if (structVarNames.TryGetValue(payloadAssign.NewValue.Id, out var newStructSrc)) {
-                // Heap-pointer payload: decref old value with field cleanup, store new, incref new
+                // Heap-pointer payload: decref old value, store new, incref new
                 var oldPayloadLoad = new StdLoadIndirectOp(enumHeapPtr, byteOffset, MlirType.I64);
                 newBlock.AddOp(oldPayloadLoad);
-                var payloadTypeName = structValueTypes.TryGetValue(payloadAssign.NewValue.Id, out var pt) ? pt : null;
-                EmitDestructOrDecrefValueIfNonnull(newBlock, (StdI64)oldPayloadLoad.Result, payloadTypeName,
-                  module.TypeDefs, module.TypeAliasSources, scopeName: func.Name);
+                EmitDecrefValueIfNonnull(newBlock, (StdI64)oldPayloadLoad.Result, scopeName: func.Name);
                 var childHeapPtr = (StdI64)EmitLoad(newBlock, newStructSrc, varTypes);
                 var enumHeapPtrReload = (StdI64)EmitLoad(newBlock, resolvedPrefix, varTypes);
                 newBlock.AddOp(new StdStoreIndirectOp(childHeapPtr, enumHeapPtrReload, byteOffset, MlirType.I64));
@@ -782,9 +800,8 @@ public static partial class MaxonToStandardConversion {
                   var totalSize = new StdMulI64Op(countOp.Result, elemSizeVal);
                   newBlock.AddOp(totalSize);
 
-                  // Allocate heap buffer as child of the array wrapper so it moves with the array
-                  var arrayWrapperPtr = (StdI64)EmitLoad(newBlock, tempName, varTypes);
-                  var heapBuf = EmitAllocIn(newBlock, totalSize.Result, arrayWrapperPtr, "Buffer");
+                  // Allocate heap buffer as raw memory (no refcount header)
+                  var heapBuf = EmitRawAlloc(newBlock, totalSize.Result);
                   var copyResult = new StdI64(MlirContext.Current.NextId());
                   newBlock.AddOp(new StdCallRuntimeOp("maxon_memcpy", [heapBuf, stackPtr.Result, totalSize.Result], copyResult));
 
@@ -865,7 +882,9 @@ public static partial class MaxonToStandardConversion {
               if (!structLiteralTargets.ContainsKey(structLitOp.Result.Id)
                   && !structLitFieldValueIds.Contains(structLitOp.Result.Id)
                   && !structLitReturnIds.Contains(structLitOp.Result.Id)) {
-                EmitIncrefValue(newBlock, (StdI64)EmitLoad(newBlock, tempName, varTypes), scopeName: func.Name);
+                // Orphan: not consumed by a named var. Incref to establish scope reference,
+                // scope_end's mm_decref will release it.
+                EmitIncrefValue(newBlock, structPtr, scopeName: func.Name);
                 varNameToStructType[tempName] = structLitOp.TypeName;
                 temps.MarkTempOrphan(tempName);
               }
@@ -890,45 +909,29 @@ public static partial class MaxonToStandardConversion {
                     ? ms.TypeName
                     : throw new InvalidOperationException($"No struct type info for value #{assignOp.Value.Id} in assign to '{assignOp.VarName}'");
                 if (srcName != dstName) {
-                  // Decref old value before overwriting (reassignment only).
-                  // Must use field-cleanup decref so managed child fields (e.g. String.managed)
-                  // are also decrefd when the old struct's rc hits 0.
-                  if (!assignOp.IsDeclaration) {
+                  // Decref old value before overwriting. Guarded by varTypes
+                  // so the first store skips the decref (no previous value);
+                  // reassignments and loop-header re-stores release the old ref.
+                  if (varTypes.ContainsKey(dstName)) {
                     if (!varNameToStructType.ContainsKey(dstName))
                       varNameToStructType[dstName] = structTypeName;
-                    EmitDecrefWithFieldCleanupIfNonnull(newBlock, dstName, varTypes,
-                      varNameToStructType, module.TypeDefs, module.TypeAliasSources,
-                      scopeName: func.Name);
+                    var oldHeapPtr = (StdI64)EmitLoad(newBlock, dstName, varTypes);
+                    EmitDecrefValueIfNonnull(newBlock, oldHeapPtr, scopeName: func.Name);
                   }
                   var srcHeapPtr = EmitLoad(newBlock, srcName, varTypes);
                   EmitStore(newBlock, srcHeapPtr, dstName, varTypes);
                 }
-                // Adjust refcount for the new reference.
-                // Skip incref when source is a call return — callee's rc=1 IS our reference.
-                bool isFromCallReturn = temps.IsCallReturnTransfer(srcName);
-                if (isFromCallReturn
-                    && !assignOp.VarName.StartsWith("__call_tmp_")
-                    && !assignOp.VarName.StartsWith("__callret_")) {
-                  // ReturnSelf check removed with scope analysis — conservative: always treat as call return
-                }
-                // Propagate CallReturn status to internal temp destinations so downstream
-                // temp-to-temp transfers also skip the redundant incref.
-                // Only propagate to __-prefixed vars (internal temps). User variables that
-                // receive a CallReturn value own a real reference — aliasing from them must
-                // incref normally.
-                if ((isFromCallReturn || assignOp.OwnerFlags?.HasFlag(OwnershipFlags.CallReturn) == true)
-                    && dstName.StartsWith("__") && !temps.IsTempRegistered(dstName)) {
-                  temps.RegisterTemp(dstName, structTypeName, OwnershipFlags.CallReturn);
-                }
-                if ((assignOp.IsDeclaration || srcName != dstName) && !isFromCallReturn) {
+                // Incref for the new reference (rc=0 at alloc, every assignment increfs).
+                // Skip incref when ownership was transferred from a callee return —
+                // but NOT for SelfReturn (borrowed reference that needs its own incref).
+                var isSelfReturn = temps.TempHasFlag(srcName, OwnershipFlags.SelfReturn);
+                var isCallRetTransfer = !isSelfReturn
+                    && (assignOp.OwnerFlags?.HasFlag(OwnershipFlags.CallReturn) == true
+                        || temps.IsCallReturnTransfer(srcName));
+                if (isCallRetTransfer) {
+                  temps.ConsumeTempOwnership(srcName);
+                } else if (assignOp.IsDeclaration || srcName != dstName) {
                   EmitIncref(newBlock, assignOp.VarName, varTypes, scopeName: func.Name);
-                } else if (isFromCallReturn && srcName != dstName
-                    && temps.IsTempRegistered(srcName)) {
-                  // Ownership transferred without incref from an internal temp — zero
-                  // the temp slot so scope_end's null-guarded decref becomes a no-op.
-                  var zeroOp = new StdConstI64Op(0);
-                  newBlock.AddOp(zeroOp);
-                  newBlock.AddOp(new StdStoreI64Op(zeroOp.Result, srcName));
                 }
                 varNameToStructType[assignOp.VarName] = structTypeName;
                 if (IsSelfField(isStructInstanceMethod, selfStructType, assignOp.VarName)) {
@@ -1143,8 +1146,7 @@ public static partial class MaxonToStandardConversion {
                 if (faFieldDef.Type is MlirStructType or MlirUnionType { HasAssociatedValues: true }) {
                   // Decref old field value before overwriting (may be null if field not yet initialized)
                   var oldFieldVal = (StdI64)EmitStructFieldLoad(newBlock, structName, faFieldDef.Offset, MlirType.I64, varTypes);
-                  EmitDestructValueIfNonnull(newBlock, oldFieldVal, faFieldDef.Type.Name,
-                    module.TypeDefs, module.TypeAliasSources, scopeName: func.Name);
+                  EmitDecrefValueIfNonnull(newBlock, oldFieldVal, scopeName: func.Name);
                 }
                 EmitStructFieldStore(newBlock, mappedVal, structName, faFieldDef.Offset, storeType, varTypes);
                 if (faFieldDef.Type is MlirStructType or MlirUnionType { HasAssociatedValues: true }) {
@@ -1267,29 +1269,28 @@ public static partial class MaxonToStandardConversion {
                 if (IsSelfField(isStructInstanceMethod, selfStructType, v)) continue;
                 // Only decref if this var is actually managed (has a struct type)
                 if (!varNameToStructType.ContainsKey(v)) continue;
-                // Decref the variable, recursively handling managed struct fields if any.
-                // For structs with managed fields, emits StdDestructStructOp which handles
-                // conditional field cleanup inline at x86 level (no block splitting needed).
-                EmitDecrefWithFieldCleanupIfNonnull(newBlock, v, varTypes,
-                  varNameToStructType, module.TypeDefs, module.TypeAliasSources,
-                  scopeName: func.Name);
+                // Simple mm_decref — destructors handle field cleanup when rc reaches 0
+                var heapPtr = (StdI64)EmitLoad(newBlock, v, varTypes);
+                EmitDecrefValueIfNonnull(newBlock, heapPtr, scopeName: func.Name);
                 // Zero the slot so other paths see NULL (null-guarded decref skips it)
                 var zeroOp = new StdConstI64Op(0);
                 newBlock.AddOp(zeroOp);
                 newBlock.AddOp(new StdStoreI64Op(zeroOp.Result, v));
               }
+              // Build set of orphan temps that back a returned value — these must
+              // survive scope cleanup so LowerReturn can read and transfer them.
+              var returnedOrphanTemps = new HashSet<string>();
+              foreach (var retId in structLitReturnIds) {
+                if (structVarNames.TryGetValue(retId, out var retTempName)
+                    && temps.TempHasFlag(retTempName, OwnershipFlags.Orphan)) {
+                  returnedOrphanTemps.Add(retTempName);
+                }
+              }
               // Decref orphan temps created during lowering (not in parser scope tracking)
               foreach (var tempName in temps.OrphanTemps) {
-                // Ensure orphan temp's struct type is resolvable for field cleanup.
-                // CallReturn temps auto-orphaned by VarRegistry may not be in
-                // varNameToStructType if they were never assigned to a named variable.
-                if (!varNameToStructType.ContainsKey(tempName)) {
-                  var tempType = temps.GetTempStructType(tempName);
-                  if (tempType != null) varNameToStructType[tempName] = tempType;
-                }
-                EmitDecrefWithFieldCleanupIfNonnull(newBlock, tempName, varTypes,
-                  varNameToStructType, module.TypeDefs, module.TypeAliasSources,
-                  scopeName: func.Name);
+                if (returnedOrphanTemps.Contains(tempName)) continue;
+                var orphanPtr = (StdI64)EmitLoad(newBlock, tempName, varTypes);
+                EmitDecrefValueIfNonnull(newBlock, orphanPtr, scopeName: func.Name);
                 var zeroGlobal = new StdConstI64Op(0);
                 newBlock.AddOp(zeroGlobal);
                 newBlock.AddOp(new StdStoreI64Op(zeroGlobal.Result, tempName));
@@ -1541,9 +1542,7 @@ public static partial class MaxonToStandardConversion {
                   // Decref old global value before storing new one (may be null if not yet assigned).
                   var oldGlobalLoad = new StdGlobalLoadI64Op(globalStore.GlobalName);
                   newBlock.AddOp(oldGlobalLoad);
-                  var globalTypeName = module.GlobalVarInfos.TryGetValue(globalStore.GlobalName, out var gMeta) ? gMeta.TypeName : null;
-                  EmitDestructOrDecrefValueIfNonnull(newBlock, oldGlobalLoad.Result, globalTypeName,
-                    module.TypeDefs, module.TypeAliasSources, scopeName: func.Name);
+                  EmitDecrefValueIfNonnull(newBlock, oldGlobalLoad.Result, scopeName: func.Name);
                 }
 
                 // Incref the new value — the global holds a reference
@@ -1636,7 +1635,7 @@ public static partial class MaxonToStandardConversion {
               LowerManagedMemRemove(memRemoveOp, newBlock, valueMap, varTypes, structVarNames, structValueTypes, temps);
               break;
             case MaxonManagedMemSetOp memSetOp:
-              LowerManagedMemSet(memSetOp, newBlock, valueMap, varTypes, structVarNames, structValueTypes, module.TypeDefs, module.TypeAliasSources);
+              LowerManagedMemSet(memSetOp, newBlock, valueMap, varTypes, structVarNames);
               break;
             case MaxonManagedMemCreateOp memCreateOp:
               LowerManagedMemCreate(memCreateOp, newBlock, valueMap, varTypes, structVarNames, temps);
@@ -1687,10 +1686,12 @@ public static partial class MaxonToStandardConversion {
               LowerStringInterp(interpOp, newBlock, valueMap, varTypes, structVarNames, result, temps);
               break;
             case MaxonManagedMemConcatOp concatOp:
-              LowerManagedMemConcat(concatOp, newBlock, varTypes, structVarNames, temps);
+              LowerManagedMemConcat(concatOp, newBlock, varTypes, structVarNames, temps,
+                managedOpTargets.GetValueOrDefault(concatOp.Result.Id));
               break;
             case MaxonManagedMemSliceOp sliceOp:
-              LowerManagedMemSlice(sliceOp, newBlock, valueMap, varTypes, structVarNames, temps);
+              LowerManagedMemSlice(sliceOp, newBlock, valueMap, varTypes, structVarNames, temps,
+                managedOpTargets.GetValueOrDefault(sliceOp.Result.Id));
               break;
             case MaxonMakeCharFromBytesOp makeCharOp:
               LowerMakeCharFromBytes(makeCharOp, newBlock, valueMap, varTypes, structVarNames, temps);
@@ -1758,7 +1759,7 @@ public static partial class MaxonToStandardConversion {
               LowerChainNodeValue(chainNodeValueOp, newBlock, valueMap, varTypes, structVarNames, structValueTypes, module.TypeDefs, temps);
               break;
             case MaxonChainNodeSetValueOp chainNodeSetValueOp:
-              LowerChainNodeSetValue(chainNodeSetValueOp, newBlock, valueMap, varTypes, structVarNames, module.TypeDefs, module.TypeAliasSources);
+              LowerChainNodeSetValue(chainNodeSetValueOp, newBlock, valueMap, varTypes, structVarNames, module.TypeDefs);
               break;
             case MaxonChainClearOp chainClearOp:
               LowerChainClear(chainClearOp, newBlock, varTypes, structVarNames, module.TypeDefs);
@@ -1809,8 +1810,11 @@ public static partial class MaxonToStandardConversion {
     GenerateGlobalCleanup(module, result);
 
     // Generate per-element-type destructor functions for containers whose elements
-    // have managed fields (e.g. Array with Wrapper where Wrapper contains Inner)
-    GenerateElementDestructorFunctions(result);
+    // Generate per-type destructor functions (called by mm_decref when rc reaches 0)
+    GenerateTypeDestructors(result);
+
+    // Build tag table for mm-trace (maps tag_index -> symdata label)
+    EmitTagTable(result);
 
     return result;
   }
@@ -1829,9 +1833,8 @@ public static partial class MaxonToStandardConversion {
       if (meta.TypeName == null) continue;
       var globalLoad = new StdGlobalLoadI64Op(varName);
       block.AddOp(globalLoad);
-      // Destruct the global with field cleanup (may be null if never assigned)
-      EmitDestructValueIfNonnull(block, globalLoad.Result, meta.TypeName,
-        module.TypeDefs, module.TypeAliasSources, scopeName: "__maxon_global_cleanup");
+      // Decref the global (destructor handles field cleanup when rc reaches 0)
+      EmitDecrefValueIfNonnull(block, globalLoad.Result, scopeName: "__maxon_global_cleanup");
     }
 
     block.AddOp(new StdReturnOp(null));
@@ -1839,77 +1842,214 @@ public static partial class MaxonToStandardConversion {
   }
 
   /// <summary>
-  /// Generate standard IR functions that loop over a __ManagedMemory buffer and
-  /// destruct each element using inline field cascading. Called once after all
-  /// user functions are lowered; requests are accumulated by BuildFieldDestructors.
+  /// Checks if a type that uses an Element type parameter has a resolved, heap-allocated
+  /// Element type. First checks the type's own TypeParams, then falls back to searching
+  /// wrapper types that contain this type as a field.
   /// </summary>
-  private static void GenerateElementDestructorFunctions(MlirModule<StandardOp> result) {
-    if (_elementDestructorRequests == null || _elementDestructorRequests.Count == 0) return;
+  private static bool HasManagedElementType(string typeName, MlirStructType resolved) {
+    var typeDefs = _resultModule!.TypeDefs;
+    var typeAliasSources = _resultModule!.TypeAliasSources;
 
-    foreach (var (funcName, request) in _elementDestructorRequests) {
-      var func = new MlirFunction<StandardOp>(funcName, ["managed_ptr"], [MlirType.I64], null, null);
+    // First try the type's own TypeParams (may be resolved directly)
+    if (typeAliasSources.TryGetValue(typeName, out var aliasInfo)
+        && aliasInfo.TypeParams != null
+        && aliasInfo.TypeParams.TryGetValue("Element", out var aliasElemType)
+        && aliasElemType is not MlirTypeParameterType
+        && aliasElemType.IsHeapAllocated) {
+      return true;
+    }
+    if (resolved.TypeParams.TryGetValue("Element", out var selfElemType)
+        && selfElemType is not MlirTypeParameterType
+        && selfElemType.IsHeapAllocated) {
+      return true;
+    }
 
-      // entry: load buffer and length, branch to loop header
+    // Fall back: find a wrapper type whose field matches this type and has a resolved Element
+    foreach (var (_, wrapperTypeDef) in typeDefs) {
+      if (wrapperTypeDef is not MlirStructType wrapperStruct) continue;
+      var wrapperResolved = ResolveStructType(wrapperStruct, typeDefs);
+      foreach (var field in wrapperResolved.Fields) {
+        if (field.Type is MlirStructType fieldStruct && fieldStruct.Name == typeName) {
+          if (wrapperResolved.TypeParams.TryGetValue("Element", out var wrapperElemType)
+              && wrapperElemType is not MlirTypeParameterType
+              && wrapperElemType.IsHeapAllocated) {
+            return true;
+          }
+        }
+      }
+    }
+    return false;
+  }
+
+  /// <summary>
+  /// Registers a type for destructor generation. Looks up the type in typeDefs and
+  /// records its managed fields so a destructor function can be synthesized.
+  /// </summary>
+  private static void RegisterTypeForDestructor(string typeName) {
+    var typeDefs = _resultModule!.TypeDefs;
+    var typeAliasSources = _resultModule!.TypeAliasSources;
+    _destructorRequests ??= [];
+    if (_destructorRequests.ContainsKey(typeName)) return;
+
+    if (!typeDefs.TryGetValue(typeName, out var typeDef)) return;
+
+    if (typeDef is MlirStructType structType) {
+      var resolved = ResolveStructType(structType, typeDefs);
+      bool isManagedMemory = TypeAliasInfo.IsManagedMemoryType(typeName, typeAliasSources);
+      bool isChain = TypeAliasInfo.IsChainType(typeName, typeAliasSources);
+
+      // __Chain types: destructor calls chain_clear or chain_clear_managed to walk nodes.
+      // chain_clear_managed decrefs each node's value before decrefing the node itself.
+      if (isChain) {
+        bool hasManagedElems = HasManagedElementType(typeName, resolved);
+        var clearFunc = hasManagedElems ? "maxon_chain_clear_managed" : "maxon_chain_clear";
+        _destructorRequests[typeName] = new DestructorRequest(typeName, [], ChainClearFunc: clearFunc);
+        return;
+      }
+
+      // Check if this __ManagedMemory type holds heap-allocated elements
+      bool needsManagedElementCleanup = isManagedMemory && HasManagedElementType(typeName, resolved);
+
+      var managedFields = new List<(int Offset, string FieldTypeName, bool IsRawBuffer)>();
+      foreach (var field in resolved.Fields) {
+        if (field.Type.IsHeapAllocated) {
+          var fieldTypeName = (field.Type as MlirStructType)?.Name ?? field.Type.Name;
+          managedFields.Add((field.Offset, fieldTypeName, false));
+        } else if (isManagedMemory && field.Name == "buffer") {
+          // __ManagedMemory.buffer is a raw pointer (I64) that needs mm_raw_free
+          managedFields.Add((field.Offset, "raw_buffer", true));
+        }
+      }
+      _destructorRequests[typeName] = new DestructorRequest(typeName, managedFields,
+        NeedsManagedElementCleanup: needsManagedElementCleanup);
+    } else if (typeDef is MlirUnionType unionType && unionType.HasAssociatedValues) {
+      // Union types with associated values — the destructor dispatches on tag
+      _destructorRequests[typeName] = new DestructorRequest(typeName, []);
+    }
+  }
+
+  /// <summary>
+  /// Generates destructor functions for all registered types. Each destructor takes a
+  /// raw user pointer and mm_decrefs all managed fields. Called by mm_decref when rc reaches 0.
+  /// </summary>
+  private static void GenerateTypeDestructors(MlirModule<StandardOp> result) {
+    if (_destructorRequests == null || _destructorRequests.Count == 0) return;
+
+    foreach (var (typeName, request) in _destructorRequests) {
+      var destructorName = $"__destruct_{typeName}";
+      var func = new MlirFunction<StandardOp>(destructorName, ["ptr"], [MlirType.I64], null, null);
       var entry = func.Body.AddBlock("entry");
-      var paramOp = new StdParamOp(0, "managed_ptr", new StdI64(MlirContext.Current.NextId()));
+
+      var paramOp = new StdParamOp(0, "ptr", new StdI64(MlirContext.Current.NextId()));
       entry.AddOp(paramOp);
-      var managedPtr = (StdI64)paramOp.Result;
+      var ptr = (StdI64)paramOp.Result;
+      entry.AddOp(new StdStoreI64Op(ptr, "__destr_ptr"));
 
-      var bufferLoad = new StdLoadIndirectOp(managedPtr, ManagedFieldBuffer, MlirType.I64);
-      entry.AddOp(bufferLoad);
-      var buffer = (StdI64)bufferLoad.Result;
+      if (result.TypeDefs.TryGetValue(typeName, out var typeDef) && typeDef is MlirUnionType unionType && unionType.HasAssociatedValues) {
+        // Union destructor: load tag, dispatch to per-case cleanup
+        // For each case with managed payloads, check tag and mm_decref them
+        for (int ci = 0; ci < unionType.Cases.Count; ci++) {
+          var caseInfo = unionType.Cases[ci];
+          var managedPayloads = new List<(int slotIndex, MlirType type)>();
+          if (caseInfo.AssociatedValues != null) {
+            for (int pi = 0; pi < caseInfo.AssociatedValues.Count; pi++) {
+              if (caseInfo.AssociatedValues[pi].Type.IsHeapAllocated)
+                managedPayloads.Add((pi, caseInfo.AssociatedValues[pi].Type));
+            }
+          }
+          if (managedPayloads.Count == 0) continue;
 
-      var lengthLoad = new StdLoadIndirectOp(managedPtr, ManagedFieldLength, MlirType.I64);
-      entry.AddOp(lengthLoad);
-      var length = (StdI64)lengthLoad.Result;
+          // Re-load tag in each check block to avoid cross-block value references
+          var ptrLoad = new StdLoadI64Op("__destr_ptr");
+          entry.AddOp(ptrLoad);
+          var tagLoad = new StdLoadIndirectOp(ptrLoad.Result, 0, MlirType.I64);
+          entry.AddOp(tagLoad);
+          var tagConst = new StdConstI64Op(ci);
+          entry.AddOp(tagConst);
+          var tagCmp = new StdCmpI64Op("eq", (StdI64)tagLoad.Result, tagConst.Result);
+          entry.AddOp(tagCmp);
+          var caseBlock = $"case_{ci}";
+          var nextBlock = ci < unionType.Cases.Count - 1 ? $"check_{ci + 1}" : "done";
+          entry.AddOp(new StdCondBrOp(tagCmp.Result, caseBlock, nextBlock));
 
-      var zeroConst = new StdConstI64Op(0);
-      entry.AddOp(zeroConst);
-      entry.AddOp(new StdStoreI64Op(zeroConst.Result, "__destr_index"));
-      entry.AddOp(new StdStoreI64Op(buffer, "__destr_buffer"));
-      entry.AddOp(new StdStoreI64Op(length, "__destr_length"));
-      entry.AddOp(new StdBrOp("loop_header"));
+          var caseBody = func.Body.AddBlock(caseBlock);
+          foreach (var (slotIndex, _) in managedPayloads) {
+            var casePtr = new StdLoadI64Op("__destr_ptr");
+            caseBody.AddOp(casePtr);
+            int byteOffset = 8 + slotIndex * 8;
+            var payloadLoad = new StdLoadIndirectOp(casePtr.Result, byteOffset, MlirType.I64);
+            caseBody.AddOp(payloadLoad);
+            EmitDecrefValueIfNonnull(caseBody, (StdI64)payloadLoad.Result, $"~{typeName}");
+          }
+          caseBody.AddOp(new StdBrOp("done"));
 
-      // loop_header: if index >= length, done
-      var header = func.Body.AddBlock("loop_header");
-      var idxLoad = new StdLoadI64Op("__destr_index");
-      header.AddOp(idxLoad);
-      var lenLoad = new StdLoadI64Op("__destr_length");
-      header.AddOp(lenLoad);
-      var cmp = new StdCmpU64Op("ult", idxLoad.Result, lenLoad.Result);
-      header.AddOp(cmp);
-      header.AddOp(new StdCondBrOp(cmp.Result, "loop_body", "done"));
+          // Continue checking for next case
+          if (ci < unionType.Cases.Count - 1) {
+            entry = func.Body.AddBlock(nextBlock);
+          }
+        }
 
-      // loop_body: load element pointer, destruct, increment index
-      var body = func.Body.AddBlock("loop_body");
-      var idxLoad2 = new StdLoadI64Op("__destr_index");
-      body.AddOp(idxLoad2);
-      var eightConst = new StdConstI64Op(8);
-      body.AddOp(eightConst);
-      var byteOffset = new StdMulI64Op(idxLoad2.Result, eightConst.Result);
-      body.AddOp(byteOffset);
-      var bufLoad = new StdLoadI64Op("__destr_buffer");
-      body.AddOp(bufLoad);
-      var elemAddr = new StdAddI64Op(bufLoad.Result, byteOffset.Result);
-      body.AddOp(elemAddr);
-      // Load the element pointer from buffer[index * 8] and store to a variable
-      // so it has a stack home (EmitInlineDestruct's internal calls evict registers)
-      var elemPtrLoad = new StdLoadIndirectOp(elemAddr.Result, 0, MlirType.I64);
-      body.AddOp(elemPtrLoad);
-      body.AddOp(new StdStoreI64Op((StdI64)elemPtrLoad.Result, "__destr_elem"));
-      var elemPtr = new StdLoadI64Op("__destr_elem");
-      body.AddOp(elemPtr);
-      // Destruct the element (null-guarded: slots may be zeroed after remove operations)
-      body.AddOp(new StdDestructStructOp(elemPtr.Result, request.ElementFieldDestructors, nullGuarded: true));
-      // index++
-      var idxLoad3 = new StdLoadI64Op("__destr_index");
-      body.AddOp(idxLoad3);
-      var oneConst = new StdConstI64Op(1);
-      body.AddOp(oneConst);
-      var nextIdx = new StdAddI64Op(idxLoad3.Result, oneConst.Result);
-      body.AddOp(nextIdx);
-      body.AddOp(new StdStoreI64Op(nextIdx.Result, "__destr_index"));
-      body.AddOp(new StdBrOp("loop_header"));
+        // If we fell through all cases without a match, jump to done
+        if (entry.Operations.Count == 0 || entry.Operations[^1] is not StdBrOp and not StdCondBrOp) {
+          entry.AddOp(new StdBrOp("done"));
+        }
+      } else if (request.ChainClearFunc != null) {
+        // Chain destructor: call chain_clear or chain_clear_managed to walk and free all nodes
+        var chainPtr = new StdLoadI64Op("__destr_ptr");
+        entry.AddOp(chainPtr);
+        entry.AddOp(new StdCallRuntimeOp(request.ChainClearFunc, [chainPtr.Result], null));
+        entry.AddOp(new StdBrOp("done"));
+      } else {
+        // Struct destructor: mm_decref each managed field, mm_raw_free raw buffers
+        var destructorScope = $"~{typeName}";
+
+        // Self-contained cleanup: __ManagedMemory types with managed elements
+        // walk the buffer and decref each element pointer before freeing the buffer
+        if (request.NeedsManagedElementCleanup) {
+          var selfPtr = new StdLoadI64Op("__destr_ptr");
+          entry.AddOp(selfPtr);
+          entry.AddOp(new StdCallRuntimeOp("mm_decref_managed_elements", [selfPtr.Result], null));
+        }
+
+        int fieldIdx = 0;
+        foreach (var (offset, fieldTypeName, isRawBuffer) in request.ManagedFields) {
+          var fieldPtrLoad = new StdLoadI64Op("__destr_ptr");
+          entry.AddOp(fieldPtrLoad);
+          var fieldLoad = new StdLoadIndirectOp(fieldPtrLoad.Result, offset, MlirType.I64);
+          entry.AddOp(fieldLoad);
+          if (isRawBuffer) {
+            // Raw buffer inside __ManagedMemory: free with mm_raw_free
+            // Skip if capacity==0 (rdata string literal — buffer points to static data)
+            var capPtrLoad = new StdLoadI64Op("__destr_ptr");
+            entry.AddOp(capPtrLoad);
+            var capLoad = new StdLoadIndirectOp(capPtrLoad.Result, ManagedFieldCapacity, MlirType.I64);
+            entry.AddOp(capLoad);
+            var zero = new StdConstI64Op(0);
+            entry.AddOp(zero);
+            var capNeZero = new StdCmpI64Op("ne", (StdI64)capLoad.Result, zero.Result);
+            entry.AddOp(capNeZero);
+            var freeBlock = $"free_buf_{fieldIdx}";
+            var skipBlock = $"skip_buf_{fieldIdx}";
+            entry.AddOp(new StdCondBrOp(capNeZero.Result, freeBlock, skipBlock));
+
+            var freeBody = func.Body.AddBlock(freeBlock);
+            var bufPtrLoad = new StdLoadI64Op("__destr_ptr");
+            freeBody.AddOp(bufPtrLoad);
+            var bufLoad = new StdLoadIndirectOp(bufPtrLoad.Result, offset, MlirType.I64);
+            freeBody.AddOp(bufLoad);
+            freeBody.AddOp(new StdCallRuntimeOp("mm_raw_free", [bufLoad.Result], null));
+            freeBody.AddOp(new StdBrOp(skipBlock));
+
+            entry = func.Body.AddBlock(skipBlock);
+          } else {
+            // Heap-allocated field: decref triggers the field's own destructor
+            // (self-contained cleanup — managed element fields handle their own buffer walk)
+            EmitDecrefValueIfNonnull(entry, (StdI64)fieldLoad.Result, destructorScope);
+          }
+          fieldIdx++;
+        }
+        entry.AddOp(new StdBrOp("done"));
+      }
 
       // done: return
       var done = func.Body.AddBlock("done");

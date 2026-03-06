@@ -23,6 +23,7 @@ public record TypeAliasInfo(string SourceTypeName, Dictionary<string, MlirType>?
     if (typeName == "__Chain") return true;
     return typeAliasSources.TryGetValue(typeName, out var info) && info.SourceTypeName == "__Chain";
   }
+
 }
 
 // Metadata for constant array literals that can be placed in .rdata
@@ -63,6 +64,10 @@ public class MlirModule<TOp> where TOp : IPrintableOp {
 
   // Non-exported type/enum/typealias names — filtered from _typeRegistry when seeding other files
   public HashSet<string> NonExportedTypeNames { get; } = [];
+
+  // Tag table for mm-trace: index -> symdata label of the type name string.
+  // Index 0 = null/no tag. Built during MaxonToStandard lowering, consumed by X86CodeEmitter.
+  public List<string?> TagTable { get; set; } = [];
 
   // Global variable metadata for cross-file seeding (name -> kind/mutability/type info)
   public Dictionary<string, GlobalVarMetadata> GlobalVarInfos { get; } = [];

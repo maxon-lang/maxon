@@ -497,7 +497,7 @@ public static partial class MaxonToStandardConversion {
       // Struct return: result is a heap pointer (i64)
       resultValue = new StdI64(MlirContext.Current.NextId());
       var icallretId = MlirContext.Current.NextId();
-      sretVarName = temps.CreateTemp("icallret", icallretId, indirectCallOp.ResultStructTypeName!, OwnershipFlags.CallReturn);
+      sretVarName = temps.CreateTemp("icallret", icallretId, indirectCallOp.ResultStructTypeName!, OwnershipFlags.Orphan);
     } else if (indirectCallOp.ResultKind != null) {
       resultValue = indirectCallOp.ResultKind switch {
         MaxonValueKind.Integer => new StdI64(MlirContext.Current.NextId()),

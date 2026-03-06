@@ -95,9 +95,6 @@ public class MlirStructType : MlirType {
   public bool IsTuple { get; }
   // True when this type represents a typealias of an interface (e.g., typealias ElementIterable = Iterable with Element)
   public bool IsInterfaceAlias { get; }
-  // When true, instances are always allocated via mm_alloc_in (child of parent struct) and must NOT be
-  // mm_decref'd by the parent destructor — mm_free(parent) frees children automatically.
-  public bool IsChildOwned { get; set; }
   // Maps type parameter names to required interface names (from where clauses)
   public Dictionary<string, List<string>> WhereConstraints { get; }
   public MlirStructType(string name, List<MlirStructField> fields, List<string>? associatedTypeNames = null, List<string>? conformingInterfaces = null, Dictionary<string, long>? constParams = null, Dictionary<string, MlirType>? typeParams = null, bool isTuple = false, Dictionary<string, List<string>>? whereConstraints = null, bool isInterfaceAlias = false) : base(name, ComputeSize(fields)) {

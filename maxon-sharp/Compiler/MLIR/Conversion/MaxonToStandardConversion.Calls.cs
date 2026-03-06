@@ -129,14 +129,14 @@ public static partial class MaxonToStandardConversion {
         // Use a non-callret prefix so the caller increfs it like any other alias assignment.
         var retVarName = calleeFunc.ReturnsSelf
             ? temps.CreateTemp("selfret", result.Id, calleeRetStructType.Name, OwnershipFlags.SelfReturn)
-            : temps.CreateTemp("callret", result.Id, calleeRetStructType.Name, OwnershipFlags.CallReturn);
+            : temps.CreateTemp("callret", result.Id, calleeRetStructType.Name, OwnershipFlags.Orphan | OwnershipFlags.CallReturn);
         EmitStore(block, callResult, retVarName, varTypes);
         structVarNames[result.Id] = retVarName;
         structValueTypes[result.Id] = calleeRetStructType.Name;
       } else if (calleeRetAssocEnum && callResult != null) {
         // Associated-value enum return: store heap pointer (no unpacking needed)
         var retEnumType = (MlirUnionType)calleeFunc.ReturnType!;
-        var retVarName = temps.CreateTemp("callret", result.Id, retEnumType.Name, OwnershipFlags.CallReturn);
+        var retVarName = temps.CreateTemp("callret", result.Id, retEnumType.Name, OwnershipFlags.Orphan | OwnershipFlags.CallReturn);
 
         if (isTryCall) {
           // try_call returns null (0) on error — guard against null dereference
@@ -205,14 +205,14 @@ public static partial class MaxonToStandardConversion {
       // Struct return: return the heap pointer as i64
       StdValue retHeapPtr;
       if (structVarNames.TryGetValue(retOp.Value.Id, out var srcName)) {
-        // Freshly allocated struct returned without assignment to a user variable
-        // (struct literals, enum rawValue/name lookups): allocated at rc=0 with no
-        // incref yet. Borrowed field references (__field_) also need incref since
-        // they are pointers into a parent struct without their own reference.
-        // Incref to establish ownership before transferring to caller.
+        // Incref before return: the function's scope-end will decref all locals,
+        // so the returned value needs an extra reference for the caller.
+        // Skip SelfReturn (alias, not owned).
+        // Skip Orphan temps: their scope-end cleanup is already skipped for returned values,
+        // so the single reference from creation transfers directly to the caller.
         if (temps.IsTempManaged(srcName)
-              && !temps.TempHasFlag(srcName, OwnershipFlags.CallReturn)
-              && !temps.TempHasFlag(srcName, OwnershipFlags.SelfReturn)) {
+              && !temps.TempHasFlag(srcName, OwnershipFlags.SelfReturn)
+              && !temps.TempHasFlag(srcName, OwnershipFlags.Orphan)) {
           EmitIncref(block, srcName, varTypes, scopeName: funcName);
           EmitTransfer(block, srcName, varTypes, funcName);
         }

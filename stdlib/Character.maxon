@@ -6,10 +6,11 @@
 export typealias AsciiValue = int(0 to 127)
 
 export type Character implements BuiltinCharLiteral, Hashable, Equatable, Comparable, Stringable, Strideable
-  var _managed __ManagedMemory
+  typealias ByteMemory = __ManagedMemory with Byte
+  var _managed ByteMemory
 
   // Default type for character literals - compiler discovers this via BuiltinCharLiteral interface
-  static function init(managed __ManagedMemory) returns Character
+  static function init(managed ByteMemory) returns Character
     return Character{_managed: managed}
   end 'init'
 
@@ -127,27 +128,27 @@ export type Character implements BuiltinCharLiteral, Hashable, Equatable, Compar
   // Uses bit shifts instead of division (int / int produces float in Maxon)
   static function _fromCodepoint(cp Codepoint) returns Character
     if cp < 128 'enc_ascii'
-      var m = __ManagedMemory.create(1, 1)
+      var m = ByteMemory.create(1, 1)
       m.setByte(0, cp)
       m.setLength(1)
       return Character{_managed: m}
     end 'enc_ascii'
     if cp < 2048 'enc_two'
-      var m = __ManagedMemory.create(2, 1)
+      var m = ByteMemory.create(2, 1)
       m.setByte(0, 192 or (cp shr 6))
       m.setByte(1, 128 or (cp and 63))
       m.setLength(2)
       return Character{_managed: m}
     end 'enc_two'
     if cp < 65536 'enc_three'
-      var m = __ManagedMemory.create(3, 1)
+      var m = ByteMemory.create(3, 1)
       m.setByte(0, 224 or (cp shr 12))
       m.setByte(1, 128 or ((cp shr 6) and 63))
       m.setByte(2, 128 or (cp and 63))
       m.setLength(3)
       return Character{_managed: m}
     end 'enc_three'
-    var m = __ManagedMemory.create(4, 1)
+    var m = ByteMemory.create(4, 1)
     m.setByte(0, 240 or (cp shr 18))
     m.setByte(1, 128 or ((cp shr 12) and 63))
     m.setByte(2, 128 or ((cp shr 6) and 63))

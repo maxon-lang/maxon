@@ -40,46 +40,48 @@ module {
   func @chain.main() -> u32 {
   entry:
     x86.prologue stack_size=672
+    x86.lea_func eax, [__destruct_IntChain]
+    x86.mov rcx, rax
+    x86.mov rdx, rcx
     x86.mov rcx, 32
-    x86.xor rdx, rdx
+    x86.mov r8, 1
     x86.call mm_alloc
-    x86.xor ecx, ecx
-    x86.mov [eax+0], ecx
-    x86.mov [eax+8], ecx
-    x86.mov [eax+16], ecx
-    x86.mov [eax+24], ecx
+    x86.xor edx, edx
+    x86.mov [eax+0], edx
+    x86.mov [eax+8], edx
+    x86.mov [eax+16], edx
+    x86.mov [eax+24], edx
     x86.mov [rbp-8], eax
-    x86.mov eax, [rbp-8]
+    x86.mov ebx, [rbp-8]
     x86.mov rcx, [rbp-8]
     x86.call mm_incref
-    x86.mov ecx, 10
-    x86.mov edx, [rbp-8]
-    x86.mov rcx, 32
-    x86.xor r8, r8
-    x86.call mm_alloc_in
-    x86.xor ebx, ebx
-    x86.mov [eax+0], ebx
-    x86.mov [eax+8], ebx
-    x86.mov [eax+16], ebx
     x86.mov esi, 10
-    x86.mov [eax+24], esi
+    x86.mov rcx, 32
+    x86.xor rdx, rdx
+    x86.mov r8, 2
+    x86.call mm_alloc
+    x86.xor edi, edi
+    x86.mov [eax+0], edi
+    x86.mov [eax+8], edi
+    x86.mov [eax+16], edi
+    x86.mov r8, 10
+    x86.mov [eax+24], r8
     x86.mov [rbp-16], eax
-    x86.mov edi, [rbp-8]
-    x86.mov r8, [rbp-16]
+    x86.mov r9, [rbp-8]
+    x86.mov ecx, [rbp-16]
     x86.mov rcx, [rbp-8]
     x86.mov rdx, [rbp-16]
     x86.call maxon_chain_insert_last
-    x86.mov r9, [rbp-16]
-    x86.mov [rbp-24], r9
+    x86.mov eax, [rbp-16]
+    x86.mov [rbp-24], eax
     x86.mov eax, [rbp-24]
     x86.mov rcx, [rbp-24]
     x86.call mm_incref
     x86.mov eax, 20
-    x86.mov ecx, [rbp-8]
-    x86.mov rdx, [rbp-8]
     x86.mov rcx, 32
-    x86.xor r8, r8
-    x86.call mm_alloc_in
+    x86.xor rdx, rdx
+    x86.mov r8, 2
+    x86.call mm_alloc
     x86.xor ecx, ecx
     x86.mov [eax+0], ecx
     x86.mov [eax+8], ecx
@@ -96,11 +98,10 @@ module {
     x86.mov rcx, [rbp-40]
     x86.call mm_incref
     x86.mov eax, 30
-    x86.mov ecx, [rbp-8]
-    x86.mov rdx, [rbp-8]
     x86.mov rcx, 32
-    x86.xor r8, r8
-    x86.call mm_alloc_in
+    x86.xor rdx, rdx
+    x86.mov r8, 2
+    x86.call mm_alloc
     x86.xor ecx, ecx
     x86.mov [eax+0], ecx
     x86.mov [eax+8], ecx
@@ -141,6 +142,9 @@ module {
     x86.label __nonnull_skip_0
     x86.mov eax, [rbp-64]
     x86.mov [rbp-72], eax
+    x86.mov eax, [rbp-72]
+    x86.mov rcx, [rbp-72]
+    x86.call mm_incref
     x86.xor eax, eax
     x86.mov ecx, [rbp-576]
     x86.cmp ecx, eax
@@ -175,20 +179,25 @@ module {
     x86.mov rcx, [rbp-72]
     x86.call mm_decref
     x86.label __nonnull_skip_5
+    x86.mov edi, [rbp-64]
+    x86.test edi, edi
+    x86.jz __nonnull_skip_6
+    x86.mov rcx, [rbp-64]
+    x86.call mm_decref
+    x86.label __nonnull_skip_6
     x86.mov eax, 1
     x86.epilogue
     x86.ret
   otherwise_continue_1:
     x86.mov eax, [rbp-72]
     x86.mov [rbp-80], eax
-    x86.xor ecx, ecx
-    x86.mov [rbp-72], ecx
+    x86.mov ecx, [rbp-80]
+    x86.call mm_incref
     x86.mov edx, [rbp-80]
     x86.mov ebx, [edx+24]
     x86.mov [rbp-576], ebx
     x86.mov rcx, 21
-    x86.xor rdx, rdx
-    x86.call mm_alloc
+    x86.call mm_raw_alloc
     x86.mov [rbp-88], eax
     x86.mov rcx, [rbp-576]
     x86.mov rdx, [rbp-88]
@@ -198,25 +207,27 @@ module {
     x86.mov r8, rdi
     x86.mov r9, 1
     x86.lea ecx, [eax + r9]
+    x86.lea_func edx, [__destruct_String]
+    x86.mov rbx, rdx
     x86.mov [rbp-584], eax
     x86.mov [rbp-592], ecx
     x86.mov [rbp-600], r8
+    x86.mov rdx, rbx
     x86.mov rcx, 16
-    x86.xor rdx, rdx
+    x86.mov r8, 3
     x86.call mm_alloc
     x86.mov [rbp-96], eax
-    x86.mov rdx, [rbp-96]
+    x86.lea_func ecx, [__destruct___ManagedMemory]
+    x86.mov rdx, rcx
     x86.mov rcx, 32
-    x86.xor r8, r8
-    x86.call mm_alloc_in
+    x86.mov r8, 4
+    x86.call mm_alloc
     x86.mov [rbp-104], eax
-    x86.mov ecx, 1
-    x86.mov edx, [rbp-592]
-    x86.lea ebx, [edx + ecx]
-    x86.mov rcx, rbx
-    x86.mov rdx, [rbp-104]
-    x86.xor r8, r8
-    x86.call mm_alloc_in
+    x86.mov eax, 1
+    x86.mov ecx, [rbp-592]
+    x86.lea edx, [ecx + eax]
+    x86.mov rcx, rdx
+    x86.call mm_raw_alloc
     x86.xor ecx, ecx
     x86.mov [rbp-112], ecx
     x86.mov [rbp-120], eax
@@ -259,7 +270,7 @@ module {
     x86.mov byte ptr [eax+0], ecxb
     x86.mov eax, [rbp-88]
     x86.mov rcx, [rbp-88]
-    x86.call mm_free
+    x86.call mm_raw_free
     x86.mov eax, [rbp-120]
     x86.mov ecx, [rbp-104]
     x86.mov [ecx+0], eax
@@ -300,12 +311,15 @@ module {
     x86.mov eax, [rbp-176]
     x86.mov [rbp-608], esi
     x86.test eax, eax
-    x86.jz __nonnull_skip_6
+    x86.jz __nonnull_skip_7
     x86.mov rcx, [rbp-176]
     x86.call mm_incref
-    x86.label __nonnull_skip_6
+    x86.label __nonnull_skip_7
     x86.mov eax, [rbp-176]
     x86.mov [rbp-184], eax
+    x86.mov eax, [rbp-184]
+    x86.mov rcx, [rbp-184]
+    x86.call mm_incref
     x86.xor eax, eax
     x86.mov ecx, [rbp-608]
     x86.cmp ecx, eax
@@ -313,73 +327,76 @@ module {
   otherwise_error_4:
     x86.mov eax, [rbp-8]
     x86.test eax, eax
-    x86.jz __nonnull_skip_7
+    x86.jz __nonnull_skip_8
     x86.mov rcx, [rbp-8]
     x86.call mm_decref
-    x86.label __nonnull_skip_7
+    x86.label __nonnull_skip_8
     x86.mov ecx, [rbp-24]
     x86.test ecx, ecx
-    x86.jz __nonnull_skip_8
-    x86.call mm_decref
-    x86.label __nonnull_skip_8
-    x86.mov edx, [rbp-40]
-    x86.test edx, edx
     x86.jz __nonnull_skip_9
-    x86.mov rcx, [rbp-40]
     x86.call mm_decref
     x86.label __nonnull_skip_9
-    x86.mov ebx, [rbp-56]
-    x86.test ebx, ebx
+    x86.mov edx, [rbp-40]
+    x86.test edx, edx
     x86.jz __nonnull_skip_10
-    x86.mov rcx, [rbp-56]
+    x86.mov rcx, [rbp-40]
     x86.call mm_decref
     x86.label __nonnull_skip_10
-    x86.mov esi, [rbp-80]
-    x86.test esi, esi
+    x86.mov ebx, [rbp-56]
+    x86.test ebx, ebx
     x86.jz __nonnull_skip_11
-    x86.mov rcx, [rbp-80]
+    x86.mov rcx, [rbp-56]
     x86.call mm_decref
     x86.label __nonnull_skip_11
-    x86.mov edi, [rbp-72]
-    x86.test edi, edi
+    x86.mov esi, [rbp-80]
+    x86.test esi, esi
     x86.jz __nonnull_skip_12
-    x86.mov rcx, [rbp-72]
+    x86.mov rcx, [rbp-80]
     x86.call mm_decref
     x86.label __nonnull_skip_12
+    x86.mov edi, [rbp-72]
+    x86.test edi, edi
+    x86.jz __nonnull_skip_13
+    x86.mov rcx, [rbp-72]
+    x86.call mm_decref
+    x86.label __nonnull_skip_13
     x86.mov r8, [rbp-168]
     x86.test r8, r8
-    x86.jz __destruct_nullguard_13
+    x86.jz __nonnull_skip_14
     x86.mov rcx, [rbp-168]
-    x86.call mm_decref_check
-    x86.test eax, eax
-    x86.jnz __destruct_skip_14
-    x86.mov r9, [rbp-168]
-    x86.mov ecx, [r9+0]
-    x86.call mm_decref_if_owned
-    x86.mov rcx, [rbp-168]
-    x86.call mm_free
-    x86.label __destruct_skip_14
-    x86.label __destruct_nullguard_13
-    x86.mov eax, [rbp-184]
-    x86.test eax, eax
+    x86.call mm_decref
+    x86.label __nonnull_skip_14
+    x86.mov r9, [rbp-184]
+    x86.test r9, r9
     x86.jz __nonnull_skip_15
     x86.mov rcx, [rbp-184]
     x86.call mm_decref
     x86.label __nonnull_skip_15
+    x86.mov eax, [rbp-64]
+    x86.test eax, eax
+    x86.jz __nonnull_skip_16
+    x86.mov rcx, [rbp-64]
+    x86.call mm_decref
+    x86.label __nonnull_skip_16
+    x86.mov eax, [rbp-176]
+    x86.test eax, eax
+    x86.jz __nonnull_skip_17
+    x86.mov rcx, [rbp-176]
+    x86.call mm_decref
+    x86.label __nonnull_skip_17
     x86.mov eax, 1
     x86.epilogue
     x86.ret
   otherwise_continue_5:
     x86.mov eax, [rbp-184]
     x86.mov [rbp-192], eax
-    x86.xor ecx, ecx
-    x86.mov [rbp-184], ecx
+    x86.mov ecx, [rbp-192]
+    x86.call mm_incref
     x86.mov edx, [rbp-192]
     x86.mov ebx, [edx+24]
     x86.mov [rbp-576], ebx
     x86.mov rcx, 21
-    x86.xor rdx, rdx
-    x86.call mm_alloc
+    x86.call mm_raw_alloc
     x86.mov [rbp-200], eax
     x86.mov rcx, [rbp-576]
     x86.mov rdx, [rbp-200]
@@ -389,25 +406,27 @@ module {
     x86.mov r8, rdi
     x86.mov r9, 1
     x86.lea ecx, [eax + r9]
+    x86.lea_func edx, [__destruct_String]
+    x86.mov rbx, rdx
     x86.mov [rbp-584], eax
     x86.mov [rbp-592], ecx
     x86.mov [rbp-600], r8
+    x86.mov rdx, rbx
     x86.mov rcx, 16
-    x86.xor rdx, rdx
+    x86.mov r8, 3
     x86.call mm_alloc
     x86.mov [rbp-208], eax
-    x86.mov rdx, [rbp-208]
+    x86.lea_func ecx, [__destruct___ManagedMemory]
+    x86.mov rdx, rcx
     x86.mov rcx, 32
-    x86.xor r8, r8
-    x86.call mm_alloc_in
+    x86.mov r8, 4
+    x86.call mm_alloc
     x86.mov [rbp-216], eax
-    x86.mov ecx, 1
-    x86.mov edx, [rbp-592]
-    x86.lea ebx, [edx + ecx]
-    x86.mov rcx, rbx
-    x86.mov rdx, [rbp-216]
-    x86.xor r8, r8
-    x86.call mm_alloc_in
+    x86.mov eax, 1
+    x86.mov ecx, [rbp-592]
+    x86.lea edx, [ecx + eax]
+    x86.mov rcx, rdx
+    x86.call mm_raw_alloc
     x86.xor ecx, ecx
     x86.mov [rbp-224], ecx
     x86.mov [rbp-232], eax
@@ -450,7 +469,7 @@ module {
     x86.mov byte ptr [eax+0], ecxb
     x86.mov eax, [rbp-200]
     x86.mov rcx, [rbp-200]
-    x86.call mm_free
+    x86.call mm_raw_free
     x86.mov eax, [rbp-232]
     x86.mov ecx, [rbp-216]
     x86.mov [ecx+0], eax
@@ -491,12 +510,15 @@ module {
     x86.mov eax, [rbp-288]
     x86.mov [rbp-608], esi
     x86.test eax, eax
-    x86.jz __nonnull_skip_16
+    x86.jz __nonnull_skip_18
     x86.mov rcx, [rbp-288]
     x86.call mm_incref
-    x86.label __nonnull_skip_16
+    x86.label __nonnull_skip_18
     x86.mov eax, [rbp-288]
     x86.mov [rbp-296], eax
+    x86.mov eax, [rbp-296]
+    x86.mov rcx, [rbp-296]
+    x86.call mm_incref
     x86.xor eax, eax
     x86.mov ecx, [rbp-608]
     x86.cmp ecx, eax
@@ -504,101 +526,100 @@ module {
   otherwise_error_8:
     x86.mov eax, [rbp-8]
     x86.test eax, eax
-    x86.jz __nonnull_skip_17
+    x86.jz __nonnull_skip_19
     x86.mov rcx, [rbp-8]
     x86.call mm_decref
-    x86.label __nonnull_skip_17
+    x86.label __nonnull_skip_19
     x86.mov ecx, [rbp-24]
     x86.test ecx, ecx
-    x86.jz __nonnull_skip_18
-    x86.call mm_decref
-    x86.label __nonnull_skip_18
-    x86.mov edx, [rbp-40]
-    x86.test edx, edx
-    x86.jz __nonnull_skip_19
-    x86.mov rcx, [rbp-40]
-    x86.call mm_decref
-    x86.label __nonnull_skip_19
-    x86.mov ebx, [rbp-56]
-    x86.test ebx, ebx
     x86.jz __nonnull_skip_20
-    x86.mov rcx, [rbp-56]
     x86.call mm_decref
     x86.label __nonnull_skip_20
-    x86.mov esi, [rbp-80]
-    x86.test esi, esi
+    x86.mov edx, [rbp-40]
+    x86.test edx, edx
     x86.jz __nonnull_skip_21
-    x86.mov rcx, [rbp-80]
+    x86.mov rcx, [rbp-40]
     x86.call mm_decref
     x86.label __nonnull_skip_21
-    x86.mov edi, [rbp-192]
-    x86.test edi, edi
+    x86.mov ebx, [rbp-56]
+    x86.test ebx, ebx
     x86.jz __nonnull_skip_22
-    x86.mov rcx, [rbp-192]
+    x86.mov rcx, [rbp-56]
     x86.call mm_decref
     x86.label __nonnull_skip_22
-    x86.mov r8, [rbp-72]
-    x86.test r8, r8
+    x86.mov esi, [rbp-80]
+    x86.test esi, esi
     x86.jz __nonnull_skip_23
-    x86.mov rcx, [rbp-72]
+    x86.mov rcx, [rbp-80]
     x86.call mm_decref
     x86.label __nonnull_skip_23
+    x86.mov edi, [rbp-192]
+    x86.test edi, edi
+    x86.jz __nonnull_skip_24
+    x86.mov rcx, [rbp-192]
+    x86.call mm_decref
+    x86.label __nonnull_skip_24
+    x86.mov r8, [rbp-72]
+    x86.test r8, r8
+    x86.jz __nonnull_skip_25
+    x86.mov rcx, [rbp-72]
+    x86.call mm_decref
+    x86.label __nonnull_skip_25
     x86.mov r9, [rbp-168]
     x86.test r9, r9
-    x86.jz __destruct_nullguard_24
-    x86.mov rcx, [rbp-168]
-    x86.call mm_decref_check
-    x86.test eax, eax
-    x86.jnz __destruct_skip_25
-    x86.mov ecx, [rbp-168]
-    x86.mov edx, [ecx+0]
-    x86.mov rcx, rdx
-    x86.call mm_decref_if_owned
-    x86.mov rcx, [rbp-168]
-    x86.call mm_free
-    x86.label __destruct_skip_25
-    x86.label __destruct_nullguard_24
-    x86.mov eax, [rbp-184]
-    x86.test eax, eax
     x86.jz __nonnull_skip_26
-    x86.mov rcx, [rbp-184]
+    x86.mov rcx, [rbp-168]
     x86.call mm_decref
     x86.label __nonnull_skip_26
+    x86.mov eax, [rbp-184]
+    x86.test eax, eax
+    x86.jz __nonnull_skip_27
+    x86.mov rcx, [rbp-184]
+    x86.call mm_decref
+    x86.label __nonnull_skip_27
     x86.mov eax, [rbp-280]
     x86.test eax, eax
-    x86.jz __destruct_nullguard_27
+    x86.jz __nonnull_skip_28
     x86.mov rcx, [rbp-280]
-    x86.call mm_decref_check
-    x86.test eax, eax
-    x86.jnz __destruct_skip_28
-    x86.mov ecx, [rbp-280]
-    x86.mov edx, [ecx+0]
-    x86.mov rcx, rdx
-    x86.call mm_decref_if_owned
-    x86.mov rcx, [rbp-280]
-    x86.call mm_free
-    x86.label __destruct_skip_28
-    x86.label __destruct_nullguard_27
+    x86.call mm_decref
+    x86.label __nonnull_skip_28
     x86.mov eax, [rbp-296]
     x86.test eax, eax
     x86.jz __nonnull_skip_29
     x86.mov rcx, [rbp-296]
     x86.call mm_decref
     x86.label __nonnull_skip_29
+    x86.mov eax, [rbp-64]
+    x86.test eax, eax
+    x86.jz __nonnull_skip_30
+    x86.mov rcx, [rbp-64]
+    x86.call mm_decref
+    x86.label __nonnull_skip_30
+    x86.mov eax, [rbp-176]
+    x86.test eax, eax
+    x86.jz __nonnull_skip_31
+    x86.mov rcx, [rbp-176]
+    x86.call mm_decref
+    x86.label __nonnull_skip_31
+    x86.mov eax, [rbp-288]
+    x86.test eax, eax
+    x86.jz __nonnull_skip_32
+    x86.mov rcx, [rbp-288]
+    x86.call mm_decref
+    x86.label __nonnull_skip_32
     x86.mov eax, 1
     x86.epilogue
     x86.ret
   otherwise_continue_9:
     x86.mov eax, [rbp-296]
     x86.mov [rbp-304], eax
-    x86.xor ecx, ecx
-    x86.mov [rbp-296], ecx
+    x86.mov ecx, [rbp-304]
+    x86.call mm_incref
     x86.mov edx, [rbp-304]
     x86.mov ebx, [edx+24]
     x86.mov [rbp-576], ebx
     x86.mov rcx, 21
-    x86.xor rdx, rdx
-    x86.call mm_alloc
+    x86.call mm_raw_alloc
     x86.mov [rbp-312], eax
     x86.mov rcx, [rbp-576]
     x86.mov rdx, [rbp-312]
@@ -608,25 +629,27 @@ module {
     x86.mov r8, rdi
     x86.mov r9, 1
     x86.lea ecx, [eax + r9]
+    x86.lea_func edx, [__destruct_String]
+    x86.mov rbx, rdx
     x86.mov [rbp-584], eax
     x86.mov [rbp-592], ecx
     x86.mov [rbp-600], r8
+    x86.mov rdx, rbx
     x86.mov rcx, 16
-    x86.xor rdx, rdx
+    x86.mov r8, 3
     x86.call mm_alloc
     x86.mov [rbp-320], eax
-    x86.mov rdx, [rbp-320]
+    x86.lea_func ecx, [__destruct___ManagedMemory]
+    x86.mov rdx, rcx
     x86.mov rcx, 32
-    x86.xor r8, r8
-    x86.call mm_alloc_in
+    x86.mov r8, 4
+    x86.call mm_alloc
     x86.mov [rbp-328], eax
-    x86.mov ecx, 1
-    x86.mov edx, [rbp-592]
-    x86.lea ebx, [edx + ecx]
-    x86.mov rcx, rbx
-    x86.mov rdx, [rbp-328]
-    x86.xor r8, r8
-    x86.call mm_alloc_in
+    x86.mov eax, 1
+    x86.mov ecx, [rbp-592]
+    x86.lea edx, [ecx + eax]
+    x86.mov rcx, rdx
+    x86.call mm_raw_alloc
     x86.xor ecx, ecx
     x86.mov [rbp-336], ecx
     x86.mov [rbp-344], eax
@@ -669,7 +692,7 @@ module {
     x86.mov byte ptr [eax+0], ecxb
     x86.mov eax, [rbp-312]
     x86.mov rcx, [rbp-312]
-    x86.call mm_free
+    x86.call mm_raw_free
     x86.mov eax, [rbp-344]
     x86.mov ecx, [rbp-328]
     x86.mov [ecx+0], eax
@@ -699,8 +722,7 @@ module {
     x86.mov ecx, [eax+24]
     x86.mov [rbp-608], ecx
     x86.mov rcx, 21
-    x86.xor rdx, rdx
-    x86.call mm_alloc
+    x86.call mm_raw_alloc
     x86.mov [rbp-400], eax
     x86.mov rcx, [rbp-608]
     x86.mov rdx, [rbp-400]
@@ -710,25 +732,27 @@ module {
     x86.mov rbx, rdx
     x86.mov edx, 1
     x86.lea esi, [eax + edx]
+    x86.lea_func edi, [__destruct_String]
+    x86.mov r8, rdi
     x86.mov [rbp-616], eax
     x86.mov [rbp-624], ebx
     x86.mov [rbp-632], esi
+    x86.mov rdx, r8
     x86.mov rcx, 16
-    x86.xor rdx, rdx
+    x86.mov r8, 3
     x86.call mm_alloc
     x86.mov [rbp-408], eax
-    x86.mov rdx, [rbp-408]
+    x86.lea_func ecx, [__destruct___ManagedMemory]
+    x86.mov rdx, rcx
     x86.mov rcx, 32
-    x86.xor r8, r8
-    x86.call mm_alloc_in
+    x86.mov r8, 4
+    x86.call mm_alloc
     x86.mov [rbp-416], eax
-    x86.mov ecx, 1
-    x86.mov edx, [rbp-632]
-    x86.lea ebx, [edx + ecx]
-    x86.mov rcx, rbx
-    x86.mov rdx, [rbp-416]
-    x86.xor r8, r8
-    x86.call mm_alloc_in
+    x86.mov eax, 1
+    x86.mov ecx, [rbp-632]
+    x86.lea edx, [ecx + eax]
+    x86.mov rcx, rdx
+    x86.call mm_raw_alloc
     x86.xor ecx, ecx
     x86.mov [rbp-424], ecx
     x86.mov [rbp-432], eax
@@ -771,7 +795,7 @@ module {
     x86.mov byte ptr [eax+0], ecxb
     x86.mov eax, [rbp-400]
     x86.mov rcx, [rbp-400]
-    x86.call mm_free
+    x86.call mm_raw_free
     x86.mov eax, [rbp-432]
     x86.mov ecx, [rbp-416]
     x86.mov [ecx+0], eax
@@ -801,8 +825,7 @@ module {
     x86.mov ecx, [eax+24]
     x86.mov [rbp-640], ecx
     x86.mov rcx, 21
-    x86.xor rdx, rdx
-    x86.call mm_alloc
+    x86.call mm_raw_alloc
     x86.mov [rbp-488], eax
     x86.mov rcx, [rbp-640]
     x86.mov rdx, [rbp-488]
@@ -812,25 +835,27 @@ module {
     x86.mov rbx, rdx
     x86.mov edx, 1
     x86.lea esi, [eax + edx]
+    x86.lea_func edi, [__destruct_String]
+    x86.mov r8, rdi
     x86.mov [rbp-648], eax
     x86.mov [rbp-656], ebx
     x86.mov [rbp-664], esi
+    x86.mov rdx, r8
     x86.mov rcx, 16
-    x86.xor rdx, rdx
+    x86.mov r8, 3
     x86.call mm_alloc
     x86.mov [rbp-496], eax
-    x86.mov rdx, [rbp-496]
+    x86.lea_func ecx, [__destruct___ManagedMemory]
+    x86.mov rdx, rcx
     x86.mov rcx, 32
-    x86.xor r8, r8
-    x86.call mm_alloc_in
+    x86.mov r8, 4
+    x86.call mm_alloc
     x86.mov [rbp-504], eax
-    x86.mov ecx, 1
-    x86.mov edx, [rbp-664]
-    x86.lea ebx, [edx + ecx]
-    x86.mov rcx, rbx
-    x86.mov rdx, [rbp-504]
-    x86.xor r8, r8
-    x86.call mm_alloc_in
+    x86.mov eax, 1
+    x86.mov ecx, [rbp-664]
+    x86.lea edx, [ecx + eax]
+    x86.mov rcx, rdx
+    x86.call mm_raw_alloc
     x86.xor ecx, ecx
     x86.mov [rbp-512], ecx
     x86.mov [rbp-520], eax
@@ -873,7 +898,7 @@ module {
     x86.mov byte ptr [eax+0], ecxb
     x86.mov eax, [rbp-488]
     x86.mov rcx, [rbp-488]
-    x86.call mm_free
+    x86.call mm_raw_free
     x86.mov eax, [rbp-520]
     x86.mov ecx, [rbp-504]
     x86.mov [ecx+0], eax
@@ -901,140 +926,167 @@ module {
     x86.call stdlib.Print.print
     x86.mov eax, [rbp-8]
     x86.test eax, eax
-    x86.jz __nonnull_skip_30
+    x86.jz __nonnull_skip_33
     x86.mov rcx, [rbp-8]
     x86.call mm_decref
-    x86.label __nonnull_skip_30
+    x86.label __nonnull_skip_33
     x86.mov eax, [rbp-24]
     x86.test eax, eax
-    x86.jz __nonnull_skip_31
+    x86.jz __nonnull_skip_34
     x86.mov rcx, [rbp-24]
     x86.call mm_decref
-    x86.label __nonnull_skip_31
+    x86.label __nonnull_skip_34
     x86.mov eax, [rbp-40]
     x86.test eax, eax
-    x86.jz __nonnull_skip_32
+    x86.jz __nonnull_skip_35
     x86.mov rcx, [rbp-40]
     x86.call mm_decref
-    x86.label __nonnull_skip_32
+    x86.label __nonnull_skip_35
     x86.mov eax, [rbp-56]
     x86.test eax, eax
-    x86.jz __nonnull_skip_33
+    x86.jz __nonnull_skip_36
     x86.mov rcx, [rbp-56]
     x86.call mm_decref
-    x86.label __nonnull_skip_33
+    x86.label __nonnull_skip_36
     x86.mov eax, [rbp-80]
     x86.test eax, eax
-    x86.jz __nonnull_skip_34
+    x86.jz __nonnull_skip_37
     x86.mov rcx, [rbp-80]
     x86.call mm_decref
-    x86.label __nonnull_skip_34
+    x86.label __nonnull_skip_37
     x86.mov eax, [rbp-192]
     x86.test eax, eax
-    x86.jz __nonnull_skip_35
+    x86.jz __nonnull_skip_38
     x86.mov rcx, [rbp-192]
     x86.call mm_decref
-    x86.label __nonnull_skip_35
+    x86.label __nonnull_skip_38
     x86.mov eax, [rbp-304]
     x86.test eax, eax
-    x86.jz __nonnull_skip_36
+    x86.jz __nonnull_skip_39
     x86.mov rcx, [rbp-304]
     x86.call mm_decref
-    x86.label __nonnull_skip_36
+    x86.label __nonnull_skip_39
     x86.mov eax, [rbp-72]
     x86.test eax, eax
-    x86.jz __nonnull_skip_37
+    x86.jz __nonnull_skip_40
     x86.mov rcx, [rbp-72]
     x86.call mm_decref
-    x86.label __nonnull_skip_37
+    x86.label __nonnull_skip_40
     x86.mov eax, [rbp-168]
     x86.test eax, eax
-    x86.jz __destruct_nullguard_38
+    x86.jz __nonnull_skip_41
     x86.mov rcx, [rbp-168]
-    x86.call mm_decref_check
-    x86.test eax, eax
-    x86.jnz __destruct_skip_39
-    x86.mov ecx, [rbp-168]
-    x86.mov edx, [ecx+0]
-    x86.mov rcx, rdx
-    x86.call mm_decref_if_owned
-    x86.mov rcx, [rbp-168]
-    x86.call mm_free
-    x86.label __destruct_skip_39
-    x86.label __destruct_nullguard_38
+    x86.call mm_decref
+    x86.label __nonnull_skip_41
     x86.mov eax, [rbp-184]
     x86.test eax, eax
-    x86.jz __nonnull_skip_40
+    x86.jz __nonnull_skip_42
     x86.mov rcx, [rbp-184]
     x86.call mm_decref
-    x86.label __nonnull_skip_40
+    x86.label __nonnull_skip_42
     x86.mov eax, [rbp-280]
     x86.test eax, eax
-    x86.jz __destruct_nullguard_41
-    x86.mov rcx, [rbp-280]
-    x86.call mm_decref_check
-    x86.test eax, eax
-    x86.jnz __destruct_skip_42
-    x86.mov ecx, [rbp-280]
-    x86.mov edx, [ecx+0]
-    x86.mov rcx, rdx
-    x86.call mm_decref_if_owned
-    x86.mov rcx, [rbp-280]
-    x86.call mm_free
-    x86.label __destruct_skip_42
-    x86.label __destruct_nullguard_41
-    x86.mov eax, [rbp-296]
-    x86.test eax, eax
     x86.jz __nonnull_skip_43
-    x86.mov rcx, [rbp-296]
+    x86.mov rcx, [rbp-280]
     x86.call mm_decref
     x86.label __nonnull_skip_43
+    x86.mov eax, [rbp-296]
+    x86.test eax, eax
+    x86.jz __nonnull_skip_44
+    x86.mov rcx, [rbp-296]
+    x86.call mm_decref
+    x86.label __nonnull_skip_44
     x86.mov eax, [rbp-392]
     x86.test eax, eax
-    x86.jz __destruct_nullguard_44
+    x86.jz __nonnull_skip_45
     x86.mov rcx, [rbp-392]
-    x86.call mm_decref_check
-    x86.test eax, eax
-    x86.jnz __destruct_skip_45
-    x86.mov ecx, [rbp-392]
-    x86.mov edx, [ecx+0]
-    x86.mov rcx, rdx
-    x86.call mm_decref_if_owned
-    x86.mov rcx, [rbp-392]
-    x86.call mm_free
-    x86.label __destruct_skip_45
-    x86.label __destruct_nullguard_44
+    x86.call mm_decref
+    x86.label __nonnull_skip_45
     x86.mov eax, [rbp-480]
     x86.test eax, eax
-    x86.jz __destruct_nullguard_46
+    x86.jz __nonnull_skip_46
     x86.mov rcx, [rbp-480]
-    x86.call mm_decref_check
-    x86.test eax, eax
-    x86.jnz __destruct_skip_47
-    x86.mov ecx, [rbp-480]
-    x86.mov edx, [ecx+0]
-    x86.mov rcx, rdx
-    x86.call mm_decref_if_owned
-    x86.mov rcx, [rbp-480]
-    x86.call mm_free
-    x86.label __destruct_skip_47
-    x86.label __destruct_nullguard_46
+    x86.call mm_decref
+    x86.label __nonnull_skip_46
     x86.mov eax, [rbp-568]
     x86.test eax, eax
-    x86.jz __destruct_nullguard_48
+    x86.jz __nonnull_skip_47
     x86.mov rcx, [rbp-568]
-    x86.call mm_decref_check
+    x86.call mm_decref
+    x86.label __nonnull_skip_47
+    x86.mov eax, [rbp-64]
     x86.test eax, eax
-    x86.jnz __destruct_skip_49
-    x86.mov ecx, [rbp-568]
-    x86.mov edx, [ecx+0]
-    x86.mov rcx, rdx
-    x86.call mm_decref_if_owned
-    x86.mov rcx, [rbp-568]
-    x86.call mm_free
-    x86.label __destruct_skip_49
-    x86.label __destruct_nullguard_48
+    x86.jz __nonnull_skip_48
+    x86.mov rcx, [rbp-64]
+    x86.call mm_decref
+    x86.label __nonnull_skip_48
+    x86.mov eax, [rbp-176]
+    x86.test eax, eax
+    x86.jz __nonnull_skip_49
+    x86.mov rcx, [rbp-176]
+    x86.call mm_decref
+    x86.label __nonnull_skip_49
+    x86.mov eax, [rbp-288]
+    x86.test eax, eax
+    x86.jz __nonnull_skip_50
+    x86.mov rcx, [rbp-288]
+    x86.call mm_decref
+    x86.label __nonnull_skip_50
     x86.xor eax, eax
+    x86.epilogue
+    x86.ret
+  }
+  func @__destruct_IntChain(ptr: i64) {
+  entry:
+    x86.prologue stack_size=16
+    x86.mov [rbp-8], ecx
+    x86.mov eax, [rbp-8]
+    x86.mov rcx, [rbp-8]
+    x86.call maxon_chain_clear
+    x86.jmp __destruct_IntChain.done
+  done:
+    x86.epilogue
+    x86.ret
+  }
+  func @__destruct___ChainNode(ptr: i64) {
+  entry:
+    x86.jmp __destruct___ChainNode.done
+  done:
+    x86.ret
+  }
+  func @__destruct_String(ptr: i64) {
+  entry:
+    x86.prologue stack_size=16
+    x86.mov [rbp-8], ecx
+    x86.mov eax, [rbp-8]
+    x86.mov ecx, [eax+0]
+    x86.mov [rbp-16], ecx
+    x86.test ecx, ecx
+    x86.jz __nonnull_skip_51
+    x86.call mm_decref
+    x86.label __nonnull_skip_51
+    x86.jmp __destruct_String.done
+  done:
+    x86.epilogue
+    x86.ret
+  }
+  func @__destruct___ManagedMemory(ptr: i64) {
+  entry:
+    x86.prologue stack_size=16
+    x86.mov [rbp-8], ecx
+    x86.mov eax, [rbp-8]
+    x86.mov ecx, [eax+16]
+    x86.xor edx, edx
+    x86.cmp ecx, edx
+    x86.je __destruct___ManagedMemory.skip_buf_0
+  free_buf_0:
+    x86.mov eax, [rbp-8]
+    x86.mov ecx, [eax+0]
+    x86.call mm_raw_free
+    x86.jmp __destruct___ManagedMemory.skip_buf_0
+  skip_buf_0:
+    x86.jmp __destruct___ManagedMemory.done
+  done:
     x86.epilogue
     x86.ret
   }

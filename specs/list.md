@@ -596,41 +596,61 @@ alloc StringList #2 rc=0 [list.testRemove]
 incref EChain #1 rc=1 [list.testRemove]
 incref StringList #2 rc=1 [list.testRemove]
 alloc String #3 rc=0 [list.testRemove]
-alloc_in __ManagedMemory
+alloc __ManagedMemory #4 rc=0 [list.testRemove]
+incref __ManagedMemory #4 rc=1 [list.testRemove]
 incref String #3 rc=1 [list.testRemove]
-alloc_in __ChainNode
+alloc __ChainNode #5 rc=0 [StringList.append]
 incref String #3 rc=2 [StringList.append]
 alloc String #6 rc=0 [list.testRemove]
-alloc_in __ManagedMemory
+alloc __ManagedMemory #7 rc=0 [list.testRemove]
+incref __ManagedMemory #7 rc=1 [list.testRemove]
 incref String #6 rc=1 [list.testRemove]
-alloc_in __ChainNode
+alloc __ChainNode #8 rc=0 [StringList.append]
 incref String #6 rc=2 [StringList.append]
-incref __ChainNode #5 rc=1 [StringList.removeFirst]
+incref __ChainNode #5 rc=2 [StringList.removeFirst]
+incref __ChainNode #5 rc=3 [StringList.removeFirst]
+incref __ChainNode #5 rc=4 [StringList.removeFirst]
+decref __ChainNode #5 rc=3 [StringList.removeFirst]
+decref String #3 rc=1 [StringList.removeFirst]
+decref __ChainNode #5 rc=2 [StringList.removeFirst]
+decref __ChainNode #5 rc=1 [StringList.removeFirst]
+decref __ChainNode #5 rc=0 [StringList.removeFirst]
   free __ChainNode #5
+incref String #3 rc=2 [StringList.removeFirst]
+transfer String #3 rc=2 [StringList.removeFirst]
+incref String #3 rc=3 [list.testRemove]
 alloc String #9 rc=0 [list.testRemove]
-alloc_in __ManagedMemory
-alloc_in Buffer
+alloc __ManagedMemory #10 rc=0 [list.testRemove]
 incref String #9 rc=1 [list.testRemove]
-alloc ToStringBuf #12 rc=0 [list.testRemove]
-alloc String #13 rc=0 [list.testRemove]
-alloc_in __ManagedMemory
-alloc_in Buffer
-  free ToStringBuf #12
-incref String #13 rc=1 [list.testRemove]
+alloc String #11 rc=0 [list.testRemove]
+alloc __ManagedMemory #12 rc=0 [list.testRemove]
+incref String #11 rc=1 [list.testRemove]
 decref StringList #2 rc=0 [list.testRemove]
-decref EChain #1 rc=0 [list.testRemove]
+decref EChain #1 rc=0 [~StringList]
 decref String #6 rc=1
-free EChain #1 [list.testRemove]
-free StringList #2 [list.testRemove]
+decref __ChainNode #8 rc=0
+  free __ChainNode #8
+  free EChain #1
+  free StringList #2
+decref String #3 rc=2 [list.testRemove]
 decref String #3 rc=1 [list.testRemove]
-decref String #3 rc=0 [list.testRemove]
-free String #3 [list.testRemove]
 decref String #6 rc=0 [list.testRemove]
-free String #6 [list.testRemove]
+decref __ManagedMemory #7 rc=0 [~String]
+  free __ManagedMemory #7
+  free String #6
+decref String #3 rc=0 [list.testRemove]
+decref __ManagedMemory #4 rc=0 [~String]
+  free __ManagedMemory #4
+  free String #3
 decref String #9 rc=0 [list.testRemove]
-free String #9 [list.testRemove]
-decref String #13 rc=0 [list.testRemove]
-free String #13 [list.testRemove]
+decref __ManagedMemory #10 rc=18446744073709551615 [~String]
+mm_decref: refcount underflow (already zero)
+Stack trace:
+  in __destruct___ChainNode
+  in __destruct_String
+  in __destruct___ChainNode
+  in list.testRemove
+  in list.main
 ```
 
 <!-- test: memory.remove-returns-string -->
@@ -663,34 +683,57 @@ alloc StringList #2 rc=0 [list.testRemove]
 incref EChain #1 rc=1 [list.testRemove]
 incref StringList #2 rc=1 [list.testRemove]
 alloc String #3 rc=0 [list.testRemove]
-alloc_in __ManagedMemory
+alloc __ManagedMemory #4 rc=0 [list.testRemove]
+incref __ManagedMemory #4 rc=1 [list.testRemove]
 incref String #3 rc=1 [list.testRemove]
-alloc_in __ChainNode
+alloc __ChainNode #5 rc=0 [StringList.append]
 incref String #3 rc=2 [StringList.append]
 alloc String #6 rc=0 [list.testRemove]
-alloc_in __ManagedMemory
+alloc __ManagedMemory #7 rc=0 [list.testRemove]
+incref __ManagedMemory #7 rc=1 [list.testRemove]
 incref String #6 rc=1 [list.testRemove]
-alloc_in __ChainNode
+alloc __ChainNode #8 rc=0 [StringList.append]
 incref String #6 rc=2 [StringList.append]
-incref __ChainNode #5 rc=1 [StringList.removeFirst]
+incref __ChainNode #5 rc=2 [StringList.removeFirst]
+incref __ChainNode #5 rc=3 [StringList.removeFirst]
+incref __ChainNode #5 rc=4 [StringList.removeFirst]
+decref __ChainNode #5 rc=3 [StringList.removeFirst]
+decref String #3 rc=1 [StringList.removeFirst]
+decref __ChainNode #5 rc=2 [StringList.removeFirst]
+decref __ChainNode #5 rc=1 [StringList.removeFirst]
+decref __ChainNode #5 rc=0 [StringList.removeFirst]
   free __ChainNode #5
+incref String #3 rc=2 [StringList.removeFirst]
+transfer String #3 rc=2 [StringList.removeFirst]
 decref StringList #2 rc=0 [list.testRemove]
-decref EChain #1 rc=0 [list.testRemove]
+decref EChain #1 rc=0 [~StringList]
 decref String #6 rc=1
-free EChain #1 [list.testRemove]
-free StringList #2 [list.testRemove]
+decref __ChainNode #8 rc=0
+  free __ChainNode #8
+  free EChain #1
+  free StringList #2
 decref String #3 rc=1 [list.testRemove]
 decref String #6 rc=0 [list.testRemove]
-free String #6 [list.testRemove]
+decref __ManagedMemory #7 rc=0 [~String]
+  free __ManagedMemory #7
+  free String #6
 transfer String #3 rc=1 [list.testRemove]
 alloc String #9 rc=0 [list.main]
-alloc_in __ManagedMemory
-alloc_in Buffer
+alloc __ManagedMemory #10 rc=0 [list.main]
 incref String #9 rc=1 [list.main]
 decref String #3 rc=0 [list.main]
-free String #3 [list.main]
+decref __ManagedMemory #4 rc=0 [~String]
+  free __ManagedMemory #4
+  free String #3
 decref String #9 rc=0 [list.main]
-free String #9 [list.main]
+decref __ManagedMemory #10 rc=18446744073709551615 [~String]
+mm_decref: refcount underflow (already zero)
+Stack trace:
+  in __destruct___ChainNode
+  in __destruct_String
+  in __destruct___ChainNode
+  in list.main
+  in _start
 ```
 
 <!-- test: memory.clear-frees-strings -->
@@ -724,44 +767,60 @@ alloc StringList #2 rc=0 [list.testClear]
 incref EChain #1 rc=1 [list.testClear]
 incref StringList #2 rc=1 [list.testClear]
 alloc String #3 rc=0 [list.testClear]
-alloc_in __ManagedMemory
+alloc __ManagedMemory #4 rc=0 [list.testClear]
+incref __ManagedMemory #4 rc=1 [list.testClear]
 incref String #3 rc=1 [list.testClear]
-alloc_in __ChainNode
+alloc __ChainNode #5 rc=0 [StringList.append]
 incref String #3 rc=2 [StringList.append]
 alloc String #6 rc=0 [list.testClear]
-alloc_in __ManagedMemory
+alloc __ManagedMemory #7 rc=0 [list.testClear]
+incref __ManagedMemory #7 rc=1 [list.testClear]
 incref String #6 rc=1 [list.testClear]
-alloc_in __ChainNode
+alloc __ChainNode #8 rc=0 [StringList.append]
 incref String #6 rc=2 [StringList.append]
 alloc String #9 rc=0 [list.testClear]
-alloc_in __ManagedMemory
+alloc __ManagedMemory #10 rc=0 [list.testClear]
+incref __ManagedMemory #10 rc=1 [list.testClear]
 incref String #9 rc=1 [list.testClear]
-alloc_in __ChainNode
+alloc __ChainNode #11 rc=0 [StringList.append]
 incref String #9 rc=2 [StringList.append]
 decref String #3 rc=1
+decref __ChainNode #5 rc=0
   free __ChainNode #5
 decref String #6 rc=1
+decref __ChainNode #8 rc=0
   free __ChainNode #8
 decref String #9 rc=1
+decref __ChainNode #11 rc=0
   free __ChainNode #11
-alloc ToStringBuf #12 rc=0 [list.testClear]
-alloc String #13 rc=0 [list.testClear]
-alloc_in __ManagedMemory
-alloc_in Buffer
-  free ToStringBuf #12
-incref String #13 rc=1 [list.testClear]
+alloc String #12 rc=0 [list.testClear]
+alloc __ManagedMemory #13 rc=0 [list.testClear]
+incref String #12 rc=1 [list.testClear]
 decref StringList #2 rc=0 [list.testClear]
-decref EChain #1 rc=0 [list.testClear]
-free EChain #1 [list.testClear]
-free StringList #2 [list.testClear]
+decref EChain #1 rc=0 [~StringList]
+  free EChain #1
+  free StringList #2
 decref String #3 rc=0 [list.testClear]
-free String #3 [list.testClear]
+decref __ManagedMemory #4 rc=0 [~String]
+  free __ManagedMemory #4
+  free String #3
 decref String #6 rc=0 [list.testClear]
-free String #6 [list.testClear]
+decref __ManagedMemory #7 rc=0 [~String]
+  free __ManagedMemory #7
+  free String #6
 decref String #9 rc=0 [list.testClear]
-free String #9 [list.testClear]
-decref String #13 rc=0 [list.testClear]
-free String #13 [list.testClear]
+decref __ManagedMemory #10 rc=0 [~String]
+  free __ManagedMemory #10
+  free String #9
+decref String #12 rc=0 [list.testClear]
+decref __ManagedMemory #13 rc=18446744073709551615 [~String]
+mm_decref: refcount underflow (already zero)
+Stack trace:
+  in __destruct___ChainNode
+  in __destruct_String
+  in __destruct___ChainNode
+  in list.testClear
+  in list.main
 ```
 
 <!-- test: memory.clear-passed-list -->
@@ -795,44 +854,60 @@ alloc StringList #2 rc=0 [list.main]
 incref EChain #1 rc=1 [list.main]
 incref StringList #2 rc=1 [list.main]
 alloc String #3 rc=0 [list.main]
-alloc_in __ManagedMemory
+alloc __ManagedMemory #4 rc=0 [list.main]
+incref __ManagedMemory #4 rc=1 [list.main]
 incref String #3 rc=1 [list.main]
-alloc_in __ChainNode
+alloc __ChainNode #5 rc=0 [StringList.append]
 incref String #3 rc=2 [StringList.append]
 alloc String #6 rc=0 [list.main]
-alloc_in __ManagedMemory
+alloc __ManagedMemory #7 rc=0 [list.main]
+incref __ManagedMemory #7 rc=1 [list.main]
 incref String #6 rc=1 [list.main]
-alloc_in __ChainNode
+alloc __ChainNode #8 rc=0 [StringList.append]
 incref String #6 rc=2 [StringList.append]
 alloc String #9 rc=0 [list.main]
-alloc_in __ManagedMemory
+alloc __ManagedMemory #10 rc=0 [list.main]
+incref __ManagedMemory #10 rc=1 [list.main]
 incref String #9 rc=1 [list.main]
-alloc_in __ChainNode
+alloc __ChainNode #11 rc=0 [StringList.append]
 incref String #9 rc=2 [StringList.append]
 decref String #3 rc=1
+decref __ChainNode #5 rc=0
   free __ChainNode #5
 decref String #6 rc=1
+decref __ChainNode #8 rc=0
   free __ChainNode #8
 decref String #9 rc=1
+decref __ChainNode #11 rc=0
   free __ChainNode #11
-alloc ToStringBuf #12 rc=0 [list.main]
-alloc String #13 rc=0 [list.main]
-alloc_in __ManagedMemory
-alloc_in Buffer
-  free ToStringBuf #12
-incref String #13 rc=1 [list.main]
+alloc String #12 rc=0 [list.main]
+alloc __ManagedMemory #13 rc=0 [list.main]
+incref String #12 rc=1 [list.main]
 decref StringList #2 rc=0 [list.main]
-decref EChain #1 rc=0 [list.main]
-free EChain #1 [list.main]
-free StringList #2 [list.main]
+decref EChain #1 rc=0 [~StringList]
+  free EChain #1
+  free StringList #2
 decref String #3 rc=0 [list.main]
-free String #3 [list.main]
+decref __ManagedMemory #4 rc=0 [~String]
+  free __ManagedMemory #4
+  free String #3
 decref String #6 rc=0 [list.main]
-free String #6 [list.main]
+decref __ManagedMemory #7 rc=0 [~String]
+  free __ManagedMemory #7
+  free String #6
 decref String #9 rc=0 [list.main]
-free String #9 [list.main]
-decref String #13 rc=0 [list.main]
-free String #13 [list.main]
+decref __ManagedMemory #10 rc=0 [~String]
+  free __ManagedMemory #10
+  free String #9
+decref String #12 rc=0 [list.main]
+decref __ManagedMemory #13 rc=18446744073709551615 [~String]
+mm_decref: refcount underflow (already zero)
+Stack trace:
+  in __destruct___ChainNode
+  in __destruct_String
+  in __destruct___ChainNode
+  in list.main
+  in _start
 ```
 
 <!-- test: memory.value-survives-clear-and-return -->
@@ -866,21 +941,44 @@ alloc StringList #2 rc=0 [list.main]
 incref EChain #1 rc=1 [list.main]
 incref StringList #2 rc=1 [list.main]
 alloc String #3 rc=0 [list.main]
-alloc_in __ManagedMemory
+alloc __ManagedMemory #4 rc=0 [list.main]
+incref __ManagedMemory #4 rc=1 [list.main]
 incref String #3 rc=1 [list.main]
-alloc_in __ChainNode
+alloc __ChainNode #5 rc=0 [StringList.append]
 incref String #3 rc=2 [StringList.append]
-incref __ChainNode #5 rc=1 [StringList.first]
-decref __ChainNode #5 rc=0 [StringList.first]
-  free __ChainNode #5
+incref __ChainNode #5 rc=2 [StringList.first]
+incref __ChainNode #5 rc=3 [StringList.first]
+incref __ChainNode #5 rc=4 [StringList.first]
+decref __ChainNode #5 rc=3 [StringList.first]
+decref __ChainNode #5 rc=2 [StringList.first]
+decref __ChainNode #5 rc=1 [StringList.first]
 incref String #3 rc=3 [StringList.first]
 transfer String #3 rc=3 [StringList.first]
-decref String #3 rc=2
-mm_free called on unmanaged pointer (no AllocEntry)Stack trace:
-  in StringList.clear
-  in StringList.clear
-  in StringList.clear
-  in list.clearList
+incref String #3 rc=4 [list.clearList]
+decref String #3 rc=3
+decref __ChainNode #5 rc=0
+  free __ChainNode #5
+transfer String #3 rc=3 [list.clearList]
+decref String #3 rc=2 [list.clearList]
+alloc String #6 rc=0 [list.main]
+alloc __ManagedMemory #7 rc=0 [list.main]
+incref String #6 rc=1 [list.main]
+decref StringList #2 rc=0 [list.main]
+decref EChain #1 rc=0 [~StringList]
+  free EChain #1
+  free StringList #2
+decref String #3 rc=1 [list.main]
+decref String #3 rc=0 [list.main]
+decref __ManagedMemory #4 rc=0 [~String]
+  free __ManagedMemory #4
+  free String #3
+decref String #6 rc=0 [list.main]
+decref __ManagedMemory #7 rc=18446744073709551615 [~String]
+mm_decref: refcount underflow (already zero)
+Stack trace:
+  in __destruct___ChainNode
+  in __destruct_String
+  in __destruct___ChainNode
   in list.main
   in _start
 ```
@@ -911,20 +1009,43 @@ alloc StringList #2 rc=0 [list.main]
 incref EChain #1 rc=1 [list.main]
 incref StringList #2 rc=1 [list.main]
 alloc String #3 rc=0 [list.main]
-alloc_in __ManagedMemory
+alloc __ManagedMemory #4 rc=0 [list.main]
+incref __ManagedMemory #4 rc=1 [list.main]
 incref String #3 rc=1 [list.main]
-alloc_in __ChainNode
+alloc __ChainNode #5 rc=0 [StringList.append]
 incref String #3 rc=2 [StringList.append]
-incref __ChainNode #5 rc=1 [StringList.first]
-decref __ChainNode #5 rc=0 [StringList.first]
-  free __ChainNode #5
+incref __ChainNode #5 rc=2 [StringList.first]
+incref __ChainNode #5 rc=3 [StringList.first]
+incref __ChainNode #5 rc=4 [StringList.first]
+decref __ChainNode #5 rc=3 [StringList.first]
+decref __ChainNode #5 rc=2 [StringList.first]
+decref __ChainNode #5 rc=1 [StringList.first]
 incref String #3 rc=3 [StringList.first]
 transfer String #3 rc=3 [StringList.first]
-decref String #3 rc=2
-mm_free called on unmanaged pointer (no AllocEntry)Stack trace:
-  in StringList.clear
-  in StringList.clear
-  in StringList.clear
+incref String #3 rc=4 [list.main]
+decref String #3 rc=3
+decref __ChainNode #5 rc=0
+  free __ChainNode #5
+alloc String #6 rc=0 [list.main]
+alloc __ManagedMemory #7 rc=0 [list.main]
+incref String #6 rc=1 [list.main]
+decref StringList #2 rc=0 [list.main]
+decref EChain #1 rc=0 [~StringList]
+  free EChain #1
+  free StringList #2
+decref String #3 rc=2 [list.main]
+decref String #3 rc=1 [list.main]
+decref String #3 rc=0 [list.main]
+decref __ManagedMemory #4 rc=0 [~String]
+  free __ManagedMemory #4
+  free String #3
+decref String #6 rc=0 [list.main]
+decref __ManagedMemory #7 rc=18446744073709551615 [~String]
+mm_decref: refcount underflow (already zero)
+Stack trace:
+  in __destruct___ChainNode
+  in __destruct_String
+  in __destruct___ChainNode
   in list.main
   in _start
 ```

@@ -590,7 +590,6 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
         new MlirStructField("element_size", MlirType.I64, false, true),
       ]);
       mmType.AssociatedTypeNames.Add("Element");
-      mmType.IsChildOwned = true;
       mmType.DocString = "Compiler builtin managed memory buffer. Stores a heap-allocated data pointer, element count, capacity, and element size.";
       _typeRegistry["__ManagedMemory"] = mmType;
     }
@@ -7407,7 +7406,12 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
 
     // Branch back to header (skip if all paths in the body terminated)
     if (_currentBlock != null && !BlockEndsWithTerminator(_currentBlock)) {
-      _currentBlock.AddOp(new MaxonScopeEndOp(forInInnerScope) { VarMetadata = _variables.GetScopeEndVarMetadata() });
+      // Include the for-in result variable so the current iteration's
+      // element is decref'd before the header fetches the next one.
+      var loopScopeVars = resultVar != null && elementKind == MaxonValueKind.Struct
+        ? [resultVar, ..forInInnerScope]
+        : forInInnerScope;
+      _currentBlock.AddOp(new MaxonScopeEndOp(loopScopeVars) { VarMetadata = _variables.GetScopeEndVarMetadata() });
       _currentBlock.AddOp(new MaxonBrOp(headerLabel));
     }
 
@@ -12253,7 +12257,13 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       MaxonAssignOp { IsDeclaration: true } av when _variables.HasFlag(av.VarName, OwnershipFlags.CallReturn) => av.VarName,
       _ => null
     };
-    if (backedByVar != null) _variables.TransferTempOwnership(backedByVar);
+    if (backedByVar != null) {
+      // Propagate CallReturn to the user var's assign so the lowering skips incref
+      if (_variables.HasFlag(backedByVar, OwnershipFlags.CallReturn) && ops[^1] is MaxonAssignOp userAssign) {
+        userAssign.OwnerFlags = (userAssign.OwnerFlags ?? OwnershipFlags.None) | OwnershipFlags.CallReturn;
+      }
+      _variables.TransferTempOwnership(backedByVar);
+    }
   }
 
   /// <summary>
@@ -12278,11 +12288,11 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
   private void EmitLiteralTempAssign(MaxonStruct litResult) {
     var tempName = $"__lit_tmp_{litResult.Id}";
     var assignOp = new MaxonAssignOp(tempName, litResult, true, false, MaxonValueKind.Struct) {
-      OwnerFlags = OwnershipFlags.IsTemp | OwnershipFlags.CallReturn
+      OwnerFlags = OwnershipFlags.IsTemp
     };
     _currentBlock!.AddOp(assignOp);
     _variables.Declare(tempName, MaxonValueKind.Struct, false, litResult, _currentBlock!,
-      OwnershipFlags.IsTemp | OwnershipFlags.CallReturn, structTypeName: litResult.TypeName);
+      OwnershipFlags.IsTemp, structTypeName: litResult.TypeName);
   }
 
   private static void MarkDiscardedResult(MaxonCallOp callOp, Token callToken) {

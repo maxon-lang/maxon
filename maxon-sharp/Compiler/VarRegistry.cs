@@ -6,17 +6,13 @@ namespace MaxonSharp.Compiler;
 [Flags]
 public enum OwnershipFlags
 {
-    None       = 0,
-    CallReturn = 1 << 0,  // Callee allocated at rc=1; skip incref on first assign
-    Borrowed   = 1 << 1,  // Borrowed ref from parent struct field; not independently owned
-    Orphan     = 1 << 2,  // Not consumed by parser-tracked var; needs scope-end cleanup
-    SelfReturn = 1 << 3,  // Returned from self-returning method; alias, not fresh alloc
-    IsTemp     = 1 << 4,  // Internal temp variable (cleaned after user vars at scope end)
-    IsParam    = 1 << 5,  // Function parameter (not owned, skip decref at scope end)
-    InlineAlloc = 1 << 6, // Inline heap allocation (concat/slice/chain_nav); owns memory like
-                           // CallReturn but allocated locally, not from a function call.
-                           // Always implies Orphan — if not consumed by assignment, scope-end
-                           // cleanup catches it; if consumed, the zeroed slot makes cleanup a no-op.
+    None         = 0,
+    CallReturn   = 1 << 0,  // Value came from a function call return (parser-level tracking)
+    Borrowed     = 1 << 1,  // Not owned; pointer alias into parent struct — skip decref at scope end
+    Orphan       = 1 << 2,  // Not consumed by parser-tracked var; needs scope-end cleanup
+    SelfReturn   = 1 << 3,  // Returned from self-returning method; alias, not fresh alloc
+    IsTemp       = 1 << 4,  // Internal temp variable (cleaned after user vars at scope end)
+    IsParam      = 1 << 5,  // Function parameter (not owned, skip decref at scope end)
 }
 
 public record EnumPayloadBinding(string EnumVarName, string EnumTypeName, int PayloadIndex);
@@ -41,10 +37,10 @@ public class VarRegistry
 {
     // Parser-level variable storage (Dictionary preserves insertion order during enumeration
     // as long as only additions happen, or remove+re-add which moves to end)
-    private readonly Dictionary<string, VarInfo> _vars = new();
+    private readonly Dictionary<string, VarInfo> _vars = [];
 
     // Lowering-level temp storage (for temps created during MaxonToStandard conversion)
-    private readonly Dictionary<string, TempVarInfo> _temps = new();
+    private readonly Dictionary<string, TempVarInfo> _temps = [];
 
     // Scope stack (replaces parser's _scopeStack)
     private readonly Stack<HashSet<string>> _scopeStack = new();
@@ -73,13 +69,6 @@ public class VarRegistry
     /// </summary>
     public string CreateTemp(string kind, int id, string structTypeName, OwnershipFlags flags)
     {
-        // InlineAlloc temps own heap allocations that were incref'd at creation (rc=1).
-        // Auto-add Orphan so scope-end cleanup catches them if not consumed by assignment.
-        // When consumed, the CallReturn flag skips incref and zeros the temp slot,
-        // making the orphan decref a null-guarded no-op.
-        if (flags.HasFlag(OwnershipFlags.InlineAlloc))
-            flags |= OwnershipFlags.Orphan;
-
         var name = $"__{kind}_{id}";
         _temps[name] = new TempVarInfo(name, structTypeName, flags);
         return name;
@@ -146,7 +135,7 @@ public class VarRegistry
     /// </summary>
     public List<string> KeysSince(HashSet<string> snapshot)
     {
-        return _vars.Keys.Where(k => !snapshot.Contains(k)).ToList();
+        return [.. _vars.Keys.Where(k => !snapshot.Contains(k))];
     }
 
     // ---- Ordered Enumeration ----
@@ -245,6 +234,15 @@ public class VarRegistry
             _temps[name] = info with { Flags = info.Flags | OwnershipFlags.Orphan };
     }
 
+    /// <summary>
+    /// Clear the Orphan flag on a temp whose ownership was consumed by assignment.
+    /// </summary>
+    public void ConsumeTempOwnership(string name)
+    {
+        if (_temps.TryGetValue(name, out var info))
+            _temps[name] = info with { Flags = info.Flags & ~OwnershipFlags.Orphan };
+    }
+
     // ---- Temp Ownership Transfer (replaces FixupTempOwnership prefix checks) ----
 
     /// <summary>
@@ -255,18 +253,20 @@ public class VarRegistry
     /// <param name="backedByVar">The temp variable that was backing the value.</param>
     public void TransferTempOwnership(string backedByVar)
     {
-        if (!_vars.ContainsKey(backedByVar)) return;
-        var info = _vars[backedByVar];
-        if (info.Flags.HasFlag(OwnershipFlags.CallReturn))
+        if (!_vars.TryGetValue(backedByVar, out var info)) return;
+        if (info.Flags.HasFlag(OwnershipFlags.IsTemp))
         {
-            // Ownership fully transferred to named var — remove the temp entirely
-            _vars.Remove(backedByVar);
-        }
-        else if (info.Flags.HasFlag(OwnershipFlags.IsTemp) && !info.Flags.HasFlag(OwnershipFlags.CallReturn))
-        {
-            // Non-call-return temps (like __try_result_): re-insert at end for ordering
-            _vars.Remove(backedByVar);
-            _vars[backedByVar] = info;
+            if (info.Flags.HasFlag(OwnershipFlags.CallReturn))
+            {
+                // CallReturn: named var is the sole owner — remove temp entirely
+                _vars.Remove(backedByVar);
+            }
+            else
+            {
+                // Non-CallReturn temps (e.g. __try_result_): re-insert at end for ordering
+                _vars.Remove(backedByVar);
+                _vars[backedByVar] = info;
+            }
         }
     }
 

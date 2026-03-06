@@ -93,7 +93,7 @@ public static partial class MaxonToStandardConversion {
 			EmitIncrefValue(block, (StdI64)loadOp.Result, scopeName: _currentFuncName);
 
 			var tempId = MlirContext.Current.NextId();
-			var tempName = temps.CreateTemp("callret", tempId, op.StructElementTypeName ?? "unknown", OwnershipFlags.CallReturn);
+			var tempName = temps.CreateTemp("callret", tempId, op.StructElementTypeName ?? "unknown", OwnershipFlags.Orphan | OwnershipFlags.CallReturn);
 			EmitStore(block, (StdI64)loadOp.Result, tempName, varTypes);
 			structVarNames[op.Result.Id] = tempName;
 			if (op.StructElementTypeName != null)
@@ -148,7 +148,7 @@ public static partial class MaxonToStandardConversion {
 			block.AddOp(new StdStoreIndirectOp(zeroOp.Result, addr, 0, MlirType.I64));
 
 			var tempId = MlirContext.Current.NextId();
-			var tempName = temps.CreateTemp("callret", tempId, op.StructElementTypeName ?? "unknown", OwnershipFlags.CallReturn);
+			var tempName = temps.CreateTemp("callret", tempId, op.StructElementTypeName ?? "unknown", OwnershipFlags.Orphan);
 			EmitStore(block, (StdI64)loadOp.Result, tempName, varTypes);
 			structVarNames[op.Result.Id] = tempName;
 			if (op.StructElementTypeName != null)
@@ -207,10 +207,7 @@ public static partial class MaxonToStandardConversion {
 	  MlirBlock<StandardOp> block,
 	  Dictionary<MaxonValue, StdValue> valueMap,
 	  Dictionary<string, string> varTypes,
-	  Dictionary<int, string> structVarNames,
-	  Dictionary<int, string> structValueTypes,
-	  Dictionary<string, MlirType> typeDefs,
-	  Dictionary<string, TypeAliasInfo>? typeAliasSources = null) {
+	  Dictionary<int, string> structVarNames) {
 		var managedVarName = ResolveManagedVarName(op.ManagedStruct, structVarNames);
 		var elemSize = (StdI64)EmitStructFieldLoad(block, managedVarName, ManagedFieldElementSize, MlirType.I64, varTypes);
 		EmitCowCheck(block, managedVarName, varTypes, elemSize);
@@ -226,9 +223,7 @@ public static partial class MaxonToStandardConversion {
 			// Old slot may be null (zeroed after remove), so use null-guarded decref.
 			var oldElemLoad = new StdLoadIndirectOp(addr, 0, MlirType.I64);
 			block.AddOp(oldElemLoad);
-			var elemTypeName = structValueTypes.TryGetValue(op.Value.Id, out var et) ? et : null;
-			EmitDestructOrDecrefValueIfNonnull(block, (StdI64)oldElemLoad.Result, elemTypeName,
-				typeDefs, typeAliasSources, scopeName: _currentFuncName);
+			EmitDecrefValueIfNonnull(block, (StdI64)oldElemLoad.Result, scopeName: _currentFuncName);
 			var srcName = structVarNames[op.Value.Id];
 			var srcHeapPtr = EmitLoad(block, srcName, varTypes);
 			block.AddOp(new StdStoreIndirectOp(srcHeapPtr, addr, 0, MlirType.I64));
@@ -258,11 +253,12 @@ public static partial class MaxonToStandardConversion {
 		block.AddOp(sizeOp);
 		var byteSizeOp = new StdMulI64Op(count, sizeOp.Result);
 		block.AddOp(byteSizeOp);
-		// Allocate __ManagedMemory struct first, then buffer as child
+		// Allocate __ManagedMemory struct, then raw buffer
 		var tempName = temps.CreateTemp("managed_create", op.Result.Id, "__ManagedMemory", OwnershipFlags.None);
 		var managedPtr = EmitAlloc(block, 32, "__ManagedMemory", scopeName: _currentFuncName);
 		EmitStore(block, managedPtr, tempName, varTypes);
-		var allocResult = EmitAllocIn(block, byteSizeOp.Result, managedPtr, "Buffer");
+		var allocResult = new StdI64(MlirContext.Current.NextId());
+		block.AddOp(new StdCallRuntimeOp("mm_raw_alloc", [byteSizeOp.Result], allocResult));
 		// Store fields via indirect access on the heap object
 		EmitStructFieldStore(block, allocResult, tempName, ManagedFieldBuffer, MlirType.I64, varTypes);
 		EmitStructFieldStore(block, count, tempName, ManagedFieldLength, MlirType.I64, varTypes);
@@ -306,10 +302,9 @@ public static partial class MaxonToStandardConversion {
 		var newByteSizeOp = new StdMulI64Op(newCap, elemSize);
 		block.AddOp(newByteSizeOp);
 
-		// Realloc: grows buffer in-place or allocates new, copies old data, frees old
-		var reallocTag = EmitTagPtr(block, "Buffer");
+		// Raw realloc: buffer has no refcount header (it's a raw HeapAlloc pointer)
 		var newBufferResult = new StdI64(MlirContext.Current.NextId());
-		block.AddOp(new StdCallRuntimeOp("mm_realloc", [oldBuffer, newByteSizeOp.Result, reallocTag], newBufferResult));
+		block.AddOp(new StdCallRuntimeOp("mm_raw_realloc", [oldBuffer, newByteSizeOp.Result], newBufferResult));
 
 		// Update managed struct fields through heap pointer
 		var newBufReload = newBufferResult;
@@ -516,7 +511,7 @@ public static partial class MaxonToStandardConversion {
 		var cstrVar = $"__cstr_ptr_{op.Result.Id}";
 		EmitStore(block, cstrPtr, cstrVar, varTypes);
 
-		// Allocate __ManagedMemory struct first, then buffer as child.
+		// Allocate __ManagedMemory struct, then raw buffer.
 		// Allocate strlen+1 bytes so the null terminator is within the allocation,
 		// preventing out-of-bounds reads in maxon_to_cstring.
 		var tempName = temps.CreateTemp("from_cstring", op.Result.Id, "__ManagedMemory", OwnershipFlags.None);
@@ -528,7 +523,8 @@ public static partial class MaxonToStandardConversion {
 		block.AddOp(oneConst);
 		var allocSize = new StdAddI64Op(lenReload1, oneConst.Result);
 		block.AddOp(allocSize);
-		var allocResult = EmitAllocIn(block, allocSize.Result, managedPtr, "Buffer");
+		var allocResult = new StdI64(MlirContext.Current.NextId());
+		block.AddOp(new StdCallRuntimeOp("mm_raw_alloc", [allocSize.Result], allocResult));
 
 		// Store buffer pointer (alloc clobbers registers)
 		var bufVar = $"__cstr_buf_{op.Result.Id}";

@@ -66,70 +66,104 @@ module {
     %3 = arith.constant {value = 0 : i64}
     %4 = arith.constant {value = 8 : i64}
     %5 = arith.constant {value = 32 : i64}
-    %6 = arith.constant {value = 0 : i64}
-    %7 = std.call_runtime @mm_alloc %5, %6
-    memref.store %7, __struct_5
-    %8 = memref.load __struct_5 : i64
-    memref.store_indirect %1, %8+0
-    %9 = memref.load __struct_5 : i64
-    memref.store_indirect %2, %9+8
+    %6 = func.ref @__destruct___ManagedMemory
+    %7 = std.ptr_to_i64 %6
+    %8 = arith.constant {value = 1 : i64}
+    %9 = std.call_runtime @mm_alloc %5, %7, %8
+    memref.store %9, __struct_5
     %10 = memref.load __struct_5 : i64
-    memref.store_indirect %3, %10+16
+    memref.store_indirect %1, %10+0
     %11 = memref.load __struct_5 : i64
-    memref.store_indirect %4, %11+24
-    %12 = arith.constant {value = 0 : i64}
-    %13 = arith.constant {value = 16 : i64}
+    memref.store_indirect %2, %11+8
+    %12 = memref.load __struct_5 : i64
+    memref.store_indirect %3, %12+16
+    %13 = memref.load __struct_5 : i64
+    memref.store_indirect %4, %13+24
     %14 = arith.constant {value = 0 : i64}
-    %15 = std.call_runtime @mm_alloc %13, %14
-    memref.store %15, arr
-    %16 = memref.load arr : i64
-    memref.store_indirect %12, %16+0
-    %17 = memref.load __struct_5 : i64
-    %18 = memref.load arr : i64
-    memref.store_indirect %17, %18+8
-    std.call_runtime @mm_incref %17
-    %19 = memref.lea_rdata __const_array_codegen-internals.main_arr
-    %20 = std.ptr_to_i64 %19
-    %21 = memref.load arr : i64
-    %22 = memref.load_indirect %21+8
-    memref.store_indirect %20, %22+0
-    %23 = memref.load arr : i64
-    std.call_runtime @mm_incref %23
-    %24 = arith.constant {value = 0 : i64}
-    %25 = arith.constant {value = 77 : i64}
-    %26 = memref.load arr : i64
-    func.call @IntArray.set %26, %24, %25
-    %27 = arith.constant {value = 0 : i64}
-    %28 = memref.load arr : i64
-    %29, %30 = func.try_call @IntArray.get %28, %27
+    %15 = arith.constant {value = 16 : i64}
+    %16 = func.ref @__destruct_IntArray
+    %17 = std.ptr_to_i64 %16
+    %18 = arith.constant {value = 2 : i64}
+    %19 = std.call_runtime @mm_alloc %15, %17, %18
+    memref.store %19, arr
+    %20 = memref.load arr : i64
+    memref.store_indirect %14, %20+0
+    %21 = memref.load __struct_5 : i64
+    %22 = memref.load arr : i64
+    memref.store_indirect %21, %22+8
+    std.call_runtime @mm_incref %21
+    %23 = memref.lea_rdata __const_array_codegen-internals.main_arr
+    %24 = std.ptr_to_i64 %23
+    %25 = memref.load arr : i64
+    %26 = memref.load_indirect %25+8
+    memref.store_indirect %24, %26+0
+    %27 = memref.load arr : i64
+    std.call_runtime @mm_incref %27
+    %28 = arith.constant {value = 0 : i64}
+    %29 = arith.constant {value = 77 : i64}
+    %30 = memref.load arr : i64
+    func.call @IntArray.set %30, %28, %29
     %31 = arith.constant {value = 0 : i64}
-    memref.store %31, __try_default_2
-    memref.store %29, __try_result_1
-    %32 = arith.constant {value = 0 : i64}
-    %33 = arith.cmpi ne %30, %32
-    cf.cond_br %33 [then: otherwise_default_error_3, else: otherwise_default_continue_4]
+    %32 = memref.load arr : i64
+    %33, %34 = func.try_call @IntArray.get %32, %31
+    %35 = arith.constant {value = 0 : i64}
+    memref.store %35, __try_default_2
+    memref.store %33, __try_result_1
+    %36 = arith.constant {value = 0 : i64}
+    %37 = arith.cmpi ne %34, %36
+    cf.cond_br %37 [then: otherwise_default_error_3, else: otherwise_default_continue_4]
   otherwise_default_error_3:
-    %34 = memref.load __try_default_2 : i64
-    memref.store %34, __try_result_1
+    %38 = memref.load __try_default_2 : i64
+    memref.store %38, __try_result_1
     cf.br otherwise_default_continue_4
   otherwise_default_continue_4:
-    %35 = memref.load __try_result_1 : i64
-    memref.store %35, __range_val_5
-    %36 = arith.constant {value = 0 : i64}
-    %37 = arith.cmpi lt %35, %36
-    %38 = arith.constant {value = 4294967295 : i64}
-    %39 = arith.cmpi gt %35, %38
-    %40 = arith.ori1 %37, %39
-    cf.cond_br %40 [then: __range_panic_5, else: __range_ok_5]
+    %39 = memref.load __try_result_1 : i64
+    memref.store %39, __range_val_5
+    %40 = arith.constant {value = 0 : i64}
+    %41 = arith.cmpi lt %39, %40
+    %42 = arith.constant {value = 4294967295 : i64}
+    %43 = arith.cmpi gt %39, %42
+    %44 = arith.ori1 %41, %43
+    cf.cond_br %44 [then: __range_panic_5, else: __range_ok_5]
   __range_panic_5:
-    %41 = memref.lea_symdata __panic_msg_25
-    %42 = std.ptr_to_i64 %41
-    std.call_runtime @maxon_panic %42
+    %45 = memref.lea_symdata __panic_msg_25
+    %46 = std.ptr_to_i64 %45
+    std.call_runtime @maxon_panic %46
   __range_ok_5:
-    %43 = memref.load __range_val_5 : i64
-    %44 = memref.load arr : i64
-    mm.destruct_struct %44 fields=[+8] null_guarded
-    func.return %43
+    %47 = memref.load __range_val_5 : i64
+    %48 = memref.load arr : i64
+    std.call_runtime_if_nonnull @mm_decref %48
+    func.return %47
+  }
+  func @__destruct___ManagedMemory(ptr: i64) {
+  entry:
+    %118 = func.param ptr : StdI64
+    memref.store %118, __destr_ptr
+    %121 = memref.load __destr_ptr : i64
+    %122 = memref.load_indirect %121+16
+    %123 = arith.constant {value = 0 : i64}
+    %124 = arith.cmpi ne %122, %123
+    cf.cond_br %124 [then: free_buf_0, else: skip_buf_0]
+  free_buf_0:
+    %125 = memref.load __destr_ptr : i64
+    %126 = memref.load_indirect %125+0
+    std.call_runtime @mm_raw_free %126
+    cf.br skip_buf_0
+  skip_buf_0:
+    cf.br done
+  done:
+    func.return
+  }
+  func @__destruct_IntArray(ptr: i64) {
+  entry:
+    %127 = func.param ptr : StdI64
+    memref.store %127, __destr_ptr
+    %128 = memref.load __destr_ptr : i64
+    %129 = memref.load_indirect %128+8
+    std.call_runtime_if_nonnull @mm_decref %129
+    cf.br done
+  done:
+    func.return
   }
 }
 === x86
@@ -141,16 +175,19 @@ module {
     x86.mov ecx, 1
     x86.xor edx, edx
     x86.mov ebx, 8
+    x86.lea_func esi, [__destruct___ManagedMemory]
+    x86.mov rdi, rsi
+    x86.mov rdx, rdi
     x86.mov rcx, 32
-    x86.xor rdx, rdx
+    x86.mov r8, 1
     x86.call mm_alloc
     x86.mov [rbp-8], eax
-    x86.mov esi, [rbp-8]
-    x86.xor edi, edi
-    x86.mov [esi+0], edi
     x86.mov r8, [rbp-8]
-    x86.mov r9, 1
-    x86.mov [r8+8], r9
+    x86.xor r9, r9
+    x86.mov [r8+0], r9
+    x86.mov eax, [rbp-8]
+    x86.mov ecx, 1
+    x86.mov [eax+8], ecx
     x86.mov eax, [rbp-8]
     x86.xor ecx, ecx
     x86.mov [eax+16], ecx
@@ -158,8 +195,10 @@ module {
     x86.mov ecx, 8
     x86.mov [eax+24], ecx
     x86.xor eax, eax
+    x86.lea_func ecx, [__destruct_IntArray]
+    x86.mov rdx, rcx
     x86.mov rcx, 16
-    x86.xor rdx, rdx
+    x86.mov r8, 2
     x86.call mm_alloc
     x86.mov [rbp-16], eax
     x86.mov eax, [rbp-16]
@@ -219,19 +258,46 @@ module {
     x86.mov eax, [rbp-40]
     x86.mov ecx, [rbp-16]
     x86.test ecx, ecx
-    x86.jz __destruct_nullguard_0
-    x86.call mm_decref_check
-    x86.test eax, eax
-    x86.jnz __destruct_skip_1
-    x86.mov ecx, [rbp-16]
-    x86.mov edx, [ecx+8]
-    x86.mov rcx, rdx
+    x86.jz __nonnull_skip_0
     x86.call mm_decref
-    x86.mov rcx, [rbp-16]
-    x86.call mm_free
-    x86.label __destruct_skip_1
-    x86.label __destruct_nullguard_0
+    x86.label __nonnull_skip_0
     x86.mov eax, [rbp-40]
+    x86.epilogue
+    x86.ret
+  }
+  func @__destruct___ManagedMemory(ptr: i64) {
+  entry:
+    x86.prologue stack_size=16
+    x86.mov [rbp-8], ecx
+    x86.mov eax, [rbp-8]
+    x86.mov ecx, [eax+16]
+    x86.xor edx, edx
+    x86.cmp ecx, edx
+    x86.je __destruct___ManagedMemory.skip_buf_0
+  free_buf_0:
+    x86.mov eax, [rbp-8]
+    x86.mov ecx, [eax+0]
+    x86.call mm_raw_free
+    x86.jmp __destruct___ManagedMemory.skip_buf_0
+  skip_buf_0:
+    x86.jmp __destruct___ManagedMemory.done
+  done:
+    x86.epilogue
+    x86.ret
+  }
+  func @__destruct_IntArray(ptr: i64) {
+  entry:
+    x86.prologue stack_size=16
+    x86.mov [rbp-8], ecx
+    x86.mov eax, [rbp-8]
+    x86.mov ecx, [eax+8]
+    x86.mov [rbp-16], ecx
+    x86.test ecx, ecx
+    x86.jz __nonnull_skip_1
+    x86.call mm_decref
+    x86.label __nonnull_skip_1
+    x86.jmp __destruct_IntArray.done
+  done:
     x86.epilogue
     x86.ret
   }

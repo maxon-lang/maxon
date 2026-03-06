@@ -92,48 +92,56 @@ module {
     %5 = memref.load i : i64
     %6 = arith.constant {value = 8 : i64}
     %7 = arith.constant {value = 0 : i64}
-    %8 = std.call_runtime @mm_alloc %6, %7
-    memref.store %8, c
-    %9 = memref.load c : i64
-    memref.store_indirect %5, %9+0
+    %8 = arith.constant {value = 1 : i64}
+    %9 = std.call_runtime @mm_alloc %6, %7, %8
+    memref.store %9, c
     %10 = memref.load c : i64
-    std.call_runtime @mm_incref %10
+    memref.store_indirect %5, %10+0
     %11 = memref.load c : i64
-    %12 = memref.load_indirect %11+0
-    %13 = arith.constant {value = 1 : i64}
-    %14 = arith.cmpi eq %12, %13
-    cf.cond_br %14 [then: check_1, else: check_1.after]
+    std.call_runtime @mm_incref %11
+    %12 = memref.load c : i64
+    %13 = memref.load_indirect %12+0
+    %14 = arith.constant {value = 1 : i64}
+    %15 = arith.cmpi eq %13, %14
+    cf.cond_br %15 [then: check_1, else: check_1.after]
   check_1:
-    %15 = memref.load c : i64
-    %16 = memref.load_indirect %15+0
-    memref.store %16, result
-    %17 = memref.load c : i64
-    std.call_runtime_if_nonnull @mm_decref %17
+    %16 = memref.load c : i64
+    %17 = memref.load_indirect %16+0
+    memref.store %17, result
+    %18 = memref.load c : i64
+    std.call_runtime_if_nonnull @mm_decref %18
     cf.br loop_0.exit
   check_1.after:
-    %19 = arith.constant {value = 1 : i64}
-    %20 = memref.load i : i64
-    %21 = arith.addi %20, %19
-    memref.store %21, i
-    %22 = memref.load c : i64
-    std.call_runtime_if_nonnull @mm_decref %22
+    %20 = arith.constant {value = 1 : i64}
+    %21 = memref.load i : i64
+    %22 = arith.addi %21, %20
+    memref.store %22, i
+    %23 = memref.load c : i64
+    std.call_runtime_if_nonnull @mm_decref %23
     cf.br loop_0.header
   loop_0.exit:
-    %24 = memref.load result : i64
-    memref.store %24, __range_val_2
-    %25 = arith.constant {value = 0 : i64}
-    %26 = arith.cmpi lt %24, %25
-    %27 = arith.constant {value = 4294967295 : i64}
-    %28 = arith.cmpi gt %24, %27
-    %29 = arith.ori1 %26, %28
-    cf.cond_br %29 [then: __range_panic_2, else: __range_ok_2]
+    %25 = memref.load result : i64
+    memref.store %25, __range_val_2
+    %26 = arith.constant {value = 0 : i64}
+    %27 = arith.cmpi lt %25, %26
+    %28 = arith.constant {value = 4294967295 : i64}
+    %29 = arith.cmpi gt %25, %28
+    %30 = arith.ori1 %27, %29
+    cf.cond_br %30 [then: __range_panic_2, else: __range_ok_2]
   __range_panic_2:
-    %30 = memref.lea_symdata __panic_msg_31
-    %31 = std.ptr_to_i64 %30
-    std.call_runtime @maxon_panic %31
+    %31 = memref.lea_symdata __panic_msg_31
+    %32 = std.ptr_to_i64 %31
+    std.call_runtime @maxon_panic %32
   __range_ok_2:
-    %32 = memref.load __range_val_2 : i64
-    func.return %32
+    %33 = memref.load __range_val_2 : i64
+    func.return %33
+  }
+  func @__destruct_Counter(ptr: i64) {
+  entry:
+    %35 = func.param ptr : StdI64
+    cf.br done
+  done:
+    func.return
   }
 }
 === x86
@@ -155,6 +163,7 @@ module {
     x86.mov eax, [rbp-16]
     x86.mov rcx, 8
     x86.xor rdx, rdx
+    x86.mov r8, 1
     x86.call mm_alloc
     x86.mov [rbp-24], eax
     x86.mov ecx, [rbp-24]
@@ -212,6 +221,12 @@ module {
   __range_ok_2:
     x86.mov eax, [rbp-32]
     x86.epilogue
+    x86.ret
+  }
+  func @__destruct_Counter(ptr: i64) {
+  entry:
+    x86.jmp __destruct_Counter.done
+  done:
     x86.ret
   }
 }

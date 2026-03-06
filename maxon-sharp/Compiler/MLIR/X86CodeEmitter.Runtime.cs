@@ -9,12 +9,9 @@ public partial class X86CodeEmitter {
     X86Register.Rsi, X86Register.Rdi, X86Register.Rax, X86Register.Rbx
   ];
 
-  /// Load a tag pointer into the given register: LEA when --mm-trace, XOR to 0 otherwise.
-  private void EmitTagOrNull(X86Register dest, string symdataLabel) {
-    if (Compiler.MmTrace)
-      EmitLeaRegSymdataRel(dest, symdataLabel);
-    else
-      EmitXorRegReg(dest, dest);
+  /// Load tag_index=0 into the given register (runtime allocations don't have tag indices).
+  private void EmitTagZero(X86Register dest) {
+    EmitXorRegReg(dest, dest);
   }
 
   public void EmitRuntimeFunctions() {
@@ -64,6 +61,9 @@ public partial class X86CodeEmitter {
     EmitMaxonStrlen();
     EmitMaxonMemcpy();
     EmitMaxonMemcmp();
+    EmitMmRawAlloc();
+    EmitMmRawRealloc();
+    EmitMmRawFree();
   }
 
   /// <summary>
@@ -87,34 +87,33 @@ public partial class X86CodeEmitter {
   /// <summary>
   /// maxon_cow_check(buffer_in_rcx, capacity_in_rdx, length_in_r8, elemSize_in_r9) -> new_buffer_in_rax
   /// If capacity != 0, buffer is already writable — return it as-is.
-  /// If capacity == 0, allocate length*elemSize bytes, copy from old buffer, return new buffer.
+  /// If capacity == 0, allocate length*elemSize bytes via mm_raw_alloc, copy from old buffer, return new buffer.
+  /// The old rdata buffer is NOT freed (capacity==0 identifies rdata).
   /// </summary>
   private void EmitMaxonCowCheck() {
-    // Args: rcx=buffer, rdx=capacity, r8=length, r9=elemSize, rsi=managedPtr
+    // Args: rcx=buffer, rdx=capacity, r8=length, r9=elemSize
     // Stack: [rbp-0x08]=buffer, [rbp-0x10]=capacity, [rbp-0x18]=length,
-    //        [rbp-0x20]=elemSize, [rbp-0x28]=managedPtr,
-    //        [rbp-0x30]=byteLen, [rbp-0x38]=new_buffer
-    EmitRuntimeFunctionStart("maxon_cow_check", 5, 0x60);
+    //        [rbp-0x20]=elemSize,
+    //        [rbp-0x28]=byteLen, [rbp-0x30]=new_buffer
+    EmitRuntimeFunctionStart("maxon_cow_check", 4, 0x60);
     // TEST rdx, rdx (check capacity)
     EmitBytes(0x48, 0x85, 0xD2);
     EmitJcc("nz", "rt_cow_writable");
     // COW path: compute byteLen = length * elemSize
     EmitMovRegMem(X86Register.Rax, -0x18, 8); // RAX = length
     EmitBytes(0x49, 0x0F, 0xAF, 0xC1);       // IMUL RAX, R9 (byteLen = length * elemSize)
-    EmitMovMemReg(-0x30, X86Register.Rax, 8); // [rbp-0x30] = byteLen
-    // mm_alloc_in(size=byteLen, parent_ptr=managedPtr, tag="Buffer")
+    EmitMovMemReg(-0x28, X86Register.Rax, 8); // [rbp-0x28] = byteLen
+    // mm_raw_alloc(size=byteLen) — raw HeapAlloc, no refcount header
     EmitMovRegReg(X86Register.Rcx, X86Register.Rax); // RCX = byteLen
-    EmitMovRegMem(X86Register.Rdx, -0x28, 8);        // RDX = managedPtr
-    EmitTagOrNull(X86Register.R8, "__rt_tag_buffer"); // R8 = tag
-    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_alloc_in")); EmitDword(0);
-    EmitMovMemReg(-0x38, X86Register.Rax, 8); // [rbp-0x38] = new buffer
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_raw_alloc")); EmitDword(0);
+    EmitMovMemReg(-0x30, X86Register.Rax, 8); // [rbp-0x30] = new buffer
     // rep movsb: RSI=src, RDI=dst, RCX=count
     EmitMovRegMem(X86Register.Rsi, -0x08, 8);  // RSI = old buffer
-    EmitMovRegMem(X86Register.Rdi, -0x38, 8);  // RDI = new buffer
-    EmitMovRegMem(X86Register.Rcx, -0x30, 8);  // RCX = byteLen
+    EmitMovRegMem(X86Register.Rdi, -0x30, 8);  // RDI = new buffer
+    EmitMovRegMem(X86Register.Rcx, -0x28, 8);  // RCX = byteLen
     EmitBytes(0xF3, 0xA4); // REP MOVSB
     // Return new buffer
-    EmitMovRegMem(X86Register.Rax, -0x38, 8);
+    EmitMovRegMem(X86Register.Rax, -0x30, 8);
     EmitJmp("rt_cow_epilogue");
     // already_writable: return old buffer
     DefineLabel("rt_cow_writable");
@@ -142,7 +141,8 @@ public partial class X86CodeEmitter {
     EmitMovRegMem(X86Register.Rcx, -0x10, 8);  // RCX = length
     // LEA RCX, [RCX+1] for alloc size
     EmitBytes(0x48, 0x8D, 0x49, 0x01); // LEA RCX, [RCX+1]
-    EmitTagOrNull(X86Register.Rdx, "__rt_tag_cstring"); // RDX = tag
+    EmitXorRegReg(X86Register.Rdx, X86Register.Rdx);     // RDX = destructor = 0 (no managed fields)
+    EmitTagZero(X86Register.R8);    // R8 = tag
     EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_alloc")); EmitDword(0);
     // Save new buffer at [rbp-24]
     EmitMovMemReg(-0x18, X86Register.Rax, 8);
@@ -1682,7 +1682,8 @@ public partial class X86CodeEmitter {
     EmitCallImport("kernel32.dll", "LocalFree");
     // Allocate 1-byte buffer with null terminator
     EmitMovRegImm(X86Register.Rcx, 1);
-    EmitTagOrNull(X86Register.Rdx, "__rt_tag_cmdline_arg");
+    EmitXorRegReg(X86Register.Rdx, X86Register.Rdx);     // destructor = 0
+    EmitTagZero(X86Register.R8);
     EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_alloc")); EmitDword(0);
     EmitBytes(0xC6, 0x00, 0x00);                         // MOV byte [RAX], 0
     EmitJmp("rt_cla_return");
@@ -1719,7 +1720,8 @@ public partial class X86CodeEmitter {
 
     // Step 6: Allocate buffer via mm_alloc
     EmitMovRegReg(X86Register.Rcx, X86Register.Rax);
-    EmitTagOrNull(X86Register.Rdx, "__rt_tag_cmdline_arg"); // RDX = tag
+    EmitXorRegReg(X86Register.Rdx, X86Register.Rdx);         // destructor = 0
+    EmitTagZero(X86Register.R8);    // R8 = tag
     EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_alloc")); EmitDword(0);
 
     // Save buffer pointer
@@ -1963,7 +1965,8 @@ public partial class X86CodeEmitter {
     EmitRuntimeFunctionStart("maxon_find_first_file", 1, 0x40);
     // Allocate block
     EmitMovRegImm(X86Register.Rcx, FindBlockSize);
-    EmitTagOrNull(X86Register.Rdx, "__rt_tag_find_data"); // RDX = tag
+    EmitXorRegReg(X86Register.Rdx, X86Register.Rdx);     // destructor = 0
+    EmitTagZero(X86Register.R8);  // R8 = tag
     EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_alloc")); EmitDword(0);
     EmitMovMemReg(-0x10, X86Register.Rax, 8); // [rbp-16] = block_ptr
     // FindFirstFileA(pattern, &block[8])
@@ -1975,10 +1978,9 @@ public partial class X86CodeEmitter {
     EmitMovRegImm(X86Register.Rcx, -1);
     EmitCmpRegReg(X86Register.Rax, X86Register.Rcx);
     EmitJcc("ne", "rt_fff_found");
-    // Not found: free block, return 0
+    // Not found: decref block (will free since rc=1), return 0
     EmitMovRegMem(X86Register.Rcx, -0x10, 8);
-    if (Compiler.MmTrace) EmitXorRegReg(X86Register.Rdx, X86Register.Rdx); // scope = NULL
-    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_free")); EmitDword(0);
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_decref")); EmitDword(0);
     EmitXorRegReg(X86Register.Rax, X86Register.Rax);
     EmitJmp("rt_fff_done");
     // Found: store handle in block[0], return block_ptr
@@ -2043,10 +2045,9 @@ public partial class X86CodeEmitter {
     EmitJcc("z", "rt_fc_done");
     EmitMovRegIndirectMem(X86Register.Rcx, X86Register.Rax, FindBlockHandleOffset); // arg1: handle
     EmitCallImport("kernel32.dll", "FindClose");
-    // Free block
+    // Decref block (will free since rc=1)
     EmitMovRegMem(X86Register.Rcx, -0x08, 8);
-    if (Compiler.MmTrace) EmitXorRegReg(X86Register.Rdx, X86Register.Rdx); // scope = NULL
-    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_free")); EmitDword(0);
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_decref")); EmitDword(0);
     DefineLabel("rt_fc_done");
     EmitRuntimeFunctionEnd();
   }
@@ -2096,7 +2097,8 @@ public partial class X86CodeEmitter {
     EmitRuntimeFunctionStart("maxon_get_current_directory", 0, 0x40);
     // Allocate 260 bytes (MAX_PATH) for the buffer
     EmitMovRegImm(X86Register.Rcx, 260);
-    EmitTagOrNull(X86Register.Rdx, "__rt_tag_dir_buffer"); // RDX = tag
+    EmitXorRegReg(X86Register.Rdx, X86Register.Rdx);     // destructor = 0
+    EmitTagZero(X86Register.R8); // R8 = tag
     EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_alloc")); EmitDword(0);
     EmitMovMemReg(-0x10, X86Register.Rax, 8); // [rbp-16] = buffer
     // GetCurrentDirectoryA(nBufferLength=260, lpBuffer=buffer)
@@ -2390,7 +2392,8 @@ public partial class X86CodeEmitter {
 
     // Allocate result struct (24 bytes)
     EmitMovRegImm(X86Register.Rcx, CaptureStructSize);
-    EmitTagOrNull(X86Register.Rdx, "__rt_tag_capture_result"); // RDX = tag
+    EmitXorRegReg(X86Register.Rdx, X86Register.Rdx);           // destructor = 0
+    EmitTagZero(X86Register.R8);   // R8 = tag
     EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_alloc")); EmitDword(0);
     EmitMovMemReg(resultSlot, X86Register.Rax, 8);
 
@@ -2433,7 +2436,8 @@ public partial class X86CodeEmitter {
 
     // Allocate initial buffer (4096 bytes)
     EmitMovRegImm(X86Register.Rcx, 4096);
-    EmitTagOrNull(X86Register.Rdx, "__rt_tag_pipe_buffer"); // RDX = tag
+    EmitXorRegReg(X86Register.Rdx, X86Register.Rdx);     // destructor = 0
+    EmitTagZero(X86Register.R8); // R8 = tag
     EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_alloc")); EmitDword(0);
     EmitMovMemReg(-0x10, X86Register.Rax, 8);           // buffer
     EmitMovRegImm(X86Register.Rax, 4096);
@@ -2460,7 +2464,7 @@ public partial class X86CodeEmitter {
     EmitMovMemReg(-0x18, X86Register.Rdx, 8);           // update capacity
     EmitMovRegMem(X86Register.Rcx, -0x10, 8);           // old buffer
     // RDX already has new size
-    EmitTagOrNull(X86Register.R8, "__rt_tag_pipe_buffer"); // R8 = tag
+    EmitTagZero(X86Register.R8); // R8 = tag
     EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_realloc")); EmitDword(0);
     EmitMovMemReg(-0x10, X86Register.Rax, 8);           // update buffer
 
@@ -2499,7 +2503,7 @@ public partial class X86CodeEmitter {
     EmitMovRegMem(X86Register.Rdx, -0x20, 8);           // total_read
     EmitAddRegImm(X86Register.Rdx, 1);                  // new size = total_read + 1
     EmitMovMemReg(-0x18, X86Register.Rdx, 8);           // update capacity
-    EmitTagOrNull(X86Register.R8, "__rt_tag_pipe_buffer"); // R8 = tag
+    EmitTagZero(X86Register.R8); // R8 = tag
     EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_realloc")); EmitDword(0);
     EmitMovMemReg(-0x10, X86Register.Rax, 8);           // update buffer
     DefineLabel("rt_prp_nullterm");
@@ -2639,6 +2643,65 @@ public partial class X86CodeEmitter {
     EmitBytes(0x0F, 0x94, 0xC0); // SETE AL
     // MOVZX RAX, AL
     EmitBytes(0x48, 0x0F, 0xB6, 0xC0); // MOVZX RAX, AL
+    EmitRuntimeFunctionEnd();
+  }
+
+  /// <summary>
+  /// mm_raw_alloc(size_rcx) -> ptr_rax
+  /// Simple HeapAlloc wrapper: GetProcessHeap, HeapAlloc(heap, HEAP_ZERO_MEMORY, size).
+  /// Returns raw pointer with no refcount header.
+  /// </summary>
+  private void EmitMmRawAlloc() {
+    EmitRuntimeFunctionStart("mm_raw_alloc", 1, 0x30);
+    // GetProcessHeap() -> RAX = heap handle
+    EmitCallImport("kernel32.dll", "GetProcessHeap");
+    EmitMovRegReg(X86Register.Rcx, X86Register.Rax);    // arg1: hHeap
+    EmitMovRegImm(X86Register.Rdx, 0x08);                // arg2: HEAP_ZERO_MEMORY = 0x08
+    EmitMovRegMem(X86Register.R8, -0x08, 8);             // arg3: size (saved from RCX by prologue)
+    EmitCallImport("kernel32.dll", "HeapAlloc");
+    // RAX = allocated pointer
+    EmitRuntimeFunctionEnd();
+  }
+
+  /// <summary>
+  /// mm_raw_realloc(ptr_rcx, new_size_rdx) -> new_ptr_rax
+  /// Simple HeapReAlloc wrapper for raw buffers (no refcount header).
+  /// If ptr is NULL, delegates to mm_raw_alloc(new_size).
+  /// </summary>
+  private void EmitMmRawRealloc() {
+    EmitRuntimeFunctionStart("mm_raw_realloc", 2, 0x30);
+    // [rbp-8] = ptr, [rbp-16] = new_size
+    EmitMovRegMem(X86Register.Rax, -0x08, 8); // RAX = ptr
+    EmitBytes(0x48, 0x85, 0xC0); // TEST rax, rax
+    EmitJcc("nz", "mm_raw_realloc_not_null");
+    // NULL path: delegate to mm_raw_alloc
+    EmitMovRegMem(X86Register.Rcx, -0x10, 8); // RCX = new_size
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_raw_alloc")); EmitDword(0);
+    EmitJmp("mm_raw_realloc_done");
+    DefineLabel("mm_raw_realloc_not_null");
+    // HeapReAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, ptr, new_size)
+    EmitCallImport("kernel32.dll", "GetProcessHeap");
+    EmitMovRegReg(X86Register.Rcx, X86Register.Rax);    // arg1: hHeap
+    EmitMovRegImm(X86Register.Rdx, 0x08);                // arg2: HEAP_ZERO_MEMORY
+    EmitMovRegMem(X86Register.R8, -0x08, 8);             // arg3: old ptr
+    EmitMovRegMem(X86Register.R9, -0x10, 8);             // arg4: new_size
+    EmitCallImport("kernel32.dll", "HeapReAlloc");
+    DefineLabel("mm_raw_realloc_done");
+    EmitRuntimeFunctionEnd();
+  }
+
+  /// <summary>
+  /// mm_raw_free(ptr_rcx)
+  /// Simple HeapFree wrapper: GetProcessHeap, HeapFree(heap, 0, ptr).
+  /// </summary>
+  private void EmitMmRawFree() {
+    EmitRuntimeFunctionStart("mm_raw_free", 1, 0x30);
+    // GetProcessHeap() -> RAX = heap handle
+    EmitCallImport("kernel32.dll", "GetProcessHeap");
+    EmitMovRegReg(X86Register.Rcx, X86Register.Rax);    // arg1: hHeap
+    EmitMovRegImm(X86Register.Rdx, 0);                   // arg2: flags = 0
+    EmitMovRegMem(X86Register.R8, -0x08, 8);             // arg3: ptr
+    EmitCallImport("kernel32.dll", "HeapFree");
     EmitRuntimeFunctionEnd();
   }
 

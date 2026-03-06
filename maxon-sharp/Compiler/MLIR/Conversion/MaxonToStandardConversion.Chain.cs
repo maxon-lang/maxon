@@ -44,7 +44,9 @@ public static partial class MaxonToStandardConversion {
     Dictionary<int, string> structValueTypes,
     VarRegistry temps) {
 
-    var chainPtr = EmitAlloc(block, ChainDataSize, "__Chain", scopeName: _currentFuncName);
+    // Use the concrete alias name (e.g., "TokenChain") so the destructor knows whether elements are managed
+    var chainTypeName = op.Result.TypeName is "__Chain" ? "__Chain" : op.Result.TypeName;
+    var chainPtr = EmitAlloc(block, ChainDataSize, chainTypeName, scopeName: _currentFuncName);
 
     // Zero-initialize head, tail, count, cursor
     var zero = new StdConstI64Op(0);
@@ -61,7 +63,7 @@ public static partial class MaxonToStandardConversion {
   }
 
   /// <summary>
-  /// Lowers MaxonChainInsertValueOp: allocates a node as child of the chain,
+  /// Lowers MaxonChainInsertValueOp: allocates a refcounted node,
   /// stores the value, and calls the appropriate runtime insert function.
   /// </summary>
   private static void LowerChainInsertValue(
@@ -75,10 +77,9 @@ public static partial class MaxonToStandardConversion {
     VarRegistry temps) {
 
     var chainVarName = structVarNames[op.Chain.Id];
-    var chainPtr = (StdI64)EmitLoad(block, chainVarName, varTypes);
 
-    // Allocate node as child of chain
-    var nodePtr = EmitAllocIn(block, ChainNodeDataSize, chainPtr, "__ChainNode");
+    // Allocate node as independent refcounted allocation
+    var nodePtr = EmitAlloc(block, ChainNodeDataSize, "__ChainNode", scopeName: _currentFuncName);
 
     // Zero-initialize link fields (runtime insert will set them)
     var zero = new StdConstI64Op(0);
@@ -129,10 +130,9 @@ public static partial class MaxonToStandardConversion {
     VarRegistry temps) {
 
     var chainVarName = structVarNames[op.Chain.Id];
-    var chainPtr = (StdI64)EmitLoad(block, chainVarName, varTypes);
 
-    // Allocate node as child of chain
-    var nodePtr = EmitAllocIn(block, ChainNodeDataSize, chainPtr, "__ChainNode");
+    // Allocate node as independent refcounted allocation
+    var nodePtr = EmitAlloc(block, ChainNodeDataSize, "__ChainNode", scopeName: _currentFuncName);
 
     // Zero-initialize link fields
     var zero = new StdConstI64Op(0);
@@ -225,17 +225,15 @@ public static partial class MaxonToStandardConversion {
     var chainPtr = (StdI64)EmitLoad(block, chainVarName, varTypes);
     var nodePtr = (StdI64)EmitLoad(block, nodeVarName, varTypes);
 
-    // Unlink node from chain's linked list.
-    // The node data stays as a child allocation of the chain — this is correct because
-    // the ChainNode wrapper holds a borrowed pointer to the data. The node data remains
-    // valid as long as the chain exists, and gets freed when the chain is freed
-    // (via mm_free_entry's recursive child cleanup).
+    // Unlink node from chain's linked list and release the chain's counted reference.
+    // The node survives because the local variable still holds a reference.
     block.AddOp(new StdCallRuntimeOp("maxon_chain_unlink", [chainPtr, nodePtr], null));
+    var nodePtrReload = (StdI64)EmitLoad(block, nodeVarName, varTypes);
+    EmitDecrefValueIfNonnull(block, nodePtrReload, scopeName: _currentFuncName);
   }
 
   /// <summary>
-  /// Lowers MaxonChainRemoveOp: unlinks node, extracts value, frees node, returns value.
-  /// For struct values, the extracted value is reparented to the current scope.
+  /// Lowers MaxonChainRemoveOp: unlinks node, extracts value, decrefs node, returns value.
   /// </summary>
   private static void LowerChainRemove(
     MaxonChainRemoveOp op,
@@ -253,8 +251,10 @@ public static partial class MaxonToStandardConversion {
     var chainPtr = (StdI64)EmitLoad(block, chainVarName, varTypes);
     var nodePtr = (StdI64)EmitLoad(block, nodeVarName, varTypes);
 
-    // Unlink node from chain
+    // Unlink node from chain and release the chain's counted reference
     block.AddOp(new StdCallRuntimeOp("maxon_chain_unlink", [chainPtr, nodePtr], null));
+    var nodeDecrefPtr = (StdI64)EmitLoad(block, nodeVarName, varTypes);
+    EmitDecrefValueIfNonnull(block, nodeDecrefPtr, scopeName: _currentFuncName);
 
     // Load value from node before freeing it
     var nodePtrReload = (StdI64)EmitLoad(block, nodeVarName, varTypes);
@@ -262,16 +262,19 @@ public static partial class MaxonToStandardConversion {
     block.AddOp(valueLoad);
     var extractedValue = (StdI64)valueLoad.Result;
 
-    // Save the extracted value. Use CallReturn flag so assignment skips incref
-    // (transfer: the node held an incref'd reference, caller inherits it).
-    var valueTempName = temps.CreateTemp("chain_nav", op.Result.Id, op.ValueKind, OwnershipFlags.CallReturn);
+    // Release the node's reference to the value (the ChainNode destructor is empty,
+    // so we must explicitly decref managed values before freeing the node)
+    if (IsChainHeapValueKind(op.ValueKind, typeDefs)) {
+      EmitDecrefValueIfNonnull(block, extractedValue, scopeName: _currentFuncName);
+    }
+
+    // Save the extracted value
+    var valueTempName = temps.CreateTemp("chain_nav", op.Result.Id, op.ValueKind, OwnershipFlags.None);
     EmitStore(block, extractedValue, valueTempName, varTypes);
 
-    // Free the node. The value's refcount is unchanged — caller inherits the node's reference.
+    // Decref the node — local variable releases its reference
     var nodePtrForFree = (StdI64)EmitLoad(block, nodeVarName, varTypes);
-    List<StdValue> freeArgs = [nodePtrForFree];
-    if (Compiler.MmTrace) freeArgs.Add(EmitNullPtr(block));
-    block.AddOp(new StdCallRuntimeOp("mm_free", freeArgs, null));
+    EmitDecrefValueIfNonnull(block, nodePtrForFree, scopeName: _currentFuncName);
 
     // Zero the node variable so scope-end cleanup skips it (node memory is already freed)
     var zeroNode = new StdConstI64Op(0);
@@ -329,8 +332,7 @@ public static partial class MaxonToStandardConversion {
 
     if (IsChainHeapValueKind(op.ValueKind, typeDefs)) {
       // Heap value: return a borrowed pointer. The assignment incref (from
-      // MaxonAssignOp) provides the caller's reference. mm_free_entry rescues
-      // children with rc > 0, so the value survives container destruction.
+      // MaxonAssignOp) provides the caller's reference.
       var tempName = temps.CreateTemp("chain_val", op.Result.Id, op.ValueKind, OwnershipFlags.Borrowed);
       EmitStore(block, (StdI64)valueLoad.Result, tempName, varTypes);
       structVarNames[op.Result.Id] = tempName;
@@ -352,8 +354,7 @@ public static partial class MaxonToStandardConversion {
     Dictionary<MaxonValue, StdValue> valueMap,
     Dictionary<string, string> varTypes,
     Dictionary<int, string> structVarNames,
-    Dictionary<string, MlirType> typeDefs,
-    Dictionary<string, TypeAliasInfo>? typeAliasSources = null) {
+    Dictionary<string, MlirType> typeDefs) {
 
     var nodeVarName = structVarNames[op.Node.Id];
     var nodePtr = (StdI64)EmitLoad(block, nodeVarName, varTypes);
@@ -364,9 +365,8 @@ public static partial class MaxonToStandardConversion {
       block.AddOp(oldValueLoad);
       var oldValue = (StdI64)oldValueLoad.Result;
 
-      // Destruct old value with field cleanup — node no longer holds a reference (may be null)
-      EmitDestructValueIfNonnull(block, oldValue, op.ValueKind,
-        typeDefs, typeAliasSources, scopeName: _currentFuncName);
+      // Decref old value — node no longer holds a reference (may be null)
+      EmitDecrefValueIfNonnull(block, oldValue, scopeName: _currentFuncName);
 
       // Store new value and incref — node now holds a reference
       var valueSrcName = structVarNames[op.Value.Id];
@@ -525,7 +525,7 @@ public static partial class MaxonToStandardConversion {
     // Register result as a ChainNode (even if null — the error path handles that)
     if (result != null) {
       var chainNodeType = result is MaxonStruct ms ? ms.TypeName : "__ChainNode";
-      var tempName = temps.CreateTemp("chain_nav", result.Id, chainNodeType, OwnershipFlags.CallReturn);
+      var tempName = temps.CreateTemp("chain_nav", result.Id, chainNodeType, OwnershipFlags.Orphan);
       EmitStore(block, loadedPtr, tempName, varTypes);
       // Incref the ChainNode so it survives until scope exit decref.
       // Null-guarded: on the error path the node pointer is null.

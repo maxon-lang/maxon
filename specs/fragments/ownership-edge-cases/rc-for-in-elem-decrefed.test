@@ -28,35 +28,40 @@ incref ElementMemory #1 rc=1 [ownership-edge-cases.main]
 incref ScoreArray #2 rc=1 [ownership-edge-cases.main]
 alloc Score #3 rc=0 [ownership-edge-cases.main]
 incref Score #3 rc=1 [ownership-edge-cases.main]
-alloc_in Buffer
 incref Score #3 rc=2 [ScoreArray.push]
+alloc Score #4 rc=0 [ownership-edge-cases.main]
+incref Score #4 rc=1 [ownership-edge-cases.main]
+incref Score #4 rc=2 [ScoreArray.push]
 alloc Score #5 rc=0 [ownership-edge-cases.main]
 incref Score #5 rc=1 [ownership-edge-cases.main]
 incref Score #5 rc=2 [ScoreArray.push]
-alloc Score #6 rc=0 [ownership-edge-cases.main]
-incref Score #6 rc=1 [ownership-edge-cases.main]
-incref Score #6 rc=2 [ScoreArray.push]
 incref ScoreArray #2 rc=2 [ownership-edge-cases.main]
 incref Score #3 rc=3 [ScoreArray.next]
 transfer Score #3 rc=3 [ScoreArray.next]
+incref Score #3 rc=4 [ownership-edge-cases.main]
+decref Score #3 rc=3 [ownership-edge-cases.main]
 decref Score #3 rc=2 [ownership-edge-cases.main]
 decref Score #3 rc=1 [ownership-edge-cases.main]
+decref Score #4 rc=1 [ownership-edge-cases.main]
 decref Score #5 rc=1 [ownership-edge-cases.main]
-decref Score #6 rc=1 [ownership-edge-cases.main]
+incref Score #4 rc=2 [ScoreArray.next]
+transfer Score #4 rc=2 [ScoreArray.next]
+incref Score #4 rc=3 [ownership-edge-cases.main]
+decref Score #4 rc=2 [ownership-edge-cases.main]
+decref Score #4 rc=1 [ownership-edge-cases.main]
 incref Score #5 rc=2 [ScoreArray.next]
 transfer Score #5 rc=2 [ScoreArray.next]
+incref Score #5 rc=3 [ownership-edge-cases.main]
+decref Score #5 rc=2 [ownership-edge-cases.main]
 decref Score #5 rc=1 [ownership-edge-cases.main]
-incref Score #6 rc=2 [ScoreArray.next]
-transfer Score #6 rc=2 [ScoreArray.next]
-decref Score #6 rc=1 [ownership-edge-cases.main]
 decref ScoreArray #2 rc=1 [ownership-edge-cases.main]
 decref ScoreArray #2 rc=0 [ownership-edge-cases.main]
+decref ElementMemory #1 rc=0 [~ScoreArray]
   free Score #3
+  free Score #4
   free Score #5
-  free Score #6
-decref ElementMemory #1 rc=0 [ownership-edge-cases.main]
   free ElementMemory #1
-free ScoreArray #2 [ownership-edge-cases.main]
+  free ScoreArray #2
 ```
 ---
 module {
@@ -69,6 +74,7 @@ module {
     x86.mov [rbp-24], edx
     x86.mov rcx, 8
     x86.xor rdx, rdx
+    x86.mov r8, 1
     x86.call mm_alloc
     x86.mov [rbp-16], eax
     x86.mov ecx, [rbp-16]
@@ -83,30 +89,36 @@ module {
   }
   func @ownership-edge-cases.main() -> u32 {
   entry:
-    x86.prologue stack_size=96
+    x86.prologue stack_size=80
     x86.xor eax, eax
     x86.xor ecx, ecx
     x86.xor edx, edx
     x86.xor ebx, ebx
     x86.mov esi, 8
+    x86.lea_func edi, [__destruct_ElementMemory]
+    x86.mov r8, rdi
+    x86.mov rdx, r8
     x86.mov rcx, 32
-    x86.xor rdx, rdx
+    x86.mov r8, 2
     x86.call mm_alloc
     x86.mov [rbp-8], eax
-    x86.mov edi, [rbp-8]
-    x86.xor r8, r8
-    x86.mov [edi+0], r8
     x86.mov r9, [rbp-8]
     x86.xor eax, eax
-    x86.mov [r9+8], eax
+    x86.mov [r9+0], eax
+    x86.mov eax, [rbp-8]
+    x86.xor ecx, ecx
+    x86.mov [eax+8], ecx
     x86.mov eax, [rbp-8]
     x86.xor ecx, ecx
     x86.mov [eax+16], ecx
     x86.mov eax, [rbp-8]
     x86.mov ecx, 8
     x86.mov [eax+24], ecx
+    x86.lea_func eax, [__destruct_ScoreArray]
+    x86.mov rcx, rax
+    x86.mov rdx, rcx
     x86.mov rcx, 16
-    x86.xor rdx, rdx
+    x86.mov r8, 3
     x86.call mm_alloc
     x86.mov [rbp-16], eax
     x86.mov ecx, [rbp-16]
@@ -122,12 +134,12 @@ module {
     x86.mov eax, 10
     x86.mov rcx, 8
     x86.xor rdx, rdx
+    x86.mov r8, 1
     x86.call mm_alloc
     x86.mov [rbp-24], eax
-    x86.mov eax, [rbp-24]
-    x86.mov ecx, 10
-    x86.mov [eax+0], ecx
-    x86.mov eax, [rbp-24]
+    x86.mov ecx, [rbp-24]
+    x86.mov edx, 10
+    x86.mov [ecx+0], edx
     x86.mov rcx, [rbp-24]
     x86.call mm_incref
     x86.mov eax, [rbp-16]
@@ -138,12 +150,12 @@ module {
     x86.mov eax, 20
     x86.mov rcx, 8
     x86.xor rdx, rdx
+    x86.mov r8, 1
     x86.call mm_alloc
     x86.mov [rbp-32], eax
-    x86.mov eax, [rbp-32]
-    x86.mov ecx, 20
-    x86.mov [eax+0], ecx
-    x86.mov eax, [rbp-32]
+    x86.mov ecx, [rbp-32]
+    x86.mov edx, 20
+    x86.mov [ecx+0], edx
     x86.mov rcx, [rbp-32]
     x86.call mm_incref
     x86.mov eax, [rbp-16]
@@ -154,12 +166,12 @@ module {
     x86.mov eax, 30
     x86.mov rcx, 8
     x86.xor rdx, rdx
+    x86.mov r8, 1
     x86.call mm_alloc
     x86.mov [rbp-40], eax
-    x86.mov eax, [rbp-40]
-    x86.mov ecx, 30
-    x86.mov [eax+0], ecx
-    x86.mov eax, [rbp-40]
+    x86.mov ecx, [rbp-40]
+    x86.mov edx, 30
+    x86.mov [ecx+0], edx
     x86.mov rcx, [rbp-40]
     x86.call mm_incref
     x86.mov eax, [rbp-16]
@@ -190,38 +202,46 @@ module {
     x86.mov eax, [rbp-64]
     x86.mov [rbp-72], eax
     x86.mov ecx, [rbp-72]
-    x86.mov edx, [ecx+0]
-    x86.mov ebx, [rbp-48]
-    x86.add ebx, edx
-    x86.mov [rbp-48], ebx
-    x86.mov esi, [rbp-72]
-    x86.test esi, esi
+    x86.call mm_incref
+    x86.mov edx, [rbp-72]
+    x86.mov ebx, [edx+0]
+    x86.mov esi, [rbp-48]
+    x86.add esi, ebx
+    x86.mov [rbp-48], esi
+    x86.mov edi, [rbp-64]
+    x86.test edi, edi
     x86.jz __nonnull_skip_0
-    x86.mov rcx, [rbp-72]
+    x86.mov rcx, [rbp-64]
     x86.call mm_decref
     x86.label __nonnull_skip_0
-    x86.mov edi, [rbp-24]
-    x86.test edi, edi
+    x86.mov r8, [rbp-72]
+    x86.test r8, r8
     x86.jz __nonnull_skip_1
-    x86.mov rcx, [rbp-24]
+    x86.mov rcx, [rbp-72]
     x86.call mm_decref
     x86.label __nonnull_skip_1
-    x86.xor r8, r8
-    x86.mov [rbp-24], r8
-    x86.mov r9, [rbp-32]
+    x86.mov r9, [rbp-24]
     x86.test r9, r9
     x86.jz __nonnull_skip_2
-    x86.mov rcx, [rbp-32]
+    x86.mov rcx, [rbp-24]
     x86.call mm_decref
     x86.label __nonnull_skip_2
+    x86.xor eax, eax
+    x86.mov [rbp-24], eax
+    x86.mov eax, [rbp-32]
+    x86.test eax, eax
+    x86.jz __nonnull_skip_3
+    x86.mov rcx, [rbp-32]
+    x86.call mm_decref
+    x86.label __nonnull_skip_3
     x86.xor eax, eax
     x86.mov [rbp-32], eax
     x86.mov eax, [rbp-40]
     x86.test eax, eax
-    x86.jz __nonnull_skip_3
+    x86.jz __nonnull_skip_4
     x86.mov rcx, [rbp-40]
     x86.call mm_decref
-    x86.label __nonnull_skip_3
+    x86.label __nonnull_skip_4
     x86.xor eax, eax
     x86.mov [rbp-40], eax
     x86.jmp ownership-edge-cases.main.loop_0.header
@@ -247,64 +267,84 @@ module {
     x86.mov eax, [rbp-80]
     x86.mov ecx, [rbp-16]
     x86.test ecx, ecx
-    x86.jz __destruct_nullguard_4
-    x86.call mm_decref_check
-    x86.test eax, eax
-    x86.jnz __destruct_skip_5
-    x86.mov ecx, [rbp-16]
-    x86.mov edx, [ecx+8]
-    x86.mov [rbp-88], edx
-    x86.mov rcx, [rbp-88]
-    x86.call mm_decref_managed_elements
-    x86.mov rcx, [rbp-88]
+    x86.jz __nonnull_skip_5
     x86.call mm_decref
-    x86.mov rcx, [rbp-16]
-    x86.call mm_free
-    x86.label __destruct_skip_5
-    x86.label __destruct_nullguard_4
+    x86.label __nonnull_skip_5
     x86.mov eax, [rbp-56]
     x86.test eax, eax
-    x86.jz __destruct_nullguard_6
+    x86.jz __nonnull_skip_6
     x86.mov rcx, [rbp-56]
-    x86.call mm_decref_check
-    x86.test eax, eax
-    x86.jnz __destruct_skip_7
-    x86.mov ecx, [rbp-56]
-    x86.mov edx, [ecx+8]
-    x86.mov [rbp-96], edx
-    x86.mov rcx, [rbp-96]
-    x86.call mm_decref_managed_elements
-    x86.mov rcx, [rbp-96]
     x86.call mm_decref
-    x86.mov rcx, [rbp-56]
-    x86.call mm_free
-    x86.label __destruct_skip_7
-    x86.label __destruct_nullguard_6
-    x86.mov ebx, [rbp-64]
-    x86.test ebx, ebx
+    x86.label __nonnull_skip_6
+    x86.mov ecx, [rbp-64]
+    x86.test ecx, ecx
+    x86.jz __nonnull_skip_7
+    x86.call mm_decref
+    x86.label __nonnull_skip_7
+    x86.mov edx, [rbp-24]
+    x86.test edx, edx
     x86.jz __nonnull_skip_8
-    x86.mov rcx, [rbp-64]
-    x86.call mm_decref
-    x86.label __nonnull_skip_8
-    x86.mov esi, [rbp-24]
-    x86.test esi, esi
-    x86.jz __nonnull_skip_9
     x86.mov rcx, [rbp-24]
     x86.call mm_decref
-    x86.label __nonnull_skip_9
-    x86.mov edi, [rbp-32]
-    x86.test edi, edi
-    x86.jz __nonnull_skip_10
+    x86.label __nonnull_skip_8
+    x86.mov ebx, [rbp-32]
+    x86.test ebx, ebx
+    x86.jz __nonnull_skip_9
     x86.mov rcx, [rbp-32]
     x86.call mm_decref
-    x86.label __nonnull_skip_10
-    x86.mov r8, [rbp-40]
-    x86.test r8, r8
-    x86.jz __nonnull_skip_11
+    x86.label __nonnull_skip_9
+    x86.mov esi, [rbp-40]
+    x86.test esi, esi
+    x86.jz __nonnull_skip_10
     x86.mov rcx, [rbp-40]
     x86.call mm_decref
-    x86.label __nonnull_skip_11
+    x86.label __nonnull_skip_10
     x86.mov eax, [rbp-80]
+    x86.epilogue
+    x86.ret
+  }
+  func @__destruct_Score(ptr: i64) {
+  entry:
+    x86.jmp __destruct_Score.done
+  done:
+    x86.ret
+  }
+  func @__destruct_ElementMemory(ptr: i64) {
+  entry:
+    x86.prologue stack_size=16
+    x86.mov [rbp-8], ecx
+    x86.mov eax, [rbp-8]
+    x86.mov rcx, [rbp-8]
+    x86.call mm_decref_managed_elements
+    x86.mov ecx, [rbp-8]
+    x86.mov edx, [ecx+16]
+    x86.xor ebx, ebx
+    x86.cmp edx, ebx
+    x86.je __destruct_ElementMemory.skip_buf_0
+  free_buf_0:
+    x86.mov eax, [rbp-8]
+    x86.mov ecx, [eax+0]
+    x86.call mm_raw_free
+    x86.jmp __destruct_ElementMemory.skip_buf_0
+  skip_buf_0:
+    x86.jmp __destruct_ElementMemory.done
+  done:
+    x86.epilogue
+    x86.ret
+  }
+  func @__destruct_ScoreArray(ptr: i64) {
+  entry:
+    x86.prologue stack_size=16
+    x86.mov [rbp-8], ecx
+    x86.mov eax, [rbp-8]
+    x86.mov ecx, [eax+8]
+    x86.mov [rbp-16], ecx
+    x86.test ecx, ecx
+    x86.jz __nonnull_skip_12
+    x86.call mm_decref
+    x86.label __nonnull_skip_12
+    x86.jmp __destruct_ScoreArray.done
+  done:
     x86.epilogue
     x86.ret
   }

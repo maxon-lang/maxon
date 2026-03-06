@@ -19,9 +19,9 @@ alloc __Tuple_i64_Point #2 rc=0 [ownership-edge-cases.main]
 incref Point #1 rc=1 [ownership-edge-cases.main]
 incref __Tuple_i64_Point #2 rc=1 [ownership-edge-cases.main]
 decref __Tuple_i64_Point #2 rc=0 [ownership-edge-cases.main]
-decref Point #1 rc=0 [ownership-edge-cases.main]
+decref Point #1 rc=0 [~__Tuple_i64_Point]
   free Point #1
-free __Tuple_i64_Point #2 [ownership-edge-cases.main]
+  free __Tuple_i64_Point #2
 ```
 ---
 module {
@@ -33,6 +33,7 @@ module {
     x86.mov edx, 20
     x86.mov rcx, 16
     x86.xor rdx, rdx
+    x86.mov r8, 1
     x86.call mm_alloc
     x86.mov [rbp-8], eax
     x86.mov ebx, [rbp-8]
@@ -41,13 +42,16 @@ module {
     x86.mov edi, [rbp-8]
     x86.mov r8, 20
     x86.mov [edi+8], r8
+    x86.lea_func r9, [__destruct___Tuple_i64_Point]
+    x86.mov rax, r9
+    x86.mov rdx, rax
     x86.mov rcx, 16
-    x86.xor rdx, rdx
+    x86.mov r8, 2
     x86.call mm_alloc
     x86.mov [rbp-16], eax
-    x86.mov r9, [rbp-16]
-    x86.mov eax, 1
-    x86.mov [r9+0], eax
+    x86.mov eax, [rbp-16]
+    x86.mov ecx, 1
+    x86.mov [eax+0], ecx
     x86.mov eax, [rbp-8]
     x86.mov ecx, [rbp-16]
     x86.mov [ecx+8], eax
@@ -78,19 +82,32 @@ module {
     x86.mov eax, [rbp-24]
     x86.mov ecx, [rbp-16]
     x86.test ecx, ecx
-    x86.jz __destruct_nullguard_0
-    x86.call mm_decref_check
-    x86.test eax, eax
-    x86.jnz __destruct_skip_1
-    x86.mov ecx, [rbp-16]
-    x86.mov edx, [ecx+8]
-    x86.mov rcx, rdx
+    x86.jz __nonnull_skip_0
     x86.call mm_decref
-    x86.mov rcx, [rbp-16]
-    x86.call mm_free
-    x86.label __destruct_skip_1
-    x86.label __destruct_nullguard_0
+    x86.label __nonnull_skip_0
     x86.mov eax, [rbp-24]
+    x86.epilogue
+    x86.ret
+  }
+  func @__destruct_Point(ptr: i64) {
+  entry:
+    x86.jmp __destruct_Point.done
+  done:
+    x86.ret
+  }
+  func @__destruct___Tuple_i64_Point(ptr: i64) {
+  entry:
+    x86.prologue stack_size=16
+    x86.mov [rbp-8], ecx
+    x86.mov eax, [rbp-8]
+    x86.mov ecx, [eax+8]
+    x86.mov [rbp-16], ecx
+    x86.test ecx, ecx
+    x86.jz __nonnull_skip_1
+    x86.call mm_decref
+    x86.label __nonnull_skip_1
+    x86.jmp __destruct___Tuple_i64_Point.done
+  done:
     x86.epilogue
     x86.ret
   }

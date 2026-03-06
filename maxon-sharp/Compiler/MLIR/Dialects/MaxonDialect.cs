@@ -152,7 +152,7 @@ public class MaxonAssignOp(string varName, MaxonValue value, bool isDeclaration,
   public bool IsDeclaration { get; } = isDeclaration;
   public bool IsMutable { get; } = isMutable;
   public MaxonValueKind ValueKind { get; } = valueKind;
-  public OwnershipFlags? OwnerFlags { get; init; }
+  public OwnershipFlags? OwnerFlags { get; set; }
   public override IReadOnlyList<string> PrintableOperands => [Value.ToString()];
   public override IReadOnlyDictionary<string, MlirAttribute> PrintableAttributes {
     get {
