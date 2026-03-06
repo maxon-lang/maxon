@@ -574,7 +574,7 @@ module {
     %11 = maxon.literal {value = 0 : i64}
     %12 = maxon.literal {value = 0 : i64}
     %13 = maxon.literal {value = 8 : i64}
-    %14 = maxon.struct_literal @ElementMemory
+    %14 = maxon.struct_literal @__ManagedMemory_Item
     %15 = maxon.struct_literal @ItemArray
     maxon.assign %15 {var = arr} {decl = 1 : i1} {mut = 1 : i1}
     %16 = maxon.literal {value = 7 : i64}
@@ -646,7 +646,7 @@ module {
     %14 = arith.constant {value = 0 : i64}
     %15 = arith.constant {value = 8 : i64}
     %16 = arith.constant {value = 32 : i64}
-    %17 = func.ref @__destruct_ElementMemory
+    %17 = func.ref @__destruct___ManagedMemory_Item
     %18 = std.ptr_to_i64 %17
     %19 = arith.constant {value = 2 : i64}
     %20 = std.call_runtime @mm_alloc %16, %18, %19
@@ -748,7 +748,7 @@ module {
   done:
     func.return
   }
-  func @__destruct_ElementMemory(ptr: i64) {
+  func @__destruct___ManagedMemory_Item(ptr: i64) {
   entry:
     %213 = func.param ptr : StdI64
     memref.store %213, __destr_ptr
@@ -815,7 +815,7 @@ module {
     x86.xor ebx, ebx
     x86.xor esi, esi
     x86.mov edi, 8
-    x86.lea_func r8, [__destruct_ElementMemory]
+    x86.lea_func r8, [__destruct___ManagedMemory_Item]
     x86.mov r9, r8
     x86.mov rdx, r9
     x86.mov rcx, 32
@@ -958,7 +958,7 @@ module {
   done:
     x86.ret
   }
-  func @__destruct_ElementMemory(ptr: i64) {
+  func @__destruct___ManagedMemory_Item(ptr: i64) {
   entry:
     x86.prologue stack_size=16
     x86.mov [rbp-8], ecx
@@ -969,14 +969,14 @@ module {
     x86.mov edx, [ecx+16]
     x86.xor ebx, ebx
     x86.cmp edx, ebx
-    x86.je __destruct_ElementMemory.skip_buf_0
+    x86.je __destruct___ManagedMemory_Item.skip_buf_0
   free_buf_0:
     x86.mov eax, [rbp-8]
     x86.mov ecx, [eax+0]
     x86.call mm_raw_free
-    x86.jmp __destruct_ElementMemory.skip_buf_0
+    x86.jmp __destruct___ManagedMemory_Item.skip_buf_0
   skip_buf_0:
-    x86.jmp __destruct_ElementMemory.done
+    x86.jmp __destruct___ManagedMemory_Item.done
   done:
     x86.epilogue
     x86.ret

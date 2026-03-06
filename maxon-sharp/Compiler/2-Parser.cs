@@ -3014,9 +3014,53 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       MlirStructType sourceStruct,
       Dictionary<string, MlirType> substitution,
       Dictionary<string, long>? constParams = null) {
+    // Resolve local typealiases: if a field's type is a typealias whose source type
+    // has type params referencing our substitution keys, create a concrete alias.
+    // E.g., Array's "ElementMemory = __ManagedMemory with Element" becomes
+    // a concrete __ManagedMemory alias when Element is resolved to a concrete type.
+    var expandedSub = new Dictionary<string, MlirType>(substitution);
+    foreach (var field in sourceStruct.Fields) {
+      if (expandedSub.ContainsKey(field.Type.Name)) continue;
+      if (!_typeAliasSources.TryGetValue(field.Type.Name, out var fieldAliasSource)) continue;
+      if (!_typeRegistry.TryGetValue(field.Type.Name, out var fieldAliasType)) continue;
+      if (fieldAliasType is not MlirStructType fieldAliasStruct) continue;
+      if (fieldAliasStruct.TypeParams.Count == 0) continue;
+
+      // Build concrete substitution for this local alias by resolving its type params
+      // through the parent's substitution (e.g., Element -> Pair)
+      var localSub = new Dictionary<string, MlirType>();
+      bool allResolved = true;
+      foreach (var (paramName, paramType) in fieldAliasStruct.TypeParams) {
+        if (paramType is MlirTypeParameterType tp
+            && substitution.TryGetValue(tp.ParameterName, out var concrete)
+            && concrete is not MlirTypeParameterType)
+          localSub[paramName] = concrete;
+        else if (paramType is not MlirTypeParameterType)
+          localSub[paramName] = paramType; // already concrete
+        else {
+          allResolved = false;
+          break;
+        }
+      }
+
+      if (!allResolved || localSub.Count == 0) continue;
+
+      // Look up the source struct for the local alias
+      if (!_typeRegistry.TryGetValue(fieldAliasSource, out var fieldSourceType)) continue;
+      if (fieldSourceType is not MlirStructType fieldSourceStruct) continue;
+
+      // Create concrete alias, e.g., __ManagedMemory_Pair
+      var concreteAliasName = $"{fieldAliasSource}_{string.Join("_", localSub.Values.Select(t => t.Name))}";
+      if (!_typeRegistry.ContainsKey(concreteAliasName))
+        RegisterConcreteTypeAlias(concreteAliasName, fieldAliasSource, fieldSourceStruct, localSub);
+      else
+        _typeAliasSources.TryAdd(concreteAliasName, fieldAliasSource);
+      expandedSub[field.Type.Name] = _typeRegistry[concreteAliasName];
+    }
+
     var concreteFields = new List<MlirStructField>();
     foreach (var field in sourceStruct.Fields) {
-      var fieldType = substitution.TryGetValue(field.Type.Name, out var concreteType)
+      var fieldType = expandedSub.TryGetValue(field.Type.Name, out var concreteType)
         ? concreteType
         : field.Type;
       concreteFields.Add(new MlirStructField(field.Name, fieldType, field.IsExported, field.IsMutable, field.DefaultValue));
@@ -6260,7 +6304,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
   }
 
   /// Ensures a concrete ChainNode alias exists with the same Element type as the given Chain type.
-  /// For example, if chainTypeName is "EChain" (alias for Chain with Element=Integer),
+  /// For example, if chainTypeName is "__Chain_Integer" (alias for Chain with Element=Integer),
   /// this creates/finds "__ChainNode_Integer" with TypeParams["Element"]=Integer.
   /// Returns the concrete ChainNode alias name, or "ChainNode" if no Element type can be resolved.
   private string EnsureConcreteChainNodeAlias(string chainTypeName) {
@@ -10343,6 +10387,14 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       var elemVarName = $"{arrayTag}.{i}";
       var assignOp = new MaxonAssignOp(elemVarName, elements[i], isDeclaration: true, isMutable: false, elementKind);
       _currentBlock!.AddOp(assignOp);
+      // Register heap-allocated struct element slots for scope-end cleanup.
+      // The lowering increfs these slots, so they need a matching decref at scope exit.
+      if (elementStructTypeName != null
+          && _typeRegistry.TryGetValue(elementStructTypeName, out var elemType2)
+          && elemType2.IsHeapAllocated) {
+        _variables.Declare(elemVarName, elementKind, false, elements[i], _currentBlock!,
+          flags: OwnershipFlags.IsTemp, structTypeName: elementStructTypeName);
+      }
     }
 
     // Create __ManagedMemory struct: {buffer: <tag_id>, length: count, capacity: 0, element_size}
@@ -10362,7 +10414,26 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       ("capacity", capLit.Result),
       ("element_size", elemSizeLit.Result)
     };
-    var managedStruct = new MaxonStructLiteralOp("__ManagedMemory", managedFields);
+
+    // Use a concrete __ManagedMemory type when elements are heap-allocated structs,
+    // so the destructor knows to decref each element when the buffer is freed.
+    string managedTypeName = "__ManagedMemory";
+    if (elementStructTypeName != null
+        && _typeRegistry.TryGetValue(elementStructTypeName, out var elemRegType)
+        && elemRegType.IsHeapAllocated
+        && _typeRegistry.TryGetValue("__ManagedMemory", out var mmBase)
+        && mmBase is MlirStructType mmStruct) {
+      var concreteName = $"__ManagedMemory_{elementStructTypeName}";
+      if (!_typeRegistry.ContainsKey(concreteName)) {
+        var sub = new Dictionary<string, MlirType> { ["Element"] = elemRegType };
+        RegisterConcreteTypeAlias(concreteName, "__ManagedMemory", mmStruct, sub);
+      } else {
+        _typeAliasSources.TryAdd(concreteName, "__ManagedMemory");
+      }
+      managedTypeName = concreteName;
+    }
+
+    var managedStruct = new MaxonStructLiteralOp(managedTypeName, managedFields);
     _currentBlock!.AddOp(managedStruct);
 
     return (managedStruct, arrayTag, count, elementKind, elementStructTypeName);

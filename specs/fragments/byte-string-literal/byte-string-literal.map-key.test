@@ -114,11 +114,11 @@ module {
     x86.mov ecx, 2
     x86.xor edx, edx
     x86.mov ebx, 8
-    x86.lea_func esi, [__destruct___ManagedMemory]
+    x86.lea_func esi, [__destruct___ManagedMemory_ByteArray]
     x86.mov rdi, rsi
     x86.mov rdx, rdi
     x86.mov rcx, 32
-    x86.mov r8, 2
+    x86.mov r8, 3
     x86.call mm_alloc
     x86.mov [rbp-56], eax
     x86.mov ecx, [rbp-56]
@@ -334,7 +334,7 @@ module {
     x86.mov [rbp-296], edx
     x86.mov rdx, rsi
     x86.mov rcx, 16
-    x86.mov r8, 3
+    x86.mov r8, 4
     x86.call mm_alloc
     x86.mov [rbp-184], eax
     x86.lea_func eax, [__destruct___ManagedMemory]
@@ -456,36 +456,52 @@ module {
     x86.mov rcx, [rbp-24]
     x86.call mm_decref
     x86.label __nonnull_skip_2
-    x86.mov eax, [rbp-96]
+    x86.mov eax, [rbp-40]
     x86.test eax, eax
     x86.jz __nonnull_skip_3
-    x86.mov rcx, [rbp-96]
+    x86.mov rcx, [rbp-40]
     x86.call mm_decref
     x86.label __nonnull_skip_3
-    x86.mov eax, [rbp-136]
+    x86.xor eax, eax
+    x86.mov [rbp-40], eax
+    x86.mov eax, [rbp-48]
     x86.test eax, eax
     x86.jz __nonnull_skip_4
-    x86.mov rcx, [rbp-136]
+    x86.mov rcx, [rbp-48]
     x86.call mm_decref
     x86.label __nonnull_skip_4
-    x86.mov eax, [rbp-184]
+    x86.xor eax, eax
+    x86.mov [rbp-48], eax
+    x86.mov eax, [rbp-96]
     x86.test eax, eax
     x86.jz __nonnull_skip_5
-    x86.mov rcx, [rbp-184]
+    x86.mov rcx, [rbp-96]
     x86.call mm_decref
     x86.label __nonnull_skip_5
-    x86.mov eax, [rbp-56]
+    x86.mov eax, [rbp-136]
     x86.test eax, eax
     x86.jz __nonnull_skip_6
-    x86.mov rcx, [rbp-56]
+    x86.mov rcx, [rbp-136]
     x86.call mm_decref
     x86.label __nonnull_skip_6
-    x86.mov eax, [rbp-80]
+    x86.mov eax, [rbp-184]
     x86.test eax, eax
     x86.jz __nonnull_skip_7
-    x86.mov rcx, [rbp-80]
+    x86.mov rcx, [rbp-184]
     x86.call mm_decref
     x86.label __nonnull_skip_7
+    x86.mov eax, [rbp-56]
+    x86.test eax, eax
+    x86.jz __nonnull_skip_8
+    x86.mov rcx, [rbp-56]
+    x86.call mm_decref
+    x86.label __nonnull_skip_8
+    x86.mov eax, [rbp-80]
+    x86.test eax, eax
+    x86.jz __nonnull_skip_9
+    x86.mov rcx, [rbp-80]
+    x86.call mm_decref
+    x86.label __nonnull_skip_9
     x86.xor eax, eax
     x86.epilogue
     x86.ret
@@ -498,9 +514,9 @@ module {
     x86.mov ecx, [eax+8]
     x86.mov [rbp-16], ecx
     x86.test ecx, ecx
-    x86.jz __nonnull_skip_43
+    x86.jz __nonnull_skip_45
     x86.call mm_decref
-    x86.label __nonnull_skip_43
+    x86.label __nonnull_skip_45
     x86.jmp __destruct_ByteArray.done
   done:
     x86.epilogue
@@ -526,6 +542,29 @@ module {
     x86.epilogue
     x86.ret
   }
+  func @__destruct___ManagedMemory_ByteArray(ptr: i64) {
+  entry:
+    x86.prologue stack_size=16
+    x86.mov [rbp-8], ecx
+    x86.mov eax, [rbp-8]
+    x86.mov rcx, [rbp-8]
+    x86.call mm_decref_managed_elements
+    x86.mov ecx, [rbp-8]
+    x86.mov edx, [ecx+16]
+    x86.xor ebx, ebx
+    x86.cmp edx, ebx
+    x86.je __destruct___ManagedMemory_ByteArray.skip_buf_0
+  free_buf_0:
+    x86.mov eax, [rbp-8]
+    x86.mov ecx, [eax+0]
+    x86.call mm_raw_free
+    x86.jmp __destruct___ManagedMemory_ByteArray.skip_buf_0
+  skip_buf_0:
+    x86.jmp __destruct___ManagedMemory_ByteArray.done
+  done:
+    x86.epilogue
+    x86.ret
+  }
   func @__destruct_String(ptr: i64) {
   entry:
     x86.prologue stack_size=16
@@ -534,9 +573,9 @@ module {
     x86.mov ecx, [eax+0]
     x86.mov [rbp-16], ecx
     x86.test ecx, ecx
-    x86.jz __nonnull_skip_44
+    x86.jz __nonnull_skip_46
     x86.call mm_decref
-    x86.label __nonnull_skip_44
+    x86.label __nonnull_skip_46
     x86.jmp __destruct_String.done
   done:
     x86.epilogue
@@ -565,7 +604,7 @@ module {
     x86.epilogue
     x86.ret
   }
-  func @__destruct___Array_ByteArray(ptr: i64) {
+  func @__destruct_Array_ByteArray(ptr: i64) {
   entry:
     x86.prologue stack_size=16
     x86.mov [rbp-8], ecx
@@ -573,15 +612,15 @@ module {
     x86.mov ecx, [eax+8]
     x86.mov [rbp-16], ecx
     x86.test ecx, ecx
-    x86.jz __nonnull_skip_45
+    x86.jz __nonnull_skip_47
     x86.call mm_decref
-    x86.label __nonnull_skip_45
-    x86.jmp __destruct___Array_ByteArray.done
+    x86.label __nonnull_skip_47
+    x86.jmp __destruct_Array_ByteArray.done
   done:
     x86.epilogue
     x86.ret
   }
-  func @__destruct___Array_i64(ptr: i64) {
+  func @__destruct_Array_i64(ptr: i64) {
   entry:
     x86.prologue stack_size=16
     x86.mov [rbp-8], ecx
@@ -589,10 +628,30 @@ module {
     x86.mov ecx, [eax+8]
     x86.mov [rbp-16], ecx
     x86.test ecx, ecx
-    x86.jz __nonnull_skip_46
+    x86.jz __nonnull_skip_48
     x86.call mm_decref
-    x86.label __nonnull_skip_46
-    x86.jmp __destruct___Array_i64.done
+    x86.label __nonnull_skip_48
+    x86.jmp __destruct_Array_i64.done
+  done:
+    x86.epilogue
+    x86.ret
+  }
+  func @__destruct___ManagedMemory_SlotState(ptr: i64) {
+  entry:
+    x86.prologue stack_size=16
+    x86.mov [rbp-8], ecx
+    x86.mov eax, [rbp-8]
+    x86.mov ecx, [eax+16]
+    x86.xor edx, edx
+    x86.cmp ecx, edx
+    x86.je __destruct___ManagedMemory_SlotState.skip_buf_0
+  free_buf_0:
+    x86.mov eax, [rbp-8]
+    x86.mov ecx, [eax+0]
+    x86.call mm_raw_free
+    x86.jmp __destruct___ManagedMemory_SlotState.skip_buf_0
+  skip_buf_0:
+    x86.jmp __destruct___ManagedMemory_SlotState.done
   done:
     x86.epilogue
     x86.ret
@@ -605,9 +664,9 @@ module {
     x86.mov ecx, [eax+8]
     x86.mov [rbp-16], ecx
     x86.test ecx, ecx
-    x86.jz __nonnull_skip_47
+    x86.jz __nonnull_skip_49
     x86.call mm_decref
-    x86.label __nonnull_skip_47
+    x86.label __nonnull_skip_49
     x86.jmp __destruct_StateArray.done
   done:
     x86.epilogue
@@ -621,25 +680,25 @@ module {
     x86.mov ecx, [eax+0]
     x86.mov [rbp-16], ecx
     x86.test ecx, ecx
-    x86.jz __nonnull_skip_48
+    x86.jz __nonnull_skip_50
     x86.call mm_decref
-    x86.label __nonnull_skip_48
+    x86.label __nonnull_skip_50
     x86.mov edx, [rbp-8]
     x86.mov ebx, [edx+8]
     x86.mov [rbp-24], ebx
     x86.test ebx, ebx
-    x86.jz __nonnull_skip_49
+    x86.jz __nonnull_skip_51
     x86.mov rcx, [rbp-24]
     x86.call mm_decref
-    x86.label __nonnull_skip_49
+    x86.label __nonnull_skip_51
     x86.mov esi, [rbp-8]
     x86.mov edi, [esi+16]
     x86.mov [rbp-32], edi
     x86.test edi, edi
-    x86.jz __nonnull_skip_50
+    x86.jz __nonnull_skip_52
     x86.mov rcx, [rbp-32]
     x86.call mm_decref
-    x86.label __nonnull_skip_50
+    x86.label __nonnull_skip_52
     x86.jmp __destruct___Map_ByteArray_i64.done
   done:
     x86.epilogue

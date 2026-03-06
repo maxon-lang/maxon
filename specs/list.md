@@ -591,9 +591,9 @@ hello world!!!!!!!!!!!!!!
 1
 ```
 ```stderr
-alloc EChain #1 rc=0 [list.testRemove]
+alloc __Chain_String #1 rc=0 [list.testRemove]
 alloc StringList #2 rc=0 [list.testRemove]
-incref EChain #1 rc=1 [list.testRemove]
+incref __Chain_String #1 rc=1 [list.testRemove]
 incref StringList #2 rc=1 [list.testRemove]
 alloc String #3 rc=0 [list.testRemove]
 alloc __ManagedMemory #4 rc=0 [list.testRemove]
@@ -630,11 +630,11 @@ alloc __ManagedMemory #12 rc=0 [list.testRemove]
 incref __ManagedMemory #12 rc=1 [list.testRemove]
 incref String #11 rc=1 [list.testRemove]
 decref StringList #2 rc=0 [list.testRemove]
-decref EChain #1 rc=0 [~StringList]
+decref __Chain_String #1 rc=0 [~StringList]
 decref String #6 rc=1 [chain_clear]
 decref __ChainNode #8 rc=0 [chain_clear]
   free __ChainNode #8
-  free EChain #1
+  free __Chain_String #1
   free StringList #2
 decref String #3 rc=2 [list.testRemove]
 decref String #3 rc=1 [list.testRemove]
@@ -681,9 +681,9 @@ end 'main'
 hello world!!!!!!!!!!!!!!
 ```
 ```stderr
-alloc EChain #1 rc=0 [list.testRemove]
+alloc __Chain_String #1 rc=0 [list.testRemove]
 alloc StringList #2 rc=0 [list.testRemove]
-incref EChain #1 rc=1 [list.testRemove]
+incref __Chain_String #1 rc=1 [list.testRemove]
 incref StringList #2 rc=1 [list.testRemove]
 alloc String #3 rc=0 [list.testRemove]
 alloc __ManagedMemory #4 rc=0 [list.testRemove]
@@ -711,11 +711,11 @@ decref __ChainNode #5 rc=0 [StringList.removeFirst]
 incref String #3 rc=2 [StringList.removeFirst]
 transfer String #3 rc=2 [StringList.removeFirst]
 decref StringList #2 rc=0 [list.testRemove]
-decref EChain #1 rc=0 [~StringList]
+decref __Chain_String #1 rc=0 [~StringList]
 decref String #6 rc=1 [chain_clear]
 decref __ChainNode #8 rc=0 [chain_clear]
   free __ChainNode #8
-  free EChain #1
+  free __Chain_String #1
   free StringList #2
 decref String #3 rc=1 [list.testRemove]
 decref String #6 rc=0 [list.testRemove]
@@ -763,9 +763,9 @@ end 'main'
 0
 ```
 ```stderr
-alloc EChain #1 rc=0 [list.testClear]
+alloc __Chain_String #1 rc=0 [list.testClear]
 alloc StringList #2 rc=0 [list.testClear]
-incref EChain #1 rc=1 [list.testClear]
+incref __Chain_String #1 rc=1 [list.testClear]
 incref StringList #2 rc=1 [list.testClear]
 alloc String #3 rc=0 [list.testClear]
 alloc __ManagedMemory #4 rc=0 [list.testClear]
@@ -802,8 +802,8 @@ alloc __ManagedMemory #13 rc=0 [list.testClear]
 incref __ManagedMemory #13 rc=1 [list.testClear]
 incref String #12 rc=1 [list.testClear]
 decref StringList #2 rc=0 [list.testClear]
-decref EChain #1 rc=0 [~StringList]
-  free EChain #1
+decref __Chain_String #1 rc=0 [~StringList]
+  free __Chain_String #1
   free StringList #2
 decref String #3 rc=0 [list.testClear]
 decref __ManagedMemory #4 rc=0 [~String]
@@ -849,9 +849,9 @@ end 'main'
 0
 ```
 ```stderr
-alloc EChain #1 rc=0 [list.main]
+alloc __Chain_String #1 rc=0 [list.main]
 alloc StringList #2 rc=0 [list.main]
-incref EChain #1 rc=1 [list.main]
+incref __Chain_String #1 rc=1 [list.main]
 incref StringList #2 rc=1 [list.main]
 alloc String #3 rc=0 [list.main]
 alloc __ManagedMemory #4 rc=0 [list.main]
@@ -888,8 +888,8 @@ alloc __ManagedMemory #13 rc=0 [list.main]
 incref __ManagedMemory #13 rc=1 [list.main]
 incref String #12 rc=1 [list.main]
 decref StringList #2 rc=0 [list.main]
-decref EChain #1 rc=0 [~StringList]
-  free EChain #1
+decref __Chain_String #1 rc=0 [~StringList]
+  free __Chain_String #1
   free StringList #2
 decref String #3 rc=0 [list.main]
 decref __ManagedMemory #4 rc=0 [~String]
@@ -935,9 +935,9 @@ end 'main'
 hello world!!!!!!!!!!!!!!
 ```
 ```stderr
-alloc EChain #1 rc=0 [list.main]
+alloc __Chain_String #1 rc=0 [list.main]
 alloc StringList #2 rc=0 [list.main]
-incref EChain #1 rc=1 [list.main]
+incref __Chain_String #1 rc=1 [list.main]
 incref StringList #2 rc=1 [list.main]
 alloc String #3 rc=0 [list.main]
 alloc __ManagedMemory #4 rc=0 [list.main]
@@ -965,8 +965,8 @@ alloc __ManagedMemory #7 rc=0 [list.main]
 incref __ManagedMemory #7 rc=1 [list.main]
 incref String #6 rc=1 [list.main]
 decref StringList #2 rc=0 [list.main]
-decref EChain #1 rc=0 [~StringList]
-  free EChain #1
+decref __Chain_String #1 rc=0 [~StringList]
+  free __Chain_String #1
   free StringList #2
 decref String #3 rc=1 [list.main]
 decref String #3 rc=0 [list.main]
@@ -1000,9 +1000,9 @@ end 'main'
 hello world!!!!!!!!!!!!!!
 ```
 ```stderr
-alloc EChain #1 rc=0 [list.main]
+alloc __Chain_String #1 rc=0 [list.main]
 alloc StringList #2 rc=0 [list.main]
-incref EChain #1 rc=1 [list.main]
+incref __Chain_String #1 rc=1 [list.main]
 incref StringList #2 rc=1 [list.main]
 alloc String #3 rc=0 [list.main]
 alloc __ManagedMemory #4 rc=0 [list.main]
@@ -1028,8 +1028,8 @@ alloc __ManagedMemory #7 rc=0 [list.main]
 incref __ManagedMemory #7 rc=1 [list.main]
 incref String #6 rc=1 [list.main]
 decref StringList #2 rc=0 [list.main]
-decref EChain #1 rc=0 [~StringList]
-  free EChain #1
+decref __Chain_String #1 rc=0 [~StringList]
+  free __Chain_String #1
   free StringList #2
 decref String #3 rc=2 [list.main]
 decref String #3 rc=1 [list.main]

@@ -16,9 +16,9 @@ Stdout: ```
 hello world!!!!!!!!!!!!!!
 ```
 Stderr: ```
-alloc EChain #1 rc=0 [list.main]
+alloc __Chain_String #1 rc=0 [list.main]
 alloc StringList #2 rc=0 [list.main]
-incref EChain #1 rc=1 [list.main]
+incref __Chain_String #1 rc=1 [list.main]
 incref StringList #2 rc=1 [list.main]
 alloc String #3 rc=0 [list.main]
 alloc __ManagedMemory #4 rc=0 [list.main]
@@ -44,8 +44,8 @@ alloc __ManagedMemory #7 rc=0 [list.main]
 incref __ManagedMemory #7 rc=1 [list.main]
 incref String #6 rc=1 [list.main]
 decref StringList #2 rc=0 [list.main]
-decref EChain #1 rc=0 [~StringList]
-  free EChain #1
+decref __Chain_String #1 rc=0 [~StringList]
+  free __Chain_String #1
   free StringList #2
 decref String #3 rc=2 [list.main]
 decref String #3 rc=1 [list.main]
@@ -71,7 +71,7 @@ module {
     x86.xor ebx, ebx
     x86.xor esi, esi
     x86.xor edi, edi
-    x86.lea_func r8, [__destruct_EChain]
+    x86.lea_func r8, [__destruct___Chain_String]
     x86.mov r9, r8
     x86.mov rdx, r9
     x86.mov rcx, 32
@@ -369,14 +369,14 @@ module {
     x86.epilogue
     x86.ret
   }
-  func @__destruct_EChain(ptr: i64) {
+  func @__destruct___Chain_String(ptr: i64) {
   entry:
     x86.prologue stack_size=16
     x86.mov [rbp-8], ecx
     x86.mov eax, [rbp-8]
     x86.mov rcx, [rbp-8]
     x86.call maxon_chain_clear_managed
-    x86.jmp __destruct_EChain.done
+    x86.jmp __destruct___Chain_String.done
   done:
     x86.epilogue
     x86.ret

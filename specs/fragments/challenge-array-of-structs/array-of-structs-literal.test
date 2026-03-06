@@ -98,7 +98,7 @@ module {
     x86.mov ecx, 2
     x86.xor edx, edx
     x86.mov ebx, 8
-    x86.lea_func esi, [__destruct___ManagedMemory]
+    x86.lea_func esi, [__destruct___ManagedMemory_Point]
     x86.mov rdi, rsi
     x86.mov rdx, rdi
     x86.mov rcx, 32
@@ -281,18 +281,34 @@ module {
     x86.mov rcx, [rbp-96]
     x86.call mm_decref
     x86.label __nonnull_skip_6
-    x86.mov esi, [rbp-8]
+    x86.mov esi, [rbp-40]
     x86.test esi, esi
     x86.jz __nonnull_skip_7
-    x86.mov rcx, [rbp-8]
+    x86.mov rcx, [rbp-40]
     x86.call mm_decref
     x86.label __nonnull_skip_7
-    x86.mov edi, [rbp-16]
-    x86.test edi, edi
+    x86.xor edi, edi
+    x86.mov [rbp-40], edi
+    x86.mov r8, [rbp-48]
+    x86.test r8, r8
     x86.jz __nonnull_skip_8
-    x86.mov rcx, [rbp-16]
+    x86.mov rcx, [rbp-48]
     x86.call mm_decref
     x86.label __nonnull_skip_8
+    x86.xor r9, r9
+    x86.mov [rbp-48], r9
+    x86.mov eax, [rbp-8]
+    x86.test eax, eax
+    x86.jz __nonnull_skip_9
+    x86.mov rcx, [rbp-8]
+    x86.call mm_decref
+    x86.label __nonnull_skip_9
+    x86.mov eax, [rbp-16]
+    x86.test eax, eax
+    x86.jz __nonnull_skip_10
+    x86.mov rcx, [rbp-16]
+    x86.call mm_decref
+    x86.label __nonnull_skip_10
     x86.mov eax, [rbp-104]
     x86.epilogue
     x86.ret
@@ -303,22 +319,25 @@ module {
   done:
     x86.ret
   }
-  func @__destruct___ManagedMemory(ptr: i64) {
+  func @__destruct___ManagedMemory_Point(ptr: i64) {
   entry:
     x86.prologue stack_size=16
     x86.mov [rbp-8], ecx
     x86.mov eax, [rbp-8]
-    x86.mov ecx, [eax+16]
-    x86.xor edx, edx
-    x86.cmp ecx, edx
-    x86.je __destruct___ManagedMemory.skip_buf_0
+    x86.mov rcx, [rbp-8]
+    x86.call mm_decref_managed_elements
+    x86.mov ecx, [rbp-8]
+    x86.mov edx, [ecx+16]
+    x86.xor ebx, ebx
+    x86.cmp edx, ebx
+    x86.je __destruct___ManagedMemory_Point.skip_buf_0
   free_buf_0:
     x86.mov eax, [rbp-8]
     x86.mov ecx, [eax+0]
     x86.call mm_raw_free
-    x86.jmp __destruct___ManagedMemory.skip_buf_0
+    x86.jmp __destruct___ManagedMemory_Point.skip_buf_0
   skip_buf_0:
-    x86.jmp __destruct___ManagedMemory.done
+    x86.jmp __destruct___ManagedMemory_Point.done
   done:
     x86.epilogue
     x86.ret
@@ -331,9 +350,9 @@ module {
     x86.mov ecx, [eax+8]
     x86.mov [rbp-16], ecx
     x86.test ecx, ecx
-    x86.jz __nonnull_skip_9
+    x86.jz __nonnull_skip_11
     x86.call mm_decref
-    x86.label __nonnull_skip_9
+    x86.label __nonnull_skip_11
     x86.jmp __destruct___Array_Point.done
   done:
     x86.epilogue
