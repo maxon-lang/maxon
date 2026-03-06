@@ -143,6 +143,7 @@ public partial class X86CodeEmitter {
     EmitBytes(0x48, 0x8D, 0x49, 0x01); // LEA RCX, [RCX+1]
     EmitXorRegReg(X86Register.Rdx, X86Register.Rdx);     // RDX = destructor = 0 (no managed fields)
     EmitTagZero(X86Register.R8);    // R8 = tag
+    if (Compiler.MmTrace) EmitLeaRegSymdataRel(X86Register.R9, "__mm_scope_cow_copy");
     EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_alloc")); EmitDword(0);
     // Save new buffer at [rbp-24]
     EmitMovMemReg(-0x18, X86Register.Rax, 8);
@@ -1684,6 +1685,7 @@ public partial class X86CodeEmitter {
     EmitMovRegImm(X86Register.Rcx, 1);
     EmitXorRegReg(X86Register.Rdx, X86Register.Rdx);     // destructor = 0
     EmitTagZero(X86Register.R8);
+    if (Compiler.MmTrace) EmitLeaRegSymdataRel(X86Register.R9, "__mm_scope_cmdline_arg");
     EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_alloc")); EmitDword(0);
     EmitBytes(0xC6, 0x00, 0x00);                         // MOV byte [RAX], 0
     EmitJmp("rt_cla_return");
@@ -1722,6 +1724,7 @@ public partial class X86CodeEmitter {
     EmitMovRegReg(X86Register.Rcx, X86Register.Rax);
     EmitXorRegReg(X86Register.Rdx, X86Register.Rdx);         // destructor = 0
     EmitTagZero(X86Register.R8);    // R8 = tag
+    if (Compiler.MmTrace) EmitLeaRegSymdataRel(X86Register.R9, "__mm_scope_cmdline_arg");
     EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_alloc")); EmitDword(0);
 
     // Save buffer pointer
@@ -1967,6 +1970,7 @@ public partial class X86CodeEmitter {
     EmitMovRegImm(X86Register.Rcx, FindBlockSize);
     EmitXorRegReg(X86Register.Rdx, X86Register.Rdx);     // destructor = 0
     EmitTagZero(X86Register.R8);  // R8 = tag
+    if (Compiler.MmTrace) EmitLeaRegSymdataRel(X86Register.R9, "__mm_scope_find_first_file");
     EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_alloc")); EmitDword(0);
     EmitMovMemReg(-0x10, X86Register.Rax, 8); // [rbp-16] = block_ptr
     // FindFirstFileA(pattern, &block[8])
@@ -1980,6 +1984,7 @@ public partial class X86CodeEmitter {
     EmitJcc("ne", "rt_fff_found");
     // Not found: decref block (will free since rc=1), return 0
     EmitMovRegMem(X86Register.Rcx, -0x10, 8);
+    if (Compiler.MmTrace) EmitLeaRegSymdataRel(X86Register.Rdx, "__mm_scope_find_close");
     EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_decref")); EmitDword(0);
     EmitXorRegReg(X86Register.Rax, X86Register.Rax);
     EmitJmp("rt_fff_done");
@@ -2047,6 +2052,7 @@ public partial class X86CodeEmitter {
     EmitCallImport("kernel32.dll", "FindClose");
     // Decref block (will free since rc=1)
     EmitMovRegMem(X86Register.Rcx, -0x08, 8);
+    if (Compiler.MmTrace) EmitLeaRegSymdataRel(X86Register.Rdx, "__mm_scope_find_close");
     EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_decref")); EmitDword(0);
     DefineLabel("rt_fc_done");
     EmitRuntimeFunctionEnd();
@@ -2099,6 +2105,7 @@ public partial class X86CodeEmitter {
     EmitMovRegImm(X86Register.Rcx, 260);
     EmitXorRegReg(X86Register.Rdx, X86Register.Rdx);     // destructor = 0
     EmitTagZero(X86Register.R8); // R8 = tag
+    if (Compiler.MmTrace) EmitLeaRegSymdataRel(X86Register.R9, "__mm_scope_get_cwd");
     EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_alloc")); EmitDword(0);
     EmitMovMemReg(-0x10, X86Register.Rax, 8); // [rbp-16] = buffer
     // GetCurrentDirectoryA(nBufferLength=260, lpBuffer=buffer)
@@ -2394,6 +2401,7 @@ public partial class X86CodeEmitter {
     EmitMovRegImm(X86Register.Rcx, CaptureStructSize);
     EmitXorRegReg(X86Register.Rdx, X86Register.Rdx);           // destructor = 0
     EmitTagZero(X86Register.R8);   // R8 = tag
+    if (Compiler.MmTrace) EmitLeaRegSymdataRel(X86Register.R9, "__mm_scope_capture");
     EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_alloc")); EmitDword(0);
     EmitMovMemReg(resultSlot, X86Register.Rax, 8);
 
@@ -2438,6 +2446,7 @@ public partial class X86CodeEmitter {
     EmitMovRegImm(X86Register.Rcx, 4096);
     EmitXorRegReg(X86Register.Rdx, X86Register.Rdx);     // destructor = 0
     EmitTagZero(X86Register.R8); // R8 = tag
+    if (Compiler.MmTrace) EmitLeaRegSymdataRel(X86Register.R9, "__mm_scope_pipe_read");
     EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_alloc")); EmitDword(0);
     EmitMovMemReg(-0x10, X86Register.Rax, 8);           // buffer
     EmitMovRegImm(X86Register.Rax, 4096);

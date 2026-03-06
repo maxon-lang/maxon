@@ -644,10 +644,12 @@ public static partial class MaxonToStandardConversion {
               var enumType = (MlirUnionType)module.TypeDefs[strRawOp.EnumTypeName];
               var ordinalValue = (StdI64)valueMap[strRawOp.EnumValue];
               var (buf, len) = EmitStringUnionToString(enumType, ordinalValue, newBlock, result);
-              var tempName = temps.CreateTemp("enum_rawval", strRawOp.Result.Id, "String", OwnershipFlags.None);
               var isString = !strRawOp.IsChar;
+              var rawValTypeName = isString ? "String" : "Character";
+              var tempName = temps.CreateTemp("enum_rawval", strRawOp.Result.Id, rawValTypeName, OwnershipFlags.None);
               EmitManagedStructFromBufLen(tempName, buf, len,
-                isString, newBlock, varTypes, structVarNames, strRawOp.Result.Id);
+                isString, newBlock, varTypes, structVarNames, strRawOp.Result.Id,
+                allocTag: rawValTypeName);
               break;
             }
             case MaxonEnumNameOp enumNameOp: {
@@ -665,7 +667,8 @@ public static partial class MaxonToStandardConversion {
               var (nameBuf, nameLen) = EmitUnionNameLookup(enumType, ordinalValue, newBlock, result);
               var tempName = temps.CreateTemp("enum_name", enumNameOp.Result.Id, "String", OwnershipFlags.None);
               EmitManagedStructFromBufLen(tempName, nameBuf, nameLen,
-                true, newBlock, varTypes, structVarNames, enumNameOp.Result.Id);
+                true, newBlock, varTypes, structVarNames, enumNameOp.Result.Id,
+                allocTag: "String");
               break;
             }
             case MaxonLiteralOp litOp: {

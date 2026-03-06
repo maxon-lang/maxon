@@ -64,26 +64,28 @@ module {
     x86.test ecx, ecx
     x86.mov edx, ebx
     x86.cmovne edx, eax
+    x86.lea_func ebx, [__destruct_Character]
+    x86.mov rax, rbx
     x86.mov [rbp-24], edx
     x86.mov [rbp-32], esi
+    x86.mov rdx, rax
     x86.mov rcx, 8
-    x86.xor rdx, rdx
-    x86.xor r8, r8
-    x86.call mm_alloc
-    x86.mov [rbp-8], eax
-    x86.lea_func ebx, [__destruct___ManagedMemory]
-    x86.mov rsi, rbx
-    x86.mov rdx, rsi
-    x86.mov rcx, 32
     x86.mov r8, 1
     x86.call mm_alloc
+    x86.mov [rbp-8], eax
+    x86.lea_func esi, [__destruct___ManagedMemory]
+    x86.mov rdi, rsi
+    x86.mov rdx, rdi
+    x86.mov rcx, 32
+    x86.mov r8, 2
+    x86.call mm_alloc
     x86.mov [rbp-16], eax
-    x86.mov edi, [rbp-16]
-    x86.mov r8, [rbp-32]
-    x86.mov [edi+0], r8
-    x86.mov r9, [rbp-16]
-    x86.mov eax, [rbp-24]
-    x86.mov [r9+8], eax
+    x86.mov r8, [rbp-16]
+    x86.mov r9, [rbp-32]
+    x86.mov [r8+0], r9
+    x86.mov eax, [rbp-16]
+    x86.mov ecx, [rbp-24]
+    x86.mov [eax+8], ecx
     x86.xor eax, eax
     x86.mov ecx, [rbp-16]
     x86.mov [ecx+16], eax
@@ -116,7 +118,7 @@ module {
     x86.mov r8, rdi
     x86.mov rdx, r8
     x86.mov rcx, 32
-    x86.mov r8, 2
+    x86.mov r8, 3
     x86.call mm_alloc
     x86.mov [rbp-8], eax
     x86.mov r9, [rbp-8]
@@ -135,7 +137,7 @@ module {
     x86.mov rcx, rax
     x86.mov rdx, rcx
     x86.mov rcx, 16
-    x86.mov r8, 3
+    x86.mov r8, 4
     x86.call mm_alloc
     x86.mov [rbp-16], eax
     x86.mov eax, [rbp-16]
@@ -155,7 +157,7 @@ module {
     x86.mov r8, rdi
     x86.mov rdx, r8
     x86.mov rcx, 32
-    x86.mov r8, 2
+    x86.mov r8, 3
     x86.call mm_alloc
     x86.mov [rbp-24], eax
     x86.mov eax, [rbp-24]
@@ -174,7 +176,7 @@ module {
     x86.mov rcx, rax
     x86.mov rdx, rcx
     x86.mov rcx, 16
-    x86.mov r8, 4
+    x86.mov r8, 5
     x86.call mm_alloc
     x86.mov [rbp-32], eax
     x86.mov eax, [rbp-32]
@@ -194,7 +196,7 @@ module {
     x86.mov r8, rdi
     x86.mov rdx, r8
     x86.mov rcx, 32
-    x86.mov r8, 2
+    x86.mov r8, 3
     x86.call mm_alloc
     x86.mov [rbp-40], eax
     x86.mov eax, [rbp-40]
@@ -213,7 +215,7 @@ module {
     x86.mov rcx, rax
     x86.mov rdx, rcx
     x86.mov rcx, 16
-    x86.mov r8, 5
+    x86.mov r8, 6
     x86.call mm_alloc
     x86.mov [rbp-48], eax
     x86.mov eax, [rbp-48]
@@ -231,7 +233,7 @@ module {
     x86.mov rsi, rbx
     x86.mov rdx, rsi
     x86.mov rcx, 48
-    x86.mov r8, 6
+    x86.mov r8, 7
     x86.call mm_alloc
     x86.mov [rbp-56], eax
     x86.mov eax, [rbp-16]
@@ -314,6 +316,22 @@ module {
     x86.epilogue
     x86.ret
   }
+  func @__destruct_Character(ptr: i64) {
+  entry:
+    x86.prologue stack_size=16
+    x86.mov [rbp-8], ecx
+    x86.mov eax, [rbp-8]
+    x86.mov ecx, [eax+0]
+    x86.mov [rbp-16], ecx
+    x86.test ecx, ecx
+    x86.jz __nonnull_skip_16
+    x86.call mm_decref
+    x86.label __nonnull_skip_16
+    x86.jmp __destruct_Character.done
+  done:
+    x86.epilogue
+    x86.ret
+  }
   func @__destruct___ManagedMemory(ptr: i64) {
   entry:
     x86.prologue stack_size=16
@@ -365,9 +383,9 @@ module {
     x86.mov ecx, [eax+8]
     x86.mov [rbp-16], ecx
     x86.test ecx, ecx
-    x86.jz __nonnull_skip_16
+    x86.jz __nonnull_skip_17
     x86.call mm_decref
-    x86.label __nonnull_skip_16
+    x86.label __nonnull_skip_17
     x86.jmp __destruct_KeyArray.done
   done:
     x86.epilogue
@@ -381,9 +399,9 @@ module {
     x86.mov ecx, [eax+8]
     x86.mov [rbp-16], ecx
     x86.test ecx, ecx
-    x86.jz __nonnull_skip_17
+    x86.jz __nonnull_skip_18
     x86.call mm_decref
-    x86.label __nonnull_skip_17
+    x86.label __nonnull_skip_18
     x86.jmp __destruct_ValueArray.done
   done:
     x86.epilogue
@@ -397,9 +415,9 @@ module {
     x86.mov ecx, [eax+8]
     x86.mov [rbp-16], ecx
     x86.test ecx, ecx
-    x86.jz __nonnull_skip_18
+    x86.jz __nonnull_skip_19
     x86.call mm_decref
-    x86.label __nonnull_skip_18
+    x86.label __nonnull_skip_19
     x86.jmp __destruct_StateArray.done
   done:
     x86.epilogue
@@ -413,25 +431,25 @@ module {
     x86.mov ecx, [eax+0]
     x86.mov [rbp-16], ecx
     x86.test ecx, ecx
-    x86.jz __nonnull_skip_19
+    x86.jz __nonnull_skip_20
     x86.call mm_decref
-    x86.label __nonnull_skip_19
+    x86.label __nonnull_skip_20
     x86.mov edx, [rbp-8]
     x86.mov ebx, [edx+8]
     x86.mov [rbp-24], ebx
     x86.test ebx, ebx
-    x86.jz __nonnull_skip_20
+    x86.jz __nonnull_skip_21
     x86.mov rcx, [rbp-24]
     x86.call mm_decref
-    x86.label __nonnull_skip_20
+    x86.label __nonnull_skip_21
     x86.mov esi, [rbp-8]
     x86.mov edi, [esi+16]
     x86.mov [rbp-32], edi
     x86.test edi, edi
-    x86.jz __nonnull_skip_21
+    x86.jz __nonnull_skip_22
     x86.mov rcx, [rbp-32]
     x86.call mm_decref
-    x86.label __nonnull_skip_21
+    x86.label __nonnull_skip_22
     x86.jmp __destruct_GradeMap.done
   done:
     x86.epilogue
@@ -468,9 +486,9 @@ module {
     x86.mov ecx, [eax+8]
     x86.mov [rbp-16], ecx
     x86.test ecx, ecx
-    x86.jz __nonnull_skip_22
+    x86.jz __nonnull_skip_23
     x86.call mm_decref
-    x86.label __nonnull_skip_22
+    x86.label __nonnull_skip_23
     x86.jmp __destruct___Array_Grade.done
   done:
     x86.epilogue
@@ -484,9 +502,9 @@ module {
     x86.mov ecx, [eax+8]
     x86.mov [rbp-16], ecx
     x86.test ecx, ecx
-    x86.jz __nonnull_skip_23
+    x86.jz __nonnull_skip_24
     x86.call mm_decref
-    x86.label __nonnull_skip_23
+    x86.label __nonnull_skip_24
     x86.jmp __destruct___Array_Int.done
   done:
     x86.epilogue

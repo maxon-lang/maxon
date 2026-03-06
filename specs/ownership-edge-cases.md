@@ -557,6 +557,7 @@ incref Node #3 rc=2 [NodeArray.get]
 incref Node #3 rc=3 [ownership-edge-cases.main]
 decref NodeArray #2 rc=0 [ownership-edge-cases.main]
 decref ElementMemory #1 rc=0 [~NodeArray]
+decref Node #3 rc=2 [~ManagedElements]
   free ElementMemory #1
   free NodeArray #2
 decref Node #3 rc=1 [ownership-edge-cases.main]
@@ -606,6 +607,7 @@ decref Node #4 rc=2 [NodeArray.remove]
 incref Node #4 rc=3 [ownership-edge-cases.main]
 decref NodeArray #2 rc=0 [ownership-edge-cases.main]
 decref ElementMemory #1 rc=0 [~NodeArray]
+decref Node #3 rc=1 [~ManagedElements]
   free ElementMemory #1
   free NodeArray #2
 decref Node #4 rc=2 [ownership-edge-cases.main]
@@ -655,6 +657,7 @@ incref Item #4 rc=3 [ItemArray.get]
 incref Item #4 rc=4 [ownership-edge-cases.main]
 decref ItemArray #2 rc=0 [ownership-edge-cases.main]
 decref ElementMemory #1 rc=0 [~ItemArray]
+decref Item #4 rc=3 [~ManagedElements]
   free ElementMemory #1
   free ItemArray #2
 decref Item #4 rc=2 [ownership-edge-cases.main]
@@ -703,6 +706,9 @@ incref Item #4 rc=2 [ItemArray.push]
 alloc Item #5 rc=0 [ownership-edge-cases.main]
 incref Item #5 rc=1 [ownership-edge-cases.main]
 incref Item #5 rc=2 [ItemArray.push]
+decref Item #3 rc=1 [~ManagedElements]
+decref Item #4 rc=1 [~ManagedElements]
+decref Item #5 rc=1 [~ManagedElements]
 decref ItemArray #2 rc=0 [ownership-edge-cases.main]
 decref ElementMemory #1 rc=0 [~ItemArray]
   free ElementMemory #1
@@ -759,6 +765,9 @@ incref Item #5 rc=1 [ownership-edge-cases.fill]
 incref Item #5 rc=2 [ItemArray.push]
 decref ItemArray #2 rc=0 [ownership-edge-cases.fill]
 decref ElementMemory #1 rc=0 [~ItemArray]
+decref Item #3 rc=1 [~ManagedElements]
+decref Item #4 rc=1 [~ManagedElements]
+decref Item #5 rc=1 [~ManagedElements]
   free ElementMemory #1
   free ItemArray #2
 decref Item #3 rc=0 [ownership-edge-cases.fill]
@@ -915,6 +924,9 @@ incref Val #4 rc=3 [ValArray.get]
 incref Val #4 rc=4 [ownership-edge-cases.main]
 decref ValArray #2 rc=0 [ownership-edge-cases.main]
 decref ElementMemory #1 rc=0 [~ValArray]
+decref Val #3 rc=3 [~ManagedElements]
+decref Val #5 rc=3 [~ManagedElements]
+decref Val #4 rc=3 [~ManagedElements]
   free ElementMemory #1
   free ValArray #2
 decref Val #3 rc=2 [ownership-edge-cases.main]
@@ -977,6 +989,8 @@ decref Val #4 rc=2 [ValArray.remove]
 incref Val #4 rc=3 [ownership-edge-cases.main]
 decref ValArray #2 rc=0 [ownership-edge-cases.main]
 decref ElementMemory #1 rc=0 [~ValArray]
+decref Val #3 rc=1 [~ManagedElements]
+decref Val #5 rc=1 [~ManagedElements]
   free ElementMemory #1
   free ValArray #2
 decref Val #4 rc=2 [ownership-edge-cases.main]
@@ -1032,6 +1046,8 @@ incref Wrapper #6 rc=1 [ownership-edge-cases.main]
 incref Wrapper #6 rc=2 [WrapperArray.push]
 decref WrapperArray #2 rc=0 [ownership-edge-cases.main]
 decref ElementMemory #1 rc=0 [~WrapperArray]
+decref Wrapper #4 rc=1 [~ManagedElements]
+decref Wrapper #6 rc=1 [~ManagedElements]
   free ElementMemory #1
   free WrapperArray #2
 decref Wrapper #4 rc=0 [ownership-edge-cases.main]
@@ -1122,6 +1138,7 @@ transfer Item #3 rc=4 [ownership-edge-cases.getFirst]
 decref Item #3 rc=3 [ownership-edge-cases.getFirst]
 decref ItemArray #2 rc=0 [ownership-edge-cases.main]
 decref ElementMemory #1 rc=0 [~ItemArray]
+decref Item #3 rc=2 [~ManagedElements]
   free ElementMemory #1
   free ItemArray #2
 decref Item #3 rc=1 [ownership-edge-cases.main]
@@ -1431,10 +1448,11 @@ alloc Token #2 rc=0 [ownership-edge-cases.main]
 incref Token #2 rc=1 [ownership-edge-cases.main]
 alloc __ChainNode #3 rc=0 [ownership-edge-cases.main]
 incref Token #2 rc=2 [ownership-edge-cases.main]
+incref __ChainNode #3 rc=1 [chain_insert]
 incref __ChainNode #3 rc=2 [ownership-edge-cases.main]
 decref TokenChain #1 rc=0 [ownership-edge-cases.main]
-decref Token #2 rc=1
-decref __ChainNode #3 rc=1
+decref Token #2 rc=1 [chain_clear]
+decref __ChainNode #3 rc=1 [chain_clear]
   free TokenChain #1
 decref Token #2 rc=0 [ownership-edge-cases.main]
   free Token #2
@@ -1471,6 +1489,7 @@ alloc Token #2 rc=0 [ownership-edge-cases.main]
 incref Token #2 rc=1 [ownership-edge-cases.main]
 alloc __ChainNode #3 rc=0 [ownership-edge-cases.main]
 incref Token #2 rc=2 [ownership-edge-cases.main]
+incref __ChainNode #3 rc=1 [chain_insert]
 incref __ChainNode #3 rc=2 [ownership-edge-cases.main]
 decref __ChainNode #3 rc=1 [ownership-edge-cases.main]
 decref Token #2 rc=1 [ownership-edge-cases.main]
@@ -1515,22 +1534,25 @@ alloc Token #2 rc=0 [ownership-edge-cases.main]
 incref Token #2 rc=1 [ownership-edge-cases.main]
 alloc __ChainNode #3 rc=0 [ownership-edge-cases.main]
 incref Token #2 rc=2 [ownership-edge-cases.main]
+incref __ChainNode #3 rc=1 [chain_insert]
 alloc Token #4 rc=0 [ownership-edge-cases.main]
 incref Token #4 rc=1 [ownership-edge-cases.main]
 alloc __ChainNode #5 rc=0 [ownership-edge-cases.main]
 incref Token #4 rc=2 [ownership-edge-cases.main]
+incref __ChainNode #5 rc=1 [chain_insert]
 alloc Token #6 rc=0 [ownership-edge-cases.main]
 incref Token #6 rc=1 [ownership-edge-cases.main]
 alloc __ChainNode #7 rc=0 [ownership-edge-cases.main]
 incref Token #6 rc=2 [ownership-edge-cases.main]
-decref Token #2 rc=1
-decref __ChainNode #3 rc=0
+incref __ChainNode #7 rc=1 [chain_insert]
+decref Token #2 rc=1 [chain_clear]
+decref __ChainNode #3 rc=0 [chain_clear]
   free __ChainNode #3
-decref Token #4 rc=1
-decref __ChainNode #5 rc=0
+decref Token #4 rc=1 [chain_clear]
+decref __ChainNode #5 rc=0 [chain_clear]
   free __ChainNode #5
-decref Token #6 rc=1
-decref __ChainNode #7 rc=0
+decref Token #6 rc=1 [chain_clear]
+decref __ChainNode #7 rc=0 [chain_clear]
   free __ChainNode #7
 decref TokenChain #1 rc=0 [ownership-edge-cases.main]
   free TokenChain #1
@@ -1571,14 +1593,15 @@ alloc Token #2 rc=0 [ownership-edge-cases.main]
 incref Token #2 rc=1 [ownership-edge-cases.main]
 alloc __ChainNode #3 rc=0 [ownership-edge-cases.main]
 incref Token #2 rc=2 [ownership-edge-cases.main]
+incref __ChainNode #3 rc=1 [chain_insert]
 incref __ChainNode #3 rc=2 [ownership-edge-cases.main]
 alloc Token #4 rc=0 [ownership-edge-cases.main]
 incref Token #4 rc=1 [ownership-edge-cases.main]
 decref Token #2 rc=1 [ownership-edge-cases.main]
 incref Token #4 rc=2 [ownership-edge-cases.main]
 decref TokenChain #1 rc=0 [ownership-edge-cases.main]
-decref Token #4 rc=1
-decref __ChainNode #3 rc=1
+decref Token #4 rc=1 [chain_clear]
+decref __ChainNode #3 rc=1 [chain_clear]
   free TokenChain #1
 decref __ChainNode #3 rc=0 [ownership-edge-cases.main]
   free __ChainNode #3
@@ -1651,8 +1674,11 @@ decref Score #5 rc=1 [ownership-edge-cases.main]
 decref ScoreArray #2 rc=1 [ownership-edge-cases.main]
 decref ScoreArray #2 rc=0 [ownership-edge-cases.main]
 decref ElementMemory #1 rc=0 [~ScoreArray]
+decref Score #3 rc=0 [~ManagedElements]
   free Score #3
+decref Score #4 rc=0 [~ManagedElements]
   free Score #4
+decref Score #5 rc=0 [~ManagedElements]
   free Score #5
   free ElementMemory #1
   free ScoreArray #2
@@ -1743,14 +1769,19 @@ incref CellArray #4 rc=2 [Grid.push]
 incref CellArray #8 rc=2 [Grid.push]
 decref Grid #2 rc=0 [ownership-edge-cases.main]
 decref ElementMemory #1 rc=0 [~Grid]
+decref CellArray #4 rc=1 [~ManagedElements]
+decref CellArray #8 rc=1 [~ManagedElements]
   free ElementMemory #1
   free Grid #2
 decref CellArray #4 rc=0 [ownership-edge-cases.main]
 decref ElementMemory #3 rc=0 [~CellArray]
+decref Cell #5 rc=1 [~ManagedElements]
+decref Cell #6 rc=1 [~ManagedElements]
   free ElementMemory #3
   free CellArray #4
 decref CellArray #8 rc=0 [ownership-edge-cases.main]
 decref ElementMemory #7 rc=0 [~CellArray]
+decref Cell #9 rc=1 [~ManagedElements]
   free ElementMemory #7
   free CellArray #8
 decref Cell #5 rc=0 [ownership-edge-cases.main]
@@ -1807,6 +1838,8 @@ incref Entry #5 rc=2 [EntryArray.push]
 decref Bucket #3 rc=0 [ownership-edge-cases.fill]
 decref EntryArray #2 rc=0 [~Bucket]
 decref ElementMemory #1 rc=0 [~EntryArray]
+decref Entry #4 rc=1 [~ManagedElements]
+decref Entry #5 rc=1 [~ManagedElements]
   free ElementMemory #1
   free EntryArray #2
   free Bucket #3
@@ -1918,10 +1951,11 @@ incref __ManagedMemory #4 rc=1 [ownership-edge-cases.main]
 incref String #3 rc=1 [ownership-edge-cases.main]
 alloc __ChainNode #5 rc=0 [StringList.append]
 incref String #3 rc=2 [StringList.append]
+incref __ChainNode #5 rc=1 [chain_insert]
 decref StringList #2 rc=0 [ownership-edge-cases.main]
 decref EChain #1 rc=0 [~StringList]
-decref String #3 rc=1
-decref __ChainNode #5 rc=0
+decref String #3 rc=1 [chain_clear]
+decref __ChainNode #5 rc=0 [chain_clear]
   free __ChainNode #5
   free EChain #1
   free StringList #2
@@ -2356,7 +2390,7 @@ end 'main'
 1
 ```
 
-<!-- disabled-test: rc-enum-name-from-function -->
+<!-- test: rc-enum-name-from-function -->
 Returning an enum's .name (String) through a function must not underflow the refcount. Currently the returned raw constant string is decremented as if it were a managed allocation.
 ```maxon
 enum Direction
@@ -2383,7 +2417,7 @@ end 'main'
 1
 ```
 
-<!-- disabled-test: rc-enum-string-rawvalue-from-function -->
+<!-- test: rc-enum-string-rawvalue-from-function -->
 Returning a string-backed enum's rawValue through a function must not underflow the refcount. Same root cause as the char variant: raw constant treated as managed allocation.
 ```maxon
 enum Planet
@@ -2461,7 +2495,7 @@ end 'main'
 42
 ```
 
-<!-- disabled-test: rc-char-to-string-interpolation -->
+<!-- test: rc-char-to-string-interpolation -->
 Interpolating a character into a string must not leak. Currently the intermediate ManagedMemory allocation from the Character is not freed.
 ```maxon
 function main() returns ExitCode
@@ -2495,7 +2529,7 @@ end 'main'
 2
 ```
 
-<!-- disabled-test: rc-string-backed-enum-compare -->
+<!-- test: rc-string-backed-enum-compare -->
 Comparing two string-backed enum values must not leak. Currently the Character/String allocations for enum case values are not freed.
 ```maxon
 enum ContentType
@@ -2516,7 +2550,7 @@ end 'main'
 1
 ```
 
-<!-- disabled-test: rc-char-backed-enum-compare -->
+<!-- test: rc-char-backed-enum-compare -->
 Comparing two char-backed enum values must not leak. Currently the Character allocations for enum case values are not freed.
 ```maxon
 enum Escape
@@ -2578,7 +2612,7 @@ end 'main'
 hello
 ```
 
-<!-- disabled-test: rc-string-replace-no-leak -->
+<!-- test: rc-string-replace-no-leak -->
 String.replace must not leak internal working allocations. Currently leaks 2 allocations (ManagedMemory buffers from the replace implementation).
 ```maxon
 function main() returns ExitCode
@@ -2595,7 +2629,7 @@ end 'main'
 hello there
 ```
 
-<!-- disabled-test: rc-string-replacefirst-no-leak -->
+<!-- test: rc-string-replacefirst-no-leak -->
 String.replaceFirst must not leak internal working allocations. The intermediate ManagedMemory and Buffer created during the replacement must be freed.
 ```maxon
 function main() returns ExitCode
@@ -2649,7 +2683,7 @@ end 'main'
 hello
 ```
 
-<!-- disabled-test: rc-enum-name-no-leak -->
+<!-- test: rc-enum-name-no-leak -->
 Accessing enum .name must not leak. The getName function allocates a String wrapper around the name data; both the wrapper and its managed memory must be freed.
 ```maxon
 enum Color
@@ -2670,7 +2704,7 @@ end 'main'
 1
 ```
 
-<!-- disabled-test: rc-enum-name-reassign-no-leak -->
+<!-- test: rc-enum-name-reassign-no-leak -->
 Accessing enum .name after reassignment must not leak. Both the old and new enum name string allocations must be properly freed.
 ```maxon
 enum Status

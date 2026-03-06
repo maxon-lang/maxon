@@ -331,9 +331,10 @@ public static partial class MaxonToStandardConversion {
 		block.AddOp(elemSizeConst2);
 		EmitStructFieldStore(block, elemSizeConst2.Result, interpManagedName, ManagedFieldElementSize, MlirType.I64, varTypes);
 
-		// Store _managed heap pointer at offset 0
+		// Store _managed heap pointer at offset 0 and incref it
 		var interpManagedReload = EmitLoad(block, interpManagedName, varTypes);
 		EmitStructFieldStore(block, interpManagedReload, tempName2, 0, MlirType.I64, varTypes);
+		EmitIncref(block, interpManagedName, varTypes, scopeName: _currentFuncName);
 
 		// Store _iterPos at offset 8
 		var iterPosConst = new StdConstI64Op(0);
@@ -732,7 +733,7 @@ public static partial class MaxonToStandardConversion {
 
 		// Heap-allocate __ManagedMemory, then buffer as raw allocation
 		var tempName = inlineTarget
-			?? temps.CreateTemp("concat", op.Result.Id, "__ManagedMemory", OwnershipFlags.CallReturn);
+			?? temps.CreateTemp("concat", op.Result.Id, "__ManagedMemory", OwnershipFlags.None);
 		var concatPtr = EmitAlloc(block, 32, "__ManagedMemory", scopeName: _currentFuncName);
 		EmitStore(block, concatPtr, tempName, varTypes);
 
@@ -802,7 +803,7 @@ public static partial class MaxonToStandardConversion {
 
 		// Heap-allocate __ManagedMemory struct, then a new raw buffer
 		var tempName = inlineTarget
-			?? temps.CreateTemp("slice", op.Result.Id, "Slice", OwnershipFlags.CallReturn);
+			?? temps.CreateTemp("slice", op.Result.Id, "Slice", OwnershipFlags.None);
 		var slicePtr = EmitAlloc(block, 32, "Slice", scopeName: _currentFuncName);
 		EmitStore(block, slicePtr, tempName, varTypes);
 

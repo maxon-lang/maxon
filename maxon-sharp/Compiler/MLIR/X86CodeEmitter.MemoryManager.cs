@@ -66,6 +66,21 @@ public partial class X86CodeEmitter {
       DefineSymdata("__rt_tag_dir_buffer", "DirBuffer\0"u8.ToArray());
       DefineSymdata("__rt_tag_capture_result", "CaptureResult\0"u8.ToArray());
       DefineSymdata("__rt_tag_pipe_buffer", "PipeBuffer\0"u8.ToArray());
+      // Scope strings for runtime-internal mm_decref calls
+      DefineSymdata("__mm_scope_managed_elements", "~ManagedElements\0"u8.ToArray());
+      DefineSymdata("__mm_scope_chain_detach", "chain_detach\0"u8.ToArray());
+      DefineSymdata("__mm_scope_chain_clear", "chain_clear\0"u8.ToArray());
+      DefineSymdata("__mm_scope_chain_decref_values", "chain_decref_values\0"u8.ToArray());
+      DefineSymdata("__mm_scope_find_close", "find_close\0"u8.ToArray());
+      // Scope strings for runtime-internal mm_alloc/mm_incref calls
+      DefineSymdata("__mm_scope_cow_copy", "cow_copy\0"u8.ToArray());
+      DefineSymdata("__mm_scope_cmdline_arg", "cmdline_arg\0"u8.ToArray());
+      DefineSymdata("__mm_scope_find_first_file", "find_first_file\0"u8.ToArray());
+      DefineSymdata("__mm_scope_get_cwd", "get_cwd\0"u8.ToArray());
+      DefineSymdata("__mm_scope_capture", "capture\0"u8.ToArray());
+      DefineSymdata("__mm_scope_pipe_read", "pipe_read\0"u8.ToArray());
+      DefineSymdata("__mm_scope_realloc", "realloc\0"u8.ToArray());
+      DefineSymdata("__mm_scope_chain_insert", "chain_insert\0"u8.ToArray());
     }
 
     // Panic messages for invalid memory manager calls
@@ -113,7 +128,7 @@ public partial class X86CodeEmitter {
     EmitMmFree();
     EmitMmIncref();
     EmitMmDecref();
-    EmitMmDecrefIfNonnull();
+
     EmitMmDecrefManagedElements();
     EmitMmClearManagedElements();
     EmitMmLeakCheck();
@@ -128,10 +143,6 @@ public partial class X86CodeEmitter {
     EmitChainDecrefValues();
     if (Compiler.MmTrace) {
       EmitMmTracePrintIndent();
-      EmitMmTraceAlloc();
-      EmitMmTraceFree();
-      EmitMmTraceIncref();
-      EmitMmTraceDecref();
       EmitMmTraceTransfer();
     }
   }
@@ -352,9 +363,10 @@ public partial class X86CodeEmitter {
     //   [rbp-8]  = arg1 (rcx) = size
     //   [rbp-16] = arg2 (rdx) = destructor_fn_ptr
     //   [rbp-24] = arg3 (r8)  = tag_index (small integer, 0 = no tag)
+    //   [rbp-32] = arg4 (r9)  = scope_cstr (MmTrace only)
     //   [rbp-40] = raw_ptr
     //   [rbp-48] = alloc_size
-    EmitRuntimeFunctionStart("mm_alloc", 3, 0x60);
+    EmitRuntimeFunctionStart("mm_alloc", Compiler.MmTrace ? 4 : 3, 0x60);
 
     // Compute alloc_size = size + 24 (+ 8 canary for MmDebug)
     EmitMovRegMem(X86Register.Rax, -0x08, 8); // RAX = size
@@ -408,6 +420,14 @@ public partial class X86CodeEmitter {
     // Return user_ptr = raw + 24
     EmitMovRegMem(X86Register.Rax, -0x28, 8); // RAX = raw
     EmitAddRegImm(X86Register.Rax, MmHeaderSize);
+
+    // Trace alloc after user_ptr is computed (in RAX)
+    if (Compiler.MmTrace) {
+      EmitMovMemReg(-0x28, X86Register.Rax, 8); // save user_ptr to [rbp-40]
+      EmitInlineTrace("__mm_tag_alloc", "mm_alloc_trace", -0x28, -0x20);
+      EmitMovRegMem(X86Register.Rax, -0x28, 8); // restore user_ptr into RAX for return
+    }
+
     EmitRuntimeFunctionEnd();
   }
 
@@ -428,10 +448,11 @@ public partial class X86CodeEmitter {
     EmitBytes(0x48, 0x85, 0xC0); // TEST rax, rax
     EmitJcc("nz", "mm_realloc_not_null");
 
-    // NULL path: mm_alloc(size=new_size, destructor=0, tag=tag)
+    // NULL path: mm_alloc(size=new_size, destructor=0, tag=tag, scope=realloc)
     EmitMovRegMem(X86Register.Rcx, -0x10, 8); // RCX = new_size
     EmitXorRegReg(X86Register.Rdx, X86Register.Rdx); // RDX = destructor = 0
     EmitMovRegMem(X86Register.R8, -0x18, 8); // R8 = tag
+    if (Compiler.MmTrace) EmitLeaRegSymdataRel(X86Register.R9, "__mm_scope_realloc");
     EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_alloc")); EmitDword(0);
     EmitJmp("mm_realloc_done");
 
@@ -483,9 +504,7 @@ public partial class X86CodeEmitter {
 
     // Trace free if enabled
     if (Compiler.MmTrace) {
-      EmitMovRegMem(X86Register.Rcx, -0x08, 8); // user_ptr
-      EmitMovRegMem(X86Register.Rdx, -0x10, 8); // scope_cstr
-      EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_trace_free")); EmitDword(0);
+      EmitInlineTraceFree("mm_free_trace", -0x08, -0x10);
     }
 
     // Decrement global alloc counter
@@ -503,11 +522,12 @@ public partial class X86CodeEmitter {
   }
 
   // -------------------------------------------------------------------------
-  // mm_incref(user_ptr_in_rcx) -> void
+  // mm_incref(user_ptr_in_rcx, [scope_cstr_in_rdx]) -> void
   // Increments refcount at [ptr-8]. Panics on NULL pointer.
   // -------------------------------------------------------------------------
   private void EmitMmIncref() {
-    EmitRuntimeFunctionStart("mm_incref", 1, 0x30);
+    // Stack: [rbp-8]=user_ptr, [rbp-16]=scope_cstr (MmTrace only)
+    EmitRuntimeFunctionStart("mm_incref", Compiler.MmTrace ? 2 : 1, 0x30);
 
     // NULL check -- panic
     EmitMovRegMem(X86Register.Rax, -0x08, 8); // RAX = user_ptr
@@ -520,11 +540,16 @@ public partial class X86CodeEmitter {
     // Increment refcount: [user_ptr - 8] += 1
     EmitBytes(0x48, 0xFF, 0x40, 0xF8); // INC qword [rax-8] -- refcount++
 
+    // Trace incref after increment
+    if (Compiler.MmTrace) {
+      EmitInlineTrace("__mm_tag_incref", "mm_incref_trace", -0x08, -0x10);
+    }
+
     EmitRuntimeFunctionEnd();
   }
 
   // -------------------------------------------------------------------------
-  // mm_decref(user_ptr_in_rcx) -> void
+  // mm_decref(user_ptr_in_rcx, [scope_cstr_in_rdx]) -> void
   //
   // Decrements refcount at [ptr-8]. If rc reaches 0:
   //   1. Load destructor from [ptr-16], if non-zero call it with ptr in rcx
@@ -532,8 +557,8 @@ public partial class X86CodeEmitter {
   // Panics on NULL or refcount underflow.
   // -------------------------------------------------------------------------
   private void EmitMmDecref() {
-    // Stack: [rbp-8]=user_ptr
-    EmitRuntimeFunctionStart("mm_decref", 1, 0x30);
+    // Stack: [rbp-8]=user_ptr, [rbp-16]=scope_cstr (MmTrace only)
+    EmitRuntimeFunctionStart("mm_decref", Compiler.MmTrace ? 2 : 1, 0x30);
 
     // NULL check -- panic
     EmitMovRegMem(X86Register.Rax, -0x08, 8); // RAX = user_ptr
@@ -542,6 +567,12 @@ public partial class X86CodeEmitter {
     EmitLeaRegSymdataRel(X86Register.Rcx, "__mm_panic_decref_null");
     EmitByte(0xE8); _relCallFixups.Add((_code.Count, "maxon_panic")); EmitDword(0);
     DefineLabel("mm_decref_not_null");
+
+    // Trace decref before modifying refcount (header still valid, prints rc-1)
+    if (Compiler.MmTrace) {
+      EmitInlineTrace("__mm_tag_decref", "mm_decref_trace", -0x08, -0x10, printRc: true, rcSubtract: 1);
+      EmitMovRegMem(X86Register.Rax, -0x08, 8); // reload RAX = user_ptr
+    }
 
     // Check refcount: if [ptr-8] == 0, panic (underflow / double-free)
     EmitBytes(0x48, 0x83, 0x78, 0xF8, 0x00); // CMP qword [rax-8], 0
@@ -580,20 +611,6 @@ public partial class X86CodeEmitter {
     EmitRuntimeFunctionEnd();
   }
 
-  // -------------------------------------------------------------------------
-  // mm_decref_if_nonnull(user_ptr_in_rcx) -> void
-  // Null-check then call mm_decref. Silently skips null pointers.
-  // -------------------------------------------------------------------------
-  private void EmitMmDecrefIfNonnull() {
-    EmitRuntimeFunctionStart("mm_decref_if_nonnull", 1, 0x30);
-    EmitMovRegMem(X86Register.Rax, -0x08, 8); // RAX = user_ptr
-    EmitBytes(0x48, 0x85, 0xC0); // TEST rax, rax
-    EmitJcc("z", "mm_decref_if_nonnull_skip");
-    EmitMovRegMem(X86Register.Rcx, -0x08, 8);
-    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_decref")); EmitDword(0);
-    DefineLabel("mm_decref_if_nonnull_skip");
-    EmitRuntimeFunctionEnd();
-  }
 
   // -------------------------------------------------------------------------
   // mm_decref_managed_elements(managed_ptr_in_rcx) -> void
@@ -643,6 +660,7 @@ public partial class X86CodeEmitter {
     EmitBytes(0x48, 0x85, 0xC9); // TEST rcx, rcx
     EmitJcc("z", "mm_decref_managed_elements_skip");
     // mm_decref(element_ptr)
+    if (Compiler.MmTrace) EmitLeaRegSymdataRel(X86Register.Rdx, "__mm_scope_managed_elements");
     EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_decref")); EmitDword(0);
     DefineLabel("mm_decref_managed_elements_skip");
 
@@ -703,6 +721,7 @@ public partial class X86CodeEmitter {
     EmitBytes(0x48, 0x85, 0xC9); // TEST rcx, rcx
     EmitJcc("z", "mm_clear_managed_elements_zero");
     // mm_decref(element_ptr)
+    if (Compiler.MmTrace) EmitLeaRegSymdataRel(X86Register.Rdx, "__mm_scope_managed_elements");
     EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_decref")); EmitDword(0);
     DefineLabel("mm_clear_managed_elements_zero");
 
@@ -795,21 +814,23 @@ public partial class X86CodeEmitter {
   }
 
   // ==========================================================================
-  // Trace functions -- only emitted when Compiler.MmTrace is true.
-  // Called from compiler-generated code, not from runtime functions.
+  // Trace helpers -- only used when Compiler.MmTrace is true.
+  // Trace output for alloc/free/incref/decref is inlined directly into those
+  // functions. Only mm_trace_transfer remains as a standalone runtime function
+  // (called from compiler-generated code for ownership transfer annotations).
   // ==========================================================================
 
   /// <summary>
   /// Emit the scope annotation suffix: prints " [scope]" if [rbp-16] (scope_cstr) is non-null,
   /// then prints a newline. Used at the end of every mm_trace_* function.
   /// </summary>
-  private void EmitMmTraceScopeAndNewline(string skipLabel) {
-    EmitMovRegMem(X86Register.Rax, -0x10, 8); // scope_cstr
+  private void EmitMmTraceScopeAndNewline(string skipLabel, int scopeSlot = -0x10) {
+    EmitMovRegMem(X86Register.Rax, scopeSlot, 8); // scope_cstr
     EmitBytes(0x48, 0x85, 0xC0); // TEST rax, rax
     EmitJcc("z", skipLabel);
     EmitLeaRegSymdataRel(X86Register.Rcx, "__mm_tag_lbracket");
     EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_trace_print_tag")); EmitDword(0);
-    EmitMovRegMem(X86Register.Rcx, -0x10, 8);
+    EmitMovRegMem(X86Register.Rcx, scopeSlot, 8);
     EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_trace_print_tag")); EmitDword(0);
     EmitLeaRegSymdataRel(X86Register.Rcx, "__mm_tag_rbracket");
     EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_trace_print_tag")); EmitDword(0);
@@ -844,84 +865,38 @@ public partial class X86CodeEmitter {
     EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_trace_print_i64")); EmitDword(0);
   }
 
-  // -------------------------------------------------------------------------
-  // mm_trace_alloc(user_ptr_in_rcx, scope_cstr_in_rdx) -> void
-  // Prints: indent + "alloc " + tag + " #N rc=N [scope]\n"
-  // -------------------------------------------------------------------------
-  private void EmitMmTraceAlloc() {
-    EmitRuntimeFunctionStart("mm_trace_alloc", 2, 0x30);
-    // [rbp-8]=user_ptr, [rbp-16]=scope_cstr
+  /// <summary>
+  /// Emit inline trace output: indent + tagLabel + "TypeName #N rc=R [scope]\n".
+  /// ptrSlot/scopeSlot are rbp-relative offsets for the user_ptr and scope_cstr.
+  /// If printRc is false, the " rc=N" part is omitted (used for free).
+  /// rcSubtract adjusts the displayed refcount (1 for decref to show post-decrement).
+  /// </summary>
+  private void EmitInlineTrace(string tagLabel, string uniquePrefix, int ptrSlot, int scopeSlot,
+      bool printRc = true, int rcSubtract = 0) {
     EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_trace_print_indent")); EmitDword(0);
-    EmitLeaRegSymdataRel(X86Register.Rcx, "__mm_tag_alloc");
+    EmitLeaRegSymdataRel(X86Register.Rcx, tagLabel);
     EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_trace_print_tag")); EmitDword(0);
-    EmitTraceTagAndId(-0x08);
-    EmitTraceRc(-0x08);
-    EmitMmTraceScopeAndNewline("mm_trace_alloc_no_scope");
-    EmitRuntimeFunctionEnd();
+    EmitTraceTagAndId(ptrSlot);
+    if (printRc) EmitTraceRc(ptrSlot, rcSubtract);
+    EmitMmTraceScopeAndNewline($"{uniquePrefix}_no_scope", scopeSlot);
   }
 
-  // -------------------------------------------------------------------------
-  // mm_trace_free(user_ptr_in_rcx, scope_cstr_in_rdx) -> void
-  // Prints: indent + "free " + tag + " #N [scope]\n"
-  // -------------------------------------------------------------------------
-  private void EmitMmTraceFree() {
-    EmitRuntimeFunctionStart("mm_trace_free", 2, 0x30);
-    // [rbp-8]=user_ptr, [rbp-16]=scope_cstr
+  /// <summary>
+  /// Emit inline free trace: indent (+ extra indent if scope is NULL) + "free " + tag + " #N [scope]\n".
+  /// </summary>
+  private void EmitInlineTraceFree(string uniquePrefix, int ptrSlot, int scopeSlot) {
     EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_trace_print_indent")); EmitDword(0);
     // When scope is NULL (free triggered internally by mm_decref), add extra indent
-    EmitMovRegMem(X86Register.Rax, -0x10, 8); // scope_cstr
+    EmitMovRegMem(X86Register.Rax, scopeSlot, 8); // scope_cstr
     EmitBytes(0x48, 0x85, 0xC0); // TEST rax, rax
-    EmitJcc("nz", "mm_trace_free_no_extra_indent");
+    EmitJcc("nz", $"{uniquePrefix}_no_extra_indent");
     EmitLeaRegSymdataRel(X86Register.Rcx, "__mm_tag_indent");
     EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_trace_print_tag")); EmitDword(0);
-    DefineLabel("mm_trace_free_no_extra_indent");
+    DefineLabel($"{uniquePrefix}_no_extra_indent");
     EmitLeaRegSymdataRel(X86Register.Rcx, "__mm_tag_free");
     EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_trace_print_tag")); EmitDword(0);
-    EmitTraceTagAndId(-0x08);
-    EmitMmTraceScopeAndNewline("mm_trace_free_no_scope");
-    EmitRuntimeFunctionEnd();
-  }
-
-  // -------------------------------------------------------------------------
-  // mm_trace_incref(user_ptr_in_rcx, scope_cstr_in_rdx) -> void
-  // Prints: indent + "incref " + tag + " #N rc=N [scope]\n"
-  // Called AFTER mm_incref so refcount is already incremented.
-  // -------------------------------------------------------------------------
-  private void EmitMmTraceIncref() {
-    EmitRuntimeFunctionStart("mm_trace_incref", 2, 0x30);
-    // [rbp-8]=user_ptr, [rbp-16]=scope_cstr
-    EmitMovRegMem(X86Register.Rax, -0x08, 8);
-    EmitBytes(0x48, 0x85, 0xC0); // TEST rax, rax
-    EmitJcc("z", "mm_trace_incref_null");
-    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_trace_print_indent")); EmitDword(0);
-    EmitLeaRegSymdataRel(X86Register.Rcx, "__mm_tag_incref");
-    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_trace_print_tag")); EmitDword(0);
-    EmitTraceTagAndId(-0x08);
-    EmitTraceRc(-0x08);
-    EmitMmTraceScopeAndNewline("mm_trace_incref_no_scope");
-    DefineLabel("mm_trace_incref_null");
-    EmitRuntimeFunctionEnd();
-  }
-
-  // -------------------------------------------------------------------------
-  // mm_trace_decref(user_ptr_in_rcx, scope_cstr_in_rdx) -> void
-  // Prints: indent + "decref " + tag + " #N rc=N [scope]\n"
-  // Called BEFORE mm_decref so the header is still valid. Prints rc-1.
-  // -------------------------------------------------------------------------
-  private void EmitMmTraceDecref() {
-    EmitRuntimeFunctionStart("mm_trace_decref", 2, 0x30);
-    // [rbp-8]=user_ptr, [rbp-16]=scope_cstr
-    EmitMovRegMem(X86Register.Rax, -0x08, 8);
-    EmitBytes(0x48, 0x85, 0xC0); // TEST rax, rax
-    EmitJcc("z", "mm_trace_decref_null");
-    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_trace_print_indent")); EmitDword(0);
-    EmitLeaRegSymdataRel(X86Register.Rcx, "__mm_tag_decref");
-    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_trace_print_tag")); EmitDword(0);
-    EmitTraceTagAndId(-0x08);
-    EmitTraceRc(-0x08, 1);
-    EmitMmTraceScopeAndNewline("mm_trace_decref_no_scope");
-    DefineLabel("mm_trace_decref_null");
-    EmitRuntimeFunctionEnd();
+    EmitTraceTagAndId(ptrSlot);
+    EmitMmTraceScopeAndNewline($"{uniquePrefix}_no_scope", scopeSlot);
   }
 
   // -------------------------------------------------------------------------
@@ -976,6 +951,7 @@ public partial class X86CodeEmitter {
     EmitByte(0xE8); _relCallFixups.Add((_code.Count, "maxon_chain_unlink")); EmitDword(0);
     // Decref node — old chain releases its counted reference
     EmitMovRegMem(X86Register.Rcx, -0x10, 8); // RCX = node_ptr
+    if (Compiler.MmTrace) EmitLeaRegSymdataRel(X86Register.Rdx, "__mm_scope_chain_detach");
     EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_decref")); EmitDword(0);
     DefineLabel("chain_insert_first_no_detach");
 
@@ -1018,6 +994,7 @@ public partial class X86CodeEmitter {
 
     // Incref node — chain holds a counted reference
     EmitMovRegMem(X86Register.Rcx, -0x10, 8); // RCX = node_ptr
+    if (Compiler.MmTrace) EmitLeaRegSymdataRel(X86Register.Rdx, "__mm_scope_chain_insert");
     EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_incref")); EmitDword(0);
 
     EmitRuntimeFunctionEnd();
@@ -1041,6 +1018,7 @@ public partial class X86CodeEmitter {
     EmitByte(0xE8); _relCallFixups.Add((_code.Count, "maxon_chain_unlink")); EmitDword(0);
     // Decref node — old chain releases its counted reference
     EmitMovRegMem(X86Register.Rcx, -0x10, 8); // RCX = node_ptr
+    if (Compiler.MmTrace) EmitLeaRegSymdataRel(X86Register.Rdx, "__mm_scope_chain_detach");
     EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_decref")); EmitDword(0);
     DefineLabel("chain_insert_last_no_detach");
 
@@ -1083,6 +1061,7 @@ public partial class X86CodeEmitter {
 
     // Incref node — chain holds a counted reference
     EmitMovRegMem(X86Register.Rcx, -0x10, 8); // RCX = node_ptr
+    if (Compiler.MmTrace) EmitLeaRegSymdataRel(X86Register.Rdx, "__mm_scope_chain_insert");
     EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_incref")); EmitDword(0);
 
     EmitRuntimeFunctionEnd();
@@ -1106,6 +1085,7 @@ public partial class X86CodeEmitter {
     EmitByte(0xE8); _relCallFixups.Add((_code.Count, "maxon_chain_unlink")); EmitDword(0);
     // Decref node — old chain releases its counted reference
     EmitMovRegMem(X86Register.Rcx, -0x18, 8); // RCX = node_ptr
+    if (Compiler.MmTrace) EmitLeaRegSymdataRel(X86Register.Rdx, "__mm_scope_chain_detach");
     EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_decref")); EmitDword(0);
     DefineLabel("chain_insert_after_no_detach");
 
@@ -1146,6 +1126,7 @@ public partial class X86CodeEmitter {
 
     // Incref node — chain holds a counted reference
     EmitMovRegMem(X86Register.Rcx, -0x18, 8); // RCX = node_ptr
+    if (Compiler.MmTrace) EmitLeaRegSymdataRel(X86Register.Rdx, "__mm_scope_chain_insert");
     EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_incref")); EmitDword(0);
 
     EmitRuntimeFunctionEnd();
@@ -1169,6 +1150,7 @@ public partial class X86CodeEmitter {
     EmitByte(0xE8); _relCallFixups.Add((_code.Count, "maxon_chain_unlink")); EmitDword(0);
     // Decref node — old chain releases its counted reference
     EmitMovRegMem(X86Register.Rcx, -0x18, 8); // RCX = node_ptr
+    if (Compiler.MmTrace) EmitLeaRegSymdataRel(X86Register.Rdx, "__mm_scope_chain_detach");
     EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_decref")); EmitDword(0);
     DefineLabel("chain_insert_before_no_detach");
 
@@ -1209,6 +1191,7 @@ public partial class X86CodeEmitter {
 
     // Incref node — chain holds a counted reference
     EmitMovRegMem(X86Register.Rcx, -0x18, 8); // RCX = node_ptr
+    if (Compiler.MmTrace) EmitLeaRegSymdataRel(X86Register.Rdx, "__mm_scope_chain_insert");
     EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_incref")); EmitDword(0);
 
     EmitRuntimeFunctionEnd();
@@ -1312,24 +1295,15 @@ public partial class X86CodeEmitter {
 
     if (managed) {
       // Decref the heap value stored in the node (node+24)
-      if (Compiler.MmTrace) {
-        EmitMovRegMem(X86Register.Rax, -0x28, 8); // RAX = current (user ptr)
-        EmitBytes(0x48, 0x8B, 0x48, 0x18); // MOV rcx, [rax+24] -- node.value
-        EmitMovRegImm(X86Register.Rdx, 0); // rdx = NULL (no source location)
-        EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_trace_decref")); EmitDword(0);
-      }
       EmitMovRegMem(X86Register.Rax, -0x28, 8); // RAX = current (user ptr)
       EmitBytes(0x48, 0x8B, 0x48, 0x18); // MOV rcx, [rax+24] -- node.value
+      if (Compiler.MmTrace) EmitLeaRegSymdataRel(X86Register.Rdx, "__mm_scope_chain_clear");
       EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_decref")); EmitDword(0);
     }
 
     // Free the node via mm_decref(user_ptr) -- each node is its own allocation
     EmitMovRegMem(X86Register.Rcx, -0x28, 8); // RCX = current (user ptr)
-    if (Compiler.MmTrace) {
-      EmitXorRegReg(X86Register.Rdx, X86Register.Rdx); // scope = NULL
-      EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_trace_decref")); EmitDword(0);
-      EmitMovRegMem(X86Register.Rcx, -0x28, 8); // reload
-    }
+    if (Compiler.MmTrace) EmitLeaRegSymdataRel(X86Register.Rdx, "__mm_scope_chain_clear");
     EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_decref")); EmitDword(0);
 
     // current = next
@@ -1374,14 +1348,9 @@ public partial class X86CodeEmitter {
     EmitMovMemReg(-0x30, X86Register.Rcx, 8); // [rbp-48] = next
 
     // Decref the heap value stored in the node (node+24)
-    if (Compiler.MmTrace) {
-      EmitMovRegMem(X86Register.Rax, -0x28, 8); // RAX = current (user ptr)
-      EmitBytes(0x48, 0x8B, 0x48, 0x18); // MOV rcx, [rax+24] -- node.value
-      EmitMovRegImm(X86Register.Rdx, 0); // rdx = NULL (no source location)
-      EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_trace_decref")); EmitDword(0);
-    }
     EmitMovRegMem(X86Register.Rax, -0x28, 8); // RAX = current (user ptr)
     EmitBytes(0x48, 0x8B, 0x48, 0x18); // MOV rcx, [rax+24] -- node.value
+    if (Compiler.MmTrace) EmitLeaRegSymdataRel(X86Register.Rdx, "__mm_scope_chain_decref_values");
     EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_decref")); EmitDword(0);
 
     // current = next

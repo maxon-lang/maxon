@@ -6663,6 +6663,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
         Expect(TokenType.RightParen);
         var op = new MaxonManagedMemConcatOp(selfValue, other);
         _currentBlock!.AddOp(op);
+        EmitLiteralTempAssign(op.Result);
         return (true, op.Result);
       }
       case "slice": {
@@ -6674,6 +6675,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
         Expect(TokenType.RightParen);
         var op = new MaxonManagedMemSliceOp(selfValue, start, end);
         _currentBlock!.AddOp(op);
+        EmitLiteralTempAssign(op.Result);
         return (true, op.Result);
       }
       case "toCString": {
@@ -9660,6 +9662,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
           var enumVal = ResolveExprValue(result);
           var nameOp = new MaxonEnumNameOp(enumVal, userTypeName);
           _currentBlock!.AddOp(nameOp);
+          EmitLiteralTempAssign(nameOp.Result);
           result = new ExprResult.Direct(nameOp.Result);
           continue;
         }
@@ -9670,12 +9673,14 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
           if (enumType.BackingType is MlirStringBackingType) {
             var stringRawOp = new MaxonEnumStringRawValueOp(enumVal, userTypeName, isChar: false);
             _currentBlock!.AddOp(stringRawOp);
+            EmitLiteralTempAssign(stringRawOp.Result);
             result = new ExprResult.Direct(stringRawOp.Result);
             continue;
           }
           if (enumType.BackingType is MlirCharBackingType) {
             var charRawOp = new MaxonEnumStringRawValueOp(enumVal, userTypeName, isChar: true);
             _currentBlock!.AddOp(charRawOp);
+            EmitLiteralTempAssign(charRawOp.Result);
             result = new ExprResult.Direct(charRawOp.Result);
             continue;
           }

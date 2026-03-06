@@ -331,10 +331,11 @@ public static partial class MaxonToStandardConversion {
     var tagIndexOp = new StdConstI64Op(tagIndex);
     block.AddOp(tagIndexOp);
     var result = new StdI64(MlirContext.Current.NextId());
-    block.AddOp(new StdCallRuntimeOp("mm_alloc", [size, destructorPtr, tagIndexOp.Result], result));
     if (Compiler.MmTrace) {
       var scopePtr = scopeName != null ? EmitTagPtr(block, scopeName) : EmitNullPtr(block);
-      block.AddOp(new StdCallRuntimeOp("mm_trace_alloc", [result, scopePtr], null));
+      block.AddOp(new StdCallRuntimeOp("mm_alloc", [size, destructorPtr, tagIndexOp.Result, scopePtr], result));
+    } else {
+      block.AddOp(new StdCallRuntimeOp("mm_alloc", [size, destructorPtr, tagIndexOp.Result], result));
     }
     return result;
   }
@@ -355,14 +356,14 @@ public static partial class MaxonToStandardConversion {
     return result;
   }
 
-  /// <summary>Emit mm_incref(heap_ptr) — increments reference count for a scope-owned allocation.</summary>
+  /// <summary>Emit mm_incref(heap_ptr) — increments reference count for a scope-owned allocation. Trace is built into mm_incref.</summary>
   private static void EmitIncref(MlirBlock<StandardOp> block, string varName, Dictionary<string, string> varTypes, string? scopeName = null) {
     var heapPtr = EmitLoad(block, varName, varTypes);
-    block.AddOp(new StdCallRuntimeOp("mm_incref", [heapPtr], null));
     if (Compiler.MmTrace) {
-      var tracePtr = EmitLoad(block, varName, varTypes);
       var scopePtr = scopeName != null ? EmitTagPtr(block, scopeName) : EmitNullPtr(block);
-      block.AddOp(new StdCallRuntimeOp("mm_trace_incref", [tracePtr, scopePtr], null));
+      block.AddOp(new StdCallRuntimeOp("mm_incref", [heapPtr, scopePtr], null));
+    } else {
+      block.AddOp(new StdCallRuntimeOp("mm_incref", [heapPtr], null));
     }
   }
 
@@ -375,30 +376,33 @@ public static partial class MaxonToStandardConversion {
     }
   }
 
-  /// <summary>Emit mm_incref on a raw heap pointer (StdI64). Used when the pointer is already loaded.</summary>
+  /// <summary>Emit mm_incref on a raw heap pointer (StdI64). Used when the pointer is already loaded. Trace is built into mm_incref.</summary>
   private static void EmitIncrefValue(MlirBlock<StandardOp> block, StdI64 heapPtr, string? scopeName = null) {
-    block.AddOp(new StdCallRuntimeOp("mm_incref", [heapPtr], null));
     if (Compiler.MmTrace) {
       var scopePtr = scopeName != null ? EmitTagPtr(block, scopeName) : EmitNullPtr(block);
-      block.AddOp(new StdCallRuntimeOp("mm_trace_incref", [heapPtr, scopePtr], null));
+      block.AddOp(new StdCallRuntimeOp("mm_incref", [heapPtr, scopePtr], null));
+    } else {
+      block.AddOp(new StdCallRuntimeOp("mm_incref", [heapPtr], null));
     }
   }
 
-  /// <summary>Emit null-guarded mm_decref: skips if pointer is null.</summary>
+  /// <summary>Emit null-guarded mm_decref: skips if pointer is null. Trace is built into mm_decref.</summary>
   private static void EmitDecrefValueIfNonnull(MlirBlock<StandardOp> block, StdI64 heapPtr, string? scopeName = null) {
     if (Compiler.MmTrace) {
       var scopePtr = scopeName != null ? EmitTagPtr(block, scopeName) : EmitNullPtr(block);
-      block.AddOp(new StdCallRuntimeIfNonnullOp("mm_trace_decref", [heapPtr, scopePtr], null));
+      block.AddOp(new StdCallRuntimeIfNonnullOp("mm_decref", [heapPtr, scopePtr], null));
+    } else {
+      block.AddOp(new StdCallRuntimeIfNonnullOp("mm_decref", [heapPtr], null));
     }
-    block.AddOp(new StdCallRuntimeIfNonnullOp("mm_decref", [heapPtr], null));
   }
 
-  /// <summary>Emit null-guarded mm_incref: skips if pointer is null.</summary>
+  /// <summary>Emit null-guarded mm_incref: skips if pointer is null. Trace is built into mm_incref.</summary>
   private static void EmitIncrefValueIfNonnull(MlirBlock<StandardOp> block, StdI64 heapPtr, string? scopeName = null) {
-    block.AddOp(new StdCallRuntimeIfNonnullOp("mm_incref", [heapPtr], null));
     if (Compiler.MmTrace) {
       var scopePtr = scopeName != null ? EmitTagPtr(block, scopeName) : EmitNullPtr(block);
-      block.AddOp(new StdCallRuntimeIfNonnullOp("mm_trace_incref", [heapPtr, scopePtr], null));
+      block.AddOp(new StdCallRuntimeIfNonnullOp("mm_incref", [heapPtr, scopePtr], null));
+    } else {
+      block.AddOp(new StdCallRuntimeIfNonnullOp("mm_incref", [heapPtr], null));
     }
   }
 
