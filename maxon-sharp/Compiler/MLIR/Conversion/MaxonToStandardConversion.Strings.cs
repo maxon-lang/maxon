@@ -67,11 +67,13 @@ public static partial class MaxonToStandardConversion {
 	  Dictionary<int, string> structVarNames,
 	  MlirModule<StandardOp> result,
 	  VarRegistry temps,
-	  string? allocTag = null) {
+	  string? allocTag = null,
+	  string? inlineTarget = null) {
 		var rdataLabel = $"__{rdataPrefix}_{NextRdataId()}";
 		var (bufferPtr, lengthVal) = EmitRdataLiteral(value, rdataLabel, block, result);
 
-		var tempName = temps.CreateTemp(tempPrefix, resultId, allocTag ?? "unknown", OwnershipFlags.None);
+		var tempName = inlineTarget
+			?? temps.CreateTemp(tempPrefix, resultId, allocTag ?? "unknown", OwnershipFlags.None);
 		var outerPtr = EmitAlloc(block, 16, allocTag, scopeName: _currentFuncName);
 		EmitStore(block, outerPtr, tempName, varTypes);
 
@@ -88,8 +90,9 @@ public static partial class MaxonToStandardConversion {
 	  Dictionary<string, string> varTypes,
 	  Dictionary<int, string> structVarNames,
 	  MlirModule<StandardOp> result,
-	  VarRegistry temps) {
-		var tempName = EmitManagedMemoryLiteral(op.Value, op.Result.Id, "str", "strtmp", block, varTypes, structVarNames, result, temps, "String");
+	  VarRegistry temps,
+	  string? inlineTarget = null) {
+		var tempName = EmitManagedMemoryLiteral(op.Value, op.Result.Id, "str", "strtmp", block, varTypes, structVarNames, result, temps, "String", inlineTarget);
 
 		// Store _iterPos at offset 8 (second field in String struct)
 		var iterConst = new StdConstI64Op(0);
@@ -103,13 +106,15 @@ public static partial class MaxonToStandardConversion {
 	  Dictionary<string, string> varTypes,
 	  Dictionary<int, string> structVarNames,
 	  MlirModule<StandardOp> result,
-	  VarRegistry temps) {
+	  VarRegistry temps,
+	  string? inlineTarget = null) {
 		// ByteArray layout differs from String: iterIndex at offset 0, managed at offset 8
 		var rdataLabel = $"__bstr_{NextRdataId()}";
 		var (bufferPtr, lengthVal) = EmitRdataLiteral(op.Value, rdataLabel, block, result,
 		  System.Text.Encoding.Latin1);
 
-		var tempName = temps.CreateTemp("bstrtmp", op.Result.Id, "ByteArray", OwnershipFlags.None);
+		var tempName = inlineTarget
+			?? temps.CreateTemp("bstrtmp", op.Result.Id, "ByteArray", OwnershipFlags.None);
 		var outerPtr = EmitAlloc(block, 16, "ByteArray", scopeName: _currentFuncName);
 		EmitStore(block, outerPtr, tempName, varTypes);
 
@@ -130,8 +135,9 @@ public static partial class MaxonToStandardConversion {
 	  Dictionary<string, string> varTypes,
 	  Dictionary<int, string> structVarNames,
 	  MlirModule<StandardOp> result,
-	  VarRegistry temps) {
-		EmitManagedMemoryLiteral(op.Value, op.Result.Id, "chr", "chrtmp", block, varTypes, structVarNames, result, temps, "Character");
+	  VarRegistry temps,
+	  string? inlineTarget = null) {
+		EmitManagedMemoryLiteral(op.Value, op.Result.Id, "chr", "chrtmp", block, varTypes, structVarNames, result, temps, "Character", inlineTarget);
 	}
 
 	private static void LowerStringInterp(
@@ -141,7 +147,8 @@ public static partial class MaxonToStandardConversion {
 	  Dictionary<string, string> varTypes,
 	  Dictionary<int, string> structVarNames,
 	  MlirModule<StandardOp> result,
-	  VarRegistry temps) {
+	  VarRegistry temps,
+	  string? inlineTarget = null) {
 
 		var partInfos = new List<(StdI64 Buffer, StdI64 Length)>();
 		// Track heap-allocated intermediate buffers that need freeing after memcopy
@@ -216,7 +223,7 @@ public static partial class MaxonToStandardConversion {
 		}
 
 		if (partInfos.Count == 0) {
-			var tempName = EmitManagedMemoryLiteral("", op.Result.Id, "interp", "interptmp", block, varTypes, structVarNames, result, temps, "String");
+			var tempName = EmitManagedMemoryLiteral("", op.Result.Id, "interp", "interptmp", block, varTypes, structVarNames, result, temps, "String", inlineTarget);
 			var iterConst = new StdConstI64Op(0);
 			block.AddOp(iterConst);
 			EmitStore(block, iterConst.Result, $"{tempName}._iterPos", varTypes);
@@ -239,7 +246,8 @@ public static partial class MaxonToStandardConversion {
 		}
 
 		// Allocate outer String struct, then ManagedMemory, then raw buffer
-		var tempName2 = temps.CreateTemp("interptmp", op.Result.Id, "String", OwnershipFlags.None);
+		var tempName2 = inlineTarget
+			?? temps.CreateTemp("interptmp", op.Result.Id, "String", OwnershipFlags.None);
 		var interpOuterPtr = EmitAlloc(block, 16, "String", scopeName: _currentFuncName);
 		EmitStore(block, interpOuterPtr, tempName2, varTypes);
 

@@ -262,35 +262,31 @@ public static partial class MaxonToStandardConversion {
         selfFieldCache.Clear();
         var newBlock = newFunc.Body.AddBlock(block.Name);
 
-        // Pre-scan: find struct literals immediately consumed by declaration assigns
-        // so we can store fields directly to the target variable.
+        // Pre-scan: find heap-allocating ops immediately consumed by declaration assigns
+        // so they can store directly into the target variable, avoiding a temp.
         // Only for declarations — reassignments need managed cleanup of the old value
         // before the new fields are stored, so they must use an intermediate.
-        var structLiteralTargets = new Dictionary<int, string>();
-        for (int oi = 0; oi < block.Operations.Count - 1; oi++) {
-          if (block.Operations[oi] is MaxonStructLiteralOp lit
-            && block.Operations[oi + 1] is MaxonAssignOp assign
-            && assign.Value.Id == lit.Result.Id
-            && assign.IsDeclaration) {
-            structLiteralTargets[lit.Result.Id] = assign.VarName;
-          }
-        }
-
-        // Pre-scan: find managed memory ops (slice, concat) immediately consumed by
-        // declaration assigns so they can store directly into the target variable,
-        // avoiding a temp that would cause double-decref at scope end.
-        var managedOpTargets = new Dictionary<int, string>();
+        var inlineTargets = new Dictionary<int, string>();
         for (int oi = 0; oi < block.Operations.Count - 1; oi++) {
           int? resultId = block.Operations[oi] switch {
+            MaxonStructLiteralOp s => s.Result.Id,
             MaxonManagedMemSliceOp s => s.Result.Id,
             MaxonManagedMemConcatOp c => c.Result.Id,
+            MaxonManagedMemCreateOp c => c.Result.Id,
+            MaxonStringLiteralOp s => s.Result.Id,
+            MaxonByteStringLiteralOp b => b.Result.Id,
+            MaxonCharLiteralOp c => c.Result.Id,
+            MaxonStringInterpOp i => i.Result.Id,
+            MaxonCStringToManagedOp c => c.Result.Id,
+            MaxonEnumConstructOp e => e.Result.Id,
+            MaxonChainCreateOp c => c.Result.Id,
             _ => null
           };
           if (resultId != null
-            && block.Operations[oi + 1] is MaxonAssignOp assign2
-            && assign2.Value.Id == resultId
-            && assign2.IsDeclaration) {
-            managedOpTargets[resultId.Value] = assign2.VarName;
+            && block.Operations[oi + 1] is MaxonAssignOp assign
+            && assign.Value.Id == resultId
+            && assign.IsDeclaration) {
+            inlineTargets[resultId.Value] = assign.VarName;
           }
         }
 
@@ -439,7 +435,9 @@ public static partial class MaxonToStandardConversion {
             }
             case MaxonEnumConstructOp enumConstructOp: {
               // Heap-allocate the enum: [tag:i64 @ 0, payload_0:i64 @ 8, payload_1:i64 @ 16, ...]
-              var tempName = temps.CreateTemp("enum", enumConstructOp.Result.Id, enumConstructOp.EnumTypeName, OwnershipFlags.None);
+              var tempName = inlineTargets.TryGetValue(enumConstructOp.Result.Id, out var enumInlineTarget)
+                ? enumInlineTarget
+                : temps.CreateTemp("enum", enumConstructOp.Result.Id, enumConstructOp.EnumTypeName, OwnershipFlags.None);
               var enumTypeDef = (MlirUnionType)module.TypeDefs[enumConstructOp.EnumTypeName];
               int maxPayload = GetMaxFlatPayloadSlots(enumTypeDef);
               int heapSize = 8 + maxPayload * 8;
@@ -717,7 +715,7 @@ public static partial class MaxonToStandardConversion {
             case MaxonStructLiteralOp structLitOp: {
               // Heap-allocate the struct and store each field via indirect stores.
               // If this literal is immediately assigned, use the target variable name for the heap pointer.
-              var tempName = structLiteralTargets.TryGetValue(structLitOp.Result.Id, out var inlineTarget)
+              var tempName = inlineTargets.TryGetValue(structLitOp.Result.Id, out var inlineTarget)
                 ? inlineTarget
                 : temps.CreateTemp("struct", structLitOp.Result.Id, structLitOp.TypeName, OwnershipFlags.None);
               var structType = (MlirStructType)module.TypeDefs[structLitOp.TypeName];
@@ -876,10 +874,10 @@ public static partial class MaxonToStandardConversion {
 
               // Orphan struct literal temps (__struct_N) need incref + scope cleanup when they
               // are not consumed by another construct that manages their lifetime:
-              //  - structLiteralTargets: inlined into a named variable (parser handles cleanup)
+              //  - inlineTargets: inlined into a named variable (parser handles cleanup)
               //  - structLitFieldValueIds: nested field value (parent field store handles incref)
               //  - structLitReturnIds: returned directly (LowerReturn handles incref + transfer)
-              if (!structLiteralTargets.ContainsKey(structLitOp.Result.Id)
+              if (!inlineTargets.ContainsKey(structLitOp.Result.Id)
                   && !structLitFieldValueIds.Contains(structLitOp.Result.Id)
                   && !structLitReturnIds.Contains(structLitOp.Result.Id)) {
                 // Orphan: not consumed by a named var. Incref to establish scope reference,
@@ -1638,7 +1636,8 @@ public static partial class MaxonToStandardConversion {
               LowerManagedMemSet(memSetOp, newBlock, valueMap, varTypes, structVarNames);
               break;
             case MaxonManagedMemCreateOp memCreateOp:
-              LowerManagedMemCreate(memCreateOp, newBlock, valueMap, varTypes, structVarNames, temps);
+              LowerManagedMemCreate(memCreateOp, newBlock, valueMap, varTypes, structVarNames, temps,
+                inlineTargets.GetValueOrDefault(memCreateOp.Result.Id));
               break;
             case MaxonManagedMemGrowOp memGrowOp:
               LowerManagedMemGrow(memGrowOp, newBlock, valueMap, varTypes, structVarNames);
@@ -1659,7 +1658,8 @@ public static partial class MaxonToStandardConversion {
               LowerManagedMemByteSet(byteSetOp, newBlock, valueMap, varTypes, structVarNames);
               break;
             case MaxonCStringToManagedOp fromCStringOp:
-              LowerCStringToManaged(fromCStringOp, newBlock, valueMap, varTypes, structVarNames, temps);
+              LowerCStringToManaged(fromCStringOp, newBlock, valueMap, varTypes, structVarNames, temps,
+                inlineTargets.GetValueOrDefault(fromCStringOp.Result.Id));
               break;
             case MaxonManagedToCStringOp toCStringOp:
               LowerManagedToCString(toCStringOp, newBlock, valueMap, varTypes, structVarNames);
@@ -1674,24 +1674,28 @@ public static partial class MaxonToStandardConversion {
               LowerPanic(panicOp, newBlock, result);
               break;
             case MaxonStringLiteralOp stringLitOp:
-              LowerStringLiteral(stringLitOp, newBlock, varTypes, structVarNames, result, temps);
+              LowerStringLiteral(stringLitOp, newBlock, varTypes, structVarNames, result, temps,
+                inlineTargets.GetValueOrDefault(stringLitOp.Result.Id));
               break;
             case MaxonByteStringLiteralOp byteStringLitOp:
-              LowerByteStringLiteral(byteStringLitOp, newBlock, varTypes, structVarNames, result, temps);
+              LowerByteStringLiteral(byteStringLitOp, newBlock, varTypes, structVarNames, result, temps,
+                inlineTargets.GetValueOrDefault(byteStringLitOp.Result.Id));
               break;
             case MaxonCharLiteralOp charLitOp:
-              LowerCharLiteral(charLitOp, newBlock, varTypes, structVarNames, result, temps);
+              LowerCharLiteral(charLitOp, newBlock, varTypes, structVarNames, result, temps,
+                inlineTargets.GetValueOrDefault(charLitOp.Result.Id));
               break;
             case MaxonStringInterpOp interpOp:
-              LowerStringInterp(interpOp, newBlock, valueMap, varTypes, structVarNames, result, temps);
+              LowerStringInterp(interpOp, newBlock, valueMap, varTypes, structVarNames, result, temps,
+                inlineTargets.GetValueOrDefault(interpOp.Result.Id));
               break;
             case MaxonManagedMemConcatOp concatOp:
               LowerManagedMemConcat(concatOp, newBlock, varTypes, structVarNames, temps,
-                managedOpTargets.GetValueOrDefault(concatOp.Result.Id));
+                inlineTargets.GetValueOrDefault(concatOp.Result.Id));
               break;
             case MaxonManagedMemSliceOp sliceOp:
               LowerManagedMemSlice(sliceOp, newBlock, valueMap, varTypes, structVarNames, temps,
-                managedOpTargets.GetValueOrDefault(sliceOp.Result.Id));
+                inlineTargets.GetValueOrDefault(sliceOp.Result.Id));
               break;
             case MaxonMakeCharFromBytesOp makeCharOp:
               LowerMakeCharFromBytes(makeCharOp, newBlock, valueMap, varTypes, structVarNames, temps);
@@ -1732,7 +1736,8 @@ public static partial class MaxonToStandardConversion {
             }
             // Chain (doubly-linked list) operations
             case MaxonChainCreateOp chainCreateOp:
-              LowerChainCreate(chainCreateOp, newBlock, varTypes, structVarNames, structValueTypes, temps);
+              LowerChainCreate(chainCreateOp, newBlock, varTypes, structVarNames, structValueTypes, temps,
+                inlineTargets.GetValueOrDefault(chainCreateOp.Result.Id));
               break;
             case MaxonChainInsertValueOp chainInsertOp:
               LowerChainInsertValue(chainInsertOp, newBlock, valueMap, varTypes, structVarNames, structValueTypes, module.TypeDefs, temps);

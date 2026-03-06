@@ -246,7 +246,8 @@ public static partial class MaxonToStandardConversion {
 	  Dictionary<MaxonValue, StdValue> valueMap,
 	  Dictionary<string, string> varTypes,
 	  Dictionary<int, string> structVarNames,
-	  VarRegistry temps) {
+	  VarRegistry temps,
+	  string? inlineTarget = null) {
 		var count = (StdI64)valueMap[op.Count];
 		// Compute byte size = count * elementSize
 		var sizeOp = new StdConstI64Op(op.ElementSize);
@@ -254,7 +255,8 @@ public static partial class MaxonToStandardConversion {
 		var byteSizeOp = new StdMulI64Op(count, sizeOp.Result);
 		block.AddOp(byteSizeOp);
 		// Allocate __ManagedMemory struct, then raw buffer
-		var tempName = temps.CreateTemp("managed_create", op.Result.Id, "__ManagedMemory", OwnershipFlags.None);
+		var tempName = inlineTarget
+			?? temps.CreateTemp("managed_create", op.Result.Id, "__ManagedMemory", OwnershipFlags.None);
 		var managedPtr = EmitAlloc(block, 32, "__ManagedMemory", scopeName: _currentFuncName);
 		EmitStore(block, managedPtr, tempName, varTypes);
 		var allocResult = new StdI64(MlirContext.Current.NextId());
@@ -498,7 +500,8 @@ public static partial class MaxonToStandardConversion {
 	  Dictionary<MaxonValue, StdValue> valueMap,
 	  Dictionary<string, string> varTypes,
 	  Dictionary<int, string> structVarNames,
-	  VarRegistry temps) {
+	  VarRegistry temps,
+	  string? inlineTarget = null) {
 		var cstrPtr = (StdI64)valueMap[op.CstrPtr];
 
 		// Get string length
@@ -514,7 +517,8 @@ public static partial class MaxonToStandardConversion {
 		// Allocate __ManagedMemory struct, then raw buffer.
 		// Allocate strlen+1 bytes so the null terminator is within the allocation,
 		// preventing out-of-bounds reads in maxon_to_cstring.
-		var tempName = temps.CreateTemp("from_cstring", op.Result.Id, "__ManagedMemory", OwnershipFlags.None);
+		var tempName = inlineTarget
+			?? temps.CreateTemp("from_cstring", op.Result.Id, "__ManagedMemory", OwnershipFlags.None);
 		var managedPtr = EmitAlloc(block, 32, "__ManagedMemory", scopeName: _currentFuncName);
 		EmitStore(block, managedPtr, tempName, varTypes);
 

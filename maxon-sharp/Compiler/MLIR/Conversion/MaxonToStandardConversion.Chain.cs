@@ -42,7 +42,8 @@ public static partial class MaxonToStandardConversion {
     Dictionary<string, string> varTypes,
     Dictionary<int, string> structVarNames,
     Dictionary<int, string> structValueTypes,
-    VarRegistry temps) {
+    VarRegistry temps,
+    string? inlineTarget = null) {
 
     // Use the concrete alias name (e.g., "TokenChain") so the destructor knows whether elements are managed
     var chainTypeName = op.Result.TypeName is "__Chain" ? "__Chain" : op.Result.TypeName;
@@ -56,7 +57,8 @@ public static partial class MaxonToStandardConversion {
     block.AddOp(new StdStoreIndirectOp(zero.Result, chainPtr, ChainCountOffset, MlirType.I64));
     block.AddOp(new StdStoreIndirectOp(zero.Result, chainPtr, ChainCursorOffset, MlirType.I64));
 
-    var tempName = temps.CreateTemp("chain", op.Result.Id, op.Result.TypeName, OwnershipFlags.None);
+    var tempName = inlineTarget
+      ?? temps.CreateTemp("chain", op.Result.Id, op.Result.TypeName, OwnershipFlags.None);
     EmitStore(block, chainPtr, tempName, varTypes);
     structVarNames[op.Result.Id] = tempName;
     structValueTypes[op.Result.Id] = op.Result.TypeName;
