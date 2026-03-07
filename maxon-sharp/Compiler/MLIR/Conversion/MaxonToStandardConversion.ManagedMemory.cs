@@ -236,6 +236,8 @@ public static partial class MaxonToStandardConversion {
 	  Dictionary<string, string> varTypes,
 	  VarRegistry temps,
 	  string? inlineTarget = null) {
+		if (op.ElementSize <= 0)
+			throw new InvalidOperationException($"MaxonManagedMemCreateOp has invalid element_size={op.ElementSize} in func {_currentFuncName}");
 		var count = (StdI64)valueMap[op.Count];
 		// Compute byte size = count * elementSize
 		var sizeOp = new StdConstI64Op(op.ElementSize);

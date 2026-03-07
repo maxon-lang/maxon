@@ -673,12 +673,18 @@ public static class MonomorphizationPass {
       case MaxonManagedMemShiftOp ms:
         return new MaxonManagedMemShiftOp(mapValue(ms.ManagedStruct), mapValue(ms.Index), mapValue(ms.Count), ms.ShiftRight);
       case MaxonManagedMemConcatOp mc: {
-        var cloned = new MaxonManagedMemConcatOp(mapValue(mc.Lhs), mapValue(mc.Rhs));
+        var cloned = new MaxonManagedMemConcatOp(mapValue(mc.Lhs), mapValue(mc.Rhs)) {
+          IsStructElement = mc.IsStructElement,
+          TypeParamName = mc.TypeParamName
+        };
         valueMap[mc.Result.Id] = cloned.Result;
         return cloned;
       }
       case MaxonManagedMemSliceOp sl: {
-        var cloned = new MaxonManagedMemSliceOp(mapValue(sl.Managed), mapValue(sl.Start), mapValue(sl.End));
+        var cloned = new MaxonManagedMemSliceOp(mapValue(sl.Managed), mapValue(sl.Start), mapValue(sl.End)) {
+          IsStructElement = sl.IsStructElement,
+          TypeParamName = sl.TypeParamName
+        };
         valueMap[sl.Result.Id] = cloned.Result;
         return cloned;
       }

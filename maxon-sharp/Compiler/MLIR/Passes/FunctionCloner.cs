@@ -358,8 +358,32 @@ internal class FunctionCloner {
         };
       }
       case MaxonManagedMemShiftOp ms: return new MaxonManagedMemShiftOp(MapValue(ms.ManagedStruct), MapValue(ms.Index), MapValue(ms.Count), ms.ShiftRight);
-      case MaxonManagedMemConcatOp mc: { var c = new MaxonManagedMemConcatOp(MapValue(mc.Lhs), MapValue(mc.Rhs)); RegisterResult(mc.Result, c.Result); return c; }
-      case MaxonManagedMemSliceOp sl: { var c = new MaxonManagedMemSliceOp(MapValue(sl.Managed), MapValue(sl.Start), MapValue(sl.End)); RegisterResult(sl.Result, c.Result); return c; }
+      case MaxonManagedMemConcatOp mc: {
+        var isHeapPtrElem = mc.IsStructElement;
+        if (mc.TypeParamName != null && _typeSubstitution.TryGetValue(mc.TypeParamName, out var concatElemType))
+          isHeapPtrElem = concatElemType is MlirStructType || concatElemType is MlirUnionType { HasAssociatedValues: true };
+        var c = new MaxonManagedMemConcatOp(MapValue(mc.Lhs), MapValue(mc.Rhs)) {
+          IsStructElement = isHeapPtrElem,
+          TypeParamName = mc.TypeParamName
+        };
+        if (isHeapPtrElem && IsManagedMemoryType(mc.Result.TypeName) && _concreteElementType != null)
+          c.Result.TypeName = $"__ManagedMemory_{_concreteElementType.Name}";
+        RegisterResult(mc.Result, c.Result);
+        return c;
+      }
+      case MaxonManagedMemSliceOp sl: {
+        var isHeapPtrElem = sl.IsStructElement;
+        if (sl.TypeParamName != null && _typeSubstitution.TryGetValue(sl.TypeParamName, out var sliceElemType))
+          isHeapPtrElem = sliceElemType is MlirStructType || sliceElemType is MlirUnionType { HasAssociatedValues: true };
+        var c = new MaxonManagedMemSliceOp(MapValue(sl.Managed), MapValue(sl.Start), MapValue(sl.End)) {
+          IsStructElement = isHeapPtrElem,
+          TypeParamName = sl.TypeParamName
+        };
+        if (isHeapPtrElem && IsManagedMemoryType(sl.Result.TypeName) && _concreteElementType != null)
+          c.Result.TypeName = $"__ManagedMemory_{_concreteElementType.Name}";
+        RegisterResult(sl.Result, c.Result);
+        return c;
+      }
 
       // Runtime and function ops
       case MaxonCallRuntimeOp cr: { var na = cr.Args.Select(MapValue).ToList(); var c = new MaxonCallRuntimeOp(cr.FunctionName, na, cr.Result != null); if (cr.Result != null && c.Result != null) RegisterResult(cr.Result, c.Result); return c; }

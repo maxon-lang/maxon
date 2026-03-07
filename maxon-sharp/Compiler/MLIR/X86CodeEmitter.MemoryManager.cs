@@ -133,6 +133,7 @@ public partial class X86CodeEmitter {
     EmitMmDecref();
 
     EmitMmDecrefManagedElements();
+    EmitMmIncrefManagedElements();
     EmitMmClearManagedElements();
     EmitMmLeakCheck();
     EmitMmValidatePtr();
@@ -682,6 +683,64 @@ public partial class X86CodeEmitter {
     EmitJmp("mm_decref_managed_elements_loop");
 
     DefineLabel("mm_decref_managed_elements_done");
+    EmitRuntimeFunctionEnd();
+  }
+
+  // mm_incref_managed_elements(managed_ptr_in_rcx) -> void
+  // Increfs every struct element pointer stored in a __ManagedMemory buffer.
+  // Called after concat/memcpy to ensure copied element pointers have correct refcounts.
+  // Args: rcx = heap pointer to __ManagedMemory struct
+  // __ManagedMemory layout: [+0 buffer(ptr), +8 length(i64), +16 capacity(i64), +24 element_size(i64)]
+  private void EmitMmIncrefManagedElements() {
+    // Stack: [rbp-8]=managed_ptr, [rbp-16]=buffer, [rbp-24]=length, [rbp-32]=index (loop counter)
+    EmitRuntimeFunctionStart("mm_incref_managed_elements", 1, 0x50);
+
+    EmitMovMemReg(-0x08, X86Register.Rcx, 8); // [rbp-8] = managed_ptr
+
+    // Load buffer pointer from managed_ptr[0]
+    EmitBytes(0x48, 0x8B, 0x01); // MOV rax, [rcx] -- managed_ptr->buffer
+    EmitMovMemReg(-0x10, X86Register.Rax, 8); // [rbp-16] = buffer
+
+    // Load length from managed_ptr[8]
+    EmitMovRegMem(X86Register.Rax, -0x08, 8); // rax = managed_ptr
+    EmitBytes(0x48, 0x8B, 0x40, 0x08); // MOV rax, [rax+8] -- managed_ptr->length
+    EmitMovMemReg(-0x18, X86Register.Rax, 8); // [rbp-24] = length
+
+    // If length == 0, nothing to incref
+    EmitBytes(0x48, 0x85, 0xC0); // TEST rax, rax
+    EmitJcc("z", "mm_incref_managed_elements_done");
+
+    // index = 0
+    EmitMovRegImm(X86Register.Rax, 0);
+    EmitMovMemReg(-0x20, X86Register.Rax, 8); // [rbp-32] = 0
+
+    DefineLabel("mm_incref_managed_elements_loop");
+    // if index >= length, done
+    EmitMovRegMem(X86Register.Rax, -0x20, 8); // rax = index
+    EmitMovRegMem(X86Register.Rcx, -0x18, 8); // rcx = length
+    EmitCmpRegReg(X86Register.Rax, X86Register.Rcx);
+    EmitJcc("ae", "mm_incref_managed_elements_done"); // unsigned >=
+
+    // Load element ptr: buffer[index * 8]
+    EmitMovRegMem(X86Register.Rax, -0x20, 8); // rax = index
+    EmitMovRegMem(X86Register.Rcx, -0x10, 8); // rcx = buffer
+    // element_ptr = buffer + index * 8
+    EmitBytes(0x48, 0x8B, 0x0C, 0xC1); // MOV rcx, [rcx + rax*8]
+    // Null guard: buffer slots can be null
+    EmitBytes(0x48, 0x85, 0xC9); // TEST rcx, rcx
+    EmitJcc("z", "mm_incref_managed_elements_skip");
+    // mm_incref(element_ptr)
+    if (Compiler.MmTrace) EmitLeaRegSymdataRel(X86Register.Rdx, "__mm_scope_managed_elements");
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_incref")); EmitDword(0);
+    DefineLabel("mm_incref_managed_elements_skip");
+
+    // index++
+    EmitMovRegMem(X86Register.Rax, -0x20, 8);
+    EmitAddRegImm(X86Register.Rax, 1);
+    EmitMovMemReg(-0x20, X86Register.Rax, 8);
+    EmitJmp("mm_incref_managed_elements_loop");
+
+    DefineLabel("mm_incref_managed_elements_done");
     EmitRuntimeFunctionEnd();
   }
 

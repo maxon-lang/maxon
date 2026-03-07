@@ -18,6 +18,14 @@ export function parse(project Project, tokens TokenArray, filePath String) retur
     logDebug(LogCategory.parser, message: "Starting parser")
 
     var pos = 0
+    // Reset block → function → module (children before parents) to prevent
+    // use-after-free when parse is called multiple times. The old module owns
+    // old functions which own old blocks; if we freed the module first, its
+    // cascade would double-free blocks/functions still held by project fields.
+    let dummyBlock = createMlirBlock(0, label: b"")
+    let dummyFunc = createMlirFunction(b"", returnType: ByteArray{})
+    project.currentBlock = dummyBlock
+    project.currentFunction = dummyFunc
     project.currentModule = createMlirModule()
     pos = skipNewlines(tokens, startPos: pos)
 

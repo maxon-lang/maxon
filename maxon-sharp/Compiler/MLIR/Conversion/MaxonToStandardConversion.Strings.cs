@@ -733,9 +733,10 @@ public static partial class MaxonToStandardConversion {
 		block.AddOp(allocSizeOp);
 
 		// Heap-allocate __ManagedMemory, then buffer as raw allocation
+		var managedTypeName = op.Result.TypeName;
 		var tempName = inlineTarget
-			?? temps.CreateTemp("concat", op.Result.Id, "__ManagedMemory", OwnershipFlags.None);
-		var concatPtr = (StdHeapPtr)EmitAlloc(block, 32, "__ManagedMemory", scopeName: _currentFuncName);
+			?? temps.CreateTemp("concat", op.Result.Id, managedTypeName, OwnershipFlags.None);
+		var concatPtr = (StdHeapPtr)EmitAlloc(block, 32, managedTypeName, scopeName: _currentFuncName);
 		EmitStore(block, concatPtr, tempName, varTypes);
 
 		var allocResult = new StdI64(MlirContext.Current.NextId());
@@ -755,6 +756,14 @@ public static partial class MaxonToStandardConversion {
 		EmitStructFieldStore(block, totalLenOp.Result, tempName, ManagedFieldLength, MlirType.I64, varTypes);
 		EmitStructFieldStore(block, totalLenOp.Result, tempName, ManagedFieldCapacity, MlirType.I64, varTypes);
 		EmitStructFieldStore(block, lhsElemSize, tempName, ManagedFieldElementSize, MlirType.I64, varTypes);
+
+		// For managed elements (structs, unions): incref each copied element.
+		// The memcpy above copied raw heap pointers without adjusting refcounts.
+		if (op.IsStructElement) {
+			var managedPtr = (StdI64)EmitLoad(block, tempName, varTypes);
+			block.AddOp(new StdCallRuntimeOp("mm_incref_managed_elements", [managedPtr], null));
+		}
+
 		valueMap[op.Result] = new StdHeapPtr(concatPtr.Id, concatPtr.TypeName, tempName);
 	}
 
@@ -802,9 +811,10 @@ public static partial class MaxonToStandardConversion {
 		block.AddOp(sliceBytesOp);
 
 		// Heap-allocate __ManagedMemory struct, then a new raw buffer
+		var managedTypeName = op.Result.TypeName;
 		var tempName = inlineTarget
-			?? temps.CreateTemp("slice", op.Result.Id, "__ManagedMemory", OwnershipFlags.None);
-		var slicePtr = (StdHeapPtr)EmitAlloc(block, 32, "__ManagedMemory", tag: "Slice", scopeName: _currentFuncName);
+			?? temps.CreateTemp("slice", op.Result.Id, managedTypeName, OwnershipFlags.None);
+		var slicePtr = (StdHeapPtr)EmitAlloc(block, 32, managedTypeName, tag: "Slice", scopeName: _currentFuncName);
 		EmitStore(block, slicePtr, tempName, varTypes);
 
 		var newBuffer = new StdI64(MlirContext.Current.NextId());
@@ -817,6 +827,14 @@ public static partial class MaxonToStandardConversion {
 		EmitStructFieldStore(block, sliceLenOp.Result, tempName, ManagedFieldLength, MlirType.I64, varTypes);
 		EmitStructFieldStore(block, sliceLenOp.Result, tempName, ManagedFieldCapacity, MlirType.I64, varTypes);
 		EmitStructFieldStore(block, srcElemSize, tempName, ManagedFieldElementSize, MlirType.I64, varTypes);
+
+		// For managed elements (structs, unions): incref each copied element.
+		// The memcpy above copied raw heap pointers without adjusting refcounts.
+		if (op.IsStructElement) {
+			var managedPtr = (StdI64)EmitLoad(block, tempName, varTypes);
+			block.AddOp(new StdCallRuntimeOp("mm_incref_managed_elements", [managedPtr], null));
+		}
+
 		valueMap[op.Result] = new StdHeapPtr(slicePtr.Id, slicePtr.TypeName, tempName);
 	}
 

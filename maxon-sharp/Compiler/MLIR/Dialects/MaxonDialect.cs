@@ -953,6 +953,8 @@ public class MaxonManagedMemConcatOp(MaxonValue lhs, MaxonValue rhs) : MaxonOp {
   public override string Mnemonic => "maxon.managed_mem_concat";
   public MaxonValue Lhs { get; } = lhs;
   public MaxonValue Rhs { get; } = rhs;
+  public bool IsStructElement { get; init; }
+  public string? TypeParamName { get; init; }
   public MaxonStruct Result { get; } = new MaxonStruct(MlirContext.Current.NextId(), "__ManagedMemory");
   public override IReadOnlyList<string> PrintableOperands => [Lhs.ToString(), Rhs.ToString()];
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
@@ -973,6 +975,8 @@ public class MaxonManagedMemSliceOp(MaxonValue managed, MaxonValue start, MaxonV
   public MaxonValue Managed { get; } = managed;
   public MaxonValue Start { get; } = start;
   public MaxonValue End { get; } = end;
+  public bool IsStructElement { get; init; }
+  public string? TypeParamName { get; init; }
   public MaxonStruct Result { get; } = new MaxonStruct(MlirContext.Current.NextId(), "__ManagedMemory");
   public override IReadOnlyList<string> PrintableOperands => [Managed.ToString(), Start.ToString(), End.ToString()];
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];

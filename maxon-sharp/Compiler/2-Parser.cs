@@ -6212,6 +6212,10 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
         return (MaxonValueKind.TypeParameter, tpt.ParameterName);
       return (elemType.ToValueKind(), null);
     }
+    // For bare __ManagedMemory (no Element type param), don't fall back to enclosing type —
+    // the enclosing type's Element (e.g., String's Element=Character from Iterable) is unrelated.
+    if (ResolveBaseTypeName(structTypeName) == "__ManagedMemory")
+      return (MaxonValueKind.Integer, null);
     // Fallback: use enclosing type's "Element" param (existing behavior)
     var kind = GetElementKind();
     if (kind == MaxonValueKind.TypeParameter)
@@ -6740,7 +6744,12 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
         TrySkipArgLabel();
         var other = ResolveExprValue(ParseExpression());
         Expect(TokenType.RightParen);
-        var op = new MaxonManagedMemConcatOp(selfValue, other);
+        var (elementKind, typeParamName) = GetManagedMemElementKind(structTypeName);
+        var isStructElem = elementKind == MaxonValueKind.Struct || elementKind == MaxonValueKind.Enum;
+        var op = new MaxonManagedMemConcatOp(selfValue, other) {
+          IsStructElement = isStructElem,
+          TypeParamName = typeParamName
+        };
         _currentBlock!.AddOp(op);
         EmitLiteralTempAssign(op.Result);
         return (true, op.Result);
@@ -6752,7 +6761,12 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
         TrySkipArgLabel();
         var end = ResolveExprValue(ParseExpression());
         Expect(TokenType.RightParen);
-        var op = new MaxonManagedMemSliceOp(selfValue, start, end);
+        var (elementKind, typeParamName) = GetManagedMemElementKind(structTypeName);
+        var isStructElem = elementKind == MaxonValueKind.Struct || elementKind == MaxonValueKind.Enum;
+        var op = new MaxonManagedMemSliceOp(selfValue, start, end) {
+          IsStructElement = isStructElem,
+          TypeParamName = typeParamName
+        };
         _currentBlock!.AddOp(op);
         EmitLiteralTempAssign(op.Result);
         return (true, op.Result);
@@ -10913,6 +10927,8 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
           if (typeParams.TryGetValue("Element", out var elemType)) {
             value = elemType.ElementSize;
           }
+          // element_size=0 is expected in generic context (type params unresolved);
+          // FunctionCloner fixes it during monomorphization.
         }
         var lit = new MaxonLiteralOp(value);
         _currentBlock!.AddOp(lit);
