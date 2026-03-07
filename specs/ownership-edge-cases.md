@@ -2747,7 +2747,7 @@ end 'main'
 30
 ```
 
-<!-- disabled-test: rc-array-of-structs-literal-no-leak -->
+<!-- test: rc-array-of-structs-literal-no-leak -->
 Creating an array literal of structs must not leak. All struct elements must be decreffed when the array is freed.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -2832,7 +2832,7 @@ end 'main'
 45
 ```
 
-<!-- disabled-test: rc-struct-field-overwrite-in-if-no-leak -->
+<!-- test: rc-struct-field-overwrite-in-if-no-leak -->
 Assigning a new struct to a struct field inside an if block must decref the old value and not leak the old struct's managed children (e.g., arrays).
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -2868,7 +2868,7 @@ end 'main'
 3
 ```
 
-<!-- disabled-test: rc-map-string-keys-no-leak -->
+<!-- test: rc-map-string-keys-no-leak -->
 A map with string keys must free all string key allocations when the map is destroyed. The string used as a key is increffed into the map's key array; when the map is freed, these strings must be decreffed.
 ```maxon
 function main() returns ExitCode
@@ -2880,7 +2880,7 @@ end 'main'
 42
 ```
 
-<!-- disabled-test: rc-map-string-keys-multiple-no-leak -->
+<!-- test: rc-map-string-keys-multiple-no-leak -->
 A map with multiple string keys must free all key and value allocations. Each insert increfs the key string; the map destructor must decref all of them.
 ```maxon
 function main() returns ExitCode
@@ -2983,7 +2983,7 @@ end 'main'
 60
 ```
 
-<!-- disabled-test: rc-array-append-no-leak -->
+<!-- test: rc-array-append-no-leak -->
 Array.append must not leak. Appending one array to another must properly manage the element storage and not leak the source array's data.
 ```maxon
 function main() returns ExitCode
@@ -3029,7 +3029,7 @@ end 'main'
 3
 ```
 
-<!-- disabled-test: rc-custom-hashable-map-key-no-leak -->
+<!-- test: rc-custom-hashable-map-key-no-leak -->
 A map using a custom Hashable struct as key must not leak. The map's internal arrays (keys, values, states) and all managed elements must be freed.
 ```maxon
 typealias Integer = int(i64.min to i64.max)

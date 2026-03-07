@@ -13,6 +13,7 @@ internal class FunctionCloner {
   private readonly string _concreteTypeName;
   private readonly TypeSubstitution _typeSubstitution;
   private readonly Dictionary<string, TypeAliasInfo> _typeAliasSources;
+  private readonly Dictionary<string, MlirType> _typeDefs;
 
   // Cloning state
   private readonly Dictionary<int, MaxonValue> _valueMap = [];
@@ -33,11 +34,13 @@ internal class FunctionCloner {
       MlirFunction<MaxonOp> sourceFunc,
       string concreteTypeName,
       TypeSubstitution typeSubstitution,
-      Dictionary<string, TypeAliasInfo> typeAliasSources) {
+      Dictionary<string, TypeAliasInfo> typeAliasSources,
+      Dictionary<string, MlirType> typeDefs) {
     _sourceFunc = sourceFunc;
     _concreteTypeName = concreteTypeName;
     _typeSubstitution = typeSubstitution;
     _typeAliasSources = typeAliasSources;
+    _typeDefs = typeDefs;
 
     // Derive element-polymorphic param indices from function signature types
     for (int i = 0; i < sourceFunc.ParamTypes.Count; i++) {
@@ -141,10 +144,30 @@ internal class FunctionCloner {
     var extraOps = new List<MaxonOp>();
     foreach (var block in _sourceFunc.Body.Blocks) {
       var newBlock = newFunc.Body.AddBlock(block.Name);
+      var ops = block.Operations;
 
-      foreach (var op in block.Operations) {
+      for (int opIdx = 0; opIdx < ops.Count; opIdx++) {
+        var op = ops[opIdx];
         extraOps.Clear();
-        var clonedOp = CloneOp(op, extraOps);
+
+        // For struct literals that are fields of a following wrapper struct,
+        // pass the wrapper so the correct concrete type can be derived from
+        // the wrapper's field definitions when the substitution map is ambiguous.
+        MaxonOp clonedOp;
+        if (op is MaxonStructLiteralOp innerLit) {
+          MaxonStructLiteralOp? nextWrapper = null;
+          for (int j = opIdx + 1; j < ops.Count; j++) {
+            if (ops[j] is MaxonStructLiteralOp candidate && candidate != innerLit) {
+              nextWrapper = candidate;
+              break;
+            }
+            if (ops[j] is not MaxonLiteralOp) break;
+          }
+          clonedOp = CloneStructLiteralOp(innerLit, extraOps, nextWrapper);
+        } else {
+          clonedOp = CloneOp(op, extraOps);
+        }
+
         foreach (var extra in extraOps) {
           newBlock.AddOp(extra);
         }
@@ -152,7 +175,8 @@ internal class FunctionCloner {
       }
     }
 
-    // Post-processing: fix __ManagedMemory element_size for multi-parameter generic types.
+    // Post-processing: fix __ManagedMemory element_size for multi-parameter generic types
+    // where a single Element substitution doesn't apply uniformly.
     if (_concreteElementType == null && _typeSubstitution.Count > 2) {
       PatchManagedMemoryElementSizes(newFunc);
     }
@@ -611,14 +635,14 @@ internal class FunctionCloner {
     return cloned;
   }
 
-  private MaxonStructLiteralOp CloneStructLiteralOp(MaxonStructLiteralOp structLit, List<MaxonOp> extraOps) {
+  private MaxonStructLiteralOp CloneStructLiteralOp(MaxonStructLiteralOp structLit, List<MaxonOp> extraOps, MaxonStructLiteralOp? nextWrapperStructLit = null) {
     var newFieldValues = structLit.FieldValues.Select(fv => (fv.FieldName, MapValue(fv.Value))).ToList();
 
     // For __ManagedMemory structs, substitute element_size based on the Element type substitution.
     if (IsManagedMemoryType(structLit.TypeName) && _concreteElementType != null) {
       for (int i = 0; i < newFieldValues.Count; i++) {
         if (newFieldValues[i].FieldName == "element_size") {
-          int elementSize = _concreteElementType?.ElementSize ?? 8;
+          int elementSize = _concreteElementType.ElementSize;
           var elementSizeLitOp = new MaxonLiteralOp((long)elementSize);
           extraOps.Add(elementSizeLitOp);
           newFieldValues[i] = ("element_size", elementSizeLitOp.Result);
@@ -627,7 +651,31 @@ internal class FunctionCloner {
       }
     }
 
-    var cloned = new MaxonStructLiteralOp(SubName(structLit.TypeName), newFieldValues) {
+    // Resolve the type name. When the substitution map doesn't resolve it (ambiguous
+    // or missing mapping), derive the correct concrete type from the following wrapper
+    // struct's field definitions. This handles cases like Map where KeyArray and ValueArray
+    // both have an ElementMemory field that resolves to different concrete types.
+    var resolvedTypeName = SubName(structLit.TypeName);
+    if (resolvedTypeName == structLit.TypeName && nextWrapperStructLit != null) {
+      var wrapperTypeName = SubName(nextWrapperStructLit.TypeName);
+      if (_typeDefs.TryGetValue(wrapperTypeName, out var wrapperDef)
+          && wrapperDef is MlirStructType wrapperStruct) {
+        // Find the field in the source type that corresponds to this struct literal
+        var wrapperSourceName = _typeAliasSources.TryGetValue(wrapperTypeName, out var wai)
+          ? wai.SourceTypeName : wrapperTypeName;
+        if (_typeDefs.TryGetValue(wrapperSourceName, out var wrapperSourceDef)
+            && wrapperSourceDef is MlirStructType wrapperSourceStruct) {
+          for (int fi = 0; fi < wrapperSourceStruct.Fields.Count && fi < wrapperStruct.Fields.Count; fi++) {
+            if (wrapperSourceStruct.Fields[fi].Type.Name == structLit.TypeName) {
+              resolvedTypeName = wrapperStruct.Fields[fi].Type.Name;
+              break;
+            }
+          }
+        }
+      }
+    }
+
+    var cloned = new MaxonStructLiteralOp(resolvedTypeName, newFieldValues) {
       ArrayLiteralTag = structLit.ArrayLiteralTag,
       ArrayLiteralCount = structLit.ArrayLiteralCount
     };

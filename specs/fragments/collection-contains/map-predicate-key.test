@@ -502,6 +502,26 @@ module {
     x86.epilogue
     x86.ret
   }
+  func @__destruct___ManagedMemory_i64(ptr: i64) {
+  entry:
+    x86.prologue stack_size=16
+    x86.mov [rbp-8], rcx
+    x86.mov rax, [rbp-8]
+    x86.mov rcx, [rax+16]
+    x86.xor rdx, rdx
+    x86.cmp rcx, rdx
+    x86.je __destruct___ManagedMemory_i64.skip_buf_0
+  free_buf_0:
+    x86.mov rax, [rbp-8]
+    x86.mov rcx, [rax+0]
+    x86.call mm_raw_free
+    x86.jmp __destruct___ManagedMemory_i64.skip_buf_0
+  skip_buf_0:
+    x86.jmp __destruct___ManagedMemory_i64.done
+  done:
+    x86.epilogue
+    x86.ret
+  }
   func @__destruct_Array_i64(ptr: i64) {
   entry:
     x86.prologue stack_size=16

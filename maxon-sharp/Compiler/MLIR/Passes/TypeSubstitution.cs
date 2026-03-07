@@ -233,8 +233,12 @@ internal class TypeSubstitution {
     // Phase 2: resolve aliases that are field types of resolved inner types.
     // E.g., if KeyArray resolved to Array_i64, look up Array (source) and Array_i64 (concrete),
     // and map field type name differences: ElementMemory → __ManagedMemory_i64.
+    // When multiple inner aliases map the same field type to different concrete types
+    // (e.g., KeyArray's ElementMemory → __ManagedMemory_String vs ValueArray's ElementMemory →
+    // __ManagedMemory_i64), the mapping is ambiguous and must be excluded.
     if (scopedNames != null) {
       var extraMappings = new Dictionary<string, MlirType>();
+      var conflicted = new HashSet<string>();
       foreach (var (aliasName, resolvedType) in map) {
         if (resolvedType is not MlirStructType resolvedStruct) continue;
         // Find the source type for this alias
@@ -249,12 +253,19 @@ internal class TypeSubstitution {
           var oldFieldTypeName = sourceStruct.Fields[i].Type.Name;
           var newFieldType = concreteStruct.Fields[i].Type;
           if (oldFieldTypeName != newFieldType.Name && !map.ContainsKey(oldFieldTypeName)) {
-            extraMappings.TryAdd(oldFieldTypeName, newFieldType);
+            if (extraMappings.TryGetValue(oldFieldTypeName, out var existing)) {
+              if (existing.Name != newFieldType.Name)
+                conflicted.Add(oldFieldTypeName);
+            } else {
+              extraMappings[oldFieldTypeName] = newFieldType;
+            }
           }
         }
       }
-      foreach (var (k, v) in extraMappings)
-        map.TryAdd(k, v);
+      foreach (var (k, v) in extraMappings) {
+        if (!conflicted.Contains(k))
+          map.TryAdd(k, v);
+      }
     }
   }
 
