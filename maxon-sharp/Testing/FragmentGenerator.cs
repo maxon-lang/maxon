@@ -59,21 +59,6 @@ public static partial class FragmentGenerator {
   }
 
   /// <summary>
-  /// Write a file with retry logic for transient Windows file locking errors
-  /// (e.g., antivirus or search indexer briefly memory-mapping the file).
-  /// </summary>
-  private static void WriteFileWithRetry(string path, string content, int maxRetries = 3) {
-    for (int attempt = 0; attempt <= maxRetries; attempt++) {
-      try {
-        File.WriteAllText(path, content);
-        return;
-      } catch (IOException) when (attempt < maxRetries) {
-        Thread.Sleep(50 * (attempt + 1));
-      }
-    }
-  }
-
-  /// <summary>
   /// Delete the .spec_count flag file (on generation failure).
   /// </summary>
   private static void DeleteSpecCountFlag(string fragmentDir) {
@@ -94,16 +79,16 @@ public static partial class FragmentGenerator {
   }
 
   /// <summary>
-  /// Generate fragment files from all specs in the given directory.
+  /// Prepare work items from spec files. Parses specs, creates directories, checks
+  /// staleness, and returns work items for the unified test pipeline.
+  /// Does NOT compile anything — compilation happens in worker threads.
   /// </summary>
-  /// <param name="specDir">Directory containing spec files</param>
-  /// <param name="fragmentDir">Directory to output fragment files</param>
-  /// <param name="force">Force regeneration even if up to date</param>
-  /// <returns>Result with number of fragments generated and error count</returns>
-  public static FragmentGenerationResult GenerateFragments(string specDir, string fragmentDir, bool force = false, string? filter = null) {
+  public static PrepareResult PrepareWorkItems(string specDir, string fragmentDir, bool force = false, string? filter = null) {
+    var errors = new List<string>();
+
     if (!Directory.Exists(specDir)) {
-      Logger.Error(LogCategory.Testing, $"Spec directory not found: {specDir}");
-      return new FragmentGenerationResult(0, 0, 1);
+      errors.Add($"Spec directory not found: {specDir}");
+      return new PrepareResult([], 0, errors);
     }
 
     Directory.CreateDirectory(fragmentDir);
@@ -120,22 +105,17 @@ public static partial class FragmentGenerator {
       force = true;
     }
 
-    var generated = 0;
-    var errors = new System.Collections.Concurrent.ConcurrentBag<string>();
-    var workerCount = Math.Max(1, Environment.ProcessorCount / 2);
     var compilerMtime = GetCompilerMtime();
 
     // Check for duplicate test names within specs
     foreach (var spec in specs) {
       var dupes = spec.Tests.GroupBy(t => t.Name).Where(g => g.Count() > 1).Select(g => g.Key).ToList();
-      if (dupes.Count > 0) {
-        foreach (var dupe in dupes) {
-          errors.Add($"Duplicate test name '{dupe}' in {spec.FilePath}");
-        }
+      foreach (var dupe in dupes) {
+        errors.Add($"Duplicate test name '{dupe}' in {spec.FilePath}");
       }
     }
-    if (!errors.IsEmpty) {
-      return new FragmentGenerationResult(0, totalTests, errors.Count);
+    if (errors.Count > 0) {
+      return new PrepareResult([], totalTests, errors);
     }
 
     // Pre-create all spec fragment directories
@@ -144,60 +124,44 @@ public static partial class FragmentGenerator {
       Directory.CreateDirectory(Path.Combine(fragmentDir, specName));
     }
 
-    // Flatten to individual (spec, test) work items for balanced parallelism
-    var workItems = specs.SelectMany(spec => spec.Tests.Select(test => (spec, test)));
-
-    Parallel.ForEach(workItems, new ParallelOptions { MaxDegreeOfParallelism = workerCount }, item => {
-      var (spec, test) = item;
+    // Build work items with staleness info
+    var workItems = new List<TestWorkItem>();
+    foreach (var spec in specs) {
       var specFile = new FileInfo(spec.FilePath);
       var specName = Path.GetFileNameWithoutExtension(spec.FilePath);
       var specFragmentDir = Path.Combine(fragmentDir, specName);
 
-      // Skip tests that don't match the filter (matched against specName/testName)
-      var testPath = $"{specName}/{test.Name}";
-      if (filter != null && !testPath.Contains(filter, StringComparison.OrdinalIgnoreCase)) {
-        return;
-      }
-
-      var fragmentPath = Path.Combine(specFragmentDir, $"{test.Name}.test");
-      var exePath = Path.Combine(specFragmentDir, $"{test.Name}.exe");
-      var fragmentFile = new FileInfo(fragmentPath);
-
-      // Skip if fragment is newer than both spec and compiler (unless force)
-      if (!force && fragmentFile.Exists &&
-        fragmentFile.LastWriteTimeUtc > specFile.LastWriteTimeUtc &&
-        fragmentFile.LastWriteTimeUtc > compilerMtime) {
-        return;
-      }
-
-      try {
-        // Pass absolute path - CompileError.Format() will make it relative to ProjectRoot
-        var absolutePath = Path.GetFullPath(fragmentPath);
-        var (content, error) = GenerateFragmentContent(test, exePath, absolutePath);
-        if (error != null) {
-          errors.Add($"Error compiling 'specs/fragments/{specName}/{test.Name}.test':\n{error}");
+      foreach (var test in spec.Tests) {
+        var testPath = $"{specName}/{test.Name}";
+        if (filter != null && !testPath.Contains(filter, StringComparison.OrdinalIgnoreCase)) {
+          continue;
         }
-        WriteFileWithRetry(fragmentPath, content.Replace("\r\n", "\n").Replace("\r", "\n"));
-        Interlocked.Increment(ref generated);
-      } catch (Exception ex) {
-        errors.Add($"Exception generating specs/fragments/{specName}/{test.Name}: {ex.Message}\n{ex.StackTrace}");
+
+        var fragmentPath = Path.Combine(specFragmentDir, $"{test.Name}.test");
+        var exePath = Path.Combine(specFragmentDir, $"{test.Name}.exe");
+        var fragmentFile = new FileInfo(fragmentPath);
+
+        var needsRebuild = force || !fragmentFile.Exists ||
+          fragmentFile.LastWriteTimeUtc <= specFile.LastWriteTimeUtc ||
+          fragmentFile.LastWriteTimeUtc <= compilerMtime;
+
+        workItems.Add(new TestWorkItem(fragmentPath, exePath, specName, test.Name, test, specFile, needsRebuild));
       }
-    });
-
-    // Report any compilation errors encountered during fragment generation
-    foreach (var error in errors) {
-      Logger.Error(LogCategory.Testing, error);
     }
 
-    // Only restore the flag on a successful unfiltered run
-    if (filter == null && errors.IsEmpty) {
-      WriteSpecCountFlag(fragmentDir, specs.Count, totalTests);
-    }
-
-    return new FragmentGenerationResult(generated, totalTests, errors.Count);
+    return new PrepareResult([.. workItems], totalTests, errors);
   }
 
-  private static (string Content, string? Error) GenerateFragmentContent(TestCase test, string exePath, string fragmentPath) {
+  /// <summary>
+  /// Write the spec count flag after a successful unfiltered run.
+  /// </summary>
+  public static void WriteSpecCountFlagPublic(string specDir, string fragmentDir) {
+    var specs = SpecParser.ParseDirectory(specDir);
+    var totalTests = specs.Sum(s => s.Tests.Count);
+    WriteSpecCountFlag(fragmentDir, specs.Count, totalTests);
+  }
+
+  public static (string Content, string? Error) GenerateFragmentContent(TestCase test, string exePath, string fragmentPath) {
     var sb = new StringBuilder();
     string? error = null;
 

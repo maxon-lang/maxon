@@ -117,6 +117,28 @@ public class TestResult {
 }
 
 /// <summary>
+/// A work item for the unified test pipeline (regenerate + compile + run + check).
+/// </summary>
+public record TestWorkItem(
+  string FragmentPath,
+  string ExePath,
+  string SpecName,
+  string TestName,
+  TestCase Test,
+  FileInfo SpecFile,
+  bool NeedsRegeneration
+);
+
+/// <summary>
+/// Result of preparing work items from specs.
+/// </summary>
+public record PrepareResult(
+  TestWorkItem[] WorkItems,
+  int TotalTests,
+  List<string> Errors
+);
+
+/// <summary>
 /// Summary of all test results.
 /// </summary>
 public class TestSummary {

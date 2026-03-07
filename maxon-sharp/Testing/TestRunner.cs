@@ -19,6 +19,8 @@ public class TestRunner(string specDir, string fragmentDir, string tempDir, stri
 
   /// <summary>
   /// Run all tests and return summary.
+  /// Uses Zig-style worker threads with atomic work-stealing for maximum parallelism.
+  /// Each worker handles the full pipeline: regenerate fragment → compile → run → check.
   /// </summary>
   public TestSummary RunAllSpecTests() {
     var sw = Stopwatch.StartNew();
@@ -28,15 +30,14 @@ public class TestRunner(string specDir, string fragmentDir, string tempDir, stri
       UpdateRequiredInSpecFiles();
     }
 
-    // Regenerate fragments if specs changed
-    var genResult = FragmentGenerator.GenerateFragments(_specDir, _fragmentDir, _updateRequired, _filter);
-    if (genResult.Generated > 0) {
-      Logger.Info(LogCategory.Testing, $"Generated {genResult.Generated} fragment(s)");
-    }
+    // Prepare work items from specs (sequential — just parses specs and checks mtimes)
+    var prepResult = FragmentGenerator.PrepareWorkItems(_specDir, _fragmentDir, _updateRequired, _filter);
 
-    // Abort if fragment generation had errors
-    if (genResult.Errors > 0) {
-      // Clean up any executables that were generated before the error
+    // Abort on errors (e.g., duplicate test names)
+    if (prepResult.Errors.Count > 0) {
+      foreach (var error in prepResult.Errors) {
+        Logger.Error(LogCategory.Testing, error);
+      }
       CleanupExecutables(_fragmentDir);
       return new TestSummary {
         Results = [],
@@ -44,22 +45,12 @@ public class TestRunner(string specDir, string fragmentDir, string tempDir, stri
         Failed = 0,
         Total = 0,
         TotalDuration = sw.Elapsed,
-        FragmentGenerationErrors = genResult.Errors
+        FragmentGenerationErrors = prepResult.Errors.Count
       };
     }
 
-    // Load all fragments
-    var fragments = LoadAllFragments();
-    if (_filter == null && genResult.TotalExpected > 0 && fragments.Count != genResult.TotalExpected) {
-      throw new InvalidOperationException(
-        $"Fragment count mismatch: expected {genResult.TotalExpected} but loaded {fragments.Count}. " +
-        "Some fragments may have failed to parse.");
-    }
-    if (_filter != null) {
-      fragments = [.. fragments.Where(f => GetTestPath(f).Contains(_filter, StringComparison.OrdinalIgnoreCase))];
-    }
-
-    if (fragments.Count == 0) {
+    var workItems = prepResult.WorkItems;
+    if (workItems.Length == 0) {
       Logger.Info(LogCategory.Testing, "No tests found");
       return new TestSummary {
         Results = [],
@@ -70,39 +61,70 @@ public class TestRunner(string specDir, string fragmentDir, string tempDir, stri
       };
     }
 
-    Logger.Info(LogCategory.Testing, $"Running {fragments.Count} test(s) with {_workerCount} worker(s)...");
-
     // Ensure temp directory exists
     Directory.CreateDirectory(_tempDir);
 
-    // Run tests in parallel
-    var results = new ConcurrentBag<TestResult>();
-    Parallel.ForEach(fragments, new ParallelOptions { MaxDegreeOfParallelism = _workerCount }, fragment => {
-      var result = RunTest(fragment);
-      results.Add(result);
+    Logger.Info(LogCategory.Testing, $"Running {workItems.Length} test(s) with {_workerCount} worker(s)...");
 
-      var root = Compiler.CompileError.ProjectRoot ?? Environment.CurrentDirectory;
-      var fullPath = Path.IsPathRooted(result.FilePath) ? result.FilePath : Path.GetFullPath(Path.Combine(root, result.FilePath));
-      var testIdentifier = Path.GetRelativePath(root, fullPath).Replace('\\', '/');
+    // Allocate results array (one slot per work item)
+    var results = new TestResult[workItems.Length];
+    var nextIndex = 0;
+    var generatedCount = 0;
+    var generationErrors = new ConcurrentBag<string>();
+    var printLock = new object();
 
-      if (result.Passed) {
-        // Passing tests only show at debug level
-        Logger.Debug(LogCategory.Testing, $"[PASS] {testIdentifier}");
-      } else {
-        // Failing tests show at error level (always visible)
-        Logger.Error(LogCategory.Testing, $"[FAIL] {testIdentifier}");
-        if (result.ErrorMessage != null) {
-          Logger.Error(LogCategory.Testing, $"  {result.ErrorMessage}");
+    // Spawn worker threads (Zig-style: explicit threads + atomic work-stealing)
+    var threadCount = Math.Min(_workerCount, workItems.Length);
+    var threads = new Thread[threadCount];
+    for (int i = 0; i < threadCount; i++) {
+      threads[i] = new Thread(() => {
+        while (true) {
+          var index = Interlocked.Increment(ref nextIndex) - 1;
+          if (index >= workItems.Length) break;
+
+          var item = workItems[index];
+          results[index] = ProcessWorkItem(item, ref generatedCount, generationErrors);
+
+          lock (printLock) {
+            var root = Compiler.CompileError.ProjectRoot ?? Environment.CurrentDirectory;
+            var testIdentifier = $"specs/fragments/{item.SpecName}/{item.TestName}.test";
+            if (results[index].Passed) {
+              Logger.Debug(LogCategory.Testing, $"[PASS] {testIdentifier}");
+            } else {
+              Logger.Error(LogCategory.Testing, $"[FAIL] {testIdentifier}");
+              if (results[index].ErrorMessage != null) {
+                Logger.Error(LogCategory.Testing, $"  {results[index].ErrorMessage}");
+              }
+            }
+          }
         }
-      }
-    });
+      }) { IsBackground = true };
+      threads[i].Start();
+    }
+
+    // Wait for all workers to complete
+    foreach (var t in threads) t.Join();
 
     sw.Stop();
+
+    // Report generation errors
+    foreach (var error in generationErrors) {
+      Logger.Error(LogCategory.Testing, error);
+    }
+
+    if (generatedCount > 0) {
+      Logger.Info(LogCategory.Testing, $"Generated {generatedCount} fragment(s)");
+    }
+
+    // Write spec count flag on successful unfiltered run
+    if (_filter == null && generationErrors.IsEmpty) {
+      FragmentGenerator.WriteSpecCountFlagPublic(_specDir, _fragmentDir);
+    }
 
     // Clean up generated .exe files in fragment directories
     CleanupExecutables(_fragmentDir);
 
-    var resultList = results.ToList();
+    var resultList = results.Where(r => r != null).ToList();
     var passed = resultList.Count(r => r.Passed);
     var failed = resultList.Count(r => !r.Passed);
 
@@ -111,8 +133,54 @@ public class TestRunner(string specDir, string fragmentDir, string tempDir, stri
       Passed = passed,
       Failed = failed,
       Total = resultList.Count,
-      TotalDuration = sw.Elapsed
+      TotalDuration = sw.Elapsed,
+      FragmentGenerationErrors = generationErrors.Count
     };
+  }
+
+  /// <summary>
+  /// Process a single work item: regenerate fragment if stale, then compile + run + check.
+  /// </summary>
+  private TestResult ProcessWorkItem(TestWorkItem item, ref int generatedCount, ConcurrentBag<string> generationErrors) {
+    var testSw = Stopwatch.StartNew();
+
+    try {
+      // Step 1: Regenerate fragment if stale
+      if (item.NeedsRegeneration) {
+        // Fragment generation compiles for IR only — always disable MmTrace
+        Compiler.Compiler.MmTrace = false;
+        var absolutePath = Path.GetFullPath(item.FragmentPath);
+        var (content, genError) = FragmentGenerator.GenerateFragmentContent(item.Test, item.ExePath, absolutePath);
+        if (genError != null) {
+          generationErrors.Add($"Error compiling 'specs/fragments/{item.SpecName}/{item.TestName}.test':\n{genError}");
+        }
+        File.WriteAllText(item.FragmentPath, content.Replace("\r\n", "\n").Replace("\r", "\n"));
+        Interlocked.Increment(ref generatedCount);
+      }
+
+      // Step 2: Parse the fragment (fresh or existing)
+      var fragment = FragmentGenerator.ParseFragment(item.FragmentPath);
+      if (fragment == null) {
+        return new TestResult {
+          TestName = item.TestName,
+          Passed = false,
+          ErrorMessage = "Failed to parse fragment file",
+          Duration = testSw.Elapsed,
+          FilePath = item.FragmentPath
+        };
+      }
+
+      // Step 3: Run the test (compile + execute + check expectations)
+      return RunTest(fragment);
+    } catch (Exception ex) {
+      return new TestResult {
+        TestName = item.TestName,
+        Passed = false,
+        ErrorMessage = $"Exception: {ex.Message}",
+        Duration = testSw.Elapsed,
+        FilePath = item.FragmentPath
+      };
+    }
   }
 
   /// <summary>
@@ -138,29 +206,6 @@ public class TestRunner(string specDir, string fragmentDir, string tempDir, stri
     } catch {
       // Ignore directory access errors
     }
-  }
-
-  /// <summary>
-  /// Get the spec/test path for filtering (e.g. "arithmetic/addition").
-  /// </summary>
-  private static string GetTestPath(Fragment f) {
-    var dir = Path.GetFileName(Path.GetDirectoryName(f.FilePath));
-    return $"{dir}/{f.TestName}";
-  }
-
-  private List<Fragment> LoadAllFragments() {
-    var fragments = new List<Fragment>();
-
-    if (!Directory.Exists(_fragmentDir)) {
-      return fragments;
-    }
-
-    foreach (var file in Directory.GetFiles(_fragmentDir, "*.test", SearchOption.AllDirectories)) {
-      var fragment = FragmentGenerator.ParseFragment(file) ?? throw new InvalidOperationException($"Failed to parse fragment file: {file}");
-      fragments.Add(fragment);
-    }
-
-    return fragments;
   }
 
   private TestResult RunTest(Fragment fragment) {
