@@ -1459,21 +1459,15 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       SkipNewlines();
     }
 
-    // Reject self-referential field layouts: a struct cannot embed itself by value
-    // because the type would have infinite size. Pointer-typed fields (i64) are fine;
-    // this check only fires when the concrete struct type appears as a field type.
-    foreach (var field in fields) {
-      if (ContainsTypeCycle(field.Type, typeName)) {
-        throw new CompileError(ErrorCode.MlirTypeCycle,
-          $"type '{typeName}' cannot contain a field of its own type (infinite size); use a pointer-based container instead",
-          typeNameToken.Line, typeNameToken.Column);
-      }
-    }
-
     // Replace temporary entry with complete struct type
-    _typeRegistry[typeName] = new MlirStructType(typeName, fields, associatedTypeNames, conformingInterfaces,
+    var completedStruct = new MlirStructType(typeName, fields, associatedTypeNames, conformingInterfaces,
       typeParams: conformanceTypeParams.Count > 0 ? conformanceTypeParams : null,
-      whereConstraints: whereConstraints.Count > 0 ? whereConstraints : null);
+      whereConstraints: whereConstraints.Count > 0 ? whereConstraints : null) {
+      SourceFilePath = _sourceFilePath,
+      SourceLine = typeNameToken.Line,
+      SourceColumn = typeNameToken.Column
+    };
+    _typeRegistry[typeName] = completedStruct;
     _locallyDefinedTypes.Add(typeName);
     if (isExported) _exportedTypes.Add(typeName);
     _currentTypeName = null;
@@ -2093,7 +2087,11 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     var finalEnumType = new MlirUnionType(enumName, cases, backingType, finalInterfaces,
       associatedTypeNames: associatedTypeNames,
       typeParams: conformanceTypeParams.Count > 0 ? conformanceTypeParams : null,
-      whereConstraints: whereConstraints.Count > 0 ? whereConstraints : null);
+      whereConstraints: whereConstraints.Count > 0 ? whereConstraints : null) {
+      SourceFilePath = _sourceFilePath,
+      SourceLine = nameToken.Line,
+      SourceColumn = nameToken.Column
+    };
     _typeRegistry[enumName] = finalEnumType;
 
     // Pre-register synthetic hash() and equals() methods for enums without associated values
@@ -3978,10 +3976,18 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
 
     var rawValue = EmitUnionRawValueExtraction(hashBlock, selfParam.Result, enumType, enumName, backingKind);
 
+    // For string/char backing, the raw value is a heap-allocated struct that must be cleaned up
+    var scopeEndVars = new List<string>();
+    if (enumType.BackingType is MlirStringBackingType or MlirCharBackingType) {
+      var rawVarName = "__hash_raw";
+      hashBlock.AddOp(new MaxonAssignOp(rawVarName, rawValue, isDeclaration: true, isMutable: true, MaxonValueKind.Struct));
+      scopeEndVars.Add(rawVarName);
+    }
+
     // Call backingType.hash(rawValue)
     var hashCall = new MaxonCallOp($"{backingTypeName}.hash", [rawValue], MaxonValueKind.Integer);
     hashBlock.AddOp(hashCall);
-    hashBlock.AddOp(new MaxonScopeEndOp([]));
+    hashBlock.AddOp(new MaxonScopeEndOp(scopeEndVars));
     hashBlock.AddOp(new MaxonReturnOp(hashCall.Result));
 
     // --- equals() ---
@@ -4002,10 +4008,18 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     var selfRaw = EmitUnionRawValueExtraction(equalsBlock, selfParam2.Result, enumType, enumName, backingKind);
     var otherRaw = EmitUnionRawValueExtraction(equalsBlock, otherParam.Result, enumType, enumName, backingKind);
 
+    // For string/char backing, raw values are heap-allocated structs that must be cleaned up
+    var eqScopeEndVars = new List<string>();
+    if (enumType.BackingType is MlirStringBackingType or MlirCharBackingType) {
+      equalsBlock.AddOp(new MaxonAssignOp("__eq_self_raw", selfRaw, isDeclaration: true, isMutable: true, MaxonValueKind.Struct));
+      equalsBlock.AddOp(new MaxonAssignOp("__eq_other_raw", otherRaw, isDeclaration: true, isMutable: true, MaxonValueKind.Struct));
+      eqScopeEndVars.AddRange(["__eq_self_raw", "__eq_other_raw"]);
+    }
+
     // Call backingType.equals(selfRaw, otherRaw)
     var equalsCall = new MaxonCallOp($"{backingTypeName}.equals", [selfRaw, otherRaw], MaxonValueKind.Bool);
     equalsBlock.AddOp(equalsCall);
-    equalsBlock.AddOp(new MaxonScopeEndOp([]));
+    equalsBlock.AddOp(new MaxonScopeEndOp(eqScopeEndVars));
     equalsBlock.AddOp(new MaxonReturnOp(equalsCall.Result));
   }
 
@@ -5741,6 +5755,20 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       var kind = DetermineValueKind(initValue);
       var rangedTypeName = _lastRangedTypeName;
       _lastRangedTypeName = null;
+      // Preserve TypeParameter kind so monomorphization can resolve the concrete type
+      if (kind == MaxonValueKind.Integer) {
+        var lastOp = _currentBlock!.Operations.LastOrDefault();
+        if (lastOp is MaxonVarRefOp { ValueKind: MaxonValueKind.TypeParameter } varRefOp
+            && varRefOp.Result == initValue) {
+          kind = MaxonValueKind.TypeParameter;
+        } else if (lastOp is MaxonCallOp { ResultKind: MaxonValueKind.TypeParameter } callOp
+            && callOp.Result == initValue) {
+          kind = MaxonValueKind.TypeParameter;
+        } else if (lastOp is MaxonManagedMemGetOp { ResultKind: MaxonValueKind.TypeParameter } memGetOp
+            && memGetOp.Result == initValue) {
+          kind = MaxonValueKind.TypeParameter;
+        }
+      }
       // Use Float32 kind when assigning to an F32-backed ranged type
       if (kind == MaxonValueKind.Float && rangedTypeName != null
           && _typeRegistry.TryGetValue(rangedTypeName, out var rt)
@@ -5940,21 +5968,6 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     }
 
     _currentBlock!.AddOp(new MaxonFieldAssignOp(structVal, structTypeName, fieldToken.Value, newValue));
-  }
-
-  // Returns true if fieldType directly or transitively embeds typeName by value (infinite-size cycle).
-  // Pointer-sized fields (i64, the storage type for heap-allocated structs) are not followed.
-  private bool ContainsTypeCycle(MlirType fieldType, string typeName) {
-    if (fieldType is not MlirStructType structType) return false;
-    if (structType.Name == typeName) return true;
-    // Recurse into non-heap-allocated (inline/value-type) struct fields only.
-    // Heap-allocated structs are stored as i64 pointers, so they cannot cause infinite size.
-    if (fieldType.IsHeapAllocated) return false;
-    if (!_typeRegistry.TryGetValue(structType.Name, out var resolved) || resolved is not MlirStructType resolvedStruct) return false;
-    foreach (var nested in resolvedStruct.Fields) {
-      if (ContainsTypeCycle(nested.Type, typeName)) return true;
-    }
-    return false;
   }
 
   // Checks if the last op emitted is a field access on the same variable and field as the LHS
@@ -7716,6 +7729,14 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       var advancedByName = $"{structTypeName}.advancedBy";
       var advToken = new Token(TokenType.Identifier, advancedByName, token.Line, token.Column);
       var advCall = CreateFunctionCall(advToken, [currentVal, stepValue]);
+      // Remove the __call_tmp_ added by EmitCallReturnTempAssign — ownership
+      // transfers directly to the counter variable, preventing a leak when
+      // the temp is overwritten on each loop iteration.
+      var lastOp = _currentBlock!.Operations[^1];
+      if (lastOp is MaxonAssignOp { IsDeclaration: true } tmpAssign && tmpAssign.VarName.StartsWith("__call_tmp_")) {
+        _currentBlock!.Operations.RemoveAt(_currentBlock!.Operations.Count - 1);
+        _variables.Remove(tmpAssign.VarName);
+      }
       _currentBlock!.AddOp(new MaxonAssignOp(counterVarName, advCall.Result!, isDeclaration: false, isMutable: true, elementKind));
     } else {
       var addOp = new MaxonBinOp(MaxonBinOperator.Add, currentVal, stepValue, elementKind);
@@ -9960,6 +9981,10 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
             var fmtLiteral = new MaxonStringLiteralOp(formatSpec, stringTypeName);
             _currentBlock!.AddOp(fmtLiteral);
             callArgs.Add(fmtLiteral.Result);
+            // Track the format string for cleanup
+            var fmtTempName = $"__interp_fmt_{fmtLiteral.Result.Id}";
+            _currentBlock!.AddOp(new MaxonAssignOp(fmtTempName, fmtLiteral.Result, true, false, MaxonValueKind.Struct));
+            _variables.Declare(fmtTempName, MaxonValueKind.Struct, false, fmtLiteral.Result, _currentBlock!, OwnershipFlags.IsTemp, structTypeName: stringTypeName);
             formatSpec = null;
           }
 

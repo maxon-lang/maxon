@@ -22,7 +22,7 @@ ExitCode: 2
 module {
   func @Planet.hash(self: i64) -> i64 {
   entry:
-    x86.prologue stack_size=32
+    x86.prologue stack_size=48
     x86.lea_rdata rax, [__strenum_fallback_0]
     x86.mov rdx, rax
     x86.mov rax, 1
@@ -67,8 +67,8 @@ module {
     x86.cmovne rdx, rax
     x86.lea_func rbx, [__destruct_String]
     x86.mov rax, rbx
-    x86.mov [rbp-24], rdx
-    x86.mov [rbp-32], rsi
+    x86.mov [rbp-32], rdx
+    x86.mov [rbp-40], rsi
     x86.mov rdx, rax
     x86.mov rcx, 16
     x86.mov r8, 1
@@ -82,10 +82,10 @@ module {
     x86.call mm_alloc
     x86.mov [rbp-16], rax
     x86.mov r8, [rbp-16]
-    x86.mov r9, [rbp-32]
+    x86.mov r9, [rbp-40]
     x86.mov [r8+0], r9
     x86.mov rax, [rbp-16]
-    x86.mov rcx, [rbp-24]
+    x86.mov rcx, [rbp-32]
     x86.mov [rax+8], rcx
     x86.xor rax, rax
     x86.mov rcx, [rbp-16]
@@ -103,10 +103,22 @@ module {
     x86.mov rcx, [rbp-8]
     x86.mov [rcx+8], rax
     x86.mov rax, [rbp-8]
-    x86.mov rcx, [rbp-8]
+    x86.mov [rbp-24], rax
+    x86.mov rax, [rbp-24]
+    x86.mov rcx, [rbp-24]
+    x86.call mm_incref
+    x86.mov rax, [rbp-24]
+    x86.mov rcx, [rbp-24]
     x86.call stdlib.String.hash
     x86.mov ecx, rax
-    x86.mov rax, rcx
+    x86.mov rax, [rbp-24]
+    x86.mov [rbp-48], rcx
+    x86.test rax, rax
+    x86.jz __nonnull_skip_0
+    x86.mov rcx, [rbp-24]
+    x86.call mm_decref
+    x86.label __nonnull_skip_0
+    x86.mov rax, [rbp-48]
     x86.epilogue
     x86.ret
   }
@@ -318,9 +330,9 @@ module {
     x86.mov rax, [rbp-80]
     x86.mov rcx, [rbp-56]
     x86.test rcx, rcx
-    x86.jz __nonnull_skip_0
+    x86.jz __nonnull_skip_1
     x86.call mm_decref
-    x86.label __nonnull_skip_0
+    x86.label __nonnull_skip_1
     x86.mov rax, [rbp-80]
     x86.epilogue
     x86.ret
@@ -333,9 +345,9 @@ module {
     x86.mov rcx, [rax+0]
     x86.mov [rbp-16], rcx
     x86.test rcx, rcx
-    x86.jz __nonnull_skip_16
+    x86.jz __nonnull_skip_17
     x86.call mm_decref
-    x86.label __nonnull_skip_16
+    x86.label __nonnull_skip_17
     x86.jmp __destruct_String.done
   done:
     x86.epilogue
@@ -389,9 +401,9 @@ module {
     x86.mov rcx, [rax+8]
     x86.mov [rbp-16], rcx
     x86.test rcx, rcx
-    x86.jz __nonnull_skip_17
+    x86.jz __nonnull_skip_18
     x86.call mm_decref
-    x86.label __nonnull_skip_17
+    x86.label __nonnull_skip_18
     x86.jmp __destruct_Array_Planet.done
   done:
     x86.epilogue
@@ -425,9 +437,9 @@ module {
     x86.mov rcx, [rax+8]
     x86.mov [rbp-16], rcx
     x86.test rcx, rcx
-    x86.jz __nonnull_skip_18
+    x86.jz __nonnull_skip_19
     x86.call mm_decref
-    x86.label __nonnull_skip_18
+    x86.label __nonnull_skip_19
     x86.jmp __destruct_Array_Int.done
   done:
     x86.epilogue
@@ -461,9 +473,9 @@ module {
     x86.mov rcx, [rax+8]
     x86.mov [rbp-16], rcx
     x86.test rcx, rcx
-    x86.jz __nonnull_skip_19
+    x86.jz __nonnull_skip_20
     x86.call mm_decref
-    x86.label __nonnull_skip_19
+    x86.label __nonnull_skip_20
     x86.jmp __destruct_Array_SetSlotState.done
   done:
     x86.epilogue
@@ -477,25 +489,25 @@ module {
     x86.mov rcx, [rax+0]
     x86.mov [rbp-16], rcx
     x86.test rcx, rcx
-    x86.jz __nonnull_skip_20
+    x86.jz __nonnull_skip_21
     x86.call mm_decref
-    x86.label __nonnull_skip_20
+    x86.label __nonnull_skip_21
     x86.mov rdx, [rbp-8]
     x86.mov rbx, [rdx+8]
     x86.mov [rbp-24], rbx
     x86.test rbx, rbx
-    x86.jz __nonnull_skip_21
+    x86.jz __nonnull_skip_22
     x86.mov rcx, [rbp-24]
     x86.call mm_decref
-    x86.label __nonnull_skip_21
+    x86.label __nonnull_skip_22
     x86.mov rsi, [rbp-8]
     x86.mov rdi, [rsi+16]
     x86.mov [rbp-32], rdi
     x86.test rdi, rdi
-    x86.jz __nonnull_skip_22
+    x86.jz __nonnull_skip_23
     x86.mov rcx, [rbp-32]
     x86.call mm_decref
-    x86.label __nonnull_skip_22
+    x86.label __nonnull_skip_23
     x86.jmp __destruct_PlanetMap.done
   done:
     x86.epilogue
@@ -529,9 +541,9 @@ module {
     x86.mov rcx, [rax+8]
     x86.mov [rbp-16], rcx
     x86.test rcx, rcx
-    x86.jz __nonnull_skip_23
+    x86.jz __nonnull_skip_24
     x86.call mm_decref
-    x86.label __nonnull_skip_23
+    x86.label __nonnull_skip_24
     x86.jmp __destruct_StateArray.done
   done:
     x86.epilogue

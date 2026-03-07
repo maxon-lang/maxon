@@ -409,10 +409,10 @@ public static partial class MaxonToStandardConversion {
               } else {
                 // Non-self struct param: receive heap pointer, store under the param name
                 int ptrFlatIdx = structParamPtrIndex[structParamOp.Index];
-                var ptrVal = new StdI64(MlirContext.Current.NextId());
+                var ptrVal = new StdHeapPtr(MlirContext.Current.NextId(), structParamOp.StructTypeName, structParamOp.Name);
                 newBlock.AddOp(new StdParamOp(ptrFlatIdx, structParamOp.Name, ptrVal));
                 EmitStore(newBlock, ptrVal, structParamOp.Name, varTypes);
-                valueMap[structParamOp.Result] = new StdHeapPtr(structParamOp.Result.Id, structParamOp.StructTypeName, structParamOp.Name);
+                valueMap[structParamOp.Result] = ptrVal;
               }
               structParamNames.Add(structParamOp.Name);
               _structParamNames?.Add(structParamOp.Name);
@@ -1801,6 +1801,11 @@ public static partial class MaxonToStandardConversion {
           }
         }
       }
+      // Zero-initialize all managed scope vars and orphan temps in the entry block
+      // so that unreached conditional paths see NULL instead of garbage
+      var orphanTempNames = temps.OrphanTemps.ToHashSet();
+      foreach (var orphan in orphanTempNames)
+        allScopeVars.Add(orphan);
       if (allScopeVars.Count > 0 && newFunc.Body.Blocks.Count > 0) {
         var entryBlock = newFunc.Body.Blocks[0];
         int insertIdx = 0;

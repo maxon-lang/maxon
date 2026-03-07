@@ -309,7 +309,8 @@ internal class TypeSubstitution {
       }
       var newType = new MlirStructType(autoAliasName, concreteFields,
         conformingInterfaces: [.. sourceStruct.ConformingInterfaces],
-        typeParams: resolvedParams);
+        typeParams: resolvedParams,
+        isTuple: sourceStruct.IsTuple);
 
       // Apply conditional conformances from extension blocks
       foreach (var (ccSourceType, interfaces, whereConstraints) in module.ConditionalConformances) {

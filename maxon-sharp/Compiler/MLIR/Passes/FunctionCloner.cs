@@ -723,7 +723,7 @@ internal class FunctionCloner {
       StructElementTypeName = elemTypeName,
       TypeParamName = memGet.TypeParamName
     };
-    RegisterResult(memGet.Result, cloned.Result);
+    RegisterHeapElementResult(memGet.Result, cloned.Result, isHeapPtrElem, elemTypeName, getElemType);
     return cloned;
   }
 
@@ -741,7 +741,7 @@ internal class FunctionCloner {
       StructElementTypeName = elemTypeName,
       TypeParamName = memRemove.TypeParamName
     };
-    RegisterResult(memRemove.Result, cloned.Result);
+    RegisterHeapElementResult(memRemove.Result, cloned.Result, isHeapPtrElem, elemTypeName, removeElemType);
     return cloned;
   }
 
@@ -755,6 +755,20 @@ internal class FunctionCloner {
       IsStructElement = isHeapPtrElem,
       TypeParamName = memSet.TypeParamName
     };
+  }
+
+  /// When the element is a heap-allocated struct/enum, register the result with
+  /// the concrete type so downstream CloneAssignOp resolves the value kind correctly
+  /// for refcount management.
+  private void RegisterHeapElementResult(MaxonValue sourceResult, MaxonValue clonedResult,
+      bool isHeapPtrElem, string? elemTypeName, MlirType? elemType) {
+    if (isHeapPtrElem && elemTypeName != null) {
+      RegisterResult(sourceResult, new MaxonStruct(clonedResult.Id, elemTypeName));
+    } else if (isHeapPtrElem && elemType is MlirUnionType) {
+      RegisterResult(sourceResult, new MaxonEnum(clonedResult.Id, elemType.Name));
+    } else {
+      RegisterResult(sourceResult, clonedResult);
+    }
   }
 
   /// When a call returns TypeParameter and the self arg is a concrete inner alias,
