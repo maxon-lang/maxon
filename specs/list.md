@@ -296,7 +296,9 @@ end 'main'
 ```maxon
 function main() returns ExitCode
   var list = List from [20, 30]
-  list.insert(at: 0, value: 10)
+  try list.insert(at: 0, value: 10) otherwise 'err'
+    return 1
+  end 'err'
   var v0 = try list.get(0) otherwise 0
   var v1 = try list.get(1) otherwise 0
   var v2 = try list.get(2) otherwise 0
@@ -319,7 +321,9 @@ end 'main'
 ```maxon
 function main() returns ExitCode
   var list = List from [10, 30]
-  list.insert(at: 1, value: 20)
+  try list.insert(at: 1, value: 20) otherwise 'err'
+    return 1
+  end 'err'
   var v0 = try list.get(0) otherwise 0
   var v1 = try list.get(1) otherwise 0
   var v2 = try list.get(2) otherwise 0
@@ -342,7 +346,9 @@ end 'main'
 ```maxon
 function main() returns ExitCode
   var list = List from [10, 20]
-  list.insert(at: 2, value: 30)
+  try list.insert(at: 2, value: 30) otherwise 'err'
+    return 1
+  end 'err'
   var v0 = try list.get(0) otherwise 0
   var v1 = try list.get(1) otherwise 0
   var v2 = try list.get(2) otherwise 0

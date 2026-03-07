@@ -27,6 +27,7 @@ You *Are* Going To Read It
 - extensions
 
 ## Ideas
+- codelens to show the complexity/cost of a function
 - reorganize structs to improve cache locality
 - array syntax: var x = Array of 10 int
 - define structs by usage 

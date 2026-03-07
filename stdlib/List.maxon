@@ -60,12 +60,7 @@ export type List uses Element implements InitableFromArrayLiteral with Element, 
 
   /// Get element at index (0-based, front to back), throws if out of bounds
   export function get(index Index) returns Element throws ArrayError
-    if index >= chain.count() 'bounds'
-      throw ArrayError.indexOutOfBounds
-    end 'bounds'
-    var node = try walkTo(index) otherwise 'err'
-      throw ArrayError.indexOutOfBounds
-    end 'err'
+    var node = try walkTo(index)
     return node.value()
   end 'get'
 
@@ -80,18 +75,18 @@ export type List uses Element implements InitableFromArrayLiteral with Element, 
   end 'append'
 
   /// Insert an element at the given index. O(n).
-  export function insert(at Index, value Element)
+  export function insert(at Index, value Element) throws ArrayError
     if at == 0 'front'
       chain.insertFirst(value)
       return
     end 'front'
+
     if at >= chain.count() 'back'
       chain.insertLast(value)
       return
     end 'back'
-    var current = try walkTo(at - 1) otherwise 'err'
-      return
-    end 'err'
+
+    var current = try walkTo(at - 1)
     chain.insertAfter(current, value: value)
   end 'insert'
 
@@ -113,12 +108,7 @@ export type List uses Element implements InitableFromArrayLiteral with Element, 
 
   /// Remove and return element at index, throws if out of bounds. O(n).
   export function remove(at Index) returns Element throws ArrayError
-    if at >= chain.count() 'bounds'
-      throw ArrayError.indexOutOfBounds
-    end 'bounds'
-    var node = try walkTo(at) otherwise 'err'
-      throw ArrayError.indexOutOfBounds
-    end 'err'
+    var node = try walkTo(at)
     return chain.remove(node)
   end 'remove'
 
