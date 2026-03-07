@@ -57,6 +57,8 @@ public class MlirPipeline {
 
     StoreForwardingPass.Run(stdModule);
     DeadStoreEliminationPass.Run(stdModule);
+    RefcountOptimizationPass.Run(stdModule);
+    DeadStoreEliminationPass.Run(stdModule); // cleanup after refcount opt
 
     // Capture standard stage
     if (returnIr || dumpStagesBasePath != null) {

@@ -153,7 +153,7 @@ Skip in nested loops: skip in inner loop only affects inner loop.
 ```maxon
 function main() returns ExitCode
     var sum = 0
-    for o in 1 to 2 'outer'
+    for _ in 1 to 2 'outer'
         var inner = [10, 20, 30, 40, 50]
         for i in inner 'inner'
             if i == 20 'check'

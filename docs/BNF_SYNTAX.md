@@ -427,8 +427,8 @@ for_stmt      = 'for' loop_var 'in' iterable_expr LABEL NEWLINE
                 body
                 'end' LABEL
 
-loop_var      = IDENTIFIER
-              | '(' IDENTIFIER { ',' IDENTIFIER } ')'
+loop_var      = IDENTIFIER                                      (* '_' discards the value *)
+              | '(' IDENTIFIER { ',' IDENTIFIER } ')'           (* '_' discards individual elements *)
 
 iterable_expr = expression ('to' | 'upto') expression          (* range form *)
               | expression '.' 'enumerated' '(' ')'            (* enumerated form *)
@@ -465,7 +465,7 @@ literal_pattern
 
 union_pattern = IDENTIFIER [ '(' binding_list ')' ]
 
-binding_list  = IDENTIFIER { ',' IDENTIFIER }
+binding_list  = IDENTIFIER { ',' IDENTIFIER }                    (* '_' discards individual bindings *)
 
 range_pattern = expression '..=' expression             (* inclusive both bounds *)
               | expression '..<' expression             (* exclusive upper bound *)
@@ -616,7 +616,7 @@ from_expr     = IDENTIFIER 'from' '[' [ expression { ',' expression } ] ']'
 closure       = '(' [ closure_params ] ')' 'gives' expression
 closure_params
               = closure_param { ',' closure_param }
-closure_param = IDENTIFIER [ type_ref ]
+closure_param = IDENTIFIER [ type_ref ]                          (* '_' discards the parameter *)
 ```
 
 ### 6.4 Match Expression

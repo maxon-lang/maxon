@@ -138,42 +138,49 @@ public static partial class FragmentGenerator {
       return new FragmentGenerationResult(0, totalTests, errors.Count);
     }
 
-    Parallel.ForEach(specs, new ParallelOptions { MaxDegreeOfParallelism = workerCount }, spec => {
+    // Pre-create all spec fragment directories
+    foreach (var spec in specs) {
+      var specName = Path.GetFileNameWithoutExtension(spec.FilePath);
+      Directory.CreateDirectory(Path.Combine(fragmentDir, specName));
+    }
+
+    // Flatten to individual (spec, test) work items for balanced parallelism
+    var workItems = specs.SelectMany(spec => spec.Tests.Select(test => (spec, test)));
+
+    Parallel.ForEach(workItems, new ParallelOptions { MaxDegreeOfParallelism = workerCount }, item => {
+      var (spec, test) = item;
       var specFile = new FileInfo(spec.FilePath);
       var specName = Path.GetFileNameWithoutExtension(spec.FilePath);
       var specFragmentDir = Path.Combine(fragmentDir, specName);
-      Directory.CreateDirectory(specFragmentDir);
 
-      foreach (var test in spec.Tests) {
-        // Skip tests that don't match the filter (matched against specName/testName)
-        var testPath = $"{specName}/{test.Name}";
-        if (filter != null && !testPath.Contains(filter, StringComparison.OrdinalIgnoreCase)) {
-          continue;
+      // Skip tests that don't match the filter (matched against specName/testName)
+      var testPath = $"{specName}/{test.Name}";
+      if (filter != null && !testPath.Contains(filter, StringComparison.OrdinalIgnoreCase)) {
+        return;
+      }
+
+      var fragmentPath = Path.Combine(specFragmentDir, $"{test.Name}.test");
+      var exePath = Path.Combine(specFragmentDir, $"{test.Name}.exe");
+      var fragmentFile = new FileInfo(fragmentPath);
+
+      // Skip if fragment is newer than both spec and compiler (unless force)
+      if (!force && fragmentFile.Exists &&
+        fragmentFile.LastWriteTimeUtc > specFile.LastWriteTimeUtc &&
+        fragmentFile.LastWriteTimeUtc > compilerMtime) {
+        return;
+      }
+
+      try {
+        // Pass absolute path - CompileError.Format() will make it relative to ProjectRoot
+        var absolutePath = Path.GetFullPath(fragmentPath);
+        var (content, error) = GenerateFragmentContent(test, exePath, absolutePath);
+        if (error != null) {
+          errors.Add($"Error compiling 'specs/fragments/{specName}/{test.Name}.test':\n{error}");
         }
-
-        var fragmentPath = Path.Combine(specFragmentDir, $"{test.Name}.test");
-        var exePath = Path.Combine(specFragmentDir, $"{test.Name}.exe");
-        var fragmentFile = new FileInfo(fragmentPath);
-
-        // Skip if fragment is newer than both spec and compiler (unless force)
-        if (!force && fragmentFile.Exists &&
-          fragmentFile.LastWriteTimeUtc > specFile.LastWriteTimeUtc &&
-          fragmentFile.LastWriteTimeUtc > compilerMtime) {
-          continue;
-        }
-
-        try {
-          // Pass absolute path - CompileError.Format() will make it relative to ProjectRoot
-          var absolutePath = Path.GetFullPath(fragmentPath);
-          var (content, error) = GenerateFragmentContent(test, exePath, absolutePath);
-          if (error != null) {
-            errors.Add($"Error compiling 'specs/fragments/{specName}/{test.Name}.test':\n{error}");
-          }
-          WriteFileWithRetry(fragmentPath, content.Replace("\r\n", "\n").Replace("\r", "\n"));
-          Interlocked.Increment(ref generated);
-        } catch (Exception ex) {
-          errors.Add($"Exception generating specs/fragments/{specName}/{test.Name}: {ex.Message}\n{ex.StackTrace}");
-        }
+        WriteFileWithRetry(fragmentPath, content.Replace("\r\n", "\n").Replace("\r", "\n"));
+        Interlocked.Increment(ref generated);
+      } catch (Exception ex) {
+        errors.Add($"Exception generating specs/fragments/{specName}/{test.Name}: {ex.Message}\n{ex.StackTrace}");
       }
     });
 

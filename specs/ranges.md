@@ -96,7 +96,7 @@ end 'main'
 ```maxon
 function main() returns ExitCode
     var count = 0
-    for i in 5 to 5 'loop'
+    for _ in 5 to 5 'loop'
         count = count + 1
     end 'loop'
     return count
@@ -110,7 +110,7 @@ end 'main'
 ```maxon
 function main() returns ExitCode
     var count = 0
-    for i in 5 upto 6 'loop'
+    for _ in 5 upto 6 'loop'
         count = count + 1
     end 'loop'
     return count
@@ -124,7 +124,7 @@ end 'main'
 ```maxon
 function main() returns ExitCode
     var count = 0
-    for i in 5 to 3 'loop'
+    for _ in 5 to 3 'loop'
         count = count + 1
     end 'loop'
     return count
@@ -138,7 +138,7 @@ end 'main'
 ```maxon
 function main() returns ExitCode
     var count = 0
-    for i in 5 upto 5 'loop'
+    for _ in 5 upto 5 'loop'
         count = count + 1
     end 'loop'
     return count
@@ -257,7 +257,7 @@ end 'main'
 ```maxon
 function main() returns ExitCode
     var sum = 0
-    for i in 1 to 1000 'loop'
+    for _ in 1 to 1000 'loop'
         sum = sum + 1
     end 'loop'
     print("{sum}")
@@ -275,7 +275,7 @@ end 'main'
 ```maxon
 function main() returns ExitCode
     var count = 0
-    for c in 'a' to 'z' 'loop'
+    for _ in 'a' to 'z' 'loop'
         count = count + 1
     end 'loop'
     return count

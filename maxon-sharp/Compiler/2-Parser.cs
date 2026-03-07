@@ -4475,20 +4475,21 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     }
   }
 
-  private void FinishFunctionBody(string name, Token nameToken, MlirType? returnType) {
-    // E014: Check for unused parameters
+  private void CheckUnusedVariables() {
     foreach (var (paramName, paramLine, paramCol) in _paramLocations) {
       if (!_referencedVars.Contains(paramName)) {
         throw new CompileError(ErrorCode.SemanticUnusedVariable, $"unused variable: '{paramName}'", paramLine, paramCol);
       }
     }
-
-    // Check for unused local variables
     foreach (var (varName, varLine, varCol) in _localVarLocations) {
       if (!_referencedVars.Contains(varName)) {
         throw new CompileError(ErrorCode.SemanticUnusedVariable, $"unused variable: '{varName}'", varLine, varCol);
       }
     }
+  }
+
+  private void FinishFunctionBody(string name, Token nameToken, MlirType? returnType) {
+    CheckUnusedVariables();
 
     // E037: Check for missing return statements
     if (returnType != null && _currentBlock != null && !BlockEndsWithTerminator(_currentBlock)) {
@@ -5238,12 +5239,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
 
     if (returnType is MlirStructType expectedStruct) {
       if (value is not MaxonStruct actualStruct || actualStruct.TypeName != expectedStruct.Name) {
-        // Allow tuple type aliases: Entry (alias for __Tuple_Key_Value) matches __Tuple_i64_i64
-        if (value is MaxonStruct actualTuple && expectedStruct.IsTuple
-            && _typeAliasSources.TryGetValue(expectedStruct.Name, out _)
-            && _typeRegistry.TryGetValue(actualTuple.TypeName, out var actualType)
-            && actualType is MlirStructType actualStructType && actualStructType.IsTuple
-            && actualStructType.Fields.Count == expectedStruct.Fields.Count) {
+        if (value is MaxonStruct aliasActual && IsStructTypeCompatible(aliasActual.TypeName, expectedStruct.Name)) {
           return;
         }
         // Allow returning concrete tuples when expected type has unresolved type parameters
@@ -6298,6 +6294,17 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     return _typeAliasSources.TryGetValue(typeName, out var source) ? source : typeName;
   }
 
+  /// Resolves a type alias to its monomorphized concrete name by combining the base source
+  /// type with the alias's type parameter names (e.g., "ENode" -> "__ChainNode_Element").
+  /// Returns the type name itself if it's not an alias or has no type parameters.
+  private string ResolveConcreteTypeName(string typeName) {
+    if (!_typeAliasSources.TryGetValue(typeName, out var source)) return typeName;
+    if (!_typeRegistry.TryGetValue(typeName, out var regType)
+        || regType is not MlirStructType regStruct
+        || regStruct.TypeParams.Count == 0) return source;
+    return $"{source}_{string.Join("_", regStruct.TypeParams.Values.Select(t => t.Name))}";
+  }
+
   /// Gets the Element type parameter name for a chain-family type (Chain or ChainNode alias).
   /// Returns the concrete element type name (e.g., "Integer", "String").
   private string GetChainElementType(string structTypeName) {
@@ -7247,12 +7254,24 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       destructureNames = [];
       do {
         if (Check(TokenType.Comma)) Advance();
-        destructureNames.Add(Expect(TokenType.Identifier).Value);
+        var nameToken = Expect(TokenType.Identifier);
+        if (nameToken.Value == "_") {
+          destructureNames.Add($"__discard_{_discardCounter++}");
+        } else {
+          destructureNames.Add(nameToken.Value);
+          _localVarLocations.Add((nameToken.Value, nameToken.Line, nameToken.Column));
+        }
       } while (Check(TokenType.Comma));
       Expect(TokenType.RightParen);
       itemName = $"__for_tuple_{_blockCounter}";
     } else {
-      itemName = Expect(TokenType.Identifier).Value;
+      var itemToken = Expect(TokenType.Identifier);
+      if (itemToken.Value == "_") {
+        itemName = $"__discard_{_discardCounter++}";
+      } else {
+        itemName = itemToken.Value;
+        _localVarLocations.Add((itemName, itemToken.Line, itemToken.Column));
+      }
     }
     Expect(TokenType.In);
     var iterableExpr = ParseExpression();
@@ -7823,7 +7842,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
   private sealed record ExactCharPattern(string Value, string DisplayName, int Line, int Column) : MatchPattern(DisplayName, Line, Column);
   private sealed record RangePattern(RangeBound? Lower, RangeBound? Upper, bool UpperInclusive, string DisplayName, int Line, int Column) : MatchPattern(DisplayName, Line, Column);
   // Pattern for associated-value enum case: matches tag and optionally binds payload values
-  private sealed record EnumCasePattern(int Ordinal, string CaseName, List<string>? Bindings,
+  private sealed record EnumCasePattern(int Ordinal, string CaseName, List<(string Name, int Line, int Column)>? Bindings,
       List<(string Name, MlirType Type)>? AssociatedValues, string DisplayName, int Line, int Column)
       : MatchPattern(DisplayName, Line, Column);
 
@@ -7863,13 +7882,17 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
         }
         seenEnumCases.Add(caseNameToken.Value);
 
-        List<string>? bindings = null;
+        List<(string Name, int Line, int Column)>? bindings = null;
         if (Check(TokenType.LeftParen)) {
           Advance(); // consume '('
           bindings = [];
           while (!Check(TokenType.RightParen) && !IsAtEnd()) {
-            var bindingName = Expect(TokenType.Identifier).Value;
-            bindings.Add(bindingName);
+            var bindingToken = Expect(TokenType.Identifier);
+            if (bindingToken.Value == "_") {
+              bindings.Add(($"__discard_{_discardCounter++}", bindingToken.Line, bindingToken.Column));
+            } else {
+              bindings.Add((bindingToken.Value, bindingToken.Line, bindingToken.Column));
+            }
             if (Check(TokenType.Comma)) Advance();
           }
           Expect(TokenType.RightParen);
@@ -8198,6 +8221,11 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
   /// </summary>
   private bool IsStructTypeCompatible(string argTypeName, string paramTypeName) {
     if (argTypeName == paramTypeName) return true;
+    // Resolve both sides to their monomorphized concrete names so aliases match
+    var argResolved = ResolveConcreteTypeName(argTypeName);
+    var paramResolved = ResolveConcreteTypeName(paramTypeName);
+    if (argResolved == paramResolved) return true;
+    if (argResolved == paramTypeName || argTypeName == paramResolved) return true;
     _typeAliasSources.TryGetValue(argTypeName, out var argSource);
     _typeAliasSources.TryGetValue(paramTypeName, out var paramSource);
     // Check if arg type is a typealias whose source matches the param type
@@ -8252,11 +8280,6 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
   }
 
   /// <summary>
-  /// Emits comparison ops for a set of patterns against the scrutinee value.
-  /// Multiple patterns are combined with logical OR.
-  /// Returns the combined boolean comparison result.
-  /// </summary>
-  /// <summary>
   /// Emits payload binding variables for associated-value enum match patterns.
   /// For each EnumCasePattern with bindings, extracts payload values from the
   /// original enum scrutinee and declares them as local variables.
@@ -8270,7 +8293,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       _currentBlock!.AddOp(enumVarRef);
 
       for (int i = 0; i < bindings.Count; i++) {
-        var bindingName = bindings[i];
+        var (bindingName, bindingLine, bindingCol) = bindings[i];
         var assocType = assocValues[i].Type;
         var bindingKind = assocType.ToValueKind();
         string? structTypeName = assocType is MlirStructType st ? st.Name
@@ -8287,10 +8310,18 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
         _currentBlock!.AddOp(new MaxonAssignOp(bindingName, payloadOp.Result,
           isDeclaration: true, isMutable: scrutineeMutable, bindingKind));
         _variables.Declare(bindingName, bindingKind, scrutineeMutable, payloadOp.Result, _currentBlock!, structTypeName: structTypeName, payloadBinding: payloadBinding);
+        if (!bindingName.StartsWith("__discard_")) {
+          _localVarLocations.Add((bindingName, bindingLine, bindingCol));
+        }
       }
     }
   }
 
+  /// <summary>
+  /// Emits comparison ops for a set of patterns against the scrutinee value.
+  /// Multiple patterns are combined with logical OR.
+  /// Returns the combined boolean comparison result.
+  /// </summary>
   private MaxonValue EmitPatternComparison(
       List<MatchPattern> patterns, string scrutTempName,
       MaxonValueKind compareKind, string? structTypeName) {
@@ -12718,12 +12749,15 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     // Parse closure parameters
     var paramNames = new List<string>();
     var paramTypes = new List<MlirType>();
+    var paramTokens = new List<Token>();
 
     if (!Check(TokenType.RightParen)) {
       int paramIdx = 0;
       do {
-        var paramName = Expect(TokenType.Identifier).Value;
+        var paramToken = Expect(TokenType.Identifier);
+        var paramName = paramToken.Value;
         paramNames.Add(paramName);
+        paramTokens.Add(paramToken);
         // Check if next token is ')' or ',' — untyped parameter, use inferred type
         if (Check(TokenType.RightParen) || Check(TokenType.Comma)) {
           if (inferredFnType != null && paramIdx < inferredFnType.ParameterTypes.Count) {
@@ -12753,6 +12787,10 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     var savedFunction = _currentFunction;
     var savedReferencedVars = new HashSet<string>(_referencedVars);
     var savedClosureCaptures = _closureCaptures;
+    var savedParamLocations = new List<(string, int, int)>(_paramLocations);
+    var savedLocalVarLocations = new List<(string, int, int)>(_localVarLocations);
+    _paramLocations.Clear();
+    _localVarLocations.Clear();
 
     // Use inferred return type if available, so struct literal syntax works in body
     MlirType? inferredReturnType = inferredFnType?.ReturnType;
@@ -12771,6 +12809,9 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
 
     // Add closure parameters to scope
     for (int i = 0; i < paramNames.Count; i++) {
+      if (paramNames[i] != "_" && i < paramTokens.Count) {
+        _paramLocations.Add((paramNames[i], paramTokens[i].Line, paramTokens[i].Column));
+      }
       if (paramTypes[i] is MlirStructType structType) {
         var structParamOp = new MaxonStructParamOp(i, paramNames[i], structType.Name);
         _currentBlock.AddOp(structParamOp);
@@ -12858,6 +12899,8 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     // Add closure function to module
     _currentModule!.Functions.Add(finalClosureFunc);
 
+    CheckUnusedVariables();
+
     // Restore parsing state
     _variables.RestoreAll(savedVars);
     _currentBlock = savedBlock;
@@ -12867,6 +12910,10 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     // Captured variables are used by the outer function (passed into the closure environment)
     foreach (var c in captures) _referencedVars.Add(c.Name);
     _closureCaptures = savedClosureCaptures;
+    _paramLocations.Clear();
+    _paramLocations.AddRange(savedParamLocations);
+    _localVarLocations.Clear();
+    _localVarLocations.AddRange(savedLocalVarLocations);
 
     // Create a function reference or closure create op
     var fnType = new MlirFunctionType(paramTypes, returnType);

@@ -78,7 +78,7 @@ typealias IntArray = Array with Integer
 function main() returns ExitCode
   var arr = IntArray{}
   var count = 0
-  for (index, value) in arr.enumerated() 'loop'
+  for (_, _) in arr.enumerated() 'loop'
     count = count + 1
   end 'loop'
   print("{count}\n")

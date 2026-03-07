@@ -139,6 +139,8 @@ let double = (n int) gives n * 2
 
 Closures capture variables from the enclosing scope **by reference**. Changes to a captured variable after the closure is created are visible inside the closure when it runs.
 
+Closure parameters are checked for unused (E3012). Use `_` to discard: `(_ int) gives 42`
+
 ## Visibility
 
 All declarations are file-scoped by default. Use `export` for cross-file visibility:
@@ -193,6 +195,10 @@ for (i, item) in array.enumerated() 'loop' ... end 'loop'
 
 // Skip: advance loop by n positions and continue
 skip 2             // skip 2 elements in innermost for loop
+
+// Discard loop variable when only side effects matter
+for _ in array 'loop' ... end 'loop'
+for (_, name) in pairs.enumerated() 'loop' ... end 'loop'
 ```
 
 ### Match Statement
@@ -214,6 +220,8 @@ break 'label'    // exits match (or loop) with that label
 Range patterns: `a..=b` (inclusive), `a..<b` (exclusive upper), `a..` (open upper), `..=b`/`..<b` (open lower), `..` (wildcard).
 
 Union matches must be exhaustive -- all cases must be listed explicitly. Use `default throws` for non-exhaustive union matching (see below).
+
+Pattern bindings are checked for unused (E3012). Use `_` to discard: `case success(_)` or `case pair(_, second)`
 
 ### Match Expression
 ```maxon

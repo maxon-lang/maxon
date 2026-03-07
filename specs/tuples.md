@@ -185,7 +185,7 @@ end 'main'
 function main() returns ExitCode
   var m = ["a": 10, "b": 32]
   var sum = 0
-  for (key, value) in m 'loop'
+  for (_, value) in m 'loop'
     sum = sum + value
   end 'loop'
   return sum

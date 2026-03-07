@@ -498,7 +498,7 @@ end 'main'
 function main() returns ExitCode
   var arr = ["aaa", "bbb", "ccc"]
   var count = 0
-  for s in arr 'loop'
+  for _ in arr 'loop'
     count = count + 1
   end 'loop'
   return count
@@ -514,7 +514,7 @@ var names = ["alice", "bob"]
 
 function main() returns ExitCode
   var count = 0
-  for name in names 'loop'
+  for _ in names 'loop'
     count = count + 1
   end 'loop'
   return count

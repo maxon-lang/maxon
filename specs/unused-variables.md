@@ -148,3 +148,186 @@ end 'main'
 ```maxoncstderr
 error E3012: specs/fragments/unused-variables/multiple-unused-first-reported.test:4:7: unused variable: 'x'
 ```
+
+<!-- test: unused-for-in-variable -->
+```maxon
+
+function main() returns ExitCode
+  var arr = [1, 2, 3]
+  var count = 0
+  for s in arr 'loop'
+    count = count + 1
+  end 'loop'
+  return count
+end 'main'
+```
+```maxoncstderr
+error E3012: specs/fragments/unused-variables/unused-for-in-variable.test:6:7: unused variable: 's'
+```
+
+<!-- test: used-for-in-variable -->
+```maxon
+
+function main() returns ExitCode
+  var arr = [10, 20, 30]
+  var total = 0
+  for s in arr 'loop'
+    total = total + s
+  end 'loop'
+  return total
+end 'main'
+```
+```exitcode
+60
+```
+
+<!-- test: discard-for-in-variable -->
+```maxon
+
+function main() returns ExitCode
+  var arr = [1, 2, 3]
+  var count = 0
+  for _ in arr 'loop'
+    count = count + 1
+  end 'loop'
+  return count
+end 'main'
+```
+```exitcode
+3
+```
+
+<!-- test: unused-for-range-variable -->
+```maxon
+
+function main() returns ExitCode
+  var count = 0
+  for i in 0 upto 3 'loop'
+    count = count + 1
+  end 'loop'
+  return count
+end 'main'
+```
+```maxoncstderr
+error E3012: specs/fragments/unused-variables/unused-for-range-variable.test:5:7: unused variable: 'i'
+```
+
+<!-- test: unused-match-binding -->
+```maxon
+
+typealias Integer = int(i64.min to i64.max)
+
+union Container
+  empty
+  value(n Integer)
+end 'Container'
+
+function main() returns ExitCode
+  var c = Container.value(42)
+  match c 'check'
+    empty then return 1
+    value(n) then return 0
+  end 'check'
+end 'main'
+```
+```maxoncstderr
+error E3012: specs/fragments/unused-variables/unused-match-binding.test:14:11: unused variable: 'n'
+```
+
+<!-- test: used-match-binding -->
+```maxon
+
+typealias Integer = int(i64.min to i64.max)
+
+union Container
+  empty
+  value(n Integer)
+end 'Container'
+
+function main() returns ExitCode
+  var c = Container.value(42)
+  match c 'check'
+    empty then return 1
+    value(n) then return n
+  end 'check'
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: discard-match-binding -->
+```maxon
+
+typealias Integer = int(i64.min to i64.max)
+
+union Container
+  empty
+  value(n Integer)
+end 'Container'
+
+function main() returns ExitCode
+  var c = Container.value(42)
+  match c 'check'
+    empty then return 1
+    value(_) then return 0
+  end 'check'
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: unused-closure-param -->
+```maxon
+
+typealias Integer = int(i64.min to i64.max)
+
+function apply(f (Integer) returns Integer, x Integer) returns Integer
+  return f(x)
+end 'apply'
+
+function main() returns ExitCode
+  var result = apply(f: (n Integer) gives 42, x: 10)
+  return result
+end 'main'
+```
+```maxoncstderr
+error E3012: specs/fragments/unused-variables/unused-closure-param.test:10:26: unused variable: 'n'
+```
+
+<!-- test: used-closure-param -->
+```maxon
+
+typealias Integer = int(i64.min to i64.max)
+
+function apply(f (Integer) returns Integer, x Integer) returns Integer
+  return f(x)
+end 'apply'
+
+function main() returns ExitCode
+  var result = apply(f: (n Integer) gives n + 1, x: 10)
+  return result
+end 'main'
+```
+```exitcode
+11
+```
+
+<!-- test: discard-closure-param -->
+```maxon
+
+typealias Integer = int(i64.min to i64.max)
+
+function apply(f (Integer) returns Integer, x Integer) returns Integer
+  return f(x)
+end 'apply'
+
+function main() returns ExitCode
+  var result = apply(f: (_ Integer) gives 42, x: 10)
+  return result
+end 'main'
+```
+```exitcode
+42
+```

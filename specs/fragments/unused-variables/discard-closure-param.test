@@ -1,0 +1,62 @@
+// Test: discard-closure-param
+
+typealias Integer = int(i64.min to i64.max)
+
+function apply(f (Integer) returns Integer, x Integer) returns Integer
+  return f(x)
+end 'apply'
+
+function main() returns ExitCode
+  var result = apply(f: (_ Integer) gives 42, x: 10)
+  return result
+end 'main'
+---
+ExitCode: 42
+---
+module {
+  func @unused-variables.apply(f: i64, __env_f: i64, x: i64) -> i64 {
+  entry:
+    x86.prologue stack_size=16
+    x86.mov [rbp-8], rcx
+    x86.mov r10, rcx
+    x86.mov rcx, r8
+    x86.call r10
+    x86.epilogue
+    x86.ret
+  }
+  func @unused-variables.main() -> u32 {
+  entry:
+    x86.prologue stack_size=16
+    x86.lea_func rax, [__closure_0]
+    x86.mov rcx, rax
+    x86.xor rdx, rdx
+    x86.mov r8, 10
+    x86.call unused-variables.apply
+    x86.mov [rbp-8], rax
+    x86.xor rcx, rcx
+    x86.cmp rax, rcx
+    x86.setl rdx
+    x86.movzx rdx, rdxb
+    x86.mov rbx, 4294967295
+    x86.cmp rax, rbx
+    x86.setg rsi
+    x86.movzx rsi, rsib
+    x86.or rdx, rsi
+    x86.test rdx, rdx
+    x86.je unused-variables.main.__range_ok_0
+  __range_panic_0:
+    x86.lea_symdata rax, [__panic_msg_13]
+    x86.mov rcx, rax
+    x86.call maxon_panic
+  __range_ok_0:
+    x86.mov rax, [rbp-8]
+    x86.epilogue
+    x86.ret
+  }
+  func @__closure_0(_: i64) -> i64 {
+  entry:
+    x86.mov rax, 42
+    x86.ret
+  }
+}
+---

@@ -1055,8 +1055,8 @@ let name = "Maxon"
 - Scope is block-scoped
 - Primitives are stack-allocated; `var` arrays use heap buffers (with automatic cleanup)
 - For struct-typed variables, `var b = a` creates a reference (alias to the same object); use `var b = a.clone()` for an independent copy (see [Reference-by-Default Assignment](#reference-by-default-assignment))
-- All variables must be used; unused variables cause a compile error (E3012)
-- The variable name `_` is a special discard identifier: it creates no binding and is exempt from unused variable checks. Only the exact name `_` is a discard -- names like `_x` are regular variables subject to normal unused checks.
+- All variables must be used; unused variables cause a compile error (E3012). This applies to `let`/`var` declarations, function parameters, for-loop variables, match pattern bindings, and closure parameters.
+- The variable name `_` is a special discard identifier: it creates no binding and is exempt from unused variable checks. Only the exact name `_` is a discard -- names like `_x` are regular variables subject to normal unused checks. Multiple `_` discards are allowed in tuple destructuring and match patterns (e.g., `for (_, _) in pairs` or `case pair(_, _)`).
 
 ### Top-Level Variables
 
@@ -1512,6 +1512,7 @@ end 'main'
 - Closure parameters may optionally omit the type annotation when the type can be inferred from context.
 - Closures can only appear where a function-type value is expected.
 - Captured variables follow the same mutability rules as parameters: a closure that assigns to a captured `let` variable produces a compile error.
+- Closure parameters are checked for unused (E3012). Use `_` to discard an unused parameter: `(_ int) gives 42`
 
 ### Function Purity and Discarded Results
 
@@ -1888,6 +1889,7 @@ This works on all iterable types (Array, String, Map, Set, List, etc.). The `Enu
 - Ranges use `to` for inclusive end and `upto` for exclusive end
 - Desugars to while loop with iterator interface
 - The compiler calls `createIterator()` before each loop to reset iteration state, enabling safe re-iteration of the same collection
+- Loop variables are checked for unused (E3012). Use `_` as the loop variable when the value is not needed: `for _ in array 'loop'`. In tuple destructuring, each element is checked independently: `for (_, name) in pairs.enumerated() 'loop'`
 
 ### Match Statement
 
@@ -1970,6 +1972,7 @@ end 'handle'
 - `default` matches any non-union value not matched by previous patterns
 - `default` must be the last case if present
 - Union case patterns: `CaseName(binding1, binding2)` extracts associated values
+- Pattern bindings are checked for unused (E3012). Use `_` to discard individual bindings: `case success(_)` or `case pair(_, second)`
 
 **Range Patterns:**
 

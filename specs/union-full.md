@@ -276,7 +276,7 @@ end 'Container'
 function main() returns ExitCode
   var c = Container.value(42)
   match c 'check'
-    value(n) then return 1
+    value(_) then return 1
     empty then return 0
   end 'check'
 end 'main'
@@ -934,7 +934,7 @@ function main() returns ExitCode
   var c = try Container.fromName("empty") otherwise Container.value(99)
   match c 'check'
     empty then return 1
-    value(_n) then return 0
+    value(_) then return 0
   end 'check'
 end 'main'
 ```
@@ -995,7 +995,7 @@ function main() returns ExitCode
   var c = try Container.fromName(name) otherwise Container.value(99)
   match c 'check'
     empty then return 1
-    value(_n) then return 0
+    value(_) then return 0
   end 'check'
 end 'main'
 ```

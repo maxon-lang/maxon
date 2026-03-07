@@ -5,6 +5,7 @@
 export type List uses Element implements InitableFromArrayLiteral with Element, Iterable with Element
   typealias ElementArray = Array with Element
   typealias EChain = __Chain with Element
+  typealias ENode = __ChainNode with Element
 
   var chain EChain
   var iterIndex Count
@@ -44,20 +45,28 @@ export type List uses Element implements InitableFromArrayLiteral with Element, 
     return node.value()
   end 'last'
 
+  /// Walk from head to the node at the given offset.
+  function walkTo(offset Index) returns ENode throws ArrayError
+    var current = try chain.head() otherwise 'err'
+      throw ArrayError.indexOutOfBounds
+    end 'err'
+    for _ in 0 upto offset 'walk'
+      current = try current.next() otherwise 'err2'
+        throw ArrayError.indexOutOfBounds
+      end 'err2'
+    end 'walk'
+    return current
+  end 'walkTo'
+
   /// Get element at index (0-based, front to back), throws if out of bounds
   export function get(index Index) returns Element throws ArrayError
     if index >= chain.count() 'bounds'
       throw ArrayError.indexOutOfBounds
     end 'bounds'
-    var current = try chain.head() otherwise 'err'
+    var node = try walkTo(index) otherwise 'err'
       throw ArrayError.indexOutOfBounds
     end 'err'
-    for i in 0 upto index 'walk'
-      current = try current.next() otherwise 'err2'
-        throw ArrayError.indexOutOfBounds
-      end 'err2'
-    end 'walk'
-    return current.value()
+    return node.value()
   end 'get'
 
   /// Add an element to the front of the list. O(1).
@@ -80,15 +89,9 @@ export type List uses Element implements InitableFromArrayLiteral with Element, 
       chain.insertLast(value)
       return
     end 'back'
-    // Walk to the node at position (at-1), insert after it
-    var current = try chain.head() otherwise 'err'
+    var current = try walkTo(at - 1) otherwise 'err'
       return
     end 'err'
-    for i in 0 upto at - 1 'walk'
-      current = try current.next() otherwise 'err2'
-        return
-      end 'err2'
-    end 'walk'
     chain.insertAfter(current, value: value)
   end 'insert'
 
@@ -113,15 +116,10 @@ export type List uses Element implements InitableFromArrayLiteral with Element, 
     if at >= chain.count() 'bounds'
       throw ArrayError.indexOutOfBounds
     end 'bounds'
-    var current = try chain.head() otherwise 'err'
+    var node = try walkTo(at) otherwise 'err'
       throw ArrayError.indexOutOfBounds
     end 'err'
-    for i in 0 upto at 'walk'
-      current = try current.next() otherwise 'err2'
-        throw ArrayError.indexOutOfBounds
-      end 'err2'
-    end 'walk'
-    return chain.remove(current)
+    return chain.remove(node)
   end 'remove'
 
   /// Remove all elements
