@@ -10,16 +10,16 @@ export function __int_fromString(input String) returns ParsedInt throws ParseErr
   var hasDigits = false
 
   for cp in input.codepoints() 'chars'
-    if cp == 45 'minus'
+    if cp == '-' 'minus'
       if hasDigits 'minus_after_digits'
         throw ParseError.invalidFormat
       end 'minus_after_digits'
       negative = true
     end 'minus' else 'not_minus'
-      if cp >= 48 'maybe_digit'
-        if cp <= 57 'is_digit'
+      if cp >= '0' 'maybe_digit'
+        if cp <= '9' 'is_digit'
           hasDigits = true
-          result = result * 10 + (cp - 48)
+          result = result * 10 + (cp - '0')
         end 'is_digit' else 'not_digit'
           throw ParseError.invalidFormat
         end 'not_digit'
@@ -49,13 +49,13 @@ export function __float_fromString(input String) returns MathValue throws ParseE
   var hasDigits = false
 
   for cp in input.codepoints() 'chars'
-    if cp == 46 'dot'
+    if cp == '.' 'dot'
       if pastDot 'double_dot'
         throw ParseError.invalidFormat
       end 'double_dot'
       pastDot = true
     end 'dot' else 'not_dot'
-      if cp == 45 'minus'
+      if cp == '-' 'minus'
         if hasDigits 'minus_after_digits'
           throw ParseError.invalidFormat
         end 'minus_after_digits'
@@ -64,10 +64,10 @@ export function __float_fromString(input String) returns MathValue throws ParseE
         end 'minus_after_dot'
         negative = true
       end 'minus' else 'not_minus'
-        if cp >= 48 'maybe_digit'
-          if cp <= 57 'is_digit'
+        if cp >= '0' 'maybe_digit'
+          if cp <= '9' 'is_digit'
             hasDigits = true
-            var digit = cp - 48
+            var digit = cp - '0'
             if pastDot 'after_dot'
               fracDiv = fracDiv * 10.0
               fracPart = fracPart + (digit as float) / fracDiv

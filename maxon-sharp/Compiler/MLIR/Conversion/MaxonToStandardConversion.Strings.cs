@@ -37,7 +37,7 @@ public static partial class MaxonToStandardConversion {
 
 	/// Allocates a __ManagedMemory struct, stores the 4 managed fields
 	/// (buffer, length, capacity=0, elementSize=1), and stores the pointer in the outer struct.
-	private static string EmitManagedChild(
+	private static string EmitManagedField(
 	  string tempName, string managedName,
 	  StdI64 bufferPtr, StdI64 lengthVal, int managedFieldOffset,
 	  MlirBlock<StandardOp> block, Dictionary<string, string> varTypes) {
@@ -77,7 +77,7 @@ public static partial class MaxonToStandardConversion {
 		EmitStore(block, outerPtr, tempName, varTypes);
 
 		var managedName = $"__{tempPrefix}_managed_{resultId}";
-		EmitManagedChild(tempName, managedName, bufferPtr, lengthVal, 0, block, varTypes);
+		EmitManagedField(tempName, managedName, bufferPtr, lengthVal, 0, block, varTypes);
 
 		return new StdHeapPtr(outerPtr.Id, outerPtr.TypeName, tempName);
 	}
@@ -123,7 +123,7 @@ public static partial class MaxonToStandardConversion {
 		EmitStructFieldStore(block, iterConst.Result, tempName, 0, MlirType.I64, varTypes);
 
 		var managedName = $"__bstrtmp_managed_{op.Result.Id}";
-		EmitManagedChild(tempName, managedName, bufferPtr, lengthVal, 8, block, varTypes);
+		EmitManagedField(tempName, managedName, bufferPtr, lengthVal, 8, block, varTypes);
 
 		valueMap[op.Result] = new StdHeapPtr(outerPtr.Id, outerPtr.TypeName, tempName);
 	}
@@ -611,7 +611,7 @@ public static partial class MaxonToStandardConversion {
 		EmitStore(block, outerPtr, tempName, varTypes);
 
 		var managedName = $"{tempName}__managed";
-		EmitManagedChild(tempName, managedName, bufferPtr, lengthVal, 0, block, varTypes);
+		EmitManagedField(tempName, managedName, bufferPtr, lengthVal, 0, block, varTypes);
 
 		if (hasIterPos) {
 			var iterConst = new StdConstI64Op(0);

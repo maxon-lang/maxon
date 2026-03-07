@@ -1,0 +1,27 @@
+// Test: char-literal-eq-codepoint
+function main() returns ExitCode
+  var cp = 45
+  if cp == '-' 'check'
+    return 0
+  end 'check'
+  return 1
+end 'main'
+---
+ExitCode: 0
+---
+module {
+  func @char-literal-to-int.main() -> u32 {
+  entry:
+    x86.mov rax, 45
+    x86.mov rcx, 45
+    x86.cmp rax, rcx
+    x86.jne char-literal-to-int.main.check_0.after
+  check_0:
+    x86.xor rax, rax
+    x86.ret
+  check_0.after:
+    x86.mov rax, 1
+    x86.ret
+  }
+}
+---

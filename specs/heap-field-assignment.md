@@ -11,7 +11,7 @@ category: memory-management
 
 ### Assigning to Heap-Pointer Fields
 
-Struct fields that hold heap-pointer types (other structs, enums with associated values) can be assigned directly. The memory manager tracks the old value as a child of the parent struct and frees it when the parent is freed.
+Struct fields that hold heap-pointer types (other structs, enums with associated values) can be assigned directly. When the struct is freed, its destructor decrefs each managed field, freeing them if no other references remain.
 
 ```text
 container.child = newChild

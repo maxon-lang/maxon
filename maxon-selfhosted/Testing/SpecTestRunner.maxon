@@ -29,13 +29,13 @@ function trimWhitespace(s String) returns String
     var cp = s.charAt(idx)
     var isCpWs = false
     for b in cp.bytes() 'checkByte'
-      if b == 32 'sp'
+      if b == ' ' 'sp'
         isCpWs = true
-      end 'sp' else if b == 10 'lf'
+      end 'sp' else if b == '\n' 'lf'
         isCpWs = true
-      end 'lf' else if b == 13 'cr'
+      end 'lf' else if b == '\r' 'cr'
         isCpWs = true
-      end 'cr' else if b == 9 'tab'
+      end 'cr' else if b == '\t' 'tab'
         isCpWs = true
       end 'tab'
     end 'checkByte'
@@ -54,13 +54,13 @@ function trimWhitespace(s String) returns String
     let nextIdx = try s.indexAfter(idx) otherwise 'lastOne'
       var isWs = false
       for b in cp.bytes() 'checkByte2'
-        if b == 32 'sp2'
+        if b == ' ' 'sp2'
           isWs = true
-        end 'sp2' else if b == 10 'lf2'
+        end 'sp2' else if b == '\n' 'lf2'
           isWs = true
-        end 'lf2' else if b == 13 'cr2'
+        end 'lf2' else if b == '\r' 'cr2'
           isWs = true
-        end 'cr2' else if b == 9 'tab2'
+        end 'cr2' else if b == '\t' 'tab2'
           isWs = true
         end 'tab2'
       end 'checkByte2'
@@ -71,13 +71,13 @@ function trimWhitespace(s String) returns String
     end 'lastOne'
     var isWs2 = false
     for b in cp.bytes() 'checkByte3'
-      if b == 32 'sp3'
+      if b == ' ' 'sp3'
         isWs2 = true
-      end 'sp3' else if b == 10 'lf3'
+      end 'sp3' else if b == '\n' 'lf3'
         isWs2 = true
-      end 'lf3' else if b == 13 'cr3'
+      end 'lf3' else if b == '\r' 'cr3'
         isWs2 = true
-      end 'cr3' else if b == 9 'tab3'
+      end 'cr3' else if b == '\t' 'tab3'
         isWs2 = true
       end 'tab3'
     end 'checkByte3'
@@ -94,19 +94,20 @@ function parseInteger(s String) returns ParsedInt throws CompileError
   var result = 0
   var negative = false
   for (i, cp) in s.codepoints().enumerated() 'chars'
-    if cp == 45 'minus'
+    if cp == '-' 'minus'
       if i == 0 'first'
         negative = true
         continue
       end 'first'
+
       throw CompileError.readError
     end 'minus'
-    if cp >= 48 'digit'
-      if cp <= 57 'isDigit'
-        result = result * 10 + cp - 48
-        continue
-      end 'isDigit'
+
+    if cp >= '0' and cp <= '9' 'digit'
+      result = result * 10 + cp - '0'
+      continue
     end 'digit'
+
     throw CompileError.readError
   end 'chars'
   if negative 'neg'

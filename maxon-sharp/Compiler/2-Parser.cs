@@ -9006,6 +9006,14 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       if (rhsVal is MaxonEnum && TryCoerceConstantsToBackingType(rhsVal, out var rhsCoerced, out _) && rhsCoerced is MaxonStruct)
         rhsVal = rhsCoerced!;
 
+      // Coerce character literals to codepoint integers when the other operand is an integer
+      {
+        if (lhsVal is MaxonStruct { TypeName: "Character" } && IsIntegerLikeKind(DetermineValueKind(rhsVal)))
+          TryCoerceCharLiteralToCodepoint(ref lhsVal);
+        if (rhsVal is MaxonStruct { TypeName: "Character" } && IsIntegerLikeKind(DetermineValueKind(lhsVal)))
+          TryCoerceCharLiteralToCodepoint(ref rhsVal);
+      }
+
       // Constrained type parameter comparison: field (Struct kind from where-clause
       // promotion) vs parameter (TypeParameter/Integer kind). Both reference the same
       // type parameter and are i64 at runtime — emit integer comparison.
@@ -11258,6 +11266,18 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       return (lhsKind, lhs, rhs);
     }
 
+    // MatchKinds is called from arithmetic paths that bypass EmitBinaryOp's early coercion
+    if (lhsKind == MaxonValueKind.Struct && IsIntegerLikeKind(rhsKind)) {
+      if (TryCoerceCharLiteralToCodepoint(ref lhs)) { lhsKind = MaxonValueKind.Integer; }
+    }
+    if (rhsKind == MaxonValueKind.Struct && IsIntegerLikeKind(lhsKind)) {
+      if (TryCoerceCharLiteralToCodepoint(ref rhs)) { rhsKind = MaxonValueKind.Integer; }
+    }
+
+    if (lhsKind == rhsKind) {
+      return (lhsKind, lhs, rhs);
+    }
+
     // Comparisons do not allow implicit int/float promotion
     if (IsComparisonOp(op)) {
       // Allow byte vs int-literal-in-range comparisons
@@ -11312,6 +11332,59 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
         return lit.ValueKind == MaxonValueKind.Integer && lit.IntValue >= 0 && lit.IntValue <= 255;
     }
     return false;
+  }
+
+  private static bool IsIntegerLikeKind(MaxonValueKind kind) =>
+    kind is MaxonValueKind.Integer or MaxonValueKind.Byte or MaxonValueKind.Short;
+
+  /// <summary>
+  /// If the given value is a Character struct produced by a char literal op,
+  /// replaces it with an integer literal containing the Unicode codepoint value.
+  /// Only coerces actual literals, not Character variables.
+  /// </summary>
+  private bool TryCoerceCharLiteralToCodepoint(ref MaxonValue value) {
+    if (value is not MaxonStruct ms || ms.TypeName != "Character") return false;
+
+    // Find the producing MaxonCharLiteralOp in the current block
+    MaxonCharLiteralOp? charOp = null;
+    int charOpIdx = -1;
+    var ops = _currentBlock!.Operations;
+    for (int i = ops.Count - 1; i >= 0; i--) {
+      if (ops[i] is MaxonCharLiteralOp cop && cop.Result == value) {
+        charOp = cop;
+        charOpIdx = i;
+        break;
+      }
+    }
+    if (charOp == null) return false; // Not a literal — don't coerce
+
+    // Extract Unicode codepoint from the escape-resolved string
+    string resolved = charOp.Value;
+    int codepoint;
+    if (resolved.Length == 1) {
+      codepoint = resolved[0];
+    } else if (resolved.Length == 2 && char.IsSurrogatePair(resolved, 0)) {
+      codepoint = char.ConvertToUtf32(resolved, 0);
+    } else {
+      return false; // Multi-codepoint grapheme cluster — cannot coerce to single int
+    }
+
+    // Remove the MaxonCharLiteralOp and its temp assign from the block
+    for (int i = ops.Count - 1; i >= charOpIdx; i--) {
+      if (ops[i] == charOp) {
+        ops.RemoveAt(i);
+      } else if (ops[i] is MaxonAssignOp assign && assign.Value == value
+                 && assign.VarName.StartsWith("__lit_tmp_")) {
+        _variables.Remove(assign.VarName);
+        ops.RemoveAt(i);
+      }
+    }
+
+    // Emit an integer literal with the codepoint value
+    var litOp = new MaxonLiteralOp((long)codepoint);
+    _currentBlock!.AddOp(litOp);
+    value = litOp.Result;
+    return true;
   }
 
   private MaxonValue PromoteValue(MaxonValue value, MaxonValueKind targetKind) {

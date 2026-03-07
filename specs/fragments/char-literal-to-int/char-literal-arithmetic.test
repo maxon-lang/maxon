@@ -1,0 +1,39 @@
+// Test: char-literal-arithmetic
+function main() returns ExitCode
+  var cp = 53
+  var digit = cp - '0'
+  return digit
+end 'main'
+---
+ExitCode: 5
+---
+module {
+  func @char-literal-to-int.main() -> u32 {
+  entry:
+    x86.prologue stack_size=16
+    x86.mov rax, 53
+    x86.mov rcx, 48
+    x86.sub rax, rcx
+    x86.mov [rbp-8], rax
+    x86.xor rdx, rdx
+    x86.cmp rax, rdx
+    x86.setl rbx
+    x86.movzx rbx, rbxb
+    x86.mov rsi, 4294967295
+    x86.cmp rax, rsi
+    x86.setg rdi
+    x86.movzx rdi, rdib
+    x86.or rbx, rdi
+    x86.test rbx, rbx
+    x86.je char-literal-to-int.main.__range_ok_0
+  __range_panic_0:
+    x86.lea_symdata rax, [__panic_msg_9]
+    x86.mov rcx, rax
+    x86.call maxon_panic
+  __range_ok_0:
+    x86.mov rax, [rbp-8]
+    x86.epilogue
+    x86.ret
+  }
+}
+---

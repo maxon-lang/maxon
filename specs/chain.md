@@ -10,7 +10,7 @@ category: collections
 
 A `__Chain` is a doubly linked list with O(1) insertion, removal, and node-level access. Unlike `List`, which provides index-based access, `__Chain` exposes node handles (`__ChainNode`) that allow direct traversal and manipulation.
 
-__Chain owns its nodes via a parent-child memory hierarchy. Nodes are accessed through `__ChainNode` handles with refcount-based lifetime.
+__Chain owns its nodes via reference counting. Nodes are accessed through `__ChainNode` handles with refcount-based lifetime.
 
 ### Creating a Chain
 

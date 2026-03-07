@@ -523,6 +523,7 @@ for cp in s.codepoints() 'cp' ... end 'cp'   // codepoints
 
 ```maxon
 // Implicit: int -> float in arithmetic
+// Implicit: 'A' -> 65 (char literal to codepoint when used with int)
 
 // Explicit with 'as'
 var f = 5 as float

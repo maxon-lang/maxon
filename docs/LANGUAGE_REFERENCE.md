@@ -161,6 +161,14 @@ Underscore separators for readability:
 Character literals create a `character` type value, which represents an Extended Grapheme Cluster (EGC).
 The `character` type may contain multiple UTF-8 bytes.
 
+When a single-codepoint character literal appears in a binary operation with an integer operand, the compiler automatically converts it to its Unicode codepoint value:
+```maxon
+var cp = 45
+if cp == '-' 'check'    // '-' is coerced to 45
+  var digit = cp - '0'  // '0' is coerced to 48
+end 'check'
+```
+
 **String Literals** (double-quoted, null-terminated)
 ```maxon
 "Hello, World!"
@@ -253,6 +261,7 @@ false
 
 **Implicit Conversions**
 - `int` → `float` (in mixed arithmetic)
+- `character` literal → `int` (in binary operations with an integer operand, coerced to Unicode codepoint value)
 
 **Explicit Conversions** (using `as` operator)
 

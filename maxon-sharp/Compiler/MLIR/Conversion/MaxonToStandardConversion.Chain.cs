@@ -164,7 +164,7 @@ public static partial class MaxonToStandardConversion {
   }
 
   /// <summary>
-  /// Lowers MaxonChainReinsertOp: reparents an existing node under the new chain
+  /// Lowers MaxonChainReinsertOp: moves an existing node into the new chain
   /// and calls the appropriate runtime insert function.
   /// </summary>
   private static void LowerChainReinsert(
@@ -333,7 +333,7 @@ public static partial class MaxonToStandardConversion {
   /// <summary>
   /// Lowers MaxonChainNodeSetValueOp: replaces the value in a chain node.
   /// For struct types, detaches the old value to current scope and decrefs it,
-  /// then reparents the new value under the node.
+  /// then stores the new value in the node.
   /// </summary>
   private static void LowerChainNodeSetValue(
     MaxonChainNodeSetValueOp op,

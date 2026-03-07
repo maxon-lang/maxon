@@ -91,7 +91,7 @@ public static partial class MaxonToStandardConversion {
 			EmitIncrefValue(block, (StdI64)loadOp.Result, scopeName: _currentFuncName);
 
 			var tempId = MlirContext.Current.NextId();
-			var tempName = temps.CreateTemp("callret", tempId, op.StructElementTypeName ?? "unknown", OwnershipFlags.Orphan | OwnershipFlags.CallReturn);
+			var tempName = temps.CreateTemp("mmget", tempId, op.StructElementTypeName ?? "unknown", OwnershipFlags.Orphan | OwnershipFlags.OwnsRef);
 			EmitStore(block, (StdI64)loadOp.Result, tempName, varTypes);
 			valueMap[op.Result] = new StdHeapPtr(loadOp.Result.Id, op.StructElementTypeName ?? "unknown", tempName);
 		} else {
