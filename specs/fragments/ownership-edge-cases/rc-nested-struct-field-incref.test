@@ -23,11 +23,11 @@ incref Inner #1 rc=1 [ownership-edge-cases.main]
 alloc Outer #2 rc=0 [ownership-edge-cases.main]
 incref Inner #1 rc=2 [ownership-edge-cases.main]
 incref Outer #2 rc=1 [ownership-edge-cases.main]
-decref Inner #1 rc=1 [ownership-edge-cases.main]
 decref Outer #2 rc=0 [ownership-edge-cases.main]
-decref Inner #1 rc=0 [~Outer]
-  free Inner #1
+decref Inner #1 rc=1 [~Outer]
   free Outer #2
+decref Inner #1 rc=0 [ownership-edge-cases.main]
+  free Inner #1
 ```
 ---
 module {
@@ -84,15 +84,15 @@ module {
     x86.call maxon_panic
   __range_ok_0:
     x86.mov rax, [rbp-32]
-    x86.mov rcx, [rbp-8]
+    x86.mov rcx, [rbp-16]
     x86.test rcx, rcx
     x86.jz __nonnull_skip_0
     x86.call mm_decref
     x86.label __nonnull_skip_0
-    x86.mov rax, [rbp-16]
+    x86.mov rax, [rbp-8]
     x86.test rax, rax
     x86.jz __nonnull_skip_1
-    x86.mov rcx, [rbp-16]
+    x86.mov rcx, [rbp-8]
     x86.call mm_decref
     x86.label __nonnull_skip_1
     x86.mov rax, [rbp-32]

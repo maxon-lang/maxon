@@ -318,7 +318,6 @@ public static partial class MaxonToStandardConversion {
     MlirBlock<StandardOp> block,
     Dictionary<MaxonValue, StdValue> valueMap,
     Dictionary<string, string> varTypes,
-    Dictionary<int, string> structVarNames,
     Dictionary<int, string> fnEnvVarNames,
     Dictionary<string, string> varNameToStructType,
     VarRegistry temps) {
@@ -341,9 +340,9 @@ public static partial class MaxonToStandardConversion {
         // Variable is itself a ref param — forward the existing reference pointer
         addressVal = EmitLoad(block, refPtrName, varTypes);
       } else if (closureOp.CapturedKinds[i] == MaxonValueKind.Struct
-             && structVarNames.TryGetValue(closureOp.CapturedValues[i].Id, out var capturedStructName)) {
+             && valueMap.TryGetValue(closureOp.CapturedValues[i], out var ccSv) && ccSv is StdHeapPtr ccHp) {
         // Struct variable: take address of the slot holding the heap pointer
-        var leaOp = new StdLeaOp(capturedStructName);
+        var leaOp = new StdLeaOp(ccHp.VarName!);
         block.AddOp(leaOp);
         var ptrToI64 = new StdPtrToI64Op(leaOp.Result);
         block.AddOp(ptrToI64);
@@ -374,8 +373,6 @@ public static partial class MaxonToStandardConversion {
     MlirBlock<StandardOp> block,
     Dictionary<MaxonValue, StdValue> valueMap,
     Dictionary<string, string> varTypes,
-    Dictionary<int, string> structVarNames,
-    Dictionary<int, string> structValueTypes,
     VarRegistry temps) {
     // Load the __env parameter (stored as a variable during function lowering)
     var envBasePtr = EmitLoad(block, "__env", varTypes);
@@ -405,11 +402,10 @@ public static partial class MaxonToStandardConversion {
       var structVarName = $"__capture_{envLoadOp.Name}";
       temps.RegisterTemp(structVarName, envLoadOp.StructTypeName ?? "unknown", OwnershipFlags.Borrowed);
       EmitStore(block, derefOp.Result, structVarName, varTypes);
-      structVarNames[envLoadOp.Result.Id] = structVarName;
-      if (envLoadOp.StructTypeName != null)
-        structValueTypes[envLoadOp.Result.Id] = envLoadOp.StructTypeName;
+      valueMap[envLoadOp.Result] = new StdHeapPtr(derefOp.Result.Id, envLoadOp.StructTypeName ?? "unknown", structVarName);
+    } else {
+      valueMap[envLoadOp.Result] = derefOp.Result;
     }
-    valueMap[envLoadOp.Result] = derefOp.Result;
   }
 
   private static void LowerFunctionParam(
@@ -458,7 +454,6 @@ public static partial class MaxonToStandardConversion {
     MlirBlock<StandardOp> block,
     Dictionary<MaxonValue, StdValue> valueMap,
     Dictionary<string, string> varTypes,
-    Dictionary<int, string> structVarNames,
     Dictionary<string, MlirType> typeDefs,
     Dictionary<int, string> fnEnvVarNames,
     Dictionary<int, StdValue> fnEnvDirectValues,
@@ -468,9 +463,9 @@ public static partial class MaxonToStandardConversion {
 
     for (int i = 0; i < indirectCallOp.Args.Count; i++) {
       var arg = indirectCallOp.Args[i];
-      if (structVarNames.TryGetValue(arg.Id, out var structName)) {
+      if (valueMap.TryGetValue(arg, out var argSv) && argSv is StdHeapPtr argHp) {
         // Struct args: pass heap pointer directly
-        var heapPtr = EmitLoad(block, structName, varTypes);
+        var heapPtr = EmitLoad(block, argHp.VarName!, varTypes);
         newArgs.Add(heapPtr);
       } else {
         newArgs.Add(valueMap[arg]);
@@ -519,7 +514,7 @@ public static partial class MaxonToStandardConversion {
     if (sretVarName != null && indirectCallOp.Result != null && callOp.Result != null) {
       // Struct return: store heap pointer in named variable
       EmitStore(block, callOp.Result, sretVarName, varTypes);
-      structVarNames[indirectCallOp.Result.Id] = sretVarName;
+      valueMap[indirectCallOp.Result] = new StdHeapPtr(callOp.Result!.Id, indirectCallOp.ResultStructTypeName ?? "unknown", sretVarName);
     } else if (indirectCallOp.Result != null && callOp.Result != null) {
       valueMap[indirectCallOp.Result] = callOp.Result;
     }

@@ -61,6 +61,40 @@ internal class TypeSubstitution {
       }
     }
 
+    // Resolve associated type params that are generic base types (e.g., Source=Array)
+    // to their concrete aliases (e.g., Source=Array_i64) using other params in the map.
+    foreach (var assocTypeName in paramNames) {
+      if (!map.TryGetValue(assocTypeName, out var assocType)) continue;
+      // Check if this type is a generic base type with concrete aliases
+      if (assocType is not MlirStructType assocStruct) continue;
+      if (!module.TypeAliasSources.ContainsKey(assocStruct.Name)
+          && module.TypeAliasSources.Values.Any(a => a.SourceTypeName == assocStruct.Name)) {
+        // It's a generic source type — try to find a concrete alias using our map
+        // Look up the source struct's associated type names to build resolved params
+        if (module.TypeDefs.TryGetValue(assocStruct.Name, out var assocTypeDef)
+            && assocTypeDef is MlirStructType assocSourceStruct) {
+          var assocTypeNames2 = assocSourceStruct.AssociatedTypeNames.Count > 0
+            ? assocSourceStruct.AssociatedTypeNames
+            : [.. assocSourceStruct.TypeParams
+                .Where(kv => kv.Value is MlirTypeParameterType)
+                .Select(kv => kv.Key)];
+          var resolvedAssocParams = new Dictionary<string, MlirType>();
+          bool allResolved = true;
+          foreach (var atn in assocTypeNames2) {
+            if (map.TryGetValue(atn, out var resolved))
+              resolvedAssocParams[atn] = resolved;
+            else { allResolved = false; break; }
+          }
+          if (allResolved && resolvedAssocParams.Count > 0) {
+            var concreteAlias = FindConcreteAlias(module, assocStruct.Name, resolvedAssocParams);
+            if (concreteAlias != null) {
+              map[assocTypeName] = concreteAlias;
+            }
+          }
+        }
+      }
+    }
+
     // Resolve conformance-bound type params (e.g., Element = Entry for Map : Iterable with Entry).
     // These are in the source struct's TypeParams but not in the concrete alias's typeParams.
     // Resolve them through inner alias chain (Entry -> Pair with (Key, Value) -> StringIntPair).
@@ -88,7 +122,30 @@ internal class TypeSubstitution {
       }
     }
 
-    ResolveInnerTypeAliases(map, sourceStruct.TypeParams, module);
+    // Collect type names referenced by this struct's fields, TypeParams, and methods
+    // to scope inner alias resolution to only relevant aliases.
+    // This prevents cross-type pollution (e.g., Map's Element=Entry leaking into Array's ElementMemory).
+    var referencedNames = new HashSet<string>();
+    foreach (var field in sourceStruct.Fields)
+      referencedNames.Add(field.Type.Name);
+    foreach (var (_, paramValue) in sourceStruct.TypeParams) {
+      referencedNames.Add(paramValue.Name);
+      if (paramValue is MlirStructType paramStruct)
+        referencedNames.Add(paramStruct.Name);
+    }
+    // Also include type names from method signatures on this type and its conforming interfaces
+    var sourcePrefix = $"{sourceStruct.Name}.";
+    foreach (var func in module.Functions) {
+      if (!func.Name.StartsWith(sourcePrefix) && !func.Name.EndsWith($".{sourceStruct.Name}.{func.Name.Split('.').Last()}"))
+        continue;
+      if (func.ReturnType is MlirStructType retSt)
+        referencedNames.Add(retSt.Name);
+      foreach (var pt in func.ParamTypes)
+        if (pt is MlirStructType paramSt)
+          referencedNames.Add(paramSt.Name);
+    }
+
+    ResolveInnerTypeAliases(map, sourceStruct.TypeParams, module, referencedNames);
 
     return new TypeSubstitution(map);
   }
@@ -118,7 +175,12 @@ internal class TypeSubstitution {
       }
     }
 
-    ResolveInnerTypeAliases(map, sourceUnion.TypeParams, module);
+    // Collect type names referenced by this union's TypeParams
+    var referencedNames = new HashSet<string>();
+    foreach (var (_, paramValue) in sourceUnion.TypeParams)
+      referencedNames.Add(paramValue.Name);
+
+    ResolveInnerTypeAliases(map, sourceUnion.TypeParams, module, referencedNames);
 
     return new TypeSubstitution(map);
   }
@@ -126,12 +188,23 @@ internal class TypeSubstitution {
   /// Resolves inner type aliases (e.g., KeyArray, ValueArray) to their concrete aliases
   /// by substituting type parameters through the current map. Handles deep resolution
   /// when a resolved type is itself an internal alias name (e.g., Entry → StringIntPair).
+  /// Only resolves aliases that are referenced by the source type's fields or TypeParams,
+  /// to avoid cross-type pollution (e.g., Array's ElementMemory being resolved through
+  /// Map's Element=Entry binding).
   private static void ResolveInnerTypeAliases(
       Dictionary<string, MlirType> map,
       Dictionary<string, MlirType> sourceTypeParams,
-      MlirModule<MaxonOp> module) {
+      MlirModule<MaxonOp> module,
+      IEnumerable<string>? referencedTypeNames = null) {
+    // Collect type names referenced by the source struct (fields + TypeParams values)
+    // to scope resolution to only relevant aliases
+    HashSet<string>? scopedNames = referencedTypeNames != null ? [.. referencedTypeNames] : null;
+
+    // Phase 1: resolve directly referenced aliases
     foreach (var (innerAliasName, aliasInfo) in module.TypeAliasSources.ToList()) {
       if (aliasInfo.TypeParams == null || aliasInfo.TypeParams.Count == 0) continue;
+      if (scopedNames != null && !scopedNames.Contains(innerAliasName)) continue;
+
       bool hasOurTypeParams = aliasInfo.TypeParams.Values.Any(t =>
         t is MlirTypeParameterType tp && map.ContainsKey(tp.ParameterName));
       if (!hasOurTypeParams) continue;
@@ -139,10 +212,6 @@ internal class TypeSubstitution {
       var resolvedParams = new Dictionary<string, MlirType>();
       foreach (var (paramName, paramType) in aliasInfo.TypeParams) {
         if (paramType is MlirTypeParameterType tp && map.TryGetValue(tp.ParameterName, out var resolved)) {
-          // Only deep-resolve through the map when the resolved type is one of the
-          // source type's own internal names (type params or aliases). This avoids
-          // chaining through user types that collide with internal alias names
-          // (e.g., user's "Entry" type vs Map's "typealias Entry = (Key, Value)").
           if (resolved is MlirStructType resolvedSt
               && sourceTypeParams.ContainsKey(resolvedSt.Name)
               && map.TryGetValue(resolvedSt.Name, out var deepResolved)) {
@@ -159,6 +228,33 @@ internal class TypeSubstitution {
       if (concreteInnerType != null) {
         map[innerAliasName] = concreteInnerType;
       }
+    }
+
+    // Phase 2: resolve aliases that are field types of resolved inner types.
+    // E.g., if KeyArray resolved to Array_i64, look up Array (source) and Array_i64 (concrete),
+    // and map field type name differences: ElementMemory → __ManagedMemory_i64.
+    if (scopedNames != null) {
+      var extraMappings = new Dictionary<string, MlirType>();
+      foreach (var (aliasName, resolvedType) in map) {
+        if (resolvedType is not MlirStructType resolvedStruct) continue;
+        // Find the source type for this alias
+        if (!module.TypeAliasSources.TryGetValue(aliasName, out var aliasInfo2)) continue;
+        if (!module.TypeDefs.TryGetValue(aliasInfo2.SourceTypeName, out var sourceDef)) continue;
+        if (sourceDef is not MlirStructType sourceStruct) continue;
+        // Find the concrete type
+        if (!module.TypeDefs.TryGetValue(resolvedStruct.Name, out var concreteDef)) continue;
+        if (concreteDef is not MlirStructType concreteStruct) continue;
+        // Map old field type names to new field types
+        for (int i = 0; i < sourceStruct.Fields.Count && i < concreteStruct.Fields.Count; i++) {
+          var oldFieldTypeName = sourceStruct.Fields[i].Type.Name;
+          var newFieldType = concreteStruct.Fields[i].Type;
+          if (oldFieldTypeName != newFieldType.Name && !map.ContainsKey(oldFieldTypeName)) {
+            extraMappings.TryAdd(oldFieldTypeName, newFieldType);
+          }
+        }
+      }
+      foreach (var (k, v) in extraMappings)
+        map.TryAdd(k, v);
     }
   }
 

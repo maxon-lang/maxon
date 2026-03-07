@@ -1,4 +1,4 @@
-using MaxonSharp.Compiler.Mlir.Core;
+﻿using MaxonSharp.Compiler.Mlir.Core;
 using MaxonSharp.Compiler.Mlir.Dialects;
 
 namespace MaxonSharp.Compiler.Mlir.Conversion;
@@ -16,14 +16,13 @@ public static partial class MaxonToStandardConversion {
     MlirUnionType enumType,
     MlirBlock<StandardOp> block,
     Dictionary<MaxonValue, StdValue> valueMap,
-    Dictionary<string, string> varTypes,
-    Dictionary<int, string> structVarNames) {
+    Dictionary<string, string> varTypes) {
 
     var inputArg = tryCallOp.Args[0];
 
     if (enumType.BackingType is MlirStringBackingType or MlirCharBackingType) {
       // String/char-backed: input is a managed struct, compare against each case's string
-      LowerUnionFromRawValueString(tryCallOp, enumType, block, valueMap, varTypes, structVarNames);
+      LowerUnionFromRawValueString(tryCallOp, enumType, block, valueMap, varTypes);
     } else if (enumType.BackingType == MlirType.F64) {
       // Float-backed: compare float values, result is the input value itself
       var inputVal = (StdF64)valueMap[inputArg];
@@ -100,12 +99,11 @@ public static partial class MaxonToStandardConversion {
     MlirUnionType enumType,
     MlirBlock<StandardOp> block,
     Dictionary<MaxonValue, StdValue> valueMap,
-    Dictionary<string, string> varTypes,
-    Dictionary<int, string> structVarNames) {
+    Dictionary<string, string> varTypes) {
 
     var inputArg = tryCallOp.Args[0];
     // Input is a String or Character managed struct - load _managed heap pointer, then buffer and length
-    var inputStructName = structVarNames[inputArg.Id];
+    var inputStructName = ((StdHeapPtr)valueMap[inputArg]).VarName!;
     var inputManagedPtr = (StdI64)EmitStructFieldLoad(block, inputStructName, 0, MlirType.I64, varTypes);
     var inputManagedVar = $"__frv_managed_{MlirContext.Current.NextId()}";
     EmitStore(block, inputManagedPtr, inputManagedVar, varTypes);
@@ -155,13 +153,11 @@ public static partial class MaxonToStandardConversion {
     MlirBlock<StandardOp> block,
     Dictionary<MaxonValue, StdValue> valueMap,
     Dictionary<string, string> varTypes,
-    Dictionary<int, string> structVarNames,
-    Dictionary<int, string> structValueTypes,
     VarRegistry temps) {
 
     var nameArg = tryCallOp.Args[0];
     // Name is always a String managed struct - load _managed heap pointer, then buffer and length
-    var nameStructName = structVarNames[nameArg.Id];
+    var nameStructName = ((StdHeapPtr)valueMap[nameArg]).VarName!;
     var nameManagedPtr = (StdI64)EmitStructFieldLoad(block, nameStructName, 0, MlirType.I64, varTypes);
     var nameManagedVar = $"__fn_managed_{MlirContext.Current.NextId()}";
     EmitStore(block, nameManagedPtr, nameManagedVar, varTypes);
@@ -174,7 +170,7 @@ public static partial class MaxonToStandardConversion {
     if (hasAssociatedValues) {
       // For associated-value enums, construct as flat struct (tag + payload)
       LowerUnionFromNameAssociated(tryCallOp, enumType, block, valueMap, varTypes,
-        structVarNames, structValueTypes, nameBuf, nameLen, hasExtraArgs, temps: temps);
+        nameBuf, nameLen, hasExtraArgs, temps: temps);
     } else {
       // Simple/raw-value enum: result is an ordinal/raw value
       LowerUnionFromNameSimple(tryCallOp, enumType, block, valueMap, varTypes, nameBuf, nameLen);
@@ -254,8 +250,6 @@ public static partial class MaxonToStandardConversion {
     MlirBlock<StandardOp> block,
     Dictionary<MaxonValue, StdValue> valueMap,
     Dictionary<string, string> varTypes,
-    Dictionary<int, string> structVarNames,
-    Dictionary<int, string> structValueTypes,
     StdI64 nameBuf, StdI64 nameLen,
     bool hasExtraArgs,
     VarRegistry temps) {
@@ -321,8 +315,7 @@ public static partial class MaxonToStandardConversion {
     }
 
     valueMap[tryCallOp.ErrorFlag] = currentErrorFlag;
-    structVarNames[tryCallOp.Result!.Id] = tempName;
-    structValueTypes[tryCallOp.Result!.Id] = enumType.Name;
+    valueMap[tryCallOp.Result!] = new StdHeapPtr(enumPtr.Id, enumType.Name, tempName);
   }
 
   /// <summary>
@@ -336,7 +329,6 @@ public static partial class MaxonToStandardConversion {
     MlirBlock<StandardOp> block,
     Dictionary<MaxonValue, StdValue> valueMap,
     Dictionary<string, string> varTypes,
-    Dictionary<int, string> structVarNames,
     List<StdValue> newArgs,
     string calleeName,
     Dictionary<int, string>? fnEnvVarNames = null,
@@ -355,7 +347,7 @@ public static partial class MaxonToStandardConversion {
           && calleeMutatedParams.Contains(calleeFunc.ParamNames[i])
           && calleeFunc.ParamNames[i] != "self") {
         string? argVarName = null;
-        if (structVarNames.TryGetValue(arg.Id, out var svn)) argVarName = svn;
+        if (valueMap.TryGetValue(arg, out var svnSv) && svnSv is StdHeapPtr svnHp) argVarName = svnHp.VarName!;
         else if (argVarNames != null && i < argVarNames.Count) argVarName = argVarNames[i];
 
         if (argVarName != null && varTypes.ContainsKey(argVarName)) {
@@ -378,8 +370,8 @@ public static partial class MaxonToStandardConversion {
           var tempName = $"__ref_temp_{MlirContext.Current.NextId()}";
           if (valueMap.TryGetValue(arg, out var argVal)) {
             EmitStore(block, argVal, tempName, varTypes);
-          } else if (structVarNames.TryGetValue(arg.Id, out var sn)) {
-            var hp = EmitLoad(block, sn, varTypes);
+          } else if (valueMap.TryGetValue(arg, out var snSv) && snSv is StdHeapPtr snHp) {
+            var hp = EmitLoad(block, snHp.VarName!, varTypes);
             EmitStore(block, hp, tempName, varTypes);
           } else {
             throw new InvalidOperationException($"Cannot resolve arg for pass-by-ref temp in call to '{calleeName}', arg {i}");
@@ -396,23 +388,25 @@ public static partial class MaxonToStandardConversion {
       if (calleeIsEnumInstance && i == 0) {
         newArgs.Add(valueMap[arg]);
       } else if (calleeFunc.ParamTypes[i] is MlirUnionType enumArgType && enumArgType.HasAssociatedValues
-                 && structVarNames.TryGetValue(arg.Id, out var enumPrefix)) {
+                 && valueMap.TryGetValue(arg, out var epSv) && epSv is StdHeapPtr epHp) {
         // Associated-value enum: already a heap pointer, just load it
-        var heapPtr = EmitLoad(block, enumPrefix, varTypes);
+        var heapPtr = EmitLoad(block, epHp.VarName!, varTypes);
         newArgs.Add(heapPtr);
       } else if (calleeFunc.ParamTypes[i] is MlirUnionType) {
         if (valueMap.TryGetValue(arg, out var enumVal)) {
           newArgs.Add(enumVal);
-        } else if (structVarNames.TryGetValue(arg.Id, out var enumTagPrefix)) {
+        } else if (valueMap.TryGetValue(arg, out var etSv) && etSv is StdHeapPtr etHp) {
           // Simple enum constructed via enum_construct — load its tag
-          var tagVal = EmitLoad(block, $"{enumTagPrefix}.__tag", varTypes);
+          var tagVal = EmitLoad(block, $"{etHp.VarName!}.__tag", varTypes);
           newArgs.Add(tagVal);
         } else {
-          throw new InvalidOperationException($"Enum arg %{arg.Id} not found in valueMap or structVarNames for call to '{calleeName}'");
+          throw new InvalidOperationException($"Enum arg %{arg.Id} not found in valueMap as StdHeapPtr for call to '{calleeName}'");
         }
-      } else if (calleeFunc.ParamTypes[i] is MlirStructType && structVarNames.TryGetValue(arg.Id, out var argStructName)) {
+      } else if (calleeFunc.ParamTypes[i] is MlirStructType && valueMap.TryGetValue(arg, out var asSv) && asSv is StdHeapPtr asHp) {
         // Struct arg: pass the heap pointer directly
-        var heapPtr = EmitLoad(block, argStructName, varTypes);
+        if (asHp.VarName == null)
+          throw new InvalidOperationException($"FlattenCallArgs: StdHeapPtr for arg %{arg.Id} (param '{calleeFunc.ParamNames[i]}') has null VarName in call to '{calleeName}'. TypeName={asHp.TypeName}, StdId={asHp.Id}");
+        var heapPtr = EmitLoad(block, asHp.VarName, varTypes);
         newArgs.Add(heapPtr);
       } else if (calleeFunc.ParamTypes[i] is MlirStructType && valueMap.TryGetValue(arg, out var rawPtrValue)) {
         // Struct arg from managed memory get — the value is already a pointer

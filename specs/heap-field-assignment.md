@@ -157,13 +157,13 @@ alloc String #4 rc=0 [heap-field-assignment.testAssign]
 alloc __ManagedMemory #5 rc=0 [heap-field-assignment.testAssign]
 incref __ManagedMemory #5 rc=1 [heap-field-assignment.testAssign]
 incref String #4 rc=1 [heap-field-assignment.testAssign]
-decref Container #2 rc=0 [heap-field-assignment.testAssign]
-decref Inner #3 rc=1 [~Container]
-  free Container #2
 decref String #4 rc=0 [heap-field-assignment.testAssign]
 decref __ManagedMemory #5 rc=0 [~String]
   free __ManagedMemory #5
   free String #4
+decref Container #2 rc=0 [heap-field-assignment.testAssign]
+decref Inner #3 rc=1 [~Container]
+  free Container #2
 decref Inner #3 rc=0 [heap-field-assignment.testAssign]
   free Inner #3
 ```
@@ -214,13 +214,13 @@ alloc String #4 rc=0 [heap-field-assignment.testAssign]
 alloc __ManagedMemory #5 rc=0 [heap-field-assignment.testAssign]
 incref __ManagedMemory #5 rc=1 [heap-field-assignment.testAssign]
 incref String #4 rc=1 [heap-field-assignment.testAssign]
-decref Pair #2 rc=0 [heap-field-assignment.testAssign]
-decref Right #3 rc=1 [~Pair]
-  free Pair #2
 decref String #4 rc=0 [heap-field-assignment.testAssign]
 decref __ManagedMemory #5 rc=0 [~String]
   free __ManagedMemory #5
   free String #4
+decref Pair #2 rc=0 [heap-field-assignment.testAssign]
+decref Right #3 rc=1 [~Pair]
+  free Pair #2
 decref Right #3 rc=0 [heap-field-assignment.testAssign]
   free Right #3
 ```

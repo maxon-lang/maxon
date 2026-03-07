@@ -57,14 +57,13 @@ public static partial class MaxonToStandardConversion {
 		return managedName;
 	}
 
-	private static string EmitManagedMemoryLiteral(
+	private static StdHeapPtr EmitManagedMemoryLiteral(
 	  string value,
 	  int resultId,
 	  string rdataPrefix,
 	  string tempPrefix,
 	  MlirBlock<StandardOp> block,
 	  Dictionary<string, string> varTypes,
-	  Dictionary<int, string> structVarNames,
 	  MlirModule<StandardOp> result,
 	  VarRegistry temps,
 	  string? allocTag = null,
@@ -74,37 +73,37 @@ public static partial class MaxonToStandardConversion {
 
 		var tempName = inlineTarget
 			?? temps.CreateTemp(tempPrefix, resultId, allocTag ?? "unknown", OwnershipFlags.None);
-		var outerPtr = EmitAlloc(block, 16, allocTag, scopeName: _currentFuncName);
+		var outerPtr = (StdHeapPtr)EmitAlloc(block, 16, allocTag, scopeName: _currentFuncName);
 		EmitStore(block, outerPtr, tempName, varTypes);
 
 		var managedName = $"__{tempPrefix}_managed_{resultId}";
 		EmitManagedChild(tempName, managedName, bufferPtr, lengthVal, 0, block, varTypes);
 
-		structVarNames[resultId] = tempName;
-		return tempName;
+		return new StdHeapPtr(outerPtr.Id, outerPtr.TypeName, tempName);
 	}
 
 	private static void LowerStringLiteral(
 	  MaxonStringLiteralOp op,
 	  MlirBlock<StandardOp> block,
+	  Dictionary<MaxonValue, StdValue> valueMap,
 	  Dictionary<string, string> varTypes,
-	  Dictionary<int, string> structVarNames,
 	  MlirModule<StandardOp> result,
 	  VarRegistry temps,
 	  string? inlineTarget = null) {
-		var tempName = EmitManagedMemoryLiteral(op.Value, op.Result.Id, "str", "strtmp", block, varTypes, structVarNames, result, temps, "String", inlineTarget);
+		var heapPtr = EmitManagedMemoryLiteral(op.Value, op.Result.Id, "str", "strtmp", block, varTypes, result, temps, "String", inlineTarget);
+		valueMap[op.Result] = heapPtr;
 
 		// Store _iterPos at offset 8 (second field in String struct)
 		var iterConst = new StdConstI64Op(0);
 		block.AddOp(iterConst);
-		EmitStructFieldStore(block, iterConst.Result, tempName, 8, MlirType.I64, varTypes);
+		EmitStructFieldStore(block, iterConst.Result, heapPtr.VarName!, 8, MlirType.I64, varTypes);
 	}
 
 	private static void LowerByteStringLiteral(
 	  MaxonByteStringLiteralOp op,
 	  MlirBlock<StandardOp> block,
+	  Dictionary<MaxonValue, StdValue> valueMap,
 	  Dictionary<string, string> varTypes,
-	  Dictionary<int, string> structVarNames,
 	  MlirModule<StandardOp> result,
 	  VarRegistry temps,
 	  string? inlineTarget = null) {
@@ -115,7 +114,7 @@ public static partial class MaxonToStandardConversion {
 
 		var tempName = inlineTarget
 			?? temps.CreateTemp("bstrtmp", op.Result.Id, "ByteArray", OwnershipFlags.None);
-		var outerPtr = EmitAlloc(block, 16, "ByteArray", scopeName: _currentFuncName);
+		var outerPtr = (StdHeapPtr)EmitAlloc(block, 16, "ByteArray", scopeName: _currentFuncName);
 		EmitStore(block, outerPtr, tempName, varTypes);
 
 		// Store iterIndex = 0 at offset 0
@@ -126,18 +125,19 @@ public static partial class MaxonToStandardConversion {
 		var managedName = $"__bstrtmp_managed_{op.Result.Id}";
 		EmitManagedChild(tempName, managedName, bufferPtr, lengthVal, 8, block, varTypes);
 
-		structVarNames[op.Result.Id] = tempName;
+		valueMap[op.Result] = new StdHeapPtr(outerPtr.Id, outerPtr.TypeName, tempName);
 	}
 
 	private static void LowerCharLiteral(
 	  MaxonCharLiteralOp op,
 	  MlirBlock<StandardOp> block,
+	  Dictionary<MaxonValue, StdValue> valueMap,
 	  Dictionary<string, string> varTypes,
-	  Dictionary<int, string> structVarNames,
 	  MlirModule<StandardOp> result,
 	  VarRegistry temps,
 	  string? inlineTarget = null) {
-		EmitManagedMemoryLiteral(op.Value, op.Result.Id, "chr", "chrtmp", block, varTypes, structVarNames, result, temps, "Character", inlineTarget);
+		var heapPtr = EmitManagedMemoryLiteral(op.Value, op.Result.Id, "chr", "chrtmp", block, varTypes, result, temps, "Character", inlineTarget);
+		valueMap[op.Result] = heapPtr;
 	}
 
 	private static void LowerStringInterp(
@@ -145,7 +145,6 @@ public static partial class MaxonToStandardConversion {
 	  MlirBlock<StandardOp> block,
 	  Dictionary<MaxonValue, StdValue> valueMap,
 	  Dictionary<string, string> varTypes,
-	  Dictionary<int, string> structVarNames,
 	  MlirModule<StandardOp> result,
 	  VarRegistry temps,
 	  string? inlineTarget = null) {
@@ -172,8 +171,8 @@ public static partial class MaxonToStandardConversion {
 			} else {
 				var exprValue = ExprValue!;
 
-				if (structVarNames.TryGetValue(exprValue.Id, out var managedVarName)) {
-					partInfos.Add(EmitStructInterpolation(managedVarName, block, varTypes));
+				if (valueMap.TryGetValue(exprValue, out var exprStdVal) && exprStdVal is StdHeapPtr hp) {
+					partInfos.Add(EmitStructInterpolation(hp.VarName!, block, varTypes));
 				} else if (exprValue is MaxonInteger or MaxonByte or MaxonShort) {
 					var stdVal = valueMap[exprValue];
 					// Widen narrower integer types to i64 for the runtime toString call
@@ -223,10 +222,11 @@ public static partial class MaxonToStandardConversion {
 		}
 
 		if (partInfos.Count == 0) {
-			var tempName = EmitManagedMemoryLiteral("", op.Result.Id, "interp", "interptmp", block, varTypes, structVarNames, result, temps, "String", inlineTarget);
+			var heapPtr = EmitManagedMemoryLiteral("", op.Result.Id, "interp", "interptmp", block, varTypes, result, temps, "String", inlineTarget);
+			valueMap[op.Result] = heapPtr;
 			var iterConst = new StdConstI64Op(0);
 			block.AddOp(iterConst);
-			EmitStore(block, iterConst.Result, $"{tempName}._iterPos", varTypes);
+			EmitStore(block, iterConst.Result, $"{heapPtr.VarName!}._iterPos", varTypes);
 			return;
 		}
 
@@ -248,7 +248,7 @@ public static partial class MaxonToStandardConversion {
 		// Allocate outer String struct, then ManagedMemory, then raw buffer
 		var tempName2 = inlineTarget
 			?? temps.CreateTemp("interptmp", op.Result.Id, "String", OwnershipFlags.None);
-		var interpOuterPtr = EmitAlloc(block, 16, "String", scopeName: _currentFuncName);
+		var interpOuterPtr = (StdHeapPtr)EmitAlloc(block, 16, "String", scopeName: _currentFuncName);
 		EmitStore(block, interpOuterPtr, tempName2, varTypes);
 
 		var interpManagedName = $"__interp_managed_{op.Result.Id}";
@@ -341,7 +341,7 @@ public static partial class MaxonToStandardConversion {
 		block.AddOp(iterPosConst);
 		EmitStructFieldStore(block, iterPosConst.Result, tempName2, 8, MlirType.I64, varTypes);
 
-		structVarNames[op.Result.Id] = tempName2;
+		valueMap[op.Result] = new StdHeapPtr(interpOuterPtr.Id, interpOuterPtr.TypeName, tempName2);
 	}
 
 	/// <summary>
@@ -600,13 +600,14 @@ public static partial class MaxonToStandardConversion {
 
 	/// Builds a managed String or Character struct from a (buffer, length) pair.
 	/// Heap-allocates outer struct, then __ManagedMemory, and links them via field store.
-	private static void EmitManagedStructFromBufLen(
+	/// Returns a StdHeapPtr with the variable name set.
+	private static StdHeapPtr EmitManagedStructFromBufLen(
 	  string tempName, StdI64 bufferPtr, StdI64 lengthVal,
 	  bool hasIterPos, MlirBlock<StandardOp> block,
-	  Dictionary<string, string> varTypes, Dictionary<int, string> structVarNames, int resultId,
+	  Dictionary<string, string> varTypes,
 	  string? allocTag = null) {
 		int outerSize = hasIterPos ? 16 : 8;
-		var outerPtr = EmitAlloc(block, outerSize, allocTag, scopeName: _currentFuncName);
+		var outerPtr = (StdHeapPtr)EmitAlloc(block, outerSize, allocTag, scopeName: _currentFuncName);
 		EmitStore(block, outerPtr, tempName, varTypes);
 
 		var managedName = $"{tempName}__managed";
@@ -618,7 +619,7 @@ public static partial class MaxonToStandardConversion {
 			EmitStructFieldStore(block, iterConst.Result, tempName, 8, MlirType.I64, varTypes);
 		}
 
-		structVarNames[resultId] = tempName;
+		return new StdHeapPtr(outerPtr.Id, outerPtr.TypeName, tempName);
 	}
 
 	/// Converts an int-backed enum raw value to its ordinal via a select chain.
@@ -701,13 +702,13 @@ public static partial class MaxonToStandardConversion {
 	private static void LowerManagedMemConcat(
 	  MaxonManagedMemConcatOp op,
 	  MlirBlock<StandardOp> block,
+	  Dictionary<MaxonValue, StdValue> valueMap,
 	  Dictionary<string, string> varTypes,
-	  Dictionary<int, string> structVarNames,
 	  VarRegistry temps,
 	  string? inlineTarget = null) {
 
-		var lhsVarName = ResolveManagedVarName(op.Lhs, structVarNames);
-		var rhsVarName = ResolveManagedVarName(op.Rhs, structVarNames);
+		var lhsVarName = ResolveManagedVarName(op.Lhs, valueMap);
+		var rhsVarName = ResolveManagedVarName(op.Rhs, valueMap);
 
 		var lhsBuf = LoadManagedBuffer(block, lhsVarName, varTypes);
 		var lhsLen = (StdI64)EmitStructFieldLoad(block, lhsVarName, ManagedFieldLength, MlirType.I64, varTypes);
@@ -734,7 +735,7 @@ public static partial class MaxonToStandardConversion {
 		// Heap-allocate __ManagedMemory, then buffer as raw allocation
 		var tempName = inlineTarget
 			?? temps.CreateTemp("concat", op.Result.Id, "__ManagedMemory", OwnershipFlags.None);
-		var concatPtr = EmitAlloc(block, 32, "__ManagedMemory", scopeName: _currentFuncName);
+		var concatPtr = (StdHeapPtr)EmitAlloc(block, 32, "__ManagedMemory", scopeName: _currentFuncName);
 		EmitStore(block, concatPtr, tempName, varTypes);
 
 		var allocResult = new StdI64(MlirContext.Current.NextId());
@@ -754,7 +755,7 @@ public static partial class MaxonToStandardConversion {
 		EmitStructFieldStore(block, totalLenOp.Result, tempName, ManagedFieldLength, MlirType.I64, varTypes);
 		EmitStructFieldStore(block, totalLenOp.Result, tempName, ManagedFieldCapacity, MlirType.I64, varTypes);
 		EmitStructFieldStore(block, lhsElemSize, tempName, ManagedFieldElementSize, MlirType.I64, varTypes);
-		structVarNames[op.Result.Id] = tempName;
+		valueMap[op.Result] = new StdHeapPtr(concatPtr.Id, concatPtr.TypeName, tempName);
 	}
 
 	private static void LowerManagedMemSlice(
@@ -762,11 +763,10 @@ public static partial class MaxonToStandardConversion {
 	  MlirBlock<StandardOp> block,
 	  Dictionary<MaxonValue, StdValue> valueMap,
 	  Dictionary<string, string> varTypes,
-	  Dictionary<int, string> structVarNames,
 	  VarRegistry temps,
 	  string? inlineTarget = null) {
 
-		var srcVarName = ResolveManagedVarName(op.Managed, structVarNames);
+		var srcVarName = ResolveManagedVarName(op.Managed, valueMap);
 		var srcLength = (StdI64)EmitStructFieldLoad(block, srcVarName, ManagedFieldLength, MlirType.I64, varTypes);
 
 		var start = (StdI64)valueMap[op.Start];
@@ -803,8 +803,8 @@ public static partial class MaxonToStandardConversion {
 
 		// Heap-allocate __ManagedMemory struct, then a new raw buffer
 		var tempName = inlineTarget
-			?? temps.CreateTemp("slice", op.Result.Id, "Slice", OwnershipFlags.None);
-		var slicePtr = EmitAlloc(block, 32, "Slice", scopeName: _currentFuncName);
+			?? temps.CreateTemp("slice", op.Result.Id, "__ManagedMemory", OwnershipFlags.None);
+		var slicePtr = (StdHeapPtr)EmitAlloc(block, 32, "__ManagedMemory", tag: "Slice", scopeName: _currentFuncName);
 		EmitStore(block, slicePtr, tempName, varTypes);
 
 		var newBuffer = new StdI64(MlirContext.Current.NextId());
@@ -817,7 +817,7 @@ public static partial class MaxonToStandardConversion {
 		EmitStructFieldStore(block, sliceLenOp.Result, tempName, ManagedFieldLength, MlirType.I64, varTypes);
 		EmitStructFieldStore(block, sliceLenOp.Result, tempName, ManagedFieldCapacity, MlirType.I64, varTypes);
 		EmitStructFieldStore(block, srcElemSize, tempName, ManagedFieldElementSize, MlirType.I64, varTypes);
-		structVarNames[op.Result.Id] = tempName;
+		valueMap[op.Result] = new StdHeapPtr(slicePtr.Id, slicePtr.TypeName, tempName);
 	}
 
 	/// <summary>
@@ -829,10 +829,9 @@ public static partial class MaxonToStandardConversion {
 	  MlirBlock<StandardOp> block,
 	  Dictionary<MaxonValue, StdValue> valueMap,
 	  Dictionary<string, string> varTypes,
-	  Dictionary<int, string> structVarNames,
 	  VarRegistry temps) {
 
-		var srcVarName = ResolveManagedVarName(op.Managed, structVarNames);
+		var srcVarName = ResolveManagedVarName(op.Managed, valueMap);
 		var srcBuffer = LoadManagedBuffer(block, srcVarName, varTypes);
 		var pos = (StdI64)valueMap[op.Pos];
 		var len = (StdI64)valueMap[op.Len];
@@ -849,7 +848,7 @@ public static partial class MaxonToStandardConversion {
 
 		// Allocate outer Character struct, then ManagedMemory, then raw buffer
 		var charVarName = temps.CreateTemp("char", op.Result.Id, "Character", OwnershipFlags.None);
-		var charOuterPtr = EmitAlloc(block, 8, "Character", scopeName: _currentFuncName);
+		var charOuterPtr = (StdHeapPtr)EmitAlloc(block, 8, "Character", scopeName: _currentFuncName);
 		EmitStore(block, charOuterPtr, charVarName, varTypes);
 
 		var charManagedName = $"__char_managed_{op.Result.Id}";
@@ -885,9 +884,10 @@ public static partial class MaxonToStandardConversion {
 		block.AddOp(elemSizeConst);
 		EmitStructFieldStore(block, elemSizeConst.Result, charManagedName, ManagedFieldElementSize, MlirType.I64, varTypes);
 
-		// Store _managed heap pointer at offset 0
+		// Store _managed heap pointer at offset 0 and incref it (Character now owns a reference)
 		var charManagedReload = EmitLoad(block, charManagedName, varTypes);
 		EmitStructFieldStore(block, charManagedReload, charVarName, 0, MlirType.I64, varTypes);
-		structVarNames[op.Result.Id] = charVarName;
+		EmitIncrefValue(block, (StdI64)charManagedReload, scopeName: _currentFuncName);
+		valueMap[op.Result] = new StdHeapPtr(charOuterPtr.Id, charOuterPtr.TypeName, charVarName);
 	}
 }

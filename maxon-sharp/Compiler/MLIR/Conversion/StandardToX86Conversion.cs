@@ -9,6 +9,8 @@ enum ComparisonKind { Integer, UnsignedInteger, Float }
 public static class StandardToX86Conversion {
   [ThreadStatic] private static int _floatBranchCounter;
   [ThreadStatic] private static int _labelCounter;
+  [ThreadStatic] private static int _nonnullSkipCounter;
+  [ThreadStatic] private static bool _inStdlib;
   public static int NextLabelId() => _labelCounter++;
   public static MlirModule<X86Op> Run(MlirModule<StandardOp> module) {
     var result = new MlirModule<X86Op>();
@@ -18,12 +20,14 @@ public static class StandardToX86Conversion {
     result.TagTable = module.TagTable;
     foreach (var (k, v) in module.TypeDefs) result.TypeDefs[k] = v;
 
-    bool hasResetAfterStdlib = false;
+    _labelCounter = 0;
+    _floatBranchCounter = 0;
+    _nonnullSkipCounter = 0;
+    _inStdlib = true;
     foreach (var func in module.Functions) {
-      if (!hasResetAfterStdlib && !func.IsStdlib) {
-        _labelCounter = 0;
-        _floatBranchCounter = 0;
-        hasResetAfterStdlib = true;
+      if (_inStdlib && !func.IsStdlib) {
+        _inStdlib = false;
+        _nonnullSkipCounter = 0;
       }
       try {
         var newFunc = ConvertFunction(func, result);
@@ -924,7 +928,8 @@ public static class StandardToX86Conversion {
             // Spill all live register values before the branch so values
             // remain accessible when the branch skips the call body.
             regManager.SpillAllLiveRegisters(x86Block);
-            var skipLabel = $"__nonnull_skip_{_labelCounter++}";
+            var skipPrefix = _inStdlib ? "__stdlib_nn_skip" : "__nonnull_skip";
+            var skipLabel = $"{skipPrefix}_{_nonnullSkipCounter++}";
             regManager.EmitBoolTest(guardedCallOp.Args[0], x86Block);
             x86Block.AddOp(new X86JccOp("z", skipLabel));
             regManager.EmitCall(guardedCallOp.Callee, guardedCallOp.Args, guardedCallOp.Result, x86Block,

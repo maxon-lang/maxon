@@ -1,4 +1,4 @@
-using MaxonSharp.Compiler.Mlir.Core;
+﻿using MaxonSharp.Compiler.Mlir.Core;
 using MaxonSharp.Compiler.Mlir.Dialects;
 
 namespace MaxonSharp.Compiler.Mlir.Conversion;
@@ -113,6 +113,12 @@ public static partial class MaxonToStandardConversion {
     bool hasResetAfterStdlib = false;
 
     foreach (var func in module.Functions) {
+      // Skip generic functions that still have unresolved type parameters —
+      // these are source templates that were monomorphized into concrete specializations.
+      if (HasUnresolvedTypeParameters(func, module)) {
+        continue;
+      }
+
       // Reset IDs after stdlib for stable test output
       if (!hasResetAfterStdlib && !func.IsStdlib) {
         MlirContext.Current.ClearHighWaterMark();
@@ -233,15 +239,11 @@ public static partial class MaxonToStandardConversion {
       var fnEnvVarNames = new Dictionary<int, string>();
       // Direct env_ptr values (avoids store/load when value is already in a register)
       var fnEnvDirectValues = new Dictionary<int, StdValue>();
-      // Maps MaxonStruct value IDs to their variable name prefix (for field access)
-      var structVarNames = new Dictionary<int, string>();
-      // Maps value IDs to their struct type name (for cases where the value is not a MaxonStruct
-      // but is semantically a struct, e.g. try_call results from monomorphized generic functions)
-      var structValueTypes = new Dictionary<int, string>();
       // Maps variable names to their resolved struct prefix (for cross-block references)
       var varNameToStructPrefix = new Dictionary<string, string>();
       // Maps variable names to their struct type name (for monomorphized type parameter vars)
       var varNameToStructType = new Dictionary<string, string>();
+      _varNameToStructType = varNameToStructType;
       var temps = new VarRegistry();
       // Use pre-computed constant array literal metadata from ConstantArrayAnalysisPass
       // Key: struct literal result ID, Value: ConstantArrayLiteralInfo
@@ -390,8 +392,7 @@ public static partial class MaxonToStandardConversion {
                 var selfPtrVal = new StdI64(MlirContext.Current.NextId());
                 newBlock.AddOp(new StdParamOp(0, "self", selfPtrVal));
                 EmitStore(newBlock, selfPtrVal, "self", varTypes);
-                structVarNames[structParamOp.Result.Id] = "self";
-                structValueTypes[structParamOp.Result.Id] = structParamOp.StructTypeName;
+                valueMap[structParamOp.Result] = new StdHeapPtr(structParamOp.Result.Id, structParamOp.StructTypeName, "self");
               } else if (refParamPtrVars.TryGetValue(structParamOp.Name, out string? value)) {
                 // Mutated struct param: receive pointer-to-heap-pointer, dereference for local copy
                 int ptrFlatIdx = structParamPtrIndex[structParamOp.Index];
@@ -404,16 +405,14 @@ public static partial class MaxonToStandardConversion {
                 var deref = new StdLoadIndirectOp(loadRef.Result, 0, MlirType.I64);
                 newBlock.AddOp(deref);
                 EmitStore(newBlock, (StdI64)deref.Result, structParamOp.Name, varTypes);
-                structVarNames[structParamOp.Result.Id] = structParamOp.Name;
-                structValueTypes[structParamOp.Result.Id] = structParamOp.StructTypeName;
+                valueMap[structParamOp.Result] = new StdHeapPtr(structParamOp.Result.Id, structParamOp.StructTypeName, structParamOp.Name);
               } else {
                 // Non-self struct param: receive heap pointer, store under the param name
                 int ptrFlatIdx = structParamPtrIndex[structParamOp.Index];
                 var ptrVal = new StdI64(MlirContext.Current.NextId());
                 newBlock.AddOp(new StdParamOp(ptrFlatIdx, structParamOp.Name, ptrVal));
                 EmitStore(newBlock, ptrVal, structParamOp.Name, varTypes);
-                structVarNames[structParamOp.Result.Id] = structParamOp.Name;
-                structValueTypes[structParamOp.Result.Id] = structParamOp.StructTypeName;
+                valueMap[structParamOp.Result] = new StdHeapPtr(structParamOp.Result.Id, structParamOp.StructTypeName, structParamOp.Name);
               }
               structParamNames.Add(structParamOp.Name);
               _structParamNames?.Add(structParamOp.Name);
@@ -453,9 +452,9 @@ public static partial class MaxonToStandardConversion {
               int slotIdx = 0;
               for (int ai = 0; ai < enumConstructOp.Args.Count; ai++) {
                 int byteOffset = 8 + slotIdx * 8;
-                if (structVarNames.TryGetValue(enumConstructOp.Args[ai].Id, out var structSrcName)) {
+                if (valueMap.TryGetValue(enumConstructOp.Args[ai], out var ecArgSv) && ecArgSv is StdHeapPtr ecArgHp) {
                   // Heap-pointer payload: store and incref — enum holds a reference
-                  var childHeapPtr = (StdI64)EmitLoad(newBlock, structSrcName, varTypes);
+                  var childHeapPtr = (StdI64)EmitLoad(newBlock, ecArgHp.VarName!, varTypes);
                   newBlock.AddOp(new StdStoreIndirectOp(childHeapPtr, enumPtr, byteOffset, MlirType.I64));
                   EmitIncrefValue(newBlock, childHeapPtr, scopeName: func.Name);
                   slotIdx++;
@@ -473,14 +472,13 @@ public static partial class MaxonToStandardConversion {
                 newBlock.AddOp(new StdStoreIndirectOp(zeroOp.Result, enumPtr, 8 + ai * 8, MlirType.I64));
               }
 
-              structVarNames[enumConstructOp.Result.Id] = tempName;
-              structValueTypes[enumConstructOp.Result.Id] = enumConstructOp.EnumTypeName;
+              valueMap[enumConstructOp.Result] = new StdHeapPtr(enumConstructOp.Result.Id, enumConstructOp.EnumTypeName, tempName);
               break;
             }
             case MaxonEnumTagOp enumTagOp: {
-              if (structVarNames.TryGetValue(enumTagOp.EnumValue.Id, out var enumPrefix)) {
+              if (valueMap.TryGetValue(enumTagOp.EnumValue, out var enumPrefixSv) && enumPrefixSv is StdHeapPtr enumPrefixHp) {
                 // Associated-value enum: load tag from heap pointer at offset 0
-                var heapPtr = (StdI64)EmitLoad(newBlock, enumPrefix, varTypes);
+                var heapPtr = (StdI64)EmitLoad(newBlock, enumPrefixHp.VarName!, varTypes);
                 var tagLoad = new StdLoadIndirectOp(heapPtr, 0, MlirType.I64);
                 newBlock.AddOp(tagLoad);
                 valueMap[enumTagOp.Result] = tagLoad.Result;
@@ -492,7 +490,7 @@ public static partial class MaxonToStandardConversion {
             }
             case MaxonEnumPayloadOp enumPayloadOp: {
               // Load a payload value from the heap-allocated enum via indirect load
-              var enumVarName = structVarNames[enumPayloadOp.EnumValue.Id];
+              var enumVarName = ((StdHeapPtr)valueMap[enumPayloadOp.EnumValue]).VarName!;
               int flatSlotOffset = enumPayloadOp.PayloadIndex;
               var heapPtr = (StdI64)EmitLoad(newBlock, enumVarName, varTypes);
               int byteOffset = 8 + flatSlotOffset * 8;
@@ -503,8 +501,7 @@ public static partial class MaxonToStandardConversion {
                 var loadOp = new StdLoadIndirectOp(heapPtr, byteOffset, MlirType.I64);
                 newBlock.AddOp(loadOp);
                 EmitStore(newBlock, (StdI64)loadOp.Result, tempStructName, varTypes);
-                structVarNames[enumPayloadOp.Result.Id] = tempStructName;
-                structValueTypes[enumPayloadOp.Result.Id] = enumPayloadOp.ResultStructTypeName;
+                valueMap[enumPayloadOp.Result] = new StdHeapPtr(enumPayloadOp.Result.Id, enumPayloadOp.ResultStructTypeName, tempStructName);
               } else if (enumPayloadOp.ResultKind == MaxonValueKind.Enum
                          && enumPayloadOp.ResultStructTypeName != null
                          && module.TypeDefs.TryGetValue(enumPayloadOp.ResultStructTypeName, out var payloadEnumDef)
@@ -514,8 +511,7 @@ public static partial class MaxonToStandardConversion {
                 var loadOp = new StdLoadIndirectOp(heapPtr, byteOffset, MlirType.I64);
                 newBlock.AddOp(loadOp);
                 EmitStore(newBlock, (StdI64)loadOp.Result, tempName, varTypes);
-                structVarNames[enumPayloadOp.Result.Id] = tempName;
-                structValueTypes[enumPayloadOp.Result.Id] = enumPayloadOp.ResultStructTypeName;
+                valueMap[enumPayloadOp.Result] = new StdHeapPtr(enumPayloadOp.Result.Id, enumPayloadOp.ResultStructTypeName, tempName);
               } else {
                 var loadOp = new StdLoadIndirectOp(heapPtr, byteOffset, MlirType.I64);
                 newBlock.AddOp(loadOp);
@@ -543,8 +539,7 @@ public static partial class MaxonToStandardConversion {
                   EmitStore(newBlock, ptrVal, enumParamOp.Name, varTypes);
                 }
 
-                structVarNames[enumParamOp.Result.Id] = enumParamOp.Name;
-                structValueTypes[enumParamOp.Result.Id] = enumParamOp.EnumTypeName;
+                valueMap[enumParamOp.Result] = new StdHeapPtr(enumParamOp.Result.Id, enumParamOp.EnumTypeName, enumParamOp.Name);
                 _structParamNames?.Add(enumParamOp.Name);
               } else if (refParamPtrVars.TryGetValue(enumParamOp.Name, out string? value)) {
                 // Mutated simple enum: receive i64 pointer, dereference for local copy
@@ -585,8 +580,7 @@ public static partial class MaxonToStandardConversion {
                 } else {
                   resolvedPrefix = enumVarRef.VarName;
                 }
-                structVarNames[enumVarRef.Result.Id] = resolvedPrefix;
-                structValueTypes[enumVarRef.Result.Id] = enumVarRef.EnumTypeName;
+                valueMap[enumVarRef.Result] = new StdHeapPtr(enumVarRef.Result.Id, enumVarRef.EnumTypeName, resolvedPrefix);
               } else {
                 var loaded = EmitLoad(newBlock, enumVarRef.VarName, varTypes);
                 valueMap[enumVarRef.Result] = loaded;
@@ -599,12 +593,12 @@ public static partial class MaxonToStandardConversion {
               var enumHeapPtr = (StdI64)EmitLoad(newBlock, resolvedPrefix, varTypes);
               int byteOffset = 8 + payloadAssign.PayloadIndex * 8;
 
-              if (structVarNames.TryGetValue(payloadAssign.NewValue.Id, out var newStructSrc)) {
+              if (valueMap.TryGetValue(payloadAssign.NewValue, out var newStructSrcSv) && newStructSrcSv is StdHeapPtr newStructSrcHp) {
                 // Heap-pointer payload: decref old value, store new, incref new
                 var oldPayloadLoad = new StdLoadIndirectOp(enumHeapPtr, byteOffset, MlirType.I64);
                 newBlock.AddOp(oldPayloadLoad);
                 EmitDecrefValueIfNonnull(newBlock, (StdI64)oldPayloadLoad.Result, scopeName: func.Name);
-                var childHeapPtr = (StdI64)EmitLoad(newBlock, newStructSrc, varTypes);
+                var childHeapPtr = (StdI64)EmitLoad(newBlock, newStructSrcHp.VarName!, varTypes);
                 var enumHeapPtrReload = (StdI64)EmitLoad(newBlock, resolvedPrefix, varTypes);
                 newBlock.AddOp(new StdStoreIndirectOp(childHeapPtr, enumHeapPtrReload, byteOffset, MlirType.I64));
                 EmitIncrefValue(newBlock, childHeapPtr, scopeName: func.Name);
@@ -627,8 +621,7 @@ public static partial class MaxonToStandardConversion {
                 var retVarName = temps.CreateTemp("error_enum", errToEnumOp.Result.Id, errToEnumOp.EnumTypeName, OwnershipFlags.None);
                 EmitStore(newBlock, heapPtr, retVarName, varTypes);
                 // No unpacking — heap pointer IS the enum value
-                structVarNames[errToEnumOp.Result.Id] = retVarName;
-                structValueTypes[errToEnumOp.Result.Id] = errToEnumOp.EnumTypeName;
+                valueMap[errToEnumOp.Result] = new StdHeapPtr(errToEnumOp.Result.Id, errToEnumOp.EnumTypeName, retVarName);
               } else {
                 // Simple error enum: subtract 1 from error flag to recover ordinal
                 var errorFlagVal = (StdI64)valueMap[errToEnumOp.ErrorFlag];
@@ -647,9 +640,10 @@ public static partial class MaxonToStandardConversion {
               var isString = !strRawOp.IsChar;
               var rawValTypeName = isString ? "String" : "Character";
               var tempName = temps.CreateTemp("enum_rawval", strRawOp.Result.Id, rawValTypeName, OwnershipFlags.None);
-              EmitManagedStructFromBufLen(tempName, buf, len,
-                isString, newBlock, varTypes, structVarNames, strRawOp.Result.Id,
+              var strRawHp = EmitManagedStructFromBufLen(tempName, buf, len,
+                isString, newBlock, varTypes,
                 allocTag: rawValTypeName);
+              valueMap[strRawOp.Result] = strRawHp;
               break;
             }
             case MaxonEnumNameOp enumNameOp: {
@@ -666,9 +660,10 @@ public static partial class MaxonToStandardConversion {
               }
               var (nameBuf, nameLen) = EmitUnionNameLookup(enumType, ordinalValue, newBlock, result);
               var tempName = temps.CreateTemp("enum_name", enumNameOp.Result.Id, "String", OwnershipFlags.None);
-              EmitManagedStructFromBufLen(tempName, nameBuf, nameLen,
-                true, newBlock, varTypes, structVarNames, enumNameOp.Result.Id,
+              var enumNameHp = EmitManagedStructFromBufLen(tempName, nameBuf, nameLen,
+                true, newBlock, varTypes,
                 allocTag: "String");
+              valueMap[enumNameOp.Result] = enumNameHp;
               break;
             }
             case MaxonLiteralOp litOp: {
@@ -729,9 +724,9 @@ public static partial class MaxonToStandardConversion {
 
               foreach (var (fieldName, fieldVal) in structLitOp.FieldValues) {
                 var field = structType.GetField(fieldName)!;
-                if (structVarNames.TryGetValue(fieldVal.Id, out var nestedStructName)) {
+                if (valueMap.TryGetValue(fieldVal, out var nestedStructNameSv) && nestedStructNameSv is StdHeapPtr nestedStructNameHp) {
                   // Struct or associated-value enum field: both are heap pointers now
-                  var nestedHeapPtr = EmitLoad(newBlock, nestedStructName, varTypes);
+                  var nestedHeapPtr = EmitLoad(newBlock, nestedStructNameHp.VarName!, varTypes);
                   EmitStructFieldStore(newBlock, nestedHeapPtr, tempName, field.Offset, MlirType.I64, varTypes);
                   // Incref — the struct holds a reference to this nested value
                   EmitIncrefValue(newBlock, (StdI64)nestedHeapPtr, scopeName: func.Name);
@@ -827,15 +822,9 @@ public static partial class MaxonToStandardConversion {
                   var castOp = new StdPtrToI64Op(leaOp.Result);
                   newBlock.AddOp(castOp);
                   rdataPtr = castOp.Result;
-
-                  // Incref struct elements — the array holds references to them
-                  var firstElemVarStack = $"{structLitOp.ArrayLiteralTag}.0";
-                  if (varNameToStructType.ContainsKey(firstElemVarStack)) {
-                    for (int ei = 0; ei < structLitOp.ArrayLiteralCount; ei++) {
-                      var elemVar = $"{structLitOp.ArrayLiteralTag}.{ei}";
-                      EmitIncrefValue(newBlock, (StdI64)EmitLoad(newBlock, elemVar, varTypes), scopeName: func.Name);
-                    }
-                  }
+                  // No extra incref for stack-buffer elements: scope cleanup tracks
+                  // __arr_N.M variables and decrefs them. The destructor's
+                  // mm_decref_managed_elements is a no-op for capacity==0 buffers.
                 }
 
                 // Set capacity for heap-allocated writable buffers only.
@@ -872,8 +861,7 @@ public static partial class MaxonToStandardConversion {
                 }
               }
 
-              structVarNames[structLitOp.Result.Id] = tempName;
-              structValueTypes[structLitOp.Result.Id] = structLitOp.TypeName;
+              valueMap[structLitOp.Result] = new StdHeapPtr(structLitOp.Result.Id, structLitOp.TypeName, tempName);
 
               // Orphan struct literal temps (__struct_N) need incref + scope cleanup when they
               // are not consumed by another construct that manages their lifetime:
@@ -895,20 +883,19 @@ public static partial class MaxonToStandardConversion {
             case MaxonAssignOp assignOp: {
               // Associated-value enums now use heap pointers (like structs) and fall
               // through to the struct assignment path below.
-              // Check structVarNames as the authoritative source: chain ops like
+              // Check valueMap for StdHeapPtr as the authoritative source: chain ops like
               // chain_node_value report MaxonStruct result type even for primitives,
               // so ValueKind alone is not reliable.
-              if (structVarNames.ContainsKey(assignOp.Value.Id)) {
+              if (valueMap.TryGetValue(assignOp.Value, out var assignSv) && assignSv is StdHeapPtr assignHp) {
                 // Struct assignment: copy the heap pointer (alias, not deep copy)
                 // Copy-by-default cloning is handled at the parser level via clone() calls.
-                if (!structVarNames.TryGetValue(assignOp.Value.Id, out var srcName))
-                  throw new InvalidOperationException($"MaxonAssignOp: structVarNames missing key {assignOp.Value.Id} for assign to '{assignOp.VarName}' (ValueKind={assignOp.ValueKind}) in func {func.Name}");
+                var srcName = assignHp.VarName
+                  ?? throw new InvalidOperationException($"MaxonAssignOp: StdHeapPtr missing VarName for value {assignOp.Value.Id} for assign to '{assignOp.VarName}' (ValueKind={assignOp.ValueKind}) in func {func.Name}");
                 var dstName = assignOp.VarName;
-                var structTypeName = structValueTypes.TryGetValue(assignOp.Value.Id, out var svt)
-                  ? svt
-                  : assignOp.Value is MaxonStruct ms
+                var structTypeName = assignHp.TypeName
+                  ?? (assignOp.Value is MaxonStruct ms
                     ? ms.TypeName
-                    : throw new InvalidOperationException($"No struct type info for value #{assignOp.Value.Id} in assign to '{assignOp.VarName}'");
+                    : throw new InvalidOperationException($"No struct type info for value #{assignOp.Value.Id} in assign to '{assignOp.VarName}'"));
                 if (srcName != dstName) {
                   // Decref old value before overwriting. Guarded by varTypes
                   // so the first store skips the decref (no previous value);
@@ -926,10 +913,11 @@ public static partial class MaxonToStandardConversion {
                 // Skip incref when ownership was transferred from a callee return —
                 // but NOT for SelfReturn (borrowed reference that needs its own incref).
                 var isSelfReturn = temps.TempHasFlag(srcName, OwnershipFlags.SelfReturn);
+                var isOwnsRef = temps.TempHasFlag(srcName, OwnershipFlags.OwnsRef);
                 var isCallRetTransfer = !isSelfReturn
                     && (assignOp.OwnerFlags?.HasFlag(OwnershipFlags.CallReturn) == true
                         || temps.IsCallReturnTransfer(srcName));
-                if (isCallRetTransfer) {
+                if (isCallRetTransfer || isOwnsRef) {
                   temps.ConsumeTempOwnership(srcName);
                 } else if (assignOp.IsDeclaration || srcName != dstName) {
                   EmitIncref(newBlock, assignOp.VarName, varTypes, scopeName: func.Name);
@@ -945,8 +933,7 @@ public static partial class MaxonToStandardConversion {
                     EmitStructFieldStore(newBlock, heapPtr2, "self", field.Offset, MlirType.I64, varTypes);
                   }
                 }
-                structVarNames[assignOp.Value.Id] = dstName;
-                structValueTypes[assignOp.Value.Id] = structTypeName;
+                valueMap[assignOp.Value] = new StdHeapPtr(assignOp.Value.Id, structTypeName, dstName);
                 varNameToStructPrefix[assignOp.VarName] = dstName;
               } else {
                 var mappedValue = valueMap[assignOp.Value];
@@ -992,10 +979,10 @@ public static partial class MaxonToStandardConversion {
               // actually refer to a struct variable. If the variable is a struct prefix,
               // handle it as a struct reference.
               if (!varTypes.ContainsKey(resolvedVarName) && varNameToStructPrefix.TryGetValue(resolvedVarName, out string? structPrefix)) {
-                structVarNames[varRef.Result.Id] = structPrefix;
-                if (varNameToStructType.TryGetValue(resolvedVarName, out var stType)) {
-                  structValueTypes[varRef.Result.Id] = stType;
-                }
+                var resolvedType = varNameToStructType.TryGetValue(resolvedVarName, out var stType)
+                  ? stType
+                  : (valueMap.TryGetValue(varRef.Result, out var existSv) && existSv is StdHeapPtr existHp ? existHp.TypeName : "unknown");
+                valueMap[varRef.Result] = new StdHeapPtr(varRef.Result.Id, resolvedType, structPrefix);
                 break;
               }
               var loaded2 = EmitLoad(newBlock, resolvedVarName, varTypes);
@@ -1021,7 +1008,6 @@ public static partial class MaxonToStandardConversion {
               } else {
                 resolvedName = varNameToStructPrefix.GetValueOrDefault(structVarRef.VarName, structVarRef.VarName);
               }
-              structVarNames[structVarRef.Result.Id] = resolvedName;
               // Prefer the canonical type from varNameToStructType (set during struct
               // assignment with resolved types) over the StructTypeName from the parser
               // which may contain stale inner alias names (e.g. "Entry" instead of
@@ -1029,13 +1015,13 @@ public static partial class MaxonToStandardConversion {
               var resolvedTypeName = varNameToStructType.TryGetValue(structVarRef.VarName, out var vt)
                 ? vt
                 : structVarRef.StructTypeName;
-              structValueTypes[structVarRef.Result.Id] = resolvedTypeName;
+              valueMap[structVarRef.Result] = new StdHeapPtr(structVarRef.Result.Id, resolvedTypeName, resolvedName);
               break;
             }
             case MaxonFieldAccessOp fieldAccess: {
-              var structName = structVarNames[fieldAccess.StructValue.Id];
+              var structName = ((StdHeapPtr)valueMap[fieldAccess.StructValue]).VarName!;
               // Resolve the field type and offset from the struct type definition
-              var parentTypeName = structValueTypes.TryGetValue(fieldAccess.StructValue.Id, out var ptn) ? ptn : null;
+              var parentTypeName = valueMap.TryGetValue(fieldAccess.StructValue, out var ptnSv2) && ptnSv2 is StdHeapPtr ptnHp2 ? ptnHp2.TypeName : null;
               MlirStructType? parentStructType = null;
               if (parentTypeName != null && module.TypeDefs.TryGetValue(parentTypeName, out var ptDef) && ptDef is MlirStructType pst)
                 parentStructType = pst;
@@ -1065,9 +1051,11 @@ public static partial class MaxonToStandardConversion {
                 if (fieldDef != null) {
                   var nestedPtr = EmitStructFieldLoad(newBlock, structName, fieldDef.Offset, MlirType.I64, varTypes);
                   EmitStore(newBlock, nestedPtr, tempVarName, varTypes);
-                  // For self fields, also initialize the field name variable so that later
-                  // code referencing it by name (across conditional blocks) gets the correct value.
-                  if (IsSelfField(isStructInstanceMethod, selfStructType, fieldAccess.FieldName)) {
+                  // For self fields accessed via self, also initialize the field name variable so that
+                  // later code referencing it by name (across conditional blocks) gets the correct value.
+                  // Only do this when the field access is on self, not on another struct that happens
+                  // to have the same field name (e.g., other.managed vs self.managed in append).
+                  if (structName == "self" && IsSelfField(isStructInstanceMethod, selfStructType, fieldAccess.FieldName)) {
                     EmitStore(newBlock, nestedPtr, fieldAccess.FieldName, varTypes);
                   }
                 } else {
@@ -1075,7 +1063,9 @@ public static partial class MaxonToStandardConversion {
                   var loaded = EmitLoad(newBlock, $"{structName}.{fieldAccess.FieldName}", varTypes);
                   EmitStore(newBlock, loaded, tempVarName, varTypes);
                 }
-                structVarNames[fieldAccess.Result.Id] = tempVarName;
+                // Propagate type info for the nested struct field
+                var resolvedFieldType = fieldDef?.Type is MlirStructType fieldStructType ? fieldStructType.Name : fieldTypeName;
+                valueMap[fieldAccess.Result] = new StdHeapPtr(fieldAccess.Result.Id, resolvedFieldType, tempVarName);
                 // Only update varNameToStructPrefix if the field name doesn't shadow
                 // an existing parameter or local variable (e.g., a param named "data"
                 // must not be overwritten by a field access like "existing.data").
@@ -1084,9 +1074,6 @@ public static partial class MaxonToStandardConversion {
                 } else {
                   Logger.Trace(LogCategory.Mlir, $"Skipping varNameToStructPrefix['{fieldAccess.FieldName}'] — shadows existing variable");
                 }
-                // Propagate type info for the nested struct field
-                if (fieldDef?.Type is MlirStructType fieldStructType)
-                  structValueTypes[fieldAccess.Result.Id] = fieldStructType.Name;
               } else if (fieldAccess.ResultKind == MaxonValueKind.Enum
                          && fieldAccess.ResultStructTypeName != null
                          && module.TypeDefs.TryGetValue(fieldAccess.ResultStructTypeName, out var faEnumDef)
@@ -1100,7 +1087,7 @@ public static partial class MaxonToStandardConversion {
                   var loaded = EmitLoad(newBlock, $"{structName}.{fieldAccess.FieldName}", varTypes);
                   EmitStore(newBlock, loaded, tempVarName, varTypes);
                 }
-                structVarNames[fieldAccess.Result.Id] = tempVarName;
+                valueMap[fieldAccess.Result] = new StdHeapPtr(fieldAccess.Result.Id, fieldAccess.ResultStructTypeName!, tempVarName);
                 if (!varTypes.ContainsKey(fieldAccess.FieldName)) {
                   varNameToStructPrefix[fieldAccess.FieldName] = tempVarName;
                 }
@@ -1110,7 +1097,6 @@ public static partial class MaxonToStandardConversion {
                   EmitStore(newBlock, EmitLoad(newBlock, tempVarName, varTypes), fieldAccess.FieldName, varTypes);
                   varNameToStructPrefix[fieldAccess.FieldName] = fieldAccess.FieldName;
                 }
-                structValueTypes[fieldAccess.Result.Id] = fieldAccess.ResultStructTypeName;
               } else {
                 // Scalar field: load via indirect access through heap pointer
                 if (fieldDef != null) {
@@ -1125,21 +1111,21 @@ public static partial class MaxonToStandardConversion {
               break;
             }
             case MaxonFieldAssignOp fieldAssign: {
-              var structName = structVarNames[fieldAssign.StructValue.Id];
+              var structName = ((StdHeapPtr)valueMap[fieldAssign.StructValue]).VarName!;
 
               // Resolve the field type and offset from the struct type definition
-              var faParentTypeName = structValueTypes.TryGetValue(fieldAssign.StructValue.Id, out var faptn) ? faptn : null;
+              var faParentTypeName = valueMap.TryGetValue(fieldAssign.StructValue, out var faptnSv2) && faptnSv2 is StdHeapPtr faptnHp2 ? faptnHp2.TypeName : null;
               MlirStructType? faParentStructType = null;
               if (faParentTypeName != null && module.TypeDefs.TryGetValue(faParentTypeName, out var faptDef) && faptDef is MlirStructType fapst)
                 faParentStructType = fapst;
               var faFieldDef = faParentStructType?.GetField(fieldAssign.FieldName);
 
               if (!valueMap.TryGetValue(fieldAssign.NewValue, out StdValue? mappedVal)) {
-                if (structVarNames.TryGetValue(fieldAssign.NewValue.Id, out var newValStructName)) {
-                  mappedVal = EmitLoad(newBlock, newValStructName, varTypes);
-                } else {
-                  throw new InvalidOperationException($"MaxonFieldAssignOp: NewValue %{fieldAssign.NewValue.Id} not in valueMap or structVarNames for {structName}.{fieldAssign.FieldName} in func {func.Name}");
-                }
+                throw new InvalidOperationException($"MaxonFieldAssignOp: NewValue %{fieldAssign.NewValue.Id} not in valueMap for {structName}.{fieldAssign.FieldName} in func {func.Name}");
+              }
+              // StdHeapPtr values must be loaded from their temp variable
+              if (mappedVal is StdHeapPtr newValHp) {
+                mappedVal = EmitLoad(newBlock, newValHp.VarName!, varTypes);
               }
 
               if (faFieldDef != null) {
@@ -1169,20 +1155,18 @@ public static partial class MaxonToStandardConversion {
                 break;
               }
 
-              // Load operand from valueMap; fall back to structVarNames for type-parameter
+              // Load operand from valueMap; fall back to StdHeapPtr for type-parameter
               // fields promoted to Struct kind (they store heap pointers as i64 values)
               if (!valueMap.TryGetValue(binOp.Lhs, out StdValue? lhs)) {
-                if (structVarNames.TryGetValue(binOp.Lhs.Id, out var lhsStructVar))
-                  lhs = EmitLoad(newBlock, lhsStructVar, varTypes);
-                else
-                  throw new InvalidOperationException($"BinOp LHS %{binOp.Lhs.Id} not in valueMap in func {func.Name} block {block.Name}, op: {binOp.Operator} {binOp.OperandKind}");
+                throw new InvalidOperationException($"BinOp LHS %{binOp.Lhs.Id} not in valueMap in func {func.Name} block {block.Name}, op: {binOp.Operator} {binOp.OperandKind}");
               }
+              if (lhs is StdHeapPtr lhsHpBinOp)
+                lhs = EmitLoad(newBlock, lhsHpBinOp.VarName!, varTypes);
               if (!valueMap.TryGetValue(binOp.Rhs, out StdValue? rhs)) {
-                if (structVarNames.TryGetValue(binOp.Rhs.Id, out var rhsStructVar))
-                  rhs = EmitLoad(newBlock, rhsStructVar, varTypes);
-                else
-                  throw new InvalidOperationException($"BinOp RHS %{binOp.Rhs.Id} not in valueMap in func {func.Name} block {block.Name}, op: {binOp.Operator} {binOp.OperandKind}");
+                throw new InvalidOperationException($"BinOp RHS %{binOp.Rhs.Id} not in valueMap in func {func.Name} block {block.Name}, op: {binOp.Operator} {binOp.OperandKind}");
               }
+              if (rhs is StdHeapPtr rhsHpBinOp)
+                rhs = EmitLoad(newBlock, rhsHpBinOp.VarName!, varTypes);
 
               // Use OptimalType to select narrower/unsigned ops
               if (binOp.OperandKind == MaxonValueKind.Integer && binOp.OptimalType is MlirType ot) {
@@ -1230,9 +1214,9 @@ public static partial class MaxonToStandardConversion {
               break;
             }
             case MaxonRefEqOp refEq: {
-              // Struct values are tracked by structVarNames — load their heap pointers
-              var lhsVarName = structVarNames[refEq.Lhs.Id];
-              var rhsVarName = structVarNames[refEq.Rhs.Id];
+              // Struct values are tracked by StdHeapPtr in valueMap — load their heap pointers
+              var lhsVarName = ((StdHeapPtr)valueMap[refEq.Lhs]).VarName!;
+              var rhsVarName = ((StdHeapPtr)valueMap[refEq.Rhs]).VarName!;
               var lhsPtr = (StdI64)EmitLoad(newBlock, lhsVarName, varTypes);
               var rhsPtr = (StdI64)EmitLoad(newBlock, rhsVarName, varTypes);
               var predicate = refEq.Negate ? "ne" : "eq";
@@ -1252,7 +1236,12 @@ public static partial class MaxonToStandardConversion {
             }
             case MaxonScopeEndOp scopeEnd: {
               var keep = scopeEnd.KeepVars;
-              foreach (var v in scopeEnd.VarsToClean) {
+              // Process in reverse order: variables declared later (containers,
+              // iterators) must be freed before their backing stores (array
+              // element slots) so destructors can still read live element data.
+              var varsToClean = scopeEnd.VarsToClean.ToList();
+              varsToClean.Reverse();
+              foreach (var v in varsToClean) {
                 if (keep != null && keep.Contains(v)) {
                   // Ownership transferred to caller — skip decref but emit trace if enabled.
                   if (Compiler.MmTrace && varNameToStructType.ContainsKey(v)) {
@@ -1282,9 +1271,13 @@ public static partial class MaxonToStandardConversion {
               // survive scope cleanup so LowerReturn can read and transfer them.
               var returnedOrphanTemps = new HashSet<string>();
               foreach (var retId in structLitReturnIds) {
-                if (structVarNames.TryGetValue(retId, out var retTempName)
-                    && temps.TempHasFlag(retTempName, OwnershipFlags.Orphan)) {
-                  returnedOrphanTemps.Add(retTempName);
+                // Find the temp name for this returned value via valueMap StdHeapPtr
+                foreach (var (mv, sv) in valueMap) {
+                  if (mv.Id == retId && sv is StdHeapPtr retHpTemp && retHpTemp.VarName != null
+                      && temps.TempHasFlag(retHpTemp.VarName, OwnershipFlags.Orphan)) {
+                    returnedOrphanTemps.Add(retHpTemp.VarName);
+                    break;
+                  }
                 }
               }
               // Decref orphan temps created during lowering (not in parser scope tracking)
@@ -1518,9 +1511,9 @@ public static partial class MaxonToStandardConversion {
                 temps.RegisterTemp(tempName, globalLoad.StructTypeName ?? "unknown", OwnershipFlags.Orphan);
                 EmitStore(newBlock, valueMap[globalLoad.Result], tempName, varTypes);
                 EmitIncref(newBlock, tempName, varTypes, scopeName: func.Name);
-                structVarNames[globalLoad.Result.Id] = tempName;
+                var globalTypeName = globalLoad.StructTypeName ?? "unknown";
+                valueMap[globalLoad.Result] = new StdHeapPtr(globalLoad.Result.Id, globalTypeName, tempName);
                 if (globalLoad.StructTypeName != null) {
-                  structValueTypes[globalLoad.Result.Id] = globalLoad.StructTypeName;
                   varNameToStructType[tempName] = globalLoad.StructTypeName;
                 }
               }
@@ -1528,12 +1521,13 @@ public static partial class MaxonToStandardConversion {
             }
             case MaxonGlobalStoreOp globalStore: {
               if (globalStore.ValueKind == MaxonValueKind.Struct) {
-                // Resolve the new heap pointer
+                // Resolve the new heap pointer -- check StdHeapPtr before StdI64
+                // since StdHeapPtr extends StdI64 and needs a load from its temp variable
                 StdI64 newHeapPtr;
-                if (valueMap.TryGetValue(globalStore.Value, out var mv) && mv is StdI64 i64Val) {
+                if (valueMap.TryGetValue(globalStore.Value, out var mv) && mv is StdHeapPtr srcNameHp) {
+                  newHeapPtr = (StdI64)EmitLoad(newBlock, srcNameHp.VarName!, varTypes);
+                } else if (mv is StdI64 i64Val) {
                   newHeapPtr = i64Val;
-                } else if (structVarNames.TryGetValue(globalStore.Value.Id, out var srcName)) {
-                  newHeapPtr = (StdI64)EmitLoad(newBlock, srcName, varTypes);
                 } else {
                   throw new InvalidOperationException($"Cannot store struct value to global '{globalStore.GlobalName}': no struct tracking info");
                 }
@@ -1572,11 +1566,11 @@ public static partial class MaxonToStandardConversion {
               break;
             }
             case MaxonTryCallOp tryCallOp:
-              LowerTryCall(tryCallOp, funcLookup, newBlock, valueMap, varTypes, structVarNames, structValueTypes, module.TypeDefs, temps);
+              LowerTryCall(tryCallOp, funcLookup, newBlock, valueMap, varTypes, module.TypeDefs, temps);
               break;
             case MaxonCallOp callOp:
               if (TryLowerPrimitiveMethod(callOp, newBlock, valueMap)) break;
-              LowerCall(callOp, funcLookup, newBlock, valueMap, varTypes, structVarNames, structValueTypes, module.TypeDefs, fnEnvVarNames: fnEnvVarNames, temps: temps);
+              LowerCall(callOp, funcLookup, newBlock, valueMap, varTypes, module.TypeDefs, fnEnvVarNames: fnEnvVarNames, temps: temps);
               // After a call that passes variables by reference, reload those variables
               // so subsequent uses see the mutated values instead of stale SSA values
               if (_mutatingParams != null && callOp.ArgVarNames != null
@@ -1607,10 +1601,10 @@ public static partial class MaxonToStandardConversion {
               LowerFunctionRef(fnRefOp, newBlock, valueMap);
               break;
             case MaxonClosureCreateOp closureCreateOp:
-              LowerClosureCreate(closureCreateOp, newBlock, valueMap, varTypes, structVarNames, fnEnvVarNames, varNameToStructType, temps);
+              LowerClosureCreate(closureCreateOp, newBlock, valueMap, varTypes, fnEnvVarNames, varNameToStructType, temps);
               break;
             case MaxonClosureEnvLoadOp envLoadOp:
-              LowerClosureEnvLoad(envLoadOp, newBlock, valueMap, varTypes, structVarNames, structValueTypes, temps);
+              LowerClosureEnvLoad(envLoadOp, newBlock, valueMap, varTypes, temps);
               break;
             case MaxonFunctionParamOp fnParamOp:
               LowerFunctionParam(fnParamOp, newBlock, valueMap, varTypes, fnEnvVarNames, fnEnvDirectValues, paramFlatIndex);
@@ -1619,108 +1613,120 @@ public static partial class MaxonToStandardConversion {
               LowerFunctionVarRef(fnVarRefOp, newBlock, valueMap, varTypes, fnEnvVarNames);
               break;
             case MaxonIndirectCallOp indirectCallOp:
-              LowerIndirectCall(indirectCallOp, newBlock, valueMap, varTypes, structVarNames, module.TypeDefs, fnEnvVarNames, fnEnvDirectValues, temps);
+              LowerIndirectCall(indirectCallOp, newBlock, valueMap, varTypes, module.TypeDefs, fnEnvVarNames, fnEnvDirectValues, temps);
               break;
             case MaxonReturnOp retOp: {
-              LowerReturn(retOp, retStructType, newBlock, valueMap, varTypes, structVarNames, structValueTypes, module.TypeDefs, func.Name, temps);
+              LowerReturn(retOp, retStructType, newBlock, valueMap, varTypes, module.TypeDefs, func.Name, temps);
               break;
             }
             case MaxonThrowOp throwOp: {
-              LowerThrow(throwOp, newBlock, valueMap, structVarNames, varTypes, module.TypeDefs);
+              LowerThrow(throwOp, newBlock, valueMap, varTypes, module.TypeDefs);
               break;
             }
             case MaxonManagedMemGetOp memGetOp:
-              LowerManagedMemGet(memGetOp, newBlock, valueMap, varTypes, structVarNames, structValueTypes, temps);
+              LowerManagedMemGet(memGetOp, newBlock, valueMap, varTypes, temps);
+              if (valueMap[memGetOp.Result] is StdHeapPtr memGetHp) {
+                valueMap[memGetOp.Result] = new StdHeapPtr(memGetOp.Result.Id, memGetHp.TypeName, memGetHp.VarName!);
+              }
               break;
             case MaxonManagedMemRemoveOp memRemoveOp:
-              LowerManagedMemRemove(memRemoveOp, newBlock, valueMap, varTypes, structVarNames, structValueTypes, temps);
+              LowerManagedMemRemove(memRemoveOp, newBlock, valueMap, varTypes, temps);
+              if (valueMap[memRemoveOp.Result] is StdHeapPtr memRemoveHp) {
+                valueMap[memRemoveOp.Result] = new StdHeapPtr(memRemoveOp.Result.Id, memRemoveHp.TypeName, memRemoveHp.VarName!);
+              }
               break;
             case MaxonManagedMemSetOp memSetOp:
-              LowerManagedMemSet(memSetOp, newBlock, valueMap, varTypes, structVarNames);
+              LowerManagedMemSet(memSetOp, newBlock, valueMap, varTypes);
               break;
             case MaxonManagedMemCreateOp memCreateOp:
-              LowerManagedMemCreate(memCreateOp, newBlock, valueMap, varTypes, structVarNames, temps,
+              LowerManagedMemCreate(memCreateOp, newBlock, valueMap, varTypes, temps,
                 inlineTargets.GetValueOrDefault(memCreateOp.Result.Id));
+              if (valueMap[memCreateOp.Result] is StdHeapPtr memCreateHp) {
+                valueMap[memCreateOp.Result] = new StdHeapPtr(memCreateOp.Result.Id, memCreateHp.TypeName, memCreateHp.VarName!);
+              }
               break;
             case MaxonManagedMemGrowOp memGrowOp:
-              LowerManagedMemGrow(memGrowOp, newBlock, valueMap, varTypes, structVarNames);
+              LowerManagedMemGrow(memGrowOp, newBlock, valueMap, varTypes);
               break;
             case MaxonManagedMemSetLengthOp setLenOp:
-              LowerManagedMemSetLength(setLenOp, newBlock, valueMap, varTypes, structVarNames);
+              LowerManagedMemSetLength(setLenOp, newBlock, valueMap, varTypes);
               break;
             case MaxonManagedMemClearOp memClearOp:
-              LowerManagedMemClear(memClearOp, newBlock, varTypes, structVarNames);
+              LowerManagedMemClear(memClearOp, newBlock, valueMap, varTypes);
               break;
             case MaxonManagedMemShiftOp memShiftOp:
-              LowerManagedMemShift(memShiftOp, newBlock, valueMap, varTypes, structVarNames);
+              LowerManagedMemShift(memShiftOp, newBlock, valueMap, varTypes);
               break;
             case MaxonManagedMemByteGetOp byteGetOp:
-              LowerManagedMemByteGet(byteGetOp, newBlock, valueMap, varTypes, structVarNames);
+              LowerManagedMemByteGet(byteGetOp, newBlock, valueMap, varTypes);
               break;
             case MaxonManagedMemByteSetOp byteSetOp:
-              LowerManagedMemByteSet(byteSetOp, newBlock, valueMap, varTypes, structVarNames);
+              LowerManagedMemByteSet(byteSetOp, newBlock, valueMap, varTypes);
               break;
             case MaxonCStringToManagedOp fromCStringOp:
-              LowerCStringToManaged(fromCStringOp, newBlock, valueMap, varTypes, structVarNames, temps,
+              LowerCStringToManaged(fromCStringOp, newBlock, valueMap, varTypes, temps,
                 inlineTargets.GetValueOrDefault(fromCStringOp.Result.Id));
+              if (valueMap[fromCStringOp.Result] is StdHeapPtr fromCStringHp) {
+                valueMap[fromCStringOp.Result] = new StdHeapPtr(fromCStringOp.Result.Id, fromCStringHp.TypeName, fromCStringHp.VarName!);
+              }
               break;
             case MaxonManagedToCStringOp toCStringOp:
-              LowerManagedToCString(toCStringOp, newBlock, valueMap, varTypes, structVarNames);
+              LowerManagedToCString(toCStringOp, newBlock, valueMap, varTypes);
               break;
             case MaxonManagedWriteStdoutOp managedWriteStdoutOp:
-              LowerManagedWriteStdout(managedWriteStdoutOp, newBlock, valueMap, varTypes, structVarNames);
+              LowerManagedWriteStdout(managedWriteStdoutOp, newBlock, valueMap, varTypes);
               break;
             case MaxonManagedWriteStderrOp managedWriteStderrOp:
-              LowerManagedWriteStderr(managedWriteStderrOp, newBlock, valueMap, varTypes, structVarNames);
+              LowerManagedWriteStderr(managedWriteStderrOp, newBlock, valueMap, varTypes);
               break;
             case MaxonPanicOp panicOp:
               LowerPanic(panicOp, newBlock, result);
               break;
             case MaxonStringLiteralOp stringLitOp:
-              LowerStringLiteral(stringLitOp, newBlock, varTypes, structVarNames, result, temps,
+              LowerStringLiteral(stringLitOp, newBlock, valueMap, varTypes, result, temps,
                 inlineTargets.GetValueOrDefault(stringLitOp.Result.Id));
               break;
             case MaxonByteStringLiteralOp byteStringLitOp:
-              LowerByteStringLiteral(byteStringLitOp, newBlock, varTypes, structVarNames, result, temps,
+              LowerByteStringLiteral(byteStringLitOp, newBlock, valueMap, varTypes, result, temps,
                 inlineTargets.GetValueOrDefault(byteStringLitOp.Result.Id));
               break;
             case MaxonCharLiteralOp charLitOp:
-              LowerCharLiteral(charLitOp, newBlock, varTypes, structVarNames, result, temps,
+              LowerCharLiteral(charLitOp, newBlock, valueMap, varTypes, result, temps,
                 inlineTargets.GetValueOrDefault(charLitOp.Result.Id));
               break;
             case MaxonStringInterpOp interpOp:
-              LowerStringInterp(interpOp, newBlock, valueMap, varTypes, structVarNames, result, temps,
+              LowerStringInterp(interpOp, newBlock, valueMap, varTypes, result, temps,
                 inlineTargets.GetValueOrDefault(interpOp.Result.Id));
               break;
             case MaxonManagedMemConcatOp concatOp:
-              LowerManagedMemConcat(concatOp, newBlock, varTypes, structVarNames, temps,
+              LowerManagedMemConcat(concatOp, newBlock, valueMap, varTypes, temps,
                 inlineTargets.GetValueOrDefault(concatOp.Result.Id));
               break;
             case MaxonManagedMemSliceOp sliceOp:
-              LowerManagedMemSlice(sliceOp, newBlock, valueMap, varTypes, structVarNames, temps,
+              LowerManagedMemSlice(sliceOp, newBlock, valueMap, varTypes, temps,
                 inlineTargets.GetValueOrDefault(sliceOp.Result.Id));
               break;
             case MaxonMakeCharFromBytesOp makeCharOp:
-              LowerMakeCharFromBytes(makeCharOp, newBlock, valueMap, varTypes, structVarNames, temps);
+              LowerMakeCharFromBytes(makeCharOp, newBlock, valueMap, varTypes, temps);
               break;
             case MaxonCallRuntimeOp callRtOp: {
               var stdArgs = callRtOp.Args.Select(a => {
-                if (valueMap.TryGetValue(a, out var mapped))
-                  return (StdValue)(StdI64)mapped;
-                if (structVarNames.TryGetValue(a.Id, out var structName)) {
-                  if (!structValueTypes.TryGetValue(a.Id, out var typeName))
-                    throw new InvalidOperationException($"MaxonCallRuntimeOp struct arg {a} has no type in structValueTypes");
-                  // Load buffer from managed struct via heap pointer indirection
-                  if (TypeAliasInfo.IsManagedMemoryType(typeName, module.TypeAliasSources)) {
-                    // structName IS the __ManagedMemory heap pointer, buffer at offset 0
-                    return (StdValue)(StdI64)EmitStructFieldLoad(newBlock, structName, ManagedFieldBuffer, MlirType.I64, varTypes);
-                  } else {
-                    throw new InvalidOperationException(
-                      $"MaxonCallRuntimeOp struct arg has unexpected type '{typeName}' — " +
-                      "only __ManagedMemory struct args are supported (extract fields before passing to runtime calls)");
+                if (valueMap.TryGetValue(a, out var mapped)) {
+                  if (mapped is StdHeapPtr hp && hp.VarName != null) {
+                    var typeName = hp.TypeName;
+                    // Load buffer from managed struct via heap pointer indirection
+                    if (TypeAliasInfo.IsManagedMemoryType(typeName, module.TypeAliasSources)) {
+                      // hp.VarName IS the __ManagedMemory heap pointer, buffer at offset 0
+                      return (StdValue)(StdI64)EmitStructFieldLoad(newBlock, hp.VarName, ManagedFieldBuffer, MlirType.I64, varTypes);
+                    } else {
+                      throw new InvalidOperationException(
+                        $"MaxonCallRuntimeOp struct arg has unexpected type '{typeName}' -- " +
+                        "only __ManagedMemory struct args are supported (extract fields before passing to runtime calls)");
+                    }
                   }
+                  return (StdValue)(StdI64)mapped;
                 }
-                throw new InvalidOperationException($"MaxonCallRuntimeOp arg {a} not found in valueMap or structVarNames");
+                throw new InvalidOperationException($"MaxonCallRuntimeOp arg {a} not found in valueMap");
               }).ToList();
               // When tracing, mm_free takes 2 params (ptr, scope) — add NULL scope if caller only passes ptr
               if (Compiler.MmTrace && callRtOp.FunctionName == "mm_free" && stdArgs.Count == 1) {
@@ -1739,44 +1745,44 @@ public static partial class MaxonToStandardConversion {
             }
             // Chain (doubly-linked list) operations
             case MaxonChainCreateOp chainCreateOp:
-              LowerChainCreate(chainCreateOp, newBlock, varTypes, structVarNames, structValueTypes, temps,
+              LowerChainCreate(chainCreateOp, newBlock, valueMap, varTypes, temps,
                 inlineTargets.GetValueOrDefault(chainCreateOp.Result.Id));
               break;
             case MaxonChainInsertValueOp chainInsertOp:
-              LowerChainInsertValue(chainInsertOp, newBlock, valueMap, varTypes, structVarNames, structValueTypes, module.TypeDefs, temps);
+              LowerChainInsertValue(chainInsertOp, newBlock, valueMap, varTypes, module.TypeDefs, temps);
               break;
             case MaxonChainInsertRelativeValueOp chainInsertRelOp:
-              LowerChainInsertRelativeValue(chainInsertRelOp, newBlock, valueMap, varTypes, structVarNames, structValueTypes, module.TypeDefs, temps);
+              LowerChainInsertRelativeValue(chainInsertRelOp, newBlock, valueMap, varTypes, module.TypeDefs, temps);
               break;
             case MaxonChainReinsertOp chainReinsertOp:
-              LowerChainReinsert(chainReinsertOp, newBlock, varTypes, structVarNames);
+              LowerChainReinsert(chainReinsertOp, newBlock, valueMap, varTypes);
               break;
             case MaxonChainReinsertRelativeOp chainReinsertRelOp:
-              LowerChainReinsertRelative(chainReinsertRelOp, newBlock, varTypes, structVarNames);
+              LowerChainReinsertRelative(chainReinsertRelOp, newBlock, valueMap, varTypes);
               break;
             case MaxonChainDetachOp chainDetachOp:
-              LowerChainDetach(chainDetachOp, newBlock, varTypes, structVarNames);
+              LowerChainDetach(chainDetachOp, newBlock, valueMap, varTypes);
               break;
             case MaxonChainRemoveOp chainRemoveOp:
-              LowerChainRemove(chainRemoveOp, newBlock, valueMap, varTypes, structVarNames, structValueTypes, module.TypeDefs, temps);
+              LowerChainRemove(chainRemoveOp, newBlock, valueMap, varTypes, module.TypeDefs, temps);
               break;
             case MaxonChainCountOp chainCountOp:
-              LowerChainCount(chainCountOp, newBlock, valueMap, varTypes, structVarNames);
+              LowerChainCount(chainCountOp, newBlock, valueMap, varTypes);
               break;
             case MaxonChainNodeValueOp chainNodeValueOp:
-              LowerChainNodeValue(chainNodeValueOp, newBlock, valueMap, varTypes, structVarNames, structValueTypes, module.TypeDefs, temps);
+              LowerChainNodeValue(chainNodeValueOp, newBlock, valueMap, varTypes, module.TypeDefs, temps);
               break;
             case MaxonChainNodeSetValueOp chainNodeSetValueOp:
-              LowerChainNodeSetValue(chainNodeSetValueOp, newBlock, valueMap, varTypes, structVarNames, module.TypeDefs);
+              LowerChainNodeSetValue(chainNodeSetValueOp, newBlock, valueMap, varTypes, module.TypeDefs);
               break;
             case MaxonChainClearOp chainClearOp:
-              LowerChainClear(chainClearOp, newBlock, varTypes, structVarNames, module.TypeDefs);
+              LowerChainClear(chainClearOp, newBlock, valueMap, varTypes, module.TypeDefs);
               break;
             case MaxonChainCursorResetOp cursorResetOp:
-              LowerChainCursorReset(cursorResetOp, newBlock, varTypes, structVarNames);
+              LowerChainCursorReset(cursorResetOp, newBlock, valueMap, varTypes);
               break;
             case MaxonChainCursorValueOp cursorValueOp:
-              LowerChainCursorValue(cursorValueOp, newBlock, valueMap, varTypes, structVarNames, structValueTypes, module.TypeDefs, temps);
+              LowerChainCursorValue(cursorValueOp, newBlock, valueMap, varTypes, module.TypeDefs, temps);
               break;
             default:
               throw new InvalidOperationException($"No MaxonToStandard conversion for: {op.GetType().Name} ({op.Mnemonic})");
@@ -2011,14 +2017,6 @@ public static partial class MaxonToStandardConversion {
         // Struct destructor: mm_decref each managed field, mm_raw_free raw buffers
         var destructorScope = $"~{typeName}";
 
-        // Self-contained cleanup: __ManagedMemory types with managed elements
-        // walk the buffer and decref each element pointer before freeing the buffer
-        if (request.NeedsManagedElementCleanup) {
-          var selfPtr = new StdLoadI64Op("__destr_ptr");
-          entry.AddOp(selfPtr);
-          entry.AddOp(new StdCallRuntimeOp("mm_decref_managed_elements", [selfPtr.Result], null));
-        }
-
         int fieldIdx = 0;
         foreach (var (offset, fieldTypeName, isRawBuffer) in request.ManagedFields) {
           var fieldPtrLoad = new StdLoadI64Op("__destr_ptr");
@@ -2027,7 +2025,8 @@ public static partial class MaxonToStandardConversion {
           entry.AddOp(fieldLoad);
           if (isRawBuffer) {
             // Raw buffer inside __ManagedMemory: free with mm_raw_free
-            // Skip if capacity==0 (rdata string literal — buffer points to static data)
+            // Skip if capacity==0 (rdata-backed — buffer points to stack/static data,
+            // scope cleanup handles element refs for rdata buffers)
             var capPtrLoad = new StdLoadI64Op("__destr_ptr");
             entry.AddOp(capPtrLoad);
             var capLoad = new StdLoadIndirectOp(capPtrLoad.Result, ManagedFieldCapacity, MlirType.I64);
@@ -2041,6 +2040,15 @@ public static partial class MaxonToStandardConversion {
             entry.AddOp(new StdCondBrOp(capNeZero.Result, freeBlock, skipBlock));
 
             var freeBody = func.Body.AddBlock(freeBlock);
+
+            // Heap-backed buffer with managed elements: decref each element
+            // before freeing (COW copy owns its own element references)
+            if (request.NeedsManagedElementCleanup) {
+              var selfPtr = new StdLoadI64Op("__destr_ptr");
+              freeBody.AddOp(selfPtr);
+              freeBody.AddOp(new StdCallRuntimeOp("mm_decref_managed_elements", [selfPtr.Result], null));
+            }
+
             var bufPtrLoad = new StdLoadI64Op("__destr_ptr");
             freeBody.AddOp(bufPtrLoad);
             var bufLoad = new StdLoadIndirectOp(bufPtrLoad.Result, offset, MlirType.I64);

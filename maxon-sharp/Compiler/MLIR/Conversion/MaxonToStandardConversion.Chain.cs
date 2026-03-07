@@ -1,4 +1,4 @@
-using System.Linq;
+﻿using System.Linq;
 using MaxonSharp.Compiler.Mlir.Core;
 using MaxonSharp.Compiler.Mlir.Dialects;
 
@@ -39,9 +39,8 @@ public static partial class MaxonToStandardConversion {
   private static void LowerChainCreate(
     MaxonChainCreateOp op,
     MlirBlock<StandardOp> block,
+    Dictionary<MaxonValue, StdValue> valueMap,
     Dictionary<string, string> varTypes,
-    Dictionary<int, string> structVarNames,
-    Dictionary<int, string> structValueTypes,
     VarRegistry temps,
     string? inlineTarget = null) {
 
@@ -60,8 +59,7 @@ public static partial class MaxonToStandardConversion {
     var tempName = inlineTarget
       ?? temps.CreateTemp("chain", op.Result.Id, op.Result.TypeName, OwnershipFlags.None);
     EmitStore(block, chainPtr, tempName, varTypes);
-    structVarNames[op.Result.Id] = tempName;
-    structValueTypes[op.Result.Id] = op.Result.TypeName;
+    valueMap[op.Result] = new StdHeapPtr(chainPtr.Id, op.Result.TypeName, tempName);
   }
 
   /// <summary>
@@ -73,12 +71,10 @@ public static partial class MaxonToStandardConversion {
     MlirBlock<StandardOp> block,
     Dictionary<MaxonValue, StdValue> valueMap,
     Dictionary<string, string> varTypes,
-    Dictionary<int, string> structVarNames,
-    Dictionary<int, string> structValueTypes,
     Dictionary<string, MlirType> typeDefs,
     VarRegistry temps) {
 
-    var chainVarName = structVarNames[op.Chain.Id];
+    var chainVarName = ((StdHeapPtr)valueMap[op.Chain]).VarName!;
 
     // Allocate node as independent refcounted allocation
     var nodePtr = EmitAlloc(block, ChainNodeDataSize, "__ChainNode", scopeName: _currentFuncName);
@@ -91,9 +87,9 @@ public static partial class MaxonToStandardConversion {
     block.AddOp(new StdStoreIndirectOp(zero.Result, nodePtr, NodeChainOffset, MlirType.I64));
 
     // Store value at offset 24
-    if (IsChainHeapValueKind(op.ValueKind, typeDefs) && structVarNames.TryGetValue(op.Value.Id, out var valueSrcName)) {
+    if (IsChainHeapValueKind(op.ValueKind, typeDefs) && valueMap.TryGetValue(op.Value, out var valSv) && valSv is StdHeapPtr valHp) {
       // Struct/heap value: store pointer and incref — node holds a reference
-      var valueHeapPtr = (StdI64)EmitLoad(block, valueSrcName, varTypes);
+      var valueHeapPtr = (StdI64)EmitLoad(block, valHp.VarName!, varTypes);
       block.AddOp(new StdStoreIndirectOp(valueHeapPtr, nodePtr, NodeValueOffset, MlirType.I64));
       EmitIncrefValue(block, valueHeapPtr, scopeName: _currentFuncName);
     } else {
@@ -113,8 +109,7 @@ public static partial class MaxonToStandardConversion {
     var rtName = op.AtHead ? "maxon_chain_insert_first" : "maxon_chain_insert_last";
     block.AddOp(new StdCallRuntimeOp(rtName, [chainPtrReload, nodePtrReload], null));
 
-    structVarNames[op.Result.Id] = nodeTempName;
-    structValueTypes[op.Result.Id] = op.Result.TypeName;
+    valueMap[op.Result] = new StdHeapPtr(nodePtr.Id, op.Result.TypeName, nodeTempName);
   }
 
   /// <summary>
@@ -126,12 +121,10 @@ public static partial class MaxonToStandardConversion {
     MlirBlock<StandardOp> block,
     Dictionary<MaxonValue, StdValue> valueMap,
     Dictionary<string, string> varTypes,
-    Dictionary<int, string> structVarNames,
-    Dictionary<int, string> structValueTypes,
     Dictionary<string, MlirType> typeDefs,
     VarRegistry temps) {
 
-    var chainVarName = structVarNames[op.Chain.Id];
+    var chainVarName = ((StdHeapPtr)valueMap[op.Chain]).VarName!;
 
     // Allocate node as independent refcounted allocation
     var nodePtr = EmitAlloc(block, ChainNodeDataSize, "__ChainNode", scopeName: _currentFuncName);
@@ -144,9 +137,9 @@ public static partial class MaxonToStandardConversion {
     block.AddOp(new StdStoreIndirectOp(zero.Result, nodePtr, NodeChainOffset, MlirType.I64));
 
     // Store value at offset 24
-    if (IsChainHeapValueKind(op.ValueKind, typeDefs) && structVarNames.TryGetValue(op.Value.Id, out var valueSrcName)) {
+    if (IsChainHeapValueKind(op.ValueKind, typeDefs) && valueMap.TryGetValue(op.Value, out var valSv) && valSv is StdHeapPtr valHp) {
       // Struct/heap value: store pointer and incref — node holds a reference
-      var valueHeapPtr = (StdI64)EmitLoad(block, valueSrcName, varTypes);
+      var valueHeapPtr = (StdI64)EmitLoad(block, valHp.VarName!, varTypes);
       block.AddOp(new StdStoreIndirectOp(valueHeapPtr, nodePtr, NodeValueOffset, MlirType.I64));
       EmitIncrefValue(block, valueHeapPtr, scopeName: _currentFuncName);
     } else {
@@ -160,15 +153,14 @@ public static partial class MaxonToStandardConversion {
 
     // Reload pointers for runtime call
     var chainPtrReload = (StdI64)EmitLoad(block, chainVarName, varTypes);
-    var targetVarName = structVarNames[op.Target.Id];
+    var targetVarName = ((StdHeapPtr)valueMap[op.Target]).VarName!;
     var targetPtr = (StdI64)EmitLoad(block, targetVarName, varTypes);
     var nodePtrReload = (StdI64)EmitLoad(block, nodeTempName, varTypes);
 
     var rtName = op.After ? "maxon_chain_insert_after" : "maxon_chain_insert_before";
     block.AddOp(new StdCallRuntimeOp(rtName, [chainPtrReload, targetPtr, nodePtrReload], null));
 
-    structVarNames[op.Result.Id] = nodeTempName;
-    structValueTypes[op.Result.Id] = op.Result.TypeName;
+    valueMap[op.Result] = new StdHeapPtr(nodePtr.Id, op.Result.TypeName, nodeTempName);
   }
 
   /// <summary>
@@ -178,11 +170,11 @@ public static partial class MaxonToStandardConversion {
   private static void LowerChainReinsert(
     MaxonChainReinsertOp op,
     MlirBlock<StandardOp> block,
-    Dictionary<string, string> varTypes,
-    Dictionary<int, string> structVarNames) {
+    Dictionary<MaxonValue, StdValue> valueMap,
+    Dictionary<string, string> varTypes) {
 
-    var chainVarName = structVarNames[op.Chain.Id];
-    var nodeVarName = structVarNames[op.Node.Id];
+    var chainVarName = ((StdHeapPtr)valueMap[op.Chain]).VarName!;
+    var nodeVarName = ((StdHeapPtr)valueMap[op.Node]).VarName!;
 
     var nodePtr = (StdI64)EmitLoad(block, nodeVarName, varTypes);
     var chainPtr = (StdI64)EmitLoad(block, chainVarName, varTypes);
@@ -197,15 +189,15 @@ public static partial class MaxonToStandardConversion {
   private static void LowerChainReinsertRelative(
     MaxonChainReinsertRelativeOp op,
     MlirBlock<StandardOp> block,
-    Dictionary<string, string> varTypes,
-    Dictionary<int, string> structVarNames) {
+    Dictionary<MaxonValue, StdValue> valueMap,
+    Dictionary<string, string> varTypes) {
 
-    var chainVarName = structVarNames[op.Chain.Id];
-    var nodeVarName = structVarNames[op.Node.Id];
+    var chainVarName = ((StdHeapPtr)valueMap[op.Chain]).VarName!;
+    var nodeVarName = ((StdHeapPtr)valueMap[op.Node]).VarName!;
 
     var nodePtr = (StdI64)EmitLoad(block, nodeVarName, varTypes);
     var chainPtr = (StdI64)EmitLoad(block, chainVarName, varTypes);
-    var targetVarName = structVarNames[op.Target.Id];
+    var targetVarName = ((StdHeapPtr)valueMap[op.Target]).VarName!;
     var targetPtr = (StdI64)EmitLoad(block, targetVarName, varTypes);
 
     var rtName = op.After ? "maxon_chain_insert_after" : "maxon_chain_insert_before";
@@ -218,11 +210,11 @@ public static partial class MaxonToStandardConversion {
   private static void LowerChainDetach(
     MaxonChainDetachOp op,
     MlirBlock<StandardOp> block,
-    Dictionary<string, string> varTypes,
-    Dictionary<int, string> structVarNames) {
+    Dictionary<MaxonValue, StdValue> valueMap,
+    Dictionary<string, string> varTypes) {
 
-    var chainVarName = structVarNames[op.Chain.Id];
-    var nodeVarName = structVarNames[op.Node.Id];
+    var chainVarName = ((StdHeapPtr)valueMap[op.Chain]).VarName!;
+    var nodeVarName = ((StdHeapPtr)valueMap[op.Node]).VarName!;
 
     var chainPtr = (StdI64)EmitLoad(block, chainVarName, varTypes);
     var nodePtr = (StdI64)EmitLoad(block, nodeVarName, varTypes);
@@ -242,13 +234,11 @@ public static partial class MaxonToStandardConversion {
     MlirBlock<StandardOp> block,
     Dictionary<MaxonValue, StdValue> valueMap,
     Dictionary<string, string> varTypes,
-    Dictionary<int, string> structVarNames,
-    Dictionary<int, string> structValueTypes,
     Dictionary<string, MlirType> typeDefs,
     VarRegistry temps) {
 
-    var chainVarName = structVarNames[op.Chain.Id];
-    var nodeVarName = structVarNames[op.Node.Id];
+    var chainVarName = ((StdHeapPtr)valueMap[op.Chain]).VarName!;
+    var nodeVarName = ((StdHeapPtr)valueMap[op.Node]).VarName!;
 
     var chainPtr = (StdI64)EmitLoad(block, chainVarName, varTypes);
     var nodePtr = (StdI64)EmitLoad(block, nodeVarName, varTypes);
@@ -285,11 +275,10 @@ public static partial class MaxonToStandardConversion {
 
     // Register the extracted value
     if (IsChainHeapValueKind(op.ValueKind, typeDefs)) {
-      structVarNames[op.Result.Id] = valueTempName;
-      structValueTypes[op.Result.Id] = op.ValueKind;
+      valueMap[op.Result] = new StdHeapPtr(extractedValue.Id, op.ValueKind, valueTempName);
     } else {
-      // Primitive value: only register in valueMap, NOT in structVarNames.
-      // Registering in structVarNames would cause downstream assign ops
+      // Primitive value: only register in valueMap as a plain value.
+      // Registering as StdHeapPtr would cause downstream assign ops
       // to treat the primitive as a heap pointer and emit incref.
       var valReload = EmitLoad(block, valueTempName, varTypes);
       valueMap[op.Result] = valReload;
@@ -303,10 +292,9 @@ public static partial class MaxonToStandardConversion {
     MaxonChainCountOp op,
     MlirBlock<StandardOp> block,
     Dictionary<MaxonValue, StdValue> valueMap,
-    Dictionary<string, string> varTypes,
-    Dictionary<int, string> structVarNames) {
+    Dictionary<string, string> varTypes) {
 
-    var chainVarName = structVarNames[op.Chain.Id];
+    var chainVarName = ((StdHeapPtr)valueMap[op.Chain]).VarName!;
     var chainPtr = (StdI64)EmitLoad(block, chainVarName, varTypes);
     var countLoad = new StdLoadIndirectOp(chainPtr, ChainCountOffset, MlirType.I64);
     block.AddOp(countLoad);
@@ -322,12 +310,10 @@ public static partial class MaxonToStandardConversion {
     MlirBlock<StandardOp> block,
     Dictionary<MaxonValue, StdValue> valueMap,
     Dictionary<string, string> varTypes,
-    Dictionary<int, string> structVarNames,
-    Dictionary<int, string> structValueTypes,
     Dictionary<string, MlirType> typeDefs,
     VarRegistry temps) {
 
-    var nodeVarName = structVarNames[op.Node.Id];
+    var nodeVarName = ((StdHeapPtr)valueMap[op.Node]).VarName!;
     var nodePtr = (StdI64)EmitLoad(block, nodeVarName, varTypes);
     var valueLoad = new StdLoadIndirectOp(nodePtr, NodeValueOffset, MlirType.I64);
     block.AddOp(valueLoad);
@@ -337,8 +323,7 @@ public static partial class MaxonToStandardConversion {
       // MaxonAssignOp) provides the caller's reference.
       var tempName = temps.CreateTemp("chain_val", op.Result.Id, op.ValueKind, OwnershipFlags.Borrowed);
       EmitStore(block, (StdI64)valueLoad.Result, tempName, varTypes);
-      structVarNames[op.Result.Id] = tempName;
-      structValueTypes[op.Result.Id] = op.ValueKind;
+      valueMap[op.Result] = new StdHeapPtr(valueLoad.Result.Id, op.ValueKind, tempName);
     } else {
       // Primitive value
       valueMap[op.Result] = valueLoad.Result;
@@ -355,10 +340,9 @@ public static partial class MaxonToStandardConversion {
     MlirBlock<StandardOp> block,
     Dictionary<MaxonValue, StdValue> valueMap,
     Dictionary<string, string> varTypes,
-    Dictionary<int, string> structVarNames,
     Dictionary<string, MlirType> typeDefs) {
 
-    var nodeVarName = structVarNames[op.Node.Id];
+    var nodeVarName = ((StdHeapPtr)valueMap[op.Node]).VarName!;
     var nodePtr = (StdI64)EmitLoad(block, nodeVarName, varTypes);
 
     if (IsChainHeapValueKind(op.ValueKind, typeDefs)) {
@@ -371,7 +355,7 @@ public static partial class MaxonToStandardConversion {
       EmitDecrefValueIfNonnull(block, oldValue, scopeName: _currentFuncName);
 
       // Store new value and incref — node now holds a reference
-      var valueSrcName = structVarNames[op.Value.Id];
+      var valueSrcName = ((StdHeapPtr)valueMap[op.Value]).VarName!;
       var newValuePtr = (StdI64)EmitLoad(block, valueSrcName, varTypes);
       var nodePtrReload = (StdI64)EmitLoad(block, nodeVarName, varTypes);
       block.AddOp(new StdStoreIndirectOp(newValuePtr, nodePtrReload, NodeValueOffset, MlirType.I64));
@@ -391,11 +375,11 @@ public static partial class MaxonToStandardConversion {
   private static void LowerChainClear(
     MaxonChainClearOp op,
     MlirBlock<StandardOp> block,
+    Dictionary<MaxonValue, StdValue> valueMap,
     Dictionary<string, string> varTypes,
-    Dictionary<int, string> structVarNames,
     Dictionary<string, MlirType> typeDefs) {
 
-    var chainVarName = structVarNames[op.Chain.Id];
+    var chainVarName = ((StdHeapPtr)valueMap[op.Chain]).VarName!;
     var chainPtr = (StdI64)EmitLoad(block, chainVarName, varTypes);
     var clearFunc = IsChainHeapValueKind(op.ValueKind, typeDefs) ? "maxon_chain_clear_managed" : "maxon_chain_clear";
     block.AddOp(new StdCallRuntimeOp(clearFunc, [chainPtr], null));
@@ -413,10 +397,10 @@ public static partial class MaxonToStandardConversion {
   private static void LowerChainCursorReset(
     MaxonChainCursorResetOp op,
     MlirBlock<StandardOp> block,
-    Dictionary<string, string> varTypes,
-    Dictionary<int, string> structVarNames) {
+    Dictionary<MaxonValue, StdValue> valueMap,
+    Dictionary<string, string> varTypes) {
 
-    var chainVarName = structVarNames[op.Chain.Id];
+    var chainVarName = ((StdHeapPtr)valueMap[op.Chain]).VarName!;
     var chainPtr = (StdI64)EmitLoad(block, chainVarName, varTypes);
     var zero = new StdConstI64Op(0);
     block.AddOp(zero);
@@ -432,12 +416,10 @@ public static partial class MaxonToStandardConversion {
     MlirBlock<StandardOp> block,
     Dictionary<MaxonValue, StdValue> valueMap,
     Dictionary<string, string> varTypes,
-    Dictionary<int, string> structVarNames,
-    Dictionary<int, string> structValueTypes,
     Dictionary<string, MlirType> typeDefs,
     VarRegistry temps) {
 
-    var chainVarName = structVarNames[op.Chain.Id];
+    var chainVarName = ((StdHeapPtr)valueMap[op.Chain]).VarName!;
     var chainPtr = (StdI64)EmitLoad(block, chainVarName, varTypes);
 
     // Load cursor (node pointer) from chain
@@ -452,8 +434,7 @@ public static partial class MaxonToStandardConversion {
     if (IsChainHeapValueKind(op.ValueKind, typeDefs)) {
       var tempName = temps.CreateTemp("chain_cursor_val", op.Result.Id, op.ValueKind, OwnershipFlags.Borrowed);
       EmitStore(block, (StdI64)valueLoad.Result, tempName, varTypes);
-      structVarNames[op.Result.Id] = tempName;
-      structValueTypes[op.Result.Id] = op.ValueKind;
+      valueMap[op.Result] = new StdHeapPtr(valueLoad.Result.Id, op.ValueKind, tempName);
     } else {
       valueMap[op.Result] = valueLoad.Result;
     }
@@ -474,19 +455,17 @@ public static partial class MaxonToStandardConversion {
     MlirBlock<StandardOp> block,
     Dictionary<MaxonValue, StdValue> valueMap,
     Dictionary<string, string> varTypes,
-    Dictionary<int, string> structVarNames,
-    Dictionary<int, string> structValueTypes,
     MaxonValue? errorFlagValue,
     VarRegistry temps) {
 
     // Handle cursor operations that read from/write to the chain's cursor field
     if (callee == "__chain_cursor_start") {
       return LowerChainCursorStart(args, isTryCall, block, valueMap, varTypes,
-        structVarNames, errorFlagValue);
+        errorFlagValue);
     }
     if (callee == "__chain_cursor_advance") {
       return LowerChainCursorAdvance(args, isTryCall, block, valueMap, varTypes,
-        structVarNames, errorFlagValue);
+        errorFlagValue);
     }
 
     int fieldOffset;
@@ -514,7 +493,7 @@ public static partial class MaxonToStandardConversion {
     }
 
     // Load the pointer from the appropriate struct
-    var srcVarName = structVarNames[args[0].Id];
+    var srcVarName = ((StdHeapPtr)valueMap[args[0]]).VarName!;
     var srcPtr = (StdI64)EmitLoad(block, srcVarName, varTypes);
     var ptrLoad = new StdLoadIndirectOp(srcPtr, fieldOffset, MlirType.I64);
     block.AddOp(ptrLoad);
@@ -527,14 +506,13 @@ public static partial class MaxonToStandardConversion {
     // Register result as a ChainNode (even if null — the error path handles that)
     if (result != null) {
       var chainNodeType = result is MaxonStruct ms ? ms.TypeName : "__ChainNode";
-      var tempName = temps.CreateTemp("chain_nav", result.Id, chainNodeType, OwnershipFlags.Orphan);
+      var tempName = temps.CreateTemp("chain_nav", result.Id, chainNodeType, OwnershipFlags.Orphan | OwnershipFlags.OwnsRef);
       EmitStore(block, loadedPtr, tempName, varTypes);
       // Incref the ChainNode so it survives until scope exit decref.
       // Null-guarded: on the error path the node pointer is null.
       var nodeForIncref = (StdI64)EmitLoad(block, tempName, varTypes);
       EmitIncrefValueIfNonnull(block, nodeForIncref, scopeName: _currentFuncName);
-      structVarNames[result.Id] = tempName;
-      structValueTypes[result.Id] = chainNodeType;
+      valueMap[result] = new StdHeapPtr(MlirContext.Current.NextId(), chainNodeType, tempName);
     }
 
     return true;
@@ -550,10 +528,9 @@ public static partial class MaxonToStandardConversion {
     MlirBlock<StandardOp> block,
     Dictionary<MaxonValue, StdValue> valueMap,
     Dictionary<string, string> varTypes,
-    Dictionary<int, string> structVarNames,
     MaxonValue? errorFlagValue) {
 
-    var chainVarName = structVarNames[args[0].Id];
+    var chainVarName = ((StdHeapPtr)valueMap[args[0]]).VarName!;
     var chainPtr = (StdI64)EmitLoad(block, chainVarName, varTypes);
 
     // Load head pointer
@@ -581,10 +558,9 @@ public static partial class MaxonToStandardConversion {
     MlirBlock<StandardOp> block,
     Dictionary<MaxonValue, StdValue> valueMap,
     Dictionary<string, string> varTypes,
-    Dictionary<int, string> structVarNames,
     MaxonValue? errorFlagValue) {
 
-    var chainVarName = structVarNames[args[0].Id];
+    var chainVarName = ((StdHeapPtr)valueMap[args[0]]).VarName!;
     var chainPtr = (StdI64)EmitLoad(block, chainVarName, varTypes);
 
     // Load current cursor

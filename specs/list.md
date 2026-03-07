@@ -611,10 +611,8 @@ incref String #6 rc=2 [StringList.append]
 incref __ChainNode #8 rc=1 [chain_insert]
 incref __ChainNode #5 rc=2 [StringList.removeFirst]
 incref __ChainNode #5 rc=3 [StringList.removeFirst]
-incref __ChainNode #5 rc=4 [StringList.removeFirst]
-decref __ChainNode #5 rc=3 [StringList.removeFirst]
-decref String #3 rc=1 [StringList.removeFirst]
 decref __ChainNode #5 rc=2 [StringList.removeFirst]
+decref String #3 rc=1 [StringList.removeFirst]
 decref __ChainNode #5 rc=1 [StringList.removeFirst]
 decref __ChainNode #5 rc=0 [StringList.removeFirst]
   free __ChainNode #5
@@ -629,31 +627,31 @@ alloc String #11 rc=0 [list.testRemove]
 alloc __ManagedMemory #12 rc=0 [list.testRemove]
 incref __ManagedMemory #12 rc=1 [list.testRemove]
 incref String #11 rc=1 [list.testRemove]
-decref StringList #2 rc=0 [list.testRemove]
-decref __Chain_String #1 rc=0 [~StringList]
-decref String #6 rc=1 [chain_clear]
-decref __ChainNode #8 rc=0 [chain_clear]
-  free __ChainNode #8
-  free __Chain_String #1
-  free StringList #2
-decref String #3 rc=2 [list.testRemove]
-decref String #3 rc=1 [list.testRemove]
-decref String #6 rc=0 [list.testRemove]
-decref __ManagedMemory #7 rc=0 [~String]
-  free __ManagedMemory #7
-  free String #6
-decref String #3 rc=0 [list.testRemove]
-decref __ManagedMemory #4 rc=0 [~String]
-  free __ManagedMemory #4
-  free String #3
-decref String #9 rc=0 [list.testRemove]
-decref __ManagedMemory #10 rc=0 [~String]
-  free __ManagedMemory #10
-  free String #9
 decref String #11 rc=0 [list.testRemove]
 decref __ManagedMemory #12 rc=0 [~String]
   free __ManagedMemory #12
   free String #11
+decref String #9 rc=0 [list.testRemove]
+decref __ManagedMemory #10 rc=0 [~String]
+  free __ManagedMemory #10
+  free String #9
+decref String #3 rc=2 [list.testRemove]
+decref String #6 rc=1 [list.testRemove]
+decref String #3 rc=1 [list.testRemove]
+decref String #3 rc=0 [list.testRemove]
+decref __ManagedMemory #4 rc=0 [~String]
+  free __ManagedMemory #4
+  free String #3
+decref StringList #2 rc=0 [list.testRemove]
+decref __Chain_String #1 rc=0 [~StringList]
+decref String #6 rc=0 [chain_clear]
+decref __ManagedMemory #7 rc=0 [~String]
+  free __ManagedMemory #7
+  free String #6
+decref __ChainNode #8 rc=0 [chain_clear]
+  free __ChainNode #8
+  free __Chain_String #1
+  free StringList #2
 ```
 
 <!-- test: memory.remove-returns-string -->
@@ -701,40 +699,38 @@ incref String #6 rc=2 [StringList.append]
 incref __ChainNode #8 rc=1 [chain_insert]
 incref __ChainNode #5 rc=2 [StringList.removeFirst]
 incref __ChainNode #5 rc=3 [StringList.removeFirst]
-incref __ChainNode #5 rc=4 [StringList.removeFirst]
-decref __ChainNode #5 rc=3 [StringList.removeFirst]
-decref String #3 rc=1 [StringList.removeFirst]
 decref __ChainNode #5 rc=2 [StringList.removeFirst]
+decref String #3 rc=1 [StringList.removeFirst]
 decref __ChainNode #5 rc=1 [StringList.removeFirst]
 decref __ChainNode #5 rc=0 [StringList.removeFirst]
   free __ChainNode #5
 incref String #3 rc=2 [StringList.removeFirst]
 transfer String #3 rc=2 [StringList.removeFirst]
+transfer String #3 rc=2 [list.testRemove]
+decref String #6 rc=1 [list.testRemove]
+decref String #3 rc=1 [list.testRemove]
 decref StringList #2 rc=0 [list.testRemove]
 decref __Chain_String #1 rc=0 [~StringList]
-decref String #6 rc=1 [chain_clear]
+decref String #6 rc=0 [chain_clear]
+decref __ManagedMemory #7 rc=0 [~String]
+  free __ManagedMemory #7
+  free String #6
 decref __ChainNode #8 rc=0 [chain_clear]
   free __ChainNode #8
   free __Chain_String #1
   free StringList #2
-decref String #3 rc=1 [list.testRemove]
-decref String #6 rc=0 [list.testRemove]
-decref __ManagedMemory #7 rc=0 [~String]
-  free __ManagedMemory #7
-  free String #6
-transfer String #3 rc=1 [list.testRemove]
 alloc String #9 rc=0 [list.main]
 alloc __ManagedMemory #10 rc=0 [list.main]
 incref __ManagedMemory #10 rc=1 [list.main]
 incref String #9 rc=1 [list.main]
-decref String #3 rc=0 [list.main]
-decref __ManagedMemory #4 rc=0 [~String]
-  free __ManagedMemory #4
-  free String #3
 decref String #9 rc=0 [list.main]
 decref __ManagedMemory #10 rc=0 [~String]
   free __ManagedMemory #10
   free String #9
+decref String #3 rc=0 [list.main]
+decref __ManagedMemory #4 rc=0 [~String]
+  free __ManagedMemory #4
+  free String #3
 ```
 
 <!-- test: memory.clear-frees-strings -->
@@ -801,26 +797,26 @@ alloc String #12 rc=0 [list.testClear]
 alloc __ManagedMemory #13 rc=0 [list.testClear]
 incref __ManagedMemory #13 rc=1 [list.testClear]
 incref String #12 rc=1 [list.testClear]
-decref StringList #2 rc=0 [list.testClear]
-decref __Chain_String #1 rc=0 [~StringList]
-  free __Chain_String #1
-  free StringList #2
-decref String #3 rc=0 [list.testClear]
-decref __ManagedMemory #4 rc=0 [~String]
-  free __ManagedMemory #4
-  free String #3
-decref String #6 rc=0 [list.testClear]
-decref __ManagedMemory #7 rc=0 [~String]
-  free __ManagedMemory #7
-  free String #6
-decref String #9 rc=0 [list.testClear]
-decref __ManagedMemory #10 rc=0 [~String]
-  free __ManagedMemory #10
-  free String #9
 decref String #12 rc=0 [list.testClear]
 decref __ManagedMemory #13 rc=0 [~String]
   free __ManagedMemory #13
   free String #12
+decref String #9 rc=0 [list.testClear]
+decref __ManagedMemory #10 rc=0 [~String]
+  free __ManagedMemory #10
+  free String #9
+decref String #6 rc=0 [list.testClear]
+decref __ManagedMemory #7 rc=0 [~String]
+  free __ManagedMemory #7
+  free String #6
+decref String #3 rc=0 [list.testClear]
+decref __ManagedMemory #4 rc=0 [~String]
+  free __ManagedMemory #4
+  free String #3
+decref StringList #2 rc=0 [list.testClear]
+decref __Chain_String #1 rc=0 [~StringList]
+  free __Chain_String #1
+  free StringList #2
 ```
 
 <!-- test: memory.clear-passed-list -->
@@ -887,26 +883,26 @@ alloc String #12 rc=0 [list.main]
 alloc __ManagedMemory #13 rc=0 [list.main]
 incref __ManagedMemory #13 rc=1 [list.main]
 incref String #12 rc=1 [list.main]
-decref StringList #2 rc=0 [list.main]
-decref __Chain_String #1 rc=0 [~StringList]
-  free __Chain_String #1
-  free StringList #2
-decref String #3 rc=0 [list.main]
-decref __ManagedMemory #4 rc=0 [~String]
-  free __ManagedMemory #4
-  free String #3
-decref String #6 rc=0 [list.main]
-decref __ManagedMemory #7 rc=0 [~String]
-  free __ManagedMemory #7
-  free String #6
-decref String #9 rc=0 [list.main]
-decref __ManagedMemory #10 rc=0 [~String]
-  free __ManagedMemory #10
-  free String #9
 decref String #12 rc=0 [list.main]
 decref __ManagedMemory #13 rc=0 [~String]
   free __ManagedMemory #13
   free String #12
+decref String #9 rc=0 [list.main]
+decref __ManagedMemory #10 rc=0 [~String]
+  free __ManagedMemory #10
+  free String #9
+decref String #6 rc=0 [list.main]
+decref __ManagedMemory #7 rc=0 [~String]
+  free __ManagedMemory #7
+  free String #6
+decref String #3 rc=0 [list.main]
+decref __ManagedMemory #4 rc=0 [~String]
+  free __ManagedMemory #4
+  free String #3
+decref StringList #2 rc=0 [list.main]
+decref __Chain_String #1 rc=0 [~StringList]
+  free __Chain_String #1
+  free StringList #2
 ```
 
 <!-- test: memory.value-survives-clear-and-return -->
@@ -948,8 +944,6 @@ incref String #3 rc=2 [StringList.append]
 incref __ChainNode #5 rc=1 [chain_insert]
 incref __ChainNode #5 rc=2 [StringList.first]
 incref __ChainNode #5 rc=3 [StringList.first]
-incref __ChainNode #5 rc=4 [StringList.first]
-decref __ChainNode #5 rc=3 [StringList.first]
 decref __ChainNode #5 rc=2 [StringList.first]
 decref __ChainNode #5 rc=1 [StringList.first]
 incref String #3 rc=3 [StringList.first]
@@ -958,25 +952,25 @@ incref String #3 rc=4 [list.clearList]
 decref String #3 rc=3 [chain_clear]
 decref __ChainNode #5 rc=0 [chain_clear]
   free __ChainNode #5
-transfer String #3 rc=3 [list.clearList]
 decref String #3 rc=2 [list.clearList]
+transfer String #3 rc=2 [list.clearList]
 alloc String #6 rc=0 [list.main]
 alloc __ManagedMemory #7 rc=0 [list.main]
 incref __ManagedMemory #7 rc=1 [list.main]
 incref String #6 rc=1 [list.main]
-decref StringList #2 rc=0 [list.main]
-decref __Chain_String #1 rc=0 [~StringList]
-  free __Chain_String #1
-  free StringList #2
+decref String #6 rc=0 [list.main]
+decref __ManagedMemory #7 rc=0 [~String]
+  free __ManagedMemory #7
+  free String #6
 decref String #3 rc=1 [list.main]
 decref String #3 rc=0 [list.main]
 decref __ManagedMemory #4 rc=0 [~String]
   free __ManagedMemory #4
   free String #3
-decref String #6 rc=0 [list.main]
-decref __ManagedMemory #7 rc=0 [~String]
-  free __ManagedMemory #7
-  free String #6
+decref StringList #2 rc=0 [list.main]
+decref __Chain_String #1 rc=0 [~StringList]
+  free __Chain_String #1
+  free StringList #2
 ```
 
 <!-- test: memory.value-survives-clear -->
@@ -1013,8 +1007,6 @@ incref String #3 rc=2 [StringList.append]
 incref __ChainNode #5 rc=1 [chain_insert]
 incref __ChainNode #5 rc=2 [StringList.first]
 incref __ChainNode #5 rc=3 [StringList.first]
-incref __ChainNode #5 rc=4 [StringList.first]
-decref __ChainNode #5 rc=3 [StringList.first]
 decref __ChainNode #5 rc=2 [StringList.first]
 decref __ChainNode #5 rc=1 [StringList.first]
 incref String #3 rc=3 [StringList.first]
@@ -1027,18 +1019,18 @@ alloc String #6 rc=0 [list.main]
 alloc __ManagedMemory #7 rc=0 [list.main]
 incref __ManagedMemory #7 rc=1 [list.main]
 incref String #6 rc=1 [list.main]
-decref StringList #2 rc=0 [list.main]
-decref __Chain_String #1 rc=0 [~StringList]
-  free __Chain_String #1
-  free StringList #2
+decref String #6 rc=0 [list.main]
+decref __ManagedMemory #7 rc=0 [~String]
+  free __ManagedMemory #7
+  free String #6
 decref String #3 rc=2 [list.main]
 decref String #3 rc=1 [list.main]
 decref String #3 rc=0 [list.main]
 decref __ManagedMemory #4 rc=0 [~String]
   free __ManagedMemory #4
   free String #3
-decref String #6 rc=0 [list.main]
-decref __ManagedMemory #7 rc=0 [~String]
-  free __ManagedMemory #7
-  free String #6
+decref StringList #2 rc=0 [list.main]
+decref __Chain_String #1 rc=0 [~StringList]
+  free __Chain_String #1
+  free StringList #2
 ```

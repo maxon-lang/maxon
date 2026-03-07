@@ -28,11 +28,11 @@ alloc Wrapper #2 rc=0 [ownership-edge-cases.wrap]
 incref Inner #1 rc=2 [ownership-edge-cases.wrap]
 incref Wrapper #2 rc=1 [ownership-edge-cases.wrap]
 transfer Wrapper #2 rc=1 [ownership-edge-cases.wrap]
-decref Inner #1 rc=1 [ownership-edge-cases.main]
 decref Wrapper #2 rc=0 [ownership-edge-cases.main]
-decref Inner #1 rc=0 [~Wrapper]
-  free Inner #1
+decref Inner #1 rc=1 [~Wrapper]
   free Wrapper #2
+decref Inner #1 rc=0 [ownership-edge-cases.main]
+  free Inner #1
 ```
 ---
 module {
@@ -99,15 +99,15 @@ module {
     x86.call maxon_panic
   __range_ok_0:
     x86.mov rax, [rbp-32]
-    x86.mov rcx, [rbp-8]
+    x86.mov rcx, [rbp-16]
     x86.test rcx, rcx
     x86.jz __nonnull_skip_0
     x86.call mm_decref
     x86.label __nonnull_skip_0
-    x86.mov rax, [rbp-16]
+    x86.mov rax, [rbp-8]
     x86.test rax, rax
     x86.jz __nonnull_skip_1
-    x86.mov rcx, [rbp-16]
+    x86.mov rcx, [rbp-8]
     x86.call mm_decref
     x86.label __nonnull_skip_1
     x86.mov rax, [rbp-32]

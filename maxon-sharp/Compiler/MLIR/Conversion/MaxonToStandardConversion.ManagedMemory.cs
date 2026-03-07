@@ -23,14 +23,14 @@ public static partial class MaxonToStandardConversion {
 
 	/// <summary>
 	/// Resolve the struct variable name for a managed memory value.
-	/// The managed value may be tracked as a struct variable or may need to be loaded.
+	/// Uses the valueMap to find a StdHeapPtr which carries the variable name.
 	/// </summary>
 	private static string ResolveManagedVarName(
 	  MaxonValue managedValue,
-	  Dictionary<int, string> structVarNames) {
-		if (structVarNames.TryGetValue(managedValue.Id, out var varName))
-			return varName;
-		throw new InvalidOperationException($"Managed memory value %{managedValue.Id} not found in struct variable names");
+	  Dictionary<MaxonValue, StdValue> valueMap) {
+		if (valueMap.TryGetValue(managedValue, out var stdVal) && stdVal is StdHeapPtr hp && hp.VarName != null)
+			return hp.VarName;
+		throw new InvalidOperationException($"Managed memory value %{managedValue.Id} not found in valueMap as StdHeapPtr with VarName");
 	}
 
 	/// <summary>
@@ -72,10 +72,8 @@ public static partial class MaxonToStandardConversion {
 	  MlirBlock<StandardOp> block,
 	  Dictionary<MaxonValue, StdValue> valueMap,
 	  Dictionary<string, string> varTypes,
-	  Dictionary<int, string> structVarNames,
-	  Dictionary<int, string> structValueTypes,
 	  VarRegistry temps) {
-		var managedVarName = ResolveManagedVarName(op.ManagedStruct, structVarNames);
+		var managedVarName = ResolveManagedVarName(op.ManagedStruct, valueMap);
 		var length = (StdI64)EmitStructFieldLoad(block, managedVarName, ManagedFieldLength, MlirType.I64, varTypes);
 		var index = (StdI64)valueMap[op.Index];
 		EmitBoundsCheck(block, index, length, "__mm_panic_index_oob");
@@ -95,10 +93,7 @@ public static partial class MaxonToStandardConversion {
 			var tempId = MlirContext.Current.NextId();
 			var tempName = temps.CreateTemp("callret", tempId, op.StructElementTypeName ?? "unknown", OwnershipFlags.Orphan | OwnershipFlags.CallReturn);
 			EmitStore(block, (StdI64)loadOp.Result, tempName, varTypes);
-			structVarNames[op.Result.Id] = tempName;
-			if (op.StructElementTypeName != null)
-				structValueTypes[op.Result.Id] = op.StructElementTypeName;
-			valueMap[op.Result] = loadOp.Result;
+			valueMap[op.Result] = new StdHeapPtr(loadOp.Result.Id, op.StructElementTypeName ?? "unknown", tempName);
 		} else {
 			// Determine load type based on result kind
 			// For byte/bool, use I8 which triggers zero-extending byte load in x86 codegen
@@ -119,10 +114,8 @@ public static partial class MaxonToStandardConversion {
 	  MlirBlock<StandardOp> block,
 	  Dictionary<MaxonValue, StdValue> valueMap,
 	  Dictionary<string, string> varTypes,
-	  Dictionary<int, string> structVarNames,
-	  Dictionary<int, string> structValueTypes,
 	  VarRegistry temps) {
-		var managedVarName = ResolveManagedVarName(op.ManagedStruct, structVarNames);
+		var managedVarName = ResolveManagedVarName(op.ManagedStruct, valueMap);
 		var length = (StdI64)EmitStructFieldLoad(block, managedVarName, ManagedFieldLength, MlirType.I64, varTypes);
 		var index = (StdI64)valueMap[op.Index];
 		EmitBoundsCheck(block, index, length, "__mm_panic_index_oob");
@@ -150,10 +143,7 @@ public static partial class MaxonToStandardConversion {
 			var tempId = MlirContext.Current.NextId();
 			var tempName = temps.CreateTemp("callret", tempId, op.StructElementTypeName ?? "unknown", OwnershipFlags.Orphan);
 			EmitStore(block, (StdI64)loadOp.Result, tempName, varTypes);
-			structVarNames[op.Result.Id] = tempName;
-			if (op.StructElementTypeName != null)
-				structValueTypes[op.Result.Id] = op.StructElementTypeName;
-			valueMap[op.Result] = loadOp.Result;
+			valueMap[op.Result] = new StdHeapPtr(loadOp.Result.Id, op.StructElementTypeName ?? "unknown", tempName);
 		} else {
 			var elemType = GetManagedMemElementType(op.ResultKind, "LowerManagedMemRemove");
 			var loadOp = new StdLoadIndirectOp(addr, 0, elemType);
@@ -206,9 +196,8 @@ public static partial class MaxonToStandardConversion {
 	  MaxonManagedMemSetOp op,
 	  MlirBlock<StandardOp> block,
 	  Dictionary<MaxonValue, StdValue> valueMap,
-	  Dictionary<string, string> varTypes,
-	  Dictionary<int, string> structVarNames) {
-		var managedVarName = ResolveManagedVarName(op.ManagedStruct, structVarNames);
+	  Dictionary<string, string> varTypes) {
+		var managedVarName = ResolveManagedVarName(op.ManagedStruct, valueMap);
 		var elemSize = (StdI64)EmitStructFieldLoad(block, managedVarName, ManagedFieldElementSize, MlirType.I64, varTypes);
 		EmitCowCheck(block, managedVarName, varTypes, elemSize);
 		// Check against capacity after COW (COW updates capacity from 0 to length)
@@ -224,7 +213,7 @@ public static partial class MaxonToStandardConversion {
 			var oldElemLoad = new StdLoadIndirectOp(addr, 0, MlirType.I64);
 			block.AddOp(oldElemLoad);
 			EmitDecrefValueIfNonnull(block, (StdI64)oldElemLoad.Result, scopeName: _currentFuncName);
-			var srcName = structVarNames[op.Value.Id];
+			var srcName = ResolveManagedVarName(op.Value, valueMap);
 			var srcHeapPtr = EmitLoad(block, srcName, varTypes);
 			block.AddOp(new StdStoreIndirectOp(srcHeapPtr, addr, 0, MlirType.I64));
 			EmitIncrefValue(block, (StdI64)srcHeapPtr, scopeName: _currentFuncName);
@@ -245,7 +234,6 @@ public static partial class MaxonToStandardConversion {
 	  MlirBlock<StandardOp> block,
 	  Dictionary<MaxonValue, StdValue> valueMap,
 	  Dictionary<string, string> varTypes,
-	  Dictionary<int, string> structVarNames,
 	  VarRegistry temps,
 	  string? inlineTarget = null) {
 		var count = (StdI64)valueMap[op.Count];
@@ -266,7 +254,7 @@ public static partial class MaxonToStandardConversion {
 		EmitStructFieldStore(block, count, tempName, ManagedFieldLength, MlirType.I64, varTypes);
 		EmitStructFieldStore(block, count, tempName, ManagedFieldCapacity, MlirType.I64, varTypes);
 		EmitStructFieldStore(block, sizeOp.Result, tempName, ManagedFieldElementSize, MlirType.I64, varTypes);
-		structVarNames[op.Result.Id] = tempName;
+		valueMap[op.Result] = new StdHeapPtr(managedPtr.Id, "__ManagedMemory", tempName);
 	}
 
 	/// <summary>
@@ -278,9 +266,8 @@ public static partial class MaxonToStandardConversion {
 	  MaxonManagedMemGrowOp op,
 	  MlirBlock<StandardOp> block,
 	  Dictionary<MaxonValue, StdValue> valueMap,
-	  Dictionary<string, string> varTypes,
-	  Dictionary<int, string> structVarNames) {
-		var managedVarName = ResolveManagedVarName(op.ManagedStruct, structVarNames);
+	  Dictionary<string, string> varTypes) {
+		var managedVarName = ResolveManagedVarName(op.ManagedStruct, valueMap);
 
 		// Load element_size from the managed struct via heap pointer
 		var elemSize = (StdI64)EmitStructFieldLoad(block, managedVarName, ManagedFieldElementSize, MlirType.I64, varTypes);
@@ -327,9 +314,8 @@ public static partial class MaxonToStandardConversion {
 	  MaxonManagedMemShiftOp op,
 	  MlirBlock<StandardOp> block,
 	  Dictionary<MaxonValue, StdValue> valueMap,
-	  Dictionary<string, string> varTypes,
-	  Dictionary<int, string> structVarNames) {
-		var managedVarName = ResolveManagedVarName(op.ManagedStruct, structVarNames);
+	  Dictionary<string, string> varTypes) {
+		var managedVarName = ResolveManagedVarName(op.ManagedStruct, valueMap);
 		var elemSize = (StdI64)EmitStructFieldLoad(block, managedVarName, ManagedFieldElementSize, MlirType.I64, varTypes);
 		EmitCowCheck(block, managedVarName, varTypes, elemSize);
 		// Check after COW (COW updates capacity from 0 to length)
@@ -409,9 +395,8 @@ public static partial class MaxonToStandardConversion {
 	  MaxonManagedMemByteGetOp op,
 	  MlirBlock<StandardOp> block,
 	  Dictionary<MaxonValue, StdValue> valueMap,
-	  Dictionary<string, string> varTypes,
-	  Dictionary<int, string> structVarNames) {
-		var managedVarName = ResolveManagedVarName(op.ManagedStruct, structVarNames);
+	  Dictionary<string, string> varTypes) {
+		var managedVarName = ResolveManagedVarName(op.ManagedStruct, valueMap);
 		var length = (StdI64)EmitStructFieldLoad(block, managedVarName, ManagedFieldLength, MlirType.I64, varTypes);
 		var elemSize = (StdI64)EmitStructFieldLoad(block, managedVarName, ManagedFieldElementSize, MlirType.I64, varTypes);
 		var byteLimitOp = new StdMulI64Op(length, elemSize);
@@ -471,9 +456,8 @@ public static partial class MaxonToStandardConversion {
 	  MaxonManagedMemByteSetOp op,
 	  MlirBlock<StandardOp> block,
 	  Dictionary<MaxonValue, StdValue> valueMap,
-	  Dictionary<string, string> varTypes,
-	  Dictionary<int, string> structVarNames) {
-		var managedVarName = ResolveManagedVarName(op.ManagedStruct, structVarNames);
+	  Dictionary<string, string> varTypes) {
+		var managedVarName = ResolveManagedVarName(op.ManagedStruct, valueMap);
 		var length = (StdI64)EmitStructFieldLoad(block, managedVarName, ManagedFieldLength, MlirType.I64, varTypes);
 		var elemSize = (StdI64)EmitStructFieldLoad(block, managedVarName, ManagedFieldElementSize, MlirType.I64, varTypes);
 		var byteLimitOp = new StdMulI64Op(length, elemSize);
@@ -499,7 +483,6 @@ public static partial class MaxonToStandardConversion {
 	  MlirBlock<StandardOp> block,
 	  Dictionary<MaxonValue, StdValue> valueMap,
 	  Dictionary<string, string> varTypes,
-	  Dictionary<int, string> structVarNames,
 	  VarRegistry temps,
 	  string? inlineTarget = null) {
 		var cstrPtr = (StdI64)valueMap[op.CstrPtr];
@@ -554,7 +537,7 @@ public static partial class MaxonToStandardConversion {
 		EmitStructFieldStore(block, lenFinal, tempName, ManagedFieldLength, MlirType.I64, varTypes);
 		EmitStructFieldStore(block, capOp.Result, tempName, ManagedFieldCapacity, MlirType.I64, varTypes);
 		EmitStructFieldStore(block, elemSizeOp.Result, tempName, ManagedFieldElementSize, MlirType.I64, varTypes);
-		structVarNames[op.Result.Id] = tempName;
+		valueMap[op.Result] = new StdHeapPtr(managedPtr.Id, "__ManagedMemory", tempName);
 	}
 
 	/// <summary>
@@ -567,9 +550,8 @@ public static partial class MaxonToStandardConversion {
 	  MaxonManagedToCStringOp op,
 	  MlirBlock<StandardOp> block,
 	  Dictionary<MaxonValue, StdValue> valueMap,
-	  Dictionary<string, string> varTypes,
-	  Dictionary<int, string> structVarNames) {
-		var managedVarName = ResolveManagedVarName(op.Managed, structVarNames);
+	  Dictionary<string, string> varTypes) {
+		var managedVarName = ResolveManagedVarName(op.Managed, valueMap);
 		var buffer = LoadManagedBuffer(block, managedVarName, varTypes);
 		var length = (StdI64)EmitStructFieldLoad(block, managedVarName, ManagedFieldLength, MlirType.I64, varTypes);
 
@@ -588,9 +570,8 @@ public static partial class MaxonToStandardConversion {
 	  MaxonValue resultValue,
 	  MlirBlock<StandardOp> block,
 	  Dictionary<MaxonValue, StdValue> valueMap,
-	  Dictionary<string, string> varTypes,
-	  Dictionary<int, string> structVarNames) {
-		var managedVarName = ResolveManagedVarName(managedValue, structVarNames);
+	  Dictionary<string, string> varTypes) {
+		var managedVarName = ResolveManagedVarName(managedValue, valueMap);
 		var buffer = LoadManagedBuffer(block, managedVarName, varTypes);
 		var length = (StdI64)EmitStructFieldLoad(block, managedVarName, ManagedFieldLength, MlirType.I64, varTypes);
 		var result = new StdI64(MlirContext.Current.NextId());
@@ -602,17 +583,15 @@ public static partial class MaxonToStandardConversion {
 	  MaxonManagedWriteStdoutOp op,
 	  MlirBlock<StandardOp> block,
 	  Dictionary<MaxonValue, StdValue> valueMap,
-	  Dictionary<string, string> varTypes,
-	  Dictionary<int, string> structVarNames) =>
-		LowerManagedWrite("maxon_managed_write_stdout", op.Managed, op.Result, block, valueMap, varTypes, structVarNames);
+	  Dictionary<string, string> varTypes) =>
+		LowerManagedWrite("maxon_managed_write_stdout", op.Managed, op.Result, block, valueMap, varTypes);
 
 	private static void LowerManagedWriteStderr(
 	  MaxonManagedWriteStderrOp op,
 	  MlirBlock<StandardOp> block,
 	  Dictionary<MaxonValue, StdValue> valueMap,
-	  Dictionary<string, string> varTypes,
-	  Dictionary<int, string> structVarNames) =>
-		LowerManagedWrite("maxon_managed_write_stderr", op.Managed, op.Result, block, valueMap, varTypes, structVarNames);
+	  Dictionary<string, string> varTypes) =>
+		LowerManagedWrite("maxon_managed_write_stderr", op.Managed, op.Result, block, valueMap, varTypes);
 
 	/// <summary>
 	/// Set length with capacity validation: panics if newLength > capacity.
@@ -621,9 +600,8 @@ public static partial class MaxonToStandardConversion {
 	  MaxonManagedMemSetLengthOp op,
 	  MlirBlock<StandardOp> block,
 	  Dictionary<MaxonValue, StdValue> valueMap,
-	  Dictionary<string, string> varTypes,
-	  Dictionary<int, string> structVarNames) {
-		var managedVarName = ResolveManagedVarName(op.ManagedStruct, structVarNames);
+	  Dictionary<string, string> varTypes) {
+		var managedVarName = ResolveManagedVarName(op.ManagedStruct, valueMap);
 		var capacity = (StdI64)EmitStructFieldLoad(block, managedVarName, ManagedFieldCapacity, MlirType.I64, varTypes);
 		var newLength = (StdI64)valueMap[op.NewLength];
 		// Check newLength <= capacity: reframe as newLength < capacity + 1
@@ -643,9 +621,9 @@ public static partial class MaxonToStandardConversion {
 	private static void LowerManagedMemClear(
 	  MaxonManagedMemClearOp op,
 	  MlirBlock<StandardOp> block,
-	  Dictionary<string, string> varTypes,
-	  Dictionary<int, string> structVarNames) {
-		var managedVarName = ResolveManagedVarName(op.ManagedStruct, structVarNames);
+	  Dictionary<MaxonValue, StdValue> valueMap,
+	  Dictionary<string, string> varTypes) {
+		var managedVarName = ResolveManagedVarName(op.ManagedStruct, valueMap);
 
 		if (op.IsStructElement) {
 			// Decref each struct element and zero the buffer slots — uses the runtime

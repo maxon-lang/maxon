@@ -13,6 +13,7 @@ public enum OwnershipFlags
     SelfReturn   = 1 << 3,  // Returned from self-returning method; alias, not fresh alloc
     IsTemp       = 1 << 4,  // Internal temp variable (cleaned after user vars at scope end)
     IsParam      = 1 << 5,  // Function parameter (not owned, skip decref at scope end)
+    OwnsRef      = 1 << 6,  // Temp already holds an owned reference (incref done); assign path skips incref
 }
 
 public record EnumPayloadBinding(string EnumVarName, string EnumTypeName, int PayloadIndex);

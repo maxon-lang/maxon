@@ -21,17 +21,17 @@ incref String #3 rc=1 [ownership-edge-cases.main]
 alloc __ChainNode #5 rc=0 [StringList.append]
 incref String #3 rc=2 [StringList.append]
 incref __ChainNode #5 rc=1 [chain_insert]
+decref String #3 rc=1 [ownership-edge-cases.main]
 decref StringList #2 rc=0 [ownership-edge-cases.main]
 decref __Chain_String #1 rc=0 [~StringList]
-decref String #3 rc=1 [chain_clear]
+decref String #3 rc=0 [chain_clear]
+decref __ManagedMemory #4 rc=0 [~String]
+  free __ManagedMemory #4
+  free String #3
 decref __ChainNode #5 rc=0 [chain_clear]
   free __ChainNode #5
   free __Chain_String #1
   free StringList #2
-decref String #3 rc=0 [ownership-edge-cases.main]
-decref __ManagedMemory #4 rc=0 [~String]
-  free __ManagedMemory #4
-  free String #3
 ```
 ---
 module {
@@ -126,16 +126,16 @@ module {
     x86.mov rcx, [rbp-16]
     x86.mov rdx, [rbp-24]
     x86.call StringList.append
-    x86.mov rax, [rbp-16]
-    x86.test rax, rax
-    x86.jz __nonnull_skip_0
-    x86.mov rcx, [rbp-16]
-    x86.call mm_decref
-    x86.label __nonnull_skip_0
     x86.mov rax, [rbp-24]
     x86.test rax, rax
-    x86.jz __nonnull_skip_1
+    x86.jz __nonnull_skip_0
     x86.mov rcx, [rbp-24]
+    x86.call mm_decref
+    x86.label __nonnull_skip_0
+    x86.mov rax, [rbp-16]
+    x86.test rax, rax
+    x86.jz __nonnull_skip_1
+    x86.mov rcx, [rbp-16]
     x86.call mm_decref
     x86.label __nonnull_skip_1
     x86.xor rax, rax

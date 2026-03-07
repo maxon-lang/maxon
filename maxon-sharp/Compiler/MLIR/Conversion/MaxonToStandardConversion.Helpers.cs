@@ -175,6 +175,11 @@ public static partial class MaxonToStandardConversion {
 
   private static void EmitStore(MlirBlock<StandardOp> block, StdValue value, string varName, Dictionary<string, string> varTypes) {
     switch (value) {
+      case StdHeapPtr hp:
+        block.AddOp(new StdStoreI64Op(hp, varName));
+        varTypes[varName] = "i64";
+        _varNameToStructType![varName] = hp.TypeName;
+        break;
       case StdI64 i64:
         block.AddOp(new StdStoreI64Op(i64, varName));
         varTypes[varName] = "i64";
@@ -213,6 +218,7 @@ public static partial class MaxonToStandardConversion {
   [ThreadStatic] private static Dictionary<string, string>? _symdataTagCache;
   [ThreadStatic] private static Dictionary<string, int>? _tagIndexMap;
   [ThreadStatic] private static int _nextTagIndex;
+  [ThreadStatic] private static Dictionary<string, string>? _varNameToStructType;
   private static string EnsureSymdataTag(string tag) {
     _symdataTagCache ??= [];
     if (_symdataTagCache.TryGetValue(tag, out var existingLabel))
@@ -330,7 +336,9 @@ public static partial class MaxonToStandardConversion {
     int tagIndex = effectiveTag != null ? EnsureTagIndex(effectiveTag) : 0;
     var tagIndexOp = new StdConstI64Op(tagIndex);
     block.AddOp(tagIndexOp);
-    var result = new StdI64(MlirContext.Current.NextId());
+    var result = typeName != null
+        ? (StdI64)new StdHeapPtr(MlirContext.Current.NextId(), typeName)
+        : new StdI64(MlirContext.Current.NextId());
     if (Compiler.MmTrace) {
       var scopePtr = scopeName != null ? EmitTagPtr(block, scopeName) : EmitNullPtr(block);
       block.AddOp(new StdCallRuntimeOp("mm_alloc", [size, destructorPtr, tagIndexOp.Result, scopePtr], result));
@@ -443,6 +451,8 @@ public static partial class MaxonToStandardConversion {
       case "i64": {
         var loadOp = new StdLoadI64Op(varName);
         block.AddOp(loadOp);
+        if (_varNameToStructType != null && _varNameToStructType.TryGetValue(varName, out var structType))
+          return new StdHeapPtr(loadOp.Result.Id, structType, varName);
         return loadOp.Result;
       }
       case "f64": {
@@ -485,6 +495,37 @@ public static partial class MaxonToStandardConversion {
     "ptr" => MlirType.I64,
     _ => throw new InvalidOperationException($"Unsupported var type for MlirType conversion: {varType}"),
   };
+
+  /// <summary>
+  /// Returns true if a function still has unresolved type parameters — either in its
+  /// signature or in its owning type. Such functions are generic templates that were
+  /// monomorphized into concrete specializations and should be skipped during lowering.
+  /// </summary>
+  private static bool HasUnresolvedTypeParameters(MlirFunction<MaxonOp> func, MlirModule<MaxonOp> module) {
+    if (func.ParamTypes.Any(t => t is MlirTypeParameterType)
+        || func.ReturnType is MlirTypeParameterType) {
+      return true;
+    }
+    // Check if the owning type is a generic source type that has been specialized.
+    // Extract type name from function name and check if it's used as a source for type aliases.
+    var parts = func.Name.Split('.');
+    for (int i = parts.Length - 1; i >= 1; i--) {
+      var candidateTypeName = parts[i - 1];
+      if (module.TypeDefs.TryGetValue(candidateTypeName, out var ownerType)) {
+        bool hasAssocTypes = (ownerType is MlirStructType st && st.AssociatedTypeNames.Count > 0)
+                          || (ownerType is MlirUnionType ut && ut.AssociatedTypeNames.Count > 0);
+        if (hasAssocTypes) {
+          // Check if this type is used as a source for at least one concrete alias
+          bool hasConcreteAlias = module.TypeAliasSources.Values
+            .Any(a => a.SourceTypeName == candidateTypeName
+                 && a.TypeParams != null
+                 && !a.TypeParams.Values.Any(t => t is MlirTypeParameterType));
+          if (hasConcreteAlias) return true;
+        }
+      }
+    }
+    return false;
+  }
 
   private static bool IsStructInstanceMethod<T>(MlirFunction<T> func) where T : IPrintableOp =>
     func.ParamNames.Count > 0

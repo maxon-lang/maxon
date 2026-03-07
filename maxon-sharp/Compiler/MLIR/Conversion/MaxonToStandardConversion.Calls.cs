@@ -44,14 +44,12 @@ public static partial class MaxonToStandardConversion {
     MlirBlock<StandardOp> block,
     Dictionary<MaxonValue, StdValue> valueMap,
     Dictionary<string, string> varTypes,
-    Dictionary<int, string> structVarNames,
-    Dictionary<int, string> structValueTypes,
     Dictionary<string, MlirType> typeDefs,
     VarRegistry temps,
     Dictionary<int, string>? fnEnvVarNames = null) {
     LowerCallCore(callOp.Callee, callOp.Args, callOp.Result, callOp.ResultKind,
-      isTryCall: false, funcLookup, block, valueMap, varTypes, structVarNames,
-      structValueTypes, typeDefs, temps, fnEnvVarNames: fnEnvVarNames,
+      isTryCall: false, funcLookup, block, valueMap, varTypes,
+      typeDefs, temps, fnEnvVarNames: fnEnvVarNames,
       argMutabilities: callOp.ArgMutabilities, argVarNames: callOp.ArgVarNames);
   }
 
@@ -69,8 +67,6 @@ public static partial class MaxonToStandardConversion {
     MlirBlock<StandardOp> block,
     Dictionary<MaxonValue, StdValue> valueMap,
     Dictionary<string, string> varTypes,
-    Dictionary<int, string> structVarNames,
-    Dictionary<int, string> structValueTypes,
     Dictionary<string, MlirType> typeDefs,
     VarRegistry temps,
     MaxonValue? errorFlagValue = null,
@@ -81,7 +77,7 @@ public static partial class MaxonToStandardConversion {
     // Intercept synthetic chain navigation calls before resolving the callee
     // (these are not real functions in the module)
     if (TryLowerChainNavigation(callee, args, result, isTryCall, block, valueMap,
-        varTypes, structVarNames, structValueTypes, errorFlagValue, temps))
+        varTypes, errorFlagValue, temps))
       return;
 
     var calleeFunc = ResolveCallee(callee, funcLookup);
@@ -102,7 +98,7 @@ public static partial class MaxonToStandardConversion {
       }
     }
 
-    FlattenCallArgs(args, calleeFunc, block, valueMap, varTypes, structVarNames, newArgs, callee, fnEnvVarNames, argVarNames);
+    FlattenCallArgs(args, calleeFunc, block, valueMap, varTypes, newArgs, callee, fnEnvVarNames, argVarNames);
 
     // Check if callee returns an associated-value enum (passed as heap pointer)
     bool calleeRetAssocEnum = calleeFunc.ReturnType is MlirUnionType cret && cret.HasAssociatedValues;
@@ -131,8 +127,7 @@ public static partial class MaxonToStandardConversion {
             ? temps.CreateTemp("selfret", result.Id, calleeRetStructType.Name, OwnershipFlags.SelfReturn)
             : temps.CreateTemp("callret", result.Id, calleeRetStructType.Name, OwnershipFlags.Orphan | OwnershipFlags.CallReturn);
         EmitStore(block, callResult, retVarName, varTypes);
-        structVarNames[result.Id] = retVarName;
-        structValueTypes[result.Id] = calleeRetStructType.Name;
+        valueMap[result] = new StdHeapPtr(callResult!.Id, calleeRetStructType.Name, retVarName);
       } else if (calleeRetAssocEnum && callResult != null) {
         // Associated-value enum return: store heap pointer (no unpacking needed)
         var retEnumType = (MlirUnionType)calleeFunc.ReturnType!;
@@ -140,23 +135,31 @@ public static partial class MaxonToStandardConversion {
 
         if (isTryCall) {
           // try_call returns null (0) on error — guard against null dereference
-          // by substituting a dummy allocation when the pointer is null
+          // by substituting a dummy allocation when the pointer is null.
+          // The dummy is increffed to rc=1 so it matches the ownership semantics
+          // of a CallReturn transfer — scope cleanup will decref whichever value
+          // was selected (real result or dummy) and both will end up properly freed.
           int maxPayloadForSize = GetMaxFlatPayloadSlots(retEnumType);
           int heapSize = 8 + maxPayloadForSize * 8;
           var dummyPtr = EmitAlloc(block, heapSize, "EnumDummy", scopeName: _currentFuncName);
+          EmitIncrefValue(block, dummyPtr, scopeName: _currentFuncName);
           var zeroConst = new StdConstI64Op(0);
           block.AddOp(zeroConst);
           var isNull = new StdCmpI64Op("eq", (StdI64)callResult, zeroConst.Result);
           block.AddOp(isNull);
           var safePtr = new StdSelectI64Op(isNull.Result, dummyPtr, (StdI64)callResult);
           block.AddOp(safePtr);
+          // Decref the non-selected value: if call succeeded, free the dummy;
+          // if call errored, the real result is null (no decref needed).
+          var notSelected = new StdSelectI64Op(isNull.Result, (StdI64)callResult, dummyPtr);
+          block.AddOp(notSelected);
+          EmitDecrefValueIfNonnull(block, notSelected.Result, scopeName: _currentFuncName);
           EmitStore(block, safePtr.Result, retVarName, varTypes);
         } else {
           EmitStore(block, callResult, retVarName, varTypes);
         }
 
-        structVarNames[result.Id] = retVarName;
-        structValueTypes[result.Id] = retEnumType.Name;
+        valueMap[result] = new StdHeapPtr(callResult!.Id, retEnumType.Name, retVarName);
       } else if (callResult != null) {
         // Widen 32-bit call results to 64-bit — StdU32 extends StdI32 so this catches both;
         // unsigned values get zero-extended, signed values get sign-extended
@@ -177,8 +180,6 @@ public static partial class MaxonToStandardConversion {
     MlirBlock<StandardOp> block,
     Dictionary<MaxonValue, StdValue> valueMap,
     Dictionary<string, string> varTypes,
-    Dictionary<int, string> structVarNames,
-    Dictionary<int, string> structValueTypes,
     Dictionary<string, MlirType> typeDefs,
     string funcName,
     VarRegistry temps) {
@@ -192,11 +193,10 @@ public static partial class MaxonToStandardConversion {
 
     // Associated-value enum return: the enum is already a heap pointer.
     if (retOp.Value != null
-        && structVarNames.TryGetValue(retOp.Value.Id, out var enumRetPrefix)
-        && structValueTypes.TryGetValue(retOp.Value.Id, out var enumRetTypeName)
-        && typeDefs.TryGetValue(enumRetTypeName, out var enumRetTypeDef)
+        && valueMap.TryGetValue(retOp.Value, out var retSv) && retSv is StdHeapPtr retHp
+        && typeDefs.TryGetValue(retHp.TypeName, out var enumRetTypeDef)
         && enumRetTypeDef is MlirUnionType enumRetType && enumRetType.HasAssociatedValues) {
-      var retHeapPtr = EmitLoad(block, enumRetPrefix, varTypes);
+      var retHeapPtr = EmitLoad(block, retHp.VarName!, varTypes);
       block.AddOp(new StdReturnOp(retHeapPtr));
       return;
     }
@@ -204,28 +204,28 @@ public static partial class MaxonToStandardConversion {
     if (retStructType != null && retOp.Value != null) {
       // Struct return: return the heap pointer as i64
       StdValue retHeapPtr;
-      if (structVarNames.TryGetValue(retOp.Value.Id, out var srcName)) {
+      if (valueMap.TryGetValue(retOp.Value, out var retStructSv) && retStructSv is StdHeapPtr retStructHp) {
         // Incref before return: the function's scope-end will decref all locals,
         // so the returned value needs an extra reference for the caller.
         // Skip SelfReturn (alias, not owned).
         // Skip Orphan temps: their scope-end cleanup is already skipped for returned values,
         // so the single reference from creation transfers directly to the caller.
-        if (temps.IsTempManaged(srcName)
-              && !temps.TempHasFlag(srcName, OwnershipFlags.SelfReturn)
-              && !temps.TempHasFlag(srcName, OwnershipFlags.Orphan)) {
-          EmitIncref(block, srcName, varTypes, scopeName: funcName);
-          EmitTransfer(block, srcName, varTypes, funcName);
+        if (temps.IsTempManaged(retStructHp.VarName!)
+              && !temps.TempHasFlag(retStructHp.VarName!, OwnershipFlags.SelfReturn)
+              && !temps.TempHasFlag(retStructHp.VarName!, OwnershipFlags.Orphan)) {
+          EmitIncref(block, retStructHp.VarName!, varTypes, scopeName: funcName);
+          EmitTransfer(block, retStructHp.VarName!, varTypes, funcName);
         }
-        retHeapPtr = EmitLoad(block, srcName, varTypes);
+        retHeapPtr = EmitLoad(block, retStructHp.VarName!, varTypes);
       } else {
         retHeapPtr = valueMap[retOp.Value];
       }
       block.AddOp(new StdReturnOp(retHeapPtr));
-    } else if (retOp.Value != null && structVarNames.TryGetValue(retOp.Value.Id, out var fallbackSrcName)) {
+    } else if (retOp.Value != null && valueMap.TryGetValue(retOp.Value, out var fbSv) && fbSv is StdHeapPtr fbHp) {
       // Value is a heap pointer (registered by chain/managed-memory ops) but the
       // function's return type is unresolved (e.g., type parameter "Element" in a
       // generic template function). Return the heap pointer as i64.
-      var retHeapPtr = EmitLoad(block, fallbackSrcName, varTypes);
+      var retHeapPtr = EmitLoad(block, fbHp.VarName!, varTypes);
       block.AddOp(new StdReturnOp(retHeapPtr));
     } else {
       StdValue? newRetVal = retOp.Value != null ? valueMap[retOp.Value] : null;
@@ -238,17 +238,16 @@ public static partial class MaxonToStandardConversion {
     MaxonThrowOp throwOp,
     MlirBlock<StandardOp> block,
     Dictionary<MaxonValue, StdValue> valueMap,
-    Dictionary<int, string> structVarNames,
     Dictionary<string, string> varTypes,
     Dictionary<string, MlirType> typeDefs) {
     // Scope cleanup is handled by MaxonScopeEndOp lowering before throw ops.
 
     // Check if this is an associated-value error enum
-    if (structVarNames.TryGetValue(throwOp.ErrorValue.Id, out var enumPrefix)
+    if (valueMap.TryGetValue(throwOp.ErrorValue, out var throwSv) && throwSv is StdHeapPtr throwHp
         && typeDefs.TryGetValue(throwOp.ErrorTypeName, out var errorTypeDef)
         && errorTypeDef is MlirUnionType errorEnumType && errorEnumType.HasAssociatedValues) {
       // Error return expects a heap pointer in RDX — already a heap pointer
-      var heapPtr = EmitLoad(block, enumPrefix, varTypes);
+      var heapPtr = EmitLoad(block, throwHp.VarName!, varTypes);
       block.AddOp(new StdErrorReturnOp(heapPtr));
     } else {
       // Simple error enum: the error value is the ordinal. Add 1 to make non-zero (0 = success).
@@ -267,28 +266,26 @@ public static partial class MaxonToStandardConversion {
     MlirBlock<StandardOp> block,
     Dictionary<MaxonValue, StdValue> valueMap,
     Dictionary<string, string> varTypes,
-    Dictionary<int, string> structVarNames,
-    Dictionary<int, string> structValueTypes,
     Dictionary<string, MlirType> typeDefs,
     VarRegistry temps) {
     // Intercept synthetic enum static method calls
     if (tryCallOp.Callee.StartsWith("__enum_fromRawValue:")) {
       var enumTypeName = tryCallOp.Callee["__enum_fromRawValue:".Length..];
       var enumType = (MlirUnionType)typeDefs[enumTypeName];
-      LowerUnionFromRawValue(tryCallOp, enumType, block, valueMap, varTypes, structVarNames);
+      LowerUnionFromRawValue(tryCallOp, enumType, block, valueMap, varTypes);
       // No temp release needed — scope handles cleanup
       return;
     }
     if (tryCallOp.Callee.StartsWith("__enum_fromName:")) {
       var enumTypeName = tryCallOp.Callee["__enum_fromName:".Length..];
       var enumType = (MlirUnionType)typeDefs[enumTypeName];
-      LowerUnionFromName(tryCallOp, enumType, block, valueMap, varTypes, structVarNames, structValueTypes, temps: temps);
+      LowerUnionFromName(tryCallOp, enumType, block, valueMap, varTypes, temps: temps);
       // No temp release needed — scope handles cleanup
       return;
     }
     LowerCallCore(tryCallOp.Callee, tryCallOp.Args, tryCallOp.Result,
       tryCallOp.ResultKind, isTryCall: true, funcLookup, block, valueMap, varTypes,
-      structVarNames, structValueTypes, typeDefs,
+      typeDefs,
       temps,
       errorFlagValue: tryCallOp.ErrorFlag,
       argMutabilities: tryCallOp.ArgMutabilities, argVarNames: tryCallOp.ArgVarNames);

@@ -193,9 +193,9 @@ alloc Num #2 rc=0 [ownership-edge-cases.main]
 incref Num #2 rc=1 [ownership-edge-cases.main]
 decref Num #1 rc=1 [ownership-edge-cases.main]
 incref Num #2 rc=2 [ownership-edge-cases.main]
-decref Num #2 rc=1 [ownership-edge-cases.main]
 decref Num #1 rc=0 [ownership-edge-cases.main]
   free Num #1
+decref Num #2 rc=1 [ownership-edge-cases.main]
 decref Num #2 rc=0 [ownership-edge-cases.main]
   free Num #2
 ```
@@ -366,11 +366,11 @@ incref Inner #1 rc=1 [ownership-edge-cases.main]
 alloc Outer #2 rc=0 [ownership-edge-cases.main]
 incref Inner #1 rc=2 [ownership-edge-cases.main]
 incref Outer #2 rc=1 [ownership-edge-cases.main]
-decref Inner #1 rc=1 [ownership-edge-cases.main]
 decref Outer #2 rc=0 [ownership-edge-cases.main]
-decref Inner #1 rc=0 [~Outer]
-  free Inner #1
+decref Inner #1 rc=1 [~Outer]
   free Outer #2
+decref Inner #1 rc=0 [ownership-edge-cases.main]
+  free Inner #1
 ```
 
 <!-- test: rc-nested-struct-deep-freed -->
@@ -452,11 +452,11 @@ alloc Payload #3 rc=0 [ownership-edge-cases.main]
 incref Payload #3 rc=1 [ownership-edge-cases.main]
 decref Payload #1 rc=1 [Container.setPayload]
 incref Payload #3 rc=2 [Container.setPayload]
-decref Payload #1 rc=0 [ownership-edge-cases.main]
-  free Payload #1
 decref Container #2 rc=0 [ownership-edge-cases.main]
 decref Payload #3 rc=1 [~Container]
   free Container #2
+decref Payload #1 rc=0 [ownership-edge-cases.main]
+  free Payload #1
 decref Payload #3 rc=0 [ownership-edge-cases.main]
   free Payload #3
 ```
@@ -555,14 +555,14 @@ incref Node #3 rc=2 [NodeArray.push]
 decref Node #3 rc=1 [ownership-edge-cases.main]
 incref Node #3 rc=2 [NodeArray.get]
 incref Node #3 rc=3 [ownership-edge-cases.main]
+decref Node #3 rc=2 [ownership-edge-cases.main]
+decref Node #3 rc=1 [ownership-edge-cases.main]
 decref NodeArray #2 rc=0 [ownership-edge-cases.main]
 decref __ManagedMemory_Node #1 rc=0 [~NodeArray]
-decref Node #3 rc=2 [~ManagedElements]
+decref Node #3 rc=0 [~ManagedElements]
+  free Node #3
   free __ManagedMemory_Node #1
   free NodeArray #2
-decref Node #3 rc=1 [ownership-edge-cases.main]
-decref Node #3 rc=0 [ownership-edge-cases.main]
-  free Node #3
 ```
 
 <!-- test: rc-container-pop-decrefs -->
@@ -605,13 +605,13 @@ incref Node #4 rc=3 [NodeArray.remove]
 transfer Node #4 rc=3 [NodeArray.remove]
 decref Node #4 rc=2 [NodeArray.remove]
 incref Node #4 rc=3 [ownership-edge-cases.main]
+decref Node #4 rc=2 [ownership-edge-cases.main]
+decref Node #4 rc=1 [ownership-edge-cases.main]
 decref NodeArray #2 rc=0 [ownership-edge-cases.main]
 decref __ManagedMemory_Node #1 rc=0 [~NodeArray]
 decref Node #3 rc=1 [~ManagedElements]
   free __ManagedMemory_Node #1
   free NodeArray #2
-decref Node #4 rc=2 [ownership-edge-cases.main]
-decref Node #4 rc=1 [ownership-edge-cases.main]
 decref Node #3 rc=0 [ownership-edge-cases.main]
   free Node #3
 decref Node #4 rc=0 [ownership-edge-cases.main]
@@ -655,13 +655,13 @@ decref Item #3 rc=1 [ItemArray.set]
 incref Item #4 rc=2 [ItemArray.set]
 incref Item #4 rc=3 [ItemArray.get]
 incref Item #4 rc=4 [ownership-edge-cases.main]
+decref Item #4 rc=3 [ownership-edge-cases.main]
+decref Item #4 rc=2 [ownership-edge-cases.main]
 decref ItemArray #2 rc=0 [ownership-edge-cases.main]
 decref __ManagedMemory_Item #1 rc=0 [~ItemArray]
-decref Item #4 rc=3 [~ManagedElements]
+decref Item #4 rc=1 [~ManagedElements]
   free __ManagedMemory_Item #1
   free ItemArray #2
-decref Item #4 rc=2 [ownership-edge-cases.main]
-decref Item #4 rc=1 [ownership-edge-cases.main]
 decref Item #3 rc=0 [ownership-edge-cases.main]
   free Item #3
 decref Item #4 rc=0 [ownership-edge-cases.main]
@@ -922,19 +922,19 @@ incref Val #5 rc=3 [ValArray.get]
 incref Val #5 rc=4 [ownership-edge-cases.main]
 incref Val #4 rc=3 [ValArray.get]
 incref Val #4 rc=4 [ownership-edge-cases.main]
+decref Val #4 rc=3 [ownership-edge-cases.main]
+decref Val #5 rc=3 [ownership-edge-cases.main]
+decref Val #3 rc=3 [ownership-edge-cases.main]
+decref Val #4 rc=2 [ownership-edge-cases.main]
+decref Val #5 rc=2 [ownership-edge-cases.main]
+decref Val #3 rc=2 [ownership-edge-cases.main]
 decref ValArray #2 rc=0 [ownership-edge-cases.main]
 decref __ManagedMemory_Val #1 rc=0 [~ValArray]
-decref Val #3 rc=3 [~ManagedElements]
-decref Val #5 rc=3 [~ManagedElements]
-decref Val #4 rc=3 [~ManagedElements]
+decref Val #3 rc=1 [~ManagedElements]
+decref Val #5 rc=1 [~ManagedElements]
+decref Val #4 rc=1 [~ManagedElements]
   free __ManagedMemory_Val #1
   free ValArray #2
-decref Val #3 rc=2 [ownership-edge-cases.main]
-decref Val #5 rc=2 [ownership-edge-cases.main]
-decref Val #4 rc=2 [ownership-edge-cases.main]
-decref Val #3 rc=1 [ownership-edge-cases.main]
-decref Val #5 rc=1 [ownership-edge-cases.main]
-decref Val #4 rc=1 [ownership-edge-cases.main]
 decref Val #3 rc=0 [ownership-edge-cases.main]
   free Val #3
 decref Val #4 rc=0 [ownership-edge-cases.main]
@@ -987,14 +987,14 @@ incref Val #4 rc=3 [ValArray.remove]
 transfer Val #4 rc=3 [ValArray.remove]
 decref Val #4 rc=2 [ValArray.remove]
 incref Val #4 rc=3 [ownership-edge-cases.main]
+decref Val #4 rc=2 [ownership-edge-cases.main]
+decref Val #4 rc=1 [ownership-edge-cases.main]
 decref ValArray #2 rc=0 [ownership-edge-cases.main]
 decref __ManagedMemory_Val #1 rc=0 [~ValArray]
 decref Val #3 rc=1 [~ManagedElements]
 decref Val #5 rc=1 [~ManagedElements]
   free __ManagedMemory_Val #1
   free ValArray #2
-decref Val #4 rc=2 [ownership-edge-cases.main]
-decref Val #4 rc=1 [ownership-edge-cases.main]
 decref Val #3 rc=0 [ownership-edge-cases.main]
   free Val #3
 decref Val #4 rc=0 [ownership-edge-cases.main]
@@ -1091,10 +1091,10 @@ alloc Step #1 rc=0 [ownership-edge-cases.compute]
 incref Step #1 rc=1 [ownership-edge-cases.compute]
 alloc Step #2 rc=0 [ownership-edge-cases.compute]
 incref Step #2 rc=1 [ownership-edge-cases.compute]
-decref Step #1 rc=0 [ownership-edge-cases.compute]
-  free Step #1
 decref Step #2 rc=0 [ownership-edge-cases.compute]
   free Step #2
+decref Step #1 rc=0 [ownership-edge-cases.compute]
+  free Step #1
 ```
 
 <!-- test: rc-return-container-element -->
@@ -1134,14 +1134,14 @@ incref Item #3 rc=1 [ownership-edge-cases.main]
 incref Item #3 rc=2 [ItemArray.push]
 incref Item #3 rc=3 [ItemArray.get]
 incref Item #3 rc=4 [ownership-edge-cases.getFirst]
-transfer Item #3 rc=4 [ownership-edge-cases.getFirst]
 decref Item #3 rc=3 [ownership-edge-cases.getFirst]
+transfer Item #3 rc=3 [ownership-edge-cases.getFirst]
+decref Item #3 rc=2 [ownership-edge-cases.main]
 decref ItemArray #2 rc=0 [ownership-edge-cases.main]
 decref __ManagedMemory_Item #1 rc=0 [~ItemArray]
-decref Item #3 rc=2 [~ManagedElements]
+decref Item #3 rc=1 [~ManagedElements]
   free __ManagedMemory_Item #1
   free ItemArray #2
-decref Item #3 rc=1 [ownership-edge-cases.main]
 decref Item #3 rc=0 [ownership-edge-cases.main]
   free Item #3
 ```
@@ -1312,8 +1312,8 @@ incref Body #1 rc=2 [ownership-edge-cases.main]
 incref Shape #2 rc=1 [ownership-edge-cases.main]
 incref Shape #2 rc=2 [ownership-edge-cases.massOf]
 incref Body #1 rc=3 [ownership-edge-cases.massOf]
-decref Body #1 rc=2 [ownership-edge-cases.massOf]
 decref Shape #2 rc=1 [ownership-edge-cases.massOf]
+decref Body #1 rc=2 [ownership-edge-cases.massOf]
 decref Shape #2 rc=0 [ownership-edge-cases.main]
 decref Body #1 rc=1 [~Shape]
   free Shape #2
@@ -1410,13 +1410,13 @@ incref ItemArray #2 rc=1 [ownership-edge-cases.main]
 alloc Item #3 rc=0 [ownership-edge-cases.main]
 incref Item #3 rc=1 [ownership-edge-cases.main]
 incref Item #3 rc=2 [ownership-edge-cases.main]
+decref Item #3 rc=1 [ownership-edge-cases.main]
+decref Item #3 rc=0 [ownership-edge-cases.main]
+  free Item #3
 decref ItemArray #2 rc=0 [ownership-edge-cases.main]
 decref __ManagedMemory_Item #1 rc=0 [~ItemArray]
   free __ManagedMemory_Item #1
   free ItemArray #2
-decref Item #3 rc=1 [ownership-edge-cases.main]
-decref Item #3 rc=0 [ownership-edge-cases.main]
-  free Item #3
 ```
 
 <!-- test: rc-chain-insert-incref -->
@@ -1450,14 +1450,14 @@ alloc __ChainNode #3 rc=0 [ownership-edge-cases.main]
 incref Token #2 rc=2 [ownership-edge-cases.main]
 incref __ChainNode #3 rc=1 [chain_insert]
 incref __ChainNode #3 rc=2 [ownership-edge-cases.main]
+decref __ChainNode #3 rc=1 [ownership-edge-cases.main]
+decref Token #2 rc=1 [ownership-edge-cases.main]
 decref TokenChain #1 rc=0 [ownership-edge-cases.main]
-decref Token #2 rc=1 [chain_clear]
-decref __ChainNode #3 rc=1 [chain_clear]
-  free TokenChain #1
-decref Token #2 rc=0 [ownership-edge-cases.main]
+decref Token #2 rc=0 [chain_clear]
   free Token #2
-decref __ChainNode #3 rc=0 [ownership-edge-cases.main]
+decref __ChainNode #3 rc=0 [chain_clear]
   free __ChainNode #3
+  free TokenChain #1
 ```
 
 <!-- test: rc-chain-remove-decrefs -->
@@ -1496,9 +1496,9 @@ decref Token #2 rc=1 [ownership-edge-cases.main]
 decref __ChainNode #3 rc=0 [ownership-edge-cases.main]
   free __ChainNode #3
 incref Token #2 rc=2 [ownership-edge-cases.main]
+decref Token #2 rc=1 [ownership-edge-cases.main]
 decref TokenChain #1 rc=0 [ownership-edge-cases.main]
   free TokenChain #1
-decref Token #2 rc=1 [ownership-edge-cases.main]
 decref Token #2 rc=0 [ownership-edge-cases.main]
   free Token #2
 ```
@@ -1599,12 +1599,12 @@ alloc Token #4 rc=0 [ownership-edge-cases.main]
 incref Token #4 rc=1 [ownership-edge-cases.main]
 decref Token #2 rc=1 [ownership-edge-cases.main]
 incref Token #4 rc=2 [ownership-edge-cases.main]
+decref __ChainNode #3 rc=1 [ownership-edge-cases.main]
 decref TokenChain #1 rc=0 [ownership-edge-cases.main]
 decref Token #4 rc=1 [chain_clear]
-decref __ChainNode #3 rc=1 [chain_clear]
-  free TokenChain #1
-decref __ChainNode #3 rc=0 [ownership-edge-cases.main]
+decref __ChainNode #3 rc=0 [chain_clear]
   free __ChainNode #3
+  free TokenChain #1
 decref Token #2 rc=0 [ownership-edge-cases.main]
   free Token #2
 decref Token #4 rc=0 [ownership-edge-cases.main]
@@ -1767,23 +1767,23 @@ incref Cell #9 rc=1 [ownership-edge-cases.main]
 incref Cell #9 rc=2 [CellArray.push]
 incref CellArray #4 rc=2 [Grid.push]
 incref CellArray #8 rc=2 [Grid.push]
+decref CellArray #8 rc=1 [ownership-edge-cases.main]
+decref CellArray #4 rc=1 [ownership-edge-cases.main]
 decref Grid #2 rc=0 [ownership-edge-cases.main]
 decref __ManagedMemory_CellArray #1 rc=0 [~Grid]
-decref CellArray #4 rc=1 [~ManagedElements]
-decref CellArray #8 rc=1 [~ManagedElements]
-  free __ManagedMemory_CellArray #1
-  free Grid #2
-decref CellArray #4 rc=0 [ownership-edge-cases.main]
+decref CellArray #4 rc=0 [~ManagedElements]
 decref __ManagedMemory_Cell #3 rc=0 [~CellArray]
 decref Cell #5 rc=1 [~ManagedElements]
 decref Cell #6 rc=1 [~ManagedElements]
   free __ManagedMemory_Cell #3
   free CellArray #4
-decref CellArray #8 rc=0 [ownership-edge-cases.main]
+decref CellArray #8 rc=0 [~ManagedElements]
 decref __ManagedMemory_Cell #7 rc=0 [~CellArray]
 decref Cell #9 rc=1 [~ManagedElements]
   free __ManagedMemory_Cell #7
   free CellArray #8
+  free __ManagedMemory_CellArray #1
+  free Grid #2
 decref Cell #5 rc=0 [ownership-edge-cases.main]
   free Cell #5
 decref Cell #6 rc=0 [ownership-edge-cases.main]
@@ -1918,11 +1918,11 @@ alloc Wrapper #2 rc=0 [ownership-edge-cases.wrap]
 incref Inner #1 rc=2 [ownership-edge-cases.wrap]
 incref Wrapper #2 rc=1 [ownership-edge-cases.wrap]
 transfer Wrapper #2 rc=1 [ownership-edge-cases.wrap]
-decref Inner #1 rc=1 [ownership-edge-cases.main]
 decref Wrapper #2 rc=0 [ownership-edge-cases.main]
-decref Inner #1 rc=0 [~Wrapper]
-  free Inner #1
+decref Inner #1 rc=1 [~Wrapper]
   free Wrapper #2
+decref Inner #1 rc=0 [ownership-edge-cases.main]
+  free Inner #1
 ```
 
 <!-- test: rc-list-scope-cleanup -->
@@ -1952,17 +1952,17 @@ incref String #3 rc=1 [ownership-edge-cases.main]
 alloc __ChainNode #5 rc=0 [StringList.append]
 incref String #3 rc=2 [StringList.append]
 incref __ChainNode #5 rc=1 [chain_insert]
+decref String #3 rc=1 [ownership-edge-cases.main]
 decref StringList #2 rc=0 [ownership-edge-cases.main]
 decref __Chain_String #1 rc=0 [~StringList]
-decref String #3 rc=1 [chain_clear]
+decref String #3 rc=0 [chain_clear]
+decref __ManagedMemory #4 rc=0 [~String]
+  free __ManagedMemory #4
+  free String #3
 decref __ChainNode #5 rc=0 [chain_clear]
   free __ChainNode #5
   free __Chain_String #1
   free StringList #2
-decref String #3 rc=0 [ownership-edge-cases.main]
-decref __ManagedMemory #4 rc=0 [~String]
-  free __ManagedMemory #4
-  free String #3
 ```
 
 <!-- test: match-string-pattern-cleanup -->
@@ -2237,13 +2237,13 @@ incref String #1 rc=1 [ownership-edge-cases.main]
 alloc __Tuple_i64_String #3 rc=0 [ownership-edge-cases.main]
 incref String #1 rc=2 [ownership-edge-cases.main]
 incref __Tuple_i64_String #3 rc=1 [ownership-edge-cases.main]
+decref String #1 rc=1 [ownership-edge-cases.main]
 decref __Tuple_i64_String #3 rc=0 [ownership-edge-cases.main]
-decref String #1 rc=1 [~__Tuple_i64_String]
-  free __Tuple_i64_String #3
-decref String #1 rc=0 [ownership-edge-cases.main]
+decref String #1 rc=0 [~__Tuple_i64_String]
 decref __ManagedMemory #2 rc=0 [~String]
   free __ManagedMemory #2
   free String #1
+  free __Tuple_i64_String #3
 ```
 
 <!-- test: rc-tuple-return-transfers-ownership -->
