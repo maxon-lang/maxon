@@ -136,7 +136,6 @@ public class Project(
     } else {
       try {
         var module = StdlibLoader.GetStdlibModule();
-        context.ClearHighWaterMark();
         context.ResetIds();
         Compiler.Compiler.CompileSources(module, sources, false);
 

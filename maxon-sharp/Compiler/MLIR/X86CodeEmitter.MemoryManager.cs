@@ -52,6 +52,9 @@ public partial class X86CodeEmitter {
       DefineSymdata("__mm_tag_incref", "incref \0"u8.ToArray());
       DefineSymdata("__mm_tag_decref", "decref \0"u8.ToArray());
       DefineSymdata("__mm_tag_transfer", "transfer \0"u8.ToArray());
+      DefineSymdata("__mm_tag_realloc", "realloc \0"u8.ToArray());
+      DefineSymdata("__mm_tag_cow", "cow \0"u8.ToArray());
+      DefineSymdata("__mm_tag_size_eq", " size=\0"u8.ToArray());
       DefineSymdata("__mm_tag_rc_eq", " rc=\0"u8.ToArray());
       DefineSymdata("__mm_tag_hash", " #\0"u8.ToArray());
       DefineSymdata("__mm_tag_lbracket", " [\0"u8.ToArray());
@@ -424,7 +427,7 @@ public partial class X86CodeEmitter {
     // Trace alloc after user_ptr is computed (in RAX)
     if (Compiler.MmTrace) {
       EmitMovMemReg(-0x28, X86Register.Rax, 8); // save user_ptr to [rbp-40]
-      EmitInlineTrace("__mm_tag_alloc", "mm_alloc_trace", -0x28, -0x20);
+      EmitInlineTrace("__mm_tag_alloc", "mm_alloc_trace", -0x28, -0x20, sizeSlot: -0x08);
       EmitMovRegMem(X86Register.Rax, -0x28, 8); // restore user_ptr into RAX for return
     }
 
@@ -486,6 +489,14 @@ public partial class X86CodeEmitter {
     // Return new_user_ptr = new_raw + 24
     EmitMovRegMem(X86Register.Rax, -0x38, 8); // RAX = new_raw
     EmitAddRegImm(X86Register.Rax, MmHeaderSize);
+
+    if (Compiler.MmTrace) {
+      EmitMovMemReg(-0x28, X86Register.Rax, 8); // [rbp-40] = new_user_ptr (reuse old_raw slot)
+      EmitXorRegReg(X86Register.Rcx, X86Register.Rcx);
+      EmitMovMemReg(-0x20, X86Register.Rcx, 8); // [rbp-32] = 0 (no scope)
+      EmitInlineTrace("__mm_tag_realloc", "mm_realloc_trace", -0x28, -0x20, sizeSlot: -0x10);
+      EmitMovRegMem(X86Register.Rax, -0x28, 8); // restore RAX = new_user_ptr
+    }
 
     DefineLabel("mm_realloc_done");
     EmitRuntimeFunctionEnd();
@@ -865,19 +876,29 @@ public partial class X86CodeEmitter {
     EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_trace_print_i64")); EmitDword(0);
   }
 
+  /// Inline helper: emit code to print " size=N" from size value at [rbp + sizeSlot].
+  private void EmitTraceSize(int sizeSlot) {
+    EmitLeaRegSymdataRel(X86Register.Rcx, "__mm_tag_size_eq");
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_trace_print_tag")); EmitDword(0);
+    EmitMovRegMem(X86Register.Rcx, sizeSlot, 8);
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_trace_print_i64")); EmitDword(0);
+  }
+
   /// <summary>
   /// Emit inline trace output: indent + tagLabel + "TypeName #N rc=R [scope]\n".
   /// ptrSlot/scopeSlot are rbp-relative offsets for the user_ptr and scope_cstr.
   /// If printRc is false, the " rc=N" part is omitted (used for free).
   /// rcSubtract adjusts the displayed refcount (1 for decref to show post-decrement).
+  /// sizeSlot, if set, prints " size=N" after the refcount.
   /// </summary>
   private void EmitInlineTrace(string tagLabel, string uniquePrefix, int ptrSlot, int scopeSlot,
-      bool printRc = true, int rcSubtract = 0) {
+      bool printRc = true, int rcSubtract = 0, int? sizeSlot = null) {
     EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_trace_print_indent")); EmitDword(0);
     EmitLeaRegSymdataRel(X86Register.Rcx, tagLabel);
     EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_trace_print_tag")); EmitDword(0);
     EmitTraceTagAndId(ptrSlot);
     if (printRc) EmitTraceRc(ptrSlot, rcSubtract);
+    if (sizeSlot.HasValue) EmitTraceSize(sizeSlot.Value);
     EmitMmTraceScopeAndNewline($"{uniquePrefix}_no_scope", scopeSlot);
   }
 

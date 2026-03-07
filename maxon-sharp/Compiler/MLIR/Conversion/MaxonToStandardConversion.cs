@@ -121,7 +121,6 @@ public static partial class MaxonToStandardConversion {
 
       // Reset IDs after stdlib for stable test output
       if (!hasResetAfterStdlib && !func.IsStdlib) {
-        MlirContext.Current.ClearHighWaterMark();
         MlirContext.Current.ResetIds();
         _rdataStdlibPhase = false;
         _nextRdataId = 0;

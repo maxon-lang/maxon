@@ -32,7 +32,7 @@ end 'main'
 1
 ```
 ```stderr
-alloc Point #1 rc=0 [ownership-edge-cases.main]
+alloc Point #1 rc=0 size=16 [ownership-edge-cases.main]
 incref Point #1 rc=1 [ownership-edge-cases.main]
 decref Point #1 rc=0 [ownership-edge-cases.main]
   free Point #1
@@ -58,7 +58,7 @@ end 'main'
 42
 ```
 ```stderr
-alloc Box #1 rc=0 [ownership-edge-cases.main]
+alloc Box #1 rc=0 size=8 [ownership-edge-cases.main]
 incref Box #1 rc=1 [ownership-edge-cases.main]
 incref Box #1 rc=2 [ownership-edge-cases.main]
 decref Box #1 rc=1 [ownership-edge-cases.main]
@@ -87,14 +87,14 @@ end 'main'
 3
 ```
 ```stderr
-alloc Tag #1 rc=0 [ownership-edge-cases.main]
+alloc Tag #1 rc=0 size=8 [ownership-edge-cases.main]
 incref Tag #1 rc=1 [ownership-edge-cases.main]
-alloc Tag #2 rc=0 [ownership-edge-cases.main]
+alloc Tag #2 rc=0 size=8 [ownership-edge-cases.main]
 incref Tag #2 rc=1 [ownership-edge-cases.main]
 decref Tag #1 rc=0 [ownership-edge-cases.main]
   free Tag #1
 incref Tag #2 rc=2 [ownership-edge-cases.main]
-alloc Tag #3 rc=0 [ownership-edge-cases.main]
+alloc Tag #3 rc=0 size=8 [ownership-edge-cases.main]
 incref Tag #3 rc=1 [ownership-edge-cases.main]
 decref Tag #2 rc=1 [ownership-edge-cases.main]
 incref Tag #3 rc=2 [ownership-edge-cases.main]
@@ -128,7 +128,7 @@ end 'main'
 7
 ```
 ```stderr
-alloc Widget #1 rc=0 [ownership-edge-cases.main]
+alloc Widget #1 rc=0 size=8 [ownership-edge-cases.main]
 incref Widget #1 rc=1 [ownership-edge-cases.main]
 decref Widget #1 rc=0 [ownership-edge-cases.main]
   free Widget #1
@@ -158,7 +158,7 @@ end 'main'
 99
 ```
 ```stderr
-alloc Token #1 rc=0 [ownership-edge-cases.makeToken]
+alloc Token #1 rc=0 size=8 [ownership-edge-cases.makeToken]
 incref Token #1 rc=1 [ownership-edge-cases.makeToken]
 transfer Token #1 rc=1 [ownership-edge-cases.makeToken]
 decref Token #1 rc=0 [ownership-edge-cases.main]
@@ -186,10 +186,10 @@ end 'main'
 30
 ```
 ```stderr
-alloc Num #1 rc=0 [ownership-edge-cases.main]
+alloc Num #1 rc=0 size=8 [ownership-edge-cases.main]
 incref Num #1 rc=1 [ownership-edge-cases.main]
 incref Num #1 rc=2 [ownership-edge-cases.main]
-alloc Num #2 rc=0 [ownership-edge-cases.main]
+alloc Num #2 rc=0 size=8 [ownership-edge-cases.main]
 incref Num #2 rc=1 [ownership-edge-cases.main]
 decref Num #1 rc=1 [ownership-edge-cases.main]
 incref Num #2 rc=2 [ownership-edge-cases.main]
@@ -225,19 +225,19 @@ end 'main'
 6
 ```
 ```stderr
-alloc Counter #1 rc=0 [ownership-edge-cases.main]
+alloc Counter #1 rc=0 size=8 [ownership-edge-cases.main]
 incref Counter #1 rc=1 [ownership-edge-cases.main]
 decref Counter #1 rc=0 [ownership-edge-cases.main]
   free Counter #1
-alloc Counter #2 rc=0 [ownership-edge-cases.main]
+alloc Counter #2 rc=0 size=8 [ownership-edge-cases.main]
 incref Counter #2 rc=1 [ownership-edge-cases.main]
 decref Counter #2 rc=0 [ownership-edge-cases.main]
   free Counter #2
-alloc Counter #3 rc=0 [ownership-edge-cases.main]
+alloc Counter #3 rc=0 size=8 [ownership-edge-cases.main]
 incref Counter #3 rc=1 [ownership-edge-cases.main]
 decref Counter #3 rc=0 [ownership-edge-cases.main]
   free Counter #3
-alloc Counter #4 rc=0 [ownership-edge-cases.main]
+alloc Counter #4 rc=0 size=8 [ownership-edge-cases.main]
 incref Counter #4 rc=1 [ownership-edge-cases.main]
 decref Counter #4 rc=0 [ownership-edge-cases.main]
   free Counter #4
@@ -269,19 +269,19 @@ end 'main'
 3
 ```
 ```stderr
-alloc Step #1 rc=0 [ownership-edge-cases.main]
+alloc Step #1 rc=0 size=8 [ownership-edge-cases.main]
 incref Step #1 rc=1 [ownership-edge-cases.main]
 decref Step #1 rc=0 [ownership-edge-cases.main]
   free Step #1
-alloc Step #2 rc=0 [ownership-edge-cases.main]
+alloc Step #2 rc=0 size=8 [ownership-edge-cases.main]
 incref Step #2 rc=1 [ownership-edge-cases.main]
 decref Step #2 rc=0 [ownership-edge-cases.main]
   free Step #2
-alloc Step #3 rc=0 [ownership-edge-cases.main]
+alloc Step #3 rc=0 size=8 [ownership-edge-cases.main]
 incref Step #3 rc=1 [ownership-edge-cases.main]
 decref Step #3 rc=0 [ownership-edge-cases.main]
   free Step #3
-alloc Step #4 rc=0 [ownership-edge-cases.main]
+alloc Step #4 rc=0 size=8 [ownership-edge-cases.main]
 incref Step #4 rc=1 [ownership-edge-cases.main]
 decref Step #4 rc=0 [ownership-edge-cases.main]
   free Step #4
@@ -315,23 +315,23 @@ end 'main'
 8
 ```
 ```stderr
-alloc Item #1 rc=0 [ownership-edge-cases.main]
+alloc Item #1 rc=0 size=8 [ownership-edge-cases.main]
 incref Item #1 rc=1 [ownership-edge-cases.main]
 decref Item #1 rc=0 [ownership-edge-cases.main]
   free Item #1
-alloc Item #2 rc=0 [ownership-edge-cases.main]
+alloc Item #2 rc=0 size=8 [ownership-edge-cases.main]
 incref Item #2 rc=1 [ownership-edge-cases.main]
 decref Item #2 rc=0 [ownership-edge-cases.main]
   free Item #2
-alloc Item #3 rc=0 [ownership-edge-cases.main]
+alloc Item #3 rc=0 size=8 [ownership-edge-cases.main]
 incref Item #3 rc=1 [ownership-edge-cases.main]
 decref Item #3 rc=0 [ownership-edge-cases.main]
   free Item #3
-alloc Item #4 rc=0 [ownership-edge-cases.main]
+alloc Item #4 rc=0 size=8 [ownership-edge-cases.main]
 incref Item #4 rc=1 [ownership-edge-cases.main]
 decref Item #4 rc=0 [ownership-edge-cases.main]
   free Item #4
-alloc Item #5 rc=0 [ownership-edge-cases.main]
+alloc Item #5 rc=0 size=8 [ownership-edge-cases.main]
 incref Item #5 rc=1 [ownership-edge-cases.main]
 decref Item #5 rc=0 [ownership-edge-cases.main]
   free Item #5
@@ -361,9 +361,9 @@ end 'main'
 55
 ```
 ```stderr
-alloc Inner #1 rc=0 [ownership-edge-cases.main]
+alloc Inner #1 rc=0 size=8 [ownership-edge-cases.main]
 incref Inner #1 rc=1 [ownership-edge-cases.main]
-alloc Outer #2 rc=0 [ownership-edge-cases.main]
+alloc Outer #2 rc=0 size=8 [ownership-edge-cases.main]
 incref Inner #1 rc=2 [ownership-edge-cases.main]
 incref Outer #2 rc=1 [ownership-edge-cases.main]
 decref Outer #2 rc=0 [ownership-edge-cases.main]
@@ -400,10 +400,10 @@ end 'main'
 7
 ```
 ```stderr
-alloc A #1 rc=0 [ownership-edge-cases.main]
-alloc B #2 rc=0 [ownership-edge-cases.main]
+alloc A #1 rc=0 size=8 [ownership-edge-cases.main]
+alloc B #2 rc=0 size=8 [ownership-edge-cases.main]
 incref A #1 rc=1 [ownership-edge-cases.main]
-alloc C #3 rc=0 [ownership-edge-cases.main]
+alloc C #3 rc=0 size=8 [ownership-edge-cases.main]
 incref B #2 rc=1 [ownership-edge-cases.main]
 incref C #3 rc=1 [ownership-edge-cases.main]
 decref C #3 rc=0 [ownership-edge-cases.main]
@@ -443,12 +443,12 @@ end 'main'
 2
 ```
 ```stderr
-alloc Payload #1 rc=0 [ownership-edge-cases.main]
+alloc Payload #1 rc=0 size=8 [ownership-edge-cases.main]
 incref Payload #1 rc=1 [ownership-edge-cases.main]
-alloc Container #2 rc=0 [ownership-edge-cases.main]
+alloc Container #2 rc=0 size=8 [ownership-edge-cases.main]
 incref Payload #1 rc=2 [ownership-edge-cases.main]
 incref Container #2 rc=1 [ownership-edge-cases.main]
-alloc Payload #3 rc=0 [ownership-edge-cases.main]
+alloc Payload #3 rc=0 size=8 [ownership-edge-cases.main]
 incref Payload #3 rc=1 [ownership-edge-cases.main]
 decref Payload #1 rc=1 [Container.setPayload]
 incref Payload #3 rc=2 [Container.setPayload]
@@ -491,20 +491,20 @@ end 'main'
 30
 ```
 ```stderr
-alloc Val #1 rc=0 [ownership-edge-cases.main]
-alloc Holder #2 rc=0 [ownership-edge-cases.main]
+alloc Val #1 rc=0 size=8 [ownership-edge-cases.main]
+alloc Holder #2 rc=0 size=8 [ownership-edge-cases.main]
 incref Val #1 rc=1 [ownership-edge-cases.main]
 incref Holder #2 rc=1 [ownership-edge-cases.main]
-alloc Val #3 rc=0 [ownership-edge-cases.main]
+alloc Val #3 rc=0 size=8 [ownership-edge-cases.main]
 incref Val #3 rc=1 [ownership-edge-cases.main]
 decref Val #1 rc=0 [Holder.set]
   free Val #1
 incref Val #3 rc=2 [Holder.set]
-alloc Val #4 rc=0 [ownership-edge-cases.main]
+alloc Val #4 rc=0 size=8 [ownership-edge-cases.main]
 incref Val #4 rc=1 [ownership-edge-cases.main]
 decref Val #3 rc=1 [Holder.set]
 incref Val #4 rc=2 [Holder.set]
-alloc Val #5 rc=0 [ownership-edge-cases.main]
+alloc Val #5 rc=0 size=8 [ownership-edge-cases.main]
 incref Val #5 rc=1 [ownership-edge-cases.main]
 decref Val #4 rc=1 [Holder.set]
 incref Val #5 rc=2 [Holder.set]
@@ -545,12 +545,13 @@ end 'main'
 10
 ```
 ```stderr
-alloc __ManagedMemory_Node #1 rc=0 [ownership-edge-cases.main]
-alloc NodeArray #2 rc=0 [ownership-edge-cases.main]
+alloc __ManagedMemory_Node #1 rc=0 size=32 [ownership-edge-cases.main]
+alloc NodeArray #2 rc=0 size=16 [ownership-edge-cases.main]
 incref __ManagedMemory_Node #1 rc=1 [ownership-edge-cases.main]
 incref NodeArray #2 rc=1 [ownership-edge-cases.main]
-alloc Node #3 rc=0 [ownership-edge-cases.main]
+alloc Node #3 rc=0 size=8 [ownership-edge-cases.main]
 incref Node #3 rc=1 [ownership-edge-cases.main]
+realloc __ManagedMemory_Node #1 rc=1 size=32
 incref Node #3 rc=2 [NodeArray.push]
 decref Node #3 rc=1 [ownership-edge-cases.main]
 incref Node #3 rc=2 [NodeArray.get]
@@ -591,14 +592,15 @@ end 'main'
 1
 ```
 ```stderr
-alloc __ManagedMemory_Node #1 rc=0 [ownership-edge-cases.main]
-alloc NodeArray #2 rc=0 [ownership-edge-cases.main]
+alloc __ManagedMemory_Node #1 rc=0 size=32 [ownership-edge-cases.main]
+alloc NodeArray #2 rc=0 size=16 [ownership-edge-cases.main]
 incref __ManagedMemory_Node #1 rc=1 [ownership-edge-cases.main]
 incref NodeArray #2 rc=1 [ownership-edge-cases.main]
-alloc Node #3 rc=0 [ownership-edge-cases.main]
+alloc Node #3 rc=0 size=8 [ownership-edge-cases.main]
 incref Node #3 rc=1 [ownership-edge-cases.main]
+realloc __ManagedMemory_Node #1 rc=1 size=32
 incref Node #3 rc=2 [NodeArray.push]
-alloc Node #4 rc=0 [ownership-edge-cases.main]
+alloc Node #4 rc=0 size=8 [ownership-edge-cases.main]
 incref Node #4 rc=1 [ownership-edge-cases.main]
 incref Node #4 rc=2 [NodeArray.push]
 incref Node #4 rc=3 [NodeArray.remove]
@@ -642,14 +644,15 @@ end 'main'
 200
 ```
 ```stderr
-alloc __ManagedMemory_Item #1 rc=0 [ownership-edge-cases.main]
-alloc ItemArray #2 rc=0 [ownership-edge-cases.main]
+alloc __ManagedMemory_Item #1 rc=0 size=32 [ownership-edge-cases.main]
+alloc ItemArray #2 rc=0 size=16 [ownership-edge-cases.main]
 incref __ManagedMemory_Item #1 rc=1 [ownership-edge-cases.main]
 incref ItemArray #2 rc=1 [ownership-edge-cases.main]
-alloc Item #3 rc=0 [ownership-edge-cases.main]
+alloc Item #3 rc=0 size=8 [ownership-edge-cases.main]
 incref Item #3 rc=1 [ownership-edge-cases.main]
+realloc __ManagedMemory_Item #1 rc=1 size=32
 incref Item #3 rc=2 [ItemArray.push]
-alloc Item #4 rc=0 [ownership-edge-cases.main]
+alloc Item #4 rc=0 size=8 [ownership-edge-cases.main]
 incref Item #4 rc=1 [ownership-edge-cases.main]
 decref Item #3 rc=1 [ItemArray.set]
 incref Item #4 rc=2 [ItemArray.set]
@@ -693,17 +696,18 @@ end 'main'
 0
 ```
 ```stderr
-alloc __ManagedMemory_Item #1 rc=0 [ownership-edge-cases.main]
-alloc ItemArray #2 rc=0 [ownership-edge-cases.main]
+alloc __ManagedMemory_Item #1 rc=0 size=32 [ownership-edge-cases.main]
+alloc ItemArray #2 rc=0 size=16 [ownership-edge-cases.main]
 incref __ManagedMemory_Item #1 rc=1 [ownership-edge-cases.main]
 incref ItemArray #2 rc=1 [ownership-edge-cases.main]
-alloc Item #3 rc=0 [ownership-edge-cases.main]
+alloc Item #3 rc=0 size=8 [ownership-edge-cases.main]
 incref Item #3 rc=1 [ownership-edge-cases.main]
+realloc __ManagedMemory_Item #1 rc=1 size=32
 incref Item #3 rc=2 [ItemArray.push]
-alloc Item #4 rc=0 [ownership-edge-cases.main]
+alloc Item #4 rc=0 size=8 [ownership-edge-cases.main]
 incref Item #4 rc=1 [ownership-edge-cases.main]
 incref Item #4 rc=2 [ItemArray.push]
-alloc Item #5 rc=0 [ownership-edge-cases.main]
+alloc Item #5 rc=0 size=8 [ownership-edge-cases.main]
 incref Item #5 rc=1 [ownership-edge-cases.main]
 incref Item #5 rc=2 [ItemArray.push]
 decref Item #3 rc=1 [~ManagedElements]
@@ -750,17 +754,18 @@ end 'main'
 3
 ```
 ```stderr
-alloc __ManagedMemory_Item #1 rc=0 [ownership-edge-cases.fill]
-alloc ItemArray #2 rc=0 [ownership-edge-cases.fill]
+alloc __ManagedMemory_Item #1 rc=0 size=32 [ownership-edge-cases.fill]
+alloc ItemArray #2 rc=0 size=16 [ownership-edge-cases.fill]
 incref __ManagedMemory_Item #1 rc=1 [ownership-edge-cases.fill]
 incref ItemArray #2 rc=1 [ownership-edge-cases.fill]
-alloc Item #3 rc=0 [ownership-edge-cases.fill]
+alloc Item #3 rc=0 size=8 [ownership-edge-cases.fill]
 incref Item #3 rc=1 [ownership-edge-cases.fill]
+realloc __ManagedMemory_Item #1 rc=1 size=32
 incref Item #3 rc=2 [ItemArray.push]
-alloc Item #4 rc=0 [ownership-edge-cases.fill]
+alloc Item #4 rc=0 size=8 [ownership-edge-cases.fill]
 incref Item #4 rc=1 [ownership-edge-cases.fill]
 incref Item #4 rc=2 [ItemArray.push]
-alloc Item #5 rc=0 [ownership-edge-cases.fill]
+alloc Item #5 rc=0 size=8 [ownership-edge-cases.fill]
 incref Item #5 rc=1 [ownership-edge-cases.fill]
 incref Item #5 rc=2 [ItemArray.push]
 decref ItemArray #2 rc=0 [ownership-edge-cases.fill]
@@ -811,28 +816,30 @@ end 'main'
 10
 ```
 ```stderr
-alloc __ManagedMemory_Entry #1 rc=0 [ownership-edge-cases.main]
-alloc EntryArray #2 rc=0 [ownership-edge-cases.main]
+alloc __ManagedMemory_Entry #1 rc=0 size=32 [ownership-edge-cases.main]
+alloc EntryArray #2 rc=0 size=16 [ownership-edge-cases.main]
 incref __ManagedMemory_Entry #1 rc=1 [ownership-edge-cases.main]
 incref EntryArray #2 rc=1 [ownership-edge-cases.main]
-alloc Entry #3 rc=0 [ownership-edge-cases.main]
+alloc Entry #3 rc=0 size=8 [ownership-edge-cases.main]
 incref Entry #3 rc=1 [ownership-edge-cases.main]
+realloc __ManagedMemory_Entry #1 rc=1 size=32
 incref Entry #3 rc=2 [EntryArray.push]
 decref Entry #3 rc=1 [ownership-edge-cases.main]
-alloc Entry #4 rc=0 [ownership-edge-cases.main]
+alloc Entry #4 rc=0 size=8 [ownership-edge-cases.main]
 incref Entry #4 rc=1 [ownership-edge-cases.main]
 incref Entry #4 rc=2 [EntryArray.push]
 decref Entry #4 rc=1 [ownership-edge-cases.main]
-alloc Entry #5 rc=0 [ownership-edge-cases.main]
+alloc Entry #5 rc=0 size=8 [ownership-edge-cases.main]
 incref Entry #5 rc=1 [ownership-edge-cases.main]
 incref Entry #5 rc=2 [EntryArray.push]
 decref Entry #5 rc=1 [ownership-edge-cases.main]
-alloc Entry #6 rc=0 [ownership-edge-cases.main]
+alloc Entry #6 rc=0 size=8 [ownership-edge-cases.main]
 incref Entry #6 rc=1 [ownership-edge-cases.main]
 incref Entry #6 rc=2 [EntryArray.push]
 decref Entry #6 rc=1 [ownership-edge-cases.main]
-alloc Entry #7 rc=0 [ownership-edge-cases.main]
+alloc Entry #7 rc=0 size=8 [ownership-edge-cases.main]
 incref Entry #7 rc=1 [ownership-edge-cases.main]
+realloc __ManagedMemory_Entry #1 rc=1 size=64
 incref Entry #7 rc=2 [EntryArray.push]
 decref Entry #7 rc=1 [ownership-edge-cases.main]
 incref Entry #3 rc=2 [EntryArray.remove]
@@ -893,17 +900,18 @@ end 'main'
 60
 ```
 ```stderr
-alloc __ManagedMemory_Val #1 rc=0 [ownership-edge-cases.main]
-alloc ValArray #2 rc=0 [ownership-edge-cases.main]
+alloc __ManagedMemory_Val #1 rc=0 size=32 [ownership-edge-cases.main]
+alloc ValArray #2 rc=0 size=16 [ownership-edge-cases.main]
 incref __ManagedMemory_Val #1 rc=1 [ownership-edge-cases.main]
 incref ValArray #2 rc=1 [ownership-edge-cases.main]
-alloc Val #3 rc=0 [ownership-edge-cases.main]
+alloc Val #3 rc=0 size=8 [ownership-edge-cases.main]
 incref Val #3 rc=1 [ownership-edge-cases.main]
+realloc __ManagedMemory_Val #1 rc=1 size=32
 incref Val #3 rc=2 [ValArray.push]
-alloc Val #4 rc=0 [ownership-edge-cases.main]
+alloc Val #4 rc=0 size=8 [ownership-edge-cases.main]
 incref Val #4 rc=1 [ownership-edge-cases.main]
 incref Val #4 rc=2 [ValArray.push]
-alloc Val #5 rc=0 [ownership-edge-cases.main]
+alloc Val #5 rc=0 size=8 [ownership-edge-cases.main]
 incref Val #5 rc=1 [ownership-edge-cases.main]
 incref Val #5 rc=2 [ValArray.insert]
 incref Val #3 rc=3 [ValArray.get]
@@ -960,17 +968,18 @@ end 'main'
 4
 ```
 ```stderr
-alloc __ManagedMemory_Val #1 rc=0 [ownership-edge-cases.main]
-alloc ValArray #2 rc=0 [ownership-edge-cases.main]
+alloc __ManagedMemory_Val #1 rc=0 size=32 [ownership-edge-cases.main]
+alloc ValArray #2 rc=0 size=16 [ownership-edge-cases.main]
 incref __ManagedMemory_Val #1 rc=1 [ownership-edge-cases.main]
 incref ValArray #2 rc=1 [ownership-edge-cases.main]
-alloc Val #3 rc=0 [ownership-edge-cases.main]
+alloc Val #3 rc=0 size=8 [ownership-edge-cases.main]
 incref Val #3 rc=1 [ownership-edge-cases.main]
+realloc __ManagedMemory_Val #1 rc=1 size=32
 incref Val #3 rc=2 [ValArray.push]
-alloc Val #4 rc=0 [ownership-edge-cases.main]
+alloc Val #4 rc=0 size=8 [ownership-edge-cases.main]
 incref Val #4 rc=1 [ownership-edge-cases.main]
 incref Val #4 rc=2 [ValArray.push]
-alloc Val #5 rc=0 [ownership-edge-cases.main]
+alloc Val #5 rc=0 size=8 [ownership-edge-cases.main]
 incref Val #5 rc=1 [ownership-edge-cases.main]
 incref Val #5 rc=2 [ValArray.push]
 incref Val #4 rc=3 [ValArray.remove]
@@ -1020,17 +1029,18 @@ end 'main'
 2
 ```
 ```stderr
-alloc __ManagedMemory_Wrapper #1 rc=0 [ownership-edge-cases.main]
-alloc WrapperArray #2 rc=0 [ownership-edge-cases.main]
+alloc __ManagedMemory_Wrapper #1 rc=0 size=32 [ownership-edge-cases.main]
+alloc WrapperArray #2 rc=0 size=16 [ownership-edge-cases.main]
 incref __ManagedMemory_Wrapper #1 rc=1 [ownership-edge-cases.main]
 incref WrapperArray #2 rc=1 [ownership-edge-cases.main]
-alloc Inner #3 rc=0 [ownership-edge-cases.main]
-alloc Wrapper #4 rc=0 [ownership-edge-cases.main]
+alloc Inner #3 rc=0 size=8 [ownership-edge-cases.main]
+alloc Wrapper #4 rc=0 size=8 [ownership-edge-cases.main]
 incref Inner #3 rc=1 [ownership-edge-cases.main]
 incref Wrapper #4 rc=1 [ownership-edge-cases.main]
+realloc __ManagedMemory_Wrapper #1 rc=1 size=32
 incref Wrapper #4 rc=2 [WrapperArray.push]
-alloc Inner #5 rc=0 [ownership-edge-cases.main]
-alloc Wrapper #6 rc=0 [ownership-edge-cases.main]
+alloc Inner #5 rc=0 size=8 [ownership-edge-cases.main]
+alloc Wrapper #6 rc=0 size=8 [ownership-edge-cases.main]
 incref Inner #5 rc=1 [ownership-edge-cases.main]
 incref Wrapper #6 rc=1 [ownership-edge-cases.main]
 incref Wrapper #6 rc=2 [WrapperArray.push]
@@ -1077,9 +1087,9 @@ end 'main'
 3
 ```
 ```stderr
-alloc Step #1 rc=0 [ownership-edge-cases.compute]
+alloc Step #1 rc=0 size=8 [ownership-edge-cases.compute]
 incref Step #1 rc=1 [ownership-edge-cases.compute]
-alloc Step #2 rc=0 [ownership-edge-cases.compute]
+alloc Step #2 rc=0 size=8 [ownership-edge-cases.compute]
 incref Step #2 rc=1 [ownership-edge-cases.compute]
 decref Step #2 rc=0 [ownership-edge-cases.compute]
   free Step #2
@@ -1115,12 +1125,13 @@ end 'main'
 77
 ```
 ```stderr
-alloc __ManagedMemory_Item #1 rc=0 [ownership-edge-cases.main]
-alloc ItemArray #2 rc=0 [ownership-edge-cases.main]
+alloc __ManagedMemory_Item #1 rc=0 size=32 [ownership-edge-cases.main]
+alloc ItemArray #2 rc=0 size=16 [ownership-edge-cases.main]
 incref __ManagedMemory_Item #1 rc=1 [ownership-edge-cases.main]
 incref ItemArray #2 rc=1 [ownership-edge-cases.main]
-alloc Item #3 rc=0 [ownership-edge-cases.main]
+alloc Item #3 rc=0 size=8 [ownership-edge-cases.main]
 incref Item #3 rc=1 [ownership-edge-cases.main]
+realloc __ManagedMemory_Item #1 rc=1 size=32
 incref Item #3 rc=2 [ItemArray.push]
 incref Item #3 rc=3 [ItemArray.get]
 incref Item #3 rc=4 [ownership-edge-cases.getFirst]
@@ -1161,11 +1172,11 @@ end 'main'
 42
 ```
 ```stderr
-alloc Cfg #1 rc=0 [ownership-edge-cases.__module_init]
+alloc Cfg #1 rc=0 size=8 [ownership-edge-cases.__module_init]
 incref Cfg #1 rc=1 [ownership-edge-cases.__module_init]
 incref Cfg #1 rc=2 [ownership-edge-cases.__module_init]
 decref Cfg #1 rc=1 [ownership-edge-cases.__module_init]
-alloc Cfg #2 rc=0 [ownership-edge-cases.setup]
+alloc Cfg #2 rc=0 size=8 [ownership-edge-cases.setup]
 incref Cfg #2 rc=1 [ownership-edge-cases.setup]
 decref Cfg #1 rc=0 [ownership-edge-cases.setup]
   free Cfg #1
@@ -1204,23 +1215,23 @@ end 'main'
 30
 ```
 ```stderr
-alloc State #1 rc=0 [ownership-edge-cases.__module_init]
+alloc State #1 rc=0 size=8 [ownership-edge-cases.__module_init]
 incref State #1 rc=1 [ownership-edge-cases.__module_init]
 incref State #1 rc=2 [ownership-edge-cases.__module_init]
 decref State #1 rc=1 [ownership-edge-cases.__module_init]
-alloc State #2 rc=0 [ownership-edge-cases.step]
+alloc State #2 rc=0 size=8 [ownership-edge-cases.step]
 incref State #2 rc=1 [ownership-edge-cases.step]
 decref State #1 rc=0 [ownership-edge-cases.step]
   free State #1
 incref State #2 rc=2 [ownership-edge-cases.step]
 decref State #2 rc=1 [ownership-edge-cases.step]
-alloc State #3 rc=0 [ownership-edge-cases.step]
+alloc State #3 rc=0 size=8 [ownership-edge-cases.step]
 incref State #3 rc=1 [ownership-edge-cases.step]
 decref State #2 rc=0 [ownership-edge-cases.step]
   free State #2
 incref State #3 rc=2 [ownership-edge-cases.step]
 decref State #3 rc=1 [ownership-edge-cases.step]
-alloc State #4 rc=0 [ownership-edge-cases.step]
+alloc State #4 rc=0 size=8 [ownership-edge-cases.step]
 incref State #4 rc=1 [ownership-edge-cases.step]
 decref State #3 rc=0 [ownership-edge-cases.step]
   free State #3
@@ -1295,9 +1306,9 @@ end 'main'
 5
 ```
 ```stderr
-alloc Body #1 rc=0 [ownership-edge-cases.main]
+alloc Body #1 rc=0 size=8 [ownership-edge-cases.main]
 incref Body #1 rc=1 [ownership-edge-cases.main]
-alloc Shape #2 rc=0 [ownership-edge-cases.main]
+alloc Shape #2 rc=0 size=16 [ownership-edge-cases.main]
 incref Body #1 rc=2 [ownership-edge-cases.main]
 incref Shape #2 rc=1 [ownership-edge-cases.main]
 incref Shape #2 rc=2 [ownership-edge-cases.massOf]
@@ -1331,7 +1342,7 @@ end 'main'
 15
 ```
 ```stderr
-alloc ClosureEnv #1 rc=0 [ownership-edge-cases.main]
+alloc ClosureEnv #1 rc=0 size=8 [ownership-edge-cases.main]
 incref ClosureEnv #1 rc=1 [ownership-edge-cases.main]
 decref ClosureEnv #1 rc=0 [ownership-edge-cases.main]
   free ClosureEnv #1
@@ -1361,9 +1372,9 @@ end 'main'
 3
 ```
 ```stderr
-alloc Config #1 rc=0 [ownership-edge-cases.main]
+alloc Config #1 rc=0 size=8 [ownership-edge-cases.main]
 incref Config #1 rc=1 [ownership-edge-cases.main]
-alloc ClosureEnv #2 rc=0 [ownership-edge-cases.main]
+alloc ClosureEnv #2 rc=0 size=8 [ownership-edge-cases.main]
 incref ClosureEnv #2 rc=1 [ownership-edge-cases.main]
 decref Config #1 rc=0 [ownership-edge-cases.main]
   free Config #1
@@ -1393,11 +1404,11 @@ end 'main'
 99
 ```
 ```stderr
-alloc __ManagedMemory_Item #1 rc=0 [ownership-edge-cases.main]
-alloc ItemArray #2 rc=0 [ownership-edge-cases.main]
+alloc __ManagedMemory_Item #1 rc=0 size=32 [ownership-edge-cases.main]
+alloc ItemArray #2 rc=0 size=16 [ownership-edge-cases.main]
 incref __ManagedMemory_Item #1 rc=1 [ownership-edge-cases.main]
 incref ItemArray #2 rc=1 [ownership-edge-cases.main]
-alloc Item #3 rc=0 [ownership-edge-cases.main]
+alloc Item #3 rc=0 size=8 [ownership-edge-cases.main]
 incref Item #3 rc=1 [ownership-edge-cases.main]
 incref Item #3 rc=2 [ownership-edge-cases.main]
 decref Item #3 rc=1 [ownership-edge-cases.main]
@@ -1432,11 +1443,11 @@ end 'main'
 7
 ```
 ```stderr
-alloc TokenChain #1 rc=0 [ownership-edge-cases.main]
+alloc TokenChain #1 rc=0 size=32 [ownership-edge-cases.main]
 incref TokenChain #1 rc=1 [ownership-edge-cases.main]
-alloc Token #2 rc=0 [ownership-edge-cases.main]
+alloc Token #2 rc=0 size=8 [ownership-edge-cases.main]
 incref Token #2 rc=1 [ownership-edge-cases.main]
-alloc __ChainNode #3 rc=0 [ownership-edge-cases.main]
+alloc __ChainNode #3 rc=0 size=32 [ownership-edge-cases.main]
 incref Token #2 rc=2 [ownership-edge-cases.main]
 incref __ChainNode #3 rc=1 [chain_insert]
 incref __ChainNode #3 rc=2 [ownership-edge-cases.main]
@@ -1473,11 +1484,11 @@ end 'main'
 9
 ```
 ```stderr
-alloc TokenChain #1 rc=0 [ownership-edge-cases.main]
+alloc TokenChain #1 rc=0 size=32 [ownership-edge-cases.main]
 incref TokenChain #1 rc=1 [ownership-edge-cases.main]
-alloc Token #2 rc=0 [ownership-edge-cases.main]
+alloc Token #2 rc=0 size=8 [ownership-edge-cases.main]
 incref Token #2 rc=1 [ownership-edge-cases.main]
-alloc __ChainNode #3 rc=0 [ownership-edge-cases.main]
+alloc __ChainNode #3 rc=0 size=32 [ownership-edge-cases.main]
 incref Token #2 rc=2 [ownership-edge-cases.main]
 incref __ChainNode #3 rc=1 [chain_insert]
 incref __ChainNode #3 rc=2 [ownership-edge-cases.main]
@@ -1518,21 +1529,21 @@ end 'main'
 0
 ```
 ```stderr
-alloc TokenChain #1 rc=0 [ownership-edge-cases.main]
+alloc TokenChain #1 rc=0 size=32 [ownership-edge-cases.main]
 incref TokenChain #1 rc=1 [ownership-edge-cases.main]
-alloc Token #2 rc=0 [ownership-edge-cases.main]
+alloc Token #2 rc=0 size=8 [ownership-edge-cases.main]
 incref Token #2 rc=1 [ownership-edge-cases.main]
-alloc __ChainNode #3 rc=0 [ownership-edge-cases.main]
+alloc __ChainNode #3 rc=0 size=32 [ownership-edge-cases.main]
 incref Token #2 rc=2 [ownership-edge-cases.main]
 incref __ChainNode #3 rc=1 [chain_insert]
-alloc Token #4 rc=0 [ownership-edge-cases.main]
+alloc Token #4 rc=0 size=8 [ownership-edge-cases.main]
 incref Token #4 rc=1 [ownership-edge-cases.main]
-alloc __ChainNode #5 rc=0 [ownership-edge-cases.main]
+alloc __ChainNode #5 rc=0 size=32 [ownership-edge-cases.main]
 incref Token #4 rc=2 [ownership-edge-cases.main]
 incref __ChainNode #5 rc=1 [chain_insert]
-alloc Token #6 rc=0 [ownership-edge-cases.main]
+alloc Token #6 rc=0 size=8 [ownership-edge-cases.main]
 incref Token #6 rc=1 [ownership-edge-cases.main]
-alloc __ChainNode #7 rc=0 [ownership-edge-cases.main]
+alloc __ChainNode #7 rc=0 size=32 [ownership-edge-cases.main]
 incref Token #6 rc=2 [ownership-edge-cases.main]
 incref __ChainNode #7 rc=1 [chain_insert]
 decref Token #2 rc=1 [chain_clear]
@@ -1577,15 +1588,15 @@ end 'main'
 99
 ```
 ```stderr
-alloc TokenChain #1 rc=0 [ownership-edge-cases.main]
+alloc TokenChain #1 rc=0 size=32 [ownership-edge-cases.main]
 incref TokenChain #1 rc=1 [ownership-edge-cases.main]
-alloc Token #2 rc=0 [ownership-edge-cases.main]
+alloc Token #2 rc=0 size=8 [ownership-edge-cases.main]
 incref Token #2 rc=1 [ownership-edge-cases.main]
-alloc __ChainNode #3 rc=0 [ownership-edge-cases.main]
+alloc __ChainNode #3 rc=0 size=32 [ownership-edge-cases.main]
 incref Token #2 rc=2 [ownership-edge-cases.main]
 incref __ChainNode #3 rc=1 [chain_insert]
 incref __ChainNode #3 rc=2 [ownership-edge-cases.main]
-alloc Token #4 rc=0 [ownership-edge-cases.main]
+alloc Token #4 rc=0 size=8 [ownership-edge-cases.main]
 incref Token #4 rc=1 [ownership-edge-cases.main]
 decref Token #2 rc=1 [ownership-edge-cases.main]
 incref Token #4 rc=2 [ownership-edge-cases.main]
@@ -1629,17 +1640,18 @@ end 'main'
 60
 ```
 ```stderr
-alloc __ManagedMemory_Score #1 rc=0 [ownership-edge-cases.main]
-alloc ScoreArray #2 rc=0 [ownership-edge-cases.main]
+alloc __ManagedMemory_Score #1 rc=0 size=32 [ownership-edge-cases.main]
+alloc ScoreArray #2 rc=0 size=16 [ownership-edge-cases.main]
 incref __ManagedMemory_Score #1 rc=1 [ownership-edge-cases.main]
 incref ScoreArray #2 rc=1 [ownership-edge-cases.main]
-alloc Score #3 rc=0 [ownership-edge-cases.main]
+alloc Score #3 rc=0 size=8 [ownership-edge-cases.main]
 incref Score #3 rc=1 [ownership-edge-cases.main]
+realloc __ManagedMemory_Score #1 rc=1 size=32
 incref Score #3 rc=2 [ScoreArray.push]
-alloc Score #4 rc=0 [ownership-edge-cases.main]
+alloc Score #4 rc=0 size=8 [ownership-edge-cases.main]
 incref Score #4 rc=1 [ownership-edge-cases.main]
 incref Score #4 rc=2 [ScoreArray.push]
-alloc Score #5 rc=0 [ownership-edge-cases.main]
+alloc Score #5 rc=0 size=8 [ownership-edge-cases.main]
 incref Score #5 rc=1 [ownership-edge-cases.main]
 incref Score #5 rc=2 [ScoreArray.push]
 incref ScoreArray #2 rc=2 [ownership-edge-cases.main]
@@ -1689,7 +1701,7 @@ end 'main'
 21
 ```
 ```stderr
-alloc Data #1 rc=0 [ownership-edge-cases.main]
+alloc Data #1 rc=0 size=8 [ownership-edge-cases.main]
 incref Data #1 rc=1 [ownership-edge-cases.main]
 incref Data #1 rc=2 [ownership-edge-cases.main]
 incref Data #1 rc=3 [ownership-edge-cases.main]
@@ -1728,27 +1740,30 @@ end 'main'
 2
 ```
 ```stderr
-alloc __ManagedMemory_CellArray #1 rc=0 [ownership-edge-cases.main]
-alloc Grid #2 rc=0 [ownership-edge-cases.main]
+alloc __ManagedMemory_CellArray #1 rc=0 size=32 [ownership-edge-cases.main]
+alloc Grid #2 rc=0 size=16 [ownership-edge-cases.main]
 incref __ManagedMemory_CellArray #1 rc=1 [ownership-edge-cases.main]
 incref Grid #2 rc=1 [ownership-edge-cases.main]
-alloc __ManagedMemory_Cell #3 rc=0 [ownership-edge-cases.main]
-alloc CellArray #4 rc=0 [ownership-edge-cases.main]
+alloc __ManagedMemory_Cell #3 rc=0 size=32 [ownership-edge-cases.main]
+alloc CellArray #4 rc=0 size=16 [ownership-edge-cases.main]
 incref __ManagedMemory_Cell #3 rc=1 [ownership-edge-cases.main]
 incref CellArray #4 rc=1 [ownership-edge-cases.main]
-alloc Cell #5 rc=0 [ownership-edge-cases.main]
+alloc Cell #5 rc=0 size=8 [ownership-edge-cases.main]
 incref Cell #5 rc=1 [ownership-edge-cases.main]
+realloc __ManagedMemory_Cell #3 rc=1 size=32
 incref Cell #5 rc=2 [CellArray.push]
-alloc Cell #6 rc=0 [ownership-edge-cases.main]
+alloc Cell #6 rc=0 size=8 [ownership-edge-cases.main]
 incref Cell #6 rc=1 [ownership-edge-cases.main]
 incref Cell #6 rc=2 [CellArray.push]
-alloc __ManagedMemory_Cell #7 rc=0 [ownership-edge-cases.main]
-alloc CellArray #8 rc=0 [ownership-edge-cases.main]
+alloc __ManagedMemory_Cell #7 rc=0 size=32 [ownership-edge-cases.main]
+alloc CellArray #8 rc=0 size=16 [ownership-edge-cases.main]
 incref __ManagedMemory_Cell #7 rc=1 [ownership-edge-cases.main]
 incref CellArray #8 rc=1 [ownership-edge-cases.main]
-alloc Cell #9 rc=0 [ownership-edge-cases.main]
+alloc Cell #9 rc=0 size=8 [ownership-edge-cases.main]
 incref Cell #9 rc=1 [ownership-edge-cases.main]
+realloc __ManagedMemory_Cell #7 rc=1 size=32
 incref Cell #9 rc=2 [CellArray.push]
+realloc __ManagedMemory_CellArray #1 rc=1 size=32
 incref CellArray #4 rc=2 [Grid.push]
 incref CellArray #8 rc=2 [Grid.push]
 decref CellArray #8 rc=1 [ownership-edge-cases.main]
@@ -1807,16 +1822,17 @@ end 'main'
 2
 ```
 ```stderr
-alloc __ManagedMemory_Entry #1 rc=0 [ownership-edge-cases.fill]
-alloc EntryArray #2 rc=0 [ownership-edge-cases.fill]
+alloc __ManagedMemory_Entry #1 rc=0 size=32 [ownership-edge-cases.fill]
+alloc EntryArray #2 rc=0 size=16 [ownership-edge-cases.fill]
 incref __ManagedMemory_Entry #1 rc=1 [ownership-edge-cases.fill]
-alloc Bucket #3 rc=0 [ownership-edge-cases.fill]
+alloc Bucket #3 rc=0 size=8 [ownership-edge-cases.fill]
 incref EntryArray #2 rc=1 [ownership-edge-cases.fill]
 incref Bucket #3 rc=1 [ownership-edge-cases.fill]
-alloc Entry #4 rc=0 [ownership-edge-cases.fill]
+alloc Entry #4 rc=0 size=8 [ownership-edge-cases.fill]
 incref Entry #4 rc=1 [ownership-edge-cases.fill]
+realloc __ManagedMemory_Entry #1 rc=1 size=32
 incref Entry #4 rc=2 [EntryArray.push]
-alloc Entry #5 rc=0 [ownership-edge-cases.fill]
+alloc Entry #5 rc=0 size=8 [ownership-edge-cases.fill]
 incref Entry #5 rc=1 [ownership-edge-cases.fill]
 incref Entry #5 rc=2 [EntryArray.push]
 decref Bucket #3 rc=0 [ownership-edge-cases.fill]
@@ -1859,7 +1875,7 @@ end 'main'
 10
 ```
 ```stderr
-alloc Pair #1 rc=0 [ownership-edge-cases.makePair]
+alloc Pair #1 rc=0 size=16 [ownership-edge-cases.makePair]
 incref Pair #1 rc=1 [ownership-edge-cases.makePair]
 transfer Pair #1 rc=1 [ownership-edge-cases.makePair]
 decref Pair #1 rc=0 [ownership-edge-cases.main]
@@ -1896,9 +1912,9 @@ end 'main'
 5
 ```
 ```stderr
-alloc Inner #1 rc=0 [ownership-edge-cases.main]
+alloc Inner #1 rc=0 size=8 [ownership-edge-cases.main]
 incref Inner #1 rc=1 [ownership-edge-cases.main]
-alloc Wrapper #2 rc=0 [ownership-edge-cases.wrap]
+alloc Wrapper #2 rc=0 size=8 [ownership-edge-cases.wrap]
 incref Inner #1 rc=2 [ownership-edge-cases.wrap]
 incref Wrapper #2 rc=1 [ownership-edge-cases.wrap]
 transfer Wrapper #2 rc=1 [ownership-edge-cases.wrap]
@@ -1925,15 +1941,15 @@ end 'main'
 0
 ```
 ```stderr
-alloc __Chain_String #1 rc=0 [ownership-edge-cases.main]
-alloc StringList #2 rc=0 [ownership-edge-cases.main]
+alloc __Chain_String #1 rc=0 size=32 [ownership-edge-cases.main]
+alloc StringList #2 rc=0 size=16 [ownership-edge-cases.main]
 incref __Chain_String #1 rc=1 [ownership-edge-cases.main]
 incref StringList #2 rc=1 [ownership-edge-cases.main]
-alloc String #3 rc=0 [ownership-edge-cases.main]
-alloc __ManagedMemory #4 rc=0 [ownership-edge-cases.main]
+alloc String #3 rc=0 size=16 [ownership-edge-cases.main]
+alloc __ManagedMemory #4 rc=0 size=32 [ownership-edge-cases.main]
 incref __ManagedMemory #4 rc=1 [ownership-edge-cases.main]
 incref String #3 rc=1 [ownership-edge-cases.main]
-alloc __ChainNode #5 rc=0 [StringList.append]
+alloc __ChainNode #5 rc=0 size=32 [StringList.append]
 incref String #3 rc=2 [StringList.append]
 incref __ChainNode #5 rc=1 [chain_insert]
 decref String #3 rc=1 [ownership-edge-cases.main]
@@ -1966,14 +1982,14 @@ end 'main'
 1
 ```
 ```stderr
-alloc String #1 rc=0 [ownership-edge-cases.main]
-alloc __ManagedMemory #2 rc=0 [ownership-edge-cases.main]
+alloc String #1 rc=0 size=16 [ownership-edge-cases.main]
+alloc __ManagedMemory #2 rc=0 size=32 [ownership-edge-cases.main]
 incref __ManagedMemory #2 rc=1 [ownership-edge-cases.main]
 incref String #1 rc=1 [ownership-edge-cases.main]
 incref String #1 rc=2 [ownership-edge-cases.main]
 incref String #1 rc=3 [ownership-edge-cases.main]
-alloc String #3 rc=0 [ownership-edge-cases.main]
-alloc __ManagedMemory #4 rc=0 [ownership-edge-cases.main]
+alloc String #3 rc=0 size=16 [ownership-edge-cases.main]
+alloc __ManagedMemory #4 rc=0 size=32 [ownership-edge-cases.main]
 incref __ManagedMemory #4 rc=1 [ownership-edge-cases.main]
 incref String #3 rc=1 [ownership-edge-cases.main]
 decref String #3 rc=0 [ownership-edge-cases.main]
@@ -2001,8 +2017,8 @@ end 'main'
 1
 ```
 ```stderr
-alloc Character #1 rc=0 [ownership-edge-cases.main]
-alloc __ManagedMemory #2 rc=0 [ownership-edge-cases.main]
+alloc Character #1 rc=0 size=16 [ownership-edge-cases.main]
+alloc __ManagedMemory #2 rc=0 size=32 [ownership-edge-cases.main]
 incref __ManagedMemory #2 rc=1 [ownership-edge-cases.main]
 incref Character #1 rc=1 [ownership-edge-cases.main]
 incref Character #1 rc=2 [ownership-edge-cases.main]
@@ -2027,8 +2043,8 @@ end 'main'
 2
 ```
 ```stderr
-alloc Character #1 rc=0 [ownership-edge-cases.main]
-alloc __ManagedMemory #2 rc=0 [ownership-edge-cases.main]
+alloc Character #1 rc=0 size=16 [ownership-edge-cases.main]
+alloc __ManagedMemory #2 rc=0 size=32 [ownership-edge-cases.main]
 incref __ManagedMemory #2 rc=1 [ownership-edge-cases.main]
 incref Character #1 rc=1 [ownership-edge-cases.main]
 incref Character #1 rc=2 [ownership-edge-cases.main]
@@ -2055,13 +2071,13 @@ end 'main'
 1
 ```
 ```stderr
-alloc Character #1 rc=0 [ownership-edge-cases.main]
-alloc __ManagedMemory #2 rc=0 [ownership-edge-cases.main]
+alloc Character #1 rc=0 size=16 [ownership-edge-cases.main]
+alloc __ManagedMemory #2 rc=0 size=32 [ownership-edge-cases.main]
 incref __ManagedMemory #2 rc=1 [ownership-edge-cases.main]
 incref Character #1 rc=1 [ownership-edge-cases.main]
 incref Character #1 rc=2 [ownership-edge-cases.main]
-alloc Character #3 rc=0 [ownership-edge-cases.main]
-alloc __ManagedMemory #4 rc=0 [ownership-edge-cases.main]
+alloc Character #3 rc=0 size=16 [ownership-edge-cases.main]
+alloc __ManagedMemory #4 rc=0 size=32 [ownership-edge-cases.main]
 incref __ManagedMemory #4 rc=1 [ownership-edge-cases.main]
 incref Character #3 rc=1 [ownership-edge-cases.main]
 decref Character #1 rc=1 [ownership-edge-cases.main]
@@ -2094,8 +2110,8 @@ end 'main'
 1
 ```
 ```stderr
-alloc Character #1 rc=0 [ownership-edge-cases.makeChar]
-alloc __ManagedMemory #2 rc=0 [ownership-edge-cases.makeChar]
+alloc Character #1 rc=0 size=16 [ownership-edge-cases.makeChar]
+alloc __ManagedMemory #2 rc=0 size=32 [ownership-edge-cases.makeChar]
 incref __ManagedMemory #2 rc=1 [ownership-edge-cases.makeChar]
 incref Character #1 rc=1 [ownership-edge-cases.makeChar]
 transfer Character #1 rc=1 [ownership-edge-cases.makeChar]
@@ -2122,8 +2138,8 @@ end 'main'
 1
 ```
 ```stderr
-alloc Character #1 rc=0 [ownership-edge-cases.main]
-alloc __ManagedMemory #2 rc=0 [ownership-edge-cases.main]
+alloc Character #1 rc=0 size=16 [ownership-edge-cases.main]
+alloc __ManagedMemory #2 rc=0 size=32 [ownership-edge-cases.main]
 incref __ManagedMemory #2 rc=1 [ownership-edge-cases.main]
 incref Character #1 rc=1 [ownership-edge-cases.main]
 incref Character #1 rc=2 [ownership-edge-cases.main]
@@ -2147,7 +2163,7 @@ end 'main'
 10
 ```
 ```stderr
-alloc __Tuple_i64_i64 #1 rc=0 [ownership-edge-cases.main]
+alloc __Tuple_i64_i64 #1 rc=0 size=16 [ownership-edge-cases.main]
 incref __Tuple_i64_i64 #1 rc=1 [ownership-edge-cases.main]
 decref __Tuple_i64_i64 #1 rc=0 [ownership-edge-cases.main]
   free __Tuple_i64_i64 #1
@@ -2167,7 +2183,7 @@ end 'main'
 10
 ```
 ```stderr
-alloc __Tuple_i64_i64 #1 rc=0 [ownership-edge-cases.main]
+alloc __Tuple_i64_i64 #1 rc=0 size=16 [ownership-edge-cases.main]
 incref __Tuple_i64_i64 #1 rc=1 [ownership-edge-cases.main]
 incref __Tuple_i64_i64 #1 rc=2 [ownership-edge-cases.main]
 decref __Tuple_i64_i64 #1 rc=1 [ownership-edge-cases.main]
@@ -2189,9 +2205,9 @@ end 'main'
 7
 ```
 ```stderr
-alloc __Tuple_i64_i64 #1 rc=0 [ownership-edge-cases.main]
+alloc __Tuple_i64_i64 #1 rc=0 size=16 [ownership-edge-cases.main]
 incref __Tuple_i64_i64 #1 rc=1 [ownership-edge-cases.main]
-alloc __Tuple_i64_i64 #2 rc=0 [ownership-edge-cases.main]
+alloc __Tuple_i64_i64 #2 rc=0 size=16 [ownership-edge-cases.main]
 incref __Tuple_i64_i64 #2 rc=1 [ownership-edge-cases.main]
 decref __Tuple_i64_i64 #1 rc=0 [ownership-edge-cases.main]
   free __Tuple_i64_i64 #1
@@ -2214,11 +2230,11 @@ end 'main'
 42
 ```
 ```stderr
-alloc String #1 rc=0 [ownership-edge-cases.main]
-alloc __ManagedMemory #2 rc=0 [ownership-edge-cases.main]
+alloc String #1 rc=0 size=16 [ownership-edge-cases.main]
+alloc __ManagedMemory #2 rc=0 size=32 [ownership-edge-cases.main]
 incref __ManagedMemory #2 rc=1 [ownership-edge-cases.main]
 incref String #1 rc=1 [ownership-edge-cases.main]
-alloc __Tuple_i64_String #3 rc=0 [ownership-edge-cases.main]
+alloc __Tuple_i64_String #3 rc=0 size=16 [ownership-edge-cases.main]
 incref String #1 rc=2 [ownership-edge-cases.main]
 incref __Tuple_i64_String #3 rc=1 [ownership-edge-cases.main]
 decref String #1 rc=1 [ownership-edge-cases.main]
@@ -2249,7 +2265,7 @@ end 'main'
 8
 ```
 ```stderr
-alloc __Tuple_i64_i64 #1 rc=0 [ownership-edge-cases.makePair]
+alloc __Tuple_i64_i64 #1 rc=0 size=16 [ownership-edge-cases.makePair]
 incref __Tuple_i64_i64 #1 rc=1 [ownership-edge-cases.makePair]
 transfer __Tuple_i64_i64 #1 rc=1 [ownership-edge-cases.makePair]
 decref __Tuple_i64_i64 #1 rc=0 [ownership-edge-cases.main]
@@ -2270,7 +2286,7 @@ end 'main'
 30
 ```
 ```stderr
-alloc __Tuple_i64_i64 #1 rc=0 [ownership-edge-cases.main]
+alloc __Tuple_i64_i64 #1 rc=0 size=16 [ownership-edge-cases.main]
 incref __Tuple_i64_i64 #1 rc=1 [ownership-edge-cases.main]
 incref __Tuple_i64_i64 #1 rc=2 [ownership-edge-cases.main]
 decref __Tuple_i64_i64 #1 rc=1 [ownership-edge-cases.main]
@@ -2298,8 +2314,8 @@ end 'main'
 1
 ```
 ```stderr
-alloc Point #1 rc=0 [ownership-edge-cases.main]
-alloc __Tuple_i64_Point #2 rc=0 [ownership-edge-cases.main]
+alloc Point #1 rc=0 size=16 [ownership-edge-cases.main]
+alloc __Tuple_i64_Point #2 rc=0 size=16 [ownership-edge-cases.main]
 incref Point #1 rc=1 [ownership-edge-cases.main]
 incref __Tuple_i64_Point #2 rc=1 [ownership-edge-cases.main]
 decref __Tuple_i64_Point #2 rc=0 [ownership-edge-cases.main]

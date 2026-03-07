@@ -85,35 +85,41 @@ public partial class X86CodeEmitter {
   }
 
   /// <summary>
-  /// maxon_cow_check(buffer_in_rcx, capacity_in_rdx, length_in_r8, elemSize_in_r9) -> new_buffer_in_rax
+  /// maxon_cow_check(buffer_in_rcx, capacity_in_rdx, byteLen_in_r8, managedPtr_in_r9) -> new_buffer_in_rax
   /// If capacity != 0, buffer is already writable — return it as-is.
-  /// If capacity == 0, allocate length*elemSize bytes via mm_raw_alloc, copy from old buffer, return new buffer.
+  /// If capacity == 0, allocate byteLen bytes via mm_raw_alloc, copy from old buffer, return new buffer.
   /// The old rdata buffer is NOT freed (capacity==0 identifies rdata).
+  /// managedPtr is the owning managed struct's heap pointer, used for --mm-trace output.
   /// </summary>
   private void EmitMaxonCowCheck() {
-    // Args: rcx=buffer, rdx=capacity, r8=length, r9=elemSize
-    // Stack: [rbp-0x08]=buffer, [rbp-0x10]=capacity, [rbp-0x18]=length,
-    //        [rbp-0x20]=elemSize,
-    //        [rbp-0x28]=byteLen, [rbp-0x30]=new_buffer
+    // Args: rcx=buffer, rdx=capacity, r8=byteLen, r9=managedPtr
+    // Stack: [rbp-0x08]=buffer, [rbp-0x10]=capacity, [rbp-0x18]=byteLen,
+    //        [rbp-0x20]=managedPtr, [rbp-0x28]=new_buffer
     EmitRuntimeFunctionStart("maxon_cow_check", 4, 0x60);
     // TEST rdx, rdx (check capacity)
     EmitBytes(0x48, 0x85, 0xD2);
     EmitJcc("nz", "rt_cow_writable");
-    // COW path: compute byteLen = length * elemSize
-    EmitMovRegMem(X86Register.Rax, -0x18, 8); // RAX = length
-    EmitBytes(0x49, 0x0F, 0xAF, 0xC1);       // IMUL RAX, R9 (byteLen = length * elemSize)
-    EmitMovMemReg(-0x28, X86Register.Rax, 8); // [rbp-0x28] = byteLen
-    // mm_raw_alloc(size=byteLen) — raw HeapAlloc, no refcount header
-    EmitMovRegReg(X86Register.Rcx, X86Register.Rax); // RCX = byteLen
+    // If byteLen == 0, nothing to copy — skip COW (e.g. empty array)
+    EmitMovRegMem(X86Register.Rax, -0x18, 8); // RAX = byteLen
+    EmitBytes(0x48, 0x85, 0xC0); // TEST rax, rax
+    EmitJcc("z", "rt_cow_writable");
+    // COW path: allocate byteLen bytes, copy old buffer
+    EmitMovRegMem(X86Register.Rcx, -0x18, 8); // RCX = byteLen
     EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_raw_alloc")); EmitDword(0);
-    EmitMovMemReg(-0x30, X86Register.Rax, 8); // [rbp-0x30] = new buffer
+    EmitMovMemReg(-0x28, X86Register.Rax, 8); // [rbp-0x28] = new buffer
     // rep movsb: RSI=src, RDI=dst, RCX=count
     EmitMovRegMem(X86Register.Rsi, -0x08, 8);  // RSI = old buffer
-    EmitMovRegMem(X86Register.Rdi, -0x30, 8);  // RDI = new buffer
-    EmitMovRegMem(X86Register.Rcx, -0x28, 8);  // RCX = byteLen
+    EmitMovRegMem(X86Register.Rdi, -0x28, 8);  // RDI = new buffer
+    EmitMovRegMem(X86Register.Rcx, -0x18, 8);  // RCX = byteLen
     EmitBytes(0xF3, 0xA4); // REP MOVSB
+    if (Compiler.MmTrace) {
+      // Trace COW copy using the owning managed struct's header
+      EmitXorRegReg(X86Register.Rcx, X86Register.Rcx);
+      EmitMovMemReg(-0x30, X86Register.Rcx, 8); // [rbp-0x30] = 0 (no scope)
+      EmitInlineTrace("__mm_tag_cow", "cow_check_trace", -0x20, -0x30, sizeSlot: -0x18);
+    }
     // Return new buffer
-    EmitMovRegMem(X86Register.Rax, -0x30, 8);
+    EmitMovRegMem(X86Register.Rax, -0x28, 8);
     EmitJmp("rt_cow_epilogue");
     // already_writable: return old buffer
     DefineLabel("rt_cow_writable");
@@ -2677,13 +2683,14 @@ public partial class X86CodeEmitter {
   }
 
   /// <summary>
-  /// mm_raw_realloc(ptr_rcx, new_size_rdx) -> new_ptr_rax
+  /// mm_raw_realloc(ptr_rcx, new_size_rdx, managedPtr_r8) -> new_ptr_rax
   /// Simple HeapReAlloc wrapper for raw buffers (no refcount header).
   /// If ptr is NULL, delegates to mm_raw_alloc(new_size).
+  /// managedPtr is the owning managed struct's heap pointer, used for --mm-trace output.
   /// </summary>
   private void EmitMmRawRealloc() {
-    EmitRuntimeFunctionStart("mm_raw_realloc", 2, 0x30);
-    // [rbp-8] = ptr, [rbp-16] = new_size
+    EmitRuntimeFunctionStart("mm_raw_realloc", 3, 0x40);
+    // [rbp-8] = ptr, [rbp-16] = new_size, [rbp-24] = managedPtr
     EmitMovRegMem(X86Register.Rax, -0x08, 8); // RAX = ptr
     EmitBytes(0x48, 0x85, 0xC0); // TEST rax, rax
     EmitJcc("nz", "mm_raw_realloc_not_null");
@@ -2700,6 +2707,13 @@ public partial class X86CodeEmitter {
     EmitMovRegMem(X86Register.R9, -0x10, 8);             // arg4: new_size
     EmitCallImport("kernel32.dll", "HeapReAlloc");
     DefineLabel("mm_raw_realloc_done");
+    if (Compiler.MmTrace) {
+      EmitMovMemReg(-0x28, X86Register.Rax, 8); // save new_ptr
+      EmitXorRegReg(X86Register.Rcx, X86Register.Rcx);
+      EmitMovMemReg(-0x30, X86Register.Rcx, 8); // [rbp-0x30] = 0 (no scope)
+      EmitInlineTrace("__mm_tag_realloc", "mm_raw_realloc_trace", -0x18, -0x30, sizeSlot: -0x10);
+      EmitMovRegMem(X86Register.Rax, -0x28, 8); // restore new_ptr
+    }
     EmitRuntimeFunctionEnd();
   }
 

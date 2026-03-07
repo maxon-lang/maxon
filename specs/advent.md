@@ -378,19 +378,19 @@ module {
   }
   func @__destruct___ManagedMemory_String(ptr: i64) {
   entry:
-    %207 = func.param ptr : StdI64
-    memref.store %207, __destr_ptr
-    %210 = memref.load __destr_ptr : i64
-    %211 = memref.load_indirect %210+16
-    %212 = arith.constant {value = 0 : i64}
-    %213 = arith.cmpi ne %211, %212
-    cf.cond_br %213 [then: free_buf_0, else: skip_buf_0]
+    %210 = func.param ptr : StdI64
+    memref.store %210, __destr_ptr
+    %213 = memref.load __destr_ptr : i64
+    %214 = memref.load_indirect %213+16
+    %215 = arith.constant {value = 0 : i64}
+    %216 = arith.cmpi ne %214, %215
+    cf.cond_br %216 [then: free_buf_0, else: skip_buf_0]
   free_buf_0:
-    %214 = memref.load __destr_ptr : i64
-    std.call_runtime @mm_decref_managed_elements %214
-    %215 = memref.load __destr_ptr : i64
-    %216 = memref.load_indirect %215+0
-    std.call_runtime @mm_raw_free %216
+    %217 = memref.load __destr_ptr : i64
+    std.call_runtime @mm_decref_managed_elements %217
+    %218 = memref.load __destr_ptr : i64
+    %219 = memref.load_indirect %218+0
+    std.call_runtime @mm_raw_free %219
     cf.br skip_buf_0
   skip_buf_0:
     cf.br done
@@ -399,28 +399,28 @@ module {
   }
   func @__destruct_StringArray(ptr: i64) {
   entry:
-    %217 = func.param ptr : StdI64
-    memref.store %217, __destr_ptr
-    %218 = memref.load __destr_ptr : i64
-    %219 = memref.load_indirect %218+8
-    std.call_runtime_if_nonnull @mm_decref %219
+    %220 = func.param ptr : StdI64
+    memref.store %220, __destr_ptr
+    %221 = memref.load __destr_ptr : i64
+    %222 = memref.load_indirect %221+8
+    std.call_runtime_if_nonnull @mm_decref %222
     cf.br done
   done:
     func.return
   }
   func @__destruct___ManagedMemory(ptr: i64) {
   entry:
-    %220 = func.param ptr : StdI64
-    memref.store %220, __destr_ptr
-    %223 = memref.load __destr_ptr : i64
-    %224 = memref.load_indirect %223+16
-    %225 = arith.constant {value = 0 : i64}
-    %226 = arith.cmpi ne %224, %225
-    cf.cond_br %226 [then: free_buf_0, else: skip_buf_0]
+    %223 = func.param ptr : StdI64
+    memref.store %223, __destr_ptr
+    %226 = memref.load __destr_ptr : i64
+    %227 = memref.load_indirect %226+16
+    %228 = arith.constant {value = 0 : i64}
+    %229 = arith.cmpi ne %227, %228
+    cf.cond_br %229 [then: free_buf_0, else: skip_buf_0]
   free_buf_0:
-    %227 = memref.load __destr_ptr : i64
-    %228 = memref.load_indirect %227+0
-    std.call_runtime @mm_raw_free %228
+    %230 = memref.load __destr_ptr : i64
+    %231 = memref.load_indirect %230+0
+    std.call_runtime @mm_raw_free %231
     cf.br skip_buf_0
   skip_buf_0:
     cf.br done
@@ -429,22 +429,22 @@ module {
   }
   func @__destruct_String(ptr: i64) {
   entry:
-    %229 = func.param ptr : StdI64
-    memref.store %229, __destr_ptr
-    %230 = memref.load __destr_ptr : i64
-    %231 = memref.load_indirect %230+0
-    std.call_runtime_if_nonnull @mm_decref %231
+    %232 = func.param ptr : StdI64
+    memref.store %232, __destr_ptr
+    %233 = memref.load __destr_ptr : i64
+    %234 = memref.load_indirect %233+0
+    std.call_runtime_if_nonnull @mm_decref %234
     cf.br done
   done:
     func.return
   }
   func @__destruct_CodepointView(ptr: i64) {
   entry:
-    %232 = func.param ptr : StdI64
-    memref.store %232, __destr_ptr
-    %233 = memref.load __destr_ptr : i64
-    %234 = memref.load_indirect %233+0
-    std.call_runtime_if_nonnull @mm_decref %234
+    %235 = func.param ptr : StdI64
+    memref.store %235, __destr_ptr
+    %236 = memref.load __destr_ptr : i64
+    %237 = memref.load_indirect %236+0
+    std.call_runtime_if_nonnull @mm_decref %237
     cf.br done
   done:
     func.return
@@ -925,19 +925,19 @@ module {
   }
   func @__destruct___ManagedMemory_String(ptr: i64) {
   entry:
-    %208 = func.param ptr : StdI64
-    memref.store %208, __destr_ptr
-    %211 = memref.load __destr_ptr : i64
-    %212 = memref.load_indirect %211+16
-    %213 = arith.constant {value = 0 : i64}
-    %214 = arith.cmpi ne %212, %213
-    cf.cond_br %214 [then: free_buf_0, else: skip_buf_0]
+    %211 = func.param ptr : StdI64
+    memref.store %211, __destr_ptr
+    %214 = memref.load __destr_ptr : i64
+    %215 = memref.load_indirect %214+16
+    %216 = arith.constant {value = 0 : i64}
+    %217 = arith.cmpi ne %215, %216
+    cf.cond_br %217 [then: free_buf_0, else: skip_buf_0]
   free_buf_0:
-    %215 = memref.load __destr_ptr : i64
-    std.call_runtime @mm_decref_managed_elements %215
-    %216 = memref.load __destr_ptr : i64
-    %217 = memref.load_indirect %216+0
-    std.call_runtime @mm_raw_free %217
+    %218 = memref.load __destr_ptr : i64
+    std.call_runtime @mm_decref_managed_elements %218
+    %219 = memref.load __destr_ptr : i64
+    %220 = memref.load_indirect %219+0
+    std.call_runtime @mm_raw_free %220
     cf.br skip_buf_0
   skip_buf_0:
     cf.br done
@@ -946,28 +946,28 @@ module {
   }
   func @__destruct_StringArray(ptr: i64) {
   entry:
-    %218 = func.param ptr : StdI64
-    memref.store %218, __destr_ptr
-    %219 = memref.load __destr_ptr : i64
-    %220 = memref.load_indirect %219+8
-    std.call_runtime_if_nonnull @mm_decref %220
+    %221 = func.param ptr : StdI64
+    memref.store %221, __destr_ptr
+    %222 = memref.load __destr_ptr : i64
+    %223 = memref.load_indirect %222+8
+    std.call_runtime_if_nonnull @mm_decref %223
     cf.br done
   done:
     func.return
   }
   func @__destruct___ManagedMemory(ptr: i64) {
   entry:
-    %221 = func.param ptr : StdI64
-    memref.store %221, __destr_ptr
-    %224 = memref.load __destr_ptr : i64
-    %225 = memref.load_indirect %224+16
-    %226 = arith.constant {value = 0 : i64}
-    %227 = arith.cmpi ne %225, %226
-    cf.cond_br %227 [then: free_buf_0, else: skip_buf_0]
+    %224 = func.param ptr : StdI64
+    memref.store %224, __destr_ptr
+    %227 = memref.load __destr_ptr : i64
+    %228 = memref.load_indirect %227+16
+    %229 = arith.constant {value = 0 : i64}
+    %230 = arith.cmpi ne %228, %229
+    cf.cond_br %230 [then: free_buf_0, else: skip_buf_0]
   free_buf_0:
-    %228 = memref.load __destr_ptr : i64
-    %229 = memref.load_indirect %228+0
-    std.call_runtime @mm_raw_free %229
+    %231 = memref.load __destr_ptr : i64
+    %232 = memref.load_indirect %231+0
+    std.call_runtime @mm_raw_free %232
     cf.br skip_buf_0
   skip_buf_0:
     cf.br done
@@ -976,22 +976,22 @@ module {
   }
   func @__destruct_String(ptr: i64) {
   entry:
-    %230 = func.param ptr : StdI64
-    memref.store %230, __destr_ptr
-    %231 = memref.load __destr_ptr : i64
-    %232 = memref.load_indirect %231+0
-    std.call_runtime_if_nonnull @mm_decref %232
+    %233 = func.param ptr : StdI64
+    memref.store %233, __destr_ptr
+    %234 = memref.load __destr_ptr : i64
+    %235 = memref.load_indirect %234+0
+    std.call_runtime_if_nonnull @mm_decref %235
     cf.br done
   done:
     func.return
   }
   func @__destruct_CodepointView(ptr: i64) {
   entry:
-    %233 = func.param ptr : StdI64
-    memref.store %233, __destr_ptr
-    %234 = memref.load __destr_ptr : i64
-    %235 = memref.load_indirect %234+0
-    std.call_runtime_if_nonnull @mm_decref %235
+    %236 = func.param ptr : StdI64
+    memref.store %236, __destr_ptr
+    %237 = memref.load __destr_ptr : i64
+    %238 = memref.load_indirect %237+0
+    std.call_runtime_if_nonnull @mm_decref %238
     cf.br done
   done:
     func.return

@@ -292,8 +292,10 @@ public static partial class MaxonToStandardConversion {
 		block.AddOp(newByteSizeOp);
 
 		// Raw realloc: buffer has no refcount header (it's a raw HeapAlloc pointer)
+		// Pass managedPtr as 3rd arg so mm_raw_realloc can emit trace output
+		var growManagedPtr = (StdI64)EmitLoad(block, managedVarName, varTypes);
 		var newBufferResult = new StdI64(MlirContext.Current.NextId());
-		block.AddOp(new StdCallRuntimeOp("mm_raw_realloc", [oldBuffer, newByteSizeOp.Result], newBufferResult));
+		block.AddOp(new StdCallRuntimeOp("mm_raw_realloc", [oldBuffer, newByteSizeOp.Result, growManagedPtr], newBufferResult));
 
 		// Update managed struct fields through heap pointer
 		var newBufReload = newBufferResult;
@@ -432,8 +434,12 @@ public static partial class MaxonToStandardConversion {
 		EmitStore(block, length, cowLenVar, varTypes);
 
 		var managedPtr = (StdI64)EmitLoad(block, managedVarName, varTypes);
+		// Compute byteLen = length * elemSize so we can pass it as a single arg
+		var byteLenOp = new StdMulI64Op(length, elemSize);
+		block.AddOp(byteLenOp);
 		var newBuffer = new StdI64(MlirContext.Current.NextId());
-		block.AddOp(new StdCallRuntimeOp("maxon_cow_check", [oldBuffer, capacity, length, elemSize, managedPtr], newBuffer));
+		// Args: buffer, capacity, byteLen, managedPtr (4 register args, no stack args)
+		block.AddOp(new StdCallRuntimeOp("maxon_cow_check", [oldBuffer, capacity, byteLenOp.Result, managedPtr], newBuffer));
 
 		EmitStructFieldStore(block, newBuffer, managedVarName, ManagedFieldBuffer, MlirType.I64, varTypes);
 		// If COW triggered (capacity was 0), new capacity = length; otherwise keep original

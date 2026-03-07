@@ -4991,10 +4991,26 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     return ResolveVariable(name) switch {
       ResolvedVar.Local(var info) => new ExprResult.VarRef(name, info),
       ResolvedVar.Global(var info) => EmitGlobalLoad(name, info),
-      null => throw new CompileError(ErrorCode.SemanticUndefinedVariable,
-        $"Undefined variable '{name}'", token.Line, token.Column),
+      null => throw CreateUndefinedVariableError(name, token),
       _ => throw new InvalidOperationException()
     };
+  }
+
+  private CompileError CreateUndefinedVariableError(string name, Token token,
+      ErrorCode fallbackCode = ErrorCode.SemanticUndefinedVariable) {
+    if (_typeRegistry.TryGetValue(name, out var type)) {
+      var isGeneric = type is MlirStructType st && st.AssociatedTypeNames.Count > 0
+        || type is MlirUnionType ut && ut.AssociatedTypeNames.Count > 0;
+      if (isGeneric)
+        return new CompileError(ErrorCode.SemanticUndefinedVariable,
+          $"'{name}' requires a typealias before use, e.g.: typealias My{name} = {name} with <type>",
+          token.Line, token.Column);
+      return new CompileError(ErrorCode.SemanticUndefinedVariable,
+        $"'{name}' is a type and cannot be used directly as a value",
+        token.Line, token.Column);
+    }
+    return new CompileError(fallbackCode,
+      $"Undefined variable '{name}'", token.Line, token.Column);
   }
 
   private ExprResult.Direct EmitGlobalLoad(string name, GlobalVarInfo info) {
@@ -5024,9 +5040,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
         _currentBlock!.AddOp(loadOp);
         return (loadOp.Result, info.TypeName);
     }
-    throw new CompileError(ErrorCode.SemanticUndefinedVariable,
-      $"Undefined variable '{name}'",
-      nameToken.Line, nameToken.Column);
+    throw CreateUndefinedVariableError(name, nameToken);
   }
 
   private void ParseNestedFieldMethodCall() {
@@ -5878,7 +5892,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     Expect(TokenType.Equals);
 
     var resolved = ResolveVariable(name)
-      ?? throw new CompileError(ErrorCode.ParserExpectedExpression, $"Undefined variable '{name}'", nameToken.Line, nameToken.Column);
+      ?? throw CreateUndefinedVariableError(name, nameToken, ErrorCode.ParserExpectedExpression);
 
     if (!resolved.IsMutable) {
       throw new CompileError(ErrorCode.ParserImmutableVariable,
@@ -9707,7 +9721,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
         return new ExprResult.Direct(fnRefOp.Result);
       }
 
-      throw new CompileError(ErrorCode.ParserExpectedExpression, $"Undefined variable '{token.Value}'", token.Line, token.Column);
+      throw CreateUndefinedVariableError(token.Value, token, ErrorCode.ParserExpectedExpression);
     }
 
     // Keywords used as variable names (e.g., parameter named 'with')

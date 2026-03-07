@@ -195,6 +195,7 @@ i8[] 10, 20, 30
 ```
 
 <!-- test: rdata-cow-mutation-copies-to-heap -->
+<!-- MmTrace -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
@@ -207,6 +208,17 @@ end 'main'
 ```
 ```exitcode
 77
+```
+```stderr
+alloc __ManagedMemory #1 rc=0 size=32 [codegen-internals.main]
+alloc IntArray #2 rc=0 size=16 [codegen-internals.main]
+incref __ManagedMemory #1 rc=1 [codegen-internals.main]
+incref IntArray #2 rc=1 [codegen-internals.main]
+cow __ManagedMemory #1 rc=1 size=8
+decref IntArray #2 rc=0 [codegen-internals.main]
+decref __ManagedMemory #1 rc=0 [~IntArray]
+  free __ManagedMemory #1
+  free IntArray #2
 ```
 ```RequiredRdata
 i64 42
@@ -339,17 +351,17 @@ module {
   }
   func @__destruct___ManagedMemory(ptr: i64) {
   entry:
-    %118 = func.param ptr : StdI64
-    memref.store %118, __destr_ptr
-    %121 = memref.load __destr_ptr : i64
-    %122 = memref.load_indirect %121+16
-    %123 = arith.constant {value = 0 : i64}
-    %124 = arith.cmpi ne %122, %123
-    cf.cond_br %124 [then: free_buf_0, else: skip_buf_0]
+    %119 = func.param ptr : StdI64
+    memref.store %119, __destr_ptr
+    %122 = memref.load __destr_ptr : i64
+    %123 = memref.load_indirect %122+16
+    %124 = arith.constant {value = 0 : i64}
+    %125 = arith.cmpi ne %123, %124
+    cf.cond_br %125 [then: free_buf_0, else: skip_buf_0]
   free_buf_0:
-    %125 = memref.load __destr_ptr : i64
-    %126 = memref.load_indirect %125+0
-    std.call_runtime @mm_raw_free %126
+    %126 = memref.load __destr_ptr : i64
+    %127 = memref.load_indirect %126+0
+    std.call_runtime @mm_raw_free %127
     cf.br skip_buf_0
   skip_buf_0:
     cf.br done
@@ -358,11 +370,11 @@ module {
   }
   func @__destruct_IntArray(ptr: i64) {
   entry:
-    %127 = func.param ptr : StdI64
-    memref.store %127, __destr_ptr
-    %128 = memref.load __destr_ptr : i64
-    %129 = memref.load_indirect %128+8
-    std.call_runtime_if_nonnull @mm_decref %129
+    %128 = func.param ptr : StdI64
+    memref.store %128, __destr_ptr
+    %129 = memref.load __destr_ptr : i64
+    %130 = memref.load_indirect %129+8
+    std.call_runtime_if_nonnull @mm_decref %130
     cf.br done
   done:
     func.return

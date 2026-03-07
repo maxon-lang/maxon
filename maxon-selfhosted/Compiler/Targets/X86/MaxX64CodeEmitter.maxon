@@ -475,7 +475,7 @@ export function emitX86(module MlirModule, target TargetTriple, osDesc OsDescrip
 
         // Block offset table for this function (indexed by BlockId)
         var blockOffsets = CodeOffsetArray{}
-        for bAlloc in 0 upto func.region.nextBlockId 'alloc'
+        for _ in 0 upto func.region.nextBlockId 'alloc'
             blockOffsets.push(0)
         end 'alloc'
 
@@ -514,13 +514,13 @@ end 'emitX86'
 function emitMaxX64MlirOp(op MlirOp, code ByteArray, blockFixups BlockJumpFixupArray, callFixups CallFixupArray, writeStdoutOff CodeOffset, i64ToStringOff CodeOffset)
     match op 'dispatch'
         maxx64(x64Op) then emitMaxX64Op(x64Op, code: code, blockFixups: blockFixups, callFixups: callFixups, writeStdoutOff: writeStdoutOff, i64ToStringOff: i64ToStringOff)
-        arith(arithOp) then break 'dispatch'
-        cf(cfOp) then break 'dispatch'
-        func(funcOp) then break 'dispatch'
-        memref(memOp) then break 'dispatch'
-        runtime(rtOp) then break 'dispatch'
-        maxarm64(armOp) then break 'dispatch'
-        maxhl(hlOp) then break 'dispatch'
+        arith(_) then break 'dispatch'
+        cf(_) then break 'dispatch'
+        func(_) then break 'dispatch'
+        memref(_) then break 'dispatch'
+        runtime(_) then break 'dispatch'
+        maxarm64(_) then break 'dispatch'
+        maxhl(_) then break 'dispatch'
     end 'dispatch'
 end 'emitMaxX64MlirOp'
 
@@ -529,21 +529,21 @@ function emitMaxX64Op(op MaxX64Op, code ByteArray, blockFixups BlockJumpFixupArr
     match op 'emit'
         prologue(stackSize) then emitPrologue(code, stackSize: stackSize)
         MaxX64Op.epilogue then emitEpilogue(code)
-        movRegImm(dest, value) then emitMovRegImm(code, value: value)
-        movSlot(slotIndex, srcReg) then emitMovSlot(code, slotIndex: slotIndex)
+        movRegImm(_, value) then emitMovRegImm(code, value: value)
+        movSlot(slotIndex, _) then emitMovSlot(code, slotIndex: slotIndex)
         loadSlot(destReg, slotIndex) then emitLoadSlotToReg(code, slotIndex: slotIndex, dest: destReg)
-        addRegReg(destReg, srcReg) then emitAddRegReg(code)
-        subRegReg(destReg, srcReg) then emitSubRegReg(code)
-        imulRegReg(destReg, srcReg) then emitImulRegReg(code)
+        addRegReg(_, _) then emitAddRegReg(code)
+        subRegReg(_, _) then emitSubRegReg(code)
+        imulRegReg(_, _) then emitImulRegReg(code)
         MaxX64Op.idivRcx then emitIdivRcx(code)
         MaxX64Op.iremRcx then emitIremRcx(code)
-        negReg(reg) then emitNegReg(code)
-        bitNotReg(reg) then emitBitNotReg(code)
-        andRegReg(destReg, srcReg) then emitAndRegReg(code)
-        orRegReg(destReg, srcReg) then emitOrRegReg(code)
-        xorRegReg(destReg, srcReg) then emitXorRegReg(code)
-        shlRegCl(reg) then emitShlRegCl(code)
-        sarRegCl(reg) then emitSarRegCl(code)
+        negReg(_) then emitNegReg(code)
+        bitNotReg(_) then emitBitNotReg(code)
+        andRegReg(_, _) then emitAndRegReg(code)
+        orRegReg(_, _) then emitOrRegReg(code)
+        xorRegReg(_, _) then emitXorRegReg(code)
+        shlRegCl(_) then emitShlRegCl(code)
+        sarRegCl(_) then emitSarRegCl(code)
         MaxX64Op.cmpRaxRcx then emitCmpRaxRcx(code)
         MaxX64Op.testRaxRax then emitTestRaxRax(code)
         condJump(condition, targetBlock) then emitCondJumpBlock(code, blockFixups: blockFixups, opcode: conditionToOpcode(condition), targetBlock: targetBlock)

@@ -64,9 +64,9 @@ function lowerMidOpToArm64(op MlirOp, dstBlock MlirBlock, valueSlots ValueSlotMa
         memref(mOp) then lowerMemRefToArm64(mOp, dstBlock: dstBlock, valueSlots: valueSlots)
         func(fOp) then lowerFuncOpToArm64(fOp, dstBlock: dstBlock)
         runtime(rOp) then lowerRuntimeToArm64(rOp, dstBlock: dstBlock)
-        cf(cOp) then break 'dispatch'
-        maxhl(hOp) then break 'dispatch'
-        maxx64(xOp) then break 'dispatch'
+        cf(_) then break 'dispatch'
+        maxhl(_) then break 'dispatch'
+        maxx64(_) then break 'dispatch'
         maxarm64(aOp) then dstBlock.ops.push(op)
     end 'dispatch'
     return tempSlot
@@ -80,25 +80,25 @@ function lowerArithToArm64(aOp ArithOp, dstBlock MlirBlock, valueSlots ValueSlot
     match aOp 'checkConst'
         constI64(resultId, value) then tempSlot = emitMaxArm64Const(dstBlock, valueSlots: valueSlots, resultId: resultId, value: value, nextTempSlot: tempSlot)
         constF64(resultId, rawBits) then tempSlot = emitMaxArm64Const(dstBlock, valueSlots: valueSlots, resultId: resultId, value: rawBits, nextTempSlot: tempSlot)
-        addI64(resultId, leftId, rightId) then tempSlot = emitMaxArm64BinaryOp(aOp, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: tempSlot)
-        subI64(resultId, leftId, rightId) then tempSlot = emitMaxArm64BinaryOp(aOp, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: tempSlot)
-        mulI64(resultId, leftId, rightId) then tempSlot = emitMaxArm64BinaryOp(aOp, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: tempSlot)
-        divI64(resultId, leftId, rightId) then tempSlot = emitMaxArm64DivRem(aOp, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: tempSlot, isRem: false)
-        remI64(resultId, leftId, rightId) then tempSlot = emitMaxArm64DivRem(aOp, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: tempSlot, isRem: true)
-        negI64(resultId, operandId) then tempSlot = emitMaxArm64Unary(aOp, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: tempSlot)
-        bitNotI64(resultId, operandId) then tempSlot = emitMaxArm64Unary(aOp, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: tempSlot)
-        andI64(resultId, leftId, rightId) then tempSlot = emitMaxArm64BinaryOp(aOp, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: tempSlot)
-        orI64(resultId, leftId, rightId) then tempSlot = emitMaxArm64BinaryOp(aOp, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: tempSlot)
-        xorI64(resultId, leftId, rightId) then tempSlot = emitMaxArm64BinaryOp(aOp, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: tempSlot)
-        shlI64(resultId, leftId, rightId) then tempSlot = emitMaxArm64BinaryOp(aOp, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: tempSlot)
-        shrI64(resultId, leftId, rightId) then tempSlot = emitMaxArm64BinaryOp(aOp, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: tempSlot)
-        cmpI64Eq(resultId, leftId, rightId) then tempSlot = emitMaxArm64BinaryOp(aOp, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: tempSlot)
-        cmpI64Ne(resultId, leftId, rightId) then tempSlot = emitMaxArm64BinaryOp(aOp, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: tempSlot)
-        cmpI64Lt(resultId, leftId, rightId) then tempSlot = emitMaxArm64BinaryOp(aOp, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: tempSlot)
-        cmpI64Le(resultId, leftId, rightId) then tempSlot = emitMaxArm64BinaryOp(aOp, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: tempSlot)
-        cmpI64Gt(resultId, leftId, rightId) then tempSlot = emitMaxArm64BinaryOp(aOp, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: tempSlot)
-        cmpI64Ge(resultId, leftId, rightId) then tempSlot = emitMaxArm64BinaryOp(aOp, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: tempSlot)
-        cmpF64Eq(resultId, leftId, rightId) then tempSlot = emitMaxArm64BinaryOp(aOp, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: tempSlot)
+        addI64(_, _, _) then tempSlot = emitMaxArm64BinaryOp(aOp, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: tempSlot)
+        subI64(_, _, _) then tempSlot = emitMaxArm64BinaryOp(aOp, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: tempSlot)
+        mulI64(_, _, _) then tempSlot = emitMaxArm64BinaryOp(aOp, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: tempSlot)
+        divI64(_, _, _) then tempSlot = emitMaxArm64DivRem(aOp, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: tempSlot, isRem: false)
+        remI64(_, _, _) then tempSlot = emitMaxArm64DivRem(aOp, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: tempSlot, isRem: true)
+        negI64(_, _) then tempSlot = emitMaxArm64Unary(aOp, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: tempSlot)
+        bitNotI64(_, _) then tempSlot = emitMaxArm64Unary(aOp, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: tempSlot)
+        andI64(_, _, _) then tempSlot = emitMaxArm64BinaryOp(aOp, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: tempSlot)
+        orI64(_, _, _) then tempSlot = emitMaxArm64BinaryOp(aOp, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: tempSlot)
+        xorI64(_, _, _) then tempSlot = emitMaxArm64BinaryOp(aOp, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: tempSlot)
+        shlI64(_, _, _) then tempSlot = emitMaxArm64BinaryOp(aOp, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: tempSlot)
+        shrI64(_, _, _) then tempSlot = emitMaxArm64BinaryOp(aOp, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: tempSlot)
+        cmpI64Eq(_, _, _) then tempSlot = emitMaxArm64BinaryOp(aOp, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: tempSlot)
+        cmpI64Ne(_, _, _) then tempSlot = emitMaxArm64BinaryOp(aOp, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: tempSlot)
+        cmpI64Lt(_, _, _) then tempSlot = emitMaxArm64BinaryOp(aOp, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: tempSlot)
+        cmpI64Le(_, _, _) then tempSlot = emitMaxArm64BinaryOp(aOp, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: tempSlot)
+        cmpI64Gt(_, _, _) then tempSlot = emitMaxArm64BinaryOp(aOp, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: tempSlot)
+        cmpI64Ge(_, _, _) then tempSlot = emitMaxArm64BinaryOp(aOp, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: tempSlot)
+        cmpF64Eq(_, _, _) then tempSlot = emitMaxArm64BinaryOp(aOp, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: tempSlot)
     end 'checkConst'
     return tempSlot
 end 'lowerArithToArm64'
@@ -143,74 +143,74 @@ function emitMaxArm64DivRem(aOp ArithOp, dstBlock MlirBlock, valueSlots ValueSlo
     var leftId = 0
     var rightId = 0
     match aOp 'extract'
-        divI64(r, l, ri) then resultId = r
-        remI64(r, l, ri) then resultId = r
-        constI64(r, v) then return nextTempSlot
-        constF64(r, v) then return nextTempSlot
-        addI64(r, l, ri) then return nextTempSlot
-        subI64(r, l, ri) then return nextTempSlot
-        mulI64(r, l, ri) then return nextTempSlot
-        negI64(r, o) then return nextTempSlot
-        bitNotI64(r, o) then return nextTempSlot
-        andI64(r, l, ri) then return nextTempSlot
-        orI64(r, l, ri) then return nextTempSlot
-        xorI64(r, l, ri) then return nextTempSlot
-        shlI64(r, l, ri) then return nextTempSlot
-        shrI64(r, l, ri) then return nextTempSlot
-        cmpI64Eq(r, l, ri) then return nextTempSlot
-        cmpI64Ne(r, l, ri) then return nextTempSlot
-        cmpI64Lt(r, l, ri) then return nextTempSlot
-        cmpI64Le(r, l, ri) then return nextTempSlot
-        cmpI64Gt(r, l, ri) then return nextTempSlot
-        cmpI64Ge(r, l, ri) then return nextTempSlot
-        cmpF64Eq(r, l, ri) then return nextTempSlot
+        divI64(r, _, _) then resultId = r
+        remI64(r, _, _) then resultId = r
+        constI64(_, _) then return nextTempSlot
+        constF64(_, _) then return nextTempSlot
+        addI64(_, _, _) then return nextTempSlot
+        subI64(_, _, _) then return nextTempSlot
+        mulI64(_, _, _) then return nextTempSlot
+        negI64(_, _) then return nextTempSlot
+        bitNotI64(_, _) then return nextTempSlot
+        andI64(_, _, _) then return nextTempSlot
+        orI64(_, _, _) then return nextTempSlot
+        xorI64(_, _, _) then return nextTempSlot
+        shlI64(_, _, _) then return nextTempSlot
+        shrI64(_, _, _) then return nextTempSlot
+        cmpI64Eq(_, _, _) then return nextTempSlot
+        cmpI64Ne(_, _, _) then return nextTempSlot
+        cmpI64Lt(_, _, _) then return nextTempSlot
+        cmpI64Le(_, _, _) then return nextTempSlot
+        cmpI64Gt(_, _, _) then return nextTempSlot
+        cmpI64Ge(_, _, _) then return nextTempSlot
+        cmpF64Eq(_, _, _) then return nextTempSlot
     end 'extract'
     // Extract left/right IDs
     match aOp 'extractIds'
-        divI64(r, l, ri) then leftId = l
-        remI64(r, l, ri) then leftId = l
-        constI64(r, v) then break 'extractIds'
-        constF64(r, v) then break 'extractIds'
-        addI64(r, l, ri) then break 'extractIds'
-        subI64(r, l, ri) then break 'extractIds'
-        mulI64(r, l, ri) then break 'extractIds'
-        negI64(r, o) then break 'extractIds'
-        bitNotI64(r, o) then break 'extractIds'
-        andI64(r, l, ri) then break 'extractIds'
-        orI64(r, l, ri) then break 'extractIds'
-        xorI64(r, l, ri) then break 'extractIds'
-        shlI64(r, l, ri) then break 'extractIds'
-        shrI64(r, l, ri) then break 'extractIds'
-        cmpI64Eq(r, l, ri) then break 'extractIds'
-        cmpI64Ne(r, l, ri) then break 'extractIds'
-        cmpI64Lt(r, l, ri) then break 'extractIds'
-        cmpI64Le(r, l, ri) then break 'extractIds'
-        cmpI64Gt(r, l, ri) then break 'extractIds'
-        cmpI64Ge(r, l, ri) then break 'extractIds'
-        cmpF64Eq(r, l, ri) then break 'extractIds'
+        divI64(_, l, _) then leftId = l
+        remI64(_, l, _) then leftId = l
+        constI64(_, _) then break 'extractIds'
+        constF64(_, _) then break 'extractIds'
+        addI64(_, _, _) then break 'extractIds'
+        subI64(_, _, _) then break 'extractIds'
+        mulI64(_, _, _) then break 'extractIds'
+        negI64(_, _) then break 'extractIds'
+        bitNotI64(_, _) then break 'extractIds'
+        andI64(_, _, _) then break 'extractIds'
+        orI64(_, _, _) then break 'extractIds'
+        xorI64(_, _, _) then break 'extractIds'
+        shlI64(_, _, _) then break 'extractIds'
+        shrI64(_, _, _) then break 'extractIds'
+        cmpI64Eq(_, _, _) then break 'extractIds'
+        cmpI64Ne(_, _, _) then break 'extractIds'
+        cmpI64Lt(_, _, _) then break 'extractIds'
+        cmpI64Le(_, _, _) then break 'extractIds'
+        cmpI64Gt(_, _, _) then break 'extractIds'
+        cmpI64Ge(_, _, _) then break 'extractIds'
+        cmpF64Eq(_, _, _) then break 'extractIds'
     end 'extractIds'
     match aOp 'extractRight'
-        divI64(r, l, ri) then rightId = ri
-        remI64(r, l, ri) then rightId = ri
-        constI64(r, v) then break 'extractRight'
-        constF64(r, v) then break 'extractRight'
-        addI64(r, l, ri) then break 'extractRight'
-        subI64(r, l, ri) then break 'extractRight'
-        mulI64(r, l, ri) then break 'extractRight'
-        negI64(r, o) then break 'extractRight'
-        bitNotI64(r, o) then break 'extractRight'
-        andI64(r, l, ri) then break 'extractRight'
-        orI64(r, l, ri) then break 'extractRight'
-        xorI64(r, l, ri) then break 'extractRight'
-        shlI64(r, l, ri) then break 'extractRight'
-        shrI64(r, l, ri) then break 'extractRight'
-        cmpI64Eq(r, l, ri) then break 'extractRight'
-        cmpI64Ne(r, l, ri) then break 'extractRight'
-        cmpI64Lt(r, l, ri) then break 'extractRight'
-        cmpI64Le(r, l, ri) then break 'extractRight'
-        cmpI64Gt(r, l, ri) then break 'extractRight'
-        cmpI64Ge(r, l, ri) then break 'extractRight'
-        cmpF64Eq(r, l, ri) then break 'extractRight'
+        divI64(_, _, ri) then rightId = ri
+        remI64(_, _, ri) then rightId = ri
+        constI64(_, _) then break 'extractRight'
+        constF64(_, _) then break 'extractRight'
+        addI64(_, _, _) then break 'extractRight'
+        subI64(_, _, _) then break 'extractRight'
+        mulI64(_, _, _) then break 'extractRight'
+        negI64(_, _) then break 'extractRight'
+        bitNotI64(_, _) then break 'extractRight'
+        andI64(_, _, _) then break 'extractRight'
+        orI64(_, _, _) then break 'extractRight'
+        xorI64(_, _, _) then break 'extractRight'
+        shlI64(_, _, _) then break 'extractRight'
+        shrI64(_, _, _) then break 'extractRight'
+        cmpI64Eq(_, _, _) then break 'extractRight'
+        cmpI64Ne(_, _, _) then break 'extractRight'
+        cmpI64Lt(_, _, _) then break 'extractRight'
+        cmpI64Le(_, _, _) then break 'extractRight'
+        cmpI64Gt(_, _, _) then break 'extractRight'
+        cmpI64Ge(_, _, _) then break 'extractRight'
+        cmpF64Eq(_, _, _) then break 'extractRight'
     end 'extractRight'
 
     let leftSlot = valueSlotMapGet(valueSlots, valueId: leftId)
@@ -237,50 +237,50 @@ function emitMaxArm64Unary(aOp ArithOp, dstBlock MlirBlock, valueSlots ValueSlot
     var resultId = 0
     var operandId = 0
     match aOp 'extractUnary'
-        negI64(r, o) then resultId = r
-        bitNotI64(r, o) then resultId = r
-        constI64(r, v) then return nextTempSlot
-        constF64(r, v) then return nextTempSlot
-        addI64(r, l, ri) then return nextTempSlot
-        subI64(r, l, ri) then return nextTempSlot
-        mulI64(r, l, ri) then return nextTempSlot
-        divI64(r, l, ri) then return nextTempSlot
-        remI64(r, l, ri) then return nextTempSlot
-        andI64(r, l, ri) then return nextTempSlot
-        orI64(r, l, ri) then return nextTempSlot
-        xorI64(r, l, ri) then return nextTempSlot
-        shlI64(r, l, ri) then return nextTempSlot
-        shrI64(r, l, ri) then return nextTempSlot
-        cmpI64Eq(r, l, ri) then return nextTempSlot
-        cmpI64Ne(r, l, ri) then return nextTempSlot
-        cmpI64Lt(r, l, ri) then return nextTempSlot
-        cmpI64Le(r, l, ri) then return nextTempSlot
-        cmpI64Gt(r, l, ri) then return nextTempSlot
-        cmpI64Ge(r, l, ri) then return nextTempSlot
-        cmpF64Eq(r, l, ri) then return nextTempSlot
+        negI64(r, _) then resultId = r
+        bitNotI64(r, _) then resultId = r
+        constI64(_, _) then return nextTempSlot
+        constF64(_, _) then return nextTempSlot
+        addI64(_, _, _) then return nextTempSlot
+        subI64(_, _, _) then return nextTempSlot
+        mulI64(_, _, _) then return nextTempSlot
+        divI64(_, _, _) then return nextTempSlot
+        remI64(_, _, _) then return nextTempSlot
+        andI64(_, _, _) then return nextTempSlot
+        orI64(_, _, _) then return nextTempSlot
+        xorI64(_, _, _) then return nextTempSlot
+        shlI64(_, _, _) then return nextTempSlot
+        shrI64(_, _, _) then return nextTempSlot
+        cmpI64Eq(_, _, _) then return nextTempSlot
+        cmpI64Ne(_, _, _) then return nextTempSlot
+        cmpI64Lt(_, _, _) then return nextTempSlot
+        cmpI64Le(_, _, _) then return nextTempSlot
+        cmpI64Gt(_, _, _) then return nextTempSlot
+        cmpI64Ge(_, _, _) then return nextTempSlot
+        cmpF64Eq(_, _, _) then return nextTempSlot
     end 'extractUnary'
     match aOp 'extractOperand'
-        negI64(r, o) then operandId = o
-        bitNotI64(r, o) then operandId = o
-        constI64(r, v) then break 'extractOperand'
-        constF64(r, v) then break 'extractOperand'
-        addI64(r, l, ri) then break 'extractOperand'
-        subI64(r, l, ri) then break 'extractOperand'
-        mulI64(r, l, ri) then break 'extractOperand'
-        divI64(r, l, ri) then break 'extractOperand'
-        remI64(r, l, ri) then break 'extractOperand'
-        andI64(r, l, ri) then break 'extractOperand'
-        orI64(r, l, ri) then break 'extractOperand'
-        xorI64(r, l, ri) then break 'extractOperand'
-        shlI64(r, l, ri) then break 'extractOperand'
-        shrI64(r, l, ri) then break 'extractOperand'
-        cmpI64Eq(r, l, ri) then break 'extractOperand'
-        cmpI64Ne(r, l, ri) then break 'extractOperand'
-        cmpI64Lt(r, l, ri) then break 'extractOperand'
-        cmpI64Le(r, l, ri) then break 'extractOperand'
-        cmpI64Gt(r, l, ri) then break 'extractOperand'
-        cmpI64Ge(r, l, ri) then break 'extractOperand'
-        cmpF64Eq(r, l, ri) then break 'extractOperand'
+        negI64(_, o) then operandId = o
+        bitNotI64(_, o) then operandId = o
+        constI64(_, _) then break 'extractOperand'
+        constF64(_, _) then break 'extractOperand'
+        addI64(_, _, _) then break 'extractOperand'
+        subI64(_, _, _) then break 'extractOperand'
+        mulI64(_, _, _) then break 'extractOperand'
+        divI64(_, _, _) then break 'extractOperand'
+        remI64(_, _, _) then break 'extractOperand'
+        andI64(_, _, _) then break 'extractOperand'
+        orI64(_, _, _) then break 'extractOperand'
+        xorI64(_, _, _) then break 'extractOperand'
+        shlI64(_, _, _) then break 'extractOperand'
+        shrI64(_, _, _) then break 'extractOperand'
+        cmpI64Eq(_, _, _) then break 'extractOperand'
+        cmpI64Ne(_, _, _) then break 'extractOperand'
+        cmpI64Lt(_, _, _) then break 'extractOperand'
+        cmpI64Le(_, _, _) then break 'extractOperand'
+        cmpI64Gt(_, _, _) then break 'extractOperand'
+        cmpI64Ge(_, _, _) then break 'extractOperand'
+        cmpF64Eq(_, _, _) then break 'extractOperand'
     end 'extractOperand'
 
     let operandSlot = valueSlotMapGet(valueSlots, valueId: operandId)
@@ -317,8 +317,8 @@ end 'emitMaxArm64LoadSlot'
 // Lower a func op to MaxArm64 ops.
 function lowerFuncOpToArm64(fOp FuncOp, dstBlock MlirBlock)
     match fOp 'lower'
-        ret(retValId) then break 'lower'
-        call(resultId, callee) then dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.branchLink(callee)))
+        ret(_) then break 'lower'
+        call(_, callee) then dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.branchLink(callee)))
     end 'lower'
 end 'lowerFuncOpToArm64'
 
@@ -326,7 +326,7 @@ end 'lowerFuncOpToArm64'
 function lowerRuntimeToArm64(rOp RuntimeOp, dstBlock MlirBlock)
     match rOp 'lower'
         printLiteral(data) then dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.printLiteral(data)))
-        printInt(valueId) then dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.printInt))
+        printInt(_) then dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.printInt))
     end 'lower'
 end 'lowerRuntimeToArm64'
 
@@ -335,12 +335,12 @@ function lowerMidTerminatorToArm64(op MlirOp, srcBlock MlirBlock, dstBlock MlirB
     match op 'dispatch'
         cf(cOp) then lowerCfTerminatorToArm64(cOp, srcBlock: srcBlock, dstBlock: dstBlock, valueSlots: valueSlots)
         func(fOp) then lowerFuncTerminatorToArm64(fOp, dstBlock: dstBlock)
-        arith(a) then break 'dispatch'
-        memref(m) then break 'dispatch'
-        runtime(r) then break 'dispatch'
-        maxhl(h) then break 'dispatch'
-        maxx64(x) then break 'dispatch'
-        maxarm64(a) then dstBlock.terminator = op
+        arith(_) then break 'dispatch'
+        memref(_) then break 'dispatch'
+        runtime(_) then break 'dispatch'
+        maxhl(_) then break 'dispatch'
+        maxx64(_) then break 'dispatch'
+        maxarm64(_) then dstBlock.terminator = op
     end 'dispatch'
     dstBlock.hasTerminator = true
 end 'lowerMidTerminatorToArm64'
@@ -387,8 +387,8 @@ end 'emitBoolTestBranch'
 // Lower func terminator (ret): emit epilogue.
 function lowerFuncTerminatorToArm64(fOp FuncOp, dstBlock MlirBlock)
     match fOp 'lower'
-        ret(retValId) then dstBlock.terminator = MlirOp.maxarm64(MaxArm64Op.epilogue)
-        call(resultId, callee) then break 'lower'
+        ret(_) then dstBlock.terminator = MlirOp.maxarm64(MaxArm64Op.epilogue)
+        call(_, _) then break 'lower'
     end 'lower'
 end 'lowerFuncTerminatorToArm64'
 
@@ -403,13 +403,13 @@ function determineJumpKindFromBlock(srcBlock MlirBlock) returns JumpKind
         end 'skipScan'
         match op 'checkOp'
             arith(aOp) then return determineJumpKindFromArith(aOp)
-            cf(c) then j = j - 1
-            func(f) then j = j - 1
-            memref(m) then j = j - 1
-            runtime(r) then j = j - 1
-            maxhl(h) then j = j - 1
-            maxx64(x) then j = j - 1
-            maxarm64(a) then j = j - 1
+            cf(_) then j = j - 1
+            func(_) then j = j - 1
+            memref(_) then j = j - 1
+            runtime(_) then j = j - 1
+            maxhl(_) then j = j - 1
+            maxx64(_) then j = j - 1
+            maxarm64(_) then j = j - 1
         end 'checkOp'
     end 'scanBack'
     return JumpKind.boolTest
@@ -418,27 +418,27 @@ end 'determineJumpKindFromBlock'
 // Check if an arith op is a comparison and return its jump kind.
 function determineJumpKindFromArith(aOp ArithOp) returns JumpKind
     match aOp 'check'
-        cmpI64Eq(r, l, ri) then return JumpKind.eq
-        cmpI64Ne(r, l, ri) then return JumpKind.ne
-        cmpI64Lt(r, l, ri) then return JumpKind.lt
-        cmpI64Le(r, l, ri) then return JumpKind.le
-        cmpI64Gt(r, l, ri) then return JumpKind.gt
-        cmpI64Ge(r, l, ri) then return JumpKind.ge
-        cmpF64Eq(r, l, ri) then return JumpKind.feq
-        constI64(r, v) then return JumpKind.boolTest
-        constF64(r, v) then return JumpKind.boolTest
-        addI64(r, l, ri) then return JumpKind.boolTest
-        subI64(r, l, ri) then return JumpKind.boolTest
-        mulI64(r, l, ri) then return JumpKind.boolTest
-        divI64(r, l, ri) then return JumpKind.boolTest
-        remI64(r, l, ri) then return JumpKind.boolTest
-        negI64(r, o) then return JumpKind.boolTest
-        bitNotI64(r, o) then return JumpKind.boolTest
-        andI64(r, l, ri) then return JumpKind.boolTest
-        orI64(r, l, ri) then return JumpKind.boolTest
-        xorI64(r, l, ri) then return JumpKind.boolTest
-        shlI64(r, l, ri) then return JumpKind.boolTest
-        shrI64(r, l, ri) then return JumpKind.boolTest
+        cmpI64Eq(_, _, _) then return JumpKind.eq
+        cmpI64Ne(_, _, _) then return JumpKind.ne
+        cmpI64Lt(_, _, _) then return JumpKind.lt
+        cmpI64Le(_, _, _) then return JumpKind.le
+        cmpI64Gt(_, _, _) then return JumpKind.gt
+        cmpI64Ge(_, _, _) then return JumpKind.ge
+        cmpF64Eq(_, _, _) then return JumpKind.feq
+        constI64(_, _) then return JumpKind.boolTest
+        constF64(_, _) then return JumpKind.boolTest
+        addI64(_, _, _) then return JumpKind.boolTest
+        subI64(_, _, _) then return JumpKind.boolTest
+        mulI64(_, _, _) then return JumpKind.boolTest
+        divI64(_, _, _) then return JumpKind.boolTest
+        remI64(_, _, _) then return JumpKind.boolTest
+        negI64(_, _) then return JumpKind.boolTest
+        bitNotI64(_, _) then return JumpKind.boolTest
+        andI64(_, _, _) then return JumpKind.boolTest
+        orI64(_, _, _) then return JumpKind.boolTest
+        xorI64(_, _, _) then return JumpKind.boolTest
+        shlI64(_, _, _) then return JumpKind.boolTest
+        shrI64(_, _, _) then return JumpKind.boolTest
     end 'check'
     return JumpKind.boolTest
 end 'determineJumpKindFromArith'
@@ -462,12 +462,12 @@ function maxArm64GetBinaryOpInfo(aOp ArithOp) returns MaxArm64BinaryOpInfo
         cmpI64Gt(resultId, leftId, rightId) then result = MaxArm64BinaryOpInfo{isBinary: true, resultId: resultId, leftId: leftId, rightId: rightId, arm64Op: MaxArm64Op.cmpRegs(MaxArm64Register.x0, MaxArm64Register.x1)}
         cmpI64Ge(resultId, leftId, rightId) then result = MaxArm64BinaryOpInfo{isBinary: true, resultId: resultId, leftId: leftId, rightId: rightId, arm64Op: MaxArm64Op.cmpRegs(MaxArm64Register.x0, MaxArm64Register.x1)}
         cmpF64Eq(resultId, leftId, rightId) then result = MaxArm64BinaryOpInfo{isBinary: true, resultId: resultId, leftId: leftId, rightId: rightId, arm64Op: MaxArm64Op.cmpRegs(MaxArm64Register.x0, MaxArm64Register.x1)}
-        divI64(resultId, leftId, rightId) then break 'check'
-        remI64(resultId, leftId, rightId) then break 'check'
-        negI64(resultId, operandId) then break 'check'
-        bitNotI64(resultId, operandId) then break 'check'
-        constI64(resultId, value) then break 'check'
-        constF64(resultId, rawBits) then break 'check'
+        divI64(_, _, _) then break 'check'
+        remI64(_, _, _) then break 'check'
+        negI64(_, _) then break 'check'
+        bitNotI64(_, _) then break 'check'
+        constI64(_, _) then break 'check'
+        constF64(_, _) then break 'check'
     end 'check'
     return result
 end 'maxArm64GetBinaryOpInfo'
@@ -475,27 +475,27 @@ end 'maxArm64GetBinaryOpInfo'
 // Map a unary ArithOp to its corresponding MaxArm64Op.
 function getMaxArm64UnaryOp(aOp ArithOp) returns MaxArm64Op
     match aOp 'check'
-        negI64(resultId, operandId) then return MaxArm64Op.negReg(MaxArm64Register.x0, MaxArm64Register.x0)
-        bitNotI64(resultId, operandId) then return MaxArm64Op.mvnReg(MaxArm64Register.x0, MaxArm64Register.x0)
-        constI64(resultId, value) then break 'check'
-        constF64(resultId, rawBits) then break 'check'
-        addI64(resultId, leftId, rightId) then break 'check'
-        subI64(resultId, leftId, rightId) then break 'check'
-        mulI64(resultId, leftId, rightId) then break 'check'
-        divI64(resultId, leftId, rightId) then break 'check'
-        remI64(resultId, leftId, rightId) then break 'check'
-        andI64(resultId, leftId, rightId) then break 'check'
-        orI64(resultId, leftId, rightId) then break 'check'
-        xorI64(resultId, leftId, rightId) then break 'check'
-        shlI64(resultId, leftId, rightId) then break 'check'
-        shrI64(resultId, leftId, rightId) then break 'check'
-        cmpI64Eq(resultId, leftId, rightId) then break 'check'
-        cmpI64Ne(resultId, leftId, rightId) then break 'check'
-        cmpI64Lt(resultId, leftId, rightId) then break 'check'
-        cmpI64Le(resultId, leftId, rightId) then break 'check'
-        cmpI64Gt(resultId, leftId, rightId) then break 'check'
-        cmpI64Ge(resultId, leftId, rightId) then break 'check'
-        cmpF64Eq(resultId, leftId, rightId) then break 'check'
+        negI64(_, _) then return MaxArm64Op.negReg(MaxArm64Register.x0, MaxArm64Register.x0)
+        bitNotI64(_, _) then return MaxArm64Op.mvnReg(MaxArm64Register.x0, MaxArm64Register.x0)
+        constI64(_, _) then break 'check'
+        constF64(_, _) then break 'check'
+        addI64(_, _, _) then break 'check'
+        subI64(_, _, _) then break 'check'
+        mulI64(_, _, _) then break 'check'
+        divI64(_, _, _) then break 'check'
+        remI64(_, _, _) then break 'check'
+        andI64(_, _, _) then break 'check'
+        orI64(_, _, _) then break 'check'
+        xorI64(_, _, _) then break 'check'
+        shlI64(_, _, _) then break 'check'
+        shrI64(_, _, _) then break 'check'
+        cmpI64Eq(_, _, _) then break 'check'
+        cmpI64Ne(_, _, _) then break 'check'
+        cmpI64Lt(_, _, _) then break 'check'
+        cmpI64Le(_, _, _) then break 'check'
+        cmpI64Gt(_, _, _) then break 'check'
+        cmpI64Ge(_, _, _) then break 'check'
+        cmpF64Eq(_, _, _) then break 'check'
     end 'check'
     return MaxArm64Op.epilogue
 end 'getMaxArm64UnaryOp'
@@ -539,51 +539,51 @@ function countOpForStackSize(op MlirOp, maxSlot SlotIndex, hasPrint bool, tempSl
         memref(mOp) then countMemRefForStackSize(mOp, maxSlot: maxSlot)
         arith(aOp) then countArithForStackSize(aOp, tempSlotCount: tempSlotCount)
         runtime(rOp) then countRuntimeForStackSize(rOp, hasPrint: hasPrint)
-        cf(c) then break 'dispatch'
-        func(f) then break 'dispatch'
-        maxhl(h) then break 'dispatch'
-        maxx64(x) then break 'dispatch'
-        maxarm64(a) then break 'dispatch'
+        cf(_) then break 'dispatch'
+        func(_) then break 'dispatch'
+        maxhl(_) then break 'dispatch'
+        maxx64(_) then break 'dispatch'
+        maxarm64(_) then break 'dispatch'
     end 'dispatch'
 end 'countOpForStackSize'
 
 function countMemRefForStackSize(mOp MemRefOp, maxSlot SlotIndex)
     match mOp 'check'
-        storeSlot(slotId, valueId) then maxSlot = maxOf(maxSlot, b: slotId)
-        loadSlot(resultId, slotId) then maxSlot = maxOf(maxSlot, b: slotId)
+        storeSlot(slotId, _) then maxSlot = maxOf(maxSlot, b: slotId)
+        loadSlot(_, slotId) then maxSlot = maxOf(maxSlot, b: slotId)
     end 'check'
 end 'countMemRefForStackSize'
 
 function countArithForStackSize(aOp ArithOp, tempSlotCount SlotIndex)
     match aOp 'check'
-        constI64(r, v) then tempSlotCount = tempSlotCount + 1
-        constF64(r, v) then tempSlotCount = tempSlotCount + 1
-        addI64(r, l, ri) then tempSlotCount = tempSlotCount + 1
-        subI64(r, l, ri) then tempSlotCount = tempSlotCount + 1
-        mulI64(r, l, ri) then tempSlotCount = tempSlotCount + 1
-        divI64(r, l, ri) then tempSlotCount = tempSlotCount + 1
-        remI64(r, l, ri) then tempSlotCount = tempSlotCount + 1
-        negI64(r, o) then tempSlotCount = tempSlotCount + 1
-        bitNotI64(r, o) then tempSlotCount = tempSlotCount + 1
-        andI64(r, l, ri) then tempSlotCount = tempSlotCount + 1
-        orI64(r, l, ri) then tempSlotCount = tempSlotCount + 1
-        xorI64(r, l, ri) then tempSlotCount = tempSlotCount + 1
-        shlI64(r, l, ri) then tempSlotCount = tempSlotCount + 1
-        shrI64(r, l, ri) then tempSlotCount = tempSlotCount + 1
-        cmpI64Eq(r, l, ri) then tempSlotCount = tempSlotCount + 1
-        cmpI64Ne(r, l, ri) then tempSlotCount = tempSlotCount + 1
-        cmpI64Lt(r, l, ri) then tempSlotCount = tempSlotCount + 1
-        cmpI64Le(r, l, ri) then tempSlotCount = tempSlotCount + 1
-        cmpI64Gt(r, l, ri) then tempSlotCount = tempSlotCount + 1
-        cmpI64Ge(r, l, ri) then tempSlotCount = tempSlotCount + 1
-        cmpF64Eq(r, l, ri) then tempSlotCount = tempSlotCount + 1
+        constI64(_, _) then tempSlotCount = tempSlotCount + 1
+        constF64(_, _) then tempSlotCount = tempSlotCount + 1
+        addI64(_, _, _) then tempSlotCount = tempSlotCount + 1
+        subI64(_, _, _) then tempSlotCount = tempSlotCount + 1
+        mulI64(_, _, _) then tempSlotCount = tempSlotCount + 1
+        divI64(_, _, _) then tempSlotCount = tempSlotCount + 1
+        remI64(_, _, _) then tempSlotCount = tempSlotCount + 1
+        negI64(_, _) then tempSlotCount = tempSlotCount + 1
+        bitNotI64(_, _) then tempSlotCount = tempSlotCount + 1
+        andI64(_, _, _) then tempSlotCount = tempSlotCount + 1
+        orI64(_, _, _) then tempSlotCount = tempSlotCount + 1
+        xorI64(_, _, _) then tempSlotCount = tempSlotCount + 1
+        shlI64(_, _, _) then tempSlotCount = tempSlotCount + 1
+        shrI64(_, _, _) then tempSlotCount = tempSlotCount + 1
+        cmpI64Eq(_, _, _) then tempSlotCount = tempSlotCount + 1
+        cmpI64Ne(_, _, _) then tempSlotCount = tempSlotCount + 1
+        cmpI64Lt(_, _, _) then tempSlotCount = tempSlotCount + 1
+        cmpI64Le(_, _, _) then tempSlotCount = tempSlotCount + 1
+        cmpI64Gt(_, _, _) then tempSlotCount = tempSlotCount + 1
+        cmpI64Ge(_, _, _) then tempSlotCount = tempSlotCount + 1
+        cmpF64Eq(_, _, _) then tempSlotCount = tempSlotCount + 1
     end 'check'
 end 'countArithForStackSize'
 
 function countRuntimeForStackSize(rOp RuntimeOp, hasPrint bool)
     match rOp 'check'
-        printLiteral(data) then hasPrint = true
-        printInt(valueId) then hasPrint = true
+        printLiteral(_) then hasPrint = true
+        printInt(_) then hasPrint = true
     end 'check'
 end 'countRuntimeForStackSize'
 
@@ -594,13 +594,13 @@ function computeMidMaxParserSlot(func MlirFunction) returns SlotIndex
         for op in block.ops 'eachOp'
             match op 'check'
                 memref(mOp) then maxSlot = checkMemRefSlot(mOp, maxSlot: maxSlot)
-                arith(a) then break 'check'
-                cf(c) then break 'check'
-                func(f) then break 'check'
-                runtime(r) then break 'check'
-                maxhl(h) then break 'check'
-                maxx64(x) then break 'check'
-                maxarm64(a) then break 'check'
+                arith(_) then break 'check'
+                cf(_) then break 'check'
+                func(_) then break 'check'
+                runtime(_) then break 'check'
+                maxhl(_) then break 'check'
+                maxx64(_) then break 'check'
+                maxarm64(_) then break 'check'
             end 'check'
         end 'eachOp'
     end 'eachBlock'
@@ -609,8 +609,8 @@ end 'computeMidMaxParserSlot'
 
 function checkMemRefSlot(mOp MemRefOp, maxSlot SlotIndex) returns SlotIndex
     match mOp 'check'
-        storeSlot(slotId, valueId) then return maxOf(maxSlot, b: slotId)
-        loadSlot(resultId, slotId) then return maxOf(maxSlot, b: slotId)
+        storeSlot(slotId, _) then return maxOf(maxSlot, b: slotId)
+        loadSlot(_, slotId) then return maxOf(maxSlot, b: slotId)
     end 'check'
     return maxSlot
 end 'checkMemRefSlot'

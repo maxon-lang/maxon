@@ -144,17 +144,17 @@ end 'main'
 20
 ```
 ```stderr
-alloc Inner #1 rc=0 [heap-field-assignment.testAssign]
-alloc Container #2 rc=0 [heap-field-assignment.testAssign]
+alloc Inner #1 rc=0 size=8 [heap-field-assignment.testAssign]
+alloc Container #2 rc=0 size=16 [heap-field-assignment.testAssign]
 incref Inner #1 rc=1 [heap-field-assignment.testAssign]
 incref Container #2 rc=1 [heap-field-assignment.testAssign]
-alloc Inner #3 rc=0 [heap-field-assignment.testAssign]
+alloc Inner #3 rc=0 size=8 [heap-field-assignment.testAssign]
 incref Inner #3 rc=1 [heap-field-assignment.testAssign]
 decref Inner #1 rc=0 [Container.replaceChild]
   free Inner #1
 incref Inner #3 rc=2 [Container.replaceChild]
-alloc String #4 rc=0 [heap-field-assignment.testAssign]
-alloc __ManagedMemory #5 rc=0 [heap-field-assignment.testAssign]
+alloc String #4 rc=0 size=16 [heap-field-assignment.testAssign]
+alloc __ManagedMemory #5 rc=0 size=32 [heap-field-assignment.testAssign]
 incref __ManagedMemory #5 rc=1 [heap-field-assignment.testAssign]
 incref String #4 rc=1 [heap-field-assignment.testAssign]
 decref String #4 rc=0 [heap-field-assignment.testAssign]
@@ -201,17 +201,17 @@ end 'main'
 20
 ```
 ```stderr
-alloc Right #1 rc=0 [heap-field-assignment.testAssign]
-alloc Pair #2 rc=0 [heap-field-assignment.testAssign]
+alloc Right #1 rc=0 size=8 [heap-field-assignment.testAssign]
+alloc Pair #2 rc=0 size=16 [heap-field-assignment.testAssign]
 incref Right #1 rc=1 [heap-field-assignment.testAssign]
 incref Pair #2 rc=1 [heap-field-assignment.testAssign]
-alloc Right #3 rc=0 [heap-field-assignment.testAssign]
+alloc Right #3 rc=0 size=8 [heap-field-assignment.testAssign]
 incref Right #3 rc=1 [heap-field-assignment.testAssign]
 decref Right #1 rc=0 [heap-field-assignment.testAssign]
   free Right #1
 incref Right #3 rc=2 [heap-field-assignment.testAssign]
-alloc String #4 rc=0 [heap-field-assignment.testAssign]
-alloc __ManagedMemory #5 rc=0 [heap-field-assignment.testAssign]
+alloc String #4 rc=0 size=16 [heap-field-assignment.testAssign]
+alloc __ManagedMemory #5 rc=0 size=32 [heap-field-assignment.testAssign]
 incref __ManagedMemory #5 rc=1 [heap-field-assignment.testAssign]
 incref String #4 rc=1 [heap-field-assignment.testAssign]
 decref String #4 rc=0 [heap-field-assignment.testAssign]
