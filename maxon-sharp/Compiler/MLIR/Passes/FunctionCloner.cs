@@ -15,6 +15,9 @@ internal class FunctionCloner {
   private readonly Dictionary<string, TypeAliasInfo> _typeAliasSources;
   private readonly Dictionary<string, MlirType> _typeDefs;
 
+  // Resolved return type after substitution (used for tuple name correction)
+  private MlirType? _resolvedReturnType;
+
   // Cloning state
   private readonly Dictionary<int, MaxonValue> _valueMap = [];
   private readonly HashSet<string> _floatVars = [];
@@ -125,6 +128,8 @@ internal class FunctionCloner {
         ? _typeSubstitution.SubstituteType(_sourceFunc.ReturnType)
         : null;
     }
+
+    _resolvedReturnType = newReturnType;
 
     var newFunc = new MlirFunction<MaxonOp>(
       newFuncName,
@@ -656,6 +661,23 @@ internal class FunctionCloner {
     // struct's field definitions. This handles cases like Map where KeyArray and ValueArray
     // both have an ElementMemory field that resolves to different concrete types.
     var resolvedTypeName = SubName(structLit.TypeName);
+
+    // Tuple type names encode field types (e.g., __Tuple_i64_i64) which aren't map keys.
+    // When a generic function returns a tuple with type-parameter-derived fields,
+    // the parser creates the tuple using runtime representations (all i64), but
+    // the function's return type is correctly substituted. Use it for correction.
+    if (resolvedTypeName == structLit.TypeName
+        && structLit.TypeName.StartsWith("__Tuple_")
+        && _resolvedReturnType is MlirStructType retTuple && retTuple.IsTuple
+        && retTuple.Fields.Count == structLit.FieldValues.Count
+        && retTuple.Name != structLit.TypeName) {
+      resolvedTypeName = retTuple.Name;
+      // Register the tuple type definition if not already present
+      if (!_typeDefs.ContainsKey(resolvedTypeName)) {
+        _typeDefs[resolvedTypeName] = retTuple;
+      }
+    }
+
     if (resolvedTypeName == structLit.TypeName && nextWrapperStructLit != null) {
       var wrapperTypeName = SubName(nextWrapperStructLit.TypeName);
       if (_typeDefs.TryGetValue(wrapperTypeName, out var wrapperDef)

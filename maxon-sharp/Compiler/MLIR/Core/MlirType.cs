@@ -208,6 +208,9 @@ public class MlirUnionType(string name, List<MlirEnumCase> cases, MlirType? back
     ? 8 + Cases.Max(c => c.AssociatedValues?.Count ?? 0) * 8
     : 8;
 
+  // Associated-value enums are heap-allocated; array elements store 8-byte pointers
+  public override int ElementSize => HasAssociatedValues ? 8 : SizeInBytes;
+
   public MlirEnumCase? GetCase(string name) => Cases.FirstOrDefault(c => c.Name == name);
 }
 

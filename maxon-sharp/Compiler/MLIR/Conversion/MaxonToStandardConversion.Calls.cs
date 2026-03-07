@@ -192,10 +192,18 @@ public static partial class MaxonToStandardConversion {
     }
 
     // Associated-value enum return: the enum is already a heap pointer.
+    // Incref before return so the caller receives an owned reference (rc>=1),
+    // matching the struct return convention.
     if (retOp.Value != null
         && valueMap.TryGetValue(retOp.Value, out var retSv) && retSv is StdHeapPtr retHp
         && typeDefs.TryGetValue(retHp.TypeName, out var enumRetTypeDef)
         && enumRetTypeDef is MlirUnionType enumRetType && enumRetType.HasAssociatedValues) {
+      if (temps.IsTempManaged(retHp.VarName!)
+            && !temps.TempHasFlag(retHp.VarName!, OwnershipFlags.SelfReturn)
+            && !temps.TempHasFlag(retHp.VarName!, OwnershipFlags.Orphan)) {
+        EmitIncref(block, retHp.VarName!, varTypes, scopeName: funcName);
+        EmitTransfer(block, retHp.VarName!, varTypes, funcName);
+      }
       var retHeapPtr = EmitLoad(block, retHp.VarName!, varTypes);
       block.AddOp(new StdReturnOp(retHeapPtr));
       return;

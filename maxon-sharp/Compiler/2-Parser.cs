@@ -381,7 +381,8 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
 
   private record LoopContext(string SourceLabel, string HeaderLabel, string ExitLabel, HashSet<string> ScopeVars,
     string? IterVarName = null, string? NextMethodName = null, MaxonValueKind? ElementKind = null, string? ElementStructTypeName = null, string? IterableTypeName = null,
-    string? RangeCounterVarName = null, MaxonValueKind? RangeElementKind = null, string? RangeStructTypeName = null);
+    string? RangeCounterVarName = null, MaxonValueKind? RangeElementKind = null, string? RangeStructTypeName = null,
+    string? ForInResultVarName = null);
   private record MatchContext(string SourceLabel, string MergeLabel, HashSet<string> ScopeVars);
 
   private static readonly Dictionary<TokenType, (MaxonBinOperator Op, int Precedence)> BinaryOperators = new() {
@@ -7422,7 +7423,8 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     var forInOuterScope = _variables.SnapshotKeys();
     PushScope();
     _loopStack.Push(new LoopContext(loopSourceLabel, headerLabel, exitLabel, forInOuterScope,
-      iterVarName, nextMethodName, elementKind, elementStructTypeName, iterableTypeName));
+      iterVarName, nextMethodName, elementKind, elementStructTypeName, iterableTypeName,
+      ForInResultVarName: resultVar));
 
     if (resultVar != null) {
       var loadedValue = EmitVarRefOp(resultVar, elementKind, elementStructTypeName);
@@ -7446,17 +7448,14 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     // Parse the body
     ParseBodyUntilEnd();
     var forInInnerScope = _variables.KeysSince(forInOuterScope);
+    var loopCtx = _loopStack.Peek();
     PopScope();
     _loopStack.Pop();
     ExpectEndLabel(loopSourceLabel);
 
     // Branch back to header (skip if all paths in the body terminated)
     if (_currentBlock != null && !BlockEndsWithTerminator(_currentBlock)) {
-      // Include the for-in result variable so the current iteration's
-      // element is decref'd before the header fetches the next one.
-      var loopScopeVars = resultVar != null && elementKind == MaxonValueKind.Struct
-        ? [resultVar, ..forInInnerScope]
-        : forInInnerScope;
+      var loopScopeVars = WithForInResultVar(loopCtx, forInInnerScope);
       _currentBlock.AddOp(new MaxonScopeEndOp(loopScopeVars) { VarMetadata = _variables.GetScopeEndVarMetadata() });
       _currentBlock.AddOp(new MaxonBrOp(headerLabel));
     }
@@ -7595,7 +7594,8 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     var token = Advance(); // consume 'continue'
     var loop = ResolveLoopTarget(token);
     var continueInnerScope = _variables.KeysSince(loop.ScopeVars);
-    _currentBlock!.AddOp(new MaxonScopeEndOp(continueInnerScope) { VarMetadata = _variables.GetScopeEndVarMetadata() });
+    var continueScopeVars = WithForInResultVar(loop, continueInnerScope);
+    _currentBlock!.AddOp(new MaxonScopeEndOp(continueScopeVars) { VarMetadata = _variables.GetScopeEndVarMetadata() });
     _currentBlock!.AddOp(new MaxonBrOp(loop.HeaderLabel));
   }
 
@@ -7657,9 +7657,10 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     var tryCallOp = new MaxonTryCallOp(loop.NextMethodName!, [iterRef.Result], loop.ElementKind!.Value, loop.ElementStructTypeName);
     skipBodyBlock.AddOp(tryCallOp);
 
-    // Store discarded result
+    // Store discarded result so scope_end can release it
+    string? discardVar = null;
     if (tryCallOp.Result != null) {
-      var discardVar = $"__skip_discard_{_blockCounter++}";
+      discardVar = $"__skip_discard_{_blockCounter++}";
       skipBodyBlock.AddOp(new MaxonAssignOp(discardVar, tryCallOp.Result, true, true, loop.ElementKind!.Value));
       _variables.Declare(discardVar, loop.ElementKind!.Value, true, tryCallOp.Result, skipBodyBlock, structTypeName: loop.ElementStructTypeName);
     }
@@ -7674,7 +7675,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     var skipDecrLabel = $"{skipLabel}.decr";
     skipBodyBlock.AddOp(new MaxonCondBrOp(errCmp.Result, skipDecrLabel, loop.ExitLabel));
 
-    // Decrement counter and loop back
+    // Decrement counter, release discarded value, and loop back
     var skipDecrBlock = _currentFunction!.Body.AddBlock(skipDecrLabel);
     _currentBlock = skipDecrBlock;
 
@@ -7684,13 +7685,19 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     var subOp = new MaxonBinOp(MaxonBinOperator.Sub, currentCount, oneLit.Result, MaxonValueKind.Integer);
     skipDecrBlock.AddOp(subOp);
     skipDecrBlock.AddOp(new MaxonAssignOp(skipCounterVar, subOp.Result, isDeclaration: false, isMutable: true, MaxonValueKind.Integer));
+    // Release the discarded next() result before looping back — the next
+    // iteration will overwrite the slot, so we must decref+zero it now.
+    if (discardVar != null) {
+      skipDecrBlock.AddOp(new MaxonScopeEndOp([discardVar]) { VarMetadata = _variables.GetScopeEndVarMetadata() });
+    }
     skipDecrBlock.AddOp(new MaxonBrOp(skipHeaderLabel));
 
     // Skip done: branch to the loop header (like continue)
     var skipDoneBlock = _currentFunction!.Body.AddBlock(skipDoneLabel);
     _currentBlock = skipDoneBlock;
     var skipInnerScope = _variables.KeysSince(loop.ScopeVars);
-    skipDoneBlock.AddOp(new MaxonScopeEndOp(skipInnerScope) { VarMetadata = _variables.GetScopeEndVarMetadata() });
+    var skipScopeVars = WithForInResultVar(loop, skipInnerScope);
+    skipDoneBlock.AddOp(new MaxonScopeEndOp(skipScopeVars) { VarMetadata = _variables.GetScopeEndVarMetadata() });
     skipDoneBlock.AddOp(new MaxonBrOp(loop.HeaderLabel));
   }
 
@@ -7715,6 +7722,19 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       _currentBlock!.AddOp(addOp);
       _currentBlock!.AddOp(new MaxonAssignOp(counterVarName, addOp.Result, isDeclaration: false, isMutable: true, elementKind));
     }
+  }
+
+  /// Prepends the for-in result variable to the scope var list when the loop
+  /// iterates over heap-allocated elements (structs, type parameters, associated-value enums).
+  /// The result var is declared before the loop's scope snapshot so KeysSince doesn't
+  /// capture it, but it must be released at every loop-exit path.
+  private static List<string> WithForInResultVar(LoopContext loop, List<string> innerScope) {
+    var resultVar = loop.ForInResultVarName;
+    if (resultVar != null
+        && loop.ElementKind is MaxonValueKind.Struct or MaxonValueKind.TypeParameter or MaxonValueKind.Enum) {
+      return [resultVar, ..innerScope];
+    }
+    return innerScope;
   }
 
   private (string ExitLabel, HashSet<string> ScopeVars, bool IsLoop) ResolveBreakTarget(Token keyword) {
