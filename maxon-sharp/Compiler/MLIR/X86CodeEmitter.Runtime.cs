@@ -1973,6 +1973,10 @@ public partial class X86CodeEmitter {
     if (Compiler.MmTrace) EmitLeaRegSymdataRel(X86Register.R9, "__mm_scope_find_first_file");
     EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_alloc")); EmitDword(0);
     EmitMovMemReg(-0x10, X86Register.Rax, 8); // [rbp-16] = block_ptr
+    // Incref so block starts at rc=1 (mm_alloc returns rc=0)
+    EmitMovRegReg(X86Register.Rcx, X86Register.Rax);
+    if (Compiler.MmTrace) EmitLeaRegSymdataRel(X86Register.Rdx, "__mm_scope_find_first_file");
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_incref")); EmitDword(0);
     // FindFirstFileA(pattern, &block[8])
     EmitMovRegMem(X86Register.Rcx, -0x08, 8); // arg1: pattern
     EmitMovRegMem(X86Register.Rdx, -0x10, 8); // block_ptr
@@ -1982,7 +1986,7 @@ public partial class X86CodeEmitter {
     EmitMovRegImm(X86Register.Rcx, -1);
     EmitCmpRegReg(X86Register.Rax, X86Register.Rcx);
     EmitJcc("ne", "rt_fff_found");
-    // Not found: decref block (will free since rc=1), return 0
+    // Not found: decref block (frees since rc drops to 0), return 0
     EmitMovRegMem(X86Register.Rcx, -0x10, 8);
     if (Compiler.MmTrace) EmitLeaRegSymdataRel(X86Register.Rdx, "__mm_scope_find_close");
     EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_decref")); EmitDword(0);
@@ -2050,7 +2054,7 @@ public partial class X86CodeEmitter {
     EmitJcc("z", "rt_fc_done");
     EmitMovRegIndirectMem(X86Register.Rcx, X86Register.Rax, FindBlockHandleOffset); // arg1: handle
     EmitCallImport("kernel32.dll", "FindClose");
-    // Decref block (will free since rc=1)
+    // Decref block (frees since rc drops to 0)
     EmitMovRegMem(X86Register.Rcx, -0x08, 8);
     if (Compiler.MmTrace) EmitLeaRegSymdataRel(X86Register.Rdx, "__mm_scope_find_close");
     EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_decref")); EmitDword(0);

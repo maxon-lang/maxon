@@ -13,12 +13,14 @@ public static class TypeCycleCheckPass {
     // Build adjacency list: typeName -> list of (edgeLabel, targetTypeName)
     var graph = BuildTypeGraph(module);
 
-    // BFS from each type to detect if it can reach itself
+    // BFS from each user-defined type to detect if it can reach itself
     foreach (var typeName in graph.Keys) {
+      // Only report cycles for user-defined types (skip stdlib/internal types)
+      var typeDef = module.TypeDefs.GetValueOrDefault(typeName);
+      if (typeDef?.SourceFilePath == null) continue;
       var cycle = FindShortestCycle(graph, typeName);
       if (cycle != null) {
         var path = string.Join(" \u2192 ", cycle);
-        var typeDef = module.TypeDefs.GetValueOrDefault(typeName);
         throw new CompileError(
           ErrorCode.MlirTypeCycle,
           $"type '{typeName}' contains a reference cycle (via {path}); recursive type references are not allowed",
@@ -51,6 +53,18 @@ public static class TypeCycleCheckPass {
       if (typeDef is MlirStructType structType) {
         foreach (var field in structType.Fields) {
           AddTypeReferenceEdge(edges, field.Name, field.Type, module);
+        }
+        // Monomorphized container types reference their element type through TypeParams
+        // (e.g. FolderArray has TypeParams["Element"] = Folder), creating ownership edges
+        foreach (var (_, paramType) in structType.TypeParams) {
+          var paramTargetName = paramType switch {
+            MlirStructType s => s.Name,
+            MlirUnionType u => u.Name,
+            _ => (string?)null
+          };
+          if (paramTargetName != null && module.TypeDefs.ContainsKey(paramTargetName)) {
+            edges.Add((paramTargetName, paramTargetName));
+          }
         }
       }
 

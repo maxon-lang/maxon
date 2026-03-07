@@ -12726,8 +12726,25 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     var bodyExpr = ParseExpression();
     var bodyValue = ResolveExprValue(bodyExpr);
 
-    // Emit return
-    _currentBlock.AddOp(new MaxonScopeEndOp(GetScopeEndVars()) { VarMetadata = _variables.GetScopeEndVarMetadata() });
+    // Emit return — compute keepVars to protect returned managed values from scope cleanup
+    HashSet<string>? keepVars = null;
+    var returnVarName = _lastExprVarName;
+    if (returnVarName != null && _variables.ContainsKey(returnVarName)
+        && _variables[returnVarName].Kind is MaxonValueKind.Struct or MaxonValueKind.Enum) {
+      keepVars = [returnVarName];
+    } else if (bodyExpr is ExprResult.Direct) {
+      var lastOp = _currentBlock!.Operations.Count > 0 ? _currentBlock.Operations[^1] : null;
+      string? backedByVar = lastOp switch {
+        MaxonStructVarRefOp sv => sv.VarName,
+        MaxonEnumVarRefOp ev => ev.VarName,
+        MaxonAssignOp { IsDeclaration: true } av when av.VarName.StartsWith("__call_tmp_") => av.VarName,
+        MaxonAssignOp { IsDeclaration: true } av when av.VarName.StartsWith("__lit_tmp_") => av.VarName,
+        _ => null
+      };
+      if (backedByVar != null && _variables.ContainsKey(backedByVar))
+        keepVars = [backedByVar];
+    }
+    _currentBlock.AddOp(new MaxonScopeEndOp(GetScopeEndVars(), keepVars) { VarMetadata = _variables.GetScopeEndVarMetadata() });
     var returnOp = new MaxonReturnOp(bodyValue);
     _currentBlock.AddOp(returnOp);
 

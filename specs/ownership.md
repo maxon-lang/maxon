@@ -1085,7 +1085,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E4014: specs/fragments/ownership/cycle-direct-self-ref.test: type 'Node' contains a reference cycle (via Node → next: Node); recursive type references are not allowed
+error E4014: specs/fragments/ownership/cycle-direct-self-ref.test:4:6: type 'Node' contains a reference cycle (via Node → next: Node); recursive type references are not allowed
 ```
 
 <!-- test: cycle-union-self-ref -->
@@ -1103,17 +1103,17 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E4014: specs/fragments/ownership/cycle-union-self-ref.test: type 'Link' contains a reference cycle (via Link → link.next: Link); recursive type references are not allowed
+error E4014: specs/fragments/ownership/cycle-union-self-ref.test:4:7: type 'Link' contains a reference cycle (via Link → link.next: Link); recursive type references are not allowed
 ```
 
 <!-- test: cycle-indirect-via-container -->
 A struct with a container of itself is a compile error.
 ```maxon
-typealias Integer = int(i64.min to i64.max)
+typealias FolderArray = Array with Folder
 
 type Folder
   export var name String
-  export var children Array with Folder
+  export var children FolderArray
 end 'Folder'
 
 function main() returns ExitCode
@@ -1121,14 +1121,12 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E4014: specs/fragments/ownership/cycle-indirect-via-container.test: type 'Folder' contains a reference cycle (via Folder → children: Array(Folder) → Folder); recursive type references are not allowed
+error E4014: specs/fragments/ownership/cycle-indirect-via-container.test:4:6: type 'Folder' contains a reference cycle (via Folder → children: FolderArray → Folder); recursive type references are not allowed
 ```
 
 <!-- test: cycle-mutual-recursion -->
 Two structs that reference each other is a compile error.
 ```maxon
-typealias Integer = int(i64.min to i64.max)
-
 type A
   export var b B
 end 'A'
@@ -1142,5 +1140,5 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E4014: specs/fragments/ownership/cycle-mutual-recursion.test: type 'A' contains a reference cycle (via A → b: B → a: A); recursive type references are not allowed
+error E4014: specs/fragments/ownership/cycle-mutual-recursion.test:2:6: type 'A' contains a reference cycle (via A → b: B → a: A); recursive type references are not allowed
 ```

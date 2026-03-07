@@ -198,9 +198,12 @@ public static partial class MaxonToStandardConversion {
         && valueMap.TryGetValue(retOp.Value, out var retSv) && retSv is StdHeapPtr retHp
         && typeDefs.TryGetValue(retHp.TypeName, out var enumRetTypeDef)
         && enumRetTypeDef is MlirUnionType enumRetType && enumRetType.HasAssociatedValues) {
-      if (temps.IsTempManaged(retHp.VarName!)
+      bool isEnumParam = _structParamNames != null && _structParamNames.Contains(retHp.VarName!)
+            && retHp.VarName != "self";
+      bool isEnumManagedTemp = temps.IsTempManaged(retHp.VarName!)
             && !temps.TempHasFlag(retHp.VarName!, OwnershipFlags.SelfReturn)
-            && !temps.TempHasFlag(retHp.VarName!, OwnershipFlags.Orphan)) {
+            && !temps.TempHasFlag(retHp.VarName!, OwnershipFlags.Orphan);
+      if (isEnumParam || isEnumManagedTemp) {
         EmitIncref(block, retHp.VarName!, varTypes, scopeName: funcName);
         EmitTransfer(block, retHp.VarName!, varTypes, funcName);
       }
@@ -213,14 +216,19 @@ public static partial class MaxonToStandardConversion {
       // Struct return: return the heap pointer as i64
       StdValue retHeapPtr;
       if (valueMap.TryGetValue(retOp.Value, out var retStructSv) && retStructSv is StdHeapPtr retStructHp) {
-        // Incref before return: the function's scope-end will decref all locals,
-        // so the returned value needs an extra reference for the caller.
+        // Incref before return so the caller receives an owned reference.
+        // - Temps: scope-end decrefs them, so incref balances that.
+        // - Struct params: scope-end skips them (borrowed), so incref creates
+        //   a new owned reference for the caller.
         // Skip SelfReturn (alias, not owned).
         // Skip Orphan temps: their scope-end cleanup is already skipped for returned values,
         // so the single reference from creation transfers directly to the caller.
-        if (temps.IsTempManaged(retStructHp.VarName!)
+        bool isStructParam = _structParamNames != null && _structParamNames.Contains(retStructHp.VarName!)
+              && retStructHp.VarName != "self";
+        bool isManagedTemp = temps.IsTempManaged(retStructHp.VarName!)
               && !temps.TempHasFlag(retStructHp.VarName!, OwnershipFlags.SelfReturn)
-              && !temps.TempHasFlag(retStructHp.VarName!, OwnershipFlags.Orphan)) {
+              && !temps.TempHasFlag(retStructHp.VarName!, OwnershipFlags.Orphan);
+        if (isStructParam || isManagedTemp) {
           EmitIncref(block, retStructHp.VarName!, varTypes, scopeName: funcName);
           EmitTransfer(block, retStructHp.VarName!, varTypes, funcName);
         }

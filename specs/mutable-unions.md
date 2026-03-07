@@ -26,10 +26,10 @@ end 'update'
 For heap-pointer bindings (structs, unions with associated values, strings), use direct assignment:
 
 ```text
-var myNode = Node.node(10, Node.empty)
-match myNode 'update'
-  node(value, next) then next = Node.empty
-  empty then return
+var b = Named.named("hello")
+match b 'update'
+  named(name) then name = "world"
+  anonymous then return
 end 'update'
 ```
 
@@ -149,40 +149,6 @@ end 'main'
 2
 ```
 
-<!-- test: linked-list-mutation -->
-Build a linked list and mutate next pointers in-place.
-```maxon
-typealias Integer = int(i64.min to i64.max)
-
-union Node
-  empty
-  item(value Integer, next Node)
-end 'Node'
-
-function main() returns ExitCode
-  var n1 = Node.item(10, Node.empty)
-  var n2 = Node.item(32, Node.empty)
-  match n1 'link'
-    item(_value, next) then next = n2
-    empty then return 0
-  end 'link'
-  match n1 'read'
-    item(v1, tail) then return v1 + nodeValue(tail)
-    empty then return 0
-  end 'read'
-end 'main'
-
-function nodeValue(n Node) returns Integer
-  match n 'get'
-    item(v, _next) then return v
-    empty then return 0
-  end 'get'
-end 'nodeValue'
-```
-```exitcode
-42
-```
-
 <!-- test: mutate-twice -->
 Mutate the same associated value twice in sequence.
 ```maxon
@@ -207,37 +173,6 @@ function main() returns ExitCode
     holding(value) then return value
     empty then return 0
   end 'read'
-end 'main'
-```
-```exitcode
-42
-```
-
-<!-- test: self-referential-mutation -->
-Self-referential union — link two nodes and traverse.
-```maxon
-typealias Integer = int(i64.min to i64.max)
-
-union Link
-  tail
-  link(value Integer, next Link)
-end 'Link'
-
-function sumChain(c Link) returns Integer
-  match c 'walk'
-    link(v, next) then return v + sumChain(next)
-    tail then return 0
-  end 'walk'
-end 'sumChain'
-
-function main() returns ExitCode
-  var c2 = Link.link(32, Link.tail)
-  var c1 = Link.link(10, Link.tail)
-  match c1 'link1'
-    link(_v, next) then next = c2
-    tail then return 0
-  end 'link1'
-  return sumChain(c1)
 end 'main'
 ```
 ```exitcode

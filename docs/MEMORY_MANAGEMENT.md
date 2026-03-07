@@ -416,7 +416,7 @@ All managed (heap-allocated) variables are **zero-initialized** at function entr
 ## Summary of Invariants
 
 1. Every heap object has a 24-byte inline header at `[ptr-24]` containing tag, destructor, and refcount.
-2. Refcount starts at 1 after `mm_alloc`. No separate incref is needed.
+2. Refcount starts at 0 after `mm_alloc`. The caller's assignment emits `mm_incref` to set it to 1.
 3. Refcount reaches 0 -> destructor called (decrefs managed fields) -> object freed.
 4. Reference cycles are impossible -- they are compile-time errors.
 5. Every scope exit path decrefs all in-scope managed variables (except returned/kept values and parameters).
