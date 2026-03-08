@@ -56,6 +56,7 @@ public partial class X86CodeEmitter {
     EmitMaxonProcessCreateWithCapture();
     EmitMaxonProcessReadPipe();
     EmitMaxonProcessGetHandle();
+    EmitMaxonProcessCloseCapture();
     EmitMaxonProcessReadStdout();
     EmitMaxonProcessReadStderr();
     EmitMaxonStrlen();
@@ -2552,6 +2553,25 @@ public partial class X86CodeEmitter {
     EmitJcc("z", "rt_pgh_done");
     EmitMovRegIndirectMem(X86Register.Rax, X86Register.Rax, 0x00);
     DefineLabel("rt_pgh_done");
+    EmitRuntimeFunctionEnd();
+  }
+
+  /// <summary>
+  /// maxon_process_close_capture(capture_struct_ptr) -> void.
+  /// Closes the hProcess handle inside the capture struct, then frees the struct.
+  /// </summary>
+  private void EmitMaxonProcessCloseCapture() {
+    EmitRuntimeFunctionStart("maxon_process_close_capture", 1, 0x20);
+    EmitMovRegMem(X86Register.Rax, -0x08, 8);
+    EmitTestRegReg(X86Register.Rax, X86Register.Rax);
+    EmitJcc("z", "rt_pcc_done");
+    // Close hProcess handle at [capture+0x00]
+    EmitMovRegIndirectMem(X86Register.Rcx, X86Register.Rax, 0x00);
+    EmitCallImport("kernel32.dll", "CloseHandle");
+    // Free the capture struct
+    EmitMovRegMem(X86Register.Rcx, -0x08, 8);
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_free")); EmitDword(0);
+    DefineLabel("rt_pcc_done");
     EmitRuntimeFunctionEnd();
   }
 

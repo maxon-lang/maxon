@@ -6160,6 +6160,9 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     ["processGetHandle"] = RuntimeCallIntrinsic(
       "Gets hProcess from capture struct.\n\n`__Builtins.processGetHandle(capture_ptr) returns int`",
       "maxon_process_get_handle", 1, true),
+    ["processCloseCapture"] = RuntimeCallIntrinsic(
+      "Closes the process handle and frees the capture struct.\n\n`__Builtins.processCloseCapture(capture_ptr)`",
+      "maxon_process_close_capture", 1, false),
     ["processReadStdout"] = RuntimeCallToManaged(
       "Reads stdout from capture struct. Returns __ManagedMemory.\n\n`__Builtins.processReadStdout(capture_ptr) returns __ManagedMemory`",
       "maxon_process_read_stdout", 1, freeCString: true),
