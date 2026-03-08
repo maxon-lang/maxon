@@ -502,7 +502,7 @@ throw_stmt    = 'throw' expression
 ### 5.11 Panic
 
 ```
-panic_stmt    = 'panic' '(' STRING_LITERAL ')'
+panic_stmt    = 'panic' '(' ( STRING | STRING_INTERP ) ')'
 ```
 
 ### 5.12 Try Statement

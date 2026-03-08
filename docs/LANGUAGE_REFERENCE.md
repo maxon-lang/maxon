@@ -2250,12 +2250,12 @@ The `panic` statement immediately terminates the program with an error message a
 panic("something went wrong")
 ```
 
-The argument must be a string literal. The program prints a panic message to stderr including the source file and line number, followed by a stack trace, then exits with code 1.
+The argument can be a plain string literal or an interpolated string. The program prints a panic message to stderr including the source file and line number, followed by a stack trace, then exits with code 1.
 
 ```maxon
 function processValue(x int) returns int
     if x < 0 'negative'
-        panic("processValue: negative input not allowed")
+        panic("processValue: negative input, got {x}")
     end 'negative'
     return x * 2
 end 'processValue'

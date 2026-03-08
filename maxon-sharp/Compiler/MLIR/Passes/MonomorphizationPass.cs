@@ -607,6 +607,8 @@ public static class MonomorphizationPass {
         return new MaxonBrOp(br.Target);
       case MaxonPanicOp p:
         return new MaxonPanicOp(p.Message);
+      case MaxonPanicDynamicOp pd:
+        return new MaxonPanicDynamicOp((MaxonStruct)mapValue(pd.MessageStruct));
       case MaxonRefEqOp req: {
         var cloned = new MaxonRefEqOp(mapValue(req.Lhs), mapValue(req.Rhs), req.Negate);
         valueMap[req.Result.Id] = cloned.Result;

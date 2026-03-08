@@ -1025,6 +1025,13 @@ public class MaxonPanicOp(string message) : MaxonOp {
   public string SymdataLabel { get; } = $"__panic_msg_{MlirContext.Current.NextId()}";
 }
 
+// Write dynamically-constructed error message (from string interpolation) to stderr and terminate
+public class MaxonPanicDynamicOp(MaxonStruct messageStruct) : MaxonOp {
+  public override string Mnemonic => "maxon.panic_dynamic";
+  public MaxonStruct MessageStruct { get; } = messageStruct;
+  public override IReadOnlyList<string> PrintableOperands => [MessageStruct.ToString()];
+}
+
 /// Generic runtime function call op for intrinsics that delegate to a runtime function.
 public class MaxonCallRuntimeOp(string functionName, List<MaxonValue> args, bool hasResult) : MaxonOp {
   public override string Mnemonic => $"maxon.call_runtime.{FunctionName}";

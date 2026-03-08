@@ -1690,6 +1690,9 @@ public static partial class MaxonToStandardConversion {
             case MaxonPanicOp panicOp:
               LowerPanic(panicOp, newBlock, result);
               break;
+            case MaxonPanicDynamicOp panicDynOp:
+              LowerPanicDynamic(panicDynOp, newBlock, valueMap, varTypes);
+              break;
             case MaxonStringLiteralOp stringLitOp:
               LowerStringLiteral(stringLitOp, newBlock, valueMap, varTypes, result, temps,
                 inlineTargets.GetValueOrDefault(stringLitOp.Result.Id));

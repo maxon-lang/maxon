@@ -483,6 +483,7 @@ end 'err'
 
 // Panic (unrecoverable error — terminates with stack trace)
 panic("invariant violated")
+panic("expected {a}, got {b}")      // interpolated strings supported
 ```
 
 ## Arrays

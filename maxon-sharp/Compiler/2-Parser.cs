@@ -5310,15 +5310,25 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     var panicToken = Advance(); // consume 'panic'
     Expect(TokenType.LeftParen);
     var msgToken = Current();
-    if (msgToken.Type != TokenType.StringLiteral) {
-      throw new CompileError(ErrorCode.SemanticTypeMismatch, "panic requires a string literal argument", msgToken.Line, msgToken.Column);
-    }
-    Advance(); // consume string literal
-    Expect(TokenType.RightParen);
 
     var sourceFileName = _sourceFilePath != null ? Path.GetFileName(_sourceFilePath) : "unknown";
-    var message = $"panic at {sourceFileName}:{panicToken.Line}: {msgToken.Value}";
-    _currentBlock!.AddOp(new MaxonPanicOp(message));
+    var prefix = $"panic at {sourceFileName}:{panicToken.Line}: ";
+
+    if (msgToken.Type == TokenType.StringInterp) {
+      Advance(); // consume interpolated string
+      Expect(TokenType.RightParen);
+      // Prepend location prefix and append newline to the interpolated string content
+      var prefixedToken = new Token(TokenType.StringInterp, prefix + msgToken.Value + "\\n", msgToken.Line, msgToken.Column);
+      var interpResult = EmitStringLiteralWithInterpolation(prefixedToken);
+      _currentBlock!.AddOp(new MaxonPanicDynamicOp(interpResult));
+    } else if (msgToken.Type == TokenType.StringLiteral) {
+      Advance(); // consume string literal
+      Expect(TokenType.RightParen);
+      var message = prefix + msgToken.Value;
+      _currentBlock!.AddOp(new MaxonPanicOp(message));
+    } else {
+      throw new CompileError(ErrorCode.SemanticTypeMismatch, "panic requires a string argument", msgToken.Line, msgToken.Column);
+    }
   }
 
   private void ParseThrow() {

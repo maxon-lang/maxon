@@ -17,7 +17,7 @@ The `panic` statement immediately terminates the program with an error message a
 panic("error message")
 ```
 
-The argument must be a string literal. The program prints a panic message to stderr including the source file and line number, followed by a stack trace, then exits with code 1.
+The argument can be a string literal or an interpolated string (see `panic-interpolation` spec). The program prints a panic message to stderr including the source file and line number, followed by a stack trace, then exits with code 1.
 
 ### Example
 

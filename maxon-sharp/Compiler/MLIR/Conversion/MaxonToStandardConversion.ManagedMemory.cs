@@ -663,4 +663,23 @@ public static partial class MaxonToStandardConversion {
 		block.AddOp(ptrToI64);
 		block.AddOp(new StdCallRuntimeOp("maxon_panic", [ptrToI64.Result], null));
 	}
+
+	private static void LowerPanicDynamic(
+	  MaxonPanicDynamicOp op,
+	  MlirBlock<StandardOp> block,
+	  Dictionary<MaxonValue, StdValue> valueMap,
+	  Dictionary<string, string> varTypes) {
+		// The interpolated String struct has _managed (a __ManagedMemory pointer) at field 0.
+		// We need two levels of dereference: String -> __ManagedMemory -> buffer.
+		// The buffer is null-terminated from LowerStringInterp.
+		var stringVarName = ResolveManagedVarName(op.MessageStruct, valueMap);
+		// Load field 0 of String = __ManagedMemory pointer
+		var managedPtr = (StdI64)EmitStructFieldLoad(block, stringVarName, 0, MlirType.I64, varTypes);
+		// Store to temp so we can load fields from it
+		var managedTempVar = $"__panic_managed_{MlirContext.Current.NextId()}";
+		EmitStore(block, managedPtr, managedTempVar, varTypes);
+		// Load field 0 of __ManagedMemory = raw buffer pointer (C string)
+		var buffer = (StdI64)EmitStructFieldLoad(block, managedTempVar, ManagedFieldBuffer, MlirType.I64, varTypes);
+		block.AddOp(new StdCallRuntimeOp("maxon_panic", [buffer], null));
+	}
 }
