@@ -2684,28 +2684,47 @@ public partial class X86CodeEmitter {
 
   /// <summary>
   /// mm_raw_realloc(ptr_rcx, new_size_rdx, managedPtr_r8) -> new_ptr_rax
-  /// Simple HeapReAlloc wrapper for raw buffers (no refcount header).
-  /// If ptr is NULL, delegates to mm_raw_alloc(new_size).
-  /// managedPtr is the owning managed struct's heap pointer, used for --mm-trace output.
+  /// Allocates a new buffer, copies old data, poisons the old buffer with 0xDE, then frees it.
+  /// This guarantees that any dangling pointers into the old buffer will read garbage,
+  /// making use-after-realloc bugs deterministic rather than dependent on OS behavior.
+  /// managedPtr is the owning managed struct's heap pointer, used for old size computation
+  /// and --mm-trace output.
   /// </summary>
   private void EmitMmRawRealloc() {
-    EmitRuntimeFunctionStart("mm_raw_realloc", 3, 0x40);
-    // [rbp-8] = ptr, [rbp-16] = new_size, [rbp-24] = managedPtr
-    EmitMovRegMem(X86Register.Rax, -0x08, 8); // RAX = ptr
-    EmitBytes(0x48, 0x85, 0xC0); // TEST rax, rax
-    EmitJcc("nz", "mm_raw_realloc_not_null");
-    // NULL path: delegate to mm_raw_alloc
+    EmitRuntimeFunctionStart("mm_raw_realloc", 3, 0x60);
+    // [rbp-0x08] = old_ptr, [rbp-0x10] = new_size, [rbp-0x18] = managedPtr
+    // [rbp-0x28] = new_ptr, [rbp-0x30] = old_byte_size
+
+    // Step 1: Allocate new buffer via mm_raw_alloc(new_size)
     EmitMovRegMem(X86Register.Rcx, -0x10, 8); // RCX = new_size
     EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_raw_alloc")); EmitDword(0);
-    EmitJmp("mm_raw_realloc_done");
-    DefineLabel("mm_raw_realloc_not_null");
-    // HeapReAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, ptr, new_size)
-    EmitCallImport("kernel32.dll", "GetProcessHeap");
-    EmitMovRegReg(X86Register.Rcx, X86Register.Rax);    // arg1: hHeap
-    EmitMovRegImm(X86Register.Rdx, 0x08);                // arg2: HEAP_ZERO_MEMORY
-    EmitMovRegMem(X86Register.R8, -0x08, 8);             // arg3: old ptr
-    EmitMovRegMem(X86Register.R9, -0x10, 8);             // arg4: new_size
-    EmitCallImport("kernel32.dll", "HeapReAlloc");
+    EmitMovMemReg(-0x28, X86Register.Rax, 8); // save new_ptr
+
+    // Step 2: Compute old_byte_size = managedPtr->capacity * managedPtr->element_size
+    EmitMovRegMem(X86Register.Rax, -0x18, 8); // RAX = managedPtr
+    EmitMovRegIndirectMem(X86Register.Rcx, X86Register.Rax, 16); // RCX = [managedPtr+16] = capacity
+    EmitMovRegIndirectMem(X86Register.Rdx, X86Register.Rax, 24); // RDX = [managedPtr+24] = element_size
+    EmitBytes(0x48, 0x0F, 0xAF, 0xCA); // IMUL RCX, RDX → RCX = old_byte_size
+    EmitMovMemReg(-0x30, X86Register.Rcx, 8); // save old_byte_size
+
+    // Step 3: memcpy(new_ptr, old_ptr, old_byte_size)
+    EmitMovRegMem(X86Register.Rcx, -0x28, 8); // RCX = new_ptr (dst)
+    EmitMovRegMem(X86Register.Rdx, -0x08, 8); // RDX = old_ptr (src)
+    EmitMovRegMem(X86Register.R8, -0x30, 8);  // R8  = old_byte_size (count)
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "maxon_memcpy")); EmitDword(0);
+
+    // Step 4: Poison old buffer with 0xDE (REP STOSB: RDI=dst, RCX=count, AL=fill)
+    EmitMovRegMem(X86Register.Rdi, -0x08, 8); // RDI = old_ptr
+    EmitMovRegMem(X86Register.Rcx, -0x30, 8); // RCX = old_byte_size
+    EmitMovRegImm(X86Register.Rax, 0xDE);      // AL = 0xDE
+    EmitBytes(0xF3, 0xAA);                     // REP STOSB
+
+    // Step 5: Free old buffer
+    EmitMovRegMem(X86Register.Rcx, -0x08, 8); // RCX = old_ptr
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_raw_free")); EmitDword(0);
+
+    // Return new_ptr
+    EmitMovRegMem(X86Register.Rax, -0x28, 8);
     DefineLabel("mm_raw_realloc_done");
     if (Compiler.MmTrace) {
       EmitMovMemReg(-0x28, X86Register.Rax, 8); // save new_ptr
