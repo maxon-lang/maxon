@@ -2242,6 +2242,36 @@ throw HttpError.serverError
 - `throw` is only valid inside functions with a `throws` declaration
 - The thrown value must match the declared error type
 
+### Panic Statement
+
+The `panic` statement immediately terminates the program with an error message and stack trace. It is used to signal unrecoverable errors — situations that represent bugs in the program rather than expected error conditions.
+
+```maxon
+panic("something went wrong")
+```
+
+The argument must be a string literal. The program prints a panic message to stderr including the source file and line number, followed by a stack trace, then exits with code 1.
+
+```maxon
+function processValue(x int) returns int
+    if x < 0 'negative'
+        panic("processValue: negative input not allowed")
+    end 'negative'
+    return x * 2
+end 'processValue'
+```
+
+Output when called with a negative value:
+```text
+panic at example.maxon:3: processValue: negative input not allowed
+Stack trace:
+  in example.processValue
+  in example.main
+  in _start
+```
+
+Use `panic` for invariant violations and unreachable code paths. For expected error conditions (invalid user input, missing files, etc.), use `throw`/`try`/`otherwise` instead.
+
 ### Calling Throwing Functions
 
 When calling a function that throws, you must use `try`:

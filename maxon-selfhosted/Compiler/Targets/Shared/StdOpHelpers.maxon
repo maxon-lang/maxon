@@ -20,13 +20,14 @@ end 'JumpKind'
 export typealias ValueSlotMap = Array with VarSlot
 
 export function valueSlotMapGet(m ValueSlotMap, valueId ValueId) returns VarSlot
-    let result = try m.get(valueId) otherwise 0 - 1
-    return result
+    return try m.get(valueId) otherwise 'notFound'
+        panic("valueSlotMapGet: no slot for ValueId")
+    end 'notFound'
 end 'valueSlotMapGet'
 
 export function valueSlotMapSet(m ValueSlotMap, valueId ValueId, slot VarSlot)
     while m.count() <= valueId 'grow'
-        m.push(0 - 1)
+        m.push(0)
     end 'grow'
     m.set(valueId, value: slot)
 end 'valueSlotMapSet'

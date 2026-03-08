@@ -46,7 +46,7 @@ KEYWORD       = 'and' | 'as' | 'bool' | 'break' | 'byte' | 'continue'
               | 'extension' | 'fallthrough' | 'false' | 'float'
               | 'for' | 'from' | 'function' | 'gives' | 'if' | 'ignore'
               | 'implements' | 'in' | 'int' | 'interface' | 'is' | 'let'
-              | 'match' | 'not' | 'of' | 'or' | 'otherwise'
+              | 'match' | 'not' | 'of' | 'or' | 'otherwise' | 'panic'
               | 'return' | 'returns' | 'self' | 'Self' | 'shl' | 'shr'
               | 'skip' | 'static' | 'then' | 'throw' | 'throws' | 'to'
               | 'true' | 'try' | 'type' | 'typealias' | 'union' | 'upto'
@@ -354,6 +354,7 @@ statement     = return_stmt
               | continue_stmt
               | skip_stmt
               | throw_stmt
+              | panic_stmt
               | try_stmt
               | assignment_stmt
               | expression_stmt
@@ -498,7 +499,13 @@ given number of positions and continues to the next iteration.
 throw_stmt    = 'throw' expression
 ```
 
-### 5.11 Try Statement
+### 5.11 Panic
+
+```
+panic_stmt    = 'panic' '(' STRING_LITERAL ')'
+```
+
+### 5.12 Try Statement
 
 ```
 try_stmt      = 'try' expression 'otherwise' otherwise_clause

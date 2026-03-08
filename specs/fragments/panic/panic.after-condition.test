@@ -1,0 +1,72 @@
+// Test: panic.after-condition
+typealias Integer = int(i64.min to i64.max)
+
+function check(n Integer) returns Integer
+    if n < 0 'negative'
+        panic("negative value")
+    end 'negative'
+    return n
+end 'check'
+
+function main() returns ExitCode
+    return check(Integer{0 - 1})
+end 'main'
+---
+ExitCode: 1
+Stderr: ```
+panic at panic.after-condition.test:6: negative value
+Stack trace:
+  in panic.check
+  in panic.main
+  in _start
+```
+---
+module {
+  func @panic.check(n: i64) -> i64 {
+  entry:
+    x86.prologue stack_size=16
+    x86.mov [rbp-8], rcx
+    x86.xor rax, rax
+    x86.cmp rcx, rax
+    x86.jge panic.check.negative_0.merge
+  negative_0:
+    x86.lea_symdata rax, [__panic_msg_3]
+    x86.mov rcx, rax
+    x86.call maxon_panic
+    x86.jmp panic.check.negative_0.merge
+  negative_0.merge:
+    x86.mov rax, [rbp-8]
+    x86.epilogue
+    x86.ret
+  }
+  func @panic.main() -> u32 {
+  entry:
+    x86.prologue stack_size=16
+    x86.xor rax, rax
+    x86.mov rcx, 1
+    x86.sub rax, rcx
+    x86.mov rcx, rax
+    x86.call panic.check
+    x86.mov [rbp-8], rax
+    x86.xor rdx, rdx
+    x86.cmp rax, rdx
+    x86.setl rbx
+    x86.movzx rbx, rbxb
+    x86.mov rsi, 4294967295
+    x86.cmp rax, rsi
+    x86.setg rdi
+    x86.movzx rdi, rdib
+    x86.or rbx, rdi
+    x86.test rbx, rbx
+    x86.je panic.main.__range_ok_0
+  __range_panic_0:
+    x86.lea_symdata rax, [__panic_msg_14]
+    x86.mov rcx, rax
+    x86.call maxon_panic
+  __range_ok_0:
+    x86.mov rax, [rbp-8]
+    x86.epilogue
+    x86.ret
+  }
+}
+---

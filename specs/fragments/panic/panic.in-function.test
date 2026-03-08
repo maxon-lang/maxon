@@ -1,0 +1,39 @@
+// Test: panic.in-function
+function fail()
+    panic("failure in helper")
+end 'fail'
+
+function main() returns ExitCode
+    fail()
+    return 0
+end 'main'
+---
+ExitCode: 1
+Stderr: ```
+panic at panic.in-function.test:3: failure in helper
+Stack trace:
+  in panic.fail
+  in panic.main
+  in _start
+```
+---
+module {
+  func @panic.fail() {
+  entry:
+    x86.prologue stack_size=16
+    x86.lea_symdata rax, [__panic_msg_0]
+    x86.mov rcx, rax
+    x86.call maxon_panic
+    x86.epilogue
+    x86.ret
+  }
+  func @panic.main() -> u32 {
+  entry:
+    x86.prologue stack_size=16
+    x86.call panic.fail
+    x86.xor rax, rax
+    x86.epilogue
+    x86.ret
+  }
+}
+---

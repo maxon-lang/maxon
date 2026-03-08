@@ -53,6 +53,7 @@ public enum TokenType {
   Try,
   Otherwise,
   Ignore,
+  Panic,
   // Match statement keywords
   Match,
   Then,
@@ -198,6 +199,7 @@ public class Lexer(string source) {
     { "gives", new(TokenType.Gives, "Used in iterator expressions.", false) },
     { "throws", new(TokenType.Throws, "Indicates that a function may throw an error.", false) },
     { "throw", new(TokenType.Throw, "Throws an error that can be caught by a try-catch block.", false) },
+    { "panic", new(TokenType.Panic, "Terminates the program with an error message and stack trace.", false) },
     { "try", new(TokenType.Try, "Attempts an operation that may throw an error.", false) },
     { "otherwise", new(TokenType.Otherwise, "Provides a fallback for try expressions when an error occurs.", true) },
     { "ignore", new(TokenType.Ignore, "Used with otherwise to silently ignore errors.", false) },

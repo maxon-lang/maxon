@@ -4813,6 +4813,8 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       ParseMatch();
     } else if (Check(TokenType.Throw)) {
       ParseThrow();
+    } else if (Check(TokenType.Panic)) {
+      ParsePanic();
     } else if (Check(TokenType.Try)) {
       ParseTryStatement();
     } else {
@@ -5302,6 +5304,21 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
 
     var expectedKind = rangedType.BaseType.ToValueKind();
     return ValidateAndEmitRangeCheck(value, rangedType, expectedKind, returnToken);
+  }
+
+  private void ParsePanic() {
+    var panicToken = Advance(); // consume 'panic'
+    Expect(TokenType.LeftParen);
+    var msgToken = Current();
+    if (msgToken.Type != TokenType.StringLiteral) {
+      throw new CompileError(ErrorCode.SemanticTypeMismatch, "panic requires a string literal argument", msgToken.Line, msgToken.Column);
+    }
+    Advance(); // consume string literal
+    Expect(TokenType.RightParen);
+
+    var sourceFileName = _sourceFilePath != null ? Path.GetFileName(_sourceFilePath) : "unknown";
+    var message = $"panic at {sourceFileName}:{panicToken.Line}: {msgToken.Value}";
+    _currentBlock!.AddOp(new MaxonPanicOp(message));
   }
 
   private void ParseThrow() {

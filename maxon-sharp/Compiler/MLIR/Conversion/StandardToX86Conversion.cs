@@ -975,7 +975,10 @@ public static class StandardToX86Conversion {
     }
 
     // Insert prologue/epilogue only when a stack frame is needed.
+    // Any function with calls needs a frame for correct stack unwinding (e.g., panic stack traces).
     int stackSize = regManager.TotalStackSize;
+    bool hasCalls = newFunc.Body.Blocks.Any(b => b.Operations.Any(op => op is X86CallDirectOp));
+    if (hasCalls && stackSize == 0) stackSize = 16;
     if (stackSize > 0) {
       var entryBlock = newFunc.Body.Blocks.First();
       entryBlock.Operations.Insert(0, new X86PrologueOp(stackSize));

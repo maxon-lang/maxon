@@ -62,7 +62,7 @@ function lowerMidOpToArm64(op MlirOp, dstBlock MlirBlock, valueSlots ValueSlotMa
     match op 'dispatch'
         arith(aOp) then tempSlot = lowerArithToArm64(aOp, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: tempSlot)
         memref(mOp) then lowerMemRefToArm64(mOp, dstBlock: dstBlock, valueSlots: valueSlots)
-        func(fOp) then lowerFuncOpToArm64(fOp, dstBlock: dstBlock)
+        func(fOp) then tempSlot = lowerFuncOpToArm64(fOp, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: tempSlot)
         runtime(rOp) then lowerRuntimeToArm64(rOp, dstBlock: dstBlock)
         cf(_) then break 'dispatch'
         maxhl(_) then break 'dispatch'
@@ -119,13 +119,8 @@ function emitMaxArm64BinaryOp(aOp ArithOp, dstBlock MlirBlock, valueSlots ValueS
         let leftSlot = valueSlotMapGet(valueSlots, valueId: info.leftId)
         let rightSlot = valueSlotMapGet(valueSlots, valueId: info.rightId)
         // Load right operand into X1 first (so X0 load doesn't clobber it)
-        if rightSlot >= 0 'hasRight'
-            dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.ldrFromSlot(MaxArm64Register.x1, rightSlot)))
-        end 'hasRight'
-        // Load left operand into X0
-        if leftSlot >= 0 'hasLeft'
-            dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.ldrFromSlot(MaxArm64Register.x0, leftSlot)))
-        end 'hasLeft'
+        dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.ldrFromSlot(MaxArm64Register.x1, rightSlot)))
+        dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.ldrFromSlot(MaxArm64Register.x0, leftSlot)))
         // Emit the operation
         dstBlock.ops.push(MlirOp.maxarm64(info.arm64Op))
         // Store the result
@@ -215,12 +210,8 @@ function emitMaxArm64DivRem(aOp ArithOp, dstBlock MlirBlock, valueSlots ValueSlo
 
     let leftSlot = valueSlotMapGet(valueSlots, valueId: leftId)
     let rightSlot = valueSlotMapGet(valueSlots, valueId: rightId)
-    if rightSlot >= 0 'hasRight'
-        dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.ldrFromSlot(MaxArm64Register.x1, rightSlot)))
-    end 'hasRight'
-    if leftSlot >= 0 'hasLeft'
-        dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.ldrFromSlot(MaxArm64Register.x0, leftSlot)))
-    end 'hasLeft'
+    dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.ldrFromSlot(MaxArm64Register.x1, rightSlot)))
+    dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.ldrFromSlot(MaxArm64Register.x0, leftSlot)))
     if isRem 'emitRem'
         dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.remRegs(MaxArm64Register.x0, MaxArm64Register.x0, MaxArm64Register.x1)))
     end 'emitRem' else 'emitDiv'
@@ -284,9 +275,7 @@ function emitMaxArm64Unary(aOp ArithOp, dstBlock MlirBlock, valueSlots ValueSlot
     end 'extractOperand'
 
     let operandSlot = valueSlotMapGet(valueSlots, valueId: operandId)
-    if operandSlot >= 0 'hasSlot'
-        dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.ldrFromSlot(MaxArm64Register.x0, operandSlot)))
-    end 'hasSlot'
+    dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.ldrFromSlot(MaxArm64Register.x0, operandSlot)))
     dstBlock.ops.push(MlirOp.maxarm64(getMaxArm64UnaryOp(aOp)))
     let slot = nextTempSlot
     dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.strToSlot(slot, MaxArm64Register.x0)))
@@ -315,12 +304,22 @@ function emitMaxArm64LoadSlot(dstBlock MlirBlock, valueSlots ValueSlotMap, resul
 end 'emitMaxArm64LoadSlot'
 
 // Lower a func op to MaxArm64 ops.
-function lowerFuncOpToArm64(fOp FuncOp, dstBlock MlirBlock)
+// After a call, the return value is in x0 — store it to a temp slot so later ops can find it.
+function lowerFuncOpToArm64(fOp FuncOp, dstBlock MlirBlock, valueSlots ValueSlotMap, nextTempSlot SlotIndex) returns SlotIndex
     match fOp 'lower'
         ret(_) then break 'lower'
-        call(_, callee) then dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.branchLink(callee)))
+        call(resultId, callee) then return lowerCallOpToArm64(resultId, callee: callee, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
     end 'lower'
+    return nextTempSlot
 end 'lowerFuncOpToArm64'
+
+function lowerCallOpToArm64(resultId ValueId, callee ByteArray, dstBlock MlirBlock, valueSlots ValueSlotMap, nextTempSlot SlotIndex) returns SlotIndex
+    dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.branchLink(callee)))
+    let tempSlot = nextTempSlot
+    dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.strToSlot(tempSlot, MaxArm64Register.x0)))
+    valueSlotMapSet(valueSlots, valueId: resultId, slot: tempSlot)
+    return nextTempSlot + 1
+end 'lowerCallOpToArm64'
 
 // Lower a runtime op to MaxArm64 ops.
 function lowerRuntimeToArm64(rOp RuntimeOp, dstBlock MlirBlock)
@@ -377,9 +376,7 @@ end 'lowerCondBrToArm64'
 // For boolTest: load condition value, compare against zero, branch if equal (false).
 function emitBoolTestBranch(dstBlock MlirBlock, valueSlots ValueSlotMap, condId ValueId, elseTarget BlockId)
     let condSlot = valueSlotMapGet(valueSlots, valueId: condId)
-    if condSlot >= 0 'hasSlot'
-        dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.ldrFromSlot(MaxArm64Register.x0, condSlot)))
-    end 'hasSlot'
+    dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.ldrFromSlot(MaxArm64Register.x0, condSlot)))
     dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.cmpRegZero(MaxArm64Register.x0)))
     dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.condBranch(MaxArm64CondCode.eq, elseTarget)))
 end 'emitBoolTestBranch'

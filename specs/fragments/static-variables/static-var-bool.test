@@ -27,11 +27,13 @@ module {
   }
   func @static-variables.main() -> u32 {
   entry:
+    x86.prologue stack_size=16
     x86.movzx rax, byte [rip+initialized]
     x86.test rax, rax
     x86.je static-variables.main.check1_0.after
   check1_0:
     x86.mov rax, 1
+    x86.epilogue
     x86.ret
   check1_0.after:
     x86.call static-variables.init
@@ -40,9 +42,11 @@ module {
     x86.je static-variables.main.check2_1.after
   check2_1:
     x86.mov rax, 42
+    x86.epilogue
     x86.ret
   check2_1.after:
     x86.xor rax, rax
+    x86.epilogue
     x86.ret
   }
 }

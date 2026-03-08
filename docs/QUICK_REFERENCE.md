@@ -480,6 +480,9 @@ if let value = try mayFail() 'ok'
 end 'ok' else (e) 'err'
     print("Error")
 end 'err'
+
+// Panic (unrecoverable error — terminates with stack trace)
+panic("invariant violated")
 ```
 
 ## Arrays

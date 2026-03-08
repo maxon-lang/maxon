@@ -62,7 +62,7 @@ function lowerMlirOp(op MlirOp, dstBlock MlirBlock, valueSlots ValueSlotMap, nex
         arith(arithOp) then return lowerArithOp(arithOp, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
         memref(memOp) then return lowerMemRefOp(memOp, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
         runtime(rtOp) then return lowerRuntimeOp(rtOp, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
-        func(funcOp) then return lowerFuncOp(funcOp, dstBlock: dstBlock, nextTempSlot: nextTempSlot)
+        func(funcOp) then return lowerFuncOp(funcOp, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
         maxx64(x64Op) then return lowerPassthroughX64(x64Op, dstBlock: dstBlock, nextTempSlot: nextTempSlot)
         cf(_) then return nextTempSlot
         maxarm64(_) then return nextTempSlot
@@ -117,12 +117,8 @@ function lowerBinaryOp(resultId ValueId, leftId ValueId, rightId ValueId, x64Op 
     let leftSlot = valueSlotMapGet(valueSlots, valueId: leftId)
     let rightSlot = valueSlotMapGet(valueSlots, valueId: rightId)
     // Load right first so rax load doesn't clobber it
-    if rightSlot >= 0 'hasRight'
-        dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.loadSlot(X64Register.rcx, rightSlot)))
-    end 'hasRight'
-    if leftSlot >= 0 'hasLeft'
-        dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.loadSlot(X64Register.rax, leftSlot)))
-    end 'hasLeft'
+    dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.loadSlot(X64Register.rcx, rightSlot)))
+    dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.loadSlot(X64Register.rax, leftSlot)))
     dstBlock.ops.push(MlirOp.maxx64(x64Op))
     let tempSlot = nextTempSlot
     dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.movSlot(tempSlot, X64Register.rax)))
@@ -135,12 +131,8 @@ function lowerShiftOp(resultId ValueId, leftId ValueId, rightId ValueId, x64Op M
     let leftSlot = valueSlotMapGet(valueSlots, valueId: leftId)
     let rightSlot = valueSlotMapGet(valueSlots, valueId: rightId)
     // Shift count must be in rcx (cl)
-    if rightSlot >= 0 'hasRight'
-        dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.loadSlot(X64Register.rcx, rightSlot)))
-    end 'hasRight'
-    if leftSlot >= 0 'hasLeft'
-        dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.loadSlot(X64Register.rax, leftSlot)))
-    end 'hasLeft'
+    dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.loadSlot(X64Register.rcx, rightSlot)))
+    dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.loadSlot(X64Register.rax, leftSlot)))
     dstBlock.ops.push(MlirOp.maxx64(x64Op))
     let tempSlot = nextTempSlot
     dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.movSlot(tempSlot, X64Register.rax)))
@@ -153,12 +145,8 @@ end 'lowerShiftOp'
 function lowerCmpOp(resultId ValueId, leftId ValueId, rightId ValueId, x64Op MaxX64Op, dstBlock MlirBlock, valueSlots ValueSlotMap, nextTempSlot SlotIndex) returns SlotIndex
     let leftSlot = valueSlotMapGet(valueSlots, valueId: leftId)
     let rightSlot = valueSlotMapGet(valueSlots, valueId: rightId)
-    if rightSlot >= 0 'hasRight'
-        dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.loadSlot(X64Register.rcx, rightSlot)))
-    end 'hasRight'
-    if leftSlot >= 0 'hasLeft'
-        dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.loadSlot(X64Register.rax, leftSlot)))
-    end 'hasLeft'
+    dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.loadSlot(X64Register.rcx, rightSlot)))
+    dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.loadSlot(X64Register.rax, leftSlot)))
     dstBlock.ops.push(MlirOp.maxx64(x64Op))
     // Record the comparison result so boolTest can find the value
     let tempSlot = nextTempSlot
@@ -171,12 +159,8 @@ end 'lowerCmpOp'
 function lowerDivRem(resultId ValueId, leftId ValueId, rightId ValueId, isRem bool, dstBlock MlirBlock, valueSlots ValueSlotMap, nextTempSlot SlotIndex) returns SlotIndex
     let leftSlot = valueSlotMapGet(valueSlots, valueId: leftId)
     let rightSlot = valueSlotMapGet(valueSlots, valueId: rightId)
-    if rightSlot >= 0 'hasRight'
-        dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.loadSlot(X64Register.rcx, rightSlot)))
-    end 'hasRight'
-    if leftSlot >= 0 'hasLeft'
-        dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.loadSlot(X64Register.rax, leftSlot)))
-    end 'hasLeft'
+    dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.loadSlot(X64Register.rcx, rightSlot)))
+    dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.loadSlot(X64Register.rax, leftSlot)))
     if isRem 'emitRem'
         dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.iremRcx))
     end 'emitRem' else 'emitDiv'
@@ -191,9 +175,7 @@ end 'lowerDivRem'
 // Unary op: loadSlot(rax, operand) + op + movSlot(temp, rax)
 function lowerUnaryOp(resultId ValueId, operandId ValueId, x64Op MaxX64Op, dstBlock MlirBlock, valueSlots ValueSlotMap, nextTempSlot SlotIndex) returns SlotIndex
     let operandSlot = valueSlotMapGet(valueSlots, valueId: operandId)
-    if operandSlot >= 0 'hasSlot'
-        dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.loadSlot(X64Register.rax, operandSlot)))
-    end 'hasSlot'
+    dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.loadSlot(X64Register.rax, operandSlot)))
     dstBlock.ops.push(MlirOp.maxx64(x64Op))
     let tempSlot = nextTempSlot
     dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.movSlot(tempSlot, X64Register.rax)))
@@ -230,22 +212,28 @@ function lowerRuntimeOp(op RuntimeOp, dstBlock MlirBlock, valueSlots ValueSlotMa
 end 'lowerRuntimeOp'
 
 function lowerPrintInt(valueId ValueId, dstBlock MlirBlock, valueSlots ValueSlotMap)
-    // Load the value into rax before printing
     let slot = valueSlotMapGet(valueSlots, valueId: valueId)
-    if slot >= 0 'hasSlot'
-        dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.loadSlot(X64Register.rax, slot)))
-    end 'hasSlot'
+    dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.loadSlot(X64Register.rax, slot)))
     dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.printInt))
 end 'lowerPrintInt'
 
 // Lower func ops (non-terminator: just call).
-function lowerFuncOp(op FuncOp, dstBlock MlirBlock, nextTempSlot SlotIndex) returns SlotIndex
+// After a call, the return value is in rax — store it to a temp slot so later ops can find it.
+function lowerFuncOp(op FuncOp, dstBlock MlirBlock, valueSlots ValueSlotMap, nextTempSlot SlotIndex) returns SlotIndex
     match op 'lower'
-        call(_, callee) then dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.callDirect(callee)))
+        call(resultId, callee) then return lowerCallOp(resultId, callee: callee, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
         ret(_) then break 'lower'
     end 'lower'
     return nextTempSlot
 end 'lowerFuncOp'
+
+function lowerCallOp(resultId ValueId, callee ByteArray, dstBlock MlirBlock, valueSlots ValueSlotMap, nextTempSlot SlotIndex) returns SlotIndex
+    dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.callDirect(callee)))
+    let tempSlot = nextTempSlot
+    dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.movSlot(tempSlot, X64Register.rax)))
+    valueSlotMapSet(valueSlots, valueId: resultId, slot: tempSlot)
+    return nextTempSlot + 1
+end 'lowerCallOp'
 
 // Lower block terminator: cf.condBr, cf.br, func.ret.
 function lowerTerminator(srcBlock MlirBlock, dstBlock MlirBlock, valueSlots ValueSlotMap)
@@ -287,11 +275,8 @@ function lowerCondBr(condId ValueId, thenTarget BlockId, elseTarget BlockId, src
 end 'lowerCondBr'
 
 function lowerBoolTestCondBr(condId ValueId, elseTarget BlockId, dstBlock MlirBlock, valueSlots ValueSlotMap)
-    // Load the boolean value into rax, test it, jump to else if zero
     let condSlot = valueSlotMapGet(valueSlots, valueId: condId)
-    if condSlot >= 0 'hasSlot'
-        dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.loadSlot(X64Register.rax, condSlot)))
-    end 'hasSlot'
+    dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.loadSlot(X64Register.rax, condSlot)))
     dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.testRaxRax))
     dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.condJump(X64JumpCondition.e, elseTarget)))
 end 'lowerBoolTestCondBr'
@@ -304,10 +289,7 @@ function lowerFuncTerminator(op FuncOp, dstBlock MlirBlock, valueSlots ValueSlot
 end 'lowerFuncTerminator'
 
 function lowerReturnOp(retValId ValueId, dstBlock MlirBlock, valueSlots ValueSlotMap)
-    // Load return value into rax if it has a known slot
     let retSlot = valueSlotMapGet(valueSlots, valueId: retValId)
-    if retSlot >= 0 'hasRetVal'
-        dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.loadSlot(X64Register.rax, retSlot)))
-    end 'hasRetVal'
+    dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.loadSlot(X64Register.rax, retSlot)))
     dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.epilogue))
 end 'lowerReturnOp'
