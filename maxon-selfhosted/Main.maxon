@@ -42,7 +42,7 @@ function printUsage()
     print("\n")
     print("Spec test options:\n")
     print("  --filter=PATTERN         Run only tests matching pattern\n")
-    print("  --target=<TRIPLE|all>    Cross-compile tests for target (e.g. x86_64-linux-gnu)\n")
+    print("  --target=<TARGET|all>    Cross-compile tests for target (e.g. x86_64-linux)\n")
     print("\n")
     print("Logging (all commands):\n")
     print("  --log=LEVEL              Set all log categories to LEVEL\n")
@@ -54,7 +54,7 @@ end 'printUsage'
 
 function runBuild(args StringArray) returns ExitCode
     var path = ""
-    var target = detectHostTriple()
+    var target = detectHostTarget()
 
     // Parse args: positional path and --target= option
     for arg in args 'parseArgs'
@@ -65,7 +65,7 @@ function runBuild(args StringArray) returns ExitCode
             let afterEq = try arg.indexAfter(eqIdx) otherwise 'bad2'
                 continue
             end 'bad2'
-            target = parseTargetTriple(arg.slice(afterEq, endIndex: arg.endIndex()))
+            target = parseTarget(arg.slice(afterEq, endIndex: arg.endIndex()))
         end 'isTarget' else 'notTarget'
             if not arg.startsWith("--") 'isPath'
                 path = arg
@@ -114,35 +114,35 @@ function runSpecTests(args StringArray) returns ExitCode
         return runAllTargetTests(filter)
     end 'runAll'
 
-    var target = detectHostTriple()
+    var target = detectHostTarget()
     if not targetStr.isEmpty() 'hasTarget'
-        target = parseTargetTriple(targetStr)
+        target = parseTarget(targetStr)
     end 'hasTarget'
 
-    logInfo(LogCategory.testing, message: "Running self-hosted spec tests ({tripleToString(target)})...")
+    logInfo(LogCategory.testing, message: "Running self-hosted spec tests ({targetToString(target)})...")
     return runAllSpecTests(filter, target: target)
 end 'runSpecTests'
 
 function runAllTargetTests(filter String) returns ExitCode
     var totalFailed = 0
 
-    let t1 = TargetTriple{cpu: CpuArch.x86_64, os: Os.windows, abi: Abi.msvc}
-    logInfo(LogCategory.testing, message: "Testing target: {tripleToString(t1)}")
+    let t1 = Target{cpu: CpuArch.x86_64, os: Os.windows}
+    logInfo(LogCategory.testing, message: "Testing target: {targetToString(t1)}")
     let ec1 = runAllSpecTests(filter, target: t1)
     totalFailed = totalFailed + ec1
 
-    let t2 = TargetTriple{cpu: CpuArch.x86_64, os: Os.linux, abi: Abi.gnu}
-    logInfo(LogCategory.testing, message: "Testing target: {tripleToString(t2)}")
+    let t2 = Target{cpu: CpuArch.x86_64, os: Os.linux}
+    logInfo(LogCategory.testing, message: "Testing target: {targetToString(t2)}")
     let ec2 = runAllSpecTests(filter, target: t2)
     totalFailed = totalFailed + ec2
 
-    let t3 = TargetTriple{cpu: CpuArch.aarch64, os: Os.linux, abi: Abi.gnu}
-    logInfo(LogCategory.testing, message: "Testing target: {tripleToString(t3)}")
+    let t3 = Target{cpu: CpuArch.aarch64, os: Os.linux}
+    logInfo(LogCategory.testing, message: "Testing target: {targetToString(t3)}")
     let ec3 = runAllSpecTests(filter, target: t3)
     totalFailed = totalFailed + ec3
 
-    let t4 = TargetTriple{cpu: CpuArch.aarch64, os: Os.windows, abi: Abi.msvc}
-    logInfo(LogCategory.testing, message: "Testing target: {tripleToString(t4)}")
+    let t4 = Target{cpu: CpuArch.aarch64, os: Os.windows}
+    logInfo(LogCategory.testing, message: "Testing target: {targetToString(t4)}")
     let ec4 = runAllSpecTests(filter, target: t4)
     totalFailed = totalFailed + ec4
 

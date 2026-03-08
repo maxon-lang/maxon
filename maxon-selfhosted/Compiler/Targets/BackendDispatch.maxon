@@ -1,7 +1,7 @@
 // Single dispatch point for all CPU+OS backend combinations.
 // CPU emitters consume OsDescriptor to handle OS differences — no CPU*OS dispatch needed.
 
-export function emitBackend(module MlirModule, target TargetTriple) returns CodeResult throws CompileError
+export function emitBackend(module MlirModule, target Target) returns CodeResult throws CompileError
     let osDesc = makeOsDescriptor(target)
     var result = CodeResult{code: ByteArray{}, mainCallFixupOffset: 0, relocations: RelocationArray{}}
     match target.cpu 'cpu'
@@ -11,7 +11,7 @@ export function emitBackend(module MlirModule, target TargetTriple) returns Code
     return result
 end 'emitBackend'
 
-export function writeExecutable(outputPath String, codeResult CodeResult, target TargetTriple)
+export function writeExecutable(outputPath String, codeResult CodeResult, target Target)
     match target.os 'os'
         Os.windows then writePe(outputPath, codeResult: codeResult, target: target)
         Os.linux then writeElf(outputPath, codeResult: codeResult, target: target)

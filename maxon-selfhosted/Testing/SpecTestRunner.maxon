@@ -340,18 +340,18 @@ function skipCodeBlock(lines StringArray, startLine LineNumber, lineCount LineNu
 end 'skipCodeBlock'
 
 
-// Check if a target matches the host (x86_64-windows-msvc).
-function isHostTarget(target TargetTriple) returns bool
-  let host = detectHostTriple()
-  let targetStr = tripleToString(target)
-  let hostStr = tripleToString(host)
+// Check if a target matches the host (x86_64-windows).
+function isHostTarget(target Target) returns bool
+  let host = detectHostTarget()
+  let targetStr = targetToString(target)
+  let hostStr = targetToString(host)
   return targetStr == hostStr
 end 'isHostTarget'
 
 // Check if we can execute binaries for this target.
 // Host target runs natively, Linux targets run via Docker.
 // Non-host Windows targets (e.g. aarch64-windows) are compile-only.
-function canExecuteTarget(target TargetTriple) returns bool
+function canExecuteTarget(target Target) returns bool
   if isHostTarget(target) 'isHost'
     return true
   end 'isHost'
@@ -363,7 +363,7 @@ end 'canExecuteTarget'
 
 // Build the command to run a compiled binary.
 // Host targets run directly; Linux targets run via Docker.
-function buildRunCommand(outputPath String, target TargetTriple, projectRoot String, testArgs String) returns String
+function buildRunCommand(outputPath String, target Target, projectRoot String, testArgs String) returns String
   if isHostTarget(target) 'isHost'
     if not testArgs.isEmpty() 'hasArgs'
       return "{outputPath} {testArgs}"
@@ -388,7 +388,7 @@ function buildRunCommand(outputPath String, target TargetTriple, projectRoot Str
 end 'buildRunCommand'
 
 // Run all whitelisted spec tests for a specific target. Returns (passed, failed).
-export function runAllSpecTests(filter String, target TargetTriple) returns ExitCode
+export function runAllSpecTests(filter String, target Target) returns ExitCode
   let root = try findProjectRoot() otherwise 'noRoot'
     logError(LogCategory.testing, message: "Could not find project root (no specs/ directory found)")
     return 1
@@ -443,7 +443,7 @@ export function runAllSpecTests(filter String, target TargetTriple) returns Exit
 end 'runAllSpecTests'
 
 // Run a single test. Returns true if passed.
-function runSingleTest(test SpecTest, projectRoot String, target TargetTriple) returns bool
+function runSingleTest(test SpecTest, projectRoot String, target Target) returns bool
   let tempDir = "{projectRoot}/temp"
   let tempSource = "{tempDir}/spectest_temp.maxon"
   let ext = executableExtension(target)

@@ -2,7 +2,7 @@
 
 The self-hosted Maxon compiler (`maxon-selfhosted/`) currently passes **3 of ~131 spec tests** (`basics`, `print-function`, `variables`). It has a working end-to-end pipeline (lexer → parser → Maxon dialect → Standard dialect → X86 dialect → code emitter → PE/ELF writer) but only supports a tiny subset of the language. This roadmap brings it to full parity with the C# compiler (`maxon-sharp/`).
 
-Each phase includes X86 + ARM64 backends and PE + ELF output formats. All targets (`x86_64-windows-msvc`, `aarch64-windows-msvc`, `x86_64-linux-gnu`, `aarch64-linux-gnu`) are brought to parity within each phase.
+Each phase includes X86 + ARM64 backends and PE + ELF output formats. All targets (`x86_64-windows`, `aarch64-windows`, `x86_64-linux`, `aarch64-linux`) are brought to parity within each phase.
 
 ## Progress
 
@@ -607,8 +607,8 @@ After each phase:
 1. Update the spec whitelist in `Testing/SpecTestRunner.maxon`
 2. Build the self-hosted compiler: `maxon build maxon-selfhosted`
 3. Run spec tests for all three targets:
-   - `./maxon-selfhosted/Main.exe spec-test` (x86_64-windows-msvc, runs natively)
-   - `./maxon-selfhosted/Main.exe spec-test --target=x86_64-linux-gnu` (runs via Docker)
-   - `./maxon-selfhosted/Main.exe spec-test --target=aarch64-linux-gnu` (runs via Docker)
+   - `./maxon-selfhosted/Main.exe spec-test` (x86_64-windows, runs natively)
+   - `./maxon-selfhosted/Main.exe spec-test --target=x86_64-linux` (runs via Docker)
+   - `./maxon-selfhosted/Main.exe spec-test --target=aarch64-linux` (runs via Docker)
 4. Verify all whitelisted tests pass on all targets
 5. Cross-check against C# compiler: `./maxon-sharp/bin/Debug/net8.0/win-x64/maxon.exe spec-test` to ensure behavioral parity

@@ -23,7 +23,7 @@ maxon-selfhosted/
     QueryDatabase.maxon                Query database types and caches
     QueryEngine.maxon                  Dependency tracking, cache validation
     StdlibLoader.maxon                 Stdlib parsing and caching
-    Target.maxon                       TargetTriple (CpuArch × Os × Abi)
+    Target.maxon                       Target (CpuArch × Os)
 
     MLIR/
       Dialects/
@@ -148,15 +148,15 @@ Machine-level operations for each CPU target:
 
 ### Project (Project.maxon)
 
-The central compilation context. Contains the query database, SSA counter, parser symbol table state, compile-time string constants, root path, and target triple.
+The central compilation context. Contains the query database, SSA counter, parser symbol table state, compile-time string constants, root path, and compilation target.
 
 ### QueryDatabase (QueryDatabase.maxon)
 
 Incremental compilation state: current revision, source file entries, per-file caches (tokens, parse), whole-program caches (MaxonOps, StdOps, code), dependency edges, and hit/miss counters.
 
-### TargetTriple (Target.maxon)
+### Target (Target.maxon)
 
-`cpu: CpuArch` (x86_64 | aarch64) × `os: Os` (windows | linux) × `abi: Abi` (msvc | gnu).
+`cpu: CpuArch` (x86_64 | aarch64) × `os: Os` (windows | linux).
 
 ### OsDescriptor (OsDescriptor.maxon)
 
