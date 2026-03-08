@@ -3025,10 +3025,41 @@ return a            // ERROR
 - Automatically freed at end of scope
 - No manual `free` or garbage collector needed
 
+### Borrow Checking
+
+The borrow checker prevents mutation of a collection while references to its elements are alive. When you obtain a reference from a mutable source (e.g., `var s = try arr.get(0) otherwise ""`), that source cannot be mutated until the reference is no longer used.
+
+Borrows use non-lexical lifetimes (NLL): a borrow ends at the last use of the borrowing variable, not at the end of its scope.
+
+```maxon
+var arr = ["hello"]
+var s = try arr.get(0) otherwise ""
+arr.push("world")    // ERROR E3070: cannot mutate 'arr' via 'push' while it is borrowed by 's'
+```
+
+```maxon
+var arr = ["hello"]
+var s = try arr.get(0) otherwise ""
+print("{s}\n")        // last use of s — borrow expires here
+arr.push("world")    // OK: borrow has expired
+```
+
+The borrow checker also detects indirect mutation through helper functions:
+
+```maxon
+function clearList(list StringList)
+  list.clear()
+end 'clearList'
+
+var val = try list.first() otherwise "none"
+clearList(list)       // ERROR E3070: cannot mutate 'list' via 'clearList' while it is borrowed by 'val'
+```
+
 ### Safety
 - No bounds checking on arrays
 - No null checks
 - Use-after-move prevented at compile time (see Ownership System above)
+- Mutation of borrowed collections prevented at compile time (see Borrow Checking above)
 
 ### Calling Convention
 - Parameters that are only read are passed by value (simple types in registers, arrays as pointer)
@@ -3160,6 +3191,13 @@ x = 10                  // ERROR: Cannot assign to immutable variable
 ```maxon
 var x = 5
 x = x                   // ERROR: self-assignment has no effect
+```
+
+**Borrow Conflict**
+```maxon
+var arr = ["hello"]
+var s = try arr.get(0) otherwise ""
+arr.push("world")       // ERROR E3070: cannot mutate 'arr' while borrowed by 's'
 ```
 
 **Useless Discard**

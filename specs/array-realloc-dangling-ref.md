@@ -1,20 +1,20 @@
 ---
 feature: array-realloc-dangling-ref
-status: experimental
-keywords: [array, realloc, dangling, reference, memory-safety, growth]
+status: stable
+keywords: [array, realloc, dangling, reference, memory-safety, growth, borrow-checker]
 category: memory
 ---
 # Array Realloc Dangling Reference
 
 ## Documentation
 
-When an array grows, its backing buffer may be reallocated to a new address. Any references obtained before the growth (e.g., from `arr.get(index)`) must remain valid after the growth. Since `get` returns a reference to a managed element (with incref), the caller holds an independent reference to the element's heap object — not a pointer into the array's buffer — so growth should not invalidate it.
+When an array grows, its backing buffer may be reallocated to a new address. Any references obtained before the growth (e.g., from `arr.get(index)`) would become dangling pointers if the source is mutated. The borrow checker prevents this at compile time: you cannot mutate a collection while any variable borrows from it.
 
 ## Tests
 
 <!-- test: string-ref-survives-array-growth -->
-### String reference survives array growth
-Get a string from a small array, then push many elements to force buffer reallocation. The original string reference must still be valid.
+### String reference borrow conflict detected
+Get a string from an array, then push elements. The borrow checker must reject this.
 ```maxon
 typealias StringArray = Array with String
 
@@ -38,16 +38,13 @@ function main() returns ExitCode
   return 1
 end 'main'
 ```
-```exitcode
-0
-```
-```stdout
-ok
+```maxoncstderr
+error E3070: specs/fragments/array-realloc-dangling-ref/string-ref-survives-array-growth.test:11:9: cannot mutate 'arr' via 'push' while it is borrowed by 's' (borrowed at line 6)
 ```
 
 <!-- test: struct-ref-survives-array-growth -->
-### Struct with string field reference survives array growth
-Get a struct from an array, then grow the array. The struct's string field must still be valid.
+### Struct with string field borrow conflict detected
+Get a struct from an array, then grow the array. The borrow checker must reject this.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -82,16 +79,13 @@ function main() returns ExitCode
   return 1
 end 'main'
 ```
-```exitcode
-0
-```
-```stdout
-ok
+```maxoncstderr
+error E3070: specs/fragments/array-realloc-dangling-ref/struct-ref-survives-array-growth.test:20:9: cannot mutate 'arr' via 'push' while it is borrowed by 'item' (borrowed at line 15)
 ```
 
 <!-- test: multiple-refs-survive-array-growth -->
-### Multiple references survive array growth
-Get references to multiple elements, then grow the array. All must remain valid.
+### Multiple references borrow conflict detected
+Get references to multiple elements, then grow the array. The borrow checker must reject this.
 ```maxon
 function main() returns ExitCode
   var arr = ["alpha string that is long enough for heap allocation purposes",
@@ -122,9 +116,6 @@ function main() returns ExitCode
   return 1
 end 'main'
 ```
-```exitcode
-0
-```
-```stdout
-ok
+```maxoncstderr
+error E3070: specs/fragments/array-realloc-dangling-ref/multiple-refs-survive-array-growth.test:14:9: cannot mutate 'arr' via 'push' while it is borrowed by 'a' (borrowed at line 7)
 ```

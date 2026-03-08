@@ -5363,7 +5363,9 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     _currentBlock!.Operations.RemoveAt(_currentBlock!.Operations.Count - 1);
     var tryCallOp = new MaxonTryCallOp(callOp.Callee, callOp.Args, callOp.ResultKind, callOp.ResultStructTypeName) {
       ArgMutabilities = callOp.ArgMutabilities,
-      ArgVarNames = callOp.ArgVarNames
+      ArgVarNames = callOp.ArgVarNames,
+      CallLine = callOp.CallLine,
+      CallColumn = callOp.CallColumn
     };
     _currentBlock!.AddOp(tryCallOp);
     _lastExprCallOp = tryCallOp;
@@ -7107,7 +7109,9 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     _currentBlock!.Operations.RemoveAt(_currentBlock!.Operations.Count - 1);
     var tryCallOp = new MaxonTryCallOp(callOp.Callee, callOp.Args, callOp.ResultKind, callOp.ResultStructTypeName) {
       ArgMutabilities = callOp.ArgMutabilities,
-      ArgVarNames = callOp.ArgVarNames
+      ArgVarNames = callOp.ArgVarNames,
+      CallLine = callOp.CallLine,
+      CallColumn = callOp.CallColumn
     };
     _currentBlock!.AddOp(tryCallOp);
 
@@ -12446,7 +12450,9 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     var (resultKind, resultStructTypeName) = ResolveCallResultType(callee.ReturnType, args);
     var callOp = new MaxonCallOp(callee.Name, args, resultKind, resultStructTypeName) {
       ArgMutabilities = _lastArgMutabilities,
-      ArgVarNames = _lastArgVarNames
+      ArgVarNames = _lastArgVarNames,
+      CallLine = functionNameToken.Line,
+      CallColumn = functionNameToken.Column
     };
     _lastArgMutabilities = null;
     _lastArgVarNames = null;
@@ -12471,7 +12477,9 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     var (resultKind, resultStructTypeName) = ResolveCallResultType(callee.ReturnType, args);
     var callOp = new MaxonCallOp(callee.Name, args, resultKind, resultStructTypeName) {
       ArgMutabilities = _lastArgMutabilities,
-      ArgVarNames = _lastArgVarNames
+      ArgVarNames = _lastArgVarNames,
+      CallLine = functionNameToken.Line,
+      CallColumn = functionNameToken.Column
     };
     _lastArgMutabilities = null;
     _lastArgVarNames = null;

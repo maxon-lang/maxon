@@ -107,6 +107,8 @@ All variables must be used (E3012). The exact name `_` is a discard identifier -
 
 **Scope cleanup:** Struct variables are automatically freed when they go out of scope (reference-counted). Returned structs transfer ownership to the caller and are not freed at scope exit.
 
+**Borrow checking:** You cannot mutate a collection while a variable borrows from it (e.g., a reference obtained via `.get()`). Borrows expire at the last use of the borrowing variable (non-lexical lifetimes). Error E3070.
+
 Function return values must be used. Pure functions (no side effects) cannot have their results discarded at all. Impure functions can have results explicitly discarded with `let _ = func()`. Chainable methods (returning own type) may be freely discarded.
 
 ## Functions

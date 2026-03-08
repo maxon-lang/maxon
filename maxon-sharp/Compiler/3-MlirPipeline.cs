@@ -38,6 +38,9 @@ public class MlirPipeline {
     // Detect reference cycles in type definitions (compile error if found)
     TypeCycleCheckPass.Run(module);
 
+    // Borrow checking (after monomorphization so concrete method names are resolved)
+    BorrowCheckPass.Run(module);
+
     // Capture maxon stage
     if (returnIr || dumpStagesBasePath != null) {
       if (returnIr) {

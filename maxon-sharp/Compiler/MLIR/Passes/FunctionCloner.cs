@@ -621,7 +621,7 @@ internal class FunctionCloner {
     var newCallee = _typeSubstitution.SubstituteCallee(call.Callee);
     var newArgs = call.Args.Select(MapValue).ToList();
     var (resultKind, resultStructTypeName) = ResolveCallResultType(call.ResultKind, call.ResultStructTypeName, newArgs);
-    var cloned = new MaxonCallOp(newCallee, newArgs, resultKind, resultStructTypeName) { ArgMutabilities = call.ArgMutabilities, ArgVarNames = call.ArgVarNames };
+    var cloned = new MaxonCallOp(newCallee, newArgs, resultKind, resultStructTypeName) { ArgMutabilities = call.ArgMutabilities, ArgVarNames = call.ArgVarNames, CallLine = call.CallLine, CallColumn = call.CallColumn };
     if (call.Result != null && cloned.Result != null)
       RegisterResult(call.Result, cloned.Result);
     return cloned;
@@ -631,7 +631,7 @@ internal class FunctionCloner {
     var newCallee = _typeSubstitution.SubstituteCallee(tryCall.Callee);
     var newArgs = tryCall.Args.Select(MapValue).ToList();
     var (resultKind, resultStructTypeName) = ResolveCallResultType(tryCall.ResultKind, tryCall.ResultStructTypeName, newArgs);
-    var cloned = new MaxonTryCallOp(newCallee, newArgs, resultKind, resultStructTypeName) { ArgMutabilities = tryCall.ArgMutabilities, ArgVarNames = tryCall.ArgVarNames };
+    var cloned = new MaxonTryCallOp(newCallee, newArgs, resultKind, resultStructTypeName) { ArgMutabilities = tryCall.ArgMutabilities, ArgVarNames = tryCall.ArgVarNames, CallLine = tryCall.CallLine, CallColumn = tryCall.CallColumn };
     if (tryCall.Result != null && cloned.Result != null)
       RegisterResult(tryCall.Result, cloned.Result);
     RegisterResult(tryCall.ErrorFlag, cloned.ErrorFlag);

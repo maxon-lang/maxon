@@ -912,7 +912,8 @@ decref __Chain_String #1 rc=0 [~StringList]
 ```
 
 <!-- test: memory.value-survives-clear-and-return -->
-<!-- MmTrace -->
+### Borrow conflict: first then clear in function
+Getting a value from a list and then clearing it is a borrow conflict, even in a helper function.
 ```maxon
 typealias StringList = List with String
 
@@ -930,57 +931,36 @@ function main() returns ExitCode
   return 0
 end 'main'
 ```
-```exitcode
-0
+```maxoncstderr
+error E3070: specs/fragments/list/memory.value-survives-clear-and-return.test:6:8: cannot mutate 'list' via 'clear' while it is borrowed by 'val' (borrowed at line 5)
 ```
-```stdout
-hello world!!!!!!!!!!!!!!
+
+<!-- test: memory.value-survives-clear-error -->
+### Borrow conflict: indirect mutation via helper function
+Passing a borrowed-from list to a function that clears it is a borrow conflict.
+```maxon
+typealias StringList = List with String
+
+function clearList(list StringList)
+  list.clear()
+end 'clearList'
+
+function main() returns ExitCode
+  var list = StringList{}
+  list.append("hello world!!!!!!!!!!!!!!")
+  var val = try list.first() otherwise "none"
+  clearList(list)
+  print("{val}\n")
+  return 0
+end 'main'
 ```
-```stderr
-alloc __Chain_String #1 rc=0 size=32 [list.main]
-alloc StringList #2 rc=0 size=16 [list.main]
-incref __Chain_String #1 rc=1 [list.main]
-incref StringList #2 rc=1 [list.main]
-alloc String #3 rc=0 size=16 [list.main]
-alloc __ManagedMemory #4 rc=0 size=32 [list.main]
-incref __ManagedMemory #4 rc=1 [list.main]
-incref String #3 rc=1 [list.main]
-alloc __ChainNode #5 rc=0 size=32 [StringList.append]
-incref String #3 rc=2 [StringList.append]
-incref __ChainNode #5 rc=1 [chain_insert]
-incref __ChainNode #5 rc=2 [StringList.first]
-incref __ChainNode #5 rc=3 [StringList.first]
-decref __ChainNode #5 rc=2 [StringList.first]
-decref __ChainNode #5 rc=1 [StringList.first]
-incref String #3 rc=3 [StringList.first]
-transfer String #3 rc=3 [StringList.first]
-incref String #3 rc=4 [list.clearList]
-decref String #3 rc=3 [chain_clear]
-decref __ChainNode #5 rc=0 [chain_clear]
-  free __ChainNode #5
-decref String #3 rc=2 [list.clearList]
-transfer String #3 rc=2 [list.clearList]
-alloc String #6 rc=0 size=16 [list.main]
-alloc __ManagedMemory #7 rc=0 size=32 [list.main]
-incref __ManagedMemory #7 rc=1 [list.main]
-incref String #6 rc=1 [list.main]
-decref String #6 rc=0 [list.main]
-decref __ManagedMemory #7 rc=0 [~String]
-  free __ManagedMemory #7
-  free String #6
-decref String #3 rc=1 [list.main]
-decref String #3 rc=0 [list.main]
-decref __ManagedMemory #4 rc=0 [~String]
-  free __ManagedMemory #4
-  free String #3
-decref StringList #2 rc=0 [list.main]
-decref __Chain_String #1 rc=0 [~StringList]
-  free __Chain_String #1
-  free StringList #2
+```maxoncstderr
+error E3070: specs/fragments/list/memory.value-survives-clear-error.test:12:3: cannot mutate 'list' via 'clearList' while it is borrowed by 'val' (borrowed at line 11)
 ```
 
 <!-- test: memory.value-survives-clear -->
-<!-- MmTrace -->
+### Borrow conflict: first then clear
+Getting a value from a list and then clearing it is a borrow conflict.
 ```maxon
 typealias StringList = List with String
 
@@ -993,50 +973,6 @@ function main() returns ExitCode
   return 0
 end 'main'
 ```
-```exitcode
-0
-```
-```stdout
-hello world!!!!!!!!!!!!!!
-```
-```stderr
-alloc __Chain_String #1 rc=0 size=32 [list.main]
-alloc StringList #2 rc=0 size=16 [list.main]
-incref __Chain_String #1 rc=1 [list.main]
-incref StringList #2 rc=1 [list.main]
-alloc String #3 rc=0 size=16 [list.main]
-alloc __ManagedMemory #4 rc=0 size=32 [list.main]
-incref __ManagedMemory #4 rc=1 [list.main]
-incref String #3 rc=1 [list.main]
-alloc __ChainNode #5 rc=0 size=32 [StringList.append]
-incref String #3 rc=2 [StringList.append]
-incref __ChainNode #5 rc=1 [chain_insert]
-incref __ChainNode #5 rc=2 [StringList.first]
-incref __ChainNode #5 rc=3 [StringList.first]
-decref __ChainNode #5 rc=2 [StringList.first]
-decref __ChainNode #5 rc=1 [StringList.first]
-incref String #3 rc=3 [StringList.first]
-transfer String #3 rc=3 [StringList.first]
-incref String #3 rc=4 [list.main]
-decref String #3 rc=3 [chain_clear]
-decref __ChainNode #5 rc=0 [chain_clear]
-  free __ChainNode #5
-alloc String #6 rc=0 size=16 [list.main]
-alloc __ManagedMemory #7 rc=0 size=32 [list.main]
-incref __ManagedMemory #7 rc=1 [list.main]
-incref String #6 rc=1 [list.main]
-decref String #6 rc=0 [list.main]
-decref __ManagedMemory #7 rc=0 [~String]
-  free __ManagedMemory #7
-  free String #6
-decref String #3 rc=2 [list.main]
-decref String #3 rc=1 [list.main]
-decref String #3 rc=0 [list.main]
-decref __ManagedMemory #4 rc=0 [~String]
-  free __ManagedMemory #4
-  free String #3
-decref StringList #2 rc=0 [list.main]
-decref __Chain_String #1 rc=0 [~StringList]
-  free __Chain_String #1
-  free StringList #2
+```maxoncstderr
+error E3070: specs/fragments/list/memory.value-survives-clear.test:8:8: cannot mutate 'list' via 'clear' while it is borrowed by 'val' (borrowed at line 7)
 ```
