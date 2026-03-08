@@ -14,7 +14,7 @@ can use the maxon-sharp compiler for reference.
 5. Repeat until all tests pass.
 6. Review all code changes:
     - Eliminate duplicated code — refactor shared logic into helper methods.
-    - Ensure no `switch` or 'match' statements use `default` cases — all cases must be handled explicitly.
+    - Ensure no `switch` or 'match' silently ignore unhandled cases — add a default case that throws an error for unexpected inputs.
     - Ensure no `else` clauses silently catch unhandled conditions — throw errors for unexpected inputs.
     - Ensure functions that handle multiple cases, for example a series of 'if' statements, but return 
       a default value for unhandled cases, should be refactored to throw an error instead. This ensures that all cases are handled explicitly and prevents silent failures.

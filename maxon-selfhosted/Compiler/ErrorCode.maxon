@@ -18,19 +18,30 @@ end 'ErrorCode'
 typealias ErrorLineNumber = int(0 to u64.max)
 typealias ErrorColumnNumber = int(0 to u64.max)
 
-// Logs a structured compile error to stderr and throws CompileError.compileError.
-// Format: "[CMP] ERROR: error E3003: filePath:line:column: message"
-export function raiseCompileError(code ErrorCode, message String, line ErrorLineNumber, column ErrorColumnNumber, filePath String) throws CompileError
-    logError(LogCategory.compiler, message: "error E{code.rawValue:04}: {filePath}:{line}:{column}: {message}")
-    throw CompileError.compileError
-end 'raiseCompileError'
+// A single diagnostic (error) collected during compilation.
+export type Diagnostic
+    export var code ErrorCode
+    export var message String
+    export var line ErrorLineNumber
+    export var column ErrorColumnNumber
+    export var filePath String
+end 'Diagnostic'
 
-// Raises a semantic error without source location.
-// Format: "error E3001: message"
-export function raiseSemanticError(code ErrorCode, message String) throws CompileError
+export typealias DiagnosticArray = Array with Diagnostic
+
+// Reports a compile error with source location. Appends to the project's
+// diagnostics list and logs to stderr, but does NOT throw.
+export function reportCompileError(project Project, code ErrorCode, message String, line ErrorLineNumber, column ErrorColumnNumber, filePath String)
+    logError(LogCategory.compiler, message: "error E{code.rawValue:04}: {filePath}:{line}:{column}: {message}")
+    project.diagnostics.push(Diagnostic{code: code, message: message, line: line, column: column, filePath: filePath})
+end 'reportCompileError'
+
+// Reports a semantic error without source location. Appends to the project's
+// diagnostics list and logs to stderr, but does NOT throw.
+export function reportSemanticError(project Project, code ErrorCode, message String)
     logError(LogCategory.compiler, message: "error E{code.rawValue:04}: {message}")
-    throw CompileError.compileError
-end 'raiseSemanticError'
+    project.diagnostics.push(Diagnostic{code: code, message: message, line: 0, column: 0, filePath: ""})
+end 'reportSemanticError'
 
 export union CompileError implements Error
     fileNotFound

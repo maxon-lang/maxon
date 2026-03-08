@@ -51,15 +51,15 @@ function dotMainBytes() returns ByteArray
     return s
 end 'dotMainBytes'
 
-export function runSemanticChecks(module MlirModule) throws CompileError
+export function runSemanticChecks(project Project, module MlirModule)
     // Walk module.functions looking for one named "main" or ending with ".main"
     let mainReturnType = findMainReturnType(module)
     if mainReturnType.count() == 0 'noMain'
-        try raiseSemanticError(ErrorCode.semanticNoMain, message: "No 'main' function found")
+        reportSemanticError(project, code: ErrorCode.semanticNoMain, message: "No 'main' function found")
     end 'noMain' else 'hasMain'
         let expected = exitCodeBytes()
         if not bytesEqual(mainReturnType, b: expected) 'wrongType'
-            try raiseSemanticError(ErrorCode.semanticMainWrongReturnType, message: "Function 'main' must return ExitCode")
+            reportSemanticError(project, code: ErrorCode.semanticMainWrongReturnType, message: "Function 'main' must return ExitCode")
         end 'wrongType'
     end 'hasMain'
 end 'runSemanticChecks'

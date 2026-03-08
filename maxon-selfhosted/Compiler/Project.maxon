@@ -31,6 +31,9 @@ export type Project
     // Compilation target
     export var target Target
 
+    // Collected diagnostics (errors reported during compilation)
+    export var diagnostics DiagnosticArray
+
     // Block-based CFG parser state: tracks where ops are emitted during parsing
     export var currentBlock MlirBlock
     export var currentFunction MlirFunction
@@ -77,8 +80,13 @@ export function createProject(rootPath String, isSingleFile bool, target Target)
         rootPath: rootPath,
         isSingleFile: isSingleFile,
         target: target,
+        diagnostics: DiagnosticArray{},
         currentBlock: emptyBlock,
         currentFunction: emptyFunc,
         currentModule: emptyModule
     }
 end 'createProject'
+
+export function hasErrors(project Project) returns bool
+    return project.diagnostics.count() > 0
+end 'hasErrors'

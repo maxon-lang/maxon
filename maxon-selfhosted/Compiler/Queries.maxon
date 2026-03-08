@@ -89,14 +89,18 @@ export function queryParseOps(project Project, path String) returns MlirModule t
     clearDepsFor(project, key: key)
 
     let tokens = try queryTokens(project, path: path)
-    let module = try parse(project, tokens: tokens, filePath: path)
+    let errorCountBefore = project.diagnostics.count()
+    let module = parse(project, tokens: tokens, filePath: path)
     let nextId = getNextValueId(project)
 
     popQuery(project)
 
-    // Store
-    let newMemo = ParseMemo{value: module, computedAt: project.db.currentRevision, verifiedAt: project.db.currentRevision, nextValueIdAfterParse: nextId}
-    project.db.parseCache.insert(path, value: newMemo)
+    // Only cache if no new errors were added during this file's parse
+    let hadErrors = project.diagnostics.count() > errorCountBefore
+    if not hadErrors 'cacheOk'
+        let newMemo = ParseMemo{value: module, computedAt: project.db.currentRevision, verifiedAt: project.db.currentRevision, nextValueIdAfterParse: nextId}
+        project.db.parseCache.insert(path, value: newMemo)
+    end 'cacheOk'
 
     return module
 end 'queryParseOps'
@@ -182,7 +186,21 @@ export function queryAllMid(project Project) returns MlirModule throws CompileEr
     clearDepsFor(project, key: key)
 
     let module = try queryAllModule(project)
-    try runSemanticChecks(module)
+
+    // Gate: if parse errors were collected, stop before semantic checks
+    if hasErrors(project) 'parseErrors'
+        popQuery(project)
+        throw CompileError.compileError
+    end 'parseErrors'
+
+    runSemanticChecks(project, module: module)
+
+    // Gate: if semantic errors were collected, stop before lowering
+    if hasErrors(project) 'semanticErrors'
+        popQuery(project)
+        throw CompileError.compileError
+    end 'semanticErrors'
+
     let result = lowerMaxHLToMid(module)
 
     popQuery(project)
