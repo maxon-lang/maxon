@@ -293,75 +293,81 @@ module {
     memref.store_indirect %3, %12+16
     %13 = memref.load __struct_5 : i64
     memref.store_indirect %4, %13+24
-    %14 = arith.constant {value = 0 : i64}
-    %15 = arith.constant {value = 16 : i64}
-    %16 = func.ref @__destruct_IntArray
-    %17 = std.ptr_to_i64 %16
-    %18 = arith.constant {value = 2 : i64}
-    %19 = std.call_runtime @mm_alloc %15, %17, %18
-    memref.store %19, arr
-    %20 = memref.load arr : i64
-    memref.store_indirect %14, %20+0
-    %21 = memref.load __struct_5 : i64
-    %22 = memref.load arr : i64
-    memref.store_indirect %21, %22+8
-    std.call_runtime @mm_incref %21
-    %23 = memref.lea_rdata __const_array_codegen-internals.main_arr
-    %24 = std.ptr_to_i64 %23
+    %14 = memref.load __struct_5 : i64
+    %15 = memref.load_indirect %14+24
+    %16 = arith.constant {value = 0 : i64}
+    %17 = memref.lea_symdata __mm_panic_element_size_zero
+    %18 = std.ptr_to_i64 %17
+    std.call_runtime @maxon_bounds_check %16, %15, %18
+    %19 = arith.constant {value = 0 : i64}
+    %20 = arith.constant {value = 16 : i64}
+    %21 = func.ref @__destruct_IntArray
+    %22 = std.ptr_to_i64 %21
+    %23 = arith.constant {value = 2 : i64}
+    %24 = std.call_runtime @mm_alloc %20, %22, %23
+    memref.store %24, arr
     %25 = memref.load arr : i64
-    %26 = memref.load_indirect %25+8
-    memref.store_indirect %24, %26+0
+    memref.store_indirect %19, %25+0
+    %26 = memref.load __struct_5 : i64
     %27 = memref.load arr : i64
-    std.call_runtime @mm_incref %27
-    %28 = arith.constant {value = 0 : i64}
-    %29 = arith.constant {value = 77 : i64}
+    memref.store_indirect %26, %27+8
+    std.call_runtime @mm_incref %26
+    %28 = memref.lea_rdata __const_array_codegen-internals.main_arr
+    %29 = std.ptr_to_i64 %28
     %30 = memref.load arr : i64
-    func.call @IntArray.set %30, %28, %29
-    %31 = arith.constant {value = 0 : i64}
+    %31 = memref.load_indirect %30+8
+    memref.store_indirect %29, %31+0
     %32 = memref.load arr : i64
-    %33, %34 = func.try_call @IntArray.get %32, %31
-    %35 = arith.constant {value = 0 : i64}
-    memref.store %35, __try_default_2
-    memref.store %33, __try_result_1
+    std.call_runtime @mm_incref %32
+    %33 = arith.constant {value = 0 : i64}
+    %34 = arith.constant {value = 77 : i64}
+    %35 = memref.load arr : i64
+    func.call @IntArray.set %35, %33, %34
     %36 = arith.constant {value = 0 : i64}
-    %37 = arith.cmpi ne %34, %36
-    cf.cond_br %37 [then: otherwise_default_error_3, else: otherwise_default_continue_4]
-  otherwise_default_error_3:
-    %38 = memref.load __try_default_2 : i64
+    %37 = memref.load arr : i64
+    %38, %39 = func.try_call @IntArray.get %37, %36
+    %40 = arith.constant {value = 0 : i64}
+    memref.store %40, __try_default_2
     memref.store %38, __try_result_1
+    %41 = arith.constant {value = 0 : i64}
+    %42 = arith.cmpi ne %39, %41
+    cf.cond_br %42 [then: otherwise_default_error_3, else: otherwise_default_continue_4]
+  otherwise_default_error_3:
+    %43 = memref.load __try_default_2 : i64
+    memref.store %43, __try_result_1
     cf.br otherwise_default_continue_4
   otherwise_default_continue_4:
-    %39 = memref.load __try_result_1 : i64
-    memref.store %39, __range_val_5
-    %40 = arith.constant {value = 0 : i64}
-    %41 = arith.cmpi lt %39, %40
-    %42 = arith.constant {value = 4294967295 : i64}
-    %43 = arith.cmpi gt %39, %42
-    %44 = arith.ori1 %41, %43
-    cf.cond_br %44 [then: __range_panic_5, else: __range_ok_5]
+    %44 = memref.load __try_result_1 : i64
+    memref.store %44, __range_val_5
+    %45 = arith.constant {value = 0 : i64}
+    %46 = arith.cmpi lt %44, %45
+    %47 = arith.constant {value = 4294967295 : i64}
+    %48 = arith.cmpi gt %44, %47
+    %49 = arith.ori1 %46, %48
+    cf.cond_br %49 [then: __range_panic_5, else: __range_ok_5]
   __range_panic_5:
-    %45 = memref.lea_symdata __panic_msg_25
-    %46 = std.ptr_to_i64 %45
-    std.call_runtime @maxon_panic %46
+    %50 = memref.lea_symdata __panic_msg_25
+    %51 = std.ptr_to_i64 %50
+    std.call_runtime @maxon_panic %51
   __range_ok_5:
-    %47 = memref.load __range_val_5 : i64
-    %48 = memref.load arr : i64
-    std.call_runtime_if_nonnull @mm_decref %48
-    func.return %47
+    %52 = memref.load __range_val_5 : i64
+    %53 = memref.load arr : i64
+    std.call_runtime_if_nonnull @mm_decref %53
+    func.return %52
   }
   func @__destruct___ManagedMemory(ptr: i64) {
   entry:
-    %119 = func.param ptr : StdI64
-    memref.store %119, __destr_ptr
-    %122 = memref.load __destr_ptr : i64
-    %123 = memref.load_indirect %122+16
-    %124 = arith.constant {value = 0 : i64}
-    %125 = arith.cmpi ne %123, %124
-    cf.cond_br %125 [then: free_buf_0, else: skip_buf_0]
+    %124 = func.param ptr : StdI64
+    memref.store %124, __destr_ptr
+    %127 = memref.load __destr_ptr : i64
+    %128 = memref.load_indirect %127+16
+    %129 = arith.constant {value = 0 : i64}
+    %130 = arith.cmpi ne %128, %129
+    cf.cond_br %130 [then: free_buf_0, else: skip_buf_0]
   free_buf_0:
-    %126 = memref.load __destr_ptr : i64
-    %127 = memref.load_indirect %126+0
-    std.call_runtime @mm_raw_free %127
+    %131 = memref.load __destr_ptr : i64
+    %132 = memref.load_indirect %131+0
+    std.call_runtime @mm_raw_free %132
     cf.br skip_buf_0
   skip_buf_0:
     cf.br done
@@ -370,11 +376,11 @@ module {
   }
   func @__destruct_IntArray(ptr: i64) {
   entry:
-    %128 = func.param ptr : StdI64
-    memref.store %128, __destr_ptr
-    %129 = memref.load __destr_ptr : i64
-    %130 = memref.load_indirect %129+8
-    std.call_runtime_if_nonnull @mm_decref %130
+    %133 = func.param ptr : StdI64
+    memref.store %133, __destr_ptr
+    %134 = memref.load __destr_ptr : i64
+    %135 = memref.load_indirect %134+8
+    std.call_runtime_if_nonnull @mm_decref %135
     cf.br done
   done:
     func.return
@@ -408,6 +414,14 @@ module {
     x86.mov rax, [rbp-8]
     x86.mov rcx, 8
     x86.mov [rax+24], rcx
+    x86.mov rax, [rbp-8]
+    x86.mov rcx, [rax+24]
+    x86.lea_symdata rax, [__mm_panic_element_size_zero]
+    x86.mov rdx, rax
+    x86.mov r8, rdx
+    x86.mov rdx, rcx
+    x86.xor rcx, rcx
+    x86.call maxon_bounds_check
     x86.xor rax, rax
     x86.lea_func rcx, [__destruct_IntArray]
     x86.mov rdx, rcx

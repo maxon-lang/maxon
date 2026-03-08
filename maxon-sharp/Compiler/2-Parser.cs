@@ -6314,6 +6314,24 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     return _typeAliasSources.TryGetValue(typeName, out var source) ? source : typeName;
   }
 
+  /// Checks if a struct type is a __ManagedMemory type, either directly by name,
+  /// by prefix convention (__ManagedMemory_*), through type alias resolution,
+  /// or by field layout (buffer, length, capacity, element_size).
+  private bool IsManagedMemoryStruct(MlirStructType structType) {
+    if (structType.Name == "__ManagedMemory" || structType.Name.StartsWith("__ManagedMemory_"))
+      return true;
+    if (ResolveBaseTypeName(structType.Name) == "__ManagedMemory")
+      return true;
+    // Fallback: check field layout for aliases not in _typeAliasSources (e.g., ByteMemory)
+    if (structType.Fields.Count == 4
+        && structType.Fields[0].Name == "buffer"
+        && structType.Fields[1].Name == "length"
+        && structType.Fields[2].Name == "capacity"
+        && structType.Fields[3].Name == "element_size")
+      return true;
+    return false;
+  }
+
   /// Resolves a type alias to its monomorphized concrete name by combining the base source
   /// type with the alias's type parameter names (e.g., "ENode" -> "__ChainNode_Element").
   /// Returns the type name itself if it's not an alias or has no type parameters.
@@ -10926,13 +10944,21 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
         zeroFields.Add((subField.Name, enumConstruct.Result));
       } else {
         long value = 0L;
-        // For __ManagedMemory.element_size, determine from Element type parameter
-        if (ResolveBaseTypeName(structType.Name) == "__ManagedMemory" && subField.Name == "element_size") {
+        // For __ManagedMemory types, set element_size from the Element type parameter.
+        // Check both directly and through _typeAliasSources, since aliases like
+        // ByteMemory or __ManagedMemory_QueryKey may refer to __ManagedMemory.
+        if (subField.Name == "element_size" && IsManagedMemoryStruct(structType)) {
           if (typeParams.TryGetValue("Element", out var elemType)) {
             value = elemType.ElementSize;
+          } else if (structType.TypeParams.TryGetValue("Element", out var elemType2)
+                     && elemType2 is not MlirTypeParameterType) {
+            value = elemType2.ElementSize;
+          } else if (structType.Name.StartsWith("__ManagedMemory_")) {
+            var elemTypeName = structType.Name["__ManagedMemory_".Length..];
+            if (_typeRegistry.TryGetValue(elemTypeName, out var regType)) {
+              value = regType.ElementSize;
+            }
           }
-          // element_size=0 is expected in generic context (type params unresolved);
-          // FunctionCloner fixes it during monomorphization.
         }
         var lit = new MaxonLiteralOp(value);
         _currentBlock!.AddOp(lit);

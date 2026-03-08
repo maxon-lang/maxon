@@ -113,7 +113,7 @@ public static class BorrowCheckPass {
   }
 
   /// Compute the last operation index where each variable is referenced.
-  private static Dictionary<string, int> ComputeLastUse(IReadOnlyList<MaxonOp> ops) {
+  private static Dictionary<string, int> ComputeLastUse(List<MaxonOp> ops) {
     var lastUse = new Dictionary<string, int>();
     for (int i = 0; i < ops.Count; i++) {
       foreach (var varName in GetReferencedVars(ops[i]))
@@ -184,6 +184,9 @@ public static class BorrowCheckPass {
 
     // Skip if callee returns void
     if (callee.ReturnType == null || callee.ReturnType == MlirType.Void) return;
+
+    // Value-type returns (primitives, simple enums) are copies, not borrows
+    if (!callee.ReturnType.IsHeapAllocated) return;
 
     // Skip mutating methods that return extracted elements (pop, remove).
     // These return values that are no longer part of the collection's internal state.

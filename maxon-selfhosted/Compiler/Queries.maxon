@@ -28,15 +28,14 @@ export function queryTokens(project Project, path String) returns TokenArray thr
 
     // Check cache
     if project.db.tokenCache.contains(path) 'checkCache'
-        let memo = try project.db.tokenCache.get(path) otherwise 'nope'
+        var memo = try project.db.tokenCache.get(path) otherwise 'nope'
             logDebug(LogCategory.compiler, message: "queryTokens cache miss for {path}")
         end 'nope'
         if memo.computedAt > 0 'hasValue'
             if areDepsValid(project, key: key, computedAt: memo.computedAt) 'valid'
                 logDebug(LogCategory.compiler, message: "queryTokens cache hit for {path}")
                 project.db.tokenHits = project.db.tokenHits + 1
-                let verified = TokenMemo{value: memo.value, computedAt: memo.computedAt, verifiedAt: project.db.currentRevision}
-                project.db.tokenCache.insert(path, value: verified)
+                memo.verifiedAt = project.db.currentRevision
                 return memo.value
             end 'valid'
         end 'hasValue'
@@ -69,15 +68,14 @@ export function queryParseOps(project Project, path String) returns MlirModule t
 
     // Check cache
     if project.db.parseCache.contains(path) 'checkCache'
-        let memo = try project.db.parseCache.get(path) otherwise 'nope'
+        var memo = try project.db.parseCache.get(path) otherwise 'nope'
             logDebug(LogCategory.compiler, message: "queryParseOps cache miss for {path}")
         end 'nope'
         if memo.computedAt > 0 'hasValue'
             if areDepsValid(project, key: key, computedAt: memo.computedAt) 'valid'
                 logDebug(LogCategory.compiler, message: "queryParseOps cache hit for {path}")
                 project.db.parseHits = project.db.parseHits + 1
-                let verified = ParseMemo{value: memo.value, computedAt: memo.computedAt, verifiedAt: project.db.currentRevision, nextValueIdAfterParse: memo.nextValueIdAfterParse}
-                project.db.parseCache.insert(path, value: verified)
+                memo.verifiedAt = project.db.currentRevision
                 return memo.value
             end 'valid'
         end 'hasValue'

@@ -14,7 +14,7 @@ public record TypeAliasInfo(string SourceTypeName, Dictionary<string, MlirType>?
     bool IsExported = false, bool IsStdlib = false, string? SourceFilePath = null) {
   /// Checks if a type name refers to __ManagedMemory, either directly or via a type alias.
   public static bool IsManagedMemoryType(string typeName, Dictionary<string, TypeAliasInfo> typeAliasSources) {
-    if (typeName == "__ManagedMemory") return true;
+    if (typeName == "__ManagedMemory" || typeName.StartsWith("__ManagedMemory_")) return true;
     return typeAliasSources.TryGetValue(typeName, out var info) && info.SourceTypeName == "__ManagedMemory";
   }
 

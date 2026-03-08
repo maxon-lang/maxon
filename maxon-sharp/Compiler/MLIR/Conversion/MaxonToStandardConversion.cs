@@ -736,6 +736,15 @@ public static partial class MaxonToStandardConversion {
                 }
               }
 
+              // Runtime guard: panic if __ManagedMemory is created with element_size == 0
+              if (TypeAliasInfo.IsManagedMemoryType(structLitOp.TypeName, module.TypeAliasSources)) {
+                var elemSizeCheck = (StdI64)EmitStructFieldLoad(newBlock, tempName, ManagedFieldElementSize, MlirType.I64, varTypes);
+                var zeroConst = new StdConstI64Op(0);
+                newBlock.AddOp(zeroConst);
+                // bounds_check(0, element_size, msg) panics if 0 >= element_size, i.e. element_size == 0
+                EmitBoundsCheck(newBlock, zeroConst.Result, elemSizeCheck, "__mm_panic_element_size_zero");
+              }
+
               // For array/vector literals, patch the buffer field to point to element data
               if (structLitOp.ArrayLiteralTag != null) {
                 // Access buffer field through heap pointer indirection.

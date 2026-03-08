@@ -2672,6 +2672,16 @@ public partial class X86CodeEmitter {
   /// </summary>
   private void EmitMmRawAlloc() {
     EmitRuntimeFunctionStart("mm_raw_alloc", 1, 0x30);
+
+    // size==0: empty managed memory buffer — return null without heap call.
+    // The destructor guards capacity==0 before calling mm_raw_free, so null is safe.
+    EmitMovRegMem(X86Register.Rax, -0x08, 8); // RAX = size
+    EmitBytes(0x48, 0x85, 0xC0); // TEST rax, rax
+    EmitJcc("nz", "mm_raw_alloc_size_ok");
+    EmitXorRegReg(X86Register.Rax, X86Register.Rax); // RAX = 0 (null)
+    EmitRuntimeFunctionEnd();
+    DefineLabel("mm_raw_alloc_size_ok");
+
     // GetProcessHeap() -> RAX = heap handle
     EmitCallImport("kernel32.dll", "GetProcessHeap");
     EmitMovRegReg(X86Register.Rcx, X86Register.Rax);    // arg1: hHeap
@@ -2694,6 +2704,14 @@ public partial class X86CodeEmitter {
     EmitRuntimeFunctionStart("mm_raw_realloc", 3, 0x60);
     // [rbp-0x08] = old_ptr, [rbp-0x10] = new_size, [rbp-0x18] = managedPtr
     // [rbp-0x28] = new_ptr, [rbp-0x30] = old_byte_size
+
+    // Panic if new_size == 0 (capacity * element_size = 0 is a bug)
+    EmitMovRegMem(X86Register.Rax, -0x10, 8); // RAX = new_size
+    EmitBytes(0x48, 0x85, 0xC0); // TEST rax, rax
+    EmitJcc("nz", "mm_raw_realloc_size_ok");
+    EmitLeaRegSymdataRel(X86Register.Rcx, "__mm_panic_realloc_zero_size");
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "maxon_panic")); EmitDword(0);
+    DefineLabel("mm_raw_realloc_size_ok");
 
     // Step 1: Allocate new buffer via mm_raw_alloc(new_size)
     EmitMovRegMem(X86Register.Rcx, -0x10, 8); // RCX = new_size

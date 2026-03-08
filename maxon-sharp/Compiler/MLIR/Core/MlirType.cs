@@ -45,8 +45,16 @@ public class MlirType {
 
   /// <summary>
   /// Returns the element size in bytes for the type.
+  /// Must be > 0 for any type used as an array element.
   /// </summary>
-  public virtual int ElementSize => SizeInBytes;
+  public virtual int ElementSize {
+    get {
+      var size = SizeInBytes;
+      if (size <= 0)
+        throw new InvalidOperationException($"ElementSize is {size} for type '{Name}' — cannot be used as an array element");
+      return size;
+    }
+  }
 
   public override string ToString() => Name;
 
@@ -115,7 +123,8 @@ public class MlirStructType : MlirType {
   }
 
   private static int ComputeSize(List<MlirStructField> fields) {
-    return fields.Count * 8;
+    // Minimum 8 bytes so zero-field structs can still be heap-allocated
+    return Math.Max(fields.Count * 8, 8);
   }
 
   // When stored as array elements, structs are heap pointers (8 bytes)

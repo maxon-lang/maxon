@@ -107,6 +107,12 @@ public partial class X86CodeEmitter {
       "__ManagedMemory: setLength exceeds capacity\n\0"u8.ToArray());
     DefineSymdata("__mm_panic_grow_shrink",
       "__ManagedMemory: grow cannot shrink capacity\n\0"u8.ToArray());
+    DefineSymdata("__mm_panic_alloc_zero_size",
+      "__ManagedMemory: alloc size must be > 0\n\0"u8.ToArray());
+    DefineSymdata("__mm_panic_realloc_zero_size",
+      "__ManagedMemory: realloc size must be > 0\n\0"u8.ToArray());
+    DefineSymdata("__mm_panic_element_size_zero",
+      "__ManagedMemory: element_size must be > 0\n\0"u8.ToArray());
 
     if (Compiler.MmDebug) {
       DefineSymdata("__mm_panic_canary",
@@ -372,6 +378,14 @@ public partial class X86CodeEmitter {
     //   [rbp-48] = alloc_size
     EmitRuntimeFunctionStart("mm_alloc", Compiler.MmTrace ? 4 : 3, 0x60);
 
+    // Panic if size == 0
+    EmitMovRegMem(X86Register.Rax, -0x08, 8); // RAX = size
+    EmitBytes(0x48, 0x85, 0xC0); // TEST rax, rax
+    EmitJcc("nz", "mm_alloc_size_ok");
+    EmitLeaRegSymdataRel(X86Register.Rcx, "__mm_panic_alloc_zero_size");
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "maxon_panic")); EmitDword(0);
+    DefineLabel("mm_alloc_size_ok");
+
     // Compute alloc_size = size + 24 (+ 8 canary for MmDebug)
     EmitMovRegMem(X86Register.Rax, -0x08, 8); // RAX = size
     EmitAddRegImm(X86Register.Rax, Compiler.MmDebug ? MmHeaderSize + 8 : MmHeaderSize);
@@ -446,6 +460,14 @@ public partial class X86CodeEmitter {
     // Stack: [rbp-8]=user_ptr, [rbp-16]=new_size, [rbp-24]=tag,
     //        [rbp-40]=old_raw, [rbp-48]=realloc_size, [rbp-56]=new_raw
     EmitRuntimeFunctionStart("mm_realloc", 3, 0x60);
+
+    // Panic if new_size == 0
+    EmitMovRegMem(X86Register.Rax, -0x10, 8); // RAX = new_size
+    EmitBytes(0x48, 0x85, 0xC0); // TEST rax, rax
+    EmitJcc("nz", "mm_realloc_size_ok");
+    EmitLeaRegSymdataRel(X86Register.Rcx, "__mm_panic_realloc_zero_size");
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "maxon_panic")); EmitDword(0);
+    DefineLabel("mm_realloc_size_ok");
 
     // If ptr == NULL, delegate to mm_alloc(new_size, destructor=0, tag)
     EmitMovRegMem(X86Register.Rax, -0x08, 8); // RAX = user_ptr
