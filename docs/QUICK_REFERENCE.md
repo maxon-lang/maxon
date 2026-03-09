@@ -221,7 +221,7 @@ break 'label'    // exits match (or loop) with that label
 
 Range patterns: `a..=b` (inclusive), `a..<b` (exclusive upper), `a..` (open upper), `..=b`/`..<b` (open lower), `..` (wildcard).
 
-Union matches must be exhaustive -- all cases must be listed explicitly. Use `default throws` for non-exhaustive union matching (see below).
+Enum and union matches must be exhaustive -- all cases must be covered. Enums support range patterns: `Priority.low to Priority.high`. Use `default throws` for non-exhaustive matching (see below).
 
 Pattern bindings are checked for unused (E3012). Use `_` to discard: `case success(_)` or `case pair(_, second)`
 
@@ -252,7 +252,7 @@ let desc = match shape 'describe'
 end 'describe'
 ```
 
-`default throws` is the only form of `default` allowed on union matches (E2046). For non-union matches, `default` with arbitrary code is still valid.
+`default throws` is the only form of `default` allowed on enum and union matches (E2046). For non-enum/union matches, `default` with arbitrary code is still valid.
 
 ## Types 
 
@@ -385,7 +385,7 @@ Union values cannot be compared with `==` or `!=` (error E3066). Use `match` to 
 
 ## Enums
 
-Enums are like unions but simpler: no methods, no associated values. Direct `==` and `!=` comparison is allowed. Use `match` with a `default` arm. Enums support `.rawValue`, `.name`, `fromRawValue()`, and `fromName()`.
+Enums are like unions but simpler: no methods, no associated values. Direct `==` and `!=` comparison is allowed. Enum matches require exhaustive coverage (all cases or range patterns). Enums support `.rawValue`, `.name`, `fromRawValue()`, and `fromName()`.
 
 ```maxon
 // Integer (auto-increment from 0)
@@ -424,7 +424,6 @@ var result = match s 'handle'
     HttpStatus.ok gives 1
     HttpStatus.notFound gives 2
     HttpStatus.serverError gives 3
-    default gives 0
 end 'handle'
 
 // rawValue, name, fromRawValue, fromName

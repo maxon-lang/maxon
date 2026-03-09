@@ -445,7 +445,7 @@ match_stmt    = 'match' expression LABEL NEWLINE
 
 match_arm     = match_patterns 'then' match_action
               | 'default' 'then' match_action
-              | 'default' 'throws' expression                   (* union-only: throws error for unmatched cases *)
+              | 'default' 'throws' expression                   (* enum/union: throws error for unmatched cases *)
 
 match_action  = statement [ 'and' 'fallthrough' ]
               | 'break' [ LABEL ]
@@ -454,8 +454,10 @@ match_patterns
               = match_pattern { 'or' match_pattern }
 
 match_pattern = literal_pattern
+              | enum_pattern
               | union_pattern
               | range_pattern
+              | enum_range_pattern
 
 literal_pattern
               = [ '-' ] INTEGER
@@ -464,16 +466,21 @@ literal_pattern
               | CHARACTER
               | BOOL
 
+enum_pattern  = IDENTIFIER '.' IDENTIFIER                        (* EnumType.caseName *)
+
 union_pattern = IDENTIFIER [ '(' binding_list ')' ]
 
 binding_list  = IDENTIFIER { ',' IDENTIFIER }                    (* '_' discards individual bindings *)
 
-range_pattern = expression '..=' expression             (* inclusive both bounds *)
-              | expression '..<' expression             (* exclusive upper bound *)
-              | expression '..'                         (* open upper bound *)
-              | '..=' expression                        (* open lower, inclusive upper *)
-              | '..<' expression                        (* open lower, exclusive upper *)
-              | '..'                                    (* wildcard *)
+range_pattern = expression 'to' expression              (* inclusive both bounds *)
+              | expression 'upto' expression            (* exclusive upper bound *)
+              | expression 'to' 'max'                   (* open upper bound *)
+              | 'min' 'to' expression                   (* open lower, inclusive upper *)
+              | 'min' 'upto' expression                 (* open lower, exclusive upper *)
+
+enum_range_pattern
+              = IDENTIFIER '.' IDENTIFIER 'to' IDENTIFIER '.' IDENTIFIER      (* inclusive enum range *)
+              | IDENTIFIER '.' IDENTIFIER 'upto' IDENTIFIER '.' IDENTIFIER    (* exclusive upper enum range *)
 ```
 
 ### 5.8 Break and Continue
@@ -636,7 +643,7 @@ match_expr    = 'match' expression LABEL NEWLINE
 match_expr_arm
               = match_patterns 'gives' expression
               | 'default' 'gives' expression
-              | 'default' 'throws' expression                   (* union-only: throws error for unmatched cases *)
+              | 'default' 'throws' expression                   (* enum/union: throws error for unmatched cases *)
 ```
 
 ### 6.5 Try Expression

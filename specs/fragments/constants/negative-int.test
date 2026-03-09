@@ -10,7 +10,6 @@ function main() returns ExitCode
     Temperature.freezing gives 0
     Temperature.cold gives -10
     Temperature.warm gives 25
-    default gives 99
   end 'check'
   return result
 end 'main'
@@ -22,41 +21,39 @@ module {
   entry:
     x86.prologue stack_size=32
     x86.mov rax, 25
-    x86.mov [rbp-8], rax
+    x86.xor rcx, rcx
+    x86.mov [rbp-8], rcx
+    x86.mov [rbp-16], rax
     x86.jmp constants.main.check_0.cmp0
   check_0.cmp0:
-    x86.mov rax, [rbp-8]
+    x86.mov rax, [rbp-16]
     x86.xor rcx, rcx
     x86.cmp rax, rcx
     x86.jne constants.main.check_0.cmp1
   check_0.case0:
     x86.xor rax, rax
-    x86.mov [rbp-16], rax
+    x86.mov [rbp-8], rax
     x86.jmp constants.main.check_0.merge
   check_0.cmp1:
-    x86.mov rax, [rbp-8]
+    x86.mov rax, [rbp-16]
     x86.mov rcx, -10
     x86.cmp rax, rcx
     x86.jne constants.main.check_0.cmp2
   check_0.case1:
     x86.mov rax, -10
-    x86.mov [rbp-16], rax
+    x86.mov [rbp-8], rax
     x86.jmp constants.main.check_0.merge
   check_0.cmp2:
-    x86.mov rax, [rbp-8]
+    x86.mov rax, [rbp-16]
     x86.mov rcx, 25
     x86.cmp rax, rcx
-    x86.jne constants.main.check_0.case3
+    x86.jne constants.main.check_0.merge
   check_0.case2:
     x86.mov rax, 25
-    x86.mov [rbp-16], rax
-    x86.jmp constants.main.check_0.merge
-  check_0.case3:
-    x86.mov rax, 99
-    x86.mov [rbp-16], rax
+    x86.mov [rbp-8], rax
     x86.jmp constants.main.check_0.merge
   check_0.merge:
-    x86.mov rax, [rbp-16]
+    x86.mov rax, [rbp-8]
     x86.mov [rbp-24], rax
     x86.xor rcx, rcx
     x86.cmp rax, rcx
@@ -70,7 +67,7 @@ module {
     x86.test rdx, rdx
     x86.je constants.main.__range_ok_1
   __range_panic_1:
-    x86.lea_symdata rax, [__panic_msg_30]
+    x86.lea_symdata rax, [__panic_msg_29]
     x86.mov rcx, rax
     x86.call maxon_panic
   __range_ok_1:

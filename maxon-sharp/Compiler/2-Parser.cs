@@ -8014,27 +8014,76 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
             $"unknown union case: '{caseNameToken.Value}'",
             caseNameToken.Line, caseNameToken.Column);
 
-        var displayName = $"{patternEnumName}.{caseNameToken.Value}";
-        if (!seenPatternKeys.Add(displayName)) {
-          throw new CompileError(ErrorCode.ParserMatchDuplicatePattern,
-            $"duplicate pattern in match: '{displayName}'",
-            patternLine, patternCol);
-        }
-        seenEnumCases.Add(caseNameToken.Value);
+        // Check for range pattern: EnumType.case to/upto EnumType.case
+        if (Check(TokenType.To) || Check(TokenType.Upto)) {
+          bool upperInclusive = Check(TokenType.To);
+          Advance(); // consume 'to' or 'upto'
 
-        if (enumType.BackingType == MlirType.F64) {
-          var rawValue = (double)enumCase.RawValue!;
-          patterns.Add(new ExactFloatPattern(rawValue, displayName, patternLine, patternCol));
-        } else {
-          long rawValue;
-          if (enumType.BackingType == MlirType.I64) {
-            rawValue = (long)enumCase.RawValue!;
-          } else if (enumType.BackingType == null || enumType.BackingType is MlirStringBackingType or MlirCharBackingType) {
-            rawValue = enumCase.Ordinal;
-          } else {
-            throw new InvalidOperationException($"Unsupported enum backing type in match pattern: {enumType.BackingType}");
+          // Parse upper bound: must be EnumType.case
+          var upperEnumTypeToken = Expect(TokenType.Identifier);
+          Expect(TokenType.Dot);
+          var upperCaseNameToken = ExpectIdentifierLike();
+
+          if (upperEnumTypeToken.Value != enumTypeName) {
+            throw new CompileError(ErrorCode.ParserUnexpectedToken,
+              $"pattern type '{upperEnumTypeToken.Value}' does not match scrutinee type",
+              upperEnumTypeToken.Line, upperEnumTypeToken.Column);
           }
-          patterns.Add(new ExactIntPattern(rawValue, displayName, patternLine, patternCol));
+
+          var upperCase = enumType!.GetCase(upperCaseNameToken.Value)
+            ?? throw new CompileError(ErrorCode.SemanticUnionUnknownCase,
+              $"unknown {DeclKeyword(enumType)} case: '{upperCaseNameToken.Value}'",
+              upperCaseNameToken.Line, upperCaseNameToken.Column);
+
+          var rangeDisplayName = $"{patternEnumName}.{caseNameToken.Value} {(upperInclusive ? "to" : "upto")} {patternEnumName}.{upperCaseNameToken.Value}";
+          if (!seenPatternKeys.Add(rangeDisplayName)) {
+            throw new CompileError(ErrorCode.ParserMatchDuplicatePattern,
+              $"duplicate pattern in match: '{rangeDisplayName}'",
+              patternLine, patternCol);
+          }
+
+          // Mark all covered enum cases for exhaustiveness checking, detecting overlaps
+          var lowerOrdinal = enumCase.Ordinal;
+          var upperOrdinal = upperCase.Ordinal;
+          foreach (var c in enumType.Cases) {
+            if (c.Ordinal >= lowerOrdinal && (upperInclusive ? c.Ordinal <= upperOrdinal : c.Ordinal < upperOrdinal)) {
+              if (!seenEnumCases.Add(c.Name)) {
+                throw new CompileError(ErrorCode.ParserMatchDuplicatePattern,
+                  $"overlapping pattern in match: '{patternEnumName}.{c.Name}' is already covered",
+                  patternLine, patternCol);
+              }
+            }
+          }
+
+          if (enumType.BackingType == MlirType.F64) {
+            patterns.Add(new RangePattern(
+              new FloatRangeBound((double)enumCase.RawValue!),
+              new FloatRangeBound((double)upperCase.RawValue!),
+              upperInclusive, rangeDisplayName, patternLine, patternCol));
+          } else {
+            patterns.Add(new RangePattern(
+              new IntRangeBound(GetEnumCaseIntRawValue(enumCase, enumType)),
+              new IntRangeBound(GetEnumCaseIntRawValue(upperCase, enumType)),
+              upperInclusive, rangeDisplayName, patternLine, patternCol));
+          }
+        } else {
+          var displayName = $"{patternEnumName}.{caseNameToken.Value}";
+          if (!seenPatternKeys.Add(displayName)) {
+            throw new CompileError(ErrorCode.ParserMatchDuplicatePattern,
+              $"duplicate pattern in match: '{displayName}'",
+              patternLine, patternCol);
+          }
+          if (!seenEnumCases.Add(caseNameToken.Value)) {
+            throw new CompileError(ErrorCode.ParserMatchDuplicatePattern,
+              $"overlapping pattern in match: '{displayName}' is already covered",
+              patternLine, patternCol);
+          }
+
+          if (enumType!.BackingType == MlirType.F64) {
+            patterns.Add(new ExactFloatPattern((double)enumCase.RawValue!, displayName, patternLine, patternCol));
+          } else {
+            patterns.Add(new ExactIntPattern(GetEnumCaseIntRawValue(enumCase, enumType), displayName, patternLine, patternCol));
+          }
         }
       } else if (Check(TokenType.Identifier) && Current().Value == "min") {
         // Open-ended lower bound: min to/upto <upper>
@@ -8256,6 +8305,15 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       CharRangeBound c => $"'{c.Value}'",
       _ => throw new InvalidOperationException($"Unknown range bound type: {bound.GetType().Name}")
     };
+  }
+
+  /// Returns the integer raw value of an enum case, using its explicit raw value for
+  /// integer-backed enums, or its ordinal for auto-incremented/string/char-backed enums.
+  private static long GetEnumCaseIntRawValue(MlirEnumCase enumCase, MlirUnionType enumType) {
+    if (enumType.BackingType == MlirType.I64) return (long)enumCase.RawValue!;
+    if (enumType.BackingType == null || enumType.BackingType is MlirStringBackingType or MlirCharBackingType)
+      return enumCase.Ordinal;
+    throw new InvalidOperationException($"Unsupported enum backing type for integer raw value: {enumType.BackingType}");
   }
 
   private static bool IsNumericKind(MaxonValueKind kind) =>
@@ -8621,8 +8679,6 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       MlirUnionType? enumType, string? enumTypeName,
       bool hasDefaultThrows, HashSet<string> seenEnumCases, Token errorToken) {
     if (enumType == null) return;
-    // Constants don't require exhaustive matching — they use 'default' like integers
-    if (enumType is MlirEnumType) return;
     // 'default throws' covers all unmatched cases — no exhaustiveness check needed
     if (hasDefaultThrows) return;
     var missingCases = enumType.Cases
@@ -8631,7 +8687,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       .ToList();
     if (missingCases.Count > 0) {
       throw new CompileError(ErrorCode.ParserMatchNotExhaustive,
-        $"match on enum '{enumTypeName}' is not exhaustive, missing: {string.Join(", ", missingCases)}",
+        $"match on {DeclKeyword(enumType)} '{enumTypeName}' is not exhaustive, missing: {string.Join(", ", missingCases)}",
         errorToken.Line, errorToken.Column);
     }
   }
@@ -8783,12 +8839,11 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
         hasDefault = true;
         defaultSeen = true;
 
-        // For enum matches (not constants), 'default' must be followed by 'throws <error>'.
-        // Constants allow plain 'default' since they have no exhaustiveness guarantee.
-        if (enumType != null && enumType is not MlirEnumType) {
+        // For enum/union matches, 'default' must be followed by 'throws <error>'.
+        if (enumType != null) {
           if (!Check(TokenType.Throws)) {
             throw new CompileError(ErrorCode.ParserMatchDefaultUnionMustThrow,
-              $"'default' in a match on union '{enumTypeName}' must be followed by 'throws <error>', e.g. 'default throws MyError.unmatched'",
+              $"'default' in a match on {DeclKeyword(enumType)} '{enumTypeName}' must be followed by 'throws <error>', e.g. 'default throws MyError.unmatched'",
               defaultToken.Line, defaultToken.Column);
           }
           ParseDefaultThrowsCase(defaultToken, matchLabel, caseIndex, cmpBlocks, caseBlocks, caseIsDefault, caseFallthrough, caseOuterScopes);
@@ -8959,12 +9014,11 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
         hasDefault = true;
         defaultSeen = true;
 
-        // For enum matches (not constants), 'default' in an expression match must be followed by 'throws <error>'.
-        // Constants allow plain 'default' since they have no exhaustiveness guarantee.
-        if (enumType != null && enumType is not MlirEnumType) {
+        // For enum/union matches, 'default' must be followed by 'throws <error>'.
+        if (enumType != null) {
           if (!Check(TokenType.Throws)) {
             throw new CompileError(ErrorCode.ParserMatchDefaultUnionMustThrow,
-              $"'default' in a match on union '{enumTypeName}' must be followed by 'throws <error>', e.g. 'default throws MyError.unmatched'",
+              $"'default' in a match on {DeclKeyword(enumType)} '{enumTypeName}' must be followed by 'throws <error>', e.g. 'default throws MyError.unmatched'",
               defaultToken.Line, defaultToken.Column);
           }
           ParseDefaultThrowsCase(defaultToken, matchLabel, caseIndex, cmpBlocks, caseBlocks, caseIsDefault, caseFallthrough: null, caseOuterScopes: null);

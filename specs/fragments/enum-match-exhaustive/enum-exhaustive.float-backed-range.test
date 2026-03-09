@@ -1,0 +1,45 @@
+// Test: enum-exhaustive.float-backed-range
+enum Threshold
+    low = 0.1
+    medium = 0.5
+    high = 0.9
+end 'Threshold'
+
+function main() returns ExitCode
+  var t = Threshold.medium
+  match t 'check'
+    Threshold.low to Threshold.high then return 1
+  end 'check'
+end 'main'
+---
+ExitCode: 1
+---
+module {
+  func @enum-match-exhaustive.main() -> u32 {
+  entry:
+    x86.prologue stack_size=16
+    x86.movsd xmm0, [rip+__float_0.5]
+    x86.movsd [rbp-8], xmm0
+    x86.jmp enum-match-exhaustive.main.check_0.cmp0
+  check_0.cmp0:
+    x86.movsd xmm0, [rbp-8]
+    x86.movsd xmm1, [rip+__float_0.1]
+    x86.ucomisd xmm0, xmm1
+    x86.setae rax
+    x86.movzx rax, raxb
+    x86.movsd xmm2, [rbp-8]
+    x86.movsd xmm3, [rip+__float_0.9]
+    x86.ucomisd xmm2, xmm3
+    x86.setbe rcx
+    x86.movzx rcx, rcxb
+    x86.and rax, rcx
+    x86.test rax, rax
+    x86.je enum-match-exhaustive.main.check_0.merge
+  check_0.case0:
+    x86.mov rax, 1
+    x86.epilogue
+    x86.ret
+  check_0.merge:
+  }
+}
+---

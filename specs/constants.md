@@ -238,7 +238,6 @@ function main() returns ExitCode
     Color.red gives 10
     Color.green gives 20
     Color.blue gives 30
-    default gives 0
   end 'check'
   return result
 end 'main'
@@ -262,7 +261,6 @@ function main() returns ExitCode
     Priority.medium gives 1
     Priority.high gives 10
     Priority.critical gives 11
-    default gives 99
   end 'check'
   return result
 end 'main'
@@ -284,7 +282,6 @@ function main() returns ExitCode
     Temperature.freezing gives 0
     Temperature.cold gives -10
     Temperature.warm gives 25
-    default gives 99
   end 'check'
   return result
 end 'main'
@@ -525,7 +522,6 @@ function main() returns ExitCode
     HttpStatus.ok gives 1
     HttpStatus.notFound gives 2
     HttpStatus.serverError gives 3
-    default gives 0
   end 'check'
   return result
 end 'main'

@@ -1167,16 +1167,27 @@ end 'check2'
 
 ### Match
 
-Use `match` with a `default` arm. Exhaustiveness is not checked for enums since the set of valid values is not fully enumerable at compile time:
+Enum matches require exhaustive case coverage — all cases must be matched by explicit patterns or range patterns. Plain `default` is not allowed; use `default throws` if you want a catch-all that throws an error:
 
 ```maxon
+// Exhaustive: all cases listed
 var result = match s 'handle'
     HttpStatus.ok gives 1
     HttpStatus.notFound gives 2
     HttpStatus.serverError gives 3
-    default gives 0
 end 'handle'
 ```
+
+Range patterns use enum case references as bounds, based on ordinal values. `to` is inclusive, `upto` excludes the upper bound:
+
+```text
+match p 'check'
+    Priority.low to Priority.medium then print("not urgent")
+    Priority.high to Priority.critical then print("urgent")
+end 'check'
+```
+
+Overlapping patterns (ranges that cover the same case, or an explicit case within a range) are reported as errors.
 
 ### Raw Value Access
 
@@ -1968,7 +1979,8 @@ end 'handle'
 - `break` exits the match statement (or a labeled enclosing loop/match)
 - `and fallthrough` continues to the next case (skipping its pattern check)
 - `and fallthrough` cannot be combined with `return`
-- For unions, all cases must be covered explicitly (error E2026) — `default` with arbitrary code is not allowed (error E2046). Use `default throws` for non-exhaustive union matching (see below).
+- For enums and unions, all cases must be covered (error E2026) — plain `default` is not allowed (error E2046). Enums support range patterns (`EnumType.case1 to EnumType.case2`). Use `default throws` for non-exhaustive matching (see below).
+- Overlapping patterns are reported as errors (error E2027).
 - `default` matches any non-union value not matched by previous patterns
 - `default` must be the last case if present
 - Union case patterns: `CaseName(binding1, binding2)` extracts associated values
