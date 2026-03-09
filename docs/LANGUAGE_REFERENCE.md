@@ -1993,13 +1993,40 @@ end 'handle'
 - `break` exits the match statement (or a labeled enclosing loop/match)
 - `and fallthrough` continues to the next case (skipping its pattern check)
 - `and fallthrough` cannot be combined with `return`
-- For enums and unions, all cases must be covered (error E2026) — plain `default` is not allowed (error E2046). Enums support range patterns (`EnumType.case1 to EnumType.case2`). Use `default throws` for non-exhaustive matching (see below).
+- For enums and unions, all cases must be covered (error E2026) — plain `default` is not allowed (error E2046). Enums support range patterns (`EnumType.case1 to EnumType.case2`). Unions with associated values support range patterns on bare case names (`caseName1 to caseName2`). Use `default throws` for non-exhaustive matching (see below).
 - Overlapping patterns are reported as errors (error E2027).
 - `default` matches any non-union value not matched by previous patterns
 - `default` must be the last case if present
 - Union case patterns: `CaseName(binding1, binding2)` extracts associated values
 - Pattern bindings are checked for unused (E3012). Use `_` to discard individual bindings: `success(_)` or `pair(_, second)`
 - To discard all associated values, omit the parentheses entirely: `success then ...`
+
+**Union Match Range Patterns:**
+
+Unions with associated values support range patterns on bare case names using `to` (inclusive) and `upto` (exclusive upper bound). This allows matching a contiguous range of cases by their ordinal (declaration order) without listing each one individually.
+
+```maxon
+union MlirOp
+    maxhl(op MaxHLOp)
+    arith(op ArithOp)
+    cf(op CfOp)
+    func(op FuncOp)
+end 'MlirOp'
+
+match op 'dispatch'
+    maxhl(hlOp) then lowerMaxHLOp(hlOp, dstBlock: dstBlock)
+    arith to func then dstBlock.ops.push(op)
+end 'dispatch'
+```
+
+In this example, `arith to func` matches `arith`, `cf`, and `func` (inclusive). Using `arith upto func` would match `arith` and `cf` but not `func`. Cases with associated values can be covered by a range — their payloads are simply inaccessible in that arm.
+
+**Rules:**
+- A range arm cannot extract bindings. To extract associated values from a specific case, match it individually with binding syntax.
+- Range bounds are based on ordinal order (the order cases are declared in the union).
+- Range patterns participate in exhaustiveness checking — they count toward full case coverage.
+- Overlapping patterns (a range that covers a case also matched explicitly, or two overlapping ranges) are reported as errors (E2027).
+- Range patterns can be combined with `or` and with explicit case patterns in the same match.
 
 **Range Patterns:**
 

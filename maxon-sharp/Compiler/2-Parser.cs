@@ -7954,40 +7954,77 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
         var caseNameToken = Advance();
         var enumCase = enumType.GetCase(caseNameToken.Value)!;
 
-        var displayName = caseNameToken.Value;
-        if (!seenPatternKeys.Add(displayName)) {
-          throw new CompileError(ErrorCode.ParserMatchDuplicatePattern,
-            $"duplicate pattern in match: '{displayName}'",
-            patternLine, patternCol);
-        }
-        seenEnumCases.Add(caseNameToken.Value);
+        // Check for range pattern: caseName to/upto caseName
+        if (Check(TokenType.To) || Check(TokenType.Upto)) {
+          bool upperInclusive = Check(TokenType.To);
+          Advance(); // consume 'to' or 'upto'
 
-        List<(string Name, int Line, int Column)>? bindings = null;
-        if (Check(TokenType.LeftParen)) {
-          Advance(); // consume '('
-          bindings = [];
-          while (!Check(TokenType.RightParen) && !IsAtEnd()) {
-            var bindingToken = Expect(TokenType.Identifier);
-            if (bindingToken.Value == "_") {
-              bindings.Add(($"__discard_{_discardCounter++}", bindingToken.Line, bindingToken.Column));
-            } else {
-              bindings.Add((bindingToken.Value, bindingToken.Line, bindingToken.Column));
+          var upperCaseToken = ExpectIdentifierLike();
+          var upperCase = enumType.GetCase(upperCaseToken.Value)
+            ?? throw new CompileError(ErrorCode.SemanticUnionUnknownCase,
+              $"unknown union case: '{upperCaseToken.Value}'",
+              upperCaseToken.Line, upperCaseToken.Column);
+
+          var rangeDisplayName = $"{caseNameToken.Value} {(upperInclusive ? "to" : "upto")} {upperCaseToken.Value}";
+          if (!seenPatternKeys.Add(rangeDisplayName)) {
+            throw new CompileError(ErrorCode.ParserMatchDuplicatePattern,
+              $"duplicate pattern in match: '{rangeDisplayName}'",
+              patternLine, patternCol);
+          }
+
+          // Mark all covered cases for exhaustiveness checking, detecting overlaps
+          var lowerOrdinal = enumCase.Ordinal;
+          var upperOrdinal = upperCase.Ordinal;
+          foreach (var c in enumType.Cases) {
+            if (c.Ordinal >= lowerOrdinal && (upperInclusive ? c.Ordinal <= upperOrdinal : c.Ordinal < upperOrdinal)) {
+              if (!seenEnumCases.Add(c.Name)) {
+                throw new CompileError(ErrorCode.ParserMatchDuplicatePattern,
+                  $"overlapping pattern in match: '{c.Name}' is already covered",
+                  patternLine, patternCol);
+              }
             }
-            if (Check(TokenType.Comma)) Advance();
           }
-          Expect(TokenType.RightParen);
 
-          // Validate binding count matches associated value count
-          var expectedCount = enumCase.AssociatedValues?.Count ?? 0;
-          if (bindings.Count != expectedCount) {
-            throw new CompileError(ErrorCode.SemanticUnionWrongBindingCount,
-              $"wrong binding count: '{caseNameToken.Value}'",
-              caseNameToken.Line, caseNameToken.Column);
+          patterns.Add(new RangePattern(
+            new IntRangeBound(enumCase.Ordinal),
+            new IntRangeBound(upperCase.Ordinal),
+            upperInclusive, rangeDisplayName, patternLine, patternCol));
+        } else {
+          var displayName = caseNameToken.Value;
+          if (!seenPatternKeys.Add(displayName)) {
+            throw new CompileError(ErrorCode.ParserMatchDuplicatePattern,
+              $"duplicate pattern in match: '{displayName}'",
+              patternLine, patternCol);
           }
+          seenEnumCases.Add(caseNameToken.Value);
+
+          List<(string Name, int Line, int Column)>? bindings = null;
+          if (Check(TokenType.LeftParen)) {
+            Advance(); // consume '('
+            bindings = [];
+            while (!Check(TokenType.RightParen) && !IsAtEnd()) {
+              var bindingToken = Expect(TokenType.Identifier);
+              if (bindingToken.Value == "_") {
+                bindings.Add(($"__discard_{_discardCounter++}", bindingToken.Line, bindingToken.Column));
+              } else {
+                bindings.Add((bindingToken.Value, bindingToken.Line, bindingToken.Column));
+              }
+              if (Check(TokenType.Comma)) Advance();
+            }
+            Expect(TokenType.RightParen);
+
+            // Validate binding count matches associated value count
+            var expectedCount = enumCase.AssociatedValues?.Count ?? 0;
+            if (bindings.Count != expectedCount) {
+              throw new CompileError(ErrorCode.SemanticUnionWrongBindingCount,
+                $"wrong binding count: '{caseNameToken.Value}'",
+                caseNameToken.Line, caseNameToken.Column);
+            }
+          }
+
+          patterns.Add(new EnumCasePattern(enumCase.Ordinal, caseNameToken.Value, bindings,
+            enumCase.AssociatedValues, displayName, patternLine, patternCol));
         }
-
-        patterns.Add(new EnumCasePattern(enumCase.Ordinal, caseNameToken.Value, bindings,
-          enumCase.AssociatedValues, displayName, patternLine, patternCol));
       } else if (CheckIdentifierLike() && enumType is { HasAssociatedValues: true }
           && PeekNext().Type != TokenType.Dot
           && enumType.GetCase(Current().Value) == null

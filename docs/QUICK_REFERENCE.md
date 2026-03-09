@@ -221,7 +221,7 @@ break 'label'    // exits match (or loop) with that label
 
 Range patterns: `a..=b` (inclusive), `a..<b` (exclusive upper), `a..` (open upper), `..=b`/`..<b` (open lower), `..` (wildcard).
 
-Enum and union matches must be exhaustive -- all cases must be covered. Enums support range patterns: `Priority.low to Priority.high`. Use `default throws` for non-exhaustive matching (see below).
+Enum and union matches must be exhaustive -- all cases must be covered. Enums support range patterns: `Priority.low to Priority.high`. Unions with associated values support range patterns on bare case names: `caseName1 to caseName2` (inclusive) or `caseName1 upto caseName2` (exclusive upper bound). A range arm cannot extract bindings, but can cover cases that have associated values. Use `default throws` for non-exhaustive matching (see below).
 
 Pattern bindings are checked for unused (E3012). Use `_` to discard: `success(_)` or `pair(_, second)`. To discard all associated values, omit parentheses entirely: `success then ...`
 

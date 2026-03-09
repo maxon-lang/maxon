@@ -458,6 +458,7 @@ match_pattern = literal_pattern
               | union_pattern
               | range_pattern
               | enum_range_pattern
+              | union_range_pattern
 
 literal_pattern
               = [ '-' ] INTEGER
@@ -481,6 +482,10 @@ range_pattern = expression 'to' expression              (* inclusive both bounds
 enum_range_pattern
               = IDENTIFIER '.' IDENTIFIER 'to' IDENTIFIER '.' IDENTIFIER      (* inclusive enum range *)
               | IDENTIFIER '.' IDENTIFIER 'upto' IDENTIFIER '.' IDENTIFIER    (* exclusive upper enum range *)
+
+union_range_pattern
+              = IDENTIFIER 'to' IDENTIFIER                                     (* inclusive union case range — bare case names *)
+              | IDENTIFIER 'upto' IDENTIFIER                                   (* exclusive upper union case range — bare case names *)
 ```
 
 ### 5.8 Break and Continue
