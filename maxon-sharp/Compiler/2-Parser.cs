@@ -7908,7 +7908,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
   private static bool BlockEndsWithTerminator(MlirBlock<MaxonOp> block) {
     if (block.Operations.Count == 0) return false;
     var lastOp = block.Operations[^1];
-    return lastOp is MaxonReturnOp or MaxonBrOp or MaxonCondBrOp or MaxonThrowOp;
+    return lastOp is MaxonReturnOp or MaxonBrOp or MaxonCondBrOp or MaxonThrowOp or MaxonPanicOp or MaxonPanicDynamicOp;
   }
 
   // ============================================================================
@@ -8757,6 +8757,48 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
   }
 
   /// <summary>
+  /// Parses and emits a 'default panic("message")' case for a match.
+  /// The 'panic' token must not yet be consumed.
+  /// </summary>
+  private void ParseDefaultPanicCase(
+      Token defaultToken, string matchLabel, int caseIndex,
+      List<MlirBlock<MaxonOp>?> cmpBlocks, List<MlirBlock<MaxonOp>> caseBlocks,
+      List<bool> caseIsDefault, List<bool>? caseFallthrough, List<List<string>>? caseOuterScopes) {
+    Advance(); // consume 'panic'
+    Expect(TokenType.LeftParen);
+    var msgToken = Current();
+
+    var sourceFileName = _sourceFilePath != null ? Path.GetFileName(_sourceFilePath) : "unknown";
+    var prefix = $"panic at {sourceFileName}:{defaultToken.Line}: ";
+
+    var panicLabel = $"{matchLabel}.case{caseIndex}";
+    cmpBlocks.Add(null);
+    var panicBlock = _currentFunction!.Body.AddBlock(panicLabel);
+    _currentBlock = panicBlock;
+    _currentBlock.AddOp(new MaxonScopeEndOp(GetScopeEndVars()) { VarMetadata = _variables.GetScopeEndVarMetadata() });
+
+    if (msgToken.Type == TokenType.StringInterp) {
+      Advance(); // consume interpolated string
+      Expect(TokenType.RightParen);
+      var prefixedToken = new Token(TokenType.StringInterp, prefix + msgToken.Value + "\\n", msgToken.Line, msgToken.Column);
+      var interpResult = EmitStringLiteralWithInterpolation(prefixedToken);
+      _currentBlock.AddOp(new MaxonPanicDynamicOp(interpResult));
+    } else if (msgToken.Type == TokenType.StringLiteral) {
+      Advance(); // consume string literal
+      Expect(TokenType.RightParen);
+      var message = prefix + msgToken.Value;
+      _currentBlock.AddOp(new MaxonPanicOp(message));
+    } else {
+      throw new CompileError(ErrorCode.SemanticTypeMismatch, "panic requires a string argument", msgToken.Line, msgToken.Column);
+    }
+
+    caseBlocks.Add(panicBlock);
+    caseIsDefault.Add(true);
+    caseFallthrough?.Add(false);
+    caseOuterScopes?.Add([]);
+  }
+
+  /// <summary>
   /// Expects 'end' followed by a matching block identifier for match statements.
   /// </summary>
   private Token ExpectMatchEndLabel(string expectedLabel) {
@@ -8876,14 +8918,25 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
         hasDefault = true;
         defaultSeen = true;
 
-        // For enum/union matches, 'default' must be followed by 'throws <error>'.
+        // For enum/union matches, 'default' must be followed by 'throws <error>' or 'panic("message")'.
         if (enumType != null) {
-          if (!Check(TokenType.Throws)) {
+          if (Check(TokenType.Throws)) {
+            ParseDefaultThrowsCase(defaultToken, matchLabel, caseIndex, cmpBlocks, caseBlocks, caseIsDefault, caseFallthrough, caseOuterScopes);
+          } else if (Check(TokenType.Panic)) {
+            ParseDefaultPanicCase(defaultToken, matchLabel, caseIndex, cmpBlocks, caseBlocks, caseIsDefault, caseFallthrough, caseOuterScopes);
+          } else {
             throw new CompileError(ErrorCode.ParserMatchDefaultUnionMustThrow,
-              $"'default' in a match on {DeclKeyword(enumType)} '{enumTypeName}' must be followed by 'throws <error>', e.g. 'default throws MyError.unmatched'",
+              $"'default' in a match on {DeclKeyword(enumType)} '{enumTypeName}' must be followed by 'throws <error>' or 'panic(\"message\")'",
               defaultToken.Line, defaultToken.Column);
           }
-          ParseDefaultThrowsCase(defaultToken, matchLabel, caseIndex, cmpBlocks, caseBlocks, caseIsDefault, caseFallthrough, caseOuterScopes);
+          caseIndex++;
+          SkipNewlines();
+          continue;
+        }
+
+        // For non-enum matches, 'default panic("message")' is allowed
+        if (Check(TokenType.Panic)) {
+          ParseDefaultPanicCase(defaultToken, matchLabel, caseIndex, cmpBlocks, caseBlocks, caseIsDefault, caseFallthrough, caseOuterScopes);
           caseIndex++;
           SkipNewlines();
           continue;
@@ -8963,6 +9016,11 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
 
     var endToken = ExpectMatchEndLabel(sourceLabel);
     ValidateEnumExhaustiveness(enumType, enumTypeName, hasDefault, seenEnumCases, endToken);
+    if (enumType == null && !hasDefault) {
+      throw new CompileError(ErrorCode.ParserMatchNotExhaustive,
+        "match is not exhaustive: add a 'default' arm",
+        endToken.Line, endToken.Column);
+    }
 
     // Always create merge block - case bodies that don't terminate branch here
     var mergeBlock = _currentFunction!.Body.AddBlock(mergeLabel);
@@ -9051,14 +9109,25 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
         hasDefault = true;
         defaultSeen = true;
 
-        // For enum/union matches, 'default' must be followed by 'throws <error>'.
+        // For enum/union matches, 'default' must be followed by 'throws <error>' or 'panic("message")'.
         if (enumType != null) {
-          if (!Check(TokenType.Throws)) {
+          if (Check(TokenType.Throws)) {
+            ParseDefaultThrowsCase(defaultToken, matchLabel, caseIndex, cmpBlocks, caseBlocks, caseIsDefault, caseFallthrough: null, caseOuterScopes: null);
+          } else if (Check(TokenType.Panic)) {
+            ParseDefaultPanicCase(defaultToken, matchLabel, caseIndex, cmpBlocks, caseBlocks, caseIsDefault, caseFallthrough: null, caseOuterScopes: null);
+          } else {
             throw new CompileError(ErrorCode.ParserMatchDefaultUnionMustThrow,
-              $"'default' in a match on {DeclKeyword(enumType)} '{enumTypeName}' must be followed by 'throws <error>', e.g. 'default throws MyError.unmatched'",
+              $"'default' in a match on {DeclKeyword(enumType)} '{enumTypeName}' must be followed by 'throws <error>' or 'panic(\"message\")'",
               defaultToken.Line, defaultToken.Column);
           }
-          ParseDefaultThrowsCase(defaultToken, matchLabel, caseIndex, cmpBlocks, caseBlocks, caseIsDefault, caseFallthrough: null, caseOuterScopes: null);
+          caseIndex++;
+          SkipNewlines();
+          continue;
+        }
+
+        // For non-enum matches, 'default panic("message")' is allowed
+        if (Check(TokenType.Panic)) {
+          ParseDefaultPanicCase(defaultToken, matchLabel, caseIndex, cmpBlocks, caseBlocks, caseIsDefault, caseFallthrough: null, caseOuterScopes: null);
           caseIndex++;
           SkipNewlines();
           continue;
@@ -9132,6 +9201,11 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     var endToken = ExpectMatchEndLabel(sourceLabel);
 
     ValidateEnumExhaustiveness(enumType, enumTypeName, hasDefault, seenEnumCases, endToken);
+    if (enumType == null && !hasDefault) {
+      throw new CompileError(ErrorCode.ParserMatchNotExhaustive,
+        "match expression is not exhaustive: add a 'default' arm",
+        endToken.Line, endToken.Column);
+    }
 
     var mergeBlock = _currentFunction!.Body.AddBlock(mergeLabel);
     PatchComparisonChain(entryBlock, matchLabel, cmpBlocks, caseIsDefault, mergeLabel);

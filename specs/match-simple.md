@@ -439,7 +439,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2046: specs/fragments/match-simple/error.match-enum-default.test:12:5: 'default' in a match on union 'Color' must be followed by 'throws <error>', e.g. 'default throws MyError.unmatched'
+error E2046: specs/fragments/match-simple/error.match-enum-default.test:12:5: 'default' in a match on union 'Color' must be followed by 'throws <error>' or 'panic("message")'
 ```
 
 <!-- test: match-enum.expression -->

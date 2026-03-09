@@ -1181,7 +1181,7 @@ end 'check2'
 
 ### Match
 
-Enum matches require exhaustive case coverage — all cases must be matched by explicit patterns or range patterns. Plain `default` is not allowed; use `default throws` if you want a catch-all that throws an error:
+Enum matches require exhaustive case coverage — all cases must be matched by explicit patterns or range patterns. Plain `default` is not allowed; use `default throws` or `default panic("message")` if you want a catch-all:
 
 ```maxon
 // Exhaustive: all cases listed
@@ -1993,9 +1993,10 @@ end 'handle'
 - `break` exits the match statement (or a labeled enclosing loop/match)
 - `and fallthrough` continues to the next case (skipping its pattern check)
 - `and fallthrough` cannot be combined with `return`
-- For enums and unions, all cases must be covered (error E2026) — plain `default` is not allowed (error E2046). Enums support range patterns (`EnumType.case1 to EnumType.case2`). Unions with associated values support range patterns on bare case names (`caseName1 to caseName2`). Use `default throws` for non-exhaustive matching (see below).
+- For enums and unions, all cases must be covered (error E2026) — plain `default` is not allowed (error E2046). Enums support range patterns (`EnumType.case1 to EnumType.case2`). Unions with associated values support range patterns on bare case names (`caseName1 to caseName2`). Use `default throws` or `default panic("message")` for non-exhaustive matching (see below).
 - Overlapping patterns are reported as errors (error E2027).
-- `default` matches any non-union value not matched by previous patterns
+- All matches must be exhaustive. For non-enum/union matches (int, float, string, char), a `default` arm is required.
+- `default` matches any non-enum/union value not matched by previous patterns
 - `default` must be the last case if present
 - Union case patterns: `CaseName(binding1, binding2)` extracts associated values
 - Pattern bindings are checked for unused (E3012). Use `_` to discard individual bindings: `success(_)` or `pair(_, second)`
@@ -2119,11 +2120,14 @@ end 'get'
 - Block identifier required
 - Union bindings work the same as in match statements
 
-### Default Throws in Union Match
+### Default Throws / Default Panic in Match
 
-When matching on a union, all cases must normally be covered explicitly (exhaustive matching). To handle only a subset of cases, use `default throws` to specify an error to throw for unmatched cases. This makes non-exhaustive matching explicit and produces a catchable error rather than a silent panic.
+When matching on an enum or union, all cases must normally be covered explicitly (exhaustive matching). To handle only a subset of cases, use `default throws` or `default panic("message")`:
 
-The `default throws` clause throws the specified error when no other case matches. The enclosing function must declare `throws ErrorType` to use this feature.
+- **`default throws`** throws the specified error when no other case matches. The enclosing function must declare `throws ErrorType` to use this feature. The error is catchable by the caller.
+- **`default panic("message")`** terminates the program with an error message when no other case matches. This is not catchable and should be used for cases that represent programming errors.
+
+Both forms work in all match types (enum, union, and primitive types).
 
 **Statement Form:**
 
@@ -2138,6 +2142,20 @@ end 'handleShape'
 ```
 
 If `shape` is `triangle`, the function throws `ShapeError.unsupported`, which the caller must handle with `try`.
+
+**Statement Form (panic):**
+
+```maxon
+function handleShape(shape Shape)
+    match shape 'draw'
+        circle(r) then drawCircle(r)
+        square(s) then drawSquare(s)
+        default panic("unsupported shape")
+    end 'draw'
+end 'handleShape'
+```
+
+If `shape` is `triangle`, the program terminates with the message "unsupported shape".
 
 **Expression Form:**
 
@@ -2182,12 +2200,11 @@ end 'main'
 ```
 
 **Notes:**
-- `default throws` is the only form of `default` allowed in union matches -- `default` with arbitrary code on unions is forbidden (error E2046)
-- The error value must be a valid union case of an `Error`-conforming type
-- The enclosing function must declare `throws` with a matching error type
-- Callers must handle the thrown error using `try ... otherwise` or `try` propagation
+- `default throws` and `default panic("message")` are the only forms of `default` allowed in enum and union matches -- `default` with arbitrary code on enums/unions is forbidden (error E2046)
+- For `default throws`: the error value must be a valid union case of an `Error`-conforming type, the enclosing function must declare `throws` with a matching error type, and callers must handle the thrown error using `try ... otherwise` or `try` propagation
+- For `default panic("message")`: the program terminates immediately with the given message. No `throws` declaration is required.
 - Supports all the same features as regular match: associated value extraction, `and fallthrough`, `break`, etc.
-- For non-union matches, `default` with arbitrary code remains valid as before
+- For non-enum/union matches, `default` with arbitrary code remains valid as before
 
 ### Break Statement
 ```maxon

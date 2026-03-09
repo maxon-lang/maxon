@@ -3,9 +3,10 @@ function main() returns ExitCode
   var temp = 25
   let category = match temp 'weather'
     min upto 0 gives 1      // freezing
-    0 upto 15 gives 2    // cold  
+    0 upto 15 gives 2    // cold
     15 upto 25 gives 3   // mild
     25 to max gives 4      // warm
+    default gives 0
   end 'weather'
   return category
 end 'main'
@@ -18,26 +19,24 @@ module {
   entry:
     x86.prologue stack_size=32
     x86.mov rax, 25
-    x86.xor rcx, rcx
-    x86.mov [rbp-8], rcx
-    x86.mov [rbp-16], rax
+    x86.mov [rbp-8], rax
     x86.jmp match-statements.main.weather_0.cmp0
   weather_0.cmp0:
-    x86.mov rax, [rbp-16]
+    x86.mov rax, [rbp-8]
     x86.xor rcx, rcx
     x86.cmp rax, rcx
     x86.jge match-statements.main.weather_0.cmp1
   weather_0.case0:
     x86.mov rax, 1
-    x86.mov [rbp-8], rax
+    x86.mov [rbp-16], rax
     x86.jmp match-statements.main.weather_0.merge
   weather_0.cmp1:
-    x86.mov rax, [rbp-16]
+    x86.mov rax, [rbp-8]
     x86.xor rcx, rcx
     x86.cmp rax, rcx
     x86.setge rdx
     x86.movzx rdx, rdxb
-    x86.mov rbx, [rbp-16]
+    x86.mov rbx, [rbp-8]
     x86.mov rsi, 15
     x86.cmp rbx, rsi
     x86.setl rdi
@@ -47,15 +46,15 @@ module {
     x86.je match-statements.main.weather_0.cmp2
   weather_0.case1:
     x86.mov rax, 2
-    x86.mov [rbp-8], rax
+    x86.mov [rbp-16], rax
     x86.jmp match-statements.main.weather_0.merge
   weather_0.cmp2:
-    x86.mov rax, [rbp-16]
+    x86.mov rax, [rbp-8]
     x86.mov rcx, 15
     x86.cmp rax, rcx
     x86.setge rdx
     x86.movzx rdx, rdxb
-    x86.mov rbx, [rbp-16]
+    x86.mov rbx, [rbp-8]
     x86.mov rsi, 25
     x86.cmp rbx, rsi
     x86.setl rdi
@@ -65,19 +64,23 @@ module {
     x86.je match-statements.main.weather_0.cmp3
   weather_0.case2:
     x86.mov rax, 3
-    x86.mov [rbp-8], rax
+    x86.mov [rbp-16], rax
     x86.jmp match-statements.main.weather_0.merge
   weather_0.cmp3:
-    x86.mov rax, [rbp-16]
+    x86.mov rax, [rbp-8]
     x86.mov rcx, 25
     x86.cmp rax, rcx
-    x86.jl match-statements.main.weather_0.merge
+    x86.jl match-statements.main.weather_0.case4
   weather_0.case3:
     x86.mov rax, 4
-    x86.mov [rbp-8], rax
+    x86.mov [rbp-16], rax
+    x86.jmp match-statements.main.weather_0.merge
+  weather_0.case4:
+    x86.xor rax, rax
+    x86.mov [rbp-16], rax
     x86.jmp match-statements.main.weather_0.merge
   weather_0.merge:
-    x86.mov rax, [rbp-8]
+    x86.mov rax, [rbp-16]
     x86.mov [rbp-24], rax
     x86.xor rcx, rcx
     x86.cmp rax, rcx
@@ -91,7 +94,7 @@ module {
     x86.test rdx, rdx
     x86.je match-statements.main.__range_ok_1
   __range_panic_1:
-    x86.lea_symdata rax, [__panic_msg_32]
+    x86.lea_symdata rax, [__panic_msg_33]
     x86.mov rcx, rax
     x86.call maxon_panic
   __range_ok_1:

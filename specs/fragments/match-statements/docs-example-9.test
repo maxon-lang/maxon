@@ -6,6 +6,7 @@ function classify(age Score) returns Score
     min upto 0 then return 0       // invalid (negative)
     0 upto 18 then return 1     // minor
     18 to max then return 2       // adult
+    default then return 0
   end 'category'
 end 'classify'
 
@@ -53,9 +54,13 @@ module {
     x86.mov rax, [rbp-8]
     x86.mov rcx, 18
     x86.cmp rax, rcx
-    x86.jl match-statements.classify.category_0.merge
+    x86.jl match-statements.classify.category_0.case3
   category_0.case2:
     x86.mov rax, 2
+    x86.epilogue
+    x86.ret
+  category_0.case3:
+    x86.xor rax, rax
     x86.epilogue
     x86.ret
   category_0.merge:
@@ -78,7 +83,7 @@ module {
     x86.test rcx, rcx
     x86.je match-statements.main.__range_ok_0
   __range_panic_0:
-    x86.lea_symdata rax, [__panic_msg_24]
+    x86.lea_symdata rax, [__panic_msg_25]
     x86.mov rcx, rax
     x86.call maxon_panic
   __range_ok_0:

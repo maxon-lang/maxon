@@ -221,7 +221,7 @@ break 'label'    // exits match (or loop) with that label
 
 Range patterns: `a..=b` (inclusive), `a..<b` (exclusive upper), `a..` (open upper), `..=b`/`..<b` (open lower), `..` (wildcard).
 
-Enum and union matches must be exhaustive -- all cases must be covered. Enums support range patterns: `Priority.low to Priority.high`. Unions with associated values support range patterns on bare case names: `caseName1 to caseName2` (inclusive) or `caseName1 upto caseName2` (exclusive upper bound). A range arm cannot extract bindings, but can cover cases that have associated values. Use `default throws` for non-exhaustive matching (see below).
+All matches must be exhaustive. For non-enum/union matches (int, float, string, char), a `default` arm is required. Enum and union matches must cover all cases explicitly. Enums support range patterns: `Priority.low to Priority.high`. Unions with associated values support range patterns on bare case names: `caseName1 to caseName2` (inclusive) or `caseName1 upto caseName2` (exclusive upper bound). A range arm cannot extract bindings, but can cover cases that have associated values. Use `default throws` or `default panic("message")` for non-exhaustive matching (see below).
 
 Pattern bindings are checked for unused (E3012). Use `_` to discard: `success(_)` or `pair(_, second)`. To discard all associated values, omit parentheses entirely: `success then ...`
 
@@ -234,14 +234,21 @@ let result = match value 'label'
 end 'label'
 ```
 
-### Default Throws (non-exhaustive union match)
+### Default Throws / Default Panic (non-exhaustive enum/union match)
 ```maxon
-// Statement form: throws an error for unmatched union cases
+// Statement form: throws an error for unmatched cases
 // Enclosing function must declare 'throws ErrorType'
 match shape 'draw'
     circle(r) then drawCircle(r)
     square(s) then drawSquare(s)
     default throws ShapeError.unsupported
+end 'draw'
+
+// Statement form: terminates with an error message
+match shape 'draw'
+    circle(r) then drawCircle(r)
+    square(s) then drawSquare(s)
+    default panic("unsupported shape")
 end 'draw'
 
 // Expression form: also throws for unmatched cases
@@ -252,7 +259,7 @@ let desc = match shape 'describe'
 end 'describe'
 ```
 
-`default throws` is the only form of `default` allowed on enum and union matches (E2046). For non-enum/union matches, `default` with arbitrary code is still valid.
+`default throws` and `default panic("message")` are the only forms of `default` allowed on enum and union matches (E2046). For non-enum/union matches, `default` with arbitrary code is still valid.
 
 ## Types 
 

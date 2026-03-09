@@ -221,6 +221,7 @@ function classify(age Score) returns Score
     min upto 0 then return 0       // invalid (negative)
     0 upto 18 then return 1     // minor
     18 to max then return 2       // adult
+    default then return 0
   end 'category'
 end 'classify'
 
@@ -239,9 +240,10 @@ function main() returns ExitCode
   var temp = 25
   let category = match temp 'weather'
     min upto 0 gives 1      // freezing
-    0 upto 15 gives 2    // cold  
+    0 upto 15 gives 2    // cold
     15 upto 25 gives 3   // mild
     25 to max gives 4      // warm
+    default gives 0
   end 'weather'
   return category
 end 'main'
@@ -601,7 +603,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2046: specs/fragments/match-statements/error.match-enum-default.test:12:5: 'default' in a match on union 'Color' must be followed by 'throws <error>', e.g. 'default throws MyError.unmatched'
+error E2046: specs/fragments/match-statements/error.match-enum-default.test:12:5: 'default' in a match on union 'Color' must be followed by 'throws <error>' or 'panic("message")'
 ```
 
 <!-- test: match-enum.expression -->
@@ -976,6 +978,7 @@ function main() returns ExitCode
     0 upto 15 gives 2
     15 upto 25 gives 3
     25 to max gives 4
+    default gives 0
   end 'weather'
   return category
 end 'main'
