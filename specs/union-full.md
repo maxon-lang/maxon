@@ -68,6 +68,30 @@ end 'handle'
 
 Each binding name becomes a local variable within the case body, with the type inferred from the union case definition.
 
+### Discarding Associated Values
+
+When matching a case with associated values, you can discard them in two ways:
+
+Use `_` to explicitly discard:
+
+```maxon
+match container 'check'
+  value(_) then return 1
+  empty then return 0
+end 'check'
+```
+
+Or omit the parentheses entirely when you don't need the associated value:
+
+```maxon
+match container 'check'
+  value then return 1
+  empty then return 0
+end 'check'
+```
+
+Both forms match the case without binding the associated value to a variable.
+
 Match expressions also support value extraction using `gives`:
 
 ```maxon

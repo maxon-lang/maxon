@@ -874,6 +874,20 @@ match result 'check'
 end 'check'
 ```
 
+**Discarding associated values:** When you don't need the associated value, you can either use `_` to explicitly discard it or omit the parentheses entirely:
+
+```maxon
+match container 'check'
+    value(_) then return 1     // discard with _
+    empty then return 0
+end 'check'
+
+match container 'check'
+    value then return 1        // omit parentheses entirely
+    empty then return 0
+end 'check'
+```
+
 **Notes:**
 - Binding names must match the number of associated values in the case definition
 - Bindings are only in scope within the case body
@@ -1984,7 +1998,8 @@ end 'handle'
 - `default` matches any non-union value not matched by previous patterns
 - `default` must be the last case if present
 - Union case patterns: `CaseName(binding1, binding2)` extracts associated values
-- Pattern bindings are checked for unused (E3012). Use `_` to discard individual bindings: `case success(_)` or `case pair(_, second)`
+- Pattern bindings are checked for unused (E3012). Use `_` to discard individual bindings: `success(_)` or `pair(_, second)`
+- To discard all associated values, omit the parentheses entirely: `success then ...`
 
 **Range Patterns:**
 

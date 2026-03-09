@@ -223,7 +223,7 @@ Range patterns: `a..=b` (inclusive), `a..<b` (exclusive upper), `a..` (open uppe
 
 Enum and union matches must be exhaustive -- all cases must be covered. Enums support range patterns: `Priority.low to Priority.high`. Use `default throws` for non-exhaustive matching (see below).
 
-Pattern bindings are checked for unused (E3012). Use `_` to discard: `case success(_)` or `case pair(_, second)`
+Pattern bindings are checked for unused (E3012). Use `_` to discard: `success(_)` or `pair(_, second)`. To discard all associated values, omit parentheses entirely: `success then ...`
 
 ### Match Expression
 ```maxon
