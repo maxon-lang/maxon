@@ -263,6 +263,40 @@ export type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
     return String{managed: managed, _iterPos: 0}
   end 'replaceFirst'
 
+  // Split method
+  typealias StringArray = Array with String
+
+  export function split(delimiter String) returns StringArray
+    var result = StringArray{}
+    var delimLen = delimiter.managed.length()
+
+    // Empty delimiter: return single-element array with original string
+    if delimLen == 0 'empty_delim'
+      result.push(String{managed: managed, _iterPos: 0})
+      return result
+    end 'empty_delim'
+
+    var selfLen = managed.length()
+    var pos = 0
+
+    while pos <= selfLen - delimLen 'search'
+      if let idx = try findManaged(managed, offset: pos, len: selfLen - pos, needle: delimiter.managed) 'try_find'
+        var matchPos = pos + idx
+        var part = managed.slice(pos, matchPos)
+        result.push(String{managed: part, _iterPos: 0})
+        pos = matchPos + delimLen
+      end 'try_find' else 'no_more'
+        break
+      end 'no_more'
+    end 'search'
+
+    // Append remaining suffix (always — even if empty, to handle trailing delimiters)
+    var tail = managed.slice(pos, selfLen)
+    result.push(String{managed: tail, _iterPos: 0})
+
+    return result
+  end 'split'
+
   // Case conversion
   export function toLower() returns String
     var len = managed.length()

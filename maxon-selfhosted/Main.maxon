@@ -2,26 +2,19 @@
 // Mirrors maxon-sharp/Program.cs command structure.
 
 function main() returns ExitCode
-    let allArgs = CommandLine.args()
+    let args = try MaxonArgs.parse() otherwise (e) 'badArgs'
+        match e 'matchErr'
+            invalidOption(a) then print("Invalid option: {a}\n")
+        end 'matchErr'
+        return 1
+    end 'badArgs'
 
-    if let command = try allArgs.get(0) 'dispatch'
-        let rest = allArgs.slice(1, endIndex: allArgs.count())
-        let cleanRest = try processLogArgs(rest) otherwise (e) 'badArgs'
-            match e 'matchErr'
-                invalidOption(a) then print("Invalid --log option: {a}\n")
-            end 'matchErr'
-            return 1
-        end 'badArgs'
-
-        match command 'cmd'
-            "build" then return runBuild(cleanRest)
-            "spec-test" then return runSpecTests(cleanRest)
-            "test-incremental" then return runIncrementalTests()
-            default then printUsage()
-        end 'cmd'
-    end 'dispatch' else 'noArgs'
-        printUsage()
-    end 'noArgs'
+    match args.command 'cmd'
+        Command.build then return runBuild(args)
+        Command.specTest then return runSpecTests(args)
+        Command.testIncremental then return runIncrementalTests()
+        Command.unknown then printUsage()
+    end 'cmd'
 
     return 1
 end 'main'
@@ -52,32 +45,8 @@ function printUsage()
     print("Log categories: compiler, lexer, parser, semantic, mlir, codegen, pe, testing\n")
 end 'printUsage'
 
-function runBuild(args StringArray) returns ExitCode
-    var path = ""
-    var target = detectHostTarget()
-
-    // Parse args: positional path and --target= option
-    for arg in args 'parseArgs'
-        if arg.startsWith("--target=") 'isTarget'
-            let eqIdx = try arg.findFirst("=") otherwise 'bad'
-                continue
-            end 'bad'
-            let afterEq = try arg.indexAfter(eqIdx) otherwise 'bad2'
-                continue
-            end 'bad2'
-            target = parseTarget(arg.slice(afterEq, endIndex: arg.endIndex()))
-        end 'isTarget' else 'notTarget'
-            if not arg.startsWith("--") 'isPath'
-                path = arg
-            end 'isPath'
-        end 'notTarget'
-    end 'parseArgs'
-
-    if path.isEmpty() 'noPath'
-        path = Directory.currentDirectory()
-    end 'noPath'
-
-    let outputPath = try compile(path, target: target) otherwise 'err'
+function runBuild(args MaxonArgs) returns ExitCode
+    let outputPath = try compile(args.path, target: args.target()) otherwise 'err'
         return 1
     end 'err'
 
@@ -86,42 +55,22 @@ function runBuild(args StringArray) returns ExitCode
     return 0
 end 'runBuild'
 
-function runSpecTests(args StringArray) returns ExitCode
-    // Parse --filter= and --target= options
-    var filter = ""
-    var targetStr = ""
-    for arg in args 'parseArgs'
-        if arg.startsWith("--filter=") 'isFilter'
-            let eqIdx = try arg.findFirst("=") otherwise 'bad'
-                continue
-            end 'bad'
-            let afterEq = try arg.indexAfter(eqIdx) otherwise 'bad2'
-                continue
-            end 'bad2'
-            filter = arg.slice(afterEq, endIndex: arg.endIndex())
-        end 'isFilter' else if arg.startsWith("--target=") 'isTarget'
-            let eqIdx = try arg.findFirst("=") otherwise 'bad3'
-                continue
-            end 'bad3'
-            let afterEq = try arg.indexAfter(eqIdx) otherwise 'bad4'
-                continue
-            end 'bad4'
-            targetStr = arg.slice(afterEq, endIndex: arg.endIndex())
-        end 'isTarget'
-    end 'parseArgs'
-
-    if targetStr == "all" 'runAll'
-        return runAllTargetTests(filter)
-    end 'runAll'
-
-    var target = detectHostTarget()
-    if not targetStr.isEmpty() 'hasTarget'
-        target = parseTarget(targetStr)
-    end 'hasTarget'
-
-    logInfo(LogCategory.testing, message: "Running self-hosted spec tests ({targetToString(target)})...")
-    return runAllSpecTests(filter, target: target)
+function runSpecTests(args MaxonArgs) returns ExitCode
+    match args.targetOption 'dispatch'
+        TargetOption.all then return runAllTargetTests(args.filter)
+        TargetOption.host then return runSpecTestsForTarget(args)
+        TargetOption.x86_64Windows then return runSpecTestsForTarget(args)
+        TargetOption.x86_64Linux then return runSpecTestsForTarget(args)
+        TargetOption.aarch64Windows then return runSpecTestsForTarget(args)
+        TargetOption.aarch64Linux then return runSpecTestsForTarget(args)
+    end 'dispatch'
 end 'runSpecTests'
+
+function runSpecTestsForTarget(args MaxonArgs) returns ExitCode
+    let target = args.target()
+    logInfo(LogCategory.testing, message: "Running self-hosted spec tests ({targetToString(target)})...")
+    return runAllSpecTests(args.filter, target: target)
+end 'runSpecTestsForTarget'
 
 function runAllTargetTests(filter String) returns ExitCode
     var totalFailed = 0

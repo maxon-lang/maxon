@@ -119,40 +119,10 @@ export function setCategoryLogLevel(category LogCategory, level LogLevel)
     categoryLogLevels.set(idx, value: level.rawValue + 1)
 end 'setCategoryLogLevel'
 
-export union ArgError implements Error
-    invalidOption(arg String)
-end 'ArgError'
-
-// Processes --log= options from args and returns remaining args.
-export function processLogArgs(args StringArray) returns StringArray throws ArgError
-    var remaining = StringArray{}
-
-    for arg in args 'loop'
-        if arg.startsWith("--log=") 'isLog'
-            let eqIdx = try arg.findFirst("=") otherwise 'bad'
-                throw ArgError.invalidOption(arg)
-            end 'bad'
-
-            let afterEq = try arg.indexAfter(eqIdx) otherwise 'bad2'
-                throw ArgError.invalidOption(arg)
-            end 'bad2'
-
-            let optionStr = arg.slice(afterEq, endIndex: arg.endIndex())
-            let ok = parseLogOption(optionStr)
-            if not ok 'badOption'
-                throw ArgError.invalidOption(arg)
-            end 'badOption'
-        end 'isLog' else 'notLog'
-            remaining.push(arg)
-        end 'notLog'
-    end 'loop'
-
-    return remaining
-end 'processLogArgs'
-
 // Parses a log option string like "debug" or "lexer:trace".
 export function parseLogOption(option String) returns bool
-    let colonIdx = try option.findFirst(":") otherwise 'noColon'
+    let parts = option.split(":")
+    if parts.count() == 1 'noColon'
         let level = try LogLevel.fromName(option.toUpper()) otherwise 'badLevel'
             return false
         end 'badLevel'
@@ -160,12 +130,12 @@ export function parseLogOption(option String) returns bool
         return true
     end 'noColon'
 
-    let afterColon = try option.indexAfter(colonIdx) otherwise 'bad'
+    let categoryStr = try parts.get(0) otherwise 'badCatPart'
         return false
-    end 'bad'
-
-    let categoryStr = option.slice(option.startIndex(), endIndex: colonIdx)
-    let levelStr = option.slice(afterColon, endIndex: option.endIndex())
+    end 'badCatPart'
+    let levelStr = try parts.get(1) otherwise 'badLevelPart'
+        return false
+    end 'badLevelPart'
 
     let category = try LogCategory.fromName(categoryStr) otherwise 'badCat'
         return false

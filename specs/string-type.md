@@ -40,6 +40,19 @@ s.contains('o')            // true (character search)
 s.findFirst("world")            // 6 (index, or -1 if not found)
 ```
 
+### Split
+
+```maxon
+var parts = "hello world foo".split(" ")   // ["hello", "world", "foo"]
+var csv = "a,b,c".split(",")              // ["a", "b", "c"]
+```
+
+`split(delimiter: String) returns Array with String` divides a string into an array of substrings. If the delimiter is not found, the result is a single-element array containing the original string. An empty delimiter also returns a single-element array. Consecutive delimiters produce empty strings in the result:
+
+```maxon
+var parts = "a,,b".split(",")   // ["a", "", "b"]
+```
+
 ### String Concatenation
 
 ```maxon

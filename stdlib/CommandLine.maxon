@@ -22,4 +22,29 @@ export type CommandLine
     let managed = __Builtins.commandLineArg(0)
     return String{managed: managed, _iterPos: 0}
   end 'executablePath'
+
+  /// Extract the value from a "--key=value" argument string.
+  /// Returns the portion after the first "=" sign.
+  /// Throws StringError.notFound if "=" is not present.
+  export static function optionValue(arg String) returns String throws StringError
+    let parts = arg.split("=")
+    if parts.count() < 2 'noEquals'
+      throw StringError.notFound
+    end 'noEquals'
+    return try parts.get(1) otherwise 'unreachable'
+      throw StringError.notFound
+    end 'unreachable'
+  end 'optionValue'
+
+  /// Search the process command line for "--name=value" and return the value.
+  /// Throws StringError.notFound if no matching option is found.
+  export static function getOptionValue(name String) returns String throws StringError
+    let prefix = "--{name}="
+    for arg in args() 'scan'
+      if arg.startsWith(prefix) 'match'
+        return try optionValue(arg)
+      end 'match'
+    end 'scan'
+    throw StringError.notFound
+  end 'getOptionValue'
 end 'CommandLine'

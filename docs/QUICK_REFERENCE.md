@@ -525,6 +525,7 @@ s.toLower()
 s.toUpper()
 s.replace("old", "new")
 s.replaceFirst("old", "new")
+s.split(",")                           // split by delimiter
 s.slice(startIdx, endIndex: endIdx)
 
 // Iteration

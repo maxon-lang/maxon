@@ -75,7 +75,6 @@ end 'main'
 ```
 ```maxoncstderr
 error E2010: specs/fragments/variables/var-explicit-type-error.test:3:8: Expected '=' but got ':'
-error E2004: specs/fragments/variables/var-explicit-type-error.test:4:10: Undefined variable 'x'
 ```
 
 <!-- test: let-explicit-type-error -->
@@ -88,5 +87,4 @@ end 'main'
 ```
 ```maxoncstderr
 error E2010: specs/fragments/variables/let-explicit-type-error.test:3:8: Expected '=' but got ':'
-error E2004: specs/fragments/variables/let-explicit-type-error.test:4:10: Undefined variable 'x'
 ```
