@@ -456,6 +456,8 @@ function parseVarDecl(project Project, tokens TokenArray, startPos TokenIndex, f
     if equalsToken.kind != TokenKind.equals 'notEquals'
         let tokStr = tokenValueToString(equalsToken.value)
         reportCompileError(project, code: ErrorCode.parserExpectedToken, message: "Expected '=' but got '{tokStr}'", line: equalsToken.line, column: equalsToken.column, filePath: filePath)
+        // Define the variable as a placeholder to prevent cascading "undefined variable" errors
+        let _ = defineVariable(project, name: nameToken.value, isFloat: false)
         return synchronizeToNextStatement(tokens, startPos: pos)
     end 'notEquals'
 

@@ -8116,7 +8116,8 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       } else if (Check(TokenType.CharacterLiteral) && structTypeName != null &&
           _typeRegistry[structTypeName] is MlirStructType charSt && charSt.ConformingInterfaces.Contains("BuiltinCharLiteral")) {
         var charToken = Advance();
-        patterns.Add(ParseCharPatternOrRange(charToken.Value, seenPatternKeys, patternLine, patternCol));
+        var resolvedCharValue = StringUtils.ResolveEscapes(charToken.Value);
+        patterns.Add(ParseCharPatternOrRange(resolvedCharValue, seenPatternKeys, patternLine, patternCol));
       } else {
         throw new CompileError(ErrorCode.ParserExpectedExpression,
           $"Expected pattern value, got '{Current().Value}'",
@@ -8202,8 +8203,9 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       bool upperInclusive = Check(TokenType.To);
       Advance();
       var upperToken = Expect(TokenType.CharacterLiteral);
+      var resolvedUpperValue = StringUtils.ResolveEscapes(upperToken.Value);
       var lower = new CharRangeBound(charValue);
-      var upper = new CharRangeBound(upperToken.Value);
+      var upper = new CharRangeBound(resolvedUpperValue);
       var displayName = $"'{charValue}' {(upperInclusive ? "to" : "upto")} '{upperToken.Value}'";
       if (!seenPatternKeys.Add(displayName)) {
         throw new CompileError(ErrorCode.ParserMatchDuplicatePattern,

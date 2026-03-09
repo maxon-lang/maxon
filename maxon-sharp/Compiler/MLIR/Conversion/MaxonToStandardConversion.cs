@@ -580,6 +580,11 @@ public static partial class MaxonToStandardConversion {
                   resolvedPrefix = enumVarRef.VarName;
                 }
                 valueMap[enumVarRef.Result] = new StdHeapPtr(enumVarRef.Result.Id, enumVarRef.EnumTypeName, resolvedPrefix);
+              } else if (IsSelfField(isStructInstanceMethod, selfStructType, enumVarRef.VarName)) {
+                // Simple enum stored as a self field — load from self's heap pointer
+                var field = selfStructType!.GetField(enumVarRef.VarName)!;
+                var loaded = EmitStructFieldLoad(newBlock, "self", field.Offset, field.Type, varTypes);
+                valueMap[enumVarRef.Result] = loaded;
               } else {
                 var loaded = EmitLoad(newBlock, enumVarRef.VarName, varTypes);
                 valueMap[enumVarRef.Result] = loaded;

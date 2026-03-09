@@ -461,3 +461,21 @@ end 'main'
 ```stdout
 -1
 ```
+
+<!-- test: match-escape-character -->
+### Match with Escape Character Literals
+
+Character match patterns must correctly handle escape sequences like `'\n'`, `'\t'`, `'\r'`, and `'\\'`.
+
+```maxon
+function main() returns ExitCode
+  let c = '\n'
+  match c 'check'
+    '\n' then return 0
+    default then return 1
+  end 'check'
+end 'main'
+```
+```exitcode
+0
+```

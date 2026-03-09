@@ -3,102 +3,43 @@
 
 let whitelist = ["basics", "print-function", "variables"]
 
+typealias TextLineArray = Array with String
+
 // Trim leading/trailing whitespace (spaces, tabs, \r, \n) from a string.
 function trimWhitespace(s String) returns String
-  // Walk string with charAt + indexAfter to find trim boundaries
   var idx = s.startIndex()
   let endIdx = s.endIndex()
   // Skip leading whitespace
   while idx < endIdx 'leading'
-    var cp = s.charAt(idx)
-    var isCpWs = false
-    for b in cp.bytes() 'checkByte'
-      if b == ' ' 'sp'
-        isCpWs = true
-      end 'sp' else if b == '\n' 'lf'
-        isCpWs = true
-      end 'lf' else if b == '\r' 'cr'
-        isCpWs = true
-      end 'cr' else if b == '\t' 'tab'
-        isCpWs = true
-      end 'tab'
-    end 'checkByte'
-    if not isCpWs 'notWs'
+    if not Ascii.isWhitespace(s.charAt(idx)) 'notWs'
       break
     end 'notWs'
+
     idx = try s.indexAfter(idx) otherwise 'done'
       break
     end 'done'
   end 'leading'
+
   var startPos = idx
   // Walk to find last non-whitespace position
   var lastNonWsEnd = idx
   while idx < endIdx 'trailing'
-    var cp = s.charAt(idx)
     let nextIdx = try s.indexAfter(idx) otherwise 'lastOne'
-      var isWs = false
-      for b in cp.bytes() 'checkByte2'
-        if b == ' ' 'sp2'
-          isWs = true
-        end 'sp2' else if b == '\n' 'lf2'
-          isWs = true
-        end 'lf2' else if b == '\r' 'cr2'
-          isWs = true
-        end 'cr2' else if b == '\t' 'tab2'
-          isWs = true
-        end 'tab2'
-      end 'checkByte2'
-      if not isWs 'notWs2'
+      if not Ascii.isWhitespace(s.charAt(idx)) 'notWsLast'
         lastNonWsEnd = endIdx
-      end 'notWs2'
+      end 'notWsLast'
       break
     end 'lastOne'
-    var isWs2 = false
-    for b in cp.bytes() 'checkByte3'
-      if b == ' ' 'sp3'
-        isWs2 = true
-      end 'sp3' else if b == '\n' 'lf3'
-        isWs2 = true
-      end 'lf3' else if b == '\r' 'cr3'
-        isWs2 = true
-      end 'cr3' else if b == '\t' 'tab3'
-        isWs2 = true
-      end 'tab3'
-    end 'checkByte3'
-    if not isWs2 'notWs3'
+
+    if not Ascii.isWhitespace(s.charAt(idx)) 'notWs2'
       lastNonWsEnd = nextIdx
-    end 'notWs3'
+    end 'notWs2'
+
     idx = nextIdx
   end 'trailing'
+
   return s.slice(startPos, endIndex: lastNonWsEnd)
 end 'trimWhitespace'
-
-// Simple string-to-integer parser.
-function parseInteger(s String) returns ParsedInt throws CompileError
-  var result = 0
-  var negative = false
-  for (i, cp) in s.codepoints().enumerated() 'chars'
-    if cp == '-' 'minus'
-      if i == 0 'first'
-        negative = true
-        continue
-      end 'first'
-
-      throw CompileError.readError
-    end 'minus'
-
-    if cp >= '0' and cp <= '9' 'digit'
-      result = result * 10 + cp - '0'
-      continue
-    end 'digit'
-
-    throw CompileError.readError
-  end 'chars'
-  if negative 'neg'
-    return 0 - result
-  end 'neg'
-  return result
-end 'parseInteger'
 
 type TestExpectation
   export var exitCode ParsedInt
@@ -141,28 +82,10 @@ function findProjectRoot() returns String throws CompileError
   throw CompileError.directoryNotFound
 end 'findProjectRoot'
 
-// Split a string by newlines into an array of lines.
-function splitLines(text String) returns StringArray
-  var lines = StringArray{}
-  var remaining = text
-  while not remaining.isEmpty() 'scan'
-    let nlPos = try remaining.findFirst("\n") otherwise 'lastLine'
-      lines.push(remaining)
-      break
-    end 'lastLine'
-    lines.push(remaining.slice(remaining.startIndex(), endIndex: nlPos))
-    let nextIdx = try remaining.indexAfter(nlPos) otherwise 'done'
-      break
-    end 'done'
-    remaining = remaining.slice(nextIdx, endIndex: remaining.endIndex())
-  end 'scan'
-  return lines
-end 'splitLines'
-
 // Parse a spec file and extract tests.
 function parseSpecFile(content String, specName String) returns SpecTestArray
   var tests = SpecTestArray{}
-  let lines = splitLines(content)
+  let lines = content.split("\n")
   var i = 0
   let lineCount = lines.count()
 
@@ -268,7 +191,7 @@ function parseSpecFile(content String, specName String) returns SpecTestArray
           i = i + 1
           let ecStr = readCodeBlock(lines, startLine: i, lineCount: lineCount)
           i = skipCodeBlock(lines, startLine: i, lineCount: lineCount)
-          let ecVal = try parseInteger(trimWhitespace(ecStr)) otherwise 'badEc'
+          let ecVal = try int.fromString(trimWhitespace(ecStr)) otherwise 'badEc'
             continue
           end 'badEc'
           expectation.exitCode = ecVal
@@ -306,7 +229,7 @@ function parseSpecFile(content String, specName String) returns SpecTestArray
 end 'parseSpecFile'
 
 // Read lines from startLine until a closing ``` is found, joining with newlines.
-function readCodeBlock(lines StringArray, startLine LineNumber, lineCount LineNumber) returns String
+function readCodeBlock(lines TextLineArray, startLine LineNumber, lineCount LineNumber) returns String
   var result = ""
   var first = true
   for i in startLine upto lineCount 'read'
@@ -327,7 +250,7 @@ function readCodeBlock(lines StringArray, startLine LineNumber, lineCount LineNu
 end 'readCodeBlock'
 
 // Skip past a code block's closing ```.
-function skipCodeBlock(lines StringArray, startLine LineNumber, lineCount LineNumber) returns LineNumber
+function skipCodeBlock(lines TextLineArray, startLine LineNumber, lineCount LineNumber) returns LineNumber
   for i in startLine upto lineCount 'scan'
     let line = try lines.get(i) otherwise 'done'
       break
@@ -561,7 +484,7 @@ function normalizeStderr(s String) returns String
   result = result.replace("\r\n", with: "\n")
   result = result.replace("\\", with: "/")
   // Strip file paths from error lines: "error EXXXX: /path/file:L:C: msg" → "error EXXXX: msg"
-  let errorLines = splitLines(result)
+  let errorLines = result.split("\n")
   var normalized = ""
   var first = true
   for errLine in errorLines 'eachLine'
