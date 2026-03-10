@@ -2843,10 +2843,10 @@ Create a `CharacterSet` using one of the built-in factory methods:
 var ws = CharacterSet.whitespacesAndNewlines()  // All Unicode whitespace including newlines
 var spaces = CharacterSet.whitespaces()         // Spaces and tabs only (no newlines)
 var nl = CharacterSet.newlines()               // Newline characters only (LF, CR, CRLF, etc.)
-var digits = CharacterSet.decimalDigits()       // ASCII digits 0-9
-var letters = CharacterSet.letters()            // ASCII letters a-z, A-Z
-var alnum = CharacterSet.alphanumerics()        // ASCII letters and digits
-var punct = CharacterSet.punctuation()          // ASCII punctuation
+var digits = CharacterSet.decimalDigits()       // Unicode decimal digits (Nd category)
+var letters = CharacterSet.letters()            // Unicode letters and marks (L*, M* categories)
+var alnum = CharacterSet.alphanumerics()        // Unicode letters, marks, and numbers
+var punct = CharacterSet.punctuation()          // Unicode punctuation (P* categories)
 var custom = CharacterSet.from(CharSet from ['a', 'e', 'i', 'o', 'u'])  // Custom set
 ```
 

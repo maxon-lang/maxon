@@ -669,10 +669,10 @@ try c.asciiValue()                   // throws CharacterError
 CharacterSet.whitespacesAndNewlines() // all Unicode whitespace + newlines
 CharacterSet.whitespaces()           // spaces and tabs (no newlines)
 CharacterSet.newlines()              // newline characters only
-CharacterSet.decimalDigits()         // 0-9
-CharacterSet.letters()               // a-z, A-Z
-CharacterSet.alphanumerics()         // letters + digits
-CharacterSet.punctuation()           // ASCII punctuation
+CharacterSet.decimalDigits()         // Unicode decimal digits (Nd)
+CharacterSet.letters()               // Unicode letters + marks (L*, M*)
+CharacterSet.alphanumerics()         // Unicode letters, marks + numbers
+CharacterSet.punctuation()           // Unicode punctuation (P*)
 CharacterSet.from(CharSet from ['a', 'e', 'i', 'o', 'u'])  // custom set
 cs.contains('x')                     // check membership
 ```
