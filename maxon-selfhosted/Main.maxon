@@ -72,25 +72,13 @@ end 'runSpecTestsForTarget'
 function runAllTargetTests(filter String) returns ExitCode
     var totalFailed = 0
 
-    let t1 = Target{cpu: CpuArch.x86_64, os: Os.windows}
-    logInfo(LogCategory.testing, message: "Testing target: {targetToString(t1)}")
-    let ec1 = runAllSpecTests(filter, target: t1)
-    totalFailed = totalFailed + ec1
-
-    let t2 = Target{cpu: CpuArch.x86_64, os: Os.linux}
-    logInfo(LogCategory.testing, message: "Testing target: {targetToString(t2)}")
-    let ec2 = runAllSpecTests(filter, target: t2)
-    totalFailed = totalFailed + ec2
-
-    let t3 = Target{cpu: CpuArch.aarch64, os: Os.linux}
-    logInfo(LogCategory.testing, message: "Testing target: {targetToString(t3)}")
-    let ec3 = runAllSpecTests(filter, target: t3)
-    totalFailed = totalFailed + ec3
-
-    let t4 = Target{cpu: CpuArch.aarch64, os: Os.windows}
-    logInfo(LogCategory.testing, message: "Testing target: {targetToString(t4)}")
-    let ec4 = runAllSpecTests(filter, target: t4)
-    totalFailed = totalFailed + ec4
+    for cpu in CpuArch.allCases 'cpus'
+        for os in Os.allCases 'oses'
+            let t = Target{cpu: cpu, os: os}
+            logInfo(LogCategory.testing, message: "Testing target: {targetToString(t)}")
+            totalFailed = totalFailed + runAllSpecTests(filter, target: t)
+        end 'oses'
+    end 'cpus'
 
     if totalFailed > 0 'hasFail'
         return 1

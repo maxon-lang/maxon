@@ -399,7 +399,7 @@ Union values cannot be compared with `==` or `!=` (error E3066). Use `match` to 
 
 ## Enums
 
-Enums are like unions but simpler: no methods, no associated values. Direct `==` and `!=` comparison is allowed. Enum matches require exhaustive coverage (all cases or range patterns). Enums support `.rawValue`, `.name`, `.ordinal`, `fromRawValue()`, and `fromName()`.
+Enums are like unions but simpler: no methods, no associated values. Direct `==` and `!=` comparison is allowed. Enum matches require exhaustive coverage (all cases or range patterns). Enums support `.rawValue`, `.name`, `.ordinal`, `.allCases`, `fromRawValue()`, and `fromName()`.
 
 ```maxon
 // Integer (auto-increment from 0)
@@ -440,10 +440,13 @@ var result = match s 'handle'
     HttpStatus.serverError gives 3
 end 'handle'
 
-// rawValue, name, ordinal, fromRawValue, fromName
+// rawValue, name, ordinal, allCases, fromRawValue, fromName
 var code = s.rawValue      // 404
 var name = s.name          // "notFound"
 var pos = s.ordinal        // 1 (declaration position, not raw value)
+for status in HttpStatus.allCases 'loop'  // iterate all cases
+    print("{status.name}\n")
+end 'loop'
 var s2 = try HttpStatus.fromRawValue(200) otherwise HttpStatus.ok    // HttpStatus.ok
 var s3 = try HttpStatus.fromName("notFound") otherwise HttpStatus.ok // HttpStatus.notFound
 

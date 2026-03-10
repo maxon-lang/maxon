@@ -1,0 +1,219 @@
+---
+feature: enum-allcases
+status: experimental
+keywords: [enum, allCases, iteration, array]
+category: type-system
+---
+
+## Documentation
+
+# Enum allCases
+
+All enums have a static `.allCases` property that returns an `Array` of all cases in declaration order:
+
+```text
+enum Color
+  red
+  green
+  blue
+end 'Color'
+
+for color in Color.allCases 'loop'
+  print("{color.name}\n")
+end 'loop'
+// Prints: red green blue
+
+var count = Color.allCases.count()  // 3
+```
+
+This works with all backing types (simple, int, float, string, char). The array always contains the cases in their declaration order.
+
+`.allCases` is not available on unions with associated values.
+
+## Tests
+
+### Simple Enum
+
+<!-- test: enum-allcases.simple -->
+```maxon
+enum Color
+  red
+  green
+  blue
+end 'Color'
+
+function main() returns ExitCode
+  for color in Color.allCases 'loop'
+    print("{color.name}\n")
+  end 'loop'
+  return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+red
+green
+blue
+```
+
+### Count
+
+<!-- test: enum-allcases.count -->
+```maxon
+enum Color
+  red
+  green
+  blue
+end 'Color'
+
+function main() returns ExitCode
+  var count = Color.allCases.count()
+  if count == 3 'check'
+    return 1
+  end 'check'
+  return 0
+end 'main'
+```
+```exitcode
+1
+```
+
+### Int-Backed Enum
+
+<!-- test: enum-allcases.int-backed -->
+```maxon
+enum HttpStatus
+  ok = 200
+  notFound = 404
+  serverError = 500
+end 'HttpStatus'
+
+function main() returns ExitCode
+  for status in HttpStatus.allCases 'loop'
+    print("{status.name}={status.rawValue}\n")
+  end 'loop'
+  return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+ok=200
+notFound=404
+serverError=500
+```
+
+### Float-Backed Enum
+
+<!-- test: enum-allcases.float-backed -->
+```maxon
+enum Threshold
+  low = 0.1
+  medium = 0.5
+  high = 0.9
+end 'Threshold'
+
+function main() returns ExitCode
+  var count = Threshold.allCases.count()
+  if count == 3 'check'
+    return 1
+  end 'check'
+  return 0
+end 'main'
+```
+```exitcode
+1
+```
+
+### String-Backed Enum
+
+<!-- test: enum-allcases.string-backed -->
+```maxon
+enum ContentType
+  json = "application/json"
+  html = "text/html"
+  plain = "text/plain"
+end 'ContentType'
+
+function main() returns ExitCode
+  for ct in ContentType.allCases 'loop'
+    print("{ct.rawValue}\n")
+  end 'loop'
+  return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+application/json
+text/html
+text/plain
+```
+
+### Char-Backed Enum
+
+<!-- test: enum-allcases.char-backed -->
+```maxon
+enum Grade
+  a = 'A'
+  b = 'B'
+  c = 'C'
+end 'Grade'
+
+function main() returns ExitCode
+  for g in Grade.allCases 'loop'
+    print("{g.rawValue}")
+  end 'loop'
+  return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+ABC
+```
+
+### Single Case
+
+<!-- test: enum-allcases.single-case -->
+```maxon
+enum Singleton
+  only
+end 'Singleton'
+
+function main() returns ExitCode
+  var count = Singleton.allCases.count()
+  if count == 1 'check'
+    return 1
+  end 'check'
+  return 0
+end 'main'
+```
+```exitcode
+1
+```
+
+### Error: allCases on Union
+
+<!-- test: enum-allcases.error-union -->
+```maxon
+union Shape
+  circle
+  square
+end 'Shape'
+
+function main() returns ExitCode
+  for s in Shape.allCases 'loop'
+    print("x")
+  end 'loop'
+  return 0
+end 'main'
+```
+```maxoncstderr
+error E4006: specs/fragments/enum-allcases/enum-allcases.error-union.test:8:12: allCases is not available on union types
+```

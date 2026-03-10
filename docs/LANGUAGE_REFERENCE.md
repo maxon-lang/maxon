@@ -1197,7 +1197,7 @@ end 'main'
 
 ## Enums
 
-Enums define a named group of typed constant values. They support direct `==` and `!=` comparison and provide `.rawValue`, `.name`, `.ordinal`, `fromRawValue()`, and `fromName()`. Unlike unions, enums have no methods and no associated values.
+Enums define a named group of typed constant values. They support direct `==` and `!=` comparison and provide `.rawValue`, `.name`, `.ordinal`, `.allCases`, `fromRawValue()`, and `fromName()`. Unlike unions, enums have no methods and no associated values.
 
 ### Declaration
 
@@ -1335,6 +1335,21 @@ s.name                 // "notFound"
 ```
 
 `.ordinal` is available on all enum backing types (int, float, string, char) but is not available on unions.
+
+### All Cases (`allCases`)
+
+All enums have a static `.allCases` property that returns an `Array` containing all cases in declaration order:
+
+```maxon
+for color in Color.allCases 'loop'
+  print("{color.name}\n")
+end 'loop'
+// Prints: red, green, blue
+
+var count = Color.allCases.count()  // 3
+```
+
+`.allCases` works with all backing types (simple, int, float, string, char) and is not available on unions.
 
 ### Converting from Raw Value (`fromRawValue`)
 

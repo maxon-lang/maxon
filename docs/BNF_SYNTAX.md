@@ -629,6 +629,7 @@ ranged_construction
               = IDENTIFIER '{' expression '}'               (* e.g., Age{25} *)
 
 union_access  = IDENTIFIER '.' IDENTIFIER [ '(' [ arg_list ] ')' ]
+              | IDENTIFIER '.' 'allCases'                            (* enum only: Array of all cases *)
 
 static_access = IDENTIFIER '.' IDENTIFIER [ '(' [ arg_list ] ')' ]
 

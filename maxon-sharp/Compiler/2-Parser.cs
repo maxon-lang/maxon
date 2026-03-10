@@ -4171,6 +4171,48 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
   private static string DeclKeyword(MlirUnionType enumType) =>
     enumType is MlirEnumType ? "enum" : "union";
 
+  /// <summary>
+  /// Emits an array literal containing all enum cases in declaration order.
+  /// Reuses the existing array literal infrastructure (EmitManagedMemoryFromElements).
+  /// </summary>
+  private ExprResult EmitEnumAllCases(MlirEnumType enumType, Token token) {
+    var elements = new List<MaxonValue>();
+    foreach (var enumCase in enumType.Cases) {
+      MaxonEnumLiteralOp enumLitOp;
+      if (enumType.BackingType == MlirType.F64) {
+        enumLitOp = new MaxonEnumLiteralOp(enumType.Name, enumCase.Name, (double)enumCase.RawValue!);
+      } else if (enumType.BackingType == MlirType.I64) {
+        enumLitOp = new MaxonEnumLiteralOp(enumType.Name, enumCase.Name, (long)enumCase.RawValue!);
+      } else if (enumType.BackingType is null or MlirStringBackingType or MlirCharBackingType) {
+        enumLitOp = new MaxonEnumLiteralOp(enumType.Name, enumCase.Name, (long)enumCase.Ordinal);
+      } else {
+        throw new InvalidOperationException($"Unsupported enum backing type: {enumType.BackingType}");
+      }
+      _currentBlock!.AddOp(enumLitOp);
+      elements.Add(enumLitOp.Result);
+    }
+
+    var (managedStruct, arrayTag, elementCount, elementKind, elementStructTypeName) =
+      EmitManagedMemoryFromElements(elements);
+
+    var arrayTypeName = FindArrayTypeAliasForElement(elementKind, elementStructTypeName);
+
+    var iterIndexLit = new MaxonLiteralOp(0L);
+    _currentBlock!.AddOp(iterIndexLit);
+
+    var arrayFields = new List<(string Name, MaxonValue Value)> {
+      ("iterIndex", iterIndexLit.Result),
+      ("managed", managedStruct.Result)
+    };
+    var arrayStruct = new MaxonStructLiteralOp(arrayTypeName, arrayFields);
+    _currentBlock!.AddOp(arrayStruct);
+
+    arrayStruct.ArrayLiteralTag = arrayTag;
+    arrayStruct.ArrayLiteralCount = elementCount;
+
+    return ParseFieldAccessChain(new ExprResult.Direct(arrayStruct.Result), token);
+  }
+
   private ExprResult.Direct ParseUnionFromRawValue(MlirUnionType enumType, Token methodToken) {
     var argExpr = ParseExpression();
     var argVal = ResolveExprValue(argExpr);
@@ -8096,6 +8138,15 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     return lastOp is MaxonReturnOp or MaxonBrOp or MaxonCondBrOp or MaxonThrowOp or MaxonPanicOp or MaxonPanicDynamicOp;
   }
 
+  /// <summary>
+  /// Returns true if the block ends with an unconditional branch to the given label.
+  /// Used to detect break-to-merge in match cases.
+  /// </summary>
+  private static bool BlockEndsBranchingToLabel(MlirBlock<MaxonOp> block, string label) {
+    if (block.Operations.Count == 0) return false;
+    return block.Operations[^1] is MaxonBrOp br && br.Target == label;
+  }
+
   // ============================================================================
   // Match statement / expression
   // ============================================================================
@@ -9119,7 +9170,13 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
           continue;
         }
 
-        // For non-enum matches, 'default panic("message")' is allowed
+        // For non-enum matches, 'default throws' and 'default panic' are allowed
+        if (Check(TokenType.Throws)) {
+          ParseDefaultThrowsCase(defaultToken, matchLabel, caseIndex, cmpBlocks, caseBlocks, caseIsDefault, caseFallthrough, caseOuterScopes);
+          caseIndex++;
+          SkipNewlines();
+          continue;
+        }
         if (Check(TokenType.Panic)) {
           ParseDefaultPanicCase(defaultToken, matchLabel, caseIndex, cmpBlocks, caseBlocks, caseIsDefault, caseFallthrough, caseOuterScopes);
           caseIndex++;
@@ -9214,16 +9271,21 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
 
     // Wire case body blocks: branch to merge or fallthrough to next case body
     bool allTerminate = true;
+    bool anyBranchesToMerge = false;
     for (int i = 0; i < caseBlocks.Count; i++) {
       var caseBlock = caseBlocks[i];
       if (!BlockEndsWithTerminator(caseBlock)) {
         allTerminate = false;
+        anyBranchesToMerge = true;
         caseBlock.AddOp(new MaxonScopeEndOp(caseOuterScopes[i]) { VarMetadata = _variables.GetScopeEndVarMetadata() });
         if (caseFallthrough[i] && i + 1 < caseBlocks.Count) {
           caseBlock.AddOp(new MaxonBrOp($"{matchLabel}.case{i + 1}"));
         } else {
           caseBlock.AddOp(new MaxonBrOp(mergeLabel));
         }
+      } else if (BlockEndsBranchingToLabel(caseBlock, mergeLabel)) {
+        // Case ends with a branch to merge (e.g. break) — flow continues after match
+        anyBranchesToMerge = true;
       }
     }
 
@@ -9231,8 +9293,8 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     // scope-end clean them up. Removing them here prevents cleanup when
     // flow continues past the match (non-terminating case bodies).
 
-    // If all cases terminate, there's no reachable code after the match
-    _currentBlock = allTerminate ? null : mergeBlock;
+    // Code after match is unreachable only if all cases terminate AND none branch to merge
+    _currentBlock = (allTerminate && !anyBranchesToMerge) ? null : mergeBlock;
   }
 
   private ExprResult.Direct ParseMatchExpression() {
@@ -9310,7 +9372,13 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
           continue;
         }
 
-        // For non-enum matches, 'default panic("message")' is allowed
+        // For non-enum matches, 'default throws' and 'default panic' are allowed
+        if (Check(TokenType.Throws)) {
+          ParseDefaultThrowsCase(defaultToken, matchLabel, caseIndex, cmpBlocks, caseBlocks, caseIsDefault, caseFallthrough: null, caseOuterScopes: null);
+          caseIndex++;
+          SkipNewlines();
+          continue;
+        }
         if (Check(TokenType.Panic)) {
           ParseDefaultPanicCase(defaultToken, matchLabel, caseIndex, cmpBlocks, caseBlocks, caseIsDefault, caseFallthrough: null, caseOuterScopes: null);
           caseIndex++;
@@ -9397,22 +9465,11 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
 
     _currentBlock = mergeBlock;
 
-    // Don't remove scrutTempName or origEnumTempName — let the function
-    // scope-end clean them up.
-    _variables.Remove(resultVarName);
+    // Don't remove scrutTempName, origEnumTempName, or resultVarName — let
+    // the function scope-end clean them up.  Removing resultVarName here
+    // would skip the decref for the match-expression temporary, leaking it.
 
-    MaxonValue resultValue;
-    if (resultKind == MaxonValueKind.Enum && resultStructTypeName != null) {
-      var resultEnumType = (MlirUnionType)_typeRegistry[resultStructTypeName];
-      var resultBackingKind = GetUnionBackingKind(resultEnumType);
-      var enumRef = new MaxonEnumVarRefOp(resultVarName, resultStructTypeName, resultBackingKind);
-      _currentBlock!.AddOp(enumRef);
-      resultValue = enumRef.Result;
-    } else {
-      var resultRef = new MaxonVarRefOp(resultVarName, resultKind);
-      _currentBlock!.AddOp(resultRef);
-      resultValue = resultRef.Result;
-    }
+    var resultValue = EmitVarRefOp(resultVarName, resultKind, resultStructTypeName);
 
     return new ExprResult.Direct(resultValue);
   }
@@ -9974,6 +10031,16 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
             _currentBlock!.AddOp(enumLitOp);
             return ParseFieldAccessChain(new ExprResult.Direct(enumLitOp.Result), token);
           }
+          // allCases: static property returning Array of all enum cases
+          if (memberName == "allCases") {
+            if (enumType is not MlirEnumType)
+              throw new CompileError(ErrorCode.MlirInvalidFieldAccess,
+                $"allCases is not available on union types", token.Line, token.Column);
+            Advance(); // consume '.'
+            Advance(); // consume 'allCases'
+            return EmitEnumAllCases((MlirEnumType)enumType, token);
+          }
+
           // If not followed by '(', it can't be a method call, so it's an unknown case name.
           if (_pos + 2 >= _tokens.Count || _tokens[_pos + 2].Type != TokenType.LeftParen) {
             Advance(); // consume '.'

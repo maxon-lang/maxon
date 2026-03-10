@@ -207,11 +207,10 @@ end 'emitMaxArm64LoadSlot'
 // Lower a func op to MaxArm64 ops.
 // After a call, the return value is in x0 — store it to a temp slot so later ops can find it.
 function lowerFuncOpToArm64(fOp FuncOp, dstBlock MlirBlock, valueSlots ValueSlotMap, nextTempSlot SlotIndex) returns SlotIndex
-    match fOp 'lower'
-        ret then break 'lower'
-        call(resultId, callee) then return lowerCallOpToArm64(resultId, callee: callee, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
+    return match fOp 'lower'
+        ret gives nextTempSlot
+        call(resultId, callee) gives lowerCallOpToArm64(resultId, callee: callee, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
     end 'lower'
-    return nextTempSlot
 end 'lowerFuncOpToArm64'
 
 function lowerCallOpToArm64(resultId ValueId, callee ByteArray, dstBlock MlirBlock, valueSlots ValueSlotMap, nextTempSlot SlotIndex) returns SlotIndex

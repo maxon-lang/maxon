@@ -1148,3 +1148,93 @@ end 'main'
 23
 ```
 
+### Default Throws on Non-Enum Match
+
+<!-- test: match-statements.default-throws-non-enum -->
+```maxon
+typealias Integer = int(0 to 100)
+
+enum StringError
+  notFound
+end 'StringError'
+
+function classify(s String) returns Integer throws StringError
+  return match s 'check'
+    "a" gives 1
+    "b" gives 2
+    default throws StringError.notFound
+  end 'check'
+end 'classify'
+
+function main() returns ExitCode
+  let a = try classify("a") otherwise 0
+  let c = try classify("c") otherwise 99
+  if a == 1 and c == 99 'check'
+    return 1
+  end 'check'
+  return 0
+end 'main'
+```
+```exitcode
+1
+```
+
+### Default Panic on Non-Enum Match
+
+<!-- test: match-statements.default-panic-non-enum -->
+```maxon
+typealias Integer = int(0 to 100)
+
+function classify(x Integer) returns Integer
+  return match x 'check'
+    1 gives 10
+    2 gives 20
+    default panic("unexpected value")
+  end 'check'
+end 'classify'
+
+function main() returns ExitCode
+  let result = classify(2)
+  if result == 20 'check'
+    return 1
+  end 'check'
+  return 0
+end 'main'
+```
+```exitcode
+1
+```
+
+### Break in Exhaustive Enum Match
+
+<!-- test: match-statements.break-exhaustive-enum -->
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+union Container
+  empty
+  value(n Integer)
+end 'Container'
+
+function process(c Container) returns Integer
+  var result = 0
+  match c 'check'
+    empty then break 'check'
+    value(n) then result = n
+  end 'check'
+  return result
+end 'process'
+
+function main() returns ExitCode
+  let a = process(Container.empty)
+  let b = process(Container.value(42))
+  if a == 0 and b == 42 'check'
+    return 1
+  end 'check'
+  return 0
+end 'main'
+```
+```exitcode
+1
+```
+
