@@ -1197,7 +1197,7 @@ end 'main'
 
 ## Enums
 
-Enums define a named group of typed constant values. They support direct `==` and `!=` comparison and provide `.rawValue`, `.name`, `fromRawValue()`, and `fromName()`. Unlike unions, enums have no methods and no associated values.
+Enums define a named group of typed constant values. They support direct `==` and `!=` comparison and provide `.rawValue`, `.name`, `.ordinal`, `fromRawValue()`, and `fromName()`. Unlike unions, enums have no methods and no associated values.
 
 ### Declaration
 
@@ -1319,6 +1319,22 @@ var s = HttpStatus.notFound
 var code = s.rawValue   // 404
 var n = s.name          // "notFound"
 ```
+
+### Ordinal Access
+
+All enums have an `.ordinal` property returning the zero-based declaration position as an `int`. For simple enums, `.ordinal` is identical to `.rawValue`. For backed enums, `.ordinal` is the position in declaration order, not the backing value:
+
+```maxon
+var c = Color.green
+var pos = c.ordinal    // 1 (same as .rawValue for simple enums)
+
+var s = HttpStatus.notFound
+s.ordinal              // 1 (second case in declaration order)
+s.rawValue             // 404 (backing value)
+s.name                 // "notFound"
+```
+
+`.ordinal` is available on all enum backing types (int, float, string, char) but is not available on unions.
 
 ### Converting from Raw Value (`fromRawValue`)
 

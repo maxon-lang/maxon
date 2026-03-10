@@ -44,22 +44,17 @@ end 'maxOf'
 function getSlotFromMlirOp(op MlirOp) returns SlotIndex
     var result = 0 - 1
     match op 'outer'
+        maxhl to func then break 'outer'
         memref(memOp) then result = getSlotFromMemRefOp(memOp)
-        arith(_) then break 'outer'
-        cf(_) then break 'outer'
-        func(_) then break 'outer'
-        runtime(_) then break 'outer'
-        maxx64(_) then break 'outer'
-        maxarm64(_) then break 'outer'
-        maxhl(_) then break 'outer'
+        runtime to maxarm64 then break 'outer'
     end 'outer'
     return result
 end 'getSlotFromMlirOp'
 
 function getSlotFromMemRefOp(op MemRefOp) returns SlotIndex
-    match op 'check'
-        storeSlot(slotId, _) then return slotId
-        loadSlot(_, slotId) then return slotId
+    return match op 'check'
+        storeSlot(slotId, _) gives slotId
+        loadSlot(_, slotId) gives slotId
     end 'check'
 end 'getSlotFromMemRefOp'
 
@@ -86,29 +81,19 @@ end 'computeMaxParserSlotInFunc'
 
 // Check if an MlirOp is an arith op that produces a temp result slot.
 function isTempProducingOp(op MlirOp) returns bool
-    match op 'check'
-        arith(_) then return true
-        memref(_) then return false
-        cf(_) then return false
-        func(_) then return false
-        runtime(_) then return false
-        maxx64(_) then return false
-        maxarm64(_) then return false
-        maxhl(_) then return false
+    return match op 'check'
+        maxhl gives false
+        arith gives true
+        cf to maxarm64 gives false
     end 'check'
 end 'isTempProducingOp'
 
 // Check if an MlirOp is a print operation (needs stack buffer).
 function isPrintOp(op MlirOp) returns bool
-    match op 'check'
-        runtime(_) then return true
-        arith(_) then return false
-        memref(_) then return false
-        cf(_) then return false
-        func(_) then return false
-        maxx64(_) then return false
-        maxarm64(_) then return false
-        maxhl(_) then return false
+    return match op 'check'
+        maxhl to memref gives false
+        runtime gives true
+        maxx64 to maxarm64 gives false
     end 'check'
 end 'isPrintOp'
 
@@ -172,52 +157,34 @@ end 'determineJumpKindInBlock'
 
 // Returns encoded jump kind (0-6) or -1 if not a comparison op.
 function getJumpKindFromOp(op MlirOp) returns SlotIndex
-    match op 'check'
-        arith(arithOp) then return getJumpKindFromArith(arithOp)
-        memref(_) then return 0 - 1
-        cf(_) then return 0 - 1
-        func(_) then return 0 - 1
-        runtime(_) then return 0 - 1
-        maxx64(_) then return 0 - 1
-        maxarm64(_) then return 0 - 1
-        maxhl(_) then return 0 - 1
+    return match op 'check'
+        maxhl gives 0 - 1
+        arith(arithOp) gives getJumpKindFromArith(arithOp)
+        cf to maxarm64 gives 0 - 1
     end 'check'
 end 'getJumpKindFromOp'
 
 function getJumpKindFromArith(op ArithOp) returns SlotIndex
-    match op 'check'
-        cmpI64Eq(_, _, _) then return 0
-        cmpI64Ne(_, _, _) then return 1
-        cmpI64Lt(_, _, _) then return 2
-        cmpI64Le(_, _, _) then return 3
-        cmpI64Gt(_, _, _) then return 4
-        cmpI64Ge(_, _, _) then return 5
-        cmpF64Eq(_, _, _) then return 6
-        constI64(_, _) then return 0 - 1
-        constF64(_, _) then return 0 - 1
-        addI64(_, _, _) then return 0 - 1
-        subI64(_, _, _) then return 0 - 1
-        mulI64(_, _, _) then return 0 - 1
-        divI64(_, _, _) then return 0 - 1
-        remI64(_, _, _) then return 0 - 1
-        negI64(_, _) then return 0 - 1
-        bitNotI64(_, _) then return 0 - 1
-        andI64(_, _, _) then return 0 - 1
-        orI64(_, _, _) then return 0 - 1
-        xorI64(_, _, _) then return 0 - 1
-        shlI64(_, _, _) then return 0 - 1
-        shrI64(_, _, _) then return 0 - 1
+    return match op 'check'
+        constI64 to shrI64 gives 0 - 1
+        cmpI64Eq gives 0
+        cmpI64Ne gives 1
+        cmpI64Lt gives 2
+        cmpI64Le gives 3
+        cmpI64Gt gives 4
+        cmpI64Ge gives 5
+        cmpF64Eq gives 6
     end 'check'
 end 'getJumpKindFromArith'
 
 function decodeJumpKind(encoded SlotIndex) returns JumpKind
-    match encoded 'decode'
-        0 then return JumpKind.eq
-        1 then return JumpKind.ne
-        2 then return JumpKind.lt
-        3 then return JumpKind.le
-        4 then return JumpKind.gt
-        5 then return JumpKind.ge
-        default then return JumpKind.feq
+    return match encoded 'decode'
+        0 gives JumpKind.eq
+        1 gives JumpKind.ne
+        2 gives JumpKind.lt
+        3 gives JumpKind.le
+        4 gives JumpKind.gt
+        5 gives JumpKind.ge
+        default gives JumpKind.feq
     end 'decode'
 end 'decodeJumpKind'

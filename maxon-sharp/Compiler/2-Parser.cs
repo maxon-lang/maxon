@@ -10204,8 +10204,8 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
 
       // Handle enum-specific access
       if (registeredType is MlirUnionType enumType) {
-        // Unions (non-enum) don't have .name or .rawValue — those belong to enum
-        if (enumType is not MlirEnumType && fieldName is "name" or "rawValue") {
+        // Unions (non-enum) don't have .name, .rawValue, or .ordinal — those belong to enum
+        if (enumType is not MlirEnumType && fieldName is "name" or "rawValue" or "ordinal") {
           throw new CompileError(ErrorCode.MlirInvalidFieldAccess,
             $"union type '{userTypeName}' has no property '{fieldName}'",
             fieldToken.Line, fieldToken.Column);
@@ -10242,6 +10242,15 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
           var rawValueOp = new MaxonEnumRawValueOp(enumVal, userTypeName, resultKind);
           _currentBlock!.AddOp(rawValueOp);
           result = new ExprResult.Direct(rawValueOp.Result);
+          continue;
+        }
+
+        // .ordinal access - returns zero-based declaration position as int
+        if (fieldName == "ordinal") {
+          var enumVal = ResolveExprValue(result);
+          var ordinalOp = new MaxonEnumOrdinalOp(enumVal, userTypeName);
+          _currentBlock!.AddOp(ordinalOp);
+          result = new ExprResult.Direct(ordinalOp.Result);
           continue;
         }
 

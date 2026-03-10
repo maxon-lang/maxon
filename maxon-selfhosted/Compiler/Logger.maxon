@@ -56,7 +56,6 @@ end 'cancelCapturingErrors'
 // Offset by 1 so 0 can mean "unset" without conflicting with LogLevel.NONE (rawValue 0).
 // Ranges kept at i64-width because Array with ranged types smaller than i64 has a sizing bug.
 typealias StoredLevel = int(0 to u64.max)
-typealias CategoryIndex = int(0 to u64.max)
 typealias CategoryLevelArray = Array with StoredLevel
 var categoryLogLevels = CategoryLevelArray{}
 var categoryLevelsInitialized = false
@@ -71,23 +70,9 @@ function ensureCategoryLevels()
     end 'fill'
 end 'ensureCategoryLevels'
 
-function categoryIndex(category LogCategory) returns CategoryIndex
-    match category 'idx'
-        LogCategory.compiler then return 0
-        LogCategory.lexer then return 1
-        LogCategory.parser then return 2
-        LogCategory.semantic then return 3
-        LogCategory.mlir then return 4
-        LogCategory.codegen then return 5
-        LogCategory.binary then return 6
-        LogCategory.testing then return 7
-    end 'idx'
-end 'categoryIndex'
-
 function effectiveLogLevel(category LogCategory) returns StoredLevel
     if categoryLevelsInitialized 'hasLevels'
-        let idx = categoryIndex(category)
-        let stored = try categoryLogLevels.get(idx) otherwise 0
+        let stored = try categoryLogLevels.get(category.ordinal) otherwise 0
         if stored > 0 'hasOverride'
             return stored - 1
         end 'hasOverride'
@@ -117,8 +102,7 @@ end 'setLogLevel'
 
 export function setCategoryLogLevel(category LogCategory, level LogLevel)
     ensureCategoryLevels()
-    let idx = categoryIndex(category)
-    categoryLogLevels.set(idx, value: level.rawValue + 1)
+    categoryLogLevels.set(category.ordinal, value: level.rawValue + 1)
 end 'setCategoryLogLevel'
 
 // Parses a log option string like "debug" or "lexer:trace".

@@ -69,87 +69,60 @@ end 'clearDepsFor'
 // --- Query key equality ---
 
 export function queryKeysEqual(a QueryKey, b QueryKey) returns bool
-    match a 'matchA'
-        sourceFile(path) then return matchSourceFile(b, path: path)
-        tokens(path) then return matchTokens(b, path: path)
-        parseOps(path) then return matchParseOps(b, path: path)
-        allModule then return matchAllModule(b)
-        allMid then return matchAllMid(b)
-        codeResult then return matchCodeResult(b)
+    return match a 'matchA'
+        sourceFile(path) gives matchSourceFile(b, path: path)
+        tokens(path) gives matchTokens(b, path: path)
+        parseOps(path) gives matchParseOps(b, path: path)
+        allModule gives matchAllModule(b)
+        allMid gives matchAllMid(b)
+        codeResult gives matchCodeResult(b)
     end 'matchA'
-    return false
 end 'queryKeysEqual'
 
 function matchSourceFile(b QueryKey, path String) returns bool
-    match b 'matchB'
-        sourceFile(bPath) then return path == bPath
-        tokens(_) then return false
-        parseOps(_) then return false
-        allModule then return false
-        allMid then return false
-        codeResult then return false
+    return match b 'matchB'
+        sourceFile(bPath) gives path == bPath
+        tokens to codeResult gives false
     end 'matchB'
-    return false
 end 'matchSourceFile'
 
 function matchTokens(b QueryKey, path String) returns bool
-    match b 'matchB'
-        sourceFile(_) then return false
-        tokens(bPath) then return path == bPath
-        parseOps(_) then return false
-        allModule then return false
-        allMid then return false
-        codeResult then return false
+    return match b 'matchB'
+        sourceFile gives false
+        tokens(bPath) gives path == bPath
+        parseOps to codeResult gives false
     end 'matchB'
-    return false
 end 'matchTokens'
 
 function matchParseOps(b QueryKey, path String) returns bool
-    match b 'matchB'
-        sourceFile(_) then return false
-        tokens(_) then return false
-        parseOps(bPath) then return path == bPath
-        allModule then return false
-        allMid then return false
-        codeResult then return false
+    return match b 'matchB'
+        sourceFile to tokens gives false
+        parseOps(bPath) gives path == bPath
+        allModule to codeResult gives false
     end 'matchB'
-    return false
 end 'matchParseOps'
 
 function matchAllModule(b QueryKey) returns bool
-    match b 'matchB'
-        sourceFile(_) then return false
-        tokens(_) then return false
-        parseOps(_) then return false
-        allModule then return true
-        allMid then return false
-        codeResult then return false
+    return match b 'matchB'
+        sourceFile to parseOps gives false
+        allModule gives true
+        allMid to codeResult gives false
     end 'matchB'
-    return false
 end 'matchAllModule'
 
 function matchAllMid(b QueryKey) returns bool
-    match b 'matchB'
-        sourceFile(_) then return false
-        tokens(_) then return false
-        parseOps(_) then return false
-        allModule then return false
-        allMid then return true
-        codeResult then return false
+    return match b 'matchB'
+        sourceFile to allModule gives false
+        allMid gives true
+        codeResult gives false
     end 'matchB'
-    return false
 end 'matchAllMid'
 
 function matchCodeResult(b QueryKey) returns bool
-    match b 'matchB'
-        sourceFile(_) then return false
-        tokens(_) then return false
-        parseOps(_) then return false
-        allModule then return false
-        allMid then return false
-        codeResult then return true
+    return match b 'matchB'
+        sourceFile to allMid gives false
+        codeResult gives true
     end 'matchB'
-    return false
 end 'matchCodeResult'
 
 // --- Cache validation ---
@@ -180,15 +153,14 @@ end 'areDepsValid'
 // Check if a single dependency is still valid since a given revision.
 // For derived queries, recursively validates their own dependencies.
 function isDependencyValid(project Project, dep QueryKey, since Revision) returns bool
-    match dep 'matchDep'
-        sourceFile(path) then return isInputUnchanged(project, path: path, since: since)
-        tokens(path) then return isTokensCacheValidDeep(project, path: path)
-        parseOps(path) then return isParseCacheValidDeep(project, path: path)
-        allModule then return isAllModuleCacheValidDeep(project)
-        allMid then return isAllMidCacheValidDeep(project)
-        codeResult then return isCodeCacheValidDeep(project)
+    return match dep 'matchDep'
+        sourceFile(path) gives isInputUnchanged(project, path: path, since: since)
+        tokens(path) gives isTokensCacheValidDeep(project, path: path)
+        parseOps(path) gives isParseCacheValidDeep(project, path: path)
+        allModule gives isAllModuleCacheValidDeep(project)
+        allMid gives isAllMidCacheValidDeep(project)
+        codeResult gives isCodeCacheValidDeep(project)
     end 'matchDep'
-    return false
 end 'isDependencyValid'
 
 function isTokensCacheValidDeep(project Project, path String) returns bool

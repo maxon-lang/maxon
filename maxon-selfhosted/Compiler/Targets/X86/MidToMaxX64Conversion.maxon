@@ -6,10 +6,9 @@ export function lowerMidToMaxX64(module MlirModule, target Target) returns MlirM
     logDebug(LogCategory.mlir, message: "Lowering Mid to MaxX64 dialect")
     var result = createMlirModule()
 
-    var shadowSpace = 32
-    match target.os 'osShadow'
-        Os.windows then shadowSpace = 32
-        Os.linux then shadowSpace = 0
+    let shadowSpace = match target.os 'osShadow'
+        Os.windows gives 32
+        Os.linux gives 0
     end 'osShadow'
 
     for srcFunc in module.functions 'eachFunc'
@@ -222,7 +221,7 @@ end 'lowerPrintInt'
 function lowerFuncOp(op FuncOp, dstBlock MlirBlock, valueSlots ValueSlotMap, nextTempSlot SlotIndex) returns SlotIndex
     return match op 'lower'
         call(resultId, callee) gives lowerCallOp(resultId, callee: callee, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
-        ret(_) gives nextTempSlot
+        ret gives nextTempSlot
     end 'lower'
 end 'lowerFuncOp'
 
@@ -237,14 +236,12 @@ end 'lowerCallOp'
 // Lower block terminator: cf.condBr, cf.br, func.ret.
 function lowerTerminator(srcBlock MlirBlock, dstBlock MlirBlock, valueSlots ValueSlotMap)
     match srcBlock.terminator 'dispatch'
+        maxhl to arith then break 'dispatch'
         cf(cfOp) then lowerCfTerminator(cfOp, srcBlock: srcBlock, dstBlock: dstBlock, valueSlots: valueSlots)
         func(funcOp) then lowerFuncTerminator(funcOp, dstBlock: dstBlock, valueSlots: valueSlots)
-        arith(_) then break 'dispatch'
-        memref(_) then break 'dispatch'
-        runtime(_) then break 'dispatch'
+        memref to runtime then break 'dispatch'
         maxx64(x64Op) then dstBlock.ops.push(MlirOp.maxx64(x64Op))
-        maxarm64(_) then break 'dispatch'
-        maxhl(_) then break 'dispatch'
+        maxarm64 then break 'dispatch'
     end 'dispatch'
 end 'lowerTerminator'
 
@@ -283,7 +280,7 @@ end 'lowerBoolTestCondBr'
 function lowerFuncTerminator(op FuncOp, dstBlock MlirBlock, valueSlots ValueSlotMap)
     match op 'lower'
         ret(retValId) then lowerReturnOp(retValId, dstBlock: dstBlock, valueSlots: valueSlots)
-        call(_, _) then break 'lower'
+        call then break 'lower'
     end 'lower'
 end 'lowerFuncTerminator'
 

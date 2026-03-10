@@ -652,6 +652,21 @@ public static partial class MaxonToStandardConversion {
               valueMap[strRawOp.Result] = strRawHp;
               break;
             }
+            case MaxonEnumOrdinalOp ordinalOp: {
+              var enumType = (MlirUnionType)module.TypeDefs[ordinalOp.EnumTypeName];
+              var stdValue = valueMap[ordinalOp.EnumValue];
+              StdI64 ordinalValue;
+              if (enumType.BackingType == MlirType.I64) {
+                ordinalValue = EmitIntEnumToPositionIndex(enumType, (StdI64)stdValue, newBlock);
+              } else if (enumType.BackingType == MlirType.F64) {
+                ordinalValue = EmitFloatEnumToPositionIndex(enumType, (StdF64)stdValue, newBlock);
+              } else {
+                // Simple enums (no backing type) and string/char-backed enums store ordinals directly
+                ordinalValue = (StdI64)stdValue;
+              }
+              valueMap[ordinalOp.Result] = ordinalValue;
+              break;
+            }
             case MaxonEnumNameOp enumNameOp: {
               var enumType = (MlirUnionType)module.TypeDefs[enumNameOp.EnumTypeName];
               var stdValue = valueMap[enumNameOp.EnumValue];

@@ -1,0 +1,63 @@
+// Test: enum-ordinal.simple
+enum Color
+  red
+  green
+  blue
+end 'Color'
+
+function main() returns ExitCode
+  var c = Color.green
+  if c.ordinal == 1 'check'
+    return 1
+  end 'check'
+  return 0
+end 'main'
+---
+ExitCode: 1
+---
+module {
+  func @enum-ordinal.main() -> u32 {
+  entry:
+    x86.prologue stack_size=16
+    x86.mov rax, 1
+    x86.mov [rbp-8], rax
+    x86.mov rcx, [rbp-8]
+    x86.xor rdx, rdx
+    x86.xor rbx, rbx
+    x86.cmp rcx, rbx
+    x86.sete rsi
+    x86.movzx rsi, rsib
+    x86.xor rdi, rdi
+    x86.test rsi, rsi
+    x86.mov r8, rdx
+    x86.cmovne r8, rdi
+    x86.mov r9, 1
+    x86.cmp rcx, r9
+    x86.sete rax
+    x86.movzx rax, raxb
+    x86.mov rdx, 1
+    x86.test rax, rax
+    x86.mov rbx, r8
+    x86.cmovne rbx, rdx
+    x86.mov rax, 2
+    x86.cmp rcx, rax
+    x86.sete rax
+    x86.movzx rax, raxb
+    x86.mov rcx, 2
+    x86.test rax, rax
+    x86.mov rdx, rbx
+    x86.cmovne rdx, rcx
+    x86.mov rax, 1
+    x86.cmp rdx, rax
+    x86.jne enum-ordinal.main.check_0.after
+  check_0:
+    x86.mov rax, 1
+    x86.epilogue
+    x86.ret
+  check_0.after:
+    x86.xor rax, rax
+    x86.epilogue
+    x86.ret
+  }
+}
+---

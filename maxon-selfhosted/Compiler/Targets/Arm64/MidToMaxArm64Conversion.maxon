@@ -64,9 +64,9 @@ function lowerMidOpToArm64(op MlirOp, dstBlock MlirBlock, valueSlots ValueSlotMa
         memref(mOp) then lowerMemRefToArm64(mOp, dstBlock: dstBlock, valueSlots: valueSlots)
         func(fOp) then tempSlot = lowerFuncOpToArm64(fOp, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: tempSlot)
         runtime(rOp) then lowerRuntimeToArm64(rOp, dstBlock: dstBlock)
-        cf(_) then break 'dispatch'
-        maxhl(_) then break 'dispatch'
-        maxx64(_) then break 'dispatch'
+        cf then break 'dispatch'
+        maxhl then break 'dispatch'
+        maxx64 then break 'dispatch'
         maxarm64(aOp) then dstBlock.ops.push(op)
     end 'dispatch'
     return tempSlot
@@ -208,7 +208,7 @@ end 'emitMaxArm64LoadSlot'
 // After a call, the return value is in x0 — store it to a temp slot so later ops can find it.
 function lowerFuncOpToArm64(fOp FuncOp, dstBlock MlirBlock, valueSlots ValueSlotMap, nextTempSlot SlotIndex) returns SlotIndex
     match fOp 'lower'
-        ret(_) then break 'lower'
+        ret then break 'lower'
         call(resultId, callee) then return lowerCallOpToArm64(resultId, callee: callee, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
     end 'lower'
     return nextTempSlot
@@ -226,21 +226,18 @@ end 'lowerCallOpToArm64'
 function lowerRuntimeToArm64(rOp RuntimeOp, dstBlock MlirBlock)
     match rOp 'lower'
         printLiteral(data) then dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.printLiteral(data)))
-        printInt(_) then dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.printInt))
+        printInt then dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.printInt))
     end 'lower'
 end 'lowerRuntimeToArm64'
 
 // Lower a block terminator to MaxArm64 ops.
 function lowerMidTerminatorToArm64(op MlirOp, srcBlock MlirBlock, dstBlock MlirBlock, valueSlots ValueSlotMap)
     match op 'dispatch'
+        maxhl to arith then break 'dispatch'
         cf(cOp) then lowerCfTerminatorToArm64(cOp, srcBlock: srcBlock, dstBlock: dstBlock, valueSlots: valueSlots)
         func(fOp) then lowerFuncTerminatorToArm64(fOp, dstBlock: dstBlock)
-        arith(_) then break 'dispatch'
-        memref(_) then break 'dispatch'
-        runtime(_) then break 'dispatch'
-        maxhl(_) then break 'dispatch'
-        maxx64(_) then break 'dispatch'
-        maxarm64(_) then dstBlock.terminator = op
+        memref to maxx64 then break 'dispatch'
+        maxarm64 then dstBlock.terminator = op
     end 'dispatch'
     dstBlock.hasTerminator = true
 end 'lowerMidTerminatorToArm64'
@@ -285,8 +282,8 @@ end 'emitBoolTestBranch'
 // Lower func terminator (ret): emit epilogue.
 function lowerFuncTerminatorToArm64(fOp FuncOp, dstBlock MlirBlock)
     match fOp 'lower'
-        ret(_) then dstBlock.terminator = MlirOp.maxarm64(MaxArm64Op.epilogue)
-        call(_, _) then break 'lower'
+        ret then dstBlock.terminator = MlirOp.maxarm64(MaxArm64Op.epilogue)
+        call then break 'lower'
     end 'lower'
 end 'lowerFuncTerminatorToArm64'
 
@@ -310,17 +307,16 @@ end 'determineJumpKindFromBlock'
 
 // Check if an arith op is a comparison and return its jump kind.
 function determineJumpKindFromArith(aOp ArithOp) returns JumpKind
-    match aOp 'check'
-        cmpI64Eq then return JumpKind.eq
-        cmpI64Ne then return JumpKind.ne
-        cmpI64Lt then return JumpKind.lt
-        cmpI64Le then return JumpKind.le
-        cmpI64Gt then return JumpKind.gt
-        cmpI64Ge then return JumpKind.ge
-        cmpF64Eq then return JumpKind.feq
-        constI64 to shrI64 then return JumpKind.boolTest
+    return match aOp 'check'
+        cmpI64Eq gives JumpKind.eq
+        cmpI64Ne gives JumpKind.ne
+        cmpI64Lt gives JumpKind.lt
+        cmpI64Le gives JumpKind.le
+        cmpI64Gt gives JumpKind.gt
+        cmpI64Ge gives JumpKind.ge
+        cmpF64Eq gives JumpKind.feq
+        constI64 to shrI64 gives JumpKind.boolTest
     end 'check'
-    return JumpKind.boolTest
 end 'determineJumpKindFromArith'
 
 // Map an ArithOp to its corresponding MaxArm64Op for binary operations.
@@ -351,8 +347,8 @@ end 'maxArm64GetBinaryOpInfo'
 // Map a unary ArithOp to its corresponding MaxArm64Op.
 function getMaxArm64UnaryOp(aOp ArithOp) returns MaxArm64Op
     match aOp 'check'
-        negI64(_, _) then return MaxArm64Op.negReg(MaxArm64Register.x0, MaxArm64Register.x0)
-        bitNotI64(_, _) then return MaxArm64Op.mvnReg(MaxArm64Register.x0, MaxArm64Register.x0)
+        negI64 then return MaxArm64Op.negReg(MaxArm64Register.x0, MaxArm64Register.x0)
+        bitNotI64 then return MaxArm64Op.mvnReg(MaxArm64Register.x0, MaxArm64Register.x0)
         constI64 to remI64 then break 'check'
         andI64 to cmpF64Eq then break 'check'
     end 'check'

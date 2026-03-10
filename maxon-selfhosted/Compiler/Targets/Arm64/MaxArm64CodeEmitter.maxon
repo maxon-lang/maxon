@@ -43,32 +43,32 @@ end 'maxArm64EmitInsn'
 // --- Register encoding ---
 
 function maxArm64RegNum(reg MaxArm64Register) returns MachineWord
-    match reg 'map'
-        MaxArm64Register.x0 then return 0
-        MaxArm64Register.x1 then return 1
-        MaxArm64Register.x2 then return 2
-        MaxArm64Register.x3 then return 3
-        MaxArm64Register.x4 then return 4
-        MaxArm64Register.x5 then return 5
-        MaxArm64Register.x6 then return 6
-        MaxArm64Register.x7 then return 7
-        MaxArm64Register.x8 then return 8
-        MaxArm64Register.x29 then return 29
-        MaxArm64Register.x30 then return 30
-        MaxArm64Register.sp then return 31
+    return match reg 'map'
+        MaxArm64Register.x0 gives 0
+        MaxArm64Register.x1 gives 1
+        MaxArm64Register.x2 gives 2
+        MaxArm64Register.x3 gives 3
+        MaxArm64Register.x4 gives 4
+        MaxArm64Register.x5 gives 5
+        MaxArm64Register.x6 gives 6
+        MaxArm64Register.x7 gives 7
+        MaxArm64Register.x8 gives 8
+        MaxArm64Register.x29 gives 29
+        MaxArm64Register.x30 gives 30
+        MaxArm64Register.sp gives 31
     end 'map'
 end 'maxArm64RegNum'
 
 // --- Condition code encoding ---
 
 function maxArm64CondNum(cond MaxArm64CondCode) returns MachineWord
-    match cond 'map'
-        MaxArm64CondCode.eq then return 0x0
-        MaxArm64CondCode.ne then return 0x1
-        MaxArm64CondCode.lt then return 0xB
-        MaxArm64CondCode.le then return 0xD
-        MaxArm64CondCode.gt then return 0xC
-        MaxArm64CondCode.ge then return 0xA
+    return match cond 'map'
+        MaxArm64CondCode.eq gives 0x0
+        MaxArm64CondCode.ne gives 0x1
+        MaxArm64CondCode.lt gives 0xB
+        MaxArm64CondCode.le gives 0xD
+        MaxArm64CondCode.gt gives 0xC
+        MaxArm64CondCode.ge gives 0xA
     end 'map'
 end 'maxArm64CondNum'
 
@@ -743,14 +743,9 @@ end 'emitMaxArm64'
 // Emit a single MlirOp (expected to be maxarm64 dialect).
 function emitMaxArm64Op(op MlirOp, code ByteArray, jumpFixups BlockIdFixupArray, callFixups MaxArm64CallFixupArray, stackTracker MaxArm64StackTracker, writeStdoutOff MaxArm64Offset, i64ToStringOff MaxArm64Offset)
     match op 'dispatch'
+        maxhl to runtime then break 'dispatch'
+        maxx64 then break 'dispatch'
         maxarm64(a64Op) then emitMaxArm64Instruction(a64Op, code: code, jumpFixups: jumpFixups, callFixups: callFixups, stackTracker: stackTracker, writeStdoutOff: writeStdoutOff, i64ToStringOff: i64ToStringOff)
-        arith(_) then break 'dispatch'
-        cf(_) then break 'dispatch'
-        func(_) then break 'dispatch'
-        memref(_) then break 'dispatch'
-        runtime(_) then break 'dispatch'
-        maxhl(_) then break 'dispatch'
-        maxx64(_) then break 'dispatch'
     end 'dispatch'
 end 'emitMaxArm64Op'
 

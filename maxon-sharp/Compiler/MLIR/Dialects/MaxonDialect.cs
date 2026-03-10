@@ -787,6 +787,16 @@ public class MaxonEnumNameOp(MaxonValue enumValue, string enumTypeName) : MaxonO
   public override IReadOnlyList<string> PrintableOperands => [EnumValue.ToString()];
 }
 
+// Accesses .ordinal on an enum value, returning the zero-based declaration position as i64
+public class MaxonEnumOrdinalOp(MaxonValue enumValue, string enumTypeName) : MaxonOp {
+  public override string Mnemonic => $"maxon.enum_ordinal @{EnumTypeName}";
+  public MaxonValue EnumValue { get; } = enumValue;
+  public string EnumTypeName { get; } = enumTypeName;
+  public MaxonInteger Result { get; } = new MaxonInteger(MlirContext.Current.NextId());
+  public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
+  public override IReadOnlyList<string> PrintableOperands => [EnumValue.ToString()];
+}
+
 public class MaxonGlobalStoreOp(string globalName, MaxonValue value, MaxonValueKind kind) : MaxonOp {
   public override string Mnemonic => $"maxon.global_store @{GlobalName}";
   public string GlobalName { get; } = globalName;

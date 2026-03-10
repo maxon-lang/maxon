@@ -91,24 +91,24 @@ export type MaxonArgs
     end 'parse'
 
     export function target() returns Target
-        match targetOption 'resolve'
-            TargetOption.host then return detectHostTarget()
-            TargetOption.all then return detectHostTarget()
-            TargetOption.x86_64Windows then return Target{cpu: CpuArch.x86_64, os: Os.windows}
-            TargetOption.x86_64Linux then return Target{cpu: CpuArch.x86_64, os: Os.linux}
-            TargetOption.aarch64Windows then return Target{cpu: CpuArch.aarch64, os: Os.windows}
-            TargetOption.aarch64Linux then return Target{cpu: CpuArch.aarch64, os: Os.linux}
+        return match targetOption 'resolve'
+            TargetOption.host gives detectHostTarget()
+            TargetOption.all gives detectHostTarget()
+            TargetOption.x86_64Windows gives Target{cpu: CpuArch.x86_64, os: Os.windows}
+            TargetOption.x86_64Linux gives Target{cpu: CpuArch.x86_64, os: Os.linux}
+            TargetOption.aarch64Windows gives Target{cpu: CpuArch.aarch64, os: Os.windows}
+            TargetOption.aarch64Linux gives Target{cpu: CpuArch.aarch64, os: Os.linux}
         end 'resolve'
     end 'target'
 end 'MaxonArgs'
 
 function parseTargetOption(s String) returns TargetOption throws StringError
-    match s 'parse'
-        "all" then return TargetOption.all
-        "x86_64-windows" then return TargetOption.x86_64Windows
-        "x86_64-linux" then return TargetOption.x86_64Linux
-        "aarch64-windows" then return TargetOption.aarch64Windows
-        "aarch64-linux" then return TargetOption.aarch64Linux
-        default throw StringError.notFound
+    return match s 'parse'
+        "all" gives TargetOption.all
+        "x86_64-windows" gives TargetOption.x86_64Windows
+        "x86_64-linux" gives TargetOption.x86_64Linux
+        "aarch64-windows" gives TargetOption.aarch64Windows
+        "aarch64-linux" gives TargetOption.aarch64Linux
+        default throws StringError.notFound
     end 'parse'
 end 'parseTargetOption'

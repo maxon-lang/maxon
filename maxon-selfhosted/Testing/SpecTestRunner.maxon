@@ -278,9 +278,9 @@ function canExecuteTarget(target Target) returns bool
   if isHostTarget(target) 'isHost'
     return true
   end 'isHost'
-  match target.os 'checkOs'
-    Os.linux then return true
-    Os.windows then return false
+  return match target.os 'checkOs'
+    Os.linux gives true
+    Os.windows gives false
   end 'checkOs'
 end 'canExecuteTarget'
 
@@ -295,10 +295,9 @@ function buildRunCommand(outputPath String, target Target, projectRoot String, t
   end 'isHost'
 
   // Docker execution for Linux targets
-  var dockerArch = "amd64"
-  match target.cpu 'pickArch'
-    CpuArch.x86_64 then dockerArch = "amd64"
-    CpuArch.aarch64 then dockerArch = "arm64"
+  let dockerArch = match target.cpu 'pickArch'
+    CpuArch.x86_64 gives "amd64"
+    CpuArch.aarch64 gives "arm64"
   end 'pickArch'
 
   // Convert Windows path to forward slashes for Docker volume mount

@@ -664,6 +664,52 @@ public static partial class MaxonToStandardConversion {
 		return currentOrd;
 	}
 
+	/// Converts an int-backed enum raw value to its zero-based declaration position via a select chain.
+	/// Unlike EmitIntUnionToOrdinal (which returns MlirEnumCase.Ordinal, used for internal name/rawValue lookup),
+	/// this returns the case's index in the Cases list — the true declaration position.
+	private static StdI64 EmitIntEnumToPositionIndex(
+	  MlirUnionType enumType, StdI64 rawValue, MlirBlock<StandardOp> block) {
+		var fallbackOrd = new StdConstI64Op(0);
+		block.AddOp(fallbackOrd);
+		StdI64 currentOrd = fallbackOrd.Result;
+
+		for (int i = 0; i < enumType.Cases.Count; i++) {
+			var enumCase = enumType.Cases[i];
+			var caseRawConst = new StdConstI64Op((long)enumCase.RawValue!);
+			block.AddOp(caseRawConst);
+			var cmpOp = new StdCmpI64Op("eq", rawValue, caseRawConst.Result);
+			block.AddOp(cmpOp);
+			var posConst = new StdConstI64Op(i);
+			block.AddOp(posConst);
+			var selectOp = new StdSelectI64Op(cmpOp.Result, posConst.Result, currentOrd);
+			block.AddOp(selectOp);
+			currentOrd = selectOp.Result;
+		}
+		return currentOrd;
+	}
+
+	/// Converts a float-backed enum raw value to its zero-based declaration position via a select chain.
+	private static StdI64 EmitFloatEnumToPositionIndex(
+	  MlirUnionType enumType, StdF64 rawValue, MlirBlock<StandardOp> block) {
+		var fallbackOrd = new StdConstI64Op(0);
+		block.AddOp(fallbackOrd);
+		StdI64 currentOrd = fallbackOrd.Result;
+
+		for (int i = 0; i < enumType.Cases.Count; i++) {
+			var enumCase = enumType.Cases[i];
+			var caseRawConst = new StdConstF64Op((double)enumCase.RawValue!);
+			block.AddOp(caseRawConst);
+			var cmpOp = new StdCmpF64Op("eq", rawValue, caseRawConst.Result);
+			block.AddOp(cmpOp);
+			var posConst = new StdConstI64Op(i);
+			block.AddOp(posConst);
+			var selectOp = new StdSelectI64Op(cmpOp.Result, posConst.Result, currentOrd);
+			block.AddOp(selectOp);
+			currentOrd = selectOp.Result;
+		}
+		return currentOrd;
+	}
+
 	/// Looks up an enum case name by ordinal via a select chain. Returns (buffer, length).
 	private static (StdI64 Buffer, StdI64 Length) EmitUnionNameLookup(
 	  MlirUnionType enumType, StdI64 ordinalValue,

@@ -155,19 +155,19 @@ end 'emitUcomisd'
 typealias CondJumpOpcode = int(0x80 to 0x8F)
 
 function conditionToOpcode(cond X64JumpCondition) returns CondJumpOpcode
-    match cond 'map'
-        X64JumpCondition.e then return 0x84
-        X64JumpCondition.ne then return 0x85
-        X64JumpCondition.l then return 0x8C
-        X64JumpCondition.le then return 0x8E
-        X64JumpCondition.g then return 0x8F
-        X64JumpCondition.ge then return 0x8D
-        X64JumpCondition.b then return 0x82
-        X64JumpCondition.be then return 0x86
-        X64JumpCondition.a then return 0x87
-        X64JumpCondition.ae then return 0x83
-        X64JumpCondition.p then return 0x8A
-        X64JumpCondition.np then return 0x8B
+    return match cond 'map'
+        X64JumpCondition.e gives 0x84
+        X64JumpCondition.ne gives 0x85
+        X64JumpCondition.l gives 0x8C
+        X64JumpCondition.le gives 0x8E
+        X64JumpCondition.g gives 0x8F
+        X64JumpCondition.ge gives 0x8D
+        X64JumpCondition.b gives 0x82
+        X64JumpCondition.be gives 0x86
+        X64JumpCondition.a gives 0x87
+        X64JumpCondition.ae gives 0x83
+        X64JumpCondition.p gives 0x8A
+        X64JumpCondition.np gives 0x8B
     end 'map'
 end 'conditionToOpcode'
 
@@ -500,14 +500,9 @@ end 'emitX86'
 // Emit bytes for a single MlirOp (should be maxx64 at this stage).
 function emitMaxX64MlirOp(op MlirOp, code ByteArray, blockFixups BlockJumpFixupArray, callFixups CallFixupArray, writeStdoutOff CodeOffset, i64ToStringOff CodeOffset)
     match op 'dispatch'
+        maxhl to runtime then break 'dispatch'
         maxx64(x64Op) then emitMaxX64Op(x64Op, code: code, blockFixups: blockFixups, callFixups: callFixups, writeStdoutOff: writeStdoutOff, i64ToStringOff: i64ToStringOff)
-        arith(_) then break 'dispatch'
-        cf(_) then break 'dispatch'
-        func(_) then break 'dispatch'
-        memref(_) then break 'dispatch'
-        runtime(_) then break 'dispatch'
-        maxarm64(_) then break 'dispatch'
-        maxhl(_) then break 'dispatch'
+        maxarm64 then break 'dispatch'
     end 'dispatch'
 end 'emitMaxX64MlirOp'
 
@@ -519,18 +514,18 @@ function emitMaxX64Op(op MaxX64Op, code ByteArray, blockFixups BlockJumpFixupArr
         movRegImm(_, value) then emitMovRegImm(code, value: value)
         movSlot(slotIndex, _) then emitMovSlot(code, slotIndex: slotIndex)
         loadSlot(destReg, slotIndex) then emitLoadSlotToReg(code, slotIndex: slotIndex, dest: destReg)
-        addRegReg(_, _) then emitAddRegReg(code)
-        subRegReg(_, _) then emitSubRegReg(code)
-        imulRegReg(_, _) then emitImulRegReg(code)
+        addRegReg then emitAddRegReg(code)
+        subRegReg then emitSubRegReg(code)
+        imulRegReg then emitImulRegReg(code)
         MaxX64Op.idivRcx then emitIdivRcx(code)
         MaxX64Op.iremRcx then emitIremRcx(code)
-        negReg(_) then emitNegReg(code)
-        bitNotReg(_) then emitBitNotReg(code)
-        andRegReg(_, _) then emitAndRegReg(code)
-        orRegReg(_, _) then emitOrRegReg(code)
-        xorRegReg(_, _) then emitXorRegReg(code)
-        shlRegCl(_) then emitShlRegCl(code)
-        sarRegCl(_) then emitSarRegCl(code)
+        negReg then emitNegReg(code)
+        bitNotReg then emitBitNotReg(code)
+        andRegReg then emitAndRegReg(code)
+        orRegReg then emitOrRegReg(code)
+        xorRegReg then emitXorRegReg(code)
+        shlRegCl then emitShlRegCl(code)
+        sarRegCl then emitSarRegCl(code)
         MaxX64Op.cmpRaxRcx then emitCmpRaxRcx(code)
         MaxX64Op.testRaxRax then emitTestRaxRax(code)
         condJump(condition, targetBlock) then emitCondJumpBlock(code, blockFixups: blockFixups, opcode: conditionToOpcode(condition), targetBlock: targetBlock)
