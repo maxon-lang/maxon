@@ -1,5 +1,3 @@
-// Self-hosted Maxon compiler core.
-
 // Convenience wrapper: compiles a file or directory and returns the output executable path.
 export function compile(path String, target Target) returns String throws CompileError
     let project = createProject(path, isSingleFile: false, target: target)
@@ -8,32 +6,9 @@ end 'compile'
 
 // Compiles a project and returns the output executable path.
 export function compileProject(project Project) returns String throws CompileError
-    logDebug(LogCategory.compiler, message: "Starting incremental compilation")
-
-    if not project.dbInitialized 'init'
-        project.db = QueryDatabase{
-            currentRevision: 1,
-            sourceFiles: SourceFileMap{},
-            sourcePaths: FilePathArray{},
-            tokenCache: TokenCacheMap{},
-            parseCache: ParseCacheMap{},
-            allModuleCache: MlirModuleMemo{value: createMlirModule(), computedAt: 0, verifiedAt: 0},
-            allMidCache: MlirModuleMemo{value: createMlirModule(), computedAt: 0, verifiedAt: 0},
-            codeCache: CodeMemo{value: CodeResult{code: ByteArray{}, mainCallFixupOffset: 0, relocations: RelocationArray{}}, computedAt: 0, verifiedAt: 0},
-            dependencies: DependencyArray{},
-            activeQueryStack: QueryKeyArray{},
-            tokenHits: 0, tokenMisses: 0,
-            parseHits: 0, parseMisses: 0,
-            allModuleHits: 0, allModuleMisses: 0,
-            allMidHits: 0, allMidMisses: 0,
-            codeHits: 0, codeMisses: 0
-        }
-        project.dbInitialized = true
-    end 'init'
+    logInfo(LogCategory.compiler, message: "Starting incremental compilation")
 
     try loadSourceFiles(project, path: project.rootPath)
-
-    logDebug(LogCategory.compiler, message: "Loaded {project.db.sourcePaths.count()} source files (revision {project.db.currentRevision})")
 
     let codeResult = try queryCodeResult(project)
 
@@ -46,14 +21,13 @@ export function compileProject(project Project) returns String throws CompileErr
     writeExecutable(outputPath, codeResult: codeResult, target: project.target)
 
     logInfo(LogCategory.compiler, message: "Wrote {codeResult.code.count()} bytes code to {outputPath}")
+
     return outputPath
 end 'compileProject'
 
 // Notify the query database that a single file has changed (for IDE use).
 export function fileChanged(project Project, path String, content ByteArray)
-    if project.dbInitialized 'ready'
-        setSourceFile(project, path: path, content: content)
-    end 'ready'
+    setSourceFile(project, path: path, content: content)
 end 'fileChanged'
 
 // --- Source file loading ---
@@ -61,12 +35,15 @@ end 'fileChanged'
 function loadSourceFiles(project Project, path String) throws CompileError
     if File.exists(path) 'isFile'
         logTrace(LogCategory.compiler, message: "Loading single file: {path}")
+
         let bytes = try File.readBinary(path) otherwise 'readErr'
             throw CompileError.readError
         end 'readErr'
+
         setSourceFile(project, path: path, content: bytes)
     end 'isFile' else if Directory.exists(path) 'isDir'
         logTrace(LogCategory.compiler, message: "Loading directory: {path}")
+
         let dirEntries = try Directory.list(path) otherwise 'listErr'
             throw CompileError.directoryNotFound
         end 'listErr'
@@ -75,12 +52,16 @@ function loadSourceFiles(project Project, path String) throws CompileError
             if name.endsWith(".maxon") 'isMaxon'
                 let filePath = "{path}\\{name}"
                 logTrace(LogCategory.compiler, message: "Loading file: {filePath}")
+
                 let bytes = try File.readBinary(filePath) otherwise 'skip'
                     continue
                 end 'skip'
+
                 setSourceFile(project, path: filePath, content: bytes)
             end 'isMaxon'
         end 'loop'
+
+    // Path does not exist.
     end 'isDir' else 'notFound'
         throw CompileError.fileNotFound
     end 'notFound'
@@ -88,7 +69,10 @@ function loadSourceFiles(project Project, path String) throws CompileError
     if project.db.sourcePaths.count() == 0 'noFiles'
         throw CompileError.noSourceFiles
     end 'noFiles'
+
 end 'loadSourceFiles'
+
+// --- Utility ---
 
 function changeExtension(path String, ext String) returns String
     let dotIdx = try path.findLast(".") otherwise path.endIndex()

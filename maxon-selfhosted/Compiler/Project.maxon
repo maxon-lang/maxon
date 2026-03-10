@@ -5,7 +5,6 @@
 export type Project
     // Query database (incremental compilation cache)
     export var db QueryDatabase
-    export var dbInitialized bool
 
     // SSA value ID counter (MLIR pipeline)
     export var nextValueId_ ValueId
@@ -46,7 +45,7 @@ export function createProject(rootPath String, isSingleFile bool, target Target)
     let emptyModuleMemo = MlirModuleMemo{value: MlirModule{functions: MlirFunctionArray{}}, computedAt: 0, verifiedAt: 0}
     let emptyCodeMemo = CodeMemo{value: CodeResult{code: ByteArray{}, mainCallFixupOffset: 0, relocations: RelocationArray{}}, computedAt: 0, verifiedAt: 0}
     let db = QueryDatabase{
-        currentRevision: 0,
+        currentRevision: 1,
         sourceFiles: SourceFileMap{},
         sourcePaths: FilePathArray{},
         tokenCache: TokenCacheMap{},
@@ -67,7 +66,6 @@ export function createProject(rootPath String, isSingleFile bool, target Target)
     let emptyModule = MlirModule{functions: MlirFunctionArray{}}
     return Project{
         db: db,
-        dbInitialized: false,
         nextValueId_: 0,
         parserVarNames: ByteArrayArray{},
         parserVarSlots: VarSlotArray{},
