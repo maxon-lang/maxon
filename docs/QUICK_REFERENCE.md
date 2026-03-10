@@ -55,7 +55,7 @@ Standard library aliases: `Count`, `Index`, `ExitCode`, `Offset`, `HashValue`, `
 "Hello, {name}!"    // interpolation with {}
 "{n:04}"            // format specifier: zero-pad to width 4
 "{f:.2}"            // format specifier: 2 decimal places
-"Line1\nLine2"      // escape sequences: \n \t \r \0 \\ \" \{ \} \xNN
+"Line1\nLine2"      // escape sequences: \n \t \r \0 \\ \" \{ \} \xNN \uXXXX
 ```
 
 ## Operators
@@ -87,6 +87,13 @@ let _ = sideEffect()  // discard: no binding, no unused check
 // Top-level variables (outside functions)
 var globalCounter = 0   // mutable, accessible from any function
 let MAX_SIZE = 1024     // immutable constant
+
+// Lazy static fields (inside types)
+// Complex initializers (function calls, struct/array literals) run on first access
+static var _ws = CharacterSet.whitespacesAndNewlines()   // lazy, cached after first use
+static var origin = Point{x: 0, y: 0}       // lazy struct literal
+static var _data = [10, 20, 30]              // lazy array literal
+static let MAX = 100                         // constant, evaluated at compile time
 
 // Reference-by-default for structs
 var a = Point{x: 1, y: 2}
@@ -534,6 +541,14 @@ s.replaceFirst("old", "new")
 s.split(",")                           // split by delimiter
 s.slice(startIdx, endIndex: endIdx)
 
+// Trimming
+s.trim()                                     // remove whitespace from both ends
+s.trimStart()                                // remove whitespace from start
+s.trimEnd()                                  // remove whitespace from end
+s.trim(in: CharacterSet.decimalDigits())     // remove matching chars from both ends
+s.trimStart(in: CharacterSet.from(CharSet from ['x']))     // remove matching chars from start
+s.trimEnd(in: CharacterSet.punctuation())   // remove matching chars from end
+
 // Iteration
 for c in s 'chars' ... end 'chars'           // grapheme clusters
 for b in s.bytes() 'bytes' ... end 'bytes'   // bytes
@@ -647,6 +662,24 @@ c.byteLength()
 c.bytes()                            // ByteView
 c.codepoints()                       // CodepointView
 try c.asciiValue()                   // throws CharacterError
+```
+
+### CharacterSet
+```maxon
+CharacterSet.whitespacesAndNewlines() // all Unicode whitespace + newlines
+CharacterSet.whitespaces()           // spaces and tabs (no newlines)
+CharacterSet.newlines()              // newline characters only
+CharacterSet.decimalDigits()         // 0-9
+CharacterSet.letters()               // a-z, A-Z
+CharacterSet.alphanumerics()         // letters + digits
+CharacterSet.punctuation()           // ASCII punctuation
+CharacterSet.from(CharSet from ['a', 'e', 'i', 'o', 'u'])  // custom set
+cs.contains('x')                     // check membership
+```
+
+### Unicode
+```maxon
+Unicode.isWhitespace(cp)            // check if codepoint is whitespace
 ```
 
 ## Standard Interfaces

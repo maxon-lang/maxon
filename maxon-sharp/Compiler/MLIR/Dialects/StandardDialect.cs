@@ -21,6 +21,10 @@ public abstract class StandardOp : IPrintableOp {
   /// Returns the result ID if this op is pure (side-effect-free and safe to remove
   /// when its result is unused), or -1 if it has side effects.
   public abstract int PureResultId { get; }
+
+  /// Returns the result ID of any value defined by this op, or -1 if it defines no value.
+  /// Unlike PureResultId, this includes non-pure ops that produce results (e.g., calls, params).
+  public virtual int AnyResultId => PureResultId;
 }
 
 public abstract class StdUnaryF64Op(StdF64 input) : StandardOp {
@@ -854,6 +858,7 @@ public class StdParamOp(int index, string name, StdValue result) : StandardOp {
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
   public override List<StdValue> ReadValues => [];
   public override int PureResultId => -1;
+  public override int AnyResultId => Result.Id;
 }
 
 public class StdCallOp(string callee, List<StdValue> args, StdValue? result = null) : StandardOp {
@@ -867,6 +872,7 @@ public class StdCallOp(string callee, List<StdValue> args, StdValue? result = nu
     [.. Args.Select(a => a.ToString())];
   public override List<StdValue> ReadValues => Args;
   public override int PureResultId => -1;
+  public override int AnyResultId => Result?.Id ?? -1;
 }
 
 // Gets the address of a function (function reference/pointer)
@@ -891,6 +897,7 @@ public class StdIndirectCallOp(StdValue callee, List<StdValue> args, StdValue? r
     [Callee.ToString(), .. Args.Select(a => a.ToString())];
   public override List<StdValue> ReadValues => [Callee, .. Args];
   public override int PureResultId => -1;
+  public override int AnyResultId => Result?.Id ?? -1;
 }
 
 public class StdReturnOp(StdValue? value = null) : StandardOp {
@@ -926,6 +933,7 @@ public class StdTryCallOp(string callee, List<StdValue> args, StdValue? result =
     [.. Args.Select(a => a.ToString())];
   public override List<StdValue> ReadValues => Args;
   public override int PureResultId => -1;
+  public override int AnyResultId => Result?.Id ?? ErrorFlag.Id;
 }
 
 // === Struct pointer operations (for sret convention) ===
@@ -1042,6 +1050,7 @@ public class StdGlobalLoadI64Op(string globalName) : StandardOp {
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
   public override List<StdValue> ReadValues => [];
   public override int PureResultId => -1; // Reads mutable global state
+  public override int AnyResultId => Result.Id;
 }
 
 public class StdGlobalLoadF64Op(string globalName) : StandardOp {
@@ -1051,6 +1060,7 @@ public class StdGlobalLoadF64Op(string globalName) : StandardOp {
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
   public override List<StdValue> ReadValues => [];
   public override int PureResultId => -1; // Reads mutable global state
+  public override int AnyResultId => Result.Id;
 }
 
 public class StdGlobalLoadF32Op(string globalName) : StandardOp {
@@ -1060,6 +1070,7 @@ public class StdGlobalLoadF32Op(string globalName) : StandardOp {
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
   public override List<StdValue> ReadValues => [];
   public override int PureResultId => -1; // Reads mutable global state
+  public override int AnyResultId => Result.Id;
 }
 
 public class StdGlobalLoadI1Op(string globalName) : StandardOp {
@@ -1069,6 +1080,7 @@ public class StdGlobalLoadI1Op(string globalName) : StandardOp {
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
   public override List<StdValue> ReadValues => [];
   public override int PureResultId => -1; // Reads mutable global state
+  public override int AnyResultId => Result.Id;
 }
 
 public class StdGlobalStoreI64Op(StdI64 value, string globalName) : StandardOp {
@@ -1114,6 +1126,7 @@ public class StdGlobalLoadI8Op(string globalName) : StandardOp {
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
   public override List<StdValue> ReadValues => [];
   public override int PureResultId => -1;
+  public override int AnyResultId => Result.Id;
 }
 
 public class StdGlobalStoreI8Op(StdI64 value, string globalName) : StandardOp {
@@ -1132,6 +1145,7 @@ public class StdGlobalLoadI16Op(string globalName) : StandardOp {
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
   public override List<StdValue> ReadValues => [];
   public override int PureResultId => -1;
+  public override int AnyResultId => Result.Id;
 }
 
 public class StdGlobalStoreI16Op(StdI64 value, string globalName) : StandardOp {
@@ -1158,6 +1172,7 @@ public class StdCallRuntimeOp(string callee, List<StdValue> args, StdValue? resu
     [.. Args.Select(a => a.ToString())];
   public override List<StdValue> ReadValues => Args;
   public override int PureResultId => -1;
+  public override int AnyResultId => Result?.Id ?? -1;
 }
 
 /// <summary>
@@ -1177,6 +1192,7 @@ public class StdCallRuntimeIfNonnullOp(string callee, List<StdValue> args, StdVa
     [.. Args.Select(a => a.ToString())];
   public override List<StdValue> ReadValues => Args;
   public override int PureResultId => -1;
+  public override int AnyResultId => Result?.Id ?? -1;
 }
 
 // ============================================================================

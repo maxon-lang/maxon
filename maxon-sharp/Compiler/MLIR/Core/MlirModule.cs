@@ -30,7 +30,7 @@ public record TypeAliasInfo(string SourceTypeName, Dictionary<string, MlirType>?
 public record ConstantArrayLiteralInfo(string RdataLabel, long[] Values, bool IsMutable, int ElementSize);
 
 // Metadata for a module-level global variable (stored in MlirModule.GlobalVarInfos for cross-file seeding)
-public record GlobalVarMetadata(MaxonValueKind Kind, bool Mutable, string? EnumTypeName = null, string? TypeName = null);
+public record GlobalVarMetadata(MaxonValueKind Kind, bool Mutable, string? EnumTypeName = null, string? TypeName = null, bool IsLazy = false);
 
 // Deferred global variable initialization: stores tokens for expressions that must be evaluated at main() entry
 public record DeferredGlobalInit(string Name, List<Token> Tokens, int TokenStart, int TokenEnd, bool IsMutable, int Line, int Column, string? SourceFilePath = null);

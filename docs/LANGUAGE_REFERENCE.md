@@ -29,6 +29,10 @@ This reference provides complete syntax and semantics for the Maxon programming 
 10. [Error Handling](#error-handling)
 11. [Namespaces](#namespaces)
 12. [Standard Library](#standard-library)
+    - [CharacterSet](#characterset)
+    - [Unicode](#unicode)
+    - [String Trimming](#string-trimming)
+    - [List](#list)
 13. [Build System](#build-system)
 14. [Memory Model](#memory-model)
     - [Reference-by-Default Assignment](#reference-by-default-assignment)
@@ -156,6 +160,8 @@ Underscore separators for readability:
 '\\'          // Escape sequence (backslash)
 '\''          // Escape sequence (single quote)
 '\x41'        // Hex escape (character 'A')
+'\u00A0'      // Unicode escape (NBSP)
+'\u03A3'      // Unicode escape (Greek sigma Σ)
 ```
 
 Character literals create a `character` type value, which represents an Extended Grapheme Cluster (EGC).
@@ -176,9 +182,10 @@ end 'check'
 "Tab\there"
 "Quote: \"text\""
 "\x48\x69"          // Hex escape ("Hi")
+"hello\u0021"       // Unicode escape ("hello!")
 ```
 
-Escape sequences: `\n` `\t` `\r` `\0` `\\` `\"` `\{` `\}` `\xNN`
+Escape sequences: `\n` `\t` `\r` `\0` `\\` `\"` `\{` `\}` `\xNN` `\uXXXX`
 
 **String Interpolation** (embed expressions in strings)
 ```maxon
@@ -245,7 +252,7 @@ let escaped = b"line\n"        // Supports escape sequences
 let raw = b"\xFF\x00"          // Hex escape: raw bytes [255, 0]
 ```
 
-Byte string literals use the `b"..."` prefix to create a `ByteArray` (`Array with Byte`) directly from a string. They support the same escape sequences as regular string literals, including `\xNN` hex escapes for arbitrary byte values (0x00-0xFF). This is useful when working with raw bytes or APIs that expect byte arrays.
+Byte string literals use the `b"..."` prefix to create a `ByteArray` (`Array with Byte`) directly from a string. They support the same escape sequences as regular string literals, including `\xNN` hex escapes for arbitrary byte values (0x00-0xFF) and `\uXXXX` Unicode escapes. This is useful when working with raw bytes or APIs that expect byte arrays.
 
 **Boolean Literals**
 ```maxon
@@ -582,7 +589,10 @@ print(Counter.MAX_COUNT)     // Prints: 1000
 - Must have an initializer value (no uninitialized static fields)
 - Accessed using `TypeName.fieldName` syntax (not instance syntax)
 - `static var` fields can be reassigned; `static let` fields are immutable
-- Initialized at program startup, before `main()` executes
+
+**Initialization behavior** depends on the initializer expression:
+- **Constant initializers** (integer, float, bool literals) are evaluated at compile time
+- **Complex initializers** (function calls, struct literals, array literals) are evaluated **lazily on first access** -- see [Lazy Static Initializers](#lazy-static-initializers) below
 
 **Differences from Instance Fields:**
 
@@ -592,6 +602,92 @@ print(Counter.MAX_COUNT)     // Prints: 1000
 | Access | `instance.field` | `Type.field` |
 | Declaration | `var field type` | `static var field = value` |
 | Requires initializer | No (can use type default) | Yes |
+
+### Lazy Static Initializers
+
+Static fields initialized with complex expressions -- function calls, struct literals, or array literals -- are evaluated lazily. The initializer runs the first time the field is accessed, and the result is cached for all subsequent accesses.
+
+```maxon
+type Config
+    static var _instance = Config._create()
+
+    static function _create() returns Config
+        return Config{value: 42}
+    end '_create'
+
+    export var value Count
+
+    export static function instance() returns Config
+        return Config._instance   // initializer runs on first call only
+    end 'instance'
+end 'Config'
+```
+
+**Lazy initialization guarantees:**
+- The initializer executes exactly once, on the first access to the static field
+- Subsequent accesses return the cached value without re-evaluating the initializer
+- `static var` fields can be reassigned after initialization; the initializer does not run again
+- `static let` fields are immutable after initialization (planned)
+- Constant initializers (integer, float, bool literals) remain compile-time constants and are not lazy
+
+**Common patterns:**
+
+Caching expensive computations:
+```maxon
+type WSCache
+    static var _ws = CharacterSet.whitespacesAndNewlines()
+
+    export static function isWhitespace(c Character) returns bool
+        return WSCache._ws.contains(c)
+    end 'isWhitespace'
+end 'WSCache'
+```
+
+Struct literal defaults:
+```maxon
+type Point
+    export var x Count
+    export var y Count
+end 'Point'
+
+type Defaults
+    static var origin = Point{x: 0, y: 0}
+
+    export static function getOrigin() returns Point
+        return Defaults.origin
+    end 'getOrigin'
+end 'Defaults'
+```
+
+Array literal initialization:
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Lookup
+    static var _values = [10, 20, 30]
+
+    export static function get(index Integer) returns Integer
+        return try Lookup._values.get(index) otherwise -1
+    end 'get'
+end 'Lookup'
+```
+
+Multiple lazy statics in the same type are each initialized independently on first access:
+```maxon
+type Cache
+    static var _a = Cache._buildA()
+    static var _b = Cache._buildB()
+    export var n Count
+
+    static function _buildA() returns Cache
+        return Cache{n: 10}
+    end '_buildA'
+
+    static function _buildB() returns Cache
+        return Cache{n: 20}
+    end '_buildB'
+end 'Cache'
+```
 
 ### Interfaces
 
@@ -2734,6 +2830,83 @@ trunc(x float) int              // Truncate toward zero
 format_int(value int) String    // Format int as string
 format_float(value float) String // Format float as string
 ```
+
+### CharacterSet
+
+`CharacterSet` represents a set of characters for use with string trimming and character classification. It is defined in `stdlib/CharacterSet.maxon`.
+
+**Static Factory Methods**
+
+Create a `CharacterSet` using one of the built-in factory methods:
+
+```maxon
+var ws = CharacterSet.whitespacesAndNewlines()  // All Unicode whitespace including newlines
+var spaces = CharacterSet.whitespaces()         // Spaces and tabs only (no newlines)
+var nl = CharacterSet.newlines()               // Newline characters only (LF, CR, CRLF, etc.)
+var digits = CharacterSet.decimalDigits()       // ASCII digits 0-9
+var letters = CharacterSet.letters()            // ASCII letters a-z, A-Z
+var alnum = CharacterSet.alphanumerics()        // ASCII letters and digits
+var punct = CharacterSet.punctuation()          // ASCII punctuation
+var custom = CharacterSet.from(CharSet from ['a', 'e', 'i', 'o', 'u'])  // Custom set
+```
+
+**Instance Methods**
+
+```maxon
+ws.contains('A')    // false
+ws.contains(' ')    // true
+```
+
+| Method | Returns | Description |
+|--------|---------|-------------|
+| `contains(c Character)` | `bool` | Check if the character is in the set |
+
+### Unicode
+
+`Unicode` provides Unicode character classification utilities. It is defined in `stdlib/Unicode.maxon`.
+
+**Static Methods**
+
+```maxon
+Unicode.isWhitespace(32)    // true (space)
+Unicode.isWhitespace(65)    // false ('A')
+```
+
+| Method | Returns | Description |
+|--------|---------|-------------|
+| `isWhitespace(cp Codepoint)` | `bool` | Check if a codepoint is Unicode whitespace |
+
+### String Trimming
+
+The `String` type provides methods for removing characters from the start and end of a string. Each method has two forms: one that accepts a `CharacterSet` parameter, and a convenience overload that trims whitespace by default.
+
+**Trimming with CharacterSet**
+
+```maxon
+"123hello456".trim(in: CharacterSet.decimalDigits())     // "hello"
+"...hello!!!".trim(in: CharacterSet.punctuation())       // "hello"
+"xxxhelloxxx".trimStart(in: CharacterSet.from(CharSet from ['x']))     // "helloxxx"
+"xxxhelloxxx".trimEnd(in: CharacterSet.from(CharSet from ['x']))       // "xxxhello"
+```
+
+**Trimming Whitespace (convenience)**
+
+```maxon
+"  hello  ".trim()          // "hello"
+"  hello  ".trimStart()     // "hello  "
+"  hello  ".trimEnd()       // "  hello"
+```
+
+| Method | Returns | Description |
+|--------|---------|-------------|
+| `trim(in CharacterSet)` | `String` | Remove matching characters from both ends |
+| `trimStart(in CharacterSet)` | `String` | Remove matching characters from the start |
+| `trimEnd(in CharacterSet)` | `String` | Remove matching characters from the end |
+| `trim()` | `String` | Remove whitespace from both ends |
+| `trimStart()` | `String` | Remove whitespace from the start |
+| `trimEnd()` | `String` | Remove whitespace from the end |
+
+The no-argument convenience methods are equivalent to calling the `CharacterSet` variants with `CharacterSet.whitespacesAndNewlines()`.
 
 ### List
 

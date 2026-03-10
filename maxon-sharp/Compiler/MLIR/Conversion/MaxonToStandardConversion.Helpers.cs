@@ -535,6 +535,18 @@ public static partial class MaxonToStandardConversion {
   private static bool IsSelfField(bool isStructInstanceMethod, MlirStructType? selfStructType, string name) =>
     isStructInstanceMethod && selfStructType != null && selfStructType.GetField(name) != null;
 
+  /// Reload struct-typed self-field local variables from the self pointer.
+  /// Called after method calls that may mutate self-fields (e.g. grow() reallocating arrays).
+  private static void ReloadSelfFieldLocals(MlirStructType selfStructType, MlirBlock<StandardOp> block, Dictionary<string, string> varTypes)
+  {
+    foreach (var field in selfStructType.Fields) {
+      if (field.Type is not MlirStructType) continue;
+      if (!varTypes.ContainsKey(field.Name)) continue;
+      var reloaded = EmitStructFieldLoad(block, "self", field.Offset, MlirType.I64, varTypes);
+      EmitStore(block, reloaded, field.Name, varTypes);
+    }
+  }
+
   private static bool IsEnumInstanceMethod<T>(MlirFunction<T> func) where T : IPrintableOp =>
     func.ParamNames.Count > 0
     && func.ParamNames[0] == "self"

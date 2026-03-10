@@ -67,8 +67,9 @@ FLOAT         = digit { digit } '.' digit { digit } [ ('e' | 'E') ['+' | '-'] di
 STRING        = '"' { string_char | escape_seq } '"'
 STRING_INTERP = '"' { string_char | escape_seq | '{' expression [ ':' format_spec ] '}' } '"'
 string_char   = <any character except '"', '\', '{', '}', or newline>
-escape_seq    = '\n' | '\t' | '\r' | '\0' | '\\' | '\"' | '\{' | '\}' | hex_escape
+escape_seq    = '\n' | '\t' | '\r' | '\0' | '\\' | '\"' | '\{' | '\}' | hex_escape | unicode_escape
 hex_escape    = '\x' hex_digit hex_digit
+unicode_escape = '\u' hex_digit hex_digit hex_digit hex_digit
 format_spec   = int_format | float_format
 int_format    = ['0'] [width] [int_type]
 int_type      = 'd' | 'x' | 'X' | 'b' | 'o'
@@ -80,7 +81,7 @@ BYTE_STRING   = 'b"' { string_char | escape_seq } '"'
 
 CHARACTER     = "'" ( grapheme_cluster | char_escape ) "'"
 grapheme_cluster = <any extended grapheme cluster>
-char_escape   = '\n' | '\t' | '\r' | '\0' | '\\' | '\'' | hex_escape
+char_escape   = '\n' | '\t' | '\r' | '\0' | '\\' | '\'' | hex_escape | unicode_escape
 
 BOOL          = 'true' | 'false'
 ```

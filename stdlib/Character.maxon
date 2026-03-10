@@ -5,7 +5,7 @@
 
 export typealias AsciiValue = int(0 to 127)
 
-export type Character implements BuiltinCharLiteral, Hashable, Equatable, Comparable, Stringable, Strideable
+export type Character implements BuiltinCharLiteral, Hashable, Equatable, Comparable, Stringable, Strideable, Cloneable
   typealias ByteMemory = __ManagedMemory with Byte
   var _managed ByteMemory
 
@@ -13,6 +13,13 @@ export type Character implements BuiltinCharLiteral, Hashable, Equatable, Compar
   static function init(managed ByteMemory) returns Character
     return Character{_managed: managed}
   end 'init'
+
+  /// Create a deep copy of this character with independent backing storage
+  export function clone() returns Character
+    var len = _managed.length()
+    var newManaged = _managed.slice(0, len)
+    return Character{_managed: newManaged}
+  end 'clone'
 
   // Basic properties
   export function byteLength() returns Count

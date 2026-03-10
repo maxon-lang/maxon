@@ -329,6 +329,118 @@ export type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
     end 'convert'
     return String{managed: managed, _iterPos: 0}
   end 'toUpper'
+
+  /// Trim characters in the given set from both ends of the string.
+  export function trim(in CharacterSet) returns String
+    var len = managed.length()
+    if len == 0 'empty'
+      return String{managed: managed, _iterPos: 0}
+    end 'empty'
+
+    // Forward scan: find first non-matching grapheme
+    var start = 0
+    while start < len 'scan_start'
+      var endByte = findGraphemeEndManaged(managed, startPos: start, len: len)
+      var graphemeLen = endByte - start
+      let ch = managed.makeCharFromBytes(start, graphemeLen)
+      if not in.contains(ch) 'found_start'
+        break
+      end 'found_start'
+      start = endByte
+    end 'scan_start'
+
+    if start >= len 'all_match'
+      var empty = managed.slice(0, 0)
+      return String{managed: empty, _iterPos: 0}
+    end 'all_match'
+
+    // Forward scan from start: track last non-matching end position
+    var endPos = start
+    var pos = start
+    while pos < len 'scan_for_end'
+      var endByte = findGraphemeEndManaged(managed, startPos: pos, len: len)
+      var graphemeLen = endByte - pos
+      let ch = managed.makeCharFromBytes(pos, graphemeLen)
+      if not in.contains(ch) 'not_match'
+        endPos = endByte
+      end 'not_match'
+      pos = endByte
+    end 'scan_for_end'
+
+    var result = managed.slice(start, endPos)
+    return String{managed: result, _iterPos: 0}
+  end 'trim'
+
+  /// Trim characters in the given set from the start of the string.
+  export function trimStart(in CharacterSet) returns String
+    var len = managed.length()
+    if len == 0 'empty'
+      return String{managed: managed, _iterPos: 0}
+    end 'empty'
+
+    var start = 0
+    while start < len 'scan_start'
+      var endByte = findGraphemeEndManaged(managed, startPos: start, len: len)
+      var graphemeLen = endByte - start
+      let ch = managed.makeCharFromBytes(start, graphemeLen)
+      if not in.contains(ch) 'found_start'
+        break
+      end 'found_start'
+      start = endByte
+    end 'scan_start'
+
+    if start >= len 'all_match'
+      var empty = managed.slice(0, 0)
+      return String{managed: empty, _iterPos: 0}
+    end 'all_match'
+
+    var result = managed.slice(start, len)
+    return String{managed: result, _iterPos: 0}
+  end 'trimStart'
+
+  /// Trim characters in the given set from the end of the string.
+  export function trimEnd(in CharacterSet) returns String
+    var len = managed.length()
+    if len == 0 'empty'
+      return String{managed: managed, _iterPos: 0}
+    end 'empty'
+
+    // Forward scan tracking last non-matching end position
+    var endPos = 0
+    var pos = 0
+    while pos < len 'scan'
+      var endByte = findGraphemeEndManaged(managed, startPos: pos, len: len)
+      var graphemeLen = endByte - pos
+      let ch = managed.makeCharFromBytes(pos, graphemeLen)
+      if not in.contains(ch) 'not_match'
+        endPos = endByte
+      end 'not_match'
+      pos = endByte
+    end 'scan'
+
+    if endPos == 0 'all_match'
+      var empty = managed.slice(0, 0)
+      return String{managed: empty, _iterPos: 0}
+    end 'all_match'
+
+    var result = managed.slice(0, endPos)
+    return String{managed: result, _iterPos: 0}
+  end 'trimEnd'
+
+  /// Trim Unicode whitespace from both ends.
+  export function trim() returns String
+    return trim(in: CharacterSet.whitespacesAndNewlines())
+  end 'trim'
+
+  /// Trim Unicode whitespace from the start.
+  export function trimStart() returns String
+    return trimStart(in: CharacterSet.whitespacesAndNewlines())
+  end 'trimStart'
+
+  /// Trim Unicode whitespace from the end.
+  export function trimEnd() returns String
+    return trimEnd(in: CharacterSet.whitespacesAndNewlines())
+  end 'trimEnd'
 end 'String'
 
 // StringIndex type - type-safe string position

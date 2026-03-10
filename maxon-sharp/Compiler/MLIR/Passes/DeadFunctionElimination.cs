@@ -52,6 +52,8 @@ public static class DeadFunctionElimination {
             EnqueueCallee(fnRef.FunctionName);
           if (op is MaxonClosureCreateOp closureCreate)
             EnqueueCallee(closureCreate.FunctionName);
+          if (op is MaxonGlobalLoadOp { LazyInitFuncName: string lazyInit })
+            EnqueueCallee(lazyInit);
           // Array.get for struct elements needs the element type's clone() method
           if (op is MaxonManagedMemGetOp { IsStructElement: true, StructElementTypeName: string elemTypeName }) {
             EnqueueCallee($"{elemTypeName}.clone");
@@ -66,5 +68,21 @@ public static class DeadFunctionElimination {
     }
 
     module.Functions.RemoveAll(f => !reachable.Contains(f.Name));
+
+    // Remove globals and metadata for unreachable lazy statics
+    var removedLazyGlobals = new HashSet<string>();
+    foreach (var (varName, meta) in module.GlobalVarInfos) {
+      if (!meta.IsLazy) continue;
+      var initFuncName = $"{varName}.__lazy_init";
+      if (!reachable.Contains(initFuncName)) {
+        removedLazyGlobals.Add(varName);
+        removedLazyGlobals.Add($"{varName}.__initialized");
+      }
+    }
+    if (removedLazyGlobals.Count > 0) {
+      module.Globals.RemoveAll(g => removedLazyGlobals.Contains(g.Name));
+      foreach (var name in removedLazyGlobals)
+        module.GlobalVarInfos.Remove(name);
+    }
   }
 }

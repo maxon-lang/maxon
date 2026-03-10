@@ -195,11 +195,43 @@ public static class StandardToX86Conversion {
     // Operations pre-handled by the entry block param save pass (skip in normal loop)
     var preHandledOps = new HashSet<StandardOp>();
 
+    // Pre-scan: detect values that are defined in one block but used in another.
+    // Blocks that define such values need spilling at block transitions to
+    // preserve register values across block boundaries.
+    var valueDefBlock = new Dictionary<int, int>(); // value ID -> block index
+    var needsCrossBlockSpill = new HashSet<int>();
+    for (int bi = 0; bi < sourceBlocks.Count; bi++) {
+      foreach (var op in sourceBlocks[bi].Operations) {
+        int resultId = op.AnyResultId;
+        if (resultId >= 0)
+          valueDefBlock[resultId] = bi;
+      }
+    }
+    for (int bi = 0; bi < sourceBlocks.Count; bi++) {
+      foreach (var op in sourceBlocks[bi].Operations) {
+        foreach (var use in op.ReadValues) {
+          if (valueDefBlock.TryGetValue(use.Id, out int defBlock) && defBlock != bi) {
+            // Mark all blocks between def and use as needing spill preservation
+            for (int k = defBlock; k < bi; k++)
+              needsCrossBlockSpill.Add(k);
+          }
+        }
+      }
+    }
+
+    MlirBlock<X86Op>? prevX86Block = null;
+    int prevBlockIdx = -1;
     for (int blockIdx = 0; blockIdx < sourceBlocks.Count; blockIdx++) {
       var srcBlock = sourceBlocks[blockIdx];
       var x86Block = newFunc.Body.AddBlock(srcBlock.Name);
 
-      regManager.Reset();
+      if (blockIdx == 0 || prevX86Block == null) {
+        regManager.Reset();
+      } else if (needsCrossBlockSpill.Contains(prevBlockIdx)) {
+        regManager.ResetForBlockTransition(prevX86Block);
+      } else {
+        regManager.Reset();
+      }
 
       // In the entry block, save register-based parameters to their stack slots
       // immediately. This prevents later operations from clobbering parameter
@@ -972,6 +1004,9 @@ public static class StandardToX86Conversion {
         regManager.AdvanceOp();
         currentOpIndex++;
       }
+
+      prevX86Block = x86Block;
+      prevBlockIdx = blockIdx;
     }
 
     // Insert prologue/epilogue only when a stack frame is needed.

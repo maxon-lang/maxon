@@ -625,6 +625,10 @@ public class MaxonGlobalLoadOp(string globalName, MaxonValueKind kind, string? e
   public MaxonValueKind ValueKind { get; } = kind;
   public string? EnumTypeName { get; } = enumTypeName;
   public string? StructTypeName { get; } = structTypeName;
+  /// When set, indicates this is a lazy static field that needs guard-check before access.
+  public string? LazyGuardName { get; set; }
+  /// The init function to call when the lazy field has not been initialized yet.
+  public string? LazyInitFuncName { get; set; }
   public MaxonValue Result { get; } = structTypeName != null ? new MaxonStruct(MlirContext.Current.NextId(), structTypeName)
     : enumTypeName != null ? new MaxonEnum(MlirContext.Current.NextId(), enumTypeName)
     : kind.CreateValue();

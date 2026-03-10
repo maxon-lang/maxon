@@ -1,0 +1,242 @@
+// Test: lazy-static.multiple-fields
+type Cache
+  static var _a = Cache._buildA()
+  static var _b = Cache._buildB()
+  export var n Count
+
+  static function _buildA() returns Cache
+    return Cache{n: 10}
+  end '_buildA'
+
+  static function _buildB() returns Cache
+    return Cache{n: 20}
+  end '_buildB'
+
+  export static function sum() returns Count
+    return Cache._a.n + Cache._b.n
+  end 'sum'
+end 'Cache'
+
+function main() returns ExitCode
+  return Cache.sum()
+end 'main'
+---
+ExitCode: 30
+---
+module {
+  func @Cache._buildA() -> i64 {
+  entry:
+    x86.prologue stack_size=16
+    x86.mov rax, 10
+    x86.mov rcx, 8
+    x86.xor rdx, rdx
+    x86.mov r8, 1
+    x86.call mm_alloc
+    x86.mov [rbp-8], rax
+    x86.mov rcx, [rbp-8]
+    x86.mov rdx, 10
+    x86.mov [rcx+0], rdx
+    x86.mov rbx, [rbp-8]
+    x86.mov rcx, [rbp-8]
+    x86.call mm_incref
+    x86.mov rax, [rbp-8]
+    x86.epilogue
+    x86.ret
+  }
+  func @Cache._buildB() -> i64 {
+  entry:
+    x86.prologue stack_size=16
+    x86.mov rax, 20
+    x86.mov rcx, 8
+    x86.xor rdx, rdx
+    x86.mov r8, 1
+    x86.call mm_alloc
+    x86.mov [rbp-8], rax
+    x86.mov rcx, [rbp-8]
+    x86.mov rdx, 20
+    x86.mov [rcx+0], rdx
+    x86.mov rbx, [rbp-8]
+    x86.mov rcx, [rbp-8]
+    x86.call mm_incref
+    x86.mov rax, [rbp-8]
+    x86.epilogue
+    x86.ret
+  }
+  func @Cache.sum() -> u64 {
+  entry:
+    x86.prologue stack_size=32
+    x86.movzx rax, byte [rip+Cache._a.__initialized]
+    x86.test rax, rax
+    x86.je Cache.sum.__lazy_init_4
+  __lazy_merge_4:
+    x86.mov rax, qword [rip+Cache._a]
+    x86.mov [rbp-8], rax
+    x86.mov rcx, [rbp-8]
+    x86.call mm_incref
+    x86.mov rdx, [rbp-8]
+    x86.mov rbx, [rdx+0]
+    x86.movzx rsi, byte [rip+Cache._b.__initialized]
+    x86.test rsi, rsi
+    x86.mov [rbp-32], rbx
+    x86.je Cache.sum.__lazy_init_6
+  __lazy_init_4:
+    x86.call Cache._a.__lazy_init
+    x86.jmp Cache.sum.__lazy_merge_4
+  __lazy_merge_6:
+    x86.mov rax, qword [rip+Cache._b]
+    x86.mov [rbp-16], rax
+    x86.mov rcx, [rbp-16]
+    x86.call mm_incref
+    x86.mov rdx, [rbp-16]
+    x86.mov rbx, [rdx+0]
+    x86.mov rsi, [rbp-32]
+    x86.add rsi, rbx
+    x86.mov [rbp-24], rsi
+    x86.xor rdi, rdi
+    x86.cmp rsi, rdi
+    x86.jge Cache.sum.__range_ok_0
+  __lazy_init_6:
+    x86.call Cache._b.__lazy_init
+    x86.jmp Cache.sum.__lazy_merge_6
+  __range_panic_0:
+    x86.lea_symdata rax, [__panic_msg_11]
+    x86.mov rcx, rax
+    x86.call maxon_panic
+  __range_ok_0:
+    x86.mov rax, [rbp-24]
+    x86.mov rcx, [rbp-8]
+    x86.test rcx, rcx
+    x86.jz __nonnull_skip_0
+    x86.call mm_decref
+    x86.label __nonnull_skip_0
+    x86.mov rax, [rbp-16]
+    x86.test rax, rax
+    x86.jz __nonnull_skip_1
+    x86.mov rcx, [rbp-16]
+    x86.call mm_decref
+    x86.label __nonnull_skip_1
+    x86.mov rax, [rbp-24]
+    x86.epilogue
+    x86.ret
+  }
+  func @lazy-static.main() -> u32 {
+  entry:
+    x86.prologue stack_size=16
+    x86.call Cache.sum
+    x86.mov [rbp-8], rax
+    x86.xor rcx, rcx
+    x86.cmp rax, rcx
+    x86.setl rcx
+    x86.movzx rcx, rcxb
+    x86.mov rdx, 4294967295
+    x86.cmp rax, rdx
+    x86.setg rax
+    x86.movzx rax, raxb
+    x86.or rcx, rax
+    x86.test rcx, rcx
+    x86.je lazy-static.main.__range_ok_0
+  __range_panic_0:
+    x86.lea_symdata rax, [__panic_msg_28]
+    x86.mov rcx, rax
+    x86.call maxon_panic
+  __range_ok_0:
+    x86.mov rax, [rbp-8]
+    x86.epilogue
+    x86.ret
+  }
+  func @Cache._a.__lazy_init() {
+  entry:
+    x86.prologue stack_size=16
+    x86.mov rax, 1
+    x86.mov byte [rip+Cache._a.__initialized], rax
+    x86.call Cache._buildA
+    x86.mov [rbp-8], rax
+    x86.mov rcx, [rbp-8]
+    x86.mov rdx, qword [rip+Cache._a]
+    x86.mov [rbp-16], rdx
+    x86.test rdx, rdx
+    x86.jz __nonnull_skip_2
+    x86.mov rcx, [rbp-16]
+    x86.call mm_decref
+    x86.label __nonnull_skip_2
+    x86.mov rcx, [rbp-8]
+    x86.call mm_incref
+    x86.mov rbx, [rbp-8]
+    x86.mov qword [rip+Cache._a], rbx
+    x86.mov rsi, [rbp-8]
+    x86.test rsi, rsi
+    x86.jz __nonnull_skip_3
+    x86.mov rcx, [rbp-8]
+    x86.call mm_decref
+    x86.label __nonnull_skip_3
+    x86.epilogue
+    x86.ret
+  }
+  func @Cache._b.__lazy_init() {
+  entry:
+    x86.prologue stack_size=16
+    x86.mov rax, 1
+    x86.mov byte [rip+Cache._b.__initialized], rax
+    x86.call Cache._buildB
+    x86.mov [rbp-8], rax
+    x86.mov rcx, [rbp-8]
+    x86.mov rdx, qword [rip+Cache._b]
+    x86.mov [rbp-16], rdx
+    x86.test rdx, rdx
+    x86.jz __nonnull_skip_4
+    x86.mov rcx, [rbp-16]
+    x86.call mm_decref
+    x86.label __nonnull_skip_4
+    x86.mov rcx, [rbp-8]
+    x86.call mm_incref
+    x86.mov rbx, [rbp-8]
+    x86.mov qword [rip+Cache._b], rbx
+    x86.mov rsi, [rbp-8]
+    x86.test rsi, rsi
+    x86.jz __nonnull_skip_5
+    x86.mov rcx, [rbp-8]
+    x86.call mm_decref
+    x86.label __nonnull_skip_5
+    x86.epilogue
+    x86.ret
+  }
+  func @__maxon_global_cleanup() {
+  entry:
+    x86.prologue stack_size=16
+    x86.movzx rax, byte [rip+Cache._a.__initialized]
+    x86.test rax, rax
+    x86.je __maxon_global_cleanup.__cleanup_skip_Cache__a
+  __cleanup_Cache__a:
+    x86.mov rax, qword [rip+Cache._a]
+    x86.mov [rbp-8], rax
+    x86.test rax, rax
+    x86.jz __nonnull_skip_6
+    x86.mov rcx, [rbp-8]
+    x86.call mm_decref
+    x86.label __nonnull_skip_6
+    x86.jmp __maxon_global_cleanup.__cleanup_skip_Cache__a
+  __cleanup_skip_Cache__a:
+    x86.movzx rax, byte [rip+Cache._b.__initialized]
+    x86.test rax, rax
+    x86.je __maxon_global_cleanup.__cleanup_skip_Cache__b
+  __cleanup_Cache__b:
+    x86.mov rax, qword [rip+Cache._b]
+    x86.mov [rbp-8], rax
+    x86.test rax, rax
+    x86.jz __nonnull_skip_7
+    x86.mov rcx, [rbp-8]
+    x86.call mm_decref
+    x86.label __nonnull_skip_7
+    x86.jmp __maxon_global_cleanup.__cleanup_skip_Cache__b
+  __cleanup_skip_Cache__b:
+    x86.epilogue
+    x86.ret
+  }
+  func @__destruct_Cache(ptr: i64) {
+  entry:
+    x86.jmp __destruct_Cache.done
+  done:
+    x86.ret
+  }
+}
+---

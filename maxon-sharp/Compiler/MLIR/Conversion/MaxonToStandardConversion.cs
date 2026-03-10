@@ -1498,6 +1498,26 @@ public static partial class MaxonToStandardConversion {
               break;
             }
             case MaxonGlobalLoadOp globalLoad: {
+              // Lazy static field: emit guard check and conditional init call
+              if (globalLoad.LazyGuardName != null && globalLoad.LazyInitFuncName != null) {
+                var guardLoad = new StdGlobalLoadI1Op(globalLoad.LazyGuardName);
+                newBlock.AddOp(guardLoad);
+
+                // Branch: if guard is true, skip init; if false, call init
+                var initBlockLabel = $"__lazy_init_{globalLoad.Result.Id}";
+                var mergeBlockLabel = $"__lazy_merge_{globalLoad.Result.Id}";
+
+                newBlock.AddOp(new StdCondBrOp(guardLoad.Result, mergeBlockLabel, initBlockLabel));
+
+                // Merge block follows immediately (fall-through when guard is true)
+                newBlock = newFunc.Body.AddBlock(mergeBlockLabel);
+
+                // Init block: call the lazy init function, then branch to merge
+                var initBlock = newFunc.Body.AddBlock(initBlockLabel);
+                initBlock.AddOp(new StdCallOp(globalLoad.LazyInitFuncName, []));
+                initBlock.AddOp(new StdBrOp(mergeBlockLabel));
+              }
+
               StandardOp loadOp = globalLoad.ValueKind switch {
                 MaxonValueKind.Integer or MaxonValueKind.Enum => new StdGlobalLoadI64Op(globalLoad.GlobalName),
                 MaxonValueKind.Float => new StdGlobalLoadF64Op(globalLoad.GlobalName),
@@ -1580,10 +1600,19 @@ public static partial class MaxonToStandardConversion {
             }
             case MaxonTryCallOp tryCallOp:
               LowerTryCall(tryCallOp, funcLookup, newBlock, valueMap, varTypes, module.TypeDefs, temps);
+              if (isStructInstanceMethod)
+                selfFieldCache.Clear();
               break;
             case MaxonCallOp callOp:
               if (TryLowerPrimitiveMethod(callOp, newBlock, valueMap)) break;
               LowerCall(callOp, funcLookup, newBlock, valueMap, varTypes, module.TypeDefs, fnEnvVarNames: fnEnvVarNames, temps: temps);
+              // Method calls may mutate self-fields (e.g. grow() reallocates arrays),
+              // so cached self-field loads must be invalidated and struct-typed
+              // field locals must be reloaded from the self pointer
+              if (isStructInstanceMethod) {
+                selfFieldCache.Clear();
+                ReloadSelfFieldLocals(selfStructType!, newBlock, varTypes);
+              }
               // After a call that passes variables by reference, reload those variables
               // so subsequent uses see the mutated values instead of stale SSA values
               if (_mutatingParams != null && callOp.ArgVarNames != null
@@ -1627,6 +1656,8 @@ public static partial class MaxonToStandardConversion {
               break;
             case MaxonIndirectCallOp indirectCallOp:
               LowerIndirectCall(indirectCallOp, newBlock, valueMap, varTypes, module.TypeDefs, fnEnvVarNames, fnEnvDirectValues, temps);
+              if (isStructInstanceMethod)
+                selfFieldCache.Clear();
               break;
             case MaxonReturnOp retOp: {
               LowerReturn(retOp, retStructType, newBlock, valueMap, varTypes, module.TypeDefs, func.Name, temps);
@@ -1855,10 +1886,12 @@ public static partial class MaxonToStandardConversion {
   }
 
   private static void GenerateGlobalCleanup(MlirModule<MaxonOp> module, MlirModule<StandardOp> result) {
-    // Only generate if there are struct globals to clean up
-    bool hasStructGlobals = module.GlobalVarInfos.Any(kv =>
-      kv.Value.Kind == MaxonValueKind.Struct && kv.Value.TypeName != null);
-    if (!hasStructGlobals) return;
+    // Only generate if there are non-lazy struct globals to clean up
+    bool hasEagerStructGlobals = module.GlobalVarInfos.Any(kv =>
+      kv.Value.Kind == MaxonValueKind.Struct && kv.Value.TypeName != null && !kv.Value.IsLazy);
+    bool hasLazyStructGlobals = module.GlobalVarInfos.Any(kv =>
+      kv.Value.Kind == MaxonValueKind.Struct && kv.Value.TypeName != null && kv.Value.IsLazy);
+    if (!hasEagerStructGlobals && !hasLazyStructGlobals) return;
 
     var cleanupFunc = new MlirFunction<StandardOp>("__maxon_global_cleanup", [], [], null, null);
     var block = cleanupFunc.Body.AddBlock("entry");
@@ -1866,10 +1899,26 @@ public static partial class MaxonToStandardConversion {
     foreach (var (varName, meta) in module.GlobalVarInfos) {
       if (meta.Kind != MaxonValueKind.Struct) continue;
       if (meta.TypeName == null) continue;
-      var globalLoad = new StdGlobalLoadI64Op(varName);
-      block.AddOp(globalLoad);
-      // Decref the global (destructor handles field cleanup when rc reaches 0)
-      EmitDecrefValueIfNonnull(block, globalLoad.Result, scopeName: "__maxon_global_cleanup");
+
+      if (meta.IsLazy) {
+        // Only decref lazy statics that were actually initialized
+        var guardName = $"{varName}.__initialized";
+        var guardLoad = new StdGlobalLoadI1Op(guardName);
+        block.AddOp(guardLoad);
+        var skipLabel = $"__cleanup_skip_{varName.Replace('.', '_')}";
+        var cleanupLabel = $"__cleanup_{varName.Replace('.', '_')}";
+        block.AddOp(new StdCondBrOp(guardLoad.Result, cleanupLabel, skipLabel));
+        block = cleanupFunc.Body.AddBlock(cleanupLabel);
+        var globalLoad = new StdGlobalLoadI64Op(varName);
+        block.AddOp(globalLoad);
+        EmitDecrefValueIfNonnull(block, globalLoad.Result, scopeName: "__maxon_global_cleanup");
+        block.AddOp(new StdBrOp(skipLabel));
+        block = cleanupFunc.Body.AddBlock(skipLabel);
+      } else {
+        var globalLoad = new StdGlobalLoadI64Op(varName);
+        block.AddOp(globalLoad);
+        EmitDecrefValueIfNonnull(block, globalLoad.Result, scopeName: "__maxon_global_cleanup");
+      }
     }
 
     block.AddOp(new StdReturnOp(null));

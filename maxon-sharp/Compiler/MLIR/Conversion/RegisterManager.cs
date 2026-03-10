@@ -1665,6 +1665,66 @@ public class RegisterManager {
     _nextSpillOffset = _spillBaseOffset;
   }
 
+  /// <summary>
+  /// Soft reset for block transitions within the same function.
+  /// Spills all live register values to stack before the block's terminator,
+  /// then clears register mappings but preserves stack homes so values can
+  /// be reloaded in successor blocks.
+  /// Does not reset the spill offset, ensuring spill slots are not reused.
+  /// </summary>
+  public void ResetForBlockTransition(MlirBlock<X86Op> block) {
+    // Collect spill ops to insert before the block's terminator
+    var spillOps = new List<X86Op>();
+
+    // Spill all GPR values that don't have a stack home yet
+    foreach (var reg in GprPool) {
+      if (_registerContents.TryGetValue(reg, out var value)
+        && !_valueStackHome.ContainsKey(value)
+        && !_constantValues.ContainsKey(value)) {
+        _nextSpillOffset -= 8;
+        spillOps.Add(new X86MovMemRegOp(_nextSpillOffset, reg, 8));
+        _valueStackHome[value] = _nextSpillOffset;
+      }
+    }
+    // Spill all XMM values that don't have a stack home yet
+    foreach (var xmm in XmmPool) {
+      if (_xmmContents.TryGetValue(xmm, out var value)
+        && !_valueXmmStackHome.ContainsKey(value)) {
+        _nextSpillOffset -= 8;
+        spillOps.Add(new X86MovMemXmmOp(_nextSpillOffset, xmm, FloatPrecision.F64));
+        _valueXmmStackHome[value] = _nextSpillOffset;
+      }
+    }
+
+    // Insert spill ops before the terminator instruction (jcc, jmp, ret)
+    if (spillOps.Count > 0) {
+      int insertIdx = block.Operations.Count;
+      // Walk backwards to find the first terminator instruction
+      while (insertIdx > 0 && block.Operations[insertIdx - 1] is X86JccOp or X86JmpOp or X86RetOp or X86EpilogueOp) {
+        insertIdx--;
+      }
+      block.Operations.InsertRange(insertIdx, spillOps);
+    }
+
+    // Clear register mappings but preserve stack homes
+    _nextFreshIndex = 0;
+    _registerContents.Clear();
+    _valueToRegister.Clear();
+    // _valueStackHome is intentionally NOT cleared
+    _lastUsed.Clear();
+    _currentOpIndex = 0;
+
+    _nextFreshXmmIndex = 0;
+    _xmmContents.Clear();
+    _valueToXmm.Clear();
+    // _valueXmmStackHome is intentionally NOT cleared
+    _xmmLastUsed.Clear();
+    _registerHints.Clear();
+    _syntheticScopes.Clear();
+    _allSyntheticValues.Clear();
+    // _nextSpillOffset is intentionally NOT reset — preserve spill slots
+  }
+
   private void Assign(X86Register reg, StdValue value) {
     // Detect value ID collisions: two different StdValue objects sharing the same ID
     // would silently corrupt register allocation (e.g., from a mid-pipeline NextId reset)

@@ -56,16 +56,19 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
   private readonly List<DeferredDecl> _deferredGlobalVars = [];
   private readonly List<DeferredDecl> _deferredExprVars = [];
 
+  // Lazy static fields (initialized on first access)
+  private record LazyStaticField(string QualifiedName, string GuardName, List<Token> Tokens, int TokenStart, int TokenEnd, bool IsMutable, int Line, int Column);
+  private readonly List<LazyStaticField> _lazyStaticFields = [];
+
   // Global mutable variables (name -> type info)
-  private record GlobalVarInfo(MaxonValueKind Kind, bool Mutable, string? EnumTypeName = null, string? TypeName = null);
-  private readonly Dictionary<string, GlobalVarInfo> _globalVars = [];
+  private readonly Dictionary<string, GlobalVarMetadata> _globalVars = [];
 
   // Unified variable resolution result
   private abstract record ResolvedVar {
     public record Local(VarInfo Info) : ResolvedVar {
       public override bool IsMutable => Info.Mutable;
     }
-    public record Global(GlobalVarInfo Info) : ResolvedVar {
+    public record Global(GlobalVarMetadata Info) : ResolvedVar {
       public override bool IsMutable => Info.Mutable;
     }
     public abstract bool IsMutable { get; }
@@ -521,6 +524,8 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
 
     CheckUnusedTypeAliases();
 
+    EmitLazyStaticInitFunctions(module);
+
     CopyStateToModule(module);
 
     Logger.Debug(LogCategory.Parser, $"Parser complete: {module.Functions.Count} functions");
@@ -687,7 +692,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     // Seed exported global variables so cross-file references resolve
     foreach (var (name, meta) in source.GlobalVarInfos) {
       if (!source.NonExportedGlobalVarNames.Contains(name))
-        _globalVars.TryAdd(name, new GlobalVarInfo(meta.Kind, meta.Mutable, meta.EnumTypeName, meta.TypeName));
+        _globalVars.TryAdd(name, meta);
     }
   }
 
@@ -828,8 +833,9 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       var kind = fieldType.ToValueKind();
       string? enumTypeName = value is EnumConstantValue ecv ? ecv.EnumTypeName : null;
       module.Globals.Add(new MlirGlobal(deferred.Name, fieldType, defaultValue));
-      _globalVars[deferred.Name] = new GlobalVarInfo(kind, true, enumTypeName);
-      module.GlobalVarInfos[deferred.Name] = new GlobalVarMetadata(kind, true, enumTypeName);
+      var gvarInfo = new GlobalVarMetadata(kind, true, enumTypeName);
+      _globalVars[deferred.Name] = gvarInfo;
+      module.GlobalVarInfos[deferred.Name] = gvarInfo;
       if (!deferred.IsExported && !_isStdlib) {
         module.NonExportedGlobalVarNames.Add(deferred.Name);
       }
@@ -839,8 +845,9 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     foreach (var deferred in _deferredExprVars) {
       var typeName = InferDeferredTypeName(deferred);
       module.Globals.Add(new MlirGlobal(deferred.Name, MlirType.I64, new IntegerAttr(0, MlirType.I64)));
-      _globalVars[deferred.Name] = new GlobalVarInfo(MaxonValueKind.Struct, true, TypeName: typeName);
-      module.GlobalVarInfos[deferred.Name] = new GlobalVarMetadata(MaxonValueKind.Struct, true, TypeName: typeName);
+      var gvarInfo = new GlobalVarMetadata(MaxonValueKind.Struct, true, TypeName: typeName);
+      _globalVars[deferred.Name] = gvarInfo;
+      module.GlobalVarInfos[deferred.Name] = gvarInfo;
       if (!deferred.IsExported && !_isStdlib) {
         module.NonExportedGlobalVarNames.Add(deferred.Name);
       }
@@ -848,8 +855,9 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     foreach (var deferred in _deferredExprLets) {
       var typeName = InferDeferredTypeName(deferred);
       module.Globals.Add(new MlirGlobal(deferred.Name, MlirType.I64, new IntegerAttr(0, MlirType.I64)));
-      _globalVars[deferred.Name] = new GlobalVarInfo(MaxonValueKind.Struct, false, TypeName: typeName);
-      module.GlobalVarInfos[deferred.Name] = new GlobalVarMetadata(MaxonValueKind.Struct, false, TypeName: typeName);
+      var gvarInfo = new GlobalVarMetadata(MaxonValueKind.Struct, false, TypeName: typeName);
+      _globalVars[deferred.Name] = gvarInfo;
+      module.GlobalVarInfos[deferred.Name] = gvarInfo;
       if (!deferred.IsExported && !_isStdlib) {
         module.NonExportedGlobalVarNames.Add(deferred.Name);
       }
@@ -887,13 +895,54 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
   }
 
   /// <summary>
+  /// Check if a static field initializer needs lazy initialization.
+  /// Includes all complex initializer patterns plus function calls.
+  /// </summary>
+  private bool IsComplexStaticInitializer(int exprStart) {
+    if (IsComplexInitializer(exprStart)) return true;
+    if (_tokens[exprStart].Type == TokenType.Identifier) {
+      var next = exprStart + 1 < _tokens.Count ? _tokens[exprStart + 1].Type : TokenType.Eof;
+      // Function call: Identifier( or Identifier.Identifier(
+      if (next == TokenType.LeftParen) return true;
+      if (next == TokenType.Dot
+          && exprStart + 2 < _tokens.Count && _tokens[exprStart + 2].Type == TokenType.Identifier
+          && exprStart + 3 < _tokens.Count && _tokens[exprStart + 3].Type == TokenType.LeftParen)
+        return true;
+      // Collection initializer: Identifier from [
+      if (next == TokenType.From
+          && exprStart + 2 < _tokens.Count && _tokens[exprStart + 2].Type == TokenType.LeftBracket)
+        return true;
+    }
+    return false;
+  }
+
+  /// <summary>
   /// Infer a preliminary TypeName for a deferred global from its tokens.
   /// For struct constructors (Identifier{}) use the identifier; for [k:v] creates
   /// a concrete Map type alias; for [...] use "Array".
   /// </summary>
   private string InferDeferredTypeName(DeferredDecl deferred) {
-    if (_tokens[deferred.TokenStart].Type == TokenType.Identifier)
-      return _tokens[deferred.TokenStart].Value;
+    if (_tokens[deferred.TokenStart].Type == TokenType.Identifier) {
+      var name = _tokens[deferred.TokenStart].Value;
+      var next = deferred.TokenStart + 1 < _tokens.Count ? _tokens[deferred.TokenStart + 1].Type : TokenType.Eof;
+
+      // Function call: name() — resolve return type from pre-scanned function
+      if (next == TokenType.LeftParen) {
+        var resolved = InferReturnTypeFromCall(name);
+        if (resolved != null) return resolved;
+      }
+
+      // Static method call: Type.method() — resolve return type from pre-scanned method
+      if (next == TokenType.Dot
+          && deferred.TokenStart + 2 < _tokens.Count && _tokens[deferred.TokenStart + 2].Type == TokenType.Identifier
+          && deferred.TokenStart + 3 < _tokens.Count && _tokens[deferred.TokenStart + 3].Type == TokenType.LeftParen) {
+        var methodName = _tokens[deferred.TokenStart + 2].Value;
+        var resolved = InferReturnTypeFromCall($"{name}.{methodName}");
+        if (resolved != null) return resolved;
+      }
+
+      return name;
+    }
     if (_tokens[deferred.TokenStart].Type == TokenType.LeftBracket && IsMapLiteralAt(deferred.TokenStart))
       return InferMapTypeAlias(deferred.TokenStart);
     if (_tokens[deferred.TokenStart].Type == TokenType.LeftBracket)
@@ -902,6 +951,19 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     throw new CompileError(ErrorCode.ParserExpectedExpression,
       $"Cannot infer type of global initializer from '{startToken.Type}' token",
       startToken.Line, startToken.Column);
+  }
+
+  /// <summary>
+  /// Look up a pre-scanned function's return type name.
+  /// Tries exact match, then suffix match for namespace-qualified names.
+  /// </summary>
+  private string? InferReturnTypeFromCall(string calleeName) {
+    if (_currentModule == null) return null;
+    var func = _currentModule.Functions.FirstOrDefault(f => f.Name == calleeName)
+            ?? _currentModule.Functions.FirstOrDefault(f => f.Name.EndsWith($".{calleeName}"));
+    if (func?.ReturnType != null)
+      return MlirType.Resolve(func.ReturnType).Name;
+    return null;
   }
 
   /// <summary>
@@ -1102,6 +1164,41 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
   }
 
   /// <summary>
+  /// Generate lazy init functions for static fields with complex initializers.
+  /// Each lazy field gets an init function that sets the guard and evaluates the initializer.
+  /// The guard check happens at each load site (in MaxonToStandardConversion).
+  /// </summary>
+  private void EmitLazyStaticInitFunctions(MlirModule<MaxonOp> module) {
+    if (_lazyStaticFields.Count == 0) return;
+
+    var savedFunction = _currentFunction;
+    var savedBlock = _currentBlock;
+
+    foreach (var field in _lazyStaticFields) {
+      var initFuncName = $"{field.QualifiedName}.__lazy_init";
+
+      var initFunc = new MlirFunction<MaxonOp>(initFuncName, [], [], returnType: null, throwsType: null);
+      module.AddFunction(initFunc);
+      _currentFunction = initFunc;
+      _currentBlock = initFunc.Body.AddBlock("entry");
+
+      // Set guard to true before evaluating (prevents infinite recursion)
+      var trueConst = new MaxonLiteralOp(true);
+      _currentBlock.AddOp(trueConst);
+      _currentBlock.AddOp(new MaxonGlobalStoreOp(field.GuardName, trueConst.Result, MaxonValueKind.Bool));
+
+      // Evaluate the initializer expression and store result
+      EmitSingleDeferredGlobalInit(field.QualifiedName, field.Tokens, field.TokenStart, field.IsMutable);
+
+      _currentBlock.AddOp(new MaxonScopeEndOp(GetScopeEndVars()) { VarMetadata = _variables.GetScopeEndVarMetadata() });
+      _currentBlock.AddOp(new MaxonReturnOp());
+    }
+
+    _currentFunction = savedFunction;
+    _currentBlock = savedBlock;
+  }
+
+  /// <summary>
   /// Parse and emit a single deferred global variable initialization.
   /// Temporarily swaps the token list and position if needed.
   /// </summary>
@@ -1116,9 +1213,9 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     _currentBlock!.AddOp(new MaxonGlobalStoreOp(name, value, MaxonValueKind.Struct));
 
     if (value is MaxonStruct ms)
-      _globalVars[name] = new GlobalVarInfo(MaxonValueKind.Struct, isMutable, TypeName: ms.TypeName);
+      _globalVars[name] = new GlobalVarMetadata(MaxonValueKind.Struct, isMutable, TypeName: ms.TypeName);
     else if (value is MaxonEnum me)
-      _globalVars[name] = new GlobalVarInfo(MaxonValueKind.Enum, isMutable, EnumTypeName: me.TypeName);
+      _globalVars[name] = new GlobalVarMetadata(MaxonValueKind.Enum, isMutable, EnumTypeName: me.TypeName);
 
     _tokens = savedTokens;
     _pos = savedPos;
@@ -4247,15 +4344,39 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     var fieldToken = _tokens[_pos - 1];
     Expect(TokenType.Equals);
 
-    var value = EvalConstExpr([], _topLevelConstants, []);
-    var (fieldType, defaultValue) = ConstValueToAttribute(value, fieldToken.Line, fieldToken.Column);
     var qualifiedName = $"{typeName}.{fieldName}";
 
-    if (isMutable) {
-      module.Globals.Add(new MlirGlobal(qualifiedName, fieldType, defaultValue));
-      _globalVars[qualifiedName] = new GlobalVarInfo(fieldType.ToValueKind(), true);
+    // Save position to try constant evaluation first, fall back to lazy init
+    int exprStart = _pos;
+    SkipToEndOfLine();
+    int exprEnd = _pos;
+
+    // Check if this is a complex initializer (function call, struct literal, array literal)
+    if (IsComplexStaticInitializer(exprStart)) {
+      // Lazy static field: defer initialization to first access
+      var guardName = $"{qualifiedName}.__initialized";
+      module.Globals.Add(new MlirGlobal(qualifiedName, MlirType.I64, new IntegerAttr(0, MlirType.I64)));
+      module.Globals.Add(new MlirGlobal(guardName, MlirType.I1, new IntegerAttr(0, MlirType.I1)));
+
+      var typeName2 = InferDeferredTypeName(new DeferredDecl(qualifiedName, exprStart, exprEnd, fieldToken.Line, fieldToken.Column));
+      var gvarInfo = new GlobalVarMetadata(MaxonValueKind.Struct, isMutable, TypeName: typeName2, IsLazy: true);
+      _globalVars[qualifiedName] = gvarInfo;
+      module.GlobalVarInfos[qualifiedName] = gvarInfo;
+      _globalVars[guardName] = new GlobalVarMetadata(MaxonValueKind.Bool, true);
+
+      _lazyStaticFields.Add(new LazyStaticField(qualifiedName, guardName, _tokens, exprStart, exprEnd, isMutable, fieldToken.Line, fieldToken.Column));
     } else {
-      RegisterStaticLetConstant(qualifiedName, fieldType, defaultValue);
+      // Simple constant initializer — evaluate at compile time
+      _pos = exprStart;
+      var value = EvalConstExpr([], _topLevelConstants, []);
+      var (fieldType, defaultValue) = ConstValueToAttribute(value, fieldToken.Line, fieldToken.Column);
+
+      if (isMutable) {
+        module.Globals.Add(new MlirGlobal(qualifiedName, fieldType, defaultValue));
+        _globalVars[qualifiedName] = new GlobalVarMetadata(fieldType.ToValueKind(), true);
+      } else {
+        RegisterStaticLetConstant(qualifiedName, fieldType, defaultValue);
+      }
     }
   }
 
@@ -5015,9 +5136,17 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       $"Undefined variable '{name}'", token.Line, token.Column);
   }
 
-  private ExprResult.Direct EmitGlobalLoad(string name, GlobalVarInfo info) {
+  private ExprResult.Direct EmitGlobalLoad(string name, GlobalVarMetadata info) {
     var loadOp = new MaxonGlobalLoadOp(name, info.Kind, info.EnumTypeName,
       structTypeName: info.Kind == MaxonValueKind.Struct ? info.TypeName : null);
+
+    // Check if this is a lazy static field — add guard info for lowering
+    var lazyField = _lazyStaticFields.Find(f => f.QualifiedName == name);
+    if (lazyField != null) {
+      loadOp.LazyGuardName = lazyField.GuardName;
+      loadOp.LazyInitFuncName = $"{lazyField.QualifiedName}.__lazy_init";
+    }
+
     _currentBlock!.AddOp(loadOp);
     return new ExprResult.Direct(loadOp.Result);
   }
@@ -5038,9 +5167,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
             $"cannot assign to immutable variable: '{name}'",
             nameToken.Line, nameToken.Column);
         }
-        var loadOp = new MaxonGlobalLoadOp(name, info.Kind, info.EnumTypeName, structTypeName: info.TypeName);
-        _currentBlock!.AddOp(loadOp);
-        return (loadOp.Result, info.TypeName);
+        return (EmitGlobalLoad(name, info).Value, info.TypeName);
     }
     throw CreateUndefinedVariableError(name, nameToken);
   }
@@ -9706,9 +9833,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
         if (_globalVars.TryGetValue(qualifiedName, out var globalInfo)) {
           Advance(); // consume '.'
           Advance(); // consume member name
-          var loadOp = new MaxonGlobalLoadOp(qualifiedName, globalInfo.Kind, globalInfo.EnumTypeName);
-          _currentBlock!.AddOp(loadOp);
-          return new ExprResult.Direct(loadOp.Result);
+          return ParseFieldAccessChain(EmitGlobalLoad(qualifiedName, globalInfo), token);
         }
 
         // Check for enum case: EnumType.caseName
@@ -10214,6 +10339,15 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
                 $"{ex.Message} in string interpolation", token.Line, token.Column + pos);
           }
           pos += 4;
+        } else if (nextChar == 'u') {
+          // \uXXXX unicode escape — exactly 4 hex digits
+          var escLen = Math.Min(6, text.Length - pos);
+          var escSeq = text.Substring(pos, escLen);
+          try { literalBuf.Append(StringUtils.ResolveEscapes(escSeq)); } catch (InvalidEscapeException ex) {
+            throw new CompileError(ErrorCode.LexerInvalidEscape,
+                $"{ex.Message} in string interpolation", token.Line, token.Column + pos);
+          }
+          pos += 6;
         } else {
           try { literalBuf.Append(StringUtils.ResolveEscapes($"\\{nextChar}")); } catch (InvalidEscapeException ex) {
             throw new CompileError(ErrorCode.LexerInvalidEscape,
@@ -11833,6 +11967,22 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     }).ToList();
 
     if (matching.Count == 1) return matching[0];
+
+    // Disambiguate by argument count: exclude candidates whose required parameter
+    // count (excluding 'self') doesn't match the number of provided arguments
+    if (matching.Count > 1) {
+      var argCount = PeekArgCount();
+      var countFiltered = matching.Where(c => {
+        int requiredParams = c.ParamNames.Count(n => n != "self");
+        return requiredParams == argCount;
+      }).ToList();
+      if (countFiltered.Count >= 1 && countFiltered.Count < matching.Count) {
+        Logger.Debug(LogCategory.Parser, $"  Overload disambiguation: narrowed {matching.Count} candidates to {countFiltered.Count} by argument count ({argCount})");
+        matching = countFiltered;
+      }
+    }
+
+    if (matching.Count == 1) return matching[0];
     if (matching.Count == 0) {
       var candidateInfo = string.Join(", ", candidates.Select(c =>
         FormatOverloadSignature(c)));
@@ -12071,6 +12221,35 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
 
     _pos = savedPos;
     return names;
+  }
+
+  /// <summary>
+  /// Peeks ahead to count the number of arguments at the current call site.
+  /// Assumes _pos is right after the opening paren. Returns 0 for empty arg list.
+  /// </summary>
+  private int PeekArgCount() {
+    var savedPos = _pos;
+
+    // Empty arg list: immediate closing paren
+    if (_pos < _tokens.Count && Current().Type == TokenType.RightParen) {
+      _pos = savedPos;
+      return 0;
+    }
+
+    int count = 1; // At least one arg if we didn't hit ')'
+    int parenDepth = 1;
+    while (_pos < _tokens.Count && parenDepth > 0) {
+      if (Current().Type == TokenType.LeftParen) parenDepth++;
+      if (Current().Type == TokenType.RightParen) {
+        parenDepth--;
+        if (parenDepth == 0) break;
+      }
+      if (Current().Type == TokenType.Comma && parenDepth == 1) count++;
+      _pos++;
+    }
+
+    _pos = savedPos;
+    return count;
   }
 
   /// <summary>
