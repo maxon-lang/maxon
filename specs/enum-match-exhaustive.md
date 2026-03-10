@@ -9,7 +9,7 @@ category: control-flow
 
 ## Documentation
 
-Enum match expressions require exhaustive case coverage, just like union matches. Every enum case must be matched by either an explicit case pattern or a range pattern. Plain `default` is not allowed — use `default throws` if you want a catch-all that throws an error.
+Enum match expressions require exhaustive case coverage, just like union matches. Every enum case must be matched by either an explicit case pattern or a range pattern. Plain `default` is not allowed — use `default then throws` if you want a catch-all that throws an error.
 
 Range patterns use enum case references as bounds:
 
@@ -166,7 +166,7 @@ typealias ColorCode = int(0 to 10)
 function checkColor(c Color) returns ColorCode throws AppError
   match c 'check'
     Color.red then return ColorCode{1}
-    default throws AppError.unmatched
+    default then throws AppError.unmatched
   end 'check'
   return ColorCode{0}
 end 'checkColor'

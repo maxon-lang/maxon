@@ -135,7 +135,7 @@ false
 ```maxon
 function main() returns ExitCode
   var s = "\u0410\u0411\u0412 123 \u0410\u0411\u0412"
-  var result = s.trim(in: CharacterSet.letters())
+  var result = s.trim(CharacterSet.letters())
   print("[{result}]")
   return 0
 end 'main'

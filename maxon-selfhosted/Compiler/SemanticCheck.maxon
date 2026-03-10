@@ -1,97 +1,15 @@
 // Semantic validation pass over the MlirModule.
 // Checks program structure requirements before lowering.
 
-// Sentinel returned by findMainReturnType when main exists but has no return type.
-function noReturnTypeSentinel() returns ByteArray
-    var s = ByteArray{}
-    // "__none__"
-    s.push(95)
-    s.push(95)
-    s.push(110)
-    s.push(111)
-    s.push(110)
-    s.push(101)
-    s.push(95)
-    s.push(95)
-    return s
-end 'noReturnTypeSentinel'
-
-function exitCodeBytes() returns ByteArray
-    var s = ByteArray{}
-    // "ExitCode"
-    s.push(69)
-    s.push(120)
-    s.push(105)
-    s.push(116)
-    s.push(67)
-    s.push(111)
-    s.push(100)
-    s.push(101)
-    return s
-end 'exitCodeBytes'
-
-function mainBytes() returns ByteArray
-    var s = ByteArray{}
-    // "main"
-    s.push(109)
-    s.push(97)
-    s.push(105)
-    s.push(110)
-    return s
-end 'mainBytes'
-
-function dotMainBytes() returns ByteArray
-    var s = ByteArray{}
-    // ".main"
-    s.push(46)
-    s.push(109)
-    s.push(97)
-    s.push(105)
-    s.push(110)
-    return s
-end 'dotMainBytes'
-
 export function runSemanticChecks(project Project, module MlirModule)
-    // Walk module.functions looking for one named "main" or ending with ".main"
-    let mainReturnType = findMainReturnType(module)
-    if mainReturnType.count() == 0 'noMain'
-        reportSemanticError(project, code: ErrorCode.semanticNoMain, message: "No 'main' function found")
-    end 'noMain' else 'hasMain'
-        let expected = exitCodeBytes()
-        if not bytesEqual(mainReturnType, b: expected) 'wrongType'
-            reportSemanticError(project, code: ErrorCode.semanticMainWrongReturnType, message: "Function 'main' must return ExitCode")
-        end 'wrongType'
-    end 'hasMain'
-end 'runSemanticChecks'
-
-function findMainReturnType(module MlirModule) returns ByteArray
-    let mn = mainBytes()
-    let dm = dotMainBytes()
     for func in module.functions 'scan'
-        if bytesEqual(func.name, b: mn) or endsWithBytes(func.name, suffix: dm) 'isMain'
-            if func.returnType.count() == 0 'noReturn'
-                return noReturnTypeSentinel()
-            end 'noReturn'
-            return func.returnType
+        if bytesEqual(func.name, b: b"main") 'isMain'
+            if not bytesEqual(func.returnType, b: b"ExitCode") 'wrongType'
+                reportSemanticError(project, code: ErrorCode.semanticMainWrongReturnType, message: "Function 'main' must return ExitCode")
+            end 'wrongType'
+            return
         end 'isMain'
     end 'scan'
-    var empty = ByteArray{}
-    return empty
-end 'findMainReturnType'
 
-function endsWithBytes(haystack ByteArray, suffix ByteArray) returns bool
-    let hLen = haystack.count()
-    let sLen = suffix.count()
-    if sLen > hLen 'tooShort'
-        return false
-    end 'tooShort'
-    for (i, sByte) in suffix.enumerated() 'cmp'
-        let hByte = try haystack.get(hLen - sLen + i) otherwise 'mismatch'
-            return false
-        end 'mismatch'
-        if hByte != sByte 'ne'
-            return false
-        end 'ne'
-    end 'cmp'
-    return true
-end 'endsWithBytes'
+    reportSemanticError(project, code: ErrorCode.semanticNoMain, message: "No 'main' function found")
+end 'runSemanticChecks'

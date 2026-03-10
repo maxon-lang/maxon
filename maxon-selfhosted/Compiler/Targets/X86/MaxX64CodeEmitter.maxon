@@ -50,35 +50,26 @@ function emitMovSlot(code ByteArray, slotIndex VarSlot)
 end 'emitMovSlot'
 
 // Load stack slot to a register: mov REG, [rbp - (slotIndex+1)*8]
+// Encoding: REX(0x48 or 0x4C for r8-r11) + 0x8B + ModR/M(mod=01, reg, rm=101/rbp) + disp8
 function emitLoadSlotToReg(code ByteArray, slotIndex VarSlot, dest X64Register)
     let offset = (slotIndex + 1) * 8
+    let disp = (0 - offset) and 0xFF
     match dest 'pickReg'
-        X64Register.rax then emitLoadSlotRax(code, offset: offset)
-        X64Register.rcx then emitLoadSlotRcx(code, offset: offset)
-        X64Register.rdx then emitLoadSlotRax(code, offset: offset)
-        X64Register.rbx then emitLoadSlotRax(code, offset: offset)
-        X64Register.rsp then emitLoadSlotRax(code, offset: offset)
-        X64Register.rbp then emitLoadSlotRax(code, offset: offset)
-        X64Register.rsi then emitLoadSlotRax(code, offset: offset)
-        X64Register.rdi then emitLoadSlotRax(code, offset: offset)
-        X64Register.r8 then emitLoadSlotRax(code, offset: offset)
-        X64Register.r9 then emitLoadSlotRax(code, offset: offset)
-        X64Register.r10 then emitLoadSlotRax(code, offset: offset)
-        X64Register.r11 then emitLoadSlotRax(code, offset: offset)
+        X64Register.rax then code.append(b"\x48\x8b\x45")
+        X64Register.rcx then code.append(b"\x48\x8b\x4d")
+        X64Register.rdx then code.append(b"\x48\x8b\x55")
+        X64Register.rbx then code.append(b"\x48\x8b\x5d")
+        X64Register.rsp then code.append(b"\x48\x8b\x65")
+        X64Register.rbp then code.append(b"\x48\x8b\x6d")
+        X64Register.rsi then code.append(b"\x48\x8b\x75")
+        X64Register.rdi then code.append(b"\x48\x8b\x7d")
+        X64Register.r8 then code.append(b"\x4c\x8b\x45")
+        X64Register.r9 then code.append(b"\x4c\x8b\x4d")
+        X64Register.r10 then code.append(b"\x4c\x8b\x55")
+        X64Register.r11 then code.append(b"\x4c\x8b\x5d")
     end 'pickReg'
+    code.push(disp)
 end 'emitLoadSlotToReg'
-
-function emitLoadSlotRax(code ByteArray, offset VarSlot)
-    // mov rax, [rbp - offset]  =>  48 8B 45 <disp8>
-    code.append(b"\x48\x8b\x45")
-    code.push((0 - offset) and 0xFF)
-end 'emitLoadSlotRax'
-
-function emitLoadSlotRcx(code ByteArray, offset VarSlot)
-    // mov rcx, [rbp - offset]  =>  48 8B 4D <disp8>
-    code.append(b"\x48\x8b\x4d")
-    code.push((0 - offset) and 0xFF)
-end 'emitLoadSlotRcx'
 
 function emitAddRegReg(code ByteArray)
     // add rax, rcx  =>  48 01 C8
@@ -331,11 +322,7 @@ function emitX86Start(code ByteArray, osDesc OsDescriptor, relocations Relocatio
     // call main (relative call, patched by label resolution)
     code.push(0xE8)
     let mainCallFixupOffset = code.count()
-    var mainName = ByteArray{}
-    mainName.push(109)
-    mainName.push(97)
-    mainName.push(105)
-    mainName.push(110)
+    var mainName = b"main"
     callFixups.push(CallFixup{codeOffset: mainCallFixupOffset, targetName: mainName})
     code.append(b"\x00\x00\x00\x00")
 

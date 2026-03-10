@@ -56,7 +56,6 @@ Target-agnostic machine IR. It operates on virtual registers and abstract memory
 These passes enforce the language reference rules before any code is modified.
 
 * **`-maxon-verify-purity`**: Validates pure/impure function returns. Throws `E3064` if pure results are discarded, or `E3065` if impure results lack explicit discard via `let _ =`.
-* **`-maxon-ownership-checker`**: Performs compile-time dataflow analysis to track `Owned` vs `Moved` states, preventing use-after-move errors.
 * **`-maxon-range-enforcement`**: Checks static constants against `!maxhl.ranged` boundaries and injects `maxhl.assert_range` for runtime checks.
 * **`-maxon-alias-analysis`**: Validates that struct assignments create references (aliases) and that `.clone()` is used for explicit deep copies when needed.
 

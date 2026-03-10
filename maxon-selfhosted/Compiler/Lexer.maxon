@@ -194,10 +194,10 @@ export enum TokenKind
 end 'TokenKind'
 
 export type Token
-    export var kind TokenKind
-    export var value ByteArray
-    export var line LineNumber
-    export var column ColumnNumber
+    export let kind TokenKind
+    export let value ByteArray
+    export let line LineNumber
+    export let column ColumnNumber
 end 'Token'
 
 export typealias TokenArray = Array with Token
@@ -315,101 +315,90 @@ export function tokenize(source ByteArray) returns TokenArray
     let len = source.count()
 
     while s.pos < len 'scan'
-        let ch = try source.get(s.pos) otherwise 0
+        let ch = try source.get(s.pos) otherwise 'readCh'
+            panic("Lexer: source read at pos {s.pos} failed (len={len})")
+        end 'readCh'
         let startLine = s.line
         let startCol = s.column
 
         // Look up character class
-        let charClass = try charClassTable.get(ch) otherwise 0
+        let charClass = try charClassTable.get(ch) otherwise 'readClass'
+            panic("Lexer: charClassTable lookup failed for byte {ch}")
+        end 'readClass'
 
         // Consume the first character
         s.pos = s.pos + 1
         s.column = s.column + 1
 
         // Look up first transition from START
-        var state = try transitionTable.get(DfaState.start * CharClass.COUNT + charClass) otherwise DfaState.skipOther
+        var state = try transitionTable.get(DfaState.start * CharClass.COUNT + charClass) otherwise panic("Lexer: transitionTable lookup failed from START for charClass {charClass}")
 
         // If we reached a live state (1-5), peek at the next character for a second transition
         if state >= DfaState.sawEq and state <= DfaState.sawSlash 'live'
             var nextClass = CharClass.eof
             if s.pos < len 'hasNext'
-                let nextCh = try source.get(s.pos) otherwise 0
-                nextClass = try charClassTable.get(nextCh) otherwise CharClass.other
+                let nextCh = try source.get(s.pos) otherwise panic("Lexer: source read at pos {s.pos} failed (len={len})")
+                nextClass = try charClassTable.get(nextCh) otherwise panic("Lexer: charClassTable lookup failed for byte {nextCh}")
             end 'hasNext'
-            state = try transitionTable.get(state * CharClass.COUNT + nextClass) otherwise DfaState.skipOther
+            state = try transitionTable.get(state * CharClass.COUNT + nextClass) otherwise panic("Lexer: transitionTable lookup failed from state {state} for charClass {nextClass}")
         end 'live'
 
         // Look up the action for the terminal state
-        let action = try actionTable.get(state) otherwise Action.skip
+        let action = try actionTable.get(state.rawValue) otherwise panic("Lexer: actionTable lookup failed for state {state}")
 
-        if action == Action.skip 'doSkip'
-            continue
-        end 'doSkip'
-
-        if action == Action.skipCr 'doCr'
-            // CR does not advance column
-            s.column = s.column - 1
-            continue
-        end 'doCr'
-
-        if action == Action.newline 'doNewline'
-            tokens.push(Token{kind: TokenKind.newline, value: b"", line: startLine, column: startCol})
-            s.line = s.line + 1
-            s.column = 1
-            continue
-        end 'doNewline'
-
-        if action == Action.emit 'doEmit'
-            emitFixedToken(state, tokens: tokens, line: startLine, column: startCol)
-            continue
-        end 'doEmit'
-
-        if action == Action.emit2 'doEmit2'
-            s.pos = s.pos + 1
-            s.column = s.column + 1
-            emitFixedToken(state, tokens: tokens, line: startLine, column: startCol)
-            continue
-        end 'doEmit2'
-
-        if action == Action.enterStrSq 'doSQ'
-            scanSingleQuoteString(source, state: s, tokens: tokens, startLine: startLine, startCol: startCol)
-            continue
-        end 'doSQ'
-
-        if action == Action.enterStrDq 'doDQ'
-            scanDoubleQuoteString(source, state: s, tokens: tokens, startLine: startLine, startCol: startCol)
-            continue
-        end 'doDQ'
-
-        if action == Action.enterNumber 'doNum'
-            // Undo advance — scanNumber scans from the first digit
-            s.pos = s.pos - 1
-            s.column = s.column - 1
-            scanNumber(source, state: s, tokens: tokens, startLine: startLine, startCol: startCol)
-            continue
-        end 'doNum'
-
-        if action == Action.enterIdent 'doIdent'
-            // Undo advance — scanIdentifier scans from the first alpha char
-            s.pos = s.pos - 1
-            s.column = s.column - 1
-            scanIdentifier(source, state: s, tokens: tokens, startLine: startLine, startCol: startCol)
-            continue
-        end 'doIdent'
-
-        if action == Action.enterComment 'doComment'
-            // Both '/' characters have been consumed (first by main loop, second needs consuming)
-            s.pos = s.pos + 1
-            s.column = s.column + 1
-            scanComment(source, state: s)
-            continue
-        end 'doComment'
+        match action 'dispatch'
+            Action.skip then break 'dispatch'
+            Action.skipCr then s.column = s.column - 1
+            Action.newline then handleNewline(tokens, state: s, startLine: startLine, startCol: startCol)
+            Action.emit then emitFixedToken(state.rawValue, tokens: tokens, line: startLine, column: startCol)
+            Action.emit2 then handleEmit2(state: s, tokens: tokens, dfaState: state, startLine: startLine, startCol: startCol)
+            Action.enterStrSq then scanSingleQuoteString(source, state: s, tokens: tokens, startLine: startLine, startCol: startCol)
+            Action.enterStrDq then scanDoubleQuoteString(source, state: s, tokens: tokens, startLine: startLine, startCol: startCol)
+            Action.enterNumber then handleEnterNumber(source, state: s, tokens: tokens, startLine: startLine, startCol: startCol)
+            Action.enterIdent then handleEnterIdent(source, state: s, tokens: tokens, startLine: startLine, startCol: startCol)
+            Action.enterComment then handleEnterComment(source, state: s)
+            default then panic("Lexer: unhandled action {action}")
+        end 'dispatch'
+        continue
     end 'scan'
 
     tokens.push(Token{kind: TokenKind.eof, value: b"", line: s.line, column: s.column})
     logDebug(LogCategory.lexer, message: "Lexer complete: {tokens.count()} tokens")
     return tokens
 end 'tokenize'
+
+// --- Action dispatch helpers ---
+// Each helper handles a multi-statement action arm from the main lexer match.
+
+function handleNewline(tokens TokenArray, state LexerState, startLine LineNumber, startCol ColumnNumber)
+    tokens.push(Token{kind: TokenKind.newline, value: b"", line: startLine, column: startCol})
+    state.line = state.line + 1
+    state.column = 1
+end 'handleNewline'
+
+function handleEmit2(state LexerState, tokens TokenArray, dfaState DfaState, startLine LineNumber, startCol ColumnNumber)
+    state.pos = state.pos + 1
+    state.column = state.column + 1
+    emitFixedToken(dfaState.rawValue, tokens: tokens, line: startLine, column: startCol)
+end 'handleEmit2'
+
+function handleEnterNumber(source ByteArray, state LexerState, tokens TokenArray, startLine LineNumber, startCol ColumnNumber)
+    state.pos = state.pos - 1
+    state.column = state.column - 1
+    scanNumber(source, state: state, tokens: tokens, startLine: startLine, startCol: startCol)
+end 'handleEnterNumber'
+
+function handleEnterIdent(source ByteArray, state LexerState, tokens TokenArray, startLine LineNumber, startCol ColumnNumber)
+    state.pos = state.pos - 1
+    state.column = state.column - 1
+    scanIdentifier(source, state: state, tokens: tokens, startLine: startLine, startCol: startCol)
+end 'handleEnterIdent'
+
+function handleEnterComment(source ByteArray, state LexerState)
+    state.pos = state.pos + 1
+    state.column = state.column + 1
+    scanComment(source, state: state)
+end 'handleEnterComment'
 
 // --- Sub-scanner functions ---
 
@@ -422,13 +411,21 @@ function scanSingleQuoteString(source ByteArray, state LexerState, tokens TokenA
         if sc == Ascii.quote 'endStr'
             break
         end 'endStr'
+        if sc == Ascii.lf 'newlineInStr'
+            logError(LogCategory.lexer, message: "error E1002: {startLine}:{startCol}: unterminated string literal")
+            break
+        end 'newlineInStr'
         state.pos = state.pos + 1
         state.column = state.column + 1
     end 'strBody'
     let strVal = sliceBytes(source, startPos: strStart, endPos: state.pos)
-    // Consume the closing quote
-    state.pos = state.pos + 1
-    state.column = state.column + 1
+    if state.pos >= len 'unterminatedAtEof'
+        logError(LogCategory.lexer, message: "error E1002: {startLine}:{startCol}: unterminated string literal")
+    end 'unterminatedAtEof' else 'consumeClose'
+        // Consume the closing quote
+        state.pos = state.pos + 1
+        state.column = state.column + 1
+    end 'consumeClose'
     tokens.push(Token{kind: TokenKind.stringLiteral, value: strVal, line: startLine, column: startCol})
 end 'scanSingleQuoteString'
 
@@ -441,6 +438,10 @@ function scanDoubleQuoteString(source ByteArray, state LexerState, tokens TokenA
         if dc == Ascii.dquote 'endDstr'
             break
         end 'endDstr'
+        if dc == Ascii.lf 'newlineInStr'
+            logError(LogCategory.lexer, message: "error E1002: {startLine}:{startCol}: unterminated string literal")
+            break
+        end 'newlineInStr'
         if dc == Ascii.backslash 'esc'
             state.pos = state.pos + 1
             state.column = state.column + 1
@@ -449,9 +450,13 @@ function scanDoubleQuoteString(source ByteArray, state LexerState, tokens TokenA
         state.column = state.column + 1
     end 'dstrBody'
     let dstrVal = sliceBytes(source, startPos: dstrStart, endPos: state.pos)
-    // Consume the closing double-quote
-    state.pos = state.pos + 1
-    state.column = state.column + 1
+    if state.pos >= len 'unterminatedAtEof'
+        logError(LogCategory.lexer, message: "error E1002: {startLine}:{startCol}: unterminated string literal")
+    end 'unterminatedAtEof' else 'consumeClose'
+        // Consume the closing double-quote
+        state.pos = state.pos + 1
+        state.column = state.column + 1
+    end 'consumeClose'
     tokens.push(Token{kind: TokenKind.doubleStringLiteral, value: dstrVal, line: startLine, column: startCol})
 end 'scanDoubleQuoteString'
 
@@ -480,10 +485,8 @@ function scanNumber(source ByteArray, state LexerState, tokens TokenArray, start
             let hexVal = sliceBytes(source, startPos: numStart, endPos: state.pos)
             tokens.push(Token{kind: TokenKind.intLiteral, value: hexVal, line: startLine, column: startCol})
             return
-        end 'isHex'
-
-        // Binary literal: 0b or 0B
-        if prefixByte == Ascii.lowerB or prefixByte == Ascii.upperB 'isBin'
+        end 'isHex' else if prefixByte == Ascii.lowerB or prefixByte == Ascii.upperB 'isBin'
+            // Binary literal: 0b or 0B
             state.pos = state.pos + 2
             state.column = state.column + 2
             while state.pos < len 'binDigits'
@@ -497,10 +500,7 @@ function scanNumber(source ByteArray, state LexerState, tokens TokenArray, start
             let binVal = sliceBytes(source, startPos: numStart, endPos: state.pos)
             tokens.push(Token{kind: TokenKind.intLiteral, value: binVal, line: startLine, column: startCol})
             return
-        end 'isBin'
-
-        // Octal literal: 0o or 0O
-        if prefixByte == Ascii.lowerO or prefixByte == Ascii.upperO 'isOct'
+        end 'isBin' else if prefixByte == Ascii.lowerO or prefixByte == Ascii.upperO 'isOct'
             state.pos = state.pos + 2
             state.column = state.column + 2
             while state.pos < len 'octDigits'
@@ -627,7 +627,7 @@ function isAlphaNum(b Byte) returns bool
 end 'isAlphaNum'
 
 export function sliceBytes(source ByteArray, startPos CharOffset, endPos CharOffset) returns ByteArray
-    var sliced = source.slice(startPos, endIndex: endPos)
+    let sliced = source.slice(startPos, endIndex: endPos)
     return ByteArray{managed: sliced.managed}
 end 'sliceBytes'
 

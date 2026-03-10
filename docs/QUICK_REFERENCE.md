@@ -112,7 +112,7 @@ All variables must be used (E3012). The exact name `_` is a discard identifier -
 
 **Auto-conformance:** The compiler auto-generates `Cloneable` and `Equatable` conformance for structs whose fields are all Cloneable/Equatable. Primitives, `String`, and `Array` are built-in Cloneable and Equatable types. Use `.clone()` to create independent copies.
 
-**Scope cleanup:** Struct variables are automatically freed when they go out of scope (reference-counted). Returned structs transfer ownership to the caller and are not freed at scope exit.
+**Scope cleanup:** Struct variables are automatically freed when they go out of scope (reference-counted). Returned structs are not freed at scope exit — the caller takes responsibility for their lifetime.
 
 **Borrow checking:** You cannot mutate a collection while a variable borrows from it (e.g., a reference obtained via `.get()`). Borrows expire at the last use of the borrowing variable (non-lexical lifetimes). Error E3070.
 
@@ -228,7 +228,7 @@ break 'label'    // exits match (or loop) with that label
 
 Range patterns: `a..=b` (inclusive), `a..<b` (exclusive upper), `a..` (open upper), `..=b`/`..<b` (open lower), `..` (wildcard).
 
-All matches must be exhaustive. For non-enum/union matches (int, float, string, char), a `default` arm is required. Enum and union matches must cover all cases explicitly. Enums support range patterns: `Priority.low to Priority.high`. Unions with associated values support range patterns on bare case names: `caseName1 to caseName2` (inclusive) or `caseName1 upto caseName2` (exclusive upper bound). A range arm cannot extract bindings, but can cover cases that have associated values. Use `default throws` or `default panic("message")` for non-exhaustive matching (see below).
+All matches must be exhaustive. For non-enum/union matches (int, float, string, char), a `default` arm is required. Enum and union matches must cover all cases explicitly. Enums support range patterns: `Priority.low to Priority.high`. Unions with associated values support range patterns on bare case names: `caseName1 to caseName2` (inclusive) or `caseName1 upto caseName2` (exclusive upper bound). A range arm cannot extract bindings, but can cover cases that have associated values. Use `default then throws` or `default then panic("message")` for non-exhaustive matching (see below).
 
 Pattern bindings are checked for unused (E3012). Use `_` to discard: `success(_)` or `pair(_, second)`. To discard all associated values, omit parentheses entirely: `success then ...`
 
@@ -248,25 +248,25 @@ end 'label'
 match shape 'draw'
     circle(r) then drawCircle(r)
     square(s) then drawSquare(s)
-    default throws ShapeError.unsupported
+    default then throws ShapeError.unsupported
 end 'draw'
 
 // Statement form: terminates with an error message
 match shape 'draw'
     circle(r) then drawCircle(r)
     square(s) then drawSquare(s)
-    default panic("unsupported shape")
+    default then panic("unsupported shape")
 end 'draw'
 
 // Expression form: also throws for unmatched cases
 let desc = match shape 'describe'
     circle(r) gives "circle"
     square(s) gives "square"
-    default throws ShapeError.unsupported
+    default then throws ShapeError.unsupported
 end 'describe'
 ```
 
-`default throws` and `default panic("message")` are the only forms of `default` allowed on enum and union matches (E2046). For non-enum/union matches, `default` with arbitrary code is still valid.
+`default then throws` and `default then panic("message")` are the only forms of `default` allowed on enum and union matches (E2046). For non-enum/union matches, `default` with arbitrary code is still valid.
 
 ## Types 
 
@@ -545,9 +545,9 @@ s.slice(startIdx, endIndex: endIdx)
 s.trim()                                     // remove whitespace from both ends
 s.trimStart()                                // remove whitespace from start
 s.trimEnd()                                  // remove whitespace from end
-s.trim(in: CharacterSet.decimalDigits())     // remove matching chars from both ends
-s.trimStart(in: CharacterSet.from(CharSet from ['x']))     // remove matching chars from start
-s.trimEnd(in: CharacterSet.punctuation())   // remove matching chars from end
+s.trim(CharacterSet.decimalDigits())     // remove matching chars from both ends
+s.trimStart(CharacterSet.from(CharSet from ['x']))     // remove matching chars from start
+s.trimEnd(CharacterSet.punctuation())   // remove matching chars from end
 
 // Iteration
 for c in s 'chars' ... end 'chars'           // grapheme clusters

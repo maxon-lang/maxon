@@ -95,11 +95,6 @@ public enum ErrorCode {
   MlirInvalidFieldAccess = 4006,
   MlirInvalidMethodCall = 4007,
   MlirUnsupportedInstruction = 4008,
-  // Ownership errors (checked in MLIR borrow checker pass)
-  MlirOwnershipUseAfterMove = 4010,
-  MlirOwnershipMoveFromImmutable = 4011,
-  MlirOwnershipBranchConflict = 4012,
-  MlirOwnershipMoveInLoop = 4013,
   MlirTypeCycle = 4014,
 
   // Code emitter errors (5xxx) - Stage 5

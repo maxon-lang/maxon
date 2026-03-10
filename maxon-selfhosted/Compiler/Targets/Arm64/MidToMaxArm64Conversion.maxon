@@ -19,8 +19,8 @@ export function lowerMidToMaxArm64(module MlirModule, target Target) returns Mli
         var dstFunc = createMlirFunction(srcFunc.name, returnType: srcFunc.returnType)
 
         // Compute stack size and max parser slot across all blocks in this function
-        let stackSize = computeMidStackSize(srcFunc, savedRegsSize: 16)
-        var nextTempSlot = computeMidMaxParserSlot(srcFunc) + 1
+        let stackSize = computeStackSizeForFunc(srcFunc, shadowSpace: 0, savedRegsSize: 16)
+        var nextTempSlot = computeMaxParserSlotInFunc(srcFunc) + 1
         var valueSlots = ValueSlotMap{}
 
         // Emit prologue as first op in first block
@@ -359,92 +359,3 @@ function getMaxArm64UnaryOp(aOp ArithOp) returns MaxArm64Op
     return MaxArm64Op.epilogue
 end 'getMaxArm64UnaryOp'
 
-// Compute stack size across all blocks of a function.
-// Counts parser slots (storeSlot/loadSlot) and temp slots (const/binary/unary results).
-function computeMidStackSize(func MlirFunction, savedRegsSize StackSize) returns StackSize
-    var maxSlot = 0 - 1
-    var hasPrint = false
-    var tempSlotCount = 0
-
-    for block in func.region.blocks 'eachBlock'
-        for op in block.ops 'eachOp'
-            countOpForStackSize(op, maxSlot: maxSlot, hasPrint: hasPrint, tempSlotCount: tempSlotCount)
-        end 'eachOp'
-    end 'eachBlock'
-
-    let totalMaxSlot = maxSlot + tempSlotCount
-    let overhead = savedRegsSize
-
-    var stackSize = 0
-    if totalMaxSlot >= 0 'hasSlots'
-        stackSize = (totalMaxSlot + 1) * 8 + overhead
-    end 'hasSlots'
-    if hasPrint and stackSize == 0 'needPrintBuf'
-        stackSize = overhead
-        if stackSize == 0 'noOverhead'
-            stackSize = 16
-        end 'noOverhead'
-    end 'needPrintBuf'
-    // Align to 16
-    if stackSize mod 16 != 0 'align'
-        stackSize = stackSize + (16 - (stackSize mod 16))
-    end 'align'
-    return stackSize
-end 'computeMidStackSize'
-
-// Count a single MlirOp for stack size computation.
-function countOpForStackSize(op MlirOp, maxSlot SlotIndex, hasPrint bool, tempSlotCount SlotIndex)
-    match op 'dispatch'
-        memref(mOp) then countMemRefForStackSize(mOp, maxSlot: maxSlot)
-        arith(aOp) then countArithForStackSize(aOp, tempSlotCount: tempSlotCount)
-        runtime(rOp) then countRuntimeForStackSize(rOp, hasPrint: hasPrint)
-        maxhl then break 'dispatch'
-        cf to func then break 'dispatch'
-        maxx64 to maxarm64 then break 'dispatch'
-    end 'dispatch'
-end 'countOpForStackSize'
-
-function countMemRefForStackSize(mOp MemRefOp, maxSlot SlotIndex)
-    match mOp 'check'
-        storeSlot(slotId, _) then maxSlot = maxOf(maxSlot, b: slotId)
-        loadSlot(_, slotId) then maxSlot = maxOf(maxSlot, b: slotId)
-    end 'check'
-end 'countMemRefForStackSize'
-
-function countArithForStackSize(aOp ArithOp, tempSlotCount SlotIndex)
-    match aOp 'check'
-        constI64 to cmpF64Eq then tempSlotCount = tempSlotCount + 1
-    end 'check'
-end 'countArithForStackSize'
-
-function countRuntimeForStackSize(rOp RuntimeOp, hasPrint bool)
-    match rOp 'check'
-        printLiteral(_) then hasPrint = true
-        printInt(_) then hasPrint = true
-    end 'check'
-end 'countRuntimeForStackSize'
-
-// Compute maximum parser-allocated slot across all blocks of a function.
-function computeMidMaxParserSlot(func MlirFunction) returns SlotIndex
-    var maxSlot = 0 - 1
-    for block in func.region.blocks 'eachBlock'
-        for op in block.ops 'eachOp'
-            match op 'check'
-                memref(mOp) then maxSlot = checkMemRefSlot(mOp, maxSlot: maxSlot)
-                maxhl then break 'check'
-                arith to func then break 'check'
-                runtime then break 'check'
-                maxx64 to maxarm64 then break 'check'
-            end 'check'
-        end 'eachOp'
-    end 'eachBlock'
-    return maxSlot
-end 'computeMidMaxParserSlot'
-
-function checkMemRefSlot(mOp MemRefOp, maxSlot SlotIndex) returns SlotIndex
-    match mOp 'check'
-        storeSlot(slotId, _) then return maxOf(maxSlot, b: slotId)
-        loadSlot(_, slotId) then return maxOf(maxSlot, b: slotId)
-    end 'check'
-    return maxSlot
-end 'checkMemRefSlot'

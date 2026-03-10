@@ -40,7 +40,6 @@ This reference provides complete syntax and semantics for the Maxon programming 
     - [Cloneable Interface](#cloneable-interface)
     - [Auto-Equatable](#auto-equatable)
     - [Scope Cleanup](#scope-cleanup)
-    - [Ownership System](#ownership-system)
 
 ---
 
@@ -1277,7 +1276,7 @@ end 'check2'
 
 ### Match
 
-Enum matches require exhaustive case coverage — all cases must be matched by explicit patterns or range patterns. Plain `default` is not allowed; use `default throws` or `default panic("message")` if you want a catch-all:
+Enum matches require exhaustive case coverage — all cases must be matched by explicit patterns or range patterns. Plain `default` is not allowed; use `default then throws` or `default then panic("message")` if you want a catch-all:
 
 ```maxon
 // Exhaustive: all cases listed
@@ -1604,8 +1603,6 @@ function main() returns ExitCode
     return x
 end 'main'
 ```
-
-**Ownership interaction:** When a `var` variable is passed to a mutating parameter, ownership transfers to the callee for the duration of the call. After the call returns, the caller's variable reflects the updated value and ownership is restored. The variable cannot be used again in a branch where the call may not return (e.g., after a `throw`).
 
 ### Closures
 
@@ -2089,7 +2086,7 @@ end 'handle'
 - `break` exits the match statement (or a labeled enclosing loop/match)
 - `and fallthrough` continues to the next case (skipping its pattern check)
 - `and fallthrough` cannot be combined with `return`
-- For enums and unions, all cases must be covered (error E2026) — plain `default` is not allowed (error E2046). Enums support range patterns (`EnumType.case1 to EnumType.case2`). Unions with associated values support range patterns on bare case names (`caseName1 to caseName2`). Use `default throws` or `default panic("message")` for non-exhaustive matching (see below).
+- For enums and unions, all cases must be covered (error E2026) — plain `default` is not allowed (error E2046). This is a deliberate design choice: when a new case is added to an enum or union, a plain `default` arm would silently swallow it, hiding bugs that can be subtle and difficult to track down. By requiring exhaustive coverage, the compiler forces every match site to be reviewed when cases change, ensuring new variants are handled intentionally. To cover cases you don't need to handle individually, use range patterns with `break` (see [Union Match Range Patterns](#union-match-range-patterns) below), or use `default then throws` / `default then panic("message")` to signal that unhandled cases are errors (see [Default Throws / Default Panic in Match](#default-throws--default-panic-in-match) below). Enums support range patterns (`EnumType.case1 to EnumType.case2`). Unions with associated values support range patterns on bare case names (`caseName1 to caseName2`).
 - Overlapping patterns are reported as errors (error E2027).
 - All matches must be exhaustive. For non-enum/union matches (int, float, string, char), a `default` arm is required.
 - `default` matches any non-enum/union value not matched by previous patterns
@@ -2218,10 +2215,24 @@ end 'get'
 
 ### Default Throws / Default Panic in Match
 
-When matching on an enum or union, all cases must normally be covered explicitly (exhaustive matching). To handle only a subset of cases, use `default throws` or `default panic("message")`:
+When matching on an enum or union, all cases must normally be covered explicitly (exhaustive matching). Plain `default` is forbidden because it defeats the purpose of exhaustiveness: if a new case is added to the enum or union later, the `default` arm would silently handle it, often with incorrect behavior. This class of bug — adding a new variant and forgetting to update match sites — is a common source of subtle, hard-to-diagnose errors in languages that allow catch-all defaults on sum types.
 
-- **`default throws`** throws the specified error when no other case matches. The enclosing function must declare `throws ErrorType` to use this feature. The error is catchable by the caller.
-- **`default panic("message")`** terminates the program with an error message when no other case matches. This is not catchable and should be used for cases that represent programming errors.
+To handle only a subset of cases, you have two options:
+
+1. **Range patterns with `break`**: When the unhandled cases are not errors — you simply don't need to act on them — cover them with a range pattern and `break`. This still participates in exhaustiveness checking, so new cases outside the range will be flagged by the compiler.
+
+```maxon
+match level 'filter'
+    LogLevel.error then handleError()
+    LogLevel.fatal then handleFatal()
+    LogLevel.trace to LogLevel.warning then break
+end 'filter'
+```
+
+2. **`default then throws` or `default then panic("message")`**: When unhandled cases represent genuine errors that should not occur silently:
+
+- **`default then throws`** throws the specified error when no other case matches. The enclosing function must declare `throws ErrorType` to use this feature. The error is catchable by the caller.
+- **`default then panic("message")`** terminates the program with an error message when no other case matches. This is not catchable and should be used for cases that represent programming errors.
 
 Both forms work in all match types (enum, union, and primitive types).
 
@@ -2232,7 +2243,7 @@ function handleShape(shape Shape) throws ShapeError
     match shape 'draw'
         circle(r) then drawCircle(r)
         square(s) then drawSquare(s)
-        default throws ShapeError.unsupported
+        default then throws ShapeError.unsupported
     end 'draw'
 end 'handleShape'
 ```
@@ -2246,7 +2257,7 @@ function handleShape(shape Shape)
     match shape 'draw'
         circle(r) then drawCircle(r)
         square(s) then drawSquare(s)
-        default panic("unsupported shape")
+        default then panic("unsupported shape")
     end 'draw'
 end 'handleShape'
 ```
@@ -2260,7 +2271,7 @@ function describeShape(shape Shape) returns String throws ShapeError
     let desc = match shape 'describe'
         circle(r) gives "circle with radius {r}"
         square(s) gives "square with side {s}"
-        default throws ShapeError.unsupported
+        default then throws ShapeError.unsupported
     end 'describe'
     return desc
 end 'describeShape'
@@ -2283,7 +2294,7 @@ function getArea(shape Shape) returns float throws ShapeError
     return match shape 'calc'
         circle(r) gives 3.14159 * r * r
         square(s) gives s * s
-        default throws ShapeError.unsupported
+        default then throws ShapeError.unsupported
     end 'calc'
 end 'getArea'
 
@@ -2296,9 +2307,9 @@ end 'main'
 ```
 
 **Notes:**
-- `default throws` and `default panic("message")` are the only forms of `default` allowed in enum and union matches -- `default` with arbitrary code on enums/unions is forbidden (error E2046)
-- For `default throws`: the error value must be a valid union case of an `Error`-conforming type, the enclosing function must declare `throws` with a matching error type, and callers must handle the thrown error using `try ... otherwise` or `try` propagation
-- For `default panic("message")`: the program terminates immediately with the given message. No `throws` declaration is required.
+- `default then throws` and `default then panic("message")` are the only forms of `default` allowed in enum and union matches -- `default` with arbitrary code on enums/unions is forbidden (error E2046)
+- For `default then throws`: the error value must be a valid union case of an `Error`-conforming type, the enclosing function must declare `throws` with a matching error type, and callers must handle the thrown error using `try ... otherwise` or `try` propagation
+- For `default then panic("message")`: the program terminates immediately with the given message. No `throws` declaration is required.
 - Supports all the same features as regular match: associated value extraction, `and fallthrough`, `break`, etc.
 - For non-enum/union matches, `default` with arbitrary code remains valid as before
 
@@ -2883,10 +2894,10 @@ The `String` type provides methods for removing characters from the start and en
 **Trimming with CharacterSet**
 
 ```maxon
-"123hello456".trim(in: CharacterSet.decimalDigits())     // "hello"
-"...hello!!!".trim(in: CharacterSet.punctuation())       // "hello"
-"xxxhelloxxx".trimStart(in: CharacterSet.from(CharSet from ['x']))     // "helloxxx"
-"xxxhelloxxx".trimEnd(in: CharacterSet.from(CharSet from ['x']))       // "xxxhello"
+"123hello456".trim(CharacterSet.decimalDigits())     // "hello"
+"...hello!!!".trim(CharacterSet.punctuation())       // "hello"
+"xxxhelloxxx".trimStart(CharacterSet.from(CharSet from ['x']))     // "helloxxx"
+"xxxhelloxxx".trimEnd(CharacterSet.from(CharSet from ['x']))       // "xxxhello"
 ```
 
 **Trimming Whitespace (convenience)**
@@ -3191,12 +3202,12 @@ function compute() returns int
 end 'compute'
 ```
 
-**Return values transfer ownership:** When a struct is returned from a function, its ownership transfers to the caller. The returned variable is not released at scope exit.
+**Return values:** When a struct is returned from a function, the returned variable is not released at scope exit — the caller takes responsibility for its lifetime.
 
 ```maxon
 function makePoint() returns Point
   var p = Point{x: 1, y: 2}
-  return p                      // ownership transfers to caller, p is NOT freed
+  return p                      // p is NOT freed; caller is responsible
 end 'makePoint'
 ```
 
@@ -3213,79 +3224,6 @@ function example() returns int
                                // then chain nodes freed, then chain freed
 end 'example'
 ```
-
-### Ownership System
-
-Maxon implements a compile-time ownership system that tracks value ownership and prevents use-after-move errors without runtime overhead.
-
-Every variable in Maxon has ownership of its value. When a variable is passed to a function:
-
-- **Borrow**: If the function only reads the parameter, ownership stays with the caller
-- **Move**: If the function mutates the parameter, ownership transfers to the callee
-
-After a move, the original variable cannot be used or reassigned - this is a compile-time error.
-
-**Example:**
-```maxon
-function main() returns ExitCode
-    var a = 42              // a owns the value 42
-
-    var b = foo(a)          // borrow - foo only reads z
-    a = a + 1               // OK - a still owns its value
-
-    bar(a)                  // move - bar mutates z, ownership transfers
-
-    // a = a + 1            // ERROR: Cannot assign after ownership transferred
-    // return a             // ERROR: Cannot use after ownership transferred
-
-    return b                // OK - b is still owned
-end 'main'
-
-function foo(z int) returns int
-    return z + 4            // only reads z - borrows
-end 'foo'
-
-function bar(z int)
-    z = z + 1               // mutates z - takes ownership
-end 'bar'
-```
-
-**How Ownership Works:**
-
-The compiler runs a mutation analysis pass that scans each function to determine which parameters it mutates:
-1. Direct assignment to a parameter
-2. Array element assignment
-3. Member assignment
-4. Passing to another function that mutates that parameter position
-
-During semantic analysis, each variable has an ownership state:
-- `Owned` - Variable owns its value and can be used
-- `Moved` - Ownership has been transferred; any use is an error
-
-**Error Messages:**
-```
-Semantic Error: example.maxon:10:4
-Cannot assign to variable 'a' after ownership was transferred
-  Ownership transferred to function 'bar' at line 8
-  Note: Once ownership is transferred, the variable cannot be used or reassigned
-```
-
-**Control Flow:**
-
-If a variable is moved in any branch of a conditional, it's considered moved after the conditional:
-```maxon
-var a = 42
-if condition 'c'
-    bar(a)          // moves a in this branch
-end 'c'
-// a is now moved - might have been moved depending on condition
-return a            // ERROR
-```
-
-**Design Principles:**
-- All types have ownership (including primitives like `int`, `float`, `bool`)
-- Automatic mutation detection (no explicit `&mut` annotations needed)
-- Compile-time only - zero runtime overhead
 
 ### Stack Allocation
 - Local variables (`var`, `let`)

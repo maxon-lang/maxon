@@ -133,7 +133,7 @@ function patchRelocationsArm64(code ByteArray, relocations RelocationArray, text
 end 'patchRelocationsArm64'
 
 export function writePe(outputPath String, codeResult CodeResult, target Target)
-    logDebug(LogCategory.pe, message: "Writing PE file: {outputPath}")
+    logDebug(LogCategory.binary, message: "Writing PE file: {outputPath}")
     var pe = ByteArray{}
     pe.reserve(4096)
 
@@ -159,8 +159,8 @@ export function writePe(outputPath String, codeResult CodeResult, target Target)
 
     let imageSize = idataRva + idataSizeVirtual
 
-    logDebug(LogCategory.pe, message: "Code section: {codeSize} bytes")
-    logDebug(LogCategory.pe, message: "Import section: {idataSize} bytes")
+    logDebug(LogCategory.binary, message: "Code section: {codeSize} bytes")
+    logDebug(LogCategory.binary, message: "Import section: {idataSize} bytes")
 
     // Patch IAT references in code (different encoding per CPU architecture)
     match target.cpu 'patchCpu'
@@ -234,6 +234,8 @@ export function writePe(outputPath String, codeResult CodeResult, target Target)
     padTo(pe, size: headersAligned + codeSizeAligned + idataSizeAligned)
 
     // Write to file
-    try File.writeBinary(outputPath, content: pe) otherwise ignore
-    logDebug(LogCategory.pe, message: "PE write complete: {pe.count()} bytes total")
+    try File.writeBinary(outputPath, content: pe) otherwise 'writeErr'
+        logError(LogCategory.binary, message: "Failed to write PE file: {outputPath}")
+    end 'writeErr'
+    logDebug(LogCategory.binary, message: "PE write complete: {pe.count()} bytes total")
 end 'writePe'

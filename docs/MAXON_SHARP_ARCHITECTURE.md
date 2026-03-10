@@ -640,11 +640,11 @@ Error codes follow the format `E` + 4 digits, grouped by compilation stage:
 | `E1xxx` | Lexer | `E1001` unexpected character, `E1002` unterminated string |
 | `E2xxx` | Parser | `E2001` unexpected token, `E2008` mismatched end label |
 | `E3xxx` | Semantic | `E3001` no main, `E3002` main wrong return type |
-| `E4xxx` | MLIR pipeline | `E4001` unsupported expression, `E4009` immutable variable, `E4010`--`E4013` ownership errors |
+| `E4xxx` | MLIR pipeline | `E4001` unsupported expression, `E4009` immutable variable |
 | `E5xxx` | Code emitter | `E5001` no main function, `E5002` unsupported instruction |
 | `E6xxx` | PE writer | `E6001` write error |
 
-The error code enum defines more codes than are currently exercised -- several (like ownership errors E4010-E4013) represent planned future features.
+The error code enum defines more codes than are currently exercised.
 
 
 ## Logging System
@@ -779,7 +779,7 @@ Unit tests use helper methods to:
 - Parse PE section headers and read section data (`ParsePeSections`, `ReadPeSectionData`)
 - Verify `.rdata` contains expected byte patterns (`VerifyRdataContains`)
 
-Many unit tests document expected future behavior -- they exercise features (like managed memory, string management, ownership) that are not yet implemented in the current pipeline, serving as a forward-looking test suite.
+Many unit tests document expected future behavior -- they exercise features (like managed memory, string management) that are not yet implemented in the current pipeline, serving as a forward-looking test suite.
 
 ### WindowsJobObject
 

@@ -2160,8 +2160,7 @@ public static partial class MaxonToStandardConversion {
       return;
     }
     var binName = label.TrimStart('_') + ".bin";
-    var stdlibPath = StdlibLoader.FindStdlibPath();
-    if (stdlibPath == null) throw new InvalidOperationException($"Cannot find stdlib path for ucd data '{label}'");
+    var stdlibPath = StdlibLoader.FindStdlibPath() ?? throw new InvalidOperationException($"Cannot find stdlib path for ucd data '{label}'");
     var binPath = Path.Combine(stdlibPath, "helpers", "string", binName);
     if (!File.Exists(binPath)) throw new InvalidOperationException($"UCD binary file not found: {binPath}");
     module.UcddataEntries.Add((label, File.ReadAllBytes(binPath), 8));

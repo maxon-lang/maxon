@@ -1066,8 +1066,8 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
         if (pos + 2 < _tokens.Count && _tokens[pos + 1].Type == TokenType.Dot) {
           endPos = pos + 3;
           if (_typeRegistry.TryGetValue(token.Value, out var enumType)) {
-            // Constants are integer-backed; treat as int so array literals infer as IntArray
-            if (enumType is MlirEnumType) return MlirType.I64;
+            // Return the enum type so array literals infer as __Array_EnumName
+            if (enumType is MlirEnumType met) return met;
             return enumType;
           }
         }
@@ -5556,6 +5556,11 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       return new ExprResult.Direct(tryCallOp.ErrorFlag);
     }
 
+    // Panic form: otherwise panic("message") — unconditionally panics on error
+    if (Check(TokenType.Panic)) {
+      return EmitTryOtherwisePanic(tryCallOp);
+    }
+
     // Check for block handler form: otherwise 'label' ... end 'label'
     if (Check(TokenType.CharacterLiteral)) {
       return EmitTryOtherwiseBlock(tryCallOp, null, callee?.ThrowsType);
@@ -5633,7 +5638,10 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
 
     if (resultVar != null) {
       var resultKind = tryCallOp.ResultKind ?? MaxonValueKind.Integer;
-      var loadedValue = EmitVarRefOp(resultVar, resultKind, tryCallOp.ResultStructTypeName);
+      var structTypeName = tryCallOp.ResultStructTypeName;
+
+
+      var loadedValue = EmitVarRefOp(resultVar, resultKind, structTypeName);
       return new ExprResult.Direct(loadedValue);
     }
     return new ExprResult.Direct(tryCallOp.ErrorFlag);
@@ -5682,6 +5690,25 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     }
 
     ExpectEndLabel(blockLabel);
+
+    return EmitTryContinueBlock(continueBlock, resultVar, tryCallOp);
+  }
+
+  /// <summary>
+  /// Emits an otherwise panic form: try func() otherwise panic("message").
+  /// On error, panics immediately. On success, returns the result.
+  /// </summary>
+  private ExprResult.Direct EmitTryOtherwisePanic(MaxonTryCallOp tryCallOp) {
+    var errorBlock = UniqueLabel("otherwise_panic");
+    var continueBlock = UniqueLabel("otherwise_continue");
+
+    var (_, resultVar) = StoreTryValuesForCrossBlockAccess(tryCallOp);
+    EmitErrorFlagCheck(tryCallOp.ErrorFlag, errorBlock, continueBlock);
+
+    // Error block: emit panic (which is a terminator — never returns)
+    var errBlock = _currentFunction!.Body.AddBlock(errorBlock);
+    _currentBlock = errBlock;
+    ParsePanic();
 
     return EmitTryContinueBlock(continueBlock, resultVar, tryCallOp);
   }
@@ -9070,8 +9097,9 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
         hasDefault = true;
         defaultSeen = true;
 
-        // For enum/union matches, 'default' must be followed by 'throws <error>' or 'panic("message")'.
+        // For enum/union matches, 'default then' must be followed by 'throws <error>' or 'panic("message")'.
         if (enumType != null) {
+          Expect(TokenType.Then);
           if (Check(TokenType.Throws)) {
             ParseDefaultThrowsCase(defaultToken, matchLabel, caseIndex, cmpBlocks, caseBlocks, caseIsDefault, caseFallthrough, caseOuterScopes);
           } else if (Check(TokenType.Panic)) {
@@ -9261,8 +9289,9 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
         hasDefault = true;
         defaultSeen = true;
 
-        // For enum/union matches, 'default' must be followed by 'throws <error>' or 'panic("message")'.
+        // For enum/union matches, 'default then' must be followed by 'throws <error>' or 'panic("message")'.
         if (enumType != null) {
+          Expect(TokenType.Then);
           if (Check(TokenType.Throws)) {
             ParseDefaultThrowsCase(defaultToken, matchLabel, caseIndex, cmpBlocks, caseBlocks, caseIsDefault, caseFallthrough: null, caseOuterScopes: null);
           } else if (Check(TokenType.Panic)) {
@@ -10776,6 +10805,8 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
         var substitution = new Dictionary<string, MlirType> { ["Element"] = elemRegisteredType };
         RegisterConcreteTypeAlias(autoAliasName, "Array", arrayStruct, substitution);
       }
+      // Auto-created aliases must survive across parser passes (PreScan → Parse)
+      _exportedTypeAliases.Add(autoAliasName);
       return autoAliasName;
     }
 
@@ -13056,26 +13087,43 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
   /// struct type has a concrete Element type that should override the result kind.
   /// </summary>
   private (MaxonValueKind Kind, string? StructTypeName) OverrideResultKindForElementType(MaxonValueKind resultKind, string? resultStructTypeName, List<MaxonValue> args) {
-    if (resultKind == MaxonValueKind.TypeParameter && args.Count > 0 && args[0] is MaxonStruct selfStruct) {
-      if (_typeRegistry.TryGetValue(selfStruct.TypeName, out var selfType)
-          && selfType is MlirStructType selfStructType) {
-        // Check common type parameter names: "Element" (Array/Iterable), "Value" (Map), "Key" (Map)
-        MlirType? resolvedType = null;
-        if (selfStructType.TypeParams.TryGetValue("Element", out var elementType))
-          resolvedType = elementType;
-        else if (selfStructType.TypeParams.TryGetValue("Value", out var valueType))
-          resolvedType = valueType;
+    if (resultKind != MaxonValueKind.TypeParameter || args.Count == 0)
+      return (resultKind, resultStructTypeName);
 
-        if (resolvedType != null) {
-          if (resolvedType is MlirTypeParameterType) return (resultKind, resultStructTypeName);
-          var kind = resolvedType.ToValueKind();
-          var typeName = resolvedType switch {
-            MlirStructType s => s.Name,
-            MlirUnionType e => e.Name,
-            _ => (string?)null
-          };
-          return (kind, typeName);
+    // Resolve the self arg's struct type name — either directly from MaxonStruct,
+    // or by looking up the variable in the registry (needed for module-level arrays
+    // in multi-file builds where args[0] is a plain MaxonValue, not MaxonStruct)
+    string? selfTypeName = null;
+    if (args[0] is MaxonStruct selfStruct) {
+      selfTypeName = selfStruct.TypeName;
+    } else {
+      foreach (var varInfo in _variables.Values) {
+        if (varInfo.Value == args[0] && varInfo.StructTypeName != null) {
+          selfTypeName = varInfo.StructTypeName;
+          break;
         }
+      }
+    }
+
+    if (selfTypeName != null
+        && _typeRegistry.TryGetValue(selfTypeName, out var selfType)
+        && selfType is MlirStructType selfStructType) {
+      // Check common type parameter names: "Element" (Array/Iterable), "Value" (Map), "Key" (Map)
+      MlirType? resolvedType = null;
+      if (selfStructType.TypeParams.TryGetValue("Element", out var elementType))
+        resolvedType = elementType;
+      else if (selfStructType.TypeParams.TryGetValue("Value", out var valueType))
+        resolvedType = valueType;
+
+      if (resolvedType != null) {
+        if (resolvedType is MlirTypeParameterType) return (resultKind, resultStructTypeName);
+        var kind = resolvedType.ToValueKind();
+        var typeName = resolvedType switch {
+          MlirStructType s => s.Name,
+          MlirUnionType e => e.Name,
+          _ => (string?)null
+        };
+        return (kind, typeName);
       }
     }
     return (resultKind, resultStructTypeName);

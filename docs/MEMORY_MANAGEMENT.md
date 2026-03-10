@@ -223,12 +223,12 @@ All managed variables in scope are decremented. The order is: user variables fir
 
 ### Return
 
-Returning a struct **transfers ownership** to the caller. The returned variable is skipped during scope cleanup (it appears in the `KeepVars` set of `MaxonScopeEndOp`):
+Returning a struct **passes lifetime responsibility** to the caller. The returned variable is skipped during scope cleanup (it appears in the `KeepVars` set of `MaxonScopeEndOp`):
 
 ```maxon
 function makePoint() returns Point
   var p = Point{x: 1, y: 2}   // rc=1
-  return p                     // p is NOT decref'd; ownership transfers to caller
+  return p                     // p is NOT decref'd; caller is responsible
 end 'makePoint'
 
 function main() returns ExitCode
@@ -237,7 +237,7 @@ function main() returns ExitCode
 end 'main'
 ```
 
-The compiler marks call-return temps with `OwnershipFlags.CallReturn`. When the caller assigns the return value to a named variable, the registry detects the `CallReturn` flag and skips the incref -- the callee already allocated at rc=1, so ownership transfers directly.
+The compiler marks call-return temps with `OwnershipFlags.CallReturn`. When the caller assigns the return value to a named variable, the registry detects the `CallReturn` flag and skips the incref -- the callee already allocated at rc=1, so the reference passes directly without an extra retain.
 
 ### Function Parameters
 

@@ -446,8 +446,9 @@ match_stmt    = 'match' expression LABEL NEWLINE
 
 match_arm     = match_patterns 'then' match_action
               | 'default' 'then' match_action
-              | 'default' 'throws' expression                   (* enum/union: throws error for unmatched cases *)
-              | 'default' 'panic' '(' STRING ')'                (* terminates with error message *)
+              | 'default' 'then' 'throws' expression             (* enum/union: throws error for unmatched cases *)
+              | 'default' 'then' 'panic' '(' STRING ')'          (* enum/union: terminates with error message *)
+              | 'default' 'panic' '(' STRING ')'                  (* non-enum: terminates with error message *)
 
 match_action  = statement [ 'and' 'fallthrough' ]
               | 'break' [ LABEL ]
@@ -650,8 +651,9 @@ match_expr    = 'match' expression LABEL NEWLINE
 match_expr_arm
               = match_patterns 'gives' expression
               | 'default' 'gives' expression
-              | 'default' 'throws' expression                   (* enum/union: throws error for unmatched cases *)
-              | 'default' 'panic' '(' STRING ')'                (* terminates with error message *)
+              | 'default' 'then' 'throws' expression             (* enum/union: throws error for unmatched cases *)
+              | 'default' 'then' 'panic' '(' STRING ')'          (* enum/union: terminates with error message *)
+              | 'default' 'panic' '(' STRING ')'                  (* non-enum: terminates with error message *)
 ```
 
 ### 6.5 Try Expression

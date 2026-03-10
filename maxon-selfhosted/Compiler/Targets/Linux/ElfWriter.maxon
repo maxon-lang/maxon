@@ -13,8 +13,8 @@ export function writeElf(outputPath String, codeResult CodeResult, target Target
     let totalSize = headerSize + codeSize
     let entryPoint = ELF_LOAD_ADDR + headerSize
 
-    logDebug(LogCategory.pe, message: "Writing ELF file: {outputPath}")
-    logDebug(LogCategory.pe, message: "Code size: {codeSize} bytes, entry point: {entryPoint}")
+    logDebug(LogCategory.binary, message: "Writing ELF file: {outputPath}")
+    logDebug(LogCategory.binary, message: "Code size: {codeSize} bytes, entry point: {entryPoint}")
 
     var elf = ByteArray{}
     elf.reserve(totalSize)
@@ -57,6 +57,8 @@ export function writeElf(outputPath String, codeResult CodeResult, target Target
     elf.append(codeResult.code)
 
     // Write to file
-    try File.writeBinary(outputPath, content: elf) otherwise ignore
-    logDebug(LogCategory.pe, message: "ELF write complete: {elf.count()} bytes total")
+    try File.writeBinary(outputPath, content: elf) otherwise 'writeErr'
+        logError(LogCategory.binary, message: "Failed to write ELF file: {outputPath}")
+    end 'writeErr'
+    logDebug(LogCategory.binary, message: "ELF write complete: {elf.count()} bytes total")
 end 'writeElf'

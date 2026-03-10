@@ -28,8 +28,8 @@ trimEnd() returns String                     // whitespace, end only
 "  hello  ".trim()                              // "hello"
 "  hello  ".trimStart()                         // "hello  "
 "  hello  ".trimEnd()                           // "  hello"
-"123hello456".trim(in: CharacterSet.decimalDigits)  // "hello"
-"...hello!!!".trim(in: CharacterSet.punctuation)    // "hello"
+"123hello456".trim(CharacterSet.decimalDigits)  // "hello"
+"...hello!!!".trim(CharacterSet.punctuation)    // "hello"
 ```
 
 The no-argument versions are convenience methods that trim Unicode whitespace.
@@ -59,7 +59,7 @@ CharacterSet.controlCharacters()       // Control characters
 function main() returns ExitCode
   var s = "  hello  "
   var ws = CharacterSet.whitespacesAndNewlines()
-  var result = s.trim(in: ws)
+  var result = s.trim(ws)
   print("[{result}]")
   return 0
 end 'main'
@@ -203,7 +203,7 @@ end 'main'
 ```maxon
 function main() returns ExitCode
   var s = "  hello  "
-  var result = s.trim(in: CharacterSet.whitespacesAndNewlines())
+  var result = s.trim(CharacterSet.whitespacesAndNewlines())
   print("[{result}]")
   return 0
 end 'main'
@@ -219,7 +219,7 @@ end 'main'
 ```maxon
 function main() returns ExitCode
   var s = "123hello456"
-  var result = s.trim(in: CharacterSet.decimalDigits())
+  var result = s.trim(CharacterSet.decimalDigits())
   print("[{result}]")
   return 0
 end 'main'
@@ -235,7 +235,7 @@ end 'main'
 ```maxon
 function main() returns ExitCode
   var s = "abc123abc"
-  var result = s.trim(in: CharacterSet.letters())
+  var result = s.trim(CharacterSet.letters())
   print("[{result}]")
   return 0
 end 'main'
@@ -251,7 +251,7 @@ end 'main'
 ```maxon
 function main() returns ExitCode
   var s = "123hello"
-  var result = s.trimStart(in: CharacterSet.decimalDigits())
+  var result = s.trimStart(CharacterSet.decimalDigits())
   print("[{result}]")
   return 0
 end 'main'
@@ -267,7 +267,7 @@ end 'main'
 ```maxon
 function main() returns ExitCode
   var s = "hello123"
-  var result = s.trimEnd(in: CharacterSet.decimalDigits())
+  var result = s.trimEnd(CharacterSet.decimalDigits())
   print("[{result}]")
   return 0
 end 'main'
@@ -283,7 +283,7 @@ end 'main'
 ```maxon
 function main() returns ExitCode
   var s = "hello"
-  var result = s.trim(in: CharacterSet.decimalDigits())
+  var result = s.trim(CharacterSet.decimalDigits())
   print("[{result}]")
   return 0
 end 'main'
@@ -299,7 +299,7 @@ end 'main'
 ```maxon
 function main() returns ExitCode
   var s = "12345"
-  var result = s.trim(in: CharacterSet.decimalDigits())
+  var result = s.trim(CharacterSet.decimalDigits())
   print("[{result}]")
   return 0
 end 'main'
@@ -315,7 +315,7 @@ end 'main'
 ```maxon
 function main() returns ExitCode
   var s = ""
-  var result = s.trim(in: CharacterSet.whitespacesAndNewlines())
+  var result = s.trim(CharacterSet.whitespacesAndNewlines())
   print("[{result}]")
   return 0
 end 'main'
@@ -331,7 +331,7 @@ end 'main'
 ```maxon
 function main() returns ExitCode
   var s = "...hello!!!"
-  var result = s.trim(in: CharacterSet.punctuation())
+  var result = s.trim(CharacterSet.punctuation())
   print("[{result}]")
   return 0
 end 'main'
