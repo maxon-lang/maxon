@@ -12729,12 +12729,24 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       // find or create the concrete specialization alias for monomorphization.
       // Only applies when self is a non-alias concrete type — alias types are handled by
       // the hasUnresolved path above.
+      // Skip when the return type itself is already a registered concrete alias whose
+      // type params match what's in the registry (e.g., StringArray with Element=String) —
+      // no need to create a mangled duplicate like __Array_String.
       if (!hasUnresolved && returnStruct.TypeParams.Count > 0
           && !_typeAliasSources.ContainsKey(selfStruct.TypeName)
           && _typeAliasSources.TryGetValue(returnStruct.Name, out var returnSourceName)
           && _typeRegistry.TryGetValue(returnSourceName, out var returnSourceReg)
           && returnSourceReg is MlirStructType returnSourceStruct
           && !returnStruct.TypeParams.Values.Any(t => t is MlirTypeParameterType)) {
+        // If the return type is already registered with the same concrete type params,
+        // use it directly instead of creating a mangled duplicate.
+        if (_typeRegistry.TryGetValue(returnStruct.Name, out var existingReg)
+            && existingReg is MlirStructType existingStruct
+            && existingStruct.TypeParams.Count == returnStruct.TypeParams.Count
+            && existingStruct.TypeParams.All(kv =>
+                returnStruct.TypeParams.TryGetValue(kv.Key, out var rv) && rv.Name == kv.Value.Name)) {
+          return (MaxonValueKind.Struct, returnStruct.Name);
+        }
         var mangledName = $"__{returnSourceName}_{string.Join("_", returnStruct.TypeParams.Values.Select(t => t.Name))}";
         if (!_typeRegistry.ContainsKey(mangledName)) {
           RegisterConcreteTypeAlias(mangledName, returnSourceName, returnSourceStruct, new(returnStruct.TypeParams));
