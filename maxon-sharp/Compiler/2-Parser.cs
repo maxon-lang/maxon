@@ -8079,7 +8079,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     var resultVar = loop.ForInResultVarName;
     if (resultVar != null
         && loop.ElementKind is MaxonValueKind.Struct or MaxonValueKind.TypeParameter or MaxonValueKind.Enum) {
-      return [resultVar, ..innerScope];
+      return [resultVar, .. innerScope];
     }
     return innerScope;
   }
