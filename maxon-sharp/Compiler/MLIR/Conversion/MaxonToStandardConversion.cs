@@ -14,6 +14,7 @@ public static partial class MaxonToStandardConversion {
   [ThreadStatic] private static int _nextRdataId;
   [ThreadStatic] private static int _nextStdlibRdataId;
   [ThreadStatic] private static bool _rdataStdlibPhase;
+  [ThreadStatic] private static HashSet<string>? _loadedUcdLabels;
   [ThreadStatic] private static string? _currentFuncName;
   [ThreadStatic] private static Dictionary<string, string>? _symdataContextCache;
   // Tracks type destructor functions that need to be generated (one per concrete type).
@@ -28,6 +29,7 @@ public static partial class MaxonToStandardConversion {
     _nextTagIndex = 1;
     _symdataContextCache = [];
     _destructorRequests = [];
+    _loadedUcdLabels = [];
     _rdataStdlibPhase = true;
     _nextStdlibRdataId = 0;
     _nextRdataId = 0;
@@ -1704,6 +1706,12 @@ public static partial class MaxonToStandardConversion {
             case MaxonManagedMemByteGetOp byteGetOp:
               LowerManagedMemByteGet(byteGetOp, newBlock, valueMap, varTypes);
               break;
+            case MaxonUcdByteLoadOp ucdByteOp:
+              LowerUcdByteLoad(ucdByteOp, newBlock, valueMap, result);
+              break;
+            case MaxonUcdI64LoadOp ucdI64Op:
+              LowerUcdI64Load(ucdI64Op, newBlock, valueMap, result);
+              break;
             case MaxonManagedMemByteSetOp byteSetOp:
               LowerManagedMemByteSet(byteSetOp, newBlock, valueMap, varTypes);
               break;
@@ -2143,6 +2151,55 @@ public static partial class MaxonToStandardConversion {
 
       result.AddFunction(func);
     }
+  }
+
+  private static void EnsureUcddataLoaded(string label, MlirModule<StandardOp> module) {
+    if (_loadedUcdLabels!.Contains(label)) return;
+    if (module.UcddataEntries.Any(e => e.label == label)) {
+      _loadedUcdLabels.Add(label);
+      return;
+    }
+    var binName = label.TrimStart('_') + ".bin";
+    var stdlibPath = StdlibLoader.FindStdlibPath();
+    if (stdlibPath == null) throw new InvalidOperationException($"Cannot find stdlib path for ucd data '{label}'");
+    var binPath = Path.Combine(stdlibPath, "helpers", "string", binName);
+    if (!File.Exists(binPath)) throw new InvalidOperationException($"UCD binary file not found: {binPath}");
+    module.UcddataEntries.Add((label, File.ReadAllBytes(binPath), 8));
+    _loadedUcdLabels.Add(label);
+  }
+
+  private static void LowerUcdByteLoad(MaxonUcdByteLoadOp op, MlirBlock<StandardOp> block,
+      Dictionary<MaxonValue, StdValue> valueMap, MlirModule<StandardOp> result) {
+    EnsureUcddataLoaded(op.UcddataLabel, result);
+    var leaOp = new StdLeaUcddataOp(op.UcddataLabel);
+    block.AddOp(leaOp);
+    var ptrOp = new StdPtrToI64Op(leaOp.Result);
+    block.AddOp(ptrOp);
+    var index = (StdI64)valueMap[op.ByteOffset];
+    var addrOp = new StdAddI64Op(ptrOp.Result, index);
+    block.AddOp(addrOp);
+    var loadOp = new StdLoadIndirectOp(addrOp.Result, 0, MlirType.I8);
+    block.AddOp(loadOp);
+    valueMap[op.Result] = loadOp.Result;
+  }
+
+  private static void LowerUcdI64Load(MaxonUcdI64LoadOp op, MlirBlock<StandardOp> block,
+      Dictionary<MaxonValue, StdValue> valueMap, MlirModule<StandardOp> result) {
+    EnsureUcddataLoaded(op.UcddataLabel, result);
+    var leaOp = new StdLeaUcddataOp(op.UcddataLabel);
+    block.AddOp(leaOp);
+    var ptrOp = new StdPtrToI64Op(leaOp.Result);
+    block.AddOp(ptrOp);
+    var index = (StdI64)valueMap[op.Index];
+    var scaleOp = new StdConstI64Op(8);
+    block.AddOp(scaleOp);
+    var byteOffOp = new StdMulI64Op(index, scaleOp.Result);
+    block.AddOp(byteOffOp);
+    var addrOp = new StdAddI64Op(ptrOp.Result, byteOffOp.Result);
+    block.AddOp(addrOp);
+    var loadOp = new StdLoadIndirectOp(addrOp.Result, 0, MlirType.I64);
+    block.AddOp(loadOp);
+    valueMap[op.Result] = loadOp.Result;
   }
 
 }

@@ -983,6 +983,16 @@ public class StdLeaSymdataOp(string symdataLabel) : StandardOp {
   public override int PureResultId => Result.Id;
 }
 
+// Gets the address of a ucddata label via RIP-relative addressing (for Unicode Character Database tables in .ucd)
+public class StdLeaUcddataOp(string ucddataLabel) : StandardOp {
+  public override string Mnemonic => $"memref.lea_ucddata {UcddataLabel}";
+  public string UcddataLabel { get; } = ucddataLabel;
+  public StdPtr Result { get; } = new StdPtr(MlirContext.Current.NextId());
+  public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
+  public override List<StdValue> ReadValues => [];
+  public override int PureResultId => Result.Id;
+}
+
 // Store a value through a pointer at a given offset (for sret writes)
 public class StdStoreIndirectOp(StdValue value, StdValue basePtr, int fieldOffset, MlirType fieldType) : StandardOp {
   public override string Mnemonic => $"memref.store_indirect %{Value.Id}, %{BasePtr.Id}+{FieldOffset}";

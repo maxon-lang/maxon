@@ -340,6 +340,8 @@ internal class FunctionCloner {
 
       // Managed memory ops (trivial)
       case MaxonManagedMemByteGetOp bg: { var c = new MaxonManagedMemByteGetOp(MapValue(bg.ManagedStruct), MapValue(bg.Index)); RegisterResult(bg.Result, c.Result); return c; }
+      case MaxonUcdByteLoadOp ucdByte: { var c = new MaxonUcdByteLoadOp(ucdByte.UcddataLabel, MapValue(ucdByte.ByteOffset)); RegisterResult(ucdByte.Result, c.Result); return c; }
+      case MaxonUcdI64LoadOp ucdI64: { var c = new MaxonUcdI64LoadOp(ucdI64.UcddataLabel, MapValue(ucdI64.Index)); RegisterResult(ucdI64.Result, c.Result); return c; }
       case MaxonManagedMemByteSetOp bs: return new MaxonManagedMemByteSetOp(MapValue(bs.ManagedStruct), MapValue(bs.Index), MapValue(bs.Value));
       case MaxonManagedMemCreateOp mc: { var c = new MaxonManagedMemCreateOp(MapValue(mc.Count), mc.ElementSize); RegisterResult(mc.Result, c.Result); return c; }
       case MaxonManagedMemGrowOp mg: return new MaxonManagedMemGrowOp(MapValue(mg.ManagedStruct), MapValue(mg.NewCapacity));

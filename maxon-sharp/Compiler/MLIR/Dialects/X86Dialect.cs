@@ -393,6 +393,13 @@ public class X86LeaSymdataRelOp(X86Register dest, string symdataLabel) : X86Op {
   public override string Mnemonic => $"x86.lea_symdata {Dest.ToString().ToLower()}, [{SymdataLabel}]";
 }
 
+// LEA dest, [rip+disp] - load effective address of a ucddata label via RIP-relative
+public class X86LeaUcddataRelOp(X86Register dest, string ucddataLabel) : X86Op {
+  public X86Register Dest { get; } = dest;
+  public string UcddataLabel { get; } = ucddataLabel;
+  public override string Mnemonic => $"x86.lea_ucddata {Dest.ToString().ToLower()}, [{UcddataLabel}]";
+}
+
 // LEA dest, [rip+disp] - load effective address of a function
 public class X86LeaFuncAddrOp(X86Register dest, string functionName) : X86Op {
   public X86Register Dest { get; } = dest;

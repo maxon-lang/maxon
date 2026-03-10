@@ -16,6 +16,7 @@ public record CodeEmitResult(
   byte[] Code,
   byte[] Rdata,
   byte[] Data,
+  byte[] Ucddata,
   byte[] Symdata,
   IReadOnlyList<ImportEntry> Imports,
   IReadOnlyList<CoffSymbol> CoffSymbols
@@ -43,6 +44,11 @@ public class CodeEmitter {
     // Define symdata entries (panic messages go in .symtab section, not .rdata)
     foreach (var (label, symdataBytes, alignment) in module.SymdataEntries) {
       emitter.DefineSymdata(label, symdataBytes, alignment);
+    }
+
+    // Define ucddata entries (Unicode Character Database tables go in .ucd section)
+    foreach (var (label, ucddataBytes, alignment) in module.UcddataEntries) {
+      emitter.DefineUcddata(label, ucddataBytes, alignment);
     }
 
     // Emit globals largest-first to eliminate alignment padding
@@ -106,7 +112,7 @@ public class CodeEmitter {
     var codeSize = (uint)emitter.GetCode().Length;
     var codeSizeVirtual = AlignUp(codeSize, 0x1000);
 
-    // Section order: .text -> .rdata -> .data -> .symtab -> .idata
+    // Section order: .text -> .rdata -> .data -> .ucd -> .symtab -> .idata
     // Calculate virtual section sizes for RVA calculations
     var rdataSize = (uint)emitter.GetRdata().Length;
     var rdataSizeVirtual = emitter.HasRdata ? AlignUp(rdataSize, 0x1000) : 0;
@@ -126,9 +132,18 @@ public class CodeEmitter {
     var dataSize = (uint)emitter.GetData().Length;
     var dataSizeVirtual = emitter.HasGlobals ? AlignUp(dataSize, 0x1000) : 0;
 
-    // Resolve symdata references (symtab section comes after data)
+    // Resolve ucddata references (ucd section comes after data)
+    if (emitter.HasUcddata) {
+      var ucddataRvaOffset = (int)(codeSizeVirtual - codeSize + rdataSizeVirtual + dataSizeVirtual);
+      emitter.ResolveUcddata(ucddataRvaOffset);
+    }
+
+    var ucddataSize = (uint)emitter.GetUcddata().Length;
+    var ucddataSizeVirtual = emitter.HasUcddata ? AlignUp(ucddataSize, 0x1000) : 0;
+
+    // Resolve symdata references (symtab section comes after ucd)
     if (emitter.HasSymdata) {
-      var symdataRvaOffset = (int)(codeSizeVirtual - codeSize + rdataSizeVirtual + dataSizeVirtual);
+      var symdataRvaOffset = (int)(codeSizeVirtual - codeSize + rdataSizeVirtual + dataSizeVirtual + ucddataSizeVirtual);
       emitter.ResolveSymdata(symdataRvaOffset);
     }
 
@@ -138,13 +153,14 @@ public class CodeEmitter {
     // Resolve import references
     // IAT comes after symtab section
     if (emitter.HasImports) {
-      var iatRvaOffset = (int)(codeSizeVirtual - codeSize + rdataSizeVirtual + dataSizeVirtual + symdataSizeVirtual);
+      var iatRvaOffset = (int)(codeSizeVirtual - codeSize + rdataSizeVirtual + dataSizeVirtual + ucddataSizeVirtual + symdataSizeVirtual);
       emitter.ResolveImports(iatRvaOffset);
     }
 
     var code = emitter.GetCode();
     var rdata = emitter.GetRdata();
     var data = emitter.GetData();
+    var ucddata = emitter.GetUcddata();
     var symdata = emitter.GetSymdata();
     var imports = emitter.Imports;
 
@@ -154,9 +170,9 @@ public class CodeEmitter {
       .Select(e => new CoffSymbol(e.name, e.codeOffset))
       .ToList();
 
-    Logger.Debug(LogCategory.Codegen, $"Emitted {code.Length} bytes code, {rdata.Length} bytes rdata, {data.Length} bytes data, {symdata.Length} bytes symdata, {imports.Count} imports, {coffSymbols.Count} COFF symbols");
+    Logger.Debug(LogCategory.Codegen, $"Emitted {code.Length} bytes code, {rdata.Length} bytes rdata, {data.Length} bytes data, {ucddata.Length} bytes ucddata, {symdata.Length} bytes symdata, {imports.Count} imports, {coffSymbols.Count} COFF symbols");
 
-    return new CodeEmitResult(code, rdata, data, symdata, imports, coffSymbols);
+    return new CodeEmitResult(code, rdata, data, ucddata, symdata, imports, coffSymbols);
   }
 
   /// <summary>

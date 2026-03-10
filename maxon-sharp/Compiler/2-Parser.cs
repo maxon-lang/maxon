@@ -6316,6 +6316,31 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
         p._currentBlock!.AddOp(op);
         return op.Result;
       }),
+    // === UCD (Unicode Character Database) intrinsics ===
+    ["ucdByteAt"] = new(
+      "Loads a byte from a .ucd section blob.\n\n`__Builtins.ucdByteAt(\"label\", offset) returns int`",
+      p => {
+        var labelToken = p.Expect(TokenType.StringLiteral);
+        var label = labelToken.Value;
+        p.Expect(TokenType.Comma);
+        var offset = p.ResolveExprValue(p.ParseExpression());
+        p.Expect(TokenType.RightParen);
+        var op = new MaxonUcdByteLoadOp(label, offset);
+        p._currentBlock!.AddOp(op);
+        return op.Result;
+      }),
+    ["ucdI64At"] = new(
+      "Loads a 64-bit int from a .ucd section blob.\n\n`__Builtins.ucdI64At(\"label\", index) returns int`",
+      p => {
+        var labelToken = p.Expect(TokenType.StringLiteral);
+        var label = labelToken.Value;
+        p.Expect(TokenType.Comma);
+        var index = p.ResolveExprValue(p.ParseExpression());
+        p.Expect(TokenType.RightParen);
+        var op = new MaxonUcdI64LoadOp(label, index);
+        p._currentBlock!.AddOp(op);
+        return op.Result;
+      }),
   };
 
   private static readonly Dictionary<string, (MlirType Type, MaxonValueKind Kind)> PrimitiveTypes = new() {

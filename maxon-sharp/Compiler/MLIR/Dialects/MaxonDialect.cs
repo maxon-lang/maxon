@@ -925,6 +925,26 @@ public class MaxonManagedMemByteSetOp(MaxonValue managedStruct, MaxonValue index
   public override IReadOnlyList<string> PrintableOperands => [ManagedStruct.ToString(), Index.ToString(), Value.ToString()];
 }
 
+// Loads a single byte (zero-extended to i64) from a named .ucd section blob at the given byte offset
+public class MaxonUcdByteLoadOp(string ucddataLabel, MaxonValue byteOffset) : MaxonOp {
+  public override string Mnemonic => $"maxon.ucd_byte_load {UcddataLabel}";
+  public string UcddataLabel { get; } = ucddataLabel;
+  public MaxonValue ByteOffset { get; } = byteOffset;
+  public MaxonInteger Result { get; } = new MaxonInteger(MlirContext.Current.NextId());
+  public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
+  public override IReadOnlyList<string> PrintableOperands => [ByteOffset.ToString()];
+}
+
+// Loads a 64-bit integer from a named .ucd section blob at position index*8
+public class MaxonUcdI64LoadOp(string ucddataLabel, MaxonValue index) : MaxonOp {
+  public override string Mnemonic => $"maxon.ucd_i64_load {UcddataLabel}";
+  public string UcddataLabel { get; } = ucddataLabel;
+  public MaxonValue Index { get; } = index;
+  public MaxonInteger Result { get; } = new MaxonInteger(MlirContext.Current.NextId());
+  public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
+  public override IReadOnlyList<string> PrintableOperands => [Index.ToString()];
+}
+
 // String literal: stores UTF-8 bytes in rdata and creates a String struct
 public class MaxonStringLiteralOp(string value, string stringTypeName) : MaxonOp {
   public override string Mnemonic => $"maxon.string_literal \"{Value}\"";

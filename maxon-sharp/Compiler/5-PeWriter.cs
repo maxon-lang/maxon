@@ -9,18 +9,20 @@ public class PeWriter {
   private const uint SectionAlignment = 0x1000;  // 4096 bytes
   private const ulong ImageBase = 0x140000000;   // Default for 64-bit
 
-  public static void Write(string path, byte[] code, byte[]? rdata = null, byte[]? data = null, IReadOnlyList<ImportEntry>? imports = null, byte[]? symdata = null, IReadOnlyList<CoffSymbol>? coffSymbols = null) {
+  public static void Write(string path, byte[] code, byte[]? rdata = null, byte[]? data = null, byte[]? ucddata = null, IReadOnlyList<ImportEntry>? imports = null, byte[]? symdata = null, IReadOnlyList<CoffSymbol>? coffSymbols = null) {
     Logger.Debug(LogCategory.Pe, $"Writing PE file: {path}");
     using var fs = new FileStream(path, FileMode.Create, FileAccess.Write);
     using var writer = new BinaryWriter(fs);
 
     rdata ??= [];
     data ??= [];
+    ucddata ??= [];
     imports ??= [];
     symdata ??= [];
 
     var hasRdata = rdata.Length > 0;
     var hasData = data.Length > 0;
+    var hasUcddata = ucddata.Length > 0;
     var hasSymdata = symdata.Length > 0;
     var hasImports = imports.Count > 0;
 
@@ -43,6 +45,7 @@ public class PeWriter {
     var numSections = 1u;
     if (hasRdata) numSections++;
     if (hasData) numSections++;
+    if (hasUcddata) numSections++;
     if (hasSymdata) numSections++;
     if (hasImports) numSections++;
 
@@ -61,6 +64,10 @@ public class PeWriter {
     var dataSizeAligned = hasData ? AlignUp(dataSize, FileAlignment) : 0;
     var dataSizeVirtual = hasData ? AlignUp(dataSize, SectionAlignment) : 0;
 
+    var ucddataSize = (uint)ucddata.Length;
+    var ucddataSizeAligned = hasUcddata ? AlignUp(ucddataSize, FileAlignment) : 0;
+    var ucddataSizeVirtual = hasUcddata ? AlignUp(ucddataSize, SectionAlignment) : 0;
+
     var symdataSize = (uint)symdata.Length;
     var symdataSizeAligned = hasSymdata ? AlignUp(symdataSize, FileAlignment) : 0;
     var symdataSizeVirtual = hasSymdata ? AlignUp(symdataSize, SectionAlignment) : 0;
@@ -69,11 +76,12 @@ public class PeWriter {
     var idataSizeAligned = hasImports ? AlignUp(idataSize, FileAlignment) : 0;
     var idataSizeVirtual = hasImports ? AlignUp(idataSize, SectionAlignment) : 0;
 
-    // Section RVAs: .text -> .rdata -> .data -> .symtab -> .idata
+    // Section RVAs: .text -> .rdata -> .data -> .ucd -> .symtab -> .idata
     var textRva = SectionAlignment;  // .text section starts at section alignment
     var rdataRva = textRva + codeSizeVirtual;  // .rdata section follows .text
     var dataRva = rdataRva + rdataSizeVirtual;  // .data section follows .rdata
-    var symdataRva = dataRva + dataSizeVirtual;  // .symtab section follows .data
+    var ucddataRva = dataRva + dataSizeVirtual;  // .ucd section follows .data
+    var symdataRva = ucddataRva + ucddataSizeVirtual;  // .symtab section follows .ucd
     var idataRva = symdataRva + symdataSizeVirtual;  // .idata section follows .symtab
 
     // Adjust RVAs in import section data for actual position
@@ -86,13 +94,15 @@ public class PeWriter {
     // Calculate image size (last section RVA + its virtual size)
     var imageSize = idataRva + idataSizeVirtual;
     if (!hasImports) imageSize = symdataRva + symdataSizeVirtual;
-    if (!hasSymdata && !hasImports) imageSize = dataRva + dataSizeVirtual;
-    if (!hasData && !hasSymdata && !hasImports) imageSize = rdataRva + rdataSizeVirtual;
-    if (!hasRdata && !hasData && !hasSymdata && !hasImports) imageSize = textRva + codeSizeVirtual;
+    if (!hasSymdata && !hasImports) imageSize = ucddataRva + ucddataSizeVirtual;
+    if (!hasUcddata && !hasSymdata && !hasImports) imageSize = dataRva + dataSizeVirtual;
+    if (!hasData && !hasUcddata && !hasSymdata && !hasImports) imageSize = rdataRva + rdataSizeVirtual;
+    if (!hasRdata && !hasData && !hasUcddata && !hasSymdata && !hasImports) imageSize = textRva + codeSizeVirtual;
 
     Logger.Debug(LogCategory.Pe, $"Code section: {codeSize} bytes at RVA 0x{textRva:X}");
     if (hasRdata) Logger.Debug(LogCategory.Pe, $"Rdata section: {rdataSize} bytes at RVA 0x{rdataRva:X}");
     if (hasData) Logger.Debug(LogCategory.Pe, $"Data section: {dataSize} bytes at RVA 0x{dataRva:X}");
+    if (hasUcddata) Logger.Debug(LogCategory.Pe, $"Ucddata section: {ucddataSize} bytes at RVA 0x{ucddataRva:X}");
     if (hasSymdata) Logger.Debug(LogCategory.Pe, $"Symdata section: {symdataSize} bytes at RVA 0x{symdataRva:X}");
     if (hasImports) Logger.Debug(LogCategory.Pe, $"Import section: {idataSize} bytes at RVA 0x{idataRva:X}");
 
@@ -118,7 +128,7 @@ public class PeWriter {
     writer.Write((byte)14);          // MajorLinkerVersion
     writer.Write((byte)0);           // MinorLinkerVersion
     writer.Write(codeSizeAligned);   // SizeOfCode
-    writer.Write(dataSizeAligned + symdataSizeAligned + idataSizeAligned);  // SizeOfInitializedData
+    writer.Write(dataSizeAligned + ucddataSizeAligned + symdataSizeAligned + idataSizeAligned);  // SizeOfInitializedData
     writer.Write((uint)0);           // SizeOfUninitializedData
     writer.Write(textRva);           // AddressOfEntryPoint (RVA of code)
     writer.Write(textRva);           // BaseOfCode
@@ -182,6 +192,13 @@ public class PeWriter {
       currentRawDataPos += dataSizeAligned;
     }
 
+    // Section Header: .ucd (if present) — read-only Unicode Character Database tables
+    if (hasUcddata) {
+      // 0x40000040 = IMAGE_SCN_CNT_INITIALIZED_DATA | IMAGE_SCN_MEM_READ
+      WriteSectionHeader(writer, ".ucd", ucddataSize, ucddataRva, ucddataSizeAligned, currentRawDataPos, 0x40000040);
+      currentRawDataPos += ucddataSizeAligned;
+    }
+
     // Section Header: .symtab (if present) — read-write because runtime counters (e.g. scope depth) are updated at execution time
     if (hasSymdata) {
       WriteSectionHeader(writer, ".symtab", symdataSize, symdataRva, symdataSizeAligned, currentRawDataPos, 0xC0000040);
@@ -225,6 +242,15 @@ public class PeWriter {
       }
     }
 
+    // .ucd section (Unicode Character Database tables)
+    if (hasUcddata) {
+      writer.Write(ucddata);
+      var ucddataPadding = ucddataSizeAligned - ucddataSize;
+      if (ucddataPadding > 0) {
+        writer.Write(new byte[ucddataPadding]);
+      }
+    }
+
     // .symtab section (symbol table for stack traces)
     if (hasSymdata) {
       writer.Write(symdata);
@@ -246,7 +272,7 @@ public class PeWriter {
     // COFF symbol table — appended after all sections, referenced by COFF header
     if (coffSymbols != null && coffSymbols.Count > 0) {
       WriteCoffSymbolTable(fs, writer, coffSymbols, codeSize,
-        hasRdata, rdataSize, hasData, dataSize, hasSymdata, symdataSize, hasImports, idataSize);
+        hasRdata, rdataSize, hasData, dataSize, hasUcddata, ucddataSize, hasSymdata, symdataSize, hasImports, idataSize);
     }
 
     Logger.Debug(LogCategory.Pe, "PE write complete");
@@ -259,7 +285,7 @@ public class PeWriter {
   private static void WriteCoffSymbolTable(FileStream fs, BinaryWriter writer,
     IReadOnlyList<CoffSymbol> coffSymbols, uint codeSize,
     bool hasRdata, uint rdataSize, bool hasData, uint dataSize,
-    bool hasSymdata, uint symdataSize, bool hasImports, uint idataSize) {
+    bool hasUcddata, uint ucddataSize, bool hasSymdata, uint symdataSize, bool hasImports, uint idataSize) {
 
     var symbolTableOffset = (uint)fs.Position;
 
@@ -272,12 +298,14 @@ public class PeWriter {
     var sectionNames = new List<string> { ".text" };
     if (hasRdata) sectionNames.Add(".rdata");
     if (hasData) sectionNames.Add(".data");
+    if (hasUcddata) sectionNames.Add(".ucd");
     if (hasSymdata) sectionNames.Add(".symtab");
     if (hasImports) sectionNames.Add(".idata");
 
     var sectionSizes = new List<uint> { codeSize };
     if (hasRdata) sectionSizes.Add(rdataSize);
     if (hasData) sectionSizes.Add(dataSize);
+    if (hasUcddata) sectionSizes.Add(ucddataSize);
     if (hasSymdata) sectionSizes.Add(symdataSize);
     if (hasImports) sectionSizes.Add(idataSize);
 

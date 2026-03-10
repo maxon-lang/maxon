@@ -42,6 +42,11 @@ public partial class X86CodeEmitter() {
   private readonly Dictionary<string, int> _symdataLabels = [];
   private readonly List<(int offset, string label)> _symdataFixups = [];
 
+  // Ucddata section: Unicode Character Database tables (read-only, separate from rdata)
+  private readonly List<byte> _ucddata = [];
+  private readonly Dictionary<string, int> _ucddataLabels = [];
+  private readonly List<(int offset, string label)> _ucddataFixups = [];
+
   // Chkstk call sites for patching
   private readonly List<int> _chkstkCallSites = [];
 
@@ -52,6 +57,7 @@ public partial class X86CodeEmitter() {
   public bool HasGlobals => _data.Count > 0;
   public bool HasImports => _imports.Count > 0;
   public bool HasSymdata => _symdata.Count > 0;
+  public bool HasUcddata => _ucddata.Count > 0;
 
   // --- Label management ---
 
@@ -92,6 +98,15 @@ public partial class X86CodeEmitter() {
     }
     _symdataLabels[label] = _symdata.Count;
     _symdata.AddRange(bytes);
+  }
+
+  public void DefineUcddata(string label, byte[] bytes, int alignment = 1) {
+    if (alignment > 1) {
+      var padding = (alignment - (_ucddata.Count % alignment)) % alignment;
+      for (var i = 0; i < padding; i++) _ucddata.Add(0);
+    }
+    _ucddataLabels[label] = _ucddata.Count;
+    _ucddata.AddRange(bytes);
   }
 
   public void DefineGlobal(string name, int size, long initValue) {
@@ -299,6 +314,9 @@ public partial class X86CodeEmitter() {
         break;
       case X86LeaSymdataRelOp leaSymdata:
         EmitLeaRegSymdataRel(leaSymdata.Dest, leaSymdata.SymdataLabel);
+        break;
+      case X86LeaUcddataRelOp leaUcdOp:
+        EmitLeaRegUcddataRel(leaUcdOp.Dest, leaUcdOp.UcddataLabel);
         break;
       case X86LeaFuncAddrOp leaFunc:
         EmitLeaFuncAddr(leaFunc.Dest, leaFunc.FunctionName);
@@ -510,6 +528,18 @@ public partial class X86CodeEmitter() {
     }
   }
 
+  public void ResolveUcddata(int rvaOffset) {
+    var codeSize = _code.Count;
+    foreach (var (offset, label) in _ucddataFixups) {
+      if (!_ucddataLabels.TryGetValue(label, out var ucddataOffset)) {
+        throw new InvalidOperationException($"Unresolved ucddata label: {label}");
+      }
+      var target = codeSize + rvaOffset + ucddataOffset;
+      var rel = target - (offset + 4);
+      PatchDword(offset, rel);
+    }
+  }
+
   public void ResolveGlobals(int rvaOffset) {
     var codeSize = _code.Count;
     foreach (var (offset, name) in _globalFixups) {
@@ -598,6 +628,7 @@ public partial class X86CodeEmitter() {
   public byte[] GetRdata() => [.. _rdata];
   public byte[] GetData() => [.. _data];
   public byte[] GetSymdata() => [.. _symdata];
+  public byte[] GetUcddata() => [.. _ucddata];
 
   // --- Private helpers ---
 
@@ -1343,6 +1374,16 @@ public partial class X86CodeEmitter() {
     EmitByte(0x8D);
     EmitByte((byte)(0x05 | (RegCode(dest) << 3)));
     _symdataFixups.Add((_code.Count, symdataLabel));
+    EmitDword(0);
+  }
+
+  private void EmitLeaRegUcddataRel(X86Register dest, string ucddataLabel) {
+    RequireGpr(dest, nameof(EmitLeaRegUcddataRel));
+    // LEA r64, [rip+disp32]: same encoding as rdata, but fixup resolves against ucddata section
+    Rex.W().Reg(dest).Emit(this);
+    EmitByte(0x8D);
+    EmitByte((byte)(0x05 | (RegCode(dest) << 3)));
+    _ucddataFixups.Add((_code.Count, ucddataLabel));
     EmitDword(0);
   }
 

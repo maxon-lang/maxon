@@ -16,6 +16,7 @@ public static class StandardToX86Conversion {
     var result = new MlirModule<X86Op>();
     result.RdataEntries.AddRange(module.RdataEntries);
     result.SymdataEntries.AddRange(module.SymdataEntries);
+    result.UcddataEntries.AddRange(module.UcddataEntries);
     result.Globals.AddRange(module.Globals);
     result.TagTable = module.TagTable;
     foreach (var (k, v) in module.TypeDefs) result.TypeDefs[k] = v;
@@ -843,6 +844,11 @@ public static class StandardToX86Conversion {
 
           case StdLeaSymdataOp leaSymdataOp: {
             regManager.EmitLeaSymdataRelative(leaSymdataOp.Result, leaSymdataOp.SymdataLabel, x86Block);
+            break;
+          }
+
+          case StdLeaUcddataOp leaUcddataOp: {
+            regManager.EmitLeaUcddataRelative(leaUcddataOp.Result, leaUcddataOp.UcddataLabel, x86Block);
             break;
           }
 

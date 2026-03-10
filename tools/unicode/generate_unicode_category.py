@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 """
-Generate _unicode_category.maxon from DerivedGeneralCategory.txt.
+Generate binary Unicode category lookup tables and a compact Maxon source file.
 
-Reads Unicode General Category data and produces a page-based dispatch function
-in Maxon that maps codepoints to their General Category integer code.
+Produces:
+  - stdlib/helpers/string/ucd_bmp.bin   (65536 bytes, flat BMP table)
+  - stdlib/helpers/string/ucd_supp.bin  (N*8 bytes, sorted supplementary ranges)
+  - stdlib/helpers/string/_unicode_category.maxon (~65 lines)
 
 Usage:
     python3 tools/unicode/generate_unicode_category.py
@@ -11,7 +13,7 @@ Usage:
 
 import re
 import os
-from collections import defaultdict
+import struct
 
 # Category name -> integer constant (skip Cn=0 which is the default)
 CATEGORY_CODES = {
@@ -72,67 +74,66 @@ def parse_derived_general_category(filepath):
                 continue
             entries.append((start, end, cat))
 
-    # Sort by start codepoint
     entries.sort(key=lambda x: x[0])
     return entries
 
 
-def split_ranges_by_page(entries):
-    """Split ranges at page boundaries and group by page.
-
-    A page is codepoint >> 8. Ranges that span multiple pages are split.
-    Returns dict: page_number -> list of (start, end, category_code).
-    """
-    pages = defaultdict(list)
-
+def build_bmp_table(entries):
+    """Build a flat 65536-byte BMP lookup table."""
+    table = bytearray(65536)
     for start, end, cat in entries:
         code = CATEGORY_CODES[cat]
-        s = start
-        while s <= end:
-            page = s >> 8
-            page_end = (page << 8) | 0xFF
-            chunk_end = min(end, page_end)
-            pages[page].append((s, chunk_end, code))
-            s = chunk_end + 1
-
-    return pages
-
-
-def merge_adjacent_ranges(ranges):
-    """Merge adjacent ranges with the same category code within a page."""
-    if not ranges:
-        return ranges
-
-    # Sort by start
-    ranges.sort(key=lambda x: x[0])
-    merged = [ranges[0]]
-
-    for start, end, code in ranges[1:]:
-        prev_start, prev_end, prev_code = merged[-1]
-        if code == prev_code and start == prev_end + 1:
-            merged[-1] = (prev_start, end, code)
-        else:
-            merged.append((start, end, code))
-
-    return merged
+        # Clamp to BMP range
+        s = max(start, 0)
+        e = min(end, 0xFFFF)
+        if s > 0xFFFF:
+            continue
+        for cp in range(s, e + 1):
+            table[cp] = code
+    return table
 
 
-def generate_maxon(entries, output_path):
-    """Generate the Maxon source file."""
-    pages = split_ranges_by_page(entries)
+def build_supp_table(entries):
+    """Build sorted supplementary range table for codepoints >= 0x10000.
 
-    # Merge adjacent ranges within each page
-    for page in pages:
-        pages[page] = merge_adjacent_ranges(pages[page])
+    Each entry is a little-endian uint64 packed as:
+      bits  0-20: start codepoint (21 bits)
+      bits 21-41: end codepoint (21 bits)
+      bits 42-46: category code (5 bits)
+    """
+    supp_entries = []
+    for start, end, cat in entries:
+        code = CATEGORY_CODES[cat]
+        # Only supplementary codepoints
+        s = max(start, 0x10000)
+        e = end
+        if e < 0x10000:
+            continue
+        # Pack into uint64
+        packed = (s & 0x1FFFFF) | ((e & 0x1FFFFF) << 21) | ((code & 0x1F) << 42)
+        supp_entries.append((s, packed))
 
+    # Sort by start codepoint
+    supp_entries.sort(key=lambda x: x[0])
+
+    # Pack into binary
+    data = bytearray()
+    for _, packed in supp_entries:
+        data.extend(struct.pack('<Q', packed))
+
+    return data, len(supp_entries)
+
+
+def generate_maxon(supp_count, output_path):
+    """Generate the compact Maxon source file."""
     lines = []
 
-    # Header
     lines.append("// Auto-generated Unicode General Category lookup table")
     lines.append("// Source: DerivedGeneralCategory-16.0.0.txt")
+    lines.append(f"// Binary data: ucd_bmp.bin (65536 bytes), ucd_supp.bin ({supp_count} entries)")
     lines.append("// Do not edit manually - regenerate with tools/unicode/generate_unicode_category.py")
     lines.append("")
-    lines.append("typealias GeneralCategory = int(0 to 30)")
+    lines.append("typealias GeneralCategory = int(0 to 29)")
     lines.append("")
 
     # Category constants
@@ -145,33 +146,34 @@ def generate_maxon(entries, output_path):
     lines.append("// Category bitmask helpers for CharacterSet")
     for mask_name, cats in MASK_DEFS.items():
         val = compute_mask(cats)
-        comment_parts = "|".join(cats)
-        lines.append(f"let {mask_name} = {val}  // {comment_parts}")
+        lines.append(f"let {mask_name} = {val}")
     lines.append("")
 
-    # Main function
+    lines.append(f"let _UCD_SUPP_COUNT = {supp_count}")
+    lines.append("")
+
+    # Main function with binary-search lookup
     lines.append("export function unicodeGeneralCategory(cp Codepoint) returns GeneralCategory")
-    lines.append("  var page = cp shr 8")
-
-    sorted_pages = sorted(pages.keys())
-
-    for page_num in sorted_pages:
-        ranges = pages[page_num]
-        page_label = f"page_0x{page_num:02X}"
-        lines.append(f"  if page == {page_num} '{page_label}'")
-
-        for start, end, code in ranges:
-            label = f"r_{start:04X}"
-            if start == end:
-                lines.append(f"    if cp == 0x{start:04X} '{label}'")
-            else:
-                lines.append(f"    if cp >= 0x{start:04X} and cp <= 0x{end:04X} '{label}'")
-            lines.append(f"      return {code}")
-            lines.append(f"    end '{label}'")
-
-        lines.append(f"    return 0")
-        lines.append(f"  end '{page_label}'")
-
+    lines.append("  if cp < 65536 'bmp'")
+    lines.append('    return __Builtins.ucdByteAt("__ucd_bmp", cp)')
+    lines.append("  end 'bmp'")
+    lines.append("  var lo = 0")
+    lines.append("  var hi = _UCD_SUPP_COUNT - 1")
+    lines.append("  while lo <= hi 'bsearch'")
+    lines.append("    var mid = (lo + hi) shr 1")
+    lines.append('    var entry = __Builtins.ucdI64At("__ucd_supp", mid)')
+    lines.append("    var rangeStart = entry and 2097151")
+    lines.append("    var rangeEnd = (entry shr 21) and 2097151")
+    lines.append("    if cp < rangeStart 'left'")
+    lines.append("      hi = mid - 1")
+    lines.append("    end 'left' else 'not_left'")
+    lines.append("      if cp > rangeEnd 'right'")
+    lines.append("        lo = mid + 1")
+    lines.append("      end 'right' else 'found'")
+    lines.append("        return (entry shr 42) and 31")
+    lines.append("      end 'found'")
+    lines.append("    end 'not_left'")
+    lines.append("  end 'bsearch'")
     lines.append("  return 0")
     lines.append("end 'unicodeGeneralCategory'")
     lines.append("")
@@ -179,13 +181,18 @@ def generate_maxon(entries, output_path):
     with open(output_path, "w", encoding="utf-8", newline="\n") as f:
         f.write("\n".join(lines))
 
+    return len(lines)
+
 
 def main():
     script_dir = os.path.dirname(os.path.abspath(__file__))
     repo_root = os.path.dirname(os.path.dirname(script_dir))
 
     input_path = os.path.join(script_dir, "DerivedGeneralCategory.txt")
-    output_path = os.path.join(repo_root, "stdlib", "helpers", "string", "_unicode_category.maxon")
+    output_dir = os.path.join(repo_root, "stdlib", "helpers", "string")
+    bmp_path = os.path.join(output_dir, "ucd_bmp.bin")
+    supp_path = os.path.join(output_dir, "ucd_supp.bin")
+    maxon_path = os.path.join(output_dir, "_unicode_category.maxon")
 
     if not os.path.exists(input_path):
         print(f"Error: {input_path} not found")
@@ -194,13 +201,47 @@ def main():
     entries = parse_derived_general_category(input_path)
     print(f"Parsed {len(entries)} ranges (excluding Cn)")
 
-    generate_maxon(entries, output_path)
+    # Count BMP and supplementary ranges
+    bmp_ranges = sum(1 for s, e, _ in entries if s <= 0xFFFF)
+    supp_ranges = sum(1 for s, e, _ in entries if e >= 0x10000)
+    print(f"  BMP ranges: {bmp_ranges}")
+    print(f"  Supplementary ranges: {supp_ranges}")
 
-    # Print some stats
-    pages = split_ranges_by_page(entries)
-    total_ranges = sum(len(v) for v in pages.values())
-    print(f"Generated {len(pages)} pages with {total_ranges} total ranges")
-    print(f"Output: {output_path}")
+    # Build BMP table
+    bmp_table = build_bmp_table(entries)
+    with open(bmp_path, "wb") as f:
+        f.write(bmp_table)
+    print(f"Wrote {len(bmp_table)} bytes to {bmp_path}")
+
+    # Count non-zero BMP entries
+    bmp_assigned = sum(1 for b in bmp_table if b != 0)
+    print(f"  BMP codepoints with category: {bmp_assigned}")
+
+    # Build supplementary table
+    supp_data, supp_count = build_supp_table(entries)
+    with open(supp_path, "wb") as f:
+        f.write(supp_data)
+    print(f"Wrote {len(supp_data)} bytes ({supp_count} entries) to {supp_path}")
+
+    # Generate Maxon source
+    line_count = generate_maxon(supp_count, maxon_path)
+    print(f"Wrote {line_count} lines to {maxon_path}")
+
+    # Verify packing round-trip for first few supplementary entries
+    supp_entries_raw = [(s, e, c) for s, e, c in entries if s >= 0x10000]
+    if supp_entries_raw:
+        first = supp_entries_raw[0]
+        s, e, cat = first
+        code = CATEGORY_CODES[cat]
+        packed = (s & 0x1FFFFF) | ((e & 0x1FFFFF) << 21) | ((code & 0x1F) << 42)
+        rt_start = packed & 0x1FFFFF
+        rt_end = (packed >> 21) & 0x1FFFFF
+        rt_code = (packed >> 42) & 0x1F
+        assert rt_start == s, f"Round-trip failed for start: {rt_start:#x} != {s:#x}"
+        assert rt_end == e, f"Round-trip failed for end: {rt_end:#x} != {e:#x}"
+        assert rt_code == code, f"Round-trip failed for code: {rt_code} != {code}"
+        print(f"Packing round-trip verified (first entry: U+{s:04X}..U+{e:04X} = {cat})")
+
     return 0
 
 

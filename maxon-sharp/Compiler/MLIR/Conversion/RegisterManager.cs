@@ -1305,6 +1305,11 @@ public class RegisterManager {
     block.AddOp(new X86LeaSymdataRelOp(gpr, symdataLabel));
   }
 
+  public void EmitLeaUcddataRelative(StdPtr result, string ucddataLabel, MlirBlock<X86Op> block) {
+    var gpr = AllocateRegister(result, block);
+    block.AddOp(new X86LeaUcddataRelOp(gpr, ucddataLabel));
+  }
+
   /// <summary>
   /// Move one value to another (same register, type reinterpretation).
   /// Used for StdPtrToI64Op where the value is the same register.
