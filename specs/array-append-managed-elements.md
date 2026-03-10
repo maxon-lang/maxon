@@ -94,7 +94,6 @@ function main() returns ExitCode
         sub(_) then return 98
         nop then return 97
     end 'check'
-    return 0
 end 'main'
 ```
 ```exitcode

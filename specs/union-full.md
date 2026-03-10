@@ -1062,7 +1062,6 @@ function main() returns ExitCode
     Color.Green then return 2
     Color.Blue then return 3
   end 'check'
-  return 0
 end 'main'
 ```
 ```exitcode

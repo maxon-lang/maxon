@@ -85,6 +85,7 @@ public enum ErrorCode {
   SemanticRefIdentityOnPrimitive = 3068,
   SemanticEqRequiresEquatable = 3069,
   SemanticBorrowConflict = 3070,
+  SemanticUnreachableCode = 3071,
 
   // MLIR pipeline errors (4xxx) - Stage 4
   MlirUnsupportedExpression = 4001,

@@ -42,7 +42,6 @@ function main() returns ExitCode
         walk(dir) then return directionValue(dir)
         stay then return 0
     end 'act'
-    return 0
 end 'main'
 ```
 ```exitcode

@@ -4886,6 +4886,12 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       // becomes null. Create a dead block so subsequent unreachable code can still
       // be parsed for syntax validation without crashing.
       if (_currentBlock == null) {
+        if (!wasDeadCode) {
+          var unreachable = Current();
+          throw new CompileError(ErrorCode.SemanticUnreachableCode,
+            "unreachable code after exhaustive match or branching where all paths return/throw",
+            unreachable.Line, unreachable.Column);
+        }
         wasDeadCode = true;
         var deadLabel = $"__dead_{_blockCounter++}";
         _currentBlock = _currentFunction!.Body.AddBlock(deadLabel);
@@ -9097,9 +9103,8 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
         hasDefault = true;
         defaultSeen = true;
 
-        // For enum/union matches, 'default then' must be followed by 'throws <error>' or 'panic("message")'.
+        // For enum/union matches, 'default' must be followed by 'throws <error>' or 'panic("message")'.
         if (enumType != null) {
-          Expect(TokenType.Then);
           if (Check(TokenType.Throws)) {
             ParseDefaultThrowsCase(defaultToken, matchLabel, caseIndex, cmpBlocks, caseBlocks, caseIsDefault, caseFallthrough, caseOuterScopes);
           } else if (Check(TokenType.Panic)) {
@@ -9289,9 +9294,8 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
         hasDefault = true;
         defaultSeen = true;
 
-        // For enum/union matches, 'default then' must be followed by 'throws <error>' or 'panic("message")'.
+        // For enum/union matches, 'default' must be followed by 'throws <error>' or 'panic("message")'.
         if (enumType != null) {
-          Expect(TokenType.Then);
           if (Check(TokenType.Throws)) {
             ParseDefaultThrowsCase(defaultToken, matchLabel, caseIndex, cmpBlocks, caseBlocks, caseIsDefault, caseFallthrough: null, caseOuterScopes: null);
           } else if (Check(TokenType.Panic)) {

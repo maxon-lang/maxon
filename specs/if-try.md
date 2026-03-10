@@ -257,7 +257,6 @@ function main() returns ExitCode
   end 'check' else 'err'
     return 77
   end 'err'
-  return 0
 end 'main'
 ```
 ```exitcode
@@ -286,7 +285,6 @@ function main() returns ExitCode
   end 'check' else 'err'
     return 77
   end 'err'
-  return 0
 end 'main'
 ```
 ```exitcode

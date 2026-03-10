@@ -437,7 +437,6 @@ function main() returns ExitCode
     TokenKind.Function then return 1
     TokenKind.Var then return 2
   end 'match'
-  return 0
 end 'main'
 ```
 ```exitcode

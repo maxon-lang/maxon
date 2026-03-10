@@ -104,7 +104,6 @@ function main() returns ExitCode
         number(n) then return n
         text(_) then return 0
     end 'check'
-    return 0
 end 'main'
 ```
 ```exitcode

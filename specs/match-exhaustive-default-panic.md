@@ -9,11 +9,11 @@ category: control-flow
 
 ## Documentation
 
-All match statements and expressions must be exhaustive. For enum and union types, this means every case must be explicitly covered, or a `default then throws` / `default then panic` must be provided. For other types (integers, strings, floats, characters), a `default` arm is always required since all values cannot be enumerated.
+All match statements and expressions must be exhaustive. For enum and union types, this means every case must be explicitly covered, or a `default throws` / `default panic` must be provided. For other types (integers, strings, floats, characters), a `default` arm is always required since all values cannot be enumerated.
 
 ### `default panic("message")`
 
-Use `default panic("message")` (or `default then panic("message")` for enum/union matches) when unmatched cases represent a programming error that should terminate the program immediately. Unlike `default then throws`, which throws a recoverable error, `default panic` halts the program with an error message and stack trace.
+Use `default panic("message")` when unmatched cases represent a programming error that should terminate the program immediately. Unlike `default throws`, which throws a recoverable error, `default panic` halts the program with an error message and stack trace.
 
 ```text
 match statusCode 'handle'
@@ -28,7 +28,7 @@ This works with both match statements and match expressions, and with all scruti
 ```text
 match color 'check'
     Color.red then print("red")
-    default then panic("unhandled color")
+    default panic("unhandled color")
 end 'check'
 ```
 
@@ -99,7 +99,7 @@ function main() returns ExitCode
   var c = Color.red
   match c 'check'
     Color.red then return 1
-    default then panic("unhandled color")
+    default panic("unhandled color")
   end 'check'
 end 'main'
 ```
@@ -120,7 +120,7 @@ function main() returns ExitCode
   let result = match c 'eval'
     Color.red gives 1
     Color.green gives 2
-    default then panic("unhandled color")
+    default panic("unhandled color")
   end 'eval'
   return result
 end 'main'
@@ -144,7 +144,7 @@ function main() returns ExitCode
   var op = Op.sub
   match op 'check'
     add to mul then return 1
-    default then panic("unexpected op")
+    default panic("unexpected op")
   end 'check'
 end 'main'
 ```
@@ -168,7 +168,7 @@ function main() returns ExitCode
   let result = match op 'eval'
     add to sub gives 1
     mul gives 2
-    default then panic("unexpected op")
+    default panic("unexpected op")
   end 'eval'
   return result
 end 'main'

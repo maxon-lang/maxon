@@ -220,11 +220,10 @@ end 'lowerPrintInt'
 // Lower func ops (non-terminator: just call).
 // After a call, the return value is in rax — store it to a temp slot so later ops can find it.
 function lowerFuncOp(op FuncOp, dstBlock MlirBlock, valueSlots ValueSlotMap, nextTempSlot SlotIndex) returns SlotIndex
-    match op 'lower'
-        call(resultId, callee) then return lowerCallOp(resultId, callee: callee, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
-        ret(_) then break 'lower'
+    return match op 'lower'
+        call(resultId, callee) gives lowerCallOp(resultId, callee: callee, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
+        ret(_) gives nextTempSlot
     end 'lower'
-    return nextTempSlot
 end 'lowerFuncOp'
 
 function lowerCallOp(resultId ValueId, callee ByteArray, dstBlock MlirBlock, valueSlots ValueSlotMap, nextTempSlot SlotIndex) returns SlotIndex

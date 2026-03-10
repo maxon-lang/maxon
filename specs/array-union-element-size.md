@@ -66,7 +66,6 @@ function main() returns ExitCode
         sub(_) then return 99
         nop then return 98
     end 'check'
-    return 0
 end 'main'
 ```
 ```exitcode
@@ -98,7 +97,6 @@ function main() returns ExitCode
         sub(_) then return 99
         nop then return 98
     end 'check'
-    return 0
 end 'main'
 ```
 ```exitcode
@@ -129,7 +127,6 @@ function checkFirst(ops MlirOpArray) returns Integer
         arith(v) then return v
         cf(_) then return 99
     end 'checkFirst'
-    return 0
 end 'checkFirst'
 
 function checkMid(ops MlirOpArray) returns Integer
@@ -138,7 +135,6 @@ function checkMid(ops MlirOpArray) returns Integer
         cf(_) then return 1
         arith(_) then return 0
     end 'checkMid'
-    return 0
 end 'checkMid'
 
 function main() returns ExitCode
@@ -216,7 +212,6 @@ function main() returns ExitCode
         arith(v) then return v
         cf(_) then return 99
     end 'check'
-    return 0
 end 'main'
 ```
 ```exitcode

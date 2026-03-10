@@ -1276,7 +1276,7 @@ end 'check2'
 
 ### Match
 
-Enum matches require exhaustive case coverage — all cases must be matched by explicit patterns or range patterns. Plain `default` is not allowed; use `default then throws` or `default then panic("message")` if you want a catch-all:
+Enum matches require exhaustive case coverage — all cases must be matched by explicit patterns or range patterns. Plain `default` is not allowed; use `default throws` or `default panic("message")` if you want a catch-all:
 
 ```maxon
 // Exhaustive: all cases listed
@@ -2086,7 +2086,7 @@ end 'handle'
 - `break` exits the match statement (or a labeled enclosing loop/match)
 - `and fallthrough` continues to the next case (skipping its pattern check)
 - `and fallthrough` cannot be combined with `return`
-- For enums and unions, all cases must be covered (error E2026) — plain `default` is not allowed (error E2046). This is a deliberate design choice: when a new case is added to an enum or union, a plain `default` arm would silently swallow it, hiding bugs that can be subtle and difficult to track down. By requiring exhaustive coverage, the compiler forces every match site to be reviewed when cases change, ensuring new variants are handled intentionally. To cover cases you don't need to handle individually, use range patterns with `break` (see [Union Match Range Patterns](#union-match-range-patterns) below), or use `default then throws` / `default then panic("message")` to signal that unhandled cases are errors (see [Default Throws / Default Panic in Match](#default-throws--default-panic-in-match) below). Enums support range patterns (`EnumType.case1 to EnumType.case2`). Unions with associated values support range patterns on bare case names (`caseName1 to caseName2`).
+- For enums and unions, all cases must be covered (error E2026) — plain `default` is not allowed (error E2046). This is a deliberate design choice: when a new case is added to an enum or union, a plain `default` arm would silently swallow it, hiding bugs that can be subtle and difficult to track down. By requiring exhaustive coverage, the compiler forces every match site to be reviewed when cases change, ensuring new variants are handled intentionally. To cover cases you don't need to handle individually, use range patterns with `break` (see [Union Match Range Patterns](#union-match-range-patterns) below), or use `default throws` / `default panic("message")` to signal that unhandled cases are errors (see [Default Throws / Default Panic in Match](#default-throws--default-panic-in-match) below). Enums support range patterns (`EnumType.case1 to EnumType.case2`). Unions with associated values support range patterns on bare case names (`caseName1 to caseName2`).
 - Overlapping patterns are reported as errors (error E2027).
 - All matches must be exhaustive. For non-enum/union matches (int, float, string, char), a `default` arm is required.
 - `default` matches any non-enum/union value not matched by previous patterns
@@ -2229,10 +2229,10 @@ match level 'filter'
 end 'filter'
 ```
 
-2. **`default then throws` or `default then panic("message")`**: When unhandled cases represent genuine errors that should not occur silently:
+2. **`default throws` or `default panic("message")`**: When unhandled cases represent genuine errors that should not occur silently:
 
-- **`default then throws`** throws the specified error when no other case matches. The enclosing function must declare `throws ErrorType` to use this feature. The error is catchable by the caller.
-- **`default then panic("message")`** terminates the program with an error message when no other case matches. This is not catchable and should be used for cases that represent programming errors.
+- **`default throws`** throws the specified error when no other case matches. The enclosing function must declare `throws ErrorType` to use this feature. The error is catchable by the caller.
+- **`default panic("message")`** terminates the program with an error message when no other case matches. This is not catchable and should be used for cases that represent programming errors.
 
 Both forms work in all match types (enum, union, and primitive types).
 
@@ -2243,7 +2243,7 @@ function handleShape(shape Shape) throws ShapeError
     match shape 'draw'
         circle(r) then drawCircle(r)
         square(s) then drawSquare(s)
-        default then throws ShapeError.unsupported
+        default throws ShapeError.unsupported
     end 'draw'
 end 'handleShape'
 ```
@@ -2257,7 +2257,7 @@ function handleShape(shape Shape)
     match shape 'draw'
         circle(r) then drawCircle(r)
         square(s) then drawSquare(s)
-        default then panic("unsupported shape")
+        default panic("unsupported shape")
     end 'draw'
 end 'handleShape'
 ```
@@ -2271,7 +2271,7 @@ function describeShape(shape Shape) returns String throws ShapeError
     let desc = match shape 'describe'
         circle(r) gives "circle with radius {r}"
         square(s) gives "square with side {s}"
-        default then throws ShapeError.unsupported
+        default throws ShapeError.unsupported
     end 'describe'
     return desc
 end 'describeShape'
@@ -2294,7 +2294,7 @@ function getArea(shape Shape) returns float throws ShapeError
     return match shape 'calc'
         circle(r) gives 3.14159 * r * r
         square(s) gives s * s
-        default then throws ShapeError.unsupported
+        default throws ShapeError.unsupported
     end 'calc'
 end 'getArea'
 
@@ -2307,9 +2307,9 @@ end 'main'
 ```
 
 **Notes:**
-- `default then throws` and `default then panic("message")` are the only forms of `default` allowed in enum and union matches -- `default` with arbitrary code on enums/unions is forbidden (error E2046)
-- For `default then throws`: the error value must be a valid union case of an `Error`-conforming type, the enclosing function must declare `throws` with a matching error type, and callers must handle the thrown error using `try ... otherwise` or `try` propagation
-- For `default then panic("message")`: the program terminates immediately with the given message. No `throws` declaration is required.
+- `default throws` and `default panic("message")` are the only forms of `default` allowed in enum and union matches -- `default` with arbitrary code on enums/unions is forbidden (error E2046)
+- For `default throws`: the error value must be a valid union case of an `Error`-conforming type, the enclosing function must declare `throws` with a matching error type, and callers must handle the thrown error using `try ... otherwise` or `try` propagation
+- For `default panic("message")`: the program terminates immediately with the given message. No `throws` declaration is required.
 - Supports all the same features as regular match: associated value extraction, `and fallthrough`, `break`, etc.
 - For non-enum/union matches, `default` with arbitrary code remains valid as before
 

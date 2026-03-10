@@ -33,7 +33,6 @@ function checkPrimary(p Palette) returns bool
         red(_) then return true
         blue then return false
     end 'mc'
-    return false
 end 'checkPrimary'
 
 function main() returns ExitCode
@@ -67,7 +66,6 @@ function isCircle(d Drawing) returns bool
         circle(_) then return true
         square(_) then return false
     end 'ms'
-    return false
 end 'isCircle'
 
 function main() returns ExitCode
@@ -102,7 +100,6 @@ function getNumber(c Container) returns SmallInt
         number(n) then return n
         empty then return 0
     end 'mv'
-    return 0
 end 'getNumber'
 
 function main() returns ExitCode

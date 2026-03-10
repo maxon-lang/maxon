@@ -1,7 +1,7 @@
 ---
 feature: union-match-only
 status: experimental
-keywords: [union, match, default then throws, exhaustive, comparison]
+keywords: [union, match, default throws, exhaustive, comparison]
 category: type-system
 ---
 
@@ -28,9 +28,9 @@ match dir 'check'
 end 'check'
 ```
 
-### Non-Exhaustive Match with `default then throws`
+### Non-Exhaustive Match with `default throws`
 
-When you intentionally want to handle only a subset of union cases, use `default then throws` as the last case. Unlike `default` with arbitrary code (which is forbidden on unions), `default then throws` explicitly declares that unmatched cases throw an error that callers must handle.
+When you intentionally want to handle only a subset of union cases, use `default throws` as the last case. Unlike `default` with arbitrary code (which is forbidden on unions), `default throws` explicitly declares that unmatched cases throw an error that callers must handle.
 
 **Statement form:**
 
@@ -38,7 +38,7 @@ When you intentionally want to handle only a subset of union cases, use `default
 match value 'label'
   Case1 then statement
   Case2 then statement
-  default then throws MyError.unmatched
+  default throws MyError.unmatched
 end 'label'
 ```
 
@@ -48,7 +48,7 @@ end 'label'
 let result = match value 'label'
   Case1 gives expr1
   Case2 gives expr2
-  default then throws MyError.unmatched
+  default throws MyError.unmatched
 end 'label'
 ```
 
@@ -178,7 +178,7 @@ end 'MatchError'
 function checkColor(c Color) returns ExitCode throws MatchError
   match c 'check'
     Color.green then return 1
-    default then throws MatchError.unmatched
+    default throws MatchError.unmatched
   end 'check'
 end 'checkColor'
 
@@ -208,7 +208,7 @@ function checkColor(c Color) returns ExitCode throws MatchError
   match c 'check'
     Color.red then return 1
     Color.green then return 2
-    default then throws MatchError.unmatched
+    default throws MatchError.unmatched
   end 'check'
 end 'checkColor'
 
@@ -238,7 +238,7 @@ function colorValue(c Color) returns ExitCode throws MatchError
   let result = match c 'check'
     Color.red gives 10
     Color.green gives 20
-    default then throws MatchError.unmatched
+    default throws MatchError.unmatched
   end 'check'
   return result
 end 'colorValue'
@@ -272,7 +272,7 @@ function getValue(r Result) returns ExitCode throws MatchError
   match r 'check'
     success(v) then return v
     failure(c) then return c
-    default then throws MatchError.unmatched
+    default throws MatchError.unmatched
   end 'check'
 end 'getValue'
 

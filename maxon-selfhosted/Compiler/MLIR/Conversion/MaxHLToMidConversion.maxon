@@ -80,21 +80,19 @@ function lowerMaxHLOp(hlOp MaxHLOp, dstBlock MlirBlock)
 end 'lowerMaxHLOp'
 
 function lowerTerminator(op MlirOp) returns MlirOp
-    match op 'dispatch'
-        maxhl(hlOp) then return lowerMaxHLTerminator(hlOp)
-        arith to maxarm64 then return op
+    return match op 'dispatch'
+        maxhl(hlOp) gives lowerMaxHLTerminator(hlOp)
+        arith to maxarm64 gives op
     end 'dispatch'
-    return op
 end 'lowerTerminator'
 
 function lowerMaxHLTerminator(hlOp MaxHLOp) returns MlirOp
-    match hlOp 'lower'
-        condBr(condId, thenTarget, elseTarget) then return MlirOp.cf(CfOp.condBr(condId, thenTarget, elseTarget))
-        br(target) then return MlirOp.cf(CfOp.br(target))
-        ret(retValId) then return MlirOp.func(FuncOp.ret(retValId))
-        literal to floatCmpEq then return MlirOp.maxhl(hlOp)
-        call then return MlirOp.maxhl(hlOp)
-        printLiteral to printInt then return MlirOp.maxhl(hlOp)
+    return match hlOp 'lower'
+        condBr(condId, thenTarget, elseTarget) gives MlirOp.cf(CfOp.condBr(condId, thenTarget, elseTarget))
+        br(target) gives MlirOp.cf(CfOp.br(target))
+        ret(retValId) gives MlirOp.func(FuncOp.ret(retValId))
+        literal to floatCmpEq gives MlirOp.maxhl(hlOp)
+        call gives MlirOp.maxhl(hlOp)
+        printLiteral to printInt gives MlirOp.maxhl(hlOp)
     end 'lower'
-    return MlirOp.maxhl(hlOp)
 end 'lowerMaxHLTerminator'

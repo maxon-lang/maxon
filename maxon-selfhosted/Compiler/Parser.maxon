@@ -588,28 +588,27 @@ end 'ExprResult'
 
 typealias BindingPower = int(0 to 14)
 
-// Returns 0 for non-operator tokens, allowing the Pratt loop to stop.
+// Throws for non-operator tokens; the call site uses `otherwise 0` to stop the Pratt loop.
 function infixBindingPower(kind TokenKind) returns BindingPower throws ParserError
-    match kind 'bp'
-        TokenKind.or then return 2
-        TokenKind.xor then return 4
-        TokenKind.and then return 6
-        TokenKind.shl then return 8
-        TokenKind.shr then return 8
-        TokenKind.equalsEquals then return 10
-        TokenKind.bangEquals then return 10
-        TokenKind.lessThan then return 10
-        TokenKind.lessEquals then return 10
-        TokenKind.greaterThan then return 10
-        TokenKind.greaterEquals then return 10
-        TokenKind.plus then return 12
-        TokenKind.minus then return 12
-        TokenKind.star then return 14
-        TokenKind.slash then return 14
-        TokenKind.mod then return 14
-        default then throws ParserError.unhandledToken
+    return match kind 'bp'
+        TokenKind.or gives 2
+        TokenKind.xor gives 4
+        TokenKind.and gives 6
+        TokenKind.shl gives 8
+        TokenKind.shr gives 8
+        TokenKind.equalsEquals gives 10
+        TokenKind.bangEquals gives 10
+        TokenKind.lessThan gives 10
+        TokenKind.lessEquals gives 10
+        TokenKind.greaterThan gives 10
+        TokenKind.greaterEquals gives 10
+        TokenKind.plus gives 12
+        TokenKind.minus gives 12
+        TokenKind.star gives 14
+        TokenKind.slash gives 14
+        TokenKind.mod gives 14
+        default throws ParserError.unhandledToken
     end 'bp'
-    return 0
 end 'infixBindingPower'
 
 function emitEqualityOp(project Project, resultId ValueId, leftId ValueId, rightId ValueId, leftIsFloat bool, rightIsFloat bool)
@@ -638,7 +637,7 @@ function emitBinaryOp(project Project, kind TokenKind, resultId ValueId, leftId 
         TokenKind.star then emitOp(project, op: MlirOp.maxhl(MaxHLOp.mul(resultId, leftId, rightId)))
         TokenKind.slash then emitOp(project, op: MlirOp.maxhl(MaxHLOp.div(resultId, leftId, rightId)))
         TokenKind.mod then emitOp(project, op: MlirOp.maxhl(MaxHLOp.mod(resultId, leftId, rightId)))
-        default then throws ParserError.unhandledToken
+        default throws ParserError.unhandledToken
     end 'emit'
 end 'emitBinaryOp'
 
@@ -753,7 +752,7 @@ function parsePrimaryMatch(project Project, tokens TokenArray, startPos TokenInd
         TokenKind.true then return parseBoolLiteral(project, startPos: startPos, value: 1)
         TokenKind.false then return parseBoolLiteral(project, startPos: startPos, value: 0)
         TokenKind.leftParen then return parseParenExpr(project, tokens: tokens, startPos: startPos, filePath: filePath)
-        default then throws ParserError.unhandledToken
+        default throws ParserError.unhandledToken
     end 'primary'
 end 'parsePrimaryMatch'
 

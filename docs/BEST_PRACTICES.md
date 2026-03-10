@@ -207,7 +207,7 @@ score = computeScore(item)
 
 ### Use `_` to Discard Intentionally
 
-When you do not need a value (loop variable, tuple element, match binding), use `_` to signal this clearly.
+When you do not need a value (loop variable, tuple element), use `_` to signal this clearly. In match arms, prefer omitting the binding entirely over using `(_)` when you don't care about the associated value.
 
 ```maxon
 ' Discard the index when only the element matters
@@ -218,7 +218,13 @@ end 'loop'
 ' Discard an impure function's result
 let _ = incrementCounter()
 
-' Discard associated values in match
+' In matches, omit the binding entirely if you don't need the associated value
+match result 'check'
+	success then return true
+	failure then return false
+end 'check'
+
+' Use (_) only when you want to emphasize that a value is being ignored
 match result 'check'
 	success(_) then return true
 	failure then return false
