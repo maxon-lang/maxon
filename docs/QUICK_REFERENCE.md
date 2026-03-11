@@ -118,6 +118,37 @@ All variables must be used (E3012). The exact name `_` is a discard identifier -
 
 Function return values must be used. Pure functions (no side effects) cannot have their results discarded at all. Impure functions can have results explicitly discarded with `let _ = func()`. Chainable methods (returning own type) may be freely discarded.
 
+## Tuples
+
+```maxon
+// Tuple literal
+var t = (10, 20)
+t.0   // 10
+t.1   // 20
+
+// Tuple as function return type
+function minMax(a int, b int) returns (int, int)
+    return (a, b)
+end 'minMax'
+
+// Destructuring declaration (creates new variables)
+var (lo, hi) = minMax(3, 7)
+
+// Tuple assignment (assigns to existing variables)
+var x = 0
+var y = 0
+(x, y) = minMax(3, 7)    // x = 3, y = 7
+
+// Discard individual elements with _
+(x, _) = minMax(3, 7)    // x = 3, second element discarded
+```
+
+**Tuple assignment rules:**
+- All named targets must already exist as `var` (mutable) variables
+- `let` variables cannot be targets (E2013)
+- Name count must match tuple element count (E3005)
+- `_` discards the element without binding
+
 ## Functions
 
 ```maxon

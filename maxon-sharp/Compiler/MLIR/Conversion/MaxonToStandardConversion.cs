@@ -16,6 +16,7 @@ public static partial class MaxonToStandardConversion {
   [ThreadStatic] private static bool _rdataStdlibPhase;
   [ThreadStatic] private static HashSet<string>? _loadedUcdLabels;
   [ThreadStatic] private static string? _currentFuncName;
+  [ThreadStatic] private static string? _currentFuncSourceFile;
   [ThreadStatic] private static Dictionary<string, string>? _symdataContextCache;
   // Tracks type destructor functions that need to be generated (one per concrete type).
   [ThreadStatic] private static Dictionary<string, DestructorRequest>? _destructorRequests;
@@ -132,6 +133,7 @@ public static partial class MaxonToStandardConversion {
 
       var retStructType = ResolveStructReturnType(func.ReturnType, module.TypeDefs);
       _currentFuncName = func.Name;
+      _currentFuncSourceFile = func.SourceFilePath;
       var escapingArrayLiterals = FindEscapingArrayLiterals(func);
 
       bool isStructInstanceMethod = IsStructInstanceMethod(func);

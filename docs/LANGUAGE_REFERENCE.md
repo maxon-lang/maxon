@@ -1969,6 +1969,34 @@ x = x         // ERROR: self-assignment has no effect
 p.x = p.x     // ERROR: self-assignment has no effect
 ```
 
+### Tuple Assignment
+
+Assign multiple values from a tuple expression (or function returning a tuple) to existing mutable variables in a single statement:
+
+```maxon
+(variable1, variable2) = expression
+```
+
+**Notes:**
+- All named variables must already be declared with `var`
+- Immutable (`let`) variables cannot be targets (error E2013)
+- The number of names must exactly match the tuple's element count (error E3005 on mismatch)
+- Use `_` to discard individual elements
+- If all elements are discarded (`(_, _) = ...`) and the function is pure, error E3064 is raised
+
+**Example:**
+```maxon
+var x = 0
+var y = 0
+(x, y) = makePair(10, b: 32)  // x = 10, y = 32
+```
+
+**Discard individual elements:**
+```maxon
+(result, _) = compute()   // discard second element
+(_, status) = fetch()     // discard first element
+```
+
 ### If Statement
 
 **Syntax**

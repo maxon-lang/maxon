@@ -227,7 +227,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3063: cannot pass immutable 'let' variable to function that mutates parameter 'x'
+error E3063: specs/fragments/pass-by-reference/pass-by-reference.let-to-mutating-param-error.test:11:3: cannot pass immutable 'let' variable to function that mutates parameter 'x'
 ```
 
 <!-- test: pass-by-reference.nested-calls -->

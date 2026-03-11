@@ -50,7 +50,8 @@ public static partial class MaxonToStandardConversion {
     LowerCallCore(callOp.Callee, callOp.Args, callOp.Result, callOp.ResultKind,
       isTryCall: false, funcLookup, block, valueMap, varTypes,
       typeDefs, temps, fnEnvVarNames: fnEnvVarNames,
-      argMutabilities: callOp.ArgMutabilities, argVarNames: callOp.ArgVarNames);
+      argMutabilities: callOp.ArgMutabilities, argVarNames: callOp.ArgVarNames,
+      callLine: callOp.CallLine, callColumn: callOp.CallColumn);
   }
 
   /// <summary>
@@ -72,7 +73,9 @@ public static partial class MaxonToStandardConversion {
     MaxonValue? errorFlagValue = null,
     Dictionary<int, string>? fnEnvVarNames = null,
     List<bool>? argMutabilities = null,
-    List<string?>? argVarNames = null) {
+    List<string?>? argVarNames = null,
+    int? callLine = null,
+    int? callColumn = null) {
 
     // Intercept synthetic managed list navigation calls before resolving the callee
     // (these are not real functions in the module)
@@ -93,7 +96,8 @@ public static partial class MaxonToStandardConversion {
         if (calleeMutParams.Contains(calleeFunc.ParamNames[i]) && !argMutabilities[i]) {
           throw new CompileError(
             ErrorCode.SemanticImmutableRefToMutatingParam,
-            $"cannot pass immutable 'let' variable to function that mutates parameter '{calleeFunc.ParamNames[i]}'");
+            $"cannot pass immutable 'let' variable to function that mutates parameter '{calleeFunc.ParamNames[i]}'",
+            callLine, callColumn) { FilePath = _currentFuncSourceFile };
         }
       }
     }
@@ -304,6 +308,7 @@ public static partial class MaxonToStandardConversion {
       typeDefs,
       temps,
       errorFlagValue: tryCallOp.ErrorFlag,
-      argMutabilities: tryCallOp.ArgMutabilities, argVarNames: tryCallOp.ArgVarNames);
+      argMutabilities: tryCallOp.ArgMutabilities, argVarNames: tryCallOp.ArgVarNames,
+      callLine: tryCallOp.CallLine, callColumn: tryCallOp.CallColumn);
   }
 }

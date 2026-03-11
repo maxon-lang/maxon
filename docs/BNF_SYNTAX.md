@@ -378,6 +378,7 @@ statement     = return_stmt
               | panic_stmt
               | try_stmt
               | assignment_stmt
+              | tuple_assign_stmt
               | expression_stmt
 
 expression_stmt
@@ -405,6 +406,24 @@ target        = IDENTIFIER
               | 'self' '.' IDENTIFIER { '.' IDENTIFIER }
               | IDENTIFIER '.' IDENTIFIER '=' expression     (* via .set() *)
 ```
+
+### 5.2.1 Tuple Assignment
+
+Assigns multiple return values to existing mutable variables in one statement:
+
+```
+tuple_assign_stmt
+              = '(' tuple_assign_target { ',' tuple_assign_target } ')' '=' expression
+
+tuple_assign_target
+              = IDENTIFIER    (* must refer to an existing var-declared variable *)
+              | '_'           (* discard this element *)
+```
+
+Constraints:
+- Each `IDENTIFIER` must refer to a `var`-declared (mutable) variable in scope
+- `let` variables are not valid targets (error E2013)
+- The number of targets must equal the tuple's element count (error E3005)
 
 ### 5.3 Return
 

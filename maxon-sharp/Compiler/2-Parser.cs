@@ -5087,6 +5087,8 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       ParsePanic();
     } else if (Check(TokenType.Try)) {
       ParseTryStatement();
+    } else if (Check(TokenType.LeftParen)) {
+      ParseTupleAssignment();
     } else {
       throw new CompileError(ErrorCode.SemanticUnexpectedToken, $"unexpected token: '{Current().Value}'", Current().Line, Current().Column);
     }
@@ -6127,29 +6129,66 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     var parenToken = Advance(); // consume '('
     var names = new List<string>();
     do {
-      if (Check(TokenType.Comma)) Advance();
       var nameToken = Expect(TokenType.Identifier);
       names.Add(nameToken.Value);
       if (nameToken.Value != "_") {
         _localVarLocations.Add((nameToken.Value, nameToken.Line, nameToken.Column));
       }
-    } while (Check(TokenType.Comma));
+      if (!Check(TokenType.Comma)) break;
+      Advance();
+    } while (true);
     Expect(TokenType.RightParen);
     Expect(TokenType.Equals);
 
+    var (tempName, tupleType) = ParseTupleRhs(parenToken, names, "Tuple destructuring");
+    EmitTupleFieldBindings(tempName, tupleType, names, isMutable);
+  }
+
+  // Each slot in a tuple assignment can be:
+  //   - a plain identifier: assign to existing var
+  //   - `var name`: declare a new mutable var
+  //   - `let name`: declare a new immutable var
+  //   - `_`: discard
+  private record TupleSlot(Token NameToken, bool IsDeclaration, bool IsMutable);
+
+  private void ParseTupleAssignment() {
+    var parenToken = Advance(); // consume '('
+    var slots = new List<TupleSlot>();
+    do {
+      bool isDecl = false;
+      bool isMutable = false;
+      if (Check(TokenType.Var)) { Advance(); isDecl = true; isMutable = true; }
+      else if (Check(TokenType.Let)) { Advance(); isDecl = true; isMutable = false; }
+      var nameToken = Expect(TokenType.Identifier);
+      slots.Add(new TupleSlot(nameToken, isDecl, isMutable));
+      if (!Check(TokenType.Comma)) break;
+      Advance();
+    } while (true);
+    Expect(TokenType.RightParen);
+    Expect(TokenType.Equals);
+
+    var names = slots.Select(s => s.NameToken.Value).ToList();
+    var (tempName, tupleType) = ParseTupleRhs(parenToken, names, "Tuple assignment");
+    EmitTupleFieldAssignments(tempName, tupleType, slots);
+  }
+
+  // Parses and validates the RHS of a tuple binding (destructuring or assignment).
+  // Evaluates the expression, confirms it's a tuple of the right arity, stores it
+  // in a temp slot, and transfers ownership. Returns (tempName, tupleType).
+  private (string tempName, MlirStructType tupleType) ParseTupleRhs(Token parenToken, List<string> names, string context) {
     _lastExprCallOp = null;
     var initExpr = ParseExpression();
     var initValue = ResolveExprValue(initExpr)
       ?? throw new CompileError(ErrorCode.ParserExpectedExpression,
-        "Tuple destructuring requires a value", parenToken.Line, parenToken.Column);
+        $"{context} requires a value", parenToken.Line, parenToken.Column);
 
     if (initValue is not MaxonStruct structVal)
       throw new CompileError(ErrorCode.SemanticTypeMismatch,
-        "Tuple destructuring requires a tuple value", parenToken.Line, parenToken.Column);
+        $"{context} requires a tuple value", parenToken.Line, parenToken.Column);
 
     if (!_typeRegistry.TryGetValue(structVal.TypeName, out var regType) || regType is not MlirStructType tupleType || !tupleType.IsTuple)
       throw new CompileError(ErrorCode.SemanticTypeMismatch,
-        "Tuple destructuring requires a tuple value", parenToken.Line, parenToken.Column);
+        $"{context} requires a tuple value", parenToken.Line, parenToken.Column);
 
     if (names.Count != tupleType.Fields.Count)
       throw new CompileError(ErrorCode.SemanticTypeMismatch,
@@ -6161,19 +6200,30 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       MarkLetDiscardResult(parenToken);
     }
 
-    // Assign the tuple to a temp variable
+    // Store the tuple in a temp variable and transfer ownership from the call temp
     var tempName = $"__destruct_{_blockCounter++}";
     _currentBlock!.AddOp(new MaxonAssignOp(tempName, initValue, true, false, MaxonValueKind.Struct));
     _variables.Declare(tempName, MaxonValueKind.Struct, false, initValue, _currentBlock!, OwnershipFlags.IsTemp | OwnershipFlags.CallReturn, structTypeName: tupleType.Name);
-    // Transfer ownership from __call_tmp_ to __destruct_ to prevent double-decref at scope exit
     FixupTempOwnership();
 
-    EmitTupleFieldBindings(tempName, tupleType, names, isMutable);
+    return (tempName, tupleType);
   }
 
+  // Emits new variable declarations for each tuple field (used by destructuring).
   private void EmitTupleFieldBindings(string sourceName, MlirStructType tupleType, List<string> names, bool isMutable) {
-    for (int i = 0; i < names.Count; i++) {
-      if (names[i] == "_") continue;
+    var slots = names.Select(n => new TupleSlot(new Token(TokenType.Identifier, n, 0, 0), IsDeclaration: true, IsMutable: isMutable)).ToList();
+    EmitTupleFieldAssignments(sourceName, tupleType, slots);
+  }
+
+  // Emits a declaration or assignment for each tuple field.
+  // Slots with IsDeclaration=true declare a new variable; others assign to an existing one.
+  private void EmitTupleFieldAssignments(string sourceName, MlirStructType tupleType, List<TupleSlot> slots) {
+    for (int i = 0; i < slots.Count; i++) {
+      var slot = slots[i];
+      var nameToken = slot.NameToken;
+      var name = nameToken.Value;
+      if (name == "_") continue;
+
       var field = tupleType.Fields[i];
       var fieldKind = field.Type.ToValueKind();
       string? fieldStructName = field.Type is MlirStructType fst ? fst.Name
@@ -6183,8 +6233,28 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       _currentBlock!.AddOp(refOp);
       var accessOp = new MaxonFieldAccessOp(refOp.Result, tupleType.Name, field.Name, fieldKind, fieldStructName);
       _currentBlock!.AddOp(accessOp);
-      _currentBlock!.AddOp(new MaxonAssignOp(names[i], accessOp.Result, isDeclaration: true, isMutable: isMutable, fieldKind));
-      _variables.Declare(names[i], fieldKind, isMutable, accessOp.Result, _currentBlock!, structTypeName: fieldStructName);
+
+      if (slot.IsDeclaration) {
+        _currentBlock!.AddOp(new MaxonAssignOp(name, accessOp.Result, isDeclaration: true, isMutable: slot.IsMutable, fieldKind));
+        _variables.Declare(name, fieldKind, slot.IsMutable, accessOp.Result, _currentBlock!, structTypeName: fieldStructName);
+        if (nameToken.Line > 0) _localVarLocations.Add((name, nameToken.Line, nameToken.Column));
+      } else {
+        var resolved = ResolveVariable(name)
+          ?? throw CreateUndefinedVariableError(name, nameToken, ErrorCode.ParserExpectedExpression);
+
+        if (resolved is not ResolvedVar.Local(var varInfo))
+          throw new CompileError(ErrorCode.ParserImmutableVariable,
+            $"cannot assign to global variable '{name}' via tuple assignment",
+            nameToken.Line, nameToken.Column);
+
+        if (!varInfo.Mutable)
+          throw new CompileError(ErrorCode.ParserImmutableVariable,
+            $"cannot assign to immutable variable: '{name}'",
+            nameToken.Line, nameToken.Column);
+
+        _currentBlock!.AddOp(new MaxonAssignOp(name, accessOp.Result, isDeclaration: false, isMutable: true, fieldKind));
+        _variables[name] = new VarInfo(name, fieldKind, true, accessOp.Result, _currentBlock!, varInfo.Flags, fieldStructName, PayloadBinding: varInfo.PayloadBinding);
+      }
     }
   }
 
