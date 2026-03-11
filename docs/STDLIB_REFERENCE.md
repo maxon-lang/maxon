@@ -1,0 +1,446 @@
+# Maxon Standard Library Reference
+
+## Table of Contents
+
+1. [Core Functions](#core-functions)
+2. [FilePath](#filepath)
+3. [URL](#url)
+4. [CharacterSet](#characterset)
+5. [Unicode](#unicode)
+6. [String Trimming](#string-trimming)
+7. [List](#list)
+8. [Networking (TcpClient)](#networking-tcpclient)
+9. [Builtin Managed Types](#builtin-managed-types)
+
+---
+
+## Core Functions
+
+**I/O Functions**
+```maxon
+print(value String)                     // Print string to stdout
+```
+
+**Math Functions**
+```maxon
+abs(x int) int                  // Absolute value
+abs(x float) float              // Absolute value (overloaded)
+sqrt(x float) float             // Square root
+pow(base float, exp float) float // Power
+sin(x float) float              // Sine
+cos(x float) float              // Cosine
+tan(x float) float              // Tangent
+exp(x float) float              // e^x
+log(x float) float              // Natural logarithm
+log2(x float) float             // Base-2 logarithm
+log10(x float) float            // Base-10 logarithm
+floor(x float) int              // Round down
+ceil(x float) int               // Round up
+round(x float) int              // Round to nearest
+trunc(x float) int              // Truncate toward zero
+```
+
+**Formatting Functions**
+```maxon
+format_int(value int) String    // Format int as string
+format_float(value float) String // Format float as string
+```
+
+---
+
+## FilePath
+
+`FilePath` is a type-safe wrapper around `String` for filesystem paths. It normalizes path separators to the platform-native format on construction and provides methods for path manipulation.
+
+**Construction:**
+```maxon
+var p = FilePath from "C:\\Users\\test.txt"              // From string literal (panics on invalid chars)
+var q = try FilePath.from("hello.maxon") otherwise ...   // From string (throws FilePathError)
+var r = FilePath from "file:///C:/Users/test.txt"        // file:// URLs are converted to paths
+var s = try FilePath.from("file:///home/user/f.txt") otherwise ...  // Also works with from()
+```
+
+Both `init()` and `from()` transparently accept `file://` URLs, parsing them with `URL.parse()` and extracting the filesystem path. On Windows, the leading `/` before drive letters is stripped (e.g. `/C:/path` becomes `C:\path`). Non-file URL schemes (e.g. `https://`) cause a panic in `init()` or throw `FilePathError.notFileURL` in `from()`.
+
+**Component Extraction:**
+```maxon
+p.filename()         // "test.txt"
+p.fileExtension()    // ".txt"
+p.stem()             // "test"
+p.parent()           // FilePath("C:\\Users")
+```
+
+**Path Manipulation:**
+```maxon
+p.join("docs")                  // Append component with platform separator
+p.join(otherFilePath)           // Join with another FilePath
+p.changeExtension(".exe")       // Replace file extension
+p.normalize()                   // Returns self (normalized on construction)
+```
+
+**Query Methods:**
+```maxon
+p.isEmpty()          // true if path is empty string
+p.isAbsolute()       // true for drive paths (C:\) or UNC paths (\\server)
+p.isRelative()       // opposite of isAbsolute
+p.fileExists()       // convenience for File.exists(p)
+p.directoryExists()  // convenience for Directory.exists(p)
+```
+
+**Static Methods:**
+```maxon
+FilePath.separator()   // Platform-native separator ("\" on Windows, "/" on Linux)
+```
+
+`FilePath` implements `Equatable`, `Hashable`, `Stringable`, and `InitableFromStringLiteral`.
+
+All `File` and `Directory` methods accept `FilePath` parameters:
+```maxon
+let fp = FilePath from "data.txt"
+let content = try File.readText(fp) otherwise ...
+try File.writeText(fp, content: "hello")
+let files = try Directory.list(FilePath from "./") otherwise ...
+```
+
+---
+
+## URL
+
+`URL` provides RFC 3986 compliant URI parsing, serialization, and reference resolution. It is defined in `stdlib/URL.maxon`.
+
+**Parsing:**
+```maxon
+var url = try URL.parse("https://example.com:8080/path?q=1#top") otherwise 'err'
+  // handle error
+end 'err'
+```
+
+**Always-available accessors:**
+```maxon
+url.scheme()     // "https" (empty string for relative references)
+url.path()       // "/path" (always present, may be empty)
+```
+
+**Throwing accessors** (throw `URLError.fieldNotPresent` if not set):
+```maxon
+var host = try url.host() otherwise "default"       // "example.com"
+var port = try url.port() otherwise 443             // 8080
+var ui = try url.userinfo() otherwise ""            // userinfo before @
+var query = try url.query() otherwise ""            // "q=1"
+var frag = try url.fragment() otherwise ""          // "top"
+```
+
+**Serialization:**
+```maxon
+url.toString()   // "https://example.com:8080/path?q=1#top"
+```
+
+**Reference Resolution** (RFC 3986 Section 5):
+```maxon
+var base = try URL.parse("http://a/b/c/d?q") otherwise ...
+var resolved = try URL.resolve(base, reference: "../g") otherwise ...
+resolved.toString()  // "http://a/b/g"
+```
+
+**Error Types:**
+
+| Error | Description |
+|-------|-------------|
+| `URLError.emptyInput` | Input is empty or whitespace-only |
+| `URLError.invalidScheme` | Scheme starts with non-alpha or contains invalid characters |
+| `URLError.invalidHost` | Malformed host (e.g., unclosed IPv6 bracket) |
+| `URLError.invalidPort` | Port is non-numeric or exceeds 65535 |
+| `URLError.invalidEncoding` | Malformed percent-encoding (e.g., `%GG`, `%2`) |
+| `URLError.relativeWithoutBase` | `resolve()` called with a base URL that has no scheme |
+| `URLError.fieldNotPresent` | Accessor called for a component not present in the URL |
+
+`URL` implements `Equatable` and `Stringable`.
+
+---
+
+## CharacterSet
+
+`CharacterSet` represents a set of characters for use with string trimming and character classification. It is defined in `stdlib/CharacterSet.maxon`.
+
+**Static Factory Methods**
+
+Create a `CharacterSet` using one of the built-in factory methods:
+
+```maxon
+var ws = CharacterSet.whitespacesAndNewlines()  // All Unicode whitespace including newlines
+var spaces = CharacterSet.whitespaces()         // Spaces and tabs only (no newlines)
+var nl = CharacterSet.newlines()               // Newline characters only (LF, CR, CRLF, etc.)
+var digits = CharacterSet.decimalDigits()       // Unicode decimal digits (Nd category)
+var letters = CharacterSet.letters()            // Unicode letters and marks (L*, M* categories)
+var alnum = CharacterSet.alphanumerics()        // Unicode letters, marks, and numbers
+var punct = CharacterSet.punctuation()          // Unicode punctuation (P* categories)
+var custom = CharacterSet.from(CharSet from ['a', 'e', 'i', 'o', 'u'])  // Custom set
+```
+
+**Instance Methods**
+
+```maxon
+ws.contains('A')    // false
+ws.contains(' ')    // true
+```
+
+| Method | Returns | Description |
+|--------|---------|-------------|
+| `contains(c Character)` | `bool` | Check if the character is in the set |
+
+---
+
+## Unicode
+
+`Unicode` provides Unicode character classification utilities. It is defined in `stdlib/Unicode.maxon`.
+
+**Static Methods**
+
+```maxon
+Unicode.isWhitespace(32)    // true (space)
+Unicode.isWhitespace(65)    // false ('A')
+```
+
+| Method | Returns | Description |
+|--------|---------|-------------|
+| `isWhitespace(cp Codepoint)` | `bool` | Check if a codepoint is Unicode whitespace |
+
+---
+
+## String Trimming
+
+The `String` type provides methods for removing characters from the start and end of a string. Each method has two forms: one that accepts a `CharacterSet` parameter, and a convenience overload that trims whitespace by default.
+
+**Trimming with CharacterSet**
+
+```maxon
+"123hello456".trim(CharacterSet.decimalDigits())     // "hello"
+"...hello!!!".trim(CharacterSet.punctuation())       // "hello"
+"xxxhelloxxx".trimStart(CharacterSet.from(CharSet from ['x']))     // "helloxxx"
+"xxxhelloxxx".trimEnd(CharacterSet.from(CharSet from ['x']))       // "xxxhello"
+```
+
+**Trimming Whitespace (convenience)**
+
+```maxon
+"  hello  ".trim()          // "hello"
+"  hello  ".trimStart()     // "hello  "
+"  hello  ".trimEnd()       // "  hello"
+```
+
+| Method | Returns | Description |
+|--------|---------|-------------|
+| `trim(in CharacterSet)` | `String` | Remove matching characters from both ends |
+| `trimStart(in CharacterSet)` | `String` | Remove matching characters from the start |
+| `trimEnd(in CharacterSet)` | `String` | Remove matching characters from the end |
+| `trim()` | `String` | Remove whitespace from both ends |
+| `trimStart()` | `String` | Remove whitespace from the start |
+| `trimEnd()` | `String` | Remove whitespace from the end |
+
+The no-argument convenience methods are equivalent to calling the `CharacterSet` variants with `CharacterSet.whitespacesAndNewlines()`.
+
+---
+
+## List
+
+`List` is a generic doubly linked list backed by `__ManagedList` (a builtin compiler-synthesized type, like `Array` and `String`) for efficient node management with automatic memory cleanup. It provides O(1) insertion and removal at both ends, and O(n) indexed access.
+
+**Creating a List**
+
+Create a concrete List type with `typealias`, then initialize with `{}`:
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntList = List with Integer
+
+var list = IntList{}             // Empty list
+```
+
+**Adding Elements**
+```maxon
+list.prepend(1)                  // Add to front — O(1)
+list.append(2)                   // Add to back — O(1)
+list.insert(1, value: 99)       // Insert at index — O(n)
+```
+
+**Accessing Elements**
+```maxon
+var first = try list.first() otherwise 0   // First element (throws ArrayError)
+var last = try list.last() otherwise 0     // Last element (throws ArrayError)
+var elem = try list.get(1) otherwise 0     // Element at index (throws ArrayError)
+```
+
+**Removing Elements**
+```maxon
+var removed = try list.removeFirst() otherwise 0  // Remove front — O(1)
+var popped = try list.removeLast() otherwise 0    // Remove back — O(1)
+var at2 = try list.remove(at: 2) otherwise 0      // Remove at index — O(n)
+list.clear()                                       // Remove all elements
+```
+
+**Query**
+```maxon
+list.count()                     // Number of elements
+list.isEmpty()                   // true if empty
+```
+
+**Iteration**
+
+`List` implements `Iterable with Element`, so it supports `for`-`in` loops:
+```maxon
+for item in list 'loop'
+    print("{item}")
+end 'loop'
+```
+
+**Complexity Summary**
+
+| Operation | Time |
+|-----------|------|
+| `prepend` | O(1) |
+| `removeFirst` | O(1) |
+| `append` | O(1) |
+| `removeLast` | O(1) |
+| `get`, `insert`, `remove(at:)` | O(n) |
+| `first`, `last`, `count`, `isEmpty` | O(1) |
+| iteration (for-in) | O(n) total |
+
+---
+
+## Networking (TcpClient)
+
+`TcpClient` provides TCP client networking with automatic resource cleanup. It is defined in `stdlib/TcpClient.maxon`. The socket is backed by `__ManagedSocket`, a builtin type whose destructor closes the file descriptor when the last reference goes out of scope.
+
+**NetworkPort Alias**
+
+The `NetworkPort` type alias constrains port numbers to the valid TCP range:
+```maxon
+typealias NetworkPort = int(1 to 65535)
+```
+
+**NetworkError**
+
+All networking operations throw `NetworkError`, a union conforming to `Error`:
+```maxon
+union NetworkError implements Error
+    resolveFailed       // DNS lookup failed
+    connectFailed       // TCP connection refused or timed out
+    sendFailed          // OS-level send error
+    recvFailed          // OS-level recv error
+    connectionClosed    // peer closed the connection
+end 'NetworkError'
+```
+
+**Connecting**
+
+`TcpClient.connect` resolves the hostname, creates a TCP socket, and connects:
+```maxon
+let client = try TcpClient.connect("example.com", port: 4242)
+```
+
+**Sending Data**
+
+`send` transmits all bytes of a string, looping internally to handle partial sends. It returns the total number of bytes sent:
+```maxon
+let bytesSent = try client.send("Hello\n")
+```
+
+**Receiving Data**
+
+`recv` reads up to `bufferSize` bytes from the connection and returns them as a `String`:
+```maxon
+let response = try client.recv(1024)
+```
+
+**Closing**
+
+`close` is idempotent and safe to call multiple times. The socket also closes automatically when the `TcpClient` goes out of scope:
+```maxon
+client.close()
+```
+
+**API Summary**
+
+| Method | Returns | Throws | Description |
+|--------|---------|--------|-------------|
+| `TcpClient.connect(host String, port NetworkPort)` | `TcpClient` | `NetworkError` | Connect to a TCP server |
+| `send(data String)` | `Count` | `NetworkError` | Send all bytes of a string |
+| `recv(bufferSize Count)` | `String` | `NetworkError` | Receive up to bufferSize bytes |
+| `close()` | — | — | Close the connection (idempotent) |
+
+**Example: Simple TCP Client**
+```maxon
+function main() returns ExitCode
+    let client = try TcpClient.connect("localhost", port: 8080) otherwise 'err'
+        print("connection failed")
+        return 1
+    end 'err'
+    let _ = try client.send("GET / HTTP/1.0\r\n\r\n") otherwise 'err'
+        print("send failed")
+        return 1
+    end 'err'
+    let response = try client.recv(4096) otherwise 'err'
+        print("recv failed")
+        return 1
+    end 'err'
+    print(response)
+    client.close()
+    return 0
+end 'main'
+```
+
+---
+
+## Builtin Managed Types
+
+The compiler provides several builtin managed types that wrap OS-level resources (file handles, sockets, directory search handles). These types use RAII via destructors: when the last reference to a managed object goes out of scope, the compiler automatically calls the destructor to release the underlying OS resource.
+
+Managed types are not used directly by application code. Instead, stdlib wrapper types (`File`, `Directory`, `TcpClient`) provide the public API. The managed types are documented here for completeness and for stdlib authors.
+
+### `__ManagedSocket`
+
+Wraps an OS socket file descriptor. Used internally by `TcpClient`. See [Networking (TcpClient)](#networking-tcpclient) for details.
+
+### `__ManagedFile`
+
+Wraps an OS file handle (Windows `HANDLE` or Linux file descriptor). Used internally by `File`.
+
+**Static Methods:**
+
+| Method | Returns | Description |
+|--------|---------|-------------|
+| `openRead(managed)` | `__ManagedFile` | Open a file for reading. Returns `-1` on failure. |
+| `openWrite(managed)` | `__ManagedFile` | Open a file for writing (creates or truncates). Returns `-1` on failure. |
+| `exists(managed)` | `int` | Check if a file exists. Returns nonzero if the file exists. |
+| `delete(managed)` | `int` | Delete a file. Returns `0` on success. |
+
+**Instance Methods:**
+
+| Method | Returns | Description |
+|--------|---------|-------------|
+| `size()` | `int` | Get the file size in bytes. |
+| `read(managed, size)` | `int` | Read up to `size` bytes into the managed buffer. Returns bytes read. |
+| `write(managed)` | `int` | Write the contents of the managed buffer. Returns bytes written, or negative on error. |
+| `close()` | -- | Close the file handle. Idempotent; also called automatically by the destructor. |
+
+The `managed` parameters refer to `__ManagedMemory` buffers (the internal backing store of `String` and `ByteArray`).
+
+### `__ManagedDirectory`
+
+Wraps an OS directory search handle (Windows `FindFirstFile`/`FindNextFile` or Linux `opendir`/`readdir`). Used internally by `Directory`.
+
+**Static Methods:**
+
+| Method | Returns | Description |
+|--------|---------|-------------|
+| `openSearch(managed)` | `__ManagedDirectory` | Open a directory search with a glob pattern. Returns `0` on failure. |
+| `exists(managed)` | `bool` | Check if a path exists and is a directory. |
+| `create(managed)` | `bool` | Create a directory. Returns `true` on success. |
+| `currentPath()` | `__ManagedMemory` | Get the current working directory as a managed string. |
+
+**Instance Methods:**
+
+| Method | Returns | Description |
+|--------|---------|-------------|
+| `filename()` | `__ManagedMemory` | Get the filename of the current search result. |
+| `next()` | `int` | Advance to the next search result. Returns `0` when no more entries. |
+| `close()` | -- | Close the search handle. Idempotent; also called automatically by the destructor. |
