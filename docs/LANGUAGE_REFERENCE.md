@@ -31,6 +31,7 @@ This reference provides complete syntax and semantics for the Maxon programming 
 11. [Namespaces](#namespaces)
 12. [Standard Library](#standard-library)
     - [FilePath](#filepath)
+    - [URL](#url)
     - [CharacterSet](#characterset)
     - [Unicode](#unicode)
     - [String Trimming](#string-trimming)
@@ -2916,7 +2917,11 @@ format_float(value float) String // Format float as string
 ```maxon
 var p = FilePath from "C:\\Users\\test.txt"              // From string literal (panics on invalid chars)
 var q = try FilePath.from("hello.maxon") otherwise ...   // From string (throws FilePathError)
+var r = FilePath from "file:///C:/Users/test.txt"        // file:// URLs are converted to paths
+var s = try FilePath.from("file:///home/user/f.txt") otherwise ...  // Also works with from()
 ```
+
+Both `init()` and `from()` transparently accept `file://` URLs, parsing them with `URL.parse()` and extracting the filesystem path. On Windows, the leading `/` before drive letters is stripped (e.g. `/C:/path` becomes `C:\path`). Non-file URL schemes (e.g. `https://`) cause a panic in `init()` or throw `FilePathError.notFileURL` in `from()`.
 
 **Component Extraction:**
 ```maxon
@@ -2957,6 +2962,58 @@ let content = try File.readText(fp) otherwise ...
 try File.writeText(fp, content: "hello")
 let files = try Directory.list(FilePath from "./") otherwise ...
 ```
+
+### URL
+
+`URL` provides RFC 3986 compliant URI parsing, serialization, and reference resolution. It is defined in `stdlib/URL.maxon`.
+
+**Parsing:**
+```maxon
+var url = try URL.parse("https://example.com:8080/path?q=1#top") otherwise 'err'
+  // handle error
+end 'err'
+```
+
+**Always-available accessors:**
+```maxon
+url.scheme()     // "https" (empty string for relative references)
+url.path()       // "/path" (always present, may be empty)
+```
+
+**Throwing accessors** (throw `URLError.fieldNotPresent` if not set):
+```maxon
+var host = try url.host() otherwise "default"       // "example.com"
+var port = try url.port() otherwise 443             // 8080
+var ui = try url.userinfo() otherwise ""            // userinfo before @
+var query = try url.query() otherwise ""            // "q=1"
+var frag = try url.fragment() otherwise ""          // "top"
+```
+
+**Serialization:**
+```maxon
+url.toString()   // "https://example.com:8080/path?q=1#top"
+```
+
+**Reference Resolution** (RFC 3986 Section 5):
+```maxon
+var base = try URL.parse("http://a/b/c/d?q") otherwise ...
+var resolved = try URL.resolve(base, reference: "../g") otherwise ...
+resolved.toString()  // "http://a/b/g"
+```
+
+**Error Types:**
+
+| Error | Description |
+|-------|-------------|
+| `URLError.emptyInput` | Input is empty or whitespace-only |
+| `URLError.invalidScheme` | Scheme starts with non-alpha or contains invalid characters |
+| `URLError.invalidHost` | Malformed host (e.g., unclosed IPv6 bracket) |
+| `URLError.invalidPort` | Port is non-numeric or exceeds 65535 |
+| `URLError.invalidEncoding` | Malformed percent-encoding (e.g., `%GG`, `%2`) |
+| `URLError.relativeWithoutBase` | `resolve()` called with a base URL that has no scheme |
+| `URLError.fieldNotPresent` | Accessor called for a component not present in the URL |
+
+`URL` implements `Equatable` and `Stringable`.
 
 ### CharacterSet
 

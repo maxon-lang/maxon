@@ -13,6 +13,7 @@
 
 export union FilePathError implements Error
   invalidCharacter
+  notFileURL
 end 'FilePathError'
 
 export type FilePath implements InitableFromStringLiteral, Equatable, Hashable, Stringable
@@ -22,20 +23,23 @@ export type FilePath implements InitableFromStringLiteral, Equatable, Hashable, 
   /// Panics if the path contains invalid characters.
   /// Non-native separators are replaced with the platform-native separator.
   static function init(value String) returns FilePath
-    if _hasInvalidChars(value) 'bad'
+    var resolved = try _resolveFileURL(value) otherwise panic("FilePath: non-file URL passed to init")
+    if _hasInvalidChars(resolved) 'bad'
       panic("FilePath: invalid characters in path")
     end 'bad'
-    return FilePath{_path: _normalizeSeparators(value)}
+    return FilePath{_path: _normalizeSeparators(resolved)}
   end 'init'
 
   /// Create FilePath from an explicit string.
+  /// Accepts file:// URLs (extracts the path) or regular path strings.
+  /// Throws FilePathError.notFileURL if the string is a non-file URL.
   /// Throws FilePathError.invalidCharacter if the path contains invalid characters.
-  /// Non-native separators are replaced with the platform-native separator.
   export static function from(path String) returns FilePath throws FilePathError
-    if _hasInvalidChars(path) 'bad'
+    var resolved = try _resolveFileURL(path)
+    if _hasInvalidChars(resolved) 'bad'
       throw FilePathError.invalidCharacter
     end 'bad'
-    return FilePath{_path: _normalizeSeparators(path)}
+    return FilePath{_path: _normalizeSeparators(resolved)}
   end 'from'
 
   /// Check for characters that are invalid in filesystem paths.
@@ -86,6 +90,57 @@ export type FilePath implements InitableFromStringLiteral, Equatable, Hashable, 
       return path.replace("\\", with: "/")
     #endif
   end '_normalizeSeparators'
+
+  /// Detect file:// URLs and extract the filesystem path.
+  /// Returns the path unchanged if not a URL.
+  /// Throws FilePathError.notFileURL for non-file URL schemes.
+  static function _resolveFileURL(input String) returns String throws FilePathError
+    // Quick check: must contain "://" to be a URL
+    let len = input.byteLength()
+    var hasScheme = false
+    var i = 0
+    while i + 2 < len 'scan'
+      // ':' = 58, '/' = 47
+      if input.managed.byteAt(i) == 58 'colon'
+        if input.managed.byteAt(i + 1) == 47 'slash1'
+          if input.managed.byteAt(i + 2) == 47 'slash2'
+            hasScheme = true
+            break
+          end 'slash2'
+        end 'slash1'
+      end 'colon'
+      i = i + 1
+    end 'scan'
+    if not hasScheme 'notURL'
+      return input
+    end 'notURL'
+    // Parse as URL
+    var url = try URL.parse(input) otherwise 'parseErr'
+      return input
+    end 'parseErr'
+    // Check scheme is "file"
+    if url.scheme() != "file" 'notFile'
+      throw FilePathError.notFileURL
+    end 'notFile'
+    var filePath = url.path()
+    #if os(Windows)
+      // file:///C:/path produces path "/C:/path" — strip leading slash before drive letter
+      let pathLen = filePath.byteLength()
+      if pathLen >= 3 'checkDrive'
+        // Check for /X: pattern (slash + alpha + colon)
+        if filePath.managed.byteAt(0) == 47 'leadingSlash'
+          let driveByte = filePath.managed.byteAt(1)
+          if filePath.managed.byteAt(2) == 58 'hasColon'
+            if (driveByte >= 65 and driveByte <= 90) or (driveByte >= 97 and driveByte <= 122) 'isDrive'
+              let trimmed = filePath.managed.slice(1, pathLen)
+              filePath = String{managed: trimmed, _iterPos: 0}
+            end 'isDrive'
+          end 'hasColon'
+        end 'leadingSlash'
+      end 'checkDrive'
+    #endif
+    return filePath
+  end '_resolveFileURL'
 
   /// The platform-native path separator string.
   export static function separator() returns String

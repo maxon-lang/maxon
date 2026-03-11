@@ -603,3 +603,101 @@ end 'main'
 ```stdout
 C:\valid\path.txt
 ```
+
+### File URL Support
+
+`FilePath` transparently accepts `file://` URLs in both `init()` and `from()`, extracting the filesystem path. Non-file URL schemes cause a panic in `init()` or throw `FilePathError.notFileURL` in `from()`.
+
+<!-- test: filepath-file-url-from -->
+```maxon
+function main() returns ExitCode
+  var p = try FilePath.from("file:///C:/Users/test.txt") otherwise panic("bad path")
+  print("{p}\n")
+  return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+C:\Users\test.txt
+```
+
+<!-- test: filepath-file-url-init -->
+```maxon
+function main() returns ExitCode
+  var p = FilePath from "file:///C:/Users/test.txt"
+  print("{p}\n")
+  return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+C:\Users\test.txt
+```
+
+<!-- test: filepath-file-url-unix-path -->
+```maxon
+function main() returns ExitCode
+  var p = try FilePath.from("file:///home/user/file.txt") otherwise panic("bad path")
+  print("{p}\n")
+  return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+\home\user\file.txt
+```
+
+<!-- test: filepath-not-file-url -->
+```maxon
+function main() returns ExitCode
+  try FilePath.from("https://example.com/path") otherwise 'err'
+    print("caught notFileURL\n")
+    return 0
+  end 'err'
+  return 1
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+caught notFileURL
+```
+
+<!-- test: filepath-regular-string-unchanged -->
+```maxon
+function main() returns ExitCode
+  var p = try FilePath.from("C:\\Users\\normal\\path.txt") otherwise panic("bad path")
+  print("{p}\n")
+  return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+C:\Users\normal\path.txt
+```
+
+<!-- test: filepath-file-url-empty-path -->
+```maxon
+function main() returns ExitCode
+  var p = try FilePath.from("file:///") otherwise panic("bad path")
+  print("path='{p}'\n")
+  print("empty={p.isEmpty()}\n")
+  return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+path='\'
+empty=false
+```

@@ -611,6 +611,7 @@ print(s)            // print string to stdout
 ```maxon
 var p = FilePath from "C:\\Users\\test.txt"   // from string literal
 var q = try FilePath.from("path") otherwise ...  // from string, throws FilePathError
+var r = FilePath from "file:///C:/Users/f.txt"   // file:// URLs converted to paths
 p.filename()                              // "test.txt"
 p.fileExtension()                         // ".txt"
 p.stem()                                  // "test"
@@ -623,6 +624,23 @@ p.isEmpty()                               // bool
 p.fileExists()                            // bool
 p.directoryExists()                       // bool
 FilePath.separator()                      // "\" on Windows, "/" on Linux
+```
+
+### URL
+```maxon
+var url = try URL.parse("https://host:8080/path?q=1#f") otherwise ...
+url.scheme()                              // "https"
+url.path()                                // "/path"
+var host = try url.host() otherwise ""    // "host"
+var port = try url.port() otherwise 443   // 8080
+var q = try url.query() otherwise ""      // "q=1"
+var f = try url.fragment() otherwise ""   // "f"
+var ui = try url.userinfo() otherwise ""  // userinfo before @
+url.toString()                            // reconstruct URL string
+// Reference resolution (RFC 3986 Section 5)
+var base = try URL.parse("http://a/b/c/d") otherwise ...
+var r = try URL.resolve(base, reference: "../g") otherwise ...
+r.toString()                              // "http://a/b/g"
 ```
 
 ### File
