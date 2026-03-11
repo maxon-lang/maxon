@@ -35,17 +35,12 @@ public partial class X86CodeEmitter {
     EmitMaxonF64ToStringFmt();
     EmitMaxonCommandLineCount();
     EmitMaxonCommandLineArg();
-    EmitMaxonFileOpenRead();
     EmitMaxonFileSize();
     EmitMaxonFileRead();
     EmitMaxonFileClose();
     EmitMaxonFileDelete();
-    EmitMaxonWriteFile();
-    EmitMaxonWriteFileBinary();
-    EmitMaxonFindFirstFile();
     EmitMaxonFindFilename();
     EmitMaxonFindNextFile();
-    EmitMaxonFindClose();
     EmitMaxonDirectoryExists();
     EmitMaxonCreateDirectory();
     EmitMaxonGetCurrentDirectory();
@@ -70,6 +65,14 @@ public partial class X86CodeEmitter {
     EmitNetRecv();
     EmitNetClose();
     EmitNetSocketDestructor();
+    EmitManagedFileOpenRead();
+    EmitManagedFileOpenWrite();
+    EmitFileExists();
+    EmitManagedFileWrite();
+    EmitFileDestructor();
+    EmitManagedDirOpenSearch();
+    EmitManagedDirClose();
+    EmitDirDestructor();
   }
 
   /// <summary>
@@ -1775,25 +1778,6 @@ public partial class X86CodeEmitter {
   // ==========================================================================
 
   /// <summary>
-  /// maxon_file_open_read(cstring_path) -> handle or -1
-  /// CreateFileA(path, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL)
-  /// Stack: [rbp-8]=path
-  /// </summary>
-  private void EmitMaxonFileOpenRead() {
-    EmitRuntimeFunctionStart("maxon_file_open_read", 1, 0x50);
-    EmitMovRegMem(X86Register.Rcx, -0x08, 8);        // arg1: lpFileName
-    EmitMovRegImm(X86Register.Rdx, 0x80000000);       // arg2: GENERIC_READ
-    EmitMovRegImm(X86Register.R8, 1);                  // arg3: FILE_SHARE_READ
-    EmitXorRegReg(X86Register.R9, X86Register.R9);     // arg4: lpSecurityAttributes = NULL
-    EmitBytes(0x48, 0xC7, 0x44, 0x24, 0x20, 0x03, 0x00, 0x00, 0x00); // [rsp+0x20] = OPEN_EXISTING (3)
-    EmitBytes(0x48, 0xC7, 0x44, 0x24, 0x28, 0x00, 0x00, 0x00, 0x00); // [rsp+0x28] = 0
-    EmitBytes(0x48, 0xC7, 0x44, 0x24, 0x30, 0x00, 0x00, 0x00, 0x00); // [rsp+0x30] = NULL
-    EmitCallImport("kernel32.dll", "CreateFileA");
-    // CreateFileA returns INVALID_HANDLE_VALUE (-1) on failure, which is what we want
-    EmitRuntimeFunctionEnd();
-  }
-
-  /// <summary>
   /// maxon_file_size(handle) -> file size in bytes
   /// GetFileSizeEx(handle, &size) - size is a 64-bit value
   /// Stack: [rbp-8]=handle, [rbp-16]=size (8 bytes for LARGE_INTEGER)
@@ -1842,13 +1826,16 @@ public partial class X86CodeEmitter {
 
   /// <summary>
   /// maxon_file_close(handle) -> void
-  /// CloseHandle(handle)
+  /// CloseHandle(handle) if non-zero. Idempotent.
   /// Stack: [rbp-8]=handle
   /// </summary>
   private void EmitMaxonFileClose() {
     EmitRuntimeFunctionStart("maxon_file_close", 1);
     EmitMovRegMem(X86Register.Rcx, -0x08, 8);         // arg1: hObject
+    EmitTestRegReg(X86Register.Rcx, X86Register.Rcx);
+    EmitJcc("z", "rt_fc_noop");
     EmitCallImport("kernel32.dll", "CloseHandle");
+    DefineLabel("rt_fc_noop");
     EmitRuntimeFunctionEnd();
   }
 
@@ -1887,74 +1874,6 @@ public partial class X86CodeEmitter {
     EmitJcc("e", failLabel);
   }
 
-  /// <summary>
-  /// Emits WriteFile + CloseHandle. Jumps to writeFailLabel if WriteFile fails (handle still needs closing).
-  /// </summary>
-  private void EmitWriteFileAndClose(int handleSlot, int bufferSlot, int lengthSlot, int bytesWrittenSlot, string writeFailLabel) {
-    EmitMovRegMem(X86Register.Rcx, handleSlot, 8);     // arg1: handle
-    EmitMovRegMem(X86Register.Rdx, bufferSlot, 8);     // arg2: buffer
-    EmitMovRegMem(X86Register.R8, lengthSlot, 8);       // arg3: length
-    // LEA R9, [rbp+bytesWrittenSlot] (&bytesWritten)
-    EmitBytes(0x4C, 0x8D, 0x4D, (byte)(bytesWrittenSlot & 0xFF));
-    EmitBytes(0x48, 0xC7, 0x44, 0x24, 0x20, 0x00, 0x00, 0x00, 0x00); // [rsp+0x20] = NULL
-    EmitCallImport("kernel32.dll", "WriteFile");
-    EmitTestRegReg(X86Register.Rax, X86Register.Rax);
-    EmitJcc("z", writeFailLabel);
-    EmitMovRegMem(X86Register.Rcx, handleSlot, 8);
-    EmitCallImport("kernel32.dll", "CloseHandle");
-  }
-
-  /// <summary>
-  /// maxon_write_file(cstring_path, cstring_content) -> 0 on success, non-zero on failure
-  /// Stack: [rbp-8]=path, [rbp-16]=content, [rbp-24]=handle, [rbp-32]=length/bytesWritten
-  /// </summary>
-  private void EmitMaxonWriteFile() {
-    EmitRuntimeFunctionStart("maxon_write_file", 2, 0x50);
-    EmitCreateFileForWrite(-0x08, "rt_wf_fail");
-    EmitMovMemReg(-0x18, X86Register.Rax, 8);         // [rbp-24] = handle
-    // strlen on content to get length
-    EmitMovRegMem(X86Register.Rdx, -0x10, 8);         // RDX = content ptr
-    EmitXorRegReg(X86Register.Rax, X86Register.Rax);    // RAX = 0 (counter)
-    DefineLabel("rt_wf_strlen_loop");
-    EmitBytes(0x0F, 0xB6, 0x0C, 0x02);                // MOVZX ECX, byte [RDX+RAX]
-    EmitBytes(0x84, 0xC9);                              // TEST CL, CL
-    EmitJcc("z", "rt_wf_strlen_done");
-    EmitBytes(0x48, 0xFF, 0xC0);                        // INC RAX
-    EmitJmp("rt_wf_strlen_loop");
-    DefineLabel("rt_wf_strlen_done");
-    EmitMovMemReg(-0x20, X86Register.Rax, 8);         // [rbp-32] = length
-    EmitWriteFileAndClose(-0x18, -0x10, -0x20, -0x20, "rt_wf_write_fail");
-    EmitXorRegReg(X86Register.Rax, X86Register.Rax);    // return 0 (success)
-    EmitJmp("rt_wf_done");
-    DefineLabel("rt_wf_write_fail");
-    EmitMovRegMem(X86Register.Rcx, -0x18, 8);
-    EmitCallImport("kernel32.dll", "CloseHandle");
-    DefineLabel("rt_wf_fail");
-    EmitMovRegImm(X86Register.Rax, 1);
-    DefineLabel("rt_wf_done");
-    EmitRuntimeFunctionEnd();
-  }
-
-  /// <summary>
-  /// maxon_write_file_binary(cstring_path, buffer_ptr, length) -> 0 on success, non-zero on failure
-  /// Stack: [rbp-8]=path, [rbp-16]=buffer_ptr, [rbp-24]=length, [rbp-32]=handle, [rbp-40]=bytesWritten
-  /// </summary>
-  private void EmitMaxonWriteFileBinary() {
-    EmitRuntimeFunctionStart("maxon_write_file_binary", 3, 0x50);
-    EmitCreateFileForWrite(-0x08, "rt_wfb_fail");
-    EmitMovMemReg(-0x20, X86Register.Rax, 8);         // [rbp-32] = handle
-    EmitWriteFileAndClose(-0x20, -0x10, -0x18, -0x28, "rt_wfb_write_fail");
-    EmitXorRegReg(X86Register.Rax, X86Register.Rax);    // return 0 (success)
-    EmitJmp("rt_wfb_done");
-    DefineLabel("rt_wfb_write_fail");
-    EmitMovRegMem(X86Register.Rcx, -0x20, 8);
-    EmitCallImport("kernel32.dll", "CloseHandle");
-    DefineLabel("rt_wfb_fail");
-    EmitMovRegImm(X86Register.Rax, 1);
-    DefineLabel("rt_wfb_done");
-    EmitRuntimeFunctionEnd();
-  }
-
   // ==========================================================================
   // Directory runtime functions
   // ==========================================================================
@@ -1969,49 +1888,6 @@ public partial class X86CodeEmitter {
   private const int FindBlockHandleOffset = 0;
   private const int FindBlockFindDataOffset = 8;
   private const int FindDataFileNameOffset = 44;
-
-  /// <summary>
-  /// maxon_find_first_file(cstring_pattern) -> block_ptr or 0
-  /// Allocates a block [handle(8) + WIN32_FIND_DATAA(320)], calls FindFirstFileA.
-  /// Returns block pointer on success, 0 if not found.
-  /// Stack: [rbp-8]=pattern, [rbp-16]=block_ptr
-  /// </summary>
-  private void EmitMaxonFindFirstFile() {
-    EmitRuntimeFunctionStart("maxon_find_first_file", 1, 0x40);
-    // Allocate block
-    EmitMovRegImm(X86Register.Rcx, FindBlockSize);
-    EmitXorRegReg(X86Register.Rdx, X86Register.Rdx);     // destructor = 0
-    EmitTagZero(X86Register.R8);  // R8 = tag
-    if (Compiler.MmTrace) EmitLeaRegSymdataRel(X86Register.R9, "__mm_scope_find_first_file");
-    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_alloc")); EmitDword(0);
-    EmitMovMemReg(-0x10, X86Register.Rax, 8); // [rbp-16] = block_ptr
-    // Incref so block starts at rc=1 (mm_alloc returns rc=0)
-    EmitMovRegReg(X86Register.Rcx, X86Register.Rax);
-    if (Compiler.MmTrace) EmitLeaRegSymdataRel(X86Register.Rdx, "__mm_scope_find_first_file");
-    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_incref")); EmitDword(0);
-    // FindFirstFileA(pattern, &block[8])
-    EmitMovRegMem(X86Register.Rcx, -0x08, 8); // arg1: pattern
-    EmitMovRegMem(X86Register.Rdx, -0x10, 8); // block_ptr
-    EmitAddRegImm(X86Register.Rdx, FindBlockFindDataOffset); // arg2: &findData
-    EmitCallImport("kernel32.dll", "FindFirstFileA");
-    // Check for INVALID_HANDLE_VALUE (-1)
-    EmitMovRegImm(X86Register.Rcx, -1);
-    EmitCmpRegReg(X86Register.Rax, X86Register.Rcx);
-    EmitJcc("ne", "rt_fff_found");
-    // Not found: decref block (frees since rc drops to 0), return 0
-    EmitMovRegMem(X86Register.Rcx, -0x10, 8);
-    if (Compiler.MmTrace) EmitLeaRegSymdataRel(X86Register.Rdx, "__mm_scope_find_close");
-    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_decref")); EmitDword(0);
-    EmitXorRegReg(X86Register.Rax, X86Register.Rax);
-    EmitJmp("rt_fff_done");
-    // Found: store handle in block[0], return block_ptr
-    DefineLabel("rt_fff_found");
-    EmitMovRegMem(X86Register.Rcx, -0x10, 8); // block_ptr
-    EmitMovIndirectMemReg(X86Register.Rcx, FindBlockHandleOffset, X86Register.Rax); // block[0] = handle
-    EmitMovRegReg(X86Register.Rax, X86Register.Rcx); // return block_ptr
-    DefineLabel("rt_fff_done");
-    EmitRuntimeFunctionEnd();
-  }
 
   /// <summary>
   /// maxon_find_filename(block_ptr) -> cstring pointer to cFileName in the block
@@ -2051,26 +1927,6 @@ public partial class X86CodeEmitter {
     EmitCallImport("kernel32.dll", "FindNextFileA");
     // RAX = non-zero if found, 0 if no more files
     DefineLabel("rt_fnf_done");
-    EmitRuntimeFunctionEnd();
-  }
-
-  /// <summary>
-  /// maxon_find_close(block_ptr) -> void
-  /// Calls FindClose(handle), then frees the block. No-op if block_ptr is null.
-  /// Stack: [rbp-8]=block_ptr
-  /// </summary>
-  private void EmitMaxonFindClose() {
-    EmitRuntimeFunctionStart("maxon_find_close", 1, 0x40);
-    EmitMovRegMem(X86Register.Rax, -0x08, 8); // block_ptr
-    EmitTestRegReg(X86Register.Rax, X86Register.Rax);
-    EmitJcc("z", "rt_fc_done");
-    EmitMovRegIndirectMem(X86Register.Rcx, X86Register.Rax, FindBlockHandleOffset); // arg1: handle
-    EmitCallImport("kernel32.dll", "FindClose");
-    // Decref block (frees since rc drops to 0)
-    EmitMovRegMem(X86Register.Rcx, -0x08, 8);
-    if (Compiler.MmTrace) EmitLeaRegSymdataRel(X86Register.Rdx, "__mm_scope_find_close");
-    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_decref")); EmitDword(0);
-    DefineLabel("rt_fc_done");
     EmitRuntimeFunctionEnd();
   }
 
@@ -3055,6 +2911,272 @@ public partial class X86CodeEmitter {
     EmitCallImport("ws2_32.dll", "closesocket");
 
     DefineLabel("rt_nsd_done");
+    EmitRuntimeFunctionEnd();
+  }
+
+  // ==========================================================================
+  // Managed File runtime functions
+  // ==========================================================================
+
+  /// <summary>
+  /// maxon_managed_file_open_read(cstring) → managed __ManagedFile ptr or -1.
+  /// Opens a file with GENERIC_READ/OPEN_EXISTING, wraps in mm_alloc with destructor.
+  /// Stack: [rbp-8]=cstring, [rbp-16]=handle
+  /// </summary>
+  private void EmitManagedFileOpenRead() {
+    EmitRuntimeFunctionStart("maxon_managed_file_open_read", 1, 0x50);
+    // CreateFileA(path, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL)
+    EmitMovRegMem(X86Register.Rcx, -0x08, 8);        // arg1: lpFileName
+    EmitMovRegImm(X86Register.Rdx, 0x80000000);       // arg2: GENERIC_READ
+    EmitMovRegImm(X86Register.R8, 1);                  // arg3: FILE_SHARE_READ
+    EmitXorRegReg(X86Register.R9, X86Register.R9);     // arg4: lpSecurityAttributes = NULL
+    EmitBytes(0x48, 0xC7, 0x44, 0x24, 0x20, 0x03, 0x00, 0x00, 0x00); // [rsp+0x20] = OPEN_EXISTING (3)
+    EmitBytes(0x48, 0xC7, 0x44, 0x24, 0x28, 0x00, 0x00, 0x00, 0x00); // [rsp+0x28] = 0
+    EmitBytes(0x48, 0xC7, 0x44, 0x24, 0x30, 0x00, 0x00, 0x00, 0x00); // [rsp+0x30] = NULL
+    EmitCallImport("kernel32.dll", "CreateFileA");
+    // Check for INVALID_HANDLE_VALUE (-1)
+    EmitMovRegImm(X86Register.Rcx, -1);
+    EmitCmpRegReg(X86Register.Rax, X86Register.Rcx);
+    EmitJcc("ne", "rt_mfor_ok");
+    // Failed: return -1
+    EmitMovRegImm(X86Register.Rax, -1);
+    EmitJmp("rt_mfor_done");
+
+    DefineLabel("rt_mfor_ok");
+    EmitMovMemReg(-0x10, X86Register.Rax, 8);         // save handle
+    // Allocate __ManagedFile via mm_alloc(8, destructor_ptr, tag_index=0)
+    EmitMovRegImm(X86Register.Rcx, 8);                // size = 8 bytes (one i64 _handle field)
+    EmitLeaFuncAddr(X86Register.Rdx, "__destruct___ManagedFile"); // destructor fn ptr
+    EmitTagZero(X86Register.R8);                        // tag_index = 0
+    EmitCallRuntimeLabel("mm_alloc");
+    // RAX = managed user pointer; store file handle at [ptr+0]
+    EmitMovRegMem(X86Register.Rcx, -0x10, 8);          // RCX = file handle
+    EmitBytes(0x48, 0x89, 0x08);                        // MOV [RAX], RCX
+
+    DefineLabel("rt_mfor_done");
+    EmitRuntimeFunctionEnd();
+  }
+
+  /// <summary>
+  /// maxon_managed_file_open_write(cstring) → managed __ManagedFile ptr or -1.
+  /// Opens a file with GENERIC_WRITE/CREATE_ALWAYS, wraps in mm_alloc with destructor.
+  /// Stack: [rbp-8]=cstring, [rbp-16]=handle
+  /// </summary>
+  private void EmitManagedFileOpenWrite() {
+    EmitRuntimeFunctionStart("maxon_managed_file_open_write", 1, 0x50);
+    EmitCreateFileForWrite(-0x08, "rt_mfow_fail");
+    EmitMovMemReg(-0x10, X86Register.Rax, 8);          // save handle
+    // Allocate __ManagedFile via mm_alloc(8, destructor_ptr, tag_index=0)
+    EmitMovRegImm(X86Register.Rcx, 8);                // size = 8 bytes
+    EmitLeaFuncAddr(X86Register.Rdx, "__destruct___ManagedFile"); // destructor fn ptr
+    EmitTagZero(X86Register.R8);                        // tag_index = 0
+    EmitCallRuntimeLabel("mm_alloc");
+    // RAX = managed user pointer; store file handle at [ptr+0]
+    EmitMovRegMem(X86Register.Rcx, -0x10, 8);          // RCX = file handle
+    EmitBytes(0x48, 0x89, 0x08);                        // MOV [RAX], RCX
+    EmitJmp("rt_mfow_done");
+
+    DefineLabel("rt_mfow_fail");
+    EmitMovRegImm(X86Register.Rax, -1);
+
+    DefineLabel("rt_mfow_done");
+    EmitRuntimeFunctionEnd();
+  }
+
+  /// <summary>
+  /// maxon_file_exists(cstring) → 1 if file exists (and is not a directory), 0 otherwise.
+  /// Calls GetFileAttributesA, checks for valid attributes without FILE_ATTRIBUTE_DIRECTORY.
+  /// Stack: [rbp-8]=path
+  /// </summary>
+  private void EmitFileExists() {
+    EmitRuntimeFunctionStart("maxon_file_exists", 1, 0x40);
+    EmitMovRegMem(X86Register.Rcx, -0x08, 8);         // arg1: path
+    EmitCallImport("kernel32.dll", "GetFileAttributesA");
+    // Check for INVALID_FILE_ATTRIBUTES (0xFFFFFFFF / -1 as DWORD)
+    EmitBytes(0x83, 0xF8, 0xFF);                        // CMP EAX, -1
+    EmitJcc("ne", "rt_fex_check_attr");
+    // INVALID_FILE_ATTRIBUTES: return 0
+    EmitXorRegReg(X86Register.Rax, X86Register.Rax);
+    EmitJmp("rt_fex_done");
+    DefineLabel("rt_fex_check_attr");
+    // Check that FILE_ATTRIBUTE_DIRECTORY bit (0x10) is NOT set
+    EmitBytes(0xA8, 0x10);                              // TEST AL, 0x10
+    EmitJcc("z", "rt_fex_is_file");
+    // Is a directory, not a file: return 0
+    EmitXorRegReg(X86Register.Rax, X86Register.Rax);
+    EmitJmp("rt_fex_done");
+    DefineLabel("rt_fex_is_file");
+    EmitMovRegImm(X86Register.Rax, 1);
+    DefineLabel("rt_fex_done");
+    EmitRuntimeFunctionEnd();
+  }
+
+  /// <summary>
+  /// maxon_managed_file_write(handle, buffer, length) → bytes written or -1.
+  /// Calls WriteFile(handle, buffer, length, &bytesWritten, NULL).
+  /// Stack: [rbp-8]=handle, [rbp-16]=buffer, [rbp-24]=length, [rbp-32]=bytesWritten
+  /// </summary>
+  private void EmitManagedFileWrite() {
+    EmitRuntimeFunctionStart("maxon_managed_file_write", 3, 0x50);
+    // Zero the bytesWritten slot
+    EmitXorRegReg(X86Register.Rax, X86Register.Rax);
+    EmitMovMemReg(-0x20, X86Register.Rax, 8);
+    EmitMovRegMem(X86Register.Rcx, -0x08, 8);         // arg1: handle
+    EmitMovRegMem(X86Register.Rdx, -0x10, 8);         // arg2: buffer
+    EmitMovRegMem(X86Register.R8, -0x18, 8);           // arg3: length
+    // LEA R9, [rbp-0x20] (&bytesWritten)
+    EmitLeaRegMem(X86Register.R9, -0x20);
+    EmitBytes(0x48, 0xC7, 0x44, 0x24, 0x20, 0x00, 0x00, 0x00, 0x00); // [rsp+0x20] = NULL (lpOverlapped)
+    EmitCallImport("kernel32.dll", "WriteFile");
+    EmitTestRegReg(X86Register.Rax, X86Register.Rax);
+    EmitJcc("nz", "rt_mfw_ok");
+    // WriteFile failed: return -1
+    EmitMovRegImm(X86Register.Rax, -1);
+    EmitJmp("rt_mfw_done");
+    DefineLabel("rt_mfw_ok");
+    EmitMovRegMem(X86Register.Rax, -0x20, 8);         // return bytesWritten
+    DefineLabel("rt_mfw_done");
+    EmitRuntimeFunctionEnd();
+  }
+
+  /// <summary>
+  /// __destruct___ManagedFile(user_ptr) → void.
+  /// Called by mm_decref when refcount hits 0. Reads _handle at [user_ptr+0],
+  /// calls CloseHandle if non-zero, then zeros the handle for idempotency.
+  /// </summary>
+  private void EmitFileDestructor() {
+    EmitRuntimeFunctionStart("__destruct___ManagedFile", 1, 0x30);
+    EmitMovRegMem(X86Register.Rax, -0x08, 8);         // RAX = user_ptr
+    EmitBytes(0x48, 0x8B, 0x08);                       // MOV RCX, [RAX] = _handle
+    EmitTestRegReg(X86Register.Rcx, X86Register.Rcx);
+    EmitJcc("z", "rt_mfd_done");
+    // Zero the handle before closing (idempotency)
+    EmitMovRegMem(X86Register.Rax, -0x08, 8);         // RAX = user_ptr
+    EmitXorRegReg(X86Register.Rdx, X86Register.Rdx);
+    EmitBytes(0x48, 0x89, 0x10);                       // MOV [RAX], RDX = 0
+    // CloseHandle(handle) — RCX already has the handle
+    EmitCallImport("kernel32.dll", "CloseHandle");
+    DefineLabel("rt_mfd_done");
+    EmitRuntimeFunctionEnd();
+  }
+
+  // ==========================================================================
+  // Managed Directory runtime functions
+  // ==========================================================================
+
+  /// <summary>
+  /// maxon_managed_dir_open_search(cstring) → managed __ManagedDirectory ptr or 0.
+  /// Allocates a find block, calls FindFirstFileA. On success, allocates a
+  /// __ManagedDirectory struct and stores the block pointer. On failure, returns 0.
+  /// Stack: [rbp-8]=cstring, [rbp-16]=block_ptr
+  /// </summary>
+  private void EmitManagedDirOpenSearch() {
+    EmitRuntimeFunctionStart("maxon_managed_dir_open_search", 1, 0x50);
+
+    // Allocate the find block (328 bytes, no destructor)
+    EmitMovRegImm(X86Register.Rcx, FindBlockSize);
+    EmitXorRegReg(X86Register.Rdx, X86Register.Rdx);   // destructor = 0
+    EmitTagZero(X86Register.R8);
+    EmitCallRuntimeLabel("mm_alloc");
+    EmitMovMemReg(-0x10, X86Register.Rax, 8);         // [rbp-16] = block_ptr
+    // Incref so block starts at rc=1
+    EmitMovRegReg(X86Register.Rcx, X86Register.Rax);
+    EmitCallRuntimeLabel("mm_incref");
+
+    // FindFirstFileA(pattern, &block[8])
+    EmitMovRegMem(X86Register.Rcx, -0x08, 8);         // arg1: pattern (cstring)
+    EmitMovRegMem(X86Register.Rdx, -0x10, 8);         // block_ptr
+    EmitAddRegImm(X86Register.Rdx, FindBlockFindDataOffset); // arg2: &findData
+    EmitCallImport("kernel32.dll", "FindFirstFileA");
+
+    // Check for INVALID_HANDLE_VALUE (-1)
+    EmitMovRegImm(X86Register.Rcx, -1);
+    EmitCmpRegReg(X86Register.Rax, X86Register.Rcx);
+    EmitJcc("ne", "rt_mdos_found");
+
+    // Not found: decref block (frees since rc drops to 0), return 0
+    EmitMovRegMem(X86Register.Rcx, -0x10, 8);
+    EmitCallRuntimeLabel("mm_decref");
+    EmitXorRegReg(X86Register.Rax, X86Register.Rax);
+    EmitJmp("rt_mdos_done");
+
+    // Found: allocate dir struct, store handle and block
+    DefineLabel("rt_mdos_found");
+    EmitMovMemReg(-0x18, X86Register.Rax, 8);         // save FindFirstFileA handle temporarily
+    // Store handle in block[0]
+    EmitMovRegMem(X86Register.Rcx, -0x10, 8);         // block_ptr
+    EmitMovRegMem(X86Register.Rax, -0x18, 8);         // handle
+    EmitMovIndirectMemReg(X86Register.Rcx, FindBlockHandleOffset, X86Register.Rax); // block[0] = handle
+
+    // Allocate __ManagedDirectory via mm_alloc(8, destructor_ptr, tag_index=0)
+    EmitMovRegImm(X86Register.Rcx, 8);                // size = 8 bytes (one i64 _block field)
+    EmitLeaFuncAddr(X86Register.Rdx, "__destruct___ManagedDirectory"); // destructor fn ptr
+    EmitTagZero(X86Register.R8);                        // tag_index = 0
+    EmitCallRuntimeLabel("mm_alloc");
+    // RAX = managed dir user pointer; store block_ptr at [ptr+0]
+    EmitMovRegMem(X86Register.Rcx, -0x10, 8);          // RCX = block_ptr
+    EmitBytes(0x48, 0x89, 0x08);                        // MOV [RAX], RCX
+    // Return dir_ptr (RAX already = dir_ptr)
+
+    DefineLabel("rt_mdos_done");
+    EmitRuntimeFunctionEnd();
+  }
+
+  /// <summary>
+  /// maxon_managed_dir_close(block_ptr) → void.
+  /// Calls FindClose on the handle inside the block if non-zero, zeros the handle.
+  /// Does NOT free the block — that is handled by the destructor.
+  /// Stack: [rbp-8]=block_ptr
+  /// </summary>
+  private void EmitManagedDirClose() {
+    EmitRuntimeFunctionStart("maxon_managed_dir_close", 1, 0x40);
+    EmitMovRegMem(X86Register.Rax, -0x08, 8);         // block_ptr
+    EmitTestRegReg(X86Register.Rax, X86Register.Rax);
+    EmitJcc("z", "rt_mdc_done");
+    // Read handle from block[0]
+    EmitMovRegIndirectMem(X86Register.Rcx, X86Register.Rax, FindBlockHandleOffset); // RCX = handle
+    EmitTestRegReg(X86Register.Rcx, X86Register.Rcx);
+    EmitJcc("z", "rt_mdc_done");
+    // Zero the handle first (idempotency)
+    EmitMovRegMem(X86Register.Rax, -0x08, 8);         // block_ptr
+    EmitXorRegReg(X86Register.Rdx, X86Register.Rdx);
+    EmitMovIndirectMemReg(X86Register.Rax, FindBlockHandleOffset, X86Register.Rdx); // block[0] = 0
+    // FindClose(handle) — RCX already has the handle
+    EmitCallImport("kernel32.dll", "FindClose");
+    DefineLabel("rt_mdc_done");
+    EmitRuntimeFunctionEnd();
+  }
+
+  /// <summary>
+  /// __destruct___ManagedDirectory(user_ptr) → void.
+  /// Called by mm_decref when refcount hits 0. Reads _block at [user_ptr+0],
+  /// if non-zero: reads handle from block[0], calls FindClose if non-zero,
+  /// then frees the block via mm_decref.
+  /// </summary>
+  private void EmitDirDestructor() {
+    EmitRuntimeFunctionStart("__destruct___ManagedDirectory", 1, 0x40);
+    EmitMovRegMem(X86Register.Rax, -0x08, 8);         // RAX = user_ptr
+    EmitBytes(0x48, 0x8B, 0x08);                       // MOV RCX, [RAX] = _block
+    EmitTestRegReg(X86Register.Rcx, X86Register.Rcx);
+    EmitJcc("z", "rt_mdd_done");
+    // Save block ptr
+    EmitMovMemReg(-0x10, X86Register.Rcx, 8);
+    // Zero _block field (idempotency)
+    EmitMovRegMem(X86Register.Rax, -0x08, 8);
+    EmitXorRegReg(X86Register.Rdx, X86Register.Rdx);
+    EmitBytes(0x48, 0x89, 0x10);                       // MOV [RAX], RDX = 0
+    // Read handle from block[0]
+    EmitMovRegMem(X86Register.Rax, -0x10, 8);         // RAX = block_ptr
+    EmitMovRegIndirectMem(X86Register.Rcx, X86Register.Rax, FindBlockHandleOffset);
+    EmitTestRegReg(X86Register.Rcx, X86Register.Rcx);
+    EmitJcc("z", "rt_mdd_skip_close");
+    // FindClose(handle)
+    EmitCallImport("kernel32.dll", "FindClose");
+    DefineLabel("rt_mdd_skip_close");
+    // Free the block via mm_decref
+    EmitMovRegMem(X86Register.Rcx, -0x10, 8);
+    EmitCallRuntimeLabel("mm_decref");
+    DefineLabel("rt_mdd_done");
     EmitRuntimeFunctionEnd();
   }
 }

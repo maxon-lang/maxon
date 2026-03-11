@@ -297,6 +297,12 @@ public static partial class MaxonToStandardConversion {
     // __ManagedSocket has a hand-written runtime destructor that calls closesocket
     if (typeName == "__ManagedSocket") return "__destruct___ManagedSocket";
 
+    // __ManagedFile has a hand-written runtime destructor that calls CloseHandle
+    if (typeName == "__ManagedFile") return "__destruct___ManagedFile";
+
+    // __ManagedDirectory has a hand-written runtime destructor that calls FindClose and frees the block
+    if (typeName == "__ManagedDirectory") return "__destruct___ManagedDirectory";
+
     // __ManagedMemory types need a destructor to free their raw buffer
     if (_resultModule?.TypeAliasSources is { } aliasSources
         && TypeAliasInfo.IsManagedMemoryType(typeName, aliasSources))

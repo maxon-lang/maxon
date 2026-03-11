@@ -1433,7 +1433,7 @@ end 'Token'
 typealias TokenChain = __Chain with Token
 
 function main() returns ExitCode
-  var chain = TokenChain{}
+  var chain = TokenChain.create()
   var t = Token{id: 7}
   var node = chain.insertFirst(t)
   return node.value().id
@@ -1474,7 +1474,7 @@ end 'Token'
 typealias TokenChain = __Chain with Token
 
 function main() returns ExitCode
-  var chain = TokenChain{}
+  var chain = TokenChain.create()
   var node = chain.insertFirst(Token{id: 9})
   var removed = chain.remove(node)
   return removed.id + chain.count()
@@ -1517,7 +1517,7 @@ end 'Token'
 typealias TokenChain = __Chain with Token
 
 function main() returns ExitCode
-  var chain = TokenChain{}
+  var chain = TokenChain.create()
   chain.insertLast(Token{id: 1})
   chain.insertLast(Token{id: 2})
   chain.insertLast(Token{id: 3})
@@ -1578,7 +1578,7 @@ end 'Token'
 typealias TokenChain = __Chain with Token
 
 function main() returns ExitCode
-  var chain = TokenChain{}
+  var chain = TokenChain.create()
   var node = chain.insertFirst(Token{id: 1})
   node.setValue(Token{id: 99})
   return node.value().id
@@ -2930,7 +2930,7 @@ end 'Item'
 typealias ItemChain = __Chain with Item
 
 function main() returns ExitCode
-  var chain = ItemChain{}
+  var chain = ItemChain.create()
   var node = chain.insertFirst(Item{value: 50})
   chain.remove(node)
   return chain.count()

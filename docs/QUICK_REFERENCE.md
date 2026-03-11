@@ -656,7 +656,9 @@ File.delete(path)                         // throws FileDeleteError
 ### Directory
 ```maxon
 Directory.exists(path)                    // bool (path is FilePath)
+Directory.isDirectory(path)               // alias for exists()
 Directory.list(path)                      // StringArray, throws
+Directory.create(path)                    // returns bool (true on success)
 Directory.currentPath()                   // returns FilePath
 ```
 

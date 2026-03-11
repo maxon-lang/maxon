@@ -37,6 +37,7 @@ This reference provides complete syntax and semantics for the Maxon programming 
     - [String Trimming](#string-trimming)
     - [List](#list)
     - [Networking (TcpClient)](#networking-tcpclient)
+    - [Builtin Managed Types](#builtin-managed-types)
 13. [Build System](#build-system)
 14. [Memory Model](#memory-model)
     - [Reference-by-Default Assignment](#reference-by-default-assignment)
@@ -3237,6 +3238,61 @@ function main() returns ExitCode
     return 0
 end 'main'
 ```
+
+### Builtin Managed Types
+
+The compiler provides several builtin managed types that wrap OS-level resources (file handles, sockets, directory search handles). These types use RAII via destructors: when the last reference to a managed object goes out of scope, the compiler automatically calls the destructor to release the underlying OS resource.
+
+Managed types are not used directly by application code. Instead, stdlib wrapper types (`File`, `Directory`, `TcpClient`) provide the public API. The managed types are documented here for completeness and for stdlib authors.
+
+#### `__ManagedSocket`
+
+Wraps an OS socket file descriptor. Used internally by `TcpClient`. See [Networking (TcpClient)](#networking-tcpclient) for details.
+
+#### `__ManagedFile`
+
+Wraps an OS file handle (Windows `HANDLE` or Linux file descriptor). Used internally by `File`.
+
+**Static Methods:**
+
+| Method | Returns | Description |
+|--------|---------|-------------|
+| `openRead(managed)` | `__ManagedFile` | Open a file for reading. Returns `-1` on failure. |
+| `openWrite(managed)` | `__ManagedFile` | Open a file for writing (creates or truncates). Returns `-1` on failure. |
+| `exists(managed)` | `int` | Check if a file exists. Returns nonzero if the file exists. |
+| `delete(managed)` | `int` | Delete a file. Returns `0` on success. |
+
+**Instance Methods:**
+
+| Method | Returns | Description |
+|--------|---------|-------------|
+| `size()` | `int` | Get the file size in bytes. |
+| `read(managed, size)` | `int` | Read up to `size` bytes into the managed buffer. Returns bytes read. |
+| `write(managed)` | `int` | Write the contents of the managed buffer. Returns bytes written, or negative on error. |
+| `close()` | -- | Close the file handle. Idempotent; also called automatically by the destructor. |
+
+The `managed` parameters refer to `__ManagedMemory` buffers (the internal backing store of `String` and `ByteArray`).
+
+#### `__ManagedDirectory`
+
+Wraps an OS directory search handle (Windows `FindFirstFile`/`FindNextFile` or Linux `opendir`/`readdir`). Used internally by `Directory`.
+
+**Static Methods:**
+
+| Method | Returns | Description |
+|--------|---------|-------------|
+| `openSearch(managed)` | `__ManagedDirectory` | Open a directory search with a glob pattern. Returns `0` on failure. |
+| `exists(managed)` | `bool` | Check if a path exists and is a directory. |
+| `create(managed)` | `bool` | Create a directory. Returns `true` on success. |
+| `currentPath()` | `__ManagedMemory` | Get the current working directory as a managed string. |
+
+**Instance Methods:**
+
+| Method | Returns | Description |
+|--------|---------|-------------|
+| `filename()` | `__ManagedMemory` | Get the filename of the current search result. |
+| `next()` | `int` | Advance to the next search result. Returns `0` when no more entries. |
+| `close()` | -- | Close the search handle. Idempotent; also called automatically by the destructor. |
 
 ---
 

@@ -28,24 +28,6 @@ All methods include safety checks to prevent crashes and memory corruption:
 - `__Builtins.commandLineCount()` returns int - Get argument count
 - `__Builtins.commandLineArg(index)` returns __ManagedMemory - Get argument at index
 
-**File I/O:**
-- `__Builtins.fileOpenRead(managed)` returns int - Open file for reading
-- `__Builtins.fileSize(handle)` returns int - Get file size
-- `__Builtins.fileRead(handle, managed, size)` returns int - Read bytes from file
-- `__Builtins.fileClose(handle)` - Close file handle
-- `__Builtins.fileDelete(managed)` returns int - Delete a file
-- `__Builtins.writeFile(pathManaged, contentManaged)` returns int - Write text file
-- `__Builtins.writeFileBinary(pathManaged, array)` returns int - Write binary file
-
-**Directory:**
-- `__Builtins.findFirstFile(managed)` returns int - Start directory search
-- `__Builtins.findFilename(handle)` returns __ManagedMemory - Get current filename
-- `__Builtins.findNextFile(handle)` returns int - Advance to next file
-- `__Builtins.findClose(handle)` - Close search handle
-- `__Builtins.directoryExists(managed)` returns bool - Check directory exists
-- `__Builtins.createDirectory(managed)` returns bool - Create directory
-- `__Builtins.getCurrentDirectory()` returns __ManagedMemory - Get current directory
-
 **Process:**
 - `__Builtins.processCreate(cmdManaged, cwdManaged)` returns int - Create process
 - `__Builtins.processWait(handle, timeoutMs)` returns int - Wait for process
@@ -127,46 +109,6 @@ function main() returns ExitCode
     return 0
   end 'check'
   return 1
-end 'main'
-```
-```exitcode
-0
-```
-
-<!-- test: builtins-type.find-filename-null-handle -->
-```maxon
-function main() returns ExitCode
-  let managed = __Builtins.findFilename(0)
-  let s = String{managed: managed, _iterPos: 0}
-  if s == "" 'check'
-    return 0
-  end 'check'
-  return 1
-end 'main'
-```
-```exitcode
-0
-```
-
-<!-- test: builtins-type.find-next-null-handle -->
-```maxon
-function main() returns ExitCode
-  let result = __Builtins.findNextFile(0)
-  if result == 0 'check'
-    return 0
-  end 'check'
-  return 1
-end 'main'
-```
-```exitcode
-0
-```
-
-<!-- test: builtins-type.find-close-null-handle -->
-```maxon
-function main() returns ExitCode
-  __Builtins.findClose(0)
-  return 0
 end 'main'
 ```
 ```exitcode

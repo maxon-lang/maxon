@@ -639,9 +639,26 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     if (!_typeRegistry.ContainsKey("__ManagedSocket")) {
       var socketType = new MlirStructType("__ManagedSocket", [
         new MlirStructField("_handle", MlirType.I64, false, true),
-      ]);
-      socketType.DocString = "Compiler builtin managed socket. Wraps an OS socket handle with automatic cleanup via destructor on last decref.";
+      ]) {
+        DocString = "Compiler builtin managed socket. Wraps an OS socket handle with automatic cleanup via destructor on last decref."
+      };
       _typeRegistry["__ManagedSocket"] = socketType;
+    }
+    if (!_typeRegistry.ContainsKey("__ManagedFile")) {
+      var fileType = new MlirStructType("__ManagedFile", [
+        new MlirStructField("_handle", MlirType.I64, false, true),
+      ]) {
+        DocString = "Compiler builtin managed file. Wraps a Windows file HANDLE with automatic cleanup via destructor on last decref."
+      };
+      _typeRegistry["__ManagedFile"] = fileType;
+    }
+    if (!_typeRegistry.ContainsKey("__ManagedDirectory")) {
+      var dirType = new MlirStructType("__ManagedDirectory", [
+        new MlirStructField("_block", MlirType.I64, false, true),
+      ]) {
+        DocString = "Compiler builtin managed directory search. Wraps a FindFirstFile block (HANDLE + WIN32_FIND_DATAA) with automatic cleanup."
+      };
+      _typeRegistry["__ManagedDirectory"] = dirType;
     }
   }
 
@@ -6361,82 +6378,6 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     ["commandLineArg"] = RuntimeCallToManaged(
       "Returns a __ManagedMemory for the command line argument at the given index.\n\n`__Builtins.commandLineArg(index) returns __ManagedMemory`",
       "maxon_command_line_arg", 1, freeCString: true),
-    // === File I/O intrinsics ===
-    ["fileOpenRead"] = ManagedToCStringRuntimeCall(
-      "Opens a file for reading, returns handle or -1.\n\n`__Builtins.fileOpenRead(managed) returns int`",
-      "maxon_file_open_read"),
-    ["fileSize"] = RuntimeCallIntrinsic(
-      "Returns the size of an open file handle.\n\n`__Builtins.fileSize(handle) returns int`",
-      "maxon_file_size", 1, true),
-    ["fileRead"] = new(
-      "Reads bytes from file into managed memory, clamped to capacity.\n\n`__Builtins.fileRead(handle, managed, size) returns int`",
-      p => {
-        var handle = p.ResolveExprValue(p.ParseExpression());
-        p.Expect(TokenType.Comma);
-        var managed = p.ResolveExprValue(p.ParseExpression());
-        p.Expect(TokenType.Comma);
-        var size = p.ResolveExprValue(p.ParseExpression());
-        p.Expect(TokenType.RightParen);
-        // Extract buffer pointer and capacity from managed struct for bounds-safe read
-        var bufferRef = new MaxonFieldAccessOp(managed, "__ManagedMemory", "buffer", MaxonValueKind.Integer);
-        p._currentBlock!.AddOp(bufferRef);
-        var capacityRef = new MaxonFieldAccessOp(managed, "__ManagedMemory", "capacity", MaxonValueKind.Integer);
-        p._currentBlock!.AddOp(capacityRef);
-        var op = new MaxonCallRuntimeOp("maxon_file_read", [handle, bufferRef.Result, size, capacityRef.Result], true);
-        p._currentBlock!.AddOp(op);
-        return op.Result;
-      }),
-    ["fileClose"] = RuntimeCallIntrinsic(
-      "Closes a file handle.\n\n`__Builtins.fileClose(handle)`",
-      "maxon_file_close", 1, false),
-    ["fileDelete"] = ManagedToCStringRuntimeCall(
-      "Deletes a file. Returns 0 on success, non-zero on failure.\n\n`__Builtins.fileDelete(managed) returns int`",
-      "maxon_file_delete"),
-    ["writeFile"] = TwoManagedToCStringRuntimeCall(
-      "Writes text content to a file. Returns 0 on success.\n\n`__Builtins.writeFile(path_managed, content_managed) returns int`",
-      "maxon_write_file"),
-    ["writeFileBinary"] = new(
-      "Writes binary content to a file. Returns 0 on success.\n\n`__Builtins.writeFileBinary(path_managed, array) returns int`",
-      p => {
-        var pathManaged = p.ResolveExprValue(p.ParseExpression());
-        p.Expect(TokenType.Comma);
-        var arrayVal = p.ResolveExprValue(p.ParseExpression());
-        p.Expect(TokenType.RightParen);
-        var pathCstr = new MaxonManagedToCStringOp(pathManaged);
-        p._currentBlock!.AddOp(pathCstr);
-        // Runtime expects raw buffer+length for binary content, not a managed struct
-        var managedRef = new MaxonFieldAccessOp(arrayVal, "Array", "managed", MaxonValueKind.Struct, "__ManagedMemory");
-        p._currentBlock!.AddOp(managedRef);
-        var bufferRef = new MaxonFieldAccessOp(managedRef.Result, "__ManagedMemory", "buffer", MaxonValueKind.Integer);
-        p._currentBlock!.AddOp(bufferRef);
-        var lengthRef = new MaxonFieldAccessOp(managedRef.Result, "__ManagedMemory", "length", MaxonValueKind.Integer);
-        p._currentBlock!.AddOp(lengthRef);
-        var op = new MaxonCallRuntimeOp("maxon_write_file_binary", [pathCstr.Result, bufferRef.Result, lengthRef.Result], true);
-        p._currentBlock!.AddOp(op);
-        return op.Result;
-      }),
-    // === Directory intrinsics ===
-    ["findFirstFile"] = ManagedToCStringRuntimeCall(
-      "Opens a file search. Returns handle or 0.\n\n`__Builtins.findFirstFile(managed) returns int`",
-      "maxon_find_first_file"),
-    ["findFilename"] = RuntimeCallToManaged(
-      "Gets the current filename from a search handle as __ManagedMemory.\n\n`__Builtins.findFilename(handle) returns __ManagedMemory`",
-      "maxon_find_filename", 1, freeCString: false),
-    ["findNextFile"] = RuntimeCallIntrinsic(
-      "Advances to next file. Returns non-zero if found.\n\n`__Builtins.findNextFile(handle) returns int`",
-      "maxon_find_next_file", 1, true),
-    ["findClose"] = RuntimeCallIntrinsic(
-      "Closes a file search handle.\n\n`__Builtins.findClose(handle)`",
-      "maxon_find_close", 1, false),
-    ["directoryExists"] = ManagedToCStringRuntimeCallBool(
-      "Checks if a directory exists. Returns true/false.\n\n`__Builtins.directoryExists(managed) returns bool`",
-      "maxon_directory_exists"),
-    ["createDirectory"] = ManagedToCStringRuntimeCallBool(
-      "Creates a directory. Returns true on success, false on failure.\n\n`__Builtins.createDirectory(managed) returns bool`",
-      "maxon_create_directory"),
-    ["getCurrentDirectory"] = RuntimeCallToManaged(
-      "Gets the current working directory as __ManagedMemory.\n\n`__Builtins.getCurrentDirectory() returns __ManagedMemory`",
-      "maxon_get_current_directory", 0, freeCString: true),
     // === Process intrinsics ===
     ["processCreate"] = TwoManagedToCStringRuntimeCall(
       "Creates a process. Returns handle.\n\n`__Builtins.processCreate(cmd_managed, cwd_managed) returns int`",
@@ -6566,19 +6507,6 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     return (kind, null);
   }
 
-  /// Converts a single managed arg to cstring, calls a runtime function, returns its result.
-  private static BuiltinInfo ManagedToCStringRuntimeCall(string doc, string runtimeName) {
-    return new(doc, p => {
-      var managed = p.ResolveExprValue(p.ParseExpression());
-      p.Expect(TokenType.RightParen);
-      var toCstrOp = new MaxonManagedToCStringOp(managed);
-      p._currentBlock!.AddOp(toCstrOp);
-      var op = new MaxonCallRuntimeOp(runtimeName, [toCstrOp.Result], true);
-      p._currentBlock!.AddOp(op);
-      return op.Result;
-    });
-  }
-
   /// Converts two managed args to cstrings, calls a runtime function, returns its result.
   private static BuiltinInfo TwoManagedToCStringRuntimeCall(string doc, string runtimeName) {
     return new(doc, p => {
@@ -6614,23 +6542,6 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
         p._currentBlock!.AddOp(freeOp);
       }
       return toManagedOp.Result;
-    });
-  }
-
-  /// Converts a single managed arg to cstring, calls runtime, compares result != 0 for bool.
-  private static BuiltinInfo ManagedToCStringRuntimeCallBool(string doc, string runtimeName) {
-    return new(doc, p => {
-      var managed = p.ResolveExprValue(p.ParseExpression());
-      p.Expect(TokenType.RightParen);
-      var toCstrOp = new MaxonManagedToCStringOp(managed);
-      p._currentBlock!.AddOp(toCstrOp);
-      var op = new MaxonCallRuntimeOp(runtimeName, [toCstrOp.Result], true);
-      p._currentBlock!.AddOp(op);
-      var zeroOp = new MaxonLiteralOp(0L);
-      p._currentBlock!.AddOp(zeroOp);
-      var cmpOp = new MaxonBinOp(MaxonBinOperator.Ne, op.Result!, zeroOp.Result, MaxonValueKind.Integer);
-      p._currentBlock!.AddOp(cmpOp);
-      return cmpOp.Result;
     });
   }
 
@@ -6962,7 +6873,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
   }
 
   private static bool IsBuiltinMethodType(string baseTypeName) =>
-    baseTypeName is "__Chain" or "__ChainNode" or "__ManagedMemory" or "__ManagedSocket";
+    baseTypeName is "__Chain" or "__ChainNode" or "__ManagedMemory" or "__ManagedSocket" or "__ManagedFile" or "__ManagedDirectory";
 
   /// Unified dispatch for builtin type instance methods.
   /// Routes to Chain/ChainNode or ManagedMemory handlers based on the resolved base type.
@@ -6975,6 +6886,10 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       return TryEmitBuiltinManagedMemoryMethod(structTypeName, methodName, selfValue);
     if (baseType == "__ManagedSocket")
       return TryEmitBuiltinManagedSocketMethod(structTypeName, methodName, selfValue);
+    if (baseType == "__ManagedFile")
+      return TryEmitBuiltinManagedFileMethod(structTypeName, methodName, selfValue);
+    if (baseType == "__ManagedDirectory")
+      return TryEmitBuiltinManagedDirectoryMethod(structTypeName, methodName, selfValue);
     throw new InvalidOperationException($"TryEmitBuiltinTypeMethod called for non-builtin type '{baseType}'");
   }
 
@@ -7256,7 +7171,235 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
         _currentBlock!.AddOp(lengthRef);
         var toCStr = new MaxonCallRuntimeOp("maxon_to_cstring", [bufferRef.Result, lengthRef.Result], true);
         _currentBlock!.AddOp(toCStr);
-        var op = new MaxonCallRuntimeOp("maxon_net_tcp_connect", [toCStr.Result, port], true);
+        var op = new MaxonCallRuntimeOp("maxon_net_tcp_connect", [toCStr.Result!, port], true);
+        _currentBlock!.AddOp(op);
+        return (true, op.Result);
+      }
+    }
+    return (false, null);
+  }
+
+  /// Emits builtin __ManagedFile instance method calls as MaxonOps.
+  /// The opening '(' has already been consumed.
+#pragma warning disable IDE0060 // structTypeName kept for interface consistency with other TryEmitBuiltin*Method dispatchers
+  private (bool Handled, MaxonValue? Result) TryEmitBuiltinManagedFileMethod(
+    string structTypeName, string methodName, MaxonValue selfValue) {
+#pragma warning restore IDE0060
+    switch (methodName) {
+      case "size": {
+        // size() → maxon_file_size(handle)
+        Expect(TokenType.RightParen);
+        var handleRef = new MaxonFieldAccessOp(selfValue, "__ManagedFile", "_handle", MaxonValueKind.Integer);
+        _currentBlock!.AddOp(handleRef);
+        var op = new MaxonCallRuntimeOp("maxon_file_size", [handleRef.Result], true);
+        _currentBlock!.AddOp(op);
+        return (true, op.Result);
+      }
+      case "read": {
+        // read(managed, size) → maxon_file_read(handle, buffer, size, capacity)
+        TrySkipArgLabel();
+        var managed = ResolveExprValue(ParseExpression());
+        Expect(TokenType.Comma);
+        TrySkipArgLabel();
+        var size = ResolveExprValue(ParseExpression());
+        Expect(TokenType.RightParen);
+        var handleRef = new MaxonFieldAccessOp(selfValue, "__ManagedFile", "_handle", MaxonValueKind.Integer);
+        _currentBlock!.AddOp(handleRef);
+        var bufferRef = new MaxonFieldAccessOp(managed, "__ManagedMemory", "buffer", MaxonValueKind.Integer);
+        _currentBlock!.AddOp(bufferRef);
+        var capacityRef = new MaxonFieldAccessOp(managed, "__ManagedMemory", "capacity", MaxonValueKind.Integer);
+        _currentBlock!.AddOp(capacityRef);
+        var op = new MaxonCallRuntimeOp("maxon_file_read", [handleRef.Result, bufferRef.Result, size, capacityRef.Result], true);
+        _currentBlock!.AddOp(op);
+        return (true, op.Result);
+      }
+      case "write": {
+        // write(managed) → maxon_managed_file_write(handle, buffer, length)
+        TrySkipArgLabel();
+        var managed = ResolveExprValue(ParseExpression());
+        Expect(TokenType.RightParen);
+        var handleRef = new MaxonFieldAccessOp(selfValue, "__ManagedFile", "_handle", MaxonValueKind.Integer);
+        _currentBlock!.AddOp(handleRef);
+        var bufferRef = new MaxonFieldAccessOp(managed, "__ManagedMemory", "buffer", MaxonValueKind.Integer);
+        _currentBlock!.AddOp(bufferRef);
+        var lengthRef = new MaxonFieldAccessOp(managed, "__ManagedMemory", "length", MaxonValueKind.Integer);
+        _currentBlock!.AddOp(lengthRef);
+        var op = new MaxonCallRuntimeOp("maxon_managed_file_write", [handleRef.Result, bufferRef.Result, lengthRef.Result], true);
+        _currentBlock!.AddOp(op);
+        return (true, op.Result);
+      }
+      case "close": {
+        // close() → maxon_file_close(handle)
+        Expect(TokenType.RightParen);
+        var handleRef = new MaxonFieldAccessOp(selfValue, "__ManagedFile", "_handle", MaxonValueKind.Integer);
+        _currentBlock!.AddOp(handleRef);
+        var op = new MaxonCallRuntimeOp("maxon_file_close", [handleRef.Result], false);
+        _currentBlock!.AddOp(op);
+        return (true, null);
+      }
+    }
+    return (false, null);
+  }
+
+  /// Emits builtin __ManagedFile static method calls.
+  /// The opening '(' has already been consumed.
+  private (bool Handled, MaxonValue? Result) TryEmitBuiltinManagedFileStaticMethod(string methodName) {
+    switch (methodName) {
+      case "openRead": {
+        // openRead(managed) → maxon_managed_file_open_read(cstring) → managed file ptr or -1
+        TrySkipArgLabel();
+        var managed = ResolveExprValue(ParseExpression());
+        Expect(TokenType.RightParen);
+        var toCstrOp = new MaxonManagedToCStringOp(managed);
+        _currentBlock!.AddOp(toCstrOp);
+        var op = new MaxonCallRuntimeOp("maxon_managed_file_open_read", [toCstrOp.Result], true);
+        _currentBlock!.AddOp(op);
+        return (true, op.Result);
+      }
+      case "openWrite": {
+        // openWrite(managed) → maxon_managed_file_open_write(cstring) → managed file ptr or -1
+        TrySkipArgLabel();
+        var managed = ResolveExprValue(ParseExpression());
+        Expect(TokenType.RightParen);
+        var toCstrOp = new MaxonManagedToCStringOp(managed);
+        _currentBlock!.AddOp(toCstrOp);
+        var op = new MaxonCallRuntimeOp("maxon_managed_file_open_write", [toCstrOp.Result], true);
+        _currentBlock!.AddOp(op);
+        return (true, op.Result);
+      }
+      case "exists": {
+        // exists(managed) → maxon_file_exists(cstring) → 1/0
+        TrySkipArgLabel();
+        var managed = ResolveExprValue(ParseExpression());
+        Expect(TokenType.RightParen);
+        var toCstrOp = new MaxonManagedToCStringOp(managed);
+        _currentBlock!.AddOp(toCstrOp);
+        var op = new MaxonCallRuntimeOp("maxon_file_exists", [toCstrOp.Result], true);
+        _currentBlock!.AddOp(op);
+        return (true, op.Result);
+      }
+      case "delete": {
+        // delete(managed) → maxon_file_delete(cstring) → 0=success
+        TrySkipArgLabel();
+        var managed = ResolveExprValue(ParseExpression());
+        Expect(TokenType.RightParen);
+        var toCstrOp = new MaxonManagedToCStringOp(managed);
+        _currentBlock!.AddOp(toCstrOp);
+        var op = new MaxonCallRuntimeOp("maxon_file_delete", [toCstrOp.Result], true);
+        _currentBlock!.AddOp(op);
+        return (true, op.Result);
+      }
+    }
+    return (false, null);
+  }
+
+  /// Emits builtin __ManagedDirectory instance method calls as MaxonOps.
+  /// The opening '(' has already been consumed.
+#pragma warning disable IDE0060 // structTypeName kept for interface consistency with other TryEmitBuiltin*Method dispatchers
+  private (bool Handled, MaxonValue? Result) TryEmitBuiltinManagedDirectoryMethod(
+    string structTypeName, string methodName, MaxonValue selfValue) {
+#pragma warning restore IDE0060
+    switch (methodName) {
+      case "filename": {
+        // filename() → maxon_find_filename(block) → cstring → managed
+        Expect(TokenType.RightParen);
+        var blockRef = new MaxonFieldAccessOp(selfValue, "__ManagedDirectory", "_block", MaxonValueKind.Integer);
+        _currentBlock!.AddOp(blockRef);
+        var op = new MaxonCallRuntimeOp("maxon_find_filename", [blockRef.Result], true);
+        _currentBlock!.AddOp(op);
+        var toManagedOp = new MaxonCStringToManagedOp(op.Result!);
+        _currentBlock!.AddOp(toManagedOp);
+        return (true, toManagedOp.Result);
+      }
+      case "next": {
+        // next() → maxon_find_next_file(block)
+        Expect(TokenType.RightParen);
+        var blockRef = new MaxonFieldAccessOp(selfValue, "__ManagedDirectory", "_block", MaxonValueKind.Integer);
+        _currentBlock!.AddOp(blockRef);
+        var op = new MaxonCallRuntimeOp("maxon_find_next_file", [blockRef.Result], true);
+        _currentBlock!.AddOp(op);
+        return (true, op.Result);
+      }
+      case "close": {
+        // close() → maxon_managed_dir_close(block)
+        Expect(TokenType.RightParen);
+        var blockRef = new MaxonFieldAccessOp(selfValue, "__ManagedDirectory", "_block", MaxonValueKind.Integer);
+        _currentBlock!.AddOp(blockRef);
+        var op = new MaxonCallRuntimeOp("maxon_managed_dir_close", [blockRef.Result], false);
+        _currentBlock!.AddOp(op);
+        return (true, null);
+      }
+    }
+    return (false, null);
+  }
+
+  /// Emits builtin __ManagedDirectory static method calls.
+  /// The opening '(' has already been consumed.
+  private (bool Handled, MaxonValue? Result) TryEmitBuiltinManagedDirectoryStaticMethod(string methodName) {
+    switch (methodName) {
+      case "openSearch": {
+        // openSearch(managed) → maxon_managed_dir_open_search(cstring) → managed dir ptr or 0
+        TrySkipArgLabel();
+        var managed = ResolveExprValue(ParseExpression());
+        Expect(TokenType.RightParen);
+        var toCstrOp = new MaxonManagedToCStringOp(managed);
+        _currentBlock!.AddOp(toCstrOp);
+        var op = new MaxonCallRuntimeOp("maxon_managed_dir_open_search", [toCstrOp.Result], true);
+        _currentBlock!.AddOp(op);
+        return (true, op.Result);
+      }
+      case "exists": {
+        // exists(managed) → maxon_directory_exists(cstring) → bool as int
+        TrySkipArgLabel();
+        var managed = ResolveExprValue(ParseExpression());
+        Expect(TokenType.RightParen);
+        var toCstrOp = new MaxonManagedToCStringOp(managed);
+        _currentBlock!.AddOp(toCstrOp);
+        var op = new MaxonCallRuntimeOp("maxon_directory_exists", [toCstrOp.Result], true);
+        _currentBlock!.AddOp(op);
+        var zeroOp = new MaxonLiteralOp(0L);
+        _currentBlock!.AddOp(zeroOp);
+        var cmpOp = new MaxonBinOp(MaxonBinOperator.Ne, op.Result!, zeroOp.Result, MaxonValueKind.Integer);
+        _currentBlock!.AddOp(cmpOp);
+        return (true, cmpOp.Result);
+      }
+      case "create": {
+        // create(managed) → maxon_create_directory(cstring) → bool as int
+        TrySkipArgLabel();
+        var managed = ResolveExprValue(ParseExpression());
+        Expect(TokenType.RightParen);
+        var toCstrOp = new MaxonManagedToCStringOp(managed);
+        _currentBlock!.AddOp(toCstrOp);
+        var op = new MaxonCallRuntimeOp("maxon_create_directory", [toCstrOp.Result], true);
+        _currentBlock!.AddOp(op);
+        var zeroOp = new MaxonLiteralOp(0L);
+        _currentBlock!.AddOp(zeroOp);
+        var cmpOp = new MaxonBinOp(MaxonBinOperator.Ne, op.Result!, zeroOp.Result, MaxonValueKind.Integer);
+        _currentBlock!.AddOp(cmpOp);
+        return (true, cmpOp.Result);
+      }
+      case "currentPath": {
+        // currentPath() → maxon_get_current_directory() → cstring → managed
+        Expect(TokenType.RightParen);
+        var rtOp = new MaxonCallRuntimeOp("maxon_get_current_directory", [], true);
+        _currentBlock!.AddOp(rtOp);
+        var toManagedOp = new MaxonCStringToManagedOp(rtOp.Result!);
+        _currentBlock!.AddOp(toManagedOp);
+        var freeOp = new MaxonCallRuntimeOp("mm_free", [rtOp.Result!], false);
+        _currentBlock!.AddOp(freeOp);
+        return (true, toManagedOp.Result);
+      }
+    }
+    return (false, null);
+  }
+
+  /// Emits builtin __Chain static method calls.
+  /// The opening '(' has already been consumed.
+  private (bool Handled, MaxonValue? Result) TryEmitBuiltinChainStaticMethod(string methodName) {
+    switch (methodName) {
+      case "create": {
+        Expect(TokenType.RightParen);
+        var op = new MaxonChainCreateOp();
         _currentBlock!.AddOp(op);
         return (true, op.Result);
       }
@@ -10076,32 +10219,39 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       if (Check(TokenType.Dot) && IsIdentifierLikeToken(PeekNext())) {
         var qualifiedName = $"{token.Value}.{PeekNext().Value}";
 
-        // Check for __ManagedMemory static methods
-        if (ResolveBaseTypeName(token.Value) == "__ManagedMemory" &&
-            PeekNext().Value is "create" or "fromCString") {
-          Advance(); // consume '.'
-          var staticMethodToken = Advance(); // consume method name
-          Expect(TokenType.LeftParen);
-          var (handled, staticResult) = TryEmitBuiltinManagedMemoryStaticMethod(staticMethodToken.Value);
-          if (handled && staticResult != null)
-            return ParseFieldAccessChain(new ExprResult.Direct(staticResult), token);
-          throw new CompileError(ErrorCode.ParserExpectedExpression,
-            $"Unknown static method '{staticMethodToken.Value}' on __ManagedMemory",
-            staticMethodToken.Line, staticMethodToken.Column);
-        }
-
-        // Check for __ManagedSocket static methods
-        if (ResolveBaseTypeName(token.Value) == "__ManagedSocket" &&
-            PeekNext().Value is "tcpConnect") {
-          Advance(); // consume '.'
-          var staticMethodToken = Advance(); // consume method name
-          Expect(TokenType.LeftParen);
-          var (handled, staticResult) = TryEmitBuiltinManagedSocketStaticMethod(staticMethodToken.Value);
-          if (handled && staticResult != null)
-            return ParseFieldAccessChain(new ExprResult.Direct(staticResult), token);
-          throw new CompileError(ErrorCode.ParserExpectedExpression,
-            $"Unknown static method '{staticMethodToken.Value}' on __ManagedSocket",
-            staticMethodToken.Line, staticMethodToken.Column);
+        // Check for builtin managed type static methods
+        {
+          var resolvedBase = ResolveBaseTypeName(token.Value);
+          var nextMethod = PeekNext().Value;
+          Func<string, (bool, MaxonValue?)>? dispatcher = resolvedBase switch {
+            "__ManagedMemory" when nextMethod is "create" or "fromCString"
+              => TryEmitBuiltinManagedMemoryStaticMethod,
+            "__ManagedSocket" when nextMethod is "tcpConnect"
+              => TryEmitBuiltinManagedSocketStaticMethod,
+            "__ManagedFile" when nextMethod is "openRead" or "openWrite" or "exists" or "delete"
+              => TryEmitBuiltinManagedFileStaticMethod,
+            "__ManagedDirectory" when nextMethod is "openSearch" or "exists" or "create" or "currentPath"
+              => TryEmitBuiltinManagedDirectoryStaticMethod,
+            "__Chain" when nextMethod is "create"
+              => TryEmitBuiltinChainStaticMethod,
+            _ => null,
+          };
+          if (dispatcher != null) {
+            _usedTypeAliases.Add(token.Value);
+            Advance(); // consume '.'
+            var staticMethodToken = Advance(); // consume method name
+            Expect(TokenType.LeftParen);
+            var (handled, staticResult) = dispatcher(staticMethodToken.Value);
+            if (handled && staticResult != null) {
+              // Chain.create() needs the alias name for type parameter resolution
+              if (resolvedBase == "__Chain" && staticResult is MaxonStruct chainResult)
+                chainResult.TypeName = token.Value;
+              return ParseFieldAccessChain(new ExprResult.Direct(staticResult), token);
+            }
+            throw new CompileError(ErrorCode.ParserExpectedExpression,
+              $"Unknown static method '{staticMethodToken.Value}' on {resolvedBase}",
+              staticMethodToken.Line, staticMethodToken.Column);
+          }
         }
 
         // Check for __Builtins static methods
@@ -11376,15 +11526,14 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     var literalLine = Current().Line;
     Advance(); // consume '{'
 
-    // Builtin Chain creation: emit MaxonChainCreateOp for zero-init Chain literals
     var baseTypeName = ResolveBaseTypeName(typeName);
-    if (baseTypeName == "__Chain") {
-      SkipNewlines();
-      Expect(TokenType.RightBrace);
-      var op = new MaxonChainCreateOp();
-      _currentBlock!.AddOp(op);
-      op.Result.TypeName = typeName;
-      return new ExprResult.Direct(op.Result);
+
+    // Block direct construction of compiler-internal types
+    if (baseTypeName is "__ManagedMemory" or "__ManagedFile" or "__ManagedDirectory"
+                      or "__ManagedSocket" or "__Chain" or "__ChainNode") {
+      throw new CompileError(ErrorCode.SemanticBuiltinTypeConstruction,
+        $"'{baseTypeName}' is a compiler builtin type and cannot be constructed directly",
+        literalLine, Current().Column);
     }
 
     var structType = (MlirStructType)_typeRegistry[typeName];

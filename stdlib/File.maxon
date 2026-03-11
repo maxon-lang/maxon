@@ -16,27 +16,28 @@ export union FileDeleteError implements Error
   notFound
 end 'FileDeleteError'
 
-export typealias FileHandle = int(0 to u32.max)
 export typealias Byte = byte(0 to u8.max)
 export typealias ByteArray = Array with Byte
 
 export type File
+  var _file __ManagedFile
+
   /// Open file for reading, throwing if not found
-  static function openForRead(path String) returns FileHandle throws FileReadError
-    let handle = __Builtins.fileOpenRead(path.managed)
-    if handle < 0 'notFound'
+  static function openForRead(path String) returns File throws FileReadError
+    let result = __ManagedFile.openRead(path.managed)
+    if result == -1 'notFound'
       throw FileReadError.notFound
     end 'notFound'
-    return handle
+    return File{_file: result}
   end 'openForRead'
 
   /// Read file into a managed memory
   static function readFileData(path String, extraBytes Count) returns __ManagedMemory throws FileReadError
-    let handle = try openForRead(path)
-    let size = __Builtins.fileSize(handle)
+    var file = try openForRead(path)
+    let size = file._file.size()
     var managed = __ManagedMemory.create(size + extraBytes, 1)
-    let bytesRead = __Builtins.fileRead(handle, managed, size)
-    __Builtins.fileClose(handle)
+    let bytesRead = file._file.read(managed, size)
+    file._file.close()
     managed.setLength(bytesRead)
     return managed
   end 'readFileData'
@@ -61,33 +62,42 @@ export type File
 
   /// Write string content to a text file
   export static function writeText(path FilePath, content String) throws FileWriteError
-    let res = __Builtins.writeFile(path._path.managed, content.managed)
-    if res != 0 'failed'
+    let result = __ManagedFile.openWrite(path._path.managed)
+    if result == -1 'openFail'
       throw FileWriteError.failed
-    end 'failed'
+    end 'openFail'
+    var file = File{_file: result}
+    let written = file._file.write(content.managed)
+    file._file.close()
+    if written < 0 'writeFail'
+      throw FileWriteError.failed
+    end 'writeFail'
   end 'writeText'
 
   /// Write binary content to a file
   export static function writeBinary(path FilePath, content ByteArray) throws FileWriteError
-    let res = __Builtins.writeFileBinary(path._path.managed, content)
-    if res != 0 'failed'
+    let result = __ManagedFile.openWrite(path._path.managed)
+    if result == -1 'openFail'
       throw FileWriteError.failed
-    end 'failed'
+    end 'openFail'
+    var file = File{_file: result}
+    let bufferRef = content.managed
+    let written = file._file.write(bufferRef)
+    file._file.close()
+    if written < 0 'writeFail'
+      throw FileWriteError.failed
+    end 'writeFail'
   end 'writeBinary'
 
   /// Check if a file exists at the given path
   export static function exists(path FilePath) returns bool
-    let handle = __Builtins.fileOpenRead(path._path.managed)
-    if handle < 0 'notFound'
-      return false
-    end 'notFound'
-    __Builtins.fileClose(handle)
-    return true
+    let result = __ManagedFile.exists(path._path.managed)
+    return result != 0
   end 'exists'
 
   /// Delete a file at the given path
   export static function delete(path FilePath) throws FileDeleteError
-    let res = __Builtins.fileDelete(path._path.managed)
+    let res = __ManagedFile.delete(path._path.managed)
     if res != 0 'failed'
       throw FileDeleteError.notFound
     end 'failed'

@@ -537,7 +537,7 @@ end 'Item'
 typealias ItemChain = __Chain with Item
 
 function main() returns ExitCode
-  var chain = ItemChain{}
+  var chain = ItemChain.create()
   var item = Item{value: 99}
   var node = chain.insertFirst(item)
   print("{node.value().value}\n")
@@ -565,7 +565,7 @@ end 'Item'
 typealias ItemChain = __Chain with Item
 
 function main() returns ExitCode
-  var chain = ItemChain{}
+  var chain = ItemChain.create()
   var node = chain.insertFirst(Item{value: 50})
   chain.remove(node)
   print("{chain.count()}\n")
@@ -591,7 +591,7 @@ end 'Item'
 typealias ItemChain = __Chain with Item
 
 function main() returns ExitCode
-  var chain = ItemChain{}
+  var chain = ItemChain.create()
   chain.insertFirst(Item{value: 1})
   chain.insertLast(Item{value: 2})
   chain.insertLast(Item{value: 3})
@@ -1050,7 +1050,7 @@ end 'Item'
 typealias ItemChain = __Chain with Item
 
 function buildChain() returns ItemChain
-  var chain = ItemChain{}
+  var chain = ItemChain.create()
   chain.insertLast(Item{value: 10})
   chain.insertLast(Item{value: 20})
   chain.insertLast(Item{value: 30})

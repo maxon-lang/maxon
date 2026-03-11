@@ -19,7 +19,7 @@ Create an empty chain with an explicit element type:
 ```text
 typealias Integer = int(i64.min to i64.max)
 typealias IntChain = __Chain with Integer
-var chain = IntChain{}
+var chain = IntChain.create()
 ```
 
 ### Inserting Elements
@@ -118,7 +118,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntChain = __Chain with Integer
 
 function main() returns ExitCode
-  var chain = IntChain{}
+  var chain = IntChain.create()
   if chain.isEmpty() 'check'
     print("{chain.count()}\n")
     return 0
@@ -139,7 +139,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntChain = __Chain with Integer
 
 function main() returns ExitCode
-  var chain = IntChain{}
+  var chain = IntChain.create()
   var node = chain.insertFirst(42)
   print("{node.value()}\n")
   print("{chain.count()}\n")
@@ -160,7 +160,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntChain = __Chain with Integer
 
 function main() returns ExitCode
-  var chain = IntChain{}
+  var chain = IntChain.create()
   var node = chain.insertLast(99)
   print("{node.value()}\n")
   print("{chain.count()}\n")
@@ -181,7 +181,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntChain = __Chain with Integer
 
 function main() returns ExitCode
-  var chain = IntChain{}
+  var chain = IntChain.create()
   var n3 = chain.insertFirst(30)
   var n2 = chain.insertFirst(20)
   var n1 = chain.insertFirst(10)
@@ -209,7 +209,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntChain = __Chain with Integer
 
 function main() returns ExitCode
-  var chain = IntChain{}
+  var chain = IntChain.create()
   var n1 = chain.insertLast(10)
   var n2 = chain.insertLast(20)
   var n3 = chain.insertLast(30)
@@ -237,7 +237,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntChain = __Chain with Integer
 
 function main() returns ExitCode
-  var chain = IntChain{}
+  var chain = IntChain.create()
   var n1 = chain.insertFirst(10)
   var n3 = chain.insertLast(30)
   // Insert 20 after n1
@@ -278,7 +278,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntChain = __Chain with Integer
 
 function main() returns ExitCode
-  var chain = IntChain{}
+  var chain = IntChain.create()
   var n1 = chain.insertFirst(10)
   var n3 = chain.insertLast(30)
   // Insert 20 before n3
@@ -319,7 +319,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntChain = __Chain with Integer
 
 function main() returns ExitCode
-  var chain = IntChain{}
+  var chain = IntChain.create()
   var n1 = chain.insertLast(10)
   var n2 = chain.insertLast(20)
   var n3 = chain.insertLast(30)
@@ -349,7 +349,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntChain = __Chain with Integer
 
 function main() returns ExitCode
-  var chain = IntChain{}
+  var chain = IntChain.create()
   var n1 = chain.insertLast(10)
   var n2 = chain.insertLast(20)
   var n3 = chain.insertLast(30)
@@ -380,7 +380,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntChain = __Chain with Integer
 
 function main() returns ExitCode
-  var chain = IntChain{}
+  var chain = IntChain.create()
   var n1 = chain.insertLast(1)
   var n2 = chain.insertLast(2)
   var n3 = chain.insertLast(3)
@@ -414,7 +414,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntChain = __Chain with Integer
 
 function main() returns ExitCode
-  var chain = IntChain{}
+  var chain = IntChain.create()
   var node = chain.insertFirst(42)
   print("{node.value()}\n")
   return 0
@@ -433,7 +433,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntChain = __Chain with Integer
 
 function main() returns ExitCode
-  var chain = IntChain{}
+  var chain = IntChain.create()
   var n1 = chain.insertLast(10)
   var n2 = chain.insertLast(20)
   var n3 = chain.insertLast(30)
@@ -477,7 +477,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntChain = __Chain with Integer
 
 function main() returns ExitCode
-  var chain = IntChain{}
+  var chain = IntChain.create()
   var node = chain.insertFirst(10)
   print("{node.value()}\n")
   node.setValue(v: 99)
@@ -504,7 +504,7 @@ end 'main'
 typealias StringChain = __Chain with String
 
 function main() returns ExitCode
-  var chain = StringChain{}
+  var chain = StringChain.create()
   var node = chain.insertFirst("hello world!!!!!!!!!!!!!!")
   var old = node.value()
   node.setValue(v: "replacement!!!!!!!!!!!!!!")
@@ -527,7 +527,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntChain = __Chain with Integer
 
 function main() returns ExitCode
-  var chain = IntChain{}
+  var chain = IntChain.create()
   var n1 = chain.insertLast(1)
   var n2 = chain.insertLast(2)
   var n3 = chain.insertLast(3)
@@ -559,7 +559,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntChain = __Chain with Integer
 
 function main() returns ExitCode
-  var chain = IntChain{}
+  var chain = IntChain.create()
   if try chain.head() 'try'
     return 1
   end 'try' else 'err'
@@ -581,7 +581,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntChain = __Chain with Integer
 
 function main() returns ExitCode
-  var chain = IntChain{}
+  var chain = IntChain.create()
   if try chain.tail() 'try'
     return 1
   end 'try' else 'err'
@@ -603,7 +603,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntChain = __Chain with Integer
 
 function main() returns ExitCode
-  var chain = IntChain{}
+  var chain = IntChain.create()
   var node = chain.insertFirst(42)
   // Use the node handle
   print("{node.value()}\n")
@@ -633,7 +633,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntChain = __Chain with Integer
 
 function main() returns ExitCode
-  var chain = IntChain{}
+  var chain = IntChain.create()
   var node = chain.insertFirst(42)
   // Use the node handle
   print("{node.value()}\n")
@@ -663,7 +663,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntChain = __Chain with Integer
 
 function main() returns ExitCode
-  var chain = IntChain{}
+  var chain = IntChain.create()
   var n1 = chain.insertLast(10)
   var n2 = chain.insertLast(20)
   var n3 = chain.insertLast(30)
@@ -704,7 +704,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntChain = __Chain with Integer
 
 function main() returns ExitCode
-  var chain = IntChain{}
+  var chain = IntChain.create()
   var n1 = chain.insertLast(10)
   var n2 = chain.insertLast(20)
   var n3 = chain.insertLast(30)
@@ -745,7 +745,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntChain = __Chain with Integer
 
 function main() returns ExitCode
-  var chain = IntChain{}
+  var chain = IntChain.create()
   var n1 = chain.insertLast(10)
   var n2 = chain.insertLast(20)
   var n3 = chain.insertLast(30)
@@ -780,7 +780,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntChain = __Chain with Integer
 
 function main() returns ExitCode
-  var chain = IntChain{}
+  var chain = IntChain.create()
   var n1 = chain.insertLast(10)
   var n2 = chain.insertLast(20)
   var n3 = chain.insertLast(30)
@@ -815,7 +815,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntChain = __Chain with Integer
 
 function main() returns ExitCode
-  var chain = IntChain{}
+  var chain = IntChain.create()
   var n1 = chain.insertLast(10)
   var n2 = chain.insertLast(20)
   var removed1 = chain.remove(node: n1)
