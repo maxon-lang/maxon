@@ -165,6 +165,20 @@ export typealias Score = int(0 to 100)          // visible to other files
 export var sharedCounter = 0                    // visible to other files
 ```
 
+## Conditional Compilation
+```maxon
+#if os(Windows)
+  let sep = "\\"
+#else
+  let sep = "/"
+#endif
+
+#if arch(x86_64)
+  // x86-specific code
+#endif
+```
+Conditions: `os(Windows)`, `os(Linux)`, `arch(x86_64)`, `arch(aarch64)`. Can appear at top-level, inside functions, and inside type bodies. Nested `#if` blocks are supported.
+
 ## Control Flow
 
 ### If
@@ -593,9 +607,27 @@ floor(x) ceil(x) round(x) trunc(x)  // float -> int
 print(s)            // print string to stdout
 ```
 
+### FilePath
+```maxon
+var p = FilePath from "C:\\Users\\test.txt"   // from string literal
+var q = try FilePath.from("path") otherwise ...  // from string, throws FilePathError
+p.filename()                              // "test.txt"
+p.fileExtension()                         // ".txt"
+p.stem()                                  // "test"
+p.parent()                                // FilePath of parent directory
+p.join("child")                           // append component with separator
+p.changeExtension(".exe")                 // replace extension
+p.isAbsolute()                            // bool
+p.isRelative()                            // bool
+p.isEmpty()                               // bool
+p.fileExists()                            // bool
+p.directoryExists()                       // bool
+FilePath.separator()                      // "\" on Windows, "/" on Linux
+```
+
 ### File
 ```maxon
-File.exists(path)                         // bool
+File.exists(path)                         // bool (path is FilePath)
 File.readText(path)                       // throws FileReadError
 File.readBinary(path)                     // returns ByteArray, throws
 File.writeText(path, content: s)          // throws FileWriteError
@@ -605,8 +637,9 @@ File.delete(path)                         // throws FileDeleteError
 
 ### Directory
 ```maxon
-Directory.exists(path)                    // bool
+Directory.exists(path)                    // bool (path is FilePath)
 Directory.list(path)                      // StringArray, throws
+Directory.currentPath()                   // returns FilePath
 ```
 
 ### Process

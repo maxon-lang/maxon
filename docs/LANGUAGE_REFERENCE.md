@@ -10,6 +10,7 @@ This reference provides complete syntax and semantics for the Maxon programming 
 ## Table of Contents
 
 1. [Program Structure](#program-structure)
+   - [Conditional Compilation](#conditional-compilation)
 2. [Lexical Elements](#lexical-elements)
 3. [Types](#types)
    - [Type Conversions](#type-conversions)
@@ -29,6 +30,7 @@ This reference provides complete syntax and semantics for the Maxon programming 
 10. [Error Handling](#error-handling)
 11. [Namespaces](#namespaces)
 12. [Standard Library](#standard-library)
+    - [FilePath](#filepath)
     - [CharacterSet](#characterset)
     - [Unicode](#unicode)
     - [String Trimming](#string-trimming)
@@ -60,6 +62,39 @@ The return value becomes the program's exit code (0-255 on Windows).
 - One or more function, type, union, enum, or typealias declarations
 - Namespace derived from file path
 - Use `export` keyword for cross-file visibility (applies to functions, types, unions, enums, and typealiases)
+
+### Conditional Compilation
+
+Maxon supports `#if`, `#else`, and `#endif` directives for platform-conditional code. These are evaluated at parse time based on the compilation target.
+
+**Target OS:**
+```maxon
+#if os(Windows)
+  let separator = "\\"
+#else
+  let separator = "/"
+#endif
+```
+
+**Target Architecture:**
+```maxon
+#if arch(x86_64)
+  let pointerSize = 8
+#else
+  let pointerSize = 8
+#endif
+```
+
+Supported conditions:
+- `os(Windows)`, `os(Linux)` — match the target operating system
+- `arch(x86_64)`, `arch(aarch64)` — match the target CPU architecture
+
+Conditional compilation directives can appear at:
+- Top level (around functions, types, variables)
+- Inside function bodies (around statements)
+- Inside type bodies (around fields and methods)
+
+Nested `#if` blocks are supported.
 
 ---
 
@@ -2871,6 +2906,56 @@ trunc(x float) int              // Truncate toward zero
 ```maxon
 format_int(value int) String    // Format int as string
 format_float(value float) String // Format float as string
+```
+
+### FilePath
+
+`FilePath` is a type-safe wrapper around `String` for filesystem paths. It normalizes path separators to the platform-native format on construction and provides methods for path manipulation.
+
+**Construction:**
+```maxon
+var p = FilePath from "C:\\Users\\test.txt"              // From string literal (panics on invalid chars)
+var q = try FilePath.from("hello.maxon") otherwise ...   // From string (throws FilePathError)
+```
+
+**Component Extraction:**
+```maxon
+p.filename()         // "test.txt"
+p.fileExtension()    // ".txt"
+p.stem()             // "test"
+p.parent()           // FilePath("C:\\Users")
+```
+
+**Path Manipulation:**
+```maxon
+p.join("docs")                  // Append component with platform separator
+p.join(otherFilePath)           // Join with another FilePath
+p.changeExtension(".exe")       // Replace file extension
+p.normalize()                   // Returns self (normalized on construction)
+```
+
+**Query Methods:**
+```maxon
+p.isEmpty()          // true if path is empty string
+p.isAbsolute()       // true for drive paths (C:\) or UNC paths (\\server)
+p.isRelative()       // opposite of isAbsolute
+p.fileExists()       // convenience for File.exists(p)
+p.directoryExists()  // convenience for Directory.exists(p)
+```
+
+**Static Methods:**
+```maxon
+FilePath.separator()   // Platform-native separator ("\" on Windows, "/" on Linux)
+```
+
+`FilePath` implements `Equatable`, `Hashable`, `Stringable`, and `InitableFromStringLiteral`.
+
+All `File` and `Directory` methods accept `FilePath` parameters:
+```maxon
+let fp = FilePath from "data.txt"
+let content = try File.readText(fp) otherwise ...
+try File.writeText(fp, content: "hello")
+let files = try Directory.list(FilePath from "./") otherwise ...
 ```
 
 ### CharacterSet

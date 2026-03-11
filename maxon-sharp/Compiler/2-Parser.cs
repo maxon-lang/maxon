@@ -4,10 +4,12 @@ using MaxonSharp.Compiler.Mlir.Dialects;
 
 namespace MaxonSharp.Compiler;
 
-public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, bool isStdlib = false, string? sourceFilePath = null) {
+public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, bool isStdlib = false, string? sourceFilePath = null, string targetOs = "Windows", string targetArch = "x86_64") {
   private List<Token> _tokens = tokens;
   private readonly bool _isStdlib = isStdlib;
   private readonly string? _sourceFilePath = sourceFilePath;
+  private readonly string _targetOs = targetOs;
+  private readonly string _targetArch = targetArch;
   private int _pos;
 
   private MlirModule<MaxonOp>? _currentModule;
@@ -568,6 +570,19 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
         Advance();
       }
 
+      if (Check(TokenType.HashIf)) {
+        HandleConditionalCompilation();
+        continue;
+      }
+      if (Check(TokenType.HashElse)) {
+        HandleConditionalElse();
+        continue;
+      }
+      if (Check(TokenType.HashEndif)) {
+        HandleConditionalEndif();
+        continue;
+      }
+
       if (Check(TokenType.Type) || Check(TokenType.Union) || Check(TokenType.Enum) || Check(TokenType.Interface)
           || Check(TokenType.Extension) || Check(TokenType.Function)) {
         Advance();
@@ -790,6 +805,15 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
         PreScanInterface();
       } else if (Check(TokenType.Extension)) {
         PreScanExtensionBlock(module);
+      } else if (Check(TokenType.HashIf)) {
+        HandleConditionalCompilation();
+        continue;
+      } else if (Check(TokenType.HashElse)) {
+        HandleConditionalElse();
+        continue;
+      } else if (Check(TokenType.HashEndif)) {
+        HandleConditionalEndif();
+        continue;
       } else {
         // Unknown top-level token, skip to next line
         SkipToEndOfLine();
@@ -1492,6 +1516,20 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     while (!Check(TokenType.End) && !IsAtEnd()) {
       SkipNewlines();
       if (Check(TokenType.End)) break;
+
+      // Conditional compilation inside type body (pre-scan)
+      if (Check(TokenType.HashIf)) {
+        HandleConditionalCompilation();
+        continue;
+      }
+      if (Check(TokenType.HashElse)) {
+        HandleConditionalElse();
+        continue;
+      }
+      if (Check(TokenType.HashEndif)) {
+        HandleConditionalEndif();
+        continue;
+      }
 
       bool isFieldExported = false;
       if (Check(TokenType.Export)) {
@@ -3580,7 +3618,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     }
     if (Check(TokenType.StringLiteral)) {
       var token = Advance();
-      return token.Value;
+      return StringUtils.ResolveEscapes(token.Value);
     }
     if (Check(TokenType.True)) {
       Advance();
@@ -3644,6 +3682,19 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
   // ============================================================================
 
   private void ParseTopLevel(MlirModule<MaxonOp> module) {
+    if (Check(TokenType.HashIf)) {
+      HandleConditionalCompilation();
+      return;
+    }
+    if (Check(TokenType.HashElse)) {
+      HandleConditionalElse();
+      return;
+    }
+    if (Check(TokenType.HashEndif)) {
+      HandleConditionalEndif();
+      return;
+    }
+
     if (Check(TokenType.Export)) {
       Advance();
     }
@@ -3717,6 +3768,20 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     while (!Check(TokenType.End) && !IsAtEnd()) {
       SkipNewlines();
       if (Check(TokenType.End)) break;
+
+      // Conditional compilation inside type body
+      if (Check(TokenType.HashIf)) {
+        HandleConditionalCompilation();
+        continue;
+      }
+      if (Check(TokenType.HashElse)) {
+        HandleConditionalElse();
+        continue;
+      }
+      if (Check(TokenType.HashEndif)) {
+        HandleConditionalEndif();
+        continue;
+      }
 
       // Handle 'static' keyword for static fields and static methods
       if (Check(TokenType.Static)) {
@@ -4947,6 +5012,18 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
   }
 
   private void ParseStatement() {
+    if (Check(TokenType.HashIf)) {
+      HandleConditionalCompilation();
+      return;
+    }
+    if (Check(TokenType.HashElse)) {
+      HandleConditionalElse();
+      return;
+    }
+    if (Check(TokenType.HashEndif)) {
+      HandleConditionalEndif();
+      return;
+    }
     if (Check(TokenType.Return)) {
       ParseReturn();
     } else if (Check(TokenType.Var)) {
@@ -11567,6 +11644,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
 
     var stringToken = Advance(); // consume the string literal
     var stringStruct = EmitStringLiteralWithInterpolation(stringToken);
+    EmitLiteralTempAssign(stringStruct);
 
     return EmitFromLiteralInitCall(typeToken, typeName, stringStruct);
   }
@@ -11583,6 +11661,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
 
     var charToken = Advance(); // consume the char literal
     var charStruct = EmitCharLiteral(charToken);
+    EmitLiteralTempAssign(charStruct);
 
     return EmitFromLiteralInitCall(typeToken, typeName, charStruct);
   }
@@ -13569,6 +13648,112 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     var methodToken = _tokens[_pos];
     _tokens[_pos] = new Token(TokenType.Identifier, $"__{typeToken.Value}_{methodToken.Value}", methodToken.Line, methodToken.Column);
     return true;
+  }
+
+  /// <summary>
+  /// Handle #if os(...) / #if arch(...) conditional compilation directive.
+  /// Evaluates the condition and skips the inactive branch.
+  /// Called from any context where #if may appear (top-level, inside functions, inside types).
+  /// </summary>
+  private void HandleConditionalCompilation() {
+    Advance(); // consume #if
+    SkipNewlines(); // skip any newlines between #if and condition
+
+    // Parse condition: os(Windows), os(Linux), arch(x86_64), arch(aarch64)
+    var conditionActive = EvaluateConditionalCondition();
+    SkipToEndOfLine();
+    SkipNewlines();
+
+    if (conditionActive) {
+      // Parse the active branch normally — tokens will be consumed by the caller's parsing loop.
+      // We just need to watch for #else (skip it) or #endif (done).
+      // Do nothing here — the caller will parse tokens until it hits #else or #endif.
+    } else {
+      // Skip the inactive #if branch
+      SkipConditionalBranch();
+      SkipNewlines();
+      // Now at #else or #endif
+      if (Check(TokenType.HashElse)) {
+        Advance(); // consume #else
+        SkipToEndOfLine();
+        SkipNewlines();
+        // The #else branch is active — caller will parse normally until #endif
+      } else if (Check(TokenType.HashEndif)) {
+        Advance(); // consume #endif
+        SkipToEndOfLine();
+        SkipNewlines();
+      }
+    }
+  }
+
+  /// <summary>
+  /// Handle #else when we're in the active #if branch — skip the #else branch.
+  /// </summary>
+  private void HandleConditionalElse() {
+    Advance(); // consume #else
+    SkipToEndOfLine();
+    SkipNewlines();
+    // Skip the #else branch (we already parsed the #if branch)
+    SkipConditionalBranch();
+    SkipNewlines();
+    // Now at #endif
+    if (Check(TokenType.HashEndif)) {
+      Advance(); // consume #endif
+      SkipToEndOfLine();
+      SkipNewlines();
+    }
+  }
+
+  /// <summary>
+  /// Handle #endif — just consume it.
+  /// </summary>
+  private void HandleConditionalEndif() {
+    Advance(); // consume #endif
+    SkipToEndOfLine();
+    SkipNewlines();
+  }
+
+  /// <summary>
+  /// Evaluate a conditional compilation condition like os(Windows) or arch(x86_64).
+  /// Returns true if the condition matches the current compilation target.
+  /// </summary>
+  private bool EvaluateConditionalCondition() {
+    var funcToken = Expect(TokenType.Identifier);
+    var funcName = funcToken.Value;
+    Expect(TokenType.LeftParen);
+    var valueToken = Expect(TokenType.Identifier);
+    var value = valueToken.Value;
+    Expect(TokenType.RightParen);
+
+    return funcName switch {
+      "os" => string.Equals(value, _targetOs, StringComparison.OrdinalIgnoreCase),
+      "arch" => string.Equals(value, _targetArch, StringComparison.OrdinalIgnoreCase),
+      _ => throw new CompileError(ErrorCode.SemanticTypeMismatch,
+        $"Unknown conditional compilation function '{funcName}'. Expected 'os' or 'arch'.",
+        funcToken.Line, funcToken.Column),
+    };
+  }
+
+  /// <summary>
+  /// Skip tokens until a matching #else or #endif is found at the current nesting depth.
+  /// Nested #if/#endif pairs are tracked via a depth counter.
+  /// </summary>
+  private void SkipConditionalBranch() {
+    int depth = 1;
+    while (!IsAtEnd()) {
+      if (Check(TokenType.HashIf)) {
+        depth++;
+        Advance();
+      } else if (Check(TokenType.HashElse) && depth == 1) {
+        return; // Don't consume — caller handles it
+      } else if (Check(TokenType.HashEndif)) {
+        depth--;
+        if (depth == 0) return; // Don't consume — caller handles it
+        Advance();
+      } else {
+        Advance();
+      }
+    }
   }
 
   private void SkipNewlines() {

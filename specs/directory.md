@@ -9,7 +9,7 @@ category: stdlib
 
 ## Documentation
 
-Directory operations using the `Directory` type.
+Directory operations using the `Directory` type. All Directory methods take a `FilePath` parameter.
 
 ### Error Types
 
@@ -25,12 +25,12 @@ end 'DirectoryListError'
 
 List files and directories in a path.
 
-**Signature:** `static function list(path string) returns StringArray throws DirectoryListError`
+**Signature:** `static function list(path FilePath) returns StringArray throws DirectoryListError`
 
 where `type StringArray implements Array with String`
 
 **Parameters:**
-- `path`: Directory path as a string
+- `path`: Directory path
 
 **Returns:** Array of filenames (excluding `.` and `..`)
 
@@ -40,7 +40,7 @@ where `type StringArray implements Array with String`
 
 ```maxon
 function main() returns ExitCode
-  let files = try Directory.list("./") otherwise 'err'
+  let files = try Directory.list(FilePath from "./") otherwise 'err'
     print("Failed to list directory")
     return 1
   end 'err'
@@ -55,7 +55,7 @@ end 'main'
 
 Check if a path exists and is a directory.
 
-**Signature:** `static function exists(path string) returns bool`
+**Signature:** `static function exists(path FilePath) returns bool`
 
 **Parameters:**
 - `path`: Path to check
@@ -66,7 +66,7 @@ Check if a path exists and is a directory.
 
 ```maxon
 function main() returns ExitCode
-  if Directory.exists("bin") 'check'
+  if Directory.exists(FilePath from "bin") 'check'
     print("bin is a directory")
   end 'check' else 'nodir'
     print("bin is not a directory")
@@ -79,26 +79,26 @@ end 'main'
 
 Check if a path is a directory. Alias for `exists`.
 
-**Signature:** `static function isDirectory(path string) returns bool`
+**Signature:** `static function isDirectory(path FilePath) returns bool`
 
 **Parameters:**
 - `path`: Path to check
 
 **Returns:** `true` if path is a directory, `false` otherwise
 
-### Directory.currentDirectory
+### Directory.currentPath
 
-Get the current working directory.
+Get the current working directory as a FilePath.
 
-**Signature:** `static function currentDirectory() returns String`
+**Signature:** `static function currentPath() returns FilePath`
 
-**Returns:** The current working directory as a string
+**Returns:** The current working directory as a FilePath
 
 **Example:**
 
 ```maxon
 function main() returns ExitCode
-  let cwd = Directory.currentDirectory()
+  let cwd = Directory.currentPath()
   print("{cwd}\n")
   return 0
 end 'main'
@@ -109,7 +109,7 @@ end 'main'
 <!-- test: list-directory -->
 ```maxon
 function main() returns ExitCode
-  let files = try Directory.list("../bin") otherwise 'err'
+  let files = try Directory.list(FilePath from "../bin") otherwise 'err'
     return 0
   end 'err'
   // bin directory should contain maxon.exe
@@ -132,7 +132,7 @@ end 'main'
 <!-- test: list-directory-count -->
 ```maxon
 function main() returns ExitCode
-  let files = try Directory.list("../bin") otherwise 'err'
+  let files = try Directory.list(FilePath from "../bin") otherwise 'err'
     return 99
   end 'err'
   // bin directory has at least maxon.exe
@@ -149,7 +149,7 @@ end 'main'
 <!-- test: list-nonexistent-directory -->
 ```maxon
 function main() returns ExitCode
-  var files = try Directory.list("nonexistent_dir_12345") otherwise 'err'
+  var files = try Directory.list(FilePath from "nonexistent_dir_12345") otherwise 'err'
     print("Directory not found")
     return 0
   end 'err'
@@ -167,7 +167,7 @@ Directory not found
 <!-- test: directory-exists -->
 ```maxon
 function main() returns ExitCode
-  if Directory.exists("../bin") 'check'
+  if Directory.exists(FilePath from "../bin") 'check'
     return 42
   end 'check'
   return 0
@@ -180,7 +180,7 @@ end 'main'
 <!-- test: directory-is-directory -->
 ```maxon
 function main() returns ExitCode
-  if Directory.isDirectory("../bin") 'check'
+  if Directory.isDirectory(FilePath from "../bin") 'check'
     return 42
   end 'check'
   return 0
@@ -194,7 +194,7 @@ end 'main'
 ```maxon
 function main() returns ExitCode
   // Test that a nonexistent path is not a directory
-  if Directory.isDirectory("nonexistent_path_12345") 'check'
+  if Directory.isDirectory(FilePath from "nonexistent_path_12345") 'check'
     return 1
   end 'check'
   return 42
@@ -207,8 +207,8 @@ end 'main'
 <!-- test: current-directory-not-empty -->
 ```maxon
 function main() returns ExitCode
-  let cwd = Directory.currentDirectory()
-  if cwd.count() > 0 'ok'
+  let cwd = Directory.currentPath()
+  if cwd.toString().count() > 0 'ok'
     return 42
   end 'ok'
   return 0
@@ -221,7 +221,7 @@ end 'main'
 <!-- test: current-directory-is-directory -->
 ```maxon
 function main() returns ExitCode
-  let cwd = Directory.currentDirectory()
+  let cwd = Directory.currentPath()
   if Directory.exists(cwd) 'ok'
     return 42
   end 'ok'

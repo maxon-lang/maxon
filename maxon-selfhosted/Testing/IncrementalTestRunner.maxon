@@ -10,9 +10,9 @@ export function runIncrementalTests() returns ExitCode
         return 1
     end 'noRoot'
 
-    let tempDir = "{projectRoot}/temp"
-    let sourcePath = "{tempDir}/incr_test.maxon"
-    let exePath = "{tempDir}/incr_test.exe"
+    let tempDir = projectRoot.join("temp")
+    let sourcePath = tempDir.join("incr_test.maxon")
+    let exePath = tempDir.join("incr_test.exe")
 
     // Clean up any stale files from previous runs
     cleanupIncrTest(sourcePath, exePath: exePath)
@@ -179,19 +179,19 @@ function assertCounter(name String, actual Revision, expected Revision) returns 
     return true
 end 'assertCounter'
 
-function cleanupIncrTest(sourcePath String, exePath String)
-    if File.exists(sourcePath) 'src'
+function cleanupIncrTest(sourcePath FilePath, exePath FilePath)
+    if sourcePath.fileExists() 'src'
         try File.delete(sourcePath) otherwise 'delSrc'
         end 'delSrc'
     end 'src'
-    if File.exists(exePath) 'exe'
+    if exePath.fileExists() 'exe'
         try File.delete(exePath) otherwise 'delExe'
         end 'delExe'
     end 'exe'
 end 'cleanupIncrTest'
 
-function verifyExeExitCode(exePath String, expectedEc ExitCode) returns bool
-    let ec = Process.execute(exePath, timeoutMs: 5000)
+function verifyExeExitCode(exePath FilePath, expectedEc ExitCode) returns bool
+    let ec = Process.execute(exePath.toString(), timeoutMs: 5000)
     if ec != expectedEc 'mismatch'
         print("  expected exit code {expectedEc}, got {ec}\n")
         return false
@@ -199,21 +199,18 @@ function verifyExeExitCode(exePath String, expectedEc ExitCode) returns bool
     return true
 end 'verifyExeExitCode'
 
-function findIncrTestRoot() returns String throws CompileError
-    var dir = Directory.currentDirectory()
+function findIncrTestRoot() returns FilePath throws CompileError
+    var dir = Directory.currentPath()
     for _ in 0 upto 10 'search'
-        let specsPath = "{dir}/specs"
-        if Directory.exists(specsPath) 'found'
+        let specsPath = dir.join("specs")
+        if specsPath.directoryExists() 'found'
             return dir
         end 'found'
-        let lastSlash = try dir.findLast("/") otherwise 'tryBackslash'
-            let lastBs = try dir.findLast("\\") otherwise 'noParent'
-                throw CompileError.directoryNotFound
-            end 'noParent'
-            dir = dir.slice(dir.startIndex(), endIndex: lastBs)
-            continue
-        end 'tryBackslash'
-        dir = dir.slice(dir.startIndex(), endIndex: lastSlash)
+        let parentDir = dir.parent()
+        if parentDir.isEmpty() 'noParent'
+            throw CompileError.directoryNotFound
+        end 'noParent'
+        dir = parentDir
     end 'search'
     throw CompileError.directoryNotFound
 end 'findIncrTestRoot'

@@ -9,19 +9,23 @@ end 'DirectoryListError'
 export type Directory
   typealias StringArray = Array with String
 
-  /// List files and directories in a path
-  export static function list(path String) returns StringArray throws DirectoryListError
-    var pattern = "{path}\\*"
+  /// List files and directories at a path
+  export static function list(path FilePath) returns StringArray throws DirectoryListError
+    var pattern = "{path._path}{FilePath.separator()}*"
+
     var handle = __Builtins.findFirstFile(pattern.managed)
     if handle == 0 'notFound'
       throw DirectoryListError.notFound
     end 'notFound'
+
     var result = StringArray{}
+
     var managed = __Builtins.findFilename(handle)
     var name = String{managed: managed, _iterPos: 0}
     if name != "." and name != ".." 'notDot1'
       result.push(name)
     end 'notDot1'
+
     var nextResult = __Builtins.findNextFile(handle)
     while nextResult != 0 'loop'
       managed = __Builtins.findFilename(handle)
@@ -36,23 +40,24 @@ export type Directory
   end 'list'
 
   /// Check if a path exists and is a directory
-  export static function exists(path String) returns bool
-    return __Builtins.directoryExists(path.managed)
+  export static function exists(path FilePath) returns bool
+    return __Builtins.directoryExists(path._path.managed)
   end 'exists'
 
   /// Alias for exists
-  export static function isDirectory(path String) returns bool
+  export static function isDirectory(path FilePath) returns bool
     return Directory.exists(path)
   end 'isDirectory'
 
   /// Create a directory at the given path. Returns true on success.
-  export static function create(path String) returns bool
-    return __Builtins.createDirectory(path.managed)
+  export static function create(path FilePath) returns bool
+    return __Builtins.createDirectory(path._path.managed)
   end 'create'
 
-  /// Get the current working directory
-  export static function currentDirectory() returns String
+  /// Get the current working directory as a FilePath
+  export static function currentPath() returns FilePath
     let managed = __Builtins.getCurrentDirectory()
-    return String{managed: managed, _iterPos: 0}
-  end 'currentDirectory'
+    let dirStr = String{managed: managed, _iterPos: 0}
+    return try FilePath.from(dirStr) otherwise panic("Directory.currentPath: invalid path")
+  end 'currentPath'
 end 'Directory'

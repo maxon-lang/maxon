@@ -9,7 +9,7 @@ category: stdlib
 
 ## Documentation
 
-File I/O operations using the `File` type.
+File I/O operations using the `File` type. All File methods take a `FilePath` parameter.
 
 ### Error Types
 
@@ -33,10 +33,10 @@ end 'FileDeleteError'
 
 Read the entire contents of a text file as a UTF-8 encoded string.
 
-**Signature:** `static function readText(path string) returns string throws FileReadError`
+**Signature:** `static function readText(path FilePath) returns String throws FileReadError`
 
 **Parameters:**
-- `path`: File path as a string
+- `path`: File path
 
 **Returns:** File contents as a string
 
@@ -46,7 +46,7 @@ Read the entire contents of a text file as a UTF-8 encoded string.
 
 ```maxon
 function main() returns ExitCode
-  let content = try File.readText("example.txt") otherwise 'err'
+  let content = try File.readText(FilePath from "example.txt") otherwise 'err'
     print("Could not read file\n")
     return 0
   end 'err'
@@ -65,10 +65,10 @@ Could not read file
 
 Write a string to a text file using UTF-8 encoding.
 
-**Signature:** `static function writeText(path string, content string) throws FileWriteError`
+**Signature:** `static function writeText(path FilePath, content String) throws FileWriteError`
 
 **Parameters:**
-- `path`: File path as a string
+- `path`: File path
 - `content`: Text content to write
 
 **Throws:** `FileWriteError.failed` on failure
@@ -77,12 +77,12 @@ Write a string to a text file using UTF-8 encoding.
 
 Read the entire contents of a file as raw bytes.
 
-**Signature:** `static function readBinary(path string) returns ByteArray throws FileReadError`
+**Signature:** `static function readBinary(path FilePath) returns ByteArray throws FileReadError`
 
 where `type ByteArray implements Array with Byte`
 
 **Parameters:**
-- `path`: File path as a string
+- `path`: File path
 
 **Returns:** File contents as a byte array
 
@@ -92,7 +92,7 @@ where `type ByteArray implements Array with Byte`
 
 ```maxon
 function main() returns ExitCode
-  let bytes = try File.readBinary("data.bin") otherwise 'err'
+  let bytes = try File.readBinary(FilePath from "data.bin") otherwise 'err'
     print("Could not read file\n")
     return 0
   end 'err'
@@ -105,12 +105,12 @@ end 'main'
 
 Write binary data to a file.
 
-**Signature:** `static function writeBinary(path string, content ByteArray) throws FileWriteError`
+**Signature:** `static function writeBinary(path FilePath, content ByteArray) throws FileWriteError`
 
 where `type ByteArray implements Array with Byte`
 
 **Parameters:**
-- `path`: File path as a string
+- `path`: File path
 - `content`: Binary data as a byte array
 
 **Throws:** `FileWriteError.failed` on failure
@@ -119,10 +119,10 @@ where `type ByteArray implements Array with Byte`
 
 Check if a file exists at the given path.
 
-**Signature:** `static function exists(path string) returns bool`
+**Signature:** `static function exists(path FilePath) returns bool`
 
 **Parameters:**
-- `path`: File path as a string
+- `path`: File path
 
 **Returns:** `true` if file exists, `false` otherwise
 
@@ -130,7 +130,7 @@ Check if a file exists at the given path.
 
 ```maxon
 function main() returns ExitCode
-  if File.exists("temp/output.txt") 'check'
+  if File.exists(FilePath from "temp/output.txt") 'check'
     print("File exists")
   end 'check' else 'nofile'
     print("File does not exist")
@@ -143,10 +143,10 @@ end 'main'
 
 Delete a file at the given path.
 
-**Signature:** `static function delete(path string) throws FileDeleteError`
+**Signature:** `static function delete(path FilePath) throws FileDeleteError`
 
 **Parameters:**
-- `path`: File path as a string
+- `path`: File path
 
 **Throws:** `FileDeleteError.notFound` if the file cannot be deleted
 
@@ -154,7 +154,7 @@ Delete a file at the given path.
 
 ```maxon
 function main() returns ExitCode
-  try File.delete("temp/old_file.txt") otherwise 'err'
+  try File.delete(FilePath from "temp/old_file.txt") otherwise 'err'
     print("Could not delete file")
     return 1
   end 'err'
@@ -175,7 +175,7 @@ Could not delete file
 ```maxon
 function main() returns ExitCode
   // Try to read a nonexistent file - this tests the error path
-  let content = try File.readText("nonexistent_file_xyz.txt") otherwise 'err'
+  let content = try File.readText(FilePath from "nonexistent_file_xyz.txt") otherwise 'err'
     print("File not found")
     return 42
   end 'err'
@@ -193,7 +193,7 @@ File not found
 <!-- test: read-nonexistent-file -->
 ```maxon
 function main() returns ExitCode
-  let content = try File.readText("nonexistent.txt") otherwise 'err'
+  let content = try File.readText(FilePath from "nonexistent.txt") otherwise 'err'
     print("File not found")
     return 0
   end 'err'
@@ -212,7 +212,7 @@ File not found
 ```maxon
 function main() returns ExitCode
   // Test File.exists on a nonexistent file (returns false)
-  if File.exists("nonexistent_xyz_12345.txt") 'check'
+  if File.exists(FilePath from "nonexistent_xyz_12345.txt") 'check'
     return 1
   end 'check'
   return 42
@@ -225,7 +225,7 @@ end 'main'
 <!-- test: read-binary-nonexistent -->
 ```maxon
 function main() returns ExitCode
-  var bytes = try File.readBinary("nonexistent_binary_file.bin") otherwise 'err'
+  var bytes = try File.readBinary(FilePath from "nonexistent_binary_file.bin") otherwise 'err'
     print("File not found")
     return 42
   end 'err'
@@ -243,20 +243,21 @@ File not found
 <!-- test: write-and-read-text -->
 ```maxon
 function main() returns ExitCode
+  let path = FilePath from "test_readtext.txt"
   // Write a text file
-  try File.writeText("test_readtext.txt", content: "Hello World") otherwise 'write_err'
+  try File.writeText(path, content: "Hello World") otherwise 'write_err'
     print("Write failed")
     return 1
   end 'write_err'
 
   // Read it back with readText
-  var content = try File.readText("test_readtext.txt") otherwise 'read_err'
+  var content = try File.readText(path) otherwise 'read_err'
     print("Read failed")
     return 2
   end 'read_err'
 
   // Clean up
-  try File.delete("test_readtext.txt") otherwise 'del_err'
+  try File.delete(path) otherwise 'del_err'
     print("Delete failed")
   end 'del_err'
 
@@ -280,6 +281,7 @@ Hello World
 ```maxon
 
 function main() returns ExitCode
+  let path = FilePath from "test_binary.bin"
   // Create a byte array with known values
   var data = ByteArray{}
   data.push(65 as Byte)
@@ -287,19 +289,19 @@ function main() returns ExitCode
   data.push(67 as Byte)
 
   // Write binary file
-  try File.writeBinary("test_binary.bin", content: data) otherwise 'write_err'
+  try File.writeBinary(path, content: data) otherwise 'write_err'
     print("Write failed")
     return 1
   end 'write_err'
 
   // Read it back
-  var readData = try File.readBinary("test_binary.bin") otherwise 'read_err'
+  var readData = try File.readBinary(path) otherwise 'read_err'
     print("Read failed")
     return 2
   end 'read_err'
 
   // Clean up the temp file
-  try File.delete("test_binary.bin") otherwise 'del_err'
+  try File.delete(path) otherwise 'del_err'
     print("Delete failed")
   end 'del_err'
 

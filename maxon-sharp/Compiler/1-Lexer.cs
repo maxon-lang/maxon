@@ -103,6 +103,11 @@ public enum TokenType {
   DocComment,
   Eof,
 
+  // Conditional compilation directives
+  HashIf,      // #if
+  HashElse,    // #else
+  HashEndif,   // #endif
+
   // Special
   Unknown
 }
@@ -392,6 +397,11 @@ public class Lexer(string source) {
       return ScanIdentifier(startLine, startColumn);
     }
 
+    // Conditional compilation directives: #if, #else, #endif
+    if (c == '#') {
+      return ScanDirective(startLine, startColumn);
+    }
+
     // Unknown
     Advance();
     return new Token(TokenType.Unknown, c.ToString(), startLine, startColumn);
@@ -529,6 +539,21 @@ public class Lexer(string source) {
     }
 
     return new Token(TokenType.ByteStringLiteral, value, startLine, startColumn);
+  }
+
+  private Token ScanDirective(int startLine, int startColumn) {
+    Advance(); // consume '#'
+    var start = _pos;
+    while (!IsAtEnd() && char.IsLetter(Current())) {
+      Advance();
+    }
+    var directive = _source[start.._pos];
+    return directive switch {
+      "if" => new Token(TokenType.HashIf, "#if", startLine, startColumn),
+      "else" => new Token(TokenType.HashElse, "#else", startLine, startColumn),
+      "endif" => new Token(TokenType.HashEndif, "#endif", startLine, startColumn),
+      _ => new Token(TokenType.Unknown, "#" + directive, startLine, startColumn),
+    };
   }
 
   private char Current() => _source[_pos];

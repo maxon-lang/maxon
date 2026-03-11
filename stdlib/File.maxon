@@ -42,8 +42,8 @@ export type File
   end 'readFileData'
 
   /// Read text file content as a UTF-8 string
-  export static function readText(path String) returns String throws FileReadError
-    var managed = try readFileData(path, extraBytes: 1)
+  export static function readText(path FilePath) returns String throws FileReadError
+    var managed = try readFileData(path._path, extraBytes: 1)
     let len = managed.length()
     // Write null terminator: len is within capacity (extraBytes=1) but at the
     // length boundary, so temporarily extend length to allow setByte at that index
@@ -54,30 +54,30 @@ export type File
   end 'readText'
 
   /// Read file content as raw bytes
-  export static function readBinary(path String) returns ByteArray throws FileReadError
-    var managed = try readFileData(path, extraBytes: 0)
+  export static function readBinary(path FilePath) returns ByteArray throws FileReadError
+    var managed = try readFileData(path._path, extraBytes: 0)
     return ByteArray{managed: managed, iterIndex: 0}
   end 'readBinary'
 
   /// Write string content to a text file
-  export static function writeText(path String, content String) throws FileWriteError
-    let res = __Builtins.writeFile(path.managed, content.managed)
+  export static function writeText(path FilePath, content String) throws FileWriteError
+    let res = __Builtins.writeFile(path._path.managed, content.managed)
     if res != 0 'failed'
       throw FileWriteError.failed
     end 'failed'
   end 'writeText'
 
   /// Write binary content to a file
-  export static function writeBinary(path String, content ByteArray) throws FileWriteError
-    let res = __Builtins.writeFileBinary(path.managed, content)
+  export static function writeBinary(path FilePath, content ByteArray) throws FileWriteError
+    let res = __Builtins.writeFileBinary(path._path.managed, content)
     if res != 0 'failed'
       throw FileWriteError.failed
     end 'failed'
   end 'writeBinary'
 
   /// Check if a file exists at the given path
-  export static function exists(path String) returns bool
-    let handle = __Builtins.fileOpenRead(path.managed)
+  export static function exists(path FilePath) returns bool
+    let handle = __Builtins.fileOpenRead(path._path.managed)
     if handle < 0 'notFound'
       return false
     end 'notFound'
@@ -86,8 +86,8 @@ export type File
   end 'exists'
 
   /// Delete a file at the given path
-  export static function delete(path String) throws FileDeleteError
-    let res = __Builtins.fileDelete(path.managed)
+  export static function delete(path FilePath) throws FileDeleteError
+    let res = __Builtins.fileDelete(path._path.managed)
     if res != 0 'failed'
       throw FileDeleteError.notFound
     end 'failed'

@@ -1,14 +1,15 @@
 // Convenience wrapper: compiles a file or directory and returns the output executable path.
-export function compile(path String, target Target) returns String throws CompileError
+export function compile(path FilePath, target Target) returns FilePath throws CompileError
     let project = createProject(path, isSingleFile: false, target: target)
     return try compileProject(project)
 end 'compile'
 
 // Compiles a project and returns the output executable path.
-export function compileProject(project Project) returns String throws CompileError
+export function compileProject(project Project) returns FilePath throws CompileError
     logInfo(LogCategory.compiler, message: "Starting incremental compilation")
 
-    try loadSourceFiles(project, path: project.rootPath)
+    let rootFp = try FilePath.from(project.rootPath) otherwise panic("invalid root path")
+    try loadSourceFiles(project, path: rootFp)
 
     let codeResult = try queryCodeResult(project)
 
@@ -17,7 +18,8 @@ export function compileProject(project Project) returns String throws CompileErr
     end 'noFiles'
 
     let ext = executableExtension(project.target)
-    let outputPath = changeExtension(firstPath, ext: ext)
+    let outputFp = try FilePath.from(firstPath) otherwise panic("invalid source path")
+    let outputPath = outputFp.changeExtension(ext)
     writeExecutable(outputPath, codeResult: codeResult, target: project.target)
 
     logInfo(LogCategory.compiler, message: "Wrote {codeResult.code.count()} bytes code to {outputPath}")
@@ -32,16 +34,16 @@ end 'fileChanged'
 
 // --- Source file loading ---
 
-function loadSourceFiles(project Project, path String) throws CompileError
-    if File.exists(path) 'isFile'
+function loadSourceFiles(project Project, path FilePath) throws CompileError
+    if path.fileExists() 'isFile'
         logTrace(LogCategory.compiler, message: "Loading single file: {path}")
 
         let bytes = try File.readBinary(path) otherwise 'readErr'
             throw CompileError.readError
         end 'readErr'
 
-        setSourceFile(project, path: path, content: bytes)
-    end 'isFile' else if Directory.exists(path) 'isDir'
+        setSourceFile(project, path: path.toString(), content: bytes)
+    end 'isFile' else if path.directoryExists() 'isDir'
         logTrace(LogCategory.compiler, message: "Loading directory: {path}")
 
         let dirEntries = try Directory.list(path) otherwise 'listErr'
@@ -50,14 +52,14 @@ function loadSourceFiles(project Project, path String) throws CompileError
 
         for name in dirEntries 'loop'
             if name.endsWith(".maxon") 'isMaxon'
-                let filePath = "{path}\\{name}"
+                let filePath = path.join(name)
                 logTrace(LogCategory.compiler, message: "Loading file: {filePath}")
 
                 let bytes = try File.readBinary(filePath) otherwise 'skip'
                     continue
                 end 'skip'
 
-                setSourceFile(project, path: filePath, content: bytes)
+                setSourceFile(project, path: filePath.toString(), content: bytes)
             end 'isMaxon'
         end 'loop'
 
@@ -71,11 +73,3 @@ function loadSourceFiles(project Project, path String) throws CompileError
     end 'noFiles'
 
 end 'loadSourceFiles'
-
-// --- Utility ---
-
-function changeExtension(path String, ext String) returns String
-    let dotIdx = try path.findLast(".") otherwise path.endIndex()
-    let base = path.slice(path.startIndex(), endIndex: dotIdx)
-    return base.concat(ext)
-end 'changeExtension'

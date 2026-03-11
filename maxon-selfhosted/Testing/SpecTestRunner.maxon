@@ -62,22 +62,18 @@ end 'SpecTest'
 typealias SpecTestArray = Array with SpecTest
 
 // Find the project root by walking up from cwd looking for a specs/ directory.
-function findProjectRoot() returns String throws CompileError
-  var dir = Directory.currentDirectory()
+function findProjectRoot() returns FilePath throws CompileError
+  var dir = Directory.currentPath()
   for _ in 0 upto 10 'search'
-    let specsPath = "{dir}/specs"
-    if Directory.exists(specsPath) 'found'
+    let specsPath = dir.join("specs")
+    if specsPath.directoryExists() 'found'
       return dir
     end 'found'
-    // Go up one level
-    let lastSlash = try dir.findLast("/") otherwise 'tryBackslash'
-      let lastBs = try dir.findLast("\\") otherwise 'noParent'
-        throw CompileError.directoryNotFound
-      end 'noParent'
-      dir = dir.slice(dir.startIndex(), endIndex: lastBs)
-      continue
-    end 'tryBackslash'
-    dir = dir.slice(dir.startIndex(), endIndex: lastSlash)
+    let parentDir = dir.parent()
+    if parentDir.isEmpty() 'noParent'
+      throw CompileError.directoryNotFound
+    end 'noParent'
+    dir = parentDir
   end 'search'
   throw CompileError.directoryNotFound
 end 'findProjectRoot'
@@ -286,12 +282,12 @@ end 'canExecuteTarget'
 
 // Build the command to run a compiled binary.
 // Host targets run directly; Linux targets run via Docker.
-function buildRunCommand(outputPath String, target Target, projectRoot String, testArgs String) returns String
+function buildRunCommand(outputPath FilePath, target Target, projectRoot FilePath, testArgs String) returns String
   if isHostTarget(target) 'isHost'
     if not testArgs.isEmpty() 'hasArgs'
       return "{outputPath} {testArgs}"
     end 'hasArgs'
-    return outputPath
+    return outputPath.toString()
   end 'isHost'
 
   // Docker execution for Linux targets
@@ -301,7 +297,7 @@ function buildRunCommand(outputPath String, target Target, projectRoot String, t
   end 'pickArch'
 
   // Convert Windows path to forward slashes for Docker volume mount
-  let tempDir = "{projectRoot}/temp"
+  let tempDir = projectRoot.join("temp")
   var dockerCmd = "docker run --rm --platform linux/{dockerArch} -v {tempDir}:/work alpine /work/spectest_temp"
   if not testArgs.isEmpty() 'hasDockerArgs'
     dockerCmd = "docker run --rm --platform linux/{dockerArch} -v {tempDir}:/work alpine /work/spectest_temp {testArgs}"
@@ -321,7 +317,7 @@ export function runAllSpecTests(filter String, target Target) returns ExitCode
   var totalTests = 0
 
   for specName in whitelist 'eachSpec'
-    let specPath = "{root}/specs/{specName}.md"
+    let specPath = root.join("specs").join("{specName}.md")
     let content = try File.readText(specPath) otherwise 'readErr'
       logError(LogCategory.testing, message: "Could not read spec: {specPath}")
       continue
@@ -365,11 +361,11 @@ export function runAllSpecTests(filter String, target Target) returns ExitCode
 end 'runAllSpecTests'
 
 // Run a single test. Returns true if passed.
-function runSingleTest(test SpecTest, projectRoot String, target Target) returns bool
-  let tempDir = "{projectRoot}/temp"
-  let tempSource = "{tempDir}/spectest_temp.maxon"
+function runSingleTest(test SpecTest, projectRoot FilePath, target Target) returns bool
+  let tempDir = projectRoot.join("temp")
+  let tempSource = tempDir.join("spectest_temp.maxon")
   let ext = executableExtension(target)
-  let tempExe = "{tempDir}/spectest_temp{ext}"
+  let tempExe = tempDir.join("spectest_temp{ext}")
 
   // Prepend "// Test:" header so line numbers match the spec fragment files
   let sourceWithHeader = "// Test: {test.name}\n{test.source}"
@@ -558,12 +554,12 @@ function stripFilePathFromError(line String) returns String
   return "{prefix}{message}"
 end 'stripFilePathFromError'
 
-function cleanup(tempSource String, tempExe String)
-  if File.exists(tempSource) 'src'
+function cleanup(tempSource FilePath, tempExe FilePath)
+  if tempSource.fileExists() 'src'
     try File.delete(tempSource) otherwise 'delErr'
     end 'delErr'
   end 'src'
-  if File.exists(tempExe) 'exe'
+  if tempExe.fileExists() 'exe'
     try File.delete(tempExe) otherwise 'delErr2'
     end 'delErr2'
   end 'exe'

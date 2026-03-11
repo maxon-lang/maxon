@@ -110,6 +110,25 @@ comment       = '//' { <any character except newline> } NEWLINE
 doc_comment   = '///' { <any character except newline> } NEWLINE
 ```
 
+### 1.8 Conditional Compilation Directives
+
+```
+hash_if       = '#if'
+hash_else     = '#else'
+hash_endif    = '#endif'
+
+conditional_block
+              = '#if' condition NEWLINE
+                { <tokens> }
+                [ '#else' NEWLINE { <tokens> } ]
+                '#endif' NEWLINE
+
+condition     = 'os' '(' IDENTIFIER ')'
+              | 'arch' '(' IDENTIFIER ')'
+```
+
+Conditional compilation directives are evaluated at parse time. Supported `os` values: `Windows`, `Linux`. Supported `arch` values: `x86_64`, `aarch64`. Nested `#if` blocks are supported.
+
 ---
 
 ## 2 — Program Structure
@@ -128,6 +147,7 @@ top_level_decl
               | typealias_decl
               | top_level_var
               | top_level_let
+              | conditional_block
 ```
 
 ### 2.1 Visibility
@@ -748,4 +768,7 @@ The following tokens are recognized but not yet fully specified:
 | `Dot`              | `.`                                              |
 | `Newline`          | `\n`                                             |
 | `DocComment`       | `/// ...`                                        |
+| `HashIf`           | `#if`                                            |
+| `HashElse`         | `#else`                                          |
+| `HashEndif`        | `#endif`                                         |
 | `Eof`              | end of input                                     |

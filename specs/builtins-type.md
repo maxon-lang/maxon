@@ -92,7 +92,7 @@ end 'main'
 <!-- test: builtins-type.directory-exists -->
 ```maxon
 function main() returns ExitCode
-  let cwd = Directory.currentDirectory()
+  let cwd = Directory.currentPath()
   if Directory.exists(cwd) 'check'
     return 0
   end 'check'
