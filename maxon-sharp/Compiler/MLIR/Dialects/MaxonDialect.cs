@@ -1088,93 +1088,93 @@ public class MaxonMakeCharFromBytesOp(MaxonValue managed, MaxonValue pos, MaxonV
 }
 
 // ============================================================================
-// Chain (doubly-linked list) operations
+// ManagedList (doubly-linked list) operations
 // ============================================================================
 
-// Creates a new empty chain data structure
-public class MaxonChainCreateOp : MaxonOp {
-  public override string Mnemonic => "maxon.chain_create";
-  public MaxonStruct Result { get; } = new MaxonStruct(MlirContext.Current.NextId(), "__Chain");
+// Creates a new empty managed list data structure
+public class MaxonManagedListCreateOp : MaxonOp {
+  public override string Mnemonic => "maxon.managed_list_create";
+  public MaxonStruct Result { get; } = new MaxonStruct(MlirContext.Current.NextId(), "__ManagedList");
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
 }
 
-// Inserts a value at the head or tail of the chain, creating a new node
-public class MaxonChainInsertValueOp(MaxonValue chain, MaxonValue value, bool atHead, string valueKind) : MaxonOp {
-  public override string Mnemonic => AtHead ? "maxon.chain_insert_head" : "maxon.chain_insert_tail";
-  public MaxonValue Chain { get; } = chain;
+// Inserts a value at the head or tail of the managed list, creating a new node
+public class MaxonManagedListInsertValueOp(MaxonValue managedList, MaxonValue value, bool atHead, string valueKind) : MaxonOp {
+  public override string Mnemonic => AtHead ? "maxon.managed_list_insert_head" : "maxon.managed_list_insert_tail";
+  public MaxonValue ManagedList { get; } = managedList;
   public MaxonValue Value { get; } = value;
   public bool AtHead { get; } = atHead;
   public string ValueKind { get; } = valueKind;
-  public MaxonStruct Result { get; } = new MaxonStruct(MlirContext.Current.NextId(), "__ChainNode");
+  public MaxonStruct Result { get; } = new MaxonStruct(MlirContext.Current.NextId(), "__ManagedListNode");
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
-  public override IReadOnlyList<string> PrintableOperands => [Chain.ToString(), Value.ToString()];
+  public override IReadOnlyList<string> PrintableOperands => [ManagedList.ToString(), Value.ToString()];
 }
 
 // Inserts a value relative to a target node (before or after)
-public class MaxonChainInsertRelativeValueOp(MaxonValue chain, MaxonValue target, MaxonValue value, bool after, string valueKind) : MaxonOp {
-  public override string Mnemonic => After ? "maxon.chain_insert_after" : "maxon.chain_insert_before";
-  public MaxonValue Chain { get; } = chain;
+public class MaxonManagedListInsertRelativeValueOp(MaxonValue managedList, MaxonValue target, MaxonValue value, bool after, string valueKind) : MaxonOp {
+  public override string Mnemonic => After ? "maxon.managed_list_insert_after" : "maxon.managed_list_insert_before";
+  public MaxonValue ManagedList { get; } = managedList;
   public MaxonValue Target { get; } = target;
   public MaxonValue Value { get; } = value;
   public bool After { get; } = after;
   public string ValueKind { get; } = valueKind;
-  public MaxonStruct Result { get; } = new MaxonStruct(MlirContext.Current.NextId(), "__ChainNode");
+  public MaxonStruct Result { get; } = new MaxonStruct(MlirContext.Current.NextId(), "__ManagedListNode");
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
-  public override IReadOnlyList<string> PrintableOperands => [Chain.ToString(), Target.ToString(), Value.ToString()];
+  public override IReadOnlyList<string> PrintableOperands => [ManagedList.ToString(), Target.ToString(), Value.ToString()];
 }
 
-// Reinserts an existing node at the head or tail of the chain
-public class MaxonChainReinsertOp(MaxonValue chain, MaxonValue node, bool atHead) : MaxonOp {
-  public override string Mnemonic => AtHead ? "maxon.chain_reinsert_head" : "maxon.chain_reinsert_tail";
-  public MaxonValue Chain { get; } = chain;
+// Reinserts an existing node at the head or tail of the managed list
+public class MaxonManagedListReinsertOp(MaxonValue managedList, MaxonValue node, bool atHead) : MaxonOp {
+  public override string Mnemonic => AtHead ? "maxon.managed_list_reinsert_head" : "maxon.managed_list_reinsert_tail";
+  public MaxonValue ManagedList { get; } = managedList;
   public MaxonValue Node { get; } = node;
   public bool AtHead { get; } = atHead;
-  public override IReadOnlyList<string> PrintableOperands => [Chain.ToString(), Node.ToString()];
+  public override IReadOnlyList<string> PrintableOperands => [ManagedList.ToString(), Node.ToString()];
 }
 
 // Reinserts an existing node relative to a target node (before or after)
-public class MaxonChainReinsertRelativeOp(MaxonValue chain, MaxonValue target, MaxonValue node, bool after) : MaxonOp {
-  public override string Mnemonic => After ? "maxon.chain_reinsert_after" : "maxon.chain_reinsert_before";
-  public MaxonValue Chain { get; } = chain;
+public class MaxonManagedListReinsertRelativeOp(MaxonValue managedList, MaxonValue target, MaxonValue node, bool after) : MaxonOp {
+  public override string Mnemonic => After ? "maxon.managed_list_reinsert_after" : "maxon.managed_list_reinsert_before";
+  public MaxonValue ManagedList { get; } = managedList;
   public MaxonValue Target { get; } = target;
   public MaxonValue Node { get; } = node;
   public bool After { get; } = after;
-  public override IReadOnlyList<string> PrintableOperands => [Chain.ToString(), Target.ToString(), Node.ToString()];
+  public override IReadOnlyList<string> PrintableOperands => [ManagedList.ToString(), Target.ToString(), Node.ToString()];
 }
 
-// Detaches a node from the chain without freeing it
-public class MaxonChainDetachOp(MaxonValue chain, MaxonValue node) : MaxonOp {
-  public override string Mnemonic => "maxon.chain_detach";
-  public MaxonValue Chain { get; } = chain;
+// Detaches a node from the managed list without freeing it
+public class MaxonManagedListDetachOp(MaxonValue managedList, MaxonValue node) : MaxonOp {
+  public override string Mnemonic => "maxon.managed_list_detach";
+  public MaxonValue ManagedList { get; } = managedList;
   public MaxonValue Node { get; } = node;
-  public override IReadOnlyList<string> PrintableOperands => [Chain.ToString(), Node.ToString()];
+  public override IReadOnlyList<string> PrintableOperands => [ManagedList.ToString(), Node.ToString()];
 }
 
-// Removes a node from the chain: extracts value, unlinks node, frees node memory
-public class MaxonChainRemoveOp(MaxonValue chain, MaxonValue node, string valueKind, MaxonValueKind resultKind) : MaxonOp {
-  public override string Mnemonic => "maxon.chain_remove";
-  public MaxonValue Chain { get; } = chain;
+// Removes a node from the managed list: extracts value, unlinks node, frees node memory
+public class MaxonManagedListRemoveOp(MaxonValue managedList, MaxonValue node, string valueKind, MaxonValueKind resultKind) : MaxonOp {
+  public override string Mnemonic => "maxon.managed_list_remove";
+  public MaxonValue ManagedList { get; } = managedList;
   public MaxonValue Node { get; } = node;
   public string ValueKind { get; } = valueKind;
   public MaxonValueKind ResultKind { get; } = resultKind;
   public MaxonValue Result { get; } = resultKind == MaxonValueKind.Struct
     ? new MaxonStruct(MlirContext.Current.NextId(), valueKind) : resultKind.CreateValue();
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
-  public override IReadOnlyList<string> PrintableOperands => [Chain.ToString(), Node.ToString()];
+  public override IReadOnlyList<string> PrintableOperands => [ManagedList.ToString(), Node.ToString()];
 }
 
-// Returns the number of nodes in the chain
-public class MaxonChainCountOp(MaxonValue chain) : MaxonOp {
-  public override string Mnemonic => "maxon.chain_count";
-  public MaxonValue Chain { get; } = chain;
+// Returns the number of nodes in the managed list
+public class MaxonManagedListCountOp(MaxonValue managedList) : MaxonOp {
+  public override string Mnemonic => "maxon.managed_list_count";
+  public MaxonValue ManagedList { get; } = managedList;
   public MaxonInteger Result { get; } = new MaxonInteger(MlirContext.Current.NextId());
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
-  public override IReadOnlyList<string> PrintableOperands => [Chain.ToString()];
+  public override IReadOnlyList<string> PrintableOperands => [ManagedList.ToString()];
 }
 
-// Loads the value stored in a chain node
-public class MaxonChainNodeValueOp(MaxonValue node, string valueKind, MaxonValueKind resultKind) : MaxonOp {
-  public override string Mnemonic => "maxon.chain_node_value";
+// Loads the value stored in a managed list node
+public class MaxonManagedListNodeValueOp(MaxonValue node, string valueKind, MaxonValueKind resultKind) : MaxonOp {
+  public override string Mnemonic => "maxon.managed_list_node_value";
   public MaxonValue Node { get; } = node;
   public string ValueKind { get; } = valueKind;
   public MaxonValueKind ResultKind { get; } = resultKind;
@@ -1184,39 +1184,39 @@ public class MaxonChainNodeValueOp(MaxonValue node, string valueKind, MaxonValue
   public override IReadOnlyList<string> PrintableOperands => [Node.ToString()];
 }
 
-// Replaces the value stored in a chain node
-public class MaxonChainNodeSetValueOp(MaxonValue node, MaxonValue value, string valueKind) : MaxonOp {
-  public override string Mnemonic => "maxon.chain_node_set_value";
+// Replaces the value stored in a managed list node
+public class MaxonManagedListNodeSetValueOp(MaxonValue node, MaxonValue value, string valueKind) : MaxonOp {
+  public override string Mnemonic => "maxon.managed_list_node_set_value";
   public MaxonValue Node { get; } = node;
   public MaxonValue Value { get; } = value;
   public string ValueKind { get; } = valueKind;
   public override IReadOnlyList<string> PrintableOperands => [Node.ToString(), Value.ToString()];
 }
 
-// Removes all nodes from the chain, freeing each node.
+// Removes all nodes from the managed list, freeing each node.
 // ValueKind indicates the element type — used to decide whether node values need decref.
-public class MaxonChainClearOp(MaxonValue chain, string valueKind) : MaxonOp {
-  public override string Mnemonic => "maxon.chain_clear";
-  public MaxonValue Chain { get; } = chain;
+public class MaxonManagedListClearOp(MaxonValue managedList, string valueKind) : MaxonOp {
+  public override string Mnemonic => "maxon.managed_list_clear";
+  public MaxonValue ManagedList { get; } = managedList;
   public string ValueKind { get; } = valueKind;
-  public override IReadOnlyList<string> PrintableOperands => [Chain.ToString()];
+  public override IReadOnlyList<string> PrintableOperands => [ManagedList.ToString()];
 }
 
-// Resets the chain's iteration cursor to null (0)
-public class MaxonChainCursorResetOp(MaxonValue chain) : MaxonOp {
-  public override string Mnemonic => "maxon.chain_cursor_reset";
-  public MaxonValue Chain { get; } = chain;
-  public override IReadOnlyList<string> PrintableOperands => [Chain.ToString()];
+// Resets the managed list's iteration cursor to null (0)
+public class MaxonManagedListCursorResetOp(MaxonValue managedList) : MaxonOp {
+  public override string Mnemonic => "maxon.managed_list_cursor_reset";
+  public MaxonValue ManagedList { get; } = managedList;
+  public override IReadOnlyList<string> PrintableOperands => [ManagedList.ToString()];
 }
 
-// Reads the value at the chain's current cursor position
-public class MaxonChainCursorValueOp(MaxonValue chain, string valueKind, MaxonValueKind resultKind) : MaxonOp {
-  public override string Mnemonic => "maxon.chain_cursor_value";
-  public MaxonValue Chain { get; } = chain;
+// Reads the value at the managed list's current cursor position
+public class MaxonManagedListCursorValueOp(MaxonValue managedList, string valueKind, MaxonValueKind resultKind) : MaxonOp {
+  public override string Mnemonic => "maxon.managed_list_cursor_value";
+  public MaxonValue ManagedList { get; } = managedList;
   public string ValueKind { get; } = valueKind;
   public MaxonValueKind ResultKind { get; } = resultKind;
   public MaxonValue Result { get; } = resultKind == MaxonValueKind.Struct
     ? new MaxonStruct(MlirContext.Current.NextId(), valueKind) : resultKind.CreateValue();
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
-  public override IReadOnlyList<string> PrintableOperands => [Chain.ToString()];
+  public override IReadOnlyList<string> PrintableOperands => [ManagedList.ToString()];
 }

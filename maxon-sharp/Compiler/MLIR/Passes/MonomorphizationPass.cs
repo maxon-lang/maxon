@@ -727,28 +727,28 @@ public static class MonomorphizationPass {
         if (indirect.Result != null && cloned.Result != null) valueMap[indirect.Result.Id] = cloned.Result;
         return cloned;
       }
-      // Chain (doubly-linked list) ops
-      case MaxonChainCreateOp: { var c = new MaxonChainCreateOp(); valueMap[((MaxonChainCreateOp)op).Result.Id] = c.Result; return c; }
-      case MaxonChainInsertValueOp ci: { var c = new MaxonChainInsertValueOp(mapValue(ci.Chain), mapValue(ci.Value), ci.AtHead, sub.SubstituteName(ci.ValueKind)); valueMap[ci.Result.Id] = c.Result; return c; }
-      case MaxonChainInsertRelativeValueOp cir: { var c = new MaxonChainInsertRelativeValueOp(mapValue(cir.Chain), mapValue(cir.Target), mapValue(cir.Value), cir.After, sub.SubstituteName(cir.ValueKind)); valueMap[cir.Result.Id] = c.Result; return c; }
-      case MaxonChainReinsertOp cr: return new MaxonChainReinsertOp(mapValue(cr.Chain), mapValue(cr.Node), cr.AtHead);
-      case MaxonChainReinsertRelativeOp crr: return new MaxonChainReinsertRelativeOp(mapValue(crr.Chain), mapValue(crr.Target), mapValue(crr.Node), crr.After);
-      case MaxonChainDetachOp cd: return new MaxonChainDetachOp(mapValue(cd.Chain), mapValue(cd.Node));
-      case MaxonChainRemoveOp crm: {
+      // ManagedList (doubly-linked list) ops
+      case MaxonManagedListCreateOp: { var c = new MaxonManagedListCreateOp(); valueMap[((MaxonManagedListCreateOp)op).Result.Id] = c.Result; return c; }
+      case MaxonManagedListInsertValueOp ci: { var c = new MaxonManagedListInsertValueOp(mapValue(ci.ManagedList), mapValue(ci.Value), ci.AtHead, sub.SubstituteName(ci.ValueKind)); valueMap[ci.Result.Id] = c.Result; return c; }
+      case MaxonManagedListInsertRelativeValueOp cir: { var c = new MaxonManagedListInsertRelativeValueOp(mapValue(cir.ManagedList), mapValue(cir.Target), mapValue(cir.Value), cir.After, sub.SubstituteName(cir.ValueKind)); valueMap[cir.Result.Id] = c.Result; return c; }
+      case MaxonManagedListReinsertOp cr: return new MaxonManagedListReinsertOp(mapValue(cr.ManagedList), mapValue(cr.Node), cr.AtHead);
+      case MaxonManagedListReinsertRelativeOp crr: return new MaxonManagedListReinsertRelativeOp(mapValue(crr.ManagedList), mapValue(crr.Target), mapValue(crr.Node), crr.After);
+      case MaxonManagedListDetachOp cd: return new MaxonManagedListDetachOp(mapValue(cd.ManagedList), mapValue(cd.Node));
+      case MaxonManagedListRemoveOp crm: {
         var newVK = sub.SubstituteName(crm.ValueKind);
         var newRK = sub.TryGetValue(crm.ValueKind, out var rvt) ? rvt.ToValueKind() : crm.ResultKind;
-        var c = new MaxonChainRemoveOp(mapValue(crm.Chain), mapValue(crm.Node), newVK, newRK);
+        var c = new MaxonManagedListRemoveOp(mapValue(crm.ManagedList), mapValue(crm.Node), newVK, newRK);
         valueMap[crm.Result.Id] = c.Result; return c;
       }
-      case MaxonChainCountOp cc: { var c = new MaxonChainCountOp(mapValue(cc.Chain)); valueMap[cc.Result.Id] = c.Result; return c; }
-      case MaxonChainNodeValueOp cnv: {
+      case MaxonManagedListCountOp cc: { var c = new MaxonManagedListCountOp(mapValue(cc.ManagedList)); valueMap[cc.Result.Id] = c.Result; return c; }
+      case MaxonManagedListNodeValueOp cnv: {
         var newVK = sub.SubstituteName(cnv.ValueKind);
         var newRK = sub.TryGetValue(cnv.ValueKind, out var nvt) ? nvt.ToValueKind() : cnv.ResultKind;
-        var c = new MaxonChainNodeValueOp(mapValue(cnv.Node), newVK, newRK);
+        var c = new MaxonManagedListNodeValueOp(mapValue(cnv.Node), newVK, newRK);
         valueMap[cnv.Result.Id] = c.Result; return c;
       }
-      case MaxonChainNodeSetValueOp cns: return new MaxonChainNodeSetValueOp(mapValue(cns.Node), mapValue(cns.Value), sub.SubstituteName(cns.ValueKind));
-      case MaxonChainClearOp ccl: return new MaxonChainClearOp(mapValue(ccl.Chain), sub.SubstituteName(ccl.ValueKind));
+      case MaxonManagedListNodeSetValueOp cns: return new MaxonManagedListNodeSetValueOp(mapValue(cns.Node), mapValue(cns.Value), sub.SubstituteName(cns.ValueKind));
+      case MaxonManagedListClearOp ccl: return new MaxonManagedListClearOp(mapValue(ccl.ManagedList), sub.SubstituteName(ccl.ValueKind));
 
       default:
         throw new InvalidOperationException($"Interface alias specialization: unhandled op type {op.GetType().Name}");

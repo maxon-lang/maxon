@@ -22,7 +22,7 @@ Every heap-allocated struct has a reference count. Assigning to a variable incre
 - Return — skips the returned variable's decref (ownership transfers to caller).
 - Struct field assignment — decrefs old field value, increfs new.
 - Container push — increfs the element; container holds the reference.
-- Container remove / chain remove — transfers the container's reference to the caller (no extra incref).
+- Container remove / managed list remove — transfers the container's reference to the caller (no extra incref).
 - Container overwrite (`set`) — decrefs old element, increfs new.
 - `clear()` / container freed at scope exit — decrefs all elements.
 
@@ -525,8 +525,8 @@ end 'main'
 20
 ```
 
-<!-- test: chain-insert-incref -->
-Inserting a struct into a chain increfs the value; the node holds the reference.
+<!-- test: managed-list-insert-incref -->
+Inserting a struct into a managed list increfs the value; the node holds the reference.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -534,14 +534,14 @@ type Item
   export var value Integer
 end 'Item'
 
-typealias ItemChain = __Chain with Item
+typealias ItemManagedList = __ManagedList with Item
 
 function main() returns ExitCode
-  var chain = ItemChain.create()
+  var managedList = ItemManagedList.create()
   var item = Item{value: 99}
-  var node = chain.insertFirst(item)
+  var node = managedList.insertFirst(item)
   print("{node.value().value}\n")
-  print("{chain.count()}\n")
+  print("{managedList.count()}\n")
   return 0
 end 'main'
 ```
@@ -553,7 +553,7 @@ end 'main'
 1
 ```
 
-<!-- test: chain-remove-decref -->
+<!-- test: managed-list-remove-decref -->
 Removing a node and discarding the result frees the value at scope exit.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
@@ -562,13 +562,13 @@ type Item
   export var value Integer
 end 'Item'
 
-typealias ItemChain = __Chain with Item
+typealias ItemManagedList = __ManagedList with Item
 
 function main() returns ExitCode
-  var chain = ItemChain.create()
-  var node = chain.insertFirst(Item{value: 50})
-  chain.remove(node)
-  print("{chain.count()}\n")
+  var managedList = ItemManagedList.create()
+  var node = managedList.insertFirst(Item{value: 50})
+  managedList.remove(node)
+  print("{managedList.count()}\n")
   return 0
 end 'main'
 ```
@@ -579,8 +579,8 @@ end 'main'
 0
 ```
 
-<!-- test: chain-clear-decrefs-all -->
-Clearing a chain decrefs all node values.
+<!-- test: managed-list-clear-decrefs-all -->
+Clearing a managed list decrefs all node values.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -588,15 +588,15 @@ type Item
   export var value Integer
 end 'Item'
 
-typealias ItemChain = __Chain with Item
+typealias ItemManagedList = __ManagedList with Item
 
 function main() returns ExitCode
-  var chain = ItemChain.create()
-  chain.insertFirst(Item{value: 1})
-  chain.insertLast(Item{value: 2})
-  chain.insertLast(Item{value: 3})
-  chain.clear()
-  print("{chain.count()}\n")
+  var managedList = ItemManagedList.create()
+  managedList.insertFirst(Item{value: 1})
+  managedList.insertLast(Item{value: 2})
+  managedList.insertLast(Item{value: 3})
+  managedList.clear()
+  print("{managedList.count()}\n")
   return 0
 end 'main'
 ```
@@ -1038,8 +1038,8 @@ end 'main'
 2
 ```
 
-<!-- test: no-leak-returned-chain -->
-Build a chain in a function, return it to the caller, caller frees it.
+<!-- test: no-leak-returned-managed-list -->
+Build a managed list in a function, return it to the caller, caller frees it.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -1047,19 +1047,19 @@ type Item
   export var value Integer
 end 'Item'
 
-typealias ItemChain = __Chain with Item
+typealias ItemManagedList = __ManagedList with Item
 
-function buildChain() returns ItemChain
-  var chain = ItemChain.create()
-  chain.insertLast(Item{value: 10})
-  chain.insertLast(Item{value: 20})
-  chain.insertLast(Item{value: 30})
-  return chain
-end 'buildChain'
+function buildManagedList() returns ItemManagedList
+  var managedList = ItemManagedList.create()
+  managedList.insertLast(Item{value: 10})
+  managedList.insertLast(Item{value: 20})
+  managedList.insertLast(Item{value: 30})
+  return managedList
+end 'buildManagedList'
 
 function main() returns ExitCode
-  var chain = buildChain()
-  print("{chain.count()}\n")
+  var managedList = buildManagedList()
+  print("{managedList.count()}\n")
   return 0
 end 'main'
 ```

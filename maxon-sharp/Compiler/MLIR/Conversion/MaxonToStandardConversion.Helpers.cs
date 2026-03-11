@@ -11,7 +11,7 @@ namespace MaxonSharp.Compiler.Mlir.Conversion;
 internal record DestructorRequest(
     string TypeName,
     List<(int Offset, string FieldTypeName, bool IsRawBuffer)> ManagedFields,
-    string? ChainClearFunc = null,
+    string? ManagedListClearFunc = null,
     bool NeedsManagedElementCleanup = false);
 
 public static partial class MaxonToStandardConversion {
@@ -308,9 +308,9 @@ public static partial class MaxonToStandardConversion {
         && TypeAliasInfo.IsManagedMemoryType(typeName, aliasSources))
       return $"__destruct_{typeName}";
 
-    // __Chain types need a destructor to clear nodes (and decref values if managed)
-    if (_resultModule?.TypeAliasSources is { } chainAliasSources
-        && TypeAliasInfo.IsChainType(typeName, chainAliasSources))
+    // __ManagedList types need a destructor to clear nodes (and decref values if managed)
+    if (_resultModule?.TypeAliasSources is { } managedListAliasSources
+        && TypeAliasInfo.IsManagedListType(typeName, managedListAliasSources))
       return $"__destruct_{typeName}";
 
     var resolved = ResolveStructType(structType, typeDefs);

@@ -282,7 +282,7 @@ public static partial class MaxonToStandardConversion {
             MaxonStringInterpOp i => i.Result.Id,
             MaxonCStringToManagedOp c => c.Result.Id,
             MaxonEnumConstructOp e => e.Result.Id,
-            MaxonChainCreateOp c => c.Result.Id,
+            MaxonManagedListCreateOp c => c.Result.Id,
             _ => null
           };
           if (resultId != null
@@ -917,8 +917,8 @@ public static partial class MaxonToStandardConversion {
             case MaxonAssignOp assignOp: {
               // Associated-value enums now use heap pointers (like structs) and fall
               // through to the struct assignment path below.
-              // Check valueMap for StdHeapPtr as the authoritative source: chain ops like
-              // chain_node_value report MaxonStruct result type even for primitives,
+              // Check valueMap for StdHeapPtr as the authoritative source: managed list ops like
+              // managed_list_node_value report MaxonStruct result type even for primitives,
               // so ValueKind alone is not reliable.
               if (valueMap.TryGetValue(assignOp.Value, out var assignSv) && assignSv is StdHeapPtr assignHp) {
                 // Struct assignment: copy the heap pointer (alias, not deep copy)
@@ -1817,46 +1817,46 @@ public static partial class MaxonToStandardConversion {
               }
               break;
             }
-            // Chain (doubly-linked list) operations
-            case MaxonChainCreateOp chainCreateOp:
-              LowerChainCreate(chainCreateOp, newBlock, valueMap, varTypes, temps,
-                inlineTargets.GetValueOrDefault(chainCreateOp.Result.Id));
+            // ManagedList (doubly-linked list) operations
+            case MaxonManagedListCreateOp managedListCreateOp:
+              LowerManagedListCreate(managedListCreateOp, newBlock, valueMap, varTypes, temps,
+                inlineTargets.GetValueOrDefault(managedListCreateOp.Result.Id));
               break;
-            case MaxonChainInsertValueOp chainInsertOp:
-              LowerChainInsertValue(chainInsertOp, newBlock, valueMap, varTypes, module.TypeDefs, temps);
+            case MaxonManagedListInsertValueOp managedListInsertOp:
+              LowerManagedListInsertValue(managedListInsertOp, newBlock, valueMap, varTypes, module.TypeDefs, temps);
               break;
-            case MaxonChainInsertRelativeValueOp chainInsertRelOp:
-              LowerChainInsertRelativeValue(chainInsertRelOp, newBlock, valueMap, varTypes, module.TypeDefs, temps);
+            case MaxonManagedListInsertRelativeValueOp managedListInsertRelOp:
+              LowerManagedListInsertRelativeValue(managedListInsertRelOp, newBlock, valueMap, varTypes, module.TypeDefs, temps);
               break;
-            case MaxonChainReinsertOp chainReinsertOp:
-              LowerChainReinsert(chainReinsertOp, newBlock, valueMap, varTypes);
+            case MaxonManagedListReinsertOp managedListReinsertOp:
+              LowerManagedListReinsert(managedListReinsertOp, newBlock, valueMap, varTypes);
               break;
-            case MaxonChainReinsertRelativeOp chainReinsertRelOp:
-              LowerChainReinsertRelative(chainReinsertRelOp, newBlock, valueMap, varTypes);
+            case MaxonManagedListReinsertRelativeOp managedListReinsertRelOp:
+              LowerManagedListReinsertRelative(managedListReinsertRelOp, newBlock, valueMap, varTypes);
               break;
-            case MaxonChainDetachOp chainDetachOp:
-              LowerChainDetach(chainDetachOp, newBlock, valueMap, varTypes);
+            case MaxonManagedListDetachOp managedListDetachOp:
+              LowerManagedListDetach(managedListDetachOp, newBlock, valueMap, varTypes);
               break;
-            case MaxonChainRemoveOp chainRemoveOp:
-              LowerChainRemove(chainRemoveOp, newBlock, valueMap, varTypes, module.TypeDefs, temps);
+            case MaxonManagedListRemoveOp managedListRemoveOp:
+              LowerManagedListRemove(managedListRemoveOp, newBlock, valueMap, varTypes, module.TypeDefs, temps);
               break;
-            case MaxonChainCountOp chainCountOp:
-              LowerChainCount(chainCountOp, newBlock, valueMap, varTypes);
+            case MaxonManagedListCountOp managedListCountOp:
+              LowerManagedListCount(managedListCountOp, newBlock, valueMap, varTypes);
               break;
-            case MaxonChainNodeValueOp chainNodeValueOp:
-              LowerChainNodeValue(chainNodeValueOp, newBlock, valueMap, varTypes, module.TypeDefs, temps);
+            case MaxonManagedListNodeValueOp managedListNodeValueOp:
+              LowerManagedListNodeValue(managedListNodeValueOp, newBlock, valueMap, varTypes, module.TypeDefs, temps);
               break;
-            case MaxonChainNodeSetValueOp chainNodeSetValueOp:
-              LowerChainNodeSetValue(chainNodeSetValueOp, newBlock, valueMap, varTypes, module.TypeDefs);
+            case MaxonManagedListNodeSetValueOp managedListNodeSetValueOp:
+              LowerManagedListNodeSetValue(managedListNodeSetValueOp, newBlock, valueMap, varTypes, module.TypeDefs);
               break;
-            case MaxonChainClearOp chainClearOp:
-              LowerChainClear(chainClearOp, newBlock, valueMap, varTypes, module.TypeDefs);
+            case MaxonManagedListClearOp managedListClearOp:
+              LowerManagedListClear(managedListClearOp, newBlock, valueMap, varTypes, module.TypeDefs);
               break;
-            case MaxonChainCursorResetOp cursorResetOp:
-              LowerChainCursorReset(cursorResetOp, newBlock, valueMap, varTypes);
+            case MaxonManagedListCursorResetOp cursorResetOp:
+              LowerManagedListCursorReset(cursorResetOp, newBlock, valueMap, varTypes);
               break;
-            case MaxonChainCursorValueOp cursorValueOp:
-              LowerChainCursorValue(cursorValueOp, newBlock, valueMap, varTypes, module.TypeDefs, temps);
+            case MaxonManagedListCursorValueOp cursorValueOp:
+              LowerManagedListCursorValue(cursorValueOp, newBlock, valueMap, varTypes, module.TypeDefs, temps);
               break;
             default:
               throw new InvalidOperationException($"No MaxonToStandard conversion for: {op.GetType().Name} ({op.Mnemonic})");
@@ -2010,14 +2010,14 @@ public static partial class MaxonToStandardConversion {
     if (typeDef is MlirStructType structType) {
       var resolved = ResolveStructType(structType, typeDefs);
       bool isManagedMemory = TypeAliasInfo.IsManagedMemoryType(typeName, typeAliasSources);
-      bool isChain = TypeAliasInfo.IsChainType(typeName, typeAliasSources);
+      bool isManagedList = TypeAliasInfo.IsManagedListType(typeName, typeAliasSources);
 
-      // __Chain types: destructor calls chain_clear or chain_clear_managed to walk nodes.
-      // chain_clear_managed decrefs each node's value before decrefing the node itself.
-      if (isChain) {
+      // __ManagedList types: destructor calls managed_list_clear or managed_list_clear_managed to walk nodes.
+      // managed_list_clear_managed decrefs each node's value before decrefing the node itself.
+      if (isManagedList) {
         bool hasManagedElems = HasManagedElementType(typeName, resolved);
-        var clearFunc = hasManagedElems ? "maxon_chain_clear_managed" : "maxon_chain_clear";
-        _destructorRequests[typeName] = new DestructorRequest(typeName, [], ChainClearFunc: clearFunc);
+        var clearFunc = hasManagedElems ? "maxon_managed_list_clear_managed" : "maxon_managed_list_clear";
+        _destructorRequests[typeName] = new DestructorRequest(typeName, [], ManagedListClearFunc: clearFunc);
         return;
       }
 
@@ -2107,11 +2107,11 @@ public static partial class MaxonToStandardConversion {
         if (entry.Operations.Count == 0 || entry.Operations[^1] is not StdBrOp and not StdCondBrOp) {
           entry.AddOp(new StdBrOp("done"));
         }
-      } else if (request.ChainClearFunc != null) {
-        // Chain destructor: call chain_clear or chain_clear_managed to walk and free all nodes
-        var chainPtr = new StdLoadI64Op("__destr_ptr");
-        entry.AddOp(chainPtr);
-        entry.AddOp(new StdCallRuntimeOp(request.ChainClearFunc, [chainPtr.Result], null));
+      } else if (request.ManagedListClearFunc != null) {
+        // ManagedList destructor: call managed_list_clear or managed_list_clear_managed to walk and free all nodes
+        var managedListPtr = new StdLoadI64Op("__destr_ptr");
+        entry.AddOp(managedListPtr);
+        entry.AddOp(new StdCallRuntimeOp(request.ManagedListClearFunc, [managedListPtr.Result], null));
         entry.AddOp(new StdBrOp("done"));
       } else {
         // Struct destructor: mm_decref each managed field, mm_raw_free raw buffers

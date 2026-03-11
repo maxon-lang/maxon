@@ -3096,7 +3096,7 @@ The no-argument convenience methods are equivalent to calling the `CharacterSet`
 
 ### List
 
-`List` is a generic doubly linked list backed by `__Chain` (a builtin compiler-synthesized type, like `Array` and `String`) for efficient node management with automatic memory cleanup. It provides O(1) insertion and removal at both ends, and O(n) indexed access.
+`List` is a generic doubly linked list backed by `__ManagedList` (a builtin compiler-synthesized type, like `Array` and `String`) for efficient node management with automatic memory cleanup. It provides O(1) insertion and removal at both ends, and O(n) indexed access.
 
 **Creating a List**
 
@@ -3523,17 +3523,17 @@ function makePoint() returns Point
 end 'makePoint'
 ```
 
-**Container cleanup:** Containers with heap-allocated elements (e.g., `List with MyStruct`) perform deep cleanup when freed. Each element's refcount is decremented, and elements whose refcount reaches zero are freed recursively. For `List`, the compiler walks all chain nodes and decrefs their stored values before freeing the chain itself.
+**Container cleanup:** Containers with heap-allocated elements (e.g., `List with MyStruct`) perform deep cleanup when freed. Each element's refcount is decremented, and elements whose refcount reaches zero are freed recursively. For `List`, the compiler walks all managed list nodes and decrefs their stored values before freeing the managed list itself.
 
 ```maxon
 typealias TokenList = List with Token
 
 function example() returns int
   var list = TokenList{}
-  list.append(Token{id: 1})   // Token incref'd by the chain node
-  list.append(Token{id: 2})   // Token incref'd by the chain node
+  list.append(Token{id: 1})   // Token incref'd by the managed list node
+  list.append(Token{id: 2})   // Token incref'd by the managed list node
   return 0                     // list freed: each Token decref'd (rc→0→freed),
-                               // then chain nodes freed, then chain freed
+                               // then managed list nodes freed, then managed list freed
 end 'example'
 ```
 

@@ -74,9 +74,9 @@ public static partial class MaxonToStandardConversion {
     List<bool>? argMutabilities = null,
     List<string?>? argVarNames = null) {
 
-    // Intercept synthetic chain navigation calls before resolving the callee
+    // Intercept synthetic managed list navigation calls before resolving the callee
     // (these are not real functions in the module)
-    if (TryLowerChainNavigation(callee, args, result, isTryCall, block, valueMap,
+    if (TryLowerManagedListNavigation(callee, args, result, isTryCall, block, valueMap,
         varTypes, errorFlagValue, temps))
       return;
 

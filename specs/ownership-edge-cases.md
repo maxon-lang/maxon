@@ -461,7 +461,7 @@ decref Payload #3 rc=0 [ownership-edge-cases.main]
   free Payload #3
 ```
 
-<!-- test: rc-field-overwrite-chain -->
+<!-- test: rc-field-overwrite-managed-list -->
 <!-- MmTrace -->
 Overwriting a struct field three times; each old value must be freed promptly.
 ```maxon
@@ -1420,9 +1420,9 @@ decref __ManagedMemory_Item #1 rc=0 [~ItemArray]
   free ItemArray #2
 ```
 
-<!-- test: rc-chain-insert-incref -->
+<!-- test: rc-managed-list-insert-incref -->
 <!-- MmTrace -->
-Inserting a struct into a chain increfs the value; the node holds the reference.
+Inserting a struct into a managed list increfs the value; the node holds the reference.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -1430,12 +1430,12 @@ type Token
   export var id Integer
 end 'Token'
 
-typealias TokenChain = __Chain with Token
+typealias TokenManagedList = __ManagedList with Token
 
 function main() returns ExitCode
-  var chain = TokenChain.create()
+  var managedList = TokenManagedList.create()
   var t = Token{id: 7}
-  var node = chain.insertFirst(t)
+  var node = managedList.insertFirst(t)
   return node.value().id
 end 'main'
 ```
@@ -1443,27 +1443,27 @@ end 'main'
 7
 ```
 ```stderr
-alloc TokenChain #1 rc=0 size=32 [ownership-edge-cases.main]
-incref TokenChain #1 rc=1 [ownership-edge-cases.main]
+alloc TokenManagedList #1 rc=0 size=32 [ownership-edge-cases.main]
+incref TokenManagedList #1 rc=1 [ownership-edge-cases.main]
 alloc Token #2 rc=0 size=8 [ownership-edge-cases.main]
 incref Token #2 rc=1 [ownership-edge-cases.main]
-alloc __ChainNode #3 rc=0 size=32 [ownership-edge-cases.main]
+alloc __ManagedListNode #3 rc=0 size=32 [ownership-edge-cases.main]
 incref Token #2 rc=2 [ownership-edge-cases.main]
-incref __ChainNode #3 rc=1 [chain_insert]
-incref __ChainNode #3 rc=2 [ownership-edge-cases.main]
-decref __ChainNode #3 rc=1 [ownership-edge-cases.main]
+incref __ManagedListNode #3 rc=1 [managed_list_insert]
+incref __ManagedListNode #3 rc=2 [ownership-edge-cases.main]
+decref __ManagedListNode #3 rc=1 [ownership-edge-cases.main]
 decref Token #2 rc=1 [ownership-edge-cases.main]
-decref TokenChain #1 rc=0 [ownership-edge-cases.main]
-decref Token #2 rc=0 [chain_clear]
+decref TokenManagedList #1 rc=0 [ownership-edge-cases.main]
+decref Token #2 rc=0 [managed_list_clear]
   free Token #2
-decref __ChainNode #3 rc=0 [chain_clear]
-  free __ChainNode #3
-  free TokenChain #1
+decref __ManagedListNode #3 rc=0 [managed_list_clear]
+  free __ManagedListNode #3
+  free TokenManagedList #1
 ```
 
-<!-- test: rc-chain-remove-decrefs -->
+<!-- test: rc-managed-list-remove-decrefs -->
 <!-- MmTrace -->
-Removing a node from a chain transfers ownership; value is freed when the result var leaves scope.
+Removing a node from a managed list transfers ownership; value is freed when the result var leaves scope.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -1471,42 +1471,42 @@ type Token
   export var id Integer
 end 'Token'
 
-typealias TokenChain = __Chain with Token
+typealias TokenManagedList = __ManagedList with Token
 
 function main() returns ExitCode
-  var chain = TokenChain.create()
-  var node = chain.insertFirst(Token{id: 9})
-  var removed = chain.remove(node)
-  return removed.id + chain.count()
+  var managedList = TokenManagedList.create()
+  var node = managedList.insertFirst(Token{id: 9})
+  var removed = managedList.remove(node)
+  return removed.id + managedList.count()
 end 'main'
 ```
 ```exitcode
 9
 ```
 ```stderr
-alloc TokenChain #1 rc=0 size=32 [ownership-edge-cases.main]
-incref TokenChain #1 rc=1 [ownership-edge-cases.main]
+alloc TokenManagedList #1 rc=0 size=32 [ownership-edge-cases.main]
+incref TokenManagedList #1 rc=1 [ownership-edge-cases.main]
 alloc Token #2 rc=0 size=8 [ownership-edge-cases.main]
 incref Token #2 rc=1 [ownership-edge-cases.main]
-alloc __ChainNode #3 rc=0 size=32 [ownership-edge-cases.main]
+alloc __ManagedListNode #3 rc=0 size=32 [ownership-edge-cases.main]
 incref Token #2 rc=2 [ownership-edge-cases.main]
-incref __ChainNode #3 rc=1 [chain_insert]
-incref __ChainNode #3 rc=2 [ownership-edge-cases.main]
-decref __ChainNode #3 rc=1 [ownership-edge-cases.main]
+incref __ManagedListNode #3 rc=1 [managed_list_insert]
+incref __ManagedListNode #3 rc=2 [ownership-edge-cases.main]
+decref __ManagedListNode #3 rc=1 [ownership-edge-cases.main]
 decref Token #2 rc=1 [ownership-edge-cases.main]
-decref __ChainNode #3 rc=0 [ownership-edge-cases.main]
-  free __ChainNode #3
+decref __ManagedListNode #3 rc=0 [ownership-edge-cases.main]
+  free __ManagedListNode #3
 incref Token #2 rc=2 [ownership-edge-cases.main]
 decref Token #2 rc=1 [ownership-edge-cases.main]
-decref TokenChain #1 rc=0 [ownership-edge-cases.main]
-  free TokenChain #1
+decref TokenManagedList #1 rc=0 [ownership-edge-cases.main]
+  free TokenManagedList #1
 decref Token #2 rc=0 [ownership-edge-cases.main]
   free Token #2
 ```
 
-<!-- test: rc-chain-clear-decrefs-all -->
+<!-- test: rc-managed-list-clear-decrefs-all -->
 <!-- MmTrace -->
-Clearing a chain decrefs every node value; all values freed when rc hits 0.
+Clearing a managed list decrefs every node value; all values freed when rc hits 0.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -1514,49 +1514,49 @@ type Token
   export var id Integer
 end 'Token'
 
-typealias TokenChain = __Chain with Token
+typealias TokenManagedList = __ManagedList with Token
 
 function main() returns ExitCode
-  var chain = TokenChain.create()
-  chain.insertLast(Token{id: 1})
-  chain.insertLast(Token{id: 2})
-  chain.insertLast(Token{id: 3})
-  chain.clear()
-  return chain.count()
+  var managedList = TokenManagedList.create()
+  managedList.insertLast(Token{id: 1})
+  managedList.insertLast(Token{id: 2})
+  managedList.insertLast(Token{id: 3})
+  managedList.clear()
+  return managedList.count()
 end 'main'
 ```
 ```exitcode
 0
 ```
 ```stderr
-alloc TokenChain #1 rc=0 size=32 [ownership-edge-cases.main]
-incref TokenChain #1 rc=1 [ownership-edge-cases.main]
+alloc TokenManagedList #1 rc=0 size=32 [ownership-edge-cases.main]
+incref TokenManagedList #1 rc=1 [ownership-edge-cases.main]
 alloc Token #2 rc=0 size=8 [ownership-edge-cases.main]
 incref Token #2 rc=1 [ownership-edge-cases.main]
-alloc __ChainNode #3 rc=0 size=32 [ownership-edge-cases.main]
+alloc __ManagedListNode #3 rc=0 size=32 [ownership-edge-cases.main]
 incref Token #2 rc=2 [ownership-edge-cases.main]
-incref __ChainNode #3 rc=1 [chain_insert]
+incref __ManagedListNode #3 rc=1 [managed_list_insert]
 alloc Token #4 rc=0 size=8 [ownership-edge-cases.main]
 incref Token #4 rc=1 [ownership-edge-cases.main]
-alloc __ChainNode #5 rc=0 size=32 [ownership-edge-cases.main]
+alloc __ManagedListNode #5 rc=0 size=32 [ownership-edge-cases.main]
 incref Token #4 rc=2 [ownership-edge-cases.main]
-incref __ChainNode #5 rc=1 [chain_insert]
+incref __ManagedListNode #5 rc=1 [managed_list_insert]
 alloc Token #6 rc=0 size=8 [ownership-edge-cases.main]
 incref Token #6 rc=1 [ownership-edge-cases.main]
-alloc __ChainNode #7 rc=0 size=32 [ownership-edge-cases.main]
+alloc __ManagedListNode #7 rc=0 size=32 [ownership-edge-cases.main]
 incref Token #6 rc=2 [ownership-edge-cases.main]
-incref __ChainNode #7 rc=1 [chain_insert]
-decref Token #2 rc=1 [chain_clear]
-decref __ChainNode #3 rc=0 [chain_clear]
-  free __ChainNode #3
-decref Token #4 rc=1 [chain_clear]
-decref __ChainNode #5 rc=0 [chain_clear]
-  free __ChainNode #5
-decref Token #6 rc=1 [chain_clear]
-decref __ChainNode #7 rc=0 [chain_clear]
-  free __ChainNode #7
-decref TokenChain #1 rc=0 [ownership-edge-cases.main]
-  free TokenChain #1
+incref __ManagedListNode #7 rc=1 [managed_list_insert]
+decref Token #2 rc=1 [managed_list_clear]
+decref __ManagedListNode #3 rc=0 [managed_list_clear]
+  free __ManagedListNode #3
+decref Token #4 rc=1 [managed_list_clear]
+decref __ManagedListNode #5 rc=0 [managed_list_clear]
+  free __ManagedListNode #5
+decref Token #6 rc=1 [managed_list_clear]
+decref __ManagedListNode #7 rc=0 [managed_list_clear]
+  free __ManagedListNode #7
+decref TokenManagedList #1 rc=0 [ownership-edge-cases.main]
+  free TokenManagedList #1
 decref Token #2 rc=0 [ownership-edge-cases.main]
   free Token #2
 decref Token #4 rc=0 [ownership-edge-cases.main]
@@ -1565,9 +1565,9 @@ decref Token #6 rc=0 [ownership-edge-cases.main]
   free Token #6
 ```
 
-<!-- test: rc-chain-node-set-value-decrefs-old -->
+<!-- test: rc-managed-list-node-set-value-decrefs-old -->
 <!-- MmTrace -->
-Calling `setValue` on a chain node decrefs the old value and increfs the new one.
+Calling `setValue` on a managed list node decrefs the old value and increfs the new one.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -1575,11 +1575,11 @@ type Token
   export var id Integer
 end 'Token'
 
-typealias TokenChain = __Chain with Token
+typealias TokenManagedList = __ManagedList with Token
 
 function main() returns ExitCode
-  var chain = TokenChain.create()
-  var node = chain.insertFirst(Token{id: 1})
+  var managedList = TokenManagedList.create()
+  var node = managedList.insertFirst(Token{id: 1})
   node.setValue(Token{id: 99})
   return node.value().id
 end 'main'
@@ -1588,24 +1588,24 @@ end 'main'
 99
 ```
 ```stderr
-alloc TokenChain #1 rc=0 size=32 [ownership-edge-cases.main]
-incref TokenChain #1 rc=1 [ownership-edge-cases.main]
+alloc TokenManagedList #1 rc=0 size=32 [ownership-edge-cases.main]
+incref TokenManagedList #1 rc=1 [ownership-edge-cases.main]
 alloc Token #2 rc=0 size=8 [ownership-edge-cases.main]
 incref Token #2 rc=1 [ownership-edge-cases.main]
-alloc __ChainNode #3 rc=0 size=32 [ownership-edge-cases.main]
+alloc __ManagedListNode #3 rc=0 size=32 [ownership-edge-cases.main]
 incref Token #2 rc=2 [ownership-edge-cases.main]
-incref __ChainNode #3 rc=1 [chain_insert]
-incref __ChainNode #3 rc=2 [ownership-edge-cases.main]
+incref __ManagedListNode #3 rc=1 [managed_list_insert]
+incref __ManagedListNode #3 rc=2 [ownership-edge-cases.main]
 alloc Token #4 rc=0 size=8 [ownership-edge-cases.main]
 incref Token #4 rc=1 [ownership-edge-cases.main]
 decref Token #2 rc=1 [ownership-edge-cases.main]
 incref Token #4 rc=2 [ownership-edge-cases.main]
-decref __ChainNode #3 rc=1 [ownership-edge-cases.main]
-decref TokenChain #1 rc=0 [ownership-edge-cases.main]
-decref Token #4 rc=1 [chain_clear]
-decref __ChainNode #3 rc=0 [chain_clear]
-  free __ChainNode #3
-  free TokenChain #1
+decref __ManagedListNode #3 rc=1 [ownership-edge-cases.main]
+decref TokenManagedList #1 rc=0 [ownership-edge-cases.main]
+decref Token #4 rc=1 [managed_list_clear]
+decref __ManagedListNode #3 rc=0 [managed_list_clear]
+  free __ManagedListNode #3
+  free TokenManagedList #1
 decref Token #2 rc=0 [ownership-edge-cases.main]
   free Token #2
 decref Token #4 rc=0 [ownership-edge-cases.main]
@@ -1927,7 +1927,7 @@ decref Inner #1 rc=0 [ownership-edge-cases.main]
 
 <!-- test: rc-list-scope-cleanup -->
 <!-- MmTrace -->
-List (struct owning a chain field) must walk and decref chain node values on scope exit.
+List (struct owning a managed list field) must walk and decref managed list node values on scope exit.
 ```maxon
 typealias StringList = List with String
 
@@ -1941,27 +1941,27 @@ end 'main'
 0
 ```
 ```stderr
-alloc __Chain_String #1 rc=0 size=32 [ownership-edge-cases.main]
+alloc __ManagedList_String #1 rc=0 size=32 [ownership-edge-cases.main]
 alloc StringList #2 rc=0 size=16 [ownership-edge-cases.main]
-incref __Chain_String #1 rc=1 [ownership-edge-cases.main]
+incref __ManagedList_String #1 rc=1 [ownership-edge-cases.main]
 incref StringList #2 rc=1 [ownership-edge-cases.main]
 alloc String #3 rc=0 size=16 [ownership-edge-cases.main]
 alloc __ManagedMemory #4 rc=0 size=32 [ownership-edge-cases.main]
 incref __ManagedMemory #4 rc=1 [ownership-edge-cases.main]
 incref String #3 rc=1 [ownership-edge-cases.main]
-alloc __ChainNode #5 rc=0 size=32 [StringList.append]
+alloc __ManagedListNode #5 rc=0 size=32 [StringList.append]
 incref String #3 rc=2 [StringList.append]
-incref __ChainNode #5 rc=1 [chain_insert]
+incref __ManagedListNode #5 rc=1 [managed_list_insert]
 decref String #3 rc=1 [ownership-edge-cases.main]
 decref StringList #2 rc=0 [ownership-edge-cases.main]
-decref __Chain_String #1 rc=0 [~StringList]
-decref String #3 rc=0 [chain_clear]
+decref __ManagedList_String #1 rc=0 [~StringList]
+decref String #3 rc=0 [managed_list_clear]
 decref __ManagedMemory #4 rc=0 [~String]
   free __ManagedMemory #4
   free String #3
-decref __ChainNode #5 rc=0 [chain_clear]
-  free __ChainNode #5
-  free __Chain_String #1
+decref __ManagedListNode #5 rc=0 [managed_list_clear]
+  free __ManagedListNode #5
+  free __ManagedList_String #1
   free StringList #2
 ```
 
@@ -2918,8 +2918,8 @@ end 'main'
 hello
 ```
 
-<!-- test: rc-chain-remove-single-no-leak -->
-Removing a node from a chain must properly decref the node's value. The chain node itself and the stored value must both be freed.
+<!-- test: rc-managed-list-remove-single-no-leak -->
+Removing a node from a managed list must properly decref the node's value. The managed list node itself and the stored value must both be freed.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -2927,13 +2927,13 @@ type Item
   export var value Integer
 end 'Item'
 
-typealias ItemChain = __Chain with Item
+typealias ItemManagedList = __ManagedList with Item
 
 function main() returns ExitCode
-  var chain = ItemChain.create()
-  var node = chain.insertFirst(Item{value: 50})
-  chain.remove(node)
-  return chain.count()
+  var managedList = ItemManagedList.create()
+  var node = managedList.insertFirst(Item{value: 50})
+  managedList.remove(node)
+  return managedList.count()
 end 'main'
 ```
 ```exitcode

@@ -397,30 +397,30 @@ internal class FunctionCloner {
       case MaxonFunctionRefOp fr: { var c = new MaxonFunctionRefOp(fr.FunctionName, fr.FunctionType); RegisterResult(fr.Result, c.Result); return c; }
       case MaxonFunctionVarRefOp fv: { var c = new MaxonFunctionVarRefOp(fv.VarName, (MlirFunctionType)_typeSubstitution.SubstituteType(fv.FunctionType)); RegisterResult(fv.Result, c.Result); return c; }
 
-      // Chain (doubly-linked list) ops
-      case MaxonChainCreateOp: { var c = new MaxonChainCreateOp(); RegisterResult(((MaxonChainCreateOp)op).Result, c.Result); return c; }
-      case MaxonChainInsertValueOp ci: { var c = new MaxonChainInsertValueOp(MapValue(ci.Chain), MapValue(ci.Value), ci.AtHead, SubName(ci.ValueKind)); RegisterResult(ci.Result, c.Result); return c; }
-      case MaxonChainInsertRelativeValueOp cir: { var c = new MaxonChainInsertRelativeValueOp(MapValue(cir.Chain), MapValue(cir.Target), MapValue(cir.Value), cir.After, SubName(cir.ValueKind)); RegisterResult(cir.Result, c.Result); return c; }
-      case MaxonChainReinsertOp cr: return new MaxonChainReinsertOp(MapValue(cr.Chain), MapValue(cr.Node), cr.AtHead);
-      case MaxonChainReinsertRelativeOp crr: return new MaxonChainReinsertRelativeOp(MapValue(crr.Chain), MapValue(crr.Target), MapValue(crr.Node), crr.After);
-      case MaxonChainDetachOp cd: return new MaxonChainDetachOp(MapValue(cd.Chain), MapValue(cd.Node));
-      case MaxonChainRemoveOp crm: {
+      // ManagedList (doubly-linked list) ops
+      case MaxonManagedListCreateOp: { var c = new MaxonManagedListCreateOp(); RegisterResult(((MaxonManagedListCreateOp)op).Result, c.Result); return c; }
+      case MaxonManagedListInsertValueOp ci: { var c = new MaxonManagedListInsertValueOp(MapValue(ci.ManagedList), MapValue(ci.Value), ci.AtHead, SubName(ci.ValueKind)); RegisterResult(ci.Result, c.Result); return c; }
+      case MaxonManagedListInsertRelativeValueOp cir: { var c = new MaxonManagedListInsertRelativeValueOp(MapValue(cir.ManagedList), MapValue(cir.Target), MapValue(cir.Value), cir.After, SubName(cir.ValueKind)); RegisterResult(cir.Result, c.Result); return c; }
+      case MaxonManagedListReinsertOp cr: return new MaxonManagedListReinsertOp(MapValue(cr.ManagedList), MapValue(cr.Node), cr.AtHead);
+      case MaxonManagedListReinsertRelativeOp crr: return new MaxonManagedListReinsertRelativeOp(MapValue(crr.ManagedList), MapValue(crr.Target), MapValue(crr.Node), crr.After);
+      case MaxonManagedListDetachOp cd: return new MaxonManagedListDetachOp(MapValue(cd.ManagedList), MapValue(cd.Node));
+      case MaxonManagedListRemoveOp crm: {
         var newRK = _typeSubstitution.TryGetValue(crm.ValueKind, out var rvt) ? rvt.ToValueKind() : crm.ResultKind;
-        var c = new MaxonChainRemoveOp(MapValue(crm.Chain), MapValue(crm.Node), SubName(crm.ValueKind), newRK);
+        var c = new MaxonManagedListRemoveOp(MapValue(crm.ManagedList), MapValue(crm.Node), SubName(crm.ValueKind), newRK);
         RegisterResult(crm.Result, c.Result); return c;
       }
-      case MaxonChainCountOp cc: { var c = new MaxonChainCountOp(MapValue(cc.Chain)); RegisterResult(cc.Result, c.Result); return c; }
-      case MaxonChainNodeValueOp cnv: {
+      case MaxonManagedListCountOp cc: { var c = new MaxonManagedListCountOp(MapValue(cc.ManagedList)); RegisterResult(cc.Result, c.Result); return c; }
+      case MaxonManagedListNodeValueOp cnv: {
         var newRK = _typeSubstitution.TryGetValue(cnv.ValueKind, out var nvt) ? nvt.ToValueKind() : cnv.ResultKind;
-        var c = new MaxonChainNodeValueOp(MapValue(cnv.Node), SubName(cnv.ValueKind), newRK);
+        var c = new MaxonManagedListNodeValueOp(MapValue(cnv.Node), SubName(cnv.ValueKind), newRK);
         RegisterResult(cnv.Result, c.Result); return c;
       }
-      case MaxonChainNodeSetValueOp cns: return new MaxonChainNodeSetValueOp(MapValue(cns.Node), MapValue(cns.Value), SubName(cns.ValueKind));
-      case MaxonChainClearOp ccl: return new MaxonChainClearOp(MapValue(ccl.Chain), SubName(ccl.ValueKind));
-      case MaxonChainCursorResetOp ccr: return new MaxonChainCursorResetOp(MapValue(ccr.Chain));
-      case MaxonChainCursorValueOp ccv: {
+      case MaxonManagedListNodeSetValueOp cns: return new MaxonManagedListNodeSetValueOp(MapValue(cns.Node), MapValue(cns.Value), SubName(cns.ValueKind));
+      case MaxonManagedListClearOp ccl: return new MaxonManagedListClearOp(MapValue(ccl.ManagedList), SubName(ccl.ValueKind));
+      case MaxonManagedListCursorResetOp ccr: return new MaxonManagedListCursorResetOp(MapValue(ccr.ManagedList));
+      case MaxonManagedListCursorValueOp ccv: {
         var newRK = _typeSubstitution.TryGetValue(ccv.ValueKind, out var cvt) ? cvt.ToValueKind() : ccv.ResultKind;
-        var c = new MaxonChainCursorValueOp(MapValue(ccv.Chain), SubName(ccv.ValueKind), newRK);
+        var c = new MaxonManagedListCursorValueOp(MapValue(ccv.ManagedList), SubName(ccv.ValueKind), newRK);
         RegisterResult(ccv.Result, c.Result); return c;
       }
 

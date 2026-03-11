@@ -21,40 +21,40 @@ Stdout: ```
 0
 ```
 Stderr: ```
-alloc __Chain_String #1 rc=0 size=32 [list.main]
+alloc __ManagedList_String #1 rc=0 size=32 [list.main]
 alloc StringList #2 rc=0 size=16 [list.main]
-incref __Chain_String #1 rc=1 [list.main]
+incref __ManagedList_String #1 rc=1 [list.main]
 incref StringList #2 rc=1 [list.main]
 alloc String #3 rc=0 size=16 [list.main]
 alloc __ManagedMemory #4 rc=0 size=32 [list.main]
 incref __ManagedMemory #4 rc=1 [list.main]
 incref String #3 rc=1 [list.main]
-alloc __ChainNode #5 rc=0 size=32 [StringList.append]
+alloc __ManagedListNode #5 rc=0 size=32 [StringList.append]
 incref String #3 rc=2 [StringList.append]
-incref __ChainNode #5 rc=1 [chain_insert]
+incref __ManagedListNode #5 rc=1 [managed_list_insert]
 alloc String #6 rc=0 size=16 [list.main]
 alloc __ManagedMemory #7 rc=0 size=32 [list.main]
 incref __ManagedMemory #7 rc=1 [list.main]
 incref String #6 rc=1 [list.main]
-alloc __ChainNode #8 rc=0 size=32 [StringList.append]
+alloc __ManagedListNode #8 rc=0 size=32 [StringList.append]
 incref String #6 rc=2 [StringList.append]
-incref __ChainNode #8 rc=1 [chain_insert]
+incref __ManagedListNode #8 rc=1 [managed_list_insert]
 alloc String #9 rc=0 size=16 [list.main]
 alloc __ManagedMemory #10 rc=0 size=32 [list.main]
 incref __ManagedMemory #10 rc=1 [list.main]
 incref String #9 rc=1 [list.main]
-alloc __ChainNode #11 rc=0 size=32 [StringList.append]
+alloc __ManagedListNode #11 rc=0 size=32 [StringList.append]
 incref String #9 rc=2 [StringList.append]
-incref __ChainNode #11 rc=1 [chain_insert]
-decref String #3 rc=1 [chain_clear]
-decref __ChainNode #5 rc=0 [chain_clear]
-  free __ChainNode #5
-decref String #6 rc=1 [chain_clear]
-decref __ChainNode #8 rc=0 [chain_clear]
-  free __ChainNode #8
-decref String #9 rc=1 [chain_clear]
-decref __ChainNode #11 rc=0 [chain_clear]
-  free __ChainNode #11
+incref __ManagedListNode #11 rc=1 [managed_list_insert]
+decref String #3 rc=1 [managed_list_clear]
+decref __ManagedListNode #5 rc=0 [managed_list_clear]
+  free __ManagedListNode #5
+decref String #6 rc=1 [managed_list_clear]
+decref __ManagedListNode #8 rc=0 [managed_list_clear]
+  free __ManagedListNode #8
+decref String #9 rc=1 [managed_list_clear]
+decref __ManagedListNode #11 rc=0 [managed_list_clear]
+  free __ManagedListNode #11
 alloc String #12 rc=0 size=16 [list.main]
 alloc __ManagedMemory #13 rc=0 size=32 [list.main]
 incref __ManagedMemory #13 rc=1 [list.main]
@@ -76,8 +76,8 @@ decref __ManagedMemory #4 rc=0 [~String]
   free __ManagedMemory #4
   free String #3
 decref StringList #2 rc=0 [list.main]
-decref __Chain_String #1 rc=0 [~StringList]
-  free __Chain_String #1
+decref __ManagedList_String #1 rc=0 [~StringList]
+  free __ManagedList_String #1
   free StringList #2
 ```
 ---
@@ -99,7 +99,7 @@ module {
     x86.xor rcx, rcx
     x86.xor rdx, rdx
     x86.xor rbx, rbx
-    x86.lea_func rsi, [__destruct___Chain_String]
+    x86.lea_func rsi, [__destruct___ManagedList_String]
     x86.mov rdi, rsi
     x86.mov rdx, rdi
     x86.mov rcx, 32
@@ -420,14 +420,14 @@ module {
     x86.epilogue
     x86.ret
   }
-  func @__destruct___Chain_String(ptr: i64) {
+  func @__destruct___ManagedList_String(ptr: i64) {
   entry:
     x86.prologue stack_size=16
     x86.mov [rbp-8], rcx
     x86.mov rax, [rbp-8]
     x86.mov rcx, [rbp-8]
-    x86.call maxon_chain_clear_managed
-    x86.jmp __destruct___Chain_String.done
+    x86.call maxon_managed_list_clear_managed
+    x86.jmp __destruct___ManagedList_String.done
   done:
     x86.epilogue
     x86.ret
@@ -484,9 +484,9 @@ module {
     x86.epilogue
     x86.ret
   }
-  func @__destruct___ChainNode(ptr: i64) {
+  func @__destruct___ManagedListNode(ptr: i64) {
   entry:
-    x86.jmp __destruct___ChainNode.done
+    x86.jmp __destruct___ManagedListNode.done
   done:
     x86.ret
   }

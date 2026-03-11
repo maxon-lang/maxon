@@ -1,7 +1,7 @@
 ---
 feature: internal-types
 status: stable
-keywords: [internal, opaque, __ManagedMemory, __Chain, __ChainNode, builtin]
+keywords: [internal, opaque, __ManagedMemory, __ManagedList, __ManagedListNode, builtin]
 category: type-system
 ---
 
@@ -15,9 +15,9 @@ Types prefixed with `__` are compiler builtin types. They are registered by the 
 
 The builtin types are:
 - `__ManagedMemory` — heap-backed buffer storage used by `Array`, `String`, and other collections
-- `__Chain` — doubly-linked list container
-- `__ChainNode` — node in a `__Chain`
-- `__ChainError` — error type for chain operations
+- `__ManagedList` — doubly-linked list container
+- `__ManagedListNode` — node in a `__ManagedList`
+- `__ManagedListError` — error type for managed list operations
 
 ### Using __ManagedMemory
 

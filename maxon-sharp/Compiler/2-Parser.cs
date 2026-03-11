@@ -614,27 +614,27 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       mmType.DocString = "Compiler builtin managed memory buffer. Stores a heap-allocated data pointer, element count, capacity, and element size.";
       _typeRegistry["__ManagedMemory"] = mmType;
     }
-    if (!_typeRegistry.ContainsKey("__Chain")) {
-      var chainType = new MlirStructType("__Chain", [
+    if (!_typeRegistry.ContainsKey("__ManagedList")) {
+      var chainType = new MlirStructType("__ManagedList", [
         new MlirStructField("head", MlirType.I64, false, true),
         new MlirStructField("tail", MlirType.I64, false, true),
         new MlirStructField("count", MlirType.I64, false, true),
         new MlirStructField("cursor", MlirType.I64, false, true),
       ]);
       chainType.AssociatedTypeNames.Add("Element");
-      chainType.DocString = "Compiler builtin doubly-linked list. Stores a head pointer, tail pointer, element count, and iteration cursor.\n\nSee the `chain` stdlib module for operations.";
-      _typeRegistry["__Chain"] = chainType;
+      chainType.DocString = "Compiler builtin doubly-linked managed list. Stores a head pointer, tail pointer, element count, and iteration cursor.\n\nSee the `managed_list` stdlib module for operations.";
+      _typeRegistry["__ManagedList"] = chainType;
     }
-    if (!_typeRegistry.ContainsKey("__ChainNode")) {
-      var nodeType = new MlirStructType("__ChainNode", [
+    if (!_typeRegistry.ContainsKey("__ManagedListNode")) {
+      var nodeType = new MlirStructType("__ManagedListNode", [
         new MlirStructField("next", MlirType.I64, false, true),
         new MlirStructField("prev", MlirType.I64, false, true),
-        new MlirStructField("chain", MlirType.I64, false, true),
+        new MlirStructField("list", MlirType.I64, false, true),
         new MlirStructField("value", MlirType.I64, false, true),
       ]);
       nodeType.AssociatedTypeNames.Add("Element");
-      nodeType.DocString = "Compiler builtin node for a `Chain` doubly-linked list. Stores next/prev node pointers, a back-pointer to the owning chain, and the element value.";
-      _typeRegistry["__ChainNode"] = nodeType;
+      nodeType.DocString = "Compiler builtin node for a `ManagedList` doubly-linked list. Stores next/prev node pointers, a back-pointer to the owning managed list, and the element value.";
+      _typeRegistry["__ManagedListNode"] = nodeType;
     }
     if (!_typeRegistry.ContainsKey("__ManagedSocket")) {
       var socketType = new MlirStructType("__ManagedSocket", [
@@ -6560,7 +6560,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     });
   }
 
-  /// Returns the base source type name for a type (e.g., "IntChain" -> "__Chain").
+  /// Returns the base source type name for a type (e.g., "IntManagedList" -> "__ManagedList").
   /// Returns the type name itself if it's not an alias.
   private string ResolveBaseTypeName(string typeName) {
     return _typeAliasSources.TryGetValue(typeName, out var source) ? source : typeName;
@@ -6585,7 +6585,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
   }
 
   /// Resolves a type alias to its monomorphized concrete name by combining the base source
-  /// type with the alias's type parameter names (e.g., "ENode" -> "__ChainNode_Element").
+  /// type with the alias's type parameter names (e.g., "ENode" -> "__ManagedListNode_Element").
   /// Returns the type name itself if it's not an alias or has no type parameters.
   private string ResolveConcreteTypeName(string typeName) {
     if (!_typeAliasSources.TryGetValue(typeName, out var source)) return typeName;
@@ -6595,9 +6595,9 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     return $"{source}_{string.Join("_", regStruct.TypeParams.Values.Select(t => t.Name))}";
   }
 
-  /// Gets the Element type parameter name for a chain-family type (Chain or ChainNode alias).
+  /// Gets the Element type parameter name for a managed-list-family type (ManagedList or ManagedListNode alias).
   /// Returns the concrete element type name (e.g., "Integer", "String").
-  private string GetChainElementType(string structTypeName) {
+  private string GetManagedListElementType(string structTypeName) {
     if (_typeRegistry.TryGetValue(structTypeName, out var typeInfo) && typeInfo is MlirStructType st) {
       if (st.TypeParams.TryGetValue("Element", out var elemType))
         return MlirType.FormatAsSourceName(elemType);
@@ -6605,8 +6605,8 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     return "Element";
   }
 
-  /// Gets the MaxonValueKind for the Element type of a chain-family type.
-  private MaxonValueKind GetChainElementKind(string structTypeName) {
+  /// Gets the MaxonValueKind for the Element type of a managed-list-family type.
+  private MaxonValueKind GetManagedListElementKind(string structTypeName) {
     if (_typeRegistry.TryGetValue(structTypeName, out var typeInfo) && typeInfo is MlirStructType st) {
       if (st.TypeParams.TryGetValue("Element", out var elemType))
         return elemType.ToValueKind();
@@ -6614,30 +6614,30 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     return MaxonValueKind.Integer;
   }
 
-  /// Ensures a concrete ChainNode alias exists with the same Element type as the given Chain type.
-  /// For example, if chainTypeName is "__Chain_Integer" (alias for Chain with Element=Integer),
-  /// this creates/finds "__ChainNode_Integer" with TypeParams["Element"]=Integer.
-  /// Returns the concrete ChainNode alias name, or "ChainNode" if no Element type can be resolved.
-  private string EnsureConcreteChainNodeAlias(string chainTypeName) {
-    if (!_typeRegistry.TryGetValue(chainTypeName, out var typeInfo) || typeInfo is not MlirStructType chainStruct)
-      return "__ChainNode";
-    if (!chainStruct.TypeParams.TryGetValue("Element", out var elemType))
-      return "__ChainNode";
+  /// Ensures a concrete ManagedListNode alias exists with the same Element type as the given ManagedList type.
+  /// For example, if listTypeName is "__ManagedList_Integer" (alias for ManagedList with Element=Integer),
+  /// this creates/finds "__ManagedListNode_Integer" with TypeParams["Element"]=Integer.
+  /// Returns the concrete ManagedListNode alias name, or "ManagedListNode" if no Element type can be resolved.
+  private string EnsureConcreteManagedListNodeAlias(string listTypeName) {
+    if (!_typeRegistry.TryGetValue(listTypeName, out var typeInfo) || typeInfo is not MlirStructType listStruct)
+      return "__ManagedListNode";
+    if (!listStruct.TypeParams.TryGetValue("Element", out var elemType))
+      return "__ManagedListNode";
 
     var elemName = MlirType.FormatAsSourceName(elemType);
-    var aliasName = $"__ChainNode_{elemName}";
+    var aliasName = $"__ManagedListNode_{elemName}";
 
     if (!_typeRegistry.ContainsKey(aliasName)) {
-      var nodeBase = (MlirStructType)_typeRegistry["__ChainNode"];
-      RegisterConcreteTypeAlias(aliasName, "__ChainNode", nodeBase,
+      var nodeBase = (MlirStructType)_typeRegistry["__ManagedListNode"];
+      RegisterConcreteTypeAlias(aliasName, "__ManagedListNode", nodeBase,
         new Dictionary<string, MlirType> { ["Element"] = elemType });
     }
-    _typeAliasSources.TryAdd(aliasName, "__ChainNode");
+    _typeAliasSources.TryAdd(aliasName, "__ManagedListNode");
     return aliasName;
   }
 
   /// Skips an optional argument label (e.g., "value:" in `insertFirst(value: 42)`).
-  /// Maxon supports labeled arguments but chain intrinsics parse them directly.
+  /// Maxon supports labeled arguments but managed list intrinsics parse them directly.
   private void TrySkipArgLabel() {
     if (Check(TokenType.Identifier) && PeekNext().Type == TokenType.Colon) {
       Advance(); // skip label
@@ -6645,148 +6645,148 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     }
   }
 
-  /// Tries to emit a builtin Chain or ChainNode method call directly as MaxonOps.
-  /// Returns (true, result) if handled, (false, null) if not a builtin chain method.
+  /// Tries to emit a builtin ManagedList or ManagedListNode method call directly as MaxonOps.
+  /// Returns (true, result) if handled, (false, null) if not a builtin managed list method.
   /// The opening '(' has already been consumed.
-  private (bool Handled, MaxonValue? Result) TryEmitBuiltinChainMethod(string structTypeName, string methodName, MaxonValue selfValue) {
+  private (bool Handled, MaxonValue? Result) TryEmitBuiltinManagedListMethod(string structTypeName, string methodName, MaxonValue selfValue) {
     var baseType = ResolveBaseTypeName(structTypeName);
 
-    if (baseType == "__Chain") {
-      var valueKind = GetChainElementType(structTypeName);
-      var elementKind = GetChainElementKind(structTypeName);
-      var concreteNodeAlias = EnsureConcreteChainNodeAlias(structTypeName);
+    if (baseType == "__ManagedList") {
+      var valueKind = GetManagedListElementType(structTypeName);
+      var elementKind = GetManagedListElementKind(structTypeName);
+      var concreteNodeAlias = EnsureConcreteManagedListNodeAlias(structTypeName);
       switch (methodName) {
         case "insertFirst": {
-          // insertFirst(value Element) returns ChainNode
+          // insertFirst(value Element) returns ManagedListNode
           TrySkipArgLabel();
           var value = ResolveExprValue(ParseExpression());
           Expect(TokenType.RightParen);
-          var op = new MaxonChainInsertValueOp(selfValue, value, atHead: true, valueKind);
+          var op = new MaxonManagedListInsertValueOp(selfValue, value, atHead: true, valueKind);
           _currentBlock!.AddOp(op);
           op.Result.TypeName = concreteNodeAlias;
           return (true, op.Result);
         }
         case "insertLast": {
-          // insertLast(value Element) returns ChainNode
+          // insertLast(value Element) returns ManagedListNode
           TrySkipArgLabel();
           var value = ResolveExprValue(ParseExpression());
           Expect(TokenType.RightParen);
-          var op = new MaxonChainInsertValueOp(selfValue, value, atHead: false, valueKind);
+          var op = new MaxonManagedListInsertValueOp(selfValue, value, atHead: false, valueKind);
           _currentBlock!.AddOp(op);
           op.Result.TypeName = concreteNodeAlias;
           return (true, op.Result);
         }
         case "insertAfter": {
-          // insertAfter(target ChainNode, value Element) returns ChainNode
+          // insertAfter(target ManagedListNode, value Element) returns ManagedListNode
           TrySkipArgLabel();
           var target = ResolveExprValue(ParseExpression());
           Expect(TokenType.Comma);
           TrySkipArgLabel();
           var value = ResolveExprValue(ParseExpression());
           Expect(TokenType.RightParen);
-          var op = new MaxonChainInsertRelativeValueOp(selfValue, target, value, after: true, valueKind);
+          var op = new MaxonManagedListInsertRelativeValueOp(selfValue, target, value, after: true, valueKind);
           _currentBlock!.AddOp(op);
           op.Result.TypeName = concreteNodeAlias;
           return (true, op.Result);
         }
         case "insertBefore": {
-          // insertBefore(target ChainNode, value Element) returns ChainNode
+          // insertBefore(target ManagedListNode, value Element) returns ManagedListNode
           TrySkipArgLabel();
           var target = ResolveExprValue(ParseExpression());
           Expect(TokenType.Comma);
           TrySkipArgLabel();
           var value = ResolveExprValue(ParseExpression());
           Expect(TokenType.RightParen);
-          var op = new MaxonChainInsertRelativeValueOp(selfValue, target, value, after: false, valueKind);
+          var op = new MaxonManagedListInsertRelativeValueOp(selfValue, target, value, after: false, valueKind);
           _currentBlock!.AddOp(op);
           op.Result.TypeName = concreteNodeAlias;
           return (true, op.Result);
         }
         case "reinsertFirst": {
-          // reinsertFirst(node ChainNode)
+          // reinsertFirst(node ManagedListNode)
           TrySkipArgLabel();
           var node = ResolveExprValue(ParseExpression());
           Expect(TokenType.RightParen);
-          var op = new MaxonChainReinsertOp(selfValue, node, atHead: true);
+          var op = new MaxonManagedListReinsertOp(selfValue, node, atHead: true);
           _currentBlock!.AddOp(op);
           return (true, null);
         }
         case "reinsertLast": {
-          // reinsertLast(node ChainNode)
+          // reinsertLast(node ManagedListNode)
           TrySkipArgLabel();
           var node = ResolveExprValue(ParseExpression());
           Expect(TokenType.RightParen);
-          var op = new MaxonChainReinsertOp(selfValue, node, atHead: false);
+          var op = new MaxonManagedListReinsertOp(selfValue, node, atHead: false);
           _currentBlock!.AddOp(op);
           return (true, null);
         }
         case "reinsertAfter": {
-          // reinsertAfter(target ChainNode, node ChainNode)
+          // reinsertAfter(target ManagedListNode, node ManagedListNode)
           TrySkipArgLabel();
           var target = ResolveExprValue(ParseExpression());
           Expect(TokenType.Comma);
           TrySkipArgLabel();
           var node = ResolveExprValue(ParseExpression());
           Expect(TokenType.RightParen);
-          var op = new MaxonChainReinsertRelativeOp(selfValue, target, node, after: true);
+          var op = new MaxonManagedListReinsertRelativeOp(selfValue, target, node, after: true);
           _currentBlock!.AddOp(op);
           return (true, null);
         }
         case "reinsertBefore": {
-          // reinsertBefore(target ChainNode, node ChainNode)
+          // reinsertBefore(target ManagedListNode, node ManagedListNode)
           TrySkipArgLabel();
           var target = ResolveExprValue(ParseExpression());
           Expect(TokenType.Comma);
           TrySkipArgLabel();
           var node = ResolveExprValue(ParseExpression());
           Expect(TokenType.RightParen);
-          var op = new MaxonChainReinsertRelativeOp(selfValue, target, node, after: false);
+          var op = new MaxonManagedListReinsertRelativeOp(selfValue, target, node, after: false);
           _currentBlock!.AddOp(op);
           return (true, null);
         }
         case "detach": {
-          // detach(node ChainNode)
+          // detach(node ManagedListNode)
           TrySkipArgLabel();
           var node = ResolveExprValue(ParseExpression());
           Expect(TokenType.RightParen);
-          var op = new MaxonChainDetachOp(selfValue, node);
+          var op = new MaxonManagedListDetachOp(selfValue, node);
           _currentBlock!.AddOp(op);
           return (true, null);
         }
         case "remove": {
-          // remove(node ChainNode) returns Element
+          // remove(node ManagedListNode) returns Element
           TrySkipArgLabel();
           var node = ResolveExprValue(ParseExpression());
           Expect(TokenType.RightParen);
-          var op = new MaxonChainRemoveOp(selfValue, node, valueKind, elementKind);
+          var op = new MaxonManagedListRemoveOp(selfValue, node, valueKind, elementKind);
           _currentBlock!.AddOp(op);
           return (true, op.Result);
         }
         case "head": {
-          // head() returns ChainNode throws ChainError
+          // head() returns ManagedListNode throws ManagedListError
           Expect(TokenType.RightParen);
-          var callOp = new MaxonCallOp("__chain_head", [selfValue], MaxonValueKind.Struct, concreteNodeAlias);
+          var callOp = new MaxonCallOp("__managed_list_head", [selfValue], MaxonValueKind.Struct, concreteNodeAlias);
           _currentBlock!.AddOp(callOp);
           return (true, callOp.Result);
         }
         case "tail": {
-          // tail() returns ChainNode throws ChainError
+          // tail() returns ManagedListNode throws ManagedListError
           Expect(TokenType.RightParen);
-          var callOp = new MaxonCallOp("__chain_tail", [selfValue], MaxonValueKind.Struct, concreteNodeAlias);
+          var callOp = new MaxonCallOp("__managed_list_tail", [selfValue], MaxonValueKind.Struct, concreteNodeAlias);
           _currentBlock!.AddOp(callOp);
           return (true, callOp.Result);
         }
         case "count": {
           // count() returns int
           Expect(TokenType.RightParen);
-          var op = new MaxonChainCountOp(selfValue);
+          var op = new MaxonManagedListCountOp(selfValue);
           _currentBlock!.AddOp(op);
           return (true, op.Result);
         }
         case "isEmpty": {
           // isEmpty() returns bool — implemented as count() == 0
           Expect(TokenType.RightParen);
-          var countOp = new MaxonChainCountOp(selfValue);
+          var countOp = new MaxonManagedListCountOp(selfValue);
           _currentBlock!.AddOp(countOp);
           var zeroLit = new MaxonLiteralOp(0L);
           _currentBlock!.AddOp(zeroLit);
@@ -6797,63 +6797,63 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
         case "clear": {
           // clear()
           Expect(TokenType.RightParen);
-          var op = new MaxonChainClearOp(selfValue, valueKind);
+          var op = new MaxonManagedListClearOp(selfValue, valueKind);
           _currentBlock!.AddOp(op);
           return (true, null);
         }
         case "cursorReset": {
           // cursorReset() — reset iteration cursor to null (before head)
           Expect(TokenType.RightParen);
-          var op = new MaxonChainCursorResetOp(selfValue);
+          var op = new MaxonManagedListCursorResetOp(selfValue);
           _currentBlock!.AddOp(op);
           return (true, null);
         }
         case "cursorValue": {
           // cursorValue() returns Element — read value at current cursor position
           Expect(TokenType.RightParen);
-          var op = new MaxonChainCursorValueOp(selfValue, valueKind, elementKind);
+          var op = new MaxonManagedListCursorValueOp(selfValue, valueKind, elementKind);
           _currentBlock!.AddOp(op);
           return (true, op.Result);
         }
         case "cursorAdvance": {
           // cursorAdvance() — advance cursor to next node, throws if at end
           Expect(TokenType.RightParen);
-          var callOp = new MaxonCallOp("__chain_cursor_advance", [selfValue], (MaxonValueKind?)null, null);
+          var callOp = new MaxonCallOp("__managed_list_cursor_advance", [selfValue], (MaxonValueKind?)null, null);
           _currentBlock!.AddOp(callOp);
           return (true, null);
         }
         case "cursorStart": {
           // cursorStart() — set cursor to head node, throws if empty
           Expect(TokenType.RightParen);
-          var callOp = new MaxonCallOp("__chain_cursor_start", [selfValue], (MaxonValueKind?)null, null);
+          var callOp = new MaxonCallOp("__managed_list_cursor_start", [selfValue], (MaxonValueKind?)null, null);
           _currentBlock!.AddOp(callOp);
           return (true, null);
         }
       }
     }
 
-    if (baseType == "__ChainNode") {
-      var valueKind = GetChainElementType(structTypeName);
-      var elementKind = GetChainElementKind(structTypeName);
+    if (baseType == "__ManagedListNode") {
+      var valueKind = GetManagedListElementType(structTypeName);
+      var elementKind = GetManagedListElementKind(structTypeName);
       switch (methodName) {
         case "next": {
-          // next() returns ChainNode throws ChainError — preserve concrete alias
+          // next() returns ManagedListNode throws ManagedListError — preserve concrete alias
           Expect(TokenType.RightParen);
-          var callOp = new MaxonCallOp("__chain_node_next", [selfValue], MaxonValueKind.Struct, structTypeName);
+          var callOp = new MaxonCallOp("__managed_list_node_next", [selfValue], MaxonValueKind.Struct, structTypeName);
           _currentBlock!.AddOp(callOp);
           return (true, callOp.Result);
         }
         case "prev": {
-          // prev() returns ChainNode throws ChainError — preserve concrete alias
+          // prev() returns ManagedListNode throws ManagedListError — preserve concrete alias
           Expect(TokenType.RightParen);
-          var callOp = new MaxonCallOp("__chain_node_prev", [selfValue], MaxonValueKind.Struct, structTypeName);
+          var callOp = new MaxonCallOp("__managed_list_node_prev", [selfValue], MaxonValueKind.Struct, structTypeName);
           _currentBlock!.AddOp(callOp);
           return (true, callOp.Result);
         }
         case "value": {
           // value() returns Element
           Expect(TokenType.RightParen);
-          var op = new MaxonChainNodeValueOp(selfValue, valueKind, elementKind);
+          var op = new MaxonManagedListNodeValueOp(selfValue, valueKind, elementKind);
           _currentBlock!.AddOp(op);
           return (true, op.Result);
         }
@@ -6862,26 +6862,26 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
           TrySkipArgLabel();
           var value = ResolveExprValue(ParseExpression());
           Expect(TokenType.RightParen);
-          var op = new MaxonChainNodeSetValueOp(selfValue, value, valueKind);
+          var op = new MaxonManagedListNodeSetValueOp(selfValue, value, valueKind);
           _currentBlock!.AddOp(op);
           return (true, null);
         }
       }
     }
 
-    return (false, null); // not a builtin chain method
+    return (false, null); // not a builtin managed list method
   }
 
   private static bool IsBuiltinMethodType(string baseTypeName) =>
-    baseTypeName is "__Chain" or "__ChainNode" or "__ManagedMemory" or "__ManagedSocket" or "__ManagedFile" or "__ManagedDirectory";
+    baseTypeName is "__ManagedList" or "__ManagedListNode" or "__ManagedMemory" or "__ManagedSocket" or "__ManagedFile" or "__ManagedDirectory";
 
   /// Unified dispatch for builtin type instance methods.
-  /// Routes to Chain/ChainNode or ManagedMemory handlers based on the resolved base type.
+  /// Routes to ManagedList/ManagedListNode or ManagedMemory handlers based on the resolved base type.
   private (bool Handled, MaxonValue? Result) TryEmitBuiltinTypeMethod(
     string structTypeName, string methodName, MaxonValue selfValue) {
     var baseType = ResolveBaseTypeName(structTypeName);
-    if (baseType is "__Chain" or "__ChainNode")
-      return TryEmitBuiltinChainMethod(structTypeName, methodName, selfValue);
+    if (baseType is "__ManagedList" or "__ManagedListNode")
+      return TryEmitBuiltinManagedListMethod(structTypeName, methodName, selfValue);
     if (baseType == "__ManagedMemory")
       return TryEmitBuiltinManagedMemoryMethod(structTypeName, methodName, selfValue);
     if (baseType == "__ManagedSocket")
@@ -7393,13 +7393,13 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     return (false, null);
   }
 
-  /// Emits builtin __Chain static method calls.
+  /// Emits builtin __ManagedList static method calls.
   /// The opening '(' has already been consumed.
-  private (bool Handled, MaxonValue? Result) TryEmitBuiltinChainStaticMethod(string methodName) {
+  private (bool Handled, MaxonValue? Result) TryEmitBuiltinManagedListStaticMethod(string methodName) {
     switch (methodName) {
       case "create": {
         Expect(TokenType.RightParen);
-        var op = new MaxonChainCreateOp();
+        var op = new MaxonManagedListCreateOp();
         _currentBlock!.AddOp(op);
         return (true, op.Result);
       }
@@ -10232,8 +10232,8 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
               => TryEmitBuiltinManagedFileStaticMethod,
             "__ManagedDirectory" when nextMethod is "openSearch" or "exists" or "create" or "currentPath"
               => TryEmitBuiltinManagedDirectoryStaticMethod,
-            "__Chain" when nextMethod is "create"
-              => TryEmitBuiltinChainStaticMethod,
+            "__ManagedList" when nextMethod is "create"
+              => TryEmitBuiltinManagedListStaticMethod,
             _ => null,
           };
           if (dispatcher != null) {
@@ -10243,9 +10243,9 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
             Expect(TokenType.LeftParen);
             var (handled, staticResult) = dispatcher(staticMethodToken.Value);
             if (handled && staticResult != null) {
-              // Chain.create() needs the alias name for type parameter resolution
-              if (resolvedBase == "__Chain" && staticResult is MaxonStruct chainResult)
-                chainResult.TypeName = token.Value;
+              // ManagedList.create() needs the alias name for type parameter resolution
+              if (resolvedBase == "__ManagedList" && staticResult is MaxonStruct listResult)
+                listResult.TypeName = token.Value;
               return ParseFieldAccessChain(new ExprResult.Direct(staticResult), token);
             }
             throw new CompileError(ErrorCode.ParserExpectedExpression,
@@ -11530,7 +11530,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
 
     // Block direct construction of compiler-internal types
     if (baseTypeName is "__ManagedMemory" or "__ManagedFile" or "__ManagedDirectory"
-                      or "__ManagedSocket" or "__Chain" or "__ChainNode") {
+                      or "__ManagedSocket" or "__ManagedList" or "__ManagedListNode") {
       throw new CompileError(ErrorCode.SemanticBuiltinTypeConstruction,
         $"'{baseTypeName}' is a compiler builtin type and cannot be constructed directly",
         literalLine, Current().Column);

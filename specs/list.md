@@ -10,7 +10,7 @@ category: collections
 
 A `List` is a doubly linked list collection. It provides O(1) insertion and removal at both ends, and O(n) indexed access.
 
-Internally, List is backed by a `__Chain` — a doubly linked chain of nodes that supports O(1) insertion and removal at both ends.
+Internally, List is backed by a `__ManagedList` — a doubly linked list of nodes that supports O(1) insertion and removal at both ends.
 
 ### Creating a List
 
@@ -88,7 +88,7 @@ for item in list 'loop'
 end 'loop'
 ```
 
-Elements are iterated front to back. Iteration uses a cached cursor on the underlying chain for O(n) total traversal (O(1) per element).
+Elements are iterated front to back. Iteration uses a cached cursor on the underlying managed list for O(n) total traversal (O(1) per element).
 
 ## Tests
 
@@ -597,31 +597,31 @@ hello world!!!!!!!!!!!!!!
 1
 ```
 ```stderr
-alloc __Chain_String #1 rc=0 size=32 [list.testRemove]
+alloc __ManagedList_String #1 rc=0 size=32 [list.testRemove]
 alloc StringList #2 rc=0 size=16 [list.testRemove]
-incref __Chain_String #1 rc=1 [list.testRemove]
+incref __ManagedList_String #1 rc=1 [list.testRemove]
 incref StringList #2 rc=1 [list.testRemove]
 alloc String #3 rc=0 size=16 [list.testRemove]
 alloc __ManagedMemory #4 rc=0 size=32 [list.testRemove]
 incref __ManagedMemory #4 rc=1 [list.testRemove]
 incref String #3 rc=1 [list.testRemove]
-alloc __ChainNode #5 rc=0 size=32 [StringList.append]
+alloc __ManagedListNode #5 rc=0 size=32 [StringList.append]
 incref String #3 rc=2 [StringList.append]
-incref __ChainNode #5 rc=1 [chain_insert]
+incref __ManagedListNode #5 rc=1 [managed_list_insert]
 alloc String #6 rc=0 size=16 [list.testRemove]
 alloc __ManagedMemory #7 rc=0 size=32 [list.testRemove]
 incref __ManagedMemory #7 rc=1 [list.testRemove]
 incref String #6 rc=1 [list.testRemove]
-alloc __ChainNode #8 rc=0 size=32 [StringList.append]
+alloc __ManagedListNode #8 rc=0 size=32 [StringList.append]
 incref String #6 rc=2 [StringList.append]
-incref __ChainNode #8 rc=1 [chain_insert]
-incref __ChainNode #5 rc=2 [StringList.removeFirst]
-incref __ChainNode #5 rc=3 [StringList.removeFirst]
-decref __ChainNode #5 rc=2 [StringList.removeFirst]
+incref __ManagedListNode #8 rc=1 [managed_list_insert]
+incref __ManagedListNode #5 rc=2 [StringList.removeFirst]
+incref __ManagedListNode #5 rc=3 [StringList.removeFirst]
+decref __ManagedListNode #5 rc=2 [StringList.removeFirst]
 decref String #3 rc=1 [StringList.removeFirst]
-decref __ChainNode #5 rc=1 [StringList.removeFirst]
-decref __ChainNode #5 rc=0 [StringList.removeFirst]
-  free __ChainNode #5
+decref __ManagedListNode #5 rc=1 [StringList.removeFirst]
+decref __ManagedListNode #5 rc=0 [StringList.removeFirst]
+  free __ManagedListNode #5
 incref String #3 rc=2 [StringList.removeFirst]
 transfer String #3 rc=2 [StringList.removeFirst]
 incref String #3 rc=3 [list.testRemove]
@@ -649,14 +649,14 @@ decref __ManagedMemory #4 rc=0 [~String]
   free __ManagedMemory #4
   free String #3
 decref StringList #2 rc=0 [list.testRemove]
-decref __Chain_String #1 rc=0 [~StringList]
-decref String #6 rc=0 [chain_clear]
+decref __ManagedList_String #1 rc=0 [~StringList]
+decref String #6 rc=0 [managed_list_clear]
 decref __ManagedMemory #7 rc=0 [~String]
   free __ManagedMemory #7
   free String #6
-decref __ChainNode #8 rc=0 [chain_clear]
-  free __ChainNode #8
-  free __Chain_String #1
+decref __ManagedListNode #8 rc=0 [managed_list_clear]
+  free __ManagedListNode #8
+  free __ManagedList_String #1
   free StringList #2
 ```
 
@@ -685,45 +685,45 @@ end 'main'
 hello world!!!!!!!!!!!!!!
 ```
 ```stderr
-alloc __Chain_String #1 rc=0 size=32 [list.testRemove]
+alloc __ManagedList_String #1 rc=0 size=32 [list.testRemove]
 alloc StringList #2 rc=0 size=16 [list.testRemove]
-incref __Chain_String #1 rc=1 [list.testRemove]
+incref __ManagedList_String #1 rc=1 [list.testRemove]
 incref StringList #2 rc=1 [list.testRemove]
 alloc String #3 rc=0 size=16 [list.testRemove]
 alloc __ManagedMemory #4 rc=0 size=32 [list.testRemove]
 incref __ManagedMemory #4 rc=1 [list.testRemove]
 incref String #3 rc=1 [list.testRemove]
-alloc __ChainNode #5 rc=0 size=32 [StringList.append]
+alloc __ManagedListNode #5 rc=0 size=32 [StringList.append]
 incref String #3 rc=2 [StringList.append]
-incref __ChainNode #5 rc=1 [chain_insert]
+incref __ManagedListNode #5 rc=1 [managed_list_insert]
 alloc String #6 rc=0 size=16 [list.testRemove]
 alloc __ManagedMemory #7 rc=0 size=32 [list.testRemove]
 incref __ManagedMemory #7 rc=1 [list.testRemove]
 incref String #6 rc=1 [list.testRemove]
-alloc __ChainNode #8 rc=0 size=32 [StringList.append]
+alloc __ManagedListNode #8 rc=0 size=32 [StringList.append]
 incref String #6 rc=2 [StringList.append]
-incref __ChainNode #8 rc=1 [chain_insert]
-incref __ChainNode #5 rc=2 [StringList.removeFirst]
-incref __ChainNode #5 rc=3 [StringList.removeFirst]
-decref __ChainNode #5 rc=2 [StringList.removeFirst]
+incref __ManagedListNode #8 rc=1 [managed_list_insert]
+incref __ManagedListNode #5 rc=2 [StringList.removeFirst]
+incref __ManagedListNode #5 rc=3 [StringList.removeFirst]
+decref __ManagedListNode #5 rc=2 [StringList.removeFirst]
 decref String #3 rc=1 [StringList.removeFirst]
-decref __ChainNode #5 rc=1 [StringList.removeFirst]
-decref __ChainNode #5 rc=0 [StringList.removeFirst]
-  free __ChainNode #5
+decref __ManagedListNode #5 rc=1 [StringList.removeFirst]
+decref __ManagedListNode #5 rc=0 [StringList.removeFirst]
+  free __ManagedListNode #5
 incref String #3 rc=2 [StringList.removeFirst]
 transfer String #3 rc=2 [StringList.removeFirst]
 transfer String #3 rc=2 [list.testRemove]
 decref String #6 rc=1 [list.testRemove]
 decref String #3 rc=1 [list.testRemove]
 decref StringList #2 rc=0 [list.testRemove]
-decref __Chain_String #1 rc=0 [~StringList]
-decref String #6 rc=0 [chain_clear]
+decref __ManagedList_String #1 rc=0 [~StringList]
+decref String #6 rc=0 [managed_list_clear]
 decref __ManagedMemory #7 rc=0 [~String]
   free __ManagedMemory #7
   free String #6
-decref __ChainNode #8 rc=0 [chain_clear]
-  free __ChainNode #8
-  free __Chain_String #1
+decref __ManagedListNode #8 rc=0 [managed_list_clear]
+  free __ManagedListNode #8
+  free __ManagedList_String #1
   free StringList #2
 alloc String #9 rc=0 size=16 [list.main]
 alloc __ManagedMemory #10 rc=0 size=32 [list.main]
@@ -765,40 +765,40 @@ end 'main'
 0
 ```
 ```stderr
-alloc __Chain_String #1 rc=0 size=32 [list.testClear]
+alloc __ManagedList_String #1 rc=0 size=32 [list.testClear]
 alloc StringList #2 rc=0 size=16 [list.testClear]
-incref __Chain_String #1 rc=1 [list.testClear]
+incref __ManagedList_String #1 rc=1 [list.testClear]
 incref StringList #2 rc=1 [list.testClear]
 alloc String #3 rc=0 size=16 [list.testClear]
 alloc __ManagedMemory #4 rc=0 size=32 [list.testClear]
 incref __ManagedMemory #4 rc=1 [list.testClear]
 incref String #3 rc=1 [list.testClear]
-alloc __ChainNode #5 rc=0 size=32 [StringList.append]
+alloc __ManagedListNode #5 rc=0 size=32 [StringList.append]
 incref String #3 rc=2 [StringList.append]
-incref __ChainNode #5 rc=1 [chain_insert]
+incref __ManagedListNode #5 rc=1 [managed_list_insert]
 alloc String #6 rc=0 size=16 [list.testClear]
 alloc __ManagedMemory #7 rc=0 size=32 [list.testClear]
 incref __ManagedMemory #7 rc=1 [list.testClear]
 incref String #6 rc=1 [list.testClear]
-alloc __ChainNode #8 rc=0 size=32 [StringList.append]
+alloc __ManagedListNode #8 rc=0 size=32 [StringList.append]
 incref String #6 rc=2 [StringList.append]
-incref __ChainNode #8 rc=1 [chain_insert]
+incref __ManagedListNode #8 rc=1 [managed_list_insert]
 alloc String #9 rc=0 size=16 [list.testClear]
 alloc __ManagedMemory #10 rc=0 size=32 [list.testClear]
 incref __ManagedMemory #10 rc=1 [list.testClear]
 incref String #9 rc=1 [list.testClear]
-alloc __ChainNode #11 rc=0 size=32 [StringList.append]
+alloc __ManagedListNode #11 rc=0 size=32 [StringList.append]
 incref String #9 rc=2 [StringList.append]
-incref __ChainNode #11 rc=1 [chain_insert]
-decref String #3 rc=1 [chain_clear]
-decref __ChainNode #5 rc=0 [chain_clear]
-  free __ChainNode #5
-decref String #6 rc=1 [chain_clear]
-decref __ChainNode #8 rc=0 [chain_clear]
-  free __ChainNode #8
-decref String #9 rc=1 [chain_clear]
-decref __ChainNode #11 rc=0 [chain_clear]
-  free __ChainNode #11
+incref __ManagedListNode #11 rc=1 [managed_list_insert]
+decref String #3 rc=1 [managed_list_clear]
+decref __ManagedListNode #5 rc=0 [managed_list_clear]
+  free __ManagedListNode #5
+decref String #6 rc=1 [managed_list_clear]
+decref __ManagedListNode #8 rc=0 [managed_list_clear]
+  free __ManagedListNode #8
+decref String #9 rc=1 [managed_list_clear]
+decref __ManagedListNode #11 rc=0 [managed_list_clear]
+  free __ManagedListNode #11
 alloc String #12 rc=0 size=16 [list.testClear]
 alloc __ManagedMemory #13 rc=0 size=32 [list.testClear]
 incref __ManagedMemory #13 rc=1 [list.testClear]
@@ -820,8 +820,8 @@ decref __ManagedMemory #4 rc=0 [~String]
   free __ManagedMemory #4
   free String #3
 decref StringList #2 rc=0 [list.testClear]
-decref __Chain_String #1 rc=0 [~StringList]
-  free __Chain_String #1
+decref __ManagedList_String #1 rc=0 [~StringList]
+  free __ManagedList_String #1
   free StringList #2
 ```
 
@@ -851,40 +851,40 @@ end 'main'
 0
 ```
 ```stderr
-alloc __Chain_String #1 rc=0 size=32 [list.main]
+alloc __ManagedList_String #1 rc=0 size=32 [list.main]
 alloc StringList #2 rc=0 size=16 [list.main]
-incref __Chain_String #1 rc=1 [list.main]
+incref __ManagedList_String #1 rc=1 [list.main]
 incref StringList #2 rc=1 [list.main]
 alloc String #3 rc=0 size=16 [list.main]
 alloc __ManagedMemory #4 rc=0 size=32 [list.main]
 incref __ManagedMemory #4 rc=1 [list.main]
 incref String #3 rc=1 [list.main]
-alloc __ChainNode #5 rc=0 size=32 [StringList.append]
+alloc __ManagedListNode #5 rc=0 size=32 [StringList.append]
 incref String #3 rc=2 [StringList.append]
-incref __ChainNode #5 rc=1 [chain_insert]
+incref __ManagedListNode #5 rc=1 [managed_list_insert]
 alloc String #6 rc=0 size=16 [list.main]
 alloc __ManagedMemory #7 rc=0 size=32 [list.main]
 incref __ManagedMemory #7 rc=1 [list.main]
 incref String #6 rc=1 [list.main]
-alloc __ChainNode #8 rc=0 size=32 [StringList.append]
+alloc __ManagedListNode #8 rc=0 size=32 [StringList.append]
 incref String #6 rc=2 [StringList.append]
-incref __ChainNode #8 rc=1 [chain_insert]
+incref __ManagedListNode #8 rc=1 [managed_list_insert]
 alloc String #9 rc=0 size=16 [list.main]
 alloc __ManagedMemory #10 rc=0 size=32 [list.main]
 incref __ManagedMemory #10 rc=1 [list.main]
 incref String #9 rc=1 [list.main]
-alloc __ChainNode #11 rc=0 size=32 [StringList.append]
+alloc __ManagedListNode #11 rc=0 size=32 [StringList.append]
 incref String #9 rc=2 [StringList.append]
-incref __ChainNode #11 rc=1 [chain_insert]
-decref String #3 rc=1 [chain_clear]
-decref __ChainNode #5 rc=0 [chain_clear]
-  free __ChainNode #5
-decref String #6 rc=1 [chain_clear]
-decref __ChainNode #8 rc=0 [chain_clear]
-  free __ChainNode #8
-decref String #9 rc=1 [chain_clear]
-decref __ChainNode #11 rc=0 [chain_clear]
-  free __ChainNode #11
+incref __ManagedListNode #11 rc=1 [managed_list_insert]
+decref String #3 rc=1 [managed_list_clear]
+decref __ManagedListNode #5 rc=0 [managed_list_clear]
+  free __ManagedListNode #5
+decref String #6 rc=1 [managed_list_clear]
+decref __ManagedListNode #8 rc=0 [managed_list_clear]
+  free __ManagedListNode #8
+decref String #9 rc=1 [managed_list_clear]
+decref __ManagedListNode #11 rc=0 [managed_list_clear]
+  free __ManagedListNode #11
 alloc String #12 rc=0 size=16 [list.main]
 alloc __ManagedMemory #13 rc=0 size=32 [list.main]
 incref __ManagedMemory #13 rc=1 [list.main]
@@ -906,8 +906,8 @@ decref __ManagedMemory #4 rc=0 [~String]
   free __ManagedMemory #4
   free String #3
 decref StringList #2 rc=0 [list.main]
-decref __Chain_String #1 rc=0 [~StringList]
-  free __Chain_String #1
+decref __ManagedList_String #1 rc=0 [~StringList]
+  free __ManagedList_String #1
   free StringList #2
 ```
 

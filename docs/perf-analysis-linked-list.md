@@ -153,12 +153,12 @@ offset 8:  next   (8 bytes, pointer)
 offset 16: value  (8 bytes, i64)
 ```
 
-### Maxon `__ChainNode` Layout (32 bytes data + 8 bytes ref-count header = 40 bytes heap)
+### Maxon `__ManagedListNode` Layout (32 bytes data + 8 bytes ref-count header = 40 bytes heap)
 
 ```
 offset 0:  next   (8 bytes, pointer)
 offset 8:  prev   (8 bytes, pointer)
-offset 16: chain  (8 bytes, back-pointer to owning chain — enables auto-detach)
+offset 16: managedList  (8 bytes, back-pointer to owning managed list — enables auto-detach)
 offset 24: value  (8 bytes, i64)
 ```
 
@@ -170,7 +170,7 @@ offset 8:  tail   (8 bytes, pointer)
 offset 16: count  (4 bytes, int)
 ```
 
-### Maxon `__Chain` Layout (24 bytes data + 8 bytes ref-count header + cursor)
+### Maxon `__ManagedList` Layout (24 bytes data + 8 bytes ref-count header + cursor)
 
 ```
 offset 0:  head    (8 bytes, pointer)
@@ -182,7 +182,7 @@ offset 24: cursor  (8 bytes, pointer — current iteration node)
 ### Maxon `IntList` Layout (16 bytes data + 8 bytes ref-count header)
 
 ```
-offset 0:  chain      (8 bytes, pointer to __Chain)
+offset 0:  managedList  (8 bytes, pointer to __ManagedList)
 offset 8:  iterIndex  (8 bytes, i64 — current iteration position)
 ```
 
@@ -210,36 +210,36 @@ mov  [rdi+8], rax          ; tail = node
 ```
 prologue stack_size=32
 mov  [rbp-8], ecx          ; save self_ptr
-mov  ebx, [eax+0]          ; load chain ptr from List wrapper
-mov  rcx, 32               ; sizeof(__ChainNode)
-call mm_alloc_in            ; managed alloc in chain's scope
-; zero out next/prev/chain fields (3 mov instructions)
+mov  ebx, [eax+0]          ; load managed list ptr from List wrapper
+mov  rcx, 32               ; sizeof(__ManagedListNode)
+call mm_alloc_in            ; managed alloc in managed list's scope
+; zero out next/prev/managedList fields (3 mov instructions)
 mov  [eax+24], edx          ; node.value = value
-call maxon_chain_insert_last ; link into chain
+call maxon_managed_list_insert_last ; link into managed list
 epilogue + ret
 ```
 
-`maxon_chain_insert_last` is a hand-written runtime function (~17 instructions on happy path):
+`maxon_managed_list_insert_last` is a hand-written runtime function (~17 instructions on happy path):
 
 ```
-; auto-detach check: if node.chain != 0, call maxon_chain_unlink first
-mov  rax, [node+16]        ; node.chain
+; auto-detach check: if node.managedList != 0, call maxon_managed_list_unlink first
+mov  rax, [node+16]        ; node.managedList
 test rax, rax
 jz   no_detach              ; always taken for fresh nodes
 no_detach:
-mov  rax, [chain+8]         ; old_tail = chain.tail
+mov  rax, [managedList+8]   ; old_tail = managedList.tail
 mov  [node+0], 0            ; node.next = 0
 mov  [node+8], old_tail     ; node.prev = old_tail
-mov  [node+16], chain_ptr   ; node.chain = chain_ptr
+mov  [node+16], managedList_ptr   ; node.managedList = managedList_ptr
 test rcx, rcx               ; if old_tail != 0
 mov  [old_tail+0], node     ;   old_tail.next = node
-mov  [chain+8], node        ; chain.tail = node
-cmp  [chain+0], 0           ; if chain.head == 0
-mov  [chain+0], node        ;   chain.head = node (first append only)
-inc  [chain+16]             ; chain.count++
+mov  [managedList+8], node  ; managedList.tail = node
+cmp  [managedList+0], 0     ; if managedList.head == 0
+mov  [managedList+0], node  ;   managedList.head = node (first append only)
+inc  [managedList+16]       ; managedList.count++
 ```
 
-Total per append: `mm_alloc_in` + `IntList.append` body + `maxon_chain_insert_last` = ~42 instructions + prologue/epilogue overhead.
+Total per append: `mm_alloc_in` + `IntList.append` body + `maxon_managed_list_insert_last` = ~42 instructions + prologue/epilogue overhead.
 
 ### Iteration Loop
 
@@ -276,10 +276,10 @@ loop_0:
 First call (iterIndex == 0) takes the `first_1` path (~42 instructions):
 ```
 ; check iterIndex >= count → exhausted
-; cursorStart: chain.cursor = chain.head
+; cursorStart: managedList.cursor = managedList.head
 ; load cursor.value
 ; iterIndex++
-; cursorAdvance: chain.cursor = cursor.next
+; cursorAdvance: managedList.cursor = cursor.next
 ; return value
 ```
 
@@ -287,7 +287,7 @@ Subsequent calls take the `first_1.merge` fast path (~22 instructions):
 ```
 ; check iterIndex >= count → exhausted (10 instructions)
 ; check iterIndex != 0 → skip cursorStart (4 instructions)
-; load chain.cursor → cursor.value (5 instructions through 3 pointer chases)
+; load managedList.cursor → cursor.value (5 instructions through 3 pointer chases)
 ; iterIndex++ (5 instructions)
 ; cursorAdvance: cursor = cursor.next (conditional, ~10 instructions when not last)
 ; return value (3 instructions)
@@ -312,9 +312,9 @@ Final call (exhausted) takes the `done_0` early-exit path (~8 instructions).
 
 | Phase | Instructions |
 |-------|-------------|
-| main setup (alloc chain+list, zero-init, mm calls) | ~40 |
+| main setup (alloc managed list+list, zero-init, mm calls) | ~40 |
 | 3x IntList.append body (excl mm_alloc_in) | 3 x 25 = 75 |
-| 3x maxon_chain_insert_last | 3 x 17 = 51 |
+| 3x maxon_managed_list_insert_last | 3 x 17 = 51 |
 | createIterator | 7 (incl prologue/epilogue) |
 | IntList.next (1st call, iterIndex==0 path) | ~42 |
 | IntList.next (2nd call, fast path) | ~22 |
@@ -328,11 +328,11 @@ Final call (exhausted) takes the `done_0` early-exit path (~8 instructions).
 | Runtime function | Call count | Purpose |
 |-----------------|-----------|---------|
 | mm_scope_enter | 1 | main scope |
-| mm_alloc | 2 | chain + list struct |
+| mm_alloc | 2 | managed list + list struct |
 | mm_move | 1 | ownership transfer |
 | mm_incref | 2 | list ref + iterator ref |
-| mm_alloc_in | 3 | 3 chain nodes |
-| maxon_chain_insert_last | 3 | link nodes |
+| mm_alloc_in | 3 | 3 managed list nodes |
+| maxon_managed_list_insert_last | 3 | link nodes |
 | mm_decref | 2 | list + iterator cleanup |
 | mm_scope_exit | 1 | main scope |
 | **Total runtime calls** | **15** | |
@@ -376,5 +376,5 @@ The ~4.6x instruction count overhead buys:
 
 ### Lower priority
 
-4. **Stack-allocate small structs** — the List and Chain headers could live on the stack when they don't escape, avoiding 2 heap allocations + ref-count overhead.
-5. **Combine the chain+list into one allocation** — the List wrapper is just a pointer to chain + an iterIndex. Flattening would eliminate one heap object and one indirection.
+4. **Stack-allocate small structs** — the List and ManagedList headers could live on the stack when they don't escape, avoiding 2 heap allocations + ref-count overhead.
+5. **Combine the managed-list+list into one allocation** — the List wrapper is just a pointer to managed list + an iterIndex. Flattening would eliminate one heap object and one indirection.

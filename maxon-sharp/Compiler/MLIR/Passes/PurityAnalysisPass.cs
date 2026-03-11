@@ -80,15 +80,15 @@ public static class PurityAnalysisPass {
           case MaxonManagedMemRemoveOp:
           case MaxonManagedMemClearOp:
             return true;
-          // Chain mutation operations modify the chain data structure in-place
-          case MaxonChainInsertValueOp:
-          case MaxonChainInsertRelativeValueOp:
-          case MaxonChainReinsertOp:
-          case MaxonChainReinsertRelativeOp:
-          case MaxonChainDetachOp:
-          case MaxonChainRemoveOp:
-          case MaxonChainClearOp:
-          case MaxonChainNodeSetValueOp:
+          // ManagedList mutation operations modify the data structure in-place
+          case MaxonManagedListInsertValueOp:
+          case MaxonManagedListInsertRelativeValueOp:
+          case MaxonManagedListReinsertOp:
+          case MaxonManagedListReinsertRelativeOp:
+          case MaxonManagedListDetachOp:
+          case MaxonManagedListRemoveOp:
+          case MaxonManagedListClearOp:
+          case MaxonManagedListNodeSetValueOp:
             return true;
         }
       }

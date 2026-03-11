@@ -71,9 +71,9 @@ public partial class X86CodeEmitter {
       DefineSymdata("__rt_tag_pipe_buffer", "PipeBuffer\0"u8.ToArray());
       // Scope strings for runtime-internal mm_decref calls
       DefineSymdata("__mm_scope_managed_elements", "~ManagedElements\0"u8.ToArray());
-      DefineSymdata("__mm_scope_chain_detach", "chain_detach\0"u8.ToArray());
-      DefineSymdata("__mm_scope_chain_clear", "chain_clear\0"u8.ToArray());
-      DefineSymdata("__mm_scope_chain_decref_values", "chain_decref_values\0"u8.ToArray());
+      DefineSymdata("__mm_scope_managed_list_detach", "managed_list_detach\0"u8.ToArray());
+      DefineSymdata("__mm_scope_managed_list_clear", "managed_list_clear\0"u8.ToArray());
+      DefineSymdata("__mm_scope_managed_list_decref_values", "managed_list_decref_values\0"u8.ToArray());
       DefineSymdata("__mm_scope_find_close", "find_close\0"u8.ToArray());
       // Scope strings for runtime-internal mm_alloc/mm_incref calls
       DefineSymdata("__mm_scope_cow_copy", "cow_copy\0"u8.ToArray());
@@ -83,7 +83,7 @@ public partial class X86CodeEmitter {
       DefineSymdata("__mm_scope_capture", "capture\0"u8.ToArray());
       DefineSymdata("__mm_scope_pipe_read", "pipe_read\0"u8.ToArray());
       DefineSymdata("__mm_scope_realloc", "realloc\0"u8.ToArray());
-      DefineSymdata("__mm_scope_chain_insert", "chain_insert\0"u8.ToArray());
+      DefineSymdata("__mm_scope_managed_list_insert", "managed_list_insert\0"u8.ToArray());
     }
 
     // Panic messages for invalid memory manager calls
@@ -143,14 +143,14 @@ public partial class X86CodeEmitter {
     EmitMmClearManagedElements();
     EmitMmLeakCheck();
     EmitMmValidatePtr();
-    EmitChainInsertFirst();
-    EmitChainInsertLast();
-    EmitChainInsertAfter();
-    EmitChainInsertBefore();
-    EmitChainUnlink();
-    EmitChainClear();
-    EmitChainClearManaged();
-    EmitChainDecrefValues();
+    EmitManagedListInsertFirst();
+    EmitManagedListInsertLast();
+    EmitManagedListInsertAfter();
+    EmitManagedListInsertBefore();
+    EmitManagedListUnlink();
+    EmitManagedListClear();
+    EmitManagedListClearManaged();
+    EmitManagedListDecrefValues();
     if (Compiler.MmTrace) {
       EmitMmTracePrintIndent();
       EmitMmTraceTransfer();
@@ -1022,43 +1022,43 @@ public partial class X86CodeEmitter {
   }
 
   // ==========================================================================
-  // Chain/ChainNode runtime helpers -- doubly-linked intrusive list for Chain<T>
+  // ManagedList/ManagedListNode runtime helpers -- doubly-linked intrusive list for ManagedList<T>
   // ==========================================================================
   //
-  // ChainNode layout (at user pointer, before the T payload):
-  //   +0   next   (ptr to next ChainNode)
-  //   +8   prev   (ptr to prev ChainNode)
-  //   +16  chain  (ptr to owning Chain, or 0 if detached)
+  // ManagedListNode layout (at user pointer, before the T payload):
+  //   +0   next   (ptr to next ManagedListNode)
+  //   +8   prev   (ptr to prev ManagedListNode)
+  //   +16  list   (ptr to owning ManagedList, or 0 if detached)
   //
-  // Chain layout:
-  //   +0   head   (ptr to first ChainNode)
-  //   +8   tail   (ptr to last ChainNode)
+  // ManagedList layout:
+  //   +0   head   (ptr to first ManagedListNode)
+  //   +8   tail   (ptr to last ManagedListNode)
   //   +16  count  (u64)
 
   // -------------------------------------------------------------------------
-  // maxon_chain_insert_first(chain_ptr_rcx, node_ptr_rdx) -> void
-  // Insert node at head of chain. Auto-detaches from old chain if needed.
-  // Stack: [rbp-8]=chain_ptr, [rbp-16]=node_ptr
+  // maxon_managed_list_insert_first(list_ptr_rcx, node_ptr_rdx) -> void
+  // Insert node at head of managed list. Auto-detaches from old list if needed.
+  // Stack: [rbp-8]=list_ptr, [rbp-16]=node_ptr
   // -------------------------------------------------------------------------
-  private void EmitChainInsertFirst() {
-    EmitRuntimeFunctionStart("maxon_chain_insert_first", 2, 0x40);
+  private void EmitManagedListInsertFirst() {
+    EmitRuntimeFunctionStart("maxon_managed_list_insert_first", 2, 0x40);
 
-    // Auto-detach: if node.chain != 0, unlink from old chain and release old chain's reference
+    // Auto-detach: if node.list != 0, unlink from old list and release old list's reference
     EmitMovRegMem(X86Register.Rax, -0x10, 8); // RAX = node_ptr
-    EmitBytes(0x48, 0x8B, 0x40, 0x10); // MOV rax, [rax+16] -- node.chain
+    EmitBytes(0x48, 0x8B, 0x40, 0x10); // MOV rax, [rax+16] -- node.list
     EmitBytes(0x48, 0x85, 0xC0); // TEST rax, rax
-    EmitJcc("z", "chain_insert_first_no_detach");
-    EmitMovRegReg(X86Register.Rcx, X86Register.Rax); // rcx = old chain
+    EmitJcc("z", "managed_list_insert_first_no_detach");
+    EmitMovRegReg(X86Register.Rcx, X86Register.Rax); // rcx = old list
     EmitMovRegMem(X86Register.Rdx, -0x10, 8); // rdx = node_ptr
-    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "maxon_chain_unlink")); EmitDword(0);
-    // Decref node — old chain releases its counted reference
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "maxon_managed_list_unlink")); EmitDword(0);
+    // Decref node — old list releases its counted reference
     EmitMovRegMem(X86Register.Rcx, -0x10, 8); // RCX = node_ptr
-    if (Compiler.MmTrace) EmitLeaRegSymdataRel(X86Register.Rdx, "__mm_scope_chain_detach");
+    if (Compiler.MmTrace) EmitLeaRegSymdataRel(X86Register.Rdx, "__mm_scope_managed_list_detach");
     EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_decref")); EmitDword(0);
-    DefineLabel("chain_insert_first_no_detach");
+    DefineLabel("managed_list_insert_first_no_detach");
 
-    // old_head = [chain+0]
-    EmitMovRegMem(X86Register.Rax, -0x08, 8); // RAX = chain_ptr
+    // old_head = [list+0]
+    EmitMovRegMem(X86Register.Rax, -0x08, 8); // RAX = list_ptr
     EmitBytes(0x48, 0x8B, 0x48, 0x00); // MOV rcx, [rax+0] -- old_head
     // rcx = old_head
 
@@ -1070,62 +1070,62 @@ public partial class X86CodeEmitter {
     EmitMovRegImm(X86Register.Rax, 0);
     EmitBytes(0x48, 0x89, 0x42, 0x08); // MOV [rdx+8], rax -- node.prev = 0
 
-    // node.chain = chain_ptr
-    EmitMovRegMem(X86Register.Rax, -0x08, 8); // RAX = chain_ptr
-    EmitBytes(0x48, 0x89, 0x42, 0x10); // MOV [rdx+16], rax -- node.chain = chain_ptr
+    // node.list = list_ptr
+    EmitMovRegMem(X86Register.Rax, -0x08, 8); // RAX = list_ptr
+    EmitBytes(0x48, 0x89, 0x42, 0x10); // MOV [rdx+16], rax -- node.list = list_ptr
 
     // if old_head != 0: old_head.prev = node_ptr
     EmitBytes(0x48, 0x85, 0xC9); // TEST rcx, rcx
-    EmitJcc("z", "chain_insert_first_no_old_head");
+    EmitJcc("z", "managed_list_insert_first_no_old_head");
     EmitBytes(0x48, 0x89, 0x51, 0x08); // MOV [rcx+8], rdx -- old_head.prev = node_ptr
-    DefineLabel("chain_insert_first_no_old_head");
+    DefineLabel("managed_list_insert_first_no_old_head");
 
-    // chain.head = node_ptr
-    EmitMovRegMem(X86Register.Rax, -0x08, 8); // RAX = chain_ptr
+    // list.head = node_ptr
+    EmitMovRegMem(X86Register.Rax, -0x08, 8); // RAX = list_ptr
     EmitMovRegMem(X86Register.Rdx, -0x10, 8); // RDX = node_ptr
-    EmitBytes(0x48, 0x89, 0x10); // MOV [rax], rdx -- chain.head = node_ptr
+    EmitBytes(0x48, 0x89, 0x10); // MOV [rax], rdx -- list.head = node_ptr
 
-    // if chain.tail == 0: chain.tail = node_ptr
+    // if list.tail == 0: list.tail = node_ptr
     EmitBytes(0x48, 0x83, 0x78, 0x08, 0x00); // CMP qword [rax+8], 0
-    EmitJcc("ne", "chain_insert_first_tail_ok");
-    EmitBytes(0x48, 0x89, 0x50, 0x08); // MOV [rax+8], rdx -- chain.tail = node_ptr
-    DefineLabel("chain_insert_first_tail_ok");
+    EmitJcc("ne", "managed_list_insert_first_tail_ok");
+    EmitBytes(0x48, 0x89, 0x50, 0x08); // MOV [rax+8], rdx -- list.tail = node_ptr
+    DefineLabel("managed_list_insert_first_tail_ok");
 
-    // chain.count++
+    // list.count++
     EmitBytes(0x48, 0xFF, 0x40, 0x10); // INC qword [rax+16]
 
-    // Incref node — chain holds a counted reference
+    // Incref node — list holds a counted reference
     EmitMovRegMem(X86Register.Rcx, -0x10, 8); // RCX = node_ptr
-    if (Compiler.MmTrace) EmitLeaRegSymdataRel(X86Register.Rdx, "__mm_scope_chain_insert");
+    if (Compiler.MmTrace) EmitLeaRegSymdataRel(X86Register.Rdx, "__mm_scope_managed_list_insert");
     EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_incref")); EmitDword(0);
 
     EmitRuntimeFunctionEnd();
   }
 
   // -------------------------------------------------------------------------
-  // maxon_chain_insert_last(chain_ptr_rcx, node_ptr_rdx) -> void
-  // Insert node at tail of chain. Auto-detaches from old chain if needed.
-  // Stack: [rbp-8]=chain_ptr, [rbp-16]=node_ptr
+  // maxon_managed_list_insert_last(list_ptr_rcx, node_ptr_rdx) -> void
+  // Insert node at tail of managed list. Auto-detaches from old list if needed.
+  // Stack: [rbp-8]=list_ptr, [rbp-16]=node_ptr
   // -------------------------------------------------------------------------
-  private void EmitChainInsertLast() {
-    EmitRuntimeFunctionStart("maxon_chain_insert_last", 2, 0x40);
+  private void EmitManagedListInsertLast() {
+    EmitRuntimeFunctionStart("maxon_managed_list_insert_last", 2, 0x40);
 
-    // Auto-detach: if node.chain != 0, unlink from old chain and release old chain's reference
+    // Auto-detach: if node.list != 0, unlink from old list and release old list's reference
     EmitMovRegMem(X86Register.Rax, -0x10, 8); // RAX = node_ptr
-    EmitBytes(0x48, 0x8B, 0x40, 0x10); // MOV rax, [rax+16] -- node.chain
+    EmitBytes(0x48, 0x8B, 0x40, 0x10); // MOV rax, [rax+16] -- node.list
     EmitBytes(0x48, 0x85, 0xC0); // TEST rax, rax
-    EmitJcc("z", "chain_insert_last_no_detach");
-    EmitMovRegReg(X86Register.Rcx, X86Register.Rax); // rcx = old chain
+    EmitJcc("z", "managed_list_insert_last_no_detach");
+    EmitMovRegReg(X86Register.Rcx, X86Register.Rax); // rcx = old list
     EmitMovRegMem(X86Register.Rdx, -0x10, 8); // rdx = node_ptr
-    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "maxon_chain_unlink")); EmitDword(0);
-    // Decref node — old chain releases its counted reference
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "maxon_managed_list_unlink")); EmitDword(0);
+    // Decref node — old list releases its counted reference
     EmitMovRegMem(X86Register.Rcx, -0x10, 8); // RCX = node_ptr
-    if (Compiler.MmTrace) EmitLeaRegSymdataRel(X86Register.Rdx, "__mm_scope_chain_detach");
+    if (Compiler.MmTrace) EmitLeaRegSymdataRel(X86Register.Rdx, "__mm_scope_managed_list_detach");
     EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_decref")); EmitDword(0);
-    DefineLabel("chain_insert_last_no_detach");
+    DefineLabel("managed_list_insert_last_no_detach");
 
-    // old_tail = [chain+8]
-    EmitMovRegMem(X86Register.Rax, -0x08, 8); // RAX = chain_ptr
+    // old_tail = [list+8]
+    EmitMovRegMem(X86Register.Rax, -0x08, 8); // RAX = list_ptr
     EmitBytes(0x48, 0x8B, 0x48, 0x08); // MOV rcx, [rax+8] -- old_tail
     // rcx = old_tail
 
@@ -1137,59 +1137,59 @@ public partial class X86CodeEmitter {
     // node.prev = old_tail
     EmitBytes(0x48, 0x89, 0x4A, 0x08); // MOV [rdx+8], rcx -- node.prev = old_tail
 
-    // node.chain = chain_ptr
-    EmitMovRegMem(X86Register.Rax, -0x08, 8); // RAX = chain_ptr
-    EmitBytes(0x48, 0x89, 0x42, 0x10); // MOV [rdx+16], rax -- node.chain = chain_ptr
+    // node.list = list_ptr
+    EmitMovRegMem(X86Register.Rax, -0x08, 8); // RAX = list_ptr
+    EmitBytes(0x48, 0x89, 0x42, 0x10); // MOV [rdx+16], rax -- node.list = list_ptr
 
     // if old_tail != 0: old_tail.next = node_ptr
     EmitBytes(0x48, 0x85, 0xC9); // TEST rcx, rcx
-    EmitJcc("z", "chain_insert_last_no_old_tail");
+    EmitJcc("z", "managed_list_insert_last_no_old_tail");
     EmitBytes(0x48, 0x89, 0x11); // MOV [rcx], rdx -- old_tail.next = node_ptr
-    DefineLabel("chain_insert_last_no_old_tail");
+    DefineLabel("managed_list_insert_last_no_old_tail");
 
-    // chain.tail = node_ptr
-    EmitMovRegMem(X86Register.Rax, -0x08, 8); // RAX = chain_ptr
+    // list.tail = node_ptr
+    EmitMovRegMem(X86Register.Rax, -0x08, 8); // RAX = list_ptr
     EmitMovRegMem(X86Register.Rdx, -0x10, 8); // RDX = node_ptr
-    EmitBytes(0x48, 0x89, 0x50, 0x08); // MOV [rax+8], rdx -- chain.tail = node_ptr
+    EmitBytes(0x48, 0x89, 0x50, 0x08); // MOV [rax+8], rdx -- list.tail = node_ptr
 
-    // if chain.head == 0: chain.head = node_ptr
+    // if list.head == 0: list.head = node_ptr
     EmitBytes(0x48, 0x83, 0x38, 0x00); // CMP qword [rax], 0
-    EmitJcc("ne", "chain_insert_last_head_ok");
-    EmitBytes(0x48, 0x89, 0x10); // MOV [rax], rdx -- chain.head = node_ptr
-    DefineLabel("chain_insert_last_head_ok");
+    EmitJcc("ne", "managed_list_insert_last_head_ok");
+    EmitBytes(0x48, 0x89, 0x10); // MOV [rax], rdx -- list.head = node_ptr
+    DefineLabel("managed_list_insert_last_head_ok");
 
-    // chain.count++
+    // list.count++
     EmitBytes(0x48, 0xFF, 0x40, 0x10); // INC qword [rax+16]
 
-    // Incref node — chain holds a counted reference
+    // Incref node — list holds a counted reference
     EmitMovRegMem(X86Register.Rcx, -0x10, 8); // RCX = node_ptr
-    if (Compiler.MmTrace) EmitLeaRegSymdataRel(X86Register.Rdx, "__mm_scope_chain_insert");
+    if (Compiler.MmTrace) EmitLeaRegSymdataRel(X86Register.Rdx, "__mm_scope_managed_list_insert");
     EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_incref")); EmitDword(0);
 
     EmitRuntimeFunctionEnd();
   }
 
   // -------------------------------------------------------------------------
-  // maxon_chain_insert_after(chain_ptr_rcx, target_ptr_rdx, node_ptr_r8) -> void
-  // Insert node after target in chain. Auto-detaches from old chain if needed.
-  // Stack: [rbp-8]=chain_ptr, [rbp-16]=target_ptr, [rbp-24]=node_ptr
+  // maxon_managed_list_insert_after(list_ptr_rcx, target_ptr_rdx, node_ptr_r8) -> void
+  // Insert node after target in managed list. Auto-detaches from old list if needed.
+  // Stack: [rbp-8]=list_ptr, [rbp-16]=target_ptr, [rbp-24]=node_ptr
   // -------------------------------------------------------------------------
-  private void EmitChainInsertAfter() {
-    EmitRuntimeFunctionStart("maxon_chain_insert_after", 3, 0x40);
+  private void EmitManagedListInsertAfter() {
+    EmitRuntimeFunctionStart("maxon_managed_list_insert_after", 3, 0x40);
 
-    // Auto-detach: if node.chain != 0, unlink from old chain and release old chain's reference
+    // Auto-detach: if node.list != 0, unlink from old list and release old list's reference
     EmitMovRegMem(X86Register.Rax, -0x18, 8); // RAX = node_ptr
-    EmitBytes(0x48, 0x8B, 0x40, 0x10); // MOV rax, [rax+16] -- node.chain
+    EmitBytes(0x48, 0x8B, 0x40, 0x10); // MOV rax, [rax+16] -- node.list
     EmitBytes(0x48, 0x85, 0xC0); // TEST rax, rax
-    EmitJcc("z", "chain_insert_after_no_detach");
-    EmitMovRegReg(X86Register.Rcx, X86Register.Rax); // rcx = old chain
+    EmitJcc("z", "managed_list_insert_after_no_detach");
+    EmitMovRegReg(X86Register.Rcx, X86Register.Rax); // rcx = old list
     EmitMovRegMem(X86Register.Rdx, -0x18, 8); // rdx = node_ptr
-    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "maxon_chain_unlink")); EmitDword(0);
-    // Decref node — old chain releases its counted reference
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "maxon_managed_list_unlink")); EmitDword(0);
+    // Decref node — old list releases its counted reference
     EmitMovRegMem(X86Register.Rcx, -0x18, 8); // RCX = node_ptr
-    if (Compiler.MmTrace) EmitLeaRegSymdataRel(X86Register.Rdx, "__mm_scope_chain_detach");
+    if (Compiler.MmTrace) EmitLeaRegSymdataRel(X86Register.Rdx, "__mm_scope_managed_list_detach");
     EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_decref")); EmitDword(0);
-    DefineLabel("chain_insert_after_no_detach");
+    DefineLabel("managed_list_insert_after_no_detach");
 
     // after = [target+0] (target.next)
     EmitMovRegMem(X86Register.Rax, -0x10, 8); // RAX = target_ptr
@@ -1204,57 +1204,57 @@ public partial class X86CodeEmitter {
     EmitMovRegMem(X86Register.Rdx, -0x10, 8); // RDX = target_ptr
     EmitBytes(0x48, 0x89, 0x51, 0x08); // MOV [rcx+8], rdx -- node.prev = target_ptr
 
-    // node.chain = chain_ptr
-    EmitMovRegMem(X86Register.Rdx, -0x08, 8); // RDX = chain_ptr
-    EmitBytes(0x48, 0x89, 0x51, 0x10); // MOV [rcx+16], rdx -- node.chain = chain_ptr
+    // node.list = list_ptr
+    EmitMovRegMem(X86Register.Rdx, -0x08, 8); // RDX = list_ptr
+    EmitBytes(0x48, 0x89, 0x51, 0x10); // MOV [rcx+16], rdx -- node.list = list_ptr
 
     // target.next = node_ptr
     EmitMovRegMem(X86Register.Rdx, -0x10, 8); // RDX = target_ptr
     EmitBytes(0x48, 0x89, 0x0A); // MOV [rdx], rcx -- target.next = node_ptr
 
-    // if after != 0: after.prev = node_ptr; else: chain.tail = node_ptr
+    // if after != 0: after.prev = node_ptr; else: list.tail = node_ptr
     EmitBytes(0x48, 0x85, 0xC0); // TEST rax, rax
-    EmitJcc("z", "chain_insert_after_was_tail");
+    EmitJcc("z", "managed_list_insert_after_was_tail");
     EmitBytes(0x48, 0x89, 0x48, 0x08); // MOV [rax+8], rcx -- after.prev = node_ptr
-    EmitJmp("chain_insert_after_linked");
-    DefineLabel("chain_insert_after_was_tail");
-    EmitMovRegMem(X86Register.Rax, -0x08, 8); // RAX = chain_ptr
-    EmitBytes(0x48, 0x89, 0x48, 0x08); // MOV [rax+8], rcx -- chain.tail = node_ptr
-    DefineLabel("chain_insert_after_linked");
+    EmitJmp("managed_list_insert_after_linked");
+    DefineLabel("managed_list_insert_after_was_tail");
+    EmitMovRegMem(X86Register.Rax, -0x08, 8); // RAX = list_ptr
+    EmitBytes(0x48, 0x89, 0x48, 0x08); // MOV [rax+8], rcx -- list.tail = node_ptr
+    DefineLabel("managed_list_insert_after_linked");
 
-    // chain.count++
-    EmitMovRegMem(X86Register.Rax, -0x08, 8); // RAX = chain_ptr
+    // list.count++
+    EmitMovRegMem(X86Register.Rax, -0x08, 8); // RAX = list_ptr
     EmitBytes(0x48, 0xFF, 0x40, 0x10); // INC qword [rax+16]
 
-    // Incref node — chain holds a counted reference
+    // Incref node — list holds a counted reference
     EmitMovRegMem(X86Register.Rcx, -0x18, 8); // RCX = node_ptr
-    if (Compiler.MmTrace) EmitLeaRegSymdataRel(X86Register.Rdx, "__mm_scope_chain_insert");
+    if (Compiler.MmTrace) EmitLeaRegSymdataRel(X86Register.Rdx, "__mm_scope_managed_list_insert");
     EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_incref")); EmitDword(0);
 
     EmitRuntimeFunctionEnd();
   }
 
   // -------------------------------------------------------------------------
-  // maxon_chain_insert_before(chain_ptr_rcx, target_ptr_rdx, node_ptr_r8) -> void
-  // Insert node before target in chain. Auto-detaches from old chain if needed.
-  // Stack: [rbp-8]=chain_ptr, [rbp-16]=target_ptr, [rbp-24]=node_ptr
+  // maxon_managed_list_insert_before(list_ptr_rcx, target_ptr_rdx, node_ptr_r8) -> void
+  // Insert node before target in managed list. Auto-detaches from old list if needed.
+  // Stack: [rbp-8]=list_ptr, [rbp-16]=target_ptr, [rbp-24]=node_ptr
   // -------------------------------------------------------------------------
-  private void EmitChainInsertBefore() {
-    EmitRuntimeFunctionStart("maxon_chain_insert_before", 3, 0x40);
+  private void EmitManagedListInsertBefore() {
+    EmitRuntimeFunctionStart("maxon_managed_list_insert_before", 3, 0x40);
 
-    // Auto-detach: if node.chain != 0, unlink from old chain and release old chain's reference
+    // Auto-detach: if node.list != 0, unlink from old list and release old list's reference
     EmitMovRegMem(X86Register.Rax, -0x18, 8); // RAX = node_ptr
-    EmitBytes(0x48, 0x8B, 0x40, 0x10); // MOV rax, [rax+16] -- node.chain
+    EmitBytes(0x48, 0x8B, 0x40, 0x10); // MOV rax, [rax+16] -- node.list
     EmitBytes(0x48, 0x85, 0xC0); // TEST rax, rax
-    EmitJcc("z", "chain_insert_before_no_detach");
-    EmitMovRegReg(X86Register.Rcx, X86Register.Rax); // rcx = old chain
+    EmitJcc("z", "managed_list_insert_before_no_detach");
+    EmitMovRegReg(X86Register.Rcx, X86Register.Rax); // rcx = old list
     EmitMovRegMem(X86Register.Rdx, -0x18, 8); // rdx = node_ptr
-    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "maxon_chain_unlink")); EmitDword(0);
-    // Decref node — old chain releases its counted reference
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "maxon_managed_list_unlink")); EmitDword(0);
+    // Decref node — old list releases its counted reference
     EmitMovRegMem(X86Register.Rcx, -0x18, 8); // RCX = node_ptr
-    if (Compiler.MmTrace) EmitLeaRegSymdataRel(X86Register.Rdx, "__mm_scope_chain_detach");
+    if (Compiler.MmTrace) EmitLeaRegSymdataRel(X86Register.Rdx, "__mm_scope_managed_list_detach");
     EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_decref")); EmitDword(0);
-    DefineLabel("chain_insert_before_no_detach");
+    DefineLabel("managed_list_insert_before_no_detach");
 
     // before = [target+8] (target.prev)
     EmitMovRegMem(X86Register.Rax, -0x10, 8); // RAX = target_ptr
@@ -1269,49 +1269,49 @@ public partial class X86CodeEmitter {
     // node.prev = before
     EmitBytes(0x48, 0x89, 0x41, 0x08); // MOV [rcx+8], rax -- node.prev = before
 
-    // node.chain = chain_ptr
-    EmitMovRegMem(X86Register.Rdx, -0x08, 8); // RDX = chain_ptr
-    EmitBytes(0x48, 0x89, 0x51, 0x10); // MOV [rcx+16], rdx -- node.chain = chain_ptr
+    // node.list = list_ptr
+    EmitMovRegMem(X86Register.Rdx, -0x08, 8); // RDX = list_ptr
+    EmitBytes(0x48, 0x89, 0x51, 0x10); // MOV [rcx+16], rdx -- node.list = list_ptr
 
     // target.prev = node_ptr
     EmitMovRegMem(X86Register.Rdx, -0x10, 8); // RDX = target_ptr
     EmitBytes(0x48, 0x89, 0x4A, 0x08); // MOV [rdx+8], rcx -- target.prev = node_ptr
 
-    // if before != 0: before.next = node_ptr; else: chain.head = node_ptr
+    // if before != 0: before.next = node_ptr; else: list.head = node_ptr
     EmitBytes(0x48, 0x85, 0xC0); // TEST rax, rax
-    EmitJcc("z", "chain_insert_before_was_head");
+    EmitJcc("z", "managed_list_insert_before_was_head");
     EmitBytes(0x48, 0x89, 0x08); // MOV [rax], rcx -- before.next = node_ptr
-    EmitJmp("chain_insert_before_linked");
-    DefineLabel("chain_insert_before_was_head");
-    EmitMovRegMem(X86Register.Rax, -0x08, 8); // RAX = chain_ptr
-    EmitBytes(0x48, 0x89, 0x08); // MOV [rax], rcx -- chain.head = node_ptr
-    DefineLabel("chain_insert_before_linked");
+    EmitJmp("managed_list_insert_before_linked");
+    DefineLabel("managed_list_insert_before_was_head");
+    EmitMovRegMem(X86Register.Rax, -0x08, 8); // RAX = list_ptr
+    EmitBytes(0x48, 0x89, 0x08); // MOV [rax], rcx -- list.head = node_ptr
+    DefineLabel("managed_list_insert_before_linked");
 
-    // chain.count++
-    EmitMovRegMem(X86Register.Rax, -0x08, 8); // RAX = chain_ptr
+    // list.count++
+    EmitMovRegMem(X86Register.Rax, -0x08, 8); // RAX = list_ptr
     EmitBytes(0x48, 0xFF, 0x40, 0x10); // INC qword [rax+16]
 
-    // Incref node — chain holds a counted reference
+    // Incref node — list holds a counted reference
     EmitMovRegMem(X86Register.Rcx, -0x18, 8); // RCX = node_ptr
-    if (Compiler.MmTrace) EmitLeaRegSymdataRel(X86Register.Rdx, "__mm_scope_chain_insert");
+    if (Compiler.MmTrace) EmitLeaRegSymdataRel(X86Register.Rdx, "__mm_scope_managed_list_insert");
     EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_incref")); EmitDword(0);
 
     EmitRuntimeFunctionEnd();
   }
 
   // -------------------------------------------------------------------------
-  // maxon_chain_unlink(chain_ptr_rcx, node_ptr_rdx) -> void
-  // Unlink node from chain. No-op if node.chain == 0. Does NOT free.
-  // Stack: [rbp-8]=chain_ptr, [rbp-16]=node_ptr
+  // maxon_managed_list_unlink(list_ptr_rcx, node_ptr_rdx) -> void
+  // Unlink node from managed list. No-op if node.list == 0. Does NOT free.
+  // Stack: [rbp-8]=list_ptr, [rbp-16]=node_ptr
   // -------------------------------------------------------------------------
-  private void EmitChainUnlink() {
-    EmitRuntimeFunctionStart("maxon_chain_unlink", 2, 0x40);
+  private void EmitManagedListUnlink() {
+    EmitRuntimeFunctionStart("maxon_managed_list_unlink", 2, 0x40);
 
-    // If node.chain == 0, no-op
+    // If node.list == 0, no-op
     EmitMovRegMem(X86Register.Rax, -0x10, 8); // RAX = node_ptr
-    EmitBytes(0x48, 0x8B, 0x40, 0x10); // MOV rax, [rax+16] -- node.chain
+    EmitBytes(0x48, 0x8B, 0x40, 0x10); // MOV rax, [rax+16] -- node.list
     EmitBytes(0x48, 0x85, 0xC0); // TEST rax, rax
-    EmitJcc("z", "chain_unlink_done");
+    EmitJcc("z", "managed_list_unlink_done");
 
     // prev = [node+8], next = [node+0]
     EmitMovRegMem(X86Register.Rax, -0x10, 8); // RAX = node_ptr
@@ -1319,65 +1319,65 @@ public partial class X86CodeEmitter {
     EmitBytes(0x48, 0x8B, 0x10); // MOV rdx, [rax] -- next
     // rcx = prev, rdx = next
 
-    // Reconnect: if prev != 0: prev.next = next; else: chain.head = next
+    // Reconnect: if prev != 0: prev.next = next; else: list.head = next
     EmitBytes(0x48, 0x85, 0xC9); // TEST rcx, rcx
-    EmitJcc("z", "chain_unlink_no_prev");
+    EmitJcc("z", "managed_list_unlink_no_prev");
     EmitBytes(0x48, 0x89, 0x11); // MOV [rcx], rdx -- prev.next = next
-    EmitJmp("chain_unlink_prev_done");
-    DefineLabel("chain_unlink_no_prev");
-    EmitMovRegMem(X86Register.Rax, -0x08, 8); // RAX = chain_ptr
-    EmitBytes(0x48, 0x89, 0x10); // MOV [rax], rdx -- chain.head = next
-    DefineLabel("chain_unlink_prev_done");
+    EmitJmp("managed_list_unlink_prev_done");
+    DefineLabel("managed_list_unlink_no_prev");
+    EmitMovRegMem(X86Register.Rax, -0x08, 8); // RAX = list_ptr
+    EmitBytes(0x48, 0x89, 0x10); // MOV [rax], rdx -- list.head = next
+    DefineLabel("managed_list_unlink_prev_done");
 
-    // if next != 0: next.prev = prev; else: chain.tail = prev
+    // if next != 0: next.prev = prev; else: list.tail = prev
     EmitBytes(0x48, 0x85, 0xD2); // TEST rdx, rdx
-    EmitJcc("z", "chain_unlink_no_next");
+    EmitJcc("z", "managed_list_unlink_no_next");
     EmitBytes(0x48, 0x89, 0x4A, 0x08); // MOV [rdx+8], rcx -- next.prev = prev
-    EmitJmp("chain_unlink_next_done");
-    DefineLabel("chain_unlink_no_next");
-    EmitMovRegMem(X86Register.Rax, -0x08, 8); // RAX = chain_ptr
-    EmitBytes(0x48, 0x89, 0x48, 0x08); // MOV [rax+8], rcx -- chain.tail = prev
-    DefineLabel("chain_unlink_next_done");
+    EmitJmp("managed_list_unlink_next_done");
+    DefineLabel("managed_list_unlink_no_next");
+    EmitMovRegMem(X86Register.Rax, -0x08, 8); // RAX = list_ptr
+    EmitBytes(0x48, 0x89, 0x48, 0x08); // MOV [rax+8], rcx -- list.tail = prev
+    DefineLabel("managed_list_unlink_next_done");
 
-    // Clear node's links: node.next = 0, node.prev = 0, node.chain = 0
+    // Clear node's links: node.next = 0, node.prev = 0, node.list = 0
     EmitMovRegMem(X86Register.Rax, -0x10, 8); // RAX = node_ptr
     EmitMovRegImm(X86Register.Rcx, 0);
     EmitBytes(0x48, 0x89, 0x08); // MOV [rax], rcx -- node.next = 0
     EmitBytes(0x48, 0x89, 0x48, 0x08); // MOV [rax+8], rcx -- node.prev = 0
-    EmitBytes(0x48, 0x89, 0x48, 0x10); // MOV [rax+16], rcx -- node.chain = 0
+    EmitBytes(0x48, 0x89, 0x48, 0x10); // MOV [rax+16], rcx -- node.list = 0
 
-    // chain.count--
-    EmitMovRegMem(X86Register.Rax, -0x08, 8); // RAX = chain_ptr
+    // list.count--
+    EmitMovRegMem(X86Register.Rax, -0x08, 8); // RAX = list_ptr
     EmitBytes(0x48, 0xFF, 0x48, 0x10); // DEC qword [rax+16]
 
-    DefineLabel("chain_unlink_done");
+    DefineLabel("managed_list_unlink_done");
     EmitRuntimeFunctionEnd();
   }
 
   // -------------------------------------------------------------------------
-  // maxon_chain_clear(chain_ptr_rcx) -> void
+  // maxon_managed_list_clear(list_ptr_rcx) -> void
   // Primitive variant: free each node without decref'ing node values.
   // -------------------------------------------------------------------------
-  private void EmitChainClear() => EmitChainClearImpl("maxon_chain_clear", managed: false);
+  private void EmitManagedListClear() => EmitManagedListClearImpl("maxon_managed_list_clear", managed: false);
 
   // -------------------------------------------------------------------------
-  // maxon_chain_clear_managed(chain_ptr_rcx) -> void
+  // maxon_managed_list_clear_managed(list_ptr_rcx) -> void
   // Managed variant: decref each node's heap value before freeing the node.
   // -------------------------------------------------------------------------
-  private void EmitChainClearManaged() => EmitChainClearImpl("maxon_chain_clear_managed", managed: true);
+  private void EmitManagedListClearManaged() => EmitManagedListClearImpl("maxon_managed_list_clear_managed", managed: true);
 
   // -------------------------------------------------------------------------
-  // Shared implementation for chain clear (primitive vs managed).
-  // Walks chain head->next, optionally decrefs node values, frees each node,
-  // then zeros the chain metadata.
-  // Stack: [rbp-8]=chain_ptr, [rbp-40]=current, [rbp-48]=next
+  // Shared implementation for managed list clear (primitive vs managed).
+  // Walks list head->next, optionally decrefs node values, frees each node,
+  // then zeros the list metadata.
+  // Stack: [rbp-8]=list_ptr, [rbp-40]=current, [rbp-48]=next
   // -------------------------------------------------------------------------
-  private void EmitChainClearImpl(string funcName, bool managed) {
+  private void EmitManagedListClearImpl(string funcName, bool managed) {
     EmitRuntimeFunctionStart(funcName, 1, 0x60);
 
-    // current = [chain+0] -- chain.head
-    EmitMovRegMem(X86Register.Rax, -0x08, 8); // RAX = chain_ptr
-    EmitBytes(0x48, 0x8B, 0x00); // MOV rax, [rax] -- chain.head
+    // current = [list+0] -- list.head
+    EmitMovRegMem(X86Register.Rax, -0x08, 8); // RAX = list_ptr
+    EmitBytes(0x48, 0x8B, 0x00); // MOV rax, [rax] -- list.head
     EmitMovMemReg(-0x28, X86Register.Rax, 8); // [rbp-40] = current
 
     DefineLabel($"{funcName}_loop");
@@ -1389,23 +1389,23 @@ public partial class X86CodeEmitter {
     EmitBytes(0x48, 0x8B, 0x48, 0x00); // MOV rcx, [rax+0] -- current.next
     EmitMovMemReg(-0x30, X86Register.Rcx, 8); // [rbp-48] = next
 
-    // Zero node's chain links
+    // Zero node's list links
     EmitMovRegImm(X86Register.Rcx, 0);
     EmitBytes(0x48, 0x89, 0x08); // MOV [rax], rcx -- node.next = 0
     EmitBytes(0x48, 0x89, 0x48, 0x08); // MOV [rax+8], rcx -- node.prev = 0
-    EmitBytes(0x48, 0x89, 0x48, 0x10); // MOV [rax+16], rcx -- node.chain = 0
+    EmitBytes(0x48, 0x89, 0x48, 0x10); // MOV [rax+16], rcx -- node.list = 0
 
     if (managed) {
       // Decref the heap value stored in the node (node+24)
       EmitMovRegMem(X86Register.Rax, -0x28, 8); // RAX = current (user ptr)
       EmitBytes(0x48, 0x8B, 0x48, 0x18); // MOV rcx, [rax+24] -- node.value
-      if (Compiler.MmTrace) EmitLeaRegSymdataRel(X86Register.Rdx, "__mm_scope_chain_clear");
+      if (Compiler.MmTrace) EmitLeaRegSymdataRel(X86Register.Rdx, "__mm_scope_managed_list_clear");
       EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_decref")); EmitDword(0);
     }
 
     // Free the node via mm_decref(user_ptr) -- each node is its own allocation
     EmitMovRegMem(X86Register.Rcx, -0x28, 8); // RCX = current (user ptr)
-    if (Compiler.MmTrace) EmitLeaRegSymdataRel(X86Register.Rdx, "__mm_scope_chain_clear");
+    if (Compiler.MmTrace) EmitLeaRegSymdataRel(X86Register.Rdx, "__mm_scope_managed_list_clear");
     EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_decref")); EmitDword(0);
 
     // current = next
@@ -1415,35 +1415,35 @@ public partial class X86CodeEmitter {
 
     DefineLabel($"{funcName}_loop_done");
 
-    // Zero chain metadata: head = 0, tail = 0, count = 0
-    EmitMovRegMem(X86Register.Rax, -0x08, 8); // RAX = chain_ptr
+    // Zero list metadata: head = 0, tail = 0, count = 0
+    EmitMovRegMem(X86Register.Rax, -0x08, 8); // RAX = list_ptr
     EmitMovRegImm(X86Register.Rcx, 0);
-    EmitBytes(0x48, 0x89, 0x08); // MOV [rax], rcx -- chain.head = 0
-    EmitBytes(0x48, 0x89, 0x48, 0x08); // MOV [rax+8], rcx -- chain.tail = 0
-    EmitBytes(0x48, 0x89, 0x48, 0x10); // MOV [rax+16], rcx -- chain.count = 0
+    EmitBytes(0x48, 0x89, 0x08); // MOV [rax], rcx -- list.head = 0
+    EmitBytes(0x48, 0x89, 0x48, 0x08); // MOV [rax+8], rcx -- list.tail = 0
+    EmitBytes(0x48, 0x89, 0x48, 0x10); // MOV [rax+16], rcx -- list.count = 0
 
     EmitRuntimeFunctionEnd();
   }
 
   // -------------------------------------------------------------------------
-  // maxon_chain_decref_values(chain_ptr_rcx) -> void
-  // Walks chain nodes and decrefs each node's heap value without freeing the
-  // nodes. Used during chain destruction: the nodes themselves will be freed
+  // maxon_managed_list_decref_values(list_ptr_rcx) -> void
+  // Walks managed list nodes and decrefs each node's heap value without freeing
+  // the nodes. Used during list destruction: the nodes themselves will be freed
   // separately, but their values need explicit decref first.
-  // Stack: [rbp-8]=chain_ptr, [rbp-40]=current
+  // Stack: [rbp-8]=list_ptr, [rbp-40]=current
   // -------------------------------------------------------------------------
-  private void EmitChainDecrefValues() {
-    EmitRuntimeFunctionStart("maxon_chain_decref_values", 1, 0x60);
+  private void EmitManagedListDecrefValues() {
+    EmitRuntimeFunctionStart("maxon_managed_list_decref_values", 1, 0x60);
 
-    // current = [chain+0] -- chain.head
-    EmitMovRegMem(X86Register.Rax, -0x08, 8); // RAX = chain_ptr
-    EmitBytes(0x48, 0x8B, 0x00); // MOV rax, [rax] -- chain.head
+    // current = [list+0] -- list.head
+    EmitMovRegMem(X86Register.Rax, -0x08, 8); // RAX = list_ptr
+    EmitBytes(0x48, 0x8B, 0x00); // MOV rax, [rax] -- list.head
     EmitMovMemReg(-0x28, X86Register.Rax, 8); // [rbp-40] = current
 
-    DefineLabel("maxon_chain_decref_values_loop");
+    DefineLabel("maxon_managed_list_decref_values_loop");
     EmitMovRegMem(X86Register.Rax, -0x28, 8); // RAX = current
     EmitBytes(0x48, 0x85, 0xC0); // TEST rax, rax
-    EmitJcc("z", "maxon_chain_decref_values_done");
+    EmitJcc("z", "maxon_managed_list_decref_values_done");
 
     // Save next before any calls: next = [current+0]
     EmitBytes(0x48, 0x8B, 0x48, 0x00); // MOV rcx, [rax+0] -- current.next
@@ -1452,15 +1452,15 @@ public partial class X86CodeEmitter {
     // Decref the heap value stored in the node (node+24)
     EmitMovRegMem(X86Register.Rax, -0x28, 8); // RAX = current (user ptr)
     EmitBytes(0x48, 0x8B, 0x48, 0x18); // MOV rcx, [rax+24] -- node.value
-    if (Compiler.MmTrace) EmitLeaRegSymdataRel(X86Register.Rdx, "__mm_scope_chain_decref_values");
+    if (Compiler.MmTrace) EmitLeaRegSymdataRel(X86Register.Rdx, "__mm_scope_managed_list_decref_values");
     EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_decref")); EmitDword(0);
 
     // current = next
     EmitMovRegMem(X86Register.Rax, -0x30, 8);
     EmitMovMemReg(-0x28, X86Register.Rax, 8);
-    EmitJmp("maxon_chain_decref_values_loop");
+    EmitJmp("maxon_managed_list_decref_values_loop");
 
-    DefineLabel("maxon_chain_decref_values_done");
+    DefineLabel("maxon_managed_list_decref_values_done");
 
     EmitRuntimeFunctionEnd();
   }

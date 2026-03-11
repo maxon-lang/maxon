@@ -1,13 +1,13 @@
 /// Doubly linked list with O(1) insertion and removal at both ends, O(n) indexed access.
-/// Backed by a Chain for efficient node management with automatic memory cleanup.
+/// Backed by a ManagedList for efficient node management with automatic memory cleanup.
 /// @category Collections
 
 export type List uses Element implements InitableFromArrayLiteral with Element, Iterable with Element
   typealias ElementArray = Array with Element
-  typealias EChain = __Chain with Element
-  typealias ENode = __ChainNode with Element
+  typealias EManagedList = __ManagedList with Element
+  typealias ENode = __ManagedListNode with Element
 
-  var chain EChain
+  var chain EManagedList
   var iterIndex Count
 
   // InitableFromArrayLiteral conformance — called by compiler for `List from [1, 2, 3]`
@@ -123,7 +123,7 @@ export type List uses Element implements InitableFromArrayLiteral with Element, 
   end 'createIterator'
 
   /// Get next element in iteration (front to back), throws when exhausted.
-  /// Uses the chain's cursor for O(1) per-step iteration instead of re-walking from head.
+  /// Uses the managed list's cursor for O(1) per-step iteration instead of re-walking from head.
   export function next() returns Element throws IterationError
     if iterIndex >= chain.count() 'done'
       throw IterationError.exhausted

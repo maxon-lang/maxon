@@ -18,10 +18,10 @@ public record TypeAliasInfo(string SourceTypeName, Dictionary<string, MlirType>?
     return typeAliasSources.TryGetValue(typeName, out var info) && info.SourceTypeName == "__ManagedMemory";
   }
 
-  /// Checks if a type name refers to __Chain, either directly or via a type alias.
-  public static bool IsChainType(string typeName, Dictionary<string, TypeAliasInfo> typeAliasSources) {
-    if (typeName == "__Chain") return true;
-    return typeAliasSources.TryGetValue(typeName, out var info) && info.SourceTypeName == "__Chain";
+  /// Checks if a type name refers to __ManagedList, either directly or via a type alias.
+  public static bool IsManagedListType(string typeName, Dictionary<string, TypeAliasInfo> typeAliasSources) {
+    if (typeName == "__ManagedList") return true;
+    return typeAliasSources.TryGetValue(typeName, out var info) && info.SourceTypeName == "__ManagedList";
   }
 
 }

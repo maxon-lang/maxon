@@ -96,7 +96,7 @@ Note: `mm_realloc` is for raw buffers only (no inline header). Managed objects a
 
 ## Destructors
 
-The compiler generates a destructor function for each concrete type that has managed fields. Each destructor decrefs the type's managed fields, triggering a recursive cleanup chain.
+The compiler generates a destructor function for each concrete type that has managed fields. Each destructor decrefs the type's managed fields, triggering a recursive cleanup cascade.
 
 ### Struct Destructor
 
@@ -126,12 +126,12 @@ destructor_Result(ptr):
             if field_ptr != NULL: mm_decref(field_ptr)
 ```
 
-### Chain Destructor
+### ManagedList Destructor
 
-For chains (`__Chain with T`) holding managed elements:
+For managed lists (`__ManagedList with T`) holding managed elements:
 
 ```
-destructor_Chain(ptr):
+destructor_ManagedList(ptr):
     node = load head
     while node != NULL:
         next = load [node + next_offset]
@@ -176,7 +176,7 @@ __ManagedMemory layout (32 bytes):
 | Strings | Yes | Struct (pointer to `__ManagedMemory`) with refcount |
 | Chars | Yes | Heap-allocated with refcounting, like a small string |
 | Arrays (`Array with T`) | Yes | Struct (count + `__ManagedMemory` pointer) with refcount |
-| Chains (`__Chain with T`) | Yes | Doubly-linked list, each node is a separate allocation |
+| ManagedLists (`__ManagedList with T`) | Yes | Doubly-linked list, each node is a separate allocation |
 | Tuples | Yes | Structs with `_0`, `_1`, etc. fields |
 | Unions (with associated values) | Yes | Tagged union with payload |
 | Enums (no associated values) | No | Stored as integers |
