@@ -126,6 +126,11 @@ function lowerArithOp(op ArithOp, dstBlock MlirBlock, valueSlots ValueSlotMap, n
         cmpI64Gt(resultId, leftId, rightId) then return lowerCmpOp(resultId, leftId: leftId, rightId: rightId, x64Op: MaxX64Op.cmpRaxRcx, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
         cmpI64Ge(resultId, leftId, rightId) then return lowerCmpOp(resultId, leftId: leftId, rightId: rightId, x64Op: MaxX64Op.cmpRaxRcx, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
         cmpF64Eq(resultId, leftId, rightId) then return lowerCmpOp(resultId, leftId: leftId, rightId: rightId, x64Op: MaxX64Op.ucomisd, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
+        cmpF64Ne(resultId, leftId, rightId) then return lowerCmpOp(resultId, leftId: leftId, rightId: rightId, x64Op: MaxX64Op.ucomisd, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
+        cmpF64Lt(resultId, leftId, rightId) then return lowerCmpOp(resultId, leftId: leftId, rightId: rightId, x64Op: MaxX64Op.ucomisd, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
+        cmpF64Le(resultId, leftId, rightId) then return lowerCmpOp(resultId, leftId: leftId, rightId: rightId, x64Op: MaxX64Op.ucomisd, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
+        cmpF64Gt(resultId, leftId, rightId) then return lowerCmpOp(resultId, leftId: leftId, rightId: rightId, x64Op: MaxX64Op.ucomisd, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
+        cmpF64Ge(resultId, leftId, rightId) then return lowerCmpOp(resultId, leftId: leftId, rightId: rightId, x64Op: MaxX64Op.ucomisd, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
     end 'lower'
 end 'lowerArithOp'
 
@@ -338,6 +343,11 @@ function lowerCondBr(condId ValueId, thenTarget BlockId, elseTarget BlockId, src
         JumpKind.gt then dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.condJump(X64JumpCondition.le, elseTarget)))
         JumpKind.ge then dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.condJump(X64JumpCondition.l, elseTarget)))
         JumpKind.feq then dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.condJump(X64JumpCondition.ne, elseTarget)))
+        JumpKind.fne then dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.condJump(X64JumpCondition.e, elseTarget)))
+        JumpKind.flt then dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.condJump(X64JumpCondition.ae, elseTarget)))
+        JumpKind.fle then dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.condJump(X64JumpCondition.a, elseTarget)))
+        JumpKind.fgt then dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.condJump(X64JumpCondition.be, elseTarget)))
+        JumpKind.fge then dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.condJump(X64JumpCondition.b, elseTarget)))
         JumpKind.boolTest then lowerBoolTestCondBr(condId, elseTarget: elseTarget, dstBlock: dstBlock, valueSlots: valueSlots)
     end 'emitJump'
     // Unconditional jump to then block

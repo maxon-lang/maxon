@@ -84,7 +84,7 @@ function lowerArithToArm64(aOp ArithOp, dstBlock MlirBlock, valueSlots ValueSlot
         divI64 then tempSlot = emitMaxArm64DivRem(aOp, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: tempSlot, isRem: false)
         remI64 then tempSlot = emitMaxArm64DivRem(aOp, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: tempSlot, isRem: true)
         negI64 to bitNotI64 then tempSlot = emitMaxArm64Unary(aOp, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: tempSlot)
-        andI64 to cmpF64Eq then tempSlot = emitMaxArm64BinaryOp(aOp, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: tempSlot)
+        andI64 to cmpF64Ge then tempSlot = emitMaxArm64BinaryOp(aOp, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: tempSlot)
     end 'checkConst'
     return tempSlot
 end 'lowerArithToArm64'
@@ -127,20 +127,20 @@ function emitMaxArm64DivRem(aOp ArithOp, dstBlock MlirBlock, valueSlots ValueSlo
         divI64(r, _, _) then resultId = r
         remI64(r, _, _) then resultId = r
         constI64 to mulI64 then return nextTempSlot
-        negI64 to cmpF64Eq then return nextTempSlot
+        negI64 to cmpF64Ge then return nextTempSlot
     end 'extract'
     // Extract left/right IDs
     match aOp 'extractIds'
         divI64(_, l, _) then leftId = l
         remI64(_, l, _) then leftId = l
         constI64 to mulI64 then break 'extractIds'
-        negI64 to cmpF64Eq then break 'extractIds'
+        negI64 to cmpF64Ge then break 'extractIds'
     end 'extractIds'
     match aOp 'extractRight'
         divI64(_, _, ri) then rightId = ri
         remI64(_, _, ri) then rightId = ri
         constI64 to mulI64 then break 'extractRight'
-        negI64 to cmpF64Eq then break 'extractRight'
+        negI64 to cmpF64Ge then break 'extractRight'
     end 'extractRight'
 
     let leftSlot = valueSlotMapGet(valueSlots, valueId: leftId)
@@ -166,13 +166,13 @@ function emitMaxArm64Unary(aOp ArithOp, dstBlock MlirBlock, valueSlots ValueSlot
         negI64(r, _) then resultId = r
         bitNotI64(r, _) then resultId = r
         constI64 to remI64 then return nextTempSlot
-        andI64 to cmpF64Eq then return nextTempSlot
+        andI64 to cmpF64Ge then return nextTempSlot
     end 'extractUnary'
     match aOp 'extractOperand'
         negI64(_, o) then operandId = o
         bitNotI64(_, o) then operandId = o
         constI64 to remI64 then break 'extractOperand'
-        andI64 to cmpF64Eq then break 'extractOperand'
+        andI64 to cmpF64Ge then break 'extractOperand'
     end 'extractOperand'
 
     let operandSlot = valueSlotMapGet(valueSlots, valueId: operandId)
@@ -285,6 +285,11 @@ function lowerCondBrToArm64(srcBlock MlirBlock, dstBlock MlirBlock, valueSlots V
         JumpKind.gt then dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.condBranch(MaxArm64CondCode.le, elseTarget)))
         JumpKind.ge then dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.condBranch(MaxArm64CondCode.lt, elseTarget)))
         JumpKind.feq then dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.condBranch(MaxArm64CondCode.ne, elseTarget)))
+        JumpKind.fne then dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.condBranch(MaxArm64CondCode.eq, elseTarget)))
+        JumpKind.flt then dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.condBranch(MaxArm64CondCode.ge, elseTarget)))
+        JumpKind.fle then dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.condBranch(MaxArm64CondCode.gt, elseTarget)))
+        JumpKind.fgt then dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.condBranch(MaxArm64CondCode.le, elseTarget)))
+        JumpKind.fge then dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.condBranch(MaxArm64CondCode.lt, elseTarget)))
         JumpKind.boolTest then emitBoolTestBranch(dstBlock, valueSlots: valueSlots, condId: condId, elseTarget: elseTarget)
     end 'emitJump'
 
@@ -336,6 +341,11 @@ function determineJumpKindFromArith(aOp ArithOp) returns JumpKind
         cmpI64Gt gives JumpKind.gt
         cmpI64Ge gives JumpKind.ge
         cmpF64Eq gives JumpKind.feq
+        cmpF64Ne gives JumpKind.fne
+        cmpF64Lt gives JumpKind.flt
+        cmpF64Le gives JumpKind.fle
+        cmpF64Gt gives JumpKind.fgt
+        cmpF64Ge gives JumpKind.fge
         constI64 to shrI64 gives JumpKind.boolTest
     end 'check'
 end 'determineJumpKindFromArith'
@@ -359,6 +369,11 @@ function maxArm64GetBinaryOpInfo(aOp ArithOp) returns MaxArm64BinaryOpInfo
         cmpI64Gt(resultId, leftId, rightId) then result = MaxArm64BinaryOpInfo{isBinary: true, resultId: resultId, leftId: leftId, rightId: rightId, arm64Op: MaxArm64Op.cmpRegs(MaxArm64Register.x0, MaxArm64Register.x1)}
         cmpI64Ge(resultId, leftId, rightId) then result = MaxArm64BinaryOpInfo{isBinary: true, resultId: resultId, leftId: leftId, rightId: rightId, arm64Op: MaxArm64Op.cmpRegs(MaxArm64Register.x0, MaxArm64Register.x1)}
         cmpF64Eq(resultId, leftId, rightId) then result = MaxArm64BinaryOpInfo{isBinary: true, resultId: resultId, leftId: leftId, rightId: rightId, arm64Op: MaxArm64Op.cmpRegs(MaxArm64Register.x0, MaxArm64Register.x1)}
+        cmpF64Ne(resultId, leftId, rightId) then result = MaxArm64BinaryOpInfo{isBinary: true, resultId: resultId, leftId: leftId, rightId: rightId, arm64Op: MaxArm64Op.cmpRegs(MaxArm64Register.x0, MaxArm64Register.x1)}
+        cmpF64Lt(resultId, leftId, rightId) then result = MaxArm64BinaryOpInfo{isBinary: true, resultId: resultId, leftId: leftId, rightId: rightId, arm64Op: MaxArm64Op.cmpRegs(MaxArm64Register.x0, MaxArm64Register.x1)}
+        cmpF64Le(resultId, leftId, rightId) then result = MaxArm64BinaryOpInfo{isBinary: true, resultId: resultId, leftId: leftId, rightId: rightId, arm64Op: MaxArm64Op.cmpRegs(MaxArm64Register.x0, MaxArm64Register.x1)}
+        cmpF64Gt(resultId, leftId, rightId) then result = MaxArm64BinaryOpInfo{isBinary: true, resultId: resultId, leftId: leftId, rightId: rightId, arm64Op: MaxArm64Op.cmpRegs(MaxArm64Register.x0, MaxArm64Register.x1)}
+        cmpF64Ge(resultId, leftId, rightId) then result = MaxArm64BinaryOpInfo{isBinary: true, resultId: resultId, leftId: leftId, rightId: rightId, arm64Op: MaxArm64Op.cmpRegs(MaxArm64Register.x0, MaxArm64Register.x1)}
         constI64 to constF64 then break 'check'
         divI64 to bitNotI64 then break 'check'
     end 'check'
@@ -371,7 +386,7 @@ function getMaxArm64UnaryOp(aOp ArithOp) returns MaxArm64Op
         negI64 then return MaxArm64Op.negReg(MaxArm64Register.x0, MaxArm64Register.x0)
         bitNotI64 then return MaxArm64Op.mvnReg(MaxArm64Register.x0, MaxArm64Register.x0)
         constI64 to remI64 then break 'check'
-        andI64 to cmpF64Eq then break 'check'
+        andI64 to cmpF64Ge then break 'check'
     end 'check'
     return MaxArm64Op.epilogue
 end 'getMaxArm64UnaryOp'

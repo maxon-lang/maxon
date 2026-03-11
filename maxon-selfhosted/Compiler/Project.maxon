@@ -33,10 +33,6 @@ export type Project
     // Collected diagnostics (errors reported during compilation)
     export var diagnostics DiagnosticArray
 
-    // Block-based CFG parser state: tracks where ops are emitted during parsing
-    export var currentBlock MlirBlock
-    export var currentFunction MlirFunction
-    export var currentModule MlirModule
 end 'Project'
 
 export typealias ProjectArray = Array with Project
@@ -61,9 +57,6 @@ export function createProject(rootPath FilePath, isSingleFile bool, target Targe
         allMidHits: 0, allMidMisses: 0,
         codeHits: 0, codeMisses: 0
     }
-    let emptyBlock = MlirBlock{id: 0, label: ByteArray{}, ops: MlirOpArray{}, terminator: MlirOp.cf(CfOp.br(0)), hasTerminator: false}
-    let emptyFunc = MlirFunction{name: ByteArray{}, returnType: ByteArray{}, paramCount: 0, region: MlirRegion{blocks: MlirBlockArray{}, nextBlockId: 0}}
-    let emptyModule = MlirModule{functions: MlirFunctionArray{}}
     return Project{
         db: db,
         nextValueId_: 0,
@@ -78,10 +71,7 @@ export function createProject(rootPath FilePath, isSingleFile bool, target Targe
         rootPath: rootPath.toString(),
         isSingleFile: isSingleFile,
         target: target,
-        diagnostics: DiagnosticArray{},
-        currentBlock: emptyBlock,
-        currentFunction: emptyFunc,
-        currentModule: emptyModule
+        diagnostics: DiagnosticArray{}
     }
 end 'createProject'
 

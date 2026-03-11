@@ -44,6 +44,14 @@ function lowerOp(op MlirOp, dstBlock MlirBlock)
     end 'dispatch'
 end 'lowerOp'
 
+function lowerCmpOp(dstBlock MlirBlock, isFloat bool, floatOp ArithOp, intOp ArithOp)
+    if isFloat 'f'
+        dstBlock.ops.push(MlirOp.arith(floatOp))
+    end 'f' else 'i'
+        dstBlock.ops.push(MlirOp.arith(intOp))
+    end 'i'
+end 'lowerCmpOp'
+
 function lowerMaxHLOp(hlOp MaxHLOp, dstBlock MlirBlock)
     match hlOp 'lower'
         literal(resultId, value) then dstBlock.ops.push(MlirOp.arith(ArithOp.constI64(resultId, value)))
@@ -63,13 +71,12 @@ function lowerMaxHLOp(hlOp MaxHLOp, dstBlock MlirBlock)
         bitXor(resultId, leftId, rightId) then dstBlock.ops.push(MlirOp.arith(ArithOp.xorI64(resultId, leftId, rightId)))
         shl(resultId, leftId, rightId) then dstBlock.ops.push(MlirOp.arith(ArithOp.shlI64(resultId, leftId, rightId)))
         shr(resultId, leftId, rightId) then dstBlock.ops.push(MlirOp.arith(ArithOp.shrI64(resultId, leftId, rightId)))
-        cmpEq(resultId, leftId, rightId) then dstBlock.ops.push(MlirOp.arith(ArithOp.cmpI64Eq(resultId, leftId, rightId)))
-        cmpNe(resultId, leftId, rightId) then dstBlock.ops.push(MlirOp.arith(ArithOp.cmpI64Ne(resultId, leftId, rightId)))
-        cmpLt(resultId, leftId, rightId) then dstBlock.ops.push(MlirOp.arith(ArithOp.cmpI64Lt(resultId, leftId, rightId)))
-        cmpLe(resultId, leftId, rightId) then dstBlock.ops.push(MlirOp.arith(ArithOp.cmpI64Le(resultId, leftId, rightId)))
-        cmpGt(resultId, leftId, rightId) then dstBlock.ops.push(MlirOp.arith(ArithOp.cmpI64Gt(resultId, leftId, rightId)))
-        cmpGe(resultId, leftId, rightId) then dstBlock.ops.push(MlirOp.arith(ArithOp.cmpI64Ge(resultId, leftId, rightId)))
-        floatCmpEq(resultId, leftId, rightId) then dstBlock.ops.push(MlirOp.arith(ArithOp.cmpF64Eq(resultId, leftId, rightId)))
+        cmpEq(resultId, leftId, rightId, isFloat) then lowerCmpOp(dstBlock, isFloat: isFloat, floatOp: ArithOp.cmpF64Eq(resultId, leftId, rightId), intOp: ArithOp.cmpI64Eq(resultId, leftId, rightId))
+        cmpNe(resultId, leftId, rightId, isFloat) then lowerCmpOp(dstBlock, isFloat: isFloat, floatOp: ArithOp.cmpF64Ne(resultId, leftId, rightId), intOp: ArithOp.cmpI64Ne(resultId, leftId, rightId))
+        cmpLt(resultId, leftId, rightId, isFloat) then lowerCmpOp(dstBlock, isFloat: isFloat, floatOp: ArithOp.cmpF64Lt(resultId, leftId, rightId), intOp: ArithOp.cmpI64Lt(resultId, leftId, rightId))
+        cmpLe(resultId, leftId, rightId, isFloat) then lowerCmpOp(dstBlock, isFloat: isFloat, floatOp: ArithOp.cmpF64Le(resultId, leftId, rightId), intOp: ArithOp.cmpI64Le(resultId, leftId, rightId))
+        cmpGt(resultId, leftId, rightId, isFloat) then lowerCmpOp(dstBlock, isFloat: isFloat, floatOp: ArithOp.cmpF64Gt(resultId, leftId, rightId), intOp: ArithOp.cmpI64Gt(resultId, leftId, rightId))
+        cmpGe(resultId, leftId, rightId, isFloat) then lowerCmpOp(dstBlock, isFloat: isFloat, floatOp: ArithOp.cmpF64Ge(resultId, leftId, rightId), intOp: ArithOp.cmpI64Ge(resultId, leftId, rightId))
         condBr(condId, thenTarget, elseTarget) then dstBlock.ops.push(MlirOp.cf(CfOp.condBr(condId, thenTarget, elseTarget)))
         br(target) then dstBlock.ops.push(MlirOp.cf(CfOp.br(target)))
         call(resultId, callee, argIds) then dstBlock.ops.push(MlirOp.func(FuncOp.call(resultId, callee, argIds)))
@@ -91,7 +98,7 @@ function lowerMaxHLTerminator(hlOp MaxHLOp) returns MlirOp
         condBr(condId, thenTarget, elseTarget) gives MlirOp.cf(CfOp.condBr(condId, thenTarget, elseTarget))
         br(target) gives MlirOp.cf(CfOp.br(target))
         ret(retValId) gives MlirOp.func(FuncOp.ret(retValId))
-        literal to floatCmpEq gives MlirOp.maxhl(hlOp)
+        literal to cmpGe gives MlirOp.maxhl(hlOp)
         call gives MlirOp.maxhl(hlOp)
         printLiteral to printInt gives MlirOp.maxhl(hlOp)
     end 'lower'
