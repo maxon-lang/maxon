@@ -21,6 +21,7 @@ end 'lowerMidToMaxX64'
 
 function lowerFunctionToX64(srcFunc MlirFunction, shadowSpace StackSize) returns MlirFunction
     var dstFunc = createMlirFunction(srcFunc.name, returnType: srcFunc.returnType)
+    dstFunc.paramCount = srcFunc.paramCount
     let stackSize = computeStackSizeForFunc(srcFunc, shadowSpace: shadowSpace, savedRegsSize: 0)
     var nextTempSlot = computeMaxParserSlotInFunc(srcFunc) + 1
     var valueSlots = ValueSlotMap{}
@@ -31,9 +32,10 @@ function lowerFunctionToX64(srcFunc MlirFunction, shadowSpace StackSize) returns
         // Preserve block ID from source so jump targets resolve correctly
         dstBlock.id = srcBlock.id
 
-        // Entry block gets prologue
+        // Entry block gets prologue + parameter saving from ABI registers
         if isFirstBlock 'isEntry'
             dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.prologue(stackSize)))
+            emitParamSaves(dstBlock, paramCount: srcFunc.paramCount)
             isFirstBlock = false
         end 'isEntry'
 
@@ -52,6 +54,32 @@ function lowerFunctionToX64(srcFunc MlirFunction, shadowSpace StackSize) returns
     dstFunc.region.nextBlockId = srcFunc.region.nextBlockId
     return dstFunc
 end 'lowerFunctionToX64'
+
+// Save parameter registers to their stack slots in the function prologue.
+// Uses Maxon's internal calling convention: rcx, rdx, r8, r9, rsi, rdi, rax, rbx
+// (matches the C# bootstrap compiler). Params 9+ come from caller's stack.
+function emitParamSaves(dstBlock MlirBlock, paramCount ParamCount)
+    if paramCount == 0 'noParams'
+        return
+    end 'noParams'
+
+    let regParams = [X64Register.rcx, X64Register.rdx, X64Register.r8, X64Register.r9, X64Register.rsi, X64Register.rdi, X64Register.rax, X64Register.rbx]
+    for (regIdx, reg) in regParams.enumerated() 'regParams'
+        if regIdx >= paramCount 'done'
+            break
+        end 'done'
+        dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.movSlot(regIdx, reg)))
+    end 'regParams'
+
+    // Params 9+ are passed on the stack by the caller at [RBP+16], [RBP+24], etc.
+    var paramIdx = 8
+    while paramIdx < paramCount 'stackParams'
+        let rbpOffset = 16 + (paramIdx - 8) * 8
+        dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.loadRegRbpOffset(X64Register.rax, rbpOffset)))
+        dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.movSlot(paramIdx, X64Register.rax)))
+        paramIdx = paramIdx + 1
+    end 'stackParams'
+end 'emitParamSaves'
 
 // Lower a single mid-level op, pushing one or more MaxX64Ops into dstBlock.
 // Returns the updated nextTempSlot.
@@ -219,16 +247,63 @@ end 'lowerPrintInt'
 // After a call, the return value is in rax — store it to a temp slot so later ops can find it.
 function lowerFuncOp(op FuncOp, dstBlock MlirBlock, valueSlots ValueSlotMap, nextTempSlot SlotIndex) returns SlotIndex
     return match op 'lower'
-        call(resultId, callee) gives lowerCallOp(resultId, callee: callee, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
+        call(resultId, callee, argIds) gives lowerCallOp(resultId, callee: callee, argIds: argIds, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
         ret gives nextTempSlot
     end 'lower'
 end 'lowerFuncOp'
 
-function lowerCallOp(resultId ValueId, callee ByteArray, dstBlock MlirBlock, valueSlots ValueSlotMap, nextTempSlot SlotIndex) returns SlotIndex
+function lowerCallOp(resultId ValueId, callee ByteArray, argIds ValueIdArray, dstBlock MlirBlock, valueSlots ValueSlotMap, nextTempSlot SlotIndex) returns SlotIndex
+    let argCount = argIds.count()
+
+    // Internal calling convention: rcx, rdx, r8, r9, rsi, rdi, rax, rbx
+    // rax/rbx are scratch registers used for stack arg spilling, so load them last.
+    // Args 0-5 (rcx, rdx, r8, r9, rsi, rdi) are safe to load first.
+    let nonScratchRegs = [X64Register.rcx, X64Register.rdx, X64Register.r8, X64Register.r9, X64Register.rsi, X64Register.rdi]
+    for (i, reg) in nonScratchRegs.enumerated() 'loadNonScratch'
+        if i >= argCount 'done'
+            break
+        end 'done'
+        let argSlot = valueSlotMapGet(valueSlots, valueId: try argIds.get(i) otherwise 0)
+        dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.loadSlot(reg, argSlot)))
+    end 'loadNonScratch'
+
+    // Args 9+ go on the stack; rax is used as scratch here, so load it after.
+    let regArgLimit = 8
+    let stackArgCount = argCount - regArgLimit
+    var stackArgBytes = 0
+    if stackArgCount > 0 'needStackSpace'
+        stackArgBytes = (stackArgCount * 8 + 15) and (0 - 16)
+        dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.subRspImm(stackArgBytes)))
+        var stackIdx = regArgLimit
+        while stackIdx < argCount 'pushStackArgs'
+            let argSlotN = valueSlotMapGet(valueSlots, valueId: try argIds.get(stackIdx) otherwise 0)
+            dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.loadSlot(X64Register.rax, argSlotN)))
+            let rspOffset = (stackIdx - regArgLimit) * 8
+            dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.movRspOffsetReg(rspOffset, X64Register.rax)))
+            stackIdx = stackIdx + 1
+        end 'pushStackArgs'
+    end 'needStackSpace'
+
+    // Load args 7-8 (rax, rbx) last since rax is used as scratch above.
+    if argCount >= 7 'arg6'
+        let argSlot6 = valueSlotMapGet(valueSlots, valueId: try argIds.get(6) otherwise 0)
+        dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.loadSlot(X64Register.rax, argSlot6)))
+    end 'arg6'
+    if argCount >= 8 'arg7'
+        let argSlot7 = valueSlotMapGet(valueSlots, valueId: try argIds.get(7) otherwise 0)
+        dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.loadSlot(X64Register.rbx, argSlot7)))
+    end 'arg7'
+
     dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.callDirect(callee)))
+
+    if stackArgBytes > 0 'deallocStack'
+        dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.addRspImm(stackArgBytes)))
+    end 'deallocStack'
+
     let tempSlot = nextTempSlot
     dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.movSlot(tempSlot, X64Register.rax)))
     valueSlotMapSet(valueSlots, valueId: resultId, slot: tempSlot)
+
     return nextTempSlot + 1
 end 'lowerCallOp'
 

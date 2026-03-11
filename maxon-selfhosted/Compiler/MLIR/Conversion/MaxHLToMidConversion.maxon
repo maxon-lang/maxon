@@ -8,6 +8,7 @@ export function lowerMaxHLToMid(module MlirModule) returns MlirModule
 
     for srcFunc in module.functions 'eachFunc'
         var dstFunc = createMlirFunction(srcFunc.name, returnType: srcFunc.returnType)
+        dstFunc.paramCount = srcFunc.paramCount
 
         for srcBlock in srcFunc.region.blocks 'eachBlock'
             var dstBlock = addBlock(dstFunc.region, label: srcBlock.label)
@@ -71,7 +72,7 @@ function lowerMaxHLOp(hlOp MaxHLOp, dstBlock MlirBlock)
         floatCmpEq(resultId, leftId, rightId) then dstBlock.ops.push(MlirOp.arith(ArithOp.cmpF64Eq(resultId, leftId, rightId)))
         condBr(condId, thenTarget, elseTarget) then dstBlock.ops.push(MlirOp.cf(CfOp.condBr(condId, thenTarget, elseTarget)))
         br(target) then dstBlock.ops.push(MlirOp.cf(CfOp.br(target)))
-        call(resultId, callee) then dstBlock.ops.push(MlirOp.func(FuncOp.call(resultId, callee)))
+        call(resultId, callee, argIds) then dstBlock.ops.push(MlirOp.func(FuncOp.call(resultId, callee, argIds)))
         ret(retValId) then dstBlock.ops.push(MlirOp.func(FuncOp.ret(retValId)))
         printLiteral(data) then dstBlock.ops.push(MlirOp.runtime(RuntimeOp.printLiteral(data)))
         printInt(valueId) then dstBlock.ops.push(MlirOp.runtime(RuntimeOp.printInt(valueId)))

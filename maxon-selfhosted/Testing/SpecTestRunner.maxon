@@ -1,7 +1,7 @@
 // Spec test runner for the self-hosted compiler.
 // Parses spec files and compiles tests using the self-hosted compiler.
 
-let whitelist = ["basics", "print-function", "variables"]
+let whitelist = ["basics", "print-function", "variables", "arithmetic"]
 
 typealias TextLineArray = Array with String
 
@@ -311,6 +311,10 @@ export function runAllSpecTests(filter String, target Target) returns ExitCode
     logError(LogCategory.testing, message: "Could not find project root (no specs/ directory found)")
     return 1
   end 'noRoot'
+
+  // Suppress compiler info/debug output during spec tests so only test results are visible
+  setLogLevel(LogLevel.ERROR)
+  setCategoryLogLevel(LogCategory.testing, level: LogLevel.INFO)
 
   var totalPassed = 0
   var totalFailed = 0

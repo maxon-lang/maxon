@@ -17,10 +17,15 @@ function emitPrologue(code ByteArray, stackSize StackSize)
     // push rbp; mov rbp, rsp
     code.append(b"\x55\x48\x89\xe5")
     // sub rsp, stackSize (only if non-zero)
-    if stackSize > 0 'hasSub'
+    if stackSize > 0 and stackSize <= 127 'smallSub'
+        // sub rsp, imm8
         code.append(b"\x48\x83\xec")
         code.push(stackSize and 0xFF)
-    end 'hasSub'
+    end 'smallSub' else if stackSize > 127 'largeSub'
+        // sub rsp, imm32
+        code.append(b"\x48\x81\xec")
+        writeDword(code, value: stackSize)
+    end 'largeSub'
 end 'emitPrologue'
 
 function emitEpilogue(code ByteArray)
@@ -41,34 +46,84 @@ function emitMovRegImm(code ByteArray, value MachineWord)
     end 'large'
 end 'emitMovRegImm'
 
-// Store RAX to stack slot: mov [rbp - (slotIndex+1)*8], rax
-function emitMovSlot(code ByteArray, slotIndex VarSlot)
+// Store a register to a stack slot: mov [rbp - offset], srcReg
+// Uses disp8 (mod=01) for offsets <= 128, disp32 (mod=10) for larger.
+function emitMovSlot(code ByteArray, slotIndex VarSlot, srcReg X64Register)
     let offset = (slotIndex + 1) * 8
-    // mov [rbp - offset], rax  =>  48 89 45 <disp8>
-    code.append(b"\x48\x89\x45")
-    code.push((0 - offset) and 0xFF)
+    let negOffset = 0 - offset
+    if offset <= 128 'useDisp8'
+        match srcReg 'pickReg8'
+            X64Register.rax then code.append(b"\x48\x89\x45")
+            X64Register.rcx then code.append(b"\x48\x89\x4d")
+            X64Register.rdx then code.append(b"\x48\x89\x55")
+            X64Register.rbx then code.append(b"\x48\x89\x5d")
+            X64Register.rsp then code.append(b"\x48\x89\x65")
+            X64Register.rbp then code.append(b"\x48\x89\x6d")
+            X64Register.rsi then code.append(b"\x48\x89\x75")
+            X64Register.rdi then code.append(b"\x48\x89\x7d")
+            X64Register.r8 then code.append(b"\x4c\x89\x45")
+            X64Register.r9 then code.append(b"\x4c\x89\x4d")
+            X64Register.r10 then code.append(b"\x4c\x89\x55")
+            X64Register.r11 then code.append(b"\x4c\x89\x5d")
+        end 'pickReg8'
+        code.push(negOffset and 0xFF)
+    end 'useDisp8' else 'useDisp32'
+        match srcReg 'pickReg32'
+            X64Register.rax then code.append(b"\x48\x89\x85")
+            X64Register.rcx then code.append(b"\x48\x89\x8d")
+            X64Register.rdx then code.append(b"\x48\x89\x95")
+            X64Register.rbx then code.append(b"\x48\x89\x9d")
+            X64Register.rsp then code.append(b"\x48\x89\xa5")
+            X64Register.rbp then code.append(b"\x48\x89\xad")
+            X64Register.rsi then code.append(b"\x48\x89\xb5")
+            X64Register.rdi then code.append(b"\x48\x89\xbd")
+            X64Register.r8 then code.append(b"\x4c\x89\x85")
+            X64Register.r9 then code.append(b"\x4c\x89\x8d")
+            X64Register.r10 then code.append(b"\x4c\x89\x95")
+            X64Register.r11 then code.append(b"\x4c\x89\x9d")
+        end 'pickReg32'
+        writeDword(code, value: negOffset)
+    end 'useDisp32'
 end 'emitMovSlot'
 
 // Load stack slot to a register: mov REG, [rbp - (slotIndex+1)*8]
-// Encoding: REX(0x48 or 0x4C for r8-r11) + 0x8B + ModR/M(mod=01, reg, rm=101/rbp) + disp8
+// Uses disp8 (mod=01) for offsets <= 128, disp32 (mod=10) for larger.
 function emitLoadSlotToReg(code ByteArray, slotIndex VarSlot, dest X64Register)
     let offset = (slotIndex + 1) * 8
-    let disp = (0 - offset) and 0xFF
-    match dest 'pickReg'
-        X64Register.rax then code.append(b"\x48\x8b\x45")
-        X64Register.rcx then code.append(b"\x48\x8b\x4d")
-        X64Register.rdx then code.append(b"\x48\x8b\x55")
-        X64Register.rbx then code.append(b"\x48\x8b\x5d")
-        X64Register.rsp then code.append(b"\x48\x8b\x65")
-        X64Register.rbp then code.append(b"\x48\x8b\x6d")
-        X64Register.rsi then code.append(b"\x48\x8b\x75")
-        X64Register.rdi then code.append(b"\x48\x8b\x7d")
-        X64Register.r8 then code.append(b"\x4c\x8b\x45")
-        X64Register.r9 then code.append(b"\x4c\x8b\x4d")
-        X64Register.r10 then code.append(b"\x4c\x8b\x55")
-        X64Register.r11 then code.append(b"\x4c\x8b\x5d")
-    end 'pickReg'
-    code.push(disp)
+    let negOffset = 0 - offset
+    if offset <= 128 'useDisp8'
+        match dest 'pickReg8'
+            X64Register.rax then code.append(b"\x48\x8b\x45")
+            X64Register.rcx then code.append(b"\x48\x8b\x4d")
+            X64Register.rdx then code.append(b"\x48\x8b\x55")
+            X64Register.rbx then code.append(b"\x48\x8b\x5d")
+            X64Register.rsp then code.append(b"\x48\x8b\x65")
+            X64Register.rbp then code.append(b"\x48\x8b\x6d")
+            X64Register.rsi then code.append(b"\x48\x8b\x75")
+            X64Register.rdi then code.append(b"\x48\x8b\x7d")
+            X64Register.r8 then code.append(b"\x4c\x8b\x45")
+            X64Register.r9 then code.append(b"\x4c\x8b\x4d")
+            X64Register.r10 then code.append(b"\x4c\x8b\x55")
+            X64Register.r11 then code.append(b"\x4c\x8b\x5d")
+        end 'pickReg8'
+        code.push(negOffset and 0xFF)
+    end 'useDisp8' else 'useDisp32'
+        match dest 'pickReg32'
+            X64Register.rax then code.append(b"\x48\x8b\x85")
+            X64Register.rcx then code.append(b"\x48\x8b\x8d")
+            X64Register.rdx then code.append(b"\x48\x8b\x95")
+            X64Register.rbx then code.append(b"\x48\x8b\x9d")
+            X64Register.rsp then code.append(b"\x48\x8b\xa5")
+            X64Register.rbp then code.append(b"\x48\x8b\xad")
+            X64Register.rsi then code.append(b"\x48\x8b\xb5")
+            X64Register.rdi then code.append(b"\x48\x8b\xbd")
+            X64Register.r8 then code.append(b"\x4c\x8b\x85")
+            X64Register.r9 then code.append(b"\x4c\x8b\x8d")
+            X64Register.r10 then code.append(b"\x4c\x8b\x95")
+            X64Register.r11 then code.append(b"\x4c\x8b\x9d")
+        end 'pickReg32'
+        writeDword(code, value: negOffset)
+    end 'useDisp32'
 end 'emitLoadSlotToReg'
 
 function emitAddRegReg(code ByteArray)
@@ -398,6 +453,73 @@ function emitX86WriteStdoutWinApi(code ByteArray, relocations RelocationArray, g
     code.append(b"\x48\x89\xec\x5d\xc3")
 end 'emitX86WriteStdoutWinApi'
 
+// --- Stack argument passing helpers ---
+
+function emitSubRspImm(code ByteArray, value StackSize)
+    if value <= 127 'small'
+        // sub rsp, imm8
+        code.append(b"\x48\x83\xec")
+        code.push(value and 0xFF)
+    end 'small' else 'large'
+        // sub rsp, imm32
+        code.append(b"\x48\x81\xec")
+        writeDword(code, value: value)
+    end 'large'
+end 'emitSubRspImm'
+
+function emitAddRspImm(code ByteArray, value StackSize)
+    if value <= 127 'small'
+        // add rsp, imm8
+        code.append(b"\x48\x83\xc4")
+        code.push(value and 0xFF)
+    end 'small' else 'large'
+        // add rsp, imm32
+        code.append(b"\x48\x81\xc4")
+        writeDword(code, value: value)
+    end 'large'
+end 'emitAddRspImm'
+
+// mov [rsp+offset], srcReg
+function emitMovRspOffsetReg(code ByteArray, offset StackSize, srcReg X64Register)
+    // REX + 0x89 + ModR/M(mod=01, reg=source, rm=100/SIB) + SIB(ss=00,idx=100/none,base=100/rsp) + disp8
+    let disp = offset and 0xFF
+    match srcReg 'pickReg'
+        X64Register.rax then code.append(b"\x48\x89\x44\x24")
+        X64Register.rcx then code.append(b"\x48\x89\x4c\x24")
+        X64Register.rdx then code.append(b"\x48\x89\x54\x24")
+        X64Register.rbx then code.append(b"\x48\x89\x5c\x24")
+        X64Register.rsp then code.append(b"\x48\x89\x64\x24")
+        X64Register.rbp then code.append(b"\x48\x89\x6c\x24")
+        X64Register.rsi then code.append(b"\x48\x89\x74\x24")
+        X64Register.rdi then code.append(b"\x48\x89\x7c\x24")
+        X64Register.r8 then code.append(b"\x4c\x89\x44\x24")
+        X64Register.r9 then code.append(b"\x4c\x89\x4c\x24")
+        X64Register.r10 then code.append(b"\x4c\x89\x54\x24")
+        X64Register.r11 then code.append(b"\x4c\x89\x5c\x24")
+    end 'pickReg'
+    code.push(disp)
+end 'emitMovRspOffsetReg'
+
+// mov destReg, [rbp+offset] (positive offset, for loading caller-passed stack args)
+function emitLoadRegRbpOffset(code ByteArray, destReg X64Register, offset StackSize)
+    let disp = offset and 0xFF
+    match destReg 'pickReg'
+        X64Register.rax then code.append(b"\x48\x8b\x45")
+        X64Register.rcx then code.append(b"\x48\x8b\x4d")
+        X64Register.rdx then code.append(b"\x48\x8b\x55")
+        X64Register.rbx then code.append(b"\x48\x8b\x5d")
+        X64Register.rsp then code.append(b"\x48\x8b\x65")
+        X64Register.rbp then code.append(b"\x48\x8b\x6d")
+        X64Register.rsi then code.append(b"\x48\x8b\x75")
+        X64Register.rdi then code.append(b"\x48\x8b\x7d")
+        X64Register.r8 then code.append(b"\x4c\x8b\x45")
+        X64Register.r9 then code.append(b"\x4c\x8b\x4d")
+        X64Register.r10 then code.append(b"\x4c\x8b\x55")
+        X64Register.r11 then code.append(b"\x4c\x8b\x5d")
+    end 'pickReg'
+    code.push(disp)
+end 'emitLoadRegRbpOffset'
+
 // --- Call fixup resolution (inter-function) ---
 
 // Emit call rel32 placeholder -- resolved after all functions are emitted.
@@ -511,7 +633,7 @@ function emitMaxX64Op(op MaxX64Op, code ByteArray, blockFixups BlockJumpFixupArr
         prologue(stackSize) then emitPrologue(code, stackSize: stackSize)
         MaxX64Op.epilogue then emitEpilogue(code)
         movRegImm(_, value) then emitMovRegImm(code, value: value)
-        movSlot(slotIndex, _) then emitMovSlot(code, slotIndex: slotIndex)
+        movSlot(slotIndex, srcReg) then emitMovSlot(code, slotIndex: slotIndex, srcReg: srcReg)
         loadSlot(destReg, slotIndex) then emitLoadSlotToReg(code, slotIndex: slotIndex, dest: destReg)
         addRegReg then emitAddRegReg(code)
         subRegReg then emitSubRegReg(code)
@@ -529,12 +651,16 @@ function emitMaxX64Op(op MaxX64Op, code ByteArray, blockFixups BlockJumpFixupArr
         MaxX64Op.testRaxRax then emitTestRaxRax(code)
         condJump(condition, targetBlock) then emitCondJumpBlock(code, blockFixups: blockFixups, opcode: conditionToOpcode(condition), targetBlock: targetBlock)
         jmp(targetBlock) then emitJmpBlock(code, blockFixups: blockFixups, targetBlock: targetBlock)
-        movF64Slot(slotIndex) then emitMovSlot(code, slotIndex: slotIndex)
+        movF64Slot(slotIndex) then emitMovSlot(code, slotIndex: slotIndex, srcReg: X64Register.rax)
         loadF64Slot(slotIndex) then emitLoadSlotToReg(code, slotIndex: slotIndex, dest: X64Register.rax)
         movF64Rdata(rdataOffset) then emitMovRegImm(code, value: rdataOffset)
         MaxX64Op.ucomisd then emitUcomisd(code)
         printLiteral(data) then emitPrintLiteral(code, data: data, writeStdoutOffset: writeStdoutOff)
         MaxX64Op.printInt then emitPrintInt(code, writeStdoutOffset: writeStdoutOff, i64ToStringOffset: i64ToStringOff)
+        subRspImm(value) then emitSubRspImm(code, value: value)
+        addRspImm(value) then emitAddRspImm(code, value: value)
+        movRspOffsetReg(offset, srcReg) then emitMovRspOffsetReg(code, offset: offset, srcReg: srcReg)
+        loadRegRbpOffset(destReg, offset) then emitLoadRegRbpOffset(code, destReg: destReg, offset: offset)
         callDirect(target) then emitCallFixup(code, callFixups: callFixups, target: target)
     end 'emit'
 end 'emitMaxX64Op'

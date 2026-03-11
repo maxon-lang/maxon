@@ -17,6 +17,7 @@ export function lowerMidToMaxArm64(module MlirModule, target Target) returns Mli
 
     for srcFunc in module.functions 'eachFunc'
         var dstFunc = createMlirFunction(srcFunc.name, returnType: srcFunc.returnType)
+        dstFunc.paramCount = srcFunc.paramCount
 
         // Compute stack size and max parser slot across all blocks in this function
         let stackSize = computeStackSizeForFunc(srcFunc, shadowSpace: 0, savedRegsSize: 16)
@@ -208,11 +209,33 @@ end 'emitMaxArm64LoadSlot'
 function lowerFuncOpToArm64(fOp FuncOp, dstBlock MlirBlock, valueSlots ValueSlotMap, nextTempSlot SlotIndex) returns SlotIndex
     return match fOp 'lower'
         ret gives nextTempSlot
-        call(resultId, callee) gives lowerCallOpToArm64(resultId, callee: callee, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
+        call(resultId, callee, argIds) gives lowerCallOpToArm64(resultId, callee: callee, argIds: argIds, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
     end 'lower'
 end 'lowerFuncOpToArm64'
 
-function lowerCallOpToArm64(resultId ValueId, callee ByteArray, dstBlock MlirBlock, valueSlots ValueSlotMap, nextTempSlot SlotIndex) returns SlotIndex
+function lowerCallOpToArm64(resultId ValueId, callee ByteArray, argIds ValueIdArray, dstBlock MlirBlock, valueSlots ValueSlotMap, nextTempSlot SlotIndex) returns SlotIndex
+    // AAPCS64: first 4 integer args in x0-x3 (stack args not yet implemented)
+    let argCount = argIds.count()
+    if argCount > 4 'tooManyArgs'
+        logError(LogCategory.codegen, message: "ARM64 backend does not yet support more than 4 function arguments (got {argCount})")
+    end 'tooManyArgs'
+    if argCount >= 1 'arg0'
+        let argSlot0 = valueSlotMapGet(valueSlots, valueId: try argIds.get(0) otherwise 0)
+        dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.ldrFromSlot(MaxArm64Register.x0, argSlot0)))
+    end 'arg0'
+    if argCount >= 2 'arg1'
+        let argSlot1 = valueSlotMapGet(valueSlots, valueId: try argIds.get(1) otherwise 0)
+        dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.ldrFromSlot(MaxArm64Register.x1, argSlot1)))
+    end 'arg1'
+    if argCount >= 3 'arg2'
+        let argSlot2 = valueSlotMapGet(valueSlots, valueId: try argIds.get(2) otherwise 0)
+        dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.ldrFromSlot(MaxArm64Register.x2, argSlot2)))
+    end 'arg2'
+    if argCount >= 4 'arg3'
+        let argSlot3 = valueSlotMapGet(valueSlots, valueId: try argIds.get(3) otherwise 0)
+        dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.ldrFromSlot(MaxArm64Register.x3, argSlot3)))
+    end 'arg3'
+
     dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.branchLink(callee)))
     let tempSlot = nextTempSlot
     dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.strToSlot(tempSlot, MaxArm64Register.x0)))

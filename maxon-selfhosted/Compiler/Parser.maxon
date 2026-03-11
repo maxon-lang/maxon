@@ -22,35 +22,30 @@ export function parse(project Project, tokens TokenArray, filePath String) retur
     logDebug(LogCategory.parser, message: "Starting parser")
 
     var pos = 0
-    // Reset block → function → module (children before parents) to prevent
-    // use-after-free when parse is called multiple times. The old module owns
-    // old functions which own old blocks; if we freed the module first, its
-    // cascade would double-free blocks/functions still held by project fields.
-    let dummyBlock = createMlirBlock(0, label: b"")
-    let dummyFunc = createMlirFunction(b"", returnType: ByteArray{})
-    project.currentBlock = dummyBlock
-    project.currentFunction = dummyFunc
+    project.currentBlock = createMlirBlock(0, label: b"")
+    project.currentFunction = createMlirFunction(b"", returnType: ByteArray{})
     project.currentModule = createMlirModule()
     pos = skipNewlines(tokens, startPos: pos)
 
     while pos < tokens.count() 'parseLoop'
         let token = tokenAt(tokens, pos: pos)
-        if token.kind == TokenKind.eof 'isEof'
-            break
-        end 'isEof'
-        if token.kind == TokenKind.function 'isFunction'
-            let prevPos = pos
-            pos = parseFunction(project, tokens: tokens, startPos: pos, filePath: filePath)
-            if pos <= prevPos 'stuck'
-                pos = prevPos + 1
-            end 'stuck'
-        end 'isFunction' else 'notFunction'
-            if token.kind == TokenKind.let 'isTopLet'
-                pos = parseTopLevelLet(project, tokens: tokens, startPos: pos, filePath: filePath)
-            end 'isTopLet' else 'notTopLet'
-                pos = pos + 1
-            end 'notTopLet'
-        end 'notFunction'
+        let prevPos = pos
+
+        match token.kind 'dispatch'
+          TokenKind.eof then break 'parseLoop'
+          TokenKind.function then pos = parseFunction(project, tokens: tokens, startPos: pos, filePath: filePath)
+          TokenKind.let then pos = parseTopLevelLet(project, tokens: tokens, startPos: pos, filePath: filePath)
+          TokenKind.typealias then pos = skipToNextLine(tokens, startPos: pos)
+          TokenKind.export then pos = parseExport(tokens, startPos: pos)
+          TokenKind.if to TokenKind.newline then break
+          // temporary
+          TokenKind.print then break
+        end 'dispatch'
+
+        if pos <= prevPos 'stuck'
+             pos = prevPos + 1
+        end 'stuck'
+
         pos = skipNewlines(tokens, startPos: pos)
     end 'parseLoop'
 
@@ -108,8 +103,32 @@ function parseFunction(project Project, tokens TokenArray, startPos TokenIndex, 
     logTrace(LogCategory.parser, message: "Parsing function '{String.from(nameToken.value)}'")
     pos = pos + 1
 
-    // Expect '(' ')'
+    // Parse parameter list
     pos = pos + 1  // skip '('
+
+    // Create function early so we can set paramCount, but defer symbol table setup
+    resetValueIds(project)
+    resetSymbolTable(project)
+
+    var paramCount = 0
+    let firstParamToken = tokenAt(tokens, pos: pos)
+    if firstParamToken.kind != TokenKind.rightParen 'hasParams'
+        // Parse parameters: name Type, name Type, ...
+        while pos < tokens.count() 'paramLoop'
+            let paramNameToken = tokenAt(tokens, pos: pos)
+            pos = pos + 1  // skip param name
+            pos = pos + 1  // skip param type
+
+            // Define the parameter as a variable so it's accessible in the body
+            let _ = defineVariable(project, name: paramNameToken.value, isFloat: false)
+            paramCount = paramCount + 1
+
+            let nextParamTok = tokenAt(tokens, pos: pos)
+            if nextParamTok.kind == TokenKind.rightParen 'endParams'
+                break
+            end 'endParams'
+        end 'paramLoop'
+    end 'hasParams'
     pos = pos + 1  // skip ')'
 
     // Parse 'returns' type
@@ -122,15 +141,20 @@ function parseFunction(project Project, tokens TokenArray, startPos TokenIndex, 
         pos = pos + 1  // skip type name
     end 'hasReturns'
 
+    // Handle optional 'throws' clause by skipping it
+    let throwsToken = tokenAt(tokens, pos: pos)
+    if throwsToken.kind == TokenKind.throws 'hasThrows'
+        pos = pos + 1  // skip 'throws'
+        pos = pos + 1  // skip error type
+    end 'hasThrows'
+
     pos = skipNewlines(tokens, startPos: pos)
 
     // Create function and entry block
     project.currentFunction = createMlirFunction(nameToken.value, returnType: returnTypeName)
+    project.currentFunction.paramCount = paramCount
     let entryBlock = newBlock(project, label: b"entry")
     switchToBlock(project, block: entryBlock)
-
-    resetValueIds(project)
-    resetSymbolTable(project)
 
     // Parse function body
     var bodyReturns = false
@@ -186,7 +210,11 @@ function parseStatements(project Project, tokens TokenArray, startPos TokenIndex
             let peekAssign = tokenAt(tokens, pos: pos + 1)
             if peekAssign.kind == TokenKind.equals 'isAssign'
                 pos = parseVarAssignment(project, tokens: tokens, startPos: pos, filePath: filePath)
-            end 'isAssign' else 'notAssign'
+            end 'isAssign' else if peekAssign.kind == TokenKind.leftParen 'isCallStmt'
+                // Statement-level function call — parse as expression, discard result
+                let callResult = parseExpression(project, tokens: tokens, startPos: pos, filePath: filePath)
+                pos = callResult.nextPos
+            end 'isCallStmt' else 'notAssign'
                 reportCompileError(project, code: ErrorCode.parserExpectedToken, message: "Unexpected token '{tokenValueToString(stmtToken.value)}' in statement position", line: stmtToken.line, column: stmtToken.column, filePath: filePath)
                 pos = synchronizeToNextStatement(tokens, startPos: pos)
                 continue
@@ -231,6 +259,18 @@ function parseTopLevelLet(project Project, tokens TokenArray, startPos TokenInde
 
     return pos
 end 'parseTopLevelLet'
+
+function parseExport(tokens TokenArray, startPos TokenIndex) returns TokenIndex
+  // Skip export prefix — check what follows
+  let afterExport = tokenAt(tokens, pos: startPos + 1)
+
+  if afterExport.kind == TokenKind.function 'isExportFunc'
+    return startPos + 1
+  end 'isExportFunc' else 'isExportOther'
+    // Skip export typealias/type declarations
+    return skipToNextLine(tokens, startPos: startPos)
+  end 'isExportOther'
+end 'parseExport'
 
 function parseReturnStatement(project Project, tokens TokenArray, startPos TokenIndex, filePath String) returns TokenIndex
     var pos = startPos + 1  // skip 'return'
@@ -725,9 +765,41 @@ end 'parseUnary'
 function parseIdentifierExpr(project Project, tokens TokenArray, startPos TokenIndex, token Token, filePath String) returns ExprResult
     let peekToken = tokenAt(tokens, pos: startPos + 1)
     if peekToken.kind == TokenKind.leftParen 'isCall'
+        var pos = startPos + 2  // skip name and '('
+        var argIds = ValueIdArray{}
+
+        // Parse arguments until ')'
+        let firstArgToken = tokenAt(tokens, pos: pos)
+        if firstArgToken.kind != TokenKind.rightParen 'hasArgs'
+            while pos < tokens.count() 'argLoop'
+                // Skip labeled argument names (e.g., "b:" in "b: 2")
+                let maybeLabel = tokenAt(tokens, pos: pos)
+                let afterLabel = tokenAt(tokens, pos: pos + 1)
+                if maybeLabel.kind == TokenKind.identifier and afterLabel.kind == TokenKind.colon 'isLabel'
+                    pos = pos + 2  // skip "name:"
+                end 'isLabel'
+
+                let argResult = parseExpression(project, tokens: tokens, startPos: pos, filePath: filePath)
+                argIds.push(argResult.valueId)
+                pos = argResult.nextPos
+
+                let nextTok = tokenAt(tokens, pos: pos)
+                if nextTok.kind == TokenKind.rightParen 'endArgs'
+                    break
+                end 'endArgs'
+            end 'argLoop'
+        end 'hasArgs'
+        pos = pos + 1  // skip ')'
+
+        // trunc() is a no-op on integers — integer division already truncates
+        if token.value == b"trunc" 'isTrunc'
+            let truncArgId = try argIds.get(0) otherwise 0
+            return ExprResult{valueId: truncArgId, nextPos: pos, isFloat: false, isStringConst: false, stringConstValue: ByteArray{}}
+        end 'isTrunc'
+
         let callId = nextValueId(project)
-        emitOp(project, op: MlirOp.maxhl(MaxHLOp.call(callId, token.value)))
-        return ExprResult{valueId: callId, nextPos: startPos + 3, isFloat: false, isStringConst: false, stringConstValue: ByteArray{}}
+        emitOp(project, op: MlirOp.maxhl(MaxHLOp.call(callId, token.value, argIds)))
+        return ExprResult{valueId: callId, nextPos: pos, isFloat: false, isStringConst: false, stringConstValue: ByteArray{}}
     end 'isCall'
     // Check for compile-time string constant before variable lookup
     let strConst = lookupStringConst(project, name: token.value)
@@ -799,6 +871,19 @@ function parseParenExpr(project Project, tokens TokenArray, startPos TokenIndex,
 end 'parseParenExpr'
 
 // --- Helpers ---
+
+// Advance past all tokens on the current line until a newline or EOF is reached.
+function skipToNextLine(tokens TokenArray, startPos TokenIndex) returns TokenIndex
+    var pos = startPos
+    while pos < tokens.count() 'skip'
+        let token = tokenAt(tokens, pos: pos)
+        if token.kind == TokenKind.newline or token.kind == TokenKind.eof 'atEnd'
+            return pos
+        end 'atEnd'
+        pos = pos + 1
+    end 'skip'
+    return pos
+end 'skipToNextLine'
 
 function skipNewlines(tokens TokenArray, startPos TokenIndex) returns TokenIndex
     var pos = startPos

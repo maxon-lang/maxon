@@ -79,14 +79,23 @@ export function computeMaxParserSlotInFunc(func MlirFunction) returns SlotIndex
     return maxSlot
 end 'computeMaxParserSlotInFunc'
 
-// Check if an MlirOp is an arith op that produces a temp result slot.
+// Check if an MlirOp produces a temp result slot during x86/arm64 lowering.
 function isTempProducingOp(op MlirOp) returns bool
     return match op 'check'
         maxhl gives false
         arith gives true
-        cf to maxarm64 gives false
+        cf gives false
+        func(funcOp) gives isFuncCallOp(funcOp)
+        memref to maxarm64 gives false
     end 'check'
 end 'isTempProducingOp'
+
+function isFuncCallOp(op FuncOp) returns bool
+    return match op 'check'
+        call gives true
+        ret gives false
+    end 'check'
+end 'isFuncCallOp'
 
 // Check if an MlirOp is a print operation (needs stack buffer).
 function isPrintOp(op MlirOp) returns bool
