@@ -33,7 +33,7 @@ var y = Age{someExpression}         // runtime range check (panics on violation)
 
 Storage in arrays and globals uses the smallest fitting integer width (u8/i8, u16/i16, u32/i32, or i64). All arithmetic uses 64-bit operations regardless of storage type.
 
-Standard library aliases: `Count`, `Index`, `ExitCode`, `Offset`, `HashValue`, `Codepoint`, `MathValue`
+Standard library aliases: `Count`, `Index`, `ExitCode`, `Offset`, `HashValue`, `Codepoint`, `MathValue`, `NetworkPort`
 
 ## Literals
 
@@ -710,6 +710,25 @@ list.clear()                         // remove all
 
 for item in list 'loop' ... end 'loop'  // iteration (Iterable)
 ```
+
+### Networking (TcpClient)
+```maxon
+typealias NetworkPort = int(1 to 65535)
+
+// Connect
+let client = try TcpClient.connect("host", port: 4242)
+
+// Send (returns Count of bytes sent)
+let _ = try client.send("Hello\n")
+
+// Receive (up to bufferSize bytes)
+let response = try client.recv(1024)
+
+// Close (idempotent, auto-closes on scope exit)
+client.close()
+```
+
+`NetworkError` union: `resolveFailed`, `connectFailed`, `sendFailed`, `recvFailed`, `connectionClosed`
 
 ### Character
 ```maxon

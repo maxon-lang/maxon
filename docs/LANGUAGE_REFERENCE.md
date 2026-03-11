@@ -36,6 +36,7 @@ This reference provides complete syntax and semantics for the Maxon programming 
     - [Unicode](#unicode)
     - [String Trimming](#string-trimming)
     - [List](#list)
+    - [Networking (TcpClient)](#networking-tcpclient)
 13. [Build System](#build-system)
 14. [Memory Model](#memory-model)
     - [Reference-by-Default Assignment](#reference-by-default-assignment)
@@ -3154,6 +3155,88 @@ end 'loop'
 | `get`, `insert`, `remove(at:)` | O(n) |
 | `first`, `last`, `count`, `isEmpty` | O(1) |
 | iteration (for-in) | O(n) total |
+
+### Networking (TcpClient)
+
+`TcpClient` provides TCP client networking with automatic resource cleanup. It is defined in `stdlib/TcpClient.maxon`. The socket is backed by `__ManagedSocket`, a builtin type whose destructor closes the file descriptor when the last reference goes out of scope.
+
+**NetworkPort Alias**
+
+The `NetworkPort` type alias constrains port numbers to the valid TCP range:
+```maxon
+typealias NetworkPort = int(1 to 65535)
+```
+
+**NetworkError**
+
+All networking operations throw `NetworkError`, a union conforming to `Error`:
+```maxon
+union NetworkError implements Error
+    resolveFailed       // DNS lookup failed
+    connectFailed       // TCP connection refused or timed out
+    sendFailed          // OS-level send error
+    recvFailed          // OS-level recv error
+    connectionClosed    // peer closed the connection
+end 'NetworkError'
+```
+
+**Connecting**
+
+`TcpClient.connect` resolves the hostname, creates a TCP socket, and connects:
+```maxon
+let client = try TcpClient.connect("example.com", port: 4242)
+```
+
+**Sending Data**
+
+`send` transmits all bytes of a string, looping internally to handle partial sends. It returns the total number of bytes sent:
+```maxon
+let bytesSent = try client.send("Hello\n")
+```
+
+**Receiving Data**
+
+`recv` reads up to `bufferSize` bytes from the connection and returns them as a `String`:
+```maxon
+let response = try client.recv(1024)
+```
+
+**Closing**
+
+`close` is idempotent and safe to call multiple times. The socket also closes automatically when the `TcpClient` goes out of scope:
+```maxon
+client.close()
+```
+
+**API Summary**
+
+| Method | Returns | Throws | Description |
+|--------|---------|--------|-------------|
+| `TcpClient.connect(host String, port NetworkPort)` | `TcpClient` | `NetworkError` | Connect to a TCP server |
+| `send(data String)` | `Count` | `NetworkError` | Send all bytes of a string |
+| `recv(bufferSize Count)` | `String` | `NetworkError` | Receive up to bufferSize bytes |
+| `close()` | — | — | Close the connection (idempotent) |
+
+**Example: Simple TCP Client**
+```maxon
+function main() returns ExitCode
+    let client = try TcpClient.connect("localhost", port: 8080) otherwise 'err'
+        print("connection failed")
+        return 1
+    end 'err'
+    let _ = try client.send("GET / HTTP/1.0\r\n\r\n") otherwise 'err'
+        print("send failed")
+        return 1
+    end 'err'
+    let response = try client.recv(4096) otherwise 'err'
+        print("recv failed")
+        return 1
+    end 'err'
+    print(response)
+    client.close()
+    return 0
+end 'main'
+```
 
 ---
 

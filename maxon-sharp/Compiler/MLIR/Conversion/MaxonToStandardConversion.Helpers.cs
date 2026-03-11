@@ -294,6 +294,9 @@ public static partial class MaxonToStandardConversion {
 
     if (typeDef is not MlirStructType structType) return null;
 
+    // __ManagedSocket has a hand-written runtime destructor that calls closesocket
+    if (typeName == "__ManagedSocket") return "__destruct___ManagedSocket";
+
     // __ManagedMemory types need a destructor to free their raw buffer
     if (_resultModule?.TypeAliasSources is { } aliasSources
         && TypeAliasInfo.IsManagedMemoryType(typeName, aliasSources))

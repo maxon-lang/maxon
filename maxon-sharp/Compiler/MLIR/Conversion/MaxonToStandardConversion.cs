@@ -755,6 +755,10 @@ public static partial class MaxonToStandardConversion {
                   var mappedVal = valueMap[fieldVal];
                   var litFieldStoreType = field.Type is MlirStructType ? MlirType.I64 : field.Type;
                   EmitStructFieldStore(newBlock, mappedVal, tempName, field.Offset, litFieldStoreType, varTypes);
+                  // If the field is heap-allocated but the value wasn't tracked as a StdHeapPtr
+                  // (e.g. runtime call results), we still need to incref
+                  if (field.Type.IsHeapAllocated && mappedVal is StdI64 stdI64)
+                    EmitIncrefValue(newBlock, stdI64, scopeName: func.Name);
                 }
               }
 
@@ -1999,6 +2003,9 @@ public static partial class MaxonToStandardConversion {
     if (_destructorRequests.ContainsKey(typeName)) return;
 
     if (!typeDefs.TryGetValue(typeName, out var typeDef)) return;
+
+    // __ManagedSocket has a hand-written runtime destructor — skip synthesis
+    if (typeName == "__ManagedSocket") return;
 
     if (typeDef is MlirStructType structType) {
       var resolved = ResolveStructType(structType, typeDefs);

@@ -1,0 +1,78 @@
+/// TCP client networking with automatic resource cleanup.
+/// @category System
+
+typealias NetworkPort = int(1 to 65535)
+
+/// TCP networking errors
+export union NetworkError implements Error
+  resolveFailed
+  connectFailed
+  sendFailed
+  recvFailed
+  connectionClosed
+end 'NetworkError'
+
+/// TCP client connection. Automatically closes when it goes out of scope.
+export type TcpClient
+  var _socket __ManagedSocket
+
+  /// Connect to a TCP server by hostname and port.
+  /// Resolves the hostname, creates a TCP socket, and connects.
+  /// The returned TcpClient auto-closes when it goes out of scope.
+  export static function connect(host String, port NetworkPort) returns TcpClient throws NetworkError
+    let result = __ManagedSocket.tcpConnect(host.managed, port)
+    if result == -1 'resolve_failed'
+      throw NetworkError.resolveFailed
+    end 'resolve_failed'
+    if result < 0 'connect_failed'
+      throw NetworkError.connectFailed
+    end 'connect_failed'
+    return TcpClient{_socket: result}
+  end 'connect'
+
+  /// Send all bytes of a string over this connection.
+  /// Loops internally to handle partial sends.
+  /// Returns the total number of bytes sent.
+  export function send(data String) returns Count throws NetworkError
+    var totalSent = 0
+    var remaining = data.managed.length()
+    while remaining > 0 'send_loop'
+      let sent = _socket.sendFrom(data.managed, totalSent, remaining)
+      if sent < 0 'failed'
+        throw NetworkError.sendFailed
+      end 'failed'
+      if sent == 0 'closed'
+        throw NetworkError.connectionClosed
+      end 'closed'
+      totalSent = totalSent + sent
+      remaining = remaining - sent
+    end 'send_loop'
+    return totalSent
+  end 'send'
+
+  /// Receive data as a string (up to bufferSize bytes).
+  /// Returns the received data. Throws connectionClosed if the peer closed.
+  export function recv(bufferSize Count) returns String throws NetworkError
+    var managed = __ManagedMemory.create(bufferSize + 1, 1)
+    let received = _socket.recv(managed)
+    if received < 0 'failed'
+      throw NetworkError.recvFailed
+    end 'failed'
+    if received == 0 'closed'
+      throw NetworkError.connectionClosed
+    end 'closed'
+    managed.setLength(received)
+    // Null-terminate for C string compatibility
+    managed.setLength(received + 1)
+    managed.setByte(received, 0)
+    managed.setLength(received)
+    return String{managed: managed, _iterPos: 0}
+  end 'recv'
+
+  /// Explicitly close the connection.
+  /// Safe to call multiple times (idempotent).
+  /// Also called automatically when the last reference goes out of scope.
+  export function close()
+    _socket.close()
+  end 'close'
+end 'TcpClient'

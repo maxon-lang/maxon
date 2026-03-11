@@ -636,6 +636,13 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       nodeType.DocString = "Compiler builtin node for a `Chain` doubly-linked list. Stores next/prev node pointers, a back-pointer to the owning chain, and the element value.";
       _typeRegistry["__ChainNode"] = nodeType;
     }
+    if (!_typeRegistry.ContainsKey("__ManagedSocket")) {
+      var socketType = new MlirStructType("__ManagedSocket", [
+        new MlirStructField("_handle", MlirType.I64, false, true),
+      ]);
+      socketType.DocString = "Compiler builtin managed socket. Wraps an OS socket handle with automatic cleanup via destructor on last decref.";
+      _typeRegistry["__ManagedSocket"] = socketType;
+    }
   }
 
   /// <summary>
@@ -6955,7 +6962,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
   }
 
   private static bool IsBuiltinMethodType(string baseTypeName) =>
-    baseTypeName is "__Chain" or "__ChainNode" or "__ManagedMemory";
+    baseTypeName is "__Chain" or "__ChainNode" or "__ManagedMemory" or "__ManagedSocket";
 
   /// Unified dispatch for builtin type instance methods.
   /// Routes to Chain/ChainNode or ManagedMemory handlers based on the resolved base type.
@@ -6966,6 +6973,8 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       return TryEmitBuiltinChainMethod(structTypeName, methodName, selfValue);
     if (baseType == "__ManagedMemory")
       return TryEmitBuiltinManagedMemoryMethod(structTypeName, methodName, selfValue);
+    if (baseType == "__ManagedSocket")
+      return TryEmitBuiltinManagedSocketMethod(structTypeName, methodName, selfValue);
     throw new InvalidOperationException($"TryEmitBuiltinTypeMethod called for non-builtin type '{baseType}'");
   }
 
@@ -7166,6 +7175,88 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
         var cstrPtr = ResolveExprValue(ParseExpression());
         Expect(TokenType.RightParen);
         var op = new MaxonCStringToManagedOp(cstrPtr);
+        _currentBlock!.AddOp(op);
+        return (true, op.Result);
+      }
+    }
+    return (false, null);
+  }
+
+  /// Emits builtin __ManagedSocket instance method calls as MaxonOps.
+  /// The opening '(' has already been consumed.
+#pragma warning disable IDE0060 // structTypeName kept for interface consistency with other TryEmitBuiltin*Method dispatchers
+  private (bool Handled, MaxonValue? Result) TryEmitBuiltinManagedSocketMethod(
+    string structTypeName, string methodName, MaxonValue selfValue) {
+#pragma warning restore IDE0060
+    switch (methodName) {
+      case "sendFrom": {
+        // sendFrom(managed, offset, length) → maxon_net_send(handle, buf+offset, length)
+        TrySkipArgLabel();
+        var managed = ResolveExprValue(ParseExpression());
+        Expect(TokenType.Comma);
+        TrySkipArgLabel();
+        var offset = ResolveExprValue(ParseExpression());
+        Expect(TokenType.Comma);
+        TrySkipArgLabel();
+        var length = ResolveExprValue(ParseExpression());
+        Expect(TokenType.RightParen);
+        var handleRef = new MaxonFieldAccessOp(selfValue, "__ManagedSocket", "_handle", MaxonValueKind.Integer);
+        _currentBlock!.AddOp(handleRef);
+        var bufferRef = new MaxonFieldAccessOp(managed, "__ManagedMemory", "buffer", MaxonValueKind.Integer);
+        _currentBlock!.AddOp(bufferRef);
+        var addOp = new MaxonBinOp(MaxonBinOperator.Add, bufferRef.Result, offset, MaxonValueKind.Integer);
+        _currentBlock!.AddOp(addOp);
+        var op = new MaxonCallRuntimeOp("maxon_net_send", [handleRef.Result, addOp.Result, length], true);
+        _currentBlock!.AddOp(op);
+        return (true, op.Result);
+      }
+      case "recv": {
+        // recv(managed) → maxon_net_recv(handle, buf, capacity)
+        TrySkipArgLabel();
+        var managed = ResolveExprValue(ParseExpression());
+        Expect(TokenType.RightParen);
+        var handleRef = new MaxonFieldAccessOp(selfValue, "__ManagedSocket", "_handle", MaxonValueKind.Integer);
+        _currentBlock!.AddOp(handleRef);
+        var bufferRef = new MaxonFieldAccessOp(managed, "__ManagedMemory", "buffer", MaxonValueKind.Integer);
+        _currentBlock!.AddOp(bufferRef);
+        var capacityRef = new MaxonFieldAccessOp(managed, "__ManagedMemory", "capacity", MaxonValueKind.Integer);
+        _currentBlock!.AddOp(capacityRef);
+        var op = new MaxonCallRuntimeOp("maxon_net_recv", [handleRef.Result, bufferRef.Result, capacityRef.Result], true);
+        _currentBlock!.AddOp(op);
+        return (true, op.Result);
+      }
+      case "close": {
+        // close() → maxon_net_close(handle), then zero the handle
+        Expect(TokenType.RightParen);
+        var handleRef = new MaxonFieldAccessOp(selfValue, "__ManagedSocket", "_handle", MaxonValueKind.Integer);
+        _currentBlock!.AddOp(handleRef);
+        var op = new MaxonCallRuntimeOp("maxon_net_close", [handleRef.Result], false);
+        _currentBlock!.AddOp(op);
+        return (true, null);
+      }
+    }
+    return (false, null);
+  }
+
+  /// Emits builtin __ManagedSocket static method calls (tcpConnect).
+  /// The opening '(' has already been consumed.
+  private (bool Handled, MaxonValue? Result) TryEmitBuiltinManagedSocketStaticMethod(string methodName) {
+    switch (methodName) {
+      case "tcpConnect": {
+        // tcpConnect(managed_host, port) → maxon_net_tcp_connect(cstring, port) → managed socket ptr
+        TrySkipArgLabel();
+        var managed = ResolveExprValue(ParseExpression());
+        Expect(TokenType.Comma);
+        TrySkipArgLabel();
+        var port = ResolveExprValue(ParseExpression());
+        Expect(TokenType.RightParen);
+        var bufferRef = new MaxonFieldAccessOp(managed, "__ManagedMemory", "buffer", MaxonValueKind.Integer);
+        _currentBlock!.AddOp(bufferRef);
+        var lengthRef = new MaxonFieldAccessOp(managed, "__ManagedMemory", "length", MaxonValueKind.Integer);
+        _currentBlock!.AddOp(lengthRef);
+        var toCStr = new MaxonCallRuntimeOp("maxon_to_cstring", [bufferRef.Result, lengthRef.Result], true);
+        _currentBlock!.AddOp(toCStr);
+        var op = new MaxonCallRuntimeOp("maxon_net_tcp_connect", [toCStr.Result, port], true);
         _currentBlock!.AddOp(op);
         return (true, op.Result);
       }
@@ -9996,6 +10087,20 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
             return ParseFieldAccessChain(new ExprResult.Direct(staticResult), token);
           throw new CompileError(ErrorCode.ParserExpectedExpression,
             $"Unknown static method '{staticMethodToken.Value}' on __ManagedMemory",
+            staticMethodToken.Line, staticMethodToken.Column);
+        }
+
+        // Check for __ManagedSocket static methods
+        if (ResolveBaseTypeName(token.Value) == "__ManagedSocket" &&
+            PeekNext().Value is "tcpConnect") {
+          Advance(); // consume '.'
+          var staticMethodToken = Advance(); // consume method name
+          Expect(TokenType.LeftParen);
+          var (handled, staticResult) = TryEmitBuiltinManagedSocketStaticMethod(staticMethodToken.Value);
+          if (handled && staticResult != null)
+            return ParseFieldAccessChain(new ExprResult.Direct(staticResult), token);
+          throw new CompileError(ErrorCode.ParserExpectedExpression,
+            $"Unknown static method '{staticMethodToken.Value}' on __ManagedSocket",
             staticMethodToken.Line, staticMethodToken.Column);
         }
 
