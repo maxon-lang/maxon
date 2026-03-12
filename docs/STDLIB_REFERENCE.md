@@ -10,7 +10,8 @@
 6. [String Trimming](#string-trimming)
 7. [List](#list)
 8. [Networking (TcpClient)](#networking-tcpclient)
-9. [Builtin Managed Types](#builtin-managed-types)
+9. [HttpClient](#httpclient)
+10. [Builtin Managed Types](#builtin-managed-types)
 
 ---
 
@@ -387,6 +388,127 @@ function main() returns ExitCode
     return 0
 end 'main'
 ```
+
+---
+
+## HttpClient
+
+HTTP/1.1 client for making HTTP requests over TCP connections. HTTP only (no HTTPS/TLS). Uses `Connection: close` for simple response reading.
+
+### `HttpError` (union, implements Error)
+
+| Variant | Description |
+|---------|-------------|
+| `invalidUrl` | URL could not be parsed |
+| `connectFailed` | TCP connection failed |
+| `sendFailed` | Sending the request failed |
+| `recvFailed` | Receiving the response failed |
+| `invalidResponse` | Response could not be parsed |
+
+### `HttpMethod` (enum)
+
+| Variant |
+|---------|
+| `get` |
+| `post` |
+| `put` |
+| `delete` |
+| `head` |
+| `patch` |
+
+### `StatusCode` (enum)
+
+| Variant | Value |
+|---------|-------|
+| `ok` | 200 |
+| `created` | 201 |
+| `noContent` | 204 |
+| `movedPermanently` | 301 |
+| `found` | 302 |
+| `notModified` | 304 |
+| `badRequest` | 400 |
+| `unauthorized` | 401 |
+| `forbidden` | 403 |
+| `notFound` | 404 |
+| `methodNotAllowed` | 405 |
+| `conflict` | 409 |
+| `gone` | 410 |
+| `internalServerError` | 500 |
+| `notImplemented` | 501 |
+| `badGateway` | 502 |
+| `serviceUnavailable` | 503 |
+
+### `HttpHeaders`
+
+Case-insensitive HTTP header map. Header names are lowercased on storage.
+
+| Method | Signature | Description |
+|--------|-----------|-------------|
+| `create` | `static function create() returns HttpHeaders` | Create an empty header map |
+| `set` | `function set(name String, value String)` | Set a header |
+| `get` | `function get(name String) returns String throws HttpError` | Get a header value |
+| `has` | `function has(name String) returns bool` | Check if a header exists |
+
+### `HttpRequest`
+
+| Method | Signature | Description |
+|--------|-----------|-------------|
+| `create` | `static function create(method HttpMethod, url String) returns HttpRequest throws HttpError` | Create a request |
+| `setHeader` | `function setHeader(name String, value String)` | Set a request header |
+| `setBody` | `function setBody(body String)` | Set the request body |
+| `url` | `function url() returns URL` | Get the request URL |
+| `method` | `function method() returns HttpMethod` | Get the request method |
+| `headers` | `function headers() returns HttpHeaders` | Get the request headers |
+| `body` | `function body() returns String` | Get the request body |
+
+### `HttpResponse`
+
+| Method | Signature | Description |
+|--------|-----------|-------------|
+| `statusCode` | `function statusCode() returns StatusCode` | Get the status code |
+| `reason` | `function reason() returns String` | Get the reason phrase |
+| `headers` | `function headers() returns HttpHeaders` | Get the response headers |
+| `body` | `function body() returns String` | Get the response body |
+| `header` | `function header(name String) returns String throws HttpError` | Get a response header by name |
+
+### `HttpClient`
+
+Stateless HTTP/1.1 client. All methods are static.
+
+| Method | Signature | Description |
+|--------|-----------|-------------|
+| `send` | `static function send(request HttpRequest) returns HttpResponse throws HttpError` | Send an HTTP request |
+| `get` | `static function get(url String) returns HttpResponse throws HttpError` | Perform a GET request |
+| `post` | `static function post(url String, body String) returns HttpResponse throws HttpError` | Perform a POST request |
+| `put` | `static function put(url String, body String) returns HttpResponse throws HttpError` | Perform a PUT request |
+| `delete` | `static function delete(url String) returns HttpResponse throws HttpError` | Perform a DELETE request |
+
+**Example: Simple GET**
+```maxon
+function fetchData() returns ExitCode throws HttpError
+  let response = try HttpClient.get("http://httpbin.org/get")
+  print(response.body())
+  return 0
+end 'fetchData'
+```
+
+**Example: POST with body**
+```maxon
+function postData() returns ExitCode throws HttpError
+  var request = try HttpRequest.create(HttpMethod.post, url: "http://httpbin.org/post")
+  request.setHeader("content-type", value: "application/json")
+  request.setBody("{\"key\": \"value\"}")
+  let response = try HttpClient.send(request)
+  print(response.statusCode())
+  return 0
+end 'postData'
+```
+
+**Limitations:**
+- HTTP only (no HTTPS/TLS)
+- No chunked transfer encoding — uses `Connection: close`
+- No redirect following (returns 3xx as-is)
+- No streaming — entire response buffered in memory
 
 ---
 
