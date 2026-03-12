@@ -12,7 +12,7 @@ Matching on a union with associated values that was loaded from a struct field.
 
 ## Tests
 
-<!-- test: enum-struct-field-match-let -->
+<!-- test: union-struct-field-match-let -->
 Match union with associated values from struct field via let binding.
 ```maxon
 typealias SmallInt = int(0 to u8.max)
@@ -47,7 +47,7 @@ end 'main'
 1
 ```
 
-<!-- test: enum-struct-field-match-direct -->
+<!-- test: union-struct-field-match-direct -->
 Match union with associated values from struct field directly.
 ```maxon
 typealias SmallInt = int(0 to u8.max)
@@ -80,7 +80,7 @@ end 'main'
 1
 ```
 
-<!-- test: enum-struct-field-match-extract -->
+<!-- test: union-struct-field-match-extract -->
 Extract associated value from union struct field.
 ```maxon
 typealias SmallInt = int(0 to u8.max)

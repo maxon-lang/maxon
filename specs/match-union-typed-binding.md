@@ -12,7 +12,7 @@ When a union case has an associated value whose type is itself a union, the matc
 
 ## Tests
 
-<!-- test: match-enum-typed-binding-pass-to-function -->
+<!-- test: match-union-typed-binding-pass-to-function -->
 Bind a union-typed associated value in a match and pass it to a function.
 ```maxon
 union Direction
@@ -48,7 +48,7 @@ end 'main'
 3
 ```
 
-<!-- test: match-enum-typed-binding-compare -->
+<!-- test: match-union-typed-binding-compare -->
 Bind a union-typed associated value in a match and compare it.
 ```maxon
 union Color

@@ -74,7 +74,7 @@ var vert = dir.isVertical() // true
 
 ## Tests
 
-<!-- test: simple-enum -->
+<!-- test: simple-union -->
 ```maxon
 union Direction
   north
@@ -98,7 +98,7 @@ end 'main'
 1
 ```
 
-<!-- test: enum-assignment -->
+<!-- test: union-assignment -->
 ```maxon
 union Color
   red
@@ -121,7 +121,7 @@ end 'main'
 1
 ```
 
-<!-- test: enum-not-equal -->
+<!-- test: union-not-equal -->
 ```maxon
 union Status
   pending
@@ -143,7 +143,7 @@ end 'main'
 1
 ```
 
-<!-- test: enum-comparison -->
+<!-- test: union-comparison -->
 ```maxon
 union Status
   pending
@@ -164,7 +164,7 @@ end 'main'
 1
 ```
 
-<!-- test: enum-function-param -->
+<!-- test: union-function-param -->
 ```maxon
 union Status
   on
@@ -191,7 +191,7 @@ end 'main'
 1
 ```
 
-<!-- test: enum-return-type -->
+<!-- test: union-return-type -->
 ```maxon
 union Result
   success
@@ -240,7 +240,7 @@ end 'main'
 1
 ```
 
-<!-- test: enum-method -->
+<!-- test: union-method -->
 ```maxon
 union Direction
   north
@@ -267,7 +267,7 @@ end 'main'
 1
 ```
 
-<!-- test: enum-method-returns-enum -->
+<!-- test: union-method-returns-union -->
 ```maxon
 union Toggle
   on
@@ -311,7 +311,7 @@ end 'main'
 error E3030: specs/fragments/unions-simple/error.duplicate-case.test:4:3: duplicate union case: 'red'
 ```
 
-<!-- test: error.unknown-enum-case -->
+<!-- test: error.unknown-union-case -->
 ```maxon
 union Color
   red
@@ -324,7 +324,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3034: specs/fragments/unions-simple/error.unknown-enum-case.test:8:12: unknown union case: 'green'
+error E3034: specs/fragments/unions-simple/error.unknown-union-case.test:8:12: unknown union case: 'green'
 ```
 
 <!-- test: error.duplicate-raw-value -->

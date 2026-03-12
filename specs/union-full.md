@@ -143,7 +143,7 @@ var vert = dir.isVertical() // true
 
 ## Tests
 
-<!-- test: simple-enum -->
+<!-- test: simple-union -->
 ```maxon
 union Direction
   north
@@ -167,7 +167,7 @@ end 'main'
 1
 ```
 
-<!-- test: enum-assignment -->
+<!-- test: union-assignment -->
 ```maxon
 union Color
   red
@@ -190,7 +190,7 @@ end 'main'
 1
 ```
 
-<!-- test: enum-not-equal -->
+<!-- test: union-not-equal -->
 ```maxon
 union Status
   pending
@@ -212,7 +212,7 @@ end 'main'
 1
 ```
 
-<!-- test: enum-comparison -->
+<!-- test: union-comparison -->
 ```maxon
 union Status
   pending
@@ -233,7 +233,7 @@ end 'main'
 1
 ```
 
-<!-- test: enum-function-param -->
+<!-- test: union-function-param -->
 ```maxon
 union Status
   on
@@ -260,7 +260,7 @@ end 'main'
 1
 ```
 
-<!-- test: enum-return-type -->
+<!-- test: union-return-type -->
 ```maxon
 union Result
   success
@@ -535,7 +535,7 @@ end 'main'
 42
 ```
 
-<!-- test: enum-method -->
+<!-- test: union-method -->
 ```maxon
 union Direction
   north
@@ -562,7 +562,7 @@ end 'main'
 1
 ```
 
-<!-- test: enum-method-returns-enum -->
+<!-- test: union-method-returns-union -->
 ```maxon
 union Toggle
   on
@@ -606,7 +606,7 @@ end 'main'
 error E3030: specs/fragments/union-full/error.duplicate-case.test:4:3: duplicate union case: 'red'
 ```
 
-<!-- test: error.unknown-enum-case -->
+<!-- test: error.unknown-union-case -->
 ```maxon
 union Color
   red
@@ -619,7 +619,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3034: specs/fragments/union-full/error.unknown-enum-case.test:8:12: unknown union case: 'green'
+error E3034: specs/fragments/union-full/error.unknown-union-case.test:8:12: unknown union case: 'green'
 ```
 
 <!-- test: error.associated-value-wrong-count -->
@@ -659,7 +659,7 @@ end 'main'
 error E3005: specs/fragments/union-full/error.associated-value-type-mismatch.test:10:35: type mismatch: 'expected Integer, got String'
 ```
 
-<!-- test: match-enum-binding-simple -->
+<!-- test: match-union-binding-simple -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -681,7 +681,7 @@ end 'main'
 42
 ```
 
-<!-- test: match-enum-binding-multiple -->
+<!-- test: match-union-binding-multiple -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -703,7 +703,7 @@ end 'main'
 99
 ```
 
-<!-- test: match-expr-enum-binding -->
+<!-- test: match-expr-union-binding -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -726,7 +726,7 @@ end 'main'
 20
 ```
 
-<!-- test: match-enum-no-binding -->
+<!-- test: match-union-no-binding -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -748,7 +748,7 @@ end 'main'
 1
 ```
 
-<!-- test: error.match-enum-wrong-binding-count -->
+<!-- test: error.match-union-wrong-binding-count -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -765,10 +765,10 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3035: specs/fragments/union-full/error.match-enum-wrong-binding-count.test:12:5: wrong binding count: 'value'
+error E3035: specs/fragments/union-full/error.match-union-wrong-binding-count.test:12:5: wrong binding count: 'value'
 ```
 
-<!-- test: error.match-enum-unknown-case -->
+<!-- test: error.match-union-unknown-case -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -786,7 +786,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3034: specs/fragments/union-full/error.match-enum-unknown-case.test:13:5: unknown union case: 'unknown'
+error E3034: specs/fragments/union-full/error.match-union-unknown-case.test:13:5: unknown union case: 'unknown'
 ```
 
 <!-- test: implicit-string-backed -->
@@ -1046,7 +1046,7 @@ end 'main'
 error E3034: specs/fragments/union-full/error.fromRawValue-associated-values.test:11:16: unknown union case: 'fromRawValue'
 ```
 
-<!-- test: enum-member-constant -->
+<!-- test: union-member-constant -->
 ```maxon
 union Color
   Red
@@ -1068,7 +1068,7 @@ end 'main'
 2
 ```
 
-<!-- test: match-enum-binding-string -->
+<!-- test: match-union-binding-string -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -1090,7 +1090,7 @@ end 'main'
 3
 ```
 
-<!-- test: match-enum-binding-struct -->
+<!-- test: match-union-binding-struct -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)

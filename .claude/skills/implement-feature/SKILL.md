@@ -68,7 +68,7 @@ Use an agent to implement the feature incrementally, test by test:
     - typealias should describe its purpose, not its type
     - typed ranges should be as specific as possible, e.g. `int(0 to 100)` instead of `int(0 to u64.max)`. Carefully consider the valid range for each type and use the narrowest possible range to catch errors. Max range is fine if there is no clear limit.
     - Fix any compiler warnings
-17. Update documentation, including `LANGUAGE_REFERENCE.md` and `QUICK_REFERENCE.md` and `BNF_SYNTAX.md` if necessary.
+17. Update documentation, including `LANGUAGE_REFERENCE.md` and `STDLIB_REFERENCE.md` and `QUICK_REFERENCE.md` and `BNF_SYNTAX.md` if necessary.
 18. Write a git commit message for these changes.
 
 ## Guidelines

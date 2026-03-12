@@ -2693,178 +2693,97 @@ public partial class X86CodeEmitter {
 
   /// <summary>
   /// maxon_net_tcp_connect(cstring_host, port) → managed __ManagedSocket ptr, or -1 (DNS fail), -2 (connect fail).
-  /// Stack layout (0x230 total):
-  ///   [rbp-0x08]  = arg1: cstring host
-  ///   [rbp-0x10]  = arg2: port
-  ///   [rbp-0x18]  = addrinfo* result from getaddrinfo
-  ///   [rbp-0x20]  = socket handle (SOCKET)
-  ///   [rbp-0x28]  = resolved IP address (4 bytes in lower dword)
-  ///   [rbp-0x30..rbp-0x60]  = hints addrinfo (48 bytes, base at rbp-0x60)
-  ///   [rbp-0x70..rbp-0x80]  = sockaddr_in (16 bytes, base at rbp-0x80)
-  ///   [rbp-0x80..rbp-0x208] = WSADATA (408=0x198 bytes, base at rbp-0x208)
-  ///   [rbp-0x208..rbp-0x228] = shadow space (32 bytes)
+  /// Delegates to __io_submit_sync(SyncOpNetConnect, host, port) so that blocking DNS/connect
+  /// runs on the sync worker's OS thread. The sync worker returns a raw socket handle (or -1/-2).
+  /// We wrap it in mm_alloc here (on the green thread) since mm_alloc is not thread-safe.
+  /// Stack: [rbp-8]=host, [rbp-16]=port, [rbp-24]=raw handle
   /// </summary>
   private void EmitNetTcpConnect() {
-    EmitRuntimeFunctionStart("maxon_net_tcp_connect", 2, 0x230);
-
-    // Lazy WSAStartup — WSADATA (408 bytes) placed at bottom of frame
-    EmitWsaEnsureInit(-0x208, "rt_ntc_wsa_ok");
-
-    // Zero the hints struct (48 bytes = 6 qwords at [rbp-0x60])
-    EmitXorRegReg(X86Register.Rax, X86Register.Rax);
-    for (int i = 0; i < 6; i++)
-      EmitMovMemReg(-0x60 + i * 8, X86Register.Rax, 8);
-
-    // hints.ai_family = AF_INET (2) at offset 4
-    EmitMovMemDwordImm(-0x60 + 4, 2); // AF_INET
-    // hints.ai_socktype = SOCK_STREAM (1) at offset 8
-    EmitMovMemDwordImm(-0x60 + 8, 1); // SOCK_STREAM
-    // hints.ai_protocol = IPPROTO_TCP (6) at offset 12
-    EmitMovMemDwordImm(-0x60 + 12, 6); // IPPROTO_TCP
-
-    // getaddrinfo(host, NULL, &hints, &result)
-    EmitMovRegMem(X86Register.Rcx, -0x08, 8);   // arg1: host cstring
-    EmitXorRegReg(X86Register.Rdx, X86Register.Rdx); // arg2: NULL (no service)
-    EmitLeaRegMem(X86Register.R8, -0x60);        // arg3: &hints
-    EmitLeaRegMem(X86Register.R9, -0x18);        // arg4: &result
-    EmitCallImport("ws2_32.dll", "getaddrinfo");
-
-    // Check result (0 = success)
+    EmitRuntimeFunctionStart("maxon_net_tcp_connect", 2, 0x30);
+    EmitMovRegImm(X86Register.Rcx, SyncOpNetConnect);   // op = 10
+    EmitMovRegMem(X86Register.Rdx, -0x08, 8);           // arg0 = cstring host
+    EmitMovRegMem(X86Register.R8, -0x10, 8);            // arg1 = port
+    EmitCallRuntimeLabel("__io_submit_sync");
+    // RAX = raw socket handle or -1 (DNS fail) or -2 (connect fail)
     EmitTestRegReg(X86Register.Rax, X86Register.Rax);
-    EmitJcc("z", "rt_ntc_dns_ok");
-    // DNS resolution failed → return -1
-    EmitMovRegImm(X86Register.Rax, -1);
-    EmitJmp("rt_ntc_done");
-
-    DefineLabel("rt_ntc_dns_ok");
-
-    // Extract IP from first addrinfo result:
-    // result->ai_addr is at offset 0x20 in addrinfo (x64)
-    // sockaddr_in.sin_addr is at offset 4 in the sockaddr_in struct
-    EmitMovRegMem(X86Register.Rax, -0x18, 8);    // RAX = addrinfo* result
-    EmitBytes(0x48, 0x8B, 0x40, 0x20);           // MOV RAX, [RAX+0x20] = ai_addr
-    EmitBytes(0x8B, 0x40, 0x04);                  // MOV EAX, [RAX+4] = sin_addr (4 bytes)
-    EmitMovMemReg(-0x28, X86Register.Rax, 8);     // save resolved IP
-
-    // freeaddrinfo(result)
-    EmitMovRegMem(X86Register.Rcx, -0x18, 8);
-    EmitCallImport("ws2_32.dll", "freeaddrinfo");
-
-    // 192.0.2.1 (TEST-NET-1, RFC 5737) simulates connect failure for testing
-    EmitMovRegMem(X86Register.Rax, -0x28, 8);
-    EmitBytes(0x3D); EmitDword(0x010200C0);            // CMP EAX, 192.0.2.1 (network byte order)
-    EmitJcc("ne", "rt_ntc_not_testnet");
-    EmitMovRegImm(X86Register.Rax, -2);                // return connectFailed
-    EmitJmp("rt_ntc_done");
-    DefineLabel("rt_ntc_not_testnet");
-
-    // socket(AF_INET=2, SOCK_STREAM=1, IPPROTO_TCP=6)
-    EmitMovRegImm(X86Register.Rcx, 2);            // AF_INET
-    EmitMovRegImm(X86Register.Rdx, 1);            // SOCK_STREAM
-    EmitMovRegImm(X86Register.R8, 6);             // IPPROTO_TCP
-    EmitCallImport("ws2_32.dll", "socket");
-
-    // Check for INVALID_SOCKET (0xFFFFFFFFFFFFFFFF)
-    EmitBytes(0x48, 0x83, 0xF8, 0xFF);            // CMP RAX, -1
-    EmitJcc("ne", "rt_ntc_sock_ok");
-    EmitMovRegImm(X86Register.Rax, -2);
-    EmitJmp("rt_ntc_done");
-
-    DefineLabel("rt_ntc_sock_ok");
-    EmitMovMemReg(-0x20, X86Register.Rax, 8);     // save socket handle
-
-    // Build sockaddr_in at [rbp-0x80] (16 bytes)
-    // Zero it first
-    EmitXorRegReg(X86Register.Rax, X86Register.Rax);
-    EmitMovMemReg(-0x80, X86Register.Rax, 8);
-    EmitMovMemReg(-0x78, X86Register.Rax, 8);
-    // sin_family = AF_INET (2) — WORD at offset 0
-    EmitBytes(0x66, 0xC7, 0x85); EmitDword(-0x80); EmitBytes(0x02, 0x00); // MOV WORD [rbp-0x80], 2
-    // sin_port = htons(port) — WORD at offset 2
-    EmitMovRegMem(X86Register.Rax, -0x10, 8);     // RAX = port
-    EmitBytes(0x66, 0xC1, 0xC0, 0x08);            // ROL AX, 8 (htons)
-    EmitBytes(0x66, 0x89, 0x85); EmitDword(-0x7E); // MOV WORD [rbp-0x7E], AX
-    // sin_addr = resolved IP — DWORD at offset 4
-    EmitMovRegMem(X86Register.Rax, -0x28, 8);     // RAX = resolved IP
-    EmitBytes(0x89, 0x85); EmitDword(-0x7C);       // MOV DWORD [rbp-0x7C], EAX
-
-    // connect(socket, &sockaddr_in, 16)
-    EmitMovRegMem(X86Register.Rcx, -0x20, 8);     // arg1: socket
-    EmitLeaRegMem(X86Register.Rdx, -0x80);        // arg2: &sockaddr_in
-    EmitMovRegImm(X86Register.R8, 16);             // arg3: sizeof(sockaddr_in)
-    EmitCallImport("ws2_32.dll", "connect");
-
-    // Check result (0 = success, SOCKET_ERROR = -1)
-    EmitTestRegReg(X86Register.Rax, X86Register.Rax);
-    EmitJcc("z", "rt_ntc_conn_ok");
-    // Connect failed — close socket and return -2
-    EmitMovRegMem(X86Register.Rcx, -0x20, 8);
-    EmitCallImport("ws2_32.dll", "closesocket");
-    EmitMovRegImm(X86Register.Rax, -2);
-    EmitJmp("rt_ntc_done");
-
-    DefineLabel("rt_ntc_conn_ok");
-
+    EmitJcc("l", "rt_ntc_fail");                         // negative = error, return as-is
+    EmitMovMemReg(-0x18, X86Register.Rax, 8);            // save raw handle
     // Allocate __ManagedSocket via mm_alloc(8, destructor_ptr, tag_index=0)
-    EmitMovRegImm(X86Register.Rcx, 8);            // size = 8 bytes (one i64 _handle field)
-    EmitLeaFuncAddr(X86Register.Rdx, "__destruct___ManagedSocket"); // destructor fn ptr
-    EmitTagZero(X86Register.R8);                    // tag_index = 0
+    EmitMovRegImm(X86Register.Rcx, 8);
+    EmitLeaFuncAddr(X86Register.Rdx, "__destruct___ManagedSocket");
+    EmitTagZero(X86Register.R8);
     EmitCallRuntimeLabel("mm_alloc");
-
     // RAX = managed user pointer; store socket handle at [ptr+0]
-    EmitMovRegMem(X86Register.Rcx, -0x20, 8);      // RCX = socket handle
-    EmitBytes(0x48, 0x89, 0x08);                    // MOV [RAX], RCX
-
+    EmitMovRegMem(X86Register.Rcx, -0x18, 8);
+    EmitBytes(0x48, 0x89, 0x08);                         // MOV [RAX], RCX
+    EmitJmp("rt_ntc_done");
+    DefineLabel("rt_ntc_fail");
+    // RAX already has -1 or -2
     DefineLabel("rt_ntc_done");
     EmitRuntimeFunctionEnd();
   }
 
   /// <summary>
   /// maxon_net_send(socket_handle, buffer_ptr, length) → bytes_sent or -1.
+  /// Delegates to __io_submit_sync(SyncOpNetSend, handle, args_struct) so that
+  /// blocking send() runs on the sync worker's OS thread.
+  /// Stack: [rbp-8]=handle, [rbp-16]=buf, [rbp-24]=length
   /// </summary>
   private void EmitNetSend() {
     EmitRuntimeFunctionStart("maxon_net_send", 3, 0x30);
-
-    // send(socket, buf, len, flags=0)
-    EmitMovRegMem(X86Register.Rcx, -0x08, 8);     // arg1: socket handle
-    EmitMovRegMem(X86Register.Rdx, -0x10, 8);     // arg2: buffer pointer
-    EmitMovRegMem(X86Register.R8, -0x18, 8);      // arg3: length
-    EmitXorRegReg(X86Register.R9, X86Register.R9); // arg4: flags = 0
-    EmitCallImport("ws2_32.dll", "send");
-
-    // RAX = bytes sent, or SOCKET_ERROR (-1)
+    // Allocate 16-byte args struct {buf_ptr, length}
+    EmitMovRegImm(X86Register.Rcx, 16);
+    EmitCallRuntimeLabel("mm_raw_alloc");
+    // Store buf_ptr and length in struct
+    EmitMovRegMem(X86Register.Rcx, -0x10, 8);     // buf_ptr
+    EmitBytes(0x48, 0x89, 0x08);                   // MOV [RAX], RCX
+    EmitMovRegMem(X86Register.Rcx, -0x18, 8);     // length
+    EmitBytes(0x48, 0x89, 0x48, 0x08);             // MOV [RAX+8], RCX
+    // Submit sync op
+    EmitMovRegReg(X86Register.R8, X86Register.Rax); // arg1 = args struct ptr
+    EmitMovRegImm(X86Register.Rcx, SyncOpNetSend);  // op
+    EmitMovRegMem(X86Register.Rdx, -0x08, 8);       // arg0 = socket handle
+    EmitCallRuntimeLabel("__io_submit_sync");
+    // RAX = bytes sent or SOCKET_ERROR (-1)
     EmitRuntimeFunctionEnd();
   }
 
   /// <summary>
   /// maxon_net_recv(socket_handle, buffer_ptr, capacity) → bytes_received, 0=closed, -1=error.
+  /// Delegates to __io_submit_sync(SyncOpNetRecv, handle, args_struct) so that
+  /// blocking recv() runs on the sync worker's OS thread.
+  /// Stack: [rbp-8]=handle, [rbp-16]=buf, [rbp-24]=capacity
   /// </summary>
   private void EmitNetRecv() {
     EmitRuntimeFunctionStart("maxon_net_recv", 3, 0x30);
-
-    // recv(socket, buf, len, flags=0)
-    EmitMovRegMem(X86Register.Rcx, -0x08, 8);     // arg1: socket handle
-    EmitMovRegMem(X86Register.Rdx, -0x10, 8);     // arg2: buffer pointer
-    EmitMovRegMem(X86Register.R8, -0x18, 8);      // arg3: capacity
-    EmitXorRegReg(X86Register.R9, X86Register.R9); // arg4: flags = 0
-    EmitCallImport("ws2_32.dll", "recv");
-
-    // RAX = bytes received, 0 = connection closed, SOCKET_ERROR (-1) = error
+    // Allocate 16-byte args struct {buf_ptr, capacity}
+    EmitMovRegImm(X86Register.Rcx, 16);
+    EmitCallRuntimeLabel("mm_raw_alloc");
+    // Store buf_ptr and capacity in struct
+    EmitMovRegMem(X86Register.Rcx, -0x10, 8);     // buf_ptr
+    EmitBytes(0x48, 0x89, 0x08);                   // MOV [RAX], RCX
+    EmitMovRegMem(X86Register.Rcx, -0x18, 8);     // capacity
+    EmitBytes(0x48, 0x89, 0x48, 0x08);             // MOV [RAX+8], RCX
+    // Submit sync op
+    EmitMovRegReg(X86Register.R8, X86Register.Rax); // arg1 = args struct ptr
+    EmitMovRegImm(X86Register.Rcx, SyncOpNetRecv);  // op
+    EmitMovRegMem(X86Register.Rdx, -0x08, 8);       // arg0 = socket handle
+    EmitCallRuntimeLabel("__io_submit_sync");
+    // RAX = bytes received, 0 = closed, -1 = error
     EmitRuntimeFunctionEnd();
   }
 
   /// <summary>
   /// maxon_net_close(socket_handle) → void. Idempotent: does nothing if handle is 0.
+  /// Delegates to __io_submit_sync(SyncOpNetClose, handle, 0) so that
+  /// closesocket() runs on the sync worker's OS thread.
   /// </summary>
   private void EmitNetClose() {
-    EmitRuntimeFunctionStart("maxon_net_close", 1, 0x30);
-
-    EmitMovRegMem(X86Register.Rcx, -0x08, 8);     // arg1: socket handle
-    EmitTestRegReg(X86Register.Rcx, X86Register.Rcx);
-    EmitJcc("z", "rt_nc_done");
-    EmitCallImport("ws2_32.dll", "closesocket");
-
-    DefineLabel("rt_nc_done");
+    EmitRuntimeFunctionStart("maxon_net_close", 1, 0x20);
+    EmitMovRegImm(X86Register.Rcx, SyncOpNetClose);    // op
+    EmitMovRegMem(X86Register.Rdx, -0x08, 8);          // arg0 = socket handle
+    EmitXorRegReg(X86Register.R8, X86Register.R8);     // arg1 = 0
+    EmitCallRuntimeLabel("__io_submit_sync");
     EmitRuntimeFunctionEnd();
   }
 
@@ -3230,6 +3149,22 @@ public partial class X86CodeEmitter {
       DefineSymdata("__at_tag_io_yield", "io_yield #\0"u8.ToArray());
       DefineSymdata("__at_tag_io_resume", "io_resume #\0"u8.ToArray());
       DefineSymdata("__at_tag_nl", "\n\0"u8.ToArray());
+
+      // Op-specific suffixes for io_yield/io_resume traces
+      DefineSymdata("__at_io_op_file_exists", " [file_exists]\0"u8.ToArray());
+      DefineSymdata("__at_io_op_file_delete", " [file_delete]\0"u8.ToArray());
+      DefineSymdata("__at_io_op_find_first", " [find_first]\0"u8.ToArray());
+      DefineSymdata("__at_io_op_find_next", " [find_next]\0"u8.ToArray());
+      DefineSymdata("__at_io_op_dir_exists", " [dir_exists]\0"u8.ToArray());
+      DefineSymdata("__at_io_op_dir_create", " [dir_create]\0"u8.ToArray());
+      DefineSymdata("__at_io_op_get_cwd", " [get_cwd]\0"u8.ToArray());
+      DefineSymdata("__at_io_op_file_open_read", " [file_open_read]\0"u8.ToArray());
+      DefineSymdata("__at_io_op_file_open_write", " [file_open_write]\0"u8.ToArray());
+      DefineSymdata("__at_io_op_close_handle", " [close_handle]\0"u8.ToArray());
+      DefineSymdata("__at_io_op_net_connect", " [net_connect]\0"u8.ToArray());
+      DefineSymdata("__at_io_op_net_send", " [net_send]\0"u8.ToArray());
+      DefineSymdata("__at_io_op_net_recv", " [net_recv]\0"u8.ToArray());
+      DefineSymdata("__at_io_op_net_close", " [net_close]\0"u8.ToArray());
     }
 
     EmitGtInit();
@@ -3295,9 +3230,9 @@ public partial class X86CodeEmitter {
     EmitCallRuntimeLabel("mm_raw_alloc");
     EmitMovMemReg(-0x20, X86Register.Rax, 8); // save gt_ptr
 
-    // Allocate 2KB stack via VirtualAlloc(NULL, 0x800, MEM_COMMIT|MEM_RESERVE, PAGE_READWRITE)
+    // Allocate initial stack via VirtualAlloc(NULL, size, MEM_COMMIT|MEM_RESERVE, PAGE_READWRITE)
     EmitXorRegReg(X86Register.Rcx, X86Register.Rcx);        // lpAddress = NULL
-    EmitMovRegImm(X86Register.Rdx, GtInitialStackSize);       // dwSize = 0x800
+    EmitMovRegImm(X86Register.Rdx, GtInitialStackSize);       // dwSize = 64KB
     EmitMovRegImm(X86Register.R8, 0x3000);                    // flAllocationType = MEM_COMMIT|MEM_RESERVE
     EmitMovRegImm(X86Register.R9, 0x04);                      // flProtect = PAGE_READWRITE
     EmitCallImport("kernel32.dll", "VirtualAlloc");
@@ -4329,6 +4264,10 @@ public partial class X86CodeEmitter {
   private const long SyncOpFileOpenRead  = 7;
   private const long SyncOpFileOpenWrite = 8;
   private const long SyncOpCloseHandle   = 9;
+  private const long SyncOpNetConnect  = 10;
+  private const long SyncOpNetSend     = 11;
+  private const long SyncOpNetRecv     = 12;
+  private const long SyncOpNetClose    = 13;
   private const long SyncOpShutdown    = 0xFF;
 
   private void EmitIoRuntime() {
@@ -4581,8 +4520,9 @@ public partial class X86CodeEmitter {
     DefineLabel("__io_sync_worker_loop");
     EmitPushReg(X86Register.Rbp);
     EmitMovRegReg(X86Register.Rbp, X86Register.Rsp);
-    EmitSubRegImm(X86Register.Rsp, 0x60);
+    EmitSubRegImm(X86Register.Rsp, 0x260);
     // Locals: [rbp-0x08]=req ptr, [rbp-0x10]=result, [rbp-0x18]=comp ptr
+    // Extended frame for net_connect: WSADATA(408b), hints(48b), sockaddr_in(16b)
 
     DefineLabel("__io_sync_worker_top");
     // WaitForSingleObject(__io_sync_req_event, INFINITE)
@@ -4620,6 +4560,14 @@ public partial class X86CodeEmitter {
     EmitJcc("e", "__io_sync_op_file_open_write");
     EmitCmpRegImm(X86Register.Rcx, SyncOpCloseHandle);
     EmitJcc("e", "__io_sync_op_close_handle");
+    EmitCmpRegImm(X86Register.Rcx, SyncOpNetConnect);
+    EmitJcc("e", "__io_sync_op_net_connect");
+    EmitCmpRegImm(X86Register.Rcx, SyncOpNetSend);
+    EmitJcc("e", "__io_sync_op_net_send");
+    EmitCmpRegImm(X86Register.Rcx, SyncOpNetRecv);
+    EmitJcc("e", "__io_sync_op_net_recv");
+    EmitCmpRegImm(X86Register.Rcx, SyncOpNetClose);
+    EmitJcc("e", "__io_sync_op_net_close");
     // Unknown op — abort
     EmitCallRuntimeLabel("__gt_panic_io");
 
@@ -4775,6 +4723,171 @@ public partial class X86CodeEmitter {
     EmitCallImport("kernel32.dll", "CloseHandle");
     EmitJmp("__io_sync_op_done");
 
+    // --- netConnect: WSAStartup + getaddrinfo + socket + connect → raw handle or -1/-2 ---
+    // Stack layout within sync worker frame (0x260 total):
+    //   [rbp-0x08]  = req ptr (sync worker)
+    //   [rbp-0x10]  = result (sync worker)
+    //   [rbp-0x18]  = comp ptr (sync worker)
+    //   [rbp-0x20]  = addrinfo* result
+    //   [rbp-0x28]  = socket handle
+    //   [rbp-0x30]  = resolved IP
+    //   [rbp-0x38]  = saved host cstring
+    //   [rbp-0x40]  = saved port
+    //   [rbp-0x48..rbp-0x78] = hints (48 bytes, base at rbp-0x78)
+    //   [rbp-0x78..rbp-0x88] (unused gap)
+    //   [rbp-0x90..rbp-0xA0] = sockaddr_in (16 bytes, base at rbp-0xA0)
+    //   [rbp-0xA0..rbp-0x238] = WSADATA (408 bytes, base at rbp-0x238)
+    DefineLabel("__io_sync_op_net_connect");
+    EmitMovRegMem(X86Register.Rax, -0x08, 8); // req
+    EmitMovRegIndirectMem(X86Register.Rcx, X86Register.Rax, SyncReqOffArg0); // cstring host
+    EmitMovMemReg(-0x38, X86Register.Rcx, 8); // save host
+    EmitMovRegIndirectMem(X86Register.Rcx, X86Register.Rax, SyncReqOffArg1); // port
+    EmitMovMemReg(-0x40, X86Register.Rcx, 8); // save port
+
+    // Lazy WSAStartup — WSADATA at [rbp-0x238]
+    EmitWsaEnsureInit(-0x238, "__io_sync_ntc_wsa_ok");
+
+    // Zero the hints struct (48 bytes = 6 qwords at [rbp-0x78])
+    EmitXorRegReg(X86Register.Rax, X86Register.Rax);
+    for (int i = 0; i < 6; i++)
+      EmitMovMemReg(-0x78 + i * 8, X86Register.Rax, 8);
+
+    // hints.ai_family = AF_INET (2) at offset 4
+    EmitMovMemDwordImm(-0x78 + 4, 2);
+    // hints.ai_socktype = SOCK_STREAM (1) at offset 8
+    EmitMovMemDwordImm(-0x78 + 8, 1);
+    // hints.ai_protocol = IPPROTO_TCP (6) at offset 12
+    EmitMovMemDwordImm(-0x78 + 12, 6);
+
+    // getaddrinfo(host, NULL, &hints, &result)
+    EmitMovRegMem(X86Register.Rcx, -0x38, 8);   // host cstring
+    EmitXorRegReg(X86Register.Rdx, X86Register.Rdx); // NULL
+    EmitLeaRegMem(X86Register.R8, -0x78);        // &hints
+    EmitLeaRegMem(X86Register.R9, -0x20);        // &result
+    EmitCallImport("ws2_32.dll", "getaddrinfo");
+
+    // Check result (0 = success)
+    EmitTestRegReg(X86Register.Rax, X86Register.Rax);
+    EmitJcc("z", "__io_sync_ntc_dns_ok");
+    // DNS resolution failed → return -1
+    EmitMovRegImm(X86Register.Rax, -1);
+    EmitJmp("__io_sync_op_done");
+
+    DefineLabel("__io_sync_ntc_dns_ok");
+
+    // Extract IP from first addrinfo result
+    EmitMovRegMem(X86Register.Rax, -0x20, 8);    // RAX = addrinfo* result
+    EmitBytes(0x48, 0x8B, 0x40, 0x20);           // MOV RAX, [RAX+0x20] = ai_addr
+    EmitBytes(0x8B, 0x40, 0x04);                  // MOV EAX, [RAX+4] = sin_addr
+    EmitMovMemReg(-0x30, X86Register.Rax, 8);     // save resolved IP
+
+    // freeaddrinfo(result)
+    EmitMovRegMem(X86Register.Rcx, -0x20, 8);
+    EmitCallImport("ws2_32.dll", "freeaddrinfo");
+
+    // TEST-NET-1 (192.0.2.1) simulates connect failure for testing
+    EmitMovRegMem(X86Register.Rax, -0x30, 8);
+    EmitBytes(0x3D); EmitDword(0x010200C0);       // CMP EAX, 192.0.2.1 (network byte order)
+    EmitJcc("ne", "__io_sync_ntc_not_testnet");
+    EmitMovRegImm(X86Register.Rax, -2);
+    EmitJmp("__io_sync_op_done");
+    DefineLabel("__io_sync_ntc_not_testnet");
+
+    // socket(AF_INET=2, SOCK_STREAM=1, IPPROTO_TCP=6)
+    EmitMovRegImm(X86Register.Rcx, 2);
+    EmitMovRegImm(X86Register.Rdx, 1);
+    EmitMovRegImm(X86Register.R8, 6);
+    EmitCallImport("ws2_32.dll", "socket");
+
+    // Check for INVALID_SOCKET (-1)
+    EmitBytes(0x48, 0x83, 0xF8, 0xFF);            // CMP RAX, -1
+    EmitJcc("ne", "__io_sync_ntc_sock_ok");
+    EmitMovRegImm(X86Register.Rax, -2);
+    EmitJmp("__io_sync_op_done");
+
+    DefineLabel("__io_sync_ntc_sock_ok");
+    EmitMovMemReg(-0x28, X86Register.Rax, 8);     // save socket handle
+
+    // Build sockaddr_in at [rbp-0xA0] (16 bytes)
+    EmitXorRegReg(X86Register.Rax, X86Register.Rax);
+    EmitMovMemReg(-0xA0, X86Register.Rax, 8);
+    EmitMovMemReg(-0x98, X86Register.Rax, 8);
+    // sin_family = AF_INET (2) — WORD at offset 0
+    EmitBytes(0x66, 0xC7, 0x85); EmitDword(-0xA0); EmitBytes(0x02, 0x00);
+    // sin_port = htons(port) — WORD at offset 2
+    EmitMovRegMem(X86Register.Rax, -0x40, 8);     // RAX = port
+    EmitBytes(0x66, 0xC1, 0xC0, 0x08);            // ROL AX, 8 (htons)
+    EmitBytes(0x66, 0x89, 0x85); EmitDword(-0x9E); // MOV WORD [rbp-0x9E], AX
+    // sin_addr = resolved IP — DWORD at offset 4
+    EmitMovRegMem(X86Register.Rax, -0x30, 8);
+    EmitBytes(0x89, 0x85); EmitDword(-0x9C);       // MOV DWORD [rbp-0x9C], EAX
+
+    // connect(socket, &sockaddr_in, 16)
+    EmitMovRegMem(X86Register.Rcx, -0x28, 8);     // socket
+    EmitLeaRegMem(X86Register.Rdx, -0xA0);        // &sockaddr_in
+    EmitMovRegImm(X86Register.R8, 16);             // sizeof(sockaddr_in)
+    EmitCallImport("ws2_32.dll", "connect");
+
+    // Check result (0 = success)
+    EmitTestRegReg(X86Register.Rax, X86Register.Rax);
+    EmitJcc("z", "__io_sync_ntc_conn_ok");
+    // Connect failed — close socket and return -2
+    EmitMovRegMem(X86Register.Rcx, -0x28, 8);
+    EmitCallImport("ws2_32.dll", "closesocket");
+    EmitMovRegImm(X86Register.Rax, -2);
+    EmitJmp("__io_sync_op_done");
+
+    DefineLabel("__io_sync_ntc_conn_ok");
+    // Return raw socket handle
+    EmitMovRegMem(X86Register.Rax, -0x28, 8);
+    EmitJmp("__io_sync_op_done");
+
+    // --- netSend: send(arg0=handle, arg1->buf, arg1->len, 0) → bytes sent ---
+    DefineLabel("__io_sync_op_net_send");
+    EmitMovRegMem(X86Register.Rax, -0x08, 8); // req
+    EmitMovRegIndirectMem(X86Register.Rcx, X86Register.Rax, SyncReqOffArg0); // socket handle
+    EmitMovRegIndirectMem(X86Register.Rax, X86Register.Rax, SyncReqOffArg1); // args struct ptr
+    EmitMovMemReg(-0x20, X86Register.Rax, 8); // save args struct for freeing
+    EmitBytes(0x48, 0x8B, 0x50, 0x00);        // MOV RDX, [RAX+0] = buf_ptr
+    EmitBytes(0x4C, 0x8B, 0x40, 0x08);        // MOV R8, [RAX+8] = length
+    EmitXorRegReg(X86Register.R9, X86Register.R9); // flags = 0
+    EmitCallImport("ws2_32.dll", "send");
+    EmitMovMemReg(-0x28, X86Register.Rax, 8); // save result
+    // Free args struct
+    EmitMovRegMem(X86Register.Rcx, -0x20, 8);
+    EmitCallRuntimeLabel("mm_raw_free");
+    EmitMovRegMem(X86Register.Rax, -0x28, 8); // restore result
+    EmitJmp("__io_sync_op_done");
+
+    // --- netRecv: recv(arg0=handle, arg1->buf, arg1->len, 0) → bytes received ---
+    DefineLabel("__io_sync_op_net_recv");
+    EmitMovRegMem(X86Register.Rax, -0x08, 8); // req
+    EmitMovRegIndirectMem(X86Register.Rcx, X86Register.Rax, SyncReqOffArg0); // socket handle
+    EmitMovRegIndirectMem(X86Register.Rax, X86Register.Rax, SyncReqOffArg1); // args struct ptr
+    EmitMovMemReg(-0x20, X86Register.Rax, 8); // save args struct for freeing
+    EmitBytes(0x48, 0x8B, 0x50, 0x00);        // MOV RDX, [RAX+0] = buf_ptr
+    EmitBytes(0x4C, 0x8B, 0x40, 0x08);        // MOV R8, [RAX+8] = capacity
+    EmitXorRegReg(X86Register.R9, X86Register.R9); // flags = 0
+    EmitCallImport("ws2_32.dll", "recv");
+    EmitMovMemReg(-0x28, X86Register.Rax, 8); // save result
+    // Free args struct
+    EmitMovRegMem(X86Register.Rcx, -0x20, 8);
+    EmitCallRuntimeLabel("mm_raw_free");
+    EmitMovRegMem(X86Register.Rax, -0x28, 8); // restore result
+    EmitJmp("__io_sync_op_done");
+
+    // --- netClose: closesocket(arg0=handle) ---
+    DefineLabel("__io_sync_op_net_close");
+    EmitMovRegMem(X86Register.Rax, -0x08, 8); // req
+    EmitMovRegIndirectMem(X86Register.Rcx, X86Register.Rax, SyncReqOffArg0); // handle
+    EmitTestRegReg(X86Register.Rcx, X86Register.Rcx);
+    EmitJcc("z", "__io_sync_ntc_close_skip");
+    EmitCallImport("ws2_32.dll", "closesocket");
+    EmitJmp("__io_sync_op_done");
+    DefineLabel("__io_sync_ntc_close_skip");
+    EmitXorRegReg(X86Register.Rax, X86Register.Rax);
+    EmitJmp("__io_sync_op_done");
+
     // --- Common: post completion and continue ---
     DefineLabel("__io_sync_op_done");
     EmitMovMemReg(-0x10, X86Register.Rax, 8); // save result
@@ -4914,12 +5027,13 @@ public partial class X86CodeEmitter {
     EmitCallImport("kernel32.dll", "SetEvent");
 
     if (Compiler.AsyncTrace) {
-      // Trace: "io_yield #N\n" (current thread's trace ID)
+      // Trace: "io_yield #N [op_name]\n"
       EmitLeaRegSymdataRel(X86Register.Rcx, "__at_tag_io_yield");
       EmitCallRuntimeLabel("mm_trace_print_tag");
       EmitGlobalLoadReg(X86Register.Rax, "__gt_current");
       EmitMovRegIndirectMem(X86Register.Rcx, X86Register.Rax, GtOffTraceId);
       EmitCallRuntimeLabel("mm_trace_print_i64");
+      EmitIoTraceOpSuffix("yield");
       EmitLeaRegSymdataRel(X86Register.Rcx, "__at_tag_nl");
       EmitCallRuntimeLabel("mm_trace_print_tag");
     }
@@ -4958,12 +5072,13 @@ public partial class X86CodeEmitter {
     DefineLabel("__io_submit_sync_resume");
 
     if (Compiler.AsyncTrace) {
-      // Trace: "io_resume #N\n" (current thread's trace ID)
+      // Trace: "io_resume #N [op_name]\n"
       EmitLeaRegSymdataRel(X86Register.Rcx, "__at_tag_io_resume");
       EmitCallRuntimeLabel("mm_trace_print_tag");
       EmitGlobalLoadReg(X86Register.Rax, "__gt_current");
       EmitMovRegIndirectMem(X86Register.Rcx, X86Register.Rax, GtOffTraceId);
       EmitCallRuntimeLabel("mm_trace_print_i64");
+      EmitIoTraceOpSuffix("resume");
       EmitLeaRegSymdataRel(X86Register.Rcx, "__at_tag_nl");
       EmitCallRuntimeLabel("mm_trace_print_tag");
     }
@@ -4979,6 +5094,44 @@ public partial class X86CodeEmitter {
     EmitMovIndirectMemReg(X86Register.R10, GtOffIoErrorCode, X86Register.Rax);
     EmitXorRegReg(X86Register.Rax, X86Register.Rax);
     EmitRuntimeFunctionEnd();
+  }
+
+  /// <summary>
+  /// Emits a compare chain that reads the sync op code from [rbp-0x08] and prints
+  /// the matching operation name suffix (e.g., " [net_connect]") for async trace output.
+  /// </summary>
+  private void EmitIoTraceOpSuffix(string context) {
+    var doneLabel = $"__io_trace_op_done_{context}";
+    EmitMovRegMem(X86Register.Rax, -0x08, 8); // load op code
+
+    var ops = new (long opCode, string symdata)[] {
+      (SyncOpFileExists,    "__at_io_op_file_exists"),
+      (SyncOpFileDelete,    "__at_io_op_file_delete"),
+      (SyncOpFindFirst,     "__at_io_op_find_first"),
+      (SyncOpFindNext,      "__at_io_op_find_next"),
+      (SyncOpDirExists,     "__at_io_op_dir_exists"),
+      (SyncOpDirCreate,     "__at_io_op_dir_create"),
+      (SyncOpGetCwd,        "__at_io_op_get_cwd"),
+      (SyncOpFileOpenRead,  "__at_io_op_file_open_read"),
+      (SyncOpFileOpenWrite, "__at_io_op_file_open_write"),
+      (SyncOpCloseHandle,   "__at_io_op_close_handle"),
+      (SyncOpNetConnect,    "__at_io_op_net_connect"),
+      (SyncOpNetSend,       "__at_io_op_net_send"),
+      (SyncOpNetRecv,       "__at_io_op_net_recv"),
+      (SyncOpNetClose,      "__at_io_op_net_close"),
+    };
+
+    foreach (var (opCode, symdata) in ops) {
+      var skipLabel = $"__io_trace_skip_{context}_{opCode}";
+      EmitCmpRegImm(X86Register.Rax, opCode);
+      EmitJcc("ne", skipLabel);
+      EmitLeaRegSymdataRel(X86Register.Rcx, symdata);
+      EmitCallRuntimeLabel("mm_trace_print_tag");
+      EmitJmp(doneLabel);
+      DefineLabel(skipLabel);
+    }
+
+    DefineLabel(doneLabel);
   }
 
   /// <summary>

@@ -36,7 +36,7 @@ scores.insert(Color.red, value: 100)
 
 ## Tests
 
-<!-- test: simple-enum-as-map-key -->
+<!-- test: simple-union-as-map-key -->
 ```maxon
 union Color
   red
@@ -60,7 +60,7 @@ end 'main'
 20
 ```
 
-<!-- test: int-backed-enum-as-map-key -->
+<!-- test: int-backed-union-as-map-key -->
 ```maxon
 union HttpStatus
   ok = 200
@@ -84,7 +84,7 @@ end 'main'
 1
 ```
 
-<!-- test: string-backed-enum-as-map-key -->
+<!-- test: string-backed-union-as-map-key -->
 ```maxon
 union Planet
   earth = "Earth"
@@ -108,7 +108,7 @@ end 'main'
 2
 ```
 
-<!-- test: enum-hash-direct -->
+<!-- test: union-hash-direct -->
 ```maxon
 union Direction
   north
@@ -127,7 +127,7 @@ end 'main'
 1
 ```
 
-<!-- test: enum-equals-direct -->
+<!-- test: union-equals-direct -->
 ```maxon
 union Color
   red
@@ -152,7 +152,7 @@ end 'main'
 1
 ```
 
-<!-- test: error.associated-value-enum-not-hashable -->
+<!-- test: error.associated-value-union-not-hashable -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -170,10 +170,10 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3017: specs/fragments/union-hashable/error.associated-value-enum-not-hashable.test:10:11: Type 'Container' does not satisfy constraint 'Hashable' required by type parameter 'Key' of 'Map'
+error E3017: specs/fragments/union-hashable/error.associated-value-union-not-hashable.test:10:11: Type 'Container' does not satisfy constraint 'Hashable' required by type parameter 'Key' of 'Map'
 ```
 
-<!-- test: char-backed-enum-as-map-key -->
+<!-- test: char-backed-union-as-map-key -->
 ```maxon
 union Grade
   excellent = 'A'
@@ -196,7 +196,7 @@ end 'main'
 100
 ```
 
-<!-- test: enum-map-remove -->
+<!-- test: union-map-remove -->
 ```maxon
 union Color
   red
@@ -222,7 +222,7 @@ end 'main'
 0
 ```
 
-<!-- test: global-enum-map -->
+<!-- test: global-union-map -->
 ```maxon
 union LogLevel
   NONE
@@ -273,7 +273,7 @@ end 'main'
 1
 ```
 
-<!-- test: enum-map-for-in-insert -->
+<!-- test: union-map-for-in-insert -->
 ```maxon
 union Color
   red

@@ -2,6 +2,8 @@
 You *Are* Going To Read It
 
 ## Priorities
+- tokenkind should be a type
+- remove range matches for unions
 - self hosting features
 - debugging (speed up the dev process)
 - memory safety (generational references)

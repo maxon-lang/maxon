@@ -1,37 +1,37 @@
-// Test: async-await.trace-yield
-typealias Integer = int(i64.min to i64.max)
-
-function ioTask() returns Integer
-    if File.exists(FilePath from "noyield.txt") 'io'
-    end 'io'
-    return 42
-end 'ioTask'
+// Test: async-tcp.trace-mixed-io
+function mixedIo() returns ExitCode throws NetworkError
+  let _ = File.exists(FilePath from "nofile.txt")
+  let _ = try TcpClient.connect("192.0.2.1", port: 1)
+  return 0
+end 'mixedIo'
 
 function main() returns ExitCode
-    var p = async ioTask()
-    var r = await p
-    return r
+  var p = async mixedIo()
+  let result = try await p otherwise 99
+  return result
 end 'main'
 ---
 AsyncTrace: true
-ExitCode: 42
+ExitCode: 99
 Stderr: ```
 spawn #1
 io_yield #1 [file_exists]
 io_resume #1 [file_exists]
-await #1 [yield]
+io_yield #1 [net_connect]
+io_resume #1 [net_connect]
+try_await #1 [yield]
 ```
 ---
 module {
-  func @async-await.ioTask() -> i64 {
+  func @async-tcp.mixedIo() -> u32 {
   entry:
-    x86.prologue stack_size=32
+    x86.prologue stack_size=96
     x86.lea_rdata rax, [__str_0]
     x86.mov rcx, rax
-    x86.mov rdx, 11
+    x86.mov rdx, 10
     x86.lea_func rbx, [__destruct_String]
     x86.mov rsi, rbx
-    x86.mov [rbp-32], rcx
+    x86.mov [rbp-72], rcx
     x86.mov rdx, rsi
     x86.mov rcx, 16
     x86.mov r8, 9
@@ -45,10 +45,10 @@ module {
     x86.call mm_alloc
     x86.mov [rbp-16], rax
     x86.mov r9, [rbp-16]
-    x86.mov rax, [rbp-32]
+    x86.mov rax, [rbp-72]
     x86.mov [r9+0], rax
     x86.mov rax, [rbp-16]
-    x86.mov rcx, 11
+    x86.mov rcx, 10
     x86.mov [rax+8], rcx
     x86.xor rax, rax
     x86.mov rcx, [rbp-16]
@@ -75,65 +75,164 @@ module {
     x86.mov rax, [rbp-24]
     x86.mov rcx, [rbp-24]
     x86.call stdlib.File.exists
-    x86.test rax, rax
-    x86.je async-await.ioTask.io_0.merge
-  io_0:
-    x86.mov rax, [rbp-24]
+    x86.lea_rdata rcx, [__str_1]
+    x86.mov rdx, rcx
+    x86.mov rcx, 9
+    x86.lea_func rbx, [__destruct_String]
+    x86.mov rsi, rbx
+    x86.mov [rbp-80], rax
+    x86.mov [rbp-88], rdx
+    x86.mov rdx, rsi
+    x86.mov rcx, 16
+    x86.mov r8, 9
+    x86.call mm_alloc
+    x86.mov [rbp-32], rax
+    x86.lea_func rax, [__destruct___ManagedMemory]
+    x86.mov rcx, rax
+    x86.mov rdx, rcx
+    x86.mov rcx, 32
+    x86.mov r8, 4
+    x86.call mm_alloc
+    x86.mov [rbp-40], rax
+    x86.mov rax, [rbp-40]
+    x86.mov rcx, [rbp-88]
+    x86.mov [rax+0], rcx
+    x86.mov rax, [rbp-40]
+    x86.mov rcx, 9
+    x86.mov [rax+8], rcx
+    x86.xor rax, rax
+    x86.mov rcx, [rbp-40]
+    x86.mov [rcx+16], rax
+    x86.mov rax, 1
+    x86.mov rcx, [rbp-40]
+    x86.mov [rcx+24], rax
+    x86.mov rax, [rbp-40]
+    x86.mov rcx, [rbp-32]
+    x86.mov [rcx+0], rax
+    x86.mov rax, [rbp-40]
+    x86.mov rcx, [rbp-40]
+    x86.call mm_incref
+    x86.xor rax, rax
+    x86.mov rcx, [rbp-32]
+    x86.mov [rcx+8], rax
+    x86.mov rax, [rbp-32]
+    x86.mov rcx, [rbp-32]
+    x86.call mm_incref
+    x86.mov rax, [rbp-32]
+    x86.mov rcx, [rbp-32]
+    x86.mov rdx, 1
+    x86.call stdlib.TcpClient.connect
+    x86.mov [rbp-48], rdx
+    x86.mov [rbp-56], rax
+    x86.xor rax, rax
+    x86.cmp rdx, rax
+    x86.je async-tcp.mixedIo.try_continue_1
+  propagate_error_0:
+    x86.mov rdx, [rbp-48]
+    x86.mov rax, [rbp-56]
     x86.test rax, rax
     x86.jz __nonnull_skip_0
-    x86.mov rcx, [rbp-24]
+    x86.mov rcx, [rbp-56]
     x86.call mm_decref
     x86.label __nonnull_skip_0
-    x86.xor rcx, rcx
-    x86.mov [rbp-24], rcx
-    x86.jmp async-await.ioTask.io_0.merge
-  io_0.merge:
-    x86.mov rax, [rbp-8]
-    x86.test rax, rax
+    x86.mov rcx, [rbp-32]
+    x86.test rcx, rcx
     x86.jz __nonnull_skip_1
-    x86.mov rcx, [rbp-8]
     x86.call mm_decref
     x86.label __nonnull_skip_1
-    x86.mov rcx, [rbp-24]
-    x86.test rcx, rcx
+    x86.mov rdx, [rbp-8]
+    x86.test rdx, rdx
     x86.jz __nonnull_skip_2
+    x86.mov rcx, [rbp-8]
     x86.call mm_decref
     x86.label __nonnull_skip_2
-    x86.mov rax, 42
+    x86.mov rbx, [rbp-24]
+    x86.test rbx, rbx
+    x86.jz __nonnull_skip_3
+    x86.mov rcx, [rbp-24]
+    x86.call mm_decref
+    x86.label __nonnull_skip_3
+    x86.mov rdx, [rbp-48]
+    x86.xor rax, rax
+    x86.epilogue
+    x86.ret
+  try_continue_1:
+    x86.mov rax, [rbp-56]
+    x86.mov [rbp-64], rax
+    x86.mov rcx, [rbp-64]
+    x86.call mm_incref
+    x86.mov rdx, [rbp-56]
+    x86.test rdx, rdx
+    x86.jz __nonnull_skip_4
+    x86.mov rcx, [rbp-56]
+    x86.call mm_decref
+    x86.label __nonnull_skip_4
+    x86.mov rbx, [rbp-32]
+    x86.test rbx, rbx
+    x86.jz __nonnull_skip_5
+    x86.mov rcx, [rbp-32]
+    x86.call mm_decref
+    x86.label __nonnull_skip_5
+    x86.mov rsi, [rbp-8]
+    x86.test rsi, rsi
+    x86.jz __nonnull_skip_6
+    x86.mov rcx, [rbp-8]
+    x86.call mm_decref
+    x86.label __nonnull_skip_6
+    x86.mov rdi, [rbp-24]
+    x86.test rdi, rdi
+    x86.jz __nonnull_skip_7
+    x86.mov rcx, [rbp-24]
+    x86.call mm_decref
+    x86.label __nonnull_skip_7
+    x86.xor rax, rax
+    x86.xor rdx, rdx
     x86.epilogue
     x86.ret
   }
-  func @async-await.main() -> u32 {
+  func @async-tcp.main() -> u32 {
   entry:
-    x86.prologue stack_size=16
+    x86.prologue stack_size=32
     x86.mov rcx, 8
     x86.call mm_raw_alloc
     x86.xor rcx, rcx
     x86.mov [rax+0], rcx
-    x86.lea_func rdx, [async-await.ioTask]
+    x86.lea_func rdx, [async-tcp.mixedIo]
     x86.mov r8, rax
     x86.xchg rdx, rcx
     x86.call __gt_spawn
     x86.mov rcx, rax
-    x86.call __gt_await
-    x86.mov [rbp-8], rax
+    x86.call __gt_try_await
+    x86.mov rcx, 99
+    x86.mov [rbp-8], rcx
+    x86.mov [rbp-16], rax
+    x86.xor rax, rax
+    x86.cmp rdx, rax
+    x86.je async-tcp.main.otherwise_default_continue_3
+  otherwise_default_error_2:
+    x86.mov rax, [rbp-8]
+    x86.mov [rbp-16], rax
+    x86.jmp async-tcp.main.otherwise_default_continue_3
+  otherwise_default_continue_3:
+    x86.mov rax, [rbp-16]
+    x86.mov [rbp-24], rax
     x86.xor rcx, rcx
     x86.cmp rax, rcx
-    x86.setl rcx
-    x86.movzx rcx, rcxb
-    x86.mov rdx, 4294967295
-    x86.cmp rax, rdx
-    x86.setg rax
-    x86.movzx rax, raxb
-    x86.or rcx, rax
-    x86.test rcx, rcx
-    x86.je async-await.main.__range_ok_0
-  __range_panic_0:
-    x86.lea_symdata rax, [__panic_msg_11]
+    x86.setl rdx
+    x86.movzx rdx, rdxb
+    x86.mov rbx, 4294967295
+    x86.cmp rax, rbx
+    x86.setg rsi
+    x86.movzx rsi, rsib
+    x86.or rdx, rsi
+    x86.test rdx, rdx
+    x86.je async-tcp.main.__range_ok_4
+  __range_panic_4:
+    x86.lea_symdata rax, [__panic_msg_27]
     x86.mov rcx, rax
     x86.call maxon_panic
-  __range_ok_0:
-    x86.mov rax, [rbp-8]
+  __range_ok_4:
+    x86.mov rax, [rbp-24]
     x86.epilogue
     x86.ret
   }
@@ -147,10 +246,10 @@ module {
     x86.mov rax, qword [rip+CharacterSet._whitespacesAndNewlines]
     x86.mov [rbp-8], rax
     x86.test rax, rax
-    x86.jz __nonnull_skip_30
+    x86.jz __nonnull_skip_35
     x86.mov rcx, [rbp-8]
     x86.call mm_decref
-    x86.label __nonnull_skip_30
+    x86.label __nonnull_skip_35
     x86.jmp __maxon_global_cleanup.__cleanup_skip_CharacterSet__whitespacesAndNewlines
   __cleanup_skip_CharacterSet__whitespacesAndNewlines:
     x86.epilogue
@@ -190,9 +289,9 @@ module {
     x86.mov rcx, [rax+0]
     x86.mov [rbp-16], rcx
     x86.test rcx, rcx
-    x86.jz __nonnull_skip_31
+    x86.jz __nonnull_skip_36
     x86.call mm_decref
-    x86.label __nonnull_skip_31
+    x86.label __nonnull_skip_36
     x86.jmp __destruct_Character.done
   done:
     x86.epilogue
@@ -230,9 +329,9 @@ module {
     x86.mov rcx, [rax+8]
     x86.mov [rbp-16], rcx
     x86.test rcx, rcx
-    x86.jz __nonnull_skip_32
+    x86.jz __nonnull_skip_37
     x86.call mm_decref
-    x86.label __nonnull_skip_32
+    x86.label __nonnull_skip_37
     x86.jmp __destruct_Array.done
   done:
     x86.epilogue
@@ -246,9 +345,9 @@ module {
     x86.mov rcx, [rax+0]
     x86.mov [rbp-16], rcx
     x86.test rcx, rcx
-    x86.jz __nonnull_skip_33
+    x86.jz __nonnull_skip_38
     x86.call mm_decref
-    x86.label __nonnull_skip_33
+    x86.label __nonnull_skip_38
     x86.jmp __destruct_CharacterSet.done
   done:
     x86.epilogue
@@ -262,9 +361,9 @@ module {
     x86.mov rcx, [rax+0]
     x86.mov [rbp-16], rcx
     x86.test rcx, rcx
-    x86.jz __nonnull_skip_34
+    x86.jz __nonnull_skip_39
     x86.call mm_decref
-    x86.label __nonnull_skip_34
+    x86.label __nonnull_skip_39
     x86.jmp __destruct_FilePath.done
   done:
     x86.epilogue
@@ -278,10 +377,26 @@ module {
     x86.mov rcx, [rax+0]
     x86.mov [rbp-16], rcx
     x86.test rcx, rcx
-    x86.jz __nonnull_skip_35
+    x86.jz __nonnull_skip_40
     x86.call mm_decref
-    x86.label __nonnull_skip_35
+    x86.label __nonnull_skip_40
     x86.jmp __destruct_String.done
+  done:
+    x86.epilogue
+    x86.ret
+  }
+  func @__destruct_TcpClient(ptr: i64) {
+  entry:
+    x86.prologue stack_size=16
+    x86.mov [rbp-8], rcx
+    x86.mov rax, [rbp-8]
+    x86.mov rcx, [rax+0]
+    x86.mov [rbp-16], rcx
+    x86.test rcx, rcx
+    x86.jz __nonnull_skip_41
+    x86.call mm_decref
+    x86.label __nonnull_skip_41
+    x86.jmp __destruct_TcpClient.done
   done:
     x86.epilogue
     x86.ret
@@ -294,47 +409,47 @@ module {
     x86.mov rcx, [rax+0]
     x86.mov [rbp-16], rcx
     x86.test rcx, rcx
-    x86.jz __nonnull_skip_36
+    x86.jz __nonnull_skip_42
     x86.call mm_decref
-    x86.label __nonnull_skip_36
+    x86.label __nonnull_skip_42
     x86.mov rdx, [rbp-8]
     x86.mov rbx, [rdx+8]
     x86.mov [rbp-24], rbx
     x86.test rbx, rbx
-    x86.jz __nonnull_skip_37
+    x86.jz __nonnull_skip_43
     x86.mov rcx, [rbp-24]
     x86.call mm_decref
-    x86.label __nonnull_skip_37
+    x86.label __nonnull_skip_43
     x86.mov rsi, [rbp-8]
     x86.mov rdi, [rsi+16]
     x86.mov [rbp-32], rdi
     x86.test rdi, rdi
-    x86.jz __nonnull_skip_38
+    x86.jz __nonnull_skip_44
     x86.mov rcx, [rbp-32]
     x86.call mm_decref
-    x86.label __nonnull_skip_38
+    x86.label __nonnull_skip_44
     x86.mov r8, [rbp-8]
     x86.mov r9, [r8+24]
     x86.mov [rbp-40], r9
     x86.test r9, r9
-    x86.jz __nonnull_skip_39
+    x86.jz __nonnull_skip_45
     x86.mov rcx, [rbp-40]
     x86.call mm_decref
-    x86.label __nonnull_skip_39
+    x86.label __nonnull_skip_45
     x86.mov rax, [rbp-8]
     x86.mov rcx, [rax+40]
     x86.mov [rbp-48], rcx
     x86.test rcx, rcx
-    x86.jz __nonnull_skip_40
+    x86.jz __nonnull_skip_46
     x86.call mm_decref
-    x86.label __nonnull_skip_40
+    x86.label __nonnull_skip_46
     x86.mov rax, [rbp-8]
     x86.mov rcx, [rax+48]
     x86.mov [rbp-56], rcx
     x86.test rcx, rcx
-    x86.jz __nonnull_skip_41
+    x86.jz __nonnull_skip_47
     x86.call mm_decref
-    x86.label __nonnull_skip_41
+    x86.label __nonnull_skip_47
     x86.jmp __destruct_URL.done
   done:
     x86.epilogue
@@ -348,9 +463,9 @@ module {
     x86.mov rcx, [rax+8]
     x86.mov [rbp-16], rcx
     x86.test rcx, rcx
-    x86.jz __nonnull_skip_42
+    x86.jz __nonnull_skip_48
     x86.call mm_decref
-    x86.label __nonnull_skip_42
+    x86.label __nonnull_skip_48
     x86.jmp __destruct_Array_Character.done
   done:
     x86.epilogue
@@ -384,9 +499,9 @@ module {
     x86.mov rcx, [rax+8]
     x86.mov [rbp-16], rcx
     x86.test rcx, rcx
-    x86.jz __nonnull_skip_43
+    x86.jz __nonnull_skip_49
     x86.call mm_decref
-    x86.label __nonnull_skip_43
+    x86.label __nonnull_skip_49
     x86.jmp __destruct_StateArray.done
   done:
     x86.epilogue
@@ -400,17 +515,17 @@ module {
     x86.mov rcx, [rax+0]
     x86.mov [rbp-16], rcx
     x86.test rcx, rcx
-    x86.jz __nonnull_skip_44
+    x86.jz __nonnull_skip_50
     x86.call mm_decref
-    x86.label __nonnull_skip_44
+    x86.label __nonnull_skip_50
     x86.mov rdx, [rbp-8]
     x86.mov rbx, [rdx+8]
     x86.mov [rbp-24], rbx
     x86.test rbx, rbx
-    x86.jz __nonnull_skip_45
+    x86.jz __nonnull_skip_51
     x86.mov rcx, [rbp-24]
     x86.call mm_decref
-    x86.label __nonnull_skip_45
+    x86.label __nonnull_skip_51
     x86.jmp __destruct_CharSet.done
   done:
     x86.epilogue

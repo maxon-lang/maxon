@@ -74,6 +74,120 @@ function lookupBlockId(state MidFuncState, label ByteArray) returns BlockId
     return 0
 end 'lookupBlockId'
 
+// --- Arith op tag enum and lookup table ---
+
+enum ArithOpTag
+    addI64
+    subI64
+    mulI64
+    divI64
+    remI64
+    negI64
+    bitNotI64
+    andI64
+    orI64
+    xorI64
+    shlI64
+    shrI64
+    cmpI64Eq
+    cmpI64Ne
+    cmpI64Lt
+    cmpI64Le
+    cmpI64Gt
+    cmpI64Ge
+    cmpF64Eq
+    cmpF64Ne
+    cmpF64Lt
+    cmpF64Le
+    cmpF64Gt
+    cmpF64Ge
+end 'ArithOpTag'
+
+var arithOpTags = [
+    b"addI64":   ArithOpTag.addI64,
+    b"subI64":   ArithOpTag.subI64,
+    b"mulI64":   ArithOpTag.mulI64,
+    b"divI64":   ArithOpTag.divI64,
+    b"remI64":   ArithOpTag.remI64,
+    b"negI64":   ArithOpTag.negI64,
+    b"bitNotI64": ArithOpTag.bitNotI64,
+    b"andI64":   ArithOpTag.andI64,
+    b"orI64":    ArithOpTag.orI64,
+    b"xorI64":   ArithOpTag.xorI64,
+    b"shlI64":   ArithOpTag.shlI64,
+    b"shrI64":   ArithOpTag.shrI64,
+    b"cmpI64Eq": ArithOpTag.cmpI64Eq,
+    b"cmpI64Ne": ArithOpTag.cmpI64Ne,
+    b"cmpI64Lt": ArithOpTag.cmpI64Lt,
+    b"cmpI64Le": ArithOpTag.cmpI64Le,
+    b"cmpI64Gt": ArithOpTag.cmpI64Gt,
+    b"cmpI64Ge": ArithOpTag.cmpI64Ge,
+    b"cmpF64Eq": ArithOpTag.cmpF64Eq,
+    b"cmpF64Ne": ArithOpTag.cmpF64Ne,
+    b"cmpF64Lt": ArithOpTag.cmpF64Lt,
+    b"cmpF64Le": ArithOpTag.cmpF64Le,
+    b"cmpF64Gt": ArithOpTag.cmpF64Gt,
+    b"cmpF64Ge": ArithOpTag.cmpF64Ge
+]
+
+// Build an ArithOp from a tag and binary operands.
+function midMakeBinaryArithOp(tag ArithOpTag, resultId ValueId, leftId ValueId, rightId ValueId) returns ArithOp
+    return match tag 'make'
+        ArithOpTag.addI64   gives ArithOp.addI64(resultId, leftId, rightId)
+        ArithOpTag.subI64   gives ArithOp.subI64(resultId, leftId, rightId)
+        ArithOpTag.mulI64   gives ArithOp.mulI64(resultId, leftId, rightId)
+        ArithOpTag.divI64   gives ArithOp.divI64(resultId, leftId, rightId)
+        ArithOpTag.remI64   gives ArithOp.remI64(resultId, leftId, rightId)
+        ArithOpTag.andI64   gives ArithOp.andI64(resultId, leftId, rightId)
+        ArithOpTag.orI64    gives ArithOp.orI64(resultId, leftId, rightId)
+        ArithOpTag.xorI64   gives ArithOp.xorI64(resultId, leftId, rightId)
+        ArithOpTag.shlI64   gives ArithOp.shlI64(resultId, leftId, rightId)
+        ArithOpTag.shrI64   gives ArithOp.shrI64(resultId, leftId, rightId)
+        ArithOpTag.cmpI64Eq gives ArithOp.cmpI64Eq(resultId, leftId, rightId)
+        ArithOpTag.cmpI64Ne gives ArithOp.cmpI64Ne(resultId, leftId, rightId)
+        ArithOpTag.cmpI64Lt gives ArithOp.cmpI64Lt(resultId, leftId, rightId)
+        ArithOpTag.cmpI64Le gives ArithOp.cmpI64Le(resultId, leftId, rightId)
+        ArithOpTag.cmpI64Gt gives ArithOp.cmpI64Gt(resultId, leftId, rightId)
+        ArithOpTag.cmpI64Ge gives ArithOp.cmpI64Ge(resultId, leftId, rightId)
+        ArithOpTag.cmpF64Eq gives ArithOp.cmpF64Eq(resultId, leftId, rightId)
+        ArithOpTag.cmpF64Ne gives ArithOp.cmpF64Ne(resultId, leftId, rightId)
+        ArithOpTag.cmpF64Lt gives ArithOp.cmpF64Lt(resultId, leftId, rightId)
+        ArithOpTag.cmpF64Le gives ArithOp.cmpF64Le(resultId, leftId, rightId)
+        ArithOpTag.cmpF64Gt gives ArithOp.cmpF64Gt(resultId, leftId, rightId)
+        ArithOpTag.cmpF64Ge gives ArithOp.cmpF64Ge(resultId, leftId, rightId)
+        default gives ArithOp.addI64(resultId, leftId, rightId)
+    end 'make'
+end 'midMakeBinaryArithOp'
+
+// Build an ArithOp from a tag and unary operand.
+function midMakeUnaryArithOp(tag ArithOpTag, resultId ValueId, operandId ValueId) returns ArithOp
+    return match tag 'make'
+        ArithOpTag.negI64    gives ArithOp.negI64(resultId, operandId)
+        ArithOpTag.bitNotI64 gives ArithOp.bitNotI64(resultId, operandId)
+        default gives ArithOp.negI64(resultId, operandId)
+    end 'make'
+end 'midMakeUnaryArithOp'
+
+// --- Sys op tag enum and lookup table ---
+
+enum SysOpTag
+    osExit
+    osWrite
+    loadByte
+    storeByte
+    memcpy
+    stackAddr
+end 'SysOpTag'
+
+var sysOpTags = [
+    b"osExit":    SysOpTag.osExit,
+    b"osWrite":   SysOpTag.osWrite,
+    b"loadByte":  SysOpTag.loadByte,
+    b"storeByte": SysOpTag.storeByte,
+    b"memcpy":    SysOpTag.memcpy,
+    b"stackAddr": SysOpTag.stackAddr
+]
+
 // --- Token helpers ---
 
 function midTokenAt(tokens TokenArray, pos MidTokenIndex) returns Token
@@ -377,11 +491,11 @@ function midParseOpBody(tokens TokenArray, startPos MidTokenIndex, block MlirBlo
     return pos
 end 'midParseOpBody'
 
-// Arith ops
+// Arith ops — table-driven dispatch
 function midParseArithOp(tokens TokenArray, startPos MidTokenIndex, block MlirBlock, state MidFuncState, resultId ValueId, opName ByteArray) returns MidTokenIndex
     var pos = startPos
 
-    // constI64: arith constI64 <value>
+    // Special case: constI64 has unique arg parsing (integer literal, not value ref)
     if bytesEqual(opName, b: b"constI64") 'isConst'
         let value = midParseIntValue(tokens, pos: pos)
         let advance = midIntValueTokenCount(tokens, pos: pos)
@@ -390,64 +504,21 @@ function midParseArithOp(tokens TokenArray, startPos MidTokenIndex, block MlirBl
         return pos
     end 'isConst'
 
-    // Binary ops: arith <op> <left> <right>
-    if bytesEqual(opName, b: b"addI64") 'isAdd'
+    // Table lookup for all other arith ops
+    if arithOpTags.contains(opName) 'inTable'
+        let tag = try arithOpTags.get(opName) otherwise ArithOpTag.addI64
+        // Unary ops
+        if tag == ArithOpTag.negI64 or tag == ArithOpTag.bitNotI64 'isUnary'
+            let operandId = lookupValueId(state, name: midTokenAt(tokens, pos: pos).value)
+            block.ops.push(MlirOp.arith(midMakeUnaryArithOp(tag, resultId: resultId, operandId: operandId)))
+            return pos + 1
+        end 'isUnary'
+        // Binary ops (all others in the table)
         let leftId = lookupValueId(state, name: midTokenAt(tokens, pos: pos).value)
         let rightId = lookupValueId(state, name: midTokenAt(tokens, pos: pos + 1).value)
-        block.ops.push(MlirOp.arith(ArithOp.addI64(resultId, leftId, rightId)))
+        block.ops.push(MlirOp.arith(midMakeBinaryArithOp(tag, resultId: resultId, leftId: leftId, rightId: rightId)))
         return pos + 2
-    end 'isAdd'
-    if bytesEqual(opName, b: b"subI64") 'isSub'
-        let leftId = lookupValueId(state, name: midTokenAt(tokens, pos: pos).value)
-        let rightId = lookupValueId(state, name: midTokenAt(tokens, pos: pos + 1).value)
-        block.ops.push(MlirOp.arith(ArithOp.subI64(resultId, leftId, rightId)))
-        return pos + 2
-    end 'isSub'
-    if bytesEqual(opName, b: b"mulI64") 'isMul'
-        let leftId = lookupValueId(state, name: midTokenAt(tokens, pos: pos).value)
-        let rightId = lookupValueId(state, name: midTokenAt(tokens, pos: pos + 1).value)
-        block.ops.push(MlirOp.arith(ArithOp.mulI64(resultId, leftId, rightId)))
-        return pos + 2
-    end 'isMul'
-    if bytesEqual(opName, b: b"divI64") 'isDiv'
-        let leftId = lookupValueId(state, name: midTokenAt(tokens, pos: pos).value)
-        let rightId = lookupValueId(state, name: midTokenAt(tokens, pos: pos + 1).value)
-        block.ops.push(MlirOp.arith(ArithOp.divI64(resultId, leftId, rightId)))
-        return pos + 2
-    end 'isDiv'
-    if bytesEqual(opName, b: b"remI64") 'isRem'
-        let leftId = lookupValueId(state, name: midTokenAt(tokens, pos: pos).value)
-        let rightId = lookupValueId(state, name: midTokenAt(tokens, pos: pos + 1).value)
-        block.ops.push(MlirOp.arith(ArithOp.remI64(resultId, leftId, rightId)))
-        return pos + 2
-    end 'isRem'
-
-    // Unary op: arith negI64 <operand>
-    if bytesEqual(opName, b: b"negI64") 'isNeg'
-        let operandId = lookupValueId(state, name: midTokenAt(tokens, pos: pos).value)
-        block.ops.push(MlirOp.arith(ArithOp.negI64(resultId, operandId)))
-        return pos + 1
-    end 'isNeg'
-
-    // Comparison ops
-    if bytesEqual(opName, b: b"cmpI64Eq") 'isCmpEq'
-        let leftId = lookupValueId(state, name: midTokenAt(tokens, pos: pos).value)
-        let rightId = lookupValueId(state, name: midTokenAt(tokens, pos: pos + 1).value)
-        block.ops.push(MlirOp.arith(ArithOp.cmpI64Eq(resultId, leftId, rightId)))
-        return pos + 2
-    end 'isCmpEq'
-    if bytesEqual(opName, b: b"cmpI64Lt") 'isCmpLt'
-        let leftId = lookupValueId(state, name: midTokenAt(tokens, pos: pos).value)
-        let rightId = lookupValueId(state, name: midTokenAt(tokens, pos: pos + 1).value)
-        block.ops.push(MlirOp.arith(ArithOp.cmpI64Lt(resultId, leftId, rightId)))
-        return pos + 2
-    end 'isCmpLt'
-    if bytesEqual(opName, b: b"cmpI64Gt") 'isCmpGt'
-        let leftId = lookupValueId(state, name: midTokenAt(tokens, pos: pos).value)
-        let rightId = lookupValueId(state, name: midTokenAt(tokens, pos: pos + 1).value)
-        block.ops.push(MlirOp.arith(ArithOp.cmpI64Gt(resultId, leftId, rightId)))
-        return pos + 2
-    end 'isCmpGt'
+    end 'inTable'
 
     panic("MidLevelParser: unknown arith op '{String.from(opName)}'")
     return pos
@@ -502,49 +573,45 @@ function midParseCfOp(tokens TokenArray, startPos MidTokenIndex, block MlirBlock
     return pos
 end 'midParseCfOp'
 
-// Sys ops
+// Sys ops — table-driven dispatch
 function midParseSysOp(tokens TokenArray, startPos MidTokenIndex, block MlirBlock, state MidFuncState, resultId ValueId, opName ByteArray) returns MidTokenIndex
     var pos = startPos
 
-    // stackAddr: sys stackAddr <slotId>
-    if bytesEqual(opName, b: b"stackAddr") 'isStackAddr'
-        let slotId = midParseUnsignedInt(midTokenAt(tokens, pos: pos).value)
-        block.ops.push(MlirOp.sys(SysOp.stackAddr(resultId, slotId)))
-        return pos + 1
-    end 'isStackAddr'
-
-    // storeByte: sys storeByte <baseRef> <offsetRef> <byteRef>
-    if bytesEqual(opName, b: b"storeByte") 'isStoreByte'
-        let baseId = lookupValueId(state, name: midTokenAt(tokens, pos: pos).value)
-        let offsetId = lookupValueId(state, name: midTokenAt(tokens, pos: pos + 1).value)
-        let byteId = lookupValueId(state, name: midTokenAt(tokens, pos: pos + 2).value)
-        block.ops.push(MlirOp.sys(SysOp.storeByte(baseId, offsetId, byteId)))
-        return pos + 3
-    end 'isStoreByte'
-
-    // memcpy: sys memcpy <dstRef> <srcRef> <lenRef>
-    if bytesEqual(opName, b: b"memcpy") 'isMemcpy'
-        let dstId = lookupValueId(state, name: midTokenAt(tokens, pos: pos).value)
-        let srcId = lookupValueId(state, name: midTokenAt(tokens, pos: pos + 1).value)
-        let lenId = lookupValueId(state, name: midTokenAt(tokens, pos: pos + 2).value)
-        block.ops.push(MlirOp.sys(SysOp.memcpy(dstId, srcId, lenId)))
-        return pos + 3
-    end 'isMemcpy'
-
-    // osExit: sys osExit <codeRef>
-    if bytesEqual(opName, b: b"osExit") 'isOsExit'
-        let codeId = lookupValueId(state, name: midTokenAt(tokens, pos: pos).value)
-        block.ops.push(MlirOp.sys(SysOp.osExit(codeId)))
-        return pos + 1
-    end 'isOsExit'
-
-    // osWrite: sys osWrite <ptrRef> <lenRef>
-    if bytesEqual(opName, b: b"osWrite") 'isOsWrite'
-        let ptrId = lookupValueId(state, name: midTokenAt(tokens, pos: pos).value)
-        let lenId = lookupValueId(state, name: midTokenAt(tokens, pos: pos + 1).value)
-        block.ops.push(MlirOp.sys(SysOp.osWrite(ptrId, lenId)))
-        return pos + 2
-    end 'isOsWrite'
+    if sysOpTags.contains(opName) 'inTable'
+        let tag = try sysOpTags.get(opName) otherwise SysOpTag.osExit
+        match tag 'dispatch'
+            SysOpTag.stackAddr then
+                let slotId = midParseUnsignedInt(midTokenAt(tokens, pos: pos).value)
+                block.ops.push(MlirOp.sys(SysOp.stackAddr(resultId, slotId)))
+                return pos + 1
+            SysOpTag.osExit then
+                let codeId = lookupValueId(state, name: midTokenAt(tokens, pos: pos).value)
+                block.ops.push(MlirOp.sys(SysOp.osExit(codeId)))
+                return pos + 1
+            SysOpTag.osWrite then
+                let ptrId = lookupValueId(state, name: midTokenAt(tokens, pos: pos).value)
+                let lenId = lookupValueId(state, name: midTokenAt(tokens, pos: pos + 1).value)
+                block.ops.push(MlirOp.sys(SysOp.osWrite(ptrId, lenId)))
+                return pos + 2
+            SysOpTag.loadByte then
+                let baseId = lookupValueId(state, name: midTokenAt(tokens, pos: pos).value)
+                let offsetId = lookupValueId(state, name: midTokenAt(tokens, pos: pos + 1).value)
+                block.ops.push(MlirOp.sys(SysOp.loadByte(resultId, baseId, offsetId)))
+                return pos + 2
+            SysOpTag.storeByte then
+                let baseId = lookupValueId(state, name: midTokenAt(tokens, pos: pos).value)
+                let offsetId = lookupValueId(state, name: midTokenAt(tokens, pos: pos + 1).value)
+                let byteId = lookupValueId(state, name: midTokenAt(tokens, pos: pos + 2).value)
+                block.ops.push(MlirOp.sys(SysOp.storeByte(baseId, offsetId, byteId)))
+                return pos + 3
+            SysOpTag.memcpy then
+                let dstId = lookupValueId(state, name: midTokenAt(tokens, pos: pos).value)
+                let srcId = lookupValueId(state, name: midTokenAt(tokens, pos: pos + 1).value)
+                let lenId = lookupValueId(state, name: midTokenAt(tokens, pos: pos + 2).value)
+                block.ops.push(MlirOp.sys(SysOp.memcpy(dstId, srcId, lenId)))
+                return pos + 3
+        end 'dispatch'
+    end 'inTable'
 
     panic("MidLevelParser: unknown sys op '{String.from(opName)}'")
     return pos

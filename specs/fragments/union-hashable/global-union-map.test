@@ -1,0 +1,595 @@
+// Test: global-union-map
+union LogLevel
+  NONE
+  ERROR
+  INFO
+end 'LogLevel'
+
+union LogCategory
+  compiler
+  lexer
+  parser
+end 'LogCategory'
+
+typealias CategoryLevelMap = Map with (LogCategory, LogLevel)
+
+var categoryLevels = CategoryLevelMap{}
+
+function setCategoryLevel(category LogCategory, level LogLevel)
+  categoryLevels.insert(category, value: level)
+end 'setCategoryLevel'
+
+function getCategoryLevel(category LogCategory) returns LogLevel
+  return try categoryLevels.get(category) otherwise LogLevel.NONE
+end 'getCategoryLevel'
+
+function main() returns ExitCode
+  setCategoryLevel(LogCategory.compiler, level: LogLevel.INFO)
+  setCategoryLevel(LogCategory.lexer, level: LogLevel.ERROR)
+  var compilerLevel = getCategoryLevel(LogCategory.compiler)
+  var lexerLevel = getCategoryLevel(LogCategory.lexer)
+  var r1 = match compilerLevel 'c'
+    LogLevel.INFO gives true
+    LogLevel.NONE gives false
+    LogLevel.ERROR gives false
+  end 'c'
+  var r2 = match lexerLevel 'l'
+    LogLevel.ERROR gives true
+    LogLevel.NONE gives false
+    LogLevel.INFO gives false
+  end 'l'
+  if r1 and r2 'both'
+    return 1
+  end 'both'
+  return 0
+end 'main'
+---
+ExitCode: 1
+---
+module {
+  func @LogCategory.hash(self: i64) -> i64 {
+  entry:
+    x86.jmp stdlib.int.hash
+  }
+  func @union-hashable.setCategoryLevel(category: i64, level: i64) {
+  entry:
+    x86.prologue stack_size=32
+    x86.mov [rbp-8], rcx
+    x86.mov [rbp-16], rdx
+    x86.mov rax, qword [rip+categoryLevels]
+    x86.mov [rbp-24], rax
+    x86.mov rax, [rbp-24]
+    x86.mov rcx, [rbp-24]
+    x86.call mm_incref
+    x86.mov rcx, [rbp-8]
+    x86.mov rdx, [rbp-16]
+    x86.mov rbx, [rbp-24]
+    x86.mov rcx, [rbp-24]
+    x86.mov rdx, [rbp-8]
+    x86.mov r8, [rbp-16]
+    x86.call CategoryLevelMap.insert
+    x86.mov rsi, [rbp-24]
+    x86.test rsi, rsi
+    x86.jz __nonnull_skip_0
+    x86.mov rcx, [rbp-24]
+    x86.call mm_decref
+    x86.label __nonnull_skip_0
+    x86.epilogue
+    x86.ret
+  }
+  func @union-hashable.getCategoryLevel(category: i64) -> i64 {
+  entry:
+    x86.prologue stack_size=32
+    x86.mov [rbp-8], rcx
+    x86.mov rax, qword [rip+categoryLevels]
+    x86.mov [rbp-16], rax
+    x86.mov rax, [rbp-16]
+    x86.mov rcx, [rbp-16]
+    x86.call mm_incref
+    x86.mov rcx, [rbp-8]
+    x86.mov rdx, [rbp-16]
+    x86.mov rcx, [rbp-16]
+    x86.mov rdx, [rbp-8]
+    x86.call CategoryLevelMap.get
+    x86.xor rbx, rbx
+    x86.mov [rbp-24], rbx
+    x86.mov [rbp-32], rax
+    x86.xor rsi, rsi
+    x86.cmp rdx, rsi
+    x86.je union-hashable.getCategoryLevel.otherwise_default_continue_3
+  otherwise_default_error_2:
+    x86.mov rax, [rbp-24]
+    x86.mov [rbp-32], rax
+    x86.jmp union-hashable.getCategoryLevel.otherwise_default_continue_3
+  otherwise_default_continue_3:
+    x86.mov rax, [rbp-32]
+    x86.mov rcx, [rbp-16]
+    x86.test rcx, rcx
+    x86.jz __nonnull_skip_1
+    x86.call mm_decref
+    x86.label __nonnull_skip_1
+    x86.mov rax, [rbp-32]
+    x86.epilogue
+    x86.ret
+  }
+  func @union-hashable.main() -> u32 {
+  entry:
+    x86.prologue stack_size=64
+    x86.xor rcx, rcx
+    x86.mov rdx, 2
+    x86.call union-hashable.setCategoryLevel
+    x86.mov rcx, 1
+    x86.mov rdx, 1
+    x86.call union-hashable.setCategoryLevel
+    x86.xor rcx, rcx
+    x86.call union-hashable.getCategoryLevel
+    x86.mov [rbp-8], rax
+    x86.mov rcx, 1
+    x86.call union-hashable.getCategoryLevel
+    x86.mov [rbp-16], rax
+    x86.mov rax, [rbp-8]
+    x86.xor rcx, rcx
+    x86.mov [rbp-24], rcx
+    x86.mov [rbp-32], rax
+    x86.jmp union-hashable.main.c_0.cmp0
+  c_0.cmp0:
+    x86.mov rax, [rbp-32]
+    x86.mov rcx, 2
+    x86.cmp rax, rcx
+    x86.jne union-hashable.main.c_0.cmp1
+  c_0.case0:
+    x86.mov rax, 1
+    x86.mov [rbp-24], rax
+    x86.jmp union-hashable.main.c_0.merge
+  c_0.cmp1:
+    x86.mov rax, [rbp-32]
+    x86.xor rcx, rcx
+    x86.cmp rax, rcx
+    x86.jne union-hashable.main.c_0.cmp2
+  c_0.case1:
+    x86.xor rax, rax
+    x86.mov [rbp-24], rax
+    x86.jmp union-hashable.main.c_0.merge
+  c_0.cmp2:
+    x86.mov rax, [rbp-32]
+    x86.mov rcx, 1
+    x86.cmp rax, rcx
+    x86.jne union-hashable.main.c_0.merge
+  c_0.case2:
+    x86.xor rax, rax
+    x86.mov [rbp-24], rax
+    x86.jmp union-hashable.main.c_0.merge
+  c_0.merge:
+    x86.mov rax, [rbp-24]
+    x86.mov [rbp-33], rax
+    x86.mov rcx, [rbp-16]
+    x86.xor rdx, rdx
+    x86.mov [rbp-41], rdx
+    x86.mov [rbp-49], rcx
+    x86.jmp union-hashable.main.l_1.cmp0
+  l_1.cmp0:
+    x86.mov rax, [rbp-49]
+    x86.mov rcx, 1
+    x86.cmp rax, rcx
+    x86.jne union-hashable.main.l_1.cmp1
+  l_1.case0:
+    x86.mov rax, 1
+    x86.mov [rbp-41], rax
+    x86.jmp union-hashable.main.l_1.merge
+  l_1.cmp1:
+    x86.mov rax, [rbp-49]
+    x86.xor rcx, rcx
+    x86.cmp rax, rcx
+    x86.jne union-hashable.main.l_1.cmp2
+  l_1.case1:
+    x86.xor rax, rax
+    x86.mov [rbp-41], rax
+    x86.jmp union-hashable.main.l_1.merge
+  l_1.cmp2:
+    x86.mov rax, [rbp-49]
+    x86.mov rcx, 2
+    x86.cmp rax, rcx
+    x86.jne union-hashable.main.l_1.merge
+  l_1.case2:
+    x86.xor rax, rax
+    x86.mov [rbp-41], rax
+    x86.jmp union-hashable.main.l_1.merge
+  l_1.merge:
+    x86.mov rax, [rbp-41]
+    x86.mov rcx, [rbp-33]
+    x86.and rcx, rax
+    x86.test rcx, rcx
+    x86.je union-hashable.main.both_2.after
+  both_2:
+    x86.mov rax, 1
+    x86.epilogue
+    x86.ret
+  both_2.after:
+    x86.xor rax, rax
+    x86.epilogue
+    x86.ret
+  }
+  func @union-hashable.__module_init() {
+  entry:
+    x86.prologue stack_size=64
+    x86.xor rax, rax
+    x86.xor rcx, rcx
+    x86.xor rdx, rdx
+    x86.xor rbx, rbx
+    x86.mov rsi, 8
+    x86.lea_func rdi, [__destruct___ManagedMemory_LogCategory]
+    x86.mov r8, rdi
+    x86.mov rdx, r8
+    x86.mov rcx, 32
+    x86.mov r8, 1
+    x86.call mm_alloc
+    x86.mov [rbp-8], rax
+    x86.mov r9, [rbp-8]
+    x86.xor rax, rax
+    x86.mov [r9+0], rax
+    x86.mov rax, [rbp-8]
+    x86.xor rcx, rcx
+    x86.mov [rax+8], rcx
+    x86.mov rax, [rbp-8]
+    x86.xor rcx, rcx
+    x86.mov [rax+16], rcx
+    x86.mov rax, [rbp-8]
+    x86.mov rcx, 8
+    x86.mov [rax+24], rcx
+    x86.mov rax, [rbp-8]
+    x86.mov rcx, [rax+24]
+    x86.lea_symdata rax, [__mm_panic_element_size_zero]
+    x86.mov rdx, rax
+    x86.mov r8, rdx
+    x86.mov rdx, rcx
+    x86.xor rcx, rcx
+    x86.call maxon_bounds_check
+    x86.lea_func rax, [__destruct_Array_LogCategory]
+    x86.mov rcx, rax
+    x86.mov rdx, rcx
+    x86.mov rcx, 16
+    x86.mov r8, 2
+    x86.call mm_alloc
+    x86.mov [rbp-16], rax
+    x86.mov rax, [rbp-16]
+    x86.xor rcx, rcx
+    x86.mov [rax+0], rcx
+    x86.mov rax, [rbp-8]
+    x86.mov rcx, [rbp-16]
+    x86.mov [rcx+8], rax
+    x86.mov rcx, [rbp-8]
+    x86.call mm_incref
+    x86.xor rax, rax
+    x86.xor rcx, rcx
+    x86.xor rdx, rdx
+    x86.xor rbx, rbx
+    x86.mov rsi, 8
+    x86.lea_func rdi, [__destruct___ManagedMemory_LogLevel]
+    x86.mov r8, rdi
+    x86.mov rdx, r8
+    x86.mov rcx, 32
+    x86.mov r8, 3
+    x86.call mm_alloc
+    x86.mov [rbp-24], rax
+    x86.mov rax, [rbp-24]
+    x86.xor rcx, rcx
+    x86.mov [rax+0], rcx
+    x86.mov rax, [rbp-24]
+    x86.xor rcx, rcx
+    x86.mov [rax+8], rcx
+    x86.mov rax, [rbp-24]
+    x86.xor rcx, rcx
+    x86.mov [rax+16], rcx
+    x86.mov rax, [rbp-24]
+    x86.mov rcx, 8
+    x86.mov [rax+24], rcx
+    x86.mov rax, [rbp-24]
+    x86.mov rcx, [rax+24]
+    x86.lea_symdata rax, [__mm_panic_element_size_zero]
+    x86.mov rdx, rax
+    x86.mov r8, rdx
+    x86.mov rdx, rcx
+    x86.xor rcx, rcx
+    x86.call maxon_bounds_check
+    x86.lea_func rax, [__destruct_Array_LogLevel]
+    x86.mov rcx, rax
+    x86.mov rdx, rcx
+    x86.mov rcx, 16
+    x86.mov r8, 4
+    x86.call mm_alloc
+    x86.mov [rbp-32], rax
+    x86.mov rax, [rbp-32]
+    x86.xor rcx, rcx
+    x86.mov [rax+0], rcx
+    x86.mov rax, [rbp-24]
+    x86.mov rcx, [rbp-32]
+    x86.mov [rcx+8], rax
+    x86.mov rcx, [rbp-24]
+    x86.call mm_incref
+    x86.xor rax, rax
+    x86.xor rcx, rcx
+    x86.xor rdx, rdx
+    x86.xor rbx, rbx
+    x86.mov rsi, 8
+    x86.lea_func rdi, [__destruct___ManagedMemory_SetSlotState]
+    x86.mov r8, rdi
+    x86.mov rdx, r8
+    x86.mov rcx, 32
+    x86.mov r8, 5
+    x86.call mm_alloc
+    x86.mov [rbp-40], rax
+    x86.mov rax, [rbp-40]
+    x86.xor rcx, rcx
+    x86.mov [rax+0], rcx
+    x86.mov rax, [rbp-40]
+    x86.xor rcx, rcx
+    x86.mov [rax+8], rcx
+    x86.mov rax, [rbp-40]
+    x86.xor rcx, rcx
+    x86.mov [rax+16], rcx
+    x86.mov rax, [rbp-40]
+    x86.mov rcx, 8
+    x86.mov [rax+24], rcx
+    x86.mov rax, [rbp-40]
+    x86.mov rcx, [rax+24]
+    x86.lea_symdata rax, [__mm_panic_element_size_zero]
+    x86.mov rdx, rax
+    x86.mov r8, rdx
+    x86.mov rdx, rcx
+    x86.xor rcx, rcx
+    x86.call maxon_bounds_check
+    x86.lea_func rax, [__destruct_Array_SetSlotState]
+    x86.mov rcx, rax
+    x86.mov rdx, rcx
+    x86.mov rcx, 16
+    x86.mov r8, 6
+    x86.call mm_alloc
+    x86.mov [rbp-48], rax
+    x86.mov rax, [rbp-48]
+    x86.xor rcx, rcx
+    x86.mov [rax+0], rcx
+    x86.mov rax, [rbp-40]
+    x86.mov rcx, [rbp-48]
+    x86.mov [rcx+8], rax
+    x86.mov rcx, [rbp-40]
+    x86.call mm_incref
+    x86.xor rax, rax
+    x86.xor rcx, rcx
+    x86.xor rdx, rdx
+    x86.lea_func rbx, [__destruct_CategoryLevelMap]
+    x86.mov rsi, rbx
+    x86.mov rdx, rsi
+    x86.mov rcx, 48
+    x86.mov r8, 7
+    x86.call mm_alloc
+    x86.mov [rbp-56], rax
+    x86.mov rcx, [rbp-16]
+    x86.mov rdx, [rbp-56]
+    x86.mov [rdx+0], rcx
+    x86.call mm_incref
+    x86.mov rax, [rbp-32]
+    x86.mov rcx, [rbp-56]
+    x86.mov [rcx+8], rax
+    x86.mov rcx, [rbp-32]
+    x86.call mm_incref
+    x86.mov rax, [rbp-48]
+    x86.mov rcx, [rbp-56]
+    x86.mov [rcx+16], rax
+    x86.mov rcx, [rbp-48]
+    x86.call mm_incref
+    x86.mov rax, [rbp-56]
+    x86.xor rcx, rcx
+    x86.mov [rax+24], rcx
+    x86.mov rax, [rbp-56]
+    x86.xor rcx, rcx
+    x86.mov [rax+32], rcx
+    x86.mov rax, [rbp-56]
+    x86.xor rcx, rcx
+    x86.mov [rax+40], rcx
+    x86.mov rcx, [rbp-56]
+    x86.call mm_incref
+    x86.mov rax, [rbp-56]
+    x86.mov rcx, [rbp-56]
+    x86.call mm_incref
+    x86.mov rax, [rbp-56]
+    x86.mov qword [rip+categoryLevels], rax
+    x86.mov rax, [rbp-56]
+    x86.test rax, rax
+    x86.jz __nonnull_skip_2
+    x86.mov rcx, [rbp-56]
+    x86.call mm_decref
+    x86.label __nonnull_skip_2
+    x86.epilogue
+    x86.ret
+  }
+  func @__maxon_global_cleanup() {
+  entry:
+    x86.prologue stack_size=16
+    x86.mov rax, qword [rip+categoryLevels]
+    x86.mov [rbp-8], rax
+    x86.test rax, rax
+    x86.jz __nonnull_skip_18
+    x86.mov rcx, [rbp-8]
+    x86.call mm_decref
+    x86.label __nonnull_skip_18
+    x86.epilogue
+    x86.ret
+  }
+  func @__destruct___ManagedMemory_LogCategory(ptr: i64) {
+  entry:
+    x86.prologue stack_size=16
+    x86.mov [rbp-8], rcx
+    x86.mov rax, [rbp-8]
+    x86.mov rcx, [rax+16]
+    x86.xor rdx, rdx
+    x86.cmp rcx, rdx
+    x86.je __destruct___ManagedMemory_LogCategory.skip_buf_0
+  free_buf_0:
+    x86.mov rax, [rbp-8]
+    x86.mov rcx, [rax+0]
+    x86.call mm_raw_free
+    x86.jmp __destruct___ManagedMemory_LogCategory.skip_buf_0
+  skip_buf_0:
+    x86.jmp __destruct___ManagedMemory_LogCategory.done
+  done:
+    x86.epilogue
+    x86.ret
+  }
+  func @__destruct_Array_LogCategory(ptr: i64) {
+  entry:
+    x86.prologue stack_size=16
+    x86.mov [rbp-8], rcx
+    x86.mov rax, [rbp-8]
+    x86.mov rcx, [rax+8]
+    x86.mov [rbp-16], rcx
+    x86.test rcx, rcx
+    x86.jz __nonnull_skip_19
+    x86.call mm_decref
+    x86.label __nonnull_skip_19
+    x86.jmp __destruct_Array_LogCategory.done
+  done:
+    x86.epilogue
+    x86.ret
+  }
+  func @__destruct___ManagedMemory_LogLevel(ptr: i64) {
+  entry:
+    x86.prologue stack_size=16
+    x86.mov [rbp-8], rcx
+    x86.mov rax, [rbp-8]
+    x86.mov rcx, [rax+16]
+    x86.xor rdx, rdx
+    x86.cmp rcx, rdx
+    x86.je __destruct___ManagedMemory_LogLevel.skip_buf_0
+  free_buf_0:
+    x86.mov rax, [rbp-8]
+    x86.mov rcx, [rax+0]
+    x86.call mm_raw_free
+    x86.jmp __destruct___ManagedMemory_LogLevel.skip_buf_0
+  skip_buf_0:
+    x86.jmp __destruct___ManagedMemory_LogLevel.done
+  done:
+    x86.epilogue
+    x86.ret
+  }
+  func @__destruct_Array_LogLevel(ptr: i64) {
+  entry:
+    x86.prologue stack_size=16
+    x86.mov [rbp-8], rcx
+    x86.mov rax, [rbp-8]
+    x86.mov rcx, [rax+8]
+    x86.mov [rbp-16], rcx
+    x86.test rcx, rcx
+    x86.jz __nonnull_skip_20
+    x86.call mm_decref
+    x86.label __nonnull_skip_20
+    x86.jmp __destruct_Array_LogLevel.done
+  done:
+    x86.epilogue
+    x86.ret
+  }
+  func @__destruct___ManagedMemory_SetSlotState(ptr: i64) {
+  entry:
+    x86.prologue stack_size=16
+    x86.mov [rbp-8], rcx
+    x86.mov rax, [rbp-8]
+    x86.mov rcx, [rax+16]
+    x86.xor rdx, rdx
+    x86.cmp rcx, rdx
+    x86.je __destruct___ManagedMemory_SetSlotState.skip_buf_0
+  free_buf_0:
+    x86.mov rax, [rbp-8]
+    x86.mov rcx, [rax+0]
+    x86.call mm_raw_free
+    x86.jmp __destruct___ManagedMemory_SetSlotState.skip_buf_0
+  skip_buf_0:
+    x86.jmp __destruct___ManagedMemory_SetSlotState.done
+  done:
+    x86.epilogue
+    x86.ret
+  }
+  func @__destruct_Array_SetSlotState(ptr: i64) {
+  entry:
+    x86.prologue stack_size=16
+    x86.mov [rbp-8], rcx
+    x86.mov rax, [rbp-8]
+    x86.mov rcx, [rax+8]
+    x86.mov [rbp-16], rcx
+    x86.test rcx, rcx
+    x86.jz __nonnull_skip_21
+    x86.call mm_decref
+    x86.label __nonnull_skip_21
+    x86.jmp __destruct_Array_SetSlotState.done
+  done:
+    x86.epilogue
+    x86.ret
+  }
+  func @__destruct_CategoryLevelMap(ptr: i64) {
+  entry:
+    x86.prologue stack_size=32
+    x86.mov [rbp-8], rcx
+    x86.mov rax, [rbp-8]
+    x86.mov rcx, [rax+0]
+    x86.mov [rbp-16], rcx
+    x86.test rcx, rcx
+    x86.jz __nonnull_skip_22
+    x86.call mm_decref
+    x86.label __nonnull_skip_22
+    x86.mov rdx, [rbp-8]
+    x86.mov rbx, [rdx+8]
+    x86.mov [rbp-24], rbx
+    x86.test rbx, rbx
+    x86.jz __nonnull_skip_23
+    x86.mov rcx, [rbp-24]
+    x86.call mm_decref
+    x86.label __nonnull_skip_23
+    x86.mov rsi, [rbp-8]
+    x86.mov rdi, [rsi+16]
+    x86.mov [rbp-32], rdi
+    x86.test rdi, rdi
+    x86.jz __nonnull_skip_24
+    x86.mov rcx, [rbp-32]
+    x86.call mm_decref
+    x86.label __nonnull_skip_24
+    x86.jmp __destruct_CategoryLevelMap.done
+  done:
+    x86.epilogue
+    x86.ret
+  }
+  func @__destruct___ManagedMemory_SlotState(ptr: i64) {
+  entry:
+    x86.prologue stack_size=16
+    x86.mov [rbp-8], rcx
+    x86.mov rax, [rbp-8]
+    x86.mov rcx, [rax+16]
+    x86.xor rdx, rdx
+    x86.cmp rcx, rdx
+    x86.je __destruct___ManagedMemory_SlotState.skip_buf_0
+  free_buf_0:
+    x86.mov rax, [rbp-8]
+    x86.mov rcx, [rax+0]
+    x86.call mm_raw_free
+    x86.jmp __destruct___ManagedMemory_SlotState.skip_buf_0
+  skip_buf_0:
+    x86.jmp __destruct___ManagedMemory_SlotState.done
+  done:
+    x86.epilogue
+    x86.ret
+  }
+  func @__destruct_StateArray(ptr: i64) {
+  entry:
+    x86.prologue stack_size=16
+    x86.mov [rbp-8], rcx
+    x86.mov rax, [rbp-8]
+    x86.mov rcx, [rax+8]
+    x86.mov [rbp-16], rcx
+    x86.test rcx, rcx
+    x86.jz __nonnull_skip_25
+    x86.call mm_decref
+    x86.label __nonnull_skip_25
+    x86.jmp __destruct_StateArray.done
+  done:
+    x86.epilogue
+    x86.ret
+  }
+}
+---

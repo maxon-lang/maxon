@@ -3,6 +3,7 @@
 
 export typealias SlotIndex = int(i64.min to i64.max)
 export typealias StdOpIndex = int(0 to u64.max)
+typealias TempSlotCount = int(0 to 10)
 
 export union JumpKind
     eq
@@ -86,7 +87,7 @@ end 'computeMaxParserSlotInFunc'
 
 // Count how many temp result slots an MlirOp produces during x86/arm64 lowering.
 // OS-neutral ops (osExit, osWrite) expand to multiple target ops; count the worst case.
-function tempSlotCountForOp(op MlirOp) returns int(0 to 10)
+function tempSlotCountForOp(op MlirOp) returns TempSlotCount
     return match op 'check'
         maxhl gives 0
         arith gives 1
@@ -99,7 +100,7 @@ function tempSlotCountForOp(op MlirOp) returns int(0 to 10)
     end 'check'
 end 'tempSlotCountForOp'
 
-function funcOpTempCount(op FuncOp) returns int(0 to 1)
+function funcOpTempCount(op FuncOp) returns TempSlotCount
     return match op 'check'
         call gives 1
         ret gives 0
@@ -109,7 +110,7 @@ end 'funcOpTempCount'
 // Worst-case temp slot count for each SysOp variant after lowering.
 // osExit expands to 1 syscall/iatCall (1 temp).
 // osWrite expands to up to 6 temps on Windows (GetStdHandle + WriteFile sequence).
-function sysTempSlotCount(op SysOp) returns int(0 to 10)
+function sysTempSlotCount(op SysOp) returns TempSlotCount
     return match op 'check'
         syscall gives 1
         iatCall gives 1

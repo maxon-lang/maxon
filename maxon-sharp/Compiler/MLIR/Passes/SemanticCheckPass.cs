@@ -98,6 +98,10 @@ public static class SemanticCheckPass {
     "maxon_get_current_directory",
     "maxon_managed_file_open_read",
     "maxon_managed_file_open_write",
+    "maxon_net_tcp_connect",
+    "maxon_net_send",
+    "maxon_net_recv",
+    "maxon_net_close",
   ];
 
   /// Checks that every `async f()` call targets a function that can yield.

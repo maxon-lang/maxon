@@ -56,7 +56,7 @@ The enclosing function must declare `throws MyError`. Callers must use `try`/`ot
 
 ## Tests
 
-<!-- test: error.enum-eq -->
+<!-- test: error.union-eq -->
 ```maxon
 union Direction
   north
@@ -72,10 +72,10 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3066: specs/fragments/union-match-only/error.enum-eq.test:9:8: cannot compare union values with '==', use 'match' instead
+error E3066: specs/fragments/union-match-only/error.union-eq.test:9:8: cannot compare union values with '==', use 'match' instead
 ```
 
-<!-- test: error.enum-ne -->
+<!-- test: error.union-ne -->
 ```maxon
 union Direction
   north
@@ -91,10 +91,10 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3066: specs/fragments/union-match-only/error.enum-ne.test:9:8: cannot compare union values with '!=', use 'match' instead
+error E3066: specs/fragments/union-match-only/error.union-ne.test:9:8: cannot compare union values with '!=', use 'match' instead
 ```
 
-<!-- test: error.enum-eq-method -->
+<!-- test: error.union-eq-method -->
 ```maxon
 union Toggle
   on
@@ -117,10 +117,10 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3066: specs/fragments/union-match-only/error.enum-eq-method.test:7:13: cannot compare union values with '==', use 'match' instead
+error E3066: specs/fragments/union-match-only/error.union-eq-method.test:7:13: cannot compare union values with '==', use 'match' instead
 ```
 
-<!-- test: error.enum-eq-associated -->
+<!-- test: error.union-eq-associated -->
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
@@ -140,7 +140,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3066: specs/fragments/union-match-only/error.enum-eq-associated.test:13:8: cannot compare union values with '==', use 'match' instead
+error E3066: specs/fragments/union-match-only/error.union-eq-associated.test:13:8: cannot compare union values with '==', use 'match' instead
 ```
 
 <!-- test: error.default-without-throws -->
@@ -286,7 +286,7 @@ end 'main'
 42
 ```
 
-<!-- test: enum-map-key-still-works -->
+<!-- test: union-map-key-still-works -->
 ```maxon
 union Color
   red

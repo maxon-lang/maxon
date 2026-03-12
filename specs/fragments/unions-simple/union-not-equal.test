@@ -1,0 +1,82 @@
+// Test: union-not-equal
+union Status
+  pending
+  active
+  done
+end 'Status'
+
+function main() returns ExitCode
+  var s = Status.pending
+  var result = match s 'check'
+    Status.active gives 0
+    Status.pending gives 1
+    Status.done gives 1
+  end 'check'
+  return result
+end 'main'
+---
+ExitCode: 1
+---
+module {
+  func @unions-simple.main() -> u32 {
+  entry:
+    x86.prologue stack_size=32
+    x86.xor rax, rax
+    x86.mov [rbp-8], rax
+    x86.mov rcx, [rbp-8]
+    x86.xor rdx, rdx
+    x86.mov [rbp-16], rdx
+    x86.mov [rbp-24], rcx
+    x86.jmp unions-simple.main.check_0.cmp0
+  check_0.cmp0:
+    x86.mov rax, [rbp-24]
+    x86.mov rcx, 1
+    x86.cmp rax, rcx
+    x86.jne unions-simple.main.check_0.cmp1
+  check_0.case0:
+    x86.xor rax, rax
+    x86.mov [rbp-16], rax
+    x86.jmp unions-simple.main.check_0.merge
+  check_0.cmp1:
+    x86.mov rax, [rbp-24]
+    x86.xor rcx, rcx
+    x86.cmp rax, rcx
+    x86.jne unions-simple.main.check_0.cmp2
+  check_0.case1:
+    x86.mov rax, 1
+    x86.mov [rbp-16], rax
+    x86.jmp unions-simple.main.check_0.merge
+  check_0.cmp2:
+    x86.mov rax, [rbp-24]
+    x86.mov rcx, 2
+    x86.cmp rax, rcx
+    x86.jne unions-simple.main.check_0.merge
+  check_0.case2:
+    x86.mov rax, 1
+    x86.mov [rbp-16], rax
+    x86.jmp unions-simple.main.check_0.merge
+  check_0.merge:
+    x86.mov rax, [rbp-16]
+    x86.mov [rbp-32], rax
+    x86.xor rcx, rcx
+    x86.cmp rax, rcx
+    x86.setl rdx
+    x86.movzx rdx, rdxb
+    x86.mov rbx, 4294967295
+    x86.cmp rax, rbx
+    x86.setg rsi
+    x86.movzx rsi, rsib
+    x86.or rdx, rsi
+    x86.test rdx, rdx
+    x86.je unions-simple.main.__range_ok_1
+  __range_panic_1:
+    x86.lea_symdata rax, [__panic_msg_30]
+    x86.mov rcx, rax
+    x86.call maxon_panic
+  __range_ok_1:
+    x86.mov rax, [rbp-32]
+    x86.epilogue
+    x86.ret
+  }
+}
+---

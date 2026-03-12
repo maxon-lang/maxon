@@ -347,7 +347,7 @@ end 'main'
 ```
 ```stderr
 spawn #1
-io_yield #1
-io_resume #1
+io_yield #1 [file_exists]
+io_resume #1 [file_exists]
 await #1 [yield]
 ```

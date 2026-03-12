@@ -1,0 +1,208 @@
+// Test: async-tcp.resolve-error
+function resolve() returns ExitCode throws NetworkError
+  let _ = try TcpClient.connect("this.host.does.not.exist.invalid", port: 80)
+  return 0
+end 'resolve'
+
+function main() returns ExitCode
+  var p = async resolve()
+  let result = try await p otherwise 42
+  return result
+end 'main'
+---
+ExitCode: 42
+---
+module {
+  func @async-tcp.resolve() -> u32 {
+  entry:
+    x86.prologue stack_size=48
+    x86.lea_rdata rax, [__str_0]
+    x86.mov rcx, rax
+    x86.mov rdx, 32
+    x86.lea_func rbx, [__destruct_String]
+    x86.mov rsi, rbx
+    x86.mov [rbp-48], rcx
+    x86.mov rdx, rsi
+    x86.mov rcx, 16
+    x86.mov r8, 2
+    x86.call mm_alloc
+    x86.mov [rbp-8], rax
+    x86.lea_func rdi, [__destruct___ManagedMemory]
+    x86.mov r8, rdi
+    x86.mov rdx, r8
+    x86.mov rcx, 32
+    x86.mov r8, 3
+    x86.call mm_alloc
+    x86.mov [rbp-16], rax
+    x86.mov r9, [rbp-16]
+    x86.mov rax, [rbp-48]
+    x86.mov [r9+0], rax
+    x86.mov rax, [rbp-16]
+    x86.mov rcx, 32
+    x86.mov [rax+8], rcx
+    x86.xor rax, rax
+    x86.mov rcx, [rbp-16]
+    x86.mov [rcx+16], rax
+    x86.mov rax, 1
+    x86.mov rcx, [rbp-16]
+    x86.mov [rcx+24], rax
+    x86.mov rax, [rbp-16]
+    x86.mov rcx, [rbp-8]
+    x86.mov [rcx+0], rax
+    x86.mov rax, [rbp-16]
+    x86.mov rcx, [rbp-16]
+    x86.call mm_incref
+    x86.xor rax, rax
+    x86.mov rcx, [rbp-8]
+    x86.mov [rcx+8], rax
+    x86.mov rax, [rbp-8]
+    x86.mov rcx, [rbp-8]
+    x86.call mm_incref
+    x86.mov rax, [rbp-8]
+    x86.mov rcx, [rbp-8]
+    x86.mov rdx, 80
+    x86.call stdlib.TcpClient.connect
+    x86.mov [rbp-24], rdx
+    x86.mov [rbp-32], rax
+    x86.xor rax, rax
+    x86.cmp rdx, rax
+    x86.je async-tcp.resolve.try_continue_1
+  propagate_error_0:
+    x86.mov rdx, [rbp-24]
+    x86.mov rax, [rbp-32]
+    x86.test rax, rax
+    x86.jz __nonnull_skip_0
+    x86.mov rcx, [rbp-32]
+    x86.call mm_decref
+    x86.label __nonnull_skip_0
+    x86.mov rcx, [rbp-8]
+    x86.test rcx, rcx
+    x86.jz __nonnull_skip_1
+    x86.call mm_decref
+    x86.label __nonnull_skip_1
+    x86.mov rdx, [rbp-24]
+    x86.xor rax, rax
+    x86.epilogue
+    x86.ret
+  try_continue_1:
+    x86.mov rax, [rbp-32]
+    x86.mov [rbp-40], rax
+    x86.mov rcx, [rbp-40]
+    x86.call mm_incref
+    x86.mov rdx, [rbp-32]
+    x86.test rdx, rdx
+    x86.jz __nonnull_skip_2
+    x86.mov rcx, [rbp-32]
+    x86.call mm_decref
+    x86.label __nonnull_skip_2
+    x86.mov rbx, [rbp-8]
+    x86.test rbx, rbx
+    x86.jz __nonnull_skip_3
+    x86.mov rcx, [rbp-8]
+    x86.call mm_decref
+    x86.label __nonnull_skip_3
+    x86.xor rax, rax
+    x86.xor rdx, rdx
+    x86.epilogue
+    x86.ret
+  }
+  func @async-tcp.main() -> u32 {
+  entry:
+    x86.prologue stack_size=32
+    x86.mov rcx, 8
+    x86.call mm_raw_alloc
+    x86.xor rcx, rcx
+    x86.mov [rax+0], rcx
+    x86.lea_func rdx, [async-tcp.resolve]
+    x86.mov r8, rax
+    x86.xchg rdx, rcx
+    x86.call __gt_spawn
+    x86.mov rcx, rax
+    x86.call __gt_try_await
+    x86.mov rcx, 42
+    x86.mov [rbp-8], rcx
+    x86.mov [rbp-16], rax
+    x86.xor rax, rax
+    x86.cmp rdx, rax
+    x86.je async-tcp.main.otherwise_default_continue_3
+  otherwise_default_error_2:
+    x86.mov rax, [rbp-8]
+    x86.mov [rbp-16], rax
+    x86.jmp async-tcp.main.otherwise_default_continue_3
+  otherwise_default_continue_3:
+    x86.mov rax, [rbp-16]
+    x86.mov [rbp-24], rax
+    x86.xor rcx, rcx
+    x86.cmp rax, rcx
+    x86.setl rdx
+    x86.movzx rdx, rdxb
+    x86.mov rbx, 4294967295
+    x86.cmp rax, rbx
+    x86.setg rsi
+    x86.movzx rsi, rsib
+    x86.or rdx, rsi
+    x86.test rdx, rdx
+    x86.je async-tcp.main.__range_ok_4
+  __range_panic_4:
+    x86.lea_symdata rax, [__panic_msg_24]
+    x86.mov rcx, rax
+    x86.call maxon_panic
+  __range_ok_4:
+    x86.mov rax, [rbp-24]
+    x86.epilogue
+    x86.ret
+  }
+  func @__destruct_TcpClient(ptr: i64) {
+  entry:
+    x86.prologue stack_size=16
+    x86.mov [rbp-8], rcx
+    x86.mov rax, [rbp-8]
+    x86.mov rcx, [rax+0]
+    x86.mov [rbp-16], rcx
+    x86.test rcx, rcx
+    x86.jz __nonnull_skip_4
+    x86.call mm_decref
+    x86.label __nonnull_skip_4
+    x86.jmp __destruct_TcpClient.done
+  done:
+    x86.epilogue
+    x86.ret
+  }
+  func @__destruct_String(ptr: i64) {
+  entry:
+    x86.prologue stack_size=16
+    x86.mov [rbp-8], rcx
+    x86.mov rax, [rbp-8]
+    x86.mov rcx, [rax+0]
+    x86.mov [rbp-16], rcx
+    x86.test rcx, rcx
+    x86.jz __nonnull_skip_5
+    x86.call mm_decref
+    x86.label __nonnull_skip_5
+    x86.jmp __destruct_String.done
+  done:
+    x86.epilogue
+    x86.ret
+  }
+  func @__destruct___ManagedMemory(ptr: i64) {
+  entry:
+    x86.prologue stack_size=16
+    x86.mov [rbp-8], rcx
+    x86.mov rax, [rbp-8]
+    x86.mov rcx, [rax+16]
+    x86.xor rdx, rdx
+    x86.cmp rcx, rdx
+    x86.je __destruct___ManagedMemory.skip_buf_0
+  free_buf_0:
+    x86.mov rax, [rbp-8]
+    x86.mov rcx, [rax+0]
+    x86.call mm_raw_free
+    x86.jmp __destruct___ManagedMemory.skip_buf_0
+  skip_buf_0:
+    x86.jmp __destruct___ManagedMemory.done
+  done:
+    x86.epilogue
+    x86.ret
+  }
+}
+---
