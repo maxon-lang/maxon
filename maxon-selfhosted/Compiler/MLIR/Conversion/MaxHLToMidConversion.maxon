@@ -1,8 +1,10 @@
 // MaxHL -> Mid-level conversion.
-// Lowers maxhl.* ops to arith/cf/func/memref/runtime dialect ops.
+// Lowers maxhl.* ops to arith/cf/func/memref/sys dialect ops.
 // Walks the MlirModule structure: functions -> blocks -> ops.
+// printLiteral is lowered to globalAddr + call write_stdout.
+// printInt is lowered to call __rt_printInt.
 
-export function lowerMaxHLToMid(module MlirModule) returns MlirModule
+export function lowerMaxHLToMid(module MlirModule, globalData GlobalDataTable, nextValueIdRef ValueIdRef) returns MlirModule
     logInfo(LogCategory.mlir, message: "Lowering MaxHL to Mid dialects")
     var result = createMlirModule()
 
@@ -17,7 +19,7 @@ export function lowerMaxHLToMid(module MlirModule) returns MlirModule
 
             // Lower ops
             for op in srcBlock.ops 'eachOp'
-                lowerOp(op, dstBlock: dstBlock)
+                lowerOp(op, dstBlock: dstBlock, globalData: globalData, nextValueIdRef: nextValueIdRef)
             end 'eachOp'
 
             // Lower terminator
@@ -37,9 +39,9 @@ export function lowerMaxHLToMid(module MlirModule) returns MlirModule
     return result
 end 'lowerMaxHLToMid'
 
-function lowerOp(op MlirOp, dstBlock MlirBlock)
+function lowerOp(op MlirOp, dstBlock MlirBlock, globalData GlobalDataTable, nextValueIdRef ValueIdRef)
     match op 'dispatch'
-        maxhl(hlOp) then lowerMaxHLOp(hlOp, dstBlock: dstBlock)
+        maxhl(hlOp) then lowerMaxHLOp(hlOp, dstBlock: dstBlock, globalData: globalData, nextValueIdRef: nextValueIdRef)
         arith to maxarm64 then dstBlock.ops.push(op)
     end 'dispatch'
 end 'lowerOp'
@@ -52,7 +54,7 @@ function lowerCmpOp(dstBlock MlirBlock, isFloat bool, floatOp ArithOp, intOp Ari
     end 'i'
 end 'lowerCmpOp'
 
-function lowerMaxHLOp(hlOp MaxHLOp, dstBlock MlirBlock)
+function lowerMaxHLOp(hlOp MaxHLOp, dstBlock MlirBlock, globalData GlobalDataTable, nextValueIdRef ValueIdRef)
     match hlOp 'lower'
         literal(resultId, value) then dstBlock.ops.push(MlirOp.arith(ArithOp.constI64(resultId, value)))
         floatLiteral(resultId, rawBits) then dstBlock.ops.push(MlirOp.arith(ArithOp.constF64(resultId, rawBits)))
@@ -81,10 +83,48 @@ function lowerMaxHLOp(hlOp MaxHLOp, dstBlock MlirBlock)
         br(target) then dstBlock.ops.push(MlirOp.cf(CfOp.br(target)))
         call(resultId, callee, argIds) then dstBlock.ops.push(MlirOp.func(FuncOp.call(resultId, callee, argIds)))
         ret(retValId) then dstBlock.ops.push(MlirOp.func(FuncOp.ret(retValId)))
-        printLiteral(data) then dstBlock.ops.push(MlirOp.runtime(RuntimeOp.printLiteral(data)))
-        printInt(valueId) then dstBlock.ops.push(MlirOp.runtime(RuntimeOp.printInt(valueId)))
+        printLiteral(data) then lowerPrintLiteral(data, dstBlock: dstBlock, globalData: globalData, nextValueIdRef: nextValueIdRef)
+        printInt(valueId) then lowerPrintIntToCall(valueId, dstBlock: dstBlock, nextValueIdRef: nextValueIdRef)
     end 'lower'
 end 'lowerMaxHLOp'
+
+// Lower printLiteral(data) to:
+//   globalAddr(addrId, "__str_N")
+//   constI64(lenId, len)
+//   call(_, "write_stdout", [addrId, lenId])
+function lowerPrintLiteral(data ByteArray, dstBlock MlirBlock, globalData GlobalDataTable, nextValueIdRef ValueIdRef)
+    let dataLen = data.count()
+    if dataLen == 0 'empty'
+        return
+    end 'empty'
+
+    // Register data in global table
+    let name = addGlobalData(globalData, data: data)
+
+    // globalAddr -> addrId
+    let addrId = allocValueId(nextValueIdRef)
+    dstBlock.ops.push(MlirOp.sys(SysOp.globalAddr(addrId, name)))
+
+    // constI64 -> lenId
+    let lenId = allocValueId(nextValueIdRef)
+    dstBlock.ops.push(MlirOp.arith(ArithOp.constI64(lenId, dataLen)))
+
+    // call write_stdout(addrId, lenId)
+    let callResultId = allocValueId(nextValueIdRef)
+    var argIds = ValueIdArray{}
+    argIds.push(addrId)
+    argIds.push(lenId)
+    dstBlock.ops.push(MlirOp.func(FuncOp.call(callResultId, b"write_stdout", argIds)))
+end 'lowerPrintLiteral'
+
+// Lower printInt(valueId) to:
+//   call(__rt_printInt, [valueId])
+function lowerPrintIntToCall(valueId ValueId, dstBlock MlirBlock, nextValueIdRef ValueIdRef)
+    let callResultId = allocValueId(nextValueIdRef)
+    var argIds = ValueIdArray{}
+    argIds.push(valueId)
+    dstBlock.ops.push(MlirOp.func(FuncOp.call(callResultId, b"__rt_printInt", argIds)))
+end 'lowerPrintIntToCall'
 
 function lowerTerminator(op MlirOp) returns MlirOp
     return match op 'dispatch'

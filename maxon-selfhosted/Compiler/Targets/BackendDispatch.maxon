@@ -1,12 +1,30 @@
 // Single dispatch point for all CPU+OS backend combinations.
-// CPU emitters consume OsDescriptor to handle OS differences — no CPU*OS dispatch needed.
+// CPU emitters consume OsDescriptor to handle OS differences -- no CPU*OS dispatch needed.
+// Runtime functions (write_stdout, i64_to_string, __rt_printInt, _start) are prepended
+// to the module as mid-level IR before target-specific lowering.
 
-export function emitBackend(module MlirModule, target Target) returns CodeResult throws CompileError
+export function emitBackend(module MlirModule, target Target, globalData GlobalDataTable) returns CodeResult throws CompileError
     let osDesc = makeOsDescriptor(target)
-    var result = CodeResult{code: ByteArray{}, mainCallFixupOffset: 0, relocations: RelocationArray{}}
+
+    // Build runtime functions and prepend them to the module.
+    // These are expressed as mid-level IR (arith/cf/func/memref/sys ops)
+    // and will be lowered by the target backends just like user functions.
+    let runtimeFuncs = buildRuntimeFunctions(osDesc)
+    var augmentedModule = createMlirModule()
+
+    // Runtime functions come first so they appear before user functions in the code.
+    for rtFunc in runtimeFuncs 'prependRt'
+        augmentedModule.functions.push(rtFunc)
+    end 'prependRt'
+    // Then user functions
+    for userFunc in module.functions 'appendUser'
+        augmentedModule.functions.push(userFunc)
+    end 'appendUser'
+
+    var result = CodeResult{code: ByteArray{}, mainCallFixupOffset: 0, relocations: RelocationArray{}, globalData: globalData}
     match target.cpu 'cpu'
-        CpuArch.x86_64 then result = emitX86(lowerMidToMaxX64(module, target: target), target: target, osDesc: osDesc)
-        CpuArch.aarch64 then result = emitMaxArm64(lowerMidToMaxArm64(module, target: target), target: target, osDesc: osDesc)
+        CpuArch.x86_64 then result = emitX86(lowerMidToMaxX64(augmentedModule, target: target), target: target, osDesc: osDesc, globalData: globalData)
+        CpuArch.aarch64 then result = emitMaxArm64(lowerMidToMaxArm64(augmentedModule, target: target), target: target, osDesc: osDesc, globalData: globalData)
     end 'cpu'
     return result
 end 'emitBackend'

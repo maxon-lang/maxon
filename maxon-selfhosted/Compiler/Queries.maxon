@@ -201,7 +201,12 @@ export function queryAllMid(project Project) returns MlirModule throws CompileEr
         throw CompileError.compileError
     end 'semanticErrors'
 
-    let result = lowerMaxHLToMid(module)
+    // Reset global data table for fresh lowering
+    project.globalData = createGlobalDataTable()
+    let valueIdRef = createValueIdRef(getNextValueId(project))
+    let result = lowerMaxHLToMid(module, globalData: project.globalData, nextValueIdRef: valueIdRef)
+    // Update the project's value ID counter past any IDs allocated during lowering
+    setNextValueId(project, id: valueIdRef.nextId)
 
     popQuery(project)
 
@@ -236,7 +241,7 @@ export function queryCodeResult(project Project) returns CodeResult throws Compi
     clearDepsFor(project, key: key)
 
     let midModule = try queryAllMid(project)
-    let result = try emitBackend(midModule, target: project.target)
+    let result = try emitBackend(midModule, target: project.target, globalData: project.globalData)
 
     popQuery(project)
 

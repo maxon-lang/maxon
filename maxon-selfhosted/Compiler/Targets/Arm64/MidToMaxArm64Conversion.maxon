@@ -64,6 +64,7 @@ function lowerMidOpToArm64(op MlirOp, dstBlock MlirBlock, valueSlots ValueSlotMa
         memref(mOp) then lowerMemRefToArm64(mOp, dstBlock: dstBlock, valueSlots: valueSlots)
         func(fOp) then tempSlot = lowerFuncOpToArm64(fOp, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: tempSlot)
         runtime(rOp) then lowerRuntimeToArm64(rOp, dstBlock: dstBlock)
+        sys(sysOp) then tempSlot = lowerSysOpToArm64(sysOp, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: tempSlot)
         cf then break 'dispatch'
         maxhl then break 'dispatch'
         maxx64 then break 'dispatch'
@@ -390,4 +391,80 @@ function getMaxArm64UnaryOp(aOp ArithOp) returns MaxArm64Op
     end 'check'
     return MaxArm64Op.epilogue
 end 'getMaxArm64UnaryOp'
+
+// Lower SysOp to MaxArm64Op.
+function lowerSysOpToArm64(op SysOp, dstBlock MlirBlock, valueSlots ValueSlotMap, nextTempSlot VarSlot) returns VarSlot
+    match op 'lower'
+        syscall(resultId, number, argIds) then return lowerSyscallArm64(resultId, number: number, argIds: argIds, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
+        iatCall(resultId, slotIndex, argIds) then return lowerIatCallArm64(resultId, slotIndex: slotIndex, argIds: argIds, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
+        globalAddr(resultId, name) then return lowerGlobalAddrArm64(resultId, name: name, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
+        stackAddr(resultId, slotId) then return lowerStackAddrArm64(resultId, slotId: slotId, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
+        storeByte(baseId, offsetId, byteId) then return lowerStoreByteArm64(baseId, offsetId: offsetId, byteId: byteId, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
+        loadByte(resultId, baseId, offsetId) then return lowerLoadByteArm64(resultId, baseId: baseId, offsetId: offsetId, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
+        memcpy(dstId, srcId, lenId) then return lowerMemcpyArm64(dstId, srcId: srcId, lenId: lenId, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
+    end 'lower'
+end 'lowerSysOpToArm64'
+
+function lowerSyscallArm64(resultId ValueId, number MachineWord, argIds ValueIdArray, dstBlock MlirBlock, valueSlots ValueSlotMap, nextTempSlot VarSlot) returns VarSlot
+    var argSlots = VarSlotArray{}
+    for argId in argIds 'mapArgs'
+        argSlots.push(valueSlotMapGet(valueSlots, valueId: argId))
+    end 'mapArgs'
+
+    let tempSlot = nextTempSlot
+    dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.syscall(tempSlot, number, argSlots)))
+    valueSlotMapSet(valueSlots, valueId: resultId, slot: tempSlot)
+    return nextTempSlot + 1
+end 'lowerSyscallArm64'
+
+function lowerIatCallArm64(resultId ValueId, slotIndex MachineWord, argIds ValueIdArray, dstBlock MlirBlock, valueSlots ValueSlotMap, nextTempSlot VarSlot) returns VarSlot
+    var argSlots = VarSlotArray{}
+    for argId in argIds 'mapArgs'
+        argSlots.push(valueSlotMapGet(valueSlots, valueId: argId))
+    end 'mapArgs'
+
+    let tempSlot = nextTempSlot
+    dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.iatCall(tempSlot, slotIndex, argSlots)))
+    valueSlotMapSet(valueSlots, valueId: resultId, slot: tempSlot)
+    return nextTempSlot + 1
+end 'lowerIatCallArm64'
+
+function lowerGlobalAddrArm64(resultId ValueId, name ByteArray, dstBlock MlirBlock, valueSlots ValueSlotMap, nextTempSlot VarSlot) returns VarSlot
+    let tempSlot = nextTempSlot
+    dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.globalAddr(tempSlot, name)))
+    valueSlotMapSet(valueSlots, valueId: resultId, slot: tempSlot)
+    return nextTempSlot + 1
+end 'lowerGlobalAddrArm64'
+
+function lowerStackAddrArm64(resultId ValueId, slotId VarSlot, dstBlock MlirBlock, valueSlots ValueSlotMap, nextTempSlot VarSlot) returns VarSlot
+    let tempSlot = nextTempSlot
+    dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.stackAddrOp(tempSlot, slotId)))
+    valueSlotMapSet(valueSlots, valueId: resultId, slot: tempSlot)
+    return nextTempSlot + 1
+end 'lowerStackAddrArm64'
+
+function lowerStoreByteArm64(baseId ValueId, offsetId ValueId, byteId ValueId, dstBlock MlirBlock, valueSlots ValueSlotMap, nextTempSlot VarSlot) returns VarSlot
+    let baseSlot = valueSlotMapGet(valueSlots, valueId: baseId)
+    let offsetSlot = valueSlotMapGet(valueSlots, valueId: offsetId)
+    let byteSlot = valueSlotMapGet(valueSlots, valueId: byteId)
+    dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.storeByteOp(baseSlot, offsetSlot, byteSlot)))
+    return nextTempSlot
+end 'lowerStoreByteArm64'
+
+function lowerLoadByteArm64(resultId ValueId, baseId ValueId, offsetId ValueId, dstBlock MlirBlock, valueSlots ValueSlotMap, nextTempSlot VarSlot) returns VarSlot
+    let baseSlot = valueSlotMapGet(valueSlots, valueId: baseId)
+    let offsetSlot = valueSlotMapGet(valueSlots, valueId: offsetId)
+    let tempSlot = nextTempSlot
+    dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.loadByteOp(tempSlot, baseSlot, offsetSlot)))
+    valueSlotMapSet(valueSlots, valueId: resultId, slot: tempSlot)
+    return nextTempSlot + 1
+end 'lowerLoadByteArm64'
+
+function lowerMemcpyArm64(dstId ValueId, srcId ValueId, lenId ValueId, dstBlock MlirBlock, valueSlots ValueSlotMap, nextTempSlot VarSlot) returns VarSlot
+    let dstSlot = valueSlotMapGet(valueSlots, valueId: dstId)
+    let srcSlot = valueSlotMapGet(valueSlots, valueId: srcId)
+    let lenSlot = valueSlotMapGet(valueSlots, valueId: lenId)
+    dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.memcpyOp(dstSlot, srcSlot, lenSlot)))
+    return nextTempSlot
+end 'lowerMemcpyArm64'
 

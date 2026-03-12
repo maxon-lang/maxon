@@ -21,3 +21,19 @@ end 'getNextValueId'
 export function setNextValueId(project Project, id ValueId)
     project.nextValueId_ = id
 end 'setNextValueId'
+
+// Mutable counter for allocating ValueIds outside of Project context.
+// Used by lowering passes that need to create new values.
+export type ValueIdRef
+    export var nextId ValueId
+end 'ValueIdRef'
+
+export function allocValueId(ref ValueIdRef) returns ValueId
+    let id = ref.nextId
+    ref.nextId = ref.nextId + 1
+    return id
+end 'allocValueId'
+
+export function createValueIdRef(startId ValueId) returns ValueIdRef
+    return ValueIdRef{nextId: startId}
+end 'createValueIdRef'

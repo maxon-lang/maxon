@@ -33,13 +33,17 @@ export type Project
     // Collected diagnostics (errors reported during compilation)
     export var diagnostics DiagnosticArray
 
+    // Global data table for string literals and other read-only data.
+    // Populated during MaxHL->Mid lowering when printLiteral ops are lowered.
+    export var globalData GlobalDataTable
+
 end 'Project'
 
 export typealias ProjectArray = Array with Project
 
 export function createProject(rootPath FilePath, isSingleFile bool, target Target) returns Project
     let emptyModuleMemo = MlirModuleMemo{value: MlirModule{functions: MlirFunctionArray{}}, computedAt: 0, verifiedAt: 0}
-    let emptyCodeMemo = CodeMemo{value: CodeResult{code: ByteArray{}, mainCallFixupOffset: 0, relocations: RelocationArray{}}, computedAt: 0, verifiedAt: 0}
+    let emptyCodeMemo = CodeMemo{value: CodeResult{code: ByteArray{}, mainCallFixupOffset: 0, relocations: RelocationArray{}, globalData: createGlobalDataTable()}, computedAt: 0, verifiedAt: 0}
     let db = QueryDatabase{
         currentRevision: 1,
         sourceFiles: SourceFileMap{},
@@ -71,7 +75,8 @@ export function createProject(rootPath FilePath, isSingleFile bool, target Targe
         rootPath: rootPath.toString(),
         isSingleFile: isSingleFile,
         target: target,
-        diagnostics: DiagnosticArray{}
+        diagnostics: DiagnosticArray{},
+        globalData: createGlobalDataTable()
     }
 end 'createProject'
 

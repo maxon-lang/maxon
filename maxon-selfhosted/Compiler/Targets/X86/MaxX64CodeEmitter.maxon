@@ -560,24 +560,19 @@ end 'recordLabel'
 // --- Main entry point ---
 
 // Emit x86-64 machine code from a block-based MlirModule containing MaxX64Ops.
-export function emitX86(module MlirModule, target Target, osDesc OsDescriptor) returns CodeResult
+export function emitX86(module MlirModule, target Target, osDesc OsDescriptor, globalData GlobalDataTable) returns CodeResult
     logInfo(LogCategory.codegen, message: "Emitting block-based machine code ({targetToString(target)})")
     var code = ByteArray{}
     code.reserve(1024)
     var relocations = RelocationArray{}
     var callFixups = CallFixupArray{}
 
-    let mainCallFixupOffset = emitX86Start(code, osDesc: osDesc, relocations: relocations, callFixups: callFixups)
-
-    logTrace(LogCategory.codegen, message: "Emitting runtime stubs at offset {code.count()}")
-    let writeStdoutOff = emitX86WriteStdout(code, osDesc: osDesc, relocations: relocations)
-    let i64ToStringOff = emitI64ToString(code)
-
     // Function label tables for inter-function call resolution
     var funcLabelNames = ByteArrayArray{}
     var funcLabelOffsets = CodeOffsetArray{}
 
-    // Emit all functions
+    // Emit all functions (runtime functions like _start, write_stdout, i64_to_string
+    // are now included in the module as regular functions)
     for func in module.functions 'eachFunc'
         // Record function name -> code offset
         recordLabel(funcLabelNames, labelOffsets: funcLabelOffsets, name: func.name, offset: code.count())
@@ -598,13 +593,13 @@ export function emitX86(module MlirModule, target Target, osDesc OsDescriptor) r
 
             // Emit all ops in the block
             for op in block.ops 'emitOps'
-                emitMaxX64MlirOp(op, code: code, blockFixups: blockFixups, callFixups: callFixups, writeStdoutOff: writeStdoutOff, i64ToStringOff: i64ToStringOff)
+                emitMaxX64MlirOp(op, code: code, blockFixups: blockFixups, callFixups: callFixups, relocations: relocations, globalData: globalData)
             end 'emitOps'
 
             // Emit terminator if present (should already be lowered to maxx64 ops
             // pushed into block.ops by MidToMaxX64, but handle hasTerminator for safety)
             if block.hasTerminator 'hasTerm'
-                emitMaxX64MlirOp(block.terminator, code: code, blockFixups: blockFixups, callFixups: callFixups, writeStdoutOff: writeStdoutOff, i64ToStringOff: i64ToStringOff)
+                emitMaxX64MlirOp(block.terminator, code: code, blockFixups: blockFixups, callFixups: callFixups, relocations: relocations, globalData: globalData)
             end 'hasTerm'
         end 'eachBlock'
 
@@ -615,20 +610,23 @@ export function emitX86(module MlirModule, target Target, osDesc OsDescriptor) r
     // Resolve inter-function call fixups
     resolveCallFixups(code, labelNames: funcLabelNames, labelOffsets: funcLabelOffsets, callFixups: callFixups)
 
-    return CodeResult{code: code, mainCallFixupOffset: mainCallFixupOffset, relocations: relocations}
+    // _start must be at offset 0 -- look up its offset for the main call fixup
+    let startOffset = lookupLabel(funcLabelNames, labelOffsets: funcLabelOffsets, name: b"_start")
+
+    return CodeResult{code: code, mainCallFixupOffset: startOffset, relocations: relocations, globalData: globalData}
 end 'emitX86'
 
 // Emit bytes for a single MlirOp (should be maxx64 at this stage).
-function emitMaxX64MlirOp(op MlirOp, code ByteArray, blockFixups BlockJumpFixupArray, callFixups CallFixupArray, writeStdoutOff CodeOffset, i64ToStringOff CodeOffset)
+function emitMaxX64MlirOp(op MlirOp, code ByteArray, blockFixups BlockJumpFixupArray, callFixups CallFixupArray, relocations RelocationArray, globalData GlobalDataTable)
     match op 'dispatch'
-        maxhl to runtime then break 'dispatch'
-        maxx64(x64Op) then emitMaxX64Op(x64Op, code: code, blockFixups: blockFixups, callFixups: callFixups, writeStdoutOff: writeStdoutOff, i64ToStringOff: i64ToStringOff)
+        maxhl to sys then break 'dispatch'
+        maxx64(x64Op) then emitMaxX64Op(x64Op, code: code, blockFixups: blockFixups, callFixups: callFixups, relocations: relocations, globalData: globalData)
         maxarm64 then break 'dispatch'
     end 'dispatch'
 end 'emitMaxX64MlirOp'
 
 // Emit bytes for a single MaxX64Op.
-function emitMaxX64Op(op MaxX64Op, code ByteArray, blockFixups BlockJumpFixupArray, callFixups CallFixupArray, writeStdoutOff CodeOffset, i64ToStringOff CodeOffset)
+function emitMaxX64Op(op MaxX64Op, code ByteArray, blockFixups BlockJumpFixupArray, callFixups CallFixupArray, relocations RelocationArray, globalData GlobalDataTable)
     match op 'emit'
         prologue(stackSize) then emitPrologue(code, stackSize: stackSize)
         MaxX64Op.epilogue then emitEpilogue(code)
@@ -655,12 +653,260 @@ function emitMaxX64Op(op MaxX64Op, code ByteArray, blockFixups BlockJumpFixupArr
         loadF64Slot(slotIndex) then emitLoadSlotToReg(code, slotIndex: slotIndex, dest: X64Register.rax)
         movF64Rdata(rdataOffset) then emitMovRegImm(code, value: rdataOffset)
         MaxX64Op.ucomisd then emitUcomisd(code)
-        printLiteral(data) then emitPrintLiteral(code, data: data, writeStdoutOffset: writeStdoutOff)
-        MaxX64Op.printInt then emitPrintInt(code, writeStdoutOffset: writeStdoutOff, i64ToStringOffset: i64ToStringOff)
+        printLiteral(data) then emitPrintLiteralInline(code, data: data, callFixups: callFixups)
+        MaxX64Op.printInt then emitPrintIntInline(code, callFixups: callFixups)
         subRspImm(value) then emitSubRspImm(code, value: value)
         addRspImm(value) then emitAddRspImm(code, value: value)
         movRspOffsetReg(offset, srcReg) then emitMovRspOffsetReg(code, offset: offset, srcReg: srcReg)
         loadRegRbpOffset(destReg, offset) then emitLoadRegRbpOffset(code, destReg: destReg, offset: offset)
         callDirect(target) then emitCallFixup(code, callFixups: callFixups, target: target)
+        syscall(resultSlot, number, argSlots) then emitX86SyscallOp(code, resultSlot: resultSlot, number: number, argSlots: argSlots)
+        iatCall(resultSlot, slotIndex, argSlots) then emitX86IatCallOp(code, relocations: relocations, resultSlot: resultSlot, slotIndex: slotIndex, argSlots: argSlots)
+        globalAddr(resultSlot, name) then emitX86GlobalAddrOp(code, globalData: globalData, resultSlot: resultSlot, name: name)
+        stackAddrOp(resultSlot, targetSlot) then emitX86StackAddrOp(code, resultSlot: resultSlot, targetSlot: targetSlot)
+        storeByteOp(baseSlot, offsetSlot, byteSlot) then emitX86StoreByteOp(code, baseSlot: baseSlot, offsetSlot: offsetSlot, byteSlot: byteSlot)
+        loadByteOp(resultSlot, baseSlot, offsetSlot) then emitX86LoadByteOp(code, resultSlot: resultSlot, baseSlot: baseSlot, offsetSlot: offsetSlot)
+        memcpyOp(dstSlot, srcSlot, lenSlot) then emitX86MemcpyOp(code, dstSlot: dstSlot, srcSlot: srcSlot, lenSlot: lenSlot)
     end 'emit'
 end 'emitMaxX64Op'
+
+// --- Inline print operations (legacy path, uses callFixups) ---
+
+// printLiteral: jump over data island, then call write_stdout via callFixup
+function emitPrintLiteralInline(code ByteArray, data ByteArray, callFixups CallFixupArray)
+    let dataLen = data.count()
+    if dataLen == 0 'empty'
+        return
+    end 'empty'
+
+    // jmp over data island: jmp rel32
+    code.push(0xE9)
+    let jmpFixup = code.count()
+    writeDword(code, value: 0)
+
+    // Data island
+    let dataOffset = code.count()
+    code.append(data)
+
+    // Patch jump
+    let afterData = code.count()
+    patchDword(code, offset: jmpFixup, value: afterData - (jmpFixup + 4))
+
+    // lea rcx, [rip + offset_to_data]
+    code.append(b"\x48\x8d\x0d")
+    let leaEnd = code.count() + 4
+    let leaRel = dataOffset - leaEnd
+    writeDword(code, value: leaRel)
+
+    // mov rdx, dataLen
+    code.append(b"\x48\xc7\xc2")
+    writeDword(code, value: dataLen)
+
+    // call write_stdout (via callFixup)
+    emitCallFixup(code, callFixups: callFixups, target: b"write_stdout")
+end 'emitPrintLiteralInline'
+
+// printInt: value in RAX, convert to string then print
+function emitPrintIntInline(code ByteArray, callFixups CallFixupArray)
+    // mov rcx, rax; lea rdx, [rsp]
+    code.append(b"\x48\x89\xc1\x48\x8d\x14\x24")
+
+    // call i64_to_string (via callFixup)
+    emitCallFixup(code, callFixups: callFixups, target: b"i64_to_string")
+
+    // mov rdx, rax (length); lea rcx, [rsp] (buffer ptr)
+    code.append(b"\x48\x89\xc2\x48\x8d\x0c\x24")
+
+    // call write_stdout (via callFixup)
+    emitCallFixup(code, callFixups: callFixups, target: b"write_stdout")
+end 'emitPrintIntInline'
+
+// --- SysOp emission (x86-64) ---
+
+// sys.syscall: Linux x86-64 syscall ABI
+// Syscall ABI: rax=number, rdi=arg0, rsi=arg1, rdx=arg2, r10=arg3, r8=arg4, r9=arg5
+// Result in rax, stored to resultSlot.
+function emitX86SyscallOp(code ByteArray, resultSlot VarSlot, number MachineWord, argSlots VarSlotArray)
+    let argCount = argSlots.count()
+
+    // Linux syscall register order: rdi, rsi, rdx, r10, r8, r9
+    if argCount >= 1 'arg0'
+        let slot0 = try argSlots.get(0) otherwise 0
+        emitLoadSlotToReg(code, slotIndex: slot0, dest: X64Register.rdi)
+    end 'arg0'
+    if argCount >= 2 'arg1'
+        let slot1 = try argSlots.get(1) otherwise 0
+        emitLoadSlotToReg(code, slotIndex: slot1, dest: X64Register.rsi)
+    end 'arg1'
+    if argCount >= 3 'arg2'
+        let slot2 = try argSlots.get(2) otherwise 0
+        emitLoadSlotToReg(code, slotIndex: slot2, dest: X64Register.rdx)
+    end 'arg2'
+    if argCount >= 4 'arg3'
+        let slot3 = try argSlots.get(3) otherwise 0
+        emitLoadSlotToReg(code, slotIndex: slot3, dest: X64Register.r10)
+    end 'arg3'
+    if argCount >= 5 'arg4'
+        let slot4 = try argSlots.get(4) otherwise 0
+        emitLoadSlotToReg(code, slotIndex: slot4, dest: X64Register.r8)
+    end 'arg4'
+    if argCount >= 6 'arg5'
+        let slot5 = try argSlots.get(5) otherwise 0
+        emitLoadSlotToReg(code, slotIndex: slot5, dest: X64Register.r9)
+    end 'arg5'
+
+    // mov eax, number
+    code.push(0xB8)
+    writeDword(code, value: number)
+    // syscall
+    code.append(b"\x0f\x05")
+
+    // Store result (rax) to resultSlot
+    emitMovSlot(code, slotIndex: resultSlot, srcReg: X64Register.rax)
+end 'emitX86SyscallOp'
+
+// sys.iatCall: Windows IAT indirect call
+// Windows x64 ABI: rcx=arg0, rdx=arg1, r8=arg2, r9=arg3, stack for arg4+
+// Shadow space (32 bytes) must be allocated by caller.
+function emitX86IatCallOp(code ByteArray, relocations RelocationArray, resultSlot VarSlot, slotIndex MachineWord, argSlots VarSlotArray)
+    let argCount = argSlots.count()
+
+    // Allocate shadow space + stack args
+    let stackArgCount = argCount - 4
+    var totalStackBytes = 32
+    if stackArgCount > 0 'extraStack'
+        totalStackBytes = totalStackBytes + stackArgCount * 8
+    end 'extraStack'
+    // Align to 16
+    totalStackBytes = (totalStackBytes + 15) and (0 - 16)
+    emitSubRspImm(code, value: totalStackBytes)
+
+    // Load register args (first 4)
+    if argCount >= 1 'arg0'
+        let slot0 = try argSlots.get(0) otherwise 0
+        emitLoadSlotToReg(code, slotIndex: slot0, dest: X64Register.rcx)
+    end 'arg0'
+    if argCount >= 2 'arg1'
+        let slot1 = try argSlots.get(1) otherwise 0
+        emitLoadSlotToReg(code, slotIndex: slot1, dest: X64Register.rdx)
+    end 'arg1'
+    if argCount >= 3 'arg2'
+        let slot2 = try argSlots.get(2) otherwise 0
+        emitLoadSlotToReg(code, slotIndex: slot2, dest: X64Register.r8)
+    end 'arg2'
+    if argCount >= 4 'arg3'
+        let slot3 = try argSlots.get(3) otherwise 0
+        emitLoadSlotToReg(code, slotIndex: slot3, dest: X64Register.r9)
+    end 'arg3'
+
+    // Stack args (arg4+ go to [rsp+32], [rsp+40], etc.)
+    var stackIdx = 4
+    while stackIdx < argCount 'pushStackArgs'
+        let argSlotN = try argSlots.get(stackIdx) otherwise 0
+        emitLoadSlotToReg(code, slotIndex: argSlotN, dest: X64Register.rax)
+        let rspOffset = 32 + (stackIdx - 4) * 8
+        emitMovRspOffsetReg(code, offset: rspOffset, srcReg: X64Register.rax)
+        stackIdx = stackIdx + 1
+    end 'pushStackArgs'
+
+    // call [rip + disp32] (IAT indirect call)
+    code.append(b"\xff\x15")
+    relocations.push(Relocation{codeOffset: code.count(), slotIndex: slotIndex})
+    writeDword(code, value: 0)
+
+    // Deallocate stack space
+    emitAddRspImm(code, value: totalStackBytes)
+
+    // Store result (rax) to resultSlot
+    emitMovSlot(code, slotIndex: resultSlot, srcReg: X64Register.rax)
+end 'emitX86IatCallOp'
+
+// sys.globalAddr: emit data island and LEA to get pointer to named global data
+function emitX86GlobalAddrOp(code ByteArray, globalData GlobalDataTable, resultSlot VarSlot, name ByteArray)
+    let data = lookupGlobalData(globalData, name: name)
+    let dataLen = data.count()
+    if dataLen == 0 'noData'
+        // Global not found or empty -- store 0
+        emitMovRegImm(code, value: 0)
+        emitMovSlot(code, slotIndex: resultSlot, srcReg: X64Register.rax)
+        return
+    end 'noData'
+
+    // Jump over data island
+    code.push(0xE9)
+    let jmpFixup = code.count()
+    writeDword(code, value: 0)
+
+    // Data island
+    let dataOffset = code.count()
+    code.append(data)
+
+    // Patch jump
+    let afterData = code.count()
+    patchDword(code, offset: jmpFixup, value: afterData - (jmpFixup + 4))
+
+    // lea rax, [rip + offset_to_data]
+    code.append(b"\x48\x8d\x05")
+    let leaEnd = code.count() + 4
+    let leaRel = dataOffset - leaEnd
+    writeDword(code, value: leaRel)
+
+    // Store to result slot
+    emitMovSlot(code, slotIndex: resultSlot, srcReg: X64Register.rax)
+end 'emitX86GlobalAddrOp'
+
+// sys.stackAddr: lea rax, [rbp - offset] to get address of a stack slot
+function emitX86StackAddrOp(code ByteArray, resultSlot VarSlot, targetSlot VarSlot)
+    let offset = (targetSlot + 1) * 8
+    let negOffset = 0 - offset
+    // lea rax, [rbp + negOffset]
+    if offset <= 128 'smallDisp'
+        code.append(b"\x48\x8d\x45")
+        code.push(negOffset and 0xFF)
+    end 'smallDisp' else 'largeDisp'
+        code.append(b"\x48\x8d\x85")
+        writeDword(code, value: negOffset)
+    end 'largeDisp'
+
+    emitMovSlot(code, slotIndex: resultSlot, srcReg: X64Register.rax)
+end 'emitX86StackAddrOp'
+
+// sys.storeByte: mov byte [base + offset], value
+function emitX86StoreByteOp(code ByteArray, baseSlot VarSlot, offsetSlot VarSlot, byteSlot VarSlot)
+    // Load base into rcx
+    emitLoadSlotToReg(code, slotIndex: baseSlot, dest: X64Register.rcx)
+    // Load offset into rdx
+    emitLoadSlotToReg(code, slotIndex: offsetSlot, dest: X64Register.rdx)
+    // Load byte value into rax
+    emitLoadSlotToReg(code, slotIndex: byteSlot, dest: X64Register.rax)
+    // add rcx, rdx (base + offset)
+    code.append(b"\x48\x01\xd1")
+    // mov byte [rcx], al
+    code.append(b"\x88\x01")
+end 'emitX86StoreByteOp'
+
+// sys.loadByte: movzx rax, byte [base + offset]
+function emitX86LoadByteOp(code ByteArray, resultSlot VarSlot, baseSlot VarSlot, offsetSlot VarSlot)
+    // Load base into rcx
+    emitLoadSlotToReg(code, slotIndex: baseSlot, dest: X64Register.rcx)
+    // Load offset into rdx
+    emitLoadSlotToReg(code, slotIndex: offsetSlot, dest: X64Register.rdx)
+    // add rcx, rdx (base + offset)
+    code.append(b"\x48\x01\xd1")
+    // movzx rax, byte [rcx]   =>  48 0F B6 01
+    code.append(b"\x48\x0f\xb6\x01")
+    // Store result
+    emitMovSlot(code, slotIndex: resultSlot, srcReg: X64Register.rax)
+end 'emitX86LoadByteOp'
+
+// sys.memcpy: rep movsb (rdi=dst, rsi=src, rcx=len)
+function emitX86MemcpyOp(code ByteArray, dstSlot VarSlot, srcSlot VarSlot, lenSlot VarSlot)
+    // Load dst into rdi
+    emitLoadSlotToReg(code, slotIndex: dstSlot, dest: X64Register.rdi)
+    // Load src into rsi
+    emitLoadSlotToReg(code, slotIndex: srcSlot, dest: X64Register.rsi)
+    // Load len into rcx
+    emitLoadSlotToReg(code, slotIndex: lenSlot, dest: X64Register.rcx)
+    // rep movsb
+    code.append(b"\xf3\xa4")
+end 'emitX86MemcpyOp'

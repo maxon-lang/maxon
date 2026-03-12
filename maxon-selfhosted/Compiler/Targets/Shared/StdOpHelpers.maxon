@@ -91,7 +91,10 @@ function isTempProducingOp(op MlirOp) returns bool
         arith gives true
         cf gives false
         func(funcOp) gives isFuncCallOp(funcOp)
-        memref to maxarm64 gives false
+        memref gives false
+        runtime gives false
+        sys(sysOp) gives isSysTempProducingOp(sysOp)
+        maxx64 to maxarm64 gives false
     end 'check'
 end 'isTempProducingOp'
 
@@ -102,12 +105,24 @@ function isFuncCallOp(op FuncOp) returns bool
     end 'check'
 end 'isFuncCallOp'
 
+function isSysTempProducingOp(op SysOp) returns bool
+    return match op 'check'
+        syscall gives true
+        iatCall gives true
+        globalAddr gives true
+        stackAddr gives true
+        loadByte gives true
+        storeByte gives false
+        memcpy gives false
+    end 'check'
+end 'isSysTempProducingOp'
+
 // Check if an MlirOp is a print operation (needs stack buffer).
 function isPrintOp(op MlirOp) returns bool
     return match op 'check'
         maxhl to memref gives false
         runtime gives true
-        maxx64 to maxarm64 gives false
+        sys to maxarm64 gives false
     end 'check'
 end 'isPrintOp'
 

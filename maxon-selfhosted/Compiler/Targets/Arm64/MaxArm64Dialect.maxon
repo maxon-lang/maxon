@@ -50,6 +50,20 @@ export union MaxArm64Op
     printLiteral(data ByteArray)
     printInt
     ret
+    // SysOp lowering: Linux ARM64 syscall (svc #0)
+    syscall(resultSlot VarSlot, number MachineWord, argSlots VarSlotArray)
+    // SysOp lowering: indirect call through IAT slot
+    iatCall(resultSlot VarSlot, slotIndex MachineWord, argSlots VarSlotArray)
+    // SysOp lowering: data island + ADR for named global data
+    globalAddr(resultSlot VarSlot, name ByteArray)
+    // SysOp lowering: address of a stack slot
+    stackAddrOp(resultSlot VarSlot, targetSlot VarSlot)
+    // SysOp lowering: strb byte at base+offset
+    storeByteOp(baseSlot VarSlot, offsetSlot VarSlot, byteSlot VarSlot)
+    // SysOp lowering: ldrb byte from base+offset
+    loadByteOp(resultSlot VarSlot, baseSlot VarSlot, offsetSlot VarSlot)
+    // SysOp lowering: byte-by-byte copy
+    memcpyOp(dstSlot VarSlot, srcSlot VarSlot, lenSlot VarSlot)
 end 'MaxArm64Op'
 
 export typealias MaxArm64OpArray = Array with MaxArm64Op
