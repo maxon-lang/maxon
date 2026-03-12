@@ -11106,11 +11106,17 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
 
 
   private string? FindTypeImplementingInterface(string interfaceName) {
+    // Prefer non-alias types (e.g., Map over HeaderMap) to avoid chained alias
+    // resolution failures when creating concrete type aliases like __Map_i64_i64
+    string? fallback = null;
     foreach (var (name, type) in _typeRegistry) {
-      if (type is MlirStructType structType && structType.ConformingInterfaces.Contains(interfaceName))
-        return name;
+      if (type is MlirStructType structType && structType.ConformingInterfaces.Contains(interfaceName)) {
+        if (!_typeAliasSources.ContainsKey(name))
+          return name;
+        fallback ??= name;
+      }
     }
-    return null;
+    return fallback;
   }
 
   private ExprResult.Direct EmitConstantLiteral(object constValue) {
