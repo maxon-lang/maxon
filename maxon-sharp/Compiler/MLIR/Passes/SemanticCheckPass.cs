@@ -32,6 +32,9 @@ public static class SemanticCheckPass {
 
     // Check discarded function results
     CheckDiscardedResults(module);
+
+    // Check async calls target yielding functions
+    CheckAsyncYielding(module);
   }
 
   private static void CheckDiscardedResults(MlirModule<MaxonOp> module) {
@@ -79,5 +82,100 @@ public static class SemanticCheckPass {
     // Strip first namespace segment: "ns.Type.method" -> "Type.method", "ns.func" -> "func"
     var dot = callee.IndexOf('.');
     return dot >= 0 ? callee[(dot + 1)..] : callee;
+  }
+
+  /// Known I/O runtime stubs that cause the calling green thread to yield.
+  /// These are runtime functions (not user-defined) that call __io_submit_*.
+  private static readonly HashSet<string> IoStubs = [
+    "maxon_file_read",
+    "maxon_managed_file_write",
+    "maxon_file_exists",
+    "maxon_file_delete",
+    "maxon_managed_dir_open_search",
+    "maxon_find_next_file",
+    "maxon_directory_exists",
+    "maxon_create_directory",
+    "maxon_get_current_directory",
+    "maxon_managed_file_open_read",
+    "maxon_managed_file_open_write",
+  ];
+
+  /// Checks that every `async f()` call targets a function that can yield.
+  /// A function yields if it contains await/try_await ops, calls a known I/O stub,
+  /// or transitively calls a function that yields.
+  private static void CheckAsyncYielding(MlirModule<MaxonOp> module) {
+    // Collect all async call ops first — if none exist, skip the analysis
+    var asyncCalls = new List<(MaxonAsyncCallOp Op, MlirFunction<MaxonOp> ContainingFunc)>();
+    foreach (var func in module.Functions) {
+      foreach (var block in func.Body.Blocks) {
+        foreach (var op in block.Operations) {
+          if (op is MaxonAsyncCallOp asyncOp)
+            asyncCalls.Add((asyncOp, func));
+        }
+      }
+    }
+    if (asyncCalls.Count == 0) return;
+
+    // Build the yields set using fixed-point iteration
+    var yields = new HashSet<string>();
+
+    // Build call graph: funcName -> set of callees
+    var callGraph = new Dictionary<string, HashSet<string>>();
+
+    foreach (var func in module.Functions) {
+      var callees = new HashSet<string>();
+      callGraph[func.Name] = callees;
+      foreach (var block in func.Body.Blocks) {
+        foreach (var op in block.Operations) {
+          switch (op) {
+            case MaxonAwaitOp:
+            case MaxonTryAwaitOp:
+            case MaxonAsyncCallOp:
+              yields.Add(func.Name);
+              break;
+            case MaxonCallOp call:
+              if (IoStubs.Contains(call.Callee))
+                yields.Add(func.Name);
+              else
+                callees.Add(call.Callee);
+              break;
+            case MaxonCallRuntimeOp rtCall:
+              if (IoStubs.Contains(rtCall.FunctionName))
+                yields.Add(func.Name);
+              break;
+          }
+        }
+      }
+    }
+
+    // Fixed-point propagation: if a function calls a yielding function, it yields too
+    bool changed = true;
+    while (changed) {
+      changed = false;
+      foreach (var (funcName, callees) in callGraph) {
+        if (yields.Contains(funcName)) continue;
+        foreach (var callee in callees) {
+          if (yields.Contains(callee)) {
+            yields.Add(funcName);
+            changed = true;
+            break;
+          }
+        }
+      }
+    }
+
+    // Check each async call: callee must be in the yields set or be a known I/O stub
+    foreach (var (asyncOp, containingFunc) in asyncCalls) {
+      if (!yields.Contains(asyncOp.Callee) && !IoStubs.Contains(asyncOp.Callee)) {
+        var sourceText = asyncOp.CallSourceText ?? $"async {asyncOp.Callee}(...)";
+        throw new CompileError(
+          ErrorCode.AsyncNonYielding,
+          $"'{sourceText}' \u2014 function never yields; 'async' is for I/O-concurrent work only",
+          asyncOp.CallLine,
+          asyncOp.CallColumn) {
+          FilePath = containingFunc.SourceFilePath
+        };
+      }
+    }
   }
 }

@@ -32,6 +32,10 @@ public class TestCase {
   /// When true, compile with --mm-trace enabled.
   /// </summary>
   public bool MmTrace { get; init; }
+  /// <summary>
+  /// When true, compile with --async-trace enabled.
+  /// </summary>
+  public bool AsyncTrace { get; init; }
 }
 
 /// <summary>
@@ -69,6 +73,11 @@ public class SuccessExpectation : TestExpectation {
   /// produce trace output on stderr.
   /// </summary>
   public bool MmTrace { get; set; }
+  /// <summary>
+  /// When true, compile with --async-trace enabled so async runtime operations
+  /// produce trace output on stderr.
+  /// </summary>
+  public bool AsyncTrace { get; set; }
 }
 
 /// <summary>
@@ -103,6 +112,10 @@ public class Fragment {
   /// When true, compile with --mm-trace enabled.
   /// </summary>
   public bool MmTrace { get; init; }
+  /// <summary>
+  /// When true, compile with --async-trace enabled.
+  /// </summary>
+  public bool AsyncTrace { get; init; }
 }
 
 /// <summary>

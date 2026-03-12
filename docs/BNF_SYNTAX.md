@@ -41,7 +41,7 @@ IDENTIFIER    = ( letter | '_' ) { letter | digit | '_' }
 ### 1.3 Keywords
 
 ```
-KEYWORD       = 'and' | 'as' | 'bool' | 'break' | 'byte' | 'continue'
+KEYWORD       = 'and' | 'as' | 'async' | 'await' | 'bool' | 'break' | 'byte' | 'continue'
               | 'default' | 'else' | 'end' | 'enum' | 'export' | 'extends'
               | 'extension' | 'fallthrough' | 'false' | 'float'
               | 'for' | 'from' | 'function' | 'gives' | 'if' | 'ignore'
@@ -649,6 +649,8 @@ primary       = INTEGER
               | match_expr
               | try_expr
               | from_expr
+              | async_expr
+              | await_expr
               | IDENTIFIER
 
 array_literal = '[' [ expression { ',' expression } ] ']'
@@ -701,7 +703,28 @@ try_expr      = 'try' expression 'otherwise' otherwise_clause
               | 'try' expression
 ```
 
-### 6.6 Function and Method Calls
+### 6.6 Async/Await Expressions
+
+```
+async_expr    = 'async' IDENTIFIER '(' [ arg_list ] ')'    (* spawn green thread, returns promise *)
+              | 'async' TYPE '.' IDENTIFIER '(' [ arg_list ] ')'  (* spawn struct method call *)
+
+await_expr    = 'await' expression                          (* wait for promise, returns result *)
+
+try_await     = 'try' 'await' expression                    (* await throwing promise, propagate error *)
+              | 'try' 'await' expression 'otherwise' expression   (* await with default on error *)
+              | 'try' 'await' expression 'otherwise' 'panic' '(' STRING ')'  (* await with panic on error *)
+              | 'try' 'await' expression 'otherwise' 'ignore'    (* await void throwing promise *)
+
+cancel_expr   = expression '.' 'cancel' '(' ')'            (* cancel a green thread *)
+```
+
+**Restrictions:**
+- `async` can only be applied to direct function calls (not closures or indirect calls)
+- `async` target function must yield (contain I/O operations or `await` points)
+- Throwing async functions require `try await` (not plain `await`)
+
+### 6.7 Function and Method Calls
 
 ```
 call_expr     = IDENTIFIER '(' [ arg_list ] ')'

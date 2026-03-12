@@ -61,6 +61,9 @@ public enum TokenType {
   Default,
   Upto,
   Is,
+  // Concurrency keywords
+  Async,
+  Await,
   // Types
   Int,
   Float,
@@ -214,6 +217,8 @@ public class Lexer(string source) {
     { "default", new(TokenType.Default, "Default case in a match statement.", false) },
     { "upto", new(TokenType.Upto, "Exclusive upper bound in range patterns.", false) },
     { "is", new(TokenType.Is, "Reference identity operator. Returns true if two variables refer to the same object. Use 'is not' for inequality.", false) },
+    { "async", new(TokenType.Async, "Spawns a green thread for a function call.", false) },
+    { "await", new(TokenType.Await, "Waits for a green thread to complete and returns its result.", false) },
   };
 
   // Operator map: { operator_text, TokenType, OperatorCategory, help_text }

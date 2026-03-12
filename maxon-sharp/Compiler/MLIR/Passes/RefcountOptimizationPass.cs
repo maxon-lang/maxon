@@ -204,7 +204,7 @@ public static class RefcountOptimizationPass {
   /// side effects (function calls, indirect stores, runtime calls with side effects).
   /// </summary>
   private static bool IsAliasingOp(StandardOp op) {
-    if (op is StdCallOp or StdTryCallOp) return true;
+    if (op is StdCallOp or StdTryCallOp or StdTryCallRuntimeOp) return true;
     if (op is StdStoreIndirectOp or StdMemCopyOp) return true;
     // mm_decref can trigger destructors with arbitrary side effects
     if (op is StdCallRuntimeOp rt && rt.Callee != "mm_incref" && rt.Callee != "mm_trace_transfer") return true;

@@ -1185,6 +1185,23 @@ public class StdCallRuntimeOp(string callee, List<StdValue> args, StdValue? resu
   public override int AnyResultId => Result?.Id ?? -1;
 }
 
+/// Calls a runtime function that returns both a result (RAX) and an error flag (RDX).
+/// Used for __gt_try_await which returns the async result and the threw flag.
+public class StdTryCallRuntimeOp(string callee, List<StdValue> args, StdValue? result = null) : StandardOp {
+  public override string Mnemonic => $"std.try_call_runtime @{Callee}";
+  public string Callee { get; } = callee;
+  public List<StdValue> Args { get; } = args;
+  public StdValue? Result { get; } = result;
+  public StdI64 ErrorFlag { get; } = new StdI64(MlirContext.Current.NextId());
+  public override IReadOnlyList<string> PrintableResults =>
+    Result != null ? [Result.ToString(), ErrorFlag.ToString()] : [ErrorFlag.ToString()];
+  public override IReadOnlyList<string> PrintableOperands =>
+    [.. Args.Select(a => a.ToString())];
+  public override List<StdValue> ReadValues => Args;
+  public override int PureResultId => -1;
+  public override int AnyResultId => Result?.Id ?? ErrorFlag.Id;
+}
+
 /// <summary>
 /// Like StdCallRuntimeOp but guards the first argument against null.
 /// If the first arg is null, the call is skipped entirely.

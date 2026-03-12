@@ -1003,6 +1003,12 @@ public static partial class MaxonToStandardConversion {
                 } else {
                   EmitStore(newBlock, mappedValue, assignOp.VarName, varTypes);
                 }
+                // For struct-typed values that bypassed the StdHeapPtr path (e.g., try-await
+                // results which are raw StdI64 heap pointers), register in varNameToStructType
+                // so that scope_end emits mm_decref.
+                if (assignOp.Value is MaxonStruct msNonHp) {
+                  varNameToStructType[assignOp.VarName] = msNonHp.TypeName;
+                }
               }
               // Write back through reference pointer for reassigned mutated parameters
               if (!assignOp.IsDeclaration && _refParamPtrVars != null
@@ -1641,6 +1647,18 @@ public static partial class MaxonToStandardConversion {
               LowerTryCall(tryCallOp, funcLookup, newBlock, valueMap, varTypes, module.TypeDefs, temps);
               if (isStructInstanceMethod)
                 selfFieldCache.Clear();
+              break;
+            case MaxonAsyncCallOp asyncCallOp:
+              LowerAsyncCall(asyncCallOp, newBlock, valueMap, varTypes);
+              break;
+            case MaxonAwaitOp awaitOp:
+              LowerAwait(awaitOp, newBlock, valueMap);
+              break;
+            case MaxonTryAwaitOp tryAwaitOp:
+              LowerTryAwait(tryAwaitOp, newBlock, valueMap);
+              break;
+            case MaxonCancelPromiseOp cancelOp:
+              LowerCancelPromise(cancelOp, newBlock, valueMap);
               break;
             case MaxonCallOp callOp:
               if (TryLowerPrimitiveMethod(callOp, newBlock, valueMap)) break;

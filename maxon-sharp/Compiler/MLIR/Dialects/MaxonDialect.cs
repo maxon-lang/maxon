@@ -1220,3 +1220,82 @@ public class MaxonManagedListCursorValueOp(MaxonValue managedList, string valueK
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
   public override IReadOnlyList<string> PrintableOperands => [ManagedList.ToString()];
 }
+
+// ========== Async/Await ops ==========
+
+/// Spawns a green thread to execute a function call.
+/// The result is a MaxonPromise that can be awaited.
+public class MaxonAsyncCallOp(string callee, List<MaxonValue> args, MaxonValueKind? innerResultKind, string? innerStructTypeName, bool throws = false) : MaxonOp {
+  public override string Mnemonic => $"maxon.async_call @{Callee}";
+  public string Callee { get; } = callee;
+  public List<MaxonValue> Args { get; } = args;
+  public MaxonPromise Result { get; } = new MaxonPromise(MlirContext.Current.NextId(), innerResultKind, innerStructTypeName, throws);
+  /// The return type of the spawned function (what await will produce)
+  public MaxonValueKind? InnerResultKind { get; } = innerResultKind;
+  public string? InnerStructTypeName { get; } = innerStructTypeName;
+  /// Whether the spawned function is a throwing function.
+  public bool Throws { get; } = throws;
+  public List<bool>? ArgMutabilities { get; set; }
+  public List<string?>? ArgVarNames { get; set; }
+  /// Source location for error reporting (line of the 'async' keyword)
+  public int? CallLine { get; set; }
+  public int? CallColumn { get; set; }
+  /// The source text of the async call expression (for error messages)
+  public string? CallSourceText { get; set; }
+  public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
+  public override IReadOnlyList<string> PrintableOperands => [.. Args.Select(a => a.ToString())];
+}
+
+/// Waits for a green thread (promise) to complete and extracts its result.
+public class MaxonAwaitOp : MaxonOp {
+  public override string Mnemonic => "maxon.await";
+  public MaxonValue Promise { get; }
+  public MaxonValue? Result { get; }
+  public MaxonValueKind? ResultKind { get; }
+  public string? ResultStructTypeName { get; }
+  public override IReadOnlyList<string> PrintableResults => Result != null ? [Result.ToString()] : [];
+  public override IReadOnlyList<string> PrintableOperands => [Promise.ToString()];
+
+  public MaxonAwaitOp(MaxonValue promise, MaxonValueKind? resultKind, string? resultStructTypeName) {
+    Promise = promise;
+    ResultKind = resultKind;
+    ResultStructTypeName = resultStructTypeName;
+    if (resultKind != null) {
+      Result = resultKind == MaxonValueKind.Struct
+        ? new MaxonStruct(MlirContext.Current.NextId(), resultStructTypeName!)
+        : resultKind.Value.CreateValue();
+    }
+  }
+}
+
+/// Waits for a throwing green thread (promise) to complete. Extracts both the result and error flag.
+/// Mirrors MaxonTryCallOp but for async/await: the error flag comes from gt.threw.
+public class MaxonTryAwaitOp : MaxonOp {
+  public override string Mnemonic => "maxon.try_await";
+  public MaxonValue Promise { get; }
+  public MaxonValue? Result { get; }
+  public MaxonInteger ErrorFlag { get; }
+  public MaxonValueKind? ResultKind { get; }
+  public string? ResultStructTypeName { get; }
+  public override IReadOnlyList<string> PrintableResults => Result != null ? [Result.ToString(), ErrorFlag.ToString()] : [ErrorFlag.ToString()];
+  public override IReadOnlyList<string> PrintableOperands => [Promise.ToString()];
+
+  public MaxonTryAwaitOp(MaxonValue promise, MaxonValueKind? resultKind, string? resultStructTypeName) {
+    Promise = promise;
+    ResultKind = resultKind;
+    ResultStructTypeName = resultStructTypeName;
+    ErrorFlag = new MaxonInteger(MlirContext.Current.NextId());
+    if (resultKind != null) {
+      Result = resultKind == MaxonValueKind.Struct
+        ? new MaxonStruct(MlirContext.Current.NextId(), resultStructTypeName!)
+        : resultKind.Value.CreateValue();
+    }
+  }
+}
+
+/// Cancels a green thread associated with a promise.
+public class MaxonCancelPromiseOp(MaxonValue promise) : MaxonOp {
+  public override string Mnemonic => "maxon.cancel_promise";
+  public MaxonValue Promise { get; } = promise;
+  public override IReadOnlyList<string> PrintableOperands => [Promise.ToString()];
+}

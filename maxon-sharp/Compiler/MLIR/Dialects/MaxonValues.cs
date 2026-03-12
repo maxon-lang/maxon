@@ -19,3 +19,12 @@ public class MaxonEnum(int id, string typeName) : MaxonValue(id) {
   public string TypeName { get; } = typeName;
 }
 public class MaxonFunctionPtr(int id) : MaxonValue(id);
+
+/// Represents a promise (green thread handle) from an async call.
+/// Carries type info about the eventual result so await can produce the right type.
+public class MaxonPromise(int id, MaxonValueKind? innerKind, string? innerStructTypeName, bool throws = false) : MaxonValue(id) {
+  public MaxonValueKind? InnerKind { get; } = innerKind;
+  public string? InnerStructTypeName { get; } = innerStructTypeName;
+  /// Whether the spawned function is a throwing function (requires try await).
+  public bool Throws { get; } = throws;
+}

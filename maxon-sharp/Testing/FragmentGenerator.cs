@@ -180,6 +180,10 @@ public static partial class FragmentGenerator {
       sb.AppendLine("MmTrace: true");
     }
 
+    if (test.AsyncTrace) {
+      sb.AppendLine("AsyncTrace: true");
+    }
+
     if (test.Expectation is SuccessExpectation success) {
       if (success.ExitCode.HasValue) {
         sb.AppendLine($"ExitCode: {success.ExitCode.Value}");
@@ -301,7 +305,7 @@ public static partial class FragmentGenerator {
     }
 
     var expectationSection = string.Join("\n", lines[(separatorIndex + 1)..secondSeparatorIndex]);
-    var (expectation, fragmentArgs, mmTrace) = ParseExpectation(expectationSection);
+    var (expectation, fragmentArgs, mmTrace, asyncTrace) = ParseExpectation(expectationSection);
 
     // Parse generated MLIR (between second --- and third ---)
     string? generatedMLIR = null;
@@ -326,6 +330,7 @@ public static partial class FragmentGenerator {
       Args = fragmentArgs,
       SourceFiles = sourceFiles,
       MmTrace = mmTrace,
+      AsyncTrace = asyncTrace,
     };
   }
 
@@ -339,7 +344,7 @@ public static partial class FragmentGenerator {
     return string.Join('\n', lines).TrimEnd();
   }
 
-  private static (TestExpectation Expectation, string? Args, bool MmTrace) ParseExpectation(string section) {
+  private static (TestExpectation Expectation, string? Args, bool MmTrace, bool AsyncTrace) ParseExpectation(string section) {
     var lines = section.Split('\n');
     int? exitCode = null;
     string? stdout = null;
@@ -350,6 +355,7 @@ public static partial class FragmentGenerator {
     string? expectedError = null;
     string? args = null;
     bool mmTrace = false;
+    bool asyncTrace = false;
 
     var i = 0;
     while (i < lines.Length) {
@@ -364,6 +370,8 @@ public static partial class FragmentGenerator {
         args = line["Args:".Length..].Trim();
       } else if (line.StartsWith("MmTrace:")) {
         mmTrace = line["MmTrace:".Length..].Trim() == "true";
+      } else if (line.StartsWith("AsyncTrace:")) {
+        asyncTrace = line["AsyncTrace:".Length..].Trim() == "true";
       } else if (line.StartsWith("MaxoncStderr: ```")) {
         expectedError = ExtractMultilineValue(lines, ref i);
       } else if (line.StartsWith("Stdout: ```")) {
@@ -384,7 +392,7 @@ public static partial class FragmentGenerator {
     if (expectedError != null) {
       return (new CompilerErrorExpectation {
         ExpectedStderr = expectedError
-      }, args, mmTrace);
+      }, args, mmTrace, asyncTrace);
     }
 
     return (new SuccessExpectation {
@@ -395,7 +403,8 @@ public static partial class FragmentGenerator {
       RequiredRdata = requiredRdata,
       RequiredData = requiredData,
       MmTrace = mmTrace,
-    }, args, mmTrace);
+      AsyncTrace = asyncTrace,
+    }, args, mmTrace, asyncTrace);
   }
 
   private static readonly Regex FileMarkerPattern = FileMarkerRegex();

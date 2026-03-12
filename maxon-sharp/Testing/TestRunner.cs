@@ -147,8 +147,9 @@ public class TestRunner(string specDir, string fragmentDir, string tempDir, stri
     try {
       // Step 1: Regenerate fragment if stale
       if (item.NeedsRegeneration) {
-        // Fragment generation compiles for IR only — always disable MmTrace
+        // Fragment generation compiles for IR only — always disable MmTrace/AsyncTrace
         Compiler.Compiler.MmTrace = false;
+        Compiler.Compiler.AsyncTrace = false;
         var absolutePath = Path.GetFullPath(item.FragmentPath);
         var (content, genError) = FragmentGenerator.GenerateFragmentContent(item.Test, item.ExePath, absolutePath);
         if (genError != null) {
@@ -222,7 +223,7 @@ public class TestRunner(string specDir, string fragmentDir, string tempDir, stri
       bool needsCleanup;
       string? compileError = null;
 
-      if (!fragment.MmTrace && File.Exists(precompiledExe)) {
+      if (!fragment.MmTrace && !fragment.AsyncTrace && File.Exists(precompiledExe)) {
         var exeFile = new FileInfo(precompiledExe);
         if (exeFile.LastWriteTimeUtc >= fragmentFile.LastWriteTimeUtc) {
           // Use pre-compiled executable (only safe when MmTrace is off — we can't verify
@@ -323,6 +324,7 @@ public class TestRunner(string specDir, string fragmentDir, string tempDir, stri
           var irExePath = Path.Combine(_tempDir, $"{fragment.TestName}_{Guid.NewGuid():N}_ir.exe");
           Compiler.Compiler.MmTrace = false;
           Compiler.Compiler.MmDebug = false;
+          Compiler.Compiler.AsyncTrace = false;
           var irResult = new Compiler.Compiler().Compile(irSources, irExePath, returnIr: true);
           if (irTempDir != null) {
             try { Directory.Delete(irTempDir, recursive: true); } catch { }
@@ -471,6 +473,7 @@ public class TestRunner(string specDir, string fragmentDir, string tempDir, stri
 
       try {
         Compiler.Compiler.MmTrace = fragment.MmTrace;
+        Compiler.Compiler.AsyncTrace = fragment.AsyncTrace;
         var result = new Compiler.Compiler().Compile(sources, outputPath);
         var error = result.Error;
         // Normalize temp directory paths to just filenames for multi-file tests
@@ -599,7 +602,10 @@ public class TestRunner(string specDir, string fragmentDir, string tempDir, stri
       return (false, $"Failed to read {sectionName} section data");
     }
 
-    if (actualBytes.SequenceEqual(expectedBytes)) {
+    // The data section may contain additional runtime globals (e.g., green thread
+    // scheduler state) after the user data. Check that the user data forms a prefix.
+    if (actualBytes.Length >= expectedBytes.Length &&
+        actualBytes.AsSpan(0, expectedBytes.Length).SequenceEqual(expectedBytes)) {
       return (true, null);
     }
 
@@ -810,6 +816,7 @@ public class TestRunner(string specDir, string fragmentDir, string tempDir, stri
           try {
             Compiler.Compiler.MmTrace = false;
             Compiler.Compiler.MmDebug = false;
+            Compiler.Compiler.AsyncTrace = false;
             var irResult = new Compiler.Compiler().Compile(sources, exePath, returnIr: true);
 
             if (irResult.Success && irResult.AllStagesIr != null) {

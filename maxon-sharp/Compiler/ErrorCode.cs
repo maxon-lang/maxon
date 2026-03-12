@@ -87,6 +87,7 @@ public enum ErrorCode {
   SemanticBorrowConflict = 3070,
   SemanticUnreachableCode = 3071,
   SemanticBuiltinTypeConstruction = 3072,
+  AsyncNonYielding = 3073,
 
   // MLIR pipeline errors (4xxx) - Stage 4
   MlirUnsupportedExpression = 4001,

@@ -73,6 +73,8 @@ public partial class X86CodeEmitter {
     EmitManagedDirOpenSearch();
     EmitManagedDirClose();
     EmitDirDestructor();
+    EmitGreenThreadRuntime();
+    EmitIoRuntime();
   }
 
   /// <summary>
@@ -1797,14 +1799,11 @@ public partial class X86CodeEmitter {
 
   /// <summary>
   /// maxon_file_read(handle, buffer_ptr, size, capacity) -> bytes read
-  /// Clamps size to capacity, then calls ReadFile(handle, buffer, clampedSize, &bytesRead, NULL).
-  /// Stack: [rbp-8]=handle, [rbp-16]=buffer, [rbp-24]=size, [rbp-32]=capacity, [rbp-40]=bytesRead
+  /// Clamps size to capacity, then calls __io_submit_read(handle, buffer, clampedSize).
+  /// Stack: [rbp-8]=handle, [rbp-16]=buffer, [rbp-24]=size, [rbp-32]=capacity
   /// </summary>
   private void EmitMaxonFileRead() {
-    EmitRuntimeFunctionStart("maxon_file_read", 4, 0x50);
-    // Zero the bytesRead slot
-    EmitMovRegImm(X86Register.Rax, 0);
-    EmitMovMemReg(-0x28, X86Register.Rax, 8);
+    EmitRuntimeFunctionStart("maxon_file_read", 4, 0x40);
     // Clamp size to capacity: if size > capacity, use capacity
     EmitMovRegMem(X86Register.R8, -0x18, 8);           // size
     EmitMovRegMem(X86Register.Rax, -0x20, 8);          // capacity
@@ -1812,66 +1811,50 @@ public partial class X86CodeEmitter {
     EmitJcc("be", "rt_fread_ok");                       // size <= capacity → no clamp
     EmitMovRegReg(X86Register.R8, X86Register.Rax);    // clamp: size = capacity
     DefineLabel("rt_fread_ok");
-    EmitMovRegMem(X86Register.Rcx, -0x08, 8);         // arg1: hFile
-    EmitMovRegMem(X86Register.Rdx, -0x10, 8);         // arg2: lpBuffer
-    // R8 already has clamped size                      // arg3: nNumberOfBytesToRead
-    // LEA R9, [rbp-0x28] (arg4: &bytesRead)
-    EmitBytes(0x4C, 0x8D, 0x4D, 0xD8);
-    // [rsp+0x20] = NULL (lpOverlapped)
-    EmitBytes(0x48, 0xC7, 0x44, 0x24, 0x20, 0x00, 0x00, 0x00, 0x00);
-    EmitCallImport("kernel32.dll", "ReadFile");
-    EmitMovRegMem(X86Register.Rax, -0x28, 8);         // return bytesRead
+    EmitMovRegMem(X86Register.Rcx, -0x08, 8);         // arg1: handle
+    EmitMovRegMem(X86Register.Rdx, -0x10, 8);         // arg2: buffer
+    // R8 already has clamped size                      // arg3: size
+    EmitCallRuntimeLabel("__io_submit_read");
+    // RAX = bytes read (or 0 on error; error code in gt->io_error_code)
     EmitRuntimeFunctionEnd();
   }
 
   /// <summary>
   /// maxon_file_close(handle) -> void
-  /// CloseHandle(handle) if non-zero. Idempotent.
+  /// Routes CloseHandle through the sync worker to avoid green thread stack crashes.
+  /// Idempotent: no-op if handle is zero.
   /// Stack: [rbp-8]=handle
   /// </summary>
   private void EmitMaxonFileClose() {
-    EmitRuntimeFunctionStart("maxon_file_close", 1);
-    EmitMovRegMem(X86Register.Rcx, -0x08, 8);         // arg1: hObject
-    EmitTestRegReg(X86Register.Rcx, X86Register.Rcx);
+    EmitRuntimeFunctionStart("maxon_file_close", 1, 0x20);
+    EmitMovRegMem(X86Register.Rdx, -0x08, 8);         // handle
+    EmitTestRegReg(X86Register.Rdx, X86Register.Rdx);
     EmitJcc("z", "rt_fc_noop");
-    EmitCallImport("kernel32.dll", "CloseHandle");
+    EmitMovRegImm(X86Register.Rcx, SyncOpCloseHandle); // op = 9
+    EmitXorRegReg(X86Register.R8, X86Register.R8);     // arg1 = 0
+    EmitCallRuntimeLabel("__io_submit_sync");
     DefineLabel("rt_fc_noop");
     EmitRuntimeFunctionEnd();
   }
 
   /// <summary>
   /// maxon_file_delete(cstring_path) -> 0 on success, non-zero on failure
-  /// DeleteFileA returns non-zero on success (inverted from our convention)
+  /// Delegates to __io_submit_sync(SyncOpFileDelete, path, 0).
+  /// Sync worker returns DeleteFileA result (non-zero=success), so we invert.
   /// Stack: [rbp-8]=path
   /// </summary>
   private void EmitMaxonFileDelete() {
-    EmitRuntimeFunctionStart("maxon_file_delete", 1, 0x30);
-    EmitMovRegMem(X86Register.Rcx, -0x08, 8);         // arg1: lpFileName
-    EmitCallImport("kernel32.dll", "DeleteFileA");
-    // DeleteFileA: non-zero = success, zero = failure
-    // We need: 0 = success, non-zero = failure (inverted)
+    EmitRuntimeFunctionStart("maxon_file_delete", 1, 0x20);
+    EmitMovRegImm(X86Register.Rcx, SyncOpFileDelete);   // op = 1
+    EmitMovRegMem(X86Register.Rdx, -0x08, 8);           // arg0 = path
+    EmitXorRegReg(X86Register.R8, X86Register.R8);      // arg1 = 0
+    EmitCallRuntimeLabel("__io_submit_sync");
+    // RAX = DeleteFileA result (non-zero = success, zero = failure)
+    // Invert: 0 = success, non-zero = failure
     EmitTestRegReg(X86Register.Rax, X86Register.Rax);
-    EmitSetcc("z", X86Register.Rax);                   // AL = 1 if failed (ZF set = RAX was 0)
+    EmitSetcc("z", X86Register.Rax);                   // AL = 1 if failed
     EmitMovzxReg8To64(X86Register.Rax);
     EmitRuntimeFunctionEnd();
-  }
-
-  /// <summary>
-  /// Emits CreateFileA call for writing: CreateFileA(pathSlot, GENERIC_WRITE, 0, NULL, CREATE_ALWAYS, 0, NULL)
-  /// Result handle is in RAX. Branches to failLabel on INVALID_HANDLE_VALUE.
-  /// </summary>
-  private void EmitCreateFileForWrite(int pathSlot, string failLabel) {
-    EmitMovRegMem(X86Register.Rcx, pathSlot, 8);       // arg1: lpFileName
-    EmitMovRegImm(X86Register.Rdx, 0x40000000);        // arg2: GENERIC_WRITE
-    EmitXorRegReg(X86Register.R8, X86Register.R8);      // arg3: dwShareMode = 0
-    EmitXorRegReg(X86Register.R9, X86Register.R9);      // arg4: lpSecurityAttributes = NULL
-    EmitBytes(0x48, 0xC7, 0x44, 0x24, 0x20, 0x02, 0x00, 0x00, 0x00); // [rsp+0x20] = CREATE_ALWAYS (2)
-    EmitBytes(0x48, 0xC7, 0x44, 0x24, 0x28, 0x00, 0x00, 0x00, 0x00); // [rsp+0x28] = 0
-    EmitBytes(0x48, 0xC7, 0x44, 0x24, 0x30, 0x00, 0x00, 0x00, 0x00); // [rsp+0x30] = NULL
-    EmitCallImport("kernel32.dll", "CreateFileA");
-    EmitMovRegImm(X86Register.Rcx, -1);
-    EmitCmpRegReg(X86Register.Rax, X86Register.Rcx);
-    EmitJcc("e", failLabel);
   }
 
   // ==========================================================================
@@ -1909,11 +1892,12 @@ public partial class X86CodeEmitter {
 
   /// <summary>
   /// maxon_find_next_file(block_ptr) -> non-zero if found, 0 if done
-  /// Calls FindNextFileA(handle, &findData). Returns 0 if block_ptr is null.
+  /// Delegates to __io_submit_sync(SyncOpFindNext, handle, findData_ptr).
+  /// Returns 0 if block_ptr is null.
   /// Stack: [rbp-8]=block_ptr
   /// </summary>
   private void EmitMaxonFindNextFile() {
-    EmitRuntimeFunctionStart("maxon_find_next_file", 1, 0x40);
+    EmitRuntimeFunctionStart("maxon_find_next_file", 1, 0x20);
     EmitMovRegMem(X86Register.Rax, -0x08, 8); // block_ptr
     EmitTestRegReg(X86Register.Rax, X86Register.Rax);
     EmitJcc("nz", "rt_fnf_valid");
@@ -1921,10 +1905,11 @@ public partial class X86CodeEmitter {
     EmitXorRegReg(X86Register.Rax, X86Register.Rax);
     EmitJmp("rt_fnf_done");
     DefineLabel("rt_fnf_valid");
-    EmitMovRegIndirectMem(X86Register.Rcx, X86Register.Rax, FindBlockHandleOffset); // arg1: handle
-    EmitMovRegMem(X86Register.Rdx, -0x08, 8); // block_ptr
-    EmitAddRegImm(X86Register.Rdx, FindBlockFindDataOffset); // arg2: &findData
-    EmitCallImport("kernel32.dll", "FindNextFileA");
+    EmitMovRegImm(X86Register.Rcx, SyncOpFindNext);     // op = 3
+    EmitMovRegIndirectMem(X86Register.Rdx, X86Register.Rax, FindBlockHandleOffset); // arg0 = handle
+    EmitMovRegMem(X86Register.R8, -0x08, 8);             // block_ptr
+    EmitAddRegImm(X86Register.R8, FindBlockFindDataOffset); // arg1 = &findData
+    EmitCallRuntimeLabel("__io_submit_sync");
     // RAX = non-zero if found, 0 if no more files
     DefineLabel("rt_fnf_done");
     EmitRuntimeFunctionEnd();
@@ -1932,37 +1917,29 @@ public partial class X86CodeEmitter {
 
   /// <summary>
   /// maxon_directory_exists(cstring_path) -> 1 if directory, 0 otherwise
-  /// Calls GetFileAttributesA, checks FILE_ATTRIBUTE_DIRECTORY (0x10).
+  /// Delegates to __io_submit_sync(SyncOpDirExists, path, 0) which returns 0 or 1.
   /// Stack: [rbp-8]=path
   /// </summary>
   private void EmitMaxonDirectoryExists() {
-    EmitRuntimeFunctionStart("maxon_directory_exists", 1, 0x40);
-    EmitMovRegMem(X86Register.Rcx, -0x08, 8); // arg1: path
-    EmitCallImport("kernel32.dll", "GetFileAttributesA");
-    // Check for INVALID_FILE_ATTRIBUTES (0xFFFFFFFF / -1 as DWORD)
-    EmitBytes(0x83, 0xF8, 0xFF); // CMP EAX, -1 (sign-extended imm8)
-    EmitJcc("ne", "rt_direx_check_attr");
-    // INVALID_FILE_ATTRIBUTES: return 0
-    EmitXorRegReg(X86Register.Rax, X86Register.Rax);
-    EmitJmp("rt_direx_done");
-    // Check FILE_ATTRIBUTE_DIRECTORY bit (0x10)
-    DefineLabel("rt_direx_check_attr");
-    EmitBytes(0xA8, 0x10); // TEST AL, 0x10
-    EmitSetcc("nz", X86Register.Rax);
-    EmitMovzxReg8To64(X86Register.Rax);
-    DefineLabel("rt_direx_done");
+    EmitRuntimeFunctionStart("maxon_directory_exists", 1, 0x20);
+    EmitMovRegImm(X86Register.Rcx, SyncOpDirExists);    // op = 4
+    EmitMovRegMem(X86Register.Rdx, -0x08, 8);           // arg0 = path
+    EmitXorRegReg(X86Register.R8, X86Register.R8);      // arg1 = 0
+    EmitCallRuntimeLabel("__io_submit_sync");
+    // RAX = 0 or 1 from sync worker
     EmitRuntimeFunctionEnd();
   }
 
   /// <summary>
   /// maxon_create_directory(cstring_path) -> nonzero on success, 0 on failure
-  /// Calls CreateDirectoryA(path, NULL).
+  /// Delegates to __io_submit_sync(SyncOpDirCreate, path, 0).
   /// </summary>
   private void EmitMaxonCreateDirectory() {
-    EmitRuntimeFunctionStart("maxon_create_directory", 1, 0x40);
-    EmitMovRegMem(X86Register.Rcx, -0x08, 8); // arg1: path
-    EmitXorRegReg(X86Register.Rdx, X86Register.Rdx); // arg2: lpSecurityAttributes = NULL
-    EmitCallImport("kernel32.dll", "CreateDirectoryA");
+    EmitRuntimeFunctionStart("maxon_create_directory", 1, 0x20);
+    EmitMovRegImm(X86Register.Rcx, SyncOpDirCreate);    // op = 5
+    EmitMovRegMem(X86Register.Rdx, -0x08, 8);           // arg0 = path
+    EmitXorRegReg(X86Register.R8, X86Register.R8);      // arg1 = 0
+    EmitCallRuntimeLabel("__io_submit_sync");
     // RAX = nonzero on success, 0 on failure
     EmitRuntimeFunctionEnd();
   }
@@ -2920,121 +2897,105 @@ public partial class X86CodeEmitter {
 
   /// <summary>
   /// maxon_managed_file_open_read(cstring) → managed __ManagedFile ptr or -1.
-  /// Opens a file with GENERIC_READ/OPEN_EXISTING, wraps in mm_alloc with destructor.
+  /// Delegates to __io_submit_sync(SyncOpFileOpenRead, path, 0) so that CreateFileA
+  /// runs on the sync worker's OS thread (not on a green thread's VirtualAlloc'd stack).
+  /// The sync worker returns a raw file handle (or -1). We wrap it in mm_alloc here
+  /// (on the green thread) since mm_alloc is not thread-safe.
   /// Stack: [rbp-8]=cstring, [rbp-16]=handle
   /// </summary>
   private void EmitManagedFileOpenRead() {
-    EmitRuntimeFunctionStart("maxon_managed_file_open_read", 1, 0x50);
-    // CreateFileA(path, GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL)
-    EmitMovRegMem(X86Register.Rcx, -0x08, 8);        // arg1: lpFileName
-    EmitMovRegImm(X86Register.Rdx, 0x80000000);       // arg2: GENERIC_READ
-    EmitMovRegImm(X86Register.R8, 1);                  // arg3: FILE_SHARE_READ
-    EmitXorRegReg(X86Register.R9, X86Register.R9);     // arg4: lpSecurityAttributes = NULL
-    EmitBytes(0x48, 0xC7, 0x44, 0x24, 0x20, 0x03, 0x00, 0x00, 0x00); // [rsp+0x20] = OPEN_EXISTING (3)
-    EmitBytes(0x48, 0xC7, 0x44, 0x24, 0x28, 0x00, 0x00, 0x00, 0x00); // [rsp+0x28] = 0
-    EmitBytes(0x48, 0xC7, 0x44, 0x24, 0x30, 0x00, 0x00, 0x00, 0x00); // [rsp+0x30] = NULL
-    EmitCallImport("kernel32.dll", "CreateFileA");
-    // Check for INVALID_HANDLE_VALUE (-1)
+    EmitRuntimeFunctionStart("maxon_managed_file_open_read", 1, 0x30);
+    EmitMovRegImm(X86Register.Rcx, SyncOpFileOpenRead);  // op = 7
+    EmitMovRegMem(X86Register.Rdx, -0x08, 8);            // arg0 = cstring path
+    EmitXorRegReg(X86Register.R8, X86Register.R8);        // arg1 = 0
+    EmitCallRuntimeLabel("__io_submit_sync");
+    // RAX = raw file handle or -1
     EmitMovRegImm(X86Register.Rcx, -1);
     EmitCmpRegReg(X86Register.Rax, X86Register.Rcx);
-    EmitJcc("ne", "rt_mfor_ok");
-    // Failed: return -1
-    EmitMovRegImm(X86Register.Rax, -1);
-    EmitJmp("rt_mfor_done");
-
-    DefineLabel("rt_mfor_ok");
-    EmitMovMemReg(-0x10, X86Register.Rax, 8);         // save handle
+    EmitJcc("e", "rt_mfor_fail");
+    EmitMovMemReg(-0x10, X86Register.Rax, 8);            // save handle
     // Allocate __ManagedFile via mm_alloc(8, destructor_ptr, tag_index=0)
-    EmitMovRegImm(X86Register.Rcx, 8);                // size = 8 bytes (one i64 _handle field)
-    EmitLeaFuncAddr(X86Register.Rdx, "__destruct___ManagedFile"); // destructor fn ptr
-    EmitTagZero(X86Register.R8);                        // tag_index = 0
+    EmitMovRegImm(X86Register.Rcx, 8);
+    EmitLeaFuncAddr(X86Register.Rdx, "__destruct___ManagedFile");
+    EmitTagZero(X86Register.R8);
     EmitCallRuntimeLabel("mm_alloc");
     // RAX = managed user pointer; store file handle at [ptr+0]
-    EmitMovRegMem(X86Register.Rcx, -0x10, 8);          // RCX = file handle
-    EmitBytes(0x48, 0x89, 0x08);                        // MOV [RAX], RCX
-
+    EmitMovRegMem(X86Register.Rcx, -0x10, 8);
+    EmitBytes(0x48, 0x89, 0x08);                          // MOV [RAX], RCX
+    EmitJmp("rt_mfor_done");
+    DefineLabel("rt_mfor_fail");
+    EmitMovRegImm(X86Register.Rax, -1);
     DefineLabel("rt_mfor_done");
     EmitRuntimeFunctionEnd();
   }
 
   /// <summary>
   /// maxon_managed_file_open_write(cstring) → managed __ManagedFile ptr or -1.
-  /// Opens a file with GENERIC_WRITE/CREATE_ALWAYS, wraps in mm_alloc with destructor.
+  /// Delegates to __io_submit_sync(SyncOpFileOpenWrite, path, 0) so that CreateFileA
+  /// runs on the sync worker's OS thread (not on a green thread's VirtualAlloc'd stack).
+  /// The sync worker returns a raw file handle (or -1). We wrap it in mm_alloc here
+  /// (on the green thread) since mm_alloc is not thread-safe.
   /// Stack: [rbp-8]=cstring, [rbp-16]=handle
   /// </summary>
   private void EmitManagedFileOpenWrite() {
-    EmitRuntimeFunctionStart("maxon_managed_file_open_write", 1, 0x50);
-    EmitCreateFileForWrite(-0x08, "rt_mfow_fail");
-    EmitMovMemReg(-0x10, X86Register.Rax, 8);          // save handle
+    EmitRuntimeFunctionStart("maxon_managed_file_open_write", 1, 0x30);
+    EmitMovRegImm(X86Register.Rcx, SyncOpFileOpenWrite); // op = 8
+    EmitMovRegMem(X86Register.Rdx, -0x08, 8);            // arg0 = cstring path
+    EmitXorRegReg(X86Register.R8, X86Register.R8);        // arg1 = 0
+    EmitCallRuntimeLabel("__io_submit_sync");
+    // RAX = raw file handle or -1
+    EmitMovRegImm(X86Register.Rcx, -1);
+    EmitCmpRegReg(X86Register.Rax, X86Register.Rcx);
+    EmitJcc("e", "rt_mfow_fail");
+    EmitMovMemReg(-0x10, X86Register.Rax, 8);            // save handle
     // Allocate __ManagedFile via mm_alloc(8, destructor_ptr, tag_index=0)
-    EmitMovRegImm(X86Register.Rcx, 8);                // size = 8 bytes
-    EmitLeaFuncAddr(X86Register.Rdx, "__destruct___ManagedFile"); // destructor fn ptr
-    EmitTagZero(X86Register.R8);                        // tag_index = 0
+    EmitMovRegImm(X86Register.Rcx, 8);
+    EmitLeaFuncAddr(X86Register.Rdx, "__destruct___ManagedFile");
+    EmitTagZero(X86Register.R8);
     EmitCallRuntimeLabel("mm_alloc");
     // RAX = managed user pointer; store file handle at [ptr+0]
-    EmitMovRegMem(X86Register.Rcx, -0x10, 8);          // RCX = file handle
-    EmitBytes(0x48, 0x89, 0x08);                        // MOV [RAX], RCX
+    EmitMovRegMem(X86Register.Rcx, -0x10, 8);
+    EmitBytes(0x48, 0x89, 0x08);                          // MOV [RAX], RCX
     EmitJmp("rt_mfow_done");
-
     DefineLabel("rt_mfow_fail");
     EmitMovRegImm(X86Register.Rax, -1);
-
     DefineLabel("rt_mfow_done");
     EmitRuntimeFunctionEnd();
   }
 
   /// <summary>
   /// maxon_file_exists(cstring) → 1 if file exists (and is not a directory), 0 otherwise.
-  /// Calls GetFileAttributesA, checks for valid attributes without FILE_ATTRIBUTE_DIRECTORY.
+  /// Delegates to __io_submit_sync(SyncOpFileExists, path, 0) which returns 0 or 1.
   /// Stack: [rbp-8]=path
   /// </summary>
   private void EmitFileExists() {
-    EmitRuntimeFunctionStart("maxon_file_exists", 1, 0x40);
-    EmitMovRegMem(X86Register.Rcx, -0x08, 8);         // arg1: path
-    EmitCallImport("kernel32.dll", "GetFileAttributesA");
-    // Check for INVALID_FILE_ATTRIBUTES (0xFFFFFFFF / -1 as DWORD)
-    EmitBytes(0x83, 0xF8, 0xFF);                        // CMP EAX, -1
-    EmitJcc("ne", "rt_fex_check_attr");
-    // INVALID_FILE_ATTRIBUTES: return 0
-    EmitXorRegReg(X86Register.Rax, X86Register.Rax);
-    EmitJmp("rt_fex_done");
-    DefineLabel("rt_fex_check_attr");
-    // Check that FILE_ATTRIBUTE_DIRECTORY bit (0x10) is NOT set
-    EmitBytes(0xA8, 0x10);                              // TEST AL, 0x10
-    EmitJcc("z", "rt_fex_is_file");
-    // Is a directory, not a file: return 0
-    EmitXorRegReg(X86Register.Rax, X86Register.Rax);
-    EmitJmp("rt_fex_done");
-    DefineLabel("rt_fex_is_file");
-    EmitMovRegImm(X86Register.Rax, 1);
-    DefineLabel("rt_fex_done");
+    EmitRuntimeFunctionStart("maxon_file_exists", 1, 0x20);
+    EmitMovRegImm(X86Register.Rcx, SyncOpFileExists);   // op = 0
+    EmitMovRegMem(X86Register.Rdx, -0x08, 8);           // arg0 = path
+    EmitXorRegReg(X86Register.R8, X86Register.R8);      // arg1 = 0
+    EmitCallRuntimeLabel("__io_submit_sync");
+    // RAX = 0 or 1 from sync worker
     EmitRuntimeFunctionEnd();
   }
 
   /// <summary>
   /// maxon_managed_file_write(handle, buffer, length) → bytes written or -1.
-  /// Calls WriteFile(handle, buffer, length, &bytesWritten, NULL).
-  /// Stack: [rbp-8]=handle, [rbp-16]=buffer, [rbp-24]=length, [rbp-32]=bytesWritten
+  /// Calls __io_submit_write(handle, buffer, length) for overlapped I/O.
+  /// Stack: [rbp-8]=handle, [rbp-16]=buffer, [rbp-24]=length
   /// </summary>
   private void EmitManagedFileWrite() {
-    EmitRuntimeFunctionStart("maxon_managed_file_write", 3, 0x50);
-    // Zero the bytesWritten slot
-    EmitXorRegReg(X86Register.Rax, X86Register.Rax);
-    EmitMovMemReg(-0x20, X86Register.Rax, 8);
+    EmitRuntimeFunctionStart("maxon_managed_file_write", 3, 0x30);
     EmitMovRegMem(X86Register.Rcx, -0x08, 8);         // arg1: handle
     EmitMovRegMem(X86Register.Rdx, -0x10, 8);         // arg2: buffer
     EmitMovRegMem(X86Register.R8, -0x18, 8);           // arg3: length
-    // LEA R9, [rbp-0x20] (&bytesWritten)
-    EmitLeaRegMem(X86Register.R9, -0x20);
-    EmitBytes(0x48, 0xC7, 0x44, 0x24, 0x20, 0x00, 0x00, 0x00, 0x00); // [rsp+0x20] = NULL (lpOverlapped)
-    EmitCallImport("kernel32.dll", "WriteFile");
-    EmitTestRegReg(X86Register.Rax, X86Register.Rax);
-    EmitJcc("nz", "rt_mfw_ok");
-    // WriteFile failed: return -1
+    EmitCallRuntimeLabel("__io_submit_write");
+    // RAX = bytes written; check gt->io_error_code for errors
+    EmitGlobalLoadReg(X86Register.Rcx, "__gt_current");
+    EmitMovRegIndirectMem(X86Register.Rcx, X86Register.Rcx, GtOffIoErrorCode);
+    EmitTestRegReg(X86Register.Rcx, X86Register.Rcx);
+    EmitJcc("z", "rt_mfw_done");
+    // Error: return -1
     EmitMovRegImm(X86Register.Rax, -1);
-    EmitJmp("rt_mfw_done");
-    DefineLabel("rt_mfw_ok");
-    EmitMovRegMem(X86Register.Rax, -0x20, 8);         // return bytesWritten
     DefineLabel("rt_mfw_done");
     EmitRuntimeFunctionEnd();
   }
@@ -3042,7 +3003,7 @@ public partial class X86CodeEmitter {
   /// <summary>
   /// __destruct___ManagedFile(user_ptr) → void.
   /// Called by mm_decref when refcount hits 0. Reads _handle at [user_ptr+0],
-  /// calls CloseHandle if non-zero, then zeros the handle for idempotency.
+  /// routes CloseHandle through sync worker, then zeros the handle for idempotency.
   /// </summary>
   private void EmitFileDestructor() {
     EmitRuntimeFunctionStart("__destruct___ManagedFile", 1, 0x30);
@@ -3054,8 +3015,11 @@ public partial class X86CodeEmitter {
     EmitMovRegMem(X86Register.Rax, -0x08, 8);         // RAX = user_ptr
     EmitXorRegReg(X86Register.Rdx, X86Register.Rdx);
     EmitBytes(0x48, 0x89, 0x10);                       // MOV [RAX], RDX = 0
-    // CloseHandle(handle) — RCX already has the handle
-    EmitCallImport("kernel32.dll", "CloseHandle");
+    // Route CloseHandle through sync worker (RCX = handle from above)
+    EmitMovRegReg(X86Register.Rdx, X86Register.Rcx);  // arg0 = handle
+    EmitMovRegImm(X86Register.Rcx, SyncOpCloseHandle); // op = 9
+    EmitXorRegReg(X86Register.R8, X86Register.R8);     // arg1 = 0
+    EmitCallRuntimeLabel("__io_submit_sync");
     DefineLabel("rt_mfd_done");
     EmitRuntimeFunctionEnd();
   }
@@ -3177,6 +3141,2120 @@ public partial class X86CodeEmitter {
     EmitMovRegMem(X86Register.Rcx, -0x10, 8);
     EmitCallRuntimeLabel("mm_decref");
     DefineLabel("rt_mdd_done");
+    EmitRuntimeFunctionEnd();
+  }
+
+  // ==========================================================================
+  // Green Thread Runtime (async/await with cooperative scheduling)
+  // ==========================================================================
+  //
+  // GreenThread struct layout (160 bytes = 0xA0):
+  //   0x00  rsp              saved stack pointer
+  //   0x08  rbp              saved base pointer
+  //   0x10  status           0=ready, 1=running, 2=completed, 3=waiting
+  //   0x18  stack_base       VirtualAlloc'd stack (low address)
+  //   0x20  stack_size       current stack allocation size
+  //   0x28  result           return value when completed
+  //   0x30  waiter           ptr to GreenThread waiting on this one
+  //   0x38  next             next in run queue linked list
+  //   0x40  func_ptr         target function address
+  //   0x48  arg_buf          ptr to argument buffer
+  //   0x50  stackguard       lowest valid stack address
+  //   0x58  threw            0=success, 1=threw (for async throws)
+  //   0x60  io_result_val    raw result value (bytes transferred, etc.)
+  //   0x68  io_result_len    byte count for read results
+  //   0x70  io_error_code    0=success, non-zero=Win32 error
+  //   0x78  cancel_flag      0=live, 1=cancel-requested
+  //   0x80  io_handle        HANDLE of in-flight I/O (for CancelIoEx)
+  //   0x88  all_next         next ptr in global all-threads list
+  //   0x90  tib_stack_base   saved TIB StackBase (gs:[0x08])
+  //   0x98  tib_stack_limit  saved TIB StackLimit (gs:[0x10])
+  //
+  // Scheduler globals (in .data section):
+  //   __gt_current          ptr to running GreenThread
+  //   __gt_run_queue_head   head of ready queue
+  //   __gt_run_queue_tail   tail of ready queue
+  //   __gt_main_thread      160-byte GreenThread struct for main thread (inline)
+
+  private const int GtOffRsp        = 0x00;
+  private const int GtOffRbp        = 0x08;
+  private const int GtOffStatus     = 0x10;
+  private const int GtOffStackBase  = 0x18;
+  private const int GtOffStackSize  = 0x20;
+  private const int GtOffResult     = 0x28;
+  private const int GtOffWaiter     = 0x30;
+  private const int GtOffNext       = 0x38;
+  private const int GtOffFuncPtr    = 0x40;
+  private const int GtOffArgBuf     = 0x48;
+  private const int GtOffStackGuard = 0x50;
+  // I/O and async fields (added for async filesystem support)
+  private const int GtOffThrew       = 0x58; // 0=success, 1=threw (for async throws)
+  private const int GtOffIoResultVal = 0x60; // raw result value (bytes transferred, etc.)
+  private const int GtOffIoResultLen = 0x68; // byte count for read results
+  private const int GtOffIoErrorCode = 0x70; // 0=success, non-zero=Win32 error
+  private const int GtOffCancelFlag  = 0x78; // 0=live, 1=cancel-requested
+  private const int GtOffIoHandle    = 0x80; // HANDLE of in-flight I/O (for CancelIoEx)
+  private const int GtOffAllNext     = 0x88; // next ptr in global all-threads list
+  private const int GtOffTibStackBase = 0x90; // saved TIB StackBase (gs:[0x08])
+  private const int GtOffTibStackLimit= 0x98; // saved TIB StackLimit (gs:[0x10])
+  private const int GtOffTraceId      = 0xA0; // async trace ID (only meaningful when --async-trace)
+  private const int GtStructSize     = 0xA8; // 168 bytes
+
+  private const int GtStatusRunning  = 1;
+  private const int GtStatusCompleted= 2;
+  private const int GtStatusWaiting  = 3;
+
+  private const int GtInitialStackSize = 0x10000; // 64KB
+  private const int GtStackGuardMargin = 0x4000;  // 16KB guard zone
+
+  private void EmitGreenThreadRuntime() {
+    // Define scheduler globals in .data section
+    // __gt_main_thread is an inline 88-byte struct, initialized to zero
+    // (stackguard=0 means main thread's stack check always passes)
+    DefineGlobal("__gt_main_thread", GtStructSize, 0);
+    // __gt_current starts pointing to __gt_main_thread (set by __gt_init)
+    DefineGlobal("__gt_current", 8, 0);
+    DefineGlobal("__gt_run_queue_head", 8, 0);
+    DefineGlobal("__gt_run_queue_tail", 8, 0);
+    DefineGlobal("__gt_live_count", 8, 0); // count of non-completed green threads (excludes main thread)
+    DefineGlobal("__gt_all_head", 8, 0);   // head of all-live-threads singly-linked list
+
+    if (Compiler.AsyncTrace) {
+      DefineGlobal("__gt_trace_counter", 8, 0);
+      DefineSymdata("__at_tag_spawn", "spawn #\0"u8.ToArray());
+      DefineSymdata("__at_tag_await", "await #\0"u8.ToArray());
+      DefineSymdata("__at_tag_await_yield", " [yield]\0"u8.ToArray());
+      DefineSymdata("__at_tag_await_imm", " [immediate]\0"u8.ToArray());
+      DefineSymdata("__at_tag_try_await", "try_await #\0"u8.ToArray());
+      DefineSymdata("__at_tag_cancel", "cancel #\0"u8.ToArray());
+      DefineSymdata("__at_tag_io_yield", "io_yield #\0"u8.ToArray());
+      DefineSymdata("__at_tag_io_resume", "io_resume #\0"u8.ToArray());
+      DefineSymdata("__at_tag_nl", "\n\0"u8.ToArray());
+    }
+
+    EmitGtInit();
+    EmitGtSpawn();
+    EmitGtTrampoline();
+    EmitGtCancel();
+    EmitGtContextSwitch();
+    EmitGtAwait();
+    EmitGtTryAwait();
+    EmitGtYield();
+    EmitGtEnqueue();
+    EmitGtDequeue();
+    EmitGtCleanup();
+    EmitGtMorestack();
+  }
+
+  /// <summary>
+  /// __gt_init(): Initialize the main thread's GreenThread struct.
+  /// Called from _start before main.
+  /// Sets status=running, stackguard=0, stores to __gt_current.
+  /// </summary>
+  private void EmitGtInit() {
+    EmitRuntimeFunctionStart("__gt_init", 0, 0x30);
+
+    // LEA rax, [rip + __gt_main_thread]
+    EmitGlobalLeaReg(X86Register.Rax, "__gt_main_thread");
+    // Set status = running (1)
+    EmitMovRegImm(X86Register.Rcx, GtStatusRunning);
+    EmitMovIndirectMemReg(X86Register.Rax, GtOffStatus, X86Register.Rcx);
+    // stackguard is already 0 from zero-initialized .data
+
+    // Save the OS thread's TIB StackBase and StackLimit into the main thread struct.
+    // When we context-switch away from main, these values will be saved/restored
+    // so that Win32 APIs on green threads see correct stack bounds.
+    // MOV RCX, gs:[0x08]  (TIB StackBase)
+    EmitBytes(0x65, 0x48, 0x8B, 0x0C, 0x25, 0x08, 0x00, 0x00, 0x00);
+    EmitMovIndirectMemReg(X86Register.Rax, GtOffTibStackBase, X86Register.Rcx);
+    // MOV RCX, gs:[0x10]  (TIB StackLimit)
+    EmitBytes(0x65, 0x48, 0x8B, 0x0C, 0x25, 0x10, 0x00, 0x00, 0x00);
+    EmitMovIndirectMemReg(X86Register.Rax, GtOffTibStackLimit, X86Register.Rcx);
+
+    // Store to __gt_current
+    EmitGlobalStoreReg(X86Register.Rax, "__gt_current");
+
+    EmitRuntimeFunctionEnd();
+  }
+
+  /// <summary>
+  /// __gt_spawn(func_ptr_rcx, arg_count_rdx, arg_buf_r8) -> promise in RAX
+  /// Allocates a GreenThread struct and a 2KB stack, initializes them,
+  /// enqueues the thread in the run queue, and returns the GreenThread ptr.
+  /// </summary>
+  private void EmitGtSpawn() {
+    EmitRuntimeFunctionStart("__gt_spawn", 3, 0x40);
+    // [rbp-0x08] = func_ptr (saved by prologue into rcx slot)
+    // [rbp-0x10] = arg_count (saved by prologue into rdx slot)
+    // [rbp-0x18] = arg_buf (saved by prologue into r8 slot)
+    // [rbp-0x20] = gt_ptr (allocated struct)
+    // [rbp-0x28] = stack_base (VirtualAlloc'd)
+
+    // Allocate GreenThread struct via mm_raw_alloc
+    EmitMovRegImm(X86Register.Rcx, GtStructSize);
+    EmitCallRuntimeLabel("mm_raw_alloc");
+    EmitMovMemReg(-0x20, X86Register.Rax, 8); // save gt_ptr
+
+    // Allocate 2KB stack via VirtualAlloc(NULL, 0x800, MEM_COMMIT|MEM_RESERVE, PAGE_READWRITE)
+    EmitXorRegReg(X86Register.Rcx, X86Register.Rcx);        // lpAddress = NULL
+    EmitMovRegImm(X86Register.Rdx, GtInitialStackSize);       // dwSize = 0x800
+    EmitMovRegImm(X86Register.R8, 0x3000);                    // flAllocationType = MEM_COMMIT|MEM_RESERVE
+    EmitMovRegImm(X86Register.R9, 0x04);                      // flProtect = PAGE_READWRITE
+    EmitCallImport("kernel32.dll", "VirtualAlloc");
+    EmitMovMemReg(-0x28, X86Register.Rax, 8); // save stack_base
+
+    // Initialize GreenThread fields
+    var gt = X86Register.R10;
+    EmitMovRegMem(gt, -0x20, 8); // gt = gt_ptr
+
+    // gt.stack_base = stack_base
+    EmitMovRegMem(X86Register.Rax, -0x28, 8);
+    EmitMovIndirectMemReg(gt, GtOffStackBase, X86Register.Rax);
+
+    // gt.stack_size = GtInitialStackSize
+    EmitMovRegImm(X86Register.Rax, GtInitialStackSize);
+    EmitMovIndirectMemReg(gt, GtOffStackSize, X86Register.Rax);
+
+    // gt.stackguard = stack_base + GtStackGuardMargin
+    EmitMovRegMem(X86Register.Rax, -0x28, 8);
+    EmitAddRegImm(X86Register.Rax, GtStackGuardMargin);
+    EmitMovIndirectMemReg(gt, GtOffStackGuard, X86Register.Rax);
+
+    // gt.tib_stack_base = stack_base + stack_size (top of stack for TIB)
+    EmitMovRegMem(X86Register.Rax, -0x28, 8);
+    EmitAddRegImm(X86Register.Rax, GtInitialStackSize);
+    EmitMovIndirectMemReg(gt, GtOffTibStackBase, X86Register.Rax);
+
+    // gt.tib_stack_limit = stack_base (bottom of stack for TIB)
+    EmitMovRegMem(X86Register.Rax, -0x28, 8);
+    EmitMovIndirectMemReg(gt, GtOffTibStackLimit, X86Register.Rax);
+
+    // gt.func_ptr = func_ptr
+    EmitMovRegMem(X86Register.Rax, -0x08, 8);
+    EmitMovIndirectMemReg(gt, GtOffFuncPtr, X86Register.Rax);
+
+    // gt.arg_buf = arg_buf
+    EmitMovRegMem(X86Register.Rax, -0x18, 8);
+    EmitMovIndirectMemReg(gt, GtOffArgBuf, X86Register.Rax);
+
+    // gt.status = ready (0)
+    EmitXorRegReg(X86Register.Rax, X86Register.Rax);
+    EmitMovIndirectMemReg(gt, GtOffStatus, X86Register.Rax);
+
+    // gt.result = 0
+    EmitMovIndirectMemReg(gt, GtOffResult, X86Register.Rax);
+    // gt.waiter = 0
+    EmitMovIndirectMemReg(gt, GtOffWaiter, X86Register.Rax);
+    // gt.next = 0
+    EmitMovIndirectMemReg(gt, GtOffNext, X86Register.Rax);
+    // gt.threw = 0
+    EmitMovIndirectMemReg(gt, GtOffThrew, X86Register.Rax);
+
+    // Initialize stack: compute stack_top = stack_base + stack_size
+    EmitMovRegMem(X86Register.Rax, -0x28, 8);           // stack_base
+    EmitAddRegImm(X86Register.Rax, GtInitialStackSize);  // stack_top
+    // Place __gt_trampoline as the return address at the top
+    // When context_switch does 'ret', it will jump to __gt_trampoline
+    // Layout at top of stack (growing downward):
+    //   [stack_top - 8]  = __gt_trampoline (return address for initial 'ret')
+    //   [stack_top - 16] = 0 (saved rbx slot for context_switch pop)
+    //   [stack_top - 24] = 0 (saved rsi)
+    //   [stack_top - 32] = 0 (saved rdi)
+    //   [stack_top - 40] = 0 (saved r12)
+    //   [stack_top - 48] = 0 (saved r13)
+    //   [stack_top - 56] = 0 (saved r14)
+    //   [stack_top - 64] = 0 (saved r15)
+    // So initial RSP = stack_top - 64
+
+    // Zero the 8 slots
+    var stackTop = X86Register.R11;
+    EmitMovRegReg(stackTop, X86Register.Rax); // R11 = stack_top
+    EmitXorRegReg(X86Register.Rcx, X86Register.Rcx);
+    for (int i = 1; i <= 8; i++) {
+      // MOV [stack_top - i*8], 0
+      EmitMovIndirectMemReg(stackTop, -i * 8, X86Register.Rcx);
+    }
+
+    // Store __gt_trampoline address at [stack_top - 8]
+    // LEA rax, [rip + __gt_trampoline]
+    EmitByte(0x48); EmitByte(0x8D); EmitByte(0x05); // LEA rax, [rip+disp32]
+    _jumpFixups.Add((_code.Count, "__gt_trampoline"));
+    EmitDword(0);
+    EmitMovIndirectMemReg(stackTop, -8, X86Register.Rax);
+
+    // gt.rsp = stack_top - 64 (7 callee-saved regs + return address)
+    EmitMovRegReg(X86Register.Rax, stackTop);
+    EmitSubRegImm(X86Register.Rax, 64);
+    EmitMovRegMem(gt, -0x20, 8); // reload gt
+    EmitMovIndirectMemReg(gt, GtOffRsp, X86Register.Rax);
+
+    // gt.rbp = 0 (no frame pointer yet)
+    EmitXorRegReg(X86Register.Rax, X86Register.Rax);
+    EmitMovIndirectMemReg(gt, GtOffRbp, X86Register.Rax);
+
+    // Add to all-threads list (prepend at head): gt.all_next = __gt_all_head; __gt_all_head = gt
+    EmitMovRegMem(gt, -0x20, 8); // reload gt
+    EmitGlobalLoadReg(X86Register.Rax, "__gt_all_head");
+    EmitMovIndirectMemReg(gt, GtOffAllNext, X86Register.Rax);
+    EmitGlobalStoreReg(gt, "__gt_all_head");
+
+    // Increment live thread count
+    EmitGlobalLoadReg(X86Register.Rax, "__gt_live_count");
+    EmitAddRegImm(X86Register.Rax, 1);
+    EmitGlobalStoreReg(X86Register.Rax, "__gt_live_count");
+
+    // Enqueue: call __gt_enqueue(gt)
+    EmitMovRegReg(X86Register.Rcx, gt);
+    EmitCallRuntimeLabel("__gt_enqueue");
+
+    // Return gt_ptr as the promise
+    EmitMovRegMem(X86Register.Rax, -0x20, 8);
+
+    if (Compiler.AsyncTrace) {
+      // Assign trace ID: counter++, store in gt.trace_id
+      EmitMovMemReg(-0x30, X86Register.Rax, 8); // save gt_ptr (RAX)
+      EmitGlobalLoadReg(X86Register.Rcx, "__gt_trace_counter");
+      EmitAddRegImm(X86Register.Rcx, 1);
+      EmitGlobalStoreReg(X86Register.Rcx, "__gt_trace_counter");
+      EmitMovRegMem(X86Register.Rax, -0x20, 8); // gt_ptr
+      EmitMovIndirectMemReg(X86Register.Rax, GtOffTraceId, X86Register.Rcx);
+      // Trace: "spawn #N\n"
+      EmitLeaRegSymdataRel(X86Register.Rcx, "__at_tag_spawn");
+      EmitCallRuntimeLabel("mm_trace_print_tag");
+      EmitMovRegMem(X86Register.Rax, -0x20, 8);
+      EmitMovRegIndirectMem(X86Register.Rcx, X86Register.Rax, GtOffTraceId);
+      EmitCallRuntimeLabel("mm_trace_print_i64");
+      EmitLeaRegSymdataRel(X86Register.Rcx, "__at_tag_nl");
+      EmitCallRuntimeLabel("mm_trace_print_tag");
+      EmitMovRegMem(X86Register.Rax, -0x30, 8); // restore gt_ptr
+    }
+
+    EmitRuntimeFunctionEnd();
+  }
+
+  /// <summary>
+  /// __gt_trampoline(): Entry point for new green threads.
+  /// Loaded from the green thread's GreenThread struct, calls the target function
+  /// with args from the arg buffer, stores the result, and yields.
+  /// </summary>
+  private void EmitGtTrampoline() {
+    DefineLabel("__gt_trampoline");
+    // No standard prologue — we are entered via context switch 'ret'
+    // Set up a frame for our local use
+    EmitPushReg(X86Register.Rbp);
+    EmitMovRegReg(X86Register.Rbp, X86Register.Rsp);
+    EmitSubRegImm(X86Register.Rsp, 0x60); // local frame
+
+    // Load current GreenThread
+    EmitGlobalLoadReg(X86Register.R10, "__gt_current");
+    EmitMovMemReg(-0x08, X86Register.R10, 8); // [rbp-8] = gt
+
+    // Load func_ptr and arg_buf from GreenThread
+    EmitMovRegIndirectMem(X86Register.R11, X86Register.R10, GtOffFuncPtr); // R11 = func_ptr
+    EmitMovMemReg(-0x10, X86Register.R11, 8); // [rbp-0x10] = func_ptr
+    EmitMovRegIndirectMem(X86Register.R11, X86Register.R10, GtOffArgBuf);
+    EmitMovMemReg(-0x18, X86Register.R11, 8); // [rbp-0x18] = arg_buf
+
+    // Load arg count from [arg_buf + 0]
+    EmitMovRegMem(X86Register.R11, -0x18, 8);           // R11 = arg_buf
+    EmitMovRegIndirectMem(X86Register.Rcx, X86Register.R11, 0); // RCX = arg_count
+    EmitMovMemReg(-0x20, X86Register.Rcx, 8); // [rbp-0x20] = arg_count
+
+    // Load args from buffer into calling convention registers
+    // Args are at [arg_buf + 8 + i*8]
+    // Calling convention: rcx, rdx, r8, r9, rsi, rdi, rax, rbx
+    // We load up to 8 args (matching calling convention register count)
+    // Use R10 for arg_count to avoid clobbering calling convention registers
+    EmitMovRegMem(X86Register.R10, -0x20, 8); // R10 = arg_count (persists across loop)
+    for (int i = 0; i < 8; i++) {
+      var skipLabel = $"__gt_tramp_skip_arg{i}";
+      // if arg_count <= i, skip
+      EmitCmpRegImm(X86Register.R10, i + 1);
+      EmitJcc("l", skipLabel); // skip if arg_count < i+1
+      // Load arg[i] from [arg_buf + 8 + i*8]
+      EmitMovRegMem(X86Register.R11, -0x18, 8); // R11 = arg_buf
+      EmitMovRegIndirectMem(_abiArgRegs[i], X86Register.R11, 8 + i * 8);
+      DefineLabel(skipLabel);
+    }
+
+    // Free arg_buf via mm_raw_free before calling target
+    // Save loaded args on stack first
+    for (int i = 0; i < 8; i++) {
+      EmitMovMemReg(-0x28 - i * 8, _abiArgRegs[i], 8);
+    }
+    EmitMovRegMem(X86Register.Rcx, -0x18, 8); // rcx = arg_buf
+    EmitCallRuntimeLabel("mm_raw_free");
+    // Restore args
+    for (int i = 0; i < 8; i++) {
+      EmitMovRegMem(_abiArgRegs[i], -0x28 - i * 8, 8);
+    }
+
+    // Call target function
+    EmitMovRegMem(X86Register.R10, -0x10, 8); // R10 = func_ptr
+    // call r10
+    EmitBytes(0x41, 0xFF, 0xD2); // CALL R10
+
+    // Store result to gt.result and error flag to gt.threw
+    // RDX holds the error flag (0=success, non-zero=threw) from throwing functions.
+    // For non-throwing functions, RDX is undefined but gt.threw is initialized to 0
+    // by __gt_spawn, so we unconditionally store RDX — harmless for non-throwing calls.
+    EmitMovMemReg(-0x58, X86Register.Rax, 8); // [rbp-0x58] = result (save)
+    EmitMovMemReg(-0x60, X86Register.Rdx, 8); // [rbp-0x60] = threw (save)
+    EmitGlobalLoadReg(X86Register.R10, "__gt_current");
+    EmitMovRegMem(X86Register.Rax, -0x58, 8);
+    EmitMovIndirectMemReg(X86Register.R10, GtOffResult, X86Register.Rax);
+    EmitMovRegMem(X86Register.Rax, -0x60, 8);
+    EmitMovIndirectMemReg(X86Register.R10, GtOffThrew, X86Register.Rax);
+
+    // Decrement live thread count
+    EmitGlobalLoadReg(X86Register.Rax, "__gt_live_count");
+    EmitSubRegImm(X86Register.Rax, 1);
+    EmitGlobalStoreReg(X86Register.Rax, "__gt_live_count");
+
+    // Remove from all-threads list: walk __gt_all_head to find this thread and unlink
+    // R10 = current gt (still loaded above)
+    // Walk: prev=NULL, cur=__gt_all_head; while cur != NULL && cur != R10: prev=cur, cur=cur.all_next
+    EmitGlobalLoadReg(X86Register.Rcx, "__gt_all_head"); // RCX = cur
+    EmitXorRegReg(X86Register.Rdx, X86Register.Rdx);    // RDX = prev = NULL
+    DefineLabel("__gt_tramp_alllist_loop");
+    // Guard: if cur == NULL, thread not found (defensive — should not happen)
+    EmitBytes(0x48, 0x85, 0xC9); // TEST RCX, RCX
+    EmitJcc("z", "__gt_tramp_alllist_done"); // not found — skip removal
+    EmitCmpRegReg(X86Register.Rcx, X86Register.R10);
+    EmitJcc("e", "__gt_tramp_alllist_found");
+    // prev = cur; cur = cur->all_next
+    EmitMovRegReg(X86Register.Rdx, X86Register.Rcx);
+    EmitMovRegIndirectMem(X86Register.Rcx, X86Register.Rcx, GtOffAllNext);
+    EmitJmp("__gt_tramp_alllist_loop");
+    DefineLabel("__gt_tramp_alllist_found");
+    // cur == R10; unlink: if prev==NULL: __gt_all_head = cur->all_next; else prev->all_next = cur->all_next
+    EmitMovRegIndirectMem(X86Register.Rax, X86Register.R10, GtOffAllNext); // RAX = cur->all_next
+    EmitBytes(0x48, 0x85, 0xD2); // TEST RDX, RDX
+    EmitJcc("nz", "__gt_tramp_alllist_prev");
+    // prev == NULL: update head
+    EmitGlobalStoreReg(X86Register.Rax, "__gt_all_head");
+    EmitJmp("__gt_tramp_alllist_done");
+    DefineLabel("__gt_tramp_alllist_prev");
+    // prev->all_next = cur->all_next
+    EmitMovIndirectMemReg(X86Register.Rdx, GtOffAllNext, X86Register.Rax);
+    DefineLabel("__gt_tramp_alllist_done");
+
+    // Reload R10 = current gt (list walk may have modified RCX/RDX)
+    EmitGlobalLoadReg(X86Register.R10, "__gt_current");
+
+    // Set status = completed
+    EmitMovRegImm(X86Register.Rax, GtStatusCompleted);
+    EmitMovIndirectMemReg(X86Register.R10, GtOffStatus, X86Register.Rax);
+
+    // Wake waiter if any: if (gt.waiter != 0) { waiter.status = ready; enqueue(waiter) }
+    EmitMovRegIndirectMem(X86Register.R11, X86Register.R10, GtOffWaiter);
+    EmitBytes(0x4D, 0x85, 0xDB); // TEST R11, R11
+    EmitJcc("z", "__gt_tramp_no_waiter");
+    // waiter.status = ready
+    EmitXorRegReg(X86Register.Rax, X86Register.Rax);
+    EmitMovIndirectMemReg(X86Register.R11, GtOffStatus, X86Register.Rax);
+    // enqueue waiter
+    EmitMovRegReg(X86Register.Rcx, X86Register.R11);
+    EmitCallRuntimeLabel("__gt_enqueue");
+    DefineLabel("__gt_tramp_no_waiter");
+
+    // Yield to next thread (never returns for completed threads)
+    EmitCallRuntimeLabel("__gt_yield_completed");
+    // int3 — should never reach here
+    EmitByte(0xCC);
+  }
+
+  /// <summary>
+  /// __gt_context_switch(from_rcx, to_rdx): Core context switch.
+  /// Saves callee-saved registers + RSP/RBP on 'from', restores from 'to'.
+  /// Updates __gt_current to 'to'.
+  /// </summary>
+  private void EmitGtContextSwitch() {
+    DefineLabel("__gt_context_switch");
+    // Save callee-saved regs on current stack (push order matches restore pop order)
+    EmitPushReg(X86Register.Rbx);
+    EmitPushReg(X86Register.Rsi);
+    EmitPushReg(X86Register.Rdi);
+    EmitPushReg(X86Register.R12);
+    EmitPushReg(X86Register.R13);
+    EmitPushReg(X86Register.R14);
+    EmitPushReg(X86Register.R15);
+
+    // Save RSP and RBP to 'from'
+    EmitMovIndirectMemReg(X86Register.Rcx, GtOffRsp, X86Register.Rsp);
+    EmitMovIndirectMemReg(X86Register.Rcx, GtOffRbp, X86Register.Rbp);
+
+    // Save TIB StackBase (gs:[0x08]) and StackLimit (gs:[0x10]) to 'from'.
+    // Win32 APIs use these for stack overflow detection (__chkstk) and SEH;
+    // without updating them, calling Win32 on a green thread's stack crashes.
+    // MOV RAX, gs:[0x08]
+    EmitBytes(0x65, 0x48, 0x8B, 0x04, 0x25, 0x08, 0x00, 0x00, 0x00);
+    EmitMovIndirectMemReg(X86Register.Rcx, GtOffTibStackBase, X86Register.Rax);
+    // MOV RAX, gs:[0x10]
+    EmitBytes(0x65, 0x48, 0x8B, 0x04, 0x25, 0x10, 0x00, 0x00, 0x00);
+    EmitMovIndirectMemReg(X86Register.Rcx, GtOffTibStackLimit, X86Register.Rax);
+
+    // Restore RSP and RBP from 'to'
+    EmitMovRegIndirectMem(X86Register.Rsp, X86Register.Rdx, GtOffRsp);
+    EmitMovRegIndirectMem(X86Register.Rbp, X86Register.Rdx, GtOffRbp);
+
+    // Restore TIB StackBase and StackLimit from 'to'
+    EmitMovRegIndirectMem(X86Register.Rax, X86Register.Rdx, GtOffTibStackBase);
+    // MOV gs:[0x08], RAX
+    EmitBytes(0x65, 0x48, 0x89, 0x04, 0x25, 0x08, 0x00, 0x00, 0x00);
+    EmitMovRegIndirectMem(X86Register.Rax, X86Register.Rdx, GtOffTibStackLimit);
+    // MOV gs:[0x10], RAX
+    EmitBytes(0x65, 0x48, 0x89, 0x04, 0x25, 0x10, 0x00, 0x00, 0x00);
+
+    // Update __gt_current = to
+    EmitGlobalStoreReg(X86Register.Rdx, "__gt_current");
+
+    // Restore callee-saved regs from new stack
+    EmitPopReg(X86Register.R15);
+    EmitPopReg(X86Register.R14);
+    EmitPopReg(X86Register.R13);
+    EmitPopReg(X86Register.R12);
+    EmitPopReg(X86Register.Rdi);
+    EmitPopReg(X86Register.Rsi);
+    EmitPopReg(X86Register.Rbx);
+
+    EmitByte(0xC3); // ret (returns to new thread's saved return address)
+  }
+
+  /// <summary>
+  /// __gt_await(promise_rcx) -> result in RAX
+  /// If the promise is already completed, extract result and return.
+  /// Otherwise, set current thread to waiting, set promise.waiter = current, and switch to next.
+  /// </summary>
+  private void EmitGtAwait() {
+    EmitRuntimeFunctionStart("__gt_await", 1, 0x30);
+    // [rbp-0x08] = promise (saved by prologue)
+
+    if (Compiler.AsyncTrace) {
+      // [rbp-0x18] = yield flag (0=immediate, 1=yielded)
+      EmitXorRegReg(X86Register.Rax, X86Register.Rax);
+      EmitMovMemReg(-0x18, X86Register.Rax, 8);
+    }
+
+    // Check if promise is already completed
+    EmitMovRegMem(X86Register.R10, -0x08, 8);                           // R10 = promise
+    EmitMovRegIndirectMem(X86Register.Rax, X86Register.R10, GtOffStatus); // RAX = promise.status
+    EmitCmpRegImm(X86Register.Rax, GtStatusCompleted);
+    EmitJcc("z", "__gt_await_done");
+
+    if (Compiler.AsyncTrace) {
+      EmitMovRegImm(X86Register.Rax, 1);
+      EmitMovMemReg(-0x18, X86Register.Rax, 8); // flag = yielded
+    }
+
+    // Not yet completed: block current thread
+    EmitGlobalLoadReg(X86Register.R11, "__gt_current"); // R11 = current
+    // current.status = waiting
+    EmitMovRegImm(X86Register.Rax, GtStatusWaiting);
+    EmitMovIndirectMemReg(X86Register.R11, GtOffStatus, X86Register.Rax);
+
+    // promise.waiter = current
+    EmitMovRegMem(X86Register.R10, -0x08, 8); // R10 = promise
+    EmitMovIndirectMemReg(X86Register.R10, GtOffWaiter, X86Register.R11);
+
+    // Dequeue next runnable thread
+    EmitCallRuntimeLabel("__gt_dequeue");
+    EmitBytes(0x48, 0x85, 0xC0); // TEST RAX, RAX
+    EmitJcc("nz", "__gt_await_has_next");
+
+    // No runnable thread: wait for I/O completions to wake a thread
+    DefineLabel("__gt_await_wait");
+    EmitGlobalLoadReg(X86Register.Rcx, "__io_done_event");
+    EmitMovRegImm(X86Register.Rdx, 0xFFFFFFFF); // INFINITE
+    EmitCallImport("kernel32.dll", "WaitForSingleObject");
+    EmitCallRuntimeLabel("__io_check_completions");
+    EmitCallRuntimeLabel("__gt_dequeue");
+    EmitBytes(0x48, 0x85, 0xC0); // TEST RAX, RAX
+    EmitJcc("z", "__gt_await_wait"); // still nothing → keep waiting
+
+    DefineLabel("__gt_await_has_next");
+    EmitMovMemReg(-0x10, X86Register.Rax, 8); // save next
+
+    // Set next.status = running
+    EmitMovRegImm(X86Register.Rcx, GtStatusRunning);
+    EmitMovIndirectMemReg(X86Register.Rax, GtOffStatus, X86Register.Rcx);
+
+    // Context switch: from=current, to=next
+    EmitGlobalLoadReg(X86Register.Rcx, "__gt_current"); // from = current
+    EmitMovRegMem(X86Register.Rdx, -0x10, 8);          // to = next
+    EmitCallRuntimeLabel("__gt_context_switch");
+
+    // We resume here after being woken up
+    // Fall through to __gt_await_done
+
+    DefineLabel("__gt_await_done");
+
+    if (Compiler.AsyncTrace) {
+      // Trace: "await #N [immediate]\n" or "await #N [yield]\n"
+      EmitLeaRegSymdataRel(X86Register.Rcx, "__at_tag_await");
+      EmitCallRuntimeLabel("mm_trace_print_tag");
+      EmitMovRegMem(X86Register.Rax, -0x08, 8); // promise
+      EmitMovRegIndirectMem(X86Register.Rcx, X86Register.Rax, GtOffTraceId);
+      EmitCallRuntimeLabel("mm_trace_print_i64");
+      EmitMovRegMem(X86Register.Rax, -0x18, 8);
+      EmitBytes(0x48, 0x85, 0xC0); // TEST RAX, RAX
+      EmitJcc("nz", "__gt_await_trace_yield");
+      EmitLeaRegSymdataRel(X86Register.Rcx, "__at_tag_await_imm");
+      EmitJmp("__gt_await_trace_print");
+      DefineLabel("__gt_await_trace_yield");
+      EmitLeaRegSymdataRel(X86Register.Rcx, "__at_tag_await_yield");
+      DefineLabel("__gt_await_trace_print");
+      EmitCallRuntimeLabel("mm_trace_print_tag");
+      EmitLeaRegSymdataRel(X86Register.Rcx, "__at_tag_nl");
+      EmitCallRuntimeLabel("mm_trace_print_tag");
+    }
+
+    // Extract result from promise
+    EmitMovRegMem(X86Register.R10, -0x08, 8);                           // R10 = promise
+    EmitMovRegIndirectMem(X86Register.Rax, X86Register.R10, GtOffResult); // RAX = promise.result
+
+    // Free the green thread's stack
+    EmitMovRegIndirectMem(X86Register.Rcx, X86Register.R10, GtOffStackBase);
+    // Only free if stack_base != 0 (main thread has no allocated stack)
+    EmitBytes(0x48, 0x85, 0xC9); // TEST rcx, rcx
+    EmitJcc("z", "__gt_await_skip_free_stack");
+    EmitMovMemReg(-0x10, X86Register.Rax, 8); // save result
+    // VirtualFree(stack_base, 0, MEM_RELEASE=0x8000)
+    // rcx already = stack_base
+    EmitXorRegReg(X86Register.Rdx, X86Register.Rdx);        // dwSize = 0
+    EmitMovRegImm(X86Register.R8, 0x8000);                    // dwFreeType = MEM_RELEASE
+    EmitCallImport("kernel32.dll", "VirtualFree");
+    EmitMovRegMem(X86Register.Rax, -0x10, 8); // restore result
+
+    DefineLabel("__gt_await_skip_free_stack");
+    // Save result, free the GreenThread struct
+    EmitMovMemReg(-0x10, X86Register.Rax, 8); // save result
+    EmitMovRegMem(X86Register.Rcx, -0x08, 8); // rcx = promise (gt struct)
+    EmitCallRuntimeLabel("mm_raw_free");
+    EmitMovRegMem(X86Register.Rax, -0x10, 8); // restore result
+
+    EmitRuntimeFunctionEnd();
+  }
+
+  /// <summary>
+  /// __gt_try_await(promise_rcx) -> result in RAX, threw flag in RDX
+  /// Like __gt_await but also returns the threw flag from the green thread.
+  /// Used for 'try await' on promises from async throwing functions.
+  /// </summary>
+  private void EmitGtTryAwait() {
+    EmitRuntimeFunctionStart("__gt_try_await", 1, 0x40);
+    // [rbp-0x08] = promise (saved by prologue)
+
+    if (Compiler.AsyncTrace) {
+      // [rbp-0x20] = yield flag (0=immediate)
+      EmitXorRegReg(X86Register.Rax, X86Register.Rax);
+      EmitMovMemReg(-0x20, X86Register.Rax, 8);
+    }
+
+    // Check if promise is already completed
+    EmitMovRegMem(X86Register.R10, -0x08, 8);                           // R10 = promise
+    EmitMovRegIndirectMem(X86Register.Rax, X86Register.R10, GtOffStatus); // RAX = promise.status
+    EmitCmpRegImm(X86Register.Rax, GtStatusCompleted);
+    EmitJcc("z", "__gt_try_await_done");
+
+    if (Compiler.AsyncTrace) {
+      EmitMovRegImm(X86Register.Rax, 1);
+      EmitMovMemReg(-0x20, X86Register.Rax, 8); // flag = yielded
+    }
+
+    // Not yet completed: block current thread
+    EmitGlobalLoadReg(X86Register.R11, "__gt_current"); // R11 = current
+    // current.status = waiting
+    EmitMovRegImm(X86Register.Rax, GtStatusWaiting);
+    EmitMovIndirectMemReg(X86Register.R11, GtOffStatus, X86Register.Rax);
+
+    // promise.waiter = current
+    EmitMovRegMem(X86Register.R10, -0x08, 8); // R10 = promise
+    EmitMovIndirectMemReg(X86Register.R10, GtOffWaiter, X86Register.R11);
+
+    // Dequeue next runnable thread
+    EmitCallRuntimeLabel("__gt_dequeue");
+    EmitBytes(0x48, 0x85, 0xC0); // TEST RAX, RAX
+    EmitJcc("nz", "__gt_try_await_has_next");
+
+    // No runnable thread: wait for I/O completions to wake a thread
+    DefineLabel("__gt_try_await_wait");
+    EmitGlobalLoadReg(X86Register.Rcx, "__io_done_event");
+    EmitMovRegImm(X86Register.Rdx, 0xFFFFFFFF); // INFINITE
+    EmitCallImport("kernel32.dll", "WaitForSingleObject");
+    EmitCallRuntimeLabel("__io_check_completions");
+    EmitCallRuntimeLabel("__gt_dequeue");
+    EmitBytes(0x48, 0x85, 0xC0); // TEST RAX, RAX
+    EmitJcc("z", "__gt_try_await_wait"); // still nothing → keep waiting
+
+    DefineLabel("__gt_try_await_has_next");
+    EmitMovMemReg(-0x10, X86Register.Rax, 8); // save next
+
+    // Set next.status = running
+    EmitMovRegImm(X86Register.Rcx, GtStatusRunning);
+    EmitMovIndirectMemReg(X86Register.Rax, GtOffStatus, X86Register.Rcx);
+
+    // Context switch: from=current, to=next
+    EmitGlobalLoadReg(X86Register.Rcx, "__gt_current"); // from = current
+    EmitMovRegMem(X86Register.Rdx, -0x10, 8);          // to = next
+    EmitCallRuntimeLabel("__gt_context_switch");
+
+    // We resume here after being woken up
+    DefineLabel("__gt_try_await_done");
+
+    if (Compiler.AsyncTrace) {
+      // Trace: "try_await #N [immediate]\n" or "try_await #N [yield]\n"
+      EmitLeaRegSymdataRel(X86Register.Rcx, "__at_tag_try_await");
+      EmitCallRuntimeLabel("mm_trace_print_tag");
+      EmitMovRegMem(X86Register.Rax, -0x08, 8); // promise
+      EmitMovRegIndirectMem(X86Register.Rcx, X86Register.Rax, GtOffTraceId);
+      EmitCallRuntimeLabel("mm_trace_print_i64");
+      EmitMovRegMem(X86Register.Rax, -0x20, 8);
+      EmitBytes(0x48, 0x85, 0xC0); // TEST RAX, RAX
+      EmitJcc("nz", "__gt_try_await_trace_yield");
+      EmitLeaRegSymdataRel(X86Register.Rcx, "__at_tag_await_imm");
+      EmitJmp("__gt_try_await_trace_print");
+      DefineLabel("__gt_try_await_trace_yield");
+      EmitLeaRegSymdataRel(X86Register.Rcx, "__at_tag_await_yield");
+      DefineLabel("__gt_try_await_trace_print");
+      EmitCallRuntimeLabel("mm_trace_print_tag");
+      EmitLeaRegSymdataRel(X86Register.Rcx, "__at_tag_nl");
+      EmitCallRuntimeLabel("mm_trace_print_tag");
+    }
+
+    // Extract result and threw flag from promise
+    EmitMovRegMem(X86Register.R10, -0x08, 8);                             // R10 = promise
+    EmitMovRegIndirectMem(X86Register.Rax, X86Register.R10, GtOffResult);  // RAX = promise.result
+    EmitMovRegIndirectMem(X86Register.Rdx, X86Register.R10, GtOffThrew);   // RDX = promise.threw
+
+    // Free the green thread's stack
+    EmitMovRegIndirectMem(X86Register.Rcx, X86Register.R10, GtOffStackBase);
+    EmitBytes(0x48, 0x85, 0xC9); // TEST rcx, rcx
+    EmitJcc("z", "__gt_try_await_skip_free_stack");
+    EmitMovMemReg(-0x10, X86Register.Rax, 8); // save result
+    EmitMovMemReg(-0x18, X86Register.Rdx, 8); // save threw
+    // VirtualFree(stack_base, 0, MEM_RELEASE=0x8000)
+    EmitXorRegReg(X86Register.Rdx, X86Register.Rdx);
+    EmitMovRegImm(X86Register.R8, 0x8000);
+    EmitCallImport("kernel32.dll", "VirtualFree");
+    EmitMovRegMem(X86Register.Rax, -0x10, 8); // restore result
+    EmitMovRegMem(X86Register.Rdx, -0x18, 8); // restore threw
+
+    DefineLabel("__gt_try_await_skip_free_stack");
+    // Save result + threw, free the GreenThread struct
+    EmitMovMemReg(-0x10, X86Register.Rax, 8); // save result
+    EmitMovMemReg(-0x18, X86Register.Rdx, 8); // save threw
+    EmitMovRegMem(X86Register.Rcx, -0x08, 8); // rcx = promise (gt struct)
+    EmitCallRuntimeLabel("mm_raw_free");
+    EmitMovRegMem(X86Register.Rax, -0x10, 8); // restore result
+    EmitMovRegMem(X86Register.Rdx, -0x18, 8); // restore threw
+
+    EmitRuntimeFunctionEnd();
+  }
+
+  /// <summary>
+  /// __gt_yield(): Yield current thread — enqueue self and switch to next.
+  /// Called from __gt_yield_completed for completed threads.
+  /// </summary>
+  private void EmitGtYield() {
+    // __gt_yield_completed: for threads that are done (don't enqueue self)
+    DefineLabel("__gt_yield_completed");
+    EmitPushReg(X86Register.Rbp);
+    EmitMovRegReg(X86Register.Rbp, X86Register.Rsp);
+    EmitSubRegImm(X86Register.Rsp, 0x30);
+
+    // Drain any I/O completions first — may re-enqueue blocked threads
+    EmitCallRuntimeLabel("__io_check_completions");
+
+    // Try to dequeue next runnable thread
+    EmitCallRuntimeLabel("__gt_dequeue");
+    // If no more threads, switch back to main thread
+    EmitBytes(0x48, 0x85, 0xC0); // TEST rax, rax
+    EmitJcc("nz", "__gt_yield_has_next");
+
+    // No more threads: switch back to main thread
+    EmitGlobalLeaReg(X86Register.Rdx, "__gt_main_thread");
+    // If current IS the main thread, just return
+    EmitGlobalLoadReg(X86Register.Rcx, "__gt_current");
+    EmitCmpRegReg(X86Register.Rcx, X86Register.Rdx);
+    EmitJcc("z", "__gt_yield_return");
+    // Switch to main
+    EmitMovRegImm(X86Register.Rax, GtStatusRunning);
+    EmitMovIndirectMemReg(X86Register.Rdx, GtOffStatus, X86Register.Rax);
+    EmitCallRuntimeLabel("__gt_context_switch");
+    EmitJmp("__gt_yield_return");
+
+    DefineLabel("__gt_yield_has_next");
+    // next.status = running
+    EmitMovMemReg(-0x08, X86Register.Rax, 8); // save next
+    EmitMovRegImm(X86Register.Rcx, GtStatusRunning);
+    EmitMovIndirectMemReg(X86Register.Rax, GtOffStatus, X86Register.Rcx);
+
+    // context switch: from=current, to=next
+    EmitGlobalLoadReg(X86Register.Rcx, "__gt_current");
+    EmitMovRegMem(X86Register.Rdx, -0x08, 8);
+    EmitCallRuntimeLabel("__gt_context_switch");
+
+    DefineLabel("__gt_yield_return");
+    EmitMovRegReg(X86Register.Rsp, X86Register.Rbp);
+    EmitPopReg(X86Register.Rbp);
+    EmitByte(0xC3); // ret
+  }
+
+  /// <summary>
+  /// __gt_enqueue(gt_rcx): Add a GreenThread to the tail of the run queue.
+  /// </summary>
+  private void EmitGtEnqueue() {
+    EmitRuntimeFunctionStart("__gt_enqueue", 1, 0x20);
+    // [rbp-0x08] = gt
+
+    // gt.next = 0
+    EmitMovRegMem(X86Register.R10, -0x08, 8);
+    EmitXorRegReg(X86Register.Rax, X86Register.Rax);
+    EmitMovIndirectMemReg(X86Register.R10, GtOffNext, X86Register.Rax);
+
+    // if tail == NULL: head = tail = gt
+    EmitGlobalLoadReg(X86Register.Rax, "__gt_run_queue_tail");
+    EmitBytes(0x48, 0x85, 0xC0); // TEST rax, rax
+    EmitJcc("nz", "__gt_enqueue_append");
+
+    // Empty queue: set both head and tail
+    EmitMovRegMem(X86Register.R10, -0x08, 8);
+    EmitGlobalStoreReg(X86Register.R10, "__gt_run_queue_head");
+    EmitGlobalStoreReg(X86Register.R10, "__gt_run_queue_tail");
+    EmitRuntimeFunctionEnd();
+
+    DefineLabel("__gt_enqueue_append");
+    // tail.next = gt
+    EmitGlobalLoadReg(X86Register.Rax, "__gt_run_queue_tail");
+    EmitMovRegMem(X86Register.R10, -0x08, 8);
+    EmitMovIndirectMemReg(X86Register.Rax, GtOffNext, X86Register.R10);
+    // tail = gt
+    EmitGlobalStoreReg(X86Register.R10, "__gt_run_queue_tail");
+    EmitRuntimeFunctionEnd();
+  }
+
+  /// <summary>
+  /// __gt_dequeue() -> GreenThread* in RAX (or NULL if queue empty).
+  /// Removes and returns the head of the run queue.
+  /// </summary>
+  private void EmitGtDequeue() {
+    EmitRuntimeFunctionStart("__gt_dequeue", 0, 0x20);
+
+    EmitGlobalLoadReg(X86Register.Rax, "__gt_run_queue_head");
+    // If head == NULL, return NULL
+    EmitBytes(0x48, 0x85, 0xC0); // TEST rax, rax
+    EmitJcc("nz", "__gt_dequeue_nonempty");
+    // Return NULL
+    EmitRuntimeFunctionEnd();
+
+    DefineLabel("__gt_dequeue_nonempty");
+    // head = head.next
+    EmitMovRegIndirectMem(X86Register.Rcx, X86Register.Rax, GtOffNext);
+    EmitGlobalStoreReg(X86Register.Rcx, "__gt_run_queue_head");
+    // If new head == NULL, clear tail too
+    EmitBytes(0x48, 0x85, 0xC9); // TEST rcx, rcx
+    EmitJcc("nz", "__gt_dequeue_done");
+    EmitXorRegReg(X86Register.Rcx, X86Register.Rcx);
+    EmitGlobalStoreReg(X86Register.Rcx, "__gt_run_queue_tail");
+    DefineLabel("__gt_dequeue_done");
+    // Clear the dequeued node's next pointer
+    EmitXorRegReg(X86Register.Rcx, X86Register.Rcx);
+    EmitMovIndirectMemReg(X86Register.Rax, GtOffNext, X86Register.Rcx);
+    // RAX = dequeued gt
+    EmitRuntimeFunctionEnd();
+  }
+
+  /// <summary>
+  /// __gt_cancel(gt_rcx): Request cancellation of a green thread.
+  /// Sets GtOffCancelFlag=1. If an I/O handle is stored in GtOffIoHandle, calls CancelIoEx
+  /// so any pending ReadFile/WriteFile completes immediately with ERROR_OPERATION_ABORTED.
+  /// </summary>
+  private void EmitGtCancel() {
+    EmitRuntimeFunctionStart("__gt_cancel", 1, 0x20);
+
+    if (Compiler.AsyncTrace) {
+      // Trace: "cancel #N\n"
+      EmitMovMemReg(-0x08, X86Register.Rcx, 8); // save rcx (gt ptr)
+      EmitLeaRegSymdataRel(X86Register.Rcx, "__at_tag_cancel");
+      EmitCallRuntimeLabel("mm_trace_print_tag");
+      EmitMovRegMem(X86Register.Rax, -0x08, 8); // gt ptr
+      EmitMovRegIndirectMem(X86Register.Rcx, X86Register.Rax, GtOffTraceId);
+      EmitCallRuntimeLabel("mm_trace_print_i64");
+      EmitLeaRegSymdataRel(X86Register.Rcx, "__at_tag_nl");
+      EmitCallRuntimeLabel("mm_trace_print_tag");
+      EmitMovRegMem(X86Register.Rcx, -0x08, 8); // restore rcx
+    }
+
+    // RCX = gt
+    // gt->cancel_flag = 1
+    EmitMovRegImm(X86Register.Rax, 1);
+    EmitMovIndirectMemReg(X86Register.Rcx, GtOffCancelFlag, X86Register.Rax);
+    // Check if there is an in-flight I/O handle
+    EmitMovRegIndirectMem(X86Register.Rax, X86Register.Rcx, GtOffIoHandle);
+    EmitBytes(0x48, 0x85, 0xC0); // TEST RAX, RAX
+    EmitJcc("z", "__gt_cancel_no_io");
+    // CancelIoEx(hFile=rax, lpOverlapped=NULL) — cancels all pending I/O on handle
+    EmitMovRegReg(X86Register.Rcx, X86Register.Rax);
+    EmitXorRegReg(X86Register.Rdx, X86Register.Rdx);
+    EmitCallImport("kernel32.dll", "CancelIoEx");
+    DefineLabel("__gt_cancel_no_io");
+    EmitRuntimeFunctionEnd();
+  }
+
+  /// <summary>
+  /// __gt_cleanup(): Called from _start after main returns.
+  /// Step 1: Cancel all live green threads (sets cancel_flag, aborts in-flight I/O).
+  /// Step 2: Drain — run queued threads to completion; wait on I/O completions if threads
+  ///         are still alive but the run queue is empty (I/O-blocked threads).
+  /// Requires __io_init to have been called before main (I/O subsystem must be alive).
+  /// </summary>
+  private void EmitGtCleanup() {
+    EmitRuntimeFunctionStart("__gt_cleanup", 0, 0x30);
+
+    // --- Step 1: Cancel all live threads ---
+    // Walk __gt_all_head linked list and call __gt_cancel on each
+    EmitGlobalLoadReg(X86Register.Rcx, "__gt_all_head");
+    DefineLabel("__gt_cleanup_cancel_loop");
+    EmitBytes(0x48, 0x85, 0xC9); // TEST RCX, RCX
+    EmitJcc("z", "__gt_cleanup_drain");
+    // Save RCX (current gt) across call, then advance to next
+    EmitMovMemReg(-0x08, X86Register.Rcx, 8); // save current gt
+    EmitMovRegIndirectMem(X86Register.Rdx, X86Register.Rcx, GtOffAllNext); // next ptr
+    EmitCallRuntimeLabel("__gt_cancel"); // __gt_cancel(rcx=gt)
+    EmitMovRegMem(X86Register.Rcx, -0x08, 8); // reload current gt
+    EmitMovRegIndirectMem(X86Register.Rcx, X86Register.Rcx, GtOffAllNext); // advance
+    EmitJmp("__gt_cleanup_cancel_loop");
+
+    // --- Step 2: Drain run queue ---
+    DefineLabel("__gt_cleanup_drain");
+    // Check for I/O completions first (may re-enqueue I/O-blocked threads)
+    EmitCallRuntimeLabel("__io_check_completions");
+
+    // Try to dequeue a runnable thread
+    EmitCallRuntimeLabel("__gt_dequeue");
+    EmitBytes(0x48, 0x85, 0xC0); // TEST RAX, RAX
+    EmitJcc("z", "__gt_cleanup_check_live");
+
+    // Run the thread: set status=running, context switch to it
+    EmitMovMemReg(-0x08, X86Register.Rax, 8); // save next
+    EmitMovRegImm(X86Register.Rcx, GtStatusRunning);
+    EmitMovIndirectMemReg(X86Register.Rax, GtOffStatus, X86Register.Rcx);
+    EmitGlobalLoadReg(X86Register.Rcx, "__gt_current");
+    EmitMovRegMem(X86Register.Rdx, -0x08, 8);
+    EmitCallRuntimeLabel("__gt_context_switch");
+    // Resume here when thread completes/yields back
+    EmitJmp("__gt_cleanup_drain");
+
+    // Run queue empty — check if any threads still alive (I/O-blocked)
+    DefineLabel("__gt_cleanup_check_live");
+    EmitGlobalLoadReg(X86Register.Rax, "__gt_live_count");
+    EmitBytes(0x48, 0x85, 0xC0); // TEST RAX, RAX
+    EmitJcc("z", "__gt_cleanup_done"); // live_count == 0 → all done
+
+    // Threads still alive but nothing runnable — wait for next I/O completion.
+    // Guard: only wait if I/O subsystem is initialized (__io_done_event != 0).
+    EmitGlobalLoadReg(X86Register.Rax, "__io_done_event");
+    EmitBytes(0x48, 0x85, 0xC0); // TEST RAX, RAX
+    EmitJcc("z", "__gt_cleanup_done"); // no I/O subsystem + stuck threads = bail
+    EmitMovRegReg(X86Register.Rcx, X86Register.Rax); // hHandle = __io_done_event
+    EmitMovRegImm(X86Register.Rdx, 0xFFFFFFFF);       // dwMilliseconds = INFINITE
+    EmitCallImport("kernel32.dll", "WaitForSingleObject");
+    EmitJmp("__gt_cleanup_drain");
+
+    DefineLabel("__gt_cleanup_done");
+    EmitRuntimeFunctionEnd();
+  }
+
+  /// <summary>
+  /// __gt_morestack(): Called from function prologues when stack space is insufficient.
+  /// Grows the current green thread's stack by 2x.
+  ///
+  /// Entry: called via CALL from the stack check in the prologue, so
+  ///   [rsp] = return address (back to the function prologue, after the jae)
+  ///   The prologue hasn't executed push rbp yet.
+  ///
+  /// Strategy: allocate a new stack 2x the current size, copy the old stack contents
+  /// to the top of the new stack, fix up the RBP chain, adjust RSP/RBP, free the old stack.
+  /// Return to the caller's stack check which will now pass.
+  ///
+  /// Register plan:
+  ///   We save callee-saved regs (rbx, r12-r15) and the return address on the stack.
+  ///   After copying and relocating, we pop them back from the new stack locations.
+  ///   The stack layout (growing downward from entry RSP):
+  ///     [entry_rsp - 0]  = return address (from CALL)
+  ///     [entry_rsp - 8]  = saved RBP  (pushed by us)
+  ///     [entry_rsp - 16] = saved RBX
+  ///     [entry_rsp - 24] = saved R12
+  ///     [entry_rsp - 32] = saved R13
+  ///     [entry_rsp - 40] = saved R14
+  ///     [entry_rsp - 48] = saved R15
+  ///   Then we create a frame for VirtualAlloc/memcpy calls below that.
+  ///
+  ///   After relocation, RSP is adjusted by the offset, so all these saved values
+  ///   are at the correct positions on the new stack. We pop them in reverse order
+  ///   and 'ret' pops the relocated return address.
+  /// </summary>
+  private void EmitGtMorestack() {
+    DefineLabel("__gt_morestack");
+
+    // Morestack is called from the function prologue BEFORE the function has saved
+    // its arguments. We must preserve all argument registers (Maxon calling convention)
+    // so the function can use them after we return.
+
+    // Push callee-saved registers first, then all argument registers.
+    // Push order: RBP, RBX, R12, R13, R14, R15, RCX, RDX, R8, R9, RSI, RDI, RAX
+    EmitPushReg(X86Register.Rbp);
+    EmitPushReg(X86Register.Rbx);
+    EmitPushReg(X86Register.R12);
+    EmitPushReg(X86Register.R13);
+    EmitPushReg(X86Register.R14);
+    EmitPushReg(X86Register.R15);
+    EmitPushReg(X86Register.Rcx);
+    EmitPushReg(X86Register.Rdx);
+    EmitPushReg(X86Register.R8);
+    EmitPushReg(X86Register.R9);
+    EmitPushReg(X86Register.Rsi);
+    EmitPushReg(X86Register.Rdi);
+    EmitPushReg(X86Register.Rax);
+
+    // Stack alignment: CALL (8) + 13 pushes (104) = 112 bytes.
+    // RSP at morestack entry is 16-byte aligned (two CALLs from aligned state).
+    // 112 mod 16 = 0, so RSP after pushes is aligned. But 104 mod 16 = 8, so
+    // RSP is actually misaligned by 8. We need SUB 0x28 (40 = 32 shadow + 8 pad).
+    EmitSubRegImm(X86Register.Rsp, 0x28);
+
+    // Load current GreenThread
+    EmitGlobalLoadReg(X86Register.Rbx, "__gt_current"); // RBX = gt (callee-saved, preserved across calls)
+
+    // R12 = old_base, R13 = old_size (callee-saved, preserved)
+    EmitMovRegIndirectMem(X86Register.R12, X86Register.Rbx, GtOffStackBase);
+    EmitMovRegIndirectMem(X86Register.R13, X86Register.Rbx, GtOffStackSize);
+
+    // R14 = new_size = old_size * 2
+    EmitMovRegReg(X86Register.R14, X86Register.R13);
+    EmitBytes(0x49, 0xD1, 0xE6); // SHL R14, 1
+
+    // VirtualAlloc(NULL, new_size, MEM_COMMIT|MEM_RESERVE, PAGE_READWRITE)
+    EmitXorRegReg(X86Register.Rcx, X86Register.Rcx);
+    EmitMovRegReg(X86Register.Rdx, X86Register.R14);
+    EmitMovRegImm(X86Register.R8, 0x3000);
+    EmitMovRegImm(X86Register.R9, 0x04);
+    EmitCallImport("kernel32.dll", "VirtualAlloc");
+    EmitMovRegReg(X86Register.R15, X86Register.Rax); // R15 = new_base
+
+    // Copy old stack to TOP of new stack:
+    // dst = new_base + new_size - old_size
+    // src = old_base
+    // count = old_size
+    EmitMovRegReg(X86Register.Rcx, X86Register.R15);  // dst = new_base
+    EmitAddRegReg(X86Register.Rcx, X86Register.R14);   // + new_size
+    EmitSubRegReg(X86Register.Rcx, X86Register.R13);   // - old_size
+    EmitMovRegReg(X86Register.Rdx, X86Register.R12);   // src = old_base
+    EmitMovRegReg(X86Register.R8, X86Register.R13);     // count = old_size
+    EmitCallRuntimeLabel("maxon_memcpy");
+
+    // Compute offset = (new_base + new_size - old_size) - old_base
+    EmitMovRegReg(X86Register.Rax, X86Register.R15);  // new_base
+    EmitAddRegReg(X86Register.Rax, X86Register.R14);   // + new_size
+    EmitSubRegReg(X86Register.Rax, X86Register.R13);   // - old_size
+    EmitSubRegReg(X86Register.Rax, X86Register.R12);   // - old_base = offset
+    // RAX = offset
+
+    // Adjust RSP by offset (moves to the corresponding position on the new stack)
+    EmitAddRegReg(X86Register.Rsp, X86Register.Rax);
+
+    // Adjust RBP if it's within the old stack range [old_base, old_base + old_size)
+    EmitMovRegReg(X86Register.Rcx, X86Register.R12);
+    EmitAddRegReg(X86Register.Rcx, X86Register.R13); // RCX = old_top
+    EmitCmpRegReg(X86Register.Rbp, X86Register.R12);
+    EmitJcc("b", "__gt_morestack_skip_rbp");
+    EmitCmpRegReg(X86Register.Rbp, X86Register.Rcx);
+    EmitJcc("ae", "__gt_morestack_skip_rbp");
+    EmitAddRegReg(X86Register.Rbp, X86Register.Rax);
+    DefineLabel("__gt_morestack_skip_rbp");
+
+    // Walk the RBP chain on the new stack and adjust saved RBP values
+    // that still point into the old stack range.
+    // RCX = walker (starts at adjusted RBP)
+    // R8 = new_low, R9 = new_high (bounds of copied data in new stack)
+    EmitMovRegReg(X86Register.Rcx, X86Register.Rbp);
+    EmitMovRegReg(X86Register.R8, X86Register.R15);
+    EmitAddRegReg(X86Register.R8, X86Register.R14);
+    EmitSubRegReg(X86Register.R8, X86Register.R13);
+    EmitMovRegReg(X86Register.R9, X86Register.R15);
+    EmitAddRegReg(X86Register.R9, X86Register.R14);
+
+    DefineLabel("__gt_morestack_walk");
+    // Exit if walker == 0
+    EmitBytes(0x48, 0x85, 0xC9); // TEST RCX, RCX
+    EmitJcc("z", "__gt_morestack_walk_done");
+    // Exit if walker outside new stack range
+    EmitCmpRegReg(X86Register.Rcx, X86Register.R8);
+    EmitJcc("b", "__gt_morestack_walk_done");
+    EmitCmpRegReg(X86Register.Rcx, X86Register.R9);
+    EmitJcc("ae", "__gt_morestack_walk_done");
+
+    // R11 = saved_rbp = [walker + 0]
+    EmitMovRegIndirectMem(X86Register.R11, X86Register.Rcx, 0);
+    // If saved_rbp is within old stack range [old_base, old_top), adjust it
+    EmitCmpRegReg(X86Register.R11, X86Register.R12);
+    EmitJcc("b", "__gt_morestack_walk_next");
+    EmitMovRegReg(X86Register.R10, X86Register.R12);
+    EmitAddRegReg(X86Register.R10, X86Register.R13); // R10 = old_top
+    EmitCmpRegReg(X86Register.R11, X86Register.R10);
+    EmitJcc("ae", "__gt_morestack_walk_next");
+    // Adjust: saved_rbp += offset, store back
+    EmitAddRegReg(X86Register.R11, X86Register.Rax);
+    EmitMovIndirectMemReg(X86Register.Rcx, 0, X86Register.R11);
+
+    DefineLabel("__gt_morestack_walk_next");
+    // walker = [walker] (the saved_rbp, possibly adjusted)
+    EmitMovRegIndirectMem(X86Register.Rcx, X86Register.Rcx, 0);
+    EmitJmp("__gt_morestack_walk");
+
+    DefineLabel("__gt_morestack_walk_done");
+
+    // Update GreenThread struct
+    EmitMovIndirectMemReg(X86Register.Rbx, GtOffStackBase, X86Register.R15); // stack_base = new_base
+    EmitMovIndirectMemReg(X86Register.Rbx, GtOffStackSize, X86Register.R14); // stack_size = new_size
+    EmitMovRegReg(X86Register.Rcx, X86Register.R15);
+    EmitAddRegImm(X86Register.Rcx, GtStackGuardMargin);
+    EmitMovIndirectMemReg(X86Register.Rbx, GtOffStackGuard, X86Register.Rcx); // stackguard = new_base + margin
+
+    // Update TIB stack bounds and green thread TIB fields for the new stack.
+    // tib_stack_base = new_base + new_size, tib_stack_limit = new_base
+    EmitMovRegReg(X86Register.Rcx, X86Register.R15);
+    EmitAddRegReg(X86Register.Rcx, X86Register.R14); // RCX = new_base + new_size
+    EmitMovIndirectMemReg(X86Register.Rbx, GtOffTibStackBase, X86Register.Rcx);
+    // MOV gs:[0x08], RCX
+    EmitBytes(0x65, 0x48, 0x89, 0x0C, 0x25, 0x08, 0x00, 0x00, 0x00);
+    EmitMovIndirectMemReg(X86Register.Rbx, GtOffTibStackLimit, X86Register.R15);
+    // MOV gs:[0x10], R15
+    EmitBytes(0x65, 0x4C, 0x89, 0x3C, 0x25, 0x10, 0x00, 0x00, 0x00);
+
+    // VirtualFree(old_base, 0, MEM_RELEASE)
+    EmitMovRegReg(X86Register.Rcx, X86Register.R12);
+    EmitXorRegReg(X86Register.Rdx, X86Register.Rdx);
+    EmitMovRegImm(X86Register.R8, 0x8000);
+    EmitCallImport("kernel32.dll", "VirtualFree");
+
+    // Tear down frame and restore all registers from the new stack.
+    // After ADD RSP, 0x28: stack layout (bottom to top) is:
+    //   [RSP+0]=RAX [RSP+8]=RDI [RSP+16]=RSI [RSP+24]=R9 [RSP+32]=R8
+    //   [RSP+40]=RDX [RSP+48]=RCX [RSP+56]=R15 [RSP+64]=R14 [RSP+72]=R13
+    //   [RSP+80]=R12 [RSP+88]=RBX [RSP+96]=RBP
+    // Fix the saved RBP value to the adjusted RBP before popping.
+    EmitAddRegImm(X86Register.Rsp, 0x28);
+    EmitMovIndirectMemReg(X86Register.Rsp, 96, X86Register.Rbp); // fix saved RBP
+
+    // Pop volatile (argument) registers in reverse push order
+    EmitPopReg(X86Register.Rax);
+    EmitPopReg(X86Register.Rdi);
+    EmitPopReg(X86Register.Rsi);
+    EmitPopReg(X86Register.R9);
+    EmitPopReg(X86Register.R8);
+    EmitPopReg(X86Register.Rdx);
+    EmitPopReg(X86Register.Rcx);
+
+    // Pop callee-saved registers
+    EmitPopReg(X86Register.R15);
+    EmitPopReg(X86Register.R14);
+    EmitPopReg(X86Register.R13);
+    EmitPopReg(X86Register.R12);
+    EmitPopReg(X86Register.Rbx);
+    EmitPopReg(X86Register.Rbp);
+
+    // The relocated return address is now at [RSP]. 'ret' will pop it and jump there.
+    EmitByte(0xC3); // ret
+  }
+
+  // ===========================================================================================
+  // I/O Runtime — IOCP-based async I/O + sync worker thread for non-overlappable operations
+  // ===========================================================================================
+  //
+  // Architecture:
+  //   - ReadFile/WriteFile use FILE_FLAG_OVERLAPPED + IOCP (true async kernel I/O).
+  //     One completion thread (IOCP drain) calls GetQueuedCompletionStatus in a loop.
+  //   - Non-overlappable ops (FindFirstFile, GetFileAttributesA, etc.) go to a single
+  //     sync worker thread via a CRITICAL_SECTION + event request queue.
+  //   - Both the IOCP thread and sync worker post completions to a shared done queue.
+  //     __io_check_completions drains it and re-enqueues waiting green threads.
+  //
+  // AsyncOpContext layout (56 bytes, OVERLAPPED at offset 0):
+  //   0x00  OVERLAPPED (32 bytes): Internal(8), InternalHigh(8), Offset/OffsetHigh(8), hEvent(8)
+  //   0x20  waiter_gt  i64
+  //   0x28  result_len i64
+  //   0x30  error_code i64
+  //
+  // SyncRequest layout (40 bytes):
+  //   0x00  op_code   i64   (see SyncOpXxx constants)
+  //   0x08  arg0      i64
+  //   0x10  arg1      i64
+  //   0x18  waiter_gt i64
+  //   0x20  next      i64
+  //
+  // IoCompletion layout (40 bytes):
+  //   0x00  waiter_gt  i64
+  //   0x08  result_val i64
+  //   0x10  result_len i64
+  //   0x18  error_code i64
+  //   0x20  next       i64
+
+  private const int AsyncCtxSize     = 0x38; // 56 bytes (OVERLAPPED=32 + 3 fields)
+  private const int AsyncCtxOffWaiter   = 0x20;
+
+  private const int SyncReqSize      = 0x28; // 40 bytes
+  private const int SyncReqOffOp     = 0x00;
+  private const int SyncReqOffArg0   = 0x08;
+  private const int SyncReqOffArg1   = 0x10;
+  private const int SyncReqOffWaiter = 0x18;
+  private const int SyncReqOffNext   = 0x20;
+
+  private const int IoCompSize       = 0x28; // 40 bytes
+  private const int IoCompOffWaiter  = 0x00;
+  private const int IoCompOffResult  = 0x08;
+  private const int IoCompOffLen     = 0x10;
+  private const int IoCompOffError   = 0x18;
+  private const int IoCompOffNext    = 0x20;
+
+  // Sync op codes (must match SyncOpXxx used in stubs)
+  private const long SyncOpFileExists  = 0;
+  private const long SyncOpFileDelete  = 1;
+  private const long SyncOpFindFirst   = 2;
+  private const long SyncOpFindNext    = 3;
+  private const long SyncOpDirExists   = 4;
+  private const long SyncOpDirCreate   = 5;
+  private const long SyncOpGetCwd      = 6;
+  private const long SyncOpFileOpenRead  = 7;
+  private const long SyncOpFileOpenWrite = 8;
+  private const long SyncOpCloseHandle   = 9;
+  private const long SyncOpShutdown    = 0xFF;
+
+  private void EmitIoRuntime() {
+    // I/O globals
+    DefineGlobal("__io_iocp",              8,  0); // HANDLE: I/O completion port
+    DefineGlobal("__io_completion_thread", 8,  0); // HANDLE: IOCP drain thread
+    DefineGlobal("__io_sync_worker",       8,  0); // HANDLE: sync-op worker thread
+    DefineGlobal("__io_sync_cs",          40,  0); // CRITICAL_SECTION (40 bytes on x64)
+    DefineGlobal("__io_sync_req_event",    8,  0); // manual-reset event: sync work available
+    DefineGlobal("__io_sync_req_head",     8,  0); // SyncRequest* head
+    DefineGlobal("__io_sync_req_tail",     8,  0); // SyncRequest* tail
+    DefineGlobal("__io_done_cs",          40,  0); // CRITICAL_SECTION for done queue
+    DefineGlobal("__io_done_event",        8,  0); // auto-reset event: completion available
+    DefineGlobal("__io_done_head",         8,  0); // IoCompletion* head
+    DefineGlobal("__io_done_tail",         8,  0); // IoCompletion* tail
+
+    EmitIoInit();
+    EmitIoShutdown();
+    EmitIoCompletionLoop();
+    EmitIoSyncWorkerLoop();
+    EmitIoCheckCompletions();
+    EmitIoSubmitSync();
+    EmitIoSubmitHelpers();
+  }
+
+  /// <summary>
+  /// __io_init(): Initialize IOCP, sync worker, and completion threads.
+  /// Called from _start after __gt_init.
+  /// </summary>
+  private void EmitIoInit() {
+    EmitRuntimeFunctionStart("__io_init", 0, 0x40);
+
+    // CreateIoCompletionPort(INVALID_HANDLE_VALUE=-1, NULL, 0, 1) → __io_iocp
+    EmitMovRegImm(X86Register.Rcx, unchecked((long)0xFFFFFFFFFFFFFFFF)); // INVALID_HANDLE_VALUE
+    EmitXorRegReg(X86Register.Rdx, X86Register.Rdx); // ExistingCompletionPort = NULL
+    EmitXorRegReg(X86Register.R8,  X86Register.R8);  // CompletionKey = 0
+    EmitMovRegImm(X86Register.R9,  1);               // NumberOfConcurrentThreads = 1
+    EmitCallImport("kernel32.dll", "CreateIoCompletionPort");
+    EmitGlobalStoreReg(X86Register.Rax, "__io_iocp");
+
+    // InitializeCriticalSection(&__io_sync_cs)
+    EmitGlobalLeaReg(X86Register.Rcx, "__io_sync_cs");
+    EmitCallImport("kernel32.dll", "InitializeCriticalSection");
+
+    // InitializeCriticalSection(&__io_done_cs)
+    EmitGlobalLeaReg(X86Register.Rcx, "__io_done_cs");
+    EmitCallImport("kernel32.dll", "InitializeCriticalSection");
+
+    // CreateEventA(NULL, TRUE=manual-reset, FALSE=not-signaled, NULL) → __io_sync_req_event
+    EmitXorRegReg(X86Register.Rcx, X86Register.Rcx);
+    EmitMovRegImm(X86Register.Rdx, 1); // bManualReset = TRUE
+    EmitXorRegReg(X86Register.R8, X86Register.R8);
+    EmitXorRegReg(X86Register.R9, X86Register.R9);
+    EmitCallImport("kernel32.dll", "CreateEventA");
+    EmitGlobalStoreReg(X86Register.Rax, "__io_sync_req_event");
+
+    // CreateEventA(NULL, FALSE=auto-reset, FALSE=not-signaled, NULL) → __io_done_event
+    EmitXorRegReg(X86Register.Rcx, X86Register.Rcx);
+    EmitXorRegReg(X86Register.Rdx, X86Register.Rdx); // bManualReset = FALSE
+    EmitXorRegReg(X86Register.R8, X86Register.R8);
+    EmitXorRegReg(X86Register.R9, X86Register.R9);
+    EmitCallImport("kernel32.dll", "CreateEventA");
+    EmitGlobalStoreReg(X86Register.Rax, "__io_done_event");
+
+    // CreateThread(NULL, 0, &__io_completion_loop, NULL, 0, NULL) → __io_completion_thread
+    EmitXorRegReg(X86Register.Rcx, X86Register.Rcx);  // lpThreadAttributes = NULL
+    EmitXorRegReg(X86Register.Rdx, X86Register.Rdx);  // dwStackSize = 0
+    // Load address of __io_completion_loop into R8
+    EmitByte(0x4C); EmitByte(0x8D); EmitByte(0x05); // LEA R8, [rip+disp32]
+    _jumpFixups.Add((_code.Count, "__io_completion_loop"));
+    EmitDword(0);
+    EmitXorRegReg(X86Register.R9, X86Register.R9);  // lpParameter = NULL
+    // dwCreationFlags = 0 (on stack slot 5) and lpThreadId = NULL (stack slot 6)
+    // R9 is already 0 — use it to zero the stack slots
+    EmitMovMemRspReg(0x20, X86Register.R9); // [rsp+0x20] = 0 (dwCreationFlags)
+    EmitMovMemRspReg(0x28, X86Register.R9); // [rsp+0x28] = 0 (lpThreadId)
+    EmitCallImport("kernel32.dll", "CreateThread");
+    EmitGlobalStoreReg(X86Register.Rax, "__io_completion_thread");
+
+    // CreateThread(NULL, 0, &__io_sync_worker_loop, NULL, 0, NULL) → __io_sync_worker
+    EmitXorRegReg(X86Register.Rcx, X86Register.Rcx);
+    EmitXorRegReg(X86Register.Rdx, X86Register.Rdx);
+    EmitByte(0x4C); EmitByte(0x8D); EmitByte(0x05); // LEA R8, [rip+disp32]
+    _jumpFixups.Add((_code.Count, "__io_sync_worker_loop"));
+    EmitDword(0);
+    EmitXorRegReg(X86Register.R9, X86Register.R9);
+    EmitMovMemRspReg(0x20, X86Register.R9);
+    EmitMovMemRspReg(0x28, X86Register.R9);
+    EmitCallImport("kernel32.dll", "CreateThread");
+    EmitGlobalStoreReg(X86Register.Rax, "__io_sync_worker");
+
+    EmitRuntimeFunctionEnd();
+  }
+
+  /// <summary>
+  /// __io_shutdown(): Signal I/O threads to exit and wait for them to terminate.
+  /// Called from _start after __gt_cleanup.
+  /// </summary>
+  private void EmitIoShutdown() {
+    EmitRuntimeFunctionStart("__io_shutdown", 0, 0x40);
+
+    // PostQueuedCompletionStatus(iocp, 0, 0, NULL) — sentinel to wake completion thread
+    EmitGlobalLoadReg(X86Register.Rcx, "__io_iocp");
+    EmitXorRegReg(X86Register.Rdx, X86Register.Rdx); // dwNumberOfBytesTransferred = 0
+    EmitXorRegReg(X86Register.R8,  X86Register.R8);  // dwCompletionKey = 0
+    EmitXorRegReg(X86Register.R9,  X86Register.R9);  // lpOverlapped = NULL
+    EmitCallImport("kernel32.dll", "PostQueuedCompletionStatus");
+
+    // Send shutdown SyncRequest to sync worker: op=0xFF, then SetEvent
+    EmitMovRegImm(X86Register.Rcx, SyncReqSize);
+    EmitCallRuntimeLabel("mm_raw_alloc"); // HEAP_ZERO_MEMORY — already zeroed
+    EmitMovMemReg(-0x08, X86Register.Rax, 8); // save req
+    // req->op = SyncOpShutdown
+    EmitMovRegMem(X86Register.Rax, -0x08, 8);
+    EmitMovRegImm(X86Register.Rcx, SyncOpShutdown);
+    EmitMovIndirectMemReg(X86Register.Rax, SyncReqOffOp, X86Register.Rcx);
+    // Enqueue to sync request queue
+    EmitMovRegMem(X86Register.Rcx, -0x08, 8); // req
+    EmitCallRuntimeLabel("__io_enqueue_sync_req");
+    // SetEvent(__io_sync_req_event)
+    EmitGlobalLoadReg(X86Register.Rcx, "__io_sync_req_event");
+    EmitCallImport("kernel32.dll", "SetEvent");
+
+    // WaitForMultipleObjects(2, handles_array, TRUE, INFINITE)
+    // Build 2-element handle array on stack: handles[0] at [rbp-0x18], handles[1] at [rbp-0x10]
+    // (contiguous upward: lpHandles[0]=handles[0], lpHandles[1]=handles[0]+8=handles[1])
+    EmitGlobalLoadReg(X86Register.Rax, "__io_completion_thread");
+    EmitMovMemReg(-0x18, X86Register.Rax, 8); // handles[0] = completion_thread
+    EmitGlobalLoadReg(X86Register.Rax, "__io_sync_worker");
+    EmitMovMemReg(-0x10, X86Register.Rax, 8); // handles[1] = sync_worker
+    EmitMovRegImm(X86Register.Rcx, 2);           // nCount
+    EmitLeaRegMem(X86Register.Rdx, -0x18);       // lpHandles = &handles[0]
+    EmitMovRegImm(X86Register.R8, 1);            // bWaitAll = TRUE
+    EmitMovRegImm(X86Register.R9, 0xFFFFFFFF);   // dwMilliseconds = INFINITE
+    EmitCallImport("kernel32.dll", "WaitForMultipleObjects");
+
+    // CloseHandle for both threads and IOCP
+    EmitGlobalLoadReg(X86Register.Rcx, "__io_completion_thread");
+    EmitCallImport("kernel32.dll", "CloseHandle");
+    EmitGlobalLoadReg(X86Register.Rcx, "__io_sync_worker");
+    EmitCallImport("kernel32.dll", "CloseHandle");
+    EmitGlobalLoadReg(X86Register.Rcx, "__io_iocp");
+    EmitCallImport("kernel32.dll", "CloseHandle");
+
+    // CloseHandle for events
+    EmitGlobalLoadReg(X86Register.Rcx, "__io_sync_req_event");
+    EmitCallImport("kernel32.dll", "CloseHandle");
+    EmitGlobalLoadReg(X86Register.Rcx, "__io_done_event");
+    EmitCallImport("kernel32.dll", "CloseHandle");
+
+    // DeleteCriticalSection for both CS
+    EmitGlobalLeaReg(X86Register.Rcx, "__io_sync_cs");
+    EmitCallImport("kernel32.dll", "DeleteCriticalSection");
+    EmitGlobalLeaReg(X86Register.Rcx, "__io_done_cs");
+    EmitCallImport("kernel32.dll", "DeleteCriticalSection");
+
+    EmitRuntimeFunctionEnd();
+  }
+
+  /// <summary>
+  /// __io_completion_loop(): IOCP drain thread entry point.
+  /// Calls GetQueuedCompletionStatus in a loop; re-enqueues waiting green threads.
+  /// Exits on sentinel (key=0, overlapped=NULL).
+  /// Note: This is a raw OS thread entry point — no Maxon calling convention.
+  /// Uses Windows x64 ABI: RCX=lpParameter (ignored). Returns DWORD in EAX.
+  /// </summary>
+  private void EmitIoCompletionLoop() {
+    DefineLabel("__io_completion_loop");
+    // Standard Windows x64 ABI prologue
+    EmitPushReg(X86Register.Rbp);
+    EmitMovRegReg(X86Register.Rbp, X86Register.Rsp);
+    EmitSubRegImm(X86Register.Rsp, 0x60); // local space (16-byte aligned: 8+0x60=0x68, mod16=8 → already aligned with push)
+
+    // Locals:
+    //   [rbp-0x08] = bytes_transferred (DWORD-sized, read from OVERLAPPED)
+    //   [rbp-0x10] = completion_key (ULONG_PTR, unused but passed by ref)
+    //   [rbp-0x18] = overlapped ptr (LPOVERLAPPED → AsyncOpContext*)
+
+    DefineLabel("__io_comp_loop_top");
+    // Zero bytes_transferred slot — GQCS writes a DWORD (32-bit), upper 32 bits must be clean
+    EmitXorRegReg(X86Register.Rax, X86Register.Rax);
+    EmitMovMemReg(-0x08, X86Register.Rax, 8);
+    // GetQueuedCompletionStatus(iocp, &bytes, &key, &overlapped, INFINITE)
+    EmitGlobalLoadReg(X86Register.Rcx, "__io_iocp");
+    EmitLeaRegMem(X86Register.Rdx, -0x08);  // lpNumberOfBytesTransferred
+    EmitLeaRegMem(X86Register.R8, -0x10);   // lpCompletionKey
+    EmitLeaRegMem(X86Register.R9, -0x18);   // lpOverlapped
+    // dwMilliseconds = INFINITE on stack [rsp+0x20] — use Rax as scratch
+    EmitMovRegImm(X86Register.Rax, 0xFFFFFFFF);
+    EmitMovMemRspReg(0x20, X86Register.Rax);
+    EmitCallImport("kernel32.dll", "GetQueuedCompletionStatus");
+
+    // Check sentinel: if overlapped == NULL → shutdown signal, exit
+    EmitMovRegMem(X86Register.Rax, -0x18, 8); // RAX = overlapped
+    EmitBytes(0x48, 0x85, 0xC0); // TEST RAX, RAX
+    EmitJcc("z", "__io_comp_loop_exit");
+
+    // ctx = (AsyncOpContext*)overlapped
+    // Allocate IoCompletion and fill it
+    EmitMovMemReg(-0x20, X86Register.Rax, 8); // save ctx
+    EmitMovRegImm(X86Register.Rcx, IoCompSize);
+    EmitCallRuntimeLabel("mm_raw_alloc");
+    EmitMovMemReg(-0x28, X86Register.Rax, 8); // save comp
+
+    // comp->waiter_gt = ctx->waiter_gt
+    EmitMovRegMem(X86Register.Rcx, -0x20, 8); // ctx
+    EmitMovRegIndirectMem(X86Register.Rdx, X86Register.Rcx, AsyncCtxOffWaiter);
+    EmitMovRegMem(X86Register.Rax, -0x28, 8); // comp
+    EmitMovIndirectMemReg(X86Register.Rax, IoCompOffWaiter, X86Register.Rdx);
+
+    // comp->result_val = bytes_transferred (from [rbp-0x08])
+    EmitMovRegMem(X86Register.Rdx, -0x08, 8); // bytes
+    EmitMovIndirectMemReg(X86Register.Rax, IoCompOffResult, X86Register.Rdx);
+
+    // comp->result_len = bytes_transferred
+    EmitMovIndirectMemReg(X86Register.Rax, IoCompOffLen, X86Register.Rdx);
+
+    // comp->error_code = 0 (GQCS returns success if it filled overlapped)
+    EmitXorRegReg(X86Register.Rdx, X86Register.Rdx);
+    EmitMovIndirectMemReg(X86Register.Rax, IoCompOffError, X86Register.Rdx);
+
+    // comp->next = 0
+    EmitMovIndirectMemReg(X86Register.Rax, IoCompOffNext, X86Register.Rdx);
+
+    // Free ctx
+    EmitMovRegMem(X86Register.Rcx, -0x20, 8);
+    EmitCallRuntimeLabel("mm_raw_free");
+
+    // Enqueue comp to done queue and signal done event
+    EmitMovRegMem(X86Register.Rcx, -0x28, 8); // comp
+    EmitCallRuntimeLabel("__io_enqueue_completion");
+    EmitGlobalLoadReg(X86Register.Rcx, "__io_done_event");
+    EmitCallImport("kernel32.dll", "SetEvent");
+
+    EmitJmp("__io_comp_loop_top");
+
+    DefineLabel("__io_comp_loop_exit");
+    EmitXorRegReg(X86Register.Rax, X86Register.Rax); // return 0
+    EmitMovRegReg(X86Register.Rsp, X86Register.Rbp);
+    EmitPopReg(X86Register.Rbp);
+    EmitByte(0xC3); // ret
+  }
+
+  /// <summary>
+  /// __io_sync_worker_loop(): Sync worker thread entry point.
+  /// Processes non-overlappable I/O ops (FindFirstFile, GetFileAttributes, etc.) serially.
+  /// Posts IoCompletion results to shared done queue.
+  /// </summary>
+  private void EmitIoSyncWorkerLoop() {
+    DefineLabel("__io_sync_worker_loop");
+    EmitPushReg(X86Register.Rbp);
+    EmitMovRegReg(X86Register.Rbp, X86Register.Rsp);
+    EmitSubRegImm(X86Register.Rsp, 0x60);
+    // Locals: [rbp-0x08]=req ptr, [rbp-0x10]=result, [rbp-0x18]=comp ptr
+
+    DefineLabel("__io_sync_worker_top");
+    // WaitForSingleObject(__io_sync_req_event, INFINITE)
+    EmitGlobalLoadReg(X86Register.Rcx, "__io_sync_req_event");
+    EmitMovRegImm(X86Register.Rdx, 0xFFFFFFFF);
+    EmitCallImport("kernel32.dll", "WaitForSingleObject");
+
+    // Dequeue one request (lock, dequeue, unlock/ResetEvent if empty)
+    EmitCallRuntimeLabel("__io_dequeue_sync_req");
+    EmitBytes(0x48, 0x85, 0xC0); // TEST RAX, RAX
+    EmitJcc("z", "__io_sync_worker_top"); // spurious wakeup
+    EmitMovMemReg(-0x08, X86Register.Rax, 8); // req
+
+    // Dispatch on op code
+    EmitMovRegIndirectMem(X86Register.Rcx, X86Register.Rax, SyncReqOffOp);
+    EmitCmpRegImm(X86Register.Rcx, SyncOpShutdown);
+    EmitJcc("e", "__io_sync_worker_shutdown");
+    EmitCmpRegImm(X86Register.Rcx, SyncOpFileExists);
+    EmitJcc("e", "__io_sync_op_file_exists");
+    EmitCmpRegImm(X86Register.Rcx, SyncOpFileDelete);
+    EmitJcc("e", "__io_sync_op_file_delete");
+    EmitCmpRegImm(X86Register.Rcx, SyncOpFindFirst);
+    EmitJcc("e", "__io_sync_op_find_first");
+    EmitCmpRegImm(X86Register.Rcx, SyncOpFindNext);
+    EmitJcc("e", "__io_sync_op_find_next");
+    EmitCmpRegImm(X86Register.Rcx, SyncOpDirExists);
+    EmitJcc("e", "__io_sync_op_dir_exists");
+    EmitCmpRegImm(X86Register.Rcx, SyncOpDirCreate);
+    EmitJcc("e", "__io_sync_op_dir_create");
+    EmitCmpRegImm(X86Register.Rcx, SyncOpGetCwd);
+    EmitJcc("e", "__io_sync_op_get_cwd");
+    EmitCmpRegImm(X86Register.Rcx, SyncOpFileOpenRead);
+    EmitJcc("e", "__io_sync_op_file_open_read");
+    EmitCmpRegImm(X86Register.Rcx, SyncOpFileOpenWrite);
+    EmitJcc("e", "__io_sync_op_file_open_write");
+    EmitCmpRegImm(X86Register.Rcx, SyncOpCloseHandle);
+    EmitJcc("e", "__io_sync_op_close_handle");
+    // Unknown op — abort
+    EmitCallRuntimeLabel("__gt_panic_io");
+
+    // --- fileExists: GetFileAttributesA(arg0) != INVALID (and not directory) ---
+    DefineLabel("__io_sync_op_file_exists");
+    EmitMovRegMem(X86Register.Rax, -0x08, 8);
+    EmitMovRegIndirectMem(X86Register.Rcx, X86Register.Rax, SyncReqOffArg0);
+    EmitCallImport("kernel32.dll", "GetFileAttributesA");
+    // INVALID_FILE_ATTRIBUTES = 0xFFFFFFFF
+    EmitMovRegImm(X86Register.Rcx, unchecked((long)0xFFFFFFFF));
+    EmitCmpRegReg(X86Register.Rax, X86Register.Rcx);
+    EmitJcc("e", "__io_sync_file_exists_no");
+    // Check not a directory (FILE_ATTRIBUTE_DIRECTORY = 0x10)
+    EmitBytes(0xA9, 0x10, 0x00, 0x00, 0x00); // TEST EAX, 0x10
+    EmitJcc("nz", "__io_sync_file_exists_no");
+    EmitMovRegImm(X86Register.Rax, 1);
+    EmitJmp("__io_sync_op_done");
+    DefineLabel("__io_sync_file_exists_no");
+    EmitXorRegReg(X86Register.Rax, X86Register.Rax);
+    EmitJmp("__io_sync_op_done");
+
+    // --- fileDelete: DeleteFileA(arg0) ---
+    DefineLabel("__io_sync_op_file_delete");
+    EmitMovRegMem(X86Register.Rax, -0x08, 8);
+    EmitMovRegIndirectMem(X86Register.Rcx, X86Register.Rax, SyncReqOffArg0);
+    EmitCallImport("kernel32.dll", "DeleteFileA");
+    EmitJmp("__io_sync_op_done"); // result in RAX (0=failure, nonzero=success)
+
+    // --- findFirst: FindFirstFileA(arg0=pattern, arg1=WIN32_FIND_DATA*) → HANDLE ---
+    DefineLabel("__io_sync_op_find_first");
+    EmitMovRegMem(X86Register.Rax, -0x08, 8);
+    EmitMovRegIndirectMem(X86Register.Rcx, X86Register.Rax, SyncReqOffArg0); // pattern
+    EmitMovRegIndirectMem(X86Register.Rdx, X86Register.Rax, SyncReqOffArg1); // WIN32_FIND_DATA*
+    EmitCallImport("kernel32.dll", "FindFirstFileA");
+    EmitJmp("__io_sync_op_done"); // INVALID_HANDLE_VALUE on failure
+
+    // --- findNext: FindNextFileA(arg0=HANDLE, arg1=WIN32_FIND_DATA*) → BOOL ---
+    DefineLabel("__io_sync_op_find_next");
+    EmitMovRegMem(X86Register.Rax, -0x08, 8);
+    EmitMovRegIndirectMem(X86Register.Rcx, X86Register.Rax, SyncReqOffArg0); // HANDLE
+    EmitMovRegIndirectMem(X86Register.Rdx, X86Register.Rax, SyncReqOffArg1); // WIN32_FIND_DATA*
+    EmitCallImport("kernel32.dll", "FindNextFileA");
+    EmitJmp("__io_sync_op_done");
+
+    // --- dirExists: GetFileAttributesA(arg0) & FILE_ATTRIBUTE_DIRECTORY ---
+    DefineLabel("__io_sync_op_dir_exists");
+    EmitMovRegMem(X86Register.Rax, -0x08, 8);
+    EmitMovRegIndirectMem(X86Register.Rcx, X86Register.Rax, SyncReqOffArg0);
+    EmitCallImport("kernel32.dll", "GetFileAttributesA");
+    EmitMovRegImm(X86Register.Rcx, unchecked((long)0xFFFFFFFF));
+    EmitCmpRegReg(X86Register.Rax, X86Register.Rcx);
+    EmitJcc("e", "__io_sync_dir_exists_no");
+    // Check directory bit
+    EmitBytes(0xA9, 0x10, 0x00, 0x00, 0x00); // TEST EAX, FILE_ATTRIBUTE_DIRECTORY
+    EmitJcc("z", "__io_sync_dir_exists_no");
+    EmitMovRegImm(X86Register.Rax, 1);
+    EmitJmp("__io_sync_op_done");
+    DefineLabel("__io_sync_dir_exists_no");
+    EmitXorRegReg(X86Register.Rax, X86Register.Rax);
+    EmitJmp("__io_sync_op_done");
+
+    // --- dirCreate: CreateDirectoryA(arg0, NULL) ---
+    DefineLabel("__io_sync_op_dir_create");
+    EmitMovRegMem(X86Register.Rax, -0x08, 8);
+    EmitMovRegIndirectMem(X86Register.Rcx, X86Register.Rax, SyncReqOffArg0);
+    EmitXorRegReg(X86Register.Rdx, X86Register.Rdx); // lpSecurityAttributes = NULL
+    EmitCallImport("kernel32.dll", "CreateDirectoryA");
+    EmitJmp("__io_sync_op_done");
+
+    // --- getCwd: GetCurrentDirectoryA(260, heap_buf) → raw ptr ---
+    DefineLabel("__io_sync_op_get_cwd");
+    // Allocate 260-byte buffer via HeapAlloc
+    EmitCallRuntimeLabel("mm_raw_alloc_260");
+    EmitMovMemReg(-0x10, X86Register.Rax, 8); // save buf
+    EmitMovRegImm(X86Register.Rcx, 260); // nBufferLength
+    EmitMovRegMem(X86Register.Rdx, -0x10, 8); // lpBuffer
+    EmitCallImport("kernel32.dll", "GetCurrentDirectoryA");
+    EmitMovRegMem(X86Register.Rax, -0x10, 8); // result = buf ptr
+    EmitJmp("__io_sync_op_done");
+
+    // --- fileOpenRead: CreateFileA(GENERIC_READ, OPEN_EXISTING, FILE_FLAG_OVERLAPPED) + IOCP ---
+    // Returns raw file handle (or -1). mm_alloc wrapping happens on the green thread.
+    DefineLabel("__io_sync_op_file_open_read");
+    EmitMovRegMem(X86Register.Rax, -0x08, 8);
+    EmitMovRegIndirectMem(X86Register.Rcx, X86Register.Rax, SyncReqOffArg0); // path
+    EmitMovRegImm(X86Register.Rdx, unchecked((long)0x80000000)); // GENERIC_READ
+    EmitMovRegImm(X86Register.R8, 1);                  // FILE_SHARE_READ
+    EmitXorRegReg(X86Register.R9, X86Register.R9);     // lpSecurityAttributes = NULL
+    EmitBytes(0x48, 0xC7, 0x44, 0x24, 0x20, 0x03, 0x00, 0x00, 0x00); // [rsp+0x20] = OPEN_EXISTING (3)
+    EmitBytes(0x48, 0xC7, 0x44, 0x24, 0x28, 0x00, 0x00, 0x00, 0x40); // [rsp+0x28] = FILE_FLAG_OVERLAPPED (0x40000000)
+    EmitBytes(0x48, 0xC7, 0x44, 0x24, 0x30, 0x00, 0x00, 0x00, 0x00); // [rsp+0x30] = NULL
+    EmitCallImport("kernel32.dll", "CreateFileA");
+    // Check for INVALID_HANDLE_VALUE (-1)
+    EmitMovRegImm(X86Register.Rcx, -1);
+    EmitCmpRegReg(X86Register.Rax, X86Register.Rcx);
+    EmitJcc("e", "__io_sync_file_open_read_fail");
+    EmitMovMemReg(-0x28, X86Register.Rax, 8);          // save handle
+    // Associate file handle with IOCP
+    EmitMovRegMem(X86Register.Rcx, -0x28, 8);           // arg1: file handle
+    EmitGlobalLoadReg(X86Register.Rdx, "__io_iocp");     // arg2: existing IOCP
+    EmitXorRegReg(X86Register.R8, X86Register.R8);       // arg3: completion key = 0
+    EmitXorRegReg(X86Register.R9, X86Register.R9);       // arg4: 0
+    EmitCallImport("kernel32.dll", "CreateIoCompletionPort");
+    // SetFileCompletionNotificationModes(handle, FILE_SKIP_COMPLETION_PORT_ON_SUCCESS=1)
+    EmitMovRegMem(X86Register.Rcx, -0x28, 8);
+    EmitMovRegImm(X86Register.Rdx, 1);
+    EmitCallImport("kernel32.dll", "SetFileCompletionNotificationModes");
+    // Return raw handle
+    EmitMovRegMem(X86Register.Rax, -0x28, 8);
+    EmitJmp("__io_sync_op_done");
+    DefineLabel("__io_sync_file_open_read_fail");
+    EmitMovRegImm(X86Register.Rax, -1);
+    EmitJmp("__io_sync_op_done");
+
+    // --- fileOpenWrite: CreateFileA(GENERIC_WRITE, CREATE_ALWAYS, FILE_FLAG_OVERLAPPED) + IOCP ---
+    // Returns raw file handle (or -1). mm_alloc wrapping happens on the green thread.
+    DefineLabel("__io_sync_op_file_open_write");
+    EmitMovRegMem(X86Register.Rax, -0x08, 8);
+    EmitMovRegIndirectMem(X86Register.Rcx, X86Register.Rax, SyncReqOffArg0); // path
+    EmitMovRegImm(X86Register.Rdx, 0x40000000);         // GENERIC_WRITE
+    EmitXorRegReg(X86Register.R8, X86Register.R8);      // dwShareMode = 0
+    EmitXorRegReg(X86Register.R9, X86Register.R9);      // lpSecurityAttributes = NULL
+    EmitBytes(0x48, 0xC7, 0x44, 0x24, 0x20, 0x02, 0x00, 0x00, 0x00); // [rsp+0x20] = CREATE_ALWAYS (2)
+    EmitBytes(0x48, 0xC7, 0x44, 0x24, 0x28, 0x00, 0x00, 0x00, 0x40); // [rsp+0x28] = FILE_FLAG_OVERLAPPED (0x40000000)
+    EmitBytes(0x48, 0xC7, 0x44, 0x24, 0x30, 0x00, 0x00, 0x00, 0x00); // [rsp+0x30] = NULL
+    EmitCallImport("kernel32.dll", "CreateFileA");
+    // Check for INVALID_HANDLE_VALUE (-1)
+    EmitMovRegImm(X86Register.Rcx, -1);
+    EmitCmpRegReg(X86Register.Rax, X86Register.Rcx);
+    EmitJcc("e", "__io_sync_file_open_write_fail");
+    EmitMovMemReg(-0x28, X86Register.Rax, 8);          // save handle
+    // Associate file handle with IOCP
+    EmitMovRegMem(X86Register.Rcx, -0x28, 8);
+    EmitGlobalLoadReg(X86Register.Rdx, "__io_iocp");
+    EmitXorRegReg(X86Register.R8, X86Register.R8);
+    EmitXorRegReg(X86Register.R9, X86Register.R9);
+    EmitCallImport("kernel32.dll", "CreateIoCompletionPort");
+    // SetFileCompletionNotificationModes(handle, FILE_SKIP_COMPLETION_PORT_ON_SUCCESS=1)
+    EmitMovRegMem(X86Register.Rcx, -0x28, 8);
+    EmitMovRegImm(X86Register.Rdx, 1);
+    EmitCallImport("kernel32.dll", "SetFileCompletionNotificationModes");
+    // Return raw handle
+    EmitMovRegMem(X86Register.Rax, -0x28, 8);
+    EmitJmp("__io_sync_op_done");
+    DefineLabel("__io_sync_file_open_write_fail");
+    EmitMovRegImm(X86Register.Rax, -1);
+    EmitJmp("__io_sync_op_done");
+
+    // --- closeHandle: CloseHandle(arg0) ---
+    DefineLabel("__io_sync_op_close_handle");
+    EmitMovRegMem(X86Register.Rax, -0x08, 8);
+    EmitMovRegIndirectMem(X86Register.Rcx, X86Register.Rax, SyncReqOffArg0); // handle
+    EmitCallImport("kernel32.dll", "CloseHandle");
+    EmitJmp("__io_sync_op_done");
+
+    // --- Common: post completion and continue ---
+    DefineLabel("__io_sync_op_done");
+    EmitMovMemReg(-0x10, X86Register.Rax, 8); // save result
+
+    // Allocate IoCompletion
+    EmitMovRegImm(X86Register.Rcx, IoCompSize);
+    EmitCallRuntimeLabel("mm_raw_alloc");
+    EmitMovMemReg(-0x18, X86Register.Rax, 8); // comp
+
+    // Fill comp
+    EmitMovRegMem(X86Register.Rcx, -0x08, 8); // req
+    EmitMovRegIndirectMem(X86Register.Rdx, X86Register.Rcx, SyncReqOffWaiter);
+    EmitMovRegMem(X86Register.Rax, -0x18, 8);
+    EmitMovIndirectMemReg(X86Register.Rax, IoCompOffWaiter, X86Register.Rdx);
+
+    EmitMovRegMem(X86Register.Rdx, -0x10, 8); // result
+    EmitMovIndirectMemReg(X86Register.Rax, IoCompOffResult, X86Register.Rdx);
+    EmitMovIndirectMemReg(X86Register.Rax, IoCompOffLen, X86Register.Rdx); // len = result for simplicity
+    EmitXorRegReg(X86Register.Rdx, X86Register.Rdx);
+    EmitMovIndirectMemReg(X86Register.Rax, IoCompOffError, X86Register.Rdx); // error = 0
+    EmitMovIndirectMemReg(X86Register.Rax, IoCompOffNext, X86Register.Rdx);  // next = 0
+
+    // Free req
+    EmitMovRegMem(X86Register.Rcx, -0x08, 8);
+    EmitCallRuntimeLabel("mm_raw_free");
+
+    // Enqueue comp and signal done event
+    EmitMovRegMem(X86Register.Rcx, -0x18, 8);
+    EmitCallRuntimeLabel("__io_enqueue_completion");
+    EmitGlobalLoadReg(X86Register.Rcx, "__io_done_event");
+    EmitCallImport("kernel32.dll", "SetEvent");
+
+    EmitJmp("__io_sync_worker_top");
+
+    // --- Shutdown: free req, exit thread ---
+    DefineLabel("__io_sync_worker_shutdown");
+    EmitMovRegMem(X86Register.Rcx, -0x08, 8);
+    EmitCallRuntimeLabel("mm_raw_free");
+    EmitXorRegReg(X86Register.Rax, X86Register.Rax);
+    EmitMovRegReg(X86Register.Rsp, X86Register.Rbp);
+    EmitPopReg(X86Register.Rbp);
+    EmitByte(0xC3); // ret
+  }
+
+  /// <summary>
+  /// __io_check_completions(): Drain the IoCompletion done queue and re-enqueue green threads.
+  /// Called from __gt_cleanup drain loop and __gt_yield_completed.
+  /// Non-blocking: returns immediately if no completions are pending.
+  /// </summary>
+  private void EmitIoCheckCompletions() {
+    EmitRuntimeFunctionStart("__io_check_completions", 0, 0x30);
+
+    DefineLabel("__io_check_comp_loop");
+    // Directly dequeue — don't poll the event. The event is used only for blocking waits;
+    // after WaitForSingleObject(INFINITE) the event is already consumed (auto-reset), so
+    // polling here would always return WAIT_TIMEOUT and nothing would be drained.
+    EmitCallRuntimeLabel("__io_dequeue_completion");
+    EmitBytes(0x48, 0x85, 0xC0); // TEST RAX, RAX
+    EmitJcc("z", "__io_check_comp_ret"); // queue empty → done
+
+    // comp = RAX; write fields into waiter green thread and re-enqueue it
+    EmitMovMemReg(-0x08, X86Register.Rax, 8); // save comp
+
+    // gt = comp->waiter_gt
+    EmitMovRegIndirectMem(X86Register.Rcx, X86Register.Rax, IoCompOffWaiter);
+    EmitMovMemReg(-0x10, X86Register.Rcx, 8); // save gt
+
+    // gt->io_result_val = comp->result_val
+    EmitMovRegIndirectMem(X86Register.Rdx, X86Register.Rax, IoCompOffResult);
+    EmitMovIndirectMemReg(X86Register.Rcx, GtOffIoResultVal, X86Register.Rdx);
+
+    // gt->io_result_len = comp->result_len
+    EmitMovRegIndirectMem(X86Register.Rdx, X86Register.Rax, IoCompOffLen);
+    EmitMovIndirectMemReg(X86Register.Rcx, GtOffIoResultLen, X86Register.Rdx);
+
+    // gt->io_error_code = comp->error_code
+    EmitMovRegIndirectMem(X86Register.Rdx, X86Register.Rax, IoCompOffError);
+    EmitMovIndirectMemReg(X86Register.Rcx, GtOffIoErrorCode, X86Register.Rdx);
+
+    // Free comp
+    EmitMovRegMem(X86Register.Rcx, -0x08, 8);
+    EmitCallRuntimeLabel("mm_raw_free");
+
+    // Re-enqueue waiter (set status=ready, add to run queue)
+    EmitMovRegMem(X86Register.Rcx, -0x10, 8); // gt
+    EmitXorRegReg(X86Register.Rax, X86Register.Rax);
+    EmitMovIndirectMemReg(X86Register.Rcx, GtOffStatus, X86Register.Rax); // status = ready
+    EmitCallRuntimeLabel("__gt_enqueue");
+
+    EmitJmp("__io_check_comp_loop");
+
+    DefineLabel("__io_check_comp_ret");
+    EmitRuntimeFunctionEnd();
+  }
+
+  /// <summary>
+  /// __io_submit_sync(op_rcx, arg0_rdx, arg1_r8): Submit a non-overlappable I/O request.
+  /// Yields the current green thread until the sync worker processes the request.
+  /// Returns result value in RAX.
+  /// </summary>
+  private void EmitIoSubmitSync() {
+    EmitRuntimeFunctionStart("__io_submit_sync", 3, 0x40);
+    // [rbp-0x08] = op, [rbp-0x10] = arg0, [rbp-0x18] = arg1
+
+    // Check cancel flag — abort immediately if cancelled
+    EmitGlobalLoadReg(X86Register.R10, "__gt_current");
+    EmitMovRegIndirectMem(X86Register.Rax, X86Register.R10, GtOffCancelFlag);
+    EmitBytes(0x48, 0x85, 0xC0); // TEST RAX, RAX
+    EmitJcc("nz", "__io_submit_sync_cancelled");
+
+    // Allocate SyncRequest
+    EmitMovRegImm(X86Register.Rcx, SyncReqSize);
+    EmitCallRuntimeLabel("mm_raw_alloc");
+    EmitMovMemReg(-0x20, X86Register.Rax, 8); // save req
+
+    // Fill: op, arg0, arg1, waiter_gt, next=0
+    EmitMovRegMem(X86Register.Rdx, -0x08, 8); // op
+    EmitMovIndirectMemReg(X86Register.Rax, SyncReqOffOp, X86Register.Rdx);
+    EmitMovRegMem(X86Register.Rdx, -0x10, 8); // arg0
+    EmitMovIndirectMemReg(X86Register.Rax, SyncReqOffArg0, X86Register.Rdx);
+    EmitMovRegMem(X86Register.Rdx, -0x18, 8); // arg1
+    EmitMovIndirectMemReg(X86Register.Rax, SyncReqOffArg1, X86Register.Rdx);
+    EmitGlobalLoadReg(X86Register.Rdx, "__gt_current");
+    EmitMovIndirectMemReg(X86Register.Rax, SyncReqOffWaiter, X86Register.Rdx);
+    EmitXorRegReg(X86Register.Rdx, X86Register.Rdx);
+    EmitMovIndirectMemReg(X86Register.Rax, SyncReqOffNext, X86Register.Rdx);
+
+    // Set current thread status = waiting
+    EmitGlobalLoadReg(X86Register.R10, "__gt_current");
+    EmitMovRegImm(X86Register.Rdx, GtStatusWaiting);
+    EmitMovIndirectMemReg(X86Register.R10, GtOffStatus, X86Register.Rdx);
+
+    // Enqueue the request and signal the sync worker
+    EmitMovRegMem(X86Register.Rcx, -0x20, 8);
+    EmitCallRuntimeLabel("__io_enqueue_sync_req");
+    EmitGlobalLoadReg(X86Register.Rcx, "__io_sync_req_event");
+    EmitCallImport("kernel32.dll", "SetEvent");
+
+    if (Compiler.AsyncTrace) {
+      // Trace: "io_yield #N\n" (current thread's trace ID)
+      EmitLeaRegSymdataRel(X86Register.Rcx, "__at_tag_io_yield");
+      EmitCallRuntimeLabel("mm_trace_print_tag");
+      EmitGlobalLoadReg(X86Register.Rax, "__gt_current");
+      EmitMovRegIndirectMem(X86Register.Rcx, X86Register.Rax, GtOffTraceId);
+      EmitCallRuntimeLabel("mm_trace_print_i64");
+      EmitLeaRegSymdataRel(X86Register.Rcx, "__at_tag_nl");
+      EmitCallRuntimeLabel("mm_trace_print_tag");
+    }
+
+    // Yield: dequeue next runnable thread
+    EmitCallRuntimeLabel("__gt_dequeue");
+    EmitBytes(0x48, 0x85, 0xC0); // TEST RAX, RAX
+    EmitJcc("z", "__io_submit_sync_wait"); // no runnable thread → wait on event
+
+    // Context switch to next thread
+    EmitMovMemReg(-0x28, X86Register.Rax, 8);
+    EmitMovRegImm(X86Register.Rcx, GtStatusRunning);
+    EmitMovIndirectMemReg(X86Register.Rax, GtOffStatus, X86Register.Rcx);
+    EmitGlobalLoadReg(X86Register.Rcx, "__gt_current");
+    EmitMovRegMem(X86Register.Rdx, -0x28, 8);
+    EmitCallRuntimeLabel("__gt_context_switch");
+    EmitJmp("__io_submit_sync_resume");
+
+    // No runnable thread: wait on done event, drain completions, try dequeue again
+    DefineLabel("__io_submit_sync_wait");
+    EmitGlobalLoadReg(X86Register.Rcx, "__io_done_event");
+    EmitMovRegImm(X86Register.Rdx, 0xFFFFFFFF);
+    EmitCallImport("kernel32.dll", "WaitForSingleObject");
+    EmitCallRuntimeLabel("__io_check_completions");
+    EmitCallRuntimeLabel("__gt_dequeue");
+    EmitBytes(0x48, 0x85, 0xC0);
+    EmitJcc("z", "__io_submit_sync_wait"); // keep waiting if still nothing runnable
+    EmitMovMemReg(-0x28, X86Register.Rax, 8);
+    EmitMovRegImm(X86Register.Rcx, GtStatusRunning);
+    EmitMovIndirectMemReg(X86Register.Rax, GtOffStatus, X86Register.Rcx);
+    EmitGlobalLoadReg(X86Register.Rcx, "__gt_current");
+    EmitMovRegMem(X86Register.Rdx, -0x28, 8);
+    EmitCallRuntimeLabel("__gt_context_switch");
+
+    // Resume here after being re-enqueued by __io_check_completions
+    DefineLabel("__io_submit_sync_resume");
+
+    if (Compiler.AsyncTrace) {
+      // Trace: "io_resume #N\n" (current thread's trace ID)
+      EmitLeaRegSymdataRel(X86Register.Rcx, "__at_tag_io_resume");
+      EmitCallRuntimeLabel("mm_trace_print_tag");
+      EmitGlobalLoadReg(X86Register.Rax, "__gt_current");
+      EmitMovRegIndirectMem(X86Register.Rcx, X86Register.Rax, GtOffTraceId);
+      EmitCallRuntimeLabel("mm_trace_print_i64");
+      EmitLeaRegSymdataRel(X86Register.Rcx, "__at_tag_nl");
+      EmitCallRuntimeLabel("mm_trace_print_tag");
+    }
+
+    EmitGlobalLoadReg(X86Register.R10, "__gt_current");
+    EmitMovRegIndirectMem(X86Register.Rax, X86Register.R10, GtOffIoResultVal);
+    EmitRuntimeFunctionEnd();
+
+    DefineLabel("__io_submit_sync_cancelled");
+    // Store ERROR_OPERATION_ABORTED and return 0 without yielding
+    EmitGlobalLoadReg(X86Register.R10, "__gt_current");
+    EmitMovRegImm(X86Register.Rax, 0x3EF); // ERROR_OPERATION_ABORTED
+    EmitMovIndirectMemReg(X86Register.R10, GtOffIoErrorCode, X86Register.Rax);
+    EmitXorRegReg(X86Register.Rax, X86Register.Rax);
+    EmitRuntimeFunctionEnd();
+  }
+
+  /// <summary>
+  /// __io_submit_async(handle_rcx, buf_rdx, size_r8, offset_r9): Submit overlapped ReadFile/WriteFile.
+  /// Yields the current green thread until IOCP completes the I/O.
+  /// The direction (read vs write) is encoded in the handle's open mode.
+  /// Callers use separate stub wrappers for read vs write.
+  /// Returns bytes transferred in RAX.
+  /// Note: The actual read/write call is in the per-stub wrappers; this function handles
+  /// the OVERLAPPED context setup, yielding, and resumption pattern.
+  /// </summary>
+  private void EmitIoSubmitHelpers() {
+    // Note: actual ReadFile/WriteFile calls are in the stubs (maxon_file_read, maxon_managed_file_write)
+    // which call the helpers below.
+    EmitIoSubmitRead();
+    EmitIoSubmitWrite();
+    EmitIoEnqueueSyncReq();
+    EmitIoDequeuesSyncReq();
+    EmitIoEnqueueCompletion();
+    EmitIoDequeueCompletion();
+    EmitMmRawAlloc260();
+    EmitIoPanicIo();
+  }
+
+  /// <summary>
+  /// __io_submit_read(handle_rcx, buf_rdx, size_r8): Overlapped ReadFile + yield.
+  /// </summary>
+  private void EmitIoSubmitRead() {
+    EmitRuntimeFunctionStart("__io_submit_read", 3, 0x50);
+    // [rbp-0x08]=handle, [rbp-0x10]=buf, [rbp-0x18]=size
+    EmitIoSubmitOverlappedCore("ReadFile", "__io_submit_read");
+  }
+
+  /// <summary>
+  /// __io_submit_write(handle_rcx, buf_rdx, size_r8): Overlapped WriteFile + yield.
+  /// </summary>
+  private void EmitIoSubmitWrite() {
+    EmitRuntimeFunctionStart("__io_submit_write", 3, 0x50);
+    EmitIoSubmitOverlappedCore("WriteFile", "__io_submit_write");
+  }
+
+  private void EmitIoSubmitOverlappedCore(string ioFuncName, string labelPrefix) {
+    // Check cancel flag
+    EmitGlobalLoadReg(X86Register.R10, "__gt_current");
+    EmitMovRegIndirectMem(X86Register.Rax, X86Register.R10, GtOffCancelFlag);
+    EmitBytes(0x48, 0x85, 0xC0); // TEST RAX, RAX
+    EmitJcc("nz", $"{labelPrefix}_cancelled");
+
+    // Allocate AsyncOpContext (64 bytes): OVERLAPPED at offset 0 + our fields
+    EmitMovRegImm(X86Register.Rcx, AsyncCtxSize);
+    EmitCallRuntimeLabel("mm_raw_alloc");
+    EmitMovMemReg(-0x20, X86Register.Rax, 8); // save ctx (mm_raw_alloc uses HEAP_ZERO_MEMORY — already zeroed)
+
+    // ctx->waiter_gt = __gt_current
+    EmitGlobalLoadReg(X86Register.Rdx, "__gt_current");
+    EmitMovRegMem(X86Register.Rax, -0x20, 8);
+    EmitMovIndirectMemReg(X86Register.Rax, AsyncCtxOffWaiter, X86Register.Rdx);
+
+    // Store handle in gt->io_handle so CancelIoEx can reach it
+    EmitGlobalLoadReg(X86Register.R10, "__gt_current");
+    EmitMovRegMem(X86Register.Rdx, -0x08, 8); // handle
+    EmitMovIndirectMemReg(X86Register.R10, GtOffIoHandle, X86Register.Rdx);
+
+    // Set current thread status = waiting
+    EmitMovRegImm(X86Register.Rax, GtStatusWaiting);
+    EmitMovIndirectMemReg(X86Register.R10, GtOffStatus, X86Register.Rax);
+
+    // Call ReadFile/WriteFile:
+    //   handle=rcx, buf=rdx, size=r8, lpBytesTransferred=NULL, overlapped=ctx
+    EmitMovRegMem(X86Register.Rcx, -0x08, 8); // handle
+    EmitMovRegMem(X86Register.Rdx, -0x10, 8); // buf
+    EmitMovRegMem(X86Register.R8,  -0x18, 8); // size
+    EmitXorRegReg(X86Register.R9, X86Register.R9); // lpBytesTransferred = NULL
+    EmitMovRegMem(X86Register.Rax, -0x20, 8);
+    EmitMovMemRspReg(0x20, X86Register.Rax);   // lpOverlapped = ctx (5th arg at [rsp+0x20])
+    EmitCallImport("kernel32.dll", ioFuncName);
+
+    // If FALSE: check GetLastError — if not IO_PENDING, it's a sync error
+    EmitBytes(0x48, 0x85, 0xC0); // TEST RAX, RAX
+    EmitJcc("nz", $"{labelPrefix}_yield"); // TRUE → sync success (with FILE_SKIP_COMPLETION)
+    // FALSE — check error code
+    EmitCallImport("kernel32.dll", "GetLastError");
+    EmitMovRegImm(X86Register.Rcx, 997); // ERROR_IO_PENDING
+    EmitCmpRegReg(X86Register.Rax, X86Register.Rcx);
+    EmitJcc("e", $"{labelPrefix}_yield"); // IO_PENDING → normal async path, yield
+
+    // Sync error: clear io_handle, store error, return 0
+    EmitGlobalLoadReg(X86Register.R10, "__gt_current");
+    EmitXorRegReg(X86Register.Rcx, X86Register.Rcx);
+    EmitMovIndirectMemReg(X86Register.R10, GtOffIoHandle, X86Register.Rcx); // clear io_handle
+    EmitMovIndirectMemReg(X86Register.R10, GtOffStatus, X86Register.Rcx); // status = ready (0)
+    // Store the error code
+    EmitCallImport("kernel32.dll", "GetLastError");
+    EmitMovIndirectMemReg(X86Register.R10, GtOffIoErrorCode, X86Register.Rax);
+    // Free ctx
+    EmitMovRegMem(X86Register.Rcx, -0x20, 8);
+    EmitCallRuntimeLabel("mm_raw_free");
+    EmitXorRegReg(X86Register.Rax, X86Register.Rax);
+    EmitRuntimeFunctionEnd();
+
+    // Yield: dequeue next runnable thread
+    DefineLabel($"{labelPrefix}_yield");
+    EmitCallRuntimeLabel("__gt_dequeue");
+    EmitBytes(0x48, 0x85, 0xC0);
+    EmitJcc("z", $"{labelPrefix}_wait");
+
+    // Context switch to next thread
+    EmitMovMemReg(-0x28, X86Register.Rax, 8);
+    EmitMovRegImm(X86Register.Rcx, GtStatusRunning);
+    EmitMovIndirectMemReg(X86Register.Rax, GtOffStatus, X86Register.Rcx);
+    EmitGlobalLoadReg(X86Register.Rcx, "__gt_current");
+    EmitMovRegMem(X86Register.Rdx, -0x28, 8);
+    EmitCallRuntimeLabel("__gt_context_switch");
+    EmitJmp($"{labelPrefix}_resume");
+
+    // No runnable thread: wait on done event
+    DefineLabel($"{labelPrefix}_wait");
+    EmitGlobalLoadReg(X86Register.Rcx, "__io_done_event");
+    EmitMovRegImm(X86Register.Rdx, 0xFFFFFFFF);
+    EmitCallImport("kernel32.dll", "WaitForSingleObject");
+    EmitCallRuntimeLabel("__io_check_completions");
+    EmitCallRuntimeLabel("__gt_dequeue");
+    EmitBytes(0x48, 0x85, 0xC0);
+    EmitJcc("z", $"{labelPrefix}_wait");
+    EmitMovMemReg(-0x28, X86Register.Rax, 8);
+    EmitMovRegImm(X86Register.Rcx, GtStatusRunning);
+    EmitMovIndirectMemReg(X86Register.Rax, GtOffStatus, X86Register.Rcx);
+    EmitGlobalLoadReg(X86Register.Rcx, "__gt_current");
+    EmitMovRegMem(X86Register.Rdx, -0x28, 8);
+    EmitCallRuntimeLabel("__gt_context_switch");
+
+    // Resume: clear io_handle, return bytes transferred
+    DefineLabel($"{labelPrefix}_resume");
+    EmitGlobalLoadReg(X86Register.R10, "__gt_current");
+    EmitXorRegReg(X86Register.Rax, X86Register.Rax);
+    EmitMovIndirectMemReg(X86Register.R10, GtOffIoHandle, X86Register.Rax); // clear io_handle
+    EmitMovRegIndirectMem(X86Register.Rax, X86Register.R10, GtOffIoResultVal);
+    EmitRuntimeFunctionEnd();
+
+    DefineLabel($"{labelPrefix}_cancelled");
+    EmitGlobalLoadReg(X86Register.R10, "__gt_current");
+    EmitMovRegImm(X86Register.Rax, 0x3EF); // ERROR_OPERATION_ABORTED
+    EmitMovIndirectMemReg(X86Register.R10, GtOffIoErrorCode, X86Register.Rax);
+    EmitXorRegReg(X86Register.Rax, X86Register.Rax);
+    EmitRuntimeFunctionEnd();
+  }
+
+  private void EmitIoEnqueueSyncReq() {
+    // __io_enqueue_sync_req(req_rcx): Add to sync request queue under lock
+    EmitRuntimeFunctionStart("__io_enqueue_sync_req", 1, 0x30);
+    EmitMovMemReg(-0x08, X86Register.Rcx, 8); // save req
+    EmitGlobalLeaReg(X86Register.Rcx, "__io_sync_cs");
+    EmitCallImport("kernel32.dll", "EnterCriticalSection");
+    // if head == NULL: head = tail = req; else tail->next = req; tail = req
+    EmitGlobalLoadReg(X86Register.Rax, "__io_sync_req_head");
+    EmitBytes(0x48, 0x85, 0xC0); // TEST RAX, RAX
+    EmitJcc("nz", "__io_enqueue_sync_nonempty");
+    EmitMovRegMem(X86Register.Rax, -0x08, 8);
+    EmitGlobalStoreReg(X86Register.Rax, "__io_sync_req_head");
+    EmitGlobalStoreReg(X86Register.Rax, "__io_sync_req_tail");
+    EmitJmp("__io_enqueue_sync_done");
+    DefineLabel("__io_enqueue_sync_nonempty");
+    EmitGlobalLoadReg(X86Register.Rcx, "__io_sync_req_tail"); // tail
+    EmitMovRegMem(X86Register.Rdx, -0x08, 8); // req
+    EmitMovIndirectMemReg(X86Register.Rcx, SyncReqOffNext, X86Register.Rdx); // tail->next = req
+    EmitGlobalStoreReg(X86Register.Rdx, "__io_sync_req_tail");
+    DefineLabel("__io_enqueue_sync_done");
+    EmitGlobalLeaReg(X86Register.Rcx, "__io_sync_cs");
+    EmitCallImport("kernel32.dll", "LeaveCriticalSection");
+    EmitRuntimeFunctionEnd();
+  }
+
+  private void EmitIoDequeuesSyncReq() {
+    // __io_dequeue_sync_req(): Dequeue one SyncRequest under lock; returns ptr or NULL
+    EmitRuntimeFunctionStart("__io_dequeue_sync_req", 0, 0x30);
+    EmitGlobalLeaReg(X86Register.Rcx, "__io_sync_cs");
+    EmitCallImport("kernel32.dll", "EnterCriticalSection");
+    EmitGlobalLoadReg(X86Register.Rax, "__io_sync_req_head"); // head
+    EmitMovMemReg(-0x08, X86Register.Rax, 8); // spill dequeued node — Win32 calls clobber RAX
+    EmitBytes(0x48, 0x85, 0xC0); // TEST RAX, RAX
+    EmitJcc("z", "__io_dequeue_sync_empty");
+    // head = head->next
+    EmitMovRegIndirectMem(X86Register.Rcx, X86Register.Rax, SyncReqOffNext);
+    EmitGlobalStoreReg(X86Register.Rcx, "__io_sync_req_head");
+    // if new head == NULL: reset tail and reset event
+    EmitBytes(0x48, 0x85, 0xC9); // TEST RCX, RCX
+    EmitJcc("nz", "__io_dequeue_sync_unlock");
+    EmitGlobalStoreReg(X86Register.Rcx, "__io_sync_req_tail"); // tail = NULL
+    // ResetEvent(__io_sync_req_event) — queue is now empty; unlock CS first
+    EmitGlobalLeaReg(X86Register.Rcx, "__io_sync_cs");
+    EmitCallImport("kernel32.dll", "LeaveCriticalSection");
+    EmitGlobalLoadReg(X86Register.Rcx, "__io_sync_req_event");
+    EmitCallImport("kernel32.dll", "ResetEvent");
+    EmitJmp("__io_dequeue_sync_ret");
+    DefineLabel("__io_dequeue_sync_empty");
+    // head was NULL — just unlock
+    DefineLabel("__io_dequeue_sync_unlock");
+    EmitGlobalLeaReg(X86Register.Rcx, "__io_sync_cs");
+    EmitCallImport("kernel32.dll", "LeaveCriticalSection");
+    DefineLabel("__io_dequeue_sync_ret");
+    EmitMovRegMem(X86Register.Rax, -0x08, 8); // reload dequeued node after Win32 calls
+    // Clear next ptr on dequeued node so it doesn't form dangling list links
+    EmitBytes(0x48, 0x85, 0xC0); // TEST RAX, RAX
+    EmitJcc("z", "__io_dequeue_sync_done");
+    EmitXorRegReg(X86Register.Rcx, X86Register.Rcx);
+    EmitMovIndirectMemReg(X86Register.Rax, SyncReqOffNext, X86Register.Rcx);
+    DefineLabel("__io_dequeue_sync_done");
+    EmitRuntimeFunctionEnd();
+  }
+
+  private void EmitIoEnqueueCompletion() {
+    // __io_enqueue_completion(comp_rcx): Add IoCompletion to done queue under lock
+    EmitRuntimeFunctionStart("__io_enqueue_completion", 1, 0x30);
+    EmitMovMemReg(-0x08, X86Register.Rcx, 8);
+    EmitGlobalLeaReg(X86Register.Rcx, "__io_done_cs");
+    EmitCallImport("kernel32.dll", "EnterCriticalSection");
+    EmitGlobalLoadReg(X86Register.Rax, "__io_done_head");
+    EmitBytes(0x48, 0x85, 0xC0);
+    EmitJcc("nz", "__io_enqueue_comp_nonempty");
+    EmitMovRegMem(X86Register.Rax, -0x08, 8);
+    EmitGlobalStoreReg(X86Register.Rax, "__io_done_head");
+    EmitGlobalStoreReg(X86Register.Rax, "__io_done_tail");
+    EmitJmp("__io_enqueue_comp_done");
+    DefineLabel("__io_enqueue_comp_nonempty");
+    EmitGlobalLoadReg(X86Register.Rcx, "__io_done_tail");
+    EmitMovRegMem(X86Register.Rdx, -0x08, 8);
+    EmitMovIndirectMemReg(X86Register.Rcx, IoCompOffNext, X86Register.Rdx);
+    EmitGlobalStoreReg(X86Register.Rdx, "__io_done_tail");
+    DefineLabel("__io_enqueue_comp_done");
+    EmitGlobalLeaReg(X86Register.Rcx, "__io_done_cs");
+    EmitCallImport("kernel32.dll", "LeaveCriticalSection");
+    EmitRuntimeFunctionEnd();
+  }
+
+  private void EmitIoDequeueCompletion() {
+    // __io_dequeue_completion(): Dequeue one IoCompletion under lock; returns ptr or NULL
+    EmitRuntimeFunctionStart("__io_dequeue_completion", 0, 0x30);
+    EmitGlobalLeaReg(X86Register.Rcx, "__io_done_cs");
+    EmitCallImport("kernel32.dll", "EnterCriticalSection");
+    EmitGlobalLoadReg(X86Register.Rax, "__io_done_head");
+    EmitMovMemReg(-0x08, X86Register.Rax, 8); // spill dequeued node — LeaveCriticalSection clobbers RAX
+    EmitBytes(0x48, 0x85, 0xC0);
+    EmitJcc("z", "__io_dequeue_comp_unlock");
+    EmitMovRegIndirectMem(X86Register.Rcx, X86Register.Rax, IoCompOffNext);
+    EmitGlobalStoreReg(X86Register.Rcx, "__io_done_head");
+    EmitBytes(0x48, 0x85, 0xC9);
+    EmitJcc("nz", "__io_dequeue_comp_unlock");
+    EmitGlobalStoreReg(X86Register.Rcx, "__io_done_tail");
+    DefineLabel("__io_dequeue_comp_unlock");
+    EmitGlobalLeaReg(X86Register.Rcx, "__io_done_cs");
+    EmitCallImport("kernel32.dll", "LeaveCriticalSection");
+    EmitMovRegMem(X86Register.Rax, -0x08, 8); // reload dequeued node after Win32 call
+    // Clear next on dequeued node (so it doesn't form dangling list links)
+    EmitBytes(0x48, 0x85, 0xC0);
+    EmitJcc("z", "__io_dequeue_comp_done");
+    EmitXorRegReg(X86Register.Rcx, X86Register.Rcx);
+    EmitMovIndirectMemReg(X86Register.Rax, IoCompOffNext, X86Register.Rcx);
+    DefineLabel("__io_dequeue_comp_done");
+    EmitRuntimeFunctionEnd();
+  }
+
+  private void EmitMmRawAlloc260() {
+    // mm_raw_alloc_260(): Allocate exactly 260 bytes of raw memory (for GetCurrentDirectoryA)
+    EmitRuntimeFunctionStart("mm_raw_alloc_260", 0, 0x20);
+    EmitMovRegImm(X86Register.Rcx, 260);
+    EmitCallRuntimeLabel("mm_raw_alloc");
+    EmitRuntimeFunctionEnd();
+  }
+
+  private void EmitIoPanicIo() {
+    // __gt_panic_io(): Called on unknown sync op code — should never happen
+    EmitRuntimeFunctionStart("__gt_panic_io", 0, 0x20);
+    var msgLabel = "__io_panic_msg";
+    DefineRdata(msgLabel, System.Text.Encoding.ASCII.GetBytes("PANIC: unknown I/O op code\0"));
+    EmitLeaRegRipRel(X86Register.Rcx, msgLabel);
+    EmitCallRuntimeLabel("maxon_panic");
     EmitRuntimeFunctionEnd();
   }
 }

@@ -147,7 +147,7 @@ public static class StandardToX86Conversion {
       foreach (var op in block.Operations) {
         foreach (var val in op.ReadValues) {
           lastUseOfValue[val] = scanIdx;
-          if (op is StdReturnOp or StdCallOp or StdCallRuntimeOp or StdCallRuntimeIfNonnullOp or StdTryCallOp)
+          if (op is StdReturnOp or StdCallOp or StdCallRuntimeOp or StdCallRuntimeIfNonnullOp or StdTryCallOp or StdTryCallRuntimeOp)
             sinkOnlyValues.Add(val);
           else
             usedByNonSink.Add(val);
@@ -958,6 +958,13 @@ public static class StandardToX86Conversion {
             // Runtime calls use the same calling convention as regular calls
             regManager.EmitCall(runtimeCallOp.Callee, runtimeCallOp.Args, runtimeCallOp.Result, x86Block,
               ConsumedArgs(runtimeCallOp.Args, lastUseOfValue, currentOpIndex));
+            break;
+          }
+
+          case StdTryCallRuntimeOp tryRuntimeCallOp: {
+            // Runtime try-calls: result in RAX, error flag in RDX (same convention as StdTryCallOp)
+            regManager.EmitTryCall(tryRuntimeCallOp.Callee, tryRuntimeCallOp.Args, tryRuntimeCallOp.Result, tryRuntimeCallOp.ErrorFlag, x86Block,
+              ConsumedArgs(tryRuntimeCallOp.Args, lastUseOfValue, currentOpIndex));
             break;
           }
 

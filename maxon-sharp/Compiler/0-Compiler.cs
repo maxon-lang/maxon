@@ -38,6 +38,9 @@ public class Compiler {
   [ThreadStatic] private static bool _mmDebug;
   public static bool MmDebug { get => _mmDebug; set => _mmDebug = value; }
 
+  [ThreadStatic] private static bool _asyncTrace;
+  public static bool AsyncTrace { get => _asyncTrace; set => _asyncTrace = value; }
+
   public CompileResult Compile(SourceFile[] sources, string outputPath, string? mlirOutputPath = null, bool returnIr = false, string? dumpStagesBasePath = null) {
     var userSourceFile = sources.Length == 1 ? sources[0].Path : null;
 
@@ -304,19 +307,15 @@ public static class StdlibLoader {
     Logger.Debug(LogCategory.Compiler, $"StdlibLoader: exeDir={exeDir}");
     if (string.IsNullOrEmpty(exeDir)) return null;
 
-    foreach (var levels in new[] { 0, 1, 2, 3, 4, 5 }) {
-      var path = exeDir;
-      for (int i = 0; i < levels && path != null; i++)
-        path = Path.GetDirectoryName(path);
-
-      if (path != null) {
-        var stdlibPath = Path.Combine(path, "stdlib");
-        Logger.Debug(LogCategory.Compiler, $"StdlibLoader: checking {stdlibPath}");
-        if (Directory.Exists(stdlibPath)) {
-          Logger.Debug(LogCategory.Compiler, $"StdlibLoader: found stdlib at {stdlibPath}");
-          return stdlibPath;
-        }
+    var path = exeDir;
+    while (path != null) {
+      var stdlibPath = Path.Combine(path, "stdlib");
+      Logger.Debug(LogCategory.Compiler, $"StdlibLoader: checking {stdlibPath}");
+      if (Directory.Exists(stdlibPath)) {
+        Logger.Debug(LogCategory.Compiler, $"StdlibLoader: found stdlib at {stdlibPath}");
+        return stdlibPath;
       }
+      path = Path.GetDirectoryName(path);
     }
     Logger.Debug(LogCategory.Compiler, "StdlibLoader: stdlib not found");
     return null;

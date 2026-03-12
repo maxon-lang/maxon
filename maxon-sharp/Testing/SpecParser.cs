@@ -88,6 +88,7 @@ public static partial class SpecParser {
       }
 
       bool mmTrace = MmTraceDirectiveRegex().IsMatch(testSection);
+      bool asyncTrace = AsyncTraceDirectiveRegex().IsMatch(testSection);
 
       var source = ExtractCodeBlock(testSection, "maxon");
       if (source == null) continue;
@@ -127,6 +128,9 @@ public static partial class SpecParser {
       if (mmTrace && expectation is SuccessExpectation mmSuccess) {
         mmSuccess.MmTrace = true;
       }
+      if (asyncTrace && expectation is SuccessExpectation atSuccess) {
+        atSuccess.AsyncTrace = true;
+      }
 
       tests.Add(new TestCase {
         Name = testName,
@@ -135,6 +139,7 @@ public static partial class SpecParser {
         Args = testArgs,
         SourceFiles = SplitMultiFileSource(source),
         MmTrace = mmTrace,
+        AsyncTrace = asyncTrace,
       });
     }
 
@@ -263,6 +268,9 @@ public static partial class SpecParser {
 
   [GeneratedRegex(@"<!--\s*MmTrace\s*-->")]
   private static partial Regex MmTraceDirectiveRegex();
+
+  [GeneratedRegex(@"<!--\s*AsyncTrace\s*-->")]
+  private static partial Regex AsyncTraceDirectiveRegex();
 
   [GeneratedRegex(@"^// --- file:\s*(.+)$", RegexOptions.Multiline)]
   private static partial Regex FileMarkerRegex();

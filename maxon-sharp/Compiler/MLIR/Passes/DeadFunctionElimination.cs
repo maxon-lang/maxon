@@ -48,6 +48,8 @@ public static class DeadFunctionElimination {
         foreach (var op in block.Operations) {
           if (op is MaxonCallOp call)
             EnqueueCallee(call.Callee);
+          if (op is MaxonAsyncCallOp asyncCall)
+            EnqueueCallee(asyncCall.Callee);
           if (op is MaxonFunctionRefOp fnRef)
             EnqueueCallee(fnRef.FunctionName);
           if (op is MaxonClosureCreateOp closureCreate)

@@ -548,6 +548,41 @@ panic("invariant violated")
 panic("expected {a}, got {b}")      // interpolated strings supported
 ```
 
+## Async/Await
+
+```maxon
+// Spawn a green thread
+var promise = async someFunction(arg1, arg2)
+
+// Wait for the result
+var result = await promise
+
+// Parallel work
+var p1 = async taskA()
+var p2 = async taskB()
+var r1 = await p1
+var r2 = await p2
+
+// Void functions
+var p = async doWork()
+await p
+
+// Throwing async functions
+var p = async mayFail(true)
+var result = try await p otherwise 0
+
+// Cancellation
+var p = async longRunning()
+p.cancel()
+```
+
+- All green threads run on a single OS thread (cooperative scheduling)
+- Context switches only at `await` points
+- Growable stacks (2KB initial, doubles as needed)
+- Throwing async functions require `try await` (not plain `await`)
+- `async` target must yield (contain I/O or `await` points)
+- Unawaited green threads are drained at program exit
+
 ## Arrays
 
 ```maxon

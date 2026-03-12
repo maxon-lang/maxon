@@ -50,6 +50,9 @@ public partial class X86CodeEmitter() {
   // Chkstk call sites for patching
   private readonly List<int> _chkstkCallSites = [];
 
+  // Counter for generating unique __gt_past_morestack labels
+  private int _morestackLabelCounter;
+
   private string _currentFunction = "";
 
   public IReadOnlyList<ImportEntry> Imports => _imports;
@@ -128,6 +131,36 @@ public partial class X86CodeEmitter() {
   public void Emit(X86Op op) {
     switch (op) {
       case X86PrologueOp prologue:
+        // Green thread stack growth check: before pushing rbp, verify we have enough
+        // stack space. If not, call __gt_morestack which relocates the stack.
+        // On the main thread, stackguard=0 so the check always passes (RSP > 0).
+        if (prologue.StackSize > 0) {
+          var pastLabel = $"__gt_past_morestack_{_morestackLabelCounter++}";
+          // LEA R10, [RSP - frameSize] — compute what RSP would be after allocation
+          if (prologue.StackSize <= 127) {
+            Rex.W().Reg(X86Register.R10).Emit(this);
+            EmitByte(0x8D); EmitByte(0x54); EmitByte(0x24); // LEA R10, [RSP + disp8]
+            EmitByte((byte)(-(int)prologue.StackSize & 0xFF));
+          } else {
+            Rex.W().Reg(X86Register.R10).Emit(this);
+            EmitByte(0x8D); EmitByte(0x94); EmitByte(0x24); // LEA R10, [RSP + disp32]
+            EmitDword(-(int)prologue.StackSize);
+          }
+          // MOV R11, [RIP + __gt_current]
+          EmitGlobalLoadReg(X86Register.R11, "__gt_current");
+          // CMP R10, [R11 + 0x50] (stackguard)
+          Rex.W().Reg(X86Register.R10).Rm(X86Register.R11).Emit(this);
+          EmitByte(0x3B); // CMP r64, r/m64
+          EmitByte((byte)(0x40 | (RegCode(X86Register.R10) << 3) | RegCode(X86Register.R11))); // mod=01 (disp8)
+          EmitByte(0x50); // disp8 = 0x50
+          // JAE past_morestack (skip if R10 >= stackguard)
+          EmitJcc("ae", pastLabel);
+          // CALL __gt_morestack
+          EmitByte(0xE8);
+          _relCallFixups.Add((_code.Count, "__gt_morestack"));
+          EmitDword(0);
+          DefineLabel(pastLabel);
+        }
         EmitPushReg(X86Register.Rbp);
         EmitMovRegReg(X86Register.Rbp, X86Register.Rsp);
         if (prologue.StackSize > 4096) {
@@ -392,6 +425,18 @@ public partial class X86CodeEmitter() {
     // [rsp+0x20] = main return value
     EmitBytes(0x48, 0x83, 0xEC, 0x28);
 
+    // Initialize green thread scheduler first — the stack growth check in every
+    // function prologue dereferences __gt_current, which must be non-NULL before
+    // any user code runs (including module initialization).
+    EmitByte(0xE8);
+    _relCallFixups.Add((_code.Count, "__gt_init"));
+    EmitDword(0);
+
+    // Initialize I/O subsystem (IOCP + worker threads) after green thread scheduler
+    EmitByte(0xE8);
+    _relCallFixups.Add((_code.Count, "__io_init"));
+    EmitDword(0);
+
     // call __module_init (initializes globals)
     if (!string.IsNullOrEmpty(moduleInitFunctionName)) {
       EmitByte(0xE8);
@@ -405,6 +450,16 @@ public partial class X86CodeEmitter() {
     EmitDword(0);
     // Save main's return value at [rsp+0x20]
     EmitBytes(0x48, 0x89, 0x44, 0x24, 0x20); // MOV [rsp+0x20], rax
+
+    // Drain any remaining green threads
+    EmitByte(0xE8);
+    _relCallFixups.Add((_code.Count, "__gt_cleanup"));
+    EmitDword(0);
+
+    // Shut down I/O subsystem after all green threads have finished
+    EmitByte(0xE8);
+    _relCallFixups.Add((_code.Count, "__io_shutdown"));
+    EmitDword(0);
 
     // Optionally clean up globals
     if (!string.IsNullOrEmpty(globalCleanupFunctionName)) {
@@ -964,6 +1019,23 @@ public partial class X86CodeEmitter() {
     Rex.W().Reg(rhs).Rm(lhs).Emit(this);
     EmitByte(0x39);
     EmitByte((byte)(0xC0 | (RegCode(rhs) << 3) | RegCode(lhs)));
+  }
+
+  private void EmitCmpRegImm(X86Register lhs, long immediate) {
+    Require64BitGpr(lhs, nameof(EmitCmpRegImm));
+    if (immediate >= -128 && immediate <= 127) {
+      // CMP r64, imm8: REX.W + 83 /7 ib
+      Rex.W().Rm(lhs).Emit(this);
+      EmitByte(0x83);
+      EmitByte((byte)(0xF8 | RegCode(lhs)));
+      EmitByte((byte)immediate);
+    } else {
+      // CMP r64, imm32: REX.W + 81 /7 id
+      Rex.W().Rm(lhs).Emit(this);
+      EmitByte(0x81);
+      EmitByte((byte)(0xF8 | RegCode(lhs)));
+      EmitDword((int)immediate);
+    }
   }
 
   private void EmitTestRegReg(X86Register lhs, X86Register rhs) {
