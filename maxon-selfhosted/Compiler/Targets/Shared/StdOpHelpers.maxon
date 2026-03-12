@@ -84,38 +84,44 @@ export function computeMaxParserSlotInFunc(func MlirFunction) returns SlotIndex
     return maxSlot
 end 'computeMaxParserSlotInFunc'
 
-// Check if an MlirOp produces a temp result slot during x86/arm64 lowering.
-function isTempProducingOp(op MlirOp) returns bool
+// Count how many temp result slots an MlirOp produces during x86/arm64 lowering.
+// OS-neutral ops (osExit, osWrite) expand to multiple target ops; count the worst case.
+function tempSlotCountForOp(op MlirOp) returns int(0 to 10)
     return match op 'check'
-        maxhl gives false
-        arith gives true
-        cf gives false
-        func(funcOp) gives isFuncCallOp(funcOp)
-        memref gives false
-        runtime gives false
-        sys(sysOp) gives isSysTempProducingOp(sysOp)
-        maxx64 to maxarm64 gives false
+        maxhl gives 0
+        arith gives 1
+        cf gives 0
+        func(funcOp) gives funcOpTempCount(funcOp)
+        memref gives 0
+        runtime gives 0
+        sys(sysOp) gives sysTempSlotCount(sysOp)
+        maxx64 to maxarm64 gives 0
     end 'check'
-end 'isTempProducingOp'
+end 'tempSlotCountForOp'
 
-function isFuncCallOp(op FuncOp) returns bool
+function funcOpTempCount(op FuncOp) returns int(0 to 1)
     return match op 'check'
-        call gives true
-        ret gives false
+        call gives 1
+        ret gives 0
     end 'check'
-end 'isFuncCallOp'
+end 'funcOpTempCount'
 
-function isSysTempProducingOp(op SysOp) returns bool
+// Worst-case temp slot count for each SysOp variant after lowering.
+// osExit expands to 1 syscall/iatCall (1 temp).
+// osWrite expands to up to 6 temps on Windows (GetStdHandle + WriteFile sequence).
+function sysTempSlotCount(op SysOp) returns int(0 to 10)
     return match op 'check'
-        syscall gives true
-        iatCall gives true
-        globalAddr gives true
-        stackAddr gives true
-        loadByte gives true
-        storeByte gives false
-        memcpy gives false
+        syscall gives 1
+        iatCall gives 1
+        globalAddr gives 1
+        stackAddr gives 1
+        loadByte gives 1
+        storeByte gives 0
+        memcpy gives 0
+        osExit gives 1
+        osWrite gives 6
     end 'check'
-end 'isSysTempProducingOp'
+end 'sysTempSlotCount'
 
 // Check if an MlirOp is a print operation (needs stack buffer).
 function isPrintOp(op MlirOp) returns bool
@@ -138,9 +144,7 @@ export function computeStackSizeForFunc(func MlirFunction, shadowSpace StackSize
             if slot >= 0 'hasSlot'
                 maxSlot = maxOf(maxSlot, b: slot)
             end 'hasSlot'
-            if isTempProducingOp(op) 'isTemp'
-                tempSlotCount = tempSlotCount + 1
-            end 'isTemp'
+            tempSlotCount = tempSlotCount + tempSlotCountForOp(op)
             if isPrintOp(op) 'isPrint'
                 hasPrint = true
             end 'isPrint'
@@ -212,19 +216,20 @@ function getJumpKindFromArith(op ArithOp) returns SlotIndex
 end 'getJumpKindFromArith'
 
 function decodeJumpKind(encoded SlotIndex) returns JumpKind
-    return match encoded 'decode'
-        0 gives JumpKind.eq
-        1 gives JumpKind.ne
-        2 gives JumpKind.lt
-        3 gives JumpKind.le
-        4 gives JumpKind.gt
-        5 gives JumpKind.ge
-        6 gives JumpKind.feq
-        7 gives JumpKind.fne
-        8 gives JumpKind.flt
-        9 gives JumpKind.fle
-        10 gives JumpKind.fgt
-        11 gives JumpKind.fge
-        default gives JumpKind.boolTest
+    match encoded 'decode'
+        0 then return JumpKind.eq
+        1 then return JumpKind.ne
+        2 then return JumpKind.lt
+        3 then return JumpKind.le
+        4 then return JumpKind.gt
+        5 then return JumpKind.ge
+        6 then return JumpKind.feq
+        7 then return JumpKind.fne
+        8 then return JumpKind.flt
+        9 then return JumpKind.fle
+        10 then return JumpKind.fgt
+        11 then return JumpKind.fge
+        default then break 'decode'
     end 'decode'
+    panic("decodeJumpKind: unknown encoded value {encoded}")
 end 'decodeJumpKind'

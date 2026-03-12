@@ -705,9 +705,17 @@ function parseExpressionBP(project Project, block MlirBlock, tokens TokenArray, 
         pos = right.nextPos
 
         let resultId = nextValueId(project)
+        let eitherIsFloat = leftIsFloat or right.isFloat
         try emitBinaryOp(block, kind: opToken.kind, resultId: resultId, leftId: leftId, rightId: right.valueId, leftIsFloat: leftIsFloat, rightIsFloat: right.isFloat) otherwise ignore
         leftId = resultId
-        leftIsFloat = false
+        // Comparison ops produce int (bool), division always produces float, arithmetic on floats produces float
+        if opToken.kind == TokenKind.equalsEquals or opToken.kind == TokenKind.bangEquals or opToken.kind == TokenKind.lessThan or opToken.kind == TokenKind.lessEquals or opToken.kind == TokenKind.greaterThan or opToken.kind == TokenKind.greaterEquals 'isCmp'
+            leftIsFloat = false
+        end 'isCmp' else if opToken.kind == TokenKind.slash 'isDiv'
+            leftIsFloat = true
+        end 'isDiv' else 'notCmp'
+            leftIsFloat = eitherIsFloat
+        end 'notCmp'
         leftIsStringConst = false
         leftStringConstValue = ByteArray{}
     end 'prattLoop'
@@ -765,11 +773,11 @@ function parseIdentifierExpr(project Project, block MlirBlock, tokens TokenArray
         end 'hasArgs'
         pos = pos + 1  // skip ')'
 
-        // trunc() converts a float to int — error if argument is not a float
+        // trunc() converts a float to int
         if token.value == b"trunc" 'isTrunc'
-            if not lastArgIsFloat 'truncNonFloat'
+            if not lastArgIsFloat 'notFloat'
                 throw ParserError.typeError
-            end 'truncNonFloat'
+            end 'notFloat'
             let truncArgId = try argIds.get(0) otherwise 0
             return ExprResult{valueId: truncArgId, nextPos: pos, isFloat: false, isStringConst: false, stringConstValue: ByteArray{}}
         end 'isTrunc'

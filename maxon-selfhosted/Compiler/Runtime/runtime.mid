@@ -1,0 +1,125 @@
+// Runtime functions expressed as mid-level MLIR IR.
+// Parsed by MidLevelParser into MlirFunction objects.
+// Uses sys osExit / sys osWrite for OS-independent runtime.
+
+// _start: process entry point. Calls main() and exits with its return code.
+func _start 0 void
+  block entry:
+    v0 = func call main
+    sys osExit v0
+    v1 = arith constI64 0
+    func ret v1
+end
+
+// write_stdout(ptr len): writes len bytes at ptr to stdout.
+func write_stdout 2 void
+  block entry:
+    v0 = memref loadSlot 0
+    v1 = memref loadSlot 1
+    sys osWrite v0 v1
+    v2 = arith constI64 0
+    func ret v2
+end
+
+// i64_to_string(value buffer_ptr): converts integer to decimal string in buffer.
+// Returns number of bytes written.
+func i64_to_string 2 i64
+  block entry:
+    v0 = memref loadSlot 0
+    v1 = arith constI64 0
+    v2 = arith cmpI64Eq v0 v1
+    cf condBr v2 zero_case check_neg
+
+  block zero_case:
+    v3 = memref loadSlot 1
+    v4 = arith constI64 0
+    v5 = arith constI64 0x30
+    sys storeByte v3 v4 v5
+    v6 = arith constI64 1
+    func ret v6
+
+  block check_neg:
+    v7 = arith constI64 0
+    memref storeSlot 5 v7
+    v8 = memref loadSlot 0
+    memref storeSlot 6 v8
+    v9 = arith constI64 0
+    v10 = arith cmpI64Lt v8 v9
+    cf condBr v10 negate setup
+
+  block negate:
+    v11 = memref loadSlot 6
+    v12 = arith negI64 v11
+    memref storeSlot 6 v12
+    v13 = arith constI64 1
+    memref storeSlot 5 v13
+    cf br setup
+
+  block setup:
+    v14 = sys stackAddr 2
+    v15 = arith constI64 20
+    v16 = arith addI64 v14 v15
+    memref storeSlot 7 v16
+    v17 = arith constI64 0
+    v18 = arith constI64 0
+    sys storeByte v16 v18 v17
+    cf br digit_loop
+
+  block digit_loop:
+    v19 = memref loadSlot 7
+    v20 = arith constI64 1
+    v21 = arith subI64 v19 v20
+    memref storeSlot 7 v21
+    v22 = memref loadSlot 6
+    v23 = arith constI64 10
+    v24 = arith remI64 v22 v23
+    v25 = arith divI64 v22 v23
+    memref storeSlot 6 v25
+    v26 = arith constI64 0x30
+    v27 = arith addI64 v24 v26
+    v28 = arith constI64 0
+    sys storeByte v21 v28 v27
+    v29 = arith constI64 0
+    v30 = memref loadSlot 6
+    v31 = arith cmpI64Gt v30 v29
+    cf condBr v31 digit_loop check_sign
+
+  block check_sign:
+    v32 = memref loadSlot 5
+    v33 = arith constI64 0
+    v34 = arith cmpI64Gt v32 v33
+    cf condBr v34 prepend_minus copy_phase
+
+  block prepend_minus:
+    v35 = memref loadSlot 7
+    v36 = arith constI64 1
+    v37 = arith subI64 v35 v36
+    memref storeSlot 7 v37
+    v38 = arith constI64 0x2D
+    v39 = arith constI64 0
+    sys storeByte v37 v39 v38
+    cf br copy_phase
+
+  block copy_phase:
+    v40 = sys stackAddr 2
+    v41 = arith constI64 20
+    v42 = arith addI64 v40 v41
+    v43 = memref loadSlot 7
+    v44 = arith subI64 v42 v43
+    v45 = memref loadSlot 1
+    sys memcpy v45 v43 v44
+    func ret v44
+
+end
+
+// __rt_printInt(value): converts to string and prints to stdout.
+func __rt_printInt 1 void
+  block entry:
+    v0 = memref loadSlot 0
+    v1 = sys stackAddr 1
+    v2 = func call i64_to_string v0 v1
+    v3 = sys stackAddr 1
+    v4 = func call write_stdout v3 v2
+    v5 = arith constI64 0
+    func ret v5
+end

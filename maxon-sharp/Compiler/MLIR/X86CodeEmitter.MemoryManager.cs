@@ -128,8 +128,9 @@ public partial class X86CodeEmitter {
     EmitMmTracePrintTag();
     EmitMmTracePrintHex();
     EmitMmTracePrintI64();
+    // Always emit tag lookup so mm_leak_check can print type names
+    EmitMmTagLookup(tagTable ?? []);
     if (Compiler.MmTrace) {
-      EmitMmTagLookup(tagTable ?? []);
       EmitMmTracePrintPackedTag();
     }
     EmitMmAlloc();
@@ -838,8 +839,10 @@ public partial class X86CodeEmitter {
   // Checks global alloc counter; if nonzero, prints leak count and exits with code 101.
   // -------------------------------------------------------------------------
   private void EmitMmLeakCheck() {
-    // Stack: [rbp-56..rbp-80]=24-byte string buffer
-    EmitRuntimeFunctionStart("mm_leak_check", 0, 0x80);
+    // Stack layout:
+    //   [rbp-8]  = saved alloc_count
+    //   [rbp-56..rbp-80] = 24-byte string buffer for i64-to-string
+    EmitRuntimeFunctionStart("mm_leak_check", 0, 0x60);
 
     // Check global alloc counter
     EmitSymdataLoadI64(X86Register.Rax, "__mm_alloc_count");
@@ -847,13 +850,13 @@ public partial class X86CodeEmitter {
     EmitJcc("z", "mm_leak_check_done"); // count == 0, no leaks
 
     // Print warning: "MM leak: N allocation(s) remain\n" to stderr
-    EmitMovMemReg(-0x28, X86Register.Rax, 8); // save count
+    EmitMovMemReg(-0x08, X86Register.Rax, 8); // [rbp-8] = count
 
     EmitLeaRegSymdataRel(X86Register.Rcx, "__mm_leak_prefix");
     EmitByte(0xE8); _relCallFixups.Add((_code.Count, "maxon_write_stderr")); EmitDword(0);
 
     // Convert count to string
-    EmitMovRegMem(X86Register.Rcx, -0x28, 8);  // RCX = count
+    EmitMovRegMem(X86Register.Rcx, -0x08, 8);  // RCX = count
     EmitLeaRegMem(X86Register.Rdx, -0x50);     // RDX = &buffer at [rbp-0x50]
     EmitByte(0xE8); _relCallFixups.Add((_code.Count, "maxon_u64_to_string")); EmitDword(0);
 

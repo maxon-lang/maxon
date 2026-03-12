@@ -2,14 +2,58 @@
 // CPU emitters consume OsDescriptor to handle OS differences -- no CPU*OS dispatch needed.
 // Runtime functions (write_stdout, i64_to_string, __rt_printInt, _start) are prepended
 // to the module as mid-level IR before target-specific lowering.
+// The runtime is loaded from runtime.mid (text-based MLIR) by MidLevelParser.
+
+function loadRuntimeFunctions() returns MlirFunctionArray
+    let runtimePath = findRuntimePath()
+    if runtimePath.isEmpty() 'noRuntime'
+        panic("Cannot find runtime.mid -- searched up from current directory")
+    end 'noRuntime'
+
+    let source = try File.readBinary(runtimePath) otherwise 'readErr'
+        panic("Failed to read runtime.mid at {runtimePath}")
+    end 'readErr'
+
+    return parseMidModule(source, startValueId: 0)
+end 'loadRuntimeFunctions'
+
+function findRuntimePath() returns FilePath
+    var dir = Directory.currentPath()
+    for _ in 0 upto 10 'search'
+        // Look for maxon-selfhosted/Compiler/Runtime/runtime.mid
+        let candidate = dir.join("maxon-selfhosted").join("Compiler").join("Runtime").join("runtime.mid")
+        if candidate.fileExists() 'found'
+            return candidate
+        end 'found'
+        // Also check Compiler/Runtime/runtime.mid (if we're inside maxon-selfhosted)
+        let candidate2 = dir.join("Compiler").join("Runtime").join("runtime.mid")
+        if candidate2.fileExists() 'found2'
+            return candidate2
+        end 'found2'
+        // Also check Runtime/runtime.mid (if we're inside Compiler)
+        let candidate3 = dir.join("Runtime").join("runtime.mid")
+        if candidate3.fileExists() 'found3'
+            return candidate3
+        end 'found3'
+        // Also check runtime.mid directly
+        let candidate4 = dir.join("runtime.mid")
+        if candidate4.fileExists() 'found4'
+            return candidate4
+        end 'found4'
+        let parentDir = dir.parent()
+        if parentDir.isEmpty() 'noParent'
+            return FilePath from ""
+        end 'noParent'
+        dir = parentDir
+    end 'search'
+    return FilePath from ""
+end 'findRuntimePath'
 
 export function emitBackend(module MlirModule, target Target, globalData GlobalDataTable) returns CodeResult throws CompileError
-    let osDesc = makeOsDescriptor(target)
-
-    // Build runtime functions and prepend them to the module.
+    // Load runtime functions from runtime.mid and prepend them to the module.
     // These are expressed as mid-level IR (arith/cf/func/memref/sys ops)
     // and will be lowered by the target backends just like user functions.
-    let runtimeFuncs = buildRuntimeFunctions(osDesc)
+    let runtimeFuncs = loadRuntimeFunctions()
     var augmentedModule = createMlirModule()
 
     // Runtime functions come first so they appear before user functions in the code.
@@ -23,8 +67,8 @@ export function emitBackend(module MlirModule, target Target, globalData GlobalD
 
     var result = CodeResult{code: ByteArray{}, mainCallFixupOffset: 0, relocations: RelocationArray{}, globalData: globalData}
     match target.cpu 'cpu'
-        CpuArch.x86_64 then result = emitX86(lowerMidToMaxX64(augmentedModule, target: target), target: target, osDesc: osDesc, globalData: globalData)
-        CpuArch.aarch64 then result = emitMaxArm64(lowerMidToMaxArm64(augmentedModule, target: target), target: target, osDesc: osDesc, globalData: globalData)
+        CpuArch.x86_64 then result = emitX86(lowerMidToMaxX64(augmentedModule, target: target), target: target, globalData: globalData)
+        CpuArch.aarch64 then result = emitMaxArm64(lowerMidToMaxArm64(augmentedModule, target: target), target: target, globalData: globalData)
     end 'cpu'
     return result
 end 'emitBackend'

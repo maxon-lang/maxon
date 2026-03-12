@@ -1,0 +1,586 @@
+// MidLevelParser: parses .mid text files into MlirFunction objects.
+// The .mid format uses tokens compatible with the Maxon lexer:
+//   func <name> <paramCount> <returnType> ... end
+//   block <label>:
+//   v0 = arith constI64 <value>
+//   memref storeSlot <slotId> <valueRef>
+//   cf br b0
+//   cf condBr v0 b1 b2
+//   func ret v0
+//   sys osExit v0
+//   sys osWrite v0 v1
+//   etc.
+
+typealias MidTokenIndex = int(0 to 100000)
+
+// State for parsing a single function.
+type MidFuncState
+    // Local value name -> ValueId map
+    export var valueNames ByteArrayArray
+    export var valueIds ValueIdArray
+    // Block label -> BlockId map
+    export var blockLabels ByteArrayArray
+    export var blockIds BlockIdArray
+    // Monotonic ValueId counter
+    export var nextId ValueId
+end 'MidFuncState'
+
+function createMidFuncState(startId ValueId) returns MidFuncState
+    return MidFuncState{
+        valueNames: ByteArrayArray{},
+        valueIds: ValueIdArray{},
+        blockLabels: ByteArrayArray{},
+        blockIds: BlockIdArray{},
+        nextId: startId
+    }
+end 'createMidFuncState'
+
+function allocValueId(state MidFuncState, name ByteArray) returns ValueId
+    let id = state.nextId
+    state.nextId = state.nextId + 1
+    state.valueNames.push(name)
+    state.valueIds.push(id)
+    return id
+end 'allocValueId'
+
+function lookupValueId(state MidFuncState, name ByteArray) returns ValueId
+    for (i, n) in state.valueNames.enumerated() 'find'
+        if bytesEqual(n, b: name) 'match'
+            return try state.valueIds.get(i) otherwise 'bug'
+                panic("MidLevelParser: valueIds/valueNames arrays out of sync at index {i}")
+            end 'bug'
+        end 'match'
+    end 'find'
+    panic("MidLevelParser: unknown value name '{String.from(name)}'")
+    return 0
+end 'lookupValueId'
+
+function allocBlockId(state MidFuncState, label ByteArray) returns BlockId
+    let id = state.blockIds.count()
+    state.blockLabels.push(label)
+    state.blockIds.push(id)
+    return id
+end 'allocBlockId'
+
+function lookupBlockId(state MidFuncState, label ByteArray) returns BlockId
+    for (i, n) in state.blockLabels.enumerated() 'find'
+        if bytesEqual(n, b: label) 'match'
+            return try state.blockIds.get(i) otherwise 'bug'
+                panic("MidLevelParser: blockIds/blockLabels arrays out of sync at index {i}")
+            end 'bug'
+        end 'match'
+    end 'find'
+    panic("MidLevelParser: unknown block label '{String.from(label)}'")
+    return 0
+end 'lookupBlockId'
+
+// --- Token helpers ---
+
+function midTokenAt(tokens TokenArray, pos MidTokenIndex) returns Token
+    return try tokens.get(pos) otherwise Token{kind: TokenKind.eof, value: ByteArray{}, line: 0, column: 0}
+end 'midTokenAt'
+
+function midSkipNewlines(tokens TokenArray, pos MidTokenIndex) returns MidTokenIndex
+    var p = pos
+    while p < tokens.count() 'skip'
+        let t = midTokenAt(tokens, pos: p)
+        if t.kind != TokenKind.newline 'notNl'
+            break
+        end 'notNl'
+        p = p + 1
+    end 'skip'
+    return p
+end 'midSkipNewlines'
+
+// Parse a signed integer value from current position.
+// Handles optional leading minus: - <intLiteral>
+// Also handles hex literals (0x...).
+function midParseIntValue(tokens TokenArray, pos MidTokenIndex) returns ParsedInt
+    let t = midTokenAt(tokens, pos: pos)
+    if t.kind == TokenKind.minus 'negative'
+        let numToken = midTokenAt(tokens, pos: pos + 1)
+        return 0 - midParseUnsignedInt(numToken.value)
+    end 'negative'
+    return midParseUnsignedInt(t.value)
+end 'midParseIntValue'
+
+// How many tokens does the integer value consume?
+function midIntValueTokenCount(tokens TokenArray, pos MidTokenIndex) returns MidTokenIndex
+    let t = midTokenAt(tokens, pos: pos)
+    if t.kind == TokenKind.minus 'negative'
+        return 2
+    end 'negative'
+    return 1
+end 'midIntValueTokenCount'
+
+// Parse an unsigned integer from a token value (decimal or hex).
+function midParseUnsignedInt(s ByteArray) returns ParsedInt
+    let sLen = s.count()
+    if sLen < 1 'empty'
+        return 0
+    end 'empty'
+
+    // Check for 0x prefix
+    if sLen >= 2 'checkHex'
+        let first = try s.get(0) otherwise 0
+        let second = try s.get(1) otherwise 0
+        if first == '0' and (second == 'x' or second == 'X') 'isHex'
+            return midParseHex(s, startIndex: 2)
+        end 'isHex'
+    end 'checkHex'
+
+    // Decimal
+    var result = 0
+    for pi in 0 upto sLen 'digits'
+        let b = try s.get(pi) otherwise 0
+        if b >= '0' and b <= '9' 'digit'
+            result = result * 10 + (b - '0')
+        end 'digit'
+    end 'digits'
+    return result
+end 'midParseUnsignedInt'
+
+function midParseHex(s ByteArray, startIndex MidTokenIndex) returns ParsedInt
+    var result = 0
+    for pi in startIndex upto s.count() 'hexDigits'
+        let b = try s.get(pi) otherwise 0
+        if b >= '0' and b <= '9' 'decDigit'
+            result = result * 16 + (b - '0')
+        end 'decDigit' else if b >= 'a' and b <= 'f' 'lowerHex'
+            result = result * 16 + (b - 'a' + 10)
+        end 'lowerHex' else if b >= 'A' and b <= 'F' 'upperHex'
+            result = result * 16 + (b - 'A' + 10)
+        end 'upperHex'
+    end 'hexDigits'
+    return result
+end 'midParseHex'
+
+// --- Main parse entry point ---
+
+// Parse a .mid file and return an array of MlirFunctions.
+// startValueId: first ValueId to allocate (avoids collision with user code).
+export function parseMidModule(source ByteArray, startValueId ValueId) returns MlirFunctionArray
+    let tokens = tokenize(source)
+    var funcs = MlirFunctionArray{}
+    var pos = midSkipNewlines(tokens, pos: 0)
+    var currentValueId = startValueId
+
+    while pos < tokens.count() 'parseLoop'
+        let t = midTokenAt(tokens, pos: pos)
+        if t.kind == TokenKind.eof 'done'
+            break
+        end 'done'
+
+        if t.kind == TokenKind.identifier and bytesEqual(t.value, b: b"func") 'isFunc'
+            let startId = currentValueId
+            let result = midParseFunction(tokens, startPos: pos, startValueId: startId)
+            funcs.push(result.func)
+            currentValueId = result.nextValueId
+            pos = result.nextPos
+        end 'isFunc' else 'skipNonFunc'
+            // Skip comments (already handled by lexer) and other tokens
+            pos = pos + 1
+        end 'skipNonFunc'
+
+        pos = midSkipNewlines(tokens, pos: pos)
+    end 'parseLoop'
+
+    return funcs
+end 'parseMidModule'
+
+// Result of parsing a single function.
+type MidFuncResult
+    export var func MlirFunction
+    export var nextPos MidTokenIndex
+    export var nextValueId ValueId
+end 'MidFuncResult'
+
+// Parse a single function: func <name> <paramCount> <returnType> ... end
+function midParseFunction(tokens TokenArray, startPos MidTokenIndex, startValueId ValueId) returns MidFuncResult
+    var pos = startPos + 1  // skip 'func'
+
+    // Function name
+    let nameToken = midTokenAt(tokens, pos: pos)
+    pos = pos + 1
+
+    // Param count
+    let paramCountToken = midTokenAt(tokens, pos: pos)
+    let paramCount = midParseUnsignedInt(paramCountToken.value)
+    pos = pos + 1
+
+    // Return type
+    let returnTypeToken = midTokenAt(tokens, pos: pos)
+    pos = pos + 1
+
+    pos = midSkipNewlines(tokens, pos: pos)
+
+    // Create function
+    var func = createMlirFunction(nameToken.value, returnType: returnTypeToken.value)
+    func.paramCount = paramCount
+
+    // Create state for this function
+    var state = createMidFuncState(startValueId)
+
+    // First pass: collect all block labels to pre-allocate BlockIds
+    midCollectBlockLabels(tokens, startPos: pos, state: state)
+
+    // Second pass: parse blocks and ops
+    pos = midParseBlocks(tokens, startPos: pos, func: func, state: state)
+
+    // Skip 'end'
+    let endToken = midTokenAt(tokens, pos: pos)
+    if endToken.kind == TokenKind.end 'hasEnd'
+        pos = pos + 1
+    end 'hasEnd'
+    pos = midSkipNewlines(tokens, pos: pos)
+
+    return MidFuncResult{func: func, nextPos: pos, nextValueId: state.nextId}
+end 'midParseFunction'
+
+// First pass: scan tokens for block labels to pre-allocate BlockIds.
+// A block label pattern is: "block" <identifier> ":"
+function midCollectBlockLabels(tokens TokenArray, startPos MidTokenIndex, state MidFuncState)
+    var pos = startPos
+    while pos < tokens.count() 'scan'
+        let t = midTokenAt(tokens, pos: pos)
+        if t.kind == TokenKind.end 'atEnd'
+            break
+        end 'atEnd'
+        if t.kind == TokenKind.eof 'atEof'
+            break
+        end 'atEof'
+
+        // Look for: identifier("block") identifier(<label>) colon
+        if t.kind == TokenKind.identifier and bytesEqual(t.value, b: b"block") 'isBlock'
+            let labelToken = midTokenAt(tokens, pos: pos + 1)
+            if labelToken.kind == TokenKind.identifier 'hasLabel'
+                let colonToken = midTokenAt(tokens, pos: pos + 2)
+                if colonToken.kind == TokenKind.colon 'hasColon'
+                    let _ = allocBlockId(state, label: labelToken.value)
+                end 'hasColon'
+            end 'hasLabel'
+        end 'isBlock'
+
+        pos = pos + 1
+    end 'scan'
+end 'midCollectBlockLabels'
+
+// Second pass: parse blocks within the function body.
+function midParseBlocks(tokens TokenArray, startPos MidTokenIndex, func MlirFunction, state MidFuncState) returns MidTokenIndex
+    var pos = startPos
+
+    while pos < tokens.count() 'blockLoop'
+        let t = midTokenAt(tokens, pos: pos)
+        if t.kind == TokenKind.end 'atEnd'
+            break
+        end 'atEnd'
+        if t.kind == TokenKind.eof 'atEof'
+            break
+        end 'atEof'
+
+        // Expect: "block" <label> ":"
+        if t.kind == TokenKind.identifier and bytesEqual(t.value, b: b"block") 'isBlock'
+            let labelToken = midTokenAt(tokens, pos: pos + 1)
+            pos = pos + 3  // skip "block" <label> ":"
+            pos = midSkipNewlines(tokens, pos: pos)
+
+            var block = addBlock(func.region, label: labelToken.value)
+
+            // Parse ops within this block until next "block" or "end"
+            pos = midParseBlockOps(tokens, startPos: pos, block: block, state: state)
+        end 'isBlock' else 'skipOther'
+            pos = pos + 1
+            pos = midSkipNewlines(tokens, pos: pos)
+        end 'skipOther'
+    end 'blockLoop'
+
+    return pos
+end 'midParseBlocks'
+
+// Parse ops within a single block.
+function midParseBlockOps(tokens TokenArray, startPos MidTokenIndex, block MlirBlock, state MidFuncState) returns MidTokenIndex
+    var pos = startPos
+
+    while pos < tokens.count() 'opLoop'
+        let t = midTokenAt(tokens, pos: pos)
+
+        // Stop at end of function or start of next block
+        if t.kind == TokenKind.end 'atEnd'
+            break
+        end 'atEnd'
+        if t.kind == TokenKind.eof 'atEof'
+            break
+        end 'atEof'
+        if t.kind == TokenKind.identifier and bytesEqual(t.value, b: b"block") 'nextBlock'
+            break
+        end 'nextBlock'
+        if t.kind == TokenKind.newline 'skipNl'
+            pos = pos + 1
+            continue
+        end 'skipNl'
+
+        // Parse an op line. Two forms:
+        // 1. <valueRef> = <dialect> <opName> <args...>   (op with result)
+        // 2. <dialect> <opName> <args...>                (op without result)
+        pos = midParseOp(tokens, startPos: pos, block: block, state: state)
+        pos = midSkipNewlines(tokens, pos: pos)
+    end 'opLoop'
+
+    return pos
+end 'midParseBlockOps'
+
+// Parse a single op line.
+function midParseOp(tokens TokenArray, startPos MidTokenIndex, block MlirBlock, state MidFuncState) returns MidTokenIndex
+    var pos = startPos
+    let t = midTokenAt(tokens, pos: pos)
+
+    // Check if this is an assignment: vN = ...
+    let nextT = midTokenAt(tokens, pos: pos + 1)
+    if nextT.kind == TokenKind.equals 'isAssignment'
+        // vN = <dialect> <opName> <args...>
+        let resultName = t.value
+        let resultId = allocValueId(state, name: resultName)
+        pos = pos + 2  // skip vN and =
+        return midParseOpBody(tokens, startPos: pos, block: block, state: state, resultId: resultId)
+    end 'isAssignment'
+
+    // No assignment: <dialect> <opName> <args...>
+    return midParseOpBody(tokens, startPos: pos, block: block, state: state, resultId: 0)
+end 'midParseOp'
+
+// Parse the body of an op after optional "vN = ".
+// Current token is the dialect name.
+function midParseOpBody(tokens TokenArray, startPos MidTokenIndex, block MlirBlock, state MidFuncState, resultId ValueId) returns MidTokenIndex
+    var pos = startPos
+    let dialectToken = midTokenAt(tokens, pos: pos)
+    pos = pos + 1
+    let opToken = midTokenAt(tokens, pos: pos)
+    pos = pos + 1
+
+    let dialect = dialectToken.value
+    let opName = opToken.value
+
+    // Dispatch on dialect
+    if bytesEqual(dialect, b: b"arith") 'isArith'
+        return midParseArithOp(tokens, startPos: pos, block: block, state: state, resultId: resultId, opName: opName)
+    end 'isArith' else if bytesEqual(dialect, b: b"memref") 'isMemref'
+        return midParseMemRefOp(tokens, startPos: pos, block: block, state: state, resultId: resultId, opName: opName)
+    end 'isMemref' else if bytesEqual(dialect, b: b"cf") 'isCf'
+        return midParseCfOp(tokens, startPos: pos, block: block, state: state, opName: opName)
+    end 'isCf' else if bytesEqual(dialect, b: b"sys") 'isSys'
+        return midParseSysOp(tokens, startPos: pos, block: block, state: state, resultId: resultId, opName: opName)
+    end 'isSys' else if bytesEqual(dialect, b: b"func") 'isFunc'
+        return midParseFuncOp(tokens, startPos: pos, block: block, state: state, resultId: resultId, opName: opName)
+    end 'isFunc' else 'unknownDialect'
+        panic("MidLevelParser: unknown dialect '{String.from(dialect)}'")
+    end 'unknownDialect'
+    return pos
+end 'midParseOpBody'
+
+// Arith ops
+function midParseArithOp(tokens TokenArray, startPos MidTokenIndex, block MlirBlock, state MidFuncState, resultId ValueId, opName ByteArray) returns MidTokenIndex
+    var pos = startPos
+
+    // constI64: arith constI64 <value>
+    if bytesEqual(opName, b: b"constI64") 'isConst'
+        let value = midParseIntValue(tokens, pos: pos)
+        let advance = midIntValueTokenCount(tokens, pos: pos)
+        pos = pos + advance
+        block.ops.push(MlirOp.arith(ArithOp.constI64(resultId, value)))
+        return pos
+    end 'isConst'
+
+    // Binary ops: arith <op> <left> <right>
+    if bytesEqual(opName, b: b"addI64") 'isAdd'
+        let leftId = lookupValueId(state, name: midTokenAt(tokens, pos: pos).value)
+        let rightId = lookupValueId(state, name: midTokenAt(tokens, pos: pos + 1).value)
+        block.ops.push(MlirOp.arith(ArithOp.addI64(resultId, leftId, rightId)))
+        return pos + 2
+    end 'isAdd'
+    if bytesEqual(opName, b: b"subI64") 'isSub'
+        let leftId = lookupValueId(state, name: midTokenAt(tokens, pos: pos).value)
+        let rightId = lookupValueId(state, name: midTokenAt(tokens, pos: pos + 1).value)
+        block.ops.push(MlirOp.arith(ArithOp.subI64(resultId, leftId, rightId)))
+        return pos + 2
+    end 'isSub'
+    if bytesEqual(opName, b: b"mulI64") 'isMul'
+        let leftId = lookupValueId(state, name: midTokenAt(tokens, pos: pos).value)
+        let rightId = lookupValueId(state, name: midTokenAt(tokens, pos: pos + 1).value)
+        block.ops.push(MlirOp.arith(ArithOp.mulI64(resultId, leftId, rightId)))
+        return pos + 2
+    end 'isMul'
+    if bytesEqual(opName, b: b"divI64") 'isDiv'
+        let leftId = lookupValueId(state, name: midTokenAt(tokens, pos: pos).value)
+        let rightId = lookupValueId(state, name: midTokenAt(tokens, pos: pos + 1).value)
+        block.ops.push(MlirOp.arith(ArithOp.divI64(resultId, leftId, rightId)))
+        return pos + 2
+    end 'isDiv'
+    if bytesEqual(opName, b: b"remI64") 'isRem'
+        let leftId = lookupValueId(state, name: midTokenAt(tokens, pos: pos).value)
+        let rightId = lookupValueId(state, name: midTokenAt(tokens, pos: pos + 1).value)
+        block.ops.push(MlirOp.arith(ArithOp.remI64(resultId, leftId, rightId)))
+        return pos + 2
+    end 'isRem'
+
+    // Unary op: arith negI64 <operand>
+    if bytesEqual(opName, b: b"negI64") 'isNeg'
+        let operandId = lookupValueId(state, name: midTokenAt(tokens, pos: pos).value)
+        block.ops.push(MlirOp.arith(ArithOp.negI64(resultId, operandId)))
+        return pos + 1
+    end 'isNeg'
+
+    // Comparison ops
+    if bytesEqual(opName, b: b"cmpI64Eq") 'isCmpEq'
+        let leftId = lookupValueId(state, name: midTokenAt(tokens, pos: pos).value)
+        let rightId = lookupValueId(state, name: midTokenAt(tokens, pos: pos + 1).value)
+        block.ops.push(MlirOp.arith(ArithOp.cmpI64Eq(resultId, leftId, rightId)))
+        return pos + 2
+    end 'isCmpEq'
+    if bytesEqual(opName, b: b"cmpI64Lt") 'isCmpLt'
+        let leftId = lookupValueId(state, name: midTokenAt(tokens, pos: pos).value)
+        let rightId = lookupValueId(state, name: midTokenAt(tokens, pos: pos + 1).value)
+        block.ops.push(MlirOp.arith(ArithOp.cmpI64Lt(resultId, leftId, rightId)))
+        return pos + 2
+    end 'isCmpLt'
+    if bytesEqual(opName, b: b"cmpI64Gt") 'isCmpGt'
+        let leftId = lookupValueId(state, name: midTokenAt(tokens, pos: pos).value)
+        let rightId = lookupValueId(state, name: midTokenAt(tokens, pos: pos + 1).value)
+        block.ops.push(MlirOp.arith(ArithOp.cmpI64Gt(resultId, leftId, rightId)))
+        return pos + 2
+    end 'isCmpGt'
+
+    panic("MidLevelParser: unknown arith op '{String.from(opName)}'")
+    return pos
+end 'midParseArithOp'
+
+// MemRef ops
+function midParseMemRefOp(tokens TokenArray, startPos MidTokenIndex, block MlirBlock, state MidFuncState, resultId ValueId, opName ByteArray) returns MidTokenIndex
+    var pos = startPos
+
+    // loadSlot: memref loadSlot <slotId>
+    if bytesEqual(opName, b: b"loadSlot") 'isLoad'
+        let slotId = midParseUnsignedInt(midTokenAt(tokens, pos: pos).value)
+        block.ops.push(MlirOp.memref(MemRefOp.loadSlot(resultId, slotId)))
+        return pos + 1
+    end 'isLoad'
+
+    // storeSlot: memref storeSlot <slotId> <valueRef>
+    if bytesEqual(opName, b: b"storeSlot") 'isStore'
+        let slotId = midParseUnsignedInt(midTokenAt(tokens, pos: pos).value)
+        let valueRefId = lookupValueId(state, name: midTokenAt(tokens, pos: pos + 1).value)
+        block.ops.push(MlirOp.memref(MemRefOp.storeSlot(slotId, valueRefId)))
+        return pos + 2
+    end 'isStore'
+
+    panic("MidLevelParser: unknown memref op '{String.from(opName)}'")
+    return pos
+end 'midParseMemRefOp'
+
+// Cf ops (terminators)
+function midParseCfOp(tokens TokenArray, startPos MidTokenIndex, block MlirBlock, state MidFuncState, opName ByteArray) returns MidTokenIndex
+    var pos = startPos
+
+    // br: cf br <blockRef>
+    if bytesEqual(opName, b: b"br") 'isBr'
+        let targetId = lookupBlockId(state, label: midTokenAt(tokens, pos: pos).value)
+        block.terminator = MlirOp.cf(CfOp.br(targetId))
+        block.hasTerminator = true
+        return pos + 1
+    end 'isBr'
+
+    // condBr: cf condBr <condRef> <thenBlock> <elseBlock>
+    if bytesEqual(opName, b: b"condBr") 'isCondBr'
+        let condId = lookupValueId(state, name: midTokenAt(tokens, pos: pos).value)
+        let thenId = lookupBlockId(state, label: midTokenAt(tokens, pos: pos + 1).value)
+        let elseId = lookupBlockId(state, label: midTokenAt(tokens, pos: pos + 2).value)
+        block.terminator = MlirOp.cf(CfOp.condBr(condId, thenId, elseId))
+        block.hasTerminator = true
+        return pos + 3
+    end 'isCondBr'
+
+    panic("MidLevelParser: unknown cf op '{String.from(opName)}'")
+    return pos
+end 'midParseCfOp'
+
+// Sys ops
+function midParseSysOp(tokens TokenArray, startPos MidTokenIndex, block MlirBlock, state MidFuncState, resultId ValueId, opName ByteArray) returns MidTokenIndex
+    var pos = startPos
+
+    // stackAddr: sys stackAddr <slotId>
+    if bytesEqual(opName, b: b"stackAddr") 'isStackAddr'
+        let slotId = midParseUnsignedInt(midTokenAt(tokens, pos: pos).value)
+        block.ops.push(MlirOp.sys(SysOp.stackAddr(resultId, slotId)))
+        return pos + 1
+    end 'isStackAddr'
+
+    // storeByte: sys storeByte <baseRef> <offsetRef> <byteRef>
+    if bytesEqual(opName, b: b"storeByte") 'isStoreByte'
+        let baseId = lookupValueId(state, name: midTokenAt(tokens, pos: pos).value)
+        let offsetId = lookupValueId(state, name: midTokenAt(tokens, pos: pos + 1).value)
+        let byteId = lookupValueId(state, name: midTokenAt(tokens, pos: pos + 2).value)
+        block.ops.push(MlirOp.sys(SysOp.storeByte(baseId, offsetId, byteId)))
+        return pos + 3
+    end 'isStoreByte'
+
+    // memcpy: sys memcpy <dstRef> <srcRef> <lenRef>
+    if bytesEqual(opName, b: b"memcpy") 'isMemcpy'
+        let dstId = lookupValueId(state, name: midTokenAt(tokens, pos: pos).value)
+        let srcId = lookupValueId(state, name: midTokenAt(tokens, pos: pos + 1).value)
+        let lenId = lookupValueId(state, name: midTokenAt(tokens, pos: pos + 2).value)
+        block.ops.push(MlirOp.sys(SysOp.memcpy(dstId, srcId, lenId)))
+        return pos + 3
+    end 'isMemcpy'
+
+    // osExit: sys osExit <codeRef>
+    if bytesEqual(opName, b: b"osExit") 'isOsExit'
+        let codeId = lookupValueId(state, name: midTokenAt(tokens, pos: pos).value)
+        block.ops.push(MlirOp.sys(SysOp.osExit(codeId)))
+        return pos + 1
+    end 'isOsExit'
+
+    // osWrite: sys osWrite <ptrRef> <lenRef>
+    if bytesEqual(opName, b: b"osWrite") 'isOsWrite'
+        let ptrId = lookupValueId(state, name: midTokenAt(tokens, pos: pos).value)
+        let lenId = lookupValueId(state, name: midTokenAt(tokens, pos: pos + 1).value)
+        block.ops.push(MlirOp.sys(SysOp.osWrite(ptrId, lenId)))
+        return pos + 2
+    end 'isOsWrite'
+
+    panic("MidLevelParser: unknown sys op '{String.from(opName)}'")
+    return pos
+end 'midParseSysOp'
+
+// --- Func dialect ops ---
+// "func" is an identifier (not the "function" keyword), parsed like other dialects.
+function midParseFuncOp(tokens TokenArray, startPos MidTokenIndex, block MlirBlock, state MidFuncState, resultId ValueId, opName ByteArray) returns MidTokenIndex
+    var pos = startPos
+
+    // ret: func ret <valueRef>
+    if bytesEqual(opName, b: b"ret") 'isRet'
+        let retValId = lookupValueId(state, name: midTokenAt(tokens, pos: pos).value)
+        block.terminator = MlirOp.func(FuncOp.ret(retValId))
+        block.hasTerminator = true
+        return pos + 1
+    end 'isRet'
+
+    // call: func call <callee> <arg0> <arg1> ...
+    if bytesEqual(opName, b: b"call") 'isCall'
+        let calleeToken = midTokenAt(tokens, pos: pos)
+        pos = pos + 1
+        var argIds = ValueIdArray{}
+        // Collect args until newline/eof/end
+        while pos < tokens.count() 'argLoop'
+            let argToken = midTokenAt(tokens, pos: pos)
+            if argToken.kind == TokenKind.newline or argToken.kind == TokenKind.eof or argToken.kind == TokenKind.end 'endArgs'
+                break
+            end 'endArgs'
+            argIds.push(lookupValueId(state, name: argToken.value))
+            pos = pos + 1
+        end 'argLoop'
+        block.ops.push(MlirOp.func(FuncOp.call(resultId, calleeToken.value, argIds)))
+        return pos
+    end 'isCall'
+
+    panic("MidLevelParser: unknown func op '{String.from(opName)}'")
+    return pos
+end 'midParseFuncOp'

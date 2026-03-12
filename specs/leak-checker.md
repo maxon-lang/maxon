@@ -115,3 +115,42 @@ end 'main'
 ```exitcode
 42
 ```
+
+<!-- test: no-leak.union-arg-conditional-use -->
+### Union arguments cleaned up when conditionally used
+When a function receives two heap-allocated union arguments but only uses one
+based on a condition, the unused argument must still be freed by the caller.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+union Op
+  addOp(left Integer, right Integer)
+  mulOp(left Integer, right Integer)
+end 'Op'
+
+function applyOp(useAdd bool, addArg Op, mulArg Op) returns Integer
+  if useAdd 'branch'
+    return match addArg 'matchAdd'
+      addOp(left, right) gives left + right
+      mulOp(left, right) gives left * right
+    end 'matchAdd'
+  end 'branch' else 'other'
+    return match mulArg 'matchMul'
+      addOp(left, right) gives left + right
+      mulOp(left, right) gives left * right
+    end 'matchMul'
+  end 'other'
+end 'applyOp'
+
+function main() returns ExitCode
+  var result = applyOp(true, addArg: Op.addOp(3, 4), mulArg: Op.mulOp(5, 6))
+  print("{result}\n")
+  return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+7
+```

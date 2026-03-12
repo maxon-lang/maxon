@@ -11,15 +11,17 @@ export function lowerMidToMaxX64(module MlirModule, target Target) returns MlirM
         Os.linux gives 0
     end 'osShadow'
 
+    let osDesc = makeOsDescriptor(target)
+
     for srcFunc in module.functions 'eachFunc'
-        let dstFunc = lowerFunctionToX64(srcFunc, shadowSpace: shadowSpace)
+        let dstFunc = lowerFunctionToX64(srcFunc, shadowSpace: shadowSpace, osDesc: osDesc)
         result.functions.push(dstFunc)
     end 'eachFunc'
 
     return result
 end 'lowerMidToMaxX64'
 
-function lowerFunctionToX64(srcFunc MlirFunction, shadowSpace StackSize) returns MlirFunction
+function lowerFunctionToX64(srcFunc MlirFunction, shadowSpace StackSize, osDesc OsDescriptor) returns MlirFunction
     var dstFunc = createMlirFunction(srcFunc.name, returnType: srcFunc.returnType)
     dstFunc.paramCount = srcFunc.paramCount
     let stackSize = computeStackSizeForFunc(srcFunc, shadowSpace: shadowSpace, savedRegsSize: 0)
@@ -41,7 +43,7 @@ function lowerFunctionToX64(srcFunc MlirFunction, shadowSpace StackSize) returns
 
         // Lower each op in the block
         for op in srcBlock.ops 'eachOp'
-            nextTempSlot = lowerMlirOp(op, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
+            nextTempSlot = lowerMlirOp(op, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot, osDesc: osDesc)
         end 'eachOp'
 
         // Lower terminator
@@ -83,14 +85,14 @@ end 'emitParamSaves'
 
 // Lower a single mid-level op, pushing one or more MaxX64Ops into dstBlock.
 // Returns the updated nextTempSlot.
-function lowerMlirOp(op MlirOp, dstBlock MlirBlock, valueSlots ValueSlotMap, nextTempSlot SlotIndex) returns SlotIndex
+function lowerMlirOp(op MlirOp, dstBlock MlirBlock, valueSlots ValueSlotMap, nextTempSlot SlotIndex, osDesc OsDescriptor) returns SlotIndex
     match op 'dispatch'
         arith(arithOp) then return lowerArithOp(arithOp, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
         memref(memOp) then return lowerMemRefOp(memOp, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
         runtime(rtOp) then return lowerRuntimeOp(rtOp, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
         func(funcOp) then return lowerFuncOp(funcOp, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
         maxx64(x64Op) then return lowerPassthroughX64(x64Op, dstBlock: dstBlock, nextTempSlot: nextTempSlot)
-        sys(sysOp) then return lowerSysOp(sysOp, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
+        sys(sysOp) then return lowerSysOp(sysOp, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot, osDesc: osDesc)
         maxhl then return nextTempSlot
         cf then return nextTempSlot
         maxarm64 then return nextTempSlot
@@ -377,7 +379,7 @@ end 'lowerReturnOp'
 
 // Lower SysOp to MaxX64Op.
 // Each SysOp maps ValueIds to VarSlots via valueSlots, then emits target-specific ops.
-function lowerSysOp(op SysOp, dstBlock MlirBlock, valueSlots ValueSlotMap, nextTempSlot SlotIndex) returns SlotIndex
+function lowerSysOp(op SysOp, dstBlock MlirBlock, valueSlots ValueSlotMap, nextTempSlot SlotIndex, osDesc OsDescriptor) returns SlotIndex
     match op 'lower'
         syscall(resultId, number, argIds) then return lowerSyscallX64(resultId, number: number, argIds: argIds, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
         iatCall(resultId, slotIndex, argIds) then return lowerIatCallX64(resultId, slotIndex: slotIndex, argIds: argIds, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
@@ -386,6 +388,8 @@ function lowerSysOp(op SysOp, dstBlock MlirBlock, valueSlots ValueSlotMap, nextT
         storeByte(baseId, offsetId, byteId) then return lowerStoreByteX64(baseId, offsetId: offsetId, byteId: byteId, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
         loadByte(resultId, baseId, offsetId) then return lowerLoadByteX64(resultId, baseId: baseId, offsetId: offsetId, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
         memcpy(dstId, srcId, lenId) then return lowerMemcpyX64(dstId, srcId: srcId, lenId: lenId, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
+        osExit(codeId) then return lowerOsExitX64(codeId, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot, osDesc: osDesc)
+        osWrite(ptrId, lenId) then return lowerOsWriteX64(ptrId, lenId: lenId, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot, osDesc: osDesc)
     end 'lower'
 end 'lowerSysOp'
 
@@ -452,3 +456,96 @@ function lowerMemcpyX64(dstId ValueId, srcId ValueId, lenId ValueId, dstBlock Ml
     dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.memcpyOp(dstSlot, srcSlot, lenSlot)))
     return nextTempSlot
 end 'lowerMemcpyX64'
+
+// OS-neutral exit: expand to syscall or iatCall based on OsDescriptor.
+function lowerOsExitX64(codeId ValueId, dstBlock MlirBlock, valueSlots ValueSlotMap, nextTempSlot SlotIndex, osDesc OsDescriptor) returns SlotIndex
+    let codeSlot = valueSlotMapGet(valueSlots, valueId: codeId)
+    match osDesc.exit 'strategy'
+        syscall(num) then return lowerOsExitSyscallX64(codeSlot, num: num, dstBlock: dstBlock, nextTempSlot: nextTempSlot)
+        iatCall(slotIdx) then return lowerOsExitIatX64(codeSlot, slotIdx: slotIdx, dstBlock: dstBlock, nextTempSlot: nextTempSlot)
+    end 'strategy'
+end 'lowerOsExitX64'
+
+function lowerOsExitSyscallX64(codeSlot VarSlot, num MachineWord, dstBlock MlirBlock, nextTempSlot SlotIndex) returns SlotIndex
+    var argSlots = VarSlotArray{}
+    argSlots.push(codeSlot)
+    dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.syscall(nextTempSlot, num, argSlots)))
+    return nextTempSlot + 1
+end 'lowerOsExitSyscallX64'
+
+function lowerOsExitIatX64(codeSlot VarSlot, slotIdx MachineWord, dstBlock MlirBlock, nextTempSlot SlotIndex) returns SlotIndex
+    var argSlots = VarSlotArray{}
+    argSlots.push(codeSlot)
+    dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.iatCall(nextTempSlot, slotIdx, argSlots)))
+    return nextTempSlot + 1
+end 'lowerOsExitIatX64'
+
+// OS-neutral write: expand to syscall or WinAPI sequence based on OsDescriptor.
+function lowerOsWriteX64(ptrId ValueId, lenId ValueId, dstBlock MlirBlock, valueSlots ValueSlotMap, nextTempSlot SlotIndex, osDesc OsDescriptor) returns SlotIndex
+    let ptrSlot = valueSlotMapGet(valueSlots, valueId: ptrId)
+    let lenSlot = valueSlotMapGet(valueSlots, valueId: lenId)
+    match osDesc.write 'strategy'
+        syscall(writeNum, fd) then return lowerOsWriteSyscallX64(ptrSlot, lenSlot: lenSlot, writeNum: writeNum, fd: fd, dstBlock: dstBlock, nextTempSlot: nextTempSlot)
+        winApi(getHandleSlot, handleConstant, writeFileSlot) then return lowerOsWriteWinApiX64(ptrSlot, lenSlot: lenSlot, getHandleSlot: getHandleSlot, handleConstant: handleConstant, writeFileSlot: writeFileSlot, dstBlock: dstBlock, nextTempSlot: nextTempSlot)
+    end 'strategy'
+end 'lowerOsWriteX64'
+
+function lowerOsWriteSyscallX64(ptrSlot VarSlot, lenSlot VarSlot, writeNum MachineWord, fd MachineWord, dstBlock MlirBlock, nextTempSlot SlotIndex) returns SlotIndex
+    // fd constant -> temp slot
+    let fdSlot = nextTempSlot
+    dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.movRegImm(X64Register.rax, fd)))
+    dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.movSlot(fdSlot, X64Register.rax)))
+    // syscall(writeNum, fd, ptr, len)
+    var argSlots = VarSlotArray{}
+    argSlots.push(fdSlot)
+    argSlots.push(ptrSlot)
+    argSlots.push(lenSlot)
+    let resultSlot = nextTempSlot + 1
+    dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.syscall(resultSlot, writeNum, argSlots)))
+    return nextTempSlot + 2
+end 'lowerOsWriteSyscallX64'
+
+function lowerOsWriteWinApiX64(ptrSlot VarSlot, lenSlot VarSlot, getHandleSlot MachineWord, handleConstant MachineWord, writeFileSlot MachineWord, dstBlock MlirBlock, nextTempSlot SlotIndex) returns SlotIndex
+    var tempSlot = nextTempSlot
+
+    // GetStdHandle(handleConstant)
+    let handleConstSlot = tempSlot
+    dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.movRegImm(X64Register.rax, handleConstant)))
+    dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.movSlot(handleConstSlot, X64Register.rax)))
+    tempSlot = tempSlot + 1
+    var getHandleArgs = VarSlotArray{}
+    getHandleArgs.push(handleConstSlot)
+    let handleResultSlot = tempSlot
+    dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.iatCall(handleResultSlot, getHandleSlot, getHandleArgs)))
+    tempSlot = tempSlot + 1
+
+    // bytesWritten = 0 stored to a slot
+    let writtenSlot = tempSlot
+    dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.movRegImm(X64Register.rax, 0)))
+    dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.movSlot(writtenSlot, X64Register.rax)))
+    tempSlot = tempSlot + 1
+
+    // Get address of bytesWritten slot
+    let writtenAddrSlot = tempSlot
+    dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.stackAddrOp(writtenAddrSlot, writtenSlot)))
+    tempSlot = tempSlot + 1
+
+    // NULL for lpOverlapped
+    let nullSlot = tempSlot
+    dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.movRegImm(X64Register.rax, 0)))
+    dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.movSlot(nullSlot, X64Register.rax)))
+    tempSlot = tempSlot + 1
+
+    // WriteFile(handle, ptr, len, &bytesWritten, NULL)
+    var writeArgs = VarSlotArray{}
+    writeArgs.push(handleResultSlot)
+    writeArgs.push(ptrSlot)
+    writeArgs.push(lenSlot)
+    writeArgs.push(writtenAddrSlot)
+    writeArgs.push(nullSlot)
+    let writeResultSlot = tempSlot
+    dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.iatCall(writeResultSlot, writeFileSlot, writeArgs)))
+    tempSlot = tempSlot + 1
+
+    return tempSlot
+end 'lowerOsWriteWinApiX64'

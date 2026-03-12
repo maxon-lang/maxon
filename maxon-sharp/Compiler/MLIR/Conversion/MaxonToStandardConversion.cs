@@ -299,8 +299,9 @@ public static partial class MaxonToStandardConversion {
         // struct literal. These get incref'd by the parent field store (line ~700) so they
         // must NOT receive a second incref or scope cleanup registration.
         var structLitFieldValueIds = new HashSet<int>();
-        // Pre-scan: find struct literal result IDs directly returned. LowerReturn handles
-        // their incref + transfer, so they must not be incref'd or cleaned up here.
+        // Pre-scan: find struct literal / enum construct result IDs directly returned or thrown.
+        // LowerReturn/LowerThrow handle their ownership transfer, so they must not be
+        // incref'd or cleaned up here.
         var structLitReturnIds = new HashSet<int>();
         foreach (var op in block.Operations) {
           if (op is MaxonStructLiteralOp parentLit) {
@@ -309,6 +310,8 @@ public static partial class MaxonToStandardConversion {
             }
           } else if (op is MaxonReturnOp retOp && retOp.Value != null) {
             structLitReturnIds.Add(retOp.Value.Id);
+          } else if (op is MaxonThrowOp throwOp) {
+            structLitReturnIds.Add(throwOp.ErrorValue.Id);
           }
         }
 
@@ -476,6 +479,19 @@ public static partial class MaxonToStandardConversion {
               }
 
               valueMap[enumConstructOp.Result] = new StdHeapPtr(enumConstructOp.Result.Id, enumConstructOp.EnumTypeName, tempName);
+
+              // Orphan enum construct temps need incref + scope cleanup when they are not
+              // consumed by a named variable (inlineTargets) or returned directly.
+              // Mirrors the struct literal orphan pattern — without this, enum values
+              // passed as borrowed function arguments leak when the callee doesn't consume them.
+              if (!inlineTargets.ContainsKey(enumConstructOp.Result.Id)
+                  && !structLitFieldValueIds.Contains(enumConstructOp.Result.Id)
+                  && !structLitReturnIds.Contains(enumConstructOp.Result.Id)) {
+                EmitIncrefValue(newBlock, enumPtr, scopeName: func.Name);
+                varNameToStructType[tempName] = enumConstructOp.EnumTypeName;
+                temps.MarkTempOrphan(tempName);
+              }
+
               break;
             }
             case MaxonEnumTagOp enumTagOp: {
