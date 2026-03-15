@@ -112,10 +112,10 @@ function main() returns ExitCode
   let files = try Directory.list(FilePath from "../bin") otherwise 'err'
     return 0
   end 'err'
-  // bin directory should contain maxon.exe
+  // bin directory should contain the maxon executable
   var foundMaxon = false
   for f in files 'loop'
-    if f == "maxon.exe" 'check'
+    if f == "maxon.exe" or f == "maxon" 'check'
       foundMaxon = true
     end 'check'
   end 'loop'

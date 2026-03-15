@@ -1,0 +1,39 @@
+// Test: struct-ref-survives-array-growth
+typealias Integer = int(i64.min to i64.max)
+
+type Item
+  export var name String
+  export var value Integer
+end 'Item'
+
+typealias ItemArray = Array with Item
+
+function main() returns ExitCode
+  var arr = ItemArray{}
+  arr.push(Item{name: "first item with a long name for heap allocation", value: 42})
+
+  var item = try arr.get(0) otherwise Item{name: "", value: 0}
+
+  // Force many growths
+  var i = 0
+  while i < 30 'grow'
+    arr.push(Item{name: "padding item with long name for heap allocation too", value: i})
+    i = i + 1
+  end 'grow'
+
+  // The original reference must still work
+  if item.name == "first item with a long name for heap allocation" 'check_name'
+    if item.value == 42 'check_val'
+      print("ok\n")
+      return 0
+    end 'check_val'
+  end 'check_name'
+  print("FAIL: name={item.name} value={item.value}\n")
+  return 1
+end 'main'
+---
+MaxoncStderr: ```
+error E3070: specs/fragments/array-realloc-dangling-ref/struct-ref-survives-array-growth.test:20:9: cannot mutate 'arr' via 'push' while it is borrowed by 'item' (borrowed at line 15)
+```
+---
+---

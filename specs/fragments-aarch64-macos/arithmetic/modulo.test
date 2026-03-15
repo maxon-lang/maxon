@@ -1,0 +1,38 @@
+// Test: modulo
+function main() returns ExitCode
+  return 17 mod 5
+end 'main'
+---
+ExitCode: 2
+---
+module {
+  func @arithmetic.main() -> u32 {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.mov x0, #17
+    arm64.mov x1, #5
+    arm64.sdiv x2, x0, x1
+    arm64.msub x3, x2, x1, x0
+    arm64.str x3, [x29, #-8]
+    arm64.mov x4, #0
+    arm64.cmp x3, x4
+    arm64.cset x5, lt
+    arm64.mov x6, #4294967295
+    arm64.cmp x3, x6
+    arm64.cset x7, gt
+    arm64.orr x8, x5, x7
+    arm64.cmp x8, #0
+    arm64.b.ne arithmetic.main.__range_panic_0
+    arm64.b arithmetic.main.__range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_symdata x0, __panic_msg_8
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl maxon_panic
+  __range_ok_0:
+    arm64.ldr x0, [x29, #-8]
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+}
+---

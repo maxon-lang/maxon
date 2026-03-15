@@ -472,7 +472,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       // but ONLY when includeFilename is true (for top-level functions)
       if (includeFilename) {
         var normalizedPath = _sourceFilePath.Replace('\\', '/');
-        if (normalizedPath.Contains("/specs/fragments/")) {
+        if (System.Text.RegularExpressions.Regex.IsMatch(normalizedPath, @"(?:^|/)specs/fragments[^/]*/")) {
           var parentDirName = Path.GetFileName(Path.GetDirectoryName(_sourceFilePath));
           return parentDirName ?? fileName;
         }

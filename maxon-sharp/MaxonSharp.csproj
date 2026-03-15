@@ -8,9 +8,18 @@
     <AssemblyName>maxon</AssemblyName>
     <PublishSingleFile>true</PublishSingleFile>
     <SelfContained>false</SelfContained>
-    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
     <EnforceCodeStyleInBuild>true</EnforceCodeStyleInBuild>
     <ServerGarbageCollection>true</ServerGarbageCollection>
+  </PropertyGroup>
+
+  <!-- Auto-detect host RID -->
+  <PropertyGroup>
+    <_HostOS Condition="$([MSBuild]::IsOSPlatform('Windows'))">win</_HostOS>
+    <_HostOS Condition="$([MSBuild]::IsOSPlatform('OSX'))">osx</_HostOS>
+    <_HostOS Condition="$([MSBuild]::IsOSPlatform('Linux'))">linux</_HostOS>
+    <_HostArch>$([System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture.ToString().ToLower())</_HostArch>
+    <RuntimeIdentifier>$(_HostOS)-$(_HostArch)</RuntimeIdentifier>
+    <_IsWindows>$([MSBuild]::IsOSPlatform('Windows'))</_IsWindows>
   </PropertyGroup>
 
   <ItemGroup>
@@ -21,12 +30,18 @@
     <Exec Command="dotnet publish -c $(Configuration) --no-build" />
   </Target>
 
-  <Target Name="CopyToBin" AfterTargets="Publish">
-    <Exec
-      Command="move /Y $(ProjectDir)..\bin\$(AssemblyName).exe $(ProjectDir)..\bin\$(AssemblyName).old.exe &gt;nul 2&gt;&amp;1 || exit /b 0" />
-    <Copy SourceFiles="$(PublishDir)$(AssemblyName).exe" DestinationFolder="$(ProjectDir)..\bin" />
-    <Exec Command="taskkill /F /IM maxon.exe &gt;nul 2&gt;&amp;1 || exit /b 0" />
-    <Exec
-      Command="del /F $(ProjectDir)..\bin\$(AssemblyName).old.exe &gt;nul 2&gt;&amp;1 || exit /b 0" />
+  <Target Name="CopyToBin" AfterTargets="Publish" Condition="!$([MSBuild]::IsOSPlatform('Windows'))">
+    <Exec Command="mv -f $(ProjectDir)../bin/$(AssemblyName) $(ProjectDir)../bin/$(AssemblyName).old 2>/dev/null || true" />
+    <Copy SourceFiles="$(PublishDir)$(AssemblyName)" DestinationFolder="$(ProjectDir)../bin" />
+    <Exec Command="pkill -f $(AssemblyName) 2>/dev/null || true" />
+    <Exec Command="rm -f $(ProjectDir)../bin/$(AssemblyName).old 2>/dev/null || true" />
   </Target>
+
+  <Target Name="CopyToBinWindows" AfterTargets="Publish" Condition="$([MSBuild]::IsOSPlatform('Windows'))">
+    <Exec Command="move /Y $(ProjectDir)..\bin\$(AssemblyName).exe $(ProjectDir)..\bin\$(AssemblyName).old.exe &gt;nul 2&gt;&amp;1 || exit /b 0" />
+    <Copy SourceFiles="$(PublishDir)$(AssemblyName).exe" DestinationFolder="$(ProjectDir)..\bin" />
+    <Exec Command="taskkill /F /IM $(AssemblyName).exe &gt;nul 2&gt;&amp;1 || exit /b 0" />
+    <Exec Command="del /F $(ProjectDir)..\bin\$(AssemblyName).old.exe &gt;nul 2&gt;&amp;1 || exit /b 0" />
+  </Target>
+
 </Project>

@@ -83,7 +83,7 @@ public static partial class FragmentGenerator {
   /// staleness, and returns work items for the unified test pipeline.
   /// Does NOT compile anything — compilation happens in worker threads.
   /// </summary>
-  public static PrepareResult PrepareWorkItems(string specDir, string fragmentDir, bool force = false, string? filter = null) {
+  public static PrepareResult PrepareWorkItems(string specDir, string fragmentDir, bool force = false, string? filter = null, Compiler.CompileTarget? target = null) {
     var errors = new List<string>();
 
     if (!Directory.Exists(specDir)) {
@@ -93,7 +93,8 @@ public static partial class FragmentGenerator {
 
     Directory.CreateDirectory(fragmentDir);
 
-    var specs = SpecParser.ParseDirectory(specDir);
+    var targetKey = target != null ? $"{target.Arch}-{target.Os}" : null;
+    var specs = SpecParser.ParseDirectory(specDir, targetKey);
     var totalTests = specs.Sum(s => s.Tests.Count);
 
     // Check before deleting, then delete so interrupted runs force full regeneration next time
@@ -161,7 +162,7 @@ public static partial class FragmentGenerator {
     WriteSpecCountFlag(fragmentDir, specs.Count, totalTests);
   }
 
-  public static (string Content, string? Error) GenerateFragmentContent(TestCase test, string exePath, string fragmentPath) {
+  public static (string Content, string? Error) GenerateFragmentContent(TestCase test, string exePath, string fragmentPath, Compiler.CompileTarget? target = null) {
     var sb = new StringBuilder();
     string? error = null;
 
@@ -237,10 +238,10 @@ public static partial class FragmentGenerator {
             File.WriteAllText(path, f.Source);
             return new Compiler.SourceFile(path, f.Source);
           })];
-          var result = new Compiler.Compiler().Compile(sources, exePath, returnIr: true);
+          var result = new Compiler.Compiler().Compile(sources, exePath, returnIr: true, target: target);
           if (result.Success) {
-            if (result.X86Ir != null) {
-              sb.Append(result.X86Ir.Trim());
+            if (result.ArchIr != null) {
+              sb.Append(result.ArchIr.Trim());
               sb.AppendLine();
             }
           } else {
@@ -252,10 +253,10 @@ public static partial class FragmentGenerator {
         }
       } else {
         sources = [new Compiler.SourceFile(fragmentPath, sourceWithComment)];
-        var result = new Compiler.Compiler().Compile(sources, exePath, returnIr: true);
+        var result = new Compiler.Compiler().Compile(sources, exePath, returnIr: true, target: target);
         if (result.Success) {
-          if (result.X86Ir != null) {
-            sb.Append(result.X86Ir.Trim());
+          if (result.ArchIr != null) {
+            sb.Append(result.ArchIr.Trim());
             sb.AppendLine();
           }
         } else {

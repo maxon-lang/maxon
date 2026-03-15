@@ -5,12 +5,16 @@ namespace MaxonSharp.Testing;
 /// <summary>
 /// Windows Job Object wrapper for managing child processes with guaranteed cleanup.
 /// When the job object is disposed, all processes assigned to it are terminated.
+/// On non-Windows platforms, this is a no-op.
 /// </summary>
 internal sealed class WindowsJobObject : IDisposable {
   private IntPtr _handle;
   private bool _disposed;
+  private static readonly bool _isWindows = RuntimeInformation.IsOSPlatform(OSPlatform.Windows);
 
   public WindowsJobObject() {
+    if (!_isWindows) return;
+
     _handle = CreateJobObject(IntPtr.Zero, null);
     if (_handle == IntPtr.Zero) {
       throw new InvalidOperationException($"Failed to create job object: {Marshal.GetLastWin32Error()}");
@@ -36,6 +40,7 @@ internal sealed class WindowsJobObject : IDisposable {
   }
 
   public bool AssignProcess(IntPtr processHandle) {
+    if (!_isWindows) return true;
     ObjectDisposedException.ThrowIf(_disposed, this);
     return AssignProcessToJobObject(_handle, processHandle);
   }
@@ -44,7 +49,7 @@ internal sealed class WindowsJobObject : IDisposable {
     if (_disposed) return;
     _disposed = true;
 
-    if (_handle != IntPtr.Zero) {
+    if (_isWindows && _handle != IntPtr.Zero) {
       CloseHandle(_handle);
       _handle = IntPtr.Zero;
     }

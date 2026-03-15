@@ -102,7 +102,7 @@ end 'main'
 <!-- test: managed-directory.open-search-nonexistent -->
 ```maxon
 function main() returns ExitCode
-  let dir = __ManagedDirectory.openSearch("nonexistent_dir_xyz_88888\\*".managed)
+  let dir = __ManagedDirectory.openSearch("nonexistent_dir_xyz_88888/*".managed)
   if dir == 0 'notFound'
     print("not found")
     return 42
@@ -148,11 +148,11 @@ function main() returns ExitCode
     end 'createFail'
   end 'needCreate'
 
-  createFile("{dirPath}\\file1.txt", content: "a")
-  createFile("{dirPath}\\file2.txt", content: "b")
+  createFile("{dirPath}/file1.txt", content: "a")
+  createFile("{dirPath}/file2.txt", content: "b")
 
   // Search the directory
-  let searchResult = __ManagedDirectory.openSearch("{dirPath}\\*".managed)
+  let searchResult = __ManagedDirectory.openSearch("{dirPath}/*".managed)
   if searchResult == 0 'searchFail'
     print("search failed")
     return 2
@@ -175,8 +175,8 @@ function main() returns ExitCode
   dir._dir.close()
 
   // Clean up
-  let del1 = __ManagedFile.delete("{dirPath}\\file1.txt".managed)
-  let del2 = __ManagedFile.delete("{dirPath}\\file2.txt".managed)
+  let del1 = __ManagedFile.delete("{dirPath}/file1.txt".managed)
+  let del2 = __ManagedFile.delete("{dirPath}/file2.txt".managed)
   if del1 != 0 or del2 != 0 'delErr'
     return 4
   end 'delErr'

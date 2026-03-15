@@ -223,7 +223,7 @@ decref __ManagedMemory #1 rc=0 [~IntArray]
 ```RequiredRdata
 i64 42
 ```
-```RequiredMLIR
+```RequiredMLIR:x86_64-windows
 === maxon
 module {
   func @codegen-internals.main() -> i64 {
@@ -531,6 +531,320 @@ module {
   }
 }
 ```
+```RequiredMLIR:aarch64-macos
+=== maxon
+module {
+  func @codegen-internals.main() -> i64 {
+  entry:
+    %0 = maxon.literal {value = 42 : i64}
+    maxon.assign %0 {var = __arr_0.0} {kind = i64} {decl = 1 : i1}
+    %1 = maxon.literal {value = 0 : i64}
+    %2 = maxon.literal {value = 1 : i64}
+    %3 = maxon.literal {value = 0 : i64}
+    %4 = maxon.literal {value = 8 : i64}
+    %5 = maxon.struct_literal @__ManagedMemory
+    %6 = maxon.literal {value = 0 : i64}
+    %7 = maxon.struct_literal @IntArray
+    maxon.assign %7 {var = arr} {decl = 1 : i1} {mut = 1 : i1}
+    %8 = maxon.literal {value = 0 : i64}
+    %9 = maxon.literal {value = 77 : i64}
+    maxon.call @IntArray.set %7, %8, %9
+    %10 = maxon.struct_var_ref arr
+    %11 = maxon.literal {value = 0 : i64}
+    %14, %13 = maxon.try_call @IntArray.get %10, %11
+    %15 = maxon.literal {value = 0 : i64}
+    maxon.assign %15 {var = __try_default_2} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %14 {var = __try_result_1} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %16 = maxon.literal {value = 0 : i64}
+    %17 = maxon.binop %13, %16 {op = ne}
+    maxon.cond_br %17 [then: otherwise_default_error_3, else: otherwise_default_continue_4]
+  otherwise_default_error_3:
+    %18 = maxon.var_ref {var = __try_default_2} {type = i64}
+    maxon.assign %18 {var = __try_result_1} {kind = i64} {mut = 1 : i1}
+    maxon.br otherwise_default_continue_4
+  otherwise_default_continue_4:
+    %19 = maxon.var_ref {var = __try_result_1} {type = i64}
+    maxon.assign %19 {var = __range_val_5} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %20 = maxon.literal {value = 0 : i64}
+    %21 = maxon.binop %19, %20 {op = lt}
+    %22 = maxon.literal {value = 4294967295 : i64}
+    %23 = maxon.binop %19, %22 {op = gt}
+    %24 = maxon.binop %21, %23 {op = or}
+    maxon.cond_br %24 [then: __range_panic_5, else: __range_ok_5]
+  __range_panic_5:
+    maxon.panic "panic at rdata-cow-mutation-copies-to-heap.test:8: Range check failed for type 'ExitCode': value outside int(0 to 4294967295)"
+  __range_ok_5:
+    %26 = maxon.var_ref {var = __range_val_5} {type = i64}
+    maxon.scope_end [arr, __try_default_2, __range_val_5, __try_result_1]
+    maxon.return %26
+  }
+}
+=== standard
+module {
+  func @codegen-internals.main() -> u32 {
+  entry:
+    %1 = arith.constant {value = 0 : i64}
+    %2 = arith.constant {value = 1 : i64}
+    %3 = arith.constant {value = 0 : i64}
+    %4 = arith.constant {value = 8 : i64}
+    %5 = arith.constant {value = 32 : i64}
+    %6 = func.ref @__destruct___ManagedMemory
+    %7 = std.ptr_to_i64 %6
+    %8 = arith.constant {value = 1 : i64}
+    %9 = std.call_runtime @mm_alloc %5, %7, %8
+    memref.store %9, __struct_5
+    %10 = memref.load __struct_5 : i64
+    memref.store_indirect %1, %10+0
+    %11 = memref.load __struct_5 : i64
+    memref.store_indirect %2, %11+8
+    %12 = memref.load __struct_5 : i64
+    memref.store_indirect %3, %12+16
+    %13 = memref.load __struct_5 : i64
+    memref.store_indirect %4, %13+24
+    %14 = memref.load __struct_5 : i64
+    %15 = memref.load_indirect %14+24
+    %16 = arith.constant {value = 0 : i64}
+    %17 = memref.lea_symdata __mm_panic_element_size_zero
+    %18 = std.ptr_to_i64 %17
+    std.call_runtime @maxon_bounds_check %16, %15, %18
+    %19 = arith.constant {value = 0 : i64}
+    %20 = arith.constant {value = 16 : i64}
+    %21 = func.ref @__destruct_IntArray
+    %22 = std.ptr_to_i64 %21
+    %23 = arith.constant {value = 2 : i64}
+    %24 = std.call_runtime @mm_alloc %20, %22, %23
+    memref.store %24, arr
+    %25 = memref.load arr : i64
+    memref.store_indirect %19, %25+0
+    %26 = memref.load __struct_5 : i64
+    %27 = memref.load arr : i64
+    memref.store_indirect %26, %27+8
+    std.call_runtime @mm_incref %26
+    %28 = memref.lea_rdata __const_array_codegen-internals.main_arr
+    %29 = std.ptr_to_i64 %28
+    %30 = memref.load arr : i64
+    %31 = memref.load_indirect %30+8
+    memref.store_indirect %29, %31+0
+    %32 = memref.load arr : i64
+    std.call_runtime @mm_incref %32
+    %33 = arith.constant {value = 0 : i64}
+    %34 = arith.constant {value = 77 : i64}
+    %35 = memref.load arr : i64
+    func.call @IntArray.set %35, %33, %34
+    %36 = arith.constant {value = 0 : i64}
+    %37 = memref.load arr : i64
+    %38, %39 = func.try_call @IntArray.get %37, %36
+    %40 = arith.constant {value = 0 : i64}
+    memref.store %40, __try_default_2
+    memref.store %38, __try_result_1
+    %41 = arith.constant {value = 0 : i64}
+    %42 = arith.cmpi ne %39, %41
+    cf.cond_br %42 [then: otherwise_default_error_3, else: otherwise_default_continue_4]
+  otherwise_default_error_3:
+    %43 = memref.load __try_default_2 : i64
+    memref.store %43, __try_result_1
+    cf.br otherwise_default_continue_4
+  otherwise_default_continue_4:
+    %44 = memref.load __try_result_1 : i64
+    memref.store %44, __range_val_5
+    %45 = arith.constant {value = 0 : i64}
+    %46 = arith.cmpi lt %44, %45
+    %47 = arith.constant {value = 4294967295 : i64}
+    %48 = arith.cmpi gt %44, %47
+    %49 = arith.ori1 %46, %48
+    cf.cond_br %49 [then: __range_panic_5, else: __range_ok_5]
+  __range_panic_5:
+    %50 = memref.lea_symdata __panic_msg_25
+    %51 = std.ptr_to_i64 %50
+    std.call_runtime @maxon_panic %51
+  __range_ok_5:
+    %52 = memref.load __range_val_5 : i64
+    %53 = memref.load arr : i64
+    std.call_runtime_if_nonnull @mm_decref %53
+    func.return %52
+  }
+  func @__destruct___ManagedMemory(ptr: i64) {
+  entry:
+    %124 = func.param ptr : StdI64
+    memref.store %124, __destr_ptr
+    %127 = memref.load __destr_ptr : i64
+    %128 = memref.load_indirect %127+16
+    %129 = arith.constant {value = 0 : i64}
+    %130 = arith.cmpi ne %128, %129
+    cf.cond_br %130 [then: free_buf_0, else: skip_buf_0]
+  free_buf_0:
+    %131 = memref.load __destr_ptr : i64
+    %132 = memref.load_indirect %131+0
+    std.call_runtime @mm_raw_free %132
+    cf.br skip_buf_0
+  skip_buf_0:
+    cf.br done
+  done:
+    func.return
+  }
+  func @__destruct_IntArray(ptr: i64) {
+  entry:
+    %133 = func.param ptr : StdI64
+    memref.store %133, __destr_ptr
+    %134 = memref.load __destr_ptr : i64
+    %135 = memref.load_indirect %134+8
+    std.call_runtime_if_nonnull @mm_decref %135
+    cf.br done
+  done:
+    func.return
+  }
+}
+=== arm64
+module {
+  func @codegen-internals.main() -> u32 {
+  entry:
+    arm64.prologue stack_size=112
+    arm64.mov x0, #0
+    arm64.mov x1, #1
+    arm64.mov x2, #0
+    arm64.mov x3, #8
+    arm64.adrp_add_func x4, __destruct___ManagedMemory
+    arm64.mov x5, x4
+    arm64.mov x1, x5
+    arm64.mov x0, #32
+    arm64.mov x2, #1
+    arm64.bl mm_alloc
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x6, [x29, #-8]
+    arm64.mov x7, #0
+    arm64.str x7, [x6, #0]
+    arm64.ldr x8, [x29, #-8]
+    arm64.mov x9, #1
+    arm64.str x9, [x8, #8]
+    arm64.ldr x10, [x29, #-8]
+    arm64.mov x11, #0
+    arm64.str x11, [x10, #16]
+    arm64.ldr x12, [x29, #-8]
+    arm64.mov x13, #8
+    arm64.str x13, [x12, #24]
+    arm64.ldr x14, [x29, #-8]
+    arm64.ldr x15, [x14, #24]
+    arm64.adrp_add_symdata x0, __mm_panic_element_size_zero
+    arm64.mov x1, x0
+    arm64.mov x2, x1
+    arm64.mov x1, x15
+    arm64.mov x0, #0
+    arm64.bl maxon_bounds_check
+    arm64.mov x0, #0
+    arm64.adrp_add_func x1, __destruct_IntArray
+    arm64.mov x2, x1
+    arm64.mov x1, x2
+    arm64.mov x0, #16
+    arm64.mov x2, #2
+    arm64.bl mm_alloc
+    arm64.str x0, [x29, #-16]
+    arm64.ldr x0, [x29, #-16]
+    arm64.mov x1, #0
+    arm64.str x1, [x0, #0]
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x29, #-16]
+    arm64.str x0, [x1, #8]
+    arm64.bl mm_incref
+    arm64.adrp_add_rdata x0, __const_array_codegen-internals.main_arr
+    arm64.mov x1, x0
+    arm64.ldr x0, [x29, #-16]
+    arm64.ldr x2, [x0, #8]
+    arm64.str x1, [x2, #0]
+    arm64.ldr x0, [x29, #-16]
+    arm64.bl mm_incref
+    arm64.ldr x0, [x29, #-16]
+    arm64.mov x1, #0
+    arm64.mov x2, #77
+    arm64.bl IntArray.set
+    arm64.ldr x0, [x29, #-16]
+    arm64.mov x1, #0
+    arm64.bl IntArray.get
+    arm64.mov x2, #0
+    arm64.str x2, [x29, #-24]
+    arm64.str x0, [x29, #-32]
+    arm64.mov x0, #0
+    arm64.cmp x1, x0
+    arm64.cset x2, ne
+    arm64.cmp x2, #0
+    arm64.b.ne codegen-internals.main.otherwise_default_error_3
+    arm64.b codegen-internals.main.otherwise_default_continue_4
+  otherwise_default_error_3:
+    arm64.ldr x0, [x29, #-24]
+    arm64.str x0, [x29, #-32]
+    arm64.b codegen-internals.main.otherwise_default_continue_4
+  otherwise_default_continue_4:
+    arm64.ldr x0, [x29, #-32]
+    arm64.str x0, [x29, #-40]
+    arm64.mov x1, #0
+    arm64.cmp x0, x1
+    arm64.cset x2, lt
+    arm64.mov x3, #4294967295
+    arm64.cmp x0, x3
+    arm64.cset x4, gt
+    arm64.orr x5, x2, x4
+    arm64.cmp x5, #0
+    arm64.b.ne codegen-internals.main.__range_panic_5
+    arm64.b codegen-internals.main.__range_ok_5
+  __range_panic_5:
+    arm64.adrp_add_symdata x0, __panic_msg_25
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl maxon_panic
+  __range_ok_5:
+    arm64.ldr x0, [x29, #-40]
+    arm64.ldr x1, [x29, #-16]
+    arm64.cmp x1, #0
+    arm64.b.eq codegen-internals.main.__skip_guarded_73
+    arm64.ldr x0, [x29, #-16]
+    arm64.bl mm_decref
+    arm64.label codegen-internals.main.__skip_guarded_73
+    arm64.ldr x0, [x29, #-40]
+    arm64.epilogue stack_size=112
+    arm64.ret
+  }
+  func @__destruct___ManagedMemory(ptr: i64) {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #16]
+    arm64.mov x2, #0
+    arm64.cmp x1, x2
+    arm64.cset x3, ne
+    arm64.cmp x3, #0
+    arm64.b.ne __destruct___ManagedMemory.free_buf_0
+    arm64.b __destruct___ManagedMemory.skip_buf_0
+  free_buf_0:
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #0]
+    arm64.mov x0, x1
+    arm64.bl mm_raw_free
+    arm64.b __destruct___ManagedMemory.skip_buf_0
+  skip_buf_0:
+    arm64.b __destruct___ManagedMemory.done
+  done:
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+  func @__destruct_IntArray(ptr: i64) {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #8]
+    arm64.str x1, [x29, #-16]
+    arm64.cmp x1, #0
+    arm64.b.eq __destruct_IntArray.__skip_guarded_4
+    arm64.ldr x0, [x29, #-16]
+    arm64.bl mm_decref
+    arm64.label __destruct_IntArray.__skip_guarded_4
+    arm64.b __destruct_IntArray.done
+  done:
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+}
+```
 
 <!-- test: rdata-cow-multiple-mutations -->
 ```maxon
@@ -669,7 +983,7 @@ end 'main'
 ```exitcode
 13
 ```
-```RequiredMLIR
+```RequiredMLIR:x86_64-windows
 === maxon
 module {
   func @codegen-internals.main() -> i64 {
@@ -750,6 +1064,87 @@ module {
   }
 }
 ```
+```RequiredMLIR:aarch64-macos
+=== maxon
+module {
+  func @codegen-internals.main() -> i64 {
+  entry:
+    %0 = maxon.literal {value = 10 : i64}
+    %1 = maxon.cast %0 {target = i16}
+    maxon.assign %1 {var = a} {kind = i16} {decl = 1 : i1} {mut = 1 : i1}
+    %2 = maxon.literal {value = 3 : i64}
+    %3 = maxon.cast %2 {target = i16}
+    maxon.assign %3 {var = b} {kind = i16} {decl = 1 : i1} {mut = 1 : i1}
+    %4 = maxon.binop %1, %3 {op = add}
+    maxon.assign %4 {var = __range_val_0} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %5 = maxon.literal {value = 0 : i64}
+    %6 = maxon.binop %4, %5 {op = lt}
+    %7 = maxon.literal {value = 4294967295 : i64}
+    %8 = maxon.binop %4, %7 {op = gt}
+    %9 = maxon.binop %6, %8 {op = or}
+    maxon.cond_br %9 [then: __range_panic_0, else: __range_ok_0]
+  __range_panic_0:
+    maxon.panic "panic at i32-unsigned-add.test:7: Range check failed for type 'ExitCode': value outside int(0 to 4294967295)"
+  __range_ok_0:
+    %11 = maxon.var_ref {var = __range_val_0} {type = i64}
+    maxon.scope_end [a, b, __range_val_0]
+    maxon.return %11
+  }
+}
+=== standard
+module {
+  func @codegen-internals.main() -> u32 {
+  entry:
+    %0 = arith.constant {value = 10 : i64}
+    %1 = arith.constant {value = 3 : i64}
+    %2 = arith.addi %0, %1
+    memref.store %2, __range_val_0
+    %3 = arith.constant {value = 0 : i64}
+    %4 = arith.cmpi lt %2, %3
+    %5 = arith.constant {value = 4294967295 : i64}
+    %6 = arith.cmpi gt %2, %5
+    %7 = arith.ori1 %4, %6
+    cf.cond_br %7 [then: __range_panic_0, else: __range_ok_0]
+  __range_panic_0:
+    %8 = memref.lea_symdata __panic_msg_10
+    %9 = std.ptr_to_i64 %8
+    std.call_runtime @maxon_panic %9
+  __range_ok_0:
+    %10 = memref.load __range_val_0 : i64
+    func.return %10
+  }
+}
+=== arm64
+module {
+  func @codegen-internals.main() -> u32 {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.mov x0, #10
+    arm64.mov x1, #3
+    arm64.add x2, x0, x1
+    arm64.str x2, [x29, #-8]
+    arm64.mov x3, #0
+    arm64.cmp x2, x3
+    arm64.cset x4, lt
+    arm64.mov x5, #4294967295
+    arm64.cmp x2, x5
+    arm64.cset x6, gt
+    arm64.orr x7, x4, x6
+    arm64.cmp x7, #0
+    arm64.b.ne codegen-internals.main.__range_panic_0
+    arm64.b codegen-internals.main.__range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_symdata x0, __panic_msg_10
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl maxon_panic
+  __range_ok_0:
+    arm64.ldr x0, [x29, #-8]
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+}
+```
 
 <!-- test: i32-unsigned-div -->
 ```maxon
@@ -764,7 +1159,7 @@ end 'main'
 ```exitcode
 6
 ```
-```RequiredMLIR
+```RequiredMLIR:x86_64-windows
 === maxon
 module {
   func @codegen-internals.main() -> i64 {
@@ -846,6 +1241,87 @@ module {
   }
 }
 ```
+```RequiredMLIR:aarch64-macos
+=== maxon
+module {
+  func @codegen-internals.main() -> i64 {
+  entry:
+    %0 = maxon.literal {value = 20 : i64}
+    %1 = maxon.cast %0 {target = i16}
+    maxon.assign %1 {var = a} {kind = i16} {decl = 1 : i1} {mut = 1 : i1}
+    %2 = maxon.literal {value = 3 : i64}
+    %3 = maxon.cast %2 {target = i16}
+    maxon.assign %3 {var = b} {kind = i16} {decl = 1 : i1} {mut = 1 : i1}
+    %4 = maxon.binop %1, %3 {op = div}
+    maxon.assign %4 {var = __range_val_0} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %5 = maxon.literal {value = 0 : i64}
+    %6 = maxon.binop %4, %5 {op = lt}
+    %7 = maxon.literal {value = 4294967295 : i64}
+    %8 = maxon.binop %4, %7 {op = gt}
+    %9 = maxon.binop %6, %8 {op = or}
+    maxon.cond_br %9 [then: __range_panic_0, else: __range_ok_0]
+  __range_panic_0:
+    maxon.panic "panic at i32-unsigned-div.test:7: Range check failed for type 'ExitCode': value outside int(0 to 4294967295)"
+  __range_ok_0:
+    %11 = maxon.var_ref {var = __range_val_0} {type = i64}
+    maxon.scope_end [a, b, __range_val_0]
+    maxon.return %11
+  }
+}
+=== standard
+module {
+  func @codegen-internals.main() -> u32 {
+  entry:
+    %0 = arith.constant {value = 20 : i64}
+    %1 = arith.constant {value = 3 : i64}
+    %2 = arith.divsi %0, %1
+    memref.store %2, __range_val_0
+    %3 = arith.constant {value = 0 : i64}
+    %4 = arith.cmpi lt %2, %3
+    %5 = arith.constant {value = 4294967295 : i64}
+    %6 = arith.cmpi gt %2, %5
+    %7 = arith.ori1 %4, %6
+    cf.cond_br %7 [then: __range_panic_0, else: __range_ok_0]
+  __range_panic_0:
+    %8 = memref.lea_symdata __panic_msg_10
+    %9 = std.ptr_to_i64 %8
+    std.call_runtime @maxon_panic %9
+  __range_ok_0:
+    %10 = memref.load __range_val_0 : i64
+    func.return %10
+  }
+}
+=== arm64
+module {
+  func @codegen-internals.main() -> u32 {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.mov x0, #20
+    arm64.mov x1, #3
+    arm64.sdiv x2, x0, x1
+    arm64.str x2, [x29, #-8]
+    arm64.mov x3, #0
+    arm64.cmp x2, x3
+    arm64.cset x4, lt
+    arm64.mov x5, #4294967295
+    arm64.cmp x2, x5
+    arm64.cset x6, gt
+    arm64.orr x7, x4, x6
+    arm64.cmp x7, #0
+    arm64.b.ne codegen-internals.main.__range_panic_0
+    arm64.b codegen-internals.main.__range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_symdata x0, __panic_msg_10
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl maxon_panic
+  __range_ok_0:
+    arm64.ldr x0, [x29, #-8]
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+}
+```
 
 <!-- test: i32-signed-div -->
 ```maxon
@@ -860,7 +1336,7 @@ end 'main'
 ```exitcode
 6
 ```
-```RequiredMLIR
+```RequiredMLIR:x86_64-windows
 === maxon
 module {
   func @codegen-internals.main() -> i64 {
@@ -950,6 +1426,93 @@ module {
   }
 }
 ```
+```RequiredMLIR:aarch64-macos
+=== maxon
+module {
+  func @codegen-internals.main() -> i64 {
+  entry:
+    %0 = maxon.literal {value = 20 : i64}
+    maxon.assign %0 {var = a} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %1 = maxon.literal {value = 3 : i64}
+    maxon.assign %1 {var = b} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %2 = maxon.binop %0, %1 {op = div} {optimalType = i32}
+    maxon.assign %2 {var = __range_val_0} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %3 = maxon.literal {value = 0 : i64}
+    %4 = maxon.binop %2, %3 {op = lt}
+    %5 = maxon.literal {value = 4294967295 : i64}
+    %6 = maxon.binop %2, %5 {op = gt}
+    %7 = maxon.binop %4, %6 {op = or}
+    maxon.cond_br %7 [then: __range_panic_0, else: __range_ok_0]
+  __range_panic_0:
+    maxon.panic "panic at i32-signed-div.test:7: Range check failed for type 'ExitCode': value outside int(0 to 4294967295)"
+  __range_ok_0:
+    %9 = maxon.var_ref {var = __range_val_0} {type = i64}
+    maxon.scope_end [a, b, __range_val_0]
+    maxon.return %9
+  }
+}
+=== standard
+module {
+  func @codegen-internals.main() -> u32 {
+  entry:
+    %0 = arith.constant {value = 20 : i64}
+    %1 = arith.constant {value = 3 : i64}
+    %2 = arith.trunci %0
+    %3 = arith.trunci %1
+    %4 = arith.divsi %2, %3
+    memref.store %4, __range_val_0
+    %5 = arith.constant {value = 0 : i64}
+    %6 = arith.extsi %4
+    %7 = arith.cmpi lt %6, %5
+    %8 = arith.constant {value = 4294967295 : i64}
+    %9 = arith.extsi %4
+    %10 = arith.cmpi gt %9, %8
+    %11 = arith.ori1 %7, %10
+    cf.cond_br %11 [then: __range_panic_0, else: __range_ok_0]
+  __range_panic_0:
+    %12 = memref.lea_symdata __panic_msg_8
+    %13 = std.ptr_to_i64 %12
+    std.call_runtime @maxon_panic %13
+  __range_ok_0:
+    %14 = memref.load __range_val_0 : i32
+    func.return %14
+  }
+}
+=== arm64
+module {
+  func @codegen-internals.main() -> u32 {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.mov x0, #20
+    arm64.mov x1, #3
+    arm64.mov x2, x0
+    arm64.mov x3, x1
+    arm64.sdiv x4, x2, x3
+    arm64.str x4, [x29, #-8]
+    arm64.mov x5, #0
+    arm64.sxtw x6, x4
+    arm64.cmp x6, x5
+    arm64.cset x7, lt
+    arm64.mov x8, #4294967295
+    arm64.sxtw x9, x4
+    arm64.cmp x9, x8
+    arm64.cset x10, gt
+    arm64.orr x11, x7, x10
+    arm64.cmp x11, #0
+    arm64.b.ne codegen-internals.main.__range_panic_0
+    arm64.b codegen-internals.main.__range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_symdata x0, __panic_msg_8
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl maxon_panic
+  __range_ok_0:
+    arm64.ldr x0, [x29, #-8]
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+}
+```
 
 <!-- test: i32-unsigned-cmp -->
 ```maxon
@@ -967,7 +1530,7 @@ end 'main'
 ```exitcode
 1
 ```
-```RequiredMLIR
+```RequiredMLIR:x86_64-windows
 === maxon
 module {
   func @codegen-internals.main() -> i64 {
@@ -1023,6 +1586,65 @@ module {
   }
 }
 ```
+```RequiredMLIR:aarch64-macos
+=== maxon
+module {
+  func @codegen-internals.main() -> i64 {
+  entry:
+    %0 = maxon.literal {value = 10 : i64}
+    %1 = maxon.cast %0 {target = i16}
+    maxon.assign %1 {var = a} {kind = i16} {decl = 1 : i1} {mut = 1 : i1}
+    %2 = maxon.literal {value = 3 : i64}
+    %3 = maxon.cast %2 {target = i16}
+    maxon.assign %3 {var = b} {kind = i16} {decl = 1 : i1} {mut = 1 : i1}
+    %4 = maxon.binop %1, %3 {op = gt}
+    maxon.cond_br %4 [then: check_0, else: check_0.after]
+  check_0:
+    %5 = maxon.literal {value = 1 : i64}
+    maxon.scope_end [a, b]
+    maxon.return %5
+  check_0.after:
+    %6 = maxon.literal {value = 0 : i64}
+    maxon.scope_end [a, b]
+    maxon.return %6
+  }
+}
+=== standard
+module {
+  func @codegen-internals.main() -> u32 {
+  entry:
+    %0 = arith.constant {value = 10 : i64}
+    %1 = arith.constant {value = 3 : i64}
+    %2 = arith.cmpi gt %0, %1
+    cf.cond_br %2 [then: check_0, else: check_0.after]
+  check_0:
+    %3 = arith.constant {value = 1 : i64}
+    func.return %3
+  check_0.after:
+    %4 = arith.constant {value = 0 : i64}
+    func.return %4
+  }
+}
+=== arm64
+module {
+  func @codegen-internals.main() -> u32 {
+  entry:
+    arm64.mov x0, #10
+    arm64.mov x1, #3
+    arm64.cmp x0, x1
+    arm64.cset x2, gt
+    arm64.cmp x2, #0
+    arm64.b.ne codegen-internals.main.check_0
+    arm64.b codegen-internals.main.check_0.after
+  check_0:
+    arm64.mov x0, #1
+    arm64.ret
+  check_0.after:
+    arm64.mov x0, #0
+    arm64.ret
+  }
+}
+```
 
 <!-- test: i32-unsigned-mod -->
 ```maxon
@@ -1037,7 +1659,7 @@ end 'main'
 ```exitcode
 2
 ```
-```RequiredMLIR
+```RequiredMLIR:x86_64-windows
 === maxon
 module {
   func @codegen-internals.main() -> i64 {
@@ -1119,6 +1741,88 @@ module {
   }
 }
 ```
+```RequiredMLIR:aarch64-macos
+=== maxon
+module {
+  func @codegen-internals.main() -> i64 {
+  entry:
+    %0 = maxon.literal {value = 20 : i64}
+    %1 = maxon.cast %0 {target = i16}
+    maxon.assign %1 {var = a} {kind = i16} {decl = 1 : i1} {mut = 1 : i1}
+    %2 = maxon.literal {value = 3 : i64}
+    %3 = maxon.cast %2 {target = i16}
+    maxon.assign %3 {var = b} {kind = i16} {decl = 1 : i1} {mut = 1 : i1}
+    %4 = maxon.binop %1, %3 {op = mod}
+    maxon.assign %4 {var = __range_val_0} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %5 = maxon.literal {value = 0 : i64}
+    %6 = maxon.binop %4, %5 {op = lt}
+    %7 = maxon.literal {value = 4294967295 : i64}
+    %8 = maxon.binop %4, %7 {op = gt}
+    %9 = maxon.binop %6, %8 {op = or}
+    maxon.cond_br %9 [then: __range_panic_0, else: __range_ok_0]
+  __range_panic_0:
+    maxon.panic "panic at i32-unsigned-mod.test:7: Range check failed for type 'ExitCode': value outside int(0 to 4294967295)"
+  __range_ok_0:
+    %11 = maxon.var_ref {var = __range_val_0} {type = i64}
+    maxon.scope_end [a, b, __range_val_0]
+    maxon.return %11
+  }
+}
+=== standard
+module {
+  func @codegen-internals.main() -> u32 {
+  entry:
+    %0 = arith.constant {value = 20 : i64}
+    %1 = arith.constant {value = 3 : i64}
+    %2 = arith.remsi %0, %1
+    memref.store %2, __range_val_0
+    %3 = arith.constant {value = 0 : i64}
+    %4 = arith.cmpi lt %2, %3
+    %5 = arith.constant {value = 4294967295 : i64}
+    %6 = arith.cmpi gt %2, %5
+    %7 = arith.ori1 %4, %6
+    cf.cond_br %7 [then: __range_panic_0, else: __range_ok_0]
+  __range_panic_0:
+    %8 = memref.lea_symdata __panic_msg_10
+    %9 = std.ptr_to_i64 %8
+    std.call_runtime @maxon_panic %9
+  __range_ok_0:
+    %10 = memref.load __range_val_0 : i64
+    func.return %10
+  }
+}
+=== arm64
+module {
+  func @codegen-internals.main() -> u32 {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.mov x0, #20
+    arm64.mov x1, #3
+    arm64.sdiv x2, x0, x1
+    arm64.msub x3, x2, x1, x0
+    arm64.str x3, [x29, #-8]
+    arm64.mov x4, #0
+    arm64.cmp x3, x4
+    arm64.cset x5, lt
+    arm64.mov x6, #4294967295
+    arm64.cmp x3, x6
+    arm64.cset x7, gt
+    arm64.orr x8, x5, x7
+    arm64.cmp x8, #0
+    arm64.b.ne codegen-internals.main.__range_panic_0
+    arm64.b codegen-internals.main.__range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_symdata x0, __panic_msg_10
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl maxon_panic
+  __range_ok_0:
+    arm64.ldr x0, [x29, #-8]
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+}
+```
 
 <!-- test: i64-signed-no-narrowing -->
 ```maxon
@@ -1133,7 +1837,7 @@ end 'main'
 ```exitcode
 6
 ```
-```RequiredMLIR
+```RequiredMLIR:x86_64-windows
 === maxon
 module {
   func @codegen-internals.main() -> i64 {
@@ -1213,6 +1917,85 @@ module {
   }
 }
 ```
+```RequiredMLIR:aarch64-macos
+=== maxon
+module {
+  func @codegen-internals.main() -> i64 {
+  entry:
+    %0 = maxon.literal {value = 20 : i64}
+    maxon.assign %0 {var = a} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %1 = maxon.literal {value = 3 : i64}
+    maxon.assign %1 {var = b} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %2 = maxon.binop %0, %1 {op = div} {optimalType = i64}
+    maxon.assign %2 {var = __range_val_0} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %3 = maxon.literal {value = 0 : i64}
+    %4 = maxon.binop %2, %3 {op = lt}
+    %5 = maxon.literal {value = 4294967295 : i64}
+    %6 = maxon.binop %2, %5 {op = gt}
+    %7 = maxon.binop %4, %6 {op = or}
+    maxon.cond_br %7 [then: __range_panic_0, else: __range_ok_0]
+  __range_panic_0:
+    maxon.panic "panic at i64-signed-no-narrowing.test:7: Range check failed for type 'ExitCode': value outside int(0 to 4294967295)"
+  __range_ok_0:
+    %9 = maxon.var_ref {var = __range_val_0} {type = i64}
+    maxon.scope_end [a, b, __range_val_0]
+    maxon.return %9
+  }
+}
+=== standard
+module {
+  func @codegen-internals.main() -> u32 {
+  entry:
+    %0 = arith.constant {value = 20 : i64}
+    %1 = arith.constant {value = 3 : i64}
+    %2 = arith.divsi %0, %1
+    memref.store %2, __range_val_0
+    %3 = arith.constant {value = 0 : i64}
+    %4 = arith.cmpi lt %2, %3
+    %5 = arith.constant {value = 4294967295 : i64}
+    %6 = arith.cmpi gt %2, %5
+    %7 = arith.ori1 %4, %6
+    cf.cond_br %7 [then: __range_panic_0, else: __range_ok_0]
+  __range_panic_0:
+    %8 = memref.lea_symdata __panic_msg_8
+    %9 = std.ptr_to_i64 %8
+    std.call_runtime @maxon_panic %9
+  __range_ok_0:
+    %10 = memref.load __range_val_0 : i64
+    func.return %10
+  }
+}
+=== arm64
+module {
+  func @codegen-internals.main() -> u32 {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.mov x0, #20
+    arm64.mov x1, #3
+    arm64.sdiv x2, x0, x1
+    arm64.str x2, [x29, #-8]
+    arm64.mov x3, #0
+    arm64.cmp x2, x3
+    arm64.cset x4, lt
+    arm64.mov x5, #4294967295
+    arm64.cmp x2, x5
+    arm64.cset x6, gt
+    arm64.orr x7, x4, x6
+    arm64.cmp x7, #0
+    arm64.b.ne codegen-internals.main.__range_panic_0
+    arm64.b codegen-internals.main.__range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_symdata x0, __panic_msg_8
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl maxon_panic
+  __range_ok_0:
+    arm64.ldr x0, [x29, #-8]
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+}
+```
 
 <!-- test: i8-range-uses-i32-arithmetic -->
 ```maxon
@@ -1227,7 +2010,7 @@ end 'main'
 ```exitcode
 7
 ```
-```RequiredMLIR
+```RequiredMLIR:x86_64-windows
 === maxon
 module {
   func @codegen-internals.main() -> i64 {
@@ -1317,6 +2100,93 @@ module {
   }
 }
 ```
+```RequiredMLIR:aarch64-macos
+=== maxon
+module {
+  func @codegen-internals.main() -> i64 {
+  entry:
+    %0 = maxon.literal {value = 21 : i64}
+    maxon.assign %0 {var = a} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %1 = maxon.literal {value = 3 : i64}
+    maxon.assign %1 {var = b} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %2 = maxon.binop %0, %1 {op = div} {optimalType = u8}
+    maxon.assign %2 {var = __range_val_0} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %3 = maxon.literal {value = 0 : i64}
+    %4 = maxon.binop %2, %3 {op = lt}
+    %5 = maxon.literal {value = 4294967295 : i64}
+    %6 = maxon.binop %2, %5 {op = gt}
+    %7 = maxon.binop %4, %6 {op = or}
+    maxon.cond_br %7 [then: __range_panic_0, else: __range_ok_0]
+  __range_panic_0:
+    maxon.panic "panic at i8-range-uses-i32-arithmetic.test:7: Range check failed for type 'ExitCode': value outside int(0 to 4294967295)"
+  __range_ok_0:
+    %9 = maxon.var_ref {var = __range_val_0} {type = i64}
+    maxon.scope_end [a, b, __range_val_0]
+    maxon.return %9
+  }
+}
+=== standard
+module {
+  func @codegen-internals.main() -> u32 {
+  entry:
+    %0 = arith.constant {value = 21 : i64}
+    %1 = arith.constant {value = 3 : i64}
+    %2 = arith.trunci %0
+    %3 = arith.trunci %1
+    %4 = arith.divui %2, %3
+    memref.store %4, __range_val_0
+    %5 = arith.constant {value = 0 : i64}
+    %6 = arith.extui %4
+    %7 = arith.cmpi lt %6, %5
+    %8 = arith.constant {value = 4294967295 : i64}
+    %9 = arith.extui %4
+    %10 = arith.cmpi gt %9, %8
+    %11 = arith.ori1 %7, %10
+    cf.cond_br %11 [then: __range_panic_0, else: __range_ok_0]
+  __range_panic_0:
+    %12 = memref.lea_symdata __panic_msg_8
+    %13 = std.ptr_to_i64 %12
+    std.call_runtime @maxon_panic %13
+  __range_ok_0:
+    %14 = memref.load __range_val_0 : i32
+    func.return %14
+  }
+}
+=== arm64
+module {
+  func @codegen-internals.main() -> u32 {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.mov x0, #21
+    arm64.mov x1, #3
+    arm64.mov x2, x0
+    arm64.mov x3, x1
+    arm64.udiv x4, x2, x3
+    arm64.str x4, [x29, #-8]
+    arm64.mov x5, #0
+    arm64.mov x6, x4
+    arm64.cmp x6, x5
+    arm64.cset x7, lt
+    arm64.mov x8, #4294967295
+    arm64.mov x9, x4
+    arm64.cmp x9, x8
+    arm64.cset x10, gt
+    arm64.orr x11, x7, x10
+    arm64.cmp x11, #0
+    arm64.b.ne codegen-internals.main.__range_panic_0
+    arm64.b codegen-internals.main.__range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_symdata x0, __panic_msg_8
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl maxon_panic
+  __range_ok_0:
+    arm64.ldr x0, [x29, #-8]
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+}
+```
 
 <!-- test: f32-arithmetic-uses-ss-instructions -->
 ```maxon
@@ -1331,7 +2201,7 @@ end 'main'
 ```exitcode
 13
 ```
-```RequiredMLIR
+```RequiredMLIR:x86_64-windows
 === maxon
 module {
   func @codegen-internals.main() -> i64 {
@@ -1414,6 +2284,88 @@ module {
   }
 }
 ```
+```RequiredMLIR:aarch64-macos
+=== maxon
+module {
+  func @codegen-internals.main() -> i64 {
+  entry:
+    %0 = maxon.literal {value = 10 : f64}
+    maxon.assign %0 {var = a} {kind = f64} {decl = 1 : i1} {mut = 1 : i1}
+    %1 = maxon.literal {value = 3 : f64}
+    maxon.assign %1 {var = b} {kind = f64} {decl = 1 : i1} {mut = 1 : i1}
+    %2 = maxon.binop %0, %1 {op = add} {kind = f64}
+    %3 = maxon.trunc %2
+    maxon.assign %3 {var = __range_val_0} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %4 = maxon.literal {value = 0 : i64}
+    %5 = maxon.binop %3, %4 {op = lt}
+    %6 = maxon.literal {value = 4294967295 : i64}
+    %7 = maxon.binop %3, %6 {op = gt}
+    %8 = maxon.binop %5, %7 {op = or}
+    maxon.cond_br %8 [then: __range_panic_0, else: __range_ok_0]
+  __range_panic_0:
+    maxon.panic "panic at f32-arithmetic-uses-ss-instructions.test:7: Range check failed for type 'ExitCode': value outside int(0 to 4294967295)"
+  __range_ok_0:
+    %10 = maxon.var_ref {var = __range_val_0} {type = i64}
+    maxon.scope_end [a, b, __range_val_0]
+    maxon.return %10
+  }
+}
+=== standard
+module {
+  func @codegen-internals.main() -> u32 {
+  entry:
+    %0 = arith.float_constant {value = 10 : f64}
+    %1 = arith.float_constant {value = 3 : f64}
+    %2 = arith.addf %0, %1
+    %3 = arith.fptosi %2
+    memref.store %3, __range_val_0
+    %4 = arith.constant {value = 0 : i64}
+    %5 = arith.cmpi lt %3, %4
+    %6 = arith.constant {value = 4294967295 : i64}
+    %7 = arith.cmpi gt %3, %6
+    %8 = arith.ori1 %5, %7
+    cf.cond_br %8 [then: __range_panic_0, else: __range_ok_0]
+  __range_panic_0:
+    %9 = memref.lea_symdata __panic_msg_9
+    %10 = std.ptr_to_i64 %9
+    std.call_runtime @maxon_panic %10
+  __range_ok_0:
+    %11 = memref.load __range_val_0 : i64
+    func.return %11
+  }
+}
+=== arm64
+module {
+  func @codegen-internals.main() -> u32 {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.fldr d0, [__float_10]
+    arm64.fldr d1, [__float_3]
+    arm64.fadd d2, d0, d1
+    arm64.fcvtzs x0, d2
+    arm64.str x0, [x29, #-8]
+    arm64.mov x1, #0
+    arm64.cmp x0, x1
+    arm64.cset x2, lt
+    arm64.mov x3, #4294967295
+    arm64.cmp x0, x3
+    arm64.cset x4, gt
+    arm64.orr x5, x2, x4
+    arm64.cmp x5, #0
+    arm64.b.ne codegen-internals.main.__range_panic_0
+    arm64.b codegen-internals.main.__range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_symdata x0, __panic_msg_9
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl maxon_panic
+  __range_ok_0:
+    arm64.ldr x0, [x29, #-8]
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+}
+```
 
 <!-- test: f32-comparison-uses-ucomiss -->
 ```maxon
@@ -1431,7 +2383,7 @@ end 'main'
 ```exitcode
 1
 ```
-```RequiredMLIR
+```RequiredMLIR:x86_64-windows
 === maxon
 module {
   func @codegen-internals.main() -> i64 {
@@ -1486,6 +2438,63 @@ module {
   }
 }
 ```
+```RequiredMLIR:aarch64-macos
+=== maxon
+module {
+  func @codegen-internals.main() -> i64 {
+  entry:
+    %0 = maxon.literal {value = 3 : f64}
+    maxon.assign %0 {var = a} {kind = f64} {decl = 1 : i1} {mut = 1 : i1}
+    %1 = maxon.literal {value = 5 : f64}
+    maxon.assign %1 {var = b} {kind = f64} {decl = 1 : i1} {mut = 1 : i1}
+    %2 = maxon.binop %0, %1 {op = lt} {kind = f64}
+    maxon.cond_br %2 [then: less_0, else: less_0.after]
+  less_0:
+    %3 = maxon.literal {value = 1 : i64}
+    maxon.scope_end [a, b]
+    maxon.return %3
+  less_0.after:
+    %4 = maxon.literal {value = 0 : i64}
+    maxon.scope_end [a, b]
+    maxon.return %4
+  }
+}
+=== standard
+module {
+  func @codegen-internals.main() -> u32 {
+  entry:
+    %0 = arith.float_constant {value = 3 : f64}
+    %1 = arith.float_constant {value = 5 : f64}
+    %2 = arith.cmpf lt %0, %1
+    cf.cond_br %2 [then: less_0, else: less_0.after]
+  less_0:
+    %3 = arith.constant {value = 1 : i64}
+    func.return %3
+  less_0.after:
+    %4 = arith.constant {value = 0 : i64}
+    func.return %4
+  }
+}
+=== arm64
+module {
+  func @codegen-internals.main() -> u32 {
+  entry:
+    arm64.fldr d0, [__float_3]
+    arm64.fldr d1, [__float_5]
+    arm64.fcmp d0, d1
+    arm64.cset x0, lt
+    arm64.cmp x0, #0
+    arm64.b.ne codegen-internals.main.less_0
+    arm64.b codegen-internals.main.less_0.after
+  less_0:
+    arm64.mov x0, #1
+    arm64.ret
+  less_0.after:
+    arm64.mov x0, #0
+    arm64.ret
+  }
+}
+```
 
 <!-- test: f32-truncation-uses-cvttss2si -->
 ```maxon
@@ -1499,7 +2508,7 @@ end 'main'
 ```exitcode
 42
 ```
-```RequiredMLIR
+```RequiredMLIR:x86_64-windows
 === maxon
 module {
   func @codegen-internals.main() -> i64 {
@@ -1571,6 +2580,81 @@ module {
     x86.mov rax, [rbp-8]
     x86.epilogue
     x86.ret
+  }
+}
+```
+```RequiredMLIR:aarch64-macos
+=== maxon
+module {
+  func @codegen-internals.main() -> i64 {
+  entry:
+    %0 = maxon.literal {value = 42.9 : f64}
+    maxon.assign %0 {var = a} {kind = f64} {decl = 1 : i1} {mut = 1 : i1}
+    %1 = maxon.trunc %0
+    maxon.assign %1 {var = __range_val_0} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %2 = maxon.literal {value = 0 : i64}
+    %3 = maxon.binop %1, %2 {op = lt}
+    %4 = maxon.literal {value = 4294967295 : i64}
+    %5 = maxon.binop %1, %4 {op = gt}
+    %6 = maxon.binop %3, %5 {op = or}
+    maxon.cond_br %6 [then: __range_panic_0, else: __range_ok_0]
+  __range_panic_0:
+    maxon.panic "panic at f32-truncation-uses-cvttss2si.test:6: Range check failed for type 'ExitCode': value outside int(0 to 4294967295)"
+  __range_ok_0:
+    %8 = maxon.var_ref {var = __range_val_0} {type = i64}
+    maxon.scope_end [a, __range_val_0]
+    maxon.return %8
+  }
+}
+=== standard
+module {
+  func @codegen-internals.main() -> u32 {
+  entry:
+    %0 = arith.float_constant {value = 42.9 : f64}
+    %1 = arith.fptosi %0
+    memref.store %1, __range_val_0
+    %2 = arith.constant {value = 0 : i64}
+    %3 = arith.cmpi lt %1, %2
+    %4 = arith.constant {value = 4294967295 : i64}
+    %5 = arith.cmpi gt %1, %4
+    %6 = arith.ori1 %3, %5
+    cf.cond_br %6 [then: __range_panic_0, else: __range_ok_0]
+  __range_panic_0:
+    %7 = memref.lea_symdata __panic_msg_7
+    %8 = std.ptr_to_i64 %7
+    std.call_runtime @maxon_panic %8
+  __range_ok_0:
+    %9 = memref.load __range_val_0 : i64
+    func.return %9
+  }
+}
+=== arm64
+module {
+  func @codegen-internals.main() -> u32 {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.fldr d0, [__float_42.9]
+    arm64.fcvtzs x0, d0
+    arm64.str x0, [x29, #-8]
+    arm64.mov x1, #0
+    arm64.cmp x0, x1
+    arm64.cset x2, lt
+    arm64.mov x3, #4294967295
+    arm64.cmp x0, x3
+    arm64.cset x4, gt
+    arm64.orr x5, x2, x4
+    arm64.cmp x5, #0
+    arm64.b.ne codegen-internals.main.__range_panic_0
+    arm64.b codegen-internals.main.__range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_symdata x0, __panic_msg_7
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl maxon_panic
+  __range_ok_0:
+    arm64.ldr x0, [x29, #-8]
+    arm64.epilogue stack_size=48
+    arm64.ret
   }
 }
 ```

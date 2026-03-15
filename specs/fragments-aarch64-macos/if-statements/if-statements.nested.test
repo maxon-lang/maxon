@@ -1,0 +1,51 @@
+// Test: if-statements.nested
+function main() returns ExitCode
+  var x = 3
+  if x == 1 'outer'
+    return 1
+  end 'outer' else 'else_outer'
+    if x == 2 'inner'
+      return 2
+    end 'inner' else 'else_inner'
+      return 3
+    end 'else_inner'
+  end 'else_outer'
+end 'main'
+---
+ExitCode: 3
+---
+module {
+  func @if-statements.main() -> u32 {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.mov x0, #3
+    arm64.str x0, [x29, #-8]
+    arm64.mov x1, #1
+    arm64.cmp x0, x1
+    arm64.cset x2, eq
+    arm64.cmp x2, #0
+    arm64.b.ne if-statements.main.outer_0
+    arm64.b if-statements.main.else_outer_1
+  outer_0:
+    arm64.mov x0, #1
+    arm64.epilogue stack_size=48
+    arm64.ret
+  else_outer_1:
+    arm64.mov x0, #2
+    arm64.ldr x1, [x29, #-8]
+    arm64.cmp x1, x0
+    arm64.cset x2, eq
+    arm64.cmp x2, #0
+    arm64.b.ne if-statements.main.inner_2
+    arm64.b if-statements.main.else_inner_3
+  inner_2:
+    arm64.mov x0, #2
+    arm64.epilogue stack_size=48
+    arm64.ret
+  else_inner_3:
+    arm64.mov x0, #3
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+}
+---

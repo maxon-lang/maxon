@@ -1,0 +1,31 @@
+// Test: transitive-interface-validation
+
+typealias Integer = int(i64.min to i64.max)
+
+interface BaseInterface
+  function baseMethod() returns Integer
+end 'BaseInterface'
+
+interface DerivedInterface extends BaseInterface
+  function derivedMethod() returns Integer
+end 'DerivedInterface'
+
+// IncompleteType is missing baseMethod from BaseInterface
+type IncompleteType implements DerivedInterface
+  var value Integer
+
+  function derivedMethod() returns Integer
+    return value
+  end 'derivedMethod'
+end 'IncompleteType'
+
+function main() returns ExitCode
+  return 0
+end 'main'
+---
+MaxoncStderr: ```
+error E3016: specs/fragments/interfaces/transitive-interface-validation.test:14:6: Partial interface implementation: type 'IncompleteType' is missing 1 method(s):
+  - baseMethod() returns Integer (from BaseInterface)
+```
+---
+---

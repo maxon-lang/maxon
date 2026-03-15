@@ -1,0 +1,133 @@
+// Test: int-parallel-accumulation
+function main() returns ExitCode
+  var sum1 = 0
+  var sum2 = 0
+  var sum3 = 0
+  sum1 = sum1 + 10
+  sum2 = sum2 + 20
+  sum3 = sum3 + 30
+  sum1 = sum1 + 5
+  sum2 = sum2 + 10
+  sum3 = sum3 + 15
+  return sum1 + sum2 + sum3
+end 'main'
+---
+ExitCode: 90
+RequiredMLIR: ```
+=== maxon
+module {
+  func @register-allocator.main() -> i64 {
+  entry:
+    %0 = maxon.literal {value = 0 : i64}
+    maxon.assign %0 {var = sum1} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %1 = maxon.literal {value = 0 : i64}
+    maxon.assign %1 {var = sum2} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %2 = maxon.literal {value = 0 : i64}
+    maxon.assign %2 {var = sum3} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %3 = maxon.literal {value = 10 : i64}
+    %4 = maxon.binop %0, %3 {op = add}
+    maxon.assign %4 {var = sum1} {kind = i64} {mut = 1 : i1}
+    %5 = maxon.literal {value = 20 : i64}
+    %6 = maxon.binop %1, %5 {op = add}
+    maxon.assign %6 {var = sum2} {kind = i64} {mut = 1 : i1}
+    %7 = maxon.literal {value = 30 : i64}
+    %8 = maxon.binop %2, %7 {op = add}
+    maxon.assign %8 {var = sum3} {kind = i64} {mut = 1 : i1}
+    %9 = maxon.literal {value = 5 : i64}
+    %10 = maxon.binop %4, %9 {op = add}
+    maxon.assign %10 {var = sum1} {kind = i64} {mut = 1 : i1}
+    %11 = maxon.literal {value = 10 : i64}
+    %12 = maxon.binop %6, %11 {op = add}
+    maxon.assign %12 {var = sum2} {kind = i64} {mut = 1 : i1}
+    %13 = maxon.literal {value = 15 : i64}
+    %14 = maxon.binop %8, %13 {op = add}
+    maxon.assign %14 {var = sum3} {kind = i64} {mut = 1 : i1}
+    %15 = maxon.binop %10, %12 {op = add}
+    %16 = maxon.binop %15, %14 {op = add}
+    maxon.assign %16 {var = __range_val_0} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %17 = maxon.literal {value = 0 : i64}
+    %18 = maxon.binop %16, %17 {op = lt}
+    %19 = maxon.literal {value = 4294967295 : i64}
+    %20 = maxon.binop %16, %19 {op = gt}
+    %21 = maxon.binop %18, %20 {op = or}
+    maxon.cond_br %21 [then: __range_panic_0, else: __range_ok_0]
+  __range_panic_0:
+    maxon.panic "panic at int-parallel-accumulation.test:12: Range check failed for type 'ExitCode': value outside int(0 to 4294967295)"
+  __range_ok_0:
+    %23 = maxon.var_ref {var = __range_val_0} {type = i64}
+    maxon.scope_end [sum1, sum2, sum3, __range_val_0]
+    maxon.return %23
+  }
+}
+=== standard
+module {
+  func @register-allocator.main() -> u32 {
+  entry:
+    %3 = arith.constant {value = 10 : i64}
+    %4 = arith.constant {value = 20 : i64}
+    %5 = arith.constant {value = 30 : i64}
+    %6 = arith.constant {value = 5 : i64}
+    %7 = arith.addi %3, %6
+    %8 = arith.constant {value = 10 : i64}
+    %9 = arith.addi %4, %8
+    %10 = arith.constant {value = 15 : i64}
+    %11 = arith.addi %5, %10
+    %12 = arith.addi %7, %9
+    %13 = arith.addi %12, %11
+    memref.store %13, __range_val_0
+    %14 = arith.constant {value = 0 : i64}
+    %15 = arith.cmpi lt %13, %14
+    %16 = arith.constant {value = 4294967295 : i64}
+    %17 = arith.cmpi gt %13, %16
+    %18 = arith.ori1 %15, %17
+    cf.cond_br %18 [then: __range_panic_0, else: __range_ok_0]
+  __range_panic_0:
+    %19 = memref.lea_symdata __panic_msg_22
+    %20 = std.ptr_to_i64 %19
+    std.call_runtime @maxon_panic %20
+  __range_ok_0:
+    %21 = memref.load __range_val_0 : i64
+    func.return %21
+  }
+}
+=== arm64
+module {
+  func @register-allocator.main() -> u32 {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.mov x0, #10
+    arm64.mov x1, #20
+    arm64.mov x2, #30
+    arm64.mov x3, #5
+    arm64.add x4, x0, x3
+    arm64.mov x5, #10
+    arm64.add x6, x1, x5
+    arm64.mov x7, #15
+    arm64.add x8, x2, x7
+    arm64.add x9, x4, x6
+    arm64.add x10, x9, x8
+    arm64.str x10, [x29, #-8]
+    arm64.mov x11, #0
+    arm64.cmp x10, x11
+    arm64.cset x12, lt
+    arm64.mov x13, #4294967295
+    arm64.cmp x10, x13
+    arm64.cset x14, gt
+    arm64.orr x15, x12, x14
+    arm64.cmp x15, #0
+    arm64.b.ne register-allocator.main.__range_panic_0
+    arm64.b register-allocator.main.__range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_symdata x0, __panic_msg_22
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl maxon_panic
+  __range_ok_0:
+    arm64.ldr x0, [x29, #-8]
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+}
+```
+---
+---

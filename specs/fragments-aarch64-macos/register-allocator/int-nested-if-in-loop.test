@@ -1,0 +1,213 @@
+// Test: int-nested-if-in-loop
+function main() returns ExitCode
+  var result = 0
+  var i = 1
+  while i <= 10 'loop'
+    if i <= 5 'first'
+      result = result + i
+    end 'first' else 'second'
+      result = result + i * 2
+    end 'second'
+    i = i + 1
+  end 'loop'
+  return result mod 256
+end 'main'
+---
+ExitCode: 95
+RequiredMLIR: ```
+=== maxon
+module {
+  func @register-allocator.main() -> i64 {
+  entry:
+    %0 = maxon.literal {value = 0 : i64}
+    maxon.assign %0 {var = result} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %1 = maxon.literal {value = 1 : i64}
+    maxon.assign %1 {var = i} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.br loop_0.header
+  loop_0.header:
+    %2 = maxon.literal {value = 10 : i64}
+    %3 = maxon.var_ref {var = i} {type = i64}
+    %4 = maxon.binop %3, %2 {op = le}
+    maxon.cond_br %4 [then: loop_0, else: loop_0.exit]
+  loop_0:
+    %5 = maxon.literal {value = 5 : i64}
+    %6 = maxon.var_ref {var = i} {type = i64}
+    %7 = maxon.binop %6, %5 {op = le}
+    maxon.cond_br %7 [then: first_1, else: second_2]
+  first_1:
+    %8 = maxon.var_ref {var = result} {type = i64}
+    %9 = maxon.var_ref {var = i} {type = i64}
+    %10 = maxon.binop %8, %9 {op = add}
+    maxon.assign %10 {var = result} {kind = i64} {mut = 1 : i1}
+    maxon.scope_end []
+    maxon.br first_1.merge
+  second_2:
+    %11 = maxon.literal {value = 2 : i64}
+    %12 = maxon.var_ref {var = i} {type = i64}
+    %13 = maxon.binop %12, %11 {op = mul}
+    %14 = maxon.var_ref {var = result} {type = i64}
+    %15 = maxon.binop %14, %13 {op = add}
+    maxon.assign %15 {var = result} {kind = i64} {mut = 1 : i1}
+    maxon.scope_end []
+    maxon.br first_1.merge
+  first_1.merge:
+    %16 = maxon.literal {value = 1 : i64}
+    %17 = maxon.var_ref {var = i} {type = i64}
+    %18 = maxon.binop %17, %16 {op = add}
+    maxon.assign %18 {var = i} {kind = i64} {mut = 1 : i1}
+    maxon.scope_end []
+    maxon.br loop_0.header
+  loop_0.exit:
+    %19 = maxon.literal {value = 256 : i64}
+    %20 = maxon.var_ref {var = result} {type = i64}
+    %21 = maxon.binop %20, %19 {op = mod}
+    maxon.assign %21 {var = __range_val_3} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %22 = maxon.literal {value = 0 : i64}
+    %23 = maxon.binop %21, %22 {op = lt}
+    %24 = maxon.literal {value = 4294967295 : i64}
+    %25 = maxon.binop %21, %24 {op = gt}
+    %26 = maxon.binop %23, %25 {op = or}
+    maxon.cond_br %26 [then: __range_panic_3, else: __range_ok_3]
+  __range_panic_3:
+    maxon.panic "panic at int-nested-if-in-loop.test:13: Range check failed for type 'ExitCode': value outside int(0 to 4294967295)"
+  __range_ok_3:
+    %28 = maxon.var_ref {var = __range_val_3} {type = i64}
+    maxon.scope_end [result, i, __range_val_3]
+    maxon.return %28
+  }
+}
+=== standard
+module {
+  func @register-allocator.main() -> u32 {
+  entry:
+    %0 = arith.constant {value = 0 : i64}
+    memref.store %0, result
+    %1 = arith.constant {value = 1 : i64}
+    memref.store %1, i
+    cf.br loop_0.header
+  loop_0.header:
+    %2 = arith.constant {value = 10 : i64}
+    %3 = memref.load i : i64
+    %4 = arith.cmpi le %3, %2
+    cf.cond_br %4 [then: loop_0, else: loop_0.exit]
+  loop_0:
+    %5 = arith.constant {value = 5 : i64}
+    %6 = memref.load i : i64
+    %7 = arith.cmpi le %6, %5
+    cf.cond_br %7 [then: first_1, else: second_2]
+  first_1:
+    %8 = memref.load result : i64
+    %9 = memref.load i : i64
+    %10 = arith.addi %8, %9
+    memref.store %10, result
+    cf.br first_1.merge
+  second_2:
+    %11 = arith.constant {value = 2 : i64}
+    %12 = memref.load i : i64
+    %13 = arith.muli %12, %11
+    %14 = memref.load result : i64
+    %15 = arith.addi %14, %13
+    memref.store %15, result
+    cf.br first_1.merge
+  first_1.merge:
+    %16 = arith.constant {value = 1 : i64}
+    %17 = memref.load i : i64
+    %18 = arith.addi %17, %16
+    memref.store %18, i
+    cf.br loop_0.header
+  loop_0.exit:
+    %19 = arith.constant {value = 256 : i64}
+    %20 = memref.load result : i64
+    %21 = arith.remsi %20, %19
+    memref.store %21, __range_val_3
+    %22 = arith.constant {value = 0 : i64}
+    %23 = arith.cmpi lt %21, %22
+    %24 = arith.constant {value = 4294967295 : i64}
+    %25 = arith.cmpi gt %21, %24
+    %26 = arith.ori1 %23, %25
+    cf.cond_br %26 [then: __range_panic_3, else: __range_ok_3]
+  __range_panic_3:
+    %27 = memref.lea_symdata __panic_msg_27
+    %28 = std.ptr_to_i64 %27
+    std.call_runtime @maxon_panic %28
+  __range_ok_3:
+    %29 = memref.load __range_val_3 : i64
+    func.return %29
+  }
+}
+=== arm64
+module {
+  func @register-allocator.main() -> u32 {
+  entry:
+    arm64.prologue stack_size=80
+    arm64.mov x0, #0
+    arm64.str x0, [x29, #-8]
+    arm64.mov x1, #1
+    arm64.str x1, [x29, #-16]
+    arm64.b register-allocator.main.loop_0.header
+  loop_0.header:
+    arm64.mov x0, #10
+    arm64.ldr x1, [x29, #-16]
+    arm64.cmp x1, x0
+    arm64.cset x2, le
+    arm64.cmp x2, #0
+    arm64.b.ne register-allocator.main.loop_0
+    arm64.b register-allocator.main.loop_0.exit
+  loop_0:
+    arm64.mov x0, #5
+    arm64.ldr x1, [x29, #-16]
+    arm64.cmp x1, x0
+    arm64.cset x2, le
+    arm64.cmp x2, #0
+    arm64.b.ne register-allocator.main.first_1
+    arm64.b register-allocator.main.second_2
+  first_1:
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x29, #-16]
+    arm64.add x2, x0, x1
+    arm64.str x2, [x29, #-8]
+    arm64.b register-allocator.main.first_1.merge
+  second_2:
+    arm64.mov x0, #2
+    arm64.ldr x1, [x29, #-16]
+    arm64.mul x2, x1, x0
+    arm64.ldr x3, [x29, #-8]
+    arm64.add x4, x3, x2
+    arm64.str x4, [x29, #-8]
+    arm64.b register-allocator.main.first_1.merge
+  first_1.merge:
+    arm64.mov x0, #1
+    arm64.ldr x1, [x29, #-16]
+    arm64.add x2, x1, x0
+    arm64.str x2, [x29, #-16]
+    arm64.b register-allocator.main.loop_0.header
+  loop_0.exit:
+    arm64.mov x0, #256
+    arm64.ldr x1, [x29, #-8]
+    arm64.sdiv x2, x1, x0
+    arm64.msub x3, x2, x0, x1
+    arm64.str x3, [x29, #-24]
+    arm64.mov x4, #0
+    arm64.cmp x3, x4
+    arm64.cset x5, lt
+    arm64.mov x6, #4294967295
+    arm64.cmp x3, x6
+    arm64.cset x7, gt
+    arm64.orr x8, x5, x7
+    arm64.cmp x8, #0
+    arm64.b.ne register-allocator.main.__range_panic_3
+    arm64.b register-allocator.main.__range_ok_3
+  __range_panic_3:
+    arm64.adrp_add_symdata x0, __panic_msg_27
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl maxon_panic
+  __range_ok_3:
+    arm64.ldr x0, [x29, #-24]
+    arm64.epilogue stack_size=80
+    arm64.ret
+  }
+}
+```
+---
+---

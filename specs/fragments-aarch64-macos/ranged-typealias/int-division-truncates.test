@@ -1,0 +1,39 @@
+// Test: int-division-truncates
+function main() returns ExitCode
+  var a = 7
+  var b = 2
+  return a / b
+end 'main'
+---
+ExitCode: 3
+---
+module {
+  func @ranged-typealias.main() -> u32 {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.mov x0, #7
+    arm64.mov x1, #2
+    arm64.sdiv x2, x0, x1
+    arm64.str x2, [x29, #-8]
+    arm64.mov x3, #0
+    arm64.cmp x2, x3
+    arm64.cset x4, lt
+    arm64.mov x5, #4294967295
+    arm64.cmp x2, x5
+    arm64.cset x6, gt
+    arm64.orr x7, x4, x6
+    arm64.cmp x7, #0
+    arm64.b.ne ranged-typealias.main.__range_panic_0
+    arm64.b ranged-typealias.main.__range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_symdata x0, __panic_msg_8
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl maxon_panic
+  __range_ok_0:
+    arm64.ldr x0, [x29, #-8]
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+}
+---

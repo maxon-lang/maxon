@@ -8,11 +8,12 @@ namespace MaxonSharp.Testing;
 public static partial class SpecParser {
   /// <summary>
   /// Parse a spec file and extract all tests.
+  /// When targetKey is provided (e.g. "x86_64-windows"), extracts RequiredMLIR:{targetKey} blocks.
   /// </summary>
-  public static SpecFile Parse(string filePath) {
+  public static SpecFile Parse(string filePath, string? targetKey = null) {
     var content = File.ReadAllText(filePath);
     var (feature, status, category) = ParseFrontmatter(content);
-    var tests = ExtractTests(content);
+    var tests = ExtractTests(content, targetKey);
 
     return new SpecFile {
       FilePath = filePath,
@@ -26,13 +27,14 @@ public static partial class SpecParser {
   /// <summary>
   /// Parse all spec files in a directory.
   /// Skips specs with status: draft.
+  /// When targetKey is provided (e.g. "x86_64-windows"), extracts RequiredMLIR:{targetKey} blocks.
   /// </summary>
-  public static List<SpecFile> ParseDirectory(string specDir) {
+  public static List<SpecFile> ParseDirectory(string specDir, string? targetKey = null) {
     var specs = new List<SpecFile>();
 
     foreach (var file in Directory.GetFiles(specDir, "*.md")) {
       try {
-        var spec = Parse(file);
+        var spec = Parse(file, targetKey);
         if (spec.Status == "draft") {
           Logger.Debug(LogCategory.Testing, $"Skipping draft spec: {Path.GetFileName(file)}");
           continue;
@@ -65,7 +67,7 @@ public static partial class SpecParser {
     return match.Success ? match.Groups[1].Value.Trim() : null;
   }
 
-  private static List<TestCase> ExtractTests(string content) {
+  private static List<TestCase> ExtractTests(string content, string? targetKey = null) {
     var tests = new List<TestCase>();
 
     // Find all test markers: <!-- test: name -->
@@ -100,7 +102,10 @@ public static partial class SpecParser {
       var runtimeStderr = ExtractCodeBlock(testSection, "stderr");
       var compilerStderr = ExtractCodeBlock(testSection, "maxoncstderr");
 
-      var requiredMLIR = ExtractCodeBlock(testSection, "RequiredMLIR");
+      // Prefer target-qualified RequiredMLIR block, fall back to unqualified for backward compat
+      var requiredMLIR = targetKey != null
+        ? ExtractCodeBlock(testSection, $"RequiredMLIR:{targetKey}") ?? ExtractCodeBlock(testSection, "RequiredMLIR")
+        : ExtractCodeBlock(testSection, "RequiredMLIR");
       var requiredRdata = ExtractCodeBlock(testSection, "RequiredRdata");
       var requiredData = ExtractCodeBlock(testSection, "RequiredData");
 
@@ -222,14 +227,20 @@ public static partial class SpecParser {
     "maxon", "exitcode", "stdout", "stderr", "maxoncstderr", "RequiredMLIR", "RequiredRdata", "RequiredData"
   ];
 
+  private static readonly HashSet<string> KnownCodeBlockPrefixes = [
+    "RequiredMLIR"
+  ];
+
   private static void ValidateCodeBlockLanguages(string testName, string testSection) {
     foreach (Match match in CodeBlockLanguageRegex().Matches(testSection)) {
       var language = match.Groups[1].Value;
-      if (!KnownCodeBlockLanguages.Contains(language)) {
-        throw new Exception(
-          $"Test '{testName}' has unrecognized code block language '{language}'. " +
-          $"Valid languages: {string.Join(", ", KnownCodeBlockLanguages)}");
-      }
+      if (KnownCodeBlockLanguages.Contains(language)) continue;
+      // Allow target-qualified blocks like RequiredMLIR:x86_64-windows
+      var colonIdx = language.IndexOf(':');
+      if (colonIdx > 0 && KnownCodeBlockPrefixes.Contains(language[..colonIdx])) continue;
+      throw new Exception(
+        $"Test '{testName}' has unrecognized code block language '{language}'. " +
+        $"Valid languages: {string.Join(", ", KnownCodeBlockLanguages)}");
     }
   }
 
@@ -275,6 +286,6 @@ public static partial class SpecParser {
   [GeneratedRegex(@"^// --- file:\s*(.+)$", RegexOptions.Multiline)]
   private static partial Regex FileMarkerRegex();
 
-  [GeneratedRegex(@"```([a-zA-Z]\w*)\r?\n", RegexOptions.Multiline)]
+  [GeneratedRegex(@"```([a-zA-Z][\w:\-]*)\r?\n", RegexOptions.Multiline)]
   private static partial Regex CodeBlockLanguageRegex();
 }

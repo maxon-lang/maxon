@@ -1,0 +1,41 @@
+// Test: enum-ordinal.string-backed
+enum ContentType
+  json = "application/json"
+  html = "text/html"
+  plain = "text/plain"
+end 'ContentType'
+
+function main() returns ExitCode
+  var ct = ContentType.html
+  if ct.ordinal == 1 'check'
+    return 1
+  end 'check'
+  return 0
+end 'main'
+---
+ExitCode: 1
+---
+module {
+  func @enum-ordinal.main() -> u32 {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.mov x0, #1
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x1, [x29, #-8]
+    arm64.mov x2, #1
+    arm64.cmp x1, x2
+    arm64.cset x3, eq
+    arm64.cmp x3, #0
+    arm64.b.ne enum-ordinal.main.check_0
+    arm64.b enum-ordinal.main.check_0.after
+  check_0:
+    arm64.mov x0, #1
+    arm64.epilogue stack_size=48
+    arm64.ret
+  check_0.after:
+    arm64.mov x0, #0
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+}
+---

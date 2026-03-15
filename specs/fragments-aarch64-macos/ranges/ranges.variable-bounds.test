@@ -1,0 +1,69 @@
+// Test: ranges.variable-bounds
+function main() returns ExitCode
+    var start = 2
+    var finish = 4
+    var sum = 0
+    for i in start to finish 'loop'
+        sum = sum + i
+    end 'loop'
+    return sum
+end 'main'
+---
+ExitCode: 9
+---
+module {
+  func @ranges.main() -> u32 {
+  entry:
+    arm64.prologue stack_size=80
+    arm64.mov x0, #2
+    arm64.mov x1, #4
+    arm64.mov x2, #0
+    arm64.str x2, [x29, #-8]
+    arm64.str x1, [x29, #-16]
+    arm64.str x0, [x29, #-24]
+    arm64.b ranges.main.loop_0.header
+  loop_0.header:
+    arm64.ldr x0, [x29, #-24]
+    arm64.ldr x1, [x29, #-16]
+    arm64.cmp x0, x1
+    arm64.cset x2, le
+    arm64.cmp x2, #0
+    arm64.b.ne ranges.main.loop_0
+    arm64.b ranges.main.loop_0.exit
+  loop_0:
+    arm64.ldr x0, [x29, #-24]
+    arm64.ldr x1, [x29, #-8]
+    arm64.add x2, x1, x0
+    arm64.str x2, [x29, #-8]
+    arm64.b ranges.main.loop_0.incr
+  loop_0.incr:
+    arm64.mov x0, #1
+    arm64.ldr x1, [x29, #-24]
+    arm64.add x2, x1, x0
+    arm64.str x2, [x29, #-24]
+    arm64.b ranges.main.loop_0.header
+  loop_0.exit:
+    arm64.ldr x0, [x29, #-8]
+    arm64.str x0, [x29, #-32]
+    arm64.mov x1, #0
+    arm64.cmp x0, x1
+    arm64.cset x2, lt
+    arm64.mov x3, #4294967295
+    arm64.cmp x0, x3
+    arm64.cset x4, gt
+    arm64.orr x5, x2, x4
+    arm64.cmp x5, #0
+    arm64.b.ne ranges.main.__range_panic_1
+    arm64.b ranges.main.__range_ok_1
+  __range_panic_1:
+    arm64.adrp_add_symdata x0, __panic_msg_18
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl maxon_panic
+  __range_ok_1:
+    arm64.ldr x0, [x29, #-32]
+    arm64.epilogue stack_size=80
+    arm64.ret
+  }
+}
+---

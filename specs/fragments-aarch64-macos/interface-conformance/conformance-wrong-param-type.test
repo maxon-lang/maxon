@@ -1,0 +1,25 @@
+// Test: conformance-wrong-param-type
+
+typealias Integer = int(i64.min to i64.max)
+typealias Float = float(f64.min to f64.max)
+
+interface Processor
+  function process(value Integer) returns Integer
+end 'Processor'
+
+type BadProcessor implements Processor
+  function process(value Float) returns Integer
+    return 0
+  end 'process'
+end 'BadProcessor'
+
+function main() returns ExitCode
+  return 0
+end 'main'
+---
+MaxoncStderr: ```
+error E3016: specs/fragments/interface-conformance/conformance-wrong-param-type.test:10:6: Partial interface implementation: type 'BadProcessor' has 1 method(s) with wrong signature:
+  - process(value Float) returns Integer (expected process(value Integer) returns Integer)
+```
+---
+---

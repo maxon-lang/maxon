@@ -1,0 +1,32 @@
+// Test: builtins-type.float-to-bits
+function main() returns ExitCode
+  let bits = __Builtins.floatToBits(1.0)
+  // IEEE 754: 1.0 = 0x3FF0000000000000 = 4607182418800017408
+  if bits == 4607182418800017408 'check'
+    return 0
+  end 'check'
+  return 1
+end 'main'
+---
+ExitCode: 0
+---
+module {
+  func @builtins-type.main() -> u32 {
+  entry:
+    arm64.fldr d0, [__float_1]
+    arm64.fmov x0, d0
+    arm64.mov x1, #4607182418800017408
+    arm64.cmp x0, x1
+    arm64.cset x2, eq
+    arm64.cmp x2, #0
+    arm64.b.ne builtins-type.main.check_0
+    arm64.b builtins-type.main.check_0.after
+  check_0:
+    arm64.mov x0, #0
+    arm64.ret
+  check_0.after:
+    arm64.mov x0, #1
+    arm64.ret
+  }
+}
+---

@@ -310,7 +310,7 @@ C:\Users\docs\readme.md
 <!-- test: filepath-is-absolute-drive -->
 ```maxon
 function main() returns ExitCode
-  var p = FilePath from "C:\\foo"
+  var p = FilePath from "/absolute/path"
   if p.isAbsolute() 'abs'
     print("absolute\n")
   end 'abs'
@@ -574,7 +574,7 @@ test.txt
 <!-- test: filepath-from-throws-invalid -->
 ```maxon
 function main() returns ExitCode
-  var p = try FilePath.from("bad<path") otherwise (e) 'err'
+  var p = try FilePath.from("https://example.com/path") otherwise (e) 'err'
     print("caught error\n")
     return 0
   end 'err'
@@ -611,7 +611,7 @@ C:\valid\path.txt
 <!-- test: filepath-file-url-from -->
 ```maxon
 function main() returns ExitCode
-  var p = try FilePath.from("file:///C:/Users/test.txt") otherwise panic("bad path")
+  var p = try FilePath.from("file:///tmp/test.txt") otherwise panic("bad path")
   print("{p}\n")
   return 0
 end 'main'
@@ -620,13 +620,13 @@ end 'main'
 0
 ```
 ```stdout
-C:\Users\test.txt
+\tmp\test.txt
 ```
 
 <!-- test: filepath-file-url-init -->
 ```maxon
 function main() returns ExitCode
-  var p = FilePath from "file:///C:/Users/test.txt"
+  var p = FilePath from "file:///tmp/test.txt"
   print("{p}\n")
   return 0
 end 'main'
@@ -635,7 +635,7 @@ end 'main'
 0
 ```
 ```stdout
-C:\Users\test.txt
+\tmp\test.txt
 ```
 
 <!-- test: filepath-file-url-unix-path -->

@@ -20,38 +20,36 @@ export type FilePath implements InitableFromStringLiteral, Equatable, Hashable, 
   export var _path String
 
   /// Create FilePath from a string literal via `FilePath from "..."` syntax.
-  /// Panics if the path contains invalid characters.
-  /// Non-native separators are replaced with the platform-native separator.
+  /// Panics if the path contains invalid characters or is a non-file URL.
   static function init(value String) returns FilePath
-    var resolved = try _resolveFileURL(value) otherwise panic("FilePath: non-file URL passed to init")
-    if _hasInvalidChars(resolved) 'bad'
-      panic("FilePath: invalid characters in path")
-    end 'bad'
-    return FilePath{_path: _normalizeSeparators(resolved)}
+    return try _create(value) otherwise panic("FilePath: invalid path")
   end 'init'
 
   /// Create FilePath from an explicit string.
   /// Accepts file:// URLs (extracts the path) or regular path strings.
-  /// Throws FilePathError.notFileURL if the string is a non-file URL.
-  /// Throws FilePathError.invalidCharacter if the path contains invalid characters.
   export static function from(path String) returns FilePath throws FilePathError
-    var resolved = try _resolveFileURL(path)
-    if _hasInvalidChars(resolved) 'bad'
-      throw FilePathError.invalidCharacter
-    end 'bad'
-    return FilePath{_path: _normalizeSeparators(resolved)}
+    return try _create(path)
   end 'from'
 
-  /// Check for characters that are invalid in filesystem paths.
-  /// On Windows: control chars (0x01-0x1F), <, >, ", |, ?, *
-  /// On Linux: only NUL (0x00), but that can't appear in Maxon strings.
-  static function _hasInvalidChars(path String) returns bool
+  /// Resolve URL, validate characters, normalize separators.
+  static function _create(input String) returns FilePath throws FilePathError
+    var resolved = try _resolveFileURL(input)
     #if os(Windows)
+      if _hasInvalidChars(resolved) 'bad'
+        throw FilePathError.invalidCharacter
+      end 'bad'
+    #endif
+    return FilePath{_path: _normalizeSeparators(resolved)}
+  end '_create'
+
+  #if os(Windows)
+    /// Check for characters that are invalid in Windows filesystem paths:
+    /// control chars (0x01-0x1F), <, >, ", |, ?, *
+    static function _hasInvalidChars(path String) returns bool
       let len = path.byteLength()
       var i = 0
       while i < len 'scan'
         let b = path.managed.byteAt(i)
-        // Control characters 0x01-0x1F
         if b >= 1 and b <= 31 'control'
           return true
         end 'control'
@@ -61,9 +59,9 @@ export type FilePath implements InitableFromStringLiteral, Equatable, Hashable, 
         end 'special'
         i = i + 1
       end 'scan'
-    #endif
-    return false
-  end '_hasInvalidChars'
+      return false
+    end '_hasInvalidChars'
+  #endif
 
   /// Replace non-native separators with the platform-native separator.
   static function _normalizeSeparators(path String) returns String

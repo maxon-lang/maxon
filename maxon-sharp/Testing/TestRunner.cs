@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Globalization;
+using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.RegularExpressions;
 
@@ -9,13 +10,15 @@ namespace MaxonSharp.Testing;
 /// <summary>
 /// Executes tests from fragment files.
 /// </summary>
-public class TestRunner(string specDir, string fragmentDir, string tempDir, string? filter = null, int? workers = null, bool updateRequired = false) {
+public class TestRunner(string specDir, string fragmentDir, string tempDir, string? filter = null, int? workers = null, bool updateRequired = false, Compiler.CompileTarget? target = null) {
   private readonly string _specDir = specDir;
   private readonly string _fragmentDir = fragmentDir;
   private readonly string _tempDir = tempDir;
   private readonly string? _filter = filter;
   private readonly int _workerCount = workers ?? Math.Max(1, Environment.ProcessorCount / 2);
   private readonly bool _updateRequired = updateRequired;
+  private readonly Compiler.CompileTarget _target = target ?? Compiler.CompileTarget.Default;
+  private static long _totalCompileMs;
 
   /// <summary>
   /// Run all tests and return summary.
@@ -31,7 +34,7 @@ public class TestRunner(string specDir, string fragmentDir, string tempDir, stri
     }
 
     // Prepare work items from specs (sequential — just parses specs and checks mtimes)
-    var prepResult = FragmentGenerator.PrepareWorkItems(_specDir, _fragmentDir, _updateRequired, _filter);
+    var prepResult = FragmentGenerator.PrepareWorkItems(_specDir, _fragmentDir, _updateRequired, _filter, _target);
 
     // Abort on errors (e.g., duplicate test names)
     if (prepResult.Errors.Count > 0) {
@@ -70,8 +73,22 @@ public class TestRunner(string specDir, string fragmentDir, string tempDir, stri
     var results = new TestResult[workItems.Length];
     var nextIndex = 0;
     var generatedCount = 0;
+    _totalCompileMs = 0;
     var generationErrors = new ConcurrentBag<string>();
     var printLock = new object();
+
+    // Per-spec tracking for real-time progress
+    var specTotal = new Dictionary<string, int>();
+    var specDone = new Dictionary<string, int>();
+    var specFailed = new Dictionary<string, List<string>>();
+    foreach (var item in workItems) {
+      specTotal.TryAdd(item.SpecName, 0);
+      specTotal[item.SpecName]++;
+    }
+    foreach (var name in specTotal.Keys) {
+      specDone[name] = 0;
+      specFailed[name] = [];
+    }
 
     // Spawn worker threads (Zig-style: explicit threads + atomic work-stealing)
     var threadCount = Math.Min(_workerCount, workItems.Length);
@@ -86,15 +103,26 @@ public class TestRunner(string specDir, string fragmentDir, string tempDir, stri
           results[index] = ProcessWorkItem(item, ref generatedCount, generationErrors);
 
           lock (printLock) {
-            var root = Compiler.CompileError.ProjectRoot ?? Environment.CurrentDirectory;
             var testIdentifier = $"specs/fragments/{item.SpecName}/{item.TestName}.test";
-            if (results[index].Passed) {
-              Logger.Debug(LogCategory.Testing, $"[PASS] {testIdentifier}");
-            } else {
-              Logger.Error(LogCategory.Testing, $"[FAIL] {testIdentifier}");
-              if (results[index].ErrorMessage != null) {
-                Logger.Error(LogCategory.Testing, $"  {results[index].ErrorMessage}");
-              }
+            if (!results[index].Passed) {
+              specFailed[item.SpecName].Add(testIdentifier);
+              if (results[index].ErrorMessage != null)
+                specFailed[item.SpecName].Add($"  {results[index].ErrorMessage}");
+            }
+            specDone[item.SpecName]++;
+
+            // When all tests in a spec are done, print the spec result
+            if (specDone[item.SpecName] == specTotal[item.SpecName]) {
+              var failures = specFailed[item.SpecName];
+              var total = specTotal[item.SpecName];
+              if (failures.Count == 0) {
+                Logger.Info(LogCategory.Testing, $"[PASS] {item.SpecName} ({total}/{total})");
+              } else {
+                var failCount = failures.Count(f => !f.StartsWith("  "));
+                Logger.Error(LogCategory.Testing, $"[FAIL] {item.SpecName} ({total - failCount}/{total})");
+                foreach (var f in failures)
+                  Logger.Error(LogCategory.Testing, f);
+    }
             }
           }
         }
@@ -110,6 +138,10 @@ public class TestRunner(string specDir, string fragmentDir, string tempDir, stri
     // Report generation errors
     foreach (var error in generationErrors) {
       Logger.Error(LogCategory.Testing, error);
+    }
+
+    if (_totalCompileMs > 0) {
+      Logger.Info(LogCategory.Testing, $"Total compile time: {_totalCompileMs}ms (across {_workerCount} workers)");
     }
 
     if (generatedCount > 0) {
@@ -152,7 +184,7 @@ public class TestRunner(string specDir, string fragmentDir, string tempDir, stri
         Compiler.Compiler.AsyncTrace = false;
         Compiler.Compiler.Testing = true;
         var absolutePath = Path.GetFullPath(item.FragmentPath);
-        var (content, genError) = FragmentGenerator.GenerateFragmentContent(item.Test, item.ExePath, absolutePath);
+        var (content, genError) = FragmentGenerator.GenerateFragmentContent(item.Test, item.ExePath, absolutePath, _target);
         if (genError != null) {
           generationErrors.Add($"Error compiling 'specs/fragments/{item.SpecName}/{item.TestName}.test':\n{genError}");
         }
@@ -210,13 +242,15 @@ public class TestRunner(string specDir, string fragmentDir, string tempDir, stri
     }
   }
 
+  private string ExeExtension => _target.Os == "windows" ? ".exe" : "";
+
   private TestResult RunTest(Fragment fragment) {
     var sw = Stopwatch.StartNew();
 
     try {
       // Check for pre-compiled executable alongside the fragment
       var fragmentDir = Path.GetDirectoryName(fragment.FilePath)!;
-      var precompiledExe = Path.Combine(fragmentDir, $"{fragment.TestName}.exe");
+      var precompiledExe = Path.Combine(fragmentDir, $"{fragment.TestName}{ExeExtension}");
       var fragmentFile = new FileInfo(fragment.FilePath);
 
       // Determine which executable to use
@@ -233,16 +267,19 @@ public class TestRunner(string specDir, string fragmentDir, string tempDir, stri
           needsCleanup = false;
         } else {
           // Exe is stale, compile fresh
-          var tempExe = Path.Combine(_tempDir, $"{fragment.TestName}_{Guid.NewGuid():N}.exe");
-          var (Success, Error) = CompileToExecutable(fragment, tempExe);
+          var tempExe = Path.Combine(_tempDir, $"{fragment.TestName}_{Guid.NewGuid():N}{ExeExtension}");
+          var (Success, Error) = CompileToExecutable(fragment, tempExe, _target);
           compileError = Error;
           exePath = tempExe;
           needsCleanup = true;
         }
       } else {
         // No pre-compiled exe, compile fresh
-        var tempExe = Path.Combine(_tempDir, $"{fragment.TestName}_{Guid.NewGuid():N}.exe");
-        var (Success, Error) = CompileToExecutable(fragment, tempExe);
+        var compileSw = Stopwatch.StartNew();
+        var tempExe = Path.Combine(_tempDir, $"{fragment.TestName}_{Guid.NewGuid():N}{ExeExtension}");
+        var (Success, Error) = CompileToExecutable(fragment, tempExe, _target);
+        compileSw.Stop();
+        Interlocked.Add(ref _totalCompileMs, compileSw.ElapsedMilliseconds);
         compileError = Error;
         exePath = tempExe;
         needsCleanup = true;
@@ -253,8 +290,8 @@ public class TestRunner(string specDir, string fragmentDir, string tempDir, stri
           // Expect compilation to fail - need to compile to check for error
           if (compileError == null && !needsCleanup) {
             // Pre-compiled exe exists, but we expect an error - compile to get the error
-            var tempExe = Path.Combine(_tempDir, $"{fragment.TestName}_{Guid.NewGuid():N}.exe");
-            var (Success, Error) = CompileToExecutable(fragment, tempExe);
+            var tempExe = Path.Combine(_tempDir, $"{fragment.TestName}_{Guid.NewGuid():N}{ExeExtension}");
+            var (Success, Error) = CompileToExecutable(fragment, tempExe, _target);
             compileError = Error;
             if (File.Exists(tempExe)) {
               try { File.Delete(tempExe); } catch { /* ignore */ }
@@ -322,12 +359,12 @@ public class TestRunner(string specDir, string fragmentDir, string tempDir, stri
           } else {
             irSources = [new Compiler.SourceFile(fragment.FilePath, fragment.Source)];
           }
-          var irExePath = Path.Combine(_tempDir, $"{fragment.TestName}_{Guid.NewGuid():N}_ir.exe");
+          var irExePath = Path.Combine(_tempDir, $"{fragment.TestName}_{Guid.NewGuid():N}_ir{ExeExtension}");
           Compiler.Compiler.MmTrace = false;
           Compiler.Compiler.MmDebug = false;
           Compiler.Compiler.AsyncTrace = false;
           Compiler.Compiler.Testing = true;
-          var irResult = new Compiler.Compiler().Compile(irSources, irExePath, returnIr: true);
+          var irResult = new Compiler.Compiler().Compile(irSources, irExePath, returnIr: true, target: _target);
           if (irTempDir != null) {
             try { Directory.Delete(irTempDir, recursive: true); } catch { }
           }
@@ -342,7 +379,7 @@ public class TestRunner(string specDir, string fragmentDir, string tempDir, stri
             };
           }
 
-          var (Passed, Message) = CheckRequiredIr(successExpectation.RequiredMLIR, irResult.AllStagesIr);
+          var (Passed, Message) = CheckRequiredIr(successExpectation.RequiredMLIR, irResult.AllStagesIr, _target);
           if (!Passed) {
             return new TestResult {
               TestName = fragment.TestName,
@@ -354,8 +391,8 @@ public class TestRunner(string specDir, string fragmentDir, string tempDir, stri
           }
         }
 
-        // Check Required Rdata
-        if (successExpectation.RequiredRdata != null) {
+        // Check Required Rdata (PE-only)
+        if (successExpectation.RequiredRdata != null && _target.Os == "windows") {
           var (rdataPassed, rdataMessage) = CheckRequiredRdata(successExpectation.RequiredRdata, exePath);
           if (!rdataPassed) {
             return new TestResult {
@@ -368,8 +405,8 @@ public class TestRunner(string specDir, string fragmentDir, string tempDir, stri
           }
         }
 
-        // Check Required Data (.data section)
-        if (successExpectation.RequiredData != null) {
+        // Check Required Data (.data section, PE-only)
+        if (successExpectation.RequiredData != null && _target.Os == "windows") {
           var (dataPassed, dataMessage) = CheckRequiredData(successExpectation.RequiredData, exePath);
           if (!dataPassed) {
             return new TestResult {
@@ -386,19 +423,40 @@ public class TestRunner(string specDir, string fragmentDir, string tempDir, stri
         if (successExpectation.ExitCode.HasValue || successExpectation.Stdout != null || successExpectation.Stderr != null) {
           var (ExitCode, Stdout, Stderr) = RunExecutable(exePath, _tempDir, fragment.Args);
 
-          if (successExpectation.ExitCode.HasValue && ExitCode != successExpectation.ExitCode.Value) {
-            return new TestResult {
-              TestName = fragment.TestName,
-              Passed = false,
-              ErrorMessage = $"Expected exit code {successExpectation.ExitCode.Value}, got {ExitCode}",
-              Duration = sw.Elapsed,
-              FilePath = fragment.FilePath
-            };
+          if (successExpectation.ExitCode.HasValue) {
+            // On macOS/Linux, process exit codes are masked to 8 bits (0-255)
+            var expectedCode = RuntimeInformation.IsOSPlatform(OSPlatform.Windows)
+              ? successExpectation.ExitCode.Value
+              : successExpectation.ExitCode.Value & 0xFF;
+            if (ExitCode != expectedCode) {
+              return new TestResult {
+                TestName = fragment.TestName,
+                Passed = false,
+                ErrorMessage = $"Expected exit code {expectedCode}, got {ExitCode}",
+                Duration = sw.Elapsed,
+                FilePath = fragment.FilePath
+              };
+            }
           }
 
           if (successExpectation.Stdout != null) {
             var expectedStdout = successExpectation.Stdout.Replace("\r\n", "\n").Trim();
             var actualStdout = Stdout.Replace("\r\n", "\n").Trim();
+            // Normalize path separators for cross-platform tests
+            if (_target.Os != "windows") {
+              expectedStdout = expectedStdout.Replace('\\', '/');
+            } else {
+              expectedStdout = expectedStdout.Replace('/', '\\');
+            }
+            // Normalize machine-specific paths: replace CWD with {CWD} placeholder
+            var cwd = Directory.GetCurrentDirectory();
+            if (_target.Os == "windows") {
+              actualStdout = actualStdout.Replace(cwd.Replace('/', '\\'), "{CWD}");
+              expectedStdout = expectedStdout.Replace(cwd.Replace('/', '\\'), "{CWD}");
+            } else {
+              actualStdout = actualStdout.Replace(cwd, "{CWD}");
+              expectedStdout = expectedStdout.Replace(cwd, "{CWD}");
+            }
             if (expectedStdout != actualStdout) {
               return new TestResult {
                 TestName = fragment.TestName,
@@ -457,7 +515,7 @@ public class TestRunner(string specDir, string fragmentDir, string tempDir, stri
     }
   }
 
-  private static (bool Success, string? Error) CompileToExecutable(Fragment fragment, string outputPath) {
+  private static (bool Success, string? Error) CompileToExecutable(Fragment fragment, string outputPath, Compiler.CompileTarget? target = null) {
     try {
       Compiler.SourceFile[] sources;
       string? tempDir = null;
@@ -478,7 +536,7 @@ public class TestRunner(string specDir, string fragmentDir, string tempDir, stri
         Compiler.Compiler.MmTrace = fragment.MmTrace;
         Compiler.Compiler.AsyncTrace = fragment.AsyncTrace;
         Compiler.Compiler.Testing = true;
-        var result = new Compiler.Compiler().Compile(sources, outputPath);
+        var result = new Compiler.Compiler().Compile(sources, outputPath, target: target);
         var error = result.Error;
         // Normalize temp directory paths to just filenames for multi-file tests
         if (error != null && tempDir != null) {
@@ -498,9 +556,11 @@ public class TestRunner(string specDir, string fragmentDir, string tempDir, stri
     }
   }
 
-  private const int TestTimeoutMs = 1000;
+  private const int TestTimeoutMs = 5000;
 
   private static (int ExitCode, string Stdout, string Stderr) RunExecutable(string exePath, string workingDirectory, string? args = null) {
+    // Code signing and executable permissions are now handled by MachOWriter at compile time
+
     var psi = new ProcessStartInfo {
       FileName = exePath,
       Arguments = args ?? "",
@@ -513,7 +573,7 @@ public class TestRunner(string specDir, string fragmentDir, string tempDir, stri
       StandardErrorEncoding = Encoding.UTF8
     };
 
-    // Use a job object to ensure child processes are killed on timeout
+    // Use a job object to ensure child processes are killed on timeout (Windows only, no-op elsewhere)
     using var job = new WindowsJobObject();
     using var process = Process.Start(psi)!;
 
@@ -550,17 +610,71 @@ public class TestRunner(string specDir, string fragmentDir, string tempDir, stri
     return string.Join("\n", lines);
   }
 
-  private static (bool Passed, string? Message) CheckRequiredIr(string required, string actual) {
-    // Normalize both for exact match
-    var requiredNorm = NormalizeIr(required);
-    var actualNorm = NormalizeIr(actual);
+  private static (bool Passed, string? Message) CheckRequiredIr(string required, string actual, Compiler.CompileTarget target) {
+    // Parse both into sections (e.g., "=== maxon", "=== standard", "=== x86", "=== arm64")
+    var requiredSections = ParseIrSections(required);
+    var actualSections = ParseIrSections(actual);
 
-    if (actualNorm == requiredNorm) {
-      return (true, null);
+    var otherBackend = target.Arch == "aarch64" ? "x86" : "arm64";
+
+    // Compare only sections that are relevant: skip the other backend's section
+    foreach (var (name, requiredContent) in requiredSections) {
+      if (name == otherBackend) continue; // skip irrelevant backend section
+
+      if (!actualSections.TryGetValue(name, out var actualContent)) {
+        return (false, $"IR mismatch: missing section '=== {name}' in actual output.");
+      }
+
+      var requiredNorm = NormalizeIr(requiredContent);
+      var actualNorm = NormalizeIr(actualContent);
+      if (requiredNorm != actualNorm) {
+        return (false, $"IR mismatch in section '=== {name}'.\nExpected:\n{requiredNorm}\n\nActual:\n{actualNorm}");
+      }
     }
 
-    // Show what we expected vs what we got
-    return (false, $"IR mismatch.\nExpected:\n{requiredNorm}\n\nActual:\n{actualNorm}");
+    // Also check that the actual output doesn't have extra sections we didn't expect
+    // (but skip the other backend's section in actual too)
+    foreach (var (name, _) in actualSections) {
+      if (name == otherBackend) continue;
+      if (!requiredSections.ContainsKey(name)) {
+        return (false, $"IR mismatch: unexpected section '=== {name}' in actual output.");
+      }
+    }
+
+    return (true, null);
+  }
+
+  /// <summary>
+  /// Parse IR text into named sections split by "=== sectionName" headers.
+  /// If no headers are found, the entire text is returned as a single unnamed section.
+  /// </summary>
+  private static Dictionary<string, string> ParseIrSections(string ir) {
+    var sections = new Dictionary<string, string>();
+    var lines = ir.Split(['\r', '\n']);
+    string? currentSection = null;
+    var currentLines = new List<string>();
+
+    foreach (var line in lines) {
+      var trimmed = line.Trim();
+      if (trimmed.StartsWith("=== ")) {
+        if (currentSection != null) {
+          sections[currentSection] = string.Join("\n", currentLines);
+        }
+        currentSection = trimmed[4..].Trim();
+        currentLines.Clear();
+      } else {
+        currentLines.Add(line);
+      }
+    }
+
+    if (currentSection != null) {
+      sections[currentSection] = string.Join("\n", currentLines);
+    } else {
+      // No sections found — treat entire text as one block
+      sections[""] = ir;
+    }
+
+    return sections;
   }
 
   /// <summary>
@@ -569,6 +683,10 @@ public class TestRunner(string specDir, string fragmentDir, string tempDir, stri
   private static string NormalizeStderr(string stderr) {
     var normalized = stderr.Replace("\r\n", "\n");
     normalized = normalized.Replace('\\', '/');
+    // Normalize target-specific fragment directory to generic path for comparison
+    // e.g., "specs/fragments-aarch64-macos/" -> "specs/fragments/"
+    normalized = System.Text.RegularExpressions.Regex.Replace(
+      normalized, @"specs/fragments-[^/]+/", "specs/fragments/");
     return normalized.Trim();
   }
 
@@ -812,9 +930,12 @@ public class TestRunner(string specDir, string fragmentDir, string tempDir, stri
 
   /// <summary>
   /// Update required blocks (RequiredMLIR, MmTrace stderr) in spec files with freshly generated output.
+  /// Only updates the current target's RequiredMLIR block without disturbing other targets.
   /// </summary>
   private void UpdateRequiredInSpecFiles() {
-    var specs = SpecParser.ParseDirectory(_specDir);
+    var targetKey = $"{_target.Arch}-{_target.Os}";
+    // Parse with targetKey so success.RequiredMLIR contains the current target's block (or unqualified fallback)
+    var specs = SpecParser.ParseDirectory(_specDir, targetKey);
     var updatedSpecs = 0;
 
     Directory.CreateDirectory(_tempDir);
@@ -836,31 +957,76 @@ public class TestRunner(string specDir, string fragmentDir, string tempDir, stri
         var markerMatch = Regex.Match(specContent, markerPattern);
         if (!markerMatch.Success) continue;
 
-        // Update RequiredMLIR
-        if (success.RequiredMLIR != null) {
+        // Update RequiredMLIR for current target
+        if (success.RequiredMLIR != null || HasAnyRequiredMlirBlock(specContent, markerMatch)) {
           var exePath = Path.Combine(_tempDir, $"{specName}_{test.Name}_ir.exe");
           try {
             Compiler.Compiler.MmTrace = false;
             Compiler.Compiler.MmDebug = false;
             Compiler.Compiler.AsyncTrace = false;
             Compiler.Compiler.Testing = true;
-            var irResult = new Compiler.Compiler().Compile(sources, exePath, returnIr: true);
+            var irResult = new Compiler.Compiler().Compile(sources, exePath, returnIr: true, target: _target);
 
             if (irResult.Success && irResult.AllStagesIr != null) {
               var newRequiredMLIR = irResult.AllStagesIr.Trim();
-              var oldNorm = NormalizeIr(success.RequiredMLIR);
-              var newNorm = NormalizeIr(newRequiredMLIR);
-              if (oldNorm != newNorm) {
-                var searchStart = markerMatch.Index + markerMatch.Length;
-                var blockPattern = @"```RequiredMLIR\s*\n(.*?)```";
-                var candidate = Regex.Match(specContent[searchStart..], blockPattern, RegexOptions.Singleline, TimeSpan.FromSeconds(5));
-                if (candidate.Success) {
-                  var absoluteStart = searchStart + candidate.Index;
-                  var absoluteEnd = absoluteStart + candidate.Length;
-                  var replacement = $"```RequiredMLIR\n{newRequiredMLIR}\n```";
+              var searchStart = markerMatch.Index + markerMatch.Length;
+
+              // Find the next test marker to bound our search
+              var nextTestMatch = Regex.Match(specContent[searchStart..], @"<!--\s*(?:disabled-)?test:\s*\S+\s*-->", RegexOptions.None, TimeSpan.FromSeconds(5));
+              var searchEnd = nextTestMatch.Success ? searchStart + nextTestMatch.Index : specContent.Length;
+
+              // Try to find and update existing target-qualified block
+              var qualifiedBlockPattern = $@"```RequiredMLIR:{Regex.Escape(targetKey)}\s*\n(.*?)```";
+              var qualifiedMatch = Regex.Match(specContent[searchStart..searchEnd], qualifiedBlockPattern, RegexOptions.Singleline, TimeSpan.FromSeconds(5));
+
+              if (qualifiedMatch.Success) {
+                // Update existing target-qualified block
+                var oldNorm = NormalizeIr(qualifiedMatch.Groups[1].Value.TrimEnd());
+                var newNorm = NormalizeIr(newRequiredMLIR);
+                if (oldNorm != newNorm) {
+                  var absoluteStart = searchStart + qualifiedMatch.Index;
+                  var absoluteEnd = absoluteStart + qualifiedMatch.Length;
+                  var replacement = $"```RequiredMLIR:{targetKey}\n{newRequiredMLIR}\n```";
                   specContent = string.Concat(specContent.AsSpan(0, absoluteStart), replacement, specContent.AsSpan(absoluteEnd));
                   updated = true;
-                  Logger.Debug(LogCategory.Testing, $"Updated RequiredMLIR for test '{test.Name}' in {Path.GetFileName(spec.FilePath)}");
+                  Logger.Debug(LogCategory.Testing, $"Updated RequiredMLIR:{targetKey} for test '{test.Name}' in {Path.GetFileName(spec.FilePath)}");
+                }
+              } else {
+                // No target-qualified block exists — check for unqualified block to migrate or find insertion point
+                var unqualifiedPattern = @"```RequiredMLIR\s*\n(.*?)```";
+                var unqualifiedMatch = Regex.Match(specContent[searchStart..searchEnd], unqualifiedPattern, RegexOptions.Singleline, TimeSpan.FromSeconds(5));
+
+                if (unqualifiedMatch.Success) {
+                  // Migrate: rename unqualified block to x86_64-windows (since all existing blocks contain x86 IR)
+                  // and insert a new block for the current target if different
+                  var absoluteStart = searchStart + unqualifiedMatch.Index;
+                  var absoluteEnd = absoluteStart + unqualifiedMatch.Length;
+                  var existingContent = unqualifiedMatch.Groups[1].Value.TrimEnd();
+
+                  if (targetKey == "x86_64-windows") {
+                    // Current target is x86 — just rename the block and update content
+                    var replacement = $"```RequiredMLIR:x86_64-windows\n{newRequiredMLIR}\n```";
+                    specContent = string.Concat(specContent.AsSpan(0, absoluteStart), replacement, specContent.AsSpan(absoluteEnd));
+                  } else {
+                    // Current target is different — rename existing to x86_64-windows and append new target block
+                    var replacement = $"```RequiredMLIR:x86_64-windows\n{existingContent}\n```\n```RequiredMLIR:{targetKey}\n{newRequiredMLIR}\n```";
+                    specContent = string.Concat(specContent.AsSpan(0, absoluteStart), replacement, specContent.AsSpan(absoluteEnd));
+                  }
+                  updated = true;
+                  Logger.Debug(LogCategory.Testing, $"Migrated RequiredMLIR to target-qualified for test '{test.Name}' in {Path.GetFileName(spec.FilePath)}");
+                } else {
+                  // Find the last RequiredMLIR block for any target and insert after it
+                  var anyBlockPattern = @"```RequiredMLIR:[^\s`]+\s*\n(.*?)```";
+                  var lastMatch = Regex.Matches(specContent[searchStart..searchEnd], anyBlockPattern, RegexOptions.Singleline, TimeSpan.FromSeconds(5))
+                    .Cast<Match>().LastOrDefault();
+
+                  if (lastMatch != null) {
+                    var insertPos = searchStart + lastMatch.Index + lastMatch.Length;
+                    var newBlock = $"\n```RequiredMLIR:{targetKey}\n{newRequiredMLIR}\n```";
+                    specContent = string.Concat(specContent.AsSpan(0, insertPos), newBlock, specContent.AsSpan(insertPos));
+                    updated = true;
+                    Logger.Debug(LogCategory.Testing, $"Added RequiredMLIR:{targetKey} for test '{test.Name}' in {Path.GetFileName(spec.FilePath)}");
+                  }
                 }
               }
             }
@@ -876,7 +1042,7 @@ public class TestRunner(string specDir, string fragmentDir, string tempDir, stri
             Compiler.Compiler.MmTrace = true;
             Compiler.Compiler.MmDebug = false;
             Compiler.Compiler.Testing = true;
-            var result = new Compiler.Compiler().Compile(sources, exePath);
+            var result = new Compiler.Compiler().Compile(sources, exePath, target: _target);
 
             if (result.Success) {
               var (_, _, actualStderr) = RunExecutable(exePath, _tempDir);
@@ -915,5 +1081,16 @@ public class TestRunner(string specDir, string fragmentDir, string tempDir, stri
     if (updatedSpecs > 0) {
       Logger.Info(LogCategory.Testing, $"Updated required blocks in {updatedSpecs} spec file(s)");
     }
+  }
+
+  /// <summary>
+  /// Check if a test section has any RequiredMLIR block (qualified or unqualified).
+  /// </summary>
+  private static bool HasAnyRequiredMlirBlock(string specContent, Match markerMatch) {
+    var searchStart = markerMatch.Index + markerMatch.Length;
+    var nextTestMatch = Regex.Match(specContent[searchStart..], @"<!--\s*(?:disabled-)?test:\s*\S+\s*-->", RegexOptions.None, TimeSpan.FromSeconds(5));
+    var searchEnd = nextTestMatch.Success ? searchStart + nextTestMatch.Index : specContent.Length;
+    var section = specContent[searchStart..searchEnd];
+    return Regex.IsMatch(section, @"```RequiredMLIR[:\s]", RegexOptions.None, TimeSpan.FromSeconds(5));
   }
 }

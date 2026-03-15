@@ -1,0 +1,65 @@
+// Test: nested-calls-in-namespace
+
+typealias Integer = int(i64.min to i64.max)
+
+function add(a Integer, b Integer) returns Integer
+  return a + b
+end 'add'
+
+function sum_three(a Integer, b Integer, c Integer) returns Integer
+  return add(add(a, b: b), b: c)
+end 'sum_three'
+
+function main() returns ExitCode
+  return sum_three(1, b: 2, c: 3)
+end 'main'
+---
+ExitCode: 6
+---
+module {
+  func @namespaces.add(a: i64, b: i64) -> i64 {
+  entry:
+    arm64.add x2, x0, x1
+    arm64.mov x0, x2
+    arm64.ret
+  }
+  func @namespaces.sum_three(a: i64, b: i64, c: i64) -> i64 {
+  entry:
+    arm64.prologue stack_size=32
+    arm64.str x2, [x29, #-8]
+    arm64.bl namespaces.add
+    arm64.ldr x1, [x29, #-8]
+    arm64.bl namespaces.add
+    arm64.epilogue stack_size=32
+    arm64.ret
+  }
+  func @namespaces.main() -> u32 {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.mov x0, #1
+    arm64.mov x1, #2
+    arm64.mov x2, #3
+    arm64.bl namespaces.sum_three
+    arm64.str x0, [x29, #-8]
+    arm64.mov x1, #0
+    arm64.cmp x0, x1
+    arm64.cset x2, lt
+    arm64.mov x1, #4294967295
+    arm64.cmp x0, x1
+    arm64.cset x3, gt
+    arm64.orr x0, x2, x3
+    arm64.cmp x0, #0
+    arm64.b.ne namespaces.main.__range_panic_0
+    arm64.b namespaces.main.__range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_symdata x0, __panic_msg_17
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl maxon_panic
+  __range_ok_0:
+    arm64.ldr x0, [x29, #-8]
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+}
+---

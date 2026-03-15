@@ -1,0 +1,205 @@
+// Test: int-nested-loops
+function main() returns ExitCode
+  var total = 0
+  var i = 0
+  while i < 5 'outer'
+    var j = 0
+    while j < 4 'inner'
+      total = total + 1
+      j = j + 1
+    end 'inner'
+    i = i + 1
+  end 'outer'
+  return total
+end 'main'
+---
+ExitCode: 20
+RequiredMLIR: ```
+=== maxon
+module {
+  func @register-allocator.main() -> i64 {
+  entry:
+    %0 = maxon.literal {value = 0 : i64}
+    maxon.assign %0 {var = total} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %1 = maxon.literal {value = 0 : i64}
+    maxon.assign %1 {var = i} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.br outer_0.header
+  outer_0.header:
+    %2 = maxon.literal {value = 5 : i64}
+    %3 = maxon.var_ref {var = i} {type = i64}
+    %4 = maxon.binop %3, %2 {op = lt}
+    maxon.cond_br %4 [then: outer_0, else: outer_0.exit]
+  outer_0:
+    %5 = maxon.literal {value = 0 : i64}
+    maxon.assign %5 {var = j} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.br inner_1.header
+  inner_1.header:
+    %6 = maxon.literal {value = 4 : i64}
+    %7 = maxon.var_ref {var = j} {type = i64}
+    %8 = maxon.binop %7, %6 {op = lt}
+    maxon.cond_br %8 [then: inner_1, else: inner_1.exit]
+  inner_1:
+    %9 = maxon.literal {value = 1 : i64}
+    %10 = maxon.var_ref {var = total} {type = i64}
+    %11 = maxon.binop %10, %9 {op = add}
+    maxon.assign %11 {var = total} {kind = i64} {mut = 1 : i1}
+    %12 = maxon.literal {value = 1 : i64}
+    %13 = maxon.var_ref {var = j} {type = i64}
+    %14 = maxon.binop %13, %12 {op = add}
+    maxon.assign %14 {var = j} {kind = i64} {mut = 1 : i1}
+    maxon.scope_end []
+    maxon.br inner_1.header
+  inner_1.exit:
+    %15 = maxon.literal {value = 1 : i64}
+    %16 = maxon.var_ref {var = i} {type = i64}
+    %17 = maxon.binop %16, %15 {op = add}
+    maxon.assign %17 {var = i} {kind = i64} {mut = 1 : i1}
+    maxon.scope_end [j]
+    maxon.br outer_0.header
+  outer_0.exit:
+    %18 = maxon.var_ref {var = total} {type = i64}
+    maxon.assign %18 {var = __range_val_2} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %19 = maxon.literal {value = 0 : i64}
+    %20 = maxon.binop %18, %19 {op = lt}
+    %21 = maxon.literal {value = 4294967295 : i64}
+    %22 = maxon.binop %18, %21 {op = gt}
+    %23 = maxon.binop %20, %22 {op = or}
+    maxon.cond_br %23 [then: __range_panic_2, else: __range_ok_2]
+  __range_panic_2:
+    maxon.panic "panic at int-nested-loops.test:13: Range check failed for type 'ExitCode': value outside int(0 to 4294967295)"
+  __range_ok_2:
+    %25 = maxon.var_ref {var = __range_val_2} {type = i64}
+    maxon.scope_end [total, i, __range_val_2]
+    maxon.return %25
+  }
+}
+=== standard
+module {
+  func @register-allocator.main() -> u32 {
+  entry:
+    %0 = arith.constant {value = 0 : i64}
+    memref.store %0, total
+    %1 = arith.constant {value = 0 : i64}
+    memref.store %1, i
+    cf.br outer_0.header
+  outer_0.header:
+    %2 = arith.constant {value = 5 : i64}
+    %3 = memref.load i : i64
+    %4 = arith.cmpi lt %3, %2
+    cf.cond_br %4 [then: outer_0, else: outer_0.exit]
+  outer_0:
+    %5 = arith.constant {value = 0 : i64}
+    memref.store %5, j
+    cf.br inner_1.header
+  inner_1.header:
+    %6 = arith.constant {value = 4 : i64}
+    %7 = memref.load j : i64
+    %8 = arith.cmpi lt %7, %6
+    cf.cond_br %8 [then: inner_1, else: inner_1.exit]
+  inner_1:
+    %9 = arith.constant {value = 1 : i64}
+    %10 = memref.load total : i64
+    %11 = arith.addi %10, %9
+    memref.store %11, total
+    %12 = arith.constant {value = 1 : i64}
+    %13 = memref.load j : i64
+    %14 = arith.addi %13, %12
+    memref.store %14, j
+    cf.br inner_1.header
+  inner_1.exit:
+    %15 = arith.constant {value = 1 : i64}
+    %16 = memref.load i : i64
+    %17 = arith.addi %16, %15
+    memref.store %17, i
+    cf.br outer_0.header
+  outer_0.exit:
+    %18 = memref.load total : i64
+    memref.store %18, __range_val_2
+    %19 = arith.constant {value = 0 : i64}
+    %20 = arith.cmpi lt %18, %19
+    %21 = arith.constant {value = 4294967295 : i64}
+    %22 = arith.cmpi gt %18, %21
+    %23 = arith.ori1 %20, %22
+    cf.cond_br %23 [then: __range_panic_2, else: __range_ok_2]
+  __range_panic_2:
+    %24 = memref.lea_symdata __panic_msg_24
+    %25 = std.ptr_to_i64 %24
+    std.call_runtime @maxon_panic %25
+  __range_ok_2:
+    %26 = memref.load __range_val_2 : i64
+    func.return %26
+  }
+}
+=== arm64
+module {
+  func @register-allocator.main() -> u32 {
+  entry:
+    arm64.prologue stack_size=80
+    arm64.mov x0, #0
+    arm64.str x0, [x29, #-8]
+    arm64.mov x1, #0
+    arm64.str x1, [x29, #-16]
+    arm64.b register-allocator.main.outer_0.header
+  outer_0.header:
+    arm64.mov x0, #5
+    arm64.ldr x1, [x29, #-16]
+    arm64.cmp x1, x0
+    arm64.cset x2, lt
+    arm64.cmp x2, #0
+    arm64.b.ne register-allocator.main.outer_0
+    arm64.b register-allocator.main.outer_0.exit
+  outer_0:
+    arm64.mov x0, #0
+    arm64.str x0, [x29, #-24]
+    arm64.b register-allocator.main.inner_1.header
+  inner_1.header:
+    arm64.mov x0, #4
+    arm64.ldr x1, [x29, #-24]
+    arm64.cmp x1, x0
+    arm64.cset x2, lt
+    arm64.cmp x2, #0
+    arm64.b.ne register-allocator.main.inner_1
+    arm64.b register-allocator.main.inner_1.exit
+  inner_1:
+    arm64.mov x0, #1
+    arm64.ldr x1, [x29, #-8]
+    arm64.add x2, x1, x0
+    arm64.str x2, [x29, #-8]
+    arm64.mov x3, #1
+    arm64.ldr x4, [x29, #-24]
+    arm64.add x5, x4, x3
+    arm64.str x5, [x29, #-24]
+    arm64.b register-allocator.main.inner_1.header
+  inner_1.exit:
+    arm64.mov x0, #1
+    arm64.ldr x1, [x29, #-16]
+    arm64.add x2, x1, x0
+    arm64.str x2, [x29, #-16]
+    arm64.b register-allocator.main.outer_0.header
+  outer_0.exit:
+    arm64.ldr x0, [x29, #-8]
+    arm64.str x0, [x29, #-32]
+    arm64.mov x1, #0
+    arm64.cmp x0, x1
+    arm64.cset x2, lt
+    arm64.mov x3, #4294967295
+    arm64.cmp x0, x3
+    arm64.cset x4, gt
+    arm64.orr x5, x2, x4
+    arm64.cmp x5, #0
+    arm64.b.ne register-allocator.main.__range_panic_2
+    arm64.b register-allocator.main.__range_ok_2
+  __range_panic_2:
+    arm64.adrp_add_symdata x0, __panic_msg_24
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl maxon_panic
+  __range_ok_2:
+    arm64.ldr x0, [x29, #-32]
+    arm64.epilogue stack_size=80
+    arm64.ret
+  }
+}
+```
+---
+---

@@ -1,0 +1,91 @@
+// Test: match-enum.expression
+union Status
+  pending
+  approved
+  rejected
+end 'Status'
+
+function main() returns ExitCode
+  var s = Status.approved
+  let code = match s 'eval'
+    Status.pending gives 0
+    Status.approved gives 1
+    Status.rejected gives 2
+  end 'eval'
+  return code
+end 'main'
+---
+ExitCode: 1
+---
+module {
+  func @match-statements.main() -> u32 {
+  entry:
+    arm64.prologue stack_size=80
+    arm64.mov x0, #1
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x1, [x29, #-8]
+    arm64.mov x2, #0
+    arm64.str x2, [x29, #-16]
+    arm64.str x1, [x29, #-24]
+    arm64.b match-statements.main.eval_0.cmp0
+  eval_0.cmp0:
+    arm64.ldr x0, [x29, #-24]
+    arm64.mov x1, #0
+    arm64.cmp x0, x1
+    arm64.cset x2, eq
+    arm64.cmp x2, #0
+    arm64.b.ne match-statements.main.eval_0.case0
+    arm64.b match-statements.main.eval_0.cmp1
+  eval_0.case0:
+    arm64.mov x0, #0
+    arm64.str x0, [x29, #-16]
+    arm64.b match-statements.main.eval_0.merge
+  eval_0.cmp1:
+    arm64.ldr x0, [x29, #-24]
+    arm64.mov x1, #1
+    arm64.cmp x0, x1
+    arm64.cset x2, eq
+    arm64.cmp x2, #0
+    arm64.b.ne match-statements.main.eval_0.case1
+    arm64.b match-statements.main.eval_0.cmp2
+  eval_0.case1:
+    arm64.mov x0, #1
+    arm64.str x0, [x29, #-16]
+    arm64.b match-statements.main.eval_0.merge
+  eval_0.cmp2:
+    arm64.ldr x0, [x29, #-24]
+    arm64.mov x1, #2
+    arm64.cmp x0, x1
+    arm64.cset x2, eq
+    arm64.cmp x2, #0
+    arm64.b.ne match-statements.main.eval_0.case2
+    arm64.b match-statements.main.eval_0.merge
+  eval_0.case2:
+    arm64.mov x0, #2
+    arm64.str x0, [x29, #-16]
+    arm64.b match-statements.main.eval_0.merge
+  eval_0.merge:
+    arm64.ldr x0, [x29, #-16]
+    arm64.str x0, [x29, #-32]
+    arm64.mov x1, #0
+    arm64.cmp x0, x1
+    arm64.cset x2, lt
+    arm64.mov x3, #4294967295
+    arm64.cmp x0, x3
+    arm64.cset x4, gt
+    arm64.orr x5, x2, x4
+    arm64.cmp x5, #0
+    arm64.b.ne match-statements.main.__range_panic_1
+    arm64.b match-statements.main.__range_ok_1
+  __range_panic_1:
+    arm64.adrp_add_symdata x0, __panic_msg_30
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl maxon_panic
+  __range_ok_1:
+    arm64.ldr x0, [x29, #-32]
+    arm64.epilogue stack_size=80
+    arm64.ret
+  }
+}
+---

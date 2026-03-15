@@ -1,0 +1,91 @@
+// Test: float-backed
+union FloatBacked
+  North = 1.1
+  South = 2.2
+  East = 3.3
+end 'FloatBacked'
+
+function main() returns ExitCode
+  var f = FloatBacked.North
+  var result = match f 'check'
+    FloatBacked.North gives 1
+    FloatBacked.South gives 0
+    FloatBacked.East gives 0
+  end 'check'
+  return result
+end 'main'
+---
+ExitCode: 1
+---
+module {
+  func @union-full.main() -> u32 {
+  entry:
+    arm64.prologue stack_size=80
+    arm64.fldr d0, [__float_1.1]
+    arm64.fstr d0, [x29, #-8]
+    arm64.fldr d1, [x29, #-8]
+    arm64.mov x0, #0
+    arm64.str x0, [x29, #-16]
+    arm64.fstr d1, [x29, #-24]
+    arm64.b union-full.main.check_0.cmp0
+  check_0.cmp0:
+    arm64.fldr d0, [x29, #-24]
+    arm64.fldr d1, [__float_1.1]
+    arm64.fcmp d0, d1
+    arm64.cset x0, eq
+    arm64.cmp x0, #0
+    arm64.b.ne union-full.main.check_0.case0
+    arm64.b union-full.main.check_0.cmp1
+  check_0.case0:
+    arm64.mov x0, #1
+    arm64.str x0, [x29, #-16]
+    arm64.b union-full.main.check_0.merge
+  check_0.cmp1:
+    arm64.fldr d0, [x29, #-24]
+    arm64.fldr d1, [__float_2.2]
+    arm64.fcmp d0, d1
+    arm64.cset x0, eq
+    arm64.cmp x0, #0
+    arm64.b.ne union-full.main.check_0.case1
+    arm64.b union-full.main.check_0.cmp2
+  check_0.case1:
+    arm64.mov x0, #0
+    arm64.str x0, [x29, #-16]
+    arm64.b union-full.main.check_0.merge
+  check_0.cmp2:
+    arm64.fldr d0, [x29, #-24]
+    arm64.fldr d1, [__float_3.3]
+    arm64.fcmp d0, d1
+    arm64.cset x0, eq
+    arm64.cmp x0, #0
+    arm64.b.ne union-full.main.check_0.case2
+    arm64.b union-full.main.check_0.merge
+  check_0.case2:
+    arm64.mov x0, #0
+    arm64.str x0, [x29, #-16]
+    arm64.b union-full.main.check_0.merge
+  check_0.merge:
+    arm64.ldr x0, [x29, #-16]
+    arm64.str x0, [x29, #-32]
+    arm64.mov x1, #0
+    arm64.cmp x0, x1
+    arm64.cset x2, lt
+    arm64.mov x3, #4294967295
+    arm64.cmp x0, x3
+    arm64.cset x4, gt
+    arm64.orr x5, x2, x4
+    arm64.cmp x5, #0
+    arm64.b.ne union-full.main.__range_panic_1
+    arm64.b union-full.main.__range_ok_1
+  __range_panic_1:
+    arm64.adrp_add_symdata x0, __panic_msg_30
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl maxon_panic
+  __range_ok_1:
+    arm64.ldr x0, [x29, #-32]
+    arm64.epilogue stack_size=80
+    arm64.ret
+  }
+}
+---

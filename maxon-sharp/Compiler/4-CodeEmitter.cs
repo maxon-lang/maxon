@@ -19,7 +19,9 @@ public record CodeEmitResult(
   byte[] Ucddata,
   byte[] Symdata,
   IReadOnlyList<ImportEntry> Imports,
-  IReadOnlyList<CoffSymbol> CoffSymbols
+  IReadOnlyList<CoffSymbol> CoffSymbols,
+  byte[]? Got = null,
+  IReadOnlyList<string>? ImportNames = null
 );
 
 /// <summary>

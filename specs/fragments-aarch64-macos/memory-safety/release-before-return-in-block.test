@@ -1,0 +1,201 @@
+// Test: release-before-return-in-block
+typealias Integer = int(i64.min to i64.max)
+
+type Wrapper
+  export var val Integer
+end 'Wrapper'
+
+function compute(flag Integer) returns Integer
+  if flag > 0 'check'
+    var w = Wrapper{val: flag}
+    return w.val + 1
+  end 'check'
+  return 0
+end 'compute'
+
+function main() returns ExitCode
+  return compute(flag: 5)
+end 'main'
+---
+ExitCode: 6
+RequiredMLIR: ```
+=== maxon
+module {
+  func @memory-safety.compute(flag: i64) -> i64 {
+  entry:
+    %9 = maxon.param {index = 0 : i32} {name = flag} {type = i64}
+    %10 = maxon.literal {value = 0 : i64}
+    %11 = maxon.binop %9, %10 {op = gt} {optimalType = i64}
+    maxon.cond_br %11 [then: check_0, else: check_0.after]
+  check_0:
+    %12 = maxon.var_ref {var = flag} {type = i64}
+    %13 = maxon.struct_literal @Wrapper
+    maxon.assign %13 {var = w} {decl = 1 : i1} {mut = 1 : i1}
+    %14 = maxon.struct_var_ref w
+    %15 = maxon.field_access .val %14
+    %16 = maxon.literal {value = 1 : i64}
+    %17 = maxon.binop %15, %16 {op = add}
+    maxon.scope_end [flag, w]
+    maxon.return %17
+  check_0.after:
+    %18 = maxon.literal {value = 0 : i64}
+    maxon.scope_end [flag]
+    maxon.return %18
+  }
+  func @memory-safety.main() -> i64 {
+  entry:
+    %19 = maxon.literal {value = 5 : i64}
+    %20 = maxon.call @memory-safety.compute %19
+    maxon.assign %20 {var = __range_val_0} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %21 = maxon.literal {value = 0 : i64}
+    %22 = maxon.binop %20, %21 {op = lt}
+    %23 = maxon.literal {value = 4294967295 : i64}
+    %24 = maxon.binop %20, %23 {op = gt}
+    %25 = maxon.binop %22, %24 {op = or}
+    maxon.cond_br %25 [then: __range_panic_0, else: __range_ok_0]
+  __range_panic_0:
+    maxon.panic "panic at release-before-return-in-block.test:17: Range check failed for type 'ExitCode': value outside int(0 to 4294967295)"
+  __range_ok_0:
+    %27 = maxon.var_ref {var = __range_val_0} {type = i64}
+    maxon.scope_end [__range_val_0]
+    maxon.return %27
+  }
+}
+=== standard
+module {
+  func @memory-safety.compute(flag: i64) -> i64 {
+  entry:
+    %0 = func.param flag : StdI64
+    memref.store %0, flag
+    %1 = arith.constant {value = 0 : i64}
+    %2 = arith.cmpi gt %0, %1
+    cf.cond_br %2 [then: check_0, else: check_0.after]
+  check_0:
+    %3 = memref.load flag : i64
+    %4 = arith.constant {value = 8 : i64}
+    %5 = arith.constant {value = 0 : i64}
+    %6 = arith.constant {value = 1 : i64}
+    %7 = std.call_runtime @mm_alloc %4, %5, %6
+    memref.store %7, w
+    %8 = memref.load w : i64
+    memref.store_indirect %3, %8+0
+    %9 = memref.load w : i64
+    std.call_runtime @mm_incref %9
+    %10 = memref.load w : i64
+    %11 = memref.load_indirect %10+0
+    %12 = arith.constant {value = 1 : i64}
+    %13 = arith.addi %11, %12
+    %14 = memref.load w : i64
+    std.call_runtime_if_nonnull @mm_decref %14
+    func.return %13
+  check_0.after:
+    %16 = arith.constant {value = 0 : i64}
+    func.return %16
+  }
+  func @memory-safety.main() -> u32 {
+  entry:
+    %18 = arith.constant {value = 5 : i64}
+    %19 = func.call @memory-safety.compute %18
+    memref.store %19, __range_val_0
+    %20 = arith.constant {value = 0 : i64}
+    %21 = arith.cmpi lt %19, %20
+    %22 = arith.constant {value = 4294967295 : i64}
+    %23 = arith.cmpi gt %19, %22
+    %24 = arith.ori1 %21, %23
+    cf.cond_br %24 [then: __range_panic_0, else: __range_ok_0]
+  __range_panic_0:
+    %25 = memref.lea_symdata __panic_msg_26
+    %26 = std.ptr_to_i64 %25
+    std.call_runtime @maxon_panic %26
+  __range_ok_0:
+    %27 = memref.load __range_val_0 : i64
+    func.return %27
+  }
+  func @__destruct_Wrapper(ptr: i64) {
+  entry:
+    %28 = func.param ptr : StdI64
+    cf.br done
+  done:
+    func.return
+  }
+}
+=== arm64
+module {
+  func @memory-safety.compute(flag: i64) -> i64 {
+  entry:
+    arm64.prologue stack_size=64
+    arm64.str x0, [x29, #-8]
+    arm64.mov x1, #0
+    arm64.cmp x0, x1
+    arm64.cset x2, gt
+    arm64.cmp x2, #0
+    arm64.b.ne memory-safety.compute.check_0
+    arm64.b memory-safety.compute.check_0.after
+  check_0:
+    arm64.ldr x0, [x29, #-8]
+    arm64.mov x0, #8
+    arm64.mov x1, #0
+    arm64.mov x2, #1
+    arm64.bl mm_alloc
+    arm64.str x0, [x29, #-16]
+    arm64.ldr x1, [x29, #-16]
+    arm64.ldr x2, [x29, #-8]
+    arm64.str x2, [x1, #0]
+    arm64.ldr x3, [x29, #-16]
+    arm64.ldr x0, [x29, #-16]
+    arm64.bl mm_incref
+    arm64.ldr x4, [x29, #-16]
+    arm64.ldr x5, [x4, #0]
+    arm64.mov x6, #1
+    arm64.add x7, x5, x6
+    arm64.ldr x8, [x29, #-16]
+    arm64.str x7, [x29, #-24]
+    arm64.cmp x8, #0
+    arm64.b.eq memory-safety.compute.__skip_guarded_20
+    arm64.ldr x0, [x29, #-16]
+    arm64.bl mm_decref
+    arm64.label memory-safety.compute.__skip_guarded_20
+    arm64.ldr x0, [x29, #-24]
+    arm64.epilogue stack_size=64
+    arm64.ret
+  check_0.after:
+    arm64.mov x0, #0
+    arm64.epilogue stack_size=64
+    arm64.ret
+  }
+  func @memory-safety.main() -> u32 {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.mov x0, #5
+    arm64.bl memory-safety.compute
+    arm64.str x0, [x29, #-8]
+    arm64.mov x1, #0
+    arm64.cmp x0, x1
+    arm64.cset x2, lt
+    arm64.mov x1, #4294967295
+    arm64.cmp x0, x1
+    arm64.cset x3, gt
+    arm64.orr x0, x2, x3
+    arm64.cmp x0, #0
+    arm64.b.ne memory-safety.main.__range_panic_0
+    arm64.b memory-safety.main.__range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_symdata x0, __panic_msg_26
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl maxon_panic
+  __range_ok_0:
+    arm64.ldr x0, [x29, #-8]
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+  func @__destruct_Wrapper(ptr: i64) {
+  entry:
+    arm64.b __destruct_Wrapper.done
+  done:
+    arm64.ret
+  }
+}
+```
+---
+---

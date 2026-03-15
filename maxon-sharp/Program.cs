@@ -39,6 +39,8 @@ class Program {
     Console.WriteLine("  lsp-server               Start language server (LSP)");
     Console.WriteLine();
     Console.WriteLine("Build options (compile, build, run):");
+    Console.WriteLine("  --target=ARCH-OS         Set compilation target (default: x86_64-windows)");
+    Console.WriteLine("                           Examples: x86_64-windows, aarch64-macos, x86_64-linux");
     Console.WriteLine("  --emit-ir                Write .mlir file");
     Console.WriteLine("  --dump-stages            Write IR at each pipeline stage (.1-maxon.mlir, etc.)");
     Console.WriteLine("  --mm-trace               Enable runtime memory manager trace output (stderr)");
@@ -81,6 +83,8 @@ class Program {
         Compiler.Compiler.MmDebug = true;
       } else if (arg == "--async-trace") {
         Compiler.Compiler.AsyncTrace = true;
+      } else if (arg.StartsWith("--target=")) {
+        // Recognized as first-class option; parsed individually in each command
       } else if (arg.StartsWith("--log=")) {
         if (!Logger.ParseOption(arg["--log=".Length..])) {
           return (false, false, false);
@@ -104,10 +108,29 @@ class Program {
     return (emitIr, dumpStages, true);
   }
 
+  static Compiler.CompileTarget ParseTarget(string[] args) {
+    foreach (var arg in args) {
+      if (arg.StartsWith("--target=")) {
+        return Compiler.CompileTarget.Parse(arg["--target=".Length..]);
+      }
+    }
+    return Compiler.CompileTarget.Default;
+  }
+
+  static string GetOutputExtension(Compiler.CompileTarget target) {
+    return target.Os.ToLowerInvariant() switch {
+      "windows" => ".exe",
+      "macos" => "",
+      "linux" => "",
+      var unknown => throw new ArgumentException($"Unknown OS '{unknown}' for output extension. Expected windows, macos, or linux.")
+    };
+  }
+
   static int RunCompile(string[] args) {
     var (emitIr, dumpStages, valid) = ParseOptions(args);
     if (!valid) return Fail();
 
+    var target = ParseTarget(args);
     var sourceFile = GetNonOptionArg(args);
     if (sourceFile == null) return Fail();
 
@@ -118,17 +141,19 @@ class Program {
 
     var content = ReadFileContentUntilSeparator(sourceFile);
     var sources = new SourceFile[] { new(sourceFile, content) };
-    var outputPath = Path.ChangeExtension(sourceFile, ".exe");
+    var ext = GetOutputExtension(target);
+    var outputPath = Path.ChangeExtension(sourceFile, ext == "" ? null : ext);
 
     var (mlirOutputPath, dumpStagesBasePath) = GetOutputPaths(sourceFile, emitIr, dumpStages);
 
-    return CompileAndReportResult(sources, outputPath, mlirOutputPath, dumpStagesBasePath);
+    return CompileAndReportResult(sources, outputPath, mlirOutputPath, dumpStagesBasePath, target);
   }
 
   static int RunBuild(string[] args) {
     var (emitIr, dumpStages, valid) = ParseOptions(args);
     if (!valid) return Fail();
 
+    var target = ParseTarget(args);
     var directory = GetNonOptionArg(args) ?? Directory.GetCurrentDirectory();
 
     if (!Directory.Exists(directory)) {
@@ -143,27 +168,30 @@ class Program {
     }
 
     var mainFile = FindMainFile(sourceFiles, directory);
-    var outputPath = Path.ChangeExtension(mainFile, ".exe");
+    var ext = GetOutputExtension(target);
+    var outputPath = Path.ChangeExtension(mainFile, ext == "" ? null : ext);
 
     var (mlirOutputPath, dumpStagesBasePath) = GetOutputPaths(mainFile, emitIr, dumpStages);
 
-    return CompileAndReportResult(sourceFiles, outputPath, mlirOutputPath, dumpStagesBasePath);
+    return CompileAndReportResult(sourceFiles, outputPath, mlirOutputPath, dumpStagesBasePath, target);
   }
 
   static int RunRun(string[] args) {
     var (emitIr, dumpStages, valid) = ParseOptions(args);
     if (!valid) return Fail();
 
+    var target = ParseTarget(args);
     var path = GetNonOptionArg(args);
     if (path == null) return Fail();
 
     var (sourceFiles, mainFile) = ResolveSourceFilesAndMain(path);
     if (sourceFiles == null || mainFile == null) return 1;
 
-    var outputPath = Path.ChangeExtension(mainFile, ".exe");
+    var ext = GetOutputExtension(target);
+    var outputPath = Path.ChangeExtension(mainFile, ext == "" ? null : ext);
     var (mlirOutputPath, dumpStagesBasePath) = GetOutputPaths(mainFile, emitIr, dumpStages);
 
-    var compileResult = CompileAndReportResult(sourceFiles, outputPath, mlirOutputPath, dumpStagesBasePath);
+    var compileResult = CompileAndReportResult(sourceFiles, outputPath, mlirOutputPath, dumpStagesBasePath, target);
     if (compileResult != 0) return compileResult;
 
     return RunExecutable(outputPath);
@@ -258,8 +286,8 @@ class Program {
   /// <summary>
   /// Compiles source files and reports the result.
   /// </summary>
-  static int CompileAndReportResult(SourceFile[] sources, string outputPath, string? mlirOutputPath, string? dumpStagesBasePath) {
-    var result = new Compiler.Compiler().Compile(sources, outputPath, mlirOutputPath, dumpStagesBasePath: dumpStagesBasePath);
+  static int CompileAndReportResult(SourceFile[] sources, string outputPath, string? mlirOutputPath, string? dumpStagesBasePath, Compiler.CompileTarget? target = null) {
+    var result = new Compiler.Compiler().Compile(sources, outputPath, mlirOutputPath, dumpStagesBasePath: dumpStagesBasePath, target: target);
     if (!result.Success && result.Error != null) {
       Logger.Error(LogCategory.Compiler, result.Error);
     }
@@ -322,13 +350,14 @@ class Program {
   static int RunSpecTests(string[] args) {
     SetupTestLogging();
 
-    var specTestOptions = new HashSet<string> { "--filter=", "--workers=", "--update-required" };
+    var specTestOptions = new HashSet<string> { "--filter=", "--workers=", "--update-required", "--target=" };
     var (_, _, valid) = ParseOptions(args, specTestOptions);
     if (!valid) return Fail();
 
     string? filter = null;
     int? workers = null;
     bool updateRequired = false;
+    Compiler.CompileTarget? target = null;
 
     foreach (var arg in args) {
       if (arg.StartsWith("--filter=")) {
@@ -341,8 +370,12 @@ class Program {
         }
       } else if (arg == "--update-required") {
         updateRequired = true;
+      } else if (arg.StartsWith("--target=")) {
+        target = Compiler.CompileTarget.Parse(arg["--target=".Length..]);
       }
     }
+
+    target ??= Compiler.CompileTarget.Default;
 
     var projectDir = FindProjectRoot();
     if (projectDir == null) {
@@ -351,14 +384,14 @@ class Program {
     }
 
     var specDir = Path.Combine(projectDir, "specs");
-    var fragmentDir = Path.Combine(specDir, "fragments");
+    var fragmentDir = Path.Combine(specDir, $"fragments-{target.Arch}-{target.Os}");
     var tempDir = Path.Combine(projectDir, "temp");
 
     Compiler.CompileError.ProjectRoot = projectDir;
 
     Logger.Info(LogCategory.Testing, "Running maxon-sharp spec tests...");
 
-    var runner = new TestRunner(specDir, fragmentDir, tempDir, filter, workers, updateRequired);
+    var runner = new TestRunner(specDir, fragmentDir, tempDir, filter, workers, updateRequired, target);
     var summary = runner.RunAllSpecTests();
 
     Logger.Info(LogCategory.Testing, "");

@@ -4,27 +4,64 @@ using MaxonSharp.Compiler.Mlir.Passes;
 
 namespace MaxonSharp.Compiler;
 
+public record CompileTarget(string Arch, string Os) {
+  public static CompileTarget Default => Native;
+
+  public static CompileTarget Native {
+    get {
+      var arch = System.Runtime.InteropServices.RuntimeInformation.OSArchitecture switch {
+        System.Runtime.InteropServices.Architecture.Arm64 => "aarch64",
+        System.Runtime.InteropServices.Architecture.X64 => "x86_64",
+        var unsupported => throw new PlatformNotSupportedException($"Unsupported architecture: {unsupported}")
+      };
+      var os = System.Runtime.InteropServices.RuntimeInformation.IsOSPlatform(
+        System.Runtime.InteropServices.OSPlatform.OSX) ? "macos" :
+        System.Runtime.InteropServices.RuntimeInformation.IsOSPlatform(
+          System.Runtime.InteropServices.OSPlatform.Linux) ? "linux" : "windows";
+      return new CompileTarget(arch, os);
+    }
+  }
+
+  /// <summary>
+  /// Maps CompileTarget.Os to the Parser's targetOs parameter value.
+  /// </summary>
+  public string ParserOs => Os.ToLowerInvariant() switch {
+    "macos" => "OSX",
+    "windows" => "Windows",
+    "linux" => "Linux",
+    var unknown => throw new ArgumentException($"Unknown OS '{unknown}' in CompileTarget. Expected macos, windows, or linux.")
+  };
+
+  /// <summary>
+  /// Parses a target triple string like "aarch64-macos" into a CompileTarget.
+  /// </summary>
+  public static CompileTarget Parse(string triple) {
+    var parts = triple.Split('-', 2);
+    if (parts.Length != 2)
+      throw new ArgumentException($"Invalid target format '{triple}'. Expected 'arch-os' (e.g., 'aarch64-macos').");
+    return new CompileTarget(parts[0], parts[1]);
+  }
+}
+
 public record CompileResult(
   bool Success,
   string? Error,
   string? AllStagesIr = null
 ) {
   /// <summary>
-  /// Extracts the x86 stage IR from AllStagesIr for unit test compatibility.
+  /// Extracts the architecture-specific stage IR (x86 or arm64) from AllStagesIr.
   /// </summary>
-  public string? X86Ir {
+  public string? ArchIr {
     get {
       if (AllStagesIr == null) return null;
-      var marker = $"=== {PipelineStages.X86}";
-      var idx = AllStagesIr.IndexOf(marker);
-      if (idx < 0) return null;
-      var start = idx + marker.Length;
-      // Skip the newline after the marker
-      if (start < AllStagesIr.Length && AllStagesIr[start] == '\n') start++;
-      // Find the next stage marker or end of string
-      var nextMarker = AllStagesIr.IndexOf("\n=== ", start);
-      var end = nextMarker >= 0 ? nextMarker : AllStagesIr.Length;
-      return AllStagesIr[start..end].TrimEnd();
+      // Find the last === marker (the arch-specific stage)
+      var lastMarker = AllStagesIr.LastIndexOf("\n=== ");
+      if (lastMarker < 0) return null;
+      var start = lastMarker + 1; // skip the leading newline
+      // Skip past the marker line itself
+      var lineEnd = AllStagesIr.IndexOf('\n', start);
+      if (lineEnd < 0) return null;
+      return AllStagesIr[(lineEnd + 1)..].TrimEnd();
     }
   }
 };
@@ -44,12 +81,14 @@ public class Compiler {
   [ThreadStatic] private static bool _testing;
   public static bool Testing { get => _testing; set => _testing = value; }
 
-  public CompileResult Compile(SourceFile[] sources, string outputPath, string? mlirOutputPath = null, bool returnIr = false, string? dumpStagesBasePath = null) {
+  public CompileResult Compile(SourceFile[] sources, string outputPath, string? mlirOutputPath = null, bool returnIr = false, string? dumpStagesBasePath = null, CompileTarget? target = null) {
+    target ??= CompileTarget.Default;
     var userSourceFile = sources.Length == 1 ? sources[0].Path : null;
 
     using var _ = _context.PushScope();
 
     try {
+      var stageSw = System.Diagnostics.Stopwatch.StartNew();
       Logger.Debug(LogCategory.Compiler, "Starting MLIR-based compilation");
 
       // Stage 1-2: Lex and parse all source files into MLIR modules
@@ -59,23 +98,42 @@ public class Compiler {
       // Reset IDs so user code starts at %0
       _context.ResetIds();
 
-      CompileSources(module, sources, false);
+      CompileSources(module, sources, false, target);
+      var parseMs = stageSw.ElapsedMilliseconds; stageSw.Restart();
 
       // Stage 3-4: MLIR pipeline (semantic checks + dialect lowering)
       var pipeline = new MlirPipeline();
-      var mlirResult = MlirPipeline.Run(module, returnIr, dumpStagesBasePath);
+      var mlirResult = MlirPipeline.Run(module, returnIr, dumpStagesBasePath, target);
+      var pipelineMs = stageSw.ElapsedMilliseconds; stageSw.Restart();
 
       // Write MLIR if requested
       if (mlirOutputPath != null) {
-        MlirPipeline.WriteMlirOutput(mlirResult.Module, mlirOutputPath);
+        if (mlirResult.X86Module != null)
+          MlirPipeline.WriteMlirOutput(mlirResult.X86Module, mlirOutputPath);
+        else if (mlirResult.ARM64Module != null)
+          MlirPipeline.WriteMlirOutput(mlirResult.ARM64Module, mlirOutputPath);
       }
 
-      // Stage 5: Code emission (X86 dialect -> machine code)
-      var codeResult = CodeEmitter.Emit(mlirResult.Module);
+      if (target.Arch == "aarch64") {
+        // Stage 5: Code emission (ARM64 dialect -> machine code)
+        var codeResult = ARM64CodeEmitterStage.Emit(mlirResult.ARM64Module!);
+        var emitMs = stageSw.ElapsedMilliseconds; stageSw.Restart();
 
-      // Stage 6: Write PE executable
-      PeWriter.Write(outputPath, codeResult.Code, codeResult.Rdata, codeResult.Data, codeResult.Ucddata, codeResult.Imports, codeResult.Symdata, codeResult.CoffSymbols);
-      Logger.Info(LogCategory.Compiler, $"Wrote {codeResult.Code.Length} bytes code, {codeResult.Rdata.Length} bytes rdata, {codeResult.Data.Length} bytes data, {codeResult.Ucddata.Length} bytes ucddata, {codeResult.Symdata.Length} bytes symdata, {codeResult.Imports.Count} imports to {outputPath}");
+        // Stage 6: Write Mach-O executable
+        MachOWriter.Write(outputPath, codeResult.Code, codeResult.Rdata, codeResult.Data, codeResult.Ucddata, symdata: codeResult.Symdata, coffSymbols: codeResult.CoffSymbols, got: codeResult.Got, importNames: codeResult.ImportNames);
+        var writeMs = stageSw.ElapsedMilliseconds;
+        Logger.Trace(LogCategory.Compiler, $"Stages: parse={parseMs}ms pipeline={pipelineMs}ms emit={emitMs}ms write={writeMs}ms");
+        Logger.Info(LogCategory.Compiler, $"Wrote {codeResult.Code.Length} bytes code, {codeResult.Rdata.Length} bytes rdata, {codeResult.Data.Length} bytes data, {codeResult.Ucddata.Length} bytes ucddata, {codeResult.Symdata.Length} bytes symdata to {outputPath}");
+      } else if (target.Arch == "x86_64") {
+        // Stage 5: Code emission (X86 dialect -> machine code)
+        var codeResult = CodeEmitter.Emit(mlirResult.X86Module!);
+
+        // Stage 6: Write PE executable
+        PeWriter.Write(outputPath, codeResult.Code, codeResult.Rdata, codeResult.Data, codeResult.Ucddata, codeResult.Imports, codeResult.Symdata, codeResult.CoffSymbols);
+        Logger.Info(LogCategory.Compiler, $"Wrote {codeResult.Code.Length} bytes code, {codeResult.Rdata.Length} bytes rdata, {codeResult.Data.Length} bytes data, {codeResult.Ucddata.Length} bytes ucddata, {codeResult.Symdata.Length} bytes symdata, {codeResult.Imports.Count} imports to {outputPath}");
+      } else {
+        throw new InvalidOperationException($"Unsupported target architecture: {target.Arch}");
+      }
 
       return new CompileResult(true, null, mlirResult.AllStagesIr);
     } catch (CompileError ex) {
@@ -120,7 +178,11 @@ public class Compiler {
     return errors;
   }
 
-  internal static void CompileSources(MlirModule<MaxonOp> module, SourceFile[] sources, bool isStdLib) {
+  internal static void CompileSources(MlirModule<MaxonOp> module, SourceFile[] sources, bool isStdLib, CompileTarget? target = null) {
+    target ??= CompileTarget.Default;
+    var parserOs = target.ParserOs;
+    var parserArch = target.Arch;
+
     // Pre-register type names from all sources so cross-file references resolve
     // (e.g., Character.maxon references String before String.maxon is parsed)
     foreach (var source in sources)
@@ -132,7 +194,7 @@ public class Compiler {
       try {
         var lexer = new Lexer(source.Content);
         var tokens = lexer.Tokenize();
-        var parser = new Parser(tokens, module, isStdlib: isStdLib, sourceFilePath: source.Path, testing: Testing);
+        var parser = new Parser(tokens, module, isStdlib: isStdLib, sourceFilePath: source.Path, testing: Testing, targetOs: parserOs, targetArch: parserArch);
         parser.PreScanTypeAliasesOnly(module);
       } catch (CompileError ex) {
         ex.FilePath ??= source.Path;
@@ -146,7 +208,7 @@ public class Compiler {
       try {
         var lexer = new Lexer(source.Content);
         var tokens = lexer.Tokenize();
-        var parser = new Parser(tokens, module, isStdlib: isStdLib, sourceFilePath: source.Path, testing: Testing);
+        var parser = new Parser(tokens, module, isStdlib: isStdLib, sourceFilePath: source.Path, testing: Testing, targetOs: parserOs, targetArch: parserArch);
         parser.PreScan(module);
       } catch (CompileError ex) {
         ex.FilePath ??= source.Path;
@@ -164,7 +226,7 @@ public class Compiler {
       try {
         var lexer = new Lexer(source.Content);
         var tokens = lexer.Tokenize();
-        var parser = new Parser(tokens, module, isStdlib: isStdLib, sourceFilePath: source.Path, testing: Testing);
+        var parser = new Parser(tokens, module, isStdlib: isStdLib, sourceFilePath: source.Path, testing: Testing, targetOs: parserOs, targetArch: parserArch);
         var parsed = parser.Parse();
         module.Merge(parsed);
       } catch (CompileError ex) {

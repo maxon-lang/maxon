@@ -1,0 +1,68 @@
+// Test: return-float-range-check
+typealias Float = float(f64.min to f64.max)
+typealias Pct = float(0.0 to 100.0)
+
+function clampedPct(x Float) returns Pct
+  return x
+end 'clampedPct'
+
+function main() returns ExitCode
+  return trunc(clampedPct(42.5))
+end 'main'
+---
+ExitCode: 42
+---
+module {
+  func @ranged-typealias.clampedPct(x: f64) -> f64 {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.fstr d0, [x29, #-8]
+    arm64.fldr d1, [__float_0]
+    arm64.fcmp d0, d1
+    arm64.cset x0, lt
+    arm64.fldr d1, [__float_100]
+    arm64.fcmp d0, d1
+    arm64.cset x1, gt
+    arm64.orr x2, x0, x1
+    arm64.cmp x2, #0
+    arm64.b.ne ranged-typealias.clampedPct.__range_panic_0
+    arm64.b ranged-typealias.clampedPct.__range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_symdata x0, __panic_msg_6
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl maxon_panic
+  __range_ok_0:
+    arm64.fldr d0, [x29, #-8]
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+  func @ranged-typealias.main() -> u32 {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.fldr d0, [__float_42.5]
+    arm64.bl ranged-typealias.clampedPct
+    arm64.fcvtzs x0, d0
+    arm64.str x0, [x29, #-8]
+    arm64.mov x1, #0
+    arm64.cmp x0, x1
+    arm64.cset x2, lt
+    arm64.mov x3, #4294967295
+    arm64.cmp x0, x3
+    arm64.cset x4, gt
+    arm64.orr x5, x2, x4
+    arm64.cmp x5, #0
+    arm64.b.ne ranged-typealias.main.__range_panic_0
+    arm64.b ranged-typealias.main.__range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_symdata x0, __panic_msg_16
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl maxon_panic
+  __range_ok_0:
+    arm64.ldr x0, [x29, #-8]
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+}
+---

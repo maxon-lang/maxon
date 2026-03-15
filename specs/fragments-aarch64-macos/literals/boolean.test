@@ -1,0 +1,27 @@
+// Test: boolean
+function main() returns ExitCode
+  var flag = true
+  if flag 'check'
+    return 1
+  end 'check'
+  return 0
+end 'main'
+---
+ExitCode: 1
+---
+module {
+  func @literals.main() -> u32 {
+  entry:
+    arm64.mov x0, #1
+    arm64.cmp x0, #0
+    arm64.b.ne literals.main.check_0
+    arm64.b literals.main.check_0.after
+  check_0:
+    arm64.mov x0, #1
+    arm64.ret
+  check_0.after:
+    arm64.mov x0, #0
+    arm64.ret
+  }
+}
+---

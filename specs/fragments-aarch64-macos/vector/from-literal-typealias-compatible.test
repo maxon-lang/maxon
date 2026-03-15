@@ -1,0 +1,238 @@
+// Test: from-literal-typealias-compatible
+
+typealias Integer = int(i64.min to i64.max)
+
+typealias Vec3 = Vector with 3 Integer
+
+function sum(v Vec3) returns Integer
+  var a = try v.get(0) otherwise 0
+  var b = try v.get(1) otherwise 0
+  var c = try v.get(2) otherwise 0
+  return a + b + c
+end 'sum'
+
+function main() returns ExitCode
+  var v = Vec3{}
+  v.set(0, value: 10)
+  v.set(1, value: 20)
+  v.set(2, value: 12)
+  return sum(v)
+end 'main'
+---
+ExitCode: 42
+---
+module {
+  func @vector.sum(v: i64) -> i64 {
+  entry:
+    arm64.prologue stack_size=176
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.mov x1, #0
+    arm64.bl Vec3.get
+    arm64.mov x2, #0
+    arm64.str x2, [x29, #-16]
+    arm64.str x0, [x29, #-24]
+    arm64.mov x0, #0
+    arm64.cmp x1, x0
+    arm64.cset x2, ne
+    arm64.cmp x2, #0
+    arm64.b.ne vector.sum.otherwise_default_error_2
+    arm64.b vector.sum.otherwise_default_continue_3
+  otherwise_default_error_2:
+    arm64.ldr x0, [x29, #-16]
+    arm64.str x0, [x29, #-24]
+    arm64.b vector.sum.otherwise_default_continue_3
+  otherwise_default_continue_3:
+    arm64.ldr x0, [x29, #-24]
+    arm64.str x0, [x29, #-32]
+    arm64.ldr x1, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.mov x1, #1
+    arm64.bl Vec3.get
+    arm64.mov x2, #0
+    arm64.str x2, [x29, #-40]
+    arm64.str x0, [x29, #-48]
+    arm64.mov x3, #0
+    arm64.cmp x1, x3
+    arm64.cset x4, ne
+    arm64.cmp x4, #0
+    arm64.b.ne vector.sum.otherwise_default_error_6
+    arm64.b vector.sum.otherwise_default_continue_7
+  otherwise_default_error_6:
+    arm64.ldr x0, [x29, #-40]
+    arm64.str x0, [x29, #-48]
+    arm64.b vector.sum.otherwise_default_continue_7
+  otherwise_default_continue_7:
+    arm64.ldr x0, [x29, #-48]
+    arm64.str x0, [x29, #-56]
+    arm64.ldr x1, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.mov x1, #2
+    arm64.bl Vec3.get
+    arm64.mov x2, #0
+    arm64.str x2, [x29, #-64]
+    arm64.str x0, [x29, #-72]
+    arm64.mov x3, #0
+    arm64.cmp x1, x3
+    arm64.cset x4, ne
+    arm64.cmp x4, #0
+    arm64.b.ne vector.sum.otherwise_default_error_10
+    arm64.b vector.sum.otherwise_default_continue_11
+  otherwise_default_error_10:
+    arm64.ldr x0, [x29, #-64]
+    arm64.str x0, [x29, #-72]
+    arm64.b vector.sum.otherwise_default_continue_11
+  otherwise_default_continue_11:
+    arm64.ldr x0, [x29, #-72]
+    arm64.ldr x1, [x29, #-32]
+    arm64.ldr x2, [x29, #-56]
+    arm64.add x3, x1, x2
+    arm64.add x4, x3, x0
+    arm64.mov x0, x4
+    arm64.epilogue stack_size=176
+    arm64.ret
+  }
+  func @vector.main() -> u32 {
+  entry:
+    arm64.prologue stack_size=112
+    arm64.mov x0, #0
+    arm64.mov x1, #0
+    arm64.str x1, [x29, #-8]
+    arm64.mov x2, #0
+    arm64.str x2, [x29, #-16]
+    arm64.mov x3, #0
+    arm64.str x3, [x29, #-24]
+    arm64.mov x4, #0
+    arm64.mov x5, #3
+    arm64.mov x6, #0
+    arm64.mov x7, #8
+    arm64.adrp_add_func x8, __destruct___ManagedMemory
+    arm64.mov x9, x8
+    arm64.mov x1, x9
+    arm64.mov x0, #32
+    arm64.mov x2, #1
+    arm64.bl mm_alloc
+    arm64.str x0, [x29, #-32]
+    arm64.ldr x10, [x29, #-32]
+    arm64.mov x11, #0
+    arm64.str x11, [x10, #0]
+    arm64.ldr x12, [x29, #-32]
+    arm64.mov x13, #3
+    arm64.str x13, [x12, #8]
+    arm64.ldr x14, [x29, #-32]
+    arm64.mov x15, #0
+    arm64.str x15, [x14, #16]
+    arm64.ldr x0, [x29, #-32]
+    arm64.mov x1, #8
+    arm64.str x1, [x0, #24]
+    arm64.ldr x0, [x29, #-32]
+    arm64.ldr x1, [x0, #24]
+    arm64.adrp_add_symdata x0, __mm_panic_element_size_zero
+    arm64.mov x2, x0
+    arm64.mov x0, #0
+    arm64.bl maxon_bounds_check
+    arm64.adrp_add_func x0, __destruct_Vec3
+    arm64.mov x1, x0
+    arm64.mov x0, #16
+    arm64.mov x2, #2
+    arm64.bl mm_alloc
+    arm64.str x0, [x29, #-40]
+    arm64.ldr x0, [x29, #-40]
+    arm64.mov x1, #0
+    arm64.str x1, [x0, #0]
+    arm64.ldr x0, [x29, #-32]
+    arm64.ldr x1, [x29, #-40]
+    arm64.str x0, [x1, #8]
+    arm64.bl mm_incref
+    arm64.add x0, x29, #-24
+    arm64.mov x1, x0
+    arm64.ldr x0, [x29, #-40]
+    arm64.ldr x2, [x0, #8]
+    arm64.str x1, [x2, #0]
+    arm64.ldr x0, [x29, #-40]
+    arm64.bl mm_incref
+    arm64.ldr x0, [x29, #-40]
+    arm64.mov x1, #0
+    arm64.mov x2, #10
+    arm64.bl Vec3.set
+    arm64.ldr x0, [x29, #-40]
+    arm64.mov x1, #1
+    arm64.mov x2, #20
+    arm64.bl Vec3.set
+    arm64.ldr x0, [x29, #-40]
+    arm64.mov x1, #2
+    arm64.mov x2, #12
+    arm64.bl Vec3.set
+    arm64.ldr x0, [x29, #-40]
+    arm64.bl vector.sum
+    arm64.str x0, [x29, #-48]
+    arm64.mov x1, #0
+    arm64.cmp x0, x1
+    arm64.cset x2, lt
+    arm64.mov x1, #4294967295
+    arm64.cmp x0, x1
+    arm64.cset x3, gt
+    arm64.orr x0, x2, x3
+    arm64.cmp x0, #0
+    arm64.b.ne vector.main.__range_panic_1
+    arm64.b vector.main.__range_ok_1
+  __range_panic_1:
+    arm64.adrp_add_symdata x0, __panic_msg_58
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl maxon_panic
+  __range_ok_1:
+    arm64.ldr x0, [x29, #-48]
+    arm64.ldr x1, [x29, #-40]
+    arm64.cmp x1, #0
+    arm64.b.eq vector.main.__skip_guarded_76
+    arm64.ldr x0, [x29, #-40]
+    arm64.bl mm_decref
+    arm64.label vector.main.__skip_guarded_76
+    arm64.ldr x0, [x29, #-48]
+    arm64.epilogue stack_size=112
+    arm64.ret
+  }
+  func @__destruct___ManagedMemory(ptr: i64) {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #16]
+    arm64.mov x2, #0
+    arm64.cmp x1, x2
+    arm64.cset x3, ne
+    arm64.cmp x3, #0
+    arm64.b.ne __destruct___ManagedMemory.free_buf_0
+    arm64.b __destruct___ManagedMemory.skip_buf_0
+  free_buf_0:
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #0]
+    arm64.mov x0, x1
+    arm64.bl mm_raw_free
+    arm64.b __destruct___ManagedMemory.skip_buf_0
+  skip_buf_0:
+    arm64.b __destruct___ManagedMemory.done
+  done:
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+  func @__destruct_Vec3(ptr: i64) {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #8]
+    arm64.str x1, [x29, #-16]
+    arm64.cmp x1, #0
+    arm64.b.eq __destruct_Vec3.__skip_guarded_4
+    arm64.ldr x0, [x29, #-16]
+    arm64.bl mm_decref
+    arm64.label __destruct_Vec3.__skip_guarded_4
+    arm64.b __destruct_Vec3.done
+  done:
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+}
+---

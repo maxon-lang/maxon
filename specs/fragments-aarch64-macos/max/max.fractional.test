@@ -1,0 +1,40 @@
+// Test: max.fractional
+function main() returns ExitCode
+  var x = max(3.5, 5.2)
+  // max of 3.5 and 5.2 is 5.2, trunc gives 5
+  return trunc(x)
+end 'main'
+---
+ExitCode: 5
+---
+module {
+  func @max.main() -> u32 {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.fldr d0, [__float_3.5]
+    arm64.fldr d1, [__float_5.2]
+    arm64.fmax d2, d0, d1
+    arm64.fcvtzs x0, d2
+    arm64.str x0, [x29, #-8]
+    arm64.mov x1, #0
+    arm64.cmp x0, x1
+    arm64.cset x2, lt
+    arm64.mov x3, #4294967295
+    arm64.cmp x0, x3
+    arm64.cset x4, gt
+    arm64.orr x5, x2, x4
+    arm64.cmp x5, #0
+    arm64.b.ne max.main.__range_panic_0
+    arm64.b max.main.__range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_symdata x0, __panic_msg_9
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl maxon_panic
+  __range_ok_0:
+    arm64.ldr x0, [x29, #-8]
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+}
+---

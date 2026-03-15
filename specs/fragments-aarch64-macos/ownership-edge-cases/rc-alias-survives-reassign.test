@@ -1,0 +1,126 @@
+// Test: rc-alias-survives-reassign
+typealias Integer = int(i64.min to i64.max)
+
+type Num
+  export var v Integer
+end 'Num'
+
+function main() returns ExitCode
+  var a = Num{v: 10}
+  let b = a
+  a = Num{v: 20}
+  return b.v + a.v
+end 'main'
+---
+MmTrace: true
+ExitCode: 30
+Stderr: ```
+alloc Num #1 rc=0 size=8 [ownership-edge-cases.main]
+incref Num #1 rc=1 [ownership-edge-cases.main]
+incref Num #1 rc=2 [ownership-edge-cases.main]
+alloc Num #2 rc=0 size=8 [ownership-edge-cases.main]
+incref Num #2 rc=1 [ownership-edge-cases.main]
+decref Num #1 rc=1 [ownership-edge-cases.main]
+incref Num #2 rc=2 [ownership-edge-cases.main]
+decref Num #1 rc=0 [ownership-edge-cases.main]
+  free Num #1
+decref Num #2 rc=1 [ownership-edge-cases.main]
+decref Num #2 rc=0 [ownership-edge-cases.main]
+  free Num #2
+```
+---
+module {
+  func @ownership-edge-cases.main() -> u32 {
+  entry:
+    arm64.prologue stack_size=80
+    arm64.mov x0, #10
+    arm64.mov x0, #8
+    arm64.mov x1, #0
+    arm64.mov x2, #1
+    arm64.bl mm_alloc
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x1, [x29, #-8]
+    arm64.mov x2, #10
+    arm64.str x2, [x1, #0]
+    arm64.ldr x3, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl mm_incref
+    arm64.ldr x4, [x29, #-8]
+    arm64.str x4, [x29, #-16]
+    arm64.ldr x5, [x29, #-16]
+    arm64.ldr x0, [x29, #-16]
+    arm64.bl mm_incref
+    arm64.mov x6, #20
+    arm64.mov x0, #8
+    arm64.mov x1, #0
+    arm64.mov x2, #1
+    arm64.bl mm_alloc
+    arm64.str x0, [x29, #-24]
+    arm64.ldr x7, [x29, #-24]
+    arm64.mov x8, #20
+    arm64.str x8, [x7, #0]
+    arm64.bl mm_incref
+    arm64.ldr x9, [x29, #-8]
+    arm64.cmp x9, #0
+    arm64.b.eq ownership-edge-cases.main.__skip_guarded_23
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl mm_decref
+    arm64.label ownership-edge-cases.main.__skip_guarded_23
+    arm64.ldr x10, [x29, #-24]
+    arm64.str x10, [x29, #-8]
+    arm64.ldr x11, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl mm_incref
+    arm64.ldr x12, [x29, #-16]
+    arm64.ldr x13, [x12, #0]
+    arm64.ldr x14, [x29, #-8]
+    arm64.ldr x15, [x14, #0]
+    arm64.add x0, x13, x15
+    arm64.str x0, [x29, #-32]
+    arm64.mov x1, #0
+    arm64.cmp x0, x1
+    arm64.cset x2, lt
+    arm64.mov x1, #4294967295
+    arm64.cmp x0, x1
+    arm64.cset x3, gt
+    arm64.orr x0, x2, x3
+    arm64.cmp x0, #0
+    arm64.b.ne ownership-edge-cases.main.__range_panic_0
+    arm64.b ownership-edge-cases.main.__range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_symdata x0, __panic_msg_24
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl maxon_panic
+  __range_ok_0:
+    arm64.ldr x0, [x29, #-32]
+    arm64.ldr x1, [x29, #-16]
+    arm64.cmp x1, #0
+    arm64.b.eq ownership-edge-cases.main.__skip_guarded_44
+    arm64.ldr x0, [x29, #-16]
+    arm64.bl mm_decref
+    arm64.label ownership-edge-cases.main.__skip_guarded_44
+    arm64.ldr x2, [x29, #-8]
+    arm64.cmp x2, #0
+    arm64.b.eq ownership-edge-cases.main.__skip_guarded_46
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl mm_decref
+    arm64.label ownership-edge-cases.main.__skip_guarded_46
+    arm64.ldr x3, [x29, #-24]
+    arm64.cmp x3, #0
+    arm64.b.eq ownership-edge-cases.main.__skip_guarded_48
+    arm64.ldr x0, [x29, #-24]
+    arm64.bl mm_decref
+    arm64.label ownership-edge-cases.main.__skip_guarded_48
+    arm64.ldr x0, [x29, #-32]
+    arm64.epilogue stack_size=80
+    arm64.ret
+  }
+  func @__destruct_Num(ptr: i64) {
+  entry:
+    arm64.b __destruct_Num.done
+  done:
+    arm64.ret
+  }
+}
+---

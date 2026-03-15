@@ -1,0 +1,86 @@
+// Test: function-param-incref
+typealias Integer = int(i64.min to i64.max)
+type Config
+    export var level Integer
+end 'Config'
+function readLevel(c Config) returns Integer
+    return c.level
+end 'readLevel'
+function main() returns ExitCode
+    var cfg = Config{level: 77}
+    let l = readLevel(cfg)
+    return l + cfg.level - 77
+end 'main'
+---
+ExitCode: 77
+---
+module {
+  func @refcount.readLevel(c: i64) -> i64 {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #0]
+    arm64.mov x0, x1
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+  func @refcount.main() -> u32 {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.mov x0, #77
+    arm64.mov x0, #8
+    arm64.mov x1, #0
+    arm64.mov x2, #1
+    arm64.bl mm_alloc
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x1, [x29, #-8]
+    arm64.mov x2, #77
+    arm64.str x2, [x1, #0]
+    arm64.ldr x3, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl mm_incref
+    arm64.ldr x4, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl refcount.readLevel
+    arm64.ldr x5, [x29, #-8]
+    arm64.ldr x6, [x5, #0]
+    arm64.add x7, x0, x6
+    arm64.mov x8, #77
+    arm64.sub x9, x7, x8
+    arm64.str x9, [x29, #-16]
+    arm64.mov x10, #0
+    arm64.cmp x9, x10
+    arm64.cset x11, lt
+    arm64.mov x12, #4294967295
+    arm64.cmp x9, x12
+    arm64.cset x13, gt
+    arm64.orr x14, x11, x13
+    arm64.cmp x14, #0
+    arm64.b.ne refcount.main.__range_panic_0
+    arm64.b refcount.main.__range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_symdata x0, __panic_msg_26
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl maxon_panic
+  __range_ok_0:
+    arm64.ldr x0, [x29, #-16]
+    arm64.ldr x1, [x29, #-8]
+    arm64.cmp x1, #0
+    arm64.b.eq refcount.main.__skip_guarded_29
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl mm_decref
+    arm64.label refcount.main.__skip_guarded_29
+    arm64.ldr x0, [x29, #-16]
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+  func @__destruct_Config(ptr: i64) {
+  entry:
+    arm64.b __destruct_Config.done
+  done:
+    arm64.ret
+  }
+}
+---

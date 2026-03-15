@@ -1,0 +1,68 @@
+// Test: first-class-function.multiple-params
+
+typealias Integer = int(i64.min to i64.max)
+
+function calculate(f (Integer, Integer) returns Integer, a Integer, b Integer) returns Integer
+  return f(a, b)
+end 'calculate'
+
+function add(x Integer, y Integer) returns Integer
+  return x + y
+end 'add'
+
+function main() returns ExitCode
+  return calculate(add, a: 15, b: 27)
+end 'main'
+---
+ExitCode: 42
+---
+module {
+  func @first-class-functions.calculate(f: i64, __env_f: i64, a: i64, b: i64) -> i64 {
+  entry:
+    arm64.prologue stack_size=32
+    arm64.str x0, [x29, #-8]
+    arm64.mov x9, x0
+    arm64.mov x0, x2
+    arm64.mov x2, x1
+    arm64.mov x1, x3
+    arm64.blr x9
+    arm64.epilogue stack_size=32
+    arm64.ret
+  }
+  func @first-class-functions.add(x: i64, y: i64) -> i64 {
+  entry:
+    arm64.add x2, x0, x1
+    arm64.mov x0, x2
+    arm64.ret
+  }
+  func @first-class-functions.main() -> u32 {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.adrp_add_func x0, first-class-functions.add
+    arm64.mov x1, #0
+    arm64.mov x2, #15
+    arm64.mov x3, #27
+    arm64.bl first-class-functions.calculate
+    arm64.str x0, [x29, #-8]
+    arm64.mov x1, #0
+    arm64.cmp x0, x1
+    arm64.cset x2, lt
+    arm64.mov x3, #4294967295
+    arm64.cmp x0, x3
+    arm64.cset x4, gt
+    arm64.orr x5, x2, x4
+    arm64.cmp x5, #0
+    arm64.b.ne first-class-functions.main.__range_panic_0
+    arm64.b first-class-functions.main.__range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_symdata x0, __panic_msg_16
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl maxon_panic
+  __range_ok_0:
+    arm64.ldr x0, [x29, #-8]
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+}
+---
