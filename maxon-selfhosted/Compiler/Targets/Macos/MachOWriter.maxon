@@ -152,20 +152,20 @@ function buildChainedFixups(dataSegmentFileOff MachineWord, gotSectionOffsetInSe
 
     // Import entries (4 bytes each): lib_ordinal=1, weak=0, name_offset
     // Symbol offsets: after the initial \0 byte
-    // __exit starts at offset 1 (7 bytes), _write starts at offset 1 + 7 = 8
+    // _exit starts at offset 1 (6 bytes), _write starts at offset 1 + 6 = 7
     let exitNameOff = 1
-    let writeNameOff = exitNameOff + 7
+    let writeNameOff = exitNameOff + 6
 
     // Import 0: _exit
     let import0 = 1 or (0 shl 8) or (exitNameOff shl 9)
     writeDword(cf, value: import0)
-    // Import 1: write
+    // Import 1: _write
     let import1 = 1 or (0 shl 8) or (writeNameOff shl 9)
     writeDword(cf, value: import1)
 
     // Symbol pool
     cf.push(0) // leading null
-    cf.append(b"__exit\x00")
+    cf.append(b"_exit\x00")
     cf.append(b"_write\x00")
 
     // Align to 8

@@ -35,7 +35,7 @@ export function lowerMidToMaxArm64(module MlirModule, target Target) returns Mli
             // Emit prologue at the start of the entry block
             if isFirstBlock 'emitPrologue'
                 dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.prologue(stackSize)))
-                // Save AAPCS64 register parameters to stack slots
+                // Save AAPCS64 register parameters to stack slots (x0-x7)
                 if srcFunc.paramCount >= 1 'saveParam0'
                     dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.strToSlot(0, MaxArm64Register.x0)))
                 end 'saveParam0'
@@ -48,6 +48,18 @@ export function lowerMidToMaxArm64(module MlirModule, target Target) returns Mli
                 if srcFunc.paramCount >= 4 'saveParam3'
                     dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.strToSlot(3, MaxArm64Register.x3)))
                 end 'saveParam3'
+                if srcFunc.paramCount >= 5 'saveParam4'
+                    dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.strToSlot(4, MaxArm64Register.x4)))
+                end 'saveParam4'
+                if srcFunc.paramCount >= 6 'saveParam5'
+                    dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.strToSlot(5, MaxArm64Register.x5)))
+                end 'saveParam5'
+                if srcFunc.paramCount >= 7 'saveParam6'
+                    dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.strToSlot(6, MaxArm64Register.x6)))
+                end 'saveParam6'
+                if srcFunc.paramCount >= 8 'saveParam7'
+                    dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.strToSlot(7, MaxArm64Register.x7)))
+                end 'saveParam7'
                 isFirstBlock = false
             end 'emitPrologue'
 
@@ -229,10 +241,10 @@ function lowerFuncOpToArm64(fOp FuncOp, dstBlock MlirBlock, valueSlots ValueSlot
 end 'lowerFuncOpToArm64'
 
 function lowerCallOpToArm64(resultId ValueId, callee ByteArray, argIds ValueIdArray, dstBlock MlirBlock, valueSlots ValueSlotMap, nextTempSlot SlotIndex) returns SlotIndex
-    // AAPCS64: first 4 integer args in x0-x3 (stack args not yet implemented)
+    // AAPCS64: first 8 integer args in x0-x7
     let argCount = argIds.count()
-    if argCount > 4 'tooManyArgs'
-        logError(LogCategory.codegen, message: "ARM64 backend does not yet support more than 4 function arguments (got {argCount})")
+    if argCount > 8 'tooManyArgs'
+        logError(LogCategory.codegen, message: "ARM64 backend does not yet support more than 8 function arguments (got {argCount})")
     end 'tooManyArgs'
     if argCount >= 1 'arg0'
         let argSlot0 = valueSlotMapGet(valueSlots, valueId: try argIds.get(0) otherwise 0)
@@ -250,6 +262,22 @@ function lowerCallOpToArm64(resultId ValueId, callee ByteArray, argIds ValueIdAr
         let argSlot3 = valueSlotMapGet(valueSlots, valueId: try argIds.get(3) otherwise 0)
         dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.ldrFromSlot(MaxArm64Register.x3, argSlot3)))
     end 'arg3'
+    if argCount >= 5 'arg4'
+        let argSlot4 = valueSlotMapGet(valueSlots, valueId: try argIds.get(4) otherwise 0)
+        dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.ldrFromSlot(MaxArm64Register.x4, argSlot4)))
+    end 'arg4'
+    if argCount >= 6 'arg5'
+        let argSlot5 = valueSlotMapGet(valueSlots, valueId: try argIds.get(5) otherwise 0)
+        dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.ldrFromSlot(MaxArm64Register.x5, argSlot5)))
+    end 'arg5'
+    if argCount >= 7 'arg6'
+        let argSlot6 = valueSlotMapGet(valueSlots, valueId: try argIds.get(6) otherwise 0)
+        dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.ldrFromSlot(MaxArm64Register.x6, argSlot6)))
+    end 'arg6'
+    if argCount >= 8 'arg7'
+        let argSlot7 = valueSlotMapGet(valueSlots, valueId: try argIds.get(7) otherwise 0)
+        dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.ldrFromSlot(MaxArm64Register.x7, argSlot7)))
+    end 'arg7'
 
     dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.branchLink(callee)))
     let tempSlot = nextTempSlot
@@ -271,7 +299,7 @@ function lowerMidTerminatorToArm64(op MlirOp, srcBlock MlirBlock, dstBlock MlirB
     match op 'dispatch'
         maxhl to arith then break 'dispatch'
         cf(cOp) then lowerCfTerminatorToArm64(cOp, srcBlock: srcBlock, dstBlock: dstBlock, valueSlots: valueSlots)
-        func(fOp) then lowerFuncTerminatorToArm64(fOp, dstBlock: dstBlock)
+        func(fOp) then lowerFuncTerminatorToArm64(fOp, dstBlock: dstBlock, valueSlots: valueSlots)
         memref to maxx64 then break 'dispatch'
         maxarm64 then dstBlock.terminator = op
     end 'dispatch'
@@ -320,13 +348,19 @@ function emitBoolTestBranch(dstBlock MlirBlock, valueSlots ValueSlotMap, condId 
     dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.condBranch(MaxArm64CondCode.eq, elseTarget)))
 end 'emitBoolTestBranch'
 
-// Lower func terminator (ret): emit epilogue.
-function lowerFuncTerminatorToArm64(fOp FuncOp, dstBlock MlirBlock)
+// Lower func terminator (ret): load return value into x0, then emit epilogue.
+function lowerFuncTerminatorToArm64(fOp FuncOp, dstBlock MlirBlock, valueSlots ValueSlotMap)
     match fOp 'lower'
-        ret then dstBlock.terminator = MlirOp.maxarm64(MaxArm64Op.epilogue)
+        ret(retValId) then lowerRetToArm64(retValId, dstBlock: dstBlock, valueSlots: valueSlots)
         call then break 'lower'
     end 'lower'
 end 'lowerFuncTerminatorToArm64'
+
+function lowerRetToArm64(retValId ValueId, dstBlock MlirBlock, valueSlots ValueSlotMap)
+    let retSlot = valueSlotMapGet(valueSlots, valueId: retValId)
+    dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.ldrFromSlot(MaxArm64Register.x0, retSlot)))
+    dstBlock.terminator = MlirOp.maxarm64(MaxArm64Op.epilogue)
+end 'lowerRetToArm64'
 
 // Scan backwards through the source block's mid-level ops to find what kind of
 // comparison produced the condition for a condBr terminator.

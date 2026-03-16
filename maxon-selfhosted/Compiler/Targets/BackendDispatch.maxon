@@ -79,4 +79,18 @@ export function writeExecutable(outputPath FilePath, codeResult CodeResult, targ
         Os.linux then writeElf(outputPath, codeResult: codeResult, target: target)
         Os.macos then writeMachO(outputPath, codeResult: codeResult, target: target)
     end 'os'
+
+    // Unix hosts need executable permission set after writing the binary
+    #if os(Macos)
+    let chmodEc = Process.execute("chmod +x {outputPath}", timeoutMs: 5000)
+    if chmodEc != 0 'chmodFail'
+        logError(LogCategory.binary, message: "chmod +x failed for {outputPath}")
+    end 'chmodFail'
+    #endif
+    #if os(Linux)
+    let chmodEc = Process.execute("chmod +x {outputPath}", timeoutMs: 5000)
+    if chmodEc != 0 'chmodFail'
+        logError(LogCategory.binary, message: "chmod +x failed for {outputPath}")
+    end 'chmodFail'
+    #endif
 end 'writeExecutable'

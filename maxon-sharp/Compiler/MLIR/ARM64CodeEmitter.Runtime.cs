@@ -126,17 +126,17 @@ public partial class ARM64CodeEmitter {
     // Green thread runtime for async/await
     EmitGreenThreadRuntime();
 
-    // Stubs for features not yet implemented on macOS
-    EmitStubFunction("maxon_process_create");
-    EmitStubFunction("maxon_process_wait");
-    EmitStubFunction("maxon_process_get_exit_code");
-    EmitStubFunction("maxon_process_close");
-    EmitStubFunction("maxon_process_create_with_capture");
-    EmitStubFunction("maxon_process_read_pipe");
-    EmitStubFunction("maxon_process_get_handle");
-    EmitStubFunction("maxon_process_close_capture");
-    EmitStubFunction("maxon_process_read_stdout");
-    EmitStubFunction("maxon_process_read_stderr");
+    // Process management (macOS POSIX implementation)
+    EmitMaxonProcessCreate();
+    EmitMaxonProcessWait();
+    EmitMaxonProcessGetExitCode();
+    EmitMaxonProcessClose();
+    EmitMaxonProcessCreateWithCapture();
+    EmitMaxonProcessReadPipe();
+    EmitMaxonProcessGetHandle();
+    EmitMaxonProcessCloseCapture();
+    EmitMaxonProcessReadStdout();
+    EmitMaxonProcessReadStderr();
     EmitNetSend();
     EmitNetRecv();
     EmitNetClose();
@@ -4429,6 +4429,533 @@ public partial class ARM64CodeEmitter {
     // LDP x29, x30, [sp], #0x20
     EmitWord(0xA8C00000 | ((0x20u / 8) << 15) | (30u << 10) | (31u << 5) | 29u);
     EmitWord(0xD65F03C0); // RET
+  }
+
+  // =============================================================================
+  // Process management — macOS POSIX implementation
+  //
+  // Uses posix_spawn with /bin/sh -c to execute commands.
+  // Capture variant uses pipe() + posix_spawn_file_actions for stdout/stderr.
+  //
+  // Capture struct layout (24 bytes, heap-allocated via mm_alloc):
+  //   +0x00: pid       (pid_t, stored as 64-bit)
+  //   +0x08: stdoutFd  (read end of stdout pipe)
+  //   +0x10: stderrFd  (read end of stderr pipe)
+  // =============================================================================
+
+  /// <summary>
+  /// maxon_process_create(cmd_cstring, cwd_cstring) -> pid (or 0 on failure).
+  /// Spawns /bin/sh -c "cmd" using posix_spawn.
+  /// Stack layout (0x60):
+  ///   [x29+16] = cmd (arg0)
+  ///   [x29+24] = cwd (arg1)
+  ///   [x29+32] = pid (local)
+  ///   [x29+40] = argv[0] ptr to "/bin/sh"
+  ///   [x29+48] = argv[1] ptr to "-c"
+  ///   [x29+56] = argv[2] = cmd
+  ///   [x29+64] = argv[3] = NULL
+  ///   [x29+72] = scratch
+  /// </summary>
+  private void EmitMaxonProcessCreate() {
+    DefineSymdata("__rt_str_bin_sh", System.Text.Encoding.UTF8.GetBytes("/bin/sh\0"));
+    DefineSymdata("__rt_str_dash_c", System.Text.Encoding.UTF8.GetBytes("-c\0"));
+    // Global to store last waitpid status (shared between processWait and processGetExitCode)
+    DefineGlobal("__proc_last_status", 8, 0);
+
+    EmitRuntimeFunctionStart("maxon_process_create", 2, 0x60);
+
+    // Store 0 at pid slot [x29+32]
+    EmitMovRegImm(ARM64Register.X0, 0);
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X29, 32, 8);
+
+    // Build argv array on stack: ["/bin/sh", "-c", cmd, NULL]
+    EmitAdrpAddFixup(ARM64Register.X0, _symdataAdrpFixups, "__rt_str_bin_sh");
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X29, 40, 8); // argv[0]
+
+    EmitAdrpAddFixup(ARM64Register.X0, _symdataAdrpFixups, "__rt_str_dash_c");
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X29, 48, 8); // argv[1]
+
+    EmitReloadArg(0); // X0 = cmd
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X29, 56, 8); // argv[2] = cmd
+
+    EmitMovRegImm(ARM64Register.X0, 0);
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X29, 64, 8); // argv[3] = NULL
+
+    // posix_spawn(&pid, "/bin/sh", NULL, NULL, argv, NULL)
+    EmitAddSubImm(ARM64Register.X0, ARM64Register.X29, 32, isAdd: true); // &pid
+    EmitAdrpAddFixup(ARM64Register.X1, _symdataAdrpFixups, "__rt_str_bin_sh"); // path
+    EmitMovRegImm(ARM64Register.X2, 0); // file_actions = NULL
+    EmitMovRegImm(ARM64Register.X3, 0); // attrp = NULL
+    EmitAddSubImm(ARM64Register.X4, ARM64Register.X29, 40, isAdd: true); // argv
+    EmitMovRegImm(ARM64Register.X5, 0); // envp = NULL
+    EmitCallImport("posix_spawn");
+
+    // posix_spawn returns 0 on success
+    EmitCbnz(ARM64Register.X0, "__proc_create_fail");
+
+    // Return pid
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X29, 32, 8);
+    EmitRuntimeFunctionEnd();
+
+    DefineLabel("__proc_create_fail");
+    EmitMovRegImm(ARM64Register.X0, 0);
+    EmitRuntimeFunctionEnd();
+  }
+
+  /// <summary>
+  /// maxon_process_wait(pid, timeoutMs) -> 0=completed, 1=timeout, -1=error.
+  /// Uses waitpid with WNOHANG polling for timeout support.
+  /// Stack layout (0x40):
+  ///   [x29+16] = pid (arg0)
+  ///   [x29+24] = timeoutMs (arg1)
+  ///   [x29+32] = status (local)
+  ///   [x29+40] = elapsed (local)
+  /// </summary>
+  private void EmitMaxonProcessWait() {
+    EmitRuntimeFunctionStart("maxon_process_wait", 2, 0x40);
+
+    // If timeout == 0, use blocking wait (INFINITE)
+    EmitReloadArg(1); // X0 = timeoutMs
+    EmitCbz(ARM64Register.X0, "__proc_wait_blocking");
+
+    // Polling wait with timeout
+    // elapsed = 0
+    EmitMovRegImm(ARM64Register.X0, 0);
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X29, 40, 8);
+
+    DefineLabel("__proc_wait_poll_loop");
+    // waitpid(pid, &status, WNOHANG)
+    EmitReloadArg(0); // X0 = pid
+    EmitAddSubImm(ARM64Register.X1, ARM64Register.X29, 32, isAdd: true); // X1 = &status
+    EmitMovRegImm(ARM64Register.X2, 1); // WNOHANG = 1
+    EmitCallImport("waitpid");
+
+    // X0 > 0: child exited
+    EmitCmpImm(ARM64Register.X0, 0);
+    EmitBranchCond(ARM64ConditionCode.Gt, "__proc_wait_done");
+
+    // X0 < 0: error
+    EmitBranchCond(ARM64ConditionCode.Lt, "__proc_wait_error");
+
+    // X0 == 0: not yet done, check timeout
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X29, 40, 8); // elapsed
+    EmitReloadArg(1); // X1 = timeoutMs
+    // Compare elapsed >= timeout
+    EmitWord(0xEB01001F); // CMP X0, X1
+    EmitBranchCond(ARM64ConditionCode.Ge, "__proc_wait_timeout");
+
+    // Sleep 1ms using nanosleep({0, 1000000}, NULL)
+    // We need to put timespec on stack: [x29+32] is reusable scratch? No, status is there.
+    // Use sub-sp approach: push timespec
+    EmitAddSubImm(ARM64Register.Sp, ARM64Register.Sp, 16, isAdd: false);
+    EmitMovRegImm(ARM64Register.X0, 0);
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.Sp, 0, 8); // tv_sec = 0
+    EmitMovRegImm(ARM64Register.X0, 1_000_000); // 1ms in nanoseconds
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.Sp, 8, 8); // tv_nsec = 1000000
+    EmitMovRegReg(ARM64Register.X0, ARM64Register.Sp); // X0 = &timespec
+    EmitMovRegImm(ARM64Register.X1, 0); // X1 = NULL (no remaining)
+    EmitCallImport("nanosleep");
+    EmitAddSubImm(ARM64Register.Sp, ARM64Register.Sp, 16, isAdd: true);
+
+    // elapsed += 1
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X29, 40, 8);
+    EmitAddSubImm(ARM64Register.X0, ARM64Register.X0, 1, isAdd: true);
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X29, 40, 8);
+
+    EmitBranch("__proc_wait_poll_loop");
+
+    // Blocking wait (no timeout)
+    DefineLabel("__proc_wait_blocking");
+    EmitReloadArg(0); // X0 = pid
+    EmitAddSubImm(ARM64Register.X1, ARM64Register.X29, 32, isAdd: true); // X1 = &status
+    EmitMovRegImm(ARM64Register.X2, 0); // options = 0 (blocking)
+    EmitCallImport("waitpid");
+    EmitCmpImm(ARM64Register.X0, 0);
+    EmitBranchCond(ARM64ConditionCode.Lt, "__proc_wait_error");
+
+    DefineLabel("__proc_wait_done");
+    // Store status in global for processGetExitCode to read
+    EmitLoadStoreUnsignedImm(0xB9400000, ARM64Register.X0, ARM64Register.X29, 32, 4); // load status (32-bit)
+    EmitGlobalStoreReg(ARM64Register.X0, "__proc_last_status");
+    EmitMovRegImm(ARM64Register.X0, 0); // 0 = completed
+    EmitRuntimeFunctionEnd();
+
+    DefineLabel("__proc_wait_timeout");
+    EmitMovRegImm(ARM64Register.X0, 1); // 1 = timeout
+    EmitRuntimeFunctionEnd();
+
+    DefineLabel("__proc_wait_error");
+    EmitMovRegImm(ARM64Register.X0, -1); // -1 = error
+    EmitRuntimeFunctionEnd();
+  }
+
+  /// <summary>
+  /// maxon_process_get_exit_code(pid) -> exit code.
+  /// Reads the status stored by processWait from __proc_last_status global,
+  /// then extracts the exit code using WEXITSTATUS(status) = (status >> 8) & 0xFF.
+  /// </summary>
+  private void EmitMaxonProcessGetExitCode() {
+    DefineLabel("maxon_process_get_exit_code");
+
+    // Load status from global
+    EmitGlobalLoadReg(ARM64Register.X0, "__proc_last_status");
+
+    // WEXITSTATUS(status) = (status >> 8) & 0xFF
+    // UBFX X0, X0, #8, #8  (extract bits 8..15)
+    EmitWord(0xD3483C00 | Reg(ARM64Register.X0)); // UBFX X0, X0, #8, #8
+
+    EmitWord(0xD65F03C0); // RET
+  }
+
+  /// <summary>
+  /// maxon_process_close(pid) -> void.
+  /// On POSIX, there's no handle to close for processes. This is a no-op.
+  /// </summary>
+  private void EmitMaxonProcessClose() {
+    DefineLabel("maxon_process_close");
+    EmitWord(0xD65F03C0); // RET
+  }
+
+  /// <summary>
+  /// maxon_process_create_with_capture(cmd_cstring, cwd_cstring) -> capture_ptr.
+  /// Creates two pipes (stdout, stderr), spawns /bin/sh -c "cmd" with
+  /// stdout/stderr redirected to pipes, returns heap struct with pid + read fds.
+  ///
+  /// Stack layout (0xA0):
+  ///   [x29+16]  = cmd (arg0)
+  ///   [x29+24]  = cwd (arg1)
+  ///   [x29+32]  = stdout_pipe[0] (read end)
+  ///   [x29+36]  = stdout_pipe[1] (write end)
+  ///   [x29+40]  = stderr_pipe[0] (read end)
+  ///   [x29+44]  = stderr_pipe[1] (write end)
+  ///   [x29+48]  = pid
+  ///   [x29+56]  = file_actions (posix_spawn_file_actions_t, opaque, ~128 bytes on macOS)
+  ///   [x29+56..x29+120] = file_actions storage (64 bytes should be enough, it's a pointer internally)
+  ///   [x29+120] = capture_ptr (result)
+  ///   [x29+128] = argv[0] "/bin/sh"
+  ///   [x29+136] = argv[1] "-c"
+  ///   [x29+144] = argv[2] = cmd
+  ///   [x29+152] = argv[3] = NULL
+  /// </summary>
+  private void EmitMaxonProcessCreateWithCapture() {
+    EmitRuntimeFunctionStart("maxon_process_create_with_capture", 2, 0xA0);
+
+    // Zero out pipe arrays and pid
+    EmitMovRegImm(ARM64Register.X0, 0);
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X29, 32, 8); // stdout_pipe
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X29, 40, 8); // stderr_pipe
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X29, 48, 8); // pid
+
+    // pipe(stdout_pipe) - creates stdout_pipe[0]=read, [1]=write
+    EmitAddSubImm(ARM64Register.X0, ARM64Register.X29, 32, isAdd: true);
+    EmitCallImport("pipe");
+    EmitCbnz(ARM64Register.X0, "__pcwc_fail");
+
+    // pipe(stderr_pipe)
+    EmitAddSubImm(ARM64Register.X0, ARM64Register.X29, 40, isAdd: true);
+    EmitCallImport("pipe");
+    EmitCbnz(ARM64Register.X0, "__pcwc_fail_close_stdout");
+
+    // posix_spawn_file_actions_init(&file_actions)
+    EmitAddSubImm(ARM64Register.X0, ARM64Register.X29, 56, isAdd: true);
+    EmitCallImport("posix_spawn_file_actions_init");
+
+    // posix_spawn_file_actions_adddup2(&file_actions, stdout_pipe[1], STDOUT_FILENO=1)
+    EmitAddSubImm(ARM64Register.X0, ARM64Register.X29, 56, isAdd: true);
+    // Load stdout_pipe[1] (32-bit int at offset 36)
+    EmitLoadStoreUnsignedImm(0xB9400000, ARM64Register.X1, ARM64Register.X29, 36, 4);
+    EmitMovRegImm(ARM64Register.X2, 1); // STDOUT_FILENO
+    EmitCallImport("posix_spawn_file_actions_adddup2");
+
+    // posix_spawn_file_actions_adddup2(&file_actions, stderr_pipe[1], STDERR_FILENO=2)
+    EmitAddSubImm(ARM64Register.X0, ARM64Register.X29, 56, isAdd: true);
+    EmitLoadStoreUnsignedImm(0xB9400000, ARM64Register.X1, ARM64Register.X29, 44, 4); // stderr_pipe[1]
+    EmitMovRegImm(ARM64Register.X2, 2); // STDERR_FILENO
+    EmitCallImport("posix_spawn_file_actions_adddup2");
+
+    // posix_spawn_file_actions_addclose(&file_actions, stdout_pipe[0]) - close read end in child
+    EmitAddSubImm(ARM64Register.X0, ARM64Register.X29, 56, isAdd: true);
+    EmitLoadStoreUnsignedImm(0xB9400000, ARM64Register.X1, ARM64Register.X29, 32, 4);
+    EmitCallImport("posix_spawn_file_actions_addclose");
+
+    // posix_spawn_file_actions_addclose(&file_actions, stderr_pipe[0])
+    EmitAddSubImm(ARM64Register.X0, ARM64Register.X29, 56, isAdd: true);
+    EmitLoadStoreUnsignedImm(0xB9400000, ARM64Register.X1, ARM64Register.X29, 40, 4);
+    EmitCallImport("posix_spawn_file_actions_addclose");
+
+    // posix_spawn_file_actions_addclose(&file_actions, stdout_pipe[1]) - close write end in child after dup2
+    EmitAddSubImm(ARM64Register.X0, ARM64Register.X29, 56, isAdd: true);
+    EmitLoadStoreUnsignedImm(0xB9400000, ARM64Register.X1, ARM64Register.X29, 36, 4);
+    EmitCallImport("posix_spawn_file_actions_addclose");
+
+    // posix_spawn_file_actions_addclose(&file_actions, stderr_pipe[1])
+    EmitAddSubImm(ARM64Register.X0, ARM64Register.X29, 56, isAdd: true);
+    EmitLoadStoreUnsignedImm(0xB9400000, ARM64Register.X1, ARM64Register.X29, 44, 4);
+    EmitCallImport("posix_spawn_file_actions_addclose");
+
+    // Build argv: ["/bin/sh", "-c", cmd, NULL]
+    EmitAdrpAddFixup(ARM64Register.X0, _symdataAdrpFixups, "__rt_str_bin_sh");
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X29, 128, 8);
+    EmitAdrpAddFixup(ARM64Register.X0, _symdataAdrpFixups, "__rt_str_dash_c");
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X29, 136, 8);
+    EmitReloadArg(0); // cmd
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X29, 144, 8);
+    EmitMovRegImm(ARM64Register.X0, 0);
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X29, 152, 8);
+
+    // posix_spawn(&pid, "/bin/sh", &file_actions, NULL, argv, NULL)
+    EmitAddSubImm(ARM64Register.X0, ARM64Register.X29, 48, isAdd: true); // &pid
+    EmitAdrpAddFixup(ARM64Register.X1, _symdataAdrpFixups, "__rt_str_bin_sh"); // path
+    EmitAddSubImm(ARM64Register.X2, ARM64Register.X29, 56, isAdd: true); // &file_actions
+    EmitMovRegImm(ARM64Register.X3, 0); // attrp = NULL
+    EmitAddSubImm(ARM64Register.X4, ARM64Register.X29, 128, isAdd: true); // argv
+    EmitMovRegImm(ARM64Register.X5, 0); // envp = NULL
+    EmitCallImport("posix_spawn");
+
+    // posix_spawn_file_actions_destroy(&file_actions)
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X29, 120, 8); // save spawn result
+    EmitAddSubImm(ARM64Register.X0, ARM64Register.X29, 56, isAdd: true);
+    EmitCallImport("posix_spawn_file_actions_destroy");
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X29, 120, 8); // restore spawn result
+
+    // Check posix_spawn result
+    EmitCbnz(ARM64Register.X0, "__pcwc_fail_close_all");
+
+    // Close write ends of pipes in parent
+    EmitLoadStoreUnsignedImm(0xB9400000, ARM64Register.X0, ARM64Register.X29, 36, 4); // stdout_pipe[1]
+    EmitCallImport("close");
+    EmitLoadStoreUnsignedImm(0xB9400000, ARM64Register.X0, ARM64Register.X29, 44, 4); // stderr_pipe[1]
+    EmitCallImport("close");
+
+    // Allocate capture struct (24 bytes) via mm_alloc
+    EmitMovRegImm(ARM64Register.X0, 24);
+    EmitMovRegImm(ARM64Register.X1, 0); // destructor
+    EmitMovRegImm(ARM64Register.X2, 0); // tag
+    EmitMovRegImm(ARM64Register.X3, 0); // scope
+    EmitBranchLink("mm_alloc");
+    // Save capture_ptr
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X29, 120, 8);
+
+    // Fill capture struct
+    // [capture+0] = pid
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X1, ARM64Register.X29, 48, 8);
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X1, ARM64Register.X0, 0, 8);
+    // [capture+8] = stdout_pipe[0] (read fd, zero-extended from 32-bit)
+    EmitLoadStoreUnsignedImm(0xB9400000, ARM64Register.X1, ARM64Register.X29, 32, 4);
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X1, ARM64Register.X0, 8, 8);
+    // [capture+16] = stderr_pipe[0] (read fd)
+    EmitLoadStoreUnsignedImm(0xB9400000, ARM64Register.X1, ARM64Register.X29, 40, 4);
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X1, ARM64Register.X0, 16, 8);
+
+    // Return capture_ptr
+    EmitRuntimeFunctionEnd();
+
+    // Error paths
+    DefineLabel("__pcwc_fail_close_all");
+    // Close all four pipe fds
+    EmitLoadStoreUnsignedImm(0xB9400000, ARM64Register.X0, ARM64Register.X29, 36, 4);
+    EmitCallImport("close");
+    EmitLoadStoreUnsignedImm(0xB9400000, ARM64Register.X0, ARM64Register.X29, 44, 4);
+    EmitCallImport("close");
+
+    DefineLabel("__pcwc_fail_close_stdout");
+    EmitLoadStoreUnsignedImm(0xB9400000, ARM64Register.X0, ARM64Register.X29, 32, 4);
+    EmitCallImport("close");
+    EmitLoadStoreUnsignedImm(0xB9400000, ARM64Register.X0, ARM64Register.X29, 40, 4);
+    EmitCallImport("close");
+
+    DefineLabel("__pcwc_fail");
+    EmitMovRegImm(ARM64Register.X0, 0);
+    EmitRuntimeFunctionEnd();
+  }
+
+  /// <summary>
+  /// maxon_process_read_pipe(fd) -> cstring_ptr (heap-allocated, null-terminated).
+  /// Reads all data from fd into a growing buffer, then closes fd.
+  /// Stack layout (0x50):
+  ///   [x29+16] = fd (arg0)
+  ///   [x29+24] = buffer ptr
+  ///   [x29+32] = capacity
+  ///   [x29+40] = total_read
+  ///   [x29+48] = bytes_read (scratch)
+  /// </summary>
+  private void EmitMaxonProcessReadPipe() {
+    EmitRuntimeFunctionStart("maxon_process_read_pipe", 1, 0x50);
+
+    // Allocate initial 4KB buffer
+    EmitMovRegImm(ARM64Register.X0, 4096);
+    EmitMovRegImm(ARM64Register.X1, 0);
+    EmitMovRegImm(ARM64Register.X2, 0);
+    EmitMovRegImm(ARM64Register.X3, 0);
+    EmitBranchLink("mm_alloc");
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X29, 24, 8); // buffer
+    EmitMovRegImm(ARM64Register.X0, 4096);
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X29, 32, 8); // capacity
+    EmitMovRegImm(ARM64Register.X0, 0);
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X29, 40, 8); // total_read = 0
+
+    DefineLabel("__read_pipe_loop");
+    // Check if buffer is full (total_read >= capacity - 1)
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X29, 40, 8); // total_read
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X1, ARM64Register.X29, 32, 8); // capacity
+    EmitAddSubImm(ARM64Register.X1, ARM64Register.X1, 1, isAdd: false); // capacity - 1
+    EmitWord(0xEB01001F); // CMP X0, X1
+    EmitBranchCond(ARM64ConditionCode.Lt, "__read_pipe_do_read");
+
+    // Grow buffer: capacity *= 2
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X29, 32, 8);
+    // LSL X0, X0, #1
+    EmitWord(0xD37FF800 | Reg(ARM64Register.X0)); // LSL X0, X0, #1
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X29, 32, 8); // new capacity
+
+    // Allocate new buffer
+    EmitMovRegImm(ARM64Register.X1, 0);
+    EmitMovRegImm(ARM64Register.X2, 0);
+    EmitMovRegImm(ARM64Register.X3, 0);
+    EmitBranchLink("mm_alloc");
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X29, 48, 8); // new_buffer (temp in scratch)
+
+    // memcpy(new_buffer, old_buffer, total_read)
+    // X0 = new_buffer (already in X0? no, need to reload)
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X29, 48, 8); // dst = new_buffer
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X1, ARM64Register.X29, 24, 8); // src = old_buffer
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X2, ARM64Register.X29, 40, 8); // count = total_read
+    EmitBranchLink("maxon_memcpy");
+
+    // Free old buffer
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X29, 24, 8);
+    EmitBranchLink("mm_free");
+
+    // Update buffer ptr to new buffer
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X29, 48, 8);
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X29, 24, 8);
+
+    DefineLabel("__read_pipe_do_read");
+    // read(fd, buffer + total_read, capacity - total_read - 1)
+    EmitReloadArg(0); // X0 = fd
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X1, ARM64Register.X29, 24, 8); // buffer
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X2, ARM64Register.X29, 40, 8); // total_read
+    // X1 = buffer + total_read
+    EmitWord(0x8B020021); // ADD X1, X1, X2
+    // X2 = capacity - total_read - 1
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X3, ARM64Register.X29, 32, 8); // capacity
+    EmitWord(0xCB020062); // SUB X2, X3, X2 (capacity - total_read)
+    EmitAddSubImm(ARM64Register.X2, ARM64Register.X2, 1, isAdd: false); // -1 for null terminator
+    EmitCallImport("read");
+
+    // X0 = bytes read. If <= 0, done.
+    EmitCmpImm(ARM64Register.X0, 0);
+    EmitBranchCond(ARM64ConditionCode.Le, "__read_pipe_done");
+
+    // total_read += bytes_read
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X1, ARM64Register.X29, 40, 8);
+    EmitWord(0x8B000020); // ADD X0, X1, X0
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X29, 40, 8);
+
+    EmitBranch("__read_pipe_loop");
+
+    DefineLabel("__read_pipe_done");
+    // Close fd
+    EmitReloadArg(0);
+    EmitCallImport("close");
+
+    // Null-terminate buffer
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X29, 24, 8); // buffer
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X1, ARM64Register.X29, 40, 8); // total_read
+    // Store 0 at buffer[total_read]
+    EmitWord(0x8B010000); // ADD X0, X0, X1
+    EmitMovRegImm(ARM64Register.X1, 0);
+    // STRB W1, [X0]
+    EmitWord(0x39000001); // STRB W1, [X0, #0]
+
+    // Return buffer
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X29, 24, 8);
+    EmitRuntimeFunctionEnd();
+  }
+
+  /// <summary>
+  /// maxon_process_get_handle(capture_ptr) -> pid.
+  /// </summary>
+  private void EmitMaxonProcessGetHandle() {
+    DefineLabel("maxon_process_get_handle");
+    // X0 = capture_ptr
+    EmitCbz(ARM64Register.X0, "__pgh_null");
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X0, 0, 8); // [capture+0] = pid
+    EmitWord(0xD65F03C0); // RET
+    DefineLabel("__pgh_null");
+    EmitMovRegImm(ARM64Register.X0, 0);
+    EmitWord(0xD65F03C0); // RET
+  }
+
+  /// <summary>
+  /// maxon_process_close_capture(capture_ptr) -> void.
+  /// Frees the capture struct via mm_free.
+  /// </summary>
+  private void EmitMaxonProcessCloseCapture() {
+    EmitRuntimeFunctionStart("maxon_process_close_capture", 1, 0x30);
+    EmitReloadArg(0); // X0 = capture_ptr
+    EmitCbz(ARM64Register.X0, "__pcc_null");
+    EmitBranchLink("mm_free");
+    DefineLabel("__pcc_null");
+    EmitRuntimeFunctionEnd();
+  }
+
+  /// <summary>
+  /// maxon_process_read_stdout(capture_ptr) -> cstring_ptr.
+  /// Reads stdout pipe from capture struct, returns null-terminated heap string.
+  /// Returns pointer to empty string if capture_ptr is null or fd is 0.
+  /// </summary>
+  private void EmitMaxonProcessReadStdout() {
+    DefineSymdata("__rt_empty_cstring", [0x00]);
+
+    EmitRuntimeFunctionStart("maxon_process_read_stdout", 1, 0x30);
+    EmitReloadArg(0); // X0 = capture_ptr
+    EmitCbz(ARM64Register.X0, "__prso_empty");
+
+    // Load stdout fd
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X1, ARM64Register.X0, 8, 8);
+    EmitCbz(ARM64Register.X1, "__prso_empty");
+
+    // Zero the fd in capture to prevent double-read
+    EmitMovRegImm(ARM64Register.X2, 0);
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X2, ARM64Register.X0, 8, 8);
+
+    // Read pipe: X0 = fd
+    EmitMovRegReg(ARM64Register.X0, ARM64Register.X1);
+    EmitBranchLink("maxon_process_read_pipe");
+    // X0 = cstring ptr, return it directly
+    EmitRuntimeFunctionEnd();
+
+    DefineLabel("__prso_empty");
+    EmitAdrpAddFixup(ARM64Register.X0, _symdataAdrpFixups, "__rt_empty_cstring");
+    EmitRuntimeFunctionEnd();
+  }
+
+  /// <summary>
+  /// maxon_process_read_stderr(capture_ptr) -> cstring_ptr.
+  /// Same as read_stdout but uses offset +16 (stderr fd).
+  /// </summary>
+  private void EmitMaxonProcessReadStderr() {
+    EmitRuntimeFunctionStart("maxon_process_read_stderr", 1, 0x30);
+    EmitReloadArg(0); // X0 = capture_ptr
+    EmitCbz(ARM64Register.X0, "__prse_empty");
+
+    // Load stderr fd
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X1, ARM64Register.X0, 16, 8);
+    EmitCbz(ARM64Register.X1, "__prse_empty");
+
+    // Zero the fd in capture
+    EmitMovRegImm(ARM64Register.X2, 0);
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X2, ARM64Register.X0, 16, 8);
+
+    // Read pipe
+    EmitMovRegReg(ARM64Register.X0, ARM64Register.X1);
+    EmitBranchLink("maxon_process_read_pipe");
+    EmitRuntimeFunctionEnd();
+
+    DefineLabel("__prse_empty");
+    EmitAdrpAddFixup(ARM64Register.X0, _symdataAdrpFixups, "__rt_empty_cstring");
+    EmitRuntimeFunctionEnd();
   }
 
 }

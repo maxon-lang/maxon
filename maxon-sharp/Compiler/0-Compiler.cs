@@ -26,7 +26,7 @@ public record CompileTarget(string Arch, string Os) {
   /// Maps CompileTarget.Os to the Parser's targetOs parameter value.
   /// </summary>
   public string ParserOs => Os.ToLowerInvariant() switch {
-    "macos" => "OSX",
+    "macos" => "Macos",
     "windows" => "Windows",
     "linux" => "Linux",
     var unknown => throw new ArgumentException($"Unknown OS '{unknown}' in CompileTarget. Expected macos, windows, or linux.")
