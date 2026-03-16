@@ -674,7 +674,6 @@ public partial class ARM64CodeEmitter {
   /// </summary>
   private void EmitMaxonI64ToStringFmt() {
     var noFmtLabel = $"__i64fmt_nofmt_{_uniqueLabelCounter}";
-    var parsedLabel = $"__i64fmt_parsed_{_uniqueLabelCounter}";
     var parseWidthLabel = $"__i64fmt_parsewidth_{_uniqueLabelCounter}";
     var parseTypeLabel = $"__i64fmt_parsetype_{_uniqueLabelCounter}";
     var positiveLabel = $"__i64fmt_positive_{_uniqueLabelCounter}";
@@ -686,7 +685,6 @@ public partial class ARM64CodeEmitter {
     var reverseLabel = $"__i64fmt_reverse_{_uniqueLabelCounter}";
     var reverseDoneLabel = $"__i64fmt_revdone_{_uniqueLabelCounter}";
     var padLabel = $"__i64fmt_pad_{_uniqueLabelCounter}";
-    var padLoopLabel = $"__i64fmt_padloop_{_uniqueLabelCounter}";
     var doneLabel = $"__i64fmt_done_{_uniqueLabelCounter}";
     _uniqueLabelCounter++;
 
@@ -801,7 +799,6 @@ public partial class ARM64CodeEmitter {
     // if digit < 10: char = digit + '0', else char = digit - 10 + hex_base
     EmitMovRegImm(ARM64Register.X6, 10);
     EmitWord(0xEB00001F | (Reg(ARM64Register.X6) << 16) | (Reg(ARM64Register.X4) << 5)); // CMP X4, 10
-    var hexDigitLabel = $"__i64fmt_hexdigit_{_uniqueLabelCounter - 1}";
     var hexAlphaLabel = $"__i64fmt_hexalpha_{_uniqueLabelCounter - 1}";
     var hexWriteLabel = $"__i64fmt_hexwrite_{_uniqueLabelCounter - 1}";
     _condBranchFixups.Add((_code.Count, hexAlphaLabel));
@@ -2267,11 +2264,8 @@ public partial class ARM64CodeEmitter {
   private const int DirBlockSize = 4384;
 
   // macOS dirent64 struct offsets
-  private const int DirentIno = 0;     // d_ino, 8 bytes
-  private const int DirentSeekoff = 8; // d_seekoff, 8 bytes
   private const int DirentReclen = 16; // d_reclen, 2 bytes
   private const int DirentNamelen = 18; // d_namlen, 2 bytes
-  private const int DirentType = 20;   // d_type, 1 byte
   private const int DirentName = 21;   // d_name, variable
 
   // --- maxon_managed_dir_open_search(pattern_cstring) -> block_ptr or 0 ---
@@ -2649,7 +2643,6 @@ public partial class ARM64CodeEmitter {
 
   // I/O result fields in GreenThread struct (used by async I/O)
   private const int GtOffIoResultVal = 0x60; // raw result value
-  private const int GtOffIoResultLen = 0x68; // byte count (unused on macOS, reserved)
   private const int GtOffIoErrorCode = 0x70; // 0=success, non-zero=error
 
   // SyncRequest layout (40 bytes) — queued I/O operations

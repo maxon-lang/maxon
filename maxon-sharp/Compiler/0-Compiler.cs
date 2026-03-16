@@ -120,7 +120,7 @@ public class Compiler {
         var emitMs = stageSw.ElapsedMilliseconds; stageSw.Restart();
 
         // Stage 6: Write Mach-O executable
-        MachOWriter.Write(outputPath, codeResult.Code, codeResult.Rdata, codeResult.Data, codeResult.Ucddata, symdata: codeResult.Symdata, coffSymbols: codeResult.CoffSymbols, got: codeResult.Got, importNames: codeResult.ImportNames);
+        MachOWriter.Write(outputPath, codeResult.Code, codeResult.Rdata, codeResult.Data, codeResult.Ucddata, symdata: codeResult.Symdata, got: codeResult.Got, importNames: codeResult.ImportNames);
         var writeMs = stageSw.ElapsedMilliseconds;
         Logger.Trace(LogCategory.Compiler, $"Stages: parse={parseMs}ms pipeline={pipelineMs}ms emit={emitMs}ms write={writeMs}ms");
         Logger.Info(LogCategory.Compiler, $"Wrote {codeResult.Code.Length} bytes code, {codeResult.Rdata.Length} bytes rdata, {codeResult.Data.Length} bytes data, {codeResult.Ucddata.Length} bytes ucddata, {codeResult.Symdata.Length} bytes symdata to {outputPath}");

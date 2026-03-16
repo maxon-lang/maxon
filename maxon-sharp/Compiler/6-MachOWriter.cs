@@ -53,8 +53,7 @@ public class MachOWriter {
   private const int CS_PAGE_SIZE_LOG2 = 12; // 4096-byte pages for hashing
 
   public static void Write(string path, byte[] code, byte[]? rdata = null, byte[]? data = null,
-    byte[]? ucddata = null, IReadOnlyList<ImportEntry>? imports = null, byte[]? symdata = null,
-    IReadOnlyList<CoffSymbol>? coffSymbols = null,
+    byte[]? ucddata = null, byte[]? symdata = null,
     byte[]? got = null, IReadOnlyList<string>? importNames = null) {
     Logger.Debug(LogCategory.Pe, $"Writing Mach-O file: {path}");
 

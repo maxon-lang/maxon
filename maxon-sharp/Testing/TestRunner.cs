@@ -10,7 +10,7 @@ namespace MaxonSharp.Testing;
 /// <summary>
 /// Executes tests from fragment files.
 /// </summary>
-public class TestRunner(string specDir, string fragmentDir, string tempDir, string? filter = null, int? workers = null, bool updateRequired = false, Compiler.CompileTarget? target = null) {
+public partial class TestRunner(string specDir, string fragmentDir, string tempDir, string? filter = null, int? workers = null, bool updateRequired = false, Compiler.CompileTarget? target = null) {
   private readonly string _specDir = specDir;
   private readonly string _fragmentDir = fragmentDir;
   private readonly string _tempDir = tempDir;
@@ -685,8 +685,7 @@ public class TestRunner(string specDir, string fragmentDir, string tempDir, stri
     normalized = normalized.Replace('\\', '/');
     // Normalize target-specific fragment directory to generic path for comparison
     // e.g., "specs/fragments-aarch64-macos/" -> "specs/fragments/"
-    normalized = System.Text.RegularExpressions.Regex.Replace(
-      normalized, @"specs/fragments-[^/]+/", "specs/fragments/");
+    normalized = FragmentDirRegex().Replace(normalized, "specs/fragments/");
     return normalized.Trim();
   }
 
@@ -1093,4 +1092,7 @@ public class TestRunner(string specDir, string fragmentDir, string tempDir, stri
     var section = specContent[searchStart..searchEnd];
     return Regex.IsMatch(section, @"```RequiredMLIR[:\s]", RegexOptions.None, TimeSpan.FromSeconds(5));
   }
+
+  [System.Text.RegularExpressions.GeneratedRegex(@"specs/fragments-[^/]+/")]
+  private static partial System.Text.RegularExpressions.Regex FragmentDirRegex();
 }

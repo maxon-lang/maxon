@@ -4,7 +4,7 @@ using MaxonSharp.Compiler.Mlir.Dialects;
 
 namespace MaxonSharp.Compiler;
 
-public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, bool isStdlib = false, string? sourceFilePath = null, string targetOs = "Windows", string targetArch = "x86_64", bool testing = false) {
+public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, bool isStdlib = false, string? sourceFilePath = null, string targetOs = "Windows", string targetArch = "x86_64", bool testing = false) {
   private List<Token> _tokens = tokens;
   private readonly bool _isStdlib = isStdlib;
   private readonly string? _sourceFilePath = sourceFilePath;
@@ -472,7 +472,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
       // but ONLY when includeFilename is true (for top-level functions)
       if (includeFilename) {
         var normalizedPath = _sourceFilePath.Replace('\\', '/');
-        if (System.Text.RegularExpressions.Regex.IsMatch(normalizedPath, @"(?:^|/)specs/fragments[^/]*/")) {
+        if (SpecFragmentsRegex().IsMatch(normalizedPath)) {
           var parentDirName = Path.GetFileName(Path.GetDirectoryName(_sourceFilePath));
           return parentDirName ?? fileName;
         }
@@ -14346,4 +14346,7 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
   }
 
   private bool IsAtEnd() => _pos >= _tokens.Count;
+
+  [System.Text.RegularExpressions.GeneratedRegex(@"(?:^|/)specs/fragments[^/]*/")]
+  private static partial System.Text.RegularExpressions.Regex SpecFragmentsRegex();
 }

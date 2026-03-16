@@ -648,7 +648,7 @@ public class ARM64RegisterManager : RegisterManagerBase<ARM64Register, ARM64Floa
     }
   }
 
-  private void PlaceFpArgs(List<int> fpArgs, ARM64FloatRegister?[] fpSources, int[] fpIndex, int regArgCount, MlirBlock<ARM64Op> block) {
+  private static void PlaceFpArgs(List<int> fpArgs, ARM64FloatRegister?[] fpSources, int[] fpIndex, int regArgCount, MlirBlock<ARM64Op> block) {
     if (fpArgs.Count == 0) return;
 
     var placed = new bool[regArgCount];

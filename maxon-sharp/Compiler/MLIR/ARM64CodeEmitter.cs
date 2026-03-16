@@ -160,8 +160,6 @@ public partial class ARM64CodeEmitter() {
     };
   }
 
-  private static bool IsWReg(ARM64Register r) => r >= ARM64Register.W0 && r <= ARM64Register.Wzr;
-
   // --- Condition code encoding ---
 
   private static uint CondCode(ARM64ConditionCode cc) {
@@ -192,7 +190,7 @@ public partial class ARM64CodeEmitter() {
       case ARM64PrologueOp prologue:
         EmitPrologue(prologue.StackSize);
         break;
-      case ARM64EpilogueOp epilogue:
+      case ARM64EpilogueOp:
         EmitEpilogue();
         break;
       case ARM64MovRegRegOp mov:
@@ -651,7 +649,6 @@ case ARM64MemcpyOp:
     } else if (offset >= -256 && offset <= 255) {
       // Use unscaled LDUR/STUR
       // Convert base opcode to unscaled variant
-      var unscaledOp = (opcode & 0xFFE00000) | 0x00000000;
       // LDUR/STUR: size_opc 11 1 00 0 0 0 0 imm9 00 Rn Rt
       var baseOp = opcode & 0xFFC00000; // keep size and V and opc bits
       // Actually unscaled offset: replace bit 24 (switch from unsigned offset to unscaled)
