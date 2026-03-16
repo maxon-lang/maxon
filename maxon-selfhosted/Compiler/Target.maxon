@@ -8,6 +8,7 @@ end 'CpuArch'
 export enum Os
     windows
     linux
+    macos
 end 'Os'
 
 export type Target
@@ -29,13 +30,19 @@ export function parseTarget(s String) returns Target
         cpu = CpuArch.x86_64
     end 'isX86' else if s.startsWith("aarch64") 'isArm'
         cpu = CpuArch.aarch64
-    end 'isArm'
+    end 'isArm' else 'unknownCpu'
+        panic("Unknown CPU architecture in target string: {s}")
+    end 'unknownCpu'
 
     if s.contains("linux") 'isLinux'
         os = Os.linux
     end 'isLinux' else if s.contains("windows") 'isWindows'
         os = Os.windows
-    end 'isWindows'
+    end 'isWindows' else if s.contains("macos") 'isMacos'
+        os = Os.macos
+    end 'isMacos' else 'unknownOs'
+        panic("Unknown OS in target string: {s}")
+    end 'unknownOs'
 
     return Target{cpu: cpu, os: os}
 end 'parseTarget'
@@ -49,6 +56,7 @@ export function targetToString(t Target) returns String
     let osStr = match t.os 'os'
         Os.windows gives "windows"
         Os.linux gives "linux"
+        Os.macos gives "macos"
     end 'os'
 
     return "{cpuStr}-{osStr}"
@@ -58,5 +66,6 @@ export function executableExtension(t Target) returns String
     return match t.os 'os'
         Os.windows gives ".exe"
         Os.linux gives ""
+        Os.macos gives ""
     end 'os'
 end 'executableExtension'

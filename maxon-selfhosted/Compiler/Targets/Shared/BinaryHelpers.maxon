@@ -64,6 +64,18 @@ export function patchDword(buf ByteArray, offset ByteOffset, value MachineWord)
     buf.set(offset + 3, value: (value shr 24) and 0xFF)
 end 'patchDword'
 
+export function writeDwordBE(buf ByteArray, value MachineWord)
+    buf.push((value shr 24) and 0xFF)
+    buf.push((value shr 16) and 0xFF)
+    buf.push((value shr 8) and 0xFF)
+    buf.push(value and 0xFF)
+end 'writeDwordBE'
+
+export function writeQwordBE(buf ByteArray, value MachineWord)
+    writeDwordBE(buf, value: (value shr 32) and 0xFFFFFFFF)
+    writeDwordBE(buf, value: value and 0xFFFFFFFF)
+end 'writeQwordBE'
+
 export function alignUp(value ByteCount, alignment ByteCount) returns ByteCount
     return (value + alignment - 1) and not (alignment - 1)
 end 'alignUp'

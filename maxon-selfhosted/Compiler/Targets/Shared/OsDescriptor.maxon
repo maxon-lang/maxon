@@ -11,6 +11,7 @@ end 'ExitStrategy'
 export union WriteStrategy
     syscall(writeNumber MachineWord, fd MachineWord)
     winApi(getHandleSlot MachineWord, handleConstant MachineWord, writeFileSlot MachineWord)
+    libcall(writeSlot MachineWord, fd MachineWord)
 end 'WriteStrategy'
 
 export type OsDescriptor
@@ -29,6 +30,7 @@ export function makeOsDescriptor(target Target) returns OsDescriptor
     match target.os 'pickOs'
         Os.windows then result = makeWindowsDescriptor()
         Os.linux then result = makeLinuxDescriptor(target)
+        Os.macos then result = makeMacOsDescriptor()
     end 'pickOs'
 
     return result
@@ -41,6 +43,14 @@ function makeWindowsDescriptor() returns OsDescriptor
         startShadowSpace: 0x28
     }
 end 'makeWindowsDescriptor'
+
+function makeMacOsDescriptor() returns OsDescriptor
+    return OsDescriptor{
+        exit: ExitStrategy.iatCall(0),
+        write: WriteStrategy.libcall(1, 1),
+        startShadowSpace: 0
+    }
+end 'makeMacOsDescriptor'
 
 function makeLinuxDescriptor(target Target) returns OsDescriptor
     let exitNum = match target.cpu 'cpuSyscalls'

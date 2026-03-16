@@ -458,6 +458,7 @@ function maxArm64EmitWriteStdout(code ByteArray, osDesc OsDescriptor, relocation
     match osDesc.write 'writeStrategy'
         syscall(writeNum, fd) then maxArm64EmitWriteStdoutSyscall(code, writeNumber: writeNum, fd: fd)
         winApi(getHandleSlot, handleConstant, writeFileSlot) then maxArm64EmitWriteStdoutWinApi(code, relocations: relocations, getHandleSlot: getHandleSlot, handleConstant: handleConstant, writeFileSlot: writeFileSlot)
+        libcall(writeSlot, fd) then maxArm64EmitWriteStdoutLibcall(code, relocations: relocations, writeSlot: writeSlot, fd: fd)
     end 'writeStrategy'
     return offset
 end 'maxArm64EmitWriteStdout'
@@ -477,6 +478,28 @@ function maxArm64EmitWriteStdoutSyscall(code ByteArray, writeNumber MachineWord,
     maxArm64EmitLdpPostIndex(code, frameSize: 32)
     maxArm64EmitRet(code)
 end 'maxArm64EmitWriteStdoutSyscall'
+
+// write_stdout via libcall: write(fd, buf, len) through GOT slot.
+// Used for macOS (libSystem.B.dylib).
+// Caller: X0=ptr, X1=len
+function maxArm64EmitWriteStdoutLibcall(code ByteArray, relocations RelocationArray, writeSlot MachineWord, fd MachineWord)
+    maxArm64EmitStpPreIndex(code, frameSize: 32)
+    maxArm64EmitMovFpSp(code)
+
+    // Remap args: caller X0=ptr, X1=len -> write(X0=fd, X1=ptr, X2=len)
+    maxArm64EmitMovReg(code, rd: 2, rn: 1)
+    maxArm64EmitMovReg(code, rd: 1, rn: 0)
+    maxArm64EmitMovz(code, rd: 0, imm16: fd)
+
+    // Call write through GOT slot
+    relocations.push(Relocation{codeOffset: code.count(), slotIndex: writeSlot})
+    maxArm64EmitAdrp(code, rd: 16)
+    maxArm64EmitLdrImm(code, rt: 16, rn: 16, imm12: 0)
+    maxArm64EmitBlr(code, rn: 16)
+
+    maxArm64EmitLdpPostIndex(code, frameSize: 32)
+    maxArm64EmitRet(code)
+end 'maxArm64EmitWriteStdoutLibcall'
 
 // write_stdout via Win32 API (GetStdHandle + WriteFile through IAT)
 // Caller: X0=ptr, X1=len

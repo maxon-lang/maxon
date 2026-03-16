@@ -35,6 +35,19 @@ export function lowerMidToMaxArm64(module MlirModule, target Target) returns Mli
             // Emit prologue at the start of the entry block
             if isFirstBlock 'emitPrologue'
                 dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.prologue(stackSize)))
+                // Save AAPCS64 register parameters to stack slots
+                if srcFunc.paramCount >= 1 'saveParam0'
+                    dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.strToSlot(0, MaxArm64Register.x0)))
+                end 'saveParam0'
+                if srcFunc.paramCount >= 2 'saveParam1'
+                    dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.strToSlot(1, MaxArm64Register.x1)))
+                end 'saveParam1'
+                if srcFunc.paramCount >= 3 'saveParam2'
+                    dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.strToSlot(2, MaxArm64Register.x2)))
+                end 'saveParam2'
+                if srcFunc.paramCount >= 4 'saveParam3'
+                    dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.strToSlot(3, MaxArm64Register.x3)))
+                end 'saveParam3'
                 isFirstBlock = false
             end 'emitPrologue'
 
@@ -501,6 +514,7 @@ function lowerOsWriteArm64(ptrId ValueId, lenId ValueId, dstBlock MlirBlock, val
     match osDesc.write 'strategy'
         syscall(writeNum, fd) then return lowerOsWriteSyscallArm64(ptrSlot, lenSlot: lenSlot, writeNum: writeNum, fd: fd, dstBlock: dstBlock, nextTempSlot: nextTempSlot)
         winApi(getHandleSlot, handleConstant, writeFileSlot) then return lowerOsWriteWinApiArm64(ptrSlot, lenSlot: lenSlot, getHandleSlot: getHandleSlot, handleConstant: handleConstant, writeFileSlot: writeFileSlot, dstBlock: dstBlock, nextTempSlot: nextTempSlot)
+        libcall(writeSlot, fd) then return lowerOsWriteLibcallArm64(ptrSlot, lenSlot: lenSlot, writeSlot: writeSlot, fd: fd, dstBlock: dstBlock, nextTempSlot: nextTempSlot)
     end 'strategy'
 end 'lowerOsWriteArm64'
 
@@ -563,4 +577,21 @@ function lowerOsWriteWinApiArm64(ptrSlot VarSlot, lenSlot VarSlot, getHandleSlot
 
     return tempSlot
 end 'lowerOsWriteWinApiArm64'
+
+// OS write via libcall: write(fd, buf, len) through GOT/IAT slot.
+// Used for macOS (libSystem.B.dylib).
+function lowerOsWriteLibcallArm64(ptrSlot VarSlot, lenSlot VarSlot, writeSlot MachineWord, fd MachineWord, dstBlock MlirBlock, nextTempSlot VarSlot) returns VarSlot
+    // fd constant -> temp slot
+    let fdSlot = nextTempSlot
+    dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.movImm(MaxArm64Register.x0, fd)))
+    dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.strToSlot(fdSlot, MaxArm64Register.x0)))
+    // iatCall write(fd, ptr, len)
+    var argSlots = VarSlotArray{}
+    argSlots.push(fdSlot)
+    argSlots.push(ptrSlot)
+    argSlots.push(lenSlot)
+    let resultSlot = nextTempSlot + 1
+    dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.iatCall(resultSlot, writeSlot, argSlots)))
+    return nextTempSlot + 2
+end 'lowerOsWriteLibcallArm64'
 

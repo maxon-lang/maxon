@@ -9,6 +9,7 @@ export function lowerMidToMaxX64(module MlirModule, target Target) returns MlirM
     let shadowSpace = match target.os 'osShadow'
         Os.windows gives 32
         Os.linux gives 0
+        Os.macos gives 0
     end 'osShadow'
 
     let osDesc = makeOsDescriptor(target)
@@ -487,6 +488,7 @@ function lowerOsWriteX64(ptrId ValueId, lenId ValueId, dstBlock MlirBlock, value
     match osDesc.write 'strategy'
         syscall(writeNum, fd) then return lowerOsWriteSyscallX64(ptrSlot, lenSlot: lenSlot, writeNum: writeNum, fd: fd, dstBlock: dstBlock, nextTempSlot: nextTempSlot)
         winApi(getHandleSlot, handleConstant, writeFileSlot) then return lowerOsWriteWinApiX64(ptrSlot, lenSlot: lenSlot, getHandleSlot: getHandleSlot, handleConstant: handleConstant, writeFileSlot: writeFileSlot, dstBlock: dstBlock, nextTempSlot: nextTempSlot)
+        libcall then panic("x86_64 does not support libcall write strategy")
     end 'strategy'
 end 'lowerOsWriteX64'
 
