@@ -141,24 +141,9 @@ public partial class ARM64CodeEmitter {
     EmitNetRecv();
     EmitNetClose();
     EmitNetSocketDestructor();
-    EmitStubFunction("managed_file_open_read");
-    EmitStubFunction("managed_file_open_write");
-    EmitStubFunction("managed_file_write");
     EmitMaxonFindFilename();
     EmitMaxonFindNextFile();
 
-    // I/O subsystem stubs (not needed on macOS — uses synchronous calls)
-    EmitStubFunction("__io_init");
-    EmitStubFunction("__io_shutdown");
-    EmitStubFunction("__io_runtime");
-    EmitStubFunction("__gt_runtime");
-  }
-
-  private void EmitStubFunction(string name) {
-    DefineLabel(name);
-    // Return 0
-    EmitMovRegImm(ARM64Register.X0, 0);
-    EmitWord(0xD65F03C0); // RET
   }
 
   // --- maxon_write_stdout(buf, len) ---
@@ -1159,12 +1144,6 @@ public partial class ARM64CodeEmitter {
     DefineLabel(epilogueLabel);
     EmitRuntimeFunctionEnd();
 
-    // Also stub the formatted variants
-    EmitStubFunction("maxon_f64_to_string_formatted");
-    EmitStubFunction("maxon_f32_to_string");
-    EmitStubFunction("maxon_f32_to_string_formatted");
-    EmitStubFunction("maxon_i64_to_string_formatted");
-    EmitStubFunction("maxon_u64_to_string_formatted");
   }
 
   // --- maxon_f64_to_string_fmt(D0=value, X0=buffer, X1=fmtPtr, X2=fmtLen) -> X0=length ---

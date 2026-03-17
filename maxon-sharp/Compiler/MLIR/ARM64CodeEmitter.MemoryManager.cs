@@ -34,7 +34,7 @@ public partial class ARM64CodeEmitter {
 
     // Trace functions
     EmitMmTracePrintTag();
-    EmitStubFunction("mm_trace_print_hex");
+    EmitMmTracePrintHex();
     EmitMmTracePrintI64();
     EmitMmTracePrintPackedTag();
     EmitMmTracePrintIndent();
@@ -46,27 +46,25 @@ public partial class ARM64CodeEmitter {
     DefineGlobal("__mm_alloc_id_counter", 8, 0);
     DefineGlobal("__mm_trace_depth", 8, 0);
 
-    if (Compiler.MmTrace) {
-      DefineSymdata("__mm_tag_alloc", "alloc \0"u8.ToArray());
-      DefineSymdata("__mm_tag_free", "free \0"u8.ToArray());
-      DefineSymdata("__mm_tag_incref", "incref \0"u8.ToArray());
-      DefineSymdata("__mm_tag_decref", "decref \0"u8.ToArray());
-      DefineSymdata("__mm_tag_transfer", "transfer \0"u8.ToArray());
-      DefineSymdata("__mm_tag_realloc", "realloc \0"u8.ToArray());
-      DefineSymdata("__mm_tag_cow", "cow \0"u8.ToArray());
-      DefineSymdata("__mm_scope_list_insert", "managed_list_insert\0"u8.ToArray());
-      DefineSymdata("__mm_scope_list_clear", "managed_list_clear\0"u8.ToArray());
-      DefineSymdata("__mm_scope_managed_elements", "~ManagedElements\0"u8.ToArray());
-      DefineSymdata("__mm_tag_size_eq", " size=\0"u8.ToArray());
-      DefineSymdata("__mm_tag_rc_eq", " rc=\0"u8.ToArray());
-      DefineSymdata("__mm_tag_hash", " #\0"u8.ToArray());
-      DefineSymdata("__mm_tag_lbracket", " [\0"u8.ToArray());
-      DefineSymdata("__mm_tag_rbracket", "]\0"u8.ToArray());
-      DefineSymdata("__mm_tag_indent", "  \0"u8.ToArray());
-      DefineSymdata("__mm_tag_newline", "\n\0"u8.ToArray());
-    }
-
-    // Shared strings used by tag lookup default
+    // Trace tag strings — always defined since trace functions are emitted unconditionally.
+    // Only a few bytes each; the trace call-sites are conditional on Compiler.MmTrace.
+    DefineSymdata("__mm_tag_alloc", "alloc \0"u8.ToArray());
+    DefineSymdata("__mm_tag_free", "free \0"u8.ToArray());
+    DefineSymdata("__mm_tag_incref", "incref \0"u8.ToArray());
+    DefineSymdata("__mm_tag_decref", "decref \0"u8.ToArray());
+    DefineSymdata("__mm_tag_transfer", "transfer \0"u8.ToArray());
+    DefineSymdata("__mm_tag_realloc", "realloc \0"u8.ToArray());
+    DefineSymdata("__mm_tag_cow", "cow \0"u8.ToArray());
+    DefineSymdata("__mm_scope_list_insert", "managed_list_insert\0"u8.ToArray());
+    DefineSymdata("__mm_scope_list_clear", "managed_list_clear\0"u8.ToArray());
+    DefineSymdata("__mm_scope_managed_elements", "~ManagedElements\0"u8.ToArray());
+    DefineSymdata("__mm_tag_size_eq", " size=\0"u8.ToArray());
+    DefineSymdata("__mm_tag_rc_eq", " rc=\0"u8.ToArray());
+    DefineSymdata("__mm_tag_hash", " #\0"u8.ToArray());
+    DefineSymdata("__mm_tag_lbracket", " [\0"u8.ToArray());
+    DefineSymdata("__mm_tag_rbracket", "]\0"u8.ToArray());
+    DefineSymdata("__mm_tag_indent", "  \0"u8.ToArray());
+    DefineSymdata("__mm_tag_newline", "\n\0"u8.ToArray());
     DefineSymdata("__mm_tag_null", "?\0"u8.ToArray());
 
     // Define panic strings in symdata (must match X86 set for all standard IR references)
@@ -498,16 +496,81 @@ public partial class ARM64CodeEmitter {
   }
 
   // --- mm_leak_check() ---
+  // Checks __mm_alloc_count; if non-zero, prints diagnostic and exits with code 101.
+  // Only active when --mm-trace is enabled; otherwise a no-op.
   private void EmitMmLeakCheck() {
-    // Stub: no-op for now
-    DefineLabel("mm_leak_check");
-    EmitWord(0xD65F03C0); // RET
+    if (!Compiler.MmTrace) {
+      DefineLabel("mm_leak_check");
+      EmitWord(0xD65F03C0); // RET
+      return;
+    }
+
+    DefineSymdata("__mm_leak_prefix", "MM leak: \0"u8.ToArray());
+    DefineSymdata("__mm_leak_suffix", " allocation(s) remain\n\0"u8.ToArray());
+
+    EmitRuntimeFunctionStart("mm_leak_check", 0, 0x50);
+
+    // Load alloc count
+    EmitGlobalLoadReg(ARM64Register.X0, "__mm_alloc_count");
+    EmitCbz(ARM64Register.X0, "mm_leak_check_done");
+
+    // Save count at [x29+16]
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X29, 16, 8);
+
+    // Print "MM leak: "
+    EmitAdrpAddFixup(ARM64Register.X0, _symdataAdrpFixups, "__mm_leak_prefix");
+    EmitBranchLink("rt_write_cstr_stderr");
+
+    // Print count as decimal
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X29, 16, 8);
+    EmitBranchLink("mm_trace_print_i64");
+
+    // Print " allocation(s) remain\n"
+    EmitAdrpAddFixup(ARM64Register.X0, _symdataAdrpFixups, "__mm_leak_suffix");
+    EmitBranchLink("rt_write_cstr_stderr");
+
+    // Leak is fatal when tracing is active
+    EmitMovRegImm(ARM64Register.X0, 101);
+    EmitCallImport("_exit");
+
+    DefineLabel("mm_leak_check_done");
+    EmitRuntimeFunctionEnd();
   }
 
-  // --- mm_validate_ptr(ptr) ---
+  // --- mm_validate_ptr(ptr, tag) ---
+  // Checks that ptr is non-null and has non-zero refcount. Panics on failure.
   private void EmitMmValidatePtr() {
-    DefineLabel("mm_validate_ptr");
-    EmitWord(0xD65F03C0); // RET
+    DefineSymdata("__mm_validate_tag", "MM VALIDATE ptr=\0"u8.ToArray());
+    DefineSymdata("__mm_validate_fail", "VALIDATION FAILED: ptr has zero refcount!\n\0"u8.ToArray());
+
+    EmitRuntimeFunctionStart("mm_validate_ptr", 2, 0x30);
+    // [x29+16] = ptr (arg 0), [x29+24] = tag (arg 1)
+
+    EmitReloadArg(0); // X0 = ptr
+    // Null is OK — skip validation
+    EmitCbz(ARM64Register.X0, "mm_validate_done");
+
+    // Load refcount at [ptr - 8]
+    // LDUR X1, [X0, #-8]
+    EmitWord(0xF85F8001 | (Reg(ARM64Register.X0) << 5));
+    // Non-zero refcount = valid
+    EmitCbnz(ARM64Register.X1, "mm_validate_done");
+
+    // FAILED: print "MM VALIDATE ptr=0xHEX\n" then panic
+    EmitAdrpAddFixup(ARM64Register.X0, _symdataAdrpFixups, "__mm_validate_tag");
+    EmitBranchLink("rt_write_cstr_stderr");
+
+    EmitReloadArg(0); // X0 = ptr
+    EmitBranchLink("mm_trace_print_hex");
+
+    EmitAdrpAddFixup(ARM64Register.X0, _symdataAdrpFixups, "__mm_tag_newline");
+    EmitBranchLink("rt_write_cstr_stderr");
+
+    EmitAdrpAddFixup(ARM64Register.X0, _symdataAdrpFixups, "__mm_validate_fail");
+    EmitBranchLink("maxon_panic");
+
+    DefineLabel("mm_validate_done");
+    EmitRuntimeFunctionEnd();
   }
 
   // =========================================================================
@@ -1032,6 +1095,64 @@ public partial class ARM64CodeEmitter {
     EmitRuntimeFunctionEnd();
   }
 
+  /// <summary>
+  /// mm_trace_print_hex(value_x0): Print a 64-bit value as "0xHEX" to stderr.
+  /// Uses a 24-byte buffer on the stack for "0x" + 16 hex digits + null.
+  /// </summary>
+  private void EmitMmTracePrintHex() {
+    DefineSymdata("__mm_hex_chars", "0123456789abcdef\0"u8.ToArray());
+
+    EmitRuntimeFunctionStart("mm_trace_print_hex", 1, 0x50);
+    // [x29+16] = value (arg 0)
+    // Buffer at [x29+24..x29+42] = 19 bytes ("0x" + 16 hex + null)
+
+    EmitReloadArg(0); // X0 = value
+    // Save value at [x29+48] (scratch)
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X29, 48, 8);
+
+    // Write '0' at buf[0], 'x' at buf[1]
+    EmitMovRegImm(ARM64Register.X1, 0x30); // '0'
+    EmitLoadStoreUnsignedImm(0x39000000, ARM64Register.X1, ARM64Register.X29, 24, 1); // STRB
+    EmitMovRegImm(ARM64Register.X1, 0x78); // 'x'
+    EmitLoadStoreUnsignedImm(0x39000000, ARM64Register.X1, ARM64Register.X29, 25, 1); // STRB
+
+    // Load hex chars table address
+    EmitAdrpAddFixup(ARM64Register.X2, _symdataAdrpFixups, "__mm_hex_chars");
+
+    // X0 = value, X3 = digit index (15 down to 0)
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X29, 48, 8);
+    EmitMovRegImm(ARM64Register.X3, 15);
+
+    DefineLabel("mm_trace_hex_loop");
+    // Extract low nybble: X4 = X0 & 0xF
+    EmitWord(0x92400C04); // AND X4, X0, #0xF
+    // Look up hex char: X4 = [X2 + X4] (byte load)
+    // LDRB W4, [X2, X4]
+    EmitWord(0x38646844);
+    // Store at buf[2 + X3]: address = x29 + 26 + X3
+    EmitAddSubImm(ARM64Register.X5, ARM64Register.X29, 26, isAdd: true);
+    // ADD X5, X5, X3
+    EmitWord(0x8B0300A5);
+    // STRB W4, [X5]
+    EmitLoadStoreUnsignedImm(0x39000000, ARM64Register.X4, ARM64Register.X5, 0, 1);
+    // Shift value right by 4: LSR X0, X0, #4
+    EmitWord(0xD344FC00);
+    // Decrement counter: SUBS X3, X3, #1 (sets flags)
+    EmitWord(0xF1000463); // SUBS X3, X3, #1
+    // Loop while X3 >= 0 (B.GE)
+    EmitBranchCond(ARM64ConditionCode.Ge, "mm_trace_hex_loop");
+
+    // Null-terminate at buf[18]
+    EmitMovRegImm(ARM64Register.X1, 0);
+    EmitLoadStoreUnsignedImm(0x39000000, ARM64Register.X1, ARM64Register.X29, 42, 1); // STRB
+
+    // Print buffer
+    EmitAddSubImm(ARM64Register.X0, ARM64Register.X29, 24, isAdd: true);
+    EmitBranchLink("rt_write_cstr_stderr");
+
+    EmitRuntimeFunctionEnd();
+  }
+
   // =========================================================================
   // Trace runtime functions
   // =========================================================================
@@ -1041,10 +1162,6 @@ public partial class ARM64CodeEmitter {
   /// look up tag string, and print it.
   /// </summary>
   private void EmitMmTracePrintPackedTag() {
-    if (!Compiler.MmTrace) {
-      EmitStubFunction("mm_trace_print_packed_tag");
-      return;
-    }
     EmitRuntimeFunctionStart("mm_trace_print_packed_tag", 1, 0x30);
     // [x29+16] = user_ptr
     EmitReloadArg(0); // X0 = user_ptr
@@ -1065,10 +1182,6 @@ public partial class ARM64CodeEmitter {
   /// mm_trace_print_indent(): Print 2 spaces for each level of __mm_trace_depth.
   /// </summary>
   private void EmitMmTracePrintIndent() {
-    if (!Compiler.MmTrace) {
-      EmitStubFunction("mm_trace_print_indent");
-      return;
-    }
     EmitRuntimeFunctionStart("mm_trace_print_indent", 0, 0x30);
     // Load __mm_trace_depth into X0
     EmitGlobalLoadReg(ARM64Register.X0, "__mm_trace_depth");
@@ -1099,10 +1212,6 @@ public partial class ARM64CodeEmitter {
   /// mm_trace_transfer(ptr in X0, scope in X1): Print transfer trace line.
   /// </summary>
   private void EmitMmTraceTransfer() {
-    if (!Compiler.MmTrace) {
-      EmitStubFunction("mm_trace_transfer");
-      return;
-    }
     EmitRuntimeFunctionStart("mm_trace_transfer", 2, 0x30);
     // [x29+16]=ptr, [x29+24]=scope
     EmitReloadArg(0); // X0 = ptr

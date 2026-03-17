@@ -88,7 +88,11 @@ end 'main'
 <!-- test: builtins-type.process-execute -->
 ```maxon
 function main() returns ExitCode
+  #if os(Windows)
   let result = Process.execute("cmd /c echo ok", timeoutMs: 5000)
+  #else
+  let result = Process.execute("/bin/echo ok", timeoutMs: 5000)
+  #endif
   if result == 0 'check'
     return 0
   end 'check'

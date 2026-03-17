@@ -1,6 +1,10 @@
 // Test: builtins-type.process-execute
 function main() returns ExitCode
+  #if os(Windows)
   let result = Process.execute("cmd /c echo ok", timeoutMs: 5000)
+  #else
+  let result = Process.execute("/bin/echo ok", timeoutMs: 5000)
+  #endif
   if result == 0 'check'
     return 0
   end 'check'
@@ -15,7 +19,7 @@ module {
     arm64.prologue stack_size=64
     arm64.adrp_add_rdata x0, __str_0
     arm64.mov x1, x0
-    arm64.mov x2, #14
+    arm64.mov x2, #12
     arm64.adrp_add_func x3, __destruct_String
     arm64.mov x4, x3
     arm64.str x1, [x29, #-24]
@@ -35,7 +39,7 @@ module {
     arm64.ldr x8, [x29, #-24]
     arm64.str x8, [x7, #0]
     arm64.ldr x9, [x29, #-16]
-    arm64.mov x10, #14
+    arm64.mov x10, #12
     arm64.str x10, [x9, #8]
     arm64.mov x11, #0
     arm64.ldr x12, [x29, #-16]
