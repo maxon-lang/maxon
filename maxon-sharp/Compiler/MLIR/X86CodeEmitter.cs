@@ -1163,6 +1163,49 @@ public partial class X86CodeEmitter() {
     EmitByte((byte)(0xC0 | (5 << 3) | RegCode(dest)));
   }
 
+  private void EmitShlRegImm(X86Register dest, byte imm) {
+    RequireGpr(dest, nameof(EmitShlRegImm));
+    // SHL r/m64, imm8: REX.W + C1 /4 ib
+    Rex.W().Rm(dest).Emit(this);
+    EmitByte(0xC1);
+    EmitByte((byte)(0xC0 | (4 << 3) | RegCode(dest)));
+    EmitByte(imm);
+  }
+
+  private void EmitShrRegImm(X86Register dest, byte imm) {
+    RequireGpr(dest, nameof(EmitShrRegImm));
+    // SHR r/m64, imm8: REX.W + C1 /5 ib
+    Rex.W().Rm(dest).Emit(this);
+    EmitByte(0xC1);
+    EmitByte((byte)(0xC0 | (5 << 3) | RegCode(dest)));
+    EmitByte(imm);
+  }
+
+  private void EmitIncReg(X86Register dest) {
+    RequireGpr(dest, nameof(EmitIncReg));
+    // INC r/m64: REX.W + FF /0
+    Rex.W().Rm(dest).Emit(this);
+    EmitByte(0xFF);
+    EmitByte((byte)(0xC0 | RegCode(dest)));
+  }
+
+  private void EmitDecReg(X86Register dest) {
+    RequireGpr(dest, nameof(EmitDecReg));
+    // DEC r/m64: REX.W + FF /1
+    Rex.W().Rm(dest).Emit(this);
+    EmitByte(0xFF);
+    EmitByte((byte)(0xC0 | (1 << 3) | RegCode(dest)));
+  }
+
+  /// CMP r64, [rbp+disp32]: REX.W + 3B /r [rbp+disp32]
+  private void EmitCmpRegMem(X86Register lhs, int rbpDisp) {
+    Require64BitGpr(lhs, nameof(EmitCmpRegMem));
+    Rex.W().Reg(lhs).Emit(this);
+    EmitByte(0x3B);
+    EmitByte((byte)(0x85 | (RegCode(lhs) << 3))); // mod=10, rm=101(rbp)
+    EmitDword(rbpDisp);
+  }
+
   private void EmitCmpRegReg(X86Register lhs, X86Register rhs) {
     RequireGpr(lhs, nameof(EmitCmpRegReg));
     RequireGpr(rhs, nameof(EmitCmpRegReg));

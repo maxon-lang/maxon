@@ -41,6 +41,11 @@ round(x float) int              // Round to nearest
 trunc(x float) int              // Truncate toward zero
 ```
 
+**Concurrency Functions**
+```maxon
+sleep(milliseconds int)         // Suspend current green thread for given duration
+```
+
 **Formatting Functions**
 ```maxon
 format_int(value int) String    // Format int as string

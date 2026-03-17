@@ -206,6 +206,7 @@ end 'doFileIo'
 
 function main() returns ExitCode
   var httpTask = async doHttp()
+  sleep(10)
   var fileTask = async doFileIo()
   var fileResult = await fileTask
   var httpResult = try await httpTask otherwise 99
@@ -217,16 +218,20 @@ end 'main'
 ```
 ```stderr
 spawn #1
+sleep_yield #0
+io_yield #1 [net_connect]
+sleep_resume #0
 spawn #2
 io_yield #2 [file_exists]
+io_resume #1 [net_connect]
 io_resume #2 [file_exists]
 io_yield #1 [net_connect]
 await #2 [yield]
 io_resume #1 [net_connect]
-io_yield #1 [net_connect]
-io_resume #1 [net_connect]
 io_yield #1 [net_send]
 io_resume #1 [net_send]
+sleep_yield #1
+sleep_resume #1
 io_yield #1 [net_recv]
 io_resume #1 [net_recv]
 io_yield #1 [net_recv]

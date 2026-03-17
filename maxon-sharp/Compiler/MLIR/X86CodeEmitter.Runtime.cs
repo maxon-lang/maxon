@@ -68,6 +68,7 @@ public partial class X86CodeEmitter {
     EmitManagedFileOpenRead();
     EmitManagedFileOpenWrite();
     EmitFileExists();
+    EmitSleep();
     EmitManagedFileWrite();
     EmitFileDestructor();
     EmitManagedDirOpenSearch();
@@ -3416,6 +3417,112 @@ public partial class X86CodeEmitter {
   }
 
   /// <summary>
+  /// maxon_sleep(milliseconds): Suspends the current green thread for the given duration.
+  /// Uses the scheduler timer heap: computes deadline = GetTickCount64() + ms,
+  /// adds (deadline, gt) to the timer min-heap, then yields. The scheduler's
+  /// __gt_timer_check() re-enqueues the GT when the deadline expires.
+  /// Stack: [rbp-8]=milliseconds
+  /// </summary>
+  private void EmitSleep() {
+    EmitRuntimeFunctionStart("maxon_sleep", 1, 0x30);
+    // [rbp-0x08] = milliseconds, [rbp-0x10] = deadline, [rbp-0x18] = dequeued GT (mainthread path)
+
+    // deadline = GetTickCount64() + milliseconds
+    EmitCallImport("kernel32.dll", "GetTickCount64");
+    EmitMovRegMem(X86Register.Rcx, -0x08, 8); // load ms
+    EmitAddRegReg(X86Register.Rax, X86Register.Rcx); // RAX = now + ms
+    EmitMovMemReg(-0x10, X86Register.Rax, 8); // save deadline
+
+    // Set current GT status = waiting
+    EmitLoadCurrentGtInline(X86Register.R10);
+    EmitMovRegImm(X86Register.Rdx, GtStatusWaiting);
+    EmitMovIndirectMemReg(X86Register.R10, GtOffStatus, X86Register.Rdx);
+
+    // __gt_timer_add(gt, deadline)
+    EmitMovRegReg(X86Register.Rcx, X86Register.R10); // gt
+    EmitMovRegMem(X86Register.Rdx, -0x10, 8);        // deadline
+    EmitCallRuntimeLabel("__gt_timer_add");
+
+    if (Compiler.AsyncTrace) {
+      // Trace: "sleep_yield #N\n"
+      EmitAtTraceLock();
+      EmitLeaRegSymdataRel(X86Register.Rcx, "__at_tag_sleep_yield");
+      EmitCallRuntimeLabel("mm_trace_print_tag");
+      EmitLoadCurrentGtInline(X86Register.Rax);
+      EmitMovRegIndirectMem(X86Register.Rcx, X86Register.Rax, GtOffTraceId);
+      EmitCallRuntimeLabel("mm_trace_print_i64");
+      EmitLeaRegSymdataRel(X86Register.Rcx, "__at_tag_nl");
+      EmitCallRuntimeLabel("mm_trace_print_tag");
+      EmitAtTraceUnlock();
+    }
+
+    // Check if current GT is the mainThread
+    EmitLoadCurrentGtInline(X86Register.Rcx);
+    EmitLeaMainThreadInline(X86Register.Rdx);
+    EmitCmpRegReg(X86Register.Rcx, X86Register.Rdx);
+    EmitJcc("e", "__sleep_mainthread_loop");
+
+    // Non-mainThread path: switch to P->mainThread (worker loop handles scheduling)
+    EmitMovRegImm(X86Register.Rax, GtStatusRunning);
+    EmitMovIndirectMemReg(X86Register.Rdx, GtOffStatus, X86Register.Rax);
+    EmitCallRuntimeLabel("__gt_context_switch");
+    EmitJmp("__sleep_resume"); // we resume here when timer expires and GT is re-enqueued
+
+    // MainThread path: inline scheduling loop until our status changes from waiting
+    DefineLabel("__sleep_mainthread_loop");
+    EmitCallRuntimeLabel("__gt_process_pending_waiter");
+    EmitCallRuntimeLabel("__io_check_completions");
+    EmitCallRuntimeLabel("__gt_timer_check");
+    // Check if our status changed from waiting (timer expired, timer_check set us to ready)
+    EmitLoadCurrentGtInline(X86Register.R10);
+    EmitMovRegIndirectMem(X86Register.Rax, X86Register.R10, GtOffStatus);
+    EmitCmpRegImm(X86Register.Rax, GtStatusWaiting);
+    EmitJcc("ne", "__sleep_resume");
+    // Try dequeue a runnable GT and run it while we wait
+    EmitCallRuntimeLabel("__gt_dequeue");
+    EmitBytes(0x48, 0x85, 0xC0); // TEST RAX, RAX
+    EmitJcc("z", "__sleep_mainthread_park");
+    // Got a GT — context-switch to it
+    EmitMovMemReg(-0x18, X86Register.Rax, 8); // save dequeued GT
+    EmitMovRegImm(X86Register.Rcx, GtStatusRunning);
+    EmitMovIndirectMemReg(X86Register.Rax, GtOffStatus, X86Register.Rcx);
+    EmitLoadCurrentGtInline(X86Register.Rcx);
+    EmitMovRegMem(X86Register.Rdx, -0x18, 8);
+    EmitCallRuntimeLabel("__gt_context_switch");
+    // Signal that the GT's context switch is complete
+    EmitMovRegMem(X86Register.Rax, -0x18, 8);
+    EmitMovRegImm(X86Register.Rcx, 1);
+    EmitMovIndirectMemReg(X86Register.Rax, GtOffIoYielded, X86Register.Rcx);
+    EmitJmp("__sleep_mainthread_loop");
+    // No GT to run — park briefly, then retry
+    DefineLabel("__sleep_mainthread_park");
+    EmitGlobalLoadReg(X86Register.Rax, "__sched_tls_teb_offset");
+    EmitByte(0x65); // GS prefix
+    EmitMovRegIndirectMemRaw(X86Register.Rax, X86Register.Rax, 0);
+    EmitMovRegIndirectMem(X86Register.Rcx, X86Register.Rax, POffWakeEvent);
+    EmitMovRegImm(X86Register.Rdx, 10); // 10ms timeout (responsive for sleep timers)
+    EmitCallImportOnSystemStack("kernel32.dll", "WaitForSingleObject");
+    EmitJmp("__sleep_mainthread_loop");
+
+    DefineLabel("__sleep_resume");
+
+    if (Compiler.AsyncTrace) {
+      // Trace: "sleep_resume #N\n"
+      EmitAtTraceLock();
+      EmitLeaRegSymdataRel(X86Register.Rcx, "__at_tag_sleep_resume");
+      EmitCallRuntimeLabel("mm_trace_print_tag");
+      EmitLoadCurrentGtInline(X86Register.Rax);
+      EmitMovRegIndirectMem(X86Register.Rcx, X86Register.Rax, GtOffTraceId);
+      EmitCallRuntimeLabel("mm_trace_print_i64");
+      EmitLeaRegSymdataRel(X86Register.Rcx, "__at_tag_nl");
+      EmitCallRuntimeLabel("mm_trace_print_tag");
+      EmitAtTraceUnlock();
+    }
+
+    EmitRuntimeFunctionEnd();
+  }
+
+  /// <summary>
   /// maxon_managed_file_write(handle, buffer, length) → bytes written or -1.
   /// Calls __io_submit_write(handle, buffer, length) for overlapped I/O.
   /// Stack: [rbp-8]=handle, [rbp-16]=buffer, [rbp-24]=length
@@ -3638,12 +3745,22 @@ public partial class X86CodeEmitter {
   private const int GtOffIoYielded    = 0xA8; // 0=not yet yielded, 1=context switch complete (for IOCP sync)
   private const int GtStructSize     = 0xB0; // 176 bytes
 
+  // Timer heap constants
+  // Each entry: [deadline_ms: i64, gt_ptr: i64] = 16 bytes
+  private const int TimerEntrySize     = 16;
+  private const int TimerOffDeadline   = 0;
+  private const int TimerOffGt         = 8;
+  private const int TimerHeapCapacity  = 256;
+
   private const int GtStatusRunning  = 1;
   private const int GtStatusCompleted= 2;
   private const int GtStatusWaiting  = 3;
 
-  private const int GtInitialStackSize = 0x1000; // 4KB (grows on demand via __gt_morestack)
-  private const int GtStackGuardMargin = 0x200; // 512-byte guard zone
+  private const int GtInitialStackSize = 0x800; // 2KB (grows on demand via __gt_morestack)
+  private const int GtStackGuardMargin = 0x3A0; // 928 bytes — matches Go's _StackGuard on amd64.
+                                                 // Covers the worst-case chain of unchecked stack
+                                                 // consumption (PUSH RBP + CALL overhead) between
+                                                 // successive prologue stack checks.
 
   // P (ProcContext) struct layout: per-worker-thread scheduler context.
   // Accessed via Windows TLS so each OS thread has its own P.
@@ -3730,6 +3847,12 @@ public partial class X86CodeEmitter {
     DefineGlobal("__gt_live_count", 8, 0); // count of non-completed green threads (excludes main thread)
     DefineGlobal("__gt_all_head", 8, 0);   // head of all-live-threads singly-linked list
 
+    // Timer heap: array of (deadline_ms i64, gt_ptr i64) pairs, min-heap by deadline.
+    // Max 256 concurrent timers. Each entry is 16 bytes. Total = 256 * 16 = 4096 bytes.
+    DefineGlobal("__gt_timer_heap", TimerHeapCapacity * TimerEntrySize, 0);
+    DefineGlobal("__gt_timer_count", 8, 0);   // current number of entries in the heap
+    DefineGlobal("__gt_timer_cs", 40, 0);     // CRITICAL_SECTION protecting the timer heap
+
     if (Compiler.AsyncTrace) {
       DefineGlobal("__gt_trace_counter", 8, 0);
       DefineGlobal("__at_trace_cs", 40, 0); // CRITICAL_SECTION serializing trace line output
@@ -3741,6 +3864,8 @@ public partial class X86CodeEmitter {
       DefineSymdata("__at_tag_cancel", "cancel #\0"u8.ToArray());
       DefineSymdata("__at_tag_io_yield", "io_yield #\0"u8.ToArray());
       DefineSymdata("__at_tag_io_resume", "io_resume #\0"u8.ToArray());
+      DefineSymdata("__at_tag_sleep_yield", "sleep_yield #\0"u8.ToArray());
+      DefineSymdata("__at_tag_sleep_resume", "sleep_resume #\0"u8.ToArray());
       DefineSymdata("__at_tag_worker_start", "worker_start #\0"u8.ToArray());
       DefineSymdata("__at_tag_worker_park", "worker_park #\0"u8.ToArray());
       DefineSymdata("__at_tag_worker_wake", "worker_wake #\0"u8.ToArray());
@@ -3781,6 +3906,8 @@ public partial class X86CodeEmitter {
     EmitSchedWorkerLoop();
     EmitGtCleanup();
     EmitGtMorestack();
+    EmitGtTimerCheck();
+    EmitGtTimerAdd();
   }
 
   /// <summary>
@@ -3933,6 +4060,8 @@ public partial class X86CodeEmitter {
     EmitGlobalLeaReg(X86Register.Rcx, "__sched_global_queue_cs");
     EmitCallImport("kernel32.dll", "InitializeCriticalSection");
     EmitGlobalLeaReg(X86Register.Rcx, "__sched_all_cs");
+    EmitCallImport("kernel32.dll", "InitializeCriticalSection");
+    EmitGlobalLeaReg(X86Register.Rcx, "__gt_timer_cs");
     EmitCallImport("kernel32.dll", "InitializeCriticalSection");
 
     if (Compiler.AsyncTrace) {
@@ -4423,6 +4552,7 @@ public partial class X86CodeEmitter {
     DefineLabel("__gt_await_sched");
     EmitCallRuntimeLabel("__gt_process_pending_waiter");
     EmitCallRuntimeLabel("__io_check_completions");
+    EmitCallRuntimeLabel("__gt_timer_check");
 
     // Check if promise already completed (could have been completed by another worker)
     EmitMovRegMem(X86Register.R10, -0x08, 8);
@@ -5372,6 +5502,7 @@ public partial class X86CodeEmitter {
     // This must run AFTER the context switch that left the completed GT's stack,
     // so the GT's stack is no longer in use when the waiter frees it.
     EmitCallRuntimeLabel("__gt_process_pending_waiter");
+    EmitCallRuntimeLabel("__gt_timer_check");
 
     // Check shutdown flag
     EmitGlobalLoadReg(X86Register.Rax, "__sched_shutdown_flag");
@@ -5588,6 +5719,7 @@ public partial class X86CodeEmitter {
     DefineLabel("__gt_cleanup_drain");
     EmitCallRuntimeLabel("__gt_process_pending_waiter");
     EmitCallRuntimeLabel("__io_check_completions");
+    EmitCallRuntimeLabel("__gt_timer_check");
 
     EmitCallRuntimeLabel("__gt_dequeue");
     EmitBytes(0x48, 0x85, 0xC0); // TEST RAX, RAX
@@ -5698,9 +5830,38 @@ public partial class X86CodeEmitter {
     // Morestack is called from the function prologue BEFORE the function has saved
     // its arguments. We must preserve all argument registers (Maxon calling convention)
     // so the function can use them after we return.
+    //
+    // Key design: all register saves go on the SYSTEM stack, not the GT stack.
+    // This means the GT stack guard only needs to cover the switch sequence itself
+    // (~32 bytes), enabling much smaller initial GT stacks (2KB with 128-byte guard).
+    //
+    // Flow:
+    //   1. Load P* via TLS, save GT entry RSP, switch RSP to system stack
+    //   2. Push all 13 registers + GT entry RSP on system stack (14 pushes = 112 bytes)
+    //   3. SUB RSP, 0x20 for shadow space (system stack frame)
+    //   4. VirtualAlloc new stack (2x old size)
+    //   5. Inline REP MOVSB to copy old stack to top of new stack
+    //   6. Compute offset, adjust RBP and RBP chain on new stack
+    //   7. Update GT struct fields and TIB
+    //   8. VirtualFree old stack
+    //   9. Compute adjusted GT RSP on new stack
+    //  10. Pop all 13 registers from system stack (original values)
+    //  11. Pop GT entry RSP into R10, apply offset → new GT RSP
+    //  12. Switch RSP to new GT stack, RET (return address was copied to new stack)
 
-    // Push callee-saved registers first, then all argument registers.
-    // Push order: RBP, RBX, R12, R13, R14, R15, RCX, RDX, R8, R9, RSI, RDI, RAX
+    // --- Step 1: Load P* and switch to system stack ---
+    // R11 = P* via TLS (only clobbers R11, preserves all other regs)
+    EmitGlobalLoadReg(X86Register.R11, "__sched_tls_teb_offset");
+    EmitByte(0x65); // GS prefix
+    EmitMovRegIndirectMemRaw(X86Register.R11, X86Register.R11, 0); // R11 = P*
+
+    EmitMovRegReg(X86Register.R10, X86Register.Rsp);               // R10 = GT entry RSP
+    EmitMovRegIndirectMem(X86Register.Rsp, X86Register.R11, POffSystemStackSP); // switch to system stack
+
+    // --- Step 2: Save GT entry RSP and all registers on system stack ---
+    // Push order: R10(gt_rsp), RBP, RBX, R12, R13, R14, R15, RCX, RDX, R8, R9, RSI, RDI, RAX
+    // 14 pushes = 112 bytes. systemStackSP is 16-aligned → 112 mod 16 = 0 → RSP stays 16-aligned.
+    EmitPushReg(X86Register.R10);
     EmitPushReg(X86Register.Rbp);
     EmitPushReg(X86Register.Rbx);
     EmitPushReg(X86Register.R12);
@@ -5715,51 +5876,48 @@ public partial class X86CodeEmitter {
     EmitPushReg(X86Register.Rdi);
     EmitPushReg(X86Register.Rax);
 
-    // Stack alignment: CALL (8) + 13 pushes (104) = 112 bytes.
-    // RSP at morestack entry is 16-byte aligned (two CALLs from aligned state).
-    // 112 mod 16 = 0, so RSP after pushes is aligned. But 104 mod 16 = 8, so
-    // RSP is actually misaligned by 8. We need SUB 0x28 (40 = 32 shadow + 8 pad).
-    EmitSubRegImm(X86Register.Rsp, 0x28);
+    // --- Step 3: Allocate shadow space on system stack ---
+    // RSP is 16-aligned after 14 pushes. SUB 0x20 (32) keeps it 16-aligned.
+    // Windows x64 ABI: CALL pushes 8 → callee sees RSP mod 16 = 8. Correct.
+    EmitSubRegImm(X86Register.Rsp, 0x20);
 
-    // Load current GreenThread
+    // --- Load GT pointer and old stack info ---
     EmitLoadCurrentGtInline(X86Register.Rbx); // RBX = gt (callee-saved, preserved across calls)
-
-    // R12 = old_base, R13 = old_size (callee-saved, preserved)
-    EmitMovRegIndirectMem(X86Register.R12, X86Register.Rbx, GtOffStackBase);
-    EmitMovRegIndirectMem(X86Register.R13, X86Register.Rbx, GtOffStackSize);
+    EmitMovRegIndirectMem(X86Register.R12, X86Register.Rbx, GtOffStackBase); // R12 = old_base
+    EmitMovRegIndirectMem(X86Register.R13, X86Register.Rbx, GtOffStackSize); // R13 = old_size
 
     // R14 = new_size = old_size * 2
     EmitMovRegReg(X86Register.R14, X86Register.R13);
     EmitBytes(0x49, 0xD1, 0xE6); // SHL R14, 1
 
-    // VirtualAlloc(NULL, new_size, MEM_COMMIT|MEM_RESERVE, PAGE_READWRITE)
+    // --- Step 4: VirtualAlloc(NULL, new_size, MEM_COMMIT|MEM_RESERVE, PAGE_READWRITE) ---
+    // We are already on the system stack, so call VirtualAlloc directly (not OnSystemStack).
     EmitXorRegReg(X86Register.Rcx, X86Register.Rcx);
     EmitMovRegReg(X86Register.Rdx, X86Register.R14);
     EmitMovRegImm(X86Register.R8, 0x3000);
     EmitMovRegImm(X86Register.R9, 0x04);
-    EmitCallImportOnSystemStack("kernel32.dll", "VirtualAlloc");
+    EmitCallImport("kernel32.dll", "VirtualAlloc");
     EmitMovRegReg(X86Register.R15, X86Register.Rax); // R15 = new_base
 
-    // Copy old stack to TOP of new stack:
-    // dst = new_base + new_size - old_size
-    // src = old_base
-    // count = old_size
-    EmitMovRegReg(X86Register.Rcx, X86Register.R15);  // dst = new_base
-    EmitAddRegReg(X86Register.Rcx, X86Register.R14);   // + new_size
-    EmitSubRegReg(X86Register.Rcx, X86Register.R13);   // - old_size
-    EmitMovRegReg(X86Register.Rdx, X86Register.R12);   // src = old_base
-    EmitMovRegReg(X86Register.R8, X86Register.R13);     // count = old_size
-    EmitCallRuntimeLabel("maxon_memcpy");
+    // --- Step 5: Inline memcpy (old stack → top of new stack) ---
+    // dst = new_base + new_size - old_size, src = old_base, count = old_size
+    // REP MOVSB uses RDI=dst, RSI=src, RCX=count. CLD ensures forward direction.
+    EmitByte(0xFC); // CLD (clear direction flag)
+    EmitMovRegReg(X86Register.Rdi, X86Register.R15);  // RDI = new_base
+    EmitAddRegReg(X86Register.Rdi, X86Register.R14);   // + new_size
+    EmitSubRegReg(X86Register.Rdi, X86Register.R13);   // - old_size = dst
+    EmitMovRegReg(X86Register.Rsi, X86Register.R12);   // RSI = old_base = src
+    EmitMovRegReg(X86Register.Rcx, X86Register.R13);   // RCX = old_size = count
+    EmitBytes(0xF3, 0xA4); // REP MOVSB
 
-    // Compute offset = (new_base + new_size - old_size) - old_base
+    // --- Step 6: Compute offset and adjust RBP chain on new stack ---
+    // offset = (new_base + new_size - old_size) - old_base
+    //        = (new_base + new_size) - (old_base + old_size)
     EmitMovRegReg(X86Register.Rax, X86Register.R15);  // new_base
     EmitAddRegReg(X86Register.Rax, X86Register.R14);   // + new_size
     EmitSubRegReg(X86Register.Rax, X86Register.R13);   // - old_size
     EmitSubRegReg(X86Register.Rax, X86Register.R12);   // - old_base = offset
-    // RAX = offset
-
-    // Adjust RSP by offset (moves to the corresponding position on the new stack)
-    EmitAddRegReg(X86Register.Rsp, X86Register.Rax);
+    // RAX = offset (preserved in RAX through the walk since walk only uses RCX/R8/R9/R10/R11)
 
     // Adjust RBP if it's within the old stack range [old_base, old_base + old_size)
     EmitMovRegReg(X86Register.Rcx, X86Register.R12);
@@ -5770,6 +5928,14 @@ public partial class X86CodeEmitter {
     EmitJcc("ae", "__gt_morestack_skip_rbp");
     EmitAddRegReg(X86Register.Rbp, X86Register.Rax);
     DefineLabel("__gt_morestack_skip_rbp");
+
+    // Write adjusted RBP back to its saved slot on the system stack so POP restores it.
+    // After SUB 0x20 shadow space, the 14 pushes are at [RSP+0x20..RSP+0x8F]:
+    //   [RSP+0x20]=RAX, [RSP+0x28]=RDI, [RSP+0x30]=RSI, [RSP+0x38]=R9,
+    //   [RSP+0x40]=R8,  [RSP+0x48]=RDX, [RSP+0x50]=RCX, [RSP+0x58]=R15,
+    //   [RSP+0x60]=R14, [RSP+0x68]=R13, [RSP+0x70]=R12, [RSP+0x78]=RBX,
+    //   [RSP+0x80]=RBP, [RSP+0x88]=R10 (GT entry RSP)
+    EmitMovIndirectMemReg(X86Register.Rsp, 0x80, X86Register.Rbp);
 
     // Walk the RBP chain on the new stack and adjust saved RBP values
     // that still point into the old stack range.
@@ -5812,7 +5978,7 @@ public partial class X86CodeEmitter {
 
     DefineLabel("__gt_morestack_walk_done");
 
-    // Update GreenThread struct
+    // --- Step 7: Update GreenThread struct and TIB ---
     EmitMovIndirectMemReg(X86Register.Rbx, GtOffStackBase, X86Register.R15); // stack_base = new_base
     EmitMovIndirectMemReg(X86Register.Rbx, GtOffStackSize, X86Register.R14); // stack_size = new_size
     EmitMovRegReg(X86Register.Rcx, X86Register.R15);
@@ -5830,22 +5996,42 @@ public partial class X86CodeEmitter {
     // MOV gs:[0x10], R15
     EmitBytes(0x65, 0x4C, 0x89, 0x3C, 0x25, 0x10, 0x00, 0x00, 0x00);
 
-    // VirtualFree(old_base, 0, MEM_RELEASE)
+    // --- Step 8: VirtualFree(old_base, 0, MEM_RELEASE) ---
+    // Save offset (RAX) in RBP temporarily — RBP was already adjusted in step 6,
+    // and we'll restore it from the system stack at the end.
+    EmitMovRegReg(X86Register.Rbp, X86Register.Rax); // RBP = offset (callee-saved, survives call)
     EmitMovRegReg(X86Register.Rcx, X86Register.R12);
     EmitXorRegReg(X86Register.Rdx, X86Register.Rdx);
     EmitMovRegImm(X86Register.R8, 0x8000);
-    EmitCallImportOnSystemStack("kernel32.dll", "VirtualFree");
+    EmitCallImport("kernel32.dll", "VirtualFree");
+    EmitMovRegReg(X86Register.Rax, X86Register.Rbp); // RAX = offset (restored)
 
-    // Tear down frame and restore all registers from the new stack.
-    // After ADD RSP, 0x28: stack layout (bottom to top) is:
-    //   [RSP+0]=RAX [RSP+8]=RDI [RSP+16]=RSI [RSP+24]=R9 [RSP+32]=R8
-    //   [RSP+40]=RDX [RSP+48]=RCX [RSP+56]=R15 [RSP+64]=R14 [RSP+72]=R13
-    //   [RSP+80]=R12 [RSP+88]=RBX [RSP+96]=RBP
-    // Fix the saved RBP value to the adjusted RBP before popping.
-    EmitAddRegImm(X86Register.Rsp, 0x28);
-    EmitMovIndirectMemReg(X86Register.Rsp, 96, X86Register.Rbp); // fix saved RBP
+    // --- Steps 9-12: Restore registers from system stack, switch to new GT stack ---
+    // Tear down shadow space
+    EmitAddRegImm(X86Register.Rsp, 0x20);
 
-    // Pop volatile (argument) registers in reverse push order
+    // At this point: RAX = offset, RSP points to saved registers on system stack.
+    // System stack layout (from RSP upward):
+    //   [RSP+0x00] = saved RAX
+    //   [RSP+0x08] = saved RDI
+    //   [RSP+0x10] = saved RSI
+    //   [RSP+0x18] = saved R9
+    //   [RSP+0x20] = saved R8
+    //   [RSP+0x28] = saved RDX
+    //   [RSP+0x30] = saved RCX
+    //   [RSP+0x38] = saved R15
+    //   [RSP+0x40] = saved R14
+    //   [RSP+0x48] = saved R13
+    //   [RSP+0x50] = saved R12
+    //   [RSP+0x58] = saved RBX
+    //   [RSP+0x60] = saved RBP
+    //   [RSP+0x68] = saved R10 (GT entry RSP)
+    //
+    // Compute new GT RSP: R10 = GT_entry_RSP + offset
+    EmitMovRegIndirectMem(X86Register.R10, X86Register.Rsp, 0x68); // R10 = GT entry RSP
+    EmitAddRegReg(X86Register.R10, X86Register.Rax); // R10 = adjusted GT RSP on new stack
+
+    // Pop all 13 registers from system stack (restore original values)
     EmitPopReg(X86Register.Rax);
     EmitPopReg(X86Register.Rdi);
     EmitPopReg(X86Register.Rsi);
@@ -5853,8 +6039,6 @@ public partial class X86CodeEmitter {
     EmitPopReg(X86Register.R8);
     EmitPopReg(X86Register.Rdx);
     EmitPopReg(X86Register.Rcx);
-
-    // Pop callee-saved registers
     EmitPopReg(X86Register.R15);
     EmitPopReg(X86Register.R14);
     EmitPopReg(X86Register.R13);
@@ -5862,8 +6046,283 @@ public partial class X86CodeEmitter {
     EmitPopReg(X86Register.Rbx);
     EmitPopReg(X86Register.Rbp);
 
-    // The relocated return address is now at [RSP]. 'ret' will pop it and jump there.
+    // RSP now points at saved R10 (GT entry RSP) on system stack. Skip it.
+    EmitAddRegImm(X86Register.Rsp, 8);
+
+    // RSP is back to systemStackSP (all pushes consumed). No need to restore P->systemStackSP
+    // since the value at P->systemStackSP is the top of the system stack and we just popped
+    // everything back to that position.
+
+    // Switch RSP to the adjusted position on the new GT stack.
+    // R10 = GT_entry_RSP + offset = position of return address on new stack.
+    EmitMovRegReg(X86Register.Rsp, X86Register.R10);
+
+    // RET: pops the return address from the new GT stack (copied from old) and jumps there.
+    // This returns to the prologue check, which now passes because the stack is larger.
     EmitByte(0xC3); // ret
+  }
+
+  /// <summary>
+  /// __gt_timer_check(): Check the timer min-heap for expired timers.
+  /// Pops all entries whose deadline &lt;= GetTickCount64() and re-enqueues their GTs.
+  /// Called from scheduling loops. Lock-free fast path when count == 0.
+  ///
+  /// Algorithm:
+  ///   if (__gt_timer_count == 0) return;  // fast path, no lock needed
+  ///   now = GetTickCount64();
+  ///   EnterCriticalSection(&amp;__gt_timer_cs);
+  ///   while (count &gt; 0 &amp;&amp; heap[0].deadline &lt;= now) {
+  ///     gt = heap[0].gt;
+  ///     // Move last element to root and sift down
+  ///     count--;
+  ///     heap[0] = heap[count];
+  ///     sift_down(0);
+  ///     gt.status = ready;
+  ///     __gt_enqueue(gt);
+  ///   }
+  ///   LeaveCriticalSection(&amp;__gt_timer_cs);
+  /// </summary>
+  private void EmitGtTimerCheck() {
+    EmitRuntimeFunctionStart("__gt_timer_check", 0, 0x40);
+    // Locals: [rbp-0x08]=now, [rbp-0x10]=heap_base, [rbp-0x18]=gt_to_enqueue
+
+    // Fast path: if count == 0, return immediately (no lock needed)
+    EmitGlobalLoadReg(X86Register.Rax, "__gt_timer_count");
+    EmitBytes(0x48, 0x85, 0xC0); // TEST RAX, RAX
+    EmitJcc("z", "__gt_timer_check_ret");
+
+    // Get current time
+    EmitCallImport("kernel32.dll", "GetTickCount64");
+    EmitMovMemReg(-0x08, X86Register.Rax, 8); // save now
+
+    // Lock timer heap
+    EmitGlobalLeaReg(X86Register.Rcx, "__gt_timer_cs");
+    EmitCallImport("kernel32.dll", "EnterCriticalSection");
+
+    // Cache heap base address
+    EmitGlobalLeaReg(X86Register.Rax, "__gt_timer_heap");
+    EmitMovMemReg(-0x10, X86Register.Rax, 8);
+
+    // Loop: pop expired timers
+    DefineLabel("__gt_timer_check_loop");
+    EmitGlobalLoadReg(X86Register.Rcx, "__gt_timer_count");
+    EmitBytes(0x48, 0x85, 0xC9); // TEST RCX, RCX
+    EmitJcc("z", "__gt_timer_check_unlock"); // count == 0, done
+
+    // Check heap[0].deadline <= now
+    EmitMovRegMem(X86Register.Rax, -0x10, 8); // heap_base
+    EmitMovRegIndirectMem(X86Register.Rdx, X86Register.Rax, TimerOffDeadline); // heap[0].deadline
+    EmitCmpRegMem(X86Register.Rdx, -0x08); // deadline vs now
+    EmitJcc("a", "__gt_timer_check_unlock"); // deadline > now, done (unsigned compare)
+
+    // Save gt from heap[0]
+    EmitMovRegMem(X86Register.Rax, -0x10, 8);
+    EmitMovRegIndirectMem(X86Register.R10, X86Register.Rax, TimerOffGt); // gt = heap[0].gt
+    EmitMovMemReg(-0x18, X86Register.R10, 8); // save gt
+
+    // count--
+    EmitGlobalLoadReg(X86Register.Rcx, "__gt_timer_count");
+    EmitDecReg(X86Register.Rcx);
+    EmitGlobalStoreReg(X86Register.Rcx, "__gt_timer_count");
+
+    // Move heap[count] to heap[0] (count is already decremented)
+    EmitMovRegMem(X86Register.Rax, -0x10, 8); // heap_base
+    // src = heap_base + count * 16
+    EmitMovRegReg(X86Register.Rdx, X86Register.Rcx);
+    EmitShlRegImm(X86Register.Rdx, 4); // count * 16
+    EmitAddRegReg(X86Register.Rdx, X86Register.Rax); // src = &heap[count]
+    // Copy 16 bytes: heap[0] = heap[count]
+    EmitMovRegIndirectMem(X86Register.R8, X86Register.Rdx, 0); // deadline
+    EmitMovIndirectMemReg(X86Register.Rax, 0, X86Register.R8);
+    EmitMovRegIndirectMem(X86Register.R8, X86Register.Rdx, 8); // gt
+    EmitMovIndirectMemReg(X86Register.Rax, 8, X86Register.R8);
+
+    // Sift down from index 0
+    // i = 0 (in R12, callee-saved)
+    EmitPushReg(X86Register.R12);
+    EmitXorRegReg(X86Register.R12, X86Register.R12); // i = 0
+
+    DefineLabel("__gt_timer_sift_down");
+    // left = 2*i + 1
+    EmitMovRegReg(X86Register.Rax, X86Register.R12);
+    EmitShlRegImm(X86Register.Rax, 1);
+    EmitIncReg(X86Register.Rax); // left = 2*i + 1
+
+    // if left >= count: done
+    EmitGlobalLoadReg(X86Register.Rcx, "__gt_timer_count");
+    EmitCmpRegReg(X86Register.Rax, X86Register.Rcx);
+    EmitJcc("ae", "__gt_timer_sift_done"); // left >= count
+
+    // smallest = left
+    EmitMovRegReg(X86Register.Rdx, X86Register.Rax); // smallest = left
+
+    // right = left + 1
+    EmitMovRegReg(X86Register.R8, X86Register.Rax);
+    EmitIncReg(X86Register.R8); // right = left + 1
+
+    // if right < count && heap[right].deadline < heap[left].deadline: smallest = right
+    EmitCmpRegReg(X86Register.R8, X86Register.Rcx);
+    EmitJcc("ae", "__gt_timer_sift_cmp_parent"); // right >= count, skip
+
+    // Compare heap[right].deadline vs heap[left].deadline
+    EmitMovRegMem(X86Register.R9, -0x10, 8); // heap_base
+    EmitMovRegReg(X86Register.Rcx, X86Register.R8);
+    EmitShlRegImm(X86Register.Rcx, 4);
+    EmitAddRegReg(X86Register.Rcx, X86Register.R9); // &heap[right]
+    EmitMovRegIndirectMem(X86Register.Rcx, X86Register.Rcx, 0); // heap[right].deadline
+
+    EmitMovRegReg(X86Register.R9, X86Register.Rax); // left
+    EmitShlRegImm(X86Register.R9, 4);
+    EmitMovRegMem(X86Register.R11, -0x10, 8); // heap_base
+    EmitAddRegReg(X86Register.R9, X86Register.R11); // &heap[left]
+    EmitMovRegIndirectMem(X86Register.R9, X86Register.R9, 0); // heap[left].deadline
+
+    EmitCmpRegReg(X86Register.Rcx, X86Register.R9); // right vs left
+    EmitJcc("ae", "__gt_timer_sift_cmp_parent"); // right >= left, keep smallest = left
+    EmitMovRegReg(X86Register.Rdx, X86Register.R8); // smallest = right
+
+    DefineLabel("__gt_timer_sift_cmp_parent");
+    // if heap[smallest].deadline >= heap[i].deadline: done
+    EmitMovRegMem(X86Register.R9, -0x10, 8); // heap_base
+    EmitMovRegReg(X86Register.Rcx, X86Register.Rdx); // smallest
+    EmitShlRegImm(X86Register.Rcx, 4);
+    EmitAddRegReg(X86Register.Rcx, X86Register.R9); // &heap[smallest]
+    EmitMovRegIndirectMem(X86Register.R8, X86Register.Rcx, 0); // heap[smallest].deadline
+
+    EmitMovRegReg(X86Register.Rax, X86Register.R12); // i
+    EmitShlRegImm(X86Register.Rax, 4);
+    EmitAddRegReg(X86Register.Rax, X86Register.R9); // &heap[i]
+    EmitMovRegIndirectMem(X86Register.R9, X86Register.Rax, 0); // heap[i].deadline
+
+    EmitCmpRegReg(X86Register.R8, X86Register.R9); // smallest vs i
+    EmitJcc("ae", "__gt_timer_sift_done"); // smallest >= i, heap property restored
+
+    // Swap heap[i] and heap[smallest] (16 bytes each)
+    // RAX = &heap[i], RCX = &heap[smallest] (already computed above)
+    // Swap deadline
+    EmitMovRegIndirectMem(X86Register.R8, X86Register.Rax, 0);
+    EmitMovRegIndirectMem(X86Register.R9, X86Register.Rcx, 0);
+    EmitMovIndirectMemReg(X86Register.Rax, 0, X86Register.R9);
+    EmitMovIndirectMemReg(X86Register.Rcx, 0, X86Register.R8);
+    // Swap gt
+    EmitMovRegIndirectMem(X86Register.R8, X86Register.Rax, 8);
+    EmitMovRegIndirectMem(X86Register.R9, X86Register.Rcx, 8);
+    EmitMovIndirectMemReg(X86Register.Rax, 8, X86Register.R9);
+    EmitMovIndirectMemReg(X86Register.Rcx, 8, X86Register.R8);
+
+    // i = smallest
+    EmitMovRegReg(X86Register.R12, X86Register.Rdx);
+    EmitJmp("__gt_timer_sift_down");
+
+    DefineLabel("__gt_timer_sift_done");
+    EmitPopReg(X86Register.R12);
+
+    // Re-enqueue the expired GT (only regular GTs with stackBase != 0).
+    // MainThread GTs (stackBase == 0) are driven by inline scheduling loops
+    // and must NOT be in the global run queue.
+    EmitMovRegMem(X86Register.Rcx, -0x18, 8); // gt
+    EmitXorRegReg(X86Register.Rax, X86Register.Rax);
+    EmitMovIndirectMemReg(X86Register.Rcx, GtOffStatus, X86Register.Rax); // status = ready
+    EmitMovRegIndirectMem(X86Register.Rax, X86Register.Rcx, GtOffStackBase);
+    EmitBytes(0x48, 0x85, 0xC0); // TEST RAX, RAX
+    EmitJcc("z", "__gt_timer_check_skip_enqueue");
+    EmitCallRuntimeLabel("__gt_enqueue");
+    DefineLabel("__gt_timer_check_skip_enqueue");
+
+    EmitJmp("__gt_timer_check_loop"); // check next entry
+
+    DefineLabel("__gt_timer_check_unlock");
+    EmitGlobalLeaReg(X86Register.Rcx, "__gt_timer_cs");
+    EmitCallImport("kernel32.dll", "LeaveCriticalSection");
+
+    DefineLabel("__gt_timer_check_ret");
+    EmitRuntimeFunctionEnd();
+  }
+
+  /// <summary>
+  /// __gt_timer_add(gt_rcx, deadline_rdx): Add a green thread to the timer heap
+  /// with the given deadline (absolute tick count from GetTickCount64).
+  /// The GT should already have status=waiting set by the caller.
+  ///
+  /// Algorithm:
+  ///   EnterCriticalSection(&amp;__gt_timer_cs);
+  ///   i = count++;
+  ///   heap[i] = { deadline, gt };
+  ///   // Sift up: while (i &gt; 0 &amp;&amp; heap[i].deadline &lt; heap[parent].deadline) swap
+  ///   LeaveCriticalSection(&amp;__gt_timer_cs);
+  /// </summary>
+  private void EmitGtTimerAdd() {
+    EmitRuntimeFunctionStart("__gt_timer_add", 2, 0x30);
+    // [rbp-0x08] = gt (rcx), [rbp-0x10] = deadline (rdx)
+
+    EmitGlobalLeaReg(X86Register.Rcx, "__gt_timer_cs");
+    EmitCallImport("kernel32.dll", "EnterCriticalSection");
+
+    // i = count
+    EmitGlobalLoadReg(X86Register.Rax, "__gt_timer_count");
+    EmitMovMemReg(-0x18, X86Register.Rax, 8); // save i
+
+    // count++
+    EmitIncReg(X86Register.Rax);
+    EmitGlobalStoreReg(X86Register.Rax, "__gt_timer_count");
+
+    // heap[i].deadline = deadline, heap[i].gt = gt
+    EmitGlobalLeaReg(X86Register.Rcx, "__gt_timer_heap");
+    EmitMovRegMem(X86Register.Rax, -0x18, 8); // i
+    EmitShlRegImm(X86Register.Rax, 4); // i * 16
+    EmitAddRegReg(X86Register.Rcx, X86Register.Rax); // &heap[i]
+    EmitMovRegMem(X86Register.Rdx, -0x10, 8); // deadline
+    EmitMovIndirectMemReg(X86Register.Rcx, TimerOffDeadline, X86Register.Rdx);
+    EmitMovRegMem(X86Register.Rdx, -0x08, 8); // gt
+    EmitMovIndirectMemReg(X86Register.Rcx, TimerOffGt, X86Register.Rdx);
+
+    // Sift up
+    DefineLabel("__gt_timer_sift_up");
+    EmitMovRegMem(X86Register.Rax, -0x18, 8); // i
+    EmitBytes(0x48, 0x85, 0xC0); // TEST RAX, RAX
+    EmitJcc("z", "__gt_timer_add_done"); // i == 0, at root
+
+    // parent = (i - 1) / 2
+    EmitDecReg(X86Register.Rax);
+    EmitShrRegImm(X86Register.Rax, 1); // parent
+    EmitMovMemReg(-0x20, X86Register.Rax, 8); // save parent
+
+    // Compare heap[i].deadline vs heap[parent].deadline
+    EmitGlobalLeaReg(X86Register.R9, "__gt_timer_heap");
+
+    EmitMovRegMem(X86Register.Rcx, -0x18, 8); // i
+    EmitShlRegImm(X86Register.Rcx, 4);
+    EmitAddRegReg(X86Register.Rcx, X86Register.R9); // &heap[i]
+    EmitMovRegIndirectMem(X86Register.R8, X86Register.Rcx, 0); // heap[i].deadline
+
+    EmitMovRegMem(X86Register.Rdx, -0x20, 8); // parent
+    EmitShlRegImm(X86Register.Rdx, 4);
+    EmitAddRegReg(X86Register.Rdx, X86Register.R9); // &heap[parent]
+    EmitMovRegIndirectMem(X86Register.R10, X86Register.Rdx, 0); // heap[parent].deadline
+
+    EmitCmpRegReg(X86Register.R8, X86Register.R10); // heap[i] vs heap[parent]
+    EmitJcc("ae", "__gt_timer_add_done"); // i >= parent, done
+
+    // Swap heap[i] and heap[parent] (RCX = &heap[i], RDX = &heap[parent])
+    // Swap deadline
+    EmitMovIndirectMemReg(X86Register.Rcx, 0, X86Register.R10);
+    EmitMovIndirectMemReg(X86Register.Rdx, 0, X86Register.R8);
+    // Swap gt
+    EmitMovRegIndirectMem(X86Register.R8, X86Register.Rcx, 8);
+    EmitMovRegIndirectMem(X86Register.R10, X86Register.Rdx, 8);
+    EmitMovIndirectMemReg(X86Register.Rcx, 8, X86Register.R10);
+    EmitMovIndirectMemReg(X86Register.Rdx, 8, X86Register.R8);
+
+    // i = parent
+    EmitMovRegMem(X86Register.Rax, -0x20, 8);
+    EmitMovMemReg(-0x18, X86Register.Rax, 8);
+    EmitJmp("__gt_timer_sift_up");
+
+    DefineLabel("__gt_timer_add_done");
+    EmitGlobalLeaReg(X86Register.Rcx, "__gt_timer_cs");
+    EmitCallImport("kernel32.dll", "LeaveCriticalSection");
+
+    EmitRuntimeFunctionEnd();
   }
 
   // ===========================================================================================
@@ -6863,6 +7322,7 @@ public partial class X86CodeEmitter {
     EmitCallRuntimeLabel("__gt_process_pending_waiter");
     // Drain completions (may re-enqueue GTs including us)
     EmitCallRuntimeLabel("__io_check_completions");
+    EmitCallRuntimeLabel("__gt_timer_check");
     // Check if our status changed from "waiting" (sync worker completed our request)
     EmitLoadCurrentGtInline(X86Register.R10);
     EmitMovRegIndirectMem(X86Register.Rax, X86Register.R10, GtOffStatus);

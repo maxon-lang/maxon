@@ -102,6 +102,7 @@ public static class SemanticCheckPass {
     "maxon_net_send",
     "maxon_net_recv",
     "maxon_net_close",
+    "maxon_sleep",
   ];
 
   /// Checks that every `async f()` call targets a function that can yield.

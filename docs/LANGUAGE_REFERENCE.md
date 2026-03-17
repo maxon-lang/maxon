@@ -92,6 +92,7 @@ Maxon supports `#if`, `#else`, and `#endif` directives for platform-conditional 
 Supported conditions:
 - `os(Windows)`, `os(Linux)` — match the target operating system
 - `arch(x86_64)`, `arch(aarch64)` — match the target CPU architecture
+- `testing(true)`, `testing(false)` — match whether the code is compiled in test mode
 
 Conditional compilation directives can appear at:
 - Top level (around functions, types, variables)

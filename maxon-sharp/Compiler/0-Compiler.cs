@@ -41,6 +41,9 @@ public class Compiler {
   [ThreadStatic] private static bool _asyncTrace;
   public static bool AsyncTrace { get => _asyncTrace; set => _asyncTrace = value; }
 
+  [ThreadStatic] private static bool _testing;
+  public static bool Testing { get => _testing; set => _testing = value; }
+
   public CompileResult Compile(SourceFile[] sources, string outputPath, string? mlirOutputPath = null, bool returnIr = false, string? dumpStagesBasePath = null) {
     var userSourceFile = sources.Length == 1 ? sources[0].Path : null;
 
@@ -129,7 +132,7 @@ public class Compiler {
       try {
         var lexer = new Lexer(source.Content);
         var tokens = lexer.Tokenize();
-        var parser = new Parser(tokens, module, isStdlib: isStdLib, sourceFilePath: source.Path);
+        var parser = new Parser(tokens, module, isStdlib: isStdLib, sourceFilePath: source.Path, testing: Testing);
         parser.PreScanTypeAliasesOnly(module);
       } catch (CompileError ex) {
         ex.FilePath ??= source.Path;
@@ -143,7 +146,7 @@ public class Compiler {
       try {
         var lexer = new Lexer(source.Content);
         var tokens = lexer.Tokenize();
-        var parser = new Parser(tokens, module, isStdlib: isStdLib, sourceFilePath: source.Path);
+        var parser = new Parser(tokens, module, isStdlib: isStdLib, sourceFilePath: source.Path, testing: Testing);
         parser.PreScan(module);
       } catch (CompileError ex) {
         ex.FilePath ??= source.Path;
@@ -161,7 +164,7 @@ public class Compiler {
       try {
         var lexer = new Lexer(source.Content);
         var tokens = lexer.Tokenize();
-        var parser = new Parser(tokens, module, isStdlib: isStdLib, sourceFilePath: source.Path);
+        var parser = new Parser(tokens, module, isStdlib: isStdLib, sourceFilePath: source.Path, testing: Testing);
         var parsed = parser.Parse();
         module.Merge(parsed);
       } catch (CompileError ex) {

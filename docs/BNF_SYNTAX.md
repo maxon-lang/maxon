@@ -125,9 +125,10 @@ conditional_block
 
 condition     = 'os' '(' IDENTIFIER ')'
               | 'arch' '(' IDENTIFIER ')'
+              | 'testing' '(' BOOL ')'
 ```
 
-Conditional compilation directives are evaluated at parse time. Supported `os` values: `Windows`, `Linux`. Supported `arch` values: `x86_64`, `aarch64`. Nested `#if` blocks are supported.
+Conditional compilation directives are evaluated at parse time. Supported `os` values: `Windows`, `Linux`. Supported `arch` values: `x86_64`, `aarch64`. Supported `testing` values: `true`, `false`. Nested `#if` blocks are supported.
 
 ---
 

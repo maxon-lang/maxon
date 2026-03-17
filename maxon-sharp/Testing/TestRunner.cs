@@ -150,6 +150,7 @@ public class TestRunner(string specDir, string fragmentDir, string tempDir, stri
         // Fragment generation compiles for IR only — always disable MmTrace/AsyncTrace
         Compiler.Compiler.MmTrace = false;
         Compiler.Compiler.AsyncTrace = false;
+        Compiler.Compiler.Testing = true;
         var absolutePath = Path.GetFullPath(item.FragmentPath);
         var (content, genError) = FragmentGenerator.GenerateFragmentContent(item.Test, item.ExePath, absolutePath);
         if (genError != null) {
@@ -325,6 +326,7 @@ public class TestRunner(string specDir, string fragmentDir, string tempDir, stri
           Compiler.Compiler.MmTrace = false;
           Compiler.Compiler.MmDebug = false;
           Compiler.Compiler.AsyncTrace = false;
+          Compiler.Compiler.Testing = true;
           var irResult = new Compiler.Compiler().Compile(irSources, irExePath, returnIr: true);
           if (irTempDir != null) {
             try { Directory.Delete(irTempDir, recursive: true); } catch { }
@@ -475,6 +477,7 @@ public class TestRunner(string specDir, string fragmentDir, string tempDir, stri
       try {
         Compiler.Compiler.MmTrace = fragment.MmTrace;
         Compiler.Compiler.AsyncTrace = fragment.AsyncTrace;
+        Compiler.Compiler.Testing = true;
         var result = new Compiler.Compiler().Compile(sources, outputPath);
         var error = result.Error;
         // Normalize temp directory paths to just filenames for multi-file tests
@@ -840,6 +843,7 @@ public class TestRunner(string specDir, string fragmentDir, string tempDir, stri
             Compiler.Compiler.MmTrace = false;
             Compiler.Compiler.MmDebug = false;
             Compiler.Compiler.AsyncTrace = false;
+            Compiler.Compiler.Testing = true;
             var irResult = new Compiler.Compiler().Compile(sources, exePath, returnIr: true);
 
             if (irResult.Success && irResult.AllStagesIr != null) {
@@ -871,6 +875,7 @@ public class TestRunner(string specDir, string fragmentDir, string tempDir, stri
           try {
             Compiler.Compiler.MmTrace = true;
             Compiler.Compiler.MmDebug = false;
+            Compiler.Compiler.Testing = true;
             var result = new Compiler.Compiler().Compile(sources, exePath);
 
             if (result.Success) {

@@ -171,6 +171,11 @@ export type HttpClient
       throw HttpError.sendFailed
     end 'sendFail'
 
+    #if testing(true)
+      // to ensure test output is deterministic we sleep briefly to allow the server to send the full response before we start receiving. In production this is not needed and would just add unnecessary latency.
+      sleep(100)
+    #endif
+
     // Receive response until server closes connection
     var responseData = ""
     var receiving = true

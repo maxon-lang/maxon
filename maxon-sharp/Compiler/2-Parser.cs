@@ -4,12 +4,13 @@ using MaxonSharp.Compiler.Mlir.Dialects;
 
 namespace MaxonSharp.Compiler;
 
-public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, bool isStdlib = false, string? sourceFilePath = null, string targetOs = "Windows", string targetArch = "x86_64") {
+public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, bool isStdlib = false, string? sourceFilePath = null, string targetOs = "Windows", string targetArch = "x86_64", bool testing = false) {
   private List<Token> _tokens = tokens;
   private readonly bool _isStdlib = isStdlib;
   private readonly string? _sourceFilePath = sourceFilePath;
   private readonly string _targetOs = targetOs;
   private readonly string _targetArch = targetArch;
+  private readonly bool _testing = testing;
   private int _pos;
 
   private MlirModule<MaxonOp>? _currentModule;
@@ -6534,6 +6535,10 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     ["processReadStderr"] = RuntimeCallToManaged(
       "Reads stderr from capture struct. Returns __ManagedMemory.\n\n`__Builtins.processReadStderr(capture_ptr) returns __ManagedMemory`",
       "maxon_process_read_stderr", 1, freeCString: true),
+    // === Sleep intrinsic ===
+    ["sleep"] = RuntimeCallIntrinsic(
+      "Suspends the current green thread for the given milliseconds.\n\n`__Builtins.sleep(ms)`",
+      "maxon_sleep", 1, false),
     // === Primitive type intrinsics ===
     ["floatToBits"] = new(
       "Reinterprets a float's IEEE 754 bit pattern as an integer (bitcast).\n\n`__Builtins.floatToBits(value) returns int`",
@@ -14212,15 +14217,19 @@ public class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, 
     var funcToken = Expect(TokenType.Identifier);
     var funcName = funcToken.Value;
     Expect(TokenType.LeftParen);
-    var valueToken = Expect(TokenType.Identifier);
+    // Accept identifier, true, or false as the condition value
+    var valueToken = Current().Type is TokenType.True or TokenType.False
+      ? Advance()
+      : Expect(TokenType.Identifier);
     var value = valueToken.Value;
     Expect(TokenType.RightParen);
 
     return funcName switch {
       "os" => string.Equals(value, _targetOs, StringComparison.OrdinalIgnoreCase),
       "arch" => string.Equals(value, _targetArch, StringComparison.OrdinalIgnoreCase),
+      "testing" => string.Equals(value, _testing.ToString(), StringComparison.OrdinalIgnoreCase),
       _ => throw new CompileError(ErrorCode.SemanticTypeMismatch,
-        $"Unknown conditional compilation function '{funcName}'. Expected 'os' or 'arch'.",
+        $"Unknown conditional compilation function '{funcName}'. Expected 'os', 'arch', or 'testing'.",
         funcToken.Line, funcToken.Column),
     };
   }
