@@ -2939,7 +2939,7 @@ var result = format_int(42)   // Finds stdlib.fmt.format_int
 
 ## Async/Await (Concurrency)
 
-Maxon supports cooperative concurrency via `async` and `await` with green threads. Each `async` call spawns a lightweight green thread with a growable stack (starting at 2KB). All green threads run on a single OS thread -- context switching happens only at `await` points.
+Maxon supports concurrency via `async` and `await` with green threads scheduled across multiple OS worker threads. Each `async` call spawns a lightweight green thread with a growable stack (starting at 4KB). The runtime uses a GMP (Goroutine-Machine-Processor) scheduler with per-worker local queues, work stealing, and IOCP-based overlapped I/O.
 
 ### Spawning Green Threads
 
@@ -3014,10 +3014,11 @@ Cancelling a green thread stops it at its next yield point. The green thread's s
 
 ### Key Properties
 
-- **No OS threads** -- all green threads share one OS thread
-- **Cooperative scheduling** -- context switches only at `await` points
-- **Growable stacks** -- 2KB initial, doubles when needed
-- **No atomics needed** -- reference counting stays non-atomic
+- **Multi-threaded** -- green threads are distributed across OS worker threads (one per CPU core)
+- **Work stealing** -- idle workers steal from busy workers' local queues for load balancing
+- **Cooperative scheduling** -- context switches at `await` points and I/O operations
+- **Growable stacks** -- 4KB initial, doubles when needed
+- **Thread-safe memory** -- atomic reference counting and lock-protected shared state
 - **Fire-and-forget safe** -- unawaited green threads are drained at program exit
 
 ---

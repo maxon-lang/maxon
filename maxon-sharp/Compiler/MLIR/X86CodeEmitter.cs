@@ -146,8 +146,8 @@ public partial class X86CodeEmitter() {
             EmitByte(0x8D); EmitByte(0x94); EmitByte(0x24); // LEA R10, [RSP + disp32]
             EmitDword(-(int)prologue.StackSize);
           }
-          // MOV R11, [RIP + __gt_current]
-          EmitGlobalLoadReg(X86Register.R11, "__gt_current");
+          // Load current green thread via inline TLS (no function call, preserves arg regs)
+          EmitLoadCurrentGtInline(X86Register.R11);
           // CMP R10, [R11 + 0x50] (stackguard)
           Rex.W().Reg(X86Register.R10).Rm(X86Register.R11).Emit(this);
           EmitByte(0x3B); // CMP r64, r/m64
@@ -432,6 +432,18 @@ public partial class X86CodeEmitter() {
     _relCallFixups.Add((_code.Count, "__gt_init"));
     EmitDword(0);
 
+    // Allocate a dedicated 8KB system stack for P[0] (same as P[1..N])
+    EmitXorRegReg(X86Register.Rcx, X86Register.Rcx);     // lpAddress = NULL
+    EmitMovRegImm(X86Register.Rdx, 0x2000);               // dwSize = 8KB
+    EmitMovRegImm(X86Register.R8, 0x3000);                 // MEM_COMMIT|MEM_RESERVE
+    EmitMovRegImm(X86Register.R9, 0x04);                   // PAGE_READWRITE
+    EmitCallImport("kernel32.dll", "VirtualAlloc");
+    EmitAddRegImm(X86Register.Rax, 0x2000);                // RAX = top of system stack
+    EmitGlobalLoadReg(X86Register.R10, "__sched_tls_teb_offset");
+    EmitByte(0x65); // GS prefix
+    EmitMovRegIndirectMemRaw(X86Register.R10, X86Register.R10, 0); // R10 = P[0]*
+    EmitMovIndirectMemReg(X86Register.R10, POffSystemStackSP, X86Register.Rax);
+
     // Initialize I/O subsystem (IOCP + worker threads) after green thread scheduler
     EmitByte(0xE8);
     _relCallFixups.Add((_code.Count, "__io_init"));
@@ -520,6 +532,145 @@ public partial class X86CodeEmitter() {
     var importIndex = AddImport(dllName, functionName);
     _importCallFixups.Add((_code.Count, importIndex));
     EmitDword(0); // placeholder
+  }
+
+  /// <summary>
+  /// Emit a Windows API call that runs on the OS thread's system stack.
+  /// If on a GT stack (currentGt->stackBase != 0), switches RSP to
+  /// P->systemStackSP for the call and restores afterwards. If on the
+  /// main thread or during early init, calls directly without switching.
+  /// R10 is preserved (saved/restored around the switch). R11 is clobbered.
+  /// Assumes register args (RCX, RDX, R8, R9) are already set by the caller.
+  /// </summary>
+  private int _sysStackLabelCounter;
+  private void EmitCallImportOnSystemStack(string dllName, string functionName) {
+    var id = _sysStackLabelCounter++;
+    var skipLabel = $"__sysstk_skip_{id}";
+    var doneLabel = $"__sysstk_done_{id}";
+
+    // R10 must be preserved: the register allocator uses R10 as a scratch
+    // register for indirect calls (holding the callee pointer), and some
+    // call sequences rely on R10 surviving across nested runtime calls.
+    // Use R11 for all TLS/P* lookups in the guard code.
+
+    // Guard: skip if TLS not set up yet
+    EmitGlobalLoadReg(X86Register.R11, "__sched_tls_teb_offset");
+    EmitBytes(0x4D, 0x85, 0xDB); // TEST R11, R11
+    EmitJcc("z", skipLabel);
+    EmitByte(0x65); // GS prefix
+    EmitMovRegIndirectMemRaw(X86Register.R11, X86Register.R11, 0); // R11 = P*
+    EmitBytes(0x4D, 0x85, 0xDB); // TEST R11, R11
+    EmitJcc("z", skipLabel);
+
+    // Check if on GT stack (stackBase != 0).
+    // Save P* on the stack so we can reuse R11 for the check.
+    EmitPushReg(X86Register.R11);      // save P* on current stack
+    EmitMovRegIndirectMem(X86Register.R11, X86Register.R11, POffCurrentGt);
+    EmitMovRegIndirectMem(X86Register.R11, X86Register.R11, GtOffStackBase);
+    EmitBytes(0x4D, 0x85, 0xDB); // TEST R11, R11
+    EmitPopReg(X86Register.R11);       // restore R11 = P* (POP preserves flags)
+    EmitJcc("z", skipLabel);
+
+    // --- GT stack path: switch RSP to the system stack ---
+    // R11 = P*. Save R10 on GT stack, use R10 to shuttle GT RSP across.
+    EmitPushReg(X86Register.R10);      // save original R10 on GT stack
+    EmitMovRegReg(X86Register.R10, X86Register.Rsp); // R10 = GT RSP (post-push)
+    EmitMovRegIndirectMem(X86Register.Rsp, X86Register.R11, POffSystemStackSP);
+    EmitPushReg(X86Register.R10);      // save GT RSP on system stack
+
+    // Alignment: systemStackSP is 16-aligned, 1 push → 8-misaligned.
+    // SUB 0x28 (shadow 0x20 + pad 0x08) → 16-aligned before CALL.
+    EmitSubRegImm(X86Register.Rsp, 0x28);
+    EmitCallImport(dllName, functionName);
+    EmitAddRegImm(X86Register.Rsp, 0x28);
+
+    EmitPopReg(X86Register.R10);       // R10 = GT RSP (pointing at saved R10)
+    EmitMovRegReg(X86Register.Rsp, X86Register.R10); // restore GT RSP
+    EmitPopReg(X86Register.R10);       // restore original R10
+    EmitJmp(doneLabel);
+
+    // --- Main thread / early init path: call directly ---
+    DefineLabel(skipLabel);
+    EmitCallImport(dllName, functionName);
+    DefineLabel(doneLabel);
+  }
+
+  /// <summary>
+  /// Switch RSP to system stack for 5+ arg calls. Same stackBase check as above.
+  /// After this, [RSP+0x20..] is on the system stack for stack arg writes.
+  /// Must be paired with EmitSystemStackLeave(frameSize).
+  /// </summary>
+  private void EmitSystemStackEnter(int frameSize) {
+    var id = _sysStackLabelCounter++;
+    _systemStackEnterIds.Push(id);
+    var skipLabel = $"__sysstk_enter_skip_{id}";
+    var doneLabel = $"__sysstk_enter_done_{id}";
+
+    // Guard: skip if TLS not set up yet (use R11 exclusively for guard)
+    EmitGlobalLoadReg(X86Register.R11, "__sched_tls_teb_offset");
+    EmitBytes(0x4D, 0x85, 0xDB); // TEST R11, R11
+    EmitJcc("z", skipLabel);
+    EmitByte(0x65); // GS prefix
+    EmitMovRegIndirectMemRaw(X86Register.R11, X86Register.R11, 0); // R11 = P*
+    EmitBytes(0x4D, 0x85, 0xDB); // TEST R11, R11
+    EmitJcc("z", skipLabel);
+
+    // Check if on GT stack (stackBase != 0)
+    EmitPushReg(X86Register.R11);      // save P* on current stack
+    EmitMovRegIndirectMem(X86Register.R11, X86Register.R11, POffCurrentGt);
+    EmitMovRegIndirectMem(X86Register.R11, X86Register.R11, GtOffStackBase);
+    EmitBytes(0x4D, 0x85, 0xDB); // TEST R11, R11
+    EmitPopReg(X86Register.R11);       // restore R11 = P* (POP preserves flags)
+    EmitJcc("z", skipLabel);
+
+    // --- GT stack path: switch RSP to system stack ---
+    EmitPushReg(X86Register.R10);      // save original R10 on GT stack
+    EmitMovRegReg(X86Register.R10, X86Register.Rsp); // R10 = GT RSP (post-push)
+    EmitMovRegIndirectMem(X86Register.Rsp, X86Register.R11, POffSystemStackSP);
+    EmitPushReg(X86Register.R10);      // save GT RSP on system stack
+    EmitSubRegImm(X86Register.Rsp, frameSize);
+    EmitJmp(doneLabel);
+
+    // --- Main thread / early init path: just SUB frameSize ---
+    DefineLabel(skipLabel);
+    EmitSubRegImm(X86Register.Rsp, frameSize);
+    DefineLabel(doneLabel);
+  }
+
+  private readonly Stack<int> _systemStackEnterIds = new();
+
+  private void EmitSystemStackLeave(int frameSize) {
+    var id = _systemStackEnterIds.Pop();
+    var skipLabel = $"__sysstk_leave_skip_{id}";
+    var doneLabel = $"__sysstk_leave_done_{id}";
+
+    // Guard: same check to determine if we switched
+    EmitGlobalLoadReg(X86Register.R11, "__sched_tls_teb_offset");
+    EmitBytes(0x4D, 0x85, 0xDB); // TEST R11, R11
+    EmitJcc("z", skipLabel);
+    EmitByte(0x65); // GS prefix
+    EmitMovRegIndirectMemRaw(X86Register.R11, X86Register.R11, 0); // R11 = P*
+    EmitBytes(0x4D, 0x85, 0xDB); // TEST R11, R11
+    EmitJcc("z", skipLabel);
+
+    EmitPushReg(X86Register.R11);      // save P*
+    EmitMovRegIndirectMem(X86Register.R11, X86Register.R11, POffCurrentGt);
+    EmitMovRegIndirectMem(X86Register.R11, X86Register.R11, GtOffStackBase);
+    EmitBytes(0x4D, 0x85, 0xDB); // TEST R11, R11
+    EmitPopReg(X86Register.R11);       // restore R11 = P*
+    EmitJcc("z", skipLabel);
+
+    // --- GT stack path: undo SUB, restore GT RSP, restore R10 ---
+    EmitAddRegImm(X86Register.Rsp, frameSize);
+    EmitPopReg(X86Register.R10);       // R10 = GT RSP (pointing at saved R10)
+    EmitMovRegReg(X86Register.Rsp, X86Register.R10); // restore GT RSP
+    EmitPopReg(X86Register.R10);       // restore original R10
+    EmitJmp(doneLabel);
+
+    // --- Main thread / early init path: just ADD frameSize ---
+    DefineLabel(skipLabel);
+    EmitAddRegImm(X86Register.Rsp, frameSize);
+    DefineLabel(doneLabel);
   }
 
   public void PatchChkstkCalls() {

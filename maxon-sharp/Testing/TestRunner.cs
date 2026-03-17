@@ -409,8 +409,9 @@ public class TestRunner(string specDir, string fragmentDir, string tempDir, stri
           }
 
           if (successExpectation.Stderr != null) {
-            var expectedStderr = successExpectation.Stderr.Replace("\r\n", "\n").Trim();
-            var actualStderr = Stderr.Replace("\r\n", "\n").Trim();
+            var normalize = fragment.AsyncTrace ? NormalizeAsyncTraceStderr : (Func<string, string>)(s => s.Replace("\r\n", "\n").Trim());
+            var expectedStderr = normalize(successExpectation.Stderr);
+            var actualStderr = normalize(Stderr);
             if (expectedStderr != actualStderr) {
               return new TestResult {
                 TestName = fragment.TestName,
@@ -563,12 +564,34 @@ public class TestRunner(string specDir, string fragmentDir, string tempDir, stri
   /// Normalize stderr for comparison: CRLF -> LF, trim, backslash -> forward slash in paths.
   /// </summary>
   private static string NormalizeStderr(string stderr) {
-    // Normalize line endings (CRLF -> LF)
     var normalized = stderr.Replace("\r\n", "\n");
-    // Normalize path separators (backslash -> forward slash)
     normalized = normalized.Replace('\\', '/');
-    // Trim whitespace
     return normalized.Trim();
+  }
+
+  // Matches the worker-suffix appended by --async-trace-workers: " [M=N]" at end of line.
+  private static readonly Regex AsyncWorkerSuffix = new(@" \[M=\d+\]$", RegexOptions.Multiline);
+
+  // Lines emitted by the worker lifecycle tracer that don't exist in the stable trace output.
+  private static readonly HashSet<string> AsyncWorkerOnlyPrefixes = new(StringComparer.Ordinal) {
+    "worker_start", "worker_park", "worker_wake", "worker_exit"
+  };
+
+  /// <summary>
+  /// Normalize async trace stderr for comparison: strip non-deterministic worker lifecycle
+  /// lines (worker_start/park/wake/exit) and [M=N] worker suffixes so tests are stable
+  /// regardless of scheduling timing.
+  /// </summary>
+  private static string NormalizeAsyncTraceStderr(string stderr) {
+    var lines = stderr.Replace("\r\n", "\n").Split('\n');
+    var kept = new List<string>();
+    foreach (var raw in lines) {
+      var line = AsyncWorkerSuffix.Replace(raw.TrimEnd(), "");
+      var prefix = line.Contains(' ') ? line[..line.IndexOf(' ')] : line;
+      if (!AsyncWorkerOnlyPrefixes.Contains(prefix))
+        kept.Add(line);
+    }
+    return string.Join('\n', kept).Trim();
   }
 
   // ============================================================================

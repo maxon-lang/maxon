@@ -397,15 +397,17 @@ public partial class X86CodeEmitter {
     if (Compiler.MmDebug) EmitMmDebugCheckHeapAllocNull("mm_alloc", "__mm_panic_heap_null");
     EmitMovMemReg(-0x28, X86Register.Rax, 8); // [rbp-40] = raw_ptr
 
-    // Increment global alloc counter
-    EmitSymdataLoadI64(X86Register.Rcx, "__mm_alloc_count");
-    EmitBytes(0x48, 0xFF, 0xC1); // INC rcx
-    EmitSymdataStoreI64(X86Register.Rcx, "__mm_alloc_count");
+    // Atomically increment global alloc counter
+    EmitLeaRegSymdataRel(X86Register.R11, "__mm_alloc_count");
+    EmitBytes(0xF0, 0x49, 0xFF, 0x03); // LOCK INC qword [R11]
 
-    // Increment alloc_id counter
-    EmitSymdataLoadI64(X86Register.Rcx, "__mm_alloc_id_counter");
-    EmitBytes(0x48, 0xFF, 0xC1); // INC rcx
-    EmitSymdataStoreI64(X86Register.Rcx, "__mm_alloc_id_counter");
+    // Atomically get-and-increment alloc_id counter via LOCK XADD
+    EmitMovRegImm(X86Register.Rcx, 1);
+    EmitLeaRegSymdataRel(X86Register.R11, "__mm_alloc_id_counter");
+    // LOCK XADD [R11], RCX — atomically: old=[R11]; [R11]+=RCX; RCX=old
+    EmitBytes(0xF0, 0x49, 0x0F, 0xC1, 0x0B);
+    // RCX now holds the OLD alloc_id; the counter has been incremented
+    EmitAddRegImm(X86Register.Rcx, 1); // RCX = new alloc_id (old + 1, matching original behavior)
 
     // Pack (alloc_id << 16 | tag_index) into [raw + 0]
     // RCX = alloc_id (just incremented)
@@ -542,10 +544,9 @@ public partial class X86CodeEmitter {
       EmitInlineTraceFree("mm_free_trace", -0x08, -0x10);
     }
 
-    // Decrement global alloc counter
-    EmitSymdataLoadI64(X86Register.Rax, "__mm_alloc_count");
-    EmitBytes(0x48, 0xFF, 0xC8); // DEC rax
-    EmitSymdataStoreI64(X86Register.Rax, "__mm_alloc_count");
+    // Atomically decrement global alloc counter
+    EmitLeaRegSymdataRel(X86Register.R11, "__mm_alloc_count");
+    EmitBytes(0xF0, 0x49, 0xFF, 0x0B); // LOCK DEC qword [R11]
 
     // HeapFree the raw allocation: user_ptr - 24
     EmitMovRegMem(X86Register.Rax, -0x08, 8); // RAX = user_ptr
@@ -572,8 +573,8 @@ public partial class X86CodeEmitter {
     EmitByte(0xE8); _relCallFixups.Add((_code.Count, "maxon_panic")); EmitDword(0);
     DefineLabel("mm_incref_not_null");
 
-    // Increment refcount: [user_ptr - 8] += 1
-    EmitBytes(0x48, 0xFF, 0x40, 0xF8); // INC qword [rax-8] -- refcount++
+    // Increment refcount: [user_ptr - 8] += 1 (atomic for thread safety)
+    EmitBytes(0xF0, 0x48, 0xFF, 0x40, 0xF8); // LOCK INC qword [rax-8]
 
     // Trace incref after increment
     if (Compiler.MmTrace) {
@@ -616,13 +617,10 @@ public partial class X86CodeEmitter {
     EmitByte(0xE8); _relCallFixups.Add((_code.Count, "maxon_panic")); EmitDword(0);
     DefineLabel("mm_decref_has_refs");
 
-    // Decrement refcount: [ptr-8] -= 1
-    EmitBytes(0x48, 0xFF, 0x48, 0xF8); // DEC qword [rax-8] -- refcount--
-
-    // Check if refcount reached zero
-    EmitMovRegMem(X86Register.Rax, -0x08, 8); // RAX = user_ptr (reload)
-    EmitBytes(0x48, 0x83, 0x78, 0xF8, 0x00); // CMP qword [rax-8], 0
-    EmitJcc("ne", "mm_decref_done");
+    // Decrement refcount: [ptr-8] -= 1 (atomic for thread safety)
+    // LOCK DEC sets ZF=1 when result reaches zero, used to branch to free path
+    EmitBytes(0xF0, 0x48, 0xFF, 0x48, 0xF8); // LOCK DEC qword [rax-8]
+    EmitJcc("ne", "mm_decref_done"); // ZF=0 means refcount > 0, skip free
 
     // refcount == 0: call destructor if non-null, then free
     // Load destructor from [ptr-16]

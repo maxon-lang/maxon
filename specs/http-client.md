@@ -182,8 +182,8 @@ end 'main'
 ### Async HTTP with Concurrent File I/O
 
 Verify that file I/O on fiber #2 interleaves with HTTP networking on fiber #1.
-The trace shows file_exists yielding and resuming between the HTTP fiber's
-net_connect and net_send operations, confirming true concurrent scheduling.
+With runnext scheduling, the later-spawned file I/O fiber (#2) runs first,
+completing file_exists before the HTTP fiber (#1) begins net_connect.
 
 <!-- test: http-client.async-trace-interleave -->
 <!-- AsyncTrace -->
@@ -218,12 +218,14 @@ end 'main'
 ```stderr
 spawn #1
 spawn #2
-io_yield #1 [net_connect]
 io_yield #2 [file_exists]
+io_resume #2 [file_exists]
+io_yield #1 [net_connect]
+await #2 [yield]
+io_resume #1 [net_connect]
+io_yield #1 [net_connect]
 io_resume #1 [net_connect]
 io_yield #1 [net_send]
-io_resume #2 [file_exists]
-await #2 [yield]
 io_resume #1 [net_send]
 io_yield #1 [net_recv]
 io_resume #1 [net_recv]

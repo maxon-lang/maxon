@@ -576,9 +576,9 @@ var p = async longRunning()
 p.cancel()
 ```
 
-- All green threads run on a single OS thread (cooperative scheduling)
-- Context switches only at `await` points
-- Growable stacks (2KB initial, doubles as needed)
+- Green threads are distributed across OS worker threads (one per CPU core)
+- Context switches at `await` points and I/O operations
+- Growable stacks (4KB initial, doubles as needed)
 - Throwing async functions require `try await` (not plain `await`)
 - `async` target must yield (contain I/O or `await` points)
 - Unawaited green threads are drained at program exit
