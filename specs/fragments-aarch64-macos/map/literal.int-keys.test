@@ -10,7 +10,7 @@ ExitCode: 200
 module {
   func @map.main() -> u32 {
   entry:
-    arm64.prologue stack_size=208
+    arm64.prologue stack_size=272
     arm64.mov x0, #1
     arm64.mov x1, #100
     arm64.mov x2, #2
@@ -54,7 +54,24 @@ module {
     arm64.add x0, x29, #-24
     arm64.mov x1, x0
     arm64.ldr x0, [x29, #-32]
-    arm64.str x1, [x0, #0]
+    arm64.ldr x2, [x0, #24]
+    arm64.mov x0, #3
+    arm64.mul x3, x0, x2
+    arm64.str x1, [x29, #-104]
+    arm64.str x3, [x29, #-112]
+    arm64.ldr x0, [x29, #-112]
+    arm64.bl mm_raw_alloc
+    arm64.str x0, [x29, #-120]
+    arm64.ldr x1, [x29, #-104]
+    arm64.ldr x2, [x29, #-112]
+    arm64.bl maxon_memcpy
+    arm64.ldr x1, [x29, #-32]
+    arm64.ldr x2, [x29, #-120]
+    arm64.str x2, [x1, #0]
+    arm64.mov x1, #3
+    arm64.ldr x2, [x29, #-32]
+    arm64.str x1, [x2, #16]
+    arm64.str x0, [x29, #-128]
     arm64.ldr x0, [x29, #-32]
     arm64.bl mm_incref
     arm64.mov x0, #300
@@ -97,7 +114,24 @@ module {
     arm64.add x0, x29, #-56
     arm64.mov x1, x0
     arm64.ldr x0, [x29, #-64]
-    arm64.str x1, [x0, #0]
+    arm64.ldr x2, [x0, #24]
+    arm64.mov x0, #3
+    arm64.mul x3, x0, x2
+    arm64.str x1, [x29, #-136]
+    arm64.str x3, [x29, #-144]
+    arm64.ldr x0, [x29, #-144]
+    arm64.bl mm_raw_alloc
+    arm64.str x0, [x29, #-152]
+    arm64.ldr x1, [x29, #-136]
+    arm64.ldr x2, [x29, #-144]
+    arm64.bl maxon_memcpy
+    arm64.ldr x1, [x29, #-64]
+    arm64.ldr x2, [x29, #-152]
+    arm64.str x2, [x1, #0]
+    arm64.mov x1, #3
+    arm64.ldr x2, [x29, #-64]
+    arm64.str x1, [x2, #16]
+    arm64.str x0, [x29, #-160]
     arm64.ldr x0, [x29, #-64]
     arm64.bl mm_incref
     arm64.ldr x0, [x29, #-32]
@@ -142,24 +176,24 @@ module {
     arm64.ldr x0, [x29, #-96]
     arm64.ldr x1, [x29, #-72]
     arm64.cmp x1, #0
-    arm64.b.eq map.main.__skip_guarded_99
+    arm64.b.eq map.main.__skip_guarded_117
     arm64.ldr x0, [x29, #-72]
     arm64.bl mm_decref
-    arm64.label map.main.__skip_guarded_99
+    arm64.label map.main.__skip_guarded_117
     arm64.ldr x2, [x29, #-32]
     arm64.cmp x2, #0
-    arm64.b.eq map.main.__skip_guarded_101
+    arm64.b.eq map.main.__skip_guarded_119
     arm64.ldr x0, [x29, #-32]
     arm64.bl mm_decref
-    arm64.label map.main.__skip_guarded_101
+    arm64.label map.main.__skip_guarded_119
     arm64.ldr x3, [x29, #-64]
     arm64.cmp x3, #0
-    arm64.b.eq map.main.__skip_guarded_103
+    arm64.b.eq map.main.__skip_guarded_121
     arm64.ldr x0, [x29, #-64]
     arm64.bl mm_decref
-    arm64.label map.main.__skip_guarded_103
+    arm64.label map.main.__skip_guarded_121
     arm64.ldr x0, [x29, #-96]
-    arm64.epilogue stack_size=208
+    arm64.epilogue stack_size=272
     arm64.ret
   }
   func @__destruct___ManagedMemory(ptr: i64) {

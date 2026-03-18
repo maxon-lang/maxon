@@ -134,8 +134,6 @@ public static partial class MaxonToStandardConversion {
       var retStructType = ResolveStructReturnType(func.ReturnType, module.TypeDefs);
       _currentFuncName = func.Name;
       _currentFuncSourceFile = func.SourceFilePath;
-      var escapingArrayLiterals = FindEscapingArrayLiterals(func);
-
       bool isStructInstanceMethod = IsStructInstanceMethod(func);
       bool isEnumInstanceMethod = IsEnumInstanceMethod(func);
       bool isInstanceMethod = isStructInstanceMethod || isEnumInstanceMethod;
@@ -822,10 +820,18 @@ public static partial class MaxonToStandardConversion {
                   var rdataPtrOp = new StdPtrToI64Op(leaRdataOp.Result);
                   newBlock.AddOp(rdataPtrOp);
                   rdataPtr = rdataPtrOp.Result;
-                } else if (escapingArrayLiterals.Contains(structLitOp.Result.Id)) {
-                  // Heap-allocate the buffer and copy element data from stack.
-                  // Stack-local element variables become invalid when the function returns,
-                  // so the buffer must live on the heap for the array to be safely returned or passed.
+                } else if (structLitOp.SkipZeroInit) {
+                  // Large scratch buffers with skipZeroInit stay on the stack — they are
+                  // temporary within a single function and not stored to heap objects.
+                  newBlock.AddOp(new StdBulkZeroOp(structLitOp.ArrayLiteralTag, structLitOp.ArrayLiteralCount, zeroInit: false));
+                  var leaOp = new StdLeaOp(structLitOp.ArrayLiteralTag);
+                  newBlock.AddOp(leaOp);
+                  var castOp = new StdPtrToI64Op(leaOp.Result);
+                  newBlock.AddOp(castOp);
+                  rdataPtr = castOp.Result;
+                } else {
+                  // Heap-allocate the buffer. Stack buffers are unsafe because
+                  // __gt_morestack can relocate the stack, making embedded stack pointers stale.
                   var leaOp = new StdLeaOp(structLitOp.ArrayLiteralTag);
                   newBlock.AddOp(leaOp);
                   var stackPtr = new StdPtrToI64Op(leaOp.Result);
@@ -863,28 +869,13 @@ public static partial class MaxonToStandardConversion {
                   }
 
                   rdataPtr = heapBuf;
-                } else {
-                  // Stack buffer is safe — array is only used within this function
-                  if (structLitOp.SkipZeroInit) {
-                    // Reserve stack space without clearing it
-                    newBlock.AddOp(new StdBulkZeroOp(structLitOp.ArrayLiteralTag, structLitOp.ArrayLiteralCount, zeroInit: false));
-                  }
-                  var leaOp = new StdLeaOp(structLitOp.ArrayLiteralTag);
-                  newBlock.AddOp(leaOp);
-                  var castOp = new StdPtrToI64Op(leaOp.Result);
-                  newBlock.AddOp(castOp);
-                  rdataPtr = castOp.Result;
-                  // No extra incref for stack-buffer elements: scope cleanup tracks
-                  // __arr_N.M variables and decrefs them. The destructor's
-                  // mm_decref_managed_elements is a no-op for capacity==0 buffers.
                 }
 
-                // Set capacity for heap-allocated writable buffers only.
-                // Stack buffers and rdata buffers get capacity=0 (treated as read-only by COW check,
-                // and skipped by the __ManagedMemory destructor to avoid freeing non-heap memory).
+                // Writable (non-constant) buffers get capacity=count so COW check passes.
+                // Constant (rdata) and skipZeroInit (stack scratch) buffers get capacity=0
+                // (read-only for COW, skipped by destructor to avoid freeing non-heap memory).
                 bool isConstantBuffer = module.ConstantArrayLiterals.ContainsKey(structLitOp.Result.Id);
-                bool isHeapEscapeBuffer = escapingArrayLiterals.Contains(structLitOp.Result.Id) && !isConstantBuffer;
-                bool bufferIsWritable = isHeapEscapeBuffer;
+                bool bufferIsWritable = !isConstantBuffer; // all non-constant buffers are now heap-allocated
                 if (TypeAliasInfo.IsManagedMemoryType(structLitOp.TypeName, module.TypeAliasSources)) {
                   // buffer is directly on this struct at offset 0
                   var bufferField = structType.GetField("buffer")!;

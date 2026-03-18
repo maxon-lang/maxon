@@ -150,11 +150,14 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
 
     // Write spec count flag on successful unfiltered run
     if (_filter == null && generationErrors.IsEmpty) {
-      FragmentGenerator.WriteSpecCountFlagPublic(_specDir, _fragmentDir);
+      FragmentGenerator.WriteSpecCountFlagPublic(_specDir, _fragmentDir, _target);
     }
 
     // Clean up generated .exe files in fragment directories
     CleanupExecutables(_fragmentDir);
+
+    // Clean up temp directory (leftover executables from interrupted or failed runs)
+    CleanupExecutables(_tempDir);
 
     var resultList = results.Where(r => r != null).ToList();
     var passed = resultList.Count(r => r.Passed);
@@ -218,18 +221,38 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
   }
 
   /// <summary>
-  /// Recursively clean up .exe files from the fragment directory and its subdirectories.
+  /// Recursively clean up compiled executables from the fragment directory and its subdirectories.
+  /// On Windows, these are .exe files. On macOS/Linux, these are extensionless files
+  /// whose name matches a .test file in the same directory.
   /// </summary>
   private static void CleanupExecutables(string directory) {
     if (!Directory.Exists(directory)) return;
 
     try {
-      // Delete .exe files in this directory
+      // Delete .exe and .ir_exe files in this directory
       foreach (var exeFile in Directory.GetFiles(directory, "*.exe")) {
         try {
           File.Delete(exeFile);
         } catch {
           // Ignore deletion errors (file may be locked)
+        }
+      }
+      foreach (var irExeFile in Directory.GetFiles(directory, "*.ir_exe")) {
+        try {
+          File.Delete(irExeFile);
+        } catch {
+          // Ignore deletion errors (file may be locked)
+        }
+      }
+
+      // Delete extensionless executables (macOS/Linux) that have a matching .test file
+      foreach (var file in Directory.GetFiles(directory)) {
+        if (Path.GetExtension(file) == "" && File.Exists(file + ".test")) {
+          try {
+            File.Delete(file);
+          } catch {
+            // Ignore deletion errors (file may be locked)
+          }
         }
       }
 
@@ -421,6 +444,8 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
 
         // Run the executable if we have runtime expectations
         if (successExpectation.ExitCode.HasValue || successExpectation.Stdout != null || successExpectation.Stderr != null) {
+          // TEMP DEBUG: save binary for failed test analysis
+          try { File.Copy(exePath, "/tmp/spec_test_binary", true); } catch { }
           var (ExitCode, Stdout, Stderr) = RunExecutable(exePath, _tempDir, fragment.Args);
 
           if (successExpectation.ExitCode.HasValue) {

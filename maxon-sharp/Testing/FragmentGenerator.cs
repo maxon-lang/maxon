@@ -18,6 +18,13 @@ public static partial class FragmentGenerator {
   /// Get the modification time of the compiler executable.
   /// </summary>
   private static DateTime GetCompilerMtime() {
+    // Use the entry assembly location first — Environment.ProcessPath returns the dotnet
+    // host binary path when running via `dotnet run`, which doesn't change on rebuild.
+    var assemblyPath = System.Reflection.Assembly.GetEntryAssembly()?.Location;
+    if (!string.IsNullOrEmpty(assemblyPath) && File.Exists(assemblyPath)) {
+      return new FileInfo(assemblyPath).LastWriteTimeUtc;
+    }
+    // Fallback to process path (works for self-contained / published single-file)
     var exePath = Environment.ProcessPath;
     if (!string.IsNullOrEmpty(exePath) && File.Exists(exePath)) {
       return new FileInfo(exePath).LastWriteTimeUtc;
@@ -69,16 +76,6 @@ public static partial class FragmentGenerator {
   }
 
   /// <summary>
-  /// Clean the fragments directory by deleting and recreating it.
-  /// </summary>
-  private static void CleanFragmentsDirectory(string fragmentDir) {
-    if (Directory.Exists(fragmentDir)) {
-      try { Directory.Delete(fragmentDir, recursive: true); } catch { /* ignore */ }
-    }
-    Directory.CreateDirectory(fragmentDir);
-  }
-
-  /// <summary>
   /// Prepare work items from spec files. Parses specs, creates directories, checks
   /// staleness, and returns work items for the unified test pipeline.
   /// Does NOT compile anything — compilation happens in worker threads.
@@ -102,7 +99,6 @@ public static partial class FragmentGenerator {
     DeleteSpecCountFlag(fragmentDir);
 
     if (needsRegen) {
-      CleanFragmentsDirectory(fragmentDir);
       force = true;
     }
 
@@ -139,7 +135,10 @@ public static partial class FragmentGenerator {
         }
 
         var fragmentPath = Path.Combine(specFragmentDir, $"{test.Name}.test");
-        var exePath = Path.Combine(specFragmentDir, $"{test.Name}.exe");
+        // Use .ir_exe suffix to avoid collision with RunTest's pre-compiled binary path.
+        // Fragment generation compiles for IR extraction; the binary should NOT be reused
+        // by RunTest which compiles with different flags (AsyncTrace, MmTrace per-test).
+        var exePath = Path.Combine(specFragmentDir, $"{test.Name}.ir_exe");
         var fragmentFile = new FileInfo(fragmentPath);
 
         var needsRebuild = force || !fragmentFile.Exists ||
@@ -150,14 +149,34 @@ public static partial class FragmentGenerator {
       }
     }
 
+    // Clean up orphaned fragments (tests removed from specs) on unfiltered runs
+    if (needsRegen && filter == null) {
+      var expectedFragments = new HashSet<string>(workItems.Select(w => Path.GetFullPath(w.FragmentPath)), StringComparer.OrdinalIgnoreCase);
+      foreach (var specDir2 in Directory.GetDirectories(fragmentDir)) {
+        foreach (var file in Directory.GetFiles(specDir2, "*.test")) {
+          if (!expectedFragments.Contains(Path.GetFullPath(file))) {
+            try { File.Delete(file); } catch { }
+          }
+        }
+      }
+      // Remove directories for specs that no longer exist
+      var expectedSpecDirs = new HashSet<string>(specs.Select(s => Path.GetFileNameWithoutExtension(s.FilePath)), StringComparer.OrdinalIgnoreCase);
+      foreach (var dir in Directory.GetDirectories(fragmentDir)) {
+        if (!expectedSpecDirs.Contains(Path.GetFileName(dir))) {
+          try { Directory.Delete(dir, recursive: true); } catch { }
+        }
+      }
+    }
+
     return new PrepareResult([.. workItems], totalTests, errors);
   }
 
   /// <summary>
   /// Write the spec count flag after a successful unfiltered run.
   /// </summary>
-  public static void WriteSpecCountFlagPublic(string specDir, string fragmentDir) {
-    var specs = SpecParser.ParseDirectory(specDir);
+  public static void WriteSpecCountFlagPublic(string specDir, string fragmentDir, Compiler.CompileTarget? target = null) {
+    var targetKey = target != null ? $"{target.Arch}-{target.Os}" : null;
+    var specs = SpecParser.ParseDirectory(specDir, targetKey);
     var totalTests = specs.Sum(s => s.Tests.Count);
     WriteSpecCountFlag(fragmentDir, specs.Count, totalTests);
   }
@@ -248,6 +267,7 @@ public static partial class FragmentGenerator {
             sb.AppendLine($"// Compilation failed: {result.Error}");
             error ??= result.Error;
           }
+          try { if (File.Exists(exePath)) File.Delete(exePath); } catch { }
         } finally {
           try { Directory.Delete(tempDir, recursive: true); } catch { }
         }
@@ -263,6 +283,7 @@ public static partial class FragmentGenerator {
           sb.AppendLine($"// Compilation failed: {result.Error}");
           error ??= result.Error;
         }
+        try { if (File.Exists(exePath)) File.Delete(exePath); } catch { }
       }
     }
 

@@ -12,6 +12,40 @@ public partial class ARM64CodeEmitter {
 
   private const int F_GETPATH = 50; // fcntl F_GETPATH on macOS
 
+  // Timer heap layout: each entry is 16 bytes {i64 deadline_ms, ptr gt}
+  private const int TimerEntrySize    = 16;
+  private const int TimerOffDeadline  = 0;
+  private const int TimerOffGt        = 8;
+  private const int TimerHeapCapacity = 256;
+
+  // IoCompletion node: only next pointer used (results stored directly in GT struct)
+  private const int IoCompOffNext    = 0x20;
+
+  // kqueue-based async IO context: {i64 fd, ptr buf, i64 len, ptr waiter_gt, i16 filter}
+  private const int KqCtxSize       = 0x28; // 40 bytes
+  private const int KqCtxOffFd      = 0x00;
+  private const int KqCtxOffBuf     = 0x08;
+  private const int KqCtxOffLen     = 0x10;
+  private const int KqCtxOffWaiter  = 0x18;
+  private const int KqCtxOffFilter  = 0x20;
+
+  // macOS kqueue constants
+  private const int EVFILT_READ  = -1;
+  private const int EVFILT_WRITE = -2;
+  private const int EV_ADD       = 0x0001;
+  private const int EV_ONESHOT   = 0x0010;
+  private const int CLOCK_UPTIME_RAW = 0x08; // macOS monotonic clock
+
+  // Internal KqCtx filter for async connect completion (not a real kqueue filter)
+  private const int KQCTX_CONNECT = -3;
+
+  // macOS fcntl / socket constants
+  private const int F_GETFL    = 3;
+  private const int F_SETFL    = 4;
+  private const int O_NONBLOCK = 0x0004;
+  private const int SOL_SOCKET = 0xFFFF;
+  private const int SO_ERROR   = 0x1007;
+
   // --- Runtime function prologue/epilogue helpers ---
 
   private void EmitRuntimeFunctionStart(string name, int argCount, int stackSize = 0x30) {
@@ -59,6 +93,72 @@ public partial class ARM64CodeEmitter {
   /// Restore SP after a variadic function call.
   private void EmitVariadicCleanup(int bytes = 16) {
     EmitAddSubImm(ARM64Register.Sp, ARM64Register.Sp, bytes, isAdd: true);
+  }
+
+  // --- GMP scheduler TLS helpers ---
+
+  /// Emit code to load P* (ProcContext) into the given register.
+  /// X28 is the dedicated per-thread P* register.
+  private void EmitLoadP(ARM64Register dest) {
+    EmitMovRegReg(dest, ARM64Register.X28); // X28 = P* (dedicated register)
+  }
+
+  /// Emit code to load the current GreenThread pointer into dest.
+  /// LDR dest, [X28, #POffCurrentGt]
+  private void EmitLoadCurrentGt(ARM64Register dest) {
+    EmitLoadStoreUnsignedImm(0xF9400000, dest, ARM64Register.X28, POffCurrentGt, 8);
+  }
+
+  /// Emit code to store a GT pointer into P->currentGt.
+  /// STR src, [X28, #POffCurrentGt]
+  private void EmitStoreCurrentGt(ARM64Register src) {
+    EmitLoadStoreUnsignedImm(0xF9000000, src, ARM64Register.X28, POffCurrentGt, 8);
+  }
+
+  // --- os_unfair_lock helpers ---
+
+  /// Emit os_unfair_lock_lock(&lock_global). Clobbers X0.
+  private void EmitLockAcquire(string lockGlobal) {
+    EmitGlobalLeaReg(ARM64Register.X0, lockGlobal);
+    EmitCallImport("os_unfair_lock_lock");
+  }
+
+  /// Emit os_unfair_lock_unlock(&lock_global). Clobbers X0.
+  private void EmitLockRelease(string lockGlobal) {
+    EmitGlobalLeaReg(ARM64Register.X0, lockGlobal);
+    EmitCallImport("os_unfair_lock_unlock");
+  }
+
+  /// Acquire the trace output lock (only when AsyncTrace is enabled).
+  /// Uses a simple LDAXR/STLXR spin lock instead of os_unfair_lock
+  /// because os_unfair_lock deadlocks for unknown reasons on this binary's data section.
+  private void EmitTraceAcquire() {
+    if (!Compiler.AsyncTrace) return;
+    var spinLabel = $"__trace_lock_spin_{_code.Count}";
+    // X16 = &__sched_trace_lock
+    EmitGlobalLeaReg(ARM64Register.X16, "__sched_trace_lock");
+    DefineLabel(spinLabel);
+    // LDAXR X17, [X16]
+    EmitWord(0xC85FFC00 | (Reg(ARM64Register.X16) << 5) | Reg(ARM64Register.X17));
+    // CBNZ X17, spin (already locked)
+    EmitCbnz(ARM64Register.X17, spinLabel);
+    // STLXR W17, X17(=1), [X16]  — try to set lock to 1
+    EmitMovRegImm(ARM64Register.X17, 1);
+    EmitWord(0xC800FC00 | (Reg(ARM64Register.X16) << 5) | (17u << 16) | Reg(ARM64Register.X17));
+    // CBNZ W17, spin (CAS failed)
+    _condBranchFixups.Add((_code.Count, spinLabel));
+    EmitWord(0x35000000 | 17u); // CBNZ W17
+  }
+
+  /// Release the trace output lock (only when AsyncTrace is enabled).
+  private void EmitTraceRelease() {
+    if (!Compiler.AsyncTrace) return;
+    // Store 0 to __sched_trace_lock with release semantics
+    // STLR XZR, [X16] — X16 was set by EmitTraceAcquire, but may have been clobbered.
+    // Reload the address:
+    EmitGlobalLeaReg(ARM64Register.X16, "__sched_trace_lock");
+    // STLR XZR, [X16]  (store-release of 0)
+    EmitWord(0xC89FFC00 | (Reg(ARM64Register.X16) << 5) | Reg(ARM64Register.Xzr));
   }
 
   // --- Libc error checking ---
@@ -122,6 +222,9 @@ public partial class ARM64CodeEmitter {
     EmitMaxonManagedDirClose();
     EmitDestructManagedDirectory();
     EmitMaxonFileExists();
+    EmitMmRawAlloc260();
+    EmitMaxonU64ToStringFmt();
+    EmitMaxonSleep();
 
     // Green thread runtime for async/await
     EmitGreenThreadRuntime();
@@ -2611,14 +2714,17 @@ public partial class ARM64CodeEmitter {
   private const int GtOffCancelFlag = 0x78;
   private const int GtOffAllNext    = 0x88;
   private const int GtOffTraceId    = 0xA0;
-  private const int GtStructSize    = 0xA8; // 168 bytes
+  private const int GtOffIoYielded  = 0xA8; // ioYielded flag for I/O completion protocol
+  private const int GtStructSize    = 0xB0; // 176 bytes
 
   private const int GtStatusReady    = 0;
   private const int GtStatusRunning  = 1;
   private const int GtStatusCompleted = 2;
   private const int GtStatusWaiting  = 3;
 
-  private const int GtInitialStackSize = 0x10000; // 64KB
+  private const int GtInitialStackSize = 0x800; // 2KB (grows on demand via __gt_morestack)
+  private const int GtStackGuardMargin = 0x3A0; // 928 bytes
+  private const int PSystemStackSize   = 0x2000; // 8KB system stack per P for morestack
 
   // I/O result fields in GreenThread struct (used by async I/O)
   private const int GtOffIoResultVal = 0x60; // raw result value
@@ -2645,23 +2751,78 @@ public partial class ARM64CodeEmitter {
   private const long SyncOpNetSend       = 11;
   private const long SyncOpNetRecv       = 12;
   private const long SyncOpNetClose      = 13;
+  private const long SyncOpShutdown      = 99; // Sentinel to shut down sync I/O worker
 
+  // P (ProcContext) struct offsets — per-worker scheduler state (GMP model)
+  private const int POffLocalQueueHead = 0x00;
+  private const int POffLocalQueueTail = 0x08;
+  private const int POffLocalQueueLen  = 0x10;
+  private const int POffCurrentGt      = 0x18;
+  private const int POffId             = 0x20;
+  private const int POffRng            = 0x28;
+  private const int POffIdleFlag       = 0x30;
+  private const int POffWakeSemaphore  = 0x38;
+  private const int POffOsThreadHandle = 0x40;
+  private const int POffStatus         = 0x48;  // 0=unstarted, 1=active (atomic CAS)
+  private const int POffPendingWaiter  = 0x50;
+  private const int POffRunnext        = 0x58;
+  private const int POffFreeListHead   = 0x60;
+  private const int POffFreeListLen    = 0x68;
+  private const int POffSystemStackSP  = 0x70; // system stack pointer for __gt_morestack
+  private const int POffMainThread     = 0x78;  // Inline GreenThread (168 bytes)
+  private const int PStructSize        = 0x78 + GtStructSize; // 296 bytes (0x128)
+
+  // Max local queue size before overflow to global queue
+  private const int MaxLocalQueueLen = 256;
+  // Free list max size before freeing to heap
+  private const int MaxFreeListLen = 64;
+  // Fairness tick interval (check global queue every Nth dequeue)
+  private const int FairnessInterval = 61;
 
   private void EmitGreenThreadRuntime() {
-    // Define scheduler globals
-    DefineGlobal("__gt_main_thread", GtStructSize, 0);
-    DefineGlobal("__gt_current", 8, 0);
+    // GMP scheduler globals
+    DefineGlobal("__sched_procs", 8, 0);           // P*[] array pointer
+    DefineGlobal("__sched_num_procs", 8, 0);       // number of P structs allocated
+    DefineGlobal("__sched_max_procs", 8, 0);       // max worker threads (CPU count)
+    DefineGlobal("__sched_active_workers", 8, 0);   // atomic count of running workers
+    DefineGlobal("__sched_shutdown_flag", 8, 0);     // 1 = shutdown requested
+    DefineGlobal("__sched_tls_key", 8, 0);           // pthread_key_t for P*
+    DefineGlobal("__sched_global_lock", 8, 0);       // os_unfair_lock for global queue
+    DefineGlobal("__sched_all_lock", 8, 0);          // os_unfair_lock for all-threads list
+    DefineGlobal("__sched_timer_lock", 8, 0);        // os_unfair_lock for timer heap
+    DefineGlobal("__sched_io_lock", 8, 0);           // os_unfair_lock for I/O request queue
+
+    // Global run queue (shared across workers, protected by __sched_global_lock)
     DefineGlobal("__gt_run_queue_head", 8, 0);
     DefineGlobal("__gt_run_queue_tail", 8, 0);
-    DefineGlobal("__gt_live_count", 8, 0);
-    DefineGlobal("__gt_all_head", 8, 0);
 
-    // I/O request queue globals
+    // Thread tracking
+    DefineGlobal("__gt_live_count", 8, 0);           // atomic count of non-completed GTs
+    DefineGlobal("__gt_all_head", 8, 0);             // all-threads list (protected by __sched_all_lock)
+
+    // Sync I/O request queue (protected by __sched_io_lock)
     DefineGlobal("__io_sync_req_head", 8, 0);
     DefineGlobal("__io_sync_req_tail", 8, 0);
+    DefineGlobal("__io_sync_req_semaphore", 8, 0);   // dispatch_semaphore_t to wake I/O worker
+
+    // I/O completion queue (posted by sync worker, drained by scheduler)
+    DefineGlobal("__io_done_head", 8, 0);
+    DefineGlobal("__io_done_tail", 8, 0);
+    DefineGlobal("__io_done_lock", 8, 0);            // os_unfair_lock for done queue
+
+    // Timer heap globals (protected by __sched_timer_lock)
+    DefineGlobal("__gt_timer_heap", TimerHeapCapacity * TimerEntrySize, 0); // 256 entries * 16 bytes
+    DefineGlobal("__gt_timer_count", 8, 0);
+
+    // kqueue globals (kqueue is thread-safe on macOS)
+    DefineGlobal("__io_kqueue_fd", 8, 0);
+    DefineGlobal("__io_kevent_buf", 32 * 32, 0); // 32 kevent structs * 32 bytes each
+
+    // Trace lock always defined to keep data layout stable (only used when AsyncTrace is enabled)
+    DefineGlobal("__gt_trace_counter", 8, 0);
+    DefineGlobal("__sched_trace_lock", 8, 0);
 
     if (Compiler.AsyncTrace) {
-      DefineGlobal("__gt_trace_counter", 8, 0);
       DefineSymdata("__at_tag_spawn", "spawn #\0"u8.ToArray());
       DefineSymdata("__at_tag_await", "await #\0"u8.ToArray());
       DefineSymdata("__at_tag_await_yield", " [yield]\0"u8.ToArray());
@@ -2683,11 +2844,18 @@ public partial class ARM64CodeEmitter {
       DefineSymdata("__at_io_op_net_send", " [net_send]\0"u8.ToArray());
       DefineSymdata("__at_io_op_net_recv", " [net_recv]\0"u8.ToArray());
       DefineSymdata("__at_io_op_net_close", " [net_close]\0"u8.ToArray());
+      DefineSymdata("__at_tag_sleep_yield", "sleep_yield #\0"u8.ToArray());
+      DefineSymdata("__at_tag_sleep_resume", "sleep_resume #\0"u8.ToArray());
     }
+
+    DefineSymdata("__io_panic_msg", "PANIC: unknown I/O op code\n\0"u8.ToArray());
+
 
     EmitGtInit();
     EmitGtEnqueue();
     EmitGtDequeue();
+    EmitGtStealWork();
+    EmitSchedWorkerLoop();
     EmitGtSpawn();
     EmitGtTrampoline();
     EmitGtContextSwitch();
@@ -2696,85 +2864,695 @@ public partial class ARM64CodeEmitter {
     EmitGtYield();
     EmitGtCancel();
     EmitGtCleanup();
+    EmitGtProcessPendingWaiter();
+    EmitGtTimerAdd();
+    EmitGtTimerCheck();
+    EmitGtMorestack();
+    EmitGtPanicIo();
     EmitIoRuntime();
   }
 
   /// <summary>
   /// __gt_init(): Initialize the main thread's GreenThread struct.
-  /// Called from _start before main. Sets status=running, stores to __gt_current.
+  /// Called from _start before main. Sets status=running, sets X28 = P[0].
   /// </summary>
   private void EmitGtInit() {
-    EmitRuntimeFunctionStart("__gt_init", 0, 0x30);
+    // __gt_init(): Initialize the GMP scheduler.
+    // Allocates TLS key, queries CPU count, allocates P structs with wake semaphores,
+    // sets P[0] as the main thread's P, initializes kqueue.
+    // Stack: [x29+16]=P[0], [x29+24]=procs_array, [x29+32]=max_procs, [x29+40]=loop_i, [x29+48]=current_P
+    EmitRuntimeFunctionStart("__gt_init", 0, 0x80);
 
-    // Load address of __gt_main_thread
-    EmitGlobalLeaReg(ARM64Register.X0, "__gt_main_thread");
-    // Set status = running (1)
+    // Step 1: Allocate TLS key — pthread_key_create(&__sched_tls_key, NULL)
+    EmitGlobalLeaReg(ARM64Register.X0, "__sched_tls_key");
+    EmitMovRegImm(ARM64Register.X1, 0); // destructor = NULL
+    EmitCallImport("pthread_key_create");
+
+    // Step 2: Query CPU count — sysconf(_SC_NPROCESSORS_ONLN)
+    EmitMovRegImm(ARM64Register.X0, 58); // _SC_NPROCESSORS_ONLN = 58 on macOS
+    EmitCallImport("sysconf");
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X29, 32, 8); // [x29+32] = max_procs
+    EmitGlobalStoreReg(ARM64Register.X0, "__sched_max_procs");
+    EmitGlobalStoreReg(ARM64Register.X0, "__sched_num_procs");
+
+    // Step 3: Allocate P*[] array — mm_raw_alloc(max_procs * 8)
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X29, 32, 8);
+    // LSL X0, X0, #3  (multiply by 8)
+    EmitWord(0xD37DF000);
+    EmitBranchLink("mm_raw_alloc");
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X29, 24, 8); // [x29+24] = procs_array
+    EmitGlobalStoreReg(ARM64Register.X0, "__sched_procs");
+
+    // Step 4: Loop to allocate P structs
+    EmitMovRegImm(ARM64Register.X0, 0);
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X29, 40, 8); // [x29+40] = i = 0
+    DefineLabel("__sched_init_ploop");
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X29, 40, 8); // i
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X1, ARM64Register.X29, 32, 8); // max_procs
+    // CMP X0, X1
+    EmitWord(0xEB01001F);
+    EmitBranchCond(ARM64ConditionCode.Hs, "__sched_init_ploop_done"); // i >= max_procs → done
+
+    // Allocate P[i] struct
+    EmitMovRegImm(ARM64Register.X0, PStructSize);
+    EmitBranchLink("mm_raw_alloc");
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X29, 48, 8); // [x29+48] = P[i]
+
+    // Store P[i] into procs_array[i]
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X1, ARM64Register.X29, 24, 8); // procs_array
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X2, ARM64Register.X29, 40, 8); // i
+    // X1 = procs_array + i * 8: ADD X1, X1, X2, LSL #3
+    EmitWord(0x8B020C21);
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X1, 0, 8);
+
+    // Set P[i]->id = i
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X9, ARM64Register.X29, 48, 8); // P[i]
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X29, 40, 8); // i
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X9, POffId, 8);
+
+    // Set P[i]->rng = i + 1 (non-zero xorshift64 seed)
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X29, 40, 8);
+    EmitAddSubImm(ARM64Register.X0, ARM64Register.X0, 1, isAdd: true);
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X9, POffRng, 8);
+
+    // Create wake semaphore: dispatch_semaphore_create(0)
+    EmitMovRegImm(ARM64Register.X0, 0);
+    EmitCallImport("dispatch_semaphore_create");
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X9, ARM64Register.X29, 48, 8); // P[i]
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X9, POffWakeSemaphore, 8);
+
+    // Allocate system stack for morestack: mmap(NULL, 8KB, PROT_READ|PROT_WRITE, MAP_ANON|MAP_PRIVATE, -1, 0)
+    EmitMovRegImm(ARM64Register.X0, 0);
+    EmitMovRegImm(ARM64Register.X1, PSystemStackSize);
+    EmitMovRegImm(ARM64Register.X2, 3);       // PROT_READ|PROT_WRITE
+    EmitMovRegImm(ARM64Register.X3, 0x1002);  // MAP_ANON|MAP_PRIVATE
+    EmitMovRegImm(ARM64Register.X4, -1);
+    EmitMovRegImm(ARM64Register.X5, 0);
+    EmitCallImport("mmap");
+    // Store top of system stack (base + size) in P->systemStackSP
+    EmitAddSubImm(ARM64Register.X0, ARM64Register.X0, PSystemStackSize, isAdd: true);
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X9, ARM64Register.X29, 48, 8); // P[i]
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X9, POffSystemStackSP, 8);
+
+    // Increment loop counter
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X29, 40, 8);
+    EmitAddSubImm(ARM64Register.X0, ARM64Register.X0, 1, isAdd: true);
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X29, 40, 8);
+    EmitBranch("__sched_init_ploop");
+    DefineLabel("__sched_init_ploop_done");
+
+    // Step 5: Set P[0] as the active worker for the main OS thread
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X29, 24, 8); // procs_array
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X0, 0, 8);   // P[0]
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X29, 16, 8); // [x29+16] = P[0]
+
+    // P[0]->status = 1 (active)
+    EmitMovRegImm(ARM64Register.X1, 1);
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X1, ARM64Register.X0, POffStatus, 8);
+
+    // Set TLS: pthread_setspecific(__sched_tls_key, P[0])
+    EmitGlobalLoadReg(ARM64Register.X0, "__sched_tls_key");
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X1, ARM64Register.X29, 16, 8); // P[0]
+    EmitCallImport("pthread_setspecific");
+
+    // Set active_workers = 1
+    EmitMovRegImm(ARM64Register.X0, 1);
+    EmitGlobalStoreReg(ARM64Register.X0, "__sched_active_workers");
+
+    // Initialize P[0].mainThread: status = Running, stackBase = 0 (already zero from alloc)
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X9, ARM64Register.X29, 16, 8); // P[0]
+    EmitAddSubImm(ARM64Register.X0, ARM64Register.X9, POffMainThread, isAdd: true);   // X0 = &P[0].mainThread
     EmitMovRegImm(ARM64Register.X1, GtStatusRunning);
     EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X1, ARM64Register.X0, GtOffStatus, 8);
-    // stackguard is already 0 (main thread's stack check always passes)
 
-    // Store to __gt_current
-    EmitGlobalStoreReg(ARM64Register.X0, "__gt_current");
+    // P[0]->currentGt = &P[0].mainThread
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X9, POffCurrentGt, 8);
+
+    // Set X28 = P[0] for the main OS thread
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X28, ARM64Register.X29, 16, 8); // X28 = P[0] from stack
+
+    // Step 6: Initialize kqueue
+    EmitCallImport("kqueue");
+    EmitGlobalStoreReg(ARM64Register.X0, "__io_kqueue_fd");
+
+    // Step 7: Create I/O sync request semaphore
+    EmitMovRegImm(ARM64Register.X0, 0);
+    EmitCallImport("dispatch_semaphore_create");
+    EmitGlobalStoreReg(ARM64Register.X0, "__io_sync_req_semaphore");
+
+    // Step 8: Spawn the I/O sync worker thread
+    // pthread_create(&tid, NULL, __io_sync_worker_loop, NULL)
+    EmitAddSubImm(ARM64Register.X0, ARM64Register.X29, 56, isAdd: true); // X0 = &tid (unused, on stack)
+    EmitMovRegImm(ARM64Register.X1, 0); // attr = NULL
+    EmitAdrpAddFixup(ARM64Register.X2, _funcAddrAdrpFixups, "__io_sync_worker_loop"); // function pointer
+    EmitMovRegImm(ARM64Register.X3, 0); // arg = NULL
+    EmitCallImport("pthread_create");
 
     EmitRuntimeFunctionEnd();
   }
 
   /// <summary>
-  /// __gt_enqueue(gt_x0): Add a GreenThread to the tail of the run queue.
+  /// __gt_enqueue(gt_x0): GMP enqueue — try runnext, then local queue, then global queue.
+  /// After enqueue, wake an idle worker if available.
+  /// Stack: [x29+16]=gt, [x29+24]=P*, [x29+32]=displaced_gt
   /// </summary>
   private void EmitGtEnqueue() {
-    EmitRuntimeFunctionStart("__gt_enqueue", 1, 0x30);
-    // [x29+16] = gt (arg 0)
+    EmitRuntimeFunctionStart("__gt_enqueue", 1, 0x50);
 
     // gt.next = 0
     EmitReloadArg(0); // X0 = gt
     EmitMovRegImm(ARM64Register.X1, 0);
     EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X1, ARM64Register.X0, GtOffNext, 8);
 
-    // if tail == NULL: head = tail = gt
-    EmitGlobalLoadReg(ARM64Register.X1, "__gt_run_queue_tail");
-    EmitCbnz(ARM64Register.X1, "__gt_enqueue_append");
+    // Load P* from X28 (dedicated register; X28=0 on I/O worker → routes to global queue)
+    EmitLoadP(ARM64Register.X9);
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X9, ARM64Register.X29, 24, 8); // [x29+24] = P*
+    // If P* == NULL (called from I/O worker thread): go to global queue
+    EmitCbz(ARM64Register.X9, "__gt_enqueue_global");
 
-    // Empty queue: set both head and tail
+    // --- Try runnext slot ---
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X1, ARM64Register.X9, POffRunnext, 8);
+    EmitCbnz(ARM64Register.X1, "__gt_enqueue_displace");
+
+    // Runnext empty: P->runnext = gt
     EmitReloadArg(0);
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X9, ARM64Register.X29, 24, 8);
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X9, POffRunnext, 8);
+    EmitBranch("__gt_enqueue_wake");
+
+    // --- Runnext occupied: displace old to local queue, set new as runnext ---
+    DefineLabel("__gt_enqueue_displace");
+    // X1 = old runnext (save it)
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X1, ARM64Register.X29, 32, 8); // [x29+32] = displaced
+    // Set P->runnext = new gt
+    EmitReloadArg(0);
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X9, ARM64Register.X29, 24, 8);
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X9, POffRunnext, 8);
+    // Clear displaced.next
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X29, 32, 8); // displaced gt
+    EmitMovRegImm(ARM64Register.X1, 0);
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X1, ARM64Register.X0, GtOffNext, 8);
+
+    // --- Enqueue displaced to local queue ---
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X9, ARM64Register.X29, 24, 8); // P*
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X1, ARM64Register.X9, POffLocalQueueLen, 8);
+    EmitCmpImm(ARM64Register.X1, MaxLocalQueueLen);
+    EmitBranchCond(ARM64ConditionCode.Hs, "__gt_enqueue_displaced_global"); // local full → global
+
+    // Local queue: append displaced to tail
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X29, 32, 8); // displaced
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X2, ARM64Register.X9, POffLocalQueueTail, 8);
+    EmitCbnz(ARM64Register.X2, "__gt_enqueue_local_append");
+    // Local queue empty: head = tail = displaced
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X9, POffLocalQueueHead, 8);
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X9, POffLocalQueueTail, 8);
+    EmitBranch("__gt_enqueue_local_inc");
+
+    DefineLabel("__gt_enqueue_local_append");
+    // tail.next = displaced; tail = displaced
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X2, GtOffNext, 8);
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X9, POffLocalQueueTail, 8);
+
+    DefineLabel("__gt_enqueue_local_inc");
+    // P->localQueueLen++
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X1, ARM64Register.X9, POffLocalQueueLen, 8);
+    EmitAddSubImm(ARM64Register.X1, ARM64Register.X1, 1, isAdd: true);
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X1, ARM64Register.X9, POffLocalQueueLen, 8);
+    EmitBranch("__gt_enqueue_wake");
+
+    // --- Displaced goes to global queue (local full) ---
+    DefineLabel("__gt_enqueue_displaced_global");
+    EmitLockAcquire("__sched_global_lock");
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X29, 32, 8); // displaced gt
+    EmitGlobalLoadReg(ARM64Register.X1, "__gt_run_queue_tail");
+    EmitCbnz(ARM64Register.X1, "__gt_enqueue_dg_append");
     EmitGlobalStoreReg(ARM64Register.X0, "__gt_run_queue_head");
     EmitGlobalStoreReg(ARM64Register.X0, "__gt_run_queue_tail");
-    EmitRuntimeFunctionEnd();
-
-    DefineLabel("__gt_enqueue_append");
-    // tail.next = gt
-    EmitGlobalLoadReg(ARM64Register.X1, "__gt_run_queue_tail");
-    EmitReloadArg(0); // X0 = gt
+    EmitBranch("__gt_enqueue_dg_done");
+    DefineLabel("__gt_enqueue_dg_append");
     EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X1, GtOffNext, 8);
-    // tail = gt
     EmitGlobalStoreReg(ARM64Register.X0, "__gt_run_queue_tail");
+    DefineLabel("__gt_enqueue_dg_done");
+    EmitLockRelease("__sched_global_lock");
+    EmitBranch("__gt_enqueue_wake");
+
+    // --- Global queue (no P* available, e.g. I/O worker) ---
+    DefineLabel("__gt_enqueue_global");
+    EmitLockAcquire("__sched_global_lock");
+    EmitReloadArg(0);
+    EmitGlobalLoadReg(ARM64Register.X1, "__gt_run_queue_tail");
+    EmitCbnz(ARM64Register.X1, "__gt_enqueue_g_append");
+    EmitGlobalStoreReg(ARM64Register.X0, "__gt_run_queue_head");
+    EmitGlobalStoreReg(ARM64Register.X0, "__gt_run_queue_tail");
+    EmitBranch("__gt_enqueue_g_done");
+    DefineLabel("__gt_enqueue_g_append");
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X1, GtOffNext, 8);
+    EmitGlobalStoreReg(ARM64Register.X0, "__gt_run_queue_tail");
+    DefineLabel("__gt_enqueue_g_done");
+    EmitLockRelease("__sched_global_lock");
+
+    // --- Wake phase: find an idle worker and signal it ---
+    DefineLabel("__gt_enqueue_wake");
+    // Check shutdown flag
+    EmitGlobalLoadReg(ARM64Register.X0, "__sched_shutdown_flag");
+    EmitCbnz(ARM64Register.X0, "__gt_enqueue_ret");
+
+    // Scan P[1..num_procs-1] for idle workers
+    EmitGlobalLoadReg(ARM64Register.X10, "__sched_procs");    // procs array
+    EmitGlobalLoadReg(ARM64Register.X11, "__sched_num_procs"); // num procs
+    EmitMovRegImm(ARM64Register.X12, 1); // i = 1 (skip P[0])
+    DefineLabel("__gt_enqueue_wake_loop");
+    // CMP X12, X11
+    EmitWord(0xEB0B019F);
+    EmitBranchCond(ARM64ConditionCode.Hs, "__gt_enqueue_try_spawn"); // i >= num_procs → no idle workers, try spawn
+
+    // Load P[i]
+    // X13 = procs[i]: LDR X13, [X10, X12, LSL #3]
+    EmitWord(0xF86C794D);
+    // Check P[i]->idleFlag
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X14, ARM64Register.X13, POffIdleFlag, 8);
+    EmitCbz(ARM64Register.X14, "__gt_enqueue_wake_next"); // not idle → next
+
+    // Found idle worker — clear idleFlag, signal semaphore
+    EmitMovRegImm(ARM64Register.X14, 0);
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X14, ARM64Register.X13, POffIdleFlag, 8);
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X13, POffWakeSemaphore, 8);
+    EmitCallImport("dispatch_semaphore_signal");
+    EmitBranch("__gt_enqueue_ret");
+
+    DefineLabel("__gt_enqueue_wake_next");
+    EmitAddSubImm(ARM64Register.X12, ARM64Register.X12, 1, isAdd: true);
+    EmitBranch("__gt_enqueue_wake_loop");
+
+    // --- No idle workers found: try to spawn a new worker thread ---
+    DefineLabel("__gt_enqueue_try_spawn");
+    // Check if active_workers < max_procs
+    EmitGlobalLoadReg(ARM64Register.X0, "__sched_active_workers");
+    EmitGlobalLoadReg(ARM64Register.X1, "__sched_max_procs");
+    // CMP X0, X1
+    EmitWord(0xEB01001F);
+    EmitBranchCond(ARM64ConditionCode.Hs, "__gt_enqueue_ret"); // all workers active
+
+    // Scan P[1..N] for P[i]->status == 0 (unstarted)
+    EmitGlobalLoadReg(ARM64Register.X10, "__sched_procs");
+    EmitGlobalLoadReg(ARM64Register.X11, "__sched_num_procs");
+    EmitMovRegImm(ARM64Register.X12, 1); // i = 1
+
+    DefineLabel("__gt_enqueue_spawn_loop");
+    // CMP X12, X11
+    EmitWord(0xEB0B019F);
+    EmitBranchCond(ARM64ConditionCode.Hs, "__gt_enqueue_ret"); // no unstarted workers found
+
+    // Load P[i]: LDR X13, [X10, X12, LSL #3]
+    EmitWord(0xF86C794D);
+
+    // Atomic CAS on P[i]->status: try to set 0→1
+    // ADD X14, X13, #POffStatus
+    EmitAddSubImm(ARM64Register.X14, ARM64Register.X13, POffStatus, isAdd: true);
+
+    DefineLabel("__gt_enqueue_cas_retry");
+    // LDAXR X0, [X14]
+    EmitWord(0xC85FFC00 | (Reg(ARM64Register.X14) << 5) | Reg(ARM64Register.X0));
+    // CBNZ X0, __gt_enqueue_spawn_next (already started)
+    EmitCbnz(ARM64Register.X0, "__gt_enqueue_spawn_next");
+
+    // STLXR W15, X1(=1), [X14]
+    EmitMovRegImm(ARM64Register.X1, 1);
+    EmitWord(0xC800FC00 | (Reg(ARM64Register.X14) << 5) | (15u << 16) | Reg(ARM64Register.X1));
+    // CBNZ W15, cas_retry (32-bit CBNZ for STLXR result)
+    _condBranchFixups.Add((_code.Count, "__gt_enqueue_cas_retry"));
+    EmitWord(0x35000000 | 15u);
+
+    // CAS succeeded! Save X13 (P[i]) to stack [x29+40]
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X13, ARM64Register.X29, 40, 8);
+
+    // Atomic increment active_workers
+    EmitGlobalLeaReg(ARM64Register.X14, "__sched_active_workers");
+    DefineLabel("__gt_enqueue_inc_retry");
+    // LDAXR X0, [X14]
+    EmitWord(0xC85FFC00 | (Reg(ARM64Register.X14) << 5) | Reg(ARM64Register.X0));
+    EmitAddSubImm(ARM64Register.X0, ARM64Register.X0, 1, isAdd: true);
+    // STLXR W15, X0, [X14]
+    EmitWord(0xC800FC00 | (Reg(ARM64Register.X14) << 5) | (15u << 16) | Reg(ARM64Register.X0));
+    // CBNZ W15, inc_retry (32-bit CBNZ for STLXR result)
+    _condBranchFixups.Add((_code.Count, "__gt_enqueue_inc_retry"));
+    EmitWord(0x35000000 | 15u);
+
+    // pthread_create(&P[i]->osThreadHandle, NULL, __sched_worker_loop, P[i])
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X13, ARM64Register.X29, 40, 8); // reload P[i]
+    EmitAddSubImm(ARM64Register.X0, ARM64Register.X13, POffOsThreadHandle, isAdd: true); // &tid
+    EmitMovRegImm(ARM64Register.X1, 0); // attr = NULL
+    EmitAdrpAddFixup(ARM64Register.X2, _funcAddrAdrpFixups, "__sched_worker_loop");
+    EmitMovRegReg(ARM64Register.X3, ARM64Register.X13); // arg = P[i]
+    EmitCallImport("pthread_create");
+
+    EmitBranch("__gt_enqueue_ret");
+
+    DefineLabel("__gt_enqueue_spawn_next");
+    EmitAddSubImm(ARM64Register.X12, ARM64Register.X12, 1, isAdd: true);
+    EmitBranch("__gt_enqueue_spawn_loop");
+
+    DefineLabel("__gt_enqueue_ret");
     EmitRuntimeFunctionEnd();
   }
 
   /// <summary>
-  /// __gt_dequeue() -> GreenThread* in X0 (or NULL if queue empty).
+  /// __gt_dequeue() -> GreenThread* in X0 (or NULL if empty).
+  /// GMP dequeue: check runnext, then local queue (with fairness), then global queue.
+  /// Stack: [x29+16]=P*
   /// </summary>
   private void EmitGtDequeue() {
-    EmitRuntimeFunctionStart("__gt_dequeue", 0, 0x30);
+    EmitRuntimeFunctionStart("__gt_dequeue", 0, 0x40);
 
-    EmitGlobalLoadReg(ARM64Register.X0, "__gt_run_queue_head");
-    // If head == NULL, return NULL
-    EmitCbnz(ARM64Register.X0, "__gt_dequeue_nonempty");
+    // Load P* via TLS
+    EmitLoadP(ARM64Register.X9);
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X9, ARM64Register.X29, 16, 8); // save P*
+
+    // --- Check runnext slot ---
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X9, POffRunnext, 8);
+    EmitCbz(ARM64Register.X0, "__gt_dequeue_check_fairness");
+    // Clear runnext and return it
+    EmitMovRegImm(ARM64Register.X1, 0);
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X1, ARM64Register.X9, POffRunnext, 8);
+    // Clear gt.next
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X1, ARM64Register.X0, GtOffNext, 8);
     EmitRuntimeFunctionEnd();
 
-    DefineLabel("__gt_dequeue_nonempty");
-    // new_head = head.next
-    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X1, ARM64Register.X0, GtOffNext, 8);
-    EmitGlobalStoreReg(ARM64Register.X1, "__gt_run_queue_head");
-    // If new head == NULL, clear tail too
-    EmitCbnz(ARM64Register.X1, "__gt_dequeue_done");
-    EmitMovRegImm(ARM64Register.X1, 0);
-    EmitGlobalStoreReg(ARM64Register.X1, "__gt_run_queue_tail");
-    DefineLabel("__gt_dequeue_done");
-    // Clear the dequeued node's next pointer
+    // --- Fairness check: xorshift64 on P->rng ---
+    DefineLabel("__gt_dequeue_check_fairness");
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X9, ARM64Register.X29, 16, 8); // P*
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X9, POffRng, 8);
+    // xorshift64: x ^= x << 13; x ^= x >> 7; x ^= x << 17
+    // EOR X0, X0, X0, LSL #13
+    EmitWord(0xCA003400);
+    // EOR X0, X0, X0, LSR #7
+    EmitWord(0xCA001C00);
+    // EOR X0, X0, X0, LSL #17
+    EmitWord(0xCA004400);
+    // Store back P->rng
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X9, POffRng, 8);
+    // Check if x % 61 == 0 (fairness tick)
+    EmitMovRegImm(ARM64Register.X1, FairnessInterval);
+    // UDIV X2, X0, X1
+    EmitWord(0x9AC10802);
+    // MSUB X2, X2, X1, X0 (X2 = X0 - X2*X1 = X0 % 61)
+    EmitWord(0x9B018040);
+    // If remainder == 0: check global first
+    EmitCbz(ARM64Register.X0, "__gt_dequeue_global");
+
+    // --- Local queue ---
+    DefineLabel("__gt_dequeue_local");
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X9, ARM64Register.X29, 16, 8); // P*
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X1, ARM64Register.X9, POffLocalQueueLen, 8);
+    EmitCbz(ARM64Register.X1, "__gt_dequeue_global"); // local empty → global
+
+    // Dequeue from local head
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X9, POffLocalQueueHead, 8);
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X2, ARM64Register.X0, GtOffNext, 8); // new head
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X2, ARM64Register.X9, POffLocalQueueHead, 8);
+    // If new head == NULL, clear tail
+    EmitCbnz(ARM64Register.X2, "__gt_dequeue_local_dec");
+    EmitMovRegImm(ARM64Register.X2, 0);
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X2, ARM64Register.X9, POffLocalQueueTail, 8);
+    DefineLabel("__gt_dequeue_local_dec");
+    // len--
+    EmitAddSubImm(ARM64Register.X1, ARM64Register.X1, 1, isAdd: false);
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X1, ARM64Register.X9, POffLocalQueueLen, 8);
+    // Clear gt.next
     EmitMovRegImm(ARM64Register.X1, 0);
     EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X1, ARM64Register.X0, GtOffNext, 8);
-    // X0 = dequeued gt
+    EmitRuntimeFunctionEnd();
+
+    // --- Global queue (locked) ---
+    DefineLabel("__gt_dequeue_global");
+    EmitLockAcquire("__sched_global_lock");
+    EmitGlobalLoadReg(ARM64Register.X0, "__gt_run_queue_head");
+    EmitCbz(ARM64Register.X0, "__gt_dequeue_global_empty");
+
+    // Dequeue from global head
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X1, ARM64Register.X0, GtOffNext, 8);
+    EmitGlobalStoreReg(ARM64Register.X1, "__gt_run_queue_head");
+    EmitCbnz(ARM64Register.X1, "__gt_dequeue_global_done");
+    EmitMovRegImm(ARM64Register.X1, 0);
+    EmitGlobalStoreReg(ARM64Register.X1, "__gt_run_queue_tail");
+    DefineLabel("__gt_dequeue_global_done");
+    EmitLockRelease("__sched_global_lock");
+    // Clear gt.next
+    EmitMovRegImm(ARM64Register.X1, 0);
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X1, ARM64Register.X0, GtOffNext, 8);
+    EmitRuntimeFunctionEnd();
+
+    DefineLabel("__gt_dequeue_global_empty");
+    EmitLockRelease("__sched_global_lock");
+    // Try work stealing before returning NULL
+    EmitBranchLink("__gt_steal_work");
+    // X0 = stolen GT or NULL
+    EmitRuntimeFunctionEnd();
+  }
+
+  /// <summary>
+  /// __gt_steal_work() -> GreenThread* in X0 (or NULL).
+  /// Tries to steal half of a random victim P's local queue.
+  /// Returns the first stolen GT (or NULL if stealing fails).
+  /// Stack: [x29+16]=attempts, [x29+24]=stolen first, [x29+32]=stolen last, [x29+40]=n
+  /// </summary>
+  private void EmitGtStealWork() {
+    EmitRuntimeFunctionStart("__gt_steal_work", 0, 0x50);
+
+    // attempts = num_procs
+    EmitGlobalLoadReg(ARM64Register.X0, "__sched_num_procs");
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X29, 16, 8);
+
+    DefineLabel("__gt_steal_attempt");
+    // if attempts == 0: return NULL
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X29, 16, 8);
+    EmitCbz(ARM64Register.X0, "__gt_steal_fail");
+    // attempts--
+    EmitAddSubImm(ARM64Register.X0, ARM64Register.X0, 1, isAdd: false);
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X29, 16, 8);
+
+    // victim_idx = xorshift64(P->rng) % num_procs
+    EmitLoadP(ARM64Register.X9);
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X9, POffRng, 8);
+    // xorshift64: x ^= x << 13; x ^= x >> 7; x ^= x << 17
+    EmitWord(0xCA003400); // EOR X0, X0, X0, LSL #13
+    EmitWord(0xCA001C00); // EOR X0, X0, X0, LSR #7
+    EmitWord(0xCA004400); // EOR X0, X0, X0, LSL #17
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X9, POffRng, 8);
+
+    // X0 = rng value; victim_idx = X0 % num_procs
+    EmitGlobalLoadReg(ARM64Register.X1, "__sched_num_procs");
+    // UDIV X2, X0, X1
+    EmitWord(0x9AC10802);
+    // MSUB X0, X2, X1, X0 (X0 = X0 - X2*X1 = remainder)
+    EmitWord(0x9B018040);
+    // X0 = victim_idx
+
+    // Skip if victim == self (compare P ids)
+    EmitLoadP(ARM64Register.X9);
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X1, ARM64Register.X9, POffId, 8);
+    // CMP X0, X1
+    EmitWord(0xEB01001F);
+    EmitBranchCond(ARM64ConditionCode.Eq, "__gt_steal_attempt"); // same P, try again
+
+    // Load victim P: procs[victim_idx]
+    EmitGlobalLoadReg(ARM64Register.X1, "__sched_procs");
+    // ADD X1, X1, X0, LSL #3
+    EmitWord(0x8B000C21);
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X10, ARM64Register.X1, 0, 8); // X10 = victim P*
+
+    // Check victim->status == 1 (active)
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X10, POffStatus, 8);
+    EmitCmpImm(ARM64Register.X0, 1);
+    EmitBranchCond(ARM64ConditionCode.Ne, "__gt_steal_attempt"); // not active, try again
+
+    // Lock global lock for safety
+    EmitLockAcquire("__sched_global_lock");
+
+    // Check victim->localQueueLen
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X10, POffLocalQueueLen, 8);
+    EmitCmpImm(ARM64Register.X0, 2);
+    EmitBranchCond(ARM64ConditionCode.Lo, "__gt_steal_unlock_retry"); // len < 2, not worth stealing
+
+    // n = len / 2
+    // LSR X11, X0, #1
+    EmitWord(0xD341FC0B); // X11 = n = len / 2
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X11, ARM64Register.X29, 40, 8); // save n
+
+    // Walk victim's local queue n nodes
+    // first = victim->localQueueHead
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X12, ARM64Register.X10, POffLocalQueueHead, 8); // X12 = first
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X12, ARM64Register.X29, 24, 8); // save first
+
+    // Walk n-1 nodes: last_stolen starts at first, walk n-1 times
+    EmitMovRegReg(ARM64Register.X13, ARM64Register.X12); // X13 = cur = first
+    EmitAddSubImm(ARM64Register.X14, ARM64Register.X11, 1, isAdd: false); // X14 = n - 1
+
+    DefineLabel("__gt_steal_walk");
+    EmitCbz(ARM64Register.X14, "__gt_steal_walk_done");
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X13, ARM64Register.X13, GtOffNext, 8); // cur = cur->next
+    EmitAddSubImm(ARM64Register.X14, ARM64Register.X14, 1, isAdd: false);
+    EmitBranch("__gt_steal_walk");
+
+    DefineLabel("__gt_steal_walk_done");
+    // X13 = last_stolen
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X13, ARM64Register.X29, 32, 8); // save last_stolen
+
+    // Split: victim keeps second half
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X13, GtOffNext, 8); // new_victim_head
+    // last_stolen->next = NULL
+    EmitMovRegImm(ARM64Register.X1, 0);
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X1, ARM64Register.X13, GtOffNext, 8);
+    // victim->localQueueHead = new_victim_head
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X10, POffLocalQueueHead, 8);
+    // if new_victim_head == NULL: victim->localQueueTail = NULL
+    EmitCbnz(ARM64Register.X0, "__gt_steal_victim_has_tail");
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X1, ARM64Register.X10, POffLocalQueueTail, 8); // X1=0
+    DefineLabel("__gt_steal_victim_has_tail");
+    // victim->localQueueLen -= n
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X10, POffLocalQueueLen, 8);
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X11, ARM64Register.X29, 40, 8); // n
+    // SUB X0, X0, X11
+    EmitWord(0xCB0B0000);
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X10, POffLocalQueueLen, 8);
+
+    // result = first; second = first->next
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X12, ARM64Register.X29, 24, 8); // first (result)
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X12, GtOffNext, 8); // second
+    EmitCbz(ARM64Register.X0, "__gt_steal_no_extra"); // n==1, no extra to add
+
+    // Add stolen[1..n-1] to our local queue
+    EmitLoadP(ARM64Register.X9);
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X1, ARM64Register.X9, POffLocalQueueTail, 8);
+    EmitCbnz(ARM64Register.X1, "__gt_steal_append_local");
+    // Our local queue is empty: head = second
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X9, POffLocalQueueHead, 8);
+    EmitBranch("__gt_steal_set_tail");
+    DefineLabel("__gt_steal_append_local");
+    // tail->next = second
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X1, GtOffNext, 8);
+    DefineLabel("__gt_steal_set_tail");
+    // tail = last_stolen
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X13, ARM64Register.X29, 32, 8); // last_stolen
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X13, ARM64Register.X9, POffLocalQueueTail, 8);
+    // localQueueLen += (n - 1)
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X9, POffLocalQueueLen, 8);
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X11, ARM64Register.X29, 40, 8); // n
+    EmitAddSubImm(ARM64Register.X11, ARM64Register.X11, 1, isAdd: false); // n - 1
+    // ADD X0, X0, X11
+    EmitWord(0x8B0B0000);
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X9, POffLocalQueueLen, 8);
+
+    DefineLabel("__gt_steal_no_extra");
+    EmitLockRelease("__sched_global_lock");
+
+    // Return first (result) with cleared next
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X29, 24, 8); // X0 = first
+    EmitMovRegImm(ARM64Register.X1, 0);
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X1, ARM64Register.X0, GtOffNext, 8);
+    EmitRuntimeFunctionEnd();
+
+    DefineLabel("__gt_steal_unlock_retry");
+    EmitLockRelease("__sched_global_lock");
+    EmitBranch("__gt_steal_attempt");
+
+    DefineLabel("__gt_steal_fail");
+    EmitMovRegImm(ARM64Register.X0, 0);
+    EmitRuntimeFunctionEnd();
+  }
+
+  /// <summary>
+  /// __sched_worker_loop(arg_x0=P*): Entry point for worker OS threads.
+  /// pthread signature: void* (*)(void* arg)
+  /// Sets TLS, then loops: process pending waiters, check timers, dequeue+run GTs, park when idle.
+  /// Stack: [x29+16]=P*
+  /// </summary>
+  private void EmitSchedWorkerLoop() {
+    EmitRuntimeFunctionStart("__sched_worker_loop", 1, 0x40);
+    // [x29+16] = P* (passed as arg)
+
+    // Set TLS: pthread_setspecific(__sched_tls_key, P*)
+    EmitGlobalLoadReg(ARM64Register.X0, "__sched_tls_key");
+    EmitReloadArg(0); // X1 = P*
+    EmitMovRegReg(ARM64Register.X1, ARM64Register.X0);
+    // Oops — need key in X0, P* in X1. Let me redo:
+    EmitReloadArg(0); // X0 = P*  (re-read from stack since we clobbered)
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X29, 16, 8); // save P* to stack
+    EmitGlobalLoadReg(ARM64Register.X0, "__sched_tls_key"); // X0 = key
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X1, ARM64Register.X29, 16, 8); // X1 = P*
+    EmitCallImport("pthread_setspecific");
+
+    // Initialize P->mainThread: status = Running
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X9, ARM64Register.X29, 16, 8); // P*
+    EmitAddSubImm(ARM64Register.X0, ARM64Register.X9, POffMainThread, isAdd: true);
+    EmitMovRegImm(ARM64Register.X1, GtStatusRunning);
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X1, ARM64Register.X0, GtOffStatus, 8);
+    // P->currentGt = &P->mainThread
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X9, POffCurrentGt, 8);
+
+    // Set X28 = P* for this worker thread
+    EmitReloadArg(0);
+    EmitMovRegReg(ARM64Register.X28, ARM64Register.X0);
+
+    // --- Main worker loop ---
+    DefineLabel("__sched_worker_loop_top");
+
+    // Process pending waiter
+    EmitBranchLink("__gt_process_pending_waiter");
+
+    // Check timers
+    EmitBranchLink("__gt_timer_check");
+
+    // Check shutdown flag
+    EmitGlobalLoadReg(ARM64Register.X0, "__sched_shutdown_flag");
+    EmitCbnz(ARM64Register.X0, "__sched_worker_loop_exit");
+
+    // Try to dequeue a GT
+    EmitBranchLink("__gt_dequeue");
+    EmitCbz(ARM64Register.X0, "__sched_worker_park");
+
+    // Got a GT — save it, set status = Running, context-switch to it
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X29, 24, 8); // save GT to [x29+24]
+    EmitMovRegImm(ARM64Register.X1, GtStatusRunning);
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X1, ARM64Register.X0, GtOffStatus, 8);
+    // Load P* (clobbers X0)
+    EmitLoadP(ARM64Register.X9);
+    // P->currentGt = GT
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X29, 24, 8); // reload GT
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X9, POffCurrentGt, 8);
+    // Context switch: from = P->mainThread, to = GT, P* = X9
+    EmitAddSubImm(ARM64Register.X0, ARM64Register.X9, POffMainThread, isAdd: true); // X0 = from = &P->mainThread
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X1, ARM64Register.X29, 24, 8); // X1 = to = GT
+    EmitMovRegReg(ARM64Register.X2, ARM64Register.X9); // X2 = P*
+    EmitBranchLink("__gt_context_switch");
+    // Returned from context switch (GT completed or yielded)
+    EmitBranch("__sched_worker_loop_top");
+
+    // --- Park: no work available ---
+    DefineLabel("__sched_worker_park");
+    EmitLoadP(ARM64Register.X9);
+    // P->idleFlag = 1
+    EmitMovRegImm(ARM64Register.X0, 1);
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X9, POffIdleFlag, 8);
+    // dispatch_semaphore_wait(P->wakeSemaphore, timeout)
+    // timeout = dispatch_time(DISPATCH_TIME_NOW, 100ms * NSEC_PER_MSEC)
+    EmitMovRegImm(ARM64Register.X0, 0); // DISPATCH_TIME_NOW = 0
+    EmitMovRegImm(ARM64Register.X1, 100_000_000); // 100ms in nanoseconds
+    EmitCallImport("dispatch_time");
+    // X0 = timeout value; now call dispatch_semaphore_wait
+    EmitMovRegReg(ARM64Register.X1, ARM64Register.X0); // X1 = timeout
+    EmitLoadP(ARM64Register.X9);
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X9, POffWakeSemaphore, 8);
+    EmitCallImport("dispatch_semaphore_wait");
+    // Clear idle flag
+    EmitLoadP(ARM64Register.X9);
+    EmitMovRegImm(ARM64Register.X0, 0);
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X9, POffIdleFlag, 8);
+    EmitBranch("__sched_worker_loop_top");
+
+    // --- Exit ---
+    DefineLabel("__sched_worker_loop_exit");
+    EmitMovRegImm(ARM64Register.X0, 0); // return NULL
     EmitRuntimeFunctionEnd();
   }
 
@@ -2788,9 +3566,24 @@ public partial class ARM64CodeEmitter {
     // [x29+16] = func_ptr, [x29+24] = arg_count, [x29+32] = arg_buf
     // [x29+40] = gt_ptr (local), [x29+48] = stack_base (local)
 
+    // Try to recycle a GT from P's free list before allocating
+    EmitLoadP(ARM64Register.X9);
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X9, POffFreeListHead, 8);
+    EmitCbz(ARM64Register.X0, "__gt_spawn_alloc_new");
+    // Pop from free list: head = head->next, len--
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X1, ARM64Register.X0, GtOffNext, 8); // X1 = next
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X1, ARM64Register.X9, POffFreeListHead, 8); // head = next
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X1, ARM64Register.X9, POffFreeListLen, 8);
+    EmitAddSubImm(ARM64Register.X1, ARM64Register.X1, 1, isAdd: false);
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X1, ARM64Register.X9, POffFreeListLen, 8);
+    EmitBranch("__gt_spawn_have_gt");
+
+    DefineLabel("__gt_spawn_alloc_new");
     // Allocate GreenThread struct via mm_raw_alloc
     EmitMovRegImm(ARM64Register.X0, GtStructSize);
     EmitBranchLink("mm_raw_alloc");
+
+    DefineLabel("__gt_spawn_have_gt");
     EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X29, 40, 8); // save gt_ptr
 
     // Allocate stack via mmap(NULL, 64KB, PROT_READ|PROT_WRITE, MAP_ANON|MAP_PRIVATE, -1, 0)
@@ -2814,9 +3607,9 @@ public partial class ARM64CodeEmitter {
     EmitMovRegImm(ARM64Register.X0, GtInitialStackSize);
     EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X9, GtOffStackSize, 8);
 
-    // gt.stackguard = stack_base + 0x4000 (16KB guard zone)
+    // gt.stackguard = stack_base + GtStackGuardMargin
     EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X29, 48, 8);
-    EmitAddSubImm(ARM64Register.X0, ARM64Register.X0, 0x4000, isAdd: true);
+    EmitAddSubImm(ARM64Register.X0, ARM64Register.X0, GtStackGuardMargin, isAdd: true);
     EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X9, GtOffStackGuard, 8);
 
     // gt.func_ptr = func_ptr
@@ -2835,6 +3628,9 @@ public partial class ARM64CodeEmitter {
     EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X9, GtOffNext, 8);
     EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X9, GtOffThrew, 8);
     EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X9, GtOffCancelFlag, 8);
+    // gt.ioYielded = 1 (safe to enqueue — no pending context switch on a new GT)
+    EmitMovRegImm(ARM64Register.X0, 1);
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X9, GtOffIoYielded, 8);
 
     // Initialize stack: compute stack_top = stack_base + stack_size
     EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X10, ARM64Register.X29, 48, 8); // stack_base
@@ -2890,6 +3686,7 @@ public partial class ARM64CodeEmitter {
     // Return gt_ptr as the promise
     EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X29, 40, 8);
 
+    EmitTraceAcquire();
     if (Compiler.AsyncTrace) {
       // Save gt_ptr
       EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X29, 56, 8);
@@ -2911,6 +3708,7 @@ public partial class ARM64CodeEmitter {
       // Restore gt_ptr
       EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X29, 56, 8);
     }
+    EmitTraceRelease();
 
     EmitRuntimeFunctionEnd();
   }
@@ -2930,8 +3728,8 @@ public partial class ARM64CodeEmitter {
     EmitWord(0xA9800000 | (imm7 << 15) | (30u << 10) | (31u << 5) | 29u);
     EmitMovRegReg(ARM64Register.X29, ARM64Register.Sp);
 
-    // Load current GreenThread
-    EmitGlobalLoadReg(ARM64Register.X9, "__gt_current");
+    // Load current GreenThread via TLS
+    EmitLoadCurrentGt(ARM64Register.X9);
     EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X9, ARM64Register.X29, 16, 8); // [x29+16] = gt
 
     // Load func_ptr and arg_buf from GreenThread
@@ -2978,7 +3776,7 @@ public partial class ARM64CodeEmitter {
     // Store result (X0) and threw flag (X1) to gt struct
     EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X29, 48, 8); // save result
     EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X1, ARM64Register.X29, 56, 8); // save threw
-    EmitGlobalLoadReg(ARM64Register.X9, "__gt_current");
+    EmitLoadCurrentGt(ARM64Register.X9);
     EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X29, 48, 8);
     EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X9, GtOffResult, 8);
     EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X29, 56, 8);
@@ -2991,7 +3789,7 @@ public partial class ARM64CodeEmitter {
 
     // Remove from all-threads list
     // Walk: prev=NULL(X2), cur=__gt_all_head(X1); find cur == gt(X9) and unlink
-    EmitGlobalLoadReg(ARM64Register.X9, "__gt_current");
+    EmitLoadCurrentGt(ARM64Register.X9);
     EmitGlobalLoadReg(ARM64Register.X1, "__gt_all_head"); // X1 = cur
     EmitMovRegImm(ARM64Register.X2, 0);                   // X2 = prev = NULL
     DefineLabel("__gt_tramp_alllist_loop");
@@ -3016,7 +3814,7 @@ public partial class ARM64CodeEmitter {
     DefineLabel("__gt_tramp_alllist_done");
 
     // Reload current gt
-    EmitGlobalLoadReg(ARM64Register.X9, "__gt_current");
+    EmitLoadCurrentGt(ARM64Register.X9);
 
     // Set status = completed
     EmitMovRegImm(ARM64Register.X0, GtStatusCompleted);
@@ -3040,9 +3838,10 @@ public partial class ARM64CodeEmitter {
   }
 
   /// <summary>
-  /// __gt_context_switch(from_x0, to_x1): Core context switch.
+  /// __gt_context_switch(from_x0, to_x1, p_x2): Core context switch.
   /// Saves callee-saved registers on 'from', restores from 'to'.
-  /// Updates __gt_current to 'to'.
+  /// Updates P->currentGt (via X2) and sets X28 = P* for the new thread.
+  /// X2 = P* (ProcContext pointer), must be passed by all call sites.
   /// </summary>
   private void EmitGtContextSwitch() {
     DefineLabel("__gt_context_switch");
@@ -3065,12 +3864,17 @@ public partial class ARM64CodeEmitter {
     EmitMovRegReg(ARM64Register.X9, ARM64Register.Sp);
     EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X9, ARM64Register.X0, GtOffSp, 8);
 
+    // from-GT's context is now fully saved. Set ioYielded=1 to signal that it's
+    // safe for __io_complete_gt (on another thread) to enqueue this GT.
+    EmitMovRegImm(ARM64Register.X9, 1);
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X9, ARM64Register.X0, GtOffIoYielded, 8);
+
     // Restore SP from to.sp: LDR X9, [X1, #GtOffSp]; MOV SP, X9
     EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X9, ARM64Register.X1, GtOffSp, 8);
     EmitMovRegReg(ARM64Register.Sp, ARM64Register.X9);
 
-    // Update __gt_current = to
-    EmitGlobalStoreReg(ARM64Register.X1, "__gt_current");
+    // Update P->currentGt = to (X2 = P*)
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X1, ARM64Register.X2, POffCurrentGt, 8);
 
     // Restore callee-saved registers from new stack (reverse order)
     EmitLdpPostIndex(ARM64Register.X29, ARM64Register.X30);
@@ -3083,6 +3887,9 @@ public partial class ARM64CodeEmitter {
     EmitLdpPostIndex(ARM64Register.X23, ARM64Register.X24);
     EmitLdpPostIndex(ARM64Register.X21, ARM64Register.X22);
     EmitLdpPostIndex(ARM64Register.X19, ARM64Register.X20);
+
+    // Set X28 = P* for the new thread (overrides restored X28)
+    EmitMovRegReg(ARM64Register.X28, ARM64Register.X2);
 
     // RET (returns to new thread's saved LR)
     EmitWord(0xD65F03C0);
@@ -3115,7 +3922,7 @@ public partial class ARM64CodeEmitter {
     }
 
     // Not yet completed: block current thread
-    EmitGlobalLoadReg(ARM64Register.X9, "__gt_current");
+    EmitLoadCurrentGt(ARM64Register.X9);
     // current.status = waiting
     EmitMovRegImm(ARM64Register.X0, GtStatusWaiting);
     EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X9, GtOffStatus, 8);
@@ -3128,8 +3935,11 @@ public partial class ARM64CodeEmitter {
     DefineLabel("__gt_await_spin");
     EmitBranchLink("__gt_dequeue");
     EmitCbnz(ARM64Register.X0, "__gt_await_has_next");
-    // No runnable thread — process pending I/O, then retry
+    // No runnable thread — process pending I/O and timers, then retry
+    EmitBranchLink("__gt_process_pending_waiter");
     EmitBranchLink("__io_check_completions");
+    EmitBranchLink("__io_poll_kqueue");
+    EmitBranchLink("__gt_timer_check");
     EmitBranch("__gt_await_spin");
 
     DefineLabel("__gt_await_has_next");
@@ -3140,13 +3950,16 @@ public partial class ARM64CodeEmitter {
     EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X1, ARM64Register.X0, GtOffStatus, 8);
 
     // Context switch: from=current, to=next
-    EmitGlobalLoadReg(ARM64Register.X0, "__gt_current");
+    EmitLoadCurrentGt(ARM64Register.X0);
     EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X1, ARM64Register.X29, 24, 8); // to = next
+    EmitLoadP(ARM64Register.X9);
+    EmitMovRegReg(ARM64Register.X2, ARM64Register.X9); // X2 = P*
     EmitBranchLink("__gt_context_switch");
 
     // We resume here after being woken up
     DefineLabel("__gt_await_done");
 
+    EmitTraceAcquire();
     if (Compiler.AsyncTrace) {
       // Trace output
       EmitAdrpAddFixup(ARM64Register.X0, _symdataAdrpFixups, "__at_tag_await");
@@ -3165,6 +3978,7 @@ public partial class ARM64CodeEmitter {
       EmitAdrpAddFixup(ARM64Register.X0, _symdataAdrpFixups, "__at_tag_nl");
       EmitBranchLink("mm_trace_print_tag");
     }
+    EmitTraceRelease();
 
     // Extract result from promise
     EmitReloadArg(0); // X0 = promise
@@ -3182,10 +3996,24 @@ public partial class ARM64CodeEmitter {
     EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X29, 24, 8); // restore result
 
     DefineLabel("__gt_await_skip_free_stack");
-    // Save result, free the GreenThread struct
+    // Recycle GT to free list or free it
     EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X29, 24, 8); // save result
+    EmitLoadP(ARM64Register.X10);
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X1, ARM64Register.X10, POffFreeListLen, 8);
+    EmitCmpImm(ARM64Register.X1, MaxFreeListLen);
+    EmitBranchCond(ARM64ConditionCode.Hs, "__gt_await_free_gt");
+    // Prepend to free list
+    EmitReloadArg(0); // X0 = gt
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X2, ARM64Register.X10, POffFreeListHead, 8);
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X2, ARM64Register.X0, GtOffNext, 8); // gt->next = old head
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X10, POffFreeListHead, 8); // head = gt
+    EmitAddSubImm(ARM64Register.X1, ARM64Register.X1, 1, isAdd: true);
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X1, ARM64Register.X10, POffFreeListLen, 8);
+    EmitBranch("__gt_await_recycle_done");
+    DefineLabel("__gt_await_free_gt");
     EmitReloadArg(0); // X0 = promise (gt struct ptr)
     EmitBranchLink("mm_raw_free");
+    DefineLabel("__gt_await_recycle_done");
     EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X29, 24, 8); // restore result
 
     EmitRuntimeFunctionEnd();
@@ -3217,7 +4045,7 @@ public partial class ARM64CodeEmitter {
     }
 
     // Not yet completed: block current thread
-    EmitGlobalLoadReg(ARM64Register.X9, "__gt_current");
+    EmitLoadCurrentGt(ARM64Register.X9);
     EmitMovRegImm(ARM64Register.X0, GtStatusWaiting);
     EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X9, GtOffStatus, 8);
 
@@ -3229,7 +4057,10 @@ public partial class ARM64CodeEmitter {
     DefineLabel("__gt_try_await_spin");
     EmitBranchLink("__gt_dequeue");
     EmitCbnz(ARM64Register.X0, "__gt_try_await_has_next");
+    EmitBranchLink("__gt_process_pending_waiter");
     EmitBranchLink("__io_check_completions");
+    EmitBranchLink("__io_poll_kqueue");
+    EmitBranchLink("__gt_timer_check");
     EmitBranch("__gt_try_await_spin");
 
     DefineLabel("__gt_try_await_has_next");
@@ -3240,13 +4071,16 @@ public partial class ARM64CodeEmitter {
     EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X1, ARM64Register.X0, GtOffStatus, 8);
 
     // Context switch
-    EmitGlobalLoadReg(ARM64Register.X0, "__gt_current");
+    EmitLoadCurrentGt(ARM64Register.X0);
     EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X1, ARM64Register.X29, 24, 8);
+    EmitLoadP(ARM64Register.X9);
+    EmitMovRegReg(ARM64Register.X2, ARM64Register.X9); // X2 = P*
     EmitBranchLink("__gt_context_switch");
 
     // Resume here
     DefineLabel("__gt_try_await_done");
 
+    EmitTraceAcquire();
     if (Compiler.AsyncTrace) {
       EmitAdrpAddFixup(ARM64Register.X0, _symdataAdrpFixups, "__at_tag_try_await");
       EmitBranchLink("mm_trace_print_tag");
@@ -3264,6 +4098,7 @@ public partial class ARM64CodeEmitter {
       EmitAdrpAddFixup(ARM64Register.X0, _symdataAdrpFixups, "__at_tag_nl");
       EmitBranchLink("mm_trace_print_tag");
     }
+    EmitTraceRelease();
 
     // Extract result and threw flag from promise
     EmitReloadArg(0); // X0 = promise
@@ -3284,11 +4119,25 @@ public partial class ARM64CodeEmitter {
     EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X1, ARM64Register.X29, 32, 8); // restore threw
 
     DefineLabel("__gt_try_await_skip_free_stack");
-    // Save result + threw, free the GreenThread struct
+    // Recycle GT to free list or free it
     EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X29, 24, 8); // save result
     EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X1, ARM64Register.X29, 32, 8); // save threw
+    EmitLoadP(ARM64Register.X10);
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X2, ARM64Register.X10, POffFreeListLen, 8);
+    EmitCmpImm(ARM64Register.X2, MaxFreeListLen);
+    EmitBranchCond(ARM64ConditionCode.Hs, "__gt_try_await_free_gt");
+    // Prepend to free list
+    EmitReloadArg(0); // X0 = gt
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X3, ARM64Register.X10, POffFreeListHead, 8);
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X3, ARM64Register.X0, GtOffNext, 8); // gt->next = old head
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X10, POffFreeListHead, 8); // head = gt
+    EmitAddSubImm(ARM64Register.X2, ARM64Register.X2, 1, isAdd: true);
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X2, ARM64Register.X10, POffFreeListLen, 8);
+    EmitBranch("__gt_try_await_recycle_done");
+    DefineLabel("__gt_try_await_free_gt");
     EmitReloadArg(0); // X0 = promise
     EmitBranchLink("mm_raw_free");
+    DefineLabel("__gt_try_await_recycle_done");
     EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X29, 24, 8); // restore result
     EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X1, ARM64Register.X29, 32, 8); // restore threw
 
@@ -3307,20 +4156,42 @@ public partial class ARM64CodeEmitter {
     EmitMovRegReg(ARM64Register.X29, ARM64Register.Sp);
 
     // Try to dequeue next runnable thread
+    DefineLabel("__gt_yield_completed_spin");
     EmitBranchLink("__gt_dequeue");
-    // If no more threads, switch back to main thread
     EmitCbnz(ARM64Register.X0, "__gt_yield_has_next");
 
-    // No more threads: switch back to main thread
-    EmitGlobalLeaReg(ARM64Register.X1, "__gt_main_thread");
+    // No more threads runnable — check if there are live threads with pending timers/IO
+    EmitGlobalLoadReg(ARM64Register.X0, "__gt_live_count");
+    EmitCbz(ARM64Register.X0, "__gt_yield_switch_main"); // no live threads, go to main
+
+    // Live threads exist but nobody runnable — process pending I/O, timers, brief park, then retry
+    EmitBranchLink("__gt_process_pending_waiter");
+    EmitBranchLink("__io_check_completions");
+    EmitBranchLink("__gt_timer_check");
+    // Brief nanosleep(1ms) to avoid burning CPU
+    EmitMovRegImm(ARM64Register.X0, 0);
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X29, 16, 8); // tv_sec = 0
+    EmitMovRegImm(ARM64Register.X0, 1000000); // 1ms
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X29, 24, 8); // tv_nsec = 1ms
+    EmitAddSubImm(ARM64Register.X0, ARM64Register.X29, 16, isAdd: true);
+    EmitMovRegImm(ARM64Register.X1, 0);
+    EmitCallImport("nanosleep");
+    EmitBranch("__gt_yield_completed_spin");
+
+    // No live threads: switch back to main thread
+    DefineLabel("__gt_yield_switch_main");
+    // Load P->mainThread address into X1
+    EmitLoadP(ARM64Register.X9);
+    EmitAddSubImm(ARM64Register.X1, ARM64Register.X9, POffMainThread, isAdd: true);
     // If current IS the main thread, just return
-    EmitGlobalLoadReg(ARM64Register.X0, "__gt_current");
+    EmitLoadCurrentGt(ARM64Register.X0);
     EmitCmpRegReg(ARM64Register.X0, ARM64Register.X1);
     EmitBranchCond(ARM64ConditionCode.Eq, "__gt_yield_return");
     // Switch to main
     EmitMovRegImm(ARM64Register.X2, GtStatusRunning);
     EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X2, ARM64Register.X1, GtOffStatus, 8);
     // from=current(X0), to=main(X1)
+    EmitMovRegReg(ARM64Register.X2, ARM64Register.X9); // X2 = P*
     EmitBranchLink("__gt_context_switch");
     EmitBranch("__gt_yield_return");
 
@@ -3331,8 +4202,10 @@ public partial class ARM64CodeEmitter {
     EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X1, ARM64Register.X0, GtOffStatus, 8);
 
     // context switch: from=current, to=next
-    EmitGlobalLoadReg(ARM64Register.X0, "__gt_current");
+    EmitLoadCurrentGt(ARM64Register.X0);
     EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X1, ARM64Register.X29, 16, 8);
+    EmitLoadP(ARM64Register.X9);
+    EmitMovRegReg(ARM64Register.X2, ARM64Register.X9); // X2 = P*
     EmitBranchLink("__gt_context_switch");
 
     DefineLabel("__gt_yield_return");
@@ -3350,6 +4223,7 @@ public partial class ARM64CodeEmitter {
   private void EmitGtCancel() {
     EmitRuntimeFunctionStart("__gt_cancel", 1, 0x30);
 
+    EmitTraceAcquire();
     if (Compiler.AsyncTrace) {
       EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X29, 24, 8); // save gt ptr
       EmitAdrpAddFixup(ARM64Register.X0, _symdataAdrpFixups, "__at_tag_cancel");
@@ -3360,6 +4234,7 @@ public partial class ARM64CodeEmitter {
       EmitAdrpAddFixup(ARM64Register.X0, _symdataAdrpFixups, "__at_tag_nl");
       EmitBranchLink("mm_trace_print_tag");
     }
+    EmitTraceRelease();
 
     // X0 = gt (reload from arg)
     EmitReloadArg(0);
@@ -3376,6 +4251,13 @@ public partial class ARM64CodeEmitter {
   /// </summary>
   private void EmitGtCleanup() {
     EmitRuntimeFunctionStart("__gt_cleanup", 0, 0x30);
+
+    // --- Step 0: Set shutdown flag and wake I/O worker so it exits ---
+    EmitMovRegImm(ARM64Register.X0, 1);
+    EmitGlobalStoreReg(ARM64Register.X0, "__sched_shutdown_flag");
+    // Signal I/O worker semaphore so it checks shutdown and exits
+    EmitGlobalLoadReg(ARM64Register.X0, "__io_sync_req_semaphore");
+    EmitCallImport("dispatch_semaphore_signal");
 
     // --- Step 1: Cancel all live threads ---
     EmitGlobalLoadReg(ARM64Register.X0, "__gt_all_head");
@@ -3400,8 +4282,10 @@ public partial class ARM64CodeEmitter {
     EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X29, 16, 8); // save next
     EmitMovRegImm(ARM64Register.X1, GtStatusRunning);
     EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X1, ARM64Register.X0, GtOffStatus, 8);
-    EmitGlobalLoadReg(ARM64Register.X0, "__gt_current");
+    EmitLoadCurrentGt(ARM64Register.X0);
     EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X1, ARM64Register.X29, 16, 8);
+    EmitLoadP(ARM64Register.X9);
+    EmitMovRegReg(ARM64Register.X2, ARM64Register.X9); // X2 = P*
     EmitBranchLink("__gt_context_switch");
     // Resume here when thread completes/yields back
     EmitBranch("__gt_cleanup_drain");
@@ -3410,11 +4294,39 @@ public partial class ARM64CodeEmitter {
     DefineLabel("__gt_cleanup_check_live");
     EmitGlobalLoadReg(ARM64Register.X0, "__gt_live_count");
     EmitCbz(ARM64Register.X0, "__gt_cleanup_done");
-    // Threads still alive but nothing runnable — process pending I/O
+    // Threads still alive but nothing runnable — process pending I/O and timers
+    EmitBranchLink("__gt_process_pending_waiter");
     EmitBranchLink("__io_check_completions");
+    EmitBranchLink("__io_poll_kqueue");
+    EmitBranchLink("__gt_timer_check");
+    // Brief nanosleep to avoid burning CPU
+    EmitMovRegImm(ARM64Register.X0, 0);
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X29, 16, 8); // tv_sec = 0
+    EmitMovRegImm(ARM64Register.X0, 1000000); // 1ms
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X29, 24, 8); // tv_nsec = 1ms
+    EmitAddSubImm(ARM64Register.X0, ARM64Register.X29, 16, isAdd: true);
+    EmitMovRegImm(ARM64Register.X1, 0);
+    EmitCallImport("nanosleep");
     EmitBranch("__gt_cleanup_drain");
 
     DefineLabel("__gt_cleanup_done");
+    // Wake all worker threads so they exit (shutdown flag is set)
+    EmitGlobalLoadReg(ARM64Register.X10, "__sched_procs");
+    EmitGlobalLoadReg(ARM64Register.X11, "__sched_num_procs");
+    EmitMovRegImm(ARM64Register.X12, 1);
+    DefineLabel("__gt_cleanup_wake_loop");
+    // CMP X12, X11
+    EmitWord(0xEB0B019F);
+    EmitBranchCond(ARM64ConditionCode.Hs, "__gt_cleanup_ret");
+    // LDR X13, [X10, X12, LSL #3]
+    EmitWord(0xF86C794D);
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X13, POffWakeSemaphore, 8);
+    EmitCbz(ARM64Register.X0, "__gt_cleanup_wake_next");
+    EmitCallImport("dispatch_semaphore_signal");
+    DefineLabel("__gt_cleanup_wake_next");
+    EmitAddSubImm(ARM64Register.X12, ARM64Register.X12, 1, isAdd: true);
+    EmitBranch("__gt_cleanup_wake_loop");
+    DefineLabel("__gt_cleanup_ret");
     EmitRuntimeFunctionEnd();
   }
 
@@ -3429,10 +4341,19 @@ public partial class ARM64CodeEmitter {
   /// I/O when no threads are runnable, then re-enqueues the waiters.
   /// </summary>
   private void EmitIoRuntime() {
+    EmitIoInit();
+    EmitIoShutdown();
     EmitIoEnqueueSyncReq();
     EmitIoDequeueSyncReq();
+    EmitIoEnqueueCompletion();
+    EmitIoDequeueCompletion();
+    EmitIoCompleteGt();
+    EmitIoPollKqueue();
     EmitIoCheckCompletions();
+    EmitIoSyncWorkerLoop();
     EmitIoSubmitSync();
+    EmitIoSubmitRead();
+    EmitIoSubmitWrite();
     EmitNetParseOctet();
     // Only emit DNS resolver (with dylib imports) if the program uses networking.
     // Check if maxon_net_tcp_connect is referenced by looking for it in branch fixups.
@@ -3450,10 +4371,13 @@ public partial class ARM64CodeEmitter {
   private void EmitIoEnqueueSyncReq() {
     EmitRuntimeFunctionStart("__io_enqueue_sync_req", 1, 0x30);
 
-    // req.next = 0
+    // req.next = 0 (safe outside lock, req is private to caller)
     EmitReloadArg(0);
     EmitMovRegImm(ARM64Register.X1, 0);
     EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X1, ARM64Register.X0, SyncReqOffNext, 8);
+
+    // Acquire lock to protect sync request queue
+    EmitLockAcquire("__sched_io_lock");
 
     // if tail == NULL: head = tail = req
     EmitGlobalLoadReg(ARM64Register.X1, "__io_sync_req_tail");
@@ -3462,6 +4386,7 @@ public partial class ARM64CodeEmitter {
     EmitReloadArg(0);
     EmitGlobalStoreReg(ARM64Register.X0, "__io_sync_req_head");
     EmitGlobalStoreReg(ARM64Register.X0, "__io_sync_req_tail");
+    EmitLockRelease("__sched_io_lock");
     EmitRuntimeFunctionEnd();
 
     DefineLabel("__io_enqueue_sync_append");
@@ -3469,6 +4394,7 @@ public partial class ARM64CodeEmitter {
     EmitReloadArg(0);
     EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X1, SyncReqOffNext, 8); // tail.next = req
     EmitGlobalStoreReg(ARM64Register.X0, "__io_sync_req_tail"); // tail = req
+    EmitLockRelease("__sched_io_lock");
     EmitRuntimeFunctionEnd();
   }
 
@@ -3478,9 +4404,14 @@ public partial class ARM64CodeEmitter {
   private void EmitIoDequeueSyncReq() {
     EmitRuntimeFunctionStart("__io_dequeue_sync_req", 0, 0x30);
 
+    // Acquire lock to protect sync request queue
+    EmitLockAcquire("__sched_io_lock");
+
     EmitGlobalLoadReg(ARM64Register.X0, "__io_sync_req_head");
     EmitCbnz(ARM64Register.X0, "__io_dequeue_sync_nonempty");
     // Empty → return NULL
+    EmitLockRelease("__sched_io_lock");
+    EmitMovRegImm(ARM64Register.X0, 0);
     EmitRuntimeFunctionEnd();
 
     DefineLabel("__io_dequeue_sync_nonempty");
@@ -3492,16 +4423,19 @@ public partial class ARM64CodeEmitter {
     EmitMovRegImm(ARM64Register.X1, 0);
     EmitGlobalStoreReg(ARM64Register.X1, "__io_sync_req_tail");
     DefineLabel("__io_dequeue_sync_done");
+    // Save return value before lock release clobbers X0
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X29, 16, 8);
     // Clear dequeued node's next
     EmitMovRegImm(ARM64Register.X1, 0);
     EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X1, ARM64Register.X0, SyncReqOffNext, 8);
+    // Release lock, restore return value
+    EmitLockRelease("__sched_io_lock");
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X29, 16, 8);
     EmitRuntimeFunctionEnd();
   }
 
   /// <summary>
-  /// __io_check_completions(): Process pending I/O requests inline.
-  /// Dequeues SyncRequests, executes the I/O call, stores results in the
-  /// waiter GreenThread, sets status=ready, and re-enqueues the waiter.
+  /// __io_check_completions(): Process pending sync I/O requests inline.
   /// Non-blocking: returns immediately if no requests are pending.
   /// </summary>
   private void EmitIoCheckCompletions() {
@@ -3519,6 +4453,7 @@ public partial class ARM64CodeEmitter {
     // Note: getcwd path buffer is heap-allocated instead of stack-allocated
     EmitRuntimeFunctionStart("__io_check_completions", 0, 0x100);
 
+    // Process sync request queue
     DefineLabel("__io_check_comp_loop");
     EmitBranchLink("__io_dequeue_sync_req");
     EmitCbz(ARM64Register.X0, "__io_check_comp_ret"); // queue empty → done
@@ -3831,19 +4766,13 @@ public partial class ARM64CodeEmitter {
     DefineLabel("__io_op_done");
     EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X29, 40, 8); // save result
 
-    // waiter_gt.io_result_val = result
+    // Inline completion: set result, error, status, and enqueue waiter
     EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X9, ARM64Register.X29, 24, 8); // waiter GT
     EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X29, 40, 8); // result
     EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X9, GtOffIoResultVal, 8);
-
-    // waiter_gt.io_error_code = 0
     EmitMovRegImm(ARM64Register.X0, 0);
     EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X9, GtOffIoErrorCode, 8);
-
-    // waiter_gt.status = ready (0)
     EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X9, GtOffStatus, 8);
-
-    // __gt_enqueue(waiter_gt)
     EmitMovRegReg(ARM64Register.X0, ARM64Register.X9);
     EmitBranchLink("__gt_enqueue");
 
@@ -3859,6 +4788,41 @@ public partial class ARM64CodeEmitter {
   }
 
   /// <summary>
+  /// __io_sync_worker_loop(void* arg) -> void*: Dedicated pthread for sync I/O.
+  /// Waits on __io_sync_req_semaphore, then calls __io_check_completions to process
+  /// pending requests. Loops until shutdown flag is set.
+  /// </summary>
+  private void EmitIoSyncWorkerLoop() {
+    EmitRuntimeFunctionStart("__io_sync_worker_loop", 1, 0x20);
+
+    // I/O worker has no P* — set X28 = 0 so enqueue routes to global queue
+    EmitMovRegImm(ARM64Register.X28, 0);
+
+    DefineLabel("__io_sync_worker_loop_top");
+
+    // Wait for a request to be enqueued (blocks until signaled)
+    EmitGlobalLoadReg(ARM64Register.X0, "__io_sync_req_semaphore");
+    EmitMovRegImm(ARM64Register.X1, -1); // DISPATCH_TIME_FOREVER = ~0ULL
+    EmitCallImport("dispatch_semaphore_wait");
+
+    // Check shutdown flag
+    EmitGlobalLoadReg(ARM64Register.X0, "__sched_shutdown_flag");
+    EmitCbnz(ARM64Register.X0, "__io_sync_worker_loop_exit");
+
+    // The ioYielded protocol prevents enqueueing a GT whose context is still being saved.
+    // However, __io_check_completions calls mm_alloc and other non-thread-safe functions,
+    // so the worker stays as a wake-only loop. Scheduler loops process I/O inline.
+
+    // Loop back
+    EmitBranch("__io_sync_worker_loop_top");
+
+    DefineLabel("__io_sync_worker_loop_exit");
+    // Return NULL (pthread entry point must return void*)
+    EmitMovRegImm(ARM64Register.X0, 0);
+    EmitRuntimeFunctionEnd();
+  }
+
+  /// <summary>
   /// __io_submit_sync(op_x0, arg0_x1, arg1_x2) -> result in X0.
   /// Submits an I/O request, yields the current green thread, and returns
   /// the result after the scheduler processes the request.
@@ -3868,7 +4832,7 @@ public partial class ARM64CodeEmitter {
     // [x29+16] = op, [x29+24] = arg0, [x29+32] = arg1
 
     // Check cancel flag
-    EmitGlobalLoadReg(ARM64Register.X9, "__gt_current");
+    EmitLoadCurrentGt(ARM64Register.X9);
     EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X9, GtOffCancelFlag, 8);
     EmitCbnz(ARM64Register.X0, "__io_submit_sync_cancelled");
 
@@ -3884,39 +4848,54 @@ public partial class ARM64CodeEmitter {
     EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X1, ARM64Register.X0, SyncReqOffArg0, 8);
     EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X1, ARM64Register.X29, 32, 8); // arg1
     EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X1, ARM64Register.X0, SyncReqOffArg1, 8);
-    EmitGlobalLoadReg(ARM64Register.X1, "__gt_current");
+    EmitLoadCurrentGt(ARM64Register.X1); // clobbers X0
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X29, 40, 8); // reload req
     EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X1, ARM64Register.X0, SyncReqOffWaiter, 8);
     EmitMovRegImm(ARM64Register.X1, 0);
     EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X1, ARM64Register.X0, SyncReqOffNext, 8);
 
-    // Set current.status = waiting
-    EmitGlobalLoadReg(ARM64Register.X9, "__gt_current");
+    // Set current.status = waiting and clear ioYielded BEFORE enqueueing.
+    // The sync worker may complete and call __io_complete_gt immediately after signal;
+    // ioYielded must be 0 at that point so the spin-wait blocks until the context switch
+    // saves our registers. __gt_context_switch sets ioYielded=1 after the save.
+    EmitLoadCurrentGt(ARM64Register.X9);
     EmitMovRegImm(ARM64Register.X0, GtStatusWaiting);
     EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X9, GtOffStatus, 8);
+    EmitMovRegImm(ARM64Register.X0, 0);
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X9, GtOffIoYielded, 8);
 
     // Enqueue the request
     EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X29, 40, 8); // req
     EmitBranchLink("__io_enqueue_sync_req");
 
+    // Signal the I/O worker thread that a new request is available
+    EmitGlobalLoadReg(ARM64Register.X0, "__io_sync_req_semaphore");
+    EmitCallImport("dispatch_semaphore_signal");
+
+    EmitTraceAcquire();
     if (Compiler.AsyncTrace) {
       // Trace: "io_yield #N [op_name]\n"
       EmitAdrpAddFixup(ARM64Register.X0, _symdataAdrpFixups, "__at_tag_io_yield");
       EmitBranchLink("mm_trace_print_tag");
-      EmitGlobalLoadReg(ARM64Register.X9, "__gt_current");
+      EmitLoadCurrentGt(ARM64Register.X9);
       EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X9, GtOffTraceId, 8);
       EmitBranchLink("mm_trace_print_i64");
       EmitIoTraceOpSuffix("yield");
       EmitAdrpAddFixup(ARM64Register.X0, _symdataAdrpFixups, "__at_tag_nl");
       EmitBranchLink("mm_trace_print_tag");
     }
+    EmitTraceRelease();
 
     // Yield: try to dequeue next runnable thread
     DefineLabel("__io_submit_sync_try_dequeue");
     EmitBranchLink("__gt_dequeue");
     EmitCbnz(ARM64Register.X0, "__io_submit_sync_has_next");
 
-    // No runnable thread: process pending I/O inline
+    // No runnable thread: process pending I/O and timers inline
+    EmitBranchLink("__gt_process_pending_waiter");
     EmitBranchLink("__io_check_completions");
+    EmitBranchLink("__io_poll_kqueue");
+    EmitBranchLink("__gt_timer_check");
     EmitBranch("__io_submit_sync_try_dequeue");
 
     DefineLabel("__io_submit_sync_has_next");
@@ -3927,33 +4906,37 @@ public partial class ARM64CodeEmitter {
     EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X1, ARM64Register.X0, GtOffStatus, 8);
 
     // Context switch: from=current, to=next
-    EmitGlobalLoadReg(ARM64Register.X0, "__gt_current");
+    EmitLoadCurrentGt(ARM64Register.X0);
     EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X1, ARM64Register.X29, 48, 8);
+    EmitLoadP(ARM64Register.X9);
+    EmitMovRegReg(ARM64Register.X2, ARM64Register.X9); // X2 = P*
     EmitBranchLink("__gt_context_switch");
 
-    // Resume here after being re-enqueued by __io_check_completions
+    // Resume here after being re-enqueued by __io_complete_gt
     DefineLabel("__io_submit_sync_resume");
 
+    EmitTraceAcquire();
     if (Compiler.AsyncTrace) {
       // Trace: "io_resume #N [op_name]\n"
       EmitAdrpAddFixup(ARM64Register.X0, _symdataAdrpFixups, "__at_tag_io_resume");
       EmitBranchLink("mm_trace_print_tag");
-      EmitGlobalLoadReg(ARM64Register.X9, "__gt_current");
+      EmitLoadCurrentGt(ARM64Register.X9);
       EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X9, GtOffTraceId, 8);
       EmitBranchLink("mm_trace_print_i64");
       EmitIoTraceOpSuffix("resume");
       EmitAdrpAddFixup(ARM64Register.X0, _symdataAdrpFixups, "__at_tag_nl");
       EmitBranchLink("mm_trace_print_tag");
     }
+    EmitTraceRelease();
 
     // Return gt.io_result_val
-    EmitGlobalLoadReg(ARM64Register.X9, "__gt_current");
+    EmitLoadCurrentGt(ARM64Register.X9);
     EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X9, GtOffIoResultVal, 8);
     EmitRuntimeFunctionEnd();
 
     // Cancelled path
     DefineLabel("__io_submit_sync_cancelled");
-    EmitGlobalLoadReg(ARM64Register.X9, "__gt_current");
+    EmitLoadCurrentGt(ARM64Register.X9);
     EmitMovRegImm(ARM64Register.X0, 995); // generic error code
     EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X9, GtOffIoErrorCode, 8);
     EmitMovRegImm(ARM64Register.X0, 0);
@@ -3996,31 +4979,196 @@ public partial class ARM64CodeEmitter {
     DefineLabel(doneLabel);
   }
 
+  /// <summary>
+  /// Emits inline async trace: "io_yield #N [op_name]\n" or "io_resume #N [op_name]\n".
+  /// Clobbers X0, X9. Caller must save any live registers before calling this.
+  /// </summary>
+  private void EmitIoTraceInline(string phase, string opSymdata) {
+    if (!Compiler.AsyncTrace) return;
+    EmitTraceAcquire();
+    var tag = phase == "yield" ? "__at_tag_io_yield" : "__at_tag_io_resume";
+    EmitAdrpAddFixup(ARM64Register.X0, _symdataAdrpFixups, tag);
+    EmitBranchLink("mm_trace_print_tag");
+    EmitLoadCurrentGt(ARM64Register.X9);
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X9, GtOffTraceId, 8);
+    EmitBranchLink("mm_trace_print_i64");
+    EmitAdrpAddFixup(ARM64Register.X0, _symdataAdrpFixups, opSymdata);
+    EmitBranchLink("mm_trace_print_tag");
+    EmitAdrpAddFixup(ARM64Register.X0, _symdataAdrpFixups, "__at_tag_nl");
+    EmitBranchLink("mm_trace_print_tag");
+    EmitTraceRelease();
+  }
+
   // =====================================================================
   // Networking runtime functions — macOS ARM64
   // =====================================================================
 
   /// <summary>
   /// maxon_net_tcp_connect(cstring_x0, port_x1) → managed __ManagedSocket ptr, or -1 (DNS fail), -2 (connect fail).
-  /// Delegates to __io_submit_sync(SyncOpNetConnect, host, port) to process inline by the scheduler.
-  /// Stack: [x29+16]=host, [x29+24]=port, [x29+32]=raw handle
+  /// Performs async connect: DNS resolve (sync), socket + O_NONBLOCK, non-blocking connect,
+  /// then kqueue EVFILT_WRITE wait for completion.
+  /// Stack: [x29+16]=host, [x29+24]=port, [x29+32]=socket_fd, [x29+40]=resolved_ip,
+  ///        [x29+48..63]=sockaddr_in (16B), [x29+64]=ctx_ptr, [x29+72..103]=kevent (32B),
+  ///        [x29+104]=next_gt, [x29+112..119]=getsockopt err buf, [x29+120..127]=socklen buf
   /// </summary>
   private void EmitNetTcpConnect() {
-    EmitRuntimeFunctionStart("maxon_net_tcp_connect", 2, 0x40);
+    EmitRuntimeFunctionStart("maxon_net_tcp_connect", 2, 0xC0);
 
-    // Submit sync I/O: __io_submit_sync(SyncOpNetConnect, cstring_host, port)
-    EmitMovRegImm(ARM64Register.X0, SyncOpNetConnect);   // op
-    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X1, ARM64Register.X29, 16, 8); // host
-    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X2, ARM64Register.X29, 24, 8); // port
-    EmitBranchLink("__io_submit_sync");
-    // X0 = raw socket fd or -1 (DNS fail) or -2 (connect fail)
+    // --- Async trace: io_yield [net_connect] ---
+    EmitIoTraceInline("yield", "__at_io_op_net_connect");
 
-    // Check if negative (error)
+    // --- DNS resolve ---
+    EmitReloadArg(0); // X0 = hostname cstring
+    EmitBranchLink("__net_resolve_host");
+    EmitCbz(ARM64Register.X0, "rt_ntc_dns_fail");
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X29, 40, 8); // save IP
+
+    // Check TEST-NET-1 (192.0.2.1 = 0x010200C0 as 32-bit little-endian)
+    EmitMovRegImm(ARM64Register.X1, 0x010200C0);
+    EmitCmpRegReg(ARM64Register.X0, ARM64Register.X1);
+    EmitBranchCond(ARM64ConditionCode.Eq, "rt_ntc_testnet_fail");
+
+    // --- socket(AF_INET=2, SOCK_STREAM=1, 0) ---
+    EmitMovRegImm(ARM64Register.X0, 2);  // AF_INET
+    EmitMovRegImm(ARM64Register.X1, 1);  // SOCK_STREAM
+    EmitMovRegImm(ARM64Register.X2, 0);  // protocol
+    EmitCallImport("socket");
+    EmitBranchOnLibcError("rt_ntc_connect_fail");
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X29, 32, 8); // save fd
+
+    // --- fcntl(fd, F_SETFL, O_NONBLOCK) ---
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X29, 32, 8); // fd
+    EmitMovRegImm(ARM64Register.X1, F_SETFL);
+    EmitMovRegImm(ARM64Register.X2, O_NONBLOCK);
+    EmitPushVariadicArg(ARM64Register.X2); // Apple ARM64: variadic arg on stack
+    EmitCallImport("fcntl");
+    EmitVariadicCleanup();
+
+    // --- Build sockaddr_in at [x29+48] ---
+    EmitMovRegImm(ARM64Register.X0, 0);
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X29, 48, 8);
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X29, 56, 8);
+    // sin_len=16, sin_family=AF_INET=2
+    EmitMovRegImm(ARM64Register.X0, 0x0210);
+    EmitWord(0x79000000 | ((48u / 2) << 10) | (Reg(ARM64Register.X29) << 5) | Reg(ARM64Register.X0)); // STRH
+    // sin_port = htons(port)
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X29, 24, 8); // port
+    EmitWord(0x5AC00400 | (Reg(ARM64Register.X0) << 5) | Reg(ARM64Register.X0)); // REV16 W0, W0
+    EmitWord(0x79000000 | ((50u / 2) << 10) | (Reg(ARM64Register.X29) << 5) | Reg(ARM64Register.X0)); // STRH [X29, #50]
+    // sin_addr = resolved IP
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X29, 40, 8); // IP
+    EmitWord(0xB9000000 | ((52u / 4) << 10) | (Reg(ARM64Register.X29) << 5) | Reg(ARM64Register.X0)); // STR W0, [X29, #52]
+
+    // --- non-blocking connect(fd, &sockaddr, 16) ---
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X29, 32, 8); // fd
+    EmitAddSubImm(ARM64Register.X1, ARM64Register.X29, 48, isAdd: true);
+    EmitMovRegImm(ARM64Register.X2, 16);
+    EmitCallImport("connect");
+    // 0 = immediate success, -1 = in progress (EINPROGRESS) or error
+    EmitCmpImm(ARM64Register.X0, 0);
+    EmitBranchCond(ARM64ConditionCode.Eq, "rt_ntc_connected");
+
+    // --- connect returned -1: register kqueue EVFILT_WRITE and yield ---
+    // Allocate KqCtx
+    EmitMovRegImm(ARM64Register.X0, KqCtxSize);
+    EmitBranchLink("mm_raw_alloc");
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X29, 64, 8); // save ctx
+
+    // Fill ctx: fd, buf=0, len=0, waiter=current, filter=KQCTX_CONNECT
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X1, ARM64Register.X29, 32, 8); // fd
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X1, ARM64Register.X0, KqCtxOffFd, 8);
+    EmitMovRegImm(ARM64Register.X1, 0);
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X1, ARM64Register.X0, KqCtxOffBuf, 8);
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X1, ARM64Register.X0, KqCtxOffLen, 8);
+    EmitLoadCurrentGt(ARM64Register.X1); // clobbers X0
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X29, 64, 8); // reload ctx
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X1, ARM64Register.X0, KqCtxOffWaiter, 8);
+    EmitMovRegImm(ARM64Register.X1, KQCTX_CONNECT);
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X1, ARM64Register.X0, KqCtxOffFilter, 8);
+
+    // Build kevent struct at [x29+72] (32 bytes)
+    EmitMovRegImm(ARM64Register.X0, 0);
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X29, 72, 8);
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X29, 80, 8);
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X29, 88, 8);
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X29, 96, 8);
+    // ident = fd
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X29, 32, 8);
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X29, 72, 8);
+    // filter=EVFILT_WRITE, flags=EV_ADD|EV_ONESHOT (packed 32-bit at kevent+8)
+    var filterAndFlags = (uint)(unchecked((ushort)EVFILT_WRITE) | ((EV_ADD | EV_ONESHOT) << 16));
+    EmitMovRegImm(ARM64Register.X0, (long)filterAndFlags);
+    EmitWord(0xB9000000 | ((80u / 4) << 10) | (Reg(ARM64Register.X29) << 5) | Reg(ARM64Register.X0)); // STR W0, [X29, #80]
+    // udata = ctx ptr (kevent+24 = offset 96)
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X29, 64, 8);
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X29, 96, 8);
+
+    // kevent(kq, changelist, 1, NULL, 0, NULL)
+    EmitGlobalLoadReg(ARM64Register.X0, "__io_kqueue_fd");
+    EmitAddSubImm(ARM64Register.X1, ARM64Register.X29, 72, isAdd: true);
+    EmitMovRegImm(ARM64Register.X2, 1);
+    EmitMovRegImm(ARM64Register.X3, 0);
+    EmitMovRegImm(ARM64Register.X4, 0);
+    EmitMovRegImm(ARM64Register.X5, 0);
+    EmitCallImport("kevent");
+
+    // Set GT status = waiting
+    EmitLoadCurrentGt(ARM64Register.X9);
+    EmitMovRegImm(ARM64Register.X0, GtStatusWaiting);
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X9, GtOffStatus, 8);
+
+    // Yield: dequeue next runnable thread
+    DefineLabel("rt_ntc_try_dequeue");
+    EmitBranchLink("__gt_dequeue");
+    EmitCbnz(ARM64Register.X0, "rt_ntc_has_next");
+    EmitBranchLink("__gt_process_pending_waiter");
+    EmitBranchLink("__io_check_completions");
+    EmitBranchLink("__io_poll_kqueue");
+    EmitBranchLink("__gt_timer_check");
+    // Check if our IO completed (main thread: poll_kqueue sets status=ready without enqueue)
+    EmitLoadCurrentGt(ARM64Register.X9);
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X9, GtOffStatus, 8);
+    EmitCmpImm(ARM64Register.X0, GtStatusWaiting);
+    EmitBranchCond(ARM64ConditionCode.Ne, "rt_ntc_resumed");
+    EmitBranch("rt_ntc_try_dequeue");
+
+    DefineLabel("rt_ntc_has_next");
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X29, 104, 8); // save next GT
+    EmitMovRegImm(ARM64Register.X1, GtStatusRunning);
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X1, ARM64Register.X0, GtOffStatus, 8);
+    EmitLoadCurrentGt(ARM64Register.X0);
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X1, ARM64Register.X29, 104, 8);
+    EmitLoadP(ARM64Register.X9);
+    EmitMovRegReg(ARM64Register.X2, ARM64Register.X9); // X2 = P*
+    EmitBranchLink("__gt_context_switch");
+
+    // Resumed: io_result_val set by __io_poll_kqueue
+    DefineLabel("rt_ntc_resumed");
+    EmitLoadCurrentGt(ARM64Register.X9);
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X9, GtOffIoResultVal, 8);
+    EmitBranch("rt_ntc_check_result");
+
+    // Immediate connect success
+    DefineLabel("rt_ntc_connected");
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X29, 32, 8); // fd
+
+    DefineLabel("rt_ntc_check_result");
+    // X0 = fd (≥0) or error (<0)
     EmitCmpImm(ARM64Register.X0, 0);
     EmitBranchCond(ARM64ConditionCode.Lt, "rt_ntc_fail");
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X29, 32, 8); // save handle
 
-    // Save raw handle
-    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X29, 32, 8);
+    // Clear O_NONBLOCK now that connect is done — kqueue still fires events,
+    // but read()/write() will block until completion (no partial reads)
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X29, 32, 8); // fd
+    EmitMovRegImm(ARM64Register.X1, F_SETFL);
+    EmitMovRegImm(ARM64Register.X2, 0); // flags = 0 (blocking)
+    EmitPushVariadicArg(ARM64Register.X2);
+    EmitCallImport("fcntl");
+    EmitVariadicCleanup();
+
+    // Async trace: io_resume [net_connect]
+    EmitIoTraceInline("resume", "__at_io_op_net_connect");
 
     // Allocate __ManagedSocket via mm_alloc(8, destructor_ptr, tag_index=0)
     EmitMovRegImm(ARM64Register.X0, 8);
@@ -4029,75 +5177,89 @@ public partial class ARM64CodeEmitter {
     EmitBranchLink("mm_alloc");
 
     // Store socket handle at [managed_ptr+0]
-    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X1, ARM64Register.X29, 32, 8); // raw handle
-    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X1, ARM64Register.X0, 0, 8);   // [ptr+0] = handle
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X1, ARM64Register.X29, 32, 8);
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X1, ARM64Register.X0, 0, 8);
     EmitBranch("rt_ntc_done");
 
     DefineLabel("rt_ntc_fail");
-    // X0 already has -1 or -2
+    // X0 already has error code (-1 or -2) — save across trace call
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X29, 32, 8);
+    EmitIoTraceInline("resume", "__at_io_op_net_connect");
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X29, 32, 8);
+    EmitBranch("rt_ntc_done");
+
+    DefineLabel("rt_ntc_close_connect_fail");
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X29, 32, 8);
+    EmitCallImport("close");
+    DefineLabel("rt_ntc_connect_fail");
+    DefineLabel("rt_ntc_testnet_fail");
+    EmitMovRegImm(ARM64Register.X0, -2);
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X29, 32, 8);
+    EmitIoTraceInline("resume", "__at_io_op_net_connect");
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X29, 32, 8);
+    EmitBranch("rt_ntc_done");
+
+    DefineLabel("rt_ntc_dns_fail");
+    EmitMovRegImm(ARM64Register.X0, -1);
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X29, 32, 8);
+    EmitIoTraceInline("resume", "__at_io_op_net_connect");
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X29, 32, 8);
+
     DefineLabel("rt_ntc_done");
     EmitRuntimeFunctionEnd();
   }
 
   /// <summary>
   /// maxon_net_send(socket_handle_x0, buffer_ptr_x1, length_x2) → bytes_sent or -1.
-  /// Delegates to __io_submit_sync(SyncOpNetSend, handle, args_struct).
-  /// Stack: [x29+16]=handle, [x29+24]=buf, [x29+32]=length, [x29+40]=args_struct
+  /// Uses kqueue EVFILT_WRITE via __io_submit_write for async I/O.
+  /// Stack: [x29+16]=handle, [x29+24]=buf, [x29+32]=length
   /// </summary>
   private void EmitNetSend() {
     EmitRuntimeFunctionStart("maxon_net_send", 3, 0x40);
 
-    // Allocate 16-byte args struct {buf_ptr, length}
-    EmitMovRegImm(ARM64Register.X0, 16);
-    EmitBranchLink("mm_raw_alloc");
-    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X29, 40, 8); // save args ptr
+    EmitIoTraceInline("yield", "__at_io_op_net_send");
 
-    // Store buf_ptr and length in struct
+    // Call __io_submit_write(fd, buf, len)
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X29, 16, 8); // fd
     EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X1, ARM64Register.X29, 24, 8); // buf
-    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X1, ARM64Register.X0, 0, 8);   // [args+0] = buf
-    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X1, ARM64Register.X29, 32, 8); // length
-    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X1, ARM64Register.X0, 8, 8);   // [args+8] = length
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X2, ARM64Register.X29, 32, 8); // len
+    EmitBranchLink("__io_submit_write");
+    // X0 = bytes written or -1
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X29, 16, 8); // save result
 
-    // Submit: __io_submit_sync(SyncOpNetSend, handle, args_struct)
-    EmitMovRegImm(ARM64Register.X0, SyncOpNetSend);
-    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X1, ARM64Register.X29, 16, 8); // handle
-    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X2, ARM64Register.X29, 40, 8); // args
-    EmitBranchLink("__io_submit_sync");
-    // X0 = bytes sent or -1
+    EmitIoTraceInline("resume", "__at_io_op_net_send");
+
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X29, 16, 8); // restore result
     EmitRuntimeFunctionEnd();
   }
 
   /// <summary>
   /// maxon_net_recv(socket_handle_x0, buffer_ptr_x1, capacity_x2) → bytes_received, 0=closed, -1=error.
-  /// Delegates to __io_submit_sync(SyncOpNetRecv, handle, args_struct).
-  /// Stack: [x29+16]=handle, [x29+24]=buf, [x29+32]=capacity, [x29+40]=args_struct
+  /// Uses kqueue EVFILT_READ via __io_submit_read for async I/O.
+  /// Stack: [x29+16]=handle, [x29+24]=buf, [x29+32]=capacity
   /// </summary>
   private void EmitNetRecv() {
     EmitRuntimeFunctionStart("maxon_net_recv", 3, 0x40);
 
-    // Allocate 16-byte args struct {buf_ptr, capacity}
-    EmitMovRegImm(ARM64Register.X0, 16);
-    EmitBranchLink("mm_raw_alloc");
-    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X29, 40, 8); // save args ptr
+    EmitIoTraceInline("yield", "__at_io_op_net_recv");
 
-    // Store buf_ptr and capacity in struct
+    // Call __io_submit_read(fd, buf, capacity)
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X29, 16, 8); // fd
     EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X1, ARM64Register.X29, 24, 8); // buf
-    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X1, ARM64Register.X0, 0, 8);   // [args+0] = buf
-    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X1, ARM64Register.X29, 32, 8); // capacity
-    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X1, ARM64Register.X0, 8, 8);   // [args+8] = capacity
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X2, ARM64Register.X29, 32, 8); // capacity
+    EmitBranchLink("__io_submit_read");
+    // X0 = bytes read, 0 = closed, -1 = error
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X29, 16, 8); // save result
 
-    // Submit: __io_submit_sync(SyncOpNetRecv, handle, args_struct)
-    EmitMovRegImm(ARM64Register.X0, SyncOpNetRecv);
-    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X1, ARM64Register.X29, 16, 8); // handle
-    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X2, ARM64Register.X29, 40, 8); // args
-    EmitBranchLink("__io_submit_sync");
-    // X0 = bytes received, 0 = closed, -1 = error
+    EmitIoTraceInline("resume", "__at_io_op_net_recv");
+
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X29, 16, 8); // restore result
     EmitRuntimeFunctionEnd();
   }
 
   /// <summary>
   /// maxon_net_close(socket_handle_x0) → void. Idempotent: does nothing if handle is 0.
-  /// Delegates to __io_submit_sync(SyncOpNetClose, handle, 0).
+  /// Delegates to __io_submit_sync(SyncOpNetClose, handle, 0) to yield and process I/O.
   /// </summary>
   private void EmitNetClose() {
     EmitRuntimeFunctionStart("maxon_net_close", 1, 0x30);
@@ -4934,6 +6096,1078 @@ public partial class ARM64CodeEmitter {
 
     DefineLabel("__prse_empty");
     EmitAdrpAddFixup(ARM64Register.X0, _symdataAdrpFixups, "__rt_empty_cstring");
+    EmitRuntimeFunctionEnd();
+  }
+
+  // ===========================================================================================
+  // Inline code-gen helpers (not standalone functions — emit instructions inline)
+  // ===========================================================================================
+
+  /// <summary>
+  /// Emit clock_gettime(CLOCK_UPTIME_RAW) and convert result to milliseconds.
+  /// Uses stack at [x29+timespecOffset] and [x29+timespecOffset+8] for the timespec struct.
+  /// Result: X2 = monotonic milliseconds. Clobbers X0, X1, X2, X3, X4.
+  /// </summary>
+  private void EmitClockGetTimeMs(int timespecOffset) {
+    EmitMovRegImm(ARM64Register.X0, CLOCK_UPTIME_RAW);
+    EmitAddSubImm(ARM64Register.X1, ARM64Register.X29, timespecOffset, isAdd: true);
+    EmitCallImport("clock_gettime");
+
+    // Convert timespec to ms: tv_sec * 1000 + tv_nsec / 1000000
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X2, ARM64Register.X29, timespecOffset, 8); // tv_sec
+    EmitMovRegImm(ARM64Register.X3, 1000);
+    EmitWord(0x9B037C42); // MUL X2, X2, X3
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X4, ARM64Register.X29, timespecOffset + 8, 8); // tv_nsec
+    EmitMovRegImm(ARM64Register.X3, 1000000);
+    EmitWord(0x9AC30884); // UDIV X4, X4, X3
+    EmitWord(0x8B040042); // ADD X2, X2, X4 → now_ms
+  }
+
+  // ===========================================================================================
+  // Trivial runtime functions
+  // ===========================================================================================
+
+  /// <summary>
+  /// mm_raw_alloc_260(): Allocate 260 bytes (for path buffers).
+  /// </summary>
+  private void EmitMmRawAlloc260() {
+    EmitRuntimeFunctionStart("mm_raw_alloc_260", 0, 0x20);
+    EmitMovRegImm(ARM64Register.X0, 260);
+    EmitBranchLink("mm_raw_alloc");
+    EmitRuntimeFunctionEnd();
+  }
+
+  /// <summary>
+  /// maxon_u64_to_string_fmt: redirect to maxon_i64_to_string_fmt
+  /// (unsigned values with sign bit clear are handled correctly).
+  /// </summary>
+  private void EmitMaxonU64ToStringFmt() {
+    DefineLabel("maxon_u64_to_string_fmt");
+    EmitBranch("maxon_i64_to_string_fmt");
+  }
+
+  /// <summary>
+  /// __gt_panic_io(): Panic with IO error message.
+  /// </summary>
+  private void EmitGtPanicIo() {
+    EmitRuntimeFunctionStart("__gt_panic_io", 0, 0x20);
+    EmitAdrpAddFixup(ARM64Register.X0, _symdataAdrpFixups, "__io_panic_msg");
+    EmitBranchLink("maxon_panic");
+    // maxon_panic does not return
+  }
+
+  /// <summary>
+  /// maxon_sleep(ms_x0): Suspends the current green thread for the given duration.
+  /// Uses clock_gettime(CLOCK_UPTIME_RAW) for monotonic millisecond timestamps.
+  /// Adds (deadline, gt) to the timer array, then yields.
+  /// </summary>
+  private void EmitMaxonSleep() {
+    // Stack: [x29+16] = ms, [x29+24] = deadline, [x29+32] = dequeued GT
+    EmitRuntimeFunctionStart("maxon_sleep", 1, 0x50);
+
+    // Get monotonic time in ms → X2
+    EmitClockGetTimeMs(40);
+
+    // deadline = now_ms + sleep_ms
+    EmitReloadArg(0); // X0 = ms
+    // ADD X0, X2, X0
+    EmitWord(0x8B000040);
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X29, 24, 8); // save deadline
+
+    // Set current GT status = waiting
+    EmitLoadCurrentGt(ARM64Register.X9);
+    EmitMovRegImm(ARM64Register.X0, GtStatusWaiting);
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X9, GtOffStatus, 8);
+
+    // __gt_timer_add(gt=current, deadline)
+    EmitMovRegReg(ARM64Register.X0, ARM64Register.X9);
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X1, ARM64Register.X29, 24, 8); // deadline
+    EmitBranchLink("__gt_timer_add");
+
+    EmitTraceAcquire();
+    if (Compiler.AsyncTrace) {
+      EmitAdrpAddFixup(ARM64Register.X0, _symdataAdrpFixups, "__at_tag_sleep_yield");
+      EmitBranchLink("mm_trace_print_tag");
+      EmitLoadCurrentGt(ARM64Register.X9);
+      EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X9, GtOffTraceId, 8);
+      EmitBranchLink("mm_trace_print_i64");
+      EmitAdrpAddFixup(ARM64Register.X0, _symdataAdrpFixups, "__at_tag_nl");
+      EmitBranchLink("mm_trace_print_tag");
+    }
+    EmitTraceRelease();
+
+    // Check if current GT is the mainThread (stackBase == 0)
+    EmitLoadCurrentGt(ARM64Register.X9);
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X9, GtOffStackBase, 8);
+    EmitCbz(ARM64Register.X0, "__sleep_mainthread_loop");
+
+    // Non-mainThread: yield to next runnable
+    EmitBranchLink("__gt_dequeue");
+    EmitCbz(ARM64Register.X0, "__sleep_mainthread_loop"); // no one to run, fall through to park loop
+
+    // Got a next thread — context switch to it
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X29, 32, 8); // save next
+    EmitMovRegImm(ARM64Register.X1, GtStatusRunning);
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X1, ARM64Register.X0, GtOffStatus, 8);
+    EmitLoadCurrentGt(ARM64Register.X0);
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X1, ARM64Register.X29, 32, 8);
+    EmitLoadP(ARM64Register.X9);
+    EmitMovRegReg(ARM64Register.X2, ARM64Register.X9); // X2 = P*
+    EmitBranchLink("__gt_context_switch");
+    EmitBranch("__sleep_resume"); // resumed when timer expires
+
+    // MainThread park loop: inline scheduling until our status changes from waiting
+    DefineLabel("__sleep_mainthread_loop");
+    EmitBranchLink("__gt_process_pending_waiter");
+    EmitBranchLink("__io_check_completions");
+    EmitBranchLink("__io_poll_kqueue");
+    EmitBranchLink("__gt_timer_check");
+    // Check if our status changed
+    EmitLoadCurrentGt(ARM64Register.X9);
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X9, GtOffStatus, 8);
+    EmitCmpImm(ARM64Register.X0, GtStatusWaiting);
+    EmitBranchCond(ARM64ConditionCode.Ne, "__sleep_resume");
+    // Try dequeue a runnable GT and run it while we wait
+    EmitBranchLink("__gt_dequeue");
+    EmitCbz(ARM64Register.X0, "__sleep_mainthread_park");
+    // Got a GT — context-switch to it
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X29, 32, 8);
+    EmitMovRegImm(ARM64Register.X1, GtStatusRunning);
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X1, ARM64Register.X0, GtOffStatus, 8);
+    EmitLoadCurrentGt(ARM64Register.X0);
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X1, ARM64Register.X29, 32, 8);
+    EmitLoadP(ARM64Register.X9);
+    EmitMovRegReg(ARM64Register.X2, ARM64Register.X9); // X2 = P*
+    EmitBranchLink("__gt_context_switch");
+    EmitBranch("__sleep_mainthread_loop");
+
+    // No GT to run — brief nanosleep then retry
+    DefineLabel("__sleep_mainthread_park");
+    // nanosleep({0, 1000000}, NULL) = 1ms
+    EmitMovRegImm(ARM64Register.X0, 0);
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X29, 40, 8); // tv_sec = 0
+    EmitMovRegImm(ARM64Register.X0, 1000000);
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X29, 48, 8); // tv_nsec = 1ms
+    EmitAddSubImm(ARM64Register.X0, ARM64Register.X29, 40, isAdd: true);
+    EmitMovRegImm(ARM64Register.X1, 0); // rem = NULL
+    EmitCallImport("nanosleep");
+    EmitBranch("__sleep_mainthread_loop");
+
+    DefineLabel("__sleep_resume");
+    EmitTraceAcquire();
+    if (Compiler.AsyncTrace) {
+      EmitAdrpAddFixup(ARM64Register.X0, _symdataAdrpFixups, "__at_tag_sleep_resume");
+      EmitBranchLink("mm_trace_print_tag");
+      EmitLoadCurrentGt(ARM64Register.X9);
+      EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X9, GtOffTraceId, 8);
+      EmitBranchLink("mm_trace_print_i64");
+      EmitAdrpAddFixup(ARM64Register.X0, _symdataAdrpFixups, "__at_tag_nl");
+      EmitBranchLink("mm_trace_print_tag");
+    }
+    EmitTraceRelease();
+
+    EmitRuntimeFunctionEnd();
+  }
+
+  // ===========================================================================================
+  // Timer infrastructure — binary min-heap (O(log n) add/remove)
+  // ===========================================================================================
+
+  /// <summary>
+  /// __gt_timer_add(gt_x0, deadline_x1): Add a timer entry and sift-up to maintain heap property.
+  /// </summary>
+  private void EmitGtTimerAdd() {
+    EmitRuntimeFunctionStart("__gt_timer_add", 2, 0x40);
+    // [x29+16] = gt, [x29+24] = deadline, [x29+32] = array_base
+
+    EmitLockAcquire("__sched_timer_lock");
+
+    // i = count; count++
+    EmitGlobalLoadReg(ARM64Register.X0, "__gt_timer_count");
+    EmitAddSubImm(ARM64Register.X2, ARM64Register.X0, 1, isAdd: true);
+    EmitGlobalStoreReg(ARM64Register.X2, "__gt_timer_count");
+    // X0 = i (insertion index)
+
+    // Cache array base
+    EmitGlobalLeaReg(ARM64Register.X2, "__gt_timer_heap");
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X2, ARM64Register.X29, 32, 8);
+
+    // &array[i] = base + i * 16
+    // LSL X3, X0, #4 (i * 16)
+    EmitWord(0xD37CEC03);
+    // ADD X2, X2, X3
+    EmitWord(0x8B030042);
+
+    // Store deadline at [X2, #0]
+    EmitReloadArg(1); // X1 = deadline
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X1, ARM64Register.X2, TimerOffDeadline, 8);
+    // Store gt at [X2, #8]
+    EmitReloadArg(0); // X0 = gt
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X2, TimerOffGt, 8);
+
+    // Sift-up: X0 = i (current index), compare with parent = (i-1)/2
+    EmitGlobalLoadReg(ARM64Register.X0, "__gt_timer_count");
+    EmitAddSubImm(ARM64Register.X0, ARM64Register.X0, 1, isAdd: false); // X0 = i = count - 1
+
+    DefineLabel("__gt_timer_siftup_loop");
+    EmitCbz(ARM64Register.X0, "__gt_timer_siftup_done"); // i == 0 → root, done
+
+    // parent = (i - 1) / 2
+    EmitAddSubImm(ARM64Register.X1, ARM64Register.X0, 1, isAdd: false); // X1 = i - 1
+    // LSR X1, X1, #1
+    EmitWord(0xD341FC21); // X1 = parent
+
+    // Load heap base
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X9, ARM64Register.X29, 32, 8); // base
+
+    // &heap[i] = base + i * 16
+    // LSL X2, X0, #4
+    EmitWord(0xD37CEC02);
+    // ADD X2, X9, X2
+    EmitWord(0x8B020122);
+
+    // &heap[parent] = base + parent * 16
+    // LSL X3, X1, #4
+    EmitWord(0xD37CEC23);
+    // ADD X3, X9, X3
+    EmitWord(0x8B030123);
+
+    // Load heap[i].deadline (X4) and heap[parent].deadline (X5)
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X4, ARM64Register.X2, TimerOffDeadline, 8);
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X5, ARM64Register.X3, TimerOffDeadline, 8);
+
+    // if heap[i].deadline >= heap[parent].deadline: done
+    // CMP X4, X5
+    EmitWord(0xEB05009F);
+    EmitBranchCond(ARM64ConditionCode.Hs, "__gt_timer_siftup_done");
+
+    // Swap heap[i] and heap[parent] (16 bytes each: deadline + gt)
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X6, ARM64Register.X2, TimerOffGt, 8); // heap[i].gt
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X7, ARM64Register.X3, TimerOffGt, 8); // heap[parent].gt
+    // Write parent's data to i's slot
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X5, ARM64Register.X2, TimerOffDeadline, 8);
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X7, ARM64Register.X2, TimerOffGt, 8);
+    // Write i's data to parent's slot
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X4, ARM64Register.X3, TimerOffDeadline, 8);
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X6, ARM64Register.X3, TimerOffGt, 8);
+
+    // i = parent, continue
+    EmitMovRegReg(ARM64Register.X0, ARM64Register.X1);
+    EmitBranch("__gt_timer_siftup_loop");
+
+    DefineLabel("__gt_timer_siftup_done");
+    EmitLockRelease("__sched_timer_lock");
+    EmitRuntimeFunctionEnd();
+  }
+
+  /// <summary>
+  /// __gt_timer_check(): Min-heap based timer check. Repeatedly checks heap[0] (smallest deadline).
+  /// When expired, removes root via sift-down and fires the GT.
+  /// </summary>
+  private void EmitGtTimerCheck() {
+    // Stack: [x29+16] = now_ms, [x29+24] = array_base, [x29+32] = sift index
+    //        [x29+40..55] = timespec for clock_gettime, [x29+56] = saved gt
+    EmitRuntimeFunctionStart("__gt_timer_check", 0, 0x50);
+
+    // Fast path: if count == 0, return immediately (no lock needed)
+    EmitGlobalLoadReg(ARM64Register.X0, "__gt_timer_count");
+    EmitCbz(ARM64Register.X0, "__gt_timer_check_ret");
+
+    // Acquire timer lock
+    EmitLockAcquire("__sched_timer_lock");
+
+    // Reload count (may have changed while acquiring lock)
+    EmitGlobalLoadReg(ARM64Register.X0, "__gt_timer_count");
+    EmitCbz(ARM64Register.X0, "__gt_timer_check_ret_unlock");
+
+    // Get monotonic time in ms
+    EmitClockGetTimeMs(40);
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X2, ARM64Register.X29, 16, 8); // save now_ms
+
+    // Cache array base
+    EmitGlobalLeaReg(ARM64Register.X0, "__gt_timer_heap");
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X29, 24, 8); // save array_base
+
+    // --- Main loop: check heap[0] ---
+    DefineLabel("__gt_timer_check_loop");
+    EmitGlobalLoadReg(ARM64Register.X0, "__gt_timer_count");
+    EmitCbz(ARM64Register.X0, "__gt_timer_check_ret_unlock"); // empty → done
+
+    // Load heap[0].deadline
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X2, ARM64Register.X29, 24, 8); // base
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X4, ARM64Register.X2, TimerOffDeadline, 8);
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X5, ARM64Register.X29, 16, 8); // now_ms
+    // if heap[0].deadline > now_ms: no more expired → done
+    // CMP X4, X5
+    EmitWord(0xEB05009F);
+    EmitBranchCond(ARM64ConditionCode.Hi, "__gt_timer_check_ret_unlock");
+
+    // Expired! Save heap[0].gt
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X2, TimerOffGt, 8);
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X29, 56, 8);
+
+    // Remove root: move heap[count-1] to heap[0], count--
+    EmitGlobalLoadReg(ARM64Register.X0, "__gt_timer_count");
+    EmitAddSubImm(ARM64Register.X0, ARM64Register.X0, 1, isAdd: false);
+    EmitGlobalStoreReg(ARM64Register.X0, "__gt_timer_count");
+
+    // If count is now 0, no need to sift (heap is empty)
+    EmitCbz(ARM64Register.X0, "__gt_timer_check_fire");
+
+    // &heap[new_count] = base + new_count * 16
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X1, ARM64Register.X29, 24, 8); // base
+    // LSL X3, X0, #4
+    EmitWord(0xD37CEC03);
+    // ADD X3, X1, X3
+    EmitWord(0x8B030023);
+    // Copy heap[count-1] to heap[0]
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X4, ARM64Register.X3, 0, 8);
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X4, ARM64Register.X1, 0, 8); // base+0 = heap[0]
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X4, ARM64Register.X3, 8, 8);
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X4, ARM64Register.X1, 8, 8);
+
+    // Sift-down from index 0
+    EmitMovRegImm(ARM64Register.X0, 0);
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X29, 32, 8); // i = 0
+
+    DefineLabel("__gt_timer_siftdown_loop");
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X29, 32, 8); // i
+    EmitGlobalLoadReg(ARM64Register.X10, "__gt_timer_count"); // count
+
+    // left = 2*i + 1
+    // LSL X1, X0, #1; ADD X1, X1, #1
+    EmitWord(0xD37FF801); // LSL X1, X0, #1
+    EmitAddSubImm(ARM64Register.X1, ARM64Register.X1, 1, isAdd: true);
+    // if left >= count: done (leaf node)
+    // CMP X1, X10
+    EmitWord(0xEB0A003F);
+    EmitBranchCond(ARM64ConditionCode.Hs, "__gt_timer_check_fire");
+
+    // smallest = left
+    EmitMovRegReg(ARM64Register.X11, ARM64Register.X1); // X11 = smallest
+
+    // right = left + 1
+    EmitAddSubImm(ARM64Register.X12, ARM64Register.X1, 1, isAdd: true); // X12 = right
+
+    // Load heap base
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X9, ARM64Register.X29, 24, 8);
+
+    // Load heap[left].deadline
+    // LSL X2, X1, #4; ADD X2, X9, X2
+    EmitWord(0xD37CEC22);
+    EmitWord(0x8B020122);
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X4, ARM64Register.X2, TimerOffDeadline, 8); // X4 = left deadline
+
+    // Check if right < count
+    // CMP X12, X10
+    EmitWord(0xEB0A019F);
+    EmitBranchCond(ARM64ConditionCode.Hs, "__gt_timer_siftdown_compare"); // no right child
+
+    // Load heap[right].deadline
+    // LSL X3, X12, #4; ADD X3, X9, X3
+    EmitWord(0xD37CED83);
+    EmitWord(0x8B030123);
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X5, ARM64Register.X3, TimerOffDeadline, 8); // X5 = right deadline
+
+    // if right.deadline < left.deadline: smallest = right
+    // CMP X5, X4
+    EmitWord(0xEB0400BF);
+    EmitBranchCond(ARM64ConditionCode.Hs, "__gt_timer_siftdown_compare"); // right >= left, keep left
+    EmitMovRegReg(ARM64Register.X11, ARM64Register.X12); // smallest = right
+    EmitMovRegReg(ARM64Register.X4, ARM64Register.X5); // X4 = smallest deadline (right)
+
+    DefineLabel("__gt_timer_siftdown_compare");
+    // Load heap[i].deadline
+    // LSL X2, X0, #4; ADD X2, X9, X2
+    EmitWord(0xD37CEC02);
+    EmitWord(0x8B020122);
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X5, ARM64Register.X2, TimerOffDeadline, 8); // X5 = i deadline
+
+    // if heap[i].deadline <= heap[smallest].deadline: done
+    // CMP X5, X4
+    EmitWord(0xEB0400BF);
+    EmitBranchCond(ARM64ConditionCode.Ls, "__gt_timer_check_fire"); // i <= smallest, heap ok
+
+    // Swap heap[i] and heap[smallest]
+    // X2 = &heap[i], compute &heap[smallest]
+    // LSL X3, X11, #4; ADD X3, X9, X3
+    EmitWord(0xD37CED63);
+    EmitWord(0x8B030123);
+    // Load all 16 bytes of both entries
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X4, ARM64Register.X2, 0, 8); // i.deadline
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X5, ARM64Register.X2, 8, 8); // i.gt
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X6, ARM64Register.X3, 0, 8); // smallest.deadline
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X7, ARM64Register.X3, 8, 8); // smallest.gt
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X6, ARM64Register.X2, 0, 8);
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X7, ARM64Register.X2, 8, 8);
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X4, ARM64Register.X3, 0, 8);
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X5, ARM64Register.X3, 8, 8);
+
+    // i = smallest, continue
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X11, ARM64Register.X29, 32, 8);
+    EmitBranch("__gt_timer_siftdown_loop");
+
+    // --- Fire the expired GT ---
+    DefineLabel("__gt_timer_check_fire");
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X29, 56, 8); // gt
+    EmitMovRegImm(ARM64Register.X1, GtStatusReady);
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X1, ARM64Register.X0, GtOffStatus, 8);
+    // Skip enqueue if mainThread (stackBase == 0)
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X1, ARM64Register.X0, GtOffStackBase, 8);
+    EmitCbz(ARM64Register.X1, "__gt_timer_check_no_enqueue");
+    // Skip enqueue if gt == P->currentGt
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X29, 56, 8); // save gt
+    EmitLoadCurrentGt(ARM64Register.X1); // clobbers X0, X9
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X29, 56, 8); // reload gt
+    // CMP X0, X1
+    EmitWord(0xEB01001F);
+    EmitBranchCond(ARM64ConditionCode.Eq, "__gt_timer_check_no_enqueue");
+    EmitBranchLink("__gt_enqueue");
+    DefineLabel("__gt_timer_check_no_enqueue");
+
+    // Loop back to check next heap root
+    EmitBranch("__gt_timer_check_loop");
+
+    DefineLabel("__gt_timer_check_ret_unlock");
+    EmitLockRelease("__sched_timer_lock");
+
+    DefineLabel("__gt_timer_check_ret");
+    EmitRuntimeFunctionEnd();
+  }
+
+  // ===========================================================================================
+  // Stack growth (__gt_morestack)
+  // ===========================================================================================
+
+  /// <summary>
+  /// __gt_morestack: Called when a function prologue detects the stack guard is about to be hit.
+  /// Allocates a new stack 2x the current size, copies the old stack content, adjusts FP chain,
+  /// and switches to the new stack. Must run on P's system stack since the GT stack is full.
+  /// Called with: X30 (LR) = return address to retry the function prologue.
+  /// X28 = P* (always valid for green threads).
+  /// </summary>
+  private void EmitGtMorestack() {
+    DefineLabel("__gt_morestack");
+    // Called via BL from a function prologue's stack guard check.
+    // X30 = return-to-prologue addr. X16 = original caller's LR. SP = old GT stack.
+    //
+    // Copy-based stack growth: allocate 2x stack, copy old content to top of new,
+    // walk FP chain adjusting saved X29 pointers, munmap old stack, return on new stack.
+    // Uses callee-saved X19-X22 as scratch (survive across libc calls).
+
+    // Save return addr and old SP in scratch regs before switching stacks
+    EmitMovRegReg(ARM64Register.X15, ARM64Register.X30); // return-to-prologue
+    EmitMovRegReg(ARM64Register.X17, ARM64Register.Sp);  // old GT SP
+
+    // Switch to per-P system stack
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X9, ARM64Register.X28, POffSystemStackSP, 8);
+    EmitWord(0x9100013F); // MOV SP, X9 (ADD SP, X9, #0)
+
+    // System frame: 0xB0 = 176 bytes (includes space for saving X0-X7 arg regs).
+    var frameSize = 0xB0;
+    var imm7 = unchecked((uint)(-frameSize / 8)) & 0x7Fu;
+    EmitWord(0xA9800000 | (imm7 << 15) | (30u << 10) | (31u << 5) | 29u);
+    EmitMovRegReg(ARM64Register.X29, ARM64Register.Sp);
+
+    // Save scratch regs and callee-saved regs we'll use
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X15, ARM64Register.X29, 16, 8); // [+16] return addr
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X17, ARM64Register.X29, 24, 8); // [+24] old GT SP
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X16, ARM64Register.X29, 32, 8); // [+32] original LR
+
+    // Save X0-X7 (function argument registers clobbered by mmap/memmove/munmap calls)
+    for (int i = 0; i < 8; i++)
+      EmitLoadStoreUnsignedImm(0xF9000000, AbiArgRegs[i], ARM64Register.X29, 80 + i * 8, 8);
+    // STP X19, X20, [X29, #40]
+    EmitWord(0xA9000000 | (5u << 15) | (20u << 10) | (Reg(ARM64Register.X29) << 5) | Reg(ARM64Register.X19));
+    // STP X21, X22, [X29, #56]
+    EmitWord(0xA9000000 | (7u << 15) | (22u << 10) | (Reg(ARM64Register.X29) << 5) | Reg(ARM64Register.X21));
+
+    // --- Load old stack info into callee-saved regs ---
+    EmitLoadCurrentGt(ARM64Register.X9);
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X19, ARM64Register.X9, GtOffStackBase, 8); // X19 = old_base
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X20, ARM64Register.X9, GtOffStackSize, 8); // X20 = old_size
+
+    // --- Allocate new stack (2x) ---
+    // X21 = new_size = old_size * 2
+    // ADD X21, X20, X20
+    EmitWord(0x8B140295);
+    // mmap(NULL, new_size, PROT_READ|PROT_WRITE, MAP_ANON|MAP_PRIVATE, -1, 0)
+    EmitMovRegImm(ARM64Register.X0, 0);
+    EmitMovRegReg(ARM64Register.X1, ARM64Register.X21);
+    EmitMovRegImm(ARM64Register.X2, 3);
+    EmitMovRegImm(ARM64Register.X3, 0x1002);
+    EmitMovRegImm(ARM64Register.X4, -1);
+    EmitMovRegImm(ARM64Register.X5, 0);
+    EmitCallImport("mmap");
+    EmitMovRegReg(ARM64Register.X22, ARM64Register.X0); // X22 = new_base
+
+    // --- Copy old stack to top of new stack ---
+    // dest = new_base + new_size - old_size
+    // ADD X0, X22, X21; SUB X0, X0, X20
+    EmitWord(0x8B1502C0); // ADD X0, X22, X21
+    EmitWord(0xCB140000); // SUB X0, X0, X20
+    EmitMovRegReg(ARM64Register.X1, ARM64Register.X19); // src = old_base
+    EmitMovRegReg(ARM64Register.X2, ARM64Register.X20); // len = old_size
+    EmitCallImport("memcpy");
+
+    // --- Compute offset = dest - old_base ---
+    // Recompute dest from callee-saved regs (X9 was clobbered by memcpy)
+    // dest = X22 + X21 - X20
+    // ADD X9, X22, X21
+    EmitWord(0x8B1502C9); // ADD X9, X22, X21
+    // SUB X9, X9, X20
+    EmitWord(0xCB140129); // SUB X9, X9, X20
+    // X9 = dest. offset = dest - X19
+    // SUB X10, X9, X19 → X10 = offset
+    EmitWord(0xCB13012A); // SUB X10, X9, X19
+
+
+    // --- Precise FP-chain walk: adjust ONLY saved X29 values ---
+    // ADD X12, X19, X20 → old_top
+    EmitWord(0x8B14026C);
+
+    // Step 1: Adjust the GT X29 in the system frame
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X11, ARM64Register.X29, 0, 8);
+    EmitWord(0xEB13017F); // CMP X11, X19
+    EmitBranchCond(ARM64ConditionCode.Lo, "__gt_morestack_fp_done");
+    EmitWord(0xEB0C017F); // CMP X11, X12
+    EmitBranchCond(ARM64ConditionCode.Hs, "__gt_morestack_fp_done");
+    EmitWord(0x8B0A016B); // ADD X11, X11, X10
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X11, ARM64Register.X29, 0, 8);
+
+    // Step 2: Walk the chain from adjusted FP. X11 = current frame on new stack.
+    DefineLabel("__gt_morestack_fp_walk");
+    // Load saved FP at [walker, #0]
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X14, ARM64Register.X11, 0, 8);
+    EmitCbz(ARM64Register.X14, "__gt_morestack_fp_done"); // 0 = chain end
+    // Check if saved_FP in [old_base, old_top)
+    EmitWord(0xEB1301DF); // CMP X14, X19
+    EmitBranchCond(ARM64ConditionCode.Lo, "__gt_morestack_fp_next");
+    EmitWord(0xEB0C01DF); // CMP X14, X12
+    EmitBranchCond(ARM64ConditionCode.Hs, "__gt_morestack_fp_next");
+    // Adjust and store back
+    EmitWord(0x8B0A01CE); // ADD X14, X14, X10
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X14, ARM64Register.X11, 0, 8);
+    DefineLabel("__gt_morestack_fp_next");
+    // Follow chain: walker = [walker, #0] (adjusted or not)
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X11, ARM64Register.X11, 0, 8);
+    EmitCbz(ARM64Register.X11, "__gt_morestack_fp_done");
+    // Bounds check: walker must be in new stack copied region [X9, X9+X20)
+    EmitWord(0xEB09017F); // CMP X11, X9
+    EmitBranchCond(ARM64ConditionCode.Lo, "__gt_morestack_fp_done");
+    // ADD X13, X9, X20
+    EmitWord(0x8B14012D);
+    EmitWord(0xEB0D017F); // CMP X11, X13
+    EmitBranchCond(ARM64ConditionCode.Hs, "__gt_morestack_fp_done");
+    EmitBranch("__gt_morestack_fp_walk");
+
+    DefineLabel("__gt_morestack_fp_done");
+
+    // --- Update GT fields ---
+    EmitLoadCurrentGt(ARM64Register.X9);
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X22, ARM64Register.X9, GtOffStackBase, 8); // new_base
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X21, ARM64Register.X9, GtOffStackSize, 8); // new_size
+    EmitAddSubImm(ARM64Register.X0, ARM64Register.X22, GtStackGuardMargin, isAdd: true);
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X9, GtOffStackGuard, 8);
+
+    // Update gt.sp if it points into the old stack (stale from last context switch)
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X9, GtOffSp, 8);
+    // ADD X12, X19, X20 → old_top (recompute, X12 may be stale)
+    EmitWord(0x8B14026C);
+    // CMP X0, X19 (old_base)
+    EmitWord(0xEB13001F);
+    EmitBranchCond(ARM64ConditionCode.Lo, "__gt_morestack_skip_sp");
+    // CMP X0, X12 (old_top)
+    EmitWord(0xEB0C001F);
+    EmitBranchCond(ARM64ConditionCode.Hs, "__gt_morestack_skip_sp");
+    // ADD X0, X0, X10 (adjust by offset)
+    EmitWord(0x8B0A0000);
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X9, GtOffSp, 8);
+    DefineLabel("__gt_morestack_skip_sp");
+
+    // Free old stack — safe now that array literal buffers are always heap-allocated,
+    // so no embedded stack pointers exist besides saved X29 (adjusted by FP walk).
+    EmitMovRegReg(ARM64Register.X0, ARM64Register.X19); // old_base
+    EmitMovRegReg(ARM64Register.X1, ARM64Register.X20); // old_size
+    EmitCallImport("munmap");
+
+    // --- Compute new SP and adjusted X29, then return ---
+    // Recompute offset from callee-saved regs (X10 was clobbered by munmap)
+    // offset = (X22 + X21 - X20) - X19
+    // ADD X10, X22, X21
+    EmitWord(0x8B1502CA); // ADD X10, X22, X21
+    // SUB X10, X10, X20
+    EmitWord(0xCB14014A); // SUB X10, X10, X20
+    // SUB X10, X10, X19
+    EmitWord(0xCB13014A); // SUB X10, X10, X19
+
+    // new_SP = old_SP + offset
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X17, ARM64Register.X29, 24, 8); // old SP
+    // ADD X17, X17, X10
+    EmitWord(0x8B0A0231); // ADD X17, X17, X10
+
+    // Load adjusted GT X29 from system frame (already adjusted by FP walk)
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X11, ARM64Register.X29, 0, 8); // adjusted X29
+
+    // Restore X0-X7 (function argument registers)
+    for (int i = 0; i < 8; i++)
+      EmitLoadStoreUnsignedImm(0xF9400000, AbiArgRegs[i], ARM64Register.X29, 80 + i * 8, 8);
+
+    // Restore callee-saved regs
+    // LDP X19, X20, [X29, #40]
+    EmitWord(0xA9400000 | (5u << 15) | (20u << 10) | (Reg(ARM64Register.X29) << 5) | Reg(ARM64Register.X19));
+    // LDP X21, X22, [X29, #56]
+    EmitWord(0xA9400000 | (7u << 15) | (22u << 10) | (Reg(ARM64Register.X29) << 5) | Reg(ARM64Register.X21));
+    // Restore scratch regs
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X15, ARM64Register.X29, 16, 8); // return addr
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X16, ARM64Register.X29, 32, 8); // original LR
+
+    // Destroy system frame (restores system X29/X30, we'll overwrite X29)
+    EmitMovRegReg(ARM64Register.Sp, ARM64Register.X29);
+    var imm7Post = (uint)(frameSize / 8) & 0x7Fu;
+    EmitWord(0xA8C00000 | (imm7Post << 15) | (30u << 10) | (31u << 5) | 29u);
+
+    // Set X29 to the adjusted GT FP (overwrite the system frame's X29)
+    EmitMovRegReg(ARM64Register.X29, ARM64Register.X11);
+
+    // Switch SP to new GT stack
+    EmitWord(0x9100023F); // MOV SP, X17 (ADD SP, X17, #0)
+
+    // Return to prologue (MOV X30, X16; STP X29, X30, ...)
+    EmitWord(0xD65F01E0); // RET X15
+  }
+
+  // ===========================================================================================
+  // Scheduler enhancements
+  // ===========================================================================================
+
+  /// <summary>
+  /// __gt_process_pending_waiter(): Load P->pendingWaiter via TLS, clear it,
+  /// and re-enqueue if non-null.
+  /// </summary>
+  private void EmitGtProcessPendingWaiter() {
+    EmitRuntimeFunctionStart("__gt_process_pending_waiter", 0, 0x20);
+
+    // Load P->pendingWaiter
+    EmitLoadP(ARM64Register.X9);
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X9, POffPendingWaiter, 8);
+    EmitCbz(ARM64Register.X0, "__gt_ppw_done");
+
+    // Clear P->pendingWaiter
+    EmitMovRegImm(ARM64Register.X1, 0);
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X1, ARM64Register.X9, POffPendingWaiter, 8);
+    // Enqueue the waiter
+    EmitBranchLink("__gt_enqueue");
+
+    DefineLabel("__gt_ppw_done");
+    EmitRuntimeFunctionEnd();
+  }
+
+  // ===========================================================================================
+  // kqueue-based async I/O
+  // ===========================================================================================
+
+  /// <summary>
+  /// __io_init(): Create kqueue file descriptor. Called from _start after __gt_init.
+  /// </summary>
+  private void EmitIoInit() {
+    EmitRuntimeFunctionStart("__io_init", 0, 0x30);
+    EmitCallImport("kqueue");
+    EmitGlobalStoreReg(ARM64Register.X0, "__io_kqueue_fd");
+    EmitRuntimeFunctionEnd();
+  }
+
+  /// <summary>
+  /// __io_shutdown(): Close kqueue fd.
+  /// </summary>
+  private void EmitIoShutdown() {
+    EmitRuntimeFunctionStart("__io_shutdown", 0, 0x20);
+    EmitGlobalLoadReg(ARM64Register.X0, "__io_kqueue_fd");
+    EmitCallImport("close");
+    EmitRuntimeFunctionEnd();
+  }
+
+  /// <summary>
+  /// __io_enqueue_completion(comp_x0): Add an IoCompletion to the done queue.
+  /// Standard linked-list append (same pattern as sync request queue).
+  /// </summary>
+  private void EmitIoEnqueueCompletion() {
+    EmitRuntimeFunctionStart("__io_enqueue_completion", 1, 0x30);
+
+    // comp.next = 0
+    EmitReloadArg(0);
+    EmitMovRegImm(ARM64Register.X1, 0);
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X1, ARM64Register.X0, IoCompOffNext, 8);
+
+    // if tail == NULL: head = tail = comp
+    EmitGlobalLoadReg(ARM64Register.X1, "__io_done_tail");
+    EmitCbnz(ARM64Register.X1, "__io_enqueue_comp_append");
+
+    EmitReloadArg(0);
+    EmitGlobalStoreReg(ARM64Register.X0, "__io_done_head");
+    EmitGlobalStoreReg(ARM64Register.X0, "__io_done_tail");
+    EmitRuntimeFunctionEnd();
+
+    DefineLabel("__io_enqueue_comp_append");
+    EmitGlobalLoadReg(ARM64Register.X1, "__io_done_tail");
+    EmitReloadArg(0);
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X1, IoCompOffNext, 8); // tail.next = comp
+    EmitGlobalStoreReg(ARM64Register.X0, "__io_done_tail"); // tail = comp
+    EmitRuntimeFunctionEnd();
+  }
+
+  /// <summary>
+  /// __io_dequeue_completion() -> IoCompletion* in X0 (or NULL if empty).
+  /// </summary>
+  private void EmitIoDequeueCompletion() {
+    EmitRuntimeFunctionStart("__io_dequeue_completion", 0, 0x30);
+
+    EmitGlobalLoadReg(ARM64Register.X0, "__io_done_head");
+    EmitCbnz(ARM64Register.X0, "__io_dequeue_comp_nonempty");
+    EmitRuntimeFunctionEnd();
+
+    DefineLabel("__io_dequeue_comp_nonempty");
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X1, ARM64Register.X0, IoCompOffNext, 8);
+    EmitGlobalStoreReg(ARM64Register.X1, "__io_done_head");
+    EmitCbnz(ARM64Register.X1, "__io_dequeue_comp_done");
+    EmitMovRegImm(ARM64Register.X1, 0);
+    EmitGlobalStoreReg(ARM64Register.X1, "__io_done_tail");
+    DefineLabel("__io_dequeue_comp_done");
+    EmitMovRegImm(ARM64Register.X1, 0);
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X1, ARM64Register.X0, IoCompOffNext, 8);
+    EmitRuntimeFunctionEnd();
+  }
+
+  /// <summary>
+  /// __io_complete_gt(gt_x0, result_x1, error_x2, bytes_x3):
+  /// Store IO results into the GT struct, set status=ready, and re-enqueue.
+  /// </summary>
+  private void EmitIoCompleteGt() {
+    EmitRuntimeFunctionStart("__io_complete_gt", 4, 0x30);
+
+    EmitReloadArg(0); // X0 = gt
+    EmitReloadArg(1); // X1 = result
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X1, ARM64Register.X0, GtOffIoResultVal, 8);
+    EmitReloadArg(2); // X2 = error
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X2, ARM64Register.X0, GtOffIoErrorCode, 8);
+
+    // Set status = ready
+    EmitMovRegImm(ARM64Register.X1, GtStatusReady);
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X1, ARM64Register.X0, GtOffStatus, 8);
+
+    // Skip enqueue for mainThread (stackBase == 0)
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X1, ARM64Register.X0, GtOffStackBase, 8);
+    EmitCbz(ARM64Register.X1, "__io_complete_gt_done");
+
+    // Spin-wait until ioYielded == 1 (context switch has saved from-GT's registers).
+    // Without this, the I/O worker thread could enqueue the GT while its SP is still
+    // being saved, causing another worker to load stale register state.
+    DefineLabel("__io_complete_gt_spin");
+    EmitReloadArg(0); // reload gt
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X1, ARM64Register.X0, GtOffIoYielded, 8);
+    EmitCbnz(ARM64Register.X1, "__io_complete_gt_enqueue");
+    EmitWord(0xD503203F); // YIELD hint (ARM64 equivalent of x86 PAUSE)
+    EmitBranch("__io_complete_gt_spin");
+
+    DefineLabel("__io_complete_gt_enqueue");
+    EmitReloadArg(0); // reload gt for enqueue
+    EmitBranchLink("__gt_enqueue");
+
+    DefineLabel("__io_complete_gt_done");
+    EmitRuntimeFunctionEnd();
+  }
+
+  /// <summary>
+  /// __io_poll_kqueue(): Non-blocking poll of kqueue for ready events.
+  /// For each ready event, dispatches based on KqCtx filter:
+  ///   EVFILT_READ (-1)  → read(fd, buf, len), result = bytes read
+  ///   EVFILT_WRITE (-2) → write(fd, buf, len), result = bytes written
+  ///   KQCTX_CONNECT (-3) → getsockopt(SO_ERROR) check, result = fd or -2
+  /// Stores result in waiting GT, sets status=ready, and re-enqueues.
+  /// </summary>
+  private void EmitIoPollKqueue() {
+    // Stack: [x29+16] = nready, [x29+24] = loop index, [x29+32] = kevent ptr
+    //        [x29+40..55] = zero timeout / reused for result and getsockopt buffers
+    //        [x29+56] = saved ctx ptr, [x29+64] = saved waiter GT ptr
+    // Thread safety note: __io_poll_kqueue uses the global __io_kevent_buf buffer.
+    // kqueue itself is thread-safe on macOS, but the shared buffer is not protected
+    // by a lock. This is safe for now because all green threads (and thus all callers
+    // of this function) run on the main OS thread. If green threads are ever distributed
+    // across multiple OS threads, __io_kevent_buf access must be synchronized.
+    EmitRuntimeFunctionStart("__io_poll_kqueue", 0, 0x60);
+
+    // Check if kqueue fd is valid (> 0)
+    EmitGlobalLoadReg(ARM64Register.X0, "__io_kqueue_fd");
+    EmitCmpImm(ARM64Register.X0, 0);
+    EmitBranchCond(ARM64ConditionCode.Le, "__io_poll_kqueue_ret");
+
+    // Build zero timeout on stack
+    EmitMovRegImm(ARM64Register.X0, 0);
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X29, 40, 8); // tv_sec = 0
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X29, 48, 8); // tv_nsec = 0
+
+    // kevent(kq, NULL, 0, __io_kevent_buf, 32, &zero_timeout) → nready
+    EmitGlobalLoadReg(ARM64Register.X0, "__io_kqueue_fd");
+    EmitMovRegImm(ARM64Register.X1, 0); // changelist = NULL
+    EmitMovRegImm(ARM64Register.X2, 0); // nchanges = 0
+    EmitGlobalLeaReg(ARM64Register.X3, "__io_kevent_buf"); // eventlist
+    EmitMovRegImm(ARM64Register.X4, 32); // nevents = 32
+    EmitAddSubImm(ARM64Register.X5, ARM64Register.X29, 40, isAdd: true); // timeout
+    EmitCallImport("kevent");
+
+    // if nready <= 0: no events, return
+    EmitCmpImm(ARM64Register.X0, 0);
+    EmitBranchCond(ARM64ConditionCode.Le, "__io_poll_kqueue_ret");
+
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X29, 16, 8); // save nready
+
+    // Loop index = 0
+    EmitMovRegImm(ARM64Register.X0, 0);
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X29, 24, 8);
+
+    DefineLabel("__io_poll_kqueue_loop");
+    // if index >= nready: done
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X29, 24, 8); // index
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X1, ARM64Register.X29, 16, 8); // nready
+    // CMP X0, X1
+    EmitWord(0xEB01001F);
+    EmitBranchCond(ARM64ConditionCode.Hs, "__io_poll_kqueue_ret");
+
+    // kevent_ptr = &__io_kevent_buf[index * 32]
+    EmitGlobalLeaReg(ARM64Register.X1, "__io_kevent_buf");
+    // X0 already = index
+    EmitMovRegImm(ARM64Register.X2, 32);
+    EmitWord(0x9B027C00); // MUL X0, X0, X2
+    EmitWord(0x8B000020); // ADD X0, X1, X0
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X29, 32, 8); // save kevent_ptr
+
+    // Load udata (KqCtx ptr) from kevent at offset 24
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X9, ARM64Register.X0, 24, 8); // udata = ctx
+    EmitCbz(ARM64Register.X9, "__io_poll_kqueue_next"); // skip if udata is NULL
+
+    // Save ctx and waiter to stack (survives function calls)
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X9, ARM64Register.X29, 56, 8); // save ctx
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X10, ARM64Register.X9, KqCtxOffWaiter, 8);
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X10, ARM64Register.X29, 64, 8); // save waiter GT
+
+    // Load filter to dispatch
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X10, ARM64Register.X9, KqCtxOffFilter, 8);
+
+    // Dispatch: KQCTX_CONNECT (-3) needs special handling (getsockopt check).
+    // EVFILT_READ (-1) and EVFILT_WRITE (-2) are notification-only — the actual
+    // read()/write() is done by the resumed GT in __io_submit_read/write.
+    EmitCmpImm(ARM64Register.X10, KQCTX_CONNECT);
+    EmitBranchCond(ARM64ConditionCode.Eq, "__io_poll_kqueue_connect");
+
+    // EVFILT_READ / EVFILT_WRITE: just wake up the GT (result=0, actual I/O done by caller)
+    EmitMovRegImm(ARM64Register.X0, 0);
+    EmitBranch("__io_poll_kqueue_complete");
+
+    // KQCTX_CONNECT: check getsockopt(fd, SOL_SOCKET, SO_ERROR)
+    DefineLabel("__io_poll_kqueue_connect");
+    // Initialize error buffer: [x29+40] = 0 (error value), [x29+44] = 4 (socklen)
+    EmitMovRegImm(ARM64Register.X0, 0);
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X29, 40, 8);
+    EmitMovRegImm(ARM64Register.X0, 4);
+    EmitWord(0xB9000000 | ((48u / 4) << 10) | (Reg(ARM64Register.X29) << 5) | Reg(ARM64Register.X0)); // STR W0, [X29, #48] = socklen=4
+    // getsockopt(fd, SOL_SOCKET, SO_ERROR, &err, &errlen)
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X9, ARM64Register.X29, 56, 8); // reload ctx
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X9, KqCtxOffFd, 8); // fd
+    EmitMovRegImm(ARM64Register.X1, SOL_SOCKET);
+    EmitMovRegImm(ARM64Register.X2, SO_ERROR);
+    EmitAddSubImm(ARM64Register.X3, ARM64Register.X29, 40, isAdd: true); // &err
+    EmitAddSubImm(ARM64Register.X4, ARM64Register.X29, 48, isAdd: true); // &errlen
+    EmitCallImport("getsockopt");
+    // Load error value
+    EmitWord(0xB9400000 | ((40u / 4) << 10) | (Reg(ARM64Register.X29) << 5) | Reg(ARM64Register.X0)); // LDR W0, [X29, #40]
+    EmitCbnz(ARM64Register.X0, "__io_poll_kqueue_connect_err");
+    // Success: result = fd
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X9, ARM64Register.X29, 56, 8); // ctx
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X9, KqCtxOffFd, 8);
+    EmitBranch("__io_poll_kqueue_complete");
+
+    DefineLabel("__io_poll_kqueue_connect_err");
+    // Error: close socket, result = -2
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X9, ARM64Register.X29, 56, 8); // ctx
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X9, KqCtxOffFd, 8);
+    EmitCallImport("close");
+    EmitMovRegImm(ARM64Register.X0, -2);
+
+    DefineLabel("__io_poll_kqueue_complete");
+    // X0 = result (bytes transferred, fd, or error code)
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X29, 40, 8); // save result
+
+    // Reload waiter GT and store result
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X10, ARM64Register.X29, 64, 8); // waiter GT
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X29, 40, 8); // result
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X10, GtOffIoResultVal, 8);
+
+    // Set error = 0 and status = ready
+    EmitMovRegImm(ARM64Register.X0, 0);
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X10, GtOffIoErrorCode, 8);
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X10, GtOffStatus, 8);
+
+    // Enqueue waiter (if stackBase != 0 and waiter != current GT)
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X10, GtOffStackBase, 8);
+    EmitCbz(ARM64Register.X0, "__io_poll_kqueue_free_ctx");
+    // Skip enqueue if waiter == P->currentGt (avoids double-enqueue when
+    // a sleeping GT runs the scheduler loop and its own kqueue event fires)
+    EmitLoadCurrentGt(ARM64Register.X0);
+    EmitCmpRegReg(ARM64Register.X0, ARM64Register.X10);
+    EmitBranchCond(ARM64ConditionCode.Eq, "__io_poll_kqueue_free_ctx");
+    EmitMovRegReg(ARM64Register.X0, ARM64Register.X10);
+    EmitBranchLink("__gt_enqueue");
+
+    DefineLabel("__io_poll_kqueue_free_ctx");
+    // Free ctx
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X29, 56, 8); // ctx
+    EmitBranchLink("mm_raw_free");
+
+    DefineLabel("__io_poll_kqueue_next");
+    // index++
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X29, 24, 8);
+    EmitAddSubImm(ARM64Register.X0, ARM64Register.X0, 1, isAdd: true);
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X29, 24, 8);
+    EmitBranch("__io_poll_kqueue_loop");
+
+    DefineLabel("__io_poll_kqueue_ret");
+    EmitRuntimeFunctionEnd();
+  }
+
+  /// <summary>
+  /// __io_submit_read(fd_x0, buf_x1, len_x2): Register EVFILT_READ with kqueue, yield GT.
+  /// When kqueue signals readiness, __io_check_completions performs the actual read()
+  /// and resumes the GT.
+  /// </summary>
+  private void EmitIoSubmitRead() {
+    EmitIoSubmitReadWrite("__io_submit_read", EVFILT_READ);
+  }
+
+  /// <summary>
+  /// __io_submit_write(fd_x0, buf_x1, len_x2): Register EVFILT_WRITE with kqueue, yield GT.
+  /// </summary>
+  private void EmitIoSubmitWrite() {
+    EmitIoSubmitReadWrite("__io_submit_write", EVFILT_WRITE);
+  }
+
+  /// <summary>
+  /// Common implementation for __io_submit_read and __io_submit_write.
+  /// Allocates a KqCtx, registers with kqueue via kevent(), sets GT status=waiting, yields.
+  /// </summary>
+  private void EmitIoSubmitReadWrite(string functionName, int filter) {
+    // Stack: [x29+16]=fd, [x29+24]=buf, [x29+32]=len, [x29+40]=ctx, [x29+48]=next GT
+    // [x29+56..119] = struct kevent (64 bytes, we use 32 for one event but align to 64)
+    EmitRuntimeFunctionStart(functionName, 3, 0x80);
+
+    // Check cancel flag
+    EmitLoadCurrentGt(ARM64Register.X9);
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X9, GtOffCancelFlag, 8);
+    EmitCbnz(ARM64Register.X0, $"{functionName}_cancelled");
+
+    // Allocate KqCtx
+    EmitMovRegImm(ARM64Register.X0, KqCtxSize);
+    EmitBranchLink("mm_raw_alloc");
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X29, 40, 8); // save ctx
+
+    // Fill ctx: fd, buf, len, waiter=current, filter
+    // Note: EmitReloadArg(i) loads into AbiArgRegs[i] (X0, X1, X2, ...)
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X9, ARM64Register.X29, 40, 8); // X9 = ctx
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X29, 16, 8); // X0 = fd
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X9, KqCtxOffFd, 8);
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X29, 24, 8); // X0 = buf
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X9, KqCtxOffBuf, 8);
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X29, 32, 8); // X0 = len
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X9, KqCtxOffLen, 8);
+    EmitLoadCurrentGt(ARM64Register.X0); // clobbers X9
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X9, ARM64Register.X29, 40, 8); // reload ctx
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X9, KqCtxOffWaiter, 8);
+    EmitMovRegImm(ARM64Register.X0, filter);
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X9, KqCtxOffFilter, 8);
+
+    // Build struct kevent on stack at [x29+56]:
+    //   ident (8) = fd, filter (2) = EVFILT_READ/WRITE, flags (2) = EV_ADD|EV_ONESHOT,
+    //   fflags (4) = 0, data (8) = 0, udata (8) = ctx_ptr
+    // struct kevent total = 32 bytes
+    // Zero the kevent area first
+    EmitMovRegImm(ARM64Register.X0, 0);
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X29, 56, 8);
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X29, 64, 8);
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X29, 72, 8);
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X29, 80, 8);
+
+    // ident = fd (at offset 0)
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X29, 16, 8); // fd
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X29, 56, 8);
+    // filter (int16 at offset 8) + flags (uint16 at offset 10)
+    // Pack: filter | (flags << 16) as a 32-bit store at offset 8
+    var filterAndFlags = (uint)((ushort)filter | ((EV_ADD | EV_ONESHOT) << 16));
+    EmitMovRegImm(ARM64Register.X0, (long)filterAndFlags);
+    // STR W0, [X29, #64] — store 32-bit value at kevent+8
+    EmitWord(0xB9000000 | ((64u / 4) << 10) | (Reg(ARM64Register.X29) << 5) | Reg(ARM64Register.X0));
+    // udata = ctx_ptr (at offset 24)
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X29, 40, 8); // ctx
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X29, 80, 8); // kevent+24 = udata
+
+    // kevent(kq, changelist, nchanges=1, eventlist=NULL, nevents=0, timeout=NULL)
+    EmitGlobalLoadReg(ARM64Register.X0, "__io_kqueue_fd");
+    EmitAddSubImm(ARM64Register.X1, ARM64Register.X29, 56, isAdd: true); // changelist
+    EmitMovRegImm(ARM64Register.X2, 1); // nchanges
+    EmitMovRegImm(ARM64Register.X3, 0); // eventlist = NULL
+    EmitMovRegImm(ARM64Register.X4, 0); // nevents = 0
+    EmitMovRegImm(ARM64Register.X5, 0); // timeout = NULL
+    EmitCallImport("kevent");
+
+    // Set current GT status = waiting
+    EmitLoadCurrentGt(ARM64Register.X9);
+    EmitMovRegImm(ARM64Register.X0, GtStatusWaiting);
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X9, GtOffStatus, 8);
+
+    // Yield: try to dequeue next runnable thread
+    DefineLabel($"{functionName}_try_dequeue");
+    EmitBranchLink("__gt_dequeue");
+    EmitCbnz(ARM64Register.X0, $"{functionName}_has_next");
+
+    // No runnable thread: process pending I/O inline, then retry
+    EmitBranchLink("__gt_process_pending_waiter");
+    EmitBranchLink("__io_check_completions");
+    EmitBranchLink("__io_poll_kqueue");
+    EmitBranchLink("__gt_timer_check");
+    // Check if our IO completed (poll_kqueue sets status=ready for main thread without enqueue)
+    EmitLoadCurrentGt(ARM64Register.X9);
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X9, GtOffStatus, 8);
+    EmitCmpImm(ARM64Register.X0, GtStatusWaiting);
+    EmitBranchCond(ARM64ConditionCode.Ne, $"{functionName}_resumed");
+    EmitBranch($"{functionName}_try_dequeue");
+
+    DefineLabel($"{functionName}_has_next");
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X29, 48, 8); // save next
+    EmitMovRegImm(ARM64Register.X1, GtStatusRunning);
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X1, ARM64Register.X0, GtOffStatus, 8);
+    EmitLoadCurrentGt(ARM64Register.X0);
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X1, ARM64Register.X29, 48, 8);
+    EmitLoadP(ARM64Register.X9);
+    EmitMovRegReg(ARM64Register.X2, ARM64Register.X9); // X2 = P*
+    EmitBranchLink("__gt_context_switch");
+
+    // Resumed after kqueue notification (via context switch or direct)
+    DefineLabel($"{functionName}_resumed");
+    // Perform the actual I/O now that kqueue told us the fd is ready
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X29, 16, 8); // fd
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X1, ARM64Register.X29, 24, 8); // buf
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X2, ARM64Register.X29, 32, 8); // len
+    if (filter == EVFILT_READ)
+      EmitCallImport("read");
+    else
+      EmitCallImport("write");
+    // X0 = bytes transferred or -1
+    EmitRuntimeFunctionEnd();
+
+    // Cancelled path
+    DefineLabel($"{functionName}_cancelled");
+    EmitLoadCurrentGt(ARM64Register.X9);
+    EmitMovRegImm(ARM64Register.X0, 995);
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X9, GtOffIoErrorCode, 8);
+    EmitMovRegImm(ARM64Register.X0, 0);
     EmitRuntimeFunctionEnd();
   }
 

@@ -454,6 +454,30 @@ case ARM64MemcpyOp:
 
   private void EmitPrologue(int stackSize) {
     if (stackSize > 0) {
+      // Stack guard check for green thread small stacks.
+      // X28 = P* (0 if no green thread context, e.g. I/O worker).
+      // Skip check if X28 == 0 (no P context) — uses CBZ.
+      // Check: if (SP - frameSize) < gt->stackGuard → call __gt_morestack
+      var guardLabel = $"__stackguard_ok_{_uniqueLabelCounter}";
+      _uniqueLabelCounter++;
+
+      EmitCbz(ARM64Register.X28, guardLabel); // no P* → skip guard check
+      // SUB X16, SP, #stackSize (projected SP after allocation)
+      EmitAddSubImm(ARM64Register.X16, ARM64Register.Sp, stackSize > 4095 ? 4095 : stackSize, isAdd: false);
+      // LDR X17, [X28, #POffCurrentGt]
+      EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X17, ARM64Register.X28, 0x18, 8); // POffCurrentGt = 0x18
+      // LDR X17, [X17, #GtOffStackGuard]
+      EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X17, ARM64Register.X17, 0x50, 8); // GtOffStackGuard = 0x50
+      // CMP X16, X17
+      EmitWord(0xEB11021F);
+      EmitBranchCond(ARM64ConditionCode.Hs, guardLabel); // SP - frameSize >= guard → OK
+      // Stack needs growth. Save original LR in X16 before BL clobbers it.
+      EmitMovRegReg(ARM64Register.X16, ARM64Register.X30);
+      EmitBranchLink("__gt_morestack");
+      // morestack returns here after growing. Restore original LR.
+      EmitMovRegReg(ARM64Register.X30, ARM64Register.X16);
+      DefineLabel(guardLabel);
+
       // Pattern: x29 near top of frame, locals below.
       // STP X29, X30, [SP, #-16]!  (save regs, SP -= 16)
       var imm7_16 = (uint)((-16 / 8) & 0x7F);
@@ -1052,6 +1076,9 @@ case ARM64MemcpyOp:
     // Initialize green thread runtime
     EmitBranchLink("__gt_init");
 
+    // Initialize kqueue I/O subsystem
+    EmitBranchLink("__io_init");
+
     // Call main
     EmitBranchLink(mainFunctionName);
 
@@ -1060,6 +1087,9 @@ case ARM64MemcpyOp:
 
     // Drain any outstanding green threads
     EmitBranchLink("__gt_cleanup");
+
+    // Shut down kqueue I/O subsystem
+    EmitBranchLink("__io_shutdown");
 
     // Call global cleanup if present
     if (!string.IsNullOrEmpty(globalCleanupFunctionName)) {
