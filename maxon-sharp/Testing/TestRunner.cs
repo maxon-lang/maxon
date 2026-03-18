@@ -467,12 +467,6 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
           if (successExpectation.Stdout != null) {
             var expectedStdout = successExpectation.Stdout.Replace("\r\n", "\n").Trim();
             var actualStdout = Stdout.Replace("\r\n", "\n").Trim();
-            // Normalize path separators for cross-platform tests
-            if (_target.Os != "windows") {
-              expectedStdout = expectedStdout.Replace('\\', '/');
-            } else {
-              expectedStdout = expectedStdout.Replace('/', '\\');
-            }
             // Normalize machine-specific paths: replace CWD with {CWD} placeholder
             var cwd = Directory.GetCurrentDirectory();
             if (_target.Os == "windows") {
