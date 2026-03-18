@@ -1,0 +1,39 @@
+// Test: byte-range
+typealias Integer = int(i64.min to i64.max)
+typealias AsciiCode = byte(0 to 127)
+
+function main() returns ExitCode
+  var c = AsciiCode{65}
+  return c as Integer
+end 'main'
+---
+ExitCode: 65
+---
+module {
+  func @ranged-typealias.main() -> u32 {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.mov x0, #65
+    arm64.str x0, [x29, #-8]
+    arm64.mov x1, #0
+    arm64.cmp x0, x1
+    arm64.cset x2, lt
+    arm64.mov x3, #4294967295
+    arm64.cmp x0, x3
+    arm64.cset x4, gt
+    arm64.orr x5, x2, x4
+    arm64.cmp x5, #0
+    arm64.b.ne ranged-typealias.main.__range_panic_0
+    arm64.b ranged-typealias.main.__range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_symdata x0, __panic_msg_7
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl maxon_panic
+  __range_ok_0:
+    arm64.ldr x0, [x29, #-8]
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+}
+---

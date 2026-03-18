@@ -1,0 +1,90 @@
+// Test: rc-tuple-destructuring-cleanup
+function main() returns ExitCode
+  var t = (10, 20)
+  var (x, y) = t
+  return x + y
+end 'main'
+---
+MmTrace: true
+ExitCode: 30
+Stderr: ```
+alloc __Tuple_i64_i64 #1 rc=0 size=16 [ownership-edge-cases.main]
+incref __Tuple_i64_i64 #1 rc=1 [ownership-edge-cases.main]
+incref __Tuple_i64_i64 #1 rc=2 [ownership-edge-cases.main]
+decref __Tuple_i64_i64 #1 rc=1 [ownership-edge-cases.main]
+decref __Tuple_i64_i64 #1 rc=0 [ownership-edge-cases.main]
+  free __Tuple_i64_i64 #1
+```
+---
+module {
+  func @ownership-edge-cases.main() -> u32 {
+  entry:
+    arm64.prologue stack_size=80
+    arm64.mov x0, #10
+    arm64.mov x1, #20
+    arm64.mov x0, #16
+    arm64.mov x1, #0
+    arm64.mov x2, #1
+    arm64.bl mm_alloc
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x2, [x29, #-8]
+    arm64.mov x3, #10
+    arm64.str x3, [x2, #0]
+    arm64.ldr x4, [x29, #-8]
+    arm64.mov x5, #20
+    arm64.str x5, [x4, #8]
+    arm64.ldr x6, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl mm_incref
+    arm64.ldr x7, [x29, #-8]
+    arm64.str x7, [x29, #-16]
+    arm64.ldr x8, [x29, #-16]
+    arm64.ldr x0, [x29, #-16]
+    arm64.bl mm_incref
+    arm64.ldr x9, [x29, #-16]
+    arm64.ldr x10, [x9, #0]
+    arm64.ldr x11, [x29, #-16]
+    arm64.ldr x12, [x11, #8]
+    arm64.add x13, x10, x12
+    arm64.str x13, [x29, #-24]
+    arm64.mov x14, #0
+    arm64.cmp x13, x14
+    arm64.cset x15, lt
+    arm64.mov x0, #4294967295
+    arm64.cmp x13, x0
+    arm64.cset x1, gt
+    arm64.orr x0, x15, x1
+    arm64.cmp x0, #0
+    arm64.b.ne ownership-edge-cases.main.__range_panic_1
+    arm64.b ownership-edge-cases.main.__range_ok_1
+  __range_panic_1:
+    arm64.adrp_add_symdata x0, __panic_msg_14
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl maxon_panic
+  __range_ok_1:
+    arm64.ldr x0, [x29, #-24]
+    arm64.ldr x1, [x29, #-16]
+    arm64.cmp x1, #0
+    arm64.b.eq ownership-edge-cases.main.__skip_guarded_33
+    arm64.ldr x0, [x29, #-16]
+    arm64.bl mm_decref
+    arm64.label ownership-edge-cases.main.__skip_guarded_33
+    arm64.ldr x2, [x29, #-8]
+    arm64.cmp x2, #0
+    arm64.b.eq ownership-edge-cases.main.__skip_guarded_35
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl mm_decref
+    arm64.label ownership-edge-cases.main.__skip_guarded_35
+    arm64.ldr x0, [x29, #-24]
+    arm64.epilogue stack_size=80
+    arm64.ret
+  }
+  func @__destruct___Tuple_i64_i64(ptr: i64) {
+  entry:
+    arm64.b __destruct___Tuple_i64_i64.done
+  done:
+    arm64.ret
+  }
+}
+---

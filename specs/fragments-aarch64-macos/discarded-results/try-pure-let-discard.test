@@ -1,0 +1,25 @@
+// Test: try-pure-let-discard
+
+typealias Integer = int(i64.min to i64.max)
+
+union ParseError implements Error
+  invalidFormat
+end 'ParseError'
+
+function parseNum(s String) returns Integer throws ParseError
+  if s.byteLength() == 0 'empty'
+    throw ParseError.invalidFormat
+  end 'empty'
+  return s.byteLength()
+end 'parseNum'
+
+function main() returns ExitCode
+  let _ = try parseNum("abc") otherwise 0
+  return 0
+end 'main'
+---
+MaxoncStderr: ```
+error E3064: specs/fragments/discarded-results/try-pure-let-discard.test:17:7: result of pure function 'parseNum' must be used
+```
+---
+---

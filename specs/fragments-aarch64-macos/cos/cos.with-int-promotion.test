@@ -1,0 +1,36 @@
+// Test: cos.with-int-promotion
+function main() returns ExitCode
+  var x = 0  // int
+  var result = Math.cos(x)  // x promoted to 0.0
+  if result == 1.0 'check'
+    return 0
+  end 'check'
+  return 1
+end 'main'
+---
+ExitCode: 0
+---
+module {
+  func @cos.main() -> u32 {
+  entry:
+    arm64.prologue stack_size=16
+    arm64.mov x0, #0
+    arm64.scvtf d0, x0
+    arm64.bl stdlib.Math.cos
+    arm64.fldr d1, [__float_1]
+    arm64.fcmp d0, d1
+    arm64.cset x1, eq
+    arm64.cmp x1, #0
+    arm64.b.ne cos.main.check_0
+    arm64.b cos.main.check_0.after
+  check_0:
+    arm64.mov x0, #0
+    arm64.epilogue stack_size=16
+    arm64.ret
+  check_0.after:
+    arm64.mov x0, #1
+    arm64.epilogue stack_size=16
+    arm64.ret
+  }
+}
+---

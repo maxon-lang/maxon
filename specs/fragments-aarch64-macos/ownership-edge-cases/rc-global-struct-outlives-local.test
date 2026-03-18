@@ -1,0 +1,158 @@
+// Test: rc-global-struct-outlives-local
+typealias Integer = int(i64.min to i64.max)
+
+type Cfg
+  export var level Integer
+end 'Cfg'
+
+var globalCfg = Cfg{level: 0}
+
+function setup()
+  globalCfg = Cfg{level: 42}
+end 'setup'
+
+function main() returns ExitCode
+  setup()
+  return globalCfg.level
+end 'main'
+---
+MmTrace: true
+ExitCode: 42
+Stderr: ```
+alloc Cfg #1 rc=0 size=8 [ownership-edge-cases.__module_init]
+incref Cfg #1 rc=1 [ownership-edge-cases.__module_init]
+incref Cfg #1 rc=2 [ownership-edge-cases.__module_init]
+decref Cfg #1 rc=1 [ownership-edge-cases.__module_init]
+alloc Cfg #2 rc=0 size=8 [ownership-edge-cases.setup]
+incref Cfg #2 rc=1 [ownership-edge-cases.setup]
+decref Cfg #1 rc=0 [ownership-edge-cases.setup]
+  free Cfg #1
+incref Cfg #2 rc=2 [ownership-edge-cases.setup]
+decref Cfg #2 rc=1 [ownership-edge-cases.setup]
+incref Cfg #2 rc=2 [ownership-edge-cases.main]
+decref Cfg #2 rc=1 [ownership-edge-cases.main]
+decref Cfg #2 rc=0 [__maxon_global_cleanup]
+  free Cfg #2
+```
+---
+module {
+  func @ownership-edge-cases.setup() {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.mov x0, #42
+    arm64.mov x0, #8
+    arm64.mov x1, #0
+    arm64.mov x2, #1
+    arm64.bl mm_alloc
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x1, [x29, #-8]
+    arm64.mov x2, #42
+    arm64.str x2, [x1, #0]
+    arm64.bl mm_incref
+    arm64.ldr x3, [x29, #-8]
+    arm64.global_load x4, [globalCfg]
+    arm64.str x4, [x29, #-16]
+    arm64.cmp x4, #0
+    arm64.b.eq ownership-edge-cases.setup.__skip_guarded_11
+    arm64.ldr x0, [x29, #-16]
+    arm64.bl mm_decref
+    arm64.label ownership-edge-cases.setup.__skip_guarded_11
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl mm_incref
+    arm64.ldr x5, [x29, #-8]
+    arm64.global_store [globalCfg], x5
+    arm64.ldr x6, [x29, #-8]
+    arm64.cmp x6, #0
+    arm64.b.eq ownership-edge-cases.setup.__skip_guarded_15
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl mm_decref
+    arm64.label ownership-edge-cases.setup.__skip_guarded_15
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+  func @ownership-edge-cases.main() -> u32 {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.bl ownership-edge-cases.setup
+    arm64.global_load x0, [globalCfg]
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x1, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl mm_incref
+    arm64.ldr x2, [x29, #-8]
+    arm64.ldr x3, [x2, #0]
+    arm64.str x3, [x29, #-16]
+    arm64.mov x4, #0
+    arm64.cmp x3, x4
+    arm64.cset x5, lt
+    arm64.mov x6, #4294967295
+    arm64.cmp x3, x6
+    arm64.cset x7, gt
+    arm64.orr x8, x5, x7
+    arm64.cmp x8, #0
+    arm64.b.ne ownership-edge-cases.main.__range_panic_0
+    arm64.b ownership-edge-cases.main.__range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_symdata x0, __panic_msg_20
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl maxon_panic
+  __range_ok_0:
+    arm64.ldr x0, [x29, #-16]
+    arm64.ldr x1, [x29, #-8]
+    arm64.cmp x1, #0
+    arm64.b.eq ownership-edge-cases.main.__skip_guarded_19
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl mm_decref
+    arm64.label ownership-edge-cases.main.__skip_guarded_19
+    arm64.ldr x0, [x29, #-16]
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+  func @ownership-edge-cases.__module_init() {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.mov x0, #0
+    arm64.mov x0, #8
+    arm64.mov x1, #0
+    arm64.mov x2, #1
+    arm64.bl mm_alloc
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x1, [x29, #-8]
+    arm64.mov x2, #0
+    arm64.str x2, [x1, #0]
+    arm64.bl mm_incref
+    arm64.ldr x3, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl mm_incref
+    arm64.ldr x4, [x29, #-8]
+    arm64.global_store [globalCfg], x4
+    arm64.ldr x5, [x29, #-8]
+    arm64.cmp x5, #0
+    arm64.b.eq ownership-edge-cases.__module_init.__skip_guarded_13
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl mm_decref
+    arm64.label ownership-edge-cases.__module_init.__skip_guarded_13
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+  func @__maxon_global_cleanup() {
+  entry:
+    arm64.prologue stack_size=32
+    arm64.global_load x0, [globalCfg]
+    arm64.str x0, [x29, #-8]
+    arm64.cmp x0, #0
+    arm64.b.eq __maxon_global_cleanup.__skip_guarded_1
+    arm64.bl mm_decref
+    arm64.label __maxon_global_cleanup.__skip_guarded_1
+    arm64.epilogue stack_size=32
+    arm64.ret
+  }
+  func @__destruct_Cfg(ptr: i64) {
+  entry:
+    arm64.b __destruct_Cfg.done
+  done:
+    arm64.ret
+  }
+}
+---

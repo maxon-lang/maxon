@@ -1,0 +1,38 @@
+// Test: byte-vs-byte
+
+typealias Byte = byte(0 to u8.max)
+
+function main() returns ExitCode
+  var a = 50 as Byte
+  var b = 50 as Byte
+  if a == b 'check'
+    return 1
+  end 'check'
+  return 0
+end 'main'
+---
+ExitCode: 1
+---
+module {
+  func @contextual-literal-typing.main() -> u32 {
+  entry:
+    arm64.mov x0, #50
+    arm64.mov x1, #255
+    arm64.and x2, x0, x1
+    arm64.mov x3, #50
+    arm64.mov x4, #255
+    arm64.and x5, x3, x4
+    arm64.cmp x2, x5
+    arm64.cset x6, eq
+    arm64.cmp x6, #0
+    arm64.b.ne contextual-literal-typing.main.check_0
+    arm64.b contextual-literal-typing.main.check_0.after
+  check_0:
+    arm64.mov x0, #1
+    arm64.ret
+  check_0.after:
+    arm64.mov x0, #0
+    arm64.ret
+  }
+}
+---

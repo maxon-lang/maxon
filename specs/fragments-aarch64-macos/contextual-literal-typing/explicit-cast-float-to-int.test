@@ -1,0 +1,32 @@
+// Test: explicit-cast-float-to-int
+function main() returns ExitCode
+  var x = 5
+  var y = 5.0
+  if x == trunc(y) 'check'
+    return 1
+  end 'check'
+  return 0
+end 'main'
+---
+ExitCode: 1
+---
+module {
+  func @contextual-literal-typing.main() -> u32 {
+  entry:
+    arm64.mov x0, #5
+    arm64.fldr d0, [__float_5]
+    arm64.fcvtzs x1, d0
+    arm64.cmp x0, x1
+    arm64.cset x2, eq
+    arm64.cmp x2, #0
+    arm64.b.ne contextual-literal-typing.main.check_0
+    arm64.b contextual-literal-typing.main.check_0.after
+  check_0:
+    arm64.mov x0, #1
+    arm64.ret
+  check_0.after:
+    arm64.mov x0, #0
+    arm64.ret
+  }
+}
+---

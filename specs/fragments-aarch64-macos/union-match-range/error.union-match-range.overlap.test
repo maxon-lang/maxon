@@ -1,0 +1,24 @@
+// Test: error.union-match-range.overlap
+typealias Integer = int(i64.min to i64.max)
+
+union Op
+  add
+  sub
+  mul
+  exec(code Integer)
+end 'Op'
+
+function main() returns ExitCode
+  var op = Op.add
+  match op 'check'
+    add to sub then return 1
+    sub to mul then return 2
+    exec(code) then return code
+  end 'check'
+end 'main'
+---
+MaxoncStderr: ```
+error E2027: specs/fragments/union-match-range/error.union-match-range.overlap.test:15:5: overlapping pattern in match: 'sub' is already covered
+```
+---
+---

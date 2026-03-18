@@ -1,0 +1,53 @@
+// Test: used-in-nested-scope
+
+function main() returns ExitCode
+  var x = 42
+  if x > 0 'check'
+    return x
+  end 'check'
+  return 0
+end 'main'
+---
+ExitCode: 42
+---
+module {
+  func @unused-variables.main() -> u32 {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.mov x0, #42
+    arm64.str x0, [x29, #-8]
+    arm64.mov x1, #0
+    arm64.cmp x0, x1
+    arm64.cset x2, gt
+    arm64.cmp x2, #0
+    arm64.b.ne unused-variables.main.check_0
+    arm64.b unused-variables.main.check_0.after
+  check_0:
+    arm64.ldr x0, [x29, #-8]
+    arm64.str x0, [x29, #-16]
+    arm64.mov x1, #0
+    arm64.cmp x0, x1
+    arm64.cset x2, lt
+    arm64.mov x3, #4294967295
+    arm64.cmp x0, x3
+    arm64.cset x4, gt
+    arm64.orr x5, x2, x4
+    arm64.cmp x5, #0
+    arm64.b.ne unused-variables.main.__range_panic_1
+    arm64.b unused-variables.main.__range_ok_1
+  __range_panic_1:
+    arm64.adrp_add_symdata x0, __panic_msg_9
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl maxon_panic
+  __range_ok_1:
+    arm64.ldr x0, [x29, #-16]
+    arm64.epilogue stack_size=48
+    arm64.ret
+  check_0.after:
+    arm64.mov x0, #0
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+}
+---

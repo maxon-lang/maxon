@@ -1,0 +1,43 @@
+// Test: top-level-var-with-let
+let BASE = 40
+var offset = 0
+
+function main() returns ExitCode
+  offset = 2
+  return BASE + offset
+end 'main'
+---
+ExitCode: 42
+---
+module {
+  func @static-variables.main() -> u32 {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.mov x0, #2
+    arm64.global_store [offset], x0
+    arm64.mov x1, #40
+    arm64.global_load x2, [offset]
+    arm64.add x3, x1, x2
+    arm64.str x3, [x29, #-8]
+    arm64.mov x4, #0
+    arm64.cmp x3, x4
+    arm64.cset x5, lt
+    arm64.mov x6, #4294967295
+    arm64.cmp x3, x6
+    arm64.cset x7, gt
+    arm64.orr x8, x5, x7
+    arm64.cmp x8, #0
+    arm64.b.ne static-variables.main.__range_panic_0
+    arm64.b static-variables.main.__range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_symdata x0, __panic_msg_9
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl maxon_panic
+  __range_ok_0:
+    arm64.ldr x0, [x29, #-8]
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+}
+---

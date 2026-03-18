@@ -1,0 +1,91 @@
+// Test: break.labeled-break-inner
+function main() returns ExitCode
+  var x = 0
+  var y = 0
+  while x < 5 'outer'
+    x = x + 1
+    while y < 10 'inner'
+      y = y + 1
+      if y == 3 'check'
+        break
+      end 'check'
+    end 'inner'
+  end 'outer'
+  return x
+end 'main'
+---
+ExitCode: 5
+---
+module {
+  func @break.main() -> u32 {
+  entry:
+    arm64.prologue stack_size=80
+    arm64.mov x0, #0
+    arm64.str x0, [x29, #-8]
+    arm64.mov x1, #0
+    arm64.str x1, [x29, #-16]
+    arm64.b break.main.outer_0.header
+  outer_0.header:
+    arm64.mov x0, #5
+    arm64.ldr x1, [x29, #-8]
+    arm64.cmp x1, x0
+    arm64.cset x2, lt
+    arm64.cmp x2, #0
+    arm64.b.ne break.main.outer_0
+    arm64.b break.main.outer_0.exit
+  outer_0:
+    arm64.mov x0, #1
+    arm64.ldr x1, [x29, #-8]
+    arm64.add x2, x1, x0
+    arm64.str x2, [x29, #-8]
+    arm64.b break.main.inner_1.header
+  inner_1.header:
+    arm64.mov x0, #10
+    arm64.ldr x1, [x29, #-16]
+    arm64.cmp x1, x0
+    arm64.cset x2, lt
+    arm64.cmp x2, #0
+    arm64.b.ne break.main.inner_1
+    arm64.b break.main.inner_1.exit
+  inner_1:
+    arm64.mov x0, #1
+    arm64.ldr x1, [x29, #-16]
+    arm64.add x2, x1, x0
+    arm64.str x2, [x29, #-16]
+    arm64.mov x3, #3
+    arm64.cmp x2, x3
+    arm64.cset x4, eq
+    arm64.cmp x4, #0
+    arm64.b.ne break.main.check_2
+    arm64.b break.main.check_2.after
+  check_2:
+    arm64.b break.main.inner_1.exit
+  check_2.after:
+    arm64.b break.main.inner_1.header
+  inner_1.exit:
+    arm64.b break.main.outer_0.header
+  outer_0.exit:
+    arm64.ldr x0, [x29, #-8]
+    arm64.str x0, [x29, #-24]
+    arm64.mov x1, #0
+    arm64.cmp x0, x1
+    arm64.cset x2, lt
+    arm64.mov x3, #4294967295
+    arm64.cmp x0, x3
+    arm64.cset x4, gt
+    arm64.orr x5, x2, x4
+    arm64.cmp x5, #0
+    arm64.b.ne break.main.__range_panic_3
+    arm64.b break.main.__range_ok_3
+  __range_panic_3:
+    arm64.adrp_add_symdata x0, __panic_msg_22
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl maxon_panic
+  __range_ok_3:
+    arm64.ldr x0, [x29, #-24]
+    arm64.epilogue stack_size=80
+    arm64.ret
+  }
+}
+---

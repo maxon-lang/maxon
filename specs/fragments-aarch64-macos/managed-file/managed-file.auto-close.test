@@ -1,0 +1,461 @@
+// Test: managed-file.auto-close
+type TestFile
+  export var _file __ManagedFile
+end 'TestFile'
+
+function writeFile(path String)
+  let result = __ManagedFile.openWrite(path.managed)
+  var wf = TestFile{_file: result}
+  let written = wf._file.write("auto".managed)
+  if written < 0 'writeErr'
+    panic("write failed")
+  end 'writeErr'
+  // wf goes out of scope here, destructor closes handle
+end 'writeFile'
+
+function main() returns ExitCode
+  let path = "test_managed_autoclose.txt"
+  writeFile(path)
+
+  // Verify we can read it (file was properly closed by destructor)
+  let readResult = __ManagedFile.openRead(path.managed)
+  if readResult == -1 'readFail'
+    print("read failed")
+    return 1
+  end 'readFail'
+  var rf = TestFile{_file: readResult}
+  let size = rf._file.size()
+  rf._file.close()
+  let delResult = __ManagedFile.delete(path.managed)
+  if delResult != 0 'delErr'
+    return 2
+  end 'delErr'
+  if size == 4 'sizeOk'
+    return 42
+  end 'sizeOk'
+  return 0
+end 'main'
+---
+ExitCode: 42
+---
+module {
+  func @managed-file.writeFile(path: i64) {
+  entry:
+    arm64.prologue stack_size=160
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #0]
+    arm64.str x1, [x29, #-16]
+    arm64.ldr x2, [x29, #-16]
+    arm64.ldr x3, [x2, #0]
+    arm64.ldr x4, [x29, #-16]
+    arm64.ldr x5, [x4, #8]
+    arm64.mov x0, x3
+    arm64.mov x1, x5
+    arm64.bl maxon_to_cstring
+    arm64.bl maxon_managed_file_open_write
+    arm64.adrp_add_func x6, __destruct_TestFile
+    arm64.mov x7, x6
+    arm64.str x0, [x29, #-64]
+    arm64.mov x1, x7
+    arm64.mov x0, #8
+    arm64.mov x2, #1
+    arm64.bl mm_alloc
+    arm64.str x0, [x29, #-24]
+    arm64.ldr x8, [x29, #-24]
+    arm64.ldr x9, [x29, #-64]
+    arm64.str x9, [x8, #0]
+    arm64.ldr x0, [x29, #-64]
+    arm64.bl mm_incref
+    arm64.ldr x10, [x29, #-24]
+    arm64.ldr x0, [x29, #-24]
+    arm64.bl mm_incref
+    arm64.ldr x11, [x29, #-24]
+    arm64.ldr x12, [x11, #0]
+    arm64.str x12, [x29, #-32]
+    arm64.adrp_add_rdata x13, __str_0
+    arm64.mov x14, x13
+    arm64.mov x15, #4
+    arm64.adrp_add_func x0, __destruct_String
+    arm64.mov x1, x0
+    arm64.str x14, [x29, #-72]
+    arm64.mov x0, #16
+    arm64.mov x2, #2
+    arm64.bl mm_alloc
+    arm64.str x0, [x29, #-40]
+    arm64.adrp_add_func x0, __destruct___ManagedMemory
+    arm64.mov x1, x0
+    arm64.mov x0, #32
+    arm64.mov x2, #3
+    arm64.bl mm_alloc
+    arm64.str x0, [x29, #-48]
+    arm64.ldr x0, [x29, #-48]
+    arm64.ldr x1, [x29, #-72]
+    arm64.str x1, [x0, #0]
+    arm64.ldr x0, [x29, #-48]
+    arm64.mov x1, #4
+    arm64.str x1, [x0, #8]
+    arm64.mov x0, #0
+    arm64.ldr x1, [x29, #-48]
+    arm64.str x0, [x1, #16]
+    arm64.mov x0, #1
+    arm64.ldr x1, [x29, #-48]
+    arm64.str x0, [x1, #24]
+    arm64.ldr x0, [x29, #-48]
+    arm64.ldr x1, [x29, #-40]
+    arm64.str x0, [x1, #0]
+    arm64.ldr x0, [x29, #-48]
+    arm64.bl mm_incref
+    arm64.mov x0, #0
+    arm64.ldr x1, [x29, #-40]
+    arm64.str x0, [x1, #8]
+    arm64.ldr x0, [x29, #-40]
+    arm64.bl mm_incref
+    arm64.ldr x0, [x29, #-40]
+    arm64.ldr x1, [x0, #0]
+    arm64.str x1, [x29, #-56]
+    arm64.ldr x0, [x29, #-32]
+    arm64.ldr x1, [x0, #0]
+    arm64.ldr x0, [x29, #-56]
+    arm64.ldr x2, [x0, #0]
+    arm64.ldr x0, [x29, #-56]
+    arm64.ldr x3, [x0, #8]
+    arm64.mov x0, x1
+    arm64.mov x1, x2
+    arm64.mov x2, x3
+    arm64.bl maxon_managed_file_write
+    arm64.mov x1, #0
+    arm64.cmp x0, x1
+    arm64.cset x2, lt
+    arm64.cmp x2, #0
+    arm64.b.ne managed-file.writeFile.writeErr_0
+    arm64.b managed-file.writeFile.writeErr_0.after
+  writeErr_0:
+    arm64.adrp_add_symdata x0, __panic_msg_16
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl maxon_panic
+  writeErr_0.after:
+    arm64.ldr x0, [x29, #-40]
+    arm64.cmp x0, #0
+    arm64.b.eq managed-file.writeFile.__skip_guarded_77
+    arm64.bl mm_decref
+    arm64.label managed-file.writeFile.__skip_guarded_77
+    arm64.ldr x1, [x29, #-24]
+    arm64.cmp x1, #0
+    arm64.b.eq managed-file.writeFile.__skip_guarded_79
+    arm64.ldr x0, [x29, #-24]
+    arm64.bl mm_decref
+    arm64.label managed-file.writeFile.__skip_guarded_79
+    arm64.epilogue stack_size=160
+    arm64.ret
+  }
+  func @managed-file.main() -> u32 {
+  entry:
+    arm64.prologue stack_size=224
+    arm64.adrp_add_rdata x0, __str_1
+    arm64.mov x1, x0
+    arm64.mov x2, #26
+    arm64.adrp_add_func x3, __destruct_String
+    arm64.mov x4, x3
+    arm64.str x1, [x29, #-104]
+    arm64.mov x1, x4
+    arm64.mov x0, #16
+    arm64.mov x2, #2
+    arm64.bl mm_alloc
+    arm64.str x0, [x29, #-8]
+    arm64.adrp_add_func x5, __destruct___ManagedMemory
+    arm64.mov x6, x5
+    arm64.mov x1, x6
+    arm64.mov x0, #32
+    arm64.mov x2, #3
+    arm64.bl mm_alloc
+    arm64.str x0, [x29, #-16]
+    arm64.ldr x7, [x29, #-16]
+    arm64.ldr x8, [x29, #-104]
+    arm64.str x8, [x7, #0]
+    arm64.ldr x9, [x29, #-16]
+    arm64.mov x10, #26
+    arm64.str x10, [x9, #8]
+    arm64.mov x11, #0
+    arm64.ldr x12, [x29, #-16]
+    arm64.str x11, [x12, #16]
+    arm64.mov x13, #1
+    arm64.ldr x14, [x29, #-16]
+    arm64.str x13, [x14, #24]
+    arm64.ldr x15, [x29, #-16]
+    arm64.ldr x0, [x29, #-8]
+    arm64.str x15, [x0, #0]
+    arm64.ldr x0, [x29, #-16]
+    arm64.bl mm_incref
+    arm64.mov x0, #0
+    arm64.ldr x1, [x29, #-8]
+    arm64.str x0, [x1, #8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl mm_incref
+    arm64.ldr x0, [x29, #-8]
+    arm64.str x0, [x29, #-24]
+    arm64.ldr x0, [x29, #-24]
+    arm64.bl mm_incref
+    arm64.ldr x0, [x29, #-24]
+    arm64.bl managed-file.writeFile
+    arm64.ldr x0, [x29, #-24]
+    arm64.ldr x1, [x0, #0]
+    arm64.str x1, [x29, #-32]
+    arm64.ldr x0, [x29, #-32]
+    arm64.ldr x1, [x0, #0]
+    arm64.ldr x0, [x29, #-32]
+    arm64.ldr x2, [x0, #8]
+    arm64.mov x0, x1
+    arm64.mov x1, x2
+    arm64.bl maxon_to_cstring
+    arm64.bl maxon_managed_file_open_read
+    arm64.str x0, [x29, #-40]
+    arm64.mov x1, #-1
+    arm64.cmp x0, x1
+    arm64.cset x2, eq
+    arm64.cmp x2, #0
+    arm64.b.ne managed-file.main.readFail_0
+    arm64.b managed-file.main.readFail_0.after
+  readFail_0:
+    arm64.adrp_add_rdata x0, __str_2
+    arm64.mov x1, x0
+    arm64.mov x2, #11
+    arm64.adrp_add_func x3, __destruct_String
+    arm64.mov x4, x3
+    arm64.str x1, [x29, #-104]
+    arm64.mov x1, x4
+    arm64.mov x0, #16
+    arm64.mov x2, #2
+    arm64.bl mm_alloc
+    arm64.str x0, [x29, #-48]
+    arm64.adrp_add_func x5, __destruct___ManagedMemory
+    arm64.mov x6, x5
+    arm64.mov x1, x6
+    arm64.mov x0, #32
+    arm64.mov x2, #3
+    arm64.bl mm_alloc
+    arm64.str x0, [x29, #-56]
+    arm64.ldr x7, [x29, #-56]
+    arm64.ldr x8, [x29, #-104]
+    arm64.str x8, [x7, #0]
+    arm64.ldr x9, [x29, #-56]
+    arm64.mov x10, #11
+    arm64.str x10, [x9, #8]
+    arm64.mov x11, #0
+    arm64.ldr x12, [x29, #-56]
+    arm64.str x11, [x12, #16]
+    arm64.mov x13, #1
+    arm64.ldr x14, [x29, #-56]
+    arm64.str x13, [x14, #24]
+    arm64.ldr x15, [x29, #-56]
+    arm64.ldr x0, [x29, #-48]
+    arm64.str x15, [x0, #0]
+    arm64.ldr x0, [x29, #-56]
+    arm64.bl mm_incref
+    arm64.mov x0, #0
+    arm64.ldr x1, [x29, #-48]
+    arm64.str x0, [x1, #8]
+    arm64.ldr x0, [x29, #-48]
+    arm64.bl mm_incref
+    arm64.ldr x0, [x29, #-48]
+    arm64.bl stdlib.Print.print
+    arm64.ldr x0, [x29, #-48]
+    arm64.cmp x0, #0
+    arm64.b.eq managed-file.main.__skip_guarded_92
+    arm64.bl mm_decref
+    arm64.label managed-file.main.__skip_guarded_92
+    arm64.ldr x0, [x29, #-8]
+    arm64.cmp x0, #0
+    arm64.b.eq managed-file.main.__skip_guarded_94
+    arm64.bl mm_decref
+    arm64.label managed-file.main.__skip_guarded_94
+    arm64.ldr x0, [x29, #-24]
+    arm64.cmp x0, #0
+    arm64.b.eq managed-file.main.__skip_guarded_96
+    arm64.bl mm_decref
+    arm64.label managed-file.main.__skip_guarded_96
+    arm64.mov x0, #1
+    arm64.epilogue stack_size=224
+    arm64.ret
+  readFail_0.after:
+    arm64.ldr x0, [x29, #-40]
+    arm64.adrp_add_func x1, __destruct_TestFile
+    arm64.mov x2, x1
+    arm64.mov x1, x2
+    arm64.mov x0, #8
+    arm64.mov x2, #1
+    arm64.bl mm_alloc
+    arm64.str x0, [x29, #-64]
+    arm64.ldr x3, [x29, #-64]
+    arm64.ldr x4, [x29, #-40]
+    arm64.str x4, [x3, #0]
+    arm64.ldr x0, [x29, #-40]
+    arm64.bl mm_incref
+    arm64.ldr x5, [x29, #-64]
+    arm64.ldr x0, [x29, #-64]
+    arm64.bl mm_incref
+    arm64.ldr x6, [x29, #-64]
+    arm64.ldr x7, [x6, #0]
+    arm64.str x7, [x29, #-72]
+    arm64.ldr x8, [x29, #-72]
+    arm64.ldr x9, [x8, #0]
+    arm64.mov x0, x9
+    arm64.bl maxon_file_size
+    arm64.str x0, [x29, #-80]
+    arm64.ldr x10, [x29, #-64]
+    arm64.ldr x11, [x10, #0]
+    arm64.str x11, [x29, #-88]
+    arm64.ldr x12, [x29, #-88]
+    arm64.ldr x13, [x12, #0]
+    arm64.mov x0, x13
+    arm64.bl maxon_file_close
+    arm64.ldr x14, [x29, #-24]
+    arm64.ldr x15, [x14, #0]
+    arm64.str x15, [x29, #-96]
+    arm64.ldr x0, [x29, #-96]
+    arm64.ldr x1, [x0, #0]
+    arm64.ldr x0, [x29, #-96]
+    arm64.ldr x2, [x0, #8]
+    arm64.mov x0, x1
+    arm64.mov x1, x2
+    arm64.bl maxon_to_cstring
+    arm64.bl maxon_file_delete
+    arm64.mov x1, #0
+    arm64.cmp x0, x1
+    arm64.cset x2, ne
+    arm64.cmp x2, #0
+    arm64.b.ne managed-file.main.delErr_1
+    arm64.b managed-file.main.delErr_1.after
+  delErr_1:
+    arm64.ldr x0, [x29, #-8]
+    arm64.cmp x0, #0
+    arm64.b.eq managed-file.main.__skip_guarded_137
+    arm64.bl mm_decref
+    arm64.label managed-file.main.__skip_guarded_137
+    arm64.ldr x1, [x29, #-64]
+    arm64.cmp x1, #0
+    arm64.b.eq managed-file.main.__skip_guarded_139
+    arm64.ldr x0, [x29, #-64]
+    arm64.bl mm_decref
+    arm64.label managed-file.main.__skip_guarded_139
+    arm64.ldr x2, [x29, #-24]
+    arm64.cmp x2, #0
+    arm64.b.eq managed-file.main.__skip_guarded_141
+    arm64.ldr x0, [x29, #-24]
+    arm64.bl mm_decref
+    arm64.label managed-file.main.__skip_guarded_141
+    arm64.mov x0, #2
+    arm64.epilogue stack_size=224
+    arm64.ret
+  delErr_1.after:
+    arm64.mov x0, #4
+    arm64.ldr x1, [x29, #-80]
+    arm64.cmp x1, x0
+    arm64.cset x2, eq
+    arm64.cmp x2, #0
+    arm64.b.ne managed-file.main.sizeOk_2
+    arm64.b managed-file.main.sizeOk_2.after
+  sizeOk_2:
+    arm64.ldr x0, [x29, #-8]
+    arm64.cmp x0, #0
+    arm64.b.eq managed-file.main.__skip_guarded_149
+    arm64.bl mm_decref
+    arm64.label managed-file.main.__skip_guarded_149
+    arm64.ldr x1, [x29, #-64]
+    arm64.cmp x1, #0
+    arm64.b.eq managed-file.main.__skip_guarded_151
+    arm64.ldr x0, [x29, #-64]
+    arm64.bl mm_decref
+    arm64.label managed-file.main.__skip_guarded_151
+    arm64.ldr x2, [x29, #-24]
+    arm64.cmp x2, #0
+    arm64.b.eq managed-file.main.__skip_guarded_153
+    arm64.ldr x0, [x29, #-24]
+    arm64.bl mm_decref
+    arm64.label managed-file.main.__skip_guarded_153
+    arm64.mov x0, #42
+    arm64.epilogue stack_size=224
+    arm64.ret
+  sizeOk_2.after:
+    arm64.ldr x0, [x29, #-8]
+    arm64.cmp x0, #0
+    arm64.b.eq managed-file.main.__skip_guarded_157
+    arm64.bl mm_decref
+    arm64.label managed-file.main.__skip_guarded_157
+    arm64.ldr x1, [x29, #-64]
+    arm64.cmp x1, #0
+    arm64.b.eq managed-file.main.__skip_guarded_159
+    arm64.ldr x0, [x29, #-64]
+    arm64.bl mm_decref
+    arm64.label managed-file.main.__skip_guarded_159
+    arm64.ldr x2, [x29, #-24]
+    arm64.cmp x2, #0
+    arm64.b.eq managed-file.main.__skip_guarded_161
+    arm64.ldr x0, [x29, #-24]
+    arm64.bl mm_decref
+    arm64.label managed-file.main.__skip_guarded_161
+    arm64.mov x0, #0
+    arm64.epilogue stack_size=224
+    arm64.ret
+  }
+  func @__destruct_TestFile(ptr: i64) {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #0]
+    arm64.str x1, [x29, #-16]
+    arm64.cmp x1, #0
+    arm64.b.eq __destruct_TestFile.__skip_guarded_4
+    arm64.ldr x0, [x29, #-16]
+    arm64.bl mm_decref
+    arm64.label __destruct_TestFile.__skip_guarded_4
+    arm64.b __destruct_TestFile.done
+  done:
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+  func @__destruct_String(ptr: i64) {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #0]
+    arm64.str x1, [x29, #-16]
+    arm64.cmp x1, #0
+    arm64.b.eq __destruct_String.__skip_guarded_4
+    arm64.ldr x0, [x29, #-16]
+    arm64.bl mm_decref
+    arm64.label __destruct_String.__skip_guarded_4
+    arm64.b __destruct_String.done
+  done:
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+  func @__destruct___ManagedMemory(ptr: i64) {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #16]
+    arm64.mov x2, #0
+    arm64.cmp x1, x2
+    arm64.cset x3, ne
+    arm64.cmp x3, #0
+    arm64.b.ne __destruct___ManagedMemory.free_buf_0
+    arm64.b __destruct___ManagedMemory.skip_buf_0
+  free_buf_0:
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #0]
+    arm64.mov x0, x1
+    arm64.bl mm_raw_free
+    arm64.b __destruct___ManagedMemory.skip_buf_0
+  skip_buf_0:
+    arm64.b __destruct___ManagedMemory.done
+  done:
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+}
+---

@@ -1,0 +1,31 @@
+// Test: if-statements.else
+function main() returns ExitCode
+  var x = 5
+  if x == 5 'is5'
+    return 1
+  end 'is5' else 'not5'
+    return 0
+  end 'not5'
+end 'main'
+---
+ExitCode: 1
+---
+module {
+  func @if-statements.main() -> u32 {
+  entry:
+    arm64.mov x0, #5
+    arm64.mov x1, #5
+    arm64.cmp x0, x1
+    arm64.cset x2, eq
+    arm64.cmp x2, #0
+    arm64.b.ne if-statements.main.is5_0
+    arm64.b if-statements.main.not5_1
+  is5_0:
+    arm64.mov x0, #1
+    arm64.ret
+  not5_1:
+    arm64.mov x0, #0
+    arm64.ret
+  }
+}
+---

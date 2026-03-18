@@ -1,0 +1,58 @@
+// Test: float-rawvalue-in-function
+
+typealias Float = float(f64.min to f64.max)
+
+enum Weights
+  light = 1.5
+  medium = 2.5
+end 'Weights'
+
+function getRaw(w Weights) returns Float
+  return w.rawValue
+end 'getRaw'
+
+function main() returns ExitCode
+  var w = Weights.medium
+  var raw = getRaw(w)
+  if raw > 2.0 'check'
+    return 1
+  end 'check'
+  return 0
+end 'main'
+---
+ExitCode: 1
+---
+module {
+  func @constants.getRaw(w: f64) -> f64 {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.fstr d0, [x29, #-8]
+    arm64.fldr d0, [x29, #-8]
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+  func @constants.main() -> u32 {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.fldr d0, [__float_2.5]
+    arm64.fstr d0, [x29, #-8]
+    arm64.fldr d1, [x29, #-8]
+    arm64.fmov d0, d1
+    arm64.bl constants.getRaw
+    arm64.fldr d2, [__float_2]
+    arm64.fcmp d0, d2
+    arm64.cset x0, gt
+    arm64.cmp x0, #0
+    arm64.b.ne constants.main.check_0
+    arm64.b constants.main.check_0.after
+  check_0:
+    arm64.mov x0, #1
+    arm64.epilogue stack_size=48
+    arm64.ret
+  check_0.after:
+    arm64.mov x0, #0
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+}
+---

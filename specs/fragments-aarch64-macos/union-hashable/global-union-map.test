@@ -1,0 +1,627 @@
+// Test: global-union-map
+union LogLevel
+  NONE
+  ERROR
+  INFO
+end 'LogLevel'
+
+union LogCategory
+  compiler
+  lexer
+  parser
+end 'LogCategory'
+
+typealias CategoryLevelMap = Map with (LogCategory, LogLevel)
+
+var categoryLevels = CategoryLevelMap{}
+
+function setCategoryLevel(category LogCategory, level LogLevel)
+  categoryLevels.insert(category, value: level)
+end 'setCategoryLevel'
+
+function getCategoryLevel(category LogCategory) returns LogLevel
+  return try categoryLevels.get(category) otherwise LogLevel.NONE
+end 'getCategoryLevel'
+
+function main() returns ExitCode
+  setCategoryLevel(LogCategory.compiler, level: LogLevel.INFO)
+  setCategoryLevel(LogCategory.lexer, level: LogLevel.ERROR)
+  var compilerLevel = getCategoryLevel(LogCategory.compiler)
+  var lexerLevel = getCategoryLevel(LogCategory.lexer)
+  var r1 = match compilerLevel 'c'
+    LogLevel.INFO gives true
+    LogLevel.NONE gives false
+    LogLevel.ERROR gives false
+  end 'c'
+  var r2 = match lexerLevel 'l'
+    LogLevel.ERROR gives true
+    LogLevel.NONE gives false
+    LogLevel.INFO gives false
+  end 'l'
+  if r1 and r2 'both'
+    return 1
+  end 'both'
+  return 0
+end 'main'
+---
+ExitCode: 1
+---
+module {
+  func @LogCategory.hash(self: i64) -> i64 {
+  entry:
+    arm64.prologue stack_size=16
+    arm64.bl stdlib.int.hash
+    arm64.epilogue stack_size=16
+    arm64.ret
+  }
+  func @union-hashable.setCategoryLevel(category: i64, level: i64) {
+  entry:
+    arm64.prologue stack_size=80
+    arm64.str x0, [x29, #-8]
+    arm64.str x1, [x29, #-16]
+    arm64.global_load x0, [categoryLevels]
+    arm64.str x0, [x29, #-24]
+    arm64.ldr x1, [x29, #-24]
+    arm64.ldr x0, [x29, #-24]
+    arm64.bl mm_incref
+    arm64.ldr x2, [x29, #-8]
+    arm64.ldr x3, [x29, #-16]
+    arm64.ldr x4, [x29, #-24]
+    arm64.ldr x0, [x29, #-24]
+    arm64.ldr x1, [x29, #-8]
+    arm64.ldr x2, [x29, #-16]
+    arm64.bl CategoryLevelMap.insert
+    arm64.ldr x5, [x29, #-24]
+    arm64.cmp x5, #0
+    arm64.b.eq union-hashable.setCategoryLevel.__skip_guarded_13
+    arm64.ldr x0, [x29, #-24]
+    arm64.bl mm_decref
+    arm64.label union-hashable.setCategoryLevel.__skip_guarded_13
+    arm64.epilogue stack_size=80
+    arm64.ret
+  }
+  func @union-hashable.getCategoryLevel(category: i64) -> i64 {
+  entry:
+    arm64.prologue stack_size=80
+    arm64.str x0, [x29, #-8]
+    arm64.global_load x0, [categoryLevels]
+    arm64.str x0, [x29, #-16]
+    arm64.ldr x1, [x29, #-16]
+    arm64.ldr x0, [x29, #-16]
+    arm64.bl mm_incref
+    arm64.ldr x2, [x29, #-8]
+    arm64.ldr x3, [x29, #-16]
+    arm64.ldr x0, [x29, #-16]
+    arm64.ldr x1, [x29, #-8]
+    arm64.bl CategoryLevelMap.get
+    arm64.mov x4, #0
+    arm64.str x4, [x29, #-24]
+    arm64.str x0, [x29, #-32]
+    arm64.mov x5, #0
+    arm64.cmp x1, x5
+    arm64.cset x6, ne
+    arm64.cmp x6, #0
+    arm64.b.ne union-hashable.getCategoryLevel.otherwise_default_error_2
+    arm64.b union-hashable.getCategoryLevel.otherwise_default_continue_3
+  otherwise_default_error_2:
+    arm64.ldr x0, [x29, #-24]
+    arm64.str x0, [x29, #-32]
+    arm64.b union-hashable.getCategoryLevel.otherwise_default_continue_3
+  otherwise_default_continue_3:
+    arm64.ldr x0, [x29, #-32]
+    arm64.ldr x1, [x29, #-16]
+    arm64.cmp x1, #0
+    arm64.b.eq union-hashable.getCategoryLevel.__skip_guarded_20
+    arm64.ldr x0, [x29, #-16]
+    arm64.bl mm_decref
+    arm64.label union-hashable.getCategoryLevel.__skip_guarded_20
+    arm64.ldr x0, [x29, #-32]
+    arm64.epilogue stack_size=80
+    arm64.ret
+  }
+  func @union-hashable.main() -> u32 {
+  entry:
+    arm64.prologue stack_size=144
+    arm64.mov x0, #0
+    arm64.mov x1, #2
+    arm64.bl union-hashable.setCategoryLevel
+    arm64.mov x0, #1
+    arm64.mov x1, #1
+    arm64.bl union-hashable.setCategoryLevel
+    arm64.mov x0, #0
+    arm64.bl union-hashable.getCategoryLevel
+    arm64.str x0, [x29, #-8]
+    arm64.mov x0, #1
+    arm64.bl union-hashable.getCategoryLevel
+    arm64.str x0, [x29, #-16]
+    arm64.ldr x0, [x29, #-8]
+    arm64.mov x1, #0
+    arm64.str x1, [x29, #-24]
+    arm64.str x0, [x29, #-32]
+    arm64.b union-hashable.main.c_0.cmp0
+  c_0.cmp0:
+    arm64.ldr x0, [x29, #-32]
+    arm64.mov x1, #2
+    arm64.cmp x0, x1
+    arm64.cset x2, eq
+    arm64.cmp x2, #0
+    arm64.b.ne union-hashable.main.c_0.case0
+    arm64.b union-hashable.main.c_0.cmp1
+  c_0.case0:
+    arm64.mov x0, #1
+    arm64.str x0, [x29, #-24]
+    arm64.b union-hashable.main.c_0.merge
+  c_0.cmp1:
+    arm64.ldr x0, [x29, #-32]
+    arm64.mov x1, #0
+    arm64.cmp x0, x1
+    arm64.cset x2, eq
+    arm64.cmp x2, #0
+    arm64.b.ne union-hashable.main.c_0.case1
+    arm64.b union-hashable.main.c_0.cmp2
+  c_0.case1:
+    arm64.mov x0, #0
+    arm64.str x0, [x29, #-24]
+    arm64.b union-hashable.main.c_0.merge
+  c_0.cmp2:
+    arm64.ldr x0, [x29, #-32]
+    arm64.mov x1, #1
+    arm64.cmp x0, x1
+    arm64.cset x2, eq
+    arm64.cmp x2, #0
+    arm64.b.ne union-hashable.main.c_0.case2
+    arm64.b union-hashable.main.c_0.merge
+  c_0.case2:
+    arm64.mov x0, #0
+    arm64.str x0, [x29, #-24]
+    arm64.b union-hashable.main.c_0.merge
+  c_0.merge:
+    arm64.ldr x0, [x29, #-24]
+    arm64.str x0, [x29, #-40]
+    arm64.ldr x1, [x29, #-16]
+    arm64.mov x2, #0
+    arm64.str x2, [x29, #-48]
+    arm64.str x1, [x29, #-56]
+    arm64.b union-hashable.main.l_1.cmp0
+  l_1.cmp0:
+    arm64.ldr x0, [x29, #-56]
+    arm64.mov x1, #1
+    arm64.cmp x0, x1
+    arm64.cset x2, eq
+    arm64.cmp x2, #0
+    arm64.b.ne union-hashable.main.l_1.case0
+    arm64.b union-hashable.main.l_1.cmp1
+  l_1.case0:
+    arm64.mov x0, #1
+    arm64.str x0, [x29, #-48]
+    arm64.b union-hashable.main.l_1.merge
+  l_1.cmp1:
+    arm64.ldr x0, [x29, #-56]
+    arm64.mov x1, #0
+    arm64.cmp x0, x1
+    arm64.cset x2, eq
+    arm64.cmp x2, #0
+    arm64.b.ne union-hashable.main.l_1.case1
+    arm64.b union-hashable.main.l_1.cmp2
+  l_1.case1:
+    arm64.mov x0, #0
+    arm64.str x0, [x29, #-48]
+    arm64.b union-hashable.main.l_1.merge
+  l_1.cmp2:
+    arm64.ldr x0, [x29, #-56]
+    arm64.mov x1, #2
+    arm64.cmp x0, x1
+    arm64.cset x2, eq
+    arm64.cmp x2, #0
+    arm64.b.ne union-hashable.main.l_1.case2
+    arm64.b union-hashable.main.l_1.merge
+  l_1.case2:
+    arm64.mov x0, #0
+    arm64.str x0, [x29, #-48]
+    arm64.b union-hashable.main.l_1.merge
+  l_1.merge:
+    arm64.ldr x0, [x29, #-48]
+    arm64.ldr x1, [x29, #-40]
+    arm64.and x2, x1, x0
+    arm64.cmp x2, #0
+    arm64.b.ne union-hashable.main.both_2
+    arm64.b union-hashable.main.both_2.after
+  both_2:
+    arm64.mov x0, #1
+    arm64.epilogue stack_size=144
+    arm64.ret
+  both_2.after:
+    arm64.mov x0, #0
+    arm64.epilogue stack_size=144
+    arm64.ret
+  }
+  func @union-hashable.__module_init() {
+  entry:
+    arm64.prologue stack_size=144
+    arm64.mov x0, #0
+    arm64.mov x1, #0
+    arm64.mov x2, #0
+    arm64.mov x3, #0
+    arm64.mov x4, #8
+    arm64.adrp_add_func x5, __destruct___ManagedMemory_LogCategory
+    arm64.mov x6, x5
+    arm64.mov x1, x6
+    arm64.mov x0, #32
+    arm64.mov x2, #1
+    arm64.bl mm_alloc
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x7, [x29, #-8]
+    arm64.mov x8, #0
+    arm64.str x8, [x7, #0]
+    arm64.ldr x9, [x29, #-8]
+    arm64.mov x10, #0
+    arm64.str x10, [x9, #8]
+    arm64.ldr x11, [x29, #-8]
+    arm64.mov x12, #0
+    arm64.str x12, [x11, #16]
+    arm64.ldr x13, [x29, #-8]
+    arm64.mov x14, #8
+    arm64.str x14, [x13, #24]
+    arm64.ldr x15, [x29, #-8]
+    arm64.ldr x0, [x15, #24]
+    arm64.adrp_add_symdata x1, __mm_panic_element_size_zero
+    arm64.mov x2, x1
+    arm64.mov x1, x0
+    arm64.mov x0, #0
+    arm64.bl maxon_bounds_check
+    arm64.adrp_add_func x0, __destruct_Array_LogCategory
+    arm64.mov x1, x0
+    arm64.mov x0, #16
+    arm64.mov x2, #2
+    arm64.bl mm_alloc
+    arm64.str x0, [x29, #-16]
+    arm64.ldr x0, [x29, #-16]
+    arm64.mov x1, #0
+    arm64.str x1, [x0, #0]
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x29, #-16]
+    arm64.str x0, [x1, #8]
+    arm64.bl mm_incref
+    arm64.mov x0, #0
+    arm64.mov x1, #0
+    arm64.mov x2, #0
+    arm64.mov x3, #0
+    arm64.mov x4, #8
+    arm64.adrp_add_func x5, __destruct___ManagedMemory_LogLevel
+    arm64.mov x6, x5
+    arm64.mov x1, x6
+    arm64.mov x0, #32
+    arm64.mov x2, #3
+    arm64.bl mm_alloc
+    arm64.str x0, [x29, #-24]
+    arm64.ldr x0, [x29, #-24]
+    arm64.mov x1, #0
+    arm64.str x1, [x0, #0]
+    arm64.ldr x0, [x29, #-24]
+    arm64.mov x1, #0
+    arm64.str x1, [x0, #8]
+    arm64.ldr x0, [x29, #-24]
+    arm64.mov x1, #0
+    arm64.str x1, [x0, #16]
+    arm64.ldr x0, [x29, #-24]
+    arm64.mov x1, #8
+    arm64.str x1, [x0, #24]
+    arm64.ldr x0, [x29, #-24]
+    arm64.ldr x1, [x0, #24]
+    arm64.adrp_add_symdata x0, __mm_panic_element_size_zero
+    arm64.mov x2, x0
+    arm64.mov x0, #0
+    arm64.bl maxon_bounds_check
+    arm64.adrp_add_func x0, __destruct_Array_LogLevel
+    arm64.mov x1, x0
+    arm64.mov x0, #16
+    arm64.mov x2, #4
+    arm64.bl mm_alloc
+    arm64.str x0, [x29, #-32]
+    arm64.ldr x0, [x29, #-32]
+    arm64.mov x1, #0
+    arm64.str x1, [x0, #0]
+    arm64.ldr x0, [x29, #-24]
+    arm64.ldr x1, [x29, #-32]
+    arm64.str x0, [x1, #8]
+    arm64.bl mm_incref
+    arm64.mov x0, #0
+    arm64.mov x1, #0
+    arm64.mov x2, #0
+    arm64.mov x3, #0
+    arm64.mov x4, #8
+    arm64.adrp_add_func x5, __destruct___ManagedMemory_SetSlotState
+    arm64.mov x6, x5
+    arm64.mov x1, x6
+    arm64.mov x0, #32
+    arm64.mov x2, #5
+    arm64.bl mm_alloc
+    arm64.str x0, [x29, #-40]
+    arm64.ldr x0, [x29, #-40]
+    arm64.mov x1, #0
+    arm64.str x1, [x0, #0]
+    arm64.ldr x0, [x29, #-40]
+    arm64.mov x1, #0
+    arm64.str x1, [x0, #8]
+    arm64.ldr x0, [x29, #-40]
+    arm64.mov x1, #0
+    arm64.str x1, [x0, #16]
+    arm64.ldr x0, [x29, #-40]
+    arm64.mov x1, #8
+    arm64.str x1, [x0, #24]
+    arm64.ldr x0, [x29, #-40]
+    arm64.ldr x1, [x0, #24]
+    arm64.adrp_add_symdata x0, __mm_panic_element_size_zero
+    arm64.mov x2, x0
+    arm64.mov x0, #0
+    arm64.bl maxon_bounds_check
+    arm64.adrp_add_func x0, __destruct_Array_SetSlotState
+    arm64.mov x1, x0
+    arm64.mov x0, #16
+    arm64.mov x2, #6
+    arm64.bl mm_alloc
+    arm64.str x0, [x29, #-48]
+    arm64.ldr x0, [x29, #-48]
+    arm64.mov x1, #0
+    arm64.str x1, [x0, #0]
+    arm64.ldr x0, [x29, #-40]
+    arm64.ldr x1, [x29, #-48]
+    arm64.str x0, [x1, #8]
+    arm64.bl mm_incref
+    arm64.mov x0, #0
+    arm64.mov x1, #0
+    arm64.mov x2, #0
+    arm64.adrp_add_func x3, __destruct_CategoryLevelMap
+    arm64.mov x4, x3
+    arm64.mov x1, x4
+    arm64.mov x0, #48
+    arm64.mov x2, #7
+    arm64.bl mm_alloc
+    arm64.str x0, [x29, #-56]
+    arm64.ldr x1, [x29, #-16]
+    arm64.ldr x2, [x29, #-56]
+    arm64.str x1, [x2, #0]
+    arm64.ldr x0, [x29, #-16]
+    arm64.bl mm_incref
+    arm64.ldr x0, [x29, #-32]
+    arm64.ldr x1, [x29, #-56]
+    arm64.str x0, [x1, #8]
+    arm64.bl mm_incref
+    arm64.ldr x0, [x29, #-48]
+    arm64.ldr x1, [x29, #-56]
+    arm64.str x0, [x1, #16]
+    arm64.bl mm_incref
+    arm64.ldr x0, [x29, #-56]
+    arm64.mov x1, #0
+    arm64.str x1, [x0, #24]
+    arm64.ldr x0, [x29, #-56]
+    arm64.mov x1, #0
+    arm64.str x1, [x0, #32]
+    arm64.ldr x0, [x29, #-56]
+    arm64.mov x1, #0
+    arm64.str x1, [x0, #40]
+    arm64.ldr x0, [x29, #-56]
+    arm64.bl mm_incref
+    arm64.ldr x0, [x29, #-56]
+    arm64.bl mm_incref
+    arm64.ldr x0, [x29, #-56]
+    arm64.global_store [categoryLevels], x0
+    arm64.ldr x0, [x29, #-56]
+    arm64.cmp x0, #0
+    arm64.b.eq union-hashable.__module_init.__skip_guarded_143
+    arm64.bl mm_decref
+    arm64.label union-hashable.__module_init.__skip_guarded_143
+    arm64.epilogue stack_size=144
+    arm64.ret
+  }
+  func @__maxon_global_cleanup() {
+  entry:
+    arm64.prologue stack_size=32
+    arm64.global_load x0, [categoryLevels]
+    arm64.str x0, [x29, #-8]
+    arm64.cmp x0, #0
+    arm64.b.eq __maxon_global_cleanup.__skip_guarded_1
+    arm64.bl mm_decref
+    arm64.label __maxon_global_cleanup.__skip_guarded_1
+    arm64.epilogue stack_size=32
+    arm64.ret
+  }
+  func @__destruct___ManagedMemory_LogCategory(ptr: i64) {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #16]
+    arm64.mov x2, #0
+    arm64.cmp x1, x2
+    arm64.cset x3, ne
+    arm64.cmp x3, #0
+    arm64.b.ne __destruct___ManagedMemory_LogCategory.free_buf_0
+    arm64.b __destruct___ManagedMemory_LogCategory.skip_buf_0
+  free_buf_0:
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #0]
+    arm64.mov x0, x1
+    arm64.bl mm_raw_free
+    arm64.b __destruct___ManagedMemory_LogCategory.skip_buf_0
+  skip_buf_0:
+    arm64.b __destruct___ManagedMemory_LogCategory.done
+  done:
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+  func @__destruct_Array_LogCategory(ptr: i64) {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #8]
+    arm64.str x1, [x29, #-16]
+    arm64.cmp x1, #0
+    arm64.b.eq __destruct_Array_LogCategory.__skip_guarded_4
+    arm64.ldr x0, [x29, #-16]
+    arm64.bl mm_decref
+    arm64.label __destruct_Array_LogCategory.__skip_guarded_4
+    arm64.b __destruct_Array_LogCategory.done
+  done:
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+  func @__destruct___ManagedMemory_LogLevel(ptr: i64) {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #16]
+    arm64.mov x2, #0
+    arm64.cmp x1, x2
+    arm64.cset x3, ne
+    arm64.cmp x3, #0
+    arm64.b.ne __destruct___ManagedMemory_LogLevel.free_buf_0
+    arm64.b __destruct___ManagedMemory_LogLevel.skip_buf_0
+  free_buf_0:
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #0]
+    arm64.mov x0, x1
+    arm64.bl mm_raw_free
+    arm64.b __destruct___ManagedMemory_LogLevel.skip_buf_0
+  skip_buf_0:
+    arm64.b __destruct___ManagedMemory_LogLevel.done
+  done:
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+  func @__destruct_Array_LogLevel(ptr: i64) {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #8]
+    arm64.str x1, [x29, #-16]
+    arm64.cmp x1, #0
+    arm64.b.eq __destruct_Array_LogLevel.__skip_guarded_4
+    arm64.ldr x0, [x29, #-16]
+    arm64.bl mm_decref
+    arm64.label __destruct_Array_LogLevel.__skip_guarded_4
+    arm64.b __destruct_Array_LogLevel.done
+  done:
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+  func @__destruct___ManagedMemory_SetSlotState(ptr: i64) {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #16]
+    arm64.mov x2, #0
+    arm64.cmp x1, x2
+    arm64.cset x3, ne
+    arm64.cmp x3, #0
+    arm64.b.ne __destruct___ManagedMemory_SetSlotState.free_buf_0
+    arm64.b __destruct___ManagedMemory_SetSlotState.skip_buf_0
+  free_buf_0:
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #0]
+    arm64.mov x0, x1
+    arm64.bl mm_raw_free
+    arm64.b __destruct___ManagedMemory_SetSlotState.skip_buf_0
+  skip_buf_0:
+    arm64.b __destruct___ManagedMemory_SetSlotState.done
+  done:
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+  func @__destruct_Array_SetSlotState(ptr: i64) {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #8]
+    arm64.str x1, [x29, #-16]
+    arm64.cmp x1, #0
+    arm64.b.eq __destruct_Array_SetSlotState.__skip_guarded_4
+    arm64.ldr x0, [x29, #-16]
+    arm64.bl mm_decref
+    arm64.label __destruct_Array_SetSlotState.__skip_guarded_4
+    arm64.b __destruct_Array_SetSlotState.done
+  done:
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+  func @__destruct_CategoryLevelMap(ptr: i64) {
+  entry:
+    arm64.prologue stack_size=64
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #0]
+    arm64.str x1, [x29, #-16]
+    arm64.cmp x1, #0
+    arm64.b.eq __destruct_CategoryLevelMap.__skip_guarded_4
+    arm64.ldr x0, [x29, #-16]
+    arm64.bl mm_decref
+    arm64.label __destruct_CategoryLevelMap.__skip_guarded_4
+    arm64.ldr x2, [x29, #-8]
+    arm64.ldr x3, [x2, #8]
+    arm64.str x3, [x29, #-24]
+    arm64.cmp x3, #0
+    arm64.b.eq __destruct_CategoryLevelMap.__skip_guarded_7
+    arm64.ldr x0, [x29, #-24]
+    arm64.bl mm_decref
+    arm64.label __destruct_CategoryLevelMap.__skip_guarded_7
+    arm64.ldr x4, [x29, #-8]
+    arm64.ldr x5, [x4, #16]
+    arm64.str x5, [x29, #-32]
+    arm64.cmp x5, #0
+    arm64.b.eq __destruct_CategoryLevelMap.__skip_guarded_10
+    arm64.ldr x0, [x29, #-32]
+    arm64.bl mm_decref
+    arm64.label __destruct_CategoryLevelMap.__skip_guarded_10
+    arm64.b __destruct_CategoryLevelMap.done
+  done:
+    arm64.epilogue stack_size=64
+    arm64.ret
+  }
+  func @__destruct___ManagedMemory_SlotState(ptr: i64) {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #16]
+    arm64.mov x2, #0
+    arm64.cmp x1, x2
+    arm64.cset x3, ne
+    arm64.cmp x3, #0
+    arm64.b.ne __destruct___ManagedMemory_SlotState.free_buf_0
+    arm64.b __destruct___ManagedMemory_SlotState.skip_buf_0
+  free_buf_0:
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #0]
+    arm64.mov x0, x1
+    arm64.bl mm_raw_free
+    arm64.b __destruct___ManagedMemory_SlotState.skip_buf_0
+  skip_buf_0:
+    arm64.b __destruct___ManagedMemory_SlotState.done
+  done:
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+  func @__destruct_StateArray(ptr: i64) {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #8]
+    arm64.str x1, [x29, #-16]
+    arm64.cmp x1, #0
+    arm64.b.eq __destruct_StateArray.__skip_guarded_4
+    arm64.ldr x0, [x29, #-16]
+    arm64.bl mm_decref
+    arm64.label __destruct_StateArray.__skip_guarded_4
+    arm64.b __destruct_StateArray.done
+  done:
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+}
+---

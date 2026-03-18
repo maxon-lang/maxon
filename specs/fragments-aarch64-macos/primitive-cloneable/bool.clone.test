@@ -1,0 +1,31 @@
+// Test: bool.clone
+function main() returns ExitCode
+  var x = true
+  if x.clone() 'ok'
+    return 1
+  end 'ok'
+  return 0
+end 'main'
+---
+ExitCode: 1
+---
+module {
+  func @primitive-cloneable.main() -> u32 {
+  entry:
+    arm64.prologue stack_size=16
+    arm64.mov x0, #1
+    arm64.bl stdlib.bool.clone
+    arm64.cmp x0, #0
+    arm64.b.ne primitive-cloneable.main.ok_0
+    arm64.b primitive-cloneable.main.ok_0.after
+  ok_0:
+    arm64.mov x0, #1
+    arm64.epilogue stack_size=16
+    arm64.ret
+  ok_0.after:
+    arm64.mov x0, #0
+    arm64.epilogue stack_size=16
+    arm64.ret
+  }
+}
+---

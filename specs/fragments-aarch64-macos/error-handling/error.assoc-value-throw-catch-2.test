@@ -1,0 +1,158 @@
+// Test: error.assoc-value-throw-catch-2
+
+typealias Integer = int(i64.min to i64.max)
+
+// Test error union with associated value - second case
+union MyError implements Error
+  notFound(code Integer)
+  failed
+end 'MyError'
+
+var counter = 0 as Integer
+
+function mayFail() returns Integer throws MyError
+  counter = counter + 1
+  throw MyError.notFound(42)
+end 'mayFail'
+
+function main() returns ExitCode
+  var result = 0
+  try mayFail() otherwise (e) 'handler'
+    match e 'check'
+      notFound(code) then result = code
+      failed then result = 0
+    end 'check'
+  end 'handler'
+  return result
+end 'main'
+---
+ExitCode: 42
+---
+module {
+  func @error-handling.mayFail() -> i64 {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.global_load x0, [counter]
+    arm64.mov x1, #1
+    arm64.add x2, x0, x1
+    arm64.global_store [counter], x2
+    arm64.mov x3, #42
+    arm64.mov x0, #16
+    arm64.mov x1, #0
+    arm64.mov x2, #1
+    arm64.bl mm_alloc
+    arm64.str x0, [x29, #-8]
+    arm64.mov x4, #0
+    arm64.str x4, [x0, #0]
+    arm64.mov x5, #42
+    arm64.str x5, [x0, #8]
+    arm64.ldr x6, [x29, #-8]
+    arm64.mov x1, x6
+    arm64.mov x0, #0
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+  func @error-handling.main() -> u32 {
+  entry:
+    arm64.prologue stack_size=128
+    arm64.mov x0, #0
+    arm64.str x0, [x29, #-8]
+    arm64.mov x1, #0
+    arm64.str x1, [x29, #-16]
+    arm64.mov x2, #0
+    arm64.str x2, [x29, #-24]
+    arm64.bl error-handling.mayFail
+    arm64.str x1, [x29, #-32]
+    arm64.mov x3, #0
+    arm64.cmp x1, x3
+    arm64.cset x4, ne
+    arm64.cmp x4, #0
+    arm64.b.ne error-handling.main.otherwise_error_0
+    arm64.b error-handling.main.otherwise_continue_1
+  otherwise_error_0:
+    arm64.ldr x0, [x29, #-32]
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x1, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl mm_incref
+    arm64.ldr x2, [x29, #-8]
+    arm64.ldr x3, [x2, #0]
+    arm64.ldr x4, [x29, #-8]
+    arm64.str x4, [x29, #-16]
+    arm64.ldr x5, [x29, #-16]
+    arm64.str x3, [x29, #-56]
+    arm64.ldr x0, [x29, #-16]
+    arm64.bl mm_incref
+    arm64.ldr x6, [x29, #-56]
+    arm64.str x6, [x29, #-40]
+    arm64.b error-handling.main.check_4.cmp0
+  check_4.cmp0:
+    arm64.ldr x0, [x29, #-40]
+    arm64.mov x1, #0
+    arm64.cmp x0, x1
+    arm64.cset x2, eq
+    arm64.cmp x2, #0
+    arm64.b.ne error-handling.main.check_4.case0
+    arm64.b error-handling.main.check_4.cmp1
+  check_4.case0:
+    arm64.ldr x0, [x29, #-16]
+    arm64.ldr x1, [x0, #8]
+    arm64.str x1, [x29, #-24]
+    arm64.b error-handling.main.check_4.merge
+  check_4.cmp1:
+    arm64.ldr x0, [x29, #-40]
+    arm64.mov x1, #1
+    arm64.cmp x0, x1
+    arm64.cset x2, eq
+    arm64.cmp x2, #0
+    arm64.b.ne error-handling.main.check_4.case1
+    arm64.b error-handling.main.check_4.merge
+  check_4.case1:
+    arm64.mov x0, #0
+    arm64.str x0, [x29, #-24]
+    arm64.b error-handling.main.check_4.merge
+  check_4.merge:
+  otherwise_continue_1:
+    arm64.ldr x0, [x29, #-24]
+    arm64.str x0, [x29, #-48]
+    arm64.mov x1, #0
+    arm64.cmp x0, x1
+    arm64.cset x2, lt
+    arm64.mov x3, #4294967295
+    arm64.cmp x0, x3
+    arm64.cset x4, gt
+    arm64.orr x5, x2, x4
+    arm64.cmp x5, #0
+    arm64.b.ne error-handling.main.__range_panic_5
+    arm64.b error-handling.main.__range_ok_5
+  __range_panic_5:
+    arm64.adrp_add_symdata x0, __panic_msg_31
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl maxon_panic
+  __range_ok_5:
+    arm64.ldr x0, [x29, #-48]
+    arm64.ldr x1, [x29, #-16]
+    arm64.cmp x1, #0
+    arm64.b.eq error-handling.main.__skip_guarded_50
+    arm64.ldr x0, [x29, #-16]
+    arm64.bl mm_decref
+    arm64.label error-handling.main.__skip_guarded_50
+    arm64.ldr x2, [x29, #-8]
+    arm64.cmp x2, #0
+    arm64.b.eq error-handling.main.__skip_guarded_52
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl mm_decref
+    arm64.label error-handling.main.__skip_guarded_52
+    arm64.ldr x0, [x29, #-48]
+    arm64.epilogue stack_size=128
+    arm64.ret
+  }
+  func @__destruct_MyError(ptr: i64) {
+  entry:
+    arm64.b __destruct_MyError.done
+  done:
+    arm64.ret
+  }
+}
+---

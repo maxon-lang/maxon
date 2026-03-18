@@ -1,0 +1,121 @@
+// Test: closure-capture.struct-field
+
+typealias Integer = int(i64.min to i64.max)
+
+function apply(f (Integer) returns Integer, x Integer) returns Integer
+  return f(x)
+end 'apply'
+
+type Level
+  export var rawValue Integer
+end 'Level'
+
+function main() returns ExitCode
+  var level = Level{rawValue: 5}
+  var result = apply(f: (_ Integer) gives level.rawValue, x: 0)
+  return result
+end 'main'
+---
+ExitCode: 5
+---
+module {
+  func @closure-capture.apply(f: i64, __env_f: i64, x: i64) -> i64 {
+  entry:
+    arm64.prologue stack_size=32
+    arm64.str x0, [x29, #-8]
+    arm64.mov x9, x0
+    arm64.mov x0, x2
+    arm64.blr x9
+    arm64.epilogue stack_size=32
+    arm64.ret
+  }
+  func @closure-capture.main() -> u32 {
+  entry:
+    arm64.prologue stack_size=80
+    arm64.mov x0, #5
+    arm64.mov x0, #8
+    arm64.mov x1, #0
+    arm64.mov x2, #1
+    arm64.bl mm_alloc
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x1, [x29, #-8]
+    arm64.mov x2, #5
+    arm64.str x2, [x1, #0]
+    arm64.ldr x3, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl mm_incref
+    arm64.adrp_add_func x4, __closure_0
+    arm64.str x4, [x29, #-32]
+    arm64.mov x0, #8
+    arm64.mov x1, #0
+    arm64.mov x2, #2
+    arm64.bl mm_alloc
+    arm64.add x5, x29, #-8
+    arm64.mov x6, x5
+    arm64.str x6, [x0, #0]
+    arm64.str x0, [x29, #-16]
+    arm64.bl mm_incref
+    arm64.ldr x7, [x29, #-16]
+    arm64.ldr x0, [x29, #-32]
+    arm64.ldr x1, [x29, #-16]
+    arm64.mov x2, #0
+    arm64.bl closure-capture.apply
+    arm64.str x0, [x29, #-24]
+    arm64.mov x8, #0
+    arm64.cmp x0, x8
+    arm64.cset x9, lt
+    arm64.mov x10, #4294967295
+    arm64.cmp x0, x10
+    arm64.cset x11, gt
+    arm64.orr x12, x9, x11
+    arm64.cmp x12, #0
+    arm64.b.ne closure-capture.main.__range_panic_0
+    arm64.b closure-capture.main.__range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_symdata x0, __panic_msg_26
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl maxon_panic
+  __range_ok_0:
+    arm64.ldr x0, [x29, #-24]
+    arm64.ldr x1, [x29, #-8]
+    arm64.cmp x1, #0
+    arm64.b.eq closure-capture.main.__skip_guarded_35
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl mm_decref
+    arm64.label closure-capture.main.__skip_guarded_35
+    arm64.mov x2, #0
+    arm64.str x2, [x29, #-8]
+    arm64.ldr x3, [x29, #-16]
+    arm64.cmp x3, #0
+    arm64.b.eq closure-capture.main.__skip_guarded_39
+    arm64.ldr x0, [x29, #-16]
+    arm64.bl mm_decref
+    arm64.label closure-capture.main.__skip_guarded_39
+    arm64.ldr x0, [x29, #-24]
+    arm64.epilogue stack_size=80
+    arm64.ret
+  }
+  func @__closure_0(_: i64, __env: i64) -> i64 {
+  entry:
+    arm64.prologue stack_size=64
+    arm64.str x1, [x29, #-8]
+    arm64.ldr x1, [x29, #-8]
+    arm64.ldr x2, [x1, #0]
+    arm64.ldr x1, [x2, #0]
+    arm64.str x1, [x29, #-16]
+    arm64.ldr x1, [x29, #-16]
+    arm64.ldr x2, [x1, #0]
+    arm64.str x0, [x29, #-24]
+    arm64.mov x0, x2
+    arm64.epilogue stack_size=64
+    arm64.ret
+  }
+  func @__destruct_Level(ptr: i64) {
+  entry:
+    arm64.b __destruct_Level.done
+  done:
+    arm64.ret
+  }
+}
+---

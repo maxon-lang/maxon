@@ -1,0 +1,91 @@
+// Test: if-try-else-block
+
+typealias Integer = int(i64.min to i64.max)
+
+union MyError implements Error
+  failed
+end 'MyError'
+
+function mayFail(succeed bool) returns Integer throws MyError
+  if not succeed 'check'
+    throw MyError.failed
+  end 'check'
+  return 42
+end 'mayFail'
+
+function main() returns ExitCode
+  var result = 0
+  if try mayFail(false) 'check'
+    result = 1
+  end 'check' else 'err'
+    result = 2
+  end 'err'
+  return result
+end 'main'
+---
+ExitCode: 2
+---
+module {
+  func @if-try.mayFail(succeed: i1) -> i64 {
+  entry:
+    arm64.mov x1, #1
+    arm64.eor x2, x0, x1
+    arm64.cmp x2, #0
+    arm64.b.ne if-try.mayFail.check_0
+    arm64.b if-try.mayFail.check_0.after
+  check_0:
+    arm64.mov x0, #0
+    arm64.mov x1, #1
+    arm64.add x2, x0, x1
+    arm64.mov x1, x2
+    arm64.mov x0, #0
+    arm64.ret
+  check_0.after:
+    arm64.mov x0, #42
+    arm64.mov x1, #0
+    arm64.ret
+  }
+  func @if-try.main() -> u32 {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.mov x0, #0
+    arm64.bl if-try.mayFail
+    arm64.mov x2, #0
+    arm64.cmp x1, x2
+    arm64.cset x3, eq
+    arm64.cmp x3, #0
+    arm64.b.ne if-try.main.check_2
+    arm64.b if-try.main.err_3
+  check_2:
+    arm64.mov x0, #1
+    arm64.str x0, [x29, #-8]
+    arm64.b if-try.main.check_2.merge
+  err_3:
+    arm64.mov x0, #2
+    arm64.str x0, [x29, #-8]
+    arm64.b if-try.main.check_2.merge
+  check_2.merge:
+    arm64.ldr x0, [x29, #-8]
+    arm64.str x0, [x29, #-16]
+    arm64.mov x1, #0
+    arm64.cmp x0, x1
+    arm64.cset x2, lt
+    arm64.mov x3, #4294967295
+    arm64.cmp x0, x3
+    arm64.cset x4, gt
+    arm64.orr x5, x2, x4
+    arm64.cmp x5, #0
+    arm64.b.ne if-try.main.__range_panic_4
+    arm64.b if-try.main.__range_ok_4
+  __range_panic_4:
+    arm64.adrp_add_symdata x0, __panic_msg_28
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl maxon_panic
+  __range_ok_4:
+    arm64.ldr x0, [x29, #-16]
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+}
+---

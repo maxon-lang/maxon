@@ -1,0 +1,240 @@
+// Test: rc-container-clear-decrefs-all
+typealias Integer = int(i64.min to i64.max)
+
+type Item
+  export var value Integer
+end 'Item'
+
+typealias ItemArray = Array with Item
+
+function main() returns ExitCode
+  var arr = ItemArray{}
+  arr.push(Item{value: 1})
+  arr.push(Item{value: 2})
+  arr.push(Item{value: 3})
+  arr.clear()
+  return arr.count()
+end 'main'
+---
+MmTrace: true
+ExitCode: 0
+Stderr: ```
+alloc __ManagedMemory_Item #1 rc=0 size=32 [ownership-edge-cases.main]
+alloc ItemArray #2 rc=0 size=16 [ownership-edge-cases.main]
+incref __ManagedMemory_Item #1 rc=1 [ownership-edge-cases.main]
+incref ItemArray #2 rc=1 [ownership-edge-cases.main]
+alloc Item #3 rc=0 size=8 [ownership-edge-cases.main]
+incref Item #3 rc=1 [ownership-edge-cases.main]
+realloc __ManagedMemory_Item #1 rc=1 size=32
+incref Item #3 rc=2 [ItemArray.push]
+alloc Item #4 rc=0 size=8 [ownership-edge-cases.main]
+incref Item #4 rc=1 [ownership-edge-cases.main]
+incref Item #4 rc=2 [ItemArray.push]
+alloc Item #5 rc=0 size=8 [ownership-edge-cases.main]
+incref Item #5 rc=1 [ownership-edge-cases.main]
+incref Item #5 rc=2 [ItemArray.push]
+decref Item #3 rc=1 [~ManagedElements]
+decref Item #4 rc=1 [~ManagedElements]
+decref Item #5 rc=1 [~ManagedElements]
+decref ItemArray #2 rc=0 [ownership-edge-cases.main]
+decref __ManagedMemory_Item #1 rc=0 [~ItemArray]
+  free __ManagedMemory_Item #1
+  free ItemArray #2
+decref Item #3 rc=0 [ownership-edge-cases.main]
+  free Item #3
+decref Item #4 rc=0 [ownership-edge-cases.main]
+  free Item #4
+decref Item #5 rc=0 [ownership-edge-cases.main]
+  free Item #5
+```
+---
+module {
+  func @ownership-edge-cases.main() -> u32 {
+  entry:
+    arm64.prologue stack_size=112
+    arm64.mov x0, #0
+    arm64.mov x1, #0
+    arm64.mov x2, #0
+    arm64.mov x3, #0
+    arm64.mov x4, #8
+    arm64.adrp_add_func x5, __destruct___ManagedMemory_Item
+    arm64.mov x6, x5
+    arm64.mov x1, x6
+    arm64.mov x0, #32
+    arm64.mov x2, #1
+    arm64.bl mm_alloc
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x7, [x29, #-8]
+    arm64.mov x8, #0
+    arm64.str x8, [x7, #0]
+    arm64.ldr x9, [x29, #-8]
+    arm64.mov x10, #0
+    arm64.str x10, [x9, #8]
+    arm64.ldr x11, [x29, #-8]
+    arm64.mov x12, #0
+    arm64.str x12, [x11, #16]
+    arm64.ldr x13, [x29, #-8]
+    arm64.mov x14, #8
+    arm64.str x14, [x13, #24]
+    arm64.ldr x15, [x29, #-8]
+    arm64.ldr x0, [x15, #24]
+    arm64.adrp_add_symdata x1, __mm_panic_element_size_zero
+    arm64.mov x2, x1
+    arm64.mov x1, x0
+    arm64.mov x0, #0
+    arm64.bl maxon_bounds_check
+    arm64.adrp_add_func x0, __destruct_ItemArray
+    arm64.mov x1, x0
+    arm64.mov x0, #16
+    arm64.mov x2, #2
+    arm64.bl mm_alloc
+    arm64.str x0, [x29, #-16]
+    arm64.ldr x0, [x29, #-16]
+    arm64.mov x1, #0
+    arm64.str x1, [x0, #0]
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x29, #-16]
+    arm64.str x0, [x1, #8]
+    arm64.bl mm_incref
+    arm64.ldr x0, [x29, #-16]
+    arm64.bl mm_incref
+    arm64.mov x0, #1
+    arm64.mov x0, #8
+    arm64.mov x1, #0
+    arm64.mov x2, #3
+    arm64.bl mm_alloc
+    arm64.str x0, [x29, #-24]
+    arm64.ldr x1, [x29, #-24]
+    arm64.mov x2, #1
+    arm64.str x2, [x1, #0]
+    arm64.bl mm_incref
+    arm64.ldr x0, [x29, #-16]
+    arm64.ldr x1, [x29, #-24]
+    arm64.bl ItemArray.push
+    arm64.mov x0, #2
+    arm64.mov x0, #8
+    arm64.mov x1, #0
+    arm64.mov x2, #3
+    arm64.bl mm_alloc
+    arm64.str x0, [x29, #-32]
+    arm64.ldr x1, [x29, #-32]
+    arm64.mov x2, #2
+    arm64.str x2, [x1, #0]
+    arm64.bl mm_incref
+    arm64.ldr x0, [x29, #-16]
+    arm64.ldr x1, [x29, #-32]
+    arm64.bl ItemArray.push
+    arm64.mov x0, #3
+    arm64.mov x0, #8
+    arm64.mov x1, #0
+    arm64.mov x2, #3
+    arm64.bl mm_alloc
+    arm64.str x0, [x29, #-40]
+    arm64.ldr x1, [x29, #-40]
+    arm64.mov x2, #3
+    arm64.str x2, [x1, #0]
+    arm64.bl mm_incref
+    arm64.ldr x0, [x29, #-16]
+    arm64.ldr x1, [x29, #-40]
+    arm64.bl ItemArray.push
+    arm64.ldr x0, [x29, #-16]
+    arm64.bl ItemArray.clear
+    arm64.ldr x0, [x29, #-16]
+    arm64.bl ItemArray.count
+    arm64.str x0, [x29, #-48]
+    arm64.mov x1, #0
+    arm64.cmp x0, x1
+    arm64.cset x2, lt
+    arm64.mov x1, #4294967295
+    arm64.cmp x0, x1
+    arm64.cset x3, gt
+    arm64.orr x0, x2, x3
+    arm64.cmp x0, #0
+    arm64.b.ne ownership-edge-cases.main.__range_panic_0
+    arm64.b ownership-edge-cases.main.__range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_symdata x0, __panic_msg_29
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl maxon_panic
+  __range_ok_0:
+    arm64.ldr x0, [x29, #-48]
+    arm64.ldr x1, [x29, #-16]
+    arm64.cmp x1, #0
+    arm64.b.eq ownership-edge-cases.main.__skip_guarded_91
+    arm64.ldr x0, [x29, #-16]
+    arm64.bl mm_decref
+    arm64.label ownership-edge-cases.main.__skip_guarded_91
+    arm64.ldr x2, [x29, #-24]
+    arm64.cmp x2, #0
+    arm64.b.eq ownership-edge-cases.main.__skip_guarded_93
+    arm64.ldr x0, [x29, #-24]
+    arm64.bl mm_decref
+    arm64.label ownership-edge-cases.main.__skip_guarded_93
+    arm64.ldr x3, [x29, #-32]
+    arm64.cmp x3, #0
+    arm64.b.eq ownership-edge-cases.main.__skip_guarded_95
+    arm64.ldr x0, [x29, #-32]
+    arm64.bl mm_decref
+    arm64.label ownership-edge-cases.main.__skip_guarded_95
+    arm64.ldr x4, [x29, #-40]
+    arm64.cmp x4, #0
+    arm64.b.eq ownership-edge-cases.main.__skip_guarded_97
+    arm64.ldr x0, [x29, #-40]
+    arm64.bl mm_decref
+    arm64.label ownership-edge-cases.main.__skip_guarded_97
+    arm64.ldr x0, [x29, #-48]
+    arm64.epilogue stack_size=112
+    arm64.ret
+  }
+  func @__destruct___ManagedMemory_Item(ptr: i64) {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #16]
+    arm64.mov x2, #0
+    arm64.cmp x1, x2
+    arm64.cset x3, ne
+    arm64.cmp x3, #0
+    arm64.b.ne __destruct___ManagedMemory_Item.free_buf_0
+    arm64.b __destruct___ManagedMemory_Item.skip_buf_0
+  free_buf_0:
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl mm_decref_managed_elements
+    arm64.ldr x1, [x29, #-8]
+    arm64.ldr x2, [x1, #0]
+    arm64.mov x0, x2
+    arm64.bl mm_raw_free
+    arm64.b __destruct___ManagedMemory_Item.skip_buf_0
+  skip_buf_0:
+    arm64.b __destruct___ManagedMemory_Item.done
+  done:
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+  func @__destruct_ItemArray(ptr: i64) {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #8]
+    arm64.str x1, [x29, #-16]
+    arm64.cmp x1, #0
+    arm64.b.eq __destruct_ItemArray.__skip_guarded_4
+    arm64.ldr x0, [x29, #-16]
+    arm64.bl mm_decref
+    arm64.label __destruct_ItemArray.__skip_guarded_4
+    arm64.b __destruct_ItemArray.done
+  done:
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+  func @__destruct_Item(ptr: i64) {
+  entry:
+    arm64.b __destruct_Item.done
+  done:
+    arm64.ret
+  }
+}
+---

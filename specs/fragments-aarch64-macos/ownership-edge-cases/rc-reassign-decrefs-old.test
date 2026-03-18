@@ -1,0 +1,143 @@
+// Test: rc-reassign-decrefs-old
+typealias Integer = int(i64.min to i64.max)
+
+type Tag
+  export var id Integer
+end 'Tag'
+
+function main() returns ExitCode
+  var t = Tag{id: 1}
+  t = Tag{id: 2}
+  t = Tag{id: 3}
+  return t.id
+end 'main'
+---
+MmTrace: true
+ExitCode: 3
+Stderr: ```
+alloc Tag #1 rc=0 size=8 [ownership-edge-cases.main]
+incref Tag #1 rc=1 [ownership-edge-cases.main]
+alloc Tag #2 rc=0 size=8 [ownership-edge-cases.main]
+incref Tag #2 rc=1 [ownership-edge-cases.main]
+decref Tag #1 rc=0 [ownership-edge-cases.main]
+  free Tag #1
+incref Tag #2 rc=2 [ownership-edge-cases.main]
+alloc Tag #3 rc=0 size=8 [ownership-edge-cases.main]
+incref Tag #3 rc=1 [ownership-edge-cases.main]
+decref Tag #2 rc=1 [ownership-edge-cases.main]
+incref Tag #3 rc=2 [ownership-edge-cases.main]
+decref Tag #3 rc=1 [ownership-edge-cases.main]
+decref Tag #2 rc=0 [ownership-edge-cases.main]
+  free Tag #2
+decref Tag #3 rc=0 [ownership-edge-cases.main]
+  free Tag #3
+```
+---
+module {
+  func @ownership-edge-cases.main() -> u32 {
+  entry:
+    arm64.prologue stack_size=80
+    arm64.mov x0, #1
+    arm64.mov x0, #8
+    arm64.mov x1, #0
+    arm64.mov x2, #1
+    arm64.bl mm_alloc
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x1, [x29, #-8]
+    arm64.mov x2, #1
+    arm64.str x2, [x1, #0]
+    arm64.ldr x3, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl mm_incref
+    arm64.mov x4, #2
+    arm64.mov x0, #8
+    arm64.mov x1, #0
+    arm64.mov x2, #1
+    arm64.bl mm_alloc
+    arm64.str x0, [x29, #-16]
+    arm64.ldr x5, [x29, #-16]
+    arm64.mov x6, #2
+    arm64.str x6, [x5, #0]
+    arm64.bl mm_incref
+    arm64.ldr x7, [x29, #-8]
+    arm64.cmp x7, #0
+    arm64.b.eq ownership-edge-cases.main.__skip_guarded_20
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl mm_decref
+    arm64.label ownership-edge-cases.main.__skip_guarded_20
+    arm64.ldr x8, [x29, #-16]
+    arm64.str x8, [x29, #-8]
+    arm64.ldr x9, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl mm_incref
+    arm64.mov x10, #3
+    arm64.mov x0, #8
+    arm64.mov x1, #0
+    arm64.mov x2, #1
+    arm64.bl mm_alloc
+    arm64.str x0, [x29, #-24]
+    arm64.ldr x11, [x29, #-24]
+    arm64.mov x12, #3
+    arm64.str x12, [x11, #0]
+    arm64.bl mm_incref
+    arm64.ldr x13, [x29, #-8]
+    arm64.cmp x13, #0
+    arm64.b.eq ownership-edge-cases.main.__skip_guarded_34
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl mm_decref
+    arm64.label ownership-edge-cases.main.__skip_guarded_34
+    arm64.ldr x14, [x29, #-24]
+    arm64.str x14, [x29, #-8]
+    arm64.ldr x15, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl mm_incref
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #0]
+    arm64.str x1, [x29, #-32]
+    arm64.mov x0, #0
+    arm64.cmp x1, x0
+    arm64.cset x2, lt
+    arm64.mov x0, #4294967295
+    arm64.cmp x1, x0
+    arm64.cset x3, gt
+    arm64.orr x0, x2, x3
+    arm64.cmp x0, #0
+    arm64.b.ne ownership-edge-cases.main.__range_panic_0
+    arm64.b ownership-edge-cases.main.__range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_symdata x0, __panic_msg_22
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl maxon_panic
+  __range_ok_0:
+    arm64.ldr x0, [x29, #-32]
+    arm64.ldr x1, [x29, #-8]
+    arm64.cmp x1, #0
+    arm64.b.eq ownership-edge-cases.main.__skip_guarded_52
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl mm_decref
+    arm64.label ownership-edge-cases.main.__skip_guarded_52
+    arm64.ldr x2, [x29, #-16]
+    arm64.cmp x2, #0
+    arm64.b.eq ownership-edge-cases.main.__skip_guarded_54
+    arm64.ldr x0, [x29, #-16]
+    arm64.bl mm_decref
+    arm64.label ownership-edge-cases.main.__skip_guarded_54
+    arm64.ldr x3, [x29, #-24]
+    arm64.cmp x3, #0
+    arm64.b.eq ownership-edge-cases.main.__skip_guarded_56
+    arm64.ldr x0, [x29, #-24]
+    arm64.bl mm_decref
+    arm64.label ownership-edge-cases.main.__skip_guarded_56
+    arm64.ldr x0, [x29, #-32]
+    arm64.epilogue stack_size=80
+    arm64.ret
+  }
+  func @__destruct_Tag(ptr: i64) {
+  entry:
+    arm64.b __destruct_Tag.done
+  done:
+    arm64.ret
+  }
+}
+---

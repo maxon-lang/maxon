@@ -1,0 +1,32 @@
+// Test: docs-example-2
+function main() returns ExitCode
+  var x = 3
+  if x > 5 'gt5'
+    return 1
+  end 'gt5' else 'not_gt5'
+    return 0
+  end 'not_gt5'
+end 'main'
+
+---
+ExitCode: 0
+---
+module {
+  func @if-statements.main() -> u32 {
+  entry:
+    arm64.mov x0, #3
+    arm64.mov x1, #5
+    arm64.cmp x0, x1
+    arm64.cset x2, gt
+    arm64.cmp x2, #0
+    arm64.b.ne if-statements.main.gt5_0
+    arm64.b if-statements.main.not_gt5_1
+  gt5_0:
+    arm64.mov x0, #1
+    arm64.ret
+  not_gt5_1:
+    arm64.mov x0, #0
+    arm64.ret
+  }
+}
+---

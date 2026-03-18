@@ -1,0 +1,30 @@
+// Test: error.throw-and-return-success
+
+typealias Integer = int(i64.min to i64.max)
+
+// Test that throwing function can return success value
+union MyError implements Error
+  failed
+end 'MyError'
+
+function mayFail(shouldFail bool) returns Integer throws MyError
+  if shouldFail 'check'
+    throw MyError.failed
+  end 'check'
+  return 42
+end 'mayFail'
+
+function main() returns ExitCode
+  return 42
+end 'main'
+---
+ExitCode: 42
+---
+module {
+  func @error-handling.main() -> u32 {
+  entry:
+    arm64.mov x0, #42
+    arm64.ret
+  }
+}
+---

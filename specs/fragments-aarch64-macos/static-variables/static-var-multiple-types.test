@@ -1,0 +1,55 @@
+// Test: static-var-multiple-types
+type TypeA
+  static var value = 10
+end 'TypeA'
+
+type TypeB
+  static var value = 20
+end 'TypeB'
+
+function main() returns ExitCode
+  TypeA.value = TypeA.value + 2
+  TypeB.value = TypeB.value + 10
+  return TypeA.value + TypeB.value
+end 'main'
+---
+ExitCode: 42
+---
+module {
+  func @static-variables.main() -> u32 {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.global_load x0, [TypeA.value]
+    arm64.mov x1, #2
+    arm64.add x2, x0, x1
+    arm64.global_store [TypeA.value], x2
+    arm64.global_load x3, [TypeB.value]
+    arm64.mov x4, #10
+    arm64.add x5, x3, x4
+    arm64.global_store [TypeB.value], x5
+    arm64.global_load x6, [TypeA.value]
+    arm64.global_load x7, [TypeB.value]
+    arm64.add x8, x6, x7
+    arm64.str x8, [x29, #-8]
+    arm64.mov x9, #0
+    arm64.cmp x8, x9
+    arm64.cset x10, lt
+    arm64.mov x11, #4294967295
+    arm64.cmp x8, x11
+    arm64.cset x12, gt
+    arm64.orr x13, x10, x12
+    arm64.cmp x13, #0
+    arm64.b.ne static-variables.main.__range_panic_0
+    arm64.b static-variables.main.__range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_symdata x0, __panic_msg_26
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl maxon_panic
+  __range_ok_0:
+    arm64.ldr x0, [x29, #-8]
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+}
+---

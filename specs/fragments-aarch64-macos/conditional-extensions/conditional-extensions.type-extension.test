@@ -1,0 +1,88 @@
+// Test: conditional-extensions.type-extension
+type Box uses Item
+  export var item Item
+end 'Box'
+
+extension Box where Item is Equatable
+  function matches(other Item) returns bool
+    return item == other
+  end 'matches'
+end 'Box'
+
+typealias Int = int(i64.min to i64.max)
+typealias IntBox = Box with Int
+
+function main() returns ExitCode
+  var b = IntBox{item: 42}
+  if b.matches(42) 'yes'
+    return 1
+  end 'yes'
+  return 0
+end 'main'
+---
+ExitCode: 1
+---
+module {
+  func @conditional-extensions.main() -> u32 {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.mov x0, #42
+    arm64.mov x0, #8
+    arm64.mov x1, #0
+    arm64.mov x2, #1
+    arm64.bl mm_alloc
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x1, [x29, #-8]
+    arm64.mov x2, #42
+    arm64.str x2, [x1, #0]
+    arm64.ldr x3, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl mm_incref
+    arm64.ldr x4, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.mov x1, #42
+    arm64.bl IntBox.matches
+    arm64.cmp x0, #0
+    arm64.b.ne conditional-extensions.main.yes_0
+    arm64.b conditional-extensions.main.yes_0.after
+  yes_0:
+    arm64.ldr x0, [x29, #-8]
+    arm64.cmp x0, #0
+    arm64.b.eq conditional-extensions.main.__skip_guarded_16
+    arm64.bl mm_decref
+    arm64.label conditional-extensions.main.__skip_guarded_16
+    arm64.mov x0, #1
+    arm64.epilogue stack_size=48
+    arm64.ret
+  yes_0.after:
+    arm64.ldr x0, [x29, #-8]
+    arm64.cmp x0, #0
+    arm64.b.eq conditional-extensions.main.__skip_guarded_20
+    arm64.bl mm_decref
+    arm64.label conditional-extensions.main.__skip_guarded_20
+    arm64.mov x0, #0
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+  func @IntBox.matches(__self_ptr: i64, other: i64) -> i1 {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x2, [x0, #0]
+    arm64.str x2, [x29, #-16]
+    arm64.ldr x0, [x29, #-16]
+    arm64.cmp x0, x1
+    arm64.cset x2, eq
+    arm64.mov x0, x2
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+  func @__destruct_IntBox(ptr: i64) {
+  entry:
+    arm64.b __destruct_IntBox.done
+  done:
+    arm64.ret
+  }
+}
+---

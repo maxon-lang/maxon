@@ -1,0 +1,81 @@
+// Test: int-var-roundtrip
+function main() returns ExitCode
+  var x = 99
+  return x
+end 'main'
+---
+ExitCode: 99
+RequiredMLIR: ```
+=== maxon
+module {
+  func @register-allocator.main() -> i64 {
+  entry:
+    %0 = maxon.literal {value = 99 : i64}
+    maxon.assign %0 {var = x} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %0 {var = __range_val_0} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %1 = maxon.literal {value = 0 : i64}
+    %2 = maxon.binop %0, %1 {op = lt}
+    %3 = maxon.literal {value = 4294967295 : i64}
+    %4 = maxon.binop %0, %3 {op = gt}
+    %5 = maxon.binop %2, %4 {op = or}
+    maxon.cond_br %5 [then: __range_panic_0, else: __range_ok_0]
+  __range_panic_0:
+    maxon.panic "panic at int-var-roundtrip.test:4: Range check failed for type 'ExitCode': value outside int(0 to 4294967295)"
+  __range_ok_0:
+    %7 = maxon.var_ref {var = __range_val_0} {type = i64}
+    maxon.scope_end [x, __range_val_0]
+    maxon.return %7
+  }
+}
+=== standard
+module {
+  func @register-allocator.main() -> u32 {
+  entry:
+    %0 = arith.constant {value = 99 : i64}
+    memref.store %0, __range_val_0
+    %1 = arith.constant {value = 0 : i64}
+    %2 = arith.cmpi lt %0, %1
+    %3 = arith.constant {value = 4294967295 : i64}
+    %4 = arith.cmpi gt %0, %3
+    %5 = arith.ori1 %2, %4
+    cf.cond_br %5 [then: __range_panic_0, else: __range_ok_0]
+  __range_panic_0:
+    %6 = memref.lea_symdata __panic_msg_6
+    %7 = std.ptr_to_i64 %6
+    std.call_runtime @maxon_panic %7
+  __range_ok_0:
+    %8 = memref.load __range_val_0 : i64
+    func.return %8
+  }
+}
+=== arm64
+module {
+  func @register-allocator.main() -> u32 {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.mov x0, #99
+    arm64.str x0, [x29, #-8]
+    arm64.mov x1, #0
+    arm64.cmp x0, x1
+    arm64.cset x2, lt
+    arm64.mov x3, #4294967295
+    arm64.cmp x0, x3
+    arm64.cset x4, gt
+    arm64.orr x5, x2, x4
+    arm64.cmp x5, #0
+    arm64.b.ne register-allocator.main.__range_panic_0
+    arm64.b register-allocator.main.__range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_symdata x0, __panic_msg_6
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl maxon_panic
+  __range_ok_0:
+    arm64.ldr x0, [x29, #-8]
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+}
+```
+---
+---

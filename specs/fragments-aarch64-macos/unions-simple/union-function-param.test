@@ -1,0 +1,85 @@
+// Test: union-function-param
+union Status
+  on
+  off
+end 'Status'
+
+function isOn(s Status) returns bool
+  var result = match s 'check'
+    Status.on gives true
+    Status.off gives false
+  end 'check'
+  return result
+end 'isOn'
+
+function main() returns ExitCode
+  var status = Status.on
+  if isOn(status) 'test'
+    return 1
+  end 'test'
+  return 0
+end 'main'
+---
+ExitCode: 1
+---
+module {
+  func @unions-simple.isOn(s: i64) -> i1 {
+  entry:
+    arm64.prologue stack_size=80
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.mov x1, #0
+    arm64.str x1, [x29, #-16]
+    arm64.str x0, [x29, #-24]
+    arm64.b unions-simple.isOn.check_0.cmp0
+  check_0.cmp0:
+    arm64.ldr x0, [x29, #-24]
+    arm64.mov x1, #0
+    arm64.cmp x0, x1
+    arm64.cset x2, eq
+    arm64.cmp x2, #0
+    arm64.b.ne unions-simple.isOn.check_0.case0
+    arm64.b unions-simple.isOn.check_0.cmp1
+  check_0.case0:
+    arm64.mov x0, #1
+    arm64.str x0, [x29, #-16]
+    arm64.b unions-simple.isOn.check_0.merge
+  check_0.cmp1:
+    arm64.ldr x0, [x29, #-24]
+    arm64.mov x1, #1
+    arm64.cmp x0, x1
+    arm64.cset x2, eq
+    arm64.cmp x2, #0
+    arm64.b.ne unions-simple.isOn.check_0.case1
+    arm64.b unions-simple.isOn.check_0.merge
+  check_0.case1:
+    arm64.mov x0, #0
+    arm64.str x0, [x29, #-16]
+    arm64.b unions-simple.isOn.check_0.merge
+  check_0.merge:
+    arm64.ldr x0, [x29, #-16]
+    arm64.epilogue stack_size=80
+    arm64.ret
+  }
+  func @unions-simple.main() -> u32 {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.mov x0, #0
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x1, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl unions-simple.isOn
+    arm64.cmp x0, #0
+    arm64.b.ne unions-simple.main.test_0
+    arm64.b unions-simple.main.test_0.after
+  test_0:
+    arm64.mov x0, #1
+    arm64.epilogue stack_size=48
+    arm64.ret
+  test_0.after:
+    arm64.mov x0, #0
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+}
+---

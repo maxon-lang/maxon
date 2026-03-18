@@ -1,0 +1,79 @@
+// Test: match-range.multiple-ranges
+function main() returns ExitCode
+  var score = 85
+  match score 'grade'
+    90 to 100 then return 65
+    80 upto 90 then return 66
+    70 upto 80 then return 67
+    default then return 70
+  end 'grade'
+end 'main'
+---
+ExitCode: 66
+---
+module {
+  func @match-statements.main() -> u32 {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.mov x0, #85
+    arm64.str x0, [x29, #-8]
+    arm64.b match-statements.main.grade_0.cmp0
+  grade_0.cmp0:
+    arm64.ldr x0, [x29, #-8]
+    arm64.mov x1, #90
+    arm64.cmp x0, x1
+    arm64.cset x2, ge
+    arm64.ldr x3, [x29, #-8]
+    arm64.mov x4, #100
+    arm64.cmp x3, x4
+    arm64.cset x5, le
+    arm64.and x6, x2, x5
+    arm64.cmp x6, #0
+    arm64.b.ne match-statements.main.grade_0.case0
+    arm64.b match-statements.main.grade_0.cmp1
+  grade_0.case0:
+    arm64.mov x0, #65
+    arm64.epilogue stack_size=48
+    arm64.ret
+  grade_0.cmp1:
+    arm64.ldr x0, [x29, #-8]
+    arm64.mov x1, #80
+    arm64.cmp x0, x1
+    arm64.cset x2, ge
+    arm64.ldr x3, [x29, #-8]
+    arm64.mov x4, #90
+    arm64.cmp x3, x4
+    arm64.cset x5, lt
+    arm64.and x6, x2, x5
+    arm64.cmp x6, #0
+    arm64.b.ne match-statements.main.grade_0.case1
+    arm64.b match-statements.main.grade_0.cmp2
+  grade_0.case1:
+    arm64.mov x0, #66
+    arm64.epilogue stack_size=48
+    arm64.ret
+  grade_0.cmp2:
+    arm64.ldr x0, [x29, #-8]
+    arm64.mov x1, #70
+    arm64.cmp x0, x1
+    arm64.cset x2, ge
+    arm64.ldr x3, [x29, #-8]
+    arm64.mov x4, #80
+    arm64.cmp x3, x4
+    arm64.cset x5, lt
+    arm64.and x6, x2, x5
+    arm64.cmp x6, #0
+    arm64.b.ne match-statements.main.grade_0.case2
+    arm64.b match-statements.main.grade_0.case3
+  grade_0.case2:
+    arm64.mov x0, #67
+    arm64.epilogue stack_size=48
+    arm64.ret
+  grade_0.case3:
+    arm64.mov x0, #70
+    arm64.epilogue stack_size=48
+    arm64.ret
+  grade_0.merge:
+  }
+}
+---
