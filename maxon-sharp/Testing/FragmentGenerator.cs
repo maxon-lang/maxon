@@ -20,7 +20,9 @@ public static partial class FragmentGenerator {
   private static DateTime GetCompilerMtime() {
     // Use the entry assembly location first — Environment.ProcessPath returns the dotnet
     // host binary path when running via `dotnet run`, which doesn't change on rebuild.
+    #pragma warning disable IL3000 // Assembly.Location returns empty in single-file; handled by fallback below
     var assemblyPath = System.Reflection.Assembly.GetEntryAssembly()?.Location;
+    #pragma warning restore IL3000
     if (!string.IsNullOrEmpty(assemblyPath) && File.Exists(assemblyPath)) {
       return new FileInfo(assemblyPath).LastWriteTimeUtc;
     }

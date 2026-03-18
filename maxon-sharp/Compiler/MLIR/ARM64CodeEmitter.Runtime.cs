@@ -13,38 +13,37 @@ public partial class ARM64CodeEmitter {
   private const int F_GETPATH = 50; // fcntl F_GETPATH on macOS
 
   // Timer heap layout: each entry is 16 bytes {i64 deadline_ms, ptr gt}
-  private const int TimerEntrySize    = 16;
-  private const int TimerOffDeadline  = 0;
-  private const int TimerOffGt        = 8;
+  private const int TimerEntrySize = 16;
+  private const int TimerOffDeadline = 0;
+  private const int TimerOffGt = 8;
   private const int TimerHeapCapacity = 256;
 
   // IoCompletion node: only next pointer used (results stored directly in GT struct)
-  private const int IoCompOffNext    = 0x20;
+  private const int IoCompOffNext = 0x20;
 
   // kqueue-based async IO context: {i64 fd, ptr buf, i64 len, ptr waiter_gt, i16 filter}
-  private const int KqCtxSize       = 0x28; // 40 bytes
-  private const int KqCtxOffFd      = 0x00;
-  private const int KqCtxOffBuf     = 0x08;
-  private const int KqCtxOffLen     = 0x10;
-  private const int KqCtxOffWaiter  = 0x18;
-  private const int KqCtxOffFilter  = 0x20;
+  private const int KqCtxSize = 0x28; // 40 bytes
+  private const int KqCtxOffFd = 0x00;
+  private const int KqCtxOffBuf = 0x08;
+  private const int KqCtxOffLen = 0x10;
+  private const int KqCtxOffWaiter = 0x18;
+  private const int KqCtxOffFilter = 0x20;
 
   // macOS kqueue constants
-  private const int EVFILT_READ  = -1;
+  private const int EVFILT_READ = -1;
   private const int EVFILT_WRITE = -2;
-  private const int EV_ADD       = 0x0001;
-  private const int EV_ONESHOT   = 0x0010;
+  private const int EV_ADD = 0x0001;
+  private const int EV_ONESHOT = 0x0010;
   private const int CLOCK_UPTIME_RAW = 0x08; // macOS monotonic clock
 
   // Internal KqCtx filter for async connect completion (not a real kqueue filter)
   private const int KQCTX_CONNECT = -3;
 
   // macOS fcntl / socket constants
-  private const int F_GETFL    = 3;
-  private const int F_SETFL    = 4;
+  private const int F_SETFL = 4;
   private const int O_NONBLOCK = 0x0004;
   private const int SOL_SOCKET = 0xFFFF;
-  private const int SO_ERROR   = 0x1007;
+  private const int SO_ERROR = 0x1007;
 
   // --- Runtime function prologue/epilogue helpers ---
 
@@ -107,12 +106,6 @@ public partial class ARM64CodeEmitter {
   /// LDR dest, [X28, #POffCurrentGt]
   private void EmitLoadCurrentGt(ARM64Register dest) {
     EmitLoadStoreUnsignedImm(0xF9400000, dest, ARM64Register.X28, POffCurrentGt, 8);
-  }
-
-  /// Emit code to store a GT pointer into P->currentGt.
-  /// STR src, [X28, #POffCurrentGt]
-  private void EmitStoreCurrentGt(ARM64Register src) {
-    EmitLoadStoreUnsignedImm(0xF9000000, src, ARM64Register.X28, POffCurrentGt, 8);
   }
 
   // --- os_unfair_lock helpers ---
@@ -2699,78 +2692,77 @@ public partial class ARM64CodeEmitter {
   // ============================================================================
 
   // GreenThread struct offsets (same layout as x86 for consistency)
-  private const int GtOffSp         = 0x00;
-  private const int GtOffFp         = 0x08;
-  private const int GtOffStatus     = 0x10;
-  private const int GtOffStackBase  = 0x18;
-  private const int GtOffStackSize  = 0x20;
-  private const int GtOffResult     = 0x28;
-  private const int GtOffWaiter     = 0x30;
-  private const int GtOffNext       = 0x38;
-  private const int GtOffFuncPtr    = 0x40;
-  private const int GtOffArgBuf     = 0x48;
+  private const int GtOffSp = 0x00;
+  private const int GtOffFp = 0x08;
+  private const int GtOffStatus = 0x10;
+  private const int GtOffStackBase = 0x18;
+  private const int GtOffStackSize = 0x20;
+  private const int GtOffResult = 0x28;
+  private const int GtOffWaiter = 0x30;
+  private const int GtOffNext = 0x38;
+  private const int GtOffFuncPtr = 0x40;
+  private const int GtOffArgBuf = 0x48;
   private const int GtOffStackGuard = 0x50;
-  private const int GtOffThrew      = 0x58;
+  private const int GtOffThrew = 0x58;
   private const int GtOffCancelFlag = 0x78;
-  private const int GtOffAllNext    = 0x88;
-  private const int GtOffTraceId    = 0xA0;
-  private const int GtOffIoYielded  = 0xA8; // ioYielded flag for I/O completion protocol
-  private const int GtStructSize    = 0xB0; // 176 bytes
+  private const int GtOffAllNext = 0x88;
+  private const int GtOffTraceId = 0xA0;
+  private const int GtOffIoYielded = 0xA8; // ioYielded flag for I/O completion protocol
+  private const int GtStructSize = 0xB0; // 176 bytes
 
-  private const int GtStatusReady    = 0;
-  private const int GtStatusRunning  = 1;
+  private const int GtStatusReady = 0;
+  private const int GtStatusRunning = 1;
   private const int GtStatusCompleted = 2;
-  private const int GtStatusWaiting  = 3;
+  private const int GtStatusWaiting = 3;
 
   private const int GtInitialStackSize = 0x800; // 2KB (grows on demand via __gt_morestack)
   private const int GtStackGuardMargin = 0x3A0; // 928 bytes
-  private const int PSystemStackSize   = 0x2000; // 8KB system stack per P for morestack
+  private const int PSystemStackSize = 0x2000; // 8KB system stack per P for morestack
 
   // I/O result fields in GreenThread struct (used by async I/O)
   private const int GtOffIoResultVal = 0x60; // raw result value
   private const int GtOffIoErrorCode = 0x70; // 0=success, non-zero=error
 
   // SyncRequest layout (40 bytes) — queued I/O operations
-  private const int SyncReqSize      = 0x28; // 40 bytes
-  private const int SyncReqOffOp     = 0x00;
-  private const int SyncReqOffArg0   = 0x08;
-  private const int SyncReqOffArg1   = 0x10;
+  private const int SyncReqSize = 0x28; // 40 bytes
+  private const int SyncReqOffOp = 0x00;
+  private const int SyncReqOffArg0 = 0x08;
+  private const int SyncReqOffArg1 = 0x10;
   private const int SyncReqOffWaiter = 0x18;
-  private const int SyncReqOffNext   = 0x20;
+  private const int SyncReqOffNext = 0x20;
 
   // Sync op codes (must match x86 values)
-  private const long SyncOpFileExists    = 0;
-  private const long SyncOpFileDelete    = 1;
-  private const long SyncOpDirExists     = 4;
-  private const long SyncOpDirCreate     = 5;
-  private const long SyncOpGetCwd        = 6;
-  private const long SyncOpFileOpenRead  = 7;
+  private const long SyncOpFileExists = 0;
+  private const long SyncOpFileDelete = 1;
+  private const long SyncOpDirExists = 4;
+  private const long SyncOpDirCreate = 5;
+  private const long SyncOpGetCwd = 6;
+  private const long SyncOpFileOpenRead = 7;
   private const long SyncOpFileOpenWrite = 8;
-  private const long SyncOpCloseHandle   = 9;
-  private const long SyncOpNetConnect    = 10;
-  private const long SyncOpNetSend       = 11;
-  private const long SyncOpNetRecv       = 12;
-  private const long SyncOpNetClose      = 13;
-  private const long SyncOpShutdown      = 99; // Sentinel to shut down sync I/O worker
+  private const long SyncOpCloseHandle = 9;
+  private const long SyncOpNetConnect = 10;
+  private const long SyncOpNetSend = 11;
+  private const long SyncOpNetRecv = 12;
+  private const long SyncOpNetClose = 13;
 
   // P (ProcContext) struct offsets — per-worker scheduler state (GMP model)
   private const int POffLocalQueueHead = 0x00;
   private const int POffLocalQueueTail = 0x08;
-  private const int POffLocalQueueLen  = 0x10;
-  private const int POffCurrentGt      = 0x18;
-  private const int POffId             = 0x20;
-  private const int POffRng            = 0x28;
-  private const int POffIdleFlag       = 0x30;
-  private const int POffWakeSemaphore  = 0x38;
+  private const int POffLocalQueueLen = 0x10;
+  private const int POffCurrentGt = 0x18;
+  private const int POffId = 0x20;
+  private const int POffRng = 0x28;
+  private const int POffIdleFlag = 0x30;
+  private const int POffWakeSemaphore = 0x38;
   private const int POffOsThreadHandle = 0x40;
-  private const int POffStatus         = 0x48;  // 0=unstarted, 1=active (atomic CAS)
-  private const int POffPendingWaiter  = 0x50;
-  private const int POffRunnext        = 0x58;
-  private const int POffFreeListHead   = 0x60;
-  private const int POffFreeListLen    = 0x68;
-  private const int POffSystemStackSP  = 0x70; // system stack pointer for __gt_morestack
-  private const int POffMainThread     = 0x78;  // Inline GreenThread (168 bytes)
-  private const int PStructSize        = 0x78 + GtStructSize; // 296 bytes (0x128)
+  private const int POffStatus = 0x48;  // 0=unstarted, 1=active (atomic CAS)
+  private const int POffPendingWaiter = 0x50;
+  private const int POffRunnext = 0x58;
+  private const int POffFreeListHead = 0x60;
+  private const int POffFreeListLen = 0x68;
+  private const int POffSystemStackSP = 0x70; // system stack pointer for __gt_morestack
+  private const int POffMainThread = 0x78;  // Inline GreenThread (168 bytes)
+  private const int PStructSize = 0x78 + GtStructSize; // 296 bytes (0x128)
 
   // Max local queue size before overflow to global queue
   private const int MaxLocalQueueLen = 256;

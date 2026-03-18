@@ -49,58 +49,6 @@ public static partial class MaxonToStandardConversion {
   }
 
   /// <summary>
-  /// Finds array literal struct ops whose buffer must be heap-allocated because
-  /// the value escapes the function (via return or call argument).
-  /// </summary>
-  private static HashSet<int> FindEscapingArrayLiterals(MlirFunction<MaxonOp> func) {
-    var escaping = new HashSet<int>();
-
-    // Map: value ID -> struct literal op (for array literals only)
-    var arrayLiterals = new Dictionary<int, MaxonStructLiteralOp>();
-    // Map: variable name -> original array literal ID
-    var varToArrayLiteral = new Dictionary<string, int>();
-
-    // Array literal buffers escape when returned from the function, since the
-    // stack frame is destroyed. Call arguments are safe because the callee
-    // runs while the caller's stack is still alive.
-    foreach (var block in func.Body.Blocks) {
-      foreach (var op in block.Operations) {
-        if (op is MaxonStructLiteralOp structLit && structLit.ArrayLiteralTag != null) {
-          arrayLiterals[structLit.Result.Id] = structLit;
-        }
-        if (op is MaxonAssignOp assign && arrayLiterals.ContainsKey(assign.Value.Id)) {
-          varToArrayLiteral[assign.VarName] = assign.Value.Id;
-        }
-        if (op is MaxonReturnOp ret && ret.Value != null && arrayLiterals.ContainsKey(ret.Value.Id)) {
-          escaping.Add(ret.Value.Id);
-        }
-        // Global stores escape: the function's stack frame is destroyed but the global persists
-        if (op is MaxonGlobalStoreOp globalStore && arrayLiterals.ContainsKey(globalStore.Value.Id)) {
-          escaping.Add(globalStore.Value.Id);
-        }
-        // Track struct_var_ref so indirect returns (var x = [...]; return x) are caught
-        if (op is MaxonStructVarRefOp varRef && varToArrayLiteral.TryGetValue(varRef.VarName, out var litId)) {
-          arrayLiterals.TryAdd(varRef.Result.Id, arrayLiterals[litId]);
-        }
-      }
-    }
-
-    // Second pass: catch returns and global stores that reference var refs of array literals
-    foreach (var block in func.Body.Blocks) {
-      foreach (var op in block.Operations) {
-        if (op is MaxonReturnOp ret && ret.Value != null && arrayLiterals.TryGetValue(ret.Value.Id, out MaxonStructLiteralOp? retLit)) {
-          escaping.Add(retLit.Result.Id);
-        }
-        if (op is MaxonGlobalStoreOp gs && arrayLiterals.TryGetValue(gs.Value.Id, out MaxonStructLiteralOp? gsLit)) {
-          escaping.Add(gsLit.Result.Id);
-        }
-      }
-    }
-
-    return escaping;
-  }
-
-  /// <summary>
   /// Resolve the standard-level result value type for a call or try_call.
   /// </summary>
   private static StdValue? ResolveCallResultType(MaxonValueKind? resultKind, MlirType? calleeReturnType) {
@@ -556,8 +504,7 @@ public static partial class MaxonToStandardConversion {
 
   /// Reload struct-typed self-field local variables from the self pointer.
   /// Called after method calls that may mutate self-fields (e.g. grow() reallocating arrays).
-  private static void ReloadSelfFieldLocals(MlirStructType selfStructType, MlirBlock<StandardOp> block, Dictionary<string, string> varTypes)
-  {
+  private static void ReloadSelfFieldLocals(MlirStructType selfStructType, MlirBlock<StandardOp> block, Dictionary<string, string> varTypes) {
     foreach (var field in selfStructType.Fields) {
       if (field.Type is not MlirStructType) continue;
       if (!varTypes.ContainsKey(field.Name)) continue;

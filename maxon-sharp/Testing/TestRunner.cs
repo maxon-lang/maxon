@@ -122,7 +122,7 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
                 Logger.Error(LogCategory.Testing, $"[FAIL] {item.SpecName} ({total - failCount}/{total})");
                 foreach (var f in failures)
                   Logger.Error(LogCategory.Testing, f);
-    }
+              }
             }
           }
         }
@@ -715,7 +715,7 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
   }
 
   // Matches the worker-suffix appended by --async-trace-workers: " [M=N]" at end of line.
-  private static readonly Regex AsyncWorkerSuffix = new(@" \[M=\d+\]$", RegexOptions.Multiline);
+  private static readonly Regex AsyncWorkerSuffix = AsyncWorkerSuffixRegex();
 
   // Lines emitted by the worker lifecycle tracer that don't exist in the stable trace output.
   private static readonly HashSet<string> AsyncWorkerOnlyPrefixes = new(StringComparer.Ordinal) {
@@ -1120,4 +1120,6 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
 
   [System.Text.RegularExpressions.GeneratedRegex(@"specs/fragments-[^/]+/")]
   private static partial System.Text.RegularExpressions.Regex FragmentDirRegex();
+  [GeneratedRegex(@" \[M=\d+\]$", RegexOptions.Multiline)]
+  private static partial Regex AsyncWorkerSuffixRegex();
 }
