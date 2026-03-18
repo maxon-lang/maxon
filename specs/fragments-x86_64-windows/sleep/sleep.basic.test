@@ -1,25 +1,23 @@
-// Test: if-arch-else
+// Test: sleep.basic
 function main() returns ExitCode
-  #if arch(aarch64)
-    print("arm\n")
-  #else
-    print("not-arm\n")
-  #endif
-  return 0
+    sleep(10)
+    print("done\n")
+    return 0
 end 'main'
 ---
-ExitCode: 0
 Stdout: ```
-not-arm
+done
 ```
 ---
 module {
-  func @conditional-compilation.main() -> u32 {
+  func @sleep.main() -> u32 {
   entry:
     x86.prologue stack_size=32
+    x86.mov rcx, 10
+    x86.call stdlib.Sleep.sleep
     x86.lea_rdata rax, [__str_0]
     x86.mov rcx, rax
-    x86.mov rdx, 8
+    x86.mov rdx, 5
     x86.lea_func rbx, [__destruct_String]
     x86.mov rsi, rbx
     x86.mov [rbp-24], rcx
@@ -39,7 +37,7 @@ module {
     x86.mov rax, [rbp-24]
     x86.mov [r9+0], rax
     x86.mov rax, [rbp-16]
-    x86.mov rcx, 8
+    x86.mov rcx, 5
     x86.mov [rax+8], rcx
     x86.xor rax, rax
     x86.mov rcx, [rbp-16]
