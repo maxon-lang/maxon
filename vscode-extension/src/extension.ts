@@ -70,20 +70,34 @@ export async function activate(ctx: vscode.ExtensionContext) {
 	log('Maxon extension activating...');
 
 	// Path to the Maxon compiler with embedded LSP server
-	// When running from the workspace (development), use ../bin relative to extension folder
-	// When installed, check workspace folders for the bin directory
-	serverExecutable = path.join(ctx.extensionPath, '..', 'bin', 'maxon.exe');
-
-	// If running from installed extension (not from workspace), try to find the compiler
-	// in the first workspace folder's bin directory
+	// Priority: workspace bin directory first, then fall back to extension-relative path
 	const fs = require('fs');
-	if (!fs.existsSync(serverExecutable) && vscode.workspace.workspaceFolders?.length) {
+	serverExecutable = '';
+
+	// First, try the workspace bin directory
+	if (vscode.workspace.workspaceFolders?.length) {
 		const workspaceRoot = vscode.workspace.workspaceFolders[0].uri.fsPath;
 		const workspaceBin = path.join(workspaceRoot, 'bin', 'maxon.exe');
 		if (fs.existsSync(workspaceBin)) {
 			serverExecutable = workspaceBin;
 			log(`Using Maxon compiler from workspace: ${serverExecutable}`);
 		}
+	}
+
+	// Fall back to extension-relative path (development mode: ../bin relative to extension folder)
+	if (!serverExecutable) {
+		const extensionRelative = path.join(ctx.extensionPath, '..', 'bin', 'maxon.exe');
+		if (fs.existsSync(extensionRelative)) {
+			serverExecutable = extensionRelative;
+			log(`Using Maxon compiler relative to extension: ${serverExecutable}`);
+		}
+	}
+
+	if (!serverExecutable) {
+		const msg = 'Could not find maxon.exe in workspace bin/ or extension directory';
+		log(msg);
+		vscode.window.showErrorMessage(msg);
+		return;
 	}
 
 	log(`Maxon compiler path: ${serverExecutable}`);
