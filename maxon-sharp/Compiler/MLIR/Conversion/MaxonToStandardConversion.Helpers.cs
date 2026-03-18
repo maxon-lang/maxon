@@ -315,9 +315,19 @@ public static partial class MaxonToStandardConversion {
 
     var resolved = ResolveStructType(structType, typeDefs);
     foreach (var f in resolved.Fields) {
-      if (f.Type.IsHeapAllocated) return $"__destruct_{typeName}";
+      if (IsFieldHeapAllocated(f, typeDefs)) return $"__destruct_{typeName}";
     }
     return null;
+  }
+
+  /// <summary>
+  /// Checks if a struct field holds a heap-allocated type, resolving through typeDefs
+  /// when the field's own type object is a stale copy (e.g. tuple fields created before
+  /// the union type's associated value cases were populated).
+  /// </summary>
+  private static bool IsFieldHeapAllocated(MlirStructField field, Dictionary<string, MlirType> typeDefs) {
+    if (field.Type.IsHeapAllocated) return true;
+    return typeDefs.TryGetValue(field.Type.Name, out var resolved) && resolved.IsHeapAllocated;
   }
 
   /// <summary>

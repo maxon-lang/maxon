@@ -47,7 +47,7 @@ You *Are* Going To Read It
   and you just get a type back with everything filled in
 - precompile stdlib and link it
 - can't instantiate vars with built in types. you have to create a user defined type that defines its range
-
+- live process monitor (memory allocations, etc)
 
 - how to have the language prevent users doing this
 The Trap: If you make an O(n) operation look like a property (s.count), a user might innocently write for i in 0..s.count, inadvertently creating an O(n²) loop because the language recalculates the count on every iteration.
@@ -67,7 +67,6 @@ mcp server
 AI optimized debugger
 
 get running on linux (devcontainer)
-get running on macos
 
 memory safety (arenas)
 

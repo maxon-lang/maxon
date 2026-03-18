@@ -2053,7 +2053,7 @@ public static partial class MaxonToStandardConversion {
 
       var managedFields = new List<(int Offset, string FieldTypeName, bool IsRawBuffer)>();
       foreach (var field in resolved.Fields) {
-        if (field.Type.IsHeapAllocated) {
+        if (IsFieldHeapAllocated(field, typeDefs)) {
           var fieldTypeName = (field.Type as MlirStructType)?.Name ?? field.Type.Name;
           managedFields.Add((field.Offset, fieldTypeName, false));
         } else if (isManagedMemory && field.Name == "buffer") {
