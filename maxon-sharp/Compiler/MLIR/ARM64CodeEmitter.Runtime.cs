@@ -14,8 +14,6 @@ public partial class ARM64CodeEmitter {
 
   // Timer heap layout: each entry is 16 bytes {i64 deadline_ms, ptr gt}
   private const int TimerEntrySize = 16;
-  private const int TimerOffDeadline = 0;
-  private const int TimerOffGt = 8;
   private const int TimerHeapCapacity = 256;
 
   // IoCompletion node: only next pointer used (results stored directly in GT struct)
@@ -185,9 +183,12 @@ public partial class ARM64CodeEmitter {
     EmitMaxonStrlen();
     EmitMaxonToCstring();
     EmitMaxonCowCheck();
-    EmitMaxonRawAlloc();
-    EmitMaxonRawRealloc();
-    EmitMaxonRawFree();
+    // mm_raw_alloc/free/realloc unified via RuntimeEmitter
+    var rawRt = new Runtime.RuntimeEmitter(CreateBackend());
+    rawRt.EmitAllocatorFunctions(Compiler.MmTrace);
+    rawRt.EmitMmRawAlloc(Compiler.MmTrace);
+    rawRt.EmitMmRawRealloc(Compiler.MmTrace);
+    rawRt.EmitMmRawFree(Compiler.MmTrace);
     EmitMaxonFileSize();
     EmitMaxonFileRead();
     EmitMaxonFileClose();
@@ -215,7 +216,7 @@ public partial class ARM64CodeEmitter {
     EmitMaxonManagedDirClose();
     EmitDestructManagedDirectory();
     EmitMaxonFileExists();
-    EmitMmRawAlloc260();
+    new Runtime.RuntimeEmitter(CreateBackend()).EmitMmRawAlloc260(Compiler.MmTrace);
     EmitMaxonU64ToStringFmt();
     EmitMaxonSleep();
 
@@ -1791,118 +1792,10 @@ public partial class ARM64CodeEmitter {
 
   // --- Raw memory functions (using mmap/munmap) ---
 
-  private void EmitMaxonRawAlloc() {
-    // mm_raw_alloc(size) -> ptr
-    // Allocates size+16 bytes via mmap, stores the mmap'd size at [base],
-    // returns base+16 so mm_raw_free can read the size from [ptr-16].
-    var allocZeroLabel = $"__raw_alloc_zero_{_uniqueLabelCounter++}";
-    EmitRuntimeFunctionStart("mm_raw_alloc", 1, 0x30);
-    EmitReloadArg(0); // X0 = requested size
+  // mm_raw_alloc: now emitted by RuntimeEmitter.MemoryManager.cs (unified x86/ARM64)
 
-    // size == 0 -> return NULL
-    _condBranchFixups.Add((_code.Count, allocZeroLabel));
-    EmitWord(0xB4000000 | Reg(ARM64Register.X0)); // CBZ X0, zero
-
-    // X1 = size + 16 (for header)
-    EmitAddSubImm(ARM64Register.X1, ARM64Register.X0, 16, isAdd: true);
-    // Save total size at [x29, #24]
-    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X1, ARM64Register.X29, 24, 8);
-    // mmap(NULL, size+16, PROT_READ|PROT_WRITE, MAP_ANON|MAP_PRIVATE, -1, 0)
-    EmitMovRegImm(ARM64Register.X0, 0); // addr = NULL
-    // X1 already = size+16
-    EmitMovRegImm(ARM64Register.X2, 3); // PROT_READ | PROT_WRITE
-    EmitMovRegImm(ARM64Register.X3, 0x1002); // MAP_ANON | MAP_PRIVATE
-    EmitMovRegImm(ARM64Register.X4, -1); // fd = -1
-    EmitMovRegImm(ARM64Register.X5, 0); // offset = 0
-    EmitCallImport("mmap");
-    // X0 = base ptr from mmap. Store total mmap size at [base].
-    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X1, ARM64Register.X29, 24, 8); // total size
-    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X1, ARM64Register.X0, 0, 8); // [base] = total size
-    // Return base + 16
-    EmitAddSubImm(ARM64Register.X0, ARM64Register.X0, 16, isAdd: true);
-    EmitRuntimeFunctionEnd();
-
-    DefineLabel(allocZeroLabel);
-    EmitMovRegImm(ARM64Register.X0, 0); // return NULL
-    EmitRuntimeFunctionEnd();
-  }
-
-  private void EmitMaxonRawRealloc() {
-    // mm_raw_realloc(old_ptr, new_size, managedPtr) -> new_ptr
-    // [x29+16] = old_ptr (x0)
-    // [x29+24] = new_size (x1)
-    // [x29+32] = managedPtr (x2)
-    // [x29+40] = new_ptr (scratch)
-    // [x29+48] = old_byte_size (scratch)
-    EmitRuntimeFunctionStart("mm_raw_realloc", 3, Compiler.MmTrace ? 0x50 : 0x40);
-
-    // Step 1: Allocate new buffer via mm_raw_alloc(new_size)
-    EmitReloadArg(1); // X1 = new_size
-    EmitMovRegReg(ARM64Register.X0, ARM64Register.X1); // X0 = new_size (arg for mm_raw_alloc)
-    EmitBranchLink("mm_raw_alloc");
-    // Save new_ptr at [x29+40]
-    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X29, 40, 8);
-
-    // Step 2: Compute old_byte_size = managedPtr->capacity * managedPtr->element_size
-    EmitReloadArg(2); // X2 = managedPtr
-    // X3 = [managedPtr+16] = capacity
-    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X3, ARM64Register.X2, 16, 8);
-    // X4 = [managedPtr+24] = element_size
-    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X4, ARM64Register.X2, 24, 8);
-    // X3 = capacity * element_size (MUL X3, X3, X4 = MADD X3, X3, X4, XZR)
-    EmitWord(0x9B047C63); // MUL X3, X3, X4
-    // Save old_byte_size at [x29+48]
-    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X3, ARM64Register.X29, 48, 8);
-
-    // Step 3: memcpy(new_ptr, old_ptr, old_byte_size)
-    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X1, ARM64Register.X29, 16, 8); // X1 = old_ptr (src)
-    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X29, 40, 8); // X0 = new_ptr (dst)
-    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X2, ARM64Register.X29, 48, 8); // X2 = old_byte_size (count)
-    EmitBranchLink("maxon_memcpy");
-
-    // Step 4: Free old buffer via mm_raw_free(old_ptr)
-    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X29, 16, 8); // X0 = old_ptr
-    EmitBranchLink("mm_raw_free");
-
-    // Return new_ptr
-    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X29, 40, 8);
-
-    if (Compiler.MmTrace) {
-      // Trace: "realloc TypeName #N rc=R size=S" using managedPtr for tag/rc, new_size for size
-      EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X29, 48, 8); // save new_ptr
-      EmitMovRegImm(ARM64Register.X1, 0);
-      EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X1, ARM64Register.X29, 56, 8); // scope=NULL
-      // ptrSlot=32 (managedPtr), scopeSlot=56, sizeSlot=24 (new_size)
-      EmitInlineTrace("__mm_tag_realloc", "mm_raw_realloc_trace", ptrSlot: 32, scopeSlot: 56, sizeSlot: 24);
-      EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X29, 48, 8); // restore new_ptr
-    }
-
-    EmitRuntimeFunctionEnd();
-  }
-
-  private void EmitMaxonRawFree() {
-    // mm_raw_free(ptr)
-    // The header at [ptr-16] contains the total mmap'd size.
-    // munmap(ptr-16, size)
-    var freeNullLabel = $"__raw_free_null_{_uniqueLabelCounter++}";
-    EmitRuntimeFunctionStart("mm_raw_free", 1);
-    EmitReloadArg(0); // X0 = ptr
-
-    // NULL check
-    _condBranchFixups.Add((_code.Count, freeNullLabel));
-    EmitWord(0xB4000000 | Reg(ARM64Register.X0)); // CBZ X0, null
-
-    // X0 = base = ptr - 16
-    EmitAddSubImm(ARM64Register.X0, ARM64Register.X0, 16, isAdd: false);
-    // X1 = [base] = total mmap size
-    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X1, ARM64Register.X0, 0, 8);
-    // munmap(base, size)
-    EmitCallImport("munmap");
-    EmitRuntimeFunctionEnd();
-
-    DefineLabel(freeNullLabel);
-    EmitRuntimeFunctionEnd();
-  }
+  // mm_raw_realloc: now emitted by RuntimeEmitter.MemoryManager.cs (unified x86/ARM64)
+  // mm_raw_free: now emitted by RuntimeEmitter.MemoryManager.cs (unified x86/ARM64)
 
   // --- File operations ---
 
@@ -2746,30 +2639,21 @@ public partial class ARM64CodeEmitter {
   private const long SyncOpNetClose = 13;
 
   // P (ProcContext) struct offsets — per-worker scheduler state (GMP model)
-  private const int POffLocalQueueHead = 0x00;
-  private const int POffLocalQueueTail = 0x08;
-  private const int POffLocalQueueLen = 0x10;
   private const int POffCurrentGt = 0x18;
   private const int POffId = 0x20;
   private const int POffRng = 0x28;
   private const int POffIdleFlag = 0x30;
   private const int POffWakeSemaphore = 0x38;
-  private const int POffOsThreadHandle = 0x40;
   private const int POffStatus = 0x48;  // 0=unstarted, 1=active (atomic CAS)
   private const int POffPendingWaiter = 0x50;
-  private const int POffRunnext = 0x58;
   private const int POffFreeListHead = 0x60;
   private const int POffFreeListLen = 0x68;
   private const int POffSystemStackSP = 0x70; // system stack pointer for __gt_morestack
   private const int POffMainThread = 0x78;  // Inline GreenThread (168 bytes)
   private const int PStructSize = 0x78 + GtStructSize; // 296 bytes (0x128)
 
-  // Max local queue size before overflow to global queue
-  private const int MaxLocalQueueLen = 256;
   // Free list max size before freeing to heap
   private const int MaxFreeListLen = 64;
-  // Fairness tick interval (check global queue every Nth dequeue)
-  private const int FairnessInterval = 61;
 
   private void EmitGreenThreadRuntime() {
     // GMP scheduler globals
@@ -2844,9 +2728,11 @@ public partial class ARM64CodeEmitter {
 
 
     EmitGtInit();
-    EmitGtEnqueue();
-    EmitGtDequeue();
-    EmitGtStealWork();
+    // Scheduler functions migrated to RuntimeEmitter (shared x86/ARM64)
+    var schedRt = new Runtime.RuntimeEmitter(CreateBackend());
+    schedRt.EmitGtEnqueue();
+    schedRt.EmitGtDequeue();
+    schedRt.EmitGtStealWork();
     EmitSchedWorkerLoop();
     EmitGtSpawn();
     EmitGtTrampoline();
@@ -2857,8 +2743,8 @@ public partial class ARM64CodeEmitter {
     EmitGtCancel();
     EmitGtCleanup();
     EmitGtProcessPendingWaiter();
-    EmitGtTimerAdd();
-    EmitGtTimerCheck();
+    schedRt.EmitGtTimerAdd();
+    schedRt.EmitGtTimerCheck();
     EmitGtMorestack();
     EmitGtPanicIo();
     EmitIoRuntime();
@@ -3000,458 +2886,13 @@ public partial class ARM64CodeEmitter {
     EmitMovRegImm(ARM64Register.X3, 0); // arg = NULL
     EmitCallImport("pthread_create");
 
+    // Step 9: Initialize slab allocator
+    EmitBranchLink("__slab_init");
+
     EmitRuntimeFunctionEnd();
   }
 
-  /// <summary>
-  /// __gt_enqueue(gt_x0): GMP enqueue — try runnext, then local queue, then global queue.
-  /// After enqueue, wake an idle worker if available.
-  /// Stack: [x29+16]=gt, [x29+24]=P*, [x29+32]=displaced_gt
-  /// </summary>
-  private void EmitGtEnqueue() {
-    EmitRuntimeFunctionStart("__gt_enqueue", 1, 0x50);
-
-    // gt.next = 0
-    EmitReloadArg(0); // X0 = gt
-    EmitMovRegImm(ARM64Register.X1, 0);
-    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X1, ARM64Register.X0, GtOffNext, 8);
-
-    // Load P* from X28 (dedicated register; X28=0 on I/O worker → routes to global queue)
-    EmitLoadP(ARM64Register.X9);
-    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X9, ARM64Register.X29, 24, 8); // [x29+24] = P*
-    // If P* == NULL (called from I/O worker thread): go to global queue
-    EmitCbz(ARM64Register.X9, "__gt_enqueue_global");
-
-    // --- Try runnext slot ---
-    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X1, ARM64Register.X9, POffRunnext, 8);
-    EmitCbnz(ARM64Register.X1, "__gt_enqueue_displace");
-
-    // Runnext empty: P->runnext = gt
-    EmitReloadArg(0);
-    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X9, ARM64Register.X29, 24, 8);
-    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X9, POffRunnext, 8);
-    EmitBranch("__gt_enqueue_wake");
-
-    // --- Runnext occupied: displace old to local queue, set new as runnext ---
-    DefineLabel("__gt_enqueue_displace");
-    // X1 = old runnext (save it)
-    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X1, ARM64Register.X29, 32, 8); // [x29+32] = displaced
-    // Set P->runnext = new gt
-    EmitReloadArg(0);
-    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X9, ARM64Register.X29, 24, 8);
-    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X9, POffRunnext, 8);
-    // Clear displaced.next
-    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X29, 32, 8); // displaced gt
-    EmitMovRegImm(ARM64Register.X1, 0);
-    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X1, ARM64Register.X0, GtOffNext, 8);
-
-    // --- Enqueue displaced to local queue ---
-    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X9, ARM64Register.X29, 24, 8); // P*
-    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X1, ARM64Register.X9, POffLocalQueueLen, 8);
-    EmitCmpImm(ARM64Register.X1, MaxLocalQueueLen);
-    EmitBranchCond(ARM64ConditionCode.Hs, "__gt_enqueue_displaced_global"); // local full → global
-
-    // Local queue: append displaced to tail
-    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X29, 32, 8); // displaced
-    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X2, ARM64Register.X9, POffLocalQueueTail, 8);
-    EmitCbnz(ARM64Register.X2, "__gt_enqueue_local_append");
-    // Local queue empty: head = tail = displaced
-    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X9, POffLocalQueueHead, 8);
-    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X9, POffLocalQueueTail, 8);
-    EmitBranch("__gt_enqueue_local_inc");
-
-    DefineLabel("__gt_enqueue_local_append");
-    // tail.next = displaced; tail = displaced
-    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X2, GtOffNext, 8);
-    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X9, POffLocalQueueTail, 8);
-
-    DefineLabel("__gt_enqueue_local_inc");
-    // P->localQueueLen++
-    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X1, ARM64Register.X9, POffLocalQueueLen, 8);
-    EmitAddSubImm(ARM64Register.X1, ARM64Register.X1, 1, isAdd: true);
-    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X1, ARM64Register.X9, POffLocalQueueLen, 8);
-    EmitBranch("__gt_enqueue_wake");
-
-    // --- Displaced goes to global queue (local full) ---
-    DefineLabel("__gt_enqueue_displaced_global");
-    EmitLockAcquire("__sched_global_lock");
-    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X29, 32, 8); // displaced gt
-    EmitGlobalLoadReg(ARM64Register.X1, "__gt_run_queue_tail");
-    EmitCbnz(ARM64Register.X1, "__gt_enqueue_dg_append");
-    EmitGlobalStoreReg(ARM64Register.X0, "__gt_run_queue_head");
-    EmitGlobalStoreReg(ARM64Register.X0, "__gt_run_queue_tail");
-    EmitBranch("__gt_enqueue_dg_done");
-    DefineLabel("__gt_enqueue_dg_append");
-    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X1, GtOffNext, 8);
-    EmitGlobalStoreReg(ARM64Register.X0, "__gt_run_queue_tail");
-    DefineLabel("__gt_enqueue_dg_done");
-    EmitLockRelease("__sched_global_lock");
-    EmitBranch("__gt_enqueue_wake");
-
-    // --- Global queue (no P* available, e.g. I/O worker) ---
-    DefineLabel("__gt_enqueue_global");
-    EmitLockAcquire("__sched_global_lock");
-    EmitReloadArg(0);
-    EmitGlobalLoadReg(ARM64Register.X1, "__gt_run_queue_tail");
-    EmitCbnz(ARM64Register.X1, "__gt_enqueue_g_append");
-    EmitGlobalStoreReg(ARM64Register.X0, "__gt_run_queue_head");
-    EmitGlobalStoreReg(ARM64Register.X0, "__gt_run_queue_tail");
-    EmitBranch("__gt_enqueue_g_done");
-    DefineLabel("__gt_enqueue_g_append");
-    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X1, GtOffNext, 8);
-    EmitGlobalStoreReg(ARM64Register.X0, "__gt_run_queue_tail");
-    DefineLabel("__gt_enqueue_g_done");
-    EmitLockRelease("__sched_global_lock");
-
-    // --- Wake phase: find an idle worker and signal it ---
-    DefineLabel("__gt_enqueue_wake");
-    // Check shutdown flag
-    EmitGlobalLoadReg(ARM64Register.X0, "__sched_shutdown_flag");
-    EmitCbnz(ARM64Register.X0, "__gt_enqueue_ret");
-
-    // Scan P[1..num_procs-1] for idle workers
-    EmitGlobalLoadReg(ARM64Register.X10, "__sched_procs");    // procs array
-    EmitGlobalLoadReg(ARM64Register.X11, "__sched_num_procs"); // num procs
-    EmitMovRegImm(ARM64Register.X12, 1); // i = 1 (skip P[0])
-    DefineLabel("__gt_enqueue_wake_loop");
-    // CMP X12, X11
-    EmitWord(0xEB0B019F);
-    EmitBranchCond(ARM64ConditionCode.Hs, "__gt_enqueue_try_spawn"); // i >= num_procs → no idle workers, try spawn
-
-    // Load P[i]
-    // X13 = procs[i]: LDR X13, [X10, X12, LSL #3]
-    EmitWord(0xF86C794D);
-    // Check P[i]->idleFlag
-    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X14, ARM64Register.X13, POffIdleFlag, 8);
-    EmitCbz(ARM64Register.X14, "__gt_enqueue_wake_next"); // not idle → next
-
-    // Found idle worker — clear idleFlag, signal semaphore
-    EmitMovRegImm(ARM64Register.X14, 0);
-    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X14, ARM64Register.X13, POffIdleFlag, 8);
-    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X13, POffWakeSemaphore, 8);
-    EmitCallImport("dispatch_semaphore_signal");
-    EmitBranch("__gt_enqueue_ret");
-
-    DefineLabel("__gt_enqueue_wake_next");
-    EmitAddSubImm(ARM64Register.X12, ARM64Register.X12, 1, isAdd: true);
-    EmitBranch("__gt_enqueue_wake_loop");
-
-    // --- No idle workers found: try to spawn a new worker thread ---
-    DefineLabel("__gt_enqueue_try_spawn");
-    // Check if active_workers < max_procs
-    EmitGlobalLoadReg(ARM64Register.X0, "__sched_active_workers");
-    EmitGlobalLoadReg(ARM64Register.X1, "__sched_max_procs");
-    // CMP X0, X1
-    EmitWord(0xEB01001F);
-    EmitBranchCond(ARM64ConditionCode.Hs, "__gt_enqueue_ret"); // all workers active
-
-    // Scan P[1..N] for P[i]->status == 0 (unstarted)
-    EmitGlobalLoadReg(ARM64Register.X10, "__sched_procs");
-    EmitGlobalLoadReg(ARM64Register.X11, "__sched_num_procs");
-    EmitMovRegImm(ARM64Register.X12, 1); // i = 1
-
-    DefineLabel("__gt_enqueue_spawn_loop");
-    // CMP X12, X11
-    EmitWord(0xEB0B019F);
-    EmitBranchCond(ARM64ConditionCode.Hs, "__gt_enqueue_ret"); // no unstarted workers found
-
-    // Load P[i]: LDR X13, [X10, X12, LSL #3]
-    EmitWord(0xF86C794D);
-
-    // Atomic CAS on P[i]->status: try to set 0→1
-    // ADD X14, X13, #POffStatus
-    EmitAddSubImm(ARM64Register.X14, ARM64Register.X13, POffStatus, isAdd: true);
-
-    DefineLabel("__gt_enqueue_cas_retry");
-    // LDAXR X0, [X14]
-    EmitWord(0xC85FFC00 | (Reg(ARM64Register.X14) << 5) | Reg(ARM64Register.X0));
-    // CBNZ X0, __gt_enqueue_spawn_next (already started)
-    EmitCbnz(ARM64Register.X0, "__gt_enqueue_spawn_next");
-
-    // STLXR W15, X1(=1), [X14]
-    EmitMovRegImm(ARM64Register.X1, 1);
-    EmitWord(0xC800FC00 | (Reg(ARM64Register.X14) << 5) | (15u << 16) | Reg(ARM64Register.X1));
-    // CBNZ W15, cas_retry (32-bit CBNZ for STLXR result)
-    _condBranchFixups.Add((_code.Count, "__gt_enqueue_cas_retry"));
-    EmitWord(0x35000000 | 15u);
-
-    // CAS succeeded! Save X13 (P[i]) to stack [x29+40]
-    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X13, ARM64Register.X29, 40, 8);
-
-    // Atomic increment active_workers
-    EmitGlobalLeaReg(ARM64Register.X14, "__sched_active_workers");
-    DefineLabel("__gt_enqueue_inc_retry");
-    // LDAXR X0, [X14]
-    EmitWord(0xC85FFC00 | (Reg(ARM64Register.X14) << 5) | Reg(ARM64Register.X0));
-    EmitAddSubImm(ARM64Register.X0, ARM64Register.X0, 1, isAdd: true);
-    // STLXR W15, X0, [X14]
-    EmitWord(0xC800FC00 | (Reg(ARM64Register.X14) << 5) | (15u << 16) | Reg(ARM64Register.X0));
-    // CBNZ W15, inc_retry (32-bit CBNZ for STLXR result)
-    _condBranchFixups.Add((_code.Count, "__gt_enqueue_inc_retry"));
-    EmitWord(0x35000000 | 15u);
-
-    // pthread_create(&P[i]->osThreadHandle, NULL, __sched_worker_loop, P[i])
-    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X13, ARM64Register.X29, 40, 8); // reload P[i]
-    EmitAddSubImm(ARM64Register.X0, ARM64Register.X13, POffOsThreadHandle, isAdd: true); // &tid
-    EmitMovRegImm(ARM64Register.X1, 0); // attr = NULL
-    EmitAdrpAddFixup(ARM64Register.X2, _funcAddrAdrpFixups, "__sched_worker_loop");
-    EmitMovRegReg(ARM64Register.X3, ARM64Register.X13); // arg = P[i]
-    EmitCallImport("pthread_create");
-
-    EmitBranch("__gt_enqueue_ret");
-
-    DefineLabel("__gt_enqueue_spawn_next");
-    EmitAddSubImm(ARM64Register.X12, ARM64Register.X12, 1, isAdd: true);
-    EmitBranch("__gt_enqueue_spawn_loop");
-
-    DefineLabel("__gt_enqueue_ret");
-    EmitRuntimeFunctionEnd();
-  }
-
-  /// <summary>
-  /// __gt_dequeue() -> GreenThread* in X0 (or NULL if empty).
-  /// GMP dequeue: check runnext, then local queue (with fairness), then global queue.
-  /// Stack: [x29+16]=P*
-  /// </summary>
-  private void EmitGtDequeue() {
-    EmitRuntimeFunctionStart("__gt_dequeue", 0, 0x40);
-
-    // Load P* via TLS
-    EmitLoadP(ARM64Register.X9);
-    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X9, ARM64Register.X29, 16, 8); // save P*
-
-    // --- Check runnext slot ---
-    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X9, POffRunnext, 8);
-    EmitCbz(ARM64Register.X0, "__gt_dequeue_check_fairness");
-    // Clear runnext and return it
-    EmitMovRegImm(ARM64Register.X1, 0);
-    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X1, ARM64Register.X9, POffRunnext, 8);
-    // Clear gt.next
-    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X1, ARM64Register.X0, GtOffNext, 8);
-    EmitRuntimeFunctionEnd();
-
-    // --- Fairness check: xorshift64 on P->rng ---
-    DefineLabel("__gt_dequeue_check_fairness");
-    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X9, ARM64Register.X29, 16, 8); // P*
-    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X9, POffRng, 8);
-    // xorshift64: x ^= x << 13; x ^= x >> 7; x ^= x << 17
-    // EOR X0, X0, X0, LSL #13
-    EmitWord(0xCA003400);
-    // EOR X0, X0, X0, LSR #7
-    EmitWord(0xCA001C00);
-    // EOR X0, X0, X0, LSL #17
-    EmitWord(0xCA004400);
-    // Store back P->rng
-    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X9, POffRng, 8);
-    // Check if x % 61 == 0 (fairness tick)
-    EmitMovRegImm(ARM64Register.X1, FairnessInterval);
-    // UDIV X2, X0, X1
-    EmitWord(0x9AC10802);
-    // MSUB X2, X2, X1, X0 (X2 = X0 - X2*X1 = X0 % 61)
-    EmitWord(0x9B018040);
-    // If remainder == 0: check global first
-    EmitCbz(ARM64Register.X0, "__gt_dequeue_global");
-
-    // --- Local queue ---
-    DefineLabel("__gt_dequeue_local");
-    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X9, ARM64Register.X29, 16, 8); // P*
-    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X1, ARM64Register.X9, POffLocalQueueLen, 8);
-    EmitCbz(ARM64Register.X1, "__gt_dequeue_global"); // local empty → global
-
-    // Dequeue from local head
-    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X9, POffLocalQueueHead, 8);
-    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X2, ARM64Register.X0, GtOffNext, 8); // new head
-    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X2, ARM64Register.X9, POffLocalQueueHead, 8);
-    // If new head == NULL, clear tail
-    EmitCbnz(ARM64Register.X2, "__gt_dequeue_local_dec");
-    EmitMovRegImm(ARM64Register.X2, 0);
-    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X2, ARM64Register.X9, POffLocalQueueTail, 8);
-    DefineLabel("__gt_dequeue_local_dec");
-    // len--
-    EmitAddSubImm(ARM64Register.X1, ARM64Register.X1, 1, isAdd: false);
-    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X1, ARM64Register.X9, POffLocalQueueLen, 8);
-    // Clear gt.next
-    EmitMovRegImm(ARM64Register.X1, 0);
-    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X1, ARM64Register.X0, GtOffNext, 8);
-    EmitRuntimeFunctionEnd();
-
-    // --- Global queue (locked) ---
-    DefineLabel("__gt_dequeue_global");
-    EmitLockAcquire("__sched_global_lock");
-    EmitGlobalLoadReg(ARM64Register.X0, "__gt_run_queue_head");
-    EmitCbz(ARM64Register.X0, "__gt_dequeue_global_empty");
-
-    // Dequeue from global head
-    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X1, ARM64Register.X0, GtOffNext, 8);
-    EmitGlobalStoreReg(ARM64Register.X1, "__gt_run_queue_head");
-    EmitCbnz(ARM64Register.X1, "__gt_dequeue_global_done");
-    EmitMovRegImm(ARM64Register.X1, 0);
-    EmitGlobalStoreReg(ARM64Register.X1, "__gt_run_queue_tail");
-    DefineLabel("__gt_dequeue_global_done");
-    EmitLockRelease("__sched_global_lock");
-    // Clear gt.next
-    EmitMovRegImm(ARM64Register.X1, 0);
-    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X1, ARM64Register.X0, GtOffNext, 8);
-    EmitRuntimeFunctionEnd();
-
-    DefineLabel("__gt_dequeue_global_empty");
-    EmitLockRelease("__sched_global_lock");
-    // Try work stealing before returning NULL
-    EmitBranchLink("__gt_steal_work");
-    // X0 = stolen GT or NULL
-    EmitRuntimeFunctionEnd();
-  }
-
-  /// <summary>
-  /// __gt_steal_work() -> GreenThread* in X0 (or NULL).
-  /// Tries to steal half of a random victim P's local queue.
-  /// Returns the first stolen GT (or NULL if stealing fails).
-  /// Stack: [x29+16]=attempts, [x29+24]=stolen first, [x29+32]=stolen last, [x29+40]=n
-  /// </summary>
-  private void EmitGtStealWork() {
-    EmitRuntimeFunctionStart("__gt_steal_work", 0, 0x50);
-
-    // attempts = num_procs
-    EmitGlobalLoadReg(ARM64Register.X0, "__sched_num_procs");
-    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X29, 16, 8);
-
-    DefineLabel("__gt_steal_attempt");
-    // if attempts == 0: return NULL
-    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X29, 16, 8);
-    EmitCbz(ARM64Register.X0, "__gt_steal_fail");
-    // attempts--
-    EmitAddSubImm(ARM64Register.X0, ARM64Register.X0, 1, isAdd: false);
-    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X29, 16, 8);
-
-    // victim_idx = xorshift64(P->rng) % num_procs
-    EmitLoadP(ARM64Register.X9);
-    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X9, POffRng, 8);
-    // xorshift64: x ^= x << 13; x ^= x >> 7; x ^= x << 17
-    EmitWord(0xCA003400); // EOR X0, X0, X0, LSL #13
-    EmitWord(0xCA001C00); // EOR X0, X0, X0, LSR #7
-    EmitWord(0xCA004400); // EOR X0, X0, X0, LSL #17
-    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X9, POffRng, 8);
-
-    // X0 = rng value; victim_idx = X0 % num_procs
-    EmitGlobalLoadReg(ARM64Register.X1, "__sched_num_procs");
-    // UDIV X2, X0, X1
-    EmitWord(0x9AC10802);
-    // MSUB X0, X2, X1, X0 (X0 = X0 - X2*X1 = remainder)
-    EmitWord(0x9B018040);
-    // X0 = victim_idx
-
-    // Skip if victim == self (compare P ids)
-    EmitLoadP(ARM64Register.X9);
-    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X1, ARM64Register.X9, POffId, 8);
-    // CMP X0, X1
-    EmitWord(0xEB01001F);
-    EmitBranchCond(ARM64ConditionCode.Eq, "__gt_steal_attempt"); // same P, try again
-
-    // Load victim P: procs[victim_idx]
-    EmitGlobalLoadReg(ARM64Register.X1, "__sched_procs");
-    // ADD X1, X1, X0, LSL #3
-    EmitWord(0x8B000C21);
-    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X10, ARM64Register.X1, 0, 8); // X10 = victim P*
-
-    // Check victim->status == 1 (active)
-    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X10, POffStatus, 8);
-    EmitCmpImm(ARM64Register.X0, 1);
-    EmitBranchCond(ARM64ConditionCode.Ne, "__gt_steal_attempt"); // not active, try again
-
-    // Lock global lock for safety
-    EmitLockAcquire("__sched_global_lock");
-
-    // Check victim->localQueueLen
-    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X10, POffLocalQueueLen, 8);
-    EmitCmpImm(ARM64Register.X0, 2);
-    EmitBranchCond(ARM64ConditionCode.Lo, "__gt_steal_unlock_retry"); // len < 2, not worth stealing
-
-    // n = len / 2
-    // LSR X11, X0, #1
-    EmitWord(0xD341FC0B); // X11 = n = len / 2
-    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X11, ARM64Register.X29, 40, 8); // save n
-
-    // Walk victim's local queue n nodes
-    // first = victim->localQueueHead
-    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X12, ARM64Register.X10, POffLocalQueueHead, 8); // X12 = first
-    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X12, ARM64Register.X29, 24, 8); // save first
-
-    // Walk n-1 nodes: last_stolen starts at first, walk n-1 times
-    EmitMovRegReg(ARM64Register.X13, ARM64Register.X12); // X13 = cur = first
-    EmitAddSubImm(ARM64Register.X14, ARM64Register.X11, 1, isAdd: false); // X14 = n - 1
-
-    DefineLabel("__gt_steal_walk");
-    EmitCbz(ARM64Register.X14, "__gt_steal_walk_done");
-    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X13, ARM64Register.X13, GtOffNext, 8); // cur = cur->next
-    EmitAddSubImm(ARM64Register.X14, ARM64Register.X14, 1, isAdd: false);
-    EmitBranch("__gt_steal_walk");
-
-    DefineLabel("__gt_steal_walk_done");
-    // X13 = last_stolen
-    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X13, ARM64Register.X29, 32, 8); // save last_stolen
-
-    // Split: victim keeps second half
-    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X13, GtOffNext, 8); // new_victim_head
-    // last_stolen->next = NULL
-    EmitMovRegImm(ARM64Register.X1, 0);
-    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X1, ARM64Register.X13, GtOffNext, 8);
-    // victim->localQueueHead = new_victim_head
-    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X10, POffLocalQueueHead, 8);
-    // if new_victim_head == NULL: victim->localQueueTail = NULL
-    EmitCbnz(ARM64Register.X0, "__gt_steal_victim_has_tail");
-    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X1, ARM64Register.X10, POffLocalQueueTail, 8); // X1=0
-    DefineLabel("__gt_steal_victim_has_tail");
-    // victim->localQueueLen -= n
-    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X10, POffLocalQueueLen, 8);
-    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X11, ARM64Register.X29, 40, 8); // n
-    // SUB X0, X0, X11
-    EmitWord(0xCB0B0000);
-    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X10, POffLocalQueueLen, 8);
-
-    // result = first; second = first->next
-    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X12, ARM64Register.X29, 24, 8); // first (result)
-    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X12, GtOffNext, 8); // second
-    EmitCbz(ARM64Register.X0, "__gt_steal_no_extra"); // n==1, no extra to add
-
-    // Add stolen[1..n-1] to our local queue
-    EmitLoadP(ARM64Register.X9);
-    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X1, ARM64Register.X9, POffLocalQueueTail, 8);
-    EmitCbnz(ARM64Register.X1, "__gt_steal_append_local");
-    // Our local queue is empty: head = second
-    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X9, POffLocalQueueHead, 8);
-    EmitBranch("__gt_steal_set_tail");
-    DefineLabel("__gt_steal_append_local");
-    // tail->next = second
-    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X1, GtOffNext, 8);
-    DefineLabel("__gt_steal_set_tail");
-    // tail = last_stolen
-    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X13, ARM64Register.X29, 32, 8); // last_stolen
-    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X13, ARM64Register.X9, POffLocalQueueTail, 8);
-    // localQueueLen += (n - 1)
-    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X9, POffLocalQueueLen, 8);
-    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X11, ARM64Register.X29, 40, 8); // n
-    EmitAddSubImm(ARM64Register.X11, ARM64Register.X11, 1, isAdd: false); // n - 1
-    // ADD X0, X0, X11
-    EmitWord(0x8B0B0000);
-    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X9, POffLocalQueueLen, 8);
-
-    DefineLabel("__gt_steal_no_extra");
-    EmitLockRelease("__sched_global_lock");
-
-    // Return first (result) with cleared next
-    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X29, 24, 8); // X0 = first
-    EmitMovRegImm(ARM64Register.X1, 0);
-    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X1, ARM64Register.X0, GtOffNext, 8);
-    EmitRuntimeFunctionEnd();
-
-    DefineLabel("__gt_steal_unlock_retry");
-    EmitLockRelease("__sched_global_lock");
-    EmitBranch("__gt_steal_attempt");
-
-    DefineLabel("__gt_steal_fail");
-    EmitMovRegImm(ARM64Register.X0, 0);
-    EmitRuntimeFunctionEnd();
-  }
+  // __gt_enqueue, __gt_dequeue, and __gt_steal_work are now emitted by RuntimeEmitter.Scheduler.cs
 
   /// <summary>
   /// __sched_worker_loop(arg_x0=P*): Entry point for worker OS threads.
@@ -6119,15 +5560,7 @@ public partial class ARM64CodeEmitter {
   // Trivial runtime functions
   // ===========================================================================================
 
-  /// <summary>
-  /// mm_raw_alloc_260(): Allocate 260 bytes (for path buffers).
-  /// </summary>
-  private void EmitMmRawAlloc260() {
-    EmitRuntimeFunctionStart("mm_raw_alloc_260", 0, 0x20);
-    EmitMovRegImm(ARM64Register.X0, 260);
-    EmitBranchLink("mm_raw_alloc");
-    EmitRuntimeFunctionEnd();
-  }
+  // mm_raw_alloc_260: now emitted by RuntimeEmitter.MemoryManager.cs (unified x86/ARM64)
 
   /// <summary>
   /// maxon_u64_to_string_fmt: redirect to maxon_i64_to_string_fmt
@@ -6261,271 +5694,7 @@ public partial class ARM64CodeEmitter {
     EmitRuntimeFunctionEnd();
   }
 
-  // ===========================================================================================
-  // Timer infrastructure — binary min-heap (O(log n) add/remove)
-  // ===========================================================================================
-
-  /// <summary>
-  /// __gt_timer_add(gt_x0, deadline_x1): Add a timer entry and sift-up to maintain heap property.
-  /// </summary>
-  private void EmitGtTimerAdd() {
-    EmitRuntimeFunctionStart("__gt_timer_add", 2, 0x40);
-    // [x29+16] = gt, [x29+24] = deadline, [x29+32] = array_base
-
-    EmitLockAcquire("__sched_timer_lock");
-
-    // i = count; count++
-    EmitGlobalLoadReg(ARM64Register.X0, "__gt_timer_count");
-    EmitAddSubImm(ARM64Register.X2, ARM64Register.X0, 1, isAdd: true);
-    EmitGlobalStoreReg(ARM64Register.X2, "__gt_timer_count");
-    // X0 = i (insertion index)
-
-    // Cache array base
-    EmitGlobalLeaReg(ARM64Register.X2, "__gt_timer_heap");
-    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X2, ARM64Register.X29, 32, 8);
-
-    // &array[i] = base + i * 16
-    // LSL X3, X0, #4 (i * 16)
-    EmitWord(0xD37CEC03);
-    // ADD X2, X2, X3
-    EmitWord(0x8B030042);
-
-    // Store deadline at [X2, #0]
-    EmitReloadArg(1); // X1 = deadline
-    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X1, ARM64Register.X2, TimerOffDeadline, 8);
-    // Store gt at [X2, #8]
-    EmitReloadArg(0); // X0 = gt
-    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X2, TimerOffGt, 8);
-
-    // Sift-up: X0 = i (current index), compare with parent = (i-1)/2
-    EmitGlobalLoadReg(ARM64Register.X0, "__gt_timer_count");
-    EmitAddSubImm(ARM64Register.X0, ARM64Register.X0, 1, isAdd: false); // X0 = i = count - 1
-
-    DefineLabel("__gt_timer_siftup_loop");
-    EmitCbz(ARM64Register.X0, "__gt_timer_siftup_done"); // i == 0 → root, done
-
-    // parent = (i - 1) / 2
-    EmitAddSubImm(ARM64Register.X1, ARM64Register.X0, 1, isAdd: false); // X1 = i - 1
-    // LSR X1, X1, #1
-    EmitWord(0xD341FC21); // X1 = parent
-
-    // Load heap base
-    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X9, ARM64Register.X29, 32, 8); // base
-
-    // &heap[i] = base + i * 16
-    // LSL X2, X0, #4
-    EmitWord(0xD37CEC02);
-    // ADD X2, X9, X2
-    EmitWord(0x8B020122);
-
-    // &heap[parent] = base + parent * 16
-    // LSL X3, X1, #4
-    EmitWord(0xD37CEC23);
-    // ADD X3, X9, X3
-    EmitWord(0x8B030123);
-
-    // Load heap[i].deadline (X4) and heap[parent].deadline (X5)
-    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X4, ARM64Register.X2, TimerOffDeadline, 8);
-    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X5, ARM64Register.X3, TimerOffDeadline, 8);
-
-    // if heap[i].deadline >= heap[parent].deadline: done
-    // CMP X4, X5
-    EmitWord(0xEB05009F);
-    EmitBranchCond(ARM64ConditionCode.Hs, "__gt_timer_siftup_done");
-
-    // Swap heap[i] and heap[parent] (16 bytes each: deadline + gt)
-    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X6, ARM64Register.X2, TimerOffGt, 8); // heap[i].gt
-    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X7, ARM64Register.X3, TimerOffGt, 8); // heap[parent].gt
-    // Write parent's data to i's slot
-    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X5, ARM64Register.X2, TimerOffDeadline, 8);
-    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X7, ARM64Register.X2, TimerOffGt, 8);
-    // Write i's data to parent's slot
-    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X4, ARM64Register.X3, TimerOffDeadline, 8);
-    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X6, ARM64Register.X3, TimerOffGt, 8);
-
-    // i = parent, continue
-    EmitMovRegReg(ARM64Register.X0, ARM64Register.X1);
-    EmitBranch("__gt_timer_siftup_loop");
-
-    DefineLabel("__gt_timer_siftup_done");
-    EmitLockRelease("__sched_timer_lock");
-    EmitRuntimeFunctionEnd();
-  }
-
-  /// <summary>
-  /// __gt_timer_check(): Min-heap based timer check. Repeatedly checks heap[0] (smallest deadline).
-  /// When expired, removes root via sift-down and fires the GT.
-  /// </summary>
-  private void EmitGtTimerCheck() {
-    // Stack: [x29+16] = now_ms, [x29+24] = array_base, [x29+32] = sift index
-    //        [x29+40..55] = timespec for clock_gettime, [x29+56] = saved gt
-    EmitRuntimeFunctionStart("__gt_timer_check", 0, 0x50);
-
-    // Fast path: if count == 0, return immediately (no lock needed)
-    EmitGlobalLoadReg(ARM64Register.X0, "__gt_timer_count");
-    EmitCbz(ARM64Register.X0, "__gt_timer_check_ret");
-
-    // Acquire timer lock
-    EmitLockAcquire("__sched_timer_lock");
-
-    // Reload count (may have changed while acquiring lock)
-    EmitGlobalLoadReg(ARM64Register.X0, "__gt_timer_count");
-    EmitCbz(ARM64Register.X0, "__gt_timer_check_ret_unlock");
-
-    // Get monotonic time in ms
-    EmitClockGetTimeMs(40);
-    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X2, ARM64Register.X29, 16, 8); // save now_ms
-
-    // Cache array base
-    EmitGlobalLeaReg(ARM64Register.X0, "__gt_timer_heap");
-    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X29, 24, 8); // save array_base
-
-    // --- Main loop: check heap[0] ---
-    DefineLabel("__gt_timer_check_loop");
-    EmitGlobalLoadReg(ARM64Register.X0, "__gt_timer_count");
-    EmitCbz(ARM64Register.X0, "__gt_timer_check_ret_unlock"); // empty → done
-
-    // Load heap[0].deadline
-    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X2, ARM64Register.X29, 24, 8); // base
-    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X4, ARM64Register.X2, TimerOffDeadline, 8);
-    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X5, ARM64Register.X29, 16, 8); // now_ms
-    // if heap[0].deadline > now_ms: no more expired → done
-    // CMP X4, X5
-    EmitWord(0xEB05009F);
-    EmitBranchCond(ARM64ConditionCode.Hi, "__gt_timer_check_ret_unlock");
-
-    // Expired! Save heap[0].gt
-    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X2, TimerOffGt, 8);
-    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X29, 56, 8);
-
-    // Remove root: move heap[count-1] to heap[0], count--
-    EmitGlobalLoadReg(ARM64Register.X0, "__gt_timer_count");
-    EmitAddSubImm(ARM64Register.X0, ARM64Register.X0, 1, isAdd: false);
-    EmitGlobalStoreReg(ARM64Register.X0, "__gt_timer_count");
-
-    // If count is now 0, no need to sift (heap is empty)
-    EmitCbz(ARM64Register.X0, "__gt_timer_check_fire");
-
-    // &heap[new_count] = base + new_count * 16
-    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X1, ARM64Register.X29, 24, 8); // base
-    // LSL X3, X0, #4
-    EmitWord(0xD37CEC03);
-    // ADD X3, X1, X3
-    EmitWord(0x8B030023);
-    // Copy heap[count-1] to heap[0]
-    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X4, ARM64Register.X3, 0, 8);
-    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X4, ARM64Register.X1, 0, 8); // base+0 = heap[0]
-    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X4, ARM64Register.X3, 8, 8);
-    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X4, ARM64Register.X1, 8, 8);
-
-    // Sift-down from index 0
-    EmitMovRegImm(ARM64Register.X0, 0);
-    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X29, 32, 8); // i = 0
-
-    DefineLabel("__gt_timer_siftdown_loop");
-    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X29, 32, 8); // i
-    EmitGlobalLoadReg(ARM64Register.X10, "__gt_timer_count"); // count
-
-    // left = 2*i + 1
-    // LSL X1, X0, #1; ADD X1, X1, #1
-    EmitWord(0xD37FF801); // LSL X1, X0, #1
-    EmitAddSubImm(ARM64Register.X1, ARM64Register.X1, 1, isAdd: true);
-    // if left >= count: done (leaf node)
-    // CMP X1, X10
-    EmitWord(0xEB0A003F);
-    EmitBranchCond(ARM64ConditionCode.Hs, "__gt_timer_check_fire");
-
-    // smallest = left
-    EmitMovRegReg(ARM64Register.X11, ARM64Register.X1); // X11 = smallest
-
-    // right = left + 1
-    EmitAddSubImm(ARM64Register.X12, ARM64Register.X1, 1, isAdd: true); // X12 = right
-
-    // Load heap base
-    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X9, ARM64Register.X29, 24, 8);
-
-    // Load heap[left].deadline
-    // LSL X2, X1, #4; ADD X2, X9, X2
-    EmitWord(0xD37CEC22);
-    EmitWord(0x8B020122);
-    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X4, ARM64Register.X2, TimerOffDeadline, 8); // X4 = left deadline
-
-    // Check if right < count
-    // CMP X12, X10
-    EmitWord(0xEB0A019F);
-    EmitBranchCond(ARM64ConditionCode.Hs, "__gt_timer_siftdown_compare"); // no right child
-
-    // Load heap[right].deadline
-    // LSL X3, X12, #4; ADD X3, X9, X3
-    EmitWord(0xD37CED83);
-    EmitWord(0x8B030123);
-    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X5, ARM64Register.X3, TimerOffDeadline, 8); // X5 = right deadline
-
-    // if right.deadline < left.deadline: smallest = right
-    // CMP X5, X4
-    EmitWord(0xEB0400BF);
-    EmitBranchCond(ARM64ConditionCode.Hs, "__gt_timer_siftdown_compare"); // right >= left, keep left
-    EmitMovRegReg(ARM64Register.X11, ARM64Register.X12); // smallest = right
-    EmitMovRegReg(ARM64Register.X4, ARM64Register.X5); // X4 = smallest deadline (right)
-
-    DefineLabel("__gt_timer_siftdown_compare");
-    // Load heap[i].deadline
-    // LSL X2, X0, #4; ADD X2, X9, X2
-    EmitWord(0xD37CEC02);
-    EmitWord(0x8B020122);
-    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X5, ARM64Register.X2, TimerOffDeadline, 8); // X5 = i deadline
-
-    // if heap[i].deadline <= heap[smallest].deadline: done
-    // CMP X5, X4
-    EmitWord(0xEB0400BF);
-    EmitBranchCond(ARM64ConditionCode.Ls, "__gt_timer_check_fire"); // i <= smallest, heap ok
-
-    // Swap heap[i] and heap[smallest]
-    // X2 = &heap[i], compute &heap[smallest]
-    // LSL X3, X11, #4; ADD X3, X9, X3
-    EmitWord(0xD37CED63);
-    EmitWord(0x8B030123);
-    // Load all 16 bytes of both entries
-    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X4, ARM64Register.X2, 0, 8); // i.deadline
-    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X5, ARM64Register.X2, 8, 8); // i.gt
-    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X6, ARM64Register.X3, 0, 8); // smallest.deadline
-    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X7, ARM64Register.X3, 8, 8); // smallest.gt
-    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X6, ARM64Register.X2, 0, 8);
-    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X7, ARM64Register.X2, 8, 8);
-    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X4, ARM64Register.X3, 0, 8);
-    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X5, ARM64Register.X3, 8, 8);
-
-    // i = smallest, continue
-    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X11, ARM64Register.X29, 32, 8);
-    EmitBranch("__gt_timer_siftdown_loop");
-
-    // --- Fire the expired GT ---
-    DefineLabel("__gt_timer_check_fire");
-    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X29, 56, 8); // gt
-    EmitMovRegImm(ARM64Register.X1, GtStatusReady);
-    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X1, ARM64Register.X0, GtOffStatus, 8);
-    // Skip enqueue if mainThread (stackBase == 0)
-    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X1, ARM64Register.X0, GtOffStackBase, 8);
-    EmitCbz(ARM64Register.X1, "__gt_timer_check_no_enqueue");
-    // Skip enqueue if gt == P->currentGt
-    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X29, 56, 8); // save gt
-    EmitLoadCurrentGt(ARM64Register.X1); // clobbers X0, X9
-    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X29, 56, 8); // reload gt
-    // CMP X0, X1
-    EmitWord(0xEB01001F);
-    EmitBranchCond(ARM64ConditionCode.Eq, "__gt_timer_check_no_enqueue");
-    EmitBranchLink("__gt_enqueue");
-    DefineLabel("__gt_timer_check_no_enqueue");
-
-    // Loop back to check next heap root
-    EmitBranch("__gt_timer_check_loop");
-
-    DefineLabel("__gt_timer_check_ret_unlock");
-    EmitLockRelease("__sched_timer_lock");
-
-    DefineLabel("__gt_timer_check_ret");
-    EmitRuntimeFunctionEnd();
-  }
+  // __gt_timer_add and __gt_timer_check are now emitted by RuntimeEmitter.Scheduler.cs
 
   // ===========================================================================================
   // Stack growth (__gt_morestack)

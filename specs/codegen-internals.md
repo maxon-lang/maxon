@@ -210,15 +210,27 @@ end 'main'
 77
 ```
 ```stderr
+slab_alloc size=64 class=6
 alloc __ManagedMemory #1 rc=0 size=32 [codegen-internals.main]
+slab_alloc size=48 class=5
 alloc IntArray #2 rc=0 size=16 [codegen-internals.main]
 incref __ManagedMemory #1 rc=1 [codegen-internals.main]
 incref IntArray #2 rc=1 [codegen-internals.main]
+slab_alloc size=8 class=2
+raw_alloc size=8
 cow __ManagedMemory #1 rc=1 size=8
 decref IntArray #2 rc=0 [codegen-internals.main]
 decref __ManagedMemory #1 rc=0 [~IntArray]
+raw_free
+slab_free size=8 class=2
   free __ManagedMemory #1
+slab_free size=80 class=6
   free IntArray #2
+slab_free size=48 class=5
+slab_alloc size=40 class=5
+raw_alloc size=40
+raw_free
+slab_free size=48 class=5
 ```
 ```RequiredRdata
 i64 42

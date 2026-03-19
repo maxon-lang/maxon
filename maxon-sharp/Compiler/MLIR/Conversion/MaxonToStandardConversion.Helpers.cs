@@ -322,12 +322,22 @@ public static partial class MaxonToStandardConversion {
   }
 
   /// <summary>
-  /// Raw buffer allocation via HeapAlloc (no refcount header).
-  /// Used for buffer allocations inside __ManagedMemory.
+  /// Raw buffer allocation via mm_raw_alloc (no refcount header).
+  /// <paramref name="label"/> names what is being allocated (e.g. "ManagedMemory.buf").
+  /// <paramref name="scopeName"/> is the enclosing function name.
+  /// Trace output: "raw_alloc label size=N [scope]"
   /// </summary>
-  private static StdI64 EmitRawAlloc(MlirBlock<StandardOp> block, StdI64 size) {
+  private static StdI64 EmitRawAlloc(MlirBlock<StandardOp> block, StdI64 size, string? label = null, string? scopeName = null) {
     var result = new StdI64(MlirContext.Current.NextId());
-    block.AddOp(new StdCallRuntimeOp("mm_raw_alloc", [size], result));
+    if (Compiler.MmTrace) {
+      var traceLabel = label != null
+        ? (scopeName != null ? $"{label} [{scopeName}]" : label)
+        : scopeName;
+      var scopePtr = traceLabel != null ? EmitTagPtr(block, traceLabel) : EmitNullPtr(block);
+      block.AddOp(new StdCallRuntimeOp("mm_raw_alloc", [size, scopePtr], result));
+    } else {
+      block.AddOp(new StdCallRuntimeOp("mm_raw_alloc", [size], result));
+    }
     return result;
   }
 

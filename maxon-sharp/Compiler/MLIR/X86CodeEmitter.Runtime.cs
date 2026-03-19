@@ -57,9 +57,12 @@ public partial class X86CodeEmitter {
     EmitMaxonStrlen();
     EmitMaxonMemcpy();
     EmitMaxonMemcmp();
-    EmitMmRawAlloc();
-    EmitMmRawRealloc();
-    EmitMmRawFree();
+    // mm_raw_alloc/free/realloc unified via RuntimeEmitter
+    var rawRt = new Runtime.RuntimeEmitter(CreateBackend());
+    rawRt.EmitAllocatorFunctions(Compiler.MmTrace);
+    rawRt.EmitMmRawAlloc(Compiler.MmTrace);
+    rawRt.EmitMmRawRealloc(Compiler.MmTrace);
+    rawRt.EmitMmRawFree(Compiler.MmTrace);
     EmitNetTcpConnect();
     EmitNetSend();
     EmitNetRecv();
@@ -2538,123 +2541,11 @@ public partial class X86CodeEmitter {
     EmitRuntimeFunctionEnd();
   }
 
-  /// <summary>
-  /// mm_raw_alloc(size_rcx) -> ptr_rax
-  /// Simple HeapAlloc wrapper: GetProcessHeap, HeapAlloc(heap, HEAP_ZERO_MEMORY, size).
-  /// Returns raw pointer with no refcount header.
-  /// </summary>
-  private void EmitMmRawAlloc() {
-    EmitRuntimeFunctionStart("mm_raw_alloc", 1, 0x30);
+  // mm_raw_alloc: now emitted by RuntimeEmitter.MemoryManager.cs (unified x86/ARM64)
 
-    // size==0: empty managed memory buffer — return null without heap call.
-    // The destructor guards capacity==0 before calling mm_raw_free, so null is safe.
-    EmitMovRegMem(X86Register.Rax, -0x08, 8); // RAX = size
-    EmitBytes(0x48, 0x85, 0xC0); // TEST rax, rax
-    EmitJcc("nz", "mm_raw_alloc_size_ok");
-    EmitXorRegReg(X86Register.Rax, X86Register.Rax); // RAX = 0 (null)
-    EmitRuntimeFunctionEnd();
-    DefineLabel("mm_raw_alloc_size_ok");
+  // mm_raw_realloc: now emitted by RuntimeEmitter.MemoryManager.cs (unified x86/ARM64)
 
-    // GetProcessHeap() -> RAX = heap handle
-    EmitCallImportOnSystemStack("kernel32.dll", "GetProcessHeap");
-    EmitMovRegReg(X86Register.Rcx, X86Register.Rax);    // arg1: hHeap
-    EmitMovRegImm(X86Register.Rdx, 0x08);                // arg2: HEAP_ZERO_MEMORY = 0x08
-    EmitMovRegMem(X86Register.R8, -0x08, 8);             // arg3: size (saved from RCX by prologue)
-    EmitCallImportOnSystemStack("kernel32.dll", "HeapAlloc");
-    // RAX = allocated pointer
-    EmitRuntimeFunctionEnd();
-  }
-
-  /// <summary>
-  /// mm_raw_realloc(ptr_rcx, new_size_rdx, managedPtr_r8) -> new_ptr_rax
-  /// Allocates a new buffer, copies old data, poisons the old buffer with 0xDE, then frees it.
-  /// This guarantees that any dangling pointers into the old buffer will read garbage,
-  /// making use-after-realloc bugs deterministic rather than dependent on OS behavior.
-  /// managedPtr is the owning managed struct's heap pointer, used for old size computation
-  /// and --mm-trace output.
-  /// </summary>
-  private void EmitMmRawRealloc() {
-    EmitRuntimeFunctionStart("mm_raw_realloc", 3, 0x60);
-    // [rbp-0x08] = old_ptr, [rbp-0x10] = new_size, [rbp-0x18] = managedPtr
-    // [rbp-0x28] = new_ptr, [rbp-0x30] = old_byte_size
-
-    // Panic if new_size == 0 (capacity * element_size = 0 is a bug)
-    EmitMovRegMem(X86Register.Rax, -0x10, 8); // RAX = new_size
-    EmitBytes(0x48, 0x85, 0xC0); // TEST rax, rax
-    EmitJcc("nz", "mm_raw_realloc_size_ok");
-    EmitLeaRegSymdataRel(X86Register.Rcx, "__mm_panic_realloc_zero_size");
-    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "maxon_panic")); EmitDword(0);
-    DefineLabel("mm_raw_realloc_size_ok");
-
-    // Step 1: Allocate new buffer via mm_raw_alloc(new_size)
-    EmitMovRegMem(X86Register.Rcx, -0x10, 8); // RCX = new_size
-    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_raw_alloc")); EmitDword(0);
-    EmitMovMemReg(-0x28, X86Register.Rax, 8); // save new_ptr
-
-    // Step 2: Compute old_byte_size = managedPtr->capacity * managedPtr->element_size
-    EmitMovRegMem(X86Register.Rax, -0x18, 8); // RAX = managedPtr
-    EmitMovRegIndirectMem(X86Register.Rcx, X86Register.Rax, 16); // RCX = [managedPtr+16] = capacity
-    EmitMovRegIndirectMem(X86Register.Rdx, X86Register.Rax, 24); // RDX = [managedPtr+24] = element_size
-    EmitBytes(0x48, 0x0F, 0xAF, 0xCA); // IMUL RCX, RDX → RCX = old_byte_size
-    EmitMovMemReg(-0x30, X86Register.Rcx, 8); // save old_byte_size
-
-    // Step 3: memcpy(new_ptr, old_ptr, old_byte_size)
-    EmitMovRegMem(X86Register.Rcx, -0x28, 8); // RCX = new_ptr (dst)
-    EmitMovRegMem(X86Register.Rdx, -0x08, 8); // RDX = old_ptr (src)
-    EmitMovRegMem(X86Register.R8, -0x30, 8);  // R8  = old_byte_size (count)
-    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "maxon_memcpy")); EmitDword(0);
-
-    // Step 4: Poison old buffer with 0xDE (REP STOSB: RDI=dst, RCX=count, AL=fill)
-    EmitMovRegMem(X86Register.Rdi, -0x08, 8); // RDI = old_ptr
-    EmitMovRegMem(X86Register.Rcx, -0x30, 8); // RCX = old_byte_size
-    EmitMovRegImm(X86Register.Rax, 0xDE);      // AL = 0xDE
-    EmitBytes(0xF3, 0xAA);                     // REP STOSB
-
-    // Step 5: Free old buffer
-    EmitMovRegMem(X86Register.Rcx, -0x08, 8); // RCX = old_ptr
-    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_raw_free")); EmitDword(0);
-
-    // Return new_ptr
-    EmitMovRegMem(X86Register.Rax, -0x28, 8);
-    DefineLabel("mm_raw_realloc_done");
-    if (Compiler.MmTrace) {
-      EmitMovMemReg(-0x28, X86Register.Rax, 8); // save new_ptr
-      EmitXorRegReg(X86Register.Rcx, X86Register.Rcx);
-      EmitMovMemReg(-0x30, X86Register.Rcx, 8); // [rbp-0x30] = 0 (no scope)
-      EmitInlineTrace("__mm_tag_realloc", "mm_raw_realloc_trace", -0x18, -0x30, sizeSlot: -0x10);
-      EmitMovRegMem(X86Register.Rax, -0x28, 8); // restore new_ptr
-    }
-    EmitRuntimeFunctionEnd();
-  }
-
-  /// <summary>
-  /// mm_raw_free(ptr_rcx)
-  /// Simple HeapFree wrapper: GetProcessHeap, HeapFree(heap, 0, ptr).
-  /// </summary>
-  private void EmitMmRawFree() {
-    EmitRuntimeFunctionStart("mm_raw_free", 1, 0x30);
-    // GetProcessHeap() -> RAX = heap handle
-    EmitCallImportOnSystemStack("kernel32.dll", "GetProcessHeap");
-    EmitMovRegReg(X86Register.Rcx, X86Register.Rax);    // arg1: hHeap
-    EmitMovRegImm(X86Register.Rdx, 0);                   // arg2: flags = 0
-    EmitMovRegMem(X86Register.R8, -0x08, 8);             // arg3: ptr
-    EmitCallImportOnSystemStack("kernel32.dll", "HeapFree");
-    EmitRuntimeFunctionEnd();
-  }
-
-  /// <summary>
-  /// Calls GetProcessHeap then a Heap function with the heap handle in RCX and flags in RDX.
-  /// Remaining args (R8, R9) must be set by the caller before calling this helper.
-  /// </summary>
-  private void EmitHeapCall(string heapFunction, int flags, int rbpSlotR8, int rbpSlotR9 = 0) {
-    EmitCallImportOnSystemStack("kernel32.dll", "GetProcessHeap");
-    EmitMovRegReg(X86Register.Rcx, X86Register.Rax);
-    EmitMovRegImm(X86Register.Rdx, flags);
-    EmitMovRegMem(X86Register.R8, rbpSlotR8, 8);
-    if (rbpSlotR9 != 0)
-      EmitMovRegMem(X86Register.R9, rbpSlotR9, 8);
-    EmitCallImportOnSystemStack("kernel32.dll", heapFunction);
-  }
+  // mm_raw_free: now emitted by RuntimeEmitter.MemoryManager.cs (unified x86/ARM64)
 
   /// <summary>Load a 64-bit value from a symdata label into dest. Uses r11 as scratch.</summary>
   private void EmitSymdataLoadI64(X86Register dest, string label) {
@@ -3720,67 +3611,61 @@ public partial class X86CodeEmitter {
   //   __gt_run_queue_tail   tail of ready queue
   //   __gt_main_thread      160-byte GreenThread struct for main thread (inline)
 
-  private const int GtOffRsp        = 0x00;
-  private const int GtOffRbp        = 0x08;
-  private const int GtOffStatus     = 0x10;
-  private const int GtOffStackBase  = 0x18;
-  private const int GtOffStackSize  = 0x20;
-  private const int GtOffResult     = 0x28;
-  private const int GtOffWaiter     = 0x30;
-  private const int GtOffNext       = 0x38;
-  private const int GtOffFuncPtr    = 0x40;
-  private const int GtOffArgBuf     = 0x48;
+  private const int GtOffRsp = 0x00;
+  private const int GtOffRbp = 0x08;
+  private const int GtOffStatus = 0x10;
+  private const int GtOffStackBase = 0x18;
+  private const int GtOffStackSize = 0x20;
+  private const int GtOffResult = 0x28;
+  private const int GtOffWaiter = 0x30;
+  private const int GtOffNext = 0x38;
+  private const int GtOffFuncPtr = 0x40;
+  private const int GtOffArgBuf = 0x48;
   private const int GtOffStackGuard = 0x50;
   // I/O and async fields (added for async filesystem support)
-  private const int GtOffThrew       = 0x58; // 0=success, 1=threw (for async throws)
+  private const int GtOffThrew = 0x58; // 0=success, 1=threw (for async throws)
   private const int GtOffIoResultVal = 0x60; // raw result value (bytes transferred, etc.)
   private const int GtOffIoResultLen = 0x68; // byte count for read results
   private const int GtOffIoErrorCode = 0x70; // 0=success, non-zero=Win32 error
-  private const int GtOffCancelFlag  = 0x78; // 0=live, 1=cancel-requested
-  private const int GtOffIoHandle    = 0x80; // HANDLE of in-flight I/O (for CancelIoEx)
-  private const int GtOffAllNext     = 0x88; // next ptr in global all-threads list
+  private const int GtOffCancelFlag = 0x78; // 0=live, 1=cancel-requested
+  private const int GtOffIoHandle = 0x80; // HANDLE of in-flight I/O (for CancelIoEx)
+  private const int GtOffAllNext = 0x88; // next ptr in global all-threads list
   private const int GtOffTibStackBase = 0x90; // saved TIB StackBase (gs:[0x08])
-  private const int GtOffTibStackLimit= 0x98; // saved TIB StackLimit (gs:[0x10])
-  private const int GtOffTraceId      = 0xA0; // async trace ID (only meaningful when --async-trace)
-  private const int GtOffIoYielded    = 0xA8; // 0=not yet yielded, 1=context switch complete (for IOCP sync)
-  private const int GtStructSize     = 0xB0; // 176 bytes
+  private const int GtOffTibStackLimit = 0x98; // saved TIB StackLimit (gs:[0x10])
+  private const int GtOffTraceId = 0xA0; // async trace ID (only meaningful when --async-trace)
+  private const int GtOffIoYielded = 0xA8; // 0=not yet yielded, 1=context switch complete (for IOCP sync)
+  private const int GtStructSize = 0xB0; // 176 bytes
 
   // Timer heap constants
   // Each entry: [deadline_ms: i64, gt_ptr: i64] = 16 bytes
-  private const int TimerEntrySize     = 16;
-  private const int TimerOffDeadline   = 0;
-  private const int TimerOffGt         = 8;
-  private const int TimerHeapCapacity  = 256;
+  private const int TimerEntrySize = 16;
+  private const int TimerHeapCapacity = 256;
 
-  private const int GtStatusRunning  = 1;
-  private const int GtStatusCompleted= 2;
-  private const int GtStatusWaiting  = 3;
+  private const int GtStatusRunning = 1;
+  private const int GtStatusCompleted = 2;
+  private const int GtStatusWaiting = 3;
 
   private const int GtInitialStackSize = 0x800; // 2KB (grows on demand via __gt_morestack)
   private const int GtStackGuardMargin = 0x3A0; // 928 bytes — matches Go's _StackGuard on amd64.
-                                                 // Covers the worst-case chain of unchecked stack
-                                                 // consumption (PUSH RBP + CALL overhead) between
-                                                 // successive prologue stack checks.
+                                                // Covers the worst-case chain of unchecked stack
+                                                // consumption (PUSH RBP + CALL overhead) between
+                                                // successive prologue stack checks.
 
   // P (ProcContext) struct layout: per-worker-thread scheduler context.
   // Accessed via Windows TLS so each OS thread has its own P.
-  private const int POffLocalQueueHead = 0x00;
-  private const int POffLocalQueueTail = 0x08;
-  private const int POffLocalQueueLen  = 0x10;
-  private const int POffCurrentGt      = 0x18;  // replaces global __gt_current
-  private const int POffId             = 0x20;
-  private const int POffRng            = 0x28;
-  private const int POffIdleFlag       = 0x30;
-  private const int POffWakeEvent      = 0x38;
+  private const int POffCurrentGt = 0x18;  // replaces global __gt_current
+  private const int POffId = 0x20;
+  private const int POffRng = 0x28;
+  private const int POffIdleFlag = 0x30;
+  private const int POffWakeEvent = 0x38;
   private const int POffOsThreadHandle = 0x40;
-  private const int POffStatus         = 0x48;
-  private const int POffPendingWaiter  = 0x50;  // GT* to wake after context-switch (deferred from trampoline)
-  private const int POffRunnext        = 0x58;  // high-priority next GT slot
-  private const int POffFreeListHead   = 0x60;  // GT free list head
-  private const int POffFreeListLen    = 0x68;  // GT free list count
-  private const int POffSystemStackSP  = 0x70;  // saved OS thread RSP for system calls
-  private const int POffMainThread     = 0x78;  // inline GreenThread (replaces __gt_main_thread)
-  private const int PStructSize        = 0x78 + GtStructSize; // 0x128 = 296 bytes
+  private const int POffStatus = 0x48;
+  private const int POffPendingWaiter = 0x50;  // GT* to wake after context-switch (deferred from trampoline)
+  private const int POffFreeListHead = 0x60;  // GT free list head
+  private const int POffFreeListLen = 0x68;  // GT free list count
+  private const int POffSystemStackSP = 0x70;  // saved OS thread RSP for system calls
+  private const int POffMainThread = 0x78;  // inline GreenThread (replaces __gt_main_thread)
+  private const int PStructSize = 0x78 + GtStructSize; // 0x128 = 296 bytes
 
   /// <summary>
   /// Emit inline gs: TLS access to load the P pointer, then dereference P->currentGt
@@ -3900,14 +3785,16 @@ public partial class X86CodeEmitter {
     EmitGtTryAwait();
     EmitGtYield();
     EmitGtProcessPendingWaiter();
-    EmitGtEnqueue();
-    EmitGtDequeue();
-    EmitGtStealWork();
+    // Scheduler functions migrated to RuntimeEmitter (shared x86/ARM64)
+    var schedRt = new Runtime.RuntimeEmitter(CreateBackend());
+    schedRt.EmitGtEnqueue();
+    schedRt.EmitGtDequeue();
+    schedRt.EmitGtStealWork();
     EmitSchedWorkerLoop();
     EmitGtCleanup();
     EmitGtMorestack();
-    EmitGtTimerCheck();
-    EmitGtTimerAdd();
+    schedRt.EmitGtTimerCheck();
+    schedRt.EmitGtTimerAdd();
   }
 
   /// <summary>
@@ -3938,14 +3825,13 @@ public partial class X86CodeEmitter {
     EmitGlobalStoreReg(X86Register.Rax, "__sched_max_procs");
     EmitGlobalStoreReg(X86Register.Rax, "__sched_num_procs");
 
-    // Step 3: Allocate P* array: HeapAlloc(heap, HEAP_ZERO_MEMORY, max_procs * 8)
-    EmitCallImport("kernel32.dll", "GetProcessHeap");
-    EmitMovRegReg(X86Register.Rcx, X86Register.Rax);
-    EmitMovRegImm(X86Register.Rdx, 0x08); // HEAP_ZERO_MEMORY
-    EmitMovRegMem(X86Register.R8, -0x18, 8);
-    // SHL R8, 3 (multiply by 8 for pointer array)
-    EmitBytes(0x49, 0xC1, 0xE0, 0x03);
-    EmitCallImport("kernel32.dll", "HeapAlloc");
+    // Step 3: Allocate P* array: VirtualAlloc(NULL, max_procs * 8, MEM_COMMIT|MEM_RESERVE, PAGE_READWRITE)
+    EmitXorRegReg(X86Register.Rcx, X86Register.Rcx);      // lpAddress = NULL
+    EmitMovRegMem(X86Register.Rdx, -0x18, 8);              // max_procs
+    EmitBytes(0x48, 0xC1, 0xE2, 0x03);                     // SHL RDX, 3 (max_procs * 8)
+    EmitMovRegImm(X86Register.R8, 0x3000);                 // MEM_COMMIT|MEM_RESERVE
+    EmitMovRegImm(X86Register.R9, 0x04);                   // PAGE_READWRITE
+    EmitCallImport("kernel32.dll", "VirtualAlloc");
     EmitMovMemReg(-0x10, X86Register.Rax, 8); // [rbp-16] = procs_array
     EmitGlobalStoreReg(X86Register.Rax, "__sched_procs");
 
@@ -3958,12 +3844,12 @@ public partial class X86CodeEmitter {
     EmitCmpRegReg(X86Register.Rax, X86Register.Rcx); // i < max_procs
     EmitJcc("ae", "__sched_init_ploop_done");
 
-    // Allocate P[i]
-    EmitCallImport("kernel32.dll", "GetProcessHeap");
-    EmitMovRegReg(X86Register.Rcx, X86Register.Rax);
-    EmitMovRegImm(X86Register.Rdx, 0x08); // HEAP_ZERO_MEMORY
-    EmitMovRegImm(X86Register.R8, PStructSize);
-    EmitCallImport("kernel32.dll", "HeapAlloc");
+    // Allocate P[i]: VirtualAlloc(NULL, PStructSize, MEM_COMMIT|MEM_RESERVE, PAGE_READWRITE)
+    EmitXorRegReg(X86Register.Rcx, X86Register.Rcx);      // lpAddress = NULL
+    EmitMovRegImm(X86Register.Rdx, PStructSize);
+    EmitMovRegImm(X86Register.R8, 0x3000);                 // MEM_COMMIT|MEM_RESERVE
+    EmitMovRegImm(X86Register.R9, 0x04);                   // PAGE_READWRITE
+    EmitCallImport("kernel32.dll", "VirtualAlloc");
     EmitMovMemReg(-0x28, X86Register.Rax, 8); // [rbp-40] = P[i]
 
     // Store P[i] into procs_array[i]
@@ -4068,6 +3954,15 @@ public partial class X86CodeEmitter {
       EmitGlobalLeaReg(X86Register.Rcx, "__at_trace_cs");
       EmitCallImport("kernel32.dll", "InitializeCriticalSection");
     }
+
+    // Step 8: Initialize slab allocator CRITICAL_SECTIONs and call __slab_init
+    EmitGlobalLeaReg(X86Register.Rcx, "__slab_mspan_pool_lock");
+    EmitCallImport("kernel32.dll", "InitializeCriticalSection");
+    for (int i = 0; i < 18; i++) {
+      EmitGlobalLeaReg(X86Register.Rcx, $"__slab_mcentral_lock_{i}");
+      EmitCallImport("kernel32.dll", "InitializeCriticalSection");
+    }
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "__slab_init")); EmitDword(0);
 
     EmitRuntimeFunctionEnd();
   }
@@ -4885,540 +4780,7 @@ public partial class X86CodeEmitter {
     EmitRuntimeFunctionEnd();
   }
 
-  /// <summary>
-  /// __gt_enqueue(gt_rcx): Add a GreenThread to the scheduling system.
-  /// Priority: runnext slot → local queue → global queue (overflow).
-  /// </summary>
-  private void EmitGtEnqueue() {
-    // Frame: locals at -0x08..-0x28 plus shadow space (0x20)
-    // plus CreateThread stack params at [rsp+0x20..0x28]. Frame = 0x60.
-    EmitRuntimeFunctionStart("__gt_enqueue", 1, 0x60);
-    // [rbp-0x08] = gt (original argument)
-    // [rbp-0x10] = P*
-    // [rbp-0x18] = num_procs (reused for wake loop)
-
-    // gt.next = 0
-    EmitMovRegMem(X86Register.R10, -0x08, 8);
-    EmitXorRegReg(X86Register.Rax, X86Register.Rax);
-    EmitMovIndirectMemReg(X86Register.R10, GtOffNext, X86Register.Rax);
-
-    // Load P* via TLS (may be NULL if called from IOCP/sync-worker thread)
-    EmitGlobalLoadReg(X86Register.Rax, "__sched_tls_teb_offset");
-    EmitByte(0x65); // GS prefix
-    EmitMovRegIndirectMemRaw(X86Register.Rax, X86Register.Rax, 0); // RAX = P*
-    EmitMovMemReg(-0x10, X86Register.Rax, 8); // save P*
-
-    // If no P* (I/O thread), go straight to global queue
-    EmitBytes(0x48, 0x85, 0xC0); // TEST RAX, RAX
-    EmitJcc("z", "__gt_enqueue_global");
-
-    // --- Runnext slot ---
-    // If P->runnext == NULL: set P->runnext = gt, done (no queuing needed)
-    EmitMovRegIndirectMem(X86Register.Rcx, X86Register.Rax, POffRunnext);
-    EmitBytes(0x48, 0x85, 0xC9); // TEST RCX, RCX
-    EmitJcc("nz", "__gt_enqueue_displace_runnext");
-
-    // Runnext is empty: P->runnext = gt
-    EmitMovRegMem(X86Register.R10, -0x08, 8); // gt
-    EmitMovRegMem(X86Register.Rax, -0x10, 8); // P*
-    EmitMovIndirectMemReg(X86Register.Rax, POffRunnext, X86Register.R10);
-    EmitJmp("__gt_enqueue_wake");
-
-    // Runnext occupied: displace old runnext to local queue, set runnext = new gt
-    DefineLabel("__gt_enqueue_displace_runnext");
-    // RCX = old runnext, RAX = P*
-    // old.next = 0 (clear it)
-    EmitXorRegReg(X86Register.Rdx, X86Register.Rdx);
-    EmitMovIndirectMemReg(X86Register.Rcx, GtOffNext, X86Register.Rdx);
-    // P->runnext = new gt
-    EmitMovRegMem(X86Register.R10, -0x08, 8);
-    EmitMovIndirectMemReg(X86Register.Rax, POffRunnext, X86Register.R10);
-    // Now push old runnext (RCX) to local queue
-    // Save old runnext to [rbp-0x08] temporarily (we'll reuse gt slot)
-    EmitMovMemReg(-0x08, X86Register.Rcx, 8); // [rbp-0x08] = old runnext (to enqueue)
-
-    // --- Local queue ---
-    // Check if local queue has room (len < 256)
-    EmitMovRegMem(X86Register.Rax, -0x10, 8); // P*
-    EmitMovRegIndirectMem(X86Register.Rcx, X86Register.Rax, POffLocalQueueLen);
-    EmitCmpRegImm(X86Register.Rcx, 256);
-    EmitJcc("ae", "__gt_enqueue_global"); // overflow to global queue
-
-    // Append to local queue tail (no lock needed — P is per-thread)
-    EmitMovRegMem(X86Register.R10, -0x08, 8); // gt to enqueue
-    EmitMovRegIndirectMem(X86Register.Rcx, X86Register.Rax, POffLocalQueueTail);
-    EmitBytes(0x48, 0x85, 0xC9); // TEST RCX, RCX
-    EmitJcc("nz", "__gt_enqueue_local_append");
-
-    // Local queue empty: head = tail = gt
-    EmitMovIndirectMemReg(X86Register.Rax, POffLocalQueueHead, X86Register.R10);
-    EmitMovIndirectMemReg(X86Register.Rax, POffLocalQueueTail, X86Register.R10);
-    EmitJmp("__gt_enqueue_local_inc");
-
-    DefineLabel("__gt_enqueue_local_append");
-    // tail.next = gt
-    EmitMovIndirectMemReg(X86Register.Rcx, GtOffNext, X86Register.R10);
-    // P->tail = gt
-    EmitMovIndirectMemReg(X86Register.Rax, POffLocalQueueTail, X86Register.R10);
-
-    DefineLabel("__gt_enqueue_local_inc");
-    // P->localQueueLen += 1
-    EmitMovRegIndirectMem(X86Register.Rcx, X86Register.Rax, POffLocalQueueLen);
-    EmitAddRegImm(X86Register.Rcx, 1);
-    EmitMovIndirectMemReg(X86Register.Rax, POffLocalQueueLen, X86Register.Rcx);
-    EmitJmp("__gt_enqueue_wake");
-
-    // --- Global queue (overflow) ---
-    DefineLabel("__gt_enqueue_global");
-    EmitGlobalLeaReg(X86Register.Rcx, "__sched_global_queue_cs");
-    EmitCallImportOnSystemStack("kernel32.dll", "EnterCriticalSection");
-
-    // if global tail == NULL: head = tail = gt
-    EmitGlobalLoadReg(X86Register.Rax, "__gt_run_queue_tail");
-    EmitBytes(0x48, 0x85, 0xC0); // TEST rax, rax
-    EmitJcc("nz", "__gt_enqueue_global_append");
-
-    EmitMovRegMem(X86Register.R10, -0x08, 8);
-    EmitGlobalStoreReg(X86Register.R10, "__gt_run_queue_head");
-    EmitGlobalStoreReg(X86Register.R10, "__gt_run_queue_tail");
-    EmitJmp("__gt_enqueue_global_unlock");
-
-    DefineLabel("__gt_enqueue_global_append");
-    EmitGlobalLoadReg(X86Register.Rax, "__gt_run_queue_tail");
-    EmitMovRegMem(X86Register.R10, -0x08, 8);
-    EmitMovIndirectMemReg(X86Register.Rax, GtOffNext, X86Register.R10);
-    EmitGlobalStoreReg(X86Register.R10, "__gt_run_queue_tail");
-
-    DefineLabel("__gt_enqueue_global_unlock");
-    EmitGlobalLeaReg(X86Register.Rcx, "__sched_global_queue_cs");
-    EmitCallImportOnSystemStack("kernel32.dll", "LeaveCriticalSection");
-
-    // After enqueue, try to wake an idle worker or spawn a new one.
-    DefineLabel("__gt_enqueue_wake");
-
-    // Skip wake/spawn during shutdown
-    EmitGlobalLoadReg(X86Register.Rax, "__sched_shutdown_flag");
-    EmitBytes(0x48, 0x85, 0xC0); // TEST RAX, RAX
-    EmitJcc("nz", "__gt_enqueue_wake_done");
-
-    // Scan P[1..num_procs-1] for one with idleFlag==1; if found, SetEvent its wakeEvent.
-    // If no idle worker found and active_workers < max_procs, spawn a new worker thread.
-    // Use [rbp-0x10] = loop index, [rbp-0x18] = num_procs
-    EmitGlobalLoadReg(X86Register.Rax, "__sched_num_procs");
-    EmitMovMemReg(-0x18, X86Register.Rax, 8);
-    EmitMovRegImm(X86Register.Rax, 1); // start from P[1] (P[0] is main thread)
-    EmitMovMemReg(-0x10, X86Register.Rax, 8);
-
-    DefineLabel("__gt_enqueue_wake_loop");
-    EmitMovRegMem(X86Register.Rax, -0x10, 8); // i
-    EmitMovRegMem(X86Register.Rcx, -0x18, 8); // num_procs
-    EmitCmpRegReg(X86Register.Rax, X86Register.Rcx); // i < num_procs
-    EmitJcc("ae", "__gt_enqueue_wake_spawn"); // checked all -> try spawn
-
-    // Load P[i]
-    EmitGlobalLoadReg(X86Register.Rcx, "__sched_procs");
-    EmitMovRegMem(X86Register.Rdx, -0x10, 8); // i
-    // RCX = procs[i] = [RCX + RDX*8]
-    EmitBytes(0x48, 0x8B, 0x0C, 0xD1); // MOV RCX, [RCX+RDX*8]
-
-    // Check P[i]->idleFlag
-    EmitMovRegIndirectMem(X86Register.Rax, X86Register.Rcx, POffIdleFlag);
-    EmitCmpRegImm(X86Register.Rax, 1);
-    EmitJcc("nz", "__gt_enqueue_wake_next");
-
-    // Found idle worker: clear idleFlag, SetEvent(P[i]->wakeEvent)
-    EmitXorRegReg(X86Register.Rax, X86Register.Rax);
-    EmitMovIndirectMemReg(X86Register.Rcx, POffIdleFlag, X86Register.Rax);
-    EmitMovRegIndirectMem(X86Register.Rcx, X86Register.Rcx, POffWakeEvent);
-    EmitCallImportOnSystemStack("kernel32.dll", "SetEvent");
-    EmitJmp("__gt_enqueue_wake_done");
-
-    DefineLabel("__gt_enqueue_wake_next");
-    EmitMovRegMem(X86Register.Rax, -0x10, 8);
-    EmitAddRegImm(X86Register.Rax, 1);
-    EmitMovMemReg(-0x10, X86Register.Rax, 8);
-    EmitJmp("__gt_enqueue_wake_loop");
-
-    // No idle worker found -- check if we should spawn a new worker thread
-    DefineLabel("__gt_enqueue_wake_spawn");
-    EmitGlobalLoadReg(X86Register.Rax, "__sched_active_workers");
-    EmitGlobalLoadReg(X86Register.Rcx, "__sched_max_procs");
-    EmitCmpRegReg(X86Register.Rax, X86Register.Rcx);
-    EmitJcc("ae", "__gt_enqueue_wake_done"); // already at max
-
-    // Find the first P with status==0 (not yet started) to spawn
-    EmitMovRegImm(X86Register.Rax, 1);
-    EmitMovMemReg(-0x10, X86Register.Rax, 8);
-
-    DefineLabel("__gt_enqueue_spawn_scan");
-    EmitMovRegMem(X86Register.Rax, -0x10, 8);
-    EmitMovRegMem(X86Register.Rcx, -0x18, 8);
-    EmitCmpRegReg(X86Register.Rax, X86Register.Rcx);
-    EmitJcc("ae", "__gt_enqueue_wake_done"); // no unstarted P found
-
-    EmitGlobalLoadReg(X86Register.Rcx, "__sched_procs");
-    EmitMovRegMem(X86Register.Rdx, -0x10, 8);
-    EmitBytes(0x48, 0x8B, 0x0C, 0xD1); // MOV RCX, [RCX+RDX*8]
-    // Atomically try to set P[i]->status from 0 → 1 (claim this P)
-    EmitXorRegReg(X86Register.Rax, X86Register.Rax); // expected = 0
-    EmitMovRegImm(X86Register.Rdx, 1); // desired = 1
-    // LOCK CMPXCHG [RCX+POffStatus], RDX — if [mem]==RAX, set [mem]=RDX and ZF=1
-    // LOCK CMPXCHG [RCX+disp32], RDX
-    // F0 48 0F B1 91 <disp32> — LOCK REX.W CMPXCHG [RCX+POffStatus], RDX
-    EmitByte(0xF0); // LOCK prefix
-    EmitBytes(0x48, 0x0F, 0xB1, 0x91); // REX.W CMPXCHG [RCX+disp32], RDX (mod=10, reg=RDX=010, r/m=RCX=001)
-    EmitDword(POffStatus);
-    EmitJcc("nz", "__gt_enqueue_spawn_next"); // CAS failed → someone else claimed it
-
-    // Won the CAS: Found unstarted P[i], now create its thread.
-    // Save P[i] first
-    EmitMovMemReg(-0x20, X86Register.Rcx, 8); // [rbp-0x20] = P[i]
-    EmitSystemStackEnter(0x30); // shadow(0x20) + 2 stack args(0x10) = 0x30
-    EmitXorRegReg(X86Register.Rcx, X86Register.Rcx); // lpThreadAttributes = NULL
-    EmitXorRegReg(X86Register.Rdx, X86Register.Rdx); // dwStackSize = 0
-    // LEA R8, [rip+disp32] for __sched_worker_loop
-    EmitByte(0x4C); EmitByte(0x8D); EmitByte(0x05);
-    _jumpFixups.Add((_code.Count, "__sched_worker_loop"));
-    EmitDword(0);
-    EmitMovRegMem(X86Register.R9, -0x20, 8); // lpParameter = P[i]
-    EmitXorRegReg(X86Register.Rax, X86Register.Rax);
-    EmitMovMemRspReg(0x20, X86Register.Rax); // dwCreationFlags = 0
-    EmitMovMemRspReg(0x28, X86Register.Rax); // lpThreadId = NULL
-    EmitCallImport("kernel32.dll", "CreateThread");
-    EmitSystemStackLeave(0x30);
-    // Store thread handle in P[i]->osThreadHandle
-    EmitMovRegMem(X86Register.Rcx, -0x20, 8); // P[i]
-    EmitMovIndirectMemReg(X86Register.Rcx, POffOsThreadHandle, X86Register.Rax);
-    EmitJmp("__gt_enqueue_wake_done");
-
-    DefineLabel("__gt_enqueue_spawn_next");
-    EmitMovRegMem(X86Register.Rax, -0x10, 8);
-    EmitAddRegImm(X86Register.Rax, 1);
-    EmitMovMemReg(-0x10, X86Register.Rax, 8);
-    EmitJmp("__gt_enqueue_spawn_scan");
-
-    DefineLabel("__gt_enqueue_wake_done");
-    EmitRuntimeFunctionEnd();
-  }
-
-  /// <summary>
-  /// __gt_dequeue() -> GreenThread* in RAX (or NULL if queue empty).
-  /// Checks: runnext → local queue → (1/61 global fairness) → global queue → work stealing.
-  /// </summary>
-  private void EmitGtDequeue() {
-    EmitRuntimeFunctionStart("__gt_dequeue", 0, 0x30);
-    // [rbp-0x08] = result GT*
-    // [rbp-0x10] = P*
-
-    // Load P* via TLS
-    EmitGlobalLoadReg(X86Register.Rax, "__sched_tls_teb_offset");
-    EmitByte(0x65); // GS prefix
-    EmitMovRegIndirectMemRaw(X86Register.Rax, X86Register.Rax, 0); // RAX = P*
-    EmitMovMemReg(-0x10, X86Register.Rax, 8); // save P*
-
-    // --- 1. Check runnext slot ---
-    EmitMovRegIndirectMem(X86Register.Rcx, X86Register.Rax, POffRunnext);
-    EmitBytes(0x48, 0x85, 0xC9); // TEST RCX, RCX
-    EmitJcc("z", "__gt_dequeue_check_fairness");
-
-    // Got runnext: clear slot, return it
-    EmitXorRegReg(X86Register.Rdx, X86Register.Rdx);
-    EmitMovIndirectMemReg(X86Register.Rax, POffRunnext, X86Register.Rdx);
-    // Clear gt.next
-    EmitMovIndirectMemReg(X86Register.Rcx, GtOffNext, X86Register.Rdx);
-    EmitMovRegReg(X86Register.Rax, X86Register.Rcx);
-    EmitJmp("__gt_dequeue_ret");
-
-    // --- Fairness check: every 61st dequeue, check global queue first ---
-    DefineLabel("__gt_dequeue_check_fairness");
-    EmitMovRegMem(X86Register.Rax, -0x10, 8); // P*
-    // Xorshift64 on P->rng to get a pseudo-random value
-    EmitMovRegIndirectMem(X86Register.Rcx, X86Register.Rax, POffRng);
-    // x ^= x << 13
-    EmitMovRegReg(X86Register.Rdx, X86Register.Rcx);
-    EmitBytes(0x48, 0xC1, 0xE2, 13); // SHL RDX, 13
-    EmitBytes(0x48, 0x31, 0xD1);     // XOR RCX, RDX
-    // x ^= x >> 7
-    EmitMovRegReg(X86Register.Rdx, X86Register.Rcx);
-    EmitBytes(0x48, 0xC1, 0xEA, 7);  // SHR RDX, 7
-    EmitBytes(0x48, 0x31, 0xD1);     // XOR RCX, RDX
-    // x ^= x << 17
-    EmitMovRegReg(X86Register.Rdx, X86Register.Rcx);
-    EmitBytes(0x48, 0xC1, 0xE2, 17); // SHL RDX, 17
-    EmitBytes(0x48, 0x31, 0xD1);     // XOR RCX, RDX
-    // Store back to P->rng
-    EmitMovIndirectMemReg(X86Register.Rax, POffRng, X86Register.Rcx);
-
-    // Check if (rng % 61) == 0 for fairness
-    EmitMovRegReg(X86Register.Rax, X86Register.Rcx);
-    EmitXorRegReg(X86Register.Rdx, X86Register.Rdx);
-    EmitMovRegImm(X86Register.Rcx, 61);
-    EmitBytes(0x48, 0xF7, 0xF1); // DIV RCX (RDX:RAX / RCX → RAX=quot, RDX=rem)
-    EmitBytes(0x48, 0x85, 0xD2); // TEST RDX, RDX
-    EmitJcc("nz", "__gt_dequeue_local"); // not fairness tick → check local first
-
-    // Fairness tick: try global queue first, then local
-    EmitJmp("__gt_dequeue_global");
-
-    // --- 2. Check local queue ---
-    DefineLabel("__gt_dequeue_local");
-    EmitMovRegMem(X86Register.Rax, -0x10, 8); // P*
-    EmitMovRegIndirectMem(X86Register.Rcx, X86Register.Rax, POffLocalQueueLen);
-    EmitBytes(0x48, 0x85, 0xC9); // TEST RCX, RCX
-    EmitJcc("z", "__gt_dequeue_global"); // local queue empty
-
-    // Dequeue from local queue head
-    EmitMovRegIndirectMem(X86Register.Rcx, X86Register.Rax, POffLocalQueueHead);
-    // P->head = gt->next
-    EmitMovRegIndirectMem(X86Register.Rdx, X86Register.Rcx, GtOffNext);
-    EmitMovIndirectMemReg(X86Register.Rax, POffLocalQueueHead, X86Register.Rdx);
-    // P->len -= 1
-    EmitMovRegIndirectMem(X86Register.R10, X86Register.Rax, POffLocalQueueLen);
-    EmitBytes(0x49, 0x83, 0xEA, 1); // SUB R10, 1
-    EmitMovIndirectMemReg(X86Register.Rax, POffLocalQueueLen, X86Register.R10);
-    // If new head == NULL, clear tail too
-    EmitBytes(0x48, 0x85, 0xD2); // TEST RDX, RDX
-    EmitJcc("nz", "__gt_dequeue_local_done");
-    EmitXorRegReg(X86Register.Rdx, X86Register.Rdx);
-    EmitMovIndirectMemReg(X86Register.Rax, POffLocalQueueTail, X86Register.Rdx);
-
-    DefineLabel("__gt_dequeue_local_done");
-    // Clear gt.next, return in RAX
-    EmitXorRegReg(X86Register.Rdx, X86Register.Rdx);
-    EmitMovIndirectMemReg(X86Register.Rcx, GtOffNext, X86Register.Rdx);
-    EmitMovRegReg(X86Register.Rax, X86Register.Rcx);
-    EmitJmp("__gt_dequeue_ret");
-
-    // --- 3. Check global queue (under lock) ---
-    DefineLabel("__gt_dequeue_global");
-    EmitGlobalLeaReg(X86Register.Rcx, "__sched_global_queue_cs");
-    EmitCallImportOnSystemStack("kernel32.dll", "EnterCriticalSection");
-
-    EmitGlobalLoadReg(X86Register.Rax, "__gt_run_queue_head");
-    EmitBytes(0x48, 0x85, 0xC0); // TEST rax, rax
-    EmitJcc("nz", "__gt_dequeue_global_nonempty");
-
-    // Global queue empty
-    EmitXorRegReg(X86Register.Rax, X86Register.Rax);
-    EmitMovMemReg(-0x08, X86Register.Rax, 8);
-    EmitJmp("__gt_dequeue_global_unlock");
-
-    DefineLabel("__gt_dequeue_global_nonempty");
-    EmitMovMemReg(-0x08, X86Register.Rax, 8); // save dequeued node
-    EmitMovRegIndirectMem(X86Register.Rcx, X86Register.Rax, GtOffNext);
-    EmitGlobalStoreReg(X86Register.Rcx, "__gt_run_queue_head");
-    EmitBytes(0x48, 0x85, 0xC9); // TEST rcx, rcx
-    EmitJcc("nz", "__gt_dequeue_global_unlock");
-    EmitXorRegReg(X86Register.Rcx, X86Register.Rcx);
-    EmitGlobalStoreReg(X86Register.Rcx, "__gt_run_queue_tail");
-
-    DefineLabel("__gt_dequeue_global_unlock");
-    EmitGlobalLeaReg(X86Register.Rcx, "__sched_global_queue_cs");
-    EmitCallImportOnSystemStack("kernel32.dll", "LeaveCriticalSection");
-
-    EmitMovRegMem(X86Register.Rax, -0x08, 8);
-    EmitBytes(0x48, 0x85, 0xC0); // TEST rax, rax
-    EmitJcc("z", "__gt_dequeue_steal"); // global empty → try stealing
-
-    // Got from global queue: clear next, return
-    EmitXorRegReg(X86Register.Rcx, X86Register.Rcx);
-    EmitMovIndirectMemReg(X86Register.Rax, GtOffNext, X86Register.Rcx);
-    EmitJmp("__gt_dequeue_ret");
-
-    // --- 4. Try work stealing ---
-    DefineLabel("__gt_dequeue_steal");
-    EmitCallRuntimeLabel("__gt_steal_work");
-    // RAX = stolen GT* or NULL (already cleaned up by steal_work)
-
-    DefineLabel("__gt_dequeue_ret");
-    // RAX = dequeued gt or NULL
-    EmitRuntimeFunctionEnd();
-  }
-
-  /// <summary>
-  /// __gt_steal_work() -> RAX = stolen GT* or NULL.
-  /// Tries to steal work from other Ps' local queues.
-  /// Uses P->rng (xorshift64) to pick random victims.
-  /// Steals half of victim's local queue (under global lock for safety).
-  /// </summary>
-  private void EmitGtStealWork() {
-    // Frame: [rbp-0x08] = our P*, [rbp-0x10] = attempt counter,
-    // [rbp-0x18] = num_procs, [rbp-0x20] = victim P*,
-    // [rbp-0x28] = first stolen GT (return value), [rbp-0x30] = steal count
-    EmitRuntimeFunctionStart("__gt_steal_work", 0, 0x50);
-
-    // Load our P* via TLS
-    EmitGlobalLoadReg(X86Register.R10, "__sched_tls_teb_offset");
-    EmitByte(0x65); // GS prefix
-    EmitMovRegIndirectMemRaw(X86Register.R10, X86Register.R10, 0); // R10 = our P*
-    EmitMovMemReg(-0x08, X86Register.R10, 8); // save our P*
-
-    // Load num_procs as attempt counter
-    EmitGlobalLoadReg(X86Register.Rax, "__sched_num_procs");
-    EmitMovMemReg(-0x10, X86Register.Rax, 8); // attempt counter
-    EmitMovMemReg(-0x18, X86Register.Rax, 8); // num_procs
-
-    // === Steal loop ===
-    DefineLabel("__gt_steal_loop");
-    EmitMovRegMem(X86Register.Rax, -0x10, 8); // attempts remaining
-    EmitBytes(0x48, 0x85, 0xC0); // TEST RAX, RAX
-    EmitJcc("z", "__gt_steal_fail"); // no attempts left
-
-    // Decrement attempt counter
-    EmitSubRegImm(X86Register.Rax, 1);
-    EmitMovMemReg(-0x10, X86Register.Rax, 8);
-
-    // xorshift64 on P->rng: x ^= x << 13; x ^= x >> 7; x ^= x << 17
-    EmitMovRegMem(X86Register.R10, -0x08, 8); // R10 = our P*
-    EmitMovRegIndirectMem(X86Register.Rax, X86Register.R10, POffRng); // RAX = rng
-    // x ^= x << 13
-    EmitMovRegReg(X86Register.Rcx, X86Register.Rax);
-    EmitBytes(0x48, 0xC1, 0xE1, 0x0D); // SHL RCX, 13
-    EmitBytes(0x48, 0x31, 0xC8); // XOR RAX, RCX
-    // x ^= x >> 7
-    EmitMovRegReg(X86Register.Rcx, X86Register.Rax);
-    EmitBytes(0x48, 0xC1, 0xE9, 0x07); // SHR RCX, 7
-    EmitBytes(0x48, 0x31, 0xC8); // XOR RAX, RCX
-    // x ^= x << 17
-    EmitMovRegReg(X86Register.Rcx, X86Register.Rax);
-    EmitBytes(0x48, 0xC1, 0xE1, 0x11); // SHL RCX, 17
-    EmitBytes(0x48, 0x31, 0xC8); // XOR RAX, RCX
-    // Store updated rng
-    EmitMovIndirectMemReg(X86Register.R10, POffRng, X86Register.Rax);
-
-    // victim index = RAX % num_procs
-    EmitXorRegReg(X86Register.Rdx, X86Register.Rdx); // zero RDX for DIV
-    EmitMovRegMem(X86Register.Rcx, -0x18, 8); // RCX = num_procs
-    EmitBytes(0x48, 0xF7, 0xF1); // DIV RCX => RAX=quotient, RDX=remainder
-    // RDX = victim index
-
-    // victim P* = procs[RDX]
-    EmitGlobalLoadReg(X86Register.Rcx, "__sched_procs");
-    EmitBytes(0x48, 0x8B, 0x0C, 0xD1); // MOV RCX, [RCX+RDX*8]
-    EmitMovMemReg(-0x20, X86Register.Rcx, 8); // save victim P*
-
-    // Skip self
-    EmitMovRegMem(X86Register.Rax, -0x08, 8); // our P*
-    EmitCmpRegReg(X86Register.Rcx, X86Register.Rax);
-    EmitJcc("z", "__gt_steal_loop"); // same P, try again
-
-    // Skip inactive workers (status != 1)
-    EmitMovRegIndirectMem(X86Register.Rax, X86Register.Rcx, POffStatus);
-    EmitCmpRegImm(X86Register.Rax, 1);
-    EmitJcc("nz", "__gt_steal_loop"); // not active
-
-    // Try to steal under global lock for safety
-    EmitGlobalLeaReg(X86Register.Rcx, "__sched_global_queue_cs");
-    EmitCallImportOnSystemStack("kernel32.dll", "EnterCriticalSection");
-
-    // Check victim's local queue length (need at least 2 to steal)
-    EmitMovRegMem(X86Register.Rcx, -0x20, 8); // victim P*
-    EmitMovRegIndirectMem(X86Register.Rax, X86Register.Rcx, POffLocalQueueLen);
-    EmitCmpRegImm(X86Register.Rax, 2);
-    EmitJcc("l", "__gt_steal_unlock_skip"); // less than 2, not worth stealing
-
-    // Steal half: n = len / 2
-    EmitBytes(0x48, 0xD1, 0xE8); // SHR RAX, 1 => n = len/2
-    EmitMovMemReg(-0x30, X86Register.Rax, 8); // save steal count n
-
-    // Walk victim's local queue: take first n items
-    // first = victim->localQueueHead (this is our return value)
-    EmitMovRegMem(X86Register.Rcx, -0x20, 8); // victim P*
-    EmitMovRegIndirectMem(X86Register.Rax, X86Register.Rcx, POffLocalQueueHead); // RAX = first stolen
-    EmitMovMemReg(-0x28, X86Register.Rax, 8); // save first stolen (return value)
-
-    // Walk n-1 more nodes to find the split point
-    // RBX = current node (walk pointer), counter in RCX
-    EmitMovRegReg(X86Register.Rbx, X86Register.Rax); // RBX = current = first
-    EmitMovRegMem(X86Register.Rcx, -0x30, 8); // RCX = n
-    EmitSubRegImm(X86Register.Rcx, 1); // walk n-1 more
-
-    DefineLabel("__gt_steal_walk");
-    EmitBytes(0x48, 0x85, 0xC9); // TEST RCX, RCX
-    EmitJcc("z", "__gt_steal_walk_done");
-    EmitMovRegIndirectMem(X86Register.Rbx, X86Register.Rbx, GtOffNext); // RBX = RBX->next
-    EmitSubRegImm(X86Register.Rcx, 1);
-    EmitJmp("__gt_steal_walk");
-
-    DefineLabel("__gt_steal_walk_done");
-    // RBX = last node in the stolen chain
-    // new_victim_head = RBX->next
-    EmitMovRegIndirectMem(X86Register.Rax, X86Register.Rbx, GtOffNext); // RAX = new head for victim
-    // Terminate stolen chain: RBX->next = NULL
-    EmitXorRegReg(X86Register.Rcx, X86Register.Rcx);
-    EmitMovIndirectMemReg(X86Register.Rbx, GtOffNext, X86Register.Rcx);
-
-    // Update victim: head = new_head, len -= n
-    EmitMovRegMem(X86Register.Rcx, -0x20, 8); // victim P*
-    EmitMovIndirectMemReg(X86Register.Rcx, POffLocalQueueHead, X86Register.Rax); // victim->head = new_head
-    // If new head == NULL, clear tail too
-    EmitBytes(0x48, 0x85, 0xC0); // TEST RAX, RAX
-    EmitJcc("nz", "__gt_steal_victim_nonempty");
-    EmitXorRegReg(X86Register.Rax, X86Register.Rax);
-    EmitMovRegMem(X86Register.Rcx, -0x20, 8); // victim P*
-    EmitMovIndirectMemReg(X86Register.Rcx, POffLocalQueueTail, X86Register.Rax);
-
-    DefineLabel("__gt_steal_victim_nonempty");
-    EmitMovRegMem(X86Register.Rcx, -0x20, 8); // victim P*
-    EmitMovRegIndirectMem(X86Register.Rax, X86Register.Rcx, POffLocalQueueLen);
-    EmitMovRegMem(X86Register.Rdx, -0x30, 8); // n
-    EmitSubRegReg(X86Register.Rax, X86Register.Rdx); // len -= n
-    EmitMovIndirectMemReg(X86Register.Rcx, POffLocalQueueLen, X86Register.Rax);
-
-    // Add stolen items (except the first, which we return) to our local queue.
-    // stolen chain: first -> ... -> last (RBX). We return first, enqueue first->next..last.
-    EmitMovRegMem(X86Register.Rax, -0x28, 8); // first stolen
-    EmitMovRegIndirectMem(X86Register.Rax, X86Register.Rax, GtOffNext); // RAX = second stolen (or NULL)
-    EmitBytes(0x48, 0x85, 0xC0); // TEST RAX, RAX
-    EmitJcc("z", "__gt_steal_got_one"); // only stole 1, nothing to add to local queue
-
-    // We have extra stolen items [RAX..RBX] to add to our local queue
-    // RAX = new chain head, RBX = new chain tail
-    EmitMovRegMem(X86Register.R10, -0x08, 8); // our P*
-    EmitMovRegIndirectMem(X86Register.Rcx, X86Register.R10, POffLocalQueueTail);
-    EmitBytes(0x48, 0x85, 0xC9); // TEST RCX, RCX
-    EmitJcc("nz", "__gt_steal_local_nonempty");
-    // Our local queue is empty: head = RAX, tail = RBX
-    EmitMovIndirectMemReg(X86Register.R10, POffLocalQueueHead, X86Register.Rax);
-    EmitMovIndirectMemReg(X86Register.R10, POffLocalQueueTail, X86Register.Rbx);
-    EmitJmp("__gt_steal_local_update_len");
-
-    DefineLabel("__gt_steal_local_nonempty");
-    // Append: our_tail->next = RAX, our_tail = RBX
-    EmitMovIndirectMemReg(X86Register.Rcx, GtOffNext, X86Register.Rax); // old_tail->next = chain_head
-    EmitMovIndirectMemReg(X86Register.R10, POffLocalQueueTail, X86Register.Rbx); // tail = chain_tail
-
-    DefineLabel("__gt_steal_local_update_len");
-    // Our local queue len += (n - 1)
-    EmitMovRegMem(X86Register.R10, -0x08, 8); // our P*
-    EmitMovRegIndirectMem(X86Register.Rax, X86Register.R10, POffLocalQueueLen);
-    EmitMovRegMem(X86Register.Rcx, -0x30, 8); // n
-    EmitSubRegImm(X86Register.Rcx, 1); // n-1
-    EmitAddRegReg(X86Register.Rax, X86Register.Rcx);
-    EmitMovIndirectMemReg(X86Register.R10, POffLocalQueueLen, X86Register.Rax);
-
-    DefineLabel("__gt_steal_got_one");
-    // Unlock
-    EmitGlobalLeaReg(X86Register.Rcx, "__sched_global_queue_cs");
-    EmitCallImportOnSystemStack("kernel32.dll", "LeaveCriticalSection");
-
-    // Clear first stolen's next pointer and return it
-    EmitMovRegMem(X86Register.Rax, -0x28, 8); // first stolen
-    EmitXorRegReg(X86Register.Rcx, X86Register.Rcx);
-    EmitMovIndirectMemReg(X86Register.Rax, GtOffNext, X86Register.Rcx);
-    EmitJmp("__gt_steal_ret");
-
-    DefineLabel("__gt_steal_unlock_skip");
-    EmitGlobalLeaReg(X86Register.Rcx, "__sched_global_queue_cs");
-    EmitCallImportOnSystemStack("kernel32.dll", "LeaveCriticalSection");
-    EmitJmp("__gt_steal_loop"); // try another victim
-
-    DefineLabel("__gt_steal_fail");
-    EmitXorRegReg(X86Register.Rax, X86Register.Rax); // return NULL
-
-    DefineLabel("__gt_steal_ret");
-    EmitRuntimeFunctionEnd();
-  }
+  // __gt_enqueue, __gt_dequeue, __gt_steal_work: migrated to RuntimeEmitter.Scheduler.cs
 
   /// <summary>
   /// __sched_worker_loop(): Entry point for worker OS threads.
@@ -6062,268 +5424,7 @@ public partial class X86CodeEmitter {
     EmitByte(0xC3); // ret
   }
 
-  /// <summary>
-  /// __gt_timer_check(): Check the timer min-heap for expired timers.
-  /// Pops all entries whose deadline &lt;= GetTickCount64() and re-enqueues their GTs.
-  /// Called from scheduling loops. Lock-free fast path when count == 0.
-  ///
-  /// Algorithm:
-  ///   if (__gt_timer_count == 0) return;  // fast path, no lock needed
-  ///   now = GetTickCount64();
-  ///   EnterCriticalSection(&amp;__gt_timer_cs);
-  ///   while (count &gt; 0 &amp;&amp; heap[0].deadline &lt;= now) {
-  ///     gt = heap[0].gt;
-  ///     // Move last element to root and sift down
-  ///     count--;
-  ///     heap[0] = heap[count];
-  ///     sift_down(0);
-  ///     gt.status = ready;
-  ///     __gt_enqueue(gt);
-  ///   }
-  ///   LeaveCriticalSection(&amp;__gt_timer_cs);
-  /// </summary>
-  private void EmitGtTimerCheck() {
-    EmitRuntimeFunctionStart("__gt_timer_check", 0, 0x40);
-    // Locals: [rbp-0x08]=now, [rbp-0x10]=heap_base, [rbp-0x18]=gt_to_enqueue
-
-    // Fast path: if count == 0, return immediately (no lock needed)
-    EmitGlobalLoadReg(X86Register.Rax, "__gt_timer_count");
-    EmitBytes(0x48, 0x85, 0xC0); // TEST RAX, RAX
-    EmitJcc("z", "__gt_timer_check_ret");
-
-    // Get current time
-    EmitCallImport("kernel32.dll", "GetTickCount64");
-    EmitMovMemReg(-0x08, X86Register.Rax, 8); // save now
-
-    // Lock timer heap
-    EmitGlobalLeaReg(X86Register.Rcx, "__gt_timer_cs");
-    EmitCallImport("kernel32.dll", "EnterCriticalSection");
-
-    // Cache heap base address
-    EmitGlobalLeaReg(X86Register.Rax, "__gt_timer_heap");
-    EmitMovMemReg(-0x10, X86Register.Rax, 8);
-
-    // Loop: pop expired timers
-    DefineLabel("__gt_timer_check_loop");
-    EmitGlobalLoadReg(X86Register.Rcx, "__gt_timer_count");
-    EmitBytes(0x48, 0x85, 0xC9); // TEST RCX, RCX
-    EmitJcc("z", "__gt_timer_check_unlock"); // count == 0, done
-
-    // Check heap[0].deadline <= now
-    EmitMovRegMem(X86Register.Rax, -0x10, 8); // heap_base
-    EmitMovRegIndirectMem(X86Register.Rdx, X86Register.Rax, TimerOffDeadline); // heap[0].deadline
-    EmitCmpRegMem(X86Register.Rdx, -0x08); // deadline vs now
-    EmitJcc("a", "__gt_timer_check_unlock"); // deadline > now, done (unsigned compare)
-
-    // Save gt from heap[0]
-    EmitMovRegMem(X86Register.Rax, -0x10, 8);
-    EmitMovRegIndirectMem(X86Register.R10, X86Register.Rax, TimerOffGt); // gt = heap[0].gt
-    EmitMovMemReg(-0x18, X86Register.R10, 8); // save gt
-
-    // count--
-    EmitGlobalLoadReg(X86Register.Rcx, "__gt_timer_count");
-    EmitDecReg(X86Register.Rcx);
-    EmitGlobalStoreReg(X86Register.Rcx, "__gt_timer_count");
-
-    // Move heap[count] to heap[0] (count is already decremented)
-    EmitMovRegMem(X86Register.Rax, -0x10, 8); // heap_base
-    // src = heap_base + count * 16
-    EmitMovRegReg(X86Register.Rdx, X86Register.Rcx);
-    EmitShlRegImm(X86Register.Rdx, 4); // count * 16
-    EmitAddRegReg(X86Register.Rdx, X86Register.Rax); // src = &heap[count]
-    // Copy 16 bytes: heap[0] = heap[count]
-    EmitMovRegIndirectMem(X86Register.R8, X86Register.Rdx, 0); // deadline
-    EmitMovIndirectMemReg(X86Register.Rax, 0, X86Register.R8);
-    EmitMovRegIndirectMem(X86Register.R8, X86Register.Rdx, 8); // gt
-    EmitMovIndirectMemReg(X86Register.Rax, 8, X86Register.R8);
-
-    // Sift down from index 0
-    // i = 0 (in R12, callee-saved)
-    EmitPushReg(X86Register.R12);
-    EmitXorRegReg(X86Register.R12, X86Register.R12); // i = 0
-
-    DefineLabel("__gt_timer_sift_down");
-    // left = 2*i + 1
-    EmitMovRegReg(X86Register.Rax, X86Register.R12);
-    EmitShlRegImm(X86Register.Rax, 1);
-    EmitIncReg(X86Register.Rax); // left = 2*i + 1
-
-    // if left >= count: done
-    EmitGlobalLoadReg(X86Register.Rcx, "__gt_timer_count");
-    EmitCmpRegReg(X86Register.Rax, X86Register.Rcx);
-    EmitJcc("ae", "__gt_timer_sift_done"); // left >= count
-
-    // smallest = left
-    EmitMovRegReg(X86Register.Rdx, X86Register.Rax); // smallest = left
-
-    // right = left + 1
-    EmitMovRegReg(X86Register.R8, X86Register.Rax);
-    EmitIncReg(X86Register.R8); // right = left + 1
-
-    // if right < count && heap[right].deadline < heap[left].deadline: smallest = right
-    EmitCmpRegReg(X86Register.R8, X86Register.Rcx);
-    EmitJcc("ae", "__gt_timer_sift_cmp_parent"); // right >= count, skip
-
-    // Compare heap[right].deadline vs heap[left].deadline
-    EmitMovRegMem(X86Register.R9, -0x10, 8); // heap_base
-    EmitMovRegReg(X86Register.Rcx, X86Register.R8);
-    EmitShlRegImm(X86Register.Rcx, 4);
-    EmitAddRegReg(X86Register.Rcx, X86Register.R9); // &heap[right]
-    EmitMovRegIndirectMem(X86Register.Rcx, X86Register.Rcx, 0); // heap[right].deadline
-
-    EmitMovRegReg(X86Register.R9, X86Register.Rax); // left
-    EmitShlRegImm(X86Register.R9, 4);
-    EmitMovRegMem(X86Register.R11, -0x10, 8); // heap_base
-    EmitAddRegReg(X86Register.R9, X86Register.R11); // &heap[left]
-    EmitMovRegIndirectMem(X86Register.R9, X86Register.R9, 0); // heap[left].deadline
-
-    EmitCmpRegReg(X86Register.Rcx, X86Register.R9); // right vs left
-    EmitJcc("ae", "__gt_timer_sift_cmp_parent"); // right >= left, keep smallest = left
-    EmitMovRegReg(X86Register.Rdx, X86Register.R8); // smallest = right
-
-    DefineLabel("__gt_timer_sift_cmp_parent");
-    // if heap[smallest].deadline >= heap[i].deadline: done
-    EmitMovRegMem(X86Register.R9, -0x10, 8); // heap_base
-    EmitMovRegReg(X86Register.Rcx, X86Register.Rdx); // smallest
-    EmitShlRegImm(X86Register.Rcx, 4);
-    EmitAddRegReg(X86Register.Rcx, X86Register.R9); // &heap[smallest]
-    EmitMovRegIndirectMem(X86Register.R8, X86Register.Rcx, 0); // heap[smallest].deadline
-
-    EmitMovRegReg(X86Register.Rax, X86Register.R12); // i
-    EmitShlRegImm(X86Register.Rax, 4);
-    EmitAddRegReg(X86Register.Rax, X86Register.R9); // &heap[i]
-    EmitMovRegIndirectMem(X86Register.R9, X86Register.Rax, 0); // heap[i].deadline
-
-    EmitCmpRegReg(X86Register.R8, X86Register.R9); // smallest vs i
-    EmitJcc("ae", "__gt_timer_sift_done"); // smallest >= i, heap property restored
-
-    // Swap heap[i] and heap[smallest] (16 bytes each)
-    // RAX = &heap[i], RCX = &heap[smallest] (already computed above)
-    // Swap deadline
-    EmitMovRegIndirectMem(X86Register.R8, X86Register.Rax, 0);
-    EmitMovRegIndirectMem(X86Register.R9, X86Register.Rcx, 0);
-    EmitMovIndirectMemReg(X86Register.Rax, 0, X86Register.R9);
-    EmitMovIndirectMemReg(X86Register.Rcx, 0, X86Register.R8);
-    // Swap gt
-    EmitMovRegIndirectMem(X86Register.R8, X86Register.Rax, 8);
-    EmitMovRegIndirectMem(X86Register.R9, X86Register.Rcx, 8);
-    EmitMovIndirectMemReg(X86Register.Rax, 8, X86Register.R9);
-    EmitMovIndirectMemReg(X86Register.Rcx, 8, X86Register.R8);
-
-    // i = smallest
-    EmitMovRegReg(X86Register.R12, X86Register.Rdx);
-    EmitJmp("__gt_timer_sift_down");
-
-    DefineLabel("__gt_timer_sift_done");
-    EmitPopReg(X86Register.R12);
-
-    // Re-enqueue the expired GT (only regular GTs with stackBase != 0).
-    // MainThread GTs (stackBase == 0) are driven by inline scheduling loops
-    // and must NOT be in the global run queue.
-    EmitMovRegMem(X86Register.Rcx, -0x18, 8); // gt
-    EmitXorRegReg(X86Register.Rax, X86Register.Rax);
-    EmitMovIndirectMemReg(X86Register.Rcx, GtOffStatus, X86Register.Rax); // status = ready
-    EmitMovRegIndirectMem(X86Register.Rax, X86Register.Rcx, GtOffStackBase);
-    EmitBytes(0x48, 0x85, 0xC0); // TEST RAX, RAX
-    EmitJcc("z", "__gt_timer_check_skip_enqueue");
-    EmitCallRuntimeLabel("__gt_enqueue");
-    DefineLabel("__gt_timer_check_skip_enqueue");
-
-    EmitJmp("__gt_timer_check_loop"); // check next entry
-
-    DefineLabel("__gt_timer_check_unlock");
-    EmitGlobalLeaReg(X86Register.Rcx, "__gt_timer_cs");
-    EmitCallImport("kernel32.dll", "LeaveCriticalSection");
-
-    DefineLabel("__gt_timer_check_ret");
-    EmitRuntimeFunctionEnd();
-  }
-
-  /// <summary>
-  /// __gt_timer_add(gt_rcx, deadline_rdx): Add a green thread to the timer heap
-  /// with the given deadline (absolute tick count from GetTickCount64).
-  /// The GT should already have status=waiting set by the caller.
-  ///
-  /// Algorithm:
-  ///   EnterCriticalSection(&amp;__gt_timer_cs);
-  ///   i = count++;
-  ///   heap[i] = { deadline, gt };
-  ///   // Sift up: while (i &gt; 0 &amp;&amp; heap[i].deadline &lt; heap[parent].deadline) swap
-  ///   LeaveCriticalSection(&amp;__gt_timer_cs);
-  /// </summary>
-  private void EmitGtTimerAdd() {
-    EmitRuntimeFunctionStart("__gt_timer_add", 2, 0x30);
-    // [rbp-0x08] = gt (rcx), [rbp-0x10] = deadline (rdx)
-
-    EmitGlobalLeaReg(X86Register.Rcx, "__gt_timer_cs");
-    EmitCallImport("kernel32.dll", "EnterCriticalSection");
-
-    // i = count
-    EmitGlobalLoadReg(X86Register.Rax, "__gt_timer_count");
-    EmitMovMemReg(-0x18, X86Register.Rax, 8); // save i
-
-    // count++
-    EmitIncReg(X86Register.Rax);
-    EmitGlobalStoreReg(X86Register.Rax, "__gt_timer_count");
-
-    // heap[i].deadline = deadline, heap[i].gt = gt
-    EmitGlobalLeaReg(X86Register.Rcx, "__gt_timer_heap");
-    EmitMovRegMem(X86Register.Rax, -0x18, 8); // i
-    EmitShlRegImm(X86Register.Rax, 4); // i * 16
-    EmitAddRegReg(X86Register.Rcx, X86Register.Rax); // &heap[i]
-    EmitMovRegMem(X86Register.Rdx, -0x10, 8); // deadline
-    EmitMovIndirectMemReg(X86Register.Rcx, TimerOffDeadline, X86Register.Rdx);
-    EmitMovRegMem(X86Register.Rdx, -0x08, 8); // gt
-    EmitMovIndirectMemReg(X86Register.Rcx, TimerOffGt, X86Register.Rdx);
-
-    // Sift up
-    DefineLabel("__gt_timer_sift_up");
-    EmitMovRegMem(X86Register.Rax, -0x18, 8); // i
-    EmitBytes(0x48, 0x85, 0xC0); // TEST RAX, RAX
-    EmitJcc("z", "__gt_timer_add_done"); // i == 0, at root
-
-    // parent = (i - 1) / 2
-    EmitDecReg(X86Register.Rax);
-    EmitShrRegImm(X86Register.Rax, 1); // parent
-    EmitMovMemReg(-0x20, X86Register.Rax, 8); // save parent
-
-    // Compare heap[i].deadline vs heap[parent].deadline
-    EmitGlobalLeaReg(X86Register.R9, "__gt_timer_heap");
-
-    EmitMovRegMem(X86Register.Rcx, -0x18, 8); // i
-    EmitShlRegImm(X86Register.Rcx, 4);
-    EmitAddRegReg(X86Register.Rcx, X86Register.R9); // &heap[i]
-    EmitMovRegIndirectMem(X86Register.R8, X86Register.Rcx, 0); // heap[i].deadline
-
-    EmitMovRegMem(X86Register.Rdx, -0x20, 8); // parent
-    EmitShlRegImm(X86Register.Rdx, 4);
-    EmitAddRegReg(X86Register.Rdx, X86Register.R9); // &heap[parent]
-    EmitMovRegIndirectMem(X86Register.R10, X86Register.Rdx, 0); // heap[parent].deadline
-
-    EmitCmpRegReg(X86Register.R8, X86Register.R10); // heap[i] vs heap[parent]
-    EmitJcc("ae", "__gt_timer_add_done"); // i >= parent, done
-
-    // Swap heap[i] and heap[parent] (RCX = &heap[i], RDX = &heap[parent])
-    // Swap deadline
-    EmitMovIndirectMemReg(X86Register.Rcx, 0, X86Register.R10);
-    EmitMovIndirectMemReg(X86Register.Rdx, 0, X86Register.R8);
-    // Swap gt
-    EmitMovRegIndirectMem(X86Register.R8, X86Register.Rcx, 8);
-    EmitMovRegIndirectMem(X86Register.R10, X86Register.Rdx, 8);
-    EmitMovIndirectMemReg(X86Register.Rcx, 8, X86Register.R10);
-    EmitMovIndirectMemReg(X86Register.Rdx, 8, X86Register.R8);
-
-    // i = parent
-    EmitMovRegMem(X86Register.Rax, -0x20, 8);
-    EmitMovMemReg(-0x18, X86Register.Rax, 8);
-    EmitJmp("__gt_timer_sift_up");
-
-    DefineLabel("__gt_timer_add_done");
-    EmitGlobalLeaReg(X86Register.Rcx, "__gt_timer_cs");
-    EmitCallImport("kernel32.dll", "LeaveCriticalSection");
-
-    EmitRuntimeFunctionEnd();
-  }
+  // __gt_timer_check and __gt_timer_add are now emitted by RuntimeEmitter.Scheduler.cs
 
   // ===========================================================================================
   // I/O Runtime — IOCP-based async I/O + sync worker thread for non-overlappable operations
@@ -6357,55 +5458,55 @@ public partial class X86CodeEmitter {
   //   0x18  error_code i64
   //   0x20  next       i64
 
-  private const int AsyncCtxSize           = 0x38; // 56 bytes (OVERLAPPED=32 + 3 fields)
-  private const int AsyncCtxOffWaiter      = 0x20;
+  private const int AsyncCtxSize = 0x38; // 56 bytes (OVERLAPPED=32 + 3 fields)
+  private const int AsyncCtxOffWaiter = 0x20;
   private const int AsyncCtxOffCustomResult = 0x28; // custom result value (e.g., socket handle for ConnectEx)
 
-  private const int SyncReqSize      = 0x28; // 40 bytes
-  private const int SyncReqOffOp     = 0x00;
-  private const int SyncReqOffArg0   = 0x08;
-  private const int SyncReqOffArg1   = 0x10;
+  private const int SyncReqSize = 0x28; // 40 bytes
+  private const int SyncReqOffOp = 0x00;
+  private const int SyncReqOffArg0 = 0x08;
+  private const int SyncReqOffArg1 = 0x10;
   private const int SyncReqOffWaiter = 0x18;
-  private const int SyncReqOffNext   = 0x20;
+  private const int SyncReqOffNext = 0x20;
 
-  private const int IoCompOffWaiter  = 0x00;
-  private const int IoCompOffResult  = 0x08;
-  private const int IoCompOffLen     = 0x10;
-  private const int IoCompOffError   = 0x18;
-  private const int IoCompOffNext    = 0x20;
+  private const int IoCompOffWaiter = 0x00;
+  private const int IoCompOffResult = 0x08;
+  private const int IoCompOffLen = 0x10;
+  private const int IoCompOffError = 0x18;
+  private const int IoCompOffNext = 0x20;
 
   // Sync op codes (must match SyncOpXxx used in stubs)
-  private const long SyncOpFileExists  = 0;
-  private const long SyncOpFileDelete  = 1;
-  private const long SyncOpFindFirst   = 2;
-  private const long SyncOpFindNext    = 3;
-  private const long SyncOpDirExists   = 4;
-  private const long SyncOpDirCreate   = 5;
-  private const long SyncOpGetCwd      = 6;
-  private const long SyncOpFileOpenRead  = 7;
+  private const long SyncOpFileExists = 0;
+  private const long SyncOpFileDelete = 1;
+  private const long SyncOpFindFirst = 2;
+  private const long SyncOpFindNext = 3;
+  private const long SyncOpDirExists = 4;
+  private const long SyncOpDirCreate = 5;
+  private const long SyncOpGetCwd = 6;
+  private const long SyncOpFileOpenRead = 7;
   private const long SyncOpFileOpenWrite = 8;
-  private const long SyncOpCloseHandle   = 9;
-  private const long SyncOpNetConnect  = 10;
-  private const long SyncOpNetSend     = 11;
-  private const long SyncOpNetRecv     = 12;
-  private const long SyncOpNetClose    = 13;
-  private const long SyncOpDnsResolve  = 14;
-  private const long SyncOpShutdown    = 0xFF;
+  private const long SyncOpCloseHandle = 9;
+  private const long SyncOpNetConnect = 10;
+  private const long SyncOpNetSend = 11;
+  private const long SyncOpNetRecv = 12;
+  private const long SyncOpNetClose = 13;
+  private const long SyncOpDnsResolve = 14;
+  private const long SyncOpShutdown = 0xFF;
 
   private void EmitIoRuntime() {
     // I/O globals
-    DefineGlobal("__io_iocp",              8,  0); // HANDLE: I/O completion port
-    DefineGlobal("__io_completion_thread", 8,  0); // HANDLE: IOCP drain thread
-    DefineGlobal("__io_sync_worker",       8,  0); // HANDLE: sync-op worker thread
-    DefineGlobal("__io_sync_cs",          40,  0); // CRITICAL_SECTION (40 bytes on x64)
-    DefineGlobal("__io_sync_req_event",    8,  0); // manual-reset event: sync work available
-    DefineGlobal("__io_sync_req_head",     8,  0); // SyncRequest* head
-    DefineGlobal("__io_sync_req_tail",     8,  0); // SyncRequest* tail
-    DefineGlobal("__io_done_cs",          40,  0); // CRITICAL_SECTION for done queue
-    DefineGlobal("__io_done_event",        8,  0); // auto-reset event: completion available
-    DefineGlobal("__io_done_head",         8,  0); // IoCompletion* head
-    DefineGlobal("__io_done_tail",         8,  0); // IoCompletion* tail
-    DefineGlobal("__io_connectex_ptr",     8,  0); // ConnectEx function pointer obtained via WSAIoctl
+    DefineGlobal("__io_iocp", 8, 0); // HANDLE: I/O completion port
+    DefineGlobal("__io_completion_thread", 8, 0); // HANDLE: IOCP drain thread
+    DefineGlobal("__io_sync_worker", 8, 0); // HANDLE: sync-op worker thread
+    DefineGlobal("__io_sync_cs", 40, 0); // CRITICAL_SECTION (40 bytes on x64)
+    DefineGlobal("__io_sync_req_event", 8, 0); // manual-reset event: sync work available
+    DefineGlobal("__io_sync_req_head", 8, 0); // SyncRequest* head
+    DefineGlobal("__io_sync_req_tail", 8, 0); // SyncRequest* tail
+    DefineGlobal("__io_done_cs", 40, 0); // CRITICAL_SECTION for done queue
+    DefineGlobal("__io_done_event", 8, 0); // auto-reset event: completion available
+    DefineGlobal("__io_done_head", 8, 0); // IoCompletion* head
+    DefineGlobal("__io_done_tail", 8, 0); // IoCompletion* tail
+    DefineGlobal("__io_connectex_ptr", 8, 0); // ConnectEx function pointer obtained via WSAIoctl
 
     EmitIoInit();
     EmitIoShutdown();
@@ -6437,8 +5538,8 @@ public partial class X86CodeEmitter {
     // CreateIoCompletionPort(INVALID_HANDLE_VALUE=-1, NULL, 0, 1) → __io_iocp
     EmitMovRegImm(X86Register.Rcx, unchecked((long)0xFFFFFFFFFFFFFFFF)); // INVALID_HANDLE_VALUE
     EmitXorRegReg(X86Register.Rdx, X86Register.Rdx); // ExistingCompletionPort = NULL
-    EmitXorRegReg(X86Register.R8,  X86Register.R8);  // CompletionKey = 0
-    EmitMovRegImm(X86Register.R9,  1);               // NumberOfConcurrentThreads = 1
+    EmitXorRegReg(X86Register.R8, X86Register.R8);  // CompletionKey = 0
+    EmitMovRegImm(X86Register.R9, 1);               // NumberOfConcurrentThreads = 1
     EmitCallImport("kernel32.dll", "CreateIoCompletionPort");
     EmitGlobalStoreReg(X86Register.Rax, "__io_iocp");
 
@@ -6563,8 +5664,8 @@ public partial class X86CodeEmitter {
     // PostQueuedCompletionStatus(iocp, 0, 0, NULL) — sentinel to wake completion thread
     EmitGlobalLoadReg(X86Register.Rcx, "__io_iocp");
     EmitXorRegReg(X86Register.Rdx, X86Register.Rdx); // dwNumberOfBytesTransferred = 0
-    EmitXorRegReg(X86Register.R8,  X86Register.R8);  // dwCompletionKey = 0
-    EmitXorRegReg(X86Register.R9,  X86Register.R9);  // lpOverlapped = NULL
+    EmitXorRegReg(X86Register.R8, X86Register.R8);  // dwCompletionKey = 0
+    EmitXorRegReg(X86Register.R9, X86Register.R9);  // lpOverlapped = NULL
     EmitCallImport("kernel32.dll", "PostQueuedCompletionStatus");
 
     // Send shutdown SyncRequest to sync worker: op=0xFF, then SetEvent
@@ -6824,7 +5925,6 @@ public partial class X86CodeEmitter {
 
     // --- getCwd: GetCurrentDirectoryA(260, heap_buf) → raw ptr ---
     DefineLabel("__io_sync_op_get_cwd");
-    // Allocate 260-byte buffer via HeapAlloc
     EmitCallRuntimeLabel("mm_raw_alloc_260");
     EmitMovMemReg(-0x10, X86Register.Rax, 8); // save buf
     EmitMovRegImm(X86Register.Rcx, 260); // nBufferLength
@@ -7476,7 +6576,7 @@ public partial class X86CodeEmitter {
     EmitIoCompleteGt();
     EmitIoEnqueueCompletion();
     EmitIoDequeueCompletion();
-    EmitMmRawAlloc260();
+    new Runtime.RuntimeEmitter(CreateBackend()).EmitMmRawAlloc260(Compiler.MmTrace);
     EmitIoPanicIo();
   }
 
@@ -7528,7 +6628,7 @@ public partial class X86CodeEmitter {
     EmitSystemStackEnter(0x30); // shadow(0x20) + 1 stack arg + pad = 0x30
     EmitMovRegMem(X86Register.Rcx, -0x08, 8); // handle
     EmitMovRegMem(X86Register.Rdx, -0x10, 8); // buf
-    EmitMovRegMem(X86Register.R8,  -0x18, 8); // size
+    EmitMovRegMem(X86Register.R8, -0x18, 8); // size
     EmitXorRegReg(X86Register.R9, X86Register.R9); // lpBytesTransferred = NULL
     EmitMovRegMem(X86Register.Rax, -0x20, 8);
     EmitMovMemRspReg(0x20, X86Register.Rax);   // lpOverlapped = ctx (5th arg at [rsp+0x20])
@@ -7836,13 +6936,7 @@ public partial class X86CodeEmitter {
     EmitRuntimeFunctionEnd();
   }
 
-  private void EmitMmRawAlloc260() {
-    // mm_raw_alloc_260(): Allocate exactly 260 bytes of raw memory (for GetCurrentDirectoryA)
-    EmitRuntimeFunctionStart("mm_raw_alloc_260", 0, 0x20);
-    EmitMovRegImm(X86Register.Rcx, 260);
-    EmitCallRuntimeLabel("mm_raw_alloc");
-    EmitRuntimeFunctionEnd();
-  }
+  // mm_raw_alloc_260: now emitted by RuntimeEmitter.MemoryManager.cs (unified x86/ARM64)
 
   private void EmitIoPanicIo() {
     // __gt_panic_io(): Called on unknown sync op code — should never happen

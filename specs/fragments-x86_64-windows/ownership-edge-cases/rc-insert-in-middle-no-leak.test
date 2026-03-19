@@ -21,17 +21,24 @@ end 'main'
 MmTrace: true
 ExitCode: 60
 Stderr: ```
+slab_alloc size=64 class=6
 alloc __ManagedMemory_Val #1 rc=0 size=32 [ownership-edge-cases.main]
+slab_alloc size=48 class=5
 alloc ValArray #2 rc=0 size=16 [ownership-edge-cases.main]
 incref __ManagedMemory_Val #1 rc=1 [ownership-edge-cases.main]
 incref ValArray #2 rc=1 [ownership-edge-cases.main]
+slab_alloc size=40 class=5
 alloc Val #3 rc=0 size=8 [ownership-edge-cases.main]
 incref Val #3 rc=1 [ownership-edge-cases.main]
+slab_alloc size=32 class=4
+raw_alloc size=32
 realloc __ManagedMemory_Val #1 rc=1 size=32
 incref Val #3 rc=2 [ValArray.push]
+slab_alloc size=40 class=5
 alloc Val #4 rc=0 size=8 [ownership-edge-cases.main]
 incref Val #4 rc=1 [ownership-edge-cases.main]
 incref Val #4 rc=2 [ValArray.push]
+slab_alloc size=40 class=5
 alloc Val #5 rc=0 size=8 [ownership-edge-cases.main]
 incref Val #5 rc=1 [ownership-edge-cases.main]
 incref Val #5 rc=2 [ValArray.insert]
@@ -52,14 +59,25 @@ decref __ManagedMemory_Val #1 rc=0 [~ValArray]
 decref Val #3 rc=1 [~ManagedElements]
 decref Val #5 rc=1 [~ManagedElements]
 decref Val #4 rc=1 [~ManagedElements]
+raw_free
+slab_free size=32 class=4
   free __ManagedMemory_Val #1
+slab_free size=80 class=6
   free ValArray #2
+slab_free size=48 class=5
 decref Val #3 rc=0 [ownership-edge-cases.main]
   free Val #3
+slab_free size=48 class=5
 decref Val #4 rc=0 [ownership-edge-cases.main]
   free Val #4
+slab_free size=48 class=5
 decref Val #5 rc=0 [ownership-edge-cases.main]
   free Val #5
+slab_free size=48 class=5
+slab_alloc size=40 class=5
+raw_alloc size=40
+raw_free
+slab_free size=48 class=5
 ```
 ---
 module {

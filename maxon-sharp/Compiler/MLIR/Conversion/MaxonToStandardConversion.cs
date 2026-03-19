@@ -855,7 +855,7 @@ public static partial class MaxonToStandardConversion {
                   newBlock.AddOp(totalSize);
 
                   // Allocate heap buffer as raw memory (no refcount header)
-                  var heapBuf = EmitRawAlloc(newBlock, totalSize.Result);
+                  var heapBuf = EmitRawAlloc(newBlock, totalSize.Result, label: "cow.buf", scopeName: _currentFuncName);
                   var copyResult = new StdI64(MlirContext.Current.NextId());
                   newBlock.AddOp(new StdCallRuntimeOp("maxon_memcpy", [heapBuf, stackPtr.Result, totalSize.Result], copyResult));
 
@@ -875,7 +875,9 @@ public static partial class MaxonToStandardConversion {
                 // Constant (rdata) and skipZeroInit (stack scratch) buffers get capacity=0
                 // (read-only for COW, skipped by destructor to avoid freeing non-heap memory).
                 bool isConstantBuffer = module.ConstantArrayLiterals.ContainsKey(structLitOp.Result.Id);
-                bool bufferIsWritable = !isConstantBuffer; // all non-constant buffers are now heap-allocated
+                // skipZeroInit buffers are stack-allocated (not heap) — capacity must stay 0 so the destructor
+                // does not call mm_raw_free on a stack address (which would corrupt the process heap).
+                bool bufferIsWritable = !isConstantBuffer && !structLitOp.SkipZeroInit;
                 if (TypeAliasInfo.IsManagedMemoryType(structLitOp.TypeName, module.TypeAliasSources)) {
                   // buffer is directly on this struct at offset 0
                   var bufferField = structType.GetField("buffer")!;

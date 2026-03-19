@@ -32,10 +32,16 @@ end 'main'
 1
 ```
 ```stderr
+slab_alloc size=48 class=5
 alloc Point #1 rc=0 size=16 [ownership-edge-cases.main]
 incref Point #1 rc=1 [ownership-edge-cases.main]
 decref Point #1 rc=0 [ownership-edge-cases.main]
   free Point #1
+slab_free size=48 class=5
+slab_alloc size=40 class=5
+raw_alloc size=40
+raw_free
+slab_free size=48 class=5
 ```
 
 <!-- test: rc-alias-incref -->
@@ -58,12 +64,18 @@ end 'main'
 42
 ```
 ```stderr
+slab_alloc size=40 class=5
 alloc Box #1 rc=0 size=8 [ownership-edge-cases.main]
 incref Box #1 rc=1 [ownership-edge-cases.main]
 incref Box #1 rc=2 [ownership-edge-cases.main]
 decref Box #1 rc=1 [ownership-edge-cases.main]
 decref Box #1 rc=0 [ownership-edge-cases.main]
   free Box #1
+slab_free size=48 class=5
+slab_alloc size=40 class=5
+raw_alloc size=40
+raw_free
+slab_free size=48 class=5
 ```
 
 <!-- test: rc-reassign-decrefs-old -->
@@ -87,13 +99,17 @@ end 'main'
 3
 ```
 ```stderr
+slab_alloc size=40 class=5
 alloc Tag #1 rc=0 size=8 [ownership-edge-cases.main]
 incref Tag #1 rc=1 [ownership-edge-cases.main]
+slab_alloc size=40 class=5
 alloc Tag #2 rc=0 size=8 [ownership-edge-cases.main]
 incref Tag #2 rc=1 [ownership-edge-cases.main]
 decref Tag #1 rc=0 [ownership-edge-cases.main]
   free Tag #1
+slab_free size=48 class=5
 incref Tag #2 rc=2 [ownership-edge-cases.main]
+slab_alloc size=40 class=5
 alloc Tag #3 rc=0 size=8 [ownership-edge-cases.main]
 incref Tag #3 rc=1 [ownership-edge-cases.main]
 decref Tag #2 rc=1 [ownership-edge-cases.main]
@@ -101,8 +117,14 @@ incref Tag #3 rc=2 [ownership-edge-cases.main]
 decref Tag #3 rc=1 [ownership-edge-cases.main]
 decref Tag #2 rc=0 [ownership-edge-cases.main]
   free Tag #2
+slab_free size=48 class=5
 decref Tag #3 rc=0 [ownership-edge-cases.main]
   free Tag #3
+slab_free size=48 class=5
+slab_alloc size=40 class=5
+raw_alloc size=40
+raw_free
+slab_free size=48 class=5
 ```
 
 <!-- test: rc-inner-block-freed -->
@@ -128,10 +150,16 @@ end 'main'
 7
 ```
 ```stderr
+slab_alloc size=40 class=5
 alloc Widget #1 rc=0 size=8 [ownership-edge-cases.main]
 incref Widget #1 rc=1 [ownership-edge-cases.main]
 decref Widget #1 rc=0 [ownership-edge-cases.main]
   free Widget #1
+slab_free size=48 class=5
+slab_alloc size=40 class=5
+raw_alloc size=40
+raw_free
+slab_free size=48 class=5
 ```
 
 <!-- test: rc-return-transfers-ownership -->
@@ -158,11 +186,17 @@ end 'main'
 99
 ```
 ```stderr
+slab_alloc size=40 class=5
 alloc Token #1 rc=0 size=8 [ownership-edge-cases.makeToken]
 incref Token #1 rc=1 [ownership-edge-cases.makeToken]
 transfer Token #1 rc=1 [ownership-edge-cases.makeToken]
 decref Token #1 rc=0 [ownership-edge-cases.main]
   free Token #1
+slab_free size=48 class=5
+slab_alloc size=40 class=5
+raw_alloc size=40
+raw_free
+slab_free size=48 class=5
 ```
 
 <!-- test: rc-alias-survives-reassign -->
@@ -186,18 +220,26 @@ end 'main'
 30
 ```
 ```stderr
+slab_alloc size=40 class=5
 alloc Num #1 rc=0 size=8 [ownership-edge-cases.main]
 incref Num #1 rc=1 [ownership-edge-cases.main]
 incref Num #1 rc=2 [ownership-edge-cases.main]
+slab_alloc size=40 class=5
 alloc Num #2 rc=0 size=8 [ownership-edge-cases.main]
 incref Num #2 rc=1 [ownership-edge-cases.main]
 decref Num #1 rc=1 [ownership-edge-cases.main]
 incref Num #2 rc=2 [ownership-edge-cases.main]
 decref Num #1 rc=0 [ownership-edge-cases.main]
   free Num #1
+slab_free size=48 class=5
 decref Num #2 rc=1 [ownership-edge-cases.main]
 decref Num #2 rc=0 [ownership-edge-cases.main]
   free Num #2
+slab_free size=48 class=5
+slab_alloc size=40 class=5
+raw_alloc size=40
+raw_free
+slab_free size=48 class=5
 ```
 
 <!-- test: rc-loop-per-iteration-freed -->
@@ -225,22 +267,34 @@ end 'main'
 6
 ```
 ```stderr
+slab_alloc size=40 class=5
 alloc Counter #1 rc=0 size=8 [ownership-edge-cases.main]
 incref Counter #1 rc=1 [ownership-edge-cases.main]
 decref Counter #1 rc=0 [ownership-edge-cases.main]
   free Counter #1
+slab_free size=48 class=5
+slab_alloc size=40 class=5
 alloc Counter #2 rc=0 size=8 [ownership-edge-cases.main]
 incref Counter #2 rc=1 [ownership-edge-cases.main]
 decref Counter #2 rc=0 [ownership-edge-cases.main]
   free Counter #2
+slab_free size=48 class=5
+slab_alloc size=40 class=5
 alloc Counter #3 rc=0 size=8 [ownership-edge-cases.main]
 incref Counter #3 rc=1 [ownership-edge-cases.main]
 decref Counter #3 rc=0 [ownership-edge-cases.main]
   free Counter #3
+slab_free size=48 class=5
+slab_alloc size=40 class=5
 alloc Counter #4 rc=0 size=8 [ownership-edge-cases.main]
 incref Counter #4 rc=1 [ownership-edge-cases.main]
 decref Counter #4 rc=0 [ownership-edge-cases.main]
   free Counter #4
+slab_free size=48 class=5
+slab_alloc size=40 class=5
+raw_alloc size=40
+raw_free
+slab_free size=48 class=5
 ```
 
 <!-- test: rc-break-frees-before-exit -->
@@ -269,22 +323,34 @@ end 'main'
 3
 ```
 ```stderr
+slab_alloc size=40 class=5
 alloc Step #1 rc=0 size=8 [ownership-edge-cases.main]
 incref Step #1 rc=1 [ownership-edge-cases.main]
 decref Step #1 rc=0 [ownership-edge-cases.main]
   free Step #1
+slab_free size=48 class=5
+slab_alloc size=40 class=5
 alloc Step #2 rc=0 size=8 [ownership-edge-cases.main]
 incref Step #2 rc=1 [ownership-edge-cases.main]
 decref Step #2 rc=0 [ownership-edge-cases.main]
   free Step #2
+slab_free size=48 class=5
+slab_alloc size=40 class=5
 alloc Step #3 rc=0 size=8 [ownership-edge-cases.main]
 incref Step #3 rc=1 [ownership-edge-cases.main]
 decref Step #3 rc=0 [ownership-edge-cases.main]
   free Step #3
+slab_free size=48 class=5
+slab_alloc size=40 class=5
 alloc Step #4 rc=0 size=8 [ownership-edge-cases.main]
 incref Step #4 rc=1 [ownership-edge-cases.main]
 decref Step #4 rc=0 [ownership-edge-cases.main]
   free Step #4
+slab_free size=48 class=5
+slab_alloc size=40 class=5
+raw_alloc size=40
+raw_free
+slab_free size=48 class=5
 ```
 
 <!-- test: rc-continue-frees-before-restart -->
@@ -315,26 +381,40 @@ end 'main'
 8
 ```
 ```stderr
+slab_alloc size=40 class=5
 alloc Item #1 rc=0 size=8 [ownership-edge-cases.main]
 incref Item #1 rc=1 [ownership-edge-cases.main]
 decref Item #1 rc=0 [ownership-edge-cases.main]
   free Item #1
+slab_free size=48 class=5
+slab_alloc size=40 class=5
 alloc Item #2 rc=0 size=8 [ownership-edge-cases.main]
 incref Item #2 rc=1 [ownership-edge-cases.main]
 decref Item #2 rc=0 [ownership-edge-cases.main]
   free Item #2
+slab_free size=48 class=5
+slab_alloc size=40 class=5
 alloc Item #3 rc=0 size=8 [ownership-edge-cases.main]
 incref Item #3 rc=1 [ownership-edge-cases.main]
 decref Item #3 rc=0 [ownership-edge-cases.main]
   free Item #3
+slab_free size=48 class=5
+slab_alloc size=40 class=5
 alloc Item #4 rc=0 size=8 [ownership-edge-cases.main]
 incref Item #4 rc=1 [ownership-edge-cases.main]
 decref Item #4 rc=0 [ownership-edge-cases.main]
   free Item #4
+slab_free size=48 class=5
+slab_alloc size=40 class=5
 alloc Item #5 rc=0 size=8 [ownership-edge-cases.main]
 incref Item #5 rc=1 [ownership-edge-cases.main]
 decref Item #5 rc=0 [ownership-edge-cases.main]
   free Item #5
+slab_free size=48 class=5
+slab_alloc size=40 class=5
+raw_alloc size=40
+raw_free
+slab_free size=48 class=5
 ```
 
 <!-- test: rc-nested-struct-field-incref -->
@@ -361,16 +441,24 @@ end 'main'
 55
 ```
 ```stderr
+slab_alloc size=40 class=5
 alloc Inner #1 rc=0 size=8 [ownership-edge-cases.main]
 incref Inner #1 rc=1 [ownership-edge-cases.main]
+slab_alloc size=40 class=5
 alloc Outer #2 rc=0 size=8 [ownership-edge-cases.main]
 incref Inner #1 rc=2 [ownership-edge-cases.main]
 incref Outer #2 rc=1 [ownership-edge-cases.main]
 decref Outer #2 rc=0 [ownership-edge-cases.main]
 decref Inner #1 rc=1 [~Outer]
   free Outer #2
+slab_free size=48 class=5
 decref Inner #1 rc=0 [ownership-edge-cases.main]
   free Inner #1
+slab_free size=48 class=5
+slab_alloc size=40 class=5
+raw_alloc size=40
+raw_free
+slab_free size=48 class=5
 ```
 
 <!-- test: rc-nested-struct-deep-freed -->
@@ -400,9 +488,12 @@ end 'main'
 7
 ```
 ```stderr
+slab_alloc size=40 class=5
 alloc A #1 rc=0 size=8 [ownership-edge-cases.main]
+slab_alloc size=40 class=5
 alloc B #2 rc=0 size=8 [ownership-edge-cases.main]
 incref A #1 rc=1 [ownership-edge-cases.main]
+slab_alloc size=40 class=5
 alloc C #3 rc=0 size=8 [ownership-edge-cases.main]
 incref B #2 rc=1 [ownership-edge-cases.main]
 incref C #3 rc=1 [ownership-edge-cases.main]
@@ -410,8 +501,15 @@ decref C #3 rc=0 [ownership-edge-cases.main]
 decref B #2 rc=0 [~C]
 decref A #1 rc=0 [~B]
   free A #1
+slab_free size=48 class=5
   free B #2
+slab_free size=48 class=5
   free C #3
+slab_free size=48 class=5
+slab_alloc size=40 class=5
+raw_alloc size=40
+raw_free
+slab_free size=48 class=5
 ```
 
 <!-- test: rc-field-overwrite-decrefs-old -->
@@ -443,11 +541,14 @@ end 'main'
 2
 ```
 ```stderr
+slab_alloc size=40 class=5
 alloc Payload #1 rc=0 size=8 [ownership-edge-cases.main]
 incref Payload #1 rc=1 [ownership-edge-cases.main]
+slab_alloc size=40 class=5
 alloc Container #2 rc=0 size=8 [ownership-edge-cases.main]
 incref Payload #1 rc=2 [ownership-edge-cases.main]
 incref Container #2 rc=1 [ownership-edge-cases.main]
+slab_alloc size=40 class=5
 alloc Payload #3 rc=0 size=8 [ownership-edge-cases.main]
 incref Payload #3 rc=1 [ownership-edge-cases.main]
 decref Payload #1 rc=1 [Container.setPayload]
@@ -455,10 +556,17 @@ incref Payload #3 rc=2 [Container.setPayload]
 decref Container #2 rc=0 [ownership-edge-cases.main]
 decref Payload #3 rc=1 [~Container]
   free Container #2
+slab_free size=48 class=5
 decref Payload #1 rc=0 [ownership-edge-cases.main]
   free Payload #1
+slab_free size=48 class=5
 decref Payload #3 rc=0 [ownership-edge-cases.main]
   free Payload #3
+slab_free size=48 class=5
+slab_alloc size=40 class=5
+raw_alloc size=40
+raw_free
+slab_free size=48 class=5
 ```
 
 <!-- test: rc-field-overwrite-managed-list -->
@@ -491,19 +599,25 @@ end 'main'
 30
 ```
 ```stderr
+slab_alloc size=40 class=5
 alloc Val #1 rc=0 size=8 [ownership-edge-cases.main]
+slab_alloc size=40 class=5
 alloc Holder #2 rc=0 size=8 [ownership-edge-cases.main]
 incref Val #1 rc=1 [ownership-edge-cases.main]
 incref Holder #2 rc=1 [ownership-edge-cases.main]
+slab_alloc size=40 class=5
 alloc Val #3 rc=0 size=8 [ownership-edge-cases.main]
 incref Val #3 rc=1 [ownership-edge-cases.main]
 decref Val #1 rc=0 [Holder.set]
   free Val #1
+slab_free size=48 class=5
 incref Val #3 rc=2 [Holder.set]
+slab_alloc size=40 class=5
 alloc Val #4 rc=0 size=8 [ownership-edge-cases.main]
 incref Val #4 rc=1 [ownership-edge-cases.main]
 decref Val #3 rc=1 [Holder.set]
 incref Val #4 rc=2 [Holder.set]
+slab_alloc size=40 class=5
 alloc Val #5 rc=0 size=8 [ownership-edge-cases.main]
 incref Val #5 rc=1 [ownership-edge-cases.main]
 decref Val #4 rc=1 [Holder.set]
@@ -511,12 +625,20 @@ incref Val #5 rc=2 [Holder.set]
 decref Holder #2 rc=0 [ownership-edge-cases.main]
 decref Val #5 rc=1 [~Holder]
   free Holder #2
+slab_free size=48 class=5
 decref Val #3 rc=0 [ownership-edge-cases.main]
   free Val #3
+slab_free size=48 class=5
 decref Val #4 rc=0 [ownership-edge-cases.main]
   free Val #4
+slab_free size=48 class=5
 decref Val #5 rc=0 [ownership-edge-cases.main]
   free Val #5
+slab_free size=48 class=5
+slab_alloc size=40 class=5
+raw_alloc size=40
+raw_free
+slab_free size=48 class=5
 ```
 
 <!-- test: rc-container-push-incref -->
@@ -545,12 +667,17 @@ end 'main'
 10
 ```
 ```stderr
+slab_alloc size=64 class=6
 alloc __ManagedMemory_Node #1 rc=0 size=32 [ownership-edge-cases.main]
+slab_alloc size=48 class=5
 alloc NodeArray #2 rc=0 size=16 [ownership-edge-cases.main]
 incref __ManagedMemory_Node #1 rc=1 [ownership-edge-cases.main]
 incref NodeArray #2 rc=1 [ownership-edge-cases.main]
+slab_alloc size=40 class=5
 alloc Node #3 rc=0 size=8 [ownership-edge-cases.main]
 incref Node #3 rc=1 [ownership-edge-cases.main]
+slab_alloc size=32 class=4
+raw_alloc size=32
 realloc __ManagedMemory_Node #1 rc=1 size=32
 incref Node #3 rc=2 [NodeArray.push]
 decref Node #3 rc=1 [ownership-edge-cases.main]
@@ -562,8 +689,17 @@ decref NodeArray #2 rc=0 [ownership-edge-cases.main]
 decref __ManagedMemory_Node #1 rc=0 [~NodeArray]
 decref Node #3 rc=0 [~ManagedElements]
   free Node #3
+slab_free size=48 class=5
+raw_free
+slab_free size=32 class=4
   free __ManagedMemory_Node #1
+slab_free size=80 class=6
   free NodeArray #2
+slab_free size=48 class=5
+slab_alloc size=40 class=5
+raw_alloc size=40
+raw_free
+slab_free size=48 class=5
 ```
 
 <!-- test: rc-container-pop-decrefs -->
@@ -592,14 +728,20 @@ end 'main'
 1
 ```
 ```stderr
+slab_alloc size=64 class=6
 alloc __ManagedMemory_Node #1 rc=0 size=32 [ownership-edge-cases.main]
+slab_alloc size=48 class=5
 alloc NodeArray #2 rc=0 size=16 [ownership-edge-cases.main]
 incref __ManagedMemory_Node #1 rc=1 [ownership-edge-cases.main]
 incref NodeArray #2 rc=1 [ownership-edge-cases.main]
+slab_alloc size=40 class=5
 alloc Node #3 rc=0 size=8 [ownership-edge-cases.main]
 incref Node #3 rc=1 [ownership-edge-cases.main]
+slab_alloc size=32 class=4
+raw_alloc size=32
 realloc __ManagedMemory_Node #1 rc=1 size=32
 incref Node #3 rc=2 [NodeArray.push]
+slab_alloc size=40 class=5
 alloc Node #4 rc=0 size=8 [ownership-edge-cases.main]
 incref Node #4 rc=1 [ownership-edge-cases.main]
 incref Node #4 rc=2 [NodeArray.push]
@@ -612,12 +754,22 @@ decref Node #4 rc=1 [ownership-edge-cases.main]
 decref NodeArray #2 rc=0 [ownership-edge-cases.main]
 decref __ManagedMemory_Node #1 rc=0 [~NodeArray]
 decref Node #3 rc=1 [~ManagedElements]
+raw_free
+slab_free size=32 class=4
   free __ManagedMemory_Node #1
+slab_free size=80 class=6
   free NodeArray #2
+slab_free size=48 class=5
 decref Node #3 rc=0 [ownership-edge-cases.main]
   free Node #3
+slab_free size=48 class=5
 decref Node #4 rc=0 [ownership-edge-cases.main]
   free Node #4
+slab_free size=48 class=5
+slab_alloc size=40 class=5
+raw_alloc size=40
+raw_free
+slab_free size=48 class=5
 ```
 
 <!-- test: rc-container-overwrite-decrefs-old -->
@@ -644,14 +796,20 @@ end 'main'
 200
 ```
 ```stderr
+slab_alloc size=64 class=6
 alloc __ManagedMemory_Item #1 rc=0 size=32 [ownership-edge-cases.main]
+slab_alloc size=48 class=5
 alloc ItemArray #2 rc=0 size=16 [ownership-edge-cases.main]
 incref __ManagedMemory_Item #1 rc=1 [ownership-edge-cases.main]
 incref ItemArray #2 rc=1 [ownership-edge-cases.main]
+slab_alloc size=40 class=5
 alloc Item #3 rc=0 size=8 [ownership-edge-cases.main]
 incref Item #3 rc=1 [ownership-edge-cases.main]
+slab_alloc size=32 class=4
+raw_alloc size=32
 realloc __ManagedMemory_Item #1 rc=1 size=32
 incref Item #3 rc=2 [ItemArray.push]
+slab_alloc size=40 class=5
 alloc Item #4 rc=0 size=8 [ownership-edge-cases.main]
 incref Item #4 rc=1 [ownership-edge-cases.main]
 decref Item #3 rc=1 [ItemArray.set]
@@ -663,12 +821,22 @@ decref Item #4 rc=2 [ownership-edge-cases.main]
 decref ItemArray #2 rc=0 [ownership-edge-cases.main]
 decref __ManagedMemory_Item #1 rc=0 [~ItemArray]
 decref Item #4 rc=1 [~ManagedElements]
+raw_free
+slab_free size=32 class=4
   free __ManagedMemory_Item #1
+slab_free size=80 class=6
   free ItemArray #2
+slab_free size=48 class=5
 decref Item #3 rc=0 [ownership-edge-cases.main]
   free Item #3
+slab_free size=48 class=5
 decref Item #4 rc=0 [ownership-edge-cases.main]
   free Item #4
+slab_free size=48 class=5
+slab_alloc size=40 class=5
+raw_alloc size=40
+raw_free
+slab_free size=48 class=5
 ```
 
 <!-- test: rc-container-clear-decrefs-all -->
@@ -696,17 +864,24 @@ end 'main'
 0
 ```
 ```stderr
+slab_alloc size=64 class=6
 alloc __ManagedMemory_Item #1 rc=0 size=32 [ownership-edge-cases.main]
+slab_alloc size=48 class=5
 alloc ItemArray #2 rc=0 size=16 [ownership-edge-cases.main]
 incref __ManagedMemory_Item #1 rc=1 [ownership-edge-cases.main]
 incref ItemArray #2 rc=1 [ownership-edge-cases.main]
+slab_alloc size=40 class=5
 alloc Item #3 rc=0 size=8 [ownership-edge-cases.main]
 incref Item #3 rc=1 [ownership-edge-cases.main]
+slab_alloc size=32 class=4
+raw_alloc size=32
 realloc __ManagedMemory_Item #1 rc=1 size=32
 incref Item #3 rc=2 [ItemArray.push]
+slab_alloc size=40 class=5
 alloc Item #4 rc=0 size=8 [ownership-edge-cases.main]
 incref Item #4 rc=1 [ownership-edge-cases.main]
 incref Item #4 rc=2 [ItemArray.push]
+slab_alloc size=40 class=5
 alloc Item #5 rc=0 size=8 [ownership-edge-cases.main]
 incref Item #5 rc=1 [ownership-edge-cases.main]
 incref Item #5 rc=2 [ItemArray.push]
@@ -715,14 +890,25 @@ decref Item #4 rc=1 [~ManagedElements]
 decref Item #5 rc=1 [~ManagedElements]
 decref ItemArray #2 rc=0 [ownership-edge-cases.main]
 decref __ManagedMemory_Item #1 rc=0 [~ItemArray]
+raw_free
+slab_free size=32 class=4
   free __ManagedMemory_Item #1
+slab_free size=80 class=6
   free ItemArray #2
+slab_free size=48 class=5
 decref Item #3 rc=0 [ownership-edge-cases.main]
   free Item #3
+slab_free size=48 class=5
 decref Item #4 rc=0 [ownership-edge-cases.main]
   free Item #4
+slab_free size=48 class=5
 decref Item #5 rc=0 [ownership-edge-cases.main]
   free Item #5
+slab_free size=48 class=5
+slab_alloc size=40 class=5
+raw_alloc size=40
+raw_free
+slab_free size=48 class=5
 ```
 
 <!-- test: rc-container-scope-exit-decrefs-elements -->
@@ -754,17 +940,24 @@ end 'main'
 3
 ```
 ```stderr
+slab_alloc size=64 class=6
 alloc __ManagedMemory_Item #1 rc=0 size=32 [ownership-edge-cases.fill]
+slab_alloc size=48 class=5
 alloc ItemArray #2 rc=0 size=16 [ownership-edge-cases.fill]
 incref __ManagedMemory_Item #1 rc=1 [ownership-edge-cases.fill]
 incref ItemArray #2 rc=1 [ownership-edge-cases.fill]
+slab_alloc size=40 class=5
 alloc Item #3 rc=0 size=8 [ownership-edge-cases.fill]
 incref Item #3 rc=1 [ownership-edge-cases.fill]
+slab_alloc size=32 class=4
+raw_alloc size=32
 realloc __ManagedMemory_Item #1 rc=1 size=32
 incref Item #3 rc=2 [ItemArray.push]
+slab_alloc size=40 class=5
 alloc Item #4 rc=0 size=8 [ownership-edge-cases.fill]
 incref Item #4 rc=1 [ownership-edge-cases.fill]
 incref Item #4 rc=2 [ItemArray.push]
+slab_alloc size=40 class=5
 alloc Item #5 rc=0 size=8 [ownership-edge-cases.fill]
 incref Item #5 rc=1 [ownership-edge-cases.fill]
 incref Item #5 rc=2 [ItemArray.push]
@@ -773,14 +966,25 @@ decref __ManagedMemory_Item #1 rc=0 [~ItemArray]
 decref Item #3 rc=1 [~ManagedElements]
 decref Item #4 rc=1 [~ManagedElements]
 decref Item #5 rc=1 [~ManagedElements]
+raw_free
+slab_free size=32 class=4
   free __ManagedMemory_Item #1
+slab_free size=80 class=6
   free ItemArray #2
+slab_free size=48 class=5
 decref Item #3 rc=0 [ownership-edge-cases.fill]
   free Item #3
+slab_free size=48 class=5
 decref Item #4 rc=0 [ownership-edge-cases.fill]
   free Item #4
+slab_free size=48 class=5
 decref Item #5 rc=0 [ownership-edge-cases.fill]
   free Item #5
+slab_free size=48 class=5
+slab_alloc size=40 class=5
+raw_alloc size=40
+raw_free
+slab_free size=48 class=5
 ```
 
 <!-- test: rc-insert-then-remove-no-leak -->
@@ -816,29 +1020,42 @@ end 'main'
 10
 ```
 ```stderr
+slab_alloc size=64 class=6
 alloc __ManagedMemory_Entry #1 rc=0 size=32 [ownership-edge-cases.main]
+slab_alloc size=48 class=5
 alloc EntryArray #2 rc=0 size=16 [ownership-edge-cases.main]
 incref __ManagedMemory_Entry #1 rc=1 [ownership-edge-cases.main]
 incref EntryArray #2 rc=1 [ownership-edge-cases.main]
+slab_alloc size=40 class=5
 alloc Entry #3 rc=0 size=8 [ownership-edge-cases.main]
 incref Entry #3 rc=1 [ownership-edge-cases.main]
+slab_alloc size=32 class=4
+raw_alloc size=32
 realloc __ManagedMemory_Entry #1 rc=1 size=32
 incref Entry #3 rc=2 [EntryArray.push]
 decref Entry #3 rc=1 [ownership-edge-cases.main]
+slab_alloc size=40 class=5
 alloc Entry #4 rc=0 size=8 [ownership-edge-cases.main]
 incref Entry #4 rc=1 [ownership-edge-cases.main]
 incref Entry #4 rc=2 [EntryArray.push]
 decref Entry #4 rc=1 [ownership-edge-cases.main]
+slab_alloc size=40 class=5
 alloc Entry #5 rc=0 size=8 [ownership-edge-cases.main]
 incref Entry #5 rc=1 [ownership-edge-cases.main]
 incref Entry #5 rc=2 [EntryArray.push]
 decref Entry #5 rc=1 [ownership-edge-cases.main]
+slab_alloc size=40 class=5
 alloc Entry #6 rc=0 size=8 [ownership-edge-cases.main]
 incref Entry #6 rc=1 [ownership-edge-cases.main]
 incref Entry #6 rc=2 [EntryArray.push]
 decref Entry #6 rc=1 [ownership-edge-cases.main]
+slab_alloc size=40 class=5
 alloc Entry #7 rc=0 size=8 [ownership-edge-cases.main]
 incref Entry #7 rc=1 [ownership-edge-cases.main]
+slab_alloc size=64 class=6
+raw_alloc size=64
+raw_free
+slab_free size=32 class=4
 realloc __ManagedMemory_Entry #1 rc=1 size=64
 incref Entry #7 rc=2 [EntryArray.push]
 decref Entry #7 rc=1 [ownership-edge-cases.main]
@@ -847,30 +1064,43 @@ transfer Entry #3 rc=2 [EntryArray.remove]
 decref Entry #3 rc=1 [EntryArray.remove]
 decref Entry #3 rc=0 [ownership-edge-cases.main]
   free Entry #3
+slab_free size=48 class=5
 incref Entry #4 rc=2 [EntryArray.remove]
 transfer Entry #4 rc=2 [EntryArray.remove]
 decref Entry #4 rc=1 [EntryArray.remove]
 decref Entry #4 rc=0 [ownership-edge-cases.main]
   free Entry #4
+slab_free size=48 class=5
 incref Entry #5 rc=2 [EntryArray.remove]
 transfer Entry #5 rc=2 [EntryArray.remove]
 decref Entry #5 rc=1 [EntryArray.remove]
 decref Entry #5 rc=0 [ownership-edge-cases.main]
   free Entry #5
+slab_free size=48 class=5
 incref Entry #6 rc=2 [EntryArray.remove]
 transfer Entry #6 rc=2 [EntryArray.remove]
 decref Entry #6 rc=1 [EntryArray.remove]
 decref Entry #6 rc=0 [ownership-edge-cases.main]
   free Entry #6
+slab_free size=48 class=5
 incref Entry #7 rc=2 [EntryArray.remove]
 transfer Entry #7 rc=2 [EntryArray.remove]
 decref Entry #7 rc=1 [EntryArray.remove]
 decref Entry #7 rc=0 [ownership-edge-cases.main]
   free Entry #7
+slab_free size=48 class=5
 decref EntryArray #2 rc=0 [ownership-edge-cases.main]
 decref __ManagedMemory_Entry #1 rc=0 [~EntryArray]
+raw_free
+slab_free size=80 class=6
   free __ManagedMemory_Entry #1
+slab_free size=80 class=6
   free EntryArray #2
+slab_free size=48 class=5
+slab_alloc size=40 class=5
+raw_alloc size=40
+raw_free
+slab_free size=48 class=5
 ```
 
 <!-- test: rc-insert-in-middle-no-leak -->
@@ -900,17 +1130,24 @@ end 'main'
 60
 ```
 ```stderr
+slab_alloc size=64 class=6
 alloc __ManagedMemory_Val #1 rc=0 size=32 [ownership-edge-cases.main]
+slab_alloc size=48 class=5
 alloc ValArray #2 rc=0 size=16 [ownership-edge-cases.main]
 incref __ManagedMemory_Val #1 rc=1 [ownership-edge-cases.main]
 incref ValArray #2 rc=1 [ownership-edge-cases.main]
+slab_alloc size=40 class=5
 alloc Val #3 rc=0 size=8 [ownership-edge-cases.main]
 incref Val #3 rc=1 [ownership-edge-cases.main]
+slab_alloc size=32 class=4
+raw_alloc size=32
 realloc __ManagedMemory_Val #1 rc=1 size=32
 incref Val #3 rc=2 [ValArray.push]
+slab_alloc size=40 class=5
 alloc Val #4 rc=0 size=8 [ownership-edge-cases.main]
 incref Val #4 rc=1 [ownership-edge-cases.main]
 incref Val #4 rc=2 [ValArray.push]
+slab_alloc size=40 class=5
 alloc Val #5 rc=0 size=8 [ownership-edge-cases.main]
 incref Val #5 rc=1 [ownership-edge-cases.main]
 incref Val #5 rc=2 [ValArray.insert]
@@ -931,14 +1168,25 @@ decref __ManagedMemory_Val #1 rc=0 [~ValArray]
 decref Val #3 rc=1 [~ManagedElements]
 decref Val #5 rc=1 [~ManagedElements]
 decref Val #4 rc=1 [~ManagedElements]
+raw_free
+slab_free size=32 class=4
   free __ManagedMemory_Val #1
+slab_free size=80 class=6
   free ValArray #2
+slab_free size=48 class=5
 decref Val #3 rc=0 [ownership-edge-cases.main]
   free Val #3
+slab_free size=48 class=5
 decref Val #4 rc=0 [ownership-edge-cases.main]
   free Val #4
+slab_free size=48 class=5
 decref Val #5 rc=0 [ownership-edge-cases.main]
   free Val #5
+slab_free size=48 class=5
+slab_alloc size=40 class=5
+raw_alloc size=40
+raw_free
+slab_free size=48 class=5
 ```
 
 <!-- test: rc-remove-middle-no-double-free -->
@@ -968,17 +1216,24 @@ end 'main'
 4
 ```
 ```stderr
+slab_alloc size=64 class=6
 alloc __ManagedMemory_Val #1 rc=0 size=32 [ownership-edge-cases.main]
+slab_alloc size=48 class=5
 alloc ValArray #2 rc=0 size=16 [ownership-edge-cases.main]
 incref __ManagedMemory_Val #1 rc=1 [ownership-edge-cases.main]
 incref ValArray #2 rc=1 [ownership-edge-cases.main]
+slab_alloc size=40 class=5
 alloc Val #3 rc=0 size=8 [ownership-edge-cases.main]
 incref Val #3 rc=1 [ownership-edge-cases.main]
+slab_alloc size=32 class=4
+raw_alloc size=32
 realloc __ManagedMemory_Val #1 rc=1 size=32
 incref Val #3 rc=2 [ValArray.push]
+slab_alloc size=40 class=5
 alloc Val #4 rc=0 size=8 [ownership-edge-cases.main]
 incref Val #4 rc=1 [ownership-edge-cases.main]
 incref Val #4 rc=2 [ValArray.push]
+slab_alloc size=40 class=5
 alloc Val #5 rc=0 size=8 [ownership-edge-cases.main]
 incref Val #5 rc=1 [ownership-edge-cases.main]
 incref Val #5 rc=2 [ValArray.push]
@@ -992,14 +1247,25 @@ decref ValArray #2 rc=0 [ownership-edge-cases.main]
 decref __ManagedMemory_Val #1 rc=0 [~ValArray]
 decref Val #3 rc=1 [~ManagedElements]
 decref Val #5 rc=1 [~ManagedElements]
+raw_free
+slab_free size=32 class=4
   free __ManagedMemory_Val #1
+slab_free size=80 class=6
   free ValArray #2
+slab_free size=48 class=5
 decref Val #3 rc=0 [ownership-edge-cases.main]
   free Val #3
+slab_free size=48 class=5
 decref Val #4 rc=0 [ownership-edge-cases.main]
   free Val #4
+slab_free size=48 class=5
 decref Val #5 rc=0 [ownership-edge-cases.main]
   free Val #5
+slab_free size=48 class=5
+slab_alloc size=40 class=5
+raw_alloc size=40
+raw_free
+slab_free size=48 class=5
 ```
 
 <!-- test: rc-nested-container-freed -->
@@ -1029,17 +1295,25 @@ end 'main'
 2
 ```
 ```stderr
+slab_alloc size=64 class=6
 alloc __ManagedMemory_Wrapper #1 rc=0 size=32 [ownership-edge-cases.main]
+slab_alloc size=48 class=5
 alloc WrapperArray #2 rc=0 size=16 [ownership-edge-cases.main]
 incref __ManagedMemory_Wrapper #1 rc=1 [ownership-edge-cases.main]
 incref WrapperArray #2 rc=1 [ownership-edge-cases.main]
+slab_alloc size=40 class=5
 alloc Inner #3 rc=0 size=8 [ownership-edge-cases.main]
+slab_alloc size=40 class=5
 alloc Wrapper #4 rc=0 size=8 [ownership-edge-cases.main]
 incref Inner #3 rc=1 [ownership-edge-cases.main]
 incref Wrapper #4 rc=1 [ownership-edge-cases.main]
+slab_alloc size=32 class=4
+raw_alloc size=32
 realloc __ManagedMemory_Wrapper #1 rc=1 size=32
 incref Wrapper #4 rc=2 [WrapperArray.push]
+slab_alloc size=40 class=5
 alloc Inner #5 rc=0 size=8 [ownership-edge-cases.main]
+slab_alloc size=40 class=5
 alloc Wrapper #6 rc=0 size=8 [ownership-edge-cases.main]
 incref Inner #5 rc=1 [ownership-edge-cases.main]
 incref Wrapper #6 rc=1 [ownership-edge-cases.main]
@@ -1048,16 +1322,28 @@ decref WrapperArray #2 rc=0 [ownership-edge-cases.main]
 decref __ManagedMemory_Wrapper #1 rc=0 [~WrapperArray]
 decref Wrapper #4 rc=1 [~ManagedElements]
 decref Wrapper #6 rc=1 [~ManagedElements]
+raw_free
+slab_free size=32 class=4
   free __ManagedMemory_Wrapper #1
+slab_free size=80 class=6
   free WrapperArray #2
+slab_free size=48 class=5
 decref Wrapper #4 rc=0 [ownership-edge-cases.main]
 decref Inner #3 rc=0 [~Wrapper]
   free Inner #3
+slab_free size=48 class=5
   free Wrapper #4
+slab_free size=48 class=5
 decref Wrapper #6 rc=0 [ownership-edge-cases.main]
 decref Inner #5 rc=0 [~Wrapper]
   free Inner #5
+slab_free size=48 class=5
   free Wrapper #6
+slab_free size=48 class=5
+slab_alloc size=40 class=5
+raw_alloc size=40
+raw_free
+slab_free size=48 class=5
 ```
 
 <!-- test: rc-return-from-inner-block-cleanup -->
@@ -1087,14 +1373,22 @@ end 'main'
 3
 ```
 ```stderr
+slab_alloc size=40 class=5
 alloc Step #1 rc=0 size=8 [ownership-edge-cases.compute]
 incref Step #1 rc=1 [ownership-edge-cases.compute]
+slab_alloc size=40 class=5
 alloc Step #2 rc=0 size=8 [ownership-edge-cases.compute]
 incref Step #2 rc=1 [ownership-edge-cases.compute]
 decref Step #2 rc=0 [ownership-edge-cases.compute]
   free Step #2
+slab_free size=48 class=5
 decref Step #1 rc=0 [ownership-edge-cases.compute]
   free Step #1
+slab_free size=48 class=5
+slab_alloc size=40 class=5
+raw_alloc size=40
+raw_free
+slab_free size=48 class=5
 ```
 
 <!-- test: rc-return-container-element -->
@@ -1125,12 +1419,17 @@ end 'main'
 77
 ```
 ```stderr
+slab_alloc size=64 class=6
 alloc __ManagedMemory_Item #1 rc=0 size=32 [ownership-edge-cases.main]
+slab_alloc size=48 class=5
 alloc ItemArray #2 rc=0 size=16 [ownership-edge-cases.main]
 incref __ManagedMemory_Item #1 rc=1 [ownership-edge-cases.main]
 incref ItemArray #2 rc=1 [ownership-edge-cases.main]
+slab_alloc size=40 class=5
 alloc Item #3 rc=0 size=8 [ownership-edge-cases.main]
 incref Item #3 rc=1 [ownership-edge-cases.main]
+slab_alloc size=32 class=4
+raw_alloc size=32
 realloc __ManagedMemory_Item #1 rc=1 size=32
 incref Item #3 rc=2 [ItemArray.push]
 incref Item #3 rc=3 [ItemArray.get]
@@ -1141,10 +1440,19 @@ decref Item #3 rc=2 [ownership-edge-cases.main]
 decref ItemArray #2 rc=0 [ownership-edge-cases.main]
 decref __ManagedMemory_Item #1 rc=0 [~ItemArray]
 decref Item #3 rc=1 [~ManagedElements]
+raw_free
+slab_free size=32 class=4
   free __ManagedMemory_Item #1
+slab_free size=80 class=6
   free ItemArray #2
+slab_free size=48 class=5
 decref Item #3 rc=0 [ownership-edge-cases.main]
   free Item #3
+slab_free size=48 class=5
+slab_alloc size=40 class=5
+raw_alloc size=40
+raw_free
+slab_free size=48 class=5
 ```
 
 <!-- test: rc-global-struct-outlives-local -->
@@ -1172,20 +1480,28 @@ end 'main'
 42
 ```
 ```stderr
+slab_alloc size=40 class=5
 alloc Cfg #1 rc=0 size=8 [ownership-edge-cases.__module_init]
 incref Cfg #1 rc=1 [ownership-edge-cases.__module_init]
 incref Cfg #1 rc=2 [ownership-edge-cases.__module_init]
 decref Cfg #1 rc=1 [ownership-edge-cases.__module_init]
+slab_alloc size=40 class=5
 alloc Cfg #2 rc=0 size=8 [ownership-edge-cases.setup]
 incref Cfg #2 rc=1 [ownership-edge-cases.setup]
 decref Cfg #1 rc=0 [ownership-edge-cases.setup]
   free Cfg #1
+slab_free size=48 class=5
 incref Cfg #2 rc=2 [ownership-edge-cases.setup]
 decref Cfg #2 rc=1 [ownership-edge-cases.setup]
 incref Cfg #2 rc=2 [ownership-edge-cases.main]
 decref Cfg #2 rc=1 [ownership-edge-cases.main]
+slab_alloc size=40 class=5
+raw_alloc size=40
+raw_free
+slab_free size=48 class=5
 decref Cfg #2 rc=0 [__maxon_global_cleanup]
   free Cfg #2
+slab_free size=48 class=5
 ```
 
 <!-- test: rc-global-reassign-decrefs-old -->
@@ -1215,32 +1531,44 @@ end 'main'
 30
 ```
 ```stderr
+slab_alloc size=40 class=5
 alloc State #1 rc=0 size=8 [ownership-edge-cases.__module_init]
 incref State #1 rc=1 [ownership-edge-cases.__module_init]
 incref State #1 rc=2 [ownership-edge-cases.__module_init]
 decref State #1 rc=1 [ownership-edge-cases.__module_init]
+slab_alloc size=40 class=5
 alloc State #2 rc=0 size=8 [ownership-edge-cases.step]
 incref State #2 rc=1 [ownership-edge-cases.step]
 decref State #1 rc=0 [ownership-edge-cases.step]
   free State #1
+slab_free size=48 class=5
 incref State #2 rc=2 [ownership-edge-cases.step]
 decref State #2 rc=1 [ownership-edge-cases.step]
+slab_alloc size=40 class=5
 alloc State #3 rc=0 size=8 [ownership-edge-cases.step]
 incref State #3 rc=1 [ownership-edge-cases.step]
 decref State #2 rc=0 [ownership-edge-cases.step]
   free State #2
+slab_free size=48 class=5
 incref State #3 rc=2 [ownership-edge-cases.step]
 decref State #3 rc=1 [ownership-edge-cases.step]
+slab_alloc size=40 class=5
 alloc State #4 rc=0 size=8 [ownership-edge-cases.step]
 incref State #4 rc=1 [ownership-edge-cases.step]
 decref State #3 rc=0 [ownership-edge-cases.step]
   free State #3
+slab_free size=48 class=5
 incref State #4 rc=2 [ownership-edge-cases.step]
 decref State #4 rc=1 [ownership-edge-cases.step]
 incref State #4 rc=2 [ownership-edge-cases.main]
 decref State #4 rc=1 [ownership-edge-cases.main]
+slab_alloc size=40 class=5
+raw_alloc size=40
+raw_free
+slab_free size=48 class=5
 decref State #4 rc=0 [__maxon_global_cleanup]
   free State #4
+slab_free size=48 class=5
 ```
 
 <!-- test: rc-union-no-struct-payload-freed -->
@@ -1273,6 +1601,10 @@ end 'main'
 2
 ```
 ```stderr
+slab_alloc size=40 class=5
+raw_alloc size=40
+raw_free
+slab_free size=48 class=5
 ```
 
 <!-- test: rc-union-struct-payload-freed -->
@@ -1306,8 +1638,10 @@ end 'main'
 5
 ```
 ```stderr
+slab_alloc size=40 class=5
 alloc Body #1 rc=0 size=8 [ownership-edge-cases.main]
 incref Body #1 rc=1 [ownership-edge-cases.main]
+slab_alloc size=48 class=5
 alloc Shape #2 rc=0 size=16 [ownership-edge-cases.main]
 incref Body #1 rc=2 [ownership-edge-cases.main]
 incref Shape #2 rc=1 [ownership-edge-cases.main]
@@ -1318,8 +1652,14 @@ decref Body #1 rc=2 [ownership-edge-cases.massOf]
 decref Shape #2 rc=0 [ownership-edge-cases.main]
 decref Body #1 rc=1 [~Shape]
   free Shape #2
+slab_free size=48 class=5
 decref Body #1 rc=0 [ownership-edge-cases.main]
   free Body #1
+slab_free size=48 class=5
+slab_alloc size=40 class=5
+raw_alloc size=40
+raw_free
+slab_free size=48 class=5
 ```
 
 <!-- test: rc-closure-env-freed -->
@@ -1342,10 +1682,16 @@ end 'main'
 15
 ```
 ```stderr
+slab_alloc size=40 class=5
 alloc ClosureEnv #1 rc=0 size=8 [ownership-edge-cases.main]
 incref ClosureEnv #1 rc=1 [ownership-edge-cases.main]
 decref ClosureEnv #1 rc=0 [ownership-edge-cases.main]
   free ClosureEnv #1
+slab_free size=48 class=5
+slab_alloc size=40 class=5
+raw_alloc size=40
+raw_free
+slab_free size=48 class=5
 ```
 
 <!-- test: rc-closure-captures-struct -->
@@ -1372,14 +1718,22 @@ end 'main'
 3
 ```
 ```stderr
+slab_alloc size=40 class=5
 alloc Config #1 rc=0 size=8 [ownership-edge-cases.main]
 incref Config #1 rc=1 [ownership-edge-cases.main]
+slab_alloc size=40 class=5
 alloc ClosureEnv #2 rc=0 size=8 [ownership-edge-cases.main]
 incref ClosureEnv #2 rc=1 [ownership-edge-cases.main]
 decref Config #1 rc=0 [ownership-edge-cases.main]
   free Config #1
+slab_free size=48 class=5
 decref ClosureEnv #2 rc=0 [ownership-edge-cases.main]
   free ClosureEnv #2
+slab_free size=48 class=5
+slab_alloc size=40 class=5
+raw_alloc size=40
+raw_free
+slab_free size=48 class=5
 ```
 
 <!-- test: rc-error-path-cleanup -->
@@ -1404,20 +1758,30 @@ end 'main'
 99
 ```
 ```stderr
+slab_alloc size=64 class=6
 alloc __ManagedMemory_Item #1 rc=0 size=32 [ownership-edge-cases.main]
+slab_alloc size=48 class=5
 alloc ItemArray #2 rc=0 size=16 [ownership-edge-cases.main]
 incref __ManagedMemory_Item #1 rc=1 [ownership-edge-cases.main]
 incref ItemArray #2 rc=1 [ownership-edge-cases.main]
+slab_alloc size=40 class=5
 alloc Item #3 rc=0 size=8 [ownership-edge-cases.main]
 incref Item #3 rc=1 [ownership-edge-cases.main]
 incref Item #3 rc=2 [ownership-edge-cases.main]
 decref Item #3 rc=1 [ownership-edge-cases.main]
 decref Item #3 rc=0 [ownership-edge-cases.main]
   free Item #3
+slab_free size=48 class=5
 decref ItemArray #2 rc=0 [ownership-edge-cases.main]
 decref __ManagedMemory_Item #1 rc=0 [~ItemArray]
   free __ManagedMemory_Item #1
+slab_free size=80 class=6
   free ItemArray #2
+slab_free size=48 class=5
+slab_alloc size=40 class=5
+raw_alloc size=40
+raw_free
+slab_free size=48 class=5
 ```
 
 <!-- test: rc-managed-list-insert-incref -->
@@ -1443,10 +1807,13 @@ end 'main'
 7
 ```
 ```stderr
+slab_alloc size=64 class=6
 alloc TokenManagedList #1 rc=0 size=32 [ownership-edge-cases.main]
 incref TokenManagedList #1 rc=1 [ownership-edge-cases.main]
+slab_alloc size=40 class=5
 alloc Token #2 rc=0 size=8 [ownership-edge-cases.main]
 incref Token #2 rc=1 [ownership-edge-cases.main]
+slab_alloc size=64 class=6
 alloc __ManagedListNode #3 rc=0 size=32 [ownership-edge-cases.main]
 incref Token #2 rc=2 [ownership-edge-cases.main]
 incref __ManagedListNode #3 rc=1 [managed_list_insert]
@@ -1456,9 +1823,16 @@ decref Token #2 rc=1 [ownership-edge-cases.main]
 decref TokenManagedList #1 rc=0 [ownership-edge-cases.main]
 decref Token #2 rc=0 [managed_list_clear]
   free Token #2
+slab_free size=48 class=5
 decref __ManagedListNode #3 rc=0 [managed_list_clear]
   free __ManagedListNode #3
+slab_free size=80 class=6
   free TokenManagedList #1
+slab_free size=80 class=6
+slab_alloc size=40 class=5
+raw_alloc size=40
+raw_free
+slab_free size=48 class=5
 ```
 
 <!-- test: rc-managed-list-remove-decrefs -->
@@ -1484,10 +1858,13 @@ end 'main'
 9
 ```
 ```stderr
+slab_alloc size=64 class=6
 alloc TokenManagedList #1 rc=0 size=32 [ownership-edge-cases.main]
 incref TokenManagedList #1 rc=1 [ownership-edge-cases.main]
+slab_alloc size=40 class=5
 alloc Token #2 rc=0 size=8 [ownership-edge-cases.main]
 incref Token #2 rc=1 [ownership-edge-cases.main]
+slab_alloc size=64 class=6
 alloc __ManagedListNode #3 rc=0 size=32 [ownership-edge-cases.main]
 incref Token #2 rc=2 [ownership-edge-cases.main]
 incref __ManagedListNode #3 rc=1 [managed_list_insert]
@@ -1496,12 +1873,19 @@ decref __ManagedListNode #3 rc=1 [ownership-edge-cases.main]
 decref Token #2 rc=1 [ownership-edge-cases.main]
 decref __ManagedListNode #3 rc=0 [ownership-edge-cases.main]
   free __ManagedListNode #3
+slab_free size=80 class=6
 incref Token #2 rc=2 [ownership-edge-cases.main]
 decref Token #2 rc=1 [ownership-edge-cases.main]
 decref TokenManagedList #1 rc=0 [ownership-edge-cases.main]
   free TokenManagedList #1
+slab_free size=80 class=6
 decref Token #2 rc=0 [ownership-edge-cases.main]
   free Token #2
+slab_free size=48 class=5
+slab_alloc size=40 class=5
+raw_alloc size=40
+raw_free
+slab_free size=48 class=5
 ```
 
 <!-- test: rc-managed-list-clear-decrefs-all -->
@@ -1529,40 +1913,58 @@ end 'main'
 0
 ```
 ```stderr
+slab_alloc size=64 class=6
 alloc TokenManagedList #1 rc=0 size=32 [ownership-edge-cases.main]
 incref TokenManagedList #1 rc=1 [ownership-edge-cases.main]
+slab_alloc size=40 class=5
 alloc Token #2 rc=0 size=8 [ownership-edge-cases.main]
 incref Token #2 rc=1 [ownership-edge-cases.main]
+slab_alloc size=64 class=6
 alloc __ManagedListNode #3 rc=0 size=32 [ownership-edge-cases.main]
 incref Token #2 rc=2 [ownership-edge-cases.main]
 incref __ManagedListNode #3 rc=1 [managed_list_insert]
+slab_alloc size=40 class=5
 alloc Token #4 rc=0 size=8 [ownership-edge-cases.main]
 incref Token #4 rc=1 [ownership-edge-cases.main]
+slab_alloc size=64 class=6
 alloc __ManagedListNode #5 rc=0 size=32 [ownership-edge-cases.main]
 incref Token #4 rc=2 [ownership-edge-cases.main]
 incref __ManagedListNode #5 rc=1 [managed_list_insert]
+slab_alloc size=40 class=5
 alloc Token #6 rc=0 size=8 [ownership-edge-cases.main]
 incref Token #6 rc=1 [ownership-edge-cases.main]
+slab_alloc size=64 class=6
 alloc __ManagedListNode #7 rc=0 size=32 [ownership-edge-cases.main]
 incref Token #6 rc=2 [ownership-edge-cases.main]
 incref __ManagedListNode #7 rc=1 [managed_list_insert]
 decref Token #2 rc=1 [managed_list_clear]
 decref __ManagedListNode #3 rc=0 [managed_list_clear]
   free __ManagedListNode #3
+slab_free size=80 class=6
 decref Token #4 rc=1 [managed_list_clear]
 decref __ManagedListNode #5 rc=0 [managed_list_clear]
   free __ManagedListNode #5
+slab_free size=80 class=6
 decref Token #6 rc=1 [managed_list_clear]
 decref __ManagedListNode #7 rc=0 [managed_list_clear]
   free __ManagedListNode #7
+slab_free size=80 class=6
 decref TokenManagedList #1 rc=0 [ownership-edge-cases.main]
   free TokenManagedList #1
+slab_free size=80 class=6
 decref Token #2 rc=0 [ownership-edge-cases.main]
   free Token #2
+slab_free size=48 class=5
 decref Token #4 rc=0 [ownership-edge-cases.main]
   free Token #4
+slab_free size=48 class=5
 decref Token #6 rc=0 [ownership-edge-cases.main]
   free Token #6
+slab_free size=48 class=5
+slab_alloc size=40 class=5
+raw_alloc size=40
+raw_free
+slab_free size=48 class=5
 ```
 
 <!-- test: rc-managed-list-node-set-value-decrefs-old -->
@@ -1588,14 +1990,18 @@ end 'main'
 99
 ```
 ```stderr
+slab_alloc size=64 class=6
 alloc TokenManagedList #1 rc=0 size=32 [ownership-edge-cases.main]
 incref TokenManagedList #1 rc=1 [ownership-edge-cases.main]
+slab_alloc size=40 class=5
 alloc Token #2 rc=0 size=8 [ownership-edge-cases.main]
 incref Token #2 rc=1 [ownership-edge-cases.main]
+slab_alloc size=64 class=6
 alloc __ManagedListNode #3 rc=0 size=32 [ownership-edge-cases.main]
 incref Token #2 rc=2 [ownership-edge-cases.main]
 incref __ManagedListNode #3 rc=1 [managed_list_insert]
 incref __ManagedListNode #3 rc=2 [ownership-edge-cases.main]
+slab_alloc size=40 class=5
 alloc Token #4 rc=0 size=8 [ownership-edge-cases.main]
 incref Token #4 rc=1 [ownership-edge-cases.main]
 decref Token #2 rc=1 [ownership-edge-cases.main]
@@ -1605,11 +2011,19 @@ decref TokenManagedList #1 rc=0 [ownership-edge-cases.main]
 decref Token #4 rc=1 [managed_list_clear]
 decref __ManagedListNode #3 rc=0 [managed_list_clear]
   free __ManagedListNode #3
+slab_free size=80 class=6
   free TokenManagedList #1
+slab_free size=80 class=6
 decref Token #2 rc=0 [ownership-edge-cases.main]
   free Token #2
+slab_free size=48 class=5
 decref Token #4 rc=0 [ownership-edge-cases.main]
   free Token #4
+slab_free size=48 class=5
+slab_alloc size=40 class=5
+raw_alloc size=40
+raw_free
+slab_free size=48 class=5
 ```
 
 <!-- test: rc-for-in-elem-decrefed -->
@@ -1640,17 +2054,24 @@ end 'main'
 60
 ```
 ```stderr
+slab_alloc size=64 class=6
 alloc __ManagedMemory_Score #1 rc=0 size=32 [ownership-edge-cases.main]
+slab_alloc size=48 class=5
 alloc ScoreArray #2 rc=0 size=16 [ownership-edge-cases.main]
 incref __ManagedMemory_Score #1 rc=1 [ownership-edge-cases.main]
 incref ScoreArray #2 rc=1 [ownership-edge-cases.main]
+slab_alloc size=40 class=5
 alloc Score #3 rc=0 size=8 [ownership-edge-cases.main]
 incref Score #3 rc=1 [ownership-edge-cases.main]
+slab_alloc size=32 class=4
+raw_alloc size=32
 realloc __ManagedMemory_Score #1 rc=1 size=32
 incref Score #3 rc=2 [ScoreArray.push]
+slab_alloc size=40 class=5
 alloc Score #4 rc=0 size=8 [ownership-edge-cases.main]
 incref Score #4 rc=1 [ownership-edge-cases.main]
 incref Score #4 rc=2 [ScoreArray.push]
+slab_alloc size=40 class=5
 alloc Score #5 rc=0 size=8 [ownership-edge-cases.main]
 incref Score #5 rc=1 [ownership-edge-cases.main]
 incref Score #5 rc=2 [ScoreArray.push]
@@ -1672,12 +2093,23 @@ decref ScoreArray #2 rc=0 [ownership-edge-cases.main]
 decref __ManagedMemory_Score #1 rc=0 [~ScoreArray]
 decref Score #3 rc=0 [~ManagedElements]
   free Score #3
+slab_free size=48 class=5
 decref Score #4 rc=0 [~ManagedElements]
   free Score #4
+slab_free size=48 class=5
 decref Score #5 rc=0 [~ManagedElements]
   free Score #5
+slab_free size=48 class=5
+raw_free
+slab_free size=32 class=4
   free __ManagedMemory_Score #1
+slab_free size=80 class=6
   free ScoreArray #2
+slab_free size=48 class=5
+slab_alloc size=40 class=5
+raw_alloc size=40
+raw_free
+slab_free size=48 class=5
 ```
 
 <!-- test: rc-multiple-aliases-freed-once -->
@@ -1701,6 +2133,7 @@ end 'main'
 21
 ```
 ```stderr
+slab_alloc size=40 class=5
 alloc Data #1 rc=0 size=8 [ownership-edge-cases.main]
 incref Data #1 rc=1 [ownership-edge-cases.main]
 incref Data #1 rc=2 [ownership-edge-cases.main]
@@ -1709,6 +2142,11 @@ decref Data #1 rc=2 [ownership-edge-cases.main]
 decref Data #1 rc=1 [ownership-edge-cases.main]
 decref Data #1 rc=0 [ownership-edge-cases.main]
   free Data #1
+slab_free size=48 class=5
+slab_alloc size=40 class=5
+raw_alloc size=40
+raw_free
+slab_free size=48 class=5
 ```
 
 <!-- test: rc-deep-container-of-containers -->
@@ -1740,29 +2178,44 @@ end 'main'
 2
 ```
 ```stderr
+slab_alloc size=64 class=6
 alloc __ManagedMemory_CellArray #1 rc=0 size=32 [ownership-edge-cases.main]
+slab_alloc size=48 class=5
 alloc Grid #2 rc=0 size=16 [ownership-edge-cases.main]
 incref __ManagedMemory_CellArray #1 rc=1 [ownership-edge-cases.main]
 incref Grid #2 rc=1 [ownership-edge-cases.main]
+slab_alloc size=64 class=6
 alloc __ManagedMemory_Cell #3 rc=0 size=32 [ownership-edge-cases.main]
+slab_alloc size=48 class=5
 alloc CellArray #4 rc=0 size=16 [ownership-edge-cases.main]
 incref __ManagedMemory_Cell #3 rc=1 [ownership-edge-cases.main]
 incref CellArray #4 rc=1 [ownership-edge-cases.main]
+slab_alloc size=40 class=5
 alloc Cell #5 rc=0 size=8 [ownership-edge-cases.main]
 incref Cell #5 rc=1 [ownership-edge-cases.main]
+slab_alloc size=32 class=4
+raw_alloc size=32
 realloc __ManagedMemory_Cell #3 rc=1 size=32
 incref Cell #5 rc=2 [CellArray.push]
+slab_alloc size=40 class=5
 alloc Cell #6 rc=0 size=8 [ownership-edge-cases.main]
 incref Cell #6 rc=1 [ownership-edge-cases.main]
 incref Cell #6 rc=2 [CellArray.push]
+slab_alloc size=64 class=6
 alloc __ManagedMemory_Cell #7 rc=0 size=32 [ownership-edge-cases.main]
+slab_alloc size=48 class=5
 alloc CellArray #8 rc=0 size=16 [ownership-edge-cases.main]
 incref __ManagedMemory_Cell #7 rc=1 [ownership-edge-cases.main]
 incref CellArray #8 rc=1 [ownership-edge-cases.main]
+slab_alloc size=40 class=5
 alloc Cell #9 rc=0 size=8 [ownership-edge-cases.main]
 incref Cell #9 rc=1 [ownership-edge-cases.main]
+slab_alloc size=32 class=4
+raw_alloc size=32
 realloc __ManagedMemory_Cell #7 rc=1 size=32
 incref Cell #9 rc=2 [CellArray.push]
+slab_alloc size=32 class=4
+raw_alloc size=32
 realloc __ManagedMemory_CellArray #1 rc=1 size=32
 incref CellArray #4 rc=2 [Grid.push]
 incref CellArray #8 rc=2 [Grid.push]
@@ -1774,21 +2227,40 @@ decref CellArray #4 rc=0 [~ManagedElements]
 decref __ManagedMemory_Cell #3 rc=0 [~CellArray]
 decref Cell #5 rc=1 [~ManagedElements]
 decref Cell #6 rc=1 [~ManagedElements]
+raw_free
+slab_free size=32 class=4
   free __ManagedMemory_Cell #3
+slab_free size=80 class=6
   free CellArray #4
+slab_free size=48 class=5
 decref CellArray #8 rc=0 [~ManagedElements]
 decref __ManagedMemory_Cell #7 rc=0 [~CellArray]
 decref Cell #9 rc=1 [~ManagedElements]
+raw_free
+slab_free size=32 class=4
   free __ManagedMemory_Cell #7
+slab_free size=80 class=6
   free CellArray #8
+slab_free size=48 class=5
+raw_free
+slab_free size=32 class=4
   free __ManagedMemory_CellArray #1
+slab_free size=80 class=6
   free Grid #2
+slab_free size=48 class=5
 decref Cell #5 rc=0 [ownership-edge-cases.main]
   free Cell #5
+slab_free size=48 class=5
 decref Cell #6 rc=0 [ownership-edge-cases.main]
   free Cell #6
+slab_free size=48 class=5
 decref Cell #9 rc=0 [ownership-edge-cases.main]
   free Cell #9
+slab_free size=48 class=5
+slab_alloc size=40 class=5
+raw_alloc size=40
+raw_free
+slab_free size=48 class=5
 ```
 
 <!-- test: rc-struct-with-array-field-freed -->
@@ -1822,16 +2294,23 @@ end 'main'
 2
 ```
 ```stderr
+slab_alloc size=64 class=6
 alloc __ManagedMemory_Entry #1 rc=0 size=32 [ownership-edge-cases.fill]
+slab_alloc size=48 class=5
 alloc EntryArray #2 rc=0 size=16 [ownership-edge-cases.fill]
 incref __ManagedMemory_Entry #1 rc=1 [ownership-edge-cases.fill]
+slab_alloc size=40 class=5
 alloc Bucket #3 rc=0 size=8 [ownership-edge-cases.fill]
 incref EntryArray #2 rc=1 [ownership-edge-cases.fill]
 incref Bucket #3 rc=1 [ownership-edge-cases.fill]
+slab_alloc size=40 class=5
 alloc Entry #4 rc=0 size=8 [ownership-edge-cases.fill]
 incref Entry #4 rc=1 [ownership-edge-cases.fill]
+slab_alloc size=32 class=4
+raw_alloc size=32
 realloc __ManagedMemory_Entry #1 rc=1 size=32
 incref Entry #4 rc=2 [EntryArray.push]
+slab_alloc size=40 class=5
 alloc Entry #5 rc=0 size=8 [ownership-edge-cases.fill]
 incref Entry #5 rc=1 [ownership-edge-cases.fill]
 incref Entry #5 rc=2 [EntryArray.push]
@@ -1840,13 +2319,24 @@ decref EntryArray #2 rc=0 [~Bucket]
 decref __ManagedMemory_Entry #1 rc=0 [~EntryArray]
 decref Entry #4 rc=1 [~ManagedElements]
 decref Entry #5 rc=1 [~ManagedElements]
+raw_free
+slab_free size=32 class=4
   free __ManagedMemory_Entry #1
+slab_free size=80 class=6
   free EntryArray #2
+slab_free size=48 class=5
   free Bucket #3
+slab_free size=48 class=5
 decref Entry #4 rc=0 [ownership-edge-cases.fill]
   free Entry #4
+slab_free size=48 class=5
 decref Entry #5 rc=0 [ownership-edge-cases.fill]
   free Entry #5
+slab_free size=48 class=5
+slab_alloc size=40 class=5
+raw_alloc size=40
+raw_free
+slab_free size=48 class=5
 ```
 
 <!-- test: rc-return-struct-literal -->
@@ -1875,11 +2365,17 @@ end 'main'
 10
 ```
 ```stderr
+slab_alloc size=48 class=5
 alloc Pair #1 rc=0 size=16 [ownership-edge-cases.makePair]
 incref Pair #1 rc=1 [ownership-edge-cases.makePair]
 transfer Pair #1 rc=1 [ownership-edge-cases.makePair]
 decref Pair #1 rc=0 [ownership-edge-cases.main]
   free Pair #1
+slab_free size=48 class=5
+slab_alloc size=40 class=5
+raw_alloc size=40
+raw_free
+slab_free size=48 class=5
 ```
 
 <!-- test: rc-return-struct-with-managed-field -->
@@ -1912,8 +2408,10 @@ end 'main'
 5
 ```
 ```stderr
+slab_alloc size=40 class=5
 alloc Inner #1 rc=0 size=8 [ownership-edge-cases.main]
 incref Inner #1 rc=1 [ownership-edge-cases.main]
+slab_alloc size=40 class=5
 alloc Wrapper #2 rc=0 size=8 [ownership-edge-cases.wrap]
 incref Inner #1 rc=2 [ownership-edge-cases.wrap]
 incref Wrapper #2 rc=1 [ownership-edge-cases.wrap]
@@ -1921,8 +2419,14 @@ transfer Wrapper #2 rc=1 [ownership-edge-cases.wrap]
 decref Wrapper #2 rc=0 [ownership-edge-cases.main]
 decref Inner #1 rc=1 [~Wrapper]
   free Wrapper #2
+slab_free size=48 class=5
 decref Inner #1 rc=0 [ownership-edge-cases.main]
   free Inner #1
+slab_free size=48 class=5
+slab_alloc size=40 class=5
+raw_alloc size=40
+raw_free
+slab_free size=48 class=5
 ```
 
 <!-- test: rc-list-scope-cleanup -->
@@ -1941,14 +2445,19 @@ end 'main'
 0
 ```
 ```stderr
+slab_alloc size=64 class=6
 alloc __ManagedList_String #1 rc=0 size=32 [ownership-edge-cases.main]
+slab_alloc size=48 class=5
 alloc StringList #2 rc=0 size=16 [ownership-edge-cases.main]
 incref __ManagedList_String #1 rc=1 [ownership-edge-cases.main]
 incref StringList #2 rc=1 [ownership-edge-cases.main]
+slab_alloc size=48 class=5
 alloc String #3 rc=0 size=16 [ownership-edge-cases.main]
+slab_alloc size=64 class=6
 alloc __ManagedMemory #4 rc=0 size=32 [ownership-edge-cases.main]
 incref __ManagedMemory #4 rc=1 [ownership-edge-cases.main]
 incref String #3 rc=1 [ownership-edge-cases.main]
+slab_alloc size=64 class=6
 alloc __ManagedListNode #5 rc=0 size=32 [StringList.append]
 incref String #3 rc=2 [StringList.append]
 incref __ManagedListNode #5 rc=1 [managed_list_insert]
@@ -1958,11 +2467,20 @@ decref __ManagedList_String #1 rc=0 [~StringList]
 decref String #3 rc=0 [managed_list_clear]
 decref __ManagedMemory #4 rc=0 [~String]
   free __ManagedMemory #4
+slab_free size=80 class=6
   free String #3
+slab_free size=48 class=5
 decref __ManagedListNode #5 rc=0 [managed_list_clear]
   free __ManagedListNode #5
+slab_free size=80 class=6
   free __ManagedList_String #1
+slab_free size=80 class=6
   free StringList #2
+slab_free size=48 class=5
+slab_alloc size=40 class=5
+raw_alloc size=40
+raw_free
+slab_free size=48 class=5
 ```
 
 <!-- test: match-string-pattern-cleanup -->
@@ -1982,26 +2500,38 @@ end 'main'
 1
 ```
 ```stderr
+slab_alloc size=48 class=5
 alloc String #1 rc=0 size=16 [ownership-edge-cases.main]
+slab_alloc size=64 class=6
 alloc __ManagedMemory #2 rc=0 size=32 [ownership-edge-cases.main]
 incref __ManagedMemory #2 rc=1 [ownership-edge-cases.main]
 incref String #1 rc=1 [ownership-edge-cases.main]
 incref String #1 rc=2 [ownership-edge-cases.main]
 incref String #1 rc=3 [ownership-edge-cases.main]
+slab_alloc size=48 class=5
 alloc String #3 rc=0 size=16 [ownership-edge-cases.main]
+slab_alloc size=64 class=6
 alloc __ManagedMemory #4 rc=0 size=32 [ownership-edge-cases.main]
 incref __ManagedMemory #4 rc=1 [ownership-edge-cases.main]
 incref String #3 rc=1 [ownership-edge-cases.main]
 decref String #3 rc=0 [ownership-edge-cases.main]
 decref __ManagedMemory #4 rc=0 [~String]
   free __ManagedMemory #4
+slab_free size=80 class=6
   free String #3
+slab_free size=48 class=5
 decref String #1 rc=2 [ownership-edge-cases.main]
 decref String #1 rc=1 [ownership-edge-cases.main]
 decref String #1 rc=0 [ownership-edge-cases.main]
 decref __ManagedMemory #2 rc=0 [~String]
   free __ManagedMemory #2
+slab_free size=80 class=6
   free String #1
+slab_free size=48 class=5
+slab_alloc size=40 class=5
+raw_alloc size=40
+raw_free
+slab_free size=48 class=5
 ```
 
 <!-- test: rc-char-single-alloc-freed -->
@@ -2017,7 +2547,9 @@ end 'main'
 1
 ```
 ```stderr
+slab_alloc size=48 class=5
 alloc Character #1 rc=0 size=16 [ownership-edge-cases.main]
+slab_alloc size=64 class=6
 alloc __ManagedMemory #2 rc=0 size=32 [ownership-edge-cases.main]
 incref __ManagedMemory #2 rc=1 [ownership-edge-cases.main]
 incref Character #1 rc=1 [ownership-edge-cases.main]
@@ -2026,7 +2558,13 @@ decref Character #1 rc=1 [ownership-edge-cases.main]
 decref Character #1 rc=0 [ownership-edge-cases.main]
 decref __ManagedMemory #2 rc=0 [~Character]
   free __ManagedMemory #2
+slab_free size=80 class=6
   free Character #1
+slab_free size=48 class=5
+slab_alloc size=40 class=5
+raw_alloc size=40
+raw_free
+slab_free size=48 class=5
 ```
 
 <!-- test: rc-char-alias-incref -->
@@ -2043,7 +2581,9 @@ end 'main'
 2
 ```
 ```stderr
+slab_alloc size=48 class=5
 alloc Character #1 rc=0 size=16 [ownership-edge-cases.main]
+slab_alloc size=64 class=6
 alloc __ManagedMemory #2 rc=0 size=32 [ownership-edge-cases.main]
 incref __ManagedMemory #2 rc=1 [ownership-edge-cases.main]
 incref Character #1 rc=1 [ownership-edge-cases.main]
@@ -2054,7 +2594,13 @@ decref Character #1 rc=1 [ownership-edge-cases.main]
 decref Character #1 rc=0 [ownership-edge-cases.main]
 decref __ManagedMemory #2 rc=0 [~Character]
   free __ManagedMemory #2
+slab_free size=80 class=6
   free Character #1
+slab_free size=48 class=5
+slab_alloc size=40 class=5
+raw_alloc size=40
+raw_free
+slab_free size=48 class=5
 ```
 
 <!-- test: rc-char-reassign-decrefs-old -->
@@ -2071,12 +2617,16 @@ end 'main'
 1
 ```
 ```stderr
+slab_alloc size=48 class=5
 alloc Character #1 rc=0 size=16 [ownership-edge-cases.main]
+slab_alloc size=64 class=6
 alloc __ManagedMemory #2 rc=0 size=32 [ownership-edge-cases.main]
 incref __ManagedMemory #2 rc=1 [ownership-edge-cases.main]
 incref Character #1 rc=1 [ownership-edge-cases.main]
 incref Character #1 rc=2 [ownership-edge-cases.main]
+slab_alloc size=48 class=5
 alloc Character #3 rc=0 size=16 [ownership-edge-cases.main]
+slab_alloc size=64 class=6
 alloc __ManagedMemory #4 rc=0 size=32 [ownership-edge-cases.main]
 incref __ManagedMemory #4 rc=1 [ownership-edge-cases.main]
 incref Character #3 rc=1 [ownership-edge-cases.main]
@@ -2086,11 +2636,19 @@ decref Character #3 rc=1 [ownership-edge-cases.main]
 decref Character #1 rc=0 [ownership-edge-cases.main]
 decref __ManagedMemory #2 rc=0 [~Character]
   free __ManagedMemory #2
+slab_free size=80 class=6
   free Character #1
+slab_free size=48 class=5
 decref Character #3 rc=0 [ownership-edge-cases.main]
 decref __ManagedMemory #4 rc=0 [~Character]
   free __ManagedMemory #4
+slab_free size=80 class=6
   free Character #3
+slab_free size=48 class=5
+slab_alloc size=40 class=5
+raw_alloc size=40
+raw_free
+slab_free size=48 class=5
 ```
 
 <!-- test: rc-char-return-transfers-ownership -->
@@ -2110,7 +2668,9 @@ end 'main'
 1
 ```
 ```stderr
+slab_alloc size=48 class=5
 alloc Character #1 rc=0 size=16 [ownership-edge-cases.makeChar]
+slab_alloc size=64 class=6
 alloc __ManagedMemory #2 rc=0 size=32 [ownership-edge-cases.makeChar]
 incref __ManagedMemory #2 rc=1 [ownership-edge-cases.makeChar]
 incref Character #1 rc=1 [ownership-edge-cases.makeChar]
@@ -2118,7 +2678,13 @@ transfer Character #1 rc=1 [ownership-edge-cases.makeChar]
 decref Character #1 rc=0 [ownership-edge-cases.main]
 decref __ManagedMemory #2 rc=0 [~Character]
   free __ManagedMemory #2
+slab_free size=80 class=6
   free Character #1
+slab_free size=48 class=5
+slab_alloc size=40 class=5
+raw_alloc size=40
+raw_free
+slab_free size=48 class=5
 ```
 
 <!-- test: rc-char-inner-block-freed -->
@@ -2138,7 +2704,9 @@ end 'main'
 1
 ```
 ```stderr
+slab_alloc size=48 class=5
 alloc Character #1 rc=0 size=16 [ownership-edge-cases.main]
+slab_alloc size=64 class=6
 alloc __ManagedMemory #2 rc=0 size=32 [ownership-edge-cases.main]
 incref __ManagedMemory #2 rc=1 [ownership-edge-cases.main]
 incref Character #1 rc=1 [ownership-edge-cases.main]
@@ -2147,7 +2715,13 @@ decref Character #1 rc=1 [ownership-edge-cases.main]
 decref Character #1 rc=0 [ownership-edge-cases.main]
 decref __ManagedMemory #2 rc=0 [~Character]
   free __ManagedMemory #2
+slab_free size=80 class=6
   free Character #1
+slab_free size=48 class=5
+slab_alloc size=40 class=5
+raw_alloc size=40
+raw_free
+slab_free size=48 class=5
 ```
 
 <!-- test: rc-tuple-primitive-freed -->
@@ -2163,10 +2737,16 @@ end 'main'
 10
 ```
 ```stderr
+slab_alloc size=48 class=5
 alloc __Tuple_i64_i64 #1 rc=0 size=16 [ownership-edge-cases.main]
 incref __Tuple_i64_i64 #1 rc=1 [ownership-edge-cases.main]
 decref __Tuple_i64_i64 #1 rc=0 [ownership-edge-cases.main]
   free __Tuple_i64_i64 #1
+slab_free size=48 class=5
+slab_alloc size=40 class=5
+raw_alloc size=40
+raw_free
+slab_free size=48 class=5
 ```
 
 <!-- test: rc-tuple-alias-incref -->
@@ -2183,12 +2763,18 @@ end 'main'
 10
 ```
 ```stderr
+slab_alloc size=48 class=5
 alloc __Tuple_i64_i64 #1 rc=0 size=16 [ownership-edge-cases.main]
 incref __Tuple_i64_i64 #1 rc=1 [ownership-edge-cases.main]
 incref __Tuple_i64_i64 #1 rc=2 [ownership-edge-cases.main]
 decref __Tuple_i64_i64 #1 rc=1 [ownership-edge-cases.main]
 decref __Tuple_i64_i64 #1 rc=0 [ownership-edge-cases.main]
   free __Tuple_i64_i64 #1
+slab_free size=48 class=5
+slab_alloc size=40 class=5
+raw_alloc size=40
+raw_free
+slab_free size=48 class=5
 ```
 
 <!-- test: rc-tuple-reassign-decrefs-old -->
@@ -2205,16 +2791,24 @@ end 'main'
 7
 ```
 ```stderr
+slab_alloc size=48 class=5
 alloc __Tuple_i64_i64 #1 rc=0 size=16 [ownership-edge-cases.main]
 incref __Tuple_i64_i64 #1 rc=1 [ownership-edge-cases.main]
+slab_alloc size=48 class=5
 alloc __Tuple_i64_i64 #2 rc=0 size=16 [ownership-edge-cases.main]
 incref __Tuple_i64_i64 #2 rc=1 [ownership-edge-cases.main]
 decref __Tuple_i64_i64 #1 rc=0 [ownership-edge-cases.main]
   free __Tuple_i64_i64 #1
+slab_free size=48 class=5
 incref __Tuple_i64_i64 #2 rc=2 [ownership-edge-cases.main]
 decref __Tuple_i64_i64 #2 rc=1 [ownership-edge-cases.main]
 decref __Tuple_i64_i64 #2 rc=0 [ownership-edge-cases.main]
   free __Tuple_i64_i64 #2
+slab_free size=48 class=5
+slab_alloc size=40 class=5
+raw_alloc size=40
+raw_free
+slab_free size=48 class=5
 ```
 
 <!-- test: rc-tuple-with-string-freed -->
@@ -2230,10 +2824,13 @@ end 'main'
 42
 ```
 ```stderr
+slab_alloc size=48 class=5
 alloc String #1 rc=0 size=16 [ownership-edge-cases.main]
+slab_alloc size=64 class=6
 alloc __ManagedMemory #2 rc=0 size=32 [ownership-edge-cases.main]
 incref __ManagedMemory #2 rc=1 [ownership-edge-cases.main]
 incref String #1 rc=1 [ownership-edge-cases.main]
+slab_alloc size=48 class=5
 alloc __Tuple_i64_String #3 rc=0 size=16 [ownership-edge-cases.main]
 incref String #1 rc=2 [ownership-edge-cases.main]
 incref __Tuple_i64_String #3 rc=1 [ownership-edge-cases.main]
@@ -2242,8 +2839,15 @@ decref __Tuple_i64_String #3 rc=0 [ownership-edge-cases.main]
 decref String #1 rc=0 [~__Tuple_i64_String]
 decref __ManagedMemory #2 rc=0 [~String]
   free __ManagedMemory #2
+slab_free size=80 class=6
   free String #1
+slab_free size=48 class=5
   free __Tuple_i64_String #3
+slab_free size=48 class=5
+slab_alloc size=40 class=5
+raw_alloc size=40
+raw_free
+slab_free size=48 class=5
 ```
 
 <!-- test: rc-tuple-return-transfers-ownership -->
@@ -2265,11 +2869,17 @@ end 'main'
 8
 ```
 ```stderr
+slab_alloc size=48 class=5
 alloc __Tuple_i64_i64 #1 rc=0 size=16 [ownership-edge-cases.makePair]
 incref __Tuple_i64_i64 #1 rc=1 [ownership-edge-cases.makePair]
 transfer __Tuple_i64_i64 #1 rc=1 [ownership-edge-cases.makePair]
 decref __Tuple_i64_i64 #1 rc=0 [ownership-edge-cases.main]
   free __Tuple_i64_i64 #1
+slab_free size=48 class=5
+slab_alloc size=40 class=5
+raw_alloc size=40
+raw_free
+slab_free size=48 class=5
 ```
 
 <!-- test: rc-tuple-destructuring-cleanup -->
@@ -2286,12 +2896,18 @@ end 'main'
 30
 ```
 ```stderr
+slab_alloc size=48 class=5
 alloc __Tuple_i64_i64 #1 rc=0 size=16 [ownership-edge-cases.main]
 incref __Tuple_i64_i64 #1 rc=1 [ownership-edge-cases.main]
 incref __Tuple_i64_i64 #1 rc=2 [ownership-edge-cases.main]
 decref __Tuple_i64_i64 #1 rc=1 [ownership-edge-cases.main]
 decref __Tuple_i64_i64 #1 rc=0 [ownership-edge-cases.main]
   free __Tuple_i64_i64 #1
+slab_free size=48 class=5
+slab_alloc size=40 class=5
+raw_alloc size=40
+raw_free
+slab_free size=48 class=5
 ```
 
 <!-- test: rc-tuple-with-struct-freed -->
@@ -2314,14 +2930,22 @@ end 'main'
 1
 ```
 ```stderr
+slab_alloc size=48 class=5
 alloc Point #1 rc=0 size=16 [ownership-edge-cases.main]
+slab_alloc size=48 class=5
 alloc __Tuple_i64_Point #2 rc=0 size=16 [ownership-edge-cases.main]
 incref Point #1 rc=1 [ownership-edge-cases.main]
 incref __Tuple_i64_Point #2 rc=1 [ownership-edge-cases.main]
 decref __Tuple_i64_Point #2 rc=0 [ownership-edge-cases.main]
 decref Point #1 rc=0 [~__Tuple_i64_Point]
   free Point #1
+slab_free size=48 class=5
   free __Tuple_i64_Point #2
+slab_free size=48 class=5
+slab_alloc size=40 class=5
+raw_alloc size=40
+raw_free
+slab_free size=48 class=5
 ```
 
 <!-- test: rc-struct-literal-as-function-arg -->

@@ -261,8 +261,7 @@ public static partial class MaxonToStandardConversion {
 		var allocSize = new StdAddI64Op(totalLen, oneOp.Result);
 		block.AddOp(allocSize);
 
-		var allocResult = new StdI64(MlirContext.Current.NextId());
-		block.AddOp(new StdCallRuntimeOp("mm_raw_alloc", [allocSize.Result], allocResult));
+		var allocResult = EmitRawAlloc(block, allocSize.Result, label: "interp.buf", scopeName: _currentFuncName);
 
 		// Store all values to stack variables since rep movsb clobbers RSI, RDI, RCX
 		var interpOffsetVar = $"__interp_offset_{op.Result.Id}";
@@ -358,8 +357,7 @@ public static partial class MaxonToStandardConversion {
 
 		var sizeOp = new StdConstI64Op(bufferSize);
 		block.AddOp(sizeOp);
-		var bufResult = new StdI64(MlirContext.Current.NextId());
-		block.AddOp(new StdCallRuntimeOp("mm_raw_alloc", [sizeOp.Result], bufResult));
+		var bufResult = EmitRawAlloc(block, sizeOp.Result, label: "toStr.buf", scopeName: _currentFuncName);
 
 		// Store buffer pointer so it survives the runtime call
 		var bufVarName = $"__tostr_buf_{bufResult.Id}";
@@ -399,8 +397,7 @@ public static partial class MaxonToStandardConversion {
 
 		var fmtSizeOp = new StdConstI64Op(bufferSize);
 		block.AddOp(fmtSizeOp);
-		var bufResult = new StdI64(MlirContext.Current.NextId());
-		block.AddOp(new StdCallRuntimeOp("mm_raw_alloc", [fmtSizeOp.Result], bufResult));
+		var bufResult = EmitRawAlloc(block, fmtSizeOp.Result, label: "fmt.buf", scopeName: _currentFuncName);
 
 		// Store buffer pointer so it survives the runtime call
 		var bufVarName = $"__tostr_buf_{bufResult.Id}";
@@ -785,8 +782,7 @@ public static partial class MaxonToStandardConversion {
 		var concatPtr = (StdHeapPtr)EmitAlloc(block, 32, managedTypeName, scopeName: _currentFuncName);
 		EmitStore(block, concatPtr, tempName, varTypes);
 
-		var allocResult = new StdI64(MlirContext.Current.NextId());
-		block.AddOp(new StdCallRuntimeOp("mm_raw_alloc", [allocSizeOp.Result], allocResult));
+		var allocResult = EmitRawAlloc(block, allocSizeOp.Result, label: "concat.buf", scopeName: _currentFuncName);
 
 		block.AddOp(new StdMemCopyOp(lhsBuf, allocResult, lhsBytesOp.Result));
 
@@ -863,8 +859,7 @@ public static partial class MaxonToStandardConversion {
 		var slicePtr = (StdHeapPtr)EmitAlloc(block, 32, managedTypeName, tag: "Slice", scopeName: _currentFuncName);
 		EmitStore(block, slicePtr, tempName, varTypes);
 
-		var newBuffer = new StdI64(MlirContext.Current.NextId());
-		block.AddOp(new StdCallRuntimeOp("mm_raw_alloc", [sliceBytesOp.Result], newBuffer));
+		var newBuffer = EmitRawAlloc(block, sliceBytesOp.Result, label: "slice.buf", scopeName: _currentFuncName);
 
 		// Copy data from source into the new buffer
 		block.AddOp(new StdMemCopyOp(srcAddrOp.Result, newBuffer, sliceBytesOp.Result));
@@ -921,8 +916,7 @@ public static partial class MaxonToStandardConversion {
 
 		// Reload len for buffer allocation (alloc clobbers registers)
 		var lenForAlloc = (StdI64)EmitLoad(block, lenVar, varTypes);
-		var newBuf = new StdI64(MlirContext.Current.NextId());
-		block.AddOp(new StdCallRuntimeOp("mm_raw_alloc", [lenForAlloc], newBuf));
+		var newBuf = EmitRawAlloc(block, lenForAlloc, label: "mkChar.buf", scopeName: _currentFuncName);
 
 		// Store the new buffer pointer (alloc clobbers registers)
 		var dstBufVar = $"__mkchar_dst_{op.Result.Id}";

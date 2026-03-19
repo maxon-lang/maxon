@@ -1053,30 +1053,32 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
           }
         }
 
-        // Update MmTrace stderr
-        if (test.MmTrace && success.Stderr != null) {
+        // Update stderr (for MmTrace, AsyncTrace, or plain stderr blocks)
+        if (success.Stderr != null) {
           var exePath = Path.Combine(_tempDir, $"{specName}_{test.Name}_stderr.exe");
           try {
-            Compiler.Compiler.MmTrace = true;
+            Compiler.Compiler.MmTrace = test.MmTrace;
+            Compiler.Compiler.AsyncTrace = test.AsyncTrace;
             Compiler.Compiler.MmDebug = false;
             Compiler.Compiler.Testing = true;
             var result = new Compiler.Compiler().Compile(sources, exePath, target: _target);
 
             if (result.Success) {
-              var (_, _, actualStderr) = RunExecutable(exePath, _tempDir);
-              var oldStderr = success.Stderr.Replace("\r\n", "\n").Trim();
-              var newStderr = actualStderr.Replace("\r\n", "\n").Trim();
+              var (_, _, actualStderr) = RunExecutable(exePath, _tempDir, test.Args);
+              var normalize = test.AsyncTrace ? NormalizeAsyncTraceStderr : (Func<string, string>)(s => s.Replace("\r\n", "\n").Trim());
+              var oldStderr = normalize(success.Stderr);
+              var newStderr = normalize(actualStderr);
               if (oldStderr != newStderr) {
                 // Re-find marker since specContent may have shifted from RequiredMLIR update
                 var markerMatch2 = Regex.Match(specContent, markerPattern);
                 if (markerMatch2.Success) {
-                  var searchStart = markerMatch2.Index + markerMatch2.Length;
+                  var searchStart2 = markerMatch2.Index + markerMatch2.Length;
                   var blockPattern = @"```stderr\s*\n(.*?)```";
-                  var candidate = Regex.Match(specContent[searchStart..], blockPattern, RegexOptions.Singleline, TimeSpan.FromSeconds(5));
+                  var candidate = Regex.Match(specContent[searchStart2..], blockPattern, RegexOptions.Singleline, TimeSpan.FromSeconds(5));
                   if (candidate.Success) {
-                    var absoluteStart = searchStart + candidate.Index;
+                    var absoluteStart = searchStart2 + candidate.Index;
                     var absoluteEnd = absoluteStart + candidate.Length;
-                    var replacement = $"```stderr\n{newStderr}\n```";
+                    var replacement = $"```stderr\n{actualStderr.Replace("\r\n", "\n").Trim()}\n```";
                     specContent = string.Concat(specContent.AsSpan(0, absoluteStart), replacement, specContent.AsSpan(absoluteEnd));
                     updated = true;
                     Logger.Debug(LogCategory.Testing, $"Updated stderr for test '{test.Name}' in {Path.GetFileName(spec.FilePath)}");

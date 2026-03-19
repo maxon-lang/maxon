@@ -249,8 +249,7 @@ public static partial class MaxonToStandardConversion {
 			?? temps.CreateTemp("managed_create", op.Result.Id, "__ManagedMemory", OwnershipFlags.None);
 		var managedPtr = EmitAlloc(block, 32, "__ManagedMemory", scopeName: _currentFuncName);
 		EmitStore(block, managedPtr, tempName, varTypes);
-		var allocResult = new StdI64(MlirContext.Current.NextId());
-		block.AddOp(new StdCallRuntimeOp("mm_raw_alloc", [byteSizeOp.Result], allocResult));
+		var allocResult = EmitRawAlloc(block, byteSizeOp.Result, label: "ManagedMemory.buf", scopeName: _currentFuncName);
 		// Store fields via indirect access on the heap object
 		EmitStructFieldStore(block, allocResult, tempName, ManagedFieldBuffer, MlirType.I64, varTypes);
 		EmitStructFieldStore(block, count, tempName, ManagedFieldLength, MlirType.I64, varTypes);
@@ -373,7 +372,8 @@ public static partial class MaxonToStandardConversion {
 			block.AddOp(dstAddr);
 			var bytesOp = new StdMulI64Op(count, elemSize);
 			block.AddOp(bytesOp);
-			// Save dstAddr and byteCount before memcopy (rep movsb clobbers RSI/RDI/RCX)
+			// Spill dstAddr and byteCount to stack before memcopy — the copy operation
+			// may consume these SSA values, and we need them again to zero the trailing slot.
 			var dstAddrVarName = $"__shift_dst_{MlirContext.Current.NextId()}";
 			EmitStore(block, dstAddr.Result, dstAddrVarName, varTypes);
 			var bytesVarName = $"__shift_bytes_{MlirContext.Current.NextId()}";
@@ -518,8 +518,7 @@ public static partial class MaxonToStandardConversion {
 		block.AddOp(oneConst);
 		var allocSize = new StdAddI64Op(lenReload1, oneConst.Result);
 		block.AddOp(allocSize);
-		var allocResult = new StdI64(MlirContext.Current.NextId());
-		block.AddOp(new StdCallRuntimeOp("mm_raw_alloc", [allocSize.Result], allocResult));
+		var allocResult = EmitRawAlloc(block, allocSize.Result, label: "CString.buf", scopeName: _currentFuncName);
 
 		// Store buffer pointer (alloc clobbers registers)
 		var bufVar = $"__cstr_buf_{op.Result.Id}";

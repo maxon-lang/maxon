@@ -24,7 +24,7 @@ public static partial class MaxonToStandardConversion {
     // Layout: [count | arg0 | arg1 | ...]
     var bufSizeConst = new StdConstI64Op((argCount + 1) * 8);
     block.AddOp(bufSizeConst);
-    var argBuf = EmitRawAlloc(block, bufSizeConst.Result);
+    var argBuf = EmitRawAlloc(block, bufSizeConst.Result, label: "async.args", scopeName: _currentFuncName);
 
     // Store arg count at [buf + 0]
     var countConst = new StdConstI64Op(argCount);
