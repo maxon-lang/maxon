@@ -419,6 +419,35 @@ public partial class ARM64CodeEmitter {
       _e.EmitWord(0x9B008000 | (Reg(v) << 16) | (Reg(d) << 10) | (Reg(ARM64Register.X16) << 5) | Reg(dr));
     }
 
+    // ---- Platform-specific labels ----
+
+    public string WriteStderrLabel => "rt_write_cstr_stderr";
+
+    // ---- Local address / byte memory ----
+
+    public void LeaLocal(VReg dest, int slotIndex) {
+      // ADD R(dest), X29, #(16 + slotIndex*8) — ARM64 args start at [x29+16]
+      int offset = 16 + slotIndex * 8;
+      _e.EmitAddSubImm(R(dest), ARM64Register.X29, offset, isAdd: true);
+    }
+
+    public void StoreIndirectByte(VReg baseReg, int offset, VReg src) {
+      // STRB W(src), [R(base), #offset] — unsigned offset form
+      // Encoding: size=00, V=0, opc=00, imm12=offset, Rn=base, Rt=src
+      // 0011 1001 000 | imm12 | Rn | Rt
+      uint imm12 = (uint)offset & 0xFFF;
+      uint instr = 0x39000000u | (imm12 << 10) | (Reg(R(baseReg)) << 5) | Reg(R(src));
+      _e.EmitWord(instr);
+    }
+
+    public void LoadIndirectByte(VReg dest, VReg baseReg, int offset) {
+      // LDRB W(dest), [R(base), #offset] — unsigned offset form
+      // 0011 1001 010 | imm12 | Rn | Rt
+      uint imm12 = (uint)offset & 0xFFF;
+      uint instr = 0x39400000u | (imm12 << 10) | (Reg(R(baseReg)) << 5) | Reg(R(dest));
+      _e.EmitWord(instr);
+    }
+
     // ---- Platform info ----
 
     public string SchedLockLabel => "__sched_global_lock";

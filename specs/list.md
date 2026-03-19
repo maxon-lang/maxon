@@ -597,8 +597,13 @@ hello world!!!!!!!!!!!!!!
 1
 ```
 ```stderr
+os_alloc size=2304
+os_alloc size=4096
+os_alloc size=4096
+os_alloc size=4096
 slab_alloc size=64 class=6
 alloc __ManagedList_String #1 rc=0 size=32 [list.testRemove]
+os_alloc size=4096
 slab_alloc size=48 class=5
 alloc StringList #2 rc=0 size=16 [list.testRemove]
 incref __ManagedList_String #1 rc=1 [list.testRemove]
@@ -638,6 +643,7 @@ slab_alloc size=48 class=5
 alloc String #9 rc=0 size=16 [list.testRemove]
 slab_alloc size=64 class=6
 alloc __ManagedMemory #10 rc=0 size=32 [list.testRemove]
+os_alloc size=4096
 slab_alloc size=27 class=4
 raw_alloc size=27 [interp.buf [list.testRemove]]
 incref __ManagedMemory #10 rc=1 [list.testRemove]
@@ -648,6 +654,7 @@ slab_alloc size=48 class=5
 alloc String #11 rc=0 size=16 [list.testRemove]
 slab_alloc size=64 class=6
 alloc __ManagedMemory #12 rc=0 size=32 [list.testRemove]
+os_alloc size=4096
 slab_alloc size=3 class=2
 raw_alloc size=3 [interp.buf [list.testRemove]]
 raw_free
@@ -725,8 +732,13 @@ end 'main'
 hello world!!!!!!!!!!!!!!
 ```
 ```stderr
+os_alloc size=2304
+os_alloc size=4096
+os_alloc size=4096
+os_alloc size=4096
 slab_alloc size=64 class=6
 alloc __ManagedList_String #1 rc=0 size=32 [list.testRemove]
+os_alloc size=4096
 slab_alloc size=48 class=5
 alloc StringList #2 rc=0 size=16 [list.testRemove]
 incref __ManagedList_String #1 rc=1 [list.testRemove]
@@ -783,6 +795,7 @@ slab_alloc size=48 class=5
 alloc String #9 rc=0 size=16 [list.main]
 slab_alloc size=64 class=6
 alloc __ManagedMemory #10 rc=0 size=32 [list.main]
+os_alloc size=4096
 slab_alloc size=27 class=4
 raw_alloc size=27 [interp.buf [list.main]]
 incref __ManagedMemory #10 rc=1 [list.main]
@@ -833,8 +846,13 @@ end 'main'
 0
 ```
 ```stderr
+os_alloc size=2304
+os_alloc size=4096
+os_alloc size=4096
+os_alloc size=4096
 slab_alloc size=64 class=6
 alloc __ManagedList_String #1 rc=0 size=32 [list.testClear]
+os_alloc size=4096
 slab_alloc size=48 class=5
 alloc StringList #2 rc=0 size=16 [list.testClear]
 incref __ManagedList_String #1 rc=1 [list.testClear]
@@ -881,12 +899,14 @@ decref String #9 rc=1 [managed_list_clear]
 decref __ManagedListNode #11 rc=0 [managed_list_clear]
   free __ManagedListNode #11
 slab_free size=80 class=6
+os_alloc size=4096
 slab_alloc size=21 class=4
 raw_alloc size=21 [toStr.buf [list.testClear]]
 slab_alloc size=48 class=5
 alloc String #12 rc=0 size=16 [list.testClear]
 slab_alloc size=64 class=6
 alloc __ManagedMemory #13 rc=0 size=32 [list.testClear]
+os_alloc size=4096
 slab_alloc size=3 class=2
 raw_alloc size=3 [interp.buf [list.testClear]]
 raw_free
@@ -957,8 +977,13 @@ end 'main'
 0
 ```
 ```stderr
+os_alloc size=2304
+os_alloc size=4096
+os_alloc size=4096
+os_alloc size=4096
 slab_alloc size=64 class=6
 alloc __ManagedList_String #1 rc=0 size=32 [list.main]
+os_alloc size=4096
 slab_alloc size=48 class=5
 alloc StringList #2 rc=0 size=16 [list.main]
 incref __ManagedList_String #1 rc=1 [list.main]
@@ -1005,12 +1030,14 @@ decref String #9 rc=1 [managed_list_clear]
 decref __ManagedListNode #11 rc=0 [managed_list_clear]
   free __ManagedListNode #11
 slab_free size=80 class=6
+os_alloc size=4096
 slab_alloc size=21 class=4
 raw_alloc size=21 [toStr.buf [list.main]]
 slab_alloc size=48 class=5
 alloc String #12 rc=0 size=16 [list.main]
 slab_alloc size=64 class=6
 alloc __ManagedMemory #13 rc=0 size=32 [list.main]
+os_alloc size=4096
 slab_alloc size=3 class=2
 raw_alloc size=3 [interp.buf [list.main]]
 raw_free

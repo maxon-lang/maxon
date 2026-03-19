@@ -64,7 +64,18 @@ public class ARM64CodeEmitterStage {
 
     // Emit runtime functions
     emitter.EmitRuntimeFunctions();
-    emitter.EmitMemoryManagerFunctions(module.TagTable);
+    var rt = new Mlir.Runtime.RuntimeEmitter(emitter.CreateBackend());
+    rt.EmitMmGlobals(Compiler.MmTrace, Compiler.MmDebug);
+    rt.EmitMmTraceFunctions(Compiler.MmTrace, module.TagTable ?? []);
+    rt.EmitMmAlloc(Compiler.MmTrace, Compiler.MmDebug);
+    rt.EmitMmRealloc(Compiler.MmTrace, Compiler.MmDebug);
+    rt.EmitMmFree(Compiler.MmTrace, Compiler.MmDebug);
+    rt.EmitMmIncref(Compiler.MmTrace);
+    rt.EmitMmDecref(Compiler.MmTrace);
+    rt.EmitMmManagedElementsFunctions(Compiler.MmTrace);
+    rt.EmitMmLeakCheck();
+    rt.EmitMmValidatePtr();
+    rt.EmitManagedListFunctions(Compiler.MmTrace);
 
     // Build symbol table
     var symbolEntries = new List<(string name, int codeOffset)>();

@@ -42,16 +42,24 @@ public partial class X86CodeEmitter {
       _e.EmitPushReg(X86Register.Rbp);
       _e.EmitMovRegReg(X86Register.Rbp, X86Register.Rsp);
       _e.EmitSubRegImm(X86Register.Rsp, frameSize);
-      // Save callee-saved RBX (Scratch3) below the frame. PUSH modifies RSP only —
+      // Save callee-saved registers below the frame. PUSH modifies RSP only —
       // the named slots at [rbp-(i+1)*8] are unaffected since they are RBP-relative.
+      // On Windows x64, RBX/RSI/RDI are callee-saved. RSI and RDI are used as
+      // Arg4/Arg5 and also clobbered by REP MOVSB in string conversion helpers.
       _e.EmitPushReg(X86Register.Rbx);
+      _e.EmitPushReg(X86Register.Rsi);
+      _e.EmitPushReg(X86Register.Rdi);
       for (int i = 0; i < argCount; i++)
         _e.EmitMovMemReg(-(i + 1) * 0x08, _abiArgRegs[i], 8);
     }
 
     public void FunctionEnd() {
-      // RSP still points at the saved RBX (no alloca-style growth occurs in runtime functions).
-      _e.EmitPopReg(X86Register.Rbx); // restore callee-saved Scratch3
+      // Restore callee-saved registers in reverse order, then tear down the frame.
+      // The POPs advance RSP back to [RBP - frameSize], and MOV RSP,RBP resets it
+      // to the saved RBP position so POP RBP and RET work correctly.
+      _e.EmitPopReg(X86Register.Rdi);
+      _e.EmitPopReg(X86Register.Rsi);
+      _e.EmitPopReg(X86Register.Rbx);
       _e.EmitMovRegReg(X86Register.Rsp, X86Register.Rbp);
       _e.EmitPopReg(X86Register.Rbp);
       _e.EmitByte(0xC3); // ret
@@ -360,6 +368,49 @@ public partial class X86CodeEmitter {
       var destReg = R(dest);
       if (destReg != X86Register.Rdx)
         _e.EmitMovRegReg(destReg, X86Register.Rdx);
+    }
+
+    // ---- Platform-specific labels ----
+
+    public string WriteStderrLabel => "maxon_write_stderr";
+
+    // ---- Local address / byte memory ----
+
+    public void LeaLocal(VReg dest, int slotIndex) {
+      // LEA R(dest), [RBP + -(slotIndex+1)*8]
+      _e.EmitLeaRegMem(R(dest), -(slotIndex + 1) * 8);
+    }
+
+    public void StoreIndirectByte(VReg baseReg, int offset, VReg src) {
+      // MOV BYTE [R(base) + offset], R(src) low byte
+      // REX + 88 /r [base + disp8]
+      var baseReg_ = R(baseReg);
+      var srcReg_ = R(src);
+      byte rex = 0x40;
+      if (baseReg_ >= X86Register.R8) rex |= 0x01; // REX.B
+      if (srcReg_ >= X86Register.R8) rex |= 0x04;  // REX.R
+      // Without REX, mod/rm encodings 4..7 select AH/CH/DH/BH instead of SPL/BPL/SIL/DIL.
+      // REX must be emitted whenever src is RSP/RBP/RSI/RDI to reach their low bytes.
+      bool needRex = rex != 0x40 || (srcReg_ >= X86Register.Rsp && srcReg_ <= X86Register.Rdi);
+      if (needRex) _e.EmitByte(rex);
+      // 88 /r ModRM(01, reg, base) + disp8
+      _e.EmitByte(0x88);
+      _e.EmitByte((byte)(0x40 | (((int)srcReg_ & 7) << 3) | ((int)baseReg_ & 7)));
+      _e.EmitByte((byte)offset);
+    }
+
+    public void LoadIndirectByte(VReg dest, VReg baseReg, int offset) {
+      // MOVZX R(dest), BYTE [R(base) + offset]
+      // REX.W + 0F B6 /r ModRM(01, dest, base) + disp8
+      var destReg = R(dest);
+      var baseReg_ = R(baseReg);
+      byte rex = 0x48;
+      if (destReg >= X86Register.R8) rex |= 0x04; // REX.R
+      if (baseReg_ >= X86Register.R8) rex |= 0x01; // REX.B
+      _e.EmitByte(rex);
+      _e.EmitBytes(0x0F, 0xB6);
+      _e.EmitByte((byte)(0x40 | (((int)destReg & 7) << 3) | ((int)baseReg_ & 7)));
+      _e.EmitByte((byte)offset);
     }
 
     // ---- Platform info ----

@@ -32,6 +32,10 @@ end 'main'
 1
 ```
 ```stderr
+os_alloc size=2304
+os_alloc size=4096
+os_alloc size=4096
+os_alloc size=4096
 slab_alloc size=48 class=5
 alloc Point #1 rc=0 size=16 [ownership-edge-cases.main]
 incref Point #1 rc=1 [ownership-edge-cases.main]
@@ -64,6 +68,10 @@ end 'main'
 42
 ```
 ```stderr
+os_alloc size=2304
+os_alloc size=4096
+os_alloc size=4096
+os_alloc size=4096
 slab_alloc size=40 class=5
 alloc Box #1 rc=0 size=8 [ownership-edge-cases.main]
 incref Box #1 rc=1 [ownership-edge-cases.main]
@@ -99,6 +107,10 @@ end 'main'
 3
 ```
 ```stderr
+os_alloc size=2304
+os_alloc size=4096
+os_alloc size=4096
+os_alloc size=4096
 slab_alloc size=40 class=5
 alloc Tag #1 rc=0 size=8 [ownership-edge-cases.main]
 incref Tag #1 rc=1 [ownership-edge-cases.main]
@@ -150,6 +162,10 @@ end 'main'
 7
 ```
 ```stderr
+os_alloc size=2304
+os_alloc size=4096
+os_alloc size=4096
+os_alloc size=4096
 slab_alloc size=40 class=5
 alloc Widget #1 rc=0 size=8 [ownership-edge-cases.main]
 incref Widget #1 rc=1 [ownership-edge-cases.main]
@@ -186,6 +202,10 @@ end 'main'
 99
 ```
 ```stderr
+os_alloc size=2304
+os_alloc size=4096
+os_alloc size=4096
+os_alloc size=4096
 slab_alloc size=40 class=5
 alloc Token #1 rc=0 size=8 [ownership-edge-cases.makeToken]
 incref Token #1 rc=1 [ownership-edge-cases.makeToken]
@@ -220,6 +240,10 @@ end 'main'
 30
 ```
 ```stderr
+os_alloc size=2304
+os_alloc size=4096
+os_alloc size=4096
+os_alloc size=4096
 slab_alloc size=40 class=5
 alloc Num #1 rc=0 size=8 [ownership-edge-cases.main]
 incref Num #1 rc=1 [ownership-edge-cases.main]
@@ -267,6 +291,10 @@ end 'main'
 6
 ```
 ```stderr
+os_alloc size=2304
+os_alloc size=4096
+os_alloc size=4096
+os_alloc size=4096
 slab_alloc size=40 class=5
 alloc Counter #1 rc=0 size=8 [ownership-edge-cases.main]
 incref Counter #1 rc=1 [ownership-edge-cases.main]
@@ -323,6 +351,10 @@ end 'main'
 3
 ```
 ```stderr
+os_alloc size=2304
+os_alloc size=4096
+os_alloc size=4096
+os_alloc size=4096
 slab_alloc size=40 class=5
 alloc Step #1 rc=0 size=8 [ownership-edge-cases.main]
 incref Step #1 rc=1 [ownership-edge-cases.main]
@@ -381,6 +413,10 @@ end 'main'
 8
 ```
 ```stderr
+os_alloc size=2304
+os_alloc size=4096
+os_alloc size=4096
+os_alloc size=4096
 slab_alloc size=40 class=5
 alloc Item #1 rc=0 size=8 [ownership-edge-cases.main]
 incref Item #1 rc=1 [ownership-edge-cases.main]
@@ -441,6 +477,10 @@ end 'main'
 55
 ```
 ```stderr
+os_alloc size=2304
+os_alloc size=4096
+os_alloc size=4096
+os_alloc size=4096
 slab_alloc size=40 class=5
 alloc Inner #1 rc=0 size=8 [ownership-edge-cases.main]
 incref Inner #1 rc=1 [ownership-edge-cases.main]
@@ -488,6 +528,10 @@ end 'main'
 7
 ```
 ```stderr
+os_alloc size=2304
+os_alloc size=4096
+os_alloc size=4096
+os_alloc size=4096
 slab_alloc size=40 class=5
 alloc A #1 rc=0 size=8 [ownership-edge-cases.main]
 slab_alloc size=40 class=5
@@ -541,6 +585,10 @@ end 'main'
 2
 ```
 ```stderr
+os_alloc size=2304
+os_alloc size=4096
+os_alloc size=4096
+os_alloc size=4096
 slab_alloc size=40 class=5
 alloc Payload #1 rc=0 size=8 [ownership-edge-cases.main]
 incref Payload #1 rc=1 [ownership-edge-cases.main]
@@ -599,6 +647,10 @@ end 'main'
 30
 ```
 ```stderr
+os_alloc size=2304
+os_alloc size=4096
+os_alloc size=4096
+os_alloc size=4096
 slab_alloc size=40 class=5
 alloc Val #1 rc=0 size=8 [ownership-edge-cases.main]
 slab_alloc size=40 class=5
@@ -667,8 +719,13 @@ end 'main'
 10
 ```
 ```stderr
+os_alloc size=2304
+os_alloc size=4096
+os_alloc size=4096
+os_alloc size=4096
 slab_alloc size=64 class=6
 alloc __ManagedMemory_Node #1 rc=0 size=32 [ownership-edge-cases.main]
+os_alloc size=4096
 slab_alloc size=48 class=5
 alloc NodeArray #2 rc=0 size=16 [ownership-edge-cases.main]
 incref __ManagedMemory_Node #1 rc=1 [ownership-edge-cases.main]
@@ -676,6 +733,7 @@ incref NodeArray #2 rc=1 [ownership-edge-cases.main]
 slab_alloc size=40 class=5
 alloc Node #3 rc=0 size=8 [ownership-edge-cases.main]
 incref Node #3 rc=1 [ownership-edge-cases.main]
+os_alloc size=4096
 slab_alloc size=32 class=4
 raw_alloc size=32
 realloc __ManagedMemory_Node #1 rc=1 size=32
@@ -728,8 +786,13 @@ end 'main'
 1
 ```
 ```stderr
+os_alloc size=2304
+os_alloc size=4096
+os_alloc size=4096
+os_alloc size=4096
 slab_alloc size=64 class=6
 alloc __ManagedMemory_Node #1 rc=0 size=32 [ownership-edge-cases.main]
+os_alloc size=4096
 slab_alloc size=48 class=5
 alloc NodeArray #2 rc=0 size=16 [ownership-edge-cases.main]
 incref __ManagedMemory_Node #1 rc=1 [ownership-edge-cases.main]
@@ -737,6 +800,7 @@ incref NodeArray #2 rc=1 [ownership-edge-cases.main]
 slab_alloc size=40 class=5
 alloc Node #3 rc=0 size=8 [ownership-edge-cases.main]
 incref Node #3 rc=1 [ownership-edge-cases.main]
+os_alloc size=4096
 slab_alloc size=32 class=4
 raw_alloc size=32
 realloc __ManagedMemory_Node #1 rc=1 size=32
@@ -796,8 +860,13 @@ end 'main'
 200
 ```
 ```stderr
+os_alloc size=2304
+os_alloc size=4096
+os_alloc size=4096
+os_alloc size=4096
 slab_alloc size=64 class=6
 alloc __ManagedMemory_Item #1 rc=0 size=32 [ownership-edge-cases.main]
+os_alloc size=4096
 slab_alloc size=48 class=5
 alloc ItemArray #2 rc=0 size=16 [ownership-edge-cases.main]
 incref __ManagedMemory_Item #1 rc=1 [ownership-edge-cases.main]
@@ -805,6 +874,7 @@ incref ItemArray #2 rc=1 [ownership-edge-cases.main]
 slab_alloc size=40 class=5
 alloc Item #3 rc=0 size=8 [ownership-edge-cases.main]
 incref Item #3 rc=1 [ownership-edge-cases.main]
+os_alloc size=4096
 slab_alloc size=32 class=4
 raw_alloc size=32
 realloc __ManagedMemory_Item #1 rc=1 size=32
@@ -864,8 +934,13 @@ end 'main'
 0
 ```
 ```stderr
+os_alloc size=2304
+os_alloc size=4096
+os_alloc size=4096
+os_alloc size=4096
 slab_alloc size=64 class=6
 alloc __ManagedMemory_Item #1 rc=0 size=32 [ownership-edge-cases.main]
+os_alloc size=4096
 slab_alloc size=48 class=5
 alloc ItemArray #2 rc=0 size=16 [ownership-edge-cases.main]
 incref __ManagedMemory_Item #1 rc=1 [ownership-edge-cases.main]
@@ -873,6 +948,7 @@ incref ItemArray #2 rc=1 [ownership-edge-cases.main]
 slab_alloc size=40 class=5
 alloc Item #3 rc=0 size=8 [ownership-edge-cases.main]
 incref Item #3 rc=1 [ownership-edge-cases.main]
+os_alloc size=4096
 slab_alloc size=32 class=4
 raw_alloc size=32
 realloc __ManagedMemory_Item #1 rc=1 size=32
@@ -940,8 +1016,13 @@ end 'main'
 3
 ```
 ```stderr
+os_alloc size=2304
+os_alloc size=4096
+os_alloc size=4096
+os_alloc size=4096
 slab_alloc size=64 class=6
 alloc __ManagedMemory_Item #1 rc=0 size=32 [ownership-edge-cases.fill]
+os_alloc size=4096
 slab_alloc size=48 class=5
 alloc ItemArray #2 rc=0 size=16 [ownership-edge-cases.fill]
 incref __ManagedMemory_Item #1 rc=1 [ownership-edge-cases.fill]
@@ -949,6 +1030,7 @@ incref ItemArray #2 rc=1 [ownership-edge-cases.fill]
 slab_alloc size=40 class=5
 alloc Item #3 rc=0 size=8 [ownership-edge-cases.fill]
 incref Item #3 rc=1 [ownership-edge-cases.fill]
+os_alloc size=4096
 slab_alloc size=32 class=4
 raw_alloc size=32
 realloc __ManagedMemory_Item #1 rc=1 size=32
@@ -1020,8 +1102,13 @@ end 'main'
 10
 ```
 ```stderr
+os_alloc size=2304
+os_alloc size=4096
+os_alloc size=4096
+os_alloc size=4096
 slab_alloc size=64 class=6
 alloc __ManagedMemory_Entry #1 rc=0 size=32 [ownership-edge-cases.main]
+os_alloc size=4096
 slab_alloc size=48 class=5
 alloc EntryArray #2 rc=0 size=16 [ownership-edge-cases.main]
 incref __ManagedMemory_Entry #1 rc=1 [ownership-edge-cases.main]
@@ -1029,6 +1116,7 @@ incref EntryArray #2 rc=1 [ownership-edge-cases.main]
 slab_alloc size=40 class=5
 alloc Entry #3 rc=0 size=8 [ownership-edge-cases.main]
 incref Entry #3 rc=1 [ownership-edge-cases.main]
+os_alloc size=4096
 slab_alloc size=32 class=4
 raw_alloc size=32
 realloc __ManagedMemory_Entry #1 rc=1 size=32
@@ -1130,8 +1218,13 @@ end 'main'
 60
 ```
 ```stderr
+os_alloc size=2304
+os_alloc size=4096
+os_alloc size=4096
+os_alloc size=4096
 slab_alloc size=64 class=6
 alloc __ManagedMemory_Val #1 rc=0 size=32 [ownership-edge-cases.main]
+os_alloc size=4096
 slab_alloc size=48 class=5
 alloc ValArray #2 rc=0 size=16 [ownership-edge-cases.main]
 incref __ManagedMemory_Val #1 rc=1 [ownership-edge-cases.main]
@@ -1139,6 +1232,7 @@ incref ValArray #2 rc=1 [ownership-edge-cases.main]
 slab_alloc size=40 class=5
 alloc Val #3 rc=0 size=8 [ownership-edge-cases.main]
 incref Val #3 rc=1 [ownership-edge-cases.main]
+os_alloc size=4096
 slab_alloc size=32 class=4
 raw_alloc size=32
 realloc __ManagedMemory_Val #1 rc=1 size=32
@@ -1216,8 +1310,13 @@ end 'main'
 4
 ```
 ```stderr
+os_alloc size=2304
+os_alloc size=4096
+os_alloc size=4096
+os_alloc size=4096
 slab_alloc size=64 class=6
 alloc __ManagedMemory_Val #1 rc=0 size=32 [ownership-edge-cases.main]
+os_alloc size=4096
 slab_alloc size=48 class=5
 alloc ValArray #2 rc=0 size=16 [ownership-edge-cases.main]
 incref __ManagedMemory_Val #1 rc=1 [ownership-edge-cases.main]
@@ -1225,6 +1324,7 @@ incref ValArray #2 rc=1 [ownership-edge-cases.main]
 slab_alloc size=40 class=5
 alloc Val #3 rc=0 size=8 [ownership-edge-cases.main]
 incref Val #3 rc=1 [ownership-edge-cases.main]
+os_alloc size=4096
 slab_alloc size=32 class=4
 raw_alloc size=32
 realloc __ManagedMemory_Val #1 rc=1 size=32
@@ -1295,8 +1395,13 @@ end 'main'
 2
 ```
 ```stderr
+os_alloc size=2304
+os_alloc size=4096
+os_alloc size=4096
+os_alloc size=4096
 slab_alloc size=64 class=6
 alloc __ManagedMemory_Wrapper #1 rc=0 size=32 [ownership-edge-cases.main]
+os_alloc size=4096
 slab_alloc size=48 class=5
 alloc WrapperArray #2 rc=0 size=16 [ownership-edge-cases.main]
 incref __ManagedMemory_Wrapper #1 rc=1 [ownership-edge-cases.main]
@@ -1307,6 +1412,7 @@ slab_alloc size=40 class=5
 alloc Wrapper #4 rc=0 size=8 [ownership-edge-cases.main]
 incref Inner #3 rc=1 [ownership-edge-cases.main]
 incref Wrapper #4 rc=1 [ownership-edge-cases.main]
+os_alloc size=4096
 slab_alloc size=32 class=4
 raw_alloc size=32
 realloc __ManagedMemory_Wrapper #1 rc=1 size=32
@@ -1373,6 +1479,10 @@ end 'main'
 3
 ```
 ```stderr
+os_alloc size=2304
+os_alloc size=4096
+os_alloc size=4096
+os_alloc size=4096
 slab_alloc size=40 class=5
 alloc Step #1 rc=0 size=8 [ownership-edge-cases.compute]
 incref Step #1 rc=1 [ownership-edge-cases.compute]
@@ -1419,8 +1529,13 @@ end 'main'
 77
 ```
 ```stderr
+os_alloc size=2304
+os_alloc size=4096
+os_alloc size=4096
+os_alloc size=4096
 slab_alloc size=64 class=6
 alloc __ManagedMemory_Item #1 rc=0 size=32 [ownership-edge-cases.main]
+os_alloc size=4096
 slab_alloc size=48 class=5
 alloc ItemArray #2 rc=0 size=16 [ownership-edge-cases.main]
 incref __ManagedMemory_Item #1 rc=1 [ownership-edge-cases.main]
@@ -1428,6 +1543,7 @@ incref ItemArray #2 rc=1 [ownership-edge-cases.main]
 slab_alloc size=40 class=5
 alloc Item #3 rc=0 size=8 [ownership-edge-cases.main]
 incref Item #3 rc=1 [ownership-edge-cases.main]
+os_alloc size=4096
 slab_alloc size=32 class=4
 raw_alloc size=32
 realloc __ManagedMemory_Item #1 rc=1 size=32
@@ -1480,6 +1596,10 @@ end 'main'
 42
 ```
 ```stderr
+os_alloc size=2304
+os_alloc size=4096
+os_alloc size=4096
+os_alloc size=4096
 slab_alloc size=40 class=5
 alloc Cfg #1 rc=0 size=8 [ownership-edge-cases.__module_init]
 incref Cfg #1 rc=1 [ownership-edge-cases.__module_init]
@@ -1531,6 +1651,10 @@ end 'main'
 30
 ```
 ```stderr
+os_alloc size=2304
+os_alloc size=4096
+os_alloc size=4096
+os_alloc size=4096
 slab_alloc size=40 class=5
 alloc State #1 rc=0 size=8 [ownership-edge-cases.__module_init]
 incref State #1 rc=1 [ownership-edge-cases.__module_init]
@@ -1601,6 +1725,10 @@ end 'main'
 2
 ```
 ```stderr
+os_alloc size=2304
+os_alloc size=4096
+os_alloc size=4096
+os_alloc size=4096
 slab_alloc size=40 class=5
 raw_alloc size=40
 raw_free
@@ -1638,6 +1766,10 @@ end 'main'
 5
 ```
 ```stderr
+os_alloc size=2304
+os_alloc size=4096
+os_alloc size=4096
+os_alloc size=4096
 slab_alloc size=40 class=5
 alloc Body #1 rc=0 size=8 [ownership-edge-cases.main]
 incref Body #1 rc=1 [ownership-edge-cases.main]
@@ -1682,6 +1814,10 @@ end 'main'
 15
 ```
 ```stderr
+os_alloc size=2304
+os_alloc size=4096
+os_alloc size=4096
+os_alloc size=4096
 slab_alloc size=40 class=5
 alloc ClosureEnv #1 rc=0 size=8 [ownership-edge-cases.main]
 incref ClosureEnv #1 rc=1 [ownership-edge-cases.main]
@@ -1718,6 +1854,10 @@ end 'main'
 3
 ```
 ```stderr
+os_alloc size=2304
+os_alloc size=4096
+os_alloc size=4096
+os_alloc size=4096
 slab_alloc size=40 class=5
 alloc Config #1 rc=0 size=8 [ownership-edge-cases.main]
 incref Config #1 rc=1 [ownership-edge-cases.main]
@@ -1758,8 +1898,13 @@ end 'main'
 99
 ```
 ```stderr
+os_alloc size=2304
+os_alloc size=4096
+os_alloc size=4096
+os_alloc size=4096
 slab_alloc size=64 class=6
 alloc __ManagedMemory_Item #1 rc=0 size=32 [ownership-edge-cases.main]
+os_alloc size=4096
 slab_alloc size=48 class=5
 alloc ItemArray #2 rc=0 size=16 [ownership-edge-cases.main]
 incref __ManagedMemory_Item #1 rc=1 [ownership-edge-cases.main]
@@ -1807,9 +1952,14 @@ end 'main'
 7
 ```
 ```stderr
+os_alloc size=2304
+os_alloc size=4096
+os_alloc size=4096
+os_alloc size=4096
 slab_alloc size=64 class=6
 alloc TokenManagedList #1 rc=0 size=32 [ownership-edge-cases.main]
 incref TokenManagedList #1 rc=1 [ownership-edge-cases.main]
+os_alloc size=4096
 slab_alloc size=40 class=5
 alloc Token #2 rc=0 size=8 [ownership-edge-cases.main]
 incref Token #2 rc=1 [ownership-edge-cases.main]
@@ -1858,9 +2008,14 @@ end 'main'
 9
 ```
 ```stderr
+os_alloc size=2304
+os_alloc size=4096
+os_alloc size=4096
+os_alloc size=4096
 slab_alloc size=64 class=6
 alloc TokenManagedList #1 rc=0 size=32 [ownership-edge-cases.main]
 incref TokenManagedList #1 rc=1 [ownership-edge-cases.main]
+os_alloc size=4096
 slab_alloc size=40 class=5
 alloc Token #2 rc=0 size=8 [ownership-edge-cases.main]
 incref Token #2 rc=1 [ownership-edge-cases.main]
@@ -1913,9 +2068,14 @@ end 'main'
 0
 ```
 ```stderr
+os_alloc size=2304
+os_alloc size=4096
+os_alloc size=4096
+os_alloc size=4096
 slab_alloc size=64 class=6
 alloc TokenManagedList #1 rc=0 size=32 [ownership-edge-cases.main]
 incref TokenManagedList #1 rc=1 [ownership-edge-cases.main]
+os_alloc size=4096
 slab_alloc size=40 class=5
 alloc Token #2 rc=0 size=8 [ownership-edge-cases.main]
 incref Token #2 rc=1 [ownership-edge-cases.main]
@@ -1990,9 +2150,14 @@ end 'main'
 99
 ```
 ```stderr
+os_alloc size=2304
+os_alloc size=4096
+os_alloc size=4096
+os_alloc size=4096
 slab_alloc size=64 class=6
 alloc TokenManagedList #1 rc=0 size=32 [ownership-edge-cases.main]
 incref TokenManagedList #1 rc=1 [ownership-edge-cases.main]
+os_alloc size=4096
 slab_alloc size=40 class=5
 alloc Token #2 rc=0 size=8 [ownership-edge-cases.main]
 incref Token #2 rc=1 [ownership-edge-cases.main]
@@ -2054,8 +2219,13 @@ end 'main'
 60
 ```
 ```stderr
+os_alloc size=2304
+os_alloc size=4096
+os_alloc size=4096
+os_alloc size=4096
 slab_alloc size=64 class=6
 alloc __ManagedMemory_Score #1 rc=0 size=32 [ownership-edge-cases.main]
+os_alloc size=4096
 slab_alloc size=48 class=5
 alloc ScoreArray #2 rc=0 size=16 [ownership-edge-cases.main]
 incref __ManagedMemory_Score #1 rc=1 [ownership-edge-cases.main]
@@ -2063,6 +2233,7 @@ incref ScoreArray #2 rc=1 [ownership-edge-cases.main]
 slab_alloc size=40 class=5
 alloc Score #3 rc=0 size=8 [ownership-edge-cases.main]
 incref Score #3 rc=1 [ownership-edge-cases.main]
+os_alloc size=4096
 slab_alloc size=32 class=4
 raw_alloc size=32
 realloc __ManagedMemory_Score #1 rc=1 size=32
@@ -2133,6 +2304,10 @@ end 'main'
 21
 ```
 ```stderr
+os_alloc size=2304
+os_alloc size=4096
+os_alloc size=4096
+os_alloc size=4096
 slab_alloc size=40 class=5
 alloc Data #1 rc=0 size=8 [ownership-edge-cases.main]
 incref Data #1 rc=1 [ownership-edge-cases.main]
@@ -2178,8 +2353,13 @@ end 'main'
 2
 ```
 ```stderr
+os_alloc size=2304
+os_alloc size=4096
+os_alloc size=4096
+os_alloc size=4096
 slab_alloc size=64 class=6
 alloc __ManagedMemory_CellArray #1 rc=0 size=32 [ownership-edge-cases.main]
+os_alloc size=4096
 slab_alloc size=48 class=5
 alloc Grid #2 rc=0 size=16 [ownership-edge-cases.main]
 incref __ManagedMemory_CellArray #1 rc=1 [ownership-edge-cases.main]
@@ -2193,6 +2373,7 @@ incref CellArray #4 rc=1 [ownership-edge-cases.main]
 slab_alloc size=40 class=5
 alloc Cell #5 rc=0 size=8 [ownership-edge-cases.main]
 incref Cell #5 rc=1 [ownership-edge-cases.main]
+os_alloc size=4096
 slab_alloc size=32 class=4
 raw_alloc size=32
 realloc __ManagedMemory_Cell #3 rc=1 size=32
@@ -2294,8 +2475,13 @@ end 'main'
 2
 ```
 ```stderr
+os_alloc size=2304
+os_alloc size=4096
+os_alloc size=4096
+os_alloc size=4096
 slab_alloc size=64 class=6
 alloc __ManagedMemory_Entry #1 rc=0 size=32 [ownership-edge-cases.fill]
+os_alloc size=4096
 slab_alloc size=48 class=5
 alloc EntryArray #2 rc=0 size=16 [ownership-edge-cases.fill]
 incref __ManagedMemory_Entry #1 rc=1 [ownership-edge-cases.fill]
@@ -2306,6 +2492,7 @@ incref Bucket #3 rc=1 [ownership-edge-cases.fill]
 slab_alloc size=40 class=5
 alloc Entry #4 rc=0 size=8 [ownership-edge-cases.fill]
 incref Entry #4 rc=1 [ownership-edge-cases.fill]
+os_alloc size=4096
 slab_alloc size=32 class=4
 raw_alloc size=32
 realloc __ManagedMemory_Entry #1 rc=1 size=32
@@ -2365,6 +2552,10 @@ end 'main'
 10
 ```
 ```stderr
+os_alloc size=2304
+os_alloc size=4096
+os_alloc size=4096
+os_alloc size=4096
 slab_alloc size=48 class=5
 alloc Pair #1 rc=0 size=16 [ownership-edge-cases.makePair]
 incref Pair #1 rc=1 [ownership-edge-cases.makePair]
@@ -2408,6 +2599,10 @@ end 'main'
 5
 ```
 ```stderr
+os_alloc size=2304
+os_alloc size=4096
+os_alloc size=4096
+os_alloc size=4096
 slab_alloc size=40 class=5
 alloc Inner #1 rc=0 size=8 [ownership-edge-cases.main]
 incref Inner #1 rc=1 [ownership-edge-cases.main]
@@ -2445,8 +2640,13 @@ end 'main'
 0
 ```
 ```stderr
+os_alloc size=2304
+os_alloc size=4096
+os_alloc size=4096
+os_alloc size=4096
 slab_alloc size=64 class=6
 alloc __ManagedList_String #1 rc=0 size=32 [ownership-edge-cases.main]
+os_alloc size=4096
 slab_alloc size=48 class=5
 alloc StringList #2 rc=0 size=16 [ownership-edge-cases.main]
 incref __ManagedList_String #1 rc=1 [ownership-edge-cases.main]
@@ -2500,8 +2700,13 @@ end 'main'
 1
 ```
 ```stderr
+os_alloc size=2304
+os_alloc size=4096
+os_alloc size=4096
+os_alloc size=4096
 slab_alloc size=48 class=5
 alloc String #1 rc=0 size=16 [ownership-edge-cases.main]
+os_alloc size=4096
 slab_alloc size=64 class=6
 alloc __ManagedMemory #2 rc=0 size=32 [ownership-edge-cases.main]
 incref __ManagedMemory #2 rc=1 [ownership-edge-cases.main]
@@ -2547,8 +2752,13 @@ end 'main'
 1
 ```
 ```stderr
+os_alloc size=2304
+os_alloc size=4096
+os_alloc size=4096
+os_alloc size=4096
 slab_alloc size=48 class=5
 alloc Character #1 rc=0 size=16 [ownership-edge-cases.main]
+os_alloc size=4096
 slab_alloc size=64 class=6
 alloc __ManagedMemory #2 rc=0 size=32 [ownership-edge-cases.main]
 incref __ManagedMemory #2 rc=1 [ownership-edge-cases.main]
@@ -2581,8 +2791,13 @@ end 'main'
 2
 ```
 ```stderr
+os_alloc size=2304
+os_alloc size=4096
+os_alloc size=4096
+os_alloc size=4096
 slab_alloc size=48 class=5
 alloc Character #1 rc=0 size=16 [ownership-edge-cases.main]
+os_alloc size=4096
 slab_alloc size=64 class=6
 alloc __ManagedMemory #2 rc=0 size=32 [ownership-edge-cases.main]
 incref __ManagedMemory #2 rc=1 [ownership-edge-cases.main]
@@ -2617,8 +2832,13 @@ end 'main'
 1
 ```
 ```stderr
+os_alloc size=2304
+os_alloc size=4096
+os_alloc size=4096
+os_alloc size=4096
 slab_alloc size=48 class=5
 alloc Character #1 rc=0 size=16 [ownership-edge-cases.main]
+os_alloc size=4096
 slab_alloc size=64 class=6
 alloc __ManagedMemory #2 rc=0 size=32 [ownership-edge-cases.main]
 incref __ManagedMemory #2 rc=1 [ownership-edge-cases.main]
@@ -2668,8 +2888,13 @@ end 'main'
 1
 ```
 ```stderr
+os_alloc size=2304
+os_alloc size=4096
+os_alloc size=4096
+os_alloc size=4096
 slab_alloc size=48 class=5
 alloc Character #1 rc=0 size=16 [ownership-edge-cases.makeChar]
+os_alloc size=4096
 slab_alloc size=64 class=6
 alloc __ManagedMemory #2 rc=0 size=32 [ownership-edge-cases.makeChar]
 incref __ManagedMemory #2 rc=1 [ownership-edge-cases.makeChar]
@@ -2704,8 +2929,13 @@ end 'main'
 1
 ```
 ```stderr
+os_alloc size=2304
+os_alloc size=4096
+os_alloc size=4096
+os_alloc size=4096
 slab_alloc size=48 class=5
 alloc Character #1 rc=0 size=16 [ownership-edge-cases.main]
+os_alloc size=4096
 slab_alloc size=64 class=6
 alloc __ManagedMemory #2 rc=0 size=32 [ownership-edge-cases.main]
 incref __ManagedMemory #2 rc=1 [ownership-edge-cases.main]
@@ -2737,6 +2967,10 @@ end 'main'
 10
 ```
 ```stderr
+os_alloc size=2304
+os_alloc size=4096
+os_alloc size=4096
+os_alloc size=4096
 slab_alloc size=48 class=5
 alloc __Tuple_i64_i64 #1 rc=0 size=16 [ownership-edge-cases.main]
 incref __Tuple_i64_i64 #1 rc=1 [ownership-edge-cases.main]
@@ -2763,6 +2997,10 @@ end 'main'
 10
 ```
 ```stderr
+os_alloc size=2304
+os_alloc size=4096
+os_alloc size=4096
+os_alloc size=4096
 slab_alloc size=48 class=5
 alloc __Tuple_i64_i64 #1 rc=0 size=16 [ownership-edge-cases.main]
 incref __Tuple_i64_i64 #1 rc=1 [ownership-edge-cases.main]
@@ -2791,6 +3029,10 @@ end 'main'
 7
 ```
 ```stderr
+os_alloc size=2304
+os_alloc size=4096
+os_alloc size=4096
+os_alloc size=4096
 slab_alloc size=48 class=5
 alloc __Tuple_i64_i64 #1 rc=0 size=16 [ownership-edge-cases.main]
 incref __Tuple_i64_i64 #1 rc=1 [ownership-edge-cases.main]
@@ -2824,8 +3066,13 @@ end 'main'
 42
 ```
 ```stderr
+os_alloc size=2304
+os_alloc size=4096
+os_alloc size=4096
+os_alloc size=4096
 slab_alloc size=48 class=5
 alloc String #1 rc=0 size=16 [ownership-edge-cases.main]
+os_alloc size=4096
 slab_alloc size=64 class=6
 alloc __ManagedMemory #2 rc=0 size=32 [ownership-edge-cases.main]
 incref __ManagedMemory #2 rc=1 [ownership-edge-cases.main]
@@ -2869,6 +3116,10 @@ end 'main'
 8
 ```
 ```stderr
+os_alloc size=2304
+os_alloc size=4096
+os_alloc size=4096
+os_alloc size=4096
 slab_alloc size=48 class=5
 alloc __Tuple_i64_i64 #1 rc=0 size=16 [ownership-edge-cases.makePair]
 incref __Tuple_i64_i64 #1 rc=1 [ownership-edge-cases.makePair]
@@ -2896,6 +3147,10 @@ end 'main'
 30
 ```
 ```stderr
+os_alloc size=2304
+os_alloc size=4096
+os_alloc size=4096
+os_alloc size=4096
 slab_alloc size=48 class=5
 alloc __Tuple_i64_i64 #1 rc=0 size=16 [ownership-edge-cases.main]
 incref __Tuple_i64_i64 #1 rc=1 [ownership-edge-cases.main]
@@ -2930,6 +3185,10 @@ end 'main'
 1
 ```
 ```stderr
+os_alloc size=2304
+os_alloc size=4096
+os_alloc size=4096
+os_alloc size=4096
 slab_alloc size=48 class=5
 alloc Point #1 rc=0 size=16 [ownership-edge-cases.main]
 slab_alloc size=48 class=5

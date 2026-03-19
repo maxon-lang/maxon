@@ -210,12 +210,18 @@ end 'main'
 77
 ```
 ```stderr
+os_alloc size=2304
+os_alloc size=4096
+os_alloc size=4096
+os_alloc size=4096
 slab_alloc size=64 class=6
 alloc __ManagedMemory #1 rc=0 size=32 [codegen-internals.main]
+os_alloc size=4096
 slab_alloc size=48 class=5
 alloc IntArray #2 rc=0 size=16 [codegen-internals.main]
 incref __ManagedMemory #1 rc=1 [codegen-internals.main]
 incref IntArray #2 rc=1 [codegen-internals.main]
+os_alloc size=4096
 slab_alloc size=8 class=2
 raw_alloc size=8
 cow __ManagedMemory #1 rc=1 size=8

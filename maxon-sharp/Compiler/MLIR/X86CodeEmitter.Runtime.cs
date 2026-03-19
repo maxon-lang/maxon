@@ -6947,4 +6947,72 @@ public partial class X86CodeEmitter {
     EmitCallRuntimeLabel("maxon_panic");
     EmitRuntimeFunctionEnd();
   }
+
+  // ==========================================================================
+  // Inline trace helpers -- emit x86 machine code sequences for trace output.
+  // Used by COW and other runtime functions that need trace output inline.
+  // ==========================================================================
+
+  /// <summary>
+  /// Emit the scope annotation suffix: prints " [scope]" if [rbp+scopeSlot] is non-null,
+  /// then prints a newline.
+  /// </summary>
+  private void EmitMmTraceScopeAndNewline(string skipLabel, int scopeSlot = -0x10) {
+    EmitMovRegMem(X86Register.Rax, scopeSlot, 8); // scope_cstr
+    EmitBytes(0x48, 0x85, 0xC0); // TEST rax, rax
+    EmitJcc("z", skipLabel);
+    EmitLeaRegSymdataRel(X86Register.Rcx, "__mm_tag_lbracket");
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_trace_print_tag")); EmitDword(0);
+    EmitMovRegMem(X86Register.Rcx, scopeSlot, 8);
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_trace_print_tag")); EmitDword(0);
+    EmitLeaRegSymdataRel(X86Register.Rcx, "__mm_tag_rbracket");
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_trace_print_tag")); EmitDword(0);
+    DefineLabel(skipLabel);
+    EmitLeaRegSymdataRel(X86Register.Rcx, "__mm_tag_newline");
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_trace_print_tag")); EmitDword(0);
+  }
+
+  /// Inline helper: emit code to print "Type #N" from user_ptr at [rbp + ptrSlot].
+  private void EmitTraceTagAndId(int ptrSlot) {
+    EmitMovRegMem(X86Register.Rcx, ptrSlot, 8);
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_trace_print_packed_tag")); EmitDword(0);
+    EmitLeaRegSymdataRel(X86Register.Rcx, "__mm_tag_hash");
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_trace_print_tag")); EmitDword(0);
+    EmitMovRegMem(X86Register.Rax, ptrSlot, 8);
+    EmitBytes(0x48, 0x8B, 0x48, 0xE8); // MOV rcx, [rax-24]
+    EmitBytes(0x48, 0xC1, 0xE9, 0x10); // SHR rcx, 16
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_trace_print_i64")); EmitDword(0);
+  }
+
+  /// Inline helper: emit code to print " rc=N" from user_ptr at [rbp + ptrSlot].
+  private void EmitTraceRc(int ptrSlot, int rcSubtract = 0) {
+    EmitLeaRegSymdataRel(X86Register.Rcx, "__mm_tag_rc_eq");
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_trace_print_tag")); EmitDword(0);
+    EmitMovRegMem(X86Register.Rax, ptrSlot, 8);
+    EmitBytes(0x48, 0x8B, 0x48, 0xF8); // MOV rcx, [rax-8]
+    if (rcSubtract > 0) EmitSubRegImm(X86Register.Rcx, rcSubtract);
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_trace_print_i64")); EmitDword(0);
+  }
+
+  /// Inline helper: emit code to print " size=N" from size value at [rbp + sizeSlot].
+  private void EmitTraceSize(int sizeSlot) {
+    EmitLeaRegSymdataRel(X86Register.Rcx, "__mm_tag_size_eq");
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_trace_print_tag")); EmitDword(0);
+    EmitMovRegMem(X86Register.Rcx, sizeSlot, 8);
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_trace_print_i64")); EmitDword(0);
+  }
+
+  /// <summary>
+  /// Emit inline trace output: indent + tagLabel + "TypeName #N rc=R [scope]\n".
+  /// </summary>
+  private void EmitInlineTrace(string tagLabel, string uniquePrefix, int ptrSlot, int scopeSlot,
+      bool printRc = true, int rcSubtract = 0, int? sizeSlot = null) {
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_trace_print_indent")); EmitDword(0);
+    EmitLeaRegSymdataRel(X86Register.Rcx, tagLabel);
+    EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_trace_print_tag")); EmitDword(0);
+    EmitTraceTagAndId(ptrSlot);
+    if (printRc) EmitTraceRc(ptrSlot, rcSubtract);
+    if (sizeSlot.HasValue) EmitTraceSize(sizeSlot.Value);
+    EmitMmTraceScopeAndNewline($"{uniquePrefix}_no_scope", scopeSlot);
+  }
 }

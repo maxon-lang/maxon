@@ -126,7 +126,7 @@ public class Compiler {
         Logger.Info(LogCategory.Compiler, $"Wrote {codeResult.Code.Length} bytes code, {codeResult.Rdata.Length} bytes rdata, {codeResult.Data.Length} bytes data, {codeResult.Ucddata.Length} bytes ucddata, {codeResult.Symdata.Length} bytes symdata to {outputPath}");
       } else if (target.Arch == "x86_64") {
         // Stage 5: Code emission (X86 dialect -> machine code)
-        var codeResult = CodeEmitter.Emit(mlirResult.X86Module!);
+        var codeResult = X86CodeEmitter.Emit(mlirResult.X86Module!);
 
         // Stage 6: Write PE executable
         PeWriter.Write(outputPath, codeResult.Code, codeResult.Rdata, codeResult.Data, codeResult.Ucddata, codeResult.Imports, codeResult.Symdata, codeResult.CoffSymbols);

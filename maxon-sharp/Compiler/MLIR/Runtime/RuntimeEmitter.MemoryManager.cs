@@ -29,6 +29,8 @@ public partial class RuntimeEmitter {
       _b.DefineSymdata("__slab_tag_alloc", "slab_alloc\0"u8.ToArray());
       _b.DefineSymdata("__slab_tag_free", "slab_free\0"u8.ToArray());
       _b.DefineSymdata("__slab_tag_class", " class=\0"u8.ToArray());
+      _b.DefineSymdata("__slab_tag_os_alloc", "os_alloc\0"u8.ToArray());
+      _b.DefineSymdata("__slab_tag_os_free", "os_free\0"u8.ToArray());
       _b.DefineSymdata("__mm_tag_incref", "incref \0"u8.ToArray());
       _b.DefineSymdata("__mm_tag_decref", "decref \0"u8.ToArray());
       _b.DefineSymdata("__mm_tag_transfer", "transfer \0"u8.ToArray());
@@ -700,6 +702,788 @@ public partial class RuntimeEmitter {
     _b.MovRegImm(VReg.Arg0, 260);
     if (mmTrace) _b.ZeroReg(VReg.Arg1); // scope = NULL
     _b.Call("mm_raw_alloc");
+    _b.FunctionEnd();
+  }
+
+  // =========================================================================
+  // Trace print functions (standalone runtime functions)
+  // =========================================================================
+
+  /// <summary>mm_trace_print_tag(cstr_ptr): Write null-terminated C string to stderr.</summary>
+  public void EmitMmTracePrintTag() {
+    _b.FunctionStart("mm_trace_print_tag", 1, 0x20);
+    _b.LoadLocal(VReg.Arg0, 0); // reload cstr ptr
+    _b.Call(_b.WriteStderrLabel);
+    _b.FunctionEnd();
+  }
+
+  /// <summary>mm_trace_print_i64(value): Print 64-bit integer in decimal to stderr.</summary>
+  public void EmitMmTracePrintI64() {
+    // Slot 0 = value (arg).
+    // Slots 4-6 = 24-byte string buffer (3 qword slots = 24 bytes).
+    // The buffer must be placed at HIGH slot numbers (low addresses) because
+    // maxon_u64_to_string writes bytes at buf[0], buf[1], ..., buf[20] — i.e.,
+    // at increasing addresses.  LeaLocal gives the address of the slot, so if
+    // we used slot 1 (= rbp-0x10), writing 21 bytes upward would reach rbp+0x0B,
+    // corrupting the saved RBP and return address.  Slot 4 (= rbp-0x28) keeps
+    // the 24-byte buffer entirely within the 0x60-byte frame.
+    _b.FunctionStart("mm_trace_print_i64", 1, 0x60);
+    _b.LoadLocal(VReg.Arg0, 0);    // Arg0 = value
+    _b.LeaLocal(VReg.Arg1, 4);     // Arg1 = &buf (at rbp-0x28, 24 bytes upward to rbp-0x11)
+    _b.Call("maxon_u64_to_string");
+    _b.LeaLocal(VReg.Arg0, 4);     // Arg0 = &buf
+    _b.Call(_b.WriteStderrLabel);
+    _b.FunctionEnd();
+  }
+
+  /// <summary>mm_trace_print_hex(value): Print 64-bit value as "0xHEX" to stderr.</summary>
+  public void EmitMmTracePrintHex() {
+    // Stack layout:
+    //   Slot 0 = value (arg)
+    //   Slot 1 = hex_chars base address (symdata ptr)
+    //   Slot 2 = loop counter (15..0)
+    //   Slots 6-8 = 24-byte buffer for "0x" + 16 hex chars + null (20 bytes used, 24 allocated)
+    // The buffer is placed at high slot numbers (low addresses) because the write_stderr
+    // function reads bytes at increasing addresses from the buffer pointer. Placing it at
+    // slot 1 would write past rbp, corrupting the saved frame pointer and return address.
+    _b.FunctionStart("mm_trace_print_hex", 1, 0x70);
+
+    var bufSlot = 6; // rbp - 0x38; 24 bytes upward reaches rbp - 0x21, safely in-frame
+
+    // Write '0' at buf[0], 'x' at buf[1]
+    _b.LeaLocal(VReg.Scratch0, bufSlot);  // Scratch0 = buf base
+    _b.MovRegImm(VReg.Scratch1, '0');
+    _b.StoreIndirectByte(VReg.Scratch0, 0, VReg.Scratch1);
+    _b.MovRegImm(VReg.Scratch1, 'x');
+    _b.StoreIndirectByte(VReg.Scratch0, 1, VReg.Scratch1);
+
+    // Load hex_chars address into slot 1
+    _b.LeaSymdata(VReg.Scratch0, "__mm_hex_chars");
+    _b.StoreLocal(1, VReg.Scratch0);
+
+    // Load value, init loop counter = 15
+    _b.LoadLocal(VReg.Scratch0, 0);  // Scratch0 = value
+    _b.MovRegImm(VReg.Scratch1, 15);
+    _b.StoreLocal(2, VReg.Scratch1); // slot 2 = counter
+
+    var loopLabel = UniqueLabel("mm_trace_hex_loop");
+    var doneLabel = UniqueLabel("mm_trace_hex_done");
+
+    _b.DefineLabel(loopLabel);
+
+    // Extract low nibble of value: Scratch2 = value & 0xF
+    _b.LoadLocal(VReg.Scratch0, 0);
+    _b.MovRegReg(VReg.Scratch2, VReg.Scratch0);
+    _b.MovRegImm(VReg.Scratch3, 0xF);
+    _b.AndRegReg(VReg.Scratch2, VReg.Scratch3);
+
+    // Look up hex char: Scratch2 = hex_chars[Scratch2]
+    _b.LoadLocal(VReg.Scratch3, 1);  // hex_chars base
+    _b.AddRegReg(VReg.Scratch3, VReg.Scratch2); // &hex_chars[nibble]
+    _b.LoadIndirectByte(VReg.Scratch2, VReg.Scratch3, 0); // Scratch2 = char
+
+    // Store at buf[2 + counter]: Scratch3 = buf + 2 + counter
+    _b.LeaLocal(VReg.Scratch3, bufSlot);  // buf base
+    _b.LoadLocal(VReg.Scratch1, 2); // counter
+    _b.AddRegReg(VReg.Scratch3, VReg.Scratch1); // buf + counter
+    _b.AddRegImm(VReg.Scratch3, 2);  // buf + 2 + counter
+    _b.StoreIndirectByte(VReg.Scratch3, 0, VReg.Scratch2);
+
+    // Shift value right by 4
+    _b.LoadLocal(VReg.Scratch0, 0);
+    _b.ShrRegImm(VReg.Scratch0, 4);
+    _b.StoreLocal(0, VReg.Scratch0);
+
+    // counter--; loop while counter >= 0
+    _b.LoadLocal(VReg.Scratch1, 2);
+    _b.SubRegImm(VReg.Scratch1, 1);
+    _b.StoreLocal(2, VReg.Scratch1);
+    _b.CmpRegImm(VReg.Scratch1, 0);
+    _b.JumpIf(Condition.GreaterEqual, loopLabel);
+
+    // Null-terminate at buf[18]
+    _b.LeaLocal(VReg.Scratch0, bufSlot);
+    _b.ZeroReg(VReg.Scratch1);
+    _b.StoreIndirectByte(VReg.Scratch0, 18, VReg.Scratch1);
+
+    // Print
+    _b.LeaLocal(VReg.Arg0, bufSlot);
+    _b.Call(_b.WriteStderrLabel);
+
+    _b.DefineLabel(doneLabel);
+    _b.FunctionEnd();
+  }
+
+  /// <summary>mm_trace_print_packed_tag(user_ptr): Extract tag index, look up name, print it.</summary>
+  public void EmitMmTracePrintPackedTag() {
+    _b.FunctionStart("mm_trace_print_packed_tag", 1, 0x30);
+    // Load packed_id from [user_ptr - 24]
+    _b.LoadLocal(VReg.Scratch0, 0); // user_ptr
+    _b.LoadIndirect(VReg.Arg0, VReg.Scratch0, MmOffPackedId); // packed_id ([ptr-24])
+    // Extract low 16 bits = tag_index
+    _b.MovRegImm(VReg.Scratch1, 0xFFFF);
+    _b.AndRegReg(VReg.Arg0, VReg.Scratch1);
+    _b.Call("mm_tag_lookup"); // Ret = cstr
+    _b.MovRegReg(VReg.Arg0, VReg.Ret);
+    _b.Call("mm_trace_print_tag");
+    _b.FunctionEnd();
+  }
+
+  /// <summary>mm_trace_print_indent(): Print 2 spaces for each level of __mm_trace_depth.</summary>
+  public void EmitMmTracePrintIndent() {
+    _b.FunctionStart("mm_trace_print_indent", 0, 0x30);
+    // Load depth -> slot 0
+    _b.LoadGlobal(VReg.Scratch0, "__mm_trace_depth");
+    _b.StoreLocal(0, VReg.Scratch0);
+
+    var loopLabel = UniqueLabel("mm_trace_indent_loop");
+    var doneLabel = UniqueLabel("mm_trace_indent_done");
+
+    _b.DefineLabel(loopLabel);
+    _b.LoadLocal(VReg.Scratch0, 0);
+    _b.JumpIfZero(VReg.Scratch0, doneLabel);
+    _b.LeaSymdata(VReg.Arg0, "__mm_tag_indent");
+    _b.Call("mm_trace_print_tag");
+    _b.LoadLocal(VReg.Scratch0, 0);
+    _b.SubRegImm(VReg.Scratch0, 1);
+    _b.StoreLocal(0, VReg.Scratch0);
+    _b.Jump(loopLabel);
+
+    _b.DefineLabel(doneLabel);
+    _b.FunctionEnd();
+  }
+
+  /// <summary>mm_tag_lookup(tag_index): Returns cstr pointer to type name, or "__mm_tag_null".</summary>
+  public void EmitMmTagLookup(List<string?> tagTable) {
+    _b.FunctionStart("mm_tag_lookup", 1, 0x20);
+    _b.LoadLocal(VReg.Scratch0, 0); // tag_index
+    for (int i = 1; i < tagTable.Count; i++) {
+      var label = tagTable[i];
+      if (label == null) continue;
+      _b.CmpRegImm(VReg.Scratch0, i);
+      var skipLabel = UniqueLabel("mm_tag_lookup_skip");
+      _b.JumpIf(Condition.NotEqual, skipLabel);
+      _b.LeaSymdata(VReg.Ret, label);
+      _b.FunctionEnd(); // return (leaves via ret)
+      _b.DefineLabel(skipLabel);
+    }
+    // Default: return __mm_tag_null
+    _b.LeaSymdata(VReg.Ret, "__mm_tag_null");
+    _b.FunctionEnd();
+  }
+
+  /// <summary>mm_trace_transfer(ptr, scope): Print "transfer TypeName #N rc=N [scope]" to stderr.</summary>
+  public void EmitMmTraceTransfer() {
+    // Slots: 0=ptr, 1=scope
+    _b.FunctionStart("mm_trace_transfer", 2, 0x30);
+    _b.LoadLocal(VReg.Scratch0, 0); // ptr
+    var nullLabel = UniqueLabel("mm_trace_transfer_null");
+    _b.JumpIfZero(VReg.Scratch0, nullLabel);
+    _b.Call("mm_trace_print_indent");
+    _b.LeaSymdata(VReg.Arg0, "__mm_tag_transfer");
+    _b.Call("mm_trace_print_tag");
+    EmitTraceTagAndId(0);
+    EmitTraceRc(0);
+    EmitTraceScopeAndNewline(UniqueLabel("mm_trace_transfer_no_scope"), 1);
+    _b.DefineLabel(nullLabel);
+    _b.FunctionEnd();
+  }
+
+  /// <summary>Emit all trace-related functions. Always emits print and tag_lookup.
+  /// Only emits packed_tag/indent/transfer when mmTrace is true.</summary>
+  public void EmitMmTraceFunctions(bool mmTrace, List<string?> tagTable) {
+    EmitMmTracePrintTag();
+    EmitMmTracePrintHex();
+    EmitMmTracePrintI64();
+    EmitMmTagLookup(tagTable);
+    if (mmTrace) {
+      EmitMmTracePrintPackedTag();
+      EmitMmTracePrintIndent();
+      EmitMmTraceTransfer();
+    }
+  }
+
+  // =========================================================================
+  // Managed elements functions (array element refcount management)
+  // =========================================================================
+
+  /// <summary>mm_decref_managed_elements(managed_ptr): Decref each element pointer in buffer.</summary>
+  public void EmitMmDecrefManagedElements(bool mmTrace) {
+    // ManagedMemory: [+0]=buf, [+8]=len, [+16]=capacity, [+24]=element_size
+    // Slots: 0=managed_ptr, 1=buf, 2=len, 3=idx
+    _b.FunctionStart("mm_decref_managed_elements", 1, 0x60);
+    _b.LoadLocal(VReg.Scratch0, 0); // managed_ptr
+    _b.LoadIndirect(VReg.Scratch1, VReg.Scratch0, 0); // buf
+    _b.StoreLocal(1, VReg.Scratch1);
+    _b.LoadIndirect(VReg.Scratch1, VReg.Scratch0, 8); // len
+    _b.StoreLocal(2, VReg.Scratch1);
+    _b.ZeroReg(VReg.Scratch0);
+    _b.StoreLocal(3, VReg.Scratch0); // idx = 0
+
+    var loopLabel = UniqueLabel("mm_decref_elems_loop");
+    var doneLabel = UniqueLabel("mm_decref_elems_done");
+    var skipLabel = UniqueLabel("mm_decref_elems_skip");
+
+    _b.DefineLabel(loopLabel);
+    _b.LoadLocal(VReg.Scratch0, 3); // idx
+    _b.LoadLocal(VReg.Scratch1, 2); // len
+    _b.CmpRegReg(VReg.Scratch0, VReg.Scratch1);
+    _b.JumpIf(Condition.AboveEqual, doneLabel);
+
+    // elem = buf[idx * 8]: base = buf + idx*8
+    _b.LoadLocal(VReg.Scratch0, 3); // idx
+    _b.ShlRegImm(VReg.Scratch0, 3); // idx * 8
+    _b.LoadLocal(VReg.Scratch1, 1); // buf
+    _b.AddRegReg(VReg.Scratch1, VReg.Scratch0); // buf + idx*8
+    _b.LoadIndirect(VReg.Arg0, VReg.Scratch1, 0); // elem = [buf + idx*8]
+
+    // Null guard
+    _b.JumpIfZero(VReg.Arg0, skipLabel);
+
+    if (mmTrace) _b.LeaSymdata(VReg.Arg1, "__mm_scope_managed_elements");
+    else _b.ZeroReg(VReg.Arg1);
+    _b.Call("mm_decref");
+
+    _b.DefineLabel(skipLabel);
+    _b.LoadLocal(VReg.Scratch0, 3);
+    _b.AddRegImm(VReg.Scratch0, 1);
+    _b.StoreLocal(3, VReg.Scratch0);
+    _b.Jump(loopLabel);
+
+    _b.DefineLabel(doneLabel);
+    _b.FunctionEnd();
+  }
+
+  /// <summary>mm_incref_managed_elements(managed_ptr): Incref each element pointer in buffer.</summary>
+  public void EmitMmIncrefManagedElements(bool mmTrace) {
+    _b.FunctionStart("mm_incref_managed_elements", 1, 0x60);
+    _b.LoadLocal(VReg.Scratch0, 0);
+    _b.LoadIndirect(VReg.Scratch1, VReg.Scratch0, 0); // buf
+    _b.StoreLocal(1, VReg.Scratch1);
+    _b.LoadIndirect(VReg.Scratch1, VReg.Scratch0, 8); // len
+    _b.StoreLocal(2, VReg.Scratch1);
+    _b.ZeroReg(VReg.Scratch0);
+    _b.StoreLocal(3, VReg.Scratch0);
+
+    var loopLabel = UniqueLabel("mm_incref_elems_loop");
+    var doneLabel = UniqueLabel("mm_incref_elems_done");
+    var skipLabel = UniqueLabel("mm_incref_elems_skip");
+
+    _b.DefineLabel(loopLabel);
+    _b.LoadLocal(VReg.Scratch0, 3);
+    _b.LoadLocal(VReg.Scratch1, 2);
+    _b.CmpRegReg(VReg.Scratch0, VReg.Scratch1);
+    _b.JumpIf(Condition.AboveEqual, doneLabel);
+
+    _b.LoadLocal(VReg.Scratch0, 3);
+    _b.ShlRegImm(VReg.Scratch0, 3);
+    _b.LoadLocal(VReg.Scratch1, 1);
+    _b.AddRegReg(VReg.Scratch1, VReg.Scratch0);
+    _b.LoadIndirect(VReg.Arg0, VReg.Scratch1, 0);
+
+    _b.JumpIfZero(VReg.Arg0, skipLabel);
+
+    if (mmTrace) _b.LeaSymdata(VReg.Arg1, "__mm_scope_managed_elements");
+    else _b.ZeroReg(VReg.Arg1);
+    _b.Call("mm_incref");
+
+    _b.DefineLabel(skipLabel);
+    _b.LoadLocal(VReg.Scratch0, 3);
+    _b.AddRegImm(VReg.Scratch0, 1);
+    _b.StoreLocal(3, VReg.Scratch0);
+    _b.Jump(loopLabel);
+
+    _b.DefineLabel(doneLabel);
+    _b.FunctionEnd();
+  }
+
+  /// <summary>mm_clear_managed_elements(managed_ptr): Decref and zero each element slot.</summary>
+  public void EmitMmClearManagedElements(bool mmTrace) {
+    _b.FunctionStart("mm_clear_managed_elements", 1, 0x60);
+    _b.LoadLocal(VReg.Scratch0, 0);
+    _b.LoadIndirect(VReg.Scratch1, VReg.Scratch0, 0); // buf
+    _b.StoreLocal(1, VReg.Scratch1);
+    _b.LoadIndirect(VReg.Scratch1, VReg.Scratch0, 8); // len
+    _b.StoreLocal(2, VReg.Scratch1);
+    _b.ZeroReg(VReg.Scratch0);
+    _b.StoreLocal(3, VReg.Scratch0);
+
+    var loopLabel = UniqueLabel("mm_clear_elems_loop");
+    var doneLabel = UniqueLabel("mm_clear_elems_done");
+    var zeroLabel = UniqueLabel("mm_clear_elems_zero");
+
+    _b.DefineLabel(loopLabel);
+    _b.LoadLocal(VReg.Scratch0, 3);
+    _b.LoadLocal(VReg.Scratch1, 2);
+    _b.CmpRegReg(VReg.Scratch0, VReg.Scratch1);
+    _b.JumpIf(Condition.AboveEqual, doneLabel);
+
+    // Compute element address = buf + idx*8
+    _b.LoadLocal(VReg.Scratch0, 3);
+    _b.ShlRegImm(VReg.Scratch0, 3);
+    _b.LoadLocal(VReg.Scratch1, 1);
+    _b.AddRegReg(VReg.Scratch1, VReg.Scratch0); // elem_addr
+    _b.LoadIndirect(VReg.Arg0, VReg.Scratch1, 0); // elem
+
+    // Null guard: skip decref, go to zero
+    _b.JumpIfZero(VReg.Arg0, zeroLabel);
+
+    if (mmTrace) _b.LeaSymdata(VReg.Arg1, "__mm_scope_managed_elements");
+    else _b.ZeroReg(VReg.Arg1);
+    _b.Call("mm_decref");
+
+    _b.DefineLabel(zeroLabel);
+    // Zero the slot: [buf + idx*8] = 0
+    _b.LoadLocal(VReg.Scratch0, 3);
+    _b.ShlRegImm(VReg.Scratch0, 3);
+    _b.LoadLocal(VReg.Scratch1, 1);
+    _b.AddRegReg(VReg.Scratch1, VReg.Scratch0);
+    _b.ZeroReg(VReg.Scratch0);
+    _b.StoreIndirect(VReg.Scratch1, 0, VReg.Scratch0);
+
+    _b.LoadLocal(VReg.Scratch0, 3);
+    _b.AddRegImm(VReg.Scratch0, 1);
+    _b.StoreLocal(3, VReg.Scratch0);
+    _b.Jump(loopLabel);
+
+    _b.DefineLabel(doneLabel);
+    _b.FunctionEnd();
+  }
+
+  /// <summary>Emit all three managed-elements functions.</summary>
+  public void EmitMmManagedElementsFunctions(bool mmTrace) {
+    EmitMmDecrefManagedElements(mmTrace);
+    EmitMmIncrefManagedElements(mmTrace);
+    EmitMmClearManagedElements(mmTrace);
+  }
+
+  // =========================================================================
+  // mm_leak_check / mm_validate_ptr
+  // =========================================================================
+
+  /// <summary>mm_leak_check(): If __mm_alloc_count > 0, print leak message and exit 101.</summary>
+  public void EmitMmLeakCheck() {
+    _b.FunctionStart("mm_leak_check", 0, 0x30);
+    _b.LoadGlobal(VReg.Scratch0, "__mm_alloc_count");
+    var doneLabel = UniqueLabel("mm_leak_check_done");
+    _b.JumpIfZero(VReg.Scratch0, doneLabel);
+    // Print "MM leak: "
+    _b.LeaSymdata(VReg.Arg0, "__mm_leak_prefix");
+    _b.Call(_b.WriteStderrLabel);
+    // Print count
+    _b.LoadGlobal(VReg.Arg0, "__mm_alloc_count");
+    _b.Call("mm_trace_print_i64");
+    // Print " allocation(s) remain\n"
+    _b.LeaSymdata(VReg.Arg0, "__mm_leak_suffix");
+    _b.Call(_b.WriteStderrLabel);
+    // Exit 101
+    _b.MovRegImm(VReg.Arg0, 101);
+    _b.CallImport("os_exit");
+    _b.DefineLabel(doneLabel);
+    _b.FunctionEnd();
+  }
+
+  /// <summary>mm_validate_ptr(user_ptr, tag_cstr): Panics if ptr is non-null but has zero refcount.</summary>
+  public void EmitMmValidatePtr() {
+    _b.DefineSymdata("__mm_validate_tag", "MM VALIDATE ptr=\0"u8.ToArray());
+    _b.DefineSymdata("__mm_validate_fail", "VALIDATION FAILED: ptr has zero refcount!\n\0"u8.ToArray());
+
+    _b.FunctionStart("mm_validate_ptr", 2, 0x30);
+    _b.LoadLocal(VReg.Scratch0, 0); // ptr
+    var doneLabel = UniqueLabel("mm_validate_done");
+    // Null is OK
+    _b.JumpIfZero(VReg.Scratch0, doneLabel);
+    // Load refcount at [ptr - 8]
+    _b.LoadIndirect(VReg.Scratch1, VReg.Scratch0, MmOffRefcount); // [ptr-8]
+    _b.JumpIfNonZero(VReg.Scratch1, doneLabel); // nonzero = valid
+    // Failed: print "MM VALIDATE ptr=0xHEX\n" then panic
+    _b.LeaSymdata(VReg.Arg0, "__mm_validate_tag");
+    _b.Call("mm_trace_print_tag");
+    _b.LoadLocal(VReg.Arg0, 0); // ptr
+    _b.Call("mm_trace_print_hex");
+    _b.LeaSymdata(VReg.Arg0, "__mm_tag_newline");
+    _b.Call("mm_trace_print_tag");
+    _b.LeaSymdata(VReg.Arg0, "__mm_validate_fail");
+    _b.Call("maxon_panic");
+    _b.DefineLabel(doneLabel);
+    _b.FunctionEnd();
+  }
+
+  // =========================================================================
+  // ManagedList runtime functions
+  // =========================================================================
+  // ManagedListNode layout: [+0]=next, [+8]=prev, [+16]=list, [+24]=value
+  // ManagedList layout: [+0]=head, [+8]=tail, [+16]=count
+
+  public void EmitManagedListFunctions(bool mmTrace) {
+    EmitManagedListInsertFirst(mmTrace);
+    EmitManagedListInsertLast(mmTrace);
+    EmitManagedListInsertAfter(mmTrace);
+    EmitManagedListInsertBefore(mmTrace);
+    EmitManagedListUnlink();
+    EmitManagedListClear(mmTrace);
+    EmitManagedListClearManaged(mmTrace);
+    EmitManagedListDecrefValues();
+  }
+
+  private void EmitManagedListInsertFirst(bool mmTrace) {
+    // Slots: 0=list_ptr, 1=node_ptr, 2=old_head
+    _b.FunctionStart("maxon_managed_list_insert_first", 2, 0x50);
+    // Auto-detach: if node.list != 0, unlink and decref
+    _b.LoadLocal(VReg.Scratch0, 1); // node_ptr
+    _b.LoadIndirect(VReg.Scratch1, VReg.Scratch0, 16); // node.list
+    var noDetach = UniqueLabel("mli_first_no_detach");
+    _b.JumpIfZero(VReg.Scratch1, noDetach);
+    _b.MovRegReg(VReg.Arg0, VReg.Scratch1); // old list
+    _b.LoadLocal(VReg.Arg1, 1);
+    _b.Call("maxon_managed_list_unlink");
+    _b.LoadLocal(VReg.Arg0, 1); // node_ptr
+    _b.ZeroReg(VReg.Arg1);
+    _b.Call("mm_decref");
+    _b.DefineLabel(noDetach);
+    // old_head = [list+0]
+    _b.LoadLocal(VReg.Scratch0, 0); // list_ptr
+    _b.LoadIndirect(VReg.Scratch1, VReg.Scratch0, 0); // old_head
+    _b.StoreLocal(2, VReg.Scratch1); // save old_head
+    // node.next = old_head; node.prev = 0; node.list = list_ptr
+    _b.LoadLocal(VReg.Scratch0, 1); // node_ptr
+    _b.LoadLocal(VReg.Scratch1, 2); // old_head
+    _b.StoreIndirect(VReg.Scratch0, 0, VReg.Scratch1); // node.next = old_head
+    _b.ZeroReg(VReg.Scratch1);
+    _b.StoreIndirect(VReg.Scratch0, 8, VReg.Scratch1); // node.prev = 0
+    _b.LoadLocal(VReg.Scratch1, 0); // list_ptr
+    _b.StoreIndirect(VReg.Scratch0, 16, VReg.Scratch1); // node.list = list_ptr
+    // if old_head != 0: old_head.prev = node_ptr
+    _b.LoadLocal(VReg.Scratch1, 2); // old_head
+    var noOldHead = UniqueLabel("mli_first_no_old_head");
+    _b.JumpIfZero(VReg.Scratch1, noOldHead);
+    _b.LoadLocal(VReg.Scratch0, 1); // node_ptr
+    _b.StoreIndirect(VReg.Scratch1, 8, VReg.Scratch0); // old_head.prev = node_ptr
+    _b.DefineLabel(noOldHead);
+    // list.head = node_ptr
+    _b.LoadLocal(VReg.Scratch0, 0); // list_ptr
+    _b.LoadLocal(VReg.Scratch1, 1); // node_ptr
+    _b.StoreIndirect(VReg.Scratch0, 0, VReg.Scratch1);
+    // if list.tail == 0: list.tail = node_ptr
+    _b.LoadIndirect(VReg.Scratch2, VReg.Scratch0, 8); // list.tail
+    var tailOk = UniqueLabel("mli_first_tail_ok");
+    _b.JumpIfNonZero(VReg.Scratch2, tailOk);
+    _b.StoreIndirect(VReg.Scratch0, 8, VReg.Scratch1); // list.tail = node_ptr
+    _b.DefineLabel(tailOk);
+    // list.count++
+    _b.LoadIndirect(VReg.Scratch2, VReg.Scratch0, 16);
+    _b.AddRegImm(VReg.Scratch2, 1);
+    _b.StoreIndirect(VReg.Scratch0, 16, VReg.Scratch2);
+    // Incref node
+    _b.LoadLocal(VReg.Arg0, 1);
+    if (mmTrace) _b.LeaSymdata(VReg.Arg1, "__mm_scope_managed_list_insert");
+    else _b.ZeroReg(VReg.Arg1);
+    _b.Call("mm_incref");
+    _b.FunctionEnd();
+  }
+
+  private void EmitManagedListInsertLast(bool mmTrace) {
+    // Slots: 0=list_ptr, 1=node_ptr, 2=old_tail
+    _b.FunctionStart("maxon_managed_list_insert_last", 2, 0x50);
+    // Auto-detach
+    _b.LoadLocal(VReg.Scratch0, 1);
+    _b.LoadIndirect(VReg.Scratch1, VReg.Scratch0, 16);
+    var noDetach = UniqueLabel("mli_last_no_detach");
+    _b.JumpIfZero(VReg.Scratch1, noDetach);
+    _b.MovRegReg(VReg.Arg0, VReg.Scratch1);
+    _b.LoadLocal(VReg.Arg1, 1);
+    _b.Call("maxon_managed_list_unlink");
+    _b.LoadLocal(VReg.Arg0, 1);
+    _b.ZeroReg(VReg.Arg1);
+    _b.Call("mm_decref");
+    _b.DefineLabel(noDetach);
+    // old_tail = [list+8]
+    _b.LoadLocal(VReg.Scratch0, 0);
+    _b.LoadIndirect(VReg.Scratch1, VReg.Scratch0, 8); // old_tail
+    _b.StoreLocal(2, VReg.Scratch1);
+    // node.next = 0; node.prev = old_tail; node.list = list_ptr
+    _b.LoadLocal(VReg.Scratch0, 1);
+    _b.ZeroReg(VReg.Scratch1);
+    _b.StoreIndirect(VReg.Scratch0, 0, VReg.Scratch1); // node.next = 0
+    _b.LoadLocal(VReg.Scratch1, 2); // old_tail
+    _b.StoreIndirect(VReg.Scratch0, 8, VReg.Scratch1); // node.prev = old_tail
+    _b.LoadLocal(VReg.Scratch1, 0);
+    _b.StoreIndirect(VReg.Scratch0, 16, VReg.Scratch1); // node.list = list_ptr
+    // if old_tail != 0: old_tail.next = node_ptr
+    _b.LoadLocal(VReg.Scratch1, 2);
+    var noOldTail = UniqueLabel("mli_last_no_old_tail");
+    _b.JumpIfZero(VReg.Scratch1, noOldTail);
+    _b.LoadLocal(VReg.Scratch0, 1);
+    _b.StoreIndirect(VReg.Scratch1, 0, VReg.Scratch0); // old_tail.next = node_ptr
+    _b.DefineLabel(noOldTail);
+    // list.tail = node_ptr
+    _b.LoadLocal(VReg.Scratch0, 0);
+    _b.LoadLocal(VReg.Scratch1, 1);
+    _b.StoreIndirect(VReg.Scratch0, 8, VReg.Scratch1);
+    // if list.head == 0: list.head = node_ptr
+    _b.LoadIndirect(VReg.Scratch2, VReg.Scratch0, 0);
+    var headOk = UniqueLabel("mli_last_head_ok");
+    _b.JumpIfNonZero(VReg.Scratch2, headOk);
+    _b.StoreIndirect(VReg.Scratch0, 0, VReg.Scratch1);
+    _b.DefineLabel(headOk);
+    // list.count++
+    _b.LoadIndirect(VReg.Scratch2, VReg.Scratch0, 16);
+    _b.AddRegImm(VReg.Scratch2, 1);
+    _b.StoreIndirect(VReg.Scratch0, 16, VReg.Scratch2);
+    // Incref node
+    _b.LoadLocal(VReg.Arg0, 1);
+    if (mmTrace) _b.LeaSymdata(VReg.Arg1, "__mm_scope_managed_list_insert");
+    else _b.ZeroReg(VReg.Arg1);
+    _b.Call("mm_incref");
+    _b.FunctionEnd();
+  }
+
+  private void EmitManagedListInsertAfter(bool mmTrace) {
+    // Slots: 0=list_ptr, 1=target_ptr, 2=node_ptr, 3=after (target.next)
+    _b.FunctionStart("maxon_managed_list_insert_after", 3, 0x60);
+    // Auto-detach
+    _b.LoadLocal(VReg.Scratch0, 2);
+    _b.LoadIndirect(VReg.Scratch1, VReg.Scratch0, 16);
+    var noDetach = UniqueLabel("mli_after_no_detach");
+    _b.JumpIfZero(VReg.Scratch1, noDetach);
+    _b.MovRegReg(VReg.Arg0, VReg.Scratch1);
+    _b.LoadLocal(VReg.Arg1, 2);
+    _b.Call("maxon_managed_list_unlink");
+    _b.LoadLocal(VReg.Arg0, 2);
+    _b.ZeroReg(VReg.Arg1);
+    _b.Call("mm_decref");
+    _b.DefineLabel(noDetach);
+    // after = target.next
+    _b.LoadLocal(VReg.Scratch0, 1); // target_ptr
+    _b.LoadIndirect(VReg.Scratch1, VReg.Scratch0, 0); // after = target.next
+    _b.StoreLocal(3, VReg.Scratch1);
+    // node.next = after; node.prev = target; node.list = list_ptr
+    _b.LoadLocal(VReg.Scratch0, 2); // node_ptr
+    _b.LoadLocal(VReg.Scratch1, 3);
+    _b.StoreIndirect(VReg.Scratch0, 0, VReg.Scratch1); // node.next = after
+    _b.LoadLocal(VReg.Scratch1, 1); // target_ptr
+    _b.StoreIndirect(VReg.Scratch0, 8, VReg.Scratch1); // node.prev = target
+    _b.LoadLocal(VReg.Scratch1, 0);
+    _b.StoreIndirect(VReg.Scratch0, 16, VReg.Scratch1); // node.list = list_ptr
+    // target.next = node_ptr
+    _b.LoadLocal(VReg.Scratch1, 1);
+    _b.LoadLocal(VReg.Scratch0, 2);
+    _b.StoreIndirect(VReg.Scratch1, 0, VReg.Scratch0);
+    // if after != 0: after.prev = node_ptr; else: list.tail = node_ptr
+    _b.LoadLocal(VReg.Scratch1, 3); // after
+    var wasTail = UniqueLabel("mli_after_was_tail");
+    var linked = UniqueLabel("mli_after_linked");
+    _b.JumpIfZero(VReg.Scratch1, wasTail);
+    _b.LoadLocal(VReg.Scratch0, 2);
+    _b.StoreIndirect(VReg.Scratch1, 8, VReg.Scratch0); // after.prev = node_ptr
+    _b.Jump(linked);
+    _b.DefineLabel(wasTail);
+    _b.LoadLocal(VReg.Scratch0, 0);
+    _b.LoadLocal(VReg.Scratch1, 2);
+    _b.StoreIndirect(VReg.Scratch0, 8, VReg.Scratch1); // list.tail = node_ptr
+    _b.DefineLabel(linked);
+    // list.count++
+    _b.LoadLocal(VReg.Scratch0, 0);
+    _b.LoadIndirect(VReg.Scratch1, VReg.Scratch0, 16);
+    _b.AddRegImm(VReg.Scratch1, 1);
+    _b.StoreIndirect(VReg.Scratch0, 16, VReg.Scratch1);
+    // Incref node
+    _b.LoadLocal(VReg.Arg0, 2);
+    if (mmTrace) _b.LeaSymdata(VReg.Arg1, "__mm_scope_managed_list_insert");
+    else _b.ZeroReg(VReg.Arg1);
+    _b.Call("mm_incref");
+    _b.FunctionEnd();
+  }
+
+  private void EmitManagedListInsertBefore(bool mmTrace) {
+    // Slots: 0=list_ptr, 1=target_ptr, 2=node_ptr, 3=before (target.prev)
+    _b.FunctionStart("maxon_managed_list_insert_before", 3, 0x60);
+    // Auto-detach
+    _b.LoadLocal(VReg.Scratch0, 2);
+    _b.LoadIndirect(VReg.Scratch1, VReg.Scratch0, 16);
+    var noDetach = UniqueLabel("mli_before_no_detach");
+    _b.JumpIfZero(VReg.Scratch1, noDetach);
+    _b.MovRegReg(VReg.Arg0, VReg.Scratch1);
+    _b.LoadLocal(VReg.Arg1, 2);
+    _b.Call("maxon_managed_list_unlink");
+    _b.LoadLocal(VReg.Arg0, 2);
+    _b.ZeroReg(VReg.Arg1);
+    _b.Call("mm_decref");
+    _b.DefineLabel(noDetach);
+    // before = target.prev
+    _b.LoadLocal(VReg.Scratch0, 1);
+    _b.LoadIndirect(VReg.Scratch1, VReg.Scratch0, 8); // before = target.prev
+    _b.StoreLocal(3, VReg.Scratch1);
+    // node.next = target; node.prev = before; node.list = list_ptr
+    _b.LoadLocal(VReg.Scratch0, 2);
+    _b.LoadLocal(VReg.Scratch1, 1); // target_ptr
+    _b.StoreIndirect(VReg.Scratch0, 0, VReg.Scratch1); // node.next = target
+    _b.LoadLocal(VReg.Scratch1, 3); // before
+    _b.StoreIndirect(VReg.Scratch0, 8, VReg.Scratch1); // node.prev = before
+    _b.LoadLocal(VReg.Scratch1, 0);
+    _b.StoreIndirect(VReg.Scratch0, 16, VReg.Scratch1); // node.list = list_ptr
+    // target.prev = node_ptr
+    _b.LoadLocal(VReg.Scratch1, 1);
+    _b.LoadLocal(VReg.Scratch0, 2);
+    _b.StoreIndirect(VReg.Scratch1, 8, VReg.Scratch0);
+    // if before != 0: before.next = node_ptr; else: list.head = node_ptr
+    _b.LoadLocal(VReg.Scratch1, 3); // before
+    var wasHead = UniqueLabel("mli_before_was_head");
+    var linked = UniqueLabel("mli_before_linked");
+    _b.JumpIfZero(VReg.Scratch1, wasHead);
+    _b.LoadLocal(VReg.Scratch0, 2);
+    _b.StoreIndirect(VReg.Scratch1, 0, VReg.Scratch0); // before.next = node_ptr
+    _b.Jump(linked);
+    _b.DefineLabel(wasHead);
+    _b.LoadLocal(VReg.Scratch0, 0);
+    _b.LoadLocal(VReg.Scratch1, 2);
+    _b.StoreIndirect(VReg.Scratch0, 0, VReg.Scratch1); // list.head = node_ptr
+    _b.DefineLabel(linked);
+    // list.count++
+    _b.LoadLocal(VReg.Scratch0, 0);
+    _b.LoadIndirect(VReg.Scratch1, VReg.Scratch0, 16);
+    _b.AddRegImm(VReg.Scratch1, 1);
+    _b.StoreIndirect(VReg.Scratch0, 16, VReg.Scratch1);
+    // Incref node
+    _b.LoadLocal(VReg.Arg0, 2);
+    if (mmTrace) _b.LeaSymdata(VReg.Arg1, "__mm_scope_managed_list_insert");
+    else _b.ZeroReg(VReg.Arg1);
+    _b.Call("mm_incref");
+    _b.FunctionEnd();
+  }
+
+  public void EmitManagedListUnlink() {
+    // Slots: 0=list_ptr, 1=node_ptr, 2=prev, 3=next
+    _b.FunctionStart("maxon_managed_list_unlink", 2, 0x60);
+    _b.LoadLocal(VReg.Scratch0, 1); // node_ptr
+    _b.LoadIndirect(VReg.Scratch1, VReg.Scratch0, 16); // node.list
+    var done = UniqueLabel("mlu_done");
+    _b.JumpIfZero(VReg.Scratch1, done);
+    // prev = [node+8], next = [node+0]
+    _b.LoadIndirect(VReg.Scratch1, VReg.Scratch0, 8); // prev
+    _b.StoreLocal(2, VReg.Scratch1);
+    _b.LoadIndirect(VReg.Scratch1, VReg.Scratch0, 0); // next
+    _b.StoreLocal(3, VReg.Scratch1);
+    // if prev != 0: prev.next = next; else: list.head = next
+    _b.LoadLocal(VReg.Scratch1, 2); // prev
+    _b.LoadLocal(VReg.Scratch0, 3); // next
+    var noPrev = UniqueLabel("mlu_no_prev");
+    var prevDone = UniqueLabel("mlu_prev_done");
+    _b.JumpIfZero(VReg.Scratch1, noPrev);
+    _b.StoreIndirect(VReg.Scratch1, 0, VReg.Scratch0); // prev.next = next
+    _b.Jump(prevDone);
+    _b.DefineLabel(noPrev);
+    _b.LoadLocal(VReg.Scratch2, 0); // list_ptr
+    _b.StoreIndirect(VReg.Scratch2, 0, VReg.Scratch0); // list.head = next
+    _b.DefineLabel(prevDone);
+    // if next != 0: next.prev = prev; else: list.tail = prev
+    _b.LoadLocal(VReg.Scratch0, 3); // next
+    _b.LoadLocal(VReg.Scratch1, 2); // prev
+    var noNext = UniqueLabel("mlu_no_next");
+    var nextDone = UniqueLabel("mlu_next_done");
+    _b.JumpIfZero(VReg.Scratch0, noNext);
+    _b.StoreIndirect(VReg.Scratch0, 8, VReg.Scratch1); // next.prev = prev
+    _b.Jump(nextDone);
+    _b.DefineLabel(noNext);
+    _b.LoadLocal(VReg.Scratch2, 0);
+    _b.StoreIndirect(VReg.Scratch2, 8, VReg.Scratch1); // list.tail = prev
+    _b.DefineLabel(nextDone);
+    // Clear node links: next=0, prev=0, list=0
+    _b.LoadLocal(VReg.Scratch0, 1); // node_ptr
+    _b.ZeroReg(VReg.Scratch1);
+    _b.StoreIndirect(VReg.Scratch0, 0, VReg.Scratch1);
+    _b.StoreIndirect(VReg.Scratch0, 8, VReg.Scratch1);
+    _b.StoreIndirect(VReg.Scratch0, 16, VReg.Scratch1);
+    // list.count--
+    _b.LoadLocal(VReg.Scratch0, 0);
+    _b.LoadIndirect(VReg.Scratch1, VReg.Scratch0, 16);
+    _b.SubRegImm(VReg.Scratch1, 1);
+    _b.StoreIndirect(VReg.Scratch0, 16, VReg.Scratch1);
+    _b.DefineLabel(done);
+    _b.FunctionEnd();
+  }
+
+  private void EmitManagedListClear(bool mmTrace) => EmitManagedListClearImpl("maxon_managed_list_clear", managed: false, mmTrace);
+  private void EmitManagedListClearManaged(bool mmTrace) => EmitManagedListClearImpl("maxon_managed_list_clear_managed", managed: true, mmTrace);
+
+  private void EmitManagedListClearImpl(string funcName, bool managed, bool mmTrace) {
+    // Slots: 0=list_ptr, 1=current, 2=next
+    _b.FunctionStart(funcName, 1, 0x50);
+    _b.LoadLocal(VReg.Scratch0, 0);
+    _b.LoadIndirect(VReg.Scratch1, VReg.Scratch0, 0); // list.head = current
+    _b.StoreLocal(1, VReg.Scratch1);
+
+    var loopLabel = UniqueLabel($"{funcName}_loop");
+    var loopDone = UniqueLabel($"{funcName}_done");
+
+    _b.DefineLabel(loopLabel);
+    _b.LoadLocal(VReg.Scratch0, 1); // current
+    _b.JumpIfZero(VReg.Scratch0, loopDone);
+    // Save next
+    _b.LoadIndirect(VReg.Scratch1, VReg.Scratch0, 0); // current.next
+    _b.StoreLocal(2, VReg.Scratch1);
+    // Clear node links
+    _b.ZeroReg(VReg.Scratch1);
+    _b.StoreIndirect(VReg.Scratch0, 0, VReg.Scratch1);
+    _b.StoreIndirect(VReg.Scratch0, 8, VReg.Scratch1);
+    _b.StoreIndirect(VReg.Scratch0, 16, VReg.Scratch1);
+
+    if (managed) {
+      // Decref value at [node+24]
+      _b.LoadLocal(VReg.Scratch0, 1);
+      _b.LoadIndirect(VReg.Arg0, VReg.Scratch0, 24); // node.value
+      if (mmTrace) _b.LeaSymdata(VReg.Arg1, "__mm_scope_managed_list_clear");
+      else _b.ZeroReg(VReg.Arg1);
+      _b.Call("mm_decref");
+    }
+
+    // Decref/free node
+    _b.LoadLocal(VReg.Arg0, 1);
+    if (mmTrace) _b.LeaSymdata(VReg.Arg1, "__mm_scope_managed_list_clear");
+    else _b.ZeroReg(VReg.Arg1);
+    _b.Call("mm_decref");
+
+    // current = next
+    _b.LoadLocal(VReg.Scratch0, 2);
+    _b.StoreLocal(1, VReg.Scratch0);
+    _b.Jump(loopLabel);
+
+    _b.DefineLabel(loopDone);
+    // Zero list metadata
+    _b.LoadLocal(VReg.Scratch0, 0);
+    _b.ZeroReg(VReg.Scratch1);
+    _b.StoreIndirect(VReg.Scratch0, 0, VReg.Scratch1);
+    _b.StoreIndirect(VReg.Scratch0, 8, VReg.Scratch1);
+    _b.StoreIndirect(VReg.Scratch0, 16, VReg.Scratch1);
+    _b.FunctionEnd();
+  }
+
+  private void EmitManagedListDecrefValues() {
+    // Slots: 0=list_ptr, 1=current, 2=next
+    _b.FunctionStart("maxon_managed_list_decref_values", 1, 0x50);
+    _b.LoadLocal(VReg.Scratch0, 0);
+    _b.LoadIndirect(VReg.Scratch1, VReg.Scratch0, 0);
+    _b.StoreLocal(1, VReg.Scratch1);
+
+    var loopLabel = UniqueLabel("mldv_loop");
+    var doneLabel = UniqueLabel("mldv_done");
+
+    _b.DefineLabel(loopLabel);
+    _b.LoadLocal(VReg.Scratch0, 1);
+    _b.JumpIfZero(VReg.Scratch0, doneLabel);
+    // Save next
+    _b.LoadIndirect(VReg.Scratch1, VReg.Scratch0, 0);
+    _b.StoreLocal(2, VReg.Scratch1);
+    // Decref value at [node+24]
+    _b.LoadIndirect(VReg.Arg0, VReg.Scratch0, 24);
+    _b.ZeroReg(VReg.Arg1);
+    _b.Call("mm_decref");
+    // current = next
+    _b.LoadLocal(VReg.Scratch0, 2);
+    _b.StoreLocal(1, VReg.Scratch0);
+    _b.Jump(loopLabel);
+
+    _b.DefineLabel(doneLabel);
     _b.FunctionEnd();
   }
 }

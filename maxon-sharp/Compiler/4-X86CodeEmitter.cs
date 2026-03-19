@@ -28,7 +28,7 @@ public record CodeEmitResult(
 /// Stage 5: Code emission.
 /// Converts X86 dialect operations to machine code bytes.
 /// </summary>
-public class CodeEmitter {
+public class X86CodeEmitter {
   /// <summary>
   /// Emits machine code from an MLIR module containing X86 dialect operations.
   /// </summary>
@@ -36,7 +36,7 @@ public class CodeEmitter {
   public static CodeEmitResult Emit(MlirModule<X86Op> module) {
     Logger.Debug(LogCategory.Codegen, "Emitting machine code");
 
-    var emitter = new X86CodeEmitter();
+    var emitter = new Mlir.X86CodeEmitter();
 
     // Define rdata constants from module's RdataEntries (populated during StandardToX86 conversion)
     foreach (var (label, rdataBytes, alignment) in module.RdataEntries) {
@@ -93,7 +93,18 @@ public class CodeEmitter {
 
     // Runtime helpers must be emitted before user code so call targets are resolved
     emitter.EmitRuntimeFunctions();
-    emitter.EmitMemoryManagerFunctions(module.TagTable);
+    var rt = new Mlir.Runtime.RuntimeEmitter(emitter.CreateBackend());
+    rt.EmitMmGlobals(Compiler.MmTrace, Compiler.MmDebug);
+    rt.EmitMmTraceFunctions(Compiler.MmTrace, module.TagTable ?? []);
+    rt.EmitMmAlloc(Compiler.MmTrace, Compiler.MmDebug);
+    rt.EmitMmRealloc(Compiler.MmTrace, Compiler.MmDebug);
+    rt.EmitMmFree(Compiler.MmTrace, Compiler.MmDebug);
+    rt.EmitMmIncref(Compiler.MmTrace);
+    rt.EmitMmDecref(Compiler.MmTrace);
+    rt.EmitMmManagedElementsFunctions(Compiler.MmTrace);
+    rt.EmitMmLeakCheck();
+    rt.EmitMmValidatePtr();
+    rt.EmitManagedListFunctions(Compiler.MmTrace);
 
     // Patch all __chkstk call sites
     emitter.PatchChkstkCalls();
@@ -180,7 +191,7 @@ public class CodeEmitter {
   /// <summary>
   /// Emits machine code for a single function.
   /// </summary>
-  private static void EmitFunction(X86CodeEmitter emitter, MlirFunction<X86Op> func) {
+  private static void EmitFunction(Mlir.X86CodeEmitter emitter, MlirFunction<X86Op> func) {
     emitter.DefineLabel(func.Name);
     emitter.SetCurrentFunction(func.Name);
 

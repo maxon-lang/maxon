@@ -225,6 +225,25 @@ public interface IEmitterBackend {
   /// </summary>
   void UDivRemainderReg(VReg dest, VReg dividend, VReg divisor);
 
+  // ---- Platform-specific labels ----
+
+  /// <summary>Label of the platform write-null-terminated-cstr-to-stderr function.
+  /// x86: "maxon_write_stderr"; ARM64: "rt_write_cstr_stderr".</summary>
+  string WriteStderrLabel { get; }
+
+  // ---- Local address / byte memory ----
+
+  /// <summary>Load address of a stack frame slot into dest.
+  /// x86: LEA R(dest), [RBP - (slotIndex+1)*8]
+  /// ARM64: ADD R(dest), X29, #(16 + slotIndex*8)</summary>
+  void LeaLocal(VReg dest, int slotIndex);
+
+  /// <summary>Store the low byte of src into [baseReg + offset].</summary>
+  void StoreIndirectByte(VReg baseReg, int offset, VReg src);
+
+  /// <summary>Load a byte (zero-extended to 64 bits) from [baseReg + offset] into dest.</summary>
+  void LoadIndirectByte(VReg dest, VReg baseReg, int offset);
+
   // ---- Platform info ----
 
   bool IsWindows { get; }

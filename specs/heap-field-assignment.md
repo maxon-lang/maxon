@@ -144,6 +144,10 @@ end 'main'
 20
 ```
 ```stderr
+os_alloc size=2304
+os_alloc size=4096
+os_alloc size=4096
+os_alloc size=4096
 slab_alloc size=40 class=5
 alloc Inner #1 rc=0 size=8 [heap-field-assignment.testAssign]
 slab_alloc size=48 class=5
@@ -157,12 +161,15 @@ decref Inner #1 rc=0 [Container.replaceChild]
   free Inner #1
 slab_free size=48 class=5
 incref Inner #3 rc=2 [Container.replaceChild]
+os_alloc size=4096
 slab_alloc size=21 class=4
 raw_alloc size=21 [toStr.buf [heap-field-assignment.testAssign]]
 slab_alloc size=48 class=5
 alloc String #4 rc=0 size=16 [heap-field-assignment.testAssign]
+os_alloc size=4096
 slab_alloc size=64 class=6
 alloc __ManagedMemory #5 rc=0 size=32 [heap-field-assignment.testAssign]
+os_alloc size=4096
 slab_alloc size=4 class=2
 raw_alloc size=4 [interp.buf [heap-field-assignment.testAssign]]
 raw_free
@@ -223,6 +230,10 @@ end 'main'
 20
 ```
 ```stderr
+os_alloc size=2304
+os_alloc size=4096
+os_alloc size=4096
+os_alloc size=4096
 slab_alloc size=40 class=5
 alloc Right #1 rc=0 size=8 [heap-field-assignment.testAssign]
 slab_alloc size=48 class=5
@@ -236,12 +247,15 @@ decref Right #1 rc=0 [heap-field-assignment.testAssign]
   free Right #1
 slab_free size=48 class=5
 incref Right #3 rc=2 [heap-field-assignment.testAssign]
+os_alloc size=4096
 slab_alloc size=21 class=4
 raw_alloc size=21 [toStr.buf [heap-field-assignment.testAssign]]
 slab_alloc size=48 class=5
 alloc String #4 rc=0 size=16 [heap-field-assignment.testAssign]
+os_alloc size=4096
 slab_alloc size=64 class=6
 alloc __ManagedMemory #5 rc=0 size=32 [heap-field-assignment.testAssign]
+os_alloc size=4096
 slab_alloc size=4 class=2
 raw_alloc size=4 [interp.buf [heap-field-assignment.testAssign]]
 raw_free

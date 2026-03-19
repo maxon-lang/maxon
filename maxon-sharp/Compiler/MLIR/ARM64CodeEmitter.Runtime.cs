@@ -203,8 +203,6 @@ public partial class ARM64CodeEmitter {
     EmitMaxonBoolToString();
     EmitMaxonI64ToStringFmt();
     EmitMaxonF64ToStringFmt();
-    EmitManagedListInsertFirst();
-    EmitManagedListInsertLast();
     EmitNetTcpConnect();
     EmitManagedFileOpenRead();
     EmitManagedFileOpenWrite();
@@ -6330,6 +6328,82 @@ public partial class ARM64CodeEmitter {
     EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X9, GtOffIoErrorCode, 8);
     EmitMovRegImm(ARM64Register.X0, 0);
     EmitRuntimeFunctionEnd();
+  }
+
+  // ==========================================================================
+  // Inline trace helpers -- emit ARM64 machine code sequences for trace output.
+  // Used by COW and other runtime functions that need trace output inline.
+  // ==========================================================================
+
+  /// <summary>
+  /// Print "TypeName " from packed tag at [x29+ptrSlot], then " #N" where N = alloc_id.
+  /// </summary>
+  private void EmitTraceTagAndId(int ptrSlot) {
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X29, ptrSlot, 8);
+    EmitBranchLink("mm_trace_print_packed_tag");
+    EmitAdrpAddFixup(ARM64Register.X0, _symdataAdrpFixups, "__mm_tag_hash");
+    EmitBranchLink("mm_trace_print_tag");
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X29, ptrSlot, 8);
+    // LDUR X0, [X0, #-24]
+    EmitWord(0xF85E8000 | (Reg(ARM64Register.X0) << 5) | Reg(ARM64Register.X0));
+    // LSR X0, X0, #16
+    EmitWord(0xD350FC00 | (Reg(ARM64Register.X0) << 5) | Reg(ARM64Register.X0));
+    EmitBranchLink("mm_trace_print_i64");
+  }
+
+  /// <summary>
+  /// Print " rc=N" from user_ptr at [x29+ptrSlot]. rcSubtract adjusts displayed value.
+  /// </summary>
+  private void EmitTraceRc(int ptrSlot, int rcSubtract = 0) {
+    EmitAdrpAddFixup(ARM64Register.X0, _symdataAdrpFixups, "__mm_tag_rc_eq");
+    EmitBranchLink("mm_trace_print_tag");
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X29, ptrSlot, 8);
+    // LDUR X0, [X0, #-8]
+    EmitWord(0xF85F8000 | (Reg(ARM64Register.X0) << 5) | Reg(ARM64Register.X0));
+    if (rcSubtract > 0) EmitAddSubImm(ARM64Register.X0, ARM64Register.X0, rcSubtract, isAdd: false);
+    EmitBranchLink("mm_trace_print_i64");
+  }
+
+  /// <summary>
+  /// Print " size=N" from size value at [x29+sizeSlot].
+  /// </summary>
+  private void EmitTraceSize(int sizeSlot) {
+    EmitAdrpAddFixup(ARM64Register.X0, _symdataAdrpFixups, "__mm_tag_size_eq");
+    EmitBranchLink("mm_trace_print_tag");
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X29, sizeSlot, 8);
+    EmitBranchLink("mm_trace_print_i64");
+  }
+
+  /// <summary>
+  /// Print " [scope]" if scope is non-null, then print newline.
+  /// </summary>
+  private void EmitMmTraceScopeAndNewline(string skipLabel, int scopeSlot) {
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X29, scopeSlot, 8);
+    _condBranchFixups.Add((_code.Count, skipLabel));
+    EmitWord(0xB4000000 | Reg(ARM64Register.X0)); // CBZ X0, skip
+    EmitAdrpAddFixup(ARM64Register.X0, _symdataAdrpFixups, "__mm_tag_lbracket");
+    EmitBranchLink("mm_trace_print_tag");
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X29, scopeSlot, 8);
+    EmitBranchLink("mm_trace_print_tag");
+    EmitAdrpAddFixup(ARM64Register.X0, _symdataAdrpFixups, "__mm_tag_rbracket");
+    EmitBranchLink("mm_trace_print_tag");
+    DefineLabel(skipLabel);
+    EmitAdrpAddFixup(ARM64Register.X0, _symdataAdrpFixups, "__mm_tag_newline");
+    EmitBranchLink("mm_trace_print_tag");
+  }
+
+  /// <summary>
+  /// Emit inline trace: indent + tag + "TypeName #N rc=R [scope]\n".
+  /// </summary>
+  private void EmitInlineTrace(string tagLabel, string uniquePrefix, int ptrSlot, int scopeSlot,
+      bool printRc = true, int rcSubtract = 0, int? sizeSlot = null) {
+    EmitBranchLink("mm_trace_print_indent");
+    EmitAdrpAddFixup(ARM64Register.X0, _symdataAdrpFixups, tagLabel);
+    EmitBranchLink("mm_trace_print_tag");
+    EmitTraceTagAndId(ptrSlot);
+    if (printRc) EmitTraceRc(ptrSlot, rcSubtract);
+    if (sizeSlot.HasValue) EmitTraceSize(sizeSlot.Value);
+    EmitMmTraceScopeAndNewline($"{uniquePrefix}_no_scope", scopeSlot);
   }
 
 }
