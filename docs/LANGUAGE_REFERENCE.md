@@ -1921,7 +1921,7 @@ Override precedence:
 
 ### Array Access
 
-Array elements are accessed using the `.get()` method, which throws `ArrayError.indexOutOfBounds` if the index is invalid:
+Array elements are accessed using the `.get()` method, which throws `ArrayError.indexOutOfBounds` if the index is out of range, or `ArrayError.emptySlot` if the slot at that index is empty (null pointer, e.g. after `resize()` without filling every slot):
 ```maxon
 var arr = [1, 2, 3, 4, 5]
 var first = try arr.get(0) otherwise 0
@@ -2758,9 +2758,10 @@ The error is bound to `e` and available within the else-block.
 The standard library provides error types for built-in operations:
 
 ```maxon
-// Array bounds checking
+// Array access errors
 union ArrayError implements Error
-    indexOutOfBounds
+    indexOutOfBounds  // index >= length
+    emptySlot         // slot pointer is null (e.g. after resize() without push())
 end 'ArrayError'
 
 // Map key lookup

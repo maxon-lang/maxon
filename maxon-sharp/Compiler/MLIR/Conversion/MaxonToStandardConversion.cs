@@ -1718,7 +1718,7 @@ public static partial class MaxonToStandardConversion {
               break;
             }
             case MaxonManagedMemGetOp memGetOp:
-              LowerManagedMemGet(memGetOp, newBlock, valueMap, varTypes, temps);
+              LowerManagedMemGet(memGetOp, newFunc, ref newBlock, valueMap, varTypes, temps);
               if (valueMap[memGetOp.Result] is StdHeapPtr memGetHp) {
                 valueMap[memGetOp.Result] = new StdHeapPtr(memGetOp.Result.Id, memGetHp.TypeName, memGetHp.VarName!);
               }

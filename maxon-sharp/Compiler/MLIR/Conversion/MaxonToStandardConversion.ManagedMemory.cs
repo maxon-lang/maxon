@@ -61,15 +61,16 @@ public static partial class MaxonToStandardConversion {
 	}
 
 	/// <summary>
-	/// __managed_memory_get_unchecked(managed, index): load element from heap buffer.
-	/// buffer[index] = *(buffer + index * elementSize)
-	/// Element size is read from the managed struct's element_size field.
-	/// For struct elements, returns the address of the element in the buffer directly
-	/// (the struct data is stored inline, not as a pointer).
+	/// __managed_memory_get(managed, index): load element from heap buffer.
+	/// For primitive elements: loads the value directly from buffer[index].
+	/// For struct elements: loads the heap pointer stored at buffer[index], guards
+	/// against null (empty slot → ArrayError.emptySlot), then increfs the pointer
+	/// so the caller receives its own reference.
 	/// </summary>
 	private static void LowerManagedMemGet(
 	  MaxonManagedMemGetOp op,
-	  MlirBlock<StandardOp> block,
+	  MlirFunction<StandardOp> func,
+	  ref MlirBlock<StandardOp> block,
 	  Dictionary<MaxonValue, StdValue> valueMap,
 	  Dictionary<string, string> varTypes,
 	  VarRegistry temps) {
@@ -88,6 +89,25 @@ public static partial class MaxonToStandardConversion {
 			// the buffer's copy when the array is freed.
 			var loadOp = new StdLoadIndirectOp(addr, 0, MlirType.I64);
 			block.AddOp(loadOp);
+
+			// Slots can be zero after resize() or remove() — increfing a null pointer
+			// would corrupt the reference count. Return ArrayError.emptySlot so callers
+			// using try/otherwise can handle sparse arrays without undefined behaviour.
+			// Error flag = ArrayError.emptySlot ordinal (1) + 1 = 2 (0 = success convention).
+			var zeroForNull = new StdConstI64Op(0);
+			block.AddOp(zeroForNull);
+			var isNullCmp = new StdCmpI64Op("eq", (StdI64)loadOp.Result, zeroForNull.Result);
+			block.AddOp(isNullCmp);
+			var nullUid = MlirContext.Current.NextId();
+			var slotEmptyBlock = $"__slot_empty_{nullUid}";
+			var slotNonnullBlock = $"__slot_nonnull_{nullUid}";
+			block.AddOp(new StdCondBrOp(isNullCmp.Result, slotEmptyBlock, slotNonnullBlock));
+			var errBlock = func.Body.AddBlock(slotEmptyBlock);
+			var errFlagConst = new StdConstI64Op(2);
+			errBlock.AddOp(errFlagConst);
+			errBlock.AddOp(new StdErrorReturnOp(errFlagConst.Result));
+			block = func.Body.AddBlock(slotNonnullBlock);
+
 			EmitIncrefValue(block, (StdI64)loadOp.Result, scopeName: _currentFuncName);
 
 			var tempId = MlirContext.Current.NextId();
