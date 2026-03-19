@@ -2572,7 +2572,8 @@ public partial class X86CodeEmitter {
   /// <summary>
   /// Emit a relative call to another runtime function label.
   /// </summary>
-  private void EmitCallRuntimeLabel(string label) {
+  private void EmitCallRuntimeLabel(string label, bool zeroSecondArg = false) {
+    if (zeroSecondArg) EmitXorRegReg(X86Register.Rdx, X86Register.Rdx);
     EmitByte(0xE8);
     _relCallFixups.Add((_code.Count, label));
     EmitDword(0);
@@ -2795,7 +2796,8 @@ public partial class X86CodeEmitter {
     EmitMovRegMem(X86Register.Rax, -0x30, 8);
     EmitMovIndirectMemReg(X86Register.R10, GtOffIoErrorCode, X86Register.Rax);
     EmitMovRegMem(X86Register.Rcx, -0x20, 8);
-    EmitCallRuntimeLabel("mm_raw_free");
+
+    EmitCallRuntimeLabel("mm_raw_free", zeroSecondArg: Compiler.MmTrace);
     EmitMovRegImm(X86Register.Rax, -2);
     EmitRuntimeFunctionEnd();
 
@@ -2810,7 +2812,8 @@ public partial class X86CodeEmitter {
     EmitMovIndirectMemReg(X86Register.R10, GtOffStatus, X86Register.Rax); // status = ready
     // Free ctx
     EmitMovRegMem(X86Register.Rcx, -0x20, 8);
-    EmitCallRuntimeLabel("mm_raw_free");
+
+    EmitCallRuntimeLabel("mm_raw_free", zeroSecondArg: Compiler.MmTrace);
     EmitJmp("rt_ntc_resume");
 
     // --- Async yield: ConnectEx returned IO_PENDING ---
@@ -3077,7 +3080,8 @@ public partial class X86CodeEmitter {
     EmitMovIndirectMemReg(X86Register.R10, GtOffIoErrorCode, X86Register.Rax);
     // Free ctx
     EmitMovRegMem(X86Register.Rcx, -0x20, 8);
-    EmitCallRuntimeLabel("mm_raw_free");
+
+    EmitCallRuntimeLabel("mm_raw_free", zeroSecondArg: Compiler.MmTrace);
     EmitXorRegReg(X86Register.Rax, X86Register.Rax);
     EmitRuntimeFunctionEnd();
 
@@ -3098,7 +3102,8 @@ public partial class X86CodeEmitter {
     EmitMovIndirectMemReg(X86Register.R10, GtOffStatus, X86Register.Rax); // status = ready (0)
     // Free ctx
     EmitMovRegMem(X86Register.Rcx, -0x20, 8);
-    EmitCallRuntimeLabel("mm_raw_free");
+
+    EmitCallRuntimeLabel("mm_raw_free", zeroSecondArg: Compiler.MmTrace);
     EmitJmp($"{labelPrefix}_resume");
 
     // Async yield: I/O is pending. Check if current GT is the mainThread.
@@ -4217,7 +4222,8 @@ public partial class X86CodeEmitter {
       EmitMovMemReg(-0x28 - i * 8, _abiArgRegs[i], 8);
     }
     EmitMovRegMem(X86Register.Rcx, -0x18, 8); // rcx = arg_buf
-    EmitCallRuntimeLabel("mm_raw_free");
+
+    EmitCallRuntimeLabel("mm_raw_free", zeroSecondArg: Compiler.MmTrace);
     // Restore args
     for (int i = 0; i < 8; i++) {
       EmitMovRegMem(_abiArgRegs[i], -0x28 - i * 8, 8);
@@ -4400,7 +4406,8 @@ public partial class X86CodeEmitter {
 
     DefineLabel($"{labelPrefix}_free_full");
     EmitMovRegMem(X86Register.Rcx, -0x08, 8); // rcx = gt struct
-    EmitCallRuntimeLabel("mm_raw_free");
+
+    EmitCallRuntimeLabel("mm_raw_free", zeroSecondArg: Compiler.MmTrace);
 
     DefineLabel($"{labelPrefix}_free_done");
   }
@@ -5776,7 +5783,8 @@ public partial class X86CodeEmitter {
 
     // Free ctx
     EmitMovRegMem(X86Register.Rcx, -0x20, 8);
-    EmitCallRuntimeLabel("mm_raw_free");
+
+    EmitCallRuntimeLabel("mm_raw_free", zeroSecondArg: Compiler.MmTrace);
 
     // __io_complete_gt(gt, result, result, 0)
     // result is bytes_transferred (or custom_result if it was set)
@@ -6156,7 +6164,8 @@ public partial class X86CodeEmitter {
     EmitMovMemReg(-0x28, X86Register.Rax, 8); // save result
     // Free args struct
     EmitMovRegMem(X86Register.Rcx, -0x20, 8);
-    EmitCallRuntimeLabel("mm_raw_free");
+
+    EmitCallRuntimeLabel("mm_raw_free", zeroSecondArg: Compiler.MmTrace);
     EmitMovRegMem(X86Register.Rax, -0x28, 8); // restore result
     EmitJmp("__io_sync_op_done");
 
@@ -6173,7 +6182,8 @@ public partial class X86CodeEmitter {
     EmitMovMemReg(-0x28, X86Register.Rax, 8); // save result
     // Free args struct
     EmitMovRegMem(X86Register.Rcx, -0x20, 8);
-    EmitCallRuntimeLabel("mm_raw_free");
+
+    EmitCallRuntimeLabel("mm_raw_free", zeroSecondArg: Compiler.MmTrace);
     EmitMovRegMem(X86Register.Rax, -0x28, 8); // restore result
     EmitJmp("__io_sync_op_done");
 
@@ -6261,7 +6271,8 @@ public partial class X86CodeEmitter {
 
     // Free req
     EmitMovRegMem(X86Register.Rcx, -0x08, 8);
-    EmitCallRuntimeLabel("mm_raw_free");
+
+    EmitCallRuntimeLabel("mm_raw_free", zeroSecondArg: Compiler.MmTrace);
 
     // __io_complete_gt(gt, result, result, 0)
     EmitMovRegMem(X86Register.Rcx, -0x18, 8); // gt
@@ -6275,7 +6286,8 @@ public partial class X86CodeEmitter {
     // --- Shutdown: free req, exit thread ---
     DefineLabel("__io_sync_worker_shutdown");
     EmitMovRegMem(X86Register.Rcx, -0x08, 8);
-    EmitCallRuntimeLabel("mm_raw_free");
+
+    EmitCallRuntimeLabel("mm_raw_free", zeroSecondArg: Compiler.MmTrace);
     EmitXorRegReg(X86Register.Rax, X86Register.Rax);
     EmitMovRegReg(X86Register.Rsp, X86Register.Rbp);
     EmitPopReg(X86Register.Rbp);
@@ -6319,7 +6331,8 @@ public partial class X86CodeEmitter {
 
     // Free comp
     EmitMovRegMem(X86Register.Rcx, -0x08, 8);
-    EmitCallRuntimeLabel("mm_raw_free");
+
+    EmitCallRuntimeLabel("mm_raw_free", zeroSecondArg: Compiler.MmTrace);
 
     // Set waiter status = ready
     EmitMovRegMem(X86Register.Rcx, -0x10, 8); // gt
@@ -6656,7 +6669,8 @@ public partial class X86CodeEmitter {
     EmitMovIndirectMemReg(X86Register.R10, GtOffIoErrorCode, X86Register.Rax);
     // Free ctx
     EmitMovRegMem(X86Register.Rcx, -0x20, 8);
-    EmitCallRuntimeLabel("mm_raw_free");
+
+    EmitCallRuntimeLabel("mm_raw_free", zeroSecondArg: Compiler.MmTrace);
     EmitXorRegReg(X86Register.Rax, X86Register.Rax);
     EmitRuntimeFunctionEnd();
 
@@ -6677,7 +6691,8 @@ public partial class X86CodeEmitter {
     EmitMovIndirectMemReg(X86Register.R10, GtOffStatus, X86Register.Rax); // status = ready (0)
     // Free ctx
     EmitMovRegMem(X86Register.Rcx, -0x20, 8);
-    EmitCallRuntimeLabel("mm_raw_free");
+
+    EmitCallRuntimeLabel("mm_raw_free", zeroSecondArg: Compiler.MmTrace);
     EmitJmp($"{labelPrefix}_resume");
 
     // Async yield: I/O is pending. Check if current GT is the mainThread.

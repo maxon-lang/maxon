@@ -23,36 +23,34 @@ end 'main'
 MmTrace: true
 ExitCode: 2
 Stderr: ```
-os_alloc size=2304
-os_alloc size=4096
-os_alloc size=4096
-os_alloc size=4096
-slab_alloc size=40 class=5
-alloc Payload #1 rc=0 size=8 [ownership-edge-cases.main]
-incref Payload #1 rc=1 [ownership-edge-cases.main]
-slab_alloc size=40 class=5
-alloc Container #2 rc=0 size=8 [ownership-edge-cases.main]
-incref Payload #1 rc=2 [ownership-edge-cases.main]
-incref Container #2 rc=1 [ownership-edge-cases.main]
-slab_alloc size=40 class=5
-alloc Payload #3 rc=0 size=8 [ownership-edge-cases.main]
-incref Payload #3 rc=1 [ownership-edge-cases.main]
-decref Payload #1 rc=1 [Container.setPayload]
-incref Payload #3 rc=2 [Container.setPayload]
-decref Container #2 rc=0 [ownership-edge-cases.main]
-decref Payload #3 rc=1 [~Container]
-  free Container #2
-slab_free size=48 class=5
-decref Payload #1 rc=0 [ownership-edge-cases.main]
-  free Payload #1
-slab_free size=48 class=5
-decref Payload #3 rc=0 [ownership-edge-cases.main]
-  free Payload #3
-slab_free size=48 class=5
-slab_alloc size=40 class=5
-raw_alloc size=40
-raw_free
-slab_free size=48 class=5
+sl_init
+    os_alloc size=67108864
+mm_alloc Payload #1 size=8 [ownership-edge-cases.main]
+  sl_alloc Payload #1 size=40 class=5
+mm_incref Payload #1 rc=1 [ownership-edge-cases.main]
+mm_alloc Container #2 size=8 [ownership-edge-cases.main]
+  sl_alloc Container #2 size=40 class=5
+mm_incref Payload #1 rc=2 [ownership-edge-cases.main]
+mm_incref Container #2 rc=1 [ownership-edge-cases.main]
+mm_alloc Payload #3 size=8 [ownership-edge-cases.main]
+  sl_alloc Payload #3 size=40 class=5
+mm_incref Payload #3 rc=1 [ownership-edge-cases.main]
+mm_decref Payload #1 rc=1 [Container.setPayload]
+mm_incref Payload #3 rc=2 [Container.setPayload]
+mm_decref Container #2 rc=0 [ownership-edge-cases.main]
+  mm_decref Payload #3 rc=1 [~Container]
+  mm_free Container #2
+    sl_free Container #2 size=48 class=5
+mm_decref Payload #1 rc=0 [ownership-edge-cases.main]
+  mm_free Payload #1
+    sl_free Payload #1 size=48 class=5
+mm_decref Payload #3 rc=0 [ownership-edge-cases.main]
+  mm_free Payload #3
+    sl_free Payload #3 size=48 class=5
+mm_raw_alloc #R1 size=40
+  sl_alloc size=40 class=5
+mm_raw_free #R1
+  sl_free size=48 class=5
 ```
 ---
 module {

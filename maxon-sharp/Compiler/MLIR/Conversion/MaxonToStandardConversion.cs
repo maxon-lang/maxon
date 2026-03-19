@@ -1831,8 +1831,8 @@ public static partial class MaxonToStandardConversion {
                 }
                 throw new InvalidOperationException($"MaxonCallRuntimeOp arg {a} not found in valueMap");
               }).ToList();
-              // When tracing, mm_free takes 2 params (ptr, scope) — add NULL scope if caller only passes ptr
-              if (Compiler.MmTrace && callRtOp.FunctionName == "mm_free" && stdArgs.Count == 1) {
+              // When tracing, mm_free/mm_raw_free take 2 params (ptr, scope) — add NULL scope if caller only passes ptr
+              if (Compiler.MmTrace && (callRtOp.FunctionName == "mm_free" || callRtOp.FunctionName == "mm_raw_free") && stdArgs.Count == 1) {
                 var nullScope = new StdConstI64Op(0);
                 newBlock.AddOp(nullScope);
                 stdArgs.Add(nullScope.Result);
@@ -2182,7 +2182,13 @@ public static partial class MaxonToStandardConversion {
             freeBody.AddOp(bufPtrLoad);
             var bufLoad = new StdLoadIndirectOp(bufPtrLoad.Result, offset, MlirType.I64);
             freeBody.AddOp(bufLoad);
-            freeBody.AddOp(new StdCallRuntimeOp("mm_raw_free", [bufLoad.Result], null));
+            if (Compiler.MmTrace) {
+              var nullScope = new StdConstI64Op(0);
+              freeBody.AddOp(nullScope);
+              freeBody.AddOp(new StdCallRuntimeOp("mm_raw_free", [bufLoad.Result, nullScope.Result], null));
+            } else {
+              freeBody.AddOp(new StdCallRuntimeOp("mm_raw_free", [bufLoad.Result], null));
+            }
             freeBody.AddOp(new StdBrOp(skipBlock));
 
             entry = func.Body.AddBlock(skipBlock);

@@ -24,50 +24,48 @@ end 'main'
 MmTrace: true
 ExitCode: 30
 Stderr: ```
-os_alloc size=2304
-os_alloc size=4096
-os_alloc size=4096
-os_alloc size=4096
-slab_alloc size=40 class=5
-alloc Val #1 rc=0 size=8 [ownership-edge-cases.main]
-slab_alloc size=40 class=5
-alloc Holder #2 rc=0 size=8 [ownership-edge-cases.main]
-incref Val #1 rc=1 [ownership-edge-cases.main]
-incref Holder #2 rc=1 [ownership-edge-cases.main]
-slab_alloc size=40 class=5
-alloc Val #3 rc=0 size=8 [ownership-edge-cases.main]
-incref Val #3 rc=1 [ownership-edge-cases.main]
-decref Val #1 rc=0 [Holder.set]
-  free Val #1
-slab_free size=48 class=5
-incref Val #3 rc=2 [Holder.set]
-slab_alloc size=40 class=5
-alloc Val #4 rc=0 size=8 [ownership-edge-cases.main]
-incref Val #4 rc=1 [ownership-edge-cases.main]
-decref Val #3 rc=1 [Holder.set]
-incref Val #4 rc=2 [Holder.set]
-slab_alloc size=40 class=5
-alloc Val #5 rc=0 size=8 [ownership-edge-cases.main]
-incref Val #5 rc=1 [ownership-edge-cases.main]
-decref Val #4 rc=1 [Holder.set]
-incref Val #5 rc=2 [Holder.set]
-decref Holder #2 rc=0 [ownership-edge-cases.main]
-decref Val #5 rc=1 [~Holder]
-  free Holder #2
-slab_free size=48 class=5
-decref Val #3 rc=0 [ownership-edge-cases.main]
-  free Val #3
-slab_free size=48 class=5
-decref Val #4 rc=0 [ownership-edge-cases.main]
-  free Val #4
-slab_free size=48 class=5
-decref Val #5 rc=0 [ownership-edge-cases.main]
-  free Val #5
-slab_free size=48 class=5
-slab_alloc size=40 class=5
-raw_alloc size=40
-raw_free
-slab_free size=48 class=5
+sl_init
+    os_alloc size=67108864
+mm_alloc Val #1 size=8 [ownership-edge-cases.main]
+  sl_alloc Val #1 size=40 class=5
+mm_alloc Holder #2 size=8 [ownership-edge-cases.main]
+  sl_alloc Holder #2 size=40 class=5
+mm_incref Val #1 rc=1 [ownership-edge-cases.main]
+mm_incref Holder #2 rc=1 [ownership-edge-cases.main]
+mm_alloc Val #3 size=8 [ownership-edge-cases.main]
+  sl_alloc Val #3 size=40 class=5
+mm_incref Val #3 rc=1 [ownership-edge-cases.main]
+mm_decref Val #1 rc=0 [Holder.set]
+  mm_free Val #1
+    sl_free Val #1 size=48 class=5
+mm_incref Val #3 rc=2 [Holder.set]
+mm_alloc Val #4 size=8 [ownership-edge-cases.main]
+  sl_alloc Val #4 size=40 class=5
+mm_incref Val #4 rc=1 [ownership-edge-cases.main]
+mm_decref Val #3 rc=1 [Holder.set]
+mm_incref Val #4 rc=2 [Holder.set]
+mm_alloc Val #5 size=8 [ownership-edge-cases.main]
+  sl_alloc Val #5 size=40 class=5
+mm_incref Val #5 rc=1 [ownership-edge-cases.main]
+mm_decref Val #4 rc=1 [Holder.set]
+mm_incref Val #5 rc=2 [Holder.set]
+mm_decref Holder #2 rc=0 [ownership-edge-cases.main]
+  mm_decref Val #5 rc=1 [~Holder]
+  mm_free Holder #2
+    sl_free Holder #2 size=48 class=5
+mm_decref Val #3 rc=0 [ownership-edge-cases.main]
+  mm_free Val #3
+    sl_free Val #3 size=48 class=5
+mm_decref Val #4 rc=0 [ownership-edge-cases.main]
+  mm_free Val #4
+    sl_free Val #4 size=48 class=5
+mm_decref Val #5 rc=0 [ownership-edge-cases.main]
+  mm_free Val #5
+    sl_free Val #5 size=48 class=5
+mm_raw_alloc #R1 size=40
+  sl_alloc size=40 class=5
+mm_raw_free #R1
+  sl_free size=48 class=5
 ```
 ---
 module {

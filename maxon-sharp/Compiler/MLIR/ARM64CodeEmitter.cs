@@ -730,7 +730,8 @@ case ARM64MemcpyOp:
     EmitWord(0x54000000 | CondCode(condition)); // B.cond placeholder
   }
 
-  private void EmitBranchLink(string target) {
+  private void EmitBranchLink(string target, bool zeroSecondArg = false) {
+    if (zeroSecondArg) EmitMovRegImm(ARM64Register.X1, 0);
     _branchFixups.Add((_code.Count, target));
     EmitWord(0x94000000); // BL placeholder
   }

@@ -8,7 +8,7 @@ namespace MaxonSharp.Compiler.Mlir.Runtime;
 ///        |  refill
 ///     mcentral    (one per size class, locked)
 ///        |  grow
-///      mheap      (global, requests pages from OS via OsAllocPages)
+///      arena      (64MB bump allocator, requests arenas from OS using large pages when available)
 ///
 /// Size classes 0-17 cover allocations from 8 to 32768 bytes.
 /// Allocations larger than 32768 bytes go directly to OsAllocPages.
@@ -26,9 +26,8 @@ public partial class RuntimeEmitter {
   // Size class tables
   // =========================================================================
   // 18 size classes. For each: the slot size and objects-per-span.
-  // Classes 0-14 use 1 page (4096 bytes). Classes 15-17 use multiple pages.
 
-  private static readonly int[] SlabClassSizes = [
+  public static readonly int[] SlabClassSizes = [
     8, 16, 24, 32, 48, 64, 96, 128,
     192, 256, 384, 512, 1024, 2048, 4096,
     8192, 16384, 32768
@@ -40,25 +39,13 @@ public partial class RuntimeEmitter {
     4, 2, 1
   ];
 
-  // Pages per span: classes 0-14 = 1 page (4096 bytes).
-  // Classes 15-17 use multiple pages to fit their slot sizes.
-  // Objs = (pages * 4096) / slot_size — must be exact.
-  //   Class 15: 8192 bytes/slot, 8 pages = 32768 bytes, 4 slots
-  //   Class 16: 16384 bytes/slot, 8 pages = 32768 bytes, 2 slots
-  //   Class 17: 32768 bytes/slot, 8 pages = 32768 bytes, 1 slot
-  private static readonly int[] SlabPagesPerSpan = [
-    1, 1, 1, 1, 1, 1, 1, 1,
-    1, 1, 1, 1, 1, 1, 1,
-    8, 8, 8
-  ];
-
   private const int SlabNumClasses = 18;
   // Stack slot used by EmitInlineTraceOsAlloc/OsFree to spill the size across calls.
   // Must be within the frame size of any caller that invokes these helpers.
   private const int OsTraceScratchSlot = 7;
   private const int SlabMaxSmallSize = 32768;
   private const int SlabHeaderSize = 16; // header stored before user pointer
-  private const int PageSize = 4096;
+  private const int ArenaSize = 64 * 1024 * 1024; // 64MB
 
   // mspan struct layout (48 bytes)
   private const int MspanOffBaseAddr = 0x00;
@@ -67,11 +54,10 @@ public partial class RuntimeEmitter {
   private const int MspanOffFreeCount = 0x18;
   private const int MspanOffNextSpan = 0x20;
   private const int MspanOffClassIndex = 0x28;
-  private const int MspanStructSize = 0x30; // 48 bytes
+  private const int MspanOffTotalSlots = 0x30;
+  private const int MspanStructSize = 0x38; // 56 bytes
 
-  // mcentral struct layout (64 bytes, padded for CRITICAL_SECTION on Windows)
-  // We use 18 separate lock labels instead of inline lock storage.
-  // The mcentral array just stores partial_head and full_head per class.
+  // mcentral struct layout
   // Layout per class entry (16 bytes):
   //   +0x00: partial_head (mspan*)
   //   +0x08: full_head    (mspan*)
@@ -79,14 +65,13 @@ public partial class RuntimeEmitter {
 
   // Global data labels
   private const string McentralArrayLabel = "__slab_mcentral_array";
-  private const string MspanPoolPtrLabel = "__slab_mspan_pool_ptr";
-  private const string MspanPoolEndLabel = "__slab_mspan_pool_end";
   private const string MspanPoolLockLabel = "__slab_mspan_pool_lock";
   private const string McacheBaseLabel = "__slab_mcache_base";
   private const string SlabClassSizesLabel = "__slab_class_sizes";
   private const string SlabObjsLabel = "__slab_objs_per_span";
-  private const string SlabPagesLabel = "__slab_pages_per_span";
   private const string SlabInitDoneLabel = "__slab_init_done";
+  private const string ArenaBaseLabel = "__slab_arena_ptr";
+  private const string ArenaEndLabel = "__slab_arena_end";
 
   // Lock labels for mcentral (18 separate locks)
   private static string McentralLockLabel(int classIndex) =>
@@ -100,9 +85,9 @@ public partial class RuntimeEmitter {
     // mcentral array: 18 entries * 16 bytes = 288 bytes
     _b.DefineGlobal(McentralArrayLabel, SlabNumClasses * McentralEntrySize, 0);
 
-    // mspan pool bump allocator
-    _b.DefineGlobal(MspanPoolPtrLabel, 8, 0);
-    _b.DefineGlobal(MspanPoolEndLabel, 8, 0);
+    // Arena bump allocator globals
+    _b.DefineGlobal(ArenaBaseLabel, 8, 0);
+    _b.DefineGlobal(ArenaEndLabel, 8, 0);
 
     // mcache base pointer (allocated at init time: max_procs * 18 * 8 bytes)
     _b.DefineGlobal(McacheBaseLabel, 8, 0);
@@ -110,7 +95,7 @@ public partial class RuntimeEmitter {
     // Init done flag
     _b.DefineGlobal(SlabInitDoneLabel, 8, 0);
 
-    // Lock for mspan pool allocation
+    // Lock for arena allocation (reused for mcentral too)
     if (_b.IsWindows) {
       _b.DefineGlobal(MspanPoolLockLabel, 40, 0); // CRITICAL_SECTION
     } else {
@@ -129,28 +114,113 @@ public partial class RuntimeEmitter {
     // Size class lookup tables as symdata (read-only)
     var classSizesData = new byte[SlabNumClasses * 8];
     var objsPerSpanData = new byte[SlabNumClasses * 8];
-    var pagesPerSpanData = new byte[SlabNumClasses * 8];
     for (int i = 0; i < SlabNumClasses; i++) {
       BitConverter.TryWriteBytes(classSizesData.AsSpan(i * 8), (long)SlabClassSizes[i]);
       BitConverter.TryWriteBytes(objsPerSpanData.AsSpan(i * 8), (long)SlabObjsPerSpan[i]);
-      BitConverter.TryWriteBytes(pagesPerSpanData.AsSpan(i * 8), (long)SlabPagesPerSpan[i]);
     }
     _b.DefineSymdata(SlabClassSizesLabel, classSizesData);
     _b.DefineSymdata(SlabObjsLabel, objsPerSpanData);
-    _b.DefineSymdata(SlabPagesLabel, pagesPerSpanData);
+  }
+
+  // =========================================================================
+  // EmitOsAllocPages: __slab_os_alloc(size) -> ptr
+  //
+  // Allocates `size` bytes from the OS with large-page preference.
+  // Tries OsAllocLargePages first (2MB TLB entries, lower TLB pressure);
+  // falls back to OsAllocPages if large pages are unavailable or unsupported.
+  // All OS memory in the slab allocator flows through this single call site.
+  // =========================================================================
+  // Stack slots: 0=size, 1=ptr. OsTraceScratchSlot=7 requires frame >= 0x40.
+  public void EmitOsAllocPages(bool mmTrace) {
+    _b.FunctionStart("__slab_os_alloc", 1, 0x50);
+
+    _b.LoadLocal(VReg.Scratch0, 0); // size
+    _b.OsAllocLargePages(VReg.Scratch1, VReg.Scratch0); // NULL on failure or unsupported
+    var gotPages = UniqueLabel("os_alloc_got");
+    _b.JumpIfNonZero(VReg.Scratch1, gotPages);
+
+    _b.LoadLocal(VReg.Scratch0, 0);
+    _b.OsAllocPages(VReg.Scratch1, VReg.Scratch0);
+
+    _b.DefineLabel(gotPages);
+    _b.StoreLocal(1, VReg.Scratch1); // save ptr; slot 1 survives trace calls
+    if (mmTrace) {
+      _b.LoadLocal(VReg.Scratch0, 0); // size
+      EmitInlineTraceOsAlloc(UniqueLabel("os_alloc_trace"), VReg.Scratch0);
+    }
+    _b.LoadLocal(VReg.Scratch0, 1); // ptr
+    _b.ReturnValue(VReg.Scratch0);
+  }
+
+  // =========================================================================
+  // EmitArenaAlloc: __slab_arena_alloc(size) -> ptr
+  //
+  // Bump-allocates `size` bytes from the current 64MB arena.
+  // If the arena is exhausted, calls __slab_os_alloc to get a new arena.
+  // Thread-safe: acquires MspanPoolLockLabel around the bump.
+  // =========================================================================
+  // Stack slots: 0=size (from Arg0), 1=result, 2=saved_tag_ctx. Frame 0x30.
+  public void EmitArenaAlloc(bool mmTrace) {
+    _b.FunctionStart("__slab_arena_alloc", 1, 0x30);
+
+    _b.LockAcquire(MspanPoolLockLabel);
+
+    // Check if arena_ptr + size <= arena_end
+    _b.LoadGlobal(VReg.Scratch0, ArenaBaseLabel);
+    _b.LoadLocal(VReg.Scratch1, 0);                  // size
+    _b.AddRegReg(VReg.Scratch1, VReg.Scratch0);      // arena_ptr + size
+    _b.LoadGlobal(VReg.Scratch2, ArenaEndLabel);
+    _b.CmpRegReg(VReg.Scratch1, VReg.Scratch2);
+    var arenaOk = UniqueLabel("arena_ok");
+    _b.JumpIf(Condition.BelowEqual, arenaOk);
+
+    // Arena exhausted: allocate a new one via __slab_os_alloc
+    // Clear tag context for arena OS alloc (arena is shared infrastructure, not tied to any object)
+    if (mmTrace) {
+      _b.LoadGlobal(VReg.Scratch0, "__mm_trace_tag_ctx");
+      _b.StoreLocal(2, VReg.Scratch0); // save tag context
+      _b.ZeroReg(VReg.Scratch0);
+      _b.StoreGlobal("__mm_trace_tag_ctx", VReg.Scratch0); // clear for arena alloc
+      EmitTraceDepthInc();
+    }
+    _b.MovRegImm(VReg.Arg0, ArenaSize);
+    _b.Call("__slab_os_alloc"); // Scratch0 = new arena base
+    _b.StoreLocal(1, VReg.Scratch0); // save arena base (slot 1) across trace calls
+    if (mmTrace) {
+      EmitTraceDepthDec();
+      _b.LoadLocal(VReg.Scratch1, 2); // restore tag context
+      _b.StoreGlobal("__mm_trace_tag_ctx", VReg.Scratch1);
+    }
+    _b.LoadLocal(VReg.Scratch0, 1); // reload arena base
+    _b.StoreGlobal(ArenaBaseLabel, VReg.Scratch0);
+    _b.MovRegReg(VReg.Scratch1, VReg.Scratch0);
+    _b.AddRegImm(VReg.Scratch1, ArenaSize);
+    _b.StoreGlobal(ArenaEndLabel, VReg.Scratch1);
+
+    _b.DefineLabel(arenaOk);
+    // result = current arena_ptr; advance arena_ptr by size
+    _b.LoadGlobal(VReg.Scratch0, ArenaBaseLabel);
+    _b.StoreLocal(1, VReg.Scratch0);
+    _b.LoadLocal(VReg.Scratch1, 0); // size
+    _b.AddRegReg(VReg.Scratch0, VReg.Scratch1);
+    _b.StoreGlobal(ArenaBaseLabel, VReg.Scratch0);
+
+    _b.LockRelease(MspanPoolLockLabel);
+
+    _b.LoadLocal(VReg.Scratch0, 1);
+    _b.ReturnValue(VReg.Scratch0);
   }
 
   // =========================================================================
   // EmitAllocatorInit: __slab_init()
   //
   // Called during scheduler init (after P structs are allocated).
-  // 1. Allocate mcache array: max_procs * 18 * 8 bytes (zero-initialized)
-  // 2. Initialize mspan pool: allocate one 4096-byte page for mspan headers
-  // 3. On Windows: InitializeCriticalSection for all locks
+  // 1. Allocate mcache array via arena, then memzero it
+  // 2. Initialize locks (Windows only)
   // =========================================================================
-  // Stack slots: 0 = max_procs, 1 = mcache_alloc_size, 2 = scratch
+  // Stack slots: 0=mcache_size, 1=mcache_ptr
   public void EmitAllocatorInit(bool mmTrace) {
-    _b.FunctionStart("__slab_init", 0, 0x40);
+    _b.FunctionStart("__slab_init", 0, 0x30);
 
     // Check if already initialized
     _b.LoadGlobal(VReg.Scratch0, SlabInitDoneLabel);
@@ -161,48 +231,42 @@ public partial class RuntimeEmitter {
     _b.MovRegImm(VReg.Scratch0, 1);
     _b.StoreGlobal(SlabInitDoneLabel, VReg.Scratch0);
 
-    // Step 1: Allocate mcache array
+    // Trace: sl_init\n + depth++
+    if (mmTrace) {
+      _b.LeaSymdata(VReg.Arg0, "__slab_tag_init");
+      _b.Call("mm_trace_print_tag");
+      _b.LeaSymdata(VReg.Arg0, "__mm_tag_newline");
+      _b.Call("mm_trace_print_tag");
+      EmitTraceDepthInc();
+    }
+
+    // Step 1: Allocate mcache array via arena
     // Size = max_procs * 18 * 8 = max_procs * 144
     _b.LoadGlobal(VReg.Scratch0, "__sched_max_procs");
-    _b.StoreLocal(0, VReg.Scratch0);
     _b.MovRegImm(VReg.Scratch1, SlabNumClasses * 8); // 144
     _b.MulRegReg(VReg.Scratch0, VReg.Scratch1);
-    _b.StoreLocal(1, VReg.Scratch0); // save alloc size
+    _b.StoreLocal(0, VReg.Scratch0); // save mcache_size
 
-    // Allocate via OsAllocPages (zero-initialized)
-    _b.OsAllocPages(VReg.Scratch1, VReg.Scratch0);
-    _b.StoreGlobal(McacheBaseLabel, VReg.Scratch1);
-    if (mmTrace) { _b.LoadLocal(VReg.Scratch0, 1); EmitInlineTraceOsAlloc(VReg.Scratch0); }
+    // Allocate via __slab_arena_alloc
+    _b.MovRegReg(VReg.Arg0, VReg.Scratch0);
+    _b.Call("__slab_arena_alloc");
+    // Scratch0 = arena alloc result
+    _b.StoreGlobal(McacheBaseLabel, VReg.Scratch0);
+    _b.StoreLocal(1, VReg.Scratch0); // save mcache_ptr
 
-    // Step 2: Allocate initial mspan pool page (4096 bytes = ~85 mspans)
-    _b.MovRegImm(VReg.Scratch0, PageSize);
-    _b.OsAllocPages(VReg.Scratch1, VReg.Scratch0);
-    _b.StoreGlobal(MspanPoolPtrLabel, VReg.Scratch1);
-    if (mmTrace) { _b.MovRegImm(VReg.Scratch0, PageSize); EmitInlineTraceOsAlloc(VReg.Scratch0); }
-    // pool_end = pool_ptr + 4096
-    _b.AddRegImm(VReg.Scratch1, PageSize);
-    _b.StoreGlobal(MspanPoolEndLabel, VReg.Scratch1);
+    // Memzero the mcache array (arena memory is not zero-initialized)
+    _b.LoadLocal(VReg.Arg0, 1); // mcache_ptr
+    _b.LoadLocal(VReg.Arg1, 0); // mcache_size
+    _b.Call("__slab_memzero");
 
-    // Step 3: Initialize locks (Windows only — os_unfair_lock is zero-init on macOS)
+    // Step 2: Initialize locks (Windows only — os_unfair_lock is zero-init on macOS)
     if (_b.IsWindows) {
-      _b.LockAcquire(MspanPoolLockLabel); // This calls InitializeCriticalSection implicitly? No.
-      _b.LockRelease(MspanPoolLockLabel);
-      // Actually, we need to call InitializeCriticalSection explicitly.
-      // The LockAcquire/LockRelease on IEmitterBackend do EnterCriticalSection/LeaveCriticalSection
-      // which require the CS to be initialized first. We need a different approach.
-      // We'll emit the init calls using LeaGlobal + CallImport.
-      // But IEmitterBackend doesn't expose CallImport for arbitrary DLL functions.
-      // Looking at the existing code, CRITICAL_SECTION init is done in platform-specific
-      // SchedInit. We'll need to call __slab_init from SchedInit AFTER the CS initialization.
-      //
-      // Actually, let me use a simpler approach: just use the LockAcquire/LockRelease API
-      // which calls EnterCriticalSection/LeaveCriticalSection. The issue is that these locks
-      // need to be initialized first. The cleanest solution is to have the platform-specific
-      // SchedInit code initialize these CRITICAL_SECTIONs before calling __slab_init.
-      //
-      // For now, mark this as needing external initialization and skip the lock init here.
-      // The platform code (EmitSchedInit in X86CodeEmitter.Runtime.cs) will call
-      // InitializeCriticalSection for each slab lock.
+      // See comment in original: CRITICAL_SECTION init is done in platform-specific
+      // SchedInit before calling __slab_init.
+    }
+
+    if (mmTrace) {
+      EmitTraceDepthDec();
     }
 
     _b.DefineLabel(alreadyDone);
@@ -213,48 +277,20 @@ public partial class RuntimeEmitter {
   // EmitMspanAlloc: __slab_mspan_alloc(class_index) -> mspan*
   //
   // Allocates a new mspan for the given size class:
-  // 1. Allocate an mspan header from the global mspan pool (bump allocator)
-  // 2. Allocate page(s) from OS for the actual slots
+  // 1. Allocate an mspan header from the arena
+  // 2. Allocate span data (slot_size * num_objs) from the arena
   // 3. Build the intrusive free list through all slots
   // 4. Return the mspan pointer
   // =========================================================================
   // Stack slots: 0=class_index, 1=mspan_ptr, 2=page_base, 3=slot_size,
-  //              4=num_objs, 5=loop_counter, 6=num_pages
-  public void EmitMspanAlloc(bool mmTrace) {
-    _b.FunctionStart("__slab_mspan_alloc", 1, 0x60);
+  //              4=num_objs, 5=loop_counter
+  public void EmitMspanAlloc() {
+    _b.FunctionStart("__slab_mspan_alloc", 1, 0x50);
 
-    // --- Allocate mspan header from pool ---
-    _b.LockAcquire(MspanPoolLockLabel);
-
-    // Check if pool has room for one more mspan (48 bytes)
-    _b.LoadGlobal(VReg.Scratch0, MspanPoolPtrLabel);
-    _b.MovRegReg(VReg.Scratch1, VReg.Scratch0);
-    _b.AddRegImm(VReg.Scratch1, MspanStructSize);
-    _b.LoadGlobal(VReg.Scratch2, MspanPoolEndLabel);
-    _b.CmpRegReg(VReg.Scratch1, VReg.Scratch2);
-    var poolOk = UniqueLabel("mspan_pool_ok");
-    _b.JumpIf(Condition.BelowEqual, poolOk);
-
-    // Pool exhausted: allocate another page
-    _b.MovRegImm(VReg.Scratch0, PageSize);
-    _b.OsAllocPages(VReg.Scratch1, VReg.Scratch0);
-    _b.StoreGlobal(MspanPoolPtrLabel, VReg.Scratch1);
-    _b.AddRegImm(VReg.Scratch1, PageSize);
-    _b.StoreGlobal(MspanPoolEndLabel, VReg.Scratch1);
-    if (mmTrace) { _b.MovRegImm(VReg.Scratch0, PageSize); EmitInlineTraceOsAlloc(VReg.Scratch0); }
-    // (pool_ptr/pool_end already stored; reloaded below after poolOk label)
-
-    _b.DefineLabel(poolOk);
-    // Scratch0 = mspan_ptr (current pool_ptr, or fresh page start)
-    // Need to reload pool_ptr since the pool_ok path may have Scratch0 from the check
-    _b.LoadGlobal(VReg.Scratch0, MspanPoolPtrLabel);
+    // --- Allocate mspan header from arena ---
+    _b.MovRegImm(VReg.Arg0, MspanStructSize);
+    _b.Call("__slab_arena_alloc");
     _b.StoreLocal(1, VReg.Scratch0); // slot 1 = mspan_ptr
-
-    // Advance pool_ptr by MspanStructSize
-    _b.AddRegImm(VReg.Scratch0, MspanStructSize);
-    _b.StoreGlobal(MspanPoolPtrLabel, VReg.Scratch0);
-
-    _b.LockRelease(MspanPoolLockLabel);
 
     // --- Look up class parameters from tables ---
     // slot_size = class_sizes[class_index]
@@ -273,26 +309,13 @@ public partial class RuntimeEmitter {
     _b.LoadIndirect(VReg.Scratch0, VReg.Scratch0, 0);
     _b.StoreLocal(4, VReg.Scratch0); // slot 4 = num_objs
 
-    // num_pages = pages_per_span[class_index]
-    _b.LeaSymdata(VReg.Scratch0, SlabPagesLabel);
-    _b.LoadLocal(VReg.Scratch1, 0);
-    _b.ShlRegImm(VReg.Scratch1, 3);
-    _b.AddRegReg(VReg.Scratch0, VReg.Scratch1);
-    _b.LoadIndirect(VReg.Scratch0, VReg.Scratch0, 0);
-    _b.StoreLocal(6, VReg.Scratch0); // slot 6 = num_pages
-
-    // --- Allocate pages from OS ---
-    // alloc_size = num_pages * 4096
-    _b.LoadLocal(VReg.Scratch0, 6);
-    _b.ShlRegImm(VReg.Scratch0, 12); // * 4096
-    _b.OsAllocPages(VReg.Scratch1, VReg.Scratch0); // Scratch1 = page_base
-    _b.StoreLocal(2, VReg.Scratch1); // slot 2 = page_base
-    if (mmTrace) {
-      // alloc_size = num_pages * 4096 (recompute since Scratch0 may be clobbered)
-      _b.LoadLocal(VReg.Scratch0, 6);
-      _b.ShlRegImm(VReg.Scratch0, 12);
-      EmitInlineTraceOsAlloc(VReg.Scratch0);
-    }
+    // --- Allocate span data from arena: slot_size * num_objs ---
+    _b.LoadLocal(VReg.Scratch0, 3); // slot_size
+    _b.LoadLocal(VReg.Scratch1, 4); // num_objs
+    _b.MulRegReg(VReg.Scratch0, VReg.Scratch1); // data_size = slot_size * num_objs
+    _b.MovRegReg(VReg.Arg0, VReg.Scratch0);
+    _b.Call("__slab_arena_alloc");
+    _b.StoreLocal(2, VReg.Scratch0); // slot 2 = page_base
 
     // --- Initialize mspan fields ---
     _b.LoadLocal(VReg.Scratch0, 1); // mspan_ptr
@@ -304,6 +327,7 @@ public partial class RuntimeEmitter {
 
     _b.LoadLocal(VReg.Scratch1, 4); // num_objs = free_count initially
     _b.StoreIndirect(VReg.Scratch0, MspanOffFreeCount, VReg.Scratch1);
+    _b.StoreIndirect(VReg.Scratch0, MspanOffTotalSlots, VReg.Scratch1); // total_slots = num_objs
 
     _b.ZeroReg(VReg.Scratch1);
     _b.StoreIndirect(VReg.Scratch0, MspanOffNextSpan, VReg.Scratch1);
@@ -402,13 +426,6 @@ public partial class RuntimeEmitter {
     _b.AddRegReg(VReg.Scratch0, VReg.Scratch1);
     _b.StoreLocal(1, VReg.Scratch0); // slot 1 = mcentral_addr
 
-    // Lock: we need to use per-class locks. Since IEmitterBackend.LockAcquire takes
-    // a label string, and we need runtime-computed lock selection, we use a different
-    // approach: emit a switch on class_index to call the right lock.
-    // Actually, this is complex. Let me use a simpler approach: since class_index
-    // is a runtime value, we'll use the mspan_pool_lock as a single global lock
-    // for all mcentral operations. This is simpler and correct (just less parallel).
-    // We can optimize to per-class locks later.
     _b.LockAcquire(MspanPoolLockLabel);
 
     // Check partial_head
@@ -418,7 +435,6 @@ public partial class RuntimeEmitter {
     _b.JumpIfNonZero(VReg.Scratch1, hasPartial);
 
     // No partial spans: allocate new one
-    // Save mcentral_addr first (Call will clobber)
     _b.LoadLocal(VReg.Arg0, 0); // class_index
     _b.Call("__slab_mspan_alloc");
     // Ret (Scratch0) = new span
@@ -449,22 +465,29 @@ public partial class RuntimeEmitter {
   // =========================================================================
   // EmitMcentralReturnSpan: __slab_mcentral_return_span(span_ptr)
   //
-  // Returns a span with free slots back to its class's mcentral partial list.
-  // Called when a mcache slot is being replaced (old span returned to mcentral).
+  // Returns a fully-free span back to its class's mcentral partial list so other
+  // Ps can reuse it. Also evicts any stale mcache pointer to this span across all
+  // Ps — a P that last used this span may still have it cached even though
+  // free_count just hit total_slots, and if another P dequeues the span before
+  // the stale P allocates from it, we'd have two Ps manipulating the same free list
+  // without a lock.
   // =========================================================================
-  // Stack slots: 0=span_ptr
+  // Stack slots: 0=span_ptr, 1=class_offset (class_index*8), 2=loop_i, 3=mcache_base
   public void EmitMcentralReturnSpan() {
-    _b.FunctionStart("__slab_mcentral_return_span", 1, 0x30);
+    _b.FunctionStart("__slab_mcentral_return_span", 1, 0x60);
 
     _b.LockAcquire(MspanPoolLockLabel);
 
-    // Get class_index from span
+    // Get class_index from span; compute class_offset = class_index * 8
     _b.LoadLocal(VReg.Scratch0, 0); // span_ptr
     _b.LoadIndirect(VReg.Scratch1, VReg.Scratch0, MspanOffClassIndex); // class_index
+    _b.ShlRegImm(VReg.Scratch1, 3); // class_offset = class_index * 8
+    _b.StoreLocal(1, VReg.Scratch1); // slot 1 = class_offset
 
-    // Compute mcentral entry address
+    // Compute mcentral entry address: mcentral_array + class_index * 16
+    // class_index = class_offset / 8, so class_index * 16 = class_offset * 2
     _b.LeaGlobal(VReg.Scratch2, McentralArrayLabel);
-    _b.ShlRegImm(VReg.Scratch1, 4); // class_index * 16
+    _b.ShlRegImm(VReg.Scratch1, 1); // class_offset * 2 = class_index * 16
     _b.AddRegReg(VReg.Scratch2, VReg.Scratch1); // Scratch2 = mcentral_addr
 
     // Prepend span to partial_head: span->next = old_partial_head
@@ -473,6 +496,50 @@ public partial class RuntimeEmitter {
     _b.StoreIndirect(VReg.Scratch0, MspanOffNextSpan, VReg.Scratch1); // span->next = old_head
     _b.StoreIndirect(VReg.Scratch2, 0, VReg.Scratch0); // partial_head = span
 
+    // Evict stale mcache pointers: iterate all Ps and null any slot that still
+    // points to this span. Held under MspanPoolLockLabel, which __slab_alloc also
+    // acquires before installing a new span into an mcache slot (via
+    // __slab_mcentral_get_span), so the eviction and installation are serialised.
+    _b.LoadGlobal(VReg.Scratch0, McacheBaseLabel);
+    _b.StoreLocal(3, VReg.Scratch0); // slot 3 = mcache_base
+
+    _b.ZeroReg(VReg.Scratch0);
+    _b.StoreLocal(2, VReg.Scratch0); // slot 2 = i = 0
+
+    var evictLoop = UniqueLabel("mcentral_return_evict_loop");
+    var evictDone = UniqueLabel("mcentral_return_evict_done");
+    var evictNext = UniqueLabel("mcentral_return_evict_next");
+
+    _b.DefineLabel(evictLoop);
+    _b.LoadLocal(VReg.Scratch0, 2); // i
+    _b.LoadGlobal(VReg.Scratch1, "__sched_max_procs");
+    _b.CmpRegReg(VReg.Scratch0, VReg.Scratch1);
+    _b.JumpIf(Condition.AboveEqual, evictDone);
+
+    // mcache_slot = mcache_base + i * (SlabNumClasses * 8) + class_offset
+    _b.LoadLocal(VReg.Scratch0, 2); // i
+    _b.MovRegImm(VReg.Scratch1, SlabNumClasses * 8); // 144
+    _b.MulRegReg(VReg.Scratch0, VReg.Scratch1); // i * 144
+    _b.LoadLocal(VReg.Scratch1, 3); // mcache_base
+    _b.AddRegReg(VReg.Scratch0, VReg.Scratch1); // mcache_base + i*144
+    _b.LoadLocal(VReg.Scratch1, 1); // class_offset
+    _b.AddRegReg(VReg.Scratch0, VReg.Scratch1); // mcache_slot_addr
+
+    // If *mcache_slot == span_ptr, clear it
+    _b.LoadIndirect(VReg.Scratch1, VReg.Scratch0, 0); // *mcache_slot
+    _b.LoadLocal(VReg.Scratch2, 0); // span_ptr
+    _b.CmpRegReg(VReg.Scratch1, VReg.Scratch2);
+    _b.JumpIf(Condition.NotEqual, evictNext);
+    _b.ZeroReg(VReg.Scratch1);
+    _b.StoreIndirect(VReg.Scratch0, 0, VReg.Scratch1); // *mcache_slot = NULL
+
+    _b.DefineLabel(evictNext);
+    _b.LoadLocal(VReg.Scratch0, 2);
+    _b.AddRegImm(VReg.Scratch0, 1);
+    _b.StoreLocal(2, VReg.Scratch0); // i++
+    _b.Jump(evictLoop);
+
+    _b.DefineLabel(evictDone);
     _b.LockRelease(MspanPoolLockLabel);
     _b.FunctionEnd();
   }
@@ -481,35 +548,117 @@ public partial class RuntimeEmitter {
   // Slab trace helpers
   // =========================================================================
 
-  /// <summary>Emit: indent + "slab_alloc size=N class=C\n"</summary>
-  // Allocates size+16 bytes from OS, writes the slab large-object header,
-  // and stores user_ptr (base+16) into resultSlot. Uses Scratch0/Scratch1.
-  // Precondition: sizeSlot holds the user-requested size.
-  private void EmitLargeObjectAlloc(int sizeSlot, int classSlot, int resultSlot, bool mmTrace) {
-    _b.LoadLocal(VReg.Scratch0, sizeSlot);
-    _b.AddRegImm(VReg.Scratch0, SlabHeaderSize); // total = size + 16
-    _b.OsAllocPages(VReg.Scratch1, VReg.Scratch0); // Scratch1 = base
-    // Store total_alloc_size at [base + 0]
-    _b.LoadLocal(VReg.Scratch0, sizeSlot);
-    _b.AddRegImm(VReg.Scratch0, SlabHeaderSize);
-    _b.StoreIndirect(VReg.Scratch1, 0, VReg.Scratch0);
-    // Store flags = 1 (large) at [base + 8]
-    _b.MovRegImm(VReg.Scratch0, 1);
-    _b.StoreIndirect(VReg.Scratch1, 8, VReg.Scratch0);
-    // user_ptr = base + 16
-    _b.AddRegImm(VReg.Scratch1, SlabHeaderSize);
-    _b.StoreLocal(resultSlot, VReg.Scratch1);
+  // Header flags stored at [user_ptr - 8]:
+  //   0 = small slab object (has span_ptr at [user_ptr-16]; returns to free list on free)
+  //   1 = arena-backed large object (bump-allocated; no individual free)
+  //   2 = OS-direct huge object (>ArenaSize; calls OsFreePages on free)
+  private const int FlagArenaLarge = 1;
+  private const int FlagOsDirect = 2;
+
+  /// <summary>
+  /// Bump-allocates a large object from the arena (32753–67108848 bytes).
+  /// Delegates the actual allocation to __slab_arena_alloc, then writes the
+  /// 16-byte header ([base+0]=total_size, [base+8]=FlagArenaLarge) and
+  /// advances resultSlot to the user pointer (base + SlabHeaderSize).
+  /// </summary>
+  private void EmitArenaLargeObjectAlloc(int sizeSlot, int classSlot, int resultSlot, bool mmTrace) {
+    // Emit sl_alloc trace BEFORE the arena call (top-down order)
     if (mmTrace) {
       _b.MovRegImm(VReg.Scratch0, -1);
-      _b.StoreLocal(classSlot, VReg.Scratch0); // class_index = -1
-      EmitInlineTraceSlabAlloc(sizeSlot, classSlot);
+      _b.StoreLocal(classSlot, VReg.Scratch0);
+      EmitInlineTraceSlabAlloc(UniqueLabel("sl_alloc_arena_large_trace"), sizeSlot, classSlot);
+      EmitTraceDepthInc();
     }
+    _b.LoadLocal(VReg.Scratch0, sizeSlot);
+    _b.AddRegImm(VReg.Scratch0, SlabHeaderSize); // total = size + 16
+    _b.MovRegReg(VReg.Arg0, VReg.Scratch0);
+    _b.Call("__slab_arena_alloc"); // Ret/Scratch0 = base
+    _b.StoreLocal(resultSlot, VReg.Scratch0);
+    if (mmTrace) {
+      EmitTraceDepthDec();
+    }
+    // Write header (no trace — already emitted above)
+    EmitWriteLargeObjectHeader(sizeSlot, resultSlot, FlagArenaLarge);
   }
 
-  private void EmitInlineTraceSlabAlloc(int sizeSlot, int classSlot) {
+  /// <summary>
+  /// Allocates a huge object directly from the OS (>67108848 bytes).
+  /// Falls outside the arena entirely: each allocation calls __slab_os_alloc
+  /// and each free calls VirtualFree/munmap.
+  /// </summary>
+  private void EmitOsDirectObjectAlloc(int sizeSlot, int classSlot, int resultSlot, bool mmTrace) {
+    // Emit sl_alloc trace BEFORE the OS call (top-down order: sl → os)
+    if (mmTrace) {
+      _b.MovRegImm(VReg.Scratch0, -1);
+      _b.StoreLocal(classSlot, VReg.Scratch0);
+      EmitInlineTraceSlabAlloc(UniqueLabel("sl_alloc_os_direct_trace"), sizeSlot, classSlot);
+      EmitTraceDepthInc();
+    }
+    _b.LoadLocal(VReg.Scratch0, sizeSlot);
+    _b.AddRegImm(VReg.Scratch0, SlabHeaderSize); // total = size + 16
+    _b.MovRegReg(VReg.Arg0, VReg.Scratch0);
+    _b.Call("__slab_os_alloc"); // Scratch0 = base; os_alloc trace emitted inside
+    _b.StoreLocal(resultSlot, VReg.Scratch0);
+    if (mmTrace) {
+      EmitTraceDepthDec();
+    }
+    // Write header (no trace — already emitted above)
+    EmitWriteLargeObjectHeader(sizeSlot, resultSlot, FlagOsDirect);
+  }
+
+  /// <summary>
+  /// Writes the 16-byte slab header into the base pointer stored in resultSlot,
+  /// then advances resultSlot to the user pointer (base + SlabHeaderSize).
+  /// Called after the base pointer has been saved to resultSlot by both large-object paths.
+  /// Emits "slab_alloc size=N class=-1" trace if mmTrace is true.
+  /// </summary>
+  private void EmitWriteLargeObjectHeader(int sizeSlot, int resultSlot, int flags) {
+    // Reload base — trace calls in the caller may have clobbered registers
+    _b.LoadLocal(VReg.Scratch1, resultSlot); // base
+    _b.LoadLocal(VReg.Scratch0, sizeSlot);
+    _b.AddRegImm(VReg.Scratch0, SlabHeaderSize); // total = size + 16
+    _b.StoreIndirect(VReg.Scratch1, 0, VReg.Scratch0); // [base+0] = total_size
+    _b.MovRegImm(VReg.Scratch0, flags);
+    _b.StoreIndirect(VReg.Scratch1, 8, VReg.Scratch0); // [base+8] = flags
+    _b.AddRegImm(VReg.Scratch1, SlabHeaderSize);
+    _b.StoreLocal(resultSlot, VReg.Scratch1); // resultSlot = user_ptr
+  }
+
+  /// <summary>
+  /// If __mm_trace_tag_ctx != 0, prints " TypeName #N".
+  /// Used by slab/OS trace helpers to show which managed allocation triggered the operation.
+  /// </summary>
+  private void EmitTraceTagCtx(string uniquePrefix) {
+    var skipLabel = $"{uniquePrefix}_no_tag_ctx";
+    _b.LoadGlobal(VReg.Scratch0, "__mm_trace_tag_ctx");
+    _b.JumpIfZero(VReg.Scratch0, skipLabel);
+    // Print " "
+    _b.LeaSymdata(VReg.Arg0, "__mm_tag_space");
+    _b.Call("mm_trace_print_tag");
+    // Extract tag_index = low 16 bits, look up name
+    _b.LoadGlobal(VReg.Scratch0, "__mm_trace_tag_ctx");
+    _b.MovRegReg(VReg.Arg0, VReg.Scratch0);
+    _b.MovRegImm(VReg.Scratch1, 0xFFFF);
+    _b.AndRegReg(VReg.Arg0, VReg.Scratch1);
+    _b.Call("mm_tag_lookup");
+    _b.MovRegReg(VReg.Arg0, VReg.Ret);
+    _b.Call("mm_trace_print_tag");
+    // Print " #N" from alloc_id (upper bits >> 16)
+    _b.LeaSymdata(VReg.Arg0, "__mm_tag_hash");
+    _b.Call("mm_trace_print_tag");
+    _b.LoadGlobal(VReg.Scratch0, "__mm_trace_tag_ctx");
+    _b.ShrRegImm(VReg.Scratch0, 16);
+    _b.MovRegReg(VReg.Arg0, VReg.Scratch0);
+    _b.Call("mm_trace_print_i64");
+    _b.DefineLabel(skipLabel);
+  }
+
+  /// <summary>Emit: indent + "sl_alloc [TypeName #N] size=S class=C\n"</summary>
+  private void EmitInlineTraceSlabAlloc(string uniquePrefix, int sizeSlot, int classSlot) {
     _b.Call("mm_trace_print_indent");
     _b.LeaSymdata(VReg.Arg0, "__slab_tag_alloc");
     _b.Call("mm_trace_print_tag");
+    EmitTraceTagCtx(uniquePrefix);
     _b.LeaSymdata(VReg.Arg0, "__mm_tag_size_eq");
     _b.Call("mm_trace_print_tag");
     _b.LoadLocal(VReg.Arg0, sizeSlot);
@@ -517,17 +666,19 @@ public partial class RuntimeEmitter {
     _b.LeaSymdata(VReg.Arg0, "__slab_tag_class");
     _b.Call("mm_trace_print_tag");
     _b.LoadLocal(VReg.Arg0, classSlot);
-    _b.Call("mm_trace_print_i64");
+    _b.Call("mm_trace_print_class"); // prints -1 for arena-large / OS-direct paths
     _b.LeaSymdata(VReg.Arg0, "__mm_tag_newline");
     _b.Call("mm_trace_print_tag");
   }
 
-  /// <summary>Emit: "os_alloc size=N\n" (no indent — internal slab machinery).</summary>
-  private void EmitInlineTraceOsAlloc(VReg sizeReg) {
+  /// <summary>Emit: indent + "os_alloc [TypeName #N] size=N\n"</summary>
+  private void EmitInlineTraceOsAlloc(string uniquePrefix, VReg sizeReg) {
     _b.MovRegReg(VReg.Arg0, sizeReg);
     _b.StoreLocal(OsTraceScratchSlot, VReg.Arg0); // spill across calls
+    _b.Call("mm_trace_print_indent");
     _b.LeaSymdata(VReg.Arg0, "__slab_tag_os_alloc");
     _b.Call("mm_trace_print_tag");
+    EmitTraceTagCtx(uniquePrefix);
     _b.LeaSymdata(VReg.Arg0, "__mm_tag_size_eq");
     _b.Call("mm_trace_print_tag");
     _b.LoadLocal(VReg.Arg0, OsTraceScratchSlot);
@@ -536,12 +687,14 @@ public partial class RuntimeEmitter {
     _b.Call("mm_trace_print_tag");
   }
 
-  /// <summary>Emit: "os_free size=N\n" (no indent — internal slab machinery).</summary>
-  private void EmitInlineTraceOsFree(VReg sizeReg) {
+  /// <summary>Emit: indent + "os_free [TypeName #N] size=N\n"</summary>
+  private void EmitInlineTraceOsFree(string uniquePrefix, VReg sizeReg) {
     _b.MovRegReg(VReg.Arg0, sizeReg);
     _b.StoreLocal(OsTraceScratchSlot, VReg.Arg0);
+    _b.Call("mm_trace_print_indent");
     _b.LeaSymdata(VReg.Arg0, "__slab_tag_os_free");
     _b.Call("mm_trace_print_tag");
+    EmitTraceTagCtx(uniquePrefix);
     _b.LeaSymdata(VReg.Arg0, "__mm_tag_size_eq");
     _b.Call("mm_trace_print_tag");
     _b.LoadLocal(VReg.Arg0, OsTraceScratchSlot);
@@ -550,11 +703,12 @@ public partial class RuntimeEmitter {
     _b.Call("mm_trace_print_tag");
   }
 
-  /// <summary>Emit: indent + "slab_free size=N class=C\n"</summary>
-  private void EmitInlineTraceSlabFree(int sizeSlot, int classSlot) {
+  /// <summary>Emit: indent + "sl_free [TypeName #N] size=N class=C\n"</summary>
+  private void EmitInlineTraceSlabFree(string uniquePrefix, int sizeSlot, int classSlot) {
     _b.Call("mm_trace_print_indent");
     _b.LeaSymdata(VReg.Arg0, "__slab_tag_free");
     _b.Call("mm_trace_print_tag");
+    EmitTraceTagCtx(uniquePrefix);
     _b.LeaSymdata(VReg.Arg0, "__mm_tag_size_eq");
     _b.Call("mm_trace_print_tag");
     _b.LoadLocal(VReg.Arg0, sizeSlot);
@@ -562,7 +716,7 @@ public partial class RuntimeEmitter {
     _b.LeaSymdata(VReg.Arg0, "__slab_tag_class");
     _b.Call("mm_trace_print_tag");
     _b.LoadLocal(VReg.Arg0, classSlot);
-    _b.Call("mm_trace_print_i64");
+    _b.Call("mm_trace_print_class"); // prints -1 for arena-large / OS-direct paths
     _b.LeaSymdata(VReg.Arg0, "__mm_tag_newline");
     _b.Call("mm_trace_print_tag");
   }
@@ -570,16 +724,14 @@ public partial class RuntimeEmitter {
   // =========================================================================
   // EmitSlabAlloc: __slab_alloc(size) -> user_ptr
   //
-  // Fast-path slab allocation:
-  // 1. If size > 32768: large object path (OsAllocPages directly)
-  // 2. Look up size class
-  // 3. Load P->id, compute mcache slot address
-  // 4. If cached span has free slots: pop from free list, return
-  // 5. Else: refill from mcentral, retry
+  // Allocation routing:
+  // 1. size > ArenaSize - SlabHeaderSize: OS-direct (flags=2, OsFreePages on free)
+  // 2. size > SlabMaxSmallSize - SlabHeaderSize: arena-backed large (flags=1, no per-object free)
+  // 3. else: slab fast path (flags=0, returns to span free list on free)
   //
   // Returns a user_ptr with a 16-byte header:
-  //   [user_ptr - 16] = span_ptr (small) or total_alloc_size (large)
-  //   [user_ptr -  8] = 0 (small) or 1 (large)
+  //   [user_ptr - 16] = span_ptr (slab) or total_size (large/OS-direct)
+  //   [user_ptr -  8] = 0 (slab), 1 (arena-large), 2 (OS-direct)
   // =========================================================================
   // Stack slots: 0=size, 1=class_index, 2=P_id, 3=mcache_slot_addr,
   //              4=span_ptr, 5=alloc_result
@@ -591,25 +743,39 @@ public partial class RuntimeEmitter {
     var slabReady = UniqueLabel("slab_alloc_ready");
     _b.JumpIfNonZero(VReg.Scratch0, slabReady);
 
-    // Fallback: allocator not initialized, use direct OS allocation
-    // This handles early allocations before __slab_init is called
-    EmitLargeObjectAlloc(sizeSlot: 0, classSlot: 1, resultSlot: 5, mmTrace);
+    // Fallback: allocator not initialized — use OS-direct path.
+    // The arena lock (CRITICAL_SECTION on Windows) is not initialized yet,
+    // so we cannot call __slab_arena_alloc safely.
+    EmitOsDirectObjectAlloc(sizeSlot: 0, classSlot: 1, resultSlot: 5, mmTrace);
     _b.LoadLocal(VReg.Scratch0, 5);
     _b.ReturnValue(VReg.Scratch0);
 
     _b.DefineLabel(slabReady);
 
-    // --- Large object check ---
+    // --- OS-direct check: size > ArenaSize - SlabHeaderSize ---
+    // Allocations larger than the arena itself must bypass the arena entirely.
+    _b.LoadLocal(VReg.Scratch0, 0); // size
+    _b.CmpRegImm(VReg.Scratch0, ArenaSize - SlabHeaderSize);
+    var notOsDirect = UniqueLabel("slab_alloc_not_os_direct");
+    _b.JumpIf(Condition.BelowEqual, notOsDirect);
+
+    EmitOsDirectObjectAlloc(sizeSlot: 0, classSlot: 1, resultSlot: 5, mmTrace);
+    _b.LoadLocal(VReg.Scratch0, 5);
+    _b.ReturnValue(VReg.Scratch0);
+
+    _b.DefineLabel(notOsDirect);
+
+    // --- Arena-large check ---
     // Must account for the 16-byte header: effective_size = size + 16
-    // Route to large path if effective_size > max class size (32768),
+    // Route to arena-large path if effective_size > max class size (32768),
     // i.e., size > 32768 - 16 = 32752
     _b.LoadLocal(VReg.Scratch0, 0); // size
     _b.CmpRegImm(VReg.Scratch0, SlabMaxSmallSize - SlabHeaderSize);
     var smallPath = UniqueLabel("slab_alloc_small");
     _b.JumpIf(Condition.BelowEqual, smallPath);
 
-    // Large object path: allocate size + 16 bytes directly from OS
-    EmitLargeObjectAlloc(sizeSlot: 0, classSlot: 1, resultSlot: 5, mmTrace);
+    // Arena-large path: bump-allocate from arena, no per-object free
+    EmitArenaLargeObjectAlloc(sizeSlot: 0, classSlot: 1, resultSlot: 5, mmTrace);
     _b.LoadLocal(VReg.Scratch0, 5);
     _b.ReturnValue(VReg.Scratch0);
 
@@ -618,13 +784,6 @@ public partial class RuntimeEmitter {
 
     // Look up size class: linear scan of class_sizes table
     // Find first class where class_sizes[i] >= (size + SlabHeaderSize)
-    // Wait - the slab header is stored INSIDE the slab slot. So we need:
-    // effective_size = size + SlabHeaderSize (16 bytes for the span_ptr + flags header)
-    // Actually, re-thinking: the 16-byte header is part of the allocation.
-    // The caller asks for `size` bytes. We need to allocate size + 16 bytes from a slab slot.
-    // So we look up the class for (size + 16).
-    // But the slots contain user data + header. We need a slot big enough for both.
-    // Let's compute effective_size = size + SlabHeaderSize.
     _b.LoadLocal(VReg.Scratch0, 0); // size
     _b.AddRegImm(VReg.Scratch0, SlabHeaderSize); // effective_size = size + 16
 
@@ -636,7 +795,6 @@ public partial class RuntimeEmitter {
     var classFound = UniqueLabel("slab_class_found");
 
     _b.DefineLabel(classLoop);
-    // If class_index >= 18, this shouldn't happen (size <= 32768 + 16 < max class)
     // Load class_sizes[class_index]
     _b.MovRegReg(VReg.Scratch3, VReg.Scratch1); // class_index
     _b.ShlRegImm(VReg.Scratch3, 3); // * 8
@@ -710,7 +868,7 @@ public partial class RuntimeEmitter {
 
     // Slot is pre-zeroed by __slab_free — no memzero needed on alloc.
     if (mmTrace) {
-      EmitInlineTraceSlabAlloc(sizeSlot: 0, classSlot: 1);
+      EmitInlineTraceSlabAlloc(UniqueLabel("sl_alloc_small_trace"), sizeSlot: 0, classSlot: 1);
     }
 
     // Return user_ptr (reload from slot 5 since trace calls may clobber regs)
@@ -748,16 +906,14 @@ public partial class RuntimeEmitter {
   // =========================================================================
   // EmitSlabFree: __slab_free(user_ptr)
   //
-  // Free a slab-allocated object:
-  // 1. Read header: span_ptr = [ptr-16], flags = [ptr-8]
-  // 2. If flags == 1 (large): OsFreePages (OS already zeroes on unmap)
-  // 3. Else: zero user data area, then return slot to span's free list.
-  //    Zeroing on free ensures stale pointers crash on access (use-after-free
-  //    detection) and slots are ready to use without zeroing on alloc.
+  // Free a slab-allocated object based on flags at [ptr-8]:
+  //   0 (slab):        zero user data, return slot to span free list
+  //   1 (arena-large): no-op — arena memory is not individually freed
+  //   2 (OS-direct):   OsFreePages — object was too large for the arena
   // =========================================================================
-  // Stack slots: 0=user_ptr, 1=span_ptr (scratch), 2=slot_size (scratch)
+  // Stack slots: 0=user_ptr, 1=span_ptr, 2=slot_size
   public void EmitSlabFree(bool mmTrace) {
-    _b.FunctionStart("__slab_free", 1, mmTrace ? 0x40 : 0x30);
+    _b.FunctionStart("__slab_free", 1, 0x40);
 
     // NULL check
     _b.LoadLocal(VReg.Scratch0, 0);
@@ -767,14 +923,24 @@ public partial class RuntimeEmitter {
 
     _b.DefineLabel(notNull);
 
-    // Read flags at [ptr - 8]
+    // Read flags at [ptr - 8] — low byte is flags, upper bytes may contain raw_alloc_id
     _b.LoadLocal(VReg.Scratch0, 0); // user_ptr
-    _b.LoadIndirect(VReg.Scratch1, VReg.Scratch0, -8); // flags
+    _b.LoadIndirect(VReg.Scratch1, VReg.Scratch0, -8); // flags (possibly with raw_id in upper bytes)
+    _b.MovRegImm(VReg.Scratch2, 0xFF);
+    _b.AndRegReg(VReg.Scratch1, VReg.Scratch2); // mask to low byte
 
-    var largeFree = UniqueLabel("slab_free_large");
-    _b.JumpIfNonZero(VReg.Scratch1, largeFree);
+    var arenaLargeFree = UniqueLabel("slab_free_arena_large");
+    var osDirect = UniqueLabel("slab_free_os_direct");
 
-    // --- Small object free ---
+    // flags == 0: slab path (fall through)
+    // flags == 1: arena-large (no-op)
+    // flags == 2: OS-direct
+    _b.CmpRegImm(VReg.Scratch1, FlagArenaLarge);
+    _b.JumpIf(Condition.Equal, arenaLargeFree);
+    _b.CmpRegImm(VReg.Scratch1, FlagOsDirect);
+    _b.JumpIf(Condition.Equal, osDirect);
+
+    // --- Slab object free (flags == 0) ---
     // Read span_ptr from [ptr - 16]
     _b.LoadLocal(VReg.Scratch0, 0); // user_ptr
     _b.LoadIndirect(VReg.Scratch1, VReg.Scratch0, -16); // span_ptr
@@ -792,7 +958,7 @@ public partial class RuntimeEmitter {
       _b.LoadLocal(VReg.Scratch0, 1); // span_ptr
       _b.LoadIndirect(VReg.Scratch0, VReg.Scratch0, MspanOffClassIndex); // class_index
       _b.StoreLocal(1, VReg.Scratch0); // reuse slot 1 = class_index for trace
-      EmitInlineTraceSlabFree(sizeSlot: 2, classSlot: 1);
+      EmitInlineTraceSlabFree(UniqueLabel("sl_free_slab_trace"), sizeSlot: 2, classSlot: 1);
       // Reload span_ptr (clobbered by trace calls) from user_ptr header
       _b.LoadLocal(VReg.Scratch0, 0); // user_ptr
       _b.LoadIndirect(VReg.Scratch1, VReg.Scratch0, -16); // span_ptr
@@ -803,7 +969,7 @@ public partial class RuntimeEmitter {
     }
 
     // Zero user data: __slab_memzero(user_ptr, slot_size - SlabHeaderSize)
-    // This catches use-after-free via null-dereference and pre-zeros for next alloc.
+    // Catches use-after-free via null-dereference; pre-zeros for next alloc.
     _b.LoadLocal(VReg.Scratch0, 2); // slot_size
     _b.SubRegImm(VReg.Scratch0, SlabHeaderSize); // user_size = slot_size - 16
     _b.LoadLocal(VReg.Arg0, 0); // user_ptr
@@ -829,36 +995,65 @@ public partial class RuntimeEmitter {
     _b.AddRegImm(VReg.Scratch2, 1);
     _b.StoreIndirect(VReg.Scratch1, MspanOffFreeCount, VReg.Scratch2);
 
+    // If span is now fully free (free_count == total_slots), return it to mcentral
+    // so other Ps can reuse it instead of allocating fresh spans from the arena.
+    // __slab_mcentral_return_span evicts any stale mcache pointers across all Ps.
+    _b.LoadIndirect(VReg.Scratch0, VReg.Scratch1, MspanOffTotalSlots);
+    _b.CmpRegReg(VReg.Scratch2, VReg.Scratch0); // free_count == total_slots?
+    var notFullyFree = UniqueLabel("slab_free_not_fully_free");
+    _b.JumpIf(Condition.NotEqual, notFullyFree);
+
+    _b.LoadLocal(VReg.Arg0, 1); // span_ptr
+    _b.Call("__slab_mcentral_return_span");
+
+    _b.DefineLabel(notFullyFree);
     _b.FunctionEnd();
 
-    // --- Large object free ---
-    _b.DefineLabel(largeFree);
+    // --- Arena-large free (flags == 1): no-op ---
+    // Arena memory is bump-allocated and not individually freed.
+    // The arena itself is held for the lifetime of the process.
+    _b.DefineLabel(arenaLargeFree);
+    if (mmTrace) {
+      _b.LoadLocal(VReg.Scratch0, 0); // user_ptr
+      _b.LoadIndirect(VReg.Scratch1, VReg.Scratch0, -16); // total_size
+      _b.SubRegImm(VReg.Scratch1, SlabHeaderSize); // user_size
+      _b.StoreLocal(1, VReg.Scratch1);
+      _b.MovRegImm(VReg.Scratch0, -1);
+      _b.StoreLocal(2, VReg.Scratch0); // class_index = -1
+      EmitInlineTraceSlabFree(UniqueLabel("sl_free_arena_large_trace"), sizeSlot: 1, classSlot: 2);
+    }
+    _b.FunctionEnd();
+
+    // --- OS-direct free (flags == 2) ---
+    _b.DefineLabel(osDirect);
 
     if (mmTrace) {
-      // user_size = total_alloc_size (at [ptr-16]) - SlabHeaderSize
       _b.LoadLocal(VReg.Scratch0, 0); // user_ptr
-      _b.LoadIndirect(VReg.Scratch1, VReg.Scratch0, -16); // total_alloc_size
+      _b.LoadIndirect(VReg.Scratch1, VReg.Scratch0, -16); // total_size
       _b.SubRegImm(VReg.Scratch1, SlabHeaderSize); // user_size
-      _b.StoreLocal(1, VReg.Scratch1); // slot 1 = user_size
+      _b.StoreLocal(1, VReg.Scratch1);
       _b.MovRegImm(VReg.Scratch0, -1);
-      _b.StoreLocal(2, VReg.Scratch0); // slot 2 = class_index = -1
-      EmitInlineTraceSlabFree(sizeSlot: 1, classSlot: 2);
+      _b.StoreLocal(2, VReg.Scratch0); // class_index = -1
+      EmitInlineTraceSlabFree(UniqueLabel("sl_free_os_direct_trace"), sizeSlot: 1, classSlot: 2);
     }
 
-    // Read total_alloc_size from [ptr - 16]
+    // Read total_size from [ptr - 16]
     _b.LoadLocal(VReg.Scratch0, 0); // user_ptr
-    _b.LoadIndirect(VReg.Scratch1, VReg.Scratch0, -16); // total_alloc_size
+    _b.LoadIndirect(VReg.Scratch1, VReg.Scratch0, -16); // total_size
 
     // base = user_ptr - 16
     _b.SubRegImm(VReg.Scratch0, SlabHeaderSize);
 
-    if (mmTrace) EmitInlineTraceOsFree(VReg.Scratch1); // Scratch1 = total_alloc_size
+    if (mmTrace) {
+      EmitTraceDepthInc();
+      EmitInlineTraceOsFree(UniqueLabel("os_free_trace"), VReg.Scratch1); // Scratch1 = total_size
+      EmitTraceDepthDec();
+    }
     // Reload base and size after trace calls clobber registers
     _b.LoadLocal(VReg.Scratch0, 0);
-    _b.LoadIndirect(VReg.Scratch1, VReg.Scratch0, -16); // total_alloc_size
+    _b.LoadIndirect(VReg.Scratch1, VReg.Scratch0, -16); // total_size
     _b.SubRegImm(VReg.Scratch0, SlabHeaderSize);        // base
 
-    // OsFreePages(base, total_alloc_size)
     _b.MovRegReg(VReg.Arg0, VReg.Scratch0);
     _b.MovRegReg(VReg.Arg1, VReg.Scratch1);
     _b.OsFreePages(VReg.Arg0, VReg.Arg1);
@@ -910,9 +1105,11 @@ public partial class RuntimeEmitter {
   // =========================================================================
   public void EmitAllocatorFunctions(bool mmTrace) {
     EmitAllocatorGlobals();
-    EmitAllocatorInit(mmTrace);
     EmitSlabMemzero();
-    EmitMspanAlloc(mmTrace);
+    EmitOsAllocPages(mmTrace);
+    EmitArenaAlloc(mmTrace);
+    EmitAllocatorInit(mmTrace);
+    EmitMspanAlloc();
     EmitMcentralGetSpan();
     EmitMcentralReturnSpan();
     EmitSlabAlloc(mmTrace);

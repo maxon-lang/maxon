@@ -3193,7 +3193,7 @@ public partial class ARM64CodeEmitter {
       EmitLoadStoreUnsignedImm(0xF9000000, AbiArgRegs[i], ARM64Register.X29, 48 + i * 8, 8);
     }
     EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X29, 32, 8); // X0 = arg_buf
-    EmitBranchLink("mm_raw_free");
+    EmitBranchLink("mm_raw_free", zeroSecondArg: Compiler.MmTrace);
     // Restore args
     for (int i = 0; i < 8; i++) {
       EmitLoadStoreUnsignedImm(0xF9400000, AbiArgRegs[i], ARM64Register.X29, 48 + i * 8, 8);
@@ -3443,7 +3443,7 @@ public partial class ARM64CodeEmitter {
     EmitBranch("__gt_await_recycle_done");
     DefineLabel("__gt_await_free_gt");
     EmitReloadArg(0); // X0 = promise (gt struct ptr)
-    EmitBranchLink("mm_raw_free");
+    EmitBranchLink("mm_raw_free", zeroSecondArg: Compiler.MmTrace);
     DefineLabel("__gt_await_recycle_done");
     EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X29, 24, 8); // restore result
 
@@ -3567,7 +3567,7 @@ public partial class ARM64CodeEmitter {
     EmitBranch("__gt_try_await_recycle_done");
     DefineLabel("__gt_try_await_free_gt");
     EmitReloadArg(0); // X0 = promise
-    EmitBranchLink("mm_raw_free");
+    EmitBranchLink("mm_raw_free", zeroSecondArg: Compiler.MmTrace);
     DefineLabel("__gt_try_await_recycle_done");
     EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X29, 24, 8); // restore result
     EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X1, ARM64Register.X29, 32, 8); // restore threw
@@ -4157,7 +4157,7 @@ public partial class ARM64CodeEmitter {
     EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X29, 40, 8); // save result
     // Free args struct
     EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X29, 88, 8);
-    EmitBranchLink("mm_raw_free");
+    EmitBranchLink("mm_raw_free", zeroSecondArg: Compiler.MmTrace);
     // On error, X0 would be negative.
     // Restore result
     EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X29, 40, 8);
@@ -4178,7 +4178,7 @@ public partial class ARM64CodeEmitter {
     EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X29, 40, 8); // save result
     // Free args struct
     EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X29, 88, 8);
-    EmitBranchLink("mm_raw_free");
+    EmitBranchLink("mm_raw_free", zeroSecondArg: Compiler.MmTrace);
     // Restore result
     EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X29, 40, 8);
     EmitBranch("__io_op_done");
@@ -4209,7 +4209,7 @@ public partial class ARM64CodeEmitter {
 
     // Free req
     EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X29, 16, 8);
-    EmitBranchLink("mm_raw_free");
+    EmitBranchLink("mm_raw_free", zeroSecondArg: Compiler.MmTrace);
 
     // Loop
     EmitBranch("__io_check_comp_loop");
@@ -6180,7 +6180,7 @@ public partial class ARM64CodeEmitter {
     DefineLabel("__io_poll_kqueue_free_ctx");
     // Free ctx
     EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X29, 56, 8); // ctx
-    EmitBranchLink("mm_raw_free");
+    EmitBranchLink("mm_raw_free", zeroSecondArg: Compiler.MmTrace);
 
     DefineLabel("__io_poll_kqueue_next");
     // index++

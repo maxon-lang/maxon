@@ -7,6 +7,8 @@ Implement a new language feature in the Maxon compiler following spec-driven dev
 
 The user will describe the feature they want. You will create the spec, write the tests, and implement the compiler changes to make them pass.
 
+By default spec tests will only show the name of failing tests, but you can use `--verbose` to show detailed failure messages for failing tests which can help with debugging. Use --filter when working on a specific failing test.
+
 ## Steps
 
 ### Phase 1: Research & Design

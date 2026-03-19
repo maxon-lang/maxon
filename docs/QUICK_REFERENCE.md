@@ -692,7 +692,10 @@ maxon lsp-server             # Start LSP server for IDE integration
 ### Test Options (spec-test)
 | Option | Description |
 |--------|-------------|
-| `--filter <pattern>` | Run tests matching pattern |
+| `--filter=PATTERN` | Run tests matching pattern |
+| `--verbose` | Show detailed failure messages for failing tests |
+| `--update-required` | Regenerate and update RequiredMLIR + MmTrace stderr |
+| `--workers=N` | Set number of parallel test workers |
 
 ## The self hosted compiler (currently in development)
 - The source is in maxon-bin-selfhosted

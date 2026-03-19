@@ -256,13 +256,16 @@ public partial class X86CodeEmitter {
     // ---- TLS ----
 
     public void LoadCurrentP(VReg dest) {
-      // Inline GS segment access: load P* from TEB via precomputed offset
-      var reg = R(dest);
+      // Load P* from TEB via precomputed GS-segment offset.
+      // Load the offset into R11, then dereference GS:[R11] to get P*.
+      // Uses R11 as scratch regardless of dest so the GS dereference is always
+      // encoded as MOV R11, GS:[R11] (REX.W+REX.R+REX.B = 0x4F, 0x8B, 0x1B).
       _e.EmitGlobalLoadReg(X86Register.R11, "__sched_tls_teb_offset");
-      // GS:[R11] → R11
-      _e.EmitByte(0x65); // GS prefix
-      _e.EmitBytes(0x4D, 0x8B, 0x1B); // MOV R11, [R11]
-      _e.EmitMovRegReg(reg, X86Register.R11);
+      _e.EmitByte(0x65); // GS segment override prefix
+      _e.EmitMovRegIndirectMemRaw(X86Register.R11, X86Register.R11, 0); // R11 = P*
+      var reg = R(dest);
+      if (reg != X86Register.R11)
+        _e.EmitMovRegReg(reg, X86Register.R11);
     }
 
     // ---- OS memory allocation ----
@@ -278,6 +281,21 @@ public partial class X86CodeEmitter {
       _e.EmitMovRegImm(X86Register.R9, 0x04);   // PAGE_READWRITE
       _e.EmitCallImportOnSystemStack("kernel32.dll", "VirtualAlloc");
       // Result in RAX; move to dest
+      var destReg = R(dest);
+      if (destReg != X86Register.Rax)
+        _e.EmitMovRegReg(destReg, X86Register.Rax);
+    }
+
+    public void OsAllocLargePages(VReg dest, VReg size) {
+      // VirtualAlloc(NULL, size, MEM_COMMIT|MEM_RESERVE|MEM_LARGE_PAGES, PAGE_READWRITE)
+      // MEM_LARGE_PAGES = 0x20000000; combined flags = 0x3000 | 0x20000000 = 0x20003000
+      // Returns NULL if SeLockMemoryPrivilege is not held — caller must check and fall back.
+      var sizeReg = R(size);
+      _e.EmitMovRegReg(X86Register.Rdx, sizeReg);
+      _e.EmitXorRegReg(X86Register.Rcx, X86Register.Rcx); // lpAddress = NULL
+      _e.EmitMovRegImm(X86Register.R8, 0x20003000);        // MEM_COMMIT|MEM_RESERVE|MEM_LARGE_PAGES
+      _e.EmitMovRegImm(X86Register.R9, 0x04);              // PAGE_READWRITE
+      _e.EmitCallImportOnSystemStack("kernel32.dll", "VirtualAlloc");
       var destReg = R(dest);
       if (destReg != X86Register.Rax)
         _e.EmitMovRegReg(destReg, X86Register.Rax);

@@ -143,6 +143,17 @@ public interface IEmitterBackend {
   void OsAllocPages(VReg dest, VReg size);
 
   /// <summary>
+  /// Attempt to allocate <paramref name="size"/> bytes using large/huge pages.
+  /// Returns the pointer in <paramref name="dest"/>, or NULL if large pages are unavailable.
+  /// On Windows: VirtualAlloc with MEM_COMMIT|MEM_RESERVE|MEM_LARGE_PAGES, PAGE_READWRITE.
+  ///             Size must be a multiple of the large page size (2MB on x86-64).
+  ///             Requires SeLockMemoryPrivilege; returns NULL if the call fails.
+  /// On macOS:   mmap with MAP_ANON|MAP_PRIVATE|MAP_SUPERPAGE. Falls back to NULL if unsupported.
+  /// Clobbers Arg0..Arg5.
+  /// </summary>
+  void OsAllocLargePages(VReg dest, VReg size);
+
+  /// <summary>
   /// Release memory previously allocated via OsAllocPages.
   /// On Windows: VirtualFree(ptr, 0, MEM_RELEASE) — size ignored.
   /// On macOS:   munmap(ptr, size).

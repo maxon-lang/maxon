@@ -209,4 +209,5 @@ public class X86CodeEmitter {
   private static uint AlignUp(uint value, uint alignment) {
     return (value + alignment - 1) & ~(alignment - 1);
   }
+
 }

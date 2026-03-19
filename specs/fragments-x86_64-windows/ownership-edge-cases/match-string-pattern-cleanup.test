@@ -11,43 +11,40 @@ end 'main'
 MmTrace: true
 ExitCode: 1
 Stderr: ```
-os_alloc size=2304
-os_alloc size=4096
-os_alloc size=4096
-os_alloc size=4096
-slab_alloc size=48 class=5
-alloc String #1 rc=0 size=16 [ownership-edge-cases.main]
-os_alloc size=4096
-slab_alloc size=64 class=6
-alloc __ManagedMemory #2 rc=0 size=32 [ownership-edge-cases.main]
-incref __ManagedMemory #2 rc=1 [ownership-edge-cases.main]
-incref String #1 rc=1 [ownership-edge-cases.main]
-incref String #1 rc=2 [ownership-edge-cases.main]
-incref String #1 rc=3 [ownership-edge-cases.main]
-slab_alloc size=48 class=5
-alloc String #3 rc=0 size=16 [ownership-edge-cases.main]
-slab_alloc size=64 class=6
-alloc __ManagedMemory #4 rc=0 size=32 [ownership-edge-cases.main]
-incref __ManagedMemory #4 rc=1 [ownership-edge-cases.main]
-incref String #3 rc=1 [ownership-edge-cases.main]
-decref String #3 rc=0 [ownership-edge-cases.main]
-decref __ManagedMemory #4 rc=0 [~String]
-  free __ManagedMemory #4
-slab_free size=80 class=6
-  free String #3
-slab_free size=48 class=5
-decref String #1 rc=2 [ownership-edge-cases.main]
-decref String #1 rc=1 [ownership-edge-cases.main]
-decref String #1 rc=0 [ownership-edge-cases.main]
-decref __ManagedMemory #2 rc=0 [~String]
-  free __ManagedMemory #2
-slab_free size=80 class=6
-  free String #1
-slab_free size=48 class=5
-slab_alloc size=40 class=5
-raw_alloc size=40
-raw_free
-slab_free size=48 class=5
+sl_init
+    os_alloc size=67108864
+mm_alloc String #1 size=16 [ownership-edge-cases.main]
+  sl_alloc String #1 size=48 class=5
+mm_alloc __ManagedMemory #2 size=32 [ownership-edge-cases.main]
+  sl_alloc __ManagedMemory #2 size=64 class=6
+mm_incref __ManagedMemory #2 rc=1 [ownership-edge-cases.main]
+mm_incref String #1 rc=1 [ownership-edge-cases.main]
+mm_incref String #1 rc=2 [ownership-edge-cases.main]
+mm_incref String #1 rc=3 [ownership-edge-cases.main]
+mm_alloc String #3 size=16 [ownership-edge-cases.main]
+  sl_alloc String #3 size=48 class=5
+mm_alloc __ManagedMemory #4 size=32 [ownership-edge-cases.main]
+  sl_alloc __ManagedMemory #4 size=64 class=6
+mm_incref __ManagedMemory #4 rc=1 [ownership-edge-cases.main]
+mm_incref String #3 rc=1 [ownership-edge-cases.main]
+mm_decref String #3 rc=0 [ownership-edge-cases.main]
+  mm_decref __ManagedMemory #4 rc=0 [~String]
+    mm_free __ManagedMemory #4
+      sl_free __ManagedMemory #4 size=80 class=6
+  mm_free String #3
+    sl_free String #3 size=48 class=5
+mm_decref String #1 rc=2 [ownership-edge-cases.main]
+mm_decref String #1 rc=1 [ownership-edge-cases.main]
+mm_decref String #1 rc=0 [ownership-edge-cases.main]
+  mm_decref __ManagedMemory #2 rc=0 [~String]
+    mm_free __ManagedMemory #2
+      sl_free __ManagedMemory #2 size=80 class=6
+  mm_free String #1
+    sl_free String #1 size=48 class=5
+mm_raw_alloc #R1 size=40
+  sl_alloc size=40 class=5
+mm_raw_free #R1
+  sl_free size=48 class=5
 ```
 ---
 module {

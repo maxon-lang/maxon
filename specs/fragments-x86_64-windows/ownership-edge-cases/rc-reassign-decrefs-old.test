@@ -15,36 +15,34 @@ end 'main'
 MmTrace: true
 ExitCode: 3
 Stderr: ```
-os_alloc size=2304
-os_alloc size=4096
-os_alloc size=4096
-os_alloc size=4096
-slab_alloc size=40 class=5
-alloc Tag #1 rc=0 size=8 [ownership-edge-cases.main]
-incref Tag #1 rc=1 [ownership-edge-cases.main]
-slab_alloc size=40 class=5
-alloc Tag #2 rc=0 size=8 [ownership-edge-cases.main]
-incref Tag #2 rc=1 [ownership-edge-cases.main]
-decref Tag #1 rc=0 [ownership-edge-cases.main]
-  free Tag #1
-slab_free size=48 class=5
-incref Tag #2 rc=2 [ownership-edge-cases.main]
-slab_alloc size=40 class=5
-alloc Tag #3 rc=0 size=8 [ownership-edge-cases.main]
-incref Tag #3 rc=1 [ownership-edge-cases.main]
-decref Tag #2 rc=1 [ownership-edge-cases.main]
-incref Tag #3 rc=2 [ownership-edge-cases.main]
-decref Tag #3 rc=1 [ownership-edge-cases.main]
-decref Tag #2 rc=0 [ownership-edge-cases.main]
-  free Tag #2
-slab_free size=48 class=5
-decref Tag #3 rc=0 [ownership-edge-cases.main]
-  free Tag #3
-slab_free size=48 class=5
-slab_alloc size=40 class=5
-raw_alloc size=40
-raw_free
-slab_free size=48 class=5
+sl_init
+    os_alloc size=67108864
+mm_alloc Tag #1 size=8 [ownership-edge-cases.main]
+  sl_alloc Tag #1 size=40 class=5
+mm_incref Tag #1 rc=1 [ownership-edge-cases.main]
+mm_alloc Tag #2 size=8 [ownership-edge-cases.main]
+  sl_alloc Tag #2 size=40 class=5
+mm_incref Tag #2 rc=1 [ownership-edge-cases.main]
+mm_decref Tag #1 rc=0 [ownership-edge-cases.main]
+  mm_free Tag #1
+    sl_free Tag #1 size=48 class=5
+mm_incref Tag #2 rc=2 [ownership-edge-cases.main]
+mm_alloc Tag #3 size=8 [ownership-edge-cases.main]
+  sl_alloc Tag #3 size=40 class=5
+mm_incref Tag #3 rc=1 [ownership-edge-cases.main]
+mm_decref Tag #2 rc=1 [ownership-edge-cases.main]
+mm_incref Tag #3 rc=2 [ownership-edge-cases.main]
+mm_decref Tag #3 rc=1 [ownership-edge-cases.main]
+mm_decref Tag #2 rc=0 [ownership-edge-cases.main]
+  mm_free Tag #2
+    sl_free Tag #2 size=48 class=5
+mm_decref Tag #3 rc=0 [ownership-edge-cases.main]
+  mm_free Tag #3
+    sl_free Tag #3 size=48 class=5
+mm_raw_alloc #R1 size=40
+  sl_alloc size=40 class=5
+mm_raw_free #R1
+  sl_free size=48 class=5
 ```
 ---
 module {

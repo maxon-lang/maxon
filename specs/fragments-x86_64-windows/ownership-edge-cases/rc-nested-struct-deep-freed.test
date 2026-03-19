@@ -21,32 +21,30 @@ end 'main'
 MmTrace: true
 ExitCode: 7
 Stderr: ```
-os_alloc size=2304
-os_alloc size=4096
-os_alloc size=4096
-os_alloc size=4096
-slab_alloc size=40 class=5
-alloc A #1 rc=0 size=8 [ownership-edge-cases.main]
-slab_alloc size=40 class=5
-alloc B #2 rc=0 size=8 [ownership-edge-cases.main]
-incref A #1 rc=1 [ownership-edge-cases.main]
-slab_alloc size=40 class=5
-alloc C #3 rc=0 size=8 [ownership-edge-cases.main]
-incref B #2 rc=1 [ownership-edge-cases.main]
-incref C #3 rc=1 [ownership-edge-cases.main]
-decref C #3 rc=0 [ownership-edge-cases.main]
-decref B #2 rc=0 [~C]
-decref A #1 rc=0 [~B]
-  free A #1
-slab_free size=48 class=5
-  free B #2
-slab_free size=48 class=5
-  free C #3
-slab_free size=48 class=5
-slab_alloc size=40 class=5
-raw_alloc size=40
-raw_free
-slab_free size=48 class=5
+sl_init
+    os_alloc size=67108864
+mm_alloc A #1 size=8 [ownership-edge-cases.main]
+  sl_alloc A #1 size=40 class=5
+mm_alloc B #2 size=8 [ownership-edge-cases.main]
+  sl_alloc B #2 size=40 class=5
+mm_incref A #1 rc=1 [ownership-edge-cases.main]
+mm_alloc C #3 size=8 [ownership-edge-cases.main]
+  sl_alloc C #3 size=40 class=5
+mm_incref B #2 rc=1 [ownership-edge-cases.main]
+mm_incref C #3 rc=1 [ownership-edge-cases.main]
+mm_decref C #3 rc=0 [ownership-edge-cases.main]
+  mm_decref B #2 rc=0 [~C]
+    mm_decref A #1 rc=0 [~B]
+      mm_free A #1
+        sl_free A #1 size=48 class=5
+    mm_free B #2
+      sl_free B #2 size=48 class=5
+  mm_free C #3
+    sl_free C #3 size=48 class=5
+mm_raw_alloc #R1 size=40
+  sl_alloc size=40 class=5
+mm_raw_free #R1
+  sl_free size=48 class=5
 ```
 ---
 module {

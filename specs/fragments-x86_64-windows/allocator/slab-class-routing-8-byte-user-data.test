@@ -1,0 +1,82 @@
+// Test: slab-class-routing-8-byte-user-data
+typealias Integer = int(i64.min to i64.max)
+
+type Tiny
+  export var x Integer
+end 'Tiny'
+
+function main() returns ExitCode
+  var t = Tiny{x: 7}
+  return t.x
+end 'main'
+---
+MmTrace: true
+ExitCode: 7
+Stderr: ```
+sl_init
+    os_alloc size=67108864
+mm_alloc Tiny #1 size=8 [allocator.main]
+  sl_alloc Tiny #1 size=40 class=5
+mm_incref Tiny #1 rc=1 [allocator.main]
+mm_decref Tiny #1 rc=0 [allocator.main]
+  mm_free Tiny #1
+    sl_free Tiny #1 size=48 class=5
+mm_raw_alloc #R1 size=40
+  sl_alloc size=40 class=5
+mm_raw_free #R1
+  sl_free size=48 class=5
+```
+---
+module {
+  func @allocator.main() -> u32 {
+  entry:
+    x86.prologue stack_size=16
+    x86.mov rax, 7
+    x86.mov rcx, 8
+    x86.xor rdx, rdx
+    x86.mov r8, 1
+    x86.call mm_alloc
+    x86.mov [rbp-8], rax
+    x86.mov rcx, [rbp-8]
+    x86.mov rdx, 7
+    x86.mov [rcx+0], rdx
+    x86.mov rbx, [rbp-8]
+    x86.mov rcx, [rbp-8]
+    x86.call mm_incref
+    x86.mov rsi, [rbp-8]
+    x86.mov rdi, [rsi+0]
+    x86.mov [rbp-16], rdi
+    x86.xor r8, r8
+    x86.cmp rdi, r8
+    x86.setl r9
+    x86.movzx r9, r9b
+    x86.mov rax, 4294967295
+    x86.cmp rdi, rax
+    x86.setg rax
+    x86.movzx rax, raxb
+    x86.or r9, rax
+    x86.test r9, r9
+    x86.je allocator.main.__range_ok_0
+  __range_panic_0:
+    x86.lea_symdata rax, [__panic_msg_18]
+    x86.mov rcx, rax
+    x86.call maxon_panic
+  __range_ok_0:
+    x86.mov rax, [rbp-16]
+    x86.mov rcx, [rbp-8]
+    x86.test rcx, rcx
+    x86.jz __nonnull_skip_0
+    x86.call mm_decref
+    x86.label __nonnull_skip_0
+    x86.mov rax, [rbp-16]
+    x86.epilogue
+    x86.ret
+  }
+  func @__destruct_Tiny(ptr: i64) {
+  entry:
+    x86.jmp __destruct_Tiny.done
+  done:
+    x86.ret
+  }
+}
+---

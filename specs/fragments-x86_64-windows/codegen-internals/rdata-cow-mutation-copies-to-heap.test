@@ -11,33 +11,29 @@ end 'main'
 MmTrace: true
 ExitCode: 77
 Stderr: ```
-os_alloc size=2304
-os_alloc size=4096
-os_alloc size=4096
-os_alloc size=4096
-slab_alloc size=64 class=6
-alloc __ManagedMemory #1 rc=0 size=32 [codegen-internals.main]
-os_alloc size=4096
-slab_alloc size=48 class=5
-alloc IntArray #2 rc=0 size=16 [codegen-internals.main]
-incref __ManagedMemory #1 rc=1 [codegen-internals.main]
-incref IntArray #2 rc=1 [codegen-internals.main]
-os_alloc size=4096
-slab_alloc size=8 class=2
-raw_alloc size=8
-cow __ManagedMemory #1 rc=1 size=8
-decref IntArray #2 rc=0 [codegen-internals.main]
-decref __ManagedMemory #1 rc=0 [~IntArray]
-raw_free
-slab_free size=8 class=2
-  free __ManagedMemory #1
-slab_free size=80 class=6
-  free IntArray #2
-slab_free size=48 class=5
-slab_alloc size=40 class=5
-raw_alloc size=40
-raw_free
-slab_free size=48 class=5
+sl_init
+    os_alloc size=67108864
+mm_alloc __ManagedMemory #1 size=32 [codegen-internals.main]
+  sl_alloc __ManagedMemory #1 size=64 class=6
+mm_alloc IntArray #2 size=16 [codegen-internals.main]
+  sl_alloc IntArray #2 size=48 class=5
+mm_incref __ManagedMemory #1 rc=1 [codegen-internals.main]
+mm_incref IntArray #2 rc=1 [codegen-internals.main]
+mm_raw_alloc #R1 size=8
+  sl_alloc size=8 class=2
+mm_cow __ManagedMemory #1 rc=1 size=8
+mm_decref IntArray #2 rc=0 [codegen-internals.main]
+  mm_decref __ManagedMemory #1 rc=0 [~IntArray]
+    mm_raw_free #R1
+      sl_free size=8 class=2
+    mm_free __ManagedMemory #1
+      sl_free __ManagedMemory #1 size=80 class=6
+  mm_free IntArray #2
+    sl_free IntArray #2 size=48 class=5
+mm_raw_alloc #R2 size=40
+  sl_alloc size=40 class=5
+mm_raw_free #R2
+  sl_free size=48 class=5
 ```
 RequiredMLIR: ```
 === maxon

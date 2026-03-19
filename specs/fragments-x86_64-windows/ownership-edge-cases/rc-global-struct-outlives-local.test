@@ -19,32 +19,30 @@ end 'main'
 MmTrace: true
 ExitCode: 42
 Stderr: ```
-os_alloc size=2304
-os_alloc size=4096
-os_alloc size=4096
-os_alloc size=4096
-slab_alloc size=40 class=5
-alloc Cfg #1 rc=0 size=8 [ownership-edge-cases.__module_init]
-incref Cfg #1 rc=1 [ownership-edge-cases.__module_init]
-incref Cfg #1 rc=2 [ownership-edge-cases.__module_init]
-decref Cfg #1 rc=1 [ownership-edge-cases.__module_init]
-slab_alloc size=40 class=5
-alloc Cfg #2 rc=0 size=8 [ownership-edge-cases.setup]
-incref Cfg #2 rc=1 [ownership-edge-cases.setup]
-decref Cfg #1 rc=0 [ownership-edge-cases.setup]
-  free Cfg #1
-slab_free size=48 class=5
-incref Cfg #2 rc=2 [ownership-edge-cases.setup]
-decref Cfg #2 rc=1 [ownership-edge-cases.setup]
-incref Cfg #2 rc=2 [ownership-edge-cases.main]
-decref Cfg #2 rc=1 [ownership-edge-cases.main]
-slab_alloc size=40 class=5
-raw_alloc size=40
-raw_free
-slab_free size=48 class=5
-decref Cfg #2 rc=0 [__maxon_global_cleanup]
-  free Cfg #2
-slab_free size=48 class=5
+sl_init
+    os_alloc size=67108864
+mm_alloc Cfg #1 size=8 [ownership-edge-cases.__module_init]
+  sl_alloc Cfg #1 size=40 class=5
+mm_incref Cfg #1 rc=1 [ownership-edge-cases.__module_init]
+mm_incref Cfg #1 rc=2 [ownership-edge-cases.__module_init]
+mm_decref Cfg #1 rc=1 [ownership-edge-cases.__module_init]
+mm_alloc Cfg #2 size=8 [ownership-edge-cases.setup]
+  sl_alloc Cfg #2 size=40 class=5
+mm_incref Cfg #2 rc=1 [ownership-edge-cases.setup]
+mm_decref Cfg #1 rc=0 [ownership-edge-cases.setup]
+  mm_free Cfg #1
+    sl_free Cfg #1 size=48 class=5
+mm_incref Cfg #2 rc=2 [ownership-edge-cases.setup]
+mm_decref Cfg #2 rc=1 [ownership-edge-cases.setup]
+mm_incref Cfg #2 rc=2 [ownership-edge-cases.main]
+mm_decref Cfg #2 rc=1 [ownership-edge-cases.main]
+mm_raw_alloc #R1 size=40
+  sl_alloc size=40 class=5
+mm_raw_free #R1
+  sl_free size=48 class=5
+mm_decref Cfg #2 rc=0 [__maxon_global_cleanup]
+  mm_free Cfg #2
+    sl_free Cfg #2 size=48 class=5
 ```
 ---
 module {

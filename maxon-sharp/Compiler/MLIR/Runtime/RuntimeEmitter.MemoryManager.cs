@@ -20,28 +20,38 @@ public partial class RuntimeEmitter {
     _b.DefineSymdata("__mm_hex_buf", new byte[24]);
     _b.DefineSymdata("__mm_tag_newline", "\n\0"u8.ToArray());
     _b.DefineSymdata("__mm_tag_null", "(null)\0"u8.ToArray());
+    _b.DefineSymdata("__mm_tag_minus_one", "-1\0"u8.ToArray());
 
     if (mmTrace) {
-      _b.DefineSymdata("__mm_tag_alloc", "alloc \0"u8.ToArray());
-      _b.DefineSymdata("__mm_tag_free", "free \0"u8.ToArray());
-      _b.DefineSymdata("__mm_tag_raw_alloc", "raw_alloc\0"u8.ToArray());
-      _b.DefineSymdata("__mm_tag_raw_free", "raw_free\0"u8.ToArray());
-      _b.DefineSymdata("__slab_tag_alloc", "slab_alloc\0"u8.ToArray());
-      _b.DefineSymdata("__slab_tag_free", "slab_free\0"u8.ToArray());
+      // MM-layer trace tags (prefixed with mm_)
+      _b.DefineSymdata("__mm_tag_alloc", "mm_alloc \0"u8.ToArray());
+      _b.DefineSymdata("__mm_tag_free", "mm_free \0"u8.ToArray());
+      _b.DefineSymdata("__mm_tag_raw_alloc", "mm_raw_alloc\0"u8.ToArray());
+      _b.DefineSymdata("__mm_tag_raw_free", "mm_raw_free\0"u8.ToArray());
+      _b.DefineSymdata("__mm_tag_incref", "mm_incref \0"u8.ToArray());
+      _b.DefineSymdata("__mm_tag_decref", "mm_decref \0"u8.ToArray());
+      _b.DefineSymdata("__mm_tag_transfer", "mm_transfer \0"u8.ToArray());
+      _b.DefineSymdata("__mm_tag_realloc", "mm_realloc \0"u8.ToArray());
+      _b.DefineSymdata("__mm_tag_cow", "mm_cow \0"u8.ToArray());
+      // Slab-layer trace tags (prefixed with sl_)
+      _b.DefineSymdata("__slab_tag_alloc", "sl_alloc\0"u8.ToArray());
+      _b.DefineSymdata("__slab_tag_free", "sl_free\0"u8.ToArray());
       _b.DefineSymdata("__slab_tag_class", " class=\0"u8.ToArray());
+      // OS-layer trace tags (unchanged)
       _b.DefineSymdata("__slab_tag_os_alloc", "os_alloc\0"u8.ToArray());
       _b.DefineSymdata("__slab_tag_os_free", "os_free\0"u8.ToArray());
-      _b.DefineSymdata("__mm_tag_incref", "incref \0"u8.ToArray());
-      _b.DefineSymdata("__mm_tag_decref", "decref \0"u8.ToArray());
-      _b.DefineSymdata("__mm_tag_transfer", "transfer \0"u8.ToArray());
-      _b.DefineSymdata("__mm_tag_realloc", "realloc \0"u8.ToArray());
-      _b.DefineSymdata("__mm_tag_cow", "cow \0"u8.ToArray());
+      _b.DefineSymdata("__slab_tag_init", "sl_init\0"u8.ToArray());
+      // Common trace formatting
       _b.DefineSymdata("__mm_tag_size_eq", " size=\0"u8.ToArray());
       _b.DefineSymdata("__mm_tag_rc_eq", " rc=\0"u8.ToArray());
       _b.DefineSymdata("__mm_tag_hash", " #\0"u8.ToArray());
+      _b.DefineSymdata("__mm_tag_hash_r", " #R\0"u8.ToArray());
+      _b.DefineSymdata("__mm_tag_space", " \0"u8.ToArray());
       _b.DefineSymdata("__mm_tag_lbracket", " [\0"u8.ToArray());
       _b.DefineSymdata("__mm_tag_rbracket", "]\0"u8.ToArray());
       _b.DefineGlobal("__mm_trace_depth", 8, 0);
+      _b.DefineGlobal("__mm_trace_tag_ctx", 8, 0);
+      _b.DefineGlobal("__mm_raw_alloc_id_counter", 8, 0);
       _b.DefineSymdata("__mm_tag_indent", "  \0"u8.ToArray());
       _b.DefineSymdata("__rt_tag_buffer", "Buffer\0"u8.ToArray());
       _b.DefineSymdata("__rt_tag_cstring", "CString\0"u8.ToArray());
@@ -123,18 +133,9 @@ public partial class RuntimeEmitter {
     EmitTraceScopeAndNewline($"{uniquePrefix}_no_scope", scopeSlot);
   }
 
-  /// <summary>
-  /// Emit: indent + [extra indent if scope NULL] + "free " + "TypeName #N" + " [scope]" + "\n"
-  /// </summary>
+  /// <summary>Emit: indent + "mm_free TypeName #N [scope]\n"</summary>
   private void EmitInlineTraceFree(string uniquePrefix, int ptrSlot, int scopeSlot) {
     _b.Call("mm_trace_print_indent");
-    // Extra indent when scope is NULL (internal free from mm_decref)
-    _b.LoadLocal(VReg.Scratch0, scopeSlot);
-    var noExtraIndent = $"{uniquePrefix}_no_extra_indent";
-    _b.JumpIfNonZero(VReg.Scratch0, noExtraIndent);
-    _b.LeaSymdata(VReg.Arg0, "__mm_tag_indent");
-    _b.Call("mm_trace_print_tag");
-    _b.DefineLabel(noExtraIndent);
     _b.LeaSymdata(VReg.Arg0, "__mm_tag_free");
     _b.Call("mm_trace_print_tag");
     EmitTraceTagAndId(ptrSlot);
@@ -189,22 +190,80 @@ public partial class RuntimeEmitter {
     _b.Call("mm_trace_print_tag");
   }
 
-  /// <summary>Emit: indent + "raw_alloc size=N" [+ " [scope]"] + "\n"</summary>
-  private void EmitInlineTraceRawAlloc(string uniquePrefix, int sizeSlot, int scopeSlot) {
+  /// <summary>Emit: indent + "mm_raw_alloc #RN size=S" [+ " [scope]"] + "\n"</summary>
+  private void EmitInlineTraceRawAlloc(string uniquePrefix, int sizeSlot, int scopeSlot,
+      int? rawIdSlot = null) {
     _b.Call("mm_trace_print_indent");
     _b.LeaSymdata(VReg.Arg0, "__mm_tag_raw_alloc");
     _b.Call("mm_trace_print_tag");
+    if (rawIdSlot.HasValue) {
+      _b.LeaSymdata(VReg.Arg0, "__mm_tag_hash_r");
+      _b.Call("mm_trace_print_tag");
+      _b.LoadLocal(VReg.Arg0, rawIdSlot.Value);
+      _b.Call("mm_trace_print_i64");
+    }
     EmitTraceSize(sizeSlot);
     EmitTraceScopeAndNewline($"{uniquePrefix}_no_scope", scopeSlot);
   }
 
-  /// <summary>Emit: indent + "raw_free\n"</summary>
-  private void EmitInlineTraceRawFree() {
+  /// <summary>Emit: indent + "mm_raw_free #RN" [+ " [scope]"] + "\n"</summary>
+  private void EmitInlineTraceRawFree(string uniquePrefix, int ptrSlot, int scopeSlot) {
     _b.Call("mm_trace_print_indent");
     _b.LeaSymdata(VReg.Arg0, "__mm_tag_raw_free");
     _b.Call("mm_trace_print_tag");
-    _b.LeaSymdata(VReg.Arg0, "__mm_tag_newline");
+    // Print " #R" + raw_alloc_id from [ptr - 8] >> 8
+    _b.LeaSymdata(VReg.Arg0, "__mm_tag_hash_r");
     _b.Call("mm_trace_print_tag");
+    _b.LoadLocal(VReg.Scratch0, ptrSlot);
+    _b.LoadIndirect(VReg.Arg0, VReg.Scratch0, -8); // flags field (raw_id << 8 | flags)
+    _b.ShrRegImm(VReg.Arg0, 8); // raw_alloc_id
+    _b.Call("mm_trace_print_i64");
+    EmitTraceScopeAndNewline($"{uniquePrefix}_no_scope", scopeSlot);
+  }
+
+  // =========================================================================
+  // Trace depth helpers — increment/decrement __mm_trace_depth for
+  // hierarchical indentation of child operations.
+  // =========================================================================
+
+  private void EmitTraceDepthInc() {
+    _b.LoadGlobal(VReg.Scratch0, "__mm_trace_depth");
+    _b.AddRegImm(VReg.Scratch0, 1);
+    _b.StoreGlobal("__mm_trace_depth", VReg.Scratch0);
+  }
+
+  private void EmitTraceDepthDec() {
+    _b.LoadGlobal(VReg.Scratch0, "__mm_trace_depth");
+    _b.SubRegImm(VReg.Scratch0, 1);
+    _b.StoreGlobal("__mm_trace_depth", VReg.Scratch0);
+  }
+
+  /// <summary>
+  /// Emit trace from a packed_id stored in a stack slot (for mm_alloc where the
+  /// pointer doesn't exist yet): indent + tagLabel + "TypeName #N" [+ " size=S"] [+ " [scope]"] + "\n"
+  /// </summary>
+  private void EmitInlineTraceFromPackedId(string tagLabel, string uniquePrefix,
+      int packedIdSlot, int scopeSlot, int? sizeSlot = null) {
+    _b.Call("mm_trace_print_indent");
+    _b.LeaSymdata(VReg.Arg0, tagLabel);
+    _b.Call("mm_trace_print_tag");
+    // Print type name from tag_index (low 16 bits of packed_id)
+    _b.LoadLocal(VReg.Scratch0, packedIdSlot);
+    _b.MovRegReg(VReg.Arg0, VReg.Scratch0);
+    _b.MovRegImm(VReg.Scratch1, 0xFFFF);
+    _b.AndRegReg(VReg.Arg0, VReg.Scratch1);
+    _b.Call("mm_tag_lookup"); // Ret = cstr pointer
+    _b.MovRegReg(VReg.Arg0, VReg.Ret);
+    _b.Call("mm_trace_print_tag");
+    // Print " #N" from alloc_id (upper bits >> 16)
+    _b.LeaSymdata(VReg.Arg0, "__mm_tag_hash");
+    _b.Call("mm_trace_print_tag");
+    _b.LoadLocal(VReg.Scratch0, packedIdSlot);
+    _b.ShrRegImm(VReg.Scratch0, 16);
+    _b.MovRegReg(VReg.Arg0, VReg.Scratch0);
+    _b.Call("mm_trace_print_i64");
+    if (sizeSlot.HasValue) EmitTraceSize(sizeSlot.Value);
+    EmitTraceScopeAndNewline($"{uniquePrefix}_no_scope", scopeSlot);
   }
 
   // =========================================================================
@@ -281,6 +340,8 @@ public partial class RuntimeEmitter {
     _b.JumpIf(Condition.NotEqual, done); // ZF=0 means refcount > 0
 
     // refcount == 0: call destructor if non-null, then free
+    if (mmTrace) EmitTraceDepthInc(); // indent child operations (mm_free, sl_free, etc.)
+
     _b.LoadLocal(VReg.Scratch0, 0); // Scratch0 = user_ptr
     _b.LoadIndirect(VReg.Scratch1, VReg.Scratch0, MmOffDestructor); // Scratch1 = destructor_fn_ptr
     var noDestructor = UniqueLabel("mm_decref_no_destructor");
@@ -296,6 +357,8 @@ public partial class RuntimeEmitter {
     _b.LoadLocal(VReg.Arg0, 0);
     if (mmTrace) _b.ZeroReg(VReg.Arg1); // scope = NULL
     _b.Call("mm_free");
+
+    if (mmTrace) EmitTraceDepthDec();
 
     _b.DefineLabel(done);
     _b.FunctionEnd();
@@ -348,11 +411,23 @@ public partial class RuntimeEmitter {
     _b.LeaGlobal(VReg.Scratch0, "__mm_alloc_count");
     _b.AtomicDec(VReg.Scratch0, 0);
 
+    // Set tag context and depth for slab/OS traces
+    if (mmTrace) {
+      _b.LoadLocal(VReg.Scratch0, 0); // user_ptr
+      _b.LoadIndirect(VReg.Scratch0, VReg.Scratch0, MmOffPackedId); // packed_id
+      _b.StoreGlobal("__mm_trace_tag_ctx", VReg.Scratch0);
+      EmitTraceDepthInc();
+    }
+
     // Compute raw_ptr = user_ptr - MmHeaderSize; free via slab allocator
     _b.LoadLocal(VReg.Scratch0, 0); // Scratch0 = user_ptr
     _b.SubRegImm(VReg.Scratch0, MmHeaderSize); // Scratch0 = raw_ptr (slab slot base)
     _b.MovRegReg(VReg.Arg0, VReg.Scratch0);
     _b.Call("__slab_free");
+
+    if (mmTrace) {
+      EmitTraceDepthDec();
+    }
 
     _b.FunctionEnd();
   }
@@ -371,9 +446,9 @@ public partial class RuntimeEmitter {
   // Increments __mm_alloc_count and __mm_alloc_id_counter.
   // =========================================================================
   // Stack slots: 0=size, 1=destructor, 2=tag_index, 3=scope_cstr (trace only)
-  //              4=alloc_size (scratch), 5=raw_ptr (scratch)
+  //              4=alloc_size (scratch), 5=raw_ptr (scratch), 6=packed_id (trace only)
   public void EmitMmAlloc(bool mmTrace, bool mmDebug) {
-    _b.FunctionStart("mm_alloc", mmTrace ? 4 : 3, 0x70);
+    _b.FunctionStart("mm_alloc", mmTrace ? 4 : 3, 0x80);
 
     // Panic if size == 0
     _b.LoadLocal(VReg.Scratch0, 0);
@@ -387,16 +462,6 @@ public partial class RuntimeEmitter {
     _b.LoadLocal(VReg.Scratch0, 0); // Scratch0 = size
     _b.AddRegImm(VReg.Scratch0, mmDebug ? MmHeaderSize + 8 : MmHeaderSize);
     _b.StoreLocal(4, VReg.Scratch0); // slot 4 = alloc_size
-
-    // Allocate alloc_size bytes via slab allocator (zero-initialized)
-    _b.LoadLocal(VReg.Arg0, 4); // Arg0 = alloc_size
-    _b.Call("__slab_alloc"); // Scratch0 = raw_ptr (slab slot base)
-    _b.StoreLocal(5, VReg.Scratch0); // slot 5 = raw_ptr
-
-    // Store total_alloc_size at [raw + 0]
-    _b.LoadLocal(VReg.Scratch0, 5);  // Scratch0 = raw_ptr
-    _b.LoadLocal(VReg.Scratch1, 4);  // Scratch1 = alloc_size
-    _b.StoreIndirect(VReg.Scratch0, 0, VReg.Scratch1); // [raw + 0] = alloc_size
 
     // Atomic increment __mm_alloc_count
     _b.LeaGlobal(VReg.Scratch0, "__mm_alloc_count");
@@ -412,8 +477,32 @@ public partial class RuntimeEmitter {
     _b.ShlRegImm(VReg.Scratch2, 16); // Scratch2 = alloc_id << 16
     _b.LoadLocal(VReg.Scratch1, 2);  // Scratch1 = tag_index
     _b.OrRegReg(VReg.Scratch2, VReg.Scratch1); // Scratch2 = packed_id
+    _b.StoreLocal(6, VReg.Scratch2); // slot 6 = packed_id (preserved across slab_alloc)
 
-    // Store packed_id at [raw + 8]
+    // Trace mm_alloc BEFORE slab call (top-down order: mm → sl → os)
+    if (mmTrace) {
+      _b.StoreGlobal("__mm_trace_tag_ctx", VReg.Scratch2); // set tag context for slab/OS traces
+      EmitInlineTraceFromPackedId("__mm_tag_alloc", UniqueLabel("mm_alloc_trace"),
+        packedIdSlot: 6, scopeSlot: 3, sizeSlot: 0);
+      EmitTraceDepthInc();
+    }
+
+    // Allocate alloc_size bytes via slab allocator (zero-initialized)
+    _b.LoadLocal(VReg.Arg0, 4); // Arg0 = alloc_size
+    _b.Call("__slab_alloc"); // Scratch0 = raw_ptr (slab slot base)
+    _b.StoreLocal(5, VReg.Scratch0); // slot 5 = raw_ptr
+
+    if (mmTrace) {
+      EmitTraceDepthDec();
+    }
+
+    // Store total_alloc_size at [raw + 0]
+    _b.LoadLocal(VReg.Scratch0, 5);  // Scratch0 = raw_ptr
+    _b.LoadLocal(VReg.Scratch1, 4);  // Scratch1 = alloc_size
+    _b.StoreIndirect(VReg.Scratch0, 0, VReg.Scratch1); // [raw + 0] = alloc_size
+
+    // Store packed_id at [raw + 8] (loaded from saved slot)
+    _b.LoadLocal(VReg.Scratch2, 6); // Scratch2 = packed_id
     _b.LoadLocal(VReg.Scratch0, 5); // Scratch0 = raw_ptr
     _b.StoreIndirect(VReg.Scratch0, 8, VReg.Scratch2); // [raw + 8] = packed_id
 
@@ -437,19 +526,11 @@ public partial class RuntimeEmitter {
       _b.StoreIndirect(VReg.Scratch0, 0, VReg.Scratch1); // [canary_addr] = canary
     }
 
-    // Compute user_ptr = raw + MmHeaderSize, save to slot 5 for trace
+    // Compute user_ptr = raw + MmHeaderSize
     _b.LoadLocal(VReg.Scratch0, 5); // Scratch0 = raw_ptr
     _b.AddRegImm(VReg.Scratch0, MmHeaderSize); // Scratch0 = user_ptr
-    _b.StoreLocal(5, VReg.Scratch0); // slot 5 = user_ptr (reuse raw_ptr slot)
-
-    // Trace alloc
-    if (mmTrace) {
-      EmitInlineTrace("__mm_tag_alloc", UniqueLabel("mm_alloc_trace"),
-        ptrSlot: 5, scopeSlot: 3, sizeSlot: 0);
-    }
 
     // Return user_ptr
-    _b.LoadLocal(VReg.Scratch0, 5);
     _b.ReturnValue(VReg.Scratch0);
   }
 
@@ -461,8 +542,9 @@ public partial class RuntimeEmitter {
   // =========================================================================
   // Stack slots: 0=user_ptr, 1=old_size, 2=new_size, 3=scope_cstr (trace only, passed from call site)
   //              4=new_alloc_size (scratch), 5=new_raw_ptr (scratch), 6=new_user_ptr (scratch)
+  //              7=packed_id (trace only)
   public void EmitMmRealloc(bool mmTrace, bool mmDebug) {
-    _b.FunctionStart("mm_realloc", mmTrace ? 4 : 3, 0x80);
+    _b.FunctionStart("mm_realloc", mmTrace ? 4 : 3, 0x90);
 
     // Panic if new_size == 0
     _b.LoadLocal(VReg.Scratch0, 2);
@@ -493,10 +575,26 @@ public partial class RuntimeEmitter {
     _b.AddRegImm(VReg.Scratch0, mmDebug ? MmHeaderSize + 8 : MmHeaderSize);
     _b.StoreLocal(4, VReg.Scratch0); // slot 4 = new_alloc_size
 
+    // Trace mm_realloc BEFORE slab calls (top-down order)
+    if (mmTrace) {
+      // Read packed_id from old allocation header [user_ptr - 24]
+      _b.LoadLocal(VReg.Scratch0, 0);
+      _b.LoadIndirect(VReg.Scratch0, VReg.Scratch0, MmOffPackedId);
+      _b.StoreLocal(7, VReg.Scratch0); // slot 7 = packed_id
+      _b.StoreGlobal("__mm_trace_tag_ctx", VReg.Scratch0);
+      EmitInlineTraceFromPackedId("__mm_tag_realloc", UniqueLabel("mm_realloc_trace"),
+        packedIdSlot: 7, scopeSlot: 3, sizeSlot: 2);
+      EmitTraceDepthInc();
+    }
+
     // Allocate new block via slab allocator
     _b.LoadLocal(VReg.Arg0, 4); // Arg0 = new_alloc_size
     _b.Call("__slab_alloc"); // Scratch0 = new_raw_ptr
     _b.StoreLocal(5, VReg.Scratch0); // slot 5 = new_raw_ptr
+
+    if (mmTrace) {
+      EmitTraceDepthDec();
+    }
 
     // Copy header + old data from old block to new block
     // old_raw = user_ptr - MmHeaderSize
@@ -518,10 +616,19 @@ public partial class RuntimeEmitter {
     _b.StoreIndirect(VReg.Scratch0, 0, VReg.Scratch1); // [new_raw + 0] = new_alloc_size
 
     // Free old block via slab allocator
+    if (mmTrace) {
+      // Restore tag context (may have been clobbered by slab_alloc traces)
+      _b.LoadLocal(VReg.Scratch0, 7); // packed_id
+      _b.StoreGlobal("__mm_trace_tag_ctx", VReg.Scratch0);
+      EmitTraceDepthInc();
+    }
     _b.LoadLocal(VReg.Scratch0, 0); // Scratch0 = user_ptr
     _b.SubRegImm(VReg.Scratch0, MmHeaderSize); // Scratch0 = old_raw (slab slot base)
     _b.MovRegReg(VReg.Arg0, VReg.Scratch0);
     _b.Call("__slab_free");
+    if (mmTrace) {
+      EmitTraceDepthDec();
+    }
 
     // Write canary at [new_user_ptr + new_size] (MmDebug only)
     if (mmDebug) {
@@ -533,19 +640,11 @@ public partial class RuntimeEmitter {
       _b.StoreIndirect(VReg.Scratch0, 0, VReg.Scratch1);
     }
 
-    // Compute new_user_ptr = new_raw + MmHeaderSize, save to slot 6
+    // Compute new_user_ptr = new_raw + MmHeaderSize
     _b.LoadLocal(VReg.Scratch0, 5); // Scratch0 = new_raw_ptr
     _b.AddRegImm(VReg.Scratch0, MmHeaderSize); // Scratch0 = new_user_ptr
-    _b.StoreLocal(6, VReg.Scratch0);
-
-    // Trace realloc
-    if (mmTrace) {
-      EmitInlineTrace("__mm_tag_realloc", UniqueLabel("mm_realloc_trace"),
-        ptrSlot: 6, scopeSlot: 3, sizeSlot: 2);
-    }
 
     // Return new_user_ptr
-    _b.LoadLocal(VReg.Scratch0, 6);
     _b.ReturnValue(VReg.Scratch0);
   }
 
@@ -566,17 +665,17 @@ public partial class RuntimeEmitter {
   // =========================================================================
 
   // =========================================================================
-  // mm_raw_alloc(size) -> ptr
+  // mm_raw_alloc(size, [scope_cstr]) -> ptr
   //
   // Allocates memory via the slab allocator (__slab_alloc). The slab allocator
   // handles the 16-byte hidden header internally. Returns NULL if size == 0.
   //
   // Header layout (managed by __slab_alloc / __slab_free):
   //   [ptr - 16]: span_ptr (small) or total_alloc_size (large)
-  //   [ptr -  8]: flags (0 = small/slab, 1 = large/direct OS)
+  //   [ptr -  8]: raw_alloc_id << 8 | flags (0=slab, 1=arena-large, 2=OS-direct)
   //   [ptr     ]: user data  <- returned pointer
   // =========================================================================
-  // Stack slots: 0=size, 1=scope_cstr (trace only), 2=result_ptr (trace only)
+  // Stack slots: 0=size, 1=scope_cstr (trace only), 2=result_ptr, 3=raw_alloc_id (trace only)
   public void EmitMmRawAlloc(bool mmTrace) {
     _b.FunctionStart("mm_raw_alloc", mmTrace ? 2 : 1, mmTrace ? 0x50 : 0x30);
 
@@ -589,30 +688,54 @@ public partial class RuntimeEmitter {
 
     _b.DefineLabel(sizeOk);
 
+    if (mmTrace) {
+      // Assign raw alloc ID
+      _b.MovRegImm(VReg.Scratch2, 1);
+      _b.LeaGlobal(VReg.Scratch0, "__mm_raw_alloc_id_counter");
+      _b.AtomicXadd(VReg.Scratch0, 0, VReg.Scratch2); // Scratch2 = old value
+      _b.AddRegImm(VReg.Scratch2, 1); // Scratch2 = new raw_alloc_id
+      _b.StoreLocal(3, VReg.Scratch2); // save raw_alloc_id
+
+      // Trace mm_raw_alloc BEFORE slab call
+      _b.ZeroReg(VReg.Scratch0);
+      _b.StoreGlobal("__mm_trace_tag_ctx", VReg.Scratch0); // no managed tag
+      EmitInlineTraceRawAlloc(UniqueLabel("mm_raw_alloc_trace"), sizeSlot: 0, scopeSlot: 1,
+        rawIdSlot: 3);
+      EmitTraceDepthInc();
+    }
+
     // Delegate to __slab_alloc(size) which handles header and slab/large dispatch
     _b.LoadLocal(VReg.Arg0, 0); // Arg0 = size
     _b.Call("__slab_alloc");
     // Scratch0 = result ptr
+    _b.StoreLocal(2, VReg.Scratch0); // save result ptr
 
     if (mmTrace) {
-      _b.StoreLocal(2, VReg.Scratch0); // save result ptr (clobbered by trace calls)
-      EmitInlineTraceRawAlloc(UniqueLabel("mm_raw_alloc_trace"), sizeSlot: 0, scopeSlot: 1);
-      _b.LoadLocal(VReg.Scratch0, 2); // restore result ptr
+      EmitTraceDepthDec();
+      // Pack raw_alloc_id into flags field: [ptr - 8] = raw_id << 8 | existing_flags
+      _b.LoadLocal(VReg.Scratch0, 2); // result ptr
+      _b.LoadIndirect(VReg.Scratch1, VReg.Scratch0, -8); // existing flags
+      _b.LoadLocal(VReg.Scratch2, 3); // raw_alloc_id
+      _b.ShlRegImm(VReg.Scratch2, 8);
+      _b.OrRegReg(VReg.Scratch1, VReg.Scratch2);
+      _b.LoadLocal(VReg.Scratch0, 2);
+      _b.StoreIndirect(VReg.Scratch0, -8, VReg.Scratch1);
     }
 
+    _b.LoadLocal(VReg.Scratch0, 2);
     _b.ReturnValue(VReg.Scratch0);
   }
 
   // =========================================================================
-  // mm_raw_free(ptr) -> void
+  // mm_raw_free(ptr, [scope_cstr]) -> void
   //
   // Frees memory allocated by mm_raw_alloc via the slab allocator.
   // Delegates to __slab_free which reads the header to determine
   // slab-free vs OS-free. Silently returns if ptr == NULL.
   // =========================================================================
-  // Stack slots: 0=ptr
+  // Stack slots: 0=ptr, 1=scope_cstr (trace only)
   public void EmitMmRawFree(bool mmTrace) {
-    _b.FunctionStart("mm_raw_free", 1, 0x20);
+    _b.FunctionStart("mm_raw_free", mmTrace ? 2 : 1, 0x30);
 
     // NULL check
     _b.LoadLocal(VReg.Scratch0, 0); // Scratch0 = ptr
@@ -623,12 +746,19 @@ public partial class RuntimeEmitter {
     _b.DefineLabel(notNull);
 
     if (mmTrace) {
-      EmitInlineTraceRawFree();
+      EmitInlineTraceRawFree(UniqueLabel("mm_raw_free_trace"), ptrSlot: 0, scopeSlot: 1);
+      _b.ZeroReg(VReg.Scratch0);
+      _b.StoreGlobal("__mm_trace_tag_ctx", VReg.Scratch0); // no managed tag
+      EmitTraceDepthInc();
     }
 
     // Delegate to __slab_free(ptr)
     _b.LoadLocal(VReg.Arg0, 0); // Arg0 = ptr
     _b.Call("__slab_free");
+
+    if (mmTrace) {
+      EmitTraceDepthDec();
+    }
 
     _b.FunctionEnd();
   }
@@ -640,8 +770,9 @@ public partial class RuntimeEmitter {
   // old_byte_size = managedPtr->capacity * managedPtr->element_size.
   // =========================================================================
   // Stack slots: 0=old_ptr, 1=new_size, 2=managedPtr, 3=new_ptr, 4=old_byte_size
+  //              5=scope (trace only), 6=packed_id (trace only)
   public void EmitMmRawRealloc(bool mmTrace) {
-    _b.FunctionStart("mm_raw_realloc", 3, mmTrace ? 0x60 : 0x50);
+    _b.FunctionStart("mm_raw_realloc", 3, mmTrace ? 0x70 : 0x50);
 
     // Panic if new_size == 0
     _b.LoadLocal(VReg.Scratch0, 1); // Scratch0 = new_size
@@ -651,9 +782,22 @@ public partial class RuntimeEmitter {
     _b.Call("maxon_panic");
     _b.DefineLabel(sizeOk);
 
-    // Step 1: Allocate new buffer via mm_raw_alloc(new_size, scope=NULL)
+    // Trace mm_realloc BEFORE child operations (top-down order)
+    if (mmTrace) {
+      _b.ZeroReg(VReg.Scratch0);
+      _b.StoreLocal(5, VReg.Scratch0); // slot 5 = scope = NULL
+      // Read packed_id from managedPtr's header: managedPtr is a user_ptr, packed_id at [ptr-24]
+      _b.LoadLocal(VReg.Scratch0, 2); // managedPtr
+      _b.LoadIndirect(VReg.Scratch0, VReg.Scratch0, MmOffPackedId);
+      _b.StoreLocal(6, VReg.Scratch0); // slot 6 = packed_id
+      EmitInlineTraceFromPackedId("__mm_tag_realloc", UniqueLabel("mm_raw_realloc_trace"),
+        packedIdSlot: 6, scopeSlot: 5, sizeSlot: 1);
+      EmitTraceDepthInc();
+    }
+
+    // Step 1: Allocate new buffer via mm_raw_alloc(new_size, scope=[realloc])
     _b.LoadLocal(VReg.Arg0, 1); // Arg0 = new_size
-    if (mmTrace) _b.ZeroReg(VReg.Arg1); // scope = NULL
+    if (mmTrace) _b.LeaSymdata(VReg.Arg1, "__mm_scope_realloc");
     _b.Call("mm_raw_alloc");
     // Return value is in Scratch0 (== Ret)
     _b.StoreLocal(3, VReg.Scratch0); // slot 3 = new_ptr
@@ -671,20 +815,13 @@ public partial class RuntimeEmitter {
     _b.LoadLocal(VReg.Arg2, 4); // Arg2 = old_byte_size (count)
     _b.Call("maxon_memcpy");
 
-    // Step 4: Free old buffer via mm_raw_free(old_ptr)
+    // Step 4: Free old buffer via mm_raw_free(old_ptr, scope=[realloc])
     _b.LoadLocal(VReg.Arg0, 0); // Arg0 = old_ptr
+    if (mmTrace) _b.LeaSymdata(VReg.Arg1, "__mm_scope_realloc");
     _b.Call("mm_raw_free");
 
-    // Trace realloc (if enabled)
     if (mmTrace) {
-      // Store new_ptr to trace slot, set scope to NULL
-      _b.LoadLocal(VReg.Scratch0, 3);
-      _b.StoreLocal(3, VReg.Scratch0); // ensure new_ptr is in slot 3
-      _b.ZeroReg(VReg.Scratch0);
-      _b.StoreLocal(5, VReg.Scratch0); // slot 5 = scope = NULL
-      // ptrSlot=2 (managedPtr, for tag/rc), scopeSlot=5, sizeSlot=1 (new_size)
-      EmitInlineTrace("__mm_tag_realloc", UniqueLabel("mm_raw_realloc_trace"),
-        ptrSlot: 2, scopeSlot: 5, sizeSlot: 1);
+      EmitTraceDepthDec();
     }
 
     // Return new_ptr
@@ -733,6 +870,25 @@ public partial class RuntimeEmitter {
     _b.Call("maxon_u64_to_string");
     _b.LeaLocal(VReg.Arg0, 4);     // Arg0 = &buf
     _b.Call(_b.WriteStderrLabel);
+    _b.FunctionEnd();
+  }
+
+  /// <summary>
+  /// mm_trace_print_class(value): Print slab class index to stderr.
+  /// Prints "-1" for the sentinel value used by arena-large and OS-direct paths.
+  /// </summary>
+  public void EmitMmTracePrintClass() {
+    _b.FunctionStart("mm_trace_print_class", 1, 0x20);
+    _b.LoadLocal(VReg.Scratch0, 0); // value
+    _b.CmpRegImm(VReg.Scratch0, -1);
+    var notMinusOne = UniqueLabel("mm_trace_class_not_minus_one");
+    _b.JumpIf(Condition.NotEqual, notMinusOne);
+    _b.LeaSymdata(VReg.Arg0, "__mm_tag_minus_one");
+    _b.Call(_b.WriteStderrLabel);
+    _b.FunctionEnd();
+    _b.DefineLabel(notMinusOne);
+    _b.LoadLocal(VReg.Arg0, 0);
+    _b.Call("mm_trace_print_i64");
     _b.FunctionEnd();
   }
 
@@ -895,6 +1051,7 @@ public partial class RuntimeEmitter {
     EmitMmTracePrintTag();
     EmitMmTracePrintHex();
     EmitMmTracePrintI64();
+    EmitMmTracePrintClass();
     EmitMmTagLookup(tagTable);
     if (mmTrace) {
       EmitMmTracePrintPackedTag();

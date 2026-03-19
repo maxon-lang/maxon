@@ -18,26 +18,24 @@ end 'main'
 MmTrace: true
 ExitCode: 3
 Stderr: ```
-os_alloc size=2304
-os_alloc size=4096
-os_alloc size=4096
-os_alloc size=4096
-slab_alloc size=40 class=5
-alloc Config #1 rc=0 size=8 [ownership-edge-cases.main]
-incref Config #1 rc=1 [ownership-edge-cases.main]
-slab_alloc size=40 class=5
-alloc ClosureEnv #2 rc=0 size=8 [ownership-edge-cases.main]
-incref ClosureEnv #2 rc=1 [ownership-edge-cases.main]
-decref Config #1 rc=0 [ownership-edge-cases.main]
-  free Config #1
-slab_free size=48 class=5
-decref ClosureEnv #2 rc=0 [ownership-edge-cases.main]
-  free ClosureEnv #2
-slab_free size=48 class=5
-slab_alloc size=40 class=5
-raw_alloc size=40
-raw_free
-slab_free size=48 class=5
+sl_init
+    os_alloc size=67108864
+mm_alloc Config #1 size=8 [ownership-edge-cases.main]
+  sl_alloc Config #1 size=40 class=5
+mm_incref Config #1 rc=1 [ownership-edge-cases.main]
+mm_alloc ClosureEnv #2 size=8 [ownership-edge-cases.main]
+  sl_alloc ClosureEnv #2 size=40 class=5
+mm_incref ClosureEnv #2 rc=1 [ownership-edge-cases.main]
+mm_decref Config #1 rc=0 [ownership-edge-cases.main]
+  mm_free Config #1
+    sl_free Config #1 size=48 class=5
+mm_decref ClosureEnv #2 rc=0 [ownership-edge-cases.main]
+  mm_free ClosureEnv #2
+    sl_free ClosureEnv #2 size=48 class=5
+mm_raw_alloc #R1 size=40
+  sl_alloc size=40 class=5
+mm_raw_free #R1
+  sl_free size=48 class=5
 ```
 ---
 module {

@@ -50,6 +50,7 @@ class Program {
     Console.WriteLine("Spec test options:");
     Console.WriteLine("  --filter=PATTERN         Run only tests matching pattern");
     Console.WriteLine("  --update-required        Force regeneration and update RequiredMLIR + MmTrace stderr");
+    Console.WriteLine("  --verbose                Show detailed failure messages for failing tests");
     Console.WriteLine();
     Console.WriteLine("Logging (all commands):");
     Console.WriteLine("  --log=LEVEL              Set all log categories to LEVEL");
@@ -350,13 +351,14 @@ class Program {
   static int RunSpecTests(string[] args) {
     SetupTestLogging();
 
-    var specTestOptions = new HashSet<string> { "--filter=", "--workers=", "--update-required", "--target=" };
+    var specTestOptions = new HashSet<string> { "--filter=", "--workers=", "--update-required", "--target=", "--verbose" };
     var (_, _, valid) = ParseOptions(args, specTestOptions);
     if (!valid) return Fail();
 
     string? filter = null;
     int? workers = null;
     bool updateRequired = false;
+    bool verbose = false;
     Compiler.CompileTarget? target = null;
 
     foreach (var arg in args) {
@@ -370,6 +372,8 @@ class Program {
         }
       } else if (arg == "--update-required") {
         updateRequired = true;
+      } else if (arg == "--verbose") {
+        verbose = true;
       } else if (arg.StartsWith("--target=")) {
         target = Compiler.CompileTarget.Parse(arg["--target=".Length..]);
       }
@@ -391,7 +395,7 @@ class Program {
 
     Logger.Info(LogCategory.Testing, "Running maxon-sharp spec tests...");
 
-    var runner = new TestRunner(specDir, fragmentDir, tempDir, filter, workers, updateRequired, target);
+    var runner = new TestRunner(specDir, fragmentDir, tempDir, filter, workers, updateRequired, target, verbose);
     var summary = runner.RunAllSpecTests();
 
     Logger.Info(LogCategory.Testing, "");

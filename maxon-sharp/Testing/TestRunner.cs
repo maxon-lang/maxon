@@ -10,7 +10,7 @@ namespace MaxonSharp.Testing;
 /// <summary>
 /// Executes tests from fragment files.
 /// </summary>
-public partial class TestRunner(string specDir, string fragmentDir, string tempDir, string? filter = null, int? workers = null, bool updateRequired = false, Compiler.CompileTarget? target = null) {
+public partial class TestRunner(string specDir, string fragmentDir, string tempDir, string? filter = null, int? workers = null, bool updateRequired = false, Compiler.CompileTarget? target = null, bool verbose = false) {
   private readonly string _specDir = specDir;
   private readonly string _fragmentDir = fragmentDir;
   private readonly string _tempDir = tempDir;
@@ -18,6 +18,7 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
   private readonly int _workerCount = workers ?? Math.Max(1, Environment.ProcessorCount / 2);
   private readonly bool _updateRequired = updateRequired;
   private readonly Compiler.CompileTarget _target = target ?? Compiler.CompileTarget.Default;
+  private readonly bool _verbose = verbose;
   private static long _totalCompileMs;
 
   /// <summary>
@@ -115,13 +116,13 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
             if (specDone[item.SpecName] == specTotal[item.SpecName]) {
               var failures = specFailed[item.SpecName];
               var total = specTotal[item.SpecName];
-              if (failures.Count == 0) {
-                Logger.Info(LogCategory.Testing, $"[PASS] {item.SpecName} ({total}/{total})");
-              } else {
+              if (failures.Count > 0) {
                 var failCount = failures.Count(f => !f.StartsWith("  "));
                 Logger.Error(LogCategory.Testing, $"[FAIL] {item.SpecName} ({total - failCount}/{total})");
-                foreach (var f in failures)
-                  Logger.Error(LogCategory.Testing, f);
+                if (_verbose) {
+                  foreach (var f in failures)
+                    Logger.Error(LogCategory.Testing, f);
+                }
               }
             }
           }

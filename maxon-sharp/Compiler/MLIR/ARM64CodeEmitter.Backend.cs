@@ -346,6 +346,13 @@ public partial class ARM64CodeEmitter {
         _e.EmitMovRegReg(destReg, ARM64Register.X0);
     }
 
+    public void OsAllocLargePages(VReg dest, VReg size) {
+      // macOS doesn't expose huge pages via standard mmap flags. Return NULL so the
+      // caller falls back to regular OsAllocPages. Large-page support on macOS requires
+      // the VM_FLAGS_SUPERPAGE_SIZE_2MB private Mach VM interface which is not ABI-stable.
+      _e.EmitMovRegImm(R(dest), 0);
+    }
+
     public void OsFreePages(VReg ptr, VReg size) {
       // munmap(ptr, size)
       _e.EmitMovRegReg(ARM64Register.X0, R(ptr));

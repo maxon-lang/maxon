@@ -1,0 +1,135 @@
+// Test: slab-class-boundary-exact
+typealias Integer = int(i64.min to i64.max)
+
+type TwoField
+  export var a Integer
+  export var b Integer
+end 'TwoField'
+
+type ThreeField
+  export var a Integer
+  export var b Integer
+  export var c Integer
+end 'ThreeField'
+
+function main() returns ExitCode
+  var t = TwoField{a: 1, b: 2}
+  var h = ThreeField{a: 3, b: 4, c: 5}
+  return t.a + h.a
+end 'main'
+---
+MmTrace: true
+ExitCode: 4
+Stderr: ```
+sl_init
+    os_alloc size=67108864
+mm_alloc TwoField #1 size=16 [allocator.main]
+  sl_alloc TwoField #1 size=48 class=5
+mm_incref TwoField #1 rc=1 [allocator.main]
+mm_alloc ThreeField #2 size=24 [allocator.main]
+  sl_alloc ThreeField #2 size=56 class=6
+mm_incref ThreeField #2 rc=1 [allocator.main]
+mm_decref ThreeField #2 rc=0 [allocator.main]
+  mm_free ThreeField #2
+    sl_free ThreeField #2 size=80 class=6
+mm_decref TwoField #1 rc=0 [allocator.main]
+  mm_free TwoField #1
+    sl_free TwoField #1 size=48 class=5
+mm_raw_alloc #R1 size=40
+  sl_alloc size=40 class=5
+mm_raw_free #R1
+  sl_free size=48 class=5
+```
+---
+module {
+  func @allocator.main() -> u32 {
+  entry:
+    x86.prologue stack_size=32
+    x86.mov rax, 1
+    x86.mov rcx, 2
+    x86.mov rcx, 16
+    x86.xor rdx, rdx
+    x86.mov r8, 1
+    x86.call mm_alloc
+    x86.mov [rbp-8], rax
+    x86.mov rdx, [rbp-8]
+    x86.mov rbx, 1
+    x86.mov [rdx+0], rbx
+    x86.mov rsi, [rbp-8]
+    x86.mov rdi, 2
+    x86.mov [rsi+8], rdi
+    x86.mov r8, [rbp-8]
+    x86.mov rcx, [rbp-8]
+    x86.call mm_incref
+    x86.mov r9, 3
+    x86.mov rax, 4
+    x86.mov rcx, 5
+    x86.mov rcx, 24
+    x86.xor rdx, rdx
+    x86.mov r8, 2
+    x86.call mm_alloc
+    x86.mov [rbp-16], rax
+    x86.mov rax, [rbp-16]
+    x86.mov rcx, 3
+    x86.mov [rax+0], rcx
+    x86.mov rax, [rbp-16]
+    x86.mov rcx, 4
+    x86.mov [rax+8], rcx
+    x86.mov rax, [rbp-16]
+    x86.mov rcx, 5
+    x86.mov [rax+16], rcx
+    x86.mov rax, [rbp-16]
+    x86.mov rcx, [rbp-16]
+    x86.call mm_incref
+    x86.mov rax, [rbp-8]
+    x86.mov rcx, [rax+0]
+    x86.mov rax, [rbp-16]
+    x86.mov rdx, [rax+0]
+    x86.add rcx, rdx
+    x86.mov [rbp-24], rcx
+    x86.xor rax, rax
+    x86.cmp rcx, rax
+    x86.setl rax
+    x86.movzx rax, raxb
+    x86.mov rdx, 4294967295
+    x86.cmp rcx, rdx
+    x86.setg rcx
+    x86.movzx rcx, rcxb
+    x86.or rax, rcx
+    x86.test rax, rax
+    x86.je allocator.main.__range_ok_0
+  __range_panic_0:
+    x86.lea_symdata rax, [__panic_msg_50]
+    x86.mov rcx, rax
+    x86.call maxon_panic
+  __range_ok_0:
+    x86.mov rax, [rbp-24]
+    x86.mov rcx, [rbp-16]
+    x86.test rcx, rcx
+    x86.jz __nonnull_skip_0
+    x86.call mm_decref
+    x86.label __nonnull_skip_0
+    x86.mov rax, [rbp-8]
+    x86.test rax, rax
+    x86.jz __nonnull_skip_1
+    x86.mov rcx, [rbp-8]
+    x86.call mm_decref
+    x86.label __nonnull_skip_1
+    x86.mov rax, [rbp-24]
+    x86.epilogue
+    x86.ret
+  }
+  func @__destruct_TwoField(ptr: i64) {
+  entry:
+    x86.jmp __destruct_TwoField.done
+  done:
+    x86.ret
+  }
+  func @__destruct_ThreeField(ptr: i64) {
+  entry:
+    x86.jmp __destruct_ThreeField.done
+  done:
+    x86.ret
+  }
+}
+---
