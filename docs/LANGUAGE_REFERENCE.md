@@ -3693,7 +3693,6 @@ end 'example'
 ### Heap Allocation
 - Arrays (all array types)
 - Strings (when dynamically allocated)
-- Allocated with Windows `HeapAlloc`
 - Automatically freed at end of scope
 - No manual `free` or garbage collector needed
 

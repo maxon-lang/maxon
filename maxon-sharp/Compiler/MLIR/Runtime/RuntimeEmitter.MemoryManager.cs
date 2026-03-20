@@ -211,12 +211,12 @@ public partial class RuntimeEmitter {
     _b.Call("mm_trace_print_indent");
     _b.LeaSymdata(VReg.Arg0, "__mm_tag_raw_free");
     _b.Call("mm_trace_print_tag");
-    // Print " #R" + raw_alloc_id from [ptr - 8] >> 8
+    // Print " #R" + raw_alloc_id via linked list lookup
     _b.LeaSymdata(VReg.Arg0, "__mm_tag_hash_r");
     _b.Call("mm_trace_print_tag");
-    _b.LoadLocal(VReg.Scratch0, ptrSlot);
-    _b.LoadIndirect(VReg.Arg0, VReg.Scratch0, -8); // flags field (raw_id << 8 | flags)
-    _b.ShrRegImm(VReg.Arg0, 8); // raw_alloc_id
+    _b.LoadLocal(VReg.Arg0, ptrSlot); // ptr
+    _b.Call("__mm_raw_id_lookup"); // Scratch0 = raw_alloc_id
+    _b.MovRegReg(VReg.Arg0, VReg.Scratch0);
     _b.Call("mm_trace_print_i64");
     EmitTraceScopeAndNewline($"{uniquePrefix}_no_scope", scopeSlot);
   }
@@ -704,7 +704,7 @@ public partial class RuntimeEmitter {
       EmitTraceDepthInc();
     }
 
-    // Delegate to __slab_alloc(size) which handles header and slab/large dispatch
+    // Delegate to __slab_alloc(size) which handles slab/arena-large/OS-direct dispatch
     _b.LoadLocal(VReg.Arg0, 0); // Arg0 = size
     _b.Call("__slab_alloc");
     // Scratch0 = result ptr
@@ -712,14 +712,10 @@ public partial class RuntimeEmitter {
 
     if (mmTrace) {
       EmitTraceDepthDec();
-      // Pack raw_alloc_id into flags field: [ptr - 8] = raw_id << 8 | existing_flags
-      _b.LoadLocal(VReg.Scratch0, 2); // result ptr
-      _b.LoadIndirect(VReg.Scratch1, VReg.Scratch0, -8); // existing flags
-      _b.LoadLocal(VReg.Scratch2, 3); // raw_alloc_id
-      _b.ShlRegImm(VReg.Scratch2, 8);
-      _b.OrRegReg(VReg.Scratch1, VReg.Scratch2);
-      _b.LoadLocal(VReg.Scratch0, 2);
-      _b.StoreIndirect(VReg.Scratch0, -8, VReg.Scratch1);
+      // Store raw_alloc_id in tracking list (header-free: no [ptr-8] to use)
+      _b.LoadLocal(VReg.Arg0, 2); // result ptr
+      _b.LoadLocal(VReg.Arg1, 3); // raw_alloc_id
+      _b.Call("__mm_raw_id_insert");
     }
 
     _b.LoadLocal(VReg.Scratch0, 2);
@@ -730,8 +726,8 @@ public partial class RuntimeEmitter {
   // mm_raw_free(ptr, [scope_cstr]) -> void
   //
   // Frees memory allocated by mm_raw_alloc via the slab allocator.
-  // Delegates to __slab_free which reads the header to determine
-  // slab-free vs OS-free. Silently returns if ptr == NULL.
+  // Delegates to __slab_free which uses the arena map and OS-direct list
+  // to determine the free path. Silently returns if ptr == NULL.
   // =========================================================================
   // Stack slots: 0=ptr, 1=scope_cstr (trace only)
   public void EmitMmRawFree(bool mmTrace) {

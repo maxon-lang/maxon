@@ -35,15 +35,15 @@ end 'main'
 sl_init
     os_alloc size=67108864
 mm_alloc Point #1 size=16 [ownership-edge-cases.main]
-  sl_alloc Point #1 size=48 class=5
+  sl_alloc Point #1 size=48 class=4
 mm_incref Point #1 rc=1 [ownership-edge-cases.main]
 mm_decref Point #1 rc=0 [ownership-edge-cases.main]
   mm_free Point #1
-    sl_free Point #1 size=48 class=5
+    sl_free Point #1 size=48 class=4
 mm_raw_alloc #R1 size=40
-  sl_alloc size=40 class=5
+  sl_alloc size=40 class=4
 mm_raw_free #R1
-  sl_free size=48 class=5
+  sl_free size=48 class=4
 ```
 
 <!-- test: rc-alias-incref -->
@@ -69,17 +69,17 @@ end 'main'
 sl_init
     os_alloc size=67108864
 mm_alloc Box #1 size=8 [ownership-edge-cases.main]
-  sl_alloc Box #1 size=40 class=5
+  sl_alloc Box #1 size=40 class=4
 mm_incref Box #1 rc=1 [ownership-edge-cases.main]
 mm_incref Box #1 rc=2 [ownership-edge-cases.main]
 mm_decref Box #1 rc=1 [ownership-edge-cases.main]
 mm_decref Box #1 rc=0 [ownership-edge-cases.main]
   mm_free Box #1
-    sl_free Box #1 size=48 class=5
+    sl_free Box #1 size=48 class=4
 mm_raw_alloc #R1 size=40
-  sl_alloc size=40 class=5
+  sl_alloc size=40 class=4
 mm_raw_free #R1
-  sl_free size=48 class=5
+  sl_free size=48 class=4
 ```
 
 <!-- test: rc-reassign-decrefs-old -->
@@ -106,31 +106,31 @@ end 'main'
 sl_init
     os_alloc size=67108864
 mm_alloc Tag #1 size=8 [ownership-edge-cases.main]
-  sl_alloc Tag #1 size=40 class=5
+  sl_alloc Tag #1 size=40 class=4
 mm_incref Tag #1 rc=1 [ownership-edge-cases.main]
 mm_alloc Tag #2 size=8 [ownership-edge-cases.main]
-  sl_alloc Tag #2 size=40 class=5
+  sl_alloc Tag #2 size=40 class=4
 mm_incref Tag #2 rc=1 [ownership-edge-cases.main]
 mm_decref Tag #1 rc=0 [ownership-edge-cases.main]
   mm_free Tag #1
-    sl_free Tag #1 size=48 class=5
+    sl_free Tag #1 size=48 class=4
 mm_incref Tag #2 rc=2 [ownership-edge-cases.main]
 mm_alloc Tag #3 size=8 [ownership-edge-cases.main]
-  sl_alloc Tag #3 size=40 class=5
+  sl_alloc Tag #3 size=40 class=4
 mm_incref Tag #3 rc=1 [ownership-edge-cases.main]
 mm_decref Tag #2 rc=1 [ownership-edge-cases.main]
 mm_incref Tag #3 rc=2 [ownership-edge-cases.main]
 mm_decref Tag #3 rc=1 [ownership-edge-cases.main]
 mm_decref Tag #2 rc=0 [ownership-edge-cases.main]
   mm_free Tag #2
-    sl_free Tag #2 size=48 class=5
+    sl_free Tag #2 size=48 class=4
 mm_decref Tag #3 rc=0 [ownership-edge-cases.main]
   mm_free Tag #3
-    sl_free Tag #3 size=48 class=5
+    sl_free Tag #3 size=48 class=4
 mm_raw_alloc #R1 size=40
-  sl_alloc size=40 class=5
+  sl_alloc size=40 class=4
 mm_raw_free #R1
-  sl_free size=48 class=5
+  sl_free size=48 class=4
 ```
 
 <!-- test: rc-inner-block-freed -->
@@ -159,15 +159,15 @@ end 'main'
 sl_init
     os_alloc size=67108864
 mm_alloc Widget #1 size=8 [ownership-edge-cases.main]
-  sl_alloc Widget #1 size=40 class=5
+  sl_alloc Widget #1 size=40 class=4
 mm_incref Widget #1 rc=1 [ownership-edge-cases.main]
 mm_decref Widget #1 rc=0 [ownership-edge-cases.main]
   mm_free Widget #1
-    sl_free Widget #1 size=48 class=5
+    sl_free Widget #1 size=48 class=4
 mm_raw_alloc #R1 size=40
-  sl_alloc size=40 class=5
+  sl_alloc size=40 class=4
 mm_raw_free #R1
-  sl_free size=48 class=5
+  sl_free size=48 class=4
 ```
 
 <!-- test: rc-return-transfers-ownership -->
@@ -197,16 +197,16 @@ end 'main'
 sl_init
     os_alloc size=67108864
 mm_alloc Token #1 size=8 [ownership-edge-cases.makeToken]
-  sl_alloc Token #1 size=40 class=5
+  sl_alloc Token #1 size=40 class=4
 mm_incref Token #1 rc=1 [ownership-edge-cases.makeToken]
 mm_transfer Token #1 rc=1 [ownership-edge-cases.makeToken]
 mm_decref Token #1 rc=0 [ownership-edge-cases.main]
   mm_free Token #1
-    sl_free Token #1 size=48 class=5
+    sl_free Token #1 size=48 class=4
 mm_raw_alloc #R1 size=40
-  sl_alloc size=40 class=5
+  sl_alloc size=40 class=4
 mm_raw_free #R1
-  sl_free size=48 class=5
+  sl_free size=48 class=4
 ```
 
 <!-- test: rc-alias-survives-reassign -->
@@ -233,25 +233,25 @@ end 'main'
 sl_init
     os_alloc size=67108864
 mm_alloc Num #1 size=8 [ownership-edge-cases.main]
-  sl_alloc Num #1 size=40 class=5
+  sl_alloc Num #1 size=40 class=4
 mm_incref Num #1 rc=1 [ownership-edge-cases.main]
 mm_incref Num #1 rc=2 [ownership-edge-cases.main]
 mm_alloc Num #2 size=8 [ownership-edge-cases.main]
-  sl_alloc Num #2 size=40 class=5
+  sl_alloc Num #2 size=40 class=4
 mm_incref Num #2 rc=1 [ownership-edge-cases.main]
 mm_decref Num #1 rc=1 [ownership-edge-cases.main]
 mm_incref Num #2 rc=2 [ownership-edge-cases.main]
 mm_decref Num #1 rc=0 [ownership-edge-cases.main]
   mm_free Num #1
-    sl_free Num #1 size=48 class=5
+    sl_free Num #1 size=48 class=4
 mm_decref Num #2 rc=1 [ownership-edge-cases.main]
 mm_decref Num #2 rc=0 [ownership-edge-cases.main]
   mm_free Num #2
-    sl_free Num #2 size=48 class=5
+    sl_free Num #2 size=48 class=4
 mm_raw_alloc #R1 size=40
-  sl_alloc size=40 class=5
+  sl_alloc size=40 class=4
 mm_raw_free #R1
-  sl_free size=48 class=5
+  sl_free size=48 class=4
 ```
 
 <!-- test: rc-loop-per-iteration-freed -->
@@ -282,33 +282,33 @@ end 'main'
 sl_init
     os_alloc size=67108864
 mm_alloc Counter #1 size=8 [ownership-edge-cases.main]
-  sl_alloc Counter #1 size=40 class=5
+  sl_alloc Counter #1 size=40 class=4
 mm_incref Counter #1 rc=1 [ownership-edge-cases.main]
 mm_decref Counter #1 rc=0 [ownership-edge-cases.main]
   mm_free Counter #1
-    sl_free Counter #1 size=48 class=5
+    sl_free Counter #1 size=48 class=4
 mm_alloc Counter #2 size=8 [ownership-edge-cases.main]
-  sl_alloc Counter #2 size=40 class=5
+  sl_alloc Counter #2 size=40 class=4
 mm_incref Counter #2 rc=1 [ownership-edge-cases.main]
 mm_decref Counter #2 rc=0 [ownership-edge-cases.main]
   mm_free Counter #2
-    sl_free Counter #2 size=48 class=5
+    sl_free Counter #2 size=48 class=4
 mm_alloc Counter #3 size=8 [ownership-edge-cases.main]
-  sl_alloc Counter #3 size=40 class=5
+  sl_alloc Counter #3 size=40 class=4
 mm_incref Counter #3 rc=1 [ownership-edge-cases.main]
 mm_decref Counter #3 rc=0 [ownership-edge-cases.main]
   mm_free Counter #3
-    sl_free Counter #3 size=48 class=5
+    sl_free Counter #3 size=48 class=4
 mm_alloc Counter #4 size=8 [ownership-edge-cases.main]
-  sl_alloc Counter #4 size=40 class=5
+  sl_alloc Counter #4 size=40 class=4
 mm_incref Counter #4 rc=1 [ownership-edge-cases.main]
 mm_decref Counter #4 rc=0 [ownership-edge-cases.main]
   mm_free Counter #4
-    sl_free Counter #4 size=48 class=5
+    sl_free Counter #4 size=48 class=4
 mm_raw_alloc #R1 size=40
-  sl_alloc size=40 class=5
+  sl_alloc size=40 class=4
 mm_raw_free #R1
-  sl_free size=48 class=5
+  sl_free size=48 class=4
 ```
 
 <!-- test: rc-break-frees-before-exit -->
@@ -340,33 +340,33 @@ end 'main'
 sl_init
     os_alloc size=67108864
 mm_alloc Step #1 size=8 [ownership-edge-cases.main]
-  sl_alloc Step #1 size=40 class=5
+  sl_alloc Step #1 size=40 class=4
 mm_incref Step #1 rc=1 [ownership-edge-cases.main]
 mm_decref Step #1 rc=0 [ownership-edge-cases.main]
   mm_free Step #1
-    sl_free Step #1 size=48 class=5
+    sl_free Step #1 size=48 class=4
 mm_alloc Step #2 size=8 [ownership-edge-cases.main]
-  sl_alloc Step #2 size=40 class=5
+  sl_alloc Step #2 size=40 class=4
 mm_incref Step #2 rc=1 [ownership-edge-cases.main]
 mm_decref Step #2 rc=0 [ownership-edge-cases.main]
   mm_free Step #2
-    sl_free Step #2 size=48 class=5
+    sl_free Step #2 size=48 class=4
 mm_alloc Step #3 size=8 [ownership-edge-cases.main]
-  sl_alloc Step #3 size=40 class=5
+  sl_alloc Step #3 size=40 class=4
 mm_incref Step #3 rc=1 [ownership-edge-cases.main]
 mm_decref Step #3 rc=0 [ownership-edge-cases.main]
   mm_free Step #3
-    sl_free Step #3 size=48 class=5
+    sl_free Step #3 size=48 class=4
 mm_alloc Step #4 size=8 [ownership-edge-cases.main]
-  sl_alloc Step #4 size=40 class=5
+  sl_alloc Step #4 size=40 class=4
 mm_incref Step #4 rc=1 [ownership-edge-cases.main]
 mm_decref Step #4 rc=0 [ownership-edge-cases.main]
   mm_free Step #4
-    sl_free Step #4 size=48 class=5
+    sl_free Step #4 size=48 class=4
 mm_raw_alloc #R1 size=40
-  sl_alloc size=40 class=5
+  sl_alloc size=40 class=4
 mm_raw_free #R1
-  sl_free size=48 class=5
+  sl_free size=48 class=4
 ```
 
 <!-- test: rc-continue-frees-before-restart -->
@@ -400,39 +400,39 @@ end 'main'
 sl_init
     os_alloc size=67108864
 mm_alloc Item #1 size=8 [ownership-edge-cases.main]
-  sl_alloc Item #1 size=40 class=5
+  sl_alloc Item #1 size=40 class=4
 mm_incref Item #1 rc=1 [ownership-edge-cases.main]
 mm_decref Item #1 rc=0 [ownership-edge-cases.main]
   mm_free Item #1
-    sl_free Item #1 size=48 class=5
+    sl_free Item #1 size=48 class=4
 mm_alloc Item #2 size=8 [ownership-edge-cases.main]
-  sl_alloc Item #2 size=40 class=5
+  sl_alloc Item #2 size=40 class=4
 mm_incref Item #2 rc=1 [ownership-edge-cases.main]
 mm_decref Item #2 rc=0 [ownership-edge-cases.main]
   mm_free Item #2
-    sl_free Item #2 size=48 class=5
+    sl_free Item #2 size=48 class=4
 mm_alloc Item #3 size=8 [ownership-edge-cases.main]
-  sl_alloc Item #3 size=40 class=5
+  sl_alloc Item #3 size=40 class=4
 mm_incref Item #3 rc=1 [ownership-edge-cases.main]
 mm_decref Item #3 rc=0 [ownership-edge-cases.main]
   mm_free Item #3
-    sl_free Item #3 size=48 class=5
+    sl_free Item #3 size=48 class=4
 mm_alloc Item #4 size=8 [ownership-edge-cases.main]
-  sl_alloc Item #4 size=40 class=5
+  sl_alloc Item #4 size=40 class=4
 mm_incref Item #4 rc=1 [ownership-edge-cases.main]
 mm_decref Item #4 rc=0 [ownership-edge-cases.main]
   mm_free Item #4
-    sl_free Item #4 size=48 class=5
+    sl_free Item #4 size=48 class=4
 mm_alloc Item #5 size=8 [ownership-edge-cases.main]
-  sl_alloc Item #5 size=40 class=5
+  sl_alloc Item #5 size=40 class=4
 mm_incref Item #5 rc=1 [ownership-edge-cases.main]
 mm_decref Item #5 rc=0 [ownership-edge-cases.main]
   mm_free Item #5
-    sl_free Item #5 size=48 class=5
+    sl_free Item #5 size=48 class=4
 mm_raw_alloc #R1 size=40
-  sl_alloc size=40 class=5
+  sl_alloc size=40 class=4
 mm_raw_free #R1
-  sl_free size=48 class=5
+  sl_free size=48 class=4
 ```
 
 <!-- test: rc-nested-struct-field-incref -->
@@ -462,23 +462,23 @@ end 'main'
 sl_init
     os_alloc size=67108864
 mm_alloc Inner #1 size=8 [ownership-edge-cases.main]
-  sl_alloc Inner #1 size=40 class=5
+  sl_alloc Inner #1 size=40 class=4
 mm_incref Inner #1 rc=1 [ownership-edge-cases.main]
 mm_alloc Outer #2 size=8 [ownership-edge-cases.main]
-  sl_alloc Outer #2 size=40 class=5
+  sl_alloc Outer #2 size=40 class=4
 mm_incref Inner #1 rc=2 [ownership-edge-cases.main]
 mm_incref Outer #2 rc=1 [ownership-edge-cases.main]
 mm_decref Outer #2 rc=0 [ownership-edge-cases.main]
   mm_decref Inner #1 rc=1 [~Outer]
   mm_free Outer #2
-    sl_free Outer #2 size=48 class=5
+    sl_free Outer #2 size=48 class=4
 mm_decref Inner #1 rc=0 [ownership-edge-cases.main]
   mm_free Inner #1
-    sl_free Inner #1 size=48 class=5
+    sl_free Inner #1 size=48 class=4
 mm_raw_alloc #R1 size=40
-  sl_alloc size=40 class=5
+  sl_alloc size=40 class=4
 mm_raw_free #R1
-  sl_free size=48 class=5
+  sl_free size=48 class=4
 ```
 
 <!-- test: rc-nested-struct-deep-freed -->
@@ -511,27 +511,27 @@ end 'main'
 sl_init
     os_alloc size=67108864
 mm_alloc A #1 size=8 [ownership-edge-cases.main]
-  sl_alloc A #1 size=40 class=5
+  sl_alloc A #1 size=40 class=4
 mm_alloc B #2 size=8 [ownership-edge-cases.main]
-  sl_alloc B #2 size=40 class=5
+  sl_alloc B #2 size=40 class=4
 mm_incref A #1 rc=1 [ownership-edge-cases.main]
 mm_alloc C #3 size=8 [ownership-edge-cases.main]
-  sl_alloc C #3 size=40 class=5
+  sl_alloc C #3 size=40 class=4
 mm_incref B #2 rc=1 [ownership-edge-cases.main]
 mm_incref C #3 rc=1 [ownership-edge-cases.main]
 mm_decref C #3 rc=0 [ownership-edge-cases.main]
   mm_decref B #2 rc=0 [~C]
     mm_decref A #1 rc=0 [~B]
       mm_free A #1
-        sl_free A #1 size=48 class=5
+        sl_free A #1 size=48 class=4
     mm_free B #2
-      sl_free B #2 size=48 class=5
+      sl_free B #2 size=48 class=4
   mm_free C #3
-    sl_free C #3 size=48 class=5
+    sl_free C #3 size=48 class=4
 mm_raw_alloc #R1 size=40
-  sl_alloc size=40 class=5
+  sl_alloc size=40 class=4
 mm_raw_free #R1
-  sl_free size=48 class=5
+  sl_free size=48 class=4
 ```
 
 <!-- test: rc-field-overwrite-decrefs-old -->
@@ -566,31 +566,31 @@ end 'main'
 sl_init
     os_alloc size=67108864
 mm_alloc Payload #1 size=8 [ownership-edge-cases.main]
-  sl_alloc Payload #1 size=40 class=5
+  sl_alloc Payload #1 size=40 class=4
 mm_incref Payload #1 rc=1 [ownership-edge-cases.main]
 mm_alloc Container #2 size=8 [ownership-edge-cases.main]
-  sl_alloc Container #2 size=40 class=5
+  sl_alloc Container #2 size=40 class=4
 mm_incref Payload #1 rc=2 [ownership-edge-cases.main]
 mm_incref Container #2 rc=1 [ownership-edge-cases.main]
 mm_alloc Payload #3 size=8 [ownership-edge-cases.main]
-  sl_alloc Payload #3 size=40 class=5
+  sl_alloc Payload #3 size=40 class=4
 mm_incref Payload #3 rc=1 [ownership-edge-cases.main]
 mm_decref Payload #1 rc=1 [Container.setPayload]
 mm_incref Payload #3 rc=2 [Container.setPayload]
 mm_decref Container #2 rc=0 [ownership-edge-cases.main]
   mm_decref Payload #3 rc=1 [~Container]
   mm_free Container #2
-    sl_free Container #2 size=48 class=5
+    sl_free Container #2 size=48 class=4
 mm_decref Payload #1 rc=0 [ownership-edge-cases.main]
   mm_free Payload #1
-    sl_free Payload #1 size=48 class=5
+    sl_free Payload #1 size=48 class=4
 mm_decref Payload #3 rc=0 [ownership-edge-cases.main]
   mm_free Payload #3
-    sl_free Payload #3 size=48 class=5
+    sl_free Payload #3 size=48 class=4
 mm_raw_alloc #R1 size=40
-  sl_alloc size=40 class=5
+  sl_alloc size=40 class=4
 mm_raw_free #R1
-  sl_free size=48 class=5
+  sl_free size=48 class=4
 ```
 
 <!-- test: rc-field-overwrite-managed-list -->
@@ -626,45 +626,45 @@ end 'main'
 sl_init
     os_alloc size=67108864
 mm_alloc Val #1 size=8 [ownership-edge-cases.main]
-  sl_alloc Val #1 size=40 class=5
+  sl_alloc Val #1 size=40 class=4
 mm_alloc Holder #2 size=8 [ownership-edge-cases.main]
-  sl_alloc Holder #2 size=40 class=5
+  sl_alloc Holder #2 size=40 class=4
 mm_incref Val #1 rc=1 [ownership-edge-cases.main]
 mm_incref Holder #2 rc=1 [ownership-edge-cases.main]
 mm_alloc Val #3 size=8 [ownership-edge-cases.main]
-  sl_alloc Val #3 size=40 class=5
+  sl_alloc Val #3 size=40 class=4
 mm_incref Val #3 rc=1 [ownership-edge-cases.main]
 mm_decref Val #1 rc=0 [Holder.set]
   mm_free Val #1
-    sl_free Val #1 size=48 class=5
+    sl_free Val #1 size=48 class=4
 mm_incref Val #3 rc=2 [Holder.set]
 mm_alloc Val #4 size=8 [ownership-edge-cases.main]
-  sl_alloc Val #4 size=40 class=5
+  sl_alloc Val #4 size=40 class=4
 mm_incref Val #4 rc=1 [ownership-edge-cases.main]
 mm_decref Val #3 rc=1 [Holder.set]
 mm_incref Val #4 rc=2 [Holder.set]
 mm_alloc Val #5 size=8 [ownership-edge-cases.main]
-  sl_alloc Val #5 size=40 class=5
+  sl_alloc Val #5 size=40 class=4
 mm_incref Val #5 rc=1 [ownership-edge-cases.main]
 mm_decref Val #4 rc=1 [Holder.set]
 mm_incref Val #5 rc=2 [Holder.set]
 mm_decref Holder #2 rc=0 [ownership-edge-cases.main]
   mm_decref Val #5 rc=1 [~Holder]
   mm_free Holder #2
-    sl_free Holder #2 size=48 class=5
+    sl_free Holder #2 size=48 class=4
 mm_decref Val #3 rc=0 [ownership-edge-cases.main]
   mm_free Val #3
-    sl_free Val #3 size=48 class=5
+    sl_free Val #3 size=48 class=4
 mm_decref Val #4 rc=0 [ownership-edge-cases.main]
   mm_free Val #4
-    sl_free Val #4 size=48 class=5
+    sl_free Val #4 size=48 class=4
 mm_decref Val #5 rc=0 [ownership-edge-cases.main]
   mm_free Val #5
-    sl_free Val #5 size=48 class=5
+    sl_free Val #5 size=48 class=4
 mm_raw_alloc #R1 size=40
-  sl_alloc size=40 class=5
+  sl_alloc size=40 class=4
 mm_raw_free #R1
-  sl_free size=48 class=5
+  sl_free size=48 class=4
 ```
 
 <!-- test: rc-container-push-incref -->
@@ -696,17 +696,17 @@ end 'main'
 sl_init
     os_alloc size=67108864
 mm_alloc __ManagedMemory_Node #1 size=32 [ownership-edge-cases.main]
-  sl_alloc __ManagedMemory_Node #1 size=64 class=6
+  sl_alloc __ManagedMemory_Node #1 size=64 class=5
 mm_alloc NodeArray #2 size=16 [ownership-edge-cases.main]
-  sl_alloc NodeArray #2 size=48 class=5
+  sl_alloc NodeArray #2 size=48 class=4
 mm_incref __ManagedMemory_Node #1 rc=1 [ownership-edge-cases.main]
 mm_incref NodeArray #2 rc=1 [ownership-edge-cases.main]
 mm_alloc Node #3 size=8 [ownership-edge-cases.main]
-  sl_alloc Node #3 size=40 class=5
+  sl_alloc Node #3 size=40 class=4
 mm_incref Node #3 rc=1 [ownership-edge-cases.main]
 mm_realloc __ManagedMemory_Node #1 size=32
   mm_raw_alloc #R1 size=32 [realloc]
-    sl_alloc size=32 class=4
+    sl_alloc size=32 class=3
 mm_incref Node #3 rc=2 [NodeArray.push]
 mm_decref Node #3 rc=1 [ownership-edge-cases.main]
 mm_incref Node #3 rc=2 [NodeArray.get]
@@ -717,17 +717,17 @@ mm_decref NodeArray #2 rc=0 [ownership-edge-cases.main]
   mm_decref __ManagedMemory_Node #1 rc=0 [~NodeArray]
     mm_decref Node #3 rc=0 [~ManagedElements]
       mm_free Node #3
-        sl_free Node #3 size=48 class=5
+        sl_free Node #3 size=48 class=4
     mm_raw_free #R1
-      sl_free size=32 class=4
+      sl_free size=32 class=3
     mm_free __ManagedMemory_Node #1
-      sl_free __ManagedMemory_Node #1 size=80 class=6
+      sl_free __ManagedMemory_Node #1 size=64 class=5
   mm_free NodeArray #2
-    sl_free NodeArray #2 size=48 class=5
+    sl_free NodeArray #2 size=48 class=4
 mm_raw_alloc #R2 size=40
-  sl_alloc size=40 class=5
+  sl_alloc size=40 class=4
 mm_raw_free #R2
-  sl_free size=48 class=5
+  sl_free size=48 class=4
 ```
 
 <!-- test: rc-container-pop-decrefs -->
@@ -759,20 +759,20 @@ end 'main'
 sl_init
     os_alloc size=67108864
 mm_alloc __ManagedMemory_Node #1 size=32 [ownership-edge-cases.main]
-  sl_alloc __ManagedMemory_Node #1 size=64 class=6
+  sl_alloc __ManagedMemory_Node #1 size=64 class=5
 mm_alloc NodeArray #2 size=16 [ownership-edge-cases.main]
-  sl_alloc NodeArray #2 size=48 class=5
+  sl_alloc NodeArray #2 size=48 class=4
 mm_incref __ManagedMemory_Node #1 rc=1 [ownership-edge-cases.main]
 mm_incref NodeArray #2 rc=1 [ownership-edge-cases.main]
 mm_alloc Node #3 size=8 [ownership-edge-cases.main]
-  sl_alloc Node #3 size=40 class=5
+  sl_alloc Node #3 size=40 class=4
 mm_incref Node #3 rc=1 [ownership-edge-cases.main]
 mm_realloc __ManagedMemory_Node #1 size=32
   mm_raw_alloc #R1 size=32 [realloc]
-    sl_alloc size=32 class=4
+    sl_alloc size=32 class=3
 mm_incref Node #3 rc=2 [NodeArray.push]
 mm_alloc Node #4 size=8 [ownership-edge-cases.main]
-  sl_alloc Node #4 size=40 class=5
+  sl_alloc Node #4 size=40 class=4
 mm_incref Node #4 rc=1 [ownership-edge-cases.main]
 mm_incref Node #4 rc=2 [NodeArray.push]
 mm_incref Node #4 rc=3 [NodeArray.remove]
@@ -785,21 +785,21 @@ mm_decref NodeArray #2 rc=0 [ownership-edge-cases.main]
   mm_decref __ManagedMemory_Node #1 rc=0 [~NodeArray]
     mm_decref Node #3 rc=1 [~ManagedElements]
     mm_raw_free #R1
-      sl_free size=32 class=4
+      sl_free size=32 class=3
     mm_free __ManagedMemory_Node #1
-      sl_free __ManagedMemory_Node #1 size=80 class=6
+      sl_free __ManagedMemory_Node #1 size=64 class=5
   mm_free NodeArray #2
-    sl_free NodeArray #2 size=48 class=5
+    sl_free NodeArray #2 size=48 class=4
 mm_decref Node #3 rc=0 [ownership-edge-cases.main]
   mm_free Node #3
-    sl_free Node #3 size=48 class=5
+    sl_free Node #3 size=48 class=4
 mm_decref Node #4 rc=0 [ownership-edge-cases.main]
   mm_free Node #4
-    sl_free Node #4 size=48 class=5
+    sl_free Node #4 size=48 class=4
 mm_raw_alloc #R2 size=40
-  sl_alloc size=40 class=5
+  sl_alloc size=40 class=4
 mm_raw_free #R2
-  sl_free size=48 class=5
+  sl_free size=48 class=4
 ```
 
 <!-- test: rc-container-overwrite-decrefs-old -->
@@ -829,20 +829,20 @@ end 'main'
 sl_init
     os_alloc size=67108864
 mm_alloc __ManagedMemory_Item #1 size=32 [ownership-edge-cases.main]
-  sl_alloc __ManagedMemory_Item #1 size=64 class=6
+  sl_alloc __ManagedMemory_Item #1 size=64 class=5
 mm_alloc ItemArray #2 size=16 [ownership-edge-cases.main]
-  sl_alloc ItemArray #2 size=48 class=5
+  sl_alloc ItemArray #2 size=48 class=4
 mm_incref __ManagedMemory_Item #1 rc=1 [ownership-edge-cases.main]
 mm_incref ItemArray #2 rc=1 [ownership-edge-cases.main]
 mm_alloc Item #3 size=8 [ownership-edge-cases.main]
-  sl_alloc Item #3 size=40 class=5
+  sl_alloc Item #3 size=40 class=4
 mm_incref Item #3 rc=1 [ownership-edge-cases.main]
 mm_realloc __ManagedMemory_Item #1 size=32
   mm_raw_alloc #R1 size=32 [realloc]
-    sl_alloc size=32 class=4
+    sl_alloc size=32 class=3
 mm_incref Item #3 rc=2 [ItemArray.push]
 mm_alloc Item #4 size=8 [ownership-edge-cases.main]
-  sl_alloc Item #4 size=40 class=5
+  sl_alloc Item #4 size=40 class=4
 mm_incref Item #4 rc=1 [ownership-edge-cases.main]
 mm_decref Item #3 rc=1 [ItemArray.set]
 mm_incref Item #4 rc=2 [ItemArray.set]
@@ -854,21 +854,21 @@ mm_decref ItemArray #2 rc=0 [ownership-edge-cases.main]
   mm_decref __ManagedMemory_Item #1 rc=0 [~ItemArray]
     mm_decref Item #4 rc=1 [~ManagedElements]
     mm_raw_free #R1
-      sl_free size=32 class=4
+      sl_free size=32 class=3
     mm_free __ManagedMemory_Item #1
-      sl_free __ManagedMemory_Item #1 size=80 class=6
+      sl_free __ManagedMemory_Item #1 size=64 class=5
   mm_free ItemArray #2
-    sl_free ItemArray #2 size=48 class=5
+    sl_free ItemArray #2 size=48 class=4
 mm_decref Item #3 rc=0 [ownership-edge-cases.main]
   mm_free Item #3
-    sl_free Item #3 size=48 class=5
+    sl_free Item #3 size=48 class=4
 mm_decref Item #4 rc=0 [ownership-edge-cases.main]
   mm_free Item #4
-    sl_free Item #4 size=48 class=5
+    sl_free Item #4 size=48 class=4
 mm_raw_alloc #R2 size=40
-  sl_alloc size=40 class=5
+  sl_alloc size=40 class=4
 mm_raw_free #R2
-  sl_free size=48 class=5
+  sl_free size=48 class=4
 ```
 
 <!-- test: rc-container-clear-decrefs-all -->
@@ -899,24 +899,24 @@ end 'main'
 sl_init
     os_alloc size=67108864
 mm_alloc __ManagedMemory_Item #1 size=32 [ownership-edge-cases.main]
-  sl_alloc __ManagedMemory_Item #1 size=64 class=6
+  sl_alloc __ManagedMemory_Item #1 size=64 class=5
 mm_alloc ItemArray #2 size=16 [ownership-edge-cases.main]
-  sl_alloc ItemArray #2 size=48 class=5
+  sl_alloc ItemArray #2 size=48 class=4
 mm_incref __ManagedMemory_Item #1 rc=1 [ownership-edge-cases.main]
 mm_incref ItemArray #2 rc=1 [ownership-edge-cases.main]
 mm_alloc Item #3 size=8 [ownership-edge-cases.main]
-  sl_alloc Item #3 size=40 class=5
+  sl_alloc Item #3 size=40 class=4
 mm_incref Item #3 rc=1 [ownership-edge-cases.main]
 mm_realloc __ManagedMemory_Item #1 size=32
   mm_raw_alloc #R1 size=32 [realloc]
-    sl_alloc size=32 class=4
+    sl_alloc size=32 class=3
 mm_incref Item #3 rc=2 [ItemArray.push]
 mm_alloc Item #4 size=8 [ownership-edge-cases.main]
-  sl_alloc Item #4 size=40 class=5
+  sl_alloc Item #4 size=40 class=4
 mm_incref Item #4 rc=1 [ownership-edge-cases.main]
 mm_incref Item #4 rc=2 [ItemArray.push]
 mm_alloc Item #5 size=8 [ownership-edge-cases.main]
-  sl_alloc Item #5 size=40 class=5
+  sl_alloc Item #5 size=40 class=4
 mm_incref Item #5 rc=1 [ownership-edge-cases.main]
 mm_incref Item #5 rc=2 [ItemArray.push]
 mm_decref Item #3 rc=1 [~ManagedElements]
@@ -925,24 +925,24 @@ mm_decref Item #5 rc=1 [~ManagedElements]
 mm_decref ItemArray #2 rc=0 [ownership-edge-cases.main]
   mm_decref __ManagedMemory_Item #1 rc=0 [~ItemArray]
     mm_raw_free #R1
-      sl_free size=32 class=4
+      sl_free size=32 class=3
     mm_free __ManagedMemory_Item #1
-      sl_free __ManagedMemory_Item #1 size=80 class=6
+      sl_free __ManagedMemory_Item #1 size=64 class=5
   mm_free ItemArray #2
-    sl_free ItemArray #2 size=48 class=5
+    sl_free ItemArray #2 size=48 class=4
 mm_decref Item #3 rc=0 [ownership-edge-cases.main]
   mm_free Item #3
-    sl_free Item #3 size=48 class=5
+    sl_free Item #3 size=48 class=4
 mm_decref Item #4 rc=0 [ownership-edge-cases.main]
   mm_free Item #4
-    sl_free Item #4 size=48 class=5
+    sl_free Item #4 size=48 class=4
 mm_decref Item #5 rc=0 [ownership-edge-cases.main]
   mm_free Item #5
-    sl_free Item #5 size=48 class=5
+    sl_free Item #5 size=48 class=4
 mm_raw_alloc #R2 size=40
-  sl_alloc size=40 class=5
+  sl_alloc size=40 class=4
 mm_raw_free #R2
-  sl_free size=48 class=5
+  sl_free size=48 class=4
 ```
 
 <!-- test: rc-container-scope-exit-decrefs-elements -->
@@ -977,24 +977,24 @@ end 'main'
 sl_init
     os_alloc size=67108864
 mm_alloc __ManagedMemory_Item #1 size=32 [ownership-edge-cases.fill]
-  sl_alloc __ManagedMemory_Item #1 size=64 class=6
+  sl_alloc __ManagedMemory_Item #1 size=64 class=5
 mm_alloc ItemArray #2 size=16 [ownership-edge-cases.fill]
-  sl_alloc ItemArray #2 size=48 class=5
+  sl_alloc ItemArray #2 size=48 class=4
 mm_incref __ManagedMemory_Item #1 rc=1 [ownership-edge-cases.fill]
 mm_incref ItemArray #2 rc=1 [ownership-edge-cases.fill]
 mm_alloc Item #3 size=8 [ownership-edge-cases.fill]
-  sl_alloc Item #3 size=40 class=5
+  sl_alloc Item #3 size=40 class=4
 mm_incref Item #3 rc=1 [ownership-edge-cases.fill]
 mm_realloc __ManagedMemory_Item #1 size=32
   mm_raw_alloc #R1 size=32 [realloc]
-    sl_alloc size=32 class=4
+    sl_alloc size=32 class=3
 mm_incref Item #3 rc=2 [ItemArray.push]
 mm_alloc Item #4 size=8 [ownership-edge-cases.fill]
-  sl_alloc Item #4 size=40 class=5
+  sl_alloc Item #4 size=40 class=4
 mm_incref Item #4 rc=1 [ownership-edge-cases.fill]
 mm_incref Item #4 rc=2 [ItemArray.push]
 mm_alloc Item #5 size=8 [ownership-edge-cases.fill]
-  sl_alloc Item #5 size=40 class=5
+  sl_alloc Item #5 size=40 class=4
 mm_incref Item #5 rc=1 [ownership-edge-cases.fill]
 mm_incref Item #5 rc=2 [ItemArray.push]
 mm_decref ItemArray #2 rc=0 [ownership-edge-cases.fill]
@@ -1003,24 +1003,24 @@ mm_decref ItemArray #2 rc=0 [ownership-edge-cases.fill]
     mm_decref Item #4 rc=1 [~ManagedElements]
     mm_decref Item #5 rc=1 [~ManagedElements]
     mm_raw_free #R1
-      sl_free size=32 class=4
+      sl_free size=32 class=3
     mm_free __ManagedMemory_Item #1
-      sl_free __ManagedMemory_Item #1 size=80 class=6
+      sl_free __ManagedMemory_Item #1 size=64 class=5
   mm_free ItemArray #2
-    sl_free ItemArray #2 size=48 class=5
+    sl_free ItemArray #2 size=48 class=4
 mm_decref Item #3 rc=0 [ownership-edge-cases.fill]
   mm_free Item #3
-    sl_free Item #3 size=48 class=5
+    sl_free Item #3 size=48 class=4
 mm_decref Item #4 rc=0 [ownership-edge-cases.fill]
   mm_free Item #4
-    sl_free Item #4 size=48 class=5
+    sl_free Item #4 size=48 class=4
 mm_decref Item #5 rc=0 [ownership-edge-cases.fill]
   mm_free Item #5
-    sl_free Item #5 size=48 class=5
+    sl_free Item #5 size=48 class=4
 mm_raw_alloc #R2 size=40
-  sl_alloc size=40 class=5
+  sl_alloc size=40 class=4
 mm_raw_free #R2
-  sl_free size=48 class=5
+  sl_free size=48 class=4
 ```
 
 <!-- test: rc-insert-then-remove-no-leak -->
@@ -1059,42 +1059,42 @@ end 'main'
 sl_init
     os_alloc size=67108864
 mm_alloc __ManagedMemory_Entry #1 size=32 [ownership-edge-cases.main]
-  sl_alloc __ManagedMemory_Entry #1 size=64 class=6
+  sl_alloc __ManagedMemory_Entry #1 size=64 class=5
 mm_alloc EntryArray #2 size=16 [ownership-edge-cases.main]
-  sl_alloc EntryArray #2 size=48 class=5
+  sl_alloc EntryArray #2 size=48 class=4
 mm_incref __ManagedMemory_Entry #1 rc=1 [ownership-edge-cases.main]
 mm_incref EntryArray #2 rc=1 [ownership-edge-cases.main]
 mm_alloc Entry #3 size=8 [ownership-edge-cases.main]
-  sl_alloc Entry #3 size=40 class=5
+  sl_alloc Entry #3 size=40 class=4
 mm_incref Entry #3 rc=1 [ownership-edge-cases.main]
 mm_realloc __ManagedMemory_Entry #1 size=32
   mm_raw_alloc #R1 size=32 [realloc]
-    sl_alloc size=32 class=4
+    sl_alloc size=32 class=3
 mm_incref Entry #3 rc=2 [EntryArray.push]
 mm_decref Entry #3 rc=1 [ownership-edge-cases.main]
 mm_alloc Entry #4 size=8 [ownership-edge-cases.main]
-  sl_alloc Entry #4 size=40 class=5
+  sl_alloc Entry #4 size=40 class=4
 mm_incref Entry #4 rc=1 [ownership-edge-cases.main]
 mm_incref Entry #4 rc=2 [EntryArray.push]
 mm_decref Entry #4 rc=1 [ownership-edge-cases.main]
 mm_alloc Entry #5 size=8 [ownership-edge-cases.main]
-  sl_alloc Entry #5 size=40 class=5
+  sl_alloc Entry #5 size=40 class=4
 mm_incref Entry #5 rc=1 [ownership-edge-cases.main]
 mm_incref Entry #5 rc=2 [EntryArray.push]
 mm_decref Entry #5 rc=1 [ownership-edge-cases.main]
 mm_alloc Entry #6 size=8 [ownership-edge-cases.main]
-  sl_alloc Entry #6 size=40 class=5
+  sl_alloc Entry #6 size=40 class=4
 mm_incref Entry #6 rc=1 [ownership-edge-cases.main]
 mm_incref Entry #6 rc=2 [EntryArray.push]
 mm_decref Entry #6 rc=1 [ownership-edge-cases.main]
 mm_alloc Entry #7 size=8 [ownership-edge-cases.main]
-  sl_alloc Entry #7 size=40 class=5
+  sl_alloc Entry #7 size=40 class=4
 mm_incref Entry #7 rc=1 [ownership-edge-cases.main]
 mm_realloc __ManagedMemory_Entry #1 size=64
   mm_raw_alloc #R2 size=64 [realloc]
-    sl_alloc size=64 class=6
+    sl_alloc size=64 class=5
   mm_raw_free #R1 [realloc]
-    sl_free size=32 class=4
+    sl_free size=32 class=3
 mm_incref Entry #7 rc=2 [EntryArray.push]
 mm_decref Entry #7 rc=1 [ownership-edge-cases.main]
 mm_incref Entry #3 rc=2 [EntryArray.remove]
@@ -1102,43 +1102,43 @@ mm_transfer Entry #3 rc=2 [EntryArray.remove]
 mm_decref Entry #3 rc=1 [EntryArray.remove]
 mm_decref Entry #3 rc=0 [ownership-edge-cases.main]
   mm_free Entry #3
-    sl_free Entry #3 size=48 class=5
+    sl_free Entry #3 size=48 class=4
 mm_incref Entry #4 rc=2 [EntryArray.remove]
 mm_transfer Entry #4 rc=2 [EntryArray.remove]
 mm_decref Entry #4 rc=1 [EntryArray.remove]
 mm_decref Entry #4 rc=0 [ownership-edge-cases.main]
   mm_free Entry #4
-    sl_free Entry #4 size=48 class=5
+    sl_free Entry #4 size=48 class=4
 mm_incref Entry #5 rc=2 [EntryArray.remove]
 mm_transfer Entry #5 rc=2 [EntryArray.remove]
 mm_decref Entry #5 rc=1 [EntryArray.remove]
 mm_decref Entry #5 rc=0 [ownership-edge-cases.main]
   mm_free Entry #5
-    sl_free Entry #5 size=48 class=5
+    sl_free Entry #5 size=48 class=4
 mm_incref Entry #6 rc=2 [EntryArray.remove]
 mm_transfer Entry #6 rc=2 [EntryArray.remove]
 mm_decref Entry #6 rc=1 [EntryArray.remove]
 mm_decref Entry #6 rc=0 [ownership-edge-cases.main]
   mm_free Entry #6
-    sl_free Entry #6 size=48 class=5
+    sl_free Entry #6 size=48 class=4
 mm_incref Entry #7 rc=2 [EntryArray.remove]
 mm_transfer Entry #7 rc=2 [EntryArray.remove]
 mm_decref Entry #7 rc=1 [EntryArray.remove]
 mm_decref Entry #7 rc=0 [ownership-edge-cases.main]
   mm_free Entry #7
-    sl_free Entry #7 size=48 class=5
+    sl_free Entry #7 size=48 class=4
 mm_decref EntryArray #2 rc=0 [ownership-edge-cases.main]
   mm_decref __ManagedMemory_Entry #1 rc=0 [~EntryArray]
     mm_raw_free #R2
-      sl_free size=80 class=6
+      sl_free size=64 class=5
     mm_free __ManagedMemory_Entry #1
-      sl_free __ManagedMemory_Entry #1 size=80 class=6
+      sl_free __ManagedMemory_Entry #1 size=64 class=5
   mm_free EntryArray #2
-    sl_free EntryArray #2 size=48 class=5
+    sl_free EntryArray #2 size=48 class=4
 mm_raw_alloc #R3 size=40
-  sl_alloc size=40 class=5
+  sl_alloc size=40 class=4
 mm_raw_free #R3
-  sl_free size=48 class=5
+  sl_free size=48 class=4
 ```
 
 <!-- test: rc-insert-in-middle-no-leak -->
@@ -1171,24 +1171,24 @@ end 'main'
 sl_init
     os_alloc size=67108864
 mm_alloc __ManagedMemory_Val #1 size=32 [ownership-edge-cases.main]
-  sl_alloc __ManagedMemory_Val #1 size=64 class=6
+  sl_alloc __ManagedMemory_Val #1 size=64 class=5
 mm_alloc ValArray #2 size=16 [ownership-edge-cases.main]
-  sl_alloc ValArray #2 size=48 class=5
+  sl_alloc ValArray #2 size=48 class=4
 mm_incref __ManagedMemory_Val #1 rc=1 [ownership-edge-cases.main]
 mm_incref ValArray #2 rc=1 [ownership-edge-cases.main]
 mm_alloc Val #3 size=8 [ownership-edge-cases.main]
-  sl_alloc Val #3 size=40 class=5
+  sl_alloc Val #3 size=40 class=4
 mm_incref Val #3 rc=1 [ownership-edge-cases.main]
 mm_realloc __ManagedMemory_Val #1 size=32
   mm_raw_alloc #R1 size=32 [realloc]
-    sl_alloc size=32 class=4
+    sl_alloc size=32 class=3
 mm_incref Val #3 rc=2 [ValArray.push]
 mm_alloc Val #4 size=8 [ownership-edge-cases.main]
-  sl_alloc Val #4 size=40 class=5
+  sl_alloc Val #4 size=40 class=4
 mm_incref Val #4 rc=1 [ownership-edge-cases.main]
 mm_incref Val #4 rc=2 [ValArray.push]
 mm_alloc Val #5 size=8 [ownership-edge-cases.main]
-  sl_alloc Val #5 size=40 class=5
+  sl_alloc Val #5 size=40 class=4
 mm_incref Val #5 rc=1 [ownership-edge-cases.main]
 mm_incref Val #5 rc=2 [ValArray.insert]
 mm_incref Val #3 rc=3 [ValArray.get]
@@ -1209,24 +1209,24 @@ mm_decref ValArray #2 rc=0 [ownership-edge-cases.main]
     mm_decref Val #5 rc=1 [~ManagedElements]
     mm_decref Val #4 rc=1 [~ManagedElements]
     mm_raw_free #R1
-      sl_free size=32 class=4
+      sl_free size=32 class=3
     mm_free __ManagedMemory_Val #1
-      sl_free __ManagedMemory_Val #1 size=80 class=6
+      sl_free __ManagedMemory_Val #1 size=64 class=5
   mm_free ValArray #2
-    sl_free ValArray #2 size=48 class=5
+    sl_free ValArray #2 size=48 class=4
 mm_decref Val #3 rc=0 [ownership-edge-cases.main]
   mm_free Val #3
-    sl_free Val #3 size=48 class=5
+    sl_free Val #3 size=48 class=4
 mm_decref Val #4 rc=0 [ownership-edge-cases.main]
   mm_free Val #4
-    sl_free Val #4 size=48 class=5
+    sl_free Val #4 size=48 class=4
 mm_decref Val #5 rc=0 [ownership-edge-cases.main]
   mm_free Val #5
-    sl_free Val #5 size=48 class=5
+    sl_free Val #5 size=48 class=4
 mm_raw_alloc #R2 size=40
-  sl_alloc size=40 class=5
+  sl_alloc size=40 class=4
 mm_raw_free #R2
-  sl_free size=48 class=5
+  sl_free size=48 class=4
 ```
 
 <!-- test: rc-remove-middle-no-double-free -->
@@ -1259,24 +1259,24 @@ end 'main'
 sl_init
     os_alloc size=67108864
 mm_alloc __ManagedMemory_Val #1 size=32 [ownership-edge-cases.main]
-  sl_alloc __ManagedMemory_Val #1 size=64 class=6
+  sl_alloc __ManagedMemory_Val #1 size=64 class=5
 mm_alloc ValArray #2 size=16 [ownership-edge-cases.main]
-  sl_alloc ValArray #2 size=48 class=5
+  sl_alloc ValArray #2 size=48 class=4
 mm_incref __ManagedMemory_Val #1 rc=1 [ownership-edge-cases.main]
 mm_incref ValArray #2 rc=1 [ownership-edge-cases.main]
 mm_alloc Val #3 size=8 [ownership-edge-cases.main]
-  sl_alloc Val #3 size=40 class=5
+  sl_alloc Val #3 size=40 class=4
 mm_incref Val #3 rc=1 [ownership-edge-cases.main]
 mm_realloc __ManagedMemory_Val #1 size=32
   mm_raw_alloc #R1 size=32 [realloc]
-    sl_alloc size=32 class=4
+    sl_alloc size=32 class=3
 mm_incref Val #3 rc=2 [ValArray.push]
 mm_alloc Val #4 size=8 [ownership-edge-cases.main]
-  sl_alloc Val #4 size=40 class=5
+  sl_alloc Val #4 size=40 class=4
 mm_incref Val #4 rc=1 [ownership-edge-cases.main]
 mm_incref Val #4 rc=2 [ValArray.push]
 mm_alloc Val #5 size=8 [ownership-edge-cases.main]
-  sl_alloc Val #5 size=40 class=5
+  sl_alloc Val #5 size=40 class=4
 mm_incref Val #5 rc=1 [ownership-edge-cases.main]
 mm_incref Val #5 rc=2 [ValArray.push]
 mm_incref Val #4 rc=3 [ValArray.remove]
@@ -1290,24 +1290,24 @@ mm_decref ValArray #2 rc=0 [ownership-edge-cases.main]
     mm_decref Val #3 rc=1 [~ManagedElements]
     mm_decref Val #5 rc=1 [~ManagedElements]
     mm_raw_free #R1
-      sl_free size=32 class=4
+      sl_free size=32 class=3
     mm_free __ManagedMemory_Val #1
-      sl_free __ManagedMemory_Val #1 size=80 class=6
+      sl_free __ManagedMemory_Val #1 size=64 class=5
   mm_free ValArray #2
-    sl_free ValArray #2 size=48 class=5
+    sl_free ValArray #2 size=48 class=4
 mm_decref Val #3 rc=0 [ownership-edge-cases.main]
   mm_free Val #3
-    sl_free Val #3 size=48 class=5
+    sl_free Val #3 size=48 class=4
 mm_decref Val #4 rc=0 [ownership-edge-cases.main]
   mm_free Val #4
-    sl_free Val #4 size=48 class=5
+    sl_free Val #4 size=48 class=4
 mm_decref Val #5 rc=0 [ownership-edge-cases.main]
   mm_free Val #5
-    sl_free Val #5 size=48 class=5
+    sl_free Val #5 size=48 class=4
 mm_raw_alloc #R2 size=40
-  sl_alloc size=40 class=5
+  sl_alloc size=40 class=4
 mm_raw_free #R2
-  sl_free size=48 class=5
+  sl_free size=48 class=4
 ```
 
 <!-- test: rc-nested-container-freed -->
@@ -1340,25 +1340,25 @@ end 'main'
 sl_init
     os_alloc size=67108864
 mm_alloc __ManagedMemory_Wrapper #1 size=32 [ownership-edge-cases.main]
-  sl_alloc __ManagedMemory_Wrapper #1 size=64 class=6
+  sl_alloc __ManagedMemory_Wrapper #1 size=64 class=5
 mm_alloc WrapperArray #2 size=16 [ownership-edge-cases.main]
-  sl_alloc WrapperArray #2 size=48 class=5
+  sl_alloc WrapperArray #2 size=48 class=4
 mm_incref __ManagedMemory_Wrapper #1 rc=1 [ownership-edge-cases.main]
 mm_incref WrapperArray #2 rc=1 [ownership-edge-cases.main]
 mm_alloc Inner #3 size=8 [ownership-edge-cases.main]
-  sl_alloc Inner #3 size=40 class=5
+  sl_alloc Inner #3 size=40 class=4
 mm_alloc Wrapper #4 size=8 [ownership-edge-cases.main]
-  sl_alloc Wrapper #4 size=40 class=5
+  sl_alloc Wrapper #4 size=40 class=4
 mm_incref Inner #3 rc=1 [ownership-edge-cases.main]
 mm_incref Wrapper #4 rc=1 [ownership-edge-cases.main]
 mm_realloc __ManagedMemory_Wrapper #1 size=32
   mm_raw_alloc #R1 size=32 [realloc]
-    sl_alloc size=32 class=4
+    sl_alloc size=32 class=3
 mm_incref Wrapper #4 rc=2 [WrapperArray.push]
 mm_alloc Inner #5 size=8 [ownership-edge-cases.main]
-  sl_alloc Inner #5 size=40 class=5
+  sl_alloc Inner #5 size=40 class=4
 mm_alloc Wrapper #6 size=8 [ownership-edge-cases.main]
-  sl_alloc Wrapper #6 size=40 class=5
+  sl_alloc Wrapper #6 size=40 class=4
 mm_incref Inner #5 rc=1 [ownership-edge-cases.main]
 mm_incref Wrapper #6 rc=1 [ownership-edge-cases.main]
 mm_incref Wrapper #6 rc=2 [WrapperArray.push]
@@ -1367,27 +1367,27 @@ mm_decref WrapperArray #2 rc=0 [ownership-edge-cases.main]
     mm_decref Wrapper #4 rc=1 [~ManagedElements]
     mm_decref Wrapper #6 rc=1 [~ManagedElements]
     mm_raw_free #R1
-      sl_free size=32 class=4
+      sl_free size=32 class=3
     mm_free __ManagedMemory_Wrapper #1
-      sl_free __ManagedMemory_Wrapper #1 size=80 class=6
+      sl_free __ManagedMemory_Wrapper #1 size=64 class=5
   mm_free WrapperArray #2
-    sl_free WrapperArray #2 size=48 class=5
+    sl_free WrapperArray #2 size=48 class=4
 mm_decref Wrapper #4 rc=0 [ownership-edge-cases.main]
   mm_decref Inner #3 rc=0 [~Wrapper]
     mm_free Inner #3
-      sl_free Inner #3 size=48 class=5
+      sl_free Inner #3 size=48 class=4
   mm_free Wrapper #4
-    sl_free Wrapper #4 size=48 class=5
+    sl_free Wrapper #4 size=48 class=4
 mm_decref Wrapper #6 rc=0 [ownership-edge-cases.main]
   mm_decref Inner #5 rc=0 [~Wrapper]
     mm_free Inner #5
-      sl_free Inner #5 size=48 class=5
+      sl_free Inner #5 size=48 class=4
   mm_free Wrapper #6
-    sl_free Wrapper #6 size=48 class=5
+    sl_free Wrapper #6 size=48 class=4
 mm_raw_alloc #R2 size=40
-  sl_alloc size=40 class=5
+  sl_alloc size=40 class=4
 mm_raw_free #R2
-  sl_free size=48 class=5
+  sl_free size=48 class=4
 ```
 
 <!-- test: rc-return-from-inner-block-cleanup -->
@@ -1420,21 +1420,21 @@ end 'main'
 sl_init
     os_alloc size=67108864
 mm_alloc Step #1 size=8 [ownership-edge-cases.compute]
-  sl_alloc Step #1 size=40 class=5
+  sl_alloc Step #1 size=40 class=4
 mm_incref Step #1 rc=1 [ownership-edge-cases.compute]
 mm_alloc Step #2 size=8 [ownership-edge-cases.compute]
-  sl_alloc Step #2 size=40 class=5
+  sl_alloc Step #2 size=40 class=4
 mm_incref Step #2 rc=1 [ownership-edge-cases.compute]
 mm_decref Step #2 rc=0 [ownership-edge-cases.compute]
   mm_free Step #2
-    sl_free Step #2 size=48 class=5
+    sl_free Step #2 size=48 class=4
 mm_decref Step #1 rc=0 [ownership-edge-cases.compute]
   mm_free Step #1
-    sl_free Step #1 size=48 class=5
+    sl_free Step #1 size=48 class=4
 mm_raw_alloc #R1 size=40
-  sl_alloc size=40 class=5
+  sl_alloc size=40 class=4
 mm_raw_free #R1
-  sl_free size=48 class=5
+  sl_free size=48 class=4
 ```
 
 <!-- test: rc-return-container-element -->
@@ -1468,17 +1468,17 @@ end 'main'
 sl_init
     os_alloc size=67108864
 mm_alloc __ManagedMemory_Item #1 size=32 [ownership-edge-cases.main]
-  sl_alloc __ManagedMemory_Item #1 size=64 class=6
+  sl_alloc __ManagedMemory_Item #1 size=64 class=5
 mm_alloc ItemArray #2 size=16 [ownership-edge-cases.main]
-  sl_alloc ItemArray #2 size=48 class=5
+  sl_alloc ItemArray #2 size=48 class=4
 mm_incref __ManagedMemory_Item #1 rc=1 [ownership-edge-cases.main]
 mm_incref ItemArray #2 rc=1 [ownership-edge-cases.main]
 mm_alloc Item #3 size=8 [ownership-edge-cases.main]
-  sl_alloc Item #3 size=40 class=5
+  sl_alloc Item #3 size=40 class=4
 mm_incref Item #3 rc=1 [ownership-edge-cases.main]
 mm_realloc __ManagedMemory_Item #1 size=32
   mm_raw_alloc #R1 size=32 [realloc]
-    sl_alloc size=32 class=4
+    sl_alloc size=32 class=3
 mm_incref Item #3 rc=2 [ItemArray.push]
 mm_incref Item #3 rc=3 [ItemArray.get]
 mm_incref Item #3 rc=4 [ownership-edge-cases.getFirst]
@@ -1489,18 +1489,18 @@ mm_decref ItemArray #2 rc=0 [ownership-edge-cases.main]
   mm_decref __ManagedMemory_Item #1 rc=0 [~ItemArray]
     mm_decref Item #3 rc=1 [~ManagedElements]
     mm_raw_free #R1
-      sl_free size=32 class=4
+      sl_free size=32 class=3
     mm_free __ManagedMemory_Item #1
-      sl_free __ManagedMemory_Item #1 size=80 class=6
+      sl_free __ManagedMemory_Item #1 size=64 class=5
   mm_free ItemArray #2
-    sl_free ItemArray #2 size=48 class=5
+    sl_free ItemArray #2 size=48 class=4
 mm_decref Item #3 rc=0 [ownership-edge-cases.main]
   mm_free Item #3
-    sl_free Item #3 size=48 class=5
+    sl_free Item #3 size=48 class=4
 mm_raw_alloc #R2 size=40
-  sl_alloc size=40 class=5
+  sl_alloc size=40 class=4
 mm_raw_free #R2
-  sl_free size=48 class=5
+  sl_free size=48 class=4
 ```
 
 <!-- test: rc-global-struct-outlives-local -->
@@ -1531,27 +1531,27 @@ end 'main'
 sl_init
     os_alloc size=67108864
 mm_alloc Cfg #1 size=8 [ownership-edge-cases.__module_init]
-  sl_alloc Cfg #1 size=40 class=5
+  sl_alloc Cfg #1 size=40 class=4
 mm_incref Cfg #1 rc=1 [ownership-edge-cases.__module_init]
 mm_incref Cfg #1 rc=2 [ownership-edge-cases.__module_init]
 mm_decref Cfg #1 rc=1 [ownership-edge-cases.__module_init]
 mm_alloc Cfg #2 size=8 [ownership-edge-cases.setup]
-  sl_alloc Cfg #2 size=40 class=5
+  sl_alloc Cfg #2 size=40 class=4
 mm_incref Cfg #2 rc=1 [ownership-edge-cases.setup]
 mm_decref Cfg #1 rc=0 [ownership-edge-cases.setup]
   mm_free Cfg #1
-    sl_free Cfg #1 size=48 class=5
+    sl_free Cfg #1 size=48 class=4
 mm_incref Cfg #2 rc=2 [ownership-edge-cases.setup]
 mm_decref Cfg #2 rc=1 [ownership-edge-cases.setup]
 mm_incref Cfg #2 rc=2 [ownership-edge-cases.main]
 mm_decref Cfg #2 rc=1 [ownership-edge-cases.main]
 mm_raw_alloc #R1 size=40
-  sl_alloc size=40 class=5
+  sl_alloc size=40 class=4
 mm_raw_free #R1
-  sl_free size=48 class=5
+  sl_free size=48 class=4
 mm_decref Cfg #2 rc=0 [__maxon_global_cleanup]
   mm_free Cfg #2
-    sl_free Cfg #2 size=48 class=5
+    sl_free Cfg #2 size=48 class=4
 ```
 
 <!-- test: rc-global-reassign-decrefs-old -->
@@ -1584,43 +1584,43 @@ end 'main'
 sl_init
     os_alloc size=67108864
 mm_alloc State #1 size=8 [ownership-edge-cases.__module_init]
-  sl_alloc State #1 size=40 class=5
+  sl_alloc State #1 size=40 class=4
 mm_incref State #1 rc=1 [ownership-edge-cases.__module_init]
 mm_incref State #1 rc=2 [ownership-edge-cases.__module_init]
 mm_decref State #1 rc=1 [ownership-edge-cases.__module_init]
 mm_alloc State #2 size=8 [ownership-edge-cases.step]
-  sl_alloc State #2 size=40 class=5
+  sl_alloc State #2 size=40 class=4
 mm_incref State #2 rc=1 [ownership-edge-cases.step]
 mm_decref State #1 rc=0 [ownership-edge-cases.step]
   mm_free State #1
-    sl_free State #1 size=48 class=5
+    sl_free State #1 size=48 class=4
 mm_incref State #2 rc=2 [ownership-edge-cases.step]
 mm_decref State #2 rc=1 [ownership-edge-cases.step]
 mm_alloc State #3 size=8 [ownership-edge-cases.step]
-  sl_alloc State #3 size=40 class=5
+  sl_alloc State #3 size=40 class=4
 mm_incref State #3 rc=1 [ownership-edge-cases.step]
 mm_decref State #2 rc=0 [ownership-edge-cases.step]
   mm_free State #2
-    sl_free State #2 size=48 class=5
+    sl_free State #2 size=48 class=4
 mm_incref State #3 rc=2 [ownership-edge-cases.step]
 mm_decref State #3 rc=1 [ownership-edge-cases.step]
 mm_alloc State #4 size=8 [ownership-edge-cases.step]
-  sl_alloc State #4 size=40 class=5
+  sl_alloc State #4 size=40 class=4
 mm_incref State #4 rc=1 [ownership-edge-cases.step]
 mm_decref State #3 rc=0 [ownership-edge-cases.step]
   mm_free State #3
-    sl_free State #3 size=48 class=5
+    sl_free State #3 size=48 class=4
 mm_incref State #4 rc=2 [ownership-edge-cases.step]
 mm_decref State #4 rc=1 [ownership-edge-cases.step]
 mm_incref State #4 rc=2 [ownership-edge-cases.main]
 mm_decref State #4 rc=1 [ownership-edge-cases.main]
 mm_raw_alloc #R1 size=40
-  sl_alloc size=40 class=5
+  sl_alloc size=40 class=4
 mm_raw_free #R1
-  sl_free size=48 class=5
+  sl_free size=48 class=4
 mm_decref State #4 rc=0 [__maxon_global_cleanup]
   mm_free State #4
-    sl_free State #4 size=48 class=5
+    sl_free State #4 size=48 class=4
 ```
 
 <!-- test: rc-union-no-struct-payload-freed -->
@@ -1656,9 +1656,9 @@ end 'main'
 sl_init
     os_alloc size=67108864
 mm_raw_alloc #R1 size=40
-  sl_alloc size=40 class=5
+  sl_alloc size=40 class=4
 mm_raw_free #R1
-  sl_free size=48 class=5
+  sl_free size=48 class=4
 ```
 
 <!-- test: rc-union-struct-payload-freed -->
@@ -1695,10 +1695,10 @@ end 'main'
 sl_init
     os_alloc size=67108864
 mm_alloc Body #1 size=8 [ownership-edge-cases.main]
-  sl_alloc Body #1 size=40 class=5
+  sl_alloc Body #1 size=40 class=4
 mm_incref Body #1 rc=1 [ownership-edge-cases.main]
 mm_alloc Shape #2 size=16 [ownership-edge-cases.main]
-  sl_alloc Shape #2 size=48 class=5
+  sl_alloc Shape #2 size=48 class=4
 mm_incref Body #1 rc=2 [ownership-edge-cases.main]
 mm_incref Shape #2 rc=1 [ownership-edge-cases.main]
 mm_incref Shape #2 rc=2 [ownership-edge-cases.massOf]
@@ -1708,14 +1708,14 @@ mm_decref Body #1 rc=2 [ownership-edge-cases.massOf]
 mm_decref Shape #2 rc=0 [ownership-edge-cases.main]
   mm_decref Body #1 rc=1 [~Shape]
   mm_free Shape #2
-    sl_free Shape #2 size=48 class=5
+    sl_free Shape #2 size=48 class=4
 mm_decref Body #1 rc=0 [ownership-edge-cases.main]
   mm_free Body #1
-    sl_free Body #1 size=48 class=5
+    sl_free Body #1 size=48 class=4
 mm_raw_alloc #R1 size=40
-  sl_alloc size=40 class=5
+  sl_alloc size=40 class=4
 mm_raw_free #R1
-  sl_free size=48 class=5
+  sl_free size=48 class=4
 ```
 
 <!-- test: rc-closure-env-freed -->
@@ -1741,15 +1741,15 @@ end 'main'
 sl_init
     os_alloc size=67108864
 mm_alloc ClosureEnv #1 size=8 [ownership-edge-cases.main]
-  sl_alloc ClosureEnv #1 size=40 class=5
+  sl_alloc ClosureEnv #1 size=40 class=4
 mm_incref ClosureEnv #1 rc=1 [ownership-edge-cases.main]
 mm_decref ClosureEnv #1 rc=0 [ownership-edge-cases.main]
   mm_free ClosureEnv #1
-    sl_free ClosureEnv #1 size=48 class=5
+    sl_free ClosureEnv #1 size=48 class=4
 mm_raw_alloc #R1 size=40
-  sl_alloc size=40 class=5
+  sl_alloc size=40 class=4
 mm_raw_free #R1
-  sl_free size=48 class=5
+  sl_free size=48 class=4
 ```
 
 <!-- test: rc-closure-captures-struct -->
@@ -1779,21 +1779,21 @@ end 'main'
 sl_init
     os_alloc size=67108864
 mm_alloc Config #1 size=8 [ownership-edge-cases.main]
-  sl_alloc Config #1 size=40 class=5
+  sl_alloc Config #1 size=40 class=4
 mm_incref Config #1 rc=1 [ownership-edge-cases.main]
 mm_alloc ClosureEnv #2 size=8 [ownership-edge-cases.main]
-  sl_alloc ClosureEnv #2 size=40 class=5
+  sl_alloc ClosureEnv #2 size=40 class=4
 mm_incref ClosureEnv #2 rc=1 [ownership-edge-cases.main]
 mm_decref Config #1 rc=0 [ownership-edge-cases.main]
   mm_free Config #1
-    sl_free Config #1 size=48 class=5
+    sl_free Config #1 size=48 class=4
 mm_decref ClosureEnv #2 rc=0 [ownership-edge-cases.main]
   mm_free ClosureEnv #2
-    sl_free ClosureEnv #2 size=48 class=5
+    sl_free ClosureEnv #2 size=48 class=4
 mm_raw_alloc #R1 size=40
-  sl_alloc size=40 class=5
+  sl_alloc size=40 class=4
 mm_raw_free #R1
-  sl_free size=48 class=5
+  sl_free size=48 class=4
 ```
 
 <!-- test: rc-error-path-cleanup -->
@@ -1821,29 +1821,29 @@ end 'main'
 sl_init
     os_alloc size=67108864
 mm_alloc __ManagedMemory_Item #1 size=32 [ownership-edge-cases.main]
-  sl_alloc __ManagedMemory_Item #1 size=64 class=6
+  sl_alloc __ManagedMemory_Item #1 size=64 class=5
 mm_alloc ItemArray #2 size=16 [ownership-edge-cases.main]
-  sl_alloc ItemArray #2 size=48 class=5
+  sl_alloc ItemArray #2 size=48 class=4
 mm_incref __ManagedMemory_Item #1 rc=1 [ownership-edge-cases.main]
 mm_incref ItemArray #2 rc=1 [ownership-edge-cases.main]
 mm_alloc Item #3 size=8 [ownership-edge-cases.main]
-  sl_alloc Item #3 size=40 class=5
+  sl_alloc Item #3 size=40 class=4
 mm_incref Item #3 rc=1 [ownership-edge-cases.main]
 mm_incref Item #3 rc=2 [ownership-edge-cases.main]
 mm_decref Item #3 rc=1 [ownership-edge-cases.main]
 mm_decref Item #3 rc=0 [ownership-edge-cases.main]
   mm_free Item #3
-    sl_free Item #3 size=48 class=5
+    sl_free Item #3 size=48 class=4
 mm_decref ItemArray #2 rc=0 [ownership-edge-cases.main]
   mm_decref __ManagedMemory_Item #1 rc=0 [~ItemArray]
     mm_free __ManagedMemory_Item #1
-      sl_free __ManagedMemory_Item #1 size=80 class=6
+      sl_free __ManagedMemory_Item #1 size=64 class=5
   mm_free ItemArray #2
-    sl_free ItemArray #2 size=48 class=5
+    sl_free ItemArray #2 size=48 class=4
 mm_raw_alloc #R1 size=40
-  sl_alloc size=40 class=5
+  sl_alloc size=40 class=4
 mm_raw_free #R1
-  sl_free size=48 class=5
+  sl_free size=48 class=4
 ```
 
 <!-- test: rc-managed-list-insert-incref -->
@@ -1872,13 +1872,13 @@ end 'main'
 sl_init
     os_alloc size=67108864
 mm_alloc TokenManagedList #1 size=32 [ownership-edge-cases.main]
-  sl_alloc TokenManagedList #1 size=64 class=6
+  sl_alloc TokenManagedList #1 size=64 class=5
 mm_incref TokenManagedList #1 rc=1 [ownership-edge-cases.main]
 mm_alloc Token #2 size=8 [ownership-edge-cases.main]
-  sl_alloc Token #2 size=40 class=5
+  sl_alloc Token #2 size=40 class=4
 mm_incref Token #2 rc=1 [ownership-edge-cases.main]
 mm_alloc __ManagedListNode #3 size=32 [ownership-edge-cases.main]
-  sl_alloc __ManagedListNode #3 size=64 class=6
+  sl_alloc __ManagedListNode #3 size=64 class=5
 mm_incref Token #2 rc=2 [ownership-edge-cases.main]
 mm_incref __ManagedListNode #3 rc=1 [managed_list_insert]
 mm_incref __ManagedListNode #3 rc=2 [ownership-edge-cases.main]
@@ -1887,16 +1887,16 @@ mm_decref Token #2 rc=1 [ownership-edge-cases.main]
 mm_decref TokenManagedList #1 rc=0 [ownership-edge-cases.main]
   mm_decref Token #2 rc=0 [managed_list_clear]
     mm_free Token #2
-      sl_free Token #2 size=48 class=5
+      sl_free Token #2 size=48 class=4
   mm_decref __ManagedListNode #3 rc=0 [managed_list_clear]
     mm_free __ManagedListNode #3
-      sl_free __ManagedListNode #3 size=80 class=6
+      sl_free __ManagedListNode #3 size=64 class=5
   mm_free TokenManagedList #1
-    sl_free TokenManagedList #1 size=80 class=6
+    sl_free TokenManagedList #1 size=64 class=5
 mm_raw_alloc #R1 size=40
-  sl_alloc size=40 class=5
+  sl_alloc size=40 class=4
 mm_raw_free #R1
-  sl_free size=48 class=5
+  sl_free size=48 class=4
 ```
 
 <!-- test: rc-managed-list-remove-decrefs -->
@@ -1925,13 +1925,13 @@ end 'main'
 sl_init
     os_alloc size=67108864
 mm_alloc TokenManagedList #1 size=32 [ownership-edge-cases.main]
-  sl_alloc TokenManagedList #1 size=64 class=6
+  sl_alloc TokenManagedList #1 size=64 class=5
 mm_incref TokenManagedList #1 rc=1 [ownership-edge-cases.main]
 mm_alloc Token #2 size=8 [ownership-edge-cases.main]
-  sl_alloc Token #2 size=40 class=5
+  sl_alloc Token #2 size=40 class=4
 mm_incref Token #2 rc=1 [ownership-edge-cases.main]
 mm_alloc __ManagedListNode #3 size=32 [ownership-edge-cases.main]
-  sl_alloc __ManagedListNode #3 size=64 class=6
+  sl_alloc __ManagedListNode #3 size=64 class=5
 mm_incref Token #2 rc=2 [ownership-edge-cases.main]
 mm_incref __ManagedListNode #3 rc=1 [managed_list_insert]
 mm_incref __ManagedListNode #3 rc=2 [ownership-edge-cases.main]
@@ -1939,19 +1939,19 @@ mm_decref __ManagedListNode #3 rc=1 [ownership-edge-cases.main]
 mm_decref Token #2 rc=1 [ownership-edge-cases.main]
 mm_decref __ManagedListNode #3 rc=0 [ownership-edge-cases.main]
   mm_free __ManagedListNode #3
-    sl_free __ManagedListNode #3 size=80 class=6
+    sl_free __ManagedListNode #3 size=64 class=5
 mm_incref Token #2 rc=2 [ownership-edge-cases.main]
 mm_decref Token #2 rc=1 [ownership-edge-cases.main]
 mm_decref TokenManagedList #1 rc=0 [ownership-edge-cases.main]
   mm_free TokenManagedList #1
-    sl_free TokenManagedList #1 size=80 class=6
+    sl_free TokenManagedList #1 size=64 class=5
 mm_decref Token #2 rc=0 [ownership-edge-cases.main]
   mm_free Token #2
-    sl_free Token #2 size=48 class=5
+    sl_free Token #2 size=48 class=4
 mm_raw_alloc #R1 size=40
-  sl_alloc size=40 class=5
+  sl_alloc size=40 class=4
 mm_raw_free #R1
-  sl_free size=48 class=5
+  sl_free size=48 class=4
 ```
 
 <!-- test: rc-managed-list-clear-decrefs-all -->
@@ -1982,57 +1982,57 @@ end 'main'
 sl_init
     os_alloc size=67108864
 mm_alloc TokenManagedList #1 size=32 [ownership-edge-cases.main]
-  sl_alloc TokenManagedList #1 size=64 class=6
+  sl_alloc TokenManagedList #1 size=64 class=5
 mm_incref TokenManagedList #1 rc=1 [ownership-edge-cases.main]
 mm_alloc Token #2 size=8 [ownership-edge-cases.main]
-  sl_alloc Token #2 size=40 class=5
+  sl_alloc Token #2 size=40 class=4
 mm_incref Token #2 rc=1 [ownership-edge-cases.main]
 mm_alloc __ManagedListNode #3 size=32 [ownership-edge-cases.main]
-  sl_alloc __ManagedListNode #3 size=64 class=6
+  sl_alloc __ManagedListNode #3 size=64 class=5
 mm_incref Token #2 rc=2 [ownership-edge-cases.main]
 mm_incref __ManagedListNode #3 rc=1 [managed_list_insert]
 mm_alloc Token #4 size=8 [ownership-edge-cases.main]
-  sl_alloc Token #4 size=40 class=5
+  sl_alloc Token #4 size=40 class=4
 mm_incref Token #4 rc=1 [ownership-edge-cases.main]
 mm_alloc __ManagedListNode #5 size=32 [ownership-edge-cases.main]
-  sl_alloc __ManagedListNode #5 size=64 class=6
+  sl_alloc __ManagedListNode #5 size=64 class=5
 mm_incref Token #4 rc=2 [ownership-edge-cases.main]
 mm_incref __ManagedListNode #5 rc=1 [managed_list_insert]
 mm_alloc Token #6 size=8 [ownership-edge-cases.main]
-  sl_alloc Token #6 size=40 class=5
+  sl_alloc Token #6 size=40 class=4
 mm_incref Token #6 rc=1 [ownership-edge-cases.main]
 mm_alloc __ManagedListNode #7 size=32 [ownership-edge-cases.main]
-  sl_alloc __ManagedListNode #7 size=64 class=6
+  sl_alloc __ManagedListNode #7 size=64 class=5
 mm_incref Token #6 rc=2 [ownership-edge-cases.main]
 mm_incref __ManagedListNode #7 rc=1 [managed_list_insert]
 mm_decref Token #2 rc=1 [managed_list_clear]
 mm_decref __ManagedListNode #3 rc=0 [managed_list_clear]
   mm_free __ManagedListNode #3
-    sl_free __ManagedListNode #3 size=80 class=6
+    sl_free __ManagedListNode #3 size=64 class=5
 mm_decref Token #4 rc=1 [managed_list_clear]
 mm_decref __ManagedListNode #5 rc=0 [managed_list_clear]
   mm_free __ManagedListNode #5
-    sl_free __ManagedListNode #5 size=80 class=6
+    sl_free __ManagedListNode #5 size=64 class=5
 mm_decref Token #6 rc=1 [managed_list_clear]
 mm_decref __ManagedListNode #7 rc=0 [managed_list_clear]
   mm_free __ManagedListNode #7
-    sl_free __ManagedListNode #7 size=80 class=6
+    sl_free __ManagedListNode #7 size=64 class=5
 mm_decref TokenManagedList #1 rc=0 [ownership-edge-cases.main]
   mm_free TokenManagedList #1
-    sl_free TokenManagedList #1 size=80 class=6
+    sl_free TokenManagedList #1 size=64 class=5
 mm_decref Token #2 rc=0 [ownership-edge-cases.main]
   mm_free Token #2
-    sl_free Token #2 size=48 class=5
+    sl_free Token #2 size=48 class=4
 mm_decref Token #4 rc=0 [ownership-edge-cases.main]
   mm_free Token #4
-    sl_free Token #4 size=48 class=5
+    sl_free Token #4 size=48 class=4
 mm_decref Token #6 rc=0 [ownership-edge-cases.main]
   mm_free Token #6
-    sl_free Token #6 size=48 class=5
+    sl_free Token #6 size=48 class=4
 mm_raw_alloc #R1 size=40
-  sl_alloc size=40 class=5
+  sl_alloc size=40 class=4
 mm_raw_free #R1
-  sl_free size=48 class=5
+  sl_free size=48 class=4
 ```
 
 <!-- test: rc-managed-list-node-set-value-decrefs-old -->
@@ -2061,18 +2061,18 @@ end 'main'
 sl_init
     os_alloc size=67108864
 mm_alloc TokenManagedList #1 size=32 [ownership-edge-cases.main]
-  sl_alloc TokenManagedList #1 size=64 class=6
+  sl_alloc TokenManagedList #1 size=64 class=5
 mm_incref TokenManagedList #1 rc=1 [ownership-edge-cases.main]
 mm_alloc Token #2 size=8 [ownership-edge-cases.main]
-  sl_alloc Token #2 size=40 class=5
+  sl_alloc Token #2 size=40 class=4
 mm_incref Token #2 rc=1 [ownership-edge-cases.main]
 mm_alloc __ManagedListNode #3 size=32 [ownership-edge-cases.main]
-  sl_alloc __ManagedListNode #3 size=64 class=6
+  sl_alloc __ManagedListNode #3 size=64 class=5
 mm_incref Token #2 rc=2 [ownership-edge-cases.main]
 mm_incref __ManagedListNode #3 rc=1 [managed_list_insert]
 mm_incref __ManagedListNode #3 rc=2 [ownership-edge-cases.main]
 mm_alloc Token #4 size=8 [ownership-edge-cases.main]
-  sl_alloc Token #4 size=40 class=5
+  sl_alloc Token #4 size=40 class=4
 mm_incref Token #4 rc=1 [ownership-edge-cases.main]
 mm_decref Token #2 rc=1 [ownership-edge-cases.main]
 mm_incref Token #4 rc=2 [ownership-edge-cases.main]
@@ -2081,19 +2081,19 @@ mm_decref TokenManagedList #1 rc=0 [ownership-edge-cases.main]
   mm_decref Token #4 rc=1 [managed_list_clear]
   mm_decref __ManagedListNode #3 rc=0 [managed_list_clear]
     mm_free __ManagedListNode #3
-      sl_free __ManagedListNode #3 size=80 class=6
+      sl_free __ManagedListNode #3 size=64 class=5
   mm_free TokenManagedList #1
-    sl_free TokenManagedList #1 size=80 class=6
+    sl_free TokenManagedList #1 size=64 class=5
 mm_decref Token #2 rc=0 [ownership-edge-cases.main]
   mm_free Token #2
-    sl_free Token #2 size=48 class=5
+    sl_free Token #2 size=48 class=4
 mm_decref Token #4 rc=0 [ownership-edge-cases.main]
   mm_free Token #4
-    sl_free Token #4 size=48 class=5
+    sl_free Token #4 size=48 class=4
 mm_raw_alloc #R1 size=40
-  sl_alloc size=40 class=5
+  sl_alloc size=40 class=4
 mm_raw_free #R1
-  sl_free size=48 class=5
+  sl_free size=48 class=4
 ```
 
 <!-- test: rc-for-in-elem-decrefed -->
@@ -2127,24 +2127,24 @@ end 'main'
 sl_init
     os_alloc size=67108864
 mm_alloc __ManagedMemory_Score #1 size=32 [ownership-edge-cases.main]
-  sl_alloc __ManagedMemory_Score #1 size=64 class=6
+  sl_alloc __ManagedMemory_Score #1 size=64 class=5
 mm_alloc ScoreArray #2 size=16 [ownership-edge-cases.main]
-  sl_alloc ScoreArray #2 size=48 class=5
+  sl_alloc ScoreArray #2 size=48 class=4
 mm_incref __ManagedMemory_Score #1 rc=1 [ownership-edge-cases.main]
 mm_incref ScoreArray #2 rc=1 [ownership-edge-cases.main]
 mm_alloc Score #3 size=8 [ownership-edge-cases.main]
-  sl_alloc Score #3 size=40 class=5
+  sl_alloc Score #3 size=40 class=4
 mm_incref Score #3 rc=1 [ownership-edge-cases.main]
 mm_realloc __ManagedMemory_Score #1 size=32
   mm_raw_alloc #R1 size=32 [realloc]
-    sl_alloc size=32 class=4
+    sl_alloc size=32 class=3
 mm_incref Score #3 rc=2 [ScoreArray.push]
 mm_alloc Score #4 size=8 [ownership-edge-cases.main]
-  sl_alloc Score #4 size=40 class=5
+  sl_alloc Score #4 size=40 class=4
 mm_incref Score #4 rc=1 [ownership-edge-cases.main]
 mm_incref Score #4 rc=2 [ScoreArray.push]
 mm_alloc Score #5 size=8 [ownership-edge-cases.main]
-  sl_alloc Score #5 size=40 class=5
+  sl_alloc Score #5 size=40 class=4
 mm_incref Score #5 rc=1 [ownership-edge-cases.main]
 mm_incref Score #5 rc=2 [ScoreArray.push]
 mm_incref ScoreArray #2 rc=2 [ownership-edge-cases.main]
@@ -2165,23 +2165,23 @@ mm_decref ScoreArray #2 rc=0 [ownership-edge-cases.main]
   mm_decref __ManagedMemory_Score #1 rc=0 [~ScoreArray]
     mm_decref Score #3 rc=0 [~ManagedElements]
       mm_free Score #3
-        sl_free Score #3 size=48 class=5
+        sl_free Score #3 size=48 class=4
     mm_decref Score #4 rc=0 [~ManagedElements]
       mm_free Score #4
-        sl_free Score #4 size=48 class=5
+        sl_free Score #4 size=48 class=4
     mm_decref Score #5 rc=0 [~ManagedElements]
       mm_free Score #5
-        sl_free Score #5 size=48 class=5
+        sl_free Score #5 size=48 class=4
     mm_raw_free #R1
-      sl_free size=32 class=4
+      sl_free size=32 class=3
     mm_free __ManagedMemory_Score #1
-      sl_free __ManagedMemory_Score #1 size=80 class=6
+      sl_free __ManagedMemory_Score #1 size=64 class=5
   mm_free ScoreArray #2
-    sl_free ScoreArray #2 size=48 class=5
+    sl_free ScoreArray #2 size=48 class=4
 mm_raw_alloc #R2 size=40
-  sl_alloc size=40 class=5
+  sl_alloc size=40 class=4
 mm_raw_free #R2
-  sl_free size=48 class=5
+  sl_free size=48 class=4
 ```
 
 <!-- test: rc-multiple-aliases-freed-once -->
@@ -2208,7 +2208,7 @@ end 'main'
 sl_init
     os_alloc size=67108864
 mm_alloc Data #1 size=8 [ownership-edge-cases.main]
-  sl_alloc Data #1 size=40 class=5
+  sl_alloc Data #1 size=40 class=4
 mm_incref Data #1 rc=1 [ownership-edge-cases.main]
 mm_incref Data #1 rc=2 [ownership-edge-cases.main]
 mm_incref Data #1 rc=3 [ownership-edge-cases.main]
@@ -2216,11 +2216,11 @@ mm_decref Data #1 rc=2 [ownership-edge-cases.main]
 mm_decref Data #1 rc=1 [ownership-edge-cases.main]
 mm_decref Data #1 rc=0 [ownership-edge-cases.main]
   mm_free Data #1
-    sl_free Data #1 size=48 class=5
+    sl_free Data #1 size=48 class=4
 mm_raw_alloc #R1 size=40
-  sl_alloc size=40 class=5
+  sl_alloc size=40 class=4
 mm_raw_free #R1
-  sl_free size=48 class=5
+  sl_free size=48 class=4
 ```
 
 <!-- test: rc-deep-container-of-containers -->
@@ -2255,44 +2255,44 @@ end 'main'
 sl_init
     os_alloc size=67108864
 mm_alloc __ManagedMemory_CellArray #1 size=32 [ownership-edge-cases.main]
-  sl_alloc __ManagedMemory_CellArray #1 size=64 class=6
+  sl_alloc __ManagedMemory_CellArray #1 size=64 class=5
 mm_alloc Grid #2 size=16 [ownership-edge-cases.main]
-  sl_alloc Grid #2 size=48 class=5
+  sl_alloc Grid #2 size=48 class=4
 mm_incref __ManagedMemory_CellArray #1 rc=1 [ownership-edge-cases.main]
 mm_incref Grid #2 rc=1 [ownership-edge-cases.main]
 mm_alloc __ManagedMemory_Cell #3 size=32 [ownership-edge-cases.main]
-  sl_alloc __ManagedMemory_Cell #3 size=64 class=6
+  sl_alloc __ManagedMemory_Cell #3 size=64 class=5
 mm_alloc CellArray #4 size=16 [ownership-edge-cases.main]
-  sl_alloc CellArray #4 size=48 class=5
+  sl_alloc CellArray #4 size=48 class=4
 mm_incref __ManagedMemory_Cell #3 rc=1 [ownership-edge-cases.main]
 mm_incref CellArray #4 rc=1 [ownership-edge-cases.main]
 mm_alloc Cell #5 size=8 [ownership-edge-cases.main]
-  sl_alloc Cell #5 size=40 class=5
+  sl_alloc Cell #5 size=40 class=4
 mm_incref Cell #5 rc=1 [ownership-edge-cases.main]
 mm_realloc __ManagedMemory_Cell #3 size=32
   mm_raw_alloc #R1 size=32 [realloc]
-    sl_alloc size=32 class=4
+    sl_alloc size=32 class=3
 mm_incref Cell #5 rc=2 [CellArray.push]
 mm_alloc Cell #6 size=8 [ownership-edge-cases.main]
-  sl_alloc Cell #6 size=40 class=5
+  sl_alloc Cell #6 size=40 class=4
 mm_incref Cell #6 rc=1 [ownership-edge-cases.main]
 mm_incref Cell #6 rc=2 [CellArray.push]
 mm_alloc __ManagedMemory_Cell #7 size=32 [ownership-edge-cases.main]
-  sl_alloc __ManagedMemory_Cell #7 size=64 class=6
+  sl_alloc __ManagedMemory_Cell #7 size=64 class=5
 mm_alloc CellArray #8 size=16 [ownership-edge-cases.main]
-  sl_alloc CellArray #8 size=48 class=5
+  sl_alloc CellArray #8 size=48 class=4
 mm_incref __ManagedMemory_Cell #7 rc=1 [ownership-edge-cases.main]
 mm_incref CellArray #8 rc=1 [ownership-edge-cases.main]
 mm_alloc Cell #9 size=8 [ownership-edge-cases.main]
-  sl_alloc Cell #9 size=40 class=5
+  sl_alloc Cell #9 size=40 class=4
 mm_incref Cell #9 rc=1 [ownership-edge-cases.main]
 mm_realloc __ManagedMemory_Cell #7 size=32
   mm_raw_alloc #R2 size=32 [realloc]
-    sl_alloc size=32 class=4
+    sl_alloc size=32 class=3
 mm_incref Cell #9 rc=2 [CellArray.push]
 mm_realloc __ManagedMemory_CellArray #1 size=32
   mm_raw_alloc #R3 size=32 [realloc]
-    sl_alloc size=32 class=4
+    sl_alloc size=32 class=3
 mm_incref CellArray #4 rc=2 [Grid.push]
 mm_incref CellArray #8 rc=2 [Grid.push]
 mm_decref CellArray #8 rc=1 [ownership-edge-cases.main]
@@ -2304,39 +2304,39 @@ mm_decref Grid #2 rc=0 [ownership-edge-cases.main]
         mm_decref Cell #5 rc=1 [~ManagedElements]
         mm_decref Cell #6 rc=1 [~ManagedElements]
         mm_raw_free #R1
-          sl_free size=32 class=4
+          sl_free size=32 class=3
         mm_free __ManagedMemory_Cell #3
-          sl_free __ManagedMemory_Cell #3 size=80 class=6
+          sl_free __ManagedMemory_Cell #3 size=64 class=5
       mm_free CellArray #4
-        sl_free CellArray #4 size=48 class=5
+        sl_free CellArray #4 size=48 class=4
     mm_decref CellArray #8 rc=0 [~ManagedElements]
       mm_decref __ManagedMemory_Cell #7 rc=0 [~CellArray]
         mm_decref Cell #9 rc=1 [~ManagedElements]
         mm_raw_free #R2
-          sl_free size=32 class=4
+          sl_free size=32 class=3
         mm_free __ManagedMemory_Cell #7
-          sl_free __ManagedMemory_Cell #7 size=80 class=6
+          sl_free __ManagedMemory_Cell #7 size=64 class=5
       mm_free CellArray #8
-        sl_free CellArray #8 size=48 class=5
+        sl_free CellArray #8 size=48 class=4
     mm_raw_free #R3
-      sl_free size=32 class=4
+      sl_free size=32 class=3
     mm_free __ManagedMemory_CellArray #1
-      sl_free __ManagedMemory_CellArray #1 size=80 class=6
+      sl_free __ManagedMemory_CellArray #1 size=64 class=5
   mm_free Grid #2
-    sl_free Grid #2 size=48 class=5
+    sl_free Grid #2 size=48 class=4
 mm_decref Cell #5 rc=0 [ownership-edge-cases.main]
   mm_free Cell #5
-    sl_free Cell #5 size=48 class=5
+    sl_free Cell #5 size=48 class=4
 mm_decref Cell #6 rc=0 [ownership-edge-cases.main]
   mm_free Cell #6
-    sl_free Cell #6 size=48 class=5
+    sl_free Cell #6 size=48 class=4
 mm_decref Cell #9 rc=0 [ownership-edge-cases.main]
   mm_free Cell #9
-    sl_free Cell #9 size=48 class=5
+    sl_free Cell #9 size=48 class=4
 mm_raw_alloc #R4 size=40
-  sl_alloc size=40 class=5
+  sl_alloc size=40 class=4
 mm_raw_free #R4
-  sl_free size=48 class=5
+  sl_free size=48 class=4
 ```
 
 <!-- test: rc-struct-with-array-field-freed -->
@@ -2373,23 +2373,23 @@ end 'main'
 sl_init
     os_alloc size=67108864
 mm_alloc __ManagedMemory_Entry #1 size=32 [ownership-edge-cases.fill]
-  sl_alloc __ManagedMemory_Entry #1 size=64 class=6
+  sl_alloc __ManagedMemory_Entry #1 size=64 class=5
 mm_alloc EntryArray #2 size=16 [ownership-edge-cases.fill]
-  sl_alloc EntryArray #2 size=48 class=5
+  sl_alloc EntryArray #2 size=48 class=4
 mm_incref __ManagedMemory_Entry #1 rc=1 [ownership-edge-cases.fill]
 mm_alloc Bucket #3 size=8 [ownership-edge-cases.fill]
-  sl_alloc Bucket #3 size=40 class=5
+  sl_alloc Bucket #3 size=40 class=4
 mm_incref EntryArray #2 rc=1 [ownership-edge-cases.fill]
 mm_incref Bucket #3 rc=1 [ownership-edge-cases.fill]
 mm_alloc Entry #4 size=8 [ownership-edge-cases.fill]
-  sl_alloc Entry #4 size=40 class=5
+  sl_alloc Entry #4 size=40 class=4
 mm_incref Entry #4 rc=1 [ownership-edge-cases.fill]
 mm_realloc __ManagedMemory_Entry #1 size=32
   mm_raw_alloc #R1 size=32 [realloc]
-    sl_alloc size=32 class=4
+    sl_alloc size=32 class=3
 mm_incref Entry #4 rc=2 [EntryArray.push]
 mm_alloc Entry #5 size=8 [ownership-edge-cases.fill]
-  sl_alloc Entry #5 size=40 class=5
+  sl_alloc Entry #5 size=40 class=4
 mm_incref Entry #5 rc=1 [ownership-edge-cases.fill]
 mm_incref Entry #5 rc=2 [EntryArray.push]
 mm_decref Bucket #3 rc=0 [ownership-edge-cases.fill]
@@ -2398,23 +2398,23 @@ mm_decref Bucket #3 rc=0 [ownership-edge-cases.fill]
       mm_decref Entry #4 rc=1 [~ManagedElements]
       mm_decref Entry #5 rc=1 [~ManagedElements]
       mm_raw_free #R1
-        sl_free size=32 class=4
+        sl_free size=32 class=3
       mm_free __ManagedMemory_Entry #1
-        sl_free __ManagedMemory_Entry #1 size=80 class=6
+        sl_free __ManagedMemory_Entry #1 size=64 class=5
     mm_free EntryArray #2
-      sl_free EntryArray #2 size=48 class=5
+      sl_free EntryArray #2 size=48 class=4
   mm_free Bucket #3
-    sl_free Bucket #3 size=48 class=5
+    sl_free Bucket #3 size=48 class=4
 mm_decref Entry #4 rc=0 [ownership-edge-cases.fill]
   mm_free Entry #4
-    sl_free Entry #4 size=48 class=5
+    sl_free Entry #4 size=48 class=4
 mm_decref Entry #5 rc=0 [ownership-edge-cases.fill]
   mm_free Entry #5
-    sl_free Entry #5 size=48 class=5
+    sl_free Entry #5 size=48 class=4
 mm_raw_alloc #R2 size=40
-  sl_alloc size=40 class=5
+  sl_alloc size=40 class=4
 mm_raw_free #R2
-  sl_free size=48 class=5
+  sl_free size=48 class=4
 ```
 
 <!-- test: rc-return-struct-literal -->
@@ -2446,16 +2446,16 @@ end 'main'
 sl_init
     os_alloc size=67108864
 mm_alloc Pair #1 size=16 [ownership-edge-cases.makePair]
-  sl_alloc Pair #1 size=48 class=5
+  sl_alloc Pair #1 size=48 class=4
 mm_incref Pair #1 rc=1 [ownership-edge-cases.makePair]
 mm_transfer Pair #1 rc=1 [ownership-edge-cases.makePair]
 mm_decref Pair #1 rc=0 [ownership-edge-cases.main]
   mm_free Pair #1
-    sl_free Pair #1 size=48 class=5
+    sl_free Pair #1 size=48 class=4
 mm_raw_alloc #R1 size=40
-  sl_alloc size=40 class=5
+  sl_alloc size=40 class=4
 mm_raw_free #R1
-  sl_free size=48 class=5
+  sl_free size=48 class=4
 ```
 
 <!-- test: rc-return-struct-with-managed-field -->
@@ -2491,24 +2491,24 @@ end 'main'
 sl_init
     os_alloc size=67108864
 mm_alloc Inner #1 size=8 [ownership-edge-cases.main]
-  sl_alloc Inner #1 size=40 class=5
+  sl_alloc Inner #1 size=40 class=4
 mm_incref Inner #1 rc=1 [ownership-edge-cases.main]
 mm_alloc Wrapper #2 size=8 [ownership-edge-cases.wrap]
-  sl_alloc Wrapper #2 size=40 class=5
+  sl_alloc Wrapper #2 size=40 class=4
 mm_incref Inner #1 rc=2 [ownership-edge-cases.wrap]
 mm_incref Wrapper #2 rc=1 [ownership-edge-cases.wrap]
 mm_transfer Wrapper #2 rc=1 [ownership-edge-cases.wrap]
 mm_decref Wrapper #2 rc=0 [ownership-edge-cases.main]
   mm_decref Inner #1 rc=1 [~Wrapper]
   mm_free Wrapper #2
-    sl_free Wrapper #2 size=48 class=5
+    sl_free Wrapper #2 size=48 class=4
 mm_decref Inner #1 rc=0 [ownership-edge-cases.main]
   mm_free Inner #1
-    sl_free Inner #1 size=48 class=5
+    sl_free Inner #1 size=48 class=4
 mm_raw_alloc #R1 size=40
-  sl_alloc size=40 class=5
+  sl_alloc size=40 class=4
 mm_raw_free #R1
-  sl_free size=48 class=5
+  sl_free size=48 class=4
 ```
 
 <!-- test: rc-list-scope-cleanup -->
@@ -2530,19 +2530,19 @@ end 'main'
 sl_init
     os_alloc size=67108864
 mm_alloc __ManagedList_String #1 size=32 [ownership-edge-cases.main]
-  sl_alloc __ManagedList_String #1 size=64 class=6
+  sl_alloc __ManagedList_String #1 size=64 class=5
 mm_alloc StringList #2 size=16 [ownership-edge-cases.main]
-  sl_alloc StringList #2 size=48 class=5
+  sl_alloc StringList #2 size=48 class=4
 mm_incref __ManagedList_String #1 rc=1 [ownership-edge-cases.main]
 mm_incref StringList #2 rc=1 [ownership-edge-cases.main]
 mm_alloc String #3 size=16 [ownership-edge-cases.main]
-  sl_alloc String #3 size=48 class=5
+  sl_alloc String #3 size=48 class=4
 mm_alloc __ManagedMemory #4 size=32 [ownership-edge-cases.main]
-  sl_alloc __ManagedMemory #4 size=64 class=6
+  sl_alloc __ManagedMemory #4 size=64 class=5
 mm_incref __ManagedMemory #4 rc=1 [ownership-edge-cases.main]
 mm_incref String #3 rc=1 [ownership-edge-cases.main]
 mm_alloc __ManagedListNode #5 size=32 [StringList.append]
-  sl_alloc __ManagedListNode #5 size=64 class=6
+  sl_alloc __ManagedListNode #5 size=64 class=5
 mm_incref String #3 rc=2 [StringList.append]
 mm_incref __ManagedListNode #5 rc=1 [managed_list_insert]
 mm_decref String #3 rc=1 [ownership-edge-cases.main]
@@ -2551,20 +2551,20 @@ mm_decref StringList #2 rc=0 [ownership-edge-cases.main]
     mm_decref String #3 rc=0 [managed_list_clear]
       mm_decref __ManagedMemory #4 rc=0 [~String]
         mm_free __ManagedMemory #4
-          sl_free __ManagedMemory #4 size=80 class=6
+          sl_free __ManagedMemory #4 size=64 class=5
       mm_free String #3
-        sl_free String #3 size=48 class=5
+        sl_free String #3 size=48 class=4
     mm_decref __ManagedListNode #5 rc=0 [managed_list_clear]
       mm_free __ManagedListNode #5
-        sl_free __ManagedListNode #5 size=80 class=6
+        sl_free __ManagedListNode #5 size=64 class=5
     mm_free __ManagedList_String #1
-      sl_free __ManagedList_String #1 size=80 class=6
+      sl_free __ManagedList_String #1 size=64 class=5
   mm_free StringList #2
-    sl_free StringList #2 size=48 class=5
+    sl_free StringList #2 size=48 class=4
 mm_raw_alloc #R1 size=40
-  sl_alloc size=40 class=5
+  sl_alloc size=40 class=4
 mm_raw_free #R1
-  sl_free size=48 class=5
+  sl_free size=48 class=4
 ```
 
 <!-- test: match-string-pattern-cleanup -->
@@ -2587,37 +2587,37 @@ end 'main'
 sl_init
     os_alloc size=67108864
 mm_alloc String #1 size=16 [ownership-edge-cases.main]
-  sl_alloc String #1 size=48 class=5
+  sl_alloc String #1 size=48 class=4
 mm_alloc __ManagedMemory #2 size=32 [ownership-edge-cases.main]
-  sl_alloc __ManagedMemory #2 size=64 class=6
+  sl_alloc __ManagedMemory #2 size=64 class=5
 mm_incref __ManagedMemory #2 rc=1 [ownership-edge-cases.main]
 mm_incref String #1 rc=1 [ownership-edge-cases.main]
 mm_incref String #1 rc=2 [ownership-edge-cases.main]
 mm_incref String #1 rc=3 [ownership-edge-cases.main]
 mm_alloc String #3 size=16 [ownership-edge-cases.main]
-  sl_alloc String #3 size=48 class=5
+  sl_alloc String #3 size=48 class=4
 mm_alloc __ManagedMemory #4 size=32 [ownership-edge-cases.main]
-  sl_alloc __ManagedMemory #4 size=64 class=6
+  sl_alloc __ManagedMemory #4 size=64 class=5
 mm_incref __ManagedMemory #4 rc=1 [ownership-edge-cases.main]
 mm_incref String #3 rc=1 [ownership-edge-cases.main]
 mm_decref String #3 rc=0 [ownership-edge-cases.main]
   mm_decref __ManagedMemory #4 rc=0 [~String]
     mm_free __ManagedMemory #4
-      sl_free __ManagedMemory #4 size=80 class=6
+      sl_free __ManagedMemory #4 size=64 class=5
   mm_free String #3
-    sl_free String #3 size=48 class=5
+    sl_free String #3 size=48 class=4
 mm_decref String #1 rc=2 [ownership-edge-cases.main]
 mm_decref String #1 rc=1 [ownership-edge-cases.main]
 mm_decref String #1 rc=0 [ownership-edge-cases.main]
   mm_decref __ManagedMemory #2 rc=0 [~String]
     mm_free __ManagedMemory #2
-      sl_free __ManagedMemory #2 size=80 class=6
+      sl_free __ManagedMemory #2 size=64 class=5
   mm_free String #1
-    sl_free String #1 size=48 class=5
+    sl_free String #1 size=48 class=4
 mm_raw_alloc #R1 size=40
-  sl_alloc size=40 class=5
+  sl_alloc size=40 class=4
 mm_raw_free #R1
-  sl_free size=48 class=5
+  sl_free size=48 class=4
 ```
 
 <!-- test: rc-char-single-alloc-freed -->
@@ -2636,9 +2636,9 @@ end 'main'
 sl_init
     os_alloc size=67108864
 mm_alloc Character #1 size=16 [ownership-edge-cases.main]
-  sl_alloc Character #1 size=48 class=5
+  sl_alloc Character #1 size=48 class=4
 mm_alloc __ManagedMemory #2 size=32 [ownership-edge-cases.main]
-  sl_alloc __ManagedMemory #2 size=64 class=6
+  sl_alloc __ManagedMemory #2 size=64 class=5
 mm_incref __ManagedMemory #2 rc=1 [ownership-edge-cases.main]
 mm_incref Character #1 rc=1 [ownership-edge-cases.main]
 mm_incref Character #1 rc=2 [ownership-edge-cases.main]
@@ -2646,13 +2646,13 @@ mm_decref Character #1 rc=1 [ownership-edge-cases.main]
 mm_decref Character #1 rc=0 [ownership-edge-cases.main]
   mm_decref __ManagedMemory #2 rc=0 [~Character]
     mm_free __ManagedMemory #2
-      sl_free __ManagedMemory #2 size=80 class=6
+      sl_free __ManagedMemory #2 size=64 class=5
   mm_free Character #1
-    sl_free Character #1 size=48 class=5
+    sl_free Character #1 size=48 class=4
 mm_raw_alloc #R1 size=40
-  sl_alloc size=40 class=5
+  sl_alloc size=40 class=4
 mm_raw_free #R1
-  sl_free size=48 class=5
+  sl_free size=48 class=4
 ```
 
 <!-- test: rc-char-alias-incref -->
@@ -2672,9 +2672,9 @@ end 'main'
 sl_init
     os_alloc size=67108864
 mm_alloc Character #1 size=16 [ownership-edge-cases.main]
-  sl_alloc Character #1 size=48 class=5
+  sl_alloc Character #1 size=48 class=4
 mm_alloc __ManagedMemory #2 size=32 [ownership-edge-cases.main]
-  sl_alloc __ManagedMemory #2 size=64 class=6
+  sl_alloc __ManagedMemory #2 size=64 class=5
 mm_incref __ManagedMemory #2 rc=1 [ownership-edge-cases.main]
 mm_incref Character #1 rc=1 [ownership-edge-cases.main]
 mm_incref Character #1 rc=2 [ownership-edge-cases.main]
@@ -2684,13 +2684,13 @@ mm_decref Character #1 rc=1 [ownership-edge-cases.main]
 mm_decref Character #1 rc=0 [ownership-edge-cases.main]
   mm_decref __ManagedMemory #2 rc=0 [~Character]
     mm_free __ManagedMemory #2
-      sl_free __ManagedMemory #2 size=80 class=6
+      sl_free __ManagedMemory #2 size=64 class=5
   mm_free Character #1
-    sl_free Character #1 size=48 class=5
+    sl_free Character #1 size=48 class=4
 mm_raw_alloc #R1 size=40
-  sl_alloc size=40 class=5
+  sl_alloc size=40 class=4
 mm_raw_free #R1
-  sl_free size=48 class=5
+  sl_free size=48 class=4
 ```
 
 <!-- test: rc-char-reassign-decrefs-old -->
@@ -2710,16 +2710,16 @@ end 'main'
 sl_init
     os_alloc size=67108864
 mm_alloc Character #1 size=16 [ownership-edge-cases.main]
-  sl_alloc Character #1 size=48 class=5
+  sl_alloc Character #1 size=48 class=4
 mm_alloc __ManagedMemory #2 size=32 [ownership-edge-cases.main]
-  sl_alloc __ManagedMemory #2 size=64 class=6
+  sl_alloc __ManagedMemory #2 size=64 class=5
 mm_incref __ManagedMemory #2 rc=1 [ownership-edge-cases.main]
 mm_incref Character #1 rc=1 [ownership-edge-cases.main]
 mm_incref Character #1 rc=2 [ownership-edge-cases.main]
 mm_alloc Character #3 size=16 [ownership-edge-cases.main]
-  sl_alloc Character #3 size=48 class=5
+  sl_alloc Character #3 size=48 class=4
 mm_alloc __ManagedMemory #4 size=32 [ownership-edge-cases.main]
-  sl_alloc __ManagedMemory #4 size=64 class=6
+  sl_alloc __ManagedMemory #4 size=64 class=5
 mm_incref __ManagedMemory #4 rc=1 [ownership-edge-cases.main]
 mm_incref Character #3 rc=1 [ownership-edge-cases.main]
 mm_decref Character #1 rc=1 [ownership-edge-cases.main]
@@ -2728,19 +2728,19 @@ mm_decref Character #3 rc=1 [ownership-edge-cases.main]
 mm_decref Character #1 rc=0 [ownership-edge-cases.main]
   mm_decref __ManagedMemory #2 rc=0 [~Character]
     mm_free __ManagedMemory #2
-      sl_free __ManagedMemory #2 size=80 class=6
+      sl_free __ManagedMemory #2 size=64 class=5
   mm_free Character #1
-    sl_free Character #1 size=48 class=5
+    sl_free Character #1 size=48 class=4
 mm_decref Character #3 rc=0 [ownership-edge-cases.main]
   mm_decref __ManagedMemory #4 rc=0 [~Character]
     mm_free __ManagedMemory #4
-      sl_free __ManagedMemory #4 size=80 class=6
+      sl_free __ManagedMemory #4 size=64 class=5
   mm_free Character #3
-    sl_free Character #3 size=48 class=5
+    sl_free Character #3 size=48 class=4
 mm_raw_alloc #R1 size=40
-  sl_alloc size=40 class=5
+  sl_alloc size=40 class=4
 mm_raw_free #R1
-  sl_free size=48 class=5
+  sl_free size=48 class=4
 ```
 
 <!-- test: rc-char-return-transfers-ownership -->
@@ -2763,22 +2763,22 @@ end 'main'
 sl_init
     os_alloc size=67108864
 mm_alloc Character #1 size=16 [ownership-edge-cases.makeChar]
-  sl_alloc Character #1 size=48 class=5
+  sl_alloc Character #1 size=48 class=4
 mm_alloc __ManagedMemory #2 size=32 [ownership-edge-cases.makeChar]
-  sl_alloc __ManagedMemory #2 size=64 class=6
+  sl_alloc __ManagedMemory #2 size=64 class=5
 mm_incref __ManagedMemory #2 rc=1 [ownership-edge-cases.makeChar]
 mm_incref Character #1 rc=1 [ownership-edge-cases.makeChar]
 mm_transfer Character #1 rc=1 [ownership-edge-cases.makeChar]
 mm_decref Character #1 rc=0 [ownership-edge-cases.main]
   mm_decref __ManagedMemory #2 rc=0 [~Character]
     mm_free __ManagedMemory #2
-      sl_free __ManagedMemory #2 size=80 class=6
+      sl_free __ManagedMemory #2 size=64 class=5
   mm_free Character #1
-    sl_free Character #1 size=48 class=5
+    sl_free Character #1 size=48 class=4
 mm_raw_alloc #R1 size=40
-  sl_alloc size=40 class=5
+  sl_alloc size=40 class=4
 mm_raw_free #R1
-  sl_free size=48 class=5
+  sl_free size=48 class=4
 ```
 
 <!-- test: rc-char-inner-block-freed -->
@@ -2801,9 +2801,9 @@ end 'main'
 sl_init
     os_alloc size=67108864
 mm_alloc Character #1 size=16 [ownership-edge-cases.main]
-  sl_alloc Character #1 size=48 class=5
+  sl_alloc Character #1 size=48 class=4
 mm_alloc __ManagedMemory #2 size=32 [ownership-edge-cases.main]
-  sl_alloc __ManagedMemory #2 size=64 class=6
+  sl_alloc __ManagedMemory #2 size=64 class=5
 mm_incref __ManagedMemory #2 rc=1 [ownership-edge-cases.main]
 mm_incref Character #1 rc=1 [ownership-edge-cases.main]
 mm_incref Character #1 rc=2 [ownership-edge-cases.main]
@@ -2811,13 +2811,13 @@ mm_decref Character #1 rc=1 [ownership-edge-cases.main]
 mm_decref Character #1 rc=0 [ownership-edge-cases.main]
   mm_decref __ManagedMemory #2 rc=0 [~Character]
     mm_free __ManagedMemory #2
-      sl_free __ManagedMemory #2 size=80 class=6
+      sl_free __ManagedMemory #2 size=64 class=5
   mm_free Character #1
-    sl_free Character #1 size=48 class=5
+    sl_free Character #1 size=48 class=4
 mm_raw_alloc #R1 size=40
-  sl_alloc size=40 class=5
+  sl_alloc size=40 class=4
 mm_raw_free #R1
-  sl_free size=48 class=5
+  sl_free size=48 class=4
 ```
 
 <!-- test: rc-tuple-primitive-freed -->
@@ -2836,15 +2836,15 @@ end 'main'
 sl_init
     os_alloc size=67108864
 mm_alloc __Tuple_i64_i64 #1 size=16 [ownership-edge-cases.main]
-  sl_alloc __Tuple_i64_i64 #1 size=48 class=5
+  sl_alloc __Tuple_i64_i64 #1 size=48 class=4
 mm_incref __Tuple_i64_i64 #1 rc=1 [ownership-edge-cases.main]
 mm_decref __Tuple_i64_i64 #1 rc=0 [ownership-edge-cases.main]
   mm_free __Tuple_i64_i64 #1
-    sl_free __Tuple_i64_i64 #1 size=48 class=5
+    sl_free __Tuple_i64_i64 #1 size=48 class=4
 mm_raw_alloc #R1 size=40
-  sl_alloc size=40 class=5
+  sl_alloc size=40 class=4
 mm_raw_free #R1
-  sl_free size=48 class=5
+  sl_free size=48 class=4
 ```
 
 <!-- test: rc-tuple-alias-incref -->
@@ -2864,17 +2864,17 @@ end 'main'
 sl_init
     os_alloc size=67108864
 mm_alloc __Tuple_i64_i64 #1 size=16 [ownership-edge-cases.main]
-  sl_alloc __Tuple_i64_i64 #1 size=48 class=5
+  sl_alloc __Tuple_i64_i64 #1 size=48 class=4
 mm_incref __Tuple_i64_i64 #1 rc=1 [ownership-edge-cases.main]
 mm_incref __Tuple_i64_i64 #1 rc=2 [ownership-edge-cases.main]
 mm_decref __Tuple_i64_i64 #1 rc=1 [ownership-edge-cases.main]
 mm_decref __Tuple_i64_i64 #1 rc=0 [ownership-edge-cases.main]
   mm_free __Tuple_i64_i64 #1
-    sl_free __Tuple_i64_i64 #1 size=48 class=5
+    sl_free __Tuple_i64_i64 #1 size=48 class=4
 mm_raw_alloc #R1 size=40
-  sl_alloc size=40 class=5
+  sl_alloc size=40 class=4
 mm_raw_free #R1
-  sl_free size=48 class=5
+  sl_free size=48 class=4
 ```
 
 <!-- test: rc-tuple-reassign-decrefs-old -->
@@ -2894,23 +2894,23 @@ end 'main'
 sl_init
     os_alloc size=67108864
 mm_alloc __Tuple_i64_i64 #1 size=16 [ownership-edge-cases.main]
-  sl_alloc __Tuple_i64_i64 #1 size=48 class=5
+  sl_alloc __Tuple_i64_i64 #1 size=48 class=4
 mm_incref __Tuple_i64_i64 #1 rc=1 [ownership-edge-cases.main]
 mm_alloc __Tuple_i64_i64 #2 size=16 [ownership-edge-cases.main]
-  sl_alloc __Tuple_i64_i64 #2 size=48 class=5
+  sl_alloc __Tuple_i64_i64 #2 size=48 class=4
 mm_incref __Tuple_i64_i64 #2 rc=1 [ownership-edge-cases.main]
 mm_decref __Tuple_i64_i64 #1 rc=0 [ownership-edge-cases.main]
   mm_free __Tuple_i64_i64 #1
-    sl_free __Tuple_i64_i64 #1 size=48 class=5
+    sl_free __Tuple_i64_i64 #1 size=48 class=4
 mm_incref __Tuple_i64_i64 #2 rc=2 [ownership-edge-cases.main]
 mm_decref __Tuple_i64_i64 #2 rc=1 [ownership-edge-cases.main]
 mm_decref __Tuple_i64_i64 #2 rc=0 [ownership-edge-cases.main]
   mm_free __Tuple_i64_i64 #2
-    sl_free __Tuple_i64_i64 #2 size=48 class=5
+    sl_free __Tuple_i64_i64 #2 size=48 class=4
 mm_raw_alloc #R1 size=40
-  sl_alloc size=40 class=5
+  sl_alloc size=40 class=4
 mm_raw_free #R1
-  sl_free size=48 class=5
+  sl_free size=48 class=4
 ```
 
 <!-- test: rc-tuple-with-string-freed -->
@@ -2929,13 +2929,13 @@ end 'main'
 sl_init
     os_alloc size=67108864
 mm_alloc String #1 size=16 [ownership-edge-cases.main]
-  sl_alloc String #1 size=48 class=5
+  sl_alloc String #1 size=48 class=4
 mm_alloc __ManagedMemory #2 size=32 [ownership-edge-cases.main]
-  sl_alloc __ManagedMemory #2 size=64 class=6
+  sl_alloc __ManagedMemory #2 size=64 class=5
 mm_incref __ManagedMemory #2 rc=1 [ownership-edge-cases.main]
 mm_incref String #1 rc=1 [ownership-edge-cases.main]
 mm_alloc __Tuple_i64_String #3 size=16 [ownership-edge-cases.main]
-  sl_alloc __Tuple_i64_String #3 size=48 class=5
+  sl_alloc __Tuple_i64_String #3 size=48 class=4
 mm_incref String #1 rc=2 [ownership-edge-cases.main]
 mm_incref __Tuple_i64_String #3 rc=1 [ownership-edge-cases.main]
 mm_decref String #1 rc=1 [ownership-edge-cases.main]
@@ -2943,15 +2943,15 @@ mm_decref __Tuple_i64_String #3 rc=0 [ownership-edge-cases.main]
   mm_decref String #1 rc=0 [~__Tuple_i64_String]
     mm_decref __ManagedMemory #2 rc=0 [~String]
       mm_free __ManagedMemory #2
-        sl_free __ManagedMemory #2 size=80 class=6
+        sl_free __ManagedMemory #2 size=64 class=5
     mm_free String #1
-      sl_free String #1 size=48 class=5
+      sl_free String #1 size=48 class=4
   mm_free __Tuple_i64_String #3
-    sl_free __Tuple_i64_String #3 size=48 class=5
+    sl_free __Tuple_i64_String #3 size=48 class=4
 mm_raw_alloc #R1 size=40
-  sl_alloc size=40 class=5
+  sl_alloc size=40 class=4
 mm_raw_free #R1
-  sl_free size=48 class=5
+  sl_free size=48 class=4
 ```
 
 <!-- test: rc-tuple-return-transfers-ownership -->
@@ -2976,16 +2976,16 @@ end 'main'
 sl_init
     os_alloc size=67108864
 mm_alloc __Tuple_i64_i64 #1 size=16 [ownership-edge-cases.makePair]
-  sl_alloc __Tuple_i64_i64 #1 size=48 class=5
+  sl_alloc __Tuple_i64_i64 #1 size=48 class=4
 mm_incref __Tuple_i64_i64 #1 rc=1 [ownership-edge-cases.makePair]
 mm_transfer __Tuple_i64_i64 #1 rc=1 [ownership-edge-cases.makePair]
 mm_decref __Tuple_i64_i64 #1 rc=0 [ownership-edge-cases.main]
   mm_free __Tuple_i64_i64 #1
-    sl_free __Tuple_i64_i64 #1 size=48 class=5
+    sl_free __Tuple_i64_i64 #1 size=48 class=4
 mm_raw_alloc #R1 size=40
-  sl_alloc size=40 class=5
+  sl_alloc size=40 class=4
 mm_raw_free #R1
-  sl_free size=48 class=5
+  sl_free size=48 class=4
 ```
 
 <!-- test: rc-tuple-destructuring-cleanup -->
@@ -3005,17 +3005,17 @@ end 'main'
 sl_init
     os_alloc size=67108864
 mm_alloc __Tuple_i64_i64 #1 size=16 [ownership-edge-cases.main]
-  sl_alloc __Tuple_i64_i64 #1 size=48 class=5
+  sl_alloc __Tuple_i64_i64 #1 size=48 class=4
 mm_incref __Tuple_i64_i64 #1 rc=1 [ownership-edge-cases.main]
 mm_incref __Tuple_i64_i64 #1 rc=2 [ownership-edge-cases.main]
 mm_decref __Tuple_i64_i64 #1 rc=1 [ownership-edge-cases.main]
 mm_decref __Tuple_i64_i64 #1 rc=0 [ownership-edge-cases.main]
   mm_free __Tuple_i64_i64 #1
-    sl_free __Tuple_i64_i64 #1 size=48 class=5
+    sl_free __Tuple_i64_i64 #1 size=48 class=4
 mm_raw_alloc #R1 size=40
-  sl_alloc size=40 class=5
+  sl_alloc size=40 class=4
 mm_raw_free #R1
-  sl_free size=48 class=5
+  sl_free size=48 class=4
 ```
 
 <!-- test: rc-tuple-with-struct-freed -->
@@ -3041,21 +3041,21 @@ end 'main'
 sl_init
     os_alloc size=67108864
 mm_alloc Point #1 size=16 [ownership-edge-cases.main]
-  sl_alloc Point #1 size=48 class=5
+  sl_alloc Point #1 size=48 class=4
 mm_alloc __Tuple_i64_Point #2 size=16 [ownership-edge-cases.main]
-  sl_alloc __Tuple_i64_Point #2 size=48 class=5
+  sl_alloc __Tuple_i64_Point #2 size=48 class=4
 mm_incref Point #1 rc=1 [ownership-edge-cases.main]
 mm_incref __Tuple_i64_Point #2 rc=1 [ownership-edge-cases.main]
 mm_decref __Tuple_i64_Point #2 rc=0 [ownership-edge-cases.main]
   mm_decref Point #1 rc=0 [~__Tuple_i64_Point]
     mm_free Point #1
-      sl_free Point #1 size=48 class=5
+      sl_free Point #1 size=48 class=4
   mm_free __Tuple_i64_Point #2
-    sl_free __Tuple_i64_Point #2 size=48 class=5
+    sl_free __Tuple_i64_Point #2 size=48 class=4
 mm_raw_alloc #R1 size=40
-  sl_alloc size=40 class=5
+  sl_alloc size=40 class=4
 mm_raw_free #R1
-  sl_free size=48 class=5
+  sl_free size=48 class=4
 ```
 
 <!-- test: rc-struct-literal-as-function-arg -->

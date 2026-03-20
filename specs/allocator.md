@@ -35,20 +35,20 @@ end 'main'
 sl_init
     os_alloc size=67108864
 mm_alloc Point #1 size=16 [allocator.main]
-  sl_alloc Point #1 size=48 class=5
+  sl_alloc Point #1 size=48 class=4
 mm_incref Point #1 rc=1 [allocator.main]
 mm_decref Point #1 rc=0 [allocator.main]
   mm_free Point #1
-    sl_free Point #1 size=48 class=5
+    sl_free Point #1 size=48 class=4
 mm_raw_alloc #R1 size=40
-  sl_alloc size=40 class=5
+  sl_alloc size=40 class=4
 mm_raw_free #R1
-  sl_free size=48 class=5
+  sl_free size=48 class=4
 ```
 
 <!-- test: slab-class-routing-8-byte-user-data -->
 <!-- MmTrace -->
-A struct with 8 bytes user data: `mm_alloc` requests 40 bytes (8+32), slab slot needs 56 (40+16), routes to class 5 (64 bytes).
+A struct with 8 bytes user data: `mm_alloc` requests 40 bytes (8+32), routes to class 4 (48 bytes) since 48 >= 40.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -68,15 +68,15 @@ end 'main'
 sl_init
     os_alloc size=67108864
 mm_alloc Tiny #1 size=8 [allocator.main]
-  sl_alloc Tiny #1 size=40 class=5
+  sl_alloc Tiny #1 size=40 class=4
 mm_incref Tiny #1 rc=1 [allocator.main]
 mm_decref Tiny #1 rc=0 [allocator.main]
   mm_free Tiny #1
-    sl_free Tiny #1 size=48 class=5
+    sl_free Tiny #1 size=48 class=4
 mm_raw_alloc #R1 size=40
-  sl_alloc size=40 class=5
+  sl_alloc size=40 class=4
 mm_raw_free #R1
-  sl_free size=48 class=5
+  sl_free size=48 class=4
 ```
 
 <!-- test: slab-free-reuses-slot-no-os-alloc -->
@@ -106,28 +106,28 @@ end 'main'
 sl_init
     os_alloc size=67108864
 mm_alloc Box #1 size=8 [allocator.make_box]
-  sl_alloc Box #1 size=40 class=5
+  sl_alloc Box #1 size=40 class=4
 mm_incref Box #1 rc=1 [allocator.make_box]
 mm_transfer Box #1 rc=1 [allocator.make_box]
 mm_alloc Box #2 size=8 [allocator.make_box]
-  sl_alloc Box #2 size=40 class=5
+  sl_alloc Box #2 size=40 class=4
 mm_incref Box #2 rc=1 [allocator.make_box]
 mm_transfer Box #2 rc=1 [allocator.make_box]
 mm_decref Box #2 rc=0 [allocator.main]
   mm_free Box #2
-    sl_free Box #2 size=48 class=5
+    sl_free Box #2 size=48 class=4
 mm_decref Box #1 rc=0 [allocator.main]
   mm_free Box #1
-    sl_free Box #1 size=48 class=5
+    sl_free Box #1 size=48 class=4
 mm_raw_alloc #R1 size=40
-  sl_alloc size=40 class=5
+  sl_alloc size=40 class=4
 mm_raw_free #R1
-  sl_free size=48 class=5
+  sl_free size=48 class=4
 ```
 
 <!-- test: slab-two-types-two-classes -->
 <!-- MmTrace -->
-Two types with different sizes land in different size classes. Small (8 bytes user data) goes to class 5 (64), Large (40 bytes user data) goes to class 6 (96).
+Two types with different sizes land in different size classes. Small (8 bytes user data, 40 total) goes to class 4 (48), Large (40 bytes user data, 72 total) goes to class 6 (96).
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -156,26 +156,26 @@ end 'main'
 sl_init
     os_alloc size=67108864
 mm_alloc Small #1 size=8 [allocator.main]
-  sl_alloc Small #1 size=40 class=5
+  sl_alloc Small #1 size=40 class=4
 mm_incref Small #1 rc=1 [allocator.main]
 mm_alloc Large #2 size=40 [allocator.main]
   sl_alloc Large #2 size=72 class=6
 mm_incref Large #2 rc=1 [allocator.main]
 mm_decref Large #2 rc=0 [allocator.main]
   mm_free Large #2
-    sl_free Large #2 size=80 class=6
+    sl_free Large #2 size=96 class=6
 mm_decref Small #1 rc=0 [allocator.main]
   mm_free Small #1
-    sl_free Small #1 size=48 class=5
+    sl_free Small #1 size=48 class=4
 mm_raw_alloc #R1 size=40
-  sl_alloc size=40 class=5
+  sl_alloc size=40 class=4
 mm_raw_free #R1
-  sl_free size=48 class=5
+  sl_free size=48 class=4
 ```
 
 <!-- test: slab-arena-large-object -->
 <!-- MmTrace -->
-An Array with a large backing buffer (5000 i64 elements = 40000 bytes) exceeds the slab threshold (32752 bytes). The backing allocation routes to the arena-large bump path, shown as `slab_alloc size=40000 class=-1`. Arena-large allocations are not individually freed — the `slab_free size=40000 class=-1` trace line confirms the no-op free path.
+An Array with a large backing buffer (5000 i64 elements = 40000 bytes) exceeds the slab threshold (32768 bytes). The backing allocation routes to the arena-large bump path, shown as `slab_alloc size=40000 class=-1`. Arena-large frees are silent no-ops — no trace is emitted on free.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
@@ -193,9 +193,9 @@ end 'main'
 sl_init
     os_alloc size=67108864
 mm_alloc __ManagedMemory_Integer #1 size=32 [allocator.main]
-  sl_alloc __ManagedMemory_Integer #1 size=64 class=6
+  sl_alloc __ManagedMemory_Integer #1 size=64 class=5
 mm_alloc IntArray #2 size=16 [allocator.main]
-  sl_alloc IntArray #2 size=48 class=5
+  sl_alloc IntArray #2 size=48 class=4
 mm_incref __ManagedMemory_Integer #1 rc=1 [allocator.main]
 mm_incref IntArray #2 rc=1 [allocator.main]
 mm_realloc __ManagedMemory_Integer #1 size=40000
@@ -204,20 +204,19 @@ mm_realloc __ManagedMemory_Integer #1 size=40000
 mm_decref IntArray #2 rc=0 [allocator.main]
   mm_decref __ManagedMemory_Integer #1 rc=0 [~IntArray]
     mm_raw_free #R1
-      sl_free size=40000 class=-1
     mm_free __ManagedMemory_Integer #1
-      sl_free __ManagedMemory_Integer #1 size=80 class=6
+      sl_free __ManagedMemory_Integer #1 size=64 class=5
   mm_free IntArray #2
-    sl_free IntArray #2 size=48 class=5
+    sl_free IntArray #2 size=48 class=4
 mm_raw_alloc #R2 size=40
-  sl_alloc size=40 class=5
+  sl_alloc size=40 class=4
 mm_raw_free #R2
-  sl_free size=48 class=5
+  sl_free size=48 class=4
 ```
 
 <!-- test: slab-span-threshold-return -->
 <!-- MmTrace -->
-Class 17 (slot size 32768) holds exactly 1 object per span. Each `reserve(4000)` allocates a 32000-byte backing buffer (32000 < 32768), filling one span. After the first span is freed, the threshold return sends it back to mcentral. The second allocation reuses it — only one `os_alloc size=67108864` appears even though two class-17 spans are allocated and freed.
+Class 17 (slot size 32768) holds exactly 1 object per span. Each `reserve(4000)` allocates a 32000-byte backing buffer (32000 <= 32768), filling one span. After the first span is freed, the threshold return sends it back to mcentral. The second allocation reuses it — only one `os_alloc size=67108864` appears even though two class-17 spans are allocated and freed.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
@@ -241,9 +240,9 @@ end 'main'
 sl_init
     os_alloc size=67108864
 mm_alloc __ManagedMemory_Integer #1 size=32 [allocator.alloc_large]
-  sl_alloc __ManagedMemory_Integer #1 size=64 class=6
+  sl_alloc __ManagedMemory_Integer #1 size=64 class=5
 mm_alloc IntArray #2 size=16 [allocator.alloc_large]
-  sl_alloc IntArray #2 size=48 class=5
+  sl_alloc IntArray #2 size=48 class=4
 mm_incref __ManagedMemory_Integer #1 rc=1 [allocator.alloc_large]
 mm_incref IntArray #2 rc=1 [allocator.alloc_large]
 mm_realloc __ManagedMemory_Integer #1 size=32000
@@ -251,9 +250,9 @@ mm_realloc __ManagedMemory_Integer #1 size=32000
     sl_alloc size=32000 class=17
 mm_transfer IntArray #2 rc=1 [allocator.alloc_large]
 mm_alloc __ManagedMemory_Integer #3 size=32 [allocator.alloc_large]
-  sl_alloc __ManagedMemory_Integer #3 size=64 class=6
+  sl_alloc __ManagedMemory_Integer #3 size=64 class=5
 mm_alloc IntArray #4 size=16 [allocator.alloc_large]
-  sl_alloc IntArray #4 size=48 class=5
+  sl_alloc IntArray #4 size=48 class=4
 mm_incref __ManagedMemory_Integer #3 rc=1 [allocator.alloc_large]
 mm_incref IntArray #4 rc=1 [allocator.alloc_large]
 mm_realloc __ManagedMemory_Integer #3 size=32000
@@ -263,28 +262,28 @@ mm_transfer IntArray #4 rc=1 [allocator.alloc_large]
 mm_decref IntArray #4 rc=0 [allocator.main]
   mm_decref __ManagedMemory_Integer #3 rc=0 [~IntArray]
     mm_raw_free #R2
-      sl_free size=32752 class=17
+      sl_free size=32768 class=17
     mm_free __ManagedMemory_Integer #3
-      sl_free __ManagedMemory_Integer #3 size=80 class=6
+      sl_free __ManagedMemory_Integer #3 size=64 class=5
   mm_free IntArray #4
-    sl_free IntArray #4 size=48 class=5
+    sl_free IntArray #4 size=48 class=4
 mm_decref IntArray #2 rc=0 [allocator.main]
   mm_decref __ManagedMemory_Integer #1 rc=0 [~IntArray]
     mm_raw_free #R1
-      sl_free size=32752 class=17
+      sl_free size=32768 class=17
     mm_free __ManagedMemory_Integer #1
-      sl_free __ManagedMemory_Integer #1 size=80 class=6
+      sl_free __ManagedMemory_Integer #1 size=64 class=5
   mm_free IntArray #2
-    sl_free IntArray #2 size=48 class=5
+    sl_free IntArray #2 size=48 class=4
 mm_raw_alloc #R3 size=40
-  sl_alloc size=40 class=5
+  sl_alloc size=40 class=4
 mm_raw_free #R3
-  sl_free size=48 class=5
+  sl_free size=48 class=4
 ```
 
 <!-- test: slab-class-boundary-exact -->
 <!-- MmTrace -->
-A struct with exactly 2 `Integer` fields (16 bytes user data) needs `16 + 32 + 16 = 64` bytes — exactly the class 5 slot size (64), so it routes to class 5. A struct with 3 fields (24 bytes user data) needs `24 + 32 + 16 = 72` bytes — exceeds class 5, routes to class 6 (96 bytes). Verifies the `>=` boundary in the class routing loop.
+A struct with exactly 2 `Integer` fields (16 bytes user data) needs `16 + 32 = 48` bytes — exactly the class 4 slot size (48), so it routes to class 4. A struct with 3 fields (24 bytes user data) needs `24 + 32 = 56` bytes — exceeds class 4, routes to class 5 (64 bytes). Verifies the `>=` boundary in the class routing loop.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -312,26 +311,26 @@ end 'main'
 sl_init
     os_alloc size=67108864
 mm_alloc TwoField #1 size=16 [allocator.main]
-  sl_alloc TwoField #1 size=48 class=5
+  sl_alloc TwoField #1 size=48 class=4
 mm_incref TwoField #1 rc=1 [allocator.main]
 mm_alloc ThreeField #2 size=24 [allocator.main]
-  sl_alloc ThreeField #2 size=56 class=6
+  sl_alloc ThreeField #2 size=56 class=5
 mm_incref ThreeField #2 rc=1 [allocator.main]
 mm_decref ThreeField #2 rc=0 [allocator.main]
   mm_free ThreeField #2
-    sl_free ThreeField #2 size=80 class=6
+    sl_free ThreeField #2 size=64 class=5
 mm_decref TwoField #1 rc=0 [allocator.main]
   mm_free TwoField #1
-    sl_free TwoField #1 size=48 class=5
+    sl_free TwoField #1 size=48 class=4
 mm_raw_alloc #R1 size=40
-  sl_alloc size=40 class=5
+  sl_alloc size=40 class=4
 mm_raw_free #R1
-  sl_free size=48 class=5
+  sl_free size=48 class=4
 ```
 
 <!-- test: slab-mixed-allocation-tiers -->
 <!-- MmTrace -->
-A single program exercises all three allocation tiers: a small struct routes to the slab (class 5), a medium array (5000 elements = 40000 bytes) routes to the arena-large bump path (class=-1), and a huge array (10485760 elements = 80MB) routes to OS-direct (class=-1 with `os_alloc`/`os_free`). All three tiers coexist and clean up correctly.
+A single program exercises all three allocation tiers: a small struct routes to the slab (class 4), a medium array (5000 elements = 40000 bytes) routes to the arena-large bump path (class=-1), and a huge array (10485760 elements = 80MB) routes to OS-direct (class=-1 with `os_alloc`/`os_free`). All three tiers coexist and clean up correctly.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
@@ -356,56 +355,55 @@ end 'main'
 sl_init
     os_alloc size=67108864
 mm_alloc Tag #1 size=8 [allocator.main]
-  sl_alloc Tag #1 size=40 class=5
+  sl_alloc Tag #1 size=40 class=4
 mm_incref Tag #1 rc=1 [allocator.main]
 mm_alloc __ManagedMemory_Integer #2 size=32 [allocator.main]
-  sl_alloc __ManagedMemory_Integer #2 size=64 class=6
+  sl_alloc __ManagedMemory_Integer #2 size=64 class=5
 mm_alloc IntArray #3 size=16 [allocator.main]
-  sl_alloc IntArray #3 size=48 class=5
+  sl_alloc IntArray #3 size=48 class=4
 mm_incref __ManagedMemory_Integer #2 rc=1 [allocator.main]
 mm_incref IntArray #3 rc=1 [allocator.main]
 mm_realloc __ManagedMemory_Integer #2 size=40000
   mm_raw_alloc #R1 size=40000 [realloc]
     sl_alloc size=40000 class=-1
 mm_alloc __ManagedMemory_Integer #4 size=32 [allocator.main]
-  sl_alloc __ManagedMemory_Integer #4 size=64 class=6
+  sl_alloc __ManagedMemory_Integer #4 size=64 class=5
 mm_alloc IntArray #5 size=16 [allocator.main]
-  sl_alloc IntArray #5 size=48 class=5
+  sl_alloc IntArray #5 size=48 class=4
 mm_incref __ManagedMemory_Integer #4 rc=1 [allocator.main]
 mm_incref IntArray #5 rc=1 [allocator.main]
 mm_realloc __ManagedMemory_Integer #4 size=83886080
   mm_raw_alloc #R2 size=83886080 [realloc]
     sl_alloc size=83886080 class=-1
-      os_alloc size=83886096
+      os_alloc size=83886080
 mm_decref IntArray #5 rc=0 [allocator.main]
   mm_decref __ManagedMemory_Integer #4 rc=0 [~IntArray]
     mm_raw_free #R2
       sl_free size=83886080 class=-1
-        os_free size=83886096
+        os_free size=83886080
     mm_free __ManagedMemory_Integer #4
-      sl_free __ManagedMemory_Integer #4 size=80 class=6
+      sl_free __ManagedMemory_Integer #4 size=64 class=5
   mm_free IntArray #5
-    sl_free IntArray #5 size=48 class=5
+    sl_free IntArray #5 size=48 class=4
 mm_decref IntArray #3 rc=0 [allocator.main]
   mm_decref __ManagedMemory_Integer #2 rc=0 [~IntArray]
     mm_raw_free #R1
-      sl_free size=40000 class=-1
     mm_free __ManagedMemory_Integer #2
-      sl_free __ManagedMemory_Integer #2 size=80 class=6
+      sl_free __ManagedMemory_Integer #2 size=64 class=5
   mm_free IntArray #3
-    sl_free IntArray #3 size=48 class=5
+    sl_free IntArray #3 size=48 class=4
 mm_decref Tag #1 rc=0 [allocator.main]
   mm_free Tag #1
-    sl_free Tag #1 size=48 class=5
+    sl_free Tag #1 size=48 class=4
 mm_raw_alloc #R3 size=40
-  sl_alloc size=40 class=5
+  sl_alloc size=40 class=4
 mm_raw_free #R3
-  sl_free size=48 class=5
+  sl_free size=48 class=4
 ```
 
 <!-- test: slab-os-direct-huge-object -->
 <!-- MmTrace -->
-An allocation exceeding the 64MB arena size routes to the OS-direct path. `reserve(10485760)` = 80MB of i64 elements, allocated directly via `VirtualAlloc` and freed via `VirtualFree` on scope exit (`os_free size=83886096` = 80MB + 16-byte slab header). Unlike arena-large objects, OS-direct allocations are individually freed.
+An allocation exceeding the 64MB arena size routes to the OS-direct path. `reserve(10485760)` = 80MB of i64 elements, allocated directly via `VirtualAlloc` and freed via `VirtualFree` on scope exit (`os_free size=83886080`). Unlike arena-large objects, OS-direct allocations are individually freed.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
@@ -423,26 +421,41 @@ end 'main'
 sl_init
     os_alloc size=67108864
 mm_alloc __ManagedMemory_Integer #1 size=32 [allocator.main]
-  sl_alloc __ManagedMemory_Integer #1 size=64 class=6
+  sl_alloc __ManagedMemory_Integer #1 size=64 class=5
 mm_alloc IntArray #2 size=16 [allocator.main]
-  sl_alloc IntArray #2 size=48 class=5
+  sl_alloc IntArray #2 size=48 class=4
 mm_incref __ManagedMemory_Integer #1 rc=1 [allocator.main]
 mm_incref IntArray #2 rc=1 [allocator.main]
 mm_realloc __ManagedMemory_Integer #1 size=83886080
   mm_raw_alloc #R1 size=83886080 [realloc]
     sl_alloc size=83886080 class=-1
-      os_alloc size=83886096
+      os_alloc size=83886080
 mm_decref IntArray #2 rc=0 [allocator.main]
   mm_decref __ManagedMemory_Integer #1 rc=0 [~IntArray]
     mm_raw_free #R1
       sl_free size=83886080 class=-1
-        os_free size=83886096
+        os_free size=83886080
     mm_free __ManagedMemory_Integer #1
-      sl_free __ManagedMemory_Integer #1 size=80 class=6
+      sl_free __ManagedMemory_Integer #1 size=64 class=5
   mm_free IntArray #2
-    sl_free IntArray #2 size=48 class=5
+    sl_free IntArray #2 size=48 class=4
 mm_raw_alloc #R2 size=40
-  sl_alloc size=40 class=5
+  sl_alloc size=40 class=4
 mm_raw_free #R2
-  sl_free size=48 class=5
+  sl_free size=48 class=4
+```
+
+<!-- test: slab-string-array-push -->
+A StringArray push triggers a realloc of the backing buffer. Managed String pointers in the buffer must survive the realloc without corruption.
+```maxon
+typealias StringArray = Array with String
+
+function main() returns ExitCode
+  var arr = StringArray{}
+  arr.push("hello")
+  return 0
+end 'main'
+```
+```exitcode
+0
 ```
