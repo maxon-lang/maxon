@@ -1,11 +1,13 @@
-// Test: slab-arena-large-object
+// Test: slab-os-direct-multiple
 typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
 function main() returns ExitCode
-  var arr = IntArray{}
-  arr.reserve(5000)
-  return arr.count()
+  var huge1 = IntArray{}
+  huge1.reserve(10485760)
+  var huge2 = IntArray{}
+  huge2.reserve(10485760)
+  return huge1.count() + huge2.count()
 end 'main'
 ---
 MmTrace: true
@@ -19,27 +21,49 @@ mm_alloc IntArray #2 size=16 [allocator.main]
   sl_alloc IntArray #2 size=48 class=4
 mm_incref __ManagedMemory_Integer #1 rc=1 [allocator.main]
 mm_incref IntArray #2 rc=1 [allocator.main]
-mm_realloc __ManagedMemory_Integer #1 size=40000
-  mm_raw_alloc #R1 size=40000 [realloc]
-    sl_alloc size=40000 class=-1
+mm_realloc __ManagedMemory_Integer #1 size=83886080
+  mm_raw_alloc #R1 size=83886080 [realloc]
+    sl_alloc size=83886080 class=-1
+      os_alloc size=83886080
+    os_alloc size=4096
+mm_alloc __ManagedMemory_Integer #3 size=32 [allocator.main]
+  sl_alloc __ManagedMemory_Integer #3 size=64 class=5
+mm_alloc IntArray #4 size=16 [allocator.main]
+  sl_alloc IntArray #4 size=48 class=4
+mm_incref __ManagedMemory_Integer #3 rc=1 [allocator.main]
+mm_incref IntArray #4 rc=1 [allocator.main]
+mm_realloc __ManagedMemory_Integer #3 size=83886080
+  mm_raw_alloc #R2 size=83886080 [realloc]
+    sl_alloc size=83886080 class=-1
+      os_alloc size=83886080
+mm_decref IntArray #4 rc=0 [allocator.main]
+  mm_decref __ManagedMemory_Integer #3 rc=0 [~IntArray]
+    mm_raw_free #R2
+      sl_free size=83886080 class=-1
+        os_free size=83886080
+    mm_free __ManagedMemory_Integer #3
+      sl_free __ManagedMemory_Integer #3 size=64 class=5
+  mm_free IntArray #4
+    sl_free IntArray #4 size=48 class=4
 mm_decref IntArray #2 rc=0 [allocator.main]
   mm_decref __ManagedMemory_Integer #1 rc=0 [~IntArray]
     mm_raw_free #R1
-      sl_free size=40960 class=-1
+      sl_free size=83886080 class=-1
+        os_free size=83886080
     mm_free __ManagedMemory_Integer #1
       sl_free __ManagedMemory_Integer #1 size=64 class=5
   mm_free IntArray #2
     sl_free IntArray #2 size=48 class=4
-mm_raw_alloc #R2 size=40
+mm_raw_alloc #R3 size=40
   sl_alloc size=40 class=4
-mm_raw_free #R2
+mm_raw_free #R3
   sl_free size=48 class=4
 ```
 ---
 module {
   func @allocator.main() -> u32 {
   entry:
-    x86.prologue stack_size=32
+    x86.prologue stack_size=48
     x86.xor rax, rax
     x86.xor rcx, rcx
     x86.xor rdx, rdx
@@ -92,35 +116,100 @@ module {
     x86.call mm_incref
     x86.mov rax, [rbp-16]
     x86.mov rcx, [rbp-16]
-    x86.mov rdx, 5000
+    x86.mov rdx, 10485760
+    x86.call IntArray.reserve
+    x86.xor rax, rax
+    x86.xor rcx, rcx
+    x86.xor rdx, rdx
+    x86.xor rbx, rbx
+    x86.mov rsi, 8
+    x86.lea_func rdi, [__destruct___ManagedMemory_Integer]
+    x86.mov r8, rdi
+    x86.mov rdx, r8
+    x86.mov rcx, 32
+    x86.mov r8, 1
+    x86.call mm_alloc
+    x86.mov [rbp-24], rax
+    x86.mov rax, [rbp-24]
+    x86.xor rcx, rcx
+    x86.mov [rax+0], rcx
+    x86.mov rax, [rbp-24]
+    x86.xor rcx, rcx
+    x86.mov [rax+8], rcx
+    x86.mov rax, [rbp-24]
+    x86.xor rcx, rcx
+    x86.mov [rax+16], rcx
+    x86.mov rax, [rbp-24]
+    x86.mov rcx, 8
+    x86.mov [rax+24], rcx
+    x86.mov rax, [rbp-24]
+    x86.mov rcx, [rax+24]
+    x86.lea_symdata rax, [__mm_panic_element_size_zero]
+    x86.mov rdx, rax
+    x86.mov r8, rdx
+    x86.mov rdx, rcx
+    x86.xor rcx, rcx
+    x86.call maxon_bounds_check
+    x86.lea_func rax, [__destruct_IntArray]
+    x86.mov rcx, rax
+    x86.mov rdx, rcx
+    x86.mov rcx, 16
+    x86.mov r8, 2
+    x86.call mm_alloc
+    x86.mov [rbp-32], rax
+    x86.mov rax, [rbp-32]
+    x86.xor rcx, rcx
+    x86.mov [rax+0], rcx
+    x86.mov rax, [rbp-24]
+    x86.mov rcx, [rbp-32]
+    x86.mov [rcx+8], rax
+    x86.mov rcx, [rbp-24]
+    x86.call mm_incref
+    x86.mov rax, [rbp-32]
+    x86.mov rcx, [rbp-32]
+    x86.call mm_incref
+    x86.mov rax, [rbp-32]
+    x86.mov rcx, [rbp-32]
+    x86.mov rdx, 10485760
     x86.call IntArray.reserve
     x86.mov rax, [rbp-16]
     x86.mov rcx, [rbp-16]
     x86.call IntArray.count
-    x86.mov [rbp-24], rax
-    x86.xor rcx, rcx
-    x86.cmp rax, rcx
-    x86.setl rcx
-    x86.movzx rcx, rcxb
-    x86.mov rdx, 4294967295
-    x86.cmp rax, rdx
-    x86.setg rax
+    x86.mov rcx, [rbp-32]
+    x86.mov [rbp-48], rax
+    x86.call IntArray.count
+    x86.mov rcx, [rbp-48]
+    x86.add rcx, rax
+    x86.mov [rbp-40], rcx
+    x86.xor rax, rax
+    x86.cmp rcx, rax
+    x86.setl rax
     x86.movzx rax, raxb
-    x86.or rcx, rax
-    x86.test rcx, rcx
+    x86.mov rdx, 4294967295
+    x86.cmp rcx, rdx
+    x86.setg rcx
+    x86.movzx rcx, rcxb
+    x86.or rax, rcx
+    x86.test rax, rax
     x86.je allocator.main.__range_ok_0
   __range_panic_0:
-    x86.lea_symdata rax, [__panic_msg_15]
+    x86.lea_symdata rax, [__panic_msg_26]
     x86.mov rcx, rax
     x86.call maxon_panic
   __range_ok_0:
-    x86.mov rax, [rbp-24]
-    x86.mov rcx, [rbp-16]
+    x86.mov rax, [rbp-40]
+    x86.mov rcx, [rbp-32]
     x86.test rcx, rcx
     x86.jz __nonnull_skip_0
     x86.call mm_decref
     x86.label __nonnull_skip_0
-    x86.mov rax, [rbp-24]
+    x86.mov rax, [rbp-16]
+    x86.test rax, rax
+    x86.jz __nonnull_skip_1
+    x86.mov rcx, [rbp-16]
+    x86.call mm_decref
+    x86.label __nonnull_skip_1
+    x86.mov rax, [rbp-40]
     x86.epilogue
     x86.ret
   }
@@ -152,9 +241,9 @@ module {
     x86.mov rcx, [rax+8]
     x86.mov [rbp-16], rcx
     x86.test rcx, rcx
-    x86.jz __nonnull_skip_1
+    x86.jz __nonnull_skip_2
     x86.call mm_decref
-    x86.label __nonnull_skip_1
+    x86.label __nonnull_skip_2
     x86.jmp __destruct_IntArray.done
   done:
     x86.epilogue

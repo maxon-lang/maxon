@@ -694,6 +694,48 @@ case ARM64MemcpyOp:
     EmitWord(baseOpcode | (Reg(src2) << 16) | (Reg(src1) << 5) | Reg(dest));
   }
 
+  /// <summary>
+  /// Set or clear a bit in a bit string at [baseReg + offset].
+  /// bitIndex is a register containing the bit index (0-based from the base).
+  /// Uses X14, X15, X16, X17 as scratch (all caller-saved, not in VReg map).
+  /// </summary>
+  internal void EmitBitTestAndModify(ARM64Register baseReg, int offset, ARM64Register bitIndex, bool clear) {
+    // Compute qword address: X16 = baseReg + offset + (bitIndex >> 6) * 8
+    // LSR X16, bitIndex, #6
+    EmitWord(0xD340FC00 | (6u << 16) | (Reg(bitIndex) << 5) | Reg(ARM64Register.X16));
+    // LSL X16, X16, #3
+    var immr_lsl3 = (uint)((64 - 3) & 63); // 61
+    var imms_lsl3 = (uint)((63 - 3) & 63); // 60
+    EmitWord(0xD3400000 | (immr_lsl3 << 16) | (imms_lsl3 << 10) | (Reg(ARM64Register.X16) << 5) | Reg(ARM64Register.X16));
+    // ADD X16, baseReg, X16
+    EmitAluRegReg(0x8B000000, ARM64Register.X16, baseReg, ARM64Register.X16);
+    // ADD X16, X16, #offset (offset is ArenaMetaOffBitmap = 0x10, fits in imm12)
+    EmitAddSubImm(ARM64Register.X16, ARM64Register.X16, offset, true);
+
+    // Load qword: X17 = [X16]
+    EmitLoadIndirect(ARM64Register.X17, ARM64Register.X16, 0, 8);
+
+    // Compute bit position within qword: X15 = bitIndex & 63
+    // AND X15, bitIndex, #0x3F (logical immediate: N=1, immr=0, imms=5)
+    EmitWord(0x92401400u | (Reg(bitIndex) << 5) | Reg(ARM64Register.X15));
+
+    // Compute mask: X14 = 1 << X15
+    EmitMovRegImm(ARM64Register.X14, 1);
+    // LSLV X14, X14, X15
+    EmitWord(0x9AC02000 | (Reg(ARM64Register.X15) << 16) | (Reg(ARM64Register.X14) << 5) | Reg(ARM64Register.X14));
+
+    if (clear) {
+      // BIC X17, X17, X14 (clear bit)
+      EmitWord(0x8A200000 | (Reg(ARM64Register.X14) << 16) | (Reg(ARM64Register.X17) << 5) | Reg(ARM64Register.X17));
+    } else {
+      // ORR X17, X17, X14 (set bit)
+      EmitAluRegReg(0xAA000000, ARM64Register.X17, ARM64Register.X17, ARM64Register.X14);
+    }
+
+    // Store back: [X16] = X17
+    EmitStoreIndirect(ARM64Register.X16, 0, ARM64Register.X17, 8);
+  }
+
   private void EmitAddSubImm(ARM64Register dest, ARM64Register src, long immediate, bool isAdd) {
     if (immediate >= 0 && immediate < 4096) {
       var opcode = isAdd ? 0x91000000u : 0xD1000000u;

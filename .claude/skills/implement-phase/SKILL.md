@@ -24,7 +24,7 @@ By default spec tests will only show the name of failing tests, but you can use 
     - Ensure comments explain "why" not "what".
     - typealias should describe its purpose, not its type
     - typed ranges should be as specific as possible, e.g. `int(0 to 100)` instead of `int(0 to u64.max)`. Carefully consider the valid range for each type and use the narrowest possible range to catch errors. Max range is fine if there is no clear limit (ie line numbers)
-8. Write a git commit message for these changes.
+8. Write a git commit message
 
 ## Guidelines
 - Read existing spec files and compiler code for similar features to follow established patterns.

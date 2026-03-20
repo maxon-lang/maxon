@@ -33,7 +33,7 @@ end 'main'
 ```
 ```stderr
 sl_init
-    os_alloc size=67108864
+  os_alloc size=67108864
 mm_alloc Point #1 size=16 [allocator.main]
   sl_alloc Point #1 size=48 class=4
 mm_incref Point #1 rc=1 [allocator.main]
@@ -66,7 +66,7 @@ end 'main'
 ```
 ```stderr
 sl_init
-    os_alloc size=67108864
+  os_alloc size=67108864
 mm_alloc Tiny #1 size=8 [allocator.main]
   sl_alloc Tiny #1 size=40 class=4
 mm_incref Tiny #1 rc=1 [allocator.main]
@@ -104,7 +104,7 @@ end 'main'
 ```
 ```stderr
 sl_init
-    os_alloc size=67108864
+  os_alloc size=67108864
 mm_alloc Box #1 size=8 [allocator.make_box]
   sl_alloc Box #1 size=40 class=4
 mm_incref Box #1 rc=1 [allocator.make_box]
@@ -154,7 +154,7 @@ end 'main'
 ```
 ```stderr
 sl_init
-    os_alloc size=67108864
+  os_alloc size=67108864
 mm_alloc Small #1 size=8 [allocator.main]
   sl_alloc Small #1 size=40 class=4
 mm_incref Small #1 rc=1 [allocator.main]
@@ -191,7 +191,7 @@ end 'main'
 ```
 ```stderr
 sl_init
-    os_alloc size=67108864
+  os_alloc size=67108864
 mm_alloc __ManagedMemory_Integer #1 size=32 [allocator.main]
   sl_alloc __ManagedMemory_Integer #1 size=64 class=5
 mm_alloc IntArray #2 size=16 [allocator.main]
@@ -204,6 +204,7 @@ mm_realloc __ManagedMemory_Integer #1 size=40000
 mm_decref IntArray #2 rc=0 [allocator.main]
   mm_decref __ManagedMemory_Integer #1 rc=0 [~IntArray]
     mm_raw_free #R1
+      sl_free size=40960 class=-1
     mm_free __ManagedMemory_Integer #1
       sl_free __ManagedMemory_Integer #1 size=64 class=5
   mm_free IntArray #2
@@ -238,7 +239,7 @@ end 'main'
 ```
 ```stderr
 sl_init
-    os_alloc size=67108864
+  os_alloc size=67108864
 mm_alloc __ManagedMemory_Integer #1 size=32 [allocator.alloc_large]
   sl_alloc __ManagedMemory_Integer #1 size=64 class=5
 mm_alloc IntArray #2 size=16 [allocator.alloc_large]
@@ -309,7 +310,7 @@ end 'main'
 ```
 ```stderr
 sl_init
-    os_alloc size=67108864
+  os_alloc size=67108864
 mm_alloc TwoField #1 size=16 [allocator.main]
   sl_alloc TwoField #1 size=48 class=4
 mm_incref TwoField #1 rc=1 [allocator.main]
@@ -353,7 +354,7 @@ end 'main'
 ```
 ```stderr
 sl_init
-    os_alloc size=67108864
+  os_alloc size=67108864
 mm_alloc Tag #1 size=8 [allocator.main]
   sl_alloc Tag #1 size=40 class=4
 mm_incref Tag #1 rc=1 [allocator.main]
@@ -376,6 +377,7 @@ mm_realloc __ManagedMemory_Integer #4 size=83886080
   mm_raw_alloc #R2 size=83886080 [realloc]
     sl_alloc size=83886080 class=-1
       os_alloc size=83886080
+    os_alloc size=4096
 mm_decref IntArray #5 rc=0 [allocator.main]
   mm_decref __ManagedMemory_Integer #4 rc=0 [~IntArray]
     mm_raw_free #R2
@@ -388,6 +390,7 @@ mm_decref IntArray #5 rc=0 [allocator.main]
 mm_decref IntArray #3 rc=0 [allocator.main]
   mm_decref __ManagedMemory_Integer #2 rc=0 [~IntArray]
     mm_raw_free #R1
+      sl_free size=40960 class=-1
     mm_free __ManagedMemory_Integer #2
       sl_free __ManagedMemory_Integer #2 size=64 class=5
   mm_free IntArray #3
@@ -419,7 +422,7 @@ end 'main'
 ```
 ```stderr
 sl_init
-    os_alloc size=67108864
+  os_alloc size=67108864
 mm_alloc __ManagedMemory_Integer #1 size=32 [allocator.main]
   sl_alloc __ManagedMemory_Integer #1 size=64 class=5
 mm_alloc IntArray #2 size=16 [allocator.main]
@@ -430,6 +433,7 @@ mm_realloc __ManagedMemory_Integer #1 size=83886080
   mm_raw_alloc #R1 size=83886080 [realloc]
     sl_alloc size=83886080 class=-1
       os_alloc size=83886080
+    os_alloc size=4096
 mm_decref IntArray #2 rc=0 [allocator.main]
   mm_decref __ManagedMemory_Integer #1 rc=0 [~IntArray]
     mm_raw_free #R1
@@ -442,6 +446,382 @@ mm_decref IntArray #2 rc=0 [allocator.main]
 mm_raw_alloc #R2 size=40
   sl_alloc size=40 class=4
 mm_raw_free #R2
+  sl_free size=48 class=4
+```
+
+<!-- test: slab-arena-large-chunk-reuse -->
+<!-- MmTrace -->
+Arena-large allocations are now freeable. When a 40000-byte backing buffer is freed, its bitmap chunks are returned. A second `reserve(5000)` reuses those chunks — no new `os_alloc` appears. Both allocations show `class=-1` and both frees show `sl_free ... class=-1`.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
+
+function alloc_medium() returns IntArray
+  var arr = IntArray{}
+  arr.reserve(5000)
+  return arr
+end 'alloc_medium'
+
+function main() returns ExitCode
+  var a = alloc_medium()
+  var b = alloc_medium()
+  return a.count() + b.count()
+end 'main'
+```
+```exitcode
+0
+```
+```stderr
+sl_init
+  os_alloc size=67108864
+mm_alloc __ManagedMemory_Integer #1 size=32 [allocator.alloc_medium]
+  sl_alloc __ManagedMemory_Integer #1 size=64 class=5
+mm_alloc IntArray #2 size=16 [allocator.alloc_medium]
+  sl_alloc IntArray #2 size=48 class=4
+mm_incref __ManagedMemory_Integer #1 rc=1 [allocator.alloc_medium]
+mm_incref IntArray #2 rc=1 [allocator.alloc_medium]
+mm_realloc __ManagedMemory_Integer #1 size=40000
+  mm_raw_alloc #R1 size=40000 [realloc]
+    sl_alloc size=40000 class=-1
+mm_transfer IntArray #2 rc=1 [allocator.alloc_medium]
+mm_alloc __ManagedMemory_Integer #3 size=32 [allocator.alloc_medium]
+  sl_alloc __ManagedMemory_Integer #3 size=64 class=5
+mm_alloc IntArray #4 size=16 [allocator.alloc_medium]
+  sl_alloc IntArray #4 size=48 class=4
+mm_incref __ManagedMemory_Integer #3 rc=1 [allocator.alloc_medium]
+mm_incref IntArray #4 rc=1 [allocator.alloc_medium]
+mm_realloc __ManagedMemory_Integer #3 size=40000
+  mm_raw_alloc #R2 size=40000 [realloc]
+    sl_alloc size=40000 class=-1
+mm_transfer IntArray #4 rc=1 [allocator.alloc_medium]
+mm_decref IntArray #4 rc=0 [allocator.main]
+  mm_decref __ManagedMemory_Integer #3 rc=0 [~IntArray]
+    mm_raw_free #R2
+      sl_free size=40960 class=-1
+    mm_free __ManagedMemory_Integer #3
+      sl_free __ManagedMemory_Integer #3 size=64 class=5
+  mm_free IntArray #4
+    sl_free IntArray #4 size=48 class=4
+mm_decref IntArray #2 rc=0 [allocator.main]
+  mm_decref __ManagedMemory_Integer #1 rc=0 [~IntArray]
+    mm_raw_free #R1
+      sl_free size=40960 class=-1
+    mm_free __ManagedMemory_Integer #1
+      sl_free __ManagedMemory_Integer #1 size=64 class=5
+  mm_free IntArray #2
+    sl_free IntArray #2 size=48 class=4
+mm_raw_alloc #R3 size=40
+  sl_alloc size=40 class=4
+mm_raw_free #R3
+  sl_free size=48 class=4
+```
+
+<!-- test: slab-arena-large-sequential-reuse -->
+<!-- MmTrace -->
+Two arena-large arrays allocated and freed sequentially. The first is fully freed before the second is allocated, proving chunks are reused. Only one `os_alloc size=67108864` should appear.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
+
+function use_medium() returns Integer
+  var arr = IntArray{}
+  arr.reserve(5000)
+  return arr.count()
+end 'use_medium'
+
+function main() returns ExitCode
+  var x = use_medium()
+  var y = use_medium()
+  return x + y
+end 'main'
+```
+```exitcode
+0
+```
+```stderr
+sl_init
+  os_alloc size=67108864
+mm_alloc __ManagedMemory_Integer #1 size=32 [allocator.use_medium]
+  sl_alloc __ManagedMemory_Integer #1 size=64 class=5
+mm_alloc IntArray #2 size=16 [allocator.use_medium]
+  sl_alloc IntArray #2 size=48 class=4
+mm_incref __ManagedMemory_Integer #1 rc=1 [allocator.use_medium]
+mm_incref IntArray #2 rc=1 [allocator.use_medium]
+mm_realloc __ManagedMemory_Integer #1 size=40000
+  mm_raw_alloc #R1 size=40000 [realloc]
+    sl_alloc size=40000 class=-1
+mm_decref IntArray #2 rc=0 [allocator.use_medium]
+  mm_decref __ManagedMemory_Integer #1 rc=0 [~IntArray]
+    mm_raw_free #R1
+      sl_free size=40960 class=-1
+    mm_free __ManagedMemory_Integer #1
+      sl_free __ManagedMemory_Integer #1 size=64 class=5
+  mm_free IntArray #2
+    sl_free IntArray #2 size=48 class=4
+mm_alloc __ManagedMemory_Integer #3 size=32 [allocator.use_medium]
+  sl_alloc __ManagedMemory_Integer #3 size=64 class=5
+mm_alloc IntArray #4 size=16 [allocator.use_medium]
+  sl_alloc IntArray #4 size=48 class=4
+mm_incref __ManagedMemory_Integer #3 rc=1 [allocator.use_medium]
+mm_incref IntArray #4 rc=1 [allocator.use_medium]
+mm_realloc __ManagedMemory_Integer #3 size=40000
+  mm_raw_alloc #R2 size=40000 [realloc]
+    sl_alloc size=40000 class=-1
+mm_decref IntArray #4 rc=0 [allocator.use_medium]
+  mm_decref __ManagedMemory_Integer #3 rc=0 [~IntArray]
+    mm_raw_free #R2
+      sl_free size=40960 class=-1
+    mm_free __ManagedMemory_Integer #3
+      sl_free __ManagedMemory_Integer #3 size=64 class=5
+  mm_free IntArray #4
+    sl_free IntArray #4 size=48 class=4
+mm_raw_alloc #R3 size=40
+  sl_alloc size=40 class=4
+mm_raw_free #R3
+  sl_free size=48 class=4
+```
+
+<!-- test: slab-os-direct-multiple -->
+<!-- MmTrace -->
+Two OS-direct allocations (>64MB each) coexist and are freed independently. Both show `os_alloc` and `os_free` in the trace. The dynamic tracking array handles multiple entries correctly.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
+
+function main() returns ExitCode
+  var huge1 = IntArray{}
+  huge1.reserve(10485760)
+  var huge2 = IntArray{}
+  huge2.reserve(10485760)
+  return huge1.count() + huge2.count()
+end 'main'
+```
+```exitcode
+0
+```
+```stderr
+sl_init
+  os_alloc size=67108864
+mm_alloc __ManagedMemory_Integer #1 size=32 [allocator.main]
+  sl_alloc __ManagedMemory_Integer #1 size=64 class=5
+mm_alloc IntArray #2 size=16 [allocator.main]
+  sl_alloc IntArray #2 size=48 class=4
+mm_incref __ManagedMemory_Integer #1 rc=1 [allocator.main]
+mm_incref IntArray #2 rc=1 [allocator.main]
+mm_realloc __ManagedMemory_Integer #1 size=83886080
+  mm_raw_alloc #R1 size=83886080 [realloc]
+    sl_alloc size=83886080 class=-1
+      os_alloc size=83886080
+    os_alloc size=4096
+mm_alloc __ManagedMemory_Integer #3 size=32 [allocator.main]
+  sl_alloc __ManagedMemory_Integer #3 size=64 class=5
+mm_alloc IntArray #4 size=16 [allocator.main]
+  sl_alloc IntArray #4 size=48 class=4
+mm_incref __ManagedMemory_Integer #3 rc=1 [allocator.main]
+mm_incref IntArray #4 rc=1 [allocator.main]
+mm_realloc __ManagedMemory_Integer #3 size=83886080
+  mm_raw_alloc #R2 size=83886080 [realloc]
+    sl_alloc size=83886080 class=-1
+      os_alloc size=83886080
+mm_decref IntArray #4 rc=0 [allocator.main]
+  mm_decref __ManagedMemory_Integer #3 rc=0 [~IntArray]
+    mm_raw_free #R2
+      sl_free size=83886080 class=-1
+        os_free size=83886080
+    mm_free __ManagedMemory_Integer #3
+      sl_free __ManagedMemory_Integer #3 size=64 class=5
+  mm_free IntArray #4
+    sl_free IntArray #4 size=48 class=4
+mm_decref IntArray #2 rc=0 [allocator.main]
+  mm_decref __ManagedMemory_Integer #1 rc=0 [~IntArray]
+    mm_raw_free #R1
+      sl_free size=83886080 class=-1
+        os_free size=83886080
+    mm_free __ManagedMemory_Integer #1
+      sl_free __ManagedMemory_Integer #1 size=64 class=5
+  mm_free IntArray #2
+    sl_free IntArray #2 size=48 class=4
+mm_raw_alloc #R3 size=40
+  sl_alloc size=40 class=4
+mm_raw_free #R3
+  sl_free size=48 class=4
+```
+
+<!-- test: slab-os-direct-sequential-reuse -->
+<!-- MmTrace -->
+Two OS-direct allocations done sequentially. The first is fully freed (VirtualFree) before the second is allocated. Both appear as separate `os_alloc`/`os_free` pairs since OS-direct memory is returned to the OS.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
+
+function use_huge() returns Integer
+  var arr = IntArray{}
+  arr.reserve(10485760)
+  return arr.count()
+end 'use_huge'
+
+function main() returns ExitCode
+  var x = use_huge()
+  var y = use_huge()
+  return x + y
+end 'main'
+```
+```exitcode
+0
+```
+```stderr
+sl_init
+  os_alloc size=67108864
+mm_alloc __ManagedMemory_Integer #1 size=32 [allocator.use_huge]
+  sl_alloc __ManagedMemory_Integer #1 size=64 class=5
+mm_alloc IntArray #2 size=16 [allocator.use_huge]
+  sl_alloc IntArray #2 size=48 class=4
+mm_incref __ManagedMemory_Integer #1 rc=1 [allocator.use_huge]
+mm_incref IntArray #2 rc=1 [allocator.use_huge]
+mm_realloc __ManagedMemory_Integer #1 size=83886080
+  mm_raw_alloc #R1 size=83886080 [realloc]
+    sl_alloc size=83886080 class=-1
+      os_alloc size=83886080
+    os_alloc size=4096
+mm_decref IntArray #2 rc=0 [allocator.use_huge]
+  mm_decref __ManagedMemory_Integer #1 rc=0 [~IntArray]
+    mm_raw_free #R1
+      sl_free size=83886080 class=-1
+        os_free size=83886080
+    mm_free __ManagedMemory_Integer #1
+      sl_free __ManagedMemory_Integer #1 size=64 class=5
+  mm_free IntArray #2
+    sl_free IntArray #2 size=48 class=4
+mm_alloc __ManagedMemory_Integer #3 size=32 [allocator.use_huge]
+  sl_alloc __ManagedMemory_Integer #3 size=64 class=5
+mm_alloc IntArray #4 size=16 [allocator.use_huge]
+  sl_alloc IntArray #4 size=48 class=4
+mm_incref __ManagedMemory_Integer #3 rc=1 [allocator.use_huge]
+mm_incref IntArray #4 rc=1 [allocator.use_huge]
+mm_realloc __ManagedMemory_Integer #3 size=83886080
+  mm_raw_alloc #R2 size=83886080 [realloc]
+    sl_alloc size=83886080 class=-1
+      os_alloc size=83886080
+mm_decref IntArray #4 rc=0 [allocator.use_huge]
+  mm_decref __ManagedMemory_Integer #3 rc=0 [~IntArray]
+    mm_raw_free #R2
+      sl_free size=83886080 class=-1
+        os_free size=83886080
+    mm_free __ManagedMemory_Integer #3
+      sl_free __ManagedMemory_Integer #3 size=64 class=5
+  mm_free IntArray #4
+    sl_free IntArray #4 size=48 class=4
+mm_raw_alloc #R3 size=40
+  sl_alloc size=40 class=4
+mm_raw_free #R3
+  sl_free size=48 class=4
+```
+
+<!-- test: slab-os-direct-sorted-array -->
+<!-- MmTrace -->
+Four concurrent OS-direct allocations exercise the sorted tracking array. The array must maintain sort order by pointer for binary search lookups. Entries are freed in LIFO order (inner scopes first), exercising removal from different positions in the sorted array.
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
+
+function main() returns ExitCode
+  var a = IntArray{}
+  a.reserve(10485760)
+  var b = IntArray{}
+  b.reserve(10485760)
+  var c = IntArray{}
+  c.reserve(10485760)
+  var d = IntArray{}
+  d.reserve(10485760)
+  return a.count() + b.count() + c.count() + d.count()
+end 'main'
+```
+```exitcode
+0
+```
+```stderr
+sl_init
+  os_alloc size=67108864
+mm_alloc __ManagedMemory_Integer #1 size=32 [allocator.main]
+  sl_alloc __ManagedMemory_Integer #1 size=64 class=5
+mm_alloc IntArray #2 size=16 [allocator.main]
+  sl_alloc IntArray #2 size=48 class=4
+mm_incref __ManagedMemory_Integer #1 rc=1 [allocator.main]
+mm_incref IntArray #2 rc=1 [allocator.main]
+mm_realloc __ManagedMemory_Integer #1 size=83886080
+  mm_raw_alloc #R1 size=83886080 [realloc]
+    sl_alloc size=83886080 class=-1
+      os_alloc size=83886080
+    os_alloc size=4096
+mm_alloc __ManagedMemory_Integer #3 size=32 [allocator.main]
+  sl_alloc __ManagedMemory_Integer #3 size=64 class=5
+mm_alloc IntArray #4 size=16 [allocator.main]
+  sl_alloc IntArray #4 size=48 class=4
+mm_incref __ManagedMemory_Integer #3 rc=1 [allocator.main]
+mm_incref IntArray #4 rc=1 [allocator.main]
+mm_realloc __ManagedMemory_Integer #3 size=83886080
+  mm_raw_alloc #R2 size=83886080 [realloc]
+    sl_alloc size=83886080 class=-1
+      os_alloc size=83886080
+mm_alloc __ManagedMemory_Integer #5 size=32 [allocator.main]
+  sl_alloc __ManagedMemory_Integer #5 size=64 class=5
+mm_alloc IntArray #6 size=16 [allocator.main]
+  sl_alloc IntArray #6 size=48 class=4
+mm_incref __ManagedMemory_Integer #5 rc=1 [allocator.main]
+mm_incref IntArray #6 rc=1 [allocator.main]
+mm_realloc __ManagedMemory_Integer #5 size=83886080
+  mm_raw_alloc #R3 size=83886080 [realloc]
+    sl_alloc size=83886080 class=-1
+      os_alloc size=83886080
+mm_alloc __ManagedMemory_Integer #7 size=32 [allocator.main]
+  sl_alloc __ManagedMemory_Integer #7 size=64 class=5
+mm_alloc IntArray #8 size=16 [allocator.main]
+  sl_alloc IntArray #8 size=48 class=4
+mm_incref __ManagedMemory_Integer #7 rc=1 [allocator.main]
+mm_incref IntArray #8 rc=1 [allocator.main]
+mm_realloc __ManagedMemory_Integer #7 size=83886080
+  mm_raw_alloc #R4 size=83886080 [realloc]
+    sl_alloc size=83886080 class=-1
+      os_alloc size=83886080
+mm_decref IntArray #8 rc=0 [allocator.main]
+  mm_decref __ManagedMemory_Integer #7 rc=0 [~IntArray]
+    mm_raw_free #R4
+      sl_free size=83886080 class=-1
+        os_free size=83886080
+    mm_free __ManagedMemory_Integer #7
+      sl_free __ManagedMemory_Integer #7 size=64 class=5
+  mm_free IntArray #8
+    sl_free IntArray #8 size=48 class=4
+mm_decref IntArray #6 rc=0 [allocator.main]
+  mm_decref __ManagedMemory_Integer #5 rc=0 [~IntArray]
+    mm_raw_free #R3
+      sl_free size=83886080 class=-1
+        os_free size=83886080
+    mm_free __ManagedMemory_Integer #5
+      sl_free __ManagedMemory_Integer #5 size=64 class=5
+  mm_free IntArray #6
+    sl_free IntArray #6 size=48 class=4
+mm_decref IntArray #4 rc=0 [allocator.main]
+  mm_decref __ManagedMemory_Integer #3 rc=0 [~IntArray]
+    mm_raw_free #R2
+      sl_free size=83886080 class=-1
+        os_free size=83886080
+    mm_free __ManagedMemory_Integer #3
+      sl_free __ManagedMemory_Integer #3 size=64 class=5
+  mm_free IntArray #4
+    sl_free IntArray #4 size=48 class=4
+mm_decref IntArray #2 rc=0 [allocator.main]
+  mm_decref __ManagedMemory_Integer #1 rc=0 [~IntArray]
+    mm_raw_free #R1
+      sl_free size=83886080 class=-1
+        os_free size=83886080
+    mm_free __ManagedMemory_Integer #1
+      sl_free __ManagedMemory_Integer #1 size=64 class=5
+  mm_free IntArray #2
+    sl_free IntArray #2 size=48 class=4
+mm_raw_alloc #R5 size=40
+  sl_alloc size=40 class=4
+mm_raw_free #R5
   sl_free size=48 class=4
 ```
 

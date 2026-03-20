@@ -156,6 +156,16 @@ public partial class ARM64CodeEmitter {
       _e.EmitWord(0xD340FC00 | ((uint)shift << 16) | (Reg(R(dest)) << 5) | Reg(R(dest)));
     }
 
+    public void ShrRegReg(VReg dest, VReg count) {
+      // LSRV Xd, Xn, Xm: 0x9AC02400 | (Rm << 16) | (Rn << 5) | Rd
+      _e.EmitWord(0x9AC02400 | (Reg(R(count)) << 16) | (Reg(R(dest)) << 5) | Reg(R(dest)));
+    }
+
+    public void ShlRegReg(VReg dest, VReg count) {
+      // LSLV Xd, Xn, Xm: 0x9AC02000 | (Rm << 16) | (Rn << 5) | Rd
+      _e.EmitWord(0x9AC02000 | (Reg(R(count)) << 16) | (Reg(R(dest)) << 5) | Reg(R(dest)));
+    }
+
     public void AndRegReg(VReg dest, VReg src) =>
       _e.EmitAluRegReg(0x8A000000, R(dest), R(dest), R(src)); // AND X
 
@@ -164,6 +174,22 @@ public partial class ARM64CodeEmitter {
 
     public void XorRegReg(VReg dest, VReg src) =>
       _e.EmitAluRegReg(0xCA000000, R(dest), R(dest), R(src)); // EOR X
+
+    // ---- Bit manipulation ----
+
+    public void BitScanForward(VReg dest, VReg src) {
+      // CTZ(x) = CLZ(RBIT(x)). Result is 64 if src==0.
+      // RBIT Xd, Xn: 0xDAC00000 | (Rn << 5) | Rd
+      _e.EmitWord(0xDAC00000 | (Reg(R(src)) << 5) | Reg(R(dest)));
+      // CLZ Xd, Xn: 0xDAC01000 | (Rn << 5) | Rd
+      _e.EmitWord(0xDAC01000 | (Reg(R(dest)) << 5) | Reg(R(dest)));
+    }
+
+    public void BitTestAndReset(VReg baseReg, int offset, VReg bitIndex) =>
+      _e.EmitBitTestAndModify(R(baseReg), offset, R(bitIndex), clear: true);
+
+    public void BitTestAndSet(VReg baseReg, int offset, VReg bitIndex) =>
+      _e.EmitBitTestAndModify(R(baseReg), offset, R(bitIndex), clear: false);
 
     // ---- Comparison & branching ----
 
@@ -358,6 +384,20 @@ public partial class ARM64CodeEmitter {
       _e.EmitMovRegReg(ARM64Register.X0, R(ptr));
       _e.EmitMovRegReg(ARM64Register.X1, R(size));
       _e.EmitCallImport("munmap");
+    }
+
+    // ---- Bulk memory ----
+
+    public void FillMemoryQwords(VReg destAddr, VReg value, VReg count) {
+      // Tight loop: STR value, [dest], #8 / SUB count, 1 / CBNZ count, loop
+      var loopLabel = $"__fill_qwords_{_e._uniqueLabelCounter++}";
+      _e.DefineLabel(loopLabel);
+      // STR Xvalue, [Xdest], #8 (post-index)
+      _e.EmitWord(0xF8008400 | (Reg(R(destAddr)) << 5) | Reg(R(value)));
+      // SUB Xcount, Xcount, #1
+      _e.EmitWord(0xD1000400u | (Reg(R(count)) << 5) | Reg(R(count)));
+      // CBNZ Xcount, loopLabel
+      _e.EmitCbnz(R(count), loopLabel);
     }
 
     // ---- Scheduler platform helpers ----

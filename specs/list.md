@@ -598,7 +598,7 @@ hello world!!!!!!!!!!!!!!
 ```
 ```stderr
 sl_init
-    os_alloc size=67108864
+  os_alloc size=67108864
 mm_alloc __ManagedList_String #1 size=32 [list.testRemove]
   sl_alloc __ManagedList_String #1 size=64 class=5
 mm_alloc StringList #2 size=16 [list.testRemove]
@@ -728,7 +728,7 @@ hello world!!!!!!!!!!!!!!
 ```
 ```stderr
 sl_init
-    os_alloc size=67108864
+  os_alloc size=67108864
 mm_alloc __ManagedList_String #1 size=32 [list.testRemove]
   sl_alloc __ManagedList_String #1 size=64 class=5
 mm_alloc StringList #2 size=16 [list.testRemove]
@@ -838,7 +838,7 @@ end 'main'
 ```
 ```stderr
 sl_init
-    os_alloc size=67108864
+  os_alloc size=67108864
 mm_alloc __ManagedList_String #1 size=32 [list.testClear]
   sl_alloc __ManagedList_String #1 size=64 class=5
 mm_alloc StringList #2 size=16 [list.testClear]
@@ -964,7 +964,7 @@ end 'main'
 ```
 ```stderr
 sl_init
-    os_alloc size=67108864
+  os_alloc size=67108864
 mm_alloc __ManagedList_String #1 size=32 [list.main]
   sl_alloc __ManagedList_String #1 size=64 class=5
 mm_alloc StringList #2 size=16 [list.main]

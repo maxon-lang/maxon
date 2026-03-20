@@ -21,7 +21,7 @@ Review the changes that have been made in the project.
     - Fix any compiler warnings
 2. Update documentation, including `LANGUAGE_REFERENCE.md` and `STDLIB_REFERENCE.md` and `QUICK_REFERENCE.md` and `BNF_SYNTAX.md` if necessary.
 3. Rebuild and run spec tests if you made any changes to the codebase, and ensure all tests pass.
-4. Write a git commit message for these changes.
+4. Write a git commit message
 
 ## Guidelines
 

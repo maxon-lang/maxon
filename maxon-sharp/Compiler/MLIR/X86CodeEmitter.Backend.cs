@@ -120,9 +120,25 @@ public partial class X86CodeEmitter {
     public void MulRegReg(VReg dest, VReg src) => _e.EmitImulRegReg(R(dest), R(src));
     public void ShlRegImm(VReg dest, int shift) => _e.EmitShlRegImm(R(dest), (byte)shift);
     public void ShrRegImm(VReg dest, int shift) => _e.EmitShrRegImm(R(dest), (byte)shift);
+    public void ShrRegReg(VReg dest, VReg count) {
+      if (R(count) != X86Register.Rcx) _e.EmitMovRegReg(X86Register.Rcx, R(count));
+      _e.EmitShrRegCl(R(dest));
+    }
+    public void ShlRegReg(VReg dest, VReg count) {
+      if (R(count) != X86Register.Rcx) _e.EmitMovRegReg(X86Register.Rcx, R(count));
+      _e.EmitShlRegCl(R(dest));
+    }
     public void AndRegReg(VReg dest, VReg src) => _e.EmitAndRegReg(R(dest), R(src));
     public void OrRegReg(VReg dest, VReg src) => _e.EmitOrRegReg(R(dest), R(src));
     public void XorRegReg(VReg dest, VReg src) => _e.EmitXorRegReg(R(dest), R(src));
+
+    // ---- Bit manipulation ----
+
+    public void BitScanForward(VReg dest, VReg src) => _e.EmitBsfRegReg(R(dest), R(src));
+    public void BitTestAndReset(VReg baseReg, int offset, VReg bitIndex) =>
+      _e.EmitBtrMemReg(R(baseReg), offset, R(bitIndex));
+    public void BitTestAndSet(VReg baseReg, int offset, VReg bitIndex) =>
+      _e.EmitBtsMemReg(R(baseReg), offset, R(bitIndex));
 
     // ---- Comparison & branching ----
 
@@ -307,6 +323,16 @@ public partial class X86CodeEmitter {
       _e.EmitXorRegReg(X86Register.Rdx, X86Register.Rdx); // dwSize = 0
       _e.EmitMovRegImm(X86Register.R8, 0x8000);            // MEM_RELEASE
       _e.EmitCallImportOnSystemStack("kernel32.dll", "VirtualFree");
+    }
+
+    // ---- Bulk memory ----
+
+    public void FillMemoryQwords(VReg destAddr, VReg value, VReg count) {
+      // REP STOSQ: RAX=value, RCX=count, RDI=dest
+      if (R(value) != X86Register.Rax) _e.EmitMovRegReg(X86Register.Rax, R(value));
+      if (R(count) != X86Register.Rcx) _e.EmitMovRegReg(X86Register.Rcx, R(count));
+      if (R(destAddr) != X86Register.Rdi) _e.EmitMovRegReg(X86Register.Rdi, R(destAddr));
+      _e.EmitBytes(0xF3, 0x48, 0xAB); // REP STOSQ
     }
 
     // ---- Scheduler platform helpers ----

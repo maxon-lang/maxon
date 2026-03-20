@@ -26,7 +26,7 @@ can use the maxon-sharp compiler for reference.
     - typed ranges should be as specific as possible, e.g. `int(0 to 100)` instead of `int(0 to u64.max)`. Carefully consider the valid range for each type and use the narrowest possible range to catch errors. Max range is fine if there is no clear limit.
     - look for any comments that imply that something was skippped or not fully implemented or should be done later
     - Fix any compiler warnings
-7. Write a git commit message for these changes
+7. Write a git commit message
 
 ## Guidelines
 - Read the relevant spec file in `specs/` to understand what the expected behavior is.

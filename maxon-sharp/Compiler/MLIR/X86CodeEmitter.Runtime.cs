@@ -2333,12 +2333,13 @@ public partial class X86CodeEmitter {
     EmitJcc("le", "rt_prp_read");
 
     // Grow: new capacity = capacity * 2
-    EmitMovRegMem(X86Register.Rdx, -0x18, 8);
-    EmitBytes(0x48, 0xD1, 0xE2);                        // SHL RDX, 1 (double)
-    EmitMovMemReg(-0x18, X86Register.Rdx, 8);           // update capacity
-    EmitMovRegMem(X86Register.Rcx, -0x10, 8);           // old buffer
-    // RDX already has new size
-    EmitTagZero(X86Register.R8); // R8 = tag
+    // mm_realloc(user_ptr, old_size, new_size)
+    EmitMovRegMem(X86Register.Rcx, -0x10, 8);           // arg0: old buffer
+    EmitMovRegMem(X86Register.Rdx, -0x18, 8);           // arg1: old capacity (old_size)
+    EmitMovRegReg(X86Register.R8, X86Register.Rdx);
+    EmitShlRegImm(X86Register.R8, 1);                   // double = new_size
+    EmitMovMemReg(-0x18, X86Register.R8, 8);            // update capacity to new value
+    if (Compiler.MmTrace) EmitLeaRegSymdataRel(X86Register.R9, "__mm_scope_pipe_read");
     EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_realloc")); EmitDword(0);
     EmitMovMemReg(-0x10, X86Register.Rax, 8);           // update buffer
 
@@ -2375,11 +2376,13 @@ public partial class X86CodeEmitter {
     EmitCmpRegReg(X86Register.Rax, X86Register.Rcx);
     EmitJcc("b", "rt_prp_nullterm");                     // total_read < capacity → skip realloc
     // Realloc to total_read + 1
-    EmitMovRegMem(X86Register.Rcx, -0x10, 8);           // old buffer
-    EmitMovRegMem(X86Register.Rdx, -0x20, 8);           // total_read
-    EmitAddRegImm(X86Register.Rdx, 1);                  // new size = total_read + 1
-    EmitMovMemReg(-0x18, X86Register.Rdx, 8);           // update capacity
-    EmitTagZero(X86Register.R8); // R8 = tag
+    // mm_realloc(user_ptr, old_size, new_size)
+    EmitMovRegMem(X86Register.Rcx, -0x10, 8);           // arg0: old buffer
+    EmitMovRegMem(X86Register.Rdx, -0x18, 8);           // arg1: old capacity (old_size)
+    EmitMovRegMem(X86Register.R8, -0x20, 8);            // total_read
+    EmitAddRegImm(X86Register.R8, 1);                   // arg2: new_size = total_read + 1
+    EmitMovMemReg(-0x18, X86Register.R8, 8);            // update capacity
+    if (Compiler.MmTrace) EmitLeaRegSymdataRel(X86Register.R9, "__mm_scope_pipe_read");
     EmitByte(0xE8); _relCallFixups.Add((_code.Count, "mm_realloc")); EmitDword(0);
     EmitMovMemReg(-0x10, X86Register.Rax, 8);           // update buffer
     DefineLabel("rt_prp_nullterm");

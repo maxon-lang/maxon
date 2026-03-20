@@ -393,8 +393,6 @@ class Program {
 
     Compiler.CompileError.ProjectRoot = projectDir;
 
-    Logger.Info(LogCategory.Testing, "Running maxon-sharp spec tests...");
-
     var runner = new TestRunner(specDir, fragmentDir, tempDir, filter, workers, updateRequired, target, verbose);
     var summary = runner.RunAllSpecTests();
 

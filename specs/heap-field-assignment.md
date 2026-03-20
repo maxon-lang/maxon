@@ -145,7 +145,7 @@ end 'main'
 ```
 ```stderr
 sl_init
-    os_alloc size=67108864
+  os_alloc size=67108864
 mm_alloc Inner #1 size=8 [heap-field-assignment.testAssign]
   sl_alloc Inner #1 size=40 class=4
 mm_alloc Container #2 size=16 [heap-field-assignment.testAssign]
@@ -226,7 +226,7 @@ end 'main'
 ```
 ```stderr
 sl_init
-    os_alloc size=67108864
+  os_alloc size=67108864
 mm_alloc Right #1 size=8 [heap-field-assignment.testAssign]
   sl_alloc Right #1 size=40 class=4
 mm_alloc Pair #2 size=16 [heap-field-assignment.testAssign]

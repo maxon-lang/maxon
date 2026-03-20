@@ -1181,6 +1181,36 @@ public partial class X86CodeEmitter() {
     EmitByte(imm);
   }
 
+  private void EmitBsfRegReg(X86Register dest, X86Register src) {
+    RequireGpr(dest, nameof(EmitBsfRegReg));
+    RequireGpr(src, nameof(EmitBsfRegReg));
+    // BSF r64, r/m64: REX.W + 0F BC /r
+    Rex.W().Reg(dest).Rm(src).Emit(this);
+    EmitByte(0x0F);
+    EmitByte(0xBC);
+    EmitByte((byte)(0xC0 | (RegCode(dest) << 3) | RegCode(src)));
+  }
+
+  private void EmitBtrMemReg(X86Register baseReg, int displacement, X86Register bitIndex) {
+    RequireGpr(baseReg, nameof(EmitBtrMemReg));
+    RequireGpr(bitIndex, nameof(EmitBtrMemReg));
+    // BTR r/m64, r64: REX.W + 0F B3 /r with [base+disp] addressing
+    Rex.W().Reg(bitIndex).Rm(baseReg).Emit(this);
+    EmitByte(0x0F);
+    EmitByte(0xB3);
+    EmitModRmWithBase(baseReg, bitIndex, displacement);
+  }
+
+  private void EmitBtsMemReg(X86Register baseReg, int displacement, X86Register bitIndex) {
+    RequireGpr(baseReg, nameof(EmitBtsMemReg));
+    RequireGpr(bitIndex, nameof(EmitBtsMemReg));
+    // BTS r/m64, r64: REX.W + 0F AB /r with [base+disp] addressing
+    Rex.W().Reg(bitIndex).Rm(baseReg).Emit(this);
+    EmitByte(0x0F);
+    EmitByte(0xAB);
+    EmitModRmWithBase(baseReg, bitIndex, displacement);
+  }
+
   private void EmitIncReg(X86Register dest) {
     RequireGpr(dest, nameof(EmitIncReg));
     // INC r/m64: REX.W + FF /0

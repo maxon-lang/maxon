@@ -211,7 +211,7 @@ end 'main'
 ```
 ```stderr
 sl_init
-    os_alloc size=67108864
+  os_alloc size=67108864
 mm_alloc __ManagedMemory #1 size=32 [codegen-internals.main]
   sl_alloc __ManagedMemory #1 size=64 class=5
 mm_alloc IntArray #2 size=16 [codegen-internals.main]

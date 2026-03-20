@@ -92,9 +92,25 @@ public interface IEmitterBackend {
   void MulRegReg(VReg dest, VReg src);
   void ShlRegImm(VReg dest, int shift);
   void ShrRegImm(VReg dest, int shift);
+  void ShrRegReg(VReg dest, VReg count);
+  void ShlRegReg(VReg dest, VReg count);
   void AndRegReg(VReg dest, VReg src);
   void OrRegReg(VReg dest, VReg src);
   void XorRegReg(VReg dest, VReg src);
+
+  // ---- Bit manipulation ----
+
+  /// <summary>Find index of lowest set bit: dest = tzcnt(src). Sets ZF if src==0.
+  /// On x86: BSF dest, src. On ARM64: RBIT+CLZ (gives 64 if src==0).</summary>
+  void BitScanForward(VReg dest, VReg src);
+
+  /// <summary>Clear bit at bitIndex in memory at [base + offset].
+  /// On x86: BTR [base+offset], bitIndex. On ARM64: load/bic/store sequence.</summary>
+  void BitTestAndReset(VReg baseReg, int offset, VReg bitIndex);
+
+  /// <summary>Set bit at bitIndex in memory at [base + offset].
+  /// On x86: BTS [base+offset], bitIndex. On ARM64: load/orr/store sequence.</summary>
+  void BitTestAndSet(VReg baseReg, int offset, VReg bitIndex);
 
   // ---- Comparison & branching ----
 
@@ -160,6 +176,16 @@ public interface IEmitterBackend {
   /// Clobbers Arg0..Arg5.
   /// </summary>
   void OsFreePages(VReg ptr, VReg size);
+
+  // ---- Bulk memory ----
+
+  /// <summary>
+  /// Fill <paramref name="count"/> qwords at <paramref name="destAddr"/> with <paramref name="value"/>.
+  /// On x86: REP STOSQ (requires Scratch0=RAX, Arg0=RCX, Arg5=RDI).
+  /// On ARM64: tight STR post-index loop.
+  /// Clobbers destAddr (advances past the filled region) and count (decremented to 0).
+  /// </summary>
+  void FillMemoryQwords(VReg destAddr, VReg value, VReg count);
 
   // ---- Atomics ----
 

@@ -33,7 +33,7 @@ end 'main'
 ```
 ```stderr
 sl_init
-    os_alloc size=67108864
+  os_alloc size=67108864
 mm_alloc Point #1 size=16 [ownership-edge-cases.main]
   sl_alloc Point #1 size=48 class=4
 mm_incref Point #1 rc=1 [ownership-edge-cases.main]
@@ -67,7 +67,7 @@ end 'main'
 ```
 ```stderr
 sl_init
-    os_alloc size=67108864
+  os_alloc size=67108864
 mm_alloc Box #1 size=8 [ownership-edge-cases.main]
   sl_alloc Box #1 size=40 class=4
 mm_incref Box #1 rc=1 [ownership-edge-cases.main]
@@ -104,7 +104,7 @@ end 'main'
 ```
 ```stderr
 sl_init
-    os_alloc size=67108864
+  os_alloc size=67108864
 mm_alloc Tag #1 size=8 [ownership-edge-cases.main]
   sl_alloc Tag #1 size=40 class=4
 mm_incref Tag #1 rc=1 [ownership-edge-cases.main]
@@ -157,7 +157,7 @@ end 'main'
 ```
 ```stderr
 sl_init
-    os_alloc size=67108864
+  os_alloc size=67108864
 mm_alloc Widget #1 size=8 [ownership-edge-cases.main]
   sl_alloc Widget #1 size=40 class=4
 mm_incref Widget #1 rc=1 [ownership-edge-cases.main]
@@ -195,7 +195,7 @@ end 'main'
 ```
 ```stderr
 sl_init
-    os_alloc size=67108864
+  os_alloc size=67108864
 mm_alloc Token #1 size=8 [ownership-edge-cases.makeToken]
   sl_alloc Token #1 size=40 class=4
 mm_incref Token #1 rc=1 [ownership-edge-cases.makeToken]
@@ -231,7 +231,7 @@ end 'main'
 ```
 ```stderr
 sl_init
-    os_alloc size=67108864
+  os_alloc size=67108864
 mm_alloc Num #1 size=8 [ownership-edge-cases.main]
   sl_alloc Num #1 size=40 class=4
 mm_incref Num #1 rc=1 [ownership-edge-cases.main]
@@ -280,7 +280,7 @@ end 'main'
 ```
 ```stderr
 sl_init
-    os_alloc size=67108864
+  os_alloc size=67108864
 mm_alloc Counter #1 size=8 [ownership-edge-cases.main]
   sl_alloc Counter #1 size=40 class=4
 mm_incref Counter #1 rc=1 [ownership-edge-cases.main]
@@ -338,7 +338,7 @@ end 'main'
 ```
 ```stderr
 sl_init
-    os_alloc size=67108864
+  os_alloc size=67108864
 mm_alloc Step #1 size=8 [ownership-edge-cases.main]
   sl_alloc Step #1 size=40 class=4
 mm_incref Step #1 rc=1 [ownership-edge-cases.main]
@@ -398,7 +398,7 @@ end 'main'
 ```
 ```stderr
 sl_init
-    os_alloc size=67108864
+  os_alloc size=67108864
 mm_alloc Item #1 size=8 [ownership-edge-cases.main]
   sl_alloc Item #1 size=40 class=4
 mm_incref Item #1 rc=1 [ownership-edge-cases.main]
@@ -460,7 +460,7 @@ end 'main'
 ```
 ```stderr
 sl_init
-    os_alloc size=67108864
+  os_alloc size=67108864
 mm_alloc Inner #1 size=8 [ownership-edge-cases.main]
   sl_alloc Inner #1 size=40 class=4
 mm_incref Inner #1 rc=1 [ownership-edge-cases.main]
@@ -509,7 +509,7 @@ end 'main'
 ```
 ```stderr
 sl_init
-    os_alloc size=67108864
+  os_alloc size=67108864
 mm_alloc A #1 size=8 [ownership-edge-cases.main]
   sl_alloc A #1 size=40 class=4
 mm_alloc B #2 size=8 [ownership-edge-cases.main]
@@ -564,7 +564,7 @@ end 'main'
 ```
 ```stderr
 sl_init
-    os_alloc size=67108864
+  os_alloc size=67108864
 mm_alloc Payload #1 size=8 [ownership-edge-cases.main]
   sl_alloc Payload #1 size=40 class=4
 mm_incref Payload #1 rc=1 [ownership-edge-cases.main]
@@ -624,7 +624,7 @@ end 'main'
 ```
 ```stderr
 sl_init
-    os_alloc size=67108864
+  os_alloc size=67108864
 mm_alloc Val #1 size=8 [ownership-edge-cases.main]
   sl_alloc Val #1 size=40 class=4
 mm_alloc Holder #2 size=8 [ownership-edge-cases.main]
@@ -694,7 +694,7 @@ end 'main'
 ```
 ```stderr
 sl_init
-    os_alloc size=67108864
+  os_alloc size=67108864
 mm_alloc __ManagedMemory_Node #1 size=32 [ownership-edge-cases.main]
   sl_alloc __ManagedMemory_Node #1 size=64 class=5
 mm_alloc NodeArray #2 size=16 [ownership-edge-cases.main]
@@ -757,7 +757,7 @@ end 'main'
 ```
 ```stderr
 sl_init
-    os_alloc size=67108864
+  os_alloc size=67108864
 mm_alloc __ManagedMemory_Node #1 size=32 [ownership-edge-cases.main]
   sl_alloc __ManagedMemory_Node #1 size=64 class=5
 mm_alloc NodeArray #2 size=16 [ownership-edge-cases.main]
@@ -827,7 +827,7 @@ end 'main'
 ```
 ```stderr
 sl_init
-    os_alloc size=67108864
+  os_alloc size=67108864
 mm_alloc __ManagedMemory_Item #1 size=32 [ownership-edge-cases.main]
   sl_alloc __ManagedMemory_Item #1 size=64 class=5
 mm_alloc ItemArray #2 size=16 [ownership-edge-cases.main]
@@ -897,7 +897,7 @@ end 'main'
 ```
 ```stderr
 sl_init
-    os_alloc size=67108864
+  os_alloc size=67108864
 mm_alloc __ManagedMemory_Item #1 size=32 [ownership-edge-cases.main]
   sl_alloc __ManagedMemory_Item #1 size=64 class=5
 mm_alloc ItemArray #2 size=16 [ownership-edge-cases.main]
@@ -975,7 +975,7 @@ end 'main'
 ```
 ```stderr
 sl_init
-    os_alloc size=67108864
+  os_alloc size=67108864
 mm_alloc __ManagedMemory_Item #1 size=32 [ownership-edge-cases.fill]
   sl_alloc __ManagedMemory_Item #1 size=64 class=5
 mm_alloc ItemArray #2 size=16 [ownership-edge-cases.fill]
@@ -1057,7 +1057,7 @@ end 'main'
 ```
 ```stderr
 sl_init
-    os_alloc size=67108864
+  os_alloc size=67108864
 mm_alloc __ManagedMemory_Entry #1 size=32 [ownership-edge-cases.main]
   sl_alloc __ManagedMemory_Entry #1 size=64 class=5
 mm_alloc EntryArray #2 size=16 [ownership-edge-cases.main]
@@ -1169,7 +1169,7 @@ end 'main'
 ```
 ```stderr
 sl_init
-    os_alloc size=67108864
+  os_alloc size=67108864
 mm_alloc __ManagedMemory_Val #1 size=32 [ownership-edge-cases.main]
   sl_alloc __ManagedMemory_Val #1 size=64 class=5
 mm_alloc ValArray #2 size=16 [ownership-edge-cases.main]
@@ -1257,7 +1257,7 @@ end 'main'
 ```
 ```stderr
 sl_init
-    os_alloc size=67108864
+  os_alloc size=67108864
 mm_alloc __ManagedMemory_Val #1 size=32 [ownership-edge-cases.main]
   sl_alloc __ManagedMemory_Val #1 size=64 class=5
 mm_alloc ValArray #2 size=16 [ownership-edge-cases.main]
@@ -1338,7 +1338,7 @@ end 'main'
 ```
 ```stderr
 sl_init
-    os_alloc size=67108864
+  os_alloc size=67108864
 mm_alloc __ManagedMemory_Wrapper #1 size=32 [ownership-edge-cases.main]
   sl_alloc __ManagedMemory_Wrapper #1 size=64 class=5
 mm_alloc WrapperArray #2 size=16 [ownership-edge-cases.main]
@@ -1418,7 +1418,7 @@ end 'main'
 ```
 ```stderr
 sl_init
-    os_alloc size=67108864
+  os_alloc size=67108864
 mm_alloc Step #1 size=8 [ownership-edge-cases.compute]
   sl_alloc Step #1 size=40 class=4
 mm_incref Step #1 rc=1 [ownership-edge-cases.compute]
@@ -1466,7 +1466,7 @@ end 'main'
 ```
 ```stderr
 sl_init
-    os_alloc size=67108864
+  os_alloc size=67108864
 mm_alloc __ManagedMemory_Item #1 size=32 [ownership-edge-cases.main]
   sl_alloc __ManagedMemory_Item #1 size=64 class=5
 mm_alloc ItemArray #2 size=16 [ownership-edge-cases.main]
@@ -1529,7 +1529,7 @@ end 'main'
 ```
 ```stderr
 sl_init
-    os_alloc size=67108864
+  os_alloc size=67108864
 mm_alloc Cfg #1 size=8 [ownership-edge-cases.__module_init]
   sl_alloc Cfg #1 size=40 class=4
 mm_incref Cfg #1 rc=1 [ownership-edge-cases.__module_init]
@@ -1582,7 +1582,7 @@ end 'main'
 ```
 ```stderr
 sl_init
-    os_alloc size=67108864
+  os_alloc size=67108864
 mm_alloc State #1 size=8 [ownership-edge-cases.__module_init]
   sl_alloc State #1 size=40 class=4
 mm_incref State #1 rc=1 [ownership-edge-cases.__module_init]
@@ -1654,7 +1654,7 @@ end 'main'
 ```
 ```stderr
 sl_init
-    os_alloc size=67108864
+  os_alloc size=67108864
 mm_raw_alloc #R1 size=40
   sl_alloc size=40 class=4
 mm_raw_free #R1
@@ -1693,7 +1693,7 @@ end 'main'
 ```
 ```stderr
 sl_init
-    os_alloc size=67108864
+  os_alloc size=67108864
 mm_alloc Body #1 size=8 [ownership-edge-cases.main]
   sl_alloc Body #1 size=40 class=4
 mm_incref Body #1 rc=1 [ownership-edge-cases.main]
@@ -1739,7 +1739,7 @@ end 'main'
 ```
 ```stderr
 sl_init
-    os_alloc size=67108864
+  os_alloc size=67108864
 mm_alloc ClosureEnv #1 size=8 [ownership-edge-cases.main]
   sl_alloc ClosureEnv #1 size=40 class=4
 mm_incref ClosureEnv #1 rc=1 [ownership-edge-cases.main]
@@ -1777,7 +1777,7 @@ end 'main'
 ```
 ```stderr
 sl_init
-    os_alloc size=67108864
+  os_alloc size=67108864
 mm_alloc Config #1 size=8 [ownership-edge-cases.main]
   sl_alloc Config #1 size=40 class=4
 mm_incref Config #1 rc=1 [ownership-edge-cases.main]
@@ -1819,7 +1819,7 @@ end 'main'
 ```
 ```stderr
 sl_init
-    os_alloc size=67108864
+  os_alloc size=67108864
 mm_alloc __ManagedMemory_Item #1 size=32 [ownership-edge-cases.main]
   sl_alloc __ManagedMemory_Item #1 size=64 class=5
 mm_alloc ItemArray #2 size=16 [ownership-edge-cases.main]
@@ -1870,7 +1870,7 @@ end 'main'
 ```
 ```stderr
 sl_init
-    os_alloc size=67108864
+  os_alloc size=67108864
 mm_alloc TokenManagedList #1 size=32 [ownership-edge-cases.main]
   sl_alloc TokenManagedList #1 size=64 class=5
 mm_incref TokenManagedList #1 rc=1 [ownership-edge-cases.main]
@@ -1923,7 +1923,7 @@ end 'main'
 ```
 ```stderr
 sl_init
-    os_alloc size=67108864
+  os_alloc size=67108864
 mm_alloc TokenManagedList #1 size=32 [ownership-edge-cases.main]
   sl_alloc TokenManagedList #1 size=64 class=5
 mm_incref TokenManagedList #1 rc=1 [ownership-edge-cases.main]
@@ -1980,7 +1980,7 @@ end 'main'
 ```
 ```stderr
 sl_init
-    os_alloc size=67108864
+  os_alloc size=67108864
 mm_alloc TokenManagedList #1 size=32 [ownership-edge-cases.main]
   sl_alloc TokenManagedList #1 size=64 class=5
 mm_incref TokenManagedList #1 rc=1 [ownership-edge-cases.main]
@@ -2059,7 +2059,7 @@ end 'main'
 ```
 ```stderr
 sl_init
-    os_alloc size=67108864
+  os_alloc size=67108864
 mm_alloc TokenManagedList #1 size=32 [ownership-edge-cases.main]
   sl_alloc TokenManagedList #1 size=64 class=5
 mm_incref TokenManagedList #1 rc=1 [ownership-edge-cases.main]
@@ -2125,7 +2125,7 @@ end 'main'
 ```
 ```stderr
 sl_init
-    os_alloc size=67108864
+  os_alloc size=67108864
 mm_alloc __ManagedMemory_Score #1 size=32 [ownership-edge-cases.main]
   sl_alloc __ManagedMemory_Score #1 size=64 class=5
 mm_alloc ScoreArray #2 size=16 [ownership-edge-cases.main]
@@ -2206,7 +2206,7 @@ end 'main'
 ```
 ```stderr
 sl_init
-    os_alloc size=67108864
+  os_alloc size=67108864
 mm_alloc Data #1 size=8 [ownership-edge-cases.main]
   sl_alloc Data #1 size=40 class=4
 mm_incref Data #1 rc=1 [ownership-edge-cases.main]
@@ -2253,7 +2253,7 @@ end 'main'
 ```
 ```stderr
 sl_init
-    os_alloc size=67108864
+  os_alloc size=67108864
 mm_alloc __ManagedMemory_CellArray #1 size=32 [ownership-edge-cases.main]
   sl_alloc __ManagedMemory_CellArray #1 size=64 class=5
 mm_alloc Grid #2 size=16 [ownership-edge-cases.main]
@@ -2371,7 +2371,7 @@ end 'main'
 ```
 ```stderr
 sl_init
-    os_alloc size=67108864
+  os_alloc size=67108864
 mm_alloc __ManagedMemory_Entry #1 size=32 [ownership-edge-cases.fill]
   sl_alloc __ManagedMemory_Entry #1 size=64 class=5
 mm_alloc EntryArray #2 size=16 [ownership-edge-cases.fill]
@@ -2444,7 +2444,7 @@ end 'main'
 ```
 ```stderr
 sl_init
-    os_alloc size=67108864
+  os_alloc size=67108864
 mm_alloc Pair #1 size=16 [ownership-edge-cases.makePair]
   sl_alloc Pair #1 size=48 class=4
 mm_incref Pair #1 rc=1 [ownership-edge-cases.makePair]
@@ -2489,7 +2489,7 @@ end 'main'
 ```
 ```stderr
 sl_init
-    os_alloc size=67108864
+  os_alloc size=67108864
 mm_alloc Inner #1 size=8 [ownership-edge-cases.main]
   sl_alloc Inner #1 size=40 class=4
 mm_incref Inner #1 rc=1 [ownership-edge-cases.main]
@@ -2528,7 +2528,7 @@ end 'main'
 ```
 ```stderr
 sl_init
-    os_alloc size=67108864
+  os_alloc size=67108864
 mm_alloc __ManagedList_String #1 size=32 [ownership-edge-cases.main]
   sl_alloc __ManagedList_String #1 size=64 class=5
 mm_alloc StringList #2 size=16 [ownership-edge-cases.main]
@@ -2585,7 +2585,7 @@ end 'main'
 ```
 ```stderr
 sl_init
-    os_alloc size=67108864
+  os_alloc size=67108864
 mm_alloc String #1 size=16 [ownership-edge-cases.main]
   sl_alloc String #1 size=48 class=4
 mm_alloc __ManagedMemory #2 size=32 [ownership-edge-cases.main]
@@ -2634,7 +2634,7 @@ end 'main'
 ```
 ```stderr
 sl_init
-    os_alloc size=67108864
+  os_alloc size=67108864
 mm_alloc Character #1 size=16 [ownership-edge-cases.main]
   sl_alloc Character #1 size=48 class=4
 mm_alloc __ManagedMemory #2 size=32 [ownership-edge-cases.main]
@@ -2670,7 +2670,7 @@ end 'main'
 ```
 ```stderr
 sl_init
-    os_alloc size=67108864
+  os_alloc size=67108864
 mm_alloc Character #1 size=16 [ownership-edge-cases.main]
   sl_alloc Character #1 size=48 class=4
 mm_alloc __ManagedMemory #2 size=32 [ownership-edge-cases.main]
@@ -2708,7 +2708,7 @@ end 'main'
 ```
 ```stderr
 sl_init
-    os_alloc size=67108864
+  os_alloc size=67108864
 mm_alloc Character #1 size=16 [ownership-edge-cases.main]
   sl_alloc Character #1 size=48 class=4
 mm_alloc __ManagedMemory #2 size=32 [ownership-edge-cases.main]
@@ -2761,7 +2761,7 @@ end 'main'
 ```
 ```stderr
 sl_init
-    os_alloc size=67108864
+  os_alloc size=67108864
 mm_alloc Character #1 size=16 [ownership-edge-cases.makeChar]
   sl_alloc Character #1 size=48 class=4
 mm_alloc __ManagedMemory #2 size=32 [ownership-edge-cases.makeChar]
@@ -2799,7 +2799,7 @@ end 'main'
 ```
 ```stderr
 sl_init
-    os_alloc size=67108864
+  os_alloc size=67108864
 mm_alloc Character #1 size=16 [ownership-edge-cases.main]
   sl_alloc Character #1 size=48 class=4
 mm_alloc __ManagedMemory #2 size=32 [ownership-edge-cases.main]
@@ -2834,7 +2834,7 @@ end 'main'
 ```
 ```stderr
 sl_init
-    os_alloc size=67108864
+  os_alloc size=67108864
 mm_alloc __Tuple_i64_i64 #1 size=16 [ownership-edge-cases.main]
   sl_alloc __Tuple_i64_i64 #1 size=48 class=4
 mm_incref __Tuple_i64_i64 #1 rc=1 [ownership-edge-cases.main]
@@ -2862,7 +2862,7 @@ end 'main'
 ```
 ```stderr
 sl_init
-    os_alloc size=67108864
+  os_alloc size=67108864
 mm_alloc __Tuple_i64_i64 #1 size=16 [ownership-edge-cases.main]
   sl_alloc __Tuple_i64_i64 #1 size=48 class=4
 mm_incref __Tuple_i64_i64 #1 rc=1 [ownership-edge-cases.main]
@@ -2892,7 +2892,7 @@ end 'main'
 ```
 ```stderr
 sl_init
-    os_alloc size=67108864
+  os_alloc size=67108864
 mm_alloc __Tuple_i64_i64 #1 size=16 [ownership-edge-cases.main]
   sl_alloc __Tuple_i64_i64 #1 size=48 class=4
 mm_incref __Tuple_i64_i64 #1 rc=1 [ownership-edge-cases.main]
@@ -2927,7 +2927,7 @@ end 'main'
 ```
 ```stderr
 sl_init
-    os_alloc size=67108864
+  os_alloc size=67108864
 mm_alloc String #1 size=16 [ownership-edge-cases.main]
   sl_alloc String #1 size=48 class=4
 mm_alloc __ManagedMemory #2 size=32 [ownership-edge-cases.main]
@@ -2974,7 +2974,7 @@ end 'main'
 ```
 ```stderr
 sl_init
-    os_alloc size=67108864
+  os_alloc size=67108864
 mm_alloc __Tuple_i64_i64 #1 size=16 [ownership-edge-cases.makePair]
   sl_alloc __Tuple_i64_i64 #1 size=48 class=4
 mm_incref __Tuple_i64_i64 #1 rc=1 [ownership-edge-cases.makePair]
@@ -3003,7 +3003,7 @@ end 'main'
 ```
 ```stderr
 sl_init
-    os_alloc size=67108864
+  os_alloc size=67108864
 mm_alloc __Tuple_i64_i64 #1 size=16 [ownership-edge-cases.main]
   sl_alloc __Tuple_i64_i64 #1 size=48 class=4
 mm_incref __Tuple_i64_i64 #1 rc=1 [ownership-edge-cases.main]
@@ -3039,7 +3039,7 @@ end 'main'
 ```
 ```stderr
 sl_init
-    os_alloc size=67108864
+  os_alloc size=67108864
 mm_alloc Point #1 size=16 [ownership-edge-cases.main]
   sl_alloc Point #1 size=48 class=4
 mm_alloc __Tuple_i64_Point #2 size=16 [ownership-edge-cases.main]
