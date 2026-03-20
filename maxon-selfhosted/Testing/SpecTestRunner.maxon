@@ -1,65 +1,8 @@
 // Spec test runner for the self-hosted compiler.
-// Parses spec files and compiles tests using the self-hosted compiler.
+// Parses spec files, generates fragments, and runs tests.
+// Uses the fragment-based pipeline matching the C# test runner.
 
 let whitelist = ["basics", "print-function", "variables", "arithmetic"]
-
-typealias TextLineArray = Array with String
-
-// Trim leading/trailing whitespace (spaces, tabs, \r, \n) from a string.
-function trimWhitespace(s String) returns String
-  var idx = s.startIndex()
-  let endIdx = s.endIndex()
-  // Skip leading whitespace
-  while idx < endIdx 'leading'
-    if not Ascii.isWhitespace(s.charAt(idx)) 'notWs'
-      break
-    end 'notWs'
-
-    idx = try s.indexAfter(idx) otherwise 'done'
-      break
-    end 'done'
-  end 'leading'
-
-  var startPos = idx
-  // Walk to find last non-whitespace position
-  var lastNonWsEnd = idx
-  while idx < endIdx 'trailing'
-    let nextIdx = try s.indexAfter(idx) otherwise 'lastOne'
-      if not Ascii.isWhitespace(s.charAt(idx)) 'notWsLast'
-        lastNonWsEnd = endIdx
-      end 'notWsLast'
-      break
-    end 'lastOne'
-
-    if not Ascii.isWhitespace(s.charAt(idx)) 'notWs2'
-      lastNonWsEnd = nextIdx
-    end 'notWs2'
-
-    idx = nextIdx
-  end 'trailing'
-
-  return s.slice(startPos, endIndex: lastNonWsEnd)
-end 'trimWhitespace'
-
-type TestExpectation
-  export var exitCode ParsedInt
-  export var hasExitCode bool
-  export var stdout String
-  export var hasStdout bool
-  export var stderr String
-  export var hasStderr bool
-  export var runtimeStderr String
-  export var hasRuntimeStderr bool
-end 'TestExpectation'
-
-type SpecTest
-  export var name String
-  export var source String
-  export var expectation TestExpectation
-  export var args String
-end 'SpecTest'
-
-typealias SpecTestArray = Array with SpecTest
 
 // Find the project root by walking up from cwd looking for a specs/ directory.
 function findProjectRoot() returns FilePath throws CompileError
@@ -78,187 +21,6 @@ function findProjectRoot() returns FilePath throws CompileError
   throw CompileError.directoryNotFound
 end 'findProjectRoot'
 
-// Parse a spec file and extract tests.
-function parseSpecFile(content String, specName String) returns SpecTestArray
-  var tests = SpecTestArray{}
-  let lines = content.split("\n")
-  var i = 0
-  let lineCount = lines.count()
-
-  while i < lineCount 'scan'
-    let line = try lines.get(i) otherwise 'skip'
-      i = i + 1
-      continue
-    end 'skip'
-    let containsResult = line.contains("<!-- test:")
-
-    // Look for test markers: <!-- test: name -->
-    if containsResult 'isTestMarker'
-      try line.findFirst("<!-- test:") otherwise 'skipMarker'
-        i = i + 1
-        continue
-      end 'skipMarker'
-      // Extract test name between "<!-- test: " and " -->"
-      let nameStart = try line.findFirst(": ") otherwise 'skipMarker2'
-        i = i + 1
-        continue
-      end 'skipMarker2'
-      let nameStartIdx = try line.indexAfter(nameStart) otherwise 'skipMarker3'
-        i = i + 1
-        continue
-      end 'skipMarker3'
-      let nameStartIdx2 = try line.indexAfter(nameStartIdx) otherwise 'skipMarker4'
-        i = i + 1
-        continue
-      end 'skipMarker4'
-      let nameEnd = try line.findFirst(" -->") otherwise 'skipMarker5'
-        i = i + 1
-        continue
-      end 'skipMarker5'
-      let testName = line.slice(nameStartIdx2, endIndex: nameEnd)
-
-      // Now scan for code blocks after this marker
-      var source = ""
-      var expectation = TestExpectation{}
-      var testArgs = ""
-      i = i + 1
-
-      while i < lineCount 'blocks'
-        let blockLine = try lines.get(i) otherwise 'skipBlock'
-          i = i + 1
-          continue
-        end 'skipBlock'
-
-        if blockLine.contains("<!-- test:") 'nextTest'
-          // Hit next test marker, stop parsing this test
-          break
-        end 'nextTest'
-
-        if blockLine.contains("<!-- Args:") 'isArgs'
-          // Extract args value between "Args: " and " -->"
-          let argsStart = try blockLine.findFirst("Args: ") otherwise 'skipArgs'
-            i = i + 1
-            continue
-          end 'skipArgs'
-          // Skip past "Args: " (6 chars)
-          var argsIdx = argsStart
-          for _ in 0 upto 6 'skipPrefix'
-            argsIdx = try blockLine.indexAfter(argsIdx) otherwise 'skipArgs2'
-              i = i + 1
-              continue
-            end 'skipArgs2'
-          end 'skipPrefix'
-          let argsEnd = try blockLine.findFirst(" -->") otherwise 'skipArgs3'
-            i = i + 1
-            continue
-          end 'skipArgs3'
-          testArgs = blockLine.slice(argsIdx, endIndex: argsEnd)
-          i = i + 1
-          continue
-        end 'isArgs'
-
-        // Check maxoncstderr before maxon since "```maxoncstderr" also startsWith "```maxon"
-        if blockLine.startsWith("```maxoncstderr") 'isStderr'
-          i = i + 1
-          let stderrBlock = readCodeBlock(lines, startLine: i, lineCount: lineCount)
-          expectation.stderr = stderrBlock
-          expectation.hasStderr = true
-          i = skipCodeBlock(lines, startLine: i, lineCount: lineCount)
-          continue
-        end 'isStderr'
-
-        if blockLine.startsWith("```maxon") 'isMaxon'
-          i = i + 1
-          source = readCodeBlock(lines, startLine: i, lineCount: lineCount)
-          i = skipCodeBlock(lines, startLine: i, lineCount: lineCount)
-          continue
-        end 'isMaxon'
-
-        if blockLine.startsWith("```stderr") 'isRuntimeStderr'
-          i = i + 1
-          let runtimeStderrBlock = readCodeBlock(lines, startLine: i, lineCount: lineCount)
-          expectation.runtimeStderr = runtimeStderrBlock
-          expectation.hasRuntimeStderr = true
-          i = skipCodeBlock(lines, startLine: i, lineCount: lineCount)
-          continue
-        end 'isRuntimeStderr'
-
-        if blockLine.startsWith("```exitcode") 'isExitCode'
-          i = i + 1
-          let ecStr = readCodeBlock(lines, startLine: i, lineCount: lineCount)
-          i = skipCodeBlock(lines, startLine: i, lineCount: lineCount)
-          let ecVal = try int.fromString(trimWhitespace(ecStr)) otherwise 'badEc'
-            continue
-          end 'badEc'
-          expectation.exitCode = ecVal
-          expectation.hasExitCode = true
-          continue
-        end 'isExitCode'
-
-        if blockLine.startsWith("```stdout") 'isStdout'
-          i = i + 1
-          let stdoutBlock = readCodeBlock(lines, startLine: i, lineCount: lineCount)
-          expectation.stdout = stdoutBlock
-          expectation.hasStdout = true
-          i = skipCodeBlock(lines, startLine: i, lineCount: lineCount)
-          continue
-        end 'isStdout'
-
-        i = i + 1
-      end 'blocks'
-
-      if not source.isEmpty() 'hasSource'
-        var test = SpecTest{}
-        test.name = "{specName}/{testName}"
-        test.source = source
-        test.expectation = expectation
-        test.args = testArgs
-        tests.push(test)
-      end 'hasSource'
-      continue
-    end 'isTestMarker'
-
-    i = i + 1
-  end 'scan'
-
-  return tests
-end 'parseSpecFile'
-
-// Read lines from startLine until a closing ``` is found, joining with newlines.
-function readCodeBlock(lines TextLineArray, startLine LineNumber, lineCount LineNumber) returns String
-  var result = ""
-  var first = true
-  for i in startLine upto lineCount 'read'
-    let line = try lines.get(i) otherwise 'done'
-      break
-    end 'done'
-    if line.startsWith("```") 'endBlock'
-      break
-    end 'endBlock'
-    if first 'isFirst'
-      result = line
-      first = false
-    end 'isFirst' else 'notFirst'
-      result = "{result}\n{line}"
-    end 'notFirst'
-  end 'read'
-  return result
-end 'readCodeBlock'
-
-// Skip past a code block's closing ```.
-function skipCodeBlock(lines TextLineArray, startLine LineNumber, lineCount LineNumber) returns LineNumber
-  for i in startLine upto lineCount 'scan'
-    let line = try lines.get(i) otherwise 'done'
-      break
-    end 'done'
-    if line.startsWith("```") 'endBlock'
-      return i + 1
-    end 'endBlock'
-  end 'scan'
-  return lineCount
-end 'skipCodeBlock'
-
-
 // Check if a target matches the host.
 function isHostTarget(target Target) returns bool
   let host = detectHostTarget()
@@ -268,8 +30,6 @@ function isHostTarget(target Target) returns bool
 end 'isHostTarget'
 
 // Check if we can execute binaries for this target.
-// Host target runs natively, Linux targets run via Docker.
-// Non-host Windows targets (e.g. aarch64-windows) are compile-only.
 function canExecuteTarget(target Target) returns bool
   if isHostTarget(target) 'isHost'
     return true
@@ -282,7 +42,6 @@ function canExecuteTarget(target Target) returns bool
 end 'canExecuteTarget'
 
 // Build the command to run a compiled binary.
-// Host targets run directly; Linux targets run via Docker.
 function buildRunCommand(outputPath FilePath, target Target, projectRoot FilePath, testArgs String) returns String
   if isHostTarget(target) 'isHost'
     if not testArgs.isEmpty() 'hasArgs'
@@ -291,13 +50,11 @@ function buildRunCommand(outputPath FilePath, target Target, projectRoot FilePat
     return outputPath.toString()
   end 'isHost'
 
-  // Docker execution for Linux targets
   let dockerArch = match target.cpu 'pickArch'
     CpuArch.x86_64 gives "amd64"
     CpuArch.aarch64 gives "arm64"
   end 'pickArch'
 
-  // Convert Windows path to forward slashes for Docker volume mount
   let tempDir = projectRoot.join("temp")
   var dockerCmd = "docker run --rm --platform linux/{dockerArch} -v {tempDir}:/work alpine /work/spectest_temp"
   if not testArgs.isEmpty() 'hasDockerArgs'
@@ -306,7 +63,7 @@ function buildRunCommand(outputPath FilePath, target Target, projectRoot FilePat
   return dockerCmd
 end 'buildRunCommand'
 
-// Run all whitelisted spec tests for a specific target. Returns (passed, failed).
+// Run all whitelisted spec tests for a specific target.
 export function runAllSpecTests(filter String, target Target) returns ExitCode
   let root = try findProjectRoot() otherwise 'noRoot'
     logError(LogCategory.testing, message: "Could not find project root (no specs/ directory found)")
@@ -317,41 +74,100 @@ export function runAllSpecTests(filter String, target Target) returns ExitCode
   setLogLevel(LogLevel.ERROR)
   setCategoryLogLevel(LogCategory.testing, level: LogLevel.INFO)
 
+  let targetKey = targetToString(target)
+  let specDir = root.join("specs")
+  let fragmentDir = specDir.join("fragments-{targetKey}")
+
+  // Ensure fragment directory exists
+  if not fragmentDir.directoryExists() 'noFragDir'
+    let _ = Process.execute("mkdir -p {fragmentDir}", timeoutMs: 5000)
+  end 'noFragDir'
+
   var totalPassed = 0
   var totalFailed = 0
   var totalTests = 0
+  var totalFragmentsWritten = 0
 
   for specName in whitelist 'eachSpec'
-    let specPath = root.join("specs").join("{specName}.md")
+    let specPath = specDir.join("{specName}.md")
     let content = try File.readText(specPath) otherwise 'readErr'
       logError(LogCategory.testing, message: "Could not read spec: {specPath}")
       continue
     end 'readErr'
 
-    let tests = parseSpecFile(content, specName: specName)
+    // Parse frontmatter — skip draft specs
+    let fm = parseFrontmatter(content)
+    if fm.status == "draft" 'isDraft'
+      logDebug(LogCategory.testing, message: "Skipping draft spec: {specName}")
+      continue
+    end 'isDraft'
+
+    // Parse all tests from the spec
+    let tests = parseSpecFile(content, targetKey: targetKey)
+
+    var specPassed = 0
+    var specFailed = 0
+    var specFailures = TextLineArray{}
 
     for test in tests 'eachTest'
       // Apply filter
+      let testPath = "{specName}/{test.name}"
       if not filter.isEmpty() 'hasFilter'
-        if not test.name.contains(filter) 'noMatch'
+        if not testPath.contains(filter) 'noMatch'
           continue
         end 'noMatch'
       end 'hasFilter'
 
       totalTests = totalTests + 1
-      let passed = runSingleTest(test, projectRoot: root, target: target)
-      if passed 'pass'
-        totalPassed = totalPassed + 1
+
+      // Generate fragment and write to disk (IR section empty — self-hosted compiler lacks returnIr)
+      writeFragment(fragmentDir, specName: specName, test: test, compileIr: "")
+      totalFragmentsWritten = totalFragmentsWritten + 1
+
+      // Step 2: Parse the fragment back
+      let fragPath = fragmentDir.join(specName).join("{test.name}.test")
+      let fragment = try parseFragment(fragPath) otherwise 'parseFailed'
+        logError(LogCategory.testing, message: "[FAIL] {testPath} - could not parse fragment")
+        specFailed = specFailed + 1
+        specFailures.push("specs/fragments-{targetKey}/{specName}/{test.name}.test")
+        specFailures.push("  Failed to parse fragment file")
+        continue
+      end 'parseFailed'
+
+      // Step 3: Run the test from fragment
+      let result = runTestFromFragment(fragment, projectRoot: root, target: target)
+      if result.passed 'pass'
+        specPassed = specPassed + 1
       end 'pass' else 'fail'
-        totalFailed = totalFailed + 1
+        specFailed = specFailed + 1
+        specFailures.push("specs/fragments-{targetKey}/{specName}/{result.testName}.test")
+        if not result.errorMessage.isEmpty() 'hasErr'
+          specFailures.push("  {result.errorMessage}")
+        end 'hasErr'
       end 'fail'
     end 'eachTest'
+
+    totalPassed = totalPassed + specPassed
+    totalFailed = totalFailed + specFailed
+
+    // Report per-spec failures
+    if specFailed > 0 'hasSpecFail'
+      let specTotal = specPassed + specFailed
+      logError(LogCategory.testing, message: "[FAIL] {specName} ({specPassed}/{specTotal})")
+      for failMsg in specFailures 'printFails'
+        logError(LogCategory.testing, message: failMsg)
+      end 'printFails'
+    end 'hasSpecFail'
   end 'eachSpec'
 
   if totalTests == 0 'noTests'
     logInfo(LogCategory.testing, message: "No tests found")
     return 0
   end 'noTests'
+
+  if totalFragmentsWritten > 0 'showFrags'
+    logInfo(LogCategory.testing, message: "Wrote {totalFragmentsWritten} fragment(s)")
+  end 'showFrags'
 
   if totalFailed == 0 'allPass'
     logInfo(LogCategory.testing, message: "Tests: {totalPassed} passed (total: {totalTests})")
@@ -365,19 +181,17 @@ export function runAllSpecTests(filter String, target Target) returns ExitCode
   return 0
 end 'runAllSpecTests'
 
-// Run a single test. Returns true if passed.
-function runSingleTest(test SpecTest, projectRoot FilePath, target Target) returns bool
+// Run a single test from a parsed fragment. Returns TestResult.
+function runTestFromFragment(fragment Fragment, projectRoot FilePath, target Target) returns TestResult
   let tempDir = projectRoot.join("temp")
   let tempSource = tempDir.join("spectest_temp.maxon")
   let ext = executableExtension(target)
   let tempExe = tempDir.join("spectest_temp{ext}")
+  let testName = fragment.testName
 
-  // Prepend "// Test:" header so line numbers match the spec fragment files
-  let sourceWithHeader = "// Test: {test.name}\n{test.source}"
-  // Write source to temp file
-  try File.writeText(tempSource, content: sourceWithHeader) otherwise 'writeErr'
-    logError(LogCategory.testing, message: "[FAIL] {test.name} - could not write temp file")
-    return false
+  // Write source from fragment to temp file
+  try File.writeText(tempSource, content: fragment.source) otherwise 'writeErr'
+    return TestResult{testName: testName, passed: false, errorMessage: "Could not write temp file", filePath: fragment.filePath}
   end 'writeErr'
 
   // Compile using the self-hosted compiler, capturing any error output
@@ -385,97 +199,98 @@ function runSingleTest(test SpecTest, projectRoot FilePath, target Target) retur
   let outputPath = try compile(tempSource, target: target) otherwise 'compileFailed'
     let capturedErrors = stopCapturingErrors()
 
-    if test.expectation.hasStderr 'expectedError'
+    if fragment.expectation.hasCompilerStderr 'expectedError'
       // Compilation failed as expected — validate the error message
-      let expectedStderr = normalizeStderr(test.expectation.stderr)
+      let expectedStderr = normalizeStderr(fragment.expectation.compilerStderr)
       let actualStderr = normalizeStderr(capturedErrors)
       if actualStderr != expectedStderr 'stderrMismatch'
-        logError(LogCategory.testing, message: "[FAIL] {test.name}")
-        logError(LogCategory.testing, message: "  Expected stderr: {expectedStderr}")
-        logError(LogCategory.testing, message: "  Actual stderr:   {actualStderr}")
         cleanup(tempSource, tempExe: tempExe)
-        return false
+        return TestResult{testName: testName, passed: false, errorMessage: "Stderr mismatch.\nExpected:\n  {expectedStderr}\nActual:\n  {actualStderr}", filePath: fragment.filePath}
       end 'stderrMismatch'
-      logDebug(LogCategory.testing, message: "[PASS] {test.name}")
       cleanup(tempSource, tempExe: tempExe)
-      return true
+      return TestResult{testName: testName, passed: true, errorMessage: "", filePath: fragment.filePath}
     end 'expectedError'
 
-    logError(LogCategory.testing, message: "[FAIL] {test.name}")
-    logError(LogCategory.testing, message: "  Compilation failed unexpectedly: {capturedErrors}")
     cleanup(tempSource, tempExe: tempExe)
-    return false
+    return TestResult{testName: testName, passed: false, errorMessage: "Compilation failed: {capturedErrors}", filePath: fragment.filePath}
   end 'compileFailed'
   cancelCapturingErrors()
 
-  if test.expectation.hasStderr 'isCompilerError'
-    // Expected a compiler error but compilation succeeded
-    logError(LogCategory.testing, message: "[FAIL] {test.name}")
-    logError(LogCategory.testing, message: "  Expected compilation error but compilation succeeded")
+  if fragment.expectation.hasCompilerStderr 'unexpectedSuccess'
     cleanup(tempSource, tempExe: tempExe)
-    return false
-  end 'isCompilerError'
+    return TestResult{testName: testName, passed: false, errorMessage: "Expected compilation error but compilation succeeded", filePath: fragment.filePath}
+  end 'unexpectedSuccess'
 
-  // For targets we can't execute (e.g. aarch64-windows), compilation success is the test
+  // For targets we can't execute, compilation success is the test
   if not canExecuteTarget(target) 'compileOnly'
-    logDebug(LogCategory.testing, message: "[PASS] {test.name} (compile-only)")
     cleanup(tempSource, tempExe: tempExe)
-    return true
+    return TestResult{testName: testName, passed: true, errorMessage: "", filePath: fragment.filePath}
   end 'compileOnly'
 
   // Run the compiled executable
-  let runCommand = buildRunCommand(outputPath, target: target, projectRoot: projectRoot, testArgs: test.args)
+  let runCommand = buildRunCommand(outputPath, target: target, projectRoot: projectRoot, testArgs: fragment.args)
   let runCap = Process.captureStart(runCommand)
   let runStdout = Process.captureStdout(runCap)
   let runStderr = Process.captureStderr(runCap)
-  let runEc = Process.captureWait(runCap, timeoutMs: 30000)
+  let runEc = Process.captureWait(runCap, timeoutMs: 5000)
 
   var passed = true
+  var errorMsg = ""
 
   // Check exit code
-  if test.expectation.hasExitCode 'checkEc'
-    if runEc != test.expectation.exitCode 'ecMismatch'
-      logError(LogCategory.testing, message: "[FAIL] {test.name}")
-      logError(LogCategory.testing, message: "  Expected exit code {test.expectation.exitCode}, got {runEc}")
+  if fragment.expectation.hasExitCode 'checkEc'
+    if runEc != fragment.expectation.exitCode 'ecMismatch'
       passed = false
+      errorMsg = "Expected exit code {fragment.expectation.exitCode}, got {runEc}"
     end 'ecMismatch'
   end 'checkEc'
 
   // Check stdout
-  if test.expectation.hasStdout 'checkStdout'
-    let expectedOut = trimWhitespace(test.expectation.stdout)
+  if fragment.expectation.hasStdout 'checkStdout'
+    let expectedOut = trimWhitespace(fragment.expectation.stdout)
     let actualOut = trimWhitespace(runStdout)
     if actualOut != expectedOut 'stdoutMismatch'
-      if passed 'firstFail'
-        logError(LogCategory.testing, message: "[FAIL] {test.name}")
-      end 'firstFail'
-      logError(LogCategory.testing, message: "  Expected stdout: {expectedOut}")
-      logError(LogCategory.testing, message: "  Actual stdout:   {actualOut}")
       passed = false
+      if errorMsg.isEmpty() 'firstStdout'
+        errorMsg = "Stdout mismatch:\nExpected: {expectedOut}\nActual: {actualOut}"
+      end 'firstStdout' else 'appendStdout'
+        errorMsg = "{errorMsg}\nStdout mismatch:\nExpected: {expectedOut}\nActual: {actualOut}"
+      end 'appendStdout'
     end 'stdoutMismatch'
   end 'checkStdout'
 
   // Check runtime stderr
-  if test.expectation.hasRuntimeStderr 'checkStderr'
-    let expectedErr = trimWhitespace(test.expectation.runtimeStderr)
+  if fragment.expectation.hasRuntimeStderr 'checkStderr'
+    let expectedErr = trimWhitespace(fragment.expectation.runtimeStderr)
     let actualErr = trimWhitespace(runStderr)
     if actualErr != expectedErr 'stderrMismatch'
-      if passed 'firstFailStderr'
-        logError(LogCategory.testing, message: "[FAIL] {test.name}")
-      end 'firstFailStderr'
-      logError(LogCategory.testing, message: "  Expected stderr: {expectedErr}")
-      logError(LogCategory.testing, message: "  Actual stderr:   {actualErr}")
       passed = false
+      if errorMsg.isEmpty() 'firstStderr'
+        errorMsg = "Stderr mismatch:\nExpected: {expectedErr}\nActual: {actualErr}"
+      end 'firstStderr' else 'appendStderr'
+        errorMsg = "{errorMsg}\nStderr mismatch:\nExpected: {expectedErr}\nActual: {actualErr}"
+      end 'appendStderr'
     end 'stderrMismatch'
-  end 'checkStderr'
+  end 'checkStderr' else 'noExpectedStderr'
+    // Unexpected stderr detection
+    let trimmedStderr = trimWhitespace(runStderr)
+    if not trimmedStderr.isEmpty() 'unexpectedStderr'
+      passed = false
+      if errorMsg.isEmpty() 'firstUnexpected'
+        errorMsg = "Unexpected stderr output:\n{trimmedStderr}"
+      end 'firstUnexpected' else 'appendUnexpected'
+        errorMsg = "{errorMsg}\nUnexpected stderr output:\n{trimmedStderr}"
+      end 'appendUnexpected'
+    end 'unexpectedStderr'
+  end 'noExpectedStderr'
 
   if passed 'didPass'
-    logDebug(LogCategory.testing, message: "[PASS] {test.name}")
+    logDebug(LogCategory.testing, message: "[PASS] {testName}")
   end 'didPass'
 
   cleanup(tempSource, tempExe: tempExe)
-  return passed
-end 'runSingleTest'
+  return TestResult{testName: testName, passed: passed, errorMessage: errorMsg, filePath: fragment.filePath}
+end 'runTestFromFragment'
 
 // Normalize stderr for comparison: trim, CRLF→LF, backslash→forward slash,
 // and strip file paths from error messages so temp paths match fragment paths.
@@ -483,7 +298,6 @@ function normalizeStderr(s String) returns String
   var result = trimWhitespace(s)
   result = result.replace("\r\n", with: "\n")
   result = result.replace("\\", with: "/")
-  // Strip file paths from error lines: "error EXXXX: /path/file:L:C: msg" → "error EXXXX: msg"
   let errorLines = result.split("\n")
   var normalized = ""
   var first = true
@@ -503,15 +317,12 @@ end 'normalizeStderr'
 // Input:  "error E2010: /some/path/file.maxon:3:8: Expected '=' but got ':'"
 // Output: "error E2010: Expected '=' but got ':'"
 function stripFilePathFromError(line String) returns String
-  // Look for "error E" prefix
   if not line.contains("error E") 'notError'
     return line
   end 'notError'
-  // Find the first ": " after "error E" — this starts the file path or message
   try line.findFirst("error E") otherwise 'noE'
     return line
   end 'noE'
-  // Find the ": " after the error code (e.g., after "error E2010")
   let firstColon = try line.findFirst(": ") otherwise 'noColon'
     return line
   end 'noColon'
@@ -521,17 +332,11 @@ function stripFilePathFromError(line String) returns String
   let afterFirstColonSpace = try line.indexAfter(afterFirstColon) otherwise 'noAfter2'
     return line
   end 'noAfter2'
-  // The rest could be "filepath:line:col: message" or just "message"
   let rest = line.slice(afterFirstColonSpace, endIndex: line.endIndex())
-  // Check if rest looks like a file path (contains "/" or "\" before a ": ")
   if not rest.contains("/") 'noPath'
     return line
   end 'noPath'
-  // Find the message after "line:col: " — look for ": " pattern after digits
-  // Strategy: find the last colon-space-uppercase pattern that starts a message
-  // Simpler: count colons in rest — filepath:line:col: has 3 colons before message
   let prefix = line.slice(line.startIndex(), endIndex: afterFirstColonSpace)
-  // Find third ": " in rest (after filepath:line:col)
   let c1 = try rest.findFirst(":") otherwise 'simple'
     return line
   end 'simple'

@@ -3,7 +3,7 @@ name: code-review
 description: Conduct a code review of the recent changes in the project, ensuring code quality and consistency.
 ---
 
-Review the changes that have been made in the project.
+Review the changes that have been made in the project to the c# and self hosted compilers.
 
 ## Steps
 
@@ -22,7 +22,3 @@ Review the changes that have been made in the project.
 2. Update documentation, including `LANGUAGE_REFERENCE.md` and `STDLIB_REFERENCE.md` and `QUICK_REFERENCE.md` and `BNF_SYNTAX.md` if necessary.
 3. Rebuild and run spec tests if you made any changes to the codebase, and ensure all tests pass.
 4. Write a git commit message
-
-## Guidelines
-
-- Keep the x86 code generation correct — watch for short jump overflow (max +/-127 bytes) and 32-bit register truncation (image base is above 4GB).

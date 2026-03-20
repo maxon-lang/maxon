@@ -1,0 +1,631 @@
+// Full-featured spec file parser for the self-hosted compiler.
+// Parses markdown spec files to extract tests, matching the C# SpecParser behavior.
+
+export typealias TextLineArray = Array with String
+export typealias IntArray = Array with ParsedInt
+
+export type SpecFrontmatter
+  export var feature String
+  export var status String
+  export var category String
+end 'SpecFrontmatter'
+
+export type TestExpectation
+  export var exitCode ParsedInt
+  export var hasExitCode bool
+  export var stdout String
+  export var hasStdout bool
+  export var compilerStderr String
+  export var hasCompilerStderr bool
+  export var runtimeStderr String
+  export var hasRuntimeStderr bool
+  export var requiredMLIR String
+  export var hasRequiredMLIR bool
+  export var requiredRdata String
+  export var hasRequiredRdata bool
+  export var requiredData String
+  export var hasRequiredData bool
+  export var mmTrace bool
+  export var asyncTrace bool
+end 'TestExpectation'
+
+export type SourceFilePair
+  export var fileName String
+  export var source String
+end 'SourceFilePair'
+
+export typealias SourceFileArray = Array with SourceFilePair
+
+export type SpecTest
+  export var name String
+  export var source String
+  export var expectation TestExpectation
+  export var args String
+  export var sourceFiles SourceFileArray
+  export var hasMultiFile bool
+  export var mmTrace bool
+  export var asyncTrace bool
+end 'SpecTest'
+
+export typealias SpecTestArray = Array with SpecTest
+
+export type SpecFile
+  export var filePath String
+  export var frontmatter SpecFrontmatter
+  export var tests SpecTestArray
+end 'SpecFile'
+
+export typealias SpecFileArray = Array with SpecFile
+
+export type Fragment
+  export var filePath String
+  export var testName String
+  export var source String
+  export var expectation TestExpectation
+  export var generatedMLIR String
+  export var hasGeneratedMLIR bool
+  export var args String
+  export var sourceFiles SourceFileArray
+  export var hasMultiFile bool
+  export var mmTrace bool
+  export var asyncTrace bool
+end 'Fragment'
+
+export type TestResult
+  export var testName String
+  export var passed bool
+  export var errorMessage String
+  export var filePath String
+end 'TestResult'
+
+export typealias TestResultArray = Array with TestResult
+
+// Trim leading/trailing whitespace (spaces, tabs, \r, \n) from a string.
+export function trimWhitespace(s String) returns String
+  var idx = s.startIndex()
+  let endIdx = s.endIndex()
+  // Skip leading whitespace
+  while idx < endIdx 'leading'
+    if not Ascii.isWhitespace(s.charAt(idx)) 'notWs'
+      break
+    end 'notWs'
+
+    idx = try s.indexAfter(idx) otherwise 'done'
+      break
+    end 'done'
+  end 'leading'
+
+  var startPos = idx
+  // Walk to find last non-whitespace position
+  var lastNonWsEnd = idx
+  while idx < endIdx 'trailing'
+    let nextIdx = try s.indexAfter(idx) otherwise 'lastOne'
+      if not Ascii.isWhitespace(s.charAt(idx)) 'notWsLast'
+        lastNonWsEnd = endIdx
+      end 'notWsLast'
+      break
+    end 'lastOne'
+
+    if not Ascii.isWhitespace(s.charAt(idx)) 'notWs2'
+      lastNonWsEnd = nextIdx
+    end 'notWs2'
+
+    idx = nextIdx
+  end 'trailing'
+
+  return s.slice(startPos, endIndex: lastNonWsEnd)
+end 'trimWhitespace'
+
+// Read lines from startLine until a closing ``` is found, joining with newlines.
+export function readCodeBlock(lines TextLineArray, startLine LineNumber, lineCount LineNumber) returns String
+  var result = ""
+  var first = true
+  for i in startLine upto lineCount 'read'
+    let line = try lines.get(i) otherwise 'done'
+      break
+    end 'done'
+    if line.startsWith("```") 'endBlock'
+      break
+    end 'endBlock'
+    if first 'isFirst'
+      result = line
+      first = false
+    end 'isFirst' else 'notFirst'
+      result = "{result}\n{line}"
+    end 'notFirst'
+  end 'read'
+  return result
+end 'readCodeBlock'
+
+// Skip past a code block's closing ```.
+export function skipCodeBlock(lines TextLineArray, startLine LineNumber, lineCount LineNumber) returns LineNumber
+  for i in startLine upto lineCount 'scan'
+    let line = try lines.get(i) otherwise 'done'
+      break
+    end 'done'
+    if line.startsWith("```") 'endBlock'
+      return i + 1
+    end 'endBlock'
+  end 'scan'
+  return lineCount
+end 'skipCodeBlock'
+
+// Parse YAML frontmatter from a spec file.
+export function parseFrontmatter(content String) returns SpecFrontmatter
+  var fm = SpecFrontmatter{feature: "unknown", status: "unknown", category: "unknown"}
+  let lines = content.split("\n")
+  let lineCount = lines.count()
+
+  // Check for opening ---
+  let firstLine = trimWhitespace(try lines.get(0) otherwise "")
+  if firstLine != "---" 'noFrontmatter'
+    return fm
+  end 'noFrontmatter'
+
+  // Scan for closing ---
+  for i in 1 upto lineCount 'scan'
+    let line = trimWhitespace(try lines.get(i) otherwise "")
+    if line == "---" 'endFrontmatter'
+      break
+    end 'endFrontmatter'
+
+    // Parse "key: value" lines
+    let colonIdx = try line.findFirst(": ") otherwise 'skipLine'
+      continue
+    end 'skipLine'
+    let key = line.slice(line.startIndex(), endIndex: colonIdx)
+    let afterColon = try line.indexAfter(colonIdx) otherwise 'skipLine2'
+      continue
+    end 'skipLine2'
+    let afterSpace = try line.indexAfter(afterColon) otherwise 'skipLine3'
+      continue
+    end 'skipLine3'
+    let value = trimWhitespace(line.slice(afterSpace, endIndex: line.endIndex()))
+
+    if key == "feature" 'isFeature'
+      fm.feature = value
+    end 'isFeature' else if key == "status" 'isStatus'
+      fm.status = value
+    end 'isStatus' else if key == "category" 'isCategory'
+      fm.category = value
+    end 'isCategory'
+  end 'scan'
+
+  return fm
+end 'parseFrontmatter'
+
+// Split source containing "// --- file: name.maxon" markers into multiple files.
+// Returns empty array if no file markers found.
+export function splitMultiFileSource(source String) returns SourceFileArray
+  var files = SourceFileArray{}
+  let lines = source.split("\n")
+  let lineCount = lines.count()
+
+  // First pass: find all marker positions
+  var markerLines = IntArray{}
+  var markerNames = TextLineArray{}
+
+  for i in 0 upto lineCount 'findMarkers'
+    let line = try lines.get(i) otherwise 'skip'
+      continue
+    end 'skip'
+    if line.startsWith("// --- file: ") 'isMarker'
+      markerLines.push(i)
+      // Extract filename: everything after "// --- file: "
+      // Skip "// --- file: " (13 chars) to get filename
+      var nameIdx = line.startIndex()
+      for _ in 0 upto 13 'skipPrefix'
+        nameIdx = try line.indexAfter(nameIdx) otherwise 'skipBad'
+          break
+        end 'skipBad'
+      end 'skipPrefix'
+      let fileName = trimWhitespace(line.slice(nameIdx, endIndex: line.endIndex()))
+      markerNames.push(fileName)
+    end 'isMarker'
+  end 'findMarkers'
+
+  if markerLines.count() == 0 'noMarkers'
+    return files
+  end 'noMarkers'
+
+  // Second pass: extract source between markers
+  for m in 0 upto markerLines.count() 'extractFiles'
+    let startLine = (try markerLines.get(m) otherwise 0) + 1
+    let endLine = try markerLines.get(m + 1) otherwise lineCount
+    let fileName = try markerNames.get(m) otherwise ""
+
+    var fileSource = ""
+    var first = true
+    for i in startLine upto endLine 'buildSource'
+      let line = try lines.get(i) otherwise 'skipLine'
+        continue
+      end 'skipLine'
+      if first 'isFirst'
+        fileSource = line
+        first = false
+      end 'isFirst' else 'notFirst'
+        fileSource = "{fileSource}\n{line}"
+      end 'notFirst'
+    end 'buildSource'
+
+    var pair = SourceFilePair{fileName: fileName, source: trimWhitespace(fileSource)}
+    files.push(pair)
+  end 'extractFiles'
+
+  return files
+end 'splitMultiFileSource'
+
+// Parse a spec file and extract all tests.
+export function parseSpecFile(content String, targetKey String) returns SpecTestArray
+  var tests = SpecTestArray{}
+  let lines = content.split("\n")
+  var i = 0
+  let lineCount = lines.count()
+
+  // Find the ## Tests section (skip ## Documentation)
+  var inTestsSection = false
+  var testsStartLine = 0
+
+  while i < lineCount 'findTests'
+    let line = try lines.get(i) otherwise 'skip'
+      i = i + 1
+      continue
+    end 'skip'
+
+    if line.startsWith("## Tests") 'foundTests'
+      inTestsSection = true
+      testsStartLine = i + 1
+      i = i + 1
+      break
+    end 'foundTests'
+
+    // If we hit a test marker before ## Tests, just start parsing from here
+    if line.contains("<!-- test:") 'earlyTest'
+      inTestsSection = true
+      testsStartLine = i
+      break
+    end 'earlyTest'
+
+    if line.contains("<!-- disabled-test:") 'earlyDisabled'
+      inTestsSection = true
+      testsStartLine = i
+      break
+    end 'earlyDisabled'
+
+    i = i + 1
+  end 'findTests'
+
+  if not inTestsSection 'noTests'
+    // Try extracting doc examples even without a Tests section
+    let docTests = extractDocExamples(content)
+    return docTests
+  end 'noTests'
+
+  i = testsStartLine
+
+  while i < lineCount 'scan'
+    let line = try lines.get(i) otherwise 'skipScan'
+      i = i + 1
+      continue
+    end 'skipScan'
+
+    // Check for disabled test marker (acts as boundary only)
+    if line.contains("<!-- disabled-test:") 'isDisabled'
+      i = i + 1
+      // Skip until next test marker
+      while i < lineCount 'skipDisabled'
+        let dLine = try lines.get(i) otherwise 'skipD'
+          i = i + 1
+          continue
+        end 'skipD'
+        if dLine.contains("<!-- test:") 'nextActive'
+          break
+        end 'nextActive'
+        if dLine.contains("<!-- disabled-test:") 'nextDisabled'
+          break
+        end 'nextDisabled'
+        i = i + 1
+      end 'skipDisabled'
+      continue
+    end 'isDisabled'
+
+    // Check for active test marker
+    if line.contains("<!-- test:") 'isTestMarker'
+      // Extract test name between "<!-- test: " and " -->"
+      let nameStart = try line.findFirst(": ") otherwise 'skipMarker'
+        i = i + 1
+        continue
+      end 'skipMarker'
+      let nameStartIdx = try line.indexAfter(nameStart) otherwise 'skipMarker2'
+        i = i + 1
+        continue
+      end 'skipMarker2'
+      let nameStartIdx2 = try line.indexAfter(nameStartIdx) otherwise 'skipMarker3'
+        i = i + 1
+        continue
+      end 'skipMarker3'
+      let nameEnd = try line.findFirst(" -->") otherwise 'skipMarker4'
+        i = i + 1
+        continue
+      end 'skipMarker4'
+      let testName = line.slice(nameStartIdx2, endIndex: nameEnd)
+
+      // Scan for directives and code blocks after this marker
+      var source = ""
+      var expectation = TestExpectation{}
+      var testArgs = ""
+      var testMmTrace = false
+      var testAsyncTrace = false
+      i = i + 1
+
+      while i < lineCount 'blocks'
+        let blockLine = try lines.get(i) otherwise 'skipBlock'
+          i = i + 1
+          continue
+        end 'skipBlock'
+
+        // Hit next test marker (active or disabled) — stop
+        if blockLine.contains("<!-- test:") 'nextTest'
+          break
+        end 'nextTest'
+        if blockLine.contains("<!-- disabled-test:") 'nextDisabledTest'
+          break
+        end 'nextDisabledTest'
+
+        // Parse Args directive
+        if blockLine.contains("<!-- Args:") 'isArgs'
+          let argsStart = try blockLine.findFirst("Args: ") otherwise 'skipArgs'
+            i = i + 1
+            continue
+          end 'skipArgs'
+          // Skip past "Args: " (6 chars)
+          var argsIdx = argsStart
+          for _ in 0 upto 6 'skipPrefix'
+            argsIdx = try blockLine.indexAfter(argsIdx) otherwise 'skipArgs2'
+              i = i + 1
+              continue
+            end 'skipArgs2'
+          end 'skipPrefix'
+          let argsEnd = try blockLine.findFirst(" -->") otherwise 'skipArgs3'
+            i = i + 1
+            continue
+          end 'skipArgs3'
+          testArgs = blockLine.slice(argsIdx, endIndex: argsEnd)
+          i = i + 1
+          continue
+        end 'isArgs'
+
+        // Parse MmTrace directive
+        if blockLine.contains("<!-- MmTrace") 'isMmTrace'
+          testMmTrace = true
+          i = i + 1
+          continue
+        end 'isMmTrace'
+
+        // Parse AsyncTrace directive
+        if blockLine.contains("<!-- AsyncTrace") 'isAsyncTrace'
+          testAsyncTrace = true
+          i = i + 1
+          continue
+        end 'isAsyncTrace'
+
+        // Check maxoncstderr before maxon since "```maxoncstderr" also startsWith "```maxon"
+        if blockLine.startsWith("```maxoncstderr") 'isCompilerStderr'
+          i = i + 1
+          let stderrBlock = readCodeBlock(lines, startLine: i, lineCount: lineCount)
+          expectation.compilerStderr = stderrBlock
+          expectation.hasCompilerStderr = true
+          i = skipCodeBlock(lines, startLine: i, lineCount: lineCount)
+          continue
+        end 'isCompilerStderr'
+
+        if blockLine.startsWith("```maxon") 'isMaxon'
+          i = i + 1
+          source = readCodeBlock(lines, startLine: i, lineCount: lineCount)
+          i = skipCodeBlock(lines, startLine: i, lineCount: lineCount)
+          continue
+        end 'isMaxon'
+
+        if blockLine.startsWith("```stderr") 'isRuntimeStderr'
+          i = i + 1
+          let runtimeStderrBlock = readCodeBlock(lines, startLine: i, lineCount: lineCount)
+          expectation.runtimeStderr = runtimeStderrBlock
+          expectation.hasRuntimeStderr = true
+          i = skipCodeBlock(lines, startLine: i, lineCount: lineCount)
+          continue
+        end 'isRuntimeStderr'
+
+        if blockLine.startsWith("```exitcode") 'isExitCode'
+          i = i + 1
+          let ecStr = readCodeBlock(lines, startLine: i, lineCount: lineCount)
+          i = skipCodeBlock(lines, startLine: i, lineCount: lineCount)
+          let ecVal = try int.fromString(trimWhitespace(ecStr)) otherwise 'badEc'
+            continue
+          end 'badEc'
+          expectation.exitCode = ecVal
+          expectation.hasExitCode = true
+          continue
+        end 'isExitCode'
+
+        if blockLine.startsWith("```stdout") 'isStdout'
+          i = i + 1
+          let stdoutBlock = readCodeBlock(lines, startLine: i, lineCount: lineCount)
+          expectation.stdout = stdoutBlock
+          expectation.hasStdout = true
+          i = skipCodeBlock(lines, startLine: i, lineCount: lineCount)
+          continue
+        end 'isStdout'
+
+        // RequiredMLIR — prefer target-qualified, fall back to unqualified
+        if not targetKey.isEmpty() 'hasTargetKey'
+          if blockLine.startsWith("```RequiredMLIR:{targetKey}") 'isTargetMLIR'
+            i = i + 1
+            let mlirBlock = readCodeBlock(lines, startLine: i, lineCount: lineCount)
+            expectation.requiredMLIR = mlirBlock
+            expectation.hasRequiredMLIR = true
+            i = skipCodeBlock(lines, startLine: i, lineCount: lineCount)
+            continue
+          end 'isTargetMLIR'
+        end 'hasTargetKey'
+
+        if blockLine.startsWith("```RequiredMLIR") 'isMLIR'
+          // Only use unqualified if we haven't found a target-qualified one
+          if not expectation.hasRequiredMLIR 'noTargetMLIR'
+            i = i + 1
+            let mlirBlock = readCodeBlock(lines, startLine: i, lineCount: lineCount)
+            expectation.requiredMLIR = mlirBlock
+            expectation.hasRequiredMLIR = true
+            i = skipCodeBlock(lines, startLine: i, lineCount: lineCount)
+            continue
+          end 'noTargetMLIR' else 'skipUnqualified'
+            i = skipCodeBlock(lines, startLine: i + 1, lineCount: lineCount)
+            continue
+          end 'skipUnqualified'
+        end 'isMLIR'
+
+        if blockLine.startsWith("```RequiredRdata") 'isRdata'
+          i = i + 1
+          let rdataBlock = readCodeBlock(lines, startLine: i, lineCount: lineCount)
+          expectation.requiredRdata = rdataBlock
+          expectation.hasRequiredRdata = true
+          i = skipCodeBlock(lines, startLine: i, lineCount: lineCount)
+          continue
+        end 'isRdata'
+
+        if blockLine.startsWith("```RequiredData") 'isData'
+          i = i + 1
+          let dataBlock = readCodeBlock(lines, startLine: i, lineCount: lineCount)
+          expectation.requiredData = dataBlock
+          expectation.hasRequiredData = true
+          i = skipCodeBlock(lines, startLine: i, lineCount: lineCount)
+          continue
+        end 'isData'
+
+        i = i + 1
+      end 'blocks'
+
+      // Only add test if we found source code
+      if not source.isEmpty() 'hasSource'
+        expectation.mmTrace = testMmTrace
+        expectation.asyncTrace = testAsyncTrace
+
+        // Split multi-file source
+        let sourceFiles = splitMultiFileSource(source)
+        let hasMulti = sourceFiles.count() > 0
+
+        var test = SpecTest{
+          name: testName,
+          source: source,
+          expectation: expectation,
+          args: testArgs,
+          sourceFiles: sourceFiles,
+          hasMultiFile: hasMulti,
+          mmTrace: testMmTrace,
+          asyncTrace: testAsyncTrace
+        }
+        tests.push(test)
+      end 'hasSource'
+      continue
+    end 'isTestMarker'
+
+    i = i + 1
+  end 'scan'
+
+  // Also extract documentation examples
+  let docTests = extractDocExamples(content)
+  for docTest in docTests 'addDocs'
+    tests.push(docTest)
+  end 'addDocs'
+
+  return tests
+end 'parseSpecFile'
+
+// Extract executable examples from the ## Documentation section.
+export function extractDocExamples(content String) returns SpecTestArray
+  var tests = SpecTestArray{}
+  let lines = content.split("\n")
+  let lineCount = lines.count()
+
+  // Find ## Documentation section
+  var docStart = -1
+  var docEnd = lineCount
+  for i in 0 upto lineCount 'findDoc'
+    let line = try lines.get(i) otherwise 'skip'
+      continue
+    end 'skip'
+    if line.startsWith("## Documentation") 'foundDoc'
+      docStart = i + 1
+    end 'foundDoc' else if docStart >= 0 'afterDoc'
+      if line.startsWith("## Tests") 'foundTests'
+        docEnd = i
+        break
+      end 'foundTests'
+    end 'afterDoc'
+  end 'findDoc'
+
+  if docStart < 0 'noDoc'
+    return tests
+  end 'noDoc'
+
+  var exampleIndex = 0
+  var i = docStart
+
+  while i < docEnd 'scanDoc'
+    let line = try lines.get(i) otherwise 'skipLine'
+      i = i + 1
+      continue
+    end 'skipLine'
+
+    if line.startsWith("```maxon") 'isMaxonBlock'
+      i = i + 1
+      let code = readCodeBlock(lines, startLine: i, lineCount: docEnd)
+      let blockEndLine = skipCodeBlock(lines, startLine: i, lineCount: docEnd)
+
+      // Only include examples with main function
+      if code.contains("function main()") 'hasMain'
+        exampleIndex = exampleIndex + 1
+        let testName = "docs-example-{exampleIndex}"
+
+        var expectation = TestExpectation{}
+
+        // Check for maxoncstderr block immediately after
+        let nextLine = try lines.get(blockEndLine) otherwise ""
+        if nextLine.startsWith("```maxoncstderr") 'hasCompilerErr'
+          let stderrBlock = readCodeBlock(lines, startLine: blockEndLine + 1, lineCount: docEnd)
+          expectation.compilerStderr = stderrBlock
+          expectation.hasCompilerStderr = true
+        end 'hasCompilerErr' else if nextLine.startsWith("```exitcode") 'hasExitCode'
+          let ecStr = readCodeBlock(lines, startLine: blockEndLine + 1, lineCount: docEnd)
+          let ecVal = try int.fromString(trimWhitespace(ecStr)) otherwise 'badEc'
+            continue
+          end 'badEc'
+          expectation.exitCode = ecVal
+          expectation.hasExitCode = true
+        end 'hasExitCode' else 'defaultExitCode'
+          // Default: expect exit code 0
+          expectation.exitCode = 0
+          expectation.hasExitCode = true
+        end 'defaultExitCode'
+
+        var test = SpecTest{
+          name: testName,
+          source: code,
+          expectation: expectation,
+          args: "",
+          sourceFiles: SourceFileArray{},
+          hasMultiFile: false,
+          mmTrace: false,
+          asyncTrace: false
+        }
+        tests.push(test)
+      end 'hasMain'
+
+      i = blockEndLine
+      continue
+    end 'isMaxonBlock'
+
+    i = i + 1
+  end 'scanDoc'
+
+  return tests
+end 'extractDocExamples'

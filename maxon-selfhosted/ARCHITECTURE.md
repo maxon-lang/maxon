@@ -53,7 +53,9 @@ maxon-selfhosted/
         ElfWriter.maxon                ELF executable writer
 
   Testing/
-    SpecTestRunner.maxon               Spec file parser and test runner
+    SpecParser.maxon                   Spec file parser, types, and frontmatter/directive extraction
+    FragmentGenerator.maxon            Fragment file generation, writing, and parsing
+    SpecTestRunner.maxon               Fragment-based test runner pipeline
     IncrementalTestRunner.maxon        Incremental compilation cache tests
 ```
 

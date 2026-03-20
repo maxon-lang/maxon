@@ -29,6 +29,8 @@ export type MaxonArgs
     export var emitIr bool
     export var dumpStages bool
     export var trackAllocs bool
+    export var updateRequired bool
+    export var verbose bool
 
     export static function parse() returns MaxonArgs throws ArgError
         let allArgs = CommandLine.args()
@@ -40,7 +42,9 @@ export type MaxonArgs
             targetOption: TargetOption.host,
             emitIr: false,
             dumpStages: false,
-            trackAllocs: false
+            trackAllocs: false,
+            updateRequired: false,
+            verbose: false
         }
 
         if allArgs.isEmpty() 'noArgs'
@@ -79,7 +83,11 @@ export type MaxonArgs
                 args.dumpStages = true
             end 'isDumpStages' else if arg == "--track-allocs" 'isTrackAllocs'
                 args.trackAllocs = true
-            end 'isTrackAllocs' else if not arg.startsWith("--") 'isPositional'
+            end 'isTrackAllocs' else if arg == "--update-required" 'isUpdateRequired'
+                args.updateRequired = true
+            end 'isUpdateRequired' else if arg == "--verbose" 'isVerbose'
+                args.verbose = true
+            end 'isVerbose' else if not arg.startsWith("--") 'isPositional'
                 args.path = arg
             end 'isPositional'
         end 'scan'
