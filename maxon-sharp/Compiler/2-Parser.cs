@@ -5071,6 +5071,8 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
     }
     if (Check(TokenType.Return)) {
       ParseReturn();
+    } else if (Check(TokenType.At)) {
+      ParseAnnotatedDecl();
     } else if (Check(TokenType.Var)) {
       ParseVarDecl();
     } else if (Check(TokenType.Let)) {
@@ -6103,6 +6105,19 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
     return new ExprResult.Direct(loadedResult);
   }
 
+  private void ParseAnnotatedDecl() {
+    var atToken = Advance(); // consume '@'
+    var annotation = Expect(TokenType.Identifier);
+    if (annotation.Value != "heap")
+      throw new CompileError(ErrorCode.ParserUnexpectedToken, $"Unknown annotation '@{annotation.Value}' (expected '@heap')", atToken.Line, atToken.Column);
+    if (Check(TokenType.Var))
+      ParseVarOrLetDecl(isMutable: true, forceHeap: true);
+    else if (Check(TokenType.Let))
+      ParseVarOrLetDecl(isMutable: false, forceHeap: true);
+    else
+      throw new CompileError(ErrorCode.ParserUnexpectedToken, "@heap must be followed by 'var' or 'let'", atToken.Line, atToken.Column);
+  }
+
   private void ParseVarDecl() {
     ParseVarOrLetDecl(isMutable: true);
   }
@@ -6111,7 +6126,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
     ParseVarOrLetDecl(isMutable: false);
   }
 
-  private void ParseVarOrLetDecl(bool isMutable) {
+  private void ParseVarOrLetDecl(bool isMutable, bool forceHeap = false) {
     Advance(); // consume 'var' or 'let'
     _lastRangedTypeName = null;
 
@@ -6151,9 +6166,14 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
       MarkLetDiscardResult(nameToken);
     }
 
+    if (forceHeap && initValue is not MaxonStruct)
+      throw new CompileError(ErrorCode.ParserUnexpectedToken, "@heap can only be used with struct literals", nameToken.Line, nameToken.Column);
+
     if (initValue is MaxonStruct structVal) {
       var kind = MaxonValueKind.Struct;
-      _currentBlock!.AddOp(new MaxonAssignOp(name, initValue, isDeclaration: true, isMutable: isMutable, kind));
+      var assignOp = new MaxonAssignOp(name, initValue, isDeclaration: true, isMutable: isMutable, kind);
+      if (forceHeap) assignOp.ForceHeap = true;
+      _currentBlock!.AddOp(assignOp);
       if (!isDiscard) {
         _variables.Declare(name, kind, isMutable, initValue, _currentBlock!, structTypeName: structVal.TypeName);
         // Fix temp ownership AFTER adding named var so __try_result_ ends up after it in the dict.

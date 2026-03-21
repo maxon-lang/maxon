@@ -82,6 +82,10 @@ public class MlirModule<TOp> where TOp : IPrintableOp {
   // Ambiguous exported type names (same name from different files)
   public HashSet<string> AmbiguousTypeNames { get; } = [];
 
+  // Struct literal result IDs eligible for stack allocation (no escape).
+  // Populated by StackPromotionAnalysisPass, consumed by MaxonToStandardConversion.
+  public HashSet<int> StackEligibleStructs { get; } = [];
+
   public void AddFunction(MlirFunction<TOp> func) {
     Functions.Add(func);
   }

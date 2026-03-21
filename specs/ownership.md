@@ -43,7 +43,7 @@ type Point
 end 'Point'
 
 function testLocal()
-  var p = Point{x: 1, y: 2}
+  @heap var p = Point{x: 1, y: 2}
   print("{p.x}\n")
 end 'testLocal'
 
@@ -128,7 +128,7 @@ end 'Widget'
 function testNestedBlock(cond bool)
   var result = 0
   if cond 'check'
-    var w = Widget{id: 42}
+    @heap var w = Widget{id: 42}
     result = w.id
   end 'check'
   print("{result}\n")
@@ -720,7 +720,7 @@ end 'Widget'
 function main() returns ExitCode
   var result = 0
   if true 'check'
-    var w = Widget{id: 5}
+    @heap var w = Widget{id: 5}
     result = w.id
   end 'check'
   print("{result}\n")
@@ -781,7 +781,7 @@ function main() returns ExitCode
   var total = 0
   var i = 0
   while i < 5 'loop'
-    var c = Counter{val: i}
+    @heap var c = Counter{val: i}
     total = total + c.val
     i = i + 1
   end 'loop'

@@ -316,7 +316,7 @@ type Resource
 end 'Resource'
 
 function createAndDrop() returns Integer
-  var r = Resource{id: 42}
+  @heap var r = Resource{id: 42}
   return r.id
 end 'createAndDrop'
 
@@ -367,7 +367,7 @@ end 'Point'
 function main() returns ExitCode
   var result = 0
   if true 'block'
-    var p = Point{x: 10, y: 20}
+    @heap var p = Point{x: 10, y: 20}
     result = p.x
   end 'block'
   return result
@@ -2096,7 +2096,7 @@ end 'Wrapper'
 
 function compute(flag Integer) returns Integer
   if flag > 0 'check'
-    var w = Wrapper{val: flag}
+    @heap var w = Wrapper{val: flag}
     return w.val + 1
   end 'check'
   return 0

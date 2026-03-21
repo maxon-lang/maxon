@@ -112,7 +112,7 @@ All variables must be used (E3012). The exact name `_` is a discard identifier -
 
 **Auto-conformance:** The compiler auto-generates `Cloneable` and `Equatable` conformance for structs whose fields are all Cloneable/Equatable. Primitives, `String`, and `Array` are built-in Cloneable and Equatable types. Use `.clone()` to create independent copies.
 
-**Scope cleanup:** Struct variables are automatically freed when they go out of scope (reference-counted). Returned structs are not freed at scope exit — the caller takes responsibility for their lifetime.
+**Scope cleanup:** Struct variables are automatically freed when they go out of scope (reference-counted). Returned structs are not freed at scope exit — the caller takes responsibility for their lifetime. Structs with all-primitive fields that don't escape scope are automatically stack-promoted (no heap allocation or refcounting). Use `@heap var p = Point{...}` to force heap allocation.
 
 **Borrow checking:** You cannot mutate a collection while a variable borrows from it (e.g., a reference obtained via `.get()`). Borrows expire at the last use of the borrowing variable (non-lexical lifetimes). Error E3070.
 

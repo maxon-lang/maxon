@@ -370,6 +370,7 @@ function_type = '(' [ type_ref { ',' type_ref } ] ')' 'returns' type_ref
 body          = { statement NEWLINE }
 
 statement     = return_stmt
+              | annotated_decl
               | var_decl
               | let_decl
               | if_stmt
@@ -393,6 +394,9 @@ expression_stmt
 ### 5.1 Variable Declarations
 
 ```
+annotated_decl
+              = '@heap' ( var_decl | let_decl )
+
 var_decl      = 'var' IDENTIFIER '=' expression
               | 'var' '(' IDENTIFIER { ',' IDENTIFIER } ')' '=' expression
 

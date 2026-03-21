@@ -19,6 +19,15 @@ public class StdHeapPtr(int id, string typeName, string? varName = null) : StdI6
   public string? VarName { get; } = varName;
 }
 public class StdU32(int id) : StdI32(id);
+/// <summary>
+/// Marker value for struct literals promoted to stack allocation.
+/// Field values are stored in named variables: {VarName}.__f{index}.
+/// </summary>
+public class StdStackStruct(int id, string varName, string typeName, int fieldCount) : StdValue(id) {
+  public string VarName { get; } = varName;
+  public string TypeName { get; } = typeName;
+  public int FieldCount { get; } = fieldCount;
+}
 public class StdF32(int id) : StdValue(id);
 public class StdF64(int id) : StdValue(id);
 public class StdBool(int id) : StdValue(id);

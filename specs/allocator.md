@@ -14,7 +14,7 @@ The allocator uses 18 size classes and a 64MB arena for large objects.
 
 <!-- test: slab-first-alloc-triggers-os-alloc -->
 <!-- MmTrace -->
-The first heap allocation triggers a single `os_alloc size=67108864` (64MB arena).
+The first heap allocation triggers a single `os_alloc size=67108864` (64MB arena). `@heap` forces heap allocation for allocator testing.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -24,7 +24,7 @@ type Point
 end 'Point'
 
 function main() returns ExitCode
-  var p = Point{x: 1, y: 2}
+  @heap var p = Point{x: 1, y: 2}
   return p.x
 end 'main'
 ```
@@ -48,7 +48,7 @@ mm_raw_free #R1
 
 <!-- test: slab-class-routing-8-byte-user-data -->
 <!-- MmTrace -->
-A struct with 8 bytes user data: `mm_alloc` requests 40 bytes (8+32), routes to class 4 (48 bytes) since 48 >= 40.
+A struct with 8 bytes user data: `mm_alloc` requests 40 bytes (8+32), routes to class 4 (48 bytes) since 48 >= 40. `@heap` forces heap allocation.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -57,7 +57,7 @@ type Tiny
 end 'Tiny'
 
 function main() returns ExitCode
-  var t = Tiny{x: 7}
+  @heap var t = Tiny{x: 7}
   return t.x
 end 'main'
 ```
@@ -127,7 +127,7 @@ mm_raw_free #R1
 
 <!-- test: slab-two-types-two-classes -->
 <!-- MmTrace -->
-Two types with different sizes land in different size classes. Small (8 bytes user data, 40 total) goes to class 4 (48), Large (40 bytes user data, 72 total) goes to class 6 (96).
+Two types with different sizes land in different size classes. Small (8 bytes user data, 40 total) goes to class 4 (48), Large (40 bytes user data, 72 total) goes to class 6 (96). `@heap` forces heap allocation.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -144,8 +144,8 @@ type Large
 end 'Large'
 
 function main() returns ExitCode
-  var s = Small{x: 1}
-  var l = Large{a: 1, b: 2, c: 3, d: 4, e: 5}
+  @heap var s = Small{x: 1}
+  @heap var l = Large{a: 1, b: 2, c: 3, d: 4, e: 5}
   return s.x + l.a
 end 'main'
 ```
@@ -284,7 +284,7 @@ mm_raw_free #R3
 
 <!-- test: slab-class-boundary-exact -->
 <!-- MmTrace -->
-A struct with exactly 2 `Integer` fields (16 bytes user data) needs `16 + 32 = 48` bytes — exactly the class 4 slot size (48), so it routes to class 4. A struct with 3 fields (24 bytes user data) needs `24 + 32 = 56` bytes — exceeds class 4, routes to class 5 (64 bytes). Verifies the `>=` boundary in the class routing loop.
+A struct with exactly 2 `Integer` fields (16 bytes user data) needs `16 + 32 = 48` bytes — exactly the class 4 slot size (48), so it routes to class 4. A struct with 3 fields (24 bytes user data) needs `24 + 32 = 56` bytes — exceeds class 4, routes to class 5 (64 bytes). Verifies the `>=` boundary in the class routing loop. `@heap` forces heap allocation.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -300,8 +300,8 @@ type ThreeField
 end 'ThreeField'
 
 function main() returns ExitCode
-  var t = TwoField{a: 1, b: 2}
-  var h = ThreeField{a: 3, b: 4, c: 5}
+  @heap var t = TwoField{a: 1, b: 2}
+  @heap var h = ThreeField{a: 3, b: 4, c: 5}
   return t.a + h.a
 end 'main'
 ```
@@ -341,7 +341,7 @@ type Tag
 end 'Tag'
 
 function main() returns ExitCode
-  var tag = Tag{id: 42}
+  @heap var tag = Tag{id: 42}
   var medium = IntArray{}
   medium.reserve(5000)
   var huge = IntArray{}

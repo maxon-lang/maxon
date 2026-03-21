@@ -153,6 +153,8 @@ public class MaxonAssignOp(string varName, MaxonValue value, bool isDeclaration,
   public bool IsMutable { get; } = isMutable;
   public MaxonValueKind ValueKind { get; } = valueKind;
   public OwnershipFlags? OwnerFlags { get; set; }
+  /// Allocator tests need deterministic heap traces; @heap opts out of stack promotion for that variable.
+  public bool ForceHeap { get; set; }
   public override IReadOnlyList<string> PrintableOperands => [Value.ToString()];
   public override IReadOnlyDictionary<string, MlirAttribute> PrintableAttributes {
     get {

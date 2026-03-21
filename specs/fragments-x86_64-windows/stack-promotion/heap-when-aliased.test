@@ -1,4 +1,4 @@
-// Test: slab-first-alloc-triggers-os-alloc
+// Test: heap-when-aliased
 typealias Integer = int(i64.min to i64.max)
 
 type Point
@@ -7,8 +7,9 @@ type Point
 end 'Point'
 
 function main() returns ExitCode
-  @heap var p = Point{x: 1, y: 2}
-  return p.x
+  var a = Point{x: 1, y: 2}
+  var b = a
+  return b.x
 end 'main'
 ---
 MmTrace: true
@@ -16,10 +17,12 @@ ExitCode: 1
 Stderr: ```
 sl_init
   os_alloc size=67108864
-mm_alloc Point #1 size=16 [allocator.main]
+mm_alloc Point #1 size=16 [stack-promotion.main]
   sl_alloc Point #1 size=48 class=4
-mm_incref Point #1 rc=1 [allocator.main]
-mm_decref Point #1 rc=0 [allocator.main]
+mm_incref Point #1 rc=1 [stack-promotion.main]
+mm_incref Point #1 rc=2 [stack-promotion.main]
+mm_decref Point #1 rc=1 [stack-promotion.main]
+mm_decref Point #1 rc=0 [stack-promotion.main]
   mm_free Point #1
     sl_free Point #1 size=48 class=4
 mm_raw_alloc #R1 size=40
@@ -29,9 +32,9 @@ mm_raw_free #R1
 ```
 ---
 module {
-  func @allocator.main() -> u32 {
+  func @stack-promotion.main() -> u32 {
   entry:
-    x86.prologue stack_size=16
+    x86.prologue stack_size=32
     x86.mov rax, 1
     x86.mov rcx, 2
     x86.mov rcx, 16
@@ -49,31 +52,42 @@ module {
     x86.mov rcx, [rbp-8]
     x86.call mm_incref
     x86.mov r9, [rbp-8]
-    x86.mov rax, [r9+0]
-    x86.mov [rbp-16], rax
-    x86.xor rcx, rcx
-    x86.cmp rax, rcx
-    x86.setl rcx
-    x86.movzx rcx, rcxb
-    x86.mov rdx, 4294967295
-    x86.cmp rax, rdx
-    x86.setg rax
+    x86.mov [rbp-16], r9
+    x86.mov rax, [rbp-16]
+    x86.mov rcx, [rbp-16]
+    x86.call mm_incref
+    x86.mov rax, [rbp-16]
+    x86.mov rcx, [rax+0]
+    x86.mov [rbp-24], rcx
+    x86.xor rax, rax
+    x86.cmp rcx, rax
+    x86.setl rax
     x86.movzx rax, raxb
-    x86.or rcx, rax
-    x86.test rcx, rcx
-    x86.je allocator.main.__range_ok_0
+    x86.mov rdx, 4294967295
+    x86.cmp rcx, rdx
+    x86.setg rcx
+    x86.movzx rcx, rcxb
+    x86.or rax, rcx
+    x86.test rax, rax
+    x86.je stack-promotion.main.__range_ok_0
   __range_panic_0:
-    x86.lea_symdata rax, [__panic_msg_24]
+    x86.lea_symdata rax, [__panic_msg_25]
     x86.mov rcx, rax
     x86.call maxon_panic
   __range_ok_0:
-    x86.mov rax, [rbp-16]
-    x86.mov rcx, [rbp-8]
+    x86.mov rax, [rbp-24]
+    x86.mov rcx, [rbp-16]
     x86.test rcx, rcx
     x86.jz __nonnull_skip_0
     x86.call mm_decref
     x86.label __nonnull_skip_0
-    x86.mov rax, [rbp-16]
+    x86.mov rax, [rbp-8]
+    x86.test rax, rax
+    x86.jz __nonnull_skip_1
+    x86.mov rcx, [rbp-8]
+    x86.call mm_decref
+    x86.label __nonnull_skip_1
+    x86.mov rax, [rbp-24]
     x86.epilogue
     x86.ret
   }

@@ -101,6 +101,8 @@ public enum TokenType {
   Colon,
   Dot,
 
+  At,          // @
+
   // Formatting
   Newline,
   DocComment,
@@ -405,6 +407,12 @@ public class Lexer(string source) {
     // Conditional compilation directives: #if, #else, #endif
     if (c == '#') {
       return ScanDirective(startLine, startColumn);
+    }
+
+    // Compiler annotations: @heap
+    if (c == '@') {
+      Advance();
+      return new Token(TokenType.At, "@", startLine, startColumn);
     }
 
     // Unknown

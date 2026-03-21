@@ -244,6 +244,8 @@ public static partial class MaxonToStandardConversion {
       var varNameToStructPrefix = new Dictionary<string, string>();
       // Maps variable names to their struct type name (for monomorphized type parameter vars)
       var varNameToStructType = new Dictionary<string, string>();
+      // Variables that are stack-allocated structs (skip refcounting and scope cleanup)
+      var stackAllocatedVars = new HashSet<string>();
       _varNameToStructType = varNameToStructType;
       var temps = new VarRegistry();
       // Use pre-computed constant array literal metadata from ConstantArrayAnalysisPass
@@ -288,7 +290,8 @@ public static partial class MaxonToStandardConversion {
           if (resultId != null
             && block.Operations[oi + 1] is MaxonAssignOp assign
             && assign.Value.Id == resultId
-            && assign.IsDeclaration) {
+            && assign.IsDeclaration
+            && !module.StackEligibleStructs.Contains(resultId.Value)) {
             inlineTargets[resultId.Value] = assign.VarName;
           }
         }
@@ -748,12 +751,41 @@ public static partial class MaxonToStandardConversion {
               break;
             }
             case MaxonStructLiteralOp structLitOp: {
+              var structType = (MlirStructType)module.TypeDefs[structLitOp.TypeName];
+
+              // Stack allocation path: decompose struct into named field variables
+              if (module.StackEligibleStructs.Contains(structLitOp.Result.Id)) {
+                // Find the target variable name from the immediately following declaration assign
+                string? stackVarName = null;
+                var blockOps = block.Operations;
+                for (int si = 0; si < blockOps.Count - 1; si++) {
+                  if (ReferenceEquals(blockOps[si], structLitOp)
+                      && blockOps[si + 1] is MaxonAssignOp sa && sa.IsDeclaration && sa.Value.Id == structLitOp.Result.Id) {
+                    stackVarName = sa.VarName;
+                    break;
+                  }
+                }
+                stackVarName ??= $"__stack_{structLitOp.Result.Id}";
+
+                // Store each field as a named variable: varName.__f0, varName.__f1, ...
+                for (int fi = 0; fi < structLitOp.FieldValues.Count; fi++) {
+                  var (fieldName, fieldVal) = structLitOp.FieldValues[fi];
+                  var mappedVal = valueMap[fieldVal];
+                  var fieldVarName = $"{stackVarName}.__f{fi}";
+                  EmitStore(newBlock, mappedVal, fieldVarName, varTypes);
+                }
+
+                valueMap[structLitOp.Result] = new StdStackStruct(
+                    structLitOp.Result.Id, stackVarName, structLitOp.TypeName, structType.Fields.Count);
+                stackAllocatedVars.Add(stackVarName);
+                break;
+              }
+
               // Heap-allocate the struct and store each field via indirect stores.
               // If this literal is immediately assigned, use the target variable name for the heap pointer.
               var tempName = inlineTargets.TryGetValue(structLitOp.Result.Id, out var inlineTarget)
                 ? inlineTarget
                 : temps.CreateTemp("struct", structLitOp.Result.Id, structLitOp.TypeName, OwnershipFlags.None);
-              var structType = (MlirStructType)module.TypeDefs[structLitOp.TypeName];
 
               // Allocate memory for the struct on the heap
               var structPtr = EmitAlloc(newBlock, structType.SizeInBytes, structLitOp.TypeName, scopeName: func.Name);
@@ -926,6 +958,11 @@ public static partial class MaxonToStandardConversion {
               break;
             }
             case MaxonAssignOp assignOp: {
+              // Stack-allocated struct: fields are already stored by the struct literal handler;
+              // skip the normal heap-assign path which would cast to StdHeapPtr.
+              if (valueMap.TryGetValue(assignOp.Value, out var assignSvCheck) && assignSvCheck is StdStackStruct) {
+                break;
+              }
               // Associated-value enums now use heap pointers (like structs) and fall
               // through to the struct assignment path below.
               // Check valueMap for StdHeapPtr as the authoritative source: managed list ops like
@@ -1041,6 +1078,15 @@ public static partial class MaxonToStandardConversion {
               break;
             }
             case MaxonStructVarRefOp structVarRef: {
+              // Stack-allocated struct: propagate the StdStackStruct marker
+              if (stackAllocatedVars.Contains(structVarRef.VarName)) {
+                var ssTypeName = structVarRef.StructTypeName;
+                var ssStructType = (MlirStructType)module.TypeDefs[ssTypeName];
+                valueMap[structVarRef.Result] = new StdStackStruct(
+                    structVarRef.Result.Id, structVarRef.VarName, ssTypeName, ssStructType.Fields.Count);
+                break;
+              }
+
               // With heap refs, self fields are accessed via indirect loads from self's heap pointer.
               // For struct-typed self fields, load the nested heap pointer and store in a temp var.
               // Cache the load so repeated references to the same self field reuse the temp var.
@@ -1070,6 +1116,14 @@ public static partial class MaxonToStandardConversion {
               break;
             }
             case MaxonFieldAccessOp fieldAccess: {
+              // Stack-allocated struct: load directly from named field variable
+              if (valueMap.TryGetValue(fieldAccess.StructValue, out var faStackCheck) && faStackCheck is StdStackStruct faStack) {
+                var faStackFieldVarName = ResolveStackFieldVar(faStack, fieldAccess.FieldName, module);
+                var faStackLoaded = EmitLoad(newBlock, faStackFieldVarName, varTypes);
+                valueMap[fieldAccess.Result] = faStackLoaded;
+                break;
+              }
+
               var structName = ((StdHeapPtr)valueMap[fieldAccess.StructValue]).VarName!;
               // Resolve the field type and offset from the struct type definition
               var parentTypeName = valueMap.TryGetValue(fieldAccess.StructValue, out var ptnSv2) && ptnSv2 is StdHeapPtr ptnHp2 ? ptnHp2.TypeName : null;
@@ -1162,6 +1216,14 @@ public static partial class MaxonToStandardConversion {
               break;
             }
             case MaxonFieldAssignOp fieldAssign: {
+              // Stack-allocated struct: store directly to named field variable
+              if (valueMap.TryGetValue(fieldAssign.StructValue, out var fsStackCheck) && fsStackCheck is StdStackStruct fsStack) {
+                var fsStackFieldVarName = ResolveStackFieldVar(fsStack, fieldAssign.FieldName, module);
+                var fsStackMappedVal = valueMap[fieldAssign.NewValue];
+                EmitStore(newBlock, fsStackMappedVal, fsStackFieldVarName, varTypes);
+                break;
+              }
+
               var structName = ((StdHeapPtr)valueMap[fieldAssign.StructValue]).VarName!;
 
               // Resolve the field type and offset from the struct type definition
@@ -1327,6 +1389,8 @@ public static partial class MaxonToStandardConversion {
                 // double-free after a field reassignment (assign decrefs old, scope_end
                 // would then decref the new value still held by the field).
                 if (IsSelfField(isStructInstanceMethod, selfStructType, v)) continue;
+                // Stack-allocated structs need no refcount cleanup — stack reclaims them
+                if (stackAllocatedVars.Contains(v)) continue;
                 // Only decref if this var is actually managed (has a struct type)
                 if (!varNameToStructType.ContainsKey(v)) continue;
                 // Simple mm_decref — destructors handle field cleanup when rc reaches 0
@@ -1958,6 +2022,12 @@ public static partial class MaxonToStandardConversion {
     EmitTagTable(result);
 
     return result;
+  }
+
+  private static string ResolveStackFieldVar(StdStackStruct stack, string fieldName, MlirModule<MaxonOp> module) {
+    var structType = (MlirStructType)module.TypeDefs[stack.TypeName];
+    var fieldIdx = structType.Fields.FindIndex(f => f.Name == fieldName);
+    return $"{stack.VarName}.__f{fieldIdx}";
   }
 
   private static void GenerateGlobalCleanup(MlirModule<MaxonOp> module, MlirModule<StandardOp> result) {

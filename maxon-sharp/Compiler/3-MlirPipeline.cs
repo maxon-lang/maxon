@@ -50,6 +50,9 @@ public class MlirPipeline {
     // Borrow checking (after monomorphization so concrete method names are resolved)
     BorrowCheckPass.Run(module);
 
+    // Stack promotion analysis: identify struct literals safe for stack allocation
+    StackPromotionAnalysisPass.Run(module);
+
     // Capture maxon stage
     if (returnIr || dumpStagesBasePath != null) {
       if (returnIr) {

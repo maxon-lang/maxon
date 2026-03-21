@@ -24,7 +24,7 @@ type Point
 end 'Point'
 
 function main() returns ExitCode
-  var p = Point{x: 1, y: 2}
+  @heap var p = Point{x: 1, y: 2}
   return p.x
 end 'main'
 ```
@@ -146,7 +146,7 @@ end 'Widget'
 function main() returns ExitCode
   var result = 0
   if true 'inner'
-    var w = Widget{id: 7}
+    @heap var w = Widget{id: 7}
     result = w.id
   end 'inner'
   return result
@@ -268,7 +268,7 @@ function main() returns ExitCode
   var total = 0
   var i = 0
   while i < 4 'loop'
-    var c = Counter{n: i}
+    @heap var c = Counter{n: i}
     total = total + c.n
     i = i + 1
   end 'loop'
@@ -324,7 +324,7 @@ end 'Step'
 function main() returns ExitCode
   var i = 0
   while i < 10 'loop'
-    var s = Step{val: i}
+    @heap var s = Step{val: i}
     if s.val == 3 'stop'
       break
     end 'stop'
@@ -1401,9 +1401,9 @@ type Step
 end 'Step'
 
 function compute(flag bool) returns Integer
-  var outer = Step{n: 1}
+  @heap var outer = Step{n: 1}
   if flag 'inner'
-    var inner = Step{n: 2}
+    @heap var inner = Step{n: 2}
     return outer.n + inner.n
   end 'inner'
   return outer.n
@@ -2832,7 +2832,7 @@ mm_raw_free #R1
 A tuple of primitives is heap-allocated and freed at scope exit.
 ```maxon
 function main() returns ExitCode
-  var t = (10, 32)
+  @heap var t = (10, 32)
   return t.0
 end 'main'
 ```

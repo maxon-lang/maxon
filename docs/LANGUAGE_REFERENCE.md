@@ -1248,7 +1248,7 @@ let name = "Maxon"
 - All variables must be initialized at declaration
 - Type is always inferred from the initializer
 - Scope is block-scoped
-- Primitives are stack-allocated; `var` arrays use heap buffers (with automatic cleanup)
+- Primitives are stack-allocated; structs with all-primitive fields that don't escape scope are stack-promoted automatically; `var` arrays use heap buffers (with automatic cleanup)
 - For struct-typed variables, `var b = a` creates a reference (alias to the same object); use `var b = a.clone()` for an independent copy (see [Reference-by-Default Assignment](#reference-by-default-assignment))
 - All variables must be used; unused variables cause a compile error (E3012). This applies to `let`/`var` declarations, function parameters, for-loop variables, match pattern bindings, and closure parameters.
 - The variable name `_` is a special discard identifier: it creates no binding and is exempt from unused variable checks. Only the exact name `_` is a discard -- names like `_x` are regular variables subject to normal unused checks. Multiple `_` discards are allowed in tuple destructuring and match patterns (e.g., `for (_, _) in pairs` or `case pair(_, _)`).
@@ -3602,6 +3602,26 @@ print("{a.x}")          // 1 -- a still points to the original
 ```
 
 All types in Maxon use reference semantics on assignment — the variable is rebound to a new value only when reassigned with an expression. The practical distinction is that struct field mutations are visible through aliases, whereas arithmetic on ranged integers and primitives always produces a new value and rebinds the variable, leaving the original unchanged.
+
+### Stack Promotion
+
+The compiler performs escape analysis to identify struct literals that can be safely stack-allocated instead of heap-allocated. A struct is promoted to the stack when all of the following are true:
+
+- All fields are primitive types (no heap-allocated field types)
+- The variable is not aliased (not assigned to another variable)
+- The variable is not passed to a function or captured by a closure
+- The variable is not returned from the function
+- The variable is used only within its declaring block
+
+Stack-promoted structs are freed automatically when the stack frame is reclaimed — no reference counting overhead is incurred. This optimization is transparent and preserves the same semantics as heap allocation.
+
+The `@heap` annotation forces a struct to be heap-allocated, bypassing stack promotion:
+
+```maxon
+@heap var p = Point{x: 1, y: 2}  // always heap-allocated
+```
+
+`@heap` is only valid on `var` or `let` declarations with struct literal initializers.
 
 ### Explicit Cloning
 
