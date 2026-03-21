@@ -49,21 +49,54 @@ function findRuntimePath() returns FilePath
     return FilePath from ""
 end 'findRuntimePath'
 
-export function emitBackend(module MlirModule, target Target, globalData GlobalDataTable) returns CodeResult throws CompileError
-    // Load runtime functions from runtime.mid and prepend them to the module.
-    // These are expressed as mid-level IR (arith/cf/func/memref/sys ops)
-    // and will be lowered by the target backends just like user functions.
-    let runtimeFuncs = loadRuntimeFunctions()
-    var augmentedModule = createMlirModule()
+export type BackendIrResult
+    export var codeResult CodeResult
+    export var archIr String
+end 'BackendIrResult'
 
-    // Runtime functions come first so they appear before user functions in the code.
+export function emitBackendWithIr(module MlirModule, target Target, globalData GlobalDataTable) returns BackendIrResult throws CompileError
+    let augmentedModule = augmentWithRuntime(module)
+    return emitBackendWithIrForCpu(augmentedModule, target: target, globalData: globalData)
+end 'emitBackendWithIr'
+
+function emitBackendWithIrForCpu(module MlirModule, target Target, globalData GlobalDataTable) returns BackendIrResult
+    match target.cpu 'cpu'
+        CpuArch.x86_64 then return emitBackendWithIrX86(module, target: target, globalData: globalData)
+        CpuArch.aarch64 then return emitBackendWithIrArm64(module, target: target, globalData: globalData)
+    end 'cpu'
+end 'emitBackendWithIrForCpu'
+
+function emitBackendWithIrX86(module MlirModule, target Target, globalData GlobalDataTable) returns BackendIrResult
+    let archModule = lowerMidToMaxX64(module, target: target)
+    let archIr = printModule(archModule, skipStdlib: true)
+    let result = emitX86(archModule, target: target, globalData: globalData)
+    return BackendIrResult{codeResult: result, archIr: archIr}
+end 'emitBackendWithIrX86'
+
+function emitBackendWithIrArm64(module MlirModule, target Target, globalData GlobalDataTable) returns BackendIrResult
+    let archModule = lowerMidToMaxArm64(module, target: target)
+    let archIr = printModule(archModule, skipStdlib: true)
+    let result = emitMaxArm64(archModule, target: target, globalData: globalData)
+    return BackendIrResult{codeResult: result, archIr: archIr}
+end 'emitBackendWithIrArm64'
+
+// Prepends runtime functions from runtime.mid to a user module.
+// Runtime functions are expressed as mid-level IR (arith/cf/func/memref/sys ops)
+// and will be lowered by the target backends just like user functions.
+function augmentWithRuntime(module MlirModule) returns MlirModule
+    let runtimeFuncs = loadRuntimeFunctions()
+    var augmented = createMlirModule()
     for rtFunc in runtimeFuncs 'prependRt'
-        augmentedModule.functions.push(rtFunc)
+        augmented.functions.push(rtFunc)
     end 'prependRt'
-    // Then user functions
     for userFunc in module.functions 'appendUser'
-        augmentedModule.functions.push(userFunc)
+        augmented.functions.push(userFunc)
     end 'appendUser'
+    return augmented
+end 'augmentWithRuntime'
+
+export function emitBackend(module MlirModule, target Target, globalData GlobalDataTable) returns CodeResult throws CompileError
+    let augmentedModule = augmentWithRuntime(module)
 
     var result = CodeResult{code: ByteArray{}, mainCallFixupOffset: 0, relocations: RelocationArray{}, globalData: globalData}
     match target.cpu 'cpu'
@@ -79,18 +112,4 @@ export function writeExecutable(outputPath FilePath, codeResult CodeResult, targ
         Os.linux then writeElf(outputPath, codeResult: codeResult, target: target)
         Os.macos then writeMachO(outputPath, codeResult: codeResult, target: target)
     end 'os'
-
-    // Unix hosts need executable permission set after writing the binary
-    #if os(Macos)
-    let chmodEc = Process.execute("chmod +x {outputPath}", timeoutMs: 5000)
-    if chmodEc != 0 'chmodFail'
-        logError(LogCategory.binary, message: "chmod +x failed for {outputPath}")
-    end 'chmodFail'
-    #endif
-    #if os(Linux)
-    let chmodEc = Process.execute("chmod +x {outputPath}", timeoutMs: 5000)
-    if chmodEc != 0 'chmodFail'
-        logError(LogCategory.binary, message: "chmod +x failed for {outputPath}")
-    end 'chmodFail'
-    #endif
 end 'writeExecutable'

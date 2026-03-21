@@ -4799,6 +4799,24 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
       Advance();
       return (MlirType.I1, new IntegerAttr(0, MlirType.I1));
     }
+    // Union/enum case: TypeName.caseName
+    if (CheckIdentifierLike() && PeekNext().Type == TokenType.Dot) {
+      var typeToken = Advance(); // consume type name
+      Advance(); // consume '.'
+      var caseToken = ExpectIdentifierLike();
+      var typeName = typeToken.Value;
+      // Resolve the type to validate it exists and is a union
+      var resolvedName = ResolveBaseTypeName(typeName);
+      if (!_typeRegistry.TryGetValue(resolvedName, out var type) || type is not MlirUnionType unionType) {
+        throw new CompileError(ErrorCode.ParserExpectedExpression,
+          $"'{typeName}' is not a known union type for default value",
+          typeToken.Line, typeToken.Column);
+      }
+      var _ = unionType.GetCase(caseToken.Value) ?? throw new CompileError(ErrorCode.ParserExpectedExpression,
+          $"'{caseToken.Value}' is not a case of union '{typeName}'",
+          caseToken.Line, caseToken.Column);
+      return (type, new EnumAttr(resolvedName, caseToken.Value));
+    }
     throw new CompileError(ErrorCode.ParserExpectedExpression, "Expected default value", Current().Line, Current().Column);
   }
 
@@ -6216,8 +6234,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
     do {
       bool isDecl = false;
       bool isMutable = false;
-      if (Check(TokenType.Var)) { Advance(); isDecl = true; isMutable = true; }
-      else if (Check(TokenType.Let)) { Advance(); isDecl = true; isMutable = false; }
+      if (Check(TokenType.Var)) { Advance(); isDecl = true; isMutable = true; } else if (Check(TokenType.Let)) { Advance(); isDecl = true; isMutable = false; }
       var nameToken = Expect(TokenType.Identifier);
       slots.Add(new TupleSlot(nameToken, isDecl, isMutable));
       if (!Check(TokenType.Comma)) break;
@@ -7400,6 +7417,18 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
         _currentBlock!.AddOp(op);
         return (true, op.Result);
       }
+      case "openWriteExecutable": {
+        // openWriteExecutable(managed) → maxon_managed_file_open_write_executable(cstring) → managed file ptr or -1
+        // Same as openWrite but creates file with executable permissions (0755) on Unix.
+        TrySkipArgLabel();
+        var managed = ResolveExprValue(ParseExpression());
+        Expect(TokenType.RightParen);
+        var toCstrOp = new MaxonManagedToCStringOp(managed);
+        _currentBlock!.AddOp(toCstrOp);
+        var op = new MaxonCallRuntimeOp("maxon_managed_file_open_write_executable", [toCstrOp.Result], true);
+        _currentBlock!.AddOp(op);
+        return (true, op.Result);
+      }
       case "exists": {
         // exists(managed) → maxon_file_exists(cstring) → 1/0
         TrySkipArgLabel();
@@ -8028,6 +8057,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
     Expect(TokenType.In);
     var iterableExpr = ParseExpression();
     var iterableValue = ResolveExprValue(iterableExpr);
+    var iterableSourceVarName = _lastExprVarName; // capture before further parsing overwrites it
 
     // Range expression: `for i in start to end` or `for i in start upto end`
     if (Check(TokenType.To) || Check(TokenType.Upto)) {
@@ -8229,8 +8259,21 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
       }
     }
 
+    // Make iterator source immutable for the loop body to prevent mutation during iteration
+    VarInfo? originalIterableInfo = null;
+    if (iterableSourceVarName != null && _variables.TryGetValue(iterableSourceVarName, out var srcInfo) && srcInfo.Mutable) {
+      originalIterableInfo = srcInfo;
+      _variables[iterableSourceVarName] = srcInfo with { Mutable = false };
+    }
+
     // Parse the body
     ParseBodyUntilEnd();
+
+    // Restore original mutability after loop body
+    if (originalIterableInfo != null) {
+      _variables[iterableSourceVarName!] = originalIterableInfo;
+    }
+
     var forInInnerScope = _variables.KeysSince(forInOuterScope);
     var loopCtx = _loopStack.Peek();
     PopScope();
@@ -10372,7 +10415,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
               => TryEmitBuiltinManagedMemoryStaticMethod,
             "__ManagedSocket" when nextMethod is "tcpConnect"
               => TryEmitBuiltinManagedSocketStaticMethod,
-            "__ManagedFile" when nextMethod is "openRead" or "openWrite" or "exists" or "delete"
+            "__ManagedFile" when nextMethod is "openRead" or "openWrite" or "openWriteExecutable" or "exists" or "delete"
               => TryEmitBuiltinManagedFileStaticMethod,
             "__ManagedDirectory" when nextMethod is "openSearch" or "exists" or "create" or "currentPath"
               => TryEmitBuiltinManagedDirectoryStaticMethod,
@@ -13802,18 +13845,36 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
   /// Emits a literal op for a default attribute value and returns the resulting MaxonValue.
   /// </summary>
   private MaxonValue EmitDefaultLiteral(MlirAttribute attr, MlirType type, Token errorToken, string context) {
-    MaxonLiteralOp defaultOp;
     if (attr is IntegerAttr intAttr && type == MlirType.I1) {
-      defaultOp = new MaxonLiteralOp(intAttr.Value != 0);
-    } else if (attr is IntegerAttr intAttr2) {
-      defaultOp = new MaxonLiteralOp(intAttr2.Value);
-    } else if (attr is FloatAttr floatAttr) {
-      defaultOp = new MaxonLiteralOp(floatAttr.Value);
-    } else {
-      throw new CompileError(ErrorCode.ParserExpectedExpression, context, errorToken.Line, errorToken.Column);
+      var defaultOp = new MaxonLiteralOp(intAttr.Value != 0);
+      _currentBlock!.AddOp(defaultOp);
+      return defaultOp.Result;
     }
-    _currentBlock!.AddOp(defaultOp);
-    return defaultOp.Result;
+    if (attr is IntegerAttr intAttr2) {
+      var defaultOp = new MaxonLiteralOp(intAttr2.Value);
+      _currentBlock!.AddOp(defaultOp);
+      return defaultOp.Result;
+    }
+    if (attr is FloatAttr floatAttr) {
+      var defaultOp = new MaxonLiteralOp(floatAttr.Value);
+      _currentBlock!.AddOp(defaultOp);
+      return defaultOp.Result;
+    }
+    if (attr is EnumAttr enumAttr) {
+      var enumType = (MlirUnionType)_typeRegistry[enumAttr.EnumTypeName];
+      var enumCase = enumType.GetCase(enumAttr.CaseName)!;
+      MaxonEnumLiteralOp enumOp;
+      if (enumType.BackingType == MlirType.F64) {
+        enumOp = new MaxonEnumLiteralOp(enumAttr.EnumTypeName, enumAttr.CaseName, (double)enumCase.RawValue!);
+      } else if (enumType.BackingType == MlirType.I64) {
+        enumOp = new MaxonEnumLiteralOp(enumAttr.EnumTypeName, enumAttr.CaseName, (long)enumCase.RawValue!);
+      } else {
+        enumOp = new MaxonEnumLiteralOp(enumAttr.EnumTypeName, enumAttr.CaseName, (long)enumCase.Ordinal);
+      }
+      _currentBlock!.AddOp(enumOp);
+      return enumOp.Result;
+    }
+    throw new CompileError(ErrorCode.ParserExpectedExpression, context, errorToken.Line, errorToken.Column);
   }
 
   private static long ParseIntegerLiteral(Token token) {
@@ -14210,10 +14271,42 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
   }
 
   /// <summary>
-  /// Evaluate a conditional compilation condition like os(Windows) or arch(x86_64).
-  /// Returns true if the condition matches the current compilation target.
+  /// Evaluate a conditional compilation condition with boolean operators.
+  /// Supports: os(X), arch(X), testing(X), `not`, `and`, `or`.
+  /// Precedence (lowest→highest): or → and → not → atom.
   /// </summary>
   private bool EvaluateConditionalCondition() {
+    var result = EvaluateConditionalOr();
+    return result;
+  }
+
+  private bool EvaluateConditionalOr() {
+    var result = EvaluateConditionalAnd();
+    while (Check(TokenType.Or)) {
+      Advance();
+      result = EvaluateConditionalAnd() | result; // no short-circuit — must consume tokens
+    }
+    return result;
+  }
+
+  private bool EvaluateConditionalAnd() {
+    var result = EvaluateConditionalUnary();
+    while (Check(TokenType.And)) {
+      Advance();
+      result = EvaluateConditionalUnary() & result; // no short-circuit — must consume tokens
+    }
+    return result;
+  }
+
+  private bool EvaluateConditionalUnary() {
+    if (Check(TokenType.Not)) {
+      Advance();
+      return !EvaluateConditionalUnary();
+    }
+    return EvaluateConditionalAtom();
+  }
+
+  private bool EvaluateConditionalAtom() {
     var funcToken = Expect(TokenType.Identifier);
     var funcName = funcToken.Value;
     Expect(TokenType.LeftParen);

@@ -58,12 +58,13 @@ module {
     x86.mov r8, 2
     x86.call mm_alloc
     x86.mov [rbp-16], rax
+    x86.mov rax, [rbp-16]
+    x86.xor rcx, rcx
+    x86.mov [rax+0], rcx
+    x86.mov rax, [rbp-8]
     x86.mov rcx, [rbp-16]
-    x86.xor rdx, rdx
-    x86.mov [rcx+0], rdx
+    x86.mov [rcx+8], rax
     x86.mov rcx, [rbp-8]
-    x86.mov rdx, [rbp-16]
-    x86.mov [rdx+8], rcx
     x86.call mm_incref
     x86.lea_rdata rax, [__const_array_skip.main_items]
     x86.mov rcx, rax
@@ -76,18 +77,14 @@ module {
     x86.xor rax, rax
     x86.mov [rbp-24], rax
     x86.mov rax, [rbp-16]
+    x86.mov rcx, [rbp-16]
+    x86.call __Array_i64.__createIter
     x86.mov [rbp-32], rax
-    x86.mov rax, [rbp-32]
-    x86.mov rcx, [rbp-32]
-    x86.call mm_incref
-    x86.mov rax, [rbp-32]
-    x86.mov rcx, [rbp-32]
-    x86.call __Array_i64.createIterator
     x86.jmp skip.main.loop_1.header
   loop_1.header:
     x86.mov rax, [rbp-32]
     x86.mov rcx, [rbp-32]
-    x86.call __Array_i64.next
+    x86.call ____Array_i64_Iter.next
     x86.mov [rbp-40], rax
     x86.xor rcx, rcx
     x86.cmp rdx, rcx
@@ -110,7 +107,7 @@ module {
   skip_5.body:
     x86.mov rax, [rbp-32]
     x86.mov rcx, [rbp-32]
-    x86.call __Array_i64.next
+    x86.call ____Array_i64_Iter.next
     x86.xor rcx, rcx
     x86.cmp rdx, rcx
     x86.jne skip.main.loop_1.exit
@@ -195,6 +192,22 @@ module {
     x86.call mm_decref
     x86.label __nonnull_skip_2
     x86.jmp __destruct___Array_i64.done
+  done:
+    x86.epilogue
+    x86.ret
+  }
+  func @__destruct___Array_Iter(ptr: i64) {
+  entry:
+    x86.prologue stack_size=16
+    x86.mov [rbp-8], rcx
+    x86.mov rax, [rbp-8]
+    x86.mov rcx, [rax+0]
+    x86.mov [rbp-16], rcx
+    x86.test rcx, rcx
+    x86.jz __nonnull_skip_3
+    x86.call mm_decref
+    x86.label __nonnull_skip_3
+    x86.jmp __destruct___Array_Iter.done
   done:
     x86.epilogue
     x86.ret

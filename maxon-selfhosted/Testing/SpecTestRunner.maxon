@@ -120,8 +120,9 @@ export function runAllSpecTests(filter String, target Target) returns ExitCode
 
       totalTests = totalTests + 1
 
-      // Generate fragment and write to disk (IR section empty — self-hosted compiler lacks returnIr)
-      writeFragment(fragmentDir, specName: specName, test: test, compileIr: "")
+      // Generate fragment: compile with IR capture and pass it to fragment writer
+      let compileIr = compileForIr(test, projectRoot: root, target: target)
+      writeFragment(fragmentDir, specName: specName, test: test, compileIr: compileIr)
       totalFragmentsWritten = totalFragmentsWritten + 1
 
       // Step 2: Parse the fragment back
@@ -363,6 +364,52 @@ function stripFilePathFromError(line String) returns String
   let message = restAfterC2.slice(afterC3Space, endIndex: restAfterC2.endIndex())
   return "{prefix}{message}"
 end 'stripFilePathFromError'
+
+// Compile a test case and return the arch-level IR text.
+// Returns empty string if compilation fails (expected for compiler-error tests).
+function compileForIr(test SpecTest, projectRoot FilePath, target Target) returns String
+    // Skip IR capture for tests that expect compiler errors
+    if test.expectation.hasCompilerStderr 'expectError'
+        return ""
+    end 'expectError'
+
+    let tempDir = projectRoot.join("temp")
+    // Ensure temp dir exists
+    if not tempDir.directoryExists() 'noTemp'
+        let _ = Process.execute("mkdir -p {tempDir}", timeoutMs: 5000)
+    end 'noTemp'
+
+    let tempSource = tempDir.join("spectest_ir_temp.maxon")
+
+    // Write test source to temp file
+    try File.writeText(tempSource, content: test.source) otherwise 'writeErr'
+        return ""
+    end 'writeErr'
+
+    // Compile with IR capture
+    let irResult = try compileWithIr(tempSource, target: target) otherwise 'compileFailed'
+        // Clean up temp files
+        if tempSource.fileExists() 'delSrc'
+            try File.delete(tempSource) otherwise 'delErr'
+            end 'delErr'
+        end 'delSrc'
+        return ""
+    end 'compileFailed'
+
+    // Clean up temp files
+    if tempSource.fileExists() 'delSrc2'
+        try File.delete(tempSource) otherwise 'delErr2'
+        end 'delErr2'
+    end 'delSrc2'
+    let ext = executableExtension(target)
+    let tempExe = tempDir.join("spectest_ir_temp{ext}")
+    if tempExe.fileExists() 'delExe'
+        try File.delete(tempExe) otherwise 'delErr3'
+        end 'delErr3'
+    end 'delExe'
+
+    return irResult.archIr
+end 'compileForIr'
 
 function cleanup(tempSource FilePath, tempExe FilePath)
   if tempSource.fileExists() 'src'

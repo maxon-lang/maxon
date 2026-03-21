@@ -70,6 +70,7 @@ public partial class X86CodeEmitter {
     EmitNetSocketDestructor();
     EmitManagedFileOpenRead();
     EmitManagedFileOpenWrite();
+    EmitManagedFileOpenWriteExecutable();
     EmitFileExists();
     EmitSleep();
     EmitManagedFileWrite();
@@ -3301,6 +3302,37 @@ public partial class X86CodeEmitter {
   }
 
   /// <summary>
+  /// maxon_managed_file_open_write_executable(cstring) → managed __ManagedFile ptr or -1.
+  /// Same as open_write but on Unix creates file with mode 0755 (executable) instead of 0666.
+  /// On Windows this is identical to open_write (no Unix permissions).
+  /// </summary>
+  private void EmitManagedFileOpenWriteExecutable() {
+    EmitRuntimeFunctionStart("maxon_managed_file_open_write_executable", 1, 0x30);
+    EmitMovRegImm(X86Register.Rcx, SyncOpFileOpenWriteExec);
+    EmitMovRegMem(X86Register.Rdx, -0x08, 8);            // arg0 = cstring path
+    EmitXorRegReg(X86Register.R8, X86Register.R8);        // arg1 = 0
+    EmitCallRuntimeLabel("__io_submit_sync");
+    // RAX = raw file handle or -1
+    EmitMovRegImm(X86Register.Rcx, -1);
+    EmitCmpRegReg(X86Register.Rax, X86Register.Rcx);
+    EmitJcc("e", "rt_mfowe_fail");
+    EmitMovMemReg(-0x10, X86Register.Rax, 8);            // save handle
+    // Allocate __ManagedFile via mm_alloc(8, destructor_ptr, tag_index=0)
+    EmitMovRegImm(X86Register.Rcx, 8);
+    EmitLeaFuncAddr(X86Register.Rdx, "__destruct___ManagedFile");
+    EmitTagZero(X86Register.R8);
+    EmitCallRuntimeLabel("mm_alloc");
+    // RAX = managed user pointer; store file handle at [ptr+0]
+    EmitMovRegMem(X86Register.Rcx, -0x10, 8);
+    EmitBytes(0x48, 0x89, 0x08);                          // MOV [RAX], RCX
+    EmitJmp("rt_mfowe_done");
+    DefineLabel("rt_mfowe_fail");
+    EmitMovRegImm(X86Register.Rax, -1);
+    DefineLabel("rt_mfowe_done");
+    EmitRuntimeFunctionEnd();
+  }
+
+  /// <summary>
   /// maxon_file_exists(cstring) → 1 if file exists (and is not a directory), 0 otherwise.
   /// Delegates to __io_submit_sync(SyncOpFileExists, path, 0) which returns 0 or 1.
   /// Stack: [rbp-8]=path
@@ -3777,6 +3809,7 @@ public partial class X86CodeEmitter {
       DefineSymdata("__at_io_op_get_cwd", " [get_cwd]\0"u8.ToArray());
       DefineSymdata("__at_io_op_file_open_read", " [file_open_read]\0"u8.ToArray());
       DefineSymdata("__at_io_op_file_open_write", " [file_open_write]\0"u8.ToArray());
+      DefineSymdata("__at_io_op_file_open_write_exec", " [file_open_write_exec]\0"u8.ToArray());
       DefineSymdata("__at_io_op_close_handle", " [close_handle]\0"u8.ToArray());
       DefineSymdata("__at_io_op_net_connect", " [net_connect]\0"u8.ToArray());
       DefineSymdata("__at_io_op_net_send", " [net_send]\0"u8.ToArray());
@@ -5501,6 +5534,7 @@ public partial class X86CodeEmitter {
   private const long SyncOpNetRecv = 12;
   private const long SyncOpNetClose = 13;
   private const long SyncOpDnsResolve = 14;
+  private const long SyncOpFileOpenWriteExec = 15;
   private const long SyncOpShutdown = 0xFF;
 
   private void EmitIoRuntime() {
@@ -5865,6 +5899,8 @@ public partial class X86CodeEmitter {
     EmitJcc("e", "__io_sync_op_net_close");
     EmitCmpRegImm(X86Register.Rcx, SyncOpDnsResolve);
     EmitJcc("e", "__io_sync_op_dns_resolve");
+    EmitCmpRegImm(X86Register.Rcx, SyncOpFileOpenWriteExec);
+    EmitJcc("e", "__io_sync_op_file_open_write_exec");
     // Unknown op — abort
     EmitCallRuntimeLabel("__gt_panic_io");
 
@@ -6009,6 +6045,35 @@ public partial class X86CodeEmitter {
     EmitMovRegMem(X86Register.Rax, -0x28, 8);
     EmitJmp("__io_sync_op_done");
     DefineLabel("__io_sync_file_open_write_fail");
+    EmitMovRegImm(X86Register.Rax, -1);
+    EmitJmp("__io_sync_op_done");
+
+    // --- SyncOpFileOpenWriteExec: same as file_open_write on Windows (no Unix permissions) ---
+    DefineLabel("__io_sync_op_file_open_write_exec");
+    EmitMovRegMem(X86Register.Rax, -0x08, 8);
+    EmitMovRegIndirectMem(X86Register.Rcx, X86Register.Rax, SyncReqOffArg0); // path
+    EmitMovRegImm(X86Register.Rdx, 0x40000000);         // GENERIC_WRITE
+    EmitXorRegReg(X86Register.R8, X86Register.R8);      // dwShareMode = 0
+    EmitXorRegReg(X86Register.R9, X86Register.R9);      // lpSecurityAttributes = NULL
+    EmitBytes(0x48, 0xC7, 0x44, 0x24, 0x20, 0x02, 0x00, 0x00, 0x00); // [rsp+0x20] = CREATE_ALWAYS (2)
+    EmitBytes(0x48, 0xC7, 0x44, 0x24, 0x28, 0x00, 0x00, 0x00, 0x40); // [rsp+0x28] = FILE_FLAG_OVERLAPPED (0x40000000)
+    EmitBytes(0x48, 0xC7, 0x44, 0x24, 0x30, 0x00, 0x00, 0x00, 0x00); // [rsp+0x30] = NULL
+    EmitCallImport("kernel32.dll", "CreateFileA");
+    EmitMovRegImm(X86Register.Rcx, -1);
+    EmitCmpRegReg(X86Register.Rax, X86Register.Rcx);
+    EmitJcc("e", "__io_sync_file_open_write_exec_fail");
+    EmitMovMemReg(-0x28, X86Register.Rax, 8);          // save handle
+    EmitMovRegMem(X86Register.Rcx, -0x28, 8);
+    EmitGlobalLoadReg(X86Register.Rdx, "__io_iocp");
+    EmitXorRegReg(X86Register.R8, X86Register.R8);
+    EmitXorRegReg(X86Register.R9, X86Register.R9);
+    EmitCallImport("kernel32.dll", "CreateIoCompletionPort");
+    EmitMovRegMem(X86Register.Rcx, -0x28, 8);
+    EmitMovRegImm(X86Register.Rdx, 1);
+    EmitCallImport("kernel32.dll", "SetFileCompletionNotificationModes");
+    EmitMovRegMem(X86Register.Rax, -0x28, 8);
+    EmitJmp("__io_sync_op_done");
+    DefineLabel("__io_sync_file_open_write_exec_fail");
     EmitMovRegImm(X86Register.Rax, -1);
     EmitJmp("__io_sync_op_done");
 
@@ -6516,6 +6581,7 @@ public partial class X86CodeEmitter {
       (SyncOpGetCwd,        "__at_io_op_get_cwd"),
       (SyncOpFileOpenRead,  "__at_io_op_file_open_read"),
       (SyncOpFileOpenWrite, "__at_io_op_file_open_write"),
+      (SyncOpFileOpenWriteExec, "__at_io_op_file_open_write_exec"),
       (SyncOpCloseHandle,   "__at_io_op_close_handle"),
       (SyncOpNetConnect,    "__at_io_op_net_connect"),
       (SyncOpNetSend,       "__at_io_op_net_send"),

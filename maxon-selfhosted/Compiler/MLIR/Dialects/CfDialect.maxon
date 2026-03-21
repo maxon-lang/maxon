@@ -4,3 +4,21 @@ export union CfOp
     br(target BlockId)
     condBr(condId ValueId, thenTarget BlockId, elseTarget BlockId)
 end 'CfOp'
+
+export function printCfOp(op CfOp, blocks MlirBlockArray) returns String
+    return match op 'print'
+        br(target) gives printCfBr(target, blocks: blocks)
+        condBr(condId, thenTarget, elseTarget) gives printCfCondBr(condId, thenTarget: thenTarget, elseTarget: elseTarget, blocks: blocks)
+    end 'print'
+end 'printCfOp'
+
+function printCfBr(target BlockId, blocks MlirBlockArray) returns String
+    let label = resolveBlockLabel(target, blocks: blocks)
+    return "cf.br {label}"
+end 'printCfBr'
+
+function printCfCondBr(condId ValueId, thenTarget BlockId, elseTarget BlockId, blocks MlirBlockArray) returns String
+    let thenLabel = resolveBlockLabel(thenTarget, blocks: blocks)
+    let elseLabel = resolveBlockLabel(elseTarget, blocks: blocks)
+    return "cf.cond_br %{condId} [then: {thenLabel}, else: {elseLabel}]"
+end 'printCfCondBr'

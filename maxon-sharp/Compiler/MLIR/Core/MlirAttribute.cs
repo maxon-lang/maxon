@@ -25,3 +25,9 @@ public class StringAttr(string value) : MlirAttribute {
   public string Value { get; } = value;
   public override string ToString() => Value;
 }
+
+public class EnumAttr(string enumTypeName, string caseName) : MlirAttribute {
+  public string EnumTypeName { get; } = enumTypeName;
+  public string CaseName { get; } = caseName;
+  public override string ToString() => $"{EnumTypeName}.{CaseName}";
+}

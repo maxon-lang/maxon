@@ -80,3 +80,110 @@ export union MaxX64Op
 end 'MaxX64Op'
 
 export typealias MaxX64OpArray = Array with MaxX64Op
+
+export function printX64Register(reg X64Register) returns String
+    return match reg 'print'
+        X64Register.rax gives "rax"
+        X64Register.rcx gives "rcx"
+        X64Register.rdx gives "rdx"
+        X64Register.rbx gives "rbx"
+        X64Register.rsp gives "rsp"
+        X64Register.rbp gives "rbp"
+        X64Register.rsi gives "rsi"
+        X64Register.rdi gives "rdi"
+        X64Register.r8 gives "r8"
+        X64Register.r9 gives "r9"
+        X64Register.r10 gives "r10"
+        X64Register.r11 gives "r11"
+    end 'print'
+end 'printX64Register'
+
+function printX64JumpCondition(cond X64JumpCondition) returns String
+    return match cond 'print'
+        X64JumpCondition.e gives "e"
+        X64JumpCondition.ne gives "ne"
+        X64JumpCondition.l gives "l"
+        X64JumpCondition.le gives "le"
+        X64JumpCondition.g gives "g"
+        X64JumpCondition.ge gives "ge"
+        X64JumpCondition.b gives "b"
+        X64JumpCondition.be gives "be"
+        X64JumpCondition.a gives "a"
+        X64JumpCondition.ae gives "ae"
+        X64JumpCondition.p gives "p"
+        X64JumpCondition.np gives "np"
+    end 'print'
+end 'printX64JumpCondition'
+
+function slotOffset(slotIndex VarSlot) returns StackSize
+    return (slotIndex + 1) * 8
+end 'slotOffset'
+
+export function formatVarSlotArgs(argSlots VarSlotArray) returns String
+    var result = ""
+    for i in 0 upto argSlots.count() 'each'
+        let slot = try argSlots.get(i) otherwise 'skip'
+            continue
+        end 'skip'
+        if i > 0 'comma'
+            result = "{result}, "
+        end 'comma'
+        result = "{result}slot_{slot}"
+    end 'each'
+    return result
+end 'formatVarSlotArgs'
+
+export function printMaxX64Op(op MaxX64Op, blocks MlirBlockArray) returns String
+    return match op 'print'
+        prologue(stackSize) gives "x86.prologue stack_size={stackSize}"
+        MaxX64Op.epilogue gives "x86.epilogue"
+        movRegImm(dest, value) gives "x86.mov {printX64Register(dest)}, {value}"
+        movSlot(slotIndex, srcReg) gives "x86.mov [rbp-{slotOffset(slotIndex)}], {printX64Register(srcReg)}"
+        loadSlot(destReg, slotIndex) gives "x86.mov {printX64Register(destReg)}, [rbp-{slotOffset(slotIndex)}]"
+        addRegReg(destReg, srcReg) gives "x86.add {printX64Register(destReg)}, {printX64Register(srcReg)}"
+        subRegReg(destReg, srcReg) gives "x86.sub {printX64Register(destReg)}, {printX64Register(srcReg)}"
+        imulRegReg(destReg, srcReg) gives "x86.imul {printX64Register(destReg)}, {printX64Register(srcReg)}"
+        MaxX64Op.idivRcx gives "x86.idiv rcx"
+        MaxX64Op.iremRcx gives "x86.idiv rcx"
+        negReg(reg) gives "x86.neg {printX64Register(reg)}"
+        bitNotReg(reg) gives "x86.not {printX64Register(reg)}"
+        andRegReg(destReg, srcReg) gives "x86.and {printX64Register(destReg)}, {printX64Register(srcReg)}"
+        orRegReg(destReg, srcReg) gives "x86.or {printX64Register(destReg)}, {printX64Register(srcReg)}"
+        xorRegReg(destReg, srcReg) gives "x86.xor {printX64Register(destReg)}, {printX64Register(srcReg)}"
+        shlRegCl(reg) gives "x86.shl {printX64Register(reg)}, cl"
+        sarRegCl(reg) gives "x86.sar {printX64Register(reg)}, cl"
+        MaxX64Op.cmpRaxRcx gives "x86.cmp rax, rcx"
+        MaxX64Op.testRaxRax gives "x86.test rax, rax"
+        condJump(condition, targetBlock) gives printX64CondJump(condition, targetBlock: targetBlock, blocks: blocks)
+        jmp(targetBlock) gives printX64Jmp(targetBlock, blocks: blocks)
+        movF64Slot(slotIndex) gives "x86.movsd [rbp-{slotOffset(slotIndex)}], xmm0"
+        loadF64Slot(slotIndex) gives "x86.movsd xmm0, [rbp-{slotOffset(slotIndex)}]"
+        movF64Rdata(rdataOffset) gives "x86.movsd xmm0, [rip+__float_{rdataOffset}]"
+        MaxX64Op.ucomisd gives "x86.ucomisd xmm0, xmm1"
+        printLiteral(data) gives "x86.print_literal \"{String.from(data)}\""
+        MaxX64Op.printInt gives "x86.print_int"
+        subRspImm(value) gives "x86.sub rsp, {value}"
+        addRspImm(value) gives "x86.add rsp, {value}"
+        movRspOffsetReg(offset, srcReg) gives "x86.mov [rsp+{offset}], {printX64Register(srcReg)}"
+        loadRegRbpOffset(destReg, offset) gives "x86.mov {printX64Register(destReg)}, [rbp-{offset}]"
+        callDirect(target) gives "x86.call {String.from(target)}"
+        syscall(_, number, argSlots) gives "x86.syscall {number}({formatVarSlotArgs(argSlots)})"
+        iatCall(_, slotIndex, _) gives "x86.call_import slot_{slotIndex}"
+        globalAddr(_, name) gives "x86.lea_rdata {printX64Register(X64Register.rax)}, [{String.from(name)}]"
+        stackAddrOp(_, targetSlot) gives "x86.lea rax, [rbp-{slotOffset(targetSlot)}]"
+        storeByteOp(_, _, _) gives "x86.mov byte ptr [rax+0], cl"
+        loadByteOp(_, _, _) gives "x86.movzx rax, byte ptr [rax+0]"
+        memcpyOp(_, _, _) gives "x86.rep_movsb"
+    end 'print'
+end 'printMaxX64Op'
+
+function printX64CondJump(condition X64JumpCondition, targetBlock BlockId, blocks MlirBlockArray) returns String
+    let condStr = printX64JumpCondition(condition)
+    let label = resolveBlockLabel(targetBlock, blocks: blocks)
+    return "x86.j{condStr} {label}"
+end 'printX64CondJump'
+
+function printX64Jmp(targetBlock BlockId, blocks MlirBlockArray) returns String
+    let label = resolveBlockLabel(targetBlock, blocks: blocks)
+    return "x86.jmp {label}"
+end 'printX64Jmp'

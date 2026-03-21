@@ -115,6 +115,7 @@ module {
     x86.mov rdx, [rbp-32]
     x86.call stdlib.String.split
     x86.mov [rbp-48], rax
+    x86.mov rax, [rbp-48]
     x86.mov rcx, [rbp-48]
     x86.call StringArray.count
     x86.mov [rbp-272], rax
@@ -221,18 +222,14 @@ module {
     x86.mov rcx, [rbp-64]
     x86.call stdlib.Print.print
     x86.mov rax, [rbp-48]
+    x86.mov rcx, [rbp-48]
+    x86.call StringArray.__createIter
     x86.mov [rbp-136], rax
-    x86.mov rax, [rbp-136]
-    x86.mov rcx, [rbp-136]
-    x86.call mm_incref
-    x86.mov rax, [rbp-136]
-    x86.mov rcx, [rbp-136]
-    x86.call StringArray.createIterator
     x86.jmp string-split.main.loop_0.header
   loop_0.header:
     x86.mov rax, [rbp-136]
     x86.mov rcx, [rbp-136]
-    x86.call StringArray.next
+    x86.call __StringArray_Iter.next
     x86.mov [rbp-144], rax
     x86.xor rcx, rcx
     x86.cmp rdx, rcx
@@ -501,6 +498,22 @@ module {
     x86.call mm_decref
     x86.label __nonnull_skip_12
     x86.jmp __destruct_StringArray.done
+  done:
+    x86.epilogue
+    x86.ret
+  }
+  func @__destruct___Array_Iter(ptr: i64) {
+  entry:
+    x86.prologue stack_size=16
+    x86.mov [rbp-8], rcx
+    x86.mov rax, [rbp-8]
+    x86.mov rcx, [rax+0]
+    x86.mov [rbp-16], rcx
+    x86.test rcx, rcx
+    x86.jz __nonnull_skip_13
+    x86.call mm_decref
+    x86.label __nonnull_skip_13
+    x86.jmp __destruct___Array_Iter.done
   done:
     x86.epilogue
     x86.ret

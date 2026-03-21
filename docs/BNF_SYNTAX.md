@@ -123,12 +123,16 @@ conditional_block
                 [ '#else' NEWLINE { <tokens> } ]
                 '#endif' NEWLINE
 
-condition     = 'os' '(' IDENTIFIER ')'
+condition     = or_expr
+or_expr       = and_expr { 'or' and_expr }
+and_expr      = unary_expr { 'and' unary_expr }
+unary_expr    = 'not' unary_expr | atom
+atom          = 'os' '(' IDENTIFIER ')'
               | 'arch' '(' IDENTIFIER ')'
               | 'testing' '(' BOOL ')'
 ```
 
-Conditional compilation directives are evaluated at parse time. Supported `os` values: `Windows`, `Linux`. Supported `arch` values: `x86_64`, `aarch64`. Supported `testing` values: `true`, `false`. Nested `#if` blocks are supported.
+Conditional compilation directives are evaluated at parse time. Conditions support boolean operators `not`, `and`, `or` (precedence: `or` < `and` < `not`). Supported `os` values: `Windows`, `Linux`, `Macos`. Supported `arch` values: `x86_64`, `aarch64`. Supported `testing` values: `true`, `false`. Nested `#if` blocks are supported.
 
 ---
 

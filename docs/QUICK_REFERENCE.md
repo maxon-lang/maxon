@@ -208,7 +208,7 @@ export var sharedCounter = 0                    // visible to other files
   // x86-specific code
 #endif
 ```
-Conditions: `os(Windows)`, `os(Linux)`, `arch(x86_64)`, `arch(aarch64)`. Can appear at top-level, inside functions, and inside type bodies. Nested `#if` blocks are supported.
+Conditions: `os(Windows)`, `os(Linux)`, `os(Macos)`, `arch(x86_64)`, `arch(aarch64)`, `testing(true)`, `testing(false)`. Boolean operators: `not`, `and`, `or` (precedence: `or` < `and` < `not`). Can appear at top-level, inside functions, and inside type bodies. Nested `#if` blocks are supported.
 
 ## Control Flow
 

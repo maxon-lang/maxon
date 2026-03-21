@@ -1,3 +1,39 @@
+// Result type for compilation that also captures the arch-level IR text.
+export type CompileWithIrResult
+    export var outputPath FilePath
+    export var archIr String
+end 'CompileWithIrResult'
+
+// Compiles a file and returns both the output path and the arch-level IR text.
+export function compileWithIr(path FilePath, target Target) returns CompileWithIrResult throws CompileError
+    let project = createProject(path, isSingleFile: true, target: target)
+    return try compileProjectWithIr(project)
+end 'compileWithIr'
+
+// Compiles a project and returns both the output executable path and arch-level IR.
+function compileProjectWithIr(project Project) returns CompileWithIrResult throws CompileError
+    logInfo(LogCategory.compiler, message: "Starting compilation with IR capture")
+
+    let rootFp = try FilePath.from(project.rootPath) otherwise panic("invalid root path")
+    try loadSourceFiles(project, path: rootFp)
+
+    let midModule = try queryAllMid(project)
+    let backendResult = try emitBackendWithIr(midModule, target: project.target, globalData: project.globalData)
+
+    let firstPath = try project.db.sourcePaths.get(0) otherwise 'noFiles'
+        throw CompileError.noSourceFiles
+    end 'noFiles'
+
+    let ext = executableExtension(project.target)
+    let outputFp = try FilePath.from(firstPath) otherwise panic("invalid source path")
+    let outputPath = outputFp.changeExtension(ext)
+    writeExecutable(outputPath, codeResult: backendResult.codeResult, target: project.target)
+
+    logInfo(LogCategory.compiler, message: "Wrote {backendResult.codeResult.code.count()} bytes code to {outputPath}")
+
+    return CompileWithIrResult{outputPath: outputPath, archIr: backendResult.archIr}
+end 'compileProjectWithIr'
+
 // Convenience wrapper: compiles a file or directory and returns the output executable path.
 export function compile(path FilePath, target Target) returns FilePath throws CompileError
     let project = createProject(path, isSingleFile: false, target: target)

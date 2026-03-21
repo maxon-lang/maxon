@@ -1,0 +1,105 @@
+// MlirPrinter: serializes an MlirModule to text matching the C# MlirPrinter output.
+
+export function printModule(module MlirModule, skipStdlib bool) returns String
+    let lb = "\{"
+    let rb = "\}"
+    var sb = "module "
+    sb = "{sb}{lb}\n"
+    for func in module.functions 'eachFunc'
+        let funcName = String.from(func.name)
+        if skipStdlib 'filter'
+            if isRuntimeFunction(funcName) 'isRuntime'
+                continue
+            end 'isRuntime'
+        end 'filter'
+        sb = "{sb}{printFunction(func)}"
+    end 'eachFunc'
+    sb = "{sb}{rb}\n"
+    return sb
+end 'printModule'
+
+function printFunction(func MlirFunction) returns String
+    let lb = "\{"
+    let rb = "\}"
+    let funcName = String.from(func.name)
+    let retType = String.from(func.returnType)
+    var sb = "  func @{funcName}("
+
+    for i in 0 upto func.paramCount 'eachParam'
+        if i > 0 'comma'
+            sb = "{sb}, "
+        end 'comma'
+        sb = "{sb}ptr: i64"
+    end 'eachParam'
+
+    sb = "{sb})"
+    if not retType.isEmpty() 'hasReturn'
+        if retType != "void" 'notVoid'
+            sb = "{sb} -> {retType}"
+        end 'notVoid'
+    end 'hasReturn'
+    sb = "{sb} {lb}\n"
+
+    let blocks = func.region.blocks
+    for block in blocks 'eachBlock'
+        let blockLabel = String.from(block.label)
+        sb = "{sb}  {blockLabel}:\n"
+        for op in block.ops 'eachOp'
+            let opText = printOp(op, blocks: blocks)
+            sb = "{sb}    {opText}\n"
+        end 'eachOp'
+        if block.hasTerminator 'hasTerm'
+            let termText = printOp(block.terminator, blocks: blocks)
+            sb = "{sb}    {termText}\n"
+        end 'hasTerm'
+    end 'eachBlock'
+
+    sb = "{sb}  {rb}\n"
+    return sb
+end 'printFunction'
+
+// Runtime/stdlib functions loaded from runtime.mid should be excluded from IR output.
+function isRuntimeFunction(name String) returns bool
+    if name == "_start" 'start'
+        return true
+    end 'start'
+    if name == "write_stdout" 'writeStdout'
+        return true
+    end 'writeStdout'
+    if name == "i64_to_string" 'i64ToString'
+        return true
+    end 'i64ToString'
+    if name.startsWith("__rt_") 'rtPrefix'
+        return true
+    end 'rtPrefix'
+    if name.startsWith("__destruct_") 'destructPrefix'
+        return true
+    end 'destructPrefix'
+    if name.startsWith("maxon_") 'maxonPrefix'
+        return true
+    end 'maxonPrefix'
+    if name.startsWith("mm_") 'mmPrefix'
+        return true
+    end 'mmPrefix'
+    if name.startsWith("stdlib.") 'stdlibPrefix'
+        return true
+    end 'stdlibPrefix'
+    if name.startsWith("stdlibTest") 'stdlibTestPrefix'
+        return true
+    end 'stdlibTestPrefix'
+    return false
+end 'isRuntimeFunction'
+
+function printOp(op MlirOp, blocks MlirBlockArray) returns String
+    return match op 'dispatch'
+        maxhl(hlOp) gives printMaxHLOp(hlOp, blocks: blocks)
+        arith(arithOp) gives printArithOp(arithOp)
+        cf(cfOp) gives printCfOp(cfOp, blocks: blocks)
+        func(funcOp) gives printFuncOp(funcOp)
+        memref(memOp) gives printMemRefOp(memOp)
+        runtime(rtOp) gives printRuntimeOp(rtOp)
+        sys(sysOp) gives printSysOp(sysOp)
+        maxx64(x64Op) gives printMaxX64Op(x64Op, blocks: blocks)
+        maxarm64(a64Op) gives printMaxArm64Op(a64Op, blocks: blocks)
+    end 'dispatch'
+end 'printOp'

@@ -52,3 +52,80 @@ export union MaxHLOp
     printLiteral(data ByteArray)
     printInt(valueId ValueId)
 end 'MaxHLOp'
+
+export function printMaxHLOp(op MaxHLOp, blocks MlirBlockArray) returns String
+    let lb = "\{"
+    let rb = "\}"
+    return match op 'print'
+        literal(resultId, value) gives "%{resultId} = maxon.literal {lb}value = {value} : i64{rb}"
+        floatLiteral(resultId, rawBits) gives "%{resultId} = maxon.float_literal {lb}rawBits = {rawBits}{rb}"
+        varDecl(slotId, valueId) gives "maxon.var_decl slot_{slotId}, %{valueId}"
+        varLoad(resultId, slotId) gives "%{resultId} = maxon.var_load slot_{slotId}"
+        varStore(slotId, valueId) gives "maxon.var_store slot_{slotId}, %{valueId}"
+        add(resultId, leftId, rightId) gives "%{resultId} = maxon.binop %{leftId}, %{rightId} {lb}op = add{rb} {lb}kind = i64{rb}"
+        sub(resultId, leftId, rightId) gives "%{resultId} = maxon.binop %{leftId}, %{rightId} {lb}op = sub{rb} {lb}kind = i64{rb}"
+        mul(resultId, leftId, rightId) gives "%{resultId} = maxon.binop %{leftId}, %{rightId} {lb}op = mul{rb} {lb}kind = i64{rb}"
+        div(resultId, leftId, rightId) gives "%{resultId} = maxon.binop %{leftId}, %{rightId} {lb}op = div{rb} {lb}kind = i64{rb}"
+        mod(resultId, leftId, rightId) gives "%{resultId} = maxon.binop %{leftId}, %{rightId} {lb}op = mod{rb} {lb}kind = i64{rb}"
+        neg(resultId, operandId) gives "%{resultId} = maxon.unop %{operandId} {lb}op = neg{rb} {lb}kind = i64{rb}"
+        bitNot(resultId, operandId) gives "%{resultId} = maxon.unop %{operandId} {lb}op = bitNot{rb} {lb}kind = i64{rb}"
+        bitAnd(resultId, leftId, rightId) gives "%{resultId} = maxon.binop %{leftId}, %{rightId} {lb}op = bitAnd{rb} {lb}kind = i64{rb}"
+        bitOr(resultId, leftId, rightId) gives "%{resultId} = maxon.binop %{leftId}, %{rightId} {lb}op = bitOr{rb} {lb}kind = i64{rb}"
+        bitXor(resultId, leftId, rightId) gives "%{resultId} = maxon.binop %{leftId}, %{rightId} {lb}op = bitXor{rb} {lb}kind = i64{rb}"
+        shl(resultId, leftId, rightId) gives "%{resultId} = maxon.binop %{leftId}, %{rightId} {lb}op = shl{rb} {lb}kind = i64{rb}"
+        shr(resultId, leftId, rightId) gives "%{resultId} = maxon.binop %{leftId}, %{rightId} {lb}op = shr{rb} {lb}kind = i64{rb}"
+        cmpEq(resultId, leftId, rightId, isFloat) gives "%{resultId} = maxon.binop %{leftId}, %{rightId} {lb}op = eq{rb} {lb}kind = {cmpKind(isFloat)}{rb}"
+        cmpNe(resultId, leftId, rightId, isFloat) gives "%{resultId} = maxon.binop %{leftId}, %{rightId} {lb}op = ne{rb} {lb}kind = {cmpKind(isFloat)}{rb}"
+        cmpLt(resultId, leftId, rightId, isFloat) gives "%{resultId} = maxon.binop %{leftId}, %{rightId} {lb}op = lt{rb} {lb}kind = {cmpKind(isFloat)}{rb}"
+        cmpLe(resultId, leftId, rightId, isFloat) gives "%{resultId} = maxon.binop %{leftId}, %{rightId} {lb}op = le{rb} {lb}kind = {cmpKind(isFloat)}{rb}"
+        cmpGt(resultId, leftId, rightId, isFloat) gives "%{resultId} = maxon.binop %{leftId}, %{rightId} {lb}op = gt{rb} {lb}kind = {cmpKind(isFloat)}{rb}"
+        cmpGe(resultId, leftId, rightId, isFloat) gives "%{resultId} = maxon.binop %{leftId}, %{rightId} {lb}op = ge{rb} {lb}kind = {cmpKind(isFloat)}{rb}"
+        condBr(condId, thenTarget, elseTarget) gives printMaxHLCondBr(condId, thenTarget: thenTarget, elseTarget: elseTarget, blocks: blocks)
+        br(target) gives printMaxHLBr(target, blocks: blocks)
+        call(resultId, callee, argIds) gives "%{resultId} = maxon.call @{String.from(callee)}({formatArgIds(argIds)})"
+        ret(retValId) gives "maxon.return %{retValId}"
+        printLiteral(data) gives "maxon.print_literal \"{String.from(data)}\""
+        printInt(valueId) gives "maxon.print_int %{valueId}"
+    end 'print'
+end 'printMaxHLOp'
+
+function printMaxHLCondBr(condId ValueId, thenTarget BlockId, elseTarget BlockId, blocks MlirBlockArray) returns String
+    let thenLabel = resolveBlockLabel(thenTarget, blocks: blocks)
+    let elseLabel = resolveBlockLabel(elseTarget, blocks: blocks)
+    return "maxon.cond_br %{condId} [then: {thenLabel}, else: {elseLabel}]"
+end 'printMaxHLCondBr'
+
+function printMaxHLBr(target BlockId, blocks MlirBlockArray) returns String
+    let label = resolveBlockLabel(target, blocks: blocks)
+    return "maxon.br {label}"
+end 'printMaxHLBr'
+
+function cmpKind(isFloat bool) returns String
+    if isFloat 'float'
+        return "f64"
+    end 'float'
+    return "i64"
+end 'cmpKind'
+
+export function formatArgIds(argIds ValueIdArray) returns String
+    var result = ""
+    for i in 0 upto argIds.count() 'each'
+        let argId = try argIds.get(i) otherwise 'skip'
+            continue
+        end 'skip'
+        if i > 0 'comma'
+            result = "{result}, "
+        end 'comma'
+        result = "{result}%{argId}"
+    end 'each'
+    return result
+end 'formatArgIds'
+
+export function resolveBlockLabel(blockId BlockId, blocks MlirBlockArray) returns String
+    for block in blocks 'search'
+        if block.id == blockId 'found'
+            return String.from(block.label)
+        end 'found'
+    end 'search'
+    return "block_{blockId}"
+end 'resolveBlockLabel'

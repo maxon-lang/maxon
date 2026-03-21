@@ -375,6 +375,44 @@ end 'main'
 0
 ```
 
+<!-- test: for-in-nested -->
+Nested for-in loops on the same array must not corrupt each other's iteration state.
+
+```maxon
+typealias Int = int(i64.min to i64.max)
+typealias IntArray = Array with Int
+
+function innerSum(arr IntArray) returns Int
+  var total = 0
+  for item in arr 'inner'
+    total = total + item
+  end 'inner'
+  return total
+end 'innerSum'
+
+function main() returns ExitCode
+  var arr = IntArray{}
+  arr.push(1)
+  arr.push(2)
+  arr.push(3)
+
+  var outerTotal = 0
+  for item in arr 'outer'
+    outerTotal = outerTotal + item + innerSum(arr)
+  end 'outer'
+
+  // Each outer item: item + innerSum(arr) = item + 6
+  // Outer loop: (1+6) + (2+6) + (3+6) = 7+8+9 = 24
+  if outerTotal == 24 'check'
+    return 0
+  end 'check'
+  return 1
+end 'main'
+```
+```exitcode
+0
+```
+
 <!-- test: isEmpty-transitions -->
 Verify isEmpty changes with push/pop.
 

@@ -69,12 +69,13 @@ module {
     x86.mov r8, 2
     x86.call mm_alloc
     x86.mov [rbp-16], rax
+    x86.mov rax, [rbp-16]
+    x86.xor rcx, rcx
+    x86.mov [rax+0], rcx
+    x86.mov rax, [rbp-8]
     x86.mov rcx, [rbp-16]
-    x86.xor rdx, rdx
-    x86.mov [rcx+0], rdx
+    x86.mov [rcx+8], rax
     x86.mov rcx, [rbp-8]
-    x86.mov rdx, [rbp-16]
-    x86.mov [rdx+8], rcx
     x86.call mm_incref
     x86.mov rax, [rbp-16]
     x86.mov rcx, [rbp-16]
@@ -133,18 +134,14 @@ module {
     x86.xor rax, rax
     x86.mov [rbp-48], rax
     x86.mov rax, [rbp-16]
+    x86.mov rcx, [rbp-16]
+    x86.call ItemArray.__createIter
     x86.mov [rbp-56], rax
-    x86.mov rax, [rbp-56]
-    x86.mov rcx, [rbp-56]
-    x86.call mm_incref
-    x86.mov rax, [rbp-56]
-    x86.mov rcx, [rbp-56]
-    x86.call ItemArray.createIterator
     x86.jmp union-full.main.loop_0.header
   loop_0.header:
     x86.mov rax, [rbp-56]
     x86.mov rcx, [rbp-56]
-    x86.call ItemArray.next
+    x86.call __ItemArray_Iter.next
     x86.mov [rbp-104], rax
     x86.mov [rbp-112], rdx
     x86.mov rcx, 16
@@ -407,6 +404,22 @@ module {
   entry:
     x86.jmp __destruct_Item.done
   done:
+    x86.ret
+  }
+  func @__destruct___Array_Iter(ptr: i64) {
+  entry:
+    x86.prologue stack_size=16
+    x86.mov [rbp-8], rcx
+    x86.mov rax, [rbp-8]
+    x86.mov rcx, [rax+0]
+    x86.mov [rbp-16], rcx
+    x86.test rcx, rcx
+    x86.jz __nonnull_skip_21
+    x86.call mm_decref
+    x86.label __nonnull_skip_21
+    x86.jmp __destruct___Array_Iter.done
+  done:
+    x86.epilogue
     x86.ret
   }
 }

@@ -4,3 +4,10 @@ export union FuncOp
     ret(retValId ValueId)
     call(resultId ValueId, callee ByteArray, argIds ValueIdArray)
 end 'FuncOp'
+
+export function printFuncOp(op FuncOp) returns String
+    return match op 'print'
+        ret(retValId) gives "func.return %{retValId}"
+        call(resultId, callee, argIds) gives "%{resultId} = func.call @{String.from(callee)}({formatArgIds(argIds)})"
+    end 'print'
+end 'printFuncOp'

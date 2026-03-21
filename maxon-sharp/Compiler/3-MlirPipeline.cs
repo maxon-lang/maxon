@@ -25,6 +25,10 @@ public class MlirPipeline {
     // Semantic checks
     SemanticCheckPass.Run(module);
 
+    // Separate iterator state from collection structs (before monomorphization
+    // so iterator types participate in generic specialization)
+    IteratorSeparationPass.Run(module);
+
     // Monomorphize generic type methods for concrete aliases
     MonomorphizationPass.Run(module);
 

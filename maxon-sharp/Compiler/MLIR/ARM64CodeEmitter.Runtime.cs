@@ -206,6 +206,7 @@ public partial class ARM64CodeEmitter {
     EmitNetTcpConnect();
     EmitManagedFileOpenRead();
     EmitManagedFileOpenWrite();
+    EmitManagedFileOpenWriteExecutable();
     EmitManagedFileWrite();
     EmitManagedFileRead();
     EmitManagedFileClose();
@@ -1966,6 +1967,43 @@ public partial class ARM64CodeEmitter {
     EmitRuntimeFunctionEnd();
   }
 
+  // maxon_managed_file_open_write_executable(cstring_path) -> managed file ptr or -1
+  // Same as open_write but creates file with mode 0755 (executable) instead of 0666.
+  private void EmitManagedFileOpenWriteExecutable() {
+    EmitRuntimeFunctionStart("maxon_managed_file_open_write_executable", 1, 0x30);
+    EmitReloadArg(0);
+    EmitMovRegReg(ARM64Register.X1, ARM64Register.X0);
+    EmitMovRegImm(ARM64Register.X0, SyncOpFileOpenWriteExec);
+    EmitMovRegImm(ARM64Register.X2, 0);
+    EmitBranchLink("__io_submit_sync");
+
+    // X0 = fd or -1
+    var failLabel = $"__fopen_write_exec_fail_{_uniqueLabelCounter}";
+    var doneLabel = $"__fopen_write_exec_done_{_uniqueLabelCounter}";
+    _uniqueLabelCounter++;
+
+    EmitAddSubImm(ARM64Register.X1, ARM64Register.X0, 1, isAdd: true);
+    EmitCbz(ARM64Register.X1, failLabel);
+
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X29, 24, 8); // save fd
+
+    EmitMovRegImm(ARM64Register.X0, 8);
+    EmitAdrpAddFixup(ARM64Register.X1, _funcAddrAdrpFixups, "__destruct___ManagedFile");
+    EmitMovRegImm(ARM64Register.X2, 0);
+    EmitBranchLink("mm_alloc");
+
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X1, ARM64Register.X29, 24, 8); // fd
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X1, ARM64Register.X0, 0, 8);
+
+    EmitBranch(doneLabel);
+
+    DefineLabel(failLabel);
+    EmitMovRegImm(ARM64Register.X0, -1);
+
+    DefineLabel(doneLabel);
+    EmitRuntimeFunctionEnd();
+  }
+
   // maxon_managed_file_write(handle, buffer, length) -> bytes written or -1
   private void EmitManagedFileWrite() {
     EmitRuntimeFunctionStart("maxon_managed_file_write", 3, 0x30);
@@ -2635,6 +2673,7 @@ public partial class ARM64CodeEmitter {
   private const long SyncOpNetSend = 11;
   private const long SyncOpNetRecv = 12;
   private const long SyncOpNetClose = 13;
+  private const long SyncOpFileOpenWriteExec = 14;
 
   // P (ProcContext) struct offsets — per-worker scheduler state (GMP model)
   private const int POffCurrentGt = 0x18;
@@ -2713,6 +2752,7 @@ public partial class ARM64CodeEmitter {
       DefineSymdata("__at_io_op_get_cwd", " [get_cwd]\0"u8.ToArray());
       DefineSymdata("__at_io_op_file_open_read", " [file_open_read]\0"u8.ToArray());
       DefineSymdata("__at_io_op_file_open_write", " [file_open_write]\0"u8.ToArray());
+      DefineSymdata("__at_io_op_file_open_write_exec", " [file_open_write_exec]\0"u8.ToArray());
       DefineSymdata("__at_io_op_close_handle", " [close_handle]\0"u8.ToArray());
       DefineSymdata("__at_io_op_net_connect", " [net_connect]\0"u8.ToArray());
       DefineSymdata("__at_io_op_net_send", " [net_send]\0"u8.ToArray());
@@ -3923,6 +3963,8 @@ public partial class ARM64CodeEmitter {
     EmitBranchCond(ARM64ConditionCode.Eq, "__io_op_net_recv");
     EmitCmpImm(ARM64Register.X2, SyncOpNetClose);
     EmitBranchCond(ARM64ConditionCode.Eq, "__io_op_net_close");
+    EmitCmpImm(ARM64Register.X2, SyncOpFileOpenWriteExec);
+    EmitBranchCond(ARM64ConditionCode.Eq, "__io_op_file_open_write_exec");
 
     // Unknown op → result = 0
     EmitMovRegImm(ARM64Register.X0, 0);
@@ -4059,6 +4101,21 @@ public partial class ARM64CodeEmitter {
     EmitBranchOnLibcError("__io_op_file_open_write_fail");
     EmitBranch("__io_op_done"); // X0 = fd
     DefineLabel("__io_op_file_open_write_fail");
+    EmitMovRegImm(ARM64Register.X0, -1);
+    EmitBranch("__io_op_done");
+
+    // --- SyncOpFileOpenWriteExec: open(path, O_WRONLY|O_CREAT|O_TRUNC, 0755) ---
+    DefineLabel("__io_op_file_open_write_exec");
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X9, ARM64Register.X29, 16, 8);
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X9, SyncReqOffArg0, 8);
+    EmitMovRegImm(ARM64Register.X1, O_WRONLY_CREAT_TRUNC);
+    EmitMovRegImm(ARM64Register.X2, 0x1ED); // 0755
+    EmitPushVariadicArg(ARM64Register.X2); // Apple ARM64: variadic arg on stack
+    EmitCallImport("open");
+    EmitVariadicCleanup();
+    EmitBranchOnLibcError("__io_op_file_open_write_exec_fail");
+    EmitBranch("__io_op_done"); // X0 = fd
+    DefineLabel("__io_op_file_open_write_exec_fail");
     EmitMovRegImm(ARM64Register.X0, -1);
     EmitBranch("__io_op_done");
 
@@ -4390,6 +4447,7 @@ public partial class ARM64CodeEmitter {
       (SyncOpGetCwd,        "__at_io_op_get_cwd"),
       (SyncOpFileOpenRead,  "__at_io_op_file_open_read"),
       (SyncOpFileOpenWrite, "__at_io_op_file_open_write"),
+      (SyncOpFileOpenWriteExec, "__at_io_op_file_open_write_exec"),
       (SyncOpCloseHandle,   "__at_io_op_close_handle"),
       (SyncOpNetConnect,    "__at_io_op_net_connect"),
       (SyncOpNetSend,       "__at_io_op_net_send"),

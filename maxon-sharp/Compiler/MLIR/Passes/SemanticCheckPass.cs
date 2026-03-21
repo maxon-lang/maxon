@@ -98,6 +98,7 @@ public static class SemanticCheckPass {
     "maxon_get_current_directory",
     "maxon_managed_file_open_read",
     "maxon_managed_file_open_write",
+    "maxon_managed_file_open_write_executable",
     "maxon_net_tcp_connect",
     "maxon_net_send",
     "maxon_net_recv",
