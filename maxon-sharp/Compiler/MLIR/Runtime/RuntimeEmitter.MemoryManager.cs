@@ -392,8 +392,8 @@ public partial class RuntimeEmitter {
       // Read alloc_size from [user_ptr - 32]
       _b.LoadLocal(VReg.Scratch0, 0); // Scratch0 = user_ptr
       _b.LoadIndirect(VReg.Scratch1, VReg.Scratch0, MmOffAllocSize); // Scratch1 = total_alloc_size
-      // user_size = total_alloc_size - MmHeaderSize
-      _b.SubRegImm(VReg.Scratch1, MmHeaderSize);
+      // user_size = total_alloc_size - MmHeaderSize - 8 (canary)
+      _b.SubRegImm(VReg.Scratch1, MmHeaderSize + 8);
       // canary_ptr = user_ptr + user_size
       _b.LoadLocal(VReg.Scratch0, 0);
       _b.AddRegReg(VReg.Scratch0, VReg.Scratch1);

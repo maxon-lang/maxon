@@ -244,6 +244,15 @@ public class VarRegistry
             _temps[name] = info with { Flags = info.Flags & ~OwnershipFlags.Orphan };
     }
 
+    /// <summary>
+    /// Set additional flags on a temp variable.
+    /// </summary>
+    public void SetTempFlag(string name, OwnershipFlags flag)
+    {
+        if (_temps.TryGetValue(name, out var info))
+            _temps[name] = info with { Flags = info.Flags | flag };
+    }
+
     // ---- Temp Ownership Transfer (replaces FixupTempOwnership prefix checks) ----
 
     /// <summary>

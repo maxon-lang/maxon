@@ -1287,6 +1287,25 @@ public static partial class MaxonToStandardConversion {
             }
             case MaxonScopeEndOp scopeEnd: {
               var keep = scopeEnd.KeepVars;
+
+              // Pre-incref Borrowed field temps that are being returned.
+              // When returning `structVar.field`, the field is loaded into a Borrowed temp.
+              // The scope cleanup decrefs structVar (whose destructor decrefs the field),
+              // but the Borrowed temp still holds a pointer to the field.
+              // Incref the field BEFORE scope cleanup so it survives the destructor.
+              foreach (var retId in structLitReturnIds) {
+                foreach (var (mv, sv) in valueMap) {
+                  if (mv.Id == retId && sv is StdHeapPtr retFieldHp && retFieldHp.VarName != null
+                      && temps.TempHasFlag(retFieldHp.VarName, OwnershipFlags.Borrowed)) {
+                    var fieldPtr = (StdI64)EmitLoad(newBlock, retFieldHp.VarName, varTypes);
+                    EmitIncrefValueIfNonnull(newBlock, fieldPtr, scopeName: func.Name);
+                    // Mark as SelfReturn so LowerReturn doesn't incref again
+                    temps.SetTempFlag(retFieldHp.VarName, OwnershipFlags.SelfReturn);
+                    break;
+                  }
+                }
+              }
+
               // Process in reverse order: variables declared later (containers,
               // iterators) must be freed before their backing stores (array
               // element slots) so destructors can still read live element data.
