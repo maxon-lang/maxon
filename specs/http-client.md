@@ -217,48 +217,28 @@ end 'main'
 0
 ```
 ```stderr
-spawn #1 [M=0]
+spawn #1
 sleep_yield #0
-worker_start #1 [M=1]
-worker_park #1 [M=1]
-io_yield #1 [net_connect] [M=0]
+io_yield #1 [net_connect]
 sleep_resume #0
-spawn #2 [M=0]
-worker_wake #1 [M=1]
-worker_park #1 [M=1]
-io_yield #2 [file_exists] [M=0]
-worker_wake #1 [M=1]
-worker_park #1 [M=1]
-io_resume #1 [net_connect] [M=0]
-worker_wake #1 [M=1]
-io_resume #2 [file_exists] [M=1]
-worker_park #1 [M=1]
-io_yield #1 [net_connect] [M=0]
-await #2 [yield] [M=0]
-worker_wake #1 [M=1]
-worker_park #1 [M=1]
-io_resume #1 [net_connect] [M=0]
-io_yield #1 [net_send] [M=0]
-io_resume #1 [net_send] [M=0]
+spawn #2
+io_yield #2 [file_exists]
+io_resume #1 [net_connect]
+io_resume #2 [file_exists]
+io_yield #1 [net_connect]
+await #2 [yield]
+io_resume #1 [net_connect]
+io_yield #1 [net_send]
+io_resume #1 [net_send]
 sleep_yield #1
-worker_wake #1 [M=1]
 sleep_resume #1
-io_yield #1 [net_recv] [M=1]
-io_resume #1 [net_recv] [M=1]
-io_yield #1 [net_recv] [M=1]
-io_resume #1 [net_recv] [M=1]
-io_yield #1 [net_close] [M=1]
-worker_start #2 [M=2]
-worker_park #2 [M=2]
-worker_park #1 [M=1]
-worker_wake #1 [M=1]
-worker_park #1 [M=1]
-io_resume #1 [net_close] [M=0]
-try_await #1 [yield] [M=0]
-worker_wake #1 [M=1]
-worker_exit #1 [M=1]
-worker_wake #2 [M=2]
-worker_exit #2 [M=2]
+io_yield #1 [net_recv]
+io_resume #1 [net_recv]
+io_yield #1 [net_recv]
+io_resume #1 [net_recv]
+io_yield #1 [net_close]
+io_resume #1 [net_close]
+try_await #1 [yield]
 ```
 
 ### Response Headers

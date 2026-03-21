@@ -56,62 +56,40 @@ module {
   }
   func @method-calls.main() -> u32 {
   entry:
-    x86.prologue stack_size=16
+    x86.prologue stack_size=32
     x86.mov rax, 10
     x86.mov rcx, 10
-    x86.mov rcx, 16
-    x86.xor rdx, rdx
-    x86.mov r8, 1
-    x86.call mm_alloc
-    x86.mov [rbp-8], rax
-    x86.mov rdx, [rbp-8]
-    x86.mov rbx, 10
-    x86.mov [rdx+0], rbx
-    x86.mov rsi, [rbp-8]
-    x86.mov rdi, 10
-    x86.mov [rsi+8], rdi
-    x86.mov r8, [rbp-8]
-    x86.mov rcx, [rbp-8]
-    x86.call mm_incref
-    x86.mov r9, [rbp-8]
-    x86.mov rcx, [rbp-8]
+    x86.mov [rbp-16], rax
+    x86.mov [rbp-8], rcx
+    x86.lea rdx, [rbp-16]
+    x86.mov rbx, rdx
+    x86.mov rcx, rbx
     x86.mov rdx, 10
     x86.mov r8, 12
     x86.call Point.moveBy
-    x86.mov rax, [rbp-8]
-    x86.mov rcx, [rbp-8]
+    x86.lea rsi, [rbp-16]
+    x86.mov rdi, rsi
+    x86.mov rcx, rdi
     x86.call Point.sum
-    x86.mov [rbp-16], rax
-    x86.xor rcx, rcx
+    x86.mov [rbp-24], rax
+    x86.xor r8, r8
+    x86.cmp rax, r8
+    x86.setl r9
+    x86.movzx r9, r9b
+    x86.mov rcx, 4294967295
     x86.cmp rax, rcx
-    x86.setl rcx
-    x86.movzx rcx, rcxb
-    x86.mov rdx, 4294967295
-    x86.cmp rax, rdx
     x86.setg rax
     x86.movzx rax, raxb
-    x86.or rcx, rax
-    x86.test rcx, rcx
+    x86.or r9, rax
+    x86.test r9, r9
     x86.je method-calls.main.__range_ok_0
   __range_panic_0:
     x86.lea_symdata rax, [__panic_msg_37]
     x86.mov rcx, rax
     x86.call maxon_panic
   __range_ok_0:
-    x86.mov rax, [rbp-16]
-    x86.mov rcx, [rbp-8]
-    x86.test rcx, rcx
-    x86.jz __nonnull_skip_0
-    x86.call mm_decref
-    x86.label __nonnull_skip_0
-    x86.mov rax, [rbp-16]
+    x86.mov rax, [rbp-24]
     x86.epilogue
-    x86.ret
-  }
-  func @__destruct_Point(ptr: i64) {
-  entry:
-    x86.jmp __destruct_Point.done
-  done:
     x86.ret
   }
 }

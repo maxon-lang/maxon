@@ -3608,10 +3608,8 @@ All types in Maxon use reference semantics on assignment — the variable is reb
 The compiler performs escape analysis to identify struct literals that can be safely stack-allocated instead of heap-allocated. A struct is promoted to the stack when all of the following are true:
 
 - All fields are primitive types (no heap-allocated field types)
-- The variable is not aliased (not assigned to another variable)
-- The variable is not passed to a function or captured by a closure
-- The variable is not returned from the function
-- The variable is used only within its declaring block
+- Neither the variable nor any alias escapes the function (not returned, stored into a heap field, captured by a closure, or passed to a function that escapes it)
+- The `@heap` directive is not used
 
 Stack-promoted structs are freed automatically when the stack frame is reclaimed — no reference counting overhead is incurred. This optimization is transparent and preserves the same semantics as heap allocation.
 

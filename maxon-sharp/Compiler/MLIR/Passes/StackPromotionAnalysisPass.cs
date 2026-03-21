@@ -5,20 +5,168 @@ namespace MaxonSharp.Compiler.Mlir.Passes;
 
 /// <summary>
 /// Escape analysis pass that identifies struct literals safe for stack allocation.
-/// Uses a whitelist approach: a struct literal is stack-eligible only if every use of
-/// the variable is one of: field access, field assign (as target), or struct var ref
-/// within the same basic block. Any other use disqualifies it.
+/// A struct is stack-eligible if it (and all its aliases) never escape to a location
+/// that outlives the caller's stack frame: heap fields, globals, closures, or callees
+/// that alias the parameter.
 /// Phase 1: only structs with all-primitive fields (no heap-allocated field types).
 /// </summary>
 public static class StackPromotionAnalysisPass {
   public static void Run(MlirModule<MaxonOp> module) {
+    var funcLookup = new Dictionary<string, MlirFunction<MaxonOp>>();
+    foreach (var func in module.Functions)
+      funcLookup[func.Name] = func;
+
+    // Build interprocedural escape map: which function params escape?
+    var escapesParam = BuildEscapesParamMap(module, funcLookup);
+
     foreach (var func in module.Functions) {
       if (func.IsStdlib) continue;
-      AnalyzeFunction(func, module);
+      AnalyzeFunction(func, module, funcLookup, escapesParam);
     }
   }
 
-  private static void AnalyzeFunction(MlirFunction<MaxonOp> func, MlirModule<MaxonOp> module) {
+  /// <summary>
+  /// For each function, determine which struct-typed parameters escape.
+  /// A param escapes if it's aliased, stored into a heap field, stored in a global,
+  /// captured by a closure, or passed to another function where that param escapes.
+  /// ReturnsSelf does NOT count as escaping (pointer returns to caller).
+  /// </summary>
+  private static Dictionary<string, HashSet<string>> BuildEscapesParamMap(
+      MlirModule<MaxonOp> module, Dictionary<string, MlirFunction<MaxonOp>> funcLookup) {
+    var result = new Dictionary<string, HashSet<string>>();
+
+    foreach (var func in module.Functions) {
+      if (func.ParamNames.Count == 0) continue;
+
+      var escapingParams = new HashSet<string>();
+
+      // Build SSA ID -> param name map for struct params
+      var paramSsa = new Dictionary<int, string>();
+      foreach (var block in func.Body.Blocks) {
+        foreach (var op in block.Operations) {
+          if (op is MaxonStructParamOp sp && func.ParamNames.Contains(sp.Name))
+            paramSsa[sp.Result.Id] = sp.Name;
+          if (op is MaxonStructVarRefOp svr && func.ParamNames.Contains(svr.VarName))
+            paramSsa[svr.Result.Id] = svr.VarName;
+          if (op is MaxonVarRefOp vr && vr.ValueKind == MaxonValueKind.Struct && func.ParamNames.Contains(vr.VarName))
+            paramSsa[vr.Result.Id] = vr.VarName;
+        }
+      }
+
+      foreach (var block in func.Body.Blocks) {
+        foreach (var op in block.Operations) {
+          switch (op) {
+            // Reassignment of param (p = newValue) — callee creates new heap object
+            // and stores through ref pointer, corrupts stack memory
+            case MaxonAssignOp assign when !assign.IsDeclaration
+                && func.ParamNames.Contains(assign.VarName):
+              escapingParams.Add(assign.VarName);
+              break;
+
+            // Aliasing: var b = paramVar (incref/decref would corrupt stack memory)
+            case MaxonAssignOp assign when !assign.IsDeclaration
+                && paramSsa.TryGetValue(assign.Value.Id, out var aliasParam):
+              escapingParams.Add(aliasParam);
+              break;
+            case MaxonAssignOp assign when assign.IsDeclaration
+                && paramSsa.TryGetValue(assign.Value.Id, out var declAliasParam)
+                && assign.VarName != declAliasParam:
+              escapingParams.Add(declAliasParam);
+              break;
+
+            // Stored into another struct's field
+            case MaxonFieldAssignOp fa when paramSsa.TryGetValue(fa.NewValue.Id, out var faParam):
+              escapingParams.Add(faParam);
+              break;
+
+            // Stored in a global
+            case MaxonGlobalStoreOp gs when paramSsa.TryGetValue(gs.Value.Id, out var gsParam):
+              escapingParams.Add(gsParam);
+              break;
+
+            // Captured by a closure
+            case MaxonClosureCreateOp closure: {
+              foreach (var capName in closure.CapturedNames) {
+                if (func.ParamNames.Contains(capName))
+                  escapingParams.Add(capName);
+              }
+              break;
+            }
+
+            // Used as a field value in a struct literal
+            case MaxonStructLiteralOp lit: {
+              foreach (var (_, fieldVal) in lit.FieldValues) {
+                if (paramSsa.TryGetValue(fieldVal.Id, out var litParam))
+                  escapingParams.Add(litParam);
+              }
+              break;
+            }
+
+            // Stored into managed memory (array element set)
+            case MaxonManagedMemSetOp memSet:
+              if (paramSsa.TryGetValue(memSet.Value.Id, out var memSetParam))
+                escapingParams.Add(memSetParam);
+              break;
+
+            // Inserted into managed list
+            case MaxonManagedListInsertValueOp listInsert:
+              if (paramSsa.TryGetValue(listInsert.Value.Id, out var listInsertParam))
+                escapingParams.Add(listInsertParam);
+              break;
+
+            case MaxonManagedListInsertRelativeValueOp listRelInsert:
+              if (paramSsa.TryGetValue(listRelInsert.Value.Id, out var listRelInsertParam))
+                escapingParams.Add(listRelInsertParam);
+              break;
+          }
+        }
+      }
+
+      if (escapingParams.Count > 0)
+        result[func.Name] = escapingParams;
+    }
+
+    // Second pass: propagate escapes through call chains.
+    // If func A passes param X to func B's param Y, and B escapes Y, then A escapes X.
+    bool changed = true;
+    while (changed) {
+      changed = false;
+      foreach (var func in module.Functions) {
+        if (func.ParamNames.Count == 0) continue;
+
+        foreach (var block in func.Body.Blocks) {
+          foreach (var op in block.Operations) {
+            if (op is not MaxonCallOp call) continue;
+
+            if (!funcLookup.TryGetValue(call.Callee, out var callee)) continue;
+            if (!result.TryGetValue(callee.Name, out var calleeEscapes)) continue;
+
+            for (int i = 0; i < call.Args.Count && i < callee.ParamNames.Count; i++) {
+              if (!calleeEscapes.Contains(callee.ParamNames[i])) continue;
+
+              // This arg position escapes in the callee. Check if the arg is one of our params.
+              string? paramName = null;
+              if (call.ArgVarNames != null && i < call.ArgVarNames.Count)
+                paramName = call.ArgVarNames[i];
+
+              if (paramName != null && func.ParamNames.Contains(paramName)) {
+                result.TryAdd(func.Name, []);
+                if (result[func.Name].Add(paramName))
+                  changed = true;
+              }
+            }
+          }
+        }
+      }
+    }
+
+    return result;
+  }
+
+  private static void AnalyzeFunction(
+      MlirFunction<MaxonOp> func, MlirModule<MaxonOp> module,
+      Dictionary<string, MlirFunction<MaxonOp>> funcLookup,
+      Dictionary<string, HashSet<string>> escapesParam) {
     // Step 1: Collect candidates: struct literal immediately followed by a declaration assign.
     var candidates = new Dictionary<string, (MaxonStructLiteralOp Literal, int BlockIndex)>();
     for (int blockIdx = 0; blockIdx < func.Body.Blocks.Count; blockIdx++) {
@@ -30,7 +178,7 @@ public static class StackPromotionAnalysisPass {
             && assign.IsDeclaration
             && assign.Value.Id == lit.Result.Id
             && !assign.ForceHeap // @heap directive forces heap allocation
-            && !assign.VarName.StartsWith("__") // Skip compiler-generated temps (array elements, etc.)
+            && !assign.VarName.StartsWith("__") // Skip compiler-generated temps
             && IsTypeEligible(lit, module)) {
           candidates[assign.VarName] = (lit, blockIdx);
         }
@@ -39,8 +187,7 @@ public static class StackPromotionAnalysisPass {
 
     if (candidates.Count == 0) return;
 
-    // Step 2: Build SSA ID -> variable name map by tracking StructVarRef chains
-    // and any other op that loads a candidate variable producing a struct-typed SSA value
+    // Step 2: Build SSA ID -> variable name map
     var ssaToVar = new Dictionary<int, string>();
     foreach (var (varName, (lit, _)) in candidates) {
       ssaToVar[lit.Result.Id] = varName;
@@ -49,67 +196,118 @@ public static class StackPromotionAnalysisPass {
       foreach (var op in block.Operations) {
         if (op is MaxonStructVarRefOp svr && candidates.ContainsKey(svr.VarName))
           ssaToVar[svr.Result.Id] = svr.VarName;
-        // VarRefOp can also load struct variables when used as struct-typed expressions
         if (op is MaxonVarRefOp vr && vr.ValueKind == MaxonValueKind.Struct && candidates.ContainsKey(vr.VarName))
           ssaToVar[vr.Result.Id] = vr.VarName;
       }
     }
 
-    // Step 3: Whitelist check — walk all ops and disqualify candidates used in non-whitelisted ways
+    // Step 3: Track aliases (var b = a). Both must not escape for the original to be eligible.
+    // Skip compiler-generated temps (__arr_0.0 etc.) — they're not true aliases.
+    var aliases = new Dictionary<string, HashSet<string>>(); // candidate -> set of alias var names
+    foreach (var block in func.Body.Blocks) {
+      foreach (var op in block.Operations) {
+        if (op is MaxonAssignOp assign && assign.IsDeclaration
+            && !assign.VarName.StartsWith("__")
+            && ssaToVar.TryGetValue(assign.Value.Id, out var srcVar)
+            && assign.VarName != srcVar) {
+          if (!aliases.ContainsKey(srcVar)) aliases[srcVar] = [];
+          aliases[srcVar].Add(assign.VarName);
+          // Track alias SSA values too
+          ssaToVar[assign.Value.Id] = srcVar; // already there, but ensure
+        }
+      }
+    }
+    // Also track StructVarRef for aliases
+    foreach (var block in func.Body.Blocks) {
+      foreach (var op in block.Operations) {
+        if (op is MaxonStructVarRefOp svr) {
+          foreach (var (candidate, aliasSet) in aliases) {
+            if (aliasSet.Contains(svr.VarName))
+              ssaToVar[svr.Result.Id] = candidate;
+          }
+        }
+      }
+    }
+
+    // Step 4: Check escape conditions. A candidate is disqualified if it or any alias escapes.
     var disqualified = new HashSet<string>();
-    for (int blockIdx = 0; blockIdx < func.Body.Blocks.Count; blockIdx++) {
-      var block = func.Body.Blocks[blockIdx];
+
+    // Reverse map: alias name -> candidate name (for O(1) lookup)
+    var aliasToCandidate = new Dictionary<string, string>();
+    foreach (var (cand, aliasSet) in aliases) {
+      foreach (var alias in aliasSet)
+        aliasToCandidate[alias] = cand;
+    }
+
+    string? ResolveCandidate(string varName) {
+      if (candidates.ContainsKey(varName)) return varName;
+      return aliasToCandidate.GetValueOrDefault(varName);
+    }
+
+    foreach (var block in func.Body.Blocks) {
       foreach (var op in block.Operations) {
         switch (op) {
           // WHITELISTED: initial declaration assign of the struct literal
           case MaxonAssignOp assign when assign.IsDeclaration
               && ssaToVar.TryGetValue(assign.Value.Id, out var declVar) && assign.VarName == declVar:
-            break; // OK
+            break;
 
-          // DISQUALIFIED: any other assign referencing a candidate's SSA value
-          case MaxonAssignOp assign when ssaToVar.TryGetValue(assign.Value.Id, out var assignVar):
+          // WHITELISTED: alias declaration (var b = a) — tracked above
+          case MaxonAssignOp assign when assign.IsDeclaration
+              && ssaToVar.TryGetValue(assign.Value.Id, out var aliasSrc)
+              && aliases.TryGetValue(aliasSrc, out var aliasSet2) && aliasSet2.Contains(assign.VarName):
+            break;
+
+          // DISQUALIFIED: reassignment of candidate or alias
+          case MaxonAssignOp assign when !assign.IsDeclaration && ResolveCandidate(assign.VarName) is string reassignCand:
+            disqualified.Add(reassignCand);
+            break;
+
+          // DISQUALIFIED: non-alias assign referencing candidate SSA
+          case MaxonAssignOp assign when ssaToVar.TryGetValue(assign.Value.Id, out var assignVar)
+              && !(aliases.TryGetValue(assignVar, out var aSet) && aSet.Contains(assign.VarName)):
             disqualified.Add(assignVar);
             break;
 
-          // DISQUALIFIED: reassignment of the candidate variable
-          case MaxonAssignOp assign when !assign.IsDeclaration && candidates.ContainsKey(assign.VarName):
-            disqualified.Add(assign.VarName);
+          // WHITELISTED: struct var ref (needed for field access, calls, etc.)
+          case MaxonStructVarRefOp:
             break;
 
-          // WHITELISTED: struct var ref in the same block (needed for field access)
-          case MaxonStructVarRefOp svr when candidates.TryGetValue(svr.VarName, out var svrInfo) && blockIdx == svrInfo.BlockIndex:
-            break; // OK
-
-          // DISQUALIFIED: struct var ref in a different block
-          case MaxonStructVarRefOp svr when candidates.ContainsKey(svr.VarName):
-            disqualified.Add(svr.VarName);
-            break;
-
-          // WHITELISTED: field access on a candidate's SSA value (reading a field)
+          // WHITELISTED: field access on a candidate's SSA value
           case MaxonFieldAccessOp fa when ssaToVar.ContainsKey(fa.StructValue.Id):
-            break; // OK
+            break;
 
-          // WHITELISTED: field assign where the candidate is the TARGET (not the value being stored)
+          // WHITELISTED: field assign where candidate is the TARGET
           case MaxonFieldAssignOp fa when ssaToVar.ContainsKey(fa.StructValue.Id)
               && !ssaToVar.ContainsKey(fa.NewValue.Id):
-            break; // OK
+            break;
 
-          // DISQUALIFIED: field assign where a candidate is the value being stored INTO another struct
+          // DISQUALIFIED: field assign where candidate is the value being stored
           case MaxonFieldAssignOp fa when ssaToVar.TryGetValue(fa.NewValue.Id, out var faNewVar):
             disqualified.Add(faNewVar);
             break;
 
-          // DISQUALIFIED: passed to a function call (by variable name or SSA value)
+          // CONDITIONAL: passed to a function call — check if callee escapes that param
           case MaxonCallOp call: {
+            // Check ArgVarNames
             if (call.ArgVarNames != null) {
-              foreach (var argName in call.ArgVarNames) {
-                if (argName != null && candidates.ContainsKey(argName))
-                  disqualified.Add(argName);
+              for (int i = 0; i < call.ArgVarNames.Count; i++) {
+                var argName = call.ArgVarNames[i];
+                if (argName == null) continue;
+                var cand = ResolveCandidate(argName);
+                if (cand == null) continue;
+
+                // Check if callee escapes this param
+                if (CalleeEscapesParam(call.Callee, i, funcLookup, escapesParam))
+                  disqualified.Add(cand);
               }
             }
-            foreach (var arg in call.Args) {
-              if (ssaToVar.TryGetValue(arg.Id, out var argVar))
-                disqualified.Add(argVar);
+            // Check Args SSA values
+            for (int i = 0; i < call.Args.Count; i++) {
+              if (ssaToVar.TryGetValue(call.Args[i].Id, out var argVar)) {
+                if (CalleeEscapesParam(call.Callee, i, funcLookup, escapesParam))
+                  disqualified.Add(argVar);
+              }
             }
             break;
           }
@@ -117,8 +315,8 @@ public static class StackPromotionAnalysisPass {
           // DISQUALIFIED: captured by a closure
           case MaxonClosureCreateOp closure: {
             foreach (var capName in closure.CapturedNames) {
-              if (candidates.ContainsKey(capName))
-                disqualified.Add(capName);
+              if (ResolveCandidate(capName) is string capCand)
+                disqualified.Add(capCand);
             }
             foreach (var capVal in closure.CapturedValues) {
               if (ssaToVar.TryGetValue(capVal.Id, out var capVar))
@@ -142,10 +340,9 @@ public static class StackPromotionAnalysisPass {
               if (ssaToVar.TryGetValue(ssaId, out var refVar))
                 disqualified.Add(refVar);
             }
-            // Also check variable names used by any op
             foreach (var varName in GetReferencedVarNames(op)) {
-              if (candidates.ContainsKey(varName))
-                disqualified.Add(varName);
+              if (ResolveCandidate(varName) is string refCand)
+                disqualified.Add(refCand);
             }
             break;
           }
@@ -153,7 +350,7 @@ public static class StackPromotionAnalysisPass {
       }
     }
 
-    // Step 4: Add surviving candidates
+    // Step 5: Add surviving candidates
     foreach (var (varName, (lit, _)) in candidates) {
       if (!disqualified.Contains(varName)) {
         module.StackEligibleStructs.Add(lit.Result.Id);
@@ -161,11 +358,21 @@ public static class StackPromotionAnalysisPass {
     }
   }
 
+  /// Check if a callee escapes the parameter at the given arg index.
+  private static bool CalleeEscapesParam(
+      string callee, int argIndex,
+      Dictionary<string, MlirFunction<MaxonOp>> funcLookup,
+      Dictionary<string, HashSet<string>> escapesParam) {
+    if (!funcLookup.TryGetValue(callee, out var calleeFunc)) return true; // unknown callee = conservative
+    if (argIndex >= calleeFunc.ParamNames.Count) return true;
+    var paramName = calleeFunc.ParamNames[argIndex];
+    // Struct params that aren't struct-typed don't need escape checking
+    if (calleeFunc.ParamTypes[argIndex] is not MlirStructType) return false;
+    return escapesParam.TryGetValue(calleeFunc.Name, out var escaping) && escaping.Contains(paramName);
+  }
+
   /// Get all SSA value IDs referenced by an operation (catch-all for non-whitelisted ops).
   private static IEnumerable<int> GetReferencedIds(MaxonOp op) {
-    // Extract all MaxonValue references from any operation via its PrintableOperands
-    // isn't possible since they're formatted strings. Instead, enumerate known op types
-    // that carry struct-typed SSA values.
     switch (op) {
       case MaxonReturnOp ret when ret.Value != null:
         yield return ret.Value.Id;
@@ -177,20 +384,14 @@ public static class StackPromotionAnalysisPass {
       case MaxonGlobalStoreOp gs:
         yield return gs.Value.Id;
         break;
-      case MaxonBinOp bin:
-        yield return bin.Lhs.Id;
-        yield return bin.Rhs.Id;
-        break;
       case MaxonManagedListInsertValueOp insert:
         yield return insert.Value.Id;
         break;
       case MaxonManagedListInsertRelativeValueOp insert:
         yield return insert.Value.Id;
         break;
-      case MaxonStringInterpOp interp:
-        foreach (var part in interp.Parts) {
-          if (part.ExprValue != null) yield return part.ExprValue.Id;
-        }
+      case MaxonManagedMemSetOp memSet:
+        yield return memSet.Value.Id;
         break;
       case MaxonThrowOp throwOp:
         yield return throwOp.ErrorValue.Id;
@@ -198,7 +399,7 @@ public static class StackPromotionAnalysisPass {
     }
   }
 
-  /// Get variable names referenced by an operation (beyond ArgVarNames which is checked separately).
+  /// Get variable names referenced by an operation.
   private static IEnumerable<string> GetReferencedVarNames(MaxonOp op) {
     switch (op) {
       case MaxonVarRefOp varRef:

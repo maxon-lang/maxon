@@ -57,7 +57,7 @@ type Box
 end 'Box'
 
 function main() returns ExitCode
-  var a = Box{value: 42}
+  @heap var a = Box{value: 42}
   let b = a
   return b.value
 end 'main'
@@ -383,7 +383,7 @@ function main() returns ExitCode
   var total = 0
   var i = 0
   while i < 5 'loop'
-    var item = Item{v: i}
+    @heap var item = Item{v: i}
     i = i + 1
     if item.v == 2 'skip'
       continue
@@ -2202,7 +2202,7 @@ type Data
 end 'Data'
 
 function main() returns ExitCode
-  var a = Data{n: 7}
+  @heap var a = Data{n: 7}
   var b = a
   var c = a
   return a.n + b.n + c.n
@@ -2859,7 +2859,7 @@ mm_raw_free #R1
 Aliasing a tuple increfs it; both variables share the same tuple object.
 ```maxon
 function main() returns ExitCode
-  var a = (3, 7)
+  @heap var a = (3, 7)
   let b = a
   return b.0 + b.1
 end 'main'

@@ -29,15 +29,8 @@ module {
   func @function-overloads.main() -> u32 {
   entry:
     x86.prologue stack_size=16
-    x86.mov rcx, 8
-    x86.xor rdx, rdx
-    x86.mov r8, 1
-    x86.call mm_alloc
-    x86.mov [rbp-8], rax
-    x86.mov rax, [rbp-8]
-    x86.mov rcx, [rbp-8]
-    x86.call mm_incref
-    x86.mov rcx, [rbp-8]
+    x86.lea rax, [rbp-8]
+    x86.mov rcx, rax
     x86.mov rdx, 21
     x86.call Converter.convert$value_i64
     x86.mov [rbp-16], rax
@@ -58,19 +51,7 @@ module {
     x86.call maxon_panic
   __range_ok_0:
     x86.mov rax, [rbp-16]
-    x86.mov rcx, [rbp-8]
-    x86.test rcx, rcx
-    x86.jz __nonnull_skip_0
-    x86.call mm_decref
-    x86.label __nonnull_skip_0
-    x86.mov rax, [rbp-16]
     x86.epilogue
-    x86.ret
-  }
-  func @__destruct_Converter(ptr: i64) {
-  entry:
-    x86.jmp __destruct_Converter.done
-  done:
     x86.ret
   }
 }

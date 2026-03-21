@@ -131,7 +131,12 @@ public static partial class MaxonToStandardConversion {
             ? temps.CreateTemp("selfret", result.Id, calleeRetStructType.Name, OwnershipFlags.SelfReturn)
             : temps.CreateTemp("callret", result.Id, calleeRetStructType.Name, OwnershipFlags.Orphan | OwnershipFlags.CallReturn);
         EmitStore(block, callResult, retVarName, varTypes);
-        valueMap[result] = new StdHeapPtr(callResult!.Id, calleeRetStructType.Name, retVarName);
+        // If ReturnsSelf and self arg was a stack pointer, propagate stack-ness
+        bool selfIsStack = calleeFunc.ReturnsSelf && args.Count > 0
+            && valueMap.TryGetValue(args[0], out var selfSv) && selfSv is StdStackPtr;
+        valueMap[result] = selfIsStack
+            ? new StdStackPtr(callResult!.Id, calleeRetStructType.Name, retVarName)
+            : new StdHeapPtr(callResult!.Id, calleeRetStructType.Name, retVarName);
       } else if (calleeRetAssocEnum && callResult != null) {
         // Associated-value enum return: store heap pointer (no unpacking needed)
         var retEnumType = (MlirUnionType)calleeFunc.ReturnType!;

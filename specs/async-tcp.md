@@ -86,8 +86,12 @@ end 'main'
 ```stderr
 spawn #1
 io_yield #1 [net_connect]
+worker_start #1
 io_resume #1 [net_connect]
 try_await #1 [yield]
+worker_exit #1
+worker_start #2
+worker_exit #2
 ```
 
 <!-- test: async-tcp.trace-mixed-io -->
@@ -110,12 +114,20 @@ end 'main'
 99
 ```
 ```stderr
-spawn #1
-io_yield #1 [file_exists]
-io_resume #1 [file_exists]
-io_yield #1 [net_connect]
-io_resume #1 [net_connect]
-try_await #1 [yield]
+spawn #1 [M=0]
+io_yield #1 [file_exists] [M=0]
+worker_start #1 [M=1]
+worker_park #1 [M=1]
+worker_wake #1 [M=1]
+worker_park #1 [M=1]
+io_resume #1 [file_exists] [M=0]
+io_yield #1 [net_connect] [M=0]
+worker_wake #1 [M=1]
+worker_park #1 [M=1]
+io_resume #1 [net_connect] [M=0]
+try_await #1 [yield] [M=0]
+worker_wake #1 [M=1]
+worker_exit #1 [M=1]
 ```
 
 <!-- test: async-tcp.echo -->

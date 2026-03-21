@@ -348,6 +348,10 @@ end 'main'
 ```stderr
 spawn #1
 io_yield #1 [file_exists]
+worker_start #1
 io_resume #1 [file_exists]
 await #1 [yield]
+worker_exit #1
+worker_start #2
+worker_exit #2
 ```

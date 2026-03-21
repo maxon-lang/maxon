@@ -402,7 +402,16 @@ public static partial class MaxonToStandardConversion {
         } else {
           throw new InvalidOperationException($"Enum arg %{arg.Id} not found in valueMap as StdHeapPtr for call to '{calleeName}'");
         }
-      } else if (calleeFunc.ParamTypes[i] is MlirStructType && valueMap.TryGetValue(arg, out var asSv) && asSv is StdHeapPtr asHp) {
+      } else if (calleeFunc.ParamTypes[i] is MlirStructType && valueMap.TryGetValue(arg, out var asSv) && asSv is StdStackPtr asSp) {
+        // Stack struct arg: emit LEA to get pointer to the stack region
+        var stackTag = _stackVarTags != null && asSp.VarName != null && _stackVarTags.TryGetValue(asSp.VarName, out var tag)
+          ? tag : $"__stk_{asSp.VarName}";
+        var leaOp = new StdLeaOp(stackTag);
+        block.AddOp(leaOp);
+        var ptrOp = new StdPtrToI64Op(leaOp.Result);
+        block.AddOp(ptrOp);
+        newArgs.Add(ptrOp.Result);
+      } else if (calleeFunc.ParamTypes[i] is MlirStructType && valueMap.TryGetValue(arg, out var asHpSv) && asHpSv is StdHeapPtr asHp) {
         // Struct arg: pass the heap pointer directly
         if (asHp.VarName == null)
           throw new InvalidOperationException($"FlattenCallArgs: StdHeapPtr for arg %{arg.Id} (param '{calleeFunc.ParamNames[i]}') has null VarName in call to '{calleeName}'. TypeName={asHp.TypeName}, StdId={asHp.Id}");

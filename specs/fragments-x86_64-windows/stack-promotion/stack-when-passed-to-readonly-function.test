@@ -1,48 +1,53 @@
-// Test: self-implicit-multiple-fields
-
+// Test: stack-when-passed-to-readonly-function
 typealias Integer = int(i64.min to i64.max)
 
-type Rectangle
-  var width Integer
-  var height Integer
+type Point
+  export var x Integer
+  export var y Integer
+end 'Point'
 
-  function area() returns Integer
-    return width * height
-  end 'area'
-end 'Rectangle'
+function readX(p Point) returns Integer
+  return p.x
+end 'readX'
 
 function main() returns ExitCode
-  var r = Rectangle{width: 6, height: 7}
-  return r.area()
+  var p = Point{x: 42, y: 0}
+  return readX(p)
 end 'main'
 ---
+MmTrace: true
 ExitCode: 42
+Stderr: ```
+sl_init
+  os_alloc size=67108864
+mm_raw_alloc #R1 size=40
+  sl_alloc size=40 class=4
+mm_raw_free #R1
+  sl_free size=48 class=4
+```
 ---
 module {
-  func @Rectangle.area(__self_ptr: i64) -> i64 {
+  func @stack-promotion.readX(p: i64) -> i64 {
   entry:
     x86.prologue stack_size=16
     x86.mov [rbp-8], rcx
     x86.mov rax, [rbp-8]
     x86.mov rdx, [rax+0]
-    x86.mov rax, [rbp-8]
-    x86.mov rbx, [rax+8]
-    x86.imul rdx, rbx
     x86.mov rax, rdx
     x86.epilogue
     x86.ret
   }
-  func @self-keyword.main() -> u32 {
+  func @stack-promotion.main() -> u32 {
   entry:
     x86.prologue stack_size=32
-    x86.mov rax, 6
-    x86.mov rcx, 7
+    x86.mov rax, 42
+    x86.xor rcx, rcx
     x86.mov [rbp-16], rax
     x86.mov [rbp-8], rcx
     x86.lea rdx, [rbp-16]
     x86.mov rbx, rdx
     x86.mov rcx, rbx
-    x86.call Rectangle.area
+    x86.call stack-promotion.readX
     x86.mov [rbp-24], rax
     x86.xor rsi, rsi
     x86.cmp rax, rsi
@@ -54,9 +59,9 @@ module {
     x86.movzx r9, r9b
     x86.or rdi, r9
     x86.test rdi, rdi
-    x86.je self-keyword.main.__range_ok_0
+    x86.je stack-promotion.main.__range_ok_0
   __range_panic_0:
-    x86.lea_symdata rax, [__panic_msg_28]
+    x86.lea_symdata rax, [__panic_msg_27]
     x86.mov rcx, rax
     x86.call maxon_panic
   __range_ok_0:

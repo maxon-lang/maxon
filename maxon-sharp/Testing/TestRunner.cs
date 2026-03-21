@@ -715,7 +715,7 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
   // Matches the worker-suffix appended by --async-trace-workers: " [M=N]" at end of line.
   private static readonly Regex AsyncWorkerSuffix = AsyncWorkerSuffixRegex();
 
-  // Lines emitted by the worker lifecycle tracer that don't exist in the stable trace output.
+  // Lines emitted by the worker lifecycle tracer that are timing-dependent and excluded from trace comparison.
   private static readonly HashSet<string> AsyncWorkerOnlyPrefixes = new(StringComparer.Ordinal) {
     "worker_start", "worker_park", "worker_wake", "worker_exit"
   };
@@ -1082,7 +1082,8 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
                   if (candidate.Success) {
                     var absoluteStart = searchStart2 + candidate.Index;
                     var absoluteEnd = absoluteStart + candidate.Length;
-                    var replacement = $"```stderr\n{actualStderr.Replace("\r\n", "\n").Trim()}\n```";
+                    var stderrContent = test.AsyncTrace ? NormalizeAsyncTraceStderr(actualStderr) : actualStderr.Replace("\r\n", "\n").Trim();
+                    var replacement = $"```stderr\n{stderrContent}\n```";
                     specContent = string.Concat(specContent.AsSpan(0, absoluteStart), replacement, specContent.AsSpan(absoluteEnd));
                     updated = true;
                     Logger.Debug(LogCategory.Testing, $"Updated stderr for test '{test.Name}' in {Path.GetFileName(spec.FilePath)}");

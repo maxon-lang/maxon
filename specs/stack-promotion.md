@@ -70,9 +70,9 @@ mm_raw_free #R1
   sl_free size=48 class=4
 ```
 
-<!-- test: heap-when-aliased -->
+<!-- test: stack-when-aliased -->
 <!-- MmTrace -->
-Struct assigned to another variable must remain heap-allocated (aliasing creates shared reference).
+Aliasing (`var b = a`) is safe for stack structs when neither alias escapes.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -93,23 +93,15 @@ end 'main'
 ```stderr
 sl_init
   os_alloc size=67108864
-mm_alloc Point #1 size=16 [stack-promotion.main]
-  sl_alloc Point #1 size=48 class=4
-mm_incref Point #1 rc=1 [stack-promotion.main]
-mm_incref Point #1 rc=2 [stack-promotion.main]
-mm_decref Point #1 rc=1 [stack-promotion.main]
-mm_decref Point #1 rc=0 [stack-promotion.main]
-  mm_free Point #1
-    sl_free Point #1 size=48 class=4
 mm_raw_alloc #R1 size=40
   sl_alloc size=40 class=4
 mm_raw_free #R1
   sl_free size=48 class=4
 ```
 
-<!-- test: heap-when-passed-to-function -->
+<!-- test: stack-when-passed-to-readonly-function -->
 <!-- MmTrace -->
-Struct passed to a function must remain heap-allocated (Phase 1).
+Struct passed to a function that only reads it remains stack-allocated.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -133,15 +125,70 @@ end 'main'
 ```stderr
 sl_init
   os_alloc size=67108864
-mm_alloc Point #1 size=16 [stack-promotion.main]
-  sl_alloc Point #1 size=48 class=4
-mm_incref Point #1 rc=1 [stack-promotion.main]
-mm_decref Point #1 rc=0 [stack-promotion.main]
-  mm_free Point #1
-    sl_free Point #1 size=48 class=4
 mm_raw_alloc #R1 size=40
   sl_alloc size=40 class=4
 mm_raw_free #R1
+  sl_free size=48 class=4
+```
+
+<!-- test: heap-when-stored-in-container -->
+<!-- MmTrace -->
+Struct pushed into a container must remain heap-allocated (the container stores the pointer).
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Item
+  export var value Integer
+end 'Item'
+
+typealias ItemArray = Array with Item
+
+function main() returns ExitCode
+  var arr = ItemArray{}
+  var item = Item{value: 7}
+  arr.push(item)
+  var got = try arr.get(0) otherwise Item{value: 0}
+  return got.value
+end 'main'
+```
+```exitcode
+7
+```
+```stderr
+sl_init
+  os_alloc size=67108864
+mm_alloc __ManagedMemory_Item #1 size=32 [stack-promotion.main]
+  sl_alloc __ManagedMemory_Item #1 size=64 class=5
+mm_alloc ItemArray #2 size=16 [stack-promotion.main]
+  sl_alloc ItemArray #2 size=48 class=4
+mm_incref __ManagedMemory_Item #1 rc=1 [stack-promotion.main]
+mm_incref ItemArray #2 rc=1 [stack-promotion.main]
+mm_alloc Item #3 size=8 [stack-promotion.main]
+  sl_alloc Item #3 size=40 class=4
+mm_incref Item #3 rc=1 [stack-promotion.main]
+mm_realloc __ManagedMemory_Item #1 size=32
+  mm_raw_alloc #R1 size=32 [realloc]
+    sl_alloc size=32 class=3
+mm_incref Item #3 rc=2 [ItemArray.push]
+mm_incref Item #3 rc=3 [ItemArray.get]
+mm_incref Item #3 rc=4 [stack-promotion.main]
+mm_decref Item #3 rc=3 [stack-promotion.main]
+mm_decref Item #3 rc=2 [stack-promotion.main]
+mm_decref Item #3 rc=1 [stack-promotion.main]
+mm_decref ItemArray #2 rc=0 [stack-promotion.main]
+  mm_decref __ManagedMemory_Item #1 rc=0 [~ItemArray]
+    mm_decref Item #3 rc=0 [~ManagedElements]
+      mm_free Item #3
+        sl_free Item #3 size=48 class=4
+    mm_raw_free #R1
+      sl_free size=32 class=3
+    mm_free __ManagedMemory_Item #1
+      sl_free __ManagedMemory_Item #1 size=64 class=5
+  mm_free ItemArray #2
+    sl_free ItemArray #2 size=48 class=4
+mm_raw_alloc #R2 size=40
+  sl_alloc size=40 class=4
+mm_raw_free #R2
   sl_free size=48 class=4
 ```
 

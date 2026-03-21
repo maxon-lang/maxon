@@ -1727,58 +1727,38 @@ module {
     cf.cond_br %4 [then: loop_0, else: loop_0.exit]
   loop_0:
     %5 = memref.load i : i64
-    %6 = arith.constant {value = 8 : i64}
-    %7 = arith.constant {value = 0 : i64}
-    %8 = arith.constant {value = 1 : i64}
-    %9 = std.call_runtime @mm_alloc %6, %7, %8
-    memref.store %9, c
-    %10 = memref.load c : i64
-    memref.store_indirect %5, %10+0
-    %11 = memref.load c : i64
-    std.call_runtime @mm_incref %11
-    %12 = memref.load c : i64
-    %13 = memref.load_indirect %12+0
-    %14 = arith.constant {value = 1 : i64}
-    %15 = arith.cmpi eq %13, %14
-    cf.cond_br %15 [then: check_1, else: check_1.after]
+    memref.bulk_zero __stk_c, 1
+    memref.store %5, __stk_c.0
+    %6 = memref.load __stk_c.0 : i64
+    %7 = arith.constant {value = 1 : i64}
+    %8 = arith.cmpi eq %6, %7
+    cf.cond_br %8 [then: check_1, else: check_1.after]
   check_1:
-    %16 = memref.load c : i64
-    %17 = memref.load_indirect %16+0
-    memref.store %17, result
-    %18 = memref.load c : i64
-    std.call_runtime_if_nonnull @mm_decref %18
+    %9 = memref.load __stk_c.0 : i64
+    memref.store %9, result
     cf.br loop_0.exit
   check_1.after:
-    %20 = arith.constant {value = 1 : i64}
-    %21 = memref.load i : i64
-    %22 = arith.addi %21, %20
-    memref.store %22, i
-    %23 = memref.load c : i64
-    std.call_runtime_if_nonnull @mm_decref %23
+    %10 = arith.constant {value = 1 : i64}
+    %11 = memref.load i : i64
+    %12 = arith.addi %11, %10
+    memref.store %12, i
     cf.br loop_0.header
   loop_0.exit:
-    %25 = memref.load result : i64
-    memref.store %25, __range_val_2
-    %26 = arith.constant {value = 0 : i64}
-    %27 = arith.cmpi lt %25, %26
-    %28 = arith.constant {value = 4294967295 : i64}
-    %29 = arith.cmpi gt %25, %28
-    %30 = arith.ori1 %27, %29
-    cf.cond_br %30 [then: __range_panic_2, else: __range_ok_2]
+    %13 = memref.load result : i64
+    memref.store %13, __range_val_2
+    %14 = arith.constant {value = 0 : i64}
+    %15 = arith.cmpi lt %13, %14
+    %16 = arith.constant {value = 4294967295 : i64}
+    %17 = arith.cmpi gt %13, %16
+    %18 = arith.ori1 %15, %17
+    cf.cond_br %18 [then: __range_panic_2, else: __range_ok_2]
   __range_panic_2:
-    %31 = memref.lea_symdata __panic_msg_31
-    %32 = std.ptr_to_i64 %31
-    std.call_runtime @maxon_panic %32
+    %19 = memref.lea_symdata __panic_msg_31
+    %20 = std.ptr_to_i64 %19
+    std.call_runtime @maxon_panic %20
   __range_ok_2:
-    %33 = memref.load __range_val_2 : i64
-    func.return %33
-  }
-  func @__destruct_Counter(ptr: i64) {
-  entry:
-    %35 = func.param ptr : StdI64
-    cf.br done
-  done:
-    func.return
+    %21 = memref.load __range_val_2 : i64
+    func.return %21
   }
 }
 === x86
@@ -1798,44 +1778,20 @@ module {
     x86.jge memory-safety.main.loop_0.exit
   loop_0:
     x86.mov rax, [rbp-16]
-    x86.mov rcx, 8
-    x86.xor rdx, rdx
-    x86.mov r8, 1
-    x86.call mm_alloc
     x86.mov [rbp-24], rax
     x86.mov rcx, [rbp-24]
-    x86.mov rdx, [rbp-16]
-    x86.mov [rcx+0], rdx
-    x86.mov rbx, [rbp-24]
-    x86.mov rcx, [rbp-24]
-    x86.call mm_incref
-    x86.mov rsi, [rbp-24]
-    x86.mov rdi, [rsi+0]
-    x86.mov r8, 1
-    x86.cmp rdi, r8
+    x86.mov rdx, 1
+    x86.cmp rcx, rdx
     x86.jne memory-safety.main.check_1.after
   check_1:
     x86.mov rax, [rbp-24]
-    x86.mov rcx, [rax+0]
-    x86.mov [rbp-8], rcx
-    x86.mov rdx, [rbp-24]
-    x86.test rdx, rdx
-    x86.jz __nonnull_skip_0
-    x86.mov rcx, [rbp-24]
-    x86.call mm_decref
-    x86.label __nonnull_skip_0
+    x86.mov [rbp-8], rax
     x86.jmp memory-safety.main.loop_0.exit
   check_1.after:
     x86.mov rax, 1
     x86.mov rcx, [rbp-16]
     x86.add rcx, rax
     x86.mov [rbp-16], rcx
-    x86.mov rdx, [rbp-24]
-    x86.test rdx, rdx
-    x86.jz __nonnull_skip_1
-    x86.mov rcx, [rbp-24]
-    x86.call mm_decref
-    x86.label __nonnull_skip_1
     x86.jmp memory-safety.main.loop_0.header
   loop_0.exit:
     x86.mov rax, [rbp-8]
@@ -1858,12 +1814,6 @@ module {
   __range_ok_2:
     x86.mov rax, [rbp-32]
     x86.epilogue
-    x86.ret
-  }
-  func @__destruct_Counter(ptr: i64) {
-  entry:
-    x86.jmp __destruct_Counter.done
-  done:
     x86.ret
   }
 }
@@ -2588,7 +2538,7 @@ function loadResource() returns Resource throws ResourceError
 end 'loadResource'
 
 function process() returns Integer throws ResourceError
-  var marker = Resource{id: 42}
+  @heap var marker = Resource{id: 42}
   var res = try loadResource()
   return res.id + marker.id
 end 'process'

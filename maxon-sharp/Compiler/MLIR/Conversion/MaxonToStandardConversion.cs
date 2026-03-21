@@ -11,6 +11,7 @@ public static partial class MaxonToStandardConversion {
   [ThreadStatic] private static Dictionary<string, string>? _refParamPtrVars;
   // Tracks struct parameter names for the current function (not owned by us, no cleanup needed)
   [ThreadStatic] private static HashSet<string>? _structParamNames;
+  [ThreadStatic] private static Dictionary<string, string>? _stackVarTags;
   [ThreadStatic] private static int _nextRdataId;
   [ThreadStatic] private static int _nextStdlibRdataId;
   [ThreadStatic] private static bool _rdataStdlibPhase;
@@ -246,6 +247,9 @@ public static partial class MaxonToStandardConversion {
       var varNameToStructType = new Dictionary<string, string>();
       // Variables that are stack-allocated structs (skip refcounting and scope cleanup)
       var stackAllocatedVars = new HashSet<string>();
+      // Maps stack-allocated variable name to its BulkZero tag (for direct field access)
+      var stackVarTags = new Dictionary<string, string>();
+      _stackVarTags = stackVarTags;
       _varNameToStructType = varNameToStructType;
       var temps = new VarRegistry();
       // Use pre-computed constant array literal metadata from ConstantArrayAnalysisPass
@@ -755,29 +759,43 @@ public static partial class MaxonToStandardConversion {
 
               // Stack allocation path: decompose struct into named field variables
               if (module.StackEligibleStructs.Contains(structLitOp.Result.Id)) {
+                // Stack-allocate: reserve contiguous stack space and use a pointer,
+                // identical to heap structs but without mm_alloc/refcounting.
                 // Find the target variable name from the immediately following declaration assign
-                string? stackVarName = null;
-                var blockOps = block.Operations;
-                for (int si = 0; si < blockOps.Count - 1; si++) {
-                  if (ReferenceEquals(blockOps[si], structLitOp)
-                      && blockOps[si + 1] is MaxonAssignOp sa && sa.IsDeclaration && sa.Value.Id == structLitOp.Result.Id) {
-                    stackVarName = sa.VarName;
+                // so we store the pointer directly as 't' instead of an intermediate '__stack_N'.
+                string? tempName2 = null;
+                var blockOps2 = block.Operations;
+                for (int si = 0; si < blockOps2.Count - 1; si++) {
+                  if (ReferenceEquals(blockOps2[si], structLitOp)
+                      && blockOps2[si + 1] is MaxonAssignOp sa && sa.IsDeclaration && sa.Value.Id == structLitOp.Result.Id) {
+                    tempName2 = sa.VarName;
                     break;
                   }
                 }
-                stackVarName ??= $"__stack_{structLitOp.Result.Id}";
+                tempName2 ??= temps.CreateTemp("stack", structLitOp.Result.Id, structLitOp.TypeName, OwnershipFlags.None);
+                var stackTag = $"__stk_{tempName2}";
+                var fieldCount = Math.Max(structType.Fields.Count, 1);
 
-                // Store each field as a named variable: varName.__f0, varName.__f1, ...
-                for (int fi = 0; fi < structLitOp.FieldValues.Count; fi++) {
-                  var (fieldName, fieldVal) = structLitOp.FieldValues[fi];
+                // Reserve stack space (skip zero-init — fields are immediately overwritten)
+                newBlock.AddOp(new StdBulkZeroOp(stackTag, fieldCount, zeroInit: false));
+
+                // Store each field directly to the BulkZero slots (no pointer indirection).
+                // Fields are stored in reverse slot order so that the LEA (which returns the
+                // lowest stack address) produces a pointer where [ptr+0] = field 0.
+                foreach (var (fieldName, fieldVal) in structLitOp.FieldValues) {
+                  var field = structType.GetField(fieldName)!;
                   var mappedVal = valueMap[fieldVal];
-                  var fieldVarName = $"{stackVarName}.__f{fi}";
-                  EmitStore(newBlock, mappedVal, fieldVarName, varTypes);
+                  var slotIndex = fieldCount - 1 - (field.Offset / 8);
+                  var slotName = $"{stackTag}.{slotIndex}";
+                  EmitStore(newBlock, mappedVal, slotName, varTypes);
                 }
 
-                valueMap[structLitOp.Result] = new StdStackStruct(
-                    structLitOp.Result.Id, stackVarName, structLitOp.TypeName, structType.Fields.Count);
-                stackAllocatedVars.Add(stackVarName);
+                // No LEA/pointer store here — the pointer is emitted lazily
+                // in FlattenCallArgs only when the struct is actually passed to a function.
+
+                valueMap[structLitOp.Result] = new StdStackPtr(structLitOp.Result.Id, structLitOp.TypeName, tempName2);
+                stackAllocatedVars.Add(tempName2);
+                stackVarTags[tempName2] = stackTag;
                 break;
               }
 
@@ -958,11 +976,6 @@ public static partial class MaxonToStandardConversion {
               break;
             }
             case MaxonAssignOp assignOp: {
-              // Stack-allocated struct: fields are already stored by the struct literal handler;
-              // skip the normal heap-assign path which would cast to StdHeapPtr.
-              if (valueMap.TryGetValue(assignOp.Value, out var assignSvCheck) && assignSvCheck is StdStackStruct) {
-                break;
-              }
               // Associated-value enums now use heap pointers (like structs) and fall
               // through to the struct assignment path below.
               // Check valueMap for StdHeapPtr as the authoritative source: managed list ops like
@@ -978,31 +991,47 @@ public static partial class MaxonToStandardConversion {
                   ?? (assignOp.Value is MaxonStruct ms
                     ? ms.TypeName
                     : throw new InvalidOperationException($"No struct type info for value #{assignOp.Value.Id} in assign to '{assignOp.VarName}'"));
-                if (srcName != dstName) {
-                  // Decref old value before overwriting. Guarded by varTypes
-                  // so the first store skips the decref (no previous value);
-                  // reassignments and loop-header re-stores release the old ref.
-                  if (varTypes.ContainsKey(dstName)) {
-                    if (!varNameToStructType.ContainsKey(dstName))
-                      varNameToStructType[dstName] = structTypeName;
-                    var oldHeapPtr = (StdI64)EmitLoad(newBlock, dstName, varTypes);
-                    EmitDecrefValueIfNonnull(newBlock, oldHeapPtr, scopeName: func.Name);
+                // Stack pointer: no refcounting needed (no refcount header on stack memory).
+                // Skip incref/decref; decref old value only if dst was heap-allocated.
+                if (assignHp is StdStackPtr || stackAllocatedVars.Contains(srcName)) {
+                  if (srcName != dstName) {
+                    // If dst previously held a heap pointer, decref it before overwriting
+                    if (varTypes.ContainsKey(dstName) && !stackAllocatedVars.Contains(dstName)) {
+                      var oldHeapPtr = (StdI64)EmitLoad(newBlock, dstName, varTypes);
+                      EmitDecrefValueIfNonnull(newBlock, oldHeapPtr, scopeName: func.Name);
+                    }
                   }
-                  var srcHeapPtr = EmitLoad(newBlock, srcName, varTypes);
-                  EmitStore(newBlock, srcHeapPtr, dstName, varTypes);
-                }
-                // Incref for the new reference (rc=0 at alloc, every assignment increfs).
-                // Skip incref when ownership was transferred from a callee return —
-                // but NOT for SelfReturn (borrowed reference that needs its own incref).
-                var isSelfReturn = temps.TempHasFlag(srcName, OwnershipFlags.SelfReturn);
-                var isOwnsRef = temps.TempHasFlag(srcName, OwnershipFlags.OwnsRef);
-                var isCallRetTransfer = !isSelfReturn
-                    && (assignOp.OwnerFlags?.HasFlag(OwnershipFlags.CallReturn) == true
-                        || temps.IsCallReturnTransfer(srcName));
-                if (isCallRetTransfer || isOwnsRef) {
-                  temps.ConsumeTempOwnership(srcName);
-                } else if (assignOp.IsDeclaration || srcName != dstName) {
-                  EmitIncref(newBlock, assignOp.VarName, varTypes, scopeName: func.Name);
+                  stackAllocatedVars.Add(dstName);
+                  // Propagate stack tag so aliases resolve to the same BulkZero slots
+                  if (stackVarTags.TryGetValue(srcName, out var srcTag))
+                    stackVarTags[dstName] = srcTag;
+                } else {
+                  if (srcName != dstName) {
+                    // Decref old value before overwriting. Guarded by varTypes
+                    // so the first store skips the decref (no previous value);
+                    // reassignments and loop-header re-stores release the old ref.
+                    if (varTypes.ContainsKey(dstName)) {
+                      if (!varNameToStructType.ContainsKey(dstName))
+                        varNameToStructType[dstName] = structTypeName;
+                      var oldHeapPtr = (StdI64)EmitLoad(newBlock, dstName, varTypes);
+                      EmitDecrefValueIfNonnull(newBlock, oldHeapPtr, scopeName: func.Name);
+                    }
+                    var srcHeapPtr = EmitLoad(newBlock, srcName, varTypes);
+                    EmitStore(newBlock, srcHeapPtr, dstName, varTypes);
+                  }
+                  // Incref for the new reference (rc=0 at alloc, every assignment increfs).
+                  // Skip incref when ownership was transferred from a callee return —
+                  // but NOT for SelfReturn (borrowed reference that needs its own incref).
+                  var isSelfReturn = temps.TempHasFlag(srcName, OwnershipFlags.SelfReturn);
+                  var isOwnsRef = temps.TempHasFlag(srcName, OwnershipFlags.OwnsRef);
+                  var isCallRetTransfer = !isSelfReturn
+                      && (assignOp.OwnerFlags?.HasFlag(OwnershipFlags.CallReturn) == true
+                          || temps.IsCallReturnTransfer(srcName));
+                  if (isCallRetTransfer || isOwnsRef) {
+                    temps.ConsumeTempOwnership(srcName);
+                  } else if (assignOp.IsDeclaration || srcName != dstName) {
+                    EmitIncref(newBlock, assignOp.VarName, varTypes, scopeName: func.Name);
+                  }
                 }
                 varNameToStructType[assignOp.VarName] = structTypeName;
                 if (IsSelfField(isStructInstanceMethod, selfStructType, assignOp.VarName)) {
@@ -1015,7 +1044,9 @@ public static partial class MaxonToStandardConversion {
                     EmitStructFieldStore(newBlock, heapPtr2, "self", field.Offset, MlirType.I64, varTypes);
                   }
                 }
-                valueMap[assignOp.Value] = new StdHeapPtr(assignOp.Value.Id, structTypeName, dstName);
+                valueMap[assignOp.Value] = stackAllocatedVars.Contains(dstName)
+                  ? new StdStackPtr(assignOp.Value.Id, structTypeName, dstName)
+                  : new StdHeapPtr(assignOp.Value.Id, structTypeName, dstName);
                 varNameToStructPrefix[assignOp.VarName] = dstName;
               } else {
                 var mappedValue = valueMap[assignOp.Value];
@@ -1078,15 +1109,6 @@ public static partial class MaxonToStandardConversion {
               break;
             }
             case MaxonStructVarRefOp structVarRef: {
-              // Stack-allocated struct: propagate the StdStackStruct marker
-              if (stackAllocatedVars.Contains(structVarRef.VarName)) {
-                var ssTypeName = structVarRef.StructTypeName;
-                var ssStructType = (MlirStructType)module.TypeDefs[ssTypeName];
-                valueMap[structVarRef.Result] = new StdStackStruct(
-                    structVarRef.Result.Id, structVarRef.VarName, ssTypeName, ssStructType.Fields.Count);
-                break;
-              }
-
               // With heap refs, self fields are accessed via indirect loads from self's heap pointer.
               // For struct-typed self fields, load the nested heap pointer and store in a temp var.
               // Cache the load so repeated references to the same self field reuse the temp var.
@@ -1112,18 +1134,12 @@ public static partial class MaxonToStandardConversion {
               var resolvedTypeName = varNameToStructType.TryGetValue(structVarRef.VarName, out var vt)
                 ? vt
                 : structVarRef.StructTypeName;
-              valueMap[structVarRef.Result] = new StdHeapPtr(structVarRef.Result.Id, resolvedTypeName, resolvedName);
+              valueMap[structVarRef.Result] = stackAllocatedVars.Contains(resolvedName)
+                ? new StdStackPtr(structVarRef.Result.Id, resolvedTypeName, resolvedName)
+                : new StdHeapPtr(structVarRef.Result.Id, resolvedTypeName, resolvedName);
               break;
             }
             case MaxonFieldAccessOp fieldAccess: {
-              // Stack-allocated struct: load directly from named field variable
-              if (valueMap.TryGetValue(fieldAccess.StructValue, out var faStackCheck) && faStackCheck is StdStackStruct faStack) {
-                var faStackFieldVarName = ResolveStackFieldVar(faStack, fieldAccess.FieldName, module);
-                var faStackLoaded = EmitLoad(newBlock, faStackFieldVarName, varTypes);
-                valueMap[fieldAccess.Result] = faStackLoaded;
-                break;
-              }
-
               var structName = ((StdHeapPtr)valueMap[fieldAccess.StructValue]).VarName!;
               // Resolve the field type and offset from the struct type definition
               var parentTypeName = valueMap.TryGetValue(fieldAccess.StructValue, out var ptnSv2) && ptnSv2 is StdHeapPtr ptnHp2 ? ptnHp2.TypeName : null;
@@ -1203,8 +1219,15 @@ public static partial class MaxonToStandardConversion {
                   varNameToStructPrefix[fieldAccess.FieldName] = fieldAccess.FieldName;
                 }
               } else {
-                // Scalar field: load via indirect access through heap pointer
-                if (fieldDef != null) {
+                // Scalar field access
+                if (fieldDef != null && valueMap[fieldAccess.StructValue] is StdStackPtr stackPtr
+                    && stackPtr.VarName != null && stackVarTags.TryGetValue(stackPtr.VarName, out var faTag)) {
+                  // Stack struct: load directly from BulkZero slot (no pointer indirection)
+                  var faFieldCount = ((MlirStructType)module.TypeDefs[stackPtr.TypeName]).Fields.Count;
+                  var slotName = $"{faTag}.{Math.Max(faFieldCount, 1) - 1 - (fieldDef.Offset / 8)}";
+                  var loaded = EmitLoad(newBlock, slotName, varTypes);
+                  valueMap[fieldAccess.Result] = loaded;
+                } else if (fieldDef != null) {
                   var loaded = EmitStructFieldLoad(newBlock, structName, fieldDef.Offset, fieldDef.Type, varTypes);
                   valueMap[fieldAccess.Result] = loaded;
                 } else {
@@ -1216,14 +1239,6 @@ public static partial class MaxonToStandardConversion {
               break;
             }
             case MaxonFieldAssignOp fieldAssign: {
-              // Stack-allocated struct: store directly to named field variable
-              if (valueMap.TryGetValue(fieldAssign.StructValue, out var fsStackCheck) && fsStackCheck is StdStackStruct fsStack) {
-                var fsStackFieldVarName = ResolveStackFieldVar(fsStack, fieldAssign.FieldName, module);
-                var fsStackMappedVal = valueMap[fieldAssign.NewValue];
-                EmitStore(newBlock, fsStackMappedVal, fsStackFieldVarName, varTypes);
-                break;
-              }
-
               var structName = ((StdHeapPtr)valueMap[fieldAssign.StructValue]).VarName!;
 
               // Resolve the field type and offset from the struct type definition
@@ -1241,7 +1256,14 @@ public static partial class MaxonToStandardConversion {
                 mappedVal = EmitLoad(newBlock, newValHp.VarName!, varTypes);
               }
 
-              if (faFieldDef != null) {
+              if (faFieldDef != null && valueMap[fieldAssign.StructValue] is StdStackPtr faStackPtr
+                  && faStackPtr.VarName != null && stackVarTags.TryGetValue(faStackPtr.VarName, out var fsTag)
+                  && !faFieldDef.Type.IsHeapAllocated) {
+                // Stack struct with primitive field: store directly to BulkZero slot
+                var fsFieldCount = ((MlirStructType)module.TypeDefs[faStackPtr.TypeName]).Fields.Count;
+                var slotName = $"{fsTag}.{Math.Max(fsFieldCount, 1) - 1 - (faFieldDef.Offset / 8)}";
+                EmitStore(newBlock, mappedVal, slotName, varTypes);
+              } else if (faFieldDef != null) {
                 var storeType = faFieldDef.Type is MlirStructType or MlirUnionType { HasAssociatedValues: true } ? MlirType.I64 : faFieldDef.Type;
                 if (faFieldDef.Type is MlirStructType or MlirUnionType { HasAssociatedValues: true }) {
                   // Decref old field value before overwriting (may be null if field not yet initialized)
@@ -2022,12 +2044,6 @@ public static partial class MaxonToStandardConversion {
     EmitTagTable(result);
 
     return result;
-  }
-
-  private static string ResolveStackFieldVar(StdStackStruct stack, string fieldName, MlirModule<MaxonOp> module) {
-    var structType = (MlirStructType)module.TypeDefs[stack.TypeName];
-    var fieldIdx = structType.Fields.FindIndex(f => f.Name == fieldName);
-    return $"{stack.VarName}.__f{fieldIdx}";
   }
 
   private static void GenerateGlobalCleanup(MlirModule<MaxonOp> module, MlirModule<StandardOp> result) {
