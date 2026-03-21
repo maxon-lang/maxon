@@ -87,6 +87,28 @@ function synchronizeToNextStatement(tokens TokenArray, startPos TokenIndex) retu
     return pos
 end 'synchronizeToNextStatement'
 
+// Dispatches an identifier at statement level: assignment, function call, or error.
+function parseIdentifierStatement(project Project, block MlirBlock, tokens TokenArray, startPos TokenIndex, filePath String) returns TokenIndex
+    let peekToken = tokenAt(tokens, pos: startPos + 1)
+    if peekToken.kind == TokenKind.equals 'isAssign'
+        return parseVarAssignment(project, block: block, tokens: tokens, startPos: startPos, filePath: filePath)
+    end 'isAssign' else if peekToken.kind == TokenKind.leftParen 'isCall'
+        // Statement-level function call — parse as expression, discard result
+        let callResult = parseExpression(project, block: block, tokens: tokens, startPos: startPos, filePath: filePath)
+        return callResult.nextPos
+    end 'isCall'
+    let stmtToken = tokenAt(tokens, pos: startPos)
+    reportCompileError(project, code: ErrorCode.parserExpectedToken, message: "Unexpected token '{tokenValueToString(stmtToken.value)}' in statement position", line: stmtToken.line, column: stmtToken.column, filePath: filePath)
+    return synchronizeToNextStatement(tokens, startPos: startPos)
+end 'parseIdentifierStatement'
+
+// Reports an unexpected token error and synchronizes to the next statement.
+function reportUnexpectedToken(project Project, tokens TokenArray, startPos TokenIndex, filePath String) returns TokenIndex
+    let stmtToken = tokenAt(tokens, pos: startPos)
+    reportCompileError(project, code: ErrorCode.parserExpectedToken, message: "Unexpected token '{tokenValueToString(stmtToken.value)}' in statement position", line: stmtToken.line, column: stmtToken.column, filePath: filePath)
+    return synchronizeToNextStatement(tokens, startPos: startPos)
+end 'reportUnexpectedToken'
+
 // --- Function parsing ---
 
 function parseFunction(project Project, module MlirModule, tokens TokenArray, startPos TokenIndex, filePath String) returns TokenIndex
@@ -199,23 +221,10 @@ function parseStatements(project Project, func MlirFunction, block MlirBlock, to
             (pos, block) = parseIfStatement(project, func: func, block: block, tokens: tokens, startPos: pos, filePath: filePath)
         end 'isIf' else if stmtToken.kind == TokenKind.while 'isWhile'
             (pos, block) = parseWhileStatement(project, func: func, block: block, tokens: tokens, startPos: pos, filePath: filePath)
-        end 'isWhile' else if stmtToken.kind == TokenKind.identifier 'maybeAssign'
-            let peekAssign = tokenAt(tokens, pos: pos + 1)
-            if peekAssign.kind == TokenKind.equals 'isAssign'
-                pos = parseVarAssignment(project, block: block, tokens: tokens, startPos: pos, filePath: filePath)
-            end 'isAssign' else if peekAssign.kind == TokenKind.leftParen 'isCallStmt'
-                // Statement-level function call — parse as expression, discard result
-                let callResult = parseExpression(project, block: block, tokens: tokens, startPos: pos, filePath: filePath)
-                pos = callResult.nextPos
-            end 'isCallStmt' else 'notAssign'
-                reportCompileError(project, code: ErrorCode.parserExpectedToken, message: "Unexpected token '{tokenValueToString(stmtToken.value)}' in statement position", line: stmtToken.line, column: stmtToken.column, filePath: filePath)
-                pos = synchronizeToNextStatement(tokens, startPos: pos)
-                continue
-            end 'notAssign'
-        end 'maybeAssign' else 'unexpectedToken'
-            reportCompileError(project, code: ErrorCode.parserExpectedToken, message: "Unexpected token '{tokenValueToString(stmtToken.value)}' in statement position", line: stmtToken.line, column: stmtToken.column, filePath: filePath)
-            pos = synchronizeToNextStatement(tokens, startPos: pos)
-            continue
+        end 'isWhile' else if stmtToken.kind == TokenKind.identifier 'isIdent'
+            pos = parseIdentifierStatement(project, block: block, tokens: tokens, startPos: pos, filePath: filePath)
+        end 'isIdent' else 'unexpectedToken'
+            pos = reportUnexpectedToken(project, tokens: tokens, startPos: pos, filePath: filePath)
         end 'unexpectedToken'
 
         pos = skipNewlines(tokens, startPos: pos)

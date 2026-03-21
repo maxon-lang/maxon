@@ -469,14 +469,14 @@ public abstract class RegisterManagerBase<TGpr, TFp, TOp>
   /// Snapshot of register allocator state for carrying assignments across diverging blocks.
   /// </summary>
   public sealed class RegisterSnapshot {
-    internal Dictionary<TGpr, StdValue> RegisterContents = new();
-    internal Dictionary<StdValue, TGpr> ValueToRegister = new();
-    internal Dictionary<StdValue, int> ValueStackHome = new();
-    internal Dictionary<StdValue, long> ConstantValues = new();
-    internal Dictionary<TFp, StdValue> FpContents = new();
-    internal Dictionary<StdValue, TFp> ValueToFp = new();
-    internal Dictionary<StdValue, int> ValueFpStackHome = new();
-    internal Dictionary<StdValue, TFp> ValuePreviousFp = new();
+    internal Dictionary<TGpr, StdValue> RegisterContents = [];
+    internal Dictionary<StdValue, TGpr> ValueToRegister = [];
+    internal Dictionary<StdValue, int> ValueStackHome = [];
+    internal Dictionary<StdValue, long> ConstantValues = [];
+    internal Dictionary<TFp, StdValue> FpContents = [];
+    internal Dictionary<StdValue, TFp> ValueToFp = [];
+    internal Dictionary<StdValue, int> ValueFpStackHome = [];
+    internal Dictionary<StdValue, TFp> ValuePreviousFp = [];
     internal int NextSpillOffset;
     internal int MinSpillOffset;
   }
