@@ -163,7 +163,6 @@ module {
     maxon.br otherwise_default_continue_4
   otherwise_default_continue_4:
     %19 = maxon.var_ref {var = __try_result_1} {type = i64}
-    maxon.assign %19 {var = __range_val_5} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
     %20 = maxon.literal {value = 0 : i64}
     %21 = maxon.binop %19, %20 {op = lt}
     %22 = maxon.literal {value = 4294967295 : i64}
@@ -173,9 +172,8 @@ module {
   __range_panic_5:
     maxon.panic "panic at create-zero-initialized.test:7: Range check failed for type 'ExitCode': value outside int(0 to 4294967295)"
   __range_ok_5:
-    %26 = maxon.var_ref {var = __range_val_5} {type = i64}
-    maxon.scope_end [v, __try_default_2, __range_val_5, __try_result_1]
-    maxon.return %26
+    maxon.scope_end [v, __try_default_2, __try_result_1]
+    maxon.return %19
   }
 }
 === standard
@@ -256,7 +254,6 @@ module {
     cf.br otherwise_default_continue_4
   otherwise_default_continue_4:
     %51 = memref.load __try_result_1 : i64
-    memref.store %51, __range_val_5
     %52 = arith.constant {value = 0 : i64}
     %53 = arith.cmpi lt %51, %52
     %54 = arith.constant {value = 4294967295 : i64}
@@ -268,24 +265,23 @@ module {
     %58 = std.ptr_to_i64 %57
     std.call_runtime @maxon_panic %58
   __range_ok_5:
-    %59 = memref.load __range_val_5 : i64
-    %60 = memref.load v : i64
-    std.call_runtime_if_nonnull @mm_decref %60
-    func.return %59
+    %59 = memref.load v : i64
+    std.call_runtime_if_nonnull @mm_decref %59
+    func.return %51
   }
   func @__destruct___ManagedMemory(ptr: i64) {
   entry:
-    %91 = func.param ptr : StdI64
-    memref.store %91, __destr_ptr
-    %94 = memref.load __destr_ptr : i64
-    %95 = memref.load_indirect %94+16
-    %96 = arith.constant {value = 0 : i64}
-    %97 = arith.cmpi ne %95, %96
-    cf.cond_br %97 [then: free_buf_0, else: skip_buf_0]
+    %90 = func.param ptr : StdI64
+    memref.store %90, __destr_ptr
+    %93 = memref.load __destr_ptr : i64
+    %94 = memref.load_indirect %93+16
+    %95 = arith.constant {value = 0 : i64}
+    %96 = arith.cmpi ne %94, %95
+    cf.cond_br %96 [then: free_buf_0, else: skip_buf_0]
   free_buf_0:
-    %98 = memref.load __destr_ptr : i64
-    %99 = memref.load_indirect %98+0
-    std.call_runtime @mm_raw_free %99
+    %97 = memref.load __destr_ptr : i64
+    %98 = memref.load_indirect %97+0
+    std.call_runtime @mm_raw_free %98
     cf.br skip_buf_0
   skip_buf_0:
     cf.br done
@@ -294,11 +290,11 @@ module {
   }
   func @__destruct_Vec3(ptr: i64) {
   entry:
-    %100 = func.param ptr : StdI64
-    memref.store %100, __destr_ptr
-    %101 = memref.load __destr_ptr : i64
-    %102 = memref.load_indirect %101+8
-    std.call_runtime_if_nonnull @mm_decref %102
+    %99 = func.param ptr : StdI64
+    memref.store %99, __destr_ptr
+    %100 = memref.load __destr_ptr : i64
+    %101 = memref.load_indirect %100+8
+    std.call_runtime_if_nonnull @mm_decref %101
     cf.br done
   done:
     func.return
@@ -368,23 +364,23 @@ module {
     x86.mov rax, [rdx+24]
     x86.mov rdx, 3
     x86.imul rdx, rax
-    x86.mov [rbp-72], rcx
-    x86.mov [rbp-80], rdx
-    x86.mov rcx, [rbp-80]
+    x86.mov [rbp-64], rcx
+    x86.mov [rbp-72], rdx
+    x86.mov rcx, [rbp-72]
     x86.call mm_raw_alloc
-    x86.mov [rbp-88], rax
-    x86.mov rcx, [rbp-88]
-    x86.mov rdx, [rbp-72]
-    x86.mov r8, [rbp-80]
+    x86.mov [rbp-80], rax
+    x86.mov rcx, [rbp-80]
+    x86.mov rdx, [rbp-64]
+    x86.mov r8, [rbp-72]
     x86.call maxon_memcpy
     x86.mov rcx, [rbp-40]
     x86.mov rdx, [rcx+8]
-    x86.mov rcx, [rbp-88]
+    x86.mov rcx, [rbp-80]
     x86.mov [rdx+0], rcx
     x86.mov rcx, 3
     x86.mov [rdx+16], rcx
     x86.mov rcx, [rbp-40]
-    x86.mov [rbp-96], rax
+    x86.mov [rbp-88], rax
     x86.call mm_incref
     x86.mov rax, [rbp-40]
     x86.mov rcx, [rbp-40]
@@ -402,7 +398,6 @@ module {
     x86.jmp vector.main.otherwise_default_continue_4
   otherwise_default_continue_4:
     x86.mov rax, [rbp-56]
-    x86.mov [rbp-64], rax
     x86.xor rcx, rcx
     x86.cmp rax, rcx
     x86.setl rdx
@@ -419,13 +414,12 @@ module {
     x86.mov rcx, rax
     x86.call maxon_panic
   __range_ok_5:
-    x86.mov rax, [rbp-64]
     x86.mov rcx, [rbp-40]
     x86.test rcx, rcx
     x86.jz __nonnull_skip_0
     x86.call mm_decref
     x86.label __nonnull_skip_0
-    x86.mov rax, [rbp-64]
+    x86.mov rax, [rbp-56]
     x86.epilogue
     x86.ret
   }
@@ -876,7 +870,6 @@ module {
     maxon.br otherwise_default_continue_4
   otherwise_default_continue_4:
     %21 = maxon.var_ref {var = __try_result_1} {type = i64}
-    maxon.assign %21 {var = __range_val_5} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
     %22 = maxon.literal {value = 0 : i64}
     %23 = maxon.binop %21, %22 {op = lt}
     %24 = maxon.literal {value = 4294967295 : i64}
@@ -886,9 +879,8 @@ module {
   __range_panic_5:
     maxon.panic "panic at set-and-get.test:8: Range check failed for type 'ExitCode': value outside int(0 to 4294967295)"
   __range_ok_5:
-    %28 = maxon.var_ref {var = __range_val_5} {type = i64}
-    maxon.scope_end [v, __try_default_2, __range_val_5, __try_result_1]
-    maxon.return %28
+    maxon.scope_end [v, __try_default_2, __try_result_1]
+    maxon.return %21
   }
 }
 === standard
@@ -973,7 +965,6 @@ module {
     cf.br otherwise_default_continue_4
   otherwise_default_continue_4:
     %54 = memref.load __try_result_1 : i64
-    memref.store %54, __range_val_5
     %55 = arith.constant {value = 0 : i64}
     %56 = arith.cmpi lt %54, %55
     %57 = arith.constant {value = 4294967295 : i64}
@@ -985,24 +976,23 @@ module {
     %61 = std.ptr_to_i64 %60
     std.call_runtime @maxon_panic %61
   __range_ok_5:
-    %62 = memref.load __range_val_5 : i64
-    %63 = memref.load v : i64
-    std.call_runtime_if_nonnull @mm_decref %63
-    func.return %62
+    %62 = memref.load v : i64
+    std.call_runtime_if_nonnull @mm_decref %62
+    func.return %54
   }
   func @__destruct___ManagedMemory(ptr: i64) {
   entry:
-    %134 = func.param ptr : StdI64
-    memref.store %134, __destr_ptr
-    %137 = memref.load __destr_ptr : i64
-    %138 = memref.load_indirect %137+16
-    %139 = arith.constant {value = 0 : i64}
-    %140 = arith.cmpi ne %138, %139
-    cf.cond_br %140 [then: free_buf_0, else: skip_buf_0]
+    %133 = func.param ptr : StdI64
+    memref.store %133, __destr_ptr
+    %136 = memref.load __destr_ptr : i64
+    %137 = memref.load_indirect %136+16
+    %138 = arith.constant {value = 0 : i64}
+    %139 = arith.cmpi ne %137, %138
+    cf.cond_br %139 [then: free_buf_0, else: skip_buf_0]
   free_buf_0:
-    %141 = memref.load __destr_ptr : i64
-    %142 = memref.load_indirect %141+0
-    std.call_runtime @mm_raw_free %142
+    %140 = memref.load __destr_ptr : i64
+    %141 = memref.load_indirect %140+0
+    std.call_runtime @mm_raw_free %141
     cf.br skip_buf_0
   skip_buf_0:
     cf.br done
@@ -1011,11 +1001,11 @@ module {
   }
   func @__destruct_Vec3(ptr: i64) {
   entry:
-    %143 = func.param ptr : StdI64
-    memref.store %143, __destr_ptr
-    %144 = memref.load __destr_ptr : i64
-    %145 = memref.load_indirect %144+8
-    std.call_runtime_if_nonnull @mm_decref %145
+    %142 = func.param ptr : StdI64
+    memref.store %142, __destr_ptr
+    %143 = memref.load __destr_ptr : i64
+    %144 = memref.load_indirect %143+8
+    std.call_runtime_if_nonnull @mm_decref %144
     cf.br done
   done:
     func.return
@@ -1085,23 +1075,23 @@ module {
     x86.mov rax, [rdx+24]
     x86.mov rdx, 3
     x86.imul rdx, rax
-    x86.mov [rbp-72], rcx
-    x86.mov [rbp-80], rdx
-    x86.mov rcx, [rbp-80]
+    x86.mov [rbp-64], rcx
+    x86.mov [rbp-72], rdx
+    x86.mov rcx, [rbp-72]
     x86.call mm_raw_alloc
-    x86.mov [rbp-88], rax
-    x86.mov rcx, [rbp-88]
-    x86.mov rdx, [rbp-72]
-    x86.mov r8, [rbp-80]
+    x86.mov [rbp-80], rax
+    x86.mov rcx, [rbp-80]
+    x86.mov rdx, [rbp-64]
+    x86.mov r8, [rbp-72]
     x86.call maxon_memcpy
     x86.mov rcx, [rbp-40]
     x86.mov rdx, [rcx+8]
-    x86.mov rcx, [rbp-88]
+    x86.mov rcx, [rbp-80]
     x86.mov [rdx+0], rcx
     x86.mov rcx, 3
     x86.mov [rdx+16], rcx
     x86.mov rcx, [rbp-40]
-    x86.mov [rbp-96], rax
+    x86.mov [rbp-88], rax
     x86.call mm_incref
     x86.mov rax, [rbp-40]
     x86.mov rcx, [rbp-40]
@@ -1124,7 +1114,6 @@ module {
     x86.jmp vector.main.otherwise_default_continue_4
   otherwise_default_continue_4:
     x86.mov rax, [rbp-56]
-    x86.mov [rbp-64], rax
     x86.xor rcx, rcx
     x86.cmp rax, rcx
     x86.setl rdx
@@ -1141,13 +1130,12 @@ module {
     x86.mov rcx, rax
     x86.call maxon_panic
   __range_ok_5:
-    x86.mov rax, [rbp-64]
     x86.mov rcx, [rbp-40]
     x86.test rcx, rcx
     x86.jz __nonnull_skip_0
     x86.call mm_decref
     x86.label __nonnull_skip_0
-    x86.mov rax, [rbp-64]
+    x86.mov rax, [rbp-56]
     x86.epilogue
     x86.ret
   }

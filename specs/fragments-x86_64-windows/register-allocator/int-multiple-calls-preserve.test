@@ -47,7 +47,6 @@ module {
     %6 = maxon.binop %2, %3 {op = add}
     %7 = maxon.binop %6, %4 {op = add}
     %8 = maxon.binop %7, %5 {op = add}
-    maxon.assign %8 {var = __range_val_0} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
     %9 = maxon.literal {value = 0 : i64}
     %10 = maxon.binop %8, %9 {op = lt}
     %11 = maxon.literal {value = 4294967295 : i64}
@@ -57,9 +56,8 @@ module {
   __range_panic_0:
     maxon.panic "panic at int-multiple-calls-preserve.test:18: Range check failed for type 'ExitCode': value outside int(0 to 4294967295)"
   __range_ok_0:
-    %15 = maxon.var_ref {var = __range_val_0} {type = i64}
-    maxon.scope_end [a, b, c, d, __range_val_0]
-    maxon.return %15
+    maxon.scope_end [a, b, c, d]
+    maxon.return %8
   }
 }
 === standard
@@ -83,7 +81,6 @@ module {
     %6 = arith.addi %2, %3
     %7 = arith.addi %6, %4
     %8 = arith.addi %7, %5
-    memref.store %8, __range_val_0
     %9 = arith.constant {value = 0 : i64}
     %10 = arith.cmpi lt %8, %9
     %11 = arith.constant {value = 4294967295 : i64}
@@ -95,8 +92,7 @@ module {
     %15 = std.ptr_to_i64 %14
     std.call_runtime @maxon_panic %15
   __range_ok_0:
-    %16 = memref.load __range_val_0 : i64
-    func.return %16
+    func.return %8
   }
 }
 === x86
@@ -117,15 +113,14 @@ module {
     x86.mov rax, 5
     x86.call register-allocator.getTen
     x86.mov rcx, 7
-    x86.mov [rbp-16], rax
+    x86.mov [rbp-8], rax
     x86.call register-allocator.getTwo
-    x86.mov rdx, [rbp-16]
+    x86.mov rdx, [rbp-8]
     x86.mov rbx, 5
     x86.add rbx, rdx
     x86.mov rsi, 7
     x86.add rbx, rsi
     x86.add rbx, rax
-    x86.mov [rbp-8], rbx
     x86.xor rdi, rdi
     x86.cmp rbx, rdi
     x86.setl r8
@@ -142,7 +137,7 @@ module {
     x86.mov rcx, rax
     x86.call maxon_panic
   __range_ok_0:
-    x86.mov rax, [rbp-8]
+    x86.mov rax, rbx
     x86.epilogue
     x86.ret
   }

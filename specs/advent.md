@@ -109,7 +109,6 @@ module {
     %3 = maxon.literal {value = 3 : i64}
     %4 = maxon.literal {value = 4 : i64}
     %5 = maxon.call @advent.add %3, %4
-    maxon.assign %5 {var = __range_val_0} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
     %6 = maxon.literal {value = 0 : i64}
     %7 = maxon.binop %5, %6 {op = lt}
     %8 = maxon.literal {value = 4294967295 : i64}
@@ -119,9 +118,8 @@ module {
   __range_panic_0:
     maxon.panic "panic at day2.test:10: Range check failed for type 'ExitCode': value outside int(0 to 4294967295)"
   __range_ok_0:
-    %12 = maxon.var_ref {var = __range_val_0} {type = i64}
-    maxon.scope_end [__range_val_0]
-    maxon.return %12
+    maxon.scope_end []
+    maxon.return %5
   }
 }
 === standard
@@ -138,7 +136,6 @@ module {
     %3 = arith.constant {value = 3 : i64}
     %4 = arith.constant {value = 4 : i64}
     %5 = func.call @advent.add %3, %4
-    memref.store %5, __range_val_0
     %6 = arith.constant {value = 0 : i64}
     %7 = arith.cmpi lt %5, %6
     %8 = arith.constant {value = 4294967295 : i64}
@@ -150,8 +147,7 @@ module {
     %12 = std.ptr_to_i64 %11
     std.call_runtime @maxon_panic %12
   __range_ok_0:
-    %13 = memref.load __range_val_0 : i64
-    func.return %13
+    func.return %5
   }
 }
 === x86
@@ -167,16 +163,15 @@ module {
     x86.mov rcx, 3
     x86.mov rdx, 4
     x86.call advent.add
-    x86.mov [rbp-8], rax
     x86.xor rcx, rcx
     x86.cmp rax, rcx
     x86.setl rcx
     x86.movzx rcx, rcxb
     x86.mov rdx, 4294967295
     x86.cmp rax, rdx
-    x86.setg rax
-    x86.movzx rax, raxb
-    x86.or rcx, rax
+    x86.setg rdx
+    x86.movzx rdx, rdxb
+    x86.or rcx, rdx
     x86.test rcx, rcx
     x86.je advent.main.__range_ok_0
   __range_panic_0:
@@ -184,7 +179,6 @@ module {
     x86.mov rcx, rax
     x86.call maxon_panic
   __range_ok_0:
-    x86.mov rax, [rbp-8]
     x86.epilogue
     x86.ret
   }
@@ -367,7 +361,6 @@ module {
   guard_8.after:
     %24 = maxon.literal {value = 3 : i64}
     %25 = maxon.call @advent.multiply %24
-    maxon.assign %25 {var = __range_val_9} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
     %26 = maxon.literal {value = 0 : i64}
     %27 = maxon.binop %25, %26 {op = lt}
     %28 = maxon.literal {value = 4294967295 : i64}
@@ -377,9 +370,8 @@ module {
   __range_panic_9:
     maxon.panic "panic at day4a.test:15: Range check failed for type 'ExitCode': value outside int(0 to 4294967295)"
   __range_ok_9:
-    %32 = maxon.var_ref {var = __range_val_9} {type = i64}
-    maxon.scope_end [args, __try_default_5, parsed, __range_val_9, __lit_tmp_9, __try_result_0, __try_result_4]
-    maxon.return %32
+    maxon.scope_end [args, __try_default_5, parsed, __lit_tmp_9, __try_result_0, __try_result_4]
+    maxon.return %25
   }
 }
 === standard
@@ -391,10 +383,10 @@ module {
   }
   func @advent.main() -> u32 {
   entry:
+    %73 = arith.constant {value = 0 : i64}
+    memref.store %73, __lit_tmp_9
     %74 = arith.constant {value = 0 : i64}
-    memref.store %74, __lit_tmp_9
-    %75 = arith.constant {value = 0 : i64}
-    memref.store %75, __try_result_0
+    memref.store %74, __try_result_0
     %2 = func.call @stdlib.CommandLine.args
     memref.store %2, args
     %5 = arith.constant {value = 0 : i64}
@@ -480,7 +472,6 @@ module {
   guard_8.after:
     %57 = arith.constant {value = 3 : i64}
     %58 = func.call @advent.multiply %57
-    memref.store %58, __range_val_9
     %59 = arith.constant {value = 0 : i64}
     %60 = arith.cmpi lt %58, %59
     %61 = arith.constant {value = 4294967295 : i64}
@@ -492,30 +483,29 @@ module {
     %65 = std.ptr_to_i64 %64
     std.call_runtime @maxon_panic %65
   __range_ok_9:
-    %66 = memref.load __range_val_9 : i64
-    %67 = memref.load __try_result_0 : i64
-    std.call_runtime_if_nonnull @mm_decref %67
-    %69 = memref.load __lit_tmp_9 : i64
-    std.call_runtime_if_nonnull @mm_decref %69
-    %71 = memref.load args : i64
-    std.call_runtime_if_nonnull @mm_decref %71
-    func.return %66
+    %66 = memref.load __try_result_0 : i64
+    std.call_runtime_if_nonnull @mm_decref %66
+    %68 = memref.load __lit_tmp_9 : i64
+    std.call_runtime_if_nonnull @mm_decref %68
+    %70 = memref.load args : i64
+    std.call_runtime_if_nonnull @mm_decref %70
+    func.return %58
   }
   func @__destruct___ManagedMemory_String(ptr: i64) {
   entry:
-    %216 = func.param ptr : StdI64
-    memref.store %216, __destr_ptr
-    %219 = memref.load __destr_ptr : i64
-    %220 = memref.load_indirect %219+16
-    %221 = arith.constant {value = 0 : i64}
-    %222 = arith.cmpi ne %220, %221
-    cf.cond_br %222 [then: free_buf_0, else: skip_buf_0]
+    %215 = func.param ptr : StdI64
+    memref.store %215, __destr_ptr
+    %218 = memref.load __destr_ptr : i64
+    %219 = memref.load_indirect %218+16
+    %220 = arith.constant {value = 0 : i64}
+    %221 = arith.cmpi ne %219, %220
+    cf.cond_br %221 [then: free_buf_0, else: skip_buf_0]
   free_buf_0:
+    %222 = memref.load __destr_ptr : i64
+    std.call_runtime @mm_decref_managed_elements %222
     %223 = memref.load __destr_ptr : i64
-    std.call_runtime @mm_decref_managed_elements %223
-    %224 = memref.load __destr_ptr : i64
-    %225 = memref.load_indirect %224+0
-    std.call_runtime @mm_raw_free %225
+    %224 = memref.load_indirect %223+0
+    std.call_runtime @mm_raw_free %224
     cf.br skip_buf_0
   skip_buf_0:
     cf.br done
@@ -524,28 +514,28 @@ module {
   }
   func @__destruct_StringArray(ptr: i64) {
   entry:
-    %226 = func.param ptr : StdI64
-    memref.store %226, __destr_ptr
-    %227 = memref.load __destr_ptr : i64
-    %228 = memref.load_indirect %227+8
-    std.call_runtime_if_nonnull @mm_decref %228
+    %225 = func.param ptr : StdI64
+    memref.store %225, __destr_ptr
+    %226 = memref.load __destr_ptr : i64
+    %227 = memref.load_indirect %226+8
+    std.call_runtime_if_nonnull @mm_decref %227
     cf.br done
   done:
     func.return
   }
   func @__destruct___ManagedMemory(ptr: i64) {
   entry:
-    %229 = func.param ptr : StdI64
-    memref.store %229, __destr_ptr
-    %232 = memref.load __destr_ptr : i64
-    %233 = memref.load_indirect %232+16
-    %234 = arith.constant {value = 0 : i64}
-    %235 = arith.cmpi ne %233, %234
-    cf.cond_br %235 [then: free_buf_0, else: skip_buf_0]
+    %228 = func.param ptr : StdI64
+    memref.store %228, __destr_ptr
+    %231 = memref.load __destr_ptr : i64
+    %232 = memref.load_indirect %231+16
+    %233 = arith.constant {value = 0 : i64}
+    %234 = arith.cmpi ne %232, %233
+    cf.cond_br %234 [then: free_buf_0, else: skip_buf_0]
   free_buf_0:
-    %236 = memref.load __destr_ptr : i64
-    %237 = memref.load_indirect %236+0
-    std.call_runtime @mm_raw_free %237
+    %235 = memref.load __destr_ptr : i64
+    %236 = memref.load_indirect %235+0
+    std.call_runtime @mm_raw_free %236
     cf.br skip_buf_0
   skip_buf_0:
     cf.br done
@@ -554,22 +544,22 @@ module {
   }
   func @__destruct_String(ptr: i64) {
   entry:
-    %238 = func.param ptr : StdI64
-    memref.store %238, __destr_ptr
-    %239 = memref.load __destr_ptr : i64
-    %240 = memref.load_indirect %239+0
-    std.call_runtime_if_nonnull @mm_decref %240
+    %237 = func.param ptr : StdI64
+    memref.store %237, __destr_ptr
+    %238 = memref.load __destr_ptr : i64
+    %239 = memref.load_indirect %238+0
+    std.call_runtime_if_nonnull @mm_decref %239
     cf.br done
   done:
     func.return
   }
   func @__destruct_CodepointView(ptr: i64) {
   entry:
-    %241 = func.param ptr : StdI64
-    memref.store %241, __destr_ptr
-    %242 = memref.load __destr_ptr : i64
-    %243 = memref.load_indirect %242+0
-    std.call_runtime_if_nonnull @mm_decref %243
+    %240 = func.param ptr : StdI64
+    memref.store %240, __destr_ptr
+    %241 = memref.load __destr_ptr : i64
+    %242 = memref.load_indirect %241+0
+    std.call_runtime_if_nonnull @mm_decref %242
     cf.br done
   done:
     func.return
@@ -584,7 +574,7 @@ module {
   }
   func @advent.main() -> u32 {
   entry:
-    x86.prologue stack_size=80
+    x86.prologue stack_size=64
     x86.xor rax, rax
     x86.mov [rbp-8], rax
     x86.xor rcx, rcx
@@ -605,7 +595,7 @@ module {
     x86.xor rdx, rdx
     x86.lea_func rbx, [__destruct_String]
     x86.mov rsi, rbx
-    x86.mov [rbp-72], rcx
+    x86.mov [rbp-64], rcx
     x86.mov rdx, rsi
     x86.mov rcx, 16
     x86.mov r8, 4
@@ -619,7 +609,7 @@ module {
     x86.call mm_alloc
     x86.mov [rbp-40], rax
     x86.mov r9, [rbp-40]
-    x86.mov rax, [rbp-72]
+    x86.mov rax, [rbp-64]
     x86.mov [r9+0], rax
     x86.mov rax, [rbp-40]
     x86.xor rcx, rcx
@@ -701,16 +691,15 @@ module {
   guard_8.after:
     x86.mov rcx, 3
     x86.call advent.multiply
-    x86.mov [rbp-64], rax
     x86.xor rcx, rcx
     x86.cmp rax, rcx
     x86.setl rcx
     x86.movzx rcx, rcxb
     x86.mov rdx, 4294967295
     x86.cmp rax, rdx
-    x86.setg rax
-    x86.movzx rax, raxb
-    x86.or rcx, rax
+    x86.setg rdx
+    x86.movzx rdx, rdxb
+    x86.or rcx, rdx
     x86.test rcx, rcx
     x86.je advent.main.__range_ok_9
   __range_panic_9:
@@ -718,8 +707,8 @@ module {
     x86.mov rcx, rax
     x86.call maxon_panic
   __range_ok_9:
-    x86.mov rax, [rbp-64]
     x86.mov rcx, [rbp-16]
+    x86.mov [rbp-64], rax
     x86.test rcx, rcx
     x86.jz __nonnull_skip_4
     x86.call mm_decref
@@ -1448,7 +1437,6 @@ module {
   guard_8.after:
     %24 = maxon.literal {value = 3 : i64}
     %25 = maxon.call @advent.multiply %24
-    maxon.assign %25 {var = __range_val_9} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
     %26 = maxon.literal {value = 0 : i64}
     %27 = maxon.binop %25, %26 {op = lt}
     %28 = maxon.literal {value = 4294967295 : i64}
@@ -1458,9 +1446,8 @@ module {
   __range_panic_9:
     maxon.panic "panic at day4b.test:15: Range check failed for type 'ExitCode': value outside int(0 to 4294967295)"
   __range_ok_9:
-    %32 = maxon.var_ref {var = __range_val_9} {type = i64}
-    maxon.scope_end [args, __try_default_5, parsed, __range_val_9, __lit_tmp_9, __try_result_0, __try_result_4]
-    maxon.return %32
+    maxon.scope_end [args, __try_default_5, parsed, __lit_tmp_9, __try_result_0, __try_result_4]
+    maxon.return %25
   }
 }
 === standard
@@ -1474,10 +1461,10 @@ module {
   }
   func @advent.main() -> u32 {
   entry:
+    %74 = arith.constant {value = 0 : i64}
+    memref.store %74, __lit_tmp_9
     %75 = arith.constant {value = 0 : i64}
-    memref.store %75, __lit_tmp_9
-    %76 = arith.constant {value = 0 : i64}
-    memref.store %76, __try_result_0
+    memref.store %75, __try_result_0
     %3 = func.call @stdlib.CommandLine.args
     memref.store %3, args
     %6 = arith.constant {value = 0 : i64}
@@ -1563,7 +1550,6 @@ module {
   guard_8.after:
     %58 = arith.constant {value = 3 : i64}
     %59 = func.call @advent.multiply %58
-    memref.store %59, __range_val_9
     %60 = arith.constant {value = 0 : i64}
     %61 = arith.cmpi lt %59, %60
     %62 = arith.constant {value = 4294967295 : i64}
@@ -1575,30 +1561,29 @@ module {
     %66 = std.ptr_to_i64 %65
     std.call_runtime @maxon_panic %66
   __range_ok_9:
-    %67 = memref.load __range_val_9 : i64
-    %68 = memref.load __try_result_0 : i64
-    std.call_runtime_if_nonnull @mm_decref %68
-    %70 = memref.load __lit_tmp_9 : i64
-    std.call_runtime_if_nonnull @mm_decref %70
-    %72 = memref.load args : i64
-    std.call_runtime_if_nonnull @mm_decref %72
-    func.return %67
+    %67 = memref.load __try_result_0 : i64
+    std.call_runtime_if_nonnull @mm_decref %67
+    %69 = memref.load __lit_tmp_9 : i64
+    std.call_runtime_if_nonnull @mm_decref %69
+    %71 = memref.load args : i64
+    std.call_runtime_if_nonnull @mm_decref %71
+    func.return %59
   }
   func @__destruct___ManagedMemory_String(ptr: i64) {
   entry:
-    %217 = func.param ptr : StdI64
-    memref.store %217, __destr_ptr
-    %220 = memref.load __destr_ptr : i64
-    %221 = memref.load_indirect %220+16
-    %222 = arith.constant {value = 0 : i64}
-    %223 = arith.cmpi ne %221, %222
-    cf.cond_br %223 [then: free_buf_0, else: skip_buf_0]
+    %216 = func.param ptr : StdI64
+    memref.store %216, __destr_ptr
+    %219 = memref.load __destr_ptr : i64
+    %220 = memref.load_indirect %219+16
+    %221 = arith.constant {value = 0 : i64}
+    %222 = arith.cmpi ne %220, %221
+    cf.cond_br %222 [then: free_buf_0, else: skip_buf_0]
   free_buf_0:
+    %223 = memref.load __destr_ptr : i64
+    std.call_runtime @mm_decref_managed_elements %223
     %224 = memref.load __destr_ptr : i64
-    std.call_runtime @mm_decref_managed_elements %224
-    %225 = memref.load __destr_ptr : i64
-    %226 = memref.load_indirect %225+0
-    std.call_runtime @mm_raw_free %226
+    %225 = memref.load_indirect %224+0
+    std.call_runtime @mm_raw_free %225
     cf.br skip_buf_0
   skip_buf_0:
     cf.br done
@@ -1607,28 +1592,28 @@ module {
   }
   func @__destruct_StringArray(ptr: i64) {
   entry:
-    %227 = func.param ptr : StdI64
-    memref.store %227, __destr_ptr
-    %228 = memref.load __destr_ptr : i64
-    %229 = memref.load_indirect %228+8
-    std.call_runtime_if_nonnull @mm_decref %229
+    %226 = func.param ptr : StdI64
+    memref.store %226, __destr_ptr
+    %227 = memref.load __destr_ptr : i64
+    %228 = memref.load_indirect %227+8
+    std.call_runtime_if_nonnull @mm_decref %228
     cf.br done
   done:
     func.return
   }
   func @__destruct___ManagedMemory(ptr: i64) {
   entry:
-    %230 = func.param ptr : StdI64
-    memref.store %230, __destr_ptr
-    %233 = memref.load __destr_ptr : i64
-    %234 = memref.load_indirect %233+16
-    %235 = arith.constant {value = 0 : i64}
-    %236 = arith.cmpi ne %234, %235
-    cf.cond_br %236 [then: free_buf_0, else: skip_buf_0]
+    %229 = func.param ptr : StdI64
+    memref.store %229, __destr_ptr
+    %232 = memref.load __destr_ptr : i64
+    %233 = memref.load_indirect %232+16
+    %234 = arith.constant {value = 0 : i64}
+    %235 = arith.cmpi ne %233, %234
+    cf.cond_br %235 [then: free_buf_0, else: skip_buf_0]
   free_buf_0:
-    %237 = memref.load __destr_ptr : i64
-    %238 = memref.load_indirect %237+0
-    std.call_runtime @mm_raw_free %238
+    %236 = memref.load __destr_ptr : i64
+    %237 = memref.load_indirect %236+0
+    std.call_runtime @mm_raw_free %237
     cf.br skip_buf_0
   skip_buf_0:
     cf.br done
@@ -1637,22 +1622,22 @@ module {
   }
   func @__destruct_String(ptr: i64) {
   entry:
-    %239 = func.param ptr : StdI64
-    memref.store %239, __destr_ptr
-    %240 = memref.load __destr_ptr : i64
-    %241 = memref.load_indirect %240+0
-    std.call_runtime_if_nonnull @mm_decref %241
+    %238 = func.param ptr : StdI64
+    memref.store %238, __destr_ptr
+    %239 = memref.load __destr_ptr : i64
+    %240 = memref.load_indirect %239+0
+    std.call_runtime_if_nonnull @mm_decref %240
     cf.br done
   done:
     func.return
   }
   func @__destruct_CodepointView(ptr: i64) {
   entry:
-    %242 = func.param ptr : StdI64
-    memref.store %242, __destr_ptr
-    %243 = memref.load __destr_ptr : i64
-    %244 = memref.load_indirect %243+0
-    std.call_runtime_if_nonnull @mm_decref %244
+    %241 = func.param ptr : StdI64
+    memref.store %241, __destr_ptr
+    %242 = memref.load __destr_ptr : i64
+    %243 = memref.load_indirect %242+0
+    std.call_runtime_if_nonnull @mm_decref %243
     cf.br done
   done:
     func.return
@@ -1669,7 +1654,7 @@ module {
   }
   func @advent.main() -> u32 {
   entry:
-    x86.prologue stack_size=80
+    x86.prologue stack_size=64
     x86.xor rax, rax
     x86.mov [rbp-8], rax
     x86.xor rcx, rcx
@@ -1690,7 +1675,7 @@ module {
     x86.xor rdx, rdx
     x86.lea_func rbx, [__destruct_String]
     x86.mov rsi, rbx
-    x86.mov [rbp-72], rcx
+    x86.mov [rbp-64], rcx
     x86.mov rdx, rsi
     x86.mov rcx, 16
     x86.mov r8, 4
@@ -1704,7 +1689,7 @@ module {
     x86.call mm_alloc
     x86.mov [rbp-40], rax
     x86.mov r9, [rbp-40]
-    x86.mov rax, [rbp-72]
+    x86.mov rax, [rbp-64]
     x86.mov [r9+0], rax
     x86.mov rax, [rbp-40]
     x86.xor rcx, rcx
@@ -1786,16 +1771,15 @@ module {
   guard_8.after:
     x86.mov rcx, 3
     x86.call advent.multiply
-    x86.mov [rbp-64], rax
     x86.xor rcx, rcx
     x86.cmp rax, rcx
     x86.setl rcx
     x86.movzx rcx, rcxb
     x86.mov rdx, 4294967295
     x86.cmp rax, rdx
-    x86.setg rax
-    x86.movzx rax, raxb
-    x86.or rcx, rax
+    x86.setg rdx
+    x86.movzx rdx, rdxb
+    x86.or rcx, rdx
     x86.test rcx, rcx
     x86.je advent.main.__range_ok_9
   __range_panic_9:
@@ -1803,8 +1787,8 @@ module {
     x86.mov rcx, rax
     x86.call maxon_panic
   __range_ok_9:
-    x86.mov rax, [rbp-64]
     x86.mov rcx, [rbp-16]
+    x86.mov [rbp-64], rax
     x86.test rcx, rcx
     x86.jz __nonnull_skip_4
     x86.call mm_decref

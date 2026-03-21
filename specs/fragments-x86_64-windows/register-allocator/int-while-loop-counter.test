@@ -30,7 +30,6 @@ module {
     maxon.br loop_0.header
   loop_0.exit:
     %7 = maxon.var_ref {var = i} {type = i64}
-    maxon.assign %7 {var = __range_val_1} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
     %8 = maxon.literal {value = 0 : i64}
     %9 = maxon.binop %7, %8 {op = lt}
     %10 = maxon.literal {value = 4294967295 : i64}
@@ -40,9 +39,8 @@ module {
   __range_panic_1:
     maxon.panic "panic at int-while-loop-counter.test:7: Range check failed for type 'ExitCode': value outside int(0 to 4294967295)"
   __range_ok_1:
-    %14 = maxon.var_ref {var = __range_val_1} {type = i64}
-    maxon.scope_end [i, __range_val_1]
-    maxon.return %14
+    maxon.scope_end [i]
+    maxon.return %7
   }
 }
 === standard
@@ -65,7 +63,6 @@ module {
     cf.br loop_0.header
   loop_0.exit:
     %7 = memref.load i : i64
-    memref.store %7, __range_val_1
     %8 = arith.constant {value = 0 : i64}
     %9 = arith.cmpi lt %7, %8
     %10 = arith.constant {value = 4294967295 : i64}
@@ -77,8 +74,7 @@ module {
     %14 = std.ptr_to_i64 %13
     std.call_runtime @maxon_panic %14
   __range_ok_1:
-    %15 = memref.load __range_val_1 : i64
-    func.return %15
+    func.return %7
   }
 }
 === x86
@@ -102,7 +98,6 @@ module {
     x86.jmp register-allocator.main.loop_0.header
   loop_0.exit:
     x86.mov rax, [rbp-8]
-    x86.mov [rbp-16], rax
     x86.xor rcx, rcx
     x86.cmp rax, rcx
     x86.setl rdx
@@ -119,7 +114,6 @@ module {
     x86.mov rcx, rax
     x86.call maxon_panic
   __range_ok_1:
-    x86.mov rax, [rbp-16]
     x86.epilogue
     x86.ret
   }

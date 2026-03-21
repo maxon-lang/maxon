@@ -45,7 +45,6 @@ module {
   otherwise_continue_1:
     %16 = maxon.var_ref {var = __try_result_3} {type = i64}
     %17 = maxon.var_ref {var = result} {type = i64}
-    maxon.assign %17 {var = __range_val_4} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
     %18 = maxon.literal {value = 0 : i64}
     %19 = maxon.binop %17, %18 {op = lt}
     %20 = maxon.literal {value = 4294967295 : i64}
@@ -55,9 +54,8 @@ module {
   __range_panic_4:
     maxon.panic "panic at error-otherwise-block.test:18: Range check failed for type 'ExitCode': value outside int(0 to 4294967295)"
   __range_ok_4:
-    %24 = maxon.var_ref {var = __range_val_4} {type = i64}
-    maxon.scope_end [result, __try_error_2, __range_val_4, __try_result_3]
-    maxon.return %24
+    maxon.scope_end [result, __try_error_2, __try_result_3]
+    maxon.return %17
   }
 }
 === standard
@@ -83,7 +81,6 @@ module {
     cf.br otherwise_continue_1
   otherwise_continue_1:
     %10 = memref.load result : i64
-    memref.store %10, __range_val_4
     %11 = arith.constant {value = 0 : i64}
     %12 = arith.cmpi lt %10, %11
     %13 = arith.constant {value = 4294967295 : i64}
@@ -95,8 +92,7 @@ module {
     %17 = std.ptr_to_i64 %16
     std.call_runtime @maxon_panic %17
   __range_ok_4:
-    %18 = memref.load __range_val_4 : i64
-    func.return %18
+    func.return %10
   }
 }
 === x86
@@ -125,7 +121,6 @@ module {
     x86.jmp register-allocator.main.otherwise_continue_1
   otherwise_continue_1:
     x86.mov rax, [rbp-8]
-    x86.mov [rbp-16], rax
     x86.xor rcx, rcx
     x86.cmp rax, rcx
     x86.setl rdx
@@ -142,7 +137,6 @@ module {
     x86.mov rcx, rax
     x86.call maxon_panic
   __range_ok_4:
-    x86.mov rax, [rbp-16]
     x86.epilogue
     x86.ret
   }

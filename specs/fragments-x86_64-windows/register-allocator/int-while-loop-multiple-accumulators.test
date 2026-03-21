@@ -76,7 +76,6 @@ module {
     %28 = maxon.binop %26, %27 {op = add}
     %29 = maxon.literal {value = 256 : i64}
     %30 = maxon.binop %28, %29 {op = mod}
-    maxon.assign %30 {var = __range_val_3} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
     %31 = maxon.literal {value = 0 : i64}
     %32 = maxon.binop %30, %31 {op = lt}
     %33 = maxon.literal {value = 4294967295 : i64}
@@ -86,9 +85,8 @@ module {
   __range_panic_3:
     maxon.panic "panic at int-while-loop-multiple-accumulators.test:16: Range check failed for type 'ExitCode': value outside int(0 to 4294967295)"
   __range_ok_3:
-    %37 = maxon.var_ref {var = __range_val_3} {type = i64}
-    maxon.scope_end [even_sum, odd_sum, count, i, __range_val_3]
-    maxon.return %37
+    maxon.scope_end [even_sum, odd_sum, count, i]
+    maxon.return %30
   }
 }
 === standard
@@ -146,7 +144,6 @@ module {
     %28 = arith.addi %26, %27
     %29 = arith.constant {value = 256 : i64}
     %30 = arith.remsi %28, %29
-    memref.store %30, __range_val_3
     %31 = arith.constant {value = 0 : i64}
     %32 = arith.cmpi lt %30, %31
     %33 = arith.constant {value = 4294967295 : i64}
@@ -158,8 +155,7 @@ module {
     %37 = std.ptr_to_i64 %36
     std.call_runtime @maxon_panic %37
   __range_ok_3:
-    %38 = memref.load __range_val_3 : i64
-    func.return %38
+    func.return %30
   }
 }
 === x86
@@ -220,10 +216,9 @@ module {
     x86.mov rdx, [rbp-24]
     x86.add rax, rdx
     x86.mov rbx, 256
-    x86.mov [rbp-48], rax
+    x86.mov [rbp-40], rax
     x86.cqo
     x86.idiv rbx
-    x86.mov [rbp-40], rdx
     x86.xor rsi, rsi
     x86.cmp rdx, rsi
     x86.setl rdi
@@ -240,7 +235,7 @@ module {
     x86.mov rcx, rax
     x86.call maxon_panic
   __range_ok_3:
-    x86.mov rax, [rbp-40]
+    x86.mov rax, rdx
     x86.epilogue
     x86.ret
   }

@@ -11668,12 +11668,6 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
     var checkId = _blockCounter++;
     var panicLabel = $"__range_panic_{checkId}";
     var continueLabel = $"__range_ok_{checkId}";
-    var tempVarName = $"__range_val_{checkId}";
-
-    // Store value into temp variable for cross-block access
-    _currentBlock!.AddOp(new MaxonAssignOp(tempVarName, value, true, true, kind));
-    _variables.Declare(tempVarName, kind, true, value, _currentBlock!);
-
     // For comparisons, use the appropriate float kind or Integer for int/byte
     var cmpKind = kind is MaxonValueKind.Float or MaxonValueKind.Float32 ? kind : MaxonValueKind.Integer;
 
@@ -11728,11 +11722,10 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
     panicBlock.AddOp(new MaxonPanicOp(
       $"panic at {sourceFileName}:{sourceLine}: Range check failed for type '{rangedType.Name}': value outside {rangedType.FormatRange()}"));
 
-    // Continue block — reload value from temp variable
+    // Continue block — no reload needed because the panic block never returns,
+    // so the register holding the original value is never clobbered on this path.
     _currentBlock = _currentFunction!.Body.AddBlock(continueLabel);
-    var reloadOp = new MaxonVarRefOp(tempVarName, kind);
-    _currentBlock.AddOp(reloadOp);
-    return reloadOp.Result;
+    return value;
   }
 
   private ExprResult.Direct ParseStructLiteral(string typeName) {

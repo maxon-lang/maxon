@@ -20,7 +20,6 @@ module {
     %3 = maxon.literal {value = 22 : i64}
     maxon.assign %3 {var = x} {kind = i64} {mut = 1 : i1}
     %4 = maxon.binop %3, %2 {op = add}
-    maxon.assign %4 {var = __range_val_0} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
     %5 = maxon.literal {value = 0 : i64}
     %6 = maxon.binop %4, %5 {op = lt}
     %7 = maxon.literal {value = 4294967295 : i64}
@@ -30,9 +29,8 @@ module {
   __range_panic_0:
     maxon.panic "panic at int-reassignment.test:6: Range check failed for type 'ExitCode': value outside int(0 to 4294967295)"
   __range_ok_0:
-    %11 = maxon.var_ref {var = __range_val_0} {type = i64}
-    maxon.scope_end [x, y, __range_val_0]
-    maxon.return %11
+    maxon.scope_end [x, y]
+    maxon.return %4
   }
 }
 === standard
@@ -44,7 +42,6 @@ module {
     %2 = arith.subi %0, %1
     %3 = arith.constant {value = 22 : i64}
     %4 = arith.addi %3, %2
-    memref.store %4, __range_val_0
     %5 = arith.constant {value = 0 : i64}
     %6 = arith.cmpi lt %4, %5
     %7 = arith.constant {value = 4294967295 : i64}
@@ -56,8 +53,7 @@ module {
     %11 = std.ptr_to_i64 %10
     std.call_runtime @maxon_panic %11
   __range_ok_0:
-    %12 = memref.load __range_val_0 : i64
-    func.return %12
+    func.return %4
   }
 }
 === x86
@@ -70,7 +66,6 @@ module {
     x86.sub rax, rcx
     x86.mov rdx, 22
     x86.add rdx, rax
-    x86.mov [rbp-8], rdx
     x86.xor rbx, rbx
     x86.cmp rdx, rbx
     x86.setl rsi
@@ -87,7 +82,7 @@ module {
     x86.mov rcx, rax
     x86.call maxon_panic
   __range_ok_0:
-    x86.mov rax, [rbp-8]
+    x86.mov rax, rdx
     x86.epilogue
     x86.ret
   }

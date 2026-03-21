@@ -45,7 +45,6 @@ module {
     %12 = maxon.call @register-allocator.useRegs %8, %9, %10, %11
     maxon.assign %12 {var = result} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
     %13 = maxon.binop %7, %12 {op = add}
-    maxon.assign %13 {var = __range_val_0} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
     %14 = maxon.literal {value = 0 : i64}
     %15 = maxon.binop %13, %14 {op = lt}
     %16 = maxon.literal {value = 4294967295 : i64}
@@ -55,9 +54,8 @@ module {
   __range_panic_0:
     maxon.panic "panic at int-callee-saved-clobber.test:15: Range check failed for type 'ExitCode': value outside int(0 to 4294967295)"
   __range_ok_0:
-    %20 = maxon.var_ref {var = __range_val_0} {type = i64}
-    maxon.scope_end [sentinel, result, __range_val_0]
-    maxon.return %20
+    maxon.scope_end [sentinel, result]
+    maxon.return %13
   }
 }
 === standard
@@ -82,7 +80,6 @@ module {
     %11 = arith.constant {value = 4 : i64}
     %12 = func.call @register-allocator.useRegs %8, %9, %10, %11
     %13 = arith.addi %7, %12
-    memref.store %13, __range_val_0
     %14 = arith.constant {value = 0 : i64}
     %15 = arith.cmpi lt %13, %14
     %16 = arith.constant {value = 4294967295 : i64}
@@ -94,8 +91,7 @@ module {
     %20 = std.ptr_to_i64 %19
     std.call_runtime @maxon_panic %20
   __range_ok_0:
-    %21 = memref.load __range_val_0 : i64
-    func.return %21
+    func.return %13
   }
 }
 === x86
@@ -118,7 +114,6 @@ module {
     x86.call register-allocator.useRegs
     x86.mov rcx, 42
     x86.add rcx, rax
-    x86.mov [rbp-8], rcx
     x86.xor rdx, rdx
     x86.cmp rcx, rdx
     x86.setl rbx
@@ -135,7 +130,7 @@ module {
     x86.mov rcx, rax
     x86.call maxon_panic
   __range_ok_0:
-    x86.mov rax, [rbp-8]
+    x86.mov rax, rcx
     x86.epilogue
     x86.ret
   }

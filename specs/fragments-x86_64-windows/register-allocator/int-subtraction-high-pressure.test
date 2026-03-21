@@ -40,7 +40,6 @@ module {
     %12 = maxon.binop %11, %5 {op = sub}
     %13 = maxon.binop %12, %6 {op = sub}
     %14 = maxon.binop %13, %7 {op = sub}
-    maxon.assign %14 {var = __range_val_0} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
     %15 = maxon.literal {value = 0 : i64}
     %16 = maxon.binop %14, %15 {op = lt}
     %17 = maxon.literal {value = 4294967295 : i64}
@@ -50,9 +49,8 @@ module {
   __range_panic_0:
     maxon.panic "panic at int-subtraction-high-pressure.test:11: Range check failed for type 'ExitCode': value outside int(0 to 4294967295)"
   __range_ok_0:
-    %21 = maxon.var_ref {var = __range_val_0} {type = i64}
-    maxon.scope_end [a, b, c, d, e, f, g, h, __range_val_0]
-    maxon.return %21
+    maxon.scope_end [a, b, c, d, e, f, g, h]
+    maxon.return %14
   }
 }
 === standard
@@ -74,7 +72,6 @@ module {
     %12 = arith.subi %11, %5
     %13 = arith.subi %12, %6
     %14 = arith.subi %13, %7
-    memref.store %14, __range_val_0
     %15 = arith.constant {value = 0 : i64}
     %16 = arith.cmpi lt %14, %15
     %17 = arith.constant {value = 4294967295 : i64}
@@ -86,8 +83,7 @@ module {
     %21 = std.ptr_to_i64 %20
     std.call_runtime @maxon_panic %21
   __range_ok_0:
-    %22 = memref.load __range_val_0 : i64
-    func.return %22
+    func.return %14
   }
 }
 === x86
@@ -110,16 +106,15 @@ module {
     x86.sub rax, rdi
     x86.sub rax, r8
     x86.sub rax, r9
-    x86.mov [rbp-8], rax
     x86.xor rcx, rcx
     x86.cmp rax, rcx
     x86.setl rcx
     x86.movzx rcx, rcxb
     x86.mov rdx, 4294967295
     x86.cmp rax, rdx
-    x86.setg rax
-    x86.movzx rax, raxb
-    x86.or rcx, rax
+    x86.setg rdx
+    x86.movzx rdx, rdxb
+    x86.or rcx, rdx
     x86.test rcx, rcx
     x86.je register-allocator.main.__range_ok_0
   __range_panic_0:
@@ -127,7 +122,6 @@ module {
     x86.mov rcx, rax
     x86.call maxon_panic
   __range_ok_0:
-    x86.mov rax, [rbp-8]
     x86.epilogue
     x86.ret
   }

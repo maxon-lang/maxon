@@ -74,7 +74,6 @@ module {
     %30 = maxon.binop %29, %15 {op = add}
     %31 = maxon.literal {value = 256 : i64}
     %32 = maxon.binop %30, %31 {op = mod}
-    maxon.assign %32 {var = __range_val_0} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
     %33 = maxon.literal {value = 0 : i64}
     %34 = maxon.binop %32, %33 {op = lt}
     %35 = maxon.literal {value = 4294967295 : i64}
@@ -84,9 +83,8 @@ module {
   __range_panic_0:
     maxon.panic "panic at int-sixteen-vars-spill.test:19: Range check failed for type 'ExitCode': value outside int(0 to 4294967295)"
   __range_ok_0:
-    %39 = maxon.var_ref {var = __range_val_0} {type = i64}
-    maxon.scope_end [a, b, c, d, e, f, g, h, i, j, k, l, m, n, o, p, __range_val_0]
-    maxon.return %39
+    maxon.scope_end [a, b, c, d, e, f, g, h, i, j, k, l, m, n, o, p]
+    maxon.return %32
   }
 }
 === standard
@@ -126,7 +124,6 @@ module {
     %30 = arith.addi %29, %15
     %31 = arith.constant {value = 256 : i64}
     %32 = arith.remsi %30, %31
-    memref.store %32, __range_val_0
     %33 = arith.constant {value = 0 : i64}
     %34 = arith.cmpi lt %32, %33
     %35 = arith.constant {value = 4294967295 : i64}
@@ -138,8 +135,7 @@ module {
     %39 = std.ptr_to_i64 %38
     std.call_runtime @maxon_panic %39
   __range_ok_0:
-    %40 = memref.load __range_val_0 : i64
-    func.return %40
+    func.return %32
   }
 }
 === x86
@@ -193,7 +189,6 @@ module {
     x86.mov rax, rcx
     x86.cqo
     x86.idiv rbx
-    x86.mov [rbp-8], rdx
     x86.xor rax, rax
     x86.cmp rdx, rax
     x86.setl rax
@@ -210,7 +205,7 @@ module {
     x86.mov rcx, rax
     x86.call maxon_panic
   __range_ok_0:
-    x86.mov rax, [rbp-8]
+    x86.mov rax, rdx
     x86.epilogue
     x86.ret
   }

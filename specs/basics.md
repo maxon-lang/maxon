@@ -88,7 +88,6 @@ module {
   func @basics.main() -> i64 {
   entry:
     %1 = maxon.call @basics.getValue
-    maxon.assign %1 {var = __range_val_0} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
     %2 = maxon.literal {value = 0 : i64}
     %3 = maxon.binop %1, %2 {op = lt}
     %4 = maxon.literal {value = 4294967295 : i64}
@@ -98,9 +97,8 @@ module {
   __range_panic_0:
     maxon.panic "panic at return-function-call.test:10: Range check failed for type 'ExitCode': value outside int(0 to 4294967295)"
   __range_ok_0:
-    %8 = maxon.var_ref {var = __range_val_0} {type = i64}
-    maxon.scope_end [__range_val_0]
-    maxon.return %8
+    maxon.scope_end []
+    maxon.return %1
   }
 }
 === standard
@@ -113,7 +111,6 @@ module {
   func @basics.main() -> u32 {
   entry:
     %1 = func.call @basics.getValue
-    memref.store %1, __range_val_0
     %2 = arith.constant {value = 0 : i64}
     %3 = arith.cmpi lt %1, %2
     %4 = arith.constant {value = 4294967295 : i64}
@@ -125,8 +122,7 @@ module {
     %8 = std.ptr_to_i64 %7
     std.call_runtime @maxon_panic %8
   __range_ok_0:
-    %9 = memref.load __range_val_0 : i64
-    func.return %9
+    func.return %1
   }
 }
 === x86
@@ -140,16 +136,15 @@ module {
   entry:
     x86.prologue stack_size=16
     x86.call basics.getValue
-    x86.mov [rbp-8], rax
     x86.xor rcx, rcx
     x86.cmp rax, rcx
     x86.setl rcx
     x86.movzx rcx, rcxb
     x86.mov rdx, 4294967295
     x86.cmp rax, rdx
-    x86.setg rax
-    x86.movzx rax, raxb
-    x86.or rcx, rax
+    x86.setg rdx
+    x86.movzx rdx, rdxb
+    x86.or rcx, rdx
     x86.test rcx, rcx
     x86.je basics.main.__range_ok_0
   __range_panic_0:
@@ -157,7 +152,6 @@ module {
     x86.mov rcx, rax
     x86.call maxon_panic
   __range_ok_0:
-    x86.mov rax, [rbp-8]
     x86.epilogue
     x86.ret
   }

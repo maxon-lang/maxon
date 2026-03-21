@@ -61,7 +61,6 @@ module {
     %19 = maxon.literal {value = 256 : i64}
     %20 = maxon.var_ref {var = result} {type = i64}
     %21 = maxon.binop %20, %19 {op = mod}
-    maxon.assign %21 {var = __range_val_3} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
     %22 = maxon.literal {value = 0 : i64}
     %23 = maxon.binop %21, %22 {op = lt}
     %24 = maxon.literal {value = 4294967295 : i64}
@@ -71,9 +70,8 @@ module {
   __range_panic_3:
     maxon.panic "panic at int-nested-if-in-loop.test:13: Range check failed for type 'ExitCode': value outside int(0 to 4294967295)"
   __range_ok_3:
-    %28 = maxon.var_ref {var = __range_val_3} {type = i64}
-    maxon.scope_end [result, i, __range_val_3]
-    maxon.return %28
+    maxon.scope_end [result, i]
+    maxon.return %21
   }
 }
 === standard
@@ -119,7 +117,6 @@ module {
     %19 = arith.constant {value = 256 : i64}
     %20 = memref.load result : i64
     %21 = arith.remsi %20, %19
-    memref.store %21, __range_val_3
     %22 = arith.constant {value = 0 : i64}
     %23 = arith.cmpi lt %21, %22
     %24 = arith.constant {value = 4294967295 : i64}
@@ -131,15 +128,14 @@ module {
     %28 = std.ptr_to_i64 %27
     std.call_runtime @maxon_panic %28
   __range_ok_3:
-    %29 = memref.load __range_val_3 : i64
-    func.return %29
+    func.return %21
   }
 }
 === x86
 module {
   func @register-allocator.main() -> u32 {
   entry:
-    x86.prologue stack_size=32
+    x86.prologue stack_size=16
     x86.xor rax, rax
     x86.mov [rbp-8], rax
     x86.mov rcx, 1
@@ -182,16 +178,15 @@ module {
     x86.mov rax, rcx
     x86.cqo
     x86.idiv rbx
-    x86.mov [rbp-24], rdx
     x86.xor rax, rax
     x86.cmp rdx, rax
     x86.setl rax
     x86.movzx rax, raxb
     x86.mov rcx, 4294967295
     x86.cmp rdx, rcx
-    x86.setg rdx
-    x86.movzx rdx, rdxb
-    x86.or rax, rdx
+    x86.setg rcx
+    x86.movzx rcx, rcxb
+    x86.or rax, rcx
     x86.test rax, rax
     x86.je register-allocator.main.__range_ok_3
   __range_panic_3:
@@ -199,7 +194,7 @@ module {
     x86.mov rcx, rax
     x86.call maxon_panic
   __range_ok_3:
-    x86.mov rax, [rbp-24]
+    x86.mov rax, rdx
     x86.epilogue
     x86.ret
   }

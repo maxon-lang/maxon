@@ -466,6 +466,80 @@ public abstract class RegisterManagerBase<TGpr, TFp, TOp>
   }
 
   /// <summary>
+  /// Snapshot of register allocator state for carrying assignments across diverging blocks.
+  /// </summary>
+  public sealed class RegisterSnapshot {
+    internal Dictionary<TGpr, StdValue> RegisterContents = new();
+    internal Dictionary<StdValue, TGpr> ValueToRegister = new();
+    internal Dictionary<StdValue, int> ValueStackHome = new();
+    internal Dictionary<StdValue, long> ConstantValues = new();
+    internal Dictionary<TFp, StdValue> FpContents = new();
+    internal Dictionary<StdValue, TFp> ValueToFp = new();
+    internal Dictionary<StdValue, int> ValueFpStackHome = new();
+    internal Dictionary<StdValue, TFp> ValuePreviousFp = new();
+    internal int NextSpillOffset;
+    internal int MinSpillOffset;
+  }
+
+  /// <summary>
+  /// Capture the current register allocator state so it can be restored later.
+  /// Used to carry register assignments across diverging (noreturn) blocks.
+  /// </summary>
+  public RegisterSnapshot SaveState() {
+    return new RegisterSnapshot {
+      RegisterContents = new(_registerContents),
+      ValueToRegister = new(_valueToRegister),
+      ValueStackHome = new(_valueStackHome),
+      ConstantValues = new(_constantValues),
+      FpContents = new(_fpContents),
+      ValueToFp = new(_valueToFp),
+      ValueFpStackHome = new(_valueFpStackHome),
+      ValuePreviousFp = new(_valuePreviousFp),
+      NextSpillOffset = _nextSpillOffset,
+      MinSpillOffset = _minSpillOffset,
+    };
+  }
+
+  /// <summary>
+  /// Restore a previously saved register allocator state.
+  /// Resets per-block counters while preserving value-to-register mappings.
+  /// </summary>
+  public void RestoreState(RegisterSnapshot state) {
+    _registerContents.Clear();
+    foreach (var kv in state.RegisterContents) _registerContents[kv.Key] = kv.Value;
+    _valueToRegister.Clear();
+    foreach (var kv in state.ValueToRegister) _valueToRegister[kv.Key] = kv.Value;
+    _valueStackHome.Clear();
+    foreach (var kv in state.ValueStackHome) _valueStackHome[kv.Key] = kv.Value;
+    _constantValues.Clear();
+    foreach (var kv in state.ConstantValues) _constantValues[kv.Key] = kv.Value;
+    _fpContents.Clear();
+    foreach (var kv in state.FpContents) _fpContents[kv.Key] = kv.Value;
+    _valueToFp.Clear();
+    foreach (var kv in state.ValueToFp) _valueToFp[kv.Key] = kv.Value;
+    _valueFpStackHome.Clear();
+    foreach (var kv in state.ValueFpStackHome) _valueFpStackHome[kv.Key] = kv.Value;
+    _valuePreviousFp.Clear();
+    foreach (var kv in state.ValuePreviousFp) _valuePreviousFp[kv.Key] = kv.Value;
+    // Preserve spill offset watermarks: the diverging block's ResetForBlockTransition
+    // may have allocated spill slots that must not be reused. Only restore if the saved
+    // offsets are further from the base (more negative = more allocated).
+    if (state.NextSpillOffset < _nextSpillOffset)
+      _nextSpillOffset = state.NextSpillOffset;
+    if (state.MinSpillOffset < _minSpillOffset)
+      _minSpillOffset = state.MinSpillOffset;
+
+    _nextFreshIndex = 0;
+    _nextFreshFpIndex = 0;
+    _lastUsed.Clear();
+    _fpLastUsed.Clear();
+    _currentOpIndex = 0;
+    _registerHints.Clear();
+    _syntheticScopes.Clear();
+    _allSyntheticValues.Clear();
+  }
+
+  /// <summary>
   /// Create a spill op for collecting into a list (for block transition insertion).
   /// Subclass returns the appropriate instruction.
   /// </summary>
@@ -535,5 +609,29 @@ public abstract class RegisterManagerBase<TGpr, TFp, TOp>
     _nextSpillOffset -= 8;
     EmitSpillGprToStack(_nextSpillOffset, reg, block);
     _valueStackHome[value] = _nextSpillOffset;
+  }
+}
+
+/// <summary>
+/// Shared analysis utilities for backend conversions.
+/// </summary>
+public static class BlockAnalysis {
+  /// <summary>
+  /// Detect diverging blocks — blocks containing a noreturn call (maxon_panic, maxon_panic_dynamic)
+  /// with no branch or return terminator. These blocks never transfer control to a successor,
+  /// so register state can be carried across them to avoid unnecessary spills.
+  /// </summary>
+  public static HashSet<int> FindDivergingBlocks(List<MlirBlock<StandardOp>> sourceBlocks) {
+    var result = new HashSet<int>();
+    for (int bi = 0; bi < sourceBlocks.Count; bi++) {
+      bool hasNoreturnCall = sourceBlocks[bi].Operations
+        .OfType<StdCallRuntimeOp>()
+        .Any(op => op.Callee is "maxon_panic" or "maxon_panic_dynamic");
+      bool hasTerminator = sourceBlocks[bi].Operations
+        .Any(op => op is StdCondBrOp or StdBrOp or StdReturnOp);
+      if (hasNoreturnCall && !hasTerminator)
+        result.Add(bi);
+    }
+    return result;
   }
 }

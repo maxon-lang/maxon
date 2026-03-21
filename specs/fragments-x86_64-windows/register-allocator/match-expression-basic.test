@@ -46,7 +46,6 @@ module {
   eval_0.merge:
     %11 = maxon.var_ref {var = __matchexpr_eval_0} {type = i64}
     maxon.assign %11 {var = result} {kind = i64} {decl = 1 : i1}
-    maxon.assign %11 {var = __range_val_1} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
     %12 = maxon.literal {value = 0 : i64}
     %13 = maxon.binop %11, %12 {op = lt}
     %14 = maxon.literal {value = 4294967295 : i64}
@@ -56,9 +55,8 @@ module {
   __range_panic_1:
     maxon.panic "panic at match-expression-basic.test:9: Range check failed for type 'ExitCode': value outside int(0 to 4294967295)"
   __range_ok_1:
-    %18 = maxon.var_ref {var = __range_val_1} {type = i64}
-    maxon.scope_end [x, __matchexpr_eval_0, result, __range_val_1, __match_eval_0]
-    maxon.return %18
+    maxon.scope_end [x, __matchexpr_eval_0, result, __match_eval_0]
+    maxon.return %11
   }
 }
 === standard
@@ -92,7 +90,6 @@ module {
     cf.br eval_0.merge
   eval_0.merge:
     %11 = memref.load __matchexpr_eval_0 : i64
-    memref.store %11, __range_val_1
     %12 = arith.constant {value = 0 : i64}
     %13 = arith.cmpi lt %11, %12
     %14 = arith.constant {value = 4294967295 : i64}
@@ -104,15 +101,14 @@ module {
     %18 = std.ptr_to_i64 %17
     std.call_runtime @maxon_panic %18
   __range_ok_1:
-    %19 = memref.load __range_val_1 : i64
-    func.return %19
+    func.return %11
   }
 }
 === x86
 module {
   func @register-allocator.main() -> u32 {
   entry:
-    x86.prologue stack_size=32
+    x86.prologue stack_size=16
     x86.mov rax, 2
     x86.mov [rbp-8], rax
     x86.jmp register-allocator.main.eval_0.cmp0
@@ -140,7 +136,6 @@ module {
     x86.jmp register-allocator.main.eval_0.merge
   eval_0.merge:
     x86.mov rax, [rbp-16]
-    x86.mov [rbp-24], rax
     x86.xor rcx, rcx
     x86.cmp rax, rcx
     x86.setl rdx
@@ -157,7 +152,6 @@ module {
     x86.mov rcx, rax
     x86.call maxon_panic
   __range_ok_1:
-    x86.mov rax, [rbp-24]
     x86.epilogue
     x86.ret
   }

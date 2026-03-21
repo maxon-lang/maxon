@@ -58,7 +58,6 @@ module {
     maxon.br outer_0.header
   outer_0.exit:
     %18 = maxon.var_ref {var = total} {type = i64}
-    maxon.assign %18 {var = __range_val_2} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
     %19 = maxon.literal {value = 0 : i64}
     %20 = maxon.binop %18, %19 {op = lt}
     %21 = maxon.literal {value = 4294967295 : i64}
@@ -68,9 +67,8 @@ module {
   __range_panic_2:
     maxon.panic "panic at int-nested-loops.test:13: Range check failed for type 'ExitCode': value outside int(0 to 4294967295)"
   __range_ok_2:
-    %25 = maxon.var_ref {var = __range_val_2} {type = i64}
-    maxon.scope_end [total, i, __range_val_2]
-    maxon.return %25
+    maxon.scope_end [total, i]
+    maxon.return %18
   }
 }
 === standard
@@ -114,7 +112,6 @@ module {
     cf.br outer_0.header
   outer_0.exit:
     %18 = memref.load total : i64
-    memref.store %18, __range_val_2
     %19 = arith.constant {value = 0 : i64}
     %20 = arith.cmpi lt %18, %19
     %21 = arith.constant {value = 4294967295 : i64}
@@ -126,8 +123,7 @@ module {
     %25 = std.ptr_to_i64 %24
     std.call_runtime @maxon_panic %25
   __range_ok_2:
-    %26 = memref.load __range_val_2 : i64
-    func.return %26
+    func.return %18
   }
 }
 === x86
@@ -172,7 +168,6 @@ module {
     x86.jmp register-allocator.main.outer_0.header
   outer_0.exit:
     x86.mov rax, [rbp-8]
-    x86.mov [rbp-32], rax
     x86.xor rcx, rcx
     x86.cmp rax, rcx
     x86.setl rdx
@@ -189,7 +184,6 @@ module {
     x86.mov rcx, rax
     x86.call maxon_panic
   __range_ok_2:
-    x86.mov rax, [rbp-32]
     x86.epilogue
     x86.ret
   }

@@ -73,7 +73,6 @@ module {
     %22 = maxon.var_ref {var = sentinel} {type = i64}
     %23 = maxon.var_ref {var = total} {type = i64}
     %24 = maxon.binop %22, %23 {op = add}
-    maxon.assign %24 {var = __range_val_3} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
     %25 = maxon.literal {value = 0 : i64}
     %26 = maxon.binop %24, %25 {op = lt}
     %27 = maxon.literal {value = 4294967295 : i64}
@@ -83,9 +82,8 @@ module {
   __range_panic_3:
     maxon.panic "panic at int-value-live-across-nested-control.test:16: Range check failed for type 'ExitCode': value outside int(0 to 4294967295)"
   __range_ok_3:
-    %31 = maxon.var_ref {var = __range_val_3} {type = i64}
-    maxon.scope_end [sentinel, total, i, __range_val_3]
-    maxon.return %31
+    maxon.scope_end [sentinel, total, i]
+    maxon.return %24
   }
 }
 === standard
@@ -140,7 +138,6 @@ module {
     %22 = memref.load sentinel : i64
     %23 = memref.load total : i64
     %24 = arith.addi %22, %23
-    memref.store %24, __range_val_3
     %25 = arith.constant {value = 0 : i64}
     %26 = arith.cmpi lt %24, %25
     %27 = arith.constant {value = 4294967295 : i64}
@@ -152,15 +149,14 @@ module {
     %31 = std.ptr_to_i64 %30
     std.call_runtime @maxon_panic %31
   __range_ok_3:
-    %32 = memref.load __range_val_3 : i64
-    func.return %32
+    func.return %24
   }
 }
 === x86
 module {
   func @register-allocator.main() -> u32 {
   entry:
-    x86.prologue stack_size=48
+    x86.prologue stack_size=32
     x86.mov rax, 100
     x86.mov [rbp-8], rax
     x86.xor rcx, rcx
@@ -209,7 +205,6 @@ module {
     x86.mov rax, [rbp-8]
     x86.mov rcx, [rbp-16]
     x86.add rax, rcx
-    x86.mov [rbp-40], rax
     x86.xor rdx, rdx
     x86.cmp rax, rdx
     x86.setl rbx
@@ -226,7 +221,6 @@ module {
     x86.mov rcx, rax
     x86.call maxon_panic
   __range_ok_3:
-    x86.mov rax, [rbp-40]
     x86.epilogue
     x86.ret
   }

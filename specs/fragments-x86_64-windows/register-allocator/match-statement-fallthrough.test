@@ -66,7 +66,6 @@ module {
     maxon.br cascade_0.merge
   cascade_0.merge:
     %21 = maxon.var_ref {var = result} {type = i64}
-    maxon.assign %21 {var = __range_val_1} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
     %22 = maxon.literal {value = 0 : i64}
     %23 = maxon.binop %21, %22 {op = lt}
     %24 = maxon.literal {value = 4294967295 : i64}
@@ -76,9 +75,8 @@ module {
   __range_panic_1:
     maxon.panic "panic at match-statement-fallthrough.test:11: Range check failed for type 'ExitCode': value outside int(0 to 4294967295)"
   __range_ok_1:
-    %28 = maxon.var_ref {var = __range_val_1} {type = i64}
-    maxon.scope_end [x, result, __range_val_1, __match_cascade_0]
-    maxon.return %28
+    maxon.scope_end [x, result, __match_cascade_0]
+    maxon.return %21
   }
 }
 === standard
@@ -129,7 +127,6 @@ module {
     cf.br cascade_0.merge
   cascade_0.merge:
     %21 = memref.load result : i64
-    memref.store %21, __range_val_1
     %22 = arith.constant {value = 0 : i64}
     %23 = arith.cmpi lt %21, %22
     %24 = arith.constant {value = 4294967295 : i64}
@@ -141,15 +138,14 @@ module {
     %28 = std.ptr_to_i64 %27
     std.call_runtime @maxon_panic %28
   __range_ok_1:
-    %29 = memref.load __range_val_1 : i64
-    func.return %29
+    func.return %21
   }
 }
 === x86
 module {
   func @register-allocator.main() -> u32 {
   entry:
-    x86.prologue stack_size=32
+    x86.prologue stack_size=16
     x86.mov rax, 1
     x86.xor rcx, rcx
     x86.mov [rbp-8], rcx
@@ -194,7 +190,6 @@ module {
     x86.jmp register-allocator.main.cascade_0.merge
   cascade_0.merge:
     x86.mov rax, [rbp-8]
-    x86.mov [rbp-24], rax
     x86.xor rcx, rcx
     x86.cmp rax, rcx
     x86.setl rdx
@@ -211,7 +206,6 @@ module {
     x86.mov rcx, rax
     x86.call maxon_panic
   __range_ok_1:
-    x86.mov rax, [rbp-24]
     x86.epilogue
     x86.ret
   }

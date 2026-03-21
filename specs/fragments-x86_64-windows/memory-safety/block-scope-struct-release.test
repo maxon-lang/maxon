@@ -37,7 +37,6 @@ module {
     maxon.br block_0.merge
   block_0.merge:
     %21 = maxon.var_ref {var = result} {type = i64}
-    maxon.assign %21 {var = __range_val_1} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
     %22 = maxon.literal {value = 0 : i64}
     %23 = maxon.binop %21, %22 {op = lt}
     %24 = maxon.literal {value = 4294967295 : i64}
@@ -47,9 +46,8 @@ module {
   __range_panic_1:
     maxon.panic "panic at block-scope-struct-release.test:15: Range check failed for type 'ExitCode': value outside int(0 to 4294967295)"
   __range_ok_1:
-    %28 = maxon.var_ref {var = __range_val_1} {type = i64}
-    maxon.scope_end [result, __range_val_1]
-    maxon.return %28
+    maxon.scope_end [result]
+    maxon.return %21
   }
 }
 === standard
@@ -82,7 +80,6 @@ module {
     cf.br block_0.merge
   block_0.merge:
     %15 = memref.load result : i64
-    memref.store %15, __range_val_1
     %16 = arith.constant {value = 0 : i64}
     %17 = arith.cmpi lt %15, %16
     %18 = arith.constant {value = 4294967295 : i64}
@@ -94,12 +91,11 @@ module {
     %22 = std.ptr_to_i64 %21
     std.call_runtime @maxon_panic %22
   __range_ok_1:
-    %23 = memref.load __range_val_1 : i64
-    func.return %23
+    func.return %15
   }
   func @__destruct_Point(ptr: i64) {
   entry:
-    %25 = func.param ptr : StdI64
+    %24 = func.param ptr : StdI64
     cf.br done
   done:
     func.return
@@ -109,7 +105,7 @@ module {
 module {
   func @memory-safety.main() -> u32 {
   entry:
-    x86.prologue stack_size=32
+    x86.prologue stack_size=16
     x86.xor rax, rax
     x86.mov [rbp-8], rax
     x86.mov rcx, 1
@@ -144,7 +140,6 @@ module {
     x86.jmp memory-safety.main.block_0.merge
   block_0.merge:
     x86.mov rax, [rbp-8]
-    x86.mov [rbp-24], rax
     x86.xor rcx, rcx
     x86.cmp rax, rcx
     x86.setl rdx
@@ -161,7 +156,6 @@ module {
     x86.mov rcx, rax
     x86.call maxon_panic
   __range_ok_1:
-    x86.mov rax, [rbp-24]
     x86.epilogue
     x86.ret
   }

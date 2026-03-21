@@ -89,7 +89,6 @@ module {
     %34 = maxon.binop %32, %33 {op = add}
     %35 = maxon.literal {value = 256 : i64}
     %36 = maxon.binop %34, %35 {op = mod}
-    maxon.assign %36 {var = __range_val_1} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
     %37 = maxon.literal {value = 0 : i64}
     %38 = maxon.binop %36, %37 {op = lt}
     %39 = maxon.literal {value = 4294967295 : i64}
@@ -99,9 +98,8 @@ module {
   __range_panic_1:
     maxon.panic "panic at int-loop-pressure-with-call.test:23: Range check failed for type 'ExitCode': value outside int(0 to 4294967295)"
   __range_ok_1:
-    %43 = maxon.var_ref {var = __range_val_1} {type = i64}
-    maxon.scope_end [a, b, c, d, e, f, i, __range_val_1]
-    maxon.return %43
+    maxon.scope_end [a, b, c, d, e, f, i]
+    maxon.return %36
   }
 }
 === standard
@@ -166,7 +164,6 @@ module {
     %34 = arith.addi %32, %33
     %35 = arith.constant {value = 256 : i64}
     %36 = arith.remsi %34, %35
-    memref.store %36, __range_val_1
     %37 = arith.constant {value = 0 : i64}
     %38 = arith.cmpi lt %36, %37
     %39 = arith.constant {value = 4294967295 : i64}
@@ -178,8 +175,7 @@ module {
     %43 = std.ptr_to_i64 %42
     std.call_runtime @maxon_panic %43
   __range_ok_1:
-    %44 = memref.load __range_val_1 : i64
-    func.return %44
+    func.return %36
   }
 }
 === x86
@@ -191,7 +187,7 @@ module {
   }
   func @register-allocator.main() -> u32 {
   entry:
-    x86.prologue stack_size=80
+    x86.prologue stack_size=64
     x86.mov rax, 1
     x86.mov [rbp-8], rax
     x86.mov rcx, 2
@@ -247,10 +243,9 @@ module {
     x86.mov rsi, [rbp-48]
     x86.add rax, rsi
     x86.mov rdi, 256
-    x86.mov [rbp-72], rax
+    x86.mov [rbp-64], rax
     x86.cqo
     x86.idiv rdi
-    x86.mov [rbp-64], rdx
     x86.xor r8, r8
     x86.cmp rdx, r8
     x86.setl r9
@@ -267,7 +262,7 @@ module {
     x86.mov rcx, rax
     x86.call maxon_panic
   __range_ok_1:
-    x86.mov rax, [rbp-64]
+    x86.mov rax, rdx
     x86.epilogue
     x86.ret
   }

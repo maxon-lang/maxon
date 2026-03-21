@@ -397,7 +397,6 @@ module {
     maxon.br block_0.merge
   block_0.merge:
     %21 = maxon.var_ref {var = result} {type = i64}
-    maxon.assign %21 {var = __range_val_1} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
     %22 = maxon.literal {value = 0 : i64}
     %23 = maxon.binop %21, %22 {op = lt}
     %24 = maxon.literal {value = 4294967295 : i64}
@@ -407,9 +406,8 @@ module {
   __range_panic_1:
     maxon.panic "panic at block-scope-struct-release.test:15: Range check failed for type 'ExitCode': value outside int(0 to 4294967295)"
   __range_ok_1:
-    %28 = maxon.var_ref {var = __range_val_1} {type = i64}
-    maxon.scope_end [result, __range_val_1]
-    maxon.return %28
+    maxon.scope_end [result]
+    maxon.return %21
   }
 }
 === standard
@@ -442,7 +440,6 @@ module {
     cf.br block_0.merge
   block_0.merge:
     %15 = memref.load result : i64
-    memref.store %15, __range_val_1
     %16 = arith.constant {value = 0 : i64}
     %17 = arith.cmpi lt %15, %16
     %18 = arith.constant {value = 4294967295 : i64}
@@ -454,12 +451,11 @@ module {
     %22 = std.ptr_to_i64 %21
     std.call_runtime @maxon_panic %22
   __range_ok_1:
-    %23 = memref.load __range_val_1 : i64
-    func.return %23
+    func.return %15
   }
   func @__destruct_Point(ptr: i64) {
   entry:
-    %25 = func.param ptr : StdI64
+    %24 = func.param ptr : StdI64
     cf.br done
   done:
     func.return
@@ -469,7 +465,7 @@ module {
 module {
   func @memory-safety.main() -> u32 {
   entry:
-    x86.prologue stack_size=32
+    x86.prologue stack_size=16
     x86.xor rax, rax
     x86.mov [rbp-8], rax
     x86.mov rcx, 1
@@ -504,7 +500,6 @@ module {
     x86.jmp memory-safety.main.block_0.merge
   block_0.merge:
     x86.mov rax, [rbp-8]
-    x86.mov [rbp-24], rax
     x86.xor rcx, rcx
     x86.cmp rax, rcx
     x86.setl rdx
@@ -521,7 +516,6 @@ module {
     x86.mov rcx, rax
     x86.call maxon_panic
   __range_ok_1:
-    x86.mov rax, [rbp-24]
     x86.epilogue
     x86.ret
   }
@@ -759,7 +753,6 @@ module {
     maxon.assign %28 {var = got} {decl = 1 : i1} {mut = 1 : i1}
     %29 = maxon.struct_var_ref got
     %30 = maxon.field_access .value %29
-    maxon.assign %30 {var = __range_val_4} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
     %31 = maxon.literal {value = 0 : i64}
     %32 = maxon.binop %30, %31 {op = lt}
     %33 = maxon.literal {value = 4294967295 : i64}
@@ -769,9 +762,8 @@ module {
   __range_panic_4:
     maxon.panic "panic at array-push-struct-incref.test:15: Range check failed for type 'ExitCode': value outside int(0 to 4294967295)"
   __range_ok_4:
-    %37 = maxon.var_ref {var = __range_val_4} {type = i64}
-    maxon.scope_end [arr, item, got, __range_val_4, __try_result_0]
-    maxon.return %37
+    maxon.scope_end [arr, item, got, __try_result_0]
+    maxon.return %30
   }
 }
 === standard
@@ -796,8 +788,8 @@ module {
   }
   func @memory-safety.main() -> u32 {
   entry:
-    %86 = arith.constant {value = 0 : i64}
-    memref.store %86, __try_result_0
+    %85 = arith.constant {value = 0 : i64}
+    memref.store %85, __try_result_0
     %11 = arith.constant {value = 0 : i64}
     %12 = arith.constant {value = 0 : i64}
     %13 = arith.constant {value = 0 : i64}
@@ -882,7 +874,6 @@ module {
     std.call_runtime @mm_incref %64
     %65 = memref.load got : i64
     %66 = memref.load_indirect %65+0
-    memref.store %66, __range_val_4
     %67 = arith.constant {value = 0 : i64}
     %68 = arith.cmpi lt %66, %67
     %69 = arith.constant {value = 4294967295 : i64}
@@ -894,39 +885,38 @@ module {
     %73 = std.ptr_to_i64 %72
     std.call_runtime @maxon_panic %73
   __range_ok_4:
-    %74 = memref.load __range_val_4 : i64
-    %75 = memref.load __try_result_0 : i64
-    std.call_runtime_if_nonnull @mm_decref %75
-    %77 = memref.load got : i64
-    std.call_runtime_if_nonnull @mm_decref %77
-    %79 = memref.load item : i64
-    std.call_runtime_if_nonnull @mm_decref %79
-    %81 = memref.load arr : i64
-    std.call_runtime_if_nonnull @mm_decref %81
-    func.return %74
+    %74 = memref.load __try_result_0 : i64
+    std.call_runtime_if_nonnull @mm_decref %74
+    %76 = memref.load got : i64
+    std.call_runtime_if_nonnull @mm_decref %76
+    %78 = memref.load item : i64
+    std.call_runtime_if_nonnull @mm_decref %78
+    %80 = memref.load arr : i64
+    std.call_runtime_if_nonnull @mm_decref %80
+    func.return %66
   }
   func @__destruct_Item(ptr: i64) {
   entry:
-    %227 = func.param ptr : StdI64
+    %226 = func.param ptr : StdI64
     cf.br done
   done:
     func.return
   }
   func @__destruct___ManagedMemory_Item(ptr: i64) {
   entry:
-    %228 = func.param ptr : StdI64
-    memref.store %228, __destr_ptr
-    %231 = memref.load __destr_ptr : i64
-    %232 = memref.load_indirect %231+16
-    %233 = arith.constant {value = 0 : i64}
-    %234 = arith.cmpi ne %232, %233
-    cf.cond_br %234 [then: free_buf_0, else: skip_buf_0]
+    %227 = func.param ptr : StdI64
+    memref.store %227, __destr_ptr
+    %230 = memref.load __destr_ptr : i64
+    %231 = memref.load_indirect %230+16
+    %232 = arith.constant {value = 0 : i64}
+    %233 = arith.cmpi ne %231, %232
+    cf.cond_br %233 [then: free_buf_0, else: skip_buf_0]
   free_buf_0:
+    %234 = memref.load __destr_ptr : i64
+    std.call_runtime @mm_decref_managed_elements %234
     %235 = memref.load __destr_ptr : i64
-    std.call_runtime @mm_decref_managed_elements %235
-    %236 = memref.load __destr_ptr : i64
-    %237 = memref.load_indirect %236+0
-    std.call_runtime @mm_raw_free %237
+    %236 = memref.load_indirect %235+0
+    std.call_runtime @mm_raw_free %236
     cf.br skip_buf_0
   skip_buf_0:
     cf.br done
@@ -935,11 +925,11 @@ module {
   }
   func @__destruct_ItemArray(ptr: i64) {
   entry:
-    %238 = func.param ptr : StdI64
-    memref.store %238, __destr_ptr
-    %239 = memref.load __destr_ptr : i64
-    %240 = memref.load_indirect %239+8
-    std.call_runtime_if_nonnull @mm_decref %240
+    %237 = func.param ptr : StdI64
+    memref.store %237, __destr_ptr
+    %238 = memref.load __destr_ptr : i64
+    %239 = memref.load_indirect %238+8
+    std.call_runtime_if_nonnull @mm_decref %239
     cf.br done
   done:
     func.return
@@ -1080,7 +1070,6 @@ module {
     x86.call mm_incref
     x86.mov rdx, [rbp-48]
     x86.mov rbx, [rdx+0]
-    x86.mov [rbp-56], rbx
     x86.xor rsi, rsi
     x86.cmp rbx, rsi
     x86.setl rdi
@@ -1097,25 +1086,26 @@ module {
     x86.mov rcx, rax
     x86.call maxon_panic
   __range_ok_4:
-    x86.mov rax, [rbp-56]
-    x86.mov rcx, [rbp-8]
-    x86.test rcx, rcx
+    x86.mov rax, [rbp-8]
+    x86.mov [rbp-56], rbx
+    x86.test rax, rax
     x86.jz __nonnull_skip_1
+    x86.mov rcx, [rbp-8]
     x86.call mm_decref
     x86.label __nonnull_skip_1
-    x86.mov rax, [rbp-48]
-    x86.test rax, rax
-    x86.jz __nonnull_skip_2
     x86.mov rcx, [rbp-48]
+    x86.test rcx, rcx
+    x86.jz __nonnull_skip_2
     x86.call mm_decref
     x86.label __nonnull_skip_2
-    x86.mov rcx, [rbp-32]
-    x86.test rcx, rcx
+    x86.mov rdx, [rbp-32]
+    x86.test rdx, rdx
     x86.jz __nonnull_skip_3
+    x86.mov rcx, [rbp-32]
     x86.call mm_decref
     x86.label __nonnull_skip_3
-    x86.mov rdx, [rbp-24]
-    x86.test rdx, rdx
+    x86.mov rbx, [rbp-24]
+    x86.test rbx, rbx
     x86.jz __nonnull_skip_4
     x86.mov rcx, [rbp-24]
     x86.call mm_decref
@@ -1696,7 +1686,6 @@ module {
     maxon.br loop_0.header
   loop_0.exit:
     %25 = maxon.var_ref {var = result} {type = i64}
-    maxon.assign %25 {var = __range_val_2} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
     %26 = maxon.literal {value = 0 : i64}
     %27 = maxon.binop %25, %26 {op = lt}
     %28 = maxon.literal {value = 4294967295 : i64}
@@ -1706,9 +1695,8 @@ module {
   __range_panic_2:
     maxon.panic "panic at release-before-break.test:19: Range check failed for type 'ExitCode': value outside int(0 to 4294967295)"
   __range_ok_2:
-    %32 = maxon.var_ref {var = __range_val_2} {type = i64}
-    maxon.scope_end [result, i, __range_val_2]
-    maxon.return %32
+    maxon.scope_end [result, i]
+    maxon.return %25
   }
 }
 === standard
@@ -1745,7 +1733,6 @@ module {
     cf.br loop_0.header
   loop_0.exit:
     %13 = memref.load result : i64
-    memref.store %13, __range_val_2
     %14 = arith.constant {value = 0 : i64}
     %15 = arith.cmpi lt %13, %14
     %16 = arith.constant {value = 4294967295 : i64}
@@ -1757,8 +1744,7 @@ module {
     %20 = std.ptr_to_i64 %19
     std.call_runtime @maxon_panic %20
   __range_ok_2:
-    %21 = memref.load __range_val_2 : i64
-    func.return %21
+    func.return %13
   }
 }
 === x86
@@ -1795,7 +1781,6 @@ module {
     x86.jmp memory-safety.main.loop_0.header
   loop_0.exit:
     x86.mov rax, [rbp-8]
-    x86.mov [rbp-32], rax
     x86.xor rcx, rcx
     x86.cmp rax, rcx
     x86.setl rdx
@@ -1812,7 +1797,6 @@ module {
     x86.mov rcx, rax
     x86.call maxon_panic
   __range_ok_2:
-    x86.mov rax, [rbp-32]
     x86.epilogue
     x86.ret
   }
@@ -2087,7 +2071,6 @@ module {
   entry:
     %19 = maxon.literal {value = 5 : i64}
     %20 = maxon.call @memory-safety.compute %19
-    maxon.assign %20 {var = __range_val_0} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
     %21 = maxon.literal {value = 0 : i64}
     %22 = maxon.binop %20, %21 {op = lt}
     %23 = maxon.literal {value = 4294967295 : i64}
@@ -2097,9 +2080,8 @@ module {
   __range_panic_0:
     maxon.panic "panic at release-before-return-in-block.test:17: Range check failed for type 'ExitCode': value outside int(0 to 4294967295)"
   __range_ok_0:
-    %27 = maxon.var_ref {var = __range_val_0} {type = i64}
-    maxon.scope_end [__range_val_0]
-    maxon.return %27
+    maxon.scope_end []
+    maxon.return %20
   }
 }
 === standard
@@ -2137,7 +2119,6 @@ module {
   entry:
     %18 = arith.constant {value = 5 : i64}
     %19 = func.call @memory-safety.compute %18
-    memref.store %19, __range_val_0
     %20 = arith.constant {value = 0 : i64}
     %21 = arith.cmpi lt %19, %20
     %22 = arith.constant {value = 4294967295 : i64}
@@ -2149,12 +2130,11 @@ module {
     %26 = std.ptr_to_i64 %25
     std.call_runtime @maxon_panic %26
   __range_ok_0:
-    %27 = memref.load __range_val_0 : i64
-    func.return %27
+    func.return %19
   }
   func @__destruct_Wrapper(ptr: i64) {
   entry:
-    %28 = func.param ptr : StdI64
+    %27 = func.param ptr : StdI64
     cf.br done
   done:
     func.return
@@ -2206,16 +2186,15 @@ module {
     x86.prologue stack_size=16
     x86.mov rcx, 5
     x86.call memory-safety.compute
-    x86.mov [rbp-8], rax
     x86.xor rcx, rcx
     x86.cmp rax, rcx
     x86.setl rcx
     x86.movzx rcx, rcxb
     x86.mov rdx, 4294967295
     x86.cmp rax, rdx
-    x86.setg rax
-    x86.movzx rax, raxb
-    x86.or rcx, rax
+    x86.setg rdx
+    x86.movzx rdx, rdxb
+    x86.or rcx, rdx
     x86.test rcx, rcx
     x86.je memory-safety.main.__range_ok_0
   __range_panic_0:
@@ -2223,7 +2202,6 @@ module {
     x86.mov rcx, rax
     x86.call maxon_panic
   __range_ok_0:
-    x86.mov rax, [rbp-8]
     x86.epilogue
     x86.ret
   }

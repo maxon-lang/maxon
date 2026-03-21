@@ -131,16 +131,29 @@ public static class StandardToARM64Conversion {
       }
     }
 
+    var divergingBlocks = BlockAnalysis.FindDivergingBlocks(sourceBlocks);
+
     MlirBlock<ARM64Op>? prevBlock = null;
     int prevBlockIdx = -1;
+    RegisterManagerBase<ARM64Register, ARM64FloatRegister, ARM64Op>.RegisterSnapshot? savedRegState = null;
     for (int blockIdx = 0; blockIdx < sourceBlocks.Count; blockIdx++) {
       var srcBlock = sourceBlocks[blockIdx];
       var armBlock = newFunc.Body.AddBlock(srcBlock.Name);
 
       if (blockIdx == 0 || prevBlock == null) {
         regManager.Reset();
+      } else if (divergingBlocks.Contains(blockIdx)) {
+        // Diverging block (noreturn) — save register state so it can be restored
+        // for the next non-diverging block, avoiding unnecessary spills on the happy path.
+        savedRegState ??= regManager.SaveState();
+        regManager.Reset();
+      } else if (savedRegState != null) {
+        // First non-diverging block after diverging block(s) — restore register
+        // state from before the diverging sequence.
+        regManager.RestoreState(savedRegState);
+        savedRegState = null;
       } else if (needsCrossBlockSpill.Contains(prevBlockIdx)) {
-        regManager.ResetForBlockTransition(prevBlock);
+        regManager.ResetForBlockTransition(prevBlock!);
       } else {
         regManager.Reset();
       }

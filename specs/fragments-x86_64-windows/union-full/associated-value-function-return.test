@@ -67,7 +67,7 @@ module {
   }
   func @union-full.main() -> u32 {
   entry:
-    x86.prologue stack_size=48
+    x86.prologue stack_size=32
     x86.mov rcx, 1
     x86.call union-full.getResult
     x86.mov [rbp-8], rax
@@ -75,10 +75,10 @@ module {
     x86.mov rdx, [rcx+0]
     x86.mov [rbp-16], rax
     x86.mov rax, [rbp-16]
-    x86.mov [rbp-48], rdx
+    x86.mov [rbp-32], rdx
     x86.mov rcx, [rbp-16]
     x86.call mm_incref
-    x86.mov rcx, [rbp-48]
+    x86.mov rcx, [rbp-32]
     x86.mov [rbp-24], rcx
     x86.jmp union-full.main.handle_0.cmp0
   handle_0.cmp0:
@@ -89,7 +89,6 @@ module {
   handle_0.case0:
     x86.mov rax, [rbp-16]
     x86.mov rcx, [rax+8]
-    x86.mov [rbp-32], rcx
     x86.xor rdx, rdx
     x86.cmp rcx, rdx
     x86.setl rbx
@@ -106,16 +105,16 @@ module {
     x86.mov rcx, rax
     x86.call maxon_panic
   __range_ok_1:
-    x86.mov rax, [rbp-32]
-    x86.mov rcx, [rbp-16]
-    x86.test rcx, rcx
+    x86.mov rax, [rbp-16]
+    x86.mov [rbp-32], rcx
+    x86.test rax, rax
     x86.jz __nonnull_skip_0
+    x86.mov rcx, [rbp-16]
     x86.call mm_decref
     x86.label __nonnull_skip_0
-    x86.mov rax, [rbp-8]
-    x86.test rax, rax
-    x86.jz __nonnull_skip_1
     x86.mov rcx, [rbp-8]
+    x86.test rcx, rcx
+    x86.jz __nonnull_skip_1
     x86.call mm_decref
     x86.label __nonnull_skip_1
     x86.mov rax, [rbp-32]
@@ -129,7 +128,6 @@ module {
   handle_0.case1:
     x86.mov rax, [rbp-16]
     x86.mov rcx, [rax+8]
-    x86.mov [rbp-40], rcx
     x86.xor rdx, rdx
     x86.cmp rcx, rdx
     x86.setl rbx
@@ -142,23 +140,23 @@ module {
     x86.test rbx, rbx
     x86.je union-full.main.__range_ok_2
   __range_panic_2:
-    x86.lea_symdata rax, [__panic_msg_31]
+    x86.lea_symdata rax, [__panic_msg_30]
     x86.mov rcx, rax
     x86.call maxon_panic
   __range_ok_2:
-    x86.mov rax, [rbp-40]
-    x86.mov rcx, [rbp-16]
-    x86.test rcx, rcx
+    x86.mov rax, [rbp-16]
+    x86.mov [rbp-32], rcx
+    x86.test rax, rax
     x86.jz __nonnull_skip_2
+    x86.mov rcx, [rbp-16]
     x86.call mm_decref
     x86.label __nonnull_skip_2
-    x86.mov rax, [rbp-8]
-    x86.test rax, rax
-    x86.jz __nonnull_skip_3
     x86.mov rcx, [rbp-8]
+    x86.test rcx, rcx
+    x86.jz __nonnull_skip_3
     x86.call mm_decref
     x86.label __nonnull_skip_3
-    x86.mov rax, [rbp-40]
+    x86.mov rax, [rbp-32]
     x86.epilogue
     x86.ret
   handle_0.merge:

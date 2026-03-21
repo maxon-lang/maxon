@@ -220,16 +220,31 @@ public static class StandardToX86Conversion {
       }
     }
 
+    var divergingBlocks = BlockAnalysis.FindDivergingBlocks(sourceBlocks);
+
     MlirBlock<X86Op>? prevX86Block = null;
     int prevBlockIdx = -1;
+    RegisterManagerBase<X86Register, X86XmmRegister, X86Op>.RegisterSnapshot? savedRegState = null;
     for (int blockIdx = 0; blockIdx < sourceBlocks.Count; blockIdx++) {
       var srcBlock = sourceBlocks[blockIdx];
       var x86Block = newFunc.Body.AddBlock(srcBlock.Name);
 
       if (blockIdx == 0 || prevX86Block == null) {
         regManager.Reset();
+      } else if (divergingBlocks.Contains(blockIdx)) {
+        // Diverging block (noreturn) — save register state so it can be restored
+        // for the next non-diverging block, avoiding unnecessary spills on the happy path.
+        // Don't spill via ResetForBlockTransition — the diverging block accesses
+        // cross-block values through variable stack slots (memref.load), not SSA refs.
+        savedRegState ??= regManager.SaveState();
+        regManager.Reset();
+      } else if (savedRegState != null) {
+        // First non-diverging block after diverging block(s) — restore register
+        // state from before the diverging sequence.
+        regManager.RestoreState(savedRegState);
+        savedRegState = null;
       } else if (needsCrossBlockSpill.Contains(prevBlockIdx)) {
-        regManager.ResetForBlockTransition(prevX86Block);
+        regManager.ResetForBlockTransition(prevX86Block!);
       } else {
         regManager.Reset();
       }

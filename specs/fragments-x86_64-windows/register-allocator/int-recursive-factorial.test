@@ -43,7 +43,6 @@ module {
     %11 = maxon.call @register-allocator.factorial %10
     %12 = maxon.literal {value = 256 : i64}
     %13 = maxon.binop %11, %12 {op = mod}
-    maxon.assign %13 {var = __range_val_0} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
     %14 = maxon.literal {value = 0 : i64}
     %15 = maxon.binop %13, %14 {op = lt}
     %16 = maxon.literal {value = 4294967295 : i64}
@@ -53,9 +52,8 @@ module {
   __range_panic_0:
     maxon.panic "panic at int-recursive-factorial.test:13: Range check failed for type 'ExitCode': value outside int(0 to 4294967295)"
   __range_ok_0:
-    %20 = maxon.var_ref {var = __range_val_0} {type = i64}
-    maxon.scope_end [__range_val_0]
-    maxon.return %20
+    maxon.scope_end []
+    maxon.return %13
   }
 }
 === standard
@@ -85,7 +83,6 @@ module {
     %11 = func.call @register-allocator.factorial %10
     %12 = arith.constant {value = 256 : i64}
     %13 = arith.remsi %11, %12
-    memref.store %13, __range_val_0
     %14 = arith.constant {value = 0 : i64}
     %15 = arith.cmpi lt %13, %14
     %16 = arith.constant {value = 4294967295 : i64}
@@ -97,8 +94,7 @@ module {
     %20 = std.ptr_to_i64 %19
     std.call_runtime @maxon_panic %20
   __range_ok_0:
-    %21 = memref.load __range_val_0 : i64
-    func.return %21
+    func.return %13
   }
 }
 === x86
@@ -131,19 +127,18 @@ module {
     x86.mov rcx, 5
     x86.call register-allocator.factorial
     x86.mov rcx, 256
-    x86.mov [rbp-16], rax
+    x86.mov [rbp-8], rax
     x86.cqo
     x86.idiv rcx
-    x86.mov [rbp-8], rdx
     x86.xor rax, rax
     x86.cmp rdx, rax
     x86.setl rcx
     x86.movzx rcx, rcxb
     x86.mov rax, 4294967295
     x86.cmp rdx, rax
-    x86.setg rdx
-    x86.movzx rdx, rdxb
-    x86.or rcx, rdx
+    x86.setg rax
+    x86.movzx rax, raxb
+    x86.or rcx, rax
     x86.test rcx, rcx
     x86.je register-allocator.main.__range_ok_0
   __range_panic_0:
@@ -151,7 +146,7 @@ module {
     x86.mov rcx, rax
     x86.call maxon_panic
   __range_ok_0:
-    x86.mov rax, [rbp-8]
+    x86.mov rax, rdx
     x86.epilogue
     x86.ret
   }

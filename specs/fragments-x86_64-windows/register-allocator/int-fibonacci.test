@@ -46,7 +46,6 @@ module {
     maxon.br loop_0.header
   loop_0.exit:
     %13 = maxon.var_ref {var = a} {type = i64}
-    maxon.assign %13 {var = __range_val_1} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
     %14 = maxon.literal {value = 0 : i64}
     %15 = maxon.binop %13, %14 {op = lt}
     %16 = maxon.literal {value = 4294967295 : i64}
@@ -56,9 +55,8 @@ module {
   __range_panic_1:
     maxon.panic "panic at int-fibonacci.test:12: Range check failed for type 'ExitCode': value outside int(0 to 4294967295)"
   __range_ok_1:
-    %20 = maxon.var_ref {var = __range_val_1} {type = i64}
-    maxon.scope_end [a, b, i, __range_val_1]
-    maxon.return %20
+    maxon.scope_end [a, b, i]
+    maxon.return %13
   }
 }
 === standard
@@ -91,7 +89,6 @@ module {
     cf.br loop_0.header
   loop_0.exit:
     %13 = memref.load a : i64
-    memref.store %13, __range_val_1
     %14 = arith.constant {value = 0 : i64}
     %15 = arith.cmpi lt %13, %14
     %16 = arith.constant {value = 4294967295 : i64}
@@ -103,8 +100,7 @@ module {
     %20 = std.ptr_to_i64 %19
     std.call_runtime @maxon_panic %20
   __range_ok_1:
-    %21 = memref.load __range_val_1 : i64
-    func.return %21
+    func.return %13
   }
 }
 === x86
@@ -138,7 +134,6 @@ module {
     x86.jmp register-allocator.main.loop_0.header
   loop_0.exit:
     x86.mov rax, [rbp-8]
-    x86.mov [rbp-32], rax
     x86.xor rcx, rcx
     x86.cmp rax, rcx
     x86.setl rdx
@@ -155,7 +150,6 @@ module {
     x86.mov rcx, rax
     x86.call maxon_panic
   __range_ok_1:
-    x86.mov rax, [rbp-32]
     x86.epilogue
     x86.ret
   }
