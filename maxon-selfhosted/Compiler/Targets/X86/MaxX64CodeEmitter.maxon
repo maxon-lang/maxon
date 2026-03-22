@@ -35,7 +35,7 @@ end 'emitEpilogue'
 
 function emitMovRegImm(code ByteArray, value MachineWord)
     // Use 32-bit sign-extended form if value fits in signed 32-bit range
-    if value >= 0 - 2147483648 and value <= 2147483647 'small'
+    if value >= -2147483648 and value <= 2147483647 'small'
         // mov rax, imm32 (sign-extended)  =>  48 C7 C0 <dword>
         code.append(b"\x48\xc7\xc0")
         writeDword(code, value: value)
@@ -779,7 +779,7 @@ function emitX86IatCallOp(code ByteArray, relocations RelocationArray, resultSlo
         totalStackBytes = totalStackBytes + stackArgCount * 8
     end 'extraStack'
     // Align to 16
-    totalStackBytes = (totalStackBytes + 15) and (0 - 16)
+    totalStackBytes = (totalStackBytes + 15) and (-16)
     emitSubRspImm(code, value: totalStackBytes)
 
     // Load register args (first 4)

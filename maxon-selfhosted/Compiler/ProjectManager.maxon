@@ -22,13 +22,15 @@ end 'createProjectManager'
 // Falls back to a single-file project if no build.maxon is found.
 export function getOrCreateProject(mgr ProjectManager, filePath FilePath) returns Project throws CompileError
     // Check if an existing project already contains this file
-    let existingIdx = findProjectIndexForFile(mgr, filePath: filePath)
-    if existingIdx >= 0 'found'
-        return try mgr.projects.get(existingIdx) otherwise 'unreachable'
-            throw CompileError.fileNotFound
-        end 'unreachable'
-    end 'found'
+    let existing = try findProjectForFile(mgr, filePath: filePath) otherwise 'notFound'
+        return try createNewProject(mgr, filePath: filePath)
+    end 'notFound'
+    return existing
+end 'getOrCreateProject'
 
+// Creates a new project for the given file path.
+// Discovers the project root or falls back to a single-file project.
+function createNewProject(mgr ProjectManager, filePath FilePath) returns Project throws CompileError
     // Discover project root
     let root = findProjectRoot(filePath)
 
@@ -38,9 +40,9 @@ export function getOrCreateProject(mgr ProjectManager, filePath FilePath) return
         // Check if we already have a project for this root
         for (i, key) in mgr.keys.enumerated() 'search'
             if key == normalizedRoot 'match'
-                return try mgr.projects.get(i) otherwise 'unreachable2'
+                return try mgr.projects.get(i) otherwise 'unreachable'
                     throw CompileError.fileNotFound
-                end 'unreachable2'
+                end 'unreachable'
             end 'match'
         end 'search'
 
@@ -57,9 +59,9 @@ export function getOrCreateProject(mgr ProjectManager, filePath FilePath) return
     // Check if we already have a project for this exact file
     for (j, key) in mgr.keys.enumerated() 'search2'
         if key == normalizedFile 'match2'
-            return try mgr.projects.get(j) otherwise 'unreachable3'
+            return try mgr.projects.get(j) otherwise 'unreachable2'
                 throw CompileError.fileNotFound
-            end 'unreachable3'
+            end 'unreachable2'
         end 'match2'
     end 'search2'
 
@@ -67,30 +69,19 @@ export function getOrCreateProject(mgr ProjectManager, filePath FilePath) return
     mgr.keys.push(normalizedFile)
     mgr.projects.push(singleProject)
     return singleProject
-end 'getOrCreateProject'
+end 'createNewProject'
 
 // Searches all managed projects for one that contains filePath.
 // Throws CompileError if no project contains the file.
 export function findProjectForFile(mgr ProjectManager, filePath FilePath) returns Project throws CompileError
-    let idx = findProjectIndexForFile(mgr, filePath: filePath)
-    if idx >= 0 'found'
-        return try mgr.projects.get(idx) otherwise 'unreachable'
-            throw CompileError.fileNotFound
-        end 'unreachable'
-    end 'found'
-    throw CompileError.fileNotFound
-end 'findProjectForFile'
-
-// Returns the index of the project containing filePath, or -1 if none.
-function findProjectIndexForFile(mgr ProjectManager, filePath FilePath) returns Index
     let normalized = filePath.normalize().toString()
-    for (i, project) in mgr.projects.enumerated() 'scan'
+    for project in mgr.projects 'scan'
         if projectContainsFile(project, filePath: normalized) 'contains'
-            return i
+            return project
         end 'contains'
     end 'scan'
-    return 0 - 1
-end 'findProjectIndexForFile'
+    throw CompileError.fileNotFound
+end 'findProjectForFile'
 
 // Checks whether a project owns the given (already-normalized) file path.
 function projectContainsFile(project Project, filePath String) returns bool

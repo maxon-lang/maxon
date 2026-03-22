@@ -1,6 +1,6 @@
 // Test: trunc.basic
 function main() returns ExitCode
-  var neg = 0.0 - 3.7
+  var neg = -3.7
   var y = trunc(neg)
   return y + 10
 end 'main'
@@ -11,11 +11,8 @@ module {
   func @trunc.main() -> u32 {
   entry:
     x86.prologue stack_size=16
-    x86.movsd xmm0, [rip+__float_0]
-    x86.movsd xmm1, [rip+__float_3.7]
-    x86.movsd xmm2, xmm0
-    x86.subsd xmm2, xmm1
-    x86.cvttsd2si rax, xmm2
+    x86.movsd xmm0, [rip+__float_-3.7]
+    x86.cvttsd2si rax, xmm0
     x86.mov rcx, 10
     x86.add rax, rcx
     x86.xor rdx, rdx
@@ -30,7 +27,7 @@ module {
     x86.test rbx, rbx
     x86.je trunc.main.__range_ok_0
   __range_panic_0:
-    x86.lea_symdata rax, [__panic_msg_11]
+    x86.lea_symdata rax, [__panic_msg_9]
     x86.mov rcx, rax
     x86.call maxon_panic
   __range_ok_0:

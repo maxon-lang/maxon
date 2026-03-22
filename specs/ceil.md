@@ -53,7 +53,7 @@ end 'main'
 <!-- test: ceil.negative -->
 ```maxon
 function main() returns ExitCode
-  var neg = 0.0 - 3.9
+  var neg = -3.9
   var y = trunc(ceil(neg))
   return y + 10
 end 'main'

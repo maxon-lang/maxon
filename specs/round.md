@@ -53,7 +53,7 @@ end 'main'
 <!-- test: round.negative -->
 ```maxon
 function main() returns ExitCode
-  var neg = 0.0 - 2.3
+  var neg = -2.3
   var y = trunc(round(neg))
   return y + 10
 end 'main'

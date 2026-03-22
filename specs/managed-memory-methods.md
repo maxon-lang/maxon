@@ -327,7 +327,7 @@ function main() returns ExitCode
   arr.push(2)
   arr.push(3)
   arr.push(4)
-  var v = arr.managed.get(0 - 1)
+  var v = arr.managed.get(-1)
   return v
 end 'main'
 ```

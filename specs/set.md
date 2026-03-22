@@ -158,7 +158,7 @@ function main() returns ExitCode
   if removed 'check'
     return s.count()
   end 'check'
-  return 0 - 1
+  return 1
 end 'main'
 ```
 ```exitcode
@@ -234,7 +234,7 @@ function main() returns ExitCode
   if s.contains(2) 'check'
     return s.count()
   end 'check'
-  return 0 - 1
+  return 1
 end 'main'
 ```
 ```exitcode
@@ -244,11 +244,11 @@ end 'main'
 <!-- test: negative-values -->
 ```maxon
 function main() returns ExitCode
-  var s = Set from [0 - 5, 0 - 3, 0 - 1, 0, 1, 3, 5]
-  if s.contains(0 - 3) 'check'
+  var s = Set from [-5, -3, -1, 0, 1, 3, 5]
+  if s.contains(-3) 'check'
     return s.count()
   end 'check'
-  return 0 - 1
+  return 1
 end 'main'
 ```
 ```exitcode

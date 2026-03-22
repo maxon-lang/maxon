@@ -218,7 +218,7 @@ function main() returns ExitCode
   if removed 'check'
     return m.count()
   end 'check'
-  return 0 - 1
+  return 1
 end 'main'
 ```
 ```exitcode
@@ -284,8 +284,8 @@ end 'main'
 <!-- test: negative-keys -->
 ```maxon
 function main() returns ExitCode
-  var m = [0 - 5: 50, 0 - 3: 30, 0 - 1: 10]
-  var result = try m.get(0 - 3) otherwise 0
+  var m = [-5: 50, -3: 30, -1: 10]
+  var result = try m.get(-3) otherwise 0
   return result
 end 'main'
 ```

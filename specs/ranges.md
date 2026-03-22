@@ -193,7 +193,7 @@ end 'main'
 ```maxon
 function main() returns ExitCode
     var sum = 0
-    for i in 0 - 2 to 2 'loop'
+    for i in -2 to 2 'loop'
         sum = sum + i
     end 'loop'
     return sum

@@ -218,7 +218,7 @@ end 'main'
 ```maxon
 function main() returns ExitCode
   var nan = 0.0 / 0.0
-  var x = 0.0 - 999999.0
+  var x = -999999.0
   var result = nan.compare(x)
   match result 'check'
     Ordering.lessThan then return 0
@@ -235,7 +235,7 @@ end 'main'
 ```maxon
 function main() returns ExitCode
   var pos = 0.0
-  var neg = 0.0 - 0.0
+  var neg = -0.0
   var result = pos.compare(neg)
   match result 'check'
     Ordering.lessThan then return 1

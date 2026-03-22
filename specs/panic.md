@@ -96,7 +96,7 @@ function check(n Integer) returns Integer
 end 'check'
 
 function main() returns ExitCode
-    return check(Integer{0 - 1})
+    return check(Integer{-1})
 end 'main'
 ```
 ```exitcode

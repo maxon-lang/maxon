@@ -53,7 +53,7 @@ end 'main'
 <!-- test: floor.negative -->
 ```maxon
 function main() returns ExitCode
-  var neg = 0.0 - 3.2
+  var neg = -3.2
   var y = trunc(floor(neg))
   return y + 10
 end 'main'

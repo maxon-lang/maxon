@@ -1,6 +1,6 @@
 // Test: floor.negative
 function main() returns ExitCode
-  var neg = 0.0 - 3.2
+  var neg = -3.2
   var y = trunc(floor(neg))
   return y + 10
 end 'main'
@@ -11,12 +11,9 @@ module {
   func @floor.main() -> u32 {
   entry:
     x86.prologue stack_size=16
-    x86.movsd xmm0, [rip+__float_0]
-    x86.movsd xmm1, [rip+__float_3.2]
-    x86.movsd xmm2, xmm0
-    x86.subsd xmm2, xmm1
-    x86.roundsd xmm3, xmm2, 1
-    x86.cvttsd2si rax, xmm3
+    x86.movsd xmm0, [rip+__float_-3.2]
+    x86.roundsd xmm1, xmm0, 1
+    x86.cvttsd2si rax, xmm1
     x86.mov rcx, 10
     x86.add rax, rcx
     x86.xor rdx, rdx
@@ -31,7 +28,7 @@ module {
     x86.test rbx, rbx
     x86.je floor.main.__range_ok_0
   __range_panic_0:
-    x86.lea_symdata rax, [__panic_msg_12]
+    x86.lea_symdata rax, [__panic_msg_10]
     x86.mov rcx, rax
     x86.call maxon_panic
   __range_ok_0:

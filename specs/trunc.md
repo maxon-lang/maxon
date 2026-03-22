@@ -38,7 +38,7 @@ var z = trunc(neg)   // -3 (toward zero, removes fractional part)
 <!-- test: trunc.basic -->
 ```maxon
 function main() returns ExitCode
-  var neg = 0.0 - 3.7
+  var neg = -3.7
   var y = trunc(neg)
   return y + 10
 end 'main'

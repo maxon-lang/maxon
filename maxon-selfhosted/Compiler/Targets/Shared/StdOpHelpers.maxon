@@ -48,7 +48,7 @@ end 'maxOf'
 // Extract slot index from an MlirOp if it is a memref store/load.
 // Returns -1 for ops that don't reference a slot.
 function getSlotFromMlirOp(op MlirOp) returns SlotIndex
-    var result = 0 - 1
+    var result = -1
     match op 'outer'
         maxhl to func then break 'outer'
         memref(memOp) then result = getSlotFromMemRefOp(memOp)
@@ -66,7 +66,7 @@ end 'getSlotFromMemRefOp'
 
 // Compute max parser-allocated slot across all blocks in a function.
 export function computeMaxParserSlotInFunc(func MlirFunction) returns SlotIndex
-    var maxSlot = 0 - 1
+    var maxSlot = -1
     for block in func.region.blocks 'eachBlock'
         for op in block.ops 'eachOp'
             let slot = getSlotFromMlirOp(op)
@@ -135,7 +135,7 @@ end 'isPrintOp'
 
 // Compute stack frame size for a function by scanning all blocks.
 export function computeStackSizeForFunc(func MlirFunction, shadowSpace StackSize, savedRegsSize StackSize) returns StackSize
-    var maxSlot = 0 - 1
+    var maxSlot = -1
     var hasPrint = false
     var tempSlotCount = 0
 
@@ -192,23 +192,23 @@ end 'determineJumpKindInBlock'
 // Returns encoded jump kind (0-11) or -1 if not a comparison op.
 function getJumpKindFromOp(op MlirOp) returns SlotIndex
     return match op 'check'
-        maxhl gives 0 - 1
+        maxhl gives -1
         arith(arithOp) gives getJumpKindFromArith(arithOp)
-        cf to maxarm64 gives 0 - 1
+        cf to maxarm64 gives -1
     end 'check'
 end 'getJumpKindFromOp'
 
 function getJumpKindFromArith(op ArithOp) returns SlotIndex
     return match op 'check'
-        const gives 0 - 1
-        unary gives 0 - 1
+        const gives -1
+        unary gives -1
         binary(binOp) gives getJumpKindFromBinaryArith(binOp)
     end 'check'
 end 'getJumpKindFromArith'
 
 function getJumpKindFromBinaryArith(op ArithBinaryOp) returns SlotIndex
     return match op 'check'
-        addI64 to shrI64 gives 0 - 1
+        addI64 to shrI64 gives -1
         cmpI64Eq gives 0
         cmpI64Ne gives 1
         cmpI64Lt gives 2

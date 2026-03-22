@@ -199,7 +199,7 @@ Answer: 42
 <!-- test: negative-integer -->
 ```maxon
 function main() returns ExitCode
-  var x = 0 - 5
+  var x = -5
   print("Negative: {x}\n")
   return 0
 end 'main'
@@ -265,7 +265,7 @@ Value: 2.5
 <!-- test: negative-float -->
 ```maxon
 function main() returns ExitCode
-  var temp = 0.0 - 3.5
+  var temp = -3.5
   print("Temp: {temp}\n")
   return 0
 end 'main'

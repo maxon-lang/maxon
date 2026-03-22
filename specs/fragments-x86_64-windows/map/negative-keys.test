@@ -1,7 +1,7 @@
 // Test: negative-keys
 function main() returns ExitCode
-  var m = [0 - 5: 50, 0 - 3: 30, 0 - 1: 10]
-  var result = try m.get(0 - 3) otherwise 0
+  var m = [-5: 50, -3: 30, -1: 10]
+  var result = try m.get(-3) otherwise 0
   return result
 end 'main'
 ---
@@ -11,27 +11,22 @@ module {
   func @map.main() -> u32 {
   entry:
     x86.prologue stack_size=160
-    x86.xor rax, rax
-    x86.mov rcx, 5
-    x86.sub rax, rcx
-    x86.mov rdx, 50
-    x86.xor rbx, rbx
-    x86.mov rsi, 3
-    x86.sub rbx, rsi
-    x86.mov rdi, 30
-    x86.xor r8, r8
-    x86.mov r9, 1
-    x86.sub r8, r9
-    x86.mov rcx, 10
-    x86.mov [rbp-8], r8
-    x86.mov [rbp-16], rbx
+    x86.mov rax, -5
+    x86.mov rcx, 50
+    x86.mov rdx, -3
+    x86.mov rbx, 30
+    x86.mov rsi, -1
+    x86.mov rdi, 10
+    x86.mov [rbp-8], rsi
+    x86.mov [rbp-16], rdx
     x86.mov [rbp-24], rax
+    x86.xor r8, r8
+    x86.mov r9, 3
     x86.xor rax, rax
-    x86.mov rbx, 3
-    x86.xor rsi, rsi
-    x86.mov r8, 8
-    x86.lea_func r9, [__destruct___ManagedMemory]
-    x86.mov rdx, r9
+    x86.mov rdx, 8
+    x86.lea_func rsi, [__destruct___ManagedMemory]
+    x86.mov rcx, rsi
+    x86.mov rdx, rcx
     x86.mov rcx, 32
     x86.mov r8, 1
     x86.call mm_alloc
@@ -145,11 +140,9 @@ module {
     x86.mov rdx, [rbp-64]
     x86.call __Map_i64_i64.init
     x86.mov [rbp-72], rax
-    x86.xor rax, rax
-    x86.mov rcx, 3
-    x86.sub rax, rcx
+    x86.mov rax, [rbp-72]
     x86.mov rcx, [rbp-72]
-    x86.mov rdx, rax
+    x86.mov rdx, -3
     x86.call __Map_i64_i64.get
     x86.xor rcx, rcx
     x86.mov [rbp-80], rcx
@@ -175,7 +168,7 @@ module {
     x86.test rdx, rdx
     x86.je map.main.__range_ok_6
   __range_panic_6:
-    x86.lea_symdata rax, [__panic_msg_40]
+    x86.lea_symdata rax, [__panic_msg_32]
     x86.mov rcx, rax
     x86.call maxon_panic
   __range_ok_6:

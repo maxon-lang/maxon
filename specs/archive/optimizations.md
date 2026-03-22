@@ -61,7 +61,7 @@ func.func @main() -> i64 {
 <!-- test: constant-folding-subtraction -->
 ```maxon
 function main() returns int
-  return 100 - 25
+  return 10-25
 end 'main'
 ```
 ```exitcode
