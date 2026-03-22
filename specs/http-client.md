@@ -206,7 +206,7 @@ end 'doFileIo'
 
 function main() returns ExitCode
   var httpTask = async doHttp()
-  sleep(10)
+  sleep(100)
   var fileTask = async doFileIo()
   var fileResult = await fileTask
   var httpResult = try await httpTask otherwise 99
