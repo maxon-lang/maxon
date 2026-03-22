@@ -210,8 +210,8 @@ score = computeScore(item)
 When you do not need a value (loop variable, tuple element), use `_` to signal this clearly. In match arms, prefer omitting the binding entirely over using `(_)` when you don't care about the associated value.
 
 ```maxon
-' Discard the index when only the element matters
-for (_, name) in entries.enumerated() 'loop'
+' Iterate directly when only the element matters (don't use enumerated())
+for name in entries 'loop'
 	print("{name}\n")
 end 'loop'
 

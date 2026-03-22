@@ -2152,7 +2152,8 @@ This works on all iterable types (Array, String, Map, Set, List, etc.). The `Enu
 - Ranges use `to` for inclusive end and `upto` for exclusive end
 - Desugars to while loop with iterator interface
 - The compiler calls `createIterator()` before each loop to reset iteration state, enabling safe re-iteration of the same collection
-- Loop variables are checked for unused (E3012). Use `_` as the loop variable when the value is not needed: `for _ in array 'loop'`. In tuple destructuring, each element is checked independently: `for (_, name) in pairs.enumerated() 'loop'`
+- Loop variables are checked for unused (E3012). Use `_` as the loop variable when the value is not needed: `for _ in array 'loop'`. In tuple destructuring, each element can be discarded independently: `for (key, _) in pairs 'loop'`
+- Discarding the index in `enumerated()` is a compile error (E3074) — use plain `for value in collection` instead
 
 ### Match Statement
 

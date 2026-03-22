@@ -8275,6 +8275,12 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
             $"Tuple has {tupleType.Fields.Count} elements but destructuring has {destructureNames.Count} bindings",
             forToken.Line, forToken.Column);
 
+        if (iterableTypeName.Contains("EnumeratedIterator")
+            && destructureNames[0].StartsWith("__discard_"))
+          throw new CompileError(ErrorCode.SemanticDiscardedEnumeratedIndex,
+            "discarding the index of enumerated() is unnecessary; use 'for value in collection' instead",
+            forToken.Line, forToken.Column);
+
         EmitTupleFieldBindings(itemName, tupleType, destructureNames, isMutable: false);
       }
     }

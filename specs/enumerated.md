@@ -78,7 +78,8 @@ typealias IntArray = Array with Integer
 function main() returns ExitCode
   var arr = IntArray{}
   var count = 0
-  for (_, _) in arr.enumerated() 'loop'
+  for (i, v) in arr.enumerated() 'loop'
+    print("{i}:{v}\n")
     count = count + 1
   end 'loop'
   print("{count}\n")
@@ -170,4 +171,35 @@ end 'main'
 0:97
 1:98
 2:99
+```
+
+<!-- test: enumerated.discard-index-error -->
+```maxon
+function main() returns ExitCode
+  var arr = [10, 20, 30]
+  for (_, value) in arr.enumerated() 'loop'
+    print("{value}\n")
+  end 'loop'
+  return 0
+end 'main'
+```
+```maxoncstderr
+error E3074: specs/fragments/enumerated/enumerated.discard-index-error.test:4:3: discarding the index of enumerated() is unnecessary; use 'for value in collection' instead
+```
+
+<!-- test: enumerated.discard-both-error -->
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
+
+function main() returns ExitCode
+  var arr = IntArray{}
+  for (_, _) in arr.enumerated() 'loop'
+    print("x\n")
+  end 'loop'
+  return 0
+end 'main'
+```
+```maxoncstderr
+error E3074: specs/fragments/enumerated/enumerated.discard-both-error.test:7:3: discarding the index of enumerated() is unnecessary; use 'for value in collection' instead
 ```

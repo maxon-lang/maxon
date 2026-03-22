@@ -252,7 +252,7 @@ skip 2             // skip 2 elements in innermost for loop
 
 // Discard loop variable when only side effects matter
 for _ in array 'loop' ... end 'loop'
-for (_, name) in pairs.enumerated() 'loop' ... end 'loop'
+for (key, _) in pairs 'loop' ... end 'loop'   // discard value, keep key
 ```
 
 ### Match Statement
