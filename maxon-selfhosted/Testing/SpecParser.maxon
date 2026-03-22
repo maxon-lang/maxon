@@ -19,8 +19,8 @@ export type TestExpectation
   export var hasCompilerStderr bool
   export var runtimeStderr String
   export var hasRuntimeStderr bool
-  export var requiredMLIR String
-  export var hasRequiredMLIR bool
+  export var requiredLowering String
+  export var hasRequiredLowering bool
   export var requiredRdata String
   export var hasRequiredRdata bool
   export var requiredData String
@@ -76,6 +76,7 @@ export type TestResult
   export var passed bool
   export var errorMessage String
   export var filePath String
+  export var loweringLog String
 end 'TestResult'
 
 export typealias TestResultArray = Array with TestResult
@@ -456,32 +457,29 @@ export function parseSpecFile(content String, targetKey String) returns SpecTest
           continue
         end 'isStdout'
 
-        // RequiredMLIR — prefer target-qualified, fall back to unqualified
-        if not targetKey.isEmpty() 'hasTargetKey'
-          if blockLine.startsWith("```RequiredMLIR:{targetKey}") 'isTargetMLIR'
-            i = i + 1
-            let mlirBlock = readCodeBlock(lines, startLine: i, lineCount: lineCount)
-            expectation.requiredMLIR = mlirBlock
-            expectation.hasRequiredMLIR = true
-            i = skipCodeBlock(lines, startLine: i, lineCount: lineCount)
-            continue
-          end 'isTargetMLIR'
-        end 'hasTargetKey'
-
+        // Skip RequiredMLIR blocks (handled by C# compiler only)
         if blockLine.startsWith("```RequiredMLIR") 'isMLIR'
-          // Only use unqualified if we haven't found a target-qualified one
-          if not expectation.hasRequiredMLIR 'noTargetMLIR'
+          i = skipCodeBlock(lines, startLine: i + 1, lineCount: lineCount)
+          continue
+        end 'isMLIR'
+
+        // RequiredLowering — always target-qualified, no unqualified fallback
+        if not targetKey.isEmpty() 'hasTargetKeyLowering'
+          if blockLine.startsWith("```RequiredLowering:{targetKey}") 'isTargetLowering'
             i = i + 1
-            let mlirBlock = readCodeBlock(lines, startLine: i, lineCount: lineCount)
-            expectation.requiredMLIR = mlirBlock
-            expectation.hasRequiredMLIR = true
+            let loweringBlock = readCodeBlock(lines, startLine: i, lineCount: lineCount)
+            expectation.requiredLowering = loweringBlock
+            expectation.hasRequiredLowering = true
             i = skipCodeBlock(lines, startLine: i, lineCount: lineCount)
             continue
-          end 'noTargetMLIR' else 'skipUnqualified'
-            i = skipCodeBlock(lines, startLine: i + 1, lineCount: lineCount)
-            continue
-          end 'skipUnqualified'
-        end 'isMLIR'
+          end 'isTargetLowering'
+        end 'hasTargetKeyLowering'
+
+        // Skip non-matching RequiredLowering blocks
+        if blockLine.startsWith("```RequiredLowering") 'isOtherLowering'
+          i = skipCodeBlock(lines, startLine: i + 1, lineCount: lineCount)
+          continue
+        end 'isOtherLowering'
 
         if blockLine.startsWith("```RequiredRdata") 'isRdata'
           i = i + 1

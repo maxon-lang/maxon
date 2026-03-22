@@ -4,6 +4,7 @@
 
 export function lowerMidToMaxX64(module MlirModule, target Target) returns MlirModule
     logInfo(LogCategory.mlir, message: "Lowering Mid to MaxX64 dialect")
+    logTrace(LogCategory.mlir, message: "=== mid-to-x86")
     var result = createMlirModule()
 
     let shadowSpace = match target.os 'osShadow'
@@ -28,12 +29,19 @@ function lowerFunctionToX64(srcFunc MlirFunction, shadowSpace StackSize, osDesc 
     let stackSize = computeStackSizeForFunc(srcFunc, shadowSpace: shadowSpace, savedRegsSize: 0)
     var nextTempSlot = computeMaxParserSlotInFunc(srcFunc) + 1
     var valueSlots = ValueSlotMap{}
+    let funcName = String.from(srcFunc.name)
+    let skipLog = isRuntimeFunction(funcName)
 
     var isFirstBlock = true
     for srcBlock in srcFunc.region.blocks 'eachBlock'
         var dstBlock = addBlock(dstFunc.region, label: srcBlock.label)
         // Preserve block ID from source so jump targets resolve correctly
         dstBlock.id = srcBlock.id
+
+        if not skipLog 'logBlockCtx'
+            let blockLabel = String.from(srcBlock.label)
+            logTrace(LogCategory.mlir, message: "@{funcName} {blockLabel}:")
+        end 'logBlockCtx'
 
         // Entry block gets prologue + parameter saving from ABI registers
         if isFirstBlock 'isEntry'
@@ -44,12 +52,12 @@ function lowerFunctionToX64(srcFunc MlirFunction, shadowSpace StackSize, osDesc 
 
         // Lower each op in the block
         for op in srcBlock.ops 'eachOp'
-            nextTempSlot = lowerMlirOp(op, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot, osDesc: osDesc)
+            nextTempSlot = lowerMlirOp(op, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot, osDesc: osDesc, skipLog: skipLog)
         end 'eachOp'
 
         // Lower terminator
         if srcBlock.hasTerminator 'hasTerm'
-            lowerTerminator(srcBlock, dstBlock: dstBlock, valueSlots: valueSlots)
+            lowerTerminator(srcBlock, dstBlock: dstBlock, valueSlots: valueSlots, skipLog: skipLog)
         end 'hasTerm'
     end 'eachBlock'
 
@@ -86,18 +94,38 @@ end 'emitParamSaves'
 
 // Lower a single mid-level op, pushing one or more MaxX64Ops into dstBlock.
 // Returns the updated nextTempSlot.
-function lowerMlirOp(op MlirOp, dstBlock MlirBlock, valueSlots ValueSlotMap, nextTempSlot SlotIndex, osDesc OsDescriptor) returns SlotIndex
+function lowerMlirOp(op MlirOp, dstBlock MlirBlock, valueSlots ValueSlotMap, nextTempSlot SlotIndex, osDesc OsDescriptor, skipLog bool) returns SlotIndex
+    let opsBefore = dstBlock.ops.count()
+    var result = nextTempSlot
     match op 'dispatch'
-        arith(arithOp) then return lowerArithOp(arithOp, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
-        memref(memOp) then return lowerMemRefOp(memOp, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
-        runtime(rtOp) then return lowerRuntimeOp(rtOp, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
-        func(funcOp) then return lowerFuncOp(funcOp, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
-        maxx64(x64Op) then return lowerPassthroughX64(x64Op, dstBlock: dstBlock, nextTempSlot: nextTempSlot)
-        sys(sysOp) then return lowerSysOp(sysOp, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot, osDesc: osDesc)
-        maxhl then return nextTempSlot
-        cf then return nextTempSlot
-        maxarm64 then return nextTempSlot
+        arith(arithOp) then result = lowerArithOp(arithOp, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
+        memref(memOp) then result = lowerMemRefOp(memOp, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
+        runtime(rtOp) then result = lowerRuntimeOp(rtOp, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
+        func(funcOp) then result = lowerFuncOp(funcOp, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
+        maxx64(x64Op) then result = lowerPassthroughX64(x64Op, dstBlock: dstBlock, nextTempSlot: nextTempSlot)
+        sys(sysOp) then result = lowerSysOp(sysOp, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot, osDesc: osDesc)
+        maxhl then result = nextTempSlot
+        cf then result = nextTempSlot
+        maxarm64 then result = nextTempSlot
     end 'dispatch'
+    if not skipLog 'logOp'
+        let sourceStr = printOp(op, blocks: MlirBlockArray{})
+        let opsAfter = dstBlock.ops.count()
+        var targetStr = ""
+        for k in opsBefore upto opsAfter 'eachNew'
+            let newOp = try dstBlock.ops.get(k) otherwise 'skipOp'
+                continue
+            end 'skipOp'
+            let newOpStr = printOp(newOp, blocks: MlirBlockArray{})
+            if targetStr.isEmpty() 'first'
+                targetStr = newOpStr
+            end 'first' else 'append'
+                targetStr = "{targetStr}, {newOpStr}"
+            end 'append'
+        end 'eachNew'
+        logTrace(LogCategory.mlir, message: "  {sourceStr} -> {targetStr}")
+    end 'logOp'
+    return result
 end 'lowerMlirOp'
 
 // Pass through already-lowered MaxX64Ops.
@@ -255,9 +283,9 @@ end 'lowerPrintInt'
 // Lower func ops (non-terminator: just call).
 // After a call, the return value is in rax — store it to a temp slot so later ops can find it.
 function lowerFuncOp(op FuncOp, dstBlock MlirBlock, valueSlots ValueSlotMap, nextTempSlot SlotIndex) returns SlotIndex
-    return match op 'lower'
-        call(resultId, callee, argIds) gives lowerCallOp(resultId, callee: callee, argIds: argIds, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
-        ret gives nextTempSlot
+    match op 'lower'
+        call(resultId, callee, argIds) then return lowerCallOp(resultId, callee: callee, argIds: argIds, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
+        ret then return nextTempSlot
     end 'lower'
 end 'lowerFuncOp'
 
@@ -317,7 +345,8 @@ function lowerCallOp(resultId ValueId, callee ByteArray, argIds ValueIdArray, ds
 end 'lowerCallOp'
 
 // Lower block terminator: cf.condBr, cf.br, func.ret.
-function lowerTerminator(srcBlock MlirBlock, dstBlock MlirBlock, valueSlots ValueSlotMap)
+function lowerTerminator(srcBlock MlirBlock, dstBlock MlirBlock, valueSlots ValueSlotMap, skipLog bool)
+    let opsBefore = dstBlock.ops.count()
     match srcBlock.terminator 'dispatch'
         maxhl to arith then break 'dispatch'
         cf(cfOp) then lowerCfTerminator(cfOp, srcBlock: srcBlock, dstBlock: dstBlock, valueSlots: valueSlots)
@@ -326,6 +355,31 @@ function lowerTerminator(srcBlock MlirBlock, dstBlock MlirBlock, valueSlots Valu
         maxx64(x64Op) then dstBlock.ops.push(MlirOp.maxx64(x64Op))
         maxarm64 then break 'dispatch'
     end 'dispatch'
+    if not skipLog 'logTerm'
+        let sourceStr = printOp(srcBlock.terminator, blocks: MlirBlockArray{})
+        let opsAfter = dstBlock.ops.count()
+        var targetStr = ""
+        for k in opsBefore upto opsAfter 'eachNew'
+            let newOp = try dstBlock.ops.get(k) otherwise 'skipOp'
+                continue
+            end 'skipOp'
+            let newOpStr = printOp(newOp, blocks: MlirBlockArray{})
+            if targetStr.isEmpty() 'first'
+                targetStr = newOpStr
+            end 'first' else 'append'
+                targetStr = "{targetStr}, {newOpStr}"
+            end 'append'
+        end 'eachNew'
+        if dstBlock.hasTerminator 'hasDstTerm'
+            let termStr = printOp(dstBlock.terminator, blocks: MlirBlockArray{})
+            if targetStr.isEmpty() 'firstTerm'
+                targetStr = termStr
+            end 'firstTerm' else 'appendTerm'
+                targetStr = "{targetStr}, {termStr}"
+            end 'appendTerm'
+        end 'hasDstTerm'
+        logTrace(LogCategory.mlir, message: "  {sourceStr} -> {targetStr}")
+    end 'logTerm'
 end 'lowerTerminator'
 
 function lowerCfTerminator(op CfOp, srcBlock MlirBlock, dstBlock MlirBlock, valueSlots ValueSlotMap)

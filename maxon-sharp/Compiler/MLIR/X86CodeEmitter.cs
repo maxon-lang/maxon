@@ -480,13 +480,14 @@ public partial class X86CodeEmitter() {
       EmitDword(0);
     }
 
-    // mm_leak_check() — report any leaked allocations
+    // mm_leak_check(exit_code) — report any leaked allocations, returns 101 if leaked or original exit_code
+    EmitBytes(0x48, 0x8B, 0x4C, 0x24, 0x20); // MOV rcx, [rsp+0x20] (main's return value as arg0)
     EmitByte(0xE8);
     _relCallFixups.Add((_code.Count, "mm_leak_check"));
     EmitDword(0);
 
-    // Restore main's return value for ExitProcess
-    EmitBytes(0x48, 0x8B, 0x4C, 0x24, 0x20); // MOV rcx, [rsp+0x20]
+    // RAX = exit code from mm_leak_check (101 if leaked, original exit code otherwise)
+    EmitBytes(0x48, 0x89, 0xC1); // MOV rcx, rax
 
     // call [rip+disp32] ExitProcess (indirect through IAT)
     EmitBytes(0xFF, 0x15);

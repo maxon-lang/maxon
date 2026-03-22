@@ -228,7 +228,7 @@ public static partial class SpecParser {
   ];
 
   private static readonly HashSet<string> KnownCodeBlockPrefixes = [
-    "RequiredMLIR"
+    "RequiredMLIR", "RequiredLowering"
   ];
 
   private static void ValidateCodeBlockLanguages(string testName, string testSection) {

@@ -1214,12 +1214,13 @@ public partial class RuntimeEmitter {
   // mm_leak_check / mm_validate_ptr
   // =========================================================================
 
-  /// <summary>mm_leak_check(): If __mm_alloc_count > 0, print leak message and exit 101.</summary>
+  /// <summary>mm_leak_check(exit_code): If __mm_alloc_count > 0, print leak message and return 101. Otherwise return exit_code unchanged.</summary>
   public void EmitMmLeakCheck() {
-    _b.FunctionStart("mm_leak_check", 0, 0x30);
+    _b.FunctionStart("mm_leak_check", 1, 0x30);
     _b.LoadGlobal(VReg.Scratch0, "__mm_alloc_count");
+    var noLeakLabel = UniqueLabel("mm_leak_check_no_leak");
     var doneLabel = UniqueLabel("mm_leak_check_done");
-    _b.JumpIfZero(VReg.Scratch0, doneLabel);
+    _b.JumpIfZero(VReg.Scratch0, noLeakLabel);
     // Print "MM leak: "
     _b.LeaSymdata(VReg.Arg0, "__mm_leak_prefix");
     _b.Call(_b.WriteStderrLabel);
@@ -1229,9 +1230,12 @@ public partial class RuntimeEmitter {
     // Print " allocation(s) remain\n"
     _b.LeaSymdata(VReg.Arg0, "__mm_leak_suffix");
     _b.Call(_b.WriteStderrLabel);
-    // Exit 101
-    _b.MovRegImm(VReg.Arg0, 101);
-    _b.CallImport("os_exit");
+    // Return 101 (leak exit code)
+    _b.MovRegImm(VReg.Ret, 101);
+    _b.Jump(doneLabel);
+    // No leak: return original exit code
+    _b.DefineLabel(noLeakLabel);
+    _b.LoadLocal(VReg.Ret, 0); // arg0 = original exit code
     _b.DefineLabel(doneLabel);
     _b.FunctionEnd();
   }

@@ -21,22 +21,12 @@ end 'LogCategory'
 
 var globalLogLevel = 2
 
-typealias ErrorMessageArray = Array with String
+typealias CaptureMessageArray = Array with String
 
-// When true, error messages are appended to capturedErrors instead of only going to stderr.
-var capturingErrors = false
-var capturedErrors = ErrorMessageArray{}
-
-export function startCapturingErrors()
-    capturingErrors = true
-    capturedErrors = ErrorMessageArray{}
-end 'startCapturingErrors'
-
-export function stopCapturingErrors() returns String
-    capturingErrors = false
+function joinLines(lines CaptureMessageArray) returns String
     var result = ""
     var first = true
-    for line in capturedErrors 'join'
+    for line in lines 'join'
         if first 'isFirst'
             result = line
             first = false
@@ -44,14 +34,50 @@ export function stopCapturingErrors() returns String
             result = "{result}\n{line}"
         end 'notFirst'
     end 'join'
-    capturedErrors = ErrorMessageArray{}
+    return result
+end 'joinLines'
+
+// When true, error messages are appended to capturedErrors instead of only going to stderr.
+var capturingErrors = false
+var capturedErrors = CaptureMessageArray{}
+
+export function startCapturingErrors()
+    capturingErrors = true
+    capturedErrors = CaptureMessageArray{}
+end 'startCapturingErrors'
+
+export function stopCapturingErrors() returns String
+    capturingErrors = false
+    let result = joinLines(capturedErrors)
+    capturedErrors = CaptureMessageArray{}
     return result
 end 'stopCapturingErrors'
 
 export function cancelCapturingErrors()
     capturingErrors = false
-    capturedErrors = ErrorMessageArray{}
+    capturedErrors = CaptureMessageArray{}
 end 'cancelCapturingErrors'
+
+// When true, trace messages are appended to capturedTrace instead of going to stderr.
+var capturingTrace = false
+var capturedTrace = CaptureMessageArray{}
+
+export function startCapturingTrace()
+    capturingTrace = true
+    capturedTrace = CaptureMessageArray{}
+end 'startCapturingTrace'
+
+export function stopCapturingTrace() returns String
+    capturingTrace = false
+    let result = joinLines(capturedTrace)
+    capturedTrace = CaptureMessageArray{}
+    return result
+end 'stopCapturingTrace'
+
+export function cancelCapturingTrace()
+    capturingTrace = false
+    capturedTrace = CaptureMessageArray{}
+end 'cancelCapturingTrace'
 
 // Offset by 1 so 0 can mean "unset" without conflicting with LogLevel.NONE (rawValue 0).
 // Ranges kept at i64-width because Array with ranged types smaller than i64 has a sizing bug.
@@ -144,6 +170,12 @@ function log(category LogCategory, level LogLevel, message String)
                 return
             end 'isError'
         end 'capturing'
+        if capturingTrace 'capTrace'
+            if level.rawValue == LogLevel.TRACE.rawValue 'isTrace'
+                capturedTrace.push(message)
+                return
+            end 'isTrace'
+        end 'capTrace'
         printError("[{category.rawValue}] {level.name}: {message}\n")
     end 'check'
 end 'log'

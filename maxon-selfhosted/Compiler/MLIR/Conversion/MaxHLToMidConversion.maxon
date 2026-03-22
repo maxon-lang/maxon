@@ -6,9 +6,12 @@
 
 export function lowerMaxHLToMid(module MlirModule, globalData GlobalDataTable, nextValueIdRef ValueIdRef) returns MlirModule
     logInfo(LogCategory.mlir, message: "Lowering MaxHL to Mid dialects")
+    logTrace(LogCategory.mlir, message: "=== maxhl-to-mid")
     var result = createMlirModule()
 
     for srcFunc in module.functions 'eachFunc'
+        let funcName = String.from(srcFunc.name)
+        let skipFunc = isRuntimeFunction(funcName)
         var dstFunc = createMlirFunction(srcFunc.name, returnType: srcFunc.returnType)
         dstFunc.paramCount = srcFunc.paramCount
 
@@ -17,14 +20,42 @@ export function lowerMaxHLToMid(module MlirModule, globalData GlobalDataTable, n
             // Override the auto-assigned id to match source block id
             dstBlock.id = srcBlock.id
 
+            if not skipFunc 'logBlockCtx'
+                let blockLabel = String.from(srcBlock.label)
+                logTrace(LogCategory.mlir, message: "@{funcName} {blockLabel}:")
+            end 'logBlockCtx'
+
             // Lower ops
             for op in srcBlock.ops 'eachOp'
+                let opsBefore = dstBlock.ops.count()
                 lowerOp(op, dstBlock: dstBlock, globalData: globalData, nextValueIdRef: nextValueIdRef)
+                if not skipFunc 'logOp'
+                    let sourceStr = printOp(op, blocks: MlirBlockArray{})
+                    let opsAfter = dstBlock.ops.count()
+                    var targetStr = ""
+                    for k in opsBefore upto opsAfter 'eachNew'
+                        let newOp = try dstBlock.ops.get(k) otherwise 'skipOp'
+                            continue
+                        end 'skipOp'
+                        let newOpStr = printOp(newOp, blocks: MlirBlockArray{})
+                        if targetStr.isEmpty() 'first'
+                            targetStr = newOpStr
+                        end 'first' else 'append'
+                            targetStr = "{targetStr}, {newOpStr}"
+                        end 'append'
+                    end 'eachNew'
+                    logTrace(LogCategory.mlir, message: "  {sourceStr} -> {targetStr}")
+                end 'logOp'
             end 'eachOp'
 
             // Lower terminator
             if srcBlock.hasTerminator 'hasTerm'
                 let loweredTerm = lowerTerminator(srcBlock.terminator)
+                if not skipFunc 'logTerm'
+                    let sourceStr = printOp(srcBlock.terminator, blocks: srcFunc.region.blocks)
+                    let targetStr = printOp(loweredTerm, blocks: dstFunc.region.blocks)
+                    logTrace(LogCategory.mlir, message: "  {sourceStr} -> {targetStr}")
+                end 'logTerm'
                 dstBlock.terminator = loweredTerm
                 dstBlock.hasTerminator = true
             end 'hasTerm'

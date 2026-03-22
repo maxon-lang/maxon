@@ -59,6 +59,16 @@ end 'main'
 ```exitcode
 42
 ```
+```RequiredLowering:x86_64-windows
+=== maxhl-to-mid
+@main entry:
+  %0 = maxon.literal {value = 42 : i64} -> %0 = arith.constant {value = 42 : i64}
+  maxon.return %0 -> func.return %0
+=== mid-to-x86
+@main entry:
+  %0 = arith.constant {value = 42 : i64} -> x86.mov rax, 42, x86.mov [rbp-8], rax
+  func.return %0 -> x86.mov rax, [rbp-8], x86.epilogue
+```
 
 <!-- test: return-function-call -->
 ```maxon

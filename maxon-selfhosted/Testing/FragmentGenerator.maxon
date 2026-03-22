@@ -35,9 +35,9 @@ export function generateFragmentContent(test SpecTest, compileIr String) returns
       sb = "{sb}Stderr: ```\n{test.expectation.runtimeStderr}\n```\n"
     end 'hasStderr'
 
-    if test.expectation.hasRequiredMLIR 'hasMLIR'
-      sb = "{sb}RequiredMLIR: ```\n{test.expectation.requiredMLIR}\n```\n"
-    end 'hasMLIR'
+    if test.expectation.hasRequiredLowering 'hasLowering'
+      sb = "{sb}RequiredLowering: ```\n{test.expectation.requiredLowering}\n```\n"
+    end 'hasLowering'
 
     if test.expectation.hasRequiredRdata 'hasRdata'
       sb = "{sb}RequiredRdata: ```\n{test.expectation.requiredRdata}\n```\n"
@@ -221,13 +221,19 @@ export function parseFragment(fragmentPath FilePath) returns Fragment throws Com
       k = stderrBlock.nextLine
       continue
     end 'isStderr' else if trimmedLine.startsWith("RequiredMLIR: ```") 'isMLIR'
+      // Skip RequiredMLIR blocks in legacy fragments (no longer used by self-hosted compiler)
       k = k + 1
       let mlirBlock = readFragmentMultilineValue(lines, startLine: k, endLine: secondSep)
-      expectation.requiredMLIR = mlirBlock.value
-      expectation.hasRequiredMLIR = true
       k = mlirBlock.nextLine
       continue
-    end 'isMLIR' else if trimmedLine.startsWith("RequiredRdata: ```") 'isRdata'
+    end 'isMLIR' else if trimmedLine.startsWith("RequiredLowering: ```") 'isLowering'
+      k = k + 1
+      let loweringBlock = readFragmentMultilineValue(lines, startLine: k, endLine: secondSep)
+      expectation.requiredLowering = loweringBlock.value
+      expectation.hasRequiredLowering = true
+      k = loweringBlock.nextLine
+      continue
+    end 'isLowering' else if trimmedLine.startsWith("RequiredRdata: ```") 'isRdata'
       k = k + 1
       let rdataBlock = readFragmentMultilineValue(lines, startLine: k, endLine: secondSep)
       expectation.requiredRdata = rdataBlock.value

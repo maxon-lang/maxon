@@ -49,37 +49,6 @@ function findRuntimePath() returns FilePath
     return FilePath from ""
 end 'findRuntimePath'
 
-export type BackendIrResult
-    export var codeResult CodeResult
-    export var archIr String
-end 'BackendIrResult'
-
-export function emitBackendWithIr(module MlirModule, target Target, globalData GlobalDataTable) returns BackendIrResult throws CompileError
-    let augmentedModule = augmentWithRuntime(module)
-    return emitBackendWithIrForCpu(augmentedModule, target: target, globalData: globalData)
-end 'emitBackendWithIr'
-
-function emitBackendWithIrForCpu(module MlirModule, target Target, globalData GlobalDataTable) returns BackendIrResult
-    match target.cpu 'cpu'
-        CpuArch.x86_64 then return emitBackendWithIrX86(module, target: target, globalData: globalData)
-        CpuArch.aarch64 then return emitBackendWithIrArm64(module, target: target, globalData: globalData)
-    end 'cpu'
-end 'emitBackendWithIrForCpu'
-
-function emitBackendWithIrX86(module MlirModule, target Target, globalData GlobalDataTable) returns BackendIrResult
-    let archModule = lowerMidToMaxX64(module, target: target)
-    let archIr = printModule(archModule, skipStdlib: true)
-    let result = emitX86(archModule, target: target, globalData: globalData)
-    return BackendIrResult{codeResult: result, archIr: archIr}
-end 'emitBackendWithIrX86'
-
-function emitBackendWithIrArm64(module MlirModule, target Target, globalData GlobalDataTable) returns BackendIrResult
-    let archModule = lowerMidToMaxArm64(module, target: target)
-    let archIr = printModule(archModule, skipStdlib: true)
-    let result = emitMaxArm64(archModule, target: target, globalData: globalData)
-    return BackendIrResult{codeResult: result, archIr: archIr}
-end 'emitBackendWithIrArm64'
-
 // Prepends runtime functions from runtime.mid to a user module.
 // Runtime functions are expressed as mid-level IR (arith/cf/func/memref/sys ops)
 // and will be lowered by the target backends just like user functions.

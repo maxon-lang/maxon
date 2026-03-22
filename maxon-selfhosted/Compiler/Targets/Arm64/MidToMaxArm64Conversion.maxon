@@ -13,12 +13,15 @@ end 'MaxArm64BinaryOpInfo'
 
 export function lowerMidToMaxArm64(module MlirModule, target Target) returns MlirModule
     logInfo(LogCategory.mlir, message: "Lowering Mid to MaxArm64 dialect for {targetToString(target)}")
+    logTrace(LogCategory.mlir, message: "=== mid-to-arm64")
     var result = createMlirModule()
     let osDesc = makeOsDescriptor(target)
 
     for srcFunc in module.functions 'eachFunc'
         var dstFunc = createMlirFunction(srcFunc.name, returnType: srcFunc.returnType)
         dstFunc.paramCount = srcFunc.paramCount
+        let funcName = String.from(srcFunc.name)
+        let skipFunc = isRuntimeFunction(funcName)
 
         // Compute stack size and max parser slot across all blocks in this function
         let stackSize = computeStackSizeForFunc(srcFunc, shadowSpace: 0, savedRegsSize: 16)
@@ -32,8 +35,16 @@ export function lowerMidToMaxArm64(module MlirModule, target Target) returns Mli
             var dstBlock = addBlock(dstFunc.region, label: srcBlock.label)
             dstBlock.id = srcBlock.id
 
+            if not skipFunc 'logBlockCtx'
+                let blockLabel = String.from(srcBlock.label)
+                logTrace(LogCategory.mlir, message: "@{funcName} {blockLabel}:")
+            end 'logBlockCtx'
+
             // Emit prologue at the start of the entry block
             if isFirstBlock 'emitPrologue'
+                if not skipFunc 'logPrologue'
+                    logTrace(LogCategory.mlir, message: "  arm64.prologue stackSize={stackSize}, params={srcFunc.paramCount}")
+                end 'logPrologue'
                 dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.prologue(stackSize)))
                 // Save AAPCS64 register parameters to stack slots (x0-x7)
                 if srcFunc.paramCount >= 1 'saveParam0'
@@ -65,12 +76,53 @@ export function lowerMidToMaxArm64(module MlirModule, target Target) returns Mli
 
             // Lower ops
             for op in srcBlock.ops 'eachOp'
+                let opsBefore = dstBlock.ops.count()
                 nextTempSlot = lowerMidOpToArm64(op, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot, osDesc: osDesc)
+                if not skipFunc 'logOp'
+                    let sourceStr = printOp(op, blocks: MlirBlockArray{})
+                    let opsAfter = dstBlock.ops.count()
+                    var targetStr = ""
+                    for k in opsBefore upto opsAfter 'eachNew'
+                        let newOp = try dstBlock.ops.get(k) otherwise 'skipOp'
+                            continue
+                        end 'skipOp'
+                        let newOpStr = printOp(newOp, blocks: MlirBlockArray{})
+                        if targetStr.isEmpty() 'first'
+                            targetStr = newOpStr
+                        end 'first' else 'append'
+                            targetStr = "{targetStr}, {newOpStr}"
+                        end 'append'
+                    end 'eachNew'
+                    logTrace(LogCategory.mlir, message: "  {sourceStr} -> {targetStr}")
+                end 'logOp'
             end 'eachOp'
 
             // Lower terminator (pass srcBlock so condBr can scan source ops for cmp kind)
             if srcBlock.hasTerminator 'hasTerm'
+                let termOpsBefore = dstBlock.ops.count()
                 lowerMidTerminatorToArm64(srcBlock.terminator, srcBlock: srcBlock, dstBlock: dstBlock, valueSlots: valueSlots)
+                if not skipFunc 'logTerm'
+                    let sourceStr = printOp(srcBlock.terminator, blocks: srcFunc.region.blocks)
+                    let targetStr = printOp(dstBlock.terminator, blocks: dstFunc.region.blocks)
+                    var extraOpsStr = ""
+                    let termOpsAfter = dstBlock.ops.count()
+                    for k in termOpsBefore upto termOpsAfter 'eachTermOp'
+                        let newOp = try dstBlock.ops.get(k) otherwise 'skipTermOp'
+                            continue
+                        end 'skipTermOp'
+                        let newOpStr = printOp(newOp, blocks: MlirBlockArray{})
+                        if extraOpsStr.isEmpty() 'first'
+                            extraOpsStr = newOpStr
+                        end 'first' else 'append'
+                            extraOpsStr = "{extraOpsStr}, {newOpStr}"
+                        end 'append'
+                    end 'eachTermOp'
+                    if extraOpsStr.isEmpty() 'noExtra'
+                        logTrace(LogCategory.mlir, message: "  {sourceStr} -> {targetStr}")
+                    end 'noExtra' else 'withExtra'
+                        logTrace(LogCategory.mlir, message: "  {sourceStr} -> {extraOpsStr}, {targetStr}")
+                    end 'withExtra'
+                end 'logTerm'
             end 'hasTerm'
         end 'eachBlock'
 
@@ -442,16 +494,16 @@ end 'getMaxArm64UnaryOp'
 
 // Lower SysOp to MaxArm64Op.
 function lowerSysOpToArm64(op SysOp, dstBlock MlirBlock, valueSlots ValueSlotMap, nextTempSlot VarSlot, osDesc OsDescriptor) returns VarSlot
-    match op 'lower'
-        syscall(resultId, number, argIds) then return lowerSyscallArm64(resultId, number: number, argIds: argIds, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
-        iatCall(resultId, slotIndex, argIds) then return lowerIatCallArm64(resultId, slotIndex: slotIndex, argIds: argIds, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
-        globalAddr(resultId, name) then return lowerGlobalAddrArm64(resultId, name: name, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
-        stackAddr(resultId, slotId) then return lowerStackAddrArm64(resultId, slotId: slotId, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
-        storeByte(baseId, offsetId, byteId) then return lowerStoreByteArm64(baseId, offsetId: offsetId, byteId: byteId, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
-        loadByte(resultId, baseId, offsetId) then return lowerLoadByteArm64(resultId, baseId: baseId, offsetId: offsetId, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
-        memcpy(dstId, srcId, lenId) then return lowerMemcpyArm64(dstId, srcId: srcId, lenId: lenId, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
-        osExit(codeId) then return lowerOsExitArm64(codeId, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot, osDesc: osDesc)
-        osWrite(ptrId, lenId) then return lowerOsWriteArm64(ptrId, lenId: lenId, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot, osDesc: osDesc)
+    return match op 'lower'
+        syscall(resultId, number, argIds) gives lowerSyscallArm64(resultId, number: number, argIds: argIds, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
+        iatCall(resultId, slotIndex, argIds) gives lowerIatCallArm64(resultId, slotIndex: slotIndex, argIds: argIds, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
+        globalAddr(resultId, name) gives lowerGlobalAddrArm64(resultId, name: name, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
+        stackAddr(resultId, slotId) gives lowerStackAddrArm64(resultId, slotId: slotId, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
+        storeByte(baseId, offsetId, byteId) gives lowerStoreByteArm64(baseId, offsetId: offsetId, byteId: byteId, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
+        loadByte(resultId, baseId, offsetId) gives lowerLoadByteArm64(resultId, baseId: baseId, offsetId: offsetId, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
+        memcpy(dstId, srcId, lenId) gives lowerMemcpyArm64(dstId, srcId: srcId, lenId: lenId, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
+        osExit(codeId) gives lowerOsExitArm64(codeId, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot, osDesc: osDesc)
+        osWrite(ptrId, lenId) gives lowerOsWriteArm64(ptrId, lenId: lenId, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot, osDesc: osDesc)
     end 'lower'
 end 'lowerSysOpToArm64'
 

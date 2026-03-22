@@ -1139,11 +1139,10 @@ case ARM64MemcpyOp:
       EmitBranchLink(globalCleanupFunctionName);
     }
 
-    // Call mm_leak_check
+    // mm_leak_check(exit_code) — returns 101 if leaked, original exit_code otherwise
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X29, 16, 8); // X0 = main's return value
     EmitBranchLink("mm_leak_check");
-
-    // Restore return value to X0 for _exit
-    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X29, 16, 8);
+    // X0 = exit code from mm_leak_check
 
     // Exit via libsystem _exit
     EmitCallImport("_exit");
