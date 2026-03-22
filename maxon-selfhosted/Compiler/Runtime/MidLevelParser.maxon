@@ -107,37 +107,37 @@ enum ArithUnaryTag
     bitNotI64
 end 'ArithUnaryTag'
 
-function makeBinaryArithOp(tag ArithBinaryTag, resultId ValueId, leftId ValueId, rightId ValueId) returns ArithOp
+function makeBinaryArithOp(tag ArithBinaryTag, resultId ValueId, leftId ValueId, rightId ValueId) returns ArithBinaryOp
     return match tag 'make'
-        ArithBinaryTag.addI64   gives ArithOp.addI64(resultId, leftId, rightId)
-        ArithBinaryTag.subI64   gives ArithOp.subI64(resultId, leftId, rightId)
-        ArithBinaryTag.mulI64   gives ArithOp.mulI64(resultId, leftId, rightId)
-        ArithBinaryTag.divI64   gives ArithOp.divI64(resultId, leftId, rightId)
-        ArithBinaryTag.remI64   gives ArithOp.remI64(resultId, leftId, rightId)
-        ArithBinaryTag.andI64   gives ArithOp.andI64(resultId, leftId, rightId)
-        ArithBinaryTag.orI64    gives ArithOp.orI64(resultId, leftId, rightId)
-        ArithBinaryTag.xorI64   gives ArithOp.xorI64(resultId, leftId, rightId)
-        ArithBinaryTag.shlI64   gives ArithOp.shlI64(resultId, leftId, rightId)
-        ArithBinaryTag.shrI64   gives ArithOp.shrI64(resultId, leftId, rightId)
-        ArithBinaryTag.cmpI64Eq gives ArithOp.cmpI64Eq(resultId, leftId, rightId)
-        ArithBinaryTag.cmpI64Ne gives ArithOp.cmpI64Ne(resultId, leftId, rightId)
-        ArithBinaryTag.cmpI64Lt gives ArithOp.cmpI64Lt(resultId, leftId, rightId)
-        ArithBinaryTag.cmpI64Le gives ArithOp.cmpI64Le(resultId, leftId, rightId)
-        ArithBinaryTag.cmpI64Gt gives ArithOp.cmpI64Gt(resultId, leftId, rightId)
-        ArithBinaryTag.cmpI64Ge gives ArithOp.cmpI64Ge(resultId, leftId, rightId)
-        ArithBinaryTag.cmpF64Eq gives ArithOp.cmpF64Eq(resultId, leftId, rightId)
-        ArithBinaryTag.cmpF64Ne gives ArithOp.cmpF64Ne(resultId, leftId, rightId)
-        ArithBinaryTag.cmpF64Lt gives ArithOp.cmpF64Lt(resultId, leftId, rightId)
-        ArithBinaryTag.cmpF64Le gives ArithOp.cmpF64Le(resultId, leftId, rightId)
-        ArithBinaryTag.cmpF64Gt gives ArithOp.cmpF64Gt(resultId, leftId, rightId)
-        ArithBinaryTag.cmpF64Ge gives ArithOp.cmpF64Ge(resultId, leftId, rightId)
+        ArithBinaryTag.addI64   gives ArithBinaryOp.addI64(resultId, leftId, rightId)
+        ArithBinaryTag.subI64   gives ArithBinaryOp.subI64(resultId, leftId, rightId)
+        ArithBinaryTag.mulI64   gives ArithBinaryOp.mulI64(resultId, leftId, rightId)
+        ArithBinaryTag.divI64   gives ArithBinaryOp.divI64(resultId, leftId, rightId)
+        ArithBinaryTag.remI64   gives ArithBinaryOp.remI64(resultId, leftId, rightId)
+        ArithBinaryTag.andI64   gives ArithBinaryOp.andI64(resultId, leftId, rightId)
+        ArithBinaryTag.orI64    gives ArithBinaryOp.orI64(resultId, leftId, rightId)
+        ArithBinaryTag.xorI64   gives ArithBinaryOp.xorI64(resultId, leftId, rightId)
+        ArithBinaryTag.shlI64   gives ArithBinaryOp.shlI64(resultId, leftId, rightId)
+        ArithBinaryTag.shrI64   gives ArithBinaryOp.shrI64(resultId, leftId, rightId)
+        ArithBinaryTag.cmpI64Eq gives ArithBinaryOp.cmpI64Eq(resultId, leftId, rightId)
+        ArithBinaryTag.cmpI64Ne gives ArithBinaryOp.cmpI64Ne(resultId, leftId, rightId)
+        ArithBinaryTag.cmpI64Lt gives ArithBinaryOp.cmpI64Lt(resultId, leftId, rightId)
+        ArithBinaryTag.cmpI64Le gives ArithBinaryOp.cmpI64Le(resultId, leftId, rightId)
+        ArithBinaryTag.cmpI64Gt gives ArithBinaryOp.cmpI64Gt(resultId, leftId, rightId)
+        ArithBinaryTag.cmpI64Ge gives ArithBinaryOp.cmpI64Ge(resultId, leftId, rightId)
+        ArithBinaryTag.cmpF64Eq gives ArithBinaryOp.cmpF64Eq(resultId, leftId, rightId)
+        ArithBinaryTag.cmpF64Ne gives ArithBinaryOp.cmpF64Ne(resultId, leftId, rightId)
+        ArithBinaryTag.cmpF64Lt gives ArithBinaryOp.cmpF64Lt(resultId, leftId, rightId)
+        ArithBinaryTag.cmpF64Le gives ArithBinaryOp.cmpF64Le(resultId, leftId, rightId)
+        ArithBinaryTag.cmpF64Gt gives ArithBinaryOp.cmpF64Gt(resultId, leftId, rightId)
+        ArithBinaryTag.cmpF64Ge gives ArithBinaryOp.cmpF64Ge(resultId, leftId, rightId)
     end 'make'
 end 'makeBinaryArithOp'
 
-function makeUnaryArithOp(tag ArithUnaryTag, resultId ValueId, operandId ValueId) returns ArithOp
+function makeUnaryArithOp(tag ArithUnaryTag, resultId ValueId, operandId ValueId) returns ArithUnaryOp
     return match tag 'make'
-        ArithUnaryTag.negI64    gives ArithOp.negI64(resultId, operandId)
-        ArithUnaryTag.bitNotI64 gives ArithOp.bitNotI64(resultId, operandId)
+        ArithUnaryTag.negI64    gives ArithUnaryOp.negI64(resultId, operandId)
+        ArithUnaryTag.bitNotI64 gives ArithUnaryOp.bitNotI64(resultId, operandId)
     end 'make'
 end 'makeUnaryArithOp'
 
@@ -500,9 +500,17 @@ function midParseArithOp(tokens TokenArray, startPos MidTokenIndex, block MlirBl
     if bytesEqual(opName, b: b"constI64") 'isConst'
         let value = midParseIntValue(tokens, pos: pos)
         pos = pos + midIntValueTokenCount(tokens, pos: pos)
-        block.ops.push(MlirOp.arith(ArithOp.constI64(resultId, value)))
+        block.ops.push(MlirOp.arith(ArithOp.const(ArithConst.constI64(resultId, value))))
         return pos
     end 'isConst'
+
+    // constF64 takes an integer literal (raw bits), not a value ref
+    if bytesEqual(opName, b: b"constF64") 'isConstF64'
+        let value = midParseIntValue(tokens, pos: pos)
+        pos = pos + midIntValueTokenCount(tokens, pos: pos)
+        block.ops.push(MlirOp.arith(ArithOp.const(ArithConst.constF64(resultId, value))))
+        return pos
+    end 'isConstF64'
 
     let opNameStr = String.from(opName)
 
@@ -513,13 +521,13 @@ function midParseArithOp(tokens TokenArray, startPos MidTokenIndex, block MlirBl
             panic("MidLevelParser: unknown arith op '{opNameStr}'")
         end 'notUnary'
         let operandId = lookupValueId(state, name: midTokenAt(tokens, pos: pos).value)
-        block.ops.push(MlirOp.arith(makeUnaryArithOp(unaryTag, resultId: resultId, operandId: operandId)))
+        block.ops.push(MlirOp.arith(ArithOp.unary(makeUnaryArithOp(unaryTag, resultId: resultId, operandId: operandId))))
         return pos + 1
     end 'notBinary'
 
     let leftId = lookupValueId(state, name: midTokenAt(tokens, pos: pos).value)
     let rightId = lookupValueId(state, name: midTokenAt(tokens, pos: pos + 1).value)
-    block.ops.push(MlirOp.arith(makeBinaryArithOp(binTag, resultId: resultId, leftId: leftId, rightId: rightId)))
+    block.ops.push(MlirOp.arith(ArithOp.binary(makeBinaryArithOp(binTag, resultId: resultId, leftId: leftId, rightId: rightId))))
     return pos + 2
 end 'midParseArithOp'
 

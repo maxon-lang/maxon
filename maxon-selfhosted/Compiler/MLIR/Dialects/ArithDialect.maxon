@@ -1,15 +1,22 @@
 // Arith Dialect — Standard typed arithmetic operations.
+// Split into const, unary, and binary sub-unions for type-safe dispatch.
 
-export union ArithOp
+export union ArithConst
     constI64(resultId ValueId, value ParsedInt)
     constF64(resultId ValueId, rawBits ParsedInt)
+end 'ArithConst'
+
+export union ArithUnaryOp
+    negI64(resultId ValueId, operandId ValueId)
+    bitNotI64(resultId ValueId, operandId ValueId)
+end 'ArithUnaryOp'
+
+export union ArithBinaryOp
     addI64(resultId ValueId, leftId ValueId, rightId ValueId)
     subI64(resultId ValueId, leftId ValueId, rightId ValueId)
     mulI64(resultId ValueId, leftId ValueId, rightId ValueId)
     divI64(resultId ValueId, leftId ValueId, rightId ValueId)
     remI64(resultId ValueId, leftId ValueId, rightId ValueId)
-    negI64(resultId ValueId, operandId ValueId)
-    bitNotI64(resultId ValueId, operandId ValueId)
     andI64(resultId ValueId, leftId ValueId, rightId ValueId)
     orI64(resultId ValueId, leftId ValueId, rightId ValueId)
     xorI64(resultId ValueId, leftId ValueId, rightId ValueId)
@@ -27,37 +34,89 @@ export union ArithOp
     cmpF64Le(resultId ValueId, leftId ValueId, rightId ValueId)
     cmpF64Gt(resultId ValueId, leftId ValueId, rightId ValueId)
     cmpF64Ge(resultId ValueId, leftId ValueId, rightId ValueId)
+end 'ArithBinaryOp'
+
+export union ArithOp
+    const(op ArithConst)
+    unary(op ArithUnaryOp)
+    binary(op ArithBinaryOp)
 end 'ArithOp'
 
 export function printArithOp(op ArithOp) returns String
+    return match op 'dispatch'
+        const(c) gives printArithConst(c)
+        unary(u) gives printArithUnaryOp(u)
+        binary(b) gives printArithBinaryOp(b)
+    end 'dispatch'
+end 'printArithOp'
+
+function printArithConst(op ArithConst) returns String
     let lb = "\{"
     let rb = "\}"
     return match op 'print'
         constI64(resultId, value) gives "%{resultId} = arith.constant {lb}value = {value} : i64{rb}"
         constF64(resultId, rawBits) gives "%{resultId} = arith.float_constant {lb}rawBits = {rawBits}{rb}"
-        addI64(resultId, leftId, rightId) gives "%{resultId} = arith.addi %{leftId}, %{rightId}"
-        subI64(resultId, leftId, rightId) gives "%{resultId} = arith.subi %{leftId}, %{rightId}"
-        mulI64(resultId, leftId, rightId) gives "%{resultId} = arith.muli %{leftId}, %{rightId}"
-        divI64(resultId, leftId, rightId) gives "%{resultId} = arith.divsi %{leftId}, %{rightId}"
-        remI64(resultId, leftId, rightId) gives "%{resultId} = arith.remsi %{leftId}, %{rightId}"
+    end 'print'
+end 'printArithConst'
+
+function printArithUnaryOp(op ArithUnaryOp) returns String
+    return match op 'print'
         negI64(resultId, operandId) gives "%{resultId} = arith.negi %{operandId}"
         bitNotI64(resultId, operandId) gives "%{resultId} = arith.noti %{operandId}"
-        andI64(resultId, leftId, rightId) gives "%{resultId} = arith.andi %{leftId}, %{rightId}"
-        orI64(resultId, leftId, rightId) gives "%{resultId} = arith.ori %{leftId}, %{rightId}"
-        xorI64(resultId, leftId, rightId) gives "%{resultId} = arith.xori %{leftId}, %{rightId}"
-        shlI64(resultId, leftId, rightId) gives "%{resultId} = arith.shli %{leftId}, %{rightId}"
-        shrI64(resultId, leftId, rightId) gives "%{resultId} = arith.shrsi %{leftId}, %{rightId}"
-        cmpI64Eq(resultId, leftId, rightId) gives "%{resultId} = arith.cmpi eq, %{leftId}, %{rightId}"
-        cmpI64Ne(resultId, leftId, rightId) gives "%{resultId} = arith.cmpi ne, %{leftId}, %{rightId}"
-        cmpI64Lt(resultId, leftId, rightId) gives "%{resultId} = arith.cmpi lt, %{leftId}, %{rightId}"
-        cmpI64Le(resultId, leftId, rightId) gives "%{resultId} = arith.cmpi le, %{leftId}, %{rightId}"
-        cmpI64Gt(resultId, leftId, rightId) gives "%{resultId} = arith.cmpi gt, %{leftId}, %{rightId}"
-        cmpI64Ge(resultId, leftId, rightId) gives "%{resultId} = arith.cmpi ge, %{leftId}, %{rightId}"
-        cmpF64Eq(resultId, leftId, rightId) gives "%{resultId} = arith.cmpf eq, %{leftId}, %{rightId}"
-        cmpF64Ne(resultId, leftId, rightId) gives "%{resultId} = arith.cmpf ne, %{leftId}, %{rightId}"
-        cmpF64Lt(resultId, leftId, rightId) gives "%{resultId} = arith.cmpf lt, %{leftId}, %{rightId}"
-        cmpF64Le(resultId, leftId, rightId) gives "%{resultId} = arith.cmpf le, %{leftId}, %{rightId}"
-        cmpF64Gt(resultId, leftId, rightId) gives "%{resultId} = arith.cmpf gt, %{leftId}, %{rightId}"
-        cmpF64Ge(resultId, leftId, rightId) gives "%{resultId} = arith.cmpf ge, %{leftId}, %{rightId}"
     end 'print'
-end 'printArithOp'
+end 'printArithUnaryOp'
+
+export function arithBinaryOpName(op ArithBinaryOp) returns String
+    return match op 'name'
+        addI64 gives "addi"
+        subI64 gives "subi"
+        mulI64 gives "muli"
+        divI64 gives "divsi"
+        remI64 gives "remsi"
+        andI64 gives "andi"
+        orI64 gives "ori"
+        xorI64 gives "xori"
+        shlI64 gives "shli"
+        shrI64 gives "shrsi"
+        cmpI64Eq gives "cmpi eq,"
+        cmpI64Ne gives "cmpi ne,"
+        cmpI64Lt gives "cmpi lt,"
+        cmpI64Le gives "cmpi le,"
+        cmpI64Gt gives "cmpi gt,"
+        cmpI64Ge gives "cmpi ge,"
+        cmpF64Eq gives "cmpf eq,"
+        cmpF64Ne gives "cmpf ne,"
+        cmpF64Lt gives "cmpf lt,"
+        cmpF64Le gives "cmpf le,"
+        cmpF64Gt gives "cmpf gt,"
+        cmpF64Ge gives "cmpf ge,"
+    end 'name'
+end 'arithBinaryOpName'
+
+function printArithBinaryOp(op ArithBinaryOp) returns String
+    let name = arithBinaryOpName(op)
+    return match op 'print'
+        addI64(r, l, ri) gives "%{r} = arith.{name} %{l}, %{ri}"
+        subI64(r, l, ri) gives "%{r} = arith.{name} %{l}, %{ri}"
+        mulI64(r, l, ri) gives "%{r} = arith.{name} %{l}, %{ri}"
+        divI64(r, l, ri) gives "%{r} = arith.{name} %{l}, %{ri}"
+        remI64(r, l, ri) gives "%{r} = arith.{name} %{l}, %{ri}"
+        andI64(r, l, ri) gives "%{r} = arith.{name} %{l}, %{ri}"
+        orI64(r, l, ri) gives "%{r} = arith.{name} %{l}, %{ri}"
+        xorI64(r, l, ri) gives "%{r} = arith.{name} %{l}, %{ri}"
+        shlI64(r, l, ri) gives "%{r} = arith.{name} %{l}, %{ri}"
+        shrI64(r, l, ri) gives "%{r} = arith.{name} %{l}, %{ri}"
+        cmpI64Eq(r, l, ri) gives "%{r} = arith.{name} %{l}, %{ri}"
+        cmpI64Ne(r, l, ri) gives "%{r} = arith.{name} %{l}, %{ri}"
+        cmpI64Lt(r, l, ri) gives "%{r} = arith.{name} %{l}, %{ri}"
+        cmpI64Le(r, l, ri) gives "%{r} = arith.{name} %{l}, %{ri}"
+        cmpI64Gt(r, l, ri) gives "%{r} = arith.{name} %{l}, %{ri}"
+        cmpI64Ge(r, l, ri) gives "%{r} = arith.{name} %{l}, %{ri}"
+        cmpF64Eq(r, l, ri) gives "%{r} = arith.{name} %{l}, %{ri}"
+        cmpF64Ne(r, l, ri) gives "%{r} = arith.{name} %{l}, %{ri}"
+        cmpF64Lt(r, l, ri) gives "%{r} = arith.{name} %{l}, %{ri}"
+        cmpF64Le(r, l, ri) gives "%{r} = arith.{name} %{l}, %{ri}"
+        cmpF64Gt(r, l, ri) gives "%{r} = arith.{name} %{l}, %{ri}"
+        cmpF64Ge(r, l, ri) gives "%{r} = arith.{name} %{l}, %{ri}"
+    end 'print'
+end 'printArithBinaryOp'

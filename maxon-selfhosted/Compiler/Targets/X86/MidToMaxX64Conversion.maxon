@@ -134,18 +134,36 @@ function lowerPassthroughX64(op MaxX64Op, dstBlock MlirBlock, nextTempSlot SlotI
     return nextTempSlot
 end 'lowerPassthroughX64'
 
-// Lower arith ops: const, binary, unary, compare, shift, div/rem.
+// Lower arith ops: dispatch to const, unary, or binary handler.
 function lowerArithOp(op ArithOp, dstBlock MlirBlock, valueSlots ValueSlotMap, nextTempSlot SlotIndex) returns SlotIndex
+    return match op 'lower'
+        const(c) gives lowerArithConst(c, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
+        unary(u) gives lowerArithUnary(u, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
+        binary(b) gives lowerArithBinary(b, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
+    end 'lower'
+end 'lowerArithOp'
+
+function lowerArithConst(op ArithConst, dstBlock MlirBlock, valueSlots ValueSlotMap, nextTempSlot SlotIndex) returns SlotIndex
+    return match op 'lower'
+        constI64(resultId, value) gives lowerConstI64(resultId, value: value, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
+        constF64(resultId, rawBits) gives lowerConstI64(resultId, value: rawBits, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
+    end 'lower'
+end 'lowerArithConst'
+
+function lowerArithUnary(op ArithUnaryOp, dstBlock MlirBlock, valueSlots ValueSlotMap, nextTempSlot SlotIndex) returns SlotIndex
+    return match op 'lower'
+        negI64(resultId, operandId) gives lowerUnaryOp(resultId, operandId: operandId, x64Op: MaxX64Op.negReg(X64Register.rax), dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
+        bitNotI64(resultId, operandId) gives lowerUnaryOp(resultId, operandId: operandId, x64Op: MaxX64Op.bitNotReg(X64Register.rax), dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
+    end 'lower'
+end 'lowerArithUnary'
+
+function lowerArithBinary(op ArithBinaryOp, dstBlock MlirBlock, valueSlots ValueSlotMap, nextTempSlot SlotIndex) returns SlotIndex
     match op 'lower'
-        constI64(resultId, value) then return lowerConstI64(resultId, value: value, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
-        constF64(resultId, rawBits) then return lowerConstI64(resultId, value: rawBits, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
         addI64(resultId, leftId, rightId) then return lowerBinaryOp(resultId, leftId: leftId, rightId: rightId, x64Op: MaxX64Op.addRegReg(X64Register.rax, X64Register.rcx), dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
         subI64(resultId, leftId, rightId) then return lowerBinaryOp(resultId, leftId: leftId, rightId: rightId, x64Op: MaxX64Op.subRegReg(X64Register.rax, X64Register.rcx), dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
         mulI64(resultId, leftId, rightId) then return lowerBinaryOp(resultId, leftId: leftId, rightId: rightId, x64Op: MaxX64Op.imulRegReg(X64Register.rax, X64Register.rcx), dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
         divI64(resultId, leftId, rightId) then return lowerDivRem(resultId, leftId: leftId, rightId: rightId, isRem: false, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
         remI64(resultId, leftId, rightId) then return lowerDivRem(resultId, leftId: leftId, rightId: rightId, isRem: true, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
-        negI64(resultId, operandId) then return lowerUnaryOp(resultId, operandId: operandId, x64Op: MaxX64Op.negReg(X64Register.rax), dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
-        bitNotI64(resultId, operandId) then return lowerUnaryOp(resultId, operandId: operandId, x64Op: MaxX64Op.bitNotReg(X64Register.rax), dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
         andI64(resultId, leftId, rightId) then return lowerBinaryOp(resultId, leftId: leftId, rightId: rightId, x64Op: MaxX64Op.andRegReg(X64Register.rax, X64Register.rcx), dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
         orI64(resultId, leftId, rightId) then return lowerBinaryOp(resultId, leftId: leftId, rightId: rightId, x64Op: MaxX64Op.orRegReg(X64Register.rax, X64Register.rcx), dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
         xorI64(resultId, leftId, rightId) then return lowerBinaryOp(resultId, leftId: leftId, rightId: rightId, x64Op: MaxX64Op.xorRegReg(X64Register.rax, X64Register.rcx), dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
@@ -164,7 +182,7 @@ function lowerArithOp(op ArithOp, dstBlock MlirBlock, valueSlots ValueSlotMap, n
         cmpF64Gt(resultId, leftId, rightId) then return lowerCmpOp(resultId, leftId: leftId, rightId: rightId, x64Op: MaxX64Op.ucomisd, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
         cmpF64Ge(resultId, leftId, rightId) then return lowerCmpOp(resultId, leftId: leftId, rightId: rightId, x64Op: MaxX64Op.ucomisd, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
     end 'lower'
-end 'lowerArithOp'
+end 'lowerArithBinary'
 
 // const -> movRegImm(rax, value) + movSlot(tempSlot, rax)
 function lowerConstI64(resultId ValueId, value ParsedInt, dstBlock MlirBlock, valueSlots ValueSlotMap, nextTempSlot SlotIndex) returns SlotIndex

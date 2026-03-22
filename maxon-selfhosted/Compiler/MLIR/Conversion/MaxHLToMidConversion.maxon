@@ -77,39 +77,39 @@ function lowerOp(op MlirOp, dstBlock MlirBlock, globalData GlobalDataTable, next
     end 'dispatch'
 end 'lowerOp'
 
-function lowerCmpOp(dstBlock MlirBlock, isFloat bool, floatOp ArithOp, intOp ArithOp)
+function lowerCmpOp(dstBlock MlirBlock, isFloat bool, floatOp ArithBinaryOp, intOp ArithBinaryOp)
     if isFloat 'f'
-        dstBlock.ops.push(MlirOp.arith(floatOp))
+        dstBlock.ops.push(MlirOp.arith(ArithOp.binary(floatOp)))
     end 'f' else 'i'
-        dstBlock.ops.push(MlirOp.arith(intOp))
+        dstBlock.ops.push(MlirOp.arith(ArithOp.binary(intOp)))
     end 'i'
 end 'lowerCmpOp'
 
 function lowerMaxHLOp(hlOp MaxHLOp, dstBlock MlirBlock, globalData GlobalDataTable, nextValueIdRef ValueIdRef)
     match hlOp 'lower'
-        literal(resultId, value) then dstBlock.ops.push(MlirOp.arith(ArithOp.constI64(resultId, value)))
-        floatLiteral(resultId, rawBits) then dstBlock.ops.push(MlirOp.arith(ArithOp.constF64(resultId, rawBits)))
+        literal(resultId, value) then dstBlock.ops.push(MlirOp.arith(ArithOp.const(ArithConst.constI64(resultId, value))))
+        floatLiteral(resultId, rawBits) then dstBlock.ops.push(MlirOp.arith(ArithOp.const(ArithConst.constF64(resultId, rawBits))))
         varDecl(slotId, valueId) then dstBlock.ops.push(MlirOp.memref(MemRefOp.storeSlot(slotId, valueId)))
         varLoad(resultId, slotId) then dstBlock.ops.push(MlirOp.memref(MemRefOp.loadSlot(resultId, slotId)))
         varStore(slotId, valueId) then dstBlock.ops.push(MlirOp.memref(MemRefOp.storeSlot(slotId, valueId)))
-        add(resultId, leftId, rightId) then dstBlock.ops.push(MlirOp.arith(ArithOp.addI64(resultId, leftId, rightId)))
-        sub(resultId, leftId, rightId) then dstBlock.ops.push(MlirOp.arith(ArithOp.subI64(resultId, leftId, rightId)))
-        mul(resultId, leftId, rightId) then dstBlock.ops.push(MlirOp.arith(ArithOp.mulI64(resultId, leftId, rightId)))
-        div(resultId, leftId, rightId) then dstBlock.ops.push(MlirOp.arith(ArithOp.divI64(resultId, leftId, rightId)))
-        mod(resultId, leftId, rightId) then dstBlock.ops.push(MlirOp.arith(ArithOp.remI64(resultId, leftId, rightId)))
-        neg(resultId, operandId) then dstBlock.ops.push(MlirOp.arith(ArithOp.negI64(resultId, operandId)))
-        bitNot(resultId, operandId) then dstBlock.ops.push(MlirOp.arith(ArithOp.bitNotI64(resultId, operandId)))
-        bitAnd(resultId, leftId, rightId) then dstBlock.ops.push(MlirOp.arith(ArithOp.andI64(resultId, leftId, rightId)))
-        bitOr(resultId, leftId, rightId) then dstBlock.ops.push(MlirOp.arith(ArithOp.orI64(resultId, leftId, rightId)))
-        bitXor(resultId, leftId, rightId) then dstBlock.ops.push(MlirOp.arith(ArithOp.xorI64(resultId, leftId, rightId)))
-        shl(resultId, leftId, rightId) then dstBlock.ops.push(MlirOp.arith(ArithOp.shlI64(resultId, leftId, rightId)))
-        shr(resultId, leftId, rightId) then dstBlock.ops.push(MlirOp.arith(ArithOp.shrI64(resultId, leftId, rightId)))
-        cmpEq(resultId, leftId, rightId, isFloat) then lowerCmpOp(dstBlock, isFloat: isFloat, floatOp: ArithOp.cmpF64Eq(resultId, leftId, rightId), intOp: ArithOp.cmpI64Eq(resultId, leftId, rightId))
-        cmpNe(resultId, leftId, rightId, isFloat) then lowerCmpOp(dstBlock, isFloat: isFloat, floatOp: ArithOp.cmpF64Ne(resultId, leftId, rightId), intOp: ArithOp.cmpI64Ne(resultId, leftId, rightId))
-        cmpLt(resultId, leftId, rightId, isFloat) then lowerCmpOp(dstBlock, isFloat: isFloat, floatOp: ArithOp.cmpF64Lt(resultId, leftId, rightId), intOp: ArithOp.cmpI64Lt(resultId, leftId, rightId))
-        cmpLe(resultId, leftId, rightId, isFloat) then lowerCmpOp(dstBlock, isFloat: isFloat, floatOp: ArithOp.cmpF64Le(resultId, leftId, rightId), intOp: ArithOp.cmpI64Le(resultId, leftId, rightId))
-        cmpGt(resultId, leftId, rightId, isFloat) then lowerCmpOp(dstBlock, isFloat: isFloat, floatOp: ArithOp.cmpF64Gt(resultId, leftId, rightId), intOp: ArithOp.cmpI64Gt(resultId, leftId, rightId))
-        cmpGe(resultId, leftId, rightId, isFloat) then lowerCmpOp(dstBlock, isFloat: isFloat, floatOp: ArithOp.cmpF64Ge(resultId, leftId, rightId), intOp: ArithOp.cmpI64Ge(resultId, leftId, rightId))
+        add(resultId, leftId, rightId) then dstBlock.ops.push(MlirOp.arith(ArithOp.binary(ArithBinaryOp.addI64(resultId, leftId, rightId))))
+        sub(resultId, leftId, rightId) then dstBlock.ops.push(MlirOp.arith(ArithOp.binary(ArithBinaryOp.subI64(resultId, leftId, rightId))))
+        mul(resultId, leftId, rightId) then dstBlock.ops.push(MlirOp.arith(ArithOp.binary(ArithBinaryOp.mulI64(resultId, leftId, rightId))))
+        div(resultId, leftId, rightId) then dstBlock.ops.push(MlirOp.arith(ArithOp.binary(ArithBinaryOp.divI64(resultId, leftId, rightId))))
+        mod(resultId, leftId, rightId) then dstBlock.ops.push(MlirOp.arith(ArithOp.binary(ArithBinaryOp.remI64(resultId, leftId, rightId))))
+        neg(resultId, operandId) then dstBlock.ops.push(MlirOp.arith(ArithOp.unary(ArithUnaryOp.negI64(resultId, operandId))))
+        bitNot(resultId, operandId) then dstBlock.ops.push(MlirOp.arith(ArithOp.unary(ArithUnaryOp.bitNotI64(resultId, operandId))))
+        bitAnd(resultId, leftId, rightId) then dstBlock.ops.push(MlirOp.arith(ArithOp.binary(ArithBinaryOp.andI64(resultId, leftId, rightId))))
+        bitOr(resultId, leftId, rightId) then dstBlock.ops.push(MlirOp.arith(ArithOp.binary(ArithBinaryOp.orI64(resultId, leftId, rightId))))
+        bitXor(resultId, leftId, rightId) then dstBlock.ops.push(MlirOp.arith(ArithOp.binary(ArithBinaryOp.xorI64(resultId, leftId, rightId))))
+        shl(resultId, leftId, rightId) then dstBlock.ops.push(MlirOp.arith(ArithOp.binary(ArithBinaryOp.shlI64(resultId, leftId, rightId))))
+        shr(resultId, leftId, rightId) then dstBlock.ops.push(MlirOp.arith(ArithOp.binary(ArithBinaryOp.shrI64(resultId, leftId, rightId))))
+        cmpEq(resultId, leftId, rightId, isFloat) then lowerCmpOp(dstBlock, isFloat: isFloat, floatOp: ArithBinaryOp.cmpF64Eq(resultId, leftId, rightId), intOp: ArithBinaryOp.cmpI64Eq(resultId, leftId, rightId))
+        cmpNe(resultId, leftId, rightId, isFloat) then lowerCmpOp(dstBlock, isFloat: isFloat, floatOp: ArithBinaryOp.cmpF64Ne(resultId, leftId, rightId), intOp: ArithBinaryOp.cmpI64Ne(resultId, leftId, rightId))
+        cmpLt(resultId, leftId, rightId, isFloat) then lowerCmpOp(dstBlock, isFloat: isFloat, floatOp: ArithBinaryOp.cmpF64Lt(resultId, leftId, rightId), intOp: ArithBinaryOp.cmpI64Lt(resultId, leftId, rightId))
+        cmpLe(resultId, leftId, rightId, isFloat) then lowerCmpOp(dstBlock, isFloat: isFloat, floatOp: ArithBinaryOp.cmpF64Le(resultId, leftId, rightId), intOp: ArithBinaryOp.cmpI64Le(resultId, leftId, rightId))
+        cmpGt(resultId, leftId, rightId, isFloat) then lowerCmpOp(dstBlock, isFloat: isFloat, floatOp: ArithBinaryOp.cmpF64Gt(resultId, leftId, rightId), intOp: ArithBinaryOp.cmpI64Gt(resultId, leftId, rightId))
+        cmpGe(resultId, leftId, rightId, isFloat) then lowerCmpOp(dstBlock, isFloat: isFloat, floatOp: ArithBinaryOp.cmpF64Ge(resultId, leftId, rightId), intOp: ArithBinaryOp.cmpI64Ge(resultId, leftId, rightId))
         condBr(condId, thenTarget, elseTarget) then dstBlock.ops.push(MlirOp.cf(CfOp.condBr(condId, thenTarget, elseTarget)))
         br(target) then dstBlock.ops.push(MlirOp.cf(CfOp.br(target)))
         call(resultId, callee, argIds) then dstBlock.ops.push(MlirOp.func(FuncOp.call(resultId, callee, argIds)))
@@ -138,7 +138,7 @@ function lowerPrintLiteral(data ByteArray, dstBlock MlirBlock, globalData Global
 
     // constI64 -> lenId
     let lenId = allocValueId(nextValueIdRef)
-    dstBlock.ops.push(MlirOp.arith(ArithOp.constI64(lenId, dataLen)))
+    dstBlock.ops.push(MlirOp.arith(ArithOp.const(ArithConst.constI64(lenId, dataLen))))
 
     // call write_stdout(addrId, lenId)
     let callResultId = allocValueId(nextValueIdRef)

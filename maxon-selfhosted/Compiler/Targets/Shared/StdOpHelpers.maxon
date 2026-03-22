@@ -189,7 +189,7 @@ export function determineJumpKindInBlock(block MlirBlock) returns JumpKind
     return JumpKind.boolTest
 end 'determineJumpKindInBlock'
 
-// Returns encoded jump kind (0-6) or -1 if not a comparison op.
+// Returns encoded jump kind (0-11) or -1 if not a comparison op.
 function getJumpKindFromOp(op MlirOp) returns SlotIndex
     return match op 'check'
         maxhl gives 0 - 1
@@ -200,7 +200,15 @@ end 'getJumpKindFromOp'
 
 function getJumpKindFromArith(op ArithOp) returns SlotIndex
     return match op 'check'
-        constI64 to shrI64 gives 0 - 1
+        const gives 0 - 1
+        unary gives 0 - 1
+        binary(binOp) gives getJumpKindFromBinaryArith(binOp)
+    end 'check'
+end 'getJumpKindFromArith'
+
+function getJumpKindFromBinaryArith(op ArithBinaryOp) returns SlotIndex
+    return match op 'check'
+        addI64 to shrI64 gives 0 - 1
         cmpI64Eq gives 0
         cmpI64Ne gives 1
         cmpI64Lt gives 2
@@ -214,7 +222,7 @@ function getJumpKindFromArith(op ArithOp) returns SlotIndex
         cmpF64Gt gives 10
         cmpF64Ge gives 11
     end 'check'
-end 'getJumpKindFromArith'
+end 'getJumpKindFromBinaryArith'
 
 function decodeJumpKind(encoded SlotIndex) returns JumpKind
     match encoded 'decode'
