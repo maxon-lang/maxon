@@ -22,6 +22,7 @@ class Program {
       "compile" => RunCompile(args[1..]),
       "build" => RunBuild(args[1..]),
       "run" => RunRun(args[1..]),
+      "fmt" => RunFmt(args[1..]),
       "spec-test" => RunSpecTests(args[1..]),
       "lsp-server" => await RunLspAsync(),
       _ => Fail()
@@ -35,6 +36,7 @@ class Program {
     Console.WriteLine("  compile <file>           Compile a single .maxon file");
     Console.WriteLine("  build [<directory>]      Build a project (default: current directory)");
     Console.WriteLine("  run <file|directory>     Compile and run");
+    Console.WriteLine("  fmt [<file|directory>]   Format .maxon source files in-place (default: current directory)");
     Console.WriteLine("  spec-test [options]      Run spec tests");
     Console.WriteLine("  lsp-server               Start language server (LSP)");
     Console.WriteLine();
@@ -196,6 +198,34 @@ class Program {
     if (compileResult != 0) return compileResult;
 
     return RunExecutable(outputPath);
+  }
+
+  static int RunFmt(string[] args) {
+    var path = args.FirstOrDefault(a => !a.StartsWith('-')) ?? Directory.GetCurrentDirectory();
+
+    List<string> files;
+    if (File.Exists(path)) {
+      files = [path];
+    } else if (Directory.Exists(path)) {
+      files = [.. Directory.GetFiles(path, "*.maxon", SearchOption.AllDirectories)];
+    } else {
+      Console.Error.WriteLine($"fmt: path not found: {path}");
+      return 1;
+    }
+
+    int changed = 0;
+    foreach (var file in files) {
+      var original = File.ReadAllText(file);
+      var formatted = Lsp.MaxonFormatter.Format(original);
+      if (formatted != original) {
+        File.WriteAllText(file, formatted);
+        Console.WriteLine($"formatted: {file}");
+        changed++;
+      }
+    }
+
+    Console.WriteLine($"fmt: {changed} file(s) changed, {files.Count - changed} unchanged.");
+    return 0;
   }
 
   /// <summary>

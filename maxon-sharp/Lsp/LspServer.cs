@@ -31,6 +31,7 @@ public class LspServer {
         .WithHandler<RenameHandler>()
         .WithHandler<PrepareRenameHandler>()
         .WithHandler<DidChangeWatchedFilesHandler>()
+        .WithHandler<FormattingHandler>()
         .WithServices(services => {
           services.AddSingleton(this);
         })

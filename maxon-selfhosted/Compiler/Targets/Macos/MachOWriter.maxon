@@ -59,483 +59,483 @@ let MACHO_IMPORT_COUNT = 2
 // --- Segment/Section header helpers ---
 
 function writeSegName(buf ByteArray, name String)
-    var written = 0
-    for ch in name 'chars'
-        let b = try ch.asciiValue() otherwise 0
-        buf.push(b)
-        written = written + 1
-    end 'chars'
-    while written < 16 'pad'
-        buf.push(0)
-        written = written + 1
-    end 'pad'
+  var written = 0
+  for ch in name 'chars'
+    let b = try ch.asciiValue() otherwise 0
+    buf.push(b)
+    written = written + 1
+  end 'chars'
+  while written < 16 'pad'
+    buf.push(0)
+    written = written + 1
+  end 'pad'
 end 'writeSegName'
 
 function writeSegmentCommand(buf ByteArray, segname String, vmaddr MachineWord, vmsize MachineWord, fileoff MachineWord, filesize MachineWord, maxprot MachineWord, initprot MachineWord, nsects MachineWord)
-    writeDword(buf, value: LC_SEGMENT_64)
-    writeDword(buf, value: 72 + 80 * nsects)
-    writeSegName(buf, name: segname)
-    writeQword(buf, value: vmaddr)
-    writeQword(buf, value: vmsize)
-    writeQword(buf, value: fileoff)
-    writeQword(buf, value: filesize)
-    writeDword(buf, value: maxprot)
-    writeDword(buf, value: initprot)
-    writeDword(buf, value: nsects)
-    writeDword(buf, value: 0)
+  writeDword(buf, value: LC_SEGMENT_64)
+  writeDword(buf, value: 72 + 80 * nsects)
+  writeSegName(buf, name: segname)
+  writeQword(buf, value: vmaddr)
+  writeQword(buf, value: vmsize)
+  writeQword(buf, value: fileoff)
+  writeQword(buf, value: filesize)
+  writeDword(buf, value: maxprot)
+  writeDword(buf, value: initprot)
+  writeDword(buf, value: nsects)
+  writeDword(buf, value: 0)
 end 'writeSegmentCommand'
 
 function writeMachOSectionHeader(buf ByteArray, sectname String, segname String, addr MachineWord, size MachineWord, offset MachineWord, alignVal MachineWord, flags MachineWord)
-    writeSegName(buf, name: sectname)
-    writeSegName(buf, name: segname)
-    writeQword(buf, value: addr)
-    writeQword(buf, value: size)
-    writeDword(buf, value: offset)
-    writeDword(buf, value: alignVal)
-    writeDword(buf, value: 0) // reloff
-    writeDword(buf, value: 0) // nreloc
-    writeDword(buf, value: flags)
-    writeDword(buf, value: 0) // reserved1
-    writeDword(buf, value: 0) // reserved2
-    writeDword(buf, value: 0) // reserved3
+  writeSegName(buf, name: sectname)
+  writeSegName(buf, name: segname)
+  writeQword(buf, value: addr)
+  writeQword(buf, value: size)
+  writeDword(buf, value: offset)
+  writeDword(buf, value: alignVal)
+  writeDword(buf, value: 0)  // reloff
+  writeDword(buf, value: 0)  // nreloc
+  writeDword(buf, value: flags)
+  writeDword(buf, value: 0)  // reserved1
+  writeDword(buf, value: 0)  // reserved2
+  writeDword(buf, value: 0)  // reserved3
 end 'writeMachOSectionHeader'
 
 // --- Chained fixups builder ---
 
 function buildChainedFixups(dataSegmentFileOff MachineWord, gotSectionOffsetInSeg MachineWord) returns ByteArray
-    var cf = ByteArray{}
-    cf.reserve(256)
+  var cf = ByteArray{}
+  cf.reserve(256)
 
-    // Header (0x20 bytes)
-    let startsOffset = 0x20
-    let segCount = 4
-    let startsSize = 4 + segCount * 4
-    let dataSegStartsSize = 4 + 2 + 2 + 8 + 4 + 2 + 2
-    let dataSegStartsOffset = startsSize
+  // Header (0x20 bytes)
+  let startsOffset = 0x20
+  let segCount = 4
+  let startsSize = 4 + segCount * 4
+  let dataSegStartsSize = 4 + 2 + 2 + 8 + 4 + 2 + 2
+  let dataSegStartsOffset = startsSize
 
-    let importsOffset = alignUp(startsOffset + startsSize + dataSegStartsSize, alignment: 4)
+  let importsOffset = alignUp(startsOffset + startsSize + dataSegStartsSize, alignment: 4)
 
-    // Symbol pool: \0 + "_" + name + \0 for each import
-    // Slot 0: __exit, Slot 1: _write
-    let symbolsOffset = importsOffset + (MACHO_IMPORT_COUNT * 4)
+  // Symbol pool: \0 + "_" + name + \0 for each import
+  // Slot 0: __exit, Slot 1: _write
+  let symbolsOffset = importsOffset + (MACHO_IMPORT_COUNT * 4)
 
-    // Header fields
-    writeDword(cf, value: 0) // fixups_version
-    writeDword(cf, value: startsOffset)
-    writeDword(cf, value: importsOffset)
-    writeDword(cf, value: symbolsOffset)
-    writeDword(cf, value: MACHO_IMPORT_COUNT)
-    writeDword(cf, value: DYLD_CHAINED_IMPORT)
-    writeDword(cf, value: 0) // symbols_format
-    writeDword(cf, value: 0) // padding to 0x20
+  // Header fields
+  writeDword(cf, value: 0)  // fixups_version
+  writeDword(cf, value: startsOffset)
+  writeDword(cf, value: importsOffset)
+  writeDword(cf, value: symbolsOffset)
+  writeDword(cf, value: MACHO_IMPORT_COUNT)
+  writeDword(cf, value: DYLD_CHAINED_IMPORT)
+  writeDword(cf, value: 0)  // symbols_format
+  writeDword(cf, value: 0)  // padding to 0x20
 
-    // Starts section (at offset 0x20)
-    writeDword(cf, value: segCount)
-    writeDword(cf, value: 0) // seg 0 (PAGEZERO): no starts
-    writeDword(cf, value: 0) // seg 1 (TEXT): no starts
-    writeDword(cf, value: dataSegStartsOffset) // seg 2 (DATA): has starts
-    writeDword(cf, value: 0) // seg 3 (LINKEDIT): no starts
+  // Starts section (at offset 0x20)
+  writeDword(cf, value: segCount)
+  writeDword(cf, value: 0)  // seg 0 (PAGEZERO): no starts
+  writeDword(cf, value: 0)  // seg 1 (TEXT): no starts
+  writeDword(cf, value: dataSegStartsOffset)  // seg 2 (DATA): has starts
+  writeDword(cf, value: 0)  // seg 3 (LINKEDIT): no starts
 
-    // DATA segment starts
-    writeDword(cf, value: dataSegStartsSize)
-    writeWord(cf, value: MACHO_PAGE_SIZE)
-    writeWord(cf, value: DYLD_CHAINED_PTR_64)
-    writeQword(cf, value: dataSegmentFileOff)
-    writeDword(cf, value: 0) // max_valid_pointer
-    writeWord(cf, value: 1) // page_count
-    writeWord(cf, value: gotSectionOffsetInSeg) // page_start[0]
+  // DATA segment starts
+  writeDword(cf, value: dataSegStartsSize)
+  writeWord(cf, value: MACHO_PAGE_SIZE)
+  writeWord(cf, value: DYLD_CHAINED_PTR_64)
+  writeQword(cf, value: dataSegmentFileOff)
+  writeDword(cf, value: 0)  // max_valid_pointer
+  writeWord(cf, value: 1)  // page_count
+  writeWord(cf, value: gotSectionOffsetInSeg)  // page_start[0]
 
-    // Pad to imports offset
-    while cf.count() < importsOffset 'padToImports'
-        cf.push(0)
-    end 'padToImports'
+  // Pad to imports offset
+  while cf.count() < importsOffset 'padToImports'
+    cf.push(0)
+  end 'padToImports'
 
-    // Import entries (4 bytes each): lib_ordinal=1, weak=0, name_offset
-    // Symbol offsets: after the initial \0 byte
-    // _exit starts at offset 1 (6 bytes), _write starts at offset 1 + 6 = 7
-    let exitNameOff = 1
-    let writeNameOff = exitNameOff + 6
+  // Import entries (4 bytes each): lib_ordinal=1, weak=0, name_offset
+  // Symbol offsets: after the initial \0 byte
+  // _exit starts at offset 1 (6 bytes), _write starts at offset 1 + 6 = 7
+  let exitNameOff = 1
+  let writeNameOff = exitNameOff + 6
 
-    // Import 0: _exit
-    let import0 = 1 or (0 shl 8) or (exitNameOff shl 9)
-    writeDword(cf, value: import0)
-    // Import 1: _write
-    let import1 = 1 or (0 shl 8) or (writeNameOff shl 9)
-    writeDword(cf, value: import1)
+  // Import 0: _exit
+  let import0 = 1 or(0 shl 8) or(exitNameOff shl 9)
+  writeDword(cf, value: import0)
+  // Import 1: _write
+  let import1 = 1 or(0 shl 8) or(writeNameOff shl 9)
+  writeDword(cf, value: import1)
 
-    // Symbol pool
-    cf.push(0) // leading null
-    cf.append(b"_exit\x00")
-    cf.append(b"_write\x00")
+  // Symbol pool
+  cf.push(0)  // leading null
+  cf.append(b"_exit\x00")
+  cf.append(b"_write\x00")
 
-    // Align to 8
-    while cf.count() mod 8 != 0 'alignCf'
-        cf.push(0)
-    end 'alignCf'
+  // Align to 8
+  while cf.count() mod 8 != 0 'alignCf'
+    cf.push(0)
+  end 'alignCf'
 
-    return cf
+  return cf
 end 'buildChainedFixups'
 
 // --- GOT builder ---
 
 function buildGot() returns ByteArray
-    var got = ByteArray{}
-    got.reserve(16)
+  var got = ByteArray{}
+  got.reserve(16)
 
-    // Build chained fixup bind entries for 2 GOT slots
-    // Entry format: bit63=1 (bind), bits 51-62=next (stride in 8-byte units), bits 0-23=ordinal
-    // Entry 0: next=2 (points to entry 1, 16 bytes away / 8 = 2), ordinal=0
-    let entry0 = (1 shl 63) or (2 shl 51) or 0
-    writeQword(got, value: entry0)
-    // Entry 1: next=0 (last entry), ordinal=1
-    let entry1 = (1 shl 63) or (0 shl 51) or 1
-    writeQword(got, value: entry1)
+  // Build chained fixup bind entries for 2 GOT slots
+  // Entry format: bit63=1 (bind), bits 51-62=next (stride in 8-byte units), bits 0-23=ordinal
+  // Entry 0: next=2 (points to entry 1, 16 bytes away / 8 = 2), ordinal=0
+  let entry0 = (1 shl 63) or(2 shl 51) or 0
+  writeQword(got, value: entry0)
+  // Entry 1: next=0 (last entry), ordinal=1
+  let entry1 = (1 shl 63) or(0 shl 51) or 1
+  writeQword(got, value: entry1)
 
-    return got
+  return got
 end 'buildGot'
 
 // --- ADRP+LDR relocation patching for Mach-O ---
 
 function patchRelocationsMachO(code ByteArray, relocations RelocationArray, textSectionVMAddr MachineWord, gotSectionVMAddr MachineWord)
-    for reloc in relocations 'patch'
-        let gotEntryVA = gotSectionVMAddr + (reloc.slotIndex * 8)
-        let instrVA = textSectionVMAddr + reloc.codeOffset
+  for reloc in relocations 'patch'
+    let gotEntryVA = gotSectionVMAddr + (reloc.slotIndex * 8)
+    let instrVA = textSectionVMAddr + reloc.codeOffset
 
-        // ADRP: target page relative to instruction page
-        let instrPage = instrVA and not 0xFFF
-        let targetPage = gotEntryVA and not 0xFFF
-        let pageOff = targetPage - instrPage
-        let pageOffShifted = pageOff shr 12
-        let immlo = pageOffShifted and 0x3
-        let immhi = (pageOffShifted shr 2) and 0x7FFFF
-        let origAdrp = readDword(code, offset: reloc.codeOffset)
-        let rd = origAdrp and 0x1F
-        let patchedAdrp = (immlo shl 29) or 0x90000000 or (immhi shl 5) or rd
-        patchDword(code, offset: reloc.codeOffset, value: patchedAdrp)
+    // ADRP: target page relative to instruction page
+    let instrPage = instrVA and not 0xFFF
+    let targetPage = gotEntryVA and not 0xFFF
+    let pageOff = targetPage - instrPage
+    let pageOffShifted = pageOff shr 12
+    let immlo = pageOffShifted and 0x3
+    let immhi = (pageOffShifted shr 2) and 0x7FFFF
+    let origAdrp = readDword(code, offset: reloc.codeOffset)
+    let rd = origAdrp and 0x1F
+    let patchedAdrp = (immlo shl 29) or 0x90000000 or(immhi shl 5) or rd
+    patchDword(code, offset: reloc.codeOffset, value: patchedAdrp)
 
-        // LDR: page offset within the 4KB page, scaled by 8
-        let pageOffset = gotEntryVA and 0xFFF
-        let ldrOffset = reloc.codeOffset + 4
-        let origLdr = readDword(code, offset: ldrOffset)
-        let ldrImm = (pageOffset / 8) and 0xFFF
-        let patchedLdr = (origLdr and 0xFFC003FF) or (ldrImm shl 10)
-        patchDword(code, offset: ldrOffset, value: patchedLdr)
-    end 'patch'
+    // LDR: page offset within the 4KB page, scaled by 8
+    let pageOffset = gotEntryVA and 0xFFF
+    let ldrOffset = reloc.codeOffset + 4
+    let origLdr = readDword(code, offset: ldrOffset)
+    let ldrImm = (pageOffset / 8) and 0xFFF
+    let patchedLdr = (origLdr and 0xFFC003FF) or(ldrImm shl 10)
+    patchDword(code, offset: ldrOffset, value: patchedLdr)
+  end 'patch'
 end 'patchRelocationsMachO'
 
 // --- Code signature builder ---
 
 function buildCodeSignature(fileData ByteArray, codeLimit MachineWord, identifierStr String) returns ByteArray
-    let hashPageSize = 1 shl CS_PAGE_SIZE_LOG2
-    let nCodeSlots = (codeLimit + hashPageSize - 1) / hashPageSize
+  let hashPageSize = 1 shl CS_PAGE_SIZE_LOG2
+  let nCodeSlots = (codeLimit + hashPageSize - 1) / hashPageSize
 
-    // Compute identifier bytes
-    var identifierBytes = ByteArray{}
-    for ch in identifierStr 'chars'
-        let b = try ch.asciiValue() otherwise 0
-        identifierBytes.push(b)
-    end 'chars'
-    let identLen = identifierBytes.count() + 1
+  // Compute identifier bytes
+  var identifierBytes = ByteArray{}
+  for ch in identifierStr 'chars'
+    let b = try ch.asciiValue() otherwise 0
+    identifierBytes.push(b)
+  end 'chars'
+  let identLen = identifierBytes.count() + 1
 
-    // CodeDirectory layout
-    let cdHeaderSize = 88
-    let hashOffset = cdHeaderSize + identLen
-    let cdSize = hashOffset + nCodeSlots * CS_SHA256_LEN
+  // CodeDirectory layout
+  let cdHeaderSize = 88
+  let hashOffset = cdHeaderSize + identLen
+  let cdSize = hashOffset + nCodeSlots * CS_SHA256_LEN
 
-    // SuperBlob: header (12) + 1 BlobIndex (8) + CodeDirectory
-    let superBlobHeaderSize = 12 + 8
-    let codeSignatureSize = superBlobHeaderSize + cdSize
+  // SuperBlob: header (12) + 1 BlobIndex (8) + CodeDirectory
+  let superBlobHeaderSize = 12 + 8
+  let codeSignatureSize = superBlobHeaderSize + cdSize
 
-    var sig = ByteArray{}
-    sig.reserve(codeSignatureSize)
+  var sig = ByteArray{}
+  sig.reserve(codeSignatureSize)
 
-    // SuperBlob header (big-endian)
-    writeDwordBE(sig, value: CSMAGIC_EMBEDDED_SIGNATURE)
-    writeDwordBE(sig, value: codeSignatureSize)
-    writeDwordBE(sig, value: 1) // count = 1 blob
+  // SuperBlob header (big-endian)
+  writeDwordBE(sig, value: CSMAGIC_EMBEDDED_SIGNATURE)
+  writeDwordBE(sig, value: codeSignatureSize)
+  writeDwordBE(sig, value: 1)  // count = 1 blob
 
-    // BlobIndex[0]
-    writeDwordBE(sig, value: CSSLOT_CODEDIRECTORY)
-    writeDwordBE(sig, value: superBlobHeaderSize) // offset to CodeDirectory
+  // BlobIndex[0]
+  writeDwordBE(sig, value: CSSLOT_CODEDIRECTORY)
+  writeDwordBE(sig, value: superBlobHeaderSize)  // offset to CodeDirectory
 
-    // CodeDirectory (big-endian)
-    writeDwordBE(sig, value: CSMAGIC_CODEDIRECTORY)
-    writeDwordBE(sig, value: cdSize)
-    writeDwordBE(sig, value: 0x20400) // version
-    writeDwordBE(sig, value: CS_ADHOC or CS_LINKER_SIGNED) // flags
-    writeDwordBE(sig, value: hashOffset) // hashOffset
-    writeDwordBE(sig, value: cdHeaderSize) // identOffset
-    writeDwordBE(sig, value: 0) // nSpecialSlots
-    writeDwordBE(sig, value: nCodeSlots) // nCodeSlots
-    writeDwordBE(sig, value: codeLimit) // codeLimit
-    sig.push(CS_SHA256_LEN) // hashSize
-    sig.push(CS_HASHTYPE_SHA256) // hashType
-    sig.push(0) // platform
-    sig.push(CS_PAGE_SIZE_LOG2) // pageSize (log2)
-    writeDwordBE(sig, value: 0) // spare2
-    writeDwordBE(sig, value: 0) // scatterOffset
-    writeDwordBE(sig, value: 0) // teamOffset
-    writeDwordBE(sig, value: 0) // spare3
-    writeQwordBE(sig, value: 0) // codeLimit64
-    writeQwordBE(sig, value: 0) // execSegBase
-    writeQwordBE(sig, value: 0) // execSegLimit (filled below)
-    writeQwordBE(sig, value: 0x1) // execSegFlags (CS_EXECSEG_MAIN_BINARY)
+  // CodeDirectory (big-endian)
+  writeDwordBE(sig, value: CSMAGIC_CODEDIRECTORY)
+  writeDwordBE(sig, value: cdSize)
+  writeDwordBE(sig, value: 0x20400)  // version
+  writeDwordBE(sig, value: CS_ADHOC or CS_LINKER_SIGNED)  // flags
+  writeDwordBE(sig, value: hashOffset)  // hashOffset
+  writeDwordBE(sig, value: cdHeaderSize)  // identOffset
+  writeDwordBE(sig, value: 0)  // nSpecialSlots
+  writeDwordBE(sig, value: nCodeSlots)  // nCodeSlots
+  writeDwordBE(sig, value: codeLimit)  // codeLimit
+  sig.push(CS_SHA256_LEN)  // hashSize
+  sig.push(CS_HASHTYPE_SHA256)  // hashType
+  sig.push(0)  // platform
+  sig.push(CS_PAGE_SIZE_LOG2)  // pageSize (log2)
+  writeDwordBE(sig, value: 0)  // spare2
+  writeDwordBE(sig, value: 0)  // scatterOffset
+  writeDwordBE(sig, value: 0)  // teamOffset
+  writeDwordBE(sig, value: 0)  // spare3
+  writeQwordBE(sig, value: 0)  // codeLimit64
+  writeQwordBE(sig, value: 0)  // execSegBase
+  writeQwordBE(sig, value: 0)  // execSegLimit (filled below)
+  writeQwordBE(sig, value: 0x1)  // execSegFlags (CS_EXECSEG_MAIN_BINARY)
 
-    // Identifier (null-terminated)
-    sig.append(identifierBytes)
-    sig.push(0)
+  // Identifier (null-terminated)
+  sig.append(identifierBytes)
+  sig.push(0)
 
-    // Page hashes (SHA-256 of each 4096-byte page)
-    var slot = 0
-    while slot < nCodeSlots 'hashPages'
-        let pageStart = slot * hashPageSize
-        var pageEnd = pageStart + hashPageSize
-        if pageEnd > codeLimit 'clamp'
-            pageEnd = codeLimit
-        end 'clamp'
-        let pageLen = pageEnd - pageStart
+  // Page hashes (SHA-256 of each 4096-byte page)
+  var slot = 0
+  while slot < nCodeSlots 'hashPages'
+    let pageStart = slot * hashPageSize
+    var pageEnd = pageStart + hashPageSize
+    if pageEnd > codeLimit 'clamp'
+      pageEnd = codeLimit
+    end 'clamp'
+    let pageLen = pageEnd - pageStart
 
-        // Extract page data
-        var pageData = ByteArray{}
-        pageData.reserve(pageLen)
-        var pi = 0
-        while pi < pageLen 'copyPage'
-            let b = try fileData.get(pageStart + pi) otherwise 0
-            pageData.push(b)
-            pi = pi + 1
-        end 'copyPage'
+    // Extract page data
+    var pageData = ByteArray{}
+    pageData.reserve(pageLen)
+    var pi = 0
+    while pi < pageLen 'copyPage'
+      let b = try fileData.get(pageStart + pi) otherwise 0
+      pageData.push(b)
+      pi = pi + 1
+    end 'copyPage'
 
-        // Hash the page
-        let hash = sha256(pageData)
-        sig.append(hash)
+    // Hash the page
+    let hash = sha256(pageData)
+    sig.append(hash)
 
-        slot = slot + 1
-    end 'hashPages'
+    slot = slot + 1
+  end 'hashPages'
 
-    return sig
+  return sig
 end 'buildCodeSignature'
 
 // --- Main Mach-O writer ---
 
 export function writeMachO(outputPath FilePath, codeResult CodeResult, target Target)
-    logInfo(LogCategory.binary, message: "Writing Mach-O file: {outputPath} ({targetToString(target)})")
+  logInfo(LogCategory.binary, message: "Writing Mach-O file: {outputPath} ({targetToString(target)})")
 
-    var code = codeResult.code
-    let codeSize = code.count()
+  var code = codeResult.code
+  let codeSize = code.count()
 
-    // --- Compute layout ---
+  // --- Compute layout ---
 
-    // Load command sizes
-    let segCmdBase = 72
-    let sectionSize = 80
-    let textCmdSize = segCmdBase + sectionSize // 1 section: __text
-    let dataCmdSize = segCmdBase + sectionSize // 1 section: __got
-    let symtabCmdSize = 24
-    let dysymtabCmdSize = 80
-    let mainCmdSize = 24
-    let buildVersionCmdSize = 24
-    let codeSignatureCmdSize = 16
-    let chainedFixupsCmdSize = 16
-    let exportTrieCmdSize = 16
+  // Load command sizes
+  let segCmdBase = 72
+  let sectionSize = 80
+  let textCmdSize = segCmdBase + sectionSize  // 1 section: __text
+  let dataCmdSize = segCmdBase + sectionSize  // 1 section: __got
+  let symtabCmdSize = 24
+  let dysymtabCmdSize = 80
+  let mainCmdSize = 24
+  let buildVersionCmdSize = 24
+  let codeSignatureCmdSize = 16
+  let chainedFixupsCmdSize = 16
+  let exportTrieCmdSize = 16
 
-    // dylinker: "/usr/lib/dyld" = 13 chars + null = 14, cmd = 12 + 14 = 26, aligned to 8 = 32
-    let dylinkerCmdSize = 32
-    // dylib: "/usr/lib/libSystem.B.dylib" = 25 chars + null = 26, cmd = 24 + 26 = 50, aligned to 8 = 56
-    let dylibCmdSize = 56
+  // dylinker: "/usr/lib/dyld" = 13 chars + null = 14, cmd = 12 + 14 = 26, aligned to 8 = 32
+  let dylinkerCmdSize = 32
+  // dylib: "/usr/lib/libSystem.B.dylib" = 25 chars + null = 26, cmd = 24 + 26 = 50, aligned to 8 = 56
+  let dylibCmdSize = 56
 
-    let loadCommandsSize = segCmdBase + textCmdSize + dataCmdSize + segCmdBase + symtabCmdSize + dysymtabCmdSize + dylinkerCmdSize + mainCmdSize + dylibCmdSize + buildVersionCmdSize + chainedFixupsCmdSize + exportTrieCmdSize + codeSignatureCmdSize
-    let numCmds = 13
-    let headerSize = 32
+  let loadCommandsSize = segCmdBase + textCmdSize + dataCmdSize + segCmdBase + symtabCmdSize + dysymtabCmdSize + dylinkerCmdSize + mainCmdSize + dylibCmdSize + buildVersionCmdSize + chainedFixupsCmdSize + exportTrieCmdSize + codeSignatureCmdSize
+  let numCmds = 13
+  let headerSize = 32
 
-    let textSectionOffset = alignUp(headerSize + loadCommandsSize, alignment: 4)
-    let textSegmentFileSize = alignUp(textSectionOffset + codeSize, alignment: MACHO_PAGE_SIZE)
+  let textSectionOffset = alignUp(headerSize + loadCommandsSize, alignment: 4)
+  let textSegmentFileSize = alignUp(textSectionOffset + codeSize, alignment: MACHO_PAGE_SIZE)
 
-    // GOT
-    let got = buildGot()
-    let gotSize = got.count()
+  // GOT
+  let got = buildGot()
+  let gotSize = got.count()
 
-    // DATA segment
-    let dataSegmentFileOff = textSegmentFileSize
-    let dataSegmentVMAddr = MACHO_TEXT_VM_ADDR + textSegmentFileSize
-    let gotSectionOffset = 0
-    let gotSectionVMAddr = dataSegmentVMAddr + gotSectionOffset
-    let dataSegmentFileSize = alignUp(gotSize, alignment: MACHO_PAGE_SIZE)
+  // DATA segment
+  let dataSegmentFileOff = textSegmentFileSize
+  let dataSegmentVMAddr = MACHO_TEXT_VM_ADDR + textSegmentFileSize
+  let gotSectionOffset = 0
+  let gotSectionVMAddr = dataSegmentVMAddr + gotSectionOffset
+  let dataSegmentFileSize = alignUp(gotSize, alignment: MACHO_PAGE_SIZE)
 
-    // LINKEDIT segment
-    let linkeditFileOff = dataSegmentFileOff + dataSegmentFileSize
-    let linkeditVMAddr = dataSegmentVMAddr + dataSegmentFileSize
+  // LINKEDIT segment
+  let linkeditFileOff = dataSegmentFileOff + dataSegmentFileSize
+  let linkeditVMAddr = dataSegmentVMAddr + dataSegmentFileSize
 
-    // Build chained fixups data
-    let chainedFixupsData = buildChainedFixups(dataSegmentFileOff, gotSectionOffsetInSeg: gotSectionOffset)
+  // Build chained fixups data
+  let chainedFixupsData = buildChainedFixups(dataSegmentFileOff, gotSectionOffsetInSeg: gotSectionOffset)
 
-    // Exports trie (minimal empty trie)
-    var exportsTrieData = ByteArray{}
-    writeQword(exportsTrieData, value: 0)
+  // Exports trie (minimal empty trie)
+  var exportsTrieData = ByteArray{}
+  writeQword(exportsTrieData, value: 0)
 
-    // LINKEDIT content layout
-    let chainedFixupsOff = linkeditFileOff
-    let chainedFixupsSize = chainedFixupsData.count()
-    let exportsTrieOff = alignUp(chainedFixupsOff + chainedFixupsSize, alignment: 8)
-    let exportsTrieSize = exportsTrieData.count()
-    let strtabOff = alignUp(exportsTrieOff + exportsTrieSize, alignment: 4)
-    let strtabSize = 4
+  // LINKEDIT content layout
+  let chainedFixupsOff = linkeditFileOff
+  let chainedFixupsSize = chainedFixupsData.count()
+  let exportsTrieOff = alignUp(chainedFixupsOff + chainedFixupsSize, alignment: 8)
+  let exportsTrieSize = exportsTrieData.count()
+  let strtabOff = alignUp(exportsTrieOff + exportsTrieSize, alignment: 4)
+  let strtabSize = 4
 
-    // Code signature offset (aligned to 16)
-    let codeSignatureOff = alignUp(strtabOff + strtabSize, alignment: 16)
+  // Code signature offset (aligned to 16)
+  let codeSignatureOff = alignUp(strtabOff + strtabSize, alignment: 16)
 
-    // Pre-compute code signature size so we can compute LINKEDIT size upfront
-    let csHashPageSize = 1 shl CS_PAGE_SIZE_LOG2
-    let csNCodeSlots = (codeSignatureOff + csHashPageSize - 1) / csHashPageSize
-    let csIdentLen = 13 // strlen("maxon-output") + 1
-    let csCdSize = 88 + csIdentLen + csNCodeSlots * CS_SHA256_LEN
-    let codeSignatureSize = 20 + csCdSize
+  // Pre-compute code signature size so we can compute LINKEDIT size upfront
+  let csHashPageSize = 1 shl CS_PAGE_SIZE_LOG2
+  let csNCodeSlots = (codeSignatureOff + csHashPageSize - 1) / csHashPageSize
+  let csIdentLen = 13  // strlen("maxon-output") + 1
+  let csCdSize = 88 + csIdentLen + csNCodeSlots * CS_SHA256_LEN
+  let codeSignatureSize = 20 + csCdSize
 
-    // Now compute final LINKEDIT size
-    let linkeditEnd = codeSignatureOff + codeSignatureSize
-    let linkeditFileSize = alignUp(linkeditEnd - linkeditFileOff, alignment: MACHO_PAGE_SIZE)
+  // Now compute final LINKEDIT size
+  let linkeditEnd = codeSignatureOff + codeSignatureSize
+  let linkeditFileSize = alignUp(linkeditEnd - linkeditFileOff, alignment: MACHO_PAGE_SIZE)
 
-    // Patch ADRP+LDR relocations in code
-    let textSectionVMAddr = MACHO_TEXT_VM_ADDR + textSectionOffset
-    patchRelocationsMachO(code, relocations: codeResult.relocations, textSectionVMAddr: textSectionVMAddr, gotSectionVMAddr: gotSectionVMAddr)
+  // Patch ADRP+LDR relocations in code
+  let textSectionVMAddr = MACHO_TEXT_VM_ADDR + textSectionOffset
+  patchRelocationsMachO(code, relocations: codeResult.relocations, textSectionVMAddr: textSectionVMAddr, gotSectionVMAddr: gotSectionVMAddr)
 
-    let entryOff = textSectionOffset + codeResult.mainCallFixupOffset
-    let flags = MH_DYLDLINK or MH_TWOLEVEL or MH_PIE
+  let entryOff = textSectionOffset + codeResult.mainCallFixupOffset
+  let flags = MH_DYLDLINK or MH_TWOLEVEL or MH_PIE
 
-    // --- Build Mach-O buffer ---
-    var macho = ByteArray{}
-    macho.reserve(codeSignatureOff + 4096)
+  // --- Build Mach-O buffer ---
+  var macho = ByteArray{}
+  macho.reserve(codeSignatureOff + 4096)
 
-    // === Mach-O Header (32 bytes) ===
-    writeDword(macho, value: MH_MAGIC_64)
-    writeDword(macho, value: CPU_TYPE_ARM64)
-    writeDword(macho, value: CPU_SUBTYPE_ARM64_ALL)
-    writeDword(macho, value: MH_EXECUTE)
-    writeDword(macho, value: numCmds)
-    writeDword(macho, value: loadCommandsSize)
-    writeDword(macho, value: flags)
-    writeDword(macho, value: 0) // reserved
+  // === Mach-O Header (32 bytes) ===
+  writeDword(macho, value: MH_MAGIC_64)
+  writeDword(macho, value: CPU_TYPE_ARM64)
+  writeDword(macho, value: CPU_SUBTYPE_ARM64_ALL)
+  writeDword(macho, value: MH_EXECUTE)
+  writeDword(macho, value: numCmds)
+  writeDword(macho, value: loadCommandsSize)
+  writeDword(macho, value: flags)
+  writeDword(macho, value: 0)  // reserved
 
-    // === __PAGEZERO ===
-    writeSegmentCommand(macho, segname: "__PAGEZERO", vmaddr: 0, vmsize: MACHO_PAGEZERO_SIZE, fileoff: 0, filesize: 0, maxprot: 0, initprot: 0, nsects: 0)
+  // === __PAGEZERO ===
+  writeSegmentCommand(macho, segname: "__PAGEZERO", vmaddr: 0, vmsize: MACHO_PAGEZERO_SIZE, fileoff: 0, filesize: 0, maxprot: 0, initprot: 0, nsects: 0)
 
-    // === __TEXT ===
-    writeSegmentCommand(macho, segname: "__TEXT", vmaddr: MACHO_TEXT_VM_ADDR, vmsize: textSegmentFileSize, fileoff: 0, filesize: textSegmentFileSize, maxprot: VM_PROT_READ or VM_PROT_EXECUTE, initprot: VM_PROT_READ or VM_PROT_EXECUTE, nsects: 1)
-    writeMachOSectionHeader(macho, sectname: "__text", segname: "__TEXT", addr: textSectionVMAddr, size: codeSize, offset: textSectionOffset, alignVal: 2, flags: S_ATTR_PURE_INSTRUCTIONS or S_ATTR_SOME_INSTRUCTIONS or S_REGULAR)
+  // === __TEXT ===
+  writeSegmentCommand(macho, segname: "__TEXT", vmaddr: MACHO_TEXT_VM_ADDR, vmsize: textSegmentFileSize, fileoff: 0, filesize: textSegmentFileSize, maxprot: VM_PROT_READ or VM_PROT_EXECUTE, initprot: VM_PROT_READ or VM_PROT_EXECUTE, nsects: 1)
+  writeMachOSectionHeader(macho, sectname: "__text", segname: "__TEXT", addr: textSectionVMAddr, size: codeSize, offset: textSectionOffset, alignVal: 2, flags: S_ATTR_PURE_INSTRUCTIONS or S_ATTR_SOME_INSTRUCTIONS or S_REGULAR)
 
-    // === __DATA ===
-    writeSegmentCommand(macho, segname: "__DATA", vmaddr: dataSegmentVMAddr, vmsize: dataSegmentFileSize, fileoff: dataSegmentFileOff, filesize: dataSegmentFileSize, maxprot: VM_PROT_READ or VM_PROT_WRITE, initprot: VM_PROT_READ or VM_PROT_WRITE, nsects: 1)
-    writeMachOSectionHeader(macho, sectname: "__got", segname: "__DATA", addr: gotSectionVMAddr, size: gotSize, offset: dataSegmentFileOff + gotSectionOffset, alignVal: 3, flags: S_REGULAR)
+  // === __DATA ===
+  writeSegmentCommand(macho, segname: "__DATA", vmaddr: dataSegmentVMAddr, vmsize: dataSegmentFileSize, fileoff: dataSegmentFileOff, filesize: dataSegmentFileSize, maxprot: VM_PROT_READ or VM_PROT_WRITE, initprot: VM_PROT_READ or VM_PROT_WRITE, nsects: 1)
+  writeMachOSectionHeader(macho, sectname: "__got", segname: "__DATA", addr: gotSectionVMAddr, size: gotSize, offset: dataSegmentFileOff + gotSectionOffset, alignVal: 3, flags: S_REGULAR)
 
-    // === __LINKEDIT ===
-    writeSegmentCommand(macho, segname: "__LINKEDIT", vmaddr: linkeditVMAddr, vmsize: linkeditFileSize, fileoff: linkeditFileOff, filesize: linkeditFileSize, maxprot: VM_PROT_READ, initprot: VM_PROT_READ, nsects: 0)
+  // === __LINKEDIT ===
+  writeSegmentCommand(macho, segname: "__LINKEDIT", vmaddr: linkeditVMAddr, vmsize: linkeditFileSize, fileoff: linkeditFileOff, filesize: linkeditFileSize, maxprot: VM_PROT_READ, initprot: VM_PROT_READ, nsects: 0)
 
-    // === LC_SYMTAB ===
-    writeDword(macho, value: LC_SYMTAB)
-    writeDword(macho, value: symtabCmdSize)
-    writeDword(macho, value: strtabOff) // symoff (point at strtab, 0 symbols)
-    writeDword(macho, value: 0) // nsyms
-    writeDword(macho, value: strtabOff) // stroff
-    writeDword(macho, value: strtabSize) // strsize
+  // === LC_SYMTAB ===
+  writeDword(macho, value: LC_SYMTAB)
+  writeDword(macho, value: symtabCmdSize)
+  writeDword(macho, value: strtabOff)  // symoff (point at strtab, 0 symbols)
+  writeDword(macho, value: 0)  // nsyms
+  writeDword(macho, value: strtabOff)  // stroff
+  writeDword(macho, value: strtabSize)  // strsize
 
-    // === LC_DYSYMTAB ===
-    writeDword(macho, value: LC_DYSYMTAB)
-    writeDword(macho, value: dysymtabCmdSize)
-    writeZeros(macho, n: 72) // 18 * 4 = 72 bytes of zeros
+  // === LC_DYSYMTAB ===
+  writeDword(macho, value: LC_DYSYMTAB)
+  writeDword(macho, value: dysymtabCmdSize)
+  writeZeros(macho, n: 72)  // 18 * 4 = 72 bytes of zeros
 
-    // === LC_LOAD_DYLINKER ===
-    writeDword(macho, value: LC_LOAD_DYLINKER)
-    writeDword(macho, value: dylinkerCmdSize)
-    writeDword(macho, value: 12) // name offset within command
-    macho.append(b"/usr/lib/dyld\x00")
-    // Pad to dylinkerCmdSize (32 - 12 - 14 = 6 bytes padding)
-    let dylinkerPad = dylinkerCmdSize - 12 - 14
-    writeZeros(macho, n: dylinkerPad)
+  // === LC_LOAD_DYLINKER ===
+  writeDword(macho, value: LC_LOAD_DYLINKER)
+  writeDword(macho, value: dylinkerCmdSize)
+  writeDword(macho, value: 12)  // name offset within command
+  macho.append(b"/usr/lib/dyld\x00")
+  // Pad to dylinkerCmdSize (32 - 12 - 14 = 6 bytes padding)
+  let dylinkerPad = dylinkerCmdSize - 12 - 14
+  writeZeros(macho, n: dylinkerPad)
 
-    // === LC_MAIN ===
-    writeDword(macho, value: LC_MAIN)
-    writeDword(macho, value: mainCmdSize)
-    writeQword(macho, value: entryOff)
-    writeQword(macho, value: 0) // stacksize
+  // === LC_MAIN ===
+  writeDword(macho, value: LC_MAIN)
+  writeDword(macho, value: mainCmdSize)
+  writeQword(macho, value: entryOff)
+  writeQword(macho, value: 0)  // stacksize
 
-    // === LC_LOAD_DYLIB ===
-    writeDword(macho, value: LC_LOAD_DYLIB)
-    writeDword(macho, value: dylibCmdSize)
-    writeDword(macho, value: 24) // name offset within command
-    writeDword(macho, value: 0) // timestamp
-    writeDword(macho, value: 0) // current_version
-    writeDword(macho, value: 0) // compat_version
-    macho.append(b"/usr/lib/libSystem.B.dylib\x00")
-    // Pad to dylibCmdSize (56 - 24 - 27 = 5 bytes padding)
-    let dylibPad = dylibCmdSize - 24 - 27
-    writeZeros(macho, n: dylibPad)
+  // === LC_LOAD_DYLIB ===
+  writeDword(macho, value: LC_LOAD_DYLIB)
+  writeDword(macho, value: dylibCmdSize)
+  writeDword(macho, value: 24)  // name offset within command
+  writeDword(macho, value: 0)  // timestamp
+  writeDword(macho, value: 0)  // current_version
+  writeDword(macho, value: 0)  // compat_version
+  macho.append(b"/usr/lib/libSystem.B.dylib\x00")
+  // Pad to dylibCmdSize (56 - 24 - 27 = 5 bytes padding)
+  let dylibPad = dylibCmdSize - 24 - 27
+  writeZeros(macho, n: dylibPad)
 
-    // === LC_BUILD_VERSION ===
-    writeDword(macho, value: LC_BUILD_VERSION)
-    writeDword(macho, value: buildVersionCmdSize)
-    writeDword(macho, value: 1) // platform = MACOS
-    writeDword(macho, value: 0x000D0000) // minos = 13.0
-    writeDword(macho, value: 0) // sdk
-    writeDword(macho, value: 0) // ntools
+  // === LC_BUILD_VERSION ===
+  writeDword(macho, value: LC_BUILD_VERSION)
+  writeDword(macho, value: buildVersionCmdSize)
+  writeDword(macho, value: 1)  // platform = MACOS
+  writeDword(macho, value: 0x000D0000)  // minos = 13.0
+  writeDword(macho, value: 0)  // sdk
+  writeDword(macho, value: 0)  // ntools
 
-    // === LC_DYLD_CHAINED_FIXUPS ===
-    writeDword(macho, value: LC_DYLD_CHAINED_FIXUPS)
-    writeDword(macho, value: chainedFixupsCmdSize)
-    writeDword(macho, value: chainedFixupsOff)
-    writeDword(macho, value: chainedFixupsSize)
+  // === LC_DYLD_CHAINED_FIXUPS ===
+  writeDword(macho, value: LC_DYLD_CHAINED_FIXUPS)
+  writeDword(macho, value: chainedFixupsCmdSize)
+  writeDword(macho, value: chainedFixupsOff)
+  writeDword(macho, value: chainedFixupsSize)
 
-    // === LC_DYLD_EXPORTS_TRIE ===
-    writeDword(macho, value: LC_DYLD_EXPORTS_TRIE)
-    writeDword(macho, value: exportTrieCmdSize)
-    writeDword(macho, value: exportsTrieOff)
-    writeDword(macho, value: exportsTrieSize)
+  // === LC_DYLD_EXPORTS_TRIE ===
+  writeDword(macho, value: LC_DYLD_EXPORTS_TRIE)
+  writeDword(macho, value: exportTrieCmdSize)
+  writeDword(macho, value: exportsTrieOff)
+  writeDword(macho, value: exportsTrieSize)
 
-    // === LC_CODE_SIGNATURE ===
-    writeDword(macho, value: LC_CODE_SIGNATURE)
-    writeDword(macho, value: codeSignatureCmdSize)
-    writeDword(macho, value: codeSignatureOff)
-    writeDword(macho, value: codeSignatureSize)
+  // === LC_CODE_SIGNATURE ===
+  writeDword(macho, value: LC_CODE_SIGNATURE)
+  writeDword(macho, value: codeSignatureCmdSize)
+  writeDword(macho, value: codeSignatureOff)
+  writeDword(macho, value: codeSignatureSize)
 
-    // === Pad to __text ===
-    padTo(macho, size: textSectionOffset)
+  // === Pad to __text ===
+  padTo(macho, size: textSectionOffset)
 
-    // === __text section ===
-    macho.append(code)
+  // === __text section ===
+  macho.append(code)
 
-    // === Pad __TEXT segment to page boundary ===
-    padTo(macho, size: textSegmentFileSize)
+  // === Pad __TEXT segment to page boundary ===
+  padTo(macho, size: textSegmentFileSize)
 
-    // === __DATA segment: __got section ===
-    macho.append(got)
-    padTo(macho, size: dataSegmentFileOff + dataSegmentFileSize)
+  // === __DATA segment: __got section ===
+  macho.append(got)
+  padTo(macho, size: dataSegmentFileOff + dataSegmentFileSize)
 
-    // === __LINKEDIT content ===
-    // Chained fixups
-    macho.append(chainedFixupsData)
-    padTo(macho, size: exportsTrieOff)
+  // === __LINKEDIT content ===
+  // Chained fixups
+  macho.append(chainedFixupsData)
+  padTo(macho, size: exportsTrieOff)
 
-    // Exports trie
-    macho.append(exportsTrieData)
-    padTo(macho, size: strtabOff)
+  // Exports trie
+  macho.append(exportsTrieData)
+  padTo(macho, size: strtabOff)
 
-    // String table (4 zero bytes)
-    writeZeros(macho, n: strtabSize)
+  // String table (4 zero bytes)
+  writeZeros(macho, n: strtabSize)
 
-    // Pad to code signature offset
-    padTo(macho, size: codeSignatureOff)
+  // Pad to code signature offset
+  padTo(macho, size: codeSignatureOff)
 
-    // === Build code signature ===
-    let sig = buildCodeSignature(macho, codeLimit: codeSignatureOff, identifierStr: "maxon-output")
+  // === Build code signature ===
+  let sig = buildCodeSignature(macho, codeLimit: codeSignatureOff, identifierStr: "maxon-output")
 
-    // Append code signature
-    macho.append(sig)
+  // Append code signature
+  macho.append(sig)
 
-    // Pad to end of LINKEDIT
-    padTo(macho, size: linkeditFileOff + linkeditFileSize)
+  // Pad to end of LINKEDIT
+  padTo(macho, size: linkeditFileOff + linkeditFileSize)
 
-    // === Write to file ===
-    try File.writeBinary(outputPath, content: macho, mode: FilePermission.executable) otherwise 'writeErr'
-        logError(LogCategory.binary, message: "Failed to write Mach-O file: {outputPath}")
-    end 'writeErr'
+  // === Write to file ===
+  try File.writeBinary(outputPath, content: macho, mode: FilePermission.executable) otherwise 'writeErr'
+    logError(LogCategory.binary, message: "Failed to write Mach-O file: {outputPath}")
+  end 'writeErr'
 
-    logInfo(LogCategory.binary, message: "Mach-O write complete: {macho.count()} bytes")
+  logInfo(LogCategory.binary, message: "Mach-O write complete: {macho.count()} bytes")
 end 'writeMachO'

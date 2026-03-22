@@ -5,118 +5,118 @@
 // printInt is lowered to call __rt_printInt.
 
 export function lowerMaxHLToMid(module MlirModule, globalData GlobalDataTable, nextValueIdRef ValueIdRef) returns MlirModule
-    logInfo(LogCategory.mlir, message: "Lowering MaxHL to Mid dialects")
-    logTrace(LogCategory.mlir, message: "=== maxhl-to-mid")
-    var result = createMlirModule()
+  logInfo(LogCategory.mlir, message: "Lowering MaxHL to Mid dialects")
+  logTrace(LogCategory.mlir, message: "=== maxhl-to-mid")
+  var result = createMlirModule()
 
-    for srcFunc in module.functions 'eachFunc'
-        let funcName = String.from(srcFunc.name)
-        let skipFunc = isRuntimeFunction(funcName)
-        var dstFunc = createMlirFunction(srcFunc.name, returnType: srcFunc.returnType)
-        dstFunc.paramCount = srcFunc.paramCount
+  for srcFunc in module.functions 'eachFunc'
+    let funcName = String.from(srcFunc.name)
+    let skipFunc = isRuntimeFunction(funcName)
+    var dstFunc = createMlirFunction(srcFunc.name, returnType: srcFunc.returnType)
+    dstFunc.paramCount = srcFunc.paramCount
 
-        for srcBlock in srcFunc.region.blocks 'eachBlock'
-            var dstBlock = addBlock(dstFunc.region, label: srcBlock.label)
-            // Override the auto-assigned id to match source block id
-            dstBlock.id = srcBlock.id
+    for srcBlock in srcFunc.region.blocks 'eachBlock'
+      var dstBlock = addBlock(dstFunc.region, label: srcBlock.label)
+      // Override the auto-assigned id to match source block id
+      dstBlock.id = srcBlock.id
 
-            if not skipFunc 'logBlockCtx'
-                let blockLabel = String.from(srcBlock.label)
-                logTrace(LogCategory.mlir, message: "@{funcName} {blockLabel}:")
-            end 'logBlockCtx'
+      if not skipFunc 'logBlockCtx'
+        let blockLabel = String.from(srcBlock.label)
+        logTrace(LogCategory.mlir, message: "@{funcName} {blockLabel}:")
+      end 'logBlockCtx'
 
-            // Lower ops
-            for op in srcBlock.ops 'eachOp'
-                let opsBefore = dstBlock.ops.count()
-                lowerOp(op, dstBlock: dstBlock, globalData: globalData, nextValueIdRef: nextValueIdRef)
-                if not skipFunc 'logOp'
-                    let sourceStr = printOp(op, blocks: MlirBlockArray{})
-                    let opsAfter = dstBlock.ops.count()
-                    var targetStr = ""
-                    for k in opsBefore upto opsAfter 'eachNew'
-                        let newOp = try dstBlock.ops.get(k) otherwise 'skipOp'
-                            continue
-                        end 'skipOp'
-                        let newOpStr = printOp(newOp, blocks: MlirBlockArray{})
-                        if targetStr.isEmpty() 'first'
-                            targetStr = newOpStr
-                        end 'first' else 'append'
-                            targetStr = "{targetStr}, {newOpStr}"
-                        end 'append'
-                    end 'eachNew'
-                    logTrace(LogCategory.mlir, message: "  {sourceStr} -> {targetStr}")
-                end 'logOp'
-            end 'eachOp'
+      // Lower ops
+      for op in srcBlock.ops 'eachOp'
+        let opsBefore = dstBlock.ops.count()
+        lowerOp(op, dstBlock: dstBlock, globalData: globalData, nextValueIdRef: nextValueIdRef)
+        if not skipFunc 'logOp'
+          let sourceStr = printOp(op, blocks: MlirBlockArray{})
+          let opsAfter = dstBlock.ops.count()
+          var targetStr = ""
+          for k in opsBefore upto opsAfter 'eachNew'
+            let newOp = try dstBlock.ops.get(k) otherwise 'skipOp'
+              continue
+            end 'skipOp'
+            let newOpStr = printOp(newOp, blocks: MlirBlockArray{})
+            if targetStr.isEmpty() 'first'
+              targetStr = newOpStr
+            end 'first' else 'append'
+              targetStr = "{targetStr}, {newOpStr}"
+            end 'append'
+          end 'eachNew'
+          logTrace(LogCategory.mlir, message: "  {sourceStr} -> {targetStr}")
+        end 'logOp'
+      end 'eachOp'
 
-            // Lower terminator
-            if srcBlock.hasTerminator 'hasTerm'
-                let loweredTerm = lowerTerminator(srcBlock.terminator)
-                if not skipFunc 'logTerm'
-                    let sourceStr = printOp(srcBlock.terminator, blocks: srcFunc.region.blocks)
-                    let targetStr = printOp(loweredTerm, blocks: dstFunc.region.blocks)
-                    logTrace(LogCategory.mlir, message: "  {sourceStr} -> {targetStr}")
-                end 'logTerm'
-                dstBlock.terminator = loweredTerm
-                dstBlock.hasTerminator = true
-            end 'hasTerm'
-        end 'eachBlock'
+      // Lower terminator
+      if srcBlock.hasTerminator 'hasTerm'
+        let loweredTerm = lowerTerminator(srcBlock.terminator)
+        if not skipFunc 'logTerm'
+          let sourceStr = printOp(srcBlock.terminator, blocks: srcFunc.region.blocks)
+          let targetStr = printOp(loweredTerm, blocks: dstFunc.region.blocks)
+          logTrace(LogCategory.mlir, message: "  {sourceStr} -> {targetStr}")
+        end 'logTerm'
+        dstBlock.terminator = loweredTerm
+        dstBlock.hasTerminator = true
+      end 'hasTerm'
+    end 'eachBlock'
 
-        // Match block IDs: set nextBlockId from source
-        dstFunc.region.nextBlockId = srcFunc.region.nextBlockId
+    // Match block IDs: set nextBlockId from source
+    dstFunc.region.nextBlockId = srcFunc.region.nextBlockId
 
-        result.functions.push(dstFunc)
-    end 'eachFunc'
+    result.functions.push(dstFunc)
+  end 'eachFunc'
 
-    return result
+  return result
 end 'lowerMaxHLToMid'
 
 function lowerOp(op MlirOp, dstBlock MlirBlock, globalData GlobalDataTable, nextValueIdRef ValueIdRef)
-    match op 'dispatch'
-        maxhl(hlOp) then lowerMaxHLOp(hlOp, dstBlock: dstBlock, globalData: globalData, nextValueIdRef: nextValueIdRef)
-        arith to maxarm64 then dstBlock.ops.push(op)
-    end 'dispatch'
+  match op 'dispatch'
+    maxhl(hlOp) then lowerMaxHLOp(hlOp, dstBlock: dstBlock, globalData: globalData, nextValueIdRef: nextValueIdRef)
+    arith to maxarm64 then dstBlock.ops.push(op)
+  end 'dispatch'
 end 'lowerOp'
 
 function lowerCmpOp(dstBlock MlirBlock, isFloat bool, floatOp ArithBinaryOp, intOp ArithBinaryOp)
-    if isFloat 'f'
-        dstBlock.ops.push(MlirOp.arith(ArithOp.binary(floatOp)))
-    end 'f' else 'i'
-        dstBlock.ops.push(MlirOp.arith(ArithOp.binary(intOp)))
-    end 'i'
+  if isFloat 'f'
+    dstBlock.ops.push(MlirOp.arith(ArithOp.binary(floatOp)))
+  end 'f' else 'i'
+    dstBlock.ops.push(MlirOp.arith(ArithOp.binary(intOp)))
+  end 'i'
 end 'lowerCmpOp'
 
 function lowerMaxHLOp(hlOp MaxHLOp, dstBlock MlirBlock, globalData GlobalDataTable, nextValueIdRef ValueIdRef)
-    match hlOp 'lower'
-        literal(resultId, value) then dstBlock.ops.push(MlirOp.arith(ArithOp.const(ArithConst.constI64(resultId, value))))
-        floatLiteral(resultId, rawBits) then dstBlock.ops.push(MlirOp.arith(ArithOp.const(ArithConst.constF64(resultId, rawBits))))
-        varDecl(slotId, valueId) then dstBlock.ops.push(MlirOp.memref(MemRefOp.storeSlot(slotId, valueId)))
-        varLoad(resultId, slotId) then dstBlock.ops.push(MlirOp.memref(MemRefOp.loadSlot(resultId, slotId)))
-        varStore(slotId, valueId) then dstBlock.ops.push(MlirOp.memref(MemRefOp.storeSlot(slotId, valueId)))
-        add(resultId, leftId, rightId) then dstBlock.ops.push(MlirOp.arith(ArithOp.binary(ArithBinaryOp{opcode: ArithBinaryOpcode.addI64, resultId: resultId, leftId: leftId, rightId: rightId})))
-        sub(resultId, leftId, rightId) then dstBlock.ops.push(MlirOp.arith(ArithOp.binary(ArithBinaryOp{opcode: ArithBinaryOpcode.subI64, resultId: resultId, leftId: leftId, rightId: rightId})))
-        mul(resultId, leftId, rightId) then dstBlock.ops.push(MlirOp.arith(ArithOp.binary(ArithBinaryOp{opcode: ArithBinaryOpcode.mulI64, resultId: resultId, leftId: leftId, rightId: rightId})))
-        div(resultId, leftId, rightId) then dstBlock.ops.push(MlirOp.arith(ArithOp.binary(ArithBinaryOp{opcode: ArithBinaryOpcode.divI64, resultId: resultId, leftId: leftId, rightId: rightId})))
-        mod(resultId, leftId, rightId) then dstBlock.ops.push(MlirOp.arith(ArithOp.binary(ArithBinaryOp{opcode: ArithBinaryOpcode.remI64, resultId: resultId, leftId: leftId, rightId: rightId})))
-        neg(resultId, operandId) then dstBlock.ops.push(MlirOp.arith(ArithOp.unary(ArithUnaryOp.negI64(resultId, operandId))))
-        bitNot(resultId, operandId) then dstBlock.ops.push(MlirOp.arith(ArithOp.unary(ArithUnaryOp.bitNotI64(resultId, operandId))))
-        bitAnd(resultId, leftId, rightId) then dstBlock.ops.push(MlirOp.arith(ArithOp.binary(ArithBinaryOp{opcode: ArithBinaryOpcode.andI64, resultId: resultId, leftId: leftId, rightId: rightId})))
-        bitOr(resultId, leftId, rightId) then dstBlock.ops.push(MlirOp.arith(ArithOp.binary(ArithBinaryOp{opcode: ArithBinaryOpcode.orI64, resultId: resultId, leftId: leftId, rightId: rightId})))
-        bitXor(resultId, leftId, rightId) then dstBlock.ops.push(MlirOp.arith(ArithOp.binary(ArithBinaryOp{opcode: ArithBinaryOpcode.xorI64, resultId: resultId, leftId: leftId, rightId: rightId})))
-        shl(resultId, leftId, rightId) then dstBlock.ops.push(MlirOp.arith(ArithOp.binary(ArithBinaryOp{opcode: ArithBinaryOpcode.shlI64, resultId: resultId, leftId: leftId, rightId: rightId})))
-        shr(resultId, leftId, rightId) then dstBlock.ops.push(MlirOp.arith(ArithOp.binary(ArithBinaryOp{opcode: ArithBinaryOpcode.shrI64, resultId: resultId, leftId: leftId, rightId: rightId})))
-        cmpEq(resultId, leftId, rightId, isFloat) then lowerCmpOp(dstBlock, isFloat: isFloat, floatOp: ArithBinaryOp{opcode: ArithBinaryOpcode.cmpF64Eq, resultId: resultId, leftId: leftId, rightId: rightId}, intOp: ArithBinaryOp{opcode: ArithBinaryOpcode.cmpI64Eq, resultId: resultId, leftId: leftId, rightId: rightId})
-        cmpNe(resultId, leftId, rightId, isFloat) then lowerCmpOp(dstBlock, isFloat: isFloat, floatOp: ArithBinaryOp{opcode: ArithBinaryOpcode.cmpF64Ne, resultId: resultId, leftId: leftId, rightId: rightId}, intOp: ArithBinaryOp{opcode: ArithBinaryOpcode.cmpI64Ne, resultId: resultId, leftId: leftId, rightId: rightId})
-        cmpLt(resultId, leftId, rightId, isFloat) then lowerCmpOp(dstBlock, isFloat: isFloat, floatOp: ArithBinaryOp{opcode: ArithBinaryOpcode.cmpF64Lt, resultId: resultId, leftId: leftId, rightId: rightId}, intOp: ArithBinaryOp{opcode: ArithBinaryOpcode.cmpI64Lt, resultId: resultId, leftId: leftId, rightId: rightId})
-        cmpLe(resultId, leftId, rightId, isFloat) then lowerCmpOp(dstBlock, isFloat: isFloat, floatOp: ArithBinaryOp{opcode: ArithBinaryOpcode.cmpF64Le, resultId: resultId, leftId: leftId, rightId: rightId}, intOp: ArithBinaryOp{opcode: ArithBinaryOpcode.cmpI64Le, resultId: resultId, leftId: leftId, rightId: rightId})
-        cmpGt(resultId, leftId, rightId, isFloat) then lowerCmpOp(dstBlock, isFloat: isFloat, floatOp: ArithBinaryOp{opcode: ArithBinaryOpcode.cmpF64Gt, resultId: resultId, leftId: leftId, rightId: rightId}, intOp: ArithBinaryOp{opcode: ArithBinaryOpcode.cmpI64Gt, resultId: resultId, leftId: leftId, rightId: rightId})
-        cmpGe(resultId, leftId, rightId, isFloat) then lowerCmpOp(dstBlock, isFloat: isFloat, floatOp: ArithBinaryOp{opcode: ArithBinaryOpcode.cmpF64Ge, resultId: resultId, leftId: leftId, rightId: rightId}, intOp: ArithBinaryOp{opcode: ArithBinaryOpcode.cmpI64Ge, resultId: resultId, leftId: leftId, rightId: rightId})
-        condBr(condId, thenTarget, elseTarget) then dstBlock.ops.push(MlirOp.cf(CfOp.condBr(condId, thenTarget, elseTarget)))
-        br(target) then dstBlock.ops.push(MlirOp.cf(CfOp.br(target)))
-        call(resultId, callee, argIds) then dstBlock.ops.push(MlirOp.func(FuncOp.call(resultId, callee, argIds)))
-        ret(retValId) then dstBlock.ops.push(MlirOp.func(FuncOp.ret(retValId)))
-        printLiteral(data) then lowerPrintLiteral(data, dstBlock: dstBlock, globalData: globalData, nextValueIdRef: nextValueIdRef)
-        printInt(valueId) then lowerPrintIntToCall(valueId, dstBlock: dstBlock, nextValueIdRef: nextValueIdRef)
-    end 'lower'
+  match hlOp 'lower'
+    literal(resultId, value) then dstBlock.ops.push(MlirOp.arith(ArithOp.const(ArithConst.constI64(resultId, value))))
+    floatLiteral(resultId, rawBits) then dstBlock.ops.push(MlirOp.arith(ArithOp.const(ArithConst.constF64(resultId, rawBits))))
+    varDecl(slotId, valueId) then dstBlock.ops.push(MlirOp.memref(MemRefOp.storeSlot(slotId, valueId)))
+    varLoad(resultId, slotId) then dstBlock.ops.push(MlirOp.memref(MemRefOp.loadSlot(resultId, slotId)))
+    varStore(slotId, valueId) then dstBlock.ops.push(MlirOp.memref(MemRefOp.storeSlot(slotId, valueId)))
+    add(resultId, leftId, rightId) then dstBlock.ops.push(MlirOp.arith(ArithOp.binary(ArithBinaryOp{opcode: ArithBinaryOpcode.addI64, resultId: resultId, leftId: leftId, rightId: rightId})))
+    sub(resultId, leftId, rightId) then dstBlock.ops.push(MlirOp.arith(ArithOp.binary(ArithBinaryOp{opcode: ArithBinaryOpcode.subI64, resultId: resultId, leftId: leftId, rightId: rightId})))
+    mul(resultId, leftId, rightId) then dstBlock.ops.push(MlirOp.arith(ArithOp.binary(ArithBinaryOp{opcode: ArithBinaryOpcode.mulI64, resultId: resultId, leftId: leftId, rightId: rightId})))
+    div(resultId, leftId, rightId) then dstBlock.ops.push(MlirOp.arith(ArithOp.binary(ArithBinaryOp{opcode: ArithBinaryOpcode.divI64, resultId: resultId, leftId: leftId, rightId: rightId})))
+    mod(resultId, leftId, rightId) then dstBlock.ops.push(MlirOp.arith(ArithOp.binary(ArithBinaryOp{opcode: ArithBinaryOpcode.remI64, resultId: resultId, leftId: leftId, rightId: rightId})))
+    neg(resultId, operandId) then dstBlock.ops.push(MlirOp.arith(ArithOp.unary(ArithUnaryOp.negI64(resultId, operandId))))
+    bitNot(resultId, operandId) then dstBlock.ops.push(MlirOp.arith(ArithOp.unary(ArithUnaryOp.bitNotI64(resultId, operandId))))
+    bitAnd(resultId, leftId, rightId) then dstBlock.ops.push(MlirOp.arith(ArithOp.binary(ArithBinaryOp{opcode: ArithBinaryOpcode.andI64, resultId: resultId, leftId: leftId, rightId: rightId})))
+    bitOr(resultId, leftId, rightId) then dstBlock.ops.push(MlirOp.arith(ArithOp.binary(ArithBinaryOp{opcode: ArithBinaryOpcode.orI64, resultId: resultId, leftId: leftId, rightId: rightId})))
+    bitXor(resultId, leftId, rightId) then dstBlock.ops.push(MlirOp.arith(ArithOp.binary(ArithBinaryOp{opcode: ArithBinaryOpcode.xorI64, resultId: resultId, leftId: leftId, rightId: rightId})))
+    shl(resultId, leftId, rightId) then dstBlock.ops.push(MlirOp.arith(ArithOp.binary(ArithBinaryOp{opcode: ArithBinaryOpcode.shlI64, resultId: resultId, leftId: leftId, rightId: rightId})))
+    shr(resultId, leftId, rightId) then dstBlock.ops.push(MlirOp.arith(ArithOp.binary(ArithBinaryOp{opcode: ArithBinaryOpcode.shrI64, resultId: resultId, leftId: leftId, rightId: rightId})))
+    cmpEq(resultId, leftId, rightId, isFloat) then lowerCmpOp(dstBlock, isFloat: isFloat, floatOp: ArithBinaryOp{opcode: ArithBinaryOpcode.cmpF64Eq, resultId: resultId, leftId: leftId, rightId: rightId}, intOp: ArithBinaryOp{opcode: ArithBinaryOpcode.cmpI64Eq, resultId: resultId, leftId: leftId, rightId: rightId})
+    cmpNe(resultId, leftId, rightId, isFloat) then lowerCmpOp(dstBlock, isFloat: isFloat, floatOp: ArithBinaryOp{opcode: ArithBinaryOpcode.cmpF64Ne, resultId: resultId, leftId: leftId, rightId: rightId}, intOp: ArithBinaryOp{opcode: ArithBinaryOpcode.cmpI64Ne, resultId: resultId, leftId: leftId, rightId: rightId})
+    cmpLt(resultId, leftId, rightId, isFloat) then lowerCmpOp(dstBlock, isFloat: isFloat, floatOp: ArithBinaryOp{opcode: ArithBinaryOpcode.cmpF64Lt, resultId: resultId, leftId: leftId, rightId: rightId}, intOp: ArithBinaryOp{opcode: ArithBinaryOpcode.cmpI64Lt, resultId: resultId, leftId: leftId, rightId: rightId})
+    cmpLe(resultId, leftId, rightId, isFloat) then lowerCmpOp(dstBlock, isFloat: isFloat, floatOp: ArithBinaryOp{opcode: ArithBinaryOpcode.cmpF64Le, resultId: resultId, leftId: leftId, rightId: rightId}, intOp: ArithBinaryOp{opcode: ArithBinaryOpcode.cmpI64Le, resultId: resultId, leftId: leftId, rightId: rightId})
+    cmpGt(resultId, leftId, rightId, isFloat) then lowerCmpOp(dstBlock, isFloat: isFloat, floatOp: ArithBinaryOp{opcode: ArithBinaryOpcode.cmpF64Gt, resultId: resultId, leftId: leftId, rightId: rightId}, intOp: ArithBinaryOp{opcode: ArithBinaryOpcode.cmpI64Gt, resultId: resultId, leftId: leftId, rightId: rightId})
+    cmpGe(resultId, leftId, rightId, isFloat) then lowerCmpOp(dstBlock, isFloat: isFloat, floatOp: ArithBinaryOp{opcode: ArithBinaryOpcode.cmpF64Ge, resultId: resultId, leftId: leftId, rightId: rightId}, intOp: ArithBinaryOp{opcode: ArithBinaryOpcode.cmpI64Ge, resultId: resultId, leftId: leftId, rightId: rightId})
+    condBr(condId, thenTarget, elseTarget) then dstBlock.ops.push(MlirOp.cf(CfOp.condBr(condId, thenTarget, elseTarget)))
+    br(target) then dstBlock.ops.push(MlirOp.cf(CfOp.br(target)))
+    call(resultId, callee, argIds) then dstBlock.ops.push(MlirOp.func(FuncOp.call(resultId, callee, argIds)))
+    ret(retValId) then dstBlock.ops.push(MlirOp.func(FuncOp.ret(retValId)))
+    printLiteral(data) then lowerPrintLiteral(data, dstBlock: dstBlock, globalData: globalData, nextValueIdRef: nextValueIdRef)
+    printInt(valueId) then lowerPrintIntToCall(valueId, dstBlock: dstBlock, nextValueIdRef: nextValueIdRef)
+  end 'lower'
 end 'lowerMaxHLOp'
 
 // Lower printLiteral(data) to:
@@ -124,53 +124,53 @@ end 'lowerMaxHLOp'
 //   constI64(lenId, len)
 //   call(_, "write_stdout", [addrId, lenId])
 function lowerPrintLiteral(data ByteArray, dstBlock MlirBlock, globalData GlobalDataTable, nextValueIdRef ValueIdRef)
-    let dataLen = data.count()
-    if dataLen == 0 'empty'
-        return
-    end 'empty'
+  let dataLen = data.count()
+  if dataLen == 0 'empty'
+    return
+  end 'empty'
 
-    // Register data in global table
-    let name = addGlobalData(globalData, data: data)
+  // Register data in global table
+  let name = addGlobalData(globalData, data: data)
 
-    // globalAddr -> addrId
-    let addrId = allocValueId(nextValueIdRef)
-    dstBlock.ops.push(MlirOp.sys(SysOp.globalAddr(addrId, name)))
+  // globalAddr -> addrId
+  let addrId = allocValueId(nextValueIdRef)
+  dstBlock.ops.push(MlirOp.sys(SysOp.globalAddr(addrId, name)))
 
-    // constI64 -> lenId
-    let lenId = allocValueId(nextValueIdRef)
-    dstBlock.ops.push(MlirOp.arith(ArithOp.const(ArithConst.constI64(lenId, dataLen))))
+  // constI64 -> lenId
+  let lenId = allocValueId(nextValueIdRef)
+  dstBlock.ops.push(MlirOp.arith(ArithOp.const(ArithConst.constI64(lenId, dataLen))))
 
-    // call write_stdout(addrId, lenId)
-    let callResultId = allocValueId(nextValueIdRef)
-    var argIds = ValueIdArray{}
-    argIds.push(addrId)
-    argIds.push(lenId)
-    dstBlock.ops.push(MlirOp.func(FuncOp.call(callResultId, b"write_stdout", argIds)))
+  // call write_stdout(addrId, lenId)
+  let callResultId = allocValueId(nextValueIdRef)
+  var argIds = ValueIdArray{}
+  argIds.push(addrId)
+  argIds.push(lenId)
+  dstBlock.ops.push(MlirOp.func(FuncOp.call(callResultId, b"write_stdout", argIds)))
 end 'lowerPrintLiteral'
 
 // Lower printInt(valueId) to:
 //   call(__rt_printInt, [valueId])
 function lowerPrintIntToCall(valueId ValueId, dstBlock MlirBlock, nextValueIdRef ValueIdRef)
-    let callResultId = allocValueId(nextValueIdRef)
-    var argIds = ValueIdArray{}
-    argIds.push(valueId)
-    dstBlock.ops.push(MlirOp.func(FuncOp.call(callResultId, b"__rt_printInt", argIds)))
+  let callResultId = allocValueId(nextValueIdRef)
+  var argIds = ValueIdArray{}
+  argIds.push(valueId)
+  dstBlock.ops.push(MlirOp.func(FuncOp.call(callResultId, b"__rt_printInt", argIds)))
 end 'lowerPrintIntToCall'
 
 function lowerTerminator(op MlirOp) returns MlirOp
-    return match op 'dispatch'
-        maxhl(hlOp) gives lowerMaxHLTerminator(hlOp)
-        arith to maxarm64 gives op
-    end 'dispatch'
+  return match op 'dispatch'
+    maxhl(hlOp) gives lowerMaxHLTerminator(hlOp)
+    arith to maxarm64 gives op
+  end 'dispatch'
 end 'lowerTerminator'
 
 function lowerMaxHLTerminator(hlOp MaxHLOp) returns MlirOp
-    return match hlOp 'lower'
-        condBr(condId, thenTarget, elseTarget) gives MlirOp.cf(CfOp.condBr(condId, thenTarget, elseTarget))
-        br(target) gives MlirOp.cf(CfOp.br(target))
-        ret(retValId) gives MlirOp.func(FuncOp.ret(retValId))
-        literal to cmpGe gives MlirOp.maxhl(hlOp)
-        call gives MlirOp.maxhl(hlOp)
-        printLiteral to printInt gives MlirOp.maxhl(hlOp)
-    end 'lower'
+  return match hlOp 'lower'
+    condBr(condId, thenTarget, elseTarget) gives MlirOp.cf(CfOp.condBr(condId, thenTarget, elseTarget))
+    br(target) gives MlirOp.cf(CfOp.br(target))
+    ret(retValId) gives MlirOp.func(FuncOp.ret(retValId))
+    literal to cmpGe gives MlirOp.maxhl(hlOp)
+    call gives MlirOp.maxhl(hlOp)
+    printLiteral to printInt gives MlirOp.maxhl(hlOp)
+  end 'lower'
 end 'lowerMaxHLTerminator'

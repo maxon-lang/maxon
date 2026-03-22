@@ -7,76 +7,75 @@ export typealias CodeOffset = int(0 to u64.max)
 export typealias StackSize = int(0 to u64.max)
 
 export function writeWord(buf ByteArray, value MachineWord)
-    buf.push(value and 0xFF)
-    buf.push((value shr 8) and 0xFF)
+  buf.push(value and 0xFF)
+  buf.push((value shr 8) and 0xFF)
 end 'writeWord'
 
 export function writeDword(buf ByteArray, value MachineWord)
-    buf.push(value and 0xFF)
-    buf.push((value shr 8) and 0xFF)
-    buf.push((value shr 16) and 0xFF)
-    buf.push((value shr 24) and 0xFF)
+  buf.push(value and 0xFF)
+  buf.push((value shr 8) and 0xFF)
+  buf.push((value shr 16) and 0xFF)
+  buf.push((value shr 24) and 0xFF)
 end 'writeDword'
 
 export function writeQword(buf ByteArray, value MachineWord)
-    buf.push(value and 0xFF)
-    buf.push((value shr 8) and 0xFF)
-    buf.push((value shr 16) and 0xFF)
-    buf.push((value shr 24) and 0xFF)
-    buf.push((value shr 32) and 0xFF)
-    buf.push((value shr 40) and 0xFF)
-    buf.push((value shr 48) and 0xFF)
-    buf.push((value shr 56) and 0xFF)
+  buf.push(value and 0xFF)
+  buf.push((value shr 8) and 0xFF)
+  buf.push((value shr 16) and 0xFF)
+  buf.push((value shr 24) and 0xFF)
+  buf.push((value shr 32) and 0xFF)
+  buf.push((value shr 40) and 0xFF)
+  buf.push((value shr 48) and 0xFF)
+  buf.push((value shr 56) and 0xFF)
 end 'writeQword'
 
 export function writeZeros(buf ByteArray, n ByteCount)
-    for _ in 0 upto n 'zeros'
-        buf.push(0)
-    end 'zeros'
+  for _ in 0 upto n 'zeros'
+    buf.push(0)
+  end 'zeros'
 end 'writeZeros'
 
 export function writeAscii(buf ByteArray, text String)
-    for ch in text 'chars'
-        let b = try ch.asciiValue() otherwise 0
-        buf.push(b)
-    end 'chars'
-    buf.push(0)
+  for ch in text 'chars'
+    let b = try ch.asciiValue() otherwise 0
+    buf.push(b)
+  end 'chars'
+  buf.push(0)
 end 'writeAscii'
 
 export function padTo(buf ByteArray, size ByteCount)
-    while buf.count() < size 'pad'
-        buf.push(0)
-    end 'pad'
+  while buf.count() < size 'pad'
+    buf.push(0)
+  end 'pad'
 end 'padTo'
 
 export function readDword(buf ByteArray, offset ByteOffset) returns MachineWord
-    let b0 = try buf.get(offset) otherwise 0
-    let b1 = try buf.get(offset + 1) otherwise 0
-    let b2 = try buf.get(offset + 2) otherwise 0
-    let b3 = try buf.get(offset + 3) otherwise 0
-    return b0 or (b1 shl 8) or (b2 shl 16) or (b3 shl 24)
+  let b0 = try buf.get(offset) otherwise 0
+  let b1 = try buf.get(offset + 1) otherwise 0
+  let b2 = try buf.get(offset + 2) otherwise 0
+  let b3 = try buf.get(offset + 3) otherwise 0
+  return b0 or(b1 shl 8) or(b2 shl 16) or(b3 shl 24)
 end 'readDword'
 
 export function patchDword(buf ByteArray, offset ByteOffset, value MachineWord)
-    buf.set(offset, value: value and 0xFF)
-    buf.set(offset + 1, value: (value shr 8) and 0xFF)
-    buf.set(offset + 2, value: (value shr 16) and 0xFF)
-    buf.set(offset + 3, value: (value shr 24) and 0xFF)
+  buf.set(offset, value: value and 0xFF)
+  buf.set(offset + 1, value: (value shr 8) and 0xFF)
+  buf.set(offset + 2, value: (value shr 16) and 0xFF)
+  buf.set(offset + 3, value: (value shr 24) and 0xFF)
 end 'patchDword'
 
 export function writeDwordBE(buf ByteArray, value MachineWord)
-    buf.push((value shr 24) and 0xFF)
-    buf.push((value shr 16) and 0xFF)
-    buf.push((value shr 8) and 0xFF)
-    buf.push(value and 0xFF)
+  buf.push((value shr 24) and 0xFF)
+  buf.push((value shr 16) and 0xFF)
+  buf.push((value shr 8) and 0xFF)
+  buf.push(value and 0xFF)
 end 'writeDwordBE'
 
 export function writeQwordBE(buf ByteArray, value MachineWord)
-    writeDwordBE(buf, value: (value shr 32) and 0xFFFFFFFF)
-    writeDwordBE(buf, value: value and 0xFFFFFFFF)
+  writeDwordBE(buf, value: (value shr 32) and 0xFFFFFFFF)
+  writeDwordBE(buf, value: value and 0xFFFFFFFF)
 end 'writeQwordBE'
 
 export function alignUp(value ByteCount, alignment ByteCount) returns ByteCount
-    return (value + alignment - 1) and not (alignment - 1)
+  return(value + alignment - 1) and not(alignment - 1)
 end 'alignUp'
-

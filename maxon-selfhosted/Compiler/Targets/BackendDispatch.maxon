@@ -5,80 +5,80 @@
 // The runtime is loaded from runtime.mid (text-based MLIR) by MidLevelParser.
 
 function loadRuntimeFunctions() returns MlirFunctionArray
-    let runtimePath = findRuntimePath()
-    if runtimePath.isEmpty() 'noRuntime'
-        panic("Cannot find runtime.mid -- searched up from current directory")
-    end 'noRuntime'
+  let runtimePath = findRuntimePath()
+  if runtimePath.isEmpty() 'noRuntime'
+    panic("Cannot find runtime.mid -- searched up from current directory")
+  end 'noRuntime'
 
-    let source = try File.readBinary(runtimePath) otherwise 'readErr'
-        panic("Failed to read runtime.mid at {runtimePath}")
-    end 'readErr'
+  let source = try File.readBinary(runtimePath) otherwise 'readErr'
+    panic("Failed to read runtime.mid at {runtimePath}")
+  end 'readErr'
 
-    return parseMidModule(source, startValueId: 0)
+  return parseMidModule(source, startValueId: 0)
 end 'loadRuntimeFunctions'
 
 function findRuntimePath() returns FilePath
-    var dir = Directory.currentPath()
-    for _ in 0 upto 10 'search'
-        // Look for maxon-selfhosted/Compiler/Runtime/runtime.mid
-        let candidate = dir.join("maxon-selfhosted").join("Compiler").join("Runtime").join("runtime.mid")
-        if candidate.fileExists() 'found'
-            return candidate
-        end 'found'
-        // Also check Compiler/Runtime/runtime.mid (if we're inside maxon-selfhosted)
-        let candidate2 = dir.join("Compiler").join("Runtime").join("runtime.mid")
-        if candidate2.fileExists() 'found2'
-            return candidate2
-        end 'found2'
-        // Also check Runtime/runtime.mid (if we're inside Compiler)
-        let candidate3 = dir.join("Runtime").join("runtime.mid")
-        if candidate3.fileExists() 'found3'
-            return candidate3
-        end 'found3'
-        // Also check runtime.mid directly
-        let candidate4 = dir.join("runtime.mid")
-        if candidate4.fileExists() 'found4'
-            return candidate4
-        end 'found4'
-        let parentDir = dir.parent()
-        if parentDir.isEmpty() 'noParent'
-            return FilePath from ""
-        end 'noParent'
-        dir = parentDir
-    end 'search'
-    return FilePath from ""
+  var dir = Directory.currentPath()
+  for _ in 0 upto 10 'search'
+    // Look for maxon-selfhosted/Compiler/Runtime/runtime.mid
+    let candidate = dir.join("maxon-selfhosted").join("Compiler").join("Runtime").join("runtime.mid")
+    if candidate.fileExists() 'found'
+      return candidate
+    end 'found'
+    // Also check Compiler/Runtime/runtime.mid (if we're inside maxon-selfhosted)
+    let candidate2 = dir.join("Compiler").join("Runtime").join("runtime.mid")
+    if candidate2.fileExists() 'found2'
+      return candidate2
+    end 'found2'
+    // Also check Runtime/runtime.mid (if we're inside Compiler)
+    let candidate3 = dir.join("Runtime").join("runtime.mid")
+    if candidate3.fileExists() 'found3'
+      return candidate3
+    end 'found3'
+    // Also check runtime.mid directly
+    let candidate4 = dir.join("runtime.mid")
+    if candidate4.fileExists() 'found4'
+      return candidate4
+    end 'found4'
+    let parentDir = dir.parent()
+    if parentDir.isEmpty() 'noParent'
+      return FilePath from ""
+    end 'noParent'
+    dir = parentDir
+  end 'search'
+  return FilePath from ""
 end 'findRuntimePath'
 
 // Prepends runtime functions from runtime.mid to a user module.
 // Runtime functions are expressed as mid-level IR (arith/cf/func/memref/sys ops)
 // and will be lowered by the target backends just like user functions.
 function augmentWithRuntime(module MlirModule) returns MlirModule
-    let runtimeFuncs = loadRuntimeFunctions()
-    var augmented = createMlirModule()
-    for rtFunc in runtimeFuncs 'prependRt'
-        augmented.functions.push(rtFunc)
-    end 'prependRt'
-    for userFunc in module.functions 'appendUser'
-        augmented.functions.push(userFunc)
-    end 'appendUser'
-    return augmented
+  let runtimeFuncs = loadRuntimeFunctions()
+  var augmented = createMlirModule()
+  for rtFunc in runtimeFuncs 'prependRt'
+    augmented.functions.push(rtFunc)
+  end 'prependRt'
+  for userFunc in module.functions 'appendUser'
+    augmented.functions.push(userFunc)
+  end 'appendUser'
+  return augmented
 end 'augmentWithRuntime'
 
 export function emitBackend(module MlirModule, target Target, globalData GlobalDataTable) returns CodeResult throws CompileError
-    let augmentedModule = augmentWithRuntime(module)
+  let augmentedModule = augmentWithRuntime(module)
 
-    var result = CodeResult{code: ByteArray{}, mainCallFixupOffset: 0, relocations: RelocationArray{}, globalData: globalData}
-    match target.cpu 'cpu'
-        CpuArch.x86_64 then result = emitX86(lowerMidToMaxX64(augmentedModule, target: target), target: target, globalData: globalData)
-        CpuArch.aarch64 then result = emitMaxArm64(lowerMidToMaxArm64(augmentedModule, target: target), target: target, globalData: globalData)
-    end 'cpu'
-    return result
+  var result = CodeResult{code: ByteArray{}, mainCallFixupOffset: 0, relocations: RelocationArray{}, globalData: globalData}
+  match target.cpu 'cpu'
+    CpuArch.x86_64 then result = emitX86(lowerMidToMaxX64(augmentedModule, target: target), target: target, globalData: globalData)
+    CpuArch.aarch64 then result = emitMaxArm64(lowerMidToMaxArm64(augmentedModule, target: target), target: target, globalData: globalData)
+  end 'cpu'
+  return result
 end 'emitBackend'
 
 export function writeExecutable(outputPath FilePath, codeResult CodeResult, target Target)
-    match target.os 'os'
-        Os.windows then writePe(outputPath, codeResult: codeResult, target: target)
-        Os.linux then writeElf(outputPath, codeResult: codeResult, target: target)
-        Os.macos then writeMachO(outputPath, codeResult: codeResult, target: target)
-    end 'os'
+  match target.os 'os'
+    Os.windows then writePe(outputPath, codeResult: codeResult, target: target)
+    Os.linux then writeElf(outputPath, codeResult: codeResult, target: target)
+    Os.macos then writeMachO(outputPath, codeResult: codeResult, target: target)
+  end 'os'
 end 'writeExecutable'

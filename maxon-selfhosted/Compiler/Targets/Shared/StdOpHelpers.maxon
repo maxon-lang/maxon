@@ -6,23 +6,23 @@ export typealias StdOpIndex = int(0 to u64.max)
 typealias TempSlotCount = int(0 to 10)
 
 union NotComparison implements Error
-    notComparison
+  notComparison
 end 'NotComparison'
 
 export union JumpKind
-    eq
-    ne
-    lt
-    le
-    gt
-    ge
-    feq
-    fne
-    flt
-    fle
-    fgt
-    fge
-    boolTest
+  eq
+  ne
+  lt
+  le
+  gt
+  ge
+  feq
+  fne
+  flt
+  fle
+  fgt
+  fge
+  boolTest
 end 'JumpKind'
 
 // Value location tracking for SSA-based register management.
@@ -30,197 +30,197 @@ end 'JumpKind'
 export typealias ValueSlotMap = Array with VarSlot
 
 export function valueSlotMapGet(m ValueSlotMap, valueId ValueId) returns VarSlot
-    return try m.get(valueId) otherwise 'notFound'
-        panic("valueSlotMapGet: no slot for ValueId {valueId}")
-    end 'notFound'
+  return try m.get(valueId) otherwise 'notFound'
+    panic("valueSlotMapGet: no slot for ValueId {valueId}")
+  end 'notFound'
 end 'valueSlotMapGet'
 
 export function valueSlotMapSet(m ValueSlotMap, valueId ValueId, slot VarSlot)
-    while m.count() <= valueId 'grow'
-        m.push(0)
-    end 'grow'
-    m.set(valueId, value: slot)
+  while m.count() <= valueId 'grow'
+    m.push(0)
+  end 'grow'
+  m.set(valueId, value: slot)
 end 'valueSlotMapSet'
 
 export function maxOf(a SlotIndex, b SlotIndex) returns SlotIndex
-    if a > b 'aGreater'
-        return a
-    end 'aGreater'
-    return b
+  if a > b 'aGreater'
+    return a
+  end 'aGreater'
+  return b
 end 'maxOf'
 
 // Extract slot index from an MlirOp if it is a memref store/load.
 // Returns -1 for ops that don't reference a slot.
 function getSlotFromMlirOp(op MlirOp) returns SlotIndex
-    var result = -1
-    match op 'outer'
-        maxhl to func then break 'outer'
-        memref(memOp) then result = getSlotFromMemRefOp(memOp)
-        runtime to maxarm64 then break 'outer'
-    end 'outer'
-    return result
+  var result = -1
+  match op 'outer'
+    maxhl to func then break 'outer'
+    memref(memOp) then result = getSlotFromMemRefOp(memOp)
+    runtime to maxarm64 then break 'outer'
+  end 'outer'
+  return result
 end 'getSlotFromMlirOp'
 
 function getSlotFromMemRefOp(op MemRefOp) returns SlotIndex
-    return match op 'check'
-        storeSlot(slotId, _) gives slotId
-        loadSlot(_, slotId) gives slotId
-    end 'check'
+  return match op 'check'
+    storeSlot(slotId, _) gives slotId
+    loadSlot(_, slotId) gives slotId
+  end 'check'
 end 'getSlotFromMemRefOp'
 
 // Compute max parser-allocated slot across all blocks in a function.
 export function computeMaxParserSlotInFunc(func MlirFunction) returns SlotIndex
-    var maxSlot = -1
-    for block in func.region.blocks 'eachBlock'
-        for op in block.ops 'eachOp'
-            let slot = getSlotFromMlirOp(op)
-            if slot >= 0 'hasSlot'
-                maxSlot = maxOf(maxSlot, b: slot)
-            end 'hasSlot'
-        end 'eachOp'
-        // Also check terminator
-        if block.hasTerminator 'hasTerm'
-            let termSlot = getSlotFromMlirOp(block.terminator)
-            if termSlot >= 0 'hasTermSlot'
-                maxSlot = maxOf(maxSlot, b: termSlot)
-            end 'hasTermSlot'
-        end 'hasTerm'
-    end 'eachBlock'
-    return maxSlot
+  var maxSlot = -1
+  for block in func.region.blocks 'eachBlock'
+    for op in block.ops 'eachOp'
+      let slot = getSlotFromMlirOp(op)
+      if slot >= 0 'hasSlot'
+        maxSlot = maxOf(maxSlot, b: slot)
+      end 'hasSlot'
+    end 'eachOp'
+    // Also check terminator
+    if block.hasTerminator 'hasTerm'
+      let termSlot = getSlotFromMlirOp(block.terminator)
+      if termSlot >= 0 'hasTermSlot'
+        maxSlot = maxOf(maxSlot, b: termSlot)
+      end 'hasTermSlot'
+    end 'hasTerm'
+  end 'eachBlock'
+  return maxSlot
 end 'computeMaxParserSlotInFunc'
 
 // Count how many temp result slots an MlirOp produces during x86/arm64 lowering.
 // OS-neutral ops (osExit, osWrite) expand to multiple target ops; count the worst case.
 function tempSlotCountForOp(op MlirOp) returns TempSlotCount
-    return match op 'check'
-        maxhl gives 0
-        arith gives 1
-        cf gives 0
-        func(funcOp) gives funcOpTempCount(funcOp)
-        memref gives 0
-        runtime gives 0
-        sys(sysOp) gives sysTempSlotCount(sysOp)
-        maxx64 to maxarm64 gives 0
-    end 'check'
+  return match op 'check'
+    maxhl gives 0
+    arith gives 1
+    cf gives 0
+    func(funcOp) gives funcOpTempCount(funcOp)
+    memref gives 0
+    runtime gives 0
+    sys(sysOp) gives sysTempSlotCount(sysOp)
+    maxx64 to maxarm64 gives 0
+  end 'check'
 end 'tempSlotCountForOp'
 
 function funcOpTempCount(op FuncOp) returns TempSlotCount
-    return match op 'check'
-        call gives 1
-        ret gives 0
-    end 'check'
+  return match op 'check'
+    call gives 1
+    ret gives 0
+  end 'check'
 end 'funcOpTempCount'
 
 // Worst-case temp slot count for each SysOp variant after lowering.
 // osExit expands to 1 syscall/iatCall (1 temp).
 // osWrite expands to up to 6 temps on Windows (GetStdHandle + WriteFile sequence).
 function sysTempSlotCount(op SysOp) returns TempSlotCount
-    return match op 'check'
-        syscall gives 1
-        iatCall gives 1
-        globalAddr gives 1
-        stackAddr gives 1
-        loadByte gives 1
-        storeByte gives 0
-        memcpy gives 0
-        osExit gives 1
-        osWrite gives 6
-    end 'check'
+  return match op 'check'
+    syscall gives 1
+    iatCall gives 1
+    globalAddr gives 1
+    stackAddr gives 1
+    loadByte gives 1
+    storeByte gives 0
+    memcpy gives 0
+    osExit gives 1
+    osWrite gives 6
+  end 'check'
 end 'sysTempSlotCount'
 
 // Check if an MlirOp is a print operation (needs stack buffer).
 function isPrintOp(op MlirOp) returns bool
-    return match op 'check'
-        maxhl to memref gives false
-        runtime gives true
-        sys to maxarm64 gives false
-    end 'check'
+  return match op 'check'
+    maxhl to memref gives false
+    runtime gives true
+    sys to maxarm64 gives false
+  end 'check'
 end 'isPrintOp'
 
 // Compute stack frame size for a function by scanning all blocks.
 export function computeStackSizeForFunc(func MlirFunction, shadowSpace StackSize, savedRegsSize StackSize) returns StackSize
-    var maxSlot = -1
-    var hasPrint = false
-    var tempSlotCount = 0
+  var maxSlot = -1
+  var hasPrint = false
+  var tempSlotCount = 0
 
-    for block in func.region.blocks 'eachBlock'
-        for op in block.ops 'eachOp'
-            let slot = getSlotFromMlirOp(op)
-            if slot >= 0 'hasSlot'
-                maxSlot = maxOf(maxSlot, b: slot)
-            end 'hasSlot'
-            tempSlotCount = tempSlotCount + tempSlotCountForOp(op)
-            if isPrintOp(op) 'isPrint'
-                hasPrint = true
-            end 'isPrint'
-        end 'eachOp'
-    end 'eachBlock'
+  for block in func.region.blocks 'eachBlock'
+    for op in block.ops 'eachOp'
+      let slot = getSlotFromMlirOp(op)
+      if slot >= 0 'hasSlot'
+        maxSlot = maxOf(maxSlot, b: slot)
+      end 'hasSlot'
+      tempSlotCount = tempSlotCount + tempSlotCountForOp(op)
+      if isPrintOp(op) 'isPrint'
+        hasPrint = true
+      end 'isPrint'
+    end 'eachOp'
+  end 'eachBlock'
 
-    let totalMaxSlot = maxSlot + tempSlotCount
-    let overhead = shadowSpace + savedRegsSize
+  let totalMaxSlot = maxSlot + tempSlotCount
+  let overhead = shadowSpace + savedRegsSize
 
-    var stackSize = 0
-    if totalMaxSlot >= 0 'hasSlots'
-        stackSize = (totalMaxSlot + 1) * 8 + overhead
-    end 'hasSlots'
-    if hasPrint and stackSize == 0 'needPrintBuf'
-        stackSize = overhead
-        if stackSize == 0 'noOverhead'
-            stackSize = 16
-        end 'noOverhead'
-    end 'needPrintBuf'
-    // Align to 16
-    if stackSize mod 16 != 0 'align'
-        stackSize = stackSize + (16 - (stackSize mod 16))
-    end 'align'
-    return stackSize
+  var stackSize = 0
+  if totalMaxSlot >= 0 'hasSlots'
+    stackSize = (totalMaxSlot + 1) * 8 + overhead
+  end 'hasSlots'
+  if hasPrint and stackSize == 0 'needPrintBuf'
+    stackSize = overhead
+    if stackSize == 0 'noOverhead'
+      stackSize = 16
+    end 'noOverhead'
+  end 'needPrintBuf'
+  // Align to 16
+  if stackSize mod 16 != 0 'align'
+    stackSize = stackSize + (16 - (stackSize mod 16))
+  end 'align'
+  return stackSize
 end 'computeStackSizeForFunc'
 
 // Scan backward within a block's ops to find the comparison that produced the condition.
 export function determineJumpKindInBlock(block MlirBlock) returns JumpKind
-    var j = block.ops.count() - 1
-    while j >= 0 'scanBack'
-        let op = try block.ops.get(j) otherwise 'skipBack'
-            j = j - 1
-            continue
-        end 'skipBack'
-        let kind = try getJumpKindFromOp(op) otherwise 'notCmp'
-            j = j - 1
-            continue
-        end 'notCmp'
-        return kind
-    end 'scanBack'
-    return JumpKind.boolTest
+  var j = block.ops.count() - 1
+  while j >= 0 'scanBack'
+    let op = try block.ops.get(j) otherwise 'skipBack'
+      j = j - 1
+      continue
+    end 'skipBack'
+    let kind = try getJumpKindFromOp(op) otherwise 'notCmp'
+      j = j - 1
+      continue
+    end 'notCmp'
+    return kind
+  end 'scanBack'
+  return JumpKind.boolTest
 end 'determineJumpKindInBlock'
 
 function getJumpKindFromOp(op MlirOp) returns JumpKind throws NotComparison
-    return match op 'check'
-        arith(arithOp) gives try getJumpKindFromArith(arithOp)
-        default throws NotComparison.notComparison
-    end 'check'
+  return match op 'check'
+    arith(arithOp) gives try getJumpKindFromArith(arithOp)
+    default throws NotComparison.notComparison
+  end 'check'
 end 'getJumpKindFromOp'
 
 function getJumpKindFromArith(op ArithOp) returns JumpKind throws NotComparison
-    return match op 'check'
-        binary(binOp) gives try getJumpKindFromBinaryArith(binOp)
-        default throws NotComparison.notComparison
-    end 'check'
+  return match op 'check'
+    binary(binOp) gives try getJumpKindFromBinaryArith(binOp)
+    default throws NotComparison.notComparison
+  end 'check'
 end 'getJumpKindFromArith'
 
 function getJumpKindFromBinaryArith(op ArithBinaryOp) returns JumpKind throws NotComparison
-    return match op.opcode 'check'
-        ArithBinaryOpcode.cmpI64Eq gives JumpKind.eq
-        ArithBinaryOpcode.cmpI64Ne gives JumpKind.ne
-        ArithBinaryOpcode.cmpI64Lt gives JumpKind.lt
-        ArithBinaryOpcode.cmpI64Le gives JumpKind.le
-        ArithBinaryOpcode.cmpI64Gt gives JumpKind.gt
-        ArithBinaryOpcode.cmpI64Ge gives JumpKind.ge
-        ArithBinaryOpcode.cmpF64Eq gives JumpKind.feq
-        ArithBinaryOpcode.cmpF64Ne gives JumpKind.fne
-        ArithBinaryOpcode.cmpF64Lt gives JumpKind.flt
-        ArithBinaryOpcode.cmpF64Le gives JumpKind.fle
-        ArithBinaryOpcode.cmpF64Gt gives JumpKind.fgt
-        ArithBinaryOpcode.cmpF64Ge gives JumpKind.fge
-        default throws NotComparison.notComparison
-    end 'check'
+  return match op.opcode 'check'
+    ArithBinaryOpcode.cmpI64Eq gives JumpKind.eq
+    ArithBinaryOpcode.cmpI64Ne gives JumpKind.ne
+    ArithBinaryOpcode.cmpI64Lt gives JumpKind.lt
+    ArithBinaryOpcode.cmpI64Le gives JumpKind.le
+    ArithBinaryOpcode.cmpI64Gt gives JumpKind.gt
+    ArithBinaryOpcode.cmpI64Ge gives JumpKind.ge
+    ArithBinaryOpcode.cmpF64Eq gives JumpKind.feq
+    ArithBinaryOpcode.cmpF64Ne gives JumpKind.fne
+    ArithBinaryOpcode.cmpF64Lt gives JumpKind.flt
+    ArithBinaryOpcode.cmpF64Le gives JumpKind.fle
+    ArithBinaryOpcode.cmpF64Gt gives JumpKind.fgt
+    ArithBinaryOpcode.cmpF64Ge gives JumpKind.fge
+    default throws NotComparison.notComparison
+  end 'check'
 end 'getJumpKindFromBinaryArith'

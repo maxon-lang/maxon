@@ -3,214 +3,214 @@
 // across multiple compilations.
 
 export function runIncrementalTests() returns ExitCode
-    logInfo(LogCategory.testing, message: "Running incremental compilation tests...")
+  logInfo(LogCategory.testing, message: "Running incremental compilation tests...")
 
-    let projectRoot = try findIncrTestRoot() otherwise 'noRoot'
-        print("Could not find project root\n")
-        return 1
-    end 'noRoot'
+  let projectRoot = try findIncrTestRoot() otherwise 'noRoot'
+    print("Could not find project root\n")
+    return 1
+  end 'noRoot'
 
-    let tempDir = projectRoot.join("temp")
-    let sourcePath = tempDir.join("incr_test.maxon")
-    let exePath = tempDir.join("incr_test.exe")
+  let tempDir = projectRoot.join("temp")
+  let sourcePath = tempDir.join("incr_test.maxon")
+  let exePath = tempDir.join("incr_test.exe")
 
-    // Clean up any stale files from previous runs
+  // Clean up any stale files from previous runs
+  cleanupIncrTest(sourcePath, exePath: exePath)
+
+  var totalPassed = 0
+  var totalFailed = 0
+
+  // --- Scenario A: Fresh compilation (all misses) ---
+  logInfo(LogCategory.testing, message: "Scenario A: Fresh compilation...")
+
+  let sourceV1 = "function main() returns ExitCode\n    return 5\nend 'main'\n"
+
+  try File.writeText(sourcePath, content: sourceV1) otherwise 'writeErr1'
+    print("Could not write test source\n")
+    return 1
+  end 'writeErr1'
+
+  var project = createProject(sourcePath, isSingleFile: true, target: detectHostTarget())
+  try compileProject(project) otherwise 'compErrA'
+    print("Scenario A: Compilation failed\n")
     cleanupIncrTest(sourcePath, exePath: exePath)
+    return 1
+  end 'compErrA'
 
-    var totalPassed = 0
-    var totalFailed = 0
+  var scenarioAPassed = true
+  scenarioAPassed = assertCounter("A tokenHits", actual: project.db.tokenHits, expected: 0) and scenarioAPassed
+  scenarioAPassed = assertCounter("A tokenMisses", actual: project.db.tokenMisses, expected: 1) and scenarioAPassed
+  scenarioAPassed = assertCounter("A parseHits", actual: project.db.parseHits, expected: 0) and scenarioAPassed
+  scenarioAPassed = assertCounter("A parseMisses", actual: project.db.parseMisses, expected: 1) and scenarioAPassed
+  scenarioAPassed = assertCounter("A allModuleHits", actual: project.db.allModuleHits, expected: 0) and scenarioAPassed
+  scenarioAPassed = assertCounter("A allModuleMisses", actual: project.db.allModuleMisses, expected: 1) and scenarioAPassed
+  scenarioAPassed = assertCounter("A allMidHits", actual: project.db.allMidHits, expected: 0) and scenarioAPassed
+  scenarioAPassed = assertCounter("A allMidMisses", actual: project.db.allMidMisses, expected: 1) and scenarioAPassed
+  scenarioAPassed = assertCounter("A codeHits", actual: project.db.codeHits, expected: 0) and scenarioAPassed
+  scenarioAPassed = assertCounter("A codeMisses", actual: project.db.codeMisses, expected: 1) and scenarioAPassed
+  // Exit code check skipped: self-hosted codegen produces wrong values for multi-digit literals
 
-    // --- Scenario A: Fresh compilation (all misses) ---
-    logInfo(LogCategory.testing, message: "Scenario A: Fresh compilation...")
+  if scenarioAPassed 'passA'
+    print("[PASS] Scenario A: Fresh compilation\n")
+    totalPassed = totalPassed + 1
+  end 'passA' else 'failA'
+    print("[FAIL] Scenario A: Fresh compilation\n")
+    totalFailed = totalFailed + 1
+  end 'failA'
 
-    let sourceV1 = "function main() returns ExitCode\n    return 5\nend 'main'\n"
+  // --- Scenario B: No-change recompile ---
+  // When the top-level code cache is valid, it short-circuits and never
+  // calls downstream queries, so only codeHits increments.
+  logInfo(LogCategory.testing, message: "Scenario B: No-change recompile...")
 
-    try File.writeText(sourcePath, content: sourceV1) otherwise 'writeErr1'
-        print("Could not write test source\n")
-        return 1
-    end 'writeErr1'
-
-    var project = createProject(sourcePath, isSingleFile: true, target: detectHostTarget())
-    try compileProject(project) otherwise 'compErrA'
-        print("Scenario A: Compilation failed\n")
-        cleanupIncrTest(sourcePath, exePath: exePath)
-        return 1
-    end 'compErrA'
-
-    var scenarioAPassed = true
-    scenarioAPassed = assertCounter("A tokenHits", actual: project.db.tokenHits, expected: 0) and scenarioAPassed
-    scenarioAPassed = assertCounter("A tokenMisses", actual: project.db.tokenMisses, expected: 1) and scenarioAPassed
-    scenarioAPassed = assertCounter("A parseHits", actual: project.db.parseHits, expected: 0) and scenarioAPassed
-    scenarioAPassed = assertCounter("A parseMisses", actual: project.db.parseMisses, expected: 1) and scenarioAPassed
-    scenarioAPassed = assertCounter("A allModuleHits", actual: project.db.allModuleHits, expected: 0) and scenarioAPassed
-    scenarioAPassed = assertCounter("A allModuleMisses", actual: project.db.allModuleMisses, expected: 1) and scenarioAPassed
-    scenarioAPassed = assertCounter("A allMidHits", actual: project.db.allMidHits, expected: 0) and scenarioAPassed
-    scenarioAPassed = assertCounter("A allMidMisses", actual: project.db.allMidMisses, expected: 1) and scenarioAPassed
-    scenarioAPassed = assertCounter("A codeHits", actual: project.db.codeHits, expected: 0) and scenarioAPassed
-    scenarioAPassed = assertCounter("A codeMisses", actual: project.db.codeMisses, expected: 1) and scenarioAPassed
-    // Exit code check skipped: self-hosted codegen produces wrong values for multi-digit literals
-
-    if scenarioAPassed 'passA'
-        print("[PASS] Scenario A: Fresh compilation\n")
-        totalPassed = totalPassed + 1
-    end 'passA' else 'failA'
-        print("[FAIL] Scenario A: Fresh compilation\n")
-        totalFailed = totalFailed + 1
-    end 'failA'
-
-    // --- Scenario B: No-change recompile ---
-    // When the top-level code cache is valid, it short-circuits and never
-    // calls downstream queries, so only codeHits increments.
-    logInfo(LogCategory.testing, message: "Scenario B: No-change recompile...")
-
-    resetCounters(project)
-    try compileProject(project) otherwise 'compErrB'
-        print("Scenario B: Compilation failed\n")
-        cleanupIncrTest(sourcePath, exePath: exePath)
-        return 1
-    end 'compErrB'
-
-    var scenarioBPassed = true
-    scenarioBPassed = assertCounter("B tokenHits", actual: project.db.tokenHits, expected: 0) and scenarioBPassed
-    scenarioBPassed = assertCounter("B tokenMisses", actual: project.db.tokenMisses, expected: 0) and scenarioBPassed
-    scenarioBPassed = assertCounter("B parseHits", actual: project.db.parseHits, expected: 0) and scenarioBPassed
-    scenarioBPassed = assertCounter("B parseMisses", actual: project.db.parseMisses, expected: 0) and scenarioBPassed
-    scenarioBPassed = assertCounter("B allModuleHits", actual: project.db.allModuleHits, expected: 0) and scenarioBPassed
-    scenarioBPassed = assertCounter("B allModuleMisses", actual: project.db.allModuleMisses, expected: 0) and scenarioBPassed
-    scenarioBPassed = assertCounter("B allMidHits", actual: project.db.allMidHits, expected: 0) and scenarioBPassed
-    scenarioBPassed = assertCounter("B allMidMisses", actual: project.db.allMidMisses, expected: 0) and scenarioBPassed
-    scenarioBPassed = assertCounter("B codeHits", actual: project.db.codeHits, expected: 1) and scenarioBPassed
-    scenarioBPassed = assertCounter("B codeMisses", actual: project.db.codeMisses, expected: 0) and scenarioBPassed
-
-    if scenarioBPassed 'passB'
-        print("[PASS] Scenario B: No-change recompile\n")
-        totalPassed = totalPassed + 1
-    end 'passB' else 'failB'
-        print("[FAIL] Scenario B: No-change recompile\n")
-        totalFailed = totalFailed + 1
-    end 'failB'
-
-    // --- Scenario C: Modify file (all misses, full recomputation) ---
-    logInfo(LogCategory.testing, message: "Scenario C: Modify file...")
-
-    resetCounters(project)
-
-    let sourceV2 = "function main() returns ExitCode\n    return 7\nend 'main'\n"
-    try File.writeText(sourcePath, content: sourceV2) otherwise 'writeErr2'
-        print("Could not overwrite test source\n")
-        cleanupIncrTest(sourcePath, exePath: exePath)
-        return 1
-    end 'writeErr2'
-
-    try compileProject(project) otherwise 'compErrC'
-        print("Scenario C: Compilation failed\n")
-        cleanupIncrTest(sourcePath, exePath: exePath)
-        return 1
-    end 'compErrC'
-
-    var scenarioCPassed = true
-    scenarioCPassed = assertCounter("C tokenHits", actual: project.db.tokenHits, expected: 0) and scenarioCPassed
-    scenarioCPassed = assertCounter("C tokenMisses", actual: project.db.tokenMisses, expected: 1) and scenarioCPassed
-    scenarioCPassed = assertCounter("C parseHits", actual: project.db.parseHits, expected: 0) and scenarioCPassed
-    scenarioCPassed = assertCounter("C parseMisses", actual: project.db.parseMisses, expected: 1) and scenarioCPassed
-    scenarioCPassed = assertCounter("C allModuleHits", actual: project.db.allModuleHits, expected: 0) and scenarioCPassed
-    scenarioCPassed = assertCounter("C allModuleMisses", actual: project.db.allModuleMisses, expected: 1) and scenarioCPassed
-    scenarioCPassed = assertCounter("C allMidHits", actual: project.db.allMidHits, expected: 0) and scenarioCPassed
-    scenarioCPassed = assertCounter("C allMidMisses", actual: project.db.allMidMisses, expected: 1) and scenarioCPassed
-    scenarioCPassed = assertCounter("C codeHits", actual: project.db.codeHits, expected: 0) and scenarioCPassed
-    scenarioCPassed = assertCounter("C codeMisses", actual: project.db.codeMisses, expected: 1) and scenarioCPassed
-    // Exit code check skipped: self-hosted codegen produces wrong values for multi-digit literals
-
-    if scenarioCPassed 'passC'
-        print("[PASS] Scenario C: Modify file\n")
-        totalPassed = totalPassed + 1
-    end 'passC' else 'failC'
-        print("[FAIL] Scenario C: Modify file\n")
-        totalFailed = totalFailed + 1
-    end 'failC'
-
-    // --- Scenario D: Same-content rewrite (code cache hit, no downstream queries) ---
-    logInfo(LogCategory.testing, message: "Scenario D: Same-content rewrite...")
-
-    resetCounters(project)
-    try compileProject(project) otherwise 'compErrD'
-        print("Scenario D: Compilation failed\n")
-        cleanupIncrTest(sourcePath, exePath: exePath)
-        return 1
-    end 'compErrD'
-
-    var scenarioDPassed = true
-    scenarioDPassed = assertCounter("D tokenHits", actual: project.db.tokenHits, expected: 0) and scenarioDPassed
-    scenarioDPassed = assertCounter("D tokenMisses", actual: project.db.tokenMisses, expected: 0) and scenarioDPassed
-    scenarioDPassed = assertCounter("D parseHits", actual: project.db.parseHits, expected: 0) and scenarioDPassed
-    scenarioDPassed = assertCounter("D parseMisses", actual: project.db.parseMisses, expected: 0) and scenarioDPassed
-    scenarioDPassed = assertCounter("D allModuleHits", actual: project.db.allModuleHits, expected: 0) and scenarioDPassed
-    scenarioDPassed = assertCounter("D allModuleMisses", actual: project.db.allModuleMisses, expected: 0) and scenarioDPassed
-    scenarioDPassed = assertCounter("D allMidHits", actual: project.db.allMidHits, expected: 0) and scenarioDPassed
-    scenarioDPassed = assertCounter("D allMidMisses", actual: project.db.allMidMisses, expected: 0) and scenarioDPassed
-    scenarioDPassed = assertCounter("D codeHits", actual: project.db.codeHits, expected: 1) and scenarioDPassed
-    scenarioDPassed = assertCounter("D codeMisses", actual: project.db.codeMisses, expected: 0) and scenarioDPassed
-
-    if scenarioDPassed 'passD'
-        print("[PASS] Scenario D: Same-content rewrite\n")
-        totalPassed = totalPassed + 1
-    end 'passD' else 'failD'
-        print("[FAIL] Scenario D: Same-content rewrite\n")
-        totalFailed = totalFailed + 1
-    end 'failD'
-
-    // Cleanup
+  resetCounters(project)
+  try compileProject(project) otherwise 'compErrB'
+    print("Scenario B: Compilation failed\n")
     cleanupIncrTest(sourcePath, exePath: exePath)
+    return 1
+  end 'compErrB'
 
-    // Summary
-    print("\nIncremental tests: {totalPassed} passed, {totalFailed} failed\n")
+  var scenarioBPassed = true
+  scenarioBPassed = assertCounter("B tokenHits", actual: project.db.tokenHits, expected: 0) and scenarioBPassed
+  scenarioBPassed = assertCounter("B tokenMisses", actual: project.db.tokenMisses, expected: 0) and scenarioBPassed
+  scenarioBPassed = assertCounter("B parseHits", actual: project.db.parseHits, expected: 0) and scenarioBPassed
+  scenarioBPassed = assertCounter("B parseMisses", actual: project.db.parseMisses, expected: 0) and scenarioBPassed
+  scenarioBPassed = assertCounter("B allModuleHits", actual: project.db.allModuleHits, expected: 0) and scenarioBPassed
+  scenarioBPassed = assertCounter("B allModuleMisses", actual: project.db.allModuleMisses, expected: 0) and scenarioBPassed
+  scenarioBPassed = assertCounter("B allMidHits", actual: project.db.allMidHits, expected: 0) and scenarioBPassed
+  scenarioBPassed = assertCounter("B allMidMisses", actual: project.db.allMidMisses, expected: 0) and scenarioBPassed
+  scenarioBPassed = assertCounter("B codeHits", actual: project.db.codeHits, expected: 1) and scenarioBPassed
+  scenarioBPassed = assertCounter("B codeMisses", actual: project.db.codeMisses, expected: 0) and scenarioBPassed
 
-    if totalFailed > 0 'hasFail'
-        return 1
-    end 'hasFail'
-    return 0
+  if scenarioBPassed 'passB'
+    print("[PASS] Scenario B: No-change recompile\n")
+    totalPassed = totalPassed + 1
+  end 'passB' else 'failB'
+    print("[FAIL] Scenario B: No-change recompile\n")
+    totalFailed = totalFailed + 1
+  end 'failB'
+
+  // --- Scenario C: Modify file (all misses, full recomputation) ---
+  logInfo(LogCategory.testing, message: "Scenario C: Modify file...")
+
+  resetCounters(project)
+
+  let sourceV2 = "function main() returns ExitCode\n    return 7\nend 'main'\n"
+  try File.writeText(sourcePath, content: sourceV2) otherwise 'writeErr2'
+    print("Could not overwrite test source\n")
+    cleanupIncrTest(sourcePath, exePath: exePath)
+    return 1
+  end 'writeErr2'
+
+  try compileProject(project) otherwise 'compErrC'
+    print("Scenario C: Compilation failed\n")
+    cleanupIncrTest(sourcePath, exePath: exePath)
+    return 1
+  end 'compErrC'
+
+  var scenarioCPassed = true
+  scenarioCPassed = assertCounter("C tokenHits", actual: project.db.tokenHits, expected: 0) and scenarioCPassed
+  scenarioCPassed = assertCounter("C tokenMisses", actual: project.db.tokenMisses, expected: 1) and scenarioCPassed
+  scenarioCPassed = assertCounter("C parseHits", actual: project.db.parseHits, expected: 0) and scenarioCPassed
+  scenarioCPassed = assertCounter("C parseMisses", actual: project.db.parseMisses, expected: 1) and scenarioCPassed
+  scenarioCPassed = assertCounter("C allModuleHits", actual: project.db.allModuleHits, expected: 0) and scenarioCPassed
+  scenarioCPassed = assertCounter("C allModuleMisses", actual: project.db.allModuleMisses, expected: 1) and scenarioCPassed
+  scenarioCPassed = assertCounter("C allMidHits", actual: project.db.allMidHits, expected: 0) and scenarioCPassed
+  scenarioCPassed = assertCounter("C allMidMisses", actual: project.db.allMidMisses, expected: 1) and scenarioCPassed
+  scenarioCPassed = assertCounter("C codeHits", actual: project.db.codeHits, expected: 0) and scenarioCPassed
+  scenarioCPassed = assertCounter("C codeMisses", actual: project.db.codeMisses, expected: 1) and scenarioCPassed
+  // Exit code check skipped: self-hosted codegen produces wrong values for multi-digit literals
+
+  if scenarioCPassed 'passC'
+    print("[PASS] Scenario C: Modify file\n")
+    totalPassed = totalPassed + 1
+  end 'passC' else 'failC'
+    print("[FAIL] Scenario C: Modify file\n")
+    totalFailed = totalFailed + 1
+  end 'failC'
+
+  // --- Scenario D: Same-content rewrite (code cache hit, no downstream queries) ---
+  logInfo(LogCategory.testing, message: "Scenario D: Same-content rewrite...")
+
+  resetCounters(project)
+  try compileProject(project) otherwise 'compErrD'
+    print("Scenario D: Compilation failed\n")
+    cleanupIncrTest(sourcePath, exePath: exePath)
+    return 1
+  end 'compErrD'
+
+  var scenarioDPassed = true
+  scenarioDPassed = assertCounter("D tokenHits", actual: project.db.tokenHits, expected: 0) and scenarioDPassed
+  scenarioDPassed = assertCounter("D tokenMisses", actual: project.db.tokenMisses, expected: 0) and scenarioDPassed
+  scenarioDPassed = assertCounter("D parseHits", actual: project.db.parseHits, expected: 0) and scenarioDPassed
+  scenarioDPassed = assertCounter("D parseMisses", actual: project.db.parseMisses, expected: 0) and scenarioDPassed
+  scenarioDPassed = assertCounter("D allModuleHits", actual: project.db.allModuleHits, expected: 0) and scenarioDPassed
+  scenarioDPassed = assertCounter("D allModuleMisses", actual: project.db.allModuleMisses, expected: 0) and scenarioDPassed
+  scenarioDPassed = assertCounter("D allMidHits", actual: project.db.allMidHits, expected: 0) and scenarioDPassed
+  scenarioDPassed = assertCounter("D allMidMisses", actual: project.db.allMidMisses, expected: 0) and scenarioDPassed
+  scenarioDPassed = assertCounter("D codeHits", actual: project.db.codeHits, expected: 1) and scenarioDPassed
+  scenarioDPassed = assertCounter("D codeMisses", actual: project.db.codeMisses, expected: 0) and scenarioDPassed
+
+  if scenarioDPassed 'passD'
+    print("[PASS] Scenario D: Same-content rewrite\n")
+    totalPassed = totalPassed + 1
+  end 'passD' else 'failD'
+    print("[FAIL] Scenario D: Same-content rewrite\n")
+    totalFailed = totalFailed + 1
+  end 'failD'
+
+  // Cleanup
+  cleanupIncrTest(sourcePath, exePath: exePath)
+
+  // Summary
+  print("\nIncremental tests: {totalPassed} passed, {totalFailed} failed\n")
+
+  if totalFailed > 0 'hasFail'
+    return 1
+  end 'hasFail'
+  return 0
 end 'runIncrementalTests'
 
 function assertCounter(name String, actual Revision, expected Revision) returns bool
-    if actual != expected 'mismatch'
-        print("  FAIL: {name} expected {expected}, got {actual}\n")
-        return false
-    end 'mismatch'
-    return true
+  if actual != expected 'mismatch'
+    print("  FAIL: {name} expected {expected}, got {actual}\n")
+    return false
+  end 'mismatch'
+  return true
 end 'assertCounter'
 
 function cleanupIncrTest(sourcePath FilePath, exePath FilePath)
-    if sourcePath.fileExists() 'src'
-        try File.delete(sourcePath) otherwise 'delSrc'
-        end 'delSrc'
-    end 'src'
-    if exePath.fileExists() 'exe'
-        try File.delete(exePath) otherwise 'delExe'
-        end 'delExe'
-    end 'exe'
+  if sourcePath.fileExists() 'src'
+    try File.delete(sourcePath) otherwise 'delSrc'
+    end 'delSrc'
+  end 'src'
+  if exePath.fileExists() 'exe'
+    try File.delete(exePath) otherwise 'delExe'
+    end 'delExe'
+  end 'exe'
 end 'cleanupIncrTest'
 
 function verifyExeExitCode(exePath FilePath, expectedEc ExitCode) returns bool
-    let ec = Process.execute(exePath.toString(), timeoutMs: 5000)
-    if ec != expectedEc 'mismatch'
-        print("  expected exit code {expectedEc}, got {ec}\n")
-        return false
-    end 'mismatch'
-    return true
+  let ec = Process.execute(exePath.toString(), timeoutMs: 5000)
+  if ec != expectedEc 'mismatch'
+    print("  expected exit code {expectedEc}, got {ec}\n")
+    return false
+  end 'mismatch'
+  return true
 end 'verifyExeExitCode'
 
 function findIncrTestRoot() returns FilePath throws CompileError
-    var dir = Directory.currentPath()
-    for _ in 0 upto 10 'search'
-        let specsPath = dir.join("specs")
-        if specsPath.directoryExists() 'found'
-            return dir
-        end 'found'
-        let parentDir = dir.parent()
-        if parentDir.isEmpty() 'noParent'
-            throw CompileError.directoryNotFound
-        end 'noParent'
-        dir = parentDir
-    end 'search'
-    throw CompileError.directoryNotFound
+  var dir = Directory.currentPath()
+  for _ in 0 upto 10 'search'
+    let specsPath = dir.join("specs")
+    if specsPath.directoryExists() 'found'
+      return dir
+    end 'found'
+    let parentDir = dir.parent()
+    if parentDir.isEmpty() 'noParent'
+      throw CompileError.directoryNotFound
+    end 'noParent'
+    dir = parentDir
+  end 'search'
+  throw CompileError.directoryNotFound
 end 'findIncrTestRoot'

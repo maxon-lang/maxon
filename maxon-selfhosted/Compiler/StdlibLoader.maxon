@@ -3,61 +3,61 @@ var _stdlibLoaded = false
 var _stdlibNextValueId = 0
 
 export function findStdlibPath() returns FilePath
-    var dir = Directory.currentPath()
-    for _ in 0 upto 10 'search'
-        let candidate = dir.join("stdlib_selfhosted")
-        if candidate.directoryExists() 'found'
-            return candidate
-        end 'found'
-        let parentDir = dir.parent()
-        if parentDir.isEmpty() 'noParent'
-            return FilePath from ""
-        end 'noParent'
-        dir = parentDir
-    end 'search'
-    return FilePath from ""
+  var dir = Directory.currentPath()
+  for _ in 0 upto 10 'search'
+    let candidate = dir.join("stdlib_selfhosted")
+    if candidate.directoryExists() 'found'
+      return candidate
+    end 'found'
+    let parentDir = dir.parent()
+    if parentDir.isEmpty() 'noParent'
+      return FilePath from ""
+    end 'noParent'
+    dir = parentDir
+  end 'search'
+  return FilePath from ""
 end 'findStdlibPath'
 
 export function getStdlibModule(project Project) returns MlirModule
-    if _stdlibLoaded 'cached'
-        return _cachedStdlibModule
-    end 'cached'
-
-    let stdlibPath = findStdlibPath()
-    if stdlibPath.isEmpty() 'noStdlib'
-        logInfo(LogCategory.compiler, message: "No stdlib_selfhosted/ found, skipping stdlib")
-        _stdlibLoaded = true
-        return _cachedStdlibModule
-    end 'noStdlib'
-
-    logInfo(LogCategory.compiler, message: "Loading stdlib from {stdlibPath}")
-
-    // Whitelist of stdlib files to load
-    var stdlibFiles = FilePathArray{}
-    stdlibFiles.push(stdlibPath.join("StdlibTest.maxon").toString())
-
-    var allModule = createMlirModule()
-    for filePathStr in stdlibFiles 'eachFile'
-        let fp = try FilePath.from(filePathStr) otherwise panic("invalid stdlib path")
-        if fp.fileExists() 'exists'
-            let bytes = try File.readBinary(fp) otherwise 'readErr'
-                logDebug(LogCategory.compiler, message: "  Failed to read {fp}")
-                continue
-            end 'readErr'
-            logDebug(LogCategory.compiler, message: "  Parsing {fp}")
-            let tokens = tokenize(bytes)
-            let parsed = parse(project, tokens: tokens, filePath: filePathStr)
-            mergeModules(allModule, source: parsed)
-        end 'exists'
-    end 'eachFile'
-
-    _cachedStdlibModule = allModule
-    _stdlibNextValueId = getNextValueId(project)
-    _stdlibLoaded = true
-
+  if _stdlibLoaded 'cached'
     return _cachedStdlibModule
+  end 'cached'
+
+  let stdlibPath = findStdlibPath()
+  if stdlibPath.isEmpty() 'noStdlib'
+    logInfo(LogCategory.compiler, message: "No stdlib_selfhosted/ found, skipping stdlib")
+    _stdlibLoaded = true
+    return _cachedStdlibModule
+  end 'noStdlib'
+
+  logInfo(LogCategory.compiler, message: "Loading stdlib from {stdlibPath}")
+
+  // Whitelist of stdlib files to load
+  var stdlibFiles = FilePathArray{}
+  stdlibFiles.push(stdlibPath.join("StdlibTest.maxon").toString())
+
+  var allModule = createMlirModule()
+  for filePathStr in stdlibFiles 'eachFile'
+    let fp = try FilePath.from(filePathStr) otherwise panic("invalid stdlib path")
+    if fp.fileExists() 'exists'
+      let bytes = try File.readBinary(fp) otherwise 'readErr'
+        logDebug(LogCategory.compiler, message: "  Failed to read {fp}")
+        continue
+      end 'readErr'
+      logDebug(LogCategory.compiler, message: "  Parsing {fp}")
+      let tokens = tokenize(bytes)
+      let parsed = parse(project, tokens: tokens, filePath: filePathStr)
+      mergeModules(allModule, source: parsed)
+    end 'exists'
+  end 'eachFile'
+
+  _cachedStdlibModule = allModule
+  _stdlibNextValueId = getNextValueId(project)
+  _stdlibLoaded = true
+
+  return _cachedStdlibModule
 end 'getStdlibModule'
 
 export function getStdlibNextValueId() returns ValueId
-    return _stdlibNextValueId
+  return _stdlibNextValueId
 end 'getStdlibNextValueId'

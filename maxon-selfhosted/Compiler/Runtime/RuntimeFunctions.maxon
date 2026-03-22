@@ -2,60 +2,60 @@
 // Used by MaxHL->Mid lowering to register string literals for the PE/ELF data section.
 
 export type GlobalDataTable
-    export var names ByteArrayArray
-    export var values ByteArrayArray
-    export var nextStringId MachineWord
+  export var names ByteArrayArray
+  export var values ByteArrayArray
+  export var nextStringId MachineWord
 end 'GlobalDataTable'
 
 export function createGlobalDataTable() returns GlobalDataTable
-    return GlobalDataTable{names: ByteArrayArray{}, values: ByteArrayArray{}, nextStringId: 0}
+  return GlobalDataTable{names: ByteArrayArray{}, values: ByteArrayArray{}, nextStringId: 0}
 end 'createGlobalDataTable'
 
 // Look up a named entry in the global data table.
 // Returns empty ByteArray if the name is not found.
 export function lookupGlobalData(table GlobalDataTable, name ByteArray) returns ByteArray
-    for (i, tableName) in table.names.enumerated() 'findData'
-        if bytesEqual(tableName, b: name) 'found'
-            return try table.values.get(i) otherwise ByteArray{}
-        end 'found'
-    end 'findData'
-    return ByteArray{}
+  for(i, tableName) in table.names.enumerated() 'findData'
+    if bytesEqual(tableName, b: name) 'found'
+      return try table.values.get(i) otherwise ByteArray{}
+    end 'found'
+  end 'findData'
+  return ByteArray{}
 end 'lookupGlobalData'
 
 export function addGlobalData(table GlobalDataTable, data ByteArray) returns ByteArray
-    let id = table.nextStringId
-    table.nextStringId = table.nextStringId + 1
-    // Build name like "__str_0", "__str_1", etc.
-    var name = b"__str_"
-    let idStr = intToBytes(id)
-    name.append(idStr)
-    table.names.push(name)
-    table.values.push(data)
-    return name
+  let id = table.nextStringId
+  table.nextStringId = table.nextStringId + 1
+  // Build name like "__str_0", "__str_1", etc.
+  var name = b"__str_"
+  let idStr = intToBytes(id)
+  name.append(idStr)
+  table.names.push(name)
+  table.values.push(data)
+  return name
 end 'addGlobalData'
 
 // Convert an integer to its decimal byte representation.
 function intToBytes(value MachineWord) returns ByteArray
-    if value == 0 'zero'
-        return b"0"
-    end 'zero'
-    var result = ByteArray{}
-    var remaining = value
-    while remaining > 0 'digits'
-        let digit = remaining mod 10
-        result.push(digit + 0x30)
-        remaining = remaining / 10
-    end 'digits'
-    // Reverse in place
-    var lo = 0
-    var hi = result.count() - 1
-    while lo < hi 'reverse'
-        let tmp = try result.get(lo) otherwise 0
-        let hiVal = try result.get(hi) otherwise 0
-        result.set(lo, value: hiVal)
-        result.set(hi, value: tmp)
-        lo = lo + 1
-        hi = hi - 1
-    end 'reverse'
-    return result
+  if value == 0 'zero'
+    return b"0"
+  end 'zero'
+  var result = ByteArray{}
+  var remaining = value
+  while remaining > 0 'digits'
+    let digit = remaining mod 10
+    result.push(digit + 0x30)
+    remaining = remaining / 10
+  end 'digits'
+  // Reverse in place
+  var lo = 0
+  var hi = result.count() - 1
+  while lo < hi 'reverse'
+    let tmp = try result.get(lo) otherwise 0
+    let hiVal = try result.get(hi) otherwise 0
+    result.set(lo, value: hiVal)
+    result.set(hi, value: tmp)
+    lo = lo + 1
+    hi = hi - 1
+  end 'reverse'
+  return result
 end 'intToBytes'

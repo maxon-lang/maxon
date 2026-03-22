@@ -4,609 +4,607 @@
 
 // ARM64-specific binary op info (uses MaxArm64Op).
 type MaxArm64BinaryOpInfo
-    export var resultId ValueId
-    export var leftId ValueId
-    export var rightId ValueId
-    export var arm64Op MaxArm64Op
+  export var resultId ValueId
+  export var leftId ValueId
+  export var rightId ValueId
+  export var arm64Op MaxArm64Op
 end 'MaxArm64BinaryOpInfo'
 
 export function lowerMidToMaxArm64(module MlirModule, target Target) returns MlirModule
-    logInfo(LogCategory.mlir, message: "Lowering Mid to MaxArm64 dialect for {targetToString(target)}")
-    logTrace(LogCategory.mlir, message: "=== mid-to-arm64")
-    var result = createMlirModule()
-    let osDesc = makeOsDescriptor(target)
+  logInfo(LogCategory.mlir, message: "Lowering Mid to MaxArm64 dialect for {targetToString(target)}")
+  logTrace(LogCategory.mlir, message: "=== mid-to-arm64")
+  var result = createMlirModule()
+  let osDesc = makeOsDescriptor(target)
 
-    for srcFunc in module.functions 'eachFunc'
-        var dstFunc = createMlirFunction(srcFunc.name, returnType: srcFunc.returnType)
-        dstFunc.paramCount = srcFunc.paramCount
-        let funcName = String.from(srcFunc.name)
-        let skipFunc = isRuntimeFunction(funcName)
+  for srcFunc in module.functions 'eachFunc'
+    var dstFunc = createMlirFunction(srcFunc.name, returnType: srcFunc.returnType)
+    dstFunc.paramCount = srcFunc.paramCount
+    let funcName = String.from(srcFunc.name)
+    let skipFunc = isRuntimeFunction(funcName)
 
-        // Compute stack size and max parser slot across all blocks in this function
-        let stackSize = computeStackSizeForFunc(srcFunc, shadowSpace: 0, savedRegsSize: 16)
-        var nextTempSlot = computeMaxParserSlotInFunc(srcFunc) + 1
-        var valueSlots = ValueSlotMap{}
+    // Compute stack size and max parser slot across all blocks in this function
+    let stackSize = computeStackSizeForFunc(srcFunc, shadowSpace: 0, savedRegsSize: 16)
+    var nextTempSlot = computeMaxParserSlotInFunc(srcFunc) + 1
+    var valueSlots = ValueSlotMap{}
 
-        // Emit prologue as first op in first block
-        var isFirstBlock = true
+    // Emit prologue as first op in first block
+    var isFirstBlock = true
 
-        for srcBlock in srcFunc.region.blocks 'eachBlock'
-            var dstBlock = addBlock(dstFunc.region, label: srcBlock.label)
-            dstBlock.id = srcBlock.id
+    for srcBlock in srcFunc.region.blocks 'eachBlock'
+      var dstBlock = addBlock(dstFunc.region, label: srcBlock.label)
+      dstBlock.id = srcBlock.id
 
-            if not skipFunc 'logBlockCtx'
-                let blockLabel = String.from(srcBlock.label)
-                logTrace(LogCategory.mlir, message: "@{funcName} {blockLabel}:")
-            end 'logBlockCtx'
+      if not skipFunc 'logBlockCtx'
+        let blockLabel = String.from(srcBlock.label)
+        logTrace(LogCategory.mlir, message: "@{funcName} {blockLabel}:")
+      end 'logBlockCtx'
 
-            // Emit prologue at the start of the entry block
-            if isFirstBlock 'emitPrologue'
-                if not skipFunc 'logPrologue'
-                    logTrace(LogCategory.mlir, message: "  arm64.prologue stackSize={stackSize}, params={srcFunc.paramCount}")
-                end 'logPrologue'
-                dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.prologue(stackSize)))
-                // Save AAPCS64 register parameters to stack slots (x0-x7)
-                if srcFunc.paramCount >= 1 'saveParam0'
-                    dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.strToSlot(0, MaxArm64Register.x0)))
-                end 'saveParam0'
-                if srcFunc.paramCount >= 2 'saveParam1'
-                    dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.strToSlot(1, MaxArm64Register.x1)))
-                end 'saveParam1'
-                if srcFunc.paramCount >= 3 'saveParam2'
-                    dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.strToSlot(2, MaxArm64Register.x2)))
-                end 'saveParam2'
-                if srcFunc.paramCount >= 4 'saveParam3'
-                    dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.strToSlot(3, MaxArm64Register.x3)))
-                end 'saveParam3'
-                if srcFunc.paramCount >= 5 'saveParam4'
-                    dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.strToSlot(4, MaxArm64Register.x4)))
-                end 'saveParam4'
-                if srcFunc.paramCount >= 6 'saveParam5'
-                    dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.strToSlot(5, MaxArm64Register.x5)))
-                end 'saveParam5'
-                if srcFunc.paramCount >= 7 'saveParam6'
-                    dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.strToSlot(6, MaxArm64Register.x6)))
-                end 'saveParam6'
-                if srcFunc.paramCount >= 8 'saveParam7'
-                    dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.strToSlot(7, MaxArm64Register.x7)))
-                end 'saveParam7'
-                isFirstBlock = false
-            end 'emitPrologue'
+      // Emit prologue at the start of the entry block
+      if isFirstBlock 'emitPrologue'
+        if not skipFunc 'logPrologue'
+          logTrace(LogCategory.mlir, message: "  arm64.prologue stackSize={stackSize}, params={srcFunc.paramCount}")
+        end 'logPrologue'
+        dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.prologue(stackSize)))
+        // Save AAPCS64 register parameters to stack slots (x0-x7)
+        if srcFunc.paramCount >= 1 'saveParam0'
+          dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.strToSlot(0, MaxArm64Register.x0)))
+        end 'saveParam0'
+        if srcFunc.paramCount >= 2 'saveParam1'
+          dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.strToSlot(1, MaxArm64Register.x1)))
+        end 'saveParam1'
+        if srcFunc.paramCount >= 3 'saveParam2'
+          dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.strToSlot(2, MaxArm64Register.x2)))
+        end 'saveParam2'
+        if srcFunc.paramCount >= 4 'saveParam3'
+          dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.strToSlot(3, MaxArm64Register.x3)))
+        end 'saveParam3'
+        if srcFunc.paramCount >= 5 'saveParam4'
+          dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.strToSlot(4, MaxArm64Register.x4)))
+        end 'saveParam4'
+        if srcFunc.paramCount >= 6 'saveParam5'
+          dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.strToSlot(5, MaxArm64Register.x5)))
+        end 'saveParam5'
+        if srcFunc.paramCount >= 7 'saveParam6'
+          dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.strToSlot(6, MaxArm64Register.x6)))
+        end 'saveParam6'
+        if srcFunc.paramCount >= 8 'saveParam7'
+          dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.strToSlot(7, MaxArm64Register.x7)))
+        end 'saveParam7'
+        isFirstBlock = false
+      end 'emitPrologue'
 
-            // Lower ops
-            for op in srcBlock.ops 'eachOp'
-                let opsBefore = dstBlock.ops.count()
-                nextTempSlot = lowerMidOpToArm64(op, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot, osDesc: osDesc)
-                if not skipFunc 'logOp'
-                    let sourceStr = printOp(op, blocks: MlirBlockArray{})
-                    let opsAfter = dstBlock.ops.count()
-                    var targetStr = ""
-                    for k in opsBefore upto opsAfter 'eachNew'
-                        let newOp = try dstBlock.ops.get(k) otherwise 'skipOp'
-                            continue
-                        end 'skipOp'
-                        let newOpStr = printOp(newOp, blocks: MlirBlockArray{})
-                        if targetStr.isEmpty() 'first'
-                            targetStr = newOpStr
-                        end 'first' else 'append'
-                            targetStr = "{targetStr}, {newOpStr}"
-                        end 'append'
-                    end 'eachNew'
-                    logTrace(LogCategory.mlir, message: "  {sourceStr} -> {targetStr}")
-                end 'logOp'
-            end 'eachOp'
+      // Lower ops
+      for op in srcBlock.ops 'eachOp'
+        let opsBefore = dstBlock.ops.count()
+        nextTempSlot = lowerMidOpToArm64(op, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot, osDesc: osDesc)
+        if not skipFunc 'logOp'
+          let sourceStr = printOp(op, blocks: MlirBlockArray{})
+          let opsAfter = dstBlock.ops.count()
+          var targetStr = ""
+          for k in opsBefore upto opsAfter 'eachNew'
+            let newOp = try dstBlock.ops.get(k) otherwise 'skipOp'
+              continue
+            end 'skipOp'
+            let newOpStr = printOp(newOp, blocks: MlirBlockArray{})
+            if targetStr.isEmpty() 'first'
+              targetStr = newOpStr
+            end 'first' else 'append'
+              targetStr = "{targetStr}, {newOpStr}"
+            end 'append'
+          end 'eachNew'
+          logTrace(LogCategory.mlir, message: "  {sourceStr} -> {targetStr}")
+        end 'logOp'
+      end 'eachOp'
 
-            // Lower terminator (pass srcBlock so condBr can scan source ops for cmp kind)
-            if srcBlock.hasTerminator 'hasTerm'
-                let termOpsBefore = dstBlock.ops.count()
-                lowerMidTerminatorToArm64(srcBlock.terminator, srcBlock: srcBlock, dstBlock: dstBlock, valueSlots: valueSlots)
-                if not skipFunc 'logTerm'
-                    let sourceStr = printOp(srcBlock.terminator, blocks: srcFunc.region.blocks)
-                    let targetStr = printOp(dstBlock.terminator, blocks: dstFunc.region.blocks)
-                    var extraOpsStr = ""
-                    let termOpsAfter = dstBlock.ops.count()
-                    for k in termOpsBefore upto termOpsAfter 'eachTermOp'
-                        let newOp = try dstBlock.ops.get(k) otherwise 'skipTermOp'
-                            continue
-                        end 'skipTermOp'
-                        let newOpStr = printOp(newOp, blocks: MlirBlockArray{})
-                        if extraOpsStr.isEmpty() 'first'
-                            extraOpsStr = newOpStr
-                        end 'first' else 'append'
-                            extraOpsStr = "{extraOpsStr}, {newOpStr}"
-                        end 'append'
-                    end 'eachTermOp'
-                    if extraOpsStr.isEmpty() 'noExtra'
-                        logTrace(LogCategory.mlir, message: "  {sourceStr} -> {targetStr}")
-                    end 'noExtra' else 'withExtra'
-                        logTrace(LogCategory.mlir, message: "  {sourceStr} -> {extraOpsStr}, {targetStr}")
-                    end 'withExtra'
-                end 'logTerm'
-            end 'hasTerm'
-        end 'eachBlock'
+      // Lower terminator (pass srcBlock so condBr can scan source ops for cmp kind)
+      if srcBlock.hasTerminator 'hasTerm'
+        let termOpsBefore = dstBlock.ops.count()
+        lowerMidTerminatorToArm64(srcBlock.terminator, srcBlock: srcBlock, dstBlock: dstBlock, valueSlots: valueSlots)
+        if not skipFunc 'logTerm'
+          let sourceStr = printOp(srcBlock.terminator, blocks: srcFunc.region.blocks)
+          let targetStr = printOp(dstBlock.terminator, blocks: dstFunc.region.blocks)
+          var extraOpsStr = ""
+          let termOpsAfter = dstBlock.ops.count()
+          for k in termOpsBefore upto termOpsAfter 'eachTermOp'
+            let newOp = try dstBlock.ops.get(k) otherwise 'skipTermOp'
+              continue
+            end 'skipTermOp'
+            let newOpStr = printOp(newOp, blocks: MlirBlockArray{})
+            if extraOpsStr.isEmpty() 'first'
+              extraOpsStr = newOpStr
+            end 'first' else 'append'
+              extraOpsStr = "{extraOpsStr}, {newOpStr}"
+            end 'append'
+          end 'eachTermOp'
+          if extraOpsStr.isEmpty() 'noExtra'
+            logTrace(LogCategory.mlir, message: "  {sourceStr} -> {targetStr}")
+          end 'noExtra' else 'withExtra'
+            logTrace(LogCategory.mlir, message: "  {sourceStr} -> {extraOpsStr}, {targetStr}")
+          end 'withExtra'
+        end 'logTerm'
+      end 'hasTerm'
+    end 'eachBlock'
 
-        dstFunc.region.nextBlockId = srcFunc.region.nextBlockId
-        result.functions.push(dstFunc)
-    end 'eachFunc'
+    dstFunc.region.nextBlockId = srcFunc.region.nextBlockId
+    result.functions.push(dstFunc)
+  end 'eachFunc'
 
-    return result
+  return result
 end 'lowerMidToMaxArm64'
 
 // Lower a single mid-level op to MaxArm64 ops in the destination block.
 // Returns the updated nextTempSlot.
 function lowerMidOpToArm64(op MlirOp, dstBlock MlirBlock, valueSlots ValueSlotMap, nextTempSlot VarSlot, osDesc OsDescriptor) returns VarSlot
-    var tempSlot = nextTempSlot
-    match op 'dispatch'
-        arith(aOp) then tempSlot = lowerArithToArm64(aOp, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: tempSlot)
-        memref(mOp) then lowerMemRefToArm64(mOp, dstBlock: dstBlock, valueSlots: valueSlots)
-        func(fOp) then tempSlot = lowerFuncOpToArm64(fOp, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: tempSlot)
-        runtime(rOp) then lowerRuntimeToArm64(rOp, dstBlock: dstBlock)
-        sys(sysOp) then tempSlot = lowerSysOpToArm64(sysOp, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: tempSlot, osDesc: osDesc)
-        cf then break 'dispatch'
-        maxhl then break 'dispatch'
-        maxx64 then break 'dispatch'
-        maxarm64(aOp) then dstBlock.ops.push(op)
-    end 'dispatch'
-    return tempSlot
+  var tempSlot = nextTempSlot
+  match op 'dispatch'
+    arith(aOp) then tempSlot = lowerArithToArm64(aOp, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: tempSlot)
+    memref(mOp) then lowerMemRefToArm64(mOp, dstBlock: dstBlock, valueSlots: valueSlots)
+    func(fOp) then tempSlot = lowerFuncOpToArm64(fOp, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: tempSlot)
+    runtime(rOp) then lowerRuntimeToArm64(rOp, dstBlock: dstBlock)
+    sys(sysOp) then tempSlot = lowerSysOpToArm64(sysOp, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: tempSlot, osDesc: osDesc)
+    cf then break 'dispatch'
+    maxhl then break 'dispatch'
+    maxx64 then break 'dispatch'
+    maxarm64(aOp) then dstBlock.ops.push(op)
+  end 'dispatch'
+  return tempSlot
 end 'lowerMidOpToArm64'
 
 // Lower an arith op to MaxArm64 ops.
 function lowerArithToArm64(aOp ArithOp, dstBlock MlirBlock, valueSlots ValueSlotMap, nextTempSlot VarSlot) returns VarSlot
-    return match aOp 'dispatch'
-        const(c) gives lowerArithConstToArm64(c, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
-        unary(u) gives lowerArithUnaryToArm64(u, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
-        binary(b) gives lowerArithBinaryToArm64(b, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
-    end 'dispatch'
+  return match aOp 'dispatch'
+    const(c) gives lowerArithConstToArm64(c, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
+    unary(u) gives lowerArithUnaryToArm64(u, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
+    binary(b) gives lowerArithBinaryToArm64(b, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
+  end 'dispatch'
 end 'lowerArithToArm64'
 
 // Emit a constant: movImm + strToSlot, record in valueSlots.
 function lowerArithConstToArm64(op ArithConst, dstBlock MlirBlock, valueSlots ValueSlotMap, nextTempSlot VarSlot) returns VarSlot
-    return match op 'lower'
-        constI64(resultId, value) gives emitMaxArm64ConstValue(dstBlock, valueSlots: valueSlots, resultId: resultId, value: value, nextTempSlot: nextTempSlot)
-        constF64(resultId, rawBits) gives emitMaxArm64ConstValue(dstBlock, valueSlots: valueSlots, resultId: resultId, value: rawBits, nextTempSlot: nextTempSlot)
-    end 'lower'
+  return match op 'lower'
+    constI64(resultId, value) gives emitMaxArm64ConstValue(dstBlock, valueSlots: valueSlots, resultId: resultId, value: value, nextTempSlot: nextTempSlot)
+    constF64(resultId, rawBits) gives emitMaxArm64ConstValue(dstBlock, valueSlots: valueSlots, resultId: resultId, value: rawBits, nextTempSlot: nextTempSlot)
+  end 'lower'
 end 'lowerArithConstToArm64'
 
 function emitMaxArm64ConstValue(dstBlock MlirBlock, valueSlots ValueSlotMap, resultId ValueId, value ParsedInt, nextTempSlot VarSlot) returns VarSlot
-    let slot = nextTempSlot
-    dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.movImm(MaxArm64Register.x0, value)))
-    dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.strToSlot(slot, MaxArm64Register.x0)))
-    valueSlotMapSet(valueSlots, valueId: resultId, slot: slot)
-    return slot + 1
+  let slot = nextTempSlot
+  dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.movImm(MaxArm64Register.x0, value)))
+  dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.strToSlot(slot, MaxArm64Register.x0)))
+  valueSlotMapSet(valueSlots, valueId: resultId, slot: slot)
+  return slot + 1
 end 'emitMaxArm64ConstValue'
 
 // Emit a unary op: load operand->X0, apply op, store result.
 function lowerArithUnaryToArm64(op ArithUnaryOp, dstBlock MlirBlock, valueSlots ValueSlotMap, nextTempSlot VarSlot) returns VarSlot
-    var resultId = 0
-    var operandId = 0
-    match op 'extractResult'
-        negI64(r, _) then resultId = r
-        bitNotI64(r, _) then resultId = r
-    end 'extractResult'
-    match op 'extractOperand'
-        negI64(_, o) then operandId = o
-        bitNotI64(_, o) then operandId = o
-    end 'extractOperand'
+  var resultId = 0
+  var operandId = 0
+  match op 'extractResult'
+    negI64(r, _) then resultId = r
+    bitNotI64(r, _) then resultId = r
+  end 'extractResult'
+  match op 'extractOperand'
+    negI64(_, o) then operandId = o
+    bitNotI64(_, o) then operandId = o
+  end 'extractOperand'
 
-    let operandSlot = valueSlotMapGet(valueSlots, valueId: operandId)
-    dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.ldrFromSlot(MaxArm64Register.x0, operandSlot)))
-    dstBlock.ops.push(MlirOp.maxarm64(getMaxArm64UnaryOp(op)))
-    let slot = nextTempSlot
-    dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.strToSlot(slot, MaxArm64Register.x0)))
-    valueSlotMapSet(valueSlots, valueId: resultId, slot: slot)
-    return slot + 1
+  let operandSlot = valueSlotMapGet(valueSlots, valueId: operandId)
+  dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.ldrFromSlot(MaxArm64Register.x0, operandSlot)))
+  dstBlock.ops.push(MlirOp.maxarm64(getMaxArm64UnaryOp(op)))
+  let slot = nextTempSlot
+  dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.strToSlot(slot, MaxArm64Register.x0)))
+  valueSlotMapSet(valueSlots, valueId: resultId, slot: slot)
+  return slot + 1
 end 'lowerArithUnaryToArm64'
 
 // Lower a binary arith op to MaxArm64 ops.
 function lowerArithBinaryToArm64(op ArithBinaryOp, dstBlock MlirBlock, valueSlots ValueSlotMap, nextTempSlot VarSlot) returns VarSlot
-    match op.opcode 'check'
-        ArithBinaryOpcode.divI64 then return emitMaxArm64DivRem(op.resultId, leftId: op.leftId, rightId: op.rightId, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot, isRem: false)
-        ArithBinaryOpcode.remI64 then return emitMaxArm64DivRem(op.resultId, leftId: op.leftId, rightId: op.rightId, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot, isRem: true)
-        ArithBinaryOpcode.addI64 to ArithBinaryOpcode.mulI64 then return emitMaxArm64BinaryOp(op, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
-        ArithBinaryOpcode.andI64 to ArithBinaryOpcode.cmpF64Ge then return emitMaxArm64BinaryOp(op, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
-    end 'check'
+  match op.opcode 'check'
+    ArithBinaryOpcode.divI64 then return emitMaxArm64DivRem(op.resultId, leftId: op.leftId, rightId: op.rightId, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot, isRem: false)
+    ArithBinaryOpcode.remI64 then return emitMaxArm64DivRem(op.resultId, leftId: op.leftId, rightId: op.rightId, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot, isRem: true)
+    ArithBinaryOpcode.addI64 to ArithBinaryOpcode.mulI64 then return emitMaxArm64BinaryOp(op, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
+    ArithBinaryOpcode.andI64 to ArithBinaryOpcode.cmpF64Ge then return emitMaxArm64BinaryOp(op, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
+  end 'check'
 end 'lowerArithBinaryToArm64'
 
 // Emit a binary op: load left->X0, load right->X1, operate, store result.
 function emitMaxArm64BinaryOp(op ArithBinaryOp, dstBlock MlirBlock, valueSlots ValueSlotMap, nextTempSlot VarSlot) returns VarSlot
-    let info = maxArm64GetBinaryOpInfo(op)
-    let leftSlot = valueSlotMapGet(valueSlots, valueId: info.leftId)
-    let rightSlot = valueSlotMapGet(valueSlots, valueId: info.rightId)
-    // Load right operand into X1 first (so X0 load doesn't clobber it)
-    dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.ldrFromSlot(MaxArm64Register.x1, rightSlot)))
-    dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.ldrFromSlot(MaxArm64Register.x0, leftSlot)))
-    // Emit the operation
-    dstBlock.ops.push(MlirOp.maxarm64(info.arm64Op))
-    // Store the result
-    let slot = nextTempSlot
-    dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.strToSlot(slot, MaxArm64Register.x0)))
-    valueSlotMapSet(valueSlots, valueId: info.resultId, slot: slot)
-    return slot + 1
+  let info = maxArm64GetBinaryOpInfo(op)
+  let leftSlot = valueSlotMapGet(valueSlots, valueId: info.leftId)
+  let rightSlot = valueSlotMapGet(valueSlots, valueId: info.rightId)
+  // Load right operand into X1 first (so X0 load doesn't clobber it)
+  dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.ldrFromSlot(MaxArm64Register.x1, rightSlot)))
+  dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.ldrFromSlot(MaxArm64Register.x0, leftSlot)))
+  // Emit the operation
+  dstBlock.ops.push(MlirOp.maxarm64(info.arm64Op))
+  // Store the result
+  let slot = nextTempSlot
+  dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.strToSlot(slot, MaxArm64Register.x0)))
+  valueSlotMapSet(valueSlots, valueId: info.resultId, slot: slot)
+  return slot + 1
 end 'emitMaxArm64BinaryOp'
 
 // Emit div or rem: load left->X0, right->X1, SDIV (or SDIV+MSUB for rem), store result.
 function emitMaxArm64DivRem(resultId ValueId, leftId ValueId, rightId ValueId, dstBlock MlirBlock, valueSlots ValueSlotMap, nextTempSlot VarSlot, isRem bool) returns VarSlot
-    let leftSlot = valueSlotMapGet(valueSlots, valueId: leftId)
-    let rightSlot = valueSlotMapGet(valueSlots, valueId: rightId)
-    dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.ldrFromSlot(MaxArm64Register.x1, rightSlot)))
-    dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.ldrFromSlot(MaxArm64Register.x0, leftSlot)))
-    if isRem 'emitRem'
-        dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.remRegs(MaxArm64Register.x0, MaxArm64Register.x0, MaxArm64Register.x1)))
-    end 'emitRem' else 'emitDiv'
-        dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.sdivRegs(MaxArm64Register.x0, MaxArm64Register.x0, MaxArm64Register.x1)))
-    end 'emitDiv'
-    let slot = nextTempSlot
-    dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.strToSlot(slot, MaxArm64Register.x0)))
-    valueSlotMapSet(valueSlots, valueId: resultId, slot: slot)
-    return slot + 1
+  let leftSlot = valueSlotMapGet(valueSlots, valueId: leftId)
+  let rightSlot = valueSlotMapGet(valueSlots, valueId: rightId)
+  dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.ldrFromSlot(MaxArm64Register.x1, rightSlot)))
+  dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.ldrFromSlot(MaxArm64Register.x0, leftSlot)))
+  if isRem 'emitRem'
+    dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.remRegs(MaxArm64Register.x0, MaxArm64Register.x0, MaxArm64Register.x1)))
+  end 'emitRem' else 'emitDiv'
+    dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.sdivRegs(MaxArm64Register.x0, MaxArm64Register.x0, MaxArm64Register.x1)))
+  end 'emitDiv'
+  let slot = nextTempSlot
+  dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.strToSlot(slot, MaxArm64Register.x0)))
+  valueSlotMapSet(valueSlots, valueId: resultId, slot: slot)
+  return slot + 1
 end 'emitMaxArm64DivRem'
 
 // Lower a memref op to MaxArm64 ops.
 function lowerMemRefToArm64(mOp MemRefOp, dstBlock MlirBlock, valueSlots ValueSlotMap)
-    match mOp 'lower'
-        storeSlot(slotId, valueId) then emitMaxArm64StoreSlot(dstBlock, valueSlots: valueSlots, slotId: slotId, valueId: valueId)
-        loadSlot(resultId, slotId) then emitMaxArm64LoadSlot(dstBlock, valueSlots: valueSlots, resultId: resultId, slotId: slotId)
-    end 'lower'
+  match mOp 'lower'
+    storeSlot(slotId, valueId) then emitMaxArm64StoreSlot(dstBlock, valueSlots: valueSlots, slotId: slotId, valueId: valueId)
+    loadSlot(resultId, slotId) then emitMaxArm64LoadSlot(dstBlock, valueSlots: valueSlots, resultId: resultId, slotId: slotId)
+  end 'lower'
 end 'lowerMemRefToArm64'
 
 // Store to slot and record the value->slot mapping.
 function emitMaxArm64StoreSlot(dstBlock MlirBlock, valueSlots ValueSlotMap, slotId VarSlot, valueId ValueId)
-    dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.strToSlot(slotId, MaxArm64Register.x0)))
-    valueSlotMapSet(valueSlots, valueId: valueId, slot: slotId)
+  dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.strToSlot(slotId, MaxArm64Register.x0)))
+  valueSlotMapSet(valueSlots, valueId: valueId, slot: slotId)
 end 'emitMaxArm64StoreSlot'
 
 // Load from slot and record the result value->slot mapping.
 function emitMaxArm64LoadSlot(dstBlock MlirBlock, valueSlots ValueSlotMap, resultId ValueId, slotId VarSlot)
-    dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.ldrFromSlot(MaxArm64Register.x0, slotId)))
-    valueSlotMapSet(valueSlots, valueId: resultId, slot: slotId)
+  dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.ldrFromSlot(MaxArm64Register.x0, slotId)))
+  valueSlotMapSet(valueSlots, valueId: resultId, slot: slotId)
 end 'emitMaxArm64LoadSlot'
 
 // Lower a func op to MaxArm64 ops.
 // After a call, the return value is in x0 — store it to a temp slot so later ops can find it.
 function lowerFuncOpToArm64(fOp FuncOp, dstBlock MlirBlock, valueSlots ValueSlotMap, nextTempSlot SlotIndex) returns SlotIndex
-    return match fOp 'lower'
-        ret gives nextTempSlot
-        call(resultId, callee, argIds) gives lowerCallOpToArm64(resultId, callee: callee, argIds: argIds, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
-    end 'lower'
+  return match fOp 'lower'
+    ret gives nextTempSlot
+    call(resultId, callee, argIds) gives lowerCallOpToArm64(resultId, callee: callee, argIds: argIds, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
+  end 'lower'
 end 'lowerFuncOpToArm64'
 
 function lowerCallOpToArm64(resultId ValueId, callee ByteArray, argIds ValueIdArray, dstBlock MlirBlock, valueSlots ValueSlotMap, nextTempSlot SlotIndex) returns SlotIndex
-    // AAPCS64: first 8 integer args in x0-x7
-    let argCount = argIds.count()
-    if argCount > 8 'tooManyArgs'
-        logError(LogCategory.codegen, message: "ARM64 backend does not yet support more than 8 function arguments (got {argCount})")
-    end 'tooManyArgs'
-    if argCount >= 1 'arg0'
-        let argSlot0 = valueSlotMapGet(valueSlots, valueId: try argIds.get(0) otherwise 0)
-        dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.ldrFromSlot(MaxArm64Register.x0, argSlot0)))
-    end 'arg0'
-    if argCount >= 2 'arg1'
-        let argSlot1 = valueSlotMapGet(valueSlots, valueId: try argIds.get(1) otherwise 0)
-        dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.ldrFromSlot(MaxArm64Register.x1, argSlot1)))
-    end 'arg1'
-    if argCount >= 3 'arg2'
-        let argSlot2 = valueSlotMapGet(valueSlots, valueId: try argIds.get(2) otherwise 0)
-        dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.ldrFromSlot(MaxArm64Register.x2, argSlot2)))
-    end 'arg2'
-    if argCount >= 4 'arg3'
-        let argSlot3 = valueSlotMapGet(valueSlots, valueId: try argIds.get(3) otherwise 0)
-        dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.ldrFromSlot(MaxArm64Register.x3, argSlot3)))
-    end 'arg3'
-    if argCount >= 5 'arg4'
-        let argSlot4 = valueSlotMapGet(valueSlots, valueId: try argIds.get(4) otherwise 0)
-        dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.ldrFromSlot(MaxArm64Register.x4, argSlot4)))
-    end 'arg4'
-    if argCount >= 6 'arg5'
-        let argSlot5 = valueSlotMapGet(valueSlots, valueId: try argIds.get(5) otherwise 0)
-        dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.ldrFromSlot(MaxArm64Register.x5, argSlot5)))
-    end 'arg5'
-    if argCount >= 7 'arg6'
-        let argSlot6 = valueSlotMapGet(valueSlots, valueId: try argIds.get(6) otherwise 0)
-        dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.ldrFromSlot(MaxArm64Register.x6, argSlot6)))
-    end 'arg6'
-    if argCount >= 8 'arg7'
-        let argSlot7 = valueSlotMapGet(valueSlots, valueId: try argIds.get(7) otherwise 0)
-        dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.ldrFromSlot(MaxArm64Register.x7, argSlot7)))
-    end 'arg7'
+  // AAPCS64: first 8 integer args in x0-x7
+  let argCount = argIds.count()
+  if argCount > 8 'tooManyArgs'
+    logError(LogCategory.codegen, message: "ARM64 backend does not yet support more than 8 function arguments (got {argCount})")
+  end 'tooManyArgs'
+  if argCount >= 1 'arg0'
+    let argSlot0 = valueSlotMapGet(valueSlots, valueId: try argIds.get(0) otherwise 0)
+    dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.ldrFromSlot(MaxArm64Register.x0, argSlot0)))
+  end 'arg0'
+  if argCount >= 2 'arg1'
+    let argSlot1 = valueSlotMapGet(valueSlots, valueId: try argIds.get(1) otherwise 0)
+    dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.ldrFromSlot(MaxArm64Register.x1, argSlot1)))
+  end 'arg1'
+  if argCount >= 3 'arg2'
+    let argSlot2 = valueSlotMapGet(valueSlots, valueId: try argIds.get(2) otherwise 0)
+    dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.ldrFromSlot(MaxArm64Register.x2, argSlot2)))
+  end 'arg2'
+  if argCount >= 4 'arg3'
+    let argSlot3 = valueSlotMapGet(valueSlots, valueId: try argIds.get(3) otherwise 0)
+    dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.ldrFromSlot(MaxArm64Register.x3, argSlot3)))
+  end 'arg3'
+  if argCount >= 5 'arg4'
+    let argSlot4 = valueSlotMapGet(valueSlots, valueId: try argIds.get(4) otherwise 0)
+    dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.ldrFromSlot(MaxArm64Register.x4, argSlot4)))
+  end 'arg4'
+  if argCount >= 6 'arg5'
+    let argSlot5 = valueSlotMapGet(valueSlots, valueId: try argIds.get(5) otherwise 0)
+    dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.ldrFromSlot(MaxArm64Register.x5, argSlot5)))
+  end 'arg5'
+  if argCount >= 7 'arg6'
+    let argSlot6 = valueSlotMapGet(valueSlots, valueId: try argIds.get(6) otherwise 0)
+    dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.ldrFromSlot(MaxArm64Register.x6, argSlot6)))
+  end 'arg6'
+  if argCount >= 8 'arg7'
+    let argSlot7 = valueSlotMapGet(valueSlots, valueId: try argIds.get(7) otherwise 0)
+    dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.ldrFromSlot(MaxArm64Register.x7, argSlot7)))
+  end 'arg7'
 
-    dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.branchLink(callee)))
-    let tempSlot = nextTempSlot
-    dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.strToSlot(tempSlot, MaxArm64Register.x0)))
-    valueSlotMapSet(valueSlots, valueId: resultId, slot: tempSlot)
-    return nextTempSlot + 1
+  dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.branchLink(callee)))
+  let tempSlot = nextTempSlot
+  dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.strToSlot(tempSlot, MaxArm64Register.x0)))
+  valueSlotMapSet(valueSlots, valueId: resultId, slot: tempSlot)
+  return nextTempSlot + 1
 end 'lowerCallOpToArm64'
 
 // Lower a runtime op to MaxArm64 ops.
 function lowerRuntimeToArm64(rOp RuntimeOp, dstBlock MlirBlock)
-    match rOp 'lower'
-        printLiteral(data) then dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.printLiteral(data)))
-        printInt then dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.printInt))
-    end 'lower'
+  match rOp 'lower'
+    printLiteral(data) then dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.printLiteral(data)))
+    printInt then dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.printInt))
+  end 'lower'
 end 'lowerRuntimeToArm64'
 
 // Lower a block terminator to MaxArm64 ops.
 function lowerMidTerminatorToArm64(op MlirOp, srcBlock MlirBlock, dstBlock MlirBlock, valueSlots ValueSlotMap)
-    match op 'dispatch'
-        maxhl to arith then break 'dispatch'
-        cf(cOp) then lowerCfTerminatorToArm64(cOp, srcBlock: srcBlock, dstBlock: dstBlock, valueSlots: valueSlots)
-        func(fOp) then lowerFuncTerminatorToArm64(fOp, dstBlock: dstBlock, valueSlots: valueSlots)
-        memref to maxx64 then break 'dispatch'
-        maxarm64 then dstBlock.terminator = op
-    end 'dispatch'
-    dstBlock.hasTerminator = true
+  match op 'dispatch'
+    maxhl to arith then break 'dispatch'
+    cf(cOp) then lowerCfTerminatorToArm64(cOp, srcBlock: srcBlock, dstBlock: dstBlock, valueSlots: valueSlots)
+    func(fOp) then lowerFuncTerminatorToArm64(fOp, dstBlock: dstBlock, valueSlots: valueSlots)
+    memref to maxx64 then break 'dispatch'
+    maxarm64 then dstBlock.terminator = op
+  end 'dispatch'
+  dstBlock.hasTerminator = true
 end 'lowerMidTerminatorToArm64'
 
 // Lower cf terminators: condBr -> compare + conditional branch, br -> unconditional branch.
 function lowerCfTerminatorToArm64(cOp CfOp, srcBlock MlirBlock, dstBlock MlirBlock, valueSlots ValueSlotMap)
-    match cOp 'lower'
-        br(target) then dstBlock.terminator = MlirOp.maxarm64(MaxArm64Op.branch(target))
-        condBr(condId, thenTarget, elseTarget) then lowerCondBrToArm64(srcBlock: srcBlock, dstBlock: dstBlock, valueSlots: valueSlots, condId: condId, thenTarget: thenTarget, elseTarget: elseTarget)
-    end 'lower'
+  match cOp 'lower'
+    br(target) then dstBlock.terminator = MlirOp.maxarm64(MaxArm64Op.branch(target))
+    condBr(condId, thenTarget, elseTarget) then lowerCondBrToArm64(srcBlock: srcBlock, dstBlock: dstBlock, valueSlots: valueSlots, condId: condId, thenTarget: thenTarget, elseTarget: elseTarget)
+  end 'lower'
 end 'lowerCfTerminatorToArm64'
 
 // Lower condBr: look back through source ops to find comparison, emit inverted conditional
 // branch to else, then unconditional branch to then.
 function lowerCondBrToArm64(srcBlock MlirBlock, dstBlock MlirBlock, valueSlots ValueSlotMap, condId ValueId, thenTarget BlockId, elseTarget BlockId)
-    let jumpKind = determineJumpKindInBlock(srcBlock)
+  let jumpKind = determineJumpKindInBlock(srcBlock)
 
-    // Emit inverted condition branch to else block
-    match jumpKind 'emitJump'
-        JumpKind.eq then dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.condBranch(MaxArm64CondCode.ne, elseTarget)))
-        JumpKind.ne then dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.condBranch(MaxArm64CondCode.eq, elseTarget)))
-        JumpKind.lt then dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.condBranch(MaxArm64CondCode.ge, elseTarget)))
-        JumpKind.le then dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.condBranch(MaxArm64CondCode.gt, elseTarget)))
-        JumpKind.gt then dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.condBranch(MaxArm64CondCode.le, elseTarget)))
-        JumpKind.ge then dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.condBranch(MaxArm64CondCode.lt, elseTarget)))
-        JumpKind.feq then dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.condBranch(MaxArm64CondCode.ne, elseTarget)))
-        JumpKind.fne then dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.condBranch(MaxArm64CondCode.eq, elseTarget)))
-        JumpKind.flt then dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.condBranch(MaxArm64CondCode.ge, elseTarget)))
-        JumpKind.fle then dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.condBranch(MaxArm64CondCode.gt, elseTarget)))
-        JumpKind.fgt then dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.condBranch(MaxArm64CondCode.le, elseTarget)))
-        JumpKind.fge then dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.condBranch(MaxArm64CondCode.lt, elseTarget)))
-        JumpKind.boolTest then emitBoolTestBranch(dstBlock, valueSlots: valueSlots, condId: condId, elseTarget: elseTarget)
-    end 'emitJump'
+  // Emit inverted condition branch to else block
+  match jumpKind 'emitJump'
+    JumpKind.eq then dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.condBranch(MaxArm64CondCode.ne, elseTarget)))
+    JumpKind.ne then dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.condBranch(MaxArm64CondCode.eq, elseTarget)))
+    JumpKind.lt then dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.condBranch(MaxArm64CondCode.ge, elseTarget)))
+    JumpKind.le then dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.condBranch(MaxArm64CondCode.gt, elseTarget)))
+    JumpKind.gt then dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.condBranch(MaxArm64CondCode.le, elseTarget)))
+    JumpKind.ge then dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.condBranch(MaxArm64CondCode.lt, elseTarget)))
+    JumpKind.feq then dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.condBranch(MaxArm64CondCode.ne, elseTarget)))
+    JumpKind.fne then dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.condBranch(MaxArm64CondCode.eq, elseTarget)))
+    JumpKind.flt then dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.condBranch(MaxArm64CondCode.ge, elseTarget)))
+    JumpKind.fle then dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.condBranch(MaxArm64CondCode.gt, elseTarget)))
+    JumpKind.fgt then dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.condBranch(MaxArm64CondCode.le, elseTarget)))
+    JumpKind.fge then dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.condBranch(MaxArm64CondCode.lt, elseTarget)))
+    JumpKind.boolTest then emitBoolTestBranch(dstBlock, valueSlots: valueSlots, condId: condId, elseTarget: elseTarget)
+  end 'emitJump'
 
-    // Unconditional branch to then block
-    dstBlock.terminator = MlirOp.maxarm64(MaxArm64Op.branch(thenTarget))
+  // Unconditional branch to then block
+  dstBlock.terminator = MlirOp.maxarm64(MaxArm64Op.branch(thenTarget))
 end 'lowerCondBrToArm64'
 
 // For boolTest: load condition value, compare against zero, branch if equal (false).
 function emitBoolTestBranch(dstBlock MlirBlock, valueSlots ValueSlotMap, condId ValueId, elseTarget BlockId)
-    let condSlot = valueSlotMapGet(valueSlots, valueId: condId)
-    dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.ldrFromSlot(MaxArm64Register.x0, condSlot)))
-    dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.cmpRegZero(MaxArm64Register.x0)))
-    dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.condBranch(MaxArm64CondCode.eq, elseTarget)))
+  let condSlot = valueSlotMapGet(valueSlots, valueId: condId)
+  dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.ldrFromSlot(MaxArm64Register.x0, condSlot)))
+  dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.cmpRegZero(MaxArm64Register.x0)))
+  dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.condBranch(MaxArm64CondCode.eq, elseTarget)))
 end 'emitBoolTestBranch'
 
 // Lower func terminator (ret): load return value into x0, then emit epilogue.
 function lowerFuncTerminatorToArm64(fOp FuncOp, dstBlock MlirBlock, valueSlots ValueSlotMap)
-    match fOp 'lower'
-        ret(retValId) then lowerRetToArm64(retValId, dstBlock: dstBlock, valueSlots: valueSlots)
-        call then break 'lower'
-    end 'lower'
+  match fOp 'lower'
+    ret(retValId) then lowerRetToArm64(retValId, dstBlock: dstBlock, valueSlots: valueSlots)
+    call then break 'lower'
+  end 'lower'
 end 'lowerFuncTerminatorToArm64'
 
 function lowerRetToArm64(retValId ValueId, dstBlock MlirBlock, valueSlots ValueSlotMap)
-    let retSlot = valueSlotMapGet(valueSlots, valueId: retValId)
-    dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.ldrFromSlot(MaxArm64Register.x0, retSlot)))
-    dstBlock.terminator = MlirOp.maxarm64(MaxArm64Op.epilogue)
+  let retSlot = valueSlotMapGet(valueSlots, valueId: retValId)
+  dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.ldrFromSlot(MaxArm64Register.x0, retSlot)))
+  dstBlock.terminator = MlirOp.maxarm64(MaxArm64Op.epilogue)
 end 'lowerRetToArm64'
-
 
 // Map an ArithBinaryOp to its corresponding MaxArm64Op for binary operations.
 function maxArm64GetBinaryOpInfo(op ArithBinaryOp) returns MaxArm64BinaryOpInfo
-    let x0 = MaxArm64Register.x0
-    let x1 = MaxArm64Register.x1
-    let arm64Op = match op.opcode 'info'
-        ArithBinaryOpcode.addI64 gives MaxArm64Op.addRegs(x0, x0, x1)
-        ArithBinaryOpcode.subI64 gives MaxArm64Op.subRegs(x0, x0, x1)
-        ArithBinaryOpcode.mulI64 gives MaxArm64Op.mulRegs(x0, x0, x1)
-        ArithBinaryOpcode.divI64 gives MaxArm64Op.epilogue
-        ArithBinaryOpcode.remI64 gives MaxArm64Op.epilogue
-        ArithBinaryOpcode.andI64 gives MaxArm64Op.andRegs(x0, x0, x1)
-        ArithBinaryOpcode.orI64 gives MaxArm64Op.orrRegs(x0, x0, x1)
-        ArithBinaryOpcode.xorI64 gives MaxArm64Op.eorRegs(x0, x0, x1)
-        ArithBinaryOpcode.shlI64 gives MaxArm64Op.lslRegs(x0, x0, x1)
-        ArithBinaryOpcode.shrI64 gives MaxArm64Op.asrRegs(x0, x0, x1)
-        ArithBinaryOpcode.cmpI64Eq to ArithBinaryOpcode.cmpF64Ge gives MaxArm64Op.cmpRegs(x0, x1)
-    end 'info'
-    return MaxArm64BinaryOpInfo{resultId: op.resultId, leftId: op.leftId, rightId: op.rightId, arm64Op: arm64Op}
+  let x0 = MaxArm64Register.x0
+  let x1 = MaxArm64Register.x1
+  let arm64Op = match op.opcode 'info'
+    ArithBinaryOpcode.addI64 gives MaxArm64Op.addRegs(x0, x0, x1)
+    ArithBinaryOpcode.subI64 gives MaxArm64Op.subRegs(x0, x0, x1)
+    ArithBinaryOpcode.mulI64 gives MaxArm64Op.mulRegs(x0, x0, x1)
+    ArithBinaryOpcode.divI64 gives MaxArm64Op.epilogue
+    ArithBinaryOpcode.remI64 gives MaxArm64Op.epilogue
+    ArithBinaryOpcode.andI64 gives MaxArm64Op.andRegs(x0, x0, x1)
+    ArithBinaryOpcode.orI64 gives MaxArm64Op.orrRegs(x0, x0, x1)
+    ArithBinaryOpcode.xorI64 gives MaxArm64Op.eorRegs(x0, x0, x1)
+    ArithBinaryOpcode.shlI64 gives MaxArm64Op.lslRegs(x0, x0, x1)
+    ArithBinaryOpcode.shrI64 gives MaxArm64Op.asrRegs(x0, x0, x1)
+    ArithBinaryOpcode.cmpI64Eq to ArithBinaryOpcode.cmpF64Ge gives MaxArm64Op.cmpRegs(x0, x1)
+  end 'info'
+  return MaxArm64BinaryOpInfo{resultId: op.resultId, leftId: op.leftId, rightId: op.rightId, arm64Op: arm64Op}
 end 'maxArm64GetBinaryOpInfo'
 
 // Map a unary ArithUnaryOp to its corresponding MaxArm64Op.
 function getMaxArm64UnaryOp(op ArithUnaryOp) returns MaxArm64Op
-    return match op 'check'
-        negI64 gives MaxArm64Op.negReg(MaxArm64Register.x0, MaxArm64Register.x0)
-        bitNotI64 gives MaxArm64Op.mvnReg(MaxArm64Register.x0, MaxArm64Register.x0)
-    end 'check'
+  return match op 'check'
+    negI64 gives MaxArm64Op.negReg(MaxArm64Register.x0, MaxArm64Register.x0)
+    bitNotI64 gives MaxArm64Op.mvnReg(MaxArm64Register.x0, MaxArm64Register.x0)
+  end 'check'
 end 'getMaxArm64UnaryOp'
 
 // Lower SysOp to MaxArm64Op.
 function lowerSysOpToArm64(op SysOp, dstBlock MlirBlock, valueSlots ValueSlotMap, nextTempSlot VarSlot, osDesc OsDescriptor) returns VarSlot
-    return match op 'lower'
-        syscall(resultId, number, argIds) gives lowerSyscallArm64(resultId, number: number, argIds: argIds, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
-        iatCall(resultId, slotIndex, argIds) gives lowerIatCallArm64(resultId, slotIndex: slotIndex, argIds: argIds, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
-        globalAddr(resultId, name) gives lowerGlobalAddrArm64(resultId, name: name, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
-        stackAddr(resultId, slotId) gives lowerStackAddrArm64(resultId, slotId: slotId, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
-        storeByte(baseId, offsetId, byteId) gives lowerStoreByteArm64(baseId, offsetId: offsetId, byteId: byteId, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
-        loadByte(resultId, baseId, offsetId) gives lowerLoadByteArm64(resultId, baseId: baseId, offsetId: offsetId, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
-        memcpy(dstId, srcId, lenId) gives lowerMemcpyArm64(dstId, srcId: srcId, lenId: lenId, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
-        osExit(codeId) gives lowerOsExitArm64(codeId, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot, osDesc: osDesc)
-        osWrite(ptrId, lenId) gives lowerOsWriteArm64(ptrId, lenId: lenId, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot, osDesc: osDesc)
-    end 'lower'
+  return match op 'lower'
+    syscall(resultId, number, argIds) gives lowerSyscallArm64(resultId, number: number, argIds: argIds, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
+    iatCall(resultId, slotIndex, argIds) gives lowerIatCallArm64(resultId, slotIndex: slotIndex, argIds: argIds, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
+    globalAddr(resultId, name) gives lowerGlobalAddrArm64(resultId, name: name, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
+    stackAddr(resultId, slotId) gives lowerStackAddrArm64(resultId, slotId: slotId, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
+    storeByte(baseId, offsetId, byteId) gives lowerStoreByteArm64(baseId, offsetId: offsetId, byteId: byteId, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
+    loadByte(resultId, baseId, offsetId) gives lowerLoadByteArm64(resultId, baseId: baseId, offsetId: offsetId, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
+    memcpy(dstId, srcId, lenId) gives lowerMemcpyArm64(dstId, srcId: srcId, lenId: lenId, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
+    osExit(codeId) gives lowerOsExitArm64(codeId, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot, osDesc: osDesc)
+    osWrite(ptrId, lenId) gives lowerOsWriteArm64(ptrId, lenId: lenId, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot, osDesc: osDesc)
+  end 'lower'
 end 'lowerSysOpToArm64'
 
 function lowerSyscallArm64(resultId ValueId, number MachineWord, argIds ValueIdArray, dstBlock MlirBlock, valueSlots ValueSlotMap, nextTempSlot VarSlot) returns VarSlot
-    var argSlots = VarSlotArray{}
-    for argId in argIds 'mapArgs'
-        argSlots.push(valueSlotMapGet(valueSlots, valueId: argId))
-    end 'mapArgs'
+  var argSlots = VarSlotArray{}
+  for argId in argIds 'mapArgs'
+    argSlots.push(valueSlotMapGet(valueSlots, valueId: argId))
+  end 'mapArgs'
 
-    let tempSlot = nextTempSlot
-    dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.syscall(tempSlot, number, argSlots)))
-    valueSlotMapSet(valueSlots, valueId: resultId, slot: tempSlot)
-    return nextTempSlot + 1
+  let tempSlot = nextTempSlot
+  dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.syscall(tempSlot, number, argSlots)))
+  valueSlotMapSet(valueSlots, valueId: resultId, slot: tempSlot)
+  return nextTempSlot + 1
 end 'lowerSyscallArm64'
 
 function lowerIatCallArm64(resultId ValueId, slotIndex MachineWord, argIds ValueIdArray, dstBlock MlirBlock, valueSlots ValueSlotMap, nextTempSlot VarSlot) returns VarSlot
-    var argSlots = VarSlotArray{}
-    for argId in argIds 'mapArgs'
-        argSlots.push(valueSlotMapGet(valueSlots, valueId: argId))
-    end 'mapArgs'
+  var argSlots = VarSlotArray{}
+  for argId in argIds 'mapArgs'
+    argSlots.push(valueSlotMapGet(valueSlots, valueId: argId))
+  end 'mapArgs'
 
-    let tempSlot = nextTempSlot
-    dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.iatCall(tempSlot, slotIndex, argSlots)))
-    valueSlotMapSet(valueSlots, valueId: resultId, slot: tempSlot)
-    return nextTempSlot + 1
+  let tempSlot = nextTempSlot
+  dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.iatCall(tempSlot, slotIndex, argSlots)))
+  valueSlotMapSet(valueSlots, valueId: resultId, slot: tempSlot)
+  return nextTempSlot + 1
 end 'lowerIatCallArm64'
 
 function lowerGlobalAddrArm64(resultId ValueId, name ByteArray, dstBlock MlirBlock, valueSlots ValueSlotMap, nextTempSlot VarSlot) returns VarSlot
-    let tempSlot = nextTempSlot
-    dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.globalAddr(tempSlot, name)))
-    valueSlotMapSet(valueSlots, valueId: resultId, slot: tempSlot)
-    return nextTempSlot + 1
+  let tempSlot = nextTempSlot
+  dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.globalAddr(tempSlot, name)))
+  valueSlotMapSet(valueSlots, valueId: resultId, slot: tempSlot)
+  return nextTempSlot + 1
 end 'lowerGlobalAddrArm64'
 
 function lowerStackAddrArm64(resultId ValueId, slotId VarSlot, dstBlock MlirBlock, valueSlots ValueSlotMap, nextTempSlot VarSlot) returns VarSlot
-    let tempSlot = nextTempSlot
-    dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.stackAddrOp(tempSlot, slotId)))
-    valueSlotMapSet(valueSlots, valueId: resultId, slot: tempSlot)
-    return nextTempSlot + 1
+  let tempSlot = nextTempSlot
+  dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.stackAddrOp(tempSlot, slotId)))
+  valueSlotMapSet(valueSlots, valueId: resultId, slot: tempSlot)
+  return nextTempSlot + 1
 end 'lowerStackAddrArm64'
 
 function lowerStoreByteArm64(baseId ValueId, offsetId ValueId, byteId ValueId, dstBlock MlirBlock, valueSlots ValueSlotMap, nextTempSlot VarSlot) returns VarSlot
-    let baseSlot = valueSlotMapGet(valueSlots, valueId: baseId)
-    let offsetSlot = valueSlotMapGet(valueSlots, valueId: offsetId)
-    let byteSlot = valueSlotMapGet(valueSlots, valueId: byteId)
-    dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.storeByteOp(baseSlot, offsetSlot, byteSlot)))
-    return nextTempSlot
+  let baseSlot = valueSlotMapGet(valueSlots, valueId: baseId)
+  let offsetSlot = valueSlotMapGet(valueSlots, valueId: offsetId)
+  let byteSlot = valueSlotMapGet(valueSlots, valueId: byteId)
+  dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.storeByteOp(baseSlot, offsetSlot, byteSlot)))
+  return nextTempSlot
 end 'lowerStoreByteArm64'
 
 function lowerLoadByteArm64(resultId ValueId, baseId ValueId, offsetId ValueId, dstBlock MlirBlock, valueSlots ValueSlotMap, nextTempSlot VarSlot) returns VarSlot
-    let baseSlot = valueSlotMapGet(valueSlots, valueId: baseId)
-    let offsetSlot = valueSlotMapGet(valueSlots, valueId: offsetId)
-    let tempSlot = nextTempSlot
-    dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.loadByteOp(tempSlot, baseSlot, offsetSlot)))
-    valueSlotMapSet(valueSlots, valueId: resultId, slot: tempSlot)
-    return nextTempSlot + 1
+  let baseSlot = valueSlotMapGet(valueSlots, valueId: baseId)
+  let offsetSlot = valueSlotMapGet(valueSlots, valueId: offsetId)
+  let tempSlot = nextTempSlot
+  dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.loadByteOp(tempSlot, baseSlot, offsetSlot)))
+  valueSlotMapSet(valueSlots, valueId: resultId, slot: tempSlot)
+  return nextTempSlot + 1
 end 'lowerLoadByteArm64'
 
 function lowerMemcpyArm64(dstId ValueId, srcId ValueId, lenId ValueId, dstBlock MlirBlock, valueSlots ValueSlotMap, nextTempSlot VarSlot) returns VarSlot
-    let dstSlot = valueSlotMapGet(valueSlots, valueId: dstId)
-    let srcSlot = valueSlotMapGet(valueSlots, valueId: srcId)
-    let lenSlot = valueSlotMapGet(valueSlots, valueId: lenId)
-    dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.memcpyOp(dstSlot, srcSlot, lenSlot)))
-    return nextTempSlot
+  let dstSlot = valueSlotMapGet(valueSlots, valueId: dstId)
+  let srcSlot = valueSlotMapGet(valueSlots, valueId: srcId)
+  let lenSlot = valueSlotMapGet(valueSlots, valueId: lenId)
+  dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.memcpyOp(dstSlot, srcSlot, lenSlot)))
+  return nextTempSlot
 end 'lowerMemcpyArm64'
 
 // OS-neutral exit: expand to syscall or iatCall based on OsDescriptor.
 function lowerOsExitArm64(codeId ValueId, dstBlock MlirBlock, valueSlots ValueSlotMap, nextTempSlot VarSlot, osDesc OsDescriptor) returns VarSlot
-    let codeSlot = valueSlotMapGet(valueSlots, valueId: codeId)
-    match osDesc.exit 'strategy'
-        syscall(num) then return lowerOsExitSyscallArm64(codeSlot, num: num, dstBlock: dstBlock, nextTempSlot: nextTempSlot)
-        iatCall(slotIdx) then return lowerOsExitIatArm64(codeSlot, slotIdx: slotIdx, dstBlock: dstBlock, nextTempSlot: nextTempSlot)
-    end 'strategy'
+  let codeSlot = valueSlotMapGet(valueSlots, valueId: codeId)
+  match osDesc.exit 'strategy'
+    syscall(num) then return lowerOsExitSyscallArm64(codeSlot, num: num, dstBlock: dstBlock, nextTempSlot: nextTempSlot)
+    iatCall(slotIdx) then return lowerOsExitIatArm64(codeSlot, slotIdx: slotIdx, dstBlock: dstBlock, nextTempSlot: nextTempSlot)
+  end 'strategy'
 end 'lowerOsExitArm64'
 
 function lowerOsExitSyscallArm64(codeSlot VarSlot, num MachineWord, dstBlock MlirBlock, nextTempSlot VarSlot) returns VarSlot
-    var argSlots = VarSlotArray{}
-    argSlots.push(codeSlot)
-    dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.syscall(nextTempSlot, num, argSlots)))
-    return nextTempSlot + 1
+  var argSlots = VarSlotArray{}
+  argSlots.push(codeSlot)
+  dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.syscall(nextTempSlot, num, argSlots)))
+  return nextTempSlot + 1
 end 'lowerOsExitSyscallArm64'
 
 function lowerOsExitIatArm64(codeSlot VarSlot, slotIdx MachineWord, dstBlock MlirBlock, nextTempSlot VarSlot) returns VarSlot
-    var argSlots = VarSlotArray{}
-    argSlots.push(codeSlot)
-    dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.iatCall(nextTempSlot, slotIdx, argSlots)))
-    return nextTempSlot + 1
+  var argSlots = VarSlotArray{}
+  argSlots.push(codeSlot)
+  dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.iatCall(nextTempSlot, slotIdx, argSlots)))
+  return nextTempSlot + 1
 end 'lowerOsExitIatArm64'
 
 // OS-neutral write: expand to syscall or WinAPI sequence based on OsDescriptor.
 function lowerOsWriteArm64(ptrId ValueId, lenId ValueId, dstBlock MlirBlock, valueSlots ValueSlotMap, nextTempSlot VarSlot, osDesc OsDescriptor) returns VarSlot
-    let ptrSlot = valueSlotMapGet(valueSlots, valueId: ptrId)
-    let lenSlot = valueSlotMapGet(valueSlots, valueId: lenId)
-    match osDesc.write 'strategy'
-        syscall(writeNum, fd) then return lowerOsWriteSyscallArm64(ptrSlot, lenSlot: lenSlot, writeNum: writeNum, fd: fd, dstBlock: dstBlock, nextTempSlot: nextTempSlot)
-        winApi(getHandleSlot, handleConstant, writeFileSlot) then return lowerOsWriteWinApiArm64(ptrSlot, lenSlot: lenSlot, getHandleSlot: getHandleSlot, handleConstant: handleConstant, writeFileSlot: writeFileSlot, dstBlock: dstBlock, nextTempSlot: nextTempSlot)
-        libcall(writeSlot, fd) then return lowerOsWriteLibcallArm64(ptrSlot, lenSlot: lenSlot, writeSlot: writeSlot, fd: fd, dstBlock: dstBlock, nextTempSlot: nextTempSlot)
-    end 'strategy'
+  let ptrSlot = valueSlotMapGet(valueSlots, valueId: ptrId)
+  let lenSlot = valueSlotMapGet(valueSlots, valueId: lenId)
+  match osDesc.write 'strategy'
+    syscall(writeNum, fd) then return lowerOsWriteSyscallArm64(ptrSlot, lenSlot: lenSlot, writeNum: writeNum, fd: fd, dstBlock: dstBlock, nextTempSlot: nextTempSlot)
+    winApi(getHandleSlot, handleConstant, writeFileSlot) then return lowerOsWriteWinApiArm64(ptrSlot, lenSlot: lenSlot, getHandleSlot: getHandleSlot, handleConstant: handleConstant, writeFileSlot: writeFileSlot, dstBlock: dstBlock, nextTempSlot: nextTempSlot)
+    libcall(writeSlot, fd) then return lowerOsWriteLibcallArm64(ptrSlot, lenSlot: lenSlot, writeSlot: writeSlot, fd: fd, dstBlock: dstBlock, nextTempSlot: nextTempSlot)
+  end 'strategy'
 end 'lowerOsWriteArm64'
 
 function lowerOsWriteSyscallArm64(ptrSlot VarSlot, lenSlot VarSlot, writeNum MachineWord, fd MachineWord, dstBlock MlirBlock, nextTempSlot VarSlot) returns VarSlot
-    // fd constant -> temp slot
-    let fdSlot = nextTempSlot
-    dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.movImm(MaxArm64Register.x0, fd)))
-    dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.strToSlot(fdSlot, MaxArm64Register.x0)))
-    // syscall(writeNum, fd, ptr, len)
-    var argSlots = VarSlotArray{}
-    argSlots.push(fdSlot)
-    argSlots.push(ptrSlot)
-    argSlots.push(lenSlot)
-    let resultSlot = nextTempSlot + 1
-    dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.syscall(resultSlot, writeNum, argSlots)))
-    return nextTempSlot + 2
+  // fd constant -> temp slot
+  let fdSlot = nextTempSlot
+  dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.movImm(MaxArm64Register.x0, fd)))
+  dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.strToSlot(fdSlot, MaxArm64Register.x0)))
+  // syscall(writeNum, fd, ptr, len)
+  var argSlots = VarSlotArray{}
+  argSlots.push(fdSlot)
+  argSlots.push(ptrSlot)
+  argSlots.push(lenSlot)
+  let resultSlot = nextTempSlot + 1
+  dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.syscall(resultSlot, writeNum, argSlots)))
+  return nextTempSlot + 2
 end 'lowerOsWriteSyscallArm64'
 
 function lowerOsWriteWinApiArm64(ptrSlot VarSlot, lenSlot VarSlot, getHandleSlot MachineWord, handleConstant MachineWord, writeFileSlot MachineWord, dstBlock MlirBlock, nextTempSlot VarSlot) returns VarSlot
-    var tempSlot = nextTempSlot
+  var tempSlot = nextTempSlot
 
-    // GetStdHandle(handleConstant)
-    let handleConstSlot = tempSlot
-    dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.movImm(MaxArm64Register.x0, handleConstant)))
-    dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.strToSlot(handleConstSlot, MaxArm64Register.x0)))
-    tempSlot = tempSlot + 1
-    var getHandleArgs = VarSlotArray{}
-    getHandleArgs.push(handleConstSlot)
-    let handleResultSlot = tempSlot
-    dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.iatCall(handleResultSlot, getHandleSlot, getHandleArgs)))
-    tempSlot = tempSlot + 1
+  // GetStdHandle(handleConstant)
+  let handleConstSlot = tempSlot
+  dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.movImm(MaxArm64Register.x0, handleConstant)))
+  dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.strToSlot(handleConstSlot, MaxArm64Register.x0)))
+  tempSlot = tempSlot + 1
+  var getHandleArgs = VarSlotArray{}
+  getHandleArgs.push(handleConstSlot)
+  let handleResultSlot = tempSlot
+  dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.iatCall(handleResultSlot, getHandleSlot, getHandleArgs)))
+  tempSlot = tempSlot + 1
 
-    // bytesWritten = 0 stored to a slot
-    let writtenSlot = tempSlot
-    dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.movImm(MaxArm64Register.x0, 0)))
-    dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.strToSlot(writtenSlot, MaxArm64Register.x0)))
-    tempSlot = tempSlot + 1
+  // bytesWritten = 0 stored to a slot
+  let writtenSlot = tempSlot
+  dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.movImm(MaxArm64Register.x0, 0)))
+  dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.strToSlot(writtenSlot, MaxArm64Register.x0)))
+  tempSlot = tempSlot + 1
 
-    // Get address of bytesWritten slot
-    let writtenAddrSlot = tempSlot
-    dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.stackAddrOp(writtenAddrSlot, writtenSlot)))
-    tempSlot = tempSlot + 1
+  // Get address of bytesWritten slot
+  let writtenAddrSlot = tempSlot
+  dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.stackAddrOp(writtenAddrSlot, writtenSlot)))
+  tempSlot = tempSlot + 1
 
-    // NULL for lpOverlapped
-    let nullSlot = tempSlot
-    dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.movImm(MaxArm64Register.x0, 0)))
-    dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.strToSlot(nullSlot, MaxArm64Register.x0)))
-    tempSlot = tempSlot + 1
+  // NULL for lpOverlapped
+  let nullSlot = tempSlot
+  dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.movImm(MaxArm64Register.x0, 0)))
+  dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.strToSlot(nullSlot, MaxArm64Register.x0)))
+  tempSlot = tempSlot + 1
 
-    // WriteFile(handle, ptr, len, &bytesWritten, NULL)
-    var writeArgs = VarSlotArray{}
-    writeArgs.push(handleResultSlot)
-    writeArgs.push(ptrSlot)
-    writeArgs.push(lenSlot)
-    writeArgs.push(writtenAddrSlot)
-    writeArgs.push(nullSlot)
-    let writeResultSlot = tempSlot
-    dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.iatCall(writeResultSlot, writeFileSlot, writeArgs)))
-    tempSlot = tempSlot + 1
+  // WriteFile(handle, ptr, len, &bytesWritten, NULL)
+  var writeArgs = VarSlotArray{}
+  writeArgs.push(handleResultSlot)
+  writeArgs.push(ptrSlot)
+  writeArgs.push(lenSlot)
+  writeArgs.push(writtenAddrSlot)
+  writeArgs.push(nullSlot)
+  let writeResultSlot = tempSlot
+  dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.iatCall(writeResultSlot, writeFileSlot, writeArgs)))
+  tempSlot = tempSlot + 1
 
-    return tempSlot
+  return tempSlot
 end 'lowerOsWriteWinApiArm64'
 
 // OS write via libcall: write(fd, buf, len) through GOT/IAT slot.
 // Used for macOS (libSystem.B.dylib).
 function lowerOsWriteLibcallArm64(ptrSlot VarSlot, lenSlot VarSlot, writeSlot MachineWord, fd MachineWord, dstBlock MlirBlock, nextTempSlot VarSlot) returns VarSlot
-    // fd constant -> temp slot
-    let fdSlot = nextTempSlot
-    dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.movImm(MaxArm64Register.x0, fd)))
-    dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.strToSlot(fdSlot, MaxArm64Register.x0)))
-    // iatCall write(fd, ptr, len)
-    var argSlots = VarSlotArray{}
-    argSlots.push(fdSlot)
-    argSlots.push(ptrSlot)
-    argSlots.push(lenSlot)
-    let resultSlot = nextTempSlot + 1
-    dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.iatCall(resultSlot, writeSlot, argSlots)))
-    return nextTempSlot + 2
+  // fd constant -> temp slot
+  let fdSlot = nextTempSlot
+  dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.movImm(MaxArm64Register.x0, fd)))
+  dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.strToSlot(fdSlot, MaxArm64Register.x0)))
+  // iatCall write(fd, ptr, len)
+  var argSlots = VarSlotArray{}
+  argSlots.push(fdSlot)
+  argSlots.push(ptrSlot)
+  argSlots.push(lenSlot)
+  let resultSlot = nextTempSlot + 1
+  dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.iatCall(resultSlot, writeSlot, argSlots)))
+  return nextTempSlot + 2
 end 'lowerOsWriteLibcallArm64'
-
