@@ -5,20 +5,20 @@ export union CfOp
   condBr(condId ValueId, thenTarget BlockId, elseTarget BlockId)
 end 'CfOp'
 
-export function printCfOp(op CfOp, blocks MlirBlockArray) returns String
+export function cfOpToString(op CfOp, blocks MlirBlockArray) returns String
   return match op 'print'
-    br(target) gives printCfBr(target, blocks: blocks)
-    condBr(condId, thenTarget, elseTarget) gives printCfCondBr(condId, thenTarget: thenTarget, elseTarget: elseTarget, blocks: blocks)
+    br(target) gives cfBrToString(target, blocks: blocks)
+    condBr(condId, thenTarget, elseTarget) gives cfCondBrToString(condId, thenTarget: thenTarget, elseTarget: elseTarget, blocks: blocks)
   end 'print'
-end 'printCfOp'
+end 'cfOpToString'
 
-function printCfBr(target BlockId, blocks MlirBlockArray) returns String
+function cfBrToString(target BlockId, blocks MlirBlockArray) returns String
   let label = resolveBlockLabel(target, blocks: blocks)
   return "cf.br {label}"
-end 'printCfBr'
+end 'cfBrToString'
 
-function printCfCondBr(condId ValueId, thenTarget BlockId, elseTarget BlockId, blocks MlirBlockArray) returns String
+function cfCondBrToString(condId ValueId, thenTarget BlockId, elseTarget BlockId, blocks MlirBlockArray) returns String
   let thenLabel = resolveBlockLabel(thenTarget, blocks: blocks)
   let elseLabel = resolveBlockLabel(elseTarget, blocks: blocks)
   return "cf.cond_br %{condId} [then: {thenLabel}, else: {elseLabel}]"
-end 'printCfCondBr'
+end 'cfCondBrToString'

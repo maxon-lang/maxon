@@ -78,14 +78,14 @@ export function lowerMidToMaxArm64(module MlirModule, target Target) returns Mli
         let opsBefore = dstBlock.ops.count()
         nextTempSlot = lowerMidOpToArm64(op, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot, osDesc: osDesc)
         if not skipFunc 'logOp'
-          let sourceStr = printOp(op, blocks: MlirBlockArray{})
+          let sourceStr = opToString(op, blocks: MlirBlockArray{})
           let opsAfter = dstBlock.ops.count()
           var targetStr = ""
           for k in opsBefore upto opsAfter 'eachNew'
             let newOp = try dstBlock.ops.get(k) otherwise 'skipOp'
               continue
             end 'skipOp'
-            let newOpStr = printOp(newOp, blocks: MlirBlockArray{})
+            let newOpStr = opToString(newOp, blocks: MlirBlockArray{})
             if targetStr.isEmpty() 'first'
               targetStr = newOpStr
             end 'first' else 'append'
@@ -101,15 +101,15 @@ export function lowerMidToMaxArm64(module MlirModule, target Target) returns Mli
         let termOpsBefore = dstBlock.ops.count()
         lowerMidTerminatorToArm64(srcBlock.terminator, srcBlock: srcBlock, dstBlock: dstBlock, valueSlots: valueSlots)
         if not skipFunc 'logTerm'
-          let sourceStr = printOp(srcBlock.terminator, blocks: srcFunc.region.blocks)
-          let targetStr = printOp(dstBlock.terminator, blocks: dstFunc.region.blocks)
+          let sourceStr = opToString(srcBlock.terminator, blocks: srcFunc.region.blocks)
+          let targetStr = opToString(dstBlock.terminator, blocks: dstFunc.region.blocks)
           var extraOpsStr = ""
           let termOpsAfter = dstBlock.ops.count()
           for k in termOpsBefore upto termOpsAfter 'eachTermOp'
             let newOp = try dstBlock.ops.get(k) otherwise 'skipTermOp'
               continue
             end 'skipTermOp'
-            let newOpStr = printOp(newOp, blocks: MlirBlockArray{})
+            let newOpStr = opToString(newOp, blocks: MlirBlockArray{})
             if extraOpsStr.isEmpty() 'first'
               extraOpsStr = newOpStr
             end 'first' else 'append'
@@ -161,9 +161,9 @@ end 'lowerArithToArm64'
 
 // Emit a constant: movImm + strToSlot, record in valueSlots.
 function lowerArithConstToArm64(op ArithConst, dstBlock MlirBlock, valueSlots ValueSlotMap, nextTempSlot VarSlot) returns VarSlot
-  return match op 'lower'
-    constI64(resultId, value) gives emitMaxArm64ConstValue(dstBlock, valueSlots: valueSlots, resultId: resultId, value: value, nextTempSlot: nextTempSlot)
-    constF64(resultId, rawBits) gives emitMaxArm64ConstValue(dstBlock, valueSlots: valueSlots, resultId: resultId, value: rawBits, nextTempSlot: nextTempSlot)
+  return match op.opcode 'lower'
+    ArithConstOpcode.constI64 gives emitMaxArm64ConstValue(dstBlock, valueSlots: valueSlots, resultId: op.resultId, value: op.value, nextTempSlot: nextTempSlot)
+    ArithConstOpcode.constF64 gives emitMaxArm64ConstValue(dstBlock, valueSlots: valueSlots, resultId: op.resultId, value: op.value, nextTempSlot: nextTempSlot)
   end 'lower'
 end 'lowerArithConstToArm64'
 
@@ -177,23 +177,12 @@ end 'emitMaxArm64ConstValue'
 
 // Emit a unary op: load operand->X0, apply op, store result.
 function lowerArithUnaryToArm64(op ArithUnaryOp, dstBlock MlirBlock, valueSlots ValueSlotMap, nextTempSlot VarSlot) returns VarSlot
-  var resultId = 0
-  var operandId = 0
-  match op 'extractResult'
-    negI64(r, _) then resultId = r
-    bitNotI64(r, _) then resultId = r
-  end 'extractResult'
-  match op 'extractOperand'
-    negI64(_, o) then operandId = o
-    bitNotI64(_, o) then operandId = o
-  end 'extractOperand'
-
-  let operandSlot = valueSlotMapGet(valueSlots, valueId: operandId)
+  let operandSlot = valueSlotMapGet(valueSlots, valueId: op.operandId)
   dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.ldrFromSlot(MaxArm64Register.x0, operandSlot)))
   dstBlock.ops.push(MlirOp.maxarm64(getMaxArm64UnaryOp(op)))
   let slot = nextTempSlot
   dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.strToSlot(slot, MaxArm64Register.x0)))
-  valueSlotMapSet(valueSlots, valueId: resultId, slot: slot)
+  valueSlotMapSet(valueSlots, valueId: op.resultId, slot: slot)
   return slot + 1
 end 'lowerArithUnaryToArm64'
 
@@ -414,9 +403,9 @@ end 'maxArm64GetBinaryOpInfo'
 
 // Map a unary ArithUnaryOp to its corresponding MaxArm64Op.
 function getMaxArm64UnaryOp(op ArithUnaryOp) returns MaxArm64Op
-  return match op 'check'
-    negI64 gives MaxArm64Op.negReg(MaxArm64Register.x0, MaxArm64Register.x0)
-    bitNotI64 gives MaxArm64Op.mvnReg(MaxArm64Register.x0, MaxArm64Register.x0)
+  return match op.opcode 'check'
+    ArithUnaryOpcode.negI64 gives MaxArm64Op.negReg(MaxArm64Register.x0, MaxArm64Register.x0)
+    ArithUnaryOpcode.bitNotI64 gives MaxArm64Op.mvnReg(MaxArm64Register.x0, MaxArm64Register.x0)
   end 'check'
 end 'getMaxArm64UnaryOp'
 

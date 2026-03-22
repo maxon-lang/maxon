@@ -1,14 +1,26 @@
 // Arith Dialect — Standard typed arithmetic operations.
 // Split into const, unary, and binary sub-unions for type-safe dispatch.
 
-export union ArithConst
-  constI64(resultId ValueId, value ParsedInt)
-  constF64(resultId ValueId, rawBits ParsedInt)
+export enum ArithConstOpcode
+  constI64
+  constF64
+end 'ArithConstOpcode'
+
+export type ArithConst
+  opcode ArithConstOpcode
+  resultId ValueId
+  value ParsedInt
 end 'ArithConst'
 
-export union ArithUnaryOp
-  negI64(resultId ValueId, operandId ValueId)
-  bitNotI64(resultId ValueId, operandId ValueId)
+export enum ArithUnaryOpcode
+  negI64
+  bitNotI64
+end 'ArithUnaryOpcode'
+
+export type ArithUnaryOp
+  opcode ArithUnaryOpcode
+  resultId ValueId
+  operandId ValueId
 end 'ArithUnaryOp'
 
 export enum ArithBinaryOpcode
@@ -49,29 +61,29 @@ export union ArithOp
   binary(op ArithBinaryOp)
 end 'ArithOp'
 
-export function printArithOp(op ArithOp) returns String
+export function arithOpToString(op ArithOp) returns String
   return match op 'dispatch'
-    const(c) gives printArithConst(c)
-    unary(u) gives printArithUnaryOp(u)
-    binary(b) gives printArithBinaryOp(b)
+    const(c) gives arithConstToString(c)
+    unary(u) gives arithUnaryOpToString(u)
+    binary(b) gives arithBinaryOpToString(b)
   end 'dispatch'
-end 'printArithOp'
+end 'arithOpToString'
 
-function printArithConst(op ArithConst) returns String
-  return match op 'print'
-    constI64(resultId, value) gives "%{resultId} = arith.constant \{value = {value} : i64\}"
-    constF64(resultId, rawBits) gives "%{resultId} = arith.float_constant \{rawBits = {rawBits} : f64\}"
-  end 'print'
-end 'printArithConst'
+function arithConstToString(op ArithConst) returns String
+  return match op.opcode 'toString'
+    ArithConstOpcode.constI64 gives "%{op.resultId} = arith.constant \{value = {op.value} : i64\}"
+    ArithConstOpcode.constF64 gives "%{op.resultId} = arith.float_constant \{rawBits = {op.value} : f64\}"
+  end 'toString'
+end 'arithConstToString'
 
-function printArithUnaryOp(op ArithUnaryOp) returns String
-  return match op 'print'
-    negI64(resultId, operandId) gives "%{resultId} = arith.negi %{operandId}"
-    bitNotI64(resultId, operandId) gives "%{resultId} = arith.noti %{operandId}"
-  end 'print'
-end 'printArithUnaryOp'
+function arithUnaryOpToString(op ArithUnaryOp) returns String
+  return match op.opcode 'toString'
+    ArithUnaryOpcode.negI64 gives "%{op.resultId} = arith.negi %{op.operandId}"
+    ArithUnaryOpcode.bitNotI64 gives "%{op.resultId} = arith.noti %{op.operandId}"
+  end 'toString'
+end 'arithUnaryOpToString'
 
-function printArithBinaryOp(op ArithBinaryOp) returns String
+function arithBinaryOpToString(op ArithBinaryOp) returns String
   let name = match op.opcode 'name'
     ArithBinaryOpcode.addI64 gives "addi"
     ArithBinaryOpcode.subI64 gives "subi"
@@ -97,4 +109,4 @@ function printArithBinaryOp(op ArithBinaryOp) returns String
     ArithBinaryOpcode.cmpF64Ge gives "cmpf ge,"
   end 'name'
   return "%{op.resultId} = arith.{name} %{op.leftId}, %{op.rightId}"
-end 'printArithBinaryOp'
+end 'arithBinaryOpToString'

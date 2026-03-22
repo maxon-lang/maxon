@@ -1,6 +1,6 @@
 // MlirPrinter: serializes an MlirModule to text matching the C# MlirPrinter output.
 
-export function printModule(module MlirModule, skipStdlib bool) returns String
+export function moduleToString(module MlirModule, skipStdlib bool) returns String
   let lb = "\{"
   let rb = "\}"
   var sb = "module "
@@ -12,13 +12,13 @@ export function printModule(module MlirModule, skipStdlib bool) returns String
         continue
       end 'isRuntime'
     end 'filter'
-    sb = "{sb}{printFunction(func)}"
+    sb = "{sb}{functionToString(func)}"
   end 'eachFunc'
   sb = "{sb}{rb}\n"
   return sb
-end 'printModule'
+end 'moduleToString'
 
-function printFunction(func MlirFunction) returns String
+function functionToString(func MlirFunction) returns String
   let lb = "\{"
   let rb = "\}"
   let funcName = String.from(func.name)
@@ -45,18 +45,18 @@ function printFunction(func MlirFunction) returns String
     let blockLabel = String.from(block.label)
     sb = "{sb}  {blockLabel}:\n"
     for op in block.ops 'eachOp'
-      let opText = printOp(op, blocks: blocks)
+      let opText = opToString(op, blocks: blocks)
       sb = "{sb}    {opText}\n"
     end 'eachOp'
     if block.hasTerminator 'hasTerm'
-      let termText = printOp(block.terminator, blocks: blocks)
+      let termText = opToString(block.terminator, blocks: blocks)
       sb = "{sb}    {termText}\n"
     end 'hasTerm'
   end 'eachBlock'
 
   sb = "{sb}  {rb}\n"
   return sb
-end 'printFunction'
+end 'functionToString'
 
 // Runtime/stdlib functions loaded from runtime.mid should be excluded from IR output.
 export function isRuntimeFunction(name String) returns bool
@@ -90,16 +90,16 @@ export function isRuntimeFunction(name String) returns bool
   return false
 end 'isRuntimeFunction'
 
-export function printOp(op MlirOp, blocks MlirBlockArray) returns String
+export function opToString(op MlirOp, blocks MlirBlockArray) returns String
   return match op 'dispatch'
-    maxhl(hlOp) gives printMaxHLOp(hlOp, blocks: blocks)
-    arith(arithOp) gives printArithOp(arithOp)
-    cf(cfOp) gives printCfOp(cfOp, blocks: blocks)
-    func(funcOp) gives printFuncOp(funcOp)
-    memref(memOp) gives printMemRefOp(memOp)
-    runtime(rtOp) gives printRuntimeOp(rtOp)
-    sys(sysOp) gives printSysOp(sysOp)
-    maxx64(x64Op) gives printMaxX64Op(x64Op, blocks: blocks)
-    maxarm64(a64Op) gives printMaxArm64Op(a64Op, blocks: blocks)
+    maxhl(hlOp) gives maxHLOpToString(hlOp, blocks: blocks)
+    arith(arithOp) gives arithOpToString(arithOp)
+    cf(cfOp) gives cfOpToString(cfOp, blocks: blocks)
+    func(funcOp) gives funcOpToString(funcOp)
+    memref(memOp) gives memRefOpToString(memOp)
+    runtime(rtOp) gives runtimeOpToString(rtOp)
+    sys(sysOp) gives sysOpToString(sysOp)
+    maxx64(x64Op) gives maxX64OpToString(x64Op, blocks: blocks)
+    maxarm64(a64Op) gives maxArm64OpToString(a64Op, blocks: blocks)
   end 'dispatch'
-end 'printOp'
+end 'opToString'

@@ -53,7 +53,7 @@ export union MaxHLOp
   printInt(valueId ValueId)
 end 'MaxHLOp'
 
-export function printMaxHLOp(op MaxHLOp, blocks MlirBlockArray) returns String
+export function maxHLOpToString(op MaxHLOp, blocks MlirBlockArray) returns String
   let lb = "\{"
   let rb = "\}"
   return match op 'print'
@@ -80,25 +80,25 @@ export function printMaxHLOp(op MaxHLOp, blocks MlirBlockArray) returns String
     cmpLe(resultId, leftId, rightId, isFloat) gives "%{resultId} = maxon.binop %{leftId}, %{rightId} {lb}op = le{rb} {lb}kind = {cmpKind(isFloat)}{rb}"
     cmpGt(resultId, leftId, rightId, isFloat) gives "%{resultId} = maxon.binop %{leftId}, %{rightId} {lb}op = gt{rb} {lb}kind = {cmpKind(isFloat)}{rb}"
     cmpGe(resultId, leftId, rightId, isFloat) gives "%{resultId} = maxon.binop %{leftId}, %{rightId} {lb}op = ge{rb} {lb}kind = {cmpKind(isFloat)}{rb}"
-    condBr(condId, thenTarget, elseTarget) gives printMaxHLCondBr(condId, thenTarget: thenTarget, elseTarget: elseTarget, blocks: blocks)
-    br(target) gives printMaxHLBr(target, blocks: blocks)
+    condBr(condId, thenTarget, elseTarget) gives maxHLCondBrToString(condId, thenTarget: thenTarget, elseTarget: elseTarget, blocks: blocks)
+    br(target) gives maxHLBrToString(target, blocks: blocks)
     call(resultId, callee, argIds) gives "%{resultId} = maxon.call @{String.from(callee)}({formatArgIds(argIds)})"
     ret(retValId) gives "maxon.return %{retValId}"
     printLiteral(data) gives "maxon.print_literal \"{String.from(data)}\""
     printInt(valueId) gives "maxon.print_int %{valueId}"
   end 'print'
-end 'printMaxHLOp'
+end 'maxHLOpToString'
 
-function printMaxHLCondBr(condId ValueId, thenTarget BlockId, elseTarget BlockId, blocks MlirBlockArray) returns String
+function maxHLCondBrToString(condId ValueId, thenTarget BlockId, elseTarget BlockId, blocks MlirBlockArray) returns String
   let thenLabel = resolveBlockLabel(thenTarget, blocks: blocks)
   let elseLabel = resolveBlockLabel(elseTarget, blocks: blocks)
   return "maxon.cond_br %{condId} [then: {thenLabel}, else: {elseLabel}]"
-end 'printMaxHLCondBr'
+end 'maxHLCondBrToString'
 
-function printMaxHLBr(target BlockId, blocks MlirBlockArray) returns String
+function maxHLBrToString(target BlockId, blocks MlirBlockArray) returns String
   let label = resolveBlockLabel(target, blocks: blocks)
   return "maxon.br {label}"
-end 'printMaxHLBr'
+end 'maxHLBrToString'
 
 function cmpKind(isFloat bool) returns String
   if isFloat 'float'

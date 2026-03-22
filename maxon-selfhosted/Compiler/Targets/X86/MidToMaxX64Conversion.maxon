@@ -109,14 +109,14 @@ function lowerMlirOp(op MlirOp, dstBlock MlirBlock, valueSlots ValueSlotMap, nex
     maxarm64 then result = nextTempSlot
   end 'dispatch'
   if not skipLog 'logOp'
-    let sourceStr = printOp(op, blocks: MlirBlockArray{})
+    let sourceStr = opToString(op, blocks: MlirBlockArray{})
     let opsAfter = dstBlock.ops.count()
     var targetStr = ""
     for k in opsBefore upto opsAfter 'eachNew'
       let newOp = try dstBlock.ops.get(k) otherwise 'skipOp'
         continue
       end 'skipOp'
-      let newOpStr = printOp(newOp, blocks: MlirBlockArray{})
+      let newOpStr = opToString(newOp, blocks: MlirBlockArray{})
       if targetStr.isEmpty() 'first'
         targetStr = newOpStr
       end 'first' else 'append'
@@ -144,17 +144,18 @@ function lowerArithOp(op ArithOp, dstBlock MlirBlock, valueSlots ValueSlotMap, n
 end 'lowerArithOp'
 
 function lowerArithConst(op ArithConst, dstBlock MlirBlock, valueSlots ValueSlotMap, nextTempSlot SlotIndex) returns SlotIndex
-  return match op 'lower'
-    constI64(resultId, value) gives lowerConstI64(resultId, value: value, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
-    constF64(resultId, rawBits) gives lowerConstI64(resultId, value: rawBits, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
+  return match op.opcode 'lower'
+    ArithConstOpcode.constI64 gives lowerConstI64(op.resultId, value: op.value, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
+    ArithConstOpcode.constF64 gives lowerConstI64(op.resultId, value: op.value, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
   end 'lower'
 end 'lowerArithConst'
 
 function lowerArithUnary(op ArithUnaryOp, dstBlock MlirBlock, valueSlots ValueSlotMap, nextTempSlot SlotIndex) returns SlotIndex
-  return match op 'lower'
-    negI64(resultId, operandId) gives lowerUnaryOp(resultId, operandId: operandId, x64Op: MaxX64Op.negReg(X64Register.rax), dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
-    bitNotI64(resultId, operandId) gives lowerUnaryOp(resultId, operandId: operandId, x64Op: MaxX64Op.bitNotReg(X64Register.rax), dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
+  let x64Op = match op.opcode 'lower'
+    ArithUnaryOpcode.negI64 gives MaxX64Op.negReg(X64Register.rax)
+    ArithUnaryOpcode.bitNotI64 gives MaxX64Op.bitNotReg(X64Register.rax)
   end 'lower'
+  return lowerUnaryOp(op.resultId, operandId: op.operandId, x64Op: x64Op, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
 end 'lowerArithUnary'
 
 function lowerArithBinary(op ArithBinaryOp, dstBlock MlirBlock, valueSlots ValueSlotMap, nextTempSlot SlotIndex) returns SlotIndex
@@ -377,14 +378,14 @@ function lowerTerminator(srcBlock MlirBlock, dstBlock MlirBlock, valueSlots Valu
     maxarm64 then break 'dispatch'
   end 'dispatch'
   if not skipLog 'logTerm'
-    let sourceStr = printOp(srcBlock.terminator, blocks: MlirBlockArray{})
+    let sourceStr = opToString(srcBlock.terminator, blocks: MlirBlockArray{})
     let opsAfter = dstBlock.ops.count()
     var targetStr = ""
     for k in opsBefore upto opsAfter 'eachNew'
       let newOp = try dstBlock.ops.get(k) otherwise 'skipOp'
         continue
       end 'skipOp'
-      let newOpStr = printOp(newOp, blocks: MlirBlockArray{})
+      let newOpStr = opToString(newOp, blocks: MlirBlockArray{})
       if targetStr.isEmpty() 'first'
         targetStr = newOpStr
       end 'first' else 'append'
@@ -392,7 +393,7 @@ function lowerTerminator(srcBlock MlirBlock, dstBlock MlirBlock, valueSlots Valu
       end 'append'
     end 'eachNew'
     if dstBlock.hasTerminator 'hasDstTerm'
-      let termStr = printOp(dstBlock.terminator, blocks: MlirBlockArray{})
+      let termStr = opToString(dstBlock.terminator, blocks: MlirBlockArray{})
       if targetStr.isEmpty() 'firstTerm'
         targetStr = termStr
       end 'firstTerm' else 'appendTerm'

@@ -74,21 +74,6 @@ function lookupBlockId(state MidFuncState, label ByteArray) returns BlockId
   return 0
 end 'lookupBlockId'
 
-// --- Arith op table ---
-// Maps .mid text names to enum tags for table-driven dispatch.
-
-enum ArithUnaryTag
-  negI64
-  bitNotI64
-end 'ArithUnaryTag'
-
-function makeUnaryArithOp(tag ArithUnaryTag, resultId ValueId, operandId ValueId) returns ArithUnaryOp
-  return match tag 'make'
-    ArithUnaryTag.negI64 gives ArithUnaryOp.negI64(resultId, operandId)
-    ArithUnaryTag.bitNotI64 gives ArithUnaryOp.bitNotI64(resultId, operandId)
-  end 'make'
-end 'makeUnaryArithOp'
-
 // --- Sys op table ---
 
 enum SysOpTag
@@ -448,7 +433,7 @@ function midParseArithOp(tokens TokenArray, startPos MidTokenIndex, block MlirBl
   if bytesEqual(opName, b: b"constI64") 'isConst'
     let value = midParseIntValue(tokens, pos: pos)
     pos = pos + midIntValueTokenCount(tokens, pos: pos)
-    block.ops.push(MlirOp.arith(ArithOp.const(ArithConst.constI64(resultId, value))))
+    block.ops.push(MlirOp.arith(ArithOp.const(ArithConst{opcode: ArithConstOpcode.constI64, resultId: resultId, value: value})))
     return pos
   end 'isConst'
 
@@ -456,7 +441,7 @@ function midParseArithOp(tokens TokenArray, startPos MidTokenIndex, block MlirBl
   if bytesEqual(opName, b: b"constF64") 'isConstF64'
     let value = midParseIntValue(tokens, pos: pos)
     pos = pos + midIntValueTokenCount(tokens, pos: pos)
-    block.ops.push(MlirOp.arith(ArithOp.const(ArithConst.constF64(resultId, value))))
+    block.ops.push(MlirOp.arith(ArithOp.const(ArithConst{opcode: ArithConstOpcode.constF64, resultId: resultId, value: value})))
     return pos
   end 'isConstF64'
 
@@ -465,11 +450,11 @@ function midParseArithOp(tokens TokenArray, startPos MidTokenIndex, block MlirBl
   // Binary ops: construct enum from string -> match -> single emit
   let binTag = try ArithBinaryOpcode.fromName(opNameStr) otherwise 'notBinary'
     // Unary ops: construct enum from string -> match -> single emit
-    let unaryTag = try ArithUnaryTag.fromName(opNameStr) otherwise 'notUnary'
+    let unaryTag = try ArithUnaryOpcode.fromName(opNameStr) otherwise 'notUnary'
       panic("MidLevelParser: unknown arith op '{opNameStr}'")
     end 'notUnary'
     let operandId = lookupValueId(state, name: midTokenAt(tokens, pos: pos).value)
-    block.ops.push(MlirOp.arith(ArithOp.unary(makeUnaryArithOp(unaryTag, resultId: resultId, operandId: operandId))))
+    block.ops.push(MlirOp.arith(ArithOp.unary(ArithUnaryOp{opcode: unaryTag, resultId: resultId, operandId: operandId})))
     return pos + 1
   end 'notBinary'
 
