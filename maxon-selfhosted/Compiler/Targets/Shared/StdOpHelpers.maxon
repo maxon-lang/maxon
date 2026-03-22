@@ -5,6 +5,10 @@ export typealias SlotIndex = int(i64.min to i64.max)
 export typealias StdOpIndex = int(0 to u64.max)
 typealias TempSlotCount = int(0 to 10)
 
+union NotComparison implements Error
+    notComparison
+end 'NotComparison'
+
 export union JumpKind
     eq
     ne
@@ -180,65 +184,43 @@ export function determineJumpKindInBlock(block MlirBlock) returns JumpKind
             j = j - 1
             continue
         end 'skipBack'
-        let kind = getJumpKindFromOp(op)
-        if kind >= 0 'found'
-            return decodeJumpKind(kind)
-        end 'found'
-        j = j - 1
+        let kind = try getJumpKindFromOp(op) otherwise 'notCmp'
+            j = j - 1
+            continue
+        end 'notCmp'
+        return kind
     end 'scanBack'
     return JumpKind.boolTest
 end 'determineJumpKindInBlock'
 
-// Returns encoded jump kind (0-11) or -1 if not a comparison op.
-function getJumpKindFromOp(op MlirOp) returns SlotIndex
+function getJumpKindFromOp(op MlirOp) returns JumpKind throws NotComparison
     return match op 'check'
-        maxhl gives -1
-        arith(arithOp) gives getJumpKindFromArith(arithOp)
-        cf to maxarm64 gives -1
+        arith(arithOp) gives try getJumpKindFromArith(arithOp)
+        default throws NotComparison.notComparison
     end 'check'
 end 'getJumpKindFromOp'
 
-function getJumpKindFromArith(op ArithOp) returns SlotIndex
+function getJumpKindFromArith(op ArithOp) returns JumpKind throws NotComparison
     return match op 'check'
-        const gives -1
-        unary gives -1
-        binary(binOp) gives getJumpKindFromBinaryArith(binOp)
+        binary(binOp) gives try getJumpKindFromBinaryArith(binOp)
+        default throws NotComparison.notComparison
     end 'check'
 end 'getJumpKindFromArith'
 
-function getJumpKindFromBinaryArith(op ArithBinaryOp) returns SlotIndex
-    return match op 'check'
-        addI64 to shrI64 gives -1
-        cmpI64Eq gives 0
-        cmpI64Ne gives 1
-        cmpI64Lt gives 2
-        cmpI64Le gives 3
-        cmpI64Gt gives 4
-        cmpI64Ge gives 5
-        cmpF64Eq gives 6
-        cmpF64Ne gives 7
-        cmpF64Lt gives 8
-        cmpF64Le gives 9
-        cmpF64Gt gives 10
-        cmpF64Ge gives 11
+function getJumpKindFromBinaryArith(op ArithBinaryOp) returns JumpKind throws NotComparison
+    return match op.opcode 'check'
+        ArithBinaryOpcode.cmpI64Eq gives JumpKind.eq
+        ArithBinaryOpcode.cmpI64Ne gives JumpKind.ne
+        ArithBinaryOpcode.cmpI64Lt gives JumpKind.lt
+        ArithBinaryOpcode.cmpI64Le gives JumpKind.le
+        ArithBinaryOpcode.cmpI64Gt gives JumpKind.gt
+        ArithBinaryOpcode.cmpI64Ge gives JumpKind.ge
+        ArithBinaryOpcode.cmpF64Eq gives JumpKind.feq
+        ArithBinaryOpcode.cmpF64Ne gives JumpKind.fne
+        ArithBinaryOpcode.cmpF64Lt gives JumpKind.flt
+        ArithBinaryOpcode.cmpF64Le gives JumpKind.fle
+        ArithBinaryOpcode.cmpF64Gt gives JumpKind.fgt
+        ArithBinaryOpcode.cmpF64Ge gives JumpKind.fge
+        default throws NotComparison.notComparison
     end 'check'
 end 'getJumpKindFromBinaryArith'
-
-function decodeJumpKind(encoded SlotIndex) returns JumpKind
-    match encoded 'decode'
-        0 then return JumpKind.eq
-        1 then return JumpKind.ne
-        2 then return JumpKind.lt
-        3 then return JumpKind.le
-        4 then return JumpKind.gt
-        5 then return JumpKind.ge
-        6 then return JumpKind.feq
-        7 then return JumpKind.fne
-        8 then return JumpKind.flt
-        9 then return JumpKind.fle
-        10 then return JumpKind.fgt
-        11 then return JumpKind.fge
-        default then break 'decode'
-    end 'decode'
-    panic("decodeJumpKind: unknown encoded value {encoded}")
-end 'decodeJumpKind'

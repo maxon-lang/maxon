@@ -11,29 +11,36 @@ export union ArithUnaryOp
     bitNotI64(resultId ValueId, operandId ValueId)
 end 'ArithUnaryOp'
 
-export union ArithBinaryOp
-    addI64(resultId ValueId, leftId ValueId, rightId ValueId)
-    subI64(resultId ValueId, leftId ValueId, rightId ValueId)
-    mulI64(resultId ValueId, leftId ValueId, rightId ValueId)
-    divI64(resultId ValueId, leftId ValueId, rightId ValueId)
-    remI64(resultId ValueId, leftId ValueId, rightId ValueId)
-    andI64(resultId ValueId, leftId ValueId, rightId ValueId)
-    orI64(resultId ValueId, leftId ValueId, rightId ValueId)
-    xorI64(resultId ValueId, leftId ValueId, rightId ValueId)
-    shlI64(resultId ValueId, leftId ValueId, rightId ValueId)
-    shrI64(resultId ValueId, leftId ValueId, rightId ValueId)
-    cmpI64Eq(resultId ValueId, leftId ValueId, rightId ValueId)
-    cmpI64Ne(resultId ValueId, leftId ValueId, rightId ValueId)
-    cmpI64Lt(resultId ValueId, leftId ValueId, rightId ValueId)
-    cmpI64Le(resultId ValueId, leftId ValueId, rightId ValueId)
-    cmpI64Gt(resultId ValueId, leftId ValueId, rightId ValueId)
-    cmpI64Ge(resultId ValueId, leftId ValueId, rightId ValueId)
-    cmpF64Eq(resultId ValueId, leftId ValueId, rightId ValueId)
-    cmpF64Ne(resultId ValueId, leftId ValueId, rightId ValueId)
-    cmpF64Lt(resultId ValueId, leftId ValueId, rightId ValueId)
-    cmpF64Le(resultId ValueId, leftId ValueId, rightId ValueId)
-    cmpF64Gt(resultId ValueId, leftId ValueId, rightId ValueId)
-    cmpF64Ge(resultId ValueId, leftId ValueId, rightId ValueId)
+export enum ArithBinaryOpcode
+    addI64
+    subI64
+    mulI64
+    divI64
+    remI64
+    andI64
+    orI64
+    xorI64
+    shlI64
+    shrI64
+    cmpI64Eq
+    cmpI64Ne
+    cmpI64Lt
+    cmpI64Le
+    cmpI64Gt
+    cmpI64Ge
+    cmpF64Eq
+    cmpF64Ne
+    cmpF64Lt
+    cmpF64Le
+    cmpF64Gt
+    cmpF64Ge
+end 'ArithBinaryOpcode'
+
+export type ArithBinaryOp
+    export let opcode ArithBinaryOpcode
+    export let resultId ValueId
+    export let leftId ValueId
+    export let rightId ValueId
 end 'ArithBinaryOp'
 
 export union ArithOp
@@ -64,57 +71,30 @@ function printArithUnaryOp(op ArithUnaryOp) returns String
     end 'print'
 end 'printArithUnaryOp'
 
-export function arithBinaryOpName(op ArithBinaryOp) returns String
-    return match op 'name'
-        addI64 gives "addi"
-        subI64 gives "subi"
-        mulI64 gives "muli"
-        divI64 gives "divsi"
-        remI64 gives "remsi"
-        andI64 gives "andi"
-        orI64 gives "ori"
-        xorI64 gives "xori"
-        shlI64 gives "shli"
-        shrI64 gives "shrsi"
-        cmpI64Eq gives "cmpi eq,"
-        cmpI64Ne gives "cmpi ne,"
-        cmpI64Lt gives "cmpi lt,"
-        cmpI64Le gives "cmpi le,"
-        cmpI64Gt gives "cmpi gt,"
-        cmpI64Ge gives "cmpi ge,"
-        cmpF64Eq gives "cmpf eq,"
-        cmpF64Ne gives "cmpf ne,"
-        cmpF64Lt gives "cmpf lt,"
-        cmpF64Le gives "cmpf le,"
-        cmpF64Gt gives "cmpf gt,"
-        cmpF64Ge gives "cmpf ge,"
-    end 'name'
-end 'arithBinaryOpName'
-
 function printArithBinaryOp(op ArithBinaryOp) returns String
-    let name = arithBinaryOpName(op)
-    return match op 'print'
-        addI64(r, l, ri) gives "%{r} = arith.{name} %{l}, %{ri}"
-        subI64(r, l, ri) gives "%{r} = arith.{name} %{l}, %{ri}"
-        mulI64(r, l, ri) gives "%{r} = arith.{name} %{l}, %{ri}"
-        divI64(r, l, ri) gives "%{r} = arith.{name} %{l}, %{ri}"
-        remI64(r, l, ri) gives "%{r} = arith.{name} %{l}, %{ri}"
-        andI64(r, l, ri) gives "%{r} = arith.{name} %{l}, %{ri}"
-        orI64(r, l, ri) gives "%{r} = arith.{name} %{l}, %{ri}"
-        xorI64(r, l, ri) gives "%{r} = arith.{name} %{l}, %{ri}"
-        shlI64(r, l, ri) gives "%{r} = arith.{name} %{l}, %{ri}"
-        shrI64(r, l, ri) gives "%{r} = arith.{name} %{l}, %{ri}"
-        cmpI64Eq(r, l, ri) gives "%{r} = arith.{name} %{l}, %{ri}"
-        cmpI64Ne(r, l, ri) gives "%{r} = arith.{name} %{l}, %{ri}"
-        cmpI64Lt(r, l, ri) gives "%{r} = arith.{name} %{l}, %{ri}"
-        cmpI64Le(r, l, ri) gives "%{r} = arith.{name} %{l}, %{ri}"
-        cmpI64Gt(r, l, ri) gives "%{r} = arith.{name} %{l}, %{ri}"
-        cmpI64Ge(r, l, ri) gives "%{r} = arith.{name} %{l}, %{ri}"
-        cmpF64Eq(r, l, ri) gives "%{r} = arith.{name} %{l}, %{ri}"
-        cmpF64Ne(r, l, ri) gives "%{r} = arith.{name} %{l}, %{ri}"
-        cmpF64Lt(r, l, ri) gives "%{r} = arith.{name} %{l}, %{ri}"
-        cmpF64Le(r, l, ri) gives "%{r} = arith.{name} %{l}, %{ri}"
-        cmpF64Gt(r, l, ri) gives "%{r} = arith.{name} %{l}, %{ri}"
-        cmpF64Ge(r, l, ri) gives "%{r} = arith.{name} %{l}, %{ri}"
-    end 'print'
+    let name = match op.opcode 'name'
+        ArithBinaryOpcode.addI64 gives "addi"
+        ArithBinaryOpcode.subI64 gives "subi"
+        ArithBinaryOpcode.mulI64 gives "muli"
+        ArithBinaryOpcode.divI64 gives "divsi"
+        ArithBinaryOpcode.remI64 gives "remsi"
+        ArithBinaryOpcode.andI64 gives "andi"
+        ArithBinaryOpcode.orI64 gives "ori"
+        ArithBinaryOpcode.xorI64 gives "xori"
+        ArithBinaryOpcode.shlI64 gives "shli"
+        ArithBinaryOpcode.shrI64 gives "shrsi"
+        ArithBinaryOpcode.cmpI64Eq gives "cmpi eq,"
+        ArithBinaryOpcode.cmpI64Ne gives "cmpi ne,"
+        ArithBinaryOpcode.cmpI64Lt gives "cmpi lt,"
+        ArithBinaryOpcode.cmpI64Le gives "cmpi le,"
+        ArithBinaryOpcode.cmpI64Gt gives "cmpi gt,"
+        ArithBinaryOpcode.cmpI64Ge gives "cmpi ge,"
+        ArithBinaryOpcode.cmpF64Eq gives "cmpf eq,"
+        ArithBinaryOpcode.cmpF64Ne gives "cmpf ne,"
+        ArithBinaryOpcode.cmpF64Lt gives "cmpf lt,"
+        ArithBinaryOpcode.cmpF64Le gives "cmpf le,"
+        ArithBinaryOpcode.cmpF64Gt gives "cmpf gt,"
+        ArithBinaryOpcode.cmpF64Ge gives "cmpf ge,"
+    end 'name'
+    return "%{op.resultId} = arith.{name} %{op.leftId}, %{op.rightId}"
 end 'printArithBinaryOp'

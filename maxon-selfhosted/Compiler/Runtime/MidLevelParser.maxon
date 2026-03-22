@@ -77,62 +77,10 @@ end 'lookupBlockId'
 // --- Arith op table ---
 // Maps .mid text names to enum tags for table-driven dispatch.
 
-enum ArithBinaryTag
-    addI64
-    subI64
-    mulI64
-    divI64
-    remI64
-    andI64
-    orI64
-    xorI64
-    shlI64
-    shrI64
-    cmpI64Eq
-    cmpI64Ne
-    cmpI64Lt
-    cmpI64Le
-    cmpI64Gt
-    cmpI64Ge
-    cmpF64Eq
-    cmpF64Ne
-    cmpF64Lt
-    cmpF64Le
-    cmpF64Gt
-    cmpF64Ge
-end 'ArithBinaryTag'
-
 enum ArithUnaryTag
     negI64
     bitNotI64
 end 'ArithUnaryTag'
-
-function makeBinaryArithOp(tag ArithBinaryTag, resultId ValueId, leftId ValueId, rightId ValueId) returns ArithBinaryOp
-    return match tag 'make'
-        ArithBinaryTag.addI64   gives ArithBinaryOp.addI64(resultId, leftId, rightId)
-        ArithBinaryTag.subI64   gives ArithBinaryOp.subI64(resultId, leftId, rightId)
-        ArithBinaryTag.mulI64   gives ArithBinaryOp.mulI64(resultId, leftId, rightId)
-        ArithBinaryTag.divI64   gives ArithBinaryOp.divI64(resultId, leftId, rightId)
-        ArithBinaryTag.remI64   gives ArithBinaryOp.remI64(resultId, leftId, rightId)
-        ArithBinaryTag.andI64   gives ArithBinaryOp.andI64(resultId, leftId, rightId)
-        ArithBinaryTag.orI64    gives ArithBinaryOp.orI64(resultId, leftId, rightId)
-        ArithBinaryTag.xorI64   gives ArithBinaryOp.xorI64(resultId, leftId, rightId)
-        ArithBinaryTag.shlI64   gives ArithBinaryOp.shlI64(resultId, leftId, rightId)
-        ArithBinaryTag.shrI64   gives ArithBinaryOp.shrI64(resultId, leftId, rightId)
-        ArithBinaryTag.cmpI64Eq gives ArithBinaryOp.cmpI64Eq(resultId, leftId, rightId)
-        ArithBinaryTag.cmpI64Ne gives ArithBinaryOp.cmpI64Ne(resultId, leftId, rightId)
-        ArithBinaryTag.cmpI64Lt gives ArithBinaryOp.cmpI64Lt(resultId, leftId, rightId)
-        ArithBinaryTag.cmpI64Le gives ArithBinaryOp.cmpI64Le(resultId, leftId, rightId)
-        ArithBinaryTag.cmpI64Gt gives ArithBinaryOp.cmpI64Gt(resultId, leftId, rightId)
-        ArithBinaryTag.cmpI64Ge gives ArithBinaryOp.cmpI64Ge(resultId, leftId, rightId)
-        ArithBinaryTag.cmpF64Eq gives ArithBinaryOp.cmpF64Eq(resultId, leftId, rightId)
-        ArithBinaryTag.cmpF64Ne gives ArithBinaryOp.cmpF64Ne(resultId, leftId, rightId)
-        ArithBinaryTag.cmpF64Lt gives ArithBinaryOp.cmpF64Lt(resultId, leftId, rightId)
-        ArithBinaryTag.cmpF64Le gives ArithBinaryOp.cmpF64Le(resultId, leftId, rightId)
-        ArithBinaryTag.cmpF64Gt gives ArithBinaryOp.cmpF64Gt(resultId, leftId, rightId)
-        ArithBinaryTag.cmpF64Ge gives ArithBinaryOp.cmpF64Ge(resultId, leftId, rightId)
-    end 'make'
-end 'makeBinaryArithOp'
 
 function makeUnaryArithOp(tag ArithUnaryTag, resultId ValueId, operandId ValueId) returns ArithUnaryOp
     return match tag 'make'
@@ -515,7 +463,7 @@ function midParseArithOp(tokens TokenArray, startPos MidTokenIndex, block MlirBl
     let opNameStr = String.from(opName)
 
     // Binary ops: construct enum from string -> match -> single emit
-    let binTag = try ArithBinaryTag.fromName(opNameStr) otherwise 'notBinary'
+    let binTag = try ArithBinaryOpcode.fromName(opNameStr) otherwise 'notBinary'
         // Unary ops: construct enum from string -> match -> single emit
         let unaryTag = try ArithUnaryTag.fromName(opNameStr) otherwise 'notUnary'
             panic("MidLevelParser: unknown arith op '{opNameStr}'")
@@ -527,7 +475,7 @@ function midParseArithOp(tokens TokenArray, startPos MidTokenIndex, block MlirBl
 
     let leftId = lookupValueId(state, name: midTokenAt(tokens, pos: pos).value)
     let rightId = lookupValueId(state, name: midTokenAt(tokens, pos: pos + 1).value)
-    block.ops.push(MlirOp.arith(ArithOp.binary(makeBinaryArithOp(binTag, resultId: resultId, leftId: leftId, rightId: rightId))))
+    block.ops.push(MlirOp.arith(ArithOp.binary(ArithBinaryOp{opcode: binTag, resultId: resultId, leftId: leftId, rightId: rightId})))
     return pos + 2
 end 'midParseArithOp'
 

@@ -199,11 +199,11 @@ end 'lowerArithUnaryToArm64'
 
 // Lower a binary arith op to MaxArm64 ops.
 function lowerArithBinaryToArm64(op ArithBinaryOp, dstBlock MlirBlock, valueSlots ValueSlotMap, nextTempSlot VarSlot) returns VarSlot
-    match op 'check'
-        divI64(resultId, leftId, rightId) then return emitMaxArm64DivRem(resultId, leftId: leftId, rightId: rightId, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot, isRem: false)
-        remI64(resultId, leftId, rightId) then return emitMaxArm64DivRem(resultId, leftId: leftId, rightId: rightId, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot, isRem: true)
-        addI64 to mulI64 then return emitMaxArm64BinaryOp(op, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
-        andI64 to cmpF64Ge then return emitMaxArm64BinaryOp(op, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
+    match op.opcode 'check'
+        ArithBinaryOpcode.divI64 then return emitMaxArm64DivRem(op.resultId, leftId: op.leftId, rightId: op.rightId, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot, isRem: false)
+        ArithBinaryOpcode.remI64 then return emitMaxArm64DivRem(op.resultId, leftId: op.leftId, rightId: op.rightId, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot, isRem: true)
+        ArithBinaryOpcode.addI64 to ArithBinaryOpcode.mulI64 then return emitMaxArm64BinaryOp(op, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
+        ArithBinaryOpcode.andI64 to ArithBinaryOpcode.cmpF64Ge then return emitMaxArm64BinaryOp(op, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
     end 'check'
 end 'lowerArithBinaryToArm64'
 
@@ -347,7 +347,7 @@ end 'lowerCfTerminatorToArm64'
 // Lower condBr: look back through source ops to find comparison, emit inverted conditional
 // branch to else, then unconditional branch to then.
 function lowerCondBrToArm64(srcBlock MlirBlock, dstBlock MlirBlock, valueSlots ValueSlotMap, condId ValueId, thenTarget BlockId, elseTarget BlockId)
-    let jumpKind = determineJumpKindFromBlock(srcBlock)
+    let jumpKind = determineJumpKindInBlock(srcBlock)
 
     // Emit inverted condition branch to else block
     match jumpKind 'emitJump'
@@ -392,81 +392,25 @@ function lowerRetToArm64(retValId ValueId, dstBlock MlirBlock, valueSlots ValueS
     dstBlock.terminator = MlirOp.maxarm64(MaxArm64Op.epilogue)
 end 'lowerRetToArm64'
 
-// Scan backwards through the source block's mid-level ops to find what kind of
-// comparison produced the condition for a condBr terminator.
-function determineJumpKindFromBlock(srcBlock MlirBlock) returns JumpKind
-    var j = srcBlock.ops.count() - 1
-    while j >= 0 'scanBack'
-        let op = try srcBlock.ops.get(j) otherwise 'skipScan'
-            j = j - 1
-            continue
-        end 'skipScan'
-        match op 'checkOp'
-            arith(aOp) then return determineJumpKindFromArith(aOp)
-            maxhl then j = j - 1
-            cf to maxarm64 then j = j - 1
-        end 'checkOp'
-    end 'scanBack'
-    return JumpKind.boolTest
-end 'determineJumpKindFromBlock'
-
-// Check if an arith op is a comparison and return its jump kind.
-function determineJumpKindFromArith(aOp ArithOp) returns JumpKind
-    return match aOp 'check'
-        const gives JumpKind.boolTest
-        unary gives JumpKind.boolTest
-        binary(binOp) gives determineJumpKindFromBinaryArith(binOp)
-    end 'check'
-end 'determineJumpKindFromArith'
-
-// Check if a binary arith op is a comparison and return its jump kind.
-function determineJumpKindFromBinaryArith(op ArithBinaryOp) returns JumpKind
-    return match op 'check'
-        cmpI64Eq gives JumpKind.eq
-        cmpI64Ne gives JumpKind.ne
-        cmpI64Lt gives JumpKind.lt
-        cmpI64Le gives JumpKind.le
-        cmpI64Gt gives JumpKind.gt
-        cmpI64Ge gives JumpKind.ge
-        cmpF64Eq gives JumpKind.feq
-        cmpF64Ne gives JumpKind.fne
-        cmpF64Lt gives JumpKind.flt
-        cmpF64Le gives JumpKind.fle
-        cmpF64Gt gives JumpKind.fgt
-        cmpF64Ge gives JumpKind.fge
-        addI64 to shrI64 gives JumpKind.boolTest
-    end 'check'
-end 'determineJumpKindFromBinaryArith'
 
 // Map an ArithBinaryOp to its corresponding MaxArm64Op for binary operations.
 function maxArm64GetBinaryOpInfo(op ArithBinaryOp) returns MaxArm64BinaryOpInfo
     let x0 = MaxArm64Register.x0
     let x1 = MaxArm64Register.x1
-    (let resultId, let leftId, let rightId, let arm64Op) = match op 'info'
-        addI64(r, l, ri) gives (r, l, ri, MaxArm64Op.addRegs(x0, x0, x1))
-        subI64(r, l, ri) gives (r, l, ri, MaxArm64Op.subRegs(x0, x0, x1))
-        mulI64(r, l, ri) gives (r, l, ri, MaxArm64Op.mulRegs(x0, x0, x1))
-        divI64(r, l, ri) gives (r, l, ri, MaxArm64Op.epilogue)
-        remI64(r, l, ri) gives (r, l, ri, MaxArm64Op.epilogue)
-        andI64(r, l, ri) gives (r, l, ri, MaxArm64Op.andRegs(x0, x0, x1))
-        orI64(r, l, ri) gives (r, l, ri, MaxArm64Op.orrRegs(x0, x0, x1))
-        xorI64(r, l, ri) gives (r, l, ri, MaxArm64Op.eorRegs(x0, x0, x1))
-        shlI64(r, l, ri) gives (r, l, ri, MaxArm64Op.lslRegs(x0, x0, x1))
-        shrI64(r, l, ri) gives (r, l, ri, MaxArm64Op.asrRegs(x0, x0, x1))
-        cmpI64Eq(r, l, ri) gives (r, l, ri, MaxArm64Op.cmpRegs(x0, x1))
-        cmpI64Ne(r, l, ri) gives (r, l, ri, MaxArm64Op.cmpRegs(x0, x1))
-        cmpI64Lt(r, l, ri) gives (r, l, ri, MaxArm64Op.cmpRegs(x0, x1))
-        cmpI64Le(r, l, ri) gives (r, l, ri, MaxArm64Op.cmpRegs(x0, x1))
-        cmpI64Gt(r, l, ri) gives (r, l, ri, MaxArm64Op.cmpRegs(x0, x1))
-        cmpI64Ge(r, l, ri) gives (r, l, ri, MaxArm64Op.cmpRegs(x0, x1))
-        cmpF64Eq(r, l, ri) gives (r, l, ri, MaxArm64Op.cmpRegs(x0, x1))
-        cmpF64Ne(r, l, ri) gives (r, l, ri, MaxArm64Op.cmpRegs(x0, x1))
-        cmpF64Lt(r, l, ri) gives (r, l, ri, MaxArm64Op.cmpRegs(x0, x1))
-        cmpF64Le(r, l, ri) gives (r, l, ri, MaxArm64Op.cmpRegs(x0, x1))
-        cmpF64Gt(r, l, ri) gives (r, l, ri, MaxArm64Op.cmpRegs(x0, x1))
-        cmpF64Ge(r, l, ri) gives (r, l, ri, MaxArm64Op.cmpRegs(x0, x1))
+    let arm64Op = match op.opcode 'info'
+        ArithBinaryOpcode.addI64 gives MaxArm64Op.addRegs(x0, x0, x1)
+        ArithBinaryOpcode.subI64 gives MaxArm64Op.subRegs(x0, x0, x1)
+        ArithBinaryOpcode.mulI64 gives MaxArm64Op.mulRegs(x0, x0, x1)
+        ArithBinaryOpcode.divI64 gives MaxArm64Op.epilogue
+        ArithBinaryOpcode.remI64 gives MaxArm64Op.epilogue
+        ArithBinaryOpcode.andI64 gives MaxArm64Op.andRegs(x0, x0, x1)
+        ArithBinaryOpcode.orI64 gives MaxArm64Op.orrRegs(x0, x0, x1)
+        ArithBinaryOpcode.xorI64 gives MaxArm64Op.eorRegs(x0, x0, x1)
+        ArithBinaryOpcode.shlI64 gives MaxArm64Op.lslRegs(x0, x0, x1)
+        ArithBinaryOpcode.shrI64 gives MaxArm64Op.asrRegs(x0, x0, x1)
+        ArithBinaryOpcode.cmpI64Eq to ArithBinaryOpcode.cmpF64Ge gives MaxArm64Op.cmpRegs(x0, x1)
     end 'info'
-    return MaxArm64BinaryOpInfo{resultId: resultId, leftId: leftId, rightId: rightId, arm64Op: arm64Op}
+    return MaxArm64BinaryOpInfo{resultId: op.resultId, leftId: op.leftId, rightId: op.rightId, arm64Op: arm64Op}
 end 'maxArm64GetBinaryOpInfo'
 
 // Map a unary ArithUnaryOp to its corresponding MaxArm64Op.
