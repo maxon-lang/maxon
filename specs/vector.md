@@ -261,7 +261,7 @@ module {
     %56 = arith.ori1 %53, %55
     cf.cond_br %56 [then: __range_panic_5, else: __range_ok_5]
   __range_panic_5:
-    %57 = memref.lea_symdata __panic_msg_25
+    %57 = memref.lea_symdata __panic_msg_0
     %58 = std.ptr_to_i64 %57
     std.call_runtime @maxon_panic %58
   __range_ok_5:
@@ -410,7 +410,7 @@ module {
     x86.test rdx, rdx
     x86.je vector.main.__range_ok_5
   __range_panic_5:
-    x86.lea_symdata rax, [__panic_msg_25]
+    x86.lea_symdata rax, [__panic_msg_0]
     x86.mov rcx, rax
     x86.call maxon_panic
   __range_ok_5:
@@ -972,7 +972,7 @@ module {
     %59 = arith.ori1 %56, %58
     cf.cond_br %59 [then: __range_panic_5, else: __range_ok_5]
   __range_panic_5:
-    %60 = memref.lea_symdata __panic_msg_27
+    %60 = memref.lea_symdata __panic_msg_0
     %61 = std.ptr_to_i64 %60
     std.call_runtime @maxon_panic %61
   __range_ok_5:
@@ -1126,7 +1126,7 @@ module {
     x86.test rdx, rdx
     x86.je vector.main.__range_ok_5
   __range_panic_5:
-    x86.lea_symdata rax, [__panic_msg_27]
+    x86.lea_symdata rax, [__panic_msg_0]
     x86.mov rcx, rax
     x86.call maxon_panic
   __range_ok_5:

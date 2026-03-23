@@ -357,7 +357,7 @@ module {
     %49 = arith.ori1 %46, %48
     cf.cond_br %49 [then: __range_panic_5, else: __range_ok_5]
   __range_panic_5:
-    %50 = memref.lea_symdata __panic_msg_25
+    %50 = memref.lea_symdata __panic_msg_0
     %51 = std.ptr_to_i64 %50
     std.call_runtime @maxon_panic %51
   __range_ok_5:
@@ -488,7 +488,7 @@ module {
     x86.test rdx, rdx
     x86.je codegen-internals.main.__range_ok_5
   __range_panic_5:
-    x86.lea_symdata rax, [__panic_msg_25]
+    x86.lea_symdata rax, [__panic_msg_0]
     x86.mov rcx, rax
     x86.call maxon_panic
   __range_ok_5:
@@ -887,6 +887,78 @@ end 'main'
 5
 ```
 
+<!-- test: rdata-global-let-array-uses-rdata -->
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
+
+let globalArr = [10, 20, 30]
+
+function main() returns ExitCode
+  return try globalArr.get(1) otherwise 0
+end 'main'
+```
+```exitcode
+20
+```
+```RequiredRdata
+i64[] 10, 20, 30
+```
+
+<!-- test: rdata-global-var-array-cow -->
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
+
+var globalArr = [1, 2, 3]
+
+function main() returns ExitCode
+  globalArr.set(0, value: 42)
+  return try globalArr.get(0) otherwise 0
+end 'main'
+```
+```exitcode
+42
+```
+```RequiredRdata
+i64[] 1, 2, 3
+```
+
+<!-- test: rdata-global-var-array-cow-preserves-original -->
+```maxon
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
+
+var globalArr = [10, 20, 30]
+
+function readFirst() returns Integer
+  return try globalArr.get(0) otherwise 0
+end 'readFirst'
+
+function main() returns ExitCode
+  globalArr.set(0, value: 99)
+  return readFirst()
+end 'main'
+```
+```exitcode
+99
+```
+```RequiredRdata
+i64[] 10, 20, 30
+```
+
+<!-- test: rdata-dead-global-array-no-init-code -->
+```maxon
+let unusedTable = [100, 200, 300, 400]
+
+function main() returns ExitCode
+  return 42
+end 'main'
+```
+```exitcode
+42
+```
+
 <!-- test: managed-string-heap-string-generates-cleanup -->
 ```maxon
 function main() returns ExitCode
@@ -1030,7 +1102,7 @@ module {
     %7 = arith.ori1 %4, %6
     cf.cond_br %7 [then: __range_panic_0, else: __range_ok_0]
   __range_panic_0:
-    %8 = memref.lea_symdata __panic_msg_10
+    %8 = memref.lea_symdata __panic_msg_0
     %9 = std.ptr_to_i64 %8
     std.call_runtime @maxon_panic %9
   __range_ok_0:
@@ -1057,7 +1129,7 @@ module {
     x86.test rbx, rbx
     x86.je codegen-internals.main.__range_ok_0
   __range_panic_0:
-    x86.lea_symdata rax, [__panic_msg_10]
+    x86.lea_symdata rax, [__panic_msg_0]
     x86.mov rcx, rax
     x86.call maxon_panic
   __range_ok_0:
@@ -1200,7 +1272,7 @@ module {
     %7 = arith.ori1 %4, %6
     cf.cond_br %7 [then: __range_panic_0, else: __range_ok_0]
   __range_panic_0:
-    %8 = memref.lea_symdata __panic_msg_10
+    %8 = memref.lea_symdata __panic_msg_0
     %9 = std.ptr_to_i64 %8
     std.call_runtime @maxon_panic %9
   __range_ok_0:
@@ -1228,7 +1300,7 @@ module {
     x86.test rbx, rbx
     x86.je codegen-internals.main.__range_ok_0
   __range_panic_0:
-    x86.lea_symdata rax, [__panic_msg_10]
+    x86.lea_symdata rax, [__panic_msg_0]
     x86.mov rcx, rax
     x86.call maxon_panic
   __range_ok_0:
@@ -1373,7 +1445,7 @@ module {
     %11 = arith.ori1 %7, %10
     cf.cond_br %11 [then: __range_panic_0, else: __range_ok_0]
   __range_panic_0:
-    %12 = memref.lea_symdata __panic_msg_8
+    %12 = memref.lea_symdata __panic_msg_0
     %13 = std.ptr_to_i64 %12
     std.call_runtime @maxon_panic %13
   __range_ok_0:
@@ -1407,7 +1479,7 @@ module {
     x86.test r8, r8
     x86.je codegen-internals.main.__range_ok_0
   __range_panic_0:
-    x86.lea_symdata rax, [__panic_msg_8]
+    x86.lea_symdata rax, [__panic_msg_0]
     x86.mov rcx, rax
     x86.call maxon_panic
   __range_ok_0:
@@ -1688,7 +1760,7 @@ module {
     %7 = arith.ori1 %4, %6
     cf.cond_br %7 [then: __range_panic_0, else: __range_ok_0]
   __range_panic_0:
-    %8 = memref.lea_symdata __panic_msg_10
+    %8 = memref.lea_symdata __panic_msg_0
     %9 = std.ptr_to_i64 %8
     std.call_runtime @maxon_panic %9
   __range_ok_0:
@@ -1716,7 +1788,7 @@ module {
     x86.test rax, rax
     x86.je codegen-internals.main.__range_ok_0
   __range_panic_0:
-    x86.lea_symdata rax, [__panic_msg_10]
+    x86.lea_symdata rax, [__panic_msg_0]
     x86.mov rcx, rax
     x86.call maxon_panic
   __range_ok_0:
@@ -1859,7 +1931,7 @@ module {
     %7 = arith.ori1 %4, %6
     cf.cond_br %7 [then: __range_panic_0, else: __range_ok_0]
   __range_panic_0:
-    %8 = memref.lea_symdata __panic_msg_8
+    %8 = memref.lea_symdata __panic_msg_0
     %9 = std.ptr_to_i64 %8
     std.call_runtime @maxon_panic %9
   __range_ok_0:
@@ -1887,7 +1959,7 @@ module {
     x86.test rbx, rbx
     x86.je codegen-internals.main.__range_ok_0
   __range_panic_0:
-    x86.lea_symdata rax, [__panic_msg_8]
+    x86.lea_symdata rax, [__panic_msg_0]
     x86.mov rcx, rax
     x86.call maxon_panic
   __range_ok_0:
@@ -2030,7 +2102,7 @@ module {
     %11 = arith.ori1 %7, %10
     cf.cond_br %11 [then: __range_panic_0, else: __range_ok_0]
   __range_panic_0:
-    %12 = memref.lea_symdata __panic_msg_8
+    %12 = memref.lea_symdata __panic_msg_0
     %13 = std.ptr_to_i64 %12
     std.call_runtime @maxon_panic %13
   __range_ok_0:
@@ -2064,7 +2136,7 @@ module {
     x86.test r8, r8
     x86.je codegen-internals.main.__range_ok_0
   __range_panic_0:
-    x86.lea_symdata rax, [__panic_msg_8]
+    x86.lea_symdata rax, [__panic_msg_0]
     x86.mov rcx, rax
     x86.call maxon_panic
   __range_ok_0:
@@ -2213,7 +2285,7 @@ module {
     %8 = arith.ori1 %5, %7
     cf.cond_br %8 [then: __range_panic_0, else: __range_ok_0]
   __range_panic_0:
-    %9 = memref.lea_symdata __panic_msg_9
+    %9 = memref.lea_symdata __panic_msg_0
     %10 = std.ptr_to_i64 %9
     std.call_runtime @maxon_panic %10
   __range_ok_0:
@@ -2242,7 +2314,7 @@ module {
     x86.test rdx, rdx
     x86.je codegen-internals.main.__range_ok_0
   __range_panic_0:
-    x86.lea_symdata rax, [__panic_msg_9]
+    x86.lea_symdata rax, [__panic_msg_0]
     x86.mov rcx, rax
     x86.call maxon_panic
   __range_ok_0:
@@ -2509,7 +2581,7 @@ module {
     %6 = arith.ori1 %3, %5
     cf.cond_br %6 [then: __range_panic_0, else: __range_ok_0]
   __range_panic_0:
-    %7 = memref.lea_symdata __panic_msg_7
+    %7 = memref.lea_symdata __panic_msg_0
     %8 = std.ptr_to_i64 %7
     std.call_runtime @maxon_panic %8
   __range_ok_0:
@@ -2535,7 +2607,7 @@ module {
     x86.test rdx, rdx
     x86.je codegen-internals.main.__range_ok_0
   __range_panic_0:
-    x86.lea_symdata rax, [__panic_msg_7]
+    x86.lea_symdata rax, [__panic_msg_0]
     x86.mov rcx, rax
     x86.call maxon_panic
   __range_ok_0:

@@ -87,53 +87,83 @@ public static class ConstantArrayAnalysisPass {
       foreach (var op in block.Operations) {
         if (op is not MaxonAssignOp { ValueKind: MaxonValueKind.Struct } assignOp) continue;
         if (!structLiterals.TryGetValue(assignOp.Value.Id, out var arrayStructLit)) continue;
-        // Accept any struct with ArrayLiteralTag (Array, Vector aliases, etc.)
         if (arrayStructLit.ArrayLiteralTag == null) continue;
 
-        var tag = arrayStructLit.ArrayLiteralTag;
-        int count = arrayStructLit.ArrayLiteralCount;
-        // Collect element values from the element assign ops
-        var elementValues = new long[count];
-        bool allConstant = true;
-        foreach (var elemOp in block.Operations) {
-          if (elemOp is not MaxonAssignOp elemAssign) continue;
-          if (!elemAssign.VarName.StartsWith($"{tag}.")) continue;
-          var indexStr = elemAssign.VarName[($"{tag}.".Length)..];
-          if (!int.TryParse(indexStr, out var idx)) continue;
-          if (!literalValues.TryGetValue(elemAssign.Value.Id, out var val)) {
-            allConstant = false;
-            break;
-          }
-          elementValues[idx] = val;
-        }
-        if (allConstant) {
-          // Extract element_size from the __ManagedMemory struct
-          MaxonStructLiteralOp? managedStruct = (TypeAliasInfo.IsManagedMemoryType(arrayStructLit.TypeName, module.TypeAliasSources)
-              ? arrayStructLit
-              : FindManagedMemoryStruct(arrayStructLit, structLiterals)) ?? throw new InvalidOperationException(
-                  $"ConstantArrayAnalysisPass: cannot find __ManagedMemory struct for array '{assignOp.VarName}' in {func.Name}");
+        // Mutable structs with stack-sized element buffers keep data on the stack
+        // so .set() can write directly without COW heap-copying
+        if (assignOp.IsMutable && HasStackAllocatableBuffer(arrayStructLit.TypeName, module.TypeDefs))
+          continue;
 
-          var (FieldName, Value) = managedStruct.FieldValues.FirstOrDefault(f => f.FieldName == "element_size");
+        TryTagConstantArray(block, arrayStructLit, assignOp.VarName, assignOp.IsMutable,
+          func, module, literalValues, structLiterals);
+      }
 
-          if (Value == null || !literalValues.TryGetValue(Value.Id, out var elemSizeVal)) {
-            throw new InvalidOperationException(
-              $"ConstantArrayAnalysisPass: cannot determine element_size for array '{assignOp.VarName}' in {func.Name}");
-          }
-          int elementSize = (int)elemSizeVal;
+      // Find global stores of array literals with all-constant elements (top-level let/var arrays)
+      foreach (var op in block.Operations) {
+        if (op is not MaxonGlobalStoreOp { ValueKind: MaxonValueKind.Struct } globalStore) continue;
+        if (!structLiterals.TryGetValue(globalStore.Value.Id, out var arrayStructLit)) continue;
+        if (arrayStructLit.ArrayLiteralTag == null) continue;
 
-          // Mutable structs with stack-sized element buffers keep data on the stack
-          // so .set() can write directly without COW heap-copying
-          if (assignOp.IsMutable && HasStackAllocatableBuffer(arrayStructLit.TypeName, module.TypeDefs)) {
-            continue;
-          }
+        bool isMutable = module.GlobalVarInfos.TryGetValue(globalStore.GlobalName, out var info) && info.Mutable;
 
-          // Include function name in rdata label to avoid conflicts
-          var rdataLabel = $"__const_array_{func.Name}_{assignOp.VarName}";
-          module.ConstantArrayLiterals[arrayStructLit.Result.Id] =
-            new ConstantArrayLiteralInfo(rdataLabel, elementValues, assignOp.IsMutable, elementSize);
-        }
+        if (isMutable && HasStackAllocatableBuffer(arrayStructLit.TypeName, module.TypeDefs))
+          continue;
+
+        TryTagConstantArray(block, arrayStructLit, globalStore.GlobalName, isMutable,
+          func, module, literalValues, structLiterals);
       }
     }
+  }
+
+  /// <summary>
+  /// Check if all elements of an array literal are constants and tag for .rdata placement.
+  /// Used for both local assigns and global stores.
+  /// </summary>
+  private static void TryTagConstantArray(
+      MlirBlock<MaxonOp> block,
+      MaxonStructLiteralOp arrayStructLit,
+      string ownerName,
+      bool isMutable,
+      MlirFunction<MaxonOp> func,
+      MlirModule<MaxonOp> module,
+      Dictionary<int, long> literalValues,
+      Dictionary<int, MaxonStructLiteralOp> structLiterals) {
+    var tag = arrayStructLit.ArrayLiteralTag!;
+    int count = arrayStructLit.ArrayLiteralCount;
+    // Collect element values from the element assign ops
+    var elementValues = new long[count];
+    bool allConstant = true;
+    foreach (var elemOp in block.Operations) {
+      if (elemOp is not MaxonAssignOp elemAssign) continue;
+      if (!elemAssign.VarName.StartsWith($"{tag}.")) continue;
+      var indexStr = elemAssign.VarName[($"{tag}.".Length)..];
+      if (!int.TryParse(indexStr, out var idx)) continue;
+      if (!literalValues.TryGetValue(elemAssign.Value.Id, out var val)) {
+        allConstant = false;
+        break;
+      }
+      elementValues[idx] = val;
+    }
+    if (!allConstant) return;
+
+    // Extract element_size from the __ManagedMemory struct
+    MaxonStructLiteralOp? managedStruct = (TypeAliasInfo.IsManagedMemoryType(arrayStructLit.TypeName, module.TypeAliasSources)
+        ? arrayStructLit
+        : FindManagedMemoryStruct(arrayStructLit, structLiterals)) ?? throw new InvalidOperationException(
+            $"ConstantArrayAnalysisPass: cannot find __ManagedMemory struct for array '{ownerName}' in {func.Name}");
+
+    var (FieldName, Value) = managedStruct.FieldValues.FirstOrDefault(f => f.FieldName == "element_size");
+
+    if (Value == null || !literalValues.TryGetValue(Value.Id, out var elemSizeVal)) {
+      throw new InvalidOperationException(
+        $"ConstantArrayAnalysisPass: cannot determine element_size for array '{ownerName}' in {func.Name}");
+    }
+    int elementSize = (int)elemSizeVal;
+
+    // Include function name in rdata label to avoid conflicts
+    var rdataLabel = $"__const_array_{func.Name}_{ownerName}";
+    module.ConstantArrayLiterals[arrayStructLit.Result.Id] =
+      new ConstantArrayLiteralInfo(rdataLabel, elementValues, isMutable, elementSize);
   }
 
   private static bool HasStackAllocatableBuffer(string typeName, Dictionary<string, MlirType> typeDefs) {

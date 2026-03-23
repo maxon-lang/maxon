@@ -4849,15 +4849,16 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
     func.SourceColumn = nameToken.Column;
     EmitParameters(paramNames, paramTypes, paramTokens);
 
-    // Emit deferred top-level expression lets/vars into a separate __module_init function
-    // that runs in the root scope (before main), so globals survive main's scope exit.
-    if (baseName == "main") {
-      EmitModuleInitFunction(module);
-    }
-
     ParseBodyUntilEnd();
     ExpectEndLabel(baseName);
     FinishFunctionBody(baseName, nameToken, returnType);
+
+    // Emit deferred top-level expression lets/vars into a separate __module_init function
+    // that runs in the root scope (before main), so globals survive main's scope exit.
+    // Emitted after main so __module_init's IDs don't shift main's labels.
+    if (baseName == "main") {
+      EmitModuleInitFunction(module);
+    }
   }
 
   // ============================================================================
@@ -11461,6 +11462,10 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
   private string? FindArrayAliasByElementName(string elementTypeName) {
     foreach (var (aliasName, sourceTypeName) in _typeAliasSources) {
       if (sourceTypeName != "Array") continue;
+      // Only consider user-defined (local) aliases, not stdlib aliases.
+      // Stdlib array aliases (e.g. Sha256Words) should not be inferred for
+      // unrelated array literals — let the caller auto-create an __Array_ alias instead.
+      if (!_localTypeAliases.Contains(aliasName)) continue;
       if (_typeRegistry.TryGetValue(aliasName, out var aliasType)
           && aliasType is MlirStructType st
           && st.TypeParams.TryGetValue("Element", out var elemType)) {

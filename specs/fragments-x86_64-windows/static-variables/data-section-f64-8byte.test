@@ -2,7 +2,10 @@
 var pi = 3.14
 
 function main() returns ExitCode
-  return 0
+  if pi > 3.0 'read'
+    return 0
+  end 'read'
+  return 1
 end 'main'
 ---
 ExitCode: 0
@@ -13,7 +16,15 @@ f64 3.14
 module {
   func @static-variables.main() -> u32 {
   entry:
+    x86.movsd xmm0, [rip+pi]
+    x86.movsd xmm1, [rip+__float_3]
+    x86.ucomisd xmm0, xmm1
+    x86.jbe static-variables.main.read_0.after
+  read_0:
     x86.xor rax, rax
+    x86.ret
+  read_0.after:
+    x86.mov rax, 1
     x86.ret
   }
 }

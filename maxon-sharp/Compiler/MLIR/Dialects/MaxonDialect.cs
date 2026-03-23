@@ -1056,9 +1056,18 @@ public class MaxonManagedWriteStderrOp(MaxonValue managed) : MaxonOp {
 
 // Write error message to stderr and terminate with exit code 1
 public class MaxonPanicOp(string message) : MaxonOp {
+  [ThreadStatic] private static Dictionary<string, string>? _panicLabelCache;
+  public static void ResetPanicLabels() => _panicLabelCache = null;
   public override string Mnemonic => $"maxon.panic \"{Message}\"";
   public string Message { get; } = message;
-  public string SymdataLabel { get; } = $"__panic_msg_{MlirContext.Current.NextId()}";
+  public string SymdataLabel { get; } = GetOrCreateLabel(message);
+  private static string GetOrCreateLabel(string message) {
+    _panicLabelCache ??= [];
+    if (_panicLabelCache.TryGetValue(message, out var label)) return label;
+    label = $"__panic_msg_{_panicLabelCache.Count}";
+    _panicLabelCache[message] = label;
+    return label;
+  }
 }
 
 // Write dynamically-constructed error message (from string interpolation) to stderr and terminate

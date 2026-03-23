@@ -137,7 +137,7 @@ public class RegisterManager : RegisterManagerBase<X86Register, X86XmmRegister, 
   }
 
   /// <summary>
-  /// Emit a shift instruction (SHL/SAR). x86 shifts require the shift count in CL.
+  /// Emit a shift instruction (SHL/SHR/SAR). x86 shifts require the shift count in CL.
   /// </summary>
   public void EmitShift(StdValue lhs, StdValue rhs, StdValue result,
     MlirBlock<X86Op> block, Func<X86Register, X86Op> makeShiftOp) {
@@ -145,8 +145,12 @@ public class RegisterManager : RegisterManagerBase<X86Register, X86XmmRegister, 
     var rhsReg = EnsureInRegister(rhs, block, protect1: lhsReg);
 
     if (lhsReg == X86Register.Rcx && rhsReg != X86Register.Rcx) {
+      // lhs is in Rcx but we need Rcx for the shift count.
+      // Copy lhs to a result register first, then spill lhs from Rcx
+      // so it can be reloaded from the stack if needed again later.
       var resultReg = AllocateRegister(result, block, protect1: X86Register.Rcx, protect2: rhsReg);
       block.AddOp(new X86MovRegRegOp(resultReg, lhsReg));
+      SpillRegisterIfOccupied(X86Register.Rcx, block);
       block.AddOp(new X86MovRegRegOp(X86Register.Rcx, rhsReg));
       block.AddOp(makeShiftOp(resultReg));
     } else {

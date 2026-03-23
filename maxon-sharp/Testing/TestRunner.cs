@@ -77,6 +77,8 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
     _totalCompileMs = 0;
     var generationErrors = new ConcurrentBag<string>();
     var printLock = new object();
+    var compilationFailed = 0; // 1 = a compilation error occurred, stop all workers
+    string? firstCompilationError = null;
 
     // Per-spec tracking for real-time progress
     var specTotal = new Dictionary<string, int>();
@@ -97,18 +99,35 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
     for (int i = 0; i < threadCount; i++) {
       threads[i] = new Thread(() => {
         while (true) {
+          // Stop all workers if a compilation error has occurred
+          if (Volatile.Read(ref compilationFailed) != 0) break;
+
           var index = Interlocked.Increment(ref nextIndex) - 1;
           if (index >= workItems.Length) break;
 
           var item = workItems[index];
+          var genErrorCountBefore = generationErrors.Count;
           results[index] = ProcessWorkItem(item, ref generatedCount, generationErrors);
 
           lock (printLock) {
             var testIdentifier = $"specs/fragments/{item.SpecName}/{item.TestName}.test";
+
+            // Check if fragment generation produced a new compilation error
+            if (generationErrors.Count > genErrorCountBefore && Interlocked.Exchange(ref compilationFailed, 1) == 0) {
+              firstCompilationError = generationErrors.Last();
+            }
+
             if (!results[index].Passed) {
+              // Detect compilation errors (not test expectation mismatches)
+              var msg = results[index].ErrorMessage;
+              var isCompilationError = msg != null && msg.StartsWith("Compilation failed:");
+              if (isCompilationError && Interlocked.Exchange(ref compilationFailed, 1) == 0) {
+                firstCompilationError = $"{testIdentifier}\n  {msg}";
+              }
+
               specFailed[item.SpecName].Add(testIdentifier);
-              if (results[index].ErrorMessage != null)
-                specFailed[item.SpecName].Add($"  {results[index].ErrorMessage}");
+              if (msg != null)
+                specFailed[item.SpecName].Add($"  {msg}");
             }
             specDone[item.SpecName]++;
 
@@ -138,6 +157,12 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
     foreach (var t in threads) t.Join();
 
     sw.Stop();
+
+    // If stopped due to compilation error, report it immediately
+    if (firstCompilationError != null) {
+      Logger.Error(LogCategory.Testing, $"Stopped: compilation error encountered:");
+      Logger.Error(LogCategory.Testing, firstCompilationError);
+    }
 
     // Report generation errors
     foreach (var error in generationErrors) {

@@ -412,7 +412,10 @@ A single bool global occupies 1 byte in the .data section.
 var flag = true
 
 function main() returns ExitCode
-  return 0
+  if flag 'read'
+    return 0
+  end 'read'
+  return 1
 end 'main'
 ```
 ```exitcode
@@ -429,7 +432,7 @@ A single i64 global occupies 8 bytes in the .data section.
 var counter = 42
 
 function main() returns ExitCode
-  return 0
+  return counter - 42
 end 'main'
 ```
 ```exitcode
@@ -446,7 +449,10 @@ A single f64 global occupies 8 bytes in the .data section.
 var pi = 3.14
 
 function main() returns ExitCode
-  return 0
+  if pi > 3.0 'read'
+    return 0
+  end 'read'
+  return 1
 end 'main'
 ```
 ```exitcode
@@ -464,7 +470,10 @@ var flag = false
 var counter = 42
 
 function main() returns ExitCode
-  return 0
+  if flag 'read'
+    return 1
+  end 'read'
+  return counter - 42
 end 'main'
 ```
 ```exitcode
@@ -483,7 +492,10 @@ var flag = true
 var counter = 99
 
 function main() returns ExitCode
-  return 0
+  if flag 'read'
+    return counter - 99
+  end 'read'
+  return 1
 end 'main'
 ```
 ```exitcode
@@ -502,7 +514,10 @@ var counter = 7
 var flag = true
 
 function main() returns ExitCode
-  return 0
+  if flag 'read'
+    return counter - 7
+  end 'read'
+  return 1
 end 'main'
 ```
 ```exitcode
@@ -522,7 +537,10 @@ var b = false
 var c = true
 
 function main() returns ExitCode
-  return 0
+  if a and c and (b == false) 'read'
+    return 0
+  end 'read'
+  return 1
 end 'main'
 ```
 ```exitcode
@@ -543,7 +561,10 @@ var count = 10
 var ratio = 2.5
 
 function main() returns ExitCode
-  return 0
+  if flag and (count == 10) and (ratio > 2.0) 'read'
+    return 0
+  end 'read'
+  return 1
 end 'main'
 ```
 ```exitcode

@@ -447,7 +447,7 @@ module {
     %20 = arith.ori1 %17, %19
     cf.cond_br %20 [then: __range_panic_1, else: __range_ok_1]
   __range_panic_1:
-    %21 = memref.lea_symdata __panic_msg_27
+    %21 = memref.lea_symdata __panic_msg_0
     %22 = std.ptr_to_i64 %21
     std.call_runtime @maxon_panic %22
   __range_ok_1:
@@ -512,7 +512,7 @@ module {
     x86.test rdx, rdx
     x86.je memory-safety.main.__range_ok_1
   __range_panic_1:
-    x86.lea_symdata rax, [__panic_msg_27]
+    x86.lea_symdata rax, [__panic_msg_0]
     x86.mov rcx, rax
     x86.call maxon_panic
   __range_ok_1:
@@ -881,7 +881,7 @@ module {
     %71 = arith.ori1 %68, %70
     cf.cond_br %71 [then: __range_panic_4, else: __range_ok_4]
   __range_panic_4:
-    %72 = memref.lea_symdata __panic_msg_36
+    %72 = memref.lea_symdata __panic_msg_0
     %73 = std.ptr_to_i64 %72
     std.call_runtime @maxon_panic %73
   __range_ok_4:
@@ -1082,7 +1082,7 @@ module {
     x86.test rdi, rdi
     x86.je memory-safety.main.__range_ok_4
   __range_panic_4:
-    x86.lea_symdata rax, [__panic_msg_36]
+    x86.lea_symdata rax, [__panic_msg_0]
     x86.mov rcx, rax
     x86.call maxon_panic
   __range_ok_4:
@@ -1740,7 +1740,7 @@ module {
     %18 = arith.ori1 %15, %17
     cf.cond_br %18 [then: __range_panic_2, else: __range_ok_2]
   __range_panic_2:
-    %19 = memref.lea_symdata __panic_msg_31
+    %19 = memref.lea_symdata __panic_msg_0
     %20 = std.ptr_to_i64 %19
     std.call_runtime @maxon_panic %20
   __range_ok_2:
@@ -1793,7 +1793,7 @@ module {
     x86.test rdx, rdx
     x86.je memory-safety.main.__range_ok_2
   __range_panic_2:
-    x86.lea_symdata rax, [__panic_msg_31]
+    x86.lea_symdata rax, [__panic_msg_0]
     x86.mov rcx, rax
     x86.call maxon_panic
   __range_ok_2:
@@ -2126,7 +2126,7 @@ module {
     %24 = arith.ori1 %21, %23
     cf.cond_br %24 [then: __range_panic_0, else: __range_ok_0]
   __range_panic_0:
-    %25 = memref.lea_symdata __panic_msg_26
+    %25 = memref.lea_symdata __panic_msg_0
     %26 = std.ptr_to_i64 %25
     std.call_runtime @maxon_panic %26
   __range_ok_0:
@@ -2198,7 +2198,7 @@ module {
     x86.test rcx, rcx
     x86.je memory-safety.main.__range_ok_0
   __range_panic_0:
-    x86.lea_symdata rax, [__panic_msg_26]
+    x86.lea_symdata rax, [__panic_msg_0]
     x86.mov rcx, rax
     x86.call maxon_panic
   __range_ok_0:

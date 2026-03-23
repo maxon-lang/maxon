@@ -126,7 +126,7 @@ module {
     %5 = arith.ori1 %2, %4
     cf.cond_br %5 [then: __range_panic_0, else: __range_ok_0]
   __range_panic_0:
-    %6 = memref.lea_symdata __panic_msg_6
+    %6 = memref.lea_symdata __panic_msg_0
     %7 = std.ptr_to_i64 %6
     std.call_runtime @maxon_panic %7
   __range_ok_0:
@@ -151,7 +151,7 @@ module {
     x86.test rdx, rdx
     x86.je register-allocator.main.__range_ok_0
   __range_panic_0:
-    x86.lea_symdata rax, [__panic_msg_6]
+    x86.lea_symdata rax, [__panic_msg_0]
     x86.mov rcx, rax
     x86.call maxon_panic
   __range_ok_0:
@@ -277,7 +277,7 @@ module {
     %7 = arith.ori1 %4, %6
     cf.cond_br %7 [then: __range_panic_0, else: __range_ok_0]
   __range_panic_0:
-    %8 = memref.lea_symdata __panic_msg_8
+    %8 = memref.lea_symdata __panic_msg_0
     %9 = std.ptr_to_i64 %8
     std.call_runtime @maxon_panic %9
   __range_ok_0:
@@ -304,7 +304,7 @@ module {
     x86.test rbx, rbx
     x86.je register-allocator.main.__range_ok_0
   __range_panic_0:
-    x86.lea_symdata rax, [__panic_msg_8]
+    x86.lea_symdata rax, [__panic_msg_0]
     x86.mov rcx, rax
     x86.call maxon_panic
   __range_ok_0:
@@ -441,7 +441,7 @@ module {
     %7 = arith.ori1 %4, %6
     cf.cond_br %7 [then: __range_panic_0, else: __range_ok_0]
   __range_panic_0:
-    %8 = memref.lea_symdata __panic_msg_8
+    %8 = memref.lea_symdata __panic_msg_0
     %9 = std.ptr_to_i64 %8
     std.call_runtime @maxon_panic %9
   __range_ok_0:
@@ -468,7 +468,7 @@ module {
     x86.test rbx, rbx
     x86.je register-allocator.main.__range_ok_0
   __range_panic_0:
-    x86.lea_symdata rax, [__panic_msg_8]
+    x86.lea_symdata rax, [__panic_msg_0]
     x86.mov rcx, rax
     x86.call maxon_panic
   __range_ok_0:
@@ -601,7 +601,7 @@ module {
     %6 = arith.ori1 %3, %5
     cf.cond_br %6 [then: __range_panic_0, else: __range_ok_0]
   __range_panic_0:
-    %7 = memref.lea_symdata __panic_msg_7
+    %7 = memref.lea_symdata __panic_msg_0
     %8 = std.ptr_to_i64 %7
     std.call_runtime @maxon_panic %8
   __range_ok_0:
@@ -627,7 +627,7 @@ module {
     x86.test rdx, rdx
     x86.je register-allocator.main.__range_ok_0
   __range_panic_0:
-    x86.lea_symdata rax, [__panic_msg_7]
+    x86.lea_symdata rax, [__panic_msg_0]
     x86.mov rcx, rax
     x86.call maxon_panic
   __range_ok_0:
@@ -772,7 +772,7 @@ module {
     %11 = arith.ori1 %8, %10
     cf.cond_br %11 [then: __range_panic_0, else: __range_ok_0]
   __range_panic_0:
-    %12 = memref.lea_symdata __panic_msg_12
+    %12 = memref.lea_symdata __panic_msg_0
     %13 = std.ptr_to_i64 %12
     std.call_runtime @maxon_panic %13
   __range_ok_0:
@@ -803,7 +803,7 @@ module {
     x86.test rdi, rdi
     x86.je register-allocator.main.__range_ok_0
   __range_panic_0:
-    x86.lea_symdata rax, [__panic_msg_12]
+    x86.lea_symdata rax, [__panic_msg_0]
     x86.mov rcx, rax
     x86.call maxon_panic
   __range_ok_0:
@@ -960,7 +960,7 @@ module {
     %9 = arith.ori1 %6, %8
     cf.cond_br %9 [then: __range_panic_0, else: __range_ok_0]
   __range_panic_0:
-    %10 = memref.lea_symdata __panic_msg_10
+    %10 = memref.lea_symdata __panic_msg_0
     %11 = std.ptr_to_i64 %10
     std.call_runtime @maxon_panic %11
   __range_ok_0:
@@ -989,7 +989,7 @@ module {
     x86.test rsi, rsi
     x86.je register-allocator.main.__range_ok_0
   __range_panic_0:
-    x86.lea_symdata rax, [__panic_msg_10]
+    x86.lea_symdata rax, [__panic_msg_0]
     x86.mov rcx, rax
     x86.call maxon_panic
   __range_ok_0:
@@ -1160,7 +1160,7 @@ module {
     %15 = arith.ori1 %12, %14
     cf.cond_br %15 [then: __range_panic_0, else: __range_ok_0]
   __range_panic_0:
-    %16 = memref.lea_symdata __panic_msg_16
+    %16 = memref.lea_symdata __panic_msg_0
     %17 = std.ptr_to_i64 %16
     std.call_runtime @maxon_panic %17
   __range_ok_0:
@@ -1195,7 +1195,7 @@ module {
     x86.test r9, r9
     x86.je register-allocator.main.__range_ok_0
   __range_panic_0:
-    x86.lea_symdata rax, [__panic_msg_16]
+    x86.lea_symdata rax, [__panic_msg_0]
     x86.mov rcx, rax
     x86.call maxon_panic
   __range_ok_0:
@@ -1408,7 +1408,7 @@ module {
     %23 = arith.ori1 %20, %22
     cf.cond_br %23 [then: __range_panic_0, else: __range_ok_0]
   __range_panic_0:
-    %24 = memref.lea_symdata __panic_msg_24
+    %24 = memref.lea_symdata __panic_msg_0
     %25 = std.ptr_to_i64 %24
     std.call_runtime @maxon_panic %25
   __range_ok_0:
@@ -1455,7 +1455,7 @@ module {
     x86.test rax, rax
     x86.je register-allocator.main.__range_ok_0
   __range_panic_0:
-    x86.lea_symdata rax, [__panic_msg_24]
+    x86.lea_symdata rax, [__panic_msg_0]
     x86.mov rcx, rax
     x86.call maxon_panic
   __range_ok_0:
@@ -1737,7 +1737,7 @@ module {
     %37 = arith.ori1 %34, %36
     cf.cond_br %37 [then: __range_panic_0, else: __range_ok_0]
   __range_panic_0:
-    %38 = memref.lea_symdata __panic_msg_38
+    %38 = memref.lea_symdata __panic_msg_0
     %39 = std.ptr_to_i64 %38
     std.call_runtime @maxon_panic %39
   __range_ok_0:
@@ -1807,7 +1807,7 @@ module {
     x86.test rax, rax
     x86.je register-allocator.main.__range_ok_0
   __range_panic_0:
-    x86.lea_symdata rax, [__panic_msg_38]
+    x86.lea_symdata rax, [__panic_msg_0]
     x86.mov rcx, rax
     x86.call maxon_panic
   __range_ok_0:
@@ -2163,7 +2163,7 @@ module {
     %45 = arith.ori1 %42, %44
     cf.cond_br %45 [then: __range_panic_0, else: __range_ok_0]
   __range_panic_0:
-    %46 = memref.lea_symdata __panic_msg_46
+    %46 = memref.lea_symdata __panic_msg_0
     %47 = std.ptr_to_i64 %46
     std.call_runtime @maxon_panic %47
   __range_ok_0:
@@ -2245,7 +2245,7 @@ module {
     x86.test rax, rax
     x86.je register-allocator.main.__range_ok_0
   __range_panic_0:
-    x86.lea_symdata rax, [__panic_msg_46]
+    x86.lea_symdata rax, [__panic_msg_0]
     x86.mov rcx, rax
     x86.call maxon_panic
   __range_ok_0:
@@ -2559,7 +2559,7 @@ module {
     %17 = arith.ori1 %14, %16
     cf.cond_br %17 [then: __range_panic_0, else: __range_ok_0]
   __range_panic_0:
-    %18 = memref.lea_symdata __panic_msg_18
+    %18 = memref.lea_symdata __panic_msg_0
     %19 = std.ptr_to_i64 %18
     std.call_runtime @maxon_panic %19
   __range_ok_0:
@@ -2598,7 +2598,7 @@ module {
     x86.test rax, rax
     x86.je register-allocator.main.__range_ok_0
   __range_panic_0:
-    x86.lea_symdata rax, [__panic_msg_18]
+    x86.lea_symdata rax, [__panic_msg_0]
     x86.mov rcx, rax
     x86.call maxon_panic
   __range_ok_0:
@@ -2811,7 +2811,7 @@ module {
     %18 = arith.ori1 %15, %17
     cf.cond_br %18 [then: __range_panic_0, else: __range_ok_0]
   __range_panic_0:
-    %19 = memref.lea_symdata __panic_msg_22
+    %19 = memref.lea_symdata __panic_msg_0
     %20 = std.ptr_to_i64 %19
     std.call_runtime @maxon_panic %20
   __range_ok_0:
@@ -2846,7 +2846,7 @@ module {
     x86.test r9, r9
     x86.je register-allocator.main.__range_ok_0
   __range_panic_0:
-    x86.lea_symdata rax, [__panic_msg_22]
+    x86.lea_symdata rax, [__panic_msg_0]
     x86.mov rcx, rax
     x86.call maxon_panic
   __range_ok_0:
@@ -3040,7 +3040,7 @@ module {
     %8 = arith.ori1 %5, %7
     cf.cond_br %8 [then: __range_panic_0, else: __range_ok_0]
   __range_panic_0:
-    %9 = memref.lea_symdata __panic_msg_9
+    %9 = memref.lea_symdata __panic_msg_0
     %10 = std.ptr_to_i64 %9
     std.call_runtime @maxon_panic %10
   __range_ok_0:
@@ -3073,7 +3073,7 @@ module {
     x86.test rbx, rbx
     x86.je register-allocator.main.__range_ok_0
   __range_panic_0:
-    x86.lea_symdata rax, [__panic_msg_9]
+    x86.lea_symdata rax, [__panic_msg_0]
     x86.mov rcx, rax
     x86.call maxon_panic
   __range_ok_0:
@@ -3273,7 +3273,7 @@ module {
     %13 = arith.ori1 %10, %12
     cf.cond_br %13 [then: __range_panic_0, else: __range_ok_0]
   __range_panic_0:
-    %14 = memref.lea_symdata __panic_msg_14
+    %14 = memref.lea_symdata __panic_msg_0
     %15 = std.ptr_to_i64 %14
     std.call_runtime @maxon_panic %15
   __range_ok_0:
@@ -3318,7 +3318,7 @@ module {
     x86.test r8, r8
     x86.je register-allocator.main.__range_ok_0
   __range_panic_0:
-    x86.lea_symdata rax, [__panic_msg_14]
+    x86.lea_symdata rax, [__panic_msg_0]
     x86.mov rcx, rax
     x86.call maxon_panic
   __range_ok_0:
@@ -3528,7 +3528,7 @@ module {
     %10 = arith.ori1 %7, %9
     cf.cond_br %10 [then: __range_panic_0, else: __range_ok_0]
   __range_panic_0:
-    %11 = memref.lea_symdata __panic_msg_11
+    %11 = memref.lea_symdata __panic_msg_0
     %12 = std.ptr_to_i64 %11
     std.call_runtime @maxon_panic %12
   __range_ok_0:
@@ -3567,7 +3567,7 @@ module {
     x86.test rax, rax
     x86.je register-allocator.main.__range_ok_0
   __range_panic_0:
-    x86.lea_symdata rax, [__panic_msg_11]
+    x86.lea_symdata rax, [__panic_msg_0]
     x86.mov rcx, rax
     x86.call maxon_panic
   __range_ok_0:
@@ -3774,7 +3774,7 @@ module {
     %10 = arith.ori1 %7, %9
     cf.cond_br %10 [then: __range_panic_0, else: __range_ok_0]
   __range_panic_0:
-    %11 = memref.lea_symdata __panic_msg_11
+    %11 = memref.lea_symdata __panic_msg_0
     %12 = std.ptr_to_i64 %11
     std.call_runtime @maxon_panic %12
   __range_ok_0:
@@ -3806,7 +3806,7 @@ module {
     x86.test rcx, rcx
     x86.je register-allocator.main.__range_ok_0
   __range_panic_0:
-    x86.lea_symdata rax, [__panic_msg_11]
+    x86.lea_symdata rax, [__panic_msg_0]
     x86.mov rcx, rax
     x86.call maxon_panic
   __range_ok_0:
@@ -3984,7 +3984,7 @@ module {
     %10 = arith.ori1 %7, %9
     cf.cond_br %10 [then: __range_panic_0, else: __range_ok_0]
   __range_panic_0:
-    %11 = memref.lea_symdata __panic_msg_11
+    %11 = memref.lea_symdata __panic_msg_0
     %12 = std.ptr_to_i64 %11
     std.call_runtime @maxon_panic %12
   __range_ok_0:
@@ -4016,7 +4016,7 @@ module {
     x86.test rcx, rcx
     x86.je register-allocator.main.__range_ok_0
   __range_panic_0:
-    x86.lea_symdata rax, [__panic_msg_11]
+    x86.lea_symdata rax, [__panic_msg_0]
     x86.mov rcx, rax
     x86.call maxon_panic
   __range_ok_0:
@@ -4339,7 +4339,7 @@ module {
     %14 = arith.ori1 %11, %13
     cf.cond_br %14 [then: __range_panic_2, else: __range_ok_2]
   __range_panic_2:
-    %15 = memref.lea_symdata __panic_msg_15
+    %15 = memref.lea_symdata __panic_msg_0
     %16 = std.ptr_to_i64 %15
     std.call_runtime @maxon_panic %16
   __range_ok_2:
@@ -4381,7 +4381,7 @@ module {
     x86.test rbx, rbx
     x86.je register-allocator.main.__range_ok_2
   __range_panic_2:
-    x86.lea_symdata rax, [__panic_msg_15]
+    x86.lea_symdata rax, [__panic_msg_0]
     x86.mov rcx, rax
     x86.call maxon_panic
   __range_ok_2:
@@ -4596,7 +4596,7 @@ module {
     %12 = arith.ori1 %9, %11
     cf.cond_br %12 [then: __range_panic_1, else: __range_ok_1]
   __range_panic_1:
-    %13 = memref.lea_symdata __panic_msg_13
+    %13 = memref.lea_symdata __panic_msg_0
     %14 = std.ptr_to_i64 %13
     std.call_runtime @maxon_panic %14
   __range_ok_1:
@@ -4636,7 +4636,7 @@ module {
     x86.test rdx, rdx
     x86.je register-allocator.main.__range_ok_1
   __range_panic_1:
-    x86.lea_symdata rax, [__panic_msg_13]
+    x86.lea_symdata rax, [__panic_msg_0]
     x86.mov rcx, rax
     x86.call maxon_panic
   __range_ok_1:
@@ -4859,7 +4859,7 @@ module {
     %18 = arith.ori1 %15, %17
     cf.cond_br %18 [then: __range_panic_1, else: __range_ok_1]
   __range_panic_1:
-    %19 = memref.lea_symdata __panic_msg_19
+    %19 = memref.lea_symdata __panic_msg_0
     %20 = std.ptr_to_i64 %19
     std.call_runtime @maxon_panic %20
   __range_ok_1:
@@ -4910,7 +4910,7 @@ module {
     x86.test rax, rax
     x86.je register-allocator.main.__range_ok_1
   __range_panic_1:
-    x86.lea_symdata rax, [__panic_msg_19]
+    x86.lea_symdata rax, [__panic_msg_0]
     x86.mov rcx, rax
     x86.call maxon_panic
   __range_ok_1:
@@ -5222,7 +5222,7 @@ module {
     %35 = arith.ori1 %32, %34
     cf.cond_br %35 [then: __range_panic_3, else: __range_ok_3]
   __range_panic_3:
-    %36 = memref.lea_symdata __panic_msg_36
+    %36 = memref.lea_symdata __panic_msg_0
     %37 = std.ptr_to_i64 %36
     std.call_runtime @maxon_panic %37
   __range_ok_3:
@@ -5302,7 +5302,7 @@ module {
     x86.test rdi, rdi
     x86.je register-allocator.main.__range_ok_3
   __range_panic_3:
-    x86.lea_symdata rax, [__panic_msg_36]
+    x86.lea_symdata rax, [__panic_msg_0]
     x86.mov rcx, rax
     x86.call maxon_panic
   __range_ok_3:
@@ -5674,7 +5674,7 @@ module {
     %26 = arith.ori1 %23, %25
     cf.cond_br %26 [then: __range_panic_3, else: __range_ok_3]
   __range_panic_3:
-    %27 = memref.lea_symdata __panic_msg_27
+    %27 = memref.lea_symdata __panic_msg_0
     %28 = std.ptr_to_i64 %27
     std.call_runtime @maxon_panic %28
   __range_ok_3:
@@ -5740,7 +5740,7 @@ module {
     x86.test rax, rax
     x86.je register-allocator.main.__range_ok_3
   __range_panic_3:
-    x86.lea_symdata rax, [__panic_msg_27]
+    x86.lea_symdata rax, [__panic_msg_0]
     x86.mov rcx, rax
     x86.call maxon_panic
   __range_ok_3:
@@ -6070,7 +6070,7 @@ module {
     %23 = arith.ori1 %20, %22
     cf.cond_br %23 [then: __range_panic_2, else: __range_ok_2]
   __range_panic_2:
-    %24 = memref.lea_symdata __panic_msg_24
+    %24 = memref.lea_symdata __panic_msg_0
     %25 = std.ptr_to_i64 %24
     std.call_runtime @maxon_panic %25
   __range_ok_2:
@@ -6131,7 +6131,7 @@ module {
     x86.test rdx, rdx
     x86.je register-allocator.main.__range_ok_2
   __range_panic_2:
-    x86.lea_symdata rax, [__panic_msg_24]
+    x86.lea_symdata rax, [__panic_msg_0]
     x86.mov rcx, rax
     x86.call maxon_panic
   __range_ok_2:
@@ -6452,7 +6452,7 @@ module {
     %23 = arith.ori1 %20, %22
     cf.cond_br %23 [then: __range_panic_2, else: __range_ok_2]
   __range_panic_2:
-    %24 = memref.lea_symdata __panic_msg_24
+    %24 = memref.lea_symdata __panic_msg_0
     %25 = std.ptr_to_i64 %24
     std.call_runtime @maxon_panic %25
   __range_ok_2:
@@ -6513,7 +6513,7 @@ module {
     x86.test rdx, rdx
     x86.je register-allocator.main.__range_ok_2
   __range_panic_2:
-    x86.lea_symdata rax, [__panic_msg_24]
+    x86.lea_symdata rax, [__panic_msg_0]
     x86.mov rcx, rax
     x86.call maxon_panic
   __range_ok_2:
@@ -6823,7 +6823,7 @@ module {
     %20 = arith.ori1 %17, %19
     cf.cond_br %20 [then: __range_panic_1, else: __range_ok_1]
   __range_panic_1:
-    %21 = memref.lea_symdata __panic_msg_21
+    %21 = memref.lea_symdata __panic_msg_0
     %22 = std.ptr_to_i64 %21
     std.call_runtime @maxon_panic %22
   __range_ok_1:
@@ -6878,7 +6878,7 @@ module {
     x86.test rdx, rdx
     x86.je register-allocator.main.__range_ok_1
   __range_panic_1:
-    x86.lea_symdata rax, [__panic_msg_21]
+    x86.lea_symdata rax, [__panic_msg_0]
     x86.mov rcx, rax
     x86.call maxon_panic
   __range_ok_1:
@@ -7113,7 +7113,7 @@ module {
     %15 = arith.ori1 %12, %14
     cf.cond_br %15 [then: __range_panic_0, else: __range_ok_0]
   __range_panic_0:
-    %16 = memref.lea_symdata __panic_msg_16
+    %16 = memref.lea_symdata __panic_msg_0
     %17 = std.ptr_to_i64 %16
     std.call_runtime @maxon_panic %17
   __range_ok_0:
@@ -7148,7 +7148,7 @@ module {
     x86.test r9, r9
     x86.je register-allocator.main.__range_ok_0
   __range_panic_0:
-    x86.lea_symdata rax, [__panic_msg_16]
+    x86.lea_symdata rax, [__panic_msg_0]
     x86.mov rcx, rax
     x86.call maxon_panic
   __range_ok_0:
@@ -7319,7 +7319,7 @@ module {
     %11 = arith.ori1 %8, %10
     cf.cond_br %11 [then: __range_panic_0, else: __range_ok_0]
   __range_panic_0:
-    %12 = memref.lea_symdata __panic_msg_12
+    %12 = memref.lea_symdata __panic_msg_0
     %13 = std.ptr_to_i64 %12
     std.call_runtime @maxon_panic %13
   __range_ok_0:
@@ -7350,7 +7350,7 @@ module {
     x86.test rdi, rdi
     x86.je register-allocator.main.__range_ok_0
   __range_panic_0:
-    x86.lea_symdata rax, [__panic_msg_12]
+    x86.lea_symdata rax, [__panic_msg_0]
     x86.mov rcx, rax
     x86.call maxon_panic
   __range_ok_0:
@@ -7537,7 +7537,7 @@ module {
     %19 = arith.ori1 %16, %18
     cf.cond_br %19 [then: __range_panic_0, else: __range_ok_0]
   __range_panic_0:
-    %20 = memref.lea_symdata __panic_msg_20
+    %20 = memref.lea_symdata __panic_msg_0
     %21 = std.ptr_to_i64 %20
     std.call_runtime @maxon_panic %21
   __range_ok_0:
@@ -7575,7 +7575,7 @@ module {
     x86.test rcx, rcx
     x86.je register-allocator.main.__range_ok_0
   __range_panic_0:
-    x86.lea_symdata rax, [__panic_msg_20]
+    x86.lea_symdata rax, [__panic_msg_0]
     x86.mov rcx, rax
     x86.call maxon_panic
   __range_ok_0:
@@ -7815,7 +7815,7 @@ module {
     %31 = arith.ori1 %28, %30
     cf.cond_br %31 [then: __range_panic_0, else: __range_ok_0]
   __range_panic_0:
-    %32 = memref.lea_symdata __panic_msg_32
+    %32 = memref.lea_symdata __panic_msg_0
     %33 = std.ptr_to_i64 %32
     std.call_runtime @maxon_panic %33
   __range_ok_0:
@@ -7871,7 +7871,7 @@ module {
     x86.test rdx, rdx
     x86.je register-allocator.main.__range_ok_0
   __range_panic_0:
-    x86.lea_symdata rax, [__panic_msg_32]
+    x86.lea_symdata rax, [__panic_msg_0]
     x86.mov rcx, rax
     x86.call maxon_panic
   __range_ok_0:
@@ -8136,7 +8136,7 @@ module {
     %18 = arith.ori1 %15, %17
     cf.cond_br %18 [then: __range_panic_0, else: __range_ok_0]
   __range_panic_0:
-    %19 = memref.lea_symdata __panic_msg_19
+    %19 = memref.lea_symdata __panic_msg_0
     %20 = std.ptr_to_i64 %19
     std.call_runtime @maxon_panic %20
   __range_ok_0:
@@ -8188,7 +8188,7 @@ module {
     x86.test rcx, rcx
     x86.je register-allocator.main.__range_ok_0
   __range_panic_0:
-    x86.lea_symdata rax, [__panic_msg_19]
+    x86.lea_symdata rax, [__panic_msg_0]
     x86.mov rcx, rax
     x86.call maxon_panic
   __range_ok_0:
@@ -8521,7 +8521,7 @@ module {
     %41 = arith.ori1 %38, %40
     cf.cond_br %41 [then: __range_panic_1, else: __range_ok_1]
   __range_panic_1:
-    %42 = memref.lea_symdata __panic_msg_42
+    %42 = memref.lea_symdata __panic_msg_0
     %43 = std.ptr_to_i64 %42
     std.call_runtime @maxon_panic %43
   __range_ok_1:
@@ -8608,7 +8608,7 @@ module {
     x86.test r9, r9
     x86.je register-allocator.main.__range_ok_1
   __range_panic_1:
-    x86.lea_symdata rax, [__panic_msg_42]
+    x86.lea_symdata rax, [__panic_msg_0]
     x86.mov rcx, rax
     x86.call maxon_panic
   __range_ok_1:
@@ -8934,7 +8934,7 @@ module {
     %12 = arith.ori1 %9, %11
     cf.cond_br %12 [then: __range_panic_0, else: __range_ok_0]
   __range_panic_0:
-    %13 = memref.lea_symdata __panic_msg_13
+    %13 = memref.lea_symdata __panic_msg_0
     %14 = std.ptr_to_i64 %13
     std.call_runtime @maxon_panic %14
   __range_ok_0:
@@ -8967,7 +8967,7 @@ module {
     x86.test rsi, rsi
     x86.je register-allocator.main.__range_ok_0
   __range_panic_0:
-    x86.lea_symdata rax, [__panic_msg_13]
+    x86.lea_symdata rax, [__panic_msg_0]
     x86.mov rcx, rax
     x86.call maxon_panic
   __range_ok_0:
@@ -9226,7 +9226,7 @@ module {
     %29 = arith.ori1 %26, %28
     cf.cond_br %29 [then: __range_panic_3, else: __range_ok_3]
   __range_panic_3:
-    %30 = memref.lea_symdata __panic_msg_30
+    %30 = memref.lea_symdata __panic_msg_0
     %31 = std.ptr_to_i64 %30
     std.call_runtime @maxon_panic %31
   __range_ok_3:
@@ -9298,7 +9298,7 @@ module {
     x86.test rbx, rbx
     x86.je register-allocator.main.__range_ok_3
   __range_panic_3:
-    x86.lea_symdata rax, [__panic_msg_30]
+    x86.lea_symdata rax, [__panic_msg_0]
     x86.mov rcx, rax
     x86.call maxon_panic
   __range_ok_3:
@@ -9633,7 +9633,7 @@ module {
     %18 = arith.ori1 %15, %17
     cf.cond_br %18 [then: __range_panic_1, else: __range_ok_1]
   __range_panic_1:
-    %19 = memref.lea_symdata __panic_msg_19
+    %19 = memref.lea_symdata __panic_msg_0
     %20 = std.ptr_to_i64 %19
     std.call_runtime @maxon_panic %20
   __range_ok_1:
@@ -9683,7 +9683,7 @@ module {
     x86.test rdx, rdx
     x86.je register-allocator.main.__range_ok_1
   __range_panic_1:
-    x86.lea_symdata rax, [__panic_msg_19]
+    x86.lea_symdata rax, [__panic_msg_0]
     x86.mov rcx, rax
     x86.call maxon_panic
   __range_ok_1:
@@ -9954,7 +9954,7 @@ module {
     %18 = arith.ori1 %15, %17
     cf.cond_br %18 [then: __range_panic_0, else: __range_ok_0]
   __range_panic_0:
-    %19 = memref.lea_symdata __panic_msg_19
+    %19 = memref.lea_symdata __panic_msg_0
     %20 = std.ptr_to_i64 %19
     std.call_runtime @maxon_panic %20
   __range_ok_0:
@@ -9993,7 +9993,7 @@ module {
     x86.test rbx, rbx
     x86.je register-allocator.main.__range_ok_0
   __range_panic_0:
-    x86.lea_symdata rax, [__panic_msg_19]
+    x86.lea_symdata rax, [__panic_msg_0]
     x86.mov rcx, rax
     x86.call maxon_panic
   __range_ok_0:
@@ -10198,7 +10198,7 @@ module {
     %9 = arith.ori1 %6, %8
     cf.cond_br %9 [then: __range_panic_0, else: __range_ok_0]
   __range_panic_0:
-    %10 = memref.lea_symdata __panic_msg_10
+    %10 = memref.lea_symdata __panic_msg_0
     %11 = std.ptr_to_i64 %10
     std.call_runtime @maxon_panic %11
   __range_ok_0:
@@ -10233,7 +10233,7 @@ module {
     x86.test rax, rax
     x86.je register-allocator.main.__range_ok_0
   __range_panic_0:
-    x86.lea_symdata rax, [__panic_msg_10]
+    x86.lea_symdata rax, [__panic_msg_0]
     x86.mov rcx, rax
     x86.call maxon_panic
   __range_ok_0:
@@ -10414,7 +10414,7 @@ module {
     %9 = arith.ori1 %6, %8
     cf.cond_br %9 [then: __range_panic_0, else: __range_ok_0]
   __range_panic_0:
-    %10 = memref.lea_symdata __panic_msg_10
+    %10 = memref.lea_symdata __panic_msg_0
     %11 = std.ptr_to_i64 %10
     std.call_runtime @maxon_panic %11
   __range_ok_0:
@@ -10445,7 +10445,7 @@ module {
     x86.test rdi, rdi
     x86.je register-allocator.main.__range_ok_0
   __range_panic_0:
-    x86.lea_symdata rax, [__panic_msg_10]
+    x86.lea_symdata rax, [__panic_msg_0]
     x86.mov rcx, rax
     x86.call maxon_panic
   __range_ok_0:
@@ -10620,7 +10620,7 @@ module {
     %12 = arith.ori1 %9, %11
     cf.cond_br %12 [then: __range_panic_0, else: __range_ok_0]
   __range_panic_0:
-    %13 = memref.lea_symdata __panic_msg_13
+    %13 = memref.lea_symdata __panic_msg_0
     %14 = std.ptr_to_i64 %13
     std.call_runtime @maxon_panic %14
   __range_ok_0:
@@ -10655,7 +10655,7 @@ module {
     x86.test rcx, rcx
     x86.je register-allocator.main.__range_ok_0
   __range_panic_0:
-    x86.lea_symdata rax, [__panic_msg_13]
+    x86.lea_symdata rax, [__panic_msg_0]
     x86.mov rcx, rax
     x86.call maxon_panic
   __range_ok_0:
@@ -10856,7 +10856,7 @@ module {
     %19 = arith.ori1 %16, %18
     cf.cond_br %19 [then: __range_panic_0, else: __range_ok_0]
   __range_panic_0:
-    %20 = memref.lea_symdata __panic_msg_20
+    %20 = memref.lea_symdata __panic_msg_0
     %21 = std.ptr_to_i64 %20
     std.call_runtime @maxon_panic %21
   __range_ok_0:
@@ -10895,7 +10895,7 @@ module {
     x86.test rcx, rcx
     x86.je register-allocator.main.__range_ok_0
   __range_panic_0:
-    x86.lea_symdata rax, [__panic_msg_20]
+    x86.lea_symdata rax, [__panic_msg_0]
     x86.mov rcx, rax
     x86.call maxon_panic
   __range_ok_0:
@@ -11136,7 +11136,7 @@ module {
     %21 = arith.ori1 %18, %20
     cf.cond_br %21 [then: __range_panic_2, else: __range_ok_2]
   __range_panic_2:
-    %22 = memref.lea_symdata __panic_msg_22
+    %22 = memref.lea_symdata __panic_msg_0
     %23 = std.ptr_to_i64 %22
     std.call_runtime @maxon_panic %23
   __range_ok_2:
@@ -11186,7 +11186,7 @@ module {
     x86.test rsi, rsi
     x86.je register-allocator.main.__range_ok_2
   __range_panic_2:
-    x86.lea_symdata rax, [__panic_msg_22]
+    x86.lea_symdata rax, [__panic_msg_0]
     x86.mov rcx, rax
     x86.call maxon_panic
   __range_ok_2:
@@ -11675,7 +11675,7 @@ module {
     %16 = arith.ori1 %13, %15
     cf.cond_br %16 [then: __range_panic_1, else: __range_ok_1]
   __range_panic_1:
-    %17 = memref.lea_symdata __panic_msg_17
+    %17 = memref.lea_symdata __panic_msg_0
     %18 = std.ptr_to_i64 %17
     std.call_runtime @maxon_panic %18
   __range_ok_1:
@@ -11726,7 +11726,7 @@ module {
     x86.test rdx, rdx
     x86.je register-allocator.main.__range_ok_1
   __range_panic_1:
-    x86.lea_symdata rax, [__panic_msg_17]
+    x86.lea_symdata rax, [__panic_msg_0]
     x86.mov rcx, rax
     x86.call maxon_panic
   __range_ok_1:
@@ -12311,7 +12311,7 @@ module {
     %26 = arith.ori1 %23, %25
     cf.cond_br %26 [then: __range_panic_1, else: __range_ok_1]
   __range_panic_1:
-    %27 = memref.lea_symdata __panic_msg_27
+    %27 = memref.lea_symdata __panic_msg_0
     %28 = std.ptr_to_i64 %27
     std.call_runtime @maxon_panic %28
   __range_ok_1:
@@ -12379,7 +12379,7 @@ module {
     x86.test rdx, rdx
     x86.je register-allocator.main.__range_ok_1
   __range_panic_1:
-    x86.lea_symdata rax, [__panic_msg_27]
+    x86.lea_symdata rax, [__panic_msg_0]
     x86.mov rcx, rax
     x86.call maxon_panic
   __range_ok_1:
@@ -12705,7 +12705,7 @@ module {
     %16 = arith.ori1 %13, %15
     cf.cond_br %16 [then: __range_panic_1, else: __range_ok_1]
   __range_panic_1:
-    %17 = memref.lea_symdata __panic_msg_17
+    %17 = memref.lea_symdata __panic_msg_0
     %18 = std.ptr_to_i64 %17
     std.call_runtime @maxon_panic %18
   __range_ok_1:
@@ -12756,7 +12756,7 @@ module {
     x86.test rdx, rdx
     x86.je register-allocator.main.__range_ok_1
   __range_panic_1:
-    x86.lea_symdata rax, [__panic_msg_17]
+    x86.lea_symdata rax, [__panic_msg_0]
     x86.mov rcx, rax
     x86.call maxon_panic
   __range_ok_1:
@@ -13043,7 +13043,7 @@ module {
     %24 = arith.ori1 %21, %23
     cf.cond_br %24 [then: __range_panic_1, else: __range_ok_1]
   __range_panic_1:
-    %25 = memref.lea_symdata __panic_msg_25
+    %25 = memref.lea_symdata __panic_msg_0
     %26 = std.ptr_to_i64 %25
     std.call_runtime @maxon_panic %26
   __range_ok_1:
@@ -13112,7 +13112,7 @@ module {
     x86.test rdx, rdx
     x86.je register-allocator.main.__range_ok_1
   __range_panic_1:
-    x86.lea_symdata rax, [__panic_msg_25]
+    x86.lea_symdata rax, [__panic_msg_0]
     x86.mov rcx, rax
     x86.call maxon_panic
   __range_ok_1:
@@ -13413,7 +13413,7 @@ module {
     %18 = arith.ori1 %15, %17
     cf.cond_br %18 [then: __range_panic_1, else: __range_ok_1]
   __range_panic_1:
-    %19 = memref.lea_symdata __panic_msg_19
+    %19 = memref.lea_symdata __panic_msg_0
     %20 = std.ptr_to_i64 %19
     std.call_runtime @maxon_panic %20
   __range_ok_1:
@@ -13466,7 +13466,7 @@ module {
     x86.test rbx, rbx
     x86.je register-allocator.main.__range_ok_1
   __range_panic_1:
-    x86.lea_symdata rax, [__panic_msg_19]
+    x86.lea_symdata rax, [__panic_msg_0]
     x86.mov rcx, rax
     x86.call maxon_panic
   __range_ok_1:
@@ -13772,7 +13772,7 @@ module {
     %21 = arith.ori1 %18, %20
     cf.cond_br %21 [then: __range_panic_1, else: __range_ok_1]
   __range_panic_1:
-    %22 = memref.lea_symdata __panic_msg_22
+    %22 = memref.lea_symdata __panic_msg_0
     %23 = std.ptr_to_i64 %22
     std.call_runtime @maxon_panic %23
   __range_ok_1:
@@ -13832,7 +13832,7 @@ module {
     x86.test rdx, rdx
     x86.je register-allocator.main.__range_ok_1
   __range_panic_1:
-    x86.lea_symdata rax, [__panic_msg_22]
+    x86.lea_symdata rax, [__panic_msg_0]
     x86.mov rcx, rax
     x86.call maxon_panic
   __range_ok_1:
@@ -14259,7 +14259,7 @@ module {
     %15 = arith.ori1 %12, %14
     cf.cond_br %15 [then: __range_panic_4, else: __range_ok_4]
   __range_panic_4:
-    %16 = memref.lea_symdata __panic_msg_23
+    %16 = memref.lea_symdata __panic_msg_0
     %17 = std.ptr_to_i64 %16
     std.call_runtime @maxon_panic %17
   __range_ok_4:
@@ -14304,7 +14304,7 @@ module {
     x86.test rdx, rdx
     x86.je register-allocator.main.__range_ok_4
   __range_panic_4:
-    x86.lea_symdata rax, [__panic_msg_23]
+    x86.lea_symdata rax, [__panic_msg_0]
     x86.mov rcx, rax
     x86.call maxon_panic
   __range_ok_4:
@@ -14574,7 +14574,7 @@ module {
     %20 = arith.ori1 %17, %19
     cf.cond_br %20 [then: __range_panic_4, else: __range_ok_4]
   __range_panic_4:
-    %21 = memref.lea_symdata __panic_msg_29
+    %21 = memref.lea_symdata __panic_msg_0
     %22 = std.ptr_to_i64 %21
     std.call_runtime @maxon_panic %22
   __range_ok_4:
@@ -14640,7 +14640,7 @@ module {
     x86.test rdx, rdx
     x86.je register-allocator.main.__range_ok_4
   __range_panic_4:
-    x86.lea_symdata rax, [__panic_msg_29]
+    x86.lea_symdata rax, [__panic_msg_0]
     x86.mov rcx, rax
     x86.call maxon_panic
   __range_ok_4:
@@ -15026,7 +15026,7 @@ module {
     %34 = arith.ori1 %31, %33
     cf.cond_br %34 [then: __range_panic_12, else: __range_ok_12]
   __range_panic_12:
-    %35 = memref.lea_symdata __panic_msg_44
+    %35 = memref.lea_symdata __panic_msg_0
     %36 = std.ptr_to_i64 %35
     std.call_runtime @maxon_panic %36
   __range_ok_12:
@@ -15116,7 +15116,7 @@ module {
     x86.test rsi, rsi
     x86.je register-allocator.main.__range_ok_12
   __range_panic_12:
-    x86.lea_symdata rax, [__panic_msg_44]
+    x86.lea_symdata rax, [__panic_msg_0]
     x86.mov rcx, rax
     x86.call maxon_panic
   __range_ok_12:
@@ -15576,7 +15576,7 @@ module {
     %36 = arith.ori1 %33, %35
     cf.cond_br %36 [then: __range_panic_8, else: __range_ok_8]
   __range_panic_8:
-    %37 = memref.lea_symdata __panic_msg_45
+    %37 = memref.lea_symdata __panic_msg_0
     %38 = std.ptr_to_i64 %37
     std.call_runtime @maxon_panic %38
   __range_ok_8:
@@ -15669,7 +15669,7 @@ module {
     x86.test rbx, rbx
     x86.je register-allocator.main.__range_ok_8
   __range_panic_8:
-    x86.lea_symdata rax, [__panic_msg_45]
+    x86.lea_symdata rax, [__panic_msg_0]
     x86.mov rcx, rax
     x86.call maxon_panic
   __range_ok_8:

@@ -11,7 +11,36 @@
 7. [List](#list)
 8. [Networking (TcpClient)](#networking-tcpclient)
 9. [HttpClient](#httpclient)
-10. [Builtin Managed Types](#builtin-managed-types)
+10. [Crypto](#crypto)
+11. [Builtin Managed Types](#builtin-managed-types)
+
+---
+
+## Crypto
+
+### `sha256`
+
+Compute the SHA-256 cryptographic hash of a byte array (FIPS 180-4).
+
+```maxon
+export function sha256(data ByteArray) returns ByteArray
+```
+
+**Parameters:**
+- `data` — The input bytes to hash
+
+**Returns:** A 32-byte `ByteArray` containing the SHA-256 digest
+
+**Example:**
+
+```maxon
+var data = ByteArray{}
+data.push(0x61)
+data.push(0x62)
+data.push(0x63)
+let hash = sha256(data)
+// hash contains the SHA-256 of "abc" (32 bytes)
+```
 
 ---
 

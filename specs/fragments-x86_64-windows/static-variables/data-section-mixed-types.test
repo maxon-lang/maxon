@@ -4,7 +4,10 @@ var count = 10
 var ratio = 2.5
 
 function main() returns ExitCode
-  return 0
+  if flag and (count == 10) and (ratio > 2.0) 'read'
+    return 0
+  end 'read'
+  return 1
 end 'main'
 ---
 ExitCode: 0
@@ -17,7 +20,26 @@ i8 1
 module {
   func @static-variables.main() -> u32 {
   entry:
+    x86.movzx rax, byte [rip+flag]
+    x86.mov rcx, qword [rip+count]
+    x86.mov rdx, 10
+    x86.cmp rcx, rdx
+    x86.sete rbx
+    x86.movzx rbx, rbxb
+    x86.and rax, rbx
+    x86.movsd xmm0, [rip+ratio]
+    x86.movsd xmm1, [rip+__float_2]
+    x86.ucomisd xmm0, xmm1
+    x86.seta rsi
+    x86.movzx rsi, rsib
+    x86.and rax, rsi
+    x86.test rax, rax
+    x86.je static-variables.main.read_0.after
+  read_0:
     x86.xor rax, rax
+    x86.ret
+  read_0.after:
+    x86.mov rax, 1
     x86.ret
   }
 }

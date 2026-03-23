@@ -97,6 +97,7 @@ public class Compiler {
 
       // Reset IDs so user code starts at %0
       _context.ResetIds();
+      MaxonPanicOp.ResetPanicLabels();
 
       CompileSources(module, sources, false, target);
       var parseMs = stageSw.ElapsedMilliseconds; stageSw.Restart();
@@ -168,6 +169,7 @@ public class Compiler {
       } else {
         var module = StdlibLoader.GetStdlibModule();
         context.ResetIds();
+        MaxonPanicOp.ResetPanicLabels();
         CompileSources(module, [new SourceFile(filePath, content)], false);
       }
     } catch (CompileError ex) {

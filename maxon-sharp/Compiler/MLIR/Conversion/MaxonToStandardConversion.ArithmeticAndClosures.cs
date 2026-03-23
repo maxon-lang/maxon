@@ -139,7 +139,7 @@ public static partial class MaxonToStandardConversion {
   { (MaxonBinOperator.BitOr, MaxonValueKind.Integer), (l, r) => { var op = new StdOrI64Op((StdI64)l, (StdI64)r); return (op, op.Result); } },
   { (MaxonBinOperator.BitXor, MaxonValueKind.Integer), (l, r) => { var op = new StdXorI64Op((StdI64)l, (StdI64)r); return (op, op.Result); } },
   { (MaxonBinOperator.Shl, MaxonValueKind.Integer), (l, r) => { var op = new StdShlI64Op((StdI64)l, (StdI64)r); return (op, op.Result); } },
-  { (MaxonBinOperator.Shr, MaxonValueKind.Integer), (l, r) => { var op = new StdShrI64Op((StdI64)l, (StdI64)r); return (op, op.Result); } },
+  { (MaxonBinOperator.Shr, MaxonValueKind.Integer), (l, r) => { var op = new StdShrU64Op((StdI64)l, (StdI64)r); return (op, op.Result); } },
     // Byte operations (bytes are represented as I64 at standard level)
     { (MaxonBinOperator.Eq, MaxonValueKind.Byte), (l, r) => { var op = new StdCmpI64Op("eq", (StdI64)l, (StdI64)r); return (op, op.Result); } },
   { (MaxonBinOperator.Ne, MaxonValueKind.Byte), (l, r) => { var op = new StdCmpI64Op("ne", (StdI64)l, (StdI64)r); return (op, op.Result); } },
@@ -165,7 +165,7 @@ public static partial class MaxonToStandardConversion {
   { (MaxonBinOperator.BitOr, MaxonValueKind.Short), (l, r) => { var op = new StdOrI64Op((StdI64)l, (StdI64)r); return (op, op.Result); } },
   { (MaxonBinOperator.BitXor, MaxonValueKind.Short), (l, r) => { var op = new StdXorI64Op((StdI64)l, (StdI64)r); return (op, op.Result); } },
   { (MaxonBinOperator.Shl, MaxonValueKind.Short), (l, r) => { var op = new StdShlI64Op((StdI64)l, (StdI64)r); return (op, op.Result); } },
-  { (MaxonBinOperator.Shr, MaxonValueKind.Short), (l, r) => { var op = new StdShrI64Op((StdI64)l, (StdI64)r); return (op, op.Result); } },
+  { (MaxonBinOperator.Shr, MaxonValueKind.Short), (l, r) => { var op = new StdShrU64Op((StdI64)l, (StdI64)r); return (op, op.Result); } },
     // Logical operations (bool)
     { (MaxonBinOperator.And, MaxonValueKind.Bool), (l, r) => { var op = new StdAndI1Op((StdBool)l, (StdBool)r); return (op, op.Result); } },
   { (MaxonBinOperator.Or, MaxonValueKind.Bool), (l, r) => { var op = new StdOrI1Op((StdBool)l, (StdBool)r); return (op, op.Result); } },
