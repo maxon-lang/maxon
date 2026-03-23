@@ -42,35 +42,7 @@ end 'maxArm64EmitInsn'
 
 // --- Register encoding ---
 
-function maxArm64RegNum(reg MaxArm64Register) returns MachineWord
-  return match reg 'map'
-    MaxArm64Register.x0 gives 0
-    MaxArm64Register.x1 gives 1
-    MaxArm64Register.x2 gives 2
-    MaxArm64Register.x3 gives 3
-    MaxArm64Register.x4 gives 4
-    MaxArm64Register.x5 gives 5
-    MaxArm64Register.x6 gives 6
-    MaxArm64Register.x7 gives 7
-    MaxArm64Register.x8 gives 8
-    MaxArm64Register.x29 gives 29
-    MaxArm64Register.x30 gives 30
-    MaxArm64Register.sp gives 31
-  end 'map'
-end 'maxArm64RegNum'
-
 // --- Condition code encoding ---
-
-function maxArm64CondNum(cond MaxArm64CondCode) returns MachineWord
-  return match cond 'map'
-    MaxArm64CondCode.eq gives 0x0
-    MaxArm64CondCode.ne gives 0x1
-    MaxArm64CondCode.lt gives 0xB
-    MaxArm64CondCode.le gives 0xD
-    MaxArm64CondCode.gt gives 0xC
-    MaxArm64CondCode.ge gives 0xA
-  end 'map'
-end 'maxArm64CondNum'
 
 // --- Instruction helpers ---
 
@@ -697,7 +669,7 @@ end 'MaxArm64StackTracker'
 
 function maxArm64HandleCondBranch(code ByteArray, jumpFixups BlockIdFixupArray, condition MaxArm64CondCode, targetBlock BlockId)
   jumpFixups.push(BlockIdFixup{instrOffset: code.count(), targetBlock: targetBlock, isCond: true})
-  maxArm64EmitCondBranch(code, cond: maxArm64CondNum(condition))
+  maxArm64EmitCondBranch(code, cond: condition.rawValue)
 end 'maxArm64HandleCondBranch'
 
 function maxArm64HandleBranch(code ByteArray, jumpFixups BlockIdFixupArray, targetBlock BlockId)
@@ -773,23 +745,23 @@ function emitMaxArm64Instruction(op MaxArm64Op, code ByteArray, jumpFixups Block
   match op 'emit'
     prologue(stackSize) then emitMaxArm64PrologueOp(code, stackSize: stackSize, tracker: stackTracker)
     epilogue then maxArm64EmitEpilogue(code, stackSize: stackTracker.currentStackSize)
-    movImm(dest, value) then maxArm64EmitMovImm(code, rd: maxArm64RegNum(dest), value: value)
-    strToSlot(slotIndex, src) then maxArm64EmitStrSlot(code, rt: maxArm64RegNum(src), slotIndex: slotIndex)
-    ldrFromSlot(dest, slotIndex) then maxArm64EmitLdrSlot(code, rt: maxArm64RegNum(dest), slotIndex: slotIndex)
-    addRegs(dest, src1, src2) then maxArm64EmitAdd(code, rd: maxArm64RegNum(dest), rn: maxArm64RegNum(src1), rm: maxArm64RegNum(src2))
-    subRegs(dest, src1, src2) then maxArm64EmitSub(code, rd: maxArm64RegNum(dest), rn: maxArm64RegNum(src1), rm: maxArm64RegNum(src2))
-    mulRegs(dest, src1, src2) then maxArm64EmitMul(code, rd: maxArm64RegNum(dest), rn: maxArm64RegNum(src1), rm: maxArm64RegNum(src2))
-    sdivRegs(dest, src1, src2) then maxArm64EmitSdiv(code, rd: maxArm64RegNum(dest), rn: maxArm64RegNum(src1), rm: maxArm64RegNum(src2))
-    remRegs(dest, src1, src2) then maxArm64EmitRem(code, rd: maxArm64RegNum(dest), rn: maxArm64RegNum(src1), rm: maxArm64RegNum(src2))
-    negReg(dest, src) then maxArm64EmitNeg(code, rd: maxArm64RegNum(dest), rn: maxArm64RegNum(src))
-    mvnReg(dest, src) then maxArm64EmitMvn(code, rd: maxArm64RegNum(dest), rn: maxArm64RegNum(src))
-    andRegs(dest, src1, src2) then maxArm64EmitAnd(code, rd: maxArm64RegNum(dest), rn: maxArm64RegNum(src1), rm: maxArm64RegNum(src2))
-    orrRegs(dest, src1, src2) then maxArm64EmitOrr(code, rd: maxArm64RegNum(dest), rn: maxArm64RegNum(src1), rm: maxArm64RegNum(src2))
-    eorRegs(dest, src1, src2) then maxArm64EmitEor(code, rd: maxArm64RegNum(dest), rn: maxArm64RegNum(src1), rm: maxArm64RegNum(src2))
-    lslRegs(dest, src1, src2) then maxArm64EmitLslv(code, rd: maxArm64RegNum(dest), rn: maxArm64RegNum(src1), rm: maxArm64RegNum(src2))
-    asrRegs(dest, src1, src2) then maxArm64EmitAsrv(code, rd: maxArm64RegNum(dest), rn: maxArm64RegNum(src1), rm: maxArm64RegNum(src2))
-    cmpRegs(src1, src2) then maxArm64EmitCmp(code, rn: maxArm64RegNum(src1), rm: maxArm64RegNum(src2))
-    cmpRegZero(src) then maxArm64EmitCmpRegZero(code, rn: maxArm64RegNum(src))
+    movImm(dest, value) then maxArm64EmitMovImm(code, rd: dest.rawValue, value: value)
+    strToSlot(slotIndex, src) then maxArm64EmitStrSlot(code, rt: src.rawValue, slotIndex: slotIndex)
+    ldrFromSlot(dest, slotIndex) then maxArm64EmitLdrSlot(code, rt: dest.rawValue, slotIndex: slotIndex)
+    addRegs(dest, src1, src2) then maxArm64EmitAdd(code, rd: dest.rawValue, rn: src1.rawValue, rm: src2.rawValue)
+    subRegs(dest, src1, src2) then maxArm64EmitSub(code, rd: dest.rawValue, rn: src1.rawValue, rm: src2.rawValue)
+    mulRegs(dest, src1, src2) then maxArm64EmitMul(code, rd: dest.rawValue, rn: src1.rawValue, rm: src2.rawValue)
+    sdivRegs(dest, src1, src2) then maxArm64EmitSdiv(code, rd: dest.rawValue, rn: src1.rawValue, rm: src2.rawValue)
+    remRegs(dest, src1, src2) then maxArm64EmitRem(code, rd: dest.rawValue, rn: src1.rawValue, rm: src2.rawValue)
+    negReg(dest, src) then maxArm64EmitNeg(code, rd: dest.rawValue, rn: src.rawValue)
+    mvnReg(dest, src) then maxArm64EmitMvn(code, rd: dest.rawValue, rn: src.rawValue)
+    andRegs(dest, src1, src2) then maxArm64EmitAnd(code, rd: dest.rawValue, rn: src1.rawValue, rm: src2.rawValue)
+    orrRegs(dest, src1, src2) then maxArm64EmitOrr(code, rd: dest.rawValue, rn: src1.rawValue, rm: src2.rawValue)
+    eorRegs(dest, src1, src2) then maxArm64EmitEor(code, rd: dest.rawValue, rn: src1.rawValue, rm: src2.rawValue)
+    lslRegs(dest, src1, src2) then maxArm64EmitLslv(code, rd: dest.rawValue, rn: src1.rawValue, rm: src2.rawValue)
+    asrRegs(dest, src1, src2) then maxArm64EmitAsrv(code, rd: dest.rawValue, rn: src1.rawValue, rm: src2.rawValue)
+    cmpRegs(src1, src2) then maxArm64EmitCmp(code, rn: src1.rawValue, rm: src2.rawValue)
+    cmpRegZero(src) then maxArm64EmitCmpRegZero(code, rn: src.rawValue)
     condBranch(condition, targetBlock) then maxArm64HandleCondBranch(code, jumpFixups: jumpFixups, condition: condition, targetBlock: targetBlock)
     branch(targetBlock) then maxArm64HandleBranch(code, jumpFixups: jumpFixups, targetBlock: targetBlock)
     branchLink(linkTarget) then maxArm64HandleBranchLink(code, callFixups: callFixups, linkTarget: linkTarget)

@@ -434,8 +434,8 @@ function main() returns ExitCode
   var keywords = ["function": TokenKind.Function, "var": TokenKind.Var]
   var kind = try keywords.get("function") otherwise TokenKind.Var
   match kind 'match'
-    TokenKind.Function then return 1
-    TokenKind.Var then return 2
+    Function then return 1
+    Var then return 2
   end 'match'
 end 'main'
 ```

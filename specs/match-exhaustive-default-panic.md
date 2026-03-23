@@ -27,7 +27,7 @@ This works with both match statements and match expressions, and with all scruti
 
 ```text
 match color 'check'
-    Color.red then print("red")
+    red then print("red")
     default panic("unhandled color")
 end 'check'
 ```
@@ -98,7 +98,7 @@ end 'Color'
 function main() returns ExitCode
   var c = Color.red
   match c 'check'
-    Color.red then return 1
+    red then return 1
     default panic("unhandled color")
   end 'check'
 end 'main'
@@ -118,8 +118,8 @@ end 'Color'
 function main() returns ExitCode
   var c = Color.green
   let result = match c 'eval'
-    Color.red gives 1
-    Color.green gives 2
+    red gives 1
+    green gives 2
     default panic("unhandled color")
   end 'eval'
   return result
@@ -217,7 +217,7 @@ end 'Color'
 function main() returns ExitCode
   var c = Color.blue
   match c 'check'
-    Color.red then return 1
+    red then return 1
     default then return 0
   end 'check'
 end 'main'

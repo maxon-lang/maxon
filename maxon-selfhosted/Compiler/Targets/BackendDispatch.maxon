@@ -69,16 +69,16 @@ export function emitBackend(module MlirModule, target Target, globalData GlobalD
 
   var result = CodeResult{code: ByteArray{}, mainCallFixupOffset: 0, relocations: RelocationArray{}, globalData: globalData}
   match target.cpu 'cpu'
-    CpuArch.x86_64 then result = emitX86(lowerMidToMaxX64(augmentedModule, target: target), target: target, globalData: globalData)
-    CpuArch.aarch64 then result = emitMaxArm64(lowerMidToMaxArm64(augmentedModule, target: target), target: target, globalData: globalData)
+    x86_64 then result = emitX86(lowerMidToMaxX64(augmentedModule, target: target), target: target, globalData: globalData)
+    aarch64 then result = emitMaxArm64(lowerMidToMaxArm64(augmentedModule, target: target), target: target, globalData: globalData)
   end 'cpu'
   return result
 end 'emitBackend'
 
 export function writeExecutable(outputPath FilePath, codeResult CodeResult, target Target)
   match target.os 'os'
-    Os.windows then writePe(outputPath, codeResult: codeResult, target: target)
-    Os.linux then writeElf(outputPath, codeResult: codeResult, target: target)
-    Os.macos then writeMachO(outputPath, codeResult: codeResult, target: target)
+    windows then writePe(outputPath, codeResult: codeResult, target: target)
+    linux then writeElf(outputPath, codeResult: codeResult, target: target)
+    macos then writeMachO(outputPath, codeResult: codeResult, target: target)
   end 'os'
 end 'writeExecutable'

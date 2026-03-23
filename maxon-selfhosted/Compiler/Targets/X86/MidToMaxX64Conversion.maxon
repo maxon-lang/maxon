@@ -8,9 +8,9 @@ export function lowerMidToMaxX64(module MlirModule, target Target) returns MlirM
   var result = createMlirModule()
 
   let shadowSpace = match target.os 'osShadow'
-    Os.windows gives 32
-    Os.linux gives 0
-    Os.macos gives 0
+    windows gives 32
+    linux gives 0
+    macos gives 0
   end 'osShadow'
 
   let osDesc = makeOsDescriptor(target)
@@ -125,15 +125,15 @@ end 'lowerArithOp'
 
 function lowerArithConst(op ArithConst, dstBlock MlirBlock, valueSlots ValueSlotMap, nextTempSlot SlotIndex) returns SlotIndex
   return match op.opcode 'lower'
-    ArithConstOpcode.constI64 gives lowerConstI64(op.resultId, value: op.value, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
-    ArithConstOpcode.constF64 gives lowerConstI64(op.resultId, value: op.value, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
+    constI64 gives lowerConstI64(op.resultId, value: op.value, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
+    constF64 gives lowerConstI64(op.resultId, value: op.value, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
   end 'lower'
 end 'lowerArithConst'
 
 function lowerArithUnary(op ArithUnaryOp, dstBlock MlirBlock, valueSlots ValueSlotMap, nextTempSlot SlotIndex) returns SlotIndex
   let x64Op = match op.opcode 'lower'
-    ArithUnaryOpcode.negI64 gives MaxX64Op.negReg(X64Register.rax)
-    ArithUnaryOpcode.bitNotI64 gives MaxX64Op.bitNotReg(X64Register.rax)
+    negI64 gives MaxX64Op.negReg(X64Register.rax)
+    bitNotI64 gives MaxX64Op.bitNotReg(X64Register.rax)
   end 'lower'
   return lowerUnaryOp(op.resultId, operandId: op.operandId, x64Op: x64Op, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
 end 'lowerArithUnary'
@@ -143,28 +143,28 @@ function lowerArithBinary(op ArithBinaryOp, dstBlock MlirBlock, valueSlots Value
   let leftId = op.leftId
   let rightId = op.rightId
   match op.opcode 'lower'
-    ArithBinaryOpcode.addI64 then return lowerBinaryOp(resultId, leftId: leftId, rightId: rightId, x64Op: MaxX64Op.addRegReg(X64Register.rax, X64Register.rcx), dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
-    ArithBinaryOpcode.subI64 then return lowerBinaryOp(resultId, leftId: leftId, rightId: rightId, x64Op: MaxX64Op.subRegReg(X64Register.rax, X64Register.rcx), dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
-    ArithBinaryOpcode.mulI64 then return lowerBinaryOp(resultId, leftId: leftId, rightId: rightId, x64Op: MaxX64Op.imulRegReg(X64Register.rax, X64Register.rcx), dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
-    ArithBinaryOpcode.divI64 then return lowerDivRem(resultId, leftId: leftId, rightId: rightId, isRem: false, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
-    ArithBinaryOpcode.remI64 then return lowerDivRem(resultId, leftId: leftId, rightId: rightId, isRem: true, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
-    ArithBinaryOpcode.andI64 then return lowerBinaryOp(resultId, leftId: leftId, rightId: rightId, x64Op: MaxX64Op.andRegReg(X64Register.rax, X64Register.rcx), dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
-    ArithBinaryOpcode.orI64 then return lowerBinaryOp(resultId, leftId: leftId, rightId: rightId, x64Op: MaxX64Op.orRegReg(X64Register.rax, X64Register.rcx), dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
-    ArithBinaryOpcode.xorI64 then return lowerBinaryOp(resultId, leftId: leftId, rightId: rightId, x64Op: MaxX64Op.xorRegReg(X64Register.rax, X64Register.rcx), dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
-    ArithBinaryOpcode.shlI64 then return lowerShiftOp(resultId, leftId: leftId, rightId: rightId, x64Op: MaxX64Op.shlRegCl(X64Register.rax), dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
-    ArithBinaryOpcode.shrI64 then return lowerShiftOp(resultId, leftId: leftId, rightId: rightId, x64Op: MaxX64Op.sarRegCl(X64Register.rax), dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
-    ArithBinaryOpcode.cmpI64Eq then return lowerCmpOp(resultId, leftId: leftId, rightId: rightId, x64Op: MaxX64Op.cmpRaxRcx, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
-    ArithBinaryOpcode.cmpI64Ne then return lowerCmpOp(resultId, leftId: leftId, rightId: rightId, x64Op: MaxX64Op.cmpRaxRcx, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
-    ArithBinaryOpcode.cmpI64Lt then return lowerCmpOp(resultId, leftId: leftId, rightId: rightId, x64Op: MaxX64Op.cmpRaxRcx, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
-    ArithBinaryOpcode.cmpI64Le then return lowerCmpOp(resultId, leftId: leftId, rightId: rightId, x64Op: MaxX64Op.cmpRaxRcx, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
-    ArithBinaryOpcode.cmpI64Gt then return lowerCmpOp(resultId, leftId: leftId, rightId: rightId, x64Op: MaxX64Op.cmpRaxRcx, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
-    ArithBinaryOpcode.cmpI64Ge then return lowerCmpOp(resultId, leftId: leftId, rightId: rightId, x64Op: MaxX64Op.cmpRaxRcx, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
-    ArithBinaryOpcode.cmpF64Eq then return lowerCmpOp(resultId, leftId: leftId, rightId: rightId, x64Op: MaxX64Op.ucomisd, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
-    ArithBinaryOpcode.cmpF64Ne then return lowerCmpOp(resultId, leftId: leftId, rightId: rightId, x64Op: MaxX64Op.ucomisd, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
-    ArithBinaryOpcode.cmpF64Lt then return lowerCmpOp(resultId, leftId: leftId, rightId: rightId, x64Op: MaxX64Op.ucomisd, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
-    ArithBinaryOpcode.cmpF64Le then return lowerCmpOp(resultId, leftId: leftId, rightId: rightId, x64Op: MaxX64Op.ucomisd, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
-    ArithBinaryOpcode.cmpF64Gt then return lowerCmpOp(resultId, leftId: leftId, rightId: rightId, x64Op: MaxX64Op.ucomisd, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
-    ArithBinaryOpcode.cmpF64Ge then return lowerCmpOp(resultId, leftId: leftId, rightId: rightId, x64Op: MaxX64Op.ucomisd, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
+    addI64 then return lowerBinaryOp(resultId, leftId: leftId, rightId: rightId, x64Op: MaxX64Op.addRegReg(X64Register.rax, X64Register.rcx), dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
+    subI64 then return lowerBinaryOp(resultId, leftId: leftId, rightId: rightId, x64Op: MaxX64Op.subRegReg(X64Register.rax, X64Register.rcx), dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
+    mulI64 then return lowerBinaryOp(resultId, leftId: leftId, rightId: rightId, x64Op: MaxX64Op.imulRegReg(X64Register.rax, X64Register.rcx), dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
+    divI64 then return lowerDivRem(resultId, leftId: leftId, rightId: rightId, isRem: false, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
+    remI64 then return lowerDivRem(resultId, leftId: leftId, rightId: rightId, isRem: true, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
+    andI64 then return lowerBinaryOp(resultId, leftId: leftId, rightId: rightId, x64Op: MaxX64Op.andRegReg(X64Register.rax, X64Register.rcx), dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
+    orI64 then return lowerBinaryOp(resultId, leftId: leftId, rightId: rightId, x64Op: MaxX64Op.orRegReg(X64Register.rax, X64Register.rcx), dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
+    xorI64 then return lowerBinaryOp(resultId, leftId: leftId, rightId: rightId, x64Op: MaxX64Op.xorRegReg(X64Register.rax, X64Register.rcx), dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
+    shlI64 then return lowerShiftOp(resultId, leftId: leftId, rightId: rightId, x64Op: MaxX64Op.shlRegCl(X64Register.rax), dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
+    shrI64 then return lowerShiftOp(resultId, leftId: leftId, rightId: rightId, x64Op: MaxX64Op.sarRegCl(X64Register.rax), dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
+    cmpI64Eq then return lowerCmpOp(resultId, leftId: leftId, rightId: rightId, x64Op: MaxX64Op.cmpRaxRcx, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
+    cmpI64Ne then return lowerCmpOp(resultId, leftId: leftId, rightId: rightId, x64Op: MaxX64Op.cmpRaxRcx, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
+    cmpI64Lt then return lowerCmpOp(resultId, leftId: leftId, rightId: rightId, x64Op: MaxX64Op.cmpRaxRcx, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
+    cmpI64Le then return lowerCmpOp(resultId, leftId: leftId, rightId: rightId, x64Op: MaxX64Op.cmpRaxRcx, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
+    cmpI64Gt then return lowerCmpOp(resultId, leftId: leftId, rightId: rightId, x64Op: MaxX64Op.cmpRaxRcx, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
+    cmpI64Ge then return lowerCmpOp(resultId, leftId: leftId, rightId: rightId, x64Op: MaxX64Op.cmpRaxRcx, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
+    cmpF64Eq then return lowerCmpOp(resultId, leftId: leftId, rightId: rightId, x64Op: MaxX64Op.ucomisd, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
+    cmpF64Ne then return lowerCmpOp(resultId, leftId: leftId, rightId: rightId, x64Op: MaxX64Op.ucomisd, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
+    cmpF64Lt then return lowerCmpOp(resultId, leftId: leftId, rightId: rightId, x64Op: MaxX64Op.ucomisd, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
+    cmpF64Le then return lowerCmpOp(resultId, leftId: leftId, rightId: rightId, x64Op: MaxX64Op.ucomisd, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
+    cmpF64Gt then return lowerCmpOp(resultId, leftId: leftId, rightId: rightId, x64Op: MaxX64Op.ucomisd, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
+    cmpF64Ge then return lowerCmpOp(resultId, leftId: leftId, rightId: rightId, x64Op: MaxX64Op.ucomisd, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
   end 'lower'
 end 'lowerArithBinary'
 
@@ -372,19 +372,19 @@ function lowerCondBr(condId ValueId, thenTarget BlockId, elseTarget BlockId, src
   // Emit inverted conditional jump to else block, then unconditional jump to then block.
   // The inverted condition means: if the condition is NOT met, jump to else.
   match jumpKind 'emitJump'
-    JumpKind.eq then dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.condJump(X64JumpCondition.ne, elseTarget)))
-    JumpKind.ne then dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.condJump(X64JumpCondition.e, elseTarget)))
-    JumpKind.lt then dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.condJump(X64JumpCondition.ge, elseTarget)))
-    JumpKind.le then dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.condJump(X64JumpCondition.g, elseTarget)))
-    JumpKind.gt then dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.condJump(X64JumpCondition.le, elseTarget)))
-    JumpKind.ge then dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.condJump(X64JumpCondition.l, elseTarget)))
-    JumpKind.feq then dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.condJump(X64JumpCondition.ne, elseTarget)))
-    JumpKind.fne then dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.condJump(X64JumpCondition.e, elseTarget)))
-    JumpKind.flt then dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.condJump(X64JumpCondition.ae, elseTarget)))
-    JumpKind.fle then dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.condJump(X64JumpCondition.a, elseTarget)))
-    JumpKind.fgt then dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.condJump(X64JumpCondition.be, elseTarget)))
-    JumpKind.fge then dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.condJump(X64JumpCondition.b, elseTarget)))
-    JumpKind.boolTest then lowerBoolTestCondBr(condId, elseTarget: elseTarget, dstBlock: dstBlock, valueSlots: valueSlots)
+    eq then dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.condJump(X64JumpCondition.ne, elseTarget)))
+    ne then dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.condJump(X64JumpCondition.e, elseTarget)))
+    lt then dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.condJump(X64JumpCondition.ge, elseTarget)))
+    le then dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.condJump(X64JumpCondition.g, elseTarget)))
+    gt then dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.condJump(X64JumpCondition.le, elseTarget)))
+    ge then dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.condJump(X64JumpCondition.l, elseTarget)))
+    feq then dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.condJump(X64JumpCondition.ne, elseTarget)))
+    fne then dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.condJump(X64JumpCondition.e, elseTarget)))
+    flt then dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.condJump(X64JumpCondition.ae, elseTarget)))
+    fle then dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.condJump(X64JumpCondition.a, elseTarget)))
+    fgt then dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.condJump(X64JumpCondition.be, elseTarget)))
+    fge then dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.condJump(X64JumpCondition.b, elseTarget)))
+    boolTest then lowerBoolTestCondBr(condId, elseTarget: elseTarget, dstBlock: dstBlock, valueSlots: valueSlots)
   end 'emitJump'
   // Unconditional jump to then block
   dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.jmp(thenTarget)))

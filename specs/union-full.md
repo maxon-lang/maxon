@@ -114,19 +114,19 @@ union Direction
 
   function opposite() returns Direction
     match self 'check'
-      Direction.north then return Direction.south
-      Direction.south then return Direction.north
-      Direction.east then return Direction.west
-      Direction.west then return Direction.east
+      north then return Direction.south
+      south then return Direction.north
+      east then return Direction.west
+      west then return Direction.east
     end 'check'
   end 'opposite'
 
   function isVertical() returns bool
     var result = match self 'check'
-      Direction.north gives true
-      Direction.south gives true
-      Direction.east gives false
-      Direction.west gives false
+      north gives true
+      south gives true
+      east gives false
+      west gives false
     end 'check'
     return result
   end 'isVertical'
@@ -155,10 +155,10 @@ end 'Direction'
 function main() returns ExitCode
   var dir = Direction.north
   var result = match dir 'check'
-    Direction.north gives 1
-    Direction.south gives 0
-    Direction.east gives 0
-    Direction.west gives 0
+    north gives 1
+    south gives 0
+    east gives 0
+    west gives 0
   end 'check'
   return result
 end 'main'
@@ -179,9 +179,9 @@ function main() returns ExitCode
   var c = Color.red
   c = Color.blue
   var result = match c 'check'
-    Color.red gives 0
-    Color.green gives 0
-    Color.blue gives 1
+    red gives 0
+    green gives 0
+    blue gives 1
   end 'check'
   return result
 end 'main'
@@ -201,9 +201,9 @@ end 'Status'
 function main() returns ExitCode
   var s = Status.pending
   var result = match s 'check'
-    Status.active gives 0
-    Status.pending gives 1
-    Status.done gives 1
+    active gives 0
+    pending gives 1
+    done gives 1
   end 'check'
   return result
 end 'main'
@@ -223,9 +223,9 @@ end 'Status'
 function main() returns ExitCode
   var s1 = Status.pending
   match s1 'check'
-    Status.pending then return 1
-    Status.active then return 0
-    Status.done then return 0
+    pending then return 1
+    active then return 0
+    done then return 0
   end 'check'
 end 'main'
 ```
@@ -242,8 +242,8 @@ end 'Status'
 
 function isOn(s Status) returns bool
   var result = match s 'check'
-    Status.on gives true
-    Status.off gives false
+    on gives true
+    off gives false
   end 'check'
   return result
 end 'isOn'
@@ -277,8 +277,8 @@ end 'getResult'
 function main() returns ExitCode
   var r = getResult(true)
   var result = match r 'handle'
-    Result.success gives 1
-    Result.failure gives 0
+    success gives 1
+    failure gives 0
   end 'handle'
   return result
 end 'main'
@@ -543,8 +543,8 @@ union Direction
 
   function isNorth() returns bool
     var result = match self 'check'
-      Direction.north gives true
-      Direction.south gives false
+      north gives true
+      south gives false
     end 'check'
     return result
   end 'isNorth'
@@ -570,8 +570,8 @@ union Toggle
 
   function flip() returns Toggle
     var result = match self 'check'
-      Toggle.on gives Toggle.off
-      Toggle.off gives Toggle.on
+      on gives Toggle.off
+      off gives Toggle.on
     end 'check'
     return result
   end 'flip'
@@ -581,8 +581,8 @@ function main() returns ExitCode
   let t = Toggle.on
   let flipped = t.flip()
   var result = match flipped 'check'
-    Toggle.off gives 1
-    Toggle.on gives 0
+    off gives 1
+    on gives 0
   end 'check'
   return result
 end 'main'
@@ -800,9 +800,9 @@ end 'StringBacked'
 function main() returns ExitCode
   var dir = StringBacked.North
   var result = match dir 'check'
-    StringBacked.North gives 1
-    StringBacked.South gives 0
-    StringBacked.East gives 0
+    North gives 1
+    South gives 0
+    East gives 0
   end 'check'
   return result
 end 'main'
@@ -822,9 +822,9 @@ end 'CharBacked'
 function main() returns ExitCode
   var dir = CharBacked.N
   var result = match dir 'check'
-    CharBacked.N gives 1
-    CharBacked.S gives 0
-    CharBacked.E gives 0
+    N gives 1
+    S gives 0
+    E gives 0
   end 'check'
   return result
 end 'main'
@@ -844,9 +844,9 @@ end 'Direction'
 function main() returns ExitCode
   var d = Direction.North
   var result = match d 'check'
-    Direction.North gives 1
-    Direction.South gives 0
-    Direction.East gives 0
+    North gives 1
+    South gives 0
+    East gives 0
   end 'check'
   return result
 end 'main'
@@ -866,9 +866,9 @@ end 'FloatBacked'
 function main() returns ExitCode
   var f = FloatBacked.North
   var result = match f 'check'
-    FloatBacked.North gives 1
-    FloatBacked.South gives 0
-    FloatBacked.East gives 0
+    North gives 1
+    South gives 0
+    East gives 0
   end 'check'
   return result
 end 'main'
@@ -1058,9 +1058,9 @@ let DEFAULT_COLOR = Color.Green
 
 function main() returns ExitCode
   match DEFAULT_COLOR 'check'
-    Color.Red then return 1
-    Color.Green then return 2
-    Color.Blue then return 3
+    Red then return 1
+    Green then return 2
+    Blue then return 3
   end 'check'
 end 'main'
 ```

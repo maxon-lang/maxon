@@ -480,9 +480,9 @@ if s == HttpStatus.notFound 'check'
 end 'check'
 
 var result = match s 'handle'
-    HttpStatus.ok gives 1
-    HttpStatus.notFound gives 2
-    HttpStatus.serverError gives 3
+    ok gives 1
+    notFound gives 2
+    serverError gives 3
 end 'handle'
 
 // rawValue, name, ordinal, allCases, fromRawValue, fromName

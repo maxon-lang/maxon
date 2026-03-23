@@ -30,14 +30,14 @@ export function parse(project Project, tokens TokenArray, filePath String) retur
     let prevPos = pos
 
     match token.kind 'dispatch'
-      TokenKind.eof then break 'parseLoop'
-      TokenKind.function then pos = parseFunction(project, module: module, tokens: tokens, startPos: pos, filePath: filePath)
-      TokenKind.let then pos = parseTopLevelLet(project, tokens: tokens, startPos: pos, filePath: filePath)
-      TokenKind.typealias then pos = skipToNextLine(tokens, startPos: pos)
-      TokenKind.export then pos = parseExport(tokens, startPos: pos)
-      TokenKind.if to TokenKind.newline then break
+      eof then break 'parseLoop'
+      function then pos = parseFunction(project, module: module, tokens: tokens, startPos: pos, filePath: filePath)
+      let then pos = parseTopLevelLet(project, tokens: tokens, startPos: pos, filePath: filePath)
+      typealias then pos = skipToNextLine(tokens, startPos: pos)
+      export then pos = parseExport(tokens, startPos: pos)
+      if to newline then break
       // temporary
-      TokenKind.print then break
+      print then break
     end 'dispatch'
 
     if pos <= prevPos 'stuck'
@@ -617,22 +617,22 @@ typealias BindingPower = int(0 to 14)
 // Throws for non-operator tokens; the call site uses `otherwise 0` to stop the Pratt loop.
 function infixBindingPower(kind TokenKind) returns BindingPower throws ParserError
   return match kind 'bp'
-    TokenKind.or gives 2
-    TokenKind.xor gives 4
-    TokenKind.and gives 6
-    TokenKind.shl gives 8
-    TokenKind.shr gives 8
-    TokenKind.equalsEquals gives 10
-    TokenKind.bangEquals gives 10
-    TokenKind.lessThan gives 10
-    TokenKind.lessEquals gives 10
-    TokenKind.greaterThan gives 10
-    TokenKind.greaterEquals gives 10
-    TokenKind.plus gives 12
-    TokenKind.minus gives 12
-    TokenKind.star gives 14
-    TokenKind.slash gives 14
-    TokenKind.mod gives 14
+    or gives 2
+    xor gives 4
+    and gives 6
+    shl gives 8
+    shr gives 8
+    equalsEquals gives 10
+    bangEquals gives 10
+    lessThan gives 10
+    lessEquals gives 10
+    greaterThan gives 10
+    greaterEquals gives 10
+    plus gives 12
+    minus gives 12
+    star gives 14
+    slash gives 14
+    mod gives 14
     default throws ParserError.unhandledToken
   end 'bp'
 end 'infixBindingPower'
@@ -640,22 +640,22 @@ end 'infixBindingPower'
 function emitBinaryOp(block MlirBlock, kind TokenKind, resultId ValueId, leftId ValueId, rightId ValueId, leftIsFloat bool, rightIsFloat bool) throws ParserError
   let isFloat = leftIsFloat or rightIsFloat
   let hlOp = match kind 'emit'
-    TokenKind.or gives MaxHLOp.bitOr(resultId, leftId, rightId)
-    TokenKind.xor gives MaxHLOp.bitXor(resultId, leftId, rightId)
-    TokenKind.and gives MaxHLOp.bitAnd(resultId, leftId, rightId)
-    TokenKind.shl gives MaxHLOp.shl(resultId, leftId, rightId)
-    TokenKind.shr gives MaxHLOp.shr(resultId, leftId, rightId)
-    TokenKind.equalsEquals gives MaxHLOp.cmpEq(resultId, leftId, rightId, isFloat)
-    TokenKind.bangEquals gives MaxHLOp.cmpNe(resultId, leftId, rightId, isFloat)
-    TokenKind.lessThan gives MaxHLOp.cmpLt(resultId, leftId, rightId, isFloat)
-    TokenKind.lessEquals gives MaxHLOp.cmpLe(resultId, leftId, rightId, isFloat)
-    TokenKind.greaterThan gives MaxHLOp.cmpGt(resultId, leftId, rightId, isFloat)
-    TokenKind.greaterEquals gives MaxHLOp.cmpGe(resultId, leftId, rightId, isFloat)
-    TokenKind.plus gives MaxHLOp.add(resultId, leftId, rightId)
-    TokenKind.minus gives MaxHLOp.sub(resultId, leftId, rightId)
-    TokenKind.star gives MaxHLOp.mul(resultId, leftId, rightId)
-    TokenKind.slash gives MaxHLOp.div(resultId, leftId, rightId)
-    TokenKind.mod gives MaxHLOp.mod(resultId, leftId, rightId)
+    or gives MaxHLOp.bitOr(resultId, leftId, rightId)
+    xor gives MaxHLOp.bitXor(resultId, leftId, rightId)
+    and gives MaxHLOp.bitAnd(resultId, leftId, rightId)
+    shl gives MaxHLOp.shl(resultId, leftId, rightId)
+    shr gives MaxHLOp.shr(resultId, leftId, rightId)
+    equalsEquals gives MaxHLOp.cmpEq(resultId, leftId, rightId, isFloat)
+    bangEquals gives MaxHLOp.cmpNe(resultId, leftId, rightId, isFloat)
+    lessThan gives MaxHLOp.cmpLt(resultId, leftId, rightId, isFloat)
+    lessEquals gives MaxHLOp.cmpLe(resultId, leftId, rightId, isFloat)
+    greaterThan gives MaxHLOp.cmpGt(resultId, leftId, rightId, isFloat)
+    greaterEquals gives MaxHLOp.cmpGe(resultId, leftId, rightId, isFloat)
+    plus gives MaxHLOp.add(resultId, leftId, rightId)
+    minus gives MaxHLOp.sub(resultId, leftId, rightId)
+    star gives MaxHLOp.mul(resultId, leftId, rightId)
+    slash gives MaxHLOp.div(resultId, leftId, rightId)
+    mod gives MaxHLOp.mod(resultId, leftId, rightId)
     default throws ParserError.unhandledToken
   end 'emit'
   emitOp(block, op: MlirOp.maxhl(hlOp))
@@ -812,13 +812,13 @@ end 'parseIdentifierExpr'
 
 function parsePrimaryMatch(project Project, block MlirBlock, tokens TokenArray, startPos TokenIndex, token Token, filePath String) returns ExprResult throws ParserError
   match token.kind 'primary'
-    TokenKind.intLiteral then return parseIntLiteral(project, block: block, token: token, startPos: startPos)
-    TokenKind.floatLiteral then return parseFloatLiteral(project, block: block, token: token, startPos: startPos)
-    TokenKind.identifier then return try parseIdentifierExpr(project, block: block, tokens: tokens, startPos: startPos, token: token, filePath: filePath)
-    TokenKind.doubleStringLiteral then return parseStringLiteral(project, token: token, startPos: startPos)
-    TokenKind.true then return parseBoolLiteral(project, block: block, startPos: startPos, value: 1)
-    TokenKind.false then return parseBoolLiteral(project, block: block, startPos: startPos, value: 0)
-    TokenKind.leftParen then return parseParenExpr(project, block: block, tokens: tokens, startPos: startPos, filePath: filePath)
+    intLiteral then return parseIntLiteral(project, block: block, token: token, startPos: startPos)
+    floatLiteral then return parseFloatLiteral(project, block: block, token: token, startPos: startPos)
+    identifier then return try parseIdentifierExpr(project, block: block, tokens: tokens, startPos: startPos, token: token, filePath: filePath)
+    doubleStringLiteral then return parseStringLiteral(project, token: token, startPos: startPos)
+    true then return parseBoolLiteral(project, block: block, startPos: startPos, value: 1)
+    false then return parseBoolLiteral(project, block: block, startPos: startPos, value: 0)
+    leftParen then return parseParenExpr(project, block: block, tokens: tokens, startPos: startPos, filePath: filePath)
     default throws ParserError.unhandledToken
   end 'primary'
 end 'parsePrimaryMatch'

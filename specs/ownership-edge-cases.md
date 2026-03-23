@@ -1637,9 +1637,9 @@ end 'Color'
 
 function colorCode(c Color) returns Integer
   let result = match c 'pick'
-    Color.red   gives 1
-    Color.green gives 2
-    Color.blue  gives 3
+    red   gives 1
+    green gives 2
+    blue  gives 3
   end 'pick'
   return result
 end 'colorCode'
@@ -1678,7 +1678,7 @@ end 'Shape'
 
 function massOf(s Shape) returns Integer
   match s 'check'
-    Shape.empty then return 0
+    empty then return 0
     solid(b) then return b.mass
   end 'check'
 end 'massOf'

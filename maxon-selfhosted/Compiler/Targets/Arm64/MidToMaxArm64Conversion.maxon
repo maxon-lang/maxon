@@ -119,8 +119,8 @@ end 'lowerArithToArm64'
 // Emit a constant: movImm + strToSlot, record in valueSlots.
 function lowerArithConstToArm64(op ArithConst, dstBlock MlirBlock, valueSlots ValueSlotMap, nextTempSlot VarSlot) returns VarSlot
   return match op.opcode 'lower'
-    ArithConstOpcode.constI64 gives emitMaxArm64ConstValue(dstBlock, valueSlots: valueSlots, resultId: op.resultId, value: op.value, nextTempSlot: nextTempSlot)
-    ArithConstOpcode.constF64 gives emitMaxArm64ConstValue(dstBlock, valueSlots: valueSlots, resultId: op.resultId, value: op.value, nextTempSlot: nextTempSlot)
+    constI64 gives emitMaxArm64ConstValue(dstBlock, valueSlots: valueSlots, resultId: op.resultId, value: op.value, nextTempSlot: nextTempSlot)
+    constF64 gives emitMaxArm64ConstValue(dstBlock, valueSlots: valueSlots, resultId: op.resultId, value: op.value, nextTempSlot: nextTempSlot)
   end 'lower'
 end 'lowerArithConstToArm64'
 
@@ -146,10 +146,10 @@ end 'lowerArithUnaryToArm64'
 // Lower a binary arith op to MaxArm64 ops.
 function lowerArithBinaryToArm64(op ArithBinaryOp, dstBlock MlirBlock, valueSlots ValueSlotMap, nextTempSlot VarSlot) returns VarSlot
   match op.opcode 'check'
-    ArithBinaryOpcode.divI64 then return emitMaxArm64DivRem(op.resultId, leftId: op.leftId, rightId: op.rightId, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot, isRem: false)
-    ArithBinaryOpcode.remI64 then return emitMaxArm64DivRem(op.resultId, leftId: op.leftId, rightId: op.rightId, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot, isRem: true)
-    ArithBinaryOpcode.addI64 to ArithBinaryOpcode.mulI64 then return emitMaxArm64BinaryOp(op, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
-    ArithBinaryOpcode.andI64 to ArithBinaryOpcode.cmpF64Ge then return emitMaxArm64BinaryOp(op, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
+    divI64 then return emitMaxArm64DivRem(op.resultId, leftId: op.leftId, rightId: op.rightId, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot, isRem: false)
+    remI64 then return emitMaxArm64DivRem(op.resultId, leftId: op.leftId, rightId: op.rightId, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot, isRem: true)
+    addI64 to mulI64 then return emitMaxArm64BinaryOp(op, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
+    andI64 to cmpF64Ge then return emitMaxArm64BinaryOp(op, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
   end 'check'
 end 'lowerArithBinaryToArm64'
 
@@ -297,19 +297,19 @@ function lowerCondBrToArm64(srcBlock MlirBlock, dstBlock MlirBlock, valueSlots V
 
   // Emit inverted condition branch to else block
   match jumpKind 'emitJump'
-    JumpKind.eq then dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.condBranch(MaxArm64CondCode.ne, elseTarget)))
-    JumpKind.ne then dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.condBranch(MaxArm64CondCode.eq, elseTarget)))
-    JumpKind.lt then dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.condBranch(MaxArm64CondCode.ge, elseTarget)))
-    JumpKind.le then dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.condBranch(MaxArm64CondCode.gt, elseTarget)))
-    JumpKind.gt then dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.condBranch(MaxArm64CondCode.le, elseTarget)))
-    JumpKind.ge then dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.condBranch(MaxArm64CondCode.lt, elseTarget)))
-    JumpKind.feq then dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.condBranch(MaxArm64CondCode.ne, elseTarget)))
-    JumpKind.fne then dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.condBranch(MaxArm64CondCode.eq, elseTarget)))
-    JumpKind.flt then dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.condBranch(MaxArm64CondCode.ge, elseTarget)))
-    JumpKind.fle then dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.condBranch(MaxArm64CondCode.gt, elseTarget)))
-    JumpKind.fgt then dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.condBranch(MaxArm64CondCode.le, elseTarget)))
-    JumpKind.fge then dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.condBranch(MaxArm64CondCode.lt, elseTarget)))
-    JumpKind.boolTest then emitBoolTestBranch(dstBlock, valueSlots: valueSlots, condId: condId, elseTarget: elseTarget)
+    eq then dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.condBranch(MaxArm64CondCode.ne, elseTarget)))
+    ne then dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.condBranch(MaxArm64CondCode.eq, elseTarget)))
+    lt then dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.condBranch(MaxArm64CondCode.ge, elseTarget)))
+    le then dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.condBranch(MaxArm64CondCode.gt, elseTarget)))
+    gt then dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.condBranch(MaxArm64CondCode.le, elseTarget)))
+    ge then dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.condBranch(MaxArm64CondCode.lt, elseTarget)))
+    feq then dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.condBranch(MaxArm64CondCode.ne, elseTarget)))
+    fne then dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.condBranch(MaxArm64CondCode.eq, elseTarget)))
+    flt then dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.condBranch(MaxArm64CondCode.ge, elseTarget)))
+    fle then dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.condBranch(MaxArm64CondCode.gt, elseTarget)))
+    fgt then dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.condBranch(MaxArm64CondCode.le, elseTarget)))
+    fge then dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.condBranch(MaxArm64CondCode.lt, elseTarget)))
+    boolTest then emitBoolTestBranch(dstBlock, valueSlots: valueSlots, condId: condId, elseTarget: elseTarget)
   end 'emitJump'
 
   // Unconditional branch to then block
@@ -343,17 +343,17 @@ function maxArm64GetBinaryOpInfo(op ArithBinaryOp) returns MaxArm64BinaryOpInfo
   let x0 = MaxArm64Register.x0
   let x1 = MaxArm64Register.x1
   let arm64Op = match op.opcode 'info'
-    ArithBinaryOpcode.addI64 gives MaxArm64Op.addRegs(x0, x0, x1)
-    ArithBinaryOpcode.subI64 gives MaxArm64Op.subRegs(x0, x0, x1)
-    ArithBinaryOpcode.mulI64 gives MaxArm64Op.mulRegs(x0, x0, x1)
-    ArithBinaryOpcode.divI64 gives MaxArm64Op.epilogue
-    ArithBinaryOpcode.remI64 gives MaxArm64Op.epilogue
-    ArithBinaryOpcode.andI64 gives MaxArm64Op.andRegs(x0, x0, x1)
-    ArithBinaryOpcode.orI64 gives MaxArm64Op.orrRegs(x0, x0, x1)
-    ArithBinaryOpcode.xorI64 gives MaxArm64Op.eorRegs(x0, x0, x1)
-    ArithBinaryOpcode.shlI64 gives MaxArm64Op.lslRegs(x0, x0, x1)
-    ArithBinaryOpcode.shrI64 gives MaxArm64Op.asrRegs(x0, x0, x1)
-    ArithBinaryOpcode.cmpI64Eq to ArithBinaryOpcode.cmpF64Ge gives MaxArm64Op.cmpRegs(x0, x1)
+    addI64 gives MaxArm64Op.addRegs(x0, x0, x1)
+    subI64 gives MaxArm64Op.subRegs(x0, x0, x1)
+    mulI64 gives MaxArm64Op.mulRegs(x0, x0, x1)
+    divI64 gives MaxArm64Op.epilogue
+    remI64 gives MaxArm64Op.epilogue
+    andI64 gives MaxArm64Op.andRegs(x0, x0, x1)
+    orI64 gives MaxArm64Op.orrRegs(x0, x0, x1)
+    xorI64 gives MaxArm64Op.eorRegs(x0, x0, x1)
+    shlI64 gives MaxArm64Op.lslRegs(x0, x0, x1)
+    shrI64 gives MaxArm64Op.asrRegs(x0, x0, x1)
+    cmpI64Eq to cmpF64Ge gives MaxArm64Op.cmpRegs(x0, x1)
   end 'info'
   return MaxArm64BinaryOpInfo{resultId: op.resultId, leftId: op.leftId, rightId: op.rightId, arm64Op: arm64Op}
 end 'maxArm64GetBinaryOpInfo'
@@ -361,8 +361,8 @@ end 'maxArm64GetBinaryOpInfo'
 // Map a unary ArithUnaryOp to its corresponding MaxArm64Op.
 function getMaxArm64UnaryOp(op ArithUnaryOp) returns MaxArm64Op
   return match op.opcode 'check'
-    ArithUnaryOpcode.negI64 gives MaxArm64Op.negReg(MaxArm64Register.x0, MaxArm64Register.x0)
-    ArithUnaryOpcode.bitNotI64 gives MaxArm64Op.mvnReg(MaxArm64Register.x0, MaxArm64Register.x0)
+    negI64 gives MaxArm64Op.negReg(MaxArm64Register.x0, MaxArm64Register.x0)
+    bitNotI64 gives MaxArm64Op.mvnReg(MaxArm64Register.x0, MaxArm64Register.x0)
   end 'check'
 end 'getMaxArm64UnaryOp'
 

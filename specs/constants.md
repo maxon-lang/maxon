@@ -235,9 +235,9 @@ end 'Color'
 function main() returns ExitCode
   var c = Color.blue
   var result = match c 'check'
-    Color.red gives 10
-    Color.green gives 20
-    Color.blue gives 30
+    red gives 10
+    green gives 20
+    blue gives 30
   end 'check'
   return result
 end 'main'
@@ -257,10 +257,10 @@ end 'Priority'
 
 function main() returns ExitCode
   var result = match Priority.critical 'check'
-    Priority.low gives 0
-    Priority.medium gives 1
-    Priority.high gives 10
-    Priority.critical gives 11
+    low gives 0
+    medium gives 1
+    high gives 10
+    critical gives 11
   end 'check'
   return result
 end 'main'
@@ -279,9 +279,9 @@ end 'Temperature'
 
 function main() returns ExitCode
   var result = match Temperature.warm 'check'
-    Temperature.freezing gives 0
-    Temperature.cold gives -10
-    Temperature.warm gives 25
+    freezing gives 0
+    cold gives -10
+    warm gives 25
   end 'check'
   return result
 end 'main'
@@ -519,9 +519,9 @@ end 'HttpStatus'
 function main() returns ExitCode
   var s = HttpStatus.notFound
   var result = match s 'check'
-    HttpStatus.ok gives 1
-    HttpStatus.notFound gives 2
-    HttpStatus.serverError gives 3
+    ok gives 1
+    notFound gives 2
+    serverError gives 3
   end 'check'
   return result
 end 'main'

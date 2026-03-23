@@ -348,16 +348,16 @@ export function tokenize(source ByteArray) returns TokenArray
     let action = try actionTable.get(state.rawValue) otherwise panic("Lexer: actionTable lookup failed for state {state}")
 
     match action 'dispatch'
-      Action.skip then break 'dispatch'
-      Action.skipCr then s.column = s.column - 1
-      Action.newline then handleNewline(tokens, state: s, startLine: startLine, startCol: startCol)
-      Action.emit then emitFixedToken(state.rawValue, tokens: tokens, line: startLine, column: startCol)
-      Action.emit2 then handleEmit2(state: s, tokens: tokens, dfaState: state, startLine: startLine, startCol: startCol)
-      Action.enterStrSq then scanSingleQuoteString(source, state: s, tokens: tokens, startLine: startLine, startCol: startCol)
-      Action.enterStrDq then scanDoubleQuoteString(source, state: s, tokens: tokens, startLine: startLine, startCol: startCol)
-      Action.enterNumber then handleEnterNumber(source, state: s, tokens: tokens, startLine: startLine, startCol: startCol)
-      Action.enterIdent then handleEnterIdent(source, state: s, tokens: tokens, startLine: startLine, startCol: startCol)
-      Action.enterComment then handleEnterComment(source, state: s)
+      skip then break 'dispatch'
+      skipCr then s.column = s.column - 1
+      newline then handleNewline(tokens, state: s, startLine: startLine, startCol: startCol)
+      emit then emitFixedToken(state.rawValue, tokens: tokens, line: startLine, column: startCol)
+      emit2 then handleEmit2(state: s, tokens: tokens, dfaState: state, startLine: startLine, startCol: startCol)
+      enterStrSq then scanSingleQuoteString(source, state: s, tokens: tokens, startLine: startLine, startCol: startCol)
+      enterStrDq then scanDoubleQuoteString(source, state: s, tokens: tokens, startLine: startLine, startCol: startCol)
+      enterNumber then handleEnterNumber(source, state: s, tokens: tokens, startLine: startLine, startCol: startCol)
+      enterIdent then handleEnterIdent(source, state: s, tokens: tokens, startLine: startLine, startCol: startCol)
+      enterComment then handleEnterComment(source, state: s)
       default panic("Lexer: unhandled action {action}")
     end 'dispatch'
     continue

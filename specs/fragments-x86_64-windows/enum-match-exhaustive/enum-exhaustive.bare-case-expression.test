@@ -1,4 +1,4 @@
-// Test: enum-exhaustive.expression
+// Test: enum-exhaustive.bare-case-expression
 enum Status
     pending
     approved
@@ -9,7 +9,8 @@ function main() returns ExitCode
   var s = Status.approved
   let code = match s 'eval'
     pending gives 0
-    approved to rejected gives 1
+    approved gives 1
+    rejected gives 2
   end 'eval'
   return code
 end 'main'
@@ -40,18 +41,18 @@ module {
     x86.mov rax, [rbp-24]
     x86.mov rcx, 1
     x86.cmp rax, rcx
-    x86.setge rdx
-    x86.movzx rdx, rdxb
-    x86.mov rbx, [rbp-24]
-    x86.mov rsi, 2
-    x86.cmp rbx, rsi
-    x86.setle rdi
-    x86.movzx rdi, rdib
-    x86.and rdx, rdi
-    x86.test rdx, rdx
-    x86.je enum-match-exhaustive.main.eval_0.merge
+    x86.jne enum-match-exhaustive.main.eval_0.cmp2
   eval_0.case1:
     x86.mov rax, 1
+    x86.mov [rbp-16], rax
+    x86.jmp enum-match-exhaustive.main.eval_0.merge
+  eval_0.cmp2:
+    x86.mov rax, [rbp-24]
+    x86.mov rcx, 2
+    x86.cmp rax, rcx
+    x86.jne enum-match-exhaustive.main.eval_0.merge
+  eval_0.case2:
+    x86.mov rax, 2
     x86.mov [rbp-16], rax
     x86.jmp enum-match-exhaustive.main.eval_0.merge
   eval_0.merge:

@@ -92,9 +92,9 @@ Capture the error for inspection:
 ```maxon
 try readFile("config.json") otherwise (e) 'handler'
   match e 'check'
-    FileError.notFound then print("File not found")
-    FileError.permissionDenied then print("Permission denied")
-    FileError.alreadyExists then print("Already exists")
+    notFound then print("File not found")
+    permissionDenied then print("Permission denied")
+    alreadyExists then print("Already exists")
   end 'check'
 end 'handler'
 ```
@@ -597,7 +597,7 @@ function main() returns ExitCode
   var result = 0
   try mayFail() otherwise (e) 'handler'
     match e 'check'
-      MyError.failed then result = 42
+      failed then result = 42
     end 'check'
   end 'handler'
   return result
@@ -636,9 +636,9 @@ function main() returns ExitCode
   var result = 0
   try mayFail(2) otherwise (e) 'handler'
     match e 'check'
-      MyError.failed then result = 10
-      MyError.timeout then result = 20
-      MyError.notFound then result = 30
+      failed then result = 10
+      timeout then result = 20
+      notFound then result = 30
     end 'check'
   end 'handler'
   return result

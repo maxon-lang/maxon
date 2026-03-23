@@ -73,7 +73,7 @@ function main() returns ExitCode
     return 1
   end 'ok' else (e) 'err'
     match e 'check'
-      NetworkError.connectFailed then return 0
+      connectFailed then return 0
       default throws NetworkError.resolveFailed
     end 'check'
   end 'err'
@@ -90,7 +90,7 @@ function main() returns ExitCode
     return 1
   end 'ok' else (e) 'err'
     match e 'check'
-      NetworkError.resolveFailed then return 0
+      resolveFailed then return 0
       default throws NetworkError.connectFailed
     end 'check'
   end 'err'

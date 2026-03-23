@@ -89,6 +89,7 @@ public enum ErrorCode {
   SemanticBuiltinTypeConstruction = 3072,
   AsyncNonYielding = 3073,
   SemanticDiscardedEnumeratedIndex = 3074,
+  SemanticMatchQualifiedCaseName = 3075,
 
   // MLIR pipeline errors (4xxx) - Stage 4
   MlirUnsupportedExpression = 4001,

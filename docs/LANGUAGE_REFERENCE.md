@@ -1362,23 +1362,23 @@ end 'check2'
 
 ### Match
 
-Enum matches require exhaustive case coverage — all cases must be matched by explicit patterns or range patterns. Plain `default` is not allowed; use `default throws` or `default panic("message")` if you want a catch-all:
+Enum matches require exhaustive case coverage — all cases must be matched by explicit patterns or range patterns. Match arms use bare case names (unqualified); using qualified `Type.case` syntax in a match arm is a compile error (E3075). Plain `default` is not allowed; use `default throws` or `default panic("message")` if you want a catch-all:
 
 ```maxon
 // Exhaustive: all cases listed
 var result = match s 'handle'
-    HttpStatus.ok gives 1
-    HttpStatus.notFound gives 2
-    HttpStatus.serverError gives 3
+    ok gives 1
+    notFound gives 2
+    serverError gives 3
 end 'handle'
 ```
 
-Range patterns use enum case references as bounds, based on ordinal values. `to` is inclusive, `upto` excludes the upper bound:
+Range patterns use bare case names as bounds, based on ordinal values. `to` is inclusive, `upto` excludes the upper bound. Qualified `Type.case` syntax in match arms is a compile error (E3075):
 
 ```text
 match p 'check'
-    Priority.low to Priority.medium then print("not urgent")
-    Priority.high to Priority.critical then print("urgent")
+    low to medium then print("not urgent")
+    high to critical then print("urgent")
 end 'check'
 ```
 
@@ -2232,7 +2232,7 @@ end 'handle'
 - `break` exits the match statement (or a labeled enclosing loop/match)
 - `and fallthrough` continues to the next case (skipping its pattern check)
 - `and fallthrough` cannot be combined with `return`
-- For enums and unions, all cases must be covered (error E2026) — plain `default` is not allowed (error E2046). This is a deliberate design choice: when a new case is added to an enum or union, a plain `default` arm would silently swallow it, hiding bugs that can be subtle and difficult to track down. By requiring exhaustive coverage, the compiler forces every match site to be reviewed when cases change, ensuring new variants are handled intentionally. To cover cases you don't need to handle individually, use range patterns with `break` (see [Union Match Range Patterns](#union-match-range-patterns) below), or use `default throws` / `default panic("message")` to signal that unhandled cases are errors (see [Default Throws / Default Panic in Match](#default-throws--default-panic-in-match) below). Enums support range patterns (`EnumType.case1 to EnumType.case2`). Unions with associated values support range patterns on bare case names (`caseName1 to caseName2`).
+- For enums and unions, all cases must be covered (error E2026) — plain `default` is not allowed (error E2046). This is a deliberate design choice: when a new case is added to an enum or union, a plain `default` arm would silently swallow it, hiding bugs that can be subtle and difficult to track down. By requiring exhaustive coverage, the compiler forces every match site to be reviewed when cases change, ensuring new variants are handled intentionally. To cover cases you don't need to handle individually, use range patterns with `break` (see [Union Match Range Patterns](#union-match-range-patterns) below), or use `default throws` / `default panic("message")` to signal that unhandled cases are errors (see [Default Throws / Default Panic in Match](#default-throws--default-panic-in-match) below). Both enums and unions use bare case names in match arms — qualified `Type.case` syntax is a compile error (E3075). Range patterns use bare case names as bounds (`case1 to case2`).
 - Overlapping patterns are reported as errors (error E2027).
 - All matches must be exhaustive. For non-enum/union matches (int, float, string, char), a `default` arm is required.
 - `default` matches any non-enum/union value not matched by previous patterns
@@ -2369,9 +2369,9 @@ To handle only a subset of cases, you have two options:
 
 ```maxon
 match level 'filter'
-    LogLevel.error then handleError()
-    LogLevel.fatal then handleFatal()
-    LogLevel.trace to LogLevel.warning then break
+    error then handleError()
+    fatal then handleFatal()
+    trace to warning then break
 end 'filter'
 ```
 
@@ -2680,9 +2680,9 @@ Capture the error as a typed union for inspection:
 ```maxon
 try readFile("config.json") otherwise (e) 'handler'
     match e 'check'
-        FileError.notFound then print("File not found")
-        FileError.permissionDenied then print("Permission denied")
-        FileError.alreadyExists then print("Already exists")
+        notFound then print("File not found")
+        permissionDenied then print("Permission denied")
+        alreadyExists then print("Already exists")
     end 'check'
 end 'handler'
 ```

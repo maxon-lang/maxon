@@ -846,8 +846,8 @@ function main() returns ExitCode
   var result = 0
   var p = Paint{id: 0}
   match c 'pick'
-    Color.red then p = Paint{id: 7}
-    Color.blue then p = Paint{id: 0}
+    red then p = Paint{id: 7}
+    blue then p = Paint{id: 0}
   end 'pick'
   result = p.id
   print("{result}\n")

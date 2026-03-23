@@ -504,11 +504,9 @@ match_patterns
               = match_pattern { 'or' match_pattern }
 
 match_pattern = literal_pattern
-              | enum_pattern
-              | union_pattern
+              | case_pattern
               | range_pattern
-              | enum_range_pattern
-              | union_range_pattern
+              | case_range_pattern
 
 literal_pattern
               = [ '-' ] INTEGER
@@ -517,9 +515,7 @@ literal_pattern
               | CHARACTER
               | BOOL
 
-enum_pattern  = IDENTIFIER '.' IDENTIFIER                        (* EnumType.caseName *)
-
-union_pattern = IDENTIFIER [ '(' binding_list ')' ]
+case_pattern  = IDENTIFIER [ '(' binding_list ')' ]              (* bare case name; bindings for union associated values *)
 
 binding_list  = IDENTIFIER { ',' IDENTIFIER }                    (* '_' discards individual bindings *)
 
@@ -529,14 +525,14 @@ range_pattern = expression 'to' expression              (* inclusive both bounds
               | 'min' 'to' expression                   (* open lower, inclusive upper *)
               | 'min' 'upto' expression                 (* open lower, exclusive upper *)
 
-enum_range_pattern
-              = IDENTIFIER '.' IDENTIFIER 'to' IDENTIFIER '.' IDENTIFIER      (* inclusive enum range *)
-              | IDENTIFIER '.' IDENTIFIER 'upto' IDENTIFIER '.' IDENTIFIER    (* exclusive upper enum range *)
-
-union_range_pattern
-              = IDENTIFIER 'to' IDENTIFIER                                     (* inclusive union case range — bare case names *)
-              | IDENTIFIER 'upto' IDENTIFIER                                   (* exclusive upper union case range — bare case names *)
+case_range_pattern
+              = IDENTIFIER 'to' IDENTIFIER              (* inclusive case range — bare case names *)
+              | IDENTIFIER 'upto' IDENTIFIER            (* exclusive upper case range — bare case names *)
 ```
+
+Match arms for enum and union types use **bare case names** (e.g., `red`, `pending`), not
+qualified `Type.case` syntax. Using a qualified name such as `Color.red` in a match arm is
+a compile error (E3075).
 
 ### 5.8 Break and Continue
 

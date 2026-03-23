@@ -21,10 +21,10 @@ end 'check'
 
 // Use match instead:
 match dir 'check'
-  Direction.north then ...
-  Direction.south then ...
-  Direction.east then ...
-  Direction.west then ...
+  north then ...
+  south then ...
+  east then ...
+  west then ...
 end 'check'
 ```
 
@@ -154,7 +154,7 @@ end 'Color'
 function main() returns ExitCode
   var c = Color.green
   match c 'check'
-    Color.green then return 1
+    green then return 1
     default then return 0
   end 'check'
 end 'main'
@@ -177,7 +177,7 @@ end 'MatchError'
 
 function checkColor(c Color) returns ExitCode throws MatchError
   match c 'check'
-    Color.green then return 1
+    green then return 1
     default throws MatchError.unmatched
   end 'check'
 end 'checkColor'
@@ -206,8 +206,8 @@ end 'MatchError'
 
 function checkColor(c Color) returns ExitCode throws MatchError
   match c 'check'
-    Color.red then return 1
-    Color.green then return 2
+    red then return 1
+    green then return 2
     default throws MatchError.unmatched
   end 'check'
 end 'checkColor'
@@ -236,8 +236,8 @@ end 'MatchError'
 
 function colorValue(c Color) returns ExitCode throws MatchError
   let result = match c 'check'
-    Color.red gives 10
-    Color.green gives 20
+    red gives 10
+    green gives 20
     default throws MatchError.unmatched
   end 'check'
   return result

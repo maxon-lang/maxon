@@ -114,10 +114,10 @@ end 'Direction'
 function main() returns ExitCode
   var dir = Direction.north
   match dir 'navigate'
-    Direction.north then return 1
-    Direction.south then return 2
-    Direction.east then return 3
-    Direction.west then return 4
+    north then return 1
+    south then return 2
+    east then return 3
+    west then return 4
   end 'navigate'
 end 'main'
 ```
@@ -412,9 +412,9 @@ end 'Color'
 function main() returns ExitCode
   var c = Color.green
   match c 'check'
-    Color.red then return 1
-    Color.green then return 2
-    Color.blue then return 3
+    red then return 1
+    green then return 2
+    blue then return 3
   end 'check'
 end 'main'
 ```
@@ -433,7 +433,7 @@ end 'Color'
 function main() returns ExitCode
   var c = Color.blue
   match c 'check'
-    Color.red then return 1
+    red then return 1
     default then return 0
   end 'check'
 end 'main'
@@ -453,9 +453,9 @@ end 'Status'
 function main() returns ExitCode
   var s = Status.approved
   let code = match s 'eval'
-    Status.pending gives 0
-    Status.approved gives 1
-    Status.rejected gives 2
+    pending gives 0
+    approved gives 1
+    rejected gives 2
   end 'eval'
   return code
 end 'main'
@@ -520,8 +520,8 @@ end 'Color'
 function main() returns ExitCode
   var c = Color.green
   match c 'check'
-    Color.red then return 1
-    Color.green then return 2
+    red then return 1
+    green then return 2
   end 'check'
 end 'main'
 ```

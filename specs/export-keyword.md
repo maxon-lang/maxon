@@ -388,9 +388,9 @@ end 'Color'
 function main() returns ExitCode
   var c = Color.blue
   match c 'check'
-    Color.blue then return 42
-    Color.red then return 0
-    Color.green then return 0
+    blue then return 42
+    red then return 0
+    green then return 0
   end 'check'
 end 'main'
 ```
@@ -540,8 +540,8 @@ end 'Direction'
 function main() returns ExitCode
   var d = Direction.up
   match d 'check'
-    Direction.up then return 42
-    Direction.down then return 0
+    up then return 42
+    down then return 0
   end 'check'
 end 'main'
 ```

@@ -51,9 +51,9 @@ function main() returns ExitCode
   var b = 20
   var result = a.compare(b)
   match result 'check'
-    Ordering.lessThan then return 0
-    Ordering.equalTo then return 1
-    Ordering.greaterThan then return 1
+    lessThan then return 0
+    equalTo then return 1
+    greaterThan then return 1
   end 'check'
 end 'main'
 ```
@@ -68,9 +68,9 @@ function main() returns ExitCode
   var b = 42
   var result = a.compare(b)
   match result 'check'
-    Ordering.lessThan then return 1
-    Ordering.equalTo then return 0
-    Ordering.greaterThan then return 1
+    lessThan then return 1
+    equalTo then return 0
+    greaterThan then return 1
   end 'check'
 end 'main'
 ```
@@ -85,9 +85,9 @@ function main() returns ExitCode
   var b = 10
   var result = a.compare(b)
   match result 'check'
-    Ordering.lessThan then return 1
-    Ordering.equalTo then return 1
-    Ordering.greaterThan then return 0
+    lessThan then return 1
+    equalTo then return 1
+    greaterThan then return 0
   end 'check'
 end 'main'
 ```
@@ -102,9 +102,9 @@ function main() returns ExitCode
   var b = true
   var result = a.compare(b)
   match result 'check'
-    Ordering.lessThan then return 0
-    Ordering.equalTo then return 1
-    Ordering.greaterThan then return 1
+    lessThan then return 0
+    equalTo then return 1
+    greaterThan then return 1
   end 'check'
 end 'main'
 ```
@@ -119,9 +119,9 @@ function main() returns ExitCode
   var b = true
   var result = a.compare(b)
   match result 'check'
-    Ordering.lessThan then return 1
-    Ordering.equalTo then return 0
-    Ordering.greaterThan then return 1
+    lessThan then return 1
+    equalTo then return 0
+    greaterThan then return 1
   end 'check'
 end 'main'
 ```
@@ -136,9 +136,9 @@ function main() returns ExitCode
   var b = 2.5
   var result = a.compare(b)
   match result 'check'
-    Ordering.lessThan then return 0
-    Ordering.equalTo then return 1
-    Ordering.greaterThan then return 1
+    lessThan then return 0
+    equalTo then return 1
+    greaterThan then return 1
   end 'check'
 end 'main'
 ```
@@ -153,9 +153,9 @@ function main() returns ExitCode
   var b = 2.71
   var result = a.compare(b)
   match result 'check'
-    Ordering.lessThan then return 1
-    Ordering.equalTo then return 1
-    Ordering.greaterThan then return 0
+    lessThan then return 1
+    equalTo then return 1
+    greaterThan then return 0
   end 'check'
 end 'main'
 ```
@@ -170,9 +170,9 @@ function main() returns ExitCode
   var x = 42.0
   var result = nan.compare(x)
   match result 'check'
-    Ordering.lessThan then return 0
-    Ordering.equalTo then return 1
-    Ordering.greaterThan then return 1
+    lessThan then return 0
+    equalTo then return 1
+    greaterThan then return 1
   end 'check'
 end 'main'
 ```
@@ -187,9 +187,9 @@ function main() returns ExitCode
   var x = 42.0
   var result = x.compare(nan)
   match result 'check'
-    Ordering.lessThan then return 1
-    Ordering.equalTo then return 1
-    Ordering.greaterThan then return 0
+    lessThan then return 1
+    equalTo then return 1
+    greaterThan then return 0
   end 'check'
 end 'main'
 ```
@@ -204,9 +204,9 @@ function main() returns ExitCode
   var b = 0.0 / 0.0
   var result = a.compare(b)
   match result 'check'
-    Ordering.lessThan then return 1
-    Ordering.equalTo then return 0
-    Ordering.greaterThan then return 1
+    lessThan then return 1
+    equalTo then return 0
+    greaterThan then return 1
   end 'check'
 end 'main'
 ```
@@ -221,9 +221,9 @@ function main() returns ExitCode
   var x = -999999.0
   var result = nan.compare(x)
   match result 'check'
-    Ordering.lessThan then return 0
-    Ordering.equalTo then return 1
-    Ordering.greaterThan then return 1
+    lessThan then return 0
+    equalTo then return 1
+    greaterThan then return 1
   end 'check'
 end 'main'
 ```
@@ -238,9 +238,9 @@ function main() returns ExitCode
   var neg = -0.0
   var result = pos.compare(neg)
   match result 'check'
-    Ordering.lessThan then return 1
-    Ordering.equalTo then return 0
-    Ordering.greaterThan then return 1
+    lessThan then return 1
+    equalTo then return 0
+    greaterThan then return 1
   end 'check'
 end 'main'
 ```
@@ -258,9 +258,9 @@ function main() returns ExitCode
   var b = 20 as Byte
   var result = a.compare(b)
   match result 'check'
-    Ordering.lessThan then return 0
-    Ordering.equalTo then return 1
-    Ordering.greaterThan then return 1
+    lessThan then return 0
+    equalTo then return 1
+    greaterThan then return 1
   end 'check'
 end 'main'
 ```
