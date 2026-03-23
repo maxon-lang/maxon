@@ -47,6 +47,10 @@ public partial class X86CodeEmitter() {
   private readonly Dictionary<string, int> _ucddataLabels = [];
   private readonly List<(int offset, string label)> _ucddataFixups = [];
 
+  // Jump table fixups: entries stored in rdata that point to code labels.
+  // Each entry is (slotIndex within table, code label, table base rdata label).
+  private readonly List<(int slotIndex, string codeLabel, string tableLabel)> _jumpTableFixups = [];
+
   // Chkstk call sites for patching
   private readonly List<int> _chkstkCallSites = [];
 
@@ -317,6 +321,9 @@ public partial class X86CodeEmitter() {
         break;
       case X86JmpOp jmp:
         EmitJmp(jmp.Target);
+        break;
+      case X86JumpTableOp jumpTable:
+        EmitJumpTableDispatch(jumpTable);
         break;
       case X86LabelDefOp labelDef:
         DefineLabel(labelDef.Name);
@@ -721,6 +728,32 @@ public partial class X86CodeEmitter() {
       var rel = target - (offset + 4);
       PatchDword(offset, rel);
     }
+  }
+
+  public void ResolveJumpTableFixups(int rvaOffset) {
+    // Each table entry is a 4-byte signed offset from the table base to a code label.
+    // At runtime: target = tableBase + entry.
+    var codeSize = _code.Count;
+    foreach (var (slotIndex, codeLabel, tableLabel) in _jumpTableFixups) {
+      if (!_labels.TryGetValue(codeLabel, out var codeLabelOffset)) {
+        throw new InvalidOperationException($"Unresolved jump table target: {codeLabel}");
+      }
+      if (!_rdataLabels.TryGetValue(tableLabel, out var tableBaseOffset)) {
+        throw new InvalidOperationException($"Unresolved jump table label: {tableLabel}");
+      }
+
+      // entry = (textRVA + codeLabelOffset) - (rdataRVA + tableBaseOffset)
+      //       = codeLabelOffset - (codeSize + rvaOffset + tableBaseOffset)
+      var entry = codeLabelOffset - (codeSize + rvaOffset + tableBaseOffset);
+      PatchRdataDword(tableBaseOffset + slotIndex * 4, entry);
+    }
+  }
+
+  private void PatchRdataDword(int offset, int value) {
+    _rdata[offset]     = (byte)(value & 0xFF);
+    _rdata[offset + 1] = (byte)((value >> 8) & 0xFF);
+    _rdata[offset + 2] = (byte)((value >> 16) & 0xFF);
+    _rdata[offset + 3] = (byte)((value >> 24) & 0xFF);
   }
 
   public void ResolveSymdata(int rvaOffset) {
@@ -1636,6 +1669,54 @@ public partial class X86CodeEmitter() {
     EmitByte(0xE9);
     _jumpFixups.Add((_code.Count, target));
     EmitDword(0); // placeholder
+  }
+
+  private void EmitJumpTableDispatch(X86JumpTableOp jt) {
+    var indexReg = jt.IndexReg;
+
+    // Unsigned compare catches negative values too (they wrap to large positives)
+    EmitCmpRegImm(indexReg, jt.CaseCount);
+    EmitJcc("ae", jt.DefaultTarget);
+
+    EmitLeaRegRipRel(X86Register.R11, jt.RdataLabel);
+    EmitMovsxdRegBaseIndexScale4(indexReg, X86Register.R11, indexReg);
+    EmitAddRegReg(X86Register.R11, indexReg);
+    EmitJmpIndirect(X86Register.R11);
+
+    for (int i = 0; i < jt.CaseTargets.Length; i++) {
+      _jumpTableFixups.Add((i, jt.CaseTargets[i], jt.RdataLabel));
+    }
+  }
+
+  private void EmitMovsxdRegBaseIndexScale4(X86Register dest, X86Register baseReg, X86Register index) {
+    RequireGpr(dest, nameof(EmitMovsxdRegBaseIndexScale4));
+    RequireGpr(baseReg, nameof(EmitMovsxdRegBaseIndexScale4));
+    RequireGpr(index, nameof(EmitMovsxdRegBaseIndexScale4));
+    // MOVSXD r64, dword [base + index*4]: REX.W + 63 /r with SIB
+    // ModRM: mod=00, reg=dest, r/m=100 (SIB follows)
+    // SIB: scale=10 (*4), index=index, base=base
+    Rex.W().Reg(dest).Index(index).Rm(baseReg).Emit(this);
+    EmitByte(0x63);
+    var destCode = RegCode(dest);
+    var baseCode = RegCode(baseReg);
+    var indexCode = RegCode(index);
+    if (baseCode == 5) {
+      // RBP/R13 as base with mod=00 means [RIP+disp32], so use mod=01 with disp8=0
+      EmitByte((byte)(0x44 | (destCode << 3))); // mod=01, r/m=100 (SIB)
+      EmitByte((byte)(0x80 | (indexCode << 3) | baseCode)); // scale=10 (*4), index, base
+      EmitByte(0x00); // disp8 = 0
+    } else {
+      EmitByte((byte)(0x04 | (destCode << 3))); // mod=00, r/m=100 (SIB)
+      EmitByte((byte)(0x80 | (indexCode << 3) | baseCode)); // scale=10 (*4), index, base
+    }
+  }
+
+  private void EmitJmpIndirect(X86Register target) {
+    RequireGpr(target, nameof(EmitJmpIndirect));
+    // JMP r/m64: FF /4 (mod=11, reg=100, r/m=target)
+    Rex.NoW().Rm(target).EmitIf(this);
+    EmitByte(0xFF);
+    EmitByte((byte)(0xE0 | RegCode(target))); // 11 100 rrr = 0xE0 | reg
   }
 
   // --- Struct support: LEA and indirect memory operations ---

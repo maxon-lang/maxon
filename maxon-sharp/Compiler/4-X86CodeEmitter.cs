@@ -134,6 +134,7 @@ public class X86CodeEmitter {
     if (emitter.HasRdata) {
       var rdataRvaOffset = (int)(codeSizeVirtual - codeSize);
       emitter.ResolveRdata(rdataRvaOffset);
+      emitter.ResolveJumpTableFixups(rdataRvaOffset);
     }
 
     // Resolve global references (data section comes after rdata)

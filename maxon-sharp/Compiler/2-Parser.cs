@@ -11741,13 +11741,9 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
           continue;
         }
 
-        var field = structType.GetField(fieldNameToken.Value);
-        if (field == null) {
-          throw new CompileError(ErrorCode.SemanticUnknownField,
+        var field = structType.GetField(fieldNameToken.Value) ?? throw new CompileError(ErrorCode.SemanticUnknownField,
             $"Type '{typeName}' has no field '{fieldNameToken.Value}'",
             fieldNameToken.Line, fieldNameToken.Column);
-        }
-
         if (!providedFields.Add(fieldNameToken.Value)) {
           throw new CompileError(ErrorCode.SemanticDuplicateDefinition,
             $"Duplicate field '{fieldNameToken.Value}' in '{typeName}' literal",

@@ -105,6 +105,13 @@ public class RegisterManager : RegisterManagerBase<X86Register, X86XmmRegister, 
   // --- X86-specific Emit methods ---
 
   /// <summary>
+  /// Ensure a value is in a GPR and return the physical register.
+  /// </summary>
+  public X86Register LoadToRegister(StdValue value, MlirBlock<X86Op> block) {
+    return EnsureInRegister(value, block);
+  }
+
+  /// <summary>
   /// Emit a two-operand register-register instruction (e.g. add, sub).
   /// </summary>
   public void EmitBinaryRegReg(StdValue lhs, StdValue rhs, StdValue result,

@@ -838,6 +838,20 @@ public static class StandardToX86Conversion {
             x86Block.AddOp(new X86JmpOp($"{func.Name}.{br.Target}"));
             break;
 
+          case StdSwitchOp switchOp: {
+            var indexReg = regManager.LoadToRegister(switchOp.Scrutinee, x86Block);
+            var tableLabel = $"__jt_{func.Name}_{NextLabelId()}";
+            var scopedTargets = switchOp.CaseTargets
+                .Select(t => $"{func.Name}.{t}").ToArray();
+            var scopedDefault = $"{func.Name}.{switchOp.DefaultTarget}";
+
+            x86Block.AddOp(new X86JumpTableOp(indexReg, switchOp.CaseTargets.Length,
+                tableLabel, scopedDefault, scopedTargets));
+
+            outputModule.RdataEntries.Add((tableLabel, new byte[switchOp.CaseTargets.Length * 4], 4));
+            break;
+          }
+
           case StdCallOp callOp:
             if (!tailCalls.ContainsValue(callOp))
               regManager.EmitCall(callOp.Callee, callOp.Args, callOp.Result, x86Block,

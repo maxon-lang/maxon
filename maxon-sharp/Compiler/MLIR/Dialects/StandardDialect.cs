@@ -848,6 +848,15 @@ public class StdBrOp(string target) : StandardOp {
   public override int PureResultId => -1;
 }
 
+public class StdSwitchOp(StdI64 scrutinee, string[] caseTargets, string defaultTarget) : StandardOp {
+  public override string Mnemonic => $"cf.switch %{Scrutinee.Id} [{CaseTargets.Length} cases] default={DefaultTarget}";
+  public StdI64 Scrutinee { get; } = scrutinee;
+  public string[] CaseTargets { get; } = caseTargets;
+  public string DefaultTarget { get; } = defaultTarget;
+  public override List<StdValue> ReadValues => [Scrutinee];
+  public override int PureResultId => -1;
+}
+
 // === Function Operations ===
 
 public class StdParamOp(int index, string name, StdValue result) : StandardOp {

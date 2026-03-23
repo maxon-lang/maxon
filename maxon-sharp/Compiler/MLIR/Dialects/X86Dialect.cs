@@ -336,6 +336,16 @@ public class X86JmpOp(string target) : X86Op {
   public override string Mnemonic => $"x86.jmp {Target}";
 }
 
+public class X86JumpTableOp(X86Register indexReg, int caseCount,
+    string rdataLabel, string defaultTarget, string[] caseTargets) : X86Op {
+  public X86Register IndexReg { get; } = indexReg;
+  public int CaseCount { get; } = caseCount;
+  public string RdataLabel { get; } = rdataLabel;
+  public string DefaultTarget { get; } = defaultTarget;
+  public string[] CaseTargets { get; } = caseTargets;
+  public override string Mnemonic => $"x86.jump_table {IndexReg.ToString().ToLower()}, {CaseCount} cases, default={DefaultTarget}";
+}
+
 public class X86LabelDefOp(string name) : X86Op {
   public string Name { get; } = name;
   public override string Mnemonic => $"x86.label {Name}";
