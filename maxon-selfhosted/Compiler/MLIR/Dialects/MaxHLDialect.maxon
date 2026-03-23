@@ -4,41 +4,50 @@
 
 export typealias ValueIdArray = Array with ValueId
 
+export enum BinOpKind
+  add = "add"
+  sub = "sub"
+  mul = "mul"
+  div = "div"
+  mod = "mod"
+  bitAnd = "bitAnd"
+  bitOr = "bitOr"
+  bitXor = "bitXor"
+  shl = "shl"
+  shr = "shr"
+end 'BinOpKind'
+
+export enum UnaryOpKind
+  neg = "neg"
+  bitNot = "bitNot"
+end 'UnaryOpKind'
+
+export enum CmpPredicate
+  eq = "eq"
+  ne = "ne"
+  lt = "lt"
+  le = "le"
+  gt = "gt"
+  ge = "ge"
+end 'CmpPredicate'
+
 export union MaxHLOp
   // Literals
-  literal(resultId ValueId, value ParsedInt)
-  floatLiteral(resultId ValueId, rawBits ParsedInt)
+  literal(resultId ValueId, value ParsedInt, isFloat bool)
 
   // Variables
   varDecl(slotId VarSlot, valueId ValueId)
   varLoad(resultId ValueId, slotId VarSlot)
   varStore(slotId VarSlot, valueId ValueId)
 
-  // Integer arithmetic
-  add(resultId ValueId, leftId ValueId, rightId ValueId)
-  sub(resultId ValueId, leftId ValueId, rightId ValueId)
-  mul(resultId ValueId, leftId ValueId, rightId ValueId)
-  div(resultId ValueId, leftId ValueId, rightId ValueId)
-  mod(resultId ValueId, leftId ValueId, rightId ValueId)
+  // Arithmetic and bitwise binary ops
+  binop(resultId ValueId, leftId ValueId, rightId ValueId, opKind BinOpKind)
 
-  // Unary
-  neg(resultId ValueId, operandId ValueId)
-  bitNot(resultId ValueId, operandId ValueId)
-
-  // Bitwise
-  bitAnd(resultId ValueId, leftId ValueId, rightId ValueId)
-  bitOr(resultId ValueId, leftId ValueId, rightId ValueId)
-  bitXor(resultId ValueId, leftId ValueId, rightId ValueId)
-  shl(resultId ValueId, leftId ValueId, rightId ValueId)
-  shr(resultId ValueId, leftId ValueId, rightId ValueId)
+  // Unary ops
+  unop(resultId ValueId, operandId ValueId, opKind UnaryOpKind)
 
   // Comparisons
-  cmpEq(resultId ValueId, leftId ValueId, rightId ValueId, isFloat bool)
-  cmpNe(resultId ValueId, leftId ValueId, rightId ValueId, isFloat bool)
-  cmpLt(resultId ValueId, leftId ValueId, rightId ValueId, isFloat bool)
-  cmpLe(resultId ValueId, leftId ValueId, rightId ValueId, isFloat bool)
-  cmpGt(resultId ValueId, leftId ValueId, rightId ValueId, isFloat bool)
-  cmpGe(resultId ValueId, leftId ValueId, rightId ValueId, isFloat bool)
+  cmp(resultId ValueId, leftId ValueId, rightId ValueId, predicate CmpPredicate, isFloat bool)
 
   // Control flow (terminators — placed as block terminators, not regular ops)
   condBr(condId ValueId, thenTarget BlockId, elseTarget BlockId)
@@ -57,29 +66,13 @@ export function maxHLOpToString(op MaxHLOp, blocks MlirBlockArray) returns Strin
   let lb = "\{"
   let rb = "\}"
   return match op 'print'
-    literal(resultId, value) gives "%{resultId} = maxon.literal {lb}value = {value} : i64{rb}"
-    floatLiteral(resultId, rawBits) gives "%{resultId} = maxon.float_literal {lb}rawBits = {rawBits}{rb}"
+    literal(resultId, value, isFloat) gives "%{resultId} = maxon.literal {lb}value = {value} : {typeKind(isFloat)}{rb}"
     varDecl(slotId, valueId) gives "maxon.var_decl slot_{slotId}, %{valueId}"
     varLoad(resultId, slotId) gives "%{resultId} = maxon.var_load slot_{slotId}"
     varStore(slotId, valueId) gives "maxon.var_store slot_{slotId}, %{valueId}"
-    add(resultId, leftId, rightId) gives "%{resultId} = maxon.binop %{leftId}, %{rightId} {lb}op = add{rb} {lb}kind = i64{rb}"
-    sub(resultId, leftId, rightId) gives "%{resultId} = maxon.binop %{leftId}, %{rightId} {lb}op = sub{rb} {lb}kind = i64{rb}"
-    mul(resultId, leftId, rightId) gives "%{resultId} = maxon.binop %{leftId}, %{rightId} {lb}op = mul{rb} {lb}kind = i64{rb}"
-    div(resultId, leftId, rightId) gives "%{resultId} = maxon.binop %{leftId}, %{rightId} {lb}op = div{rb} {lb}kind = i64{rb}"
-    mod(resultId, leftId, rightId) gives "%{resultId} = maxon.binop %{leftId}, %{rightId} {lb}op = mod{rb} {lb}kind = i64{rb}"
-    neg(resultId, operandId) gives "%{resultId} = maxon.unop %{operandId} {lb}op = neg{rb} {lb}kind = i64{rb}"
-    bitNot(resultId, operandId) gives "%{resultId} = maxon.unop %{operandId} {lb}op = bitNot{rb} {lb}kind = i64{rb}"
-    bitAnd(resultId, leftId, rightId) gives "%{resultId} = maxon.binop %{leftId}, %{rightId} {lb}op = bitAnd{rb} {lb}kind = i64{rb}"
-    bitOr(resultId, leftId, rightId) gives "%{resultId} = maxon.binop %{leftId}, %{rightId} {lb}op = bitOr{rb} {lb}kind = i64{rb}"
-    bitXor(resultId, leftId, rightId) gives "%{resultId} = maxon.binop %{leftId}, %{rightId} {lb}op = bitXor{rb} {lb}kind = i64{rb}"
-    shl(resultId, leftId, rightId) gives "%{resultId} = maxon.binop %{leftId}, %{rightId} {lb}op = shl{rb} {lb}kind = i64{rb}"
-    shr(resultId, leftId, rightId) gives "%{resultId} = maxon.binop %{leftId}, %{rightId} {lb}op = shr{rb} {lb}kind = i64{rb}"
-    cmpEq(resultId, leftId, rightId, isFloat) gives "%{resultId} = maxon.binop %{leftId}, %{rightId} {lb}op = eq{rb} {lb}kind = {cmpKind(isFloat)}{rb}"
-    cmpNe(resultId, leftId, rightId, isFloat) gives "%{resultId} = maxon.binop %{leftId}, %{rightId} {lb}op = ne{rb} {lb}kind = {cmpKind(isFloat)}{rb}"
-    cmpLt(resultId, leftId, rightId, isFloat) gives "%{resultId} = maxon.binop %{leftId}, %{rightId} {lb}op = lt{rb} {lb}kind = {cmpKind(isFloat)}{rb}"
-    cmpLe(resultId, leftId, rightId, isFloat) gives "%{resultId} = maxon.binop %{leftId}, %{rightId} {lb}op = le{rb} {lb}kind = {cmpKind(isFloat)}{rb}"
-    cmpGt(resultId, leftId, rightId, isFloat) gives "%{resultId} = maxon.binop %{leftId}, %{rightId} {lb}op = gt{rb} {lb}kind = {cmpKind(isFloat)}{rb}"
-    cmpGe(resultId, leftId, rightId, isFloat) gives "%{resultId} = maxon.binop %{leftId}, %{rightId} {lb}op = ge{rb} {lb}kind = {cmpKind(isFloat)}{rb}"
+    binop(resultId, leftId, rightId, opKind) gives "%{resultId} = maxon.binop %{leftId}, %{rightId} {lb}op = {opKind.rawValue}{rb} {lb}kind = i64{rb}"
+    unop(resultId, operandId, opKind) gives "%{resultId} = maxon.unop %{operandId} {lb}op = {opKind.rawValue}{rb} {lb}kind = i64{rb}"
+    cmp(resultId, leftId, rightId, predicate, isFloat) gives "%{resultId} = maxon.binop %{leftId}, %{rightId} {lb}op = {predicate.rawValue}{rb} {lb}kind = {typeKind(isFloat)}{rb}"
     condBr(condId, thenTarget, elseTarget) gives maxHLCondBrToString(condId, thenTarget: thenTarget, elseTarget: elseTarget, blocks: blocks)
     br(target) gives maxHLBrToString(target, blocks: blocks)
     call(resultId, callee, argIds) gives "%{resultId} = maxon.call @{String.from(callee)}({formatArgIds(argIds)})"
@@ -100,12 +93,12 @@ function maxHLBrToString(target BlockId, blocks MlirBlockArray) returns String
   return "maxon.br {label}"
 end 'maxHLBrToString'
 
-function cmpKind(isFloat bool) returns String
+function typeKind(isFloat bool) returns String
   if isFloat 'float'
     return "f64"
   end 'float'
   return "i64"
-end 'cmpKind'
+end 'typeKind'
 
 export function formatArgIds(argIds ValueIdArray) returns String
   var result = ""

@@ -178,7 +178,7 @@ function parseFunction(project Project, module MlirModule, tokens TokenArray, st
   // Implicit void return if body did not end with a return
   if not block.hasTerminator 'needsImplicitRet'
     let zeroId = nextValueId(project)
-    emitOp(block, op: MlirOp.maxhl(MaxHLOp.literal(zeroId, 0)))
+    emitOp(block, op: MlirOp.maxhl(MaxHLOp.literal(zeroId, 0, false)))
     finalizeBlock(block, terminator: MlirOp.maxhl(MaxHLOp.ret(zeroId)))
   end 'needsImplicitRet'
 
@@ -281,7 +281,7 @@ function parseReturnStatement(project Project, block MlirBlock, tokens TokenArra
   let nextTok = tokenAt(tokens, pos: pos)
   if nextTok.kind == TokenKind.newline or nextTok.kind == TokenKind.end or nextTok.kind == TokenKind.eof 'bareReturn'
     let zeroId = nextValueId(project)
-    emitOp(block, op: MlirOp.maxhl(MaxHLOp.literal(zeroId, 0)))
+    emitOp(block, op: MlirOp.maxhl(MaxHLOp.literal(zeroId, 0, false)))
     finalizeBlock(block, terminator: MlirOp.maxhl(MaxHLOp.ret(zeroId)))
     return pos
   end 'bareReturn'
@@ -640,22 +640,22 @@ end 'infixBindingPower'
 function emitBinaryOp(block MlirBlock, kind TokenKind, resultId ValueId, leftId ValueId, rightId ValueId, leftIsFloat bool, rightIsFloat bool) throws ParserError
   let isFloat = leftIsFloat or rightIsFloat
   let hlOp = match kind 'emit'
-    or gives MaxHLOp.bitOr(resultId, leftId, rightId)
-    xor gives MaxHLOp.bitXor(resultId, leftId, rightId)
-    and gives MaxHLOp.bitAnd(resultId, leftId, rightId)
-    shl gives MaxHLOp.shl(resultId, leftId, rightId)
-    shr gives MaxHLOp.shr(resultId, leftId, rightId)
-    equalsEquals gives MaxHLOp.cmpEq(resultId, leftId, rightId, isFloat)
-    bangEquals gives MaxHLOp.cmpNe(resultId, leftId, rightId, isFloat)
-    lessThan gives MaxHLOp.cmpLt(resultId, leftId, rightId, isFloat)
-    lessEquals gives MaxHLOp.cmpLe(resultId, leftId, rightId, isFloat)
-    greaterThan gives MaxHLOp.cmpGt(resultId, leftId, rightId, isFloat)
-    greaterEquals gives MaxHLOp.cmpGe(resultId, leftId, rightId, isFloat)
-    plus gives MaxHLOp.add(resultId, leftId, rightId)
-    minus gives MaxHLOp.sub(resultId, leftId, rightId)
-    star gives MaxHLOp.mul(resultId, leftId, rightId)
-    slash gives MaxHLOp.div(resultId, leftId, rightId)
-    mod gives MaxHLOp.mod(resultId, leftId, rightId)
+    or gives MaxHLOp.binop(resultId, leftId, rightId, BinOpKind.bitOr)
+    xor gives MaxHLOp.binop(resultId, leftId, rightId, BinOpKind.bitXor)
+    and gives MaxHLOp.binop(resultId, leftId, rightId, BinOpKind.bitAnd)
+    shl gives MaxHLOp.binop(resultId, leftId, rightId, BinOpKind.shl)
+    shr gives MaxHLOp.binop(resultId, leftId, rightId, BinOpKind.shr)
+    equalsEquals gives MaxHLOp.cmp(resultId, leftId, rightId, CmpPredicate.eq, isFloat)
+    bangEquals gives MaxHLOp.cmp(resultId, leftId, rightId, CmpPredicate.ne, isFloat)
+    lessThan gives MaxHLOp.cmp(resultId, leftId, rightId, CmpPredicate.lt, isFloat)
+    lessEquals gives MaxHLOp.cmp(resultId, leftId, rightId, CmpPredicate.le, isFloat)
+    greaterThan gives MaxHLOp.cmp(resultId, leftId, rightId, CmpPredicate.gt, isFloat)
+    greaterEquals gives MaxHLOp.cmp(resultId, leftId, rightId, CmpPredicate.ge, isFloat)
+    plus gives MaxHLOp.binop(resultId, leftId, rightId, BinOpKind.add)
+    minus gives MaxHLOp.binop(resultId, leftId, rightId, BinOpKind.sub)
+    star gives MaxHLOp.binop(resultId, leftId, rightId, BinOpKind.mul)
+    slash gives MaxHLOp.binop(resultId, leftId, rightId, BinOpKind.div)
+    mod gives MaxHLOp.binop(resultId, leftId, rightId, BinOpKind.mod)
     default throws ParserError.unhandledToken
   end 'emit'
   emitOp(block, op: MlirOp.maxhl(hlOp))
@@ -696,11 +696,11 @@ function parseExpressionBP(project Project, block MlirBlock, tokens TokenArray, 
           foldedLeft = 0
         end 'strNeq'
         let leftLitId = nextValueId(project)
-        emitOp(block, op: MlirOp.maxhl(MaxHLOp.literal(leftLitId, foldedLeft)))
+        emitOp(block, op: MlirOp.maxhl(MaxHLOp.literal(leftLitId, foldedLeft, false)))
         let rightLitId = nextValueId(project)
-        emitOp(block, op: MlirOp.maxhl(MaxHLOp.literal(rightLitId, 1)))
+        emitOp(block, op: MlirOp.maxhl(MaxHLOp.literal(rightLitId, 1, false)))
         let resultId = nextValueId(project)
-        emitOp(block, op: MlirOp.maxhl(MaxHLOp.cmpEq(resultId, leftLitId, rightLitId, false)))
+        emitOp(block, op: MlirOp.maxhl(MaxHLOp.cmp(resultId, leftLitId, rightLitId, CmpPredicate.eq, false)))
         leftId = resultId
         leftIsFloat = false
         leftIsStringConst = false
@@ -739,12 +739,12 @@ function parseUnary(project Project, block MlirBlock, tokens TokenArray, startPo
   if token.kind == TokenKind.minus 'isNeg'
     let operand = parseUnary(project, block: block, tokens: tokens, startPos: startPos + 1, filePath: filePath)
     let resultId = nextValueId(project)
-    emitOp(block, op: MlirOp.maxhl(MaxHLOp.neg(resultId, operand.valueId)))
+    emitOp(block, op: MlirOp.maxhl(MaxHLOp.unop(resultId, operand.valueId, UnaryOpKind.neg)))
     return ExprResult{valueId: resultId, nextPos: operand.nextPos, isFloat: operand.isFloat, isStringConst: false, stringConstValue: ByteArray{}}
   end 'isNeg' else if token.kind == TokenKind.not 'isNot'
     let operand = parseUnary(project, block: block, tokens: tokens, startPos: startPos + 1, filePath: filePath)
     let resultId = nextValueId(project)
-    emitOp(block, op: MlirOp.maxhl(MaxHLOp.bitNot(resultId, operand.valueId)))
+    emitOp(block, op: MlirOp.maxhl(MaxHLOp.unop(resultId, operand.valueId, UnaryOpKind.bitNot)))
     return ExprResult{valueId: resultId, nextPos: operand.nextPos, isFloat: false, isStringConst: false, stringConstValue: ByteArray{}}
   end 'isNot'
 
@@ -839,14 +839,14 @@ end 'raiseUnexpectedToken'
 function parseIntLiteral(project Project, block MlirBlock, token Token, startPos TokenIndex) returns ExprResult
   let value = parseInt(token.value)
   let id = nextValueId(project)
-  emitOp(block, op: MlirOp.maxhl(MaxHLOp.literal(id, value)))
+  emitOp(block, op: MlirOp.maxhl(MaxHLOp.literal(id, value, false)))
   return ExprResult{valueId: id, nextPos: startPos + 1, isFloat: false, isStringConst: false, stringConstValue: ByteArray{}}
 end 'parseIntLiteral'
 
 function parseFloatLiteral(project Project, block MlirBlock, token Token, startPos TokenIndex) returns ExprResult
   let rawBits = parseFloatBits(token.value)
   let id = nextValueId(project)
-  emitOp(block, op: MlirOp.maxhl(MaxHLOp.floatLiteral(id, rawBits)))
+  emitOp(block, op: MlirOp.maxhl(MaxHLOp.literal(id, rawBits, true)))
   return ExprResult{valueId: id, nextPos: startPos + 1, isFloat: true, isStringConst: false, stringConstValue: ByteArray{}}
 end 'parseFloatLiteral'
 
@@ -857,7 +857,7 @@ end 'parseStringLiteral'
 
 function parseBoolLiteral(project Project, block MlirBlock, startPos TokenIndex, value ParsedInt) returns ExprResult
   let id = nextValueId(project)
-  emitOp(block, op: MlirOp.maxhl(MaxHLOp.literal(id, value)))
+  emitOp(block, op: MlirOp.maxhl(MaxHLOp.literal(id, value, false)))
   return ExprResult{valueId: id, nextPos: startPos + 1, isFloat: false, isStringConst: false, stringConstValue: ByteArray{}}
 end 'parseBoolLiteral'
 
