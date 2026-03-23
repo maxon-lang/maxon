@@ -4851,6 +4851,34 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
     throw new CompileError(ErrorCode.ParserExpectedExpression, "Expected default value", Current().Line, Current().Column);
   }
 
+  /// Captures the tokens of a default value expression without evaluating it.
+  /// The tokens are stored and re-parsed via ParseExpression() at each call site.
+  /// This supports any literal expression as a default value.
+  private TokenRangeAttr CaptureDefaultValueTokens() {
+    var startPos = _pos;
+    // Skip over the expression by tracking bracket/brace/paren nesting.
+    // The expression ends at an unmatched ',' or ')' at depth 0.
+    var depth = 0;
+    while (_pos < _tokens.Count) {
+      var type = Current().Type;
+      if (type == TokenType.LeftParen || type == TokenType.LeftBracket || type == TokenType.LeftBrace) {
+        depth++;
+      } else if (type == TokenType.RightParen || type == TokenType.RightBracket || type == TokenType.RightBrace) {
+        if (depth == 0) break;
+        depth--;
+      } else if (type == TokenType.Comma && depth == 0) {
+        break;
+      } else if (type == TokenType.Newline && depth == 0) {
+        break;
+      }
+      _pos++;
+    }
+    if (_pos == startPos) {
+      throw new CompileError(ErrorCode.ParserExpectedExpression, "Expected default value", Current().Line, Current().Column);
+    }
+    return new TokenRangeAttr(_tokens.GetRange(startPos, _pos - startPos));
+  }
+
   private void ParseFunction(MlirModule<MaxonOp> module) {
     Expect(TokenType.Function);
     var nameToken = ExpectIdentifierLike();
@@ -4908,8 +4936,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
         var paramType = ParseTypeRef();
         if (Check(TokenType.Equals)) {
           Advance(); // consume '='
-          var (_, defaultValue) = ParseFieldDefault();
-          defaults[paramIndex] = defaultValue;
+          defaults[paramIndex] = CaptureDefaultValueTokens();
         }
         names.Add(paramToken.Value);
         types.Add(paramType);
@@ -13885,7 +13912,24 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
       _currentBlock!.AddOp(enumOp);
       return enumOp.Result;
     }
+    if (attr is TokenRangeAttr tokenRange) {
+      return EmitDefaultFromTokens(tokenRange);
+    }
     throw new CompileError(ErrorCode.ParserExpectedExpression, context, errorToken.Line, errorToken.Column);
+  }
+
+  /// Re-parses stored default value tokens via ParseExpression(), so any literal
+  /// expression (strings, arrays, structs, characters, etc.) works as a default.
+  private MaxonValue EmitDefaultFromTokens(TokenRangeAttr tokenRange) {
+    var savedPos = _pos;
+    var savedTokens = _tokens;
+    // Inject the stored tokens plus an EOF sentinel so ParseExpression stops cleanly
+    _tokens = [.. tokenRange.Tokens, new Token(TokenType.Eof, "", 0, 0)];
+    _pos = 0;
+    var result = ResolveExprValue(ParseExpression());
+    _tokens = savedTokens;
+    _pos = savedPos;
+    return result;
   }
 
   private static long ParseIntegerLiteral(Token token) {

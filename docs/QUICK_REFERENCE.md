@@ -156,9 +156,17 @@ function add(a int, b int) returns int
     return a + b
 end 'add'
 
-function greet(name String, title String = "Mr.")  // default value
+function greet(name String, title String = "Mr.")  // string default
     print("Hello, {title} {name}")
 end 'greet'
+
+function process(items IntArray = [10, 20, 12]) returns Integer  // array default
+    return items.count()
+end 'process'
+
+// Any literal expression is supported as a default value:
+// integers, floats, bools, strings, arrays, enum cases,
+// struct construction, character literals, byte string literals
 
 // Calling: first arg positional, rest named
 greet("Smith", title: "Dr.")

@@ -177,7 +177,17 @@ function_decl = export_prefix 'function' IDENTIFIER '(' [ param_list ] ')'
                 'end' LABEL
 
 param_list    = param { ',' param }
-param         = IDENTIFIER type_ref [ '=' expression ]
+param         = IDENTIFIER type_ref [ '=' default_value ]
+
+default_value = [ '-' ] INTEGER                              (* integer literal *)
+              | [ '-' ] FLOAT                                (* float literal *)
+              | BOOL                                         (* boolean literal *)
+              | STRING                                       (* string literal *)
+              | CHARACTER                                    (* character literal, e.g. '/' *)
+              | BYTE_STRING                                  (* byte string literal, e.g. b"data" *)
+              | IDENTIFIER '.' IDENTIFIER                    (* enum case, e.g. Priority.medium *)
+              | array_literal                                (* array literal, e.g. [10, 20, 12] *)
+              | struct_literal                               (* struct constructor, e.g. Point{x: 0, y: 0} *)
 
 throws_clause = 'throws' type_ref
 ```

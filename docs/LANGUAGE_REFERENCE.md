@@ -1562,21 +1562,67 @@ greet("Alice")    // Single param is positional
 
 ### Default Values
 
-Parameters can have default values. Parameters with defaults can be omitted at the call site:
+Parameters can have default values. Parameters with defaults can be omitted at the call site. Any literal expression is supported as a default value, including integers, floats, booleans, strings, arrays, enum cases, struct construction, character literals, and byte string literals.
 
 ```maxon
 function greet(name String, title String = "Mr.")
-    print("Hello, " + title + " " + name)
+    print("Hello, {title} {name}")
 end 'greet'
 
 greet("Smith")                    // Uses default title
 greet("Smith", title: "Dr.")      // Override default
+
+// String default
+function connect(host String = "localhost") returns ExitCode
+    // ...
+end 'connect'
+
+// Array default
+function process(items IntArray = [10, 20, 12]) returns Integer
+    // ...
+end 'process'
+
+// Integer default
+function retry(attempts Count = 3) returns ExitCode
+    // ...
+end 'retry'
+
+// Float default
+function scale(factor MathValue = 1.0) returns MathValue
+    // ...
+end 'scale'
+
+// Bool default
+function run(verbose bool = false) returns ExitCode
+    // ...
+end 'run'
+
+// Enum default
+function setLevel(level Priority = Priority.medium) returns ExitCode
+    // ...
+end 'setLevel'
+
+// Struct default
+function draw(origin Point = Point{x: 0, y: 0}) returns ExitCode
+    // ...
+end 'draw'
+
+// Character default
+function setSeparator(sep Character = '/') returns ExitCode
+    // ...
+end 'setSeparator'
+
+// Byte string default
+function send(header ByteArray = b"HTTP/1.1") returns ExitCode
+    // ...
+end 'send'
 ```
 
 **Rules:**
 - Parameters with defaults must come after required parameters
 - Default values are evaluated at call site
 - Arguments may be omitted if they have defaults
+- Any literal expression is supported as a default value
 
 ### Function Overloads
 
