@@ -136,7 +136,7 @@ export function runAllSpecTests(filter String, target Target, updateRequired boo
       end 'parseFailed'
 
       // Step 3: Run the test from fragment
-      let result = runTestFromFragment(fragment, projectRoot: root, target: target, captureTrace: updateRequired)
+      let result = runTestFromFragment(fragment, projectRoot: root, target: target, captureTrace: updateRequired, specName: specName)
 
       // Re-write fragment with compiled IR
       if not result.compileIr.isEmpty() 'hasIr'
@@ -194,17 +194,12 @@ export function runAllSpecTests(filter String, target Target, updateRequired boo
 end 'runAllSpecTests'
 
 // Run a single test from a parsed fragment. Returns TestResult.
-function runTestFromFragment(fragment Fragment, projectRoot FilePath, target Target, captureTrace bool = false) returns TestResult
+function runTestFromFragment(fragment Fragment, projectRoot FilePath, target Target, captureTrace bool = false, specName String) returns TestResult
   let tempDir = projectRoot.join("temp")
-  let tempSource = tempDir.join("spectest_temp.maxon")
+  let tempSource = tempDir.join("{specName}.maxon")
   let ext = executableExtension(target)
-  let tempExe = tempDir.join("spectest_temp{ext}")
+  let tempExe = tempDir.join("{specName}{ext}")
   let testName = fragment.testName
-
-  // Write source from fragment to temp file
-  try File.writeText(tempSource, content: fragment.source) otherwise 'writeErr'
-    return TestResult{testName: testName, passed: false, errorMessage: "Could not write temp file", filePath: fragment.filePath, loweringLog: "", compileIr: ""}
-  end 'writeErr'
 
   // Enable trace capture for RequiredLowering validation or --update-required
   let needTrace = fragment.expectation.hasRequiredLowering or captureTrace
@@ -213,9 +208,9 @@ function runTestFromFragment(fragment Fragment, projectRoot FilePath, target Tar
     startCapturingTrace()
   end 'enableTrace'
 
-  // Compile using the self-hosted compiler, capturing any error output
+  // Compile source directly from memory, capturing any error output
   startCapturingErrors()
-  let compileResult = try compileWithIr(tempSource, target: target) otherwise 'compileFailed'
+  let compileResult = try compileSourceWithIr(fragment.source, virtualPath: tempSource.toString(), target: target, outputPath: tempExe) otherwise 'compileFailed'
     let capturedErrors = stopCapturingErrors()
     if needTrace 'cancelTrace'
       cancelCapturingTrace()
@@ -227,14 +222,14 @@ function runTestFromFragment(fragment Fragment, projectRoot FilePath, target Tar
       let expectedStderr = normalizeStderr(fragment.expectation.compilerStderr)
       let actualStderr = normalizeStderr(capturedErrors)
       if actualStderr != expectedStderr 'stderrMismatch'
-        cleanup(tempSource, tempExe: tempExe)
+        cleanup(tempExe)
         return TestResult{testName: testName, passed: false, errorMessage: "Stderr mismatch.\nExpected:\n  {expectedStderr}\nActual:\n  {actualStderr}", filePath: fragment.filePath, loweringLog: "", compileIr: ""}
       end 'stderrMismatch'
-      cleanup(tempSource, tempExe: tempExe)
+      cleanup(tempExe)
       return TestResult{testName: testName, passed: true, errorMessage: "", filePath: fragment.filePath, loweringLog: "", compileIr: ""}
     end 'expectedError'
 
-    cleanup(tempSource, tempExe: tempExe)
+    cleanup(tempExe)
     return TestResult{testName: testName, passed: false, errorMessage: "Compilation failed: {capturedErrors}", filePath: fragment.filePath, loweringLog: "", compileIr: ""}
   end 'compileFailed'
   cancelCapturingErrors()
@@ -249,13 +244,13 @@ function runTestFromFragment(fragment Fragment, projectRoot FilePath, target Tar
   end 'captureLowering'
 
   if fragment.expectation.hasCompilerStderr 'unexpectedSuccess'
-    cleanup(tempSource, tempExe: tempExe)
+    cleanup(tempExe)
     return TestResult{testName: testName, passed: false, errorMessage: "Expected compilation error but compilation succeeded", filePath: fragment.filePath, loweringLog: "", compileIr: ""}
   end 'unexpectedSuccess'
 
   // For targets we can't execute, compilation success is the test
   if not canExecuteTarget(target) 'compileOnly'
-    cleanup(tempSource, tempExe: tempExe)
+    cleanup(tempExe)
     return TestResult{testName: testName, passed: true, errorMessage: "", filePath: fragment.filePath, loweringLog: "", compileIr: ""}
   end 'compileOnly'
 
@@ -333,7 +328,7 @@ function runTestFromFragment(fragment Fragment, projectRoot FilePath, target Tar
     logDebug(LogCategory.testing, message: () gives "[PASS] {testName}")
   end 'didPass'
 
-  cleanup(tempSource, tempExe: tempExe)
+  cleanup(tempExe)
   return TestResult{testName: testName, passed: passed, errorMessage: errorMsg, filePath: fragment.filePath, loweringLog: loweringLog, compileIr: compileIr}
 end 'runTestFromFragment'
 
@@ -409,14 +404,10 @@ function stripFilePathFromError(line String) returns String
   return "{prefix}{message}"
 end 'stripFilePathFromError'
 
-function cleanup(tempSource FilePath, tempExe FilePath)
-  if tempSource.fileExists() 'src'
-    try File.delete(tempSource) otherwise 'delErr'
-    end 'delErr'
-  end 'src'
+function cleanup(tempExe FilePath)
   if tempExe.fileExists() 'exe'
-    try File.delete(tempExe) otherwise 'delErr2'
-    end 'delErr2'
+    try File.delete(tempExe) otherwise 'delErr'
+    end 'delErr'
   end 'exe'
 end 'cleanup'
 

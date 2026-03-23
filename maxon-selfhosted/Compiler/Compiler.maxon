@@ -13,6 +13,22 @@ export function compileWithIr(path FilePath, target Target) returns CompileWithI
   return CompileWithIrResult{outputPath: outputPath, ir: ir}
 end 'compileWithIr'
 
+// Compiles source code directly from memory (no temp file) and returns IR.
+export function compileSourceWithIr(source String, virtualPath String, target Target, outputPath FilePath) returns CompileWithIrResult throws CompileError
+  let project = createProject(outputPath, isSingleFile: true, target: target)
+  let bytes = source.toByteArray()
+  setSourceFile(project, path: virtualPath, content: bytes)
+
+  logInfo(LogCategory.compiler, message: () gives "Starting in-memory compilation")
+  let codeResult = try queryCodeResult(project)
+  writeExecutable(outputPath, codeResult: codeResult, target: project.target)
+  logInfo(LogCategory.compiler, message: () gives "Wrote {codeResult.code.count()} bytes code to {outputPath}")
+
+  let targetModule = project.db.codeCache.value.targetModule
+  let ir = moduleToString(targetModule, skipStdlib: true)
+  return CompileWithIrResult{outputPath: outputPath, ir: ir}
+end 'compileSourceWithIr'
+
 export type CompileWithIrResult
   export var outputPath FilePath
   export var ir String
