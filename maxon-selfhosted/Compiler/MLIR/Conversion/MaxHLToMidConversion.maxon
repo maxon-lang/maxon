@@ -6,11 +6,9 @@
 
 export function lowerMaxHLToMid(module MlirModule, project Project, globalData GlobalDataTable, nextValueIdRef ValueIdRef) returns MlirModule
   logInfo(LogCategory.mlir, message: () gives "Lowering MaxHL to Mid dialects")
-  logTrace(LogCategory.mlir, message: () gives "=== maxhl-to-mid")
   var result = createMlirModule()
 
   for srcFunc in module.functions 'eachFunc'
-    let funcName = String.from(srcFunc.name)
     var dstFunc = createMlirFunction(srcFunc.name, returnType: resolveTypeName(project, name: srcFunc.returnType))
     dstFunc.paramCount = srcFunc.paramCount
 
@@ -19,19 +17,17 @@ export function lowerMaxHLToMid(module MlirModule, project Project, globalData G
       // Override the auto-assigned id to match source block id
       dstBlock.id = srcBlock.id
 
-      logTrace(LogCategory.mlir, message: () gives "@{funcName} {String.from(srcBlock.label)}:")
-
       // Lower ops
       for op in srcBlock.ops 'eachOp'
         let opsBefore = dstBlock.ops.count()
         lowerOp(op, dstBlock: dstBlock, globalData: globalData, nextValueIdRef: nextValueIdRef)
-        logTrace(LogCategory.mlir, message: () gives formatLoweringResult(sourceOp: op, dstBlock: dstBlock, opsBefore: opsBefore))
+        logTrace(LogCategory.mlir, message: () gives "maxhl-to-mid: {formatLoweringResult(sourceOp: op, dstBlock: dstBlock, opsBefore: opsBefore)}")
       end 'eachOp'
 
       // Lower terminator
       if srcBlock.hasTerminator 'hasTerm'
         let loweredTerm = lowerTerminator(srcBlock.terminator)
-        logTrace(LogCategory.mlir, message: () gives "  {opToString(srcBlock.terminator, blocks: srcFunc.region.blocks)} -> {opToString(loweredTerm, blocks: dstFunc.region.blocks)}")
+        logTrace(LogCategory.mlir, message: () gives "maxhl-to-mid: {opToString(srcBlock.terminator, blocks: srcFunc.region.blocks)} -> {opToString(loweredTerm, blocks: dstFunc.region.blocks)}")
         dstBlock.terminator = loweredTerm
         dstBlock.hasTerminator = true
       end 'hasTerm'

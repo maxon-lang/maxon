@@ -428,85 +428,13 @@ type LoweringCheckResult
 end 'LoweringCheckResult'
 
 function checkRequiredLowering(expected String, actual String) returns LoweringCheckResult
-  let expectedSections = parseLoweringSections(expected)
-  let actualSections = parseLoweringSections(actual)
-
-  for i in 0 upto expectedSections.count() 'eachSection'
-    let expSection = try expectedSections.get(i) otherwise 'skip'
-      continue
-    end 'skip'
-
-    // Find matching section in actual
-    var found = false
-    for j in 0 upto actualSections.count() 'findMatch'
-      let actSection = try actualSections.get(j) otherwise 'skip2'
-        continue
-      end 'skip2'
-      if actSection.name == expSection.name 'nameMatch'
-        found = true
-        let expNorm = normalizeLowering(expSection.content)
-        let actNorm = normalizeLowering(actSection.content)
-        if expNorm != actNorm 'mismatch'
-          return LoweringCheckResult{passed: false, message: "Lowering mismatch in section '=== {expSection.name}'.\nExpected:\n{expNorm}\nActual:\n{actNorm}"}
-        end 'mismatch'
-      end 'nameMatch'
-    end 'findMatch'
-
-    if not found 'missing'
-      return LoweringCheckResult{passed: false, message: "Lowering mismatch: missing section '=== {expSection.name}' in actual output."}
-    end 'missing'
-  end 'eachSection'
-
+  let expNorm = normalizeLowering(expected)
+  let actNorm = normalizeLowering(actual)
+  if expNorm != actNorm 'mismatch'
+    return LoweringCheckResult{passed: false, message: "Lowering mismatch.\nExpected:\n{expNorm}\nActual:\n{actNorm}"}
+  end 'mismatch'
   return LoweringCheckResult{passed: true, message: ""}
 end 'checkRequiredLowering'
-
-type LoweringSection
-  export var name String
-  export var content String
-end 'LoweringSection'
-
-typealias LoweringSectionArray = Array with LoweringSection
-
-function parseLoweringSections(text String) returns LoweringSectionArray
-  var sections = LoweringSectionArray{}
-  let lines = text.split("\n")
-  var currentName = ""
-  var currentLines = ""
-  var hasSection = false
-
-  for line in lines 'eachLine'
-    let trimmed = trimWhitespace(line)
-    if trimmed.startsWith("=== ") 'isSectionHeader'
-      if hasSection 'savePrev'
-        sections.push(LoweringSection{name: currentName, content: currentLines})
-      end 'savePrev'
-      // Extract section name after "=== " (4 chars)
-      var nameIdx = trimmed.startIndex()
-      for _ in 0 upto 4 'skipPrefix'
-        nameIdx = try trimmed.indexAfter(nameIdx) otherwise 'bad'
-          break
-        end 'bad'
-      end 'skipPrefix'
-      currentName = trimmed.slice(nameIdx, endIndex: trimmed.endIndex())
-      currentLines = ""
-      hasSection = true
-    end 'isSectionHeader' else 'isContent'
-      if hasSection 'hasCtx'
-        if currentLines.isEmpty() 'first'
-          currentLines = line
-        end 'first' else 'append'
-          currentLines = "{currentLines}\n{line}"
-        end 'append'
-      end 'hasCtx'
-    end 'isContent'
-  end 'eachLine'
-
-  if hasSection 'saveLast'
-    sections.push(LoweringSection{name: currentName, content: currentLines})
-  end 'saveLast'
-
-  return sections
-end 'parseLoweringSections'
 
 function normalizeLowering(text String) returns String
   let lines = text.split("\n")

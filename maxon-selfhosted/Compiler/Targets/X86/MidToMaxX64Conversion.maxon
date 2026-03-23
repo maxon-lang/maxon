@@ -4,7 +4,6 @@
 
 export function lowerMidToMaxX64(module MlirModule, target Target) returns MlirModule
   logInfo(LogCategory.mlir, message: () gives "Lowering Mid to MaxX64 dialect")
-  logTrace(LogCategory.mlir, message: () gives "=== mid-to-x86")
   var result = createMlirModule()
 
   let shadowSpace = match target.os 'osShadow'
@@ -16,28 +15,27 @@ export function lowerMidToMaxX64(module MlirModule, target Target) returns MlirM
   let osDesc = makeOsDescriptor(target)
 
   for srcFunc in module.functions 'eachFunc'
-    let dstFunc = lowerFunctionToX64(srcFunc, shadowSpace: shadowSpace, osDesc: osDesc)
+    let funcName = String.from(srcFunc.name)
+    let logLowering = not isRuntimeFunction(funcName)
+    let dstFunc = lowerFunctionToX64(srcFunc, shadowSpace: shadowSpace, osDesc: osDesc, logLowering: logLowering)
     result.functions.push(dstFunc)
   end 'eachFunc'
 
   return result
 end 'lowerMidToMaxX64'
 
-function lowerFunctionToX64(srcFunc MlirFunction, shadowSpace StackSize, osDesc OsDescriptor) returns MlirFunction
+function lowerFunctionToX64(srcFunc MlirFunction, shadowSpace StackSize, osDesc OsDescriptor, logLowering bool) returns MlirFunction
   var dstFunc = createMlirFunction(srcFunc.name, returnType: srcFunc.returnType)
   dstFunc.paramCount = srcFunc.paramCount
   let stackSize = computeStackSizeForFunc(srcFunc, shadowSpace: shadowSpace, savedRegsSize: 0)
   var nextTempSlot = computeMaxParserSlotInFunc(srcFunc) + 1
   var valueSlots = ValueSlotMap{}
-  let funcName = String.from(srcFunc.name)
 
   var isFirstBlock = true
   for srcBlock in srcFunc.region.blocks 'eachBlock'
     var dstBlock = addBlock(dstFunc.region, label: srcBlock.label)
     // Preserve block ID from source so jump targets resolve correctly
     dstBlock.id = srcBlock.id
-
-    logTrace(LogCategory.mlir, message: () gives "@{funcName} {String.from(srcBlock.label)}:")
 
     // Entry block gets prologue + parameter saving from ABI registers
     if isFirstBlock 'isEntry'
@@ -48,12 +46,12 @@ function lowerFunctionToX64(srcFunc MlirFunction, shadowSpace StackSize, osDesc 
 
     // Lower each op in the block
     for op in srcBlock.ops 'eachOp'
-      nextTempSlot = lowerMlirOp(op, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot, osDesc: osDesc)
+      nextTempSlot = lowerMlirOp(op, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot, osDesc: osDesc, logLowering: logLowering)
     end 'eachOp'
 
     // Lower terminator
     if srcBlock.hasTerminator 'hasTerm'
-      lowerTerminator(srcBlock, dstBlock: dstBlock, valueSlots: valueSlots)
+      lowerTerminator(srcBlock, dstBlock: dstBlock, valueSlots: valueSlots, logLowering: logLowering)
     end 'hasTerm'
   end 'eachBlock'
 
@@ -90,7 +88,7 @@ end 'emitParamSaves'
 
 // Lower a single mid-level op, pushing one or more MaxX64Ops into dstBlock.
 // Returns the updated nextTempSlot.
-function lowerMlirOp(op MlirOp, dstBlock MlirBlock, valueSlots ValueSlotMap, nextTempSlot SlotIndex, osDesc OsDescriptor) returns SlotIndex
+function lowerMlirOp(op MlirOp, dstBlock MlirBlock, valueSlots ValueSlotMap, nextTempSlot SlotIndex, osDesc OsDescriptor, logLowering bool) returns SlotIndex
   let opsBefore = dstBlock.ops.count()
   var result = nextTempSlot
   match op 'dispatch'
@@ -104,7 +102,9 @@ function lowerMlirOp(op MlirOp, dstBlock MlirBlock, valueSlots ValueSlotMap, nex
     cf then result = nextTempSlot
     maxarm64 then result = nextTempSlot
   end 'dispatch'
-  logTrace(LogCategory.mlir, message: () gives formatLoweringResult(sourceOp: op, dstBlock: dstBlock, opsBefore: opsBefore))
+  if logLowering 'logOp'
+    logTrace(LogCategory.mlir, message: () gives "mid-to-x86: {formatLoweringResult(sourceOp: op, dstBlock: dstBlock, opsBefore: opsBefore)}")
+  end 'logOp'
   return result
 end 'lowerMlirOp'
 
@@ -347,7 +347,7 @@ function lowerCallOp(resultId ValueId, callee ByteArray, argIds ValueIdArray, ds
 end 'lowerCallOp'
 
 // Lower block terminator: cf.condBr, cf.br, func.ret.
-function lowerTerminator(srcBlock MlirBlock, dstBlock MlirBlock, valueSlots ValueSlotMap)
+function lowerTerminator(srcBlock MlirBlock, dstBlock MlirBlock, valueSlots ValueSlotMap, logLowering bool)
   let opsBefore = dstBlock.ops.count()
   match srcBlock.terminator 'dispatch'
     maxhl to arith then break 'dispatch'
@@ -357,7 +357,9 @@ function lowerTerminator(srcBlock MlirBlock, dstBlock MlirBlock, valueSlots Valu
     maxx64(x64Op) then dstBlock.ops.push(MlirOp.maxx64(x64Op))
     maxarm64 then break 'dispatch'
   end 'dispatch'
-  logTrace(LogCategory.mlir, message: () gives formatTerminatorResult(sourceOp: srcBlock.terminator, dstBlock: dstBlock, opsBefore: opsBefore))
+  if logLowering 'logTerm'
+    logTrace(LogCategory.mlir, message: () gives "mid-to-x86: {formatTerminatorResult(sourceOp: srcBlock.terminator, dstBlock: dstBlock, opsBefore: opsBefore)}")
+  end 'logTerm'
 end 'lowerTerminator'
 
 function lowerCfTerminator(op CfOp, srcBlock MlirBlock, dstBlock MlirBlock, valueSlots ValueSlotMap)
