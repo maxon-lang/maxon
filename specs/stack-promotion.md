@@ -157,25 +157,25 @@ end 'main'
 ```stderr
 sl_init
   os_alloc size=67108864
-mm_alloc __ManagedMemory_Item #1 size=32 [stack-promotion.main]
+mm_alloc __ManagedMemory_Item #1 size=32 [main]
   sl_alloc __ManagedMemory_Item #1 size=64 class=5
-mm_alloc ItemArray #2 size=16 [stack-promotion.main]
+mm_alloc ItemArray #2 size=16 [main]
   sl_alloc ItemArray #2 size=48 class=4
-mm_incref __ManagedMemory_Item #1 rc=1 [stack-promotion.main]
-mm_incref ItemArray #2 rc=1 [stack-promotion.main]
-mm_alloc Item #3 size=8 [stack-promotion.main]
+mm_incref __ManagedMemory_Item #1 rc=1 [main]
+mm_incref ItemArray #2 rc=1 [main]
+mm_alloc Item #3 size=8 [main]
   sl_alloc Item #3 size=40 class=4
-mm_incref Item #3 rc=1 [stack-promotion.main]
+mm_incref Item #3 rc=1 [main]
 mm_realloc __ManagedMemory_Item #1 size=32
   mm_raw_alloc #R1 size=32 [realloc]
     sl_alloc size=32 class=3
 mm_incref Item #3 rc=2 [ItemArray.push]
 mm_incref Item #3 rc=3 [ItemArray.get]
-mm_incref Item #3 rc=4 [stack-promotion.main]
-mm_decref Item #3 rc=3 [stack-promotion.main]
-mm_decref Item #3 rc=2 [stack-promotion.main]
-mm_decref Item #3 rc=1 [stack-promotion.main]
-mm_decref ItemArray #2 rc=0 [stack-promotion.main]
+mm_incref Item #3 rc=4 [main]
+mm_decref Item #3 rc=3 [main]
+mm_decref Item #3 rc=2 [main]
+mm_decref Item #3 rc=1 [main]
+mm_decref ItemArray #2 rc=0 [main]
   mm_decref __ManagedMemory_Item #1 rc=0 [~ItemArray]
     mm_decref Item #3 rc=0 [~ManagedElements]
       mm_free Item #3
@@ -222,7 +222,7 @@ mm_alloc Point #1 size=16 [stack-promotion.makePoint]
   sl_alloc Point #1 size=48 class=4
 mm_incref Point #1 rc=1 [stack-promotion.makePoint]
 mm_transfer Point #1 rc=1 [stack-promotion.makePoint]
-mm_decref Point #1 rc=0 [stack-promotion.main]
+mm_decref Point #1 rc=0 [main]
   mm_free Point #1
     sl_free Point #1 size=48 class=4
 mm_raw_alloc #R1 size=40

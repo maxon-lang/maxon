@@ -1708,7 +1708,7 @@ public static partial class MaxonToStandardConversion {
                   throw new InvalidOperationException($"Cannot store struct value to global '{globalStore.GlobalName}': no struct tracking info");
                 }
 
-                bool isModuleInit = func.Name == "__module_init" || func.Name.EndsWith(".__module_init");
+                bool isModuleInit = func.Name == "__module_init";
                 if (!isModuleInit) {
                   // Decref old global value before storing new one (may be null if not yet assigned).
                   var oldGlobalLoad = new StdGlobalLoadI64Op(globalStore.GlobalName);

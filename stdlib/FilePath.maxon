@@ -377,4 +377,22 @@ export type FilePath implements InitableFromStringLiteral, Equatable, Hashable, 
     return try Directory.list(self)
   end 'listDirectory'
 
+  /// Check whether this path starts with the given directory prefix.
+  /// Compares full path components, so "/foo/bar" starts with "/foo" but not "/fo".
+  export function startsWith(prefix FilePath) returns bool
+    let selfStr = _path
+    let prefixStr = prefix._path
+    if not selfStr.startsWith(prefixStr) 'noMatch'
+      return false
+    end 'noMatch'
+    let prefixLen = prefixStr.byteLength()
+    let selfLen = selfStr.byteLength()
+    // Exact match or next character is a separator
+    if prefixLen == selfLen 'exact'
+      return true
+    end 'exact'
+    let nextByte = selfStr.managed.byteAt(prefixLen)
+    return nextByte == _pathSeparatorByte or nextByte == _otherSeparatorByte
+  end 'startsWith'
+
 end 'FilePath'

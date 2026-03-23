@@ -14,7 +14,7 @@ export function compileWithIr(path FilePath, target Target) returns CompileWithI
 end 'compileWithIr'
 
 // Compiles source code directly from memory (no temp file) and returns IR.
-export function compileSourceWithIr(source String, virtualPath String, target Target, outputPath FilePath) returns CompileWithIrResult throws CompileError
+export function compileSourceWithIr(source String, virtualPath FilePath, target Target, outputPath FilePath) returns CompileWithIrResult throws CompileError
   let project = createProject(outputPath, isSingleFile: true, target: target)
   let bytes = source.toByteArray()
   setSourceFile(project, path: virtualPath, content: bytes)
@@ -38,8 +38,7 @@ end 'CompileWithIrResult'
 export function compileProject(project Project) returns FilePath throws CompileError
   logInfo(LogCategory.compiler, message: () gives "Starting incremental compilation")
 
-  let rootFp = try FilePath.from(project.rootPath) otherwise panic("invalid root path")
-  try loadSourceFiles(project, path: rootFp)
+  try loadSourceFiles(project, path: project.rootPath)
 
   let codeResult = try queryCodeResult(project)
 
@@ -48,8 +47,7 @@ export function compileProject(project Project) returns FilePath throws CompileE
   end 'noFiles'
 
   let ext = executableExtension(project.target)
-  let outputFp = try FilePath.from(firstPath) otherwise panic("invalid source path")
-  let outputPath = outputFp.changeExtension(ext)
+  let outputPath = firstPath.changeExtension(ext)
   writeExecutable(outputPath, codeResult: codeResult, target: project.target)
 
   logInfo(LogCategory.compiler, message: () gives "Wrote {codeResult.code.count()} bytes code to {outputPath}")
@@ -58,7 +56,7 @@ export function compileProject(project Project) returns FilePath throws CompileE
 end 'compileProject'
 
 // Notify the query database that a single file has changed (for IDE use).
-export function fileChanged(project Project, path String, content ByteArray)
+export function fileChanged(project Project, path FilePath, content ByteArray)
   setSourceFile(project, path: path, content: content)
 end 'fileChanged'
 
@@ -72,7 +70,7 @@ function loadSourceFiles(project Project, path FilePath) throws CompileError
       throw CompileError.readError
     end 'readErr'
 
-    setSourceFile(project, path: path.toString(), content: bytes)
+    setSourceFile(project, path: path, content: bytes)
   end 'isFile' else if path.directoryExists() 'isDir'
     logTrace(LogCategory.compiler, message: () gives "Loading directory: {path}")
 
@@ -89,7 +87,7 @@ function loadSourceFiles(project Project, path FilePath) throws CompileError
           continue
         end 'skip'
 
-        setSourceFile(project, path: filePath.toString(), content: bytes)
+        setSourceFile(project, path: filePath, content: bytes)
       end 'isMaxon'
     end 'loop'
 

@@ -66,18 +66,17 @@ public class X86CodeEmitter {
       emitter.DefineGlobal(global.Name, size, initValue);
     }
 
-    // Verify main exists (check for exact match or suffix match)
-    var mainFunc = module.Functions.FirstOrDefault(f => f.Name == "main" || f.Name.EndsWith(".main"))
+    var mainFunc = module.Functions.FirstOrDefault(f => f.Name == "main")
       ?? throw new InvalidOperationException("No 'main' function found at code emission stage — semantic check should have caught this");
 
     // Emit _start wrapper first (entry point at offset 0)
     // _start calls main and then ExitProcess
     var globalCleanupName = module.Functions
-      .Where(f => f.Name == "__maxon_global_cleanup" || f.Name.EndsWith(".__maxon_global_cleanup"))
+      .Where(f => f.Name == "__maxon_global_cleanup")
       .Select(f => f.Name)
       .FirstOrDefault();
     var moduleInitName = module.Functions
-      .Where(f => f.Name == "__module_init" || f.Name.EndsWith(".__module_init"))
+      .Where(f => f.Name == "__module_init")
       .Select(f => f.Name)
       .FirstOrDefault();
     emitter.EmitStartWrapper(mainFunc.Name, globalCleanupName, moduleInitName);

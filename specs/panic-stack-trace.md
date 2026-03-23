@@ -34,7 +34,7 @@ end
 panic at simple-panic.test:6: Range check failed for type 'Byte': value outside int(0 to 255)
 Stack trace:
   in panic-stack-trace.dangerous
-  in panic-stack-trace.main
+  in main
   in _start
 ```
 
@@ -70,7 +70,7 @@ Stack trace:
   in panic-stack-trace.validate
   in panic-stack-trace.process
   in panic-stack-trace.caller
-  in panic-stack-trace.main
+  in main
   in _start
 ```
 
@@ -96,6 +96,6 @@ end
 ```stderr
 panic at panic-in-main.test:10: Range check failed for type 'Bounded': value outside int(10 to 20)
 Stack trace:
-  in panic-stack-trace.main
+  in main
   in _start
 ```

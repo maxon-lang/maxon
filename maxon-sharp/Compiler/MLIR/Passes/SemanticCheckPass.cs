@@ -5,9 +5,9 @@ namespace MaxonSharp.Compiler.Mlir.Passes;
 
 public static class SemanticCheckPass {
   public static void Run(MlirModule<MaxonOp> module) {
-    // E3001: main function must exist (check for exact match or suffix match)
+    // E3001: main function must exist
     Logger.Debug(LogCategory.Semantic, $"SemanticCheckPass: Checking for main function among {module.Functions.Count} functions");
-    var mainMatches = module.Functions.Where(f => f.Name == "main" || f.Name.EndsWith(".main")).ToList();
+    var mainMatches = module.Functions.Where(f => f.Name == "main").ToList();
     Logger.Debug(LogCategory.Semantic, $"  Found {mainMatches.Count} main candidates: {string.Join(", ", mainMatches.Select(f => f.Name))}");
     var mainFunc = mainMatches.FirstOrDefault()
       ?? throw new CompileError(ErrorCode.SemanticNoMain, "No 'main' function found");

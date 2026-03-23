@@ -58,7 +58,7 @@ end 'main'
 ```stderr
 panic at panic.basic.test:3: something went wrong
 Stack trace:
-  in panic.main
+  in main
   in _start
 ```
 
@@ -80,7 +80,7 @@ end 'main'
 panic at panic.in-function.test:3: failure in helper
 Stack trace:
   in panic.fail
-  in panic.main
+  in main
   in _start
 ```
 
@@ -106,6 +106,6 @@ end 'main'
 panic at panic.after-condition.test:6: negative value
 Stack trace:
   in panic.check
-  in panic.main
+  in main
   in _start
 ```

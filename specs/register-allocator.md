@@ -32,7 +32,7 @@ end 'main'
 ```RequiredMLIR:x86_64-windows
 === maxon
 module {
-  func @register-allocator.main() -> i64 {
+  func @main() -> i64 {
   entry:
     %0 = maxon.literal {value = 42 : i64}
     maxon.scope_end []
@@ -41,7 +41,7 @@ module {
 }
 === standard
 module {
-  func @register-allocator.main() -> u32 {
+  func @main() -> u32 {
   entry:
     %0 = arith.constant {value = 42 : i64}
     func.return %0
@@ -49,7 +49,7 @@ module {
 }
 === x86
 module {
-  func @register-allocator.main() -> u32 {
+  func @main() -> u32 {
   entry:
     x86.mov rax, 42
     x86.ret
@@ -97,7 +97,7 @@ end 'main'
 ```RequiredMLIR:x86_64-windows
 === maxon
 module {
-  func @register-allocator.main() -> i64 {
+  func @main() -> i64 {
   entry:
     %0 = maxon.literal {value = 99 : i64}
     maxon.assign %0 {var = x} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
@@ -116,7 +116,7 @@ module {
 }
 === standard
 module {
-  func @register-allocator.main() -> u32 {
+  func @main() -> u32 {
   entry:
     %0 = arith.constant {value = 99 : i64}
     %1 = arith.constant {value = 0 : i64}
@@ -135,7 +135,7 @@ module {
 }
 === x86
 module {
-  func @register-allocator.main() -> u32 {
+  func @main() -> u32 {
   entry:
     x86.prologue stack_size=16
     x86.mov rax, 99
@@ -149,7 +149,7 @@ module {
     x86.movzx rsi, rsib
     x86.or rdx, rsi
     x86.test rdx, rdx
-    x86.je register-allocator.main.__range_ok_0
+    x86.je main.__range_ok_0
   __range_panic_0:
     x86.lea_symdata rax, [__panic_msg_0]
     x86.mov rcx, rax
@@ -245,7 +245,7 @@ end 'main'
 ```RequiredMLIR:x86_64-windows
 === maxon
 module {
-  func @register-allocator.main() -> i64 {
+  func @main() -> i64 {
   entry:
     %0 = maxon.literal {value = 30 : i64}
     %1 = maxon.literal {value = 12 : i64}
@@ -265,7 +265,7 @@ module {
 }
 === standard
 module {
-  func @register-allocator.main() -> u32 {
+  func @main() -> u32 {
   entry:
     %0 = arith.constant {value = 30 : i64}
     %1 = arith.constant {value = 12 : i64}
@@ -286,7 +286,7 @@ module {
 }
 === x86
 module {
-  func @register-allocator.main() -> u32 {
+  func @main() -> u32 {
   entry:
     x86.prologue stack_size=16
     x86.mov rax, 30
@@ -302,7 +302,7 @@ module {
     x86.movzx rdi, rdib
     x86.or rbx, rdi
     x86.test rbx, rbx
-    x86.je register-allocator.main.__range_ok_0
+    x86.je main.__range_ok_0
   __range_panic_0:
     x86.lea_symdata rax, [__panic_msg_0]
     x86.mov rcx, rax
@@ -407,7 +407,7 @@ end 'main'
 ```RequiredMLIR:x86_64-windows
 === maxon
 module {
-  func @register-allocator.main() -> i64 {
+  func @main() -> i64 {
   entry:
     %0 = maxon.literal {value = 30 : i64}
     maxon.assign %0 {var = a} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
@@ -429,7 +429,7 @@ module {
 }
 === standard
 module {
-  func @register-allocator.main() -> u32 {
+  func @main() -> u32 {
   entry:
     %0 = arith.constant {value = 30 : i64}
     %1 = arith.constant {value = 12 : i64}
@@ -450,7 +450,7 @@ module {
 }
 === x86
 module {
-  func @register-allocator.main() -> u32 {
+  func @main() -> u32 {
   entry:
     x86.prologue stack_size=16
     x86.mov rax, 30
@@ -466,7 +466,7 @@ module {
     x86.movzx rdi, rdib
     x86.or rbx, rdi
     x86.test rbx, rbx
-    x86.je register-allocator.main.__range_ok_0
+    x86.je main.__range_ok_0
   __range_panic_0:
     x86.lea_symdata rax, [__panic_msg_0]
     x86.mov rcx, rax
@@ -570,7 +570,7 @@ end 'main'
 ```RequiredMLIR:x86_64-windows
 === maxon
 module {
-  func @register-allocator.main() -> i64 {
+  func @main() -> i64 {
   entry:
     %0 = maxon.literal {value = 21 : i64}
     maxon.assign %0 {var = x} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
@@ -590,7 +590,7 @@ module {
 }
 === standard
 module {
-  func @register-allocator.main() -> u32 {
+  func @main() -> u32 {
   entry:
     %0 = arith.constant {value = 21 : i64}
     %1 = arith.addi %0, %0
@@ -610,7 +610,7 @@ module {
 }
 === x86
 module {
-  func @register-allocator.main() -> u32 {
+  func @main() -> u32 {
   entry:
     x86.prologue stack_size=16
     x86.mov rax, 21
@@ -625,7 +625,7 @@ module {
     x86.movzx rsi, rsib
     x86.or rdx, rsi
     x86.test rdx, rdx
-    x86.je register-allocator.main.__range_ok_0
+    x86.je main.__range_ok_0
   __range_panic_0:
     x86.lea_symdata rax, [__panic_msg_0]
     x86.mov rcx, rax
@@ -728,7 +728,7 @@ end 'main'
 ```RequiredMLIR:x86_64-windows
 === maxon
 module {
-  func @register-allocator.main() -> i64 {
+  func @main() -> i64 {
   entry:
     %0 = maxon.literal {value = 10 : i64}
     maxon.assign %0 {var = a} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
@@ -756,7 +756,7 @@ module {
 }
 === standard
 module {
-  func @register-allocator.main() -> u32 {
+  func @main() -> u32 {
   entry:
     %0 = arith.constant {value = 10 : i64}
     %1 = arith.constant {value = 5 : i64}
@@ -781,7 +781,7 @@ module {
 }
 === x86
 module {
-  func @register-allocator.main() -> u32 {
+  func @main() -> u32 {
   entry:
     x86.prologue stack_size=16
     x86.mov rax, 10
@@ -801,7 +801,7 @@ module {
     x86.movzx r9, r9b
     x86.or rdi, r9
     x86.test rdi, rdi
-    x86.je register-allocator.main.__range_ok_0
+    x86.je main.__range_ok_0
   __range_panic_0:
     x86.lea_symdata rax, [__panic_msg_0]
     x86.mov rcx, rax
@@ -921,7 +921,7 @@ end 'main'
 ```RequiredMLIR:x86_64-windows
 === maxon
 module {
-  func @register-allocator.main() -> i64 {
+  func @main() -> i64 {
   entry:
     %0 = maxon.literal {value = 100 : i64}
     maxon.assign %0 {var = x} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
@@ -946,7 +946,7 @@ module {
 }
 === standard
 module {
-  func @register-allocator.main() -> u32 {
+  func @main() -> u32 {
   entry:
     %0 = arith.constant {value = 100 : i64}
     %1 = arith.constant {value = 80 : i64}
@@ -969,7 +969,7 @@ module {
 }
 === x86
 module {
-  func @register-allocator.main() -> u32 {
+  func @main() -> u32 {
   entry:
     x86.prologue stack_size=16
     x86.mov rax, 100
@@ -987,7 +987,7 @@ module {
     x86.movzx r8, r8b
     x86.or rsi, r8
     x86.test rsi, rsi
-    x86.je register-allocator.main.__range_ok_0
+    x86.je main.__range_ok_0
   __range_panic_0:
     x86.lea_symdata rax, [__panic_msg_0]
     x86.mov rcx, rax
@@ -1106,7 +1106,7 @@ end 'main'
 ```RequiredMLIR:x86_64-windows
 === maxon
 module {
-  func @register-allocator.main() -> i64 {
+  func @main() -> i64 {
   entry:
     %0 = maxon.literal {value = 1 : i64}
     maxon.assign %0 {var = a} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
@@ -1140,7 +1140,7 @@ module {
 }
 === standard
 module {
-  func @register-allocator.main() -> u32 {
+  func @main() -> u32 {
   entry:
     %0 = arith.constant {value = 1 : i64}
     %1 = arith.constant {value = 2 : i64}
@@ -1169,7 +1169,7 @@ module {
 }
 === x86
 module {
-  func @register-allocator.main() -> u32 {
+  func @main() -> u32 {
   entry:
     x86.prologue stack_size=16
     x86.mov rax, 1
@@ -1193,7 +1193,7 @@ module {
     x86.movzx rcx, rcxb
     x86.or r9, rcx
     x86.test r9, r9
-    x86.je register-allocator.main.__range_ok_0
+    x86.je main.__range_ok_0
   __range_panic_0:
     x86.lea_symdata rax, [__panic_msg_0]
     x86.mov rcx, rax
@@ -1334,7 +1334,7 @@ end 'main'
 ```RequiredMLIR:x86_64-windows
 === maxon
 module {
-  func @register-allocator.main() -> i64 {
+  func @main() -> i64 {
   entry:
     %0 = maxon.literal {value = 1 : i64}
     maxon.assign %0 {var = a} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
@@ -1380,7 +1380,7 @@ module {
 }
 === standard
 module {
-  func @register-allocator.main() -> u32 {
+  func @main() -> u32 {
   entry:
     %0 = arith.constant {value = 1 : i64}
     %1 = arith.constant {value = 2 : i64}
@@ -1417,7 +1417,7 @@ module {
 }
 === x86
 module {
-  func @register-allocator.main() -> u32 {
+  func @main() -> u32 {
   entry:
     x86.prologue stack_size=16
     x86.mov rax, 1
@@ -1453,7 +1453,7 @@ module {
     x86.movzx rcx, rcxb
     x86.or rax, rcx
     x86.test rax, rax
-    x86.je register-allocator.main.__range_ok_0
+    x86.je main.__range_ok_0
   __range_panic_0:
     x86.lea_symdata rax, [__panic_msg_0]
     x86.mov rcx, rax
@@ -1629,7 +1629,7 @@ end 'main'
 ```RequiredMLIR:x86_64-windows
 === maxon
 module {
-  func @register-allocator.main() -> i64 {
+  func @main() -> i64 {
   entry:
     %0 = maxon.literal {value = 1 : i64}
     maxon.assign %0 {var = a} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
@@ -1695,7 +1695,7 @@ module {
 }
 === standard
 module {
-  func @register-allocator.main() -> u32 {
+  func @main() -> u32 {
   entry:
     %0 = arith.constant {value = 1 : i64}
     %1 = arith.constant {value = 2 : i64}
@@ -1746,7 +1746,7 @@ module {
 }
 === x86
 module {
-  func @register-allocator.main() -> u32 {
+  func @main() -> u32 {
   entry:
     x86.prologue stack_size=16
     x86.mov rax, 1
@@ -1805,7 +1805,7 @@ module {
     x86.movzx rcx, rcxb
     x86.or rax, rcx
     x86.test rax, rax
-    x86.je register-allocator.main.__range_ok_0
+    x86.je main.__range_ok_0
   __range_panic_0:
     x86.lea_symdata rax, [__panic_msg_0]
     x86.mov rcx, rax
@@ -2035,7 +2035,7 @@ end 'main'
 ```RequiredMLIR:x86_64-windows
 === maxon
 module {
-  func @register-allocator.main() -> i64 {
+  func @main() -> i64 {
   entry:
     %0 = maxon.literal {value = 1 : i64}
     maxon.assign %0 {var = a} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
@@ -2113,7 +2113,7 @@ module {
 }
 === standard
 module {
-  func @register-allocator.main() -> u32 {
+  func @main() -> u32 {
   entry:
     %0 = arith.constant {value = 1 : i64}
     %1 = arith.constant {value = 2 : i64}
@@ -2172,7 +2172,7 @@ module {
 }
 === x86
 module {
-  func @register-allocator.main() -> u32 {
+  func @main() -> u32 {
   entry:
     x86.prologue stack_size=16
     x86.mov rax, 1
@@ -2243,7 +2243,7 @@ module {
     x86.movzx rcx, rcxb
     x86.or rax, rcx
     x86.test rax, rax
-    x86.je register-allocator.main.__range_ok_0
+    x86.je main.__range_ok_0
   __range_panic_0:
     x86.lea_symdata rax, [__panic_msg_0]
     x86.mov rcx, rax
@@ -2497,7 +2497,7 @@ end 'main'
 ```RequiredMLIR:x86_64-windows
 === maxon
 module {
-  func @register-allocator.main() -> i64 {
+  func @main() -> i64 {
   entry:
     %0 = maxon.literal {value = 10 : i64}
     maxon.assign %0 {var = a} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
@@ -2537,7 +2537,7 @@ module {
 }
 === standard
 module {
-  func @register-allocator.main() -> u32 {
+  func @main() -> u32 {
   entry:
     %0 = arith.constant {value = 10 : i64}
     %1 = arith.constant {value = 20 : i64}
@@ -2568,7 +2568,7 @@ module {
 }
 === x86
 module {
-  func @register-allocator.main() -> u32 {
+  func @main() -> u32 {
   entry:
     x86.prologue stack_size=16
     x86.mov rax, 10
@@ -2596,7 +2596,7 @@ module {
     x86.movzx rcx, rcxb
     x86.or rax, rcx
     x86.test rax, rax
-    x86.je register-allocator.main.__range_ok_0
+    x86.je main.__range_ok_0
   __range_panic_0:
     x86.lea_symdata rax, [__panic_msg_0]
     x86.mov rcx, rax
@@ -2748,7 +2748,7 @@ end 'main'
 ```RequiredMLIR:x86_64-windows
 === maxon
 module {
-  func @register-allocator.main() -> i64 {
+  func @main() -> i64 {
   entry:
     %0 = maxon.literal {value = 0 : i64}
     maxon.assign %0 {var = sum1} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
@@ -2791,7 +2791,7 @@ module {
 }
 === standard
 module {
-  func @register-allocator.main() -> u32 {
+  func @main() -> u32 {
   entry:
     %3 = arith.constant {value = 10 : i64}
     %4 = arith.constant {value = 20 : i64}
@@ -2820,7 +2820,7 @@ module {
 }
 === x86
 module {
-  func @register-allocator.main() -> u32 {
+  func @main() -> u32 {
   entry:
     x86.prologue stack_size=16
     x86.mov rax, 10
@@ -2844,7 +2844,7 @@ module {
     x86.movzx rcx, rcxb
     x86.or r9, rcx
     x86.test r9, r9
-    x86.je register-allocator.main.__range_ok_0
+    x86.je main.__range_ok_0
   __range_panic_0:
     x86.lea_symdata rax, [__panic_msg_0]
     x86.mov rcx, rax
@@ -3001,7 +3001,7 @@ module {
     maxon.scope_end []
     maxon.return %0
   }
-  func @register-allocator.main() -> i64 {
+  func @main() -> i64 {
   entry:
     %1 = maxon.literal {value = 2 : i64}
     maxon.assign %1 {var = x} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
@@ -3028,7 +3028,7 @@ module {
     %0 = arith.constant {value = 40 : i64}
     func.return %0
   }
-  func @register-allocator.main() -> u32 {
+  func @main() -> u32 {
   entry:
     %1 = arith.constant {value = 2 : i64}
     %2 = func.call @register-allocator.getForty
@@ -3054,7 +3054,7 @@ module {
     x86.mov rax, 40
     x86.ret
   }
-  func @register-allocator.main() -> u32 {
+  func @main() -> u32 {
   entry:
     x86.prologue stack_size=16
     x86.mov rax, 2
@@ -3071,7 +3071,7 @@ module {
     x86.movzx rdi, rdib
     x86.or rbx, rdi
     x86.test rbx, rbx
-    x86.je register-allocator.main.__range_ok_0
+    x86.je main.__range_ok_0
   __range_panic_0:
     x86.lea_symdata rax, [__panic_msg_0]
     x86.mov rcx, rax
@@ -3219,7 +3219,7 @@ module {
     maxon.scope_end []
     maxon.return %1
   }
-  func @register-allocator.main() -> i64 {
+  func @main() -> i64 {
   entry:
     %2 = maxon.literal {value = 5 : i64}
     maxon.assign %2 {var = a} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
@@ -3257,7 +3257,7 @@ module {
     %1 = arith.constant {value = 2 : i64}
     func.return %1
   }
-  func @register-allocator.main() -> u32 {
+  func @main() -> u32 {
   entry:
     %2 = arith.constant {value = 5 : i64}
     %3 = func.call @register-allocator.getTen
@@ -3292,7 +3292,7 @@ module {
     x86.mov rax, 2
     x86.ret
   }
-  func @register-allocator.main() -> u32 {
+  func @main() -> u32 {
   entry:
     x86.prologue stack_size=16
     x86.mov rax, 5
@@ -3316,7 +3316,7 @@ module {
     x86.movzx rax, raxb
     x86.or r8, rax
     x86.test r8, r8
-    x86.je register-allocator.main.__range_ok_0
+    x86.je main.__range_ok_0
   __range_panic_0:
     x86.lea_symdata rax, [__panic_msg_0]
     x86.mov rcx, rax
@@ -3485,7 +3485,7 @@ module {
     maxon.scope_end []
     maxon.return %0
   }
-  func @register-allocator.main() -> i64 {
+  func @main() -> i64 {
   entry:
     %1 = maxon.call @register-allocator.compute
     maxon.assign %1 {var = a} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
@@ -3514,7 +3514,7 @@ module {
     %0 = arith.constant {value = 100 : i64}
     func.return %0
   }
-  func @register-allocator.main() -> u32 {
+  func @main() -> u32 {
   entry:
     %1 = func.call @register-allocator.compute
     %2 = func.call @register-allocator.compute
@@ -3542,7 +3542,7 @@ module {
     x86.mov rax, 100
     x86.ret
   }
-  func @register-allocator.main() -> u32 {
+  func @main() -> u32 {
   entry:
     x86.prologue stack_size=16
     x86.call register-allocator.compute
@@ -3565,7 +3565,7 @@ module {
     x86.movzx rcx, rcxb
     x86.or rax, rcx
     x86.test rax, rax
-    x86.je register-allocator.main.__range_ok_0
+    x86.je main.__range_ok_0
   __range_panic_0:
     x86.lea_symdata rax, [__panic_msg_0]
     x86.mov rcx, rax
@@ -3735,7 +3735,7 @@ module {
     maxon.scope_end [a, b]
     maxon.return %2
   }
-  func @register-allocator.main() -> i64 {
+  func @main() -> i64 {
   entry:
     %3 = maxon.literal {value = 30 : i64}
     %4 = maxon.literal {value = 12 : i64}
@@ -3762,7 +3762,7 @@ module {
     %2 = arith.addi %0, %1
     func.return %2
   }
-  func @register-allocator.main() -> u32 {
+  func @main() -> u32 {
   entry:
     %3 = arith.constant {value = 30 : i64}
     %4 = arith.constant {value = 12 : i64}
@@ -3788,7 +3788,7 @@ module {
     x86.lea rax, [rcx + rdx]
     x86.ret
   }
-  func @register-allocator.main() -> u32 {
+  func @main() -> u32 {
   entry:
     x86.prologue stack_size=16
     x86.mov rcx, 30
@@ -3804,7 +3804,7 @@ module {
     x86.movzx rdx, rdxb
     x86.or rcx, rdx
     x86.test rcx, rcx
-    x86.je register-allocator.main.__range_ok_0
+    x86.je main.__range_ok_0
   __range_panic_0:
     x86.lea_symdata rax, [__panic_msg_0]
     x86.mov rcx, rax
@@ -3943,7 +3943,7 @@ module {
     maxon.scope_end [a, b]
     maxon.return %2
   }
-  func @register-allocator.main() -> i64 {
+  func @main() -> i64 {
   entry:
     %3 = maxon.literal {value = 20 : i64}
     maxon.assign %3 {var = x} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
@@ -3972,7 +3972,7 @@ module {
     %2 = arith.addi %0, %1
     func.return %2
   }
-  func @register-allocator.main() -> u32 {
+  func @main() -> u32 {
   entry:
     %3 = arith.constant {value = 20 : i64}
     %4 = arith.constant {value = 22 : i64}
@@ -3998,7 +3998,7 @@ module {
     x86.lea rax, [rcx + rdx]
     x86.ret
   }
-  func @register-allocator.main() -> u32 {
+  func @main() -> u32 {
   entry:
     x86.prologue stack_size=16
     x86.mov rcx, 22
@@ -4014,7 +4014,7 @@ module {
     x86.movzx rdx, rdxb
     x86.or rcx, rdx
     x86.test rcx, rcx
-    x86.je register-allocator.main.__range_ok_0
+    x86.je main.__range_ok_0
   __range_panic_0:
     x86.lea_symdata rax, [__panic_msg_0]
     x86.mov rcx, rax
@@ -4145,7 +4145,7 @@ end 'main'
 ```RequiredMLIR:x86_64-windows
 === maxon
 module {
-  func @register-allocator.main() -> i64 {
+  func @main() -> i64 {
   entry:
     %0 = maxon.literal {value = 10 : i64}
     maxon.assign %0 {var = x} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
@@ -4164,7 +4164,7 @@ module {
 }
 === standard
 module {
-  func @register-allocator.main() -> u32 {
+  func @main() -> u32 {
   entry:
     %0 = arith.constant {value = 10 : i64}
     %1 = arith.constant {value = 10 : i64}
@@ -4180,12 +4180,12 @@ module {
 }
 === x86
 module {
-  func @register-allocator.main() -> u32 {
+  func @main() -> u32 {
   entry:
     x86.mov rax, 10
     x86.mov rcx, 10
     x86.cmp rax, rcx
-    x86.jne register-allocator.main.other_1
+    x86.jne main.other_1
   check_0:
     x86.mov rax, 42
     x86.ret
@@ -4272,7 +4272,7 @@ end 'main'
 ```RequiredMLIR:x86_64-windows
 === maxon
 module {
-  func @register-allocator.main() -> i64 {
+  func @main() -> i64 {
   entry:
     %0 = maxon.literal {value = 40 : i64}
     maxon.assign %0 {var = base} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
@@ -4312,7 +4312,7 @@ module {
 }
 === standard
 module {
-  func @register-allocator.main() -> u32 {
+  func @main() -> u32 {
   entry:
     %0 = arith.constant {value = 40 : i64}
     memref.store %0, base
@@ -4348,7 +4348,7 @@ module {
 }
 === x86
 module {
-  func @register-allocator.main() -> u32 {
+  func @main() -> u32 {
   entry:
     x86.prologue stack_size=16
     x86.mov rax, 40
@@ -4356,15 +4356,15 @@ module {
     x86.mov rcx, 1
     x86.mov rdx, 1
     x86.cmp rcx, rdx
-    x86.jne register-allocator.main.other_1
+    x86.jne main.other_1
   check_0:
     x86.mov rax, 2
     x86.mov [rbp-16], rax
-    x86.jmp register-allocator.main.check_0.merge
+    x86.jmp main.check_0.merge
   other_1:
     x86.mov rax, 100
     x86.mov [rbp-16], rax
-    x86.jmp register-allocator.main.check_0.merge
+    x86.jmp main.check_0.merge
   check_0.merge:
     x86.mov rax, [rbp-8]
     x86.mov rcx, [rbp-16]
@@ -4379,7 +4379,7 @@ module {
     x86.movzx rdi, rdib
     x86.or rbx, rdi
     x86.test rbx, rbx
-    x86.je register-allocator.main.__range_ok_2
+    x86.je main.__range_ok_2
   __range_panic_2:
     x86.lea_symdata rax, [__panic_msg_0]
     x86.mov rcx, rax
@@ -4537,7 +4537,7 @@ end 'main'
 ```RequiredMLIR:x86_64-windows
 === maxon
 module {
-  func @register-allocator.main() -> i64 {
+  func @main() -> i64 {
   entry:
     %0 = maxon.literal {value = 0 : i64}
     maxon.assign %0 {var = i} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
@@ -4571,7 +4571,7 @@ module {
 }
 === standard
 module {
-  func @register-allocator.main() -> u32 {
+  func @main() -> u32 {
   entry:
     %0 = arith.constant {value = 0 : i64}
     memref.store %0, i
@@ -4605,23 +4605,23 @@ module {
 }
 === x86
 module {
-  func @register-allocator.main() -> u32 {
+  func @main() -> u32 {
   entry:
     x86.prologue stack_size=16
     x86.xor rax, rax
     x86.mov [rbp-8], rax
-    x86.jmp register-allocator.main.loop_0.header
+    x86.jmp main.loop_0.header
   loop_0.header:
     x86.mov rax, 42
     x86.mov rcx, [rbp-8]
     x86.cmp rcx, rax
-    x86.jge register-allocator.main.loop_0.exit
+    x86.jge main.loop_0.exit
   loop_0:
     x86.mov rax, 1
     x86.mov rcx, [rbp-8]
     x86.add rcx, rax
     x86.mov [rbp-8], rcx
-    x86.jmp register-allocator.main.loop_0.header
+    x86.jmp main.loop_0.header
   loop_0.exit:
     x86.mov rax, [rbp-8]
     x86.xor rcx, rcx
@@ -4634,7 +4634,7 @@ module {
     x86.movzx rsi, rsib
     x86.or rdx, rsi
     x86.test rdx, rdx
-    x86.je register-allocator.main.__range_ok_1
+    x86.je main.__range_ok_1
   __range_panic_1:
     x86.lea_symdata rax, [__panic_msg_0]
     x86.mov rcx, rax
@@ -4784,7 +4784,7 @@ end 'main'
 ```RequiredMLIR:x86_64-windows
 === maxon
 module {
-  func @register-allocator.main() -> i64 {
+  func @main() -> i64 {
   entry:
     %0 = maxon.literal {value = 0 : i64}
     maxon.assign %0 {var = sum} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
@@ -4826,7 +4826,7 @@ module {
 }
 === standard
 module {
-  func @register-allocator.main() -> u32 {
+  func @main() -> u32 {
   entry:
     %0 = arith.constant {value = 0 : i64}
     memref.store %0, sum
@@ -4868,19 +4868,19 @@ module {
 }
 === x86
 module {
-  func @register-allocator.main() -> u32 {
+  func @main() -> u32 {
   entry:
     x86.prologue stack_size=16
     x86.xor rax, rax
     x86.mov [rbp-8], rax
     x86.xor rcx, rcx
     x86.mov [rbp-16], rcx
-    x86.jmp register-allocator.main.loop_0.header
+    x86.jmp main.loop_0.header
   loop_0.header:
     x86.mov rax, 10
     x86.mov rcx, [rbp-16]
     x86.cmp rcx, rax
-    x86.jge register-allocator.main.loop_0.exit
+    x86.jge main.loop_0.exit
   loop_0:
     x86.mov rax, [rbp-8]
     x86.mov rcx, [rbp-16]
@@ -4890,7 +4890,7 @@ module {
     x86.mov rbx, [rbp-16]
     x86.add rbx, rdx
     x86.mov [rbp-16], rbx
-    x86.jmp register-allocator.main.loop_0.header
+    x86.jmp main.loop_0.header
   loop_0.exit:
     x86.mov rax, 256
     x86.mov rcx, [rbp-8]
@@ -4908,7 +4908,7 @@ module {
     x86.movzx rcx, rcxb
     x86.or rax, rcx
     x86.test rax, rax
-    x86.je register-allocator.main.__range_ok_1
+    x86.je main.__range_ok_1
   __range_panic_1:
     x86.lea_symdata rax, [__panic_msg_0]
     x86.mov rcx, rax
@@ -5091,7 +5091,7 @@ end 'main'
 ```RequiredMLIR:x86_64-windows
 === maxon
 module {
-  func @register-allocator.main() -> i64 {
+  func @main() -> i64 {
   entry:
     %0 = maxon.literal {value = 0 : i64}
     maxon.assign %0 {var = even_sum} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
@@ -5162,7 +5162,7 @@ module {
 }
 === standard
 module {
-  func @register-allocator.main() -> u32 {
+  func @main() -> u32 {
   entry:
     %0 = arith.constant {value = 0 : i64}
     memref.store %0, even_sum
@@ -5231,7 +5231,7 @@ module {
 }
 === x86
 module {
-  func @register-allocator.main() -> u32 {
+  func @main() -> u32 {
   entry:
     x86.prologue stack_size=48
     x86.xor rax, rax
@@ -5242,12 +5242,12 @@ module {
     x86.mov [rbp-24], rdx
     x86.xor rbx, rbx
     x86.mov [rbp-32], rbx
-    x86.jmp register-allocator.main.loop_0.header
+    x86.jmp main.loop_0.header
   loop_0.header:
     x86.mov rax, 20
     x86.mov rcx, [rbp-32]
     x86.cmp rcx, rax
-    x86.jge register-allocator.main.loop_0.exit
+    x86.jge main.loop_0.exit
   loop_0:
     x86.mov rax, 2
     x86.mov rcx, [rbp-32]
@@ -5257,7 +5257,7 @@ module {
     x86.idiv rbx
     x86.xor rax, rax
     x86.cmp rdx, rax
-    x86.jne register-allocator.main.odd_2
+    x86.jne main.odd_2
   even_1:
     x86.mov rax, [rbp-8]
     x86.mov rcx, [rbp-32]
@@ -5267,19 +5267,19 @@ module {
     x86.mov rbx, [rbp-24]
     x86.add rbx, rdx
     x86.mov [rbp-24], rbx
-    x86.jmp register-allocator.main.even_1.merge
+    x86.jmp main.even_1.merge
   odd_2:
     x86.mov rax, [rbp-16]
     x86.mov rcx, [rbp-32]
     x86.add rax, rcx
     x86.mov [rbp-16], rax
-    x86.jmp register-allocator.main.even_1.merge
+    x86.jmp main.even_1.merge
   even_1.merge:
     x86.mov rax, 1
     x86.mov rcx, [rbp-32]
     x86.add rcx, rax
     x86.mov [rbp-32], rcx
-    x86.jmp register-allocator.main.loop_0.header
+    x86.jmp main.loop_0.header
   loop_0.exit:
     x86.mov rax, [rbp-8]
     x86.mov rcx, [rbp-16]
@@ -5300,7 +5300,7 @@ module {
     x86.movzx r9, r9b
     x86.or rdi, r9
     x86.test rdi, rdi
-    x86.je register-allocator.main.__range_ok_3
+    x86.je main.__range_ok_3
   __range_panic_3:
     x86.lea_symdata rax, [__panic_msg_0]
     x86.mov rcx, rax
@@ -5567,7 +5567,7 @@ end 'main'
 ```RequiredMLIR:x86_64-windows
 === maxon
 module {
-  func @register-allocator.main() -> i64 {
+  func @main() -> i64 {
   entry:
     %0 = maxon.literal {value = 0 : i64}
     maxon.assign %0 {var = result} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
@@ -5626,7 +5626,7 @@ module {
 }
 === standard
 module {
-  func @register-allocator.main() -> u32 {
+  func @main() -> u32 {
   entry:
     %0 = arith.constant {value = 0 : i64}
     memref.store %0, result
@@ -5683,30 +5683,30 @@ module {
 }
 === x86
 module {
-  func @register-allocator.main() -> u32 {
+  func @main() -> u32 {
   entry:
     x86.prologue stack_size=16
     x86.xor rax, rax
     x86.mov [rbp-8], rax
     x86.mov rcx, 1
     x86.mov [rbp-16], rcx
-    x86.jmp register-allocator.main.loop_0.header
+    x86.jmp main.loop_0.header
   loop_0.header:
     x86.mov rax, 10
     x86.mov rcx, [rbp-16]
     x86.cmp rcx, rax
-    x86.jg register-allocator.main.loop_0.exit
+    x86.jg main.loop_0.exit
   loop_0:
     x86.mov rax, 5
     x86.mov rcx, [rbp-16]
     x86.cmp rcx, rax
-    x86.jg register-allocator.main.second_2
+    x86.jg main.second_2
   first_1:
     x86.mov rax, [rbp-8]
     x86.mov rcx, [rbp-16]
     x86.add rax, rcx
     x86.mov [rbp-8], rax
-    x86.jmp register-allocator.main.first_1.merge
+    x86.jmp main.first_1.merge
   second_2:
     x86.mov rax, 2
     x86.mov rcx, [rbp-16]
@@ -5714,13 +5714,13 @@ module {
     x86.mov rdx, [rbp-8]
     x86.add rdx, rcx
     x86.mov [rbp-8], rdx
-    x86.jmp register-allocator.main.first_1.merge
+    x86.jmp main.first_1.merge
   first_1.merge:
     x86.mov rax, 1
     x86.mov rcx, [rbp-16]
     x86.add rcx, rax
     x86.mov [rbp-16], rcx
-    x86.jmp register-allocator.main.loop_0.header
+    x86.jmp main.loop_0.header
   loop_0.exit:
     x86.mov rax, 256
     x86.mov rcx, [rbp-8]
@@ -5738,7 +5738,7 @@ module {
     x86.movzx rcx, rcxb
     x86.or rax, rcx
     x86.test rax, rax
-    x86.je register-allocator.main.__range_ok_3
+    x86.je main.__range_ok_3
   __range_panic_3:
     x86.lea_symdata rax, [__panic_msg_0]
     x86.mov rcx, rax
@@ -5968,7 +5968,7 @@ end 'main'
 ```RequiredMLIR:x86_64-windows
 === maxon
 module {
-  func @register-allocator.main() -> i64 {
+  func @main() -> i64 {
   entry:
     %0 = maxon.literal {value = 0 : i64}
     maxon.assign %0 {var = total} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
@@ -6024,7 +6024,7 @@ module {
 }
 === standard
 module {
-  func @register-allocator.main() -> u32 {
+  func @main() -> u32 {
   entry:
     %0 = arith.constant {value = 0 : i64}
     memref.store %0, total
@@ -6079,28 +6079,28 @@ module {
 }
 === x86
 module {
-  func @register-allocator.main() -> u32 {
+  func @main() -> u32 {
   entry:
     x86.prologue stack_size=32
     x86.xor rax, rax
     x86.mov [rbp-8], rax
     x86.xor rcx, rcx
     x86.mov [rbp-16], rcx
-    x86.jmp register-allocator.main.outer_0.header
+    x86.jmp main.outer_0.header
   outer_0.header:
     x86.mov rax, 5
     x86.mov rcx, [rbp-16]
     x86.cmp rcx, rax
-    x86.jge register-allocator.main.outer_0.exit
+    x86.jge main.outer_0.exit
   outer_0:
     x86.xor rax, rax
     x86.mov [rbp-24], rax
-    x86.jmp register-allocator.main.inner_1.header
+    x86.jmp main.inner_1.header
   inner_1.header:
     x86.mov rax, 4
     x86.mov rcx, [rbp-24]
     x86.cmp rcx, rax
-    x86.jge register-allocator.main.inner_1.exit
+    x86.jge main.inner_1.exit
   inner_1:
     x86.mov rax, 1
     x86.mov rcx, [rbp-8]
@@ -6110,13 +6110,13 @@ module {
     x86.mov rbx, [rbp-24]
     x86.add rbx, rdx
     x86.mov [rbp-24], rbx
-    x86.jmp register-allocator.main.inner_1.header
+    x86.jmp main.inner_1.header
   inner_1.exit:
     x86.mov rax, 1
     x86.mov rcx, [rbp-16]
     x86.add rcx, rax
     x86.mov [rbp-16], rcx
-    x86.jmp register-allocator.main.outer_0.header
+    x86.jmp main.outer_0.header
   outer_0.exit:
     x86.mov rax, [rbp-8]
     x86.xor rcx, rcx
@@ -6129,7 +6129,7 @@ module {
     x86.movzx rsi, rsib
     x86.or rdx, rsi
     x86.test rdx, rdx
-    x86.je register-allocator.main.__range_ok_2
+    x86.je main.__range_ok_2
   __range_panic_2:
     x86.lea_symdata rax, [__panic_msg_0]
     x86.mov rcx, rax
@@ -6350,7 +6350,7 @@ end 'main'
 ```RequiredMLIR:x86_64-windows
 === maxon
 module {
-  func @register-allocator.main() -> i64 {
+  func @main() -> i64 {
   entry:
     %0 = maxon.literal {value = 0 : i64}
     maxon.assign %0 {var = total} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
@@ -6406,7 +6406,7 @@ module {
 }
 === standard
 module {
-  func @register-allocator.main() -> u32 {
+  func @main() -> u32 {
   entry:
     %0 = arith.constant {value = 0 : i64}
     memref.store %0, total
@@ -6461,28 +6461,28 @@ module {
 }
 === x86
 module {
-  func @register-allocator.main() -> u32 {
+  func @main() -> u32 {
   entry:
     x86.prologue stack_size=32
     x86.xor rax, rax
     x86.mov [rbp-8], rax
     x86.mov rcx, 1
     x86.mov [rbp-16], rcx
-    x86.jmp register-allocator.main.outer_0.header
+    x86.jmp main.outer_0.header
   outer_0.header:
     x86.mov rax, 5
     x86.mov rcx, [rbp-16]
     x86.cmp rcx, rax
-    x86.jg register-allocator.main.outer_0.exit
+    x86.jg main.outer_0.exit
   outer_0:
     x86.mov rax, 1
     x86.mov [rbp-24], rax
-    x86.jmp register-allocator.main.inner_1.header
+    x86.jmp main.inner_1.header
   inner_1.header:
     x86.mov rax, [rbp-24]
     x86.mov rcx, [rbp-16]
     x86.cmp rax, rcx
-    x86.jg register-allocator.main.inner_1.exit
+    x86.jg main.inner_1.exit
   inner_1:
     x86.mov rax, 1
     x86.mov rcx, [rbp-8]
@@ -6492,13 +6492,13 @@ module {
     x86.mov rbx, [rbp-24]
     x86.add rbx, rdx
     x86.mov [rbp-24], rbx
-    x86.jmp register-allocator.main.inner_1.header
+    x86.jmp main.inner_1.header
   inner_1.exit:
     x86.mov rax, 1
     x86.mov rcx, [rbp-16]
     x86.add rcx, rax
     x86.mov [rbp-16], rcx
-    x86.jmp register-allocator.main.outer_0.header
+    x86.jmp main.outer_0.header
   outer_0.exit:
     x86.mov rax, [rbp-8]
     x86.xor rcx, rcx
@@ -6511,7 +6511,7 @@ module {
     x86.movzx rsi, rsib
     x86.or rdx, rsi
     x86.test rdx, rdx
-    x86.je register-allocator.main.__range_ok_2
+    x86.je main.__range_ok_2
   __range_panic_2:
     x86.lea_symdata rax, [__panic_msg_0]
     x86.mov rcx, rax
@@ -6743,7 +6743,7 @@ module {
     maxon.scope_end [x]
     maxon.return %2
   }
-  func @register-allocator.main() -> i64 {
+  func @main() -> i64 {
   entry:
     %3 = maxon.literal {value = 0 : i64}
     maxon.assign %3 {var = sum} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
@@ -6791,7 +6791,7 @@ module {
     %2 = arith.muli %0, %1
     func.return %2
   }
-  func @register-allocator.main() -> u32 {
+  func @main() -> u32 {
   entry:
     %3 = arith.constant {value = 0 : i64}
     memref.store %3, sum
@@ -6839,19 +6839,19 @@ module {
     x86.mov rax, rcx
     x86.ret
   }
-  func @register-allocator.main() -> u32 {
+  func @main() -> u32 {
   entry:
     x86.prologue stack_size=16
     x86.xor rax, rax
     x86.mov [rbp-8], rax
     x86.xor rcx, rcx
     x86.mov [rbp-16], rcx
-    x86.jmp register-allocator.main.loop_0.header
+    x86.jmp main.loop_0.header
   loop_0.header:
     x86.mov rax, 5
     x86.mov rcx, [rbp-16]
     x86.cmp rcx, rax
-    x86.jge register-allocator.main.loop_0.exit
+    x86.jge main.loop_0.exit
   loop_0:
     x86.mov rax, [rbp-16]
     x86.mov rcx, [rbp-16]
@@ -6863,7 +6863,7 @@ module {
     x86.mov rbx, [rbp-16]
     x86.add rbx, rdx
     x86.mov [rbp-16], rbx
-    x86.jmp register-allocator.main.loop_0.header
+    x86.jmp main.loop_0.header
   loop_0.exit:
     x86.mov rax, [rbp-8]
     x86.xor rcx, rcx
@@ -6876,7 +6876,7 @@ module {
     x86.movzx rsi, rsib
     x86.or rdx, rsi
     x86.test rdx, rdx
-    x86.je register-allocator.main.__range_ok_1
+    x86.je main.__range_ok_1
   __range_panic_1:
     x86.lea_symdata rax, [__panic_msg_0]
     x86.mov rcx, rax
@@ -7065,7 +7065,7 @@ end 'main'
 ```RequiredMLIR:x86_64-windows
 === maxon
 module {
-  func @register-allocator.main() -> i64 {
+  func @main() -> i64 {
   entry:
     %0 = maxon.literal {value = 1 : i64}
     %1 = maxon.literal {value = 2 : i64}
@@ -7093,7 +7093,7 @@ module {
 }
 === standard
 module {
-  func @register-allocator.main() -> u32 {
+  func @main() -> u32 {
   entry:
     %0 = arith.constant {value = 1 : i64}
     %1 = arith.constant {value = 2 : i64}
@@ -7122,7 +7122,7 @@ module {
 }
 === x86
 module {
-  func @register-allocator.main() -> u32 {
+  func @main() -> u32 {
   entry:
     x86.prologue stack_size=16
     x86.mov rax, 1
@@ -7146,7 +7146,7 @@ module {
     x86.movzx rcx, rcxb
     x86.or r9, rcx
     x86.test r9, r9
-    x86.je register-allocator.main.__range_ok_0
+    x86.je main.__range_ok_0
   __range_panic_0:
     x86.lea_symdata rax, [__panic_msg_0]
     x86.mov rcx, rax
@@ -7275,7 +7275,7 @@ end 'main'
 ```RequiredMLIR:x86_64-windows
 === maxon
 module {
-  func @register-allocator.main() -> i64 {
+  func @main() -> i64 {
   entry:
     %0 = maxon.literal {value = 3 : i64}
     maxon.assign %0 {var = a} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
@@ -7303,7 +7303,7 @@ module {
 }
 === standard
 module {
-  func @register-allocator.main() -> u32 {
+  func @main() -> u32 {
   entry:
     %0 = arith.constant {value = 3 : i64}
     %1 = arith.constant {value = 5 : i64}
@@ -7328,7 +7328,7 @@ module {
 }
 === x86
 module {
-  func @register-allocator.main() -> u32 {
+  func @main() -> u32 {
   entry:
     x86.prologue stack_size=16
     x86.mov rax, 3
@@ -7348,7 +7348,7 @@ module {
     x86.movzx r9, r9b
     x86.or rdi, r9
     x86.test rdi, rdi
-    x86.je register-allocator.main.__range_ok_0
+    x86.je main.__range_ok_0
   __range_panic_0:
     x86.lea_symdata rax, [__panic_msg_0]
     x86.mov rcx, rax
@@ -7486,7 +7486,7 @@ module {
     maxon.scope_end [a, b, c, d, e]
     maxon.return %8
   }
-  func @register-allocator.main() -> i64 {
+  func @main() -> i64 {
   entry:
     %9 = maxon.literal {value = 5 : i64}
     %10 = maxon.literal {value = 10 : i64}
@@ -7522,7 +7522,7 @@ module {
     %8 = arith.addi %7, %4
     func.return %8
   }
-  func @register-allocator.main() -> u32 {
+  func @main() -> u32 {
   entry:
     %9 = arith.constant {value = 5 : i64}
     %10 = arith.constant {value = 10 : i64}
@@ -7554,7 +7554,7 @@ module {
     x86.lea rax, [rcx + rsi]
     x86.ret
   }
-  func @register-allocator.main() -> u32 {
+  func @main() -> u32 {
   entry:
     x86.prologue stack_size=16
     x86.mov rcx, 5
@@ -7573,7 +7573,7 @@ module {
     x86.movzx rdx, rdxb
     x86.or rcx, rdx
     x86.test rcx, rcx
-    x86.je register-allocator.main.__range_ok_0
+    x86.je main.__range_ok_0
   __range_panic_0:
     x86.lea_symdata rax, [__panic_msg_0]
     x86.mov rcx, rax
@@ -7748,7 +7748,7 @@ module {
     maxon.scope_end [a, b, c, d, e, f, g, h, i]
     maxon.return %16
   }
-  func @register-allocator.main() -> i64 {
+  func @main() -> i64 {
   entry:
     %17 = maxon.literal {value = 1 : i64}
     %18 = maxon.literal {value = 2 : i64}
@@ -7796,7 +7796,7 @@ module {
     %16 = arith.addi %15, %8
     func.return %16
   }
-  func @register-allocator.main() -> u32 {
+  func @main() -> u32 {
   entry:
     %17 = arith.constant {value = 1 : i64}
     %18 = arith.constant {value = 2 : i64}
@@ -7843,7 +7843,7 @@ module {
     x86.epilogue
     x86.ret
   }
-  func @register-allocator.main() -> u32 {
+  func @main() -> u32 {
   entry:
     x86.prologue stack_size=16
     x86.sub rsp, 16
@@ -7869,7 +7869,7 @@ module {
     x86.movzx rsi, rsib
     x86.or rdx, rsi
     x86.test rdx, rdx
-    x86.je register-allocator.main.__range_ok_0
+    x86.je main.__range_ok_0
   __range_panic_0:
     x86.lea_symdata rax, [__panic_msg_0]
     x86.mov rcx, rax
@@ -8083,7 +8083,7 @@ module {
     maxon.scope_end [n]
     maxon.return %9
   }
-  func @register-allocator.main() -> i64 {
+  func @main() -> i64 {
   entry:
     %10 = maxon.literal {value = 5 : i64}
     %11 = maxon.call @register-allocator.factorial %10
@@ -8123,7 +8123,7 @@ module {
     %9 = arith.muli %8, %7
     func.return %9
   }
-  func @register-allocator.main() -> u32 {
+  func @main() -> u32 {
   entry:
     %10 = arith.constant {value = 5 : i64}
     %11 = func.call @register-allocator.factorial %10
@@ -8167,7 +8167,7 @@ module {
     x86.epilogue
     x86.ret
   }
-  func @register-allocator.main() -> u32 {
+  func @main() -> u32 {
   entry:
     x86.prologue stack_size=16
     x86.mov rcx, 5
@@ -8186,7 +8186,7 @@ module {
     x86.movzx rax, raxb
     x86.or rcx, rax
     x86.test rcx, rcx
-    x86.je register-allocator.main.__range_ok_0
+    x86.je main.__range_ok_0
   __range_panic_0:
     x86.lea_symdata rax, [__panic_msg_0]
     x86.mov rcx, rax
@@ -8383,7 +8383,7 @@ module {
     maxon.scope_end [x]
     maxon.return %0
   }
-  func @register-allocator.main() -> i64 {
+  func @main() -> i64 {
   entry:
     %1 = maxon.literal {value = 1 : i64}
     maxon.assign %1 {var = a} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
@@ -8459,7 +8459,7 @@ module {
     %0 = func.param x : StdI64
     func.return %0
   }
-  func @register-allocator.main() -> u32 {
+  func @main() -> u32 {
   entry:
     %1 = arith.constant {value = 1 : i64}
     memref.store %1, a
@@ -8535,7 +8535,7 @@ module {
     x86.mov rax, rcx
     x86.ret
   }
-  func @register-allocator.main() -> u32 {
+  func @main() -> u32 {
   entry:
     x86.prologue stack_size=64
     x86.mov rax, 1
@@ -8552,12 +8552,12 @@ module {
     x86.mov [rbp-48], rdi
     x86.xor r8, r8
     x86.mov [rbp-56], r8
-    x86.jmp register-allocator.main.loop_0.header
+    x86.jmp main.loop_0.header
   loop_0.header:
     x86.mov rax, 3
     x86.mov rcx, [rbp-56]
     x86.cmp rcx, rax
-    x86.jge register-allocator.main.loop_0.exit
+    x86.jge main.loop_0.exit
   loop_0:
     x86.mov rax, [rbp-16]
     x86.mov rcx, [rbp-16]
@@ -8581,7 +8581,7 @@ module {
     x86.mov r9, [rbp-56]
     x86.add r9, r8
     x86.mov [rbp-56], r9
-    x86.jmp register-allocator.main.loop_0.header
+    x86.jmp main.loop_0.header
   loop_0.exit:
     x86.mov rax, [rbp-8]
     x86.mov rcx, [rbp-24]
@@ -8606,7 +8606,7 @@ module {
     x86.movzx rax, raxb
     x86.or r9, rax
     x86.test r9, r9
-    x86.je register-allocator.main.__range_ok_1
+    x86.je main.__range_ok_1
   __range_panic_1:
     x86.lea_symdata rax, [__panic_msg_0]
     x86.mov rcx, rax
@@ -8886,7 +8886,7 @@ end 'main'
 ```RequiredMLIR:x86_64-windows
 === maxon
 module {
-  func @register-allocator.main() -> i64 {
+  func @main() -> i64 {
   entry:
     %0 = maxon.literal {value = 3.14 : f64}
     maxon.assign %0 {var = x} {kind = f64} {decl = 1 : i1} {mut = 1 : i1}
@@ -8917,7 +8917,7 @@ module {
 }
 === standard
 module {
-  func @register-allocator.main() -> u32 {
+  func @main() -> u32 {
   entry:
     %0 = arith.float_constant {value = 3.14 : f64}
     %1 = arith.float_constant {value = 2.86 : f64}
@@ -8943,7 +8943,7 @@ module {
 }
 === x86
 module {
-  func @register-allocator.main() -> u32 {
+  func @main() -> u32 {
   entry:
     x86.prologue stack_size=16
     x86.movsd xmm0, [rip+__float_3.14]
@@ -8965,7 +8965,7 @@ module {
     x86.movzx r8, r8b
     x86.or rsi, r8
     x86.test rsi, rsi
-    x86.je register-allocator.main.__range_ok_0
+    x86.je main.__range_ok_0
   __range_panic_0:
     x86.lea_symdata rax, [__panic_msg_0]
     x86.mov rcx, rax
@@ -9101,7 +9101,7 @@ end 'main'
 ```RequiredMLIR:x86_64-windows
 === maxon
 module {
-  func @register-allocator.main() -> i64 {
+  func @main() -> i64 {
   entry:
     %0 = maxon.literal {value = 100 : i64}
     maxon.assign %0 {var = sentinel} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
@@ -9169,7 +9169,7 @@ module {
 }
 === standard
 module {
-  func @register-allocator.main() -> u32 {
+  func @main() -> u32 {
   entry:
     %0 = arith.constant {value = 100 : i64}
     memref.store %0, sentinel
@@ -9235,7 +9235,7 @@ module {
 }
 === x86
 module {
-  func @register-allocator.main() -> u32 {
+  func @main() -> u32 {
   entry:
     x86.prologue stack_size=32
     x86.mov rax, 100
@@ -9244,44 +9244,44 @@ module {
     x86.mov [rbp-16], rcx
     x86.xor rdx, rdx
     x86.mov [rbp-24], rdx
-    x86.jmp register-allocator.main.outer_0.header
+    x86.jmp main.outer_0.header
   outer_0.header:
     x86.mov rax, 3
     x86.mov rcx, [rbp-24]
     x86.cmp rcx, rax
-    x86.jge register-allocator.main.outer_0.exit
+    x86.jge main.outer_0.exit
   outer_0:
     x86.xor rax, rax
     x86.mov [rbp-32], rax
-    x86.jmp register-allocator.main.inner_1.header
+    x86.jmp main.inner_1.header
   inner_1.header:
     x86.mov rax, 3
     x86.mov rcx, [rbp-32]
     x86.cmp rcx, rax
-    x86.jge register-allocator.main.inner_1.exit
+    x86.jge main.inner_1.exit
   inner_1:
     x86.mov rax, [rbp-24]
     x86.mov rcx, [rbp-32]
     x86.cmp rax, rcx
-    x86.jne register-allocator.main.diag_2.merge
+    x86.jne main.diag_2.merge
   diag_2:
     x86.mov rax, 1
     x86.mov rcx, [rbp-16]
     x86.add rcx, rax
     x86.mov [rbp-16], rcx
-    x86.jmp register-allocator.main.diag_2.merge
+    x86.jmp main.diag_2.merge
   diag_2.merge:
     x86.mov rax, 1
     x86.mov rcx, [rbp-32]
     x86.add rcx, rax
     x86.mov [rbp-32], rcx
-    x86.jmp register-allocator.main.inner_1.header
+    x86.jmp main.inner_1.header
   inner_1.exit:
     x86.mov rax, 1
     x86.mov rcx, [rbp-24]
     x86.add rcx, rax
     x86.mov [rbp-24], rcx
-    x86.jmp register-allocator.main.outer_0.header
+    x86.jmp main.outer_0.header
   outer_0.exit:
     x86.mov rax, [rbp-8]
     x86.mov rcx, [rbp-16]
@@ -9296,7 +9296,7 @@ module {
     x86.movzx rdi, rdib
     x86.or rbx, rdi
     x86.test rbx, rbx
-    x86.je register-allocator.main.__range_ok_3
+    x86.je main.__range_ok_3
   __range_panic_3:
     x86.lea_symdata rax, [__panic_msg_0]
     x86.mov rcx, rax
@@ -9553,7 +9553,7 @@ end 'main'
 ```RequiredMLIR:x86_64-windows
 === maxon
 module {
-  func @register-allocator.main() -> i64 {
+  func @main() -> i64 {
   entry:
     %0 = maxon.literal {value = 0 : i64}
     maxon.assign %0 {var = a} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
@@ -9598,7 +9598,7 @@ module {
 }
 === standard
 module {
-  func @register-allocator.main() -> u32 {
+  func @main() -> u32 {
   entry:
     %0 = arith.constant {value = 0 : i64}
     memref.store %0, a
@@ -9642,7 +9642,7 @@ module {
 }
 === x86
 module {
-  func @register-allocator.main() -> u32 {
+  func @main() -> u32 {
   entry:
     x86.prologue stack_size=32
     x86.xor rax, rax
@@ -9651,12 +9651,12 @@ module {
     x86.mov [rbp-16], rcx
     x86.xor rdx, rdx
     x86.mov [rbp-24], rdx
-    x86.jmp register-allocator.main.loop_0.header
+    x86.jmp main.loop_0.header
   loop_0.header:
     x86.mov rax, 13
     x86.mov rcx, [rbp-24]
     x86.cmp rcx, rax
-    x86.jge register-allocator.main.loop_0.exit
+    x86.jge main.loop_0.exit
   loop_0:
     x86.mov rax, [rbp-8]
     x86.mov rcx, [rbp-16]
@@ -9668,7 +9668,7 @@ module {
     x86.mov rsi, [rbp-24]
     x86.add rsi, rbx
     x86.mov [rbp-24], rsi
-    x86.jmp register-allocator.main.loop_0.header
+    x86.jmp main.loop_0.header
   loop_0.exit:
     x86.mov rax, [rbp-8]
     x86.xor rcx, rcx
@@ -9681,7 +9681,7 @@ module {
     x86.movzx rsi, rsib
     x86.or rdx, rsi
     x86.test rdx, rdx
-    x86.je register-allocator.main.__range_ok_1
+    x86.je main.__range_ok_1
   __range_panic_1:
     x86.lea_symdata rax, [__panic_msg_0]
     x86.mov rcx, rax
@@ -9901,7 +9901,7 @@ module {
     maxon.scope_end [a, b, c, d, x, y, z]
     maxon.return %6
   }
-  func @register-allocator.main() -> i64 {
+  func @main() -> i64 {
   entry:
     %7 = maxon.literal {value = 42 : i64}
     maxon.assign %7 {var = sentinel} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
@@ -9938,7 +9938,7 @@ module {
     %6 = arith.addi %4, %5
     func.return %6
   }
-  func @register-allocator.main() -> u32 {
+  func @main() -> u32 {
   entry:
     %7 = arith.constant {value = 42 : i64}
     %8 = arith.constant {value = 1 : i64}
@@ -9970,7 +9970,7 @@ module {
     x86.lea rax, [rcx + r8]
     x86.ret
   }
-  func @register-allocator.main() -> u32 {
+  func @main() -> u32 {
   entry:
     x86.prologue stack_size=16
     x86.mov rax, 42
@@ -9991,7 +9991,7 @@ module {
     x86.movzx rdi, rdib
     x86.or rbx, rdi
     x86.test rbx, rbx
-    x86.je register-allocator.main.__range_ok_0
+    x86.je main.__range_ok_0
   __range_panic_0:
     x86.lea_symdata rax, [__panic_msg_0]
     x86.mov rcx, rax
@@ -10157,7 +10157,7 @@ module {
     maxon.scope_end []
     maxon.return %0
   }
-  func @register-allocator.main() -> i64 {
+  func @main() -> i64 {
   entry:
     %1 = maxon.literal {value = 3.14 : f64}
     maxon.assign %1 {var = f} {kind = f64} {decl = 1 : i1} {mut = 1 : i1}
@@ -10185,7 +10185,7 @@ module {
     %0 = arith.constant {value = 40 : i64}
     func.return %0
   }
-  func @register-allocator.main() -> u32 {
+  func @main() -> u32 {
   entry:
     %1 = arith.float_constant {value = 3.14 : f64}
     %2 = func.call @register-allocator.getInt
@@ -10212,7 +10212,7 @@ module {
     x86.mov rax, 40
     x86.ret
   }
-  func @register-allocator.main() -> u32 {
+  func @main() -> u32 {
   entry:
     x86.prologue stack_size=16
     x86.movsd xmm0, [rip+__float_3.14]
@@ -10231,7 +10231,7 @@ module {
     x86.movzx rdx, rdxb
     x86.or rax, rdx
     x86.test rax, rax
-    x86.je register-allocator.main.__range_ok_0
+    x86.je main.__range_ok_0
   __range_panic_0:
     x86.lea_symdata rax, [__panic_msg_0]
     x86.mov rcx, rax
@@ -10374,7 +10374,7 @@ end 'main'
 ```RequiredMLIR:x86_64-windows
 === maxon
 module {
-  func @register-allocator.main() -> i64 {
+  func @main() -> i64 {
   entry:
     %0 = maxon.literal {value = 100 : i64}
     maxon.assign %0 {var = a} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
@@ -10400,7 +10400,7 @@ module {
 }
 === standard
 module {
-  func @register-allocator.main() -> u32 {
+  func @main() -> u32 {
   entry:
     %0 = arith.constant {value = 100 : i64}
     %1 = arith.constant {value = 7 : i64}
@@ -10423,7 +10423,7 @@ module {
 }
 === x86
 module {
-  func @register-allocator.main() -> u32 {
+  func @main() -> u32 {
   entry:
     x86.prologue stack_size=16
     x86.mov rax, 100
@@ -10443,7 +10443,7 @@ module {
     x86.movzx r9, r9b
     x86.or rdi, r9
     x86.test rdi, rdi
-    x86.je register-allocator.main.__range_ok_0
+    x86.je main.__range_ok_0
   __range_panic_0:
     x86.lea_symdata rax, [__panic_msg_0]
     x86.mov rcx, rax
@@ -10574,7 +10574,7 @@ module {
     maxon.scope_end [a, b]
     maxon.return %2
   }
-  func @register-allocator.main() -> i64 {
+  func @main() -> i64 {
   entry:
     %3 = maxon.literal {value = 10 : i64}
     maxon.assign %3 {var = x} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
@@ -10606,7 +10606,7 @@ module {
     %2 = arith.subi %0, %1
     func.return %2
   }
-  func @register-allocator.main() -> u32 {
+  func @main() -> u32 {
   entry:
     %3 = arith.constant {value = 10 : i64}
     %4 = arith.constant {value = 3 : i64}
@@ -10635,7 +10635,7 @@ module {
     x86.mov rax, rcx
     x86.ret
   }
-  func @register-allocator.main() -> u32 {
+  func @main() -> u32 {
   entry:
     x86.prologue stack_size=16
     x86.mov rcx, 3
@@ -10653,7 +10653,7 @@ module {
     x86.movzx rdx, rdxb
     x86.or rcx, rdx
     x86.test rcx, rcx
-    x86.je register-allocator.main.__range_ok_0
+    x86.je main.__range_ok_0
   __range_panic_0:
     x86.lea_symdata rax, [__panic_msg_0]
     x86.mov rcx, rax
@@ -10792,7 +10792,7 @@ end 'main'
 ```RequiredMLIR:x86_64-windows
 === maxon
 module {
-  func @register-allocator.main() -> i64 {
+  func @main() -> i64 {
   entry:
     %0 = maxon.literal {value = 100 : i64}
     maxon.assign %0 {var = a} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
@@ -10832,7 +10832,7 @@ module {
 }
 === standard
 module {
-  func @register-allocator.main() -> u32 {
+  func @main() -> u32 {
   entry:
     %0 = arith.constant {value = 100 : i64}
     %1 = arith.constant {value = 1 : i64}
@@ -10865,7 +10865,7 @@ module {
 }
 === x86
 module {
-  func @register-allocator.main() -> u32 {
+  func @main() -> u32 {
   entry:
     x86.prologue stack_size=16
     x86.mov rax, 100
@@ -10893,7 +10893,7 @@ module {
     x86.movzx rdx, rdxb
     x86.or rcx, rdx
     x86.test rcx, rcx
-    x86.je register-allocator.main.__range_ok_0
+    x86.je main.__range_ok_0
   __range_panic_0:
     x86.lea_symdata rax, [__panic_msg_0]
     x86.mov rcx, rax
@@ -11050,7 +11050,7 @@ end 'main'
 ```RequiredMLIR:x86_64-windows
 === maxon
 module {
-  func @register-allocator.main() -> i64 {
+  func @main() -> i64 {
   entry:
     %0 = maxon.literal {value = 0 : i64}
     maxon.assign %0 {var = x} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
@@ -11101,7 +11101,7 @@ module {
 }
 === standard
 module {
-  func @register-allocator.main() -> u32 {
+  func @main() -> u32 {
   entry:
     %3 = arith.constant {value = 1 : i64}
     %4 = arith.constant {value = 2 : i64}
@@ -11145,13 +11145,13 @@ module {
 }
 === x86
 module {
-  func @register-allocator.main() -> u32 {
+  func @main() -> u32 {
   entry:
     x86.prologue stack_size=32
     x86.mov rax, 1
     x86.mov rcx, 2
     x86.cmp rax, rcx
-    x86.jge register-allocator.main.other_1
+    x86.jge main.other_1
   branch_0:
     x86.mov rax, 10
     x86.mov [rbp-8], rax
@@ -11159,7 +11159,7 @@ module {
     x86.mov [rbp-16], rcx
     x86.mov rdx, 12
     x86.mov [rbp-24], rdx
-    x86.jmp register-allocator.main.branch_0.merge
+    x86.jmp main.branch_0.merge
   other_1:
     x86.mov rax, 1
     x86.mov [rbp-8], rax
@@ -11167,7 +11167,7 @@ module {
     x86.mov [rbp-16], rcx
     x86.mov rdx, 3
     x86.mov [rbp-24], rdx
-    x86.jmp register-allocator.main.branch_0.merge
+    x86.jmp main.branch_0.merge
   branch_0.merge:
     x86.mov rax, [rbp-8]
     x86.mov rcx, [rbp-16]
@@ -11184,7 +11184,7 @@ module {
     x86.movzx r8, r8b
     x86.or rsi, r8
     x86.test rsi, rsi
-    x86.je register-allocator.main.__range_ok_2
+    x86.je main.__range_ok_2
   __range_panic_2:
     x86.lea_symdata rax, [__panic_msg_0]
     x86.mov rcx, rax
@@ -11372,7 +11372,7 @@ end 'main'
 ```RequiredMLIR:x86_64-windows
 === maxon
 module {
-  func @register-allocator.main() -> i64 {
+  func @main() -> i64 {
   entry:
     %0 = maxon.literal {value = 2 : i64}
     maxon.assign %0 {var = x} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
@@ -11405,7 +11405,7 @@ module {
 }
 === standard
 module {
-  func @register-allocator.main() -> u32 {
+  func @main() -> u32 {
   entry:
     %0 = arith.constant {value = 2 : i64}
     memref.store %0, __match_check_0
@@ -11434,17 +11434,17 @@ module {
 }
 === x86
 module {
-  func @register-allocator.main() -> u32 {
+  func @main() -> u32 {
   entry:
     x86.prologue stack_size=16
     x86.mov rax, 2
     x86.mov [rbp-8], rax
-    x86.jmp register-allocator.main.check_0.cmp0
+    x86.jmp main.check_0.cmp0
   check_0.cmp0:
     x86.mov rax, [rbp-8]
     x86.mov rcx, 1
     x86.cmp rax, rcx
-    x86.jne register-allocator.main.check_0.cmp1
+    x86.jne main.check_0.cmp1
   check_0.case0:
     x86.mov rax, 10
     x86.epilogue
@@ -11453,7 +11453,7 @@ module {
     x86.mov rax, [rbp-8]
     x86.mov rcx, 2
     x86.cmp rax, rcx
-    x86.jne register-allocator.main.check_0.case2
+    x86.jne main.check_0.case2
   check_0.case1:
     x86.mov rax, 20
     x86.epilogue
@@ -11589,7 +11589,7 @@ end 'main'
 ```RequiredMLIR:x86_64-windows
 === maxon
 module {
-  func @register-allocator.main() -> i64 {
+  func @main() -> i64 {
   entry:
     %0 = maxon.literal {value = 2 : i64}
     maxon.assign %0 {var = x} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
@@ -11639,7 +11639,7 @@ module {
 }
 === standard
 module {
-  func @register-allocator.main() -> u32 {
+  func @main() -> u32 {
   entry:
     %0 = arith.constant {value = 2 : i64}
     memref.store %0, __match_process_0
@@ -11684,34 +11684,34 @@ module {
 }
 === x86
 module {
-  func @register-allocator.main() -> u32 {
+  func @main() -> u32 {
   entry:
     x86.prologue stack_size=16
     x86.mov rax, 2
     x86.mov [rbp-8], rax
-    x86.jmp register-allocator.main.process_0.cmp0
+    x86.jmp main.process_0.cmp0
   process_0.cmp0:
     x86.mov rax, [rbp-8]
     x86.mov rcx, 1
     x86.cmp rax, rcx
-    x86.jne register-allocator.main.process_0.cmp1
+    x86.jne main.process_0.cmp1
   process_0.case0:
     x86.mov rax, 100
     x86.mov [rbp-16], rax
-    x86.jmp register-allocator.main.process_0.merge
+    x86.jmp main.process_0.merge
   process_0.cmp1:
     x86.mov rax, [rbp-8]
     x86.mov rcx, 2
     x86.cmp rax, rcx
-    x86.jne register-allocator.main.process_0.case2
+    x86.jne main.process_0.case2
   process_0.case1:
     x86.mov rax, 200
     x86.mov [rbp-16], rax
-    x86.jmp register-allocator.main.process_0.merge
+    x86.jmp main.process_0.merge
   process_0.case2:
     x86.xor rax, rax
     x86.mov [rbp-16], rax
-    x86.jmp register-allocator.main.process_0.merge
+    x86.jmp main.process_0.merge
   process_0.merge:
     x86.mov rax, [rbp-16]
     x86.xor rcx, rcx
@@ -11724,7 +11724,7 @@ module {
     x86.movzx rsi, rsib
     x86.or rdx, rsi
     x86.test rdx, rdx
-    x86.je register-allocator.main.__range_ok_1
+    x86.je main.__range_ok_1
   __range_panic_1:
     x86.lea_symdata rax, [__panic_msg_0]
     x86.mov rcx, rax
@@ -11914,7 +11914,7 @@ end 'main'
 ```RequiredMLIR:x86_64-windows
 === maxon
 module {
-  func @register-allocator.main() -> i64 {
+  func @main() -> i64 {
   entry:
     %0 = maxon.literal {value = 3 : i64}
     maxon.assign %0 {var = x} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
@@ -11955,7 +11955,7 @@ module {
 }
 === standard
 module {
-  func @register-allocator.main() -> u32 {
+  func @main() -> u32 {
   entry:
     %0 = arith.constant {value = 3 : i64}
     memref.store %0, __match_check_0
@@ -11992,12 +11992,12 @@ module {
 }
 === x86
 module {
-  func @register-allocator.main() -> u32 {
+  func @main() -> u32 {
   entry:
     x86.prologue stack_size=16
     x86.mov rax, 3
     x86.mov [rbp-8], rax
-    x86.jmp register-allocator.main.check_0.cmp0
+    x86.jmp main.check_0.cmp0
   check_0.cmp0:
     x86.mov rax, [rbp-8]
     x86.mov rcx, 1
@@ -12011,7 +12011,7 @@ module {
     x86.movzx rdi, rdib
     x86.or rdx, rdi
     x86.test rdx, rdx
-    x86.je register-allocator.main.check_0.cmp1
+    x86.je main.check_0.cmp1
   check_0.case0:
     x86.mov rax, 10
     x86.epilogue
@@ -12029,7 +12029,7 @@ module {
     x86.movzx rdi, rdib
     x86.or rdx, rdi
     x86.test rdx, rdx
-    x86.je register-allocator.main.check_0.case2
+    x86.je main.check_0.case2
   check_0.case1:
     x86.mov rax, 20
     x86.epilogue
@@ -12192,7 +12192,7 @@ end 'main'
 ```RequiredMLIR:x86_64-windows
 === maxon
 module {
-  func @register-allocator.main() -> i64 {
+  func @main() -> i64 {
   entry:
     %0 = maxon.literal {value = 1 : i64}
     maxon.assign %0 {var = x} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
@@ -12258,7 +12258,7 @@ module {
 }
 === standard
 module {
-  func @register-allocator.main() -> u32 {
+  func @main() -> u32 {
   entry:
     %0 = arith.constant {value = 1 : i64}
     %1 = arith.constant {value = 0 : i64}
@@ -12320,51 +12320,51 @@ module {
 }
 === x86
 module {
-  func @register-allocator.main() -> u32 {
+  func @main() -> u32 {
   entry:
     x86.prologue stack_size=16
     x86.mov rax, 1
     x86.xor rcx, rcx
     x86.mov [rbp-8], rcx
     x86.mov [rbp-16], rax
-    x86.jmp register-allocator.main.cascade_0.cmp0
+    x86.jmp main.cascade_0.cmp0
   cascade_0.cmp0:
     x86.mov rax, [rbp-16]
     x86.mov rcx, 1
     x86.cmp rax, rcx
-    x86.jne register-allocator.main.cascade_0.cmp1
+    x86.jne main.cascade_0.cmp1
   cascade_0.case0:
     x86.mov rax, 10
     x86.mov rcx, [rbp-8]
     x86.add rcx, rax
     x86.mov [rbp-8], rcx
-    x86.jmp register-allocator.main.cascade_0.case1
+    x86.jmp main.cascade_0.case1
   cascade_0.cmp1:
     x86.mov rax, [rbp-16]
     x86.mov rcx, 2
     x86.cmp rax, rcx
-    x86.jne register-allocator.main.cascade_0.cmp2
+    x86.jne main.cascade_0.cmp2
   cascade_0.case1:
     x86.mov rax, 20
     x86.mov rcx, [rbp-8]
     x86.add rcx, rax
     x86.mov [rbp-8], rcx
-    x86.jmp register-allocator.main.cascade_0.case2
+    x86.jmp main.cascade_0.case2
   cascade_0.cmp2:
     x86.mov rax, [rbp-16]
     x86.mov rcx, 3
     x86.cmp rax, rcx
-    x86.jne register-allocator.main.cascade_0.case3
+    x86.jne main.cascade_0.case3
   cascade_0.case2:
     x86.mov rax, 30
     x86.mov rcx, [rbp-8]
     x86.add rcx, rax
     x86.mov [rbp-8], rcx
-    x86.jmp register-allocator.main.cascade_0.merge
+    x86.jmp main.cascade_0.merge
   cascade_0.case3:
     x86.mov rax, 100
     x86.mov [rbp-8], rax
-    x86.jmp register-allocator.main.cascade_0.merge
+    x86.jmp main.cascade_0.merge
   cascade_0.merge:
     x86.mov rax, [rbp-8]
     x86.xor rcx, rcx
@@ -12377,7 +12377,7 @@ module {
     x86.movzx rsi, rsib
     x86.or rdx, rsi
     x86.test rdx, rdx
-    x86.je register-allocator.main.__range_ok_1
+    x86.je main.__range_ok_1
   __range_panic_1:
     x86.lea_symdata rax, [__panic_msg_0]
     x86.mov rcx, rax
@@ -12621,7 +12621,7 @@ end 'main'
 ```RequiredMLIR:x86_64-windows
 === maxon
 module {
-  func @register-allocator.main() -> i64 {
+  func @main() -> i64 {
   entry:
     %0 = maxon.literal {value = 2 : i64}
     maxon.assign %0 {var = x} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
@@ -12669,7 +12669,7 @@ module {
 }
 === standard
 module {
-  func @register-allocator.main() -> u32 {
+  func @main() -> u32 {
   entry:
     %0 = arith.constant {value = 2 : i64}
     memref.store %0, __match_eval_0
@@ -12714,34 +12714,34 @@ module {
 }
 === x86
 module {
-  func @register-allocator.main() -> u32 {
+  func @main() -> u32 {
   entry:
     x86.prologue stack_size=16
     x86.mov rax, 2
     x86.mov [rbp-8], rax
-    x86.jmp register-allocator.main.eval_0.cmp0
+    x86.jmp main.eval_0.cmp0
   eval_0.cmp0:
     x86.mov rax, [rbp-8]
     x86.mov rcx, 1
     x86.cmp rax, rcx
-    x86.jne register-allocator.main.eval_0.cmp1
+    x86.jne main.eval_0.cmp1
   eval_0.case0:
     x86.mov rax, 10
     x86.mov [rbp-16], rax
-    x86.jmp register-allocator.main.eval_0.merge
+    x86.jmp main.eval_0.merge
   eval_0.cmp1:
     x86.mov rax, [rbp-8]
     x86.mov rcx, 2
     x86.cmp rax, rcx
-    x86.jne register-allocator.main.eval_0.case2
+    x86.jne main.eval_0.case2
   eval_0.case1:
     x86.mov rax, 20
     x86.mov [rbp-16], rax
-    x86.jmp register-allocator.main.eval_0.merge
+    x86.jmp main.eval_0.merge
   eval_0.case2:
     x86.xor rax, rax
     x86.mov [rbp-16], rax
-    x86.jmp register-allocator.main.eval_0.merge
+    x86.jmp main.eval_0.merge
   eval_0.merge:
     x86.mov rax, [rbp-16]
     x86.xor rcx, rcx
@@ -12754,7 +12754,7 @@ module {
     x86.movzx rsi, rsib
     x86.or rdx, rsi
     x86.test rdx, rdx
-    x86.je register-allocator.main.__range_ok_1
+    x86.je main.__range_ok_1
   __range_panic_1:
     x86.lea_symdata rax, [__panic_msg_0]
     x86.mov rcx, rax
@@ -12943,7 +12943,7 @@ end 'main'
 ```RequiredMLIR:x86_64-windows
 === maxon
 module {
-  func @register-allocator.main() -> i64 {
+  func @main() -> i64 {
   entry:
     %0 = maxon.literal {value = 4 : i64}
     maxon.assign %0 {var = x} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
@@ -12999,7 +12999,7 @@ module {
 }
 === standard
 module {
-  func @register-allocator.main() -> u32 {
+  func @main() -> u32 {
   entry:
     %0 = arith.constant {value = 4 : i64}
     memref.store %0, __match_eval_0
@@ -13052,12 +13052,12 @@ module {
 }
 === x86
 module {
-  func @register-allocator.main() -> u32 {
+  func @main() -> u32 {
   entry:
     x86.prologue stack_size=16
     x86.mov rax, 4
     x86.mov [rbp-8], rax
-    x86.jmp register-allocator.main.eval_0.cmp0
+    x86.jmp main.eval_0.cmp0
   eval_0.cmp0:
     x86.mov rax, [rbp-8]
     x86.mov rcx, 1
@@ -13071,11 +13071,11 @@ module {
     x86.movzx rdi, rdib
     x86.or rdx, rdi
     x86.test rdx, rdx
-    x86.je register-allocator.main.eval_0.cmp1
+    x86.je main.eval_0.cmp1
   eval_0.case0:
     x86.mov rax, 10
     x86.mov [rbp-16], rax
-    x86.jmp register-allocator.main.eval_0.merge
+    x86.jmp main.eval_0.merge
   eval_0.cmp1:
     x86.mov rax, [rbp-8]
     x86.mov rcx, 3
@@ -13089,15 +13089,15 @@ module {
     x86.movzx rdi, rdib
     x86.or rdx, rdi
     x86.test rdx, rdx
-    x86.je register-allocator.main.eval_0.case2
+    x86.je main.eval_0.case2
   eval_0.case1:
     x86.mov rax, 20
     x86.mov [rbp-16], rax
-    x86.jmp register-allocator.main.eval_0.merge
+    x86.jmp main.eval_0.merge
   eval_0.case2:
     x86.xor rax, rax
     x86.mov [rbp-16], rax
-    x86.jmp register-allocator.main.eval_0.merge
+    x86.jmp main.eval_0.merge
   eval_0.merge:
     x86.mov rax, [rbp-16]
     x86.xor rcx, rcx
@@ -13110,7 +13110,7 @@ module {
     x86.movzx rsi, rsib
     x86.or rdx, rsi
     x86.test rdx, rdx
-    x86.je register-allocator.main.__range_ok_1
+    x86.je main.__range_ok_1
   __range_panic_1:
     x86.lea_symdata rax, [__panic_msg_0]
     x86.mov rcx, rax
@@ -13325,7 +13325,7 @@ end 'main'
 ```RequiredMLIR:x86_64-windows
 === maxon
 module {
-  func @register-allocator.main() -> i64 {
+  func @main() -> i64 {
   entry:
     %0 = maxon.literal {value = 2 : i64}
     maxon.assign %0 {var = x} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
@@ -13375,7 +13375,7 @@ module {
 }
 === standard
 module {
-  func @register-allocator.main() -> u32 {
+  func @main() -> u32 {
   entry:
     %0 = arith.constant {value = 2 : i64}
     memref.store %0, __match_eval_0
@@ -13422,34 +13422,34 @@ module {
 }
 === x86
 module {
-  func @register-allocator.main() -> u32 {
+  func @main() -> u32 {
   entry:
     x86.prologue stack_size=16
     x86.mov rax, 2
     x86.mov [rbp-8], rax
-    x86.jmp register-allocator.main.eval_0.cmp0
+    x86.jmp main.eval_0.cmp0
   eval_0.cmp0:
     x86.mov rax, [rbp-8]
     x86.mov rcx, 1
     x86.cmp rax, rcx
-    x86.jne register-allocator.main.eval_0.cmp1
+    x86.jne main.eval_0.cmp1
   eval_0.case0:
     x86.mov rax, 10
     x86.mov [rbp-16], rax
-    x86.jmp register-allocator.main.eval_0.merge
+    x86.jmp main.eval_0.merge
   eval_0.cmp1:
     x86.mov rax, [rbp-8]
     x86.mov rcx, 2
     x86.cmp rax, rcx
-    x86.jne register-allocator.main.eval_0.case2
+    x86.jne main.eval_0.case2
   eval_0.case1:
     x86.mov rax, 20
     x86.mov [rbp-16], rax
-    x86.jmp register-allocator.main.eval_0.merge
+    x86.jmp main.eval_0.merge
   eval_0.case2:
     x86.xor rax, rax
     x86.mov [rbp-16], rax
-    x86.jmp register-allocator.main.eval_0.merge
+    x86.jmp main.eval_0.merge
   eval_0.merge:
     x86.mov rax, [rbp-16]
     x86.mov rcx, 2
@@ -13464,7 +13464,7 @@ module {
     x86.movzx rdi, rdib
     x86.or rbx, rdi
     x86.test rbx, rbx
-    x86.je register-allocator.main.__range_ok_1
+    x86.je main.__range_ok_1
   __range_panic_1:
     x86.lea_symdata rax, [__panic_msg_0]
     x86.mov rcx, rax
@@ -13675,7 +13675,7 @@ module {
     maxon.scope_end [n]
     maxon.return %2
   }
-  func @register-allocator.main() -> i64 {
+  func @main() -> i64 {
   entry:
     %3 = maxon.literal {value = 2 : i64}
     maxon.assign %3 {var = x} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
@@ -13734,7 +13734,7 @@ module {
     %2 = arith.muli %0, %1
     func.return %2
   }
-  func @register-allocator.main() -> u32 {
+  func @main() -> u32 {
   entry:
     %3 = arith.constant {value = 2 : i64}
     memref.store %3, __match_process_0
@@ -13788,36 +13788,36 @@ module {
     x86.mov rax, rcx
     x86.ret
   }
-  func @register-allocator.main() -> u32 {
+  func @main() -> u32 {
   entry:
     x86.prologue stack_size=16
     x86.mov rax, 2
     x86.mov [rbp-8], rax
-    x86.jmp register-allocator.main.process_0.cmp0
+    x86.jmp main.process_0.cmp0
   process_0.cmp0:
     x86.mov rax, [rbp-8]
     x86.mov rcx, 1
     x86.cmp rax, rcx
-    x86.jne register-allocator.main.process_0.cmp1
+    x86.jne main.process_0.cmp1
   process_0.case0:
     x86.mov rcx, 10
     x86.call register-allocator.double
     x86.mov [rbp-16], rax
-    x86.jmp register-allocator.main.process_0.merge
+    x86.jmp main.process_0.merge
   process_0.cmp1:
     x86.mov rax, [rbp-8]
     x86.mov rcx, 2
     x86.cmp rax, rcx
-    x86.jne register-allocator.main.process_0.case2
+    x86.jne main.process_0.case2
   process_0.case1:
     x86.mov rcx, 20
     x86.call register-allocator.double
     x86.mov [rbp-16], rax
-    x86.jmp register-allocator.main.process_0.merge
+    x86.jmp main.process_0.merge
   process_0.case2:
     x86.xor rax, rax
     x86.mov [rbp-16], rax
-    x86.jmp register-allocator.main.process_0.merge
+    x86.jmp main.process_0.merge
   process_0.merge:
     x86.mov rax, [rbp-16]
     x86.xor rcx, rcx
@@ -13830,7 +13830,7 @@ module {
     x86.movzx rsi, rsib
     x86.or rdx, rsi
     x86.test rdx, rdx
-    x86.je register-allocator.main.__range_ok_1
+    x86.je main.__range_ok_1
   __range_panic_1:
     x86.lea_symdata rax, [__panic_msg_0]
     x86.mov rcx, rax
@@ -14063,7 +14063,7 @@ module {
     maxon.scope_end []
     maxon.throw @MyError %8
   }
-  func @register-allocator.main() -> i64 {
+  func @main() -> i64 {
   entry:
     %11, %10 = maxon.try_call @register-allocator.mayFail
     %12 = maxon.literal {value = 42 : i64}
@@ -14080,7 +14080,7 @@ module {
     %2 = arith.addi %0, %1
     func.error_return %2
   }
-  func @register-allocator.main() -> u32 {
+  func @main() -> u32 {
   entry:
     %3, %4 = func.try_call @register-allocator.mayFail
     %5 = arith.constant {value = 42 : i64}
@@ -14098,7 +14098,7 @@ module {
     x86.xor rax, rax
     x86.ret
   }
-  func @register-allocator.main() -> u32 {
+  func @main() -> u32 {
   entry:
     x86.prologue stack_size=16
     x86.call register-allocator.mayFail
@@ -14199,7 +14199,7 @@ module {
     maxon.scope_end []
     maxon.throw @MyError %8
   }
-  func @register-allocator.main() -> i64 {
+  func @main() -> i64 {
   entry:
     %9 = maxon.literal {value = 0 : i64}
     maxon.assign %9 {var = result} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
@@ -14238,7 +14238,7 @@ module {
     %2 = arith.addi %0, %1
     func.error_return %2
   }
-  func @register-allocator.main() -> u32 {
+  func @main() -> u32 {
   entry:
     %3 = arith.constant {value = 0 : i64}
     memref.store %3, result
@@ -14277,7 +14277,7 @@ module {
     x86.xor rax, rax
     x86.ret
   }
-  func @register-allocator.main() -> u32 {
+  func @main() -> u32 {
   entry:
     x86.prologue stack_size=16
     x86.xor rax, rax
@@ -14285,11 +14285,11 @@ module {
     x86.call register-allocator.mayFail
     x86.xor rcx, rcx
     x86.cmp rdx, rcx
-    x86.je register-allocator.main.otherwise_continue_1
+    x86.je main.otherwise_continue_1
   otherwise_error_0:
     x86.mov rax, 42
     x86.mov [rbp-8], rax
-    x86.jmp register-allocator.main.otherwise_continue_1
+    x86.jmp main.otherwise_continue_1
   otherwise_continue_1:
     x86.mov rax, [rbp-8]
     x86.xor rcx, rcx
@@ -14302,7 +14302,7 @@ module {
     x86.movzx rsi, rsib
     x86.or rdx, rsi
     x86.test rdx, rdx
-    x86.je register-allocator.main.__range_ok_4
+    x86.je main.__range_ok_4
   __range_panic_4:
     x86.lea_symdata rax, [__panic_msg_0]
     x86.mov rcx, rax
@@ -14499,7 +14499,7 @@ module {
     maxon.scope_end [__try_error_2, x, __try_result_3]
     maxon.return %15
   }
-  func @register-allocator.main() -> i64 {
+  func @main() -> i64 {
   entry:
     %18, %17 = maxon.try_call @register-allocator.middle
     %19 = maxon.literal {value = 99 : i64}
@@ -14552,7 +14552,7 @@ module {
     %8 = memref.load __try_result_3 : i64
     func.return %8
   }
-  func @register-allocator.main() -> u32 {
+  func @main() -> u32 {
   entry:
     %9, %10 = func.try_call @register-allocator.middle
     %11 = arith.constant {value = 99 : i64}
@@ -14612,7 +14612,7 @@ module {
     x86.epilogue
     x86.ret
   }
-  func @register-allocator.main() -> u32 {
+  func @main() -> u32 {
   entry:
     x86.prologue stack_size=16
     x86.call register-allocator.middle
@@ -14621,11 +14621,11 @@ module {
     x86.mov [rbp-16], rax
     x86.xor rax, rax
     x86.cmp rdx, rax
-    x86.je register-allocator.main.otherwise_default_continue_3
+    x86.je main.otherwise_default_continue_3
   otherwise_default_error_2:
     x86.mov rax, [rbp-8]
     x86.mov [rbp-16], rax
-    x86.jmp register-allocator.main.otherwise_default_continue_3
+    x86.jmp main.otherwise_default_continue_3
   otherwise_default_continue_3:
     x86.mov rax, [rbp-16]
     x86.xor rcx, rcx
@@ -14638,7 +14638,7 @@ module {
     x86.movzx rsi, rsib
     x86.or rdx, rsi
     x86.test rdx, rdx
-    x86.je register-allocator.main.__range_ok_4
+    x86.je main.__range_ok_4
   __range_panic_4:
     x86.lea_symdata rax, [__panic_msg_0]
     x86.mov rcx, rax
@@ -14892,7 +14892,7 @@ module {
     maxon.scope_end []
     maxon.throw @MyError %10
   }
-  func @register-allocator.main() -> i64 {
+  func @main() -> i64 {
   entry:
     %13, %12 = maxon.try_call @register-allocator.getA
     %14 = maxon.literal {value = 0 : i64}
@@ -14972,7 +14972,7 @@ module {
     %4 = arith.addi %2, %3
     func.error_return %4
   }
-  func @register-allocator.main() -> u32 {
+  func @main() -> u32 {
   entry:
     %5, %6 = func.try_call @register-allocator.getA
     %7 = arith.constant {value = 0 : i64}
@@ -15056,7 +15056,7 @@ module {
     x86.xor rax, rax
     x86.ret
   }
-  func @register-allocator.main() -> u32 {
+  func @main() -> u32 {
   entry:
     x86.prologue stack_size=64
     x86.call register-allocator.getA
@@ -15065,11 +15065,11 @@ module {
     x86.mov [rbp-16], rax
     x86.xor rax, rax
     x86.cmp rdx, rax
-    x86.je register-allocator.main.otherwise_default_continue_3
+    x86.je main.otherwise_default_continue_3
   otherwise_default_error_2:
     x86.mov rax, [rbp-8]
     x86.mov [rbp-16], rax
-    x86.jmp register-allocator.main.otherwise_default_continue_3
+    x86.jmp main.otherwise_default_continue_3
   otherwise_default_continue_3:
     x86.mov rax, [rbp-16]
     x86.mov [rbp-24], rax
@@ -15079,11 +15079,11 @@ module {
     x86.mov [rbp-40], rax
     x86.xor rax, rax
     x86.cmp rdx, rax
-    x86.je register-allocator.main.otherwise_default_continue_7
+    x86.je main.otherwise_default_continue_7
   otherwise_default_error_6:
     x86.mov rax, [rbp-32]
     x86.mov [rbp-40], rax
-    x86.jmp register-allocator.main.otherwise_default_continue_7
+    x86.jmp main.otherwise_default_continue_7
   otherwise_default_continue_7:
     x86.mov rax, [rbp-40]
     x86.mov [rbp-48], rax
@@ -15093,11 +15093,11 @@ module {
     x86.mov [rbp-64], rax
     x86.xor rax, rax
     x86.cmp rdx, rax
-    x86.je register-allocator.main.otherwise_default_continue_11
+    x86.je main.otherwise_default_continue_11
   otherwise_default_error_10:
     x86.mov rax, [rbp-56]
     x86.mov [rbp-64], rax
-    x86.jmp register-allocator.main.otherwise_default_continue_11
+    x86.jmp main.otherwise_default_continue_11
   otherwise_default_continue_11:
     x86.mov rax, [rbp-64]
     x86.mov rcx, [rbp-24]
@@ -15114,7 +15114,7 @@ module {
     x86.movzx r8, r8b
     x86.or rsi, r8
     x86.test rsi, rsi
-    x86.je register-allocator.main.__range_ok_12
+    x86.je main.__range_ok_12
   __range_panic_12:
     x86.lea_symdata rax, [__panic_msg_0]
     x86.mov rcx, rax
@@ -15455,7 +15455,7 @@ module {
     maxon.throw @MyError %17
   dispatch_0.merge:
   }
-  func @register-allocator.main() -> i64 {
+  func @main() -> i64 {
   entry:
     %18 = maxon.literal {value = 2 : i64}
     %21, %20 = maxon.try_call @register-allocator.lookup %18
@@ -15534,7 +15534,7 @@ module {
     func.error_return %11
   dispatch_0.merge:
   }
-  func @register-allocator.main() -> u32 {
+  func @main() -> u32 {
   entry:
     %12 = arith.constant {value = 2 : i64}
     %13, %14 = func.try_call @register-allocator.lookup %12
@@ -15620,7 +15620,7 @@ module {
     x86.ret
   dispatch_0.merge:
   }
-  func @register-allocator.main() -> u32 {
+  func @main() -> u32 {
   entry:
     x86.prologue stack_size=48
     x86.mov rcx, 2
@@ -15630,11 +15630,11 @@ module {
     x86.mov [rbp-16], rax
     x86.xor rax, rax
     x86.cmp rdx, rax
-    x86.je register-allocator.main.otherwise_default_continue_3
+    x86.je main.otherwise_default_continue_3
   otherwise_default_error_2:
     x86.mov rax, [rbp-8]
     x86.mov [rbp-16], rax
-    x86.jmp register-allocator.main.otherwise_default_continue_3
+    x86.jmp main.otherwise_default_continue_3
   otherwise_default_continue_3:
     x86.mov rax, [rbp-16]
     x86.mov [rbp-24], rax
@@ -15645,11 +15645,11 @@ module {
     x86.mov [rbp-40], rax
     x86.xor rax, rax
     x86.cmp rdx, rax
-    x86.je register-allocator.main.otherwise_default_continue_7
+    x86.je main.otherwise_default_continue_7
   otherwise_default_error_6:
     x86.mov rax, [rbp-32]
     x86.mov [rbp-40], rax
-    x86.jmp register-allocator.main.otherwise_default_continue_7
+    x86.jmp main.otherwise_default_continue_7
   otherwise_default_continue_7:
     x86.mov rax, [rbp-40]
     x86.mov rcx, 256
@@ -15667,7 +15667,7 @@ module {
     x86.movzx rdi, rdib
     x86.or rbx, rdi
     x86.test rbx, rbx
-    x86.je register-allocator.main.__range_ok_8
+    x86.je main.__range_ok_8
   __range_panic_8:
     x86.lea_symdata rax, [__panic_msg_0]
     x86.mov rcx, rax

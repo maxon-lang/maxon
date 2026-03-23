@@ -24,19 +24,19 @@ ExitCode: 5
 Stderr: ```
 sl_init
   os_alloc size=67108864
-mm_alloc Inner #1 size=8 [ownership-edge-cases.main]
+mm_alloc Inner #1 size=8 [main]
   sl_alloc Inner #1 size=40 class=4
-mm_incref Inner #1 rc=1 [ownership-edge-cases.main]
+mm_incref Inner #1 rc=1 [main]
 mm_alloc Wrapper #2 size=8 [ownership-edge-cases.wrap]
   sl_alloc Wrapper #2 size=40 class=4
 mm_incref Inner #1 rc=2 [ownership-edge-cases.wrap]
 mm_incref Wrapper #2 rc=1 [ownership-edge-cases.wrap]
 mm_transfer Wrapper #2 rc=1 [ownership-edge-cases.wrap]
-mm_decref Wrapper #2 rc=0 [ownership-edge-cases.main]
+mm_decref Wrapper #2 rc=0 [main]
   mm_decref Inner #1 rc=1 [~Wrapper]
   mm_free Wrapper #2
     sl_free Wrapper #2 size=48 class=4
-mm_decref Inner #1 rc=0 [ownership-edge-cases.main]
+mm_decref Inner #1 rc=0 [main]
   mm_free Inner #1
     sl_free Inner #1 size=48 class=4
 mm_raw_alloc #R1 size=40
@@ -67,7 +67,7 @@ module {
     x86.epilogue
     x86.ret
   }
-  func @ownership-edge-cases.main() -> u32 {
+  func @main() -> u32 {
   entry:
     x86.prologue stack_size=32
     x86.mov rax, 5
@@ -101,7 +101,7 @@ module {
     x86.movzx rdx, rdxb
     x86.or rcx, rdx
     x86.test rcx, rcx
-    x86.je ownership-edge-cases.main.__range_ok_0
+    x86.je main.__range_ok_0
   __range_panic_0:
     x86.lea_symdata rax, [__panic_msg_0]
     x86.mov rcx, rax

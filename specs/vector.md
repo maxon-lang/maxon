@@ -132,7 +132,7 @@ end 'main'
 ```RequiredMLIR:x86_64-windows
 === maxon
 module {
-  func @vector.main() -> i64 {
+  func @main() -> i64 {
   entry:
     %0 = maxon.literal {value = 0 : i64}
     %1 = maxon.literal {value = 0 : i64}
@@ -178,7 +178,7 @@ module {
 }
 === standard
 module {
-  func @vector.main() -> u32 {
+  func @main() -> u32 {
   entry:
     %0 = arith.constant {value = 0 : i64}
     %1 = arith.constant {value = 0 : i64}
@@ -302,7 +302,7 @@ module {
 }
 === x86
 module {
-  func @vector.main() -> u32 {
+  func @main() -> u32 {
   entry:
     x86.prologue stack_size=96
     x86.xor rax, rax
@@ -391,11 +391,11 @@ module {
     x86.mov [rbp-56], rax
     x86.xor rax, rax
     x86.cmp rdx, rax
-    x86.je vector.main.otherwise_default_continue_4
+    x86.je main.otherwise_default_continue_4
   otherwise_default_error_3:
     x86.mov rax, [rbp-48]
     x86.mov [rbp-56], rax
-    x86.jmp vector.main.otherwise_default_continue_4
+    x86.jmp main.otherwise_default_continue_4
   otherwise_default_continue_4:
     x86.mov rax, [rbp-56]
     x86.xor rcx, rcx
@@ -408,7 +408,7 @@ module {
     x86.movzx rsi, rsib
     x86.or rdx, rsi
     x86.test rdx, rdx
-    x86.je vector.main.__range_ok_5
+    x86.je main.__range_ok_5
   __range_panic_5:
     x86.lea_symdata rax, [__panic_msg_0]
     x86.mov rcx, rax
@@ -836,7 +836,7 @@ end 'main'
 ```RequiredMLIR:x86_64-windows
 === maxon
 module {
-  func @vector.main() -> i64 {
+  func @main() -> i64 {
   entry:
     %0 = maxon.literal {value = 0 : i64}
     %1 = maxon.literal {value = 0 : i64}
@@ -885,7 +885,7 @@ module {
 }
 === standard
 module {
-  func @vector.main() -> u32 {
+  func @main() -> u32 {
   entry:
     %0 = arith.constant {value = 0 : i64}
     %1 = arith.constant {value = 0 : i64}
@@ -1013,7 +1013,7 @@ module {
 }
 === x86
 module {
-  func @vector.main() -> u32 {
+  func @main() -> u32 {
   entry:
     x86.prologue stack_size=96
     x86.xor rax, rax
@@ -1107,11 +1107,11 @@ module {
     x86.mov [rbp-56], rax
     x86.xor rax, rax
     x86.cmp rdx, rax
-    x86.je vector.main.otherwise_default_continue_4
+    x86.je main.otherwise_default_continue_4
   otherwise_default_error_3:
     x86.mov rax, [rbp-48]
     x86.mov [rbp-56], rax
-    x86.jmp vector.main.otherwise_default_continue_4
+    x86.jmp main.otherwise_default_continue_4
   otherwise_default_continue_4:
     x86.mov rax, [rbp-56]
     x86.xor rcx, rcx
@@ -1124,7 +1124,7 @@ module {
     x86.movzx rsi, rsib
     x86.or rdx, rsi
     x86.test rdx, rdx
-    x86.je vector.main.__range_ok_5
+    x86.je main.__range_ok_5
   __range_panic_5:
     x86.lea_symdata rax, [__panic_msg_0]
     x86.mov rcx, rax

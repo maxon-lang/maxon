@@ -17,7 +17,7 @@ ExitCode: 15
 RequiredMLIR: ```
 === maxon
 module {
-  func @register-allocator.main() -> i64 {
+  func @main() -> i64 {
   entry:
     %0 = maxon.literal {value = 0 : i64}
     maxon.assign %0 {var = total} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
@@ -73,7 +73,7 @@ module {
 }
 === standard
 module {
-  func @register-allocator.main() -> u32 {
+  func @main() -> u32 {
   entry:
     %0 = arith.constant {value = 0 : i64}
     memref.store %0, total
@@ -128,28 +128,28 @@ module {
 }
 === x86
 module {
-  func @register-allocator.main() -> u32 {
+  func @main() -> u32 {
   entry:
     x86.prologue stack_size=32
     x86.xor rax, rax
     x86.mov [rbp-8], rax
     x86.mov rcx, 1
     x86.mov [rbp-16], rcx
-    x86.jmp register-allocator.main.outer_0.header
+    x86.jmp main.outer_0.header
   outer_0.header:
     x86.mov rax, 5
     x86.mov rcx, [rbp-16]
     x86.cmp rcx, rax
-    x86.jg register-allocator.main.outer_0.exit
+    x86.jg main.outer_0.exit
   outer_0:
     x86.mov rax, 1
     x86.mov [rbp-24], rax
-    x86.jmp register-allocator.main.inner_1.header
+    x86.jmp main.inner_1.header
   inner_1.header:
     x86.mov rax, [rbp-24]
     x86.mov rcx, [rbp-16]
     x86.cmp rax, rcx
-    x86.jg register-allocator.main.inner_1.exit
+    x86.jg main.inner_1.exit
   inner_1:
     x86.mov rax, 1
     x86.mov rcx, [rbp-8]
@@ -159,13 +159,13 @@ module {
     x86.mov rbx, [rbp-24]
     x86.add rbx, rdx
     x86.mov [rbp-24], rbx
-    x86.jmp register-allocator.main.inner_1.header
+    x86.jmp main.inner_1.header
   inner_1.exit:
     x86.mov rax, 1
     x86.mov rcx, [rbp-16]
     x86.add rcx, rax
     x86.mov [rbp-16], rcx
-    x86.jmp register-allocator.main.outer_0.header
+    x86.jmp main.outer_0.header
   outer_0.exit:
     x86.mov rax, [rbp-8]
     x86.xor rcx, rcx
@@ -178,7 +178,7 @@ module {
     x86.movzx rsi, rsib
     x86.or rdx, rsi
     x86.test rdx, rdx
-    x86.je register-allocator.main.__range_ok_2
+    x86.je main.__range_ok_2
   __range_panic_2:
     x86.lea_symdata rax, [__panic_msg_0]
     x86.mov rcx, rax

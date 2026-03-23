@@ -196,7 +196,7 @@ end 'main'
 ```stderr
 __ManagedMemory: index out of bounds
 Stack trace:
-  in managed-memory-methods.main
+  in main
   in _start
 ```
 
@@ -221,7 +221,7 @@ end 'main'
 ```stderr
 __ManagedMemory: index out of bounds
 Stack trace:
-  in managed-memory-methods.main
+  in main
   in _start
 ```
 
@@ -243,7 +243,7 @@ end 'main'
 ```stderr
 __ManagedMemory: setLength exceeds capacity
 Stack trace:
-  in managed-memory-methods.main
+  in main
   in _start
 ```
 
@@ -266,7 +266,7 @@ end 'main'
 ```stderr
 __ManagedMemory: byte index out of bounds
 Stack trace:
-  in managed-memory-methods.main
+  in main
   in _start
 ```
 
@@ -291,7 +291,7 @@ end 'main'
 ```stderr
 __ManagedMemory: slice out of bounds
 Stack trace:
-  in managed-memory-methods.main
+  in main
   in _start
 ```
 
@@ -337,6 +337,6 @@ end 'main'
 ```stderr
 __ManagedMemory: index out of bounds
 Stack trace:
-  in managed-memory-methods.main
+  in main
   in _start
 ```

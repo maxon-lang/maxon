@@ -275,7 +275,7 @@ end 'main'
 panic at runtime-check-fail.test:6: Range check failed for type 'Age': value outside int(0 to 150)
 Stack trace:
   in ranged-typealias.makeAge
-  in ranged-typealias.main
+  in main
   in _start
 ```
 
@@ -388,7 +388,7 @@ end 'main'
 panic at return-runtime-check-fail.test:5: Range check failed for type 'Score': value outside int(0 to 100)
 Stack trace:
   in ranged-typealias.doubleScore
-  in ranged-typealias.main
+  in main
   in _start
 ```
 

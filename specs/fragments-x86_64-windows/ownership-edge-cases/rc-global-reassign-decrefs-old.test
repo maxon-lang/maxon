@@ -23,11 +23,11 @@ ExitCode: 30
 Stderr: ```
 sl_init
   os_alloc size=67108864
-mm_alloc State #1 size=8 [ownership-edge-cases.__module_init]
+mm_alloc State #1 size=8 [__module_init]
   sl_alloc State #1 size=40 class=4
-mm_incref State #1 rc=1 [ownership-edge-cases.__module_init]
-mm_incref State #1 rc=2 [ownership-edge-cases.__module_init]
-mm_decref State #1 rc=1 [ownership-edge-cases.__module_init]
+mm_incref State #1 rc=1 [__module_init]
+mm_incref State #1 rc=2 [__module_init]
+mm_decref State #1 rc=1 [__module_init]
 mm_alloc State #2 size=8 [ownership-edge-cases.step]
   sl_alloc State #2 size=40 class=4
 mm_incref State #2 rc=1 [ownership-edge-cases.step]
@@ -52,8 +52,8 @@ mm_decref State #3 rc=0 [ownership-edge-cases.step]
     sl_free State #3 size=48 class=4
 mm_incref State #4 rc=2 [ownership-edge-cases.step]
 mm_decref State #4 rc=1 [ownership-edge-cases.step]
-mm_incref State #4 rc=2 [ownership-edge-cases.main]
-mm_decref State #4 rc=1 [ownership-edge-cases.main]
+mm_incref State #4 rc=2 [main]
+mm_decref State #4 rc=1 [main]
 mm_raw_alloc #R1 size=40
   sl_alloc size=40 class=4
 mm_raw_free #R1
@@ -98,7 +98,7 @@ module {
     x86.epilogue
     x86.ret
   }
-  func @ownership-edge-cases.main() -> u32 {
+  func @main() -> u32 {
   entry:
     x86.prologue stack_size=16
     x86.mov rcx, 10
@@ -123,7 +123,7 @@ module {
     x86.movzx r9, r9b
     x86.or rdi, r9
     x86.test rdi, rdi
-    x86.je ownership-edge-cases.main.__range_ok_0
+    x86.je main.__range_ok_0
   __range_panic_0:
     x86.lea_symdata rax, [__panic_msg_0]
     x86.mov rcx, rax
@@ -140,7 +140,7 @@ module {
     x86.epilogue
     x86.ret
   }
-  func @ownership-edge-cases.__module_init() {
+  func @__module_init() {
   entry:
     x86.prologue stack_size=16
     x86.xor rax, rax

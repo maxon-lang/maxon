@@ -26,14 +26,14 @@ export type Diagnostic
   export let message String
   export let line ErrorLineNumber
   export let column ErrorColumnNumber
-  export let filePath String
+  export let filePath FilePath
 end 'Diagnostic'
 
 export typealias DiagnosticArray = Array with Diagnostic
 
 // Reports a compile error with source location. Appends to the project's
 // diagnostics list and logs to stderr, but does NOT throw.
-export function reportCompileError(project Project, code ErrorCode, message String, line ErrorLineNumber, column ErrorColumnNumber, filePath String)
+export function reportCompileError(project Project, code ErrorCode, message String, line ErrorLineNumber, column ErrorColumnNumber, filePath FilePath)
   logError(LogCategory.compiler, message: () gives "error E{code.rawValue:04}: {filePath}:{line}:{column}: {message}")
   project.diagnostics.push(Diagnostic{code: code, message: message, line: line, column: column, filePath: filePath})
 end 'reportCompileError'
@@ -42,7 +42,7 @@ end 'reportCompileError'
 // diagnostics list and logs to stderr, but does NOT throw.
 export function reportSemanticError(project Project, code ErrorCode, message String)
   logError(LogCategory.compiler, message: () gives "error E{code.rawValue:04}: {message}")
-  project.diagnostics.push(Diagnostic{code: code, message: message, line: 0, column: 0, filePath: ""})
+  project.diagnostics.push(Diagnostic{code: code, message: message, line: 0, column: 0, filePath: FilePath from ""})
 end 'reportSemanticError'
 
 export union CompileError implements Error

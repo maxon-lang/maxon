@@ -66,7 +66,7 @@ end 'main'
 ```stderr
 panic at default-panic.statement-hit.test:7: unexpected value
 Stack trace:
-  in match-exhaustive-default-panic.main
+  in main
   in _start
 ```
 

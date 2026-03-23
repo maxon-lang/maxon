@@ -60,14 +60,10 @@ end 'main'
 42
 ```
 ```RequiredLowering:x86_64-windows
-=== maxhl-to-mid
-@main entry:
-  %0 = maxon.literal {value = 42 : i64} -> %0 = arith.constant {value = 42 : i64}
-  maxon.return %0 -> func.return %0
-=== mid-to-x86
-@main entry:
-  %0 = arith.constant {value = 42 : i64} -> x86.mov rax, 42, x86.mov [rbp-8], rax
-  func.return %0 -> x86.mov rax, [rbp-8], x86.epilogue
+maxhl-to-mid: %0 = maxon.literal {value = 42 : i64} -> %0 = arith.constant {value = 42 : i64}
+maxhl-to-mid: maxon.return %0 -> func.return %0
+mid-to-x86: %0 = arith.constant {value = 42 : i64} -> x86.mov rax, 42, x86.mov [rbp-8], rax
+mid-to-x86: func.return %0 -> x86.mov rax, [rbp-8], x86.epilogue
 ```
 
 <!-- test: return-function-call -->
@@ -95,7 +91,7 @@ module {
     maxon.scope_end []
     maxon.return %0
   }
-  func @basics.main() -> i64 {
+  func @main() -> i64 {
   entry:
     %1 = maxon.call @basics.getValue
     %2 = maxon.literal {value = 0 : i64}
@@ -118,7 +114,7 @@ module {
     %0 = arith.constant {value = 42 : i64}
     func.return %0
   }
-  func @basics.main() -> u32 {
+  func @main() -> u32 {
   entry:
     %1 = func.call @basics.getValue
     %2 = arith.constant {value = 0 : i64}
@@ -142,7 +138,7 @@ module {
     x86.mov rax, 42
     x86.ret
   }
-  func @basics.main() -> u32 {
+  func @main() -> u32 {
   entry:
     x86.prologue stack_size=16
     x86.call basics.getValue
@@ -156,7 +152,7 @@ module {
     x86.movzx rdx, rdxb
     x86.or rcx, rdx
     x86.test rcx, rcx
-    x86.je basics.main.__range_ok_0
+    x86.je main.__range_ok_0
   __range_panic_0:
     x86.lea_symdata rax, [__panic_msg_0]
     x86.mov rcx, rax
@@ -275,7 +271,7 @@ f64 3.14
 ```RequiredMLIR:x86_64-windows
 === maxon
 module {
-  func @basics.main() -> i64 {
+  func @main() -> i64 {
   entry:
     %0 = maxon.literal {value = 3.14 : f64}
     maxon.assign %0 {var = x} {kind = f64} {decl = 1 : i1} {mut = 1 : i1}
@@ -294,7 +290,7 @@ module {
 }
 === standard
 module {
-  func @basics.main() -> u32 {
+  func @main() -> u32 {
   entry:
     %0 = arith.float_constant {value = 3.14 : f64}
     %1 = arith.float_constant {value = 3.14 : f64}
@@ -310,13 +306,13 @@ module {
 }
 === x86
 module {
-  func @basics.main() -> u32 {
+  func @main() -> u32 {
   entry:
     x86.movsd xmm0, [rip+__float_3.14]
     x86.movsd xmm1, [rip+__float_3.14]
     x86.ucomisd xmm0, xmm1
-    x86.jne basics.main.other_1
-    x86.jp basics.main.other_1
+    x86.jne main.other_1
+    x86.jp main.other_1
   check_0:
     x86.mov rax, 1
     x86.ret
@@ -382,3 +378,6 @@ module {
   }
 }
 ```
+
+
+

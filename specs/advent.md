@@ -25,7 +25,7 @@ end 'main'
 ```RequiredMLIR:x86_64-windows
 === maxon
 module {
-  func @advent.main() -> i64 {
+  func @main() -> i64 {
   entry:
     %0 = maxon.literal {value = 0 : i64}
     maxon.scope_end []
@@ -34,7 +34,7 @@ module {
 }
 === standard
 module {
-  func @advent.main() -> u32 {
+  func @main() -> u32 {
   entry:
     %0 = arith.constant {value = 0 : i64}
     func.return %0
@@ -42,7 +42,7 @@ module {
 }
 === x86
 module {
-  func @advent.main() -> u32 {
+  func @main() -> u32 {
   entry:
     x86.xor rax, rax
     x86.ret
@@ -104,7 +104,7 @@ module {
     maxon.scope_end [x, y]
     maxon.return %2
   }
-  func @advent.main() -> i64 {
+  func @main() -> i64 {
   entry:
     %3 = maxon.literal {value = 3 : i64}
     %4 = maxon.literal {value = 4 : i64}
@@ -131,7 +131,7 @@ module {
     %2 = arith.addi %0, %1
     func.return %2
   }
-  func @advent.main() -> u32 {
+  func @main() -> u32 {
   entry:
     %3 = arith.constant {value = 3 : i64}
     %4 = arith.constant {value = 4 : i64}
@@ -157,7 +157,7 @@ module {
     x86.lea rax, [rcx + rdx]
     x86.ret
   }
-  func @advent.main() -> u32 {
+  func @main() -> u32 {
   entry:
     x86.prologue stack_size=16
     x86.mov rcx, 3
@@ -173,7 +173,7 @@ module {
     x86.movzx rdx, rdxb
     x86.or rcx, rdx
     x86.test rcx, rcx
-    x86.je advent.main.__range_ok_0
+    x86.je main.__range_ok_0
   __range_panic_0:
     x86.lea_symdata rax, [__panic_msg_0]
     x86.mov rcx, rax
@@ -316,7 +316,7 @@ module {
     maxon.scope_end [x]
     maxon.return %2
   }
-  func @advent.main() -> i64 {
+  func @main() -> i64 {
   entry:
     %3 = maxon.call @stdlib.CommandLine.args
     maxon.assign %3 {var = __call_tmp_3} {decl = 1 : i1}
@@ -381,7 +381,7 @@ module {
     %0 = func.param x : StdI64
     func.return %0
   }
-  func @advent.main() -> u32 {
+  func @main() -> u32 {
   entry:
     %73 = arith.constant {value = 0 : i64}
     memref.store %73, __lit_tmp_9
@@ -572,7 +572,7 @@ module {
     x86.mov rax, rcx
     x86.ret
   }
-  func @advent.main() -> u32 {
+  func @main() -> u32 {
   entry:
     x86.prologue stack_size=64
     x86.xor rax, rax
@@ -588,7 +588,7 @@ module {
     x86.mov [rbp-32], rax
     x86.xor rbx, rbx
     x86.cmp rdx, rbx
-    x86.je advent.main.otherwise_default_success_2
+    x86.je main.otherwise_default_success_2
   otherwise_default_error_1:
     x86.lea_rdata rax, [__str_0]
     x86.mov rcx, rax
@@ -637,7 +637,7 @@ module {
     x86.mov rax, [rbp-16]
     x86.mov rcx, [rbp-16]
     x86.call mm_incref
-    x86.jmp advent.main.otherwise_default_continue_3
+    x86.jmp main.otherwise_default_continue_3
   otherwise_default_success_2:
     x86.mov rax, [rbp-16]
     x86.test rax, rax
@@ -647,7 +647,7 @@ module {
     x86.label __nonnull_skip_0
     x86.mov rcx, [rbp-32]
     x86.mov [rbp-16], rcx
-    x86.jmp advent.main.otherwise_default_continue_3
+    x86.jmp main.otherwise_default_continue_3
   otherwise_default_continue_3:
     x86.mov rax, [rbp-16]
     x86.mov rcx, [rbp-16]
@@ -657,16 +657,16 @@ module {
     x86.mov [rbp-56], rax
     x86.xor rax, rax
     x86.cmp rdx, rax
-    x86.je advent.main.otherwise_default_continue_7
+    x86.je main.otherwise_default_continue_7
   otherwise_default_error_6:
     x86.mov rax, [rbp-48]
     x86.mov [rbp-56], rax
-    x86.jmp advent.main.otherwise_default_continue_7
+    x86.jmp main.otherwise_default_continue_7
   otherwise_default_continue_7:
     x86.mov rax, [rbp-56]
     x86.mov rcx, 1000
     x86.cmp rax, rcx
-    x86.jle advent.main.guard_8.after
+    x86.jle main.guard_8.after
   guard_8:
     x86.mov rax, [rbp-16]
     x86.test rax, rax
@@ -701,7 +701,7 @@ module {
     x86.movzx rdx, rdxb
     x86.or rcx, rdx
     x86.test rcx, rcx
-    x86.je advent.main.__range_ok_9
+    x86.je main.__range_ok_9
   __range_panic_9:
     x86.lea_symdata rax, [__panic_msg_0]
     x86.mov rcx, rax
@@ -1392,7 +1392,7 @@ module {
     maxon.scope_end [x]
     maxon.return %2
   }
-  func @advent.main() -> i64 {
+  func @main() -> i64 {
   entry:
     %3 = maxon.call @stdlib.CommandLine.args
     maxon.assign %3 {var = __call_tmp_3} {decl = 1 : i1}
@@ -1459,7 +1459,7 @@ module {
     %2 = arith.muli %0, %1
     func.return %2
   }
-  func @advent.main() -> u32 {
+  func @main() -> u32 {
   entry:
     %74 = arith.constant {value = 0 : i64}
     memref.store %74, __lit_tmp_9
@@ -1652,7 +1652,7 @@ module {
     x86.mov rax, rcx
     x86.ret
   }
-  func @advent.main() -> u32 {
+  func @main() -> u32 {
   entry:
     x86.prologue stack_size=64
     x86.xor rax, rax
@@ -1668,7 +1668,7 @@ module {
     x86.mov [rbp-32], rax
     x86.xor rbx, rbx
     x86.cmp rdx, rbx
-    x86.je advent.main.otherwise_default_success_2
+    x86.je main.otherwise_default_success_2
   otherwise_default_error_1:
     x86.lea_rdata rax, [__str_0]
     x86.mov rcx, rax
@@ -1717,7 +1717,7 @@ module {
     x86.mov rax, [rbp-16]
     x86.mov rcx, [rbp-16]
     x86.call mm_incref
-    x86.jmp advent.main.otherwise_default_continue_3
+    x86.jmp main.otherwise_default_continue_3
   otherwise_default_success_2:
     x86.mov rax, [rbp-16]
     x86.test rax, rax
@@ -1727,7 +1727,7 @@ module {
     x86.label __nonnull_skip_0
     x86.mov rcx, [rbp-32]
     x86.mov [rbp-16], rcx
-    x86.jmp advent.main.otherwise_default_continue_3
+    x86.jmp main.otherwise_default_continue_3
   otherwise_default_continue_3:
     x86.mov rax, [rbp-16]
     x86.mov rcx, [rbp-16]
@@ -1737,16 +1737,16 @@ module {
     x86.mov [rbp-56], rax
     x86.xor rax, rax
     x86.cmp rdx, rax
-    x86.je advent.main.otherwise_default_continue_7
+    x86.je main.otherwise_default_continue_7
   otherwise_default_error_6:
     x86.mov rax, [rbp-48]
     x86.mov [rbp-56], rax
-    x86.jmp advent.main.otherwise_default_continue_7
+    x86.jmp main.otherwise_default_continue_7
   otherwise_default_continue_7:
     x86.mov rax, [rbp-56]
     x86.mov rcx, 1000
     x86.cmp rax, rcx
-    x86.jle advent.main.guard_8.after
+    x86.jle main.guard_8.after
   guard_8:
     x86.mov rax, [rbp-16]
     x86.test rax, rax
@@ -1781,7 +1781,7 @@ module {
     x86.movzx rdx, rdxb
     x86.or rcx, rdx
     x86.test rcx, rcx
-    x86.je advent.main.__range_ok_9
+    x86.je main.__range_ok_9
   __range_panic_9:
     x86.lea_symdata rax, [__panic_msg_0]
     x86.mov rcx, rax

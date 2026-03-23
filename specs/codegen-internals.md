@@ -212,16 +212,16 @@ end 'main'
 ```stderr
 sl_init
   os_alloc size=67108864
-mm_alloc __ManagedMemory #1 size=32 [codegen-internals.main]
+mm_alloc __ManagedMemory #1 size=32 [main]
   sl_alloc __ManagedMemory #1 size=64 class=5
-mm_alloc IntArray #2 size=16 [codegen-internals.main]
+mm_alloc IntArray #2 size=16 [main]
   sl_alloc IntArray #2 size=48 class=4
-mm_incref __ManagedMemory #1 rc=1 [codegen-internals.main]
-mm_incref IntArray #2 rc=1 [codegen-internals.main]
+mm_incref __ManagedMemory #1 rc=1 [main]
+mm_incref IntArray #2 rc=1 [main]
 mm_raw_alloc #R1 size=8
   sl_alloc size=8 class=0
 mm_cow __ManagedMemory #1 rc=1 size=8
-mm_decref IntArray #2 rc=0 [codegen-internals.main]
+mm_decref IntArray #2 rc=0 [main]
   mm_decref __ManagedMemory #1 rc=0 [~IntArray]
     mm_raw_free #R1
       sl_free size=8 class=0
@@ -240,7 +240,7 @@ i64 42
 ```RequiredMLIR:x86_64-windows
 === maxon
 module {
-  func @codegen-internals.main() -> i64 {
+  func @main() -> i64 {
   entry:
     %0 = maxon.literal {value = 42 : i64}
     maxon.assign %0 {var = __arr_0.0} {kind = i64} {decl = 1 : i1}
@@ -285,7 +285,7 @@ module {
 }
 === standard
 module {
-  func @codegen-internals.main() -> u32 {
+  func @main() -> u32 {
   entry:
     %1 = arith.constant {value = 0 : i64}
     %2 = arith.constant {value = 1 : i64}
@@ -324,7 +324,7 @@ module {
     %27 = memref.load arr : i64
     memref.store_indirect %26, %27+8
     std.call_runtime @mm_incref %26
-    %28 = memref.lea_rdata __const_array_codegen-internals.main_arr
+    %28 = memref.lea_rdata __const_array_main_arr
     %29 = std.ptr_to_i64 %28
     %30 = memref.load arr : i64
     %31 = memref.load_indirect %30+8
@@ -398,7 +398,7 @@ module {
 }
 === x86
 module {
-  func @codegen-internals.main() -> u32 {
+  func @main() -> u32 {
   entry:
     x86.prologue stack_size=32
     x86.xor rax, rax
@@ -447,7 +447,7 @@ module {
     x86.mov [rcx+8], rax
     x86.mov rcx, [rbp-8]
     x86.call mm_incref
-    x86.lea_rdata rax, [__const_array_codegen-internals.main_arr]
+    x86.lea_rdata rax, [__const_array_main_arr]
     x86.mov rcx, rax
     x86.mov rax, [rbp-16]
     x86.mov rdx, [rax+8]
@@ -469,11 +469,11 @@ module {
     x86.mov [rbp-32], rax
     x86.xor rax, rax
     x86.cmp rdx, rax
-    x86.je codegen-internals.main.otherwise_default_continue_4
+    x86.je main.otherwise_default_continue_4
   otherwise_default_error_3:
     x86.mov rax, [rbp-24]
     x86.mov [rbp-32], rax
-    x86.jmp codegen-internals.main.otherwise_default_continue_4
+    x86.jmp main.otherwise_default_continue_4
   otherwise_default_continue_4:
     x86.mov rax, [rbp-32]
     x86.xor rcx, rcx
@@ -486,7 +486,7 @@ module {
     x86.movzx rsi, rsib
     x86.or rdx, rsi
     x86.test rdx, rdx
-    x86.je codegen-internals.main.__range_ok_5
+    x86.je main.__range_ok_5
   __range_panic_5:
     x86.lea_symdata rax, [__panic_msg_0]
     x86.mov rcx, rax
@@ -1066,7 +1066,7 @@ end 'main'
 ```RequiredMLIR:x86_64-windows
 === maxon
 module {
-  func @codegen-internals.main() -> i64 {
+  func @main() -> i64 {
   entry:
     %0 = maxon.literal {value = 10 : i64}
     %1 = maxon.cast %0 {target = i16}
@@ -1090,7 +1090,7 @@ module {
 }
 === standard
 module {
-  func @codegen-internals.main() -> u32 {
+  func @main() -> u32 {
   entry:
     %0 = arith.constant {value = 10 : i64}
     %1 = arith.constant {value = 3 : i64}
@@ -1111,7 +1111,7 @@ module {
 }
 === x86
 module {
-  func @codegen-internals.main() -> u32 {
+  func @main() -> u32 {
   entry:
     x86.prologue stack_size=16
     x86.mov rax, 10
@@ -1127,7 +1127,7 @@ module {
     x86.movzx rdi, rdib
     x86.or rbx, rdi
     x86.test rbx, rbx
-    x86.je codegen-internals.main.__range_ok_0
+    x86.je main.__range_ok_0
   __range_panic_0:
     x86.lea_symdata rax, [__panic_msg_0]
     x86.mov rcx, rax
@@ -1236,7 +1236,7 @@ end 'main'
 ```RequiredMLIR:x86_64-windows
 === maxon
 module {
-  func @codegen-internals.main() -> i64 {
+  func @main() -> i64 {
   entry:
     %0 = maxon.literal {value = 20 : i64}
     %1 = maxon.cast %0 {target = i16}
@@ -1260,7 +1260,7 @@ module {
 }
 === standard
 module {
-  func @codegen-internals.main() -> u32 {
+  func @main() -> u32 {
   entry:
     %0 = arith.constant {value = 20 : i64}
     %1 = arith.constant {value = 3 : i64}
@@ -1281,7 +1281,7 @@ module {
 }
 === x86
 module {
-  func @codegen-internals.main() -> u32 {
+  func @main() -> u32 {
   entry:
     x86.prologue stack_size=16
     x86.mov rax, 20
@@ -1298,7 +1298,7 @@ module {
     x86.movzx rdi, rdib
     x86.or rbx, rdi
     x86.test rbx, rbx
-    x86.je codegen-internals.main.__range_ok_0
+    x86.je main.__range_ok_0
   __range_panic_0:
     x86.lea_symdata rax, [__panic_msg_0]
     x86.mov rcx, rax
@@ -1407,7 +1407,7 @@ end 'main'
 ```RequiredMLIR:x86_64-windows
 === maxon
 module {
-  func @codegen-internals.main() -> i64 {
+  func @main() -> i64 {
   entry:
     %0 = maxon.literal {value = 20 : i64}
     maxon.assign %0 {var = a} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
@@ -1429,7 +1429,7 @@ module {
 }
 === standard
 module {
-  func @codegen-internals.main() -> u32 {
+  func @main() -> u32 {
   entry:
     %0 = arith.constant {value = 20 : i64}
     %1 = arith.constant {value = 3 : i64}
@@ -1454,7 +1454,7 @@ module {
 }
 === x86
 module {
-  func @codegen-internals.main() -> u32 {
+  func @main() -> u32 {
   entry:
     x86.prologue stack_size=16
     x86.mov rax, 20
@@ -1477,7 +1477,7 @@ module {
     x86.movzx rcx, rcxb
     x86.or r8, rcx
     x86.test r8, r8
-    x86.je codegen-internals.main.__range_ok_0
+    x86.je main.__range_ok_0
   __range_panic_0:
     x86.lea_symdata rax, [__panic_msg_0]
     x86.mov rcx, rax
@@ -1595,7 +1595,7 @@ end 'main'
 ```RequiredMLIR:x86_64-windows
 === maxon
 module {
-  func @codegen-internals.main() -> i64 {
+  func @main() -> i64 {
   entry:
     %0 = maxon.literal {value = 10 : i64}
     %1 = maxon.cast %0 {target = i16}
@@ -1617,7 +1617,7 @@ module {
 }
 === standard
 module {
-  func @codegen-internals.main() -> u32 {
+  func @main() -> u32 {
   entry:
     %0 = arith.constant {value = 10 : i64}
     %1 = arith.constant {value = 3 : i64}
@@ -1633,12 +1633,12 @@ module {
 }
 === x86
 module {
-  func @codegen-internals.main() -> u32 {
+  func @main() -> u32 {
   entry:
     x86.mov rax, 10
     x86.mov rcx, 3
     x86.cmp rax, rcx
-    x86.jle codegen-internals.main.check_0.after
+    x86.jle main.check_0.after
   check_0:
     x86.mov rax, 1
     x86.ret
@@ -1724,7 +1724,7 @@ end 'main'
 ```RequiredMLIR:x86_64-windows
 === maxon
 module {
-  func @codegen-internals.main() -> i64 {
+  func @main() -> i64 {
   entry:
     %0 = maxon.literal {value = 20 : i64}
     %1 = maxon.cast %0 {target = i16}
@@ -1748,7 +1748,7 @@ module {
 }
 === standard
 module {
-  func @codegen-internals.main() -> u32 {
+  func @main() -> u32 {
   entry:
     %0 = arith.constant {value = 20 : i64}
     %1 = arith.constant {value = 3 : i64}
@@ -1769,7 +1769,7 @@ module {
 }
 === x86
 module {
-  func @codegen-internals.main() -> u32 {
+  func @main() -> u32 {
   entry:
     x86.prologue stack_size=16
     x86.mov rax, 20
@@ -1786,7 +1786,7 @@ module {
     x86.movzx rcx, rcxb
     x86.or rax, rcx
     x86.test rax, rax
-    x86.je codegen-internals.main.__range_ok_0
+    x86.je main.__range_ok_0
   __range_panic_0:
     x86.lea_symdata rax, [__panic_msg_0]
     x86.mov rcx, rax
@@ -1897,7 +1897,7 @@ end 'main'
 ```RequiredMLIR:x86_64-windows
 === maxon
 module {
-  func @codegen-internals.main() -> i64 {
+  func @main() -> i64 {
   entry:
     %0 = maxon.literal {value = 20 : i64}
     maxon.assign %0 {var = a} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
@@ -1919,7 +1919,7 @@ module {
 }
 === standard
 module {
-  func @codegen-internals.main() -> u32 {
+  func @main() -> u32 {
   entry:
     %0 = arith.constant {value = 20 : i64}
     %1 = arith.constant {value = 3 : i64}
@@ -1940,7 +1940,7 @@ module {
 }
 === x86
 module {
-  func @codegen-internals.main() -> u32 {
+  func @main() -> u32 {
   entry:
     x86.prologue stack_size=16
     x86.mov rax, 20
@@ -1957,7 +1957,7 @@ module {
     x86.movzx rdi, rdib
     x86.or rbx, rdi
     x86.test rbx, rbx
-    x86.je codegen-internals.main.__range_ok_0
+    x86.je main.__range_ok_0
   __range_panic_0:
     x86.lea_symdata rax, [__panic_msg_0]
     x86.mov rcx, rax
@@ -2064,7 +2064,7 @@ end 'main'
 ```RequiredMLIR:x86_64-windows
 === maxon
 module {
-  func @codegen-internals.main() -> i64 {
+  func @main() -> i64 {
   entry:
     %0 = maxon.literal {value = 21 : i64}
     maxon.assign %0 {var = a} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
@@ -2086,7 +2086,7 @@ module {
 }
 === standard
 module {
-  func @codegen-internals.main() -> u32 {
+  func @main() -> u32 {
   entry:
     %0 = arith.constant {value = 21 : i64}
     %1 = arith.constant {value = 3 : i64}
@@ -2111,7 +2111,7 @@ module {
 }
 === x86
 module {
-  func @codegen-internals.main() -> u32 {
+  func @main() -> u32 {
   entry:
     x86.prologue stack_size=16
     x86.mov rax, 21
@@ -2134,7 +2134,7 @@ module {
     x86.movzx rcx, rcxb
     x86.or r8, rcx
     x86.test r8, r8
-    x86.je codegen-internals.main.__range_ok_0
+    x86.je main.__range_ok_0
   __range_panic_0:
     x86.lea_symdata rax, [__panic_msg_0]
     x86.mov rcx, rax
@@ -2249,7 +2249,7 @@ end 'main'
 ```RequiredMLIR:x86_64-windows
 === maxon
 module {
-  func @codegen-internals.main() -> i64 {
+  func @main() -> i64 {
   entry:
     %0 = maxon.literal {value = 10 : f64}
     maxon.assign %0 {var = a} {kind = f64} {decl = 1 : i1} {mut = 1 : i1}
@@ -2272,7 +2272,7 @@ module {
 }
 === standard
 module {
-  func @codegen-internals.main() -> u32 {
+  func @main() -> u32 {
   entry:
     %0 = arith.float_constant {value = 10 : f64}
     %1 = arith.float_constant {value = 3 : f64}
@@ -2294,7 +2294,7 @@ module {
 }
 === x86
 module {
-  func @codegen-internals.main() -> u32 {
+  func @main() -> u32 {
   entry:
     x86.prologue stack_size=16
     x86.movsd xmm0, [rip+__float_10]
@@ -2312,7 +2312,7 @@ module {
     x86.movzx rsi, rsib
     x86.or rdx, rsi
     x86.test rdx, rdx
-    x86.je codegen-internals.main.__range_ok_0
+    x86.je main.__range_ok_0
   __range_panic_0:
     x86.lea_symdata rax, [__panic_msg_0]
     x86.mov rcx, rax
@@ -2425,7 +2425,7 @@ end 'main'
 ```RequiredMLIR:x86_64-windows
 === maxon
 module {
-  func @codegen-internals.main() -> i64 {
+  func @main() -> i64 {
   entry:
     %0 = maxon.literal {value = 3 : f64}
     maxon.assign %0 {var = a} {kind = f64} {decl = 1 : i1} {mut = 1 : i1}
@@ -2445,7 +2445,7 @@ module {
 }
 === standard
 module {
-  func @codegen-internals.main() -> u32 {
+  func @main() -> u32 {
   entry:
     %0 = arith.float_constant {value = 3 : f64}
     %1 = arith.float_constant {value = 5 : f64}
@@ -2461,13 +2461,13 @@ module {
 }
 === x86
 module {
-  func @codegen-internals.main() -> u32 {
+  func @main() -> u32 {
   entry:
     x86.movsd xmm0, [rip+__float_3]
     x86.movsd xmm1, [rip+__float_5]
     x86.ucomisd xmm0, xmm1
-    x86.jp codegen-internals.main.less_0.after
-    x86.jae codegen-internals.main.less_0.after
+    x86.jp main.less_0.after
+    x86.jae main.less_0.after
   less_0:
     x86.mov rax, 1
     x86.ret
@@ -2550,7 +2550,7 @@ end 'main'
 ```RequiredMLIR:x86_64-windows
 === maxon
 module {
-  func @codegen-internals.main() -> i64 {
+  func @main() -> i64 {
   entry:
     %0 = maxon.literal {value = 42.9 : f64}
     maxon.assign %0 {var = a} {kind = f64} {decl = 1 : i1} {mut = 1 : i1}
@@ -2570,7 +2570,7 @@ module {
 }
 === standard
 module {
-  func @codegen-internals.main() -> u32 {
+  func @main() -> u32 {
   entry:
     %0 = arith.float_constant {value = 42.9 : f64}
     %1 = arith.fptosi %0
@@ -2590,7 +2590,7 @@ module {
 }
 === x86
 module {
-  func @codegen-internals.main() -> u32 {
+  func @main() -> u32 {
   entry:
     x86.prologue stack_size=16
     x86.movsd xmm0, [rip+__float_42.9]
@@ -2605,7 +2605,7 @@ module {
     x86.movzx rsi, rsib
     x86.or rdx, rsi
     x86.test rdx, rdx
-    x86.je codegen-internals.main.__range_ok_0
+    x86.je main.__range_ok_0
   __range_panic_0:
     x86.lea_symdata rax, [__panic_msg_0]
     x86.mov rcx, rax

@@ -783,15 +783,15 @@ mm_decref StringList #2 rc=0 [list.testRemove]
       sl_free __ManagedList_String #1 size=64 class=5
   mm_free StringList #2
     sl_free StringList #2 size=48 class=4
-mm_alloc String #9 size=16 [list.main]
+mm_alloc String #9 size=16 [main]
   sl_alloc String #9 size=48 class=4
-mm_alloc __ManagedMemory #10 size=32 [list.main]
+mm_alloc __ManagedMemory #10 size=32 [main]
   sl_alloc __ManagedMemory #10 size=64 class=5
-mm_raw_alloc #R1 size=27 [interp.buf [list.main]]
+mm_raw_alloc #R1 size=27 [interp.buf [main]]
   sl_alloc size=27 class=3
-mm_incref __ManagedMemory #10 rc=1 [list.main]
-mm_incref String #9 rc=1 [list.main]
-mm_decref String #9 rc=0 [list.main]
+mm_incref __ManagedMemory #10 rc=1 [main]
+mm_incref String #9 rc=1 [main]
+mm_decref String #9 rc=0 [main]
   mm_decref __ManagedMemory #10 rc=0 [~String]
     mm_raw_free #R1
       sl_free size=32 class=3
@@ -799,7 +799,7 @@ mm_decref String #9 rc=0 [list.main]
       sl_free __ManagedMemory #10 size=64 class=5
   mm_free String #9
     sl_free String #9 size=48 class=4
-mm_decref String #3 rc=0 [list.main]
+mm_decref String #3 rc=0 [main]
   mm_decref __ManagedMemory #4 rc=0 [~String]
     mm_free __ManagedMemory #4
       sl_free __ManagedMemory #4 size=64 class=5
@@ -965,38 +965,38 @@ end 'main'
 ```stderr
 sl_init
   os_alloc size=67108864
-mm_alloc __ManagedList_String #1 size=32 [list.main]
+mm_alloc __ManagedList_String #1 size=32 [main]
   sl_alloc __ManagedList_String #1 size=64 class=5
-mm_alloc StringList #2 size=16 [list.main]
+mm_alloc StringList #2 size=16 [main]
   sl_alloc StringList #2 size=48 class=4
-mm_incref __ManagedList_String #1 rc=1 [list.main]
-mm_incref StringList #2 rc=1 [list.main]
-mm_alloc String #3 size=16 [list.main]
+mm_incref __ManagedList_String #1 rc=1 [main]
+mm_incref StringList #2 rc=1 [main]
+mm_alloc String #3 size=16 [main]
   sl_alloc String #3 size=48 class=4
-mm_alloc __ManagedMemory #4 size=32 [list.main]
+mm_alloc __ManagedMemory #4 size=32 [main]
   sl_alloc __ManagedMemory #4 size=64 class=5
-mm_incref __ManagedMemory #4 rc=1 [list.main]
-mm_incref String #3 rc=1 [list.main]
+mm_incref __ManagedMemory #4 rc=1 [main]
+mm_incref String #3 rc=1 [main]
 mm_alloc __ManagedListNode #5 size=32 [StringList.append]
   sl_alloc __ManagedListNode #5 size=64 class=5
 mm_incref String #3 rc=2 [StringList.append]
 mm_incref __ManagedListNode #5 rc=1 [managed_list_insert]
-mm_alloc String #6 size=16 [list.main]
+mm_alloc String #6 size=16 [main]
   sl_alloc String #6 size=48 class=4
-mm_alloc __ManagedMemory #7 size=32 [list.main]
+mm_alloc __ManagedMemory #7 size=32 [main]
   sl_alloc __ManagedMemory #7 size=64 class=5
-mm_incref __ManagedMemory #7 rc=1 [list.main]
-mm_incref String #6 rc=1 [list.main]
+mm_incref __ManagedMemory #7 rc=1 [main]
+mm_incref String #6 rc=1 [main]
 mm_alloc __ManagedListNode #8 size=32 [StringList.append]
   sl_alloc __ManagedListNode #8 size=64 class=5
 mm_incref String #6 rc=2 [StringList.append]
 mm_incref __ManagedListNode #8 rc=1 [managed_list_insert]
-mm_alloc String #9 size=16 [list.main]
+mm_alloc String #9 size=16 [main]
   sl_alloc String #9 size=48 class=4
-mm_alloc __ManagedMemory #10 size=32 [list.main]
+mm_alloc __ManagedMemory #10 size=32 [main]
   sl_alloc __ManagedMemory #10 size=64 class=5
-mm_incref __ManagedMemory #10 rc=1 [list.main]
-mm_incref String #9 rc=1 [list.main]
+mm_incref __ManagedMemory #10 rc=1 [main]
+mm_incref String #9 rc=1 [main]
 mm_alloc __ManagedListNode #11 size=32 [StringList.append]
   sl_alloc __ManagedListNode #11 size=64 class=5
 mm_incref String #9 rc=2 [StringList.append]
@@ -1013,19 +1013,19 @@ mm_decref String #9 rc=1 [managed_list_clear]
 mm_decref __ManagedListNode #11 rc=0 [managed_list_clear]
   mm_free __ManagedListNode #11
     sl_free __ManagedListNode #11 size=64 class=5
-mm_raw_alloc #R1 size=21 [toStr.buf [list.main]]
+mm_raw_alloc #R1 size=21 [toStr.buf [main]]
   sl_alloc size=21 class=2
-mm_alloc String #12 size=16 [list.main]
+mm_alloc String #12 size=16 [main]
   sl_alloc String #12 size=48 class=4
-mm_alloc __ManagedMemory #13 size=32 [list.main]
+mm_alloc __ManagedMemory #13 size=32 [main]
   sl_alloc __ManagedMemory #13 size=64 class=5
-mm_raw_alloc #R2 size=3 [interp.buf [list.main]]
+mm_raw_alloc #R2 size=3 [interp.buf [main]]
   sl_alloc size=3 class=0
 mm_raw_free #R1
   sl_free size=24 class=2
-mm_incref __ManagedMemory #13 rc=1 [list.main]
-mm_incref String #12 rc=1 [list.main]
-mm_decref String #12 rc=0 [list.main]
+mm_incref __ManagedMemory #13 rc=1 [main]
+mm_incref String #12 rc=1 [main]
+mm_decref String #12 rc=0 [main]
   mm_decref __ManagedMemory #13 rc=0 [~String]
     mm_raw_free #R2
       sl_free size=8 class=0
@@ -1033,25 +1033,25 @@ mm_decref String #12 rc=0 [list.main]
       sl_free __ManagedMemory #13 size=64 class=5
   mm_free String #12
     sl_free String #12 size=48 class=4
-mm_decref String #9 rc=0 [list.main]
+mm_decref String #9 rc=0 [main]
   mm_decref __ManagedMemory #10 rc=0 [~String]
     mm_free __ManagedMemory #10
       sl_free __ManagedMemory #10 size=64 class=5
   mm_free String #9
     sl_free String #9 size=48 class=4
-mm_decref String #6 rc=0 [list.main]
+mm_decref String #6 rc=0 [main]
   mm_decref __ManagedMemory #7 rc=0 [~String]
     mm_free __ManagedMemory #7
       sl_free __ManagedMemory #7 size=64 class=5
   mm_free String #6
     sl_free String #6 size=48 class=4
-mm_decref String #3 rc=0 [list.main]
+mm_decref String #3 rc=0 [main]
   mm_decref __ManagedMemory #4 rc=0 [~String]
     mm_free __ManagedMemory #4
       sl_free __ManagedMemory #4 size=64 class=5
   mm_free String #3
     sl_free String #3 size=48 class=4
-mm_decref StringList #2 rc=0 [list.main]
+mm_decref StringList #2 rc=0 [main]
   mm_decref __ManagedList_String #1 rc=0 [~StringList]
     mm_free __ManagedList_String #1
       sl_free __ManagedList_String #1 size=64 class=5

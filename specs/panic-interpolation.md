@@ -57,7 +57,7 @@ end 'main'
 ```stderr
 panic at panic-interpolation.basic-int.test:4: value is 42
 Stack trace:
-  in panic-interpolation.main
+  in main
   in _start
 ```
 
@@ -76,7 +76,7 @@ end 'main'
 ```stderr
 panic at panic-interpolation.multiple-values.test:5: 10 != 20
 Stack trace:
-  in panic-interpolation.main
+  in main
   in _start
 ```
 
@@ -95,7 +95,7 @@ end 'main'
 ```stderr
 panic at panic-interpolation.expression.test:5: result: 7
 Stack trace:
-  in panic-interpolation.main
+  in main
   in _start
 ```
 
@@ -113,7 +113,7 @@ end 'main'
 ```stderr
 panic at panic-interpolation.format-spec.test:4: hex: 2a
 Stack trace:
-  in panic-interpolation.main
+  in main
   in _start
 ```
 
@@ -139,7 +139,7 @@ end 'main'
 panic at panic-interpolation.in-function.test:6: check failed: -5 is negative
 Stack trace:
   in panic-interpolation.check
-  in panic-interpolation.main
+  in main
   in _start
 ```
 
@@ -156,6 +156,6 @@ end 'main'
 ```stderr
 panic at panic-interpolation.plain-string-unchanged.test:3: simple message
 Stack trace:
-  in panic-interpolation.main
+  in main
   in _start
 ```

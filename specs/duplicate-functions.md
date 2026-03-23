@@ -24,7 +24,7 @@ error E3006: file.maxon:5:10: Duplicate function 'helper'
 In a multi-file build, if more than one file defines a `main` function:
 
 ```text
-error E3006: b.maxon:1:10: Multiple 'main' functions found
+error E3006: b.maxon:1:10: Duplicate function 'main'
 ```
 
 #### No main function
@@ -65,7 +65,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3006: specs/fragments/duplicate-functions/error.same-file-duplicate-main.test:6:10: Duplicate function 'duplicate-functions.main'
+error E3006: specs/fragments/duplicate-functions/error.same-file-duplicate-main.test:6:10: Duplicate function 'main'
 ```
 
 <!-- test: error.multi-file-duplicate-main -->
@@ -81,5 +81,5 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3006: b.maxon:1:10: Multiple 'main' functions found
+error E3006: b.maxon:1:10: Duplicate function 'main'
 ```

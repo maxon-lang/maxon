@@ -379,7 +379,7 @@ end 'main'
 ```RequiredMLIR:x86_64-windows
 === maxon
 module {
-  func @memory-safety.main() -> i64 {
+  func @main() -> i64 {
   entry:
     %14 = maxon.literal {value = 0 : i64}
     maxon.assign %14 {var = result} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
@@ -412,7 +412,7 @@ module {
 }
 === standard
 module {
-  func @memory-safety.main() -> u32 {
+  func @main() -> u32 {
   entry:
     %0 = arith.constant {value = 0 : i64}
     memref.store %0, result
@@ -463,14 +463,14 @@ module {
 }
 === x86
 module {
-  func @memory-safety.main() -> u32 {
+  func @main() -> u32 {
   entry:
     x86.prologue stack_size=16
     x86.xor rax, rax
     x86.mov [rbp-8], rax
     x86.mov rcx, 1
     x86.test rcx, rcx
-    x86.je memory-safety.main.block_0.merge
+    x86.je main.block_0.merge
   block_0:
     x86.mov rax, 10
     x86.mov rcx, 20
@@ -497,7 +497,7 @@ module {
     x86.mov rcx, [rbp-16]
     x86.call mm_decref
     x86.label __nonnull_skip_0
-    x86.jmp memory-safety.main.block_0.merge
+    x86.jmp main.block_0.merge
   block_0.merge:
     x86.mov rax, [rbp-8]
     x86.xor rcx, rcx
@@ -510,7 +510,7 @@ module {
     x86.movzx rsi, rsib
     x86.or rdx, rsi
     x86.test rdx, rdx
-    x86.je memory-safety.main.__range_ok_1
+    x86.je main.__range_ok_1
   __range_panic_1:
     x86.lea_symdata rax, [__panic_msg_0]
     x86.mov rcx, rax
@@ -719,7 +719,7 @@ module {
     maxon.scope_end [__retval_3]
     maxon.return %2
   }
-  func @memory-safety.main() -> i64 {
+  func @main() -> i64 {
   entry:
     %9 = maxon.literal {value = 0 : i64}
     %10 = maxon.literal {value = 0 : i64}
@@ -786,7 +786,7 @@ module {
     %9 = memref.load __retval_3 : i64
     func.return %9
   }
-  func @memory-safety.main() -> u32 {
+  func @main() -> u32 {
   entry:
     %85 = arith.constant {value = 0 : i64}
     memref.store %85, __try_result_0
@@ -959,7 +959,7 @@ module {
     x86.epilogue
     x86.ret
   }
-  func @memory-safety.main() -> u32 {
+  func @main() -> u32 {
   entry:
     x86.prologue stack_size=64
     x86.xor rax, rax
@@ -1038,7 +1038,7 @@ module {
     x86.mov [rbp-40], rax
     x86.xor rax, rax
     x86.cmp rdx, rax
-    x86.je memory-safety.main.otherwise_default_success_2
+    x86.je main.otherwise_default_success_2
   otherwise_default_error_1:
     x86.xor rax, rax
     x86.mov rcx, 8
@@ -1052,7 +1052,7 @@ module {
     x86.mov rbx, [rbp-8]
     x86.mov rcx, [rbp-8]
     x86.call mm_incref
-    x86.jmp memory-safety.main.otherwise_default_continue_3
+    x86.jmp main.otherwise_default_continue_3
   otherwise_default_success_2:
     x86.mov rax, [rbp-8]
     x86.test rax, rax
@@ -1062,7 +1062,7 @@ module {
     x86.label __nonnull_skip_0
     x86.mov rcx, [rbp-40]
     x86.mov [rbp-8], rcx
-    x86.jmp memory-safety.main.otherwise_default_continue_3
+    x86.jmp main.otherwise_default_continue_3
   otherwise_default_continue_3:
     x86.mov rax, [rbp-8]
     x86.mov [rbp-48], rax
@@ -1080,7 +1080,7 @@ module {
     x86.movzx r9, r9b
     x86.or rdi, r9
     x86.test rdi, rdi
-    x86.je memory-safety.main.__range_ok_4
+    x86.je main.__range_ok_4
   __range_panic_4:
     x86.lea_symdata rax, [__panic_msg_0]
     x86.mov rcx, rax
@@ -1650,7 +1650,7 @@ end 'main'
 ```RequiredMLIR:x86_64-windows
 === maxon
 module {
-  func @memory-safety.main() -> i64 {
+  func @main() -> i64 {
   entry:
     %9 = maxon.literal {value = 0 : i64}
     maxon.assign %9 {var = result} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
@@ -1701,7 +1701,7 @@ module {
 }
 === standard
 module {
-  func @memory-safety.main() -> u32 {
+  func @main() -> u32 {
   entry:
     %0 = arith.constant {value = 0 : i64}
     memref.store %0, result
@@ -1749,36 +1749,36 @@ module {
 }
 === x86
 module {
-  func @memory-safety.main() -> u32 {
+  func @main() -> u32 {
   entry:
     x86.prologue stack_size=32
     x86.xor rax, rax
     x86.mov [rbp-8], rax
     x86.xor rcx, rcx
     x86.mov [rbp-16], rcx
-    x86.jmp memory-safety.main.loop_0.header
+    x86.jmp main.loop_0.header
   loop_0.header:
     x86.mov rax, 3
     x86.mov rcx, [rbp-16]
     x86.cmp rcx, rax
-    x86.jge memory-safety.main.loop_0.exit
+    x86.jge main.loop_0.exit
   loop_0:
     x86.mov rax, [rbp-16]
     x86.mov [rbp-24], rax
     x86.mov rcx, [rbp-24]
     x86.mov rdx, 1
     x86.cmp rcx, rdx
-    x86.jne memory-safety.main.check_1.after
+    x86.jne main.check_1.after
   check_1:
     x86.mov rax, [rbp-24]
     x86.mov [rbp-8], rax
-    x86.jmp memory-safety.main.loop_0.exit
+    x86.jmp main.loop_0.exit
   check_1.after:
     x86.mov rax, 1
     x86.mov rcx, [rbp-16]
     x86.add rcx, rax
     x86.mov [rbp-16], rcx
-    x86.jmp memory-safety.main.loop_0.header
+    x86.jmp main.loop_0.header
   loop_0.exit:
     x86.mov rax, [rbp-8]
     x86.xor rcx, rcx
@@ -1791,7 +1791,7 @@ module {
     x86.movzx rsi, rsib
     x86.or rdx, rsi
     x86.test rdx, rdx
-    x86.je memory-safety.main.__range_ok_2
+    x86.je main.__range_ok_2
   __range_panic_2:
     x86.lea_symdata rax, [__panic_msg_0]
     x86.mov rcx, rax
@@ -2067,7 +2067,7 @@ module {
     maxon.scope_end [flag]
     maxon.return %18
   }
-  func @memory-safety.main() -> i64 {
+  func @main() -> i64 {
   entry:
     %19 = maxon.literal {value = 5 : i64}
     %20 = maxon.call @memory-safety.compute %19
@@ -2115,7 +2115,7 @@ module {
     %16 = arith.constant {value = 0 : i64}
     func.return %16
   }
-  func @memory-safety.main() -> u32 {
+  func @main() -> u32 {
   entry:
     %18 = arith.constant {value = 5 : i64}
     %19 = func.call @memory-safety.compute %18
@@ -2181,7 +2181,7 @@ module {
     x86.epilogue
     x86.ret
   }
-  func @memory-safety.main() -> u32 {
+  func @main() -> u32 {
   entry:
     x86.prologue stack_size=16
     x86.mov rcx, 5
@@ -2196,7 +2196,7 @@ module {
     x86.movzx rdx, rdxb
     x86.or rcx, rdx
     x86.test rcx, rcx
-    x86.je memory-safety.main.__range_ok_0
+    x86.je main.__range_ok_0
   __range_panic_0:
     x86.lea_symdata rax, [__panic_msg_0]
     x86.mov rcx, rax

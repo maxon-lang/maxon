@@ -19,10 +19,10 @@ ExitCode: 7
 Stderr: ```
 sl_init
   os_alloc size=67108864
-mm_alloc Widget #1 size=8 [ownership-edge-cases.main]
+mm_alloc Widget #1 size=8 [main]
   sl_alloc Widget #1 size=40 class=4
-mm_incref Widget #1 rc=1 [ownership-edge-cases.main]
-mm_decref Widget #1 rc=0 [ownership-edge-cases.main]
+mm_incref Widget #1 rc=1 [main]
+mm_decref Widget #1 rc=0 [main]
   mm_free Widget #1
     sl_free Widget #1 size=48 class=4
 mm_raw_alloc #R1 size=40
@@ -32,14 +32,14 @@ mm_raw_free #R1
 ```
 ---
 module {
-  func @ownership-edge-cases.main() -> u32 {
+  func @main() -> u32 {
   entry:
     x86.prologue stack_size=16
     x86.xor rax, rax
     x86.mov [rbp-8], rax
     x86.mov rcx, 1
     x86.test rcx, rcx
-    x86.je ownership-edge-cases.main.inner_0.merge
+    x86.je main.inner_0.merge
   inner_0:
     x86.mov rax, 7
     x86.mov rcx, 8
@@ -62,7 +62,7 @@ module {
     x86.mov rcx, [rbp-16]
     x86.call mm_decref
     x86.label __nonnull_skip_0
-    x86.jmp ownership-edge-cases.main.inner_0.merge
+    x86.jmp main.inner_0.merge
   inner_0.merge:
     x86.mov rax, [rbp-8]
     x86.xor rcx, rcx
@@ -75,7 +75,7 @@ module {
     x86.movzx rsi, rsib
     x86.or rdx, rsi
     x86.test rdx, rdx
-    x86.je ownership-edge-cases.main.__range_ok_1
+    x86.je main.__range_ok_1
   __range_panic_1:
     x86.lea_symdata rax, [__panic_msg_0]
     x86.mov rcx, rax

@@ -42,16 +42,16 @@ public class ARM64CodeEmitterStage {
     }
 
     // Find main function
-    var mainFunc = module.Functions.FirstOrDefault(f => f.Name == "main" || f.Name.EndsWith(".main"))
+    var mainFunc = module.Functions.FirstOrDefault(f => f.Name == "main")
       ?? throw new InvalidOperationException("No 'main' function found");
 
     // Emit _start wrapper
     var globalCleanupName = module.Functions
-      .Where(f => f.Name == "__maxon_global_cleanup" || f.Name.EndsWith(".__maxon_global_cleanup"))
+      .Where(f => f.Name == "__maxon_global_cleanup")
       .Select(f => f.Name)
       .FirstOrDefault();
     var moduleInitName = module.Functions
-      .Where(f => f.Name == "__module_init" || f.Name.EndsWith(".__module_init"))
+      .Where(f => f.Name == "__module_init")
       .Select(f => f.Name)
       .FirstOrDefault();
     emitter.EmitStartWrapper(mainFunc.Name, globalCleanupName, moduleInitName);

@@ -39,11 +39,10 @@ export function getStdlibModule(project Project) returns MlirModule
 
   // Whitelist of stdlib files to load
   var stdlibFiles = FilePathArray{}
-  stdlibFiles.push(stdlibPath.join("StdlibTest.maxon").toString())
+  stdlibFiles.push(stdlibPath.join("StdlibTest.maxon"))
 
   var allModule = createMlirModule()
-  for filePathStr in stdlibFiles 'eachFile'
-    let fp = try FilePath.from(filePathStr) otherwise panic("invalid stdlib path")
+  for fp in stdlibFiles 'eachFile'
     if fp.fileExists() 'exists'
       let bytes = try File.readBinary(fp) otherwise 'readErr'
         logDebug(LogCategory.compiler, message: () gives "  Failed to read {fp}")
@@ -51,7 +50,7 @@ export function getStdlibModule(project Project) returns MlirModule
       end 'readErr'
       logDebug(LogCategory.compiler, message: () gives "  Parsing {fp}")
       let tokens = tokenize(bytes)
-      let parsed = parse(project, tokens: tokens, filePath: filePathStr)
+      let parsed = parse(project, tokens: tokens, filePath: fp)
       mergeModules(allModule, source: parsed)
     end 'exists'
   end 'eachFile'

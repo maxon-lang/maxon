@@ -15,7 +15,7 @@ ExitCode: 42
 RequiredMLIR: ```
 === maxon
 module {
-  func @register-allocator.main() -> i64 {
+  func @main() -> i64 {
   entry:
     %0 = maxon.literal {value = 40 : i64}
     maxon.assign %0 {var = base} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
@@ -55,7 +55,7 @@ module {
 }
 === standard
 module {
-  func @register-allocator.main() -> u32 {
+  func @main() -> u32 {
   entry:
     %0 = arith.constant {value = 40 : i64}
     memref.store %0, base
@@ -91,7 +91,7 @@ module {
 }
 === x86
 module {
-  func @register-allocator.main() -> u32 {
+  func @main() -> u32 {
   entry:
     x86.prologue stack_size=16
     x86.mov rax, 40
@@ -99,15 +99,15 @@ module {
     x86.mov rcx, 1
     x86.mov rdx, 1
     x86.cmp rcx, rdx
-    x86.jne register-allocator.main.other_1
+    x86.jne main.other_1
   check_0:
     x86.mov rax, 2
     x86.mov [rbp-16], rax
-    x86.jmp register-allocator.main.check_0.merge
+    x86.jmp main.check_0.merge
   other_1:
     x86.mov rax, 100
     x86.mov [rbp-16], rax
-    x86.jmp register-allocator.main.check_0.merge
+    x86.jmp main.check_0.merge
   check_0.merge:
     x86.mov rax, [rbp-8]
     x86.mov rcx, [rbp-16]
@@ -122,7 +122,7 @@ module {
     x86.movzx rdi, rdib
     x86.or rbx, rdi
     x86.test rbx, rbx
-    x86.je register-allocator.main.__range_ok_2
+    x86.je main.__range_ok_2
   __range_panic_2:
     x86.lea_symdata rax, [__panic_msg_0]
     x86.mov rcx, rax

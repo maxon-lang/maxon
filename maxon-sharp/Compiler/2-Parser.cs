@@ -1200,9 +1200,8 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
     var savedFunction = _currentFunction;
     var savedBlock = _currentBlock;
 
-    // Create __module_init function
-    var namespace_ = DeriveNamespace();
-    var initFuncName = string.IsNullOrEmpty(namespace_) ? "__module_init" : $"{namespace_}.__module_init";
+    // Create __module_init function (unqualified — compiler-internal)
+    var initFuncName = "__module_init";
     var initFunc = new MlirFunction<MaxonOp>(initFuncName, [], [], returnType: null, throwsType: null);
     module.AddFunction(initFunc);
     _currentFunction = initFunc;
@@ -1297,9 +1296,9 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
       var qualifiedTypeName = string.IsNullOrEmpty(namespace_) ? owningType : $"{namespace_}.{owningType}";
       funcName = $"{qualifiedTypeName}.{baseName}";
     } else {
-      // Top-level function: prepend file-based namespace
+      // Top-level function: prepend file-based namespace (except main)
       var namespace_ = DeriveNamespace();
-      funcName = string.IsNullOrEmpty(namespace_) ? baseName : $"{namespace_}.{baseName}";
+      funcName = (baseName == "main" || string.IsNullOrEmpty(namespace_)) ? baseName : $"{namespace_}.{baseName}";
     }
     Logger.Trace(LogCategory.Parser, $"PreScanFunction: {funcName} (base: {baseName}, file: {_sourceFilePath})");
 
@@ -4857,9 +4856,9 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
     var nameToken = ExpectIdentifierLike();
     var baseName = nameToken.Value;
 
-    // Top-level functions get qualified with file-based namespace
+    // Top-level functions get qualified with file-based namespace (except main)
     var namespace_ = DeriveNamespace();
-    var name = string.IsNullOrEmpty(namespace_) ? baseName : $"{namespace_}.{baseName}";
+    var name = (baseName == "main" || string.IsNullOrEmpty(namespace_)) ? baseName : $"{namespace_}.{baseName}";
 
     Logger.Debug(LogCategory.Parser, $"Parsing function: {name} (base: {baseName}, namespace: {namespace_})");
 

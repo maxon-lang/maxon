@@ -10,17 +10,16 @@ public static class DeadFunctionElimination {
     foreach (var func in module.Functions)
       funcByName[func.Name] = func;
 
-    // BFS from main and runtime entry points (check for exact match or suffix match)
+    // BFS from main and runtime entry points
     var queue = new Queue<string>();
-    var mainFunc = module.Functions.FirstOrDefault(f => f.Name == "main" || f.Name.EndsWith(".main"));
+    var mainFunc = module.Functions.FirstOrDefault(f => f.Name == "main");
     if (mainFunc != null) {
       queue.Enqueue(mainFunc.Name);
       reachable.Add(mainFunc.Name);
     }
     // __module_init and __maxon_global_cleanup are called from _start, not from Maxon code
     foreach (var func in module.Functions) {
-      if (func.Name == "__module_init" || func.Name.EndsWith(".__module_init")
-          || func.Name == "__maxon_global_cleanup" || func.Name.EndsWith(".__maxon_global_cleanup")) {
+      if (func.Name == "__module_init" || func.Name == "__maxon_global_cleanup") {
         if (reachable.Add(func.Name))
           queue.Enqueue(func.Name);
       }
@@ -99,7 +98,7 @@ public static class DeadFunctionElimination {
 
       // Remove dead init code from __module_init and cleanup functions
       foreach (var func in module.Functions) {
-        if (!func.Name.Contains("__module_init") && !func.Name.Contains("__maxon_global_cleanup"))
+        if (func.Name != "__module_init" && func.Name != "__maxon_global_cleanup")
           continue;
         foreach (var block in func.Body.Blocks)
           EliminateDeadOps(block, deadGlobals);
@@ -109,7 +108,7 @@ public static class DeadFunctionElimination {
     // Remove __module_init / __maxon_global_cleanup functions that are now empty
     // (only contain scope_end + return with no real work)
     module.Functions.RemoveAll(f => {
-      if (!f.Name.Contains("__module_init") && !f.Name.Contains("__maxon_global_cleanup"))
+      if (f.Name != "__module_init" && f.Name != "__maxon_global_cleanup")
         return false;
       var ops = f.Body.Blocks[0].Operations;
       return ops.All(op => op is MaxonScopeEndOp or MaxonReturnOp);

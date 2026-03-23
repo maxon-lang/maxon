@@ -19,7 +19,7 @@ enum ParserError
   typeError
 end 'ParserError'
 
-export function parse(project Project, tokens TokenArray, filePath String) returns MlirModule
+export function parse(project Project, tokens TokenArray, filePath FilePath) returns MlirModule
   logDebug(LogCategory.parser, message: () gives "Starting parser")
 
   var module = createMlirModule()
@@ -88,7 +88,7 @@ function synchronizeToNextStatement(tokens TokenArray, startPos TokenIndex) retu
 end 'synchronizeToNextStatement'
 
 // Dispatches an identifier at statement level: assignment, function call, or error.
-function parseIdentifierStatement(project Project, block MlirBlock, tokens TokenArray, startPos TokenIndex, filePath String) returns TokenIndex
+function parseIdentifierStatement(project Project, block MlirBlock, tokens TokenArray, startPos TokenIndex, filePath FilePath) returns TokenIndex
   let peekToken = tokenAt(tokens, pos: startPos + 1)
   if peekToken.kind == TokenKind.equals 'isAssign'
     return parseVarAssignment(project, block: block, tokens: tokens, startPos: startPos, filePath: filePath)
@@ -103,7 +103,7 @@ function parseIdentifierStatement(project Project, block MlirBlock, tokens Token
 end 'parseIdentifierStatement'
 
 // Reports an unexpected token error and synchronizes to the next statement.
-function reportUnexpectedToken(project Project, tokens TokenArray, startPos TokenIndex, filePath String) returns TokenIndex
+function reportUnexpectedToken(project Project, tokens TokenArray, startPos TokenIndex, filePath FilePath) returns TokenIndex
   let stmtToken = tokenAt(tokens, pos: startPos)
   reportCompileError(project, code: ErrorCode.parserExpectedToken, message: "Unexpected token '{tokenValueToString(stmtToken.value)}' in statement position", line: stmtToken.line, column: stmtToken.column, filePath: filePath)
   return synchronizeToNextStatement(tokens, startPos: startPos)
@@ -111,7 +111,7 @@ end 'reportUnexpectedToken'
 
 // --- Function parsing ---
 
-function parseFunction(project Project, module MlirModule, tokens TokenArray, startPos TokenIndex, filePath String) returns TokenIndex
+function parseFunction(project Project, module MlirModule, tokens TokenArray, startPos TokenIndex, filePath FilePath) returns TokenIndex
   var pos = startPos
   pos = pos + 1  // skip 'function'
 
@@ -166,8 +166,13 @@ function parseFunction(project Project, module MlirModule, tokens TokenArray, st
 
   pos = skipNewlines(tokens, startPos: pos)
 
-  // Create function and entry block
-  var func = createMlirFunction(nameToken.value, returnType: returnTypeName)
+  // Create function and entry block — qualify name with file-based namespace (except main)
+  var funcName = nameToken.value
+  if funcName != b"main" 'qualifyNonMain'
+    let ns = deriveNamespace(filePath)
+    funcName = qualifyName(ns, name: funcName)
+  end 'qualifyNonMain'
+  var func = createMlirFunction(funcName, returnType: returnTypeName)
   func.paramCount = paramCount
   var block = newBlock(func, label: b"entry")
 
@@ -198,7 +203,7 @@ end 'parseFunction'
 
 // Parse statements until 'end' is reached. Returns the position at the 'end' token.
 // Sets lastWasReturn to true if the last statement was a return.
-function parseStatements(project Project, func MlirFunction, block MlirBlock, tokens TokenArray, startPos TokenIndex, filePath String, lastWasReturn bool) returns(TokenIndex, MlirBlock)
+function parseStatements(project Project, func MlirFunction, block MlirBlock, tokens TokenArray, startPos TokenIndex, filePath FilePath, lastWasReturn bool) returns(TokenIndex, MlirBlock)
   var pos = startPos
   lastWasReturn = false
 
@@ -234,7 +239,7 @@ return(pos, block)
 end 'parseStatements'
 
 // Parse top-level `let NAME = "value"` — stores as compile-time string constant.
-function parseTopLevelLet(project Project, tokens TokenArray, startPos TokenIndex, filePath String) returns TokenIndex
+function parseTopLevelLet(project Project, tokens TokenArray, startPos TokenIndex, filePath FilePath) returns TokenIndex
   var pos = startPos + 1  // skip 'let'
 
   let nameToken = tokenAt(tokens, pos: pos)
@@ -395,7 +400,7 @@ function computeOptimalIntType(lower BoundValue, upper BoundValue) returns ByteA
   return b"i64"
 end 'computeOptimalIntType'
 
-function parseReturnStatement(project Project, block MlirBlock, tokens TokenArray, startPos TokenIndex, filePath String) returns TokenIndex
+function parseReturnStatement(project Project, block MlirBlock, tokens TokenArray, startPos TokenIndex, filePath FilePath) returns TokenIndex
   var pos = startPos + 1  // skip 'return'
 
   // Bare 'return' without expression (void return)
@@ -416,7 +421,7 @@ end 'parseReturnStatement'
 
 // Parse: if <condition> 'label' ... end 'label' [else 'label' ... end 'label']
 // Returns the next token position and the block to continue emitting into (the merge block).
-function parseIfStatement(project Project, func MlirFunction, block MlirBlock, tokens TokenArray, startPos TokenIndex, filePath String) returns(TokenIndex, MlirBlock)
+function parseIfStatement(project Project, func MlirFunction, block MlirBlock, tokens TokenArray, startPos TokenIndex, filePath FilePath) returns(TokenIndex, MlirBlock)
   var pos = startPos + 1  // skip 'if'
 
   // Parse condition expression (emits ops to current block)
@@ -513,7 +518,7 @@ end 'parseIfStatement'
 
 // Parse: while <condition> 'label' ... end 'label'
 // Returns the next token position and the exit block to continue emitting into.
-function parseWhileStatement(project Project, func MlirFunction, block MlirBlock, tokens TokenArray, startPos TokenIndex, filePath String) returns(TokenIndex, MlirBlock)
+function parseWhileStatement(project Project, func MlirFunction, block MlirBlock, tokens TokenArray, startPos TokenIndex, filePath FilePath) returns(TokenIndex, MlirBlock)
   var pos = startPos + 1  // skip 'while'
 
   // Create blocks for loop structure
@@ -561,7 +566,7 @@ function parseWhileStatement(project Project, func MlirFunction, block MlirBlock
 end 'parseWhileStatement'
 
 // Parse: identifier = expression (variable reassignment)
-function parseVarAssignment(project Project, block MlirBlock, tokens TokenArray, startPos TokenIndex, filePath String) returns TokenIndex
+function parseVarAssignment(project Project, block MlirBlock, tokens TokenArray, startPos TokenIndex, filePath FilePath) returns TokenIndex
   var pos = startPos
   let nameToken = tokenAt(tokens, pos: pos)
   pos = pos + 1  // skip name
@@ -597,7 +602,7 @@ function appendIntBytes(dst ByteArray, n ParsedInt)
   end 'reverse'
 end 'appendIntBytes'
 
-function parseVarDecl(project Project, block MlirBlock, tokens TokenArray, startPos TokenIndex, filePath String) returns TokenIndex
+function parseVarDecl(project Project, block MlirBlock, tokens TokenArray, startPos TokenIndex, filePath FilePath) returns TokenIndex
   var pos = startPos + 1  // skip 'var'/'let'
 
   let nameToken = tokenAt(tokens, pos: pos)
@@ -622,7 +627,7 @@ function parseVarDecl(project Project, block MlirBlock, tokens TokenArray, start
   return pos
 end 'parseVarDecl'
 
-function parsePrintStatement(project Project, block MlirBlock, tokens TokenArray, startPos TokenIndex, filePath String) returns TokenIndex
+function parsePrintStatement(project Project, block MlirBlock, tokens TokenArray, startPos TokenIndex, filePath FilePath) returns TokenIndex
   var pos = startPos + 1  // skip 'print'
   pos = pos + 1  // skip '('
   let strToken = tokenAt(tokens, pos: pos)
@@ -637,7 +642,7 @@ end 'parsePrintStatement'
 
 // --- String Interpolation ---
 
-function parseStringInterpolation(project Project, block MlirBlock, str ByteArray, filePath String)
+function parseStringInterpolation(project Project, block MlirBlock, str ByteArray, filePath FilePath)
   var buf = ByteArray{}
   var i = 0
   let len = str.count()
@@ -783,11 +788,11 @@ function emitBinaryOp(block MlirBlock, kind TokenKind, resultId ValueId, leftId 
 end 'emitBinaryOp'
 
 // Pratt expression parser: single loop handles all binary precedence levels.
-function parseExpression(project Project, block MlirBlock, tokens TokenArray, startPos TokenIndex, filePath String) returns ExprResult
+function parseExpression(project Project, block MlirBlock, tokens TokenArray, startPos TokenIndex, filePath FilePath) returns ExprResult
   return parseExpressionBP(project, block: block, tokens: tokens, startPos: startPos, filePath: filePath, minBP: 0)
 end 'parseExpression'
 
-function parseExpressionBP(project Project, block MlirBlock, tokens TokenArray, startPos TokenIndex, filePath String, minBP BindingPower) returns ExprResult
+function parseExpressionBP(project Project, block MlirBlock, tokens TokenArray, startPos TokenIndex, filePath FilePath, minBP BindingPower) returns ExprResult
   var left = parseUnary(project, block: block, tokens: tokens, startPos: startPos, filePath: filePath)
   var pos = left.nextPos
   var leftId = left.valueId
@@ -854,7 +859,7 @@ function parseExpressionBP(project Project, block MlirBlock, tokens TokenArray, 
 end 'parseExpressionBP'
 
 // Unary: -expr | not expr | primary
-function parseUnary(project Project, block MlirBlock, tokens TokenArray, startPos TokenIndex, filePath String) returns ExprResult
+function parseUnary(project Project, block MlirBlock, tokens TokenArray, startPos TokenIndex, filePath FilePath) returns ExprResult
   let token = tokenAt(tokens, pos: startPos)
 
   if token.kind == TokenKind.minus 'isNeg'
@@ -872,7 +877,7 @@ function parseUnary(project Project, block MlirBlock, tokens TokenArray, startPo
   return parsePrimary(project, block: block, tokens: tokens, startPos: startPos, filePath: filePath)
 end 'parseUnary'
 
-function parseIdentifierExpr(project Project, block MlirBlock, tokens TokenArray, startPos TokenIndex, token Token, filePath String) returns ExprResult throws ParserError
+function parseIdentifierExpr(project Project, block MlirBlock, tokens TokenArray, startPos TokenIndex, token Token, filePath FilePath) returns ExprResult throws ParserError
   let peekToken = tokenAt(tokens, pos: startPos + 1)
   if peekToken.kind == TokenKind.leftParen 'isCall'
     var pos = startPos + 2  // skip name and '('
@@ -912,8 +917,14 @@ function parseIdentifierExpr(project Project, block MlirBlock, tokens TokenArray
       return ExprResult{valueId: truncArgId, nextPos: pos, isFloat: false, isStringConst: false, stringConstValue: ByteArray{}}
     end 'isTrunc'
 
+    // Qualify call target with file-based namespace (except main)
+    var calleeName = token.value
+    if calleeName != b"main" 'qualifyCall'
+      let callNs = deriveNamespace(filePath)
+      calleeName = qualifyName(callNs, name: calleeName)
+    end 'qualifyCall'
     let callId = nextValueId(project)
-    emitOp(block, op: MlirOp.maxhl(MaxHLOp.call(callId, token.value, argIds)))
+    emitOp(block, op: MlirOp.maxhl(MaxHLOp.call(callId, calleeName, argIds)))
     return ExprResult{valueId: callId, nextPos: pos, isFloat: false, isStringConst: false, stringConstValue: ByteArray{}}
   end 'isCall'
 
@@ -931,7 +942,7 @@ function parseIdentifierExpr(project Project, block MlirBlock, tokens TokenArray
   return ExprResult{valueId: id, nextPos: startPos + 1, isFloat: varIsFloat, isStringConst: false, stringConstValue: ByteArray{}}
 end 'parseIdentifierExpr'
 
-function parsePrimaryMatch(project Project, block MlirBlock, tokens TokenArray, startPos TokenIndex, token Token, filePath String) returns ExprResult throws ParserError
+function parsePrimaryMatch(project Project, block MlirBlock, tokens TokenArray, startPos TokenIndex, token Token, filePath FilePath) returns ExprResult throws ParserError
   match token.kind 'primary'
     intLiteral then return parseIntLiteral(project, block: block, token: token, startPos: startPos)
     floatLiteral then return parseFloatLiteral(project, block: block, token: token, startPos: startPos)
@@ -944,7 +955,7 @@ function parsePrimaryMatch(project Project, block MlirBlock, tokens TokenArray, 
   end 'primary'
 end 'parsePrimaryMatch'
 
-function parsePrimary(project Project, block MlirBlock, tokens TokenArray, startPos TokenIndex, filePath String) returns ExprResult
+function parsePrimary(project Project, block MlirBlock, tokens TokenArray, startPos TokenIndex, filePath FilePath) returns ExprResult
   let token = tokenAt(tokens, pos: startPos)
   let result = try parsePrimaryMatch(project, block: block, tokens: tokens, startPos: startPos, token: token, filePath: filePath) otherwise 'unhandled'
     return raiseUnexpectedToken(project, token: token, startPos: startPos, filePath: filePath)
@@ -952,7 +963,7 @@ function parsePrimary(project Project, block MlirBlock, tokens TokenArray, start
   return result
 end 'parsePrimary'
 
-function raiseUnexpectedToken(project Project, token Token, startPos TokenIndex, filePath String) returns ExprResult
+function raiseUnexpectedToken(project Project, token Token, startPos TokenIndex, filePath FilePath) returns ExprResult
   reportCompileError(project, code: ErrorCode.parserExpectedExpression, message: "Expected expression but got '{tokenValueToString(token.value)}'", line: token.line, column: token.column, filePath: filePath)
   return ExprResult{valueId: 0, nextPos: startPos + 1, isFloat: false, isStringConst: false, stringConstValue: ByteArray{}}
 end 'raiseUnexpectedToken'
@@ -982,7 +993,7 @@ function parseBoolLiteral(project Project, block MlirBlock, startPos TokenIndex,
   return ExprResult{valueId: id, nextPos: startPos + 1, isFloat: false, isStringConst: false, stringConstValue: ByteArray{}}
 end 'parseBoolLiteral'
 
-function parseParenExpr(project Project, block MlirBlock, tokens TokenArray, startPos TokenIndex, filePath String) returns ExprResult
+function parseParenExpr(project Project, block MlirBlock, tokens TokenArray, startPos TokenIndex, filePath FilePath) returns ExprResult
   let inner = parseExpression(project, block: block, tokens: tokens, startPos: startPos + 1, filePath: filePath)
   return ExprResult{valueId: inner.valueId, nextPos: inner.nextPos + 1, isFloat: inner.isFloat, isStringConst: inner.isStringConst, stringConstValue: inner.stringConstValue}
 end 'parseParenExpr'
@@ -1254,7 +1265,7 @@ function defineVariable(project Project, name ByteArray, isFloat bool) returns V
   return slot
 end 'defineVariable'
 
-function lookupVariable(project Project, name ByteArray, token Token, filePath String) returns VarSlot
+function lookupVariable(project Project, name ByteArray, token Token, filePath FilePath) returns VarSlot
   var i = project.parserVarNames.count() - 1
   while i >= 0 'lookup'
     let vn = try project.parserVarNames.get(i) otherwise ByteArray{}
@@ -1289,3 +1300,22 @@ function isVariableFloat(project Project, name ByteArray) returns bool
   end 'lookup'
   return false
 end 'isVariableFloat'
+
+// Derive a namespace from the file path (filename without extension).
+// e.g. "/temp/basics.maxon" -> "basics", "C:\foo\bar.maxon" -> "bar"
+function deriveNamespace(filePath FilePath) returns ByteArray
+  return filePath.stem().toByteArray()
+end 'deriveNamespace'
+
+// Qualify a function name with namespace: "ns.name".
+// Returns the raw name if namespace is empty.
+function qualifyName(ns ByteArray, name ByteArray) returns ByteArray
+  if ns.isEmpty() 'noNs'
+    return name
+  end 'noNs'
+  var qualified = ByteArray{}
+  qualified.append(ns)
+  qualified.push(46)  // '.'
+  qualified.append(name)
+  return qualified
+end 'qualifyName'
