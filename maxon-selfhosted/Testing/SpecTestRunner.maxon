@@ -66,7 +66,7 @@ end 'buildRunCommand'
 // Run all whitelisted spec tests for a specific target.
 export function runAllSpecTests(filter String, target Target, updateRequired bool = false) returns ExitCode
   let root = try findProjectRoot() otherwise 'noRoot'
-    logError(LogCategory.testing, message: "Could not find project root (no specs/ directory found)")
+    logError(LogCategory.testing, message: () gives "Could not find project root (no specs/ directory found)")
     return 1
   end 'noRoot'
 
@@ -91,14 +91,14 @@ export function runAllSpecTests(filter String, target Target, updateRequired boo
   for specName in whitelist 'eachSpec'
     let specPath = specDir.join("{specName}.md")
     let content = try File.readText(specPath) otherwise 'readErr'
-      logError(LogCategory.testing, message: "Could not read spec: {specPath}")
+      logError(LogCategory.testing, message: () gives "Could not read spec: {specPath}")
       continue
     end 'readErr'
 
     // Parse frontmatter — skip draft specs
     let fm = parseFrontmatter(content)
     if fm.status == "draft" 'isDraft'
-      logDebug(LogCategory.testing, message: "Skipping draft spec: {specName}")
+      logDebug(LogCategory.testing, message: () gives "Skipping draft spec: {specName}")
       continue
     end 'isDraft'
 
@@ -128,7 +128,7 @@ export function runAllSpecTests(filter String, target Target, updateRequired boo
       // Step 2: Parse the fragment back
       let fragPath = fragmentDir.join(specName).join("{test.name}.test")
       let fragment = try parseFragment(fragPath) otherwise 'parseFailed'
-        logError(LogCategory.testing, message: "[FAIL] {testPath} - could not parse fragment")
+        logError(LogCategory.testing, message: () gives "[FAIL] {testPath} - could not parse fragment")
         specFailed = specFailed + 1
         specFailures.push("specs/fragments-{targetKey}/{specName}/{test.name}.test")
         specFailures.push("  Failed to parse fragment file")
@@ -160,26 +160,26 @@ export function runAllSpecTests(filter String, target Target, updateRequired boo
     // Report per-spec failures
     if specFailed > 0 'hasSpecFail'
       let specTotal = specPassed + specFailed
-      logError(LogCategory.testing, message: "[FAIL] {specName} ({specPassed}/{specTotal})")
+      logError(LogCategory.testing, message: () gives "[FAIL] {specName} ({specPassed}/{specTotal})")
       for failMsg in specFailures 'printFails'
-        logError(LogCategory.testing, message: failMsg)
+        logError(LogCategory.testing, message: () gives failMsg)
       end 'printFails'
     end 'hasSpecFail'
   end 'eachSpec'
 
   if totalTests == 0 'noTests'
-    logInfo(LogCategory.testing, message: "No tests found")
+    logInfo(LogCategory.testing, message: () gives "No tests found")
     return 0
   end 'noTests'
 
   if totalFragmentsWritten > 0 'showFrags'
-    logInfo(LogCategory.testing, message: "Wrote {totalFragmentsWritten} fragment(s)")
+    logInfo(LogCategory.testing, message: () gives "Wrote {totalFragmentsWritten} fragment(s)")
   end 'showFrags'
 
   if totalFailed == 0 'allPass'
-    logInfo(LogCategory.testing, message: "Tests: {totalPassed} passed (total: {totalTests})")
+    logInfo(LogCategory.testing, message: () gives "Tests: {totalPassed} passed (total: {totalTests})")
   end 'allPass' else 'someFail'
-    logInfo(LogCategory.testing, message: "Tests: {totalPassed} passed, {totalFailed} failed (total: {totalTests})")
+    logInfo(LogCategory.testing, message: () gives "Tests: {totalPassed} passed, {totalFailed} failed (total: {totalTests})")
   end 'someFail'
 
   if totalFailed > 0 'hasFail'
@@ -323,7 +323,7 @@ function runTestFromFragment(fragment Fragment, projectRoot FilePath, target Tar
   end 'checkLowering'
 
   if passed 'didPass'
-    logDebug(LogCategory.testing, message: "[PASS] {testName}")
+    logDebug(LogCategory.testing, message: () gives "[PASS] {testName}")
   end 'didPass'
 
   cleanup(tempSource, tempExe: tempExe)
@@ -543,18 +543,18 @@ function updateSpecLowering(specPath FilePath, targetKey String, results TestRes
       specContent = updatedContent
       modified = true
       totalUpdated = totalUpdated + 1
-      logInfo(LogCategory.testing, message: "Updated RequiredLowering:{targetKey} for {result.testName}")
+      logInfo(LogCategory.testing, message: () gives "Updated RequiredLowering:{targetKey} for {result.testName}")
     end 'changed'
   end 'eachResult'
 
   if modified 'writeBack'
     try File.writeText(specPath, content: specContent) otherwise 'writeErr'
-      logError(LogCategory.testing, message: "Failed to write spec: {specPath}")
+      logError(LogCategory.testing, message: () gives "Failed to write spec: {specPath}")
     end 'writeErr'
   end 'writeBack'
 
   if totalUpdated > 0 'showCount'
-    logInfo(LogCategory.testing, message: "Updated {totalUpdated} RequiredLowering block(s) in {specPath}")
+    logInfo(LogCategory.testing, message: () gives "Updated {totalUpdated} RequiredLowering block(s) in {specPath}")
   end 'showCount'
 end 'updateSpecLowering'
 

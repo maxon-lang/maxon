@@ -525,7 +525,7 @@ end 'emitLoadRegRbpOffset'
 
 // Emit call rel32 placeholder -- resolved after all functions are emitted.
 function emitCallFixup(code ByteArray, callFixups CallFixupArray, target ByteArray)
-  logTrace(LogCategory.codegen, message: "Call fixup to '{String.from(target)}' at offset {code.count()}")
+  logTrace(LogCategory.codegen, message: () gives "Call fixup to '{String.from(target)}' at offset {code.count()}")
   code.push(0xE8)
   let fixupOffset = code.count()
   callFixups.push(CallFixup{codeOffset: fixupOffset, targetName: target})
@@ -533,7 +533,7 @@ function emitCallFixup(code ByteArray, callFixups CallFixupArray, target ByteArr
 end 'emitCallFixup'
 
 function resolveCallFixups(code ByteArray, labelNames ByteArrayArray, labelOffsets CodeOffsetArray, callFixups CallFixupArray)
-  logTrace(LogCategory.codegen, message: "Resolving {callFixups.count()} call fixups")
+  logTrace(LogCategory.codegen, message: () gives "Resolving {callFixups.count()} call fixups")
   for fixup in callFixups 'resolve'
     let targetOffset = lookupLabel(labelNames, labelOffsets: labelOffsets, name: fixup.targetName)
     let callEnd = fixup.codeOffset + 4
@@ -548,12 +548,12 @@ function lookupLabel(labelNames ByteArrayArray, labelOffsets CodeOffsetArray, na
       return try labelOffsets.get(i) otherwise 0
     end 'found'
   end 'search'
-  logError(LogCategory.codegen, message: "Unresolved label '{String.from(name)}' -- call will jump to offset 0")
+  logError(LogCategory.codegen, message: () gives "Unresolved label '{String.from(name)}' -- call will jump to offset 0")
   return 0
 end 'lookupLabel'
 
 function recordLabel(labelNames ByteArrayArray, labelOffsets CodeOffsetArray, name ByteArray, offset CodeOffset)
-  logTrace(LogCategory.codegen, message: "Label '{String.from(name)}' at code offset {offset}")
+  logTrace(LogCategory.codegen, message: () gives "Label '{String.from(name)}' at code offset {offset}")
   labelNames.push(name)
   labelOffsets.push(offset)
 end 'recordLabel'
@@ -562,7 +562,7 @@ end 'recordLabel'
 
 // Emit x86-64 machine code from a block-based MlirModule containing MaxX64Ops.
 export function emitX86(module MlirModule, target Target, globalData GlobalDataTable) returns CodeResult
-  logInfo(LogCategory.codegen, message: "Emitting block-based machine code ({targetToString(target)})")
+  logInfo(LogCategory.codegen, message: () gives "Emitting block-based machine code ({targetToString(target)})")
   var code = ByteArray{}
   code.reserve(1024)
   var relocations = RelocationArray{}

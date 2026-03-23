@@ -6,7 +6,7 @@ end 'compile'
 
 // Compiles a project and returns the output executable path.
 export function compileProject(project Project) returns FilePath throws CompileError
-  logInfo(LogCategory.compiler, message: "Starting incremental compilation")
+  logInfo(LogCategory.compiler, message: () gives "Starting incremental compilation")
 
   let rootFp = try FilePath.from(project.rootPath) otherwise panic("invalid root path")
   try loadSourceFiles(project, path: rootFp)
@@ -22,7 +22,7 @@ export function compileProject(project Project) returns FilePath throws CompileE
   let outputPath = outputFp.changeExtension(ext)
   writeExecutable(outputPath, codeResult: codeResult, target: project.target)
 
-  logInfo(LogCategory.compiler, message: "Wrote {codeResult.code.count()} bytes code to {outputPath}")
+  logInfo(LogCategory.compiler, message: () gives "Wrote {codeResult.code.count()} bytes code to {outputPath}")
 
   return outputPath
 end 'compileProject'
@@ -36,7 +36,7 @@ end 'fileChanged'
 
 function loadSourceFiles(project Project, path FilePath) throws CompileError
   if path.fileExists() 'isFile'
-    logTrace(LogCategory.compiler, message: "Loading single file: {path}")
+    logTrace(LogCategory.compiler, message: () gives "Loading single file: {path}")
 
     let bytes = try File.readBinary(path) otherwise 'readErr'
       throw CompileError.readError
@@ -44,7 +44,7 @@ function loadSourceFiles(project Project, path FilePath) throws CompileError
 
     setSourceFile(project, path: path.toString(), content: bytes)
   end 'isFile' else if path.directoryExists() 'isDir'
-    logTrace(LogCategory.compiler, message: "Loading directory: {path}")
+    logTrace(LogCategory.compiler, message: () gives "Loading directory: {path}")
 
     let dirEntries = try Directory.list(path) otherwise 'listErr'
       throw CompileError.directoryNotFound
@@ -53,7 +53,7 @@ function loadSourceFiles(project Project, path FilePath) throws CompileError
     for name in dirEntries 'loop'
       if name.endsWith(".maxon") 'isMaxon'
         let filePath = path.join(name)
-        logTrace(LogCategory.compiler, message: "Loading file: {filePath}")
+        logTrace(LogCategory.compiler, message: () gives "Loading file: {filePath}")
 
         let bytes = try File.readBinary(filePath) otherwise 'skip'
           continue

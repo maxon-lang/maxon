@@ -11,8 +11,8 @@ type MaxArm64BinaryOpInfo
 end 'MaxArm64BinaryOpInfo'
 
 export function lowerMidToMaxArm64(module MlirModule, target Target) returns MlirModule
-  logInfo(LogCategory.mlir, message: "Lowering Mid to MaxArm64 dialect for {targetToString(target)}")
-  logTrace(LogCategory.mlir, message: "=== mid-to-arm64")
+  logInfo(LogCategory.mlir, message: () gives "Lowering Mid to MaxArm64 dialect for {targetToString(target)}")
+  logTrace(LogCategory.mlir, message: () gives "=== mid-to-arm64")
   var result = createMlirModule()
   let osDesc = makeOsDescriptor(target)
 
@@ -20,7 +20,6 @@ export function lowerMidToMaxArm64(module MlirModule, target Target) returns Mli
     var dstFunc = createMlirFunction(srcFunc.name, returnType: srcFunc.returnType)
     dstFunc.paramCount = srcFunc.paramCount
     let funcName = String.from(srcFunc.name)
-    let skipFunc = isRuntimeFunction(funcName)
 
     // Compute stack size and max parser slot across all blocks in this function
     let stackSize = computeStackSizeForFunc(srcFunc, shadowSpace: 0, savedRegsSize: 16)
@@ -34,16 +33,11 @@ export function lowerMidToMaxArm64(module MlirModule, target Target) returns Mli
       var dstBlock = addBlock(dstFunc.region, label: srcBlock.label)
       dstBlock.id = srcBlock.id
 
-      if not skipFunc 'logBlockCtx'
-        let blockLabel = String.from(srcBlock.label)
-        logTrace(LogCategory.mlir, message: "@{funcName} {blockLabel}:")
-      end 'logBlockCtx'
+      logTrace(LogCategory.mlir, message: () gives "@{funcName} {String.from(srcBlock.label)}:")
 
       // Emit prologue at the start of the entry block
       if isFirstBlock 'emitPrologue'
-        if not skipFunc 'logPrologue'
-          logTrace(LogCategory.mlir, message: "  arm64.prologue stackSize={stackSize}, params={srcFunc.paramCount}")
-        end 'logPrologue'
+        logTrace(LogCategory.mlir, message: () gives "  arm64.prologue stackSize={stackSize}, params={srcFunc.paramCount}")
         dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.prologue(stackSize)))
         // Save AAPCS64 register parameters to stack slots (x0-x7)
         if srcFunc.paramCount >= 1 'saveParam0'
@@ -77,51 +71,14 @@ export function lowerMidToMaxArm64(module MlirModule, target Target) returns Mli
       for op in srcBlock.ops 'eachOp'
         let opsBefore = dstBlock.ops.count()
         nextTempSlot = lowerMidOpToArm64(op, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot, osDesc: osDesc)
-        if not skipFunc 'logOp'
-          let sourceStr = opToString(op, blocks: MlirBlockArray{})
-          let opsAfter = dstBlock.ops.count()
-          var targetStr = ""
-          for k in opsBefore upto opsAfter 'eachNew'
-            let newOp = try dstBlock.ops.get(k) otherwise 'skipOp'
-              continue
-            end 'skipOp'
-            let newOpStr = opToString(newOp, blocks: MlirBlockArray{})
-            if targetStr.isEmpty() 'first'
-              targetStr = newOpStr
-            end 'first' else 'append'
-              targetStr = "{targetStr}, {newOpStr}"
-            end 'append'
-          end 'eachNew'
-          logTrace(LogCategory.mlir, message: "  {sourceStr} -> {targetStr}")
-        end 'logOp'
+        logTrace(LogCategory.mlir, message: () gives formatLoweringResult(sourceOp: op, dstBlock: dstBlock, opsBefore: opsBefore))
       end 'eachOp'
 
       // Lower terminator (pass srcBlock so condBr can scan source ops for cmp kind)
       if srcBlock.hasTerminator 'hasTerm'
         let termOpsBefore = dstBlock.ops.count()
         lowerMidTerminatorToArm64(srcBlock.terminator, srcBlock: srcBlock, dstBlock: dstBlock, valueSlots: valueSlots)
-        if not skipFunc 'logTerm'
-          let sourceStr = opToString(srcBlock.terminator, blocks: srcFunc.region.blocks)
-          let targetStr = opToString(dstBlock.terminator, blocks: dstFunc.region.blocks)
-          var extraOpsStr = ""
-          let termOpsAfter = dstBlock.ops.count()
-          for k in termOpsBefore upto termOpsAfter 'eachTermOp'
-            let newOp = try dstBlock.ops.get(k) otherwise 'skipTermOp'
-              continue
-            end 'skipTermOp'
-            let newOpStr = opToString(newOp, blocks: MlirBlockArray{})
-            if extraOpsStr.isEmpty() 'first'
-              extraOpsStr = newOpStr
-            end 'first' else 'append'
-              extraOpsStr = "{extraOpsStr}, {newOpStr}"
-            end 'append'
-          end 'eachTermOp'
-          if extraOpsStr.isEmpty() 'noExtra'
-            logTrace(LogCategory.mlir, message: "  {sourceStr} -> {targetStr}")
-          end 'noExtra' else 'withExtra'
-            logTrace(LogCategory.mlir, message: "  {sourceStr} -> {extraOpsStr}, {targetStr}")
-          end 'withExtra'
-        end 'logTerm'
+        logTrace(LogCategory.mlir, message: () gives formatTerminatorResultWithBlocks(sourceOp: srcBlock.terminator, dstBlock: dstBlock, opsBefore: termOpsBefore, sourceBlocks: srcFunc.region.blocks, dstBlocks: dstFunc.region.blocks))
       end 'hasTerm'
     end 'eachBlock'
 
@@ -263,7 +220,7 @@ function lowerCallOpToArm64(resultId ValueId, callee ByteArray, argIds ValueIdAr
   // AAPCS64: first 8 integer args in x0-x7
   let argCount = argIds.count()
   if argCount > 8 'tooManyArgs'
-    logError(LogCategory.codegen, message: "ARM64 backend does not yet support more than 8 function arguments (got {argCount})")
+    logError(LogCategory.codegen, message: () gives "ARM64 backend does not yet support more than 8 function arguments (got {argCount})")
   end 'tooManyArgs'
   if argCount >= 1 'arg0'
     let argSlot0 = valueSlotMapGet(valueSlots, valueId: try argIds.get(0) otherwise 0)

@@ -309,7 +309,7 @@ end 'emitFixedToken'
 // --- Main tokenize function ---
 
 export function tokenize(source ByteArray) returns TokenArray
-  logDebug(LogCategory.lexer, message: "Starting lexer")
+  logDebug(LogCategory.lexer, message: () gives "Starting lexer")
 
   var tokens = TokenArray{}
   var s = LexerState{pos: 0, line: 1, column: 1}
@@ -412,7 +412,7 @@ function scanSingleQuoteString(source ByteArray, state LexerState, tokens TokenA
       break
     end 'endStr'
     if sc == Ascii.lf 'newlineInStr'
-      logError(LogCategory.lexer, message: "error E1002: {startLine}:{startCol}: unterminated string literal")
+      logError(LogCategory.lexer, message: () gives "error E1002: {startLine}:{startCol}: unterminated string literal")
       break
     end 'newlineInStr'
     state.pos = state.pos + 1
@@ -420,7 +420,7 @@ function scanSingleQuoteString(source ByteArray, state LexerState, tokens TokenA
   end 'strBody'
   let strVal = sliceBytes(source, startPos: strStart, endPos: state.pos)
   if state.pos >= len 'unterminatedAtEof'
-    logError(LogCategory.lexer, message: "error E1002: {startLine}:{startCol}: unterminated string literal")
+    logError(LogCategory.lexer, message: () gives "error E1002: {startLine}:{startCol}: unterminated string literal")
   end 'unterminatedAtEof' else 'consumeClose'
     // Consume the closing quote
     state.pos = state.pos + 1
@@ -439,7 +439,7 @@ function scanDoubleQuoteString(source ByteArray, state LexerState, tokens TokenA
       break
     end 'endDstr'
     if dc == Ascii.lf 'newlineInStr'
-      logError(LogCategory.lexer, message: "error E1002: {startLine}:{startCol}: unterminated string literal")
+      logError(LogCategory.lexer, message: () gives "error E1002: {startLine}:{startCol}: unterminated string literal")
       break
     end 'newlineInStr'
     if dc == Ascii.backslash 'esc'
@@ -451,7 +451,7 @@ function scanDoubleQuoteString(source ByteArray, state LexerState, tokens TokenA
   end 'dstrBody'
   let dstrVal = sliceBytes(source, startPos: dstrStart, endPos: state.pos)
   if state.pos >= len 'unterminatedAtEof'
-    logError(LogCategory.lexer, message: "error E1002: {startLine}:{startCol}: unterminated string literal")
+    logError(LogCategory.lexer, message: () gives "error E1002: {startLine}:{startCol}: unterminated string literal")
   end 'unterminatedAtEof' else 'consumeClose'
     // Consume the closing double-quote
     state.pos = state.pos + 1

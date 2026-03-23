@@ -90,6 +90,78 @@ export function isRuntimeFunction(name String) returns bool
   return false
 end 'isRuntimeFunction'
 
+// Format a lowering result: "  sourceOp -> newOp1, newOp2, ..."
+// Used by conversion passes to log how each op was lowered.
+export function formatLoweringResult(sourceOp MlirOp, dstBlock MlirBlock, opsBefore Count) returns String
+  let sourceStr = opToString(sourceOp, blocks: MlirBlockArray{})
+  let opsAfter = dstBlock.ops.count()
+  var targetStr = ""
+  for k in opsBefore upto opsAfter 'eachNew'
+    let newOp = try dstBlock.ops.get(k) otherwise 'skipOp'
+      continue
+    end 'skipOp'
+    let newOpStr = opToString(newOp, blocks: MlirBlockArray{})
+    if targetStr.isEmpty() 'first'
+      targetStr = newOpStr
+    end 'first' else 'append'
+      targetStr = "{targetStr}, {newOpStr}"
+    end 'append'
+  end 'eachNew'
+  return "  {sourceStr} -> {targetStr}"
+end 'formatLoweringResult'
+
+// Format a terminator lowering result: "  sourceOp -> newOp1, ..., terminator"
+// Includes both new ops added to dstBlock and the dstBlock terminator itself.
+export function formatTerminatorResult(sourceOp MlirOp, dstBlock MlirBlock, opsBefore Count) returns String
+  let sourceStr = opToString(sourceOp, blocks: MlirBlockArray{})
+  let opsAfter = dstBlock.ops.count()
+  var targetStr = ""
+  for k in opsBefore upto opsAfter 'eachNew'
+    let newOp = try dstBlock.ops.get(k) otherwise 'skipOp'
+      continue
+    end 'skipOp'
+    let newOpStr = opToString(newOp, blocks: MlirBlockArray{})
+    if targetStr.isEmpty() 'first'
+      targetStr = newOpStr
+    end 'first' else 'append'
+      targetStr = "{targetStr}, {newOpStr}"
+    end 'append'
+  end 'eachNew'
+  if dstBlock.hasTerminator 'hasDstTerm'
+    let termStr = opToString(dstBlock.terminator, blocks: MlirBlockArray{})
+    if targetStr.isEmpty() 'firstTerm'
+      targetStr = termStr
+    end 'firstTerm' else 'appendTerm'
+      targetStr = "{targetStr}, {termStr}"
+    end 'appendTerm'
+  end 'hasDstTerm'
+  return "  {sourceStr} -> {targetStr}"
+end 'formatTerminatorResult'
+
+// Format a terminator lowering result with explicit block arrays for label resolution.
+// Used by ARM64 backend where source/dst blocks differ from the default.
+export function formatTerminatorResultWithBlocks(sourceOp MlirOp, dstBlock MlirBlock, opsBefore Count, sourceBlocks MlirBlockArray, dstBlocks MlirBlockArray) returns String
+  let sourceStr = opToString(sourceOp, blocks: sourceBlocks)
+  let opsAfter = dstBlock.ops.count()
+  var extraOpsStr = ""
+  for k in opsBefore upto opsAfter 'eachTermOp'
+    let newOp = try dstBlock.ops.get(k) otherwise 'skipTermOp'
+      continue
+    end 'skipTermOp'
+    let newOpStr = opToString(newOp, blocks: MlirBlockArray{})
+    if extraOpsStr.isEmpty() 'first'
+      extraOpsStr = newOpStr
+    end 'first' else 'append'
+      extraOpsStr = "{extraOpsStr}, {newOpStr}"
+    end 'append'
+  end 'eachTermOp'
+  let targetStr = opToString(dstBlock.terminator, blocks: dstBlocks)
+  if extraOpsStr.isEmpty() 'noExtra'
+    return "  {sourceStr} -> {targetStr}"
+  end 'noExtra'
+  return "  {sourceStr} -> {extraOpsStr}, {targetStr}"
+end 'formatTerminatorResultWithBlocks'
+
 export function opToString(op MlirOp, blocks MlirBlockArray) returns String
   return match op 'dispatch'
     maxhl(hlOp) gives maxHLOpToString(hlOp, blocks: blocks)

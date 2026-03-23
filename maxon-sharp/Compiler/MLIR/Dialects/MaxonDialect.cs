@@ -245,9 +245,11 @@ public class MaxonClosureEnvLoadOp(int index, string name, MaxonValueKind kind, 
   public string Name { get; } = name;
   public MaxonValueKind Kind { get; } = kind;
   public string? StructTypeName { get; } = structTypeName;
-  public MaxonValue Result { get; } = kind == MaxonValueKind.Struct
-      ? new MaxonStruct(MlirContext.Current.NextId(), structTypeName!)
-      : kind.CreateValue();
+  public MaxonValue Result { get; } = kind switch {
+      MaxonValueKind.Struct => new MaxonStruct(MlirContext.Current.NextId(), structTypeName!),
+      MaxonValueKind.Enum when structTypeName != null => new MaxonEnum(MlirContext.Current.NextId(), structTypeName),
+      _ => kind.CreateValue()
+  };
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
 }
 

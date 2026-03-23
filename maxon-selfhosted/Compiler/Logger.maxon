@@ -106,21 +106,25 @@ function effectiveLogLevel(category LogCategory) returns StoredLevel
   return globalLogLevel
 end 'effectiveLogLevel'
 
-export function logError(category LogCategory, message String)
+export function logError(category LogCategory, message () returns String)
   log(category, level: LogLevel.ERROR, message: message)
 end 'logError'
 
-export function logInfo(category LogCategory, message String)
+export function logInfo(category LogCategory, message () returns String)
   log(category, level: LogLevel.INFO, message: message)
 end 'logInfo'
 
-export function logDebug(category LogCategory, message String)
+export function logDebug(category LogCategory, message () returns String)
   log(category, level: LogLevel.DEBUG, message: message)
 end 'logDebug'
 
-export function logTrace(category LogCategory, message String)
+export function logTrace(category LogCategory, message () returns String)
   log(category, level: LogLevel.TRACE, message: message)
 end 'logTrace'
+
+export function isLogEnabled(category LogCategory, level LogLevel) returns bool
+  return level.rawValue <= effectiveLogLevel(category)
+end 'isLogEnabled'
 
 export function setLogLevel(level LogLevel)
   globalLogLevel = level.rawValue
@@ -161,21 +165,22 @@ export function parseLogOption(option String) returns bool
   return true
 end 'parseLogOption'
 
-function log(category LogCategory, level LogLevel, message String)
+function log(category LogCategory, level LogLevel, message () returns String)
   let effectiveLevel = effectiveLogLevel(category)
   if level.rawValue <= effectiveLevel 'check'
+    let msg = message()
     if capturingErrors 'capturing'
       if level.rawValue <= 1 'isError'
-        capturedErrors.push(message)
+        capturedErrors.push(msg)
         return
       end 'isError'
     end 'capturing'
     if capturingTrace 'capTrace'
       if level.rawValue == LogLevel.TRACE.rawValue 'isTrace'
-        capturedTrace.push(message)
+        capturedTrace.push(msg)
         return
       end 'isTrace'
     end 'capTrace'
-    printError("[{category.rawValue}] {level.name}: {message}\n")
+    printError("[{category.rawValue}] {level.name}: {msg}\n")
   end 'check'
 end 'log'

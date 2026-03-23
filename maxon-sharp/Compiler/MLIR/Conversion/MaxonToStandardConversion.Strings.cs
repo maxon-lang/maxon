@@ -113,8 +113,8 @@ public static partial class MaxonToStandardConversion {
 		  System.Text.Encoding.Latin1);
 
 		var tempName = inlineTarget
-			?? temps.CreateTemp("bstrtmp", op.Result.Id, "ByteArray", OwnershipFlags.None);
-		var outerPtr = (StdHeapPtr)EmitAlloc(block, 16, "ByteArray", scopeName: _currentFuncName);
+			?? temps.CreateTemp("bstrtmp", op.Result.Id, op.ArrayTypeName, OwnershipFlags.None);
+		var outerPtr = (StdHeapPtr)EmitAlloc(block, 16, op.ArrayTypeName, scopeName: _currentFuncName);
 		EmitStore(block, outerPtr, tempName, varTypes);
 
 		// Store iterIndex = 0 at offset 0

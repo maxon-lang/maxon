@@ -31,7 +31,8 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
   private readonly VarRegistry _variables = new();
   private readonly HashSet<string> _referencedVars = [];
   private int _blockCounter;
-  private int _closureCounter;
+  [ThreadStatic] private static int _closureCounter;
+  public static void ResetClosureCounter() => _closureCounter = 0;
   private int _discardCounter;
   private readonly Stack<LoopContext> _loopStack = new();
   private readonly Stack<MatchContext> _matchStack = new();
@@ -1615,6 +1616,14 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
         fields.Add(new MlirStructField(fieldName, fieldType, isFieldExported, isMutable, defaultValue));
         SkipNewlines();
         continue;
+      }
+
+      // If we consumed 'export' but didn't match any known member, it's likely a missing var/let
+      if (isFieldExported && !Check(TokenType.End) && !IsAtEnd()) {
+        var badToken = Current();
+        throw new CompileError(ErrorCode.ParserExpectedToken,
+          $"Expected 'var', 'let', 'function', or 'static' after 'export' in type '{typeName}', got '{badToken.Value}'",
+          badToken.Line, badToken.Column);
       }
 
       SkipToEndOfLine();
@@ -6763,7 +6772,9 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
     if (!_typeRegistry.TryGetValue(typeName, out var regType)
         || regType is not MlirStructType regStruct
         || regStruct.TypeParams.Count == 0) return source;
-    return $"{source}_{string.Join("_", regStruct.TypeParams.Values.Select(t => t.Name))}";
+    // Normalize ranged primitives to their base type name so that e.g.
+    // ByteArray (Element=Byte) and __Array_i8 (Element=i8) resolve identically.
+    return $"{source}_{string.Join("_", regStruct.TypeParams.Values.Select(t => t is MlirRangedPrimitiveType rpt ? rpt.BaseType.Name : t.Name))}";
   }
 
   /// Gets the Element type parameter name for a managed-list-family type (ManagedList or ManagedListNode alias).
@@ -9199,10 +9210,11 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
     if (structA.TypeParams.Count != structB.TypeParams.Count) return false;
     foreach (var (key, valueA) in structA.TypeParams) {
       if (!structB.TypeParams.TryGetValue(key, out var valueB)) return false;
-      // If either is still a generic type parameter, consider it compatible
-      // (monomorphization will specialize the concrete types later)
       if (valueA is MlirTypeParameterType || valueB is MlirTypeParameterType) continue;
-      if (valueA.Name != valueB.Name) return false;
+      // Normalize ranged primitives to base type for comparison (e.g., Byte → i8)
+      var nameA = valueA is MlirRangedPrimitiveType rptA ? rptA.BaseType.Name : valueA.Name;
+      var nameB = valueB is MlirRangedPrimitiveType rptB ? rptB.BaseType.Name : valueB.Name;
+      if (nameA != nameB) return false;
     }
     return true;
   }
@@ -10067,7 +10079,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
       // Struct equality/inequality via Equatable interface
       if (entry.Op is MaxonBinOperator.Eq or MaxonBinOperator.Ne
           && lhsVal is MaxonStruct lhsStruct && rhsVal is MaxonStruct rhsStruct
-          && lhsStruct.TypeName == rhsStruct.TypeName) {
+          && IsStructTypeCompatible(lhsStruct.TypeName, rhsStruct.TypeName)) {
         if (_typeRegistry[lhsStruct.TypeName] is MlirStructType structType && structType.ConformingInterfaces.Contains("Equatable")) {
           if (!_isStdlib && _typeRegistry[lhsStruct.TypeName] is MlirUnionType enumT && enumT is not MlirEnumType) {
             var opStr = entry.Op == MaxonBinOperator.Eq ? "==" : "!=";
@@ -10099,7 +10111,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
       // Struct ordering via Comparable interface
       if (entry.Op is MaxonBinOperator.Lt or MaxonBinOperator.Gt or MaxonBinOperator.Le or MaxonBinOperator.Ge
           && lhsVal is MaxonStruct lhsCmpStruct && rhsVal is MaxonStruct rhsCmpStruct
-          && lhsCmpStruct.TypeName == rhsCmpStruct.TypeName) {
+          && IsStructTypeCompatible(lhsCmpStruct.TypeName, rhsCmpStruct.TypeName)) {
         if (_typeRegistry[lhsCmpStruct.TypeName] is MlirStructType cmpStructType && cmpStructType.ConformingInterfaces.Contains("Comparable")) {
           var compareMethodName = $"{lhsCmpStruct.TypeName}.compare";
           var compareToken = new Token(TokenType.Identifier, compareMethodName, opToken.Line, opToken.Column);
@@ -11051,9 +11063,16 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
         var exprText = text[exprStart..pos];
         if (pos < text.Length) pos++; // skip closing '}'
 
-        // Split on ':' for format specifier (e.g., {value:verbose})
+        // Split on ':' for format specifier (e.g., {value:verbose}), but only if the
+        // colon is not inside parentheses (which would be a named arg in a function call).
         string? formatSpec = null;
-        var colonIdx = exprText.IndexOf(':');
+        int parenDepth = 0;
+        int colonIdx = -1;
+        for (int ci = 0; ci < exprText.Length; ci++) {
+          if (exprText[ci] == '(') parenDepth++;
+          else if (exprText[ci] == ')') parenDepth--;
+          else if (exprText[ci] == ':' && parenDepth == 0) { colonIdx = ci; break; }
+        }
         if (colonIdx >= 0) {
           formatSpec = exprText[(colonIdx + 1)..];
           exprText = exprText[..colonIdx];
@@ -11453,6 +11472,9 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
         var substitution = new Dictionary<string, MlirType> { ["Element"] = primMlirType };
         RegisterConcreteTypeAlias(autoAliasName, "Array", arrayStruct, substitution);
       }
+      // Ensure alias source is registered even when the type was seeded from a
+      // previous parser pass — RegisterConcreteTypeAlias is skipped in that case.
+      _typeAliasSources.TryAdd(autoAliasName, "Array");
       return autoAliasName;
     }
 
@@ -11782,9 +11804,12 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
           continue;
         }
 
-        var field = structType.GetField(fieldNameToken.Value) ?? throw new CompileError(ErrorCode.SemanticUnknownField,
+        var field = structType.GetField(fieldNameToken.Value);
+        if (field == null) {
+          throw new CompileError(ErrorCode.SemanticUnknownField,
             $"Type '{typeName}' has no field '{fieldNameToken.Value}'",
             fieldNameToken.Line, fieldNameToken.Column);
+        }
 
         if (!providedFields.Add(fieldNameToken.Value)) {
           throw new CompileError(ErrorCode.SemanticDuplicateDefinition,
