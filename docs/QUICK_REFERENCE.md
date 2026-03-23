@@ -678,6 +678,31 @@ ceil(x)    // up
 | `Strideable` | `advancedBy(n) -> Self` (enables range expressions) |
 | `Error` | (marker for throwable unions) |
 
+## File I/O
+
+```maxon
+// Reading
+let text = try File.readText(path) otherwise ""           // UTF-8 string
+let bytes = try File.readBinary(path) otherwise empty     // ByteArray
+
+// Writing
+try File.writeText(path, content: "hello")                // string
+try File.writeBinary(path, content: data)                 // bytes
+
+// Query
+File.exists(path)                                         // bool
+try File.delete(path)                                     // throws FileDeleteError
+
+// Metadata
+let info = try File.info(path) otherwise ...              // throws FileInfoError
+info.size              // FileSize — bytes
+info.modifiedTime      // Timestamp — Unix epoch seconds
+info.createdTime       // Timestamp — Unix epoch seconds
+info.accessedTime      // Timestamp — Unix epoch seconds
+info.isDirectory       // bool
+info.isReadOnly        // bool
+```
+
 ## Command Line
 
 ### Commands

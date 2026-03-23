@@ -4,15 +4,16 @@
 
 1. [Core Functions](#core-functions)
 2. [FilePath](#filepath)
-3. [URL](#url)
-4. [CharacterSet](#characterset)
-5. [Unicode](#unicode)
-6. [String Trimming](#string-trimming)
-7. [List](#list)
-8. [Networking (TcpClient)](#networking-tcpclient)
-9. [HttpClient](#httpclient)
-10. [Crypto](#crypto)
-11. [Builtin Managed Types](#builtin-managed-types)
+3. [File](#file)
+4. [URL](#url)
+5. [CharacterSet](#characterset)
+6. [Unicode](#unicode)
+7. [String Trimming](#string-trimming)
+8. [List](#list)
+9. [Networking (TcpClient)](#networking-tcpclient)
+10. [HttpClient](#httpclient)
+11. [Crypto](#crypto)
+12. [Builtin Managed Types](#builtin-managed-types)
 
 ---
 
@@ -135,6 +136,108 @@ let fp = FilePath from "data.txt"
 let content = try File.readText(fp) otherwise ...
 try File.writeText(fp, content: "hello")
 let files = try Directory.list(FilePath from "./") otherwise ...
+```
+
+---
+
+## File
+
+`File` provides static methods for reading, writing, deleting, and querying files. It is defined in `stdlib/File.maxon`. All methods accept `FilePath` parameters.
+
+### Type Aliases
+
+```maxon
+export typealias FileSize = int(0 to u64.max)     // File size in bytes
+export typealias Timestamp = int(0 to u64.max)    // Unix epoch seconds
+```
+
+### `FileInfo`
+
+Metadata about a file, returned by `File.info()`. All fields are obtained from a single OS call.
+
+```maxon
+export type FileInfo
+  export let size FileSize
+  export let modifiedTime Timestamp
+  export let createdTime Timestamp
+  export let accessedTime Timestamp
+  export let isDirectory bool
+  export let isReadOnly bool
+end 'FileInfo'
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `size` | `FileSize` | File size in bytes |
+| `modifiedTime` | `Timestamp` | Last modification time (Unix epoch seconds) |
+| `createdTime` | `Timestamp` | Creation time (Unix epoch seconds) |
+| `accessedTime` | `Timestamp` | Last access time (Unix epoch seconds) |
+| `isDirectory` | `bool` | `true` if the path is a directory |
+| `isReadOnly` | `bool` | `true` if the file is read-only |
+
+### `FilePermission` (enum)
+
+| Case | Description |
+|------|-------------|
+| `normal` | Standard file permissions (0666) |
+| `executable` | Executable permissions (0755, Unix) |
+
+### Error Types
+
+```maxon
+export union FileReadError implements Error
+  notFound              // file not found when reading
+end 'FileReadError'
+
+export union FileWriteError implements Error
+  failed                // write operation failed
+end 'FileWriteError'
+
+export union FileDeleteError implements Error
+  notFound              // file not found when deleting
+end 'FileDeleteError'
+
+export union FileInfoError implements Error
+  notFound              // file not found when querying metadata
+end 'FileInfoError'
+```
+
+### API Summary
+
+| Method | Returns | Throws | Description |
+|--------|---------|--------|-------------|
+| `File.readText(path FilePath)` | `String` | `FileReadError` | Read file as UTF-8 string |
+| `File.readBinary(path FilePath)` | `ByteArray` | `FileReadError` | Read file as raw bytes |
+| `File.writeText(path FilePath, content String, mode FilePermission = .normal)` | -- | `FileWriteError` | Write string to file |
+| `File.writeBinary(path FilePath, content ByteArray, mode FilePermission = .normal)` | -- | `FileWriteError` | Write bytes to file |
+| `File.exists(path FilePath)` | `bool` | -- | Check if file exists |
+| `File.delete(path FilePath)` | -- | `FileDeleteError` | Delete a file |
+| `File.info(path FilePath)` | `FileInfo` | `FileInfoError` | Get file metadata |
+
+### `File.info`
+
+```maxon
+export static function info(path FilePath) returns FileInfo throws FileInfoError
+```
+
+**Parameters:**
+- `path` -- The path to query
+
+**Returns:** A `FileInfo` struct containing the file's size, timestamps, and attributes
+
+**Throws:** `FileInfoError.notFound` when the file does not exist
+
+**Example:**
+
+```maxon
+let fp = FilePath from "data.txt"
+let info = try File.info(fp) otherwise 'err'
+    print("file not found")
+    return 1
+end 'err'
+print("size: {info.size}")
+print("modified: {info.modifiedTime}")
+print("is directory: {info.isDirectory}")
 ```
 
 ---

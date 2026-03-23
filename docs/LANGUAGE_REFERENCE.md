@@ -2835,6 +2835,11 @@ end 'MapError'
 union IterationError implements Error
     exhausted
 end 'IterationError'
+
+// File metadata errors
+union FileInfoError implements Error
+    notFound              // file does not exist
+end 'FileInfoError'
 ```
 
 Array and Map access methods throw these errors:
@@ -3174,6 +3179,76 @@ let content = try File.readText(fp) otherwise ...
 try File.writeText(fp, content: "hello")
 let files = try Directory.list(FilePath from "./") otherwise ...
 ```
+
+### File
+
+`File` provides static methods for reading, writing, deleting, and querying files. All methods accept `FilePath` parameters. It is defined in `stdlib/File.maxon`.
+
+**Reading Files:**
+```maxon
+let text = try File.readText(path) otherwise ""           // Read as UTF-8 string (throws FileReadError)
+let bytes = try File.readBinary(path) otherwise empty     // Read as ByteArray (throws FileReadError)
+```
+
+**Writing Files:**
+```maxon
+try File.writeText(path, content: "hello") otherwise ...           // Write string (throws FileWriteError)
+try File.writeBinary(path, content: data) otherwise ...            // Write bytes (throws FileWriteError)
+try File.writeText(path, content: "#!/bin/sh", mode: FilePermission.executable)  // Write with permissions
+```
+
+**Query and Delete:**
+```maxon
+File.exists(path)                                         // Check if file exists (returns bool)
+try File.delete(path) otherwise ...                       // Delete file (throws FileDeleteError)
+```
+
+**File Metadata:**
+```maxon
+let info = try File.info(path) otherwise ...              // Get file metadata (throws FileInfoError)
+info.size                                                 // FileSize — file size in bytes
+info.modifiedTime                                         // Timestamp — last modification (Unix epoch seconds)
+info.createdTime                                          // Timestamp — creation time (Unix epoch seconds)
+info.accessedTime                                         // Timestamp — last access (Unix epoch seconds)
+info.isDirectory                                          // bool — true if path is a directory
+info.isReadOnly                                           // bool — true if file is read-only
+```
+
+`File.info` retrieves all metadata from a single OS call. Throws `FileInfoError.notFound` when the file does not exist.
+
+**Type Aliases:**
+```maxon
+typealias FileSize = int(0 to u64.max)     // File size in bytes
+typealias Timestamp = int(0 to u64.max)    // Unix epoch seconds
+```
+
+**FileInfo Type:**
+```maxon
+type FileInfo
+  export let size FileSize
+  export let modifiedTime Timestamp
+  export let createdTime Timestamp
+  export let accessedTime Timestamp
+  export let isDirectory bool
+  export let isReadOnly bool
+end 'FileInfo'
+```
+
+**Error Types:**
+
+| Error | Description |
+|-------|-------------|
+| `FileReadError.notFound` | File not found when reading |
+| `FileWriteError.failed` | Write operation failed |
+| `FileDeleteError.notFound` | File not found when deleting |
+| `FileInfoError.notFound` | File not found when querying metadata |
+
+**FilePermission Enum:**
+
+| Case | Description |
+|------|-------------|
+| `normal` | Standard file permissions (0666) |
+| `executable` | Executable permissions (0755, Unix) |
 
 ### URL
 

@@ -16,6 +16,24 @@ export union FileDeleteError implements Error
   notFound
 end 'FileDeleteError'
 
+export typealias FileSize = int(0 to u64.max)
+export typealias Timestamp = int(0 to u64.max)
+
+/// Error for file info operations
+export union FileInfoError implements Error
+  notFound
+end 'FileInfoError'
+
+/// Metadata about a file
+export type FileInfo
+  export let size FileSize
+  export let modifiedTime Timestamp
+  export let createdTime Timestamp
+  export let accessedTime Timestamp
+  export let isDirectory bool
+  export let isReadOnly bool
+end 'FileInfo'
+
 export typealias Byte = byte(0 to u8.max)
 export typealias ByteArray = Array with Byte
 
@@ -112,4 +130,22 @@ export type File
       throw FileDeleteError.notFound
     end 'failed'
   end 'delete'
+
+  /// Get file metadata
+  export static function info(path FilePath) returns FileInfo throws FileInfoError
+    let statResult = __ManagedFile.stat(path._path.managed)
+    if statResult == -1 'notFound'
+      throw FileInfoError.notFound
+    end 'notFound'
+    let fileSize = __ManagedFile.statField(statResult, 0) as FileSize
+    let mtime = __ManagedFile.statField(statResult, 1) as Timestamp
+    let ctime = __ManagedFile.statField(statResult, 2) as Timestamp
+    let atime = __ManagedFile.statField(statResult, 3) as Timestamp
+    let attrs = __ManagedFile.statField(statResult, 4)
+    let isDir = attrs == 1
+    let roAttrs = __ManagedFile.statField(statResult, 5)
+    let isRo = roAttrs == 1
+    __ManagedFile.statFree(statResult)
+    return FileInfo{size: fileSize, modifiedTime: mtime, createdTime: ctime, accessedTime: atime, isDirectory: isDir, isReadOnly: isRo}
+  end 'info'
 end 'File'

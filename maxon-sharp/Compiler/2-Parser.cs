@@ -5232,6 +5232,29 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
           return;
         }
 
+        // Check for builtin managed type static methods as statements (void calls)
+        {
+          var resolvedBase = ResolveBaseTypeName(nameToken.Value);
+          var nextMethod = _tokens[_pos + 2].Value;
+          Func<string, (bool, MaxonValue?)>? dispatcher = resolvedBase switch {
+            "__ManagedFile" when nextMethod is "statFree"
+              => TryEmitBuiltinManagedFileStaticMethod,
+            _ => null,
+          };
+          if (dispatcher != null) {
+            _usedTypeAliases.Add(nameToken.Value);
+            Advance(); // consume type name
+            Advance(); // consume '.'
+            var methodToken = Advance(); // consume method name
+            Advance(); // consume '('
+            var (handled, _) = dispatcher(methodToken.Value);
+            if (handled) return;
+            throw new CompileError(ErrorCode.ParserExpectedExpression,
+              $"Unknown static method '{methodToken.Value}' on {resolvedBase}",
+              methodToken.Line, methodToken.Column);
+          }
+        }
+
         // Check for static/qualified function call: Type.method(...)
         if (ResolveMethodName(qualifiedName) != null) {
           ParseQualifiedCallStatement();
@@ -7531,6 +7554,38 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
         var op = new MaxonCallRuntimeOp("maxon_file_delete", [toCstrOp.Result], true);
         _currentBlock!.AddOp(op);
         return (true, op.Result);
+      }
+      case "stat": {
+        // stat(managed) → maxon_file_stat(cstring) → raw buffer ptr or -1
+        TrySkipArgLabel();
+        var managed = ResolveExprValue(ParseExpression());
+        Expect(TokenType.RightParen);
+        var toCstrOp = new MaxonManagedToCStringOp(managed);
+        _currentBlock!.AddOp(toCstrOp);
+        var op = new MaxonCallRuntimeOp("maxon_file_stat", [toCstrOp.Result], true);
+        _currentBlock!.AddOp(op);
+        return (true, op.Result);
+      }
+      case "statField": {
+        // statField(buffer, index) → i64 value at index*8 from buffer
+        TrySkipArgLabel();
+        var buffer = ResolveExprValue(ParseExpression());
+        Expect(TokenType.Comma);
+        TrySkipArgLabel();
+        var index = ResolveExprValue(ParseExpression());
+        Expect(TokenType.RightParen);
+        var op = new MaxonCallRuntimeOp("maxon_file_stat_field", [buffer, index], true);
+        _currentBlock!.AddOp(op);
+        return (true, op.Result);
+      }
+      case "statFree": {
+        // statFree(buffer) → frees the stat buffer
+        TrySkipArgLabel();
+        var buffer = ResolveExprValue(ParseExpression());
+        Expect(TokenType.RightParen);
+        var op = new MaxonCallRuntimeOp("mm_raw_free", [buffer], false);
+        _currentBlock!.AddOp(op);
+        return (true, null);
       }
     }
     return (false, null);
@@ -10050,18 +10105,17 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
       // Constrained type parameter comparison: field (Struct kind from where-clause
       // promotion) vs parameter (TypeParameter/Integer kind). Both reference the same
       // type parameter and are i64 at runtime — emit integer comparison.
-      // For ==/!= skip this shortcut so the Equatable dispatch below handles struct
-      // types correctly (e.g., ByteArray == ByteArray inside generic Array.contains).
+      // This applies to all comparison operators including ==/!= because at the generic
+      // level, type parameters are always i64 — Equatable dispatch only applies to
+      // concrete struct types resolved at instantiation time.
       {
         bool isTypeParamStruct(MaxonValue v) =>
           v is MaxonStruct ms && _typeRegistry.TryGetValue(ms.TypeName, out var reg) && reg is MlirTypeParameterType;
         if (isTypeParamStruct(lhsVal) || isTypeParamStruct(rhsVal)) {
-          if (entry.Op is not (MaxonBinOperator.Eq or MaxonBinOperator.Ne)) {
-            var tpBinOp = new MaxonBinOp(entry.Op, lhsVal, rhsVal, MaxonValueKind.Integer);
-            _currentBlock!.AddOp(tpBinOp);
-            lhs = new ExprResult.Direct(tpBinOp.Result);
-            continue;
-          }
+          var tpBinOp = new MaxonBinOp(entry.Op, lhsVal, rhsVal, MaxonValueKind.Integer);
+          _currentBlock!.AddOp(tpBinOp);
+          lhs = new ExprResult.Direct(tpBinOp.Result);
+          continue;
         }
       }
 
@@ -10443,7 +10497,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
               => TryEmitBuiltinManagedMemoryStaticMethod,
             "__ManagedSocket" when nextMethod is "tcpConnect"
               => TryEmitBuiltinManagedSocketStaticMethod,
-            "__ManagedFile" when nextMethod is "openRead" or "openWrite" or "openWriteExecutable" or "exists" or "delete"
+            "__ManagedFile" when nextMethod is "openRead" or "openWrite" or "openWriteExecutable" or "exists" or "delete" or "stat" or "statField" or "statFree"
               => TryEmitBuiltinManagedFileStaticMethod,
             "__ManagedDirectory" when nextMethod is "openSearch" or "exists" or "create" or "currentPath"
               => TryEmitBuiltinManagedDirectoryStaticMethod,
