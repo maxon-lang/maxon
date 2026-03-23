@@ -682,7 +682,7 @@ struct_literal
 field_init    = IDENTIFIER ':' expression
 
 ranged_construction
-              = IDENTIFIER '{' expression '}'               (* e.g., Age{25} *)
+              = IDENTIFIER '{' expression '}'               (* e.g., Port{8080} *)
 
 union_access  = IDENTIFIER '.' IDENTIFIER [ '(' [ arg_list ] ')' ]
               | IDENTIFIER '.' 'allCases'                            (* enum only: Array of all cases *)

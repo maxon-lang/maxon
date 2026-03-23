@@ -341,6 +341,5 @@ maxon build maxon-selfhosted
 
 ## Known Constraints and Gotchas
 
-- **ByteArray comparison**: Identifiers and keywords are compared as `ByteArray` using element-wise `bytesEqual()` because string comparison is pointer-based.
 - **Match exhaustiveness**: Maxon's `match` on unions requires exhaustive case listing — every variant must be listed even if most are no-ops. This makes semantic check code verbose.
 - **Single-line match arms**: Match arms can only contain a single expression/statement.

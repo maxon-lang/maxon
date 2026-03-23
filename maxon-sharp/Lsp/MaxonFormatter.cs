@@ -4,7 +4,7 @@ using MaxonSharp.Compiler;
 namespace MaxonSharp.Lsp;
 
 public static class MaxonFormatter {
-  private enum BlockKind { Other, Union, Enum, Interface }
+  private enum BlockKind { Other, Union, Enum, Interface, Match }
 
   // Labelless block openers: these keywords start a block declaration on the current line.
   private static readonly HashSet<TokenType> LabellessBlockOpeners = [
@@ -85,6 +85,7 @@ private record SourceComment(string Text, bool WholeLine);
     var consumedCommentLines = new HashSet<int>();
     bool lineStartedWithEnd = false;
     bool lineHasLabeledOpener = false; // true if a LabeledBlockOpener appeared on the current line
+    bool lineHasMatch = false; // true if a Match keyword appeared on the current line
 
     // Stack tracking what kind of block we're inside.
     // Pushed when we open a block, popped when we see 'end label'.
@@ -93,6 +94,7 @@ private record SourceComment(string Text, bool WholeLine);
     bool InDataBlock() => blockStack.Count > 0 &&
       (blockStack.Peek() == BlockKind.Union || blockStack.Peek() == BlockKind.Enum);
     bool InInterfaceBlock() => blockStack.Count > 0 && blockStack.Peek() == BlockKind.Interface;
+    bool InMatchBlock() => blockStack.Count > 0 && blockStack.Peek() == BlockKind.Match;
 
     for (int i = 0; i < tokens.Count; i++) {
       var tok = tokens[i];
@@ -194,14 +196,18 @@ private record SourceComment(string Text, bool WholeLine);
           lineStartedWithEnd = false;
         }
         lineHasLabeledOpener = false;
+        lineHasMatch = false;
       }
 
       // Labeled block openers that must be at line start to open a block.
       if (wasAtLineStart && LabeledBlockOpeners.Contains(tok.Type))
         lineHasLabeledOpener = true;
-      // These keywords open labeled blocks even when mid-line.
+      // These keywords open labeled blocks even when mid-line (but not 'then' — it only
+      // opens a block when at line start, to avoid treating match arm labels as block openers).
       if (tok.Type == TokenType.Try || tok.Type == TokenType.Otherwise || tok.Type == TokenType.Match)
         lineHasLabeledOpener = true;
+      if (tok.Type == TokenType.Match)
+        lineHasMatch = true;
 
       // Emit indentation
       if (atLineStart) {
@@ -283,7 +289,7 @@ private record SourceComment(string Text, bool WholeLine);
       // Labelless block openers push a block and indent the next line.
       // Only trigger when at line start (or after 'export'/'static') — not as enum case values (handled above).
       // Skip if the next non-newline token is 'end' (bodyless declaration, e.g. interface method signature).
-      if (LabellessBlockOpeners.Contains(tok.Type) && (wasAtLineStart || prevToken == TokenType.Export || prevToken == TokenType.Static)) {
+      if (LabellessBlockOpeners.Contains(tok.Type) && (wasAtLineStart || prevToken == TokenType.Export || prevToken == TokenType.Static) && !InMatchBlock()) {
         // Inside an interface block, function/type declarations are bodyless signatures — don't open a block.
         bool bodylessDecl = InInterfaceBlock() && tok.Type == TokenType.Function;
         if (!bodylessDecl) {
@@ -306,7 +312,7 @@ private record SourceComment(string Text, bool WholeLine);
         bool nextIsChain = next < tokens.Count &&
           (tokens[next].Type == TokenType.Else || tokens[next].Type == TokenType.Otherwise);
         if (!nextIsChain) {
-          blockStack.Push(BlockKind.Other);
+          blockStack.Push(lineHasMatch ? BlockKind.Match : BlockKind.Other);
           pendingIndentIncrease = true;
         }
       }

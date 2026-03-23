@@ -98,12 +98,12 @@ Configure formatting behavior in your VSCode settings:
 
 ```json
 {
-  "maxon.formatting.insertSpaces": false,  // Use tabs (default)
-  "maxon.formatting.tabSize": 4,           // Tab size (when using spaces)
+  "maxon.formatting.insertSpaces": true,   // Use spaces (default)
+  "maxon.formatting.tabSize": 2,           // 2 spaces per indent level
   "[maxon]": {
     "editor.formatOnSave": true,           // Format on save (optional)
-    "editor.tabSize": 4,
-    "editor.insertSpaces": false
+    "editor.tabSize": 2,
+    "editor.insertSpaces": true
   }
 }
 ```

@@ -17,7 +17,7 @@
 All numeric types in type positions require a `typealias` with range constraints (`bool` is exempt):
 
 ```maxon
-typealias Age = int(0 to 150)       // inclusive upper bound
+typealias Port = int(0 to 65535)    // inclusive upper bound
 typealias Idx = int(0 upto 100)     // exclusive upper bound (0-99)
 typealias Pct = float(0.0 to 100.0)
 typealias FullInt = int(i64.min to i64.max)  // type.min/type.max for full range
@@ -26,9 +26,9 @@ typealias Handle = int(0 to u32.max)         // full u32 range
 
 Construction and range checks:
 ```maxon
-var a = Age{25}                     // construct with TypeName{value}
-var x = Age{200}                    // compile error: out of range
-var y = Age{someExpression}         // runtime range check (panics on violation)
+var p = Port{8080}                  // construct with TypeName{value}
+var x = Port{70000}                 // compile error: out of range
+var y = Port{someExpression}        // runtime range check (panics on violation)
 ```
 
 Storage in arrays and globals uses the smallest fitting integer width (u8/i8, u16/i16, u32/i32, or i64). All arithmetic uses 64-bit operations regardless of storage type.

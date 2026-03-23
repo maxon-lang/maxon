@@ -106,19 +106,19 @@ function effectiveLogLevel(category LogCategory) returns StoredLevel
   return globalLogLevel
 end 'effectiveLogLevel'
 
-export function logError(category LogCategory, message () returns String)
+export function logError(category LogCategory, message() returns String)
   log(category, level: LogLevel.ERROR, message: message)
 end 'logError'
 
-export function logInfo(category LogCategory, message () returns String)
+export function logInfo(category LogCategory, message() returns String)
   log(category, level: LogLevel.INFO, message: message)
 end 'logInfo'
 
-export function logDebug(category LogCategory, message () returns String)
+export function logDebug(category LogCategory, message() returns String)
   log(category, level: LogLevel.DEBUG, message: message)
 end 'logDebug'
 
-export function logTrace(category LogCategory, message () returns String)
+export function logTrace(category LogCategory, message() returns String)
   log(category, level: LogLevel.TRACE, message: message)
 end 'logTrace'
 
@@ -165,7 +165,7 @@ export function parseLogOption(option String) returns bool
   return true
 end 'parseLogOption'
 
-function log(category LogCategory, level LogLevel, message () returns String)
+function log(category LogCategory, level LogLevel, message() returns String)
   let effectiveLevel = effectiveLogLevel(category)
   if level.rawValue <= effectiveLevel 'check'
     let msg = message()
@@ -176,10 +176,12 @@ function log(category LogCategory, level LogLevel, message () returns String)
       end 'isError'
     end 'capturing'
     if capturingTrace 'capTrace'
-      if level.rawValue == LogLevel.TRACE.rawValue 'isTrace'
-        capturedTrace.push(msg)
+      if level.rawValue >= LogLevel.DEBUG.rawValue 'isDebugOrTrace'
+        if level.rawValue == LogLevel.TRACE.rawValue 'isTrace'
+          capturedTrace.push(msg)
+        end 'isTrace'
         return
-      end 'isTrace'
+      end 'isDebugOrTrace'
     end 'capTrace'
     printError("[{category.rawValue}] {level.name}: {msg}\n")
   end 'check'

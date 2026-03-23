@@ -379,7 +379,7 @@ type IntBox implements Container with Integer // OK
 **Declaration:**
 
 ```maxon
-typealias Age = int(0 to 150)
+typealias Port = int(0 to 65535)
 typealias Percentage = float(0.0 to 100.0)
 typealias Pixel = byte(0 to u8.max)
 typealias Temperature = int(-273 to 1000)
@@ -409,8 +409,8 @@ When both bounds use type qualifiers, they must reference the same type (e.g., `
 Create values using `TypeName{value}` syntax:
 
 ```maxon
-typealias Age = int(0 to 150)
-var myAge = Age{25}
+typealias Port = int(0 to 65535)
+var p = Port{8080}
 ```
 
 **Compile-time range checks:**
@@ -427,12 +427,12 @@ var x = SmallInt{15}   // error: Value 15 is outside the range of 'SmallInt'
 When the value is a computed expression, a runtime range check is emitted that panics on violation:
 
 ```maxon
-typealias Age = int(0 to 150)
-typealias Year = int(i64.min to i64.max)
-function makeAge(n Year) returns Year
-  var a = Age{n}   // runtime check: panics if n < 0 or n > 150
-  return a
-end 'makeAge'
+typealias Port = int(0 to 65535)
+typealias RawValue = int(i64.min to i64.max)
+function makePort(n RawValue) returns RawValue
+  var p = Port{n}   // runtime check: panics if n < 0 or n > 65535
+  return p
+end 'makePort'
 ```
 
 **Return value range checks:**
@@ -480,7 +480,7 @@ The compiler automatically selects the smallest x86-optimal integer width that c
 ```maxon
 typealias Pixel = int(0 to 65535)    // stored as u16 in arrays and globals
 typealias Offset = int(-32768 to 32767)  // stored as i16 in arrays and globals
-typealias Age = int(0 to 150)        // stored as u8 in arrays and globals
+typealias Percent = int(0 to 100)    // stored as u8 in arrays and globals
 ```
 
 Local variables always use 64-bit registers regardless of the ranged type's storage class.

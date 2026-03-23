@@ -153,6 +153,7 @@ export enum TokenKind
   shl
   shr
   as
+  is
   // Literals
   true
   false
@@ -631,23 +632,6 @@ export function sliceBytes(source ByteArray, startPos CharOffset, endPos CharOff
   return ByteArray{managed: sliced.managed}
 end 'sliceBytes'
 
-// Element-wise comparison for ByteArrays (== does pointer comparison in self-hosted binary).
-export function bytesEqual(a ByteArray, b ByteArray) returns bool
-  let aLen = a.count()
-  if aLen != b.count() 'lenMismatch'
-    return false
-  end 'lenMismatch'
-  for(i, ab) in a.enumerated() 'cmp'
-    let bb = try b.get(i) otherwise 'mismatch'
-      return false
-    end 'mismatch'
-    if ab != bb 'ne'
-      return false
-    end 'ne'
-  end 'cmp'
-  return true
-end 'bytesEqual'
-
 export type KeywordInfo
   export var kind TokenKind
   export var helpText String
@@ -703,6 +687,7 @@ var keywordMap = [
   b"shl": KeywordInfo{kind: TokenKind.shl, helpText: "Shift left operator. Shifts integer bits to the left.", canHaveBlockLabel: false},
   b"shr": KeywordInfo{kind: TokenKind.shr, helpText: "Shift right operator. Shifts integer bits to the right.", canHaveBlockLabel: false},
   b"as": KeywordInfo{kind: TokenKind.as, helpText: "Type cast operator. Converts a value to a different type.", canHaveBlockLabel: false},
+  b"is": KeywordInfo{kind: TokenKind.is, helpText: "Reference identity operator. Returns true if two references point to the same object.", canHaveBlockLabel: false},
   b"implements": KeywordInfo{kind: TokenKind.implements, helpText: "Specifies that a type conforms to an interface.", canHaveBlockLabel: false},
   b"true": KeywordInfo{kind: TokenKind.true, helpText: "Boolean literal representing true.", canHaveBlockLabel: false},
   b"false": KeywordInfo{kind: TokenKind.false, helpText: "Boolean literal representing false.", canHaveBlockLabel: false},

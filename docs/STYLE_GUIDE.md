@@ -17,17 +17,17 @@ A comprehensive guide to writing idiomatic and consistent Maxon code.
 
 ## Indentation
 
-### Use Tabs, Not Spaces
+### Use 2 Spaces
 
-Always use **tabs for indentation**. One tab per indentation level.
+Always use **2 spaces for indentation**. One level per nested block.
 
 ```maxon
 function main() returns ExitCode
-	var x = 5
-	if x > 0 'check'
-		print(x)
-	end 'check'
-	return 0
+  var x = 5
+  if x > 0 'check'
+    print(x)
+  end 'check'
+  return 0
 end 'main'
 ```
 
@@ -39,14 +39,14 @@ Each block increases indentation by one level:
 
 ```maxon
 function calculate(value int) returns int
-	if value > 0 'positive'
-		while value > 0 'loop'
-			value = value - 1
-		end 'loop'
-	else
-		value = 0
-	end 'positive'
-	return value
+  if value > 0 'positive'
+    while value > 0 'loop'
+      value = value - 1
+    end 'loop'
+  else
+    value = 0
+  end 'positive'
+  return value
 end 'calculate'
 ```
 
@@ -70,12 +70,12 @@ Use **camelCase** for function names. Start with a lowercase letter.
 
 ```maxon
 function calculateSum(a int, b int) returns int
-	return a + b
+  return a + b
 end 'calculateSum'
 
 function printGreeting(name string) returns int
-	print(name)
-	return 0
+  print(name)
+  return 0
 end 'printGreeting'
 ```
 
@@ -104,11 +104,11 @@ Block identifiers (for `if`, `while`, `for`, `end`) should be descriptive and us
 
 ```maxon
 if value > 0 'check-positive'
-	...
+  ...
 end 'check-positive'
 
 while count < 10 'mainLoop'
-	...
+  ...
 end 'mainLoop'
 ```
 
@@ -120,7 +120,7 @@ end 'mainLoop'
 
 ```maxon
 returns returnType
-	...
+  ...
 end 'name'
 ```
 
@@ -130,7 +130,7 @@ Parameters should be on the same line. If the line is too long, break after the 
 
 ```maxon
 function processData(input string, offset int, length int) returns int
-	...
+  ...
 end 'processData'
 ```
 
@@ -148,7 +148,7 @@ Place the block identifier immediately after the condition:
 
 ```maxon
 if condition 'check'
-	...
+  ...
 end 'check'
 ```
 
@@ -158,9 +158,9 @@ Always include a matching block identifier for the `end` statement.
 
 ```maxon
 if x > 0 'positive'
-	print("{x}")
+  print("{x}")
 else
-	print("0")
+  print("0")
 end 'positive'
 ```
 
@@ -168,7 +168,7 @@ end 'positive'
 
 ```maxon
 while condition 'loop'
-	...
+  ...
 end 'loop'
 ```
 
@@ -176,7 +176,7 @@ end 'loop'
 
 ```maxon
 for i = 0 to 10 'count'
-	print(i)
+  print(i)
 end 'count'
 ```
 
@@ -186,9 +186,9 @@ Use `break` to exit loops early, with its corresponding block identifier nearby:
 
 ```maxon
 while true 'processLoop'
-	if shouldStop 'check'
-		break
-	end 'check'
+  if shouldStop 'check'
+    break
+  end 'check'
 end 'processLoop'
 ```
 
@@ -202,38 +202,38 @@ Use comments to explain **why**, not **what**. The code should be clear about wh
 
 ```maxon
 function processItems(count int) returns int
-	var result = 0
-	
-	' Sum first N items (skipping zeros for optimization)
-	while count > 0 'loop'
-		var item = getItem(count)
-		if item != 0 'notZero'
-			result = result + item
-		end 'notZero'
-		count = count - 1
-	end 'loop'
-	
-	return result
+  var result = 0
+
+  // Sum first N items (skipping zeros for optimization)
+  while count > 0 'loop'
+    var item = getItem(count)
+    if item != 0 'notZero'
+      result = result + item
+    end 'notZero'
+    count = count - 1
+  end 'loop'
+
+  return result
 end 'processItems'
 ```
 
 ### Comment Style
 
-Use single quotes `'` for comments (standard Maxon style).
+Use `//` for comments.
 
 ```maxon
-' This is a comment
-var x = 5  ' Inline comment
+// This is a comment
+var x = 5  // Inline comment
 ```
 
 ### Avoid Obvious Comments
 
 ```maxon
-' Bad: obvious what the code does
-var i = 0  ' Set i to 0
+// Bad: obvious what the code does
+var i = 0  // Set i to 0
 
-' Good: explains the purpose
-var i = 0  ' Initialize counter for loop iterations
+// Good: explains the purpose
+var i = 0  // Initialize counter for loop iterations
 ```
 
 ---
@@ -246,17 +246,17 @@ Use blank lines to separate logical sections within functions:
 
 ```maxon
 function initialize() returns int
-	' Setup phase
-	var config = loadConfig()
-	var data = createData()
-	
-	' Validation phase
-	if not isValid(config) 'invalid'
-		return 1
-	end 'invalid'
-	
-	' Execution phase
-	return run(data)
+  // Setup phase
+  var config = loadConfig()
+  var data = createData()
+
+  // Validation phase
+  if not isValid(config) 'invalid'
+    return 1
+  end 'invalid'
+
+  // Execution phase
+  return run(data)
 end 'initialize'
 ```
 
@@ -266,17 +266,17 @@ Use a single blank line between function definitions:
 
 ```maxon
 function first() returns int
-	return 1
+  return 1
 end 'first'
 
 function second() returns int
-	return 2
+  return 2
 end 'second'
 ```
 
 ### No Trailing Whitespace
 
-Remove trailing spaces and tabs at the end of lines. The VSCode formatter will do this automatically.
+Remove trailing spaces at the end of lines. The VSCode formatter will do this automatically.
 
 ### No Multiple Consecutive Blank Lines
 
@@ -291,11 +291,11 @@ Avoid more than one blank line in a row. The formatter will consolidate multiple
 Keep lines reasonably short for readability. Aim for under 80 characters when practical, but readability is more important than a strict limit.
 
 ```maxon
-' Good: clear and readable
+// Good: clear and readable
 function calculateDistance(x1 int, y1 int, x2 int, y2 int) returns int
-	var dx = x2 - x1
-	var dy = y2 - y1
-	return sqrt(dx * dx + dy * dy)
+  var dx = x2 - x1
+  var dy = y2 - y1
+  return sqrt(dx * dx + dy * dy)
 end 'calculateDistance'
 ```
 
@@ -323,14 +323,14 @@ var x = calculateSum(a, b)
 Always use block identifiers with `end` statements:
 
 ```maxon
-' Good
+// Good
 if condition 'check'
-	...
+  ...
 end 'check'
 
-' Avoid: missing identifier
+// Avoid: missing identifier
 if condition
-	...
+  ...
 end
 ```
 
@@ -340,7 +340,7 @@ end
 
 The VSCode extension includes a built-in code formatter that will automatically:
 
-- Normalize indentation to tabs
+- Normalize indentation to 2 spaces
 - Consolidate multiple blank lines into one
 - Remove trailing whitespace
 - Ensure files end with a newline
@@ -358,44 +358,44 @@ The VSCode extension includes a built-in code formatter that will automatically:
 Here's a complete program following all style guide conventions:
 
 ```maxon
-' Calculate the sum of integers from 1 to N
+// Calculate the sum of integers from 1 to N
 function sum(n int) returns int
-	var result = 0
-	var i = 1
-	
-	while i <= n 'loop'
-		result = result + i
-		i = i + 1
-	end 'loop'
-	
-	return result
+  var result = 0
+  var i = 1
+
+  while i <= n 'loop'
+    result = result + i
+    i = i + 1
+  end 'loop'
+
+  return result
 end 'sum'
 
-' Check if a number is prime
+// Check if a number is prime
 function isPrime(num int) returns int
-	if num <= 1 'notPrime'
-		return 0
-	end 'notPrime'
-	
-	var i = 2
-	while i * i <= num 'divisorCheck'
-		if num % i = 0 'hasDivisor'
-			return 0
-		end 'hasDivisor'
-		i = i + 1
-	end 'divisorCheck'
-	
-	return 1
+  if num <= 1 'notPrime'
+    return 0
+  end 'notPrime'
+
+  var i = 2
+  while i * i <= num 'divisorCheck'
+    if num mod i == 0 'hasDivisor'
+      return 0
+    end 'hasDivisor'
+    i = i + 1
+  end 'divisorCheck'
+
+  return 1
 end 'isPrime'
 
 function main() returns ExitCode
-	var total = sum(10)
-	print(total)
-	
-	var prime = isPrime(7)
-	print(prime)
-	
-	return 0
+  var total = sum(10)
+  print(total)
+
+  var prime = isPrime(7)
+  print(prime)
+
+  return 0
 end 'main'
 ```
 
@@ -405,7 +405,7 @@ end 'main'
 
 Key takeaways:
 
-- **Indentation:** Tabs, one per level
+- **Indentation:** 2 spaces, one level per block
 - **Line Endings:** LF only
 - **Names:** camelCase for variables and functions
 - **Functions:** Single responsibility, clear names
@@ -419,4 +419,3 @@ Following these conventions ensures your Maxon code is:
 - **Consistent:** Matches the style of other Maxon code
 - **Maintainable:** Easier to modify and debug
 - **Professional:** Suitable for team collaboration
-

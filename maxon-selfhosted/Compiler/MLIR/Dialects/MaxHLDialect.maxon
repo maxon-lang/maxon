@@ -49,6 +49,9 @@ export union MaxHLOp
   // Comparisons
   cmp(resultId ValueId, leftId ValueId, rightId ValueId, predicate CmpPredicate, isFloat bool)
 
+  // Reference identity (pointer comparison)
+  refEq(resultId ValueId, leftId ValueId, rightId ValueId, negate bool)
+
   // Control flow (terminators — placed as block terminators, not regular ops)
   condBr(condId ValueId, thenTarget BlockId, elseTarget BlockId)
   br(target BlockId)
@@ -73,6 +76,7 @@ export function maxHLOpToString(op MaxHLOp, blocks MlirBlockArray) returns Strin
     binop(resultId, leftId, rightId, opKind) gives "%{resultId} = maxon.binop %{leftId}, %{rightId} {lb}op = {opKind.rawValue}{rb} {lb}kind = i64{rb}"
     unop(resultId, operandId, opKind) gives "%{resultId} = maxon.unop %{operandId} {lb}op = {opKind.rawValue}{rb} {lb}kind = i64{rb}"
     cmp(resultId, leftId, rightId, predicate, isFloat) gives "%{resultId} = maxon.binop %{leftId}, %{rightId} {lb}op = {predicate.rawValue}{rb} {lb}kind = {typeKind(isFloat)}{rb}"
+    refEq(resultId, leftId, rightId, negate) gives "%{resultId} = maxon.{refEqMnemonic(negate)} %{leftId}, %{rightId}"
     condBr(condId, thenTarget, elseTarget) gives maxHLCondBrToString(condId, thenTarget: thenTarget, elseTarget: elseTarget, blocks: blocks)
     br(target) gives maxHLBrToString(target, blocks: blocks)
     call(resultId, callee, argIds) gives "%{resultId} = maxon.call @{String.from(callee)}({formatArgIds(argIds)})"
@@ -92,6 +96,13 @@ function maxHLBrToString(target BlockId, blocks MlirBlockArray) returns String
   let label = resolveBlockLabel(target, blocks: blocks)
   return "maxon.br {label}"
 end 'maxHLBrToString'
+
+function refEqMnemonic(negate bool) returns String
+  if negate 'neg'
+    return "ref_ne"
+  end 'neg'
+  return "ref_eq"
+end 'refEqMnemonic'
 
 function typeKind(isFloat bool) returns String
   if isFloat 'float'

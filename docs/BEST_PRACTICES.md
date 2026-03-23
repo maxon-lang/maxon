@@ -26,12 +26,12 @@ Every numeric type must go through a `typealias` with range constraints. Use thi
 
 ```maxon
 ' Good: ranges communicate intent and catch bugs at compile time
-typealias Age = int(0 to 150)
-typealias Percentage = float(0.0 to 100.0)
 typealias Port = int(0 to 65535)
+typealias Percentage = float(0.0 to 100.0)
+typealias Pixel = int(0 to 255)
 
-' Avoid: max-range aliases that provide no safety
-typealias Age = int(i64.min to i64.max)    ' defeats the purpose
+' Wide ranges are fine when no concrete upper bound exists
+typealias LineNumber = int(0 to u64.max)   ' no inherent max
 ```
 
 When a value genuinely has no meaningful range constraint (like a general-purpose counter), use the standard library aliases:

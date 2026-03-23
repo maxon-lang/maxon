@@ -10050,15 +10050,18 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
       // Constrained type parameter comparison: field (Struct kind from where-clause
       // promotion) vs parameter (TypeParameter/Integer kind). Both reference the same
       // type parameter and are i64 at runtime — emit integer comparison.
-      // ValidateTypeParameterConstraints already verified the where clause above.
+      // For ==/!= skip this shortcut so the Equatable dispatch below handles struct
+      // types correctly (e.g., ByteArray == ByteArray inside generic Array.contains).
       {
         bool isTypeParamStruct(MaxonValue v) =>
           v is MaxonStruct ms && _typeRegistry.TryGetValue(ms.TypeName, out var reg) && reg is MlirTypeParameterType;
         if (isTypeParamStruct(lhsVal) || isTypeParamStruct(rhsVal)) {
-          var tpBinOp = new MaxonBinOp(entry.Op, lhsVal, rhsVal, MaxonValueKind.Integer);
-          _currentBlock!.AddOp(tpBinOp);
-          lhs = new ExprResult.Direct(tpBinOp.Result);
-          continue;
+          if (entry.Op is not (MaxonBinOperator.Eq or MaxonBinOperator.Ne)) {
+            var tpBinOp = new MaxonBinOp(entry.Op, lhsVal, rhsVal, MaxonValueKind.Integer);
+            _currentBlock!.AddOp(tpBinOp);
+            lhs = new ExprResult.Direct(tpBinOp.Result);
+            continue;
+          }
         }
       }
 
@@ -12711,6 +12714,8 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
             if (argType == null) continue; // unknown arg type — compatible with anything
             if (!IsOverloadArgTypeCompatible(argType, paramType)) { compatible = false; break; }
             if (paramType is MlirTypeParameterType) score += 0; // generic match
+            else if (paramType is MlirStructType paramSt && paramSt.TypeParams.Values.Any(v => v is MlirTypeParameterType))
+              score += 0; // generic struct with unresolved type params (e.g., ElementArray = Array with Element)
             else if (TypeMangledSuffix(argType) == TypeMangledSuffix(paramType)) score += 2; // exact match
             else score += 1; // widening/compatible match
           }

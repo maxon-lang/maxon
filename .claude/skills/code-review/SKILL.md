@@ -7,6 +7,7 @@ Review the changes that have been made in the project to the c# and self hosted 
 
 ## Steps
 
+0. Read `docs/WRITING_MAXON_CODE.md` for Maxon syntax and common mistakes to check for.
 1. Review all code changes:
     - Eliminate duplicated code — refactor shared logic into helper methods.
     - Ensure no `switch` or 'match' statements use `default` cases — all cases must be handled explicitly.

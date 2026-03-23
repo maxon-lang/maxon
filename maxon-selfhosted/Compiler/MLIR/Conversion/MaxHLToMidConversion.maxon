@@ -5,7 +5,7 @@
 // printInt is lowered to call __rt_printInt.
 
 export function lowerMaxHLToMid(module MlirModule, project Project, globalData GlobalDataTable, nextValueIdRef ValueIdRef) returns MlirModule
-  logInfo(LogCategory.mlir, message: () gives "Lowering MaxHL to Mid dialects")
+  logDebug(LogCategory.mlir, message: () gives "Lowering MaxHL to Mid dialects")
   var result = createMlirModule()
 
   for srcFunc in module.functions 'eachFunc'
@@ -99,6 +99,13 @@ function cmpPredicateToArithOpcode(predicate CmpPredicate, isFloat bool) returns
   end 'intOp'
 end 'cmpPredicateToArithOpcode'
 
+function refEqOpcode(negate bool) returns ArithBinaryOpcode
+  if negate 'ne'
+    return ArithBinaryOpcode.cmpI64Ne
+  end 'ne'
+  return ArithBinaryOpcode.cmpI64Eq
+end 'refEqOpcode'
+
 function lowerMaxHLOp(hlOp MaxHLOp, dstBlock MlirBlock, globalData GlobalDataTable, nextValueIdRef ValueIdRef)
   match hlOp 'lower'
     literal(resultId, value, isFloat) then dstBlock.ops.push(MlirOp.arith(ArithOp.const(ArithConst{opcode: literalToArithOpcode(isFloat), resultId: resultId, value: value})))
@@ -108,6 +115,7 @@ function lowerMaxHLOp(hlOp MaxHLOp, dstBlock MlirBlock, globalData GlobalDataTab
     binop(resultId, leftId, rightId, opKind) then dstBlock.ops.push(MlirOp.arith(ArithOp.binary(ArithBinaryOp{opcode: binOpKindToArithOpcode(opKind), resultId: resultId, leftId: leftId, rightId: rightId})))
     unop(resultId, operandId, opKind) then dstBlock.ops.push(MlirOp.arith(ArithOp.unary(ArithUnaryOp{opcode: unaryOpKindToArithOpcode(opKind), resultId: resultId, operandId: operandId})))
     cmp(resultId, leftId, rightId, predicate, isFloat) then dstBlock.ops.push(MlirOp.arith(ArithOp.binary(ArithBinaryOp{opcode: cmpPredicateToArithOpcode(predicate, isFloat: isFloat), resultId: resultId, leftId: leftId, rightId: rightId})))
+    refEq(resultId, leftId, rightId, negate) then dstBlock.ops.push(MlirOp.arith(ArithOp.binary(ArithBinaryOp{opcode: refEqOpcode(negate), resultId: resultId, leftId: leftId, rightId: rightId})))
     condBr(condId, thenTarget, elseTarget) then dstBlock.ops.push(MlirOp.cf(CfOp.condBr(condId, thenTarget, elseTarget)))
     br(target) then dstBlock.ops.push(MlirOp.cf(CfOp.br(target)))
     call(resultId, callee, argIds) then dstBlock.ops.push(MlirOp.func(FuncOp.call(resultId, callee, argIds)))
@@ -167,7 +175,7 @@ function lowerMaxHLTerminator(hlOp MaxHLOp) returns MlirOp
     condBr(condId, thenTarget, elseTarget) gives MlirOp.cf(CfOp.condBr(condId, thenTarget, elseTarget))
     br(target) gives MlirOp.cf(CfOp.br(target))
     ret(retValId) gives MlirOp.func(FuncOp.ret(retValId))
-    literal to cmp gives MlirOp.maxhl(hlOp)
+    literal to refEq gives MlirOp.maxhl(hlOp)
     call gives MlirOp.maxhl(hlOp)
     printLiteral to printInt gives MlirOp.maxhl(hlOp)
   end 'lower'

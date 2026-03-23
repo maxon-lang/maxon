@@ -17,7 +17,7 @@ export function eliminateDeadFunctions(module MlirModule) returns MlirModule
   // Filter module to only reachable functions
   var result = createMlirModule()
   for func in module.functions 'filter'
-    if containsName(reachable, name: func.name) 'keep'
+    if reachable.contains(func.name) 'keep'
       result.functions.push(func)
     end 'keep'
   end 'filter'
@@ -26,7 +26,7 @@ end 'eliminateDeadFunctions'
 
 function collectCallees(module MlirModule, funcName ByteArray, reachable ByteArrayArray)
   for func in module.functions 'findFunc'
-    if not bytesEqual(func.name, b: funcName) 'notMatch'
+    if func.name != funcName 'notMatch'
       continue
     end 'notMatch'
 
@@ -46,7 +46,7 @@ function addCalleeFromOp(op MlirOp, reachable ByteArrayArray)
   if callee.isEmpty() 'noCall'
     return
   end 'noCall'
-  if not containsName(reachable, name: callee) 'new'
+  if not reachable.contains(callee) 'new'
     reachable.push(callee)
   end 'new'
 end 'addCalleeFromOp'
@@ -61,18 +61,9 @@ end 'extractCallee'
 function extractMaxHLCallee(hlOp MaxHLOp) returns ByteArray
   return match hlOp 'extract'
     call(_, callee, _) gives callee
-    literal to cmp gives ByteArray{}
+    literal to refEq gives ByteArray{}
     condBr to br gives ByteArray{}
     ret gives ByteArray{}
     printLiteral to printInt gives ByteArray{}
   end 'extract'
 end 'extractMaxHLCallee'
-
-function containsName(names ByteArrayArray, name ByteArray) returns bool
-  for n in names 'search'
-    if bytesEqual(n, b: name) 'found'
-      return true
-    end 'found'
-  end 'search'
-  return false
-end 'containsName'

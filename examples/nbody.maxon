@@ -5,176 +5,183 @@
 // -0.169075164
 // -0.169059907
 
+typealias Integer = int(i64.min to i64.max)
+typealias PlanetArray = Array with Planet
+
 type Planet
-var x float
-var y float
-var z float
-var vx float
-var vy float
-var vz float
-var mass float
+  export var x MathValue
+  export var y MathValue
+  export var z MathValue
+  export var vx MathValue
+  export var vy MathValue
+  export var vz MathValue
+  export var mass MathValue
 end 'Planet'
 
-function initBodies(bodies Array of Planet) returns int
-	// Constants
-	let SOLAR_MASS = 39.478417604357432  // 4.0 * PI * PI
-	let DAYS_PER_YEAR = 365.24
+function initBodies(bodies PlanetArray)
+  // Constants
+  let SOLAR_MASS = 39.478417604357432  // 4.0 * PI * PI
+  let DAYS_PER_YEAR = 365.24
 
-	// Sun (at origin with zero velocity initially)
-	bodies[0] = Planet{x: 0.0, y: 0.0, z: 0.0, vx: 0.0, vy: 0.0, vz: 0.0, mass: SOLAR_MASS}
+  // Sun (at origin with zero velocity initially)
+  bodies.set(0, value: Planet{x: 0.0, y: 0.0, z: 0.0, vx: 0.0, vy: 0.0, vz: 0.0, mass: SOLAR_MASS})
 
-	// Jupiter
-	bodies[1] = Planet{
-	x: 4.84143144246472090e+00,
-	y: -1.16032004402742839e+00,
-	z: -1.03622044471123109e-01,
-	vx: 1.66007664274403694e-03 * DAYS_PER_YEAR,
-	vy: 7.69901118419740425e-03 * DAYS_PER_YEAR,
-	vz: -6.90460016972063023e-05 * DAYS_PER_YEAR,
-	mass: 9.54791938424326609e-04 * SOLAR_MASS
-	}
+  // Jupiter
+  bodies.set(1, value: Planet{
+    x: 4.84143144246472090e+00,
+    y: -1.16032004402742839e+00,
+    z: -1.03622044471123109e-01,
+    vx: 1.66007664274403694e-03 * DAYS_PER_YEAR,
+    vy: 7.69901118419740425e-03 * DAYS_PER_YEAR,
+    vz: -6.90460016972063023e-05 * DAYS_PER_YEAR,
+    mass: 9.54791938424326609e-04 * SOLAR_MASS
+  })
 
-	// Saturn
-	bodies[2] = Planet{
-	x: 8.34336671824457987e+00,
-	y: 4.12479856412430479e+00,
-	z: -4.03523417114321381e-01,
-	vx: -2.76742510726862411e-03 * DAYS_PER_YEAR,
-	vy: 4.99852801234917238e-03 * DAYS_PER_YEAR,
-	vz: 2.30417297573763929e-05 * DAYS_PER_YEAR,
-	mass: 2.85885980666130812e-04 * SOLAR_MASS
-	}
+  // Saturn
+  bodies.set(2, value: Planet{
+    x: 8.34336671824457987e+00,
+    y: 4.12479856412430479e+00,
+    z: -4.03523417114321381e-01,
+    vx: -2.76742510726862411e-03 * DAYS_PER_YEAR,
+    vy: 4.99852801234917238e-03 * DAYS_PER_YEAR,
+    vz: 2.30417297573763929e-05 * DAYS_PER_YEAR,
+    mass: 2.85885980666130812e-04 * SOLAR_MASS
+  })
 
-	// Uranus
-	bodies[3] = Planet{
-	x: 1.28943695621391310e+01,
-	y: -1.51111514016986312e+01,
-	z: -2.23307578892655734e-01,
-	vx: 2.96460137564761618e-03 * DAYS_PER_YEAR,
-	vy: 2.37847173959480950e-03 * DAYS_PER_YEAR,
-	vz: -2.96589568540237556e-05 * DAYS_PER_YEAR,
-	mass: 4.36624404335156298e-05 * SOLAR_MASS
-	}
+  // Uranus
+  bodies.set(3, value: Planet{
+    x: 1.28943695621391310e+01,
+    y: -1.51111514016986312e+01,
+    z: -2.23307578892655734e-01,
+    vx: 2.96460137564761618e-03 * DAYS_PER_YEAR,
+    vy: 2.37847173959480950e-03 * DAYS_PER_YEAR,
+    vz: -2.96589568540237556e-05 * DAYS_PER_YEAR,
+    mass: 4.36624404335156298e-05 * SOLAR_MASS
+  })
 
-	// Neptune
-	bodies[4] = Planet{
-	x: 1.53796971148509165e+01,
-	y: -2.59193146099879641e+01,
-	z: 1.79258772950371181e-01,
-	vx: 2.68067772490389322e-03 * DAYS_PER_YEAR,
-	vy: 1.62824170038242295e-03 * DAYS_PER_YEAR,
-	vz: -9.51592254519715870e-05 * DAYS_PER_YEAR,
-	mass: 5.15138902046611451e-05 * SOLAR_MASS
-	}
-
-	return 0
+  // Neptune
+  bodies.set(4, value: Planet{
+    x: 1.53796971148509165e+01,
+    y: -2.59193146099879641e+01,
+    z: 1.79258772950371181e-01,
+    vx: 2.68067772490389322e-03 * DAYS_PER_YEAR,
+    vy: 1.62824170038242295e-03 * DAYS_PER_YEAR,
+    vz: -9.51592254519715870e-05 * DAYS_PER_YEAR,
+    mass: 5.15138902046611451e-05 * SOLAR_MASS
+  })
 end 'initBodies'
 
-function offsetMomentum(bodies Array of Planet, n int) returns int
-	let SOLAR_MASS = 39.478417604357432  // 4.0 * PI * PI
+function offsetMomentum(bodies PlanetArray, n Integer)
+  let SOLAR_MASS = 39.478417604357432  // 4.0 * PI * PI
 
-	var px = 0.0
-	var py = 0.0
-	var pz = 0.0
+  var px = 0.0
+  var py = 0.0
+  var pz = 0.0
 
-	for i in range(0, n) 'momentum_loop'
-		px = px + bodies[i].vx * bodies[i].mass
-		py = py + bodies[i].vy * bodies[i].mass
-		pz = pz + bodies[i].vz * bodies[i].mass
-	end 'momentum_loop'
+  for i in 0 upto n 'momentum_loop'
+    var body = try bodies.get(i) otherwise Planet{x: 0.0, y: 0.0, z: 0.0, vx: 0.0, vy: 0.0, vz: 0.0, mass: 0.0}
+    px = px + body.vx * body.mass
+    py = py + body.vy * body.mass
+    pz = pz + body.vz * body.mass
+  end 'momentum_loop'
 
-	bodies[0].vx = -px / SOLAR_MASS
-	bodies[0].vy = -py / SOLAR_MASS
-	bodies[0].vz = -pz / SOLAR_MASS
-
-	return 0
+  var sun = try bodies.get(0) otherwise Planet{x: 0.0, y: 0.0, z: 0.0, vx: 0.0, vy: 0.0, vz: 0.0, mass: 0.0}
+  sun.vx = -px / SOLAR_MASS
+  sun.vy = -py / SOLAR_MASS
+  sun.vz = -pz / SOLAR_MASS
+  bodies.set(0, value: sun)
 end 'offsetMomentum'
 
-function energy(bodies Array of Planet, n int) returns float
-	var e = 0.0
+function energy(bodies PlanetArray, n Integer) returns MathValue
+  var e = 0.0
 
-	for i in range(0, n) 'outer_energy'
-		// Kinetic energy: 0.5 * m * v^2
-		e = e + 0.5 * bodies[i].mass * (bodies[i].vx * bodies[i].vx + bodies[i].vy * bodies[i].vy + bodies[i].vz * bodies[i].vz)
+  for i in 0 upto n 'outer_energy'
+    var bi = try bodies.get(i) otherwise Planet{x: 0.0, y: 0.0, z: 0.0, vx: 0.0, vy: 0.0, vz: 0.0, mass: 0.0}
+    // Kinetic energy: 0.5 * m * v^2
+    e = e + 0.5 * bi.mass * (bi.vx * bi.vx + bi.vy * bi.vy + bi.vz * bi.vz)
 
-		// Potential energy with other bodies
-		var j = i + 1
-		while j < n 'inner_energy'
-			let dx = bodies[i].x - bodies[j].x
-			let dy = bodies[i].y - bodies[j].y
-			let dz = bodies[i].z - bodies[j].z
+    // Potential energy with other bodies
+    var j = i + 1
+    while j < n 'inner_energy'
+      var bj = try bodies.get(j) otherwise Planet{x: 0.0, y: 0.0, z: 0.0, vx: 0.0, vy: 0.0, vz: 0.0, mass: 0.0}
+      let dx = bi.x - bj.x
+      let dy = bi.y - bj.y
+      let dz = bi.z - bj.z
 
-			let distance = sqrt(dx * dx + dy * dy + dz * dz)
-			e = e - (bodies[i].mass * bodies[j].mass) / distance
+      let distance = sqrt(dx * dx + dy * dy + dz * dz)
+      e = e - (bi.mass * bj.mass) / distance
 
-			j = j + 1
-		end 'inner_energy'
-	end 'outer_energy'
+      j = j + 1
+    end 'inner_energy'
+  end 'outer_energy'
 
-	return e
+  return e
 end 'energy'
 
-function advance(bodies Array of Planet, n int, dt float) returns int
-	for i in range(0, n) 'outer_advance'
-		var j = i + 1
-		while j < n 'inner_advance'
-			let dx = bodies[i].x - bodies[j].x
-			let dy = bodies[i].y - bodies[j].y
-			let dz = bodies[i].z - bodies[j].z
+function advance(bodies PlanetArray, n Integer, dt MathValue)
+  for i in 0 upto n 'outer_advance'
+    var bi = try bodies.get(i) otherwise Planet{x: 0.0, y: 0.0, z: 0.0, vx: 0.0, vy: 0.0, vz: 0.0, mass: 0.0}
+    var j = i + 1
+    while j < n 'inner_advance'
+      var bj = try bodies.get(j) otherwise Planet{x: 0.0, y: 0.0, z: 0.0, vx: 0.0, vy: 0.0, vz: 0.0, mass: 0.0}
+      let dx = bi.x - bj.x
+      let dy = bi.y - bj.y
+      let dz = bi.z - bj.z
 
-			let dist_sq = dx * dx + dy * dy + dz * dz
-			let distance = sqrt(dist_sq)
-			let mag = dt / (dist_sq * distance)
+      let dist_sq = dx * dx + dy * dy + dz * dz
+      let distance = sqrt(dist_sq)
+      let mag = dt / (dist_sq * distance)
 
-			let bi_mass_mag = bodies[i].mass * mag
-			let bj_mass_mag = bodies[j].mass * mag
+      let bj_mass_mag = bj.mass * mag
+      let bi_mass_mag = bi.mass * mag
 
-			bodies[i].vx = bodies[i].vx - dx * bj_mass_mag
-			bodies[i].vy = bodies[i].vy - dy * bj_mass_mag
-			bodies[i].vz = bodies[i].vz - dz * bj_mass_mag
+      bi.vx = bi.vx - dx * bj_mass_mag
+      bi.vy = bi.vy - dy * bj_mass_mag
+      bi.vz = bi.vz - dz * bj_mass_mag
 
-			bodies[j].vx = bodies[j].vx + dx * bi_mass_mag
-			bodies[j].vy = bodies[j].vy + dy * bi_mass_mag
-			bodies[j].vz = bodies[j].vz + dz * bi_mass_mag
+      bj.vx = bj.vx + dx * bi_mass_mag
+      bj.vy = bj.vy + dy * bi_mass_mag
+      bj.vz = bj.vz + dz * bi_mass_mag
 
-			j = j + 1
-		end 'inner_advance'
-	end 'outer_advance'
+      bodies.set(j, value: bj)
+      j = j + 1
+    end 'inner_advance'
+    bodies.set(i, value: bi)
+  end 'outer_advance'
 
-	// Update positions
-	for k in range(0, n) 'update_positions'
-		bodies[k].x = bodies[k].x + dt * bodies[k].vx
-		bodies[k].y = bodies[k].y + dt * bodies[k].vy
-		bodies[k].z = bodies[k].z + dt * bodies[k].vz
-	end 'update_positions'
-
-	return 0
+  // Update positions
+  for k in 0 upto n 'update_positions'
+    var body = try bodies.get(k) otherwise Planet{x: 0.0, y: 0.0, z: 0.0, vx: 0.0, vy: 0.0, vz: 0.0, mass: 0.0}
+    body.x = body.x + dt * body.vx
+    body.y = body.y + dt * body.vy
+    body.z = body.z + dt * body.vz
+    bodies.set(k, value: body)
+  end 'update_positions'
 end 'advance'
 
-function main() returns int
-	let n = 5  // Number of bodies
-	var bodies = Array of 5 Planet
+function main() returns ExitCode
+  let n = 5  // Number of bodies
+  var bodies = PlanetArray{}
+  bodies.resize(5)
 
-	initBodies(bodies)
-	offsetMomentum(bodies, n)
+  initBodies(bodies)
+  offsetMomentum(bodies, n: n)
 
-	// Print initial energy
-	let e1 = energy(bodies, n)
-	print("{e1}")
+  // Print initial energy
+  let e1 = energy(bodies, n: n)
+  print("{e1}")
 
-	// Run simulation for 50,000,000 steps
-	let steps = 50000000
-	var step = 0
-	while step < steps 'simulation'
-		advance(bodies, n, 0.01)
-		step = step + 1
-	end 'simulation'
+  // Run simulation for 50,000,000 steps
+  let steps = 50000000
+  var step = 0
+  while step < steps 'simulation'
+    advance(bodies, n: n, dt: 0.01)
+    step = step + 1
+  end 'simulation'
 
-	// Print final energy
-	let e2 = energy(bodies, n)
-	print("{e2}")
+  // Print final energy
+  let e2 = energy(bodies, n: n)
+  print("{e2}")
 
-	return 0
+  return 0
 end 'main'
-
-

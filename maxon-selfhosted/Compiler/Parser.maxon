@@ -136,7 +136,7 @@ function parseFunction(project Project, module MlirModule, tokens TokenArray, st
       pos = pos + 1  // skip param type
 
       // Define the parameter as a variable so it's accessible in the body
-      let _ = defineVariable(project, name: paramNameToken.value, isFloat: false)
+      let _ = defineVariable(project, name: paramNameToken.value, isFloat: false, isRefType: false)
       paramCount = paramCount + 1
 
       let nextParamTok = tokenAt(tokens, pos: pos)
@@ -613,7 +613,7 @@ function parseVarDecl(project Project, block MlirBlock, tokens TokenArray, start
     let tokStr = tokenValueToString(equalsToken.value)
     reportCompileError(project, code: ErrorCode.parserExpectedToken, message: "Expected '=' but got '{tokStr}'", line: equalsToken.line, column: equalsToken.column, filePath: filePath)
     // Define the variable as a placeholder to prevent cascading "undefined variable" errors
-    let _ = defineVariable(project, name: nameToken.value, isFloat: false)
+    let _ = defineVariable(project, name: nameToken.value, isFloat: false, isRefType: false)
     return synchronizeToNextStatement(tokens, startPos: pos)
   end 'notEquals'
 
@@ -621,7 +621,7 @@ function parseVarDecl(project Project, block MlirBlock, tokens TokenArray, start
   let exprResult = parseExpression(project, block: block, tokens: tokens, startPos: pos, filePath: filePath)
   pos = exprResult.nextPos
 
-  let slot = defineVariable(project, name: nameToken.value, isFloat: exprResult.isFloat)
+  let slot = defineVariable(project, name: nameToken.value, isFloat: exprResult.isFloat, isRefType: exprResult.isRefType)
   emitOp(block, op: MlirOp.maxhl(MaxHLOp.varDecl(slot, exprResult.valueId)))
 
   return pos
@@ -733,6 +733,7 @@ export type ExprResult
   export var valueId ValueId
   export var nextPos TokenIndex
   export var isFloat bool
+  export var isRefType bool
   // For compile-time string constant folding
   export var isStringConst bool
   export var stringConstValue ByteArray
@@ -750,6 +751,7 @@ function infixBindingPower(kind TokenKind) returns BindingPower throws ParserErr
     shr gives 8
     equalsEquals gives 10
     bangEquals gives 10
+    is gives 10
     lessThan gives 10
     lessEquals gives 10
     greaterThan gives 10
@@ -797,6 +799,7 @@ function parseExpressionBP(project Project, block MlirBlock, tokens TokenArray, 
   var pos = left.nextPos
   var leftId = left.valueId
   var leftIsFloat = left.isFloat
+  var leftIsRefType = left.isRefType
   var leftIsStringConst = left.isStringConst
   var leftStringConstValue = left.stringConstValue
 
@@ -818,7 +821,7 @@ function parseExpressionBP(project Project, block MlirBlock, tokens TokenArray, 
         let right = parsePrimary(project, block: block, tokens: tokens, startPos: pos, filePath: filePath)
         pos = right.nextPos
         var foldedLeft = 1
-        if not bytesEqual(leftStringConstValue, b: right.stringConstValue) 'strNeq'
+        if leftStringConstValue != right.stringConstValue 'strNeq'
           foldedLeft = 0
         end 'strNeq'
         let leftLitId = nextValueId(project)
@@ -829,15 +832,62 @@ function parseExpressionBP(project Project, block MlirBlock, tokens TokenArray, 
         emitOp(block, op: MlirOp.maxhl(MaxHLOp.cmp(resultId, leftLitId, rightLitId, CmpPredicate.eq, false)))
         leftId = resultId
         leftIsFloat = false
+        leftIsRefType = false
         leftIsStringConst = false
         leftStringConstValue = ByteArray{}
         continue
       end 'leftIsStr'
     end 'checkStrFold'
 
+    // Reference identity: is / is not
+    if opToken.kind == TokenKind.is 'isRefEq'
+      var negate = false
+      let maybeNot = tokenAt(tokens, pos: pos)
+      if maybeNot.kind == TokenKind.not 'isNot'
+        negate = true
+        pos = pos + 1
+      end 'isNot'
+      let right = parseExpressionBP(project, block: block, tokens: tokens, startPos: pos, filePath: filePath, minBP: bp)
+      pos = right.nextPos
+      if not leftIsRefType or not right.isRefType 'notRef'
+        reportCompileError(project, code: ErrorCode.semanticIsRequiresRefType, message: "'is' requires reference types (structs), not primitive values", line: opToken.line, column: opToken.column, filePath: filePath)
+      end 'notRef'
+      let resultId = nextValueId(project)
+      emitOp(block, op: MlirOp.maxhl(MaxHLOp.refEq(resultId, leftId, right.valueId, negate)))
+      leftId = resultId
+      leftIsFloat = false
+      leftIsRefType = false
+      leftIsStringConst = false
+      leftStringConstValue = ByteArray{}
+      continue
+    end 'isRefEq'
+
     // Parse right operand with higher minimum binding power for left-associativity
     let right = parseExpressionBP(project, block: block, tokens: tokens, startPos: pos, filePath: filePath, minBP: bp)
     pos = right.nextPos
+
+    // Dispatch == and != to .equals() call for reference types (content comparison)
+    if(opToken.kind == TokenKind.equalsEquals or opToken.kind == TokenKind.bangEquals) and leftIsRefType and right.isRefType 'refEquals'
+      let equalsResultId = nextValueId(project)
+      var equalsArgIds = ValueIdArray{}
+      equalsArgIds.push(leftId)
+      equalsArgIds.push(right.valueId)
+      // TODO: use actual type name once type tracking is available (e.g., "ByteArray.equals")
+      emitOp(block, op: MlirOp.maxhl(MaxHLOp.call(equalsResultId, b"equals", equalsArgIds)))
+      if opToken.kind == TokenKind.bangEquals 'neq'
+        // != is !equals(): invert with bitNot
+        let notResultId = nextValueId(project)
+        emitOp(block, op: MlirOp.maxhl(MaxHLOp.unop(notResultId, equalsResultId, UnaryOpKind.bitNot)))
+        leftId = notResultId
+      end 'neq' else 'eq'
+        leftId = equalsResultId
+      end 'eq'
+      leftIsFloat = false
+      leftIsRefType = false
+      leftIsStringConst = false
+      leftStringConstValue = ByteArray{}
+      continue
+    end 'refEquals'
 
     let resultId = nextValueId(project)
     let eitherIsFloat = leftIsFloat or right.isFloat
@@ -851,11 +901,12 @@ function parseExpressionBP(project Project, block MlirBlock, tokens TokenArray, 
     end 'isDiv' else 'notCmp'
       leftIsFloat = eitherIsFloat
     end 'notCmp'
+    leftIsRefType = false
     leftIsStringConst = false
     leftStringConstValue = ByteArray{}
   end 'prattLoop'
 
-  return ExprResult{valueId: leftId, nextPos: pos, isFloat: leftIsFloat, isStringConst: leftIsStringConst, stringConstValue: leftStringConstValue}
+  return ExprResult{valueId: leftId, nextPos: pos, isFloat: leftIsFloat, isRefType: leftIsRefType, isStringConst: leftIsStringConst, stringConstValue: leftStringConstValue}
 end 'parseExpressionBP'
 
 // Unary: -expr | not expr | primary
@@ -866,12 +917,12 @@ function parseUnary(project Project, block MlirBlock, tokens TokenArray, startPo
     let operand = parseUnary(project, block: block, tokens: tokens, startPos: startPos + 1, filePath: filePath)
     let resultId = nextValueId(project)
     emitOp(block, op: MlirOp.maxhl(MaxHLOp.unop(resultId, operand.valueId, UnaryOpKind.neg)))
-    return ExprResult{valueId: resultId, nextPos: operand.nextPos, isFloat: operand.isFloat, isStringConst: false, stringConstValue: ByteArray{}}
+    return ExprResult{valueId: resultId, nextPos: operand.nextPos, isFloat: operand.isFloat, isRefType: false, isStringConst: false, stringConstValue: ByteArray{}}
   end 'isNeg' else if token.kind == TokenKind.not 'isNot'
     let operand = parseUnary(project, block: block, tokens: tokens, startPos: startPos + 1, filePath: filePath)
     let resultId = nextValueId(project)
     emitOp(block, op: MlirOp.maxhl(MaxHLOp.unop(resultId, operand.valueId, UnaryOpKind.bitNot)))
-    return ExprResult{valueId: resultId, nextPos: operand.nextPos, isFloat: false, isStringConst: false, stringConstValue: ByteArray{}}
+    return ExprResult{valueId: resultId, nextPos: operand.nextPos, isFloat: false, isRefType: false, isStringConst: false, stringConstValue: ByteArray{}}
   end 'isNot'
 
   return parsePrimary(project, block: block, tokens: tokens, startPos: startPos, filePath: filePath)
@@ -914,7 +965,7 @@ function parseIdentifierExpr(project Project, block MlirBlock, tokens TokenArray
         throw ParserError.typeError
       end 'notFloat'
       let truncArgId = try argIds.get(0) otherwise 0
-      return ExprResult{valueId: truncArgId, nextPos: pos, isFloat: false, isStringConst: false, stringConstValue: ByteArray{}}
+      return ExprResult{valueId: truncArgId, nextPos: pos, isFloat: false, isRefType: false, isStringConst: false, stringConstValue: ByteArray{}}
     end 'isTrunc'
 
     // Qualify call target with file-based namespace (except main)
@@ -925,21 +976,22 @@ function parseIdentifierExpr(project Project, block MlirBlock, tokens TokenArray
     end 'qualifyCall'
     let callId = nextValueId(project)
     emitOp(block, op: MlirOp.maxhl(MaxHLOp.call(callId, calleeName, argIds)))
-    return ExprResult{valueId: callId, nextPos: pos, isFloat: false, isStringConst: false, stringConstValue: ByteArray{}}
+    return ExprResult{valueId: callId, nextPos: pos, isFloat: false, isRefType: false, isStringConst: false, stringConstValue: ByteArray{}}
   end 'isCall'
 
   // Check for compile-time string constant before variable lookup
   let strConst = lookupStringConst(project, name: token.value)
   if not strConst.isEmpty() 'isStrConst'
     let id = nextValueId(project)
-    return ExprResult{valueId: id, nextPos: startPos + 1, isFloat: false, isStringConst: true, stringConstValue: strConst}
+    return ExprResult{valueId: id, nextPos: startPos + 1, isFloat: false, isRefType: false, isStringConst: true, stringConstValue: strConst}
   end 'isStrConst'
 
   let slot = lookupVariable(project, name: token.value, token: token, filePath: filePath)
   let id = nextValueId(project)
   emitOp(block, op: MlirOp.maxhl(MaxHLOp.varLoad(id, slot)))
   let varIsFloat = isVariableFloat(project, name: token.value)
-  return ExprResult{valueId: id, nextPos: startPos + 1, isFloat: varIsFloat, isStringConst: false, stringConstValue: ByteArray{}}
+  let varIsRef = isVariableRefType(project, name: token.value)
+  return ExprResult{valueId: id, nextPos: startPos + 1, isFloat: varIsFloat, isRefType: varIsRef, isStringConst: false, stringConstValue: ByteArray{}}
 end 'parseIdentifierExpr'
 
 function parsePrimaryMatch(project Project, block MlirBlock, tokens TokenArray, startPos TokenIndex, token Token, filePath FilePath) returns ExprResult throws ParserError
@@ -965,37 +1017,37 @@ end 'parsePrimary'
 
 function raiseUnexpectedToken(project Project, token Token, startPos TokenIndex, filePath FilePath) returns ExprResult
   reportCompileError(project, code: ErrorCode.parserExpectedExpression, message: "Expected expression but got '{tokenValueToString(token.value)}'", line: token.line, column: token.column, filePath: filePath)
-  return ExprResult{valueId: 0, nextPos: startPos + 1, isFloat: false, isStringConst: false, stringConstValue: ByteArray{}}
+  return ExprResult{valueId: 0, nextPos: startPos + 1, isFloat: false, isRefType: false, isStringConst: false, stringConstValue: ByteArray{}}
 end 'raiseUnexpectedToken'
 
 function parseIntLiteral(project Project, block MlirBlock, token Token, startPos TokenIndex) returns ExprResult
   let value = parseInt(token.value)
   let id = nextValueId(project)
   emitOp(block, op: MlirOp.maxhl(MaxHLOp.literal(id, value, false)))
-  return ExprResult{valueId: id, nextPos: startPos + 1, isFloat: false, isStringConst: false, stringConstValue: ByteArray{}}
+  return ExprResult{valueId: id, nextPos: startPos + 1, isFloat: false, isRefType: false, isStringConst: false, stringConstValue: ByteArray{}}
 end 'parseIntLiteral'
 
 function parseFloatLiteral(project Project, block MlirBlock, token Token, startPos TokenIndex) returns ExprResult
   let rawBits = parseFloatBits(token.value)
   let id = nextValueId(project)
   emitOp(block, op: MlirOp.maxhl(MaxHLOp.literal(id, rawBits, true)))
-  return ExprResult{valueId: id, nextPos: startPos + 1, isFloat: true, isStringConst: false, stringConstValue: ByteArray{}}
+  return ExprResult{valueId: id, nextPos: startPos + 1, isFloat: true, isRefType: false, isStringConst: false, stringConstValue: ByteArray{}}
 end 'parseFloatLiteral'
 
 function parseStringLiteral(project Project, token Token, startPos TokenIndex) returns ExprResult
   let id = nextValueId(project)
-  return ExprResult{valueId: id, nextPos: startPos + 1, isFloat: false, isStringConst: true, stringConstValue: token.value}
+  return ExprResult{valueId: id, nextPos: startPos + 1, isFloat: false, isRefType: false, isStringConst: true, stringConstValue: token.value}
 end 'parseStringLiteral'
 
 function parseBoolLiteral(project Project, block MlirBlock, startPos TokenIndex, value ParsedInt) returns ExprResult
   let id = nextValueId(project)
   emitOp(block, op: MlirOp.maxhl(MaxHLOp.literal(id, value, false)))
-  return ExprResult{valueId: id, nextPos: startPos + 1, isFloat: false, isStringConst: false, stringConstValue: ByteArray{}}
+  return ExprResult{valueId: id, nextPos: startPos + 1, isFloat: false, isRefType: false, isStringConst: false, stringConstValue: ByteArray{}}
 end 'parseBoolLiteral'
 
 function parseParenExpr(project Project, block MlirBlock, tokens TokenArray, startPos TokenIndex, filePath FilePath) returns ExprResult
   let inner = parseExpression(project, block: block, tokens: tokens, startPos: startPos + 1, filePath: filePath)
-  return ExprResult{valueId: inner.valueId, nextPos: inner.nextPos + 1, isFloat: inner.isFloat, isStringConst: inner.isStringConst, stringConstValue: inner.stringConstValue}
+  return ExprResult{valueId: inner.valueId, nextPos: inner.nextPos + 1, isFloat: inner.isFloat, isRefType: inner.isRefType, isStringConst: inner.isStringConst, stringConstValue: inner.stringConstValue}
 end 'parseParenExpr'
 
 // --- Helpers ---
@@ -1237,6 +1289,7 @@ function resetSymbolTable(project Project)
   project.parserVarNames = ByteArrayArray{}
   project.parserVarSlots = VarSlotArray{}
   project.parserVarIsFloat = BoolArray{}
+  project.parserVarIsRefType = BoolArray{}
   project.parserScopeStack = ScopeDepthArray{}
   project.parserNextSlot = 0
 end 'resetSymbolTable'
@@ -1253,14 +1306,16 @@ function popScope(project Project)
     try project.parserVarNames.pop() otherwise ByteArray{}
     try project.parserVarSlots.pop() otherwise 0
     try project.parserVarIsFloat.pop() otherwise false
+    try project.parserVarIsRefType.pop() otherwise false
   end 'trim'
 end 'popScope'
 
-function defineVariable(project Project, name ByteArray, isFloat bool) returns VarSlot
+function defineVariable(project Project, name ByteArray, isFloat bool, isRefType bool) returns VarSlot
   let slot = project.parserNextSlot
   project.parserVarNames.push(name)
   project.parserVarSlots.push(slot)
   project.parserVarIsFloat.push(isFloat)
+  project.parserVarIsRefType.push(isRefType)
   project.parserNextSlot = project.parserNextSlot + 1
   return slot
 end 'defineVariable'
@@ -1269,7 +1324,7 @@ function lookupVariable(project Project, name ByteArray, token Token, filePath F
   var i = project.parserVarNames.count() - 1
   while i >= 0 'lookup'
     let vn = try project.parserVarNames.get(i) otherwise ByteArray{}
-    if bytesEqual(vn, b: name) 'found'
+    if vn == name 'found'
       return try project.parserVarSlots.get(i) otherwise 0
     end 'found'
     i = i - 1
@@ -1281,7 +1336,7 @@ end 'lookupVariable'
 // Look up a compile-time string constant. Returns empty ByteArray if not found.
 function lookupStringConst(project Project, name ByteArray) returns ByteArray
   for(i, cn) in project.stringConstNames.enumerated() 'lookup'
-    if bytesEqual(cn, b: name) 'found'
+    if cn == name 'found'
       return try project.stringConstValues.get(i) otherwise ByteArray{}
     end 'found'
   end 'lookup'
@@ -1293,13 +1348,25 @@ function isVariableFloat(project Project, name ByteArray) returns bool
   var i = project.parserVarNames.count() - 1
   while i >= 0 'lookup'
     let vn = try project.parserVarNames.get(i) otherwise ByteArray{}
-    if bytesEqual(vn, b: name) 'found'
+    if vn == name 'found'
       return try project.parserVarIsFloat.get(i) otherwise false
     end 'found'
     i = i - 1
   end 'lookup'
   return false
 end 'isVariableFloat'
+
+function isVariableRefType(project Project, name ByteArray) returns bool
+  var i = project.parserVarNames.count() - 1
+  while i >= 0 'lookup'
+    let vn = try project.parserVarNames.get(i) otherwise ByteArray{}
+    if vn == name 'found'
+      return try project.parserVarIsRefType.get(i) otherwise false
+    end 'found'
+    i = i - 1
+  end 'lookup'
+  return false
+end 'isVariableRefType'
 
 // Derive a namespace from the file path (filename without extension).
 // e.g. "/temp/basics.maxon" -> "basics", "C:\foo\bar.maxon" -> "bar"
