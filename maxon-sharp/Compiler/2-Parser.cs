@@ -1295,6 +1295,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
       var namespace_ = DeriveNamespace();
       funcName = string.IsNullOrEmpty(namespace_) ? baseName : $"{namespace_}.{baseName}";
     }
+    Logger.Trace(LogCategory.Parser, $"PreScanFunction: {funcName} (base: {baseName}, file: {_sourceFilePath})");
 
     Expect(TokenType.LeftParen);
     var (paramNames, paramTypes, paramDefaults, paramTokens) = ParseParamListWithDefaults();
@@ -1522,6 +1523,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
     var typeNameToken = Expect(TokenType.Identifier);
     var typeName = typeNameToken.Value;
     _currentTypeName = typeName;
+    Logger.Trace(LogCategory.Parser, $"PreScanType: {typeName} (file: {_sourceFilePath})");
 
     // Temporary entry so ParseTypeRef/PreScanInstanceMethod can resolve Self references
     if (!_typeRegistry.ContainsKey(typeName)) {
@@ -2043,6 +2045,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
     var nameToken = Expect(TokenType.Identifier);
     var enumName = nameToken.Value;
     _currentTypeName = enumName;
+    Logger.Trace(LogCategory.Parser, $"PreScanUnion: {enumName} (file: {_sourceFilePath})");
 
     var associatedTypeNames = ParseUsesClause();
     var (conformingInterfaces, conformanceTypeParams) = ParseConformanceClause();
@@ -2285,6 +2288,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
     Advance(); // consume 'enum'
     var nameToken = Expect(TokenType.Identifier);
     var name = nameToken.Value;
+    Logger.Trace(LogCategory.Parser, $"PreScanEnum: {name} (file: {_sourceFilePath})");
 
     // Temporary entry so ParseTypeRef can resolve forward references
     if (!_typeRegistry.ContainsKey(name))
@@ -2536,6 +2540,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
     Advance(); // consume 'interface'
     var nameToken = Expect(TokenType.Identifier);
     var interfaceName = nameToken.Value;
+    Logger.Trace(LogCategory.Parser, $"PreScanInterface: {interfaceName} (file: {_sourceFilePath})");
     // Allow Self to resolve inside interface method signatures
     _currentTypeName = interfaceName;
 
@@ -2639,6 +2644,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
   /// Pre-scan an extension block: register method signatures for each concrete type conforming to the interface.
   /// </summary>
   private void PreScanExtensionBlock(MlirModule<MaxonOp> module) {
+    Logger.Trace(LogCategory.Parser, $"PreScanExtensionBlock (file: {_sourceFilePath})");
     ProcessExtensionBlock(module, (m, positions, typeName) => {
       foreach (var pos in positions) {
         _pos = pos;
@@ -2975,6 +2981,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
     Advance(); // consume 'typealias'
     var aliasNameToken = Expect(TokenType.Identifier);
     var aliasName = aliasNameToken.Value;
+    Logger.Trace(LogCategory.Parser, $"PreScanTypeAlias: {aliasName} (file: {_sourceFilePath})");
 
     // Duplicate detection only for top-level typealiases (not type-scoped ones)
     if (_currentTypeName == null && !_localTypeAliases.Add(aliasName))
@@ -3443,20 +3450,30 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
       if (prevWasDot) {
         // Keywords after '.' are member names, not block openers/closers
       } else if (Check(TokenType.Function) || Check(TokenType.If) || Check(TokenType.While) || Check(TokenType.For) || Check(TokenType.Match)) {
-        depth++;
+        // Keywords used as match case labels (e.g., `function then ...`, `if to newline then ...`)
+        // are not block openers. Detect by checking if the next token indicates a case label context:
+        // `then`, `gives` (value arms), `to`/`upto` (range patterns).
+        var next = _pos + 1 < _tokens.Count ? _tokens[_pos + 1].Type : TokenType.Eof;
+        if (next is not TokenType.Then and not TokenType.Gives and not TokenType.To and not TokenType.Upto)
+          depth++;
       } else if (Check(TokenType.Else)) {
-        // 'else if' is a single construct — the 'if' will increment depth, so 'else' should not.
-        // 'else' on its own (with label) opens a block needing its own 'end'.
-        // Pattern: else 'label' → standalone else; else if → else-if chain
-        int j = _pos + 1;
-        if (j < _tokens.Count && _tokens[j].Type == TokenType.If) {
+        var next = _pos + 1 < _tokens.Count ? _tokens[_pos + 1].Type : TokenType.Eof;
+        if (next is TokenType.Then or TokenType.Gives or TokenType.To or TokenType.Upto) {
+          // Match case label context — not a block opener
+        } else if (next == TokenType.If) {
           // else if — don't increment (let 'if' handle it)
         } else {
+          // Standalone else 'label' opens a block needing its own 'end'
           depth++;
         }
-      } else if (Check(TokenType.Otherwise) && _pos + 1 < _tokens.Count && _tokens[_pos + 1].Type == TokenType.CharacterLiteral) {
-        // otherwise 'label' introduces a block ending with end (but not inline otherwise <value>)
-        depth++;
+      } else if (Check(TokenType.Otherwise)) {
+        var next = _pos + 1 < _tokens.Count ? _tokens[_pos + 1].Type : TokenType.Eof;
+        if (next is TokenType.Then or TokenType.Gives or TokenType.To or TokenType.Upto) {
+          // Match case label context — not a block opener
+        } else if (next == TokenType.CharacterLiteral) {
+          // otherwise 'label' introduces a block ending with end (but not inline otherwise <value>)
+          depth++;
+        }
       } else if (Check(TokenType.End)) {
         depth--;
       }
@@ -11015,7 +11032,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
           exprText = exprText[..colonIdx];
         }
 
-        var (exprValue, _exprKind) = ParseInterpolationExpressionWithKind(exprText);
+        var (exprValue, _exprKind) = ParseInterpolationExpressionWithKind(exprText, token.Line, token.Column + 1 + exprStart);
         var exprOptimalType = GetOptimalType(exprValue);
 
         // Non-String structs need a toString call — emit it here as a regular MaxonCallOp
@@ -11081,9 +11098,16 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
   }
 
   /// Returns the resolved value and its value kind (needed to distinguish signed vs unsigned in interpolation).
-  private (MaxonValue Value, MaxonValueKind Kind) ParseInterpolationExpressionWithKind(string exprText) {
+  private (MaxonValue Value, MaxonValueKind Kind) ParseInterpolationExpressionWithKind(string exprText, int sourceLine, int sourceColumn) {
     var lexer = new Lexer(exprText);
     var exprTokens = lexer.Tokenize();
+
+    // Remap token positions from the sub-lexer (which starts at line 1, col 1)
+    // back to the original source position within the enclosing string literal.
+    for (int i = 0; i < exprTokens.Count; i++) {
+      var t = exprTokens[i];
+      exprTokens[i] = t with { Line = sourceLine, Column = sourceColumn + t.Column - 1 };
+    }
 
     // Save and swap parser token state
     var savedTokens = new List<Token>(_tokens);

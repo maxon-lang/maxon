@@ -1,6 +1,12 @@
 // Arith Dialect — Standard typed arithmetic operations.
 // Split into const, unary, and binary sub-unions for type-safe dispatch.
 
+export union ArithOp
+  const(op ArithConst)
+  unary(op ArithUnaryOp)
+  binary(op ArithBinaryOp)
+end 'ArithOp'
+
 export enum ArithConstOpcode
   constI64
   constF64
@@ -24,28 +30,28 @@ export type ArithUnaryOp
 end 'ArithUnaryOp'
 
 export enum ArithBinaryOpcode
-  addI64
-  subI64
-  mulI64
-  divI64
-  remI64
-  andI64
-  orI64
-  xorI64
-  shlI64
-  shrI64
-  cmpI64Eq
-  cmpI64Ne
-  cmpI64Lt
-  cmpI64Le
-  cmpI64Gt
-  cmpI64Ge
-  cmpF64Eq
-  cmpF64Ne
-  cmpF64Lt
-  cmpF64Le
-  cmpF64Gt
-  cmpF64Ge
+  addI64 = "addi"
+  subI64 = "subi"
+  mulI64 = "muli"
+  divI64 = "divsi"
+  remI64 = "remsi"
+  andI64 = "andi"
+  orI64 = "ori"
+  xorI64 = "xori"
+  shlI64 = "shli"
+  shrI64 = "shrsi"
+  cmpI64Eq = "cmpi eq,"
+  cmpI64Ne = "cmpi ne,"
+  cmpI64Lt = "cmpi lt,"
+  cmpI64Le = "cmpi le,"
+  cmpI64Gt = "cmpi gt,"
+  cmpI64Ge = "cmpi ge,"
+  cmpF64Eq = "cmpf eq,"
+  cmpF64Ne = "cmpf ne,"
+  cmpF64Lt = "cmpf lt,"
+  cmpF64Le = "cmpf le,"
+  cmpF64Gt = "cmpf gt,"
+  cmpF64Ge = "cmpf ge,"
 end 'ArithBinaryOpcode'
 
 export type ArithBinaryOp
@@ -55,24 +61,18 @@ export type ArithBinaryOp
   export let rightId ValueId
 end 'ArithBinaryOp'
 
-export union ArithOp
-  const(op ArithConst)
-  unary(op ArithUnaryOp)
-  binary(op ArithBinaryOp)
-end 'ArithOp'
-
 export function arithOpToString(op ArithOp) returns String
   return match op 'dispatch'
     const(c) gives arithConstToString(c)
     unary(u) gives arithUnaryOpToString(u)
-    binary(b) gives arithBinaryOpToString(b)
+    binary(b) gives "%{b.resultId} = arith.{b.opcode.rawValue} %{b.leftId}, %{b.rightId}"
   end 'dispatch'
 end 'arithOpToString'
 
 function arithConstToString(op ArithConst) returns String
   return match op.opcode 'toString'
     constI64 gives "%{op.resultId} = arith.constant \{value = {op.value} : i64\}"
-    constF64 gives "%{op.resultId} = arith.float_constant \{rawBits = {op.value} : f64\}"
+    constF64 gives "%{op.resultId} = arith.float_constant \{value = {op.value} : f64\}"
   end 'toString'
 end 'arithConstToString'
 
@@ -82,31 +82,3 @@ function arithUnaryOpToString(op ArithUnaryOp) returns String
     bitNotI64 gives "%{op.resultId} = arith.noti %{op.operandId}"
   end 'toString'
 end 'arithUnaryOpToString'
-
-function arithBinaryOpToString(op ArithBinaryOp) returns String
-  let name = match op.opcode 'name'
-    addI64 gives "addi"
-    subI64 gives "subi"
-    mulI64 gives "muli"
-    divI64 gives "divsi"
-    remI64 gives "remsi"
-    andI64 gives "andi"
-    orI64 gives "ori"
-    xorI64 gives "xori"
-    shlI64 gives "shli"
-    shrI64 gives "shrsi"
-    cmpI64Eq gives "cmpi eq,"
-    cmpI64Ne gives "cmpi ne,"
-    cmpI64Lt gives "cmpi lt,"
-    cmpI64Le gives "cmpi le,"
-    cmpI64Gt gives "cmpi gt,"
-    cmpI64Ge gives "cmpi ge,"
-    cmpF64Eq gives "cmpf eq,"
-    cmpF64Ne gives "cmpf ne,"
-    cmpF64Lt gives "cmpf lt,"
-    cmpF64Le gives "cmpf le,"
-    cmpF64Gt gives "cmpf gt,"
-    cmpF64Ge gives "cmpf ge,"
-  end 'name'
-  return "%{op.resultId} = arith.{name} %{op.leftId}, %{op.rightId}"
-end 'arithBinaryOpToString'
