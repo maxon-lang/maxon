@@ -33,8 +33,8 @@ export function parse(project Project, tokens TokenArray, filePath String) retur
       eof then break 'parseLoop'
       function then pos = parseFunction(project, module: module, tokens: tokens, startPos: pos, filePath: filePath)
       let then pos = parseTopLevelLet(project, tokens: tokens, startPos: pos, filePath: filePath)
-      typealias then pos = skipToNextLine(tokens, startPos: pos)
-      export then pos = parseExport(tokens, startPos: pos)
+      typealias then pos = parseTopLevelTypealias(project, tokens: tokens, startPos: pos)
+      export then pos = parseExport(project, tokens: tokens, startPos: pos)
       if to newline then break
       // temporary
       print then break
@@ -262,17 +262,138 @@ function parseTopLevelLet(project Project, tokens TokenArray, startPos TokenInde
   return pos
 end 'parseTopLevelLet'
 
-function parseExport(tokens TokenArray, startPos TokenIndex) returns TokenIndex
+function parseExport(project Project, tokens TokenArray, startPos TokenIndex) returns TokenIndex
   // Skip export prefix — check what follows
   let afterExport = tokenAt(tokens, pos: startPos + 1)
 
   if afterExport.kind == TokenKind.function 'isExportFunc'
     return startPos + 1
-  end 'isExportFunc' else 'isExportOther'
-    // Skip export typealias/type declarations
+  end 'isExportFunc' else if afterExport.kind == TokenKind.typealias 'isExportTypealias'
+    return parseTopLevelTypealias(project, tokens: tokens, startPos: startPos + 1)
+  end 'isExportTypealias' else 'isExportOther'
+    // Skip export type/other declarations
     return skipToNextLine(tokens, startPos: startPos)
   end 'isExportOther'
 end 'parseExport'
+
+// Parse: typealias Name = int(...) | float(...) | Array with T | ...
+// Registers primitive-backed typealiases in the project's type registry.
+// Computes optimal MLIR type from the range bounds (e.g. int(0 to u32.max) → u32).
+function parseTopLevelTypealias(project Project, tokens TokenArray, startPos TokenIndex) returns TokenIndex
+  var pos = startPos + 1  // skip 'typealias'
+  let nameToken = tokenAt(tokens, pos: pos)
+  pos = pos + 1  // skip alias name
+
+  let equalsToken = tokenAt(tokens, pos: pos)
+  if equalsToken.kind != TokenKind.equals 'noEquals'
+    return skipToNextLine(tokens, startPos: startPos)
+  end 'noEquals'
+  pos = pos + 1  // skip '='
+
+  let baseToken = tokenAt(tokens, pos: pos)
+  if baseToken.kind == TokenKind.float 'isFloat'
+    project.typealiases.insert(nameToken.value, value: b"f64")
+    return skipToNextLine(tokens, startPos: startPos)
+  end 'isFloat'
+  if baseToken.kind == TokenKind.bool 'isBool'
+    project.typealiases.insert(nameToken.value, value: b"i1")
+    return skipToNextLine(tokens, startPos: startPos)
+  end 'isBool'
+  if baseToken.kind != TokenKind.int 'notInt'
+    return skipToNextLine(tokens, startPos: startPos)
+  end 'notInt'
+
+  // Parse int(LOWER to UPPER) to compute optimal type
+  pos = pos + 1  // skip 'int'
+  let parenToken = tokenAt(tokens, pos: pos)
+  if parenToken.kind != TokenKind.leftParen 'noParen'
+    project.typealiases.insert(nameToken.value, value: b"i64")
+    return skipToNextLine(tokens, startPos: startPos)
+  end 'noParen'
+  pos = pos + 1  // skip '('
+
+  // Parse lower bound
+  let lowerBound = parseTypeBound(tokens, pos: pos)
+  pos = lowerBound.nextPos
+
+  // Skip 'to'
+  let toToken = tokenAt(tokens, pos: pos)
+  if toToken.kind == TokenKind.to 'hasTo'
+    pos = pos + 1
+  end 'hasTo'
+
+  // Parse upper bound
+  let upperBound = parseTypeBound(tokens, pos: pos)
+
+  let mlirType = computeOptimalIntType(lower: lowerBound.value, upper: upperBound.value)
+  project.typealiases.insert(nameToken.value, value: mlirType)
+  return skipToNextLine(tokens, startPos: startPos)
+end 'parseTopLevelTypealias'
+
+typealias BoundValue = int(i64.min to i64.max)
+
+type ParsedBound
+  export var value BoundValue
+  export var nextPos TokenIndex
+end 'ParsedBound'
+
+// Parse a type bound: a number literal, negative literal, or T.min/T.max.
+// The lexer doesn't emit '.' tokens, so "u32.max" is tokenized as two
+// identifiers: "u32" and "max" (with '.' silently skipped).
+function parseTypeBound(tokens TokenArray, pos TokenIndex) returns ParsedBound
+  let token = tokenAt(tokens, pos: pos)
+
+  // Negative literal: - NUMBER
+  if token.kind == TokenKind.minus 'isNeg'
+    let numToken = tokenAt(tokens, pos: pos + 1)
+    let value = parseInt(numToken.value)
+    return ParsedBound{value: 0 - value, nextPos: pos + 2}
+  end 'isNeg'
+
+  // Number literal
+  if token.kind == TokenKind.intLiteral 'isLit'
+    return ParsedBound{value: parseInt(token.value), nextPos: pos + 1}
+  end 'isLit'
+
+  // T.min or T.max — lexed as two identifiers (T and min/max)
+  let fieldToken = tokenAt(tokens, pos: pos + 1)
+  if fieldToken.kind == TokenKind.identifier 'hasField'
+    let bound = resolveTypeBound(token.value, field: fieldToken.value)
+    return ParsedBound{value: bound, nextPos: pos + 2}
+  end 'hasField'
+
+  return ParsedBound{value: 0, nextPos: pos + 1}
+end 'parseTypeBound'
+
+let typeBoundsTable = [
+  b"u8.max": 255, b"u16.max": 65535, b"u32.max": 4294967295, b"u64.max": 9223372036854775807,
+  b"i8.max": 127, b"i16.max": 32767, b"i32.max": 2147483647, b"i64.max": 9223372036854775807,
+  b"i8.min": -128, b"i16.min": -32768, b"i32.min": -2147483648, b"i64.min": -9223372036854775807
+]
+
+function resolveTypeBound(typeName ByteArray, field ByteArray) returns BoundValue
+  var key = ByteArray{}
+  key.append(typeName)
+  key.push(46)
+  key.append(field)
+  return try typeBoundsTable.get(key) otherwise 0
+end 'resolveTypeBound'
+
+function computeOptimalIntType(lower BoundValue, upper BoundValue) returns ByteArray
+  if lower >= 0 'unsigned'
+    if upper <= 255 'u8'
+      return b"u8"
+    end 'u8'
+    if upper <= 65535 'u16'
+      return b"u16"
+    end 'u16'
+    if upper <= 4294967295 'u32'
+      return b"u32"
+    end 'u32'
+    return b"u64"
+  end 'unsigned'
+  return b"i64"
+end 'computeOptimalIntType'
 
 function parseReturnStatement(project Project, block MlirBlock, tokens TokenArray, startPos TokenIndex, filePath String) returns TokenIndex
   var pos = startPos + 1  // skip 'return'

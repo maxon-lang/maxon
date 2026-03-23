@@ -1092,6 +1092,12 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
 
     var token = _tokens[pos];
     switch (token.Type) {
+      case TokenType.Minus:
+        // Negative literal: -NUMBER
+        endPos = pos + 2;
+        if (pos + 1 < _tokens.Count && _tokens[pos + 1].Type == TokenType.FloatLiteral)
+          return MlirType.F64;
+        return MlirType.I64;
       case TokenType.IntegerLiteral:
         return MlirType.I64;
       case TokenType.FloatLiteral:

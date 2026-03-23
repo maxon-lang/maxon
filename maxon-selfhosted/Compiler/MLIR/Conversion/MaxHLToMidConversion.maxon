@@ -4,14 +4,14 @@
 // printLiteral is lowered to globalAddr + call write_stdout.
 // printInt is lowered to call __rt_printInt.
 
-export function lowerMaxHLToMid(module MlirModule, globalData GlobalDataTable, nextValueIdRef ValueIdRef) returns MlirModule
+export function lowerMaxHLToMid(module MlirModule, project Project, globalData GlobalDataTable, nextValueIdRef ValueIdRef) returns MlirModule
   logInfo(LogCategory.mlir, message: () gives "Lowering MaxHL to Mid dialects")
   logTrace(LogCategory.mlir, message: () gives "=== maxhl-to-mid")
   var result = createMlirModule()
 
   for srcFunc in module.functions 'eachFunc'
     let funcName = String.from(srcFunc.name)
-    var dstFunc = createMlirFunction(srcFunc.name, returnType: srcFunc.returnType)
+    var dstFunc = createMlirFunction(srcFunc.name, returnType: resolveTypeName(project, name: srcFunc.returnType))
     dstFunc.paramCount = srcFunc.paramCount
 
     for srcBlock in srcFunc.region.blocks 'eachBlock'

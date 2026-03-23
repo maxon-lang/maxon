@@ -16,6 +16,9 @@ export type Project
   export var parserVarIsFloat BoolArray
   export var parserScopeStack ScopeDepthArray
 
+  // Typealias registry: maps alias names to their MLIR base type (b"i64", b"f64", etc.)
+  export var typealiases TypealiasMap
+
   // Top-level string constants (compile-time known, used for constant folding)
   export var stringConstNames ByteArrayArray
   export var stringConstValues ByteArrayArray
@@ -36,11 +39,12 @@ export type Project
 
 end 'Project'
 
+export typealias TypealiasMap = Map with(ByteArray, ByteArray)
 export typealias ProjectArray = Array with Project
 
 export function createProject(rootPath FilePath, isSingleFile bool, target Target) returns Project
   let emptyModuleMemo = MlirModuleMemo{value: MlirModule{functions: MlirFunctionArray{}}, computedAt: 0, verifiedAt: 0}
-  let emptyCodeMemo = CodeMemo{value: CodeResult{code: ByteArray{}, mainCallFixupOffset: 0, relocations: RelocationArray{}, globalData: createGlobalDataTable()}, computedAt: 0, verifiedAt: 0}
+  let emptyCodeMemo = CodeMemo{value: CodeResult{code: ByteArray{}, mainCallFixupOffset: 0, relocations: RelocationArray{}, globalData: createGlobalDataTable(), targetModule: MlirModule{functions: MlirFunctionArray{}}}, computedAt: 0, verifiedAt: 0}
   let db = QueryDatabase{
     currentRevision: 1,
     sourceFiles: SourceFileMap{},
@@ -66,6 +70,7 @@ export function createProject(rootPath FilePath, isSingleFile bool, target Targe
     parserVarIsFloat: BoolArray{},
     parserScopeStack: ScopeDepthArray{},
     parserNextSlot: 0,
+    typealiases: TypealiasMap{},
     stringConstNames: ByteArrayArray{},
     stringConstValues: ByteArrayArray{},
     rootPath: rootPath.toString(),
@@ -79,3 +84,9 @@ end 'createProject'
 export function hasErrors(project Project) returns bool
   return project.diagnostics.count() > 0
 end 'hasErrors'
+
+// Resolve a source-level type name to its MLIR base type.
+// Returns the original name if not a registered typealias.
+export function resolveTypeName(project Project, name ByteArray) returns ByteArray
+  return try project.typealiases.get(name) otherwise name
+end 'resolveTypeName'

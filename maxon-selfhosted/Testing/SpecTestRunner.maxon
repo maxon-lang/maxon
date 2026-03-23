@@ -121,7 +121,7 @@ export function runAllSpecTests(filter String, target Target, updateRequired boo
 
       totalTests = totalTests + 1
 
-      // Generate fragment
+      // Generate fragment (without IR initially, to parse expectations)
       writeFragment(fragmentDir, specName: specName, test: test, compileIr: "")
       totalFragmentsWritten = totalFragmentsWritten + 1
 
@@ -137,6 +137,11 @@ export function runAllSpecTests(filter String, target Target, updateRequired boo
 
       // Step 3: Run the test from fragment
       let result = runTestFromFragment(fragment, projectRoot: root, target: target, captureTrace: updateRequired)
+
+      // Re-write fragment with compiled IR
+      if not result.compileIr.isEmpty() 'hasIr'
+        writeFragment(fragmentDir, specName: specName, test: test, compileIr: result.compileIr)
+      end 'hasIr'
       if result.passed 'pass'
         specPassed = specPassed + 1
       end 'pass' else 'fail'
@@ -198,7 +203,7 @@ function runTestFromFragment(fragment Fragment, projectRoot FilePath, target Tar
 
   // Write source from fragment to temp file
   try File.writeText(tempSource, content: fragment.source) otherwise 'writeErr'
-    return TestResult{testName: testName, passed: false, errorMessage: "Could not write temp file", filePath: fragment.filePath, loweringLog: ""}
+    return TestResult{testName: testName, passed: false, errorMessage: "Could not write temp file", filePath: fragment.filePath, loweringLog: "", compileIr: ""}
   end 'writeErr'
 
   // Enable trace capture for RequiredLowering validation or --update-required
@@ -210,7 +215,7 @@ function runTestFromFragment(fragment Fragment, projectRoot FilePath, target Tar
 
   // Compile using the self-hosted compiler, capturing any error output
   startCapturingErrors()
-  let outputPath = try compile(tempSource, target: target) otherwise 'compileFailed'
+  let compileResult = try compileWithIr(tempSource, target: target) otherwise 'compileFailed'
     let capturedErrors = stopCapturingErrors()
     if needTrace 'cancelTrace'
       cancelCapturingTrace()
@@ -223,16 +228,18 @@ function runTestFromFragment(fragment Fragment, projectRoot FilePath, target Tar
       let actualStderr = normalizeStderr(capturedErrors)
       if actualStderr != expectedStderr 'stderrMismatch'
         cleanup(tempSource, tempExe: tempExe)
-        return TestResult{testName: testName, passed: false, errorMessage: "Stderr mismatch.\nExpected:\n  {expectedStderr}\nActual:\n  {actualStderr}", filePath: fragment.filePath, loweringLog: ""}
+        return TestResult{testName: testName, passed: false, errorMessage: "Stderr mismatch.\nExpected:\n  {expectedStderr}\nActual:\n  {actualStderr}", filePath: fragment.filePath, loweringLog: "", compileIr: ""}
       end 'stderrMismatch'
       cleanup(tempSource, tempExe: tempExe)
-      return TestResult{testName: testName, passed: true, errorMessage: "", filePath: fragment.filePath, loweringLog: ""}
+      return TestResult{testName: testName, passed: true, errorMessage: "", filePath: fragment.filePath, loweringLog: "", compileIr: ""}
     end 'expectedError'
 
     cleanup(tempSource, tempExe: tempExe)
-    return TestResult{testName: testName, passed: false, errorMessage: "Compilation failed: {capturedErrors}", filePath: fragment.filePath, loweringLog: ""}
+    return TestResult{testName: testName, passed: false, errorMessage: "Compilation failed: {capturedErrors}", filePath: fragment.filePath, loweringLog: "", compileIr: ""}
   end 'compileFailed'
   cancelCapturingErrors()
+  let outputPath = compileResult.outputPath
+  let compileIr = compileResult.ir
 
   // Capture lowering log if needed
   var loweringLog = ""
@@ -243,13 +250,13 @@ function runTestFromFragment(fragment Fragment, projectRoot FilePath, target Tar
 
   if fragment.expectation.hasCompilerStderr 'unexpectedSuccess'
     cleanup(tempSource, tempExe: tempExe)
-    return TestResult{testName: testName, passed: false, errorMessage: "Expected compilation error but compilation succeeded", filePath: fragment.filePath, loweringLog: ""}
+    return TestResult{testName: testName, passed: false, errorMessage: "Expected compilation error but compilation succeeded", filePath: fragment.filePath, loweringLog: "", compileIr: ""}
   end 'unexpectedSuccess'
 
   // For targets we can't execute, compilation success is the test
   if not canExecuteTarget(target) 'compileOnly'
     cleanup(tempSource, tempExe: tempExe)
-    return TestResult{testName: testName, passed: true, errorMessage: "", filePath: fragment.filePath, loweringLog: ""}
+    return TestResult{testName: testName, passed: true, errorMessage: "", filePath: fragment.filePath, loweringLog: "", compileIr: ""}
   end 'compileOnly'
 
   // Run the compiled executable
@@ -327,7 +334,7 @@ function runTestFromFragment(fragment Fragment, projectRoot FilePath, target Tar
   end 'didPass'
 
   cleanup(tempSource, tempExe: tempExe)
-  return TestResult{testName: testName, passed: passed, errorMessage: errorMsg, filePath: fragment.filePath, loweringLog: loweringLog}
+  return TestResult{testName: testName, passed: passed, errorMessage: errorMsg, filePath: fragment.filePath, loweringLog: loweringLog, compileIr: compileIr}
 end 'runTestFromFragment'
 
 // Normalize stderr for comparison: trim, CRLF→LF, backslash→forward slash,
@@ -643,30 +650,6 @@ function updateLoweringBlock(specContent String, testName String, targetKey Stri
     return result
   end 'replaceExisting'
 
-  // No existing block — find the last ``` in this test's range to insert after
-  var lastClosingBacktick = -1
-  for i in(testLine + 1) upto nextTestLine 'findInsertPt'
-    let line = try lines.get(i) otherwise 'skip'
-      continue
-    end 'skip'
-    let trimmed = trimWhitespace(line)
-    if trimmed == "```" 'isClose'
-      lastClosingBacktick = i
-    end 'isClose'
-  end 'findInsertPt'
-
-  if lastClosingBacktick < 0 'noInsertPt'
-    return specContent
-  end 'noInsertPt'
-
-  // Insert new block after lastClosingBacktick
-  var result = ""
-  for i in 0 upto lineCount 'rebuild2'
-    let line = try lines.get(i) otherwise ""
-    result = "{result}{line}\n"
-    if i == lastClosingBacktick 'insertAfter'
-      result = "{result}{blockHeader}\n{loweringLog}\n```\n"
-    end 'insertAfter'
-  end 'rebuild2'
-  return result
+  // No existing block — do not insert one. --update-required only updates existing blocks.
+  return specContent
 end 'updateLoweringBlock'

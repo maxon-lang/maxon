@@ -52,7 +52,7 @@ end 'findRuntimePath'
 // Prepends runtime functions from runtime.mid to a user module.
 // Runtime functions are expressed as mid-level IR (arith/cf/func/memref/sys ops)
 // and will be lowered by the target backends just like user functions.
-function augmentWithRuntime(module MlirModule) returns MlirModule
+export function augmentWithRuntime(module MlirModule) returns MlirModule
   let runtimeFuncs = loadRuntimeFunctions()
   var augmented = createMlirModule()
   for rtFunc in runtimeFuncs 'prependRt'
@@ -67,13 +67,25 @@ end 'augmentWithRuntime'
 export function emitBackend(module MlirModule, target Target, globalData GlobalDataTable) returns CodeResult throws CompileError
   let augmentedModule = augmentWithRuntime(module)
 
-  var result = CodeResult{code: ByteArray{}, mainCallFixupOffset: 0, relocations: RelocationArray{}, globalData: globalData}
-  match target.cpu 'cpu'
-    x86_64 then result = emitX86(lowerMidToMaxX64(augmentedModule, target: target), target: target, globalData: globalData)
-    aarch64 then result = emitMaxArm64(lowerMidToMaxArm64(augmentedModule, target: target), target: target, globalData: globalData)
-  end 'cpu'
+  let targetModule = lowerToTarget(augmentedModule, target: target)
+  var result = emitTargetCode(targetModule, target: target, globalData: globalData)
+  result.targetModule = targetModule
   return result
 end 'emitBackend'
+
+function lowerToTarget(module MlirModule, target Target) returns MlirModule
+  return match target.cpu 'cpu'
+    x86_64 gives lowerMidToMaxX64(module, target: target)
+    aarch64 gives lowerMidToMaxArm64(module, target: target)
+  end 'cpu'
+end 'lowerToTarget'
+
+function emitTargetCode(module MlirModule, target Target, globalData GlobalDataTable) returns CodeResult
+  return match target.cpu 'cpu'
+    x86_64 gives emitX86(module, target: target, globalData: globalData)
+    aarch64 gives emitMaxArm64(module, target: target, globalData: globalData)
+  end 'cpu'
+end 'emitTargetCode'
 
 export function writeExecutable(outputPath FilePath, codeResult CodeResult, target Target)
   match target.os 'os'

@@ -201,10 +201,13 @@ export function queryAllMid(project Project) returns MlirModule throws CompileEr
     throw CompileError.compileError
   end 'semanticErrors'
 
+  // Eliminate unreachable functions (e.g. unused stdlib)
+  let liveModule = eliminateDeadFunctions(module)
+
   // Reset global data table for fresh lowering
   project.globalData = createGlobalDataTable()
   let valueIdRef = createValueIdRef(getNextValueId(project))
-  let result = lowerMaxHLToMid(module, globalData: project.globalData, nextValueIdRef: valueIdRef)
+  let result = lowerMaxHLToMid(liveModule, project: project, globalData: project.globalData, nextValueIdRef: valueIdRef)
   // Update the project's value ID counter past any IDs allocated during lowering
   setNextValueId(project, id: valueIdRef.nextId)
 

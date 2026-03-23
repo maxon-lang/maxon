@@ -4,6 +4,20 @@ export function compile(path FilePath, target Target) returns FilePath throws Co
   return try compileProject(project)
 end 'compile'
 
+// Compiles and also returns the final target-level MLIR text (for test fragments).
+export function compileWithIr(path FilePath, target Target) returns CompileWithIrResult throws CompileError
+  let project = createProject(path, isSingleFile: false, target: target)
+  let outputPath = try compileProject(project)
+  let targetModule = project.db.codeCache.value.targetModule
+  let ir = moduleToString(targetModule, skipStdlib: true)
+  return CompileWithIrResult{outputPath: outputPath, ir: ir}
+end 'compileWithIr'
+
+export type CompileWithIrResult
+  export var outputPath FilePath
+  export var ir String
+end 'CompileWithIrResult'
+
 // Compiles a project and returns the output executable path.
 export function compileProject(project Project) returns FilePath throws CompileError
   logInfo(LogCategory.compiler, message: () gives "Starting incremental compilation")
