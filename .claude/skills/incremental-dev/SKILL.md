@@ -9,7 +9,7 @@ By default spec tests will only show the name of failing tests, but you can use 
 
 ## Steps
 
-0. Read `docs/WRITING_MAXON_CODE.md` for Maxon syntax, common mistakes, and how to compile/test.
+0. Run the `maxon-coder` skill to load Maxon syntax rules before writing any Maxon code.
 1. Run the spec tests: `bin/maxon.exe spec-test`
 2. Ensure the currently enabled tests pass. If not fix them.
 3. Find the next disabled test in this spec file (labeled with 'disabled-test') and enable it by removing 'disabled-'.

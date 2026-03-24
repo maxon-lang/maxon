@@ -7,7 +7,7 @@ Run the spec tests and fix any failures by modifying the compiler code.
 By default spec tests will only show the name of failing tests, but you can use `--verbose` to show detailed failure messages for failing tests which can help with debugging. Use --filter when working on a specific failing test.
 
 ## Steps
-0. Read `docs/WRITING_MAXON_CODE.md` for Maxon syntax, common mistakes, and how to compile/test.
+0. Run the `maxon-coder` skill to load Maxon syntax rules before writing any Maxon code.
 1. Run the spec tests: `./maxon-selfhosted/main.exe spec-test`
 2. Analyze the output to identify which tests are failing and why.
 3. Fix the compiler code in `maxon-selfhosted/` to make the failing tests pass. If new features need to be implemented you

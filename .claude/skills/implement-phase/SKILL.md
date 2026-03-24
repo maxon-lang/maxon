@@ -9,7 +9,7 @@ By default spec tests will only show the name of failing tests, but you can use 
 
 ## Steps
 
-0. Read `docs/WRITING_MAXON_CODE.md` for Maxon syntax, common mistakes, and how to compile/test.
+0. Run the `maxon-coder` skill to load Maxon syntax rules before writing any Maxon code.
 1. Add the spec files specified in the ROADMAP.md for this phase to the whitelist in runAllSpecTests.
 2. Run the spec tests: `main.exe spec-test`
 3. Read maxon-selfhosted\ARCHITECTURE.md for an overview of the compiler architecture and how to navigate the codebase. This will help you understand where to find the relevant code for the phase you are implementing.

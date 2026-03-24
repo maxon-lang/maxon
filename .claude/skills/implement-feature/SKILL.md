@@ -13,7 +13,7 @@ By default spec tests will only show the name of failing tests, but you can use 
 
 ### Phase 1: Research & Design
 
-1. Read `docs/WRITING_MAXON_CODE.md` for a quick overview of Maxon syntax, common mistakes, and how to compile/test. Refer to `docs/LANGUAGE_REFERENCE.md` and `docs/QUICK_REFERENCE.md` for full details.
+1. Run the `maxon-coder` skill to load Maxon syntax rules. Refer to `docs/LANGUAGE_REFERENCE.md` and `docs/QUICK_REFERENCE.md` for full details.
 2. Read `docs/SPECS.md` to understand the spec file format.
 3. Look at existing spec files in `specs/` for similar features to use as reference.
 4. Explore the compiler code in `maxon-sharp/Compiler/` to understand how similar features are implemented across the pipeline stages (parsing, AST-to-Maxon, Maxon-to-Standard, Standard-to-X86, code emission).
