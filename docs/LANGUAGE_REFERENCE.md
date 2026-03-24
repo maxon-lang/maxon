@@ -3379,6 +3379,33 @@ The `String` type provides methods for removing characters from the start and en
 
 The no-argument convenience methods are equivalent to calling the `CharacterSet` variants with `CharacterSet.whitespacesAndNewlines()`.
 
+### String Append
+
+`String.append` grows a string's buffer in place, avoiding the allocation of a new string. When called with an interpolated string argument, the interpolation parts are written directly into the buffer without materializing a temporary string. Uses a 2x growth strategy for amortized O(1) append.
+
+```maxon
+var s = "Hello"
+s.append(" World")       // s is now "Hello World"
+
+var name = "World"
+s.append(" {name}!")      // interpolation written directly into buffer
+```
+
+The compiler also automatically optimizes the pattern `s = "{s}..."` into an in-place append when it detects the string being reassigned to itself with additional content. This means loops like:
+
+```maxon
+var s = ""
+while condition 'loop'
+  s = "{s}{value},"     // automatically optimized to in-place append
+end 'loop'
+```
+
+are efficient without requiring explicit `append` calls.
+
+| Method | Description |
+|--------|-------------|
+| `append(other String)` | Append another string's content in place |
+
 ### List
 
 `List` is a generic doubly linked list backed by `__ManagedList` (a builtin compiler-synthesized type, like `Array` and `String`) for efficient node management with automatic memory cleanup. It provides O(1) insertion and removal at both ends, and O(n) indexed access.

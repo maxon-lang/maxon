@@ -26,6 +26,12 @@ end 'ProcessResult'
 
 /// Execute external processes and capture their output
 export type Process
+  /// Returns monotonic time in milliseconds (time since boot).
+  /// Useful for measuring elapsed time between two calls.
+  export static function currentTimeMs() returns Duration
+    return __Builtins.currentTimeMs()
+  end 'currentTimeMs'
+
   /// Execute a command and return exit code.
   /// Currently does not capture stdout/stderr.
   /// @param command The command to execute (will be passed to cmd.exe on Windows)
@@ -72,4 +78,21 @@ export type Process
     __Builtins.processCloseCapture(capturePtr)
     return ec
   end 'captureWait'
+
+  /// Run a command, wait for it to finish, then read stdout/stderr.
+  /// Avoids pipe deadlocks by waiting for exit before reading output.
+  export static function captureOutput(command String, timeoutMs Duration) returns ProcessResult
+    let cap = captureStart(command)
+    let hProcess = __Builtins.processGetHandle(cap)
+    let waitResult = __Builtins.processWait(hProcess, timeoutMs)
+    if waitResult != 0 'timedOut'
+      __Builtins.processCloseCapture(cap)
+      return ProcessResult{exitCode: 0 as ExitCode, stdout: "", stderr: "Process timed out"}
+    end 'timedOut'
+    let ec = __Builtins.processGetExitCode(hProcess)
+    let out = captureStdout(cap)
+    let err = captureStderr(cap)
+    __Builtins.processCloseCapture(cap)
+    return ProcessResult{exitCode: ec as ExitCode, stdout: out, stderr: err}
+  end 'captureOutput'
 end 'Process'

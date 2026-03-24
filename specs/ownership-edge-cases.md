@@ -775,9 +775,6 @@ mm_alloc Node #4 size=8 [main]
   sl_alloc Node #4 size=40 class=4
 mm_incref Node #4 rc=1 [main]
 mm_incref Node #4 rc=2 [NodeArray.push]
-mm_incref Node #4 rc=3 [NodeArray.remove]
-mm_transfer Node #4 rc=3 [NodeArray.remove]
-mm_decref Node #4 rc=2 [NodeArray.remove]
 mm_incref Node #4 rc=3 [main]
 mm_decref Node #4 rc=2 [main]
 mm_decref Node #4 rc=1 [main]
@@ -1097,33 +1094,18 @@ mm_realloc __ManagedMemory_Entry #1 size=64
     sl_free size=32 class=3
 mm_incref Entry #7 rc=2 [EntryArray.push]
 mm_decref Entry #7 rc=1 [main]
-mm_incref Entry #3 rc=2 [EntryArray.remove]
-mm_transfer Entry #3 rc=2 [EntryArray.remove]
-mm_decref Entry #3 rc=1 [EntryArray.remove]
 mm_decref Entry #3 rc=0 [main]
   mm_free Entry #3
     sl_free Entry #3 size=48 class=4
-mm_incref Entry #4 rc=2 [EntryArray.remove]
-mm_transfer Entry #4 rc=2 [EntryArray.remove]
-mm_decref Entry #4 rc=1 [EntryArray.remove]
 mm_decref Entry #4 rc=0 [main]
   mm_free Entry #4
     sl_free Entry #4 size=48 class=4
-mm_incref Entry #5 rc=2 [EntryArray.remove]
-mm_transfer Entry #5 rc=2 [EntryArray.remove]
-mm_decref Entry #5 rc=1 [EntryArray.remove]
 mm_decref Entry #5 rc=0 [main]
   mm_free Entry #5
     sl_free Entry #5 size=48 class=4
-mm_incref Entry #6 rc=2 [EntryArray.remove]
-mm_transfer Entry #6 rc=2 [EntryArray.remove]
-mm_decref Entry #6 rc=1 [EntryArray.remove]
 mm_decref Entry #6 rc=0 [main]
   mm_free Entry #6
     sl_free Entry #6 size=48 class=4
-mm_incref Entry #7 rc=2 [EntryArray.remove]
-mm_transfer Entry #7 rc=2 [EntryArray.remove]
-mm_decref Entry #7 rc=1 [EntryArray.remove]
 mm_decref Entry #7 rc=0 [main]
   mm_free Entry #7
     sl_free Entry #7 size=48 class=4
@@ -1279,9 +1261,6 @@ mm_alloc Val #5 size=8 [main]
   sl_alloc Val #5 size=40 class=4
 mm_incref Val #5 rc=1 [main]
 mm_incref Val #5 rc=2 [ValArray.push]
-mm_incref Val #4 rc=3 [ValArray.remove]
-mm_transfer Val #4 rc=3 [ValArray.remove]
-mm_decref Val #4 rc=2 [ValArray.remove]
 mm_incref Val #4 rc=3 [main]
 mm_decref Val #4 rc=2 [main]
 mm_decref Val #4 rc=1 [main]

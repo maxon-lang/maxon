@@ -5293,6 +5293,23 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
               methodToken.Line, methodToken.Column);
           }
 
+          // Optimized String.append: builds directly into target buffer
+          if (structTypeName == "String" && methodFieldName == "append") {
+            Advance(); // consume variable name
+            Advance(); // consume '.'
+            Advance(); // consume 'append'
+            Advance(); // consume '('
+            MaxonValue structVal = resolved switch {
+              ResolvedVar.Local(var info) => info.Value,
+              ResolvedVar.Global(var info) => EmitGlobalLoad(nameToken.Value, info).Value,
+              _ => throw new InvalidOperationException()
+            };
+            TrySkipArgLabel();
+            EmitStringAppendBuiltin(structVal, nameToken.Value);
+            Expect(TokenType.RightParen);
+            return;
+          }
+
           var instanceMethodName = $"{structTypeName}.{methodFieldName}";
           var resolvedName = ResolveMethodName(instanceMethodName);
           if (resolvedName != null) {
@@ -5475,6 +5492,15 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
           throw new CompileError(ErrorCode.ParserExpectedExpression,
             $"Unknown method '{fieldToken.Value}' on builtin type '{baseNestedType}'",
             fieldToken.Line, fieldToken.Column);
+        }
+
+        // Optimized String.append: builds directly into target buffer
+        if (currentStructTypeName == "String" && fieldToken.Value == "append") {
+          Advance(); // consume '('
+          TrySkipArgLabel();
+          EmitStringAppendBuiltin(currentValue, nameToken.Value);
+          Expect(TokenType.RightParen);
+          return;
         }
 
         // This is the method call at the end of the chain
@@ -6658,6 +6684,10 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
     ["sleep"] = RuntimeCallIntrinsic(
       "Suspends the current green thread for the given milliseconds.\n\n`__Builtins.sleep(ms)`",
       "maxon_sleep", 1, false),
+    // === Time intrinsics ===
+    ["currentTimeMs"] = RuntimeCallIntrinsic(
+      "Returns monotonic time in milliseconds.\n\n`__Builtins.currentTimeMs() returns int`",
+      "maxon_current_time_ms", 0, true),
     // === Primitive type intrinsics ===
     ["floatToBits"] = new(
       "Reinterprets a float's IEEE 754 bit pattern as an integer (bitcast).\n\n`__Builtins.floatToBits(value) returns int`",
@@ -11055,6 +11085,58 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
         "No type implements BuiltinStringLiteral (String type not found in stdlib)",
         token.Line, token.Column);
 
+    var parts = ParseStringInterpParts(token, stringTypeName);
+
+    // If no expression parts, emit a regular string literal with escaped content
+    if (parts.All(p => p.IsLiteral)) {
+      var fullText = string.Concat(parts.Where(p => p.IsLiteral).Select(p => p.LiteralValue));
+      var op = new MaxonStringLiteralOp(fullText, stringTypeName);
+      _currentBlock!.AddOp(op);
+      return op.Result;
+    }
+
+    var interpOp = new MaxonStringInterpOp(parts, stringTypeName);
+    _currentBlock!.AddOp(interpOp);
+    return interpOp.Result;
+  }
+
+  /// <summary>
+  /// Emits an optimized String.append operation. If the argument is an interpolated string,
+  /// extracts the parts and emits MaxonStringAppendInterpOp to write them directly into the
+  /// target buffer. Otherwise emits MaxonStringAppendOp for a plain string argument.
+  /// </summary>
+  private void EmitStringAppendBuiltin(MaxonValue selfValue, string selfVarName) {
+    var stringTypeName = FindTypeImplementingInterface("BuiltinStringLiteral") ?? "String";
+
+    if (Check(TokenType.StringInterp)) {
+      // Interpolated string argument: extract parts and emit append-interp op
+      var token = Advance();
+      var parts = ParseStringInterpParts(token, stringTypeName);
+      var appendOp = new MaxonStringAppendInterpOp(selfValue, parts) { SelfVarName = selfVarName };
+      _currentBlock!.AddOp(appendOp);
+    } else if (Check(TokenType.StringLiteral)) {
+      // String literal: emit as a single-part append-interp
+      var token = Advance();
+      var literalText = StringUtils.ResolveEscapes(token.Value);
+      var parts = new List<(bool IsLiteral, string? LiteralValue, MaxonValue? ExprValue, string? FormatSpec, MlirType? OptimalType)> {
+        (true, literalText, null, null, null)
+      };
+      var appendOp = new MaxonStringAppendInterpOp(selfValue, parts) { SelfVarName = selfVarName };
+      _currentBlock!.AddOp(appendOp);
+    } else {
+      // Expression argument (variable, function call, etc.): emit append op
+      var argExpr = ParseExpression();
+      var argValue = ResolveExprValue(argExpr);
+      var appendOp = new MaxonStringAppendOp(selfValue, argValue) { SelfVarName = selfVarName };
+      _currentBlock!.AddOp(appendOp);
+    }
+  }
+
+  /// <summary>
+  /// Parses string interpolation parts from a StringInterp token. Shared between
+  /// EmitStringLiteralWithInterpolation and EmitStringAppendBuiltin.
+  /// </summary>
+  private List<(bool IsLiteral, string? LiteralValue, MaxonValue? ExprValue, string? FormatSpec, MlirType? OptimalType)> ParseStringInterpParts(Token token, string stringTypeName) {
     var parts = new List<(bool IsLiteral, string? LiteralValue, MaxonValue? ExprValue, string? FormatSpec, MlirType? OptimalType)>();
     var text = token.Value;
     var pos = 0;
@@ -11075,7 +11157,6 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
           }
           pos += 4;
         } else if (nextChar == 'u') {
-          // \uXXXX unicode escape — exactly 4 hex digits
           var escLen = Math.Min(6, text.Length - pos);
           var escSeq = text.Substring(pos, escLen);
           try { literalBuf.Append(StringUtils.ResolveEscapes(escSeq)); } catch (InvalidEscapeException ex) {
@@ -11095,7 +11176,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
           parts.Add((true, literalBuf.ToString(), null, null, (MlirType?)null));
           literalBuf.Clear();
         }
-        pos++; // skip '{'
+        pos++;
         var exprStart = pos;
         var braceDepth = 1;
         while (pos < text.Length && braceDepth > 0) {
@@ -11104,10 +11185,8 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
           if (braceDepth > 0) pos++;
         }
         var exprText = text[exprStart..pos];
-        if (pos < text.Length) pos++; // skip closing '}'
+        if (pos < text.Length) pos++;
 
-        // Split on ':' for format specifier (e.g., {value:verbose}), but only if the
-        // colon is not inside parentheses (which would be a named arg in a function call).
         string? formatSpec = null;
         int parenDepth = 0;
         int colonIdx = -1;
@@ -11124,16 +11203,14 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
         var (exprValue, _exprKind) = ParseInterpolationExpressionWithKind(exprText, token.Line, token.Column + 1 + exprStart);
         var exprOptimalType = GetOptimalType(exprValue);
 
-        // Non-String structs need a toString call — emit it here as a regular MaxonCallOp
-        // so DCE sees it naturally, just like any other function call
+        // Non-String structs need a toString call
         if (exprValue is MaxonStruct structVal && structVal.TypeName != stringTypeName) {
           var overloads = ResolveFunctionOverloads($"{structVal.TypeName}.toString");
           if (overloads.Count == 0)
             throw new CompileError(ErrorCode.SemanticPartialInterfaceImpl,
-              $"Type '{structVal.TypeName}' used in string interpolation must have a toString method",
-              token.Line, token.Column);
+                $"Type '{structVal.TypeName}' used in string interpolation must have a toString method",
+                token.Line, token.Column);
 
-          // With format spec: prefer overload with 2 params (self + format), fall back to 1 param
           var toStringFunc = formatSpec != null
             ? overloads.FirstOrDefault(f => f.ParamTypes.Count == 2) ?? overloads.First(f => f.ParamTypes.Count == 1)
             : overloads.First(f => f.ParamTypes.Count == 1);
@@ -11143,7 +11220,6 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
             var fmtLiteral = new MaxonStringLiteralOp(formatSpec, stringTypeName);
             _currentBlock!.AddOp(fmtLiteral);
             callArgs.Add(fmtLiteral.Result);
-            // Track the format string for cleanup
             var fmtTempName = $"__interp_fmt_{fmtLiteral.Result.Id}";
             _currentBlock!.AddOp(new MaxonAssignOp(fmtTempName, fmtLiteral.Result, true, false, MaxonValueKind.Struct));
             _variables.Declare(fmtTempName, MaxonValueKind.Struct, false, fmtLiteral.Result, _currentBlock!, OwnershipFlags.IsTemp, structTypeName: stringTypeName);
@@ -11154,7 +11230,6 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
           var callOp = new MaxonCallOp(toStringFunc.Name, callArgs, resultKind, resultStructTypeName);
           _currentBlock!.AddOp(callOp);
 
-          // Assign to temp variable so refcounting tracks the return value
           var tempName = $"__interp_tostr_{callOp.Result!.Id}";
           var assignOp = new MaxonAssignOp(tempName, callOp.Result, true, false, resultKind ?? MaxonValueKind.Struct);
           _currentBlock!.AddOp(assignOp);
@@ -11173,17 +11248,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
       parts.Add((true, literalBuf.ToString(), null, null, (MlirType?)null));
     }
 
-    // If no expression parts, emit a regular string literal with escaped content
-    if (parts.All(p => p.IsLiteral)) {
-      var fullText = string.Concat(parts.Where(p => p.IsLiteral).Select(p => p.LiteralValue));
-      var op = new MaxonStringLiteralOp(fullText, stringTypeName);
-      _currentBlock!.AddOp(op);
-      return op.Result;
-    }
-
-    var interpOp = new MaxonStringInterpOp(parts, stringTypeName);
-    _currentBlock!.AddOp(interpOp);
-    return interpOp.Result;
+    return parts;
   }
 
   /// Returns the resolved value and its value kind (needed to distinguish signed vs unsigned in interpolation).

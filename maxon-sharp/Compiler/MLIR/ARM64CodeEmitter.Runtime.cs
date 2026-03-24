@@ -189,6 +189,8 @@ public partial class ARM64CodeEmitter {
     rawRt.EmitMmRawAlloc(Compiler.MmTrace);
     rawRt.EmitMmRawRealloc(Compiler.MmTrace);
     rawRt.EmitMmRawFree(Compiler.MmTrace);
+    rawRt.EmitStringEnsureCap(Compiler.MmTrace);
+    rawRt.EmitCurrentTimeMs();
     EmitMaxonFileSize();
     EmitMaxonFileRead();
     EmitMaxonFileClose();

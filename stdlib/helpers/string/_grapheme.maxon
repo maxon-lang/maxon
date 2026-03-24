@@ -9,10 +9,26 @@ typealias BreakProperty = int(0 to 20)
 // ============================================
 
 // findGraphemeEndManagedRange - Find end of grapheme cluster in range
-function findGraphemeEndManagedRange(managed __ManagedMemory, offset Index, startPos Index, len Count) returns Index
+export function findGraphemeEndManagedRange(managed __ManagedMemory, offset Index, startPos Index, len Count) returns Index
   if startPos >= len 'atEnd'
     return startPos
   end 'atEnd'
+
+  // Fast path: ASCII bytes (< 0x80) are single-byte graphemes,
+  // except CR (0x0D) which may combine with LF (0x0A) per UAX #29 GB3.
+  let firstByte = managed.byteAt(offset + startPos)
+  if firstByte < 128 'isAscii'
+    if firstByte == 13 'isCR'
+      // Check if next byte is LF — if so, fall through to full algorithm
+      if startPos + 1 < len 'hasNext'
+        let nextByte = managed.byteAt(offset + startPos + 1)
+        if nextByte == 10 'isCRLF'
+          return startPos + 2
+        end 'isCRLF'
+      end 'hasNext'
+    end 'isCR'
+    return startPos + 1
+  end 'isAscii'
 
   // Decode first codepoint at startPos (with offset)
   var pos = startPos
@@ -48,11 +64,6 @@ function findGraphemeEndManagedRange(managed __ManagedMemory, offset Index, star
   return pos
 end 'findGraphemeEndManagedRange'
 
-/// Find the end of the grapheme cluster in a __ManagedMemory starting at startPos
-/// Returns the byte offset of the end of the grapheme cluster
-export function findGraphemeEndManaged(managed __ManagedMemory, startPos Index, len Count) returns Index
-  return findGraphemeEndManagedRange(managed, offset: 0, startPos: startPos, len: len)
-end 'findGraphemeEndManaged'
 
 // ============================================
 // Count grapheme helpers

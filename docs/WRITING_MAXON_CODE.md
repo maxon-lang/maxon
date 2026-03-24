@@ -220,6 +220,13 @@ print("{f:.2}")     // 2 decimal places
 
 Escape literal braces: `\{` and `\}`.
 
+To build a string incrementally, use `append`:
+```maxon
+var s = ""
+s.append("hello")
+s.append(" {name}!")    // interpolation written directly into buffer
+```
+
 ### 15. Comments use `//`
 
 ```maxon

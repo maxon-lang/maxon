@@ -63,6 +63,14 @@ function buildRunCommand(outputPath FilePath, target Target, projectRoot FilePat
   return dockerCmd
 end 'buildRunCommand'
 
+// Check if a fragment file needs regeneration (missing or older than spec file).
+function isFragmentStale(fragmentPath FilePath, specModifiedTime Timestamp) returns bool
+  let fragInfo = try File.info(fragmentPath) otherwise 'noFile'
+    return true
+  end 'noFile'
+  return fragInfo.modifiedTime <= specModifiedTime
+end 'isFragmentStale'
+
 // Run all whitelisted spec tests for a specific target.
 export function runAllSpecTests(filter String, target Target, updateRequired bool = false) returns ExitCode
   let root = try findProjectRoot() otherwise 'noRoot'
@@ -105,6 +113,12 @@ export function runAllSpecTests(filter String, target Target, updateRequired boo
     // Parse all tests from the spec
     let tests = parseSpecFile(content, targetKey: targetKey)
 
+    // Cache spec modification time for staleness checks
+    let specFileInfo = try File.info(specPath) otherwise 'noSpecInfo'
+      continue
+    end 'noSpecInfo'
+    let specMtime = specFileInfo.modifiedTime
+
     var specPassed = 0
     var specFailed = 0
     var specFailures = TextLineArray{}
@@ -121,9 +135,12 @@ export function runAllSpecTests(filter String, target Target, updateRequired boo
 
       totalTests = totalTests + 1
 
-      // Generate fragment
+      // Generate fragment only if stale (missing or older than spec file)
       let fragPath = fragmentDir.join(specName).join("{test.name}.test")
-      writeFragment(fragmentDir, specName: specName, test: test, compileIr: "")
+      if isFragmentStale(fragPath, specModifiedTime: specMtime) 'stale'
+        writeFragment(fragmentDir, specName: specName, test: test, compileIr: "")
+        totalFragmentsWritten = totalFragmentsWritten + 1
+      end 'stale'
 
       // Step 2: Parse the fragment back
       let fragment = try parseFragment(fragPath) otherwise 'parseFailed'
@@ -255,10 +272,10 @@ function runTestFromFragment(fragment Fragment, projectRoot FilePath, target Tar
 
   // Run the compiled executable
   let runCommand = buildRunCommand(outputPath, target: target, projectRoot: projectRoot, testArgs: fragment.args)
-  let runCap = Process.captureStart(runCommand)
-  let runStdout = Process.captureStdout(runCap)
-  let runStderr = Process.captureStderr(runCap)
-  let runEc = Process.captureWait(runCap, timeoutMs: 5000)
+  let runResult = Process.captureOutput(runCommand, timeoutMs: 5000)
+  let runStdout = runResult.stdout
+  let runStderr = runResult.stderr
+  let runEc = runResult.exitCode as Offset
 
   var passed = true
   var errorMsg = ""

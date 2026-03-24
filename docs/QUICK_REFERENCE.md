@@ -613,7 +613,7 @@ arr.last()                             // last element (throws)
 
 ## Strings
 
-There is no string concatenation, only interpolation.
+There is no string concatenation operator. Use interpolation to build strings, or `append` to grow a string in place.
 
 ```maxon
 s.count()                              // grapheme count
@@ -632,6 +632,10 @@ s.replace("old", "new")
 s.replaceFirst("old", "new")
 s.split(",")                           // split by delimiter
 s.slice(startIdx, endIndex: endIdx)
+
+// In-place mutation
+s.append("suffix")                       // grow buffer, append literal
+s.append("{x} more")                     // append interpolation directly into buffer
 
 // Trimming
 s.trim()                                     // remove whitespace from both ends

@@ -1007,6 +1007,27 @@ public class MaxonStringInterpOp(List<(bool IsLiteral, string? LiteralValue, Max
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
 }
 
+// Append another String's bytes into self's buffer (grow if needed, in-place mutation)
+public class MaxonStringAppendOp(MaxonValue self, MaxonValue other) : MaxonOp {
+  public override string Mnemonic => "maxon.string_append";
+  public MaxonValue Self { get; } = self;
+  public MaxonValue Other { get; } = other;
+  /// The variable name of self, so the lowering can update it in-place
+  public string SelfVarName { get; init; } = "";
+  public override IReadOnlyList<string> PrintableOperands => [Self.ToString(), Other.ToString()];
+}
+
+// Append interpolated parts directly into self's String buffer (grow if needed, in-place mutation)
+// Parts are NOT materialized as a separate String — they are written directly into the target buffer
+public class MaxonStringAppendInterpOp(MaxonValue self, List<(bool IsLiteral, string? LiteralValue, MaxonValue? ExprValue, string? FormatSpec, MlirType? OptimalType)> parts) : MaxonOp {
+  public override string Mnemonic => "maxon.string_append_interp";
+  public MaxonValue Self { get; } = self;
+  public List<(bool IsLiteral, string? LiteralValue, MaxonValue? ExprValue, string? FormatSpec, MlirType? OptimalType)> Parts { get; } = parts;
+  /// The variable name of self, so the lowering can update it in-place
+  public string SelfVarName { get; init; } = "";
+  public override IReadOnlyList<string> PrintableOperands => [Self.ToString()];
+}
+
 // Create a slice of a __ManagedMemory buffer (start/end byte positions)
 public class MaxonManagedMemSliceOp(MaxonValue managed, MaxonValue start, MaxonValue end) : MaxonOp {
   public override string Mnemonic => "maxon.managed_mem_slice";

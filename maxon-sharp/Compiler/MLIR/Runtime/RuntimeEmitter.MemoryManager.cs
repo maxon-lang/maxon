@@ -826,6 +826,70 @@ public partial class RuntimeEmitter {
   }
 
   // =========================================================================
+  // maxon_string_ensure_cap(buffer, length, capacity, requiredCap) -> buffer
+  //
+  // Ensures a string's backing buffer has at least requiredCap bytes of capacity.
+  // Three cases:
+  //   1. capacity >= requiredCap: return buffer as-is (no-op)
+  //   2. capacity == 0 (rdata/literal): alloc requiredCap bytes, copy length bytes from old buffer
+  //   3. capacity < requiredCap (heap): realloc via mm_raw_alloc + memcpy + mm_raw_free
+  // Returns the (possibly new) buffer pointer.
+  // =========================================================================
+  // Stack slots: 0=buffer, 1=length, 2=capacity, 3=requiredCap
+  //              4=new_buffer (scratch)
+  public void EmitStringEnsureCap(bool mmTrace) {
+    _b.FunctionStart("maxon_string_ensure_cap", 4, mmTrace ? 0x50 : 0x40);
+
+    // Check: capacity >= requiredCap → return buffer as-is
+    _b.LoadLocal(VReg.Scratch0, 2); // Scratch0 = capacity
+    _b.LoadLocal(VReg.Scratch1, 3); // Scratch1 = requiredCap
+    _b.CmpRegReg(VReg.Scratch0, VReg.Scratch1);
+    var needGrow = UniqueLabel("str_ensure_need_grow");
+    _b.JumpIf(Condition.Below, needGrow); // unsigned: capacity < requiredCap
+
+    // No growth needed — return existing buffer
+    _b.LoadLocal(VReg.Scratch0, 0);
+    _b.ReturnValue(VReg.Scratch0);
+
+    // Needs growth: allocate new buffer of requiredCap bytes
+    _b.DefineLabel(needGrow);
+    _b.LoadLocal(VReg.Arg0, 3); // Arg0 = requiredCap
+    if (mmTrace) _b.LeaSymdata(VReg.Arg1, "__mm_scope_realloc");
+    _b.Call("mm_raw_alloc");
+    _b.StoreLocal(4, VReg.Scratch0); // slot 4 = new_buffer
+
+    // Copy length bytes from old buffer to new buffer
+    _b.LoadLocal(VReg.Arg0, 4); // Arg0 = new_buffer (dst)
+    _b.LoadLocal(VReg.Arg1, 0); // Arg1 = old_buffer (src)
+    _b.LoadLocal(VReg.Arg2, 1); // Arg2 = length (count)
+    _b.Call("maxon_memcpy");
+
+    // If capacity > 0 (heap-allocated), free the old buffer
+    _b.LoadLocal(VReg.Scratch0, 2); // Scratch0 = capacity
+    var skipFree = UniqueLabel("str_ensure_skip_free");
+    _b.JumpIfZero(VReg.Scratch0, skipFree);
+    _b.LoadLocal(VReg.Arg0, 0); // Arg0 = old_buffer
+    if (mmTrace) _b.LeaSymdata(VReg.Arg1, "__mm_scope_realloc");
+    _b.Call("mm_raw_free");
+    _b.DefineLabel(skipFree);
+
+    // Return new_buffer
+    _b.LoadLocal(VReg.Scratch0, 4);
+    _b.ReturnValue(VReg.Scratch0);
+  }
+
+  // =========================================================================
+  // maxon_current_time_ms() -> i64 (milliseconds since boot/epoch)
+  //
+  // Simple wrapper around the platform's monotonic clock.
+  // =========================================================================
+  public void EmitCurrentTimeMs() {
+    _b.FunctionStart("maxon_current_time_ms", 0, 0x20);
+    _b.GetCurrentTimeMs(VReg.Scratch0, scratchSlot: 0);
+    _b.ReturnValue(VReg.Scratch0);
+  }
+
+  // =========================================================================
   // mm_raw_alloc_260() -> ptr
   //
   // Convenience wrapper: allocates exactly 260 bytes (for path buffers).

@@ -379,6 +379,24 @@ The no-argument convenience methods are equivalent to calling the `CharacterSet`
 
 ---
 
+## String Append
+
+`String.append` grows a string's buffer in place, avoiding the allocation of a new string. When called with an interpolated string argument, the interpolation parts are written directly into the buffer without materializing a temporary string.
+
+```maxon
+var s = "Hello"
+s.append(" World")       // s is now "Hello World"
+s.append(" {name}!")      // interpolation written directly into buffer
+```
+
+The compiler also automatically optimizes the pattern `s = "{s}..."` into an in-place append when it detects the string being reassigned to itself with additional content.
+
+| Method | Description |
+|--------|-------------|
+| `append(other String)` | Append another string's content in place |
+
+---
+
 ## List
 
 `List` is a generic doubly linked list backed by `__ManagedList` (a builtin compiler-synthesized type, like `Array` and `String`) for efficient node management with automatic memory cleanup. It provides O(1) insertion and removal at both ends, and O(n) indexed access.

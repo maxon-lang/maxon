@@ -67,7 +67,7 @@ export type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
   export function next() returns Character throws IterationError
     if _iterPos < managed.length() 'check'
       var len = managed.length()
-      var endPos = findGraphemeEndManaged(managed, startPos: _iterPos, len: len)
+      var endPos = findGraphemeEndManagedRange(managed, offset: 0, startPos: _iterPos, len: len)
       var graphemeLen = endPos - _iterPos
       let grapheme = _makeCharFromBytes(_iterPos, len: graphemeLen)
       _iterPos = endPos
@@ -95,19 +95,19 @@ export type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
     // Calculate the byte length of this grapheme at the given byte position
     var len = managed.length()
     var byteStart = idx.bytePos()
-    var endPos = findGraphemeEndManaged(managed, startPos: byteStart, len: len)
+    var endPos = findGraphemeEndManagedRange(managed, offset: 0, startPos: byteStart, len: len)
     var byteLen = endPos - byteStart
     return _makeCharFromBytes(byteStart, len: byteLen)
   end 'charAt'
 
   /// Get the index after the given position (for iteration)
   export function indexAfter(idx StringIndex) returns StringIndex throws StringError
-    if idx.charIndex() >= countGraphemesManaged(managed) 'atEnd'
+    var len = managed.length()
+    if idx.bytePos() >= len 'atEnd'
       throw StringError.invalidIndex
     end 'atEnd'
-    var len = managed.length()
     var byteStart = idx.bytePos()
-    var endPos = findGraphemeEndManaged(managed, startPos: byteStart, len: len)
+    var endPos = findGraphemeEndManagedRange(managed, offset: 0, startPos: byteStart, len: len)
     var byteLen = endPos - byteStart
     return StringIndex{_charIndex: idx.charIndex() + 1, _bytePos: byteStart + byteLen}
   end 'indexAfter'
@@ -117,6 +117,15 @@ export type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
     var result = managed.concat(other.managed)
     return String{managed: result, _iterPos: 0}
   end 'concat'
+
+  /// Append another string's content to this string in place.
+  /// The compiler optimizes this to grow the buffer and copy directly,
+  /// avoiding intermediate allocations. When called with an interpolated
+  /// string argument, the interpolation parts are written directly into
+  /// the buffer without materializing a temporary string.
+  export function append(other String)
+    managed = managed.concat(other.managed)
+  end 'append'
 
   // Search methods
   export function startsWith(prefix String) returns bool
@@ -340,7 +349,7 @@ export type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
     // Forward scan: find first non-matching grapheme
     var start = 0
     while start < len 'scan_start'
-      var endByte = findGraphemeEndManaged(managed, startPos: start, len: len)
+      var endByte = findGraphemeEndManagedRange(managed, offset: 0, startPos: start, len: len)
       var graphemeLen = endByte - start
       let ch = managed.makeCharFromBytes(start, graphemeLen)
       if not chars.contains(ch) 'found_start'
@@ -358,7 +367,7 @@ export type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
     var endPos = start
     var pos = start
     while pos < len 'scan_for_end'
-      var endByte = findGraphemeEndManaged(managed, startPos: pos, len: len)
+      var endByte = findGraphemeEndManagedRange(managed, offset: 0, startPos: pos, len: len)
       var graphemeLen = endByte - pos
       let ch = managed.makeCharFromBytes(pos, graphemeLen)
       if not chars.contains(ch) 'not_match'
@@ -380,7 +389,7 @@ export type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 
     var start = 0
     while start < len 'scan_start'
-      var endByte = findGraphemeEndManaged(managed, startPos: start, len: len)
+      var endByte = findGraphemeEndManagedRange(managed, offset: 0, startPos: start, len: len)
       var graphemeLen = endByte - start
       let ch = managed.makeCharFromBytes(start, graphemeLen)
       if not chars.contains(ch) 'found_start'
@@ -409,7 +418,7 @@ export type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
     var endPos = 0
     var pos = 0
     while pos < len 'scan'
-      var endByte = findGraphemeEndManaged(managed, startPos: pos, len: len)
+      var endByte = findGraphemeEndManagedRange(managed, offset: 0, startPos: pos, len: len)
       var graphemeLen = endByte - pos
       let ch = managed.makeCharFromBytes(pos, graphemeLen)
       if not chars.contains(ch) 'not_match'

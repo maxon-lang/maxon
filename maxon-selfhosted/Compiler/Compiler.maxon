@@ -29,6 +29,17 @@ export function compileSourceWithIr(source String, virtualPath FilePath, target 
   return CompileWithIrResult{outputPath: outputPath, ir: ir}
 end 'compileSourceWithIr'
 
+// Compiles source code directly from memory without generating IR text.
+export function compileSource(source String, virtualPath FilePath, target Target, outputPath FilePath) returns FilePath throws CompileError
+  let project = createProject(outputPath, isSingleFile: true, target: target)
+  let bytes = source.toByteArray()
+  setSourceFile(project, path: virtualPath, content: bytes)
+
+  let codeResult = try queryCodeResult(project)
+  writeExecutable(outputPath, codeResult: codeResult, target: project.target)
+  return outputPath
+end 'compileSource'
+
 export type CompileWithIrResult
   export var outputPath FilePath
   export var ir String

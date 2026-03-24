@@ -1399,3 +1399,127 @@ end 'main'
 ```stdout
 hello
 ```
+
+## String.append
+
+<!-- test: string-append-basic -->
+### Basic Append
+Append a string literal to an existing string.
+```maxon
+function main() returns ExitCode
+  var s = "Hello"
+  s.append(" World")
+  print("{s}\n")
+  return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+Hello World
+```
+
+<!-- test: string-append-interp -->
+### Append with Interpolation
+Append an interpolated string directly into the target buffer without materializing a temporary.
+```maxon
+function main() returns ExitCode
+  var s = "Hello"
+  var name = "World"
+  s.append(" {name}!")
+  print("{s}\n")
+  return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+Hello World!
+```
+
+<!-- test: string-append-loop -->
+### Append in Loop
+Append in a loop builds the string efficiently with amortized O(1) per append.
+```maxon
+function main() returns ExitCode
+  var s = ""
+  var i = 0
+  while i < 5 'loop'
+    s.append("{i}")
+    i = i + 1
+  end 'loop'
+  print("{s}\n")
+  return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+01234
+```
+
+<!-- test: string-append-variable -->
+### Append Variable
+Append another string variable.
+```maxon
+function main() returns ExitCode
+  var s = "abc"
+  var other = "def"
+  s.append(other)
+  print("{s}\n")
+  return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+abcdef
+```
+
+<!-- test: string-append-implicit-loop -->
+### Implicit Append Optimization
+The pattern `s = "{s}..."` is automatically optimized to in-place buffer growth,
+equivalent to `s.append("...")`.
+```maxon
+function main() returns ExitCode
+  var s = ""
+  var i = 0
+  while i < 5 'loop'
+    s = "{s}{i},"
+    i = i + 1
+  end 'loop'
+  print("{s}\n")
+  return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+0,1,2,3,4,
+```
+
+<!-- test: string-append-multi-parts -->
+### Append Multiple Interpolation Parts
+Append with multiple interpolated expressions written directly into buffer.
+```maxon
+function main() returns ExitCode
+  var s = "["
+  var a = 1
+  var b = 2
+  s.append("{a}+{b}")
+  s.append("]")
+  print("{s}\n")
+  return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+[1+2]
+```

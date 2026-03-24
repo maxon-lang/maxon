@@ -364,10 +364,77 @@ public static partial class MaxonToStandardConversion {
           }
         }
 
+        // Pre-scan: detect self-referential string interpolation patterns like s = "{s}..."
+        // and rewrite them to MaxonStringAppendInterpOp for efficient in-place buffer growth.
+        var selfInterpSkipOps = new HashSet<MaxonOp>();
+        var selfInterpAppendOps = new List<(MaxonOp insertBefore, MaxonStringAppendInterpOp appendOp, List<MaxonAssignOp> tempDecls)>();
+        {
+          // Build a map from MaxonValue.Id to variable name for VarRef ops
+          var varRefMap = new Dictionary<int, string>();
+          foreach (var scanOp in block.Operations) {
+            if (scanOp is MaxonVarRefOp varRef) {
+              varRefMap[varRef.Result.Id] = varRef.VarName;
+            } else if (scanOp is MaxonStructVarRefOp structVarRef) {
+              varRefMap[structVarRef.Result.Id] = structVarRef.VarName;
+            }
+          }
+          var ops = block.Operations;
+          for (int si = 0; si < ops.Count - 1; si++) {
+            if (ops[si] is not MaxonStringInterpOp interpOp) continue;
+            if (interpOp.Parts.Count < 2 || interpOp.Parts[0].IsLiteral || interpOp.Parts[0].ExprValue == null) continue;
+            if (!varRefMap.TryGetValue(interpOp.Parts[0].ExprValue!.Id, out var selfVarName)) continue;
+
+            // Look for the reassignment to selfVarName in the next 1-2 ops
+            // (there may be an intermediate temp assign like __lit_tmp_N)
+            MaxonAssignOp? reassignOp = null;
+            var tempDeclOps = new List<MaxonAssignOp>();
+            for (int look = si + 1; look < Math.Min(si + 3, ops.Count); look++) {
+              if (ops[look] is MaxonAssignOp candidate && candidate.Value.Id == interpOp.Result.Id) {
+                if (candidate.IsDeclaration) {
+                  tempDeclOps.Add(candidate);
+                } else if (candidate.VarName == selfVarName) {
+                  reassignOp = candidate;
+                  break;
+                }
+              } else {
+                break;
+              }
+            }
+            if (reassignOp == null) continue;
+
+            // Pattern matched: s = "{s}..." — rewrite to append
+            var selfExprValue = interpOp.Parts[0].ExprValue!;
+            var appendParts = interpOp.Parts.Skip(1).ToList();
+            var appendOp = new MaxonStringAppendInterpOp(selfExprValue, appendParts) {
+              SelfVarName = selfVarName
+            };
+            selfInterpSkipOps.Add(interpOp);
+            selfInterpSkipOps.Add(reassignOp);
+            foreach (var tempDecl in tempDeclOps)
+              selfInterpSkipOps.Add(tempDecl);
+            selfInterpAppendOps.Add((ops[si], appendOp, tempDeclOps));
+          }
+        }
+
         foreach (var op in block.Operations) {
           if (bulkZeroSkipOps.Contains(op)) {
             if (bulkZeroEmitPoints.TryGetValue(op, out var bzInfo))
               newBlock.AddOp(new StdBulkZeroOp(bzInfo.tag, bzInfo.count));
+            continue;
+          }
+          if (selfInterpSkipOps.Contains(op)) {
+            // Check if this is the position where we emit the append op
+            foreach (var (insertBefore, appendOp, tempDecls) in selfInterpAppendOps) {
+              if (insertBefore == op) {
+                LowerStringAppendInterpOp(appendOp, newBlock, valueMap, varTypes, result);
+                // Zero-initialize temp declaration vars so scope_end decref is a safe no-op
+                foreach (var tempDecl in tempDecls) {
+                  var zeroOp = new StdConstI64Op(0);
+                  newBlock.AddOp(zeroOp);
+                  EmitStore(newBlock, zeroOp.Result, tempDecl.VarName, varTypes);
+                }
+              }
+            }
             continue;
           }
           switch (op) {
@@ -1909,6 +1976,12 @@ public static partial class MaxonToStandardConversion {
             case MaxonManagedMemConcatOp concatOp:
               LowerManagedMemConcat(concatOp, newBlock, valueMap, varTypes, temps,
                 inlineTargets.GetValueOrDefault(concatOp.Result.Id));
+              break;
+            case MaxonStringAppendOp appendOp:
+              LowerStringAppendOp(appendOp, newBlock, valueMap, varTypes, result);
+              break;
+            case MaxonStringAppendInterpOp appendInterpOp:
+              LowerStringAppendInterpOp(appendInterpOp, newBlock, valueMap, varTypes, result);
               break;
             case MaxonManagedMemSliceOp sliceOp:
               LowerManagedMemSlice(sliceOp, newBlock, valueMap, varTypes, temps,

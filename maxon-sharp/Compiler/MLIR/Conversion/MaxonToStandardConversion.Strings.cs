@@ -149,77 +149,7 @@ public static partial class MaxonToStandardConversion {
 	  VarRegistry temps,
 	  string? inlineTarget = null) {
 
-		var partInfos = new List<(StdI64 Buffer, StdI64 Length)>();
-		// Track heap-allocated intermediate buffers that need freeing after memcopy
-		var interpTempBufVars = new List<string>();
-		void AddToStringResult((StdI64 Buffer, StdI64 Length, string BufVarName) r) {
-			partInfos.Add((r.Buffer, r.Length));
-			interpTempBufVars.Add(r.BufVarName);
-		}
-		void AddEnumToStringResult((StdI64 Buffer, StdI64 Length, string? BufVarName) r) {
-			partInfos.Add((r.Buffer, r.Length));
-			if (r.BufVarName != null) interpTempBufVars.Add(r.BufVarName);
-		}
-
-		foreach (var (IsLiteral, LiteralValue, ExprValue, FormatSpec, OptimalType) in op.Parts) {
-			if (IsLiteral) {
-				if (string.IsNullOrEmpty(LiteralValue)) continue;
-
-				var litId = NextRdataId();
-				var rdataLabel = $"__interp_lit_{litId}";
-				partInfos.Add(EmitRdataLiteral(LiteralValue!, rdataLabel, block, result));
-			} else {
-				var exprValue = ExprValue!;
-
-				if (valueMap.TryGetValue(exprValue, out var exprStdVal) && exprStdVal is StdHeapPtr hp) {
-					partInfos.Add(EmitStructInterpolation(hp.VarName!, block, varTypes));
-				} else if (exprValue is MaxonInteger or MaxonByte or MaxonShort) {
-					var stdVal = valueMap[exprValue];
-					// Widen narrower integer types to i64 for the runtime toString call
-					if (stdVal is StdU32 u32) {
-						stdVal = EnsureI64(new StdI32(u32.Id), block, signExtend: false);
-					} else if (stdVal is StdI32) {
-						stdVal = EnsureI64(stdVal, block, signExtend: true);
-					}
-					bool isUnsigned = (OptimalType?.IsUnsigned ?? false) || stdVal is StdU64;
-					if (FormatSpec != null) {
-						if (isUnsigned) {
-							AddToStringResult(EmitU64ToStringFormatted(stdVal, FormatSpec, block, varTypes, result));
-						} else {
-							AddToStringResult(EmitI64ToStringFormatted(stdVal, FormatSpec, block, varTypes, result));
-						}
-					} else {
-						if (isUnsigned) {
-							AddToStringResult(EmitU64ToString(stdVal, block, varTypes));
-						} else {
-							AddToStringResult(EmitI64ToString(stdVal, block, varTypes));
-						}
-					}
-				} else if (exprValue is MaxonFloat && valueMap[exprValue] is StdF32 f32ForStr) {
-					// Promote f32 to f64 for string conversion (reuses existing f64 toString runtime)
-					var promote = new StdF32ToF64Op(f32ForStr);
-					block.AddOp(promote);
-					if (FormatSpec != null) {
-						AddToStringResult(EmitF64ToStringFormatted(promote.Result, FormatSpec, block, varTypes, result));
-					} else {
-						AddToStringResult(EmitF64ToString(promote.Result, block, varTypes));
-					}
-				} else if (exprValue is MaxonFloat) {
-					if (FormatSpec != null) {
-						AddToStringResult(EmitF64ToStringFormatted((StdF64)valueMap[exprValue], FormatSpec, block, varTypes, result));
-					} else {
-						AddToStringResult(EmitF64ToString((StdF64)valueMap[exprValue], block, varTypes));
-					}
-				} else if (exprValue is MaxonBool) {
-					AddToStringResult(EmitBoolToString((StdBool)valueMap[exprValue], block, varTypes));
-				} else if (exprValue is MaxonEnum enumValue) {
-					AddEnumToStringResult(EmitUnionToString(enumValue, valueMap, block, varTypes, result));
-				} else {
-					throw new InvalidOperationException(
-					  $"String interpolation: unsupported expression type {exprValue.GetType().Name} for value %{exprValue.Id}");
-				}
-			}
-		}
+		var (partInfos, interpTempBufVars) = EmitInterpParts(op.Parts, "interp", block, valueMap, varTypes, result);
 
 		if (partInfos.Count == 0) {
 			var heapPtr = EmitManagedMemoryLiteral("", op.Result.Id, "interp", "interptmp", block, varTypes, result, temps, "String", inlineTarget);
@@ -347,6 +277,282 @@ public static partial class MaxonToStandardConversion {
 		EmitStructFieldStore(block, iterPosConst.Result, tempName2, 8, MlirType.I64, varTypes);
 
 		valueMap[op.Result] = new StdHeapPtr(interpOuterPtr.Id, interpOuterPtr.TypeName, tempName2);
+	}
+
+	/// <summary>
+	/// Processes interpolation parts into (buffer, length) pairs and tracks temporary buffers.
+	/// Shared by LowerStringInterp and LowerStringAppend.
+	/// </summary>
+	private static (List<(StdI64 Buffer, StdI64 Length)> partInfos, List<string> tempBufVars) EmitInterpParts(
+	  List<(bool IsLiteral, string? LiteralValue, MaxonValue? ExprValue, string? FormatSpec, MlirType? OptimalType)> parts,
+	  string rdataPrefix,
+	  MlirBlock<StandardOp> block,
+	  Dictionary<MaxonValue, StdValue> valueMap,
+	  Dictionary<string, string> varTypes,
+	  MlirModule<StandardOp> result) {
+		var partInfos = new List<(StdI64 Buffer, StdI64 Length)>();
+		var tempBufVars = new List<string>();
+		void AddToStringResult((StdI64 Buffer, StdI64 Length, string BufVarName) r) {
+			partInfos.Add((r.Buffer, r.Length));
+			tempBufVars.Add(r.BufVarName);
+		}
+		void AddEnumToStringResult((StdI64 Buffer, StdI64 Length, string? BufVarName) r) {
+			partInfos.Add((r.Buffer, r.Length));
+			if (r.BufVarName != null) tempBufVars.Add(r.BufVarName);
+		}
+
+		foreach (var (IsLiteral, LiteralValue, ExprValue, FormatSpec, OptimalType) in parts) {
+			if (IsLiteral) {
+				if (string.IsNullOrEmpty(LiteralValue)) continue;
+				var litId = NextRdataId();
+				var rdataLabel = $"__{rdataPrefix}_lit_{litId}";
+				partInfos.Add(EmitRdataLiteral(LiteralValue!, rdataLabel, block, result));
+			} else {
+				var exprValue = ExprValue!;
+				if (valueMap.TryGetValue(exprValue, out var exprStdVal) && exprStdVal is StdHeapPtr hp) {
+					partInfos.Add(EmitStructInterpolation(hp.VarName!, block, varTypes));
+				} else if (exprValue is MaxonInteger or MaxonByte or MaxonShort) {
+					var stdVal = valueMap[exprValue];
+					// Widen narrower integer types to i64 for the runtime toString call
+					if (stdVal is StdU32 u32) {
+						stdVal = EnsureI64(new StdI32(u32.Id), block, signExtend: false);
+					} else if (stdVal is StdI32) {
+						stdVal = EnsureI64(stdVal, block, signExtend: true);
+					}
+					bool isUnsigned = (OptimalType?.IsUnsigned ?? false) || stdVal is StdU64;
+					if (FormatSpec != null) {
+						if (isUnsigned) AddToStringResult(EmitU64ToStringFormatted(stdVal, FormatSpec, block, varTypes, result));
+						else AddToStringResult(EmitI64ToStringFormatted(stdVal, FormatSpec, block, varTypes, result));
+					} else {
+						if (isUnsigned) AddToStringResult(EmitU64ToString(stdVal, block, varTypes));
+						else AddToStringResult(EmitI64ToString(stdVal, block, varTypes));
+					}
+				} else if (exprValue is MaxonFloat && valueMap[exprValue] is StdF32 f32ForStr) {
+					var promote = new StdF32ToF64Op(f32ForStr);
+					block.AddOp(promote);
+					if (FormatSpec != null) AddToStringResult(EmitF64ToStringFormatted(promote.Result, FormatSpec, block, varTypes, result));
+					else AddToStringResult(EmitF64ToString(promote.Result, block, varTypes));
+				} else if (exprValue is MaxonFloat) {
+					if (FormatSpec != null) AddToStringResult(EmitF64ToStringFormatted((StdF64)valueMap[exprValue], FormatSpec, block, varTypes, result));
+					else AddToStringResult(EmitF64ToString((StdF64)valueMap[exprValue], block, varTypes));
+				} else if (exprValue is MaxonBool) {
+					AddToStringResult(EmitBoolToString((StdBool)valueMap[exprValue], block, varTypes));
+				} else if (exprValue is MaxonEnum enumValue) {
+					AddEnumToStringResult(EmitUnionToString(enumValue, valueMap, block, varTypes, result));
+				} else {
+					throw new InvalidOperationException(
+					  $"String {rdataPrefix}: unsupported expression type {exprValue.GetType().Name} for value %{exprValue.Id}");
+				}
+			}
+		}
+		return (partInfos, tempBufVars);
+	}
+
+	/// <summary>
+	/// Unified append lowering for both MaxonStringAppendOp and MaxonStringAppendInterpOp.
+	/// Grows the target String's buffer in place and appends new data directly into it.
+	/// Handles capacity==0 (rdata/literal) by allocating a fresh writable buffer first.
+	/// Uses 2x growth strategy for amortized O(1) append.
+	/// </summary>
+	private static void LowerStringAppend(
+	  string selfVarName,
+	  List<(bool IsLiteral, string? LiteralValue, MaxonValue? ExprValue, string? FormatSpec, MlirType? OptimalType)> parts,
+	  MlirBlock<StandardOp> block,
+	  Dictionary<MaxonValue, StdValue> valueMap,
+	  Dictionary<string, string> varTypes,
+	  MlirModule<StandardOp> result) {
+
+		var (partInfos, interpTempBufVars) = EmitInterpParts(parts, "append", block, valueMap, varTypes, result);
+		if (partInfos.Count == 0) return;
+
+		// --- Step 2: Compute total append length ---
+		StdI64 appendLen;
+		if (partInfos.Count == 1) {
+			appendLen = partInfos[0].Length;
+		} else {
+			var sum = new StdAddI64Op(partInfos[0].Length, partInfos[1].Length);
+			block.AddOp(sum);
+			appendLen = sum.Result;
+			for (int i = 2; i < partInfos.Count; i++) {
+				var add = new StdAddI64Op(appendLen, partInfos[i].Length);
+				block.AddOp(add);
+				appendLen = add.Result;
+			}
+		}
+
+		// Spill append length and part buffers/lengths to stack vars (memcpy clobbers registers)
+		var uid = MlirContext.Current.NextId();
+		var appendLenVar = $"__append_len_{uid}";
+		EmitStore(block, appendLen, appendLenVar, varTypes);
+		var partBufVars = new string[partInfos.Count];
+		var partLenVars = new string[partInfos.Count];
+		for (int i = 0; i < partInfos.Count; i++) {
+			partBufVars[i] = $"__append_partbuf_{uid}_{i}";
+			partLenVars[i] = $"__append_partlen_{uid}_{i}";
+			EmitStore(block, partInfos[i].Buffer, partBufVars[i], varTypes);
+			EmitStore(block, partInfos[i].Length, partLenVars[i], varTypes);
+		}
+
+		// --- Step 3: Load self's managed struct fields ---
+		// selfVarName is the String variable; its _managed field is at offset 0
+		var selfManagedTempVar = $"__append_managed_{uid}";
+		var selfManagedPtr = (StdI64)EmitStructFieldLoad(block, selfVarName, 0, MlirType.I64, varTypes);
+		EmitStore(block, selfManagedPtr, selfManagedTempVar, varTypes);
+
+		var oldBuffer = LoadManagedBuffer(block, selfManagedTempVar, varTypes);
+		var oldLength = (StdI64)EmitStructFieldLoad(block, selfManagedTempVar, ManagedFieldLength, MlirType.I64, varTypes);
+		var oldCapacity = (StdI64)EmitStructFieldLoad(block, selfManagedTempVar, ManagedFieldCapacity, MlirType.I64, varTypes);
+
+		// Spill these to stack vars (they'll be needed after the ensure_cap call)
+		var oldLenVar = $"__append_oldlen_{uid}";
+		var oldBufVar = $"__append_oldbuf_{uid}";
+		var oldCapVar = $"__append_oldcap_{uid}";
+		EmitStore(block, oldLength, oldLenVar, varTypes);
+		EmitStore(block, oldBuffer, oldBufVar, varTypes);
+		EmitStore(block, oldCapacity, oldCapVar, varTypes);
+
+		// --- Step 4: Compute required capacity with 2x growth ---
+		var reloadAppendLen = (StdI64)EmitLoad(block, appendLenVar, varTypes);
+		var requiredCapRaw = new StdAddI64Op(oldLength, reloadAppendLen);
+		block.AddOp(requiredCapRaw);
+		// Add 1 for null terminator
+		var oneConst = new StdConstI64Op(1);
+		block.AddOp(oneConst);
+		var requiredCapPlus1 = new StdAddI64Op(requiredCapRaw.Result, oneConst.Result);
+		block.AddOp(requiredCapPlus1);
+
+		// growCap = max(requiredCap+1, capacity * 2, 64)
+		// This is only used when ensure_cap actually needs to allocate (capacity < requiredCap+1).
+		// ensure_cap returns old buffer when capacity >= requiredCap, so growCap is only
+		// relevant for the allocation case.
+		var twoConst = new StdConstI64Op(2);
+		block.AddOp(twoConst);
+		var doubledCap = new StdMulI64Op(oldCapacity, twoConst.Result);
+		block.AddOp(doubledCap);
+		var cmpDouble = new StdCmpU64Op("ugt", requiredCapPlus1.Result, doubledCap.Result);
+		block.AddOp(cmpDouble);
+		var growCap1 = new StdSelectI64Op(cmpDouble.Result, requiredCapPlus1.Result, doubledCap.Result);
+		block.AddOp(growCap1);
+		var minCapConst = new StdConstI64Op(64);
+		block.AddOp(minCapConst);
+		var cmpMin = new StdCmpU64Op("ugt", growCap1.Result, minCapConst.Result);
+		block.AddOp(cmpMin);
+		var growCap = new StdSelectI64Op(cmpMin.Result, growCap1.Result, minCapConst.Result);
+		block.AddOp(growCap);
+
+		// We always pass growCap to ensure_cap (which may be larger than needed).
+		// After the call, we use requiredCap+1 > oldCapacity to determine if growth actually
+		// occurred — pointer comparison is unreliable since the slab allocator may reuse addresses.
+		var growCapVar = $"__append_growcap_{uid}";
+		EmitStore(block, growCap.Result, growCapVar, varTypes);
+		var reqCapVar = $"__append_reqcap_{uid}";
+		EmitStore(block, requiredCapPlus1.Result, reqCapVar, varTypes);
+
+		// --- Step 5: Call maxon_string_ensure_cap(buffer, length, capacity, growCap) ---
+		var callBuf = (StdI64)EmitLoad(block, oldBufVar, varTypes);
+		var callLen = (StdI64)EmitLoad(block, oldLenVar, varTypes);
+		var callCap = (StdI64)EmitLoad(block, oldCapVar, varTypes);
+		var callGrow = (StdI64)EmitLoad(block, growCapVar, varTypes);
+		var newBuffer = new StdI64(MlirContext.Current.NextId());
+		block.AddOp(new StdCallRuntimeOp("maxon_string_ensure_cap",
+		  [callBuf, callLen, callCap, callGrow], newBuffer));
+
+		// Spill new buffer to stack
+		var newBufVar = $"__append_buf_{uid}";
+		EmitStore(block, newBuffer, newBufVar, varTypes);
+
+		// Update managed struct: buffer always gets the return value (same or new ptr).
+		// Capacity: use growCap if growth was needed, otherwise keep oldCapacity.
+		// Re-derive the needsGrow flag from spilled values (can't rely on pointer comparison
+		// since the slab allocator may reuse freed addresses).
+		var reloadReqCap = (StdI64)EmitLoad(block, reqCapVar, varTypes);
+		var reloadOldCap2 = (StdI64)EmitLoad(block, oldCapVar, varTypes);
+		var reloadGrowCap = (StdI64)EmitLoad(block, growCapVar, varTypes);
+		var needsGrow = new StdCmpU64Op("ugt", reloadReqCap, reloadOldCap2);
+		block.AddOp(needsGrow);
+		var actualCap = new StdSelectI64Op(needsGrow.Result, reloadGrowCap, reloadOldCap2);
+		block.AddOp(actualCap);
+		EmitStructFieldStore(block, newBuffer, selfManagedTempVar, ManagedFieldBuffer, MlirType.I64, varTypes);
+		EmitStructFieldStore(block, actualCap.Result, selfManagedTempVar, ManagedFieldCapacity, MlirType.I64, varTypes);
+
+		// --- Step 6: Append parts at buffer + oldLength ---
+		var offsetVar = $"__append_offset_{uid}";
+		var reloadOldLen2 = (StdI64)EmitLoad(block, oldLenVar, varTypes);
+		EmitStore(block, reloadOldLen2, offsetVar, varTypes);
+
+		for (int i = 0; i < partInfos.Count; i++) {
+			var curBuf = (StdI64)EmitLoad(block, newBufVar, varTypes);
+			var curOff = (StdI64)EmitLoad(block, offsetVar, varTypes);
+			var dstAddr = new StdAddI64Op(curBuf, curOff);
+			block.AddOp(dstAddr);
+
+			var srcBuf = (StdI64)EmitLoad(block, partBufVars[i], varTypes);
+			var srcLen = (StdI64)EmitLoad(block, partLenVars[i], varTypes);
+			block.AddOp(new StdMemCopyOp(srcBuf, dstAddr.Result, srcLen));
+
+			// Advance offset
+			var curOff2 = (StdI64)EmitLoad(block, offsetVar, varTypes);
+			var partLen = (StdI64)EmitLoad(block, partLenVars[i], varTypes);
+			var newOffset = new StdAddI64Op(curOff2, partLen);
+			block.AddOp(newOffset);
+			EmitStore(block, newOffset.Result, offsetVar, varTypes);
+		}
+
+		// --- Step 7: Write null terminator at buffer[newLength] ---
+		{
+			var ntBuf = (StdI64)EmitLoad(block, newBufVar, varTypes);
+			var ntOff = (StdI64)EmitLoad(block, offsetVar, varTypes);
+			var ntAddr = new StdAddI64Op(ntBuf, ntOff);
+			block.AddOp(ntAddr);
+			var ntZero = new StdConstI64Op(0);
+			block.AddOp(ntZero);
+			block.AddOp(new StdStoreIndirectOp(ntZero.Result, ntAddr.Result, 0, MlirType.I8));
+		}
+
+		// --- Step 8: Update managed length ---
+		var finalLen = (StdI64)EmitLoad(block, offsetVar, varTypes);
+		EmitStructFieldStore(block, finalLen, selfManagedTempVar, ManagedFieldLength, MlirType.I64, varTypes);
+
+		// --- Step 9: Free intermediate toString buffers ---
+		foreach (var bufVar in interpTempBufVars) {
+			var bufPtr = (StdI64)EmitLoad(block, bufVar, varTypes);
+			if (Compiler.MmTrace) {
+				var nullScope = new StdConstI64Op(0);
+				block.AddOp(nullScope);
+				block.AddOp(new StdCallRuntimeOp("mm_raw_free", [bufPtr, nullScope.Result], null));
+			} else {
+				block.AddOp(new StdCallRuntimeOp("mm_raw_free", [bufPtr], null));
+			}
+		}
+	}
+
+	/// <summary>
+	/// Lowering entry point for MaxonStringAppendOp (append another String's bytes).
+	/// Delegates to the unified LowerStringAppend with a single struct-interpolation part.
+	/// </summary>
+	private static void LowerStringAppendOp(
+	  MaxonStringAppendOp op,
+	  MlirBlock<StandardOp> block,
+	  Dictionary<MaxonValue, StdValue> valueMap,
+	  Dictionary<string, string> varTypes,
+	  MlirModule<StandardOp> result) {
+		// Create a single-part list: the other String's buffer/length
+		var parts = new List<(bool IsLiteral, string? LiteralValue, MaxonValue? ExprValue, string? FormatSpec, MlirType? OptimalType)> {
+			(false, null, op.Other, null, null)
+		};
+		LowerStringAppend(op.SelfVarName, parts, block, valueMap, varTypes, result);
+	}
+
+	/// <summary>
+	/// Lowering entry point for MaxonStringAppendInterpOp (append interpolated parts directly).
+	/// </summary>
+	private static void LowerStringAppendInterpOp(
+	  MaxonStringAppendInterpOp op,
+	  MlirBlock<StandardOp> block,
+	  Dictionary<MaxonValue, StdValue> valueMap,
+	  Dictionary<string, string> varTypes,
+	  MlirModule<StandardOp> result) {
+		LowerStringAppend(op.SelfVarName, op.Parts, block, valueMap, varTypes, result);
 	}
 
 	/// <summary>

@@ -63,6 +63,8 @@ public partial class X86CodeEmitter {
     rawRt.EmitMmRawAlloc(Compiler.MmTrace);
     rawRt.EmitMmRawRealloc(Compiler.MmTrace);
     rawRt.EmitMmRawFree(Compiler.MmTrace);
+    rawRt.EmitStringEnsureCap(Compiler.MmTrace);
+    rawRt.EmitCurrentTimeMs();
     EmitNetTcpConnect();
     EmitNetSend();
     EmitNetRecv();
@@ -3351,29 +3353,98 @@ public partial class X86CodeEmitter {
 
   /// <summary>
   /// maxon_file_stat(cstring_path) → raw buffer ptr (6 x i64) or -1
-  /// Allocates a 48-byte buffer, passes it to the sync worker via
-  /// __io_submit_sync(SyncOpFileStat, path, buffer). On success returns the buffer
-  /// pointer; on failure frees the buffer and returns -1.
-  /// Stack: [rbp-8]=path, [rbp-0x10]=buffer
+  /// Calls FindFirstFileA directly (via system stack switch), extracts metadata
+  /// from WIN32_FIND_DATAA, then closes the handle. Packs results into a
+  /// heap-allocated 48-byte buffer.
+  /// Stack layout:
+  ///   [rbp-0x08]         = cstring path (arg0)
+  ///   [rbp-0x10]         = output buffer ptr (mm_raw_alloc'd)
+  ///   [rbp-0x18]         = FindFirstFileA handle
+  ///   [rbp-0x158]..[rbp-0x19] = WIN32_FIND_DATAA (320 bytes)
+  ///     +0   dwFileAttributes (4 bytes)
+  ///     +4   ftCreationTime (8 bytes)
+  ///     +12  ftLastAccessTime (8 bytes)
+  ///     +20  ftLastWriteTime (8 bytes)
+  ///     +28  nFileSizeHigh (4 bytes)
+  ///     +32  nFileSizeLow (4 bytes)
   /// </summary>
   private void EmitFileStat() {
-    EmitRuntimeFunctionStart("maxon_file_stat", 1, 0x30);
-    // Allocate 48-byte buffer
+    const int findDataOffset = -0x158; // WIN32_FIND_DATAA on stack
+    EmitRuntimeFunctionStart("maxon_file_stat", 1, 0x180);
+    // Allocate 48-byte output buffer
     EmitMovRegImm(X86Register.Rcx, 48);
     EmitCallRuntimeLabel("mm_raw_alloc", zeroSecondArg: Compiler.MmTrace);
     EmitMovMemReg(-0x10, X86Register.Rax, 8);            // save buffer ptr
-    // __io_submit_sync(SyncOpFileStat, path, buffer)
-    EmitMovRegImm(X86Register.Rcx, SyncOpFileStat);
-    EmitMovRegMem(X86Register.Rdx, -0x08, 8);            // path
-    EmitMovRegMem(X86Register.R8, -0x10, 8);             // buffer
-    EmitCallRuntimeLabel("__io_submit_sync");
-    // Check result: sync worker returns 0 on success, -1 on failure
+
+    // FindFirstFileA(path, &findData)
+    EmitMovRegMem(X86Register.Rcx, -0x08, 8);            // arg1: path
+    EmitLeaRegMem(X86Register.Rdx, findDataOffset);       // arg2: &WIN32_FIND_DATAA
+    EmitCallImportOnSystemStack("kernel32.dll", "FindFirstFileA");
+    // Check for INVALID_HANDLE_VALUE (-1)
     EmitMovRegImm(X86Register.Rcx, -1);
     EmitCmpRegReg(X86Register.Rax, X86Register.Rcx);
     EmitJcc("e", "rt_fstat_fail");
-    // Success: return buffer ptr
+    EmitMovMemReg(-0x18, X86Register.Rax, 8);            // save handle
+
+    // Close the find handle immediately — we only needed the first result
+    EmitMovRegReg(X86Register.Rcx, X86Register.Rax);     // handle
+    EmitCallImportOnSystemStack("kernel32.dll", "FindClose");
+
+    // Load output buffer pointer into RDI
+    EmitMovRegMem(X86Register.Rdi, -0x10, 8);
+
+    // buf[0] = size = (nFileSizeHigh << 32) | nFileSizeLow
+    EmitMovRegMem(X86Register.Rax, findDataOffset + 28, 4); // nFileSizeHigh (zero-extended)
+    EmitShlRegImm(X86Register.Rax, 32);
+    EmitMovRegMem(X86Register.Rcx, findDataOffset + 32, 4); // nFileSizeLow (zero-extended)
+    EmitOrRegReg(X86Register.Rax, X86Register.Rcx);
+    EmitMovIndirectMemReg(X86Register.Rdi, 0, X86Register.Rax);
+
+    // buf[8] = modifiedTime: FILETIME → Unix epoch seconds
+    // (filetime - 116444736000000000) / 10000000
+    EmitMovRegMem(X86Register.Rax, findDataOffset + 20, 8); // ftLastWriteTime
+    EmitMovRegImm(X86Register.Rcx, 116444736000000000L);
+    EmitSubRegReg(X86Register.Rax, X86Register.Rcx);
+    EmitMovRegImm(X86Register.Rcx, 10000000L);
+    EmitBytes(0x48, 0x99);                                // CQO
+    EmitIdivReg(X86Register.Rcx);
+    EmitMovIndirectMemReg(X86Register.Rdi, 8, X86Register.Rax);
+
+    // buf[16] = createdTime
+    EmitMovRegMem(X86Register.Rax, findDataOffset + 4, 8); // ftCreationTime
+    EmitMovRegImm(X86Register.Rcx, 116444736000000000L);
+    EmitSubRegReg(X86Register.Rax, X86Register.Rcx);
+    EmitMovRegImm(X86Register.Rcx, 10000000L);
+    EmitBytes(0x48, 0x99);                                // CQO
+    EmitIdivReg(X86Register.Rcx);
+    EmitMovIndirectMemReg(X86Register.Rdi, 16, X86Register.Rax);
+
+    // buf[24] = accessedTime
+    EmitMovRegMem(X86Register.Rax, findDataOffset + 12, 8); // ftLastAccessTime
+    EmitMovRegImm(X86Register.Rcx, 116444736000000000L);
+    EmitSubRegReg(X86Register.Rax, X86Register.Rcx);
+    EmitMovRegImm(X86Register.Rcx, 10000000L);
+    EmitBytes(0x48, 0x99);                                // CQO
+    EmitIdivReg(X86Register.Rcx);
+    EmitMovIndirectMemReg(X86Register.Rdi, 24, X86Register.Rax);
+
+    // buf[32] = isDirectory (FILE_ATTRIBUTE_DIRECTORY = 0x10)
+    EmitMovRegMem(X86Register.Rax, findDataOffset, 4);   // dwFileAttributes
+    EmitBytes(0xA9, 0x10, 0x00, 0x00, 0x00);             // TEST EAX, 0x10
+    EmitSetcc("nz", X86Register.Rcx);
+    EmitMovzxReg8To64(X86Register.Rcx);
+    EmitMovIndirectMemReg(X86Register.Rdi, 32, X86Register.Rcx);
+
+    // buf[40] = isReadOnly (FILE_ATTRIBUTE_READONLY = 0x01)
+    EmitBytes(0xA9, 0x01, 0x00, 0x00, 0x00);             // TEST EAX, 0x01
+    EmitSetcc("nz", X86Register.Rcx);
+    EmitMovzxReg8To64(X86Register.Rcx);
+    EmitMovIndirectMemReg(X86Register.Rdi, 40, X86Register.Rcx);
+
+    // Return buffer ptr
     EmitMovRegMem(X86Register.Rax, -0x10, 8);
     EmitJmp("rt_fstat_done");
+
     DefineLabel("rt_fstat_fail");
     // Free buffer on failure
     EmitMovRegMem(X86Register.Rcx, -0x10, 8);
@@ -3862,7 +3933,7 @@ public partial class X86CodeEmitter {
       DefineSymdata("__at_io_op_file_open_read", " [file_open_read]\0"u8.ToArray());
       DefineSymdata("__at_io_op_file_open_write", " [file_open_write]\0"u8.ToArray());
       DefineSymdata("__at_io_op_file_open_write_exec", " [file_open_write_exec]\0"u8.ToArray());
-      DefineSymdata("__at_io_op_file_stat", " [file_stat]\0"u8.ToArray());
+
       DefineSymdata("__at_io_op_close_handle", " [close_handle]\0"u8.ToArray());
       DefineSymdata("__at_io_op_net_connect", " [net_connect]\0"u8.ToArray());
       DefineSymdata("__at_io_op_net_send", " [net_send]\0"u8.ToArray());
@@ -5588,7 +5659,6 @@ public partial class X86CodeEmitter {
   private const long SyncOpNetClose = 13;
   private const long SyncOpDnsResolve = 14;
   private const long SyncOpFileOpenWriteExec = 15;
-  private const long SyncOpFileStat = 16;
   private const long SyncOpShutdown = 0xFF;
 
   private void EmitIoRuntime() {
@@ -5955,8 +6025,6 @@ public partial class X86CodeEmitter {
     EmitJcc("e", "__io_sync_op_dns_resolve");
     EmitCmpRegImm(X86Register.Rcx, SyncOpFileOpenWriteExec);
     EmitJcc("e", "__io_sync_op_file_open_write_exec");
-    EmitCmpRegImm(X86Register.Rcx, SyncOpFileStat);
-    EmitJcc("e", "__io_sync_op_file_stat");
     // Unknown op — abort
     EmitCallRuntimeLabel("__gt_panic_io");
 
@@ -6384,84 +6452,6 @@ public partial class X86CodeEmitter {
     EmitMovRegMem(X86Register.Rax, -0x30, 8);
     EmitJmp("__io_sync_op_done");
 
-    // --- fileStat: GetFileAttributesExA(path, GetFileExInfoStandard=0, &data) ---
-    // arg0 = cstring path, arg1 = caller-allocated 48-byte output buffer
-    // WIN32_FILE_ATTRIBUTE_DATA (36 bytes) at [rbp-0x60]:
-    //   +0  dwFileAttributes (4 bytes)
-    //   +4  ftCreationTime (8 bytes)
-    //   +12 ftLastAccessTime (8 bytes)
-    //   +20 ftLastWriteTime (8 bytes)
-    //   +28 nFileSizeHigh (4 bytes)
-    //   +32 nFileSizeLow (4 bytes)
-    DefineLabel("__io_sync_op_file_stat");
-    EmitMovRegMem(X86Register.Rax, -0x08, 8);                   // req
-    EmitMovRegIndirectMem(X86Register.Rcx, X86Register.Rax, SyncReqOffArg0); // path
-    EmitXorRegReg(X86Register.Rdx, X86Register.Rdx);             // GetFileExInfoStandard = 0
-    EmitLeaRegMem(X86Register.R8, -0x60);                        // &data at [rbp-0x60]
-    EmitCallImport("kernel32.dll", "GetFileAttributesExA");
-    // Check result (0 = failure)
-    EmitTestRegReg(X86Register.Rax, X86Register.Rax);
-    EmitJcc("z", "__io_sync_file_stat_fail");
-
-    // Success — load output buffer pointer from req->arg1
-    EmitMovRegMem(X86Register.Rax, -0x08, 8);                   // reload req
-    EmitMovRegIndirectMem(X86Register.Rdi, X86Register.Rax, SyncReqOffArg1); // RDI = output buffer
-
-    // [0] size = (nFileSizeHigh << 32) | nFileSizeLow
-    EmitMovRegMem(X86Register.Rax, -0x60 + 28, 4);              // nFileSizeHigh (4 bytes, zero-extended)
-    EmitShlRegImm(X86Register.Rax, 32);
-    EmitMovRegMem(X86Register.Rcx, -0x60 + 32, 4);              // nFileSizeLow (4 bytes, zero-extended)
-    EmitOrRegReg(X86Register.Rax, X86Register.Rcx);
-    EmitMovIndirectMemReg(X86Register.Rdi, 0, X86Register.Rax); // buf[0] = size
-
-    // FILETIME → Unix epoch: (filetime - 116444736000000000) / 10000000
-    // ftLastWriteTime at data+20 → modifiedTime → buf[8]
-    EmitMovRegMem(X86Register.Rax, -0x60 + 20, 8);
-    EmitMovRegImm(X86Register.Rcx, 116444736000000000L);        // 0x019DB1DED53E8000
-    EmitSubRegReg(X86Register.Rax, X86Register.Rcx);
-    EmitMovRegImm(X86Register.Rcx, 10000000L);
-    EmitBytes(0x48, 0x99);                                       // CQO (sign-extend RAX into RDX:RAX)
-    EmitIdivReg(X86Register.Rcx);                                // RAX = quotient
-    EmitMovIndirectMemReg(X86Register.Rdi, 8, X86Register.Rax); // buf[8] = modifiedTime
-
-    // ftCreationTime at data+4 → createdTime → buf[16]
-    EmitMovRegMem(X86Register.Rax, -0x60 + 4, 8);
-    EmitMovRegImm(X86Register.Rcx, 116444736000000000L);
-    EmitSubRegReg(X86Register.Rax, X86Register.Rcx);
-    EmitMovRegImm(X86Register.Rcx, 10000000L);
-    EmitBytes(0x48, 0x99);                                       // CQO
-    EmitIdivReg(X86Register.Rcx);
-    EmitMovIndirectMemReg(X86Register.Rdi, 16, X86Register.Rax); // buf[16] = createdTime
-
-    // ftLastAccessTime at data+12 → accessedTime → buf[24]
-    EmitMovRegMem(X86Register.Rax, -0x60 + 12, 8);
-    EmitMovRegImm(X86Register.Rcx, 116444736000000000L);
-    EmitSubRegReg(X86Register.Rax, X86Register.Rcx);
-    EmitMovRegImm(X86Register.Rcx, 10000000L);
-    EmitBytes(0x48, 0x99);                                       // CQO
-    EmitIdivReg(X86Register.Rcx);
-    EmitMovIndirectMemReg(X86Register.Rdi, 24, X86Register.Rax); // buf[24] = accessedTime
-
-    // dwFileAttributes at data+0, check FILE_ATTRIBUTE_DIRECTORY = 0x10
-    EmitMovRegMem(X86Register.Rax, -0x60, 4);                   // load dwFileAttributes (4 bytes, zero-extended)
-    EmitBytes(0xA9, 0x10, 0x00, 0x00, 0x00);                    // TEST EAX, 0x10
-    EmitSetcc("nz", X86Register.Rcx);                            // CL = 1 if directory
-    EmitMovzxReg8To64(X86Register.Rcx);
-    EmitMovIndirectMemReg(X86Register.Rdi, 32, X86Register.Rcx); // buf[32] = isDirectory
-
-    // Check FILE_ATTRIBUTE_READONLY = 0x01
-    EmitBytes(0xA9, 0x01, 0x00, 0x00, 0x00);                    // TEST EAX, 0x01
-    EmitSetcc("nz", X86Register.Rcx);                            // CL = 1 if read-only
-    EmitMovzxReg8To64(X86Register.Rcx);
-    EmitMovIndirectMemReg(X86Register.Rdi, 40, X86Register.Rcx); // buf[40] = isReadOnly
-
-    EmitXorRegReg(X86Register.Rax, X86Register.Rax);             // return 0 = success
-    EmitJmp("__io_sync_op_done");
-
-    DefineLabel("__io_sync_file_stat_fail");
-    EmitMovRegImm(X86Register.Rax, -1);
-    EmitJmp("__io_sync_op_done");
-
     // --- Common: direct GT completion (no intermediate queue) ---
     DefineLabel("__io_sync_op_done");
     EmitMovMemReg(-0x10, X86Register.Rax, 8); // save result
@@ -6722,7 +6712,7 @@ public partial class X86CodeEmitter {
       (SyncOpNetRecv,       "__at_io_op_net_recv"),
       (SyncOpNetClose,      "__at_io_op_net_close"),
       (SyncOpDnsResolve,    "__at_io_op_net_connect"),
-      (SyncOpFileStat,      "__at_io_op_file_stat"),
+
     };
 
     foreach (var (opCode, symdata) in ops) {

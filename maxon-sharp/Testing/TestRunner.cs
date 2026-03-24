@@ -995,6 +995,12 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
       foreach (var test in spec.Tests) {
         if (test.Expectation is not SuccessExpectation success) continue;
 
+        // Honor --filter: skip tests that don't match
+        if (_filter != null) {
+          var testPath = $"{specName}/{test.Name}";
+          if (!testPath.Contains(_filter, StringComparison.OrdinalIgnoreCase)) continue;
+        }
+
         var fragmentPath = Path.GetFullPath(Path.Combine(_fragmentDir, specName, $"{test.Name}.test"));
         var sourceWithComment = $"// Test: {test.Name}\n{test.Source}";
         var sources = new[] { new Compiler.SourceFile(fragmentPath, sourceWithComment) };
