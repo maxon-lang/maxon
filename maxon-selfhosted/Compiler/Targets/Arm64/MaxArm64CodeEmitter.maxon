@@ -216,6 +216,29 @@ function maxArm64EmitRem(code ByteArray, rd MachineWord, rn MachineWord, rm Mach
   maxArm64EmitMsub(code, rd: rd, rn: 2, rm: rm, ra: rn)
 end 'maxArm64EmitRem'
 
+// MOV Xd, Xn => ORR Xd, XZR, Xn
+function maxArm64EmitMovRegReg(code ByteArray, rd MachineWord, rn MachineWord)
+  // ORR Xd, XZR, Xn: 0xAA0003E0 | (rn << 16) | rd
+  let insn = 0xAA0003E0 or (rn shl 16) or rd
+  maxArm64EmitInsn(code, insn: insn)
+end 'maxArm64EmitMovRegReg'
+
+// STUR Xt, [X29, #offset] — store to signed byte offset from frame pointer
+function maxArm64EmitSpillToStack(code ByteArray, rt MachineWord, byteOffset MachineWord)
+  // STUR Xt, [Xn, #simm9]: 0xF8000000 | (imm9 << 12) | (Xn << 5) | Xt
+  let imm9 = byteOffset and 0x1FF
+  let insn = 0xF8000000 or (imm9 shl 12) or (29 shl 5) or rt
+  maxArm64EmitInsn(code, insn: insn)
+end 'maxArm64EmitSpillToStack'
+
+// LDUR Xt, [X29, #offset] — load from signed byte offset from frame pointer
+function maxArm64EmitReloadFromStack(code ByteArray, rt MachineWord, byteOffset MachineWord)
+  // LDUR Xt, [Xn, #simm9]: 0xF8400000 | (imm9 << 12) | (Xn << 5) | Xt
+  let imm9 = byteOffset and 0x1FF
+  let insn = 0xF8400000 or (imm9 shl 12) or (29 shl 5) or rt
+  maxArm64EmitInsn(code, insn: insn)
+end 'maxArm64EmitReloadFromStack'
+
 // CMP Xn, Xm => SUBS XZR, Xn, Xm
 function maxArm64EmitCmp(code ByteArray, rn MachineWord, rm MachineWord)
   let insn = 0xEB00001F or(rm shl 16) or(rn shl 5)
@@ -775,6 +798,10 @@ function emitMaxArm64Instruction(op MaxArm64Op, code ByteArray, jumpFixups Block
     storeByteOp(baseSlot, offsetSlot, byteSlot) then maxArm64EmitStoreByteOp(code, baseSlot: baseSlot, offsetSlot: offsetSlot, byteSlot: byteSlot)
     loadByteOp(resultSlot, baseSlot, offsetSlot) then maxArm64EmitLoadByteOp(code, resultSlot: resultSlot, baseSlot: baseSlot, offsetSlot: offsetSlot)
     memcpyOp(dstSlot, srcSlot, lenSlot) then maxArm64EmitMemcpyOp(code, dstSlot: dstSlot, srcSlot: srcSlot, lenSlot: lenSlot)
+    // Register allocator ops
+    movRegReg(dest, src) then maxArm64EmitMovRegReg(code, rd: dest.rawValue, rn: src.rawValue)
+    spillToStack(offset, src) then maxArm64EmitSpillToStack(code, rt: src.rawValue, byteOffset: offset)
+    reloadFromStack(dest, offset) then maxArm64EmitReloadFromStack(code, rt: dest.rawValue, byteOffset: offset)
   end 'emit'
 end 'emitMaxArm64Instruction'
 

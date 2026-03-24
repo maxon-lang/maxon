@@ -11,6 +11,247 @@ type BlockJumpFixup
 end 'BlockJumpFixup'
 typealias BlockJumpFixupArray = Array with BlockJumpFixup
 
+// --- REX/ModRM encoding for arbitrary register pairs ---
+
+// 3-bit register code (low 3 bits of register number)
+function regCode(reg X64Register) returns MachineWord
+  return match reg 'code'
+    rax gives 0
+    rcx gives 1
+    rdx gives 2
+    rbx gives 3
+    rsp gives 4
+    rbp gives 5
+    rsi gives 6
+    rdi gives 7
+    r8 gives 0
+    r9 gives 1
+    r10 gives 2
+    r11 gives 3
+  end 'code'
+end 'regCode'
+
+// True for extended registers (R8-R11) that need REX.B or REX.R
+function isExtended(reg X64Register) returns bool
+  return match reg 'ext'
+    rax to rdi gives false
+    r8 to r11 gives true
+  end 'ext'
+end 'isExtended'
+
+// Emit REX.W prefix with optional R and B bits for extended registers
+// regField = register in ModRM reg field; rmField = register in ModRM r/m field
+function emitRexWPrefix(code ByteArray, regField X64Register, rmField X64Register)
+  var rex = 0x48
+  if isExtended(regField) 'rBit'
+    rex = rex or 0x04
+  end 'rBit'
+  if isExtended(rmField) 'bBit'
+    rex = rex or 0x01
+  end 'bBit'
+  code.push(rex)
+end 'emitRexWPrefix'
+
+// Emit REX.W prefix for single-register ops (register in r/m field)
+function emitRexWSingle(code ByteArray, rmField X64Register)
+  var rex = 0x48
+  if isExtended(rmField) 'bBit'
+    rex = rex or 0x01
+  end 'bBit'
+  code.push(rex)
+end 'emitRexWSingle'
+
+// Emit ModRM byte: mod=11 (register), reg field, r/m field
+function emitModRMReg(code ByteArray, regField X64Register, rmField X64Register)
+  let regBits = regCode(regField)
+  let rmBits = regCode(rmField)
+  let modrm = 0xC0 or (regBits shl 3) or rmBits
+  code.push(modrm)
+end 'emitModRMReg'
+
+// Emit ModRM byte with a fixed opcode extension in the reg field
+function emitModRMExt(code ByteArray, ext MachineWord, rmField X64Register)
+  let rmBits = regCode(rmField)
+  let modrm = 0xC0 or (ext shl 3) or rmBits
+  code.push(modrm)
+end 'emitModRMExt'
+
+// --- Emitters for register-allocator ops ---
+
+function emitMovRegRegOp(code ByteArray, dest X64Register, src X64Register)
+  // mov dest, src  =>  REX.W 89 ModRM(src -> dest)
+  emitRexWPrefix(code, regField: src, rmField: dest)
+  code.push(0x89)
+  emitModRMReg(code, regField: src, rmField: dest)
+end 'emitMovRegRegOp'
+
+function emitCmpRegRegOp(code ByteArray, lhs X64Register, rhs X64Register)
+  // cmp lhs, rhs  =>  REX.W 39 ModRM(rhs -> lhs)
+  // CMP r/m64, r64: opcode 0x39, reg=rhs, r/m=lhs
+  emitRexWPrefix(code, regField: rhs, rmField: lhs)
+  code.push(0x39)
+  emitModRMReg(code, regField: rhs, rmField: lhs)
+end 'emitCmpRegRegOp'
+
+function emitTestRegRegOp(code ByteArray, reg1 X64Register, reg2 X64Register)
+  // test reg1, reg2  =>  REX.W 85 ModRM(reg2 -> reg1)
+  emitRexWPrefix(code, regField: reg2, rmField: reg1)
+  code.push(0x85)
+  emitModRMReg(code, regField: reg2, rmField: reg1)
+end 'emitTestRegRegOp'
+
+function emitCqoOp(code ByteArray)
+  // cqo  =>  48 99
+  code.append(b"\x48\x99")
+end 'emitCqoOp'
+
+function emitIdivRegOp(code ByteArray, divisor X64Register)
+  // idiv divisor  =>  REX.W F7 ModRM(/7, divisor)
+  emitRexWSingle(code, rmField: divisor)
+  code.push(0xF7)
+  emitModRMExt(code, ext: 7, rmField: divisor)
+end 'emitIdivRegOp'
+
+function emitXorRegRegSelfOp(code ByteArray, reg X64Register)
+  // xor reg, reg  =>  REX.W 31 ModRM(reg, reg)
+  emitRexWPrefix(code, regField: reg, rmField: reg)
+  code.push(0x31)
+  emitModRMReg(code, regField: reg, rmField: reg)
+end 'emitXorRegRegSelfOp'
+
+// Spill: mov [rbp+offset], srcReg (offset is negative for spill slots)
+function emitSpillToStackOp(code ByteArray, offset MachineWord, srcReg X64Register)
+  let srcCode = regCode(srcReg)
+  let signedOffset = offset
+  if signedOffset >= -128 and signedOffset <= 127 'disp8'
+    emitRexWPrefix(code, regField: srcReg, rmField: X64Register.rbp)
+    code.push(0x89)
+    let modrm = 0x45 or (srcCode shl 3)
+    code.push(modrm)
+    code.push(signedOffset and 0xFF)
+  end 'disp8' else 'disp32'
+    emitRexWPrefix(code, regField: srcReg, rmField: X64Register.rbp)
+    code.push(0x89)
+    let modrm = 0x85 or (srcCode shl 3)
+    code.push(modrm)
+    writeDword(code, value: signedOffset)
+  end 'disp32'
+end 'emitSpillToStackOp'
+
+// Reload: mov destReg, [rbp+offset] (offset is negative for spill slots)
+function emitReloadFromStackOp(code ByteArray, dest X64Register, offset MachineWord)
+  let destCode = regCode(dest)
+  let signedOffset = offset
+  if signedOffset >= -128 and signedOffset <= 127 'disp8'
+    emitRexWPrefix(code, regField: dest, rmField: X64Register.rbp)
+    code.push(0x8B)
+    let modrm = 0x45 or (destCode shl 3)
+    code.push(modrm)
+    code.push(signedOffset and 0xFF)
+  end 'disp8' else 'disp32'
+    emitRexWPrefix(code, regField: dest, rmField: X64Register.rbp)
+    code.push(0x8B)
+    let modrm = 0x85 or (destCode shl 3)
+    code.push(modrm)
+    writeDword(code, value: signedOffset)
+  end 'disp32'
+end 'emitReloadFromStackOp'
+
+// movRegImm for arbitrary destination register (not just rax)
+function emitMovRegImmGeneric(code ByteArray, dest X64Register, value MachineWord)
+  if value == 0 'useXor'
+    emitXorRegRegSelfOp(code, reg: dest)
+    return
+  end 'useXor'
+  if value >= -2147483648 and value <= 2147483647 'small'
+    // mov r/m64, imm32 (sign-extended)  =>  REX.W C7 ModRM(/0, dest) + imm32
+    emitRexWSingle(code, rmField: dest)
+    code.push(0xC7)
+    emitModRMExt(code, ext: 0, rmField: dest)
+    writeDword(code, value: value)
+  end 'small' else 'large'
+    // mov reg, imm64  =>  REX.W B8+rd <qword>
+    var rex = 0x48
+    if isExtended(dest) 'extBit'
+      rex = rex or 0x01
+    end 'extBit'
+    code.push(rex)
+    let destCode = regCode(dest)
+    code.push(0xB8 + destCode)
+    writeQword(code, value: value)
+  end 'large'
+end 'emitMovRegImmGeneric'
+
+// --- Upgraded emitters for register-parameterized existing ops ---
+
+function emitAddRegRegParam(code ByteArray, dest X64Register, src X64Register)
+  // add dest, src  =>  REX.W 01 ModRM(src -> dest)
+  emitRexWPrefix(code, regField: src, rmField: dest)
+  code.push(0x01)
+  emitModRMReg(code, regField: src, rmField: dest)
+end 'emitAddRegRegParam'
+
+function emitSubRegRegParam(code ByteArray, dest X64Register, src X64Register)
+  // sub dest, src  =>  REX.W 29 ModRM(src -> dest)
+  emitRexWPrefix(code, regField: src, rmField: dest)
+  code.push(0x29)
+  emitModRMReg(code, regField: src, rmField: dest)
+end 'emitSubRegRegParam'
+
+function emitImulRegRegParam(code ByteArray, dest X64Register, src X64Register)
+  // imul dest, src  =>  REX.W 0F AF ModRM(dest -> src)
+  emitRexWPrefix(code, regField: dest, rmField: src)
+  code.push(0x0F)
+  code.push(0xAF)
+  emitModRMReg(code, regField: dest, rmField: src)
+end 'emitImulRegRegParam'
+
+function emitNegRegParam(code ByteArray, reg X64Register)
+  // neg reg  =>  REX.W F7 ModRM(/3, reg)
+  emitRexWSingle(code, rmField: reg)
+  code.push(0xF7)
+  emitModRMExt(code, ext: 3, rmField: reg)
+end 'emitNegRegParam'
+
+function emitBitNotRegParam(code ByteArray, reg X64Register)
+  // not reg  =>  REX.W F7 ModRM(/2, reg)
+  emitRexWSingle(code, rmField: reg)
+  code.push(0xF7)
+  emitModRMExt(code, ext: 2, rmField: reg)
+end 'emitBitNotRegParam'
+
+function emitAndRegRegParam(code ByteArray, dest X64Register, src X64Register)
+  emitRexWPrefix(code, regField: src, rmField: dest)
+  code.push(0x21)
+  emitModRMReg(code, regField: src, rmField: dest)
+end 'emitAndRegRegParam'
+
+function emitOrRegRegParam(code ByteArray, dest X64Register, src X64Register)
+  emitRexWPrefix(code, regField: src, rmField: dest)
+  code.push(0x09)
+  emitModRMReg(code, regField: src, rmField: dest)
+end 'emitOrRegRegParam'
+
+function emitXorRegRegParam(code ByteArray, dest X64Register, src X64Register)
+  emitRexWPrefix(code, regField: src, rmField: dest)
+  code.push(0x31)
+  emitModRMReg(code, regField: src, rmField: dest)
+end 'emitXorRegRegParam'
+
+function emitShlRegClParam(code ByteArray, reg X64Register)
+  // shl reg, cl  =>  REX.W D3 ModRM(/4, reg)
+  emitRexWSingle(code, rmField: reg)
+  code.push(0xD3)
+  emitModRMExt(code, ext: 4, rmField: reg)
+end 'emitShlRegClParam'
+
+function emitSarRegClParam(code ByteArray, reg X64Register)
+  // sar reg, cl  =>  REX.W D3 ModRM(/7, reg)
+  emitRexWSingle(code, rmField: reg)
+  code.push(0xD3)
+  emitModRMExt(code, ext: 7, rmField: reg)
+end 'emitSarRegClParam'
+
 // --- Byte emission helpers (identical to X86CodeEmitter) ---
 
 function emitPrologue(code ByteArray, stackSize StackSize)
@@ -613,21 +854,21 @@ function emitMaxX64Op(op MaxX64Op, code ByteArray, blockFixups BlockJumpFixupArr
   match op 'emit'
     prologue(stackSize) then emitPrologue(code, stackSize: stackSize)
     epilogue then emitEpilogue(code)
-    movRegImm(_, value) then emitMovRegImm(code, value: value)
+    movRegImm(dest, value) then emitMovRegImmGeneric(code, dest: dest, value: value)
     movSlot(slotIndex, srcReg) then emitMovSlot(code, slotIndex: slotIndex, srcReg: srcReg)
     loadSlot(destReg, slotIndex) then emitLoadSlotToReg(code, slotIndex: slotIndex, dest: destReg)
-    addRegReg then emitAddRegReg(code)
-    subRegReg then emitSubRegReg(code)
-    imulRegReg then emitImulRegReg(code)
+    addRegReg(destReg, srcReg) then emitAddRegRegParam(code, dest: destReg, src: srcReg)
+    subRegReg(destReg, srcReg) then emitSubRegRegParam(code, dest: destReg, src: srcReg)
+    imulRegReg(destReg, srcReg) then emitImulRegRegParam(code, dest: destReg, src: srcReg)
     idivRcx then emitIdivRcx(code)
     iremRcx then emitIremRcx(code)
-    negReg then emitNegReg(code)
-    bitNotReg then emitBitNotReg(code)
-    andRegReg then emitAndRegReg(code)
-    orRegReg then emitOrRegReg(code)
-    xorRegReg then emitXorRegReg(code)
-    shlRegCl then emitShlRegCl(code)
-    sarRegCl then emitSarRegCl(code)
+    negReg(reg) then emitNegRegParam(code, reg: reg)
+    bitNotReg(reg) then emitBitNotRegParam(code, reg: reg)
+    andRegReg(destReg, srcReg) then emitAndRegRegParam(code, dest: destReg, src: srcReg)
+    orRegReg(destReg, srcReg) then emitOrRegRegParam(code, dest: destReg, src: srcReg)
+    xorRegReg(destReg, srcReg) then emitXorRegRegParam(code, dest: destReg, src: srcReg)
+    shlRegCl(reg) then emitShlRegClParam(code, reg: reg)
+    sarRegCl(reg) then emitSarRegClParam(code, reg: reg)
     cmpRaxRcx then emitCmpRaxRcx(code)
     testRaxRax then emitTestRaxRax(code)
     condJump(condition, targetBlock) then emitCondJumpBlock(code, blockFixups: blockFixups, opcode: condition.rawValue, targetBlock: targetBlock)
@@ -650,6 +891,15 @@ function emitMaxX64Op(op MaxX64Op, code ByteArray, blockFixups BlockJumpFixupArr
     storeByteOp(baseSlot, offsetSlot, byteSlot) then emitX86StoreByteOp(code, baseSlot: baseSlot, offsetSlot: offsetSlot, byteSlot: byteSlot)
     loadByteOp(resultSlot, baseSlot, offsetSlot) then emitX86LoadByteOp(code, resultSlot: resultSlot, baseSlot: baseSlot, offsetSlot: offsetSlot)
     memcpyOp(dstSlot, srcSlot, lenSlot) then emitX86MemcpyOp(code, dstSlot: dstSlot, srcSlot: srcSlot, lenSlot: lenSlot)
+    // Register allocator ops
+    movRegReg(destReg, srcReg) then emitMovRegRegOp(code, dest: destReg, src: srcReg)
+    cmpRegReg(lhsReg, rhsReg) then emitCmpRegRegOp(code, lhs: lhsReg, rhs: rhsReg)
+    testRegReg(reg1, reg2) then emitTestRegRegOp(code, reg1: reg1, reg2: reg2)
+    cqo then emitCqoOp(code)
+    idivReg(divisorReg) then emitIdivRegOp(code, divisor: divisorReg)
+    spillToStack(offset, srcReg) then emitSpillToStackOp(code, offset: offset, srcReg: srcReg)
+    reloadFromStack(destReg, offset) then emitReloadFromStackOp(code, dest: destReg, offset: offset)
+    xorRegRegSelf(reg) then emitXorRegRegSelfOp(code, reg: reg)
   end 'emit'
 end 'emitMaxX64Op'
 

@@ -77,6 +77,15 @@ export union MaxX64Op
   loadByteOp(resultSlot VarSlot, baseSlot VarSlot, offsetSlot VarSlot)
   // SysOp lowering: rep movsb (memcpy)
   memcpyOp(dstSlot VarSlot, srcSlot VarSlot, lenSlot VarSlot)
+  // Register allocator ops
+  movRegReg(destReg X64Register, srcReg X64Register)
+  cmpRegReg(lhsReg X64Register, rhsReg X64Register)
+  testRegReg(reg1 X64Register, reg2 X64Register)
+  cqo
+  idivReg(divisorReg X64Register)
+  spillToStack(offset MachineWord, srcReg X64Register)
+  reloadFromStack(destReg X64Register, offset MachineWord)
+  xorRegRegSelf(reg X64Register)
 end 'MaxX64Op'
 
 export typealias MaxX64OpArray = Array with MaxX64Op
@@ -140,5 +149,13 @@ export function maxX64OpToString(op MaxX64Op, blocks MlirBlockArray) returns Str
     storeByteOp(_, _, _) gives "x86.mov byte ptr [rax+0], cl"
     loadByteOp(_, _, _) gives "x86.movzx rax, byte ptr [rax+0]"
     memcpyOp(_, _, _) gives "x86.rep_movsb"
+    movRegReg(destReg, srcReg) gives "x86.mov {destReg.name}, {srcReg.name}"
+    cmpRegReg(lhsReg, rhsReg) gives "x86.cmp {lhsReg.name}, {rhsReg.name}"
+    testRegReg(reg1, reg2) gives "x86.test {reg1.name}, {reg2.name}"
+    cqo gives "x86.cqo"
+    idivReg(divisorReg) gives "x86.idiv {divisorReg.name}"
+    spillToStack(offset, srcReg) gives "x86.mov [rbp+{offset}], {srcReg.name}"
+    reloadFromStack(destReg, offset) gives "x86.mov {destReg.name}, [rbp+{offset}]"
+    xorRegRegSelf(reg) gives "x86.xor {reg.name}, {reg.name}"
   end 'toString'
 end 'maxX64OpToString'
