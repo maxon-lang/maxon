@@ -28,7 +28,7 @@ module {
     maxon.scope_end [__retval_3]
     maxon.return %2
   }
-  func @memory-safety.main() -> i64 {
+  func @main() -> i64 {
   entry:
     %9 = maxon.literal {value = 0 : i64}
     %10 = maxon.literal {value = 0 : i64}
@@ -62,7 +62,6 @@ module {
     maxon.assign %28 {var = got} {decl = 1 : i1} {mut = 1 : i1}
     %29 = maxon.struct_var_ref got
     %30 = maxon.field_access .value %29
-    maxon.assign %30 {var = __range_val_4} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
     %31 = maxon.literal {value = 0 : i64}
     %32 = maxon.binop %30, %31 {op = lt}
     %33 = maxon.literal {value = 4294967295 : i64}
@@ -72,9 +71,8 @@ module {
   __range_panic_4:
     maxon.panic "panic at array-push-struct-incref.test:15: Range check failed for type 'ExitCode': value outside int(0 to 4294967295)"
   __range_ok_4:
-    %37 = maxon.var_ref {var = __range_val_4} {type = i64}
-    maxon.scope_end [arr, item, got, __range_val_4, __try_result_0]
-    maxon.return %37
+    maxon.scope_end [arr, item, got, __try_result_0]
+    maxon.return %30
   }
 }
 === standard
@@ -97,10 +95,10 @@ module {
     %9 = memref.load __retval_3 : i64
     func.return %9
   }
-  func @memory-safety.main() -> u32 {
+  func @main() -> u32 {
   entry:
-    %86 = arith.constant {value = 0 : i64}
-    memref.store %86, __try_result_0
+    %85 = arith.constant {value = 0 : i64}
+    memref.store %85, __try_result_0
     %11 = arith.constant {value = 0 : i64}
     %12 = arith.constant {value = 0 : i64}
     %13 = arith.constant {value = 0 : i64}
@@ -185,7 +183,6 @@ module {
     std.call_runtime @mm_incref %64
     %65 = memref.load got : i64
     %66 = memref.load_indirect %65+0
-    memref.store %66, __range_val_4
     %67 = arith.constant {value = 0 : i64}
     %68 = arith.cmpi lt %66, %67
     %69 = arith.constant {value = 4294967295 : i64}
@@ -193,43 +190,42 @@ module {
     %71 = arith.ori1 %68, %70
     cf.cond_br %71 [then: __range_panic_4, else: __range_ok_4]
   __range_panic_4:
-    %72 = memref.lea_symdata __panic_msg_36
+    %72 = memref.lea_symdata __panic_msg_0
     %73 = std.ptr_to_i64 %72
     std.call_runtime @maxon_panic %73
   __range_ok_4:
-    %74 = memref.load __range_val_4 : i64
-    %75 = memref.load __try_result_0 : i64
-    std.call_runtime_if_nonnull @mm_decref %75
-    %77 = memref.load got : i64
-    std.call_runtime_if_nonnull @mm_decref %77
-    %79 = memref.load item : i64
-    std.call_runtime_if_nonnull @mm_decref %79
-    %81 = memref.load arr : i64
-    std.call_runtime_if_nonnull @mm_decref %81
-    func.return %74
+    %74 = memref.load __try_result_0 : i64
+    std.call_runtime_if_nonnull @mm_decref %74
+    %76 = memref.load got : i64
+    std.call_runtime_if_nonnull @mm_decref %76
+    %78 = memref.load item : i64
+    std.call_runtime_if_nonnull @mm_decref %78
+    %80 = memref.load arr : i64
+    std.call_runtime_if_nonnull @mm_decref %80
+    func.return %66
   }
   func @__destruct_Item(ptr: i64) {
   entry:
-    %223 = func.param ptr : StdI64
+    %226 = func.param ptr : StdI64
     cf.br done
   done:
     func.return
   }
   func @__destruct___ManagedMemory_Item(ptr: i64) {
   entry:
-    %224 = func.param ptr : StdI64
-    memref.store %224, __destr_ptr
-    %227 = memref.load __destr_ptr : i64
-    %228 = memref.load_indirect %227+16
-    %229 = arith.constant {value = 0 : i64}
-    %230 = arith.cmpi ne %228, %229
-    cf.cond_br %230 [then: free_buf_0, else: skip_buf_0]
+    %227 = func.param ptr : StdI64
+    memref.store %227, __destr_ptr
+    %230 = memref.load __destr_ptr : i64
+    %231 = memref.load_indirect %230+16
+    %232 = arith.constant {value = 0 : i64}
+    %233 = arith.cmpi ne %231, %232
+    cf.cond_br %233 [then: free_buf_0, else: skip_buf_0]
   free_buf_0:
-    %231 = memref.load __destr_ptr : i64
-    std.call_runtime @mm_decref_managed_elements %231
-    %232 = memref.load __destr_ptr : i64
-    %233 = memref.load_indirect %232+0
-    std.call_runtime @mm_raw_free %233
+    %234 = memref.load __destr_ptr : i64
+    std.call_runtime @mm_decref_managed_elements %234
+    %235 = memref.load __destr_ptr : i64
+    %236 = memref.load_indirect %235+0
+    std.call_runtime @mm_raw_free %236
     cf.br skip_buf_0
   skip_buf_0:
     cf.br done
@@ -238,11 +234,11 @@ module {
   }
   func @__destruct_ItemArray(ptr: i64) {
   entry:
-    %234 = func.param ptr : StdI64
-    memref.store %234, __destr_ptr
-    %235 = memref.load __destr_ptr : i64
-    %236 = memref.load_indirect %235+8
-    std.call_runtime_if_nonnull @mm_decref %236
+    %237 = func.param ptr : StdI64
+    memref.store %237, __destr_ptr
+    %238 = memref.load __destr_ptr : i64
+    %239 = memref.load_indirect %238+8
+    std.call_runtime_if_nonnull @mm_decref %239
     cf.br done
   done:
     func.return
@@ -273,9 +269,9 @@ module {
     arm64.epilogue stack_size=64
     arm64.ret
   }
-  func @memory-safety.main() -> u32 {
+  func @main() -> u32 {
   entry:
-    arm64.prologue stack_size=144
+    arm64.prologue stack_size=128
     arm64.mov x0, #0
     arm64.str x0, [x29, #-8]
     arm64.mov x1, #0
@@ -345,8 +341,8 @@ module {
     arm64.cmp x1, x0
     arm64.cset x2, ne
     arm64.cmp x2, #0
-    arm64.b.ne memory-safety.main.otherwise_default_error_1
-    arm64.b memory-safety.main.otherwise_default_success_2
+    arm64.b.ne main.otherwise_default_error_1
+    arm64.b main.otherwise_default_success_2
   otherwise_default_error_1:
     arm64.mov x0, #0
     arm64.mov x0, #8
@@ -360,16 +356,16 @@ module {
     arm64.ldr x3, [x29, #-8]
     arm64.ldr x0, [x29, #-8]
     arm64.bl mm_incref
-    arm64.b memory-safety.main.otherwise_default_continue_3
+    arm64.b main.otherwise_default_continue_3
   otherwise_default_success_2:
     arm64.ldr x0, [x29, #-8]
     arm64.cmp x0, #0
-    arm64.b.eq memory-safety.main.__skip_guarded_73
+    arm64.b.eq main.__skip_guarded_73
     arm64.bl mm_decref
-    arm64.label memory-safety.main.__skip_guarded_73
+    arm64.label main.__skip_guarded_73
     arm64.ldr x1, [x29, #-40]
     arm64.str x1, [x29, #-8]
-    arm64.b memory-safety.main.otherwise_default_continue_3
+    arm64.b main.otherwise_default_continue_3
   otherwise_default_continue_3:
     arm64.ldr x0, [x29, #-8]
     arm64.str x0, [x29, #-48]
@@ -378,7 +374,6 @@ module {
     arm64.bl mm_incref
     arm64.ldr x2, [x29, #-48]
     arm64.ldr x3, [x2, #0]
-    arm64.str x3, [x29, #-56]
     arm64.mov x4, #0
     arm64.cmp x3, x4
     arm64.cset x5, lt
@@ -387,41 +382,40 @@ module {
     arm64.cset x7, gt
     arm64.orr x8, x5, x7
     arm64.cmp x8, #0
-    arm64.b.ne memory-safety.main.__range_panic_4
-    arm64.b memory-safety.main.__range_ok_4
+    arm64.b.ne main.__range_panic_4
+    arm64.b main.__range_ok_4
   __range_panic_4:
-    arm64.adrp_add_symdata x0, __panic_msg_36
+    arm64.adrp_add_symdata x0, __panic_msg_0
     arm64.mov x1, x0
     arm64.mov x0, x1
     arm64.bl maxon_panic
   __range_ok_4:
-    arm64.ldr x0, [x29, #-56]
-    arm64.ldr x1, [x29, #-8]
-    arm64.cmp x1, #0
-    arm64.b.eq memory-safety.main.__skip_guarded_95
     arm64.ldr x0, [x29, #-8]
+    arm64.str x3, [x29, #-56]
+    arm64.cmp x0, #0
+    arm64.b.eq main.__skip_guarded_93
     arm64.bl mm_decref
-    arm64.label memory-safety.main.__skip_guarded_95
-    arm64.ldr x2, [x29, #-48]
-    arm64.cmp x2, #0
-    arm64.b.eq memory-safety.main.__skip_guarded_97
+    arm64.label main.__skip_guarded_93
+    arm64.ldr x1, [x29, #-48]
+    arm64.cmp x1, #0
+    arm64.b.eq main.__skip_guarded_95
     arm64.ldr x0, [x29, #-48]
     arm64.bl mm_decref
-    arm64.label memory-safety.main.__skip_guarded_97
-    arm64.ldr x3, [x29, #-32]
-    arm64.cmp x3, #0
-    arm64.b.eq memory-safety.main.__skip_guarded_99
+    arm64.label main.__skip_guarded_95
+    arm64.ldr x2, [x29, #-32]
+    arm64.cmp x2, #0
+    arm64.b.eq main.__skip_guarded_97
     arm64.ldr x0, [x29, #-32]
     arm64.bl mm_decref
-    arm64.label memory-safety.main.__skip_guarded_99
-    arm64.ldr x4, [x29, #-24]
-    arm64.cmp x4, #0
-    arm64.b.eq memory-safety.main.__skip_guarded_101
+    arm64.label main.__skip_guarded_97
+    arm64.ldr x3, [x29, #-24]
+    arm64.cmp x3, #0
+    arm64.b.eq main.__skip_guarded_99
     arm64.ldr x0, [x29, #-24]
     arm64.bl mm_decref
-    arm64.label memory-safety.main.__skip_guarded_101
+    arm64.label main.__skip_guarded_99
     arm64.ldr x0, [x29, #-56]
-    arm64.epilogue stack_size=144
+    arm64.epilogue stack_size=128
     arm64.ret
   }
   func @__destruct_Item(ptr: i64) {

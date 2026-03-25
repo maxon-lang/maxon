@@ -49,9 +49,9 @@ module {
     arm64.epilogue stack_size=48
     arm64.ret
   }
-  func @method-calls.main() -> u32 {
+  func @main() -> u32 {
   entry:
-    arm64.prologue stack_size=80
+    arm64.prologue stack_size=64
     arm64.mov x0, #42
     arm64.mov x0, #8
     arm64.mov x1, #0
@@ -79,7 +79,6 @@ module {
     arm64.ldr x8, [x29, #-16]
     arm64.ldr x0, [x29, #-16]
     arm64.bl Outer.getInnerValue
-    arm64.str x0, [x29, #-24]
     arm64.mov x9, #0
     arm64.cmp x0, x9
     arm64.cset x10, lt
@@ -88,23 +87,23 @@ module {
     arm64.cset x12, gt
     arm64.orr x13, x10, x12
     arm64.cmp x13, #0
-    arm64.b.ne method-calls.main.__range_panic_0
-    arm64.b method-calls.main.__range_ok_0
+    arm64.b.ne main.__range_panic_0
+    arm64.b main.__range_ok_0
   __range_panic_0:
-    arm64.adrp_add_symdata x0, __panic_msg_35
+    arm64.adrp_add_symdata x0, __panic_msg_0
     arm64.mov x1, x0
     arm64.mov x0, x1
     arm64.bl maxon_panic
   __range_ok_0:
-    arm64.ldr x0, [x29, #-24]
     arm64.ldr x1, [x29, #-16]
+    arm64.str x0, [x29, #-24]
     arm64.cmp x1, #0
-    arm64.b.eq method-calls.main.__skip_guarded_34
+    arm64.b.eq main.__skip_guarded_32
     arm64.ldr x0, [x29, #-16]
     arm64.bl mm_decref
-    arm64.label method-calls.main.__skip_guarded_34
+    arm64.label main.__skip_guarded_32
     arm64.ldr x0, [x29, #-24]
-    arm64.epilogue stack_size=80
+    arm64.epilogue stack_size=64
     arm64.ret
   }
   func @__destruct_Inner(ptr: i64) {

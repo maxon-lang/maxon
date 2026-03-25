@@ -15,8 +15,12 @@ ExitCode: 99
 Stderr: ```
 spawn #1
 io_yield #1 [net_connect]
+worker_start #1
 io_resume #1 [net_connect]
 try_await #1 [yield]
+worker_exit #1
+worker_start #2
+worker_exit #2
 ```
 ---
 module {
@@ -115,9 +119,9 @@ module {
     arm64.epilogue stack_size=112
     arm64.ret
   }
-  func @async-tcp.main() -> u32 {
+  func @main() -> u32 {
   entry:
-    arm64.prologue stack_size=80
+    arm64.prologue stack_size=48
     arm64.mov x0, #8
     arm64.bl mm_raw_alloc
     arm64.mov x1, #0
@@ -135,15 +139,14 @@ module {
     arm64.cmp x1, x0
     arm64.cset x2, ne
     arm64.cmp x2, #0
-    arm64.b.ne async-tcp.main.otherwise_default_error_2
-    arm64.b async-tcp.main.otherwise_default_continue_3
+    arm64.b.ne main.otherwise_default_error_2
+    arm64.b main.otherwise_default_continue_3
   otherwise_default_error_2:
     arm64.ldr x0, [x29, #-8]
     arm64.str x0, [x29, #-16]
-    arm64.b async-tcp.main.otherwise_default_continue_3
+    arm64.b main.otherwise_default_continue_3
   otherwise_default_continue_3:
     arm64.ldr x0, [x29, #-16]
-    arm64.str x0, [x29, #-24]
     arm64.mov x1, #0
     arm64.cmp x0, x1
     arm64.cset x2, lt
@@ -152,16 +155,15 @@ module {
     arm64.cset x4, gt
     arm64.orr x5, x2, x4
     arm64.cmp x5, #0
-    arm64.b.ne async-tcp.main.__range_panic_4
-    arm64.b async-tcp.main.__range_ok_4
+    arm64.b.ne main.__range_panic_4
+    arm64.b main.__range_ok_4
   __range_panic_4:
-    arm64.adrp_add_symdata x0, __panic_msg_24
+    arm64.adrp_add_symdata x0, __panic_msg_0
     arm64.mov x1, x0
     arm64.mov x0, x1
     arm64.bl maxon_panic
   __range_ok_4:
-    arm64.ldr x0, [x29, #-24]
-    arm64.epilogue stack_size=80
+    arm64.epilogue stack_size=48
     arm64.ret
   }
   func @__destruct_TcpClient(ptr: i64) {

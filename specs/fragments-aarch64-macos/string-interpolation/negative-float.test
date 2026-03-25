@@ -1,6 +1,6 @@
 // Test: negative-float
 function main() returns ExitCode
-  var temp = 0.0 - 3.5
+  var temp = -3.5
   print("Temp: {temp}\n")
   return 0
 end 'main'
@@ -11,22 +11,19 @@ Temp: -3.5
 ```
 ---
 module {
-  func @string-interpolation.main() -> u32 {
+  func @main() -> u32 {
   entry:
     arm64.prologue stack_size=272
-    arm64.fldr d0, [__float_0]
-    arm64.fldr d1, [__float_3.5]
-    arm64.fsub d2, d0, d1
+    arm64.fldr d0, [__float_-3.5]
     arm64.adrp_add_rdata x0, __interp_lit_0
     arm64.mov x1, x0
     arm64.mov x2, #6
     arm64.str x1, [x29, #-104]
-    arm64.fstr d2, [x29, #-112]
+    arm64.fstr d0, [x29, #-112]
     arm64.mov x0, #32
     arm64.bl mm_raw_alloc
     arm64.str x0, [x29, #-8]
-    arm64.fldr d2, [x29, #-112]
-    arm64.fmov d0, d2
+    arm64.fldr d0, [x29, #-112]
     arm64.bl maxon_f64_to_string
     arm64.ldr x3, [x29, #-8]
     arm64.adrp_add_rdata x4, __interp_lit_1
@@ -143,9 +140,9 @@ module {
     arm64.bl stdlib.Print.print
     arm64.ldr x0, [x29, #-16]
     arm64.cmp x0, #0
-    arm64.b.eq string-interpolation.main.__skip_guarded_99
+    arm64.b.eq main.__skip_guarded_97
     arm64.bl mm_decref
-    arm64.label string-interpolation.main.__skip_guarded_99
+    arm64.label main.__skip_guarded_97
     arm64.mov x0, #0
     arm64.epilogue stack_size=272
     arm64.ret

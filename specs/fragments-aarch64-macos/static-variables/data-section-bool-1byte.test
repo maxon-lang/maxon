@@ -2,7 +2,10 @@
 var flag = true
 
 function main() returns ExitCode
-  return 0
+  if flag 'read'
+    return 0
+  end 'read'
+  return 1
 end 'main'
 ---
 ExitCode: 0
@@ -11,9 +14,17 @@ i8 1
 ```
 ---
 module {
-  func @static-variables.main() -> u32 {
+  func @main() -> u32 {
   entry:
+    arm64.global_load x0, [flag]
+    arm64.cmp x0, #0
+    arm64.b.ne main.read_0
+    arm64.b main.read_0.after
+  read_0:
     arm64.mov x0, #0
+    arm64.ret
+  read_0.after:
+    arm64.mov x0, #1
     arm64.ret
   }
 }

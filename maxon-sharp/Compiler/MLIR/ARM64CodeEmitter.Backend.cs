@@ -15,7 +15,7 @@ public partial class ARM64CodeEmitter {
     VReg.Arg3 => ARM64Register.X3,
     VReg.Arg4 => ARM64Register.X4,
     VReg.Arg5 => ARM64Register.X5,
-    VReg.Scratch0 => ARM64Register.X9,   // Also VReg.Ret (need to move to X0 on return)
+    VReg.Scratch0 => ARM64Register.X9,   // Also VReg.Ret — X9 is scratch; Call/CallImport move X0→X9 after each call
     VReg.Scratch1 => ARM64Register.X10,
     VReg.Scratch2 => ARM64Register.X11,
     VReg.Scratch3 => ARM64Register.X12,
@@ -38,6 +38,7 @@ public partial class ARM64CodeEmitter {
 
     public void FunctionStart(string name, int argCount, int frameSize) {
       _e.DefineLabel(name);
+      _e._runtimeFunctionLabels.Add(name);
       _e._currentRuntimeStackSize = frameSize;
       // STP x29, x30, [sp, #-stackSize]!
       var imm7 = (uint)((-frameSize / 8) & 0x7F);
@@ -50,6 +51,9 @@ public partial class ARM64CodeEmitter {
     }
 
     public void FunctionEnd() {
+      // On ARM64, VReg.Ret/Scratch0 = X9 but calling convention returns in X0.
+      // Always move X9→X0 so the return value is correct (harmless for void functions).
+      _e.EmitMovRegReg(ARM64Register.X0, ARM64Register.X9);
       // MOV sp, x29
       _e.EmitWord(0x91000000 | (29u << 5) | 31u);
       // LDP x29, x30, [sp], #stackSize
@@ -60,9 +64,9 @@ public partial class ARM64CodeEmitter {
     }
 
     public void ReturnValue(VReg src) {
-      // On ARM64, return value goes in X0
-      if (R(src) != ARM64Register.X0)
-        _e.EmitMovRegReg(ARM64Register.X0, R(src));
+      // Move return value to X9 (Scratch0/Ret) first if needed, then FunctionEnd handles X9→X0
+      if (R(src) != ARM64Register.X9)
+        _e.EmitMovRegReg(ARM64Register.X9, R(src));
       FunctionEnd();
     }
 
@@ -236,12 +240,18 @@ public partial class ARM64CodeEmitter {
     }
 
     // ---- Calls ----
+    // ARM64 returns in X0 but VReg.Ret/Scratch0 maps to X9.
+    // Move X0→X9 after every call so VReg.Scratch0 sees the return value.
 
-    public void Call(string label) => _e.EmitBranchLink(label);
+    public void Call(string label) {
+      _e.EmitBranchLink(label);
+      _e.EmitMovRegReg(ARM64Register.X9, ARM64Register.X0);
+    }
 
     public void CallImport(string function) {
       var resolved = ResolveImport(function);
       _e.EmitCallImport(resolved);
+      _e.EmitMovRegReg(ARM64Register.X9, ARM64Register.X0);
     }
 
     public void CallImportOnSystemStack(string function) {
@@ -249,81 +259,61 @@ public partial class ARM64CodeEmitter {
       // with macOS syscalls in the same way). Just call the import directly.
       var resolved = ResolveImport(function);
       _e.EmitCallImport(resolved);
+      _e.EmitMovRegReg(ARM64Register.X9, ARM64Register.X0);
     }
 
     public void CallIndirect(VReg target) {
-      // BLR Xn
-      _e.EmitWord(0xD63F0000 | (Reg(R(target)) << 5));
+      _e.EmitWord(0xD63F0000 | (Reg(R(target)) << 5)); // BLR Xn
+      _e.EmitMovRegReg(ARM64Register.X9, ARM64Register.X0);
     }
 
     // ---- Atomics ----
+    // Non-atomic load/add/store — safe because each P runs one GT at a time.
+    // Cross-P atomics (LDAXR/STLXR) are only needed for shared scheduler state,
+    // which uses the LockAcquire/LockRelease path instead.
 
-    public void AtomicInc(VReg baseAddr, int offset) {
-      // Load value, add 1, store. ARM64 atomic: LDAXR/ADD/STLXR loop
-      // For simplicity and matching existing code, use non-atomic load/add/store
-      // (single-threaded per-P context — only one GT runs on a P at a time).
-      // TODO: Use proper atomics when needed for cross-P operations.
-      var reg = R(baseAddr);
-      // Load [reg + offset] into X16
+    /// LDR Xdst, [Xbase, #offset] using unsigned-imm or unscaled-imm encoding.
+    private void EmitLoad64(ARM64Register dst, ARM64Register baseReg, int offset) {
       if (offset >= 0 && offset % 8 == 0) {
-        _e.EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X16, reg, offset, 8);
+        _e.EmitLoadStoreUnsignedImm(0xF9400000, dst, baseReg, offset, 8);
       } else {
         var imm9 = (uint)(offset & 0x1FF);
-        _e.EmitWord(0xF8400000 | (imm9 << 12) | (Reg(reg) << 5) | Reg(ARM64Register.X16));
-      }
-      // ADD X16, X16, #1
-      _e.EmitAddSubImm(ARM64Register.X16, ARM64Register.X16, 1, isAdd: true);
-      // Store back
-      if (offset >= 0 && offset % 8 == 0) {
-        _e.EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X16, reg, offset, 8);
-      } else {
-        var imm9 = (uint)(offset & 0x1FF);
-        _e.EmitWord(0xF8000000 | (imm9 << 12) | (Reg(reg) << 5) | Reg(ARM64Register.X16));
+        _e.EmitWord(0xF8400000 | (imm9 << 12) | (Reg(baseReg) << 5) | Reg(dst));
       }
     }
 
-    public void AtomicDec(VReg baseAddr, int offset) {
-      // Load, sub 1, store, set flags (SUBS for zero check)
+    /// STR Xsrc, [Xbase, #offset] using unsigned-imm or unscaled-imm encoding.
+    private void EmitStore64(ARM64Register src, ARM64Register baseReg, int offset) {
+      if (offset >= 0 && offset % 8 == 0) {
+        _e.EmitLoadStoreUnsignedImm(0xF9000000, src, baseReg, offset, 8);
+      } else {
+        var imm9 = (uint)(offset & 0x1FF);
+        _e.EmitWord(0xF8000000 | (imm9 << 12) | (Reg(baseReg) << 5) | Reg(src));
+      }
+    }
+
+    public void AtomicInc(VReg baseAddr, int offset) {
       var reg = R(baseAddr);
-      if (offset >= 0 && offset % 8 == 0) {
-        _e.EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X16, reg, offset, 8);
-      } else {
-        var imm9 = (uint)(offset & 0x1FF);
-        _e.EmitWord(0xF8400000 | (imm9 << 12) | (Reg(reg) << 5) | Reg(ARM64Register.X16));
-      }
-      // SUBS X16, X16, #1 (sets zero flag)
-      // SUBS Xd, Xn, #imm12: sf=1, op=1, S=1, sh=0 → 0xF1000000 | (imm12 << 10) | (Rn << 5) | Rd
+      EmitLoad64(ARM64Register.X16, reg, offset);
+      _e.EmitAddSubImm(ARM64Register.X16, ARM64Register.X16, 1, isAdd: true);
+      EmitStore64(ARM64Register.X16, reg, offset);
+    }
+
+    public void AtomicDec(VReg baseAddr, int offset) {
+      var reg = R(baseAddr);
+      EmitLoad64(ARM64Register.X16, reg, offset);
+      // SUBS sets zero flag so callers can branch on refcount == 0
       _e.EmitWord(0xF1000000 | (1u << 10) | (Reg(ARM64Register.X16) << 5) | Reg(ARM64Register.X16));
-      // Store back
-      if (offset >= 0 && offset % 8 == 0) {
-        _e.EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X16, reg, offset, 8);
-      } else {
-        var imm9 = (uint)(offset & 0x1FF);
-        _e.EmitWord(0xF8000000 | (imm9 << 12) | (Reg(reg) << 5) | Reg(ARM64Register.X16));
-      }
+      EmitStore64(ARM64Register.X16, reg, offset);
     }
 
     public void AtomicXadd(VReg baseAddr, int offset, VReg val) {
       // old = [base+offset]; [base+offset] = old + val; val = old
       var reg = R(baseAddr);
       var vr = R(val);
-      // Load old into X16
-      if (offset >= 0 && offset % 8 == 0) {
-        _e.EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X16, reg, offset, 8);
-      } else {
-        var imm9 = (uint)(offset & 0x1FF);
-        _e.EmitWord(0xF8400000 | (imm9 << 12) | (Reg(reg) << 5) | Reg(ARM64Register.X16));
-      }
-      // X17 = X16 + val
+      EmitLoad64(ARM64Register.X16, reg, offset);
       _e.EmitAluRegReg(0x8B000000, ARM64Register.X17, ARM64Register.X16, vr);
-      // Store X17 back
-      if (offset >= 0 && offset % 8 == 0) {
-        _e.EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X17, reg, offset, 8);
-      } else {
-        var imm9 = (uint)(offset & 0x1FF);
-        _e.EmitWord(0xF8000000 | (imm9 << 12) | (Reg(reg) << 5) | Reg(ARM64Register.X17));
-      }
-      // val = old (X16)
+      EmitStore64(ARM64Register.X17, reg, offset);
       _e.EmitMovRegReg(vr, ARM64Register.X16);
     }
 
@@ -335,15 +325,72 @@ public partial class ARM64CodeEmitter {
     public void DefineSymdata(string label, byte[] data) => _e.DefineSymdata(label, data);
 
     // ---- Locking ----
+    // Recursive spinlock: layout [lock(8) @ +0, owner(8) @ +8, count(8) @ +16]
+    // Owner is the P* pointer (X28). Lock=0 means free, lock=1 means held.
 
     public void LockAcquire(string lockGlobal) {
-      _e.EmitGlobalLeaReg(ARM64Register.X0, lockGlobal);
-      _e.EmitCallImport("os_unfair_lock_lock");
+      // X16 = &lock_global (layout: [lock(8), owner(8), count(8)])
+      _e.EmitGlobalLeaReg(ARM64Register.X16, lockGlobal);
+
+      var owned = $"__lock_owned_{_e._uniqueLabelCounter}";
+      var spin = $"__lock_spin_{_e._uniqueLabelCounter}";
+      var acquired = $"__lock_acquired_{_e._uniqueLabelCounter++}";
+
+      // Check if we already own it: if [X16+8] == X28, go to owned
+      _e.EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X17, ARM64Register.X16, 8, 8); // X17 = owner
+      // CMP X17, X28 (SUBS XZR, X17, X28)
+      _e.EmitWord(0xEB1C023F);
+      // B.EQ owned
+      _e._condBranchFixups.Add((_e._code.Count, owned));
+      _e.EmitWord(0x54000000); // B.EQ (cond=0000)
+
+      // Spin to acquire lock
+      _e.DefineLabel(spin);
+      // LDAXR X17, [X16]
+      _e.EmitWord(0xC85FFC00 | (Reg(ARM64Register.X16) << 5) | Reg(ARM64Register.X17));
+      // CBNZ X17, spin (lock held by someone else)
+      _e.EmitCbnz(ARM64Register.X17, spin);
+      // STLXR W17, #1, [X16] — try to set lock to 1
+      _e.EmitMovRegImm(ARM64Register.X17, 1);
+      _e.EmitWord(0xC800FC00 | (Reg(ARM64Register.X16) << 5) | (17u << 16) | Reg(ARM64Register.X17));
+      // CBNZ W17, spin (CAS failed)
+      _e._condBranchFixups.Add((_e._code.Count, spin));
+      _e.EmitWord(0x35000000 | 17u);
+      // We got the lock — set owner = X28, count = 1
+      _e.EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X28, ARM64Register.X16, 8, 8); // owner = P*
+      _e.EmitMovRegImm(ARM64Register.X17, 1);
+      _e.EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X17, ARM64Register.X16, 16, 8); // count = 1
+      _e.EmitBranch(acquired);
+
+      // Already owned: increment count
+      _e.DefineLabel(owned);
+      _e.EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X17, ARM64Register.X16, 16, 8); // X17 = count
+      _e.EmitAddSubImm(ARM64Register.X17, ARM64Register.X17, 1, isAdd: true);
+      _e.EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X17, ARM64Register.X16, 16, 8); // count++
+
+      _e.DefineLabel(acquired);
     }
 
     public void LockRelease(string lockGlobal) {
-      _e.EmitGlobalLeaReg(ARM64Register.X0, lockGlobal);
-      _e.EmitCallImport("os_unfair_lock_unlock");
+      // X16 = &lock_global
+      _e.EmitGlobalLeaReg(ARM64Register.X16, lockGlobal);
+
+      // Decrement count
+      _e.EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X17, ARM64Register.X16, 16, 8); // X17 = count
+      _e.EmitAddSubImm(ARM64Register.X17, ARM64Register.X17, 1, isAdd: false); // count--
+      _e.EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X17, ARM64Register.X16, 16, 8); // store count
+
+      // If count > 0, still held — just return
+      var done = $"__lock_release_done_{_e._uniqueLabelCounter++}";
+      _e.EmitCbnz(ARM64Register.X17, done);
+
+      // count == 0: clear owner and release lock
+      _e.EmitMovRegImm(ARM64Register.X17, 0);
+      _e.EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X17, ARM64Register.X16, 8, 8); // owner = 0
+      // STLR XZR, [X16] — store-release of 0 to lock field
+      _e.EmitWord(0xC89FFC00 | (Reg(ARM64Register.X16) << 5) | Reg(ARM64Register.Xzr));
+
+      _e.DefineLabel(done);
     }
 
     // ---- TLS ----
@@ -448,7 +495,7 @@ public partial class ARM64CodeEmitter {
       var d = R(dividend);
       _e.EmitMovRegImm(ARM64Register.X16, divisor);
       // UDIV X17, d, X16
-      _e.EmitWord(0x9AD00000 | (Reg(ARM64Register.X16) << 16) | (Reg(d) << 5) | Reg(ARM64Register.X17));
+      _e.EmitWord(0x9AC00800 | (Reg(ARM64Register.X16) << 16) | (Reg(d) << 5) | Reg(ARM64Register.X17));
       // MSUB dest, X17, X16, d → dest = d - X17*X16 = d % divisor
       var dr = R(dest);
       _e.EmitWord(0x9B108000 | (Reg(ARM64Register.X16) << 16) | (Reg(d) << 10) | (Reg(ARM64Register.X17) << 5) | Reg(dr));
@@ -460,7 +507,7 @@ public partial class ARM64CodeEmitter {
       var d = R(dividend);
       var v = R(divisor);
       // UDIV X16, d, v
-      _e.EmitWord(0x9AC00000 | (Reg(v) << 16) | (Reg(d) << 5) | Reg(ARM64Register.X16));
+      _e.EmitWord(0x9AC00800 | (Reg(v) << 16) | (Reg(d) << 5) | Reg(ARM64Register.X16));
       // MSUB dest, X16, v, d → dest = d - X16*v = d % v
       var dr = R(dest);
       _e.EmitWord(0x9B008000 | (Reg(v) << 16) | (Reg(d) << 10) | (Reg(ARM64Register.X16) << 5) | Reg(dr));

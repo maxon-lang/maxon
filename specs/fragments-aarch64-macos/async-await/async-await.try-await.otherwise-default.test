@@ -129,7 +129,7 @@ module {
     arm64.epilogue stack_size=96
     arm64.ret
   }
-  func @async-await.main() -> u32 {
+  func @main() -> u32 {
   entry:
     arm64.prologue stack_size=112
     arm64.mov x0, #1
@@ -151,12 +151,12 @@ module {
     arm64.cmp x1, x5
     arm64.cset x6, ne
     arm64.cmp x6, #0
-    arm64.b.ne async-await.main.otherwise_default_error_2
-    arm64.b async-await.main.otherwise_default_continue_3
+    arm64.b.ne main.otherwise_default_error_2
+    arm64.b main.otherwise_default_continue_3
   otherwise_default_error_2:
     arm64.ldr x0, [x29, #-8]
     arm64.str x0, [x29, #-16]
-    arm64.b async-await.main.otherwise_default_continue_3
+    arm64.b main.otherwise_default_continue_3
   otherwise_default_continue_3:
     arm64.ldr x0, [x29, #-16]
     arm64.str x0, [x29, #-24]
@@ -180,17 +180,16 @@ module {
     arm64.cmp x1, x6
     arm64.cset x7, ne
     arm64.cmp x7, #0
-    arm64.b.ne async-await.main.otherwise_default_error_6
-    arm64.b async-await.main.otherwise_default_continue_7
+    arm64.b.ne main.otherwise_default_error_6
+    arm64.b main.otherwise_default_continue_7
   otherwise_default_error_6:
     arm64.ldr x0, [x29, #-32]
     arm64.str x0, [x29, #-40]
-    arm64.b async-await.main.otherwise_default_continue_7
+    arm64.b main.otherwise_default_continue_7
   otherwise_default_continue_7:
     arm64.ldr x0, [x29, #-40]
     arm64.ldr x1, [x29, #-24]
     arm64.add x2, x1, x0
-    arm64.str x2, [x29, #-48]
     arm64.mov x3, #0
     arm64.cmp x2, x3
     arm64.cset x4, lt
@@ -199,15 +198,15 @@ module {
     arm64.cset x6, gt
     arm64.orr x7, x4, x6
     arm64.cmp x7, #0
-    arm64.b.ne async-await.main.__range_panic_8
-    arm64.b async-await.main.__range_ok_8
+    arm64.b.ne main.__range_panic_8
+    arm64.b main.__range_ok_8
   __range_panic_8:
-    arm64.adrp_add_symdata x0, __panic_msg_42
+    arm64.adrp_add_symdata x0, __panic_msg_0
     arm64.mov x1, x0
     arm64.mov x0, x1
     arm64.bl maxon_panic
   __range_ok_8:
-    arm64.ldr x0, [x29, #-48]
+    arm64.mov x0, x2
     arm64.epilogue stack_size=112
     arm64.ret
   }

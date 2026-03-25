@@ -9,7 +9,7 @@ end 'Point'
 function main() returns ExitCode
   var result = 0
   if true 'block'
-    var p = Point{x: 10, y: 20}
+    @heap var p = Point{x: 10, y: 20}
     result = p.x
   end 'block'
   return result
@@ -19,7 +19,7 @@ ExitCode: 10
 RequiredMLIR: ```
 === maxon
 module {
-  func @memory-safety.main() -> i64 {
+  func @main() -> i64 {
   entry:
     %14 = maxon.literal {value = 0 : i64}
     maxon.assign %14 {var = result} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
@@ -37,7 +37,6 @@ module {
     maxon.br block_0.merge
   block_0.merge:
     %21 = maxon.var_ref {var = result} {type = i64}
-    maxon.assign %21 {var = __range_val_1} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
     %22 = maxon.literal {value = 0 : i64}
     %23 = maxon.binop %21, %22 {op = lt}
     %24 = maxon.literal {value = 4294967295 : i64}
@@ -47,14 +46,13 @@ module {
   __range_panic_1:
     maxon.panic "panic at block-scope-struct-release.test:15: Range check failed for type 'ExitCode': value outside int(0 to 4294967295)"
   __range_ok_1:
-    %28 = maxon.var_ref {var = __range_val_1} {type = i64}
-    maxon.scope_end [result, __range_val_1]
-    maxon.return %28
+    maxon.scope_end [result]
+    maxon.return %21
   }
 }
 === standard
 module {
-  func @memory-safety.main() -> u32 {
+  func @main() -> u32 {
   entry:
     %0 = arith.constant {value = 0 : i64}
     memref.store %0, result
@@ -82,7 +80,6 @@ module {
     cf.br block_0.merge
   block_0.merge:
     %15 = memref.load result : i64
-    memref.store %15, __range_val_1
     %16 = arith.constant {value = 0 : i64}
     %17 = arith.cmpi lt %15, %16
     %18 = arith.constant {value = 4294967295 : i64}
@@ -90,16 +87,15 @@ module {
     %20 = arith.ori1 %17, %19
     cf.cond_br %20 [then: __range_panic_1, else: __range_ok_1]
   __range_panic_1:
-    %21 = memref.lea_symdata __panic_msg_27
+    %21 = memref.lea_symdata __panic_msg_0
     %22 = std.ptr_to_i64 %21
     std.call_runtime @maxon_panic %22
   __range_ok_1:
-    %23 = memref.load __range_val_1 : i64
-    func.return %23
+    func.return %15
   }
   func @__destruct_Point(ptr: i64) {
   entry:
-    %25 = func.param ptr : StdI64
+    %24 = func.param ptr : StdI64
     cf.br done
   done:
     func.return
@@ -107,15 +103,15 @@ module {
 }
 === arm64
 module {
-  func @memory-safety.main() -> u32 {
+  func @main() -> u32 {
   entry:
-    arm64.prologue stack_size=80
+    arm64.prologue stack_size=48
     arm64.mov x0, #0
     arm64.str x0, [x29, #-8]
     arm64.mov x1, #1
     arm64.cmp x1, #0
-    arm64.b.ne memory-safety.main.block_0
-    arm64.b memory-safety.main.block_0.merge
+    arm64.b.ne main.block_0
+    arm64.b main.block_0.merge
   block_0:
     arm64.mov x0, #10
     arm64.mov x1, #20
@@ -138,14 +134,13 @@ module {
     arm64.str x8, [x29, #-8]
     arm64.ldr x9, [x29, #-16]
     arm64.cmp x9, #0
-    arm64.b.eq memory-safety.main.__skip_guarded_21
+    arm64.b.eq main.__skip_guarded_21
     arm64.ldr x0, [x29, #-16]
     arm64.bl mm_decref
-    arm64.label memory-safety.main.__skip_guarded_21
-    arm64.b memory-safety.main.block_0.merge
+    arm64.label main.__skip_guarded_21
+    arm64.b main.block_0.merge
   block_0.merge:
     arm64.ldr x0, [x29, #-8]
-    arm64.str x0, [x29, #-24]
     arm64.mov x1, #0
     arm64.cmp x0, x1
     arm64.cset x2, lt
@@ -154,16 +149,15 @@ module {
     arm64.cset x4, gt
     arm64.orr x5, x2, x4
     arm64.cmp x5, #0
-    arm64.b.ne memory-safety.main.__range_panic_1
-    arm64.b memory-safety.main.__range_ok_1
+    arm64.b.ne main.__range_panic_1
+    arm64.b main.__range_ok_1
   __range_panic_1:
-    arm64.adrp_add_symdata x0, __panic_msg_27
+    arm64.adrp_add_symdata x0, __panic_msg_0
     arm64.mov x1, x0
     arm64.mov x0, x1
     arm64.bl maxon_panic
   __range_ok_1:
-    arm64.ldr x0, [x29, #-24]
-    arm64.epilogue stack_size=80
+    arm64.epilogue stack_size=48
     arm64.ret
   }
   func @__destruct_Point(ptr: i64) {

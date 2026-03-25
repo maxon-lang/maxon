@@ -28,7 +28,7 @@ module {
     maxon.scope_end []
     maxon.throw @MyError %8
   }
-  func @register-allocator.main() -> i64 {
+  func @main() -> i64 {
   entry:
     %9 = maxon.literal {value = 0 : i64}
     maxon.assign %9 {var = result} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
@@ -45,7 +45,6 @@ module {
   otherwise_continue_1:
     %16 = maxon.var_ref {var = __try_result_3} {type = i64}
     %17 = maxon.var_ref {var = result} {type = i64}
-    maxon.assign %17 {var = __range_val_4} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
     %18 = maxon.literal {value = 0 : i64}
     %19 = maxon.binop %17, %18 {op = lt}
     %20 = maxon.literal {value = 4294967295 : i64}
@@ -55,9 +54,8 @@ module {
   __range_panic_4:
     maxon.panic "panic at error-otherwise-block.test:18: Range check failed for type 'ExitCode': value outside int(0 to 4294967295)"
   __range_ok_4:
-    %24 = maxon.var_ref {var = __range_val_4} {type = i64}
-    maxon.scope_end [result, __try_error_2, __range_val_4, __try_result_3]
-    maxon.return %24
+    maxon.scope_end [result, __try_error_2, __try_result_3]
+    maxon.return %17
   }
 }
 === standard
@@ -69,7 +67,7 @@ module {
     %2 = arith.addi %0, %1
     func.error_return %2
   }
-  func @register-allocator.main() -> u32 {
+  func @main() -> u32 {
   entry:
     %3 = arith.constant {value = 0 : i64}
     memref.store %3, result
@@ -83,7 +81,6 @@ module {
     cf.br otherwise_continue_1
   otherwise_continue_1:
     %10 = memref.load result : i64
-    memref.store %10, __range_val_4
     %11 = arith.constant {value = 0 : i64}
     %12 = arith.cmpi lt %10, %11
     %13 = arith.constant {value = 4294967295 : i64}
@@ -91,12 +88,11 @@ module {
     %15 = arith.ori1 %12, %14
     cf.cond_br %15 [then: __range_panic_4, else: __range_ok_4]
   __range_panic_4:
-    %16 = memref.lea_symdata __panic_msg_23
+    %16 = memref.lea_symdata __panic_msg_0
     %17 = std.ptr_to_i64 %16
     std.call_runtime @maxon_panic %17
   __range_ok_4:
-    %18 = memref.load __range_val_4 : i64
-    func.return %18
+    func.return %10
   }
 }
 === arm64
@@ -110,7 +106,7 @@ module {
     arm64.mov x0, #0
     arm64.ret
   }
-  func @register-allocator.main() -> u32 {
+  func @main() -> u32 {
   entry:
     arm64.prologue stack_size=48
     arm64.mov x0, #0
@@ -120,15 +116,14 @@ module {
     arm64.cmp x1, x2
     arm64.cset x3, ne
     arm64.cmp x3, #0
-    arm64.b.ne register-allocator.main.otherwise_error_0
-    arm64.b register-allocator.main.otherwise_continue_1
+    arm64.b.ne main.otherwise_error_0
+    arm64.b main.otherwise_continue_1
   otherwise_error_0:
     arm64.mov x0, #42
     arm64.str x0, [x29, #-8]
-    arm64.b register-allocator.main.otherwise_continue_1
+    arm64.b main.otherwise_continue_1
   otherwise_continue_1:
     arm64.ldr x0, [x29, #-8]
-    arm64.str x0, [x29, #-16]
     arm64.mov x1, #0
     arm64.cmp x0, x1
     arm64.cset x2, lt
@@ -137,15 +132,14 @@ module {
     arm64.cset x4, gt
     arm64.orr x5, x2, x4
     arm64.cmp x5, #0
-    arm64.b.ne register-allocator.main.__range_panic_4
-    arm64.b register-allocator.main.__range_ok_4
+    arm64.b.ne main.__range_panic_4
+    arm64.b main.__range_ok_4
   __range_panic_4:
-    arm64.adrp_add_symdata x0, __panic_msg_23
+    arm64.adrp_add_symdata x0, __panic_msg_0
     arm64.mov x1, x0
     arm64.mov x0, x1
     arm64.bl maxon_panic
   __range_ok_4:
-    arm64.ldr x0, [x29, #-16]
     arm64.epilogue stack_size=48
     arm64.ret
   }

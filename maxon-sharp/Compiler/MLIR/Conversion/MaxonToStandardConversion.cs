@@ -2211,8 +2211,10 @@ public static partial class MaxonToStandardConversion {
 
     if (!typeDefs.TryGetValue(typeName, out var typeDef)) return;
 
-    // __ManagedSocket has a hand-written runtime destructor — skip synthesis
-    if (typeName == "__ManagedSocket") return;
+    // These types have hand-written runtime destructors — skip synthesis
+    // to avoid emitting a duplicate (no-op) synthesized destructor that
+    // would shadow the real one.
+    if (typeName is "__ManagedSocket" or "__ManagedDirectory" or "__ManagedFile") return;
 
     if (typeDef is MlirStructType structType) {
       var resolved = ResolveStructType(structType, typeDefs);

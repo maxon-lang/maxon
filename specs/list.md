@@ -597,6 +597,35 @@ hello world!!!!!!!!!!!!!!
 1
 ```
 ```stderr
+mm_raw_alloc #R1 size=64
+  sl_alloc size=64 class=-1
+    os_alloc size=64
+  os_alloc size=4096
+os_alloc size=67108864
+mm_raw_alloc #R2 size=296
+  sl_alloc size=296 class=-1
+    os_alloc size=296
+mm_raw_alloc #R3 size=296
+  sl_alloc size=296 class=-1
+    os_alloc size=296
+mm_raw_alloc #R4 size=296
+  sl_alloc size=296 class=-1
+    os_alloc size=296
+mm_raw_alloc #R5 size=296
+  sl_alloc size=296 class=-1
+    os_alloc size=296
+mm_raw_alloc #R6 size=296
+  sl_alloc size=296 class=-1
+    os_alloc size=296
+mm_raw_alloc #R7 size=296
+  sl_alloc size=296 class=-1
+    os_alloc size=296
+mm_raw_alloc #R8 size=296
+  sl_alloc size=296 class=-1
+    os_alloc size=296
+mm_raw_alloc #R9 size=296
+  sl_alloc size=296 class=-1
+    os_alloc size=296
 sl_init
   os_alloc size=67108864
 mm_alloc __ManagedList_String #1 size=32 [list.testRemove]
@@ -640,25 +669,25 @@ mm_alloc String #9 size=16 [list.testRemove]
   sl_alloc String #9 size=48 class=4
 mm_alloc __ManagedMemory #10 size=32 [list.testRemove]
   sl_alloc __ManagedMemory #10 size=64 class=5
-mm_raw_alloc #R1 size=27 [interp.buf [list.testRemove]]
+mm_raw_alloc #R10 size=27 [interp.buf [list.testRemove]]
   sl_alloc size=27 class=3
 mm_incref __ManagedMemory #10 rc=1 [list.testRemove]
 mm_incref String #9 rc=1 [list.testRemove]
-mm_raw_alloc #R2 size=21 [toStr.buf [list.testRemove]]
+mm_raw_alloc #R11 size=21 [toStr.buf [list.testRemove]]
   sl_alloc size=21 class=2
 mm_alloc String #11 size=16 [list.testRemove]
   sl_alloc String #11 size=48 class=4
 mm_alloc __ManagedMemory #12 size=32 [list.testRemove]
   sl_alloc __ManagedMemory #12 size=64 class=5
-mm_raw_alloc #R3 size=3 [interp.buf [list.testRemove]]
+mm_raw_alloc #R12 size=3 [interp.buf [list.testRemove]]
   sl_alloc size=3 class=0
-mm_raw_free #R2
+mm_raw_free #R11
   sl_free size=24 class=2
 mm_incref __ManagedMemory #12 rc=1 [list.testRemove]
 mm_incref String #11 rc=1 [list.testRemove]
 mm_decref String #11 rc=0 [list.testRemove]
   mm_decref __ManagedMemory #12 rc=0 [~String]
-    mm_raw_free #R3
+    mm_raw_free #R12
       sl_free size=8 class=0
     mm_free __ManagedMemory #12
       sl_free __ManagedMemory #12 size=64 class=5
@@ -666,7 +695,7 @@ mm_decref String #11 rc=0 [list.testRemove]
     sl_free String #11 size=48 class=4
 mm_decref String #9 rc=0 [list.testRemove]
   mm_decref __ManagedMemory #10 rc=0 [~String]
-    mm_raw_free #R1
+    mm_raw_free #R10
       sl_free size=32 class=3
     mm_free __ManagedMemory #10
       sl_free __ManagedMemory #10 size=64 class=5
@@ -696,10 +725,6 @@ mm_decref StringList #2 rc=0 [list.testRemove]
       sl_free __ManagedList_String #1 size=64 class=5
   mm_free StringList #2
     sl_free StringList #2 size=48 class=4
-mm_raw_alloc #R4 size=40
-  sl_alloc size=40 class=4
-mm_raw_free #R4
-  sl_free size=48 class=4
 ```
 
 <!-- test: memory.remove-returns-string -->
@@ -727,6 +752,35 @@ end 'main'
 hello world!!!!!!!!!!!!!!
 ```
 ```stderr
+mm_raw_alloc #R1 size=64
+  sl_alloc size=64 class=-1
+    os_alloc size=64
+  os_alloc size=4096
+os_alloc size=67108864
+mm_raw_alloc #R2 size=296
+  sl_alloc size=296 class=-1
+    os_alloc size=296
+mm_raw_alloc #R3 size=296
+  sl_alloc size=296 class=-1
+    os_alloc size=296
+mm_raw_alloc #R4 size=296
+  sl_alloc size=296 class=-1
+    os_alloc size=296
+mm_raw_alloc #R5 size=296
+  sl_alloc size=296 class=-1
+    os_alloc size=296
+mm_raw_alloc #R6 size=296
+  sl_alloc size=296 class=-1
+    os_alloc size=296
+mm_raw_alloc #R7 size=296
+  sl_alloc size=296 class=-1
+    os_alloc size=296
+mm_raw_alloc #R8 size=296
+  sl_alloc size=296 class=-1
+    os_alloc size=296
+mm_raw_alloc #R9 size=296
+  sl_alloc size=296 class=-1
+    os_alloc size=296
 sl_init
   os_alloc size=67108864
 mm_alloc __ManagedList_String #1 size=32 [list.testRemove]
@@ -787,13 +841,13 @@ mm_alloc String #9 size=16 [main]
   sl_alloc String #9 size=48 class=4
 mm_alloc __ManagedMemory #10 size=32 [main]
   sl_alloc __ManagedMemory #10 size=64 class=5
-mm_raw_alloc #R1 size=27 [interp.buf [main]]
+mm_raw_alloc #R10 size=27 [interp.buf [main]]
   sl_alloc size=27 class=3
 mm_incref __ManagedMemory #10 rc=1 [main]
 mm_incref String #9 rc=1 [main]
 mm_decref String #9 rc=0 [main]
   mm_decref __ManagedMemory #10 rc=0 [~String]
-    mm_raw_free #R1
+    mm_raw_free #R10
       sl_free size=32 class=3
     mm_free __ManagedMemory #10
       sl_free __ManagedMemory #10 size=64 class=5
@@ -805,10 +859,6 @@ mm_decref String #3 rc=0 [main]
       sl_free __ManagedMemory #4 size=64 class=5
   mm_free String #3
     sl_free String #3 size=48 class=4
-mm_raw_alloc #R2 size=40
-  sl_alloc size=40 class=4
-mm_raw_free #R2
-  sl_free size=48 class=4
 ```
 
 <!-- test: memory.clear-frees-strings -->
@@ -837,6 +887,35 @@ end 'main'
 0
 ```
 ```stderr
+mm_raw_alloc #R1 size=64
+  sl_alloc size=64 class=-1
+    os_alloc size=64
+  os_alloc size=4096
+os_alloc size=67108864
+mm_raw_alloc #R2 size=296
+  sl_alloc size=296 class=-1
+    os_alloc size=296
+mm_raw_alloc #R3 size=296
+  sl_alloc size=296 class=-1
+    os_alloc size=296
+mm_raw_alloc #R4 size=296
+  sl_alloc size=296 class=-1
+    os_alloc size=296
+mm_raw_alloc #R5 size=296
+  sl_alloc size=296 class=-1
+    os_alloc size=296
+mm_raw_alloc #R6 size=296
+  sl_alloc size=296 class=-1
+    os_alloc size=296
+mm_raw_alloc #R7 size=296
+  sl_alloc size=296 class=-1
+    os_alloc size=296
+mm_raw_alloc #R8 size=296
+  sl_alloc size=296 class=-1
+    os_alloc size=296
+mm_raw_alloc #R9 size=296
+  sl_alloc size=296 class=-1
+    os_alloc size=296
 sl_init
   os_alloc size=67108864
 mm_alloc __ManagedList_String #1 size=32 [list.testClear]
@@ -887,21 +966,21 @@ mm_decref String #9 rc=1 [managed_list_clear]
 mm_decref __ManagedListNode #11 rc=0 [managed_list_clear]
   mm_free __ManagedListNode #11
     sl_free __ManagedListNode #11 size=64 class=5
-mm_raw_alloc #R1 size=21 [toStr.buf [list.testClear]]
+mm_raw_alloc #R10 size=21 [toStr.buf [list.testClear]]
   sl_alloc size=21 class=2
 mm_alloc String #12 size=16 [list.testClear]
   sl_alloc String #12 size=48 class=4
 mm_alloc __ManagedMemory #13 size=32 [list.testClear]
   sl_alloc __ManagedMemory #13 size=64 class=5
-mm_raw_alloc #R2 size=3 [interp.buf [list.testClear]]
+mm_raw_alloc #R11 size=3 [interp.buf [list.testClear]]
   sl_alloc size=3 class=0
-mm_raw_free #R1
+mm_raw_free #R10
   sl_free size=24 class=2
 mm_incref __ManagedMemory #13 rc=1 [list.testClear]
 mm_incref String #12 rc=1 [list.testClear]
 mm_decref String #12 rc=0 [list.testClear]
   mm_decref __ManagedMemory #13 rc=0 [~String]
-    mm_raw_free #R2
+    mm_raw_free #R11
       sl_free size=8 class=0
     mm_free __ManagedMemory #13
       sl_free __ManagedMemory #13 size=64 class=5
@@ -931,10 +1010,6 @@ mm_decref StringList #2 rc=0 [list.testClear]
       sl_free __ManagedList_String #1 size=64 class=5
   mm_free StringList #2
     sl_free StringList #2 size=48 class=4
-mm_raw_alloc #R3 size=40
-  sl_alloc size=40 class=4
-mm_raw_free #R3
-  sl_free size=48 class=4
 ```
 
 <!-- test: memory.clear-passed-list -->
@@ -963,6 +1038,35 @@ end 'main'
 0
 ```
 ```stderr
+mm_raw_alloc #R1 size=64
+  sl_alloc size=64 class=-1
+    os_alloc size=64
+  os_alloc size=4096
+os_alloc size=67108864
+mm_raw_alloc #R2 size=296
+  sl_alloc size=296 class=-1
+    os_alloc size=296
+mm_raw_alloc #R3 size=296
+  sl_alloc size=296 class=-1
+    os_alloc size=296
+mm_raw_alloc #R4 size=296
+  sl_alloc size=296 class=-1
+    os_alloc size=296
+mm_raw_alloc #R5 size=296
+  sl_alloc size=296 class=-1
+    os_alloc size=296
+mm_raw_alloc #R6 size=296
+  sl_alloc size=296 class=-1
+    os_alloc size=296
+mm_raw_alloc #R7 size=296
+  sl_alloc size=296 class=-1
+    os_alloc size=296
+mm_raw_alloc #R8 size=296
+  sl_alloc size=296 class=-1
+    os_alloc size=296
+mm_raw_alloc #R9 size=296
+  sl_alloc size=296 class=-1
+    os_alloc size=296
 sl_init
   os_alloc size=67108864
 mm_alloc __ManagedList_String #1 size=32 [main]
@@ -1013,21 +1117,21 @@ mm_decref String #9 rc=1 [managed_list_clear]
 mm_decref __ManagedListNode #11 rc=0 [managed_list_clear]
   mm_free __ManagedListNode #11
     sl_free __ManagedListNode #11 size=64 class=5
-mm_raw_alloc #R1 size=21 [toStr.buf [main]]
+mm_raw_alloc #R10 size=21 [toStr.buf [main]]
   sl_alloc size=21 class=2
 mm_alloc String #12 size=16 [main]
   sl_alloc String #12 size=48 class=4
 mm_alloc __ManagedMemory #13 size=32 [main]
   sl_alloc __ManagedMemory #13 size=64 class=5
-mm_raw_alloc #R2 size=3 [interp.buf [main]]
+mm_raw_alloc #R11 size=3 [interp.buf [main]]
   sl_alloc size=3 class=0
-mm_raw_free #R1
+mm_raw_free #R10
   sl_free size=24 class=2
 mm_incref __ManagedMemory #13 rc=1 [main]
 mm_incref String #12 rc=1 [main]
 mm_decref String #12 rc=0 [main]
   mm_decref __ManagedMemory #13 rc=0 [~String]
-    mm_raw_free #R2
+    mm_raw_free #R11
       sl_free size=8 class=0
     mm_free __ManagedMemory #13
       sl_free __ManagedMemory #13 size=64 class=5
@@ -1057,10 +1161,6 @@ mm_decref StringList #2 rc=0 [main]
       sl_free __ManagedList_String #1 size=64 class=5
   mm_free StringList #2
     sl_free StringList #2 size=48 class=4
-mm_raw_alloc #R3 size=40
-  sl_alloc size=40 class=4
-mm_raw_free #R3
-  sl_free size=48 class=4
 ```
 
 <!-- test: memory.value-survives-clear-and-return -->

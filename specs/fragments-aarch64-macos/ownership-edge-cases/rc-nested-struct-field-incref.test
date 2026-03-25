@@ -18,20 +18,55 @@ end 'main'
 MmTrace: true
 ExitCode: 55
 Stderr: ```
-alloc Inner #1 rc=0 size=8 [ownership-edge-cases.main]
-incref Inner #1 rc=1 [ownership-edge-cases.main]
-alloc Outer #2 rc=0 size=8 [ownership-edge-cases.main]
-incref Inner #1 rc=2 [ownership-edge-cases.main]
-incref Outer #2 rc=1 [ownership-edge-cases.main]
-decref Outer #2 rc=0 [ownership-edge-cases.main]
-decref Inner #1 rc=1 [~Outer]
-  free Outer #2
-decref Inner #1 rc=0 [ownership-edge-cases.main]
-  free Inner #1
+mm_raw_alloc #R1 size=64
+  sl_alloc size=64 class=-1
+    os_alloc size=64
+  os_alloc size=4096
+os_alloc size=67108864
+mm_raw_alloc #R2 size=296
+  sl_alloc size=296 class=-1
+    os_alloc size=296
+mm_raw_alloc #R3 size=296
+  sl_alloc size=296 class=-1
+    os_alloc size=296
+mm_raw_alloc #R4 size=296
+  sl_alloc size=296 class=-1
+    os_alloc size=296
+mm_raw_alloc #R5 size=296
+  sl_alloc size=296 class=-1
+    os_alloc size=296
+mm_raw_alloc #R6 size=296
+  sl_alloc size=296 class=-1
+    os_alloc size=296
+mm_raw_alloc #R7 size=296
+  sl_alloc size=296 class=-1
+    os_alloc size=296
+mm_raw_alloc #R8 size=296
+  sl_alloc size=296 class=-1
+    os_alloc size=296
+mm_raw_alloc #R9 size=296
+  sl_alloc size=296 class=-1
+    os_alloc size=296
+sl_init
+  os_alloc size=67108864
+mm_alloc Inner #1 size=8 [main]
+  sl_alloc Inner #1 size=40 class=4
+mm_incref Inner #1 rc=1 [main]
+mm_alloc Outer #2 size=8 [main]
+  sl_alloc Outer #2 size=40 class=4
+mm_incref Inner #1 rc=2 [main]
+mm_incref Outer #2 rc=1 [main]
+mm_decref Outer #2 rc=0 [main]
+  mm_decref Inner #1 rc=1 [~Outer]
+  mm_free Outer #2
+    sl_free Outer #2 size=48 class=4
+mm_decref Inner #1 rc=0 [main]
+  mm_free Inner #1
+    sl_free Inner #1 size=48 class=4
 ```
 ---
 module {
-  func @ownership-edge-cases.main() -> u32 {
+  func @main() -> u32 {
   entry:
     arm64.prologue stack_size=80
     arm64.mov x0, #55
@@ -66,7 +101,6 @@ module {
     arm64.str x10, [x29, #-24]
     arm64.ldr x11, [x29, #-24]
     arm64.ldr x12, [x11, #0]
-    arm64.str x12, [x29, #-32]
     arm64.mov x13, #0
     arm64.cmp x12, x13
     arm64.cset x14, lt
@@ -75,27 +109,26 @@ module {
     arm64.cset x0, gt
     arm64.orr x1, x14, x0
     arm64.cmp x1, #0
-    arm64.b.ne ownership-edge-cases.main.__range_panic_0
-    arm64.b ownership-edge-cases.main.__range_ok_0
+    arm64.b.ne main.__range_panic_0
+    arm64.b main.__range_ok_0
   __range_panic_0:
-    arm64.adrp_add_symdata x0, __panic_msg_31
+    arm64.adrp_add_symdata x0, __panic_msg_0
     arm64.mov x1, x0
     arm64.mov x0, x1
     arm64.bl maxon_panic
   __range_ok_0:
-    arm64.ldr x0, [x29, #-32]
-    arm64.ldr x1, [x29, #-16]
-    arm64.cmp x1, #0
-    arm64.b.eq ownership-edge-cases.main.__skip_guarded_39
     arm64.ldr x0, [x29, #-16]
+    arm64.str x12, [x29, #-32]
+    arm64.cmp x0, #0
+    arm64.b.eq main.__skip_guarded_37
     arm64.bl mm_decref
-    arm64.label ownership-edge-cases.main.__skip_guarded_39
-    arm64.ldr x2, [x29, #-8]
-    arm64.cmp x2, #0
-    arm64.b.eq ownership-edge-cases.main.__skip_guarded_41
+    arm64.label main.__skip_guarded_37
+    arm64.ldr x1, [x29, #-8]
+    arm64.cmp x1, #0
+    arm64.b.eq main.__skip_guarded_39
     arm64.ldr x0, [x29, #-8]
     arm64.bl mm_decref
-    arm64.label ownership-edge-cases.main.__skip_guarded_41
+    arm64.label main.__skip_guarded_39
     arm64.ldr x0, [x29, #-32]
     arm64.epilogue stack_size=80
     arm64.ret

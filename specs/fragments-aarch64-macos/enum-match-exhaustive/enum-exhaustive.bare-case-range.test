@@ -1,0 +1,63 @@
+// Test: enum-exhaustive.bare-case-range
+enum Priority
+    low
+    medium
+    high
+    critical
+end 'Priority'
+
+function main() returns ExitCode
+  var p = Priority.high
+  match p 'check'
+    low to medium then return 1
+    high to critical then return 2
+  end 'check'
+end 'main'
+---
+ExitCode: 2
+---
+module {
+  func @main() -> u32 {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.mov x0, #2
+    arm64.str x0, [x29, #-8]
+    arm64.b main.check_0.cmp0
+  check_0.cmp0:
+    arm64.ldr x0, [x29, #-8]
+    arm64.mov x1, #0
+    arm64.cmp x0, x1
+    arm64.cset x2, ge
+    arm64.ldr x3, [x29, #-8]
+    arm64.mov x4, #1
+    arm64.cmp x3, x4
+    arm64.cset x5, le
+    arm64.and x6, x2, x5
+    arm64.cmp x6, #0
+    arm64.b.ne main.check_0.case0
+    arm64.b main.check_0.cmp1
+  check_0.case0:
+    arm64.mov x0, #1
+    arm64.epilogue stack_size=48
+    arm64.ret
+  check_0.cmp1:
+    arm64.ldr x0, [x29, #-8]
+    arm64.mov x1, #2
+    arm64.cmp x0, x1
+    arm64.cset x2, ge
+    arm64.ldr x3, [x29, #-8]
+    arm64.mov x4, #3
+    arm64.cmp x3, x4
+    arm64.cset x5, le
+    arm64.and x6, x2, x5
+    arm64.cmp x6, #0
+    arm64.b.ne main.check_0.case1
+    arm64.b main.check_0.merge
+  check_0.case1:
+    arm64.mov x0, #2
+    arm64.epilogue stack_size=48
+    arm64.ret
+  check_0.merge:
+  }
+}
+---

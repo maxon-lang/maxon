@@ -47,6 +47,7 @@ public partial class ARM64CodeEmitter {
 
   private void EmitRuntimeFunctionStart(string name, int argCount, int stackSize = 0x30) {
     DefineLabel(name);
+    _runtimeFunctionLabels.Add(name);
     _currentRuntimeStackSize = stackSize;
     // STP x29, x30, [sp, #-stackSize]!
     var imm7 = (uint)((-stackSize / 8) & 0x7F);
@@ -90,6 +91,13 @@ public partial class ARM64CodeEmitter {
   /// Restore SP after a variadic function call.
   private void EmitVariadicCleanup(int bytes = 16) {
     EmitAddSubImm(ARM64Register.Sp, ARM64Register.Sp, bytes, isAdd: true);
+  }
+
+  /// Call mm_raw_alloc with X0 = size. Zeros X1 (scope) when mm-trace is enabled
+  /// so that internal callers don't pass garbage as the scope argument.
+  private void EmitCallMmRawAlloc() {
+    if (Compiler.MmTrace) EmitMovRegImm(ARM64Register.X1, 0);
+    EmitBranchLink("mm_raw_alloc");
   }
 
   // --- GMP scheduler TLS helpers ---
@@ -155,6 +163,8 @@ public partial class ARM64CodeEmitter {
   // --- Libc error checking ---
 
   /// Branch to errorLabel if libc call returned negative (X0 < 0).
+  /// Callers must sign-extend W0→X0 after libc calls that return int,
+  /// since Apple ARM64 zero-extends 32-bit return values.
   private void EmitBranchOnLibcError(string errorLabel) {
     // CMP X0, #0 (SUBS XZR, X0, #0)
     EmitWord(0xF100001F);
@@ -168,8 +178,8 @@ public partial class ARM64CodeEmitter {
   public void EmitRuntimeFunctions() {
     EmitMaxonWriteStdout();
     EmitMaxonWriteStderr();
-    EmitMaxonManagedWriteStdout();
-    EmitMaxonManagedWriteStderr();
+    EmitManagedWrite("maxon_managed_write_stdout", 1);
+    EmitManagedWrite("maxon_managed_write_stderr", 2);
     EmitMaxonExit();
     EmitWriteCstrToStderr();
     EmitMaxonPanic();
@@ -242,18 +252,91 @@ public partial class ARM64CodeEmitter {
     EmitMaxonFindFilename();
     EmitMaxonFindNextFile();
 
+    // maxon_file_stat(cstr_path) -> ptr to 48-byte buffer or -1 on failure
+    // Buffer layout: [size(8), modifiedTime(8), createdTime(8), accessedTime(8), isDir(8), isReadOnly(8)]
+    // Uses POSIX stat() on macOS. struct stat is 144 bytes on macOS ARM64.
+    EmitRuntimeFunctionStart("maxon_file_stat", 1, 0xC0);
+    // Allocate 48-byte output buffer
+    EmitMovRegImm(ARM64Register.X0, 48);
+    EmitCallMmRawAlloc();
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X29, 24, 8); // save buf ptr
+
+    // stat(path, &statbuf) — statbuf at [x29+48] (144 bytes, fits in 0xC0 frame)
+    EmitReloadArg(0); // X0 = path
+    EmitAddSubImm(ARM64Register.X1, ARM64Register.X29, 48, isAdd: true); // X1 = &statbuf
+    EmitCallImport("stat");
+    // Check return: if X0 != 0, fail
+    EmitCbnz(ARM64Register.X0, "rt_fstat_fail");
+
+    // Load output buffer
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X9, ARM64Register.X29, 24, 8); // X9 = buf
+
+    // buf[0] = st_size: at offset 96 in macOS ARM64 struct stat
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X29, 48 + 96, 8);
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X9, 0, 8);
+
+    // buf[8] = st_mtime (modifiedTime): at offset 48, seconds field
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X29, 48 + 48, 8);
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X9, 8, 8);
+
+    // buf[16] = st_birthtimespec (createdTime): at offset 80, seconds field
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X29, 48 + 80, 8);
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X9, 16, 8);
+
+    // buf[24] = st_atime (accessedTime): at offset 32, seconds field
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X29, 48 + 32, 8);
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X9, 24, 8);
+
+    // buf[32] = isDirectory: st_mode at offset 4 (u16), check S_IFDIR (0040000 = 0x4000)
+    EmitLoadStoreUnsignedImm(0x79400000, ARM64Register.X0, ARM64Register.X29, 48 + 4, 2); // LDRH st_mode
+    EmitMovRegImm(ARM64Register.X1, 0xF000); // file type mask
+    // AND X0, X0, X1
+    EmitAluRegReg(0x8A000000, ARM64Register.X0, ARM64Register.X0, ARM64Register.X1);
+    EmitMovRegImm(ARM64Register.X1, 0x4000); // S_IFDIR
+    EmitWord(0xEB01001F); // CMP X0, X1
+    EmitWord(0x9A9F17E0); // CSET X0, EQ
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X9, 32, 8);
+
+    // buf[40] = isReadOnly: check !(st_mode & S_IWUSR) where S_IWUSR = 0200 = 0x80
+    EmitLoadStoreUnsignedImm(0x79400000, ARM64Register.X0, ARM64Register.X29, 48 + 4, 2); // LDRH st_mode
+    EmitMovRegImm(ARM64Register.X1, 0x80); // S_IWUSR
+    // TST X0, X1 (= ANDS XZR, X0, X1)
+    EmitWord(0xEA01001F);
+    EmitWord(0x9A9F17E0); // CSET X0, EQ (read-only if write bit NOT set)
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X9, 40, 8);
+
+    // Return buffer ptr
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X29, 24, 8);
+    EmitBranch("rt_fstat_done");
+
+    DefineLabel("rt_fstat_fail");
+    // Free buffer on failure
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X29, 24, 8);
+    if (Compiler.MmTrace) EmitMovRegImm(ARM64Register.X1, 0);
+    EmitBranchLink("mm_raw_free");
+    EmitMovRegImm(ARM64Register.X0, -1);
+
+    DefineLabel("rt_fstat_done");
+    EmitRuntimeFunctionEnd();
+
+    // maxon_file_stat_field(buffer, index) -> i64 value at buffer[index * 8]
+    EmitRuntimeFunctionStart("maxon_file_stat_field", 2, 0x20);
+    EmitReloadArg(0); // X0 = buffer
+    EmitReloadArg(1); // X1 = index
+    // LDR X0, [X0, X1, LSL #3]
+    EmitWord(0xF8617800);
+    EmitRuntimeFunctionEnd();
   }
 
   // --- maxon_write_stdout(buf, len) ---
   // X0 = buffer ptr, X1 = length
   private void EmitMaxonWriteStdout() {
     EmitRuntimeFunctionStart("maxon_write_stdout", 2);
-    // write(1, buf, len)
-    EmitReloadArg(0); // buf -> X1
+    // write() syscall expects (fd, buf, len) in X0-X2 but IR args arrive in X0-X1
+    EmitReloadArg(0);
     var buf = ARM64Register.X0;
     EmitReloadArg(1);
     var len = ARM64Register.X1;
-    // Rearrange: X0=fd=1, X1=buf, X2=len
     EmitMovRegReg(ARM64Register.X2, len);
     EmitMovRegReg(ARM64Register.X1, buf);
     EmitMovRegImm(ARM64Register.X0, 1); // stdout fd
@@ -273,28 +356,16 @@ public partial class ARM64CodeEmitter {
     EmitRuntimeFunctionEnd();
   }
 
-  // --- maxon_managed_write_stdout(buf_ptr, length) ---
-  // Takes buffer pointer in X0 and length in X1, writes to stdout.
-  // Matches the standard IR calling convention (2 args: buf_ptr, length).
-  private void EmitMaxonManagedWriteStdout() {
-    EmitRuntimeFunctionStart("maxon_managed_write_stdout", 2);
-    EmitReloadArg(0); // X0 = buf_ptr
-    EmitReloadArg(1); // X1 = length
-    // write(fd=X0, buf=X1, count=X2): move args to correct positions
-    EmitMovRegReg(ARM64Register.X2, ARM64Register.X1); // count = length
-    EmitMovRegReg(ARM64Register.X1, ARM64Register.X0); // buf = buf_ptr
-    EmitMovRegImm(ARM64Register.X0, 1); // fd = stdout
-    EmitCallImport("write");
-    EmitRuntimeFunctionEnd();
-  }
+  // --- maxon_managed_write_stdout/stderr(buf_ptr, length) ---
+  // Thin wrappers that rearrange IR args (X0=buf, X1=len) into write() syscall order (X0=fd, X1=buf, X2=len).
 
-  private void EmitMaxonManagedWriteStderr() {
-    EmitRuntimeFunctionStart("maxon_managed_write_stderr", 2);
+  private void EmitManagedWrite(string name, int fd) {
+    EmitRuntimeFunctionStart(name, 2);
     EmitReloadArg(0);
     EmitReloadArg(1);
     EmitMovRegReg(ARM64Register.X2, ARM64Register.X1);
     EmitMovRegReg(ARM64Register.X1, ARM64Register.X0);
-    EmitMovRegImm(ARM64Register.X0, 2); // fd = stderr
+    EmitMovRegImm(ARM64Register.X0, fd);
     EmitCallImport("write");
     EmitRuntimeFunctionEnd();
   }
@@ -681,8 +752,11 @@ public partial class ARM64CodeEmitter {
     EmitBranch(reverseLabel);
 
     DefineLabel(doneLabel);
+    // Null-terminate the string
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X3, ARM64Register.X29, 56, 8); // end pos
+    EmitMovRegImm(ARM64Register.X4, 0);
+    EmitWord(0x39000000 | (Reg(ARM64Register.X3) << 5) | Reg(ARM64Register.X4)); // STRB WZR, [X3] (null terminator)
     // Return length = end - buf_start
-    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X3, ARM64Register.X29, 56, 8); // end
     EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X1, ARM64Register.X29, 32, 8); // buf start
     EmitWord(0xCB000000 | (Reg(ARM64Register.X1) << 16) | (Reg(ARM64Register.X3) << 5) | Reg(ARM64Register.X0)); // SUB X0, X3, X1
     EmitRuntimeFunctionEnd();
@@ -1704,12 +1778,18 @@ public partial class ARM64CodeEmitter {
   }
 
   // --- maxon_to_cstring(buf, len) -> ptr ---
-  // Allocates a null-terminated copy
+  // Returns a null-terminated C string. If buffer[length] is already 0,
+  // returns the original buffer (no allocation). Otherwise allocates a copy.
   private void EmitMaxonToCstring() {
     EmitRuntimeFunctionStart("maxon_to_cstring", 2, 0x40);
-    EmitReloadArg(0); // buf
-    EmitReloadArg(1); // len
-    // Allocate len+1 bytes
+    EmitReloadArg(0); // X0 = buf
+    EmitReloadArg(1); // X1 = len
+    // Check if already null-terminated: LDRB W2, [X0, X1]
+    EmitWord(0x38616802); // LDRB W2, [X0, X1]
+    EmitCbz(ARM64Register.X2, "rt_tocstr_already_terminated");
+
+    // Not terminated — allocate len+1 bytes via mm_alloc
+    EmitReloadArg(1); // X1 = len
     EmitMovRegReg(ARM64Register.X0, ARM64Register.X1);
     EmitAddSubImm(ARM64Register.X0, ARM64Register.X0, 1, isAdd: true);
     EmitMovRegImm(ARM64Register.X1, 0); // no destructor
@@ -1719,20 +1799,28 @@ public partial class ARM64CodeEmitter {
     // Save allocated ptr [x29, #32]
     EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X29, 32, 8);
     // Copy: memcpy(allocated, buf, len)
-    EmitReloadArg(0); // buf -> x1
-    EmitReloadArg(1); // len -> x2
+    EmitReloadArg(0); // buf
+    EmitReloadArg(1); // len
     EmitMovRegReg(ARM64Register.X2, ARM64Register.X1);
     EmitMovRegReg(ARM64Register.X1, ARM64Register.X0);
     EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X29, 32, 8);
     EmitBranchLink("maxon_memcpy");
-    // Null terminate
+    // Null terminate: buf[len] = 0
     EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X29, 32, 8);
     EmitReloadArg(1); // len
-    // STRB WZR, [X0, X1]
-    EmitWord(0x8B000000 | (Reg(ARM64Register.X1) << 16) | (Reg(ARM64Register.X0) << 5) | Reg(ARM64Register.X2));
+    // ADD X2, X0, X1 (ptr + len)
+    EmitAluRegReg(0x8B000000, ARM64Register.X2, ARM64Register.X0, ARM64Register.X1);
+    // STRB WZR, [X2]
     EmitWord(0x39000000 | (Reg(ARM64Register.X2) << 5) | Reg(ARM64Register.Xzr));
-    // Return ptr
+    // Return allocated ptr
     EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X29, 32, 8);
+    EmitBranch("rt_tocstr_epilogue");
+
+    // Already terminated: return original buffer
+    DefineLabel("rt_tocstr_already_terminated");
+    EmitReloadArg(0); // X0 = original buf
+
+    DefineLabel("rt_tocstr_epilogue");
     EmitRuntimeFunctionEnd();
   }
 
@@ -1761,7 +1849,7 @@ public partial class ARM64CodeEmitter {
     // COW path: allocate byteLen bytes, copy old buffer
     EmitReloadArg(2); // X2 = byteLen
     EmitMovRegReg(ARM64Register.X0, ARM64Register.X2); // X0 = byteLen (arg for mm_raw_alloc)
-    EmitBranchLink("mm_raw_alloc");
+    EmitCallMmRawAlloc();
     // Save new buffer at [x29+48]
     EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X29, 48, 8);
 
@@ -2313,10 +2401,26 @@ public partial class ARM64CodeEmitter {
     _condBranchFixups.Add((_code.Count, noStripLabel));
     EmitWord(0x54000000 | CondCode(ARM64ConditionCode.Ne)); // B.NE nostrip
 
-    // Null-terminate at len-2 (stripping the last 2 chars: separator + '*')
+    // Strip by allocating a mutable copy of path without trailing "/*"
+    // len-2 = path length without separator+'*'
     EmitAddSubImm(ARM64Register.X3, ARM64Register.X2, 2, isAdd: false); // X3 = len-2
-    // STRB WZR, [X1, X3]
-    EmitWord(0x38206800 | (Reg(ARM64Register.X3) << 16) | (Reg(ARM64Register.X1) << 5) | Reg(ARM64Register.Xzr));
+    EmitAddSubImm(ARM64Register.X0, ARM64Register.X3, 1, isAdd: true); // alloc len-2+1
+    EmitCallMmRawAlloc();
+    // Save new buffer at [x29+24] (replaces original pattern pointer)
+    EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X29, 24, 8);
+    // Copy original path bytes: memcpy(new_buf, original, len-2)
+    EmitReloadArg(0); // X0 = original pattern
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X2, ARM64Register.X29, 32, 8); // len
+    EmitAddSubImm(ARM64Register.X2, ARM64Register.X2, 2, isAdd: false); // X2 = len-2
+    EmitMovRegReg(ARM64Register.X1, ARM64Register.X0); // X1 = src
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X29, 24, 8); // X0 = dst
+    EmitBranchLink("maxon_memcpy");
+    // Null-terminate the copy
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X29, 24, 8);
+    EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X1, ARM64Register.X29, 32, 8);
+    EmitAddSubImm(ARM64Register.X1, ARM64Register.X1, 2, isAdd: false);
+    // STRB WZR, [X0, X1]
+    EmitWord(0x38216800 | (Reg(ARM64Register.X1) << 16) | (Reg(ARM64Register.X0) << 5) | Reg(ARM64Register.Xzr));
     _branchFixups.Add((_code.Count, stripDoneLabel));
     EmitWord(0x14000000); // B stripdone
 
@@ -2331,6 +2435,8 @@ public partial class ARM64CodeEmitter {
     EmitPushVariadicArg(ARM64Register.X2); // Apple ARM64: variadic arg on stack
     EmitCallImport("open");
     EmitVariadicCleanup();
+    // Sign-extend W0→X0: open() returns int (32-bit), need sign extension for error check
+    EmitWord(0x93407C00); // SXTW X0, W0
 
     // Check if open failed
     var openFailLabel = $"__dir_openfail_{_uniqueLabelCounter}";
@@ -2423,9 +2529,10 @@ public partial class ARM64CodeEmitter {
     EmitCallImport("close");
     DefineLabel(skipCloseLabel);
 
-    // Decref block
+    // Free block directly — block has no refcount (allocated with mm_alloc but
+    // never increffed; it's an internal resource, not a managed reference)
     EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X29, 24, 8);
-    EmitBranchLink("mm_decref");
+    EmitBranchLink("mm_free");
 
     // Zero block field in user struct for idempotency
     EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X29, 16, 8);
@@ -2817,7 +2924,7 @@ public partial class ARM64CodeEmitter {
     EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X0, ARM64Register.X29, 32, 8);
     // LSL X0, X0, #3  (multiply by 8)
     EmitWord(0xD37DF000);
-    EmitBranchLink("mm_raw_alloc");
+    EmitCallMmRawAlloc();
     EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X29, 24, 8); // [x29+24] = procs_array
     EmitGlobalStoreReg(ARM64Register.X0, "__sched_procs");
 
@@ -2833,7 +2940,7 @@ public partial class ARM64CodeEmitter {
 
     // Allocate P[i] struct
     EmitMovRegImm(ARM64Register.X0, PStructSize);
-    EmitBranchLink("mm_raw_alloc");
+    EmitCallMmRawAlloc();
     EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X29, 48, 8); // [x29+48] = P[i]
 
     // Store P[i] into procs_array[i]
@@ -3054,7 +3161,7 @@ public partial class ARM64CodeEmitter {
     DefineLabel("__gt_spawn_alloc_new");
     // Allocate GreenThread struct via mm_raw_alloc
     EmitMovRegImm(ARM64Register.X0, GtStructSize);
-    EmitBranchLink("mm_raw_alloc");
+    EmitCallMmRawAlloc();
 
     DefineLabel("__gt_spawn_have_gt");
     EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X29, 40, 8); // save gt_ptr
@@ -4328,7 +4435,7 @@ public partial class ARM64CodeEmitter {
 
     // Allocate SyncRequest
     EmitMovRegImm(ARM64Register.X0, SyncReqSize);
-    EmitBranchLink("mm_raw_alloc");
+    EmitCallMmRawAlloc();
     EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X29, 40, 8); // save req
 
     // Fill: op, arg0, arg1, waiter=current, next=0
@@ -4562,7 +4669,7 @@ public partial class ARM64CodeEmitter {
     // --- connect returned -1: register kqueue EVFILT_WRITE and yield ---
     // Allocate KqCtx
     EmitMovRegImm(ARM64Register.X0, KqCtxSize);
-    EmitBranchLink("mm_raw_alloc");
+    EmitCallMmRawAlloc();
     EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X29, 64, 8); // save ctx
 
     // Fill ctx: fd, buf=0, len=0, waiter=current, filter=KQCTX_CONNECT
@@ -6285,7 +6392,7 @@ public partial class ARM64CodeEmitter {
 
     // Allocate KqCtx
     EmitMovRegImm(ARM64Register.X0, KqCtxSize);
-    EmitBranchLink("mm_raw_alloc");
+    EmitCallMmRawAlloc();
     EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X29, 40, 8); // save ctx
 
     // Fill ctx: fd, buf, len, waiter=current, filter

@@ -23,22 +23,59 @@ end 'main'
 MmTrace: true
 ExitCode: 2
 Stderr: ```
-alloc Payload #1 rc=0 size=8 [ownership-edge-cases.main]
-incref Payload #1 rc=1 [ownership-edge-cases.main]
-alloc Container #2 rc=0 size=8 [ownership-edge-cases.main]
-incref Payload #1 rc=2 [ownership-edge-cases.main]
-incref Container #2 rc=1 [ownership-edge-cases.main]
-alloc Payload #3 rc=0 size=8 [ownership-edge-cases.main]
-incref Payload #3 rc=1 [ownership-edge-cases.main]
-decref Payload #1 rc=1 [Container.setPayload]
-incref Payload #3 rc=2 [Container.setPayload]
-decref Container #2 rc=0 [ownership-edge-cases.main]
-decref Payload #3 rc=1 [~Container]
-  free Container #2
-decref Payload #1 rc=0 [ownership-edge-cases.main]
-  free Payload #1
-decref Payload #3 rc=0 [ownership-edge-cases.main]
-  free Payload #3
+mm_raw_alloc #R1 size=64
+  sl_alloc size=64 class=-1
+    os_alloc size=64
+  os_alloc size=4096
+os_alloc size=67108864
+mm_raw_alloc #R2 size=296
+  sl_alloc size=296 class=-1
+    os_alloc size=296
+mm_raw_alloc #R3 size=296
+  sl_alloc size=296 class=-1
+    os_alloc size=296
+mm_raw_alloc #R4 size=296
+  sl_alloc size=296 class=-1
+    os_alloc size=296
+mm_raw_alloc #R5 size=296
+  sl_alloc size=296 class=-1
+    os_alloc size=296
+mm_raw_alloc #R6 size=296
+  sl_alloc size=296 class=-1
+    os_alloc size=296
+mm_raw_alloc #R7 size=296
+  sl_alloc size=296 class=-1
+    os_alloc size=296
+mm_raw_alloc #R8 size=296
+  sl_alloc size=296 class=-1
+    os_alloc size=296
+mm_raw_alloc #R9 size=296
+  sl_alloc size=296 class=-1
+    os_alloc size=296
+sl_init
+  os_alloc size=67108864
+mm_alloc Payload #1 size=8 [main]
+  sl_alloc Payload #1 size=40 class=4
+mm_incref Payload #1 rc=1 [main]
+mm_alloc Container #2 size=8 [main]
+  sl_alloc Container #2 size=40 class=4
+mm_incref Payload #1 rc=2 [main]
+mm_incref Container #2 rc=1 [main]
+mm_alloc Payload #3 size=8 [main]
+  sl_alloc Payload #3 size=40 class=4
+mm_incref Payload #3 rc=1 [main]
+mm_decref Payload #1 rc=1 [Container.setPayload]
+mm_incref Payload #3 rc=2 [Container.setPayload]
+mm_decref Container #2 rc=0 [main]
+  mm_decref Payload #3 rc=1 [~Container]
+  mm_free Container #2
+    sl_free Container #2 size=48 class=4
+mm_decref Payload #1 rc=0 [main]
+  mm_free Payload #1
+    sl_free Payload #1 size=48 class=4
+mm_decref Payload #3 rc=0 [main]
+  mm_free Payload #3
+    sl_free Payload #3 size=48 class=4
 ```
 ---
 module {
@@ -66,9 +103,9 @@ module {
     arm64.epilogue stack_size=64
     arm64.ret
   }
-  func @ownership-edge-cases.main() -> u32 {
+  func @main() -> u32 {
   entry:
-    arm64.prologue stack_size=112
+    arm64.prologue stack_size=96
     arm64.mov x0, #1
     arm64.mov x0, #8
     arm64.mov x1, #0
@@ -116,7 +153,6 @@ module {
     arm64.str x15, [x29, #-32]
     arm64.ldr x0, [x29, #-32]
     arm64.ldr x1, [x0, #0]
-    arm64.str x1, [x29, #-40]
     arm64.mov x0, #0
     arm64.cmp x1, x0
     arm64.cset x2, lt
@@ -125,35 +161,34 @@ module {
     arm64.cset x3, gt
     arm64.orr x0, x2, x3
     arm64.cmp x0, #0
-    arm64.b.ne ownership-edge-cases.main.__range_panic_0
-    arm64.b ownership-edge-cases.main.__range_ok_0
+    arm64.b.ne main.__range_panic_0
+    arm64.b main.__range_ok_0
   __range_panic_0:
-    arm64.adrp_add_symdata x0, __panic_msg_37
+    arm64.adrp_add_symdata x0, __panic_msg_0
     arm64.mov x1, x0
     arm64.mov x0, x1
     arm64.bl maxon_panic
   __range_ok_0:
-    arm64.ldr x0, [x29, #-40]
-    arm64.ldr x1, [x29, #-16]
-    arm64.cmp x1, #0
-    arm64.b.eq ownership-edge-cases.main.__skip_guarded_51
     arm64.ldr x0, [x29, #-16]
+    arm64.str x1, [x29, #-40]
+    arm64.cmp x0, #0
+    arm64.b.eq main.__skip_guarded_49
     arm64.bl mm_decref
-    arm64.label ownership-edge-cases.main.__skip_guarded_51
-    arm64.ldr x2, [x29, #-8]
-    arm64.cmp x2, #0
-    arm64.b.eq ownership-edge-cases.main.__skip_guarded_53
+    arm64.label main.__skip_guarded_49
+    arm64.ldr x1, [x29, #-8]
+    arm64.cmp x1, #0
+    arm64.b.eq main.__skip_guarded_51
     arm64.ldr x0, [x29, #-8]
     arm64.bl mm_decref
-    arm64.label ownership-edge-cases.main.__skip_guarded_53
-    arm64.ldr x3, [x29, #-24]
-    arm64.cmp x3, #0
-    arm64.b.eq ownership-edge-cases.main.__skip_guarded_55
+    arm64.label main.__skip_guarded_51
+    arm64.ldr x2, [x29, #-24]
+    arm64.cmp x2, #0
+    arm64.b.eq main.__skip_guarded_53
     arm64.ldr x0, [x29, #-24]
     arm64.bl mm_decref
-    arm64.label ownership-edge-cases.main.__skip_guarded_55
+    arm64.label main.__skip_guarded_53
     arm64.ldr x0, [x29, #-40]
-    arm64.epilogue stack_size=112
+    arm64.epilogue stack_size=96
     arm64.ret
   }
   func @__destruct_Payload(ptr: i64) {

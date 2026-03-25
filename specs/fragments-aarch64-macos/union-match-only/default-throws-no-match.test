@@ -11,8 +11,8 @@ end 'MatchError'
 
 function checkColor(c Color) returns ExitCode throws MatchError
   match c 'check'
-    Color.red then return 1
-    Color.green then return 2
+    red then return 1
+    green then return 2
     default throws MatchError.unmatched
   end 'check'
 end 'checkColor'
@@ -67,7 +67,7 @@ module {
     arm64.ret
   check_0.merge:
   }
-  func @union-match-only.main() -> u32 {
+  func @main() -> u32 {
   entry:
     arm64.prologue stack_size=80
     arm64.mov x0, #2
@@ -83,15 +83,14 @@ module {
     arm64.cmp x1, x4
     arm64.cset x5, ne
     arm64.cmp x5, #0
-    arm64.b.ne union-match-only.main.otherwise_default_error_2
-    arm64.b union-match-only.main.otherwise_default_continue_3
+    arm64.b.ne main.otherwise_default_error_2
+    arm64.b main.otherwise_default_continue_3
   otherwise_default_error_2:
     arm64.ldr x0, [x29, #-16]
     arm64.str x0, [x29, #-24]
-    arm64.b union-match-only.main.otherwise_default_continue_3
+    arm64.b main.otherwise_default_continue_3
   otherwise_default_continue_3:
     arm64.ldr x0, [x29, #-24]
-    arm64.str x0, [x29, #-32]
     arm64.mov x1, #0
     arm64.cmp x0, x1
     arm64.cset x2, lt
@@ -100,15 +99,14 @@ module {
     arm64.cset x4, gt
     arm64.orr x5, x2, x4
     arm64.cmp x5, #0
-    arm64.b.ne union-match-only.main.__range_panic_4
-    arm64.b union-match-only.main.__range_ok_4
+    arm64.b.ne main.__range_panic_4
+    arm64.b main.__range_ok_4
   __range_panic_4:
-    arm64.adrp_add_symdata x0, __panic_msg_43
+    arm64.adrp_add_symdata x0, __panic_msg_0
     arm64.mov x1, x0
     arm64.mov x0, x1
     arm64.bl maxon_panic
   __range_ok_4:
-    arm64.ldr x0, [x29, #-32]
     arm64.epilogue stack_size=80
     arm64.ret
   }

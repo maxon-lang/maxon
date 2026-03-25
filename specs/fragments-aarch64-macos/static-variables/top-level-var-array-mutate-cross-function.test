@@ -190,9 +190,9 @@ module {
     arm64.epilogue stack_size=208
     arm64.ret
   }
-  func @static-variables.main() -> u32 {
+  func @main() -> u32 {
   entry:
-    arm64.prologue stack_size=48
+    arm64.prologue stack_size=16
     arm64.mov x0, #0
     arm64.bl static-variables.increment
     arm64.mov x0, #0
@@ -206,63 +206,57 @@ module {
     arm64.mov x0, #2
     arm64.bl static-variables.increment
     arm64.bl static-variables.total
-    arm64.str x0, [x29, #-8]
     arm64.mov x1, #0
     arm64.cmp x0, x1
     arm64.cset x2, lt
     arm64.mov x1, #4294967295
     arm64.cmp x0, x1
     arm64.cset x3, gt
-    arm64.orr x0, x2, x3
-    arm64.cmp x0, #0
-    arm64.b.ne static-variables.main.__range_panic_1
-    arm64.b static-variables.main.__range_ok_1
-  __range_panic_1:
-    arm64.adrp_add_symdata x0, __panic_msg_70
+    arm64.orr x1, x2, x3
+    arm64.cmp x1, #0
+    arm64.b.ne main.__range_panic_0
+    arm64.b main.__range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_symdata x0, __panic_msg_0
     arm64.mov x1, x0
     arm64.mov x0, x1
     arm64.bl maxon_panic
-  __range_ok_1:
-    arm64.ldr x0, [x29, #-8]
-    arm64.epilogue stack_size=48
+  __range_ok_0:
+    arm64.epilogue stack_size=16
     arm64.ret
   }
-  func @static-variables.__module_init() {
+  func @__module_init() {
   entry:
-    arm64.prologue stack_size=144
+    arm64.prologue stack_size=48
     arm64.mov x0, #0
-    arm64.mov x1, #0
+    arm64.mov x1, #3
     arm64.mov x2, #0
-    arm64.str x2, [x29, #-8]
-    arm64.str x1, [x29, #-16]
-    arm64.str x0, [x29, #-24]
-    arm64.mov x3, #0
-    arm64.mov x4, #3
-    arm64.mov x5, #0
-    arm64.mov x6, #8
-    arm64.adrp_add_func x7, __destruct___ManagedMemory
-    arm64.mov x8, x7
-    arm64.mov x1, x8
+    arm64.mov x3, #8
+    arm64.adrp_add_func x4, __destruct___ManagedMemory
+    arm64.mov x5, x4
+    arm64.mov x1, x5
     arm64.mov x0, #32
     arm64.mov x2, #1
     arm64.bl mm_alloc
-    arm64.str x0, [x29, #-32]
-    arm64.ldr x9, [x29, #-32]
-    arm64.mov x10, #0
-    arm64.str x10, [x9, #0]
-    arm64.ldr x11, [x29, #-32]
-    arm64.mov x12, #3
-    arm64.str x12, [x11, #8]
-    arm64.ldr x13, [x29, #-32]
-    arm64.mov x14, #0
-    arm64.str x14, [x13, #16]
-    arm64.ldr x15, [x29, #-32]
-    arm64.mov x0, #8
-    arm64.str x0, [x15, #24]
-    arm64.ldr x0, [x29, #-32]
-    arm64.ldr x1, [x0, #24]
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x6, [x29, #-8]
+    arm64.mov x7, #0
+    arm64.str x7, [x6, #0]
+    arm64.ldr x8, [x29, #-8]
+    arm64.mov x9, #3
+    arm64.str x9, [x8, #8]
+    arm64.ldr x10, [x29, #-8]
+    arm64.mov x11, #0
+    arm64.str x11, [x10, #16]
+    arm64.ldr x12, [x29, #-8]
+    arm64.mov x13, #8
+    arm64.str x13, [x12, #24]
+    arm64.ldr x14, [x29, #-8]
+    arm64.ldr x15, [x14, #24]
     arm64.adrp_add_symdata x0, __mm_panic_element_size_zero
-    arm64.mov x2, x0
+    arm64.mov x1, x0
+    arm64.mov x2, x1
+    arm64.mov x1, x15
     arm64.mov x0, #0
     arm64.bl maxon_bounds_check
     arm64.mov x0, #0
@@ -272,49 +266,32 @@ module {
     arm64.mov x0, #16
     arm64.mov x2, #2
     arm64.bl mm_alloc
-    arm64.str x0, [x29, #-40]
-    arm64.ldr x1, [x29, #-40]
+    arm64.str x0, [x29, #-16]
+    arm64.ldr x1, [x29, #-16]
     arm64.mov x2, #0
     arm64.str x2, [x1, #0]
-    arm64.ldr x1, [x29, #-32]
-    arm64.ldr x2, [x29, #-40]
+    arm64.ldr x1, [x29, #-8]
+    arm64.ldr x2, [x29, #-16]
     arm64.str x1, [x2, #8]
-    arm64.ldr x0, [x29, #-32]
+    arm64.ldr x0, [x29, #-8]
     arm64.bl mm_incref
-    arm64.add x0, x29, #-24
+    arm64.adrp_add_rdata x0, __const_array___module_init_counters
     arm64.mov x1, x0
-    arm64.ldr x0, [x29, #-40]
+    arm64.ldr x0, [x29, #-16]
     arm64.ldr x2, [x0, #8]
-    arm64.ldr x0, [x2, #24]
-    arm64.mov x2, #3
-    arm64.mul x3, x2, x0
-    arm64.str x1, [x29, #-48]
-    arm64.str x3, [x29, #-56]
-    arm64.ldr x0, [x29, #-56]
-    arm64.bl mm_raw_alloc
-    arm64.str x0, [x29, #-64]
-    arm64.ldr x1, [x29, #-48]
-    arm64.ldr x2, [x29, #-56]
-    arm64.bl maxon_memcpy
-    arm64.ldr x1, [x29, #-40]
-    arm64.ldr x2, [x1, #8]
-    arm64.ldr x1, [x29, #-64]
     arm64.str x1, [x2, #0]
-    arm64.mov x1, #3
-    arm64.str x1, [x2, #16]
-    arm64.str x0, [x29, #-72]
-    arm64.ldr x0, [x29, #-40]
+    arm64.ldr x0, [x29, #-16]
     arm64.bl mm_incref
-    arm64.ldr x0, [x29, #-40]
+    arm64.ldr x0, [x29, #-16]
     arm64.bl mm_incref
-    arm64.ldr x0, [x29, #-40]
+    arm64.ldr x0, [x29, #-16]
     arm64.global_store [counters], x0
-    arm64.ldr x0, [x29, #-40]
+    arm64.ldr x0, [x29, #-16]
     arm64.cmp x0, #0
-    arm64.b.eq static-variables.__module_init.__skip_guarded_62
+    arm64.b.eq __module_init.__skip_guarded_47
     arm64.bl mm_decref
-    arm64.label static-variables.__module_init.__skip_guarded_62
-    arm64.epilogue stack_size=144
+    arm64.label __module_init.__skip_guarded_47
+    arm64.epilogue stack_size=48
     arm64.ret
   }
   func @__maxon_global_cleanup() {

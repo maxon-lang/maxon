@@ -13,9 +13,9 @@ end 'main'
 ExitCode: 42
 ---
 module {
-  func @export-keyword.main() -> u32 {
+  func @main() -> u32 {
   entry:
-    arm64.prologue stack_size=112
+    arm64.prologue stack_size=80
     arm64.mov x0, #0
     arm64.mov x1, #0
     arm64.mov x2, #0
@@ -75,15 +75,14 @@ module {
     arm64.cmp x1, x0
     arm64.cset x2, ne
     arm64.cmp x2, #0
-    arm64.b.ne export-keyword.main.otherwise_default_error_2
-    arm64.b export-keyword.main.otherwise_default_continue_3
+    arm64.b.ne main.otherwise_default_error_2
+    arm64.b main.otherwise_default_continue_3
   otherwise_default_error_2:
     arm64.ldr x0, [x29, #-24]
     arm64.str x0, [x29, #-32]
-    arm64.b export-keyword.main.otherwise_default_continue_3
+    arm64.b main.otherwise_default_continue_3
   otherwise_default_continue_3:
     arm64.ldr x0, [x29, #-32]
-    arm64.str x0, [x29, #-40]
     arm64.mov x1, #0
     arm64.cmp x0, x1
     arm64.cset x2, lt
@@ -92,23 +91,22 @@ module {
     arm64.cset x4, gt
     arm64.orr x5, x2, x4
     arm64.cmp x5, #0
-    arm64.b.ne export-keyword.main.__range_panic_4
-    arm64.b export-keyword.main.__range_ok_4
+    arm64.b.ne main.__range_panic_4
+    arm64.b main.__range_ok_4
   __range_panic_4:
-    arm64.adrp_add_symdata x0, __panic_msg_23
+    arm64.adrp_add_symdata x0, __panic_msg_0
     arm64.mov x1, x0
     arm64.mov x0, x1
     arm64.bl maxon_panic
   __range_ok_4:
-    arm64.ldr x0, [x29, #-40]
     arm64.ldr x1, [x29, #-16]
     arm64.cmp x1, #0
-    arm64.b.eq export-keyword.main.__skip_guarded_67
+    arm64.b.eq main.__skip_guarded_65
     arm64.ldr x0, [x29, #-16]
     arm64.bl mm_decref
-    arm64.label export-keyword.main.__skip_guarded_67
-    arm64.ldr x0, [x29, #-40]
-    arm64.epilogue stack_size=112
+    arm64.label main.__skip_guarded_65
+    arm64.ldr x0, [x29, #-32]
+    arm64.epilogue stack_size=80
     arm64.ret
   }
   func @__destruct___ManagedMemory_Integer(ptr: i64) {

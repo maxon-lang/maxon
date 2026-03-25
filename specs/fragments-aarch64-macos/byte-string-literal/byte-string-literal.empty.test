@@ -7,15 +7,15 @@ end 'main'
 ExitCode: 0
 ---
 module {
-  func @byte-string-literal.main() -> u32 {
+  func @main() -> u32 {
   entry:
     arm64.prologue stack_size=96
     arm64.adrp_add_rdata x0, __bstr_0
     arm64.mov x1, x0
     arm64.mov x2, #0
-    arm64.adrp_add_func x3, __destruct_ByteArray
+    arm64.adrp_add_func x3, __destruct___Array_i8
     arm64.mov x4, x3
-    arm64.str x1, [x29, #-40]
+    arm64.str x1, [x29, #-32]
     arm64.mov x1, x4
     arm64.mov x0, #16
     arm64.mov x2, #1
@@ -32,7 +32,7 @@ module {
     arm64.bl mm_alloc
     arm64.str x0, [x29, #-16]
     arm64.ldr x9, [x29, #-16]
-    arm64.ldr x10, [x29, #-40]
+    arm64.ldr x10, [x29, #-32]
     arm64.str x10, [x9, #0]
     arm64.ldr x11, [x29, #-16]
     arm64.mov x12, #0
@@ -55,42 +55,40 @@ module {
     arm64.ldr x0, [x29, #-24]
     arm64.bl mm_incref
     arm64.ldr x0, [x29, #-24]
-    arm64.bl ByteArray.count
-    arm64.str x0, [x29, #-32]
+    arm64.bl __Array_i8.count
     arm64.mov x1, #0
     arm64.cmp x0, x1
     arm64.cset x2, lt
     arm64.mov x1, #4294967295
     arm64.cmp x0, x1
     arm64.cset x3, gt
-    arm64.orr x0, x2, x3
-    arm64.cmp x0, #0
-    arm64.b.ne byte-string-literal.main.__range_panic_0
-    arm64.b byte-string-literal.main.__range_ok_0
+    arm64.orr x1, x2, x3
+    arm64.cmp x1, #0
+    arm64.b.ne main.__range_panic_0
+    arm64.b main.__range_ok_0
   __range_panic_0:
-    arm64.adrp_add_symdata x0, __panic_msg_8
+    arm64.adrp_add_symdata x0, __panic_msg_0
     arm64.mov x1, x0
     arm64.mov x0, x1
     arm64.bl maxon_panic
   __range_ok_0:
-    arm64.ldr x0, [x29, #-32]
     arm64.ldr x1, [x29, #-8]
+    arm64.str x0, [x29, #-40]
     arm64.cmp x1, #0
-    arm64.b.eq byte-string-literal.main.__skip_guarded_52
+    arm64.b.eq main.__skip_guarded_50
     arm64.ldr x0, [x29, #-8]
     arm64.bl mm_decref
-    arm64.label byte-string-literal.main.__skip_guarded_52
-    arm64.ldr x2, [x29, #-24]
-    arm64.cmp x2, #0
-    arm64.b.eq byte-string-literal.main.__skip_guarded_54
+    arm64.label main.__skip_guarded_50
     arm64.ldr x0, [x29, #-24]
+    arm64.cmp x0, #0
+    arm64.b.eq main.__skip_guarded_52
     arm64.bl mm_decref
-    arm64.label byte-string-literal.main.__skip_guarded_54
-    arm64.ldr x0, [x29, #-32]
+    arm64.label main.__skip_guarded_52
+    arm64.ldr x0, [x29, #-40]
     arm64.epilogue stack_size=96
     arm64.ret
   }
-  func @__destruct_ByteArray(ptr: i64) {
+  func @__destruct___Array_i8(ptr: i64) {
   entry:
     arm64.prologue stack_size=48
     arm64.str x0, [x29, #-8]
@@ -98,11 +96,11 @@ module {
     arm64.ldr x1, [x0, #8]
     arm64.str x1, [x29, #-16]
     arm64.cmp x1, #0
-    arm64.b.eq __destruct_ByteArray.__skip_guarded_4
+    arm64.b.eq __destruct___Array_i8.__skip_guarded_4
     arm64.ldr x0, [x29, #-16]
     arm64.bl mm_decref
-    arm64.label __destruct_ByteArray.__skip_guarded_4
-    arm64.b __destruct_ByteArray.done
+    arm64.label __destruct___Array_i8.__skip_guarded_4
+    arm64.b __destruct___Array_i8.done
   done:
     arm64.epilogue stack_size=48
     arm64.ret

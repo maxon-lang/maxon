@@ -3,7 +3,10 @@ var counter = 7
 var flag = true
 
 function main() returns ExitCode
-  return 0
+  if flag 'read'
+    return counter - 7
+  end 'read'
+  return 1
 end 'main'
 ---
 ExitCode: 0
@@ -13,9 +16,39 @@ i8 1
 ```
 ---
 module {
-  func @static-variables.main() -> u32 {
+  func @main() -> u32 {
   entry:
-    arm64.mov x0, #0
+    arm64.prologue stack_size=16
+    arm64.global_load x0, [flag]
+    arm64.cmp x0, #0
+    arm64.b.ne main.read_0
+    arm64.b main.read_0.after
+  read_0:
+    arm64.global_load x0, [counter]
+    arm64.mov x1, #7
+    arm64.sub x2, x0, x1
+    arm64.mov x3, #0
+    arm64.cmp x2, x3
+    arm64.cset x4, lt
+    arm64.mov x5, #4294967295
+    arm64.cmp x2, x5
+    arm64.cset x6, gt
+    arm64.orr x7, x4, x6
+    arm64.cmp x7, #0
+    arm64.b.ne main.__range_panic_1
+    arm64.b main.__range_ok_1
+  __range_panic_1:
+    arm64.adrp_add_symdata x0, __panic_msg_0
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl maxon_panic
+  __range_ok_1:
+    arm64.mov x0, x2
+    arm64.epilogue stack_size=16
+    arm64.ret
+  read_0.after:
+    arm64.mov x0, #1
+    arm64.epilogue stack_size=16
     arm64.ret
   }
 }

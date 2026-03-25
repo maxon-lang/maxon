@@ -9,9 +9,9 @@ end 'main'
 ExitCode: 34
 ---
 module {
-  func @parentheses.main() -> u32 {
+  func @main() -> u32 {
   entry:
-    arm64.prologue stack_size=48
+    arm64.prologue stack_size=16
     arm64.mov x0, #2
     arm64.mov x1, #3
     arm64.mov x2, #4
@@ -23,7 +23,6 @@ module {
     arm64.mov x8, #4
     arm64.mul x9, x7, x8
     arm64.add x10, x4, x9
-    arm64.str x10, [x29, #-8]
     arm64.mov x11, #0
     arm64.cmp x10, x11
     arm64.cset x12, lt
@@ -32,16 +31,16 @@ module {
     arm64.cset x14, gt
     arm64.orr x15, x12, x14
     arm64.cmp x15, #0
-    arm64.b.ne parentheses.main.__range_panic_0
-    arm64.b parentheses.main.__range_ok_0
+    arm64.b.ne main.__range_panic_0
+    arm64.b main.__range_ok_0
   __range_panic_0:
-    arm64.adrp_add_symdata x0, __panic_msg_16
+    arm64.adrp_add_symdata x0, __panic_msg_0
     arm64.mov x1, x0
     arm64.mov x0, x1
     arm64.bl maxon_panic
   __range_ok_0:
-    arm64.ldr x0, [x29, #-8]
-    arm64.epilogue stack_size=48
+    arm64.mov x0, x10
+    arm64.epilogue stack_size=16
     arm64.ret
   }
 }

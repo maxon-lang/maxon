@@ -9,7 +9,7 @@ function main() returns ExitCode
   var total = 0
   var i = 0
   while i < 5 'loop'
-    var item = Item{v: i}
+    @heap var item = Item{v: i}
     i = i + 1
     if item.v == 2 'skip'
       continue
@@ -22,45 +22,86 @@ end 'main'
 MmTrace: true
 ExitCode: 8
 Stderr: ```
-alloc Item #1 rc=0 size=8 [ownership-edge-cases.main]
-incref Item #1 rc=1 [ownership-edge-cases.main]
-decref Item #1 rc=0 [ownership-edge-cases.main]
-  free Item #1
-alloc Item #2 rc=0 size=8 [ownership-edge-cases.main]
-incref Item #2 rc=1 [ownership-edge-cases.main]
-decref Item #2 rc=0 [ownership-edge-cases.main]
-  free Item #2
-alloc Item #3 rc=0 size=8 [ownership-edge-cases.main]
-incref Item #3 rc=1 [ownership-edge-cases.main]
-decref Item #3 rc=0 [ownership-edge-cases.main]
-  free Item #3
-alloc Item #4 rc=0 size=8 [ownership-edge-cases.main]
-incref Item #4 rc=1 [ownership-edge-cases.main]
-decref Item #4 rc=0 [ownership-edge-cases.main]
-  free Item #4
-alloc Item #5 rc=0 size=8 [ownership-edge-cases.main]
-incref Item #5 rc=1 [ownership-edge-cases.main]
-decref Item #5 rc=0 [ownership-edge-cases.main]
-  free Item #5
+mm_raw_alloc #R1 size=64
+  sl_alloc size=64 class=-1
+    os_alloc size=64
+  os_alloc size=4096
+os_alloc size=67108864
+mm_raw_alloc #R2 size=296
+  sl_alloc size=296 class=-1
+    os_alloc size=296
+mm_raw_alloc #R3 size=296
+  sl_alloc size=296 class=-1
+    os_alloc size=296
+mm_raw_alloc #R4 size=296
+  sl_alloc size=296 class=-1
+    os_alloc size=296
+mm_raw_alloc #R5 size=296
+  sl_alloc size=296 class=-1
+    os_alloc size=296
+mm_raw_alloc #R6 size=296
+  sl_alloc size=296 class=-1
+    os_alloc size=296
+mm_raw_alloc #R7 size=296
+  sl_alloc size=296 class=-1
+    os_alloc size=296
+mm_raw_alloc #R8 size=296
+  sl_alloc size=296 class=-1
+    os_alloc size=296
+mm_raw_alloc #R9 size=296
+  sl_alloc size=296 class=-1
+    os_alloc size=296
+sl_init
+  os_alloc size=67108864
+mm_alloc Item #1 size=8 [main]
+  sl_alloc Item #1 size=40 class=4
+mm_incref Item #1 rc=1 [main]
+mm_decref Item #1 rc=0 [main]
+  mm_free Item #1
+    sl_free Item #1 size=48 class=4
+mm_alloc Item #2 size=8 [main]
+  sl_alloc Item #2 size=40 class=4
+mm_incref Item #2 rc=1 [main]
+mm_decref Item #2 rc=0 [main]
+  mm_free Item #2
+    sl_free Item #2 size=48 class=4
+mm_alloc Item #3 size=8 [main]
+  sl_alloc Item #3 size=40 class=4
+mm_incref Item #3 rc=1 [main]
+mm_decref Item #3 rc=0 [main]
+  mm_free Item #3
+    sl_free Item #3 size=48 class=4
+mm_alloc Item #4 size=8 [main]
+  sl_alloc Item #4 size=40 class=4
+mm_incref Item #4 rc=1 [main]
+mm_decref Item #4 rc=0 [main]
+  mm_free Item #4
+    sl_free Item #4 size=48 class=4
+mm_alloc Item #5 size=8 [main]
+  sl_alloc Item #5 size=40 class=4
+mm_incref Item #5 rc=1 [main]
+mm_decref Item #5 rc=0 [main]
+  mm_free Item #5
+    sl_free Item #5 size=48 class=4
 ```
 ---
 module {
-  func @ownership-edge-cases.main() -> u32 {
+  func @main() -> u32 {
   entry:
     arm64.prologue stack_size=80
     arm64.mov x0, #0
     arm64.str x0, [x29, #-8]
     arm64.mov x1, #0
     arm64.str x1, [x29, #-16]
-    arm64.b ownership-edge-cases.main.loop_0.header
+    arm64.b main.loop_0.header
   loop_0.header:
     arm64.mov x0, #5
     arm64.ldr x1, [x29, #-16]
     arm64.cmp x1, x0
     arm64.cset x2, lt
     arm64.cmp x2, #0
-    arm64.b.ne ownership-edge-cases.main.loop_0
-    arm64.b ownership-edge-cases.main.loop_0.exit
+    arm64.b.ne main.loop_0
+    arm64.b main.loop_0.exit
   loop_0:
     arm64.ldr x0, [x29, #-16]
     arm64.mov x0, #8
@@ -84,15 +125,15 @@ module {
     arm64.cmp x8, x9
     arm64.cset x10, eq
     arm64.cmp x10, #0
-    arm64.b.ne ownership-edge-cases.main.skip_1
-    arm64.b ownership-edge-cases.main.skip_1.after
+    arm64.b.ne main.skip_1
+    arm64.b main.skip_1.after
   skip_1:
     arm64.ldr x0, [x29, #-24]
     arm64.cmp x0, #0
-    arm64.b.eq ownership-edge-cases.main.__skip_guarded_29
+    arm64.b.eq main.__skip_guarded_29
     arm64.bl mm_decref
-    arm64.label ownership-edge-cases.main.__skip_guarded_29
-    arm64.b ownership-edge-cases.main.loop_0.header
+    arm64.label main.__skip_guarded_29
+    arm64.b main.loop_0.header
   skip_1.after:
     arm64.ldr x0, [x29, #-24]
     arm64.ldr x1, [x0, #0]
@@ -101,14 +142,13 @@ module {
     arm64.str x3, [x29, #-8]
     arm64.ldr x4, [x29, #-24]
     arm64.cmp x4, #0
-    arm64.b.eq ownership-edge-cases.main.__skip_guarded_37
+    arm64.b.eq main.__skip_guarded_37
     arm64.ldr x0, [x29, #-24]
     arm64.bl mm_decref
-    arm64.label ownership-edge-cases.main.__skip_guarded_37
-    arm64.b ownership-edge-cases.main.loop_0.header
+    arm64.label main.__skip_guarded_37
+    arm64.b main.loop_0.header
   loop_0.exit:
     arm64.ldr x0, [x29, #-8]
-    arm64.str x0, [x29, #-32]
     arm64.mov x1, #0
     arm64.cmp x0, x1
     arm64.cset x2, lt
@@ -117,15 +157,14 @@ module {
     arm64.cset x4, gt
     arm64.orr x5, x2, x4
     arm64.cmp x5, #0
-    arm64.b.ne ownership-edge-cases.main.__range_panic_2
-    arm64.b ownership-edge-cases.main.__range_ok_2
+    arm64.b.ne main.__range_panic_2
+    arm64.b main.__range_ok_2
   __range_panic_2:
-    arm64.adrp_add_symdata x0, __panic_msg_33
+    arm64.adrp_add_symdata x0, __panic_msg_0
     arm64.mov x1, x0
     arm64.mov x0, x1
     arm64.bl maxon_panic
   __range_ok_2:
-    arm64.ldr x0, [x29, #-32]
     arm64.epilogue stack_size=80
     arm64.ret
   }

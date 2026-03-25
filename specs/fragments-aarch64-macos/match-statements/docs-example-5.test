@@ -9,10 +9,10 @@ end 'Direction'
 function main() returns ExitCode
   var dir = Direction.north
   match dir 'navigate'
-    Direction.north then return 1
-    Direction.south then return 2
-    Direction.east then return 3
-    Direction.west then return 4
+    north then return 1
+    south then return 2
+    east then return 3
+    west then return 4
   end 'navigate'
 end 'main'
 
@@ -20,56 +20,25 @@ end 'main'
 ExitCode: 1
 ---
 module {
-  func @match-statements.main() -> u32 {
+  func @main() -> u32 {
   entry:
     arm64.prologue stack_size=48
     arm64.mov x0, #0
     arm64.str x0, [x29, #-8]
-    arm64.b match-statements.main.navigate_0.cmp0
-  navigate_0.cmp0:
-    arm64.ldr x0, [x29, #-8]
-    arm64.mov x1, #0
-    arm64.cmp x0, x1
-    arm64.cset x2, eq
-    arm64.cmp x2, #0
-    arm64.b.ne match-statements.main.navigate_0.case0
-    arm64.b match-statements.main.navigate_0.cmp1
+    arm64.ldr x1, [x29, #-8]
+    arm64.jump_table x1, 4 cases, default=main.navigate_0.merge
   navigate_0.case0:
     arm64.mov x0, #1
     arm64.epilogue stack_size=48
     arm64.ret
-  navigate_0.cmp1:
-    arm64.ldr x0, [x29, #-8]
-    arm64.mov x1, #1
-    arm64.cmp x0, x1
-    arm64.cset x2, eq
-    arm64.cmp x2, #0
-    arm64.b.ne match-statements.main.navigate_0.case1
-    arm64.b match-statements.main.navigate_0.cmp2
   navigate_0.case1:
     arm64.mov x0, #2
     arm64.epilogue stack_size=48
     arm64.ret
-  navigate_0.cmp2:
-    arm64.ldr x0, [x29, #-8]
-    arm64.mov x1, #2
-    arm64.cmp x0, x1
-    arm64.cset x2, eq
-    arm64.cmp x2, #0
-    arm64.b.ne match-statements.main.navigate_0.case2
-    arm64.b match-statements.main.navigate_0.cmp3
   navigate_0.case2:
     arm64.mov x0, #3
     arm64.epilogue stack_size=48
     arm64.ret
-  navigate_0.cmp3:
-    arm64.ldr x0, [x29, #-8]
-    arm64.mov x1, #3
-    arm64.cmp x0, x1
-    arm64.cset x2, eq
-    arm64.cmp x2, #0
-    arm64.b.ne match-statements.main.navigate_0.case3
-    arm64.b match-statements.main.navigate_0.merge
   navigate_0.case3:
     arm64.mov x0, #4
     arm64.epilogue stack_size=48

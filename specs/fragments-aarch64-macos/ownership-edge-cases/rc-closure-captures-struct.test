@@ -18,14 +18,49 @@ end 'main'
 MmTrace: true
 ExitCode: 3
 Stderr: ```
-alloc Config #1 rc=0 size=8 [ownership-edge-cases.main]
-incref Config #1 rc=1 [ownership-edge-cases.main]
-alloc ClosureEnv #2 rc=0 size=8 [ownership-edge-cases.main]
-incref ClosureEnv #2 rc=1 [ownership-edge-cases.main]
-decref Config #1 rc=0 [ownership-edge-cases.main]
-  free Config #1
-decref ClosureEnv #2 rc=0 [ownership-edge-cases.main]
-  free ClosureEnv #2
+mm_raw_alloc #R1 size=64
+  sl_alloc size=64 class=-1
+    os_alloc size=64
+  os_alloc size=4096
+os_alloc size=67108864
+mm_raw_alloc #R2 size=296
+  sl_alloc size=296 class=-1
+    os_alloc size=296
+mm_raw_alloc #R3 size=296
+  sl_alloc size=296 class=-1
+    os_alloc size=296
+mm_raw_alloc #R4 size=296
+  sl_alloc size=296 class=-1
+    os_alloc size=296
+mm_raw_alloc #R5 size=296
+  sl_alloc size=296 class=-1
+    os_alloc size=296
+mm_raw_alloc #R6 size=296
+  sl_alloc size=296 class=-1
+    os_alloc size=296
+mm_raw_alloc #R7 size=296
+  sl_alloc size=296 class=-1
+    os_alloc size=296
+mm_raw_alloc #R8 size=296
+  sl_alloc size=296 class=-1
+    os_alloc size=296
+mm_raw_alloc #R9 size=296
+  sl_alloc size=296 class=-1
+    os_alloc size=296
+sl_init
+  os_alloc size=67108864
+mm_alloc Config #1 size=8 [main]
+  sl_alloc Config #1 size=40 class=4
+mm_incref Config #1 rc=1 [main]
+mm_alloc ClosureEnv #2 size=8 [main]
+  sl_alloc ClosureEnv #2 size=40 class=4
+mm_incref ClosureEnv #2 rc=1 [main]
+mm_decref Config #1 rc=0 [main]
+  mm_free Config #1
+    sl_free Config #1 size=48 class=4
+mm_decref ClosureEnv #2 rc=0 [main]
+  mm_free ClosureEnv #2
+    sl_free ClosureEnv #2 size=48 class=4
 ```
 ---
 module {
@@ -39,9 +74,9 @@ module {
     arm64.epilogue stack_size=32
     arm64.ret
   }
-  func @ownership-edge-cases.main() -> u32 {
+  func @main() -> u32 {
   entry:
-    arm64.prologue stack_size=80
+    arm64.prologue stack_size=64
     arm64.mov x0, #3
     arm64.mov x0, #8
     arm64.mov x1, #0
@@ -55,7 +90,7 @@ module {
     arm64.ldr x0, [x29, #-8]
     arm64.bl mm_incref
     arm64.adrp_add_func x4, __closure_0
-    arm64.str x4, [x29, #-32]
+    arm64.str x4, [x29, #-24]
     arm64.mov x0, #8
     arm64.mov x1, #0
     arm64.mov x2, #2
@@ -66,11 +101,10 @@ module {
     arm64.str x0, [x29, #-16]
     arm64.bl mm_incref
     arm64.ldr x7, [x29, #-16]
-    arm64.ldr x0, [x29, #-32]
+    arm64.ldr x0, [x29, #-24]
     arm64.ldr x1, [x29, #-16]
     arm64.mov x2, #0
     arm64.bl ownership-edge-cases.apply
-    arm64.str x0, [x29, #-24]
     arm64.mov x8, #0
     arm64.cmp x0, x8
     arm64.cset x9, lt
@@ -79,31 +113,31 @@ module {
     arm64.cset x11, gt
     arm64.orr x12, x9, x11
     arm64.cmp x12, #0
-    arm64.b.ne ownership-edge-cases.main.__range_panic_0
-    arm64.b ownership-edge-cases.main.__range_ok_0
+    arm64.b.ne main.__range_panic_0
+    arm64.b main.__range_ok_0
   __range_panic_0:
-    arm64.adrp_add_symdata x0, __panic_msg_26
+    arm64.adrp_add_symdata x0, __panic_msg_0
     arm64.mov x1, x0
     arm64.mov x0, x1
     arm64.bl maxon_panic
   __range_ok_0:
-    arm64.ldr x0, [x29, #-24]
     arm64.ldr x1, [x29, #-8]
+    arm64.str x0, [x29, #-32]
     arm64.cmp x1, #0
-    arm64.b.eq ownership-edge-cases.main.__skip_guarded_35
+    arm64.b.eq main.__skip_guarded_33
     arm64.ldr x0, [x29, #-8]
     arm64.bl mm_decref
-    arm64.label ownership-edge-cases.main.__skip_guarded_35
-    arm64.mov x2, #0
-    arm64.str x2, [x29, #-8]
-    arm64.ldr x3, [x29, #-16]
-    arm64.cmp x3, #0
-    arm64.b.eq ownership-edge-cases.main.__skip_guarded_39
+    arm64.label main.__skip_guarded_33
+    arm64.mov x0, #0
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x1, [x29, #-16]
+    arm64.cmp x1, #0
+    arm64.b.eq main.__skip_guarded_37
     arm64.ldr x0, [x29, #-16]
     arm64.bl mm_decref
-    arm64.label ownership-edge-cases.main.__skip_guarded_39
-    arm64.ldr x0, [x29, #-24]
-    arm64.epilogue stack_size=80
+    arm64.label main.__skip_guarded_37
+    arm64.ldr x0, [x29, #-32]
+    arm64.epilogue stack_size=64
     arm64.ret
   }
   func @__closure_0(_: i64, __env: i64) -> i64 {

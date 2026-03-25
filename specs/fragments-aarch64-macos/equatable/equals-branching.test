@@ -45,90 +45,75 @@ module {
     arm64.epilogue stack_size=48
     arm64.ret
   }
-  func @equatable.main() -> u32 {
+  func @main() -> u32 {
   entry:
-    arm64.prologue stack_size=112
+    arm64.prologue stack_size=80
     arm64.mov x0, #10
-    arm64.mov x0, #8
     arm64.mov x1, #0
-    arm64.mov x2, #1
-    arm64.bl mm_alloc
+    arm64.str x1, [x29, #-8]
     arm64.str x0, [x29, #-8]
-    arm64.ldr x1, [x29, #-8]
     arm64.mov x2, #10
-    arm64.str x2, [x1, #0]
-    arm64.ldr x3, [x29, #-8]
-    arm64.ldr x0, [x29, #-8]
-    arm64.bl mm_incref
-    arm64.mov x4, #10
-    arm64.mov x0, #8
-    arm64.mov x1, #0
-    arm64.mov x2, #1
-    arm64.bl mm_alloc
-    arm64.str x0, [x29, #-16]
-    arm64.ldr x5, [x29, #-16]
-    arm64.mov x6, #10
-    arm64.str x6, [x5, #0]
-    arm64.ldr x7, [x29, #-16]
-    arm64.ldr x0, [x29, #-16]
-    arm64.bl mm_incref
-    arm64.mov x8, #20
-    arm64.mov x0, #8
-    arm64.mov x1, #0
-    arm64.mov x2, #1
-    arm64.bl mm_alloc
-    arm64.str x0, [x29, #-24]
-    arm64.ldr x9, [x29, #-24]
-    arm64.mov x10, #20
-    arm64.str x10, [x9, #0]
-    arm64.ldr x11, [x29, #-24]
-    arm64.ldr x0, [x29, #-24]
-    arm64.bl mm_incref
-    arm64.mov x12, #0
-    arm64.str x12, [x29, #-32]
-    arm64.ldr x13, [x29, #-8]
-    arm64.ldr x14, [x29, #-16]
-    arm64.ldr x0, [x29, #-8]
-    arm64.ldr x1, [x29, #-16]
+    arm64.mov x3, #0
+    arm64.str x3, [x29, #-16]
+    arm64.str x2, [x29, #-16]
+    arm64.mov x4, #20
+    arm64.mov x5, #0
+    arm64.str x5, [x29, #-24]
+    arm64.str x4, [x29, #-24]
+    arm64.mov x6, #0
+    arm64.str x6, [x29, #-32]
+    arm64.add x7, x29, #-8
+    arm64.mov x8, x7
+    arm64.add x9, x29, #-16
+    arm64.mov x10, x9
+    arm64.mov x0, x8
+    arm64.mov x1, x10
     arm64.bl Token.equals
     arm64.cmp x0, #0
-    arm64.b.ne equatable.main.first_0
-    arm64.b equatable.main.first_0.merge
+    arm64.b.ne main.first_0
+    arm64.b main.first_0.merge
   first_0:
     arm64.mov x0, #1
     arm64.ldr x1, [x29, #-32]
     arm64.add x2, x1, x0
     arm64.str x2, [x29, #-32]
-    arm64.b equatable.main.first_0.merge
+    arm64.b main.first_0.merge
   first_0.merge:
-    arm64.ldr x0, [x29, #-8]
-    arm64.ldr x1, [x29, #-24]
+    arm64.add x0, x29, #-8
+    arm64.mov x1, x0
+    arm64.add x2, x29, #-24
+    arm64.mov x3, x2
+    arm64.mov x0, x1
+    arm64.mov x1, x3
     arm64.bl Token.equals
     arm64.cmp x0, #0
-    arm64.b.ne equatable.main.second_1
-    arm64.b equatable.main.second_1.merge
+    arm64.b.ne main.second_1
+    arm64.b main.second_1.merge
   second_1:
     arm64.mov x0, #10
     arm64.ldr x1, [x29, #-32]
     arm64.add x2, x1, x0
     arm64.str x2, [x29, #-32]
-    arm64.b equatable.main.second_1.merge
+    arm64.b main.second_1.merge
   second_1.merge:
-    arm64.ldr x0, [x29, #-16]
-    arm64.ldr x1, [x29, #-24]
+    arm64.add x0, x29, #-16
+    arm64.mov x1, x0
+    arm64.add x2, x29, #-24
+    arm64.mov x3, x2
+    arm64.mov x0, x1
+    arm64.mov x1, x3
     arm64.bl Token.equals
     arm64.cmp x0, #0
-    arm64.b.ne equatable.main.third_2
-    arm64.b equatable.main.third_2.merge
+    arm64.b.ne main.third_2
+    arm64.b main.third_2.merge
   third_2:
     arm64.mov x0, #100
     arm64.ldr x1, [x29, #-32]
     arm64.add x2, x1, x0
     arm64.str x2, [x29, #-32]
-    arm64.b equatable.main.third_2.merge
+    arm64.b main.third_2.merge
   third_2.merge:
     arm64.ldr x0, [x29, #-32]
-    arm64.str x0, [x29, #-40]
     arm64.mov x1, #0
     arm64.cmp x0, x1
     arm64.cset x2, lt
@@ -137,41 +122,15 @@ module {
     arm64.cset x4, gt
     arm64.orr x5, x2, x4
     arm64.cmp x5, #0
-    arm64.b.ne equatable.main.__range_panic_3
-    arm64.b equatable.main.__range_ok_3
+    arm64.b.ne main.__range_panic_3
+    arm64.b main.__range_ok_3
   __range_panic_3:
-    arm64.adrp_add_symdata x0, __panic_msg_41
+    arm64.adrp_add_symdata x0, __panic_msg_0
     arm64.mov x1, x0
     arm64.mov x0, x1
     arm64.bl maxon_panic
   __range_ok_3:
-    arm64.ldr x0, [x29, #-40]
-    arm64.ldr x1, [x29, #-24]
-    arm64.cmp x1, #0
-    arm64.b.eq equatable.main.__skip_guarded_72
-    arm64.ldr x0, [x29, #-24]
-    arm64.bl mm_decref
-    arm64.label equatable.main.__skip_guarded_72
-    arm64.ldr x2, [x29, #-16]
-    arm64.cmp x2, #0
-    arm64.b.eq equatable.main.__skip_guarded_74
-    arm64.ldr x0, [x29, #-16]
-    arm64.bl mm_decref
-    arm64.label equatable.main.__skip_guarded_74
-    arm64.ldr x3, [x29, #-8]
-    arm64.cmp x3, #0
-    arm64.b.eq equatable.main.__skip_guarded_76
-    arm64.ldr x0, [x29, #-8]
-    arm64.bl mm_decref
-    arm64.label equatable.main.__skip_guarded_76
-    arm64.ldr x0, [x29, #-40]
-    arm64.epilogue stack_size=112
-    arm64.ret
-  }
-  func @__destruct_Token(ptr: i64) {
-  entry:
-    arm64.b __destruct_Token.done
-  done:
+    arm64.epilogue stack_size=80
     arm64.ret
   }
 }

@@ -220,13 +220,6 @@ end 'main'
 spawn #1
 sleep_yield #0
 io_yield #1 [net_connect]
-sleep_resume #0
-spawn #2
-io_yield #2 [file_exists]
-io_resume #1 [net_connect]
-io_resume #2 [file_exists]
-io_yield #1 [net_connect]
-await #2 [yield]
 io_resume #1 [net_connect]
 io_yield #1 [net_send]
 io_resume #1 [net_send]
@@ -238,7 +231,12 @@ io_yield #1 [net_recv]
 io_resume #1 [net_recv]
 io_yield #1 [net_close]
 io_resume #1 [net_close]
-try_await #1 [yield]
+sleep_resume #0
+spawn #2
+io_yield #2 [file_exists]
+io_resume #2 [file_exists]
+await #2 [yield]
+try_await #1 [immediate]
 ```
 
 ### Response Headers

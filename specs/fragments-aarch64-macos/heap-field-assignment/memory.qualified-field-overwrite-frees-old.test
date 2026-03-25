@@ -27,28 +27,77 @@ Stdout: ```
 20
 ```
 Stderr: ```
-alloc Right #1 rc=0 size=8 [heap-field-assignment.testAssign]
-alloc Pair #2 rc=0 size=16 [heap-field-assignment.testAssign]
-incref Right #1 rc=1 [heap-field-assignment.testAssign]
-incref Pair #2 rc=1 [heap-field-assignment.testAssign]
-alloc Right #3 rc=0 size=8 [heap-field-assignment.testAssign]
-incref Right #3 rc=1 [heap-field-assignment.testAssign]
-decref Right #1 rc=0 [heap-field-assignment.testAssign]
-  free Right #1
-incref Right #3 rc=2 [heap-field-assignment.testAssign]
-alloc String #4 rc=0 size=16 [heap-field-assignment.testAssign]
-alloc __ManagedMemory #5 rc=0 size=32 [heap-field-assignment.testAssign]
-incref __ManagedMemory #5 rc=1 [heap-field-assignment.testAssign]
-incref String #4 rc=1 [heap-field-assignment.testAssign]
-decref String #4 rc=0 [heap-field-assignment.testAssign]
-decref __ManagedMemory #5 rc=0 [~String]
-  free __ManagedMemory #5
-  free String #4
-decref Pair #2 rc=0 [heap-field-assignment.testAssign]
-decref Right #3 rc=1 [~Pair]
-  free Pair #2
-decref Right #3 rc=0 [heap-field-assignment.testAssign]
-  free Right #3
+mm_raw_alloc #R1 size=64
+  sl_alloc size=64 class=-1
+    os_alloc size=64
+  os_alloc size=4096
+os_alloc size=67108864
+mm_raw_alloc #R2 size=296
+  sl_alloc size=296 class=-1
+    os_alloc size=296
+mm_raw_alloc #R3 size=296
+  sl_alloc size=296 class=-1
+    os_alloc size=296
+mm_raw_alloc #R4 size=296
+  sl_alloc size=296 class=-1
+    os_alloc size=296
+mm_raw_alloc #R5 size=296
+  sl_alloc size=296 class=-1
+    os_alloc size=296
+mm_raw_alloc #R6 size=296
+  sl_alloc size=296 class=-1
+    os_alloc size=296
+mm_raw_alloc #R7 size=296
+  sl_alloc size=296 class=-1
+    os_alloc size=296
+mm_raw_alloc #R8 size=296
+  sl_alloc size=296 class=-1
+    os_alloc size=296
+mm_raw_alloc #R9 size=296
+  sl_alloc size=296 class=-1
+    os_alloc size=296
+sl_init
+  os_alloc size=67108864
+mm_alloc Right #1 size=8 [heap-field-assignment.testAssign]
+  sl_alloc Right #1 size=40 class=4
+mm_alloc Pair #2 size=16 [heap-field-assignment.testAssign]
+  sl_alloc Pair #2 size=48 class=4
+mm_incref Right #1 rc=1 [heap-field-assignment.testAssign]
+mm_incref Pair #2 rc=1 [heap-field-assignment.testAssign]
+mm_alloc Right #3 size=8 [heap-field-assignment.testAssign]
+  sl_alloc Right #3 size=40 class=4
+mm_incref Right #3 rc=1 [heap-field-assignment.testAssign]
+mm_decref Right #1 rc=0 [heap-field-assignment.testAssign]
+  mm_free Right #1
+    sl_free Right #1 size=48 class=4
+mm_incref Right #3 rc=2 [heap-field-assignment.testAssign]
+mm_raw_alloc #R10 size=21 [toStr.buf [heap-field-assignment.testAssign]]
+  sl_alloc size=21 class=2
+mm_alloc String #4 size=16 [heap-field-assignment.testAssign]
+  sl_alloc String #4 size=48 class=4
+mm_alloc __ManagedMemory #5 size=32 [heap-field-assignment.testAssign]
+  sl_alloc __ManagedMemory #5 size=64 class=5
+mm_raw_alloc #R11 size=4 [interp.buf [heap-field-assignment.testAssign]]
+  sl_alloc size=4 class=0
+mm_raw_free #R10
+  sl_free size=24 class=2
+mm_incref __ManagedMemory #5 rc=1 [heap-field-assignment.testAssign]
+mm_incref String #4 rc=1 [heap-field-assignment.testAssign]
+mm_decref String #4 rc=0 [heap-field-assignment.testAssign]
+  mm_decref __ManagedMemory #5 rc=0 [~String]
+    mm_raw_free #R11
+      sl_free size=8 class=0
+    mm_free __ManagedMemory #5
+      sl_free __ManagedMemory #5 size=64 class=5
+  mm_free String #4
+    sl_free String #4 size=48 class=4
+mm_decref Pair #2 rc=0 [heap-field-assignment.testAssign]
+  mm_decref Right #3 rc=1 [~Pair]
+  mm_free Pair #2
+    sl_free Pair #2 size=48 class=4
+mm_decref Right #3 rc=0 [heap-field-assignment.testAssign]
+  mm_free Right #3
+    sl_free Right #3 size=48 class=4
 ```
 ---
 module {
@@ -229,7 +278,7 @@ module {
     arm64.epilogue stack_size=304
     arm64.ret
   }
-  func @heap-field-assignment.main() -> u32 {
+  func @main() -> u32 {
   entry:
     arm64.prologue stack_size=16
     arm64.bl heap-field-assignment.testAssign

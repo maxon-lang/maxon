@@ -30,139 +30,92 @@ end 'main'
 ExitCode: 30
 ---
 module {
-  func @memory-safety.main() -> u32 {
+  func @main() -> u32 {
   entry:
-    arm64.prologue stack_size=128
+    arm64.prologue stack_size=144
     arm64.mov x0, #0
     arm64.str x0, [x29, #-8]
     arm64.mov x1, #0
     arm64.str x1, [x29, #-16]
-    arm64.b memory-safety.main.outer_0.header
+    arm64.b main.outer_0.header
   outer_0.header:
     arm64.mov x0, #3
     arm64.ldr x1, [x29, #-16]
     arm64.cmp x1, x0
     arm64.cset x2, lt
     arm64.cmp x2, #0
-    arm64.b.ne memory-safety.main.outer_0
-    arm64.b memory-safety.main.outer_0.exit
+    arm64.b.ne main.outer_0
+    arm64.b main.outer_0.exit
   outer_0:
     arm64.ldr x0, [x29, #-16]
     arm64.mov x1, #10
     arm64.ldr x2, [x29, #-16]
     arm64.mul x3, x2, x1
-    arm64.str x3, [x29, #-56]
-    arm64.mov x0, #16
-    arm64.mov x1, #0
-    arm64.mov x2, #1
-    arm64.bl mm_alloc
-    arm64.str x0, [x29, #-24]
-    arm64.ldr x4, [x29, #-24]
-    arm64.ldr x5, [x29, #-16]
-    arm64.str x5, [x4, #0]
-    arm64.ldr x6, [x29, #-24]
-    arm64.ldr x7, [x29, #-56]
-    arm64.str x7, [x6, #8]
-    arm64.ldr x8, [x29, #-24]
-    arm64.ldr x0, [x29, #-24]
-    arm64.bl mm_incref
-    arm64.mov x9, #0
-    arm64.str x9, [x29, #-32]
-    arm64.b memory-safety.main.inner_1.header
+    arm64.mov x4, #0
+    arm64.str x4, [x29, #-24]
+    arm64.mov x5, #0
+    arm64.str x5, [x29, #-32]
+    arm64.str x0, [x29, #-32]
+    arm64.str x3, [x29, #-24]
+    arm64.mov x6, #0
+    arm64.str x6, [x29, #-40]
+    arm64.b main.inner_1.header
   inner_1.header:
     arm64.mov x0, #3
-    arm64.ldr x1, [x29, #-32]
+    arm64.ldr x1, [x29, #-40]
     arm64.cmp x1, x0
     arm64.cset x2, lt
     arm64.cmp x2, #0
-    arm64.b.ne memory-safety.main.inner_1
-    arm64.b memory-safety.main.inner_1.exit
+    arm64.b.ne main.inner_1
+    arm64.b main.inner_1.exit
   inner_1:
-    arm64.ldr x0, [x29, #-32]
+    arm64.ldr x0, [x29, #-40]
     arm64.mov x1, #10
-    arm64.ldr x2, [x29, #-32]
+    arm64.ldr x2, [x29, #-40]
     arm64.mul x3, x2, x1
-    arm64.str x3, [x29, #-56]
-    arm64.mov x0, #16
-    arm64.mov x1, #0
-    arm64.mov x2, #1
-    arm64.bl mm_alloc
-    arm64.str x0, [x29, #-40]
-    arm64.ldr x4, [x29, #-40]
-    arm64.ldr x5, [x29, #-32]
-    arm64.str x5, [x4, #0]
-    arm64.ldr x6, [x29, #-40]
-    arm64.ldr x7, [x29, #-56]
-    arm64.str x7, [x6, #8]
-    arm64.ldr x8, [x29, #-40]
-    arm64.ldr x0, [x29, #-40]
-    arm64.bl mm_incref
-    arm64.ldr x9, [x29, #-24]
-    arm64.ldr x10, [x9, #0]
-    arm64.mov x11, #1
-    arm64.cmp x10, x11
-    arm64.cset x12, eq
-    arm64.cmp x12, #0
-    arm64.b.ne memory-safety.main.check_2
-    arm64.b memory-safety.main.check_2.merge
+    arm64.mov x4, #0
+    arm64.str x4, [x29, #-48]
+    arm64.mov x5, #0
+    arm64.str x5, [x29, #-56]
+    arm64.str x0, [x29, #-56]
+    arm64.str x3, [x29, #-48]
+    arm64.ldr x6, [x29, #-32]
+    arm64.mov x7, #1
+    arm64.cmp x6, x7
+    arm64.cset x8, eq
+    arm64.cmp x8, #0
+    arm64.b.ne main.check_2
+    arm64.b main.check_2.merge
   check_2:
-    arm64.ldr x0, [x29, #-40]
-    arm64.ldr x1, [x0, #0]
-    arm64.mov x2, #2
-    arm64.cmp x1, x2
-    arm64.cset x3, eq
-    arm64.cmp x3, #0
-    arm64.b.ne memory-safety.main.found_3
-    arm64.b memory-safety.main.found_3.after
+    arm64.ldr x0, [x29, #-56]
+    arm64.mov x1, #2
+    arm64.cmp x0, x1
+    arm64.cset x2, eq
+    arm64.cmp x2, #0
+    arm64.b.ne main.found_3
+    arm64.b main.found_3.after
   found_3:
     arm64.ldr x0, [x29, #-24]
-    arm64.ldr x1, [x0, #8]
-    arm64.ldr x2, [x29, #-40]
-    arm64.ldr x3, [x2, #8]
-    arm64.add x4, x1, x3
-    arm64.str x4, [x29, #-8]
-    arm64.ldr x5, [x29, #-40]
-    arm64.cmp x5, #0
-    arm64.b.eq memory-safety.main.__skip_guarded_63
-    arm64.ldr x0, [x29, #-40]
-    arm64.bl mm_decref
-    arm64.label memory-safety.main.__skip_guarded_63
-    arm64.ldr x6, [x29, #-24]
-    arm64.cmp x6, #0
-    arm64.b.eq memory-safety.main.__skip_guarded_65
-    arm64.ldr x0, [x29, #-24]
-    arm64.bl mm_decref
-    arm64.label memory-safety.main.__skip_guarded_65
-    arm64.b memory-safety.main.outer_0.exit
+    arm64.ldr x1, [x29, #-48]
+    arm64.add x2, x0, x1
+    arm64.str x2, [x29, #-8]
+    arm64.b main.outer_0.exit
   found_3.after:
-    arm64.b memory-safety.main.check_2.merge
+    arm64.b main.check_2.merge
   check_2.merge:
     arm64.mov x0, #1
-    arm64.ldr x1, [x29, #-32]
+    arm64.ldr x1, [x29, #-40]
     arm64.add x2, x1, x0
-    arm64.str x2, [x29, #-32]
-    arm64.ldr x3, [x29, #-40]
-    arm64.cmp x3, #0
-    arm64.b.eq memory-safety.main.__skip_guarded_73
-    arm64.ldr x0, [x29, #-40]
-    arm64.bl mm_decref
-    arm64.label memory-safety.main.__skip_guarded_73
-    arm64.b memory-safety.main.inner_1.header
+    arm64.str x2, [x29, #-40]
+    arm64.b main.inner_1.header
   inner_1.exit:
     arm64.mov x0, #1
     arm64.ldr x1, [x29, #-16]
     arm64.add x2, x1, x0
     arm64.str x2, [x29, #-16]
-    arm64.ldr x3, [x29, #-24]
-    arm64.cmp x3, #0
-    arm64.b.eq memory-safety.main.__skip_guarded_80
-    arm64.ldr x0, [x29, #-24]
-    arm64.bl mm_decref
-    arm64.label memory-safety.main.__skip_guarded_80
-    arm64.b memory-safety.main.outer_0.header
+    arm64.b main.outer_0.header
   outer_0.exit:
     arm64.ldr x0, [x29, #-8]
-    arm64.str x0, [x29, #-48]
     arm64.mov x1, #0
     arm64.cmp x0, x1
     arm64.cset x2, lt
@@ -171,22 +124,15 @@ module {
     arm64.cset x4, gt
     arm64.orr x5, x2, x4
     arm64.cmp x5, #0
-    arm64.b.ne memory-safety.main.__range_panic_4
-    arm64.b memory-safety.main.__range_ok_4
+    arm64.b.ne main.__range_panic_4
+    arm64.b main.__range_ok_4
   __range_panic_4:
-    arm64.adrp_add_symdata x0, __panic_msg_58
+    arm64.adrp_add_symdata x0, __panic_msg_0
     arm64.mov x1, x0
     arm64.mov x0, x1
     arm64.bl maxon_panic
   __range_ok_4:
-    arm64.ldr x0, [x29, #-48]
-    arm64.epilogue stack_size=128
-    arm64.ret
-  }
-  func @__destruct_Pair(ptr: i64) {
-  entry:
-    arm64.b __destruct_Pair.done
-  done:
+    arm64.epilogue stack_size=144
     arm64.ret
   }
 }

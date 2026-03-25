@@ -68,33 +68,32 @@ module {
     arm64.epilogue stack_size=48
     arm64.ret
   }
-  func @if-statements.main() -> u32 {
+  func @main() -> u32 {
   entry:
-    arm64.prologue stack_size=64
+    arm64.prologue stack_size=48
     arm64.mov x0, #0
     arm64.bl if-statements.classify
-    arm64.str x0, [x29, #-16]
+    arm64.str x0, [x29, #-8]
     arm64.mov x0, #5
     arm64.bl if-statements.classify
-    arm64.str x0, [x29, #-24]
+    arm64.str x0, [x29, #-16]
     arm64.mov x0, #50
     arm64.bl if-statements.classify
-    arm64.str x0, [x29, #-32]
+    arm64.str x0, [x29, #-24]
     arm64.mov x0, #200
     arm64.bl if-statements.classify
     arm64.mov x1, #10
-    arm64.ldr x2, [x29, #-24]
+    arm64.ldr x2, [x29, #-16]
     arm64.mul x3, x2, x1
-    arm64.ldr x1, [x29, #-16]
+    arm64.ldr x1, [x29, #-8]
     arm64.add x2, x1, x3
     arm64.mov x1, #100
-    arm64.ldr x3, [x29, #-32]
+    arm64.ldr x3, [x29, #-24]
     arm64.mul x4, x3, x1
     arm64.add x1, x2, x4
     arm64.mov x2, #1000
     arm64.mul x3, x0, x2
     arm64.add x0, x1, x3
-    arm64.str x0, [x29, #-8]
     arm64.mov x1, #0
     arm64.cmp x0, x1
     arm64.cset x2, lt
@@ -103,16 +102,15 @@ module {
     arm64.cset x4, gt
     arm64.orr x5, x2, x4
     arm64.cmp x5, #0
-    arm64.b.ne if-statements.main.__range_panic_0
-    arm64.b if-statements.main.__range_ok_0
+    arm64.b.ne main.__range_panic_0
+    arm64.b main.__range_ok_0
   __range_panic_0:
-    arm64.adrp_add_symdata x0, __panic_msg_35
+    arm64.adrp_add_symdata x0, __panic_msg_0
     arm64.mov x1, x0
     arm64.mov x0, x1
     arm64.bl maxon_panic
   __range_ok_0:
-    arm64.ldr x0, [x29, #-8]
-    arm64.epilogue stack_size=64
+    arm64.epilogue stack_size=48
     arm64.ret
   }
 }

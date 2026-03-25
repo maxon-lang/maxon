@@ -19,7 +19,7 @@ ExitCode: 42
 RequiredMLIR: ```
 === maxon
 module {
-  func @register-allocator.main() -> i64 {
+  func @main() -> i64 {
   entry:
     %0 = maxon.literal {value = 0 : i64}
     maxon.assign %0 {var = x} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
@@ -55,7 +55,6 @@ module {
     %14 = maxon.binop %12, %13 {op = add}
     %15 = maxon.var_ref {var = z} {type = i64}
     %16 = maxon.binop %14, %15 {op = add}
-    maxon.assign %16 {var = __range_val_2} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
     %17 = maxon.literal {value = 0 : i64}
     %18 = maxon.binop %16, %17 {op = lt}
     %19 = maxon.literal {value = 4294967295 : i64}
@@ -65,14 +64,13 @@ module {
   __range_panic_2:
     maxon.panic "panic at int-multi-var-branch-merge.test:15: Range check failed for type 'ExitCode': value outside int(0 to 4294967295)"
   __range_ok_2:
-    %23 = maxon.var_ref {var = __range_val_2} {type = i64}
-    maxon.scope_end [x, y, z, __range_val_2]
-    maxon.return %23
+    maxon.scope_end [x, y, z]
+    maxon.return %16
   }
 }
 === standard
 module {
-  func @register-allocator.main() -> u32 {
+  func @main() -> u32 {
   entry:
     %3 = arith.constant {value = 1 : i64}
     %4 = arith.constant {value = 2 : i64}
@@ -100,7 +98,6 @@ module {
     %14 = arith.addi %12, %13
     %15 = memref.load z : i64
     %16 = arith.addi %14, %15
-    memref.store %16, __range_val_2
     %17 = arith.constant {value = 0 : i64}
     %18 = arith.cmpi lt %16, %17
     %19 = arith.constant {value = 4294967295 : i64}
@@ -108,17 +105,16 @@ module {
     %21 = arith.ori1 %18, %20
     cf.cond_br %21 [then: __range_panic_2, else: __range_ok_2]
   __range_panic_2:
-    %22 = memref.lea_symdata __panic_msg_22
+    %22 = memref.lea_symdata __panic_msg_0
     %23 = std.ptr_to_i64 %22
     std.call_runtime @maxon_panic %23
   __range_ok_2:
-    %24 = memref.load __range_val_2 : i64
-    func.return %24
+    func.return %16
   }
 }
 === arm64
 module {
-  func @register-allocator.main() -> u32 {
+  func @main() -> u32 {
   entry:
     arm64.prologue stack_size=80
     arm64.mov x0, #1
@@ -126,8 +122,8 @@ module {
     arm64.cmp x0, x1
     arm64.cset x2, lt
     arm64.cmp x2, #0
-    arm64.b.ne register-allocator.main.branch_0
-    arm64.b register-allocator.main.other_1
+    arm64.b.ne main.branch_0
+    arm64.b main.other_1
   branch_0:
     arm64.mov x0, #10
     arm64.str x0, [x29, #-8]
@@ -135,7 +131,7 @@ module {
     arm64.str x1, [x29, #-16]
     arm64.mov x2, #12
     arm64.str x2, [x29, #-24]
-    arm64.b register-allocator.main.branch_0.merge
+    arm64.b main.branch_0.merge
   other_1:
     arm64.mov x0, #1
     arm64.str x0, [x29, #-8]
@@ -143,14 +139,13 @@ module {
     arm64.str x1, [x29, #-16]
     arm64.mov x2, #3
     arm64.str x2, [x29, #-24]
-    arm64.b register-allocator.main.branch_0.merge
+    arm64.b main.branch_0.merge
   branch_0.merge:
     arm64.ldr x0, [x29, #-8]
     arm64.ldr x1, [x29, #-16]
     arm64.add x2, x0, x1
     arm64.ldr x3, [x29, #-24]
     arm64.add x4, x2, x3
-    arm64.str x4, [x29, #-32]
     arm64.mov x5, #0
     arm64.cmp x4, x5
     arm64.cset x6, lt
@@ -159,15 +154,15 @@ module {
     arm64.cset x8, gt
     arm64.orr x9, x6, x8
     arm64.cmp x9, #0
-    arm64.b.ne register-allocator.main.__range_panic_2
-    arm64.b register-allocator.main.__range_ok_2
+    arm64.b.ne main.__range_panic_2
+    arm64.b main.__range_ok_2
   __range_panic_2:
-    arm64.adrp_add_symdata x0, __panic_msg_22
+    arm64.adrp_add_symdata x0, __panic_msg_0
     arm64.mov x1, x0
     arm64.mov x0, x1
     arm64.bl maxon_panic
   __range_ok_2:
-    arm64.ldr x0, [x29, #-32]
+    arm64.mov x0, x4
     arm64.epilogue stack_size=80
     arm64.ret
   }

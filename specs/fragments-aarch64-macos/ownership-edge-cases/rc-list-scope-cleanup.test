@@ -10,32 +10,73 @@ end 'main'
 MmTrace: true
 ExitCode: 0
 Stderr: ```
-alloc __ManagedList_String #1 rc=0 size=32 [ownership-edge-cases.main]
-alloc StringList #2 rc=0 size=16 [ownership-edge-cases.main]
-incref __ManagedList_String #1 rc=1 [ownership-edge-cases.main]
-incref StringList #2 rc=1 [ownership-edge-cases.main]
-alloc String #3 rc=0 size=16 [ownership-edge-cases.main]
-alloc __ManagedMemory #4 rc=0 size=32 [ownership-edge-cases.main]
-incref __ManagedMemory #4 rc=1 [ownership-edge-cases.main]
-incref String #3 rc=1 [ownership-edge-cases.main]
-alloc __ManagedListNode #5 rc=0 size=32 [StringList.append]
-incref String #3 rc=2 [StringList.append]
-incref __ManagedListNode #5 rc=1 [managed_list_insert]
-decref String #3 rc=1 [ownership-edge-cases.main]
-decref StringList #2 rc=0 [ownership-edge-cases.main]
-decref __ManagedList_String #1 rc=0 [~StringList]
-decref String #3 rc=0 [managed_list_clear]
-decref __ManagedMemory #4 rc=0 [~String]
-  free __ManagedMemory #4
-  free String #3
-decref __ManagedListNode #5 rc=0 [managed_list_clear]
-  free __ManagedListNode #5
-  free __ManagedList_String #1
-  free StringList #2
+mm_raw_alloc #R1 size=64
+  sl_alloc size=64 class=-1
+    os_alloc size=64
+  os_alloc size=4096
+os_alloc size=67108864
+mm_raw_alloc #R2 size=296
+  sl_alloc size=296 class=-1
+    os_alloc size=296
+mm_raw_alloc #R3 size=296
+  sl_alloc size=296 class=-1
+    os_alloc size=296
+mm_raw_alloc #R4 size=296
+  sl_alloc size=296 class=-1
+    os_alloc size=296
+mm_raw_alloc #R5 size=296
+  sl_alloc size=296 class=-1
+    os_alloc size=296
+mm_raw_alloc #R6 size=296
+  sl_alloc size=296 class=-1
+    os_alloc size=296
+mm_raw_alloc #R7 size=296
+  sl_alloc size=296 class=-1
+    os_alloc size=296
+mm_raw_alloc #R8 size=296
+  sl_alloc size=296 class=-1
+    os_alloc size=296
+mm_raw_alloc #R9 size=296
+  sl_alloc size=296 class=-1
+    os_alloc size=296
+sl_init
+  os_alloc size=67108864
+mm_alloc __ManagedList_String #1 size=32 [main]
+  sl_alloc __ManagedList_String #1 size=64 class=5
+mm_alloc StringList #2 size=16 [main]
+  sl_alloc StringList #2 size=48 class=4
+mm_incref __ManagedList_String #1 rc=1 [main]
+mm_incref StringList #2 rc=1 [main]
+mm_alloc String #3 size=16 [main]
+  sl_alloc String #3 size=48 class=4
+mm_alloc __ManagedMemory #4 size=32 [main]
+  sl_alloc __ManagedMemory #4 size=64 class=5
+mm_incref __ManagedMemory #4 rc=1 [main]
+mm_incref String #3 rc=1 [main]
+mm_alloc __ManagedListNode #5 size=32 [StringList.append]
+  sl_alloc __ManagedListNode #5 size=64 class=5
+mm_incref String #3 rc=2 [StringList.append]
+mm_incref __ManagedListNode #5 rc=1 [managed_list_insert]
+mm_decref String #3 rc=1 [main]
+mm_decref StringList #2 rc=0 [main]
+  mm_decref __ManagedList_String #1 rc=0 [~StringList]
+    mm_decref String #3 rc=0 [managed_list_clear]
+      mm_decref __ManagedMemory #4 rc=0 [~String]
+        mm_free __ManagedMemory #4
+          sl_free __ManagedMemory #4 size=64 class=5
+      mm_free String #3
+        sl_free String #3 size=48 class=4
+    mm_decref __ManagedListNode #5 rc=0 [managed_list_clear]
+      mm_free __ManagedListNode #5
+        sl_free __ManagedListNode #5 size=64 class=5
+    mm_free __ManagedList_String #1
+      sl_free __ManagedList_String #1 size=64 class=5
+  mm_free StringList #2
+    sl_free StringList #2 size=48 class=4
 ```
 ---
 module {
-  func @ownership-edge-cases.main() -> u32 {
+  func @main() -> u32 {
   entry:
     arm64.prologue stack_size=96
     arm64.mov x0, #0
@@ -122,14 +163,14 @@ module {
     arm64.bl StringList.append
     arm64.ldr x0, [x29, #-24]
     arm64.cmp x0, #0
-    arm64.b.eq ownership-edge-cases.main.__skip_guarded_73
+    arm64.b.eq main.__skip_guarded_73
     arm64.bl mm_decref
-    arm64.label ownership-edge-cases.main.__skip_guarded_73
+    arm64.label main.__skip_guarded_73
     arm64.ldr x0, [x29, #-16]
     arm64.cmp x0, #0
-    arm64.b.eq ownership-edge-cases.main.__skip_guarded_75
+    arm64.b.eq main.__skip_guarded_75
     arm64.bl mm_decref
-    arm64.label ownership-edge-cases.main.__skip_guarded_75
+    arm64.label main.__skip_guarded_75
     arm64.mov x0, #0
     arm64.epilogue stack_size=96
     arm64.ret

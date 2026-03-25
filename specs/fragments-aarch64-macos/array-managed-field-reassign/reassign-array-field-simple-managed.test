@@ -82,7 +82,7 @@ module {
   }
   func @array-managed-field-reassign.keepBigValues(c: i64) {
   entry:
-    arm64.prologue stack_size=128
+    arm64.prologue stack_size=144
     arm64.str x0, [x29, #-8]
     arm64.mov x0, #0
     arm64.mov x1, #0
@@ -134,14 +134,13 @@ module {
     arm64.ldr x1, [x0, #0]
     arm64.str x1, [x29, #-32]
     arm64.ldr x0, [x29, #-32]
-    arm64.bl mm_incref
-    arm64.ldr x0, [x29, #-32]
-    arm64.bl ItemArray.createIterator
+    arm64.bl ItemArray.__createIter
+    arm64.str x0, [x29, #-40]
     arm64.b array-managed-field-reassign.keepBigValues.scan_0.header
   scan_0.header:
-    arm64.ldr x0, [x29, #-32]
-    arm64.bl ItemArray.next
-    arm64.str x0, [x29, #-40]
+    arm64.ldr x0, [x29, #-40]
+    arm64.bl __ItemArray_Iter.next
+    arm64.str x0, [x29, #-48]
     arm64.mov x0, #0
     arm64.cmp x1, x0
     arm64.cset x2, eq
@@ -149,12 +148,12 @@ module {
     arm64.b.ne array-managed-field-reassign.keepBigValues.scan_0
     arm64.b array-managed-field-reassign.keepBigValues.scan_0.exit
   scan_0:
-    arm64.ldr x0, [x29, #-40]
-    arm64.str x0, [x29, #-48]
-    arm64.ldr x1, [x29, #-48]
     arm64.ldr x0, [x29, #-48]
+    arm64.str x0, [x29, #-56]
+    arm64.ldr x1, [x29, #-56]
+    arm64.ldr x0, [x29, #-56]
     arm64.bl mm_incref
-    arm64.ldr x2, [x29, #-48]
+    arm64.ldr x2, [x29, #-56]
     arm64.ldr x3, [x2, #8]
     arm64.mov x4, #3
     arm64.cmp x3, x4
@@ -164,59 +163,59 @@ module {
     arm64.b array-managed-field-reassign.keepBigValues.big_3.merge
   big_3:
     arm64.ldr x0, [x29, #-24]
-    arm64.ldr x1, [x29, #-48]
+    arm64.ldr x1, [x29, #-56]
     arm64.bl ItemArray.push
     arm64.b array-managed-field-reassign.keepBigValues.big_3.merge
   big_3.merge:
-    arm64.ldr x0, [x29, #-48]
+    arm64.ldr x0, [x29, #-56]
     arm64.cmp x0, #0
-    arm64.b.eq array-managed-field-reassign.keepBigValues.__skip_guarded_69
+    arm64.b.eq array-managed-field-reassign.keepBigValues.__skip_guarded_68
     arm64.bl mm_decref
-    arm64.label array-managed-field-reassign.keepBigValues.__skip_guarded_69
-    arm64.ldr x1, [x29, #-40]
+    arm64.label array-managed-field-reassign.keepBigValues.__skip_guarded_68
+    arm64.ldr x1, [x29, #-48]
     arm64.cmp x1, #0
-    arm64.b.eq array-managed-field-reassign.keepBigValues.__skip_guarded_71
-    arm64.ldr x0, [x29, #-40]
+    arm64.b.eq array-managed-field-reassign.keepBigValues.__skip_guarded_70
+    arm64.ldr x0, [x29, #-48]
     arm64.bl mm_decref
-    arm64.label array-managed-field-reassign.keepBigValues.__skip_guarded_71
+    arm64.label array-managed-field-reassign.keepBigValues.__skip_guarded_70
     arm64.b array-managed-field-reassign.keepBigValues.scan_0.header
   scan_0.exit:
     arm64.ldr x0, [x29, #-24]
     arm64.ldr x1, [x29, #-8]
     arm64.ldr x2, [x1, #0]
-    arm64.str x2, [x29, #-56]
+    arm64.str x2, [x29, #-64]
     arm64.cmp x2, #0
-    arm64.b.eq array-managed-field-reassign.keepBigValues.__skip_guarded_76
-    arm64.ldr x0, [x29, #-56]
+    arm64.b.eq array-managed-field-reassign.keepBigValues.__skip_guarded_75
+    arm64.ldr x0, [x29, #-64]
     arm64.bl mm_decref
-    arm64.label array-managed-field-reassign.keepBigValues.__skip_guarded_76
+    arm64.label array-managed-field-reassign.keepBigValues.__skip_guarded_75
     arm64.ldr x3, [x29, #-8]
     arm64.ldr x4, [x29, #-24]
     arm64.str x4, [x3, #0]
     arm64.ldr x0, [x29, #-24]
     arm64.bl mm_incref
-    arm64.ldr x5, [x29, #-40]
+    arm64.ldr x5, [x29, #-48]
     arm64.cmp x5, #0
-    arm64.b.eq array-managed-field-reassign.keepBigValues.__skip_guarded_81
+    arm64.b.eq array-managed-field-reassign.keepBigValues.__skip_guarded_80
+    arm64.ldr x0, [x29, #-48]
+    arm64.bl mm_decref
+    arm64.label array-managed-field-reassign.keepBigValues.__skip_guarded_80
+    arm64.ldr x6, [x29, #-40]
+    arm64.cmp x6, #0
+    arm64.b.eq array-managed-field-reassign.keepBigValues.__skip_guarded_82
     arm64.ldr x0, [x29, #-40]
     arm64.bl mm_decref
-    arm64.label array-managed-field-reassign.keepBigValues.__skip_guarded_81
-    arm64.ldr x6, [x29, #-32]
-    arm64.cmp x6, #0
-    arm64.b.eq array-managed-field-reassign.keepBigValues.__skip_guarded_83
-    arm64.ldr x0, [x29, #-32]
-    arm64.bl mm_decref
-    arm64.label array-managed-field-reassign.keepBigValues.__skip_guarded_83
+    arm64.label array-managed-field-reassign.keepBigValues.__skip_guarded_82
     arm64.ldr x7, [x29, #-24]
     arm64.cmp x7, #0
-    arm64.b.eq array-managed-field-reassign.keepBigValues.__skip_guarded_85
+    arm64.b.eq array-managed-field-reassign.keepBigValues.__skip_guarded_84
     arm64.ldr x0, [x29, #-24]
     arm64.bl mm_decref
-    arm64.label array-managed-field-reassign.keepBigValues.__skip_guarded_85
-    arm64.epilogue stack_size=128
+    arm64.label array-managed-field-reassign.keepBigValues.__skip_guarded_84
+    arm64.epilogue stack_size=144
     arm64.ret
   }
-  func @array-managed-field-reassign.main() -> u32 {
+  func @main() -> u32 {
   entry:
     arm64.prologue stack_size=384
     arm64.mov x0, #0
@@ -270,7 +269,7 @@ module {
     arm64.mov x0, #44
     arm64.adrp_add_func x2, __destruct_String
     arm64.mov x3, x2
-    arm64.str x1, [x29, #-168]
+    arm64.str x1, [x29, #-160]
     arm64.mov x1, x3
     arm64.mov x0, #16
     arm64.mov x2, #2
@@ -283,7 +282,7 @@ module {
     arm64.bl mm_alloc
     arm64.str x0, [x29, #-32]
     arm64.ldr x0, [x29, #-32]
-    arm64.ldr x1, [x29, #-168]
+    arm64.ldr x1, [x29, #-160]
     arm64.str x1, [x0, #0]
     arm64.ldr x0, [x29, #-32]
     arm64.mov x1, #44
@@ -330,7 +329,7 @@ module {
     arm64.mov x0, #43
     arm64.adrp_add_func x2, __destruct_String
     arm64.mov x3, x2
-    arm64.str x1, [x29, #-176]
+    arm64.str x1, [x29, #-168]
     arm64.mov x1, x3
     arm64.mov x0, #16
     arm64.mov x2, #2
@@ -343,7 +342,7 @@ module {
     arm64.bl mm_alloc
     arm64.str x0, [x29, #-56]
     arm64.ldr x0, [x29, #-56]
-    arm64.ldr x1, [x29, #-176]
+    arm64.ldr x1, [x29, #-168]
     arm64.str x1, [x0, #0]
     arm64.ldr x0, [x29, #-56]
     arm64.mov x1, #43
@@ -390,7 +389,7 @@ module {
     arm64.mov x0, #44
     arm64.adrp_add_func x2, __destruct_String
     arm64.mov x3, x2
-    arm64.str x1, [x29, #-184]
+    arm64.str x1, [x29, #-176]
     arm64.mov x1, x3
     arm64.mov x0, #16
     arm64.mov x2, #2
@@ -403,7 +402,7 @@ module {
     arm64.bl mm_alloc
     arm64.str x0, [x29, #-80]
     arm64.ldr x0, [x29, #-80]
-    arm64.ldr x1, [x29, #-184]
+    arm64.ldr x1, [x29, #-176]
     arm64.str x1, [x0, #0]
     arm64.ldr x0, [x29, #-80]
     arm64.mov x1, #44
@@ -450,7 +449,7 @@ module {
     arm64.mov x0, #44
     arm64.adrp_add_func x2, __destruct_String
     arm64.mov x3, x2
-    arm64.str x1, [x29, #-192]
+    arm64.str x1, [x29, #-184]
     arm64.mov x1, x3
     arm64.mov x0, #16
     arm64.mov x2, #2
@@ -463,7 +462,7 @@ module {
     arm64.bl mm_alloc
     arm64.str x0, [x29, #-104]
     arm64.ldr x0, [x29, #-104]
-    arm64.ldr x1, [x29, #-192]
+    arm64.ldr x1, [x29, #-184]
     arm64.str x1, [x0, #0]
     arm64.ldr x0, [x29, #-104]
     arm64.mov x1, #44
@@ -510,7 +509,7 @@ module {
     arm64.mov x0, #46
     arm64.adrp_add_func x2, __destruct_String
     arm64.mov x3, x2
-    arm64.str x1, [x29, #-200]
+    arm64.str x1, [x29, #-192]
     arm64.mov x1, x3
     arm64.mov x0, #16
     arm64.mov x2, #2
@@ -523,7 +522,7 @@ module {
     arm64.bl mm_alloc
     arm64.str x0, [x29, #-128]
     arm64.ldr x0, [x29, #-128]
-    arm64.ldr x1, [x29, #-200]
+    arm64.ldr x1, [x29, #-192]
     arm64.str x1, [x0, #0]
     arm64.ldr x0, [x29, #-128]
     arm64.mov x1, #46
@@ -584,97 +583,95 @@ module {
     arm64.str x1, [x29, #-152]
     arm64.ldr x0, [x29, #-152]
     arm64.bl ItemArray.count
-    arm64.str x0, [x29, #-160]
     arm64.mov x1, #0
     arm64.cmp x0, x1
     arm64.cset x2, lt
     arm64.mov x1, #4294967295
     arm64.cmp x0, x1
     arm64.cset x3, gt
-    arm64.orr x0, x2, x3
-    arm64.cmp x0, #0
-    arm64.b.ne array-managed-field-reassign.main.__range_panic_0
-    arm64.b array-managed-field-reassign.main.__range_ok_0
+    arm64.orr x1, x2, x3
+    arm64.cmp x1, #0
+    arm64.b.ne main.__range_panic_0
+    arm64.b main.__range_ok_0
   __range_panic_0:
-    arm64.adrp_add_symdata x0, __panic_msg_76
+    arm64.adrp_add_symdata x0, __panic_msg_0
     arm64.mov x1, x0
     arm64.mov x0, x1
     arm64.bl maxon_panic
   __range_ok_0:
-    arm64.ldr x0, [x29, #-160]
     arm64.ldr x1, [x29, #-120]
+    arm64.str x0, [x29, #-200]
     arm64.cmp x1, #0
-    arm64.b.eq array-managed-field-reassign.main.__skip_guarded_330
+    arm64.b.eq main.__skip_guarded_328
     arm64.ldr x0, [x29, #-120]
     arm64.bl mm_decref
-    arm64.label array-managed-field-reassign.main.__skip_guarded_330
-    arm64.ldr x2, [x29, #-96]
-    arm64.cmp x2, #0
-    arm64.b.eq array-managed-field-reassign.main.__skip_guarded_332
+    arm64.label main.__skip_guarded_328
     arm64.ldr x0, [x29, #-96]
+    arm64.cmp x0, #0
+    arm64.b.eq main.__skip_guarded_330
     arm64.bl mm_decref
-    arm64.label array-managed-field-reassign.main.__skip_guarded_332
-    arm64.ldr x3, [x29, #-72]
-    arm64.cmp x3, #0
-    arm64.b.eq array-managed-field-reassign.main.__skip_guarded_334
+    arm64.label main.__skip_guarded_330
+    arm64.ldr x1, [x29, #-72]
+    arm64.cmp x1, #0
+    arm64.b.eq main.__skip_guarded_332
     arm64.ldr x0, [x29, #-72]
     arm64.bl mm_decref
-    arm64.label array-managed-field-reassign.main.__skip_guarded_334
-    arm64.ldr x4, [x29, #-48]
-    arm64.cmp x4, #0
-    arm64.b.eq array-managed-field-reassign.main.__skip_guarded_336
+    arm64.label main.__skip_guarded_332
+    arm64.ldr x2, [x29, #-48]
+    arm64.cmp x2, #0
+    arm64.b.eq main.__skip_guarded_334
     arm64.ldr x0, [x29, #-48]
     arm64.bl mm_decref
-    arm64.label array-managed-field-reassign.main.__skip_guarded_336
-    arm64.ldr x5, [x29, #-24]
-    arm64.cmp x5, #0
-    arm64.b.eq array-managed-field-reassign.main.__skip_guarded_338
+    arm64.label main.__skip_guarded_334
+    arm64.ldr x3, [x29, #-24]
+    arm64.cmp x3, #0
+    arm64.b.eq main.__skip_guarded_336
     arm64.ldr x0, [x29, #-24]
     arm64.bl mm_decref
-    arm64.label array-managed-field-reassign.main.__skip_guarded_338
-    arm64.ldr x6, [x29, #-144]
-    arm64.cmp x6, #0
-    arm64.b.eq array-managed-field-reassign.main.__skip_guarded_340
+    arm64.label main.__skip_guarded_336
+    arm64.ldr x4, [x29, #-144]
+    arm64.cmp x4, #0
+    arm64.b.eq main.__skip_guarded_338
     arm64.ldr x0, [x29, #-144]
     arm64.bl mm_decref
-    arm64.label array-managed-field-reassign.main.__skip_guarded_340
-    arm64.ldr x7, [x29, #-16]
-    arm64.cmp x7, #0
-    arm64.b.eq array-managed-field-reassign.main.__skip_guarded_342
+    arm64.label main.__skip_guarded_338
+    arm64.ldr x5, [x29, #-16]
+    arm64.cmp x5, #0
+    arm64.b.eq main.__skip_guarded_340
     arm64.ldr x0, [x29, #-16]
     arm64.bl mm_decref
-    arm64.label array-managed-field-reassign.main.__skip_guarded_342
-    arm64.ldr x8, [x29, #-40]
-    arm64.cmp x8, #0
-    arm64.b.eq array-managed-field-reassign.main.__skip_guarded_344
+    arm64.label main.__skip_guarded_340
+    arm64.ldr x6, [x29, #-40]
+    arm64.cmp x6, #0
+    arm64.b.eq main.__skip_guarded_342
     arm64.ldr x0, [x29, #-40]
     arm64.bl mm_decref
-    arm64.label array-managed-field-reassign.main.__skip_guarded_344
-    arm64.ldr x9, [x29, #-64]
-    arm64.cmp x9, #0
-    arm64.b.eq array-managed-field-reassign.main.__skip_guarded_346
+    arm64.label main.__skip_guarded_342
+    arm64.ldr x7, [x29, #-64]
+    arm64.cmp x7, #0
+    arm64.b.eq main.__skip_guarded_344
     arm64.ldr x0, [x29, #-64]
     arm64.bl mm_decref
-    arm64.label array-managed-field-reassign.main.__skip_guarded_346
-    arm64.ldr x10, [x29, #-88]
-    arm64.cmp x10, #0
-    arm64.b.eq array-managed-field-reassign.main.__skip_guarded_348
+    arm64.label main.__skip_guarded_344
+    arm64.ldr x8, [x29, #-88]
+    arm64.cmp x8, #0
+    arm64.b.eq main.__skip_guarded_346
     arm64.ldr x0, [x29, #-88]
     arm64.bl mm_decref
-    arm64.label array-managed-field-reassign.main.__skip_guarded_348
-    arm64.ldr x11, [x29, #-112]
-    arm64.cmp x11, #0
-    arm64.b.eq array-managed-field-reassign.main.__skip_guarded_350
+    arm64.label main.__skip_guarded_346
+    arm64.ldr x9, [x29, #-112]
+    arm64.cmp x9, #0
+    arm64.b.eq main.__skip_guarded_348
     arm64.ldr x0, [x29, #-112]
     arm64.bl mm_decref
-    arm64.label array-managed-field-reassign.main.__skip_guarded_350
-    arm64.ldr x12, [x29, #-136]
-    arm64.cmp x12, #0
-    arm64.b.eq array-managed-field-reassign.main.__skip_guarded_352
+    arm64.label main.__skip_guarded_348
+    arm64.ldr x10, [x29, #-136]
+    arm64.cmp x10, #0
+    arm64.b.eq main.__skip_guarded_350
     arm64.ldr x0, [x29, #-136]
     arm64.bl mm_decref
-    arm64.label array-managed-field-reassign.main.__skip_guarded_352
-    arm64.ldr x0, [x29, #-160]
+    arm64.label main.__skip_guarded_350
+    arm64.ldr x0, [x29, #-200]
     arm64.epilogue stack_size=384
     arm64.ret
   }
@@ -792,6 +789,23 @@ module {
     arm64.bl mm_decref
     arm64.label __destruct_Container.__skip_guarded_4
     arm64.b __destruct_Container.done
+  done:
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+  func @__destruct___Array_Iter(ptr: i64) {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #0]
+    arm64.str x1, [x29, #-16]
+    arm64.cmp x1, #0
+    arm64.b.eq __destruct___Array_Iter.__skip_guarded_4
+    arm64.ldr x0, [x29, #-16]
+    arm64.bl mm_decref
+    arm64.label __destruct___Array_Iter.__skip_guarded_4
+    arm64.b __destruct___Array_Iter.done
   done:
     arm64.epilogue stack_size=48
     arm64.ret

@@ -1,0 +1,244 @@
+// Test: last-empty-slot
+typealias Integer = int(i64.min to i64.max)
+
+type Slot
+  export var value Integer
+end 'Slot'
+
+typealias SlotArray = Array with Slot
+
+function main() returns ExitCode
+  var arr = SlotArray{}
+  arr.push(Slot{value: 1})
+  arr.resize(3)
+  let result = try arr.last() otherwise Slot{value: 55}
+  return result.value
+end 'main'
+---
+ExitCode: 55
+---
+module {
+  func @Slot.clone(__self_ptr: i64) -> i64 {
+  entry:
+    arm64.prologue stack_size=64
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #0]
+    arm64.str x1, [x29, #-24]
+    arm64.mov x0, #8
+    arm64.mov x1, #0
+    arm64.mov x2, #1
+    arm64.bl mm_alloc
+    arm64.str x0, [x29, #-16]
+    arm64.ldr x2, [x29, #-16]
+    arm64.ldr x3, [x29, #-24]
+    arm64.str x3, [x2, #0]
+    arm64.ldr x4, [x29, #-16]
+    arm64.ldr x0, [x29, #-16]
+    arm64.bl mm_incref
+    arm64.ldr x5, [x29, #-16]
+    arm64.mov x0, x5
+    arm64.epilogue stack_size=64
+    arm64.ret
+  }
+  func @main() -> u32 {
+  entry:
+    arm64.prologue stack_size=128
+    arm64.mov x0, #0
+    arm64.str x0, [x29, #-8]
+    arm64.mov x1, #0
+    arm64.mov x2, #0
+    arm64.mov x3, #0
+    arm64.mov x4, #0
+    arm64.mov x5, #8
+    arm64.adrp_add_func x6, __destruct___ManagedMemory_Slot
+    arm64.mov x7, x6
+    arm64.mov x1, x7
+    arm64.mov x0, #32
+    arm64.mov x2, #2
+    arm64.bl mm_alloc
+    arm64.str x0, [x29, #-16]
+    arm64.ldr x8, [x29, #-16]
+    arm64.mov x9, #0
+    arm64.str x9, [x8, #0]
+    arm64.ldr x10, [x29, #-16]
+    arm64.mov x11, #0
+    arm64.str x11, [x10, #8]
+    arm64.ldr x12, [x29, #-16]
+    arm64.mov x13, #0
+    arm64.str x13, [x12, #16]
+    arm64.ldr x14, [x29, #-16]
+    arm64.mov x15, #8
+    arm64.str x15, [x14, #24]
+    arm64.ldr x0, [x29, #-16]
+    arm64.ldr x1, [x0, #24]
+    arm64.adrp_add_symdata x0, __mm_panic_element_size_zero
+    arm64.mov x2, x0
+    arm64.mov x0, #0
+    arm64.bl maxon_bounds_check
+    arm64.adrp_add_func x0, __destruct_SlotArray
+    arm64.mov x1, x0
+    arm64.mov x0, #16
+    arm64.mov x2, #3
+    arm64.bl mm_alloc
+    arm64.str x0, [x29, #-24]
+    arm64.ldr x0, [x29, #-24]
+    arm64.mov x1, #0
+    arm64.str x1, [x0, #0]
+    arm64.ldr x0, [x29, #-16]
+    arm64.ldr x1, [x29, #-24]
+    arm64.str x0, [x1, #8]
+    arm64.bl mm_incref
+    arm64.ldr x0, [x29, #-24]
+    arm64.bl mm_incref
+    arm64.mov x0, #1
+    arm64.mov x0, #8
+    arm64.mov x1, #0
+    arm64.mov x2, #1
+    arm64.bl mm_alloc
+    arm64.str x0, [x29, #-32]
+    arm64.ldr x1, [x29, #-32]
+    arm64.mov x2, #1
+    arm64.str x2, [x1, #0]
+    arm64.bl mm_incref
+    arm64.ldr x0, [x29, #-24]
+    arm64.ldr x1, [x29, #-32]
+    arm64.bl SlotArray.push
+    arm64.ldr x0, [x29, #-24]
+    arm64.mov x1, #3
+    arm64.bl SlotArray.resize
+    arm64.ldr x0, [x29, #-24]
+    arm64.bl SlotArray.last
+    arm64.str x0, [x29, #-40]
+    arm64.mov x0, #0
+    arm64.cmp x1, x0
+    arm64.cset x2, ne
+    arm64.cmp x2, #0
+    arm64.b.ne main.otherwise_default_error_1
+    arm64.b main.otherwise_default_success_2
+  otherwise_default_error_1:
+    arm64.mov x0, #55
+    arm64.mov x0, #8
+    arm64.mov x1, #0
+    arm64.mov x2, #1
+    arm64.bl mm_alloc
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x1, [x29, #-8]
+    arm64.mov x2, #55
+    arm64.str x2, [x1, #0]
+    arm64.ldr x3, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl mm_incref
+    arm64.b main.otherwise_default_continue_3
+  otherwise_default_success_2:
+    arm64.ldr x0, [x29, #-8]
+    arm64.cmp x0, #0
+    arm64.b.eq main.__skip_guarded_74
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_74
+    arm64.ldr x1, [x29, #-40]
+    arm64.str x1, [x29, #-8]
+    arm64.b main.otherwise_default_continue_3
+  otherwise_default_continue_3:
+    arm64.ldr x0, [x29, #-8]
+    arm64.str x0, [x29, #-48]
+    arm64.ldr x1, [x29, #-48]
+    arm64.ldr x0, [x29, #-48]
+    arm64.bl mm_incref
+    arm64.ldr x2, [x29, #-48]
+    arm64.ldr x3, [x2, #0]
+    arm64.mov x4, #0
+    arm64.cmp x3, x4
+    arm64.cset x5, lt
+    arm64.mov x6, #4294967295
+    arm64.cmp x3, x6
+    arm64.cset x7, gt
+    arm64.orr x8, x5, x7
+    arm64.cmp x8, #0
+    arm64.b.ne main.__range_panic_4
+    arm64.b main.__range_ok_4
+  __range_panic_4:
+    arm64.adrp_add_symdata x0, __panic_msg_0
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl maxon_panic
+  __range_ok_4:
+    arm64.ldr x0, [x29, #-8]
+    arm64.str x3, [x29, #-56]
+    arm64.cmp x0, #0
+    arm64.b.eq main.__skip_guarded_94
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_94
+    arm64.ldr x1, [x29, #-48]
+    arm64.cmp x1, #0
+    arm64.b.eq main.__skip_guarded_96
+    arm64.ldr x0, [x29, #-48]
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_96
+    arm64.ldr x2, [x29, #-24]
+    arm64.cmp x2, #0
+    arm64.b.eq main.__skip_guarded_98
+    arm64.ldr x0, [x29, #-24]
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_98
+    arm64.ldr x3, [x29, #-32]
+    arm64.cmp x3, #0
+    arm64.b.eq main.__skip_guarded_100
+    arm64.ldr x0, [x29, #-32]
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_100
+    arm64.ldr x0, [x29, #-56]
+    arm64.epilogue stack_size=128
+    arm64.ret
+  }
+  func @__destruct_Slot(ptr: i64) {
+  entry:
+    arm64.b __destruct_Slot.done
+  done:
+    arm64.ret
+  }
+  func @__destruct___ManagedMemory_Slot(ptr: i64) {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #16]
+    arm64.mov x2, #0
+    arm64.cmp x1, x2
+    arm64.cset x3, ne
+    arm64.cmp x3, #0
+    arm64.b.ne __destruct___ManagedMemory_Slot.free_buf_0
+    arm64.b __destruct___ManagedMemory_Slot.skip_buf_0
+  free_buf_0:
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl mm_decref_managed_elements
+    arm64.ldr x1, [x29, #-8]
+    arm64.ldr x2, [x1, #0]
+    arm64.mov x0, x2
+    arm64.bl mm_raw_free
+    arm64.b __destruct___ManagedMemory_Slot.skip_buf_0
+  skip_buf_0:
+    arm64.b __destruct___ManagedMemory_Slot.done
+  done:
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+  func @__destruct_SlotArray(ptr: i64) {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #8]
+    arm64.str x1, [x29, #-16]
+    arm64.cmp x1, #0
+    arm64.b.eq __destruct_SlotArray.__skip_guarded_4
+    arm64.ldr x0, [x29, #-16]
+    arm64.bl mm_decref
+    arm64.label __destruct_SlotArray.__skip_guarded_4
+    arm64.b __destruct_SlotArray.done
+  done:
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+}
+---

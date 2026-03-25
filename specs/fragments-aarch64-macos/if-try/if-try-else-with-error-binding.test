@@ -70,7 +70,7 @@ module {
     arm64.epilogue stack_size=48
     arm64.ret
   }
-  func @if-try.main() -> u32 {
+  func @main() -> u32 {
   entry:
     arm64.prologue stack_size=48
     arm64.mov x0, #1
@@ -79,19 +79,18 @@ module {
     arm64.cmp x1, x2
     arm64.cset x3, eq
     arm64.cmp x3, #0
-    arm64.b.ne if-try.main.check_2
-    arm64.b if-try.main.err_3
+    arm64.b.ne main.check_2
+    arm64.b main.err_3
   check_2:
     arm64.mov x0, #100
     arm64.str x0, [x29, #-8]
-    arm64.b if-try.main.check_2.merge
+    arm64.b main.check_2.merge
   err_3:
     arm64.mov x0, #50
     arm64.str x0, [x29, #-8]
-    arm64.b if-try.main.check_2.merge
+    arm64.b main.check_2.merge
   check_2.merge:
     arm64.ldr x0, [x29, #-8]
-    arm64.str x0, [x29, #-16]
     arm64.mov x1, #0
     arm64.cmp x0, x1
     arm64.cset x2, lt
@@ -100,15 +99,14 @@ module {
     arm64.cset x4, gt
     arm64.orr x5, x2, x4
     arm64.cmp x5, #0
-    arm64.b.ne if-try.main.__range_panic_4
-    arm64.b if-try.main.__range_ok_4
+    arm64.b.ne main.__range_panic_4
+    arm64.b main.__range_ok_4
   __range_panic_4:
-    arm64.adrp_add_symdata x0, __panic_msg_34
+    arm64.adrp_add_symdata x0, __panic_msg_0
     arm64.mov x1, x0
     arm64.mov x0, x1
     arm64.bl maxon_panic
   __range_ok_4:
-    arm64.ldr x0, [x29, #-16]
     arm64.epilogue stack_size=48
     arm64.ret
   }

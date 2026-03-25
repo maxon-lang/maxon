@@ -21,9 +21,9 @@ function main() returns ExitCode
   var activeCount = 0
   for task in tasks 'loop'
     match task.status 'check'
-      Status.active then activeCount = activeCount + 1
-      Status.pending then break
-      Status.done then break
+      active then activeCount = activeCount + 1
+      pending then break
+      done then break
     end 'check'
   end 'loop'
 
@@ -56,9 +56,9 @@ module {
     arm64.epilogue stack_size=64
     arm64.ret
   }
-  func @challenge-array-of-structs.main() -> u32 {
+  func @main() -> u32 {
   entry:
-    arm64.prologue stack_size=208
+    arm64.prologue stack_size=176
     arm64.mov x0, #0
     arm64.mov x1, #0
     arm64.mov x2, #0
@@ -96,13 +96,12 @@ module {
     arm64.mov x2, #3
     arm64.bl mm_alloc
     arm64.str x0, [x29, #-16]
-    arm64.ldr x1, [x29, #-16]
-    arm64.mov x2, #0
-    arm64.str x2, [x1, #0]
-    arm64.ldr x1, [x29, #-8]
-    arm64.ldr x2, [x29, #-16]
-    arm64.str x1, [x2, #8]
+    arm64.ldr x0, [x29, #-16]
+    arm64.mov x1, #0
+    arm64.str x1, [x0, #0]
     arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x29, #-16]
+    arm64.str x0, [x1, #8]
     arm64.bl mm_incref
     arm64.ldr x0, [x29, #-16]
     arm64.bl mm_incref
@@ -148,22 +147,19 @@ module {
     arm64.mov x0, #0
     arm64.str x0, [x29, #-48]
     arm64.ldr x0, [x29, #-16]
+    arm64.bl TaskArray.__createIter
     arm64.str x0, [x29, #-56]
-    arm64.ldr x0, [x29, #-56]
-    arm64.bl mm_incref
-    arm64.ldr x0, [x29, #-56]
-    arm64.bl TaskArray.createIterator
-    arm64.b challenge-array-of-structs.main.loop_0.header
+    arm64.b main.loop_0.header
   loop_0.header:
     arm64.ldr x0, [x29, #-56]
-    arm64.bl TaskArray.next
+    arm64.bl __TaskArray_Iter.next
     arm64.str x0, [x29, #-64]
     arm64.mov x0, #0
     arm64.cmp x1, x0
     arm64.cset x2, eq
     arm64.cmp x2, #0
-    arm64.b.ne challenge-array-of-structs.main.loop_0
-    arm64.b challenge-array-of-structs.main.loop_0.exit
+    arm64.b.ne main.loop_0
+    arm64.b main.loop_0.exit
   loop_0:
     arm64.ldr x0, [x29, #-64]
     arm64.str x0, [x29, #-72]
@@ -173,15 +169,15 @@ module {
     arm64.ldr x2, [x29, #-72]
     arm64.ldr x3, [x2, #0]
     arm64.str x3, [x29, #-80]
-    arm64.b challenge-array-of-structs.main.check_3.cmp0
+    arm64.b main.check_3.cmp0
   check_3.cmp0:
     arm64.ldr x0, [x29, #-80]
     arm64.mov x1, #1
     arm64.cmp x0, x1
     arm64.cset x2, eq
     arm64.cmp x2, #0
-    arm64.b.ne challenge-array-of-structs.main.check_3.case0
-    arm64.b challenge-array-of-structs.main.check_3.cmp1
+    arm64.b.ne main.check_3.case0
+    arm64.b main.check_3.cmp1
   check_3.case0:
     arm64.mov x0, #1
     arm64.ldr x1, [x29, #-48]
@@ -189,135 +185,134 @@ module {
     arm64.str x2, [x29, #-48]
     arm64.ldr x3, [x29, #-24]
     arm64.cmp x3, #0
-    arm64.b.eq challenge-array-of-structs.main.__skip_guarded_106
+    arm64.b.eq main.__skip_guarded_104
     arm64.ldr x0, [x29, #-24]
     arm64.bl mm_decref
-    arm64.label challenge-array-of-structs.main.__skip_guarded_106
+    arm64.label main.__skip_guarded_104
     arm64.mov x4, #0
     arm64.str x4, [x29, #-24]
     arm64.ldr x5, [x29, #-32]
     arm64.cmp x5, #0
-    arm64.b.eq challenge-array-of-structs.main.__skip_guarded_110
+    arm64.b.eq main.__skip_guarded_108
     arm64.ldr x0, [x29, #-32]
     arm64.bl mm_decref
-    arm64.label challenge-array-of-structs.main.__skip_guarded_110
+    arm64.label main.__skip_guarded_108
     arm64.mov x6, #0
     arm64.str x6, [x29, #-32]
     arm64.ldr x7, [x29, #-40]
     arm64.cmp x7, #0
-    arm64.b.eq challenge-array-of-structs.main.__skip_guarded_114
+    arm64.b.eq main.__skip_guarded_112
     arm64.ldr x0, [x29, #-40]
     arm64.bl mm_decref
-    arm64.label challenge-array-of-structs.main.__skip_guarded_114
+    arm64.label main.__skip_guarded_112
     arm64.mov x8, #0
     arm64.str x8, [x29, #-40]
-    arm64.b challenge-array-of-structs.main.check_3.merge
+    arm64.b main.check_3.merge
   check_3.cmp1:
     arm64.ldr x0, [x29, #-80]
     arm64.mov x1, #0
     arm64.cmp x0, x1
     arm64.cset x2, eq
     arm64.cmp x2, #0
-    arm64.b.ne challenge-array-of-structs.main.check_3.case1
-    arm64.b challenge-array-of-structs.main.check_3.cmp2
+    arm64.b.ne main.check_3.case1
+    arm64.b main.check_3.cmp2
   check_3.case1:
     arm64.ldr x0, [x29, #-24]
     arm64.cmp x0, #0
-    arm64.b.eq challenge-array-of-structs.main.__skip_guarded_123
+    arm64.b.eq main.__skip_guarded_121
     arm64.bl mm_decref
-    arm64.label challenge-array-of-structs.main.__skip_guarded_123
+    arm64.label main.__skip_guarded_121
     arm64.mov x1, #0
     arm64.str x1, [x29, #-24]
     arm64.ldr x2, [x29, #-32]
     arm64.cmp x2, #0
-    arm64.b.eq challenge-array-of-structs.main.__skip_guarded_127
+    arm64.b.eq main.__skip_guarded_125
     arm64.ldr x0, [x29, #-32]
     arm64.bl mm_decref
-    arm64.label challenge-array-of-structs.main.__skip_guarded_127
+    arm64.label main.__skip_guarded_125
     arm64.mov x3, #0
     arm64.str x3, [x29, #-32]
     arm64.ldr x4, [x29, #-40]
     arm64.cmp x4, #0
-    arm64.b.eq challenge-array-of-structs.main.__skip_guarded_131
+    arm64.b.eq main.__skip_guarded_129
     arm64.ldr x0, [x29, #-40]
     arm64.bl mm_decref
-    arm64.label challenge-array-of-structs.main.__skip_guarded_131
+    arm64.label main.__skip_guarded_129
     arm64.mov x5, #0
     arm64.str x5, [x29, #-40]
-    arm64.b challenge-array-of-structs.main.check_3.merge
+    arm64.b main.check_3.merge
   check_3.cmp2:
     arm64.ldr x0, [x29, #-80]
     arm64.mov x1, #2
     arm64.cmp x0, x1
     arm64.cset x2, eq
     arm64.cmp x2, #0
-    arm64.b.ne challenge-array-of-structs.main.check_3.case2
-    arm64.b challenge-array-of-structs.main.check_3.merge
+    arm64.b.ne main.check_3.case2
+    arm64.b main.check_3.merge
   check_3.case2:
     arm64.ldr x0, [x29, #-24]
     arm64.cmp x0, #0
-    arm64.b.eq challenge-array-of-structs.main.__skip_guarded_140
+    arm64.b.eq main.__skip_guarded_138
     arm64.bl mm_decref
-    arm64.label challenge-array-of-structs.main.__skip_guarded_140
+    arm64.label main.__skip_guarded_138
     arm64.mov x1, #0
     arm64.str x1, [x29, #-24]
     arm64.ldr x2, [x29, #-32]
     arm64.cmp x2, #0
-    arm64.b.eq challenge-array-of-structs.main.__skip_guarded_144
+    arm64.b.eq main.__skip_guarded_142
     arm64.ldr x0, [x29, #-32]
     arm64.bl mm_decref
-    arm64.label challenge-array-of-structs.main.__skip_guarded_144
+    arm64.label main.__skip_guarded_142
     arm64.mov x3, #0
     arm64.str x3, [x29, #-32]
     arm64.ldr x4, [x29, #-40]
     arm64.cmp x4, #0
-    arm64.b.eq challenge-array-of-structs.main.__skip_guarded_148
+    arm64.b.eq main.__skip_guarded_146
     arm64.ldr x0, [x29, #-40]
     arm64.bl mm_decref
-    arm64.label challenge-array-of-structs.main.__skip_guarded_148
+    arm64.label main.__skip_guarded_146
     arm64.mov x5, #0
     arm64.str x5, [x29, #-40]
-    arm64.b challenge-array-of-structs.main.check_3.merge
+    arm64.b main.check_3.merge
   check_3.merge:
     arm64.ldr x0, [x29, #-72]
     arm64.cmp x0, #0
-    arm64.b.eq challenge-array-of-structs.main.__skip_guarded_153
+    arm64.b.eq main.__skip_guarded_151
     arm64.bl mm_decref
-    arm64.label challenge-array-of-structs.main.__skip_guarded_153
+    arm64.label main.__skip_guarded_151
     arm64.ldr x1, [x29, #-64]
     arm64.cmp x1, #0
-    arm64.b.eq challenge-array-of-structs.main.__skip_guarded_155
+    arm64.b.eq main.__skip_guarded_153
     arm64.ldr x0, [x29, #-64]
     arm64.bl mm_decref
-    arm64.label challenge-array-of-structs.main.__skip_guarded_155
+    arm64.label main.__skip_guarded_153
     arm64.ldr x2, [x29, #-24]
     arm64.cmp x2, #0
-    arm64.b.eq challenge-array-of-structs.main.__skip_guarded_157
+    arm64.b.eq main.__skip_guarded_155
     arm64.ldr x0, [x29, #-24]
     arm64.bl mm_decref
-    arm64.label challenge-array-of-structs.main.__skip_guarded_157
+    arm64.label main.__skip_guarded_155
     arm64.mov x3, #0
     arm64.str x3, [x29, #-24]
     arm64.ldr x4, [x29, #-32]
     arm64.cmp x4, #0
-    arm64.b.eq challenge-array-of-structs.main.__skip_guarded_161
+    arm64.b.eq main.__skip_guarded_159
     arm64.ldr x0, [x29, #-32]
     arm64.bl mm_decref
-    arm64.label challenge-array-of-structs.main.__skip_guarded_161
+    arm64.label main.__skip_guarded_159
     arm64.mov x5, #0
     arm64.str x5, [x29, #-32]
     arm64.ldr x6, [x29, #-40]
     arm64.cmp x6, #0
-    arm64.b.eq challenge-array-of-structs.main.__skip_guarded_165
+    arm64.b.eq main.__skip_guarded_163
     arm64.ldr x0, [x29, #-40]
     arm64.bl mm_decref
-    arm64.label challenge-array-of-structs.main.__skip_guarded_165
+    arm64.label main.__skip_guarded_163
     arm64.mov x7, #0
     arm64.str x7, [x29, #-40]
-    arm64.b challenge-array-of-structs.main.loop_0.header
+    arm64.b main.loop_0.header
   loop_0.exit:
     arm64.ldr x0, [x29, #-48]
-    arm64.str x0, [x29, #-88]
     arm64.mov x1, #0
     arm64.cmp x0, x1
     arm64.cset x2, lt
@@ -326,53 +321,51 @@ module {
     arm64.cset x4, gt
     arm64.orr x5, x2, x4
     arm64.cmp x5, #0
-    arm64.b.ne challenge-array-of-structs.main.__range_panic_4
-    arm64.b challenge-array-of-structs.main.__range_ok_4
+    arm64.b.ne main.__range_panic_4
+    arm64.b main.__range_ok_4
   __range_panic_4:
-    arm64.adrp_add_symdata x0, __panic_msg_59
+    arm64.adrp_add_symdata x0, __panic_msg_0
     arm64.mov x1, x0
     arm64.mov x0, x1
     arm64.bl maxon_panic
   __range_ok_4:
-    arm64.ldr x0, [x29, #-88]
     arm64.ldr x1, [x29, #-64]
     arm64.cmp x1, #0
-    arm64.b.eq challenge-array-of-structs.main.__skip_guarded_182
+    arm64.b.eq main.__skip_guarded_178
     arm64.ldr x0, [x29, #-64]
     arm64.bl mm_decref
-    arm64.label challenge-array-of-structs.main.__skip_guarded_182
-    arm64.ldr x2, [x29, #-56]
-    arm64.cmp x2, #0
-    arm64.b.eq challenge-array-of-structs.main.__skip_guarded_184
+    arm64.label main.__skip_guarded_178
     arm64.ldr x0, [x29, #-56]
+    arm64.cmp x0, #0
+    arm64.b.eq main.__skip_guarded_180
     arm64.bl mm_decref
-    arm64.label challenge-array-of-structs.main.__skip_guarded_184
-    arm64.ldr x3, [x29, #-16]
-    arm64.cmp x3, #0
-    arm64.b.eq challenge-array-of-structs.main.__skip_guarded_186
+    arm64.label main.__skip_guarded_180
+    arm64.ldr x1, [x29, #-16]
+    arm64.cmp x1, #0
+    arm64.b.eq main.__skip_guarded_182
     arm64.ldr x0, [x29, #-16]
     arm64.bl mm_decref
-    arm64.label challenge-array-of-structs.main.__skip_guarded_186
-    arm64.ldr x4, [x29, #-24]
-    arm64.cmp x4, #0
-    arm64.b.eq challenge-array-of-structs.main.__skip_guarded_188
+    arm64.label main.__skip_guarded_182
+    arm64.ldr x2, [x29, #-24]
+    arm64.cmp x2, #0
+    arm64.b.eq main.__skip_guarded_184
     arm64.ldr x0, [x29, #-24]
     arm64.bl mm_decref
-    arm64.label challenge-array-of-structs.main.__skip_guarded_188
-    arm64.ldr x5, [x29, #-32]
-    arm64.cmp x5, #0
-    arm64.b.eq challenge-array-of-structs.main.__skip_guarded_190
+    arm64.label main.__skip_guarded_184
+    arm64.ldr x3, [x29, #-32]
+    arm64.cmp x3, #0
+    arm64.b.eq main.__skip_guarded_186
     arm64.ldr x0, [x29, #-32]
     arm64.bl mm_decref
-    arm64.label challenge-array-of-structs.main.__skip_guarded_190
-    arm64.ldr x6, [x29, #-40]
-    arm64.cmp x6, #0
-    arm64.b.eq challenge-array-of-structs.main.__skip_guarded_192
+    arm64.label main.__skip_guarded_186
+    arm64.ldr x4, [x29, #-40]
+    arm64.cmp x4, #0
+    arm64.b.eq main.__skip_guarded_188
     arm64.ldr x0, [x29, #-40]
     arm64.bl mm_decref
-    arm64.label challenge-array-of-structs.main.__skip_guarded_192
-    arm64.ldr x0, [x29, #-88]
-    arm64.epilogue stack_size=208
+    arm64.label main.__skip_guarded_188
+    arm64.ldr x0, [x29, #-48]
+    arm64.epilogue stack_size=176
     arm64.ret
   }
   func @__destruct_Task(ptr: i64) {
@@ -420,6 +413,23 @@ module {
     arm64.bl mm_decref
     arm64.label __destruct_TaskArray.__skip_guarded_4
     arm64.b __destruct_TaskArray.done
+  done:
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+  func @__destruct___Array_Iter(ptr: i64) {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #0]
+    arm64.str x1, [x29, #-16]
+    arm64.cmp x1, #0
+    arm64.b.eq __destruct___Array_Iter.__skip_guarded_4
+    arm64.ldr x0, [x29, #-16]
+    arm64.bl mm_decref
+    arm64.label __destruct___Array_Iter.__skip_guarded_4
+    arm64.b __destruct___Array_Iter.done
   done:
     arm64.epilogue stack_size=48
     arm64.ret

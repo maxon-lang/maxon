@@ -4,7 +4,10 @@ var b = false
 var c = true
 
 function main() returns ExitCode
-  return 0
+  if a and c and (b == false) 'read'
+    return 0
+  end 'read'
+  return 1
 end 'main'
 ---
 ExitCode: 0
@@ -15,9 +18,24 @@ i8 1
 ```
 ---
 module {
-  func @static-variables.main() -> u32 {
+  func @main() -> u32 {
   entry:
+    arm64.global_load x0, [a]
+    arm64.global_load x1, [c]
+    arm64.and x2, x0, x1
+    arm64.global_load x3, [b]
+    arm64.mov x4, #0
+    arm64.cmp x3, x4
+    arm64.cset x5, eq
+    arm64.and x6, x2, x5
+    arm64.cmp x6, #0
+    arm64.b.ne main.read_0
+    arm64.b main.read_0.after
+  read_0:
     arm64.mov x0, #0
+    arm64.ret
+  read_0.after:
+    arm64.mov x0, #1
     arm64.ret
   }
 }

@@ -12,6 +12,10 @@ public partial class ARM64CodeEmitter() {
   // Label name -> code offset
   private readonly Dictionary<string, int> _labels = [];
 
+  // Runtime function labels for symbol table inclusion
+  private readonly List<string> _runtimeFunctionLabels = [];
+  public IReadOnlyList<string> RuntimeFunctionLabels => _runtimeFunctionLabels;
+
   // Branch fixups: code offset -> target label name (for B and BL instructions)
   private readonly List<(int offset, string target)> _branchFixups = [];
 
@@ -49,6 +53,9 @@ public partial class ARM64CodeEmitter() {
   private readonly List<string> _importNames = [];  // ordered list of imported function names
   // GOT ADRP+LDR fixups: (adrpOffset, ldrOffset, functionName)
   private readonly List<(int adrpOffset, int ldrOffset, string functionName)> _gotFixups = [];
+
+  // Jump table fixups: (slotIndex, codeLabel, tableLabel)
+  private readonly List<(int slotIndex, string codeLabel, string tableLabel)> _jumpTableFixups = [];
 
   private string _currentFunction = "";
   private int _uniqueLabelCounter;
@@ -362,6 +369,9 @@ case ARM64MemcpyOp:
         break;
       case ARM64StoreToSpOp storeSp:
         EmitStoreToSp(storeSp.Offset, storeSp.Src);
+        break;
+      case ARM64JumpTableOp jt:
+        EmitJumpTableDispatch(jt);
         break;
       // Float ops
       case ARM64FmovToFloatOp fmov:
@@ -1082,6 +1092,61 @@ case ARM64MemcpyOp:
   private void EmitCmpRegReg(ARM64Register lhs, ARM64Register rhs) {
     // SUBS XZR, Xn, Xm
     EmitWord(0xEB00001F | (Reg(rhs) << 16) | (Reg(lhs) << 5));
+  }
+
+  // --- Jump table dispatch ---
+
+  private void EmitJumpTableDispatch(ARM64JumpTableOp jt) {
+    var indexReg = jt.IndexReg;
+
+    // 1. Bounds check: CMP Xn, #caseCount (unsigned — catches negative values too)
+    EmitWord(0xF100001F | ((uint)jt.CaseCount << 10) | (Reg(indexReg) << 5));
+    // 2. B.HS defaultTarget (out of bounds → default)
+    _condBranchFixups.Add((_code.Count, jt.DefaultTarget));
+    EmitWord(0x54000000 | CondCode(ARM64ConditionCode.Hs));
+
+    // 3. ADRP X17, tableLabel + ADD X17, X17, #pageOff — load table base address
+    EmitAdrpAddFixup(ARM64Register.X17, _rdataAdrpFixups, jt.RdataLabel);
+
+    // 4. LDRSW X16, [X17, Xn, LSL #2] — load signed 32-bit entry at index*4
+    EmitWord(0xB8A07800 | (Reg(indexReg) << 16) | (Reg(ARM64Register.X17) << 5) | Reg(ARM64Register.X16));
+
+    // 5. ADD X17, X17, X16 — compute target = tableBase + offset
+    EmitAluRegReg(0x8B000000, ARM64Register.X17, ARM64Register.X17, ARM64Register.X16);
+
+    // 6. BR X17 — indirect branch to target
+    EmitWord(0xD61F0000 | (Reg(ARM64Register.X17) << 5));
+
+    // Record fixups for rdata patching
+    for (int i = 0; i < jt.CaseTargets.Length; i++) {
+      _jumpTableFixups.Add((i, jt.CaseTargets[i], jt.RdataLabel));
+    }
+  }
+
+  public void ResolveJumpTableFixups(uint textSectionFileOffset, ulong textSegmentVMAddr,
+      uint rdataSectionFileOffset) {
+    // Each rdata table entry is a signed 32-bit offset from the table base to the target code label.
+    // At runtime: target = tableBase + entry
+    foreach (var (slotIndex, codeLabel, tableLabel) in _jumpTableFixups) {
+      if (!_labels.TryGetValue(codeLabel, out var codeLabelOffset))
+        throw new InvalidOperationException($"Unresolved jump table target: {codeLabel}");
+      if (!_rdataLabels.TryGetValue(tableLabel, out var tableBaseOffset))
+        throw new InvalidOperationException($"Unresolved jump table label: {tableLabel}");
+
+      // Code label VM address
+      var codeLabelVMAddr = textSegmentVMAddr + textSectionFileOffset + (ulong)codeLabelOffset;
+      // Table base VM address
+      var tableBaseVMAddr = textSegmentVMAddr + rdataSectionFileOffset + (ulong)tableBaseOffset;
+      // Entry = signed offset from table base to code label
+      var entry = (int)((long)codeLabelVMAddr - (long)tableBaseVMAddr);
+
+      // Patch the rdata entry (4 bytes, little-endian)
+      var off = tableBaseOffset + slotIndex * 4;
+      _rdata[off] = (byte)(entry & 0xFF);
+      _rdata[off + 1] = (byte)((entry >> 8) & 0xFF);
+      _rdata[off + 2] = (byte)((entry >> 16) & 0xFF);
+      _rdata[off + 3] = (byte)((entry >> 24) & 0xFF);
+    }
   }
 
   // --- Start wrapper ---

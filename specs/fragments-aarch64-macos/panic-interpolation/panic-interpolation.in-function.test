@@ -8,7 +8,7 @@ function check(n Integer)
 end 'check'
 
 function main() returns ExitCode
-    check(Integer{0 - 5})
+    check(Integer{-5})
     return 0
 end 'main'
 ---
@@ -17,7 +17,7 @@ Stderr: ```
 panic at panic-interpolation.in-function.test:6: check failed: -5 is negative
 Stack trace:
   in panic-interpolation.check
-  in panic-interpolation.main
+  in main
   in _start
 ```
 ---
@@ -165,13 +165,10 @@ module {
     arm64.epilogue stack_size=304
     arm64.ret
   }
-  func @panic-interpolation.main() -> u32 {
+  func @main() -> u32 {
   entry:
     arm64.prologue stack_size=16
-    arm64.mov x0, #0
-    arm64.mov x1, #5
-    arm64.sub x2, x0, x1
-    arm64.mov x0, x2
+    arm64.mov x0, #-5
     arm64.bl panic-interpolation.check
     arm64.mov x0, #0
     arm64.epilogue stack_size=16

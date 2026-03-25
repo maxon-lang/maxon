@@ -77,13 +77,17 @@ public class ARM64CodeEmitterStage {
     rt.EmitMmValidatePtr();
     rt.EmitManagedListFunctions(Compiler.MmTrace);
 
-    // Build symbol table
+    // Build symbol table (compiler-generated functions + runtime functions)
     var symbolEntries = new List<(string name, int codeOffset)>();
     var startOffset = emitter.GetLabelOffset("_start");
     if (startOffset >= 0) symbolEntries.Add(("_start", startOffset));
     foreach (var func in module.Functions) {
       var offset = emitter.GetLabelOffset(func.Name);
       if (offset >= 0) symbolEntries.Add((func.Name, offset));
+    }
+    foreach (var label in emitter.RuntimeFunctionLabels) {
+      var offset = emitter.GetLabelOffset(label);
+      if (offset >= 0) symbolEntries.Add((label, offset));
     }
     emitter.EmitSymbolTable(symbolEntries);
 
@@ -124,6 +128,9 @@ public class ARM64CodeEmitterStage {
     if (emitter.HasImports) {
       emitter.ResolveGotFixups(layout.TextSectionOffset, MachOLayout.TextSegmentVMAddr, layout.GotSectionVMAddr);
     }
+
+    // Resolve jump table fixups (rdata entries pointing to code labels)
+    emitter.ResolveJumpTableFixups(layout.TextSectionOffset, MachOLayout.TextSegmentVMAddr, rdataSectionFileOffset);
 
     var code = emitter.GetCode();
     var rdata = emitter.GetRdata();

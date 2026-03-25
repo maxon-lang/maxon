@@ -13,7 +13,7 @@ ExitCode: 36
 RequiredMLIR: ```
 === maxon
 module {
-  func @register-allocator.main() -> i64 {
+  func @main() -> i64 {
   entry:
     %0 = maxon.literal {value = 3.14 : f64}
     maxon.assign %0 {var = x} {kind = f64} {decl = 1 : i1} {mut = 1 : i1}
@@ -29,7 +29,6 @@ module {
     maxon.assign %5 {var = sum_i} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
     %6 = maxon.trunc %2
     %7 = maxon.binop %6, %5 {op = add}
-    maxon.assign %7 {var = __range_val_0} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
     %8 = maxon.literal {value = 0 : i64}
     %9 = maxon.binop %7, %8 {op = lt}
     %10 = maxon.literal {value = 4294967295 : i64}
@@ -39,14 +38,13 @@ module {
   __range_panic_0:
     maxon.panic "panic at float-and-int-mixed-pressure.test:9: Range check failed for type 'ExitCode': value outside int(0 to 4294967295)"
   __range_ok_0:
-    %14 = maxon.var_ref {var = __range_val_0} {type = i64}
-    maxon.scope_end [x, y, sum_f, a, b, sum_i, __range_val_0]
-    maxon.return %14
+    maxon.scope_end [x, y, sum_f, a, b, sum_i]
+    maxon.return %7
   }
 }
 === standard
 module {
-  func @register-allocator.main() -> u32 {
+  func @main() -> u32 {
   entry:
     %0 = arith.float_constant {value = 3.14 : f64}
     %1 = arith.float_constant {value = 2.86 : f64}
@@ -56,7 +54,6 @@ module {
     %5 = arith.addi %3, %4
     %6 = arith.fptosi %2
     %7 = arith.addi %6, %5
-    memref.store %7, __range_val_0
     %8 = arith.constant {value = 0 : i64}
     %9 = arith.cmpi lt %7, %8
     %10 = arith.constant {value = 4294967295 : i64}
@@ -64,19 +61,18 @@ module {
     %12 = arith.ori1 %9, %11
     cf.cond_br %12 [then: __range_panic_0, else: __range_ok_0]
   __range_panic_0:
-    %13 = memref.lea_symdata __panic_msg_13
+    %13 = memref.lea_symdata __panic_msg_0
     %14 = std.ptr_to_i64 %13
     std.call_runtime @maxon_panic %14
   __range_ok_0:
-    %15 = memref.load __range_val_0 : i64
-    func.return %15
+    func.return %7
   }
 }
 === arm64
 module {
-  func @register-allocator.main() -> u32 {
+  func @main() -> u32 {
   entry:
-    arm64.prologue stack_size=48
+    arm64.prologue stack_size=16
     arm64.fldr d0, [__float_3.14]
     arm64.fldr d1, [__float_2.86]
     arm64.fadd d2, d0, d1
@@ -85,7 +81,6 @@ module {
     arm64.add x2, x0, x1
     arm64.fcvtzs x3, d2
     arm64.add x4, x3, x2
-    arm64.str x4, [x29, #-8]
     arm64.mov x5, #0
     arm64.cmp x4, x5
     arm64.cset x6, lt
@@ -94,16 +89,16 @@ module {
     arm64.cset x8, gt
     arm64.orr x9, x6, x8
     arm64.cmp x9, #0
-    arm64.b.ne register-allocator.main.__range_panic_0
-    arm64.b register-allocator.main.__range_ok_0
+    arm64.b.ne main.__range_panic_0
+    arm64.b main.__range_ok_0
   __range_panic_0:
-    arm64.adrp_add_symdata x0, __panic_msg_13
+    arm64.adrp_add_symdata x0, __panic_msg_0
     arm64.mov x1, x0
     arm64.mov x0, x1
     arm64.bl maxon_panic
   __range_ok_0:
-    arm64.ldr x0, [x29, #-8]
-    arm64.epilogue stack_size=48
+    arm64.mov x0, x4
+    arm64.epilogue stack_size=16
     arm64.ret
   }
 }

@@ -496,15 +496,9 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
           if (successExpectation.Stdout != null) {
             var expectedStdout = successExpectation.Stdout.Replace("\r\n", "\n").Trim();
             var actualStdout = Stdout.Replace("\r\n", "\n").Trim();
-            // Normalize machine-specific paths: replace CWD with {CWD} placeholder
-            var cwd = Directory.GetCurrentDirectory();
-            if (_target.Os == "windows") {
-              actualStdout = actualStdout.Replace(cwd.Replace('/', '\\'), "{CWD}");
-              expectedStdout = expectedStdout.Replace(cwd.Replace('/', '\\'), "{CWD}");
-            } else {
-              actualStdout = actualStdout.Replace(cwd, "{CWD}");
-              expectedStdout = expectedStdout.Replace(cwd, "{CWD}");
-            }
+            // Normalize machine-specific paths so tests are portable across OSes
+            actualStdout = NormalizePathsForComparison(actualStdout);
+            expectedStdout = NormalizePathsForComparison(expectedStdout);
             if (expectedStdout != actualStdout) {
               return new TestResult {
                 TestName = fragment.TestName,
@@ -750,6 +744,19 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
   /// lines (worker_start/park/wake/exit) and [M=N] worker suffixes so tests are stable
   /// regardless of scheduling timing.
   /// </summary>
+  /// Replace CWD with placeholder and unify path separators to native format.
+  private string NormalizePathsForComparison(string s) {
+    var cwd = Directory.GetCurrentDirectory();
+    if (_target.Os == "windows") {
+      s = s.Replace(cwd.Replace('/', '\\'), "{CWD}");
+      s = s.Replace('/', '\\');
+    } else {
+      s = s.Replace(cwd, "{CWD}");
+      s = s.Replace('\\', '/');
+    }
+    return s;
+  }
+
   private static string NormalizeAsyncTraceStderr(string stderr) {
     var lines = stderr.Replace("\r\n", "\n").Split('\n');
     var kept = new List<string>();

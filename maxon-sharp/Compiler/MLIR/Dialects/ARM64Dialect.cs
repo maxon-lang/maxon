@@ -673,3 +673,15 @@ public class ARM64StoreToSpOp(int offset, ARM64Register src) : ARM64Op {
   public ARM64Register Src { get; } = src;
   public override string Mnemonic => $"arm64.str {Src.ToString().ToLower()}, [sp, #{Offset}]";
 }
+
+// --- Jump table dispatch ---
+
+public class ARM64JumpTableOp(ARM64Register indexReg, int caseCount,
+    string rdataLabel, string defaultTarget, string[] caseTargets) : ARM64Op {
+  public ARM64Register IndexReg { get; } = indexReg;
+  public int CaseCount { get; } = caseCount;
+  public string RdataLabel { get; } = rdataLabel;
+  public string DefaultTarget { get; } = defaultTarget;
+  public string[] CaseTargets { get; } = caseTargets;
+  public override string Mnemonic => $"arm64.jump_table {IndexReg.ToString().ToLower()}, {CaseCount} cases, default={DefaultTarget}";
+}

@@ -1230,29 +1230,37 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
 
     var savedFunction = _currentFunction;
     var savedBlock = _currentBlock;
+    var savedVariables = _variables.SaveAll();
 
-    foreach (var field in _lazyStaticFields) {
-      var initFuncName = $"{field.QualifiedName}.__lazy_init";
+    try {
+      foreach (var field in _lazyStaticFields) {
+        // Each lazy init gets a clean variable scope — prevents stray variables
+        // from prior functions or prior lazy inits leaking into this scope_end.
+        _variables.Clear();
 
-      var initFunc = new MlirFunction<MaxonOp>(initFuncName, [], [], returnType: null, throwsType: null);
-      module.AddFunction(initFunc);
-      _currentFunction = initFunc;
-      _currentBlock = initFunc.Body.AddBlock("entry");
+        var initFuncName = $"{field.QualifiedName}.__lazy_init";
 
-      // Set guard to true before evaluating (prevents infinite recursion)
-      var trueConst = new MaxonLiteralOp(true);
-      _currentBlock.AddOp(trueConst);
-      _currentBlock.AddOp(new MaxonGlobalStoreOp(field.GuardName, trueConst.Result, MaxonValueKind.Bool));
+        var initFunc = new MlirFunction<MaxonOp>(initFuncName, [], [], returnType: null, throwsType: null);
+        module.AddFunction(initFunc);
+        _currentFunction = initFunc;
+        _currentBlock = initFunc.Body.AddBlock("entry");
 
-      // Evaluate the initializer expression and store result
-      EmitSingleDeferredGlobalInit(field.QualifiedName, field.Tokens, field.TokenStart, field.IsMutable);
+        // Set guard to true before evaluating (prevents infinite recursion)
+        var trueConst = new MaxonLiteralOp(true);
+        _currentBlock.AddOp(trueConst);
+        _currentBlock.AddOp(new MaxonGlobalStoreOp(field.GuardName, trueConst.Result, MaxonValueKind.Bool));
 
-      _currentBlock.AddOp(new MaxonScopeEndOp(GetScopeEndVars()) { VarMetadata = _variables.GetScopeEndVarMetadata() });
-      _currentBlock.AddOp(new MaxonReturnOp());
+        // Evaluate the initializer expression and store result
+        EmitSingleDeferredGlobalInit(field.QualifiedName, field.Tokens, field.TokenStart, field.IsMutable);
+
+        _currentBlock.AddOp(new MaxonScopeEndOp(GetScopeEndVars()) { VarMetadata = _variables.GetScopeEndVarMetadata() });
+        _currentBlock.AddOp(new MaxonReturnOp());
+      }
+    } finally {
+      _variables.RestoreAll(savedVariables);
+      _currentFunction = savedFunction;
+      _currentBlock = savedBlock;
     }
-
-    _currentFunction = savedFunction;
-    _currentBlock = savedBlock;
   }
 
   /// <summary>

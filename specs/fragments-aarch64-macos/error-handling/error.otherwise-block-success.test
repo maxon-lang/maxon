@@ -49,7 +49,7 @@ module {
     arm64.mov x1, #0
     arm64.ret
   }
-  func @error-handling.main() -> u32 {
+  func @main() -> u32 {
   entry:
     arm64.prologue stack_size=48
     arm64.mov x0, #0
@@ -60,15 +60,14 @@ module {
     arm64.cmp x1, x2
     arm64.cset x3, ne
     arm64.cmp x3, #0
-    arm64.b.ne error-handling.main.otherwise_error_0
-    arm64.b error-handling.main.otherwise_continue_1
+    arm64.b.ne main.otherwise_error_0
+    arm64.b main.otherwise_continue_1
   otherwise_error_0:
     arm64.mov x0, #42
     arm64.str x0, [x29, #-8]
-    arm64.b error-handling.main.otherwise_continue_1
+    arm64.b main.otherwise_continue_1
   otherwise_continue_1:
     arm64.ldr x0, [x29, #-8]
-    arm64.str x0, [x29, #-16]
     arm64.mov x1, #0
     arm64.cmp x0, x1
     arm64.cset x2, lt
@@ -77,15 +76,14 @@ module {
     arm64.cset x4, gt
     arm64.orr x5, x2, x4
     arm64.cmp x5, #0
-    arm64.b.ne error-handling.main.__range_panic_4
-    arm64.b error-handling.main.__range_ok_4
+    arm64.b.ne main.__range_panic_4
+    arm64.b main.__range_ok_4
   __range_panic_4:
-    arm64.adrp_add_symdata x0, __panic_msg_29
+    arm64.adrp_add_symdata x0, __panic_msg_0
     arm64.mov x1, x0
     arm64.mov x0, x1
     arm64.bl maxon_panic
   __range_ok_4:
-    arm64.ldr x0, [x29, #-16]
     arm64.epilogue stack_size=48
     arm64.ret
   }

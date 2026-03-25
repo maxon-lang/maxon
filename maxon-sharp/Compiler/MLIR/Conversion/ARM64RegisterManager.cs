@@ -61,6 +61,11 @@ public class ARM64RegisterManager : RegisterManagerBase<ARM64Register, ARM64Floa
     return b != null && a == b.Value;
   }
 
+  /// <summary>Ensure a value is in a GPR and return the physical register.</summary>
+  public ARM64Register LoadToRegister(StdValue value, MlirBlock<ARM64Op> block) {
+    return EnsureInRegister(value, block);
+  }
+
   protected override void EmitImmediateToRegister(ARM64Register reg, long immediate, MlirBlock<ARM64Op> block) {
     block.AddOp(new ARM64MovRegImmOp(reg, immediate));
   }

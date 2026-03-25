@@ -588,6 +588,20 @@ public static class StandardToARM64Conversion {
         block.AddOp(new ARM64BranchOp($"{funcName}.{condBr.ElseBlock}"));
         break;
 
+      case StdSwitchOp switchOp: {
+        var indexReg = regManager.LoadToRegister(switchOp.Scrutinee, block);
+        var tableLabel = $"__jt_{funcName}_{currentOpIndex}";
+        var scopedTargets = switchOp.CaseTargets
+            .Select(t => $"{funcName}.{t}").ToArray();
+        var scopedDefault = $"{funcName}.{switchOp.DefaultTarget}";
+
+        block.AddOp(new ARM64JumpTableOp(indexReg, switchOp.CaseTargets.Length,
+            tableLabel, scopedDefault, scopedTargets));
+
+        outputModule.RdataEntries.Add((tableLabel, new byte[switchOp.CaseTargets.Length * 4], 4));
+        break;
+      }
+
       // === LEA (address-of) ===
       case StdLeaOp leaOp: {
         if (varOffsets.TryGetValue(leaOp.VarName, out var leaOffset)) {

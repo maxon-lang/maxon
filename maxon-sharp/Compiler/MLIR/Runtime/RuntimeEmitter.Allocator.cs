@@ -138,7 +138,7 @@ public partial class RuntimeEmitter {
     if (_b.IsWindows) {
       _b.DefineGlobal(MspanPoolLockLabel, 40, 0); // CRITICAL_SECTION
     } else {
-      _b.DefineGlobal(MspanPoolLockLabel, 8, 0);  // os_unfair_lock
+      _b.DefineGlobal(MspanPoolLockLabel, 24, 0); // recursive spinlock: [lock(8), owner(8), count(8)]
     }
 
     // Per-class mcentral locks
@@ -404,7 +404,7 @@ public partial class RuntimeEmitter {
   // Returns a 64-byte metadata slot to the free list.
   // =========================================================================
   public void EmitMetaFree() {
-    _b.FunctionStart("__slab_meta_free", 1, 0x10);
+    _b.FunctionStart("__slab_meta_free", 1, 0x20);
 
     _b.LoadLocal(VReg.Scratch0, 0); // ptr
     _b.LoadGlobal(VReg.Scratch1, MetaFreeHeadLabel);
@@ -794,7 +794,7 @@ public partial class RuntimeEmitter {
   // =========================================================================
   // Stack slots: 0=arena_base, 1=chunk_index, 2=num_chunks, 3=qword_idx, 4=end_qword
   public void EmitArenaFreeChunks() {
-    _b.FunctionStart("__slab_arena_free_chunks", 3, 0x30);
+    _b.FunctionStart("__slab_arena_free_chunks", 3, 0x40);
 
     _b.LockAcquire(MspanPoolLockLabel);
 
@@ -1164,7 +1164,7 @@ public partial class RuntimeEmitter {
   // =========================================================================
   // Stack slots: 0=ptr, 1=size, 2=count, 3=capacity, 4=insert_idx, 5=new_array, 6=i
   public void EmitOsDirectInsert() {
-    _b.FunctionStart("__slab_os_direct_insert", 2, 0x40);
+    _b.FunctionStart("__slab_os_direct_insert", 2, 0x50);
 
     // Lazy init: if capacity == 0, allocate first page
     _b.LoadGlobal(VReg.Scratch0, OsDirectCapacityLabel);
@@ -1353,7 +1353,7 @@ public partial class RuntimeEmitter {
   // =========================================================================
   // Stack slots: 0=ptr, 1=array, 2=count, 3=lo, 4=hi, 5=found_size, 6=i
   public void EmitOsDirectRemove() {
-    _b.FunctionStart("__slab_os_direct_remove", 1, 0x40);
+    _b.FunctionStart("__slab_os_direct_remove", 1, 0x50);
 
     _b.LoadGlobal(VReg.Scratch0, OsDirectArrayLabel);
     _b.StoreLocal(1, VReg.Scratch0); // array

@@ -1,0 +1,223 @@
+// Test: rdata-global-var-array-cow-preserves-original
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
+
+var globalArr = [10, 20, 30]
+
+function readFirst() returns Integer
+  return try globalArr.get(0) otherwise 0
+end 'readFirst'
+
+function main() returns ExitCode
+  globalArr.set(0, value: 99)
+  return readFirst()
+end 'main'
+---
+ExitCode: 99
+RequiredRdata: ```
+i64[] 10, 20, 30
+```
+---
+module {
+  func @codegen-internals.readFirst() -> i64 {
+  entry:
+    arm64.prologue stack_size=80
+    arm64.global_load x0, [globalArr]
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x1, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl mm_incref
+    arm64.ldr x2, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.mov x1, #0
+    arm64.bl IntArray.get
+    arm64.mov x3, #0
+    arm64.str x3, [x29, #-16]
+    arm64.str x0, [x29, #-24]
+    arm64.mov x4, #0
+    arm64.cmp x1, x4
+    arm64.cset x5, ne
+    arm64.cmp x5, #0
+    arm64.b.ne codegen-internals.readFirst.otherwise_default_error_2
+    arm64.b codegen-internals.readFirst.otherwise_default_continue_3
+  otherwise_default_error_2:
+    arm64.ldr x0, [x29, #-16]
+    arm64.str x0, [x29, #-24]
+    arm64.b codegen-internals.readFirst.otherwise_default_continue_3
+  otherwise_default_continue_3:
+    arm64.ldr x0, [x29, #-24]
+    arm64.ldr x1, [x29, #-8]
+    arm64.cmp x1, #0
+    arm64.b.eq codegen-internals.readFirst.__skip_guarded_18
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl mm_decref
+    arm64.label codegen-internals.readFirst.__skip_guarded_18
+    arm64.ldr x0, [x29, #-24]
+    arm64.epilogue stack_size=80
+    arm64.ret
+  }
+  func @main() -> u32 {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.global_load x0, [globalArr]
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x1, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl mm_incref
+    arm64.ldr x2, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.mov x1, #0
+    arm64.mov x2, #99
+    arm64.bl IntArray.set
+    arm64.bl codegen-internals.readFirst
+    arm64.mov x3, #0
+    arm64.cmp x0, x3
+    arm64.cset x4, lt
+    arm64.mov x5, #4294967295
+    arm64.cmp x0, x5
+    arm64.cset x6, gt
+    arm64.orr x7, x4, x6
+    arm64.cmp x7, #0
+    arm64.b.ne main.__range_panic_0
+    arm64.b main.__range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_symdata x0, __panic_msg_0
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl maxon_panic
+  __range_ok_0:
+    arm64.ldr x1, [x29, #-8]
+    arm64.str x0, [x29, #-16]
+    arm64.cmp x1, #0
+    arm64.b.eq main.__skip_guarded_19
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl mm_decref
+    arm64.label main.__skip_guarded_19
+    arm64.ldr x0, [x29, #-16]
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+  func @__module_init() {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.mov x0, #0
+    arm64.mov x1, #3
+    arm64.mov x2, #0
+    arm64.mov x3, #8
+    arm64.adrp_add_func x4, __destruct___ManagedMemory
+    arm64.mov x5, x4
+    arm64.mov x1, x5
+    arm64.mov x0, #32
+    arm64.mov x2, #1
+    arm64.bl mm_alloc
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x6, [x29, #-8]
+    arm64.mov x7, #0
+    arm64.str x7, [x6, #0]
+    arm64.ldr x8, [x29, #-8]
+    arm64.mov x9, #3
+    arm64.str x9, [x8, #8]
+    arm64.ldr x10, [x29, #-8]
+    arm64.mov x11, #0
+    arm64.str x11, [x10, #16]
+    arm64.ldr x12, [x29, #-8]
+    arm64.mov x13, #8
+    arm64.str x13, [x12, #24]
+    arm64.ldr x14, [x29, #-8]
+    arm64.ldr x15, [x14, #24]
+    arm64.adrp_add_symdata x0, __mm_panic_element_size_zero
+    arm64.mov x1, x0
+    arm64.mov x2, x1
+    arm64.mov x1, x15
+    arm64.mov x0, #0
+    arm64.bl maxon_bounds_check
+    arm64.mov x0, #0
+    arm64.adrp_add_func x1, __destruct_IntArray
+    arm64.mov x2, x1
+    arm64.mov x1, x2
+    arm64.mov x0, #16
+    arm64.mov x2, #2
+    arm64.bl mm_alloc
+    arm64.str x0, [x29, #-16]
+    arm64.ldr x1, [x29, #-16]
+    arm64.mov x2, #0
+    arm64.str x2, [x1, #0]
+    arm64.ldr x1, [x29, #-8]
+    arm64.ldr x2, [x29, #-16]
+    arm64.str x1, [x2, #8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.bl mm_incref
+    arm64.adrp_add_rdata x0, __const_array___module_init_globalArr
+    arm64.mov x1, x0
+    arm64.ldr x0, [x29, #-16]
+    arm64.ldr x2, [x0, #8]
+    arm64.str x1, [x2, #0]
+    arm64.ldr x0, [x29, #-16]
+    arm64.bl mm_incref
+    arm64.ldr x0, [x29, #-16]
+    arm64.bl mm_incref
+    arm64.ldr x0, [x29, #-16]
+    arm64.global_store [globalArr], x0
+    arm64.ldr x0, [x29, #-16]
+    arm64.cmp x0, #0
+    arm64.b.eq __module_init.__skip_guarded_47
+    arm64.bl mm_decref
+    arm64.label __module_init.__skip_guarded_47
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+  func @__maxon_global_cleanup() {
+  entry:
+    arm64.prologue stack_size=32
+    arm64.global_load x0, [globalArr]
+    arm64.str x0, [x29, #-8]
+    arm64.cmp x0, #0
+    arm64.b.eq __maxon_global_cleanup.__skip_guarded_1
+    arm64.bl mm_decref
+    arm64.label __maxon_global_cleanup.__skip_guarded_1
+    arm64.epilogue stack_size=32
+    arm64.ret
+  }
+  func @__destruct___ManagedMemory(ptr: i64) {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #16]
+    arm64.mov x2, #0
+    arm64.cmp x1, x2
+    arm64.cset x3, ne
+    arm64.cmp x3, #0
+    arm64.b.ne __destruct___ManagedMemory.free_buf_0
+    arm64.b __destruct___ManagedMemory.skip_buf_0
+  free_buf_0:
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #0]
+    arm64.mov x0, x1
+    arm64.bl mm_raw_free
+    arm64.b __destruct___ManagedMemory.skip_buf_0
+  skip_buf_0:
+    arm64.b __destruct___ManagedMemory.done
+  done:
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+  func @__destruct_IntArray(ptr: i64) {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #8]
+    arm64.str x1, [x29, #-16]
+    arm64.cmp x1, #0
+    arm64.b.eq __destruct_IntArray.__skip_guarded_4
+    arm64.ldr x0, [x29, #-16]
+    arm64.bl mm_decref
+    arm64.label __destruct_IntArray.__skip_guarded_4
+    arm64.b __destruct_IntArray.done
+  done:
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+}
+---

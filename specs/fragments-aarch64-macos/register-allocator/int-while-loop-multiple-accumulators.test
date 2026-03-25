@@ -20,7 +20,7 @@ ExitCode: 200
 RequiredMLIR: ```
 === maxon
 module {
-  func @register-allocator.main() -> i64 {
+  func @main() -> i64 {
   entry:
     %0 = maxon.literal {value = 0 : i64}
     maxon.assign %0 {var = even_sum} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
@@ -76,7 +76,6 @@ module {
     %28 = maxon.binop %26, %27 {op = add}
     %29 = maxon.literal {value = 256 : i64}
     %30 = maxon.binop %28, %29 {op = mod}
-    maxon.assign %30 {var = __range_val_3} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
     %31 = maxon.literal {value = 0 : i64}
     %32 = maxon.binop %30, %31 {op = lt}
     %33 = maxon.literal {value = 4294967295 : i64}
@@ -86,14 +85,13 @@ module {
   __range_panic_3:
     maxon.panic "panic at int-while-loop-multiple-accumulators.test:16: Range check failed for type 'ExitCode': value outside int(0 to 4294967295)"
   __range_ok_3:
-    %37 = maxon.var_ref {var = __range_val_3} {type = i64}
-    maxon.scope_end [even_sum, odd_sum, count, i, __range_val_3]
-    maxon.return %37
+    maxon.scope_end [even_sum, odd_sum, count, i]
+    maxon.return %30
   }
 }
 === standard
 module {
-  func @register-allocator.main() -> u32 {
+  func @main() -> u32 {
   entry:
     %0 = arith.constant {value = 0 : i64}
     memref.store %0, even_sum
@@ -146,7 +144,6 @@ module {
     %28 = arith.addi %26, %27
     %29 = arith.constant {value = 256 : i64}
     %30 = arith.remsi %28, %29
-    memref.store %30, __range_val_3
     %31 = arith.constant {value = 0 : i64}
     %32 = arith.cmpi lt %30, %31
     %33 = arith.constant {value = 4294967295 : i64}
@@ -154,19 +151,18 @@ module {
     %35 = arith.ori1 %32, %34
     cf.cond_br %35 [then: __range_panic_3, else: __range_ok_3]
   __range_panic_3:
-    %36 = memref.lea_symdata __panic_msg_36
+    %36 = memref.lea_symdata __panic_msg_0
     %37 = std.ptr_to_i64 %36
     std.call_runtime @maxon_panic %37
   __range_ok_3:
-    %38 = memref.load __range_val_3 : i64
-    func.return %38
+    func.return %30
   }
 }
 === arm64
 module {
-  func @register-allocator.main() -> u32 {
+  func @main() -> u32 {
   entry:
-    arm64.prologue stack_size=112
+    arm64.prologue stack_size=80
     arm64.mov x0, #0
     arm64.str x0, [x29, #-8]
     arm64.mov x1, #0
@@ -175,15 +171,15 @@ module {
     arm64.str x2, [x29, #-24]
     arm64.mov x3, #0
     arm64.str x3, [x29, #-32]
-    arm64.b register-allocator.main.loop_0.header
+    arm64.b main.loop_0.header
   loop_0.header:
     arm64.mov x0, #20
     arm64.ldr x1, [x29, #-32]
     arm64.cmp x1, x0
     arm64.cset x2, lt
     arm64.cmp x2, #0
-    arm64.b.ne register-allocator.main.loop_0
-    arm64.b register-allocator.main.loop_0.exit
+    arm64.b.ne main.loop_0
+    arm64.b main.loop_0.exit
   loop_0:
     arm64.mov x0, #2
     arm64.ldr x1, [x29, #-32]
@@ -193,8 +189,8 @@ module {
     arm64.cmp x3, x4
     arm64.cset x5, eq
     arm64.cmp x5, #0
-    arm64.b.ne register-allocator.main.even_1
-    arm64.b register-allocator.main.odd_2
+    arm64.b.ne main.even_1
+    arm64.b main.odd_2
   even_1:
     arm64.ldr x0, [x29, #-8]
     arm64.ldr x1, [x29, #-32]
@@ -204,19 +200,19 @@ module {
     arm64.ldr x4, [x29, #-24]
     arm64.add x5, x4, x3
     arm64.str x5, [x29, #-24]
-    arm64.b register-allocator.main.even_1.merge
+    arm64.b main.even_1.merge
   odd_2:
     arm64.ldr x0, [x29, #-16]
     arm64.ldr x1, [x29, #-32]
     arm64.add x2, x0, x1
     arm64.str x2, [x29, #-16]
-    arm64.b register-allocator.main.even_1.merge
+    arm64.b main.even_1.merge
   even_1.merge:
     arm64.mov x0, #1
     arm64.ldr x1, [x29, #-32]
     arm64.add x2, x1, x0
     arm64.str x2, [x29, #-32]
-    arm64.b register-allocator.main.loop_0.header
+    arm64.b main.loop_0.header
   loop_0.exit:
     arm64.ldr x0, [x29, #-8]
     arm64.ldr x1, [x29, #-16]
@@ -226,7 +222,6 @@ module {
     arm64.mov x5, #256
     arm64.sdiv x6, x4, x5
     arm64.msub x7, x6, x5, x4
-    arm64.str x7, [x29, #-40]
     arm64.mov x8, #0
     arm64.cmp x7, x8
     arm64.cset x9, lt
@@ -235,16 +230,16 @@ module {
     arm64.cset x11, gt
     arm64.orr x12, x9, x11
     arm64.cmp x12, #0
-    arm64.b.ne register-allocator.main.__range_panic_3
-    arm64.b register-allocator.main.__range_ok_3
+    arm64.b.ne main.__range_panic_3
+    arm64.b main.__range_ok_3
   __range_panic_3:
-    arm64.adrp_add_symdata x0, __panic_msg_36
+    arm64.adrp_add_symdata x0, __panic_msg_0
     arm64.mov x1, x0
     arm64.mov x0, x1
     arm64.bl maxon_panic
   __range_ok_3:
-    arm64.ldr x0, [x29, #-40]
-    arm64.epilogue stack_size=112
+    arm64.mov x0, x7
+    arm64.epilogue stack_size=80
     arm64.ret
   }
 }

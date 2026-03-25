@@ -17,7 +17,7 @@ ExitCode: 15
 RequiredMLIR: ```
 === maxon
 module {
-  func @register-allocator.main() -> i64 {
+  func @main() -> i64 {
   entry:
     %0 = maxon.literal {value = 0 : i64}
     maxon.assign %0 {var = total} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
@@ -58,7 +58,6 @@ module {
     maxon.br outer_0.header
   outer_0.exit:
     %18 = maxon.var_ref {var = total} {type = i64}
-    maxon.assign %18 {var = __range_val_2} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
     %19 = maxon.literal {value = 0 : i64}
     %20 = maxon.binop %18, %19 {op = lt}
     %21 = maxon.literal {value = 4294967295 : i64}
@@ -68,14 +67,13 @@ module {
   __range_panic_2:
     maxon.panic "panic at int-nested-loops-with-outer-var.test:13: Range check failed for type 'ExitCode': value outside int(0 to 4294967295)"
   __range_ok_2:
-    %25 = maxon.var_ref {var = __range_val_2} {type = i64}
-    maxon.scope_end [total, i, __range_val_2]
-    maxon.return %25
+    maxon.scope_end [total, i]
+    maxon.return %18
   }
 }
 === standard
 module {
-  func @register-allocator.main() -> u32 {
+  func @main() -> u32 {
   entry:
     %0 = arith.constant {value = 0 : i64}
     memref.store %0, total
@@ -114,7 +112,6 @@ module {
     cf.br outer_0.header
   outer_0.exit:
     %18 = memref.load total : i64
-    memref.store %18, __range_val_2
     %19 = arith.constant {value = 0 : i64}
     %20 = arith.cmpi lt %18, %19
     %21 = arith.constant {value = 4294967295 : i64}
@@ -122,44 +119,43 @@ module {
     %23 = arith.ori1 %20, %22
     cf.cond_br %23 [then: __range_panic_2, else: __range_ok_2]
   __range_panic_2:
-    %24 = memref.lea_symdata __panic_msg_24
+    %24 = memref.lea_symdata __panic_msg_0
     %25 = std.ptr_to_i64 %24
     std.call_runtime @maxon_panic %25
   __range_ok_2:
-    %26 = memref.load __range_val_2 : i64
-    func.return %26
+    func.return %18
   }
 }
 === arm64
 module {
-  func @register-allocator.main() -> u32 {
+  func @main() -> u32 {
   entry:
     arm64.prologue stack_size=80
     arm64.mov x0, #0
     arm64.str x0, [x29, #-8]
     arm64.mov x1, #1
     arm64.str x1, [x29, #-16]
-    arm64.b register-allocator.main.outer_0.header
+    arm64.b main.outer_0.header
   outer_0.header:
     arm64.mov x0, #5
     arm64.ldr x1, [x29, #-16]
     arm64.cmp x1, x0
     arm64.cset x2, le
     arm64.cmp x2, #0
-    arm64.b.ne register-allocator.main.outer_0
-    arm64.b register-allocator.main.outer_0.exit
+    arm64.b.ne main.outer_0
+    arm64.b main.outer_0.exit
   outer_0:
     arm64.mov x0, #1
     arm64.str x0, [x29, #-24]
-    arm64.b register-allocator.main.inner_1.header
+    arm64.b main.inner_1.header
   inner_1.header:
     arm64.ldr x0, [x29, #-24]
     arm64.ldr x1, [x29, #-16]
     arm64.cmp x0, x1
     arm64.cset x2, le
     arm64.cmp x2, #0
-    arm64.b.ne register-allocator.main.inner_1
-    arm64.b register-allocator.main.inner_1.exit
+    arm64.b.ne main.inner_1
+    arm64.b main.inner_1.exit
   inner_1:
     arm64.mov x0, #1
     arm64.ldr x1, [x29, #-8]
@@ -169,16 +165,15 @@ module {
     arm64.ldr x4, [x29, #-24]
     arm64.add x5, x4, x3
     arm64.str x5, [x29, #-24]
-    arm64.b register-allocator.main.inner_1.header
+    arm64.b main.inner_1.header
   inner_1.exit:
     arm64.mov x0, #1
     arm64.ldr x1, [x29, #-16]
     arm64.add x2, x1, x0
     arm64.str x2, [x29, #-16]
-    arm64.b register-allocator.main.outer_0.header
+    arm64.b main.outer_0.header
   outer_0.exit:
     arm64.ldr x0, [x29, #-8]
-    arm64.str x0, [x29, #-32]
     arm64.mov x1, #0
     arm64.cmp x0, x1
     arm64.cset x2, lt
@@ -187,15 +182,14 @@ module {
     arm64.cset x4, gt
     arm64.orr x5, x2, x4
     arm64.cmp x5, #0
-    arm64.b.ne register-allocator.main.__range_panic_2
-    arm64.b register-allocator.main.__range_ok_2
+    arm64.b.ne main.__range_panic_2
+    arm64.b main.__range_ok_2
   __range_panic_2:
-    arm64.adrp_add_symdata x0, __panic_msg_24
+    arm64.adrp_add_symdata x0, __panic_msg_0
     arm64.mov x1, x0
     arm64.mov x0, x1
     arm64.bl maxon_panic
   __range_ok_2:
-    arm64.ldr x0, [x29, #-32]
     arm64.epilogue stack_size=80
     arm64.ret
   }

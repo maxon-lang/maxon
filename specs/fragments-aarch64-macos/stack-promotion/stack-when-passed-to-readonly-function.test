@@ -1,0 +1,100 @@
+// Test: stack-when-passed-to-readonly-function
+typealias Integer = int(i64.min to i64.max)
+
+type Point
+  export var x Integer
+  export var y Integer
+end 'Point'
+
+function readX(p Point) returns Integer
+  return p.x
+end 'readX'
+
+function main() returns ExitCode
+  var p = Point{x: 42, y: 0}
+  return readX(p)
+end 'main'
+---
+MmTrace: true
+ExitCode: 42
+Stderr: ```
+mm_raw_alloc #R1 size=64
+  sl_alloc size=64 class=-1
+    os_alloc size=64
+  os_alloc size=4096
+os_alloc size=67108864
+mm_raw_alloc #R2 size=296
+  sl_alloc size=296 class=-1
+    os_alloc size=296
+mm_raw_alloc #R3 size=296
+  sl_alloc size=296 class=-1
+    os_alloc size=296
+mm_raw_alloc #R4 size=296
+  sl_alloc size=296 class=-1
+    os_alloc size=296
+mm_raw_alloc #R5 size=296
+  sl_alloc size=296 class=-1
+    os_alloc size=296
+mm_raw_alloc #R6 size=296
+  sl_alloc size=296 class=-1
+    os_alloc size=296
+mm_raw_alloc #R7 size=296
+  sl_alloc size=296 class=-1
+    os_alloc size=296
+mm_raw_alloc #R8 size=296
+  sl_alloc size=296 class=-1
+    os_alloc size=296
+mm_raw_alloc #R9 size=296
+  sl_alloc size=296 class=-1
+    os_alloc size=296
+sl_init
+  os_alloc size=67108864
+```
+---
+module {
+  func @stack-promotion.readX(p: i64) -> i64 {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.str x0, [x29, #-8]
+    arm64.ldr x0, [x29, #-8]
+    arm64.ldr x1, [x0, #0]
+    arm64.mov x0, x1
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+  func @main() -> u32 {
+  entry:
+    arm64.prologue stack_size=48
+    arm64.mov x0, #42
+    arm64.mov x1, #0
+    arm64.mov x2, #0
+    arm64.str x2, [x29, #-8]
+    arm64.mov x3, #0
+    arm64.str x3, [x29, #-16]
+    arm64.str x0, [x29, #-16]
+    arm64.str x1, [x29, #-8]
+    arm64.add x4, x29, #-16
+    arm64.mov x5, x4
+    arm64.mov x0, x5
+    arm64.bl stack-promotion.readX
+    arm64.mov x6, #0
+    arm64.cmp x0, x6
+    arm64.cset x7, lt
+    arm64.mov x8, #4294967295
+    arm64.cmp x0, x8
+    arm64.cset x9, gt
+    arm64.orr x10, x7, x9
+    arm64.cmp x10, #0
+    arm64.b.ne main.__range_panic_0
+    arm64.b main.__range_ok_0
+  __range_panic_0:
+    arm64.adrp_add_symdata x0, __panic_msg_0
+    arm64.mov x1, x0
+    arm64.mov x0, x1
+    arm64.bl maxon_panic
+  __range_ok_0:
+    arm64.epilogue stack_size=48
+    arm64.ret
+  }
+}
+---
