@@ -38,13 +38,13 @@ var values = items.map((_) gives defaultValue)
 typealias Integer = int(i64.min to i64.max)
 
 function apply(f (Integer) returns Integer, x Integer) returns Integer
-  return f(x)
+	return f(x)
 end 'apply'
 
 function main() returns ExitCode
-  var offset = 7
-  var result = apply(f: (n Integer) gives n + offset, x: 10)
-  return result
+	var offset = 7
+	var result = apply(f: (n Integer) gives n + offset, x: 10)
+	return result
 end 'main'
 ```
 ```exitcode
@@ -57,13 +57,13 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 function apply(f (Integer) returns Integer, x Integer) returns Integer
-  return f(x)
+	return f(x)
 end 'apply'
 
 function main() returns ExitCode
-  var value = 42
-  var result = apply(f: (_ Integer) gives value, x: 99)
-  return result
+	var value = 42
+	var result = apply(f: (_ Integer) gives value, x: 99)
+	return result
 end 'main'
 ```
 ```exitcode
@@ -76,17 +76,17 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 function apply(f (Integer) returns Integer, x Integer) returns Integer
-  return f(x)
+	return f(x)
 end 'apply'
 
 type Level
-  export var rawValue Integer
+	export var rawValue Integer
 end 'Level'
 
 function main() returns ExitCode
-  var level = Level{rawValue: 5}
-  var result = apply(f: (_ Integer) gives level.rawValue, x: 0)
-  return result
+	var level = Level{rawValue: 5}
+	var result = apply(f: (_ Integer) gives level.rawValue, x: 0)
+	return result
 end 'main'
 ```
 ```exitcode
@@ -99,14 +99,14 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 type Level
-  export var rawValue Integer
+	export var rawValue Integer
 end 'Level'
 
 function main() returns ExitCode
-  var level = Level{rawValue: 5}
-  var arr = [1, 2, 3]
-  var result = arr.map((_ Integer) gives level.rawValue)
-  return result.count()
+	var level = Level{rawValue: 5}
+	var arr = [1, 2, 3]
+	var result = arr.map((_ Integer) gives level.rawValue)
+	return result.count()
 end 'main'
 ```
 ```exitcode
@@ -119,14 +119,14 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 function apply(f (Integer) returns Integer, x Integer) returns Integer
-  return f(x)
+	return f(x)
 end 'apply'
 
 function main() returns ExitCode
-  var a = 10
-  var b = 20
-  var result = apply(f: (x Integer) gives x + a + b, x: 5)
-  return result
+	var a = 10
+	var b = 20
+	var result = apply(f: (x Integer) gives x + a + b, x: 5)
+	return result
 end 'main'
 ```
 ```exitcode
@@ -139,12 +139,12 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 function apply(f (Integer) returns Integer, x Integer) returns Integer
-  return f(x)
+	return f(x)
 end 'apply'
 
 function main() returns ExitCode
-  var result = apply(f: (n Integer) gives n * 3, x: 10)
-  return result
+	var result = apply(f: (n Integer) gives n * 3, x: 10)
+	return result
 end 'main'
 ```
 ```exitcode
@@ -157,14 +157,14 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 function apply(f (Integer) returns String, x Integer) returns String
-  return f(x)
+	return f(x)
 end 'apply'
 
 function main() returns ExitCode
-  var prefix = "hello"
-  var result = apply(f: (_ Integer) gives prefix, x: 0)
-  print(result)
-  return 0
+	var prefix = "hello"
+	var result = apply(f: (_ Integer) gives prefix, x: 0)
+	print(result)
+	return 0
 end 'main'
 ```
 ```exitcode

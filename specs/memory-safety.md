@@ -62,16 +62,16 @@ Every object is owned by a region (stack frame, struct, or array). When a region
 typealias Integer = int(i64.min to i64.max)
 
 type Point
-  export var x Integer
-  export var y Integer
+	export var x Integer
+	export var y Integer
 end 'Point'
 
 function main() returns ExitCode
-  var a = Point{x: 1, y: 2}
-  var b = a
-  b.x = 99
-  print("{a.x}")
-  return 0
+	var a = Point{x: 1, y: 2}
+	var b = a
+	b.x = 99
+	print("{a.x}")
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -86,16 +86,16 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 type Point
-  export var x Integer
-  export var y Integer
+	export var x Integer
+	export var y Integer
 end 'Point'
 
 function main() returns ExitCode
-  var a = Point{x: 1, y: 2}
-  var b = a
-  b = Point{x: 99, y: 99}
-  print("{a.x}")
-  return 0
+	var a = Point{x: 1, y: 2}
+	var b = a
+	b = Point{x: 99, y: 99}
+	print("{a.x}")
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -110,21 +110,21 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 enum Color
-  red
-  green
-  blue
+	red
+	green
+	blue
 end 'Color'
 
 type Item
-  export var color Color
-  export var value Integer
+	export var color Color
+	export var value Integer
 end 'Item'
 
 function main() returns ExitCode
-  var a = Item{color: Color.red, value: 42}
-  var b = a
-  b.value = 99
-  return a.value
+	var a = Item{color: Color.red, value: 42}
+	var b = a
+	b.value = 99
+	return a.value
 end 'main'
 ```
 ```exitcode
@@ -136,18 +136,18 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 type Point
-  export var x Integer
-  export var y Integer
+	export var x Integer
+	export var y Integer
 end 'Point'
 
 function main() returns ExitCode
-  var a = Point{x: 10, y: 20}
-  var b = a.clone()
-  b.x = 99
-  if a is not b 'diff'
-    return a.x + a.y
-  end 'diff'
-  return 0
+	var a = Point{x: 10, y: 20}
+	var b = a.clone()
+	b.x = 99
+	if a is not b 'diff'
+		return a.x + a.y
+	end 'diff'
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -157,12 +157,12 @@ end 'main'
 <!-- test: string-clone -->
 ```maxon
 function main() returns ExitCode
-  var a = "hello"
-  var b = a.clone()
-  if a is not b 'diff'
-    return 1
-  end 'diff'
-  return 0
+	var a = "hello"
+	var b = a.clone()
+	if a is not b 'diff'
+		return 1
+	end 'diff'
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -172,12 +172,12 @@ end 'main'
 <!-- test: array-clone -->
 ```maxon
 function main() returns ExitCode
-  var a = [1, 2, 3]
-  var b = a.clone()
-  if a is not b 'diff'
-    return 1
-  end 'diff'
-  return 0
+	var a = [1, 2, 3]
+	var b = a.clone()
+	if a is not b 'diff'
+		return 1
+	end 'diff'
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -189,22 +189,22 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 type Inner
-  export var value Integer
+	export var value Integer
 end 'Inner'
 
 type Outer
-  export var a Inner
-  export var b Integer
+	export var a Inner
+	export var b Integer
 end 'Outer'
 
 function main() returns ExitCode
-  var x = Outer{a: Inner{value: 42}, b: 10}
-  var y = x.clone()
-  y.a.value = 99
-  y.b = 0
-  print("{x.a.value}\n")
-  print("{x.b}")
-  return 0
+	var x = Outer{a: Inner{value: 42}, b: 10}
+	var y = x.clone()
+	y.a.value = 99
+	y.b = 0
+	print("{x.a.value}\n")
+	print("{x.b}")
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -220,20 +220,20 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 type Callback
-  export var fn () returns Integer
+	export var fn () returns Integer
 end 'Callback'
 
 function main() returns ExitCode
-  var a = Callback{fn: main}
-  var b = Callback{fn: main}
-  if a == b 'eq'
-    return 1
-  end 'eq'
-  return 0
+	var a = Callback{fn: main}
+	var b = Callback{fn: main}
+	if a == b 'eq'
+		return 1
+	end 'eq'
+	return 0
 end 'main'
 ```
 ```maxoncstderr
-error E3069: specs/fragments/memory-safety/eq-requires-equatable.test:11:8: '==' requires type 'Callback' to implement 'Equatable'
+error E3069: specs/fragments/memory-safety/eq-requires-equatable.test:11:7: '==' requires type 'Callback' to implement 'Equatable'
 ```
 
 <!-- test: auto-equatable -->
@@ -241,22 +241,22 @@ error E3069: specs/fragments/memory-safety/eq-requires-equatable.test:11:8: '=='
 typealias Integer = int(i64.min to i64.max)
 
 type Point
-  export var x Integer
-  export var y Integer
+	export var x Integer
+	export var y Integer
 end 'Point'
 
 function main() returns ExitCode
-  var a = Point{x: 1, y: 2}
-  var b = Point{x: 1, y: 2}
-  var c = Point{x: 3, y: 4}
-  var result = 0
-  if a == b 'eq1'
-    result = result + 1
-  end 'eq1'
-  if a == c 'eq2'
-    result = result + 10
-  end 'eq2'
-  return result
+	var a = Point{x: 1, y: 2}
+	var b = Point{x: 1, y: 2}
+	var c = Point{x: 3, y: 4}
+	var result = 0
+	if a == b 'eq1'
+		result = result + 1
+	end 'eq1'
+	if a == c 'eq2'
+		result = result + 10
+	end 'eq2'
+	return result
 end 'main'
 ```
 ```exitcode
@@ -268,17 +268,17 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 type Point
-  export var x Integer
-  export var y Integer
+	export var x Integer
+	export var y Integer
 end 'Point'
 
 function main() returns ExitCode
-  var a = Point{x: 1, y: 2}
-  var b = a
-  if a is b 'same'
-    return 1
-  end 'same'
-  return 0
+	var a = Point{x: 1, y: 2}
+	var b = a
+	if a is b 'same'
+		return 1
+	end 'same'
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -290,17 +290,17 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 type Point
-  export var x Integer
-  export var y Integer
+	export var x Integer
+	export var y Integer
 end 'Point'
 
 function main() returns ExitCode
-  var a = Point{x: 1, y: 2}
-  var b = a.clone()
-  if a is not b 'diff'
-    return 1
-  end 'diff'
-  return 0
+	var a = Point{x: 1, y: 2}
+	var b = a.clone()
+	if a is not b 'diff'
+		return 1
+	end 'diff'
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -312,16 +312,16 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 type Resource
-  export var id Integer
+	export var id Integer
 end 'Resource'
 
 function createAndDrop() returns Integer
-  @heap var r = Resource{id: 42}
-  return r.id
+	@heap var r = Resource{id: 42}
+	return r.id
 end 'createAndDrop'
 
 function main() returns ExitCode
-  return createAndDrop()
+	return createAndDrop()
 end 'main'
 ```
 ```exitcode
@@ -333,19 +333,19 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 type Point
-  export var x Integer
-  export var y Integer
+	export var x Integer
+	export var y Integer
 end 'Point'
 
 function makeRef() returns Point
-  var local = Point{x: 1, y: 2}
-  return local
+	var local = Point{x: 1, y: 2}
+	return local
 end 'makeRef'
 
 function main() returns ExitCode
-  var p = makeRef()
-  print("{p.x}")
-  return 0
+	var p = makeRef()
+	print("{p.x}")
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -360,17 +360,17 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 type Point
-  export var x Integer
-  export var y Integer
+	export var x Integer
+	export var y Integer
 end 'Point'
 
 function main() returns ExitCode
-  var result = 0
-  if true 'block'
-    @heap var p = Point{x: 10, y: 20}
-    result = p.x
-  end 'block'
-  return result
+	var result = 0
+	if true 'block'
+		@heap var p = Point{x: 10, y: 20}
+		result = p.x
+	end 'block'
+	return result
 end 'main'
 ```
 ```exitcode
@@ -685,17 +685,17 @@ module {
 typealias Integer = int(i64.min to i64.max)
 
 type Item
-  export var value Integer
+	export var value Integer
 end 'Item'
 
 typealias ItemArray = Array with Item
 
 function main() returns ExitCode
-  var arr = ItemArray{}
-  var item = Item{value: 7}
-  arr.push(item)
-  var got = try arr.get(0) otherwise Item{value: 0}
-  return got.value
+	var arr = ItemArray{}
+	var item = Item{value: 7}
+	arr.push(item)
+	var got = try arr.get(0) otherwise Item{value: 0}
+	return got.value
 end 'main'
 ```
 ```exitcode
@@ -1615,21 +1615,21 @@ module {
 typealias Integer = int(i64.min to i64.max)
 
 type Counter
-  export var n Integer
+	export var n Integer
 end 'Counter'
 
 function main() returns ExitCode
-  var result = 0
-  var i = 0
-  while i < 3 'loop'
-    var c = Counter{n: i}
-    if c.n == 1 'check'
-      result = c.n
-      break
-    end 'check'
-    i = i + 1
-  end 'loop'
-  return result
+	var result = 0
+	var i = 0
+	while i < 3 'loop'
+		var c = Counter{n: i}
+		if c.n == 1 'check'
+			result = c.n
+			break
+		end 'check'
+		i = i + 1
+	end 'loop'
+	return result
 end 'main'
 ```
 ```exitcode
@@ -1959,19 +1959,19 @@ module {
 typealias Integer = int(i64.min to i64.max)
 
 type Wrapper
-  export var val Integer
+	export var val Integer
 end 'Wrapper'
 
 function compute(flag Integer) returns Integer
-  if flag > 0 'check'
-    @heap var w = Wrapper{val: flag}
-    return w.val + 1
-  end 'check'
-  return 0
+	if flag > 0 'check'
+		@heap var w = Wrapper{val: flag}
+		return w.val + 1
+	end 'check'
+	return 0
 end 'compute'
 
 function main() returns ExitCode
-  return compute(flag: 5)
+	return compute(flag: 5)
 end 'main'
 ```
 ```exitcode
@@ -2332,21 +2332,21 @@ that iteration leaks.
 typealias Integer = int(i64.min to i64.max)
 
 type Counter
-  export var n Integer
+	export var n Integer
 end 'Counter'
 
 function main() returns ExitCode
-  var total = 0
-  var i = 0
-  while i < 5 'loop'
-    i = i + 1
-    var c = Counter{n: i}
-    if c.n == 3 'skip'
-      continue
-    end 'skip'
-    total = total + c.n
-  end 'loop'
-  return total
+	var total = 0
+	var i = 0
+	while i < 5 'loop'
+		i = i + 1
+		var c = Counter{n: i}
+		if c.n == 3 'skip'
+			continue
+		end 'skip'
+		total = total + c.n
+	end 'loop'
+	return total
 end 'main'
 ```
 ```exitcode
@@ -2363,29 +2363,29 @@ loop body scope and the outer loop body scope must be cleaned up.
 typealias Integer = int(i64.min to i64.max)
 
 type Pair
-  export var a Integer
-  export var b Integer
+	export var a Integer
+	export var b Integer
 end 'Pair'
 
 function main() returns ExitCode
-  var result = 0
-  var i = 0
-  while i < 3 'outer'
-    var p = Pair{a: i, b: i * 10}
-    var j = 0
-    while j < 3 'inner'
-      var q = Pair{a: j, b: j * 10}
-      if p.a == 1 'check'
-        if q.a == 2 'found'
-          result = p.b + q.b
-          break 'outer'
-        end 'found'
-      end 'check'
-      j = j + 1
-    end 'inner'
-    i = i + 1
-  end 'outer'
-  return result
+	var result = 0
+	var i = 0
+	while i < 3 'outer'
+		var p = Pair{a: i, b: i * 10}
+		var j = 0
+		while j < 3 'inner'
+			var q = Pair{a: j, b: j * 10}
+			if p.a == 1 'check'
+				if q.a == 2 'found'
+					result = p.b + q.b
+					break 'outer'
+				end 'found'
+			end 'check'
+			j = j + 1
+		end 'inner'
+		i = i + 1
+	end 'outer'
+	return result
 end 'main'
 ```
 ```exitcode
@@ -2402,20 +2402,20 @@ for-in loop with struct allocations must clean up the loop body scope.
 typealias Integer = int(i64.min to i64.max)
 
 type Item
-  export var val Integer
+	export var val Integer
 end 'Item'
 
 function main() returns ExitCode
-  var items = [10, 20, 30, 40, 50]
-  var result = 0
-  for item in items 'search'
-    var wrapped = Item{val: item}
-    if wrapped.val == 30 'found'
-      result = wrapped.val
-      break
-    end 'found'
-  end 'search'
-  return result
+	var items = [10, 20, 30, 40, 50]
+	var result = 0
+	for item in items 'search'
+		var wrapped = Item{val: item}
+		if wrapped.val == 30 'found'
+			result = wrapped.val
+			break
+		end 'found'
+	end 'search'
+	return result
 end 'main'
 ```
 ```exitcode
@@ -2432,28 +2432,28 @@ be exited so that any allocations made before the try call are freed.
 typealias Integer = int(i64.min to i64.max)
 
 type Resource
-  export var id Integer
+	export var id Integer
 end 'Resource'
 
 enum ResourceError
-  case notFound
+	case notFound
 end 'ResourceError'
 
 function loadResource() returns Resource throws ResourceError
-  throw ResourceError.notFound
+	throw ResourceError.notFound
 end 'loadResource'
 
 function process() returns Integer throws ResourceError
-  @heap var marker = Resource{id: 42}
-  var res = try loadResource()
-  return res.id + marker.id
+	@heap var marker = Resource{id: 42}
+	var res = try loadResource()
+	return res.id + marker.id
 end 'process'
 
 function main() returns ExitCode
-  var result = try process() otherwise 'err'
-    return 99
-  end 'err'
-  return result
+	var result = try process() otherwise 'err'
+		return 99
+	end 'err'
+	return result
 end 'main'
 ```
 ```exitcode
@@ -2470,32 +2470,32 @@ all intermediate scopes plus the function scope must be cleaned up.
 typealias Integer = int(i64.min to i64.max)
 
 type Wrapper
-  export var val Integer
+	export var val Integer
 end 'Wrapper'
 
 enum LookupError
-  case missing
+	case missing
 end 'LookupError'
 
 function failingLookup() returns Integer throws LookupError
-  throw LookupError.missing
+	throw LookupError.missing
 end 'failingLookup'
 
 function compute(flag Integer) returns Integer throws LookupError
-  var w = Wrapper{val: flag}
-  if w.val > 0 'positive'
-    var inner = Wrapper{val: w.val * 2}
-    var result = try failingLookup()
-    return result + inner.val
-  end 'positive'
-  return 0
+	var w = Wrapper{val: flag}
+	if w.val > 0 'positive'
+		var inner = Wrapper{val: w.val * 2}
+		var result = try failingLookup()
+		return result + inner.val
+	end 'positive'
+	return 0
 end 'compute'
 
 function main() returns ExitCode
-  var result = try compute(flag: 5) otherwise 'err'
-    return 77
-  end 'err'
-  return result
+	var result = try compute(flag: 5) otherwise 'err'
+		return 77
+	end 'err'
+	return result
 end 'main'
 ```
 ```exitcode
@@ -2513,23 +2513,23 @@ clone these ops correctly. Missing handlers would crash the compiler.
 typealias Integer = int(i64.min to i64.max)
 
 type Wrapper
-  export var value Integer
+	export var value Integer
 end 'Wrapper'
 
 typealias WrapperArray = Array with Wrapper
 
 function firstOrDefault(arr WrapperArray) returns Wrapper
-  var fallback = Wrapper{value: 0}
-  var result = try arr.get(0) otherwise fallback
-  return result
+	var fallback = Wrapper{value: 0}
+	var result = try arr.get(0) otherwise fallback
+	return result
 end 'firstOrDefault'
 
 function main() returns ExitCode
-  var arr = WrapperArray{}
-  var w = Wrapper{value: 42}
-  arr.push(w)
-  var got = firstOrDefault(arr: arr)
-  return got.value
+	var arr = WrapperArray{}
+	var w = Wrapper{value: 42}
+	arr.push(w)
+	var got = firstOrDefault(arr: arr)
+	return got.value
 end 'main'
 ```
 ```exitcode
@@ -2546,23 +2546,23 @@ monomorphization passes when it appears in generic or cloned functions.
 typealias Integer = int(i64.min to i64.max)
 
 type Box
-  export var value Integer
+	export var value Integer
 end 'Box'
 
 function isSame(a Box, b Box) returns Integer
-  if a is b 'same'
-    return 1
-  end 'same'
-  return 0
+	if a is b 'same'
+		return 1
+	end 'same'
+	return 0
 end 'isSame'
 
 function main() returns ExitCode
-  var x = Box{value: 10}
-  var y = x
-  var z = Box{value: 10}
-  var same = isSame(a: x, b: y)
-  var diff = isSame(a: x, b: z)
-  return same + diff
+	var x = Box{value: 10}
+	var y = x
+	var z = Box{value: 10}
+	var same = isSame(a: x, b: y)
+	var diff = isSame(a: x, b: z)
+	return same + diff
 end 'main'
 ```
 ```exitcode

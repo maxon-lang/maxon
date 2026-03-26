@@ -33,7 +33,7 @@ error E3002: Function 'main' must return ExitCode
 typealias Integer = int(i64.min to i64.max)
 
 function notmain() returns Integer
-  return 42
+	return 42
 end 'notmain'
 ```
 ```maxoncstderr
@@ -43,7 +43,7 @@ error E3001: No 'main' function found
 <!-- test: main-no-return-type -->
 ```maxon
 function main()
-  return
+	return
 end 'main'
 ```
 ```maxoncstderr
@@ -53,7 +53,7 @@ error E3002: Function 'main' must return ExitCode
 <!-- test: valid-main -->
 ```maxon
 function main() returns ExitCode
-  return 42
+	return 42
 end 'main'
 ```
 ```exitcode
@@ -72,11 +72,11 @@ mid-to-x86: func.return %0 -> x86.mov rax, [rbp-8], x86.epilogue
 typealias Integer = int(i64.min to i64.max)
 
 function getValue() returns Integer
-  return 42
+	return 42
 end 'getValue'
 
 function main() returns ExitCode
-  return getValue()
+	return getValue()
 end 'main'
 ```
 ```exitcode
@@ -248,12 +248,12 @@ module {
 <!-- test: float-var-if-else -->
 ```maxon
 function main() returns ExitCode
-  var x = 3.14
-  if x == 3.14 'check'
-    return 1
-  end 'check' else 'other'
-    return 0
-  end 'other'
+	var x = 3.14
+	if x == 3.14 'check'
+		return 1
+	end 'check' else 'other'
+		return 0
+	end 'other'
 end 'main'
 ```
 ```exitcode

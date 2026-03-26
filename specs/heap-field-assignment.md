@@ -25,25 +25,25 @@ Assign to a struct field on self and verify the new value is stored.
 typealias Integer = int(i64.min to i64.max)
 
 type Inner
-  export var value Integer
+	export var value Integer
 end 'Inner'
 
 type Container
-  export var value Integer
-  export var child Inner
+	export var value Integer
+	export var child Inner
 
-  export function replaceChild(newChild Inner)
-    child = newChild
-  end 'replaceChild'
+	export function replaceChild(newChild Inner)
+		child = newChild
+	end 'replaceChild'
 end 'Container'
 
 function main() returns ExitCode
-  var c = Container{value: 1, child: Inner{value: 10}}
-  c.replaceChild(Inner{value: 20})
-  if c.child.value == 20 'check'
-    return 0
-  end 'check'
-  return 1
+	var c = Container{value: 1, child: Inner{value: 10}}
+	c.replaceChild(Inner{value: 20})
+	if c.child.value == 20 'check'
+		return 0
+	end 'check'
+	return 1
 end 'main'
 ```
 ```exitcode
@@ -56,21 +56,21 @@ Assign to a field on a variable via qualified access.
 typealias Integer = int(i64.min to i64.max)
 
 type Right
-  export var left Integer
+	export var left Integer
 end 'Right'
 
 type Pair
-  export var left Integer
-  export var right Right
+	export var left Integer
+	export var right Right
 end 'Pair'
 
 function main() returns ExitCode
-  var p = Pair{left: 5, right: Right{left: 10}}
-  p.right = Right{left: 20}
-  if p.right.left == 20 'check'
-    return 0
-  end 'check'
-  return 1
+	var p = Pair{left: 5, right: Right{left: 10}}
+	p.right = Right{left: 20}
+	if p.right.left == 20 'check'
+		return 0
+	end 'check'
+	return 1
 end 'main'
 ```
 ```exitcode
@@ -81,22 +81,22 @@ end 'main'
 Direct assignment to a scalar (non-heap-pointer) field is allowed.
 ```maxon
 type Counter
-  var count Count
+	var count Count
 
-  export function increment()
-    count = count + 1
-  end 'increment'
+	export function increment()
+		count = count + 1
+	end 'increment'
 
-  export function value() returns Count
-    return count
-  end 'value'
+	export function value() returns Count
+		return count
+	end 'value'
 end 'Counter'
 
 function main() returns ExitCode
-  var c = Counter{count: 0}
-  c.increment()
-  c.increment()
-  return c.value()
+	var c = Counter{count: 0}
+	c.increment()
+	c.increment()
+	return c.value()
 end 'main'
 ```
 ```exitcode
@@ -110,31 +110,31 @@ Overwrite a self field in a method and verify all allocations are freed properly
 typealias Integer = int(i64.min to i64.max)
 
 type Inner
-  export var value Integer
+	export var value Integer
 end 'Inner'
 
 type Container
-  export var value Integer
-  export var child Inner
+	export var value Integer
+	export var child Inner
 
-  export function replaceChild(newChild Inner)
-    child = newChild
-  end 'replaceChild'
+	export function replaceChild(newChild Inner)
+		child = newChild
+	end 'replaceChild'
 
-  export function childValue() returns Integer
-    return child.value
-  end 'childValue'
+	export function childValue() returns Integer
+		return child.value
+	end 'childValue'
 end 'Container'
 
 function testAssign()
-  var c = Container{value: 1, child: Inner{value: 10}}
-  c.replaceChild(Inner{value: 20})
-  print("{c.childValue()}\n")
+	var c = Container{value: 1, child: Inner{value: 10}}
+	c.replaceChild(Inner{value: 20})
+	print("{c.childValue()}\n")
 end 'testAssign'
 
 function main() returns ExitCode
-  testAssign()
-  return 0
+	testAssign()
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -199,23 +199,23 @@ Overwrite a qualified field and verify all allocations are freed properly.
 typealias Integer = int(i64.min to i64.max)
 
 type Right
-  export var left Integer
+	export var left Integer
 end 'Right'
 
 type Pair
-  export var left Integer
-  export var right Right
+	export var left Integer
+	export var right Right
 end 'Pair'
 
 function testAssign()
-  var p = Pair{left: 5, right: Right{left: 10}}
-  p.right = Right{left: 20}
-  print("{p.right.left}\n")
+	var p = Pair{left: 5, right: Right{left: 10}}
+	p.right = Right{left: 20}
+	print("{p.right.left}\n")
 end 'testAssign'
 
 function main() returns ExitCode
-  testAssign()
-  return 0
+	testAssign()
+	return 0
 end 'main'
 ```
 ```exitcode

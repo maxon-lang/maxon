@@ -1,37 +1,37 @@
 // Test: if-try-binding-struct-multiple-managed-fields
 union MyError implements Error
-  failed
+	failed
 end 'MyError'
 
 typealias Int = int(i64.min to i64.max)
 typealias IntArray = Array with Int
 
 type MultiManaged
-  export var numbers IntArray
-  export var text String
-  export var tag String
+	export var numbers IntArray
+	export var text String
+	export var tag String
 end 'MultiManaged'
 
 function mayFail(succeed bool) returns MultiManaged throws MyError
-  if not succeed 'check'
-    throw MyError.failed
-  end 'check'
-  var nums = IntArray{}
-  nums.push(10)
-  nums.push(20)
-  return MultiManaged{numbers: nums, text: "hello", tag: "world"}
+	if not succeed 'check'
+		throw MyError.failed
+	end 'check'
+	var nums = IntArray{}
+	nums.push(10)
+	nums.push(20)
+	return MultiManaged{numbers: nums, text: "hello", tag: "world"}
 end 'mayFail'
 
 function main() returns ExitCode
-  var result = 0
-  var i = 0
-  while i < 3 'loop'
-    if let item = try mayFail(true) 'check'
-      result = result + (try item.numbers.get(0) otherwise 0)
-    end 'check'
-    i = i + 1
-  end 'loop'
-  return result
+	var result = 0
+	var i = 0
+	while i < 3 'loop'
+		if let item = try mayFail(true) 'check'
+			result = result + (try item.numbers.get(0) otherwise 0)
+		end 'check'
+		i = i + 1
+	end 'loop'
+	return result
 end 'main'
 ---
 ExitCode: 30

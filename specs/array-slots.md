@@ -21,17 +21,17 @@ Create an array, push one item, resize to 3, then `try arr.get(1) otherwise` sho
 typealias Integer = int(i64.min to i64.max)
 
 type Slot
-  export var value Integer
+	export var value Integer
 end 'Slot'
 
 typealias SlotArray = Array with Slot
 
 function main() returns ExitCode
-  var arr = SlotArray{}
-  arr.push(Slot{value: 10})
-  arr.resize(3)
-  let result = try arr.get(1) otherwise Slot{value: -1}
-  return result.value + 1
+	var arr = SlotArray{}
+	arr.push(Slot{value: 10})
+	arr.resize(3)
+	let result = try arr.get(1) otherwise Slot{value: -1}
+	return result.value + 1
 end 'main'
 ```
 ```exitcode
@@ -45,16 +45,16 @@ Getting an element from a slot that was populated via push should work without e
 typealias Integer = int(i64.min to i64.max)
 
 type Slot
-  export var value Integer
+	export var value Integer
 end 'Slot'
 
 typealias SlotArray = Array with Slot
 
 function main() returns ExitCode
-  var arr = SlotArray{}
-  arr.push(Slot{value: 42})
-  let result = try arr.get(0) otherwise Slot{value: 0}
-  return result.value
+	var arr = SlotArray{}
+	arr.push(Slot{value: 42})
+	let result = try arr.get(0) otherwise Slot{value: 0}
+	return result.value
 end 'main'
 ```
 ```exitcode
@@ -69,13 +69,13 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
 function main() returns ExitCode
-  var arr = IntArray{}
-  arr.push(0)
-  arr.push(5)
-  arr.resize(4)
-  let val = try arr.get(0) otherwise -1
-  let val2 = try arr.get(2) otherwise -1
-  return val + val2
+	var arr = IntArray{}
+	arr.push(0)
+	arr.push(5)
+	arr.resize(4)
+	let val = try arr.get(0) otherwise -1
+	let val2 = try arr.get(2) otherwise -1
+	return val + val2
 end 'main'
 ```
 ```exitcode
@@ -88,16 +88,16 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 type Slot
-  export var value Integer
+	export var value Integer
 end 'Slot'
 
 typealias SlotArray = Array with Slot
 
 function main() returns ExitCode
-  var arr = SlotArray{}
-  arr.resize(3)
-  let result = try arr.get(0) otherwise Slot{value: 99}
-  return result.value
+	var arr = SlotArray{}
+	arr.resize(3)
+	let result = try arr.get(0) otherwise Slot{value: 99}
+	return result.value
 end 'main'
 ```
 ```exitcode
@@ -111,18 +111,18 @@ Resize to 3 without pushing any elements. `first()` should use the otherwise pat
 typealias Integer = int(i64.min to i64.max)
 
 type Slot
-  export var value Integer
+	export var value Integer
 end 'Slot'
 
 typealias SlotArray = Array with Slot
 
 function main() returns ExitCode
-  var arr = SlotArray{}
-  arr.push(Slot{value: 1})
-  arr.resize(3)
-  try arr.remove(0) otherwise ignore
-  let result = try arr.first() otherwise Slot{value: 77}
-  return result.value
+	var arr = SlotArray{}
+	arr.push(Slot{value: 1})
+	arr.resize(3)
+	try arr.remove(0) otherwise ignore
+	let result = try arr.first() otherwise Slot{value: 77}
+	return result.value
 end 'main'
 ```
 ```exitcode
@@ -136,17 +136,17 @@ Resize to 3, only push 1 item. `last()` should use the otherwise path since slot
 typealias Integer = int(i64.min to i64.max)
 
 type Slot
-  export var value Integer
+	export var value Integer
 end 'Slot'
 
 typealias SlotArray = Array with Slot
 
 function main() returns ExitCode
-  var arr = SlotArray{}
-  arr.push(Slot{value: 1})
-  arr.resize(3)
-  let result = try arr.last() otherwise Slot{value: 55}
-  return result.value
+	var arr = SlotArray{}
+	arr.push(Slot{value: 1})
+	arr.resize(3)
+	let result = try arr.last() otherwise Slot{value: 55}
+	return result.value
 end 'main'
 ```
 ```exitcode
@@ -159,21 +159,21 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 type Slot
-  export var value Integer
+	export var value Integer
 end 'Slot'
 
 typealias SlotArray = Array with Slot
 
 function main() returns ExitCode
-  var arr = SlotArray{}
-  arr.resize(2)
-  try arr.get(0) otherwise (e) 'handler'
-    match e 'check'
-      emptySlot then return 42
-      indexOutOfBounds then return 99
-    end 'check'
-  end 'handler'
-  return 0
+	var arr = SlotArray{}
+	arr.resize(2)
+	try arr.get(0) otherwise (e) 'handler'
+		match e 'check'
+			emptySlot then return 42
+			indexOutOfBounds then return 99
+		end 'check'
+	end 'handler'
+	return 0
 end 'main'
 ```
 ```exitcode

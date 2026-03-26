@@ -19,11 +19,11 @@ Integer literals in the range 0-255 can be compared directly with byte values:
 typealias Pixel = byte(0 to u8.max)
 
 function main() returns ExitCode
-  var b = 100 as Pixel
-  if b == 50 'check'
-    return 1
-  end 'check'
-  return 0
+	var b = 100 as Pixel
+	if b == 50 'check'
+		return 1
+	end 'check'
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -36,11 +36,11 @@ Byte variables can be compared directly with int literals in the 0-255 range:
 typealias Pixel = byte(0 to u8.max)
 
 function main() returns ExitCode
-  var b = 200 as Pixel
-  if b == 200 'check'
-    return 1
-  end 'check'
-  return 0
+	var b = 200 as Pixel
+	if b == 200 'check'
+		return 1
+	end 'check'
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -65,12 +65,12 @@ To compare, cast explicitly:
 typealias Decimal = float(f64.min to f64.max)
 
 function main() returns ExitCode
-  var x = 5
-  var y = 5.0
-  if (x as Decimal) == y 'check'
-    return 1
-  end 'check'
-  return 0
+	var x = 5
+	var y = 5.0
+	if (x as Decimal) == y 'check'
+		return 1
+	end 'check'
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -83,8 +83,8 @@ Math intrinsics like `sin`, `cos`, `sqrt`, etc. accept both int and float argume
 
 ```maxon
 function main() returns ExitCode
-  var x = sqrt(16.0)
-  return trunc(x)
+	var x = sqrt(16.0)
+	return trunc(x)
 end 'main'
 ```
 ```exitcode
@@ -99,11 +99,11 @@ end 'main'
 typealias Byte = byte(0 to u8.max)
 
 function main() returns ExitCode
-  var b = 42 as Byte
-  if b == 42 'check'
-    return 1
-  end 'check'
-  return 0
+	var b = 42 as Byte
+	if b == 42 'check'
+		return 1
+	end 'check'
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -116,73 +116,73 @@ end 'main'
 typealias Byte = byte(0 to u8.max)
 
 function main() returns ExitCode
-  var b = 100 as Byte
-  if b == 300 'check'
-    return 1
-  end 'check'
-  return 0
+	var b = 100 as Byte
+	if b == 300 'check'
+		return 1
+	end 'check'
+	return 0
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/fragments/contextual-literal-typing/int-literal-vs-byte-out-of-range.test:7:8: type mismatch: 'cannot compare byte with int'
+error E3005: specs/fragments/contextual-literal-typing/int-literal-vs-byte-out-of-range.test:7:7: type mismatch: 'cannot compare byte with int'
 ```
 
 <!-- test: int-vs-float-error -->
 ```maxon
 function main() returns ExitCode
-  var x = 5
-  var y = 5.0
-  if x == y 'check'
-    return 1
-  end 'check'
-  return 0
+	var x = 5
+	var y = 5.0
+	if x == y 'check'
+		return 1
+	end 'check'
+	return 0
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/fragments/contextual-literal-typing/int-vs-float-error.test:5:8: type mismatch: 'cannot compare int with float'
+error E3005: specs/fragments/contextual-literal-typing/int-vs-float-error.test:5:7: type mismatch: 'cannot compare int with float'
 ```
 
 <!-- test: float-vs-int-error -->
 ```maxon
 function main() returns ExitCode
-  var x = 5.0
-  var y = 5
-  if x == y 'check'
-    return 1
-  end 'check'
-  return 0
+	var x = 5.0
+	var y = 5
+	if x == y 'check'
+		return 1
+	end 'check'
+	return 0
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/fragments/contextual-literal-typing/float-vs-int-error.test:5:8: type mismatch: 'cannot compare float with int'
+error E3005: specs/fragments/contextual-literal-typing/float-vs-int-error.test:5:7: type mismatch: 'cannot compare float with int'
 ```
 
 <!-- test: int-literal-vs-float-error -->
 ```maxon
 function main() returns ExitCode
-  var x = 5.0
-  if x == 5 'check'
-    return 1
-  end 'check'
-  return 0
+	var x = 5.0
+	if x == 5 'check'
+		return 1
+	end 'check'
+	return 0
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/fragments/contextual-literal-typing/int-literal-vs-float-error.test:4:8: type mismatch: 'cannot compare float with int'
+error E3005: specs/fragments/contextual-literal-typing/int-literal-vs-float-error.test:4:7: type mismatch: 'cannot compare float with int'
 ```
 
 <!-- test: float-literal-vs-int-error -->
 ```maxon
 function main() returns ExitCode
-  var x = 5
-  if x == 5.0 'check'
-    return 1
-  end 'check'
-  return 0
+	var x = 5
+	if x == 5.0 'check'
+		return 1
+	end 'check'
+	return 0
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/fragments/contextual-literal-typing/float-literal-vs-int-error.test:4:8: type mismatch: 'cannot compare int with float'
+error E3005: specs/fragments/contextual-literal-typing/float-literal-vs-int-error.test:4:7: type mismatch: 'cannot compare int with float'
 ```
 
 <!-- test: explicit-cast-int-to-float -->
@@ -191,12 +191,12 @@ error E3005: specs/fragments/contextual-literal-typing/float-literal-vs-int-erro
 typealias Float = float(f64.min to f64.max)
 
 function main() returns ExitCode
-  var x = 5
-  var y = 5.0
-  if (x as Float) == y 'check'
-    return 1
-  end 'check'
-  return 0
+	var x = 5
+	var y = 5.0
+	if (x as Float) == y 'check'
+		return 1
+	end 'check'
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -206,12 +206,12 @@ end 'main'
 <!-- test: explicit-cast-float-to-int -->
 ```maxon
 function main() returns ExitCode
-  var x = 5
-  var y = 5.0
-  if x == trunc(y) 'check'
-    return 1
-  end 'check'
-  return 0
+	var x = 5
+	var y = 5.0
+	if x == trunc(y) 'check'
+		return 1
+	end 'check'
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -221,9 +221,9 @@ end 'main'
 <!-- test: math-intrinsic-with-int -->
 ```maxon
 function main() returns ExitCode
-  var x = 16
-  var result = sqrt(x)
-  return trunc(result)
+	var x = 16
+	var result = sqrt(x)
+	return trunc(result)
 end 'main'
 ```
 ```exitcode
@@ -233,8 +233,8 @@ end 'main'
 <!-- test: math-intrinsic-with-float-literal -->
 ```maxon
 function main() returns ExitCode
-  var x = sqrt(16.0)
-  return trunc(x)
+	var x = sqrt(16.0)
+	return trunc(x)
 end 'main'
 ```
 ```exitcode
@@ -247,12 +247,12 @@ end 'main'
 typealias Byte = byte(0 to u8.max)
 
 function main() returns ExitCode
-  var a = 50 as Byte
-  var b = 50 as Byte
-  if a == b 'check'
-    return 1
-  end 'check'
-  return 0
+	var a = 50 as Byte
+	var b = 50 as Byte
+	if a == b 'check'
+		return 1
+	end 'check'
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -262,12 +262,12 @@ end 'main'
 <!-- test: int-vs-int -->
 ```maxon
 function main() returns ExitCode
-  var a = 1000
-  var b = 1000
-  if a == b 'check'
-    return 1
-  end 'check'
-  return 0
+	var a = 1000
+	var b = 1000
+	if a == b 'check'
+		return 1
+	end 'check'
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -277,12 +277,12 @@ end 'main'
 <!-- test: float-vs-float -->
 ```maxon
 function main() returns ExitCode
-  var a = 3.14
-  var b = 3.14
-  if a == b 'check'
-    return 1
-  end 'check'
-  return 0
+	var a = 3.14
+	var b = 3.14
+	if a == b 'check'
+		return 1
+	end 'check'
+	return 0
 end 'main'
 ```
 ```exitcode

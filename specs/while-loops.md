@@ -14,7 +14,7 @@ Execute a block of code repeatedly while a condition is true.
 
 ```maxon
 while <condition> 'identifier'
-  <statements>
+	<statements>
 end 'identifier'
 ```
 **Parameters:**
@@ -27,8 +27,8 @@ end 'identifier'
 var x = 5
 var i = 3
 while i > 0 'loop'
-  x = x + 2
-  i = i - 1
+	x = x + 2
+	i = i - 1
 end 'loop'
 // x is now 11
 ```
@@ -63,14 +63,14 @@ end 'main'
 <!-- test: while-loops.break -->
 ```maxon
 function main() returns ExitCode
-  var x = 5
-  while true 'loop'
-    x = x + 2
-    if x == 11 'check'
-      break
-    end 'check'
-  end 'loop'
-  return x
+	var x = 5
+	while true 'loop'
+		x = x + 2
+		if x == 11 'check'
+			break
+		end 'check'
+	end 'loop'
+	return x
 end 'main'
 ```
 ```exitcode
@@ -80,11 +80,11 @@ end 'main'
 <!-- test: while-loops.zero-iterations -->
 ```maxon
 function main() returns ExitCode
-  var x = 10
-  while x < 5 'loop'
-    x = x + 1
-  end 'loop'
-  return x
+	var x = 10
+	while x < 5 'loop'
+		x = x + 1
+	end 'loop'
+	return x
 end 'main'
 ```
 ```exitcode
@@ -94,19 +94,19 @@ end 'main'
 <!-- test: nested-control -->
 ```maxon
 function main() returns ExitCode
-  var result = 0
-  var i = 0
-  while i < 3 'outer'
-    var j = 0
-    while j < 3 'inner'
-      if (i + j) mod 2 == 0 'even'
-        result = result + 1
-      end 'even'
-      j = j + 1
-    end 'inner'
-    i = i + 1
-  end 'outer'
-  return result
+	var result = 0
+	var i = 0
+	while i < 3 'outer'
+		var j = 0
+		while j < 3 'inner'
+			if (i + j) mod 2 == 0 'even'
+				result = result + 1
+			end 'even'
+			j = j + 1
+		end 'inner'
+		i = i + 1
+	end 'outer'
+	return result
 end 'main'
 ```
 ```exitcode
@@ -116,16 +116,16 @@ end 'main'
 <!-- test: while-loops.continue -->
 ```maxon
 function main() returns ExitCode
-  var sum = 0
-  var i = 0
-  while i < 5 'loop'
-    i = i + 1
-    if i == 3 'skip'
-      continue
-    end 'skip'
-    sum = sum + i
-  end 'loop'
-  return sum
+	var sum = 0
+	var i = 0
+	while i < 5 'loop'
+		i = i + 1
+		if i == 3 'skip'
+			continue
+		end 'skip'
+		sum = sum + i
+	end 'loop'
+	return sum
 end 'main'
 ```
 ```exitcode

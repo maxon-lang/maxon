@@ -61,8 +61,8 @@ end 'swap'
 <!-- test: basic-tuple -->
 ```maxon
 function main() returns ExitCode
-  var t = (10, 32)
-  return t.0 + t.1
+	var t = (10, 32)
+	return t.0 + t.1
 end 'main'
 ```
 ```exitcode
@@ -72,8 +72,8 @@ end 'main'
 <!-- test: mixed-type-tuple -->
 ```maxon
 function main() returns ExitCode
-  var t = (40, 2.5)
-  return t.0 + trunc(t.1)
+	var t = (40, 2.5)
+	return t.0 + trunc(t.1)
 end 'main'
 ```
 ```exitcode
@@ -86,12 +86,12 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 function sum(t (Integer, Integer)) returns Integer
-  return t.0 + t.1
+	return t.0 + t.1
 end 'sum'
 
 function main() returns ExitCode
-  var t = (10, 32)
-  return sum(t)
+	var t = (10, 32)
+	return sum(t)
 end 'main'
 ```
 ```exitcode
@@ -104,12 +104,12 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 function makePair(a Integer, b Integer) returns (Integer, Integer)
-  return (a, b)
+	return (a, b)
 end 'makePair'
 
 function main() returns ExitCode
-  var t = makePair(10, b: 32)
-  return t.0 + t.1
+	var t = makePair(10, b: 32)
+	return t.0 + t.1
 end 'main'
 ```
 ```exitcode
@@ -122,12 +122,12 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 function makePair(a Integer, b Integer) returns (Integer, Integer)
-  return (a, b)
+	return (a, b)
 end 'makePair'
 
 function main() returns ExitCode
-  var (x, y) = makePair(10, b: 32)
-  return x + y
+	var (x, y) = makePair(10, b: 32)
+	return x + y
 end 'main'
 ```
 ```exitcode
@@ -137,8 +137,8 @@ end 'main'
 <!-- test: three-element-tuple -->
 ```maxon
 function main() returns ExitCode
-  var t = (1, 2, 39)
-  return t.0 + t.1 + t.2
+	var t = (1, 2, 39)
+	return t.0 + t.1 + t.2
 end 'main'
 ```
 ```exitcode
@@ -148,10 +148,10 @@ end 'main'
 <!-- test: tuple-field-write -->
 ```maxon
 function main() returns ExitCode
-  var t = (0, 0)
-  t.0 = 20
-  t.1 = 22
-  return t.0 + t.1
+	var t = (0, 0)
+	t.0 = 20
+	t.1 = 22
+	return t.0 + t.1
 end 'main'
 ```
 ```exitcode
@@ -161,8 +161,8 @@ end 'main'
 <!-- test: tuple-with-string -->
 ```maxon
 function main() returns ExitCode
-  var t = (42, "hello")
-  return t.0
+	var t = (42, "hello")
+	return t.0
 end 'main'
 ```
 ```exitcode
@@ -172,8 +172,8 @@ end 'main'
 <!-- test: let-destructuring -->
 ```maxon
 function main() returns ExitCode
-  let (x, y) = (10, 32)
-  return x + y
+	let (x, y) = (10, 32)
+	return x + y
 end 'main'
 ```
 ```exitcode
@@ -183,12 +183,12 @@ end 'main'
 <!-- test: for-destructuring-map -->
 ```maxon
 function main() returns ExitCode
-  var m = ["a": 10, "b": 32]
-  var sum = 0
-  for (_, value) in m 'loop'
-    sum = sum + value
-  end 'loop'
-  return sum
+	var m = ["a": 10, "b": 32]
+	var sum = 0
+	for (_, value) in m 'loop'
+		sum = sum + value
+	end 'loop'
+	return sum
 end 'main'
 ```
 ```exitcode

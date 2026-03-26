@@ -20,11 +20,11 @@ typealias Integer = int(i64.min to i64.max)
 typealias Byte = int(0 to u8.max)
 
 function dangerous(value Integer) returns Byte
-  return Byte{value}
+	return Byte{value}
 end
 
 function main() returns ExitCode
-  return dangerous(Integer{300})
+	return dangerous(Integer{300})
 end
 ```
 ```exitcode
@@ -46,19 +46,19 @@ typealias Integer = int(i64.min to i64.max)
 typealias SmallInt = int(0 to 100)
 
 function validate(n Integer) returns SmallInt
-  return SmallInt{n}
+	return SmallInt{n}
 end
 
 function process(n Integer) returns SmallInt
-  return validate(n)
+	return validate(n)
 end
 
 function caller(n Integer) returns SmallInt
-  return process(n)
+	return process(n)
 end
 
 function main() returns ExitCode
-  return caller(Integer{999})
+	return caller(Integer{999})
 end
 ```
 ```exitcode
@@ -82,12 +82,12 @@ typealias Integer = int(i64.min to i64.max)
 typealias Bounded = int(10 to 20)
 
 function getVal() returns Integer
-  return Integer{5}
+	return Integer{5}
 end
 
 function main() returns ExitCode
-  var b = Bounded{getVal()}
-  return b as ExitCode
+	var b = Bounded{getVal()}
+	return b as ExitCode
 end
 ```
 ```exitcode

@@ -1,22 +1,22 @@
 // Logging system for the compiler.
 
 export enum LogLevel
-  NONE
-  ERROR
-  INFO
-  DEBUG
-  TRACE
+	NONE
+	ERROR
+	INFO
+	DEBUG
+	TRACE
 end 'LogLevel'
 
 export enum LogCategory
-  compiler = "CMP"
-  lexer = "LEX"
-  parser = "PAR"
-  semantic = "SEM"
-  mlir = "MLR"
-  codegen = "GEN"
-  binary = "BIN"
-  testing = "TST"
+	compiler = "CMP"
+	lexer = "LEX"
+	parser = "PAR"
+	semantic = "SEM"
+	mlir = "MLR"
+	codegen = "GEN"
+	binary = "BIN"
+	testing = "TST"
 end 'LogCategory'
 
 var globalLogLevel = 2
@@ -24,17 +24,17 @@ var globalLogLevel = 2
 typealias CaptureMessageArray = Array with String
 
 function joinLines(lines CaptureMessageArray) returns String
-  var result = ""
-  var first = true
-  for line in lines 'join'
-    if first 'isFirst'
-      result = line
-      first = false
-    end 'isFirst' else 'notFirst'
-      result = "{result}\n{line}"
-    end 'notFirst'
-  end 'join'
-  return result
+	var result = ""
+	var first = true
+	for line in lines 'join'
+		if first 'isFirst'
+			result = line
+			first = false
+		end 'isFirst' else 'notFirst'
+			result = "{result}\n{line}"
+		end 'notFirst'
+	end 'join'
+	return result
 end 'joinLines'
 
 // When true, error messages are appended to capturedErrors instead of only going to stderr.
@@ -42,20 +42,20 @@ var capturingErrors = false
 var capturedErrors = CaptureMessageArray{}
 
 export function startCapturingErrors()
-  capturingErrors = true
-  capturedErrors = CaptureMessageArray{}
+	capturingErrors = true
+	capturedErrors = CaptureMessageArray{}
 end 'startCapturingErrors'
 
 export function stopCapturingErrors() returns String
-  capturingErrors = false
-  let result = joinLines(capturedErrors)
-  capturedErrors = CaptureMessageArray{}
-  return result
+	capturingErrors = false
+	let result = joinLines(capturedErrors)
+	capturedErrors = CaptureMessageArray{}
+	return result
 end 'stopCapturingErrors'
 
 export function cancelCapturingErrors()
-  capturingErrors = false
-  capturedErrors = CaptureMessageArray{}
+	capturingErrors = false
+	capturedErrors = CaptureMessageArray{}
 end 'cancelCapturingErrors'
 
 // When true, trace messages are appended to capturedTrace instead of going to stderr.
@@ -63,20 +63,20 @@ var capturingTrace = false
 var capturedTrace = CaptureMessageArray{}
 
 export function startCapturingTrace()
-  capturingTrace = true
-  capturedTrace = CaptureMessageArray{}
+	capturingTrace = true
+	capturedTrace = CaptureMessageArray{}
 end 'startCapturingTrace'
 
 export function stopCapturingTrace() returns String
-  capturingTrace = false
-  let result = joinLines(capturedTrace)
-  capturedTrace = CaptureMessageArray{}
-  return result
+	capturingTrace = false
+	let result = joinLines(capturedTrace)
+	capturedTrace = CaptureMessageArray{}
+	return result
 end 'stopCapturingTrace'
 
 export function cancelCapturingTrace()
-  capturingTrace = false
-  capturedTrace = CaptureMessageArray{}
+	capturingTrace = false
+	capturedTrace = CaptureMessageArray{}
 end 'cancelCapturingTrace'
 
 // Offset by 1 so 0 can mean "unset" without conflicting with LogLevel.NONE (rawValue 0).
@@ -87,102 +87,102 @@ var categoryLogLevels = CategoryLevelArray{}
 var categoryLevelsInitialized = false
 
 function ensureCategoryLevels()
-  if categoryLevelsInitialized 'alreadyDone'
-    return
-  end 'alreadyDone'
-  categoryLevelsInitialized = true
-  for _ in 0 upto 8 'fill'
-    categoryLogLevels.push(0)
-  end 'fill'
+	if categoryLevelsInitialized 'alreadyDone'
+		return
+	end 'alreadyDone'
+	categoryLevelsInitialized = true
+	for _ in 0 upto 8 'fill'
+		categoryLogLevels.push(0)
+	end 'fill'
 end 'ensureCategoryLevels'
 
 function effectiveLogLevel(category LogCategory) returns StoredLevel
-  if categoryLevelsInitialized 'hasLevels'
-    let stored = try categoryLogLevels.get(category.ordinal) otherwise 0
-    if stored > 0 'hasOverride'
-      return stored - 1
-    end 'hasOverride'
-  end 'hasLevels'
-  return globalLogLevel
+	if categoryLevelsInitialized 'hasLevels'
+		let stored = try categoryLogLevels.get(category.ordinal) otherwise 0
+		if stored > 0 'hasOverride'
+			return stored - 1
+		end 'hasOverride'
+	end 'hasLevels'
+	return globalLogLevel
 end 'effectiveLogLevel'
 
 export function logError(category LogCategory, message() returns String)
-  log(category, level: LogLevel.ERROR, message: message)
+	log(category, level: LogLevel.ERROR, message: message)
 end 'logError'
 
 export function logInfo(category LogCategory, message() returns String)
-  log(category, level: LogLevel.INFO, message: message)
+	log(category, level: LogLevel.INFO, message: message)
 end 'logInfo'
 
 export function logDebug(category LogCategory, message() returns String)
-  log(category, level: LogLevel.DEBUG, message: message)
+	log(category, level: LogLevel.DEBUG, message: message)
 end 'logDebug'
 
 export function logTrace(category LogCategory, message() returns String)
-  log(category, level: LogLevel.TRACE, message: message)
+	log(category, level: LogLevel.TRACE, message: message)
 end 'logTrace'
 
 export function isLogEnabled(category LogCategory, level LogLevel) returns bool
-  return level.rawValue <= effectiveLogLevel(category)
+	return level.rawValue <= effectiveLogLevel(category)
 end 'isLogEnabled'
 
 export function setLogLevel(level LogLevel)
-  globalLogLevel = level.rawValue
+	globalLogLevel = level.rawValue
 end 'setLogLevel'
 
 export function setCategoryLogLevel(category LogCategory, level LogLevel)
-  ensureCategoryLevels()
-  categoryLogLevels.set(category.ordinal, value: level.rawValue + 1)
+	ensureCategoryLevels()
+	categoryLogLevels.set(category.ordinal, value: level.rawValue + 1)
 end 'setCategoryLogLevel'
 
 // Parses a log option string like "debug" or "lexer:trace".
 export function parseLogOption(option String) returns bool
-  let parts = option.split(":")
-  if parts.count() == 1 'noColon'
-    let level = try LogLevel.fromName(option.toUpper()) otherwise 'badLevel'
-      return false
-    end 'badLevel'
-    setLogLevel(level)
-    return true
-  end 'noColon'
+	let parts = option.split(":")
+	if parts.count() == 1 'noColon'
+		let level = try LogLevel.fromName(option.toUpper()) otherwise 'badLevel'
+			return false
+		end 'badLevel'
+		setLogLevel(level)
+		return true
+	end 'noColon'
 
-  let categoryStr = try parts.get(0) otherwise 'badCatPart'
-    return false
-  end 'badCatPart'
-  let levelStr = try parts.get(1) otherwise 'badLevelPart'
-    return false
-  end 'badLevelPart'
+	let categoryStr = try parts.get(0) otherwise 'badCatPart'
+		return false
+	end 'badCatPart'
+	let levelStr = try parts.get(1) otherwise 'badLevelPart'
+		return false
+	end 'badLevelPart'
 
-  let category = try LogCategory.fromName(categoryStr) otherwise 'badCat'
-    return false
-  end 'badCat'
+	let category = try LogCategory.fromName(categoryStr) otherwise 'badCat'
+		return false
+	end 'badCat'
 
-  let level = try LogLevel.fromName(levelStr.toUpper()) otherwise 'badLevel2'
-    return false
-  end 'badLevel2'
+	let level = try LogLevel.fromName(levelStr.toUpper()) otherwise 'badLevel2'
+		return false
+	end 'badLevel2'
 
-  setCategoryLogLevel(category, level: level)
-  return true
+	setCategoryLogLevel(category, level: level)
+	return true
 end 'parseLogOption'
 
 function log(category LogCategory, level LogLevel, message() returns String)
-  let effectiveLevel = effectiveLogLevel(category)
-  if level.rawValue <= effectiveLevel 'check'
-    let msg = message()
-    if capturingErrors 'capturing'
-      if level.rawValue <= 1 'isError'
-        capturedErrors.push(msg)
-        return
-      end 'isError'
-    end 'capturing'
-    if capturingTrace 'capTrace'
-      if level.rawValue >= LogLevel.DEBUG.rawValue 'isDebugOrTrace'
-        if level.rawValue == LogLevel.TRACE.rawValue 'isTrace'
-          capturedTrace.push(msg)
-        end 'isTrace'
-        return
-      end 'isDebugOrTrace'
-    end 'capTrace'
-    printError("[{category.rawValue}] {level.name}: {msg}\n")
-  end 'check'
+	let effectiveLevel = effectiveLogLevel(category)
+	if level.rawValue <= effectiveLevel 'check'
+		let msg = message()
+		if capturingErrors 'capturing'
+			if level.rawValue <= 1 'isError'
+				capturedErrors.push(msg)
+				return
+			end 'isError'
+		end 'capturing'
+		if capturingTrace 'capTrace'
+			if level.rawValue >= LogLevel.DEBUG.rawValue 'isDebugOrTrace'
+				if level.rawValue == LogLevel.TRACE.rawValue 'isTrace'
+					capturedTrace.push(msg)
+				end 'isTrace'
+				return
+			end 'isDebugOrTrace'
+		end 'capTrace'
+		printError("[{category.rawValue}] {level.name}: {msg}\n")
+	end 'check'
 end 'log'

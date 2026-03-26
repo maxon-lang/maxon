@@ -41,9 +41,9 @@ var i = trunc(round(x))   // 4
 <!-- test: round.basic -->
 ```maxon
 function main() returns ExitCode
-  var x = 3.7
-  var y = trunc(round(x))
-  return y
+	var x = 3.7
+	var y = trunc(round(x))
+	return y
 end 'main'
 ```
 ```exitcode
@@ -53,9 +53,9 @@ end 'main'
 <!-- test: round.negative -->
 ```maxon
 function main() returns ExitCode
-  var neg = -2.3
-  var y = trunc(round(neg))
-  return y + 10
+	var neg = -2.3
+	var y = trunc(round(neg))
+	return y + 10
 end 'main'
 ```
 ```exitcode
@@ -65,9 +65,9 @@ end 'main'
 <!-- test: round.halfway -->
 ```maxon
 function main() returns ExitCode
-  var x = 2.5
-  var y = trunc(round(x))
-  return y
+	var x = 2.5
+	var y = trunc(round(x))
+	return y
 end 'main'
 ```
 ```exitcode
@@ -78,9 +78,9 @@ end 'main'
 <!-- Args: 3.7 -->
 ```maxon
 function main() returns ExitCode
-  let args = CommandLine.args()
-  var x = try float.fromString(try args.get(0) otherwise "") otherwise 0.0
-  return trunc(round(x))
+	let args = CommandLine.args()
+	var x = try float.fromString(try args.get(0) otherwise "") otherwise 0.0
+	return trunc(round(x))
 end 'main'
 ```
 ```exitcode
@@ -91,9 +91,9 @@ end 'main'
 <!-- Args: -2.3 -->
 ```maxon
 function main() returns ExitCode
-  let args = CommandLine.args()
-  var x = try float.fromString(try args.get(0) otherwise "") otherwise 0.0
-  return trunc(round(x)) + 10
+	let args = CommandLine.args()
+	var x = try float.fromString(try args.get(0) otherwise "") otherwise 0.0
+	return trunc(round(x)) + 10
 end 'main'
 ```
 ```exitcode
@@ -104,9 +104,9 @@ end 'main'
 <!-- Args: 2.5 -->
 ```maxon
 function main() returns ExitCode
-  let args = CommandLine.args()
-  var x = try float.fromString(try args.get(0) otherwise "") otherwise 0.0
-  return trunc(round(x))
+	let args = CommandLine.args()
+	var x = try float.fromString(try args.get(0) otherwise "") otherwise 0.0
+	return trunc(round(x))
 end 'main'
 ```
 ```exitcode

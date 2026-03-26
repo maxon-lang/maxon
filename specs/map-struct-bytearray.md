@@ -20,26 +20,26 @@ typealias Byte = byte(0 to u8.max)
 typealias ByteArray = Array with Byte
 
 type Entry
-  export var data ByteArray
-  export var tag SmallInt
+	export var data ByteArray
+	export var tag SmallInt
 end 'Entry'
 
 typealias EntryMap = Map with (String, Entry)
 
 function main() returns ExitCode
-  var m = EntryMap{}
-  var arr = ByteArray{}
-  arr.push(10)
-  arr.push(20)
-  arr.push(30)
-  let e = Entry{data: arr, tag: 42}
-  m.insert("hello", value: e)
-  let got = try m.get("hello") otherwise Entry{data: ByteArray{}, tag: 0}
-  print("{got.data.count()}\n")
-  print("{got.tag}\n")
-  let b = try got.data.get(1) otherwise 0
-  print("{b}\n")
-  return 0
+	var m = EntryMap{}
+	var arr = ByteArray{}
+	arr.push(10)
+	arr.push(20)
+	arr.push(30)
+	let e = Entry{data: arr, tag: 42}
+	m.insert("hello", value: e)
+	let got = try m.get("hello") otherwise Entry{data: ByteArray{}, tag: 0}
+	print("{got.data.count()}\n")
+	print("{got.tag}\n")
+	let b = try got.data.get(1) otherwise 0
+	print("{b}\n")
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -60,40 +60,40 @@ typealias ByteArray = Array with Byte
 typealias Count = int(0 to u64.max)
 
 type Entry
-  export var data ByteArray
-  export var tag Count
+	export var data ByteArray
+	export var tag Count
 end 'Entry'
 
 typealias EntryMap = Map with (String, Entry)
 typealias StringArray = Array with String
 
 type Database
-  export var sourceFiles EntryMap
-  export var sourcePaths StringArray
+	export var sourceFiles EntryMap
+	export var sourcePaths StringArray
 end 'Database'
 
 var db = Database{sourceFiles: EntryMap{}, sourcePaths: StringArray{}}
 
 function storeAndCheck(key String, data ByteArray)
-  if db.sourceFiles.contains(key) 'exists'
-    let existing = try db.sourceFiles.get(key) otherwise 'skip'
-      return
-    end 'skip'
-    let existingCount = existing.data.count()
-    print("existing: {existingCount}\n")
-  end 'exists' else 'newFile'
-    print("new\n")
-  end 'newFile'
-  print("{data.count()}\n")
+	if db.sourceFiles.contains(key) 'exists'
+		let existing = try db.sourceFiles.get(key) otherwise 'skip'
+			return
+		end 'skip'
+		let existingCount = existing.data.count()
+		print("existing: {existingCount}\n")
+	end 'exists' else 'newFile'
+		print("new\n")
+	end 'newFile'
+	print("{data.count()}\n")
 end 'storeAndCheck'
 
 function main() returns ExitCode
-  var arr = ByteArray{}
-  arr.push(1)
-  arr.push(2)
-  arr.push(3)
-  storeAndCheck("hello", data: arr)
-  return 0
+	var arr = ByteArray{}
+	arr.push(1)
+	arr.push(2)
+	arr.push(3)
+	storeAndCheck("hello", data: arr)
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -113,41 +113,41 @@ export typealias ByteArray = Array with Byte
 export typealias Count = int(0 to u64.max)
 
 export type Entry
-  export var data ByteArray
-  export var tag Count
+	export var data ByteArray
+	export var tag Count
 end 'Entry'
 
 export typealias EntryMap = Map with (String, Entry)
 export typealias StringArray = Array with String
 
 export type Database
-  export var sourceFiles EntryMap
-  export var sourcePaths StringArray
+	export var sourceFiles EntryMap
+	export var sourcePaths StringArray
 end 'Database'
 
 export var db = Database{sourceFiles: EntryMap{}, sourcePaths: StringArray{}}
 
 // --- file: 1-Logic.maxon
 export function storeAndCheck(key String, data ByteArray)
-  if db.sourceFiles.contains(key) 'exists'
-    let existing = try db.sourceFiles.get(key) otherwise 'skip'
-      return
-    end 'skip'
-    let existingCount = existing.data.count()
-    print("existing: {existingCount}\n")
-  end 'exists' else 'newFile'
-    print("new\n")
-  end 'newFile'
-  print("{data.count()}\n")
+	if db.sourceFiles.contains(key) 'exists'
+		let existing = try db.sourceFiles.get(key) otherwise 'skip'
+			return
+		end 'skip'
+		let existingCount = existing.data.count()
+		print("existing: {existingCount}\n")
+	end 'exists' else 'newFile'
+		print("new\n")
+	end 'newFile'
+	print("{data.count()}\n")
 end 'storeAndCheck'
 
 function main() returns ExitCode
-  var arr = ByteArray{}
-  arr.push(1)
-  arr.push(2)
-  arr.push(3)
-  storeAndCheck("hello", data: arr)
-  return 0
+	var arr = ByteArray{}
+	arr.push(1)
+	arr.push(2)
+	arr.push(3)
+	storeAndCheck("hello", data: arr)
+	return 0
 end 'main'
 ```
 ```exitcode

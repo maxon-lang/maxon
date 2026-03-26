@@ -1,14 +1,14 @@
 // Test: global-union-map
 union LogLevel
-  NONE
-  ERROR
-  INFO
+	NONE
+	ERROR
+	INFO
 end 'LogLevel'
 
 union LogCategory
-  compiler
-  lexer
-  parser
+	compiler
+	lexer
+	parser
 end 'LogCategory'
 
 typealias CategoryLevelMap = Map with (LogCategory, LogLevel)
@@ -16,32 +16,32 @@ typealias CategoryLevelMap = Map with (LogCategory, LogLevel)
 var categoryLevels = CategoryLevelMap{}
 
 function setCategoryLevel(category LogCategory, level LogLevel)
-  categoryLevels.insert(category, value: level)
+	categoryLevels.insert(category, value: level)
 end 'setCategoryLevel'
 
 function getCategoryLevel(category LogCategory) returns LogLevel
-  return try categoryLevels.get(category) otherwise LogLevel.NONE
+	return try categoryLevels.get(category) otherwise LogLevel.NONE
 end 'getCategoryLevel'
 
 function main() returns ExitCode
-  setCategoryLevel(LogCategory.compiler, level: LogLevel.INFO)
-  setCategoryLevel(LogCategory.lexer, level: LogLevel.ERROR)
-  var compilerLevel = getCategoryLevel(LogCategory.compiler)
-  var lexerLevel = getCategoryLevel(LogCategory.lexer)
-  var r1 = match compilerLevel 'c'
-    INFO gives true
-    NONE gives false
-    ERROR gives false
-  end 'c'
-  var r2 = match lexerLevel 'l'
-    ERROR gives true
-    NONE gives false
-    INFO gives false
-  end 'l'
-  if r1 and r2 'both'
-    return 1
-  end 'both'
-  return 0
+	setCategoryLevel(LogCategory.compiler, level: LogLevel.INFO)
+	setCategoryLevel(LogCategory.lexer, level: LogLevel.ERROR)
+	var compilerLevel = getCategoryLevel(LogCategory.compiler)
+	var lexerLevel = getCategoryLevel(LogCategory.lexer)
+	var r1 = match compilerLevel 'c'
+		INFO gives true
+		NONE gives false
+		ERROR gives false
+	end 'c'
+	var r2 = match lexerLevel 'l'
+		ERROR gives true
+		NONE gives false
+		INFO gives false
+	end 'l'
+	if r1 and r2 'both'
+		return 1
+	end 'both'
+	return 0
 end 'main'
 ---
 ExitCode: 1

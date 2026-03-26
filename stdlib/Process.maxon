@@ -6,93 +6,93 @@ typealias ProcessHandle = int(0 to u64.max)
 
 /// Process execution errors
 export union ProcessError implements Error
-  commandNotFound
-  executionFailed
-  timeout
-  invalidArgument
+	commandNotFound
+	executionFailed
+	timeout
+	invalidArgument
 end 'ProcessError'
 
 /// Result of process execution
 export type ProcessResult
-  export var exitCode ExitCode
-  export var stdout String
-  export var stderr String
+	export var exitCode ExitCode
+	export var stdout String
+	export var stderr String
 
-  /// Check if the process exited successfully (exit code 0)
-  export function succeeded() returns bool
-    return exitCode == 0
-  end 'succeeded'
+	/// Check if the process exited successfully (exit code 0)
+	export function succeeded() returns bool
+		return exitCode == 0
+	end 'succeeded'
 end 'ProcessResult'
 
 /// Execute external processes and capture their output
 export type Process
-  /// Returns monotonic time in milliseconds (time since boot).
-  /// Useful for measuring elapsed time between two calls.
-  export static function currentTimeMs() returns Duration
-    return __Builtins.currentTimeMs()
-  end 'currentTimeMs'
+	/// Returns monotonic time in milliseconds (time since boot).
+	/// Useful for measuring elapsed time between two calls.
+	export static function currentTimeMs() returns Duration
+		return __Builtins.currentTimeMs()
+	end 'currentTimeMs'
 
-  /// Execute a command and return exit code.
-  /// Currently does not capture stdout/stderr.
-  /// @param command The command to execute (will be passed to cmd.exe on Windows)
-  /// @param timeoutMs Timeout in milliseconds (0 = wait forever)
-  /// @returns The process exit code, or -1 on error
-  export static function execute(command String, timeoutMs Duration) returns Offset
-    var empty = ""
-    let handle = __Builtins.processCreate(command.managed, empty.managed)
-    let waitResult = __Builtins.processWait(handle, timeoutMs)
-    // waitResult: 0 = completed, 1 = timeout, -1 = error
-    if waitResult != 0 'check'
-      __Builtins.processClose(handle)
-      return -1
-    end 'check'
-    let exitCode = __Builtins.processGetExitCode(handle)
-    __Builtins.processClose(handle)
-    return exitCode
-  end 'execute'
+	/// Execute a command and return exit code.
+	/// Currently does not capture stdout/stderr.
+	/// @param command The command to execute (will be passed to cmd.exe on Windows)
+	/// @param timeoutMs Timeout in milliseconds (0 = wait forever)
+	/// @returns The process exit code, or -1 on error
+	export static function execute(command String, timeoutMs Duration) returns Offset
+		var empty = ""
+		let handle = __Builtins.processCreate(command.managed, empty.managed)
+		let waitResult = __Builtins.processWait(handle, timeoutMs)
+		// waitResult: 0 = completed, 1 = timeout, -1 = error
+		if waitResult != 0 'check'
+			__Builtins.processClose(handle)
+			return -1
+		end 'check'
+		let exitCode = __Builtins.processGetExitCode(handle)
+		__Builtins.processClose(handle)
+		return exitCode
+	end 'execute'
 
-  /// Start a process with stdout/stderr capture, returning a capture handle.
-  /// Use captureStdout/captureStderr to read output, then captureWait to finish.
-  export static function captureStart(command String) returns ProcessHandle
-    var empty = ""
-    return __Builtins.processCreateWithCapture(command.managed, empty.managed)
-  end 'captureStart'
+	/// Start a process with stdout/stderr capture, returning a capture handle.
+	/// Use captureStdout/captureStderr to read output, then captureWait to finish.
+	export static function captureStart(command String) returns ProcessHandle
+		var empty = ""
+		return __Builtins.processCreateWithCapture(command.managed, empty.managed)
+	end 'captureStart'
 
-  /// Read all stdout from a capture handle as a String. Must call before captureWait.
-  export static function captureStdout(capturePtr ProcessHandle) returns String
-    let managed = __Builtins.processReadStdout(capturePtr)
-    return String{managed: managed, _iterPos: 0}
-  end 'captureStdout'
+	/// Read all stdout from a capture handle as a String. Must call before captureWait.
+	export static function captureStdout(capturePtr ProcessHandle) returns String
+		let managed = __Builtins.processReadStdout(capturePtr)
+		return String{managed: managed, _iterPos: 0}
+	end 'captureStdout'
 
-  /// Read all stderr from a capture handle as a String. Must call before captureWait.
-  export static function captureStderr(capturePtr ProcessHandle) returns String
-    let managed = __Builtins.processReadStderr(capturePtr)
-    return String{managed: managed, _iterPos: 0}
-  end 'captureStderr'
+	/// Read all stderr from a capture handle as a String. Must call before captureWait.
+	export static function captureStderr(capturePtr ProcessHandle) returns String
+		let managed = __Builtins.processReadStderr(capturePtr)
+		return String{managed: managed, _iterPos: 0}
+	end 'captureStderr'
 
-  /// Wait for a captured process to complete and return its exit code.
-  export static function captureWait(capturePtr ProcessHandle, timeoutMs Duration) returns Offset
-    let hProcess = __Builtins.processGetHandle(capturePtr)
-    __Builtins.processWait(hProcess, timeoutMs)
-    let ec = __Builtins.processGetExitCode(hProcess)
-    __Builtins.processCloseCapture(capturePtr)
-    return ec
-  end 'captureWait'
+	/// Wait for a captured process to complete and return its exit code.
+	export static function captureWait(capturePtr ProcessHandle, timeoutMs Duration) returns Offset
+		let hProcess = __Builtins.processGetHandle(capturePtr)
+		__Builtins.processWait(hProcess, timeoutMs)
+		let ec = __Builtins.processGetExitCode(hProcess)
+		__Builtins.processCloseCapture(capturePtr)
+		return ec
+	end 'captureWait'
 
-  /// Run a command, wait for it to finish, then read stdout/stderr.
-  /// Avoids pipe deadlocks by waiting for exit before reading output.
-  export static function captureOutput(command String, timeoutMs Duration) returns ProcessResult
-    let cap = captureStart(command)
-    let hProcess = __Builtins.processGetHandle(cap)
-    let waitResult = __Builtins.processWait(hProcess, timeoutMs)
-    if waitResult != 0 'timedOut'
-      __Builtins.processCloseCapture(cap)
-      return ProcessResult{exitCode: 0 as ExitCode, stdout: "", stderr: "Process timed out"}
-    end 'timedOut'
-    let ec = __Builtins.processGetExitCode(hProcess)
-    let out = captureStdout(cap)
-    let err = captureStderr(cap)
-    __Builtins.processCloseCapture(cap)
-    return ProcessResult{exitCode: ec as ExitCode, stdout: out, stderr: err}
-  end 'captureOutput'
+	/// Run a command, wait for it to finish, then read stdout/stderr.
+	/// Avoids pipe deadlocks by waiting for exit before reading output.
+	export static function captureOutput(command String, timeoutMs Duration) returns ProcessResult
+		let cap = captureStart(command)
+		let hProcess = __Builtins.processGetHandle(cap)
+		let waitResult = __Builtins.processWait(hProcess, timeoutMs)
+		if waitResult != 0 'timedOut'
+			__Builtins.processCloseCapture(cap)
+			return ProcessResult{exitCode: 0 as ExitCode, stdout: "", stderr: "Process timed out"}
+		end 'timedOut'
+		let ec = __Builtins.processGetExitCode(hProcess)
+		let out = captureStdout(cap)
+		let err = captureStderr(cap)
+		__Builtins.processCloseCapture(cap)
+		return ProcessResult{exitCode: ec as ExitCode, stdout: out, stderr: err}
+	end 'captureOutput'
 end 'Process'

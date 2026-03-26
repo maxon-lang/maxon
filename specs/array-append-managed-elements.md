@@ -25,33 +25,33 @@ elements in dest are now dangling pointers.
 typealias Integer = int(i64.min to i64.max)
 
 export type Item
-    export var name String
-    export var value Integer
+		export var name String
+		export var value Integer
 end 'Item'
 
 typealias ItemArray = Array with Item
 
 function appendFromHelper(dest ItemArray)
-    var src = ItemArray{}
-    src.push(Item{name: "hello from source that is long enough", value: 10})
-    src.push(Item{name: "second item from source long enough", value: 20})
-    src.push(Item{name: "third item from source long enough", value: 30})
-    dest.append(src)
-    // src is freed when this function returns
+		var src = ItemArray{}
+		src.push(Item{name: "hello from source that is long enough", value: 10})
+		src.push(Item{name: "second item from source long enough", value: 20})
+		src.push(Item{name: "third item from source long enough", value: 30})
+		dest.append(src)
+		// src is freed when this function returns
 end 'appendFromHelper'
 
 function main() returns ExitCode
-    var dest = ItemArray{}
-    dest.push(Item{name: "dest item that is long enough for heap", value: 1})
-    appendFromHelper(dest)
+		var dest = ItemArray{}
+		dest.push(Item{name: "dest item that is long enough for heap", value: 1})
+		appendFromHelper(dest)
 
-    // Source array is freed. dest should still have valid elements.
-    if dest.count() != 4 'badCount'
-        return 99
-    end 'badCount'
+		// Source array is freed. dest should still have valid elements.
+		if dest.count() != 4 'badCount'
+				return 99
+		end 'badCount'
 
-    let item = try dest.get(1) otherwise Item{name: "", value: 0}
-    return item.value
+		let item = try dest.get(1) otherwise Item{name: "", value: 0}
+		return item.value
 end 'main'
 ```
 ```exitcode
@@ -64,36 +64,36 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 export union Op
-    add(value Integer)
-    sub(value Integer)
-    nop
+		add(value Integer)
+		sub(value Integer)
+		nop
 end 'Op'
 
 typealias OpArray = Array with Op
 
 function appendOps(dest OpArray)
-    var src = OpArray{}
-    src.push(Op.add(10))
-    src.push(Op.sub(20))
-    src.push(Op.add(30))
-    dest.append(src)
+		var src = OpArray{}
+		src.push(Op.add(10))
+		src.push(Op.sub(20))
+		src.push(Op.add(30))
+		dest.append(src)
 end 'appendOps'
 
 function main() returns ExitCode
-    var dest = OpArray{}
-    dest.push(Op.nop)
-    appendOps(dest)
+		var dest = OpArray{}
+		dest.push(Op.nop)
+		appendOps(dest)
 
-    if dest.count() != 4 'badCount'
-        return 99
-    end 'badCount'
+		if dest.count() != 4 'badCount'
+				return 99
+		end 'badCount'
 
-    let op = try dest.get(1) otherwise Op.nop
-    match op 'check'
-        add(v) then return v
-        sub(_) then return 98
-        nop then return 97
-    end 'check'
+		let op = try dest.get(1) otherwise Op.nop
+		match op 'check'
+				add(v) then return v
+				sub(_) then return 98
+				nop then return 97
+		end 'check'
 end 'main'
 ```
 ```exitcode
@@ -109,41 +109,41 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
 export type Func
-    export var name String
-    export var body IntArray
+		export var name String
+		export var body IntArray
 end 'Func'
 
 typealias FuncArray = Array with Func
 
 export type Module
-    export var functions FuncArray
+		export var functions FuncArray
 end 'Module'
 
 function createModule() returns Module
-    return Module{functions: FuncArray{}}
+		return Module{functions: FuncArray{}}
 end 'createModule'
 
 function parseAndMerge(dest Module, name String)
-    let source = createModule()
-    source.functions.push(Func{name: name, body: IntArray{}})
-    dest.functions.append(source.functions)
-    // source is freed when this function returns
+		let source = createModule()
+		source.functions.push(Func{name: name, body: IntArray{}})
+		dest.functions.append(source.functions)
+		// source is freed when this function returns
 end 'parseAndMerge'
 
 function main() returns ExitCode
-    var allModule = createModule()
-    parseAndMerge(allModule, name: "func_a_with_long_name_for_heap")
-    parseAndMerge(allModule, name: "func_b_with_long_name_for_heap")
+		var allModule = createModule()
+		parseAndMerge(allModule, name: "func_a_with_long_name_for_heap")
+		parseAndMerge(allModule, name: "func_b_with_long_name_for_heap")
 
-    if allModule.functions.count() != 2 'badCount'
-        return 99
-    end 'badCount'
+		if allModule.functions.count() != 2 'badCount'
+				return 99
+		end 'badCount'
 
-    let first = try allModule.functions.get(0) otherwise Func{name: "", body: IntArray{}}
-    if first.name == "func_a_with_long_name_for_heap" 'correct'
-        return 0
-    end 'correct'
-    return 1
+		let first = try allModule.functions.get(0) otherwise Func{name: "", body: IntArray{}}
+		if first.name == "func_a_with_long_name_for_heap" 'correct'
+				return 0
+		end 'correct'
+		return 1
 end 'main'
 ```
 ```exitcode

@@ -1,125 +1,125 @@
 // Parsed command line arguments for the Maxon compiler.
 
 export enum Command
-  build
-  specTest
-  testIncremental
-  unknown
+	build
+	specTest
+	testIncremental
+	unknown
 end 'Command'
 
 export enum TargetOption
-  host
-  all
-  x86_64Windows
-  x86_64Linux
-  aarch64Windows
-  aarch64Linux
-  aarch64Macos
+	host
+	all
+	x86_64Windows
+	x86_64Linux
+	aarch64Windows
+	aarch64Linux
+	aarch64Macos
 end 'TargetOption'
 
 export union ArgError implements Error
-  invalidOption(arg String)
+	invalidOption(arg String)
 end 'ArgError'
 
 export type MaxonArgs
-  export var command Command
-  export var path String
-  export var filter String
-  export var targetOption TargetOption
-  export var emitIr bool
-  export var dumpStages bool
-  export var trackAllocs bool
-  export var updateRequired bool
-  export var verbose bool
+	export var command Command
+	export var path String
+	export var filter String
+	export var targetOption TargetOption
+	export var emitIr bool
+	export var dumpStages bool
+	export var trackAllocs bool
+	export var updateRequired bool
+	export var verbose bool
 
-  export static function parse() returns MaxonArgs throws ArgError
-    let allArgs = CommandLine.args()
+	export static function parse() returns MaxonArgs throws ArgError
+		let allArgs = CommandLine.args()
 
-    var args = MaxonArgs{
-      command: Command.unknown,
-      path: "",
-      filter: "",
-      targetOption: TargetOption.host,
-      emitIr: false,
-      dumpStages: false,
-      trackAllocs: false,
-      updateRequired: false,
-      verbose: false
-    }
+		var args = MaxonArgs{
+			command: Command.unknown,
+			path: "",
+			filter: "",
+			targetOption: TargetOption.host,
+			emitIr: false,
+			dumpStages: false,
+			trackAllocs: false,
+			updateRequired: false,
+			verbose: false
+		}
 
-    if allArgs.isEmpty() 'noArgs'
-      return args
-    end 'noArgs'
+		if allArgs.isEmpty() 'noArgs'
+			return args
+		end 'noArgs'
 
-    let cmdStr = try allArgs.get(0) otherwise ""
-    match cmdStr 'parseCmd'
-      "build" then args.command = Command.build
-      "spec-test" then args.command = Command.specTest
-      "test-incremental" then args.command = Command.testIncremental
-      default then args.command = Command.unknown
-    end 'parseCmd'
+		let cmdStr = try allArgs.get(0) otherwise ""
+		match cmdStr 'parseCmd'
+			"build" then args.command = Command.build
+			"spec-test" then args.command = Command.specTest
+			"test-incremental" then args.command = Command.testIncremental
+			default then args.command = Command.unknown
+		end 'parseCmd'
 
-    for i in 1 upto allArgs.count() 'scan'
-      let arg = try allArgs.get(i) otherwise ""
-      if arg.startsWith("--log=") 'isLog'
-        let optionStr = try CommandLine.optionValue(arg) otherwise ""
-        if optionStr.isEmpty() 'emptyLog'
-          throw ArgError.invalidOption(arg)
-        end 'emptyLog'
-        let ok = parseLogOption(optionStr)
-        if not ok 'badLog'
-          throw ArgError.invalidOption(arg)
-        end 'badLog'
-      end 'isLog' else if arg.startsWith("--filter=") 'isFilter'
-        args.filter = try CommandLine.optionValue(arg) otherwise ""
-      end 'isFilter' else if arg.startsWith("--target=") 'isTarget'
-        let targetStr = try CommandLine.optionValue(arg) otherwise ""
-        args.targetOption = try parseTargetOption(targetStr) otherwise 'badTarget'
-          throw ArgError.invalidOption(arg)
-        end 'badTarget'
-      end 'isTarget' else if arg == "--emit-ir" 'isEmitIr'
-        args.emitIr = true
-      end 'isEmitIr' else if arg == "--dump-stages" 'isDumpStages'
-        args.dumpStages = true
-      end 'isDumpStages' else if arg == "--track-allocs" 'isTrackAllocs'
-        args.trackAllocs = true
-      end 'isTrackAllocs' else if arg == "--update-required" 'isUpdateRequired'
-        args.updateRequired = true
-      end 'isUpdateRequired' else if arg == "--verbose" 'isVerbose'
-        args.verbose = true
-      end 'isVerbose' else if not arg.startsWith("--") 'isPositional'
-        args.path = arg
-      end 'isPositional'
-    end 'scan'
+		for i in 1 upto allArgs.count() 'scan'
+			let arg = try allArgs.get(i) otherwise ""
+			if arg.startsWith("--log=") 'isLog'
+				let optionStr = try CommandLine.optionValue(arg) otherwise ""
+				if optionStr.isEmpty() 'emptyLog'
+					throw ArgError.invalidOption(arg)
+				end 'emptyLog'
+				let ok = parseLogOption(optionStr)
+				if not ok 'badLog'
+					throw ArgError.invalidOption(arg)
+				end 'badLog'
+			end 'isLog' else if arg.startsWith("--filter=") 'isFilter'
+				args.filter = try CommandLine.optionValue(arg) otherwise ""
+			end 'isFilter' else if arg.startsWith("--target=") 'isTarget'
+				let targetStr = try CommandLine.optionValue(arg) otherwise ""
+				args.targetOption = try parseTargetOption(targetStr) otherwise 'badTarget'
+					throw ArgError.invalidOption(arg)
+				end 'badTarget'
+			end 'isTarget' else if arg == "--emit-ir" 'isEmitIr'
+				args.emitIr = true
+			end 'isEmitIr' else if arg == "--dump-stages" 'isDumpStages'
+				args.dumpStages = true
+			end 'isDumpStages' else if arg == "--track-allocs" 'isTrackAllocs'
+				args.trackAllocs = true
+			end 'isTrackAllocs' else if arg == "--update-required" 'isUpdateRequired'
+				args.updateRequired = true
+			end 'isUpdateRequired' else if arg == "--verbose" 'isVerbose'
+				args.verbose = true
+			end 'isVerbose' else if not arg.startsWith("--") 'isPositional'
+				args.path = arg
+			end 'isPositional'
+		end 'scan'
 
-    if args.path.isEmpty() 'defaultPath'
-      args.path = Directory.currentPath().toString()
-    end 'defaultPath'
+		if args.path.isEmpty() 'defaultPath'
+			args.path = Directory.currentPath().toString()
+		end 'defaultPath'
 
-    return args
-  end 'parse'
+		return args
+	end 'parse'
 
-  export function target() returns Target
-    return match targetOption 'resolve'
-      host gives detectHostTarget()
-      all gives detectHostTarget()
-      x86_64Windows gives Target{cpu: CpuArch.x86_64, os: Os.windows}
-      x86_64Linux gives Target{cpu: CpuArch.x86_64, os: Os.linux}
-      aarch64Windows gives Target{cpu: CpuArch.aarch64, os: Os.windows}
-      aarch64Linux gives Target{cpu: CpuArch.aarch64, os: Os.linux}
-      aarch64Macos gives Target{cpu: CpuArch.aarch64, os: Os.macos}
-    end 'resolve'
-  end 'target'
+	export function target() returns Target
+		return match targetOption 'resolve'
+			host gives detectHostTarget()
+			all gives detectHostTarget()
+			x86_64Windows gives Target{cpu: CpuArch.x86_64, os: Os.windows}
+			x86_64Linux gives Target{cpu: CpuArch.x86_64, os: Os.linux}
+			aarch64Windows gives Target{cpu: CpuArch.aarch64, os: Os.windows}
+			aarch64Linux gives Target{cpu: CpuArch.aarch64, os: Os.linux}
+			aarch64Macos gives Target{cpu: CpuArch.aarch64, os: Os.macos}
+		end 'resolve'
+	end 'target'
 end 'MaxonArgs'
 
 function parseTargetOption(s String) returns TargetOption throws StringError
-  return match s 'parse'
-    "all" gives TargetOption.all
-    "x86_64-windows" gives TargetOption.x86_64Windows
-    "x86_64-linux" gives TargetOption.x86_64Linux
-    "aarch64-windows" gives TargetOption.aarch64Windows
-    "aarch64-linux" gives TargetOption.aarch64Linux
-    "aarch64-macos" gives TargetOption.aarch64Macos
-    default throws StringError.notFound
-  end 'parse'
+	return match s 'parse'
+		"all" gives TargetOption.all
+		"x86_64-windows" gives TargetOption.x86_64Windows
+		"x86_64-linux" gives TargetOption.x86_64Linux
+		"aarch64-windows" gives TargetOption.aarch64Windows
+		"aarch64-linux" gives TargetOption.aarch64Linux
+		"aarch64-macos" gives TargetOption.aarch64Macos
+		default throws StringError.notFound
+	end 'parse'
 end 'parseTargetOption'

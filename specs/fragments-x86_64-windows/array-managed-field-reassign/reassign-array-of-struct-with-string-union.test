@@ -1,44 +1,44 @@
 // Test: reassign-array-of-struct-with-string-union
 export union QueryKey
-    sourceFile(path String)
-    tokens(path String)
-    allModule
-    codeResult
+		sourceFile(path String)
+		tokens(path String)
+		allModule
+		codeResult
 end 'QueryKey'
 
 export type Dependency
-    export var dependent QueryKey
-    export var dependency QueryKey
+		export var dependent QueryKey
+		export var dependency QueryKey
 end 'Dependency'
 
 typealias DependencyArray = Array with Dependency
 
 export type Database
-    export var dependencies DependencyArray
+		export var dependencies DependencyArray
 end 'Database'
 
 function clearDepsFor(db Database)
-    var newDeps = DependencyArray{}
-    for dep in db.dependencies 'scan'
-        match dep.dependent 'check'
-            sourceFile(_) then newDeps.push(dep)
-            tokens(_) then newDeps.push(dep)
-            allModule then continue
-            codeResult then newDeps.push(dep)
-        end 'check'
-    end 'scan'
-    db.dependencies = newDeps
+		var newDeps = DependencyArray{}
+		for dep in db.dependencies 'scan'
+				match dep.dependent 'check'
+						sourceFile(_) then newDeps.push(dep)
+						tokens(_) then newDeps.push(dep)
+						allModule then continue
+						codeResult then newDeps.push(dep)
+				end 'check'
+		end 'scan'
+		db.dependencies = newDeps
 end 'clearDepsFor'
 
 function main() returns ExitCode
-    var deps = DependencyArray{}
-    deps.push(Dependency{dependent: QueryKey.allModule, dependency: QueryKey.sourceFile("test.maxon")})
-    deps.push(Dependency{dependent: QueryKey.codeResult, dependency: QueryKey.tokens("test.maxon")})
-    deps.push(Dependency{dependent: QueryKey.allModule, dependency: QueryKey.sourceFile("other.maxon")})
-    deps.push(Dependency{dependent: QueryKey.sourceFile("a.maxon"), dependency: QueryKey.tokens("a.maxon")})
-    let db = Database{dependencies: deps}
-    clearDepsFor(db)
-    return db.dependencies.count()
+		var deps = DependencyArray{}
+		deps.push(Dependency{dependent: QueryKey.allModule, dependency: QueryKey.sourceFile("test.maxon")})
+		deps.push(Dependency{dependent: QueryKey.codeResult, dependency: QueryKey.tokens("test.maxon")})
+		deps.push(Dependency{dependent: QueryKey.allModule, dependency: QueryKey.sourceFile("other.maxon")})
+		deps.push(Dependency{dependent: QueryKey.sourceFile("a.maxon"), dependency: QueryKey.tokens("a.maxon")})
+		let db = Database{dependencies: deps}
+		clearDepsFor(db)
+		return db.dependencies.count()
 end 'main'
 ---
 ExitCode: 2

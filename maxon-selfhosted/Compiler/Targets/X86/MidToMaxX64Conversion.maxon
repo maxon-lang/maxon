@@ -7,257 +7,257 @@ let RM_NONE = -1
 let RM_NO_STACK_HOME = -9223372036854775807
 
 export function lowerMidToMaxX64(module MlirModule, target Target) returns MlirModule
-  logDebug(LogCategory.mlir, message: () gives "Lowering Mid to MaxX64 dialect")
-  var result = createMlirModule()
+	logDebug(LogCategory.mlir, message: () gives "Lowering Mid to MaxX64 dialect")
+	var result = createMlirModule()
 
-  let shadowSpace = match target.os 'osShadow'
-    windows gives 32
-    linux gives 0
-    macos gives 0
-  end 'osShadow'
+	let shadowSpace = match target.os 'osShadow'
+		windows gives 32
+		linux gives 0
+		macos gives 0
+	end 'osShadow'
 
-  let osDesc = makeOsDescriptor(target)
+	let osDesc = makeOsDescriptor(target)
 
-  for srcFunc in module.functions 'eachFunc'
-    let funcName = String.from(srcFunc.name)
-    let logLowering = not isRuntimeFunction(funcName)
-    let dstFunc = lowerFunctionToX64(srcFunc, shadowSpace: shadowSpace, osDesc: osDesc, logLowering: logLowering)
-    result.functions.push(dstFunc)
-  end 'eachFunc'
+	for srcFunc in module.functions 'eachFunc'
+		let funcName = String.from(srcFunc.name)
+		let logLowering = not isRuntimeFunction(funcName)
+		let dstFunc = lowerFunctionToX64(srcFunc, shadowSpace: shadowSpace, osDesc: osDesc, logLowering: logLowering)
+		result.functions.push(dstFunc)
+	end 'eachFunc'
 
-  return result
+	return result
 end 'lowerMidToMaxX64'
 
 function lowerFunctionToX64(srcFunc MlirFunction, shadowSpace StackSize, osDesc OsDescriptor, logLowering bool) returns MlirFunction
-  var dstFunc = createMlirFunction(srcFunc.name, returnType: srcFunc.returnType)
-  dstFunc.paramCount = srcFunc.paramCount
+	var dstFunc = createMlirFunction(srcFunc.name, returnType: srcFunc.returnType)
+	dstFunc.paramCount = srcFunc.paramCount
 
-  // Phase 1: Compute variable stack space from memref slots.
-  // Variable slots use the convention: [rbp - (slotIndex+1)*8]
-  let maxParserSlot = computeMaxParserSlotInFunc(srcFunc)
-  var varStackSize = 0
-  if maxParserSlot >= 0 'hasVarSlots'
-    varStackSize = (maxParserSlot + 1) * 8
-  end 'hasVarSlots'
+	// Phase 1: Compute variable stack space from memref slots.
+	// Variable slots use the convention: [rbp - (slotIndex+1)*8]
+	let maxParserSlot = computeMaxParserSlotInFunc(srcFunc)
+	var varStackSize = 0
+	if maxParserSlot >= 0 'hasVarSlots'
+		varStackSize = (maxParserSlot + 1) * 8
+	end 'hasVarSlots'
 
-  // Also count temp slots needed by SysOps (they still use slot-based addressing)
-  var sysOpTempCount = 0
-  for srcBlock in srcFunc.region.blocks 'countSysTemps'
-    for op in srcBlock.ops 'countOp'
-      sysOpTempCount = sysOpTempCount + sysOpTempSlotCount(op)
-    end 'countOp'
-  end 'countSysTemps'
-  // Check for print ops which need stack buffer space
-  var hasPrint = false
-  for srcBlock in srcFunc.region.blocks 'checkPrint'
-    for op in srcBlock.ops 'checkPrintOp'
-      if isPrintRuntime(op) 'foundPrint'
-        hasPrint = true
-      end 'foundPrint'
-    end 'checkPrintOp'
-  end 'checkPrint'
+	// Also count temp slots needed by SysOps (they still use slot-based addressing)
+	var sysOpTempCount = 0
+	for srcBlock in srcFunc.region.blocks 'countSysTemps'
+		for op in srcBlock.ops 'countOp'
+			sysOpTempCount = sysOpTempCount + sysOpTempSlotCount(op)
+		end 'countOp'
+	end 'countSysTemps'
+	// Check for print ops which need stack buffer space
+	var hasPrint = false
+	for srcBlock in srcFunc.region.blocks 'checkPrint'
+		for op in srcBlock.ops 'checkPrintOp'
+			if isPrintRuntime(op) 'foundPrint'
+				hasPrint = true
+			end 'foundPrint'
+		end 'checkPrintOp'
+	end 'checkPrint'
 
-  // Total variable area includes parser slots + sysop temp slots
-  let totalVarSlots = maxParserSlot + 1 + sysOpTempCount
-  varStackSize = totalVarSlots * 8
+	// Total variable area includes parser slots + sysop temp slots
+	let totalVarSlots = maxParserSlot + 1 + sysOpTempCount
+	varStackSize = totalVarSlots * 8
 
-  // Phase 2: Initialize register allocator.
-  // Spill slots start below the variable area (negative offsets from RBP).
-  let gprPool = createX64GprPool()
-  let callerSaved = createX64CallerSavedGprs()
-  let ccGprs = createX64CallConvGprs()
-  let fpPool = createX64FpPool()
-  let fpCallerSaved = createX64CallerSavedFps()
-  let ccFps = createX64CallConvFps()
-  var regState = createRegState(0 - varStackSize, gprPool: gprPool, callerSavedGprs: callerSaved, target: RegTarget.x64, callConvGprs: ccGprs, returnGprOrd: 0, errorFlagOrd: 2, indirectCallScratchOrd: 10, gprCycleBreakOrd: 10, hasXchg: true, fpPool: fpPool, callerSavedFps: fpCallerSaved, callConvFps: ccFps, returnFpOrd: 0, fpCycleBreakOrd: 15)
+	// Phase 2: Initialize register allocator.
+	// Spill slots start below the variable area (negative offsets from RBP).
+	let gprPool = createX64GprPool()
+	let callerSaved = createX64CallerSavedGprs()
+	let ccGprs = createX64CallConvGprs()
+	let fpPool = createX64FpPool()
+	let fpCallerSaved = createX64CallerSavedFps()
+	let ccFps = createX64CallConvFps()
+	var regState = createRegState(0 - varStackSize, gprPool: gprPool, callerSavedGprs: callerSaved, target: RegTarget.x64, callConvGprs: ccGprs, returnGprOrd: 0, errorFlagOrd: 2, indirectCallScratchOrd: 10, gprCycleBreakOrd: 10, hasXchg: true, fpPool: fpPool, callerSavedFps: fpCallerSaved, callConvFps: ccFps, returnFpOrd: 0, fpCycleBreakOrd: 15)
 
-  // We still need ValueSlotMap for SysOp functions that use slot-based addressing
-  var nextTempSlot = maxParserSlot + 1
-  var valueSlots = ValueSlotMap{}
+	// We still need ValueSlotMap for SysOp functions that use slot-based addressing
+	var nextTempSlot = maxParserSlot + 1
+	var valueSlots = ValueSlotMap{}
 
-  // Phase 3: Lower all blocks WITHOUT prologue.
-  var isFirstBlock = true
-  var entryBlock = MlirBlock{id: 0, label: b"", ops: MlirOpArray{}, terminator: MlirOp.cf(CfOp.br(0)), hasTerminator: false}
-  var prevDstBlock = entryBlock
-  for srcBlock in srcFunc.region.blocks 'eachBlock'
-    var dstBlock = addBlock(dstFunc.region, label: srcBlock.label)
-    dstBlock.id = srcBlock.id
+	// Phase 3: Lower all blocks WITHOUT prologue.
+	var isFirstBlock = true
+	var entryBlock = MlirBlock{id: 0, label: b"", ops: MlirOpArray{}, terminator: MlirOp.cf(CfOp.br(0)), hasTerminator: false}
+	var prevDstBlock = entryBlock
+	for srcBlock in srcFunc.region.blocks 'eachBlock'
+		var dstBlock = addBlock(dstFunc.region, label: srcBlock.label)
+		dstBlock.id = srcBlock.id
 
-    if isFirstBlock 'isEntry'
-      // Do NOT emit prologue here -- we'll insert it after all lowering.
-      // Emit parameter saves: move params from ABI registers to their stack slots
-      // and also register them with the register allocator.
-      emitParamSavesRegAlloc(dstBlock, paramCount: srcFunc.paramCount)
-      entryBlock = dstBlock
-      isFirstBlock = false
-    end 'isEntry' else 'notEntry'
-      // Reset register state — spill live registers into the PREVIOUS block
-      rmResetForBlockTransition(regState, prevBlock: prevDstBlock)
-    end 'notEntry'
+		if isFirstBlock 'isEntry'
+			// Do NOT emit prologue here -- we'll insert it after all lowering.
+			// Emit parameter saves: move params from ABI registers to their stack slots
+			// and also register them with the register allocator.
+			emitParamSavesRegAlloc(dstBlock, paramCount: srcFunc.paramCount)
+			entryBlock = dstBlock
+			isFirstBlock = false
+		end 'isEntry' else 'notEntry'
+			// Reset register state — spill live registers into the PREVIOUS block
+			rmResetForBlockTransition(regState, prevBlock: prevDstBlock)
+		end 'notEntry'
 
-    // Lower each op in the block
-    for op in srcBlock.ops 'eachOp'
-      let opsBefore = dstBlock.ops.count()
-      nextTempSlot = lowerMlirOpRegAlloc(op, dstBlock: dstBlock, regState: regState, valueSlots: valueSlots, nextTempSlot: nextTempSlot, osDesc: osDesc)
-      if logLowering 'logOp'
-        logTrace(LogCategory.mlir, message: () gives "mid-to-x86: {formatLoweringResult(sourceOp: op, dstBlock: dstBlock, opsBefore: opsBefore)}")
-      end 'logOp'
-      rmAdvanceOp(regState)
-    end 'eachOp'
+		// Lower each op in the block
+		for op in srcBlock.ops 'eachOp'
+			let opsBefore = dstBlock.ops.count()
+			nextTempSlot = lowerMlirOpRegAlloc(op, dstBlock: dstBlock, regState: regState, valueSlots: valueSlots, nextTempSlot: nextTempSlot, osDesc: osDesc)
+			if logLowering 'logOp'
+				logTrace(LogCategory.mlir, message: () gives "mid-to-x86: {formatLoweringResult(sourceOp: op, dstBlock: dstBlock, opsBefore: opsBefore)}")
+			end 'logOp'
+			rmAdvanceOp(regState)
+		end 'eachOp'
 
-    // Lower terminator
-    if srcBlock.hasTerminator 'hasTerm'
-      let opsBefore = dstBlock.ops.count()
-      lowerTerminatorRegAlloc(srcBlock, dstBlock: dstBlock, regState: regState)
-      if logLowering 'logTerm'
-        logTrace(LogCategory.mlir, message: () gives "mid-to-x86: {formatTerminatorResult(sourceOp: srcBlock.terminator, dstBlock: dstBlock, opsBefore: opsBefore)}")
-      end 'logTerm'
-    end 'hasTerm'
-    prevDstBlock = dstBlock
-  end 'eachBlock'
+		// Lower terminator
+		if srcBlock.hasTerminator 'hasTerm'
+			let opsBefore = dstBlock.ops.count()
+			lowerTerminatorRegAlloc(srcBlock, dstBlock: dstBlock, regState: regState)
+			if logLowering 'logTerm'
+				logTrace(LogCategory.mlir, message: () gives "mid-to-x86: {formatTerminatorResult(sourceOp: srcBlock.terminator, dstBlock: dstBlock, opsBefore: opsBefore)}")
+			end 'logTerm'
+		end 'hasTerm'
+		prevDstBlock = dstBlock
+	end 'eachBlock'
 
-  // Phase 4: Compute final stack size and insert prologue at the front of the entry block.
-  // Recompute varStackSize from actual nextTempSlot, since ensureValueInSlot may
-  // have allocated additional temp slots beyond the pre-scanned sysOpTempCount.
-  let actualVarStackSize = nextTempSlot * 8
-  let spillSize = rmTotalStackSize(regState)
-  // Detect if function has calls — shadow space is only needed for callers
-  var hasCalls = false
-  for blk in dstFunc.region.blocks 'scanCalls'
-    for op in blk.ops 'scanOp'
-      if isCallDirectOp(op) 'foundCall'
-        hasCalls = true
-      end 'foundCall'
-    end 'scanOp'
-  end 'scanCalls'
-  var totalStackSize = actualVarStackSize + spillSize
-  if hasCalls 'addShadow'
-    totalStackSize = totalStackSize + shadowSpace
-  end 'addShadow'
-  if hasPrint and totalStackSize == 0 'needPrintBuf'
-    totalStackSize = 16
-  end 'needPrintBuf'
-  if hasCalls and totalStackSize == 0 'needCallFrame'
-    totalStackSize = 16
-  end 'needCallFrame'
-  // Align to 16
-  if totalStackSize mod 16 != 0 'align'
-    totalStackSize = totalStackSize + (16 - (totalStackSize mod 16))
-  end 'align'
+	// Phase 4: Compute final stack size and insert prologue at the front of the entry block.
+	// Recompute varStackSize from actual nextTempSlot, since ensureValueInSlot may
+	// have allocated additional temp slots beyond the pre-scanned sysOpTempCount.
+	let actualVarStackSize = nextTempSlot * 8
+	let spillSize = rmTotalStackSize(regState)
+	// Detect if function has calls — shadow space is only needed for callers
+	var hasCalls = false
+	for blk in dstFunc.region.blocks 'scanCalls'
+		for op in blk.ops 'scanOp'
+			if isCallDirectOp(op) 'foundCall'
+				hasCalls = true
+			end 'foundCall'
+		end 'scanOp'
+	end 'scanCalls'
+	var totalStackSize = actualVarStackSize + spillSize
+	if hasCalls 'addShadow'
+		totalStackSize = totalStackSize + shadowSpace
+	end 'addShadow'
+	if hasPrint and totalStackSize == 0 'needPrintBuf'
+		totalStackSize = 16
+	end 'needPrintBuf'
+	if hasCalls and totalStackSize == 0 'needCallFrame'
+		totalStackSize = 16
+	end 'needCallFrame'
+	// Align to 16
+	if totalStackSize mod 16 != 0 'align'
+		totalStackSize = totalStackSize + (16 - (totalStackSize mod 16))
+	end 'align'
 
-  // Insert prologue at the front of the entry block.
-  // Always emit prologue/epilogue (even for stackSize=0) so ret is present.
-  var newOps = MlirOpArray{}
-  newOps.push(MlirOp.maxx64(MaxX64Op.prologue(totalStackSize)))
-  for op in entryBlock.ops 'copyOps'
-    newOps.push(op)
-  end 'copyOps'
-  entryBlock.ops = newOps
+	// Insert prologue at the front of the entry block.
+	// Always emit prologue/epilogue (even for stackSize=0) so ret is present.
+	var newOps = MlirOpArray{}
+	newOps.push(MlirOp.maxx64(MaxX64Op.prologue(totalStackSize)))
+	for op in entryBlock.ops 'copyOps'
+		newOps.push(op)
+	end 'copyOps'
+	entryBlock.ops = newOps
 
-  // Preserve region metadata
-  dstFunc.region.nextBlockId = srcFunc.region.nextBlockId
-  return dstFunc
+	// Preserve region metadata
+	dstFunc.region.nextBlockId = srcFunc.region.nextBlockId
+	return dstFunc
 end 'lowerFunctionToX64'
 
 // Check if an MlirOp is a callDirect (for detecting if function has calls)
 function isCallDirectOp(op MlirOp) returns bool
-  var result = false
-  match op 'check'
-    maxhl to sys then break 'check'
-    maxx64(x64Op) then result = isX64CallDirect(x64Op)
-    maxarm64 then break 'check'
-  end 'check'
-  return result
+	var result = false
+	match op 'check'
+		maxhl to sys then break 'check'
+		maxx64(x64Op) then result = isX64CallDirect(x64Op)
+		maxarm64 then break 'check'
+	end 'check'
+	return result
 end 'isCallDirectOp'
 
 function isX64CallDirect(op MaxX64Op) returns bool
-  return match op 'check'
-    prologue to loadRegRbpOffset gives false
-    callDirect gives true
-    syscall to xorRegRegSelf gives false
-    callIndirect gives true
-    xchgRegReg to repStosq gives false
-  end 'check'
+	return match op 'check'
+		prologue to loadRegRbpOffset gives false
+		callDirect gives true
+		syscall to xorRegRegSelf gives false
+		callIndirect gives true
+		xchgRegReg to repStosq gives false
+	end 'check'
 end 'isX64CallDirect'
 
 // Check if a runtime op (for print buffer allocation)
 function isPrintRuntime(op MlirOp) returns bool
-  return match op 'check'
-    maxhl to memref gives false
-    runtime gives true
-    sys to maxarm64 gives false
-  end 'check'
+	return match op 'check'
+		maxhl to memref gives false
+		runtime gives true
+		sys to maxarm64 gives false
+	end 'check'
 end 'isPrintRuntime'
 
 // Count temp slots needed by SysOps only (non-sys ops use regalloc now)
 function sysOpTempSlotCount(op MlirOp) returns SlotIndex
-  return match op 'check'
-    maxhl to runtime gives 0
-    sys(sysOp) gives sysTempCount(sysOp)
-    maxx64 to maxarm64 gives 0
-  end 'check'
+	return match op 'check'
+		maxhl to runtime gives 0
+		sys(sysOp) gives sysTempCount(sysOp)
+		maxx64 to maxarm64 gives 0
+	end 'check'
 end 'sysOpTempSlotCount'
 
 function sysTempCount(op SysOp) returns SlotIndex
-  // Count temp slots needed: result slot + ensureValueInSlot calls (worst case each needs a temp).
-  return match op 'check'
-    syscall gives 1
-    iatCall gives 1
-    globalAddr gives 1
-    stackAddr gives 1
-    loadByte gives 3
-    storeByte gives 3
-    memcpy gives 3
-    osExit gives 1
-    osWrite gives 6
-  end 'check'
+	// Count temp slots needed: result slot + ensureValueInSlot calls (worst case each needs a temp).
+	return match op 'check'
+		syscall gives 1
+		iatCall gives 1
+		globalAddr gives 1
+		stackAddr gives 1
+		loadByte gives 3
+		storeByte gives 3
+		memcpy gives 3
+		osExit gives 1
+		osWrite gives 6
+	end 'check'
 end 'sysTempCount'
 
 // Save parameter registers to their stack slots AND register with the allocator.
 // Uses Maxon's internal calling convention: rcx, rdx, r8, r9, rsi, rdi, rax, rbx
 function emitParamSavesRegAlloc(dstBlock MlirBlock, paramCount ParamCount)
-  if paramCount == 0 'noParams'
-    return
-  end 'noParams'
+	if paramCount == 0 'noParams'
+		return
+	end 'noParams'
 
-  // Save register params to their stack slots.
-  // Do NOT register with the register allocator — body SSA values start from valueId 0
-  // which would conflict with param valueIds. The body's memref.load operations will
-  // correctly register values with the allocator when they're needed.
-  let regParams = [X64Register.rcx, X64Register.rdx, X64Register.r8, X64Register.r9, X64Register.rsi, X64Register.rdi, X64Register.rax, X64Register.rbx]
-  for(regIdx, reg) in regParams.enumerated() 'regParams'
-    if regIdx >= paramCount 'done'
-      break
-    end 'done'
-    // Store param to its variable slot
-    dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.movSlot(regIdx, reg)))
-  end 'regParams'
+	// Save register params to their stack slots.
+	// Do NOT register with the register allocator — body SSA values start from valueId 0
+	// which would conflict with param valueIds. The body's memref.load operations will
+	// correctly register values with the allocator when they're needed.
+	let regParams = [X64Register.rcx, X64Register.rdx, X64Register.r8, X64Register.r9, X64Register.rsi, X64Register.rdi, X64Register.rax, X64Register.rbx]
+	for(regIdx, reg) in regParams.enumerated() 'regParams'
+		if regIdx >= paramCount 'done'
+			break
+		end 'done'
+		// Store param to its variable slot
+		dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.movSlot(regIdx, reg)))
+	end 'regParams'
 
-  // Params 9+ are passed on the stack by the caller at [RBP+16], [RBP+24], etc.
-  var paramIdx = 8
-  while paramIdx < paramCount 'stackParams'
-    let rbpOffset = 16 + (paramIdx - 8) * 8
-    dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.loadRegRbpOffset(X64Register.rax, rbpOffset)))
-    dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.movSlot(paramIdx, X64Register.rax)))
-    paramIdx = paramIdx + 1
-  end 'stackParams'
+	// Params 9+ are passed on the stack by the caller at [RBP+16], [RBP+24], etc.
+	var paramIdx = 8
+	while paramIdx < paramCount 'stackParams'
+		let rbpOffset = 16 + (paramIdx - 8) * 8
+		dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.loadRegRbpOffset(X64Register.rax, rbpOffset)))
+		dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.movSlot(paramIdx, X64Register.rax)))
+		paramIdx = paramIdx + 1
+	end 'stackParams'
 end 'emitParamSavesRegAlloc'
 
 // Lower a single mid-level op using register allocation.
 function lowerMlirOpRegAlloc(op MlirOp, dstBlock MlirBlock, regState RegState, valueSlots ValueSlotMap, nextTempSlot SlotIndex, osDesc OsDescriptor) returns SlotIndex
-  var result = nextTempSlot
-  match op 'dispatch'
-    arith(arithOp) then lowerArithOpRA(arithOp, dstBlock: dstBlock, regState: regState)
-    memref(memOp) then lowerMemRefOpRA(memOp, dstBlock: dstBlock, regState: regState, valueSlots: valueSlots)
-    runtime(rtOp) then lowerRuntimeOpRA(rtOp, dstBlock: dstBlock, regState: regState)
-    func(funcOp) then lowerFuncOpRA(funcOp, dstBlock: dstBlock, regState: regState)
-    maxx64(x64Op) then dstBlock.ops.push(MlirOp.maxx64(x64Op))
-    sys(sysOp) then result = lowerSysOpRA(sysOp, dstBlock: dstBlock, regState: regState, valueSlots: valueSlots, nextTempSlot: nextTempSlot, osDesc: osDesc)
-    maxhl then result = nextTempSlot
-    cf then result = nextTempSlot
-    maxarm64 then result = nextTempSlot
-  end 'dispatch'
-  return result
+	var result = nextTempSlot
+	match op 'dispatch'
+		arith(arithOp) then lowerArithOpRA(arithOp, dstBlock: dstBlock, regState: regState)
+		memref(memOp) then lowerMemRefOpRA(memOp, dstBlock: dstBlock, regState: regState, valueSlots: valueSlots)
+		runtime(rtOp) then lowerRuntimeOpRA(rtOp, dstBlock: dstBlock, regState: regState)
+		func(funcOp) then lowerFuncOpRA(funcOp, dstBlock: dstBlock, regState: regState)
+		maxx64(x64Op) then dstBlock.ops.push(MlirOp.maxx64(x64Op))
+		sys(sysOp) then result = lowerSysOpRA(sysOp, dstBlock: dstBlock, regState: regState, valueSlots: valueSlots, nextTempSlot: nextTempSlot, osDesc: osDesc)
+		maxhl then result = nextTempSlot
+		cf then result = nextTempSlot
+		maxarm64 then result = nextTempSlot
+	end 'dispatch'
+	return result
 end 'lowerMlirOpRegAlloc'
 
 // ============================================================
@@ -265,252 +265,252 @@ end 'lowerMlirOpRegAlloc'
 // ============================================================
 
 function lowerArithOpRA(op ArithOp, dstBlock MlirBlock, regState RegState)
-  match op 'lower'
-    const(c) then lowerArithConstRA(c, dstBlock: dstBlock, regState: regState)
-    unary(u) then lowerArithUnaryRA(u, dstBlock: dstBlock, regState: regState)
-    binary(b) then lowerArithBinaryRA(b, dstBlock: dstBlock, regState: regState)
-  end 'lower'
+	match op 'lower'
+		const(c) then lowerArithConstRA(c, dstBlock: dstBlock, regState: regState)
+		unary(u) then lowerArithUnaryRA(u, dstBlock: dstBlock, regState: regState)
+		binary(b) then lowerArithBinaryRA(b, dstBlock: dstBlock, regState: regState)
+	end 'lower'
 end 'lowerArithOpRA'
 
 function lowerArithConstRA(op ArithConst, dstBlock MlirBlock, regState RegState)
-  // Record constant and allocate a register for it
-  rmEmitLoadImmediate(regState, valueId: op.resultId, value: op.value, dstBlock: dstBlock)
+	// Record constant and allocate a register for it
+	rmEmitLoadImmediate(regState, valueId: op.resultId, value: op.value, dstBlock: dstBlock)
 end 'lowerArithConstRA'
 
 function lowerArithUnaryRA(op ArithUnaryOp, dstBlock MlirBlock, regState RegState)
-  // Get operand into a register
-  let operandOrd = rmEnsureInRegister(regState, valueId: op.operandId, dstBlock: dstBlock, protect1: RM_NONE, protect2: RM_NONE)
-  // Transfer to result (reuses the register)
-  rmTransferValue(regState, oldValueId: op.operandId, regOrdinal: operandOrd, newValueId: op.resultId)
-  let reg = ordinalToX64(operandOrd)
-  // Emit the unary operation
-  match op.opcode 'emit'
-    negI64 then dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.negReg(reg)))
-    bitNotI64 then dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.bitNotReg(reg)))
-  end 'emit'
+	// Get operand into a register
+	let operandOrd = rmEnsureInRegister(regState, valueId: op.operandId, dstBlock: dstBlock, protect1: RM_NONE, protect2: RM_NONE)
+	// Transfer to result (reuses the register)
+	rmTransferValue(regState, oldValueId: op.operandId, regOrdinal: operandOrd, newValueId: op.resultId)
+	let reg = ordinalToX64(operandOrd)
+	// Emit the unary operation
+	match op.opcode 'emit'
+		negI64 then dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.negReg(reg)))
+		bitNotI64 then dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.bitNotReg(reg)))
+	end 'emit'
 end 'lowerArithUnaryRA'
 
 function lowerArithBinaryRA(op ArithBinaryOp, dstBlock MlirBlock, regState RegState)
-  let resultId = op.resultId
-  let leftId = op.leftId
-  let rightId = op.rightId
-  match op.opcode 'lower'
-    addI64 then lowerBinaryOpRA(resultId, leftId: leftId, rightId: rightId, opKind: X64BinKind.add, dstBlock: dstBlock, regState: regState)
-    subI64 then lowerBinaryOpRA(resultId, leftId: leftId, rightId: rightId, opKind: X64BinKind.sub, dstBlock: dstBlock, regState: regState)
-    mulI64 then lowerBinaryOpRA(resultId, leftId: leftId, rightId: rightId, opKind: X64BinKind.mul, dstBlock: dstBlock, regState: regState)
-    divI64 then lowerDivRemRA(resultId, leftId: leftId, rightId: rightId, isRem: false, dstBlock: dstBlock, regState: regState)
-    remI64 then lowerDivRemRA(resultId, leftId: leftId, rightId: rightId, isRem: true, dstBlock: dstBlock, regState: regState)
-    andI64 then lowerBinaryOpRA(resultId, leftId: leftId, rightId: rightId, opKind: X64BinKind.bitAnd, dstBlock: dstBlock, regState: regState)
-    orI64 then lowerBinaryOpRA(resultId, leftId: leftId, rightId: rightId, opKind: X64BinKind.bitOr, dstBlock: dstBlock, regState: regState)
-    xorI64 then lowerBinaryOpRA(resultId, leftId: leftId, rightId: rightId, opKind: X64BinKind.bitXor, dstBlock: dstBlock, regState: regState)
-    shlI64 then lowerShiftOpRA(resultId, leftId: leftId, rightId: rightId, isLeft: true, dstBlock: dstBlock, regState: regState)
-    shrI64 then lowerShiftOpRA(resultId, leftId: leftId, rightId: rightId, isLeft: false, dstBlock: dstBlock, regState: regState)
-    cmpI64Eq then lowerCmpOpRA(leftId, rightId: rightId, dstBlock: dstBlock, regState: regState)
-    cmpI64Ne then lowerCmpOpRA(leftId, rightId: rightId, dstBlock: dstBlock, regState: regState)
-    cmpI64Lt then lowerCmpOpRA(leftId, rightId: rightId, dstBlock: dstBlock, regState: regState)
-    cmpI64Le then lowerCmpOpRA(leftId, rightId: rightId, dstBlock: dstBlock, regState: regState)
-    cmpI64Gt then lowerCmpOpRA(leftId, rightId: rightId, dstBlock: dstBlock, regState: regState)
-    cmpI64Ge then lowerCmpOpRA(leftId, rightId: rightId, dstBlock: dstBlock, regState: regState)
-    cmpF64Eq then lowerFloatCmpOpRA(leftId, rightId: rightId, dstBlock: dstBlock, regState: regState)
-    cmpF64Ne then lowerFloatCmpOpRA(leftId, rightId: rightId, dstBlock: dstBlock, regState: regState)
-    cmpF64Lt then lowerFloatCmpOpRA(leftId, rightId: rightId, dstBlock: dstBlock, regState: regState)
-    cmpF64Le then lowerFloatCmpOpRA(leftId, rightId: rightId, dstBlock: dstBlock, regState: regState)
-    cmpF64Gt then lowerFloatCmpOpRA(leftId, rightId: rightId, dstBlock: dstBlock, regState: regState)
-    cmpF64Ge then lowerFloatCmpOpRA(leftId, rightId: rightId, dstBlock: dstBlock, regState: regState)
-  end 'lower'
+	let resultId = op.resultId
+	let leftId = op.leftId
+	let rightId = op.rightId
+	match op.opcode 'lower'
+		addI64 then lowerBinaryOpRA(resultId, leftId: leftId, rightId: rightId, opKind: X64BinKind.add, dstBlock: dstBlock, regState: regState)
+		subI64 then lowerBinaryOpRA(resultId, leftId: leftId, rightId: rightId, opKind: X64BinKind.sub, dstBlock: dstBlock, regState: regState)
+		mulI64 then lowerBinaryOpRA(resultId, leftId: leftId, rightId: rightId, opKind: X64BinKind.mul, dstBlock: dstBlock, regState: regState)
+		divI64 then lowerDivRemRA(resultId, leftId: leftId, rightId: rightId, isRem: false, dstBlock: dstBlock, regState: regState)
+		remI64 then lowerDivRemRA(resultId, leftId: leftId, rightId: rightId, isRem: true, dstBlock: dstBlock, regState: regState)
+		andI64 then lowerBinaryOpRA(resultId, leftId: leftId, rightId: rightId, opKind: X64BinKind.bitAnd, dstBlock: dstBlock, regState: regState)
+		orI64 then lowerBinaryOpRA(resultId, leftId: leftId, rightId: rightId, opKind: X64BinKind.bitOr, dstBlock: dstBlock, regState: regState)
+		xorI64 then lowerBinaryOpRA(resultId, leftId: leftId, rightId: rightId, opKind: X64BinKind.bitXor, dstBlock: dstBlock, regState: regState)
+		shlI64 then lowerShiftOpRA(resultId, leftId: leftId, rightId: rightId, isLeft: true, dstBlock: dstBlock, regState: regState)
+		shrI64 then lowerShiftOpRA(resultId, leftId: leftId, rightId: rightId, isLeft: false, dstBlock: dstBlock, regState: regState)
+		cmpI64Eq then lowerCmpOpRA(leftId, rightId: rightId, dstBlock: dstBlock, regState: regState)
+		cmpI64Ne then lowerCmpOpRA(leftId, rightId: rightId, dstBlock: dstBlock, regState: regState)
+		cmpI64Lt then lowerCmpOpRA(leftId, rightId: rightId, dstBlock: dstBlock, regState: regState)
+		cmpI64Le then lowerCmpOpRA(leftId, rightId: rightId, dstBlock: dstBlock, regState: regState)
+		cmpI64Gt then lowerCmpOpRA(leftId, rightId: rightId, dstBlock: dstBlock, regState: regState)
+		cmpI64Ge then lowerCmpOpRA(leftId, rightId: rightId, dstBlock: dstBlock, regState: regState)
+		cmpF64Eq then lowerFloatCmpOpRA(leftId, rightId: rightId, dstBlock: dstBlock, regState: regState)
+		cmpF64Ne then lowerFloatCmpOpRA(leftId, rightId: rightId, dstBlock: dstBlock, regState: regState)
+		cmpF64Lt then lowerFloatCmpOpRA(leftId, rightId: rightId, dstBlock: dstBlock, regState: regState)
+		cmpF64Le then lowerFloatCmpOpRA(leftId, rightId: rightId, dstBlock: dstBlock, regState: regState)
+		cmpF64Gt then lowerFloatCmpOpRA(leftId, rightId: rightId, dstBlock: dstBlock, regState: regState)
+		cmpF64Ge then lowerFloatCmpOpRA(leftId, rightId: rightId, dstBlock: dstBlock, regState: regState)
+	end 'lower'
 end 'lowerArithBinaryRA'
 
 // Binary operation kinds for x64 dispatch
 enum X64BinKind
-  add
-  sub
-  mul
-  bitAnd
-  bitOr
-  bitXor
+	add
+	sub
+	mul
+	bitAnd
+	bitOr
+	bitXor
 end 'X64BinKind'
 
 // Binary op: ensure both operands in registers, transfer LHS to result, emit op
 function lowerBinaryOpRA(resultId ValueId, leftId ValueId, rightId ValueId, opKind X64BinKind, dstBlock MlirBlock, regState RegState)
-  let rhsOrd = rmEnsureInRegister(regState, valueId: rightId, dstBlock: dstBlock, protect1: RM_NONE, protect2: RM_NONE)
-  let lhsOrd = rmEnsureInRegister(regState, valueId: leftId, dstBlock: dstBlock, protect1: rhsOrd, protect2: RM_NONE)
-  // Transfer LHS register to result (LHS is consumed by the operation)
-  rmTransferValue(regState, oldValueId: leftId, regOrdinal: lhsOrd, newValueId: resultId)
-  let lhsReg = ordinalToX64(lhsOrd)
-  let rhsReg = ordinalToX64(rhsOrd)
-  // Emit the binary instruction
-  match opKind 'emit'
-    add then dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.addRegReg(lhsReg, rhsReg)))
-    sub then dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.subRegReg(lhsReg, rhsReg)))
-    mul then dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.imulRegReg(lhsReg, rhsReg)))
-    bitAnd then dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.andRegReg(lhsReg, rhsReg)))
-    bitOr then dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.orRegReg(lhsReg, rhsReg)))
-    bitXor then dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.xorRegReg(lhsReg, rhsReg)))
-  end 'emit'
+	let rhsOrd = rmEnsureInRegister(regState, valueId: rightId, dstBlock: dstBlock, protect1: RM_NONE, protect2: RM_NONE)
+	let lhsOrd = rmEnsureInRegister(regState, valueId: leftId, dstBlock: dstBlock, protect1: rhsOrd, protect2: RM_NONE)
+	// Transfer LHS register to result (LHS is consumed by the operation)
+	rmTransferValue(regState, oldValueId: leftId, regOrdinal: lhsOrd, newValueId: resultId)
+	let lhsReg = ordinalToX64(lhsOrd)
+	let rhsReg = ordinalToX64(rhsOrd)
+	// Emit the binary instruction
+	match opKind 'emit'
+		add then dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.addRegReg(lhsReg, rhsReg)))
+		sub then dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.subRegReg(lhsReg, rhsReg)))
+		mul then dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.imulRegReg(lhsReg, rhsReg)))
+		bitAnd then dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.andRegReg(lhsReg, rhsReg)))
+		bitOr then dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.orRegReg(lhsReg, rhsReg)))
+		bitXor then dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.xorRegReg(lhsReg, rhsReg)))
+	end 'emit'
 end 'lowerBinaryOpRA'
 
 // Shift op: shift count must be in RCX (cl register).
 function lowerShiftOpRA(resultId ValueId, leftId ValueId, rightId ValueId, isLeft bool, dstBlock MlirBlock, regState RegState)
-  let rcxOrd = x64RegToOrdinal(X64Register.rcx)
-  // Get LHS into a register first
-  let lhsOrd = rmEnsureInRegister(regState, valueId: leftId, dstBlock: dstBlock, protect1: RM_NONE, protect2: RM_NONE)
-  // Get RHS into a register
-  let rhsOrd = rmEnsureInRegister(regState, valueId: rightId, dstBlock: dstBlock, protect1: lhsOrd, protect2: RM_NONE)
+	let rcxOrd = x64RegToOrdinal(X64Register.rcx)
+	// Get LHS into a register first
+	let lhsOrd = rmEnsureInRegister(regState, valueId: leftId, dstBlock: dstBlock, protect1: RM_NONE, protect2: RM_NONE)
+	// Get RHS into a register
+	let rhsOrd = rmEnsureInRegister(regState, valueId: rightId, dstBlock: dstBlock, protect1: lhsOrd, protect2: RM_NONE)
 
-  if lhsOrd == rcxOrd and rhsOrd != rcxOrd 'lhsInRcx'
-    // LHS is in RCX but we need RCX for the shift count.
-    // Allocate a result register (not RCX, not RHS), move LHS there first.
-    let resultOrd = rmAllocateRegister(regState, valueId: resultId, dstBlock: dstBlock, protect1: rcxOrd, protect2: rhsOrd)
-    let resultReg = ordinalToX64(resultOrd)
-    let lhsReg = ordinalToX64(lhsOrd)
-    let rhsReg = ordinalToX64(rhsOrd)
-    dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.movRegReg(resultReg, lhsReg)))
-    // Spill RCX and move RHS to RCX
-    rmSpillRegisterIfOccupied(regState, regOrdinal: rcxOrd, dstBlock: dstBlock)
-    dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.movRegReg(X64Register.rcx, rhsReg)))
-    // Emit the shift
-    if isLeft 'shl'
-      dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.shlRegCl(resultReg)))
-    end 'shl' else 'sar'
-      dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.sarRegCl(resultReg)))
-    end 'sar'
-  end 'lhsInRcx' else 'normal'
-    // Move shift count to RCX if not already there
-    if rhsOrd != rcxOrd 'needMovToRcx'
-      rmSpillRegisterIfOccupied(regState, regOrdinal: rcxOrd, dstBlock: dstBlock)
-      let rhsReg = ordinalToX64(rhsOrd)
-      dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.movRegReg(X64Register.rcx, rhsReg)))
-    end 'needMovToRcx'
-    // Allocate result register (not LHS, not RCX)
-    let resultOrd = rmAllocateRegister(regState, valueId: resultId, dstBlock: dstBlock, protect1: lhsOrd, protect2: rcxOrd)
-    let resultReg = ordinalToX64(resultOrd)
-    let lhsReg = ordinalToX64(lhsOrd)
-    if resultOrd != lhsOrd 'movToResult'
-      dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.movRegReg(resultReg, lhsReg)))
-    end 'movToResult'
-    if isLeft 'shl2'
-      dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.shlRegCl(resultReg)))
-    end 'shl2' else 'sar2'
-      dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.sarRegCl(resultReg)))
-    end 'sar2'
-  end 'normal'
+	if lhsOrd == rcxOrd and rhsOrd != rcxOrd 'lhsInRcx'
+		// LHS is in RCX but we need RCX for the shift count.
+		// Allocate a result register (not RCX, not RHS), move LHS there first.
+		let resultOrd = rmAllocateRegister(regState, valueId: resultId, dstBlock: dstBlock, protect1: rcxOrd, protect2: rhsOrd)
+		let resultReg = ordinalToX64(resultOrd)
+		let lhsReg = ordinalToX64(lhsOrd)
+		let rhsReg = ordinalToX64(rhsOrd)
+		dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.movRegReg(resultReg, lhsReg)))
+		// Spill RCX and move RHS to RCX
+		rmSpillRegisterIfOccupied(regState, regOrdinal: rcxOrd, dstBlock: dstBlock)
+		dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.movRegReg(X64Register.rcx, rhsReg)))
+		// Emit the shift
+		if isLeft 'shl'
+			dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.shlRegCl(resultReg)))
+		end 'shl' else 'sar'
+			dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.sarRegCl(resultReg)))
+		end 'sar'
+	end 'lhsInRcx' else 'normal'
+		// Move shift count to RCX if not already there
+		if rhsOrd != rcxOrd 'needMovToRcx'
+			rmSpillRegisterIfOccupied(regState, regOrdinal: rcxOrd, dstBlock: dstBlock)
+			let rhsReg = ordinalToX64(rhsOrd)
+			dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.movRegReg(X64Register.rcx, rhsReg)))
+		end 'needMovToRcx'
+		// Allocate result register (not LHS, not RCX)
+		let resultOrd = rmAllocateRegister(regState, valueId: resultId, dstBlock: dstBlock, protect1: lhsOrd, protect2: rcxOrd)
+		let resultReg = ordinalToX64(resultOrd)
+		let lhsReg = ordinalToX64(lhsOrd)
+		if resultOrd != lhsOrd 'movToResult'
+			dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.movRegReg(resultReg, lhsReg)))
+		end 'movToResult'
+		if isLeft 'shl2'
+			dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.shlRegCl(resultReg)))
+		end 'shl2' else 'sar2'
+			dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.sarRegCl(resultReg)))
+		end 'sar2'
+	end 'normal'
 end 'lowerShiftOpRA'
 
 // Compare op: ensure both operands in registers, emit cmpRegReg.
 // No slot/register needed for the result -- flags are consumed by condBr.
 function lowerCmpOpRA(leftId ValueId, rightId ValueId, dstBlock MlirBlock, regState RegState)
-  let rhsOrd = rmEnsureInRegister(regState, valueId: rightId, dstBlock: dstBlock, protect1: RM_NONE, protect2: RM_NONE)
-  let lhsOrd = rmEnsureInRegister(regState, valueId: leftId, dstBlock: dstBlock, protect1: rhsOrd, protect2: RM_NONE)
-  let lhsReg = ordinalToX64(lhsOrd)
-  let rhsReg = ordinalToX64(rhsOrd)
-  dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.cmpRegReg(lhsReg, rhsReg)))
+	let rhsOrd = rmEnsureInRegister(regState, valueId: rightId, dstBlock: dstBlock, protect1: RM_NONE, protect2: RM_NONE)
+	let lhsOrd = rmEnsureInRegister(regState, valueId: leftId, dstBlock: dstBlock, protect1: rhsOrd, protect2: RM_NONE)
+	let lhsReg = ordinalToX64(lhsOrd)
+	let rhsReg = ordinalToX64(rhsOrd)
+	dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.cmpRegReg(lhsReg, rhsReg)))
 end 'lowerCmpOpRA'
 
 // Float compare (ucomisd) -- load from stack slots since we only have integer regalloc
 function lowerFloatCmpOpRA(leftId ValueId, rightId ValueId, dstBlock MlirBlock, regState RegState)
-  // Float comparisons still use XMM registers via slot-based ops.
-  // We need a slot for the float values - use rmEnsureInRegister then store,
-  // or if they already have a stack home use that.
-  // Actually the float values are loaded via movsd from slots -- we need slots.
-  // Float cmp uses ucomisd which works with xmm0/xmm1.
-  // The float values should already be on the stack from their definition.
-  // For now, fall through to the existing slot-based approach.
-  // Float values get their slot from the stack home in regState.
-  let leftHome = rmGetOr(regState.valueStackHome, index: leftId, fallback: RM_NO_STACK_HOME)
-  let rightHome = rmGetOr(regState.valueStackHome, index: rightId, fallback: RM_NO_STACK_HOME)
-  if leftHome != RM_NO_STACK_HOME and rightHome != RM_NO_STACK_HOME 'bothOnStack'
-    // Convert stack offsets back to slot indices: offset = -(slotId+1)*8, so slotId = (-offset/8) - 1
-    let leftSlot = (0 - leftHome) / 8 - 1
-    let rightSlot = (0 - rightHome) / 8 - 1
-    dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.loadF64Slot(rightSlot)))
-    dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.loadF64Slot(leftSlot)))
-    dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.ucomisd))
-  end 'bothOnStack' else 'fallback'
-    // If not on stack, treat like integer cmp
-    let rhsOrd = rmEnsureInRegister(regState, valueId: rightId, dstBlock: dstBlock, protect1: RM_NONE, protect2: RM_NONE)
-    let lhsOrd = rmEnsureInRegister(regState, valueId: leftId, dstBlock: dstBlock, protect1: rhsOrd, protect2: RM_NONE)
-    let lhsReg = ordinalToX64(lhsOrd)
-    let rhsReg = ordinalToX64(rhsOrd)
-    dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.cmpRegReg(lhsReg, rhsReg)))
-  end 'fallback'
+	// Float comparisons still use XMM registers via slot-based ops.
+	// We need a slot for the float values - use rmEnsureInRegister then store,
+	// or if they already have a stack home use that.
+	// Actually the float values are loaded via movsd from slots -- we need slots.
+	// Float cmp uses ucomisd which works with xmm0/xmm1.
+	// The float values should already be on the stack from their definition.
+	// For now, fall through to the existing slot-based approach.
+	// Float values get their slot from the stack home in regState.
+	let leftHome = rmGetOr(regState.valueStackHome, index: leftId, fallback: RM_NO_STACK_HOME)
+	let rightHome = rmGetOr(regState.valueStackHome, index: rightId, fallback: RM_NO_STACK_HOME)
+	if leftHome != RM_NO_STACK_HOME and rightHome != RM_NO_STACK_HOME 'bothOnStack'
+		// Convert stack offsets back to slot indices: offset = -(slotId+1)*8, so slotId = (-offset/8) - 1
+		let leftSlot = (0 - leftHome) / 8 - 1
+		let rightSlot = (0 - rightHome) / 8 - 1
+		dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.loadF64Slot(rightSlot)))
+		dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.loadF64Slot(leftSlot)))
+		dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.ucomisd))
+	end 'bothOnStack' else 'fallback'
+		// If not on stack, treat like integer cmp
+		let rhsOrd = rmEnsureInRegister(regState, valueId: rightId, dstBlock: dstBlock, protect1: RM_NONE, protect2: RM_NONE)
+		let lhsOrd = rmEnsureInRegister(regState, valueId: leftId, dstBlock: dstBlock, protect1: rhsOrd, protect2: RM_NONE)
+		let lhsReg = ordinalToX64(lhsOrd)
+		let rhsReg = ordinalToX64(rhsOrd)
+		dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.cmpRegReg(lhsReg, rhsReg)))
+	end 'fallback'
 end 'lowerFloatCmpOpRA'
 
 // Division: IDIV uses RAX:RDX (dividend in RAX, sign-extended to RDX via CQO).
 // The divisor must NOT be in RAX or RDX.
 function lowerDivRemRA(resultId ValueId, leftId ValueId, rightId ValueId, isRem bool, dstBlock MlirBlock, regState RegState)
-  let raxOrd = x64RegToOrdinal(X64Register.rax)
-  let rdxOrd = x64RegToOrdinal(X64Register.rdx)
+	let raxOrd = x64RegToOrdinal(X64Register.rax)
+	let rdxOrd = x64RegToOrdinal(X64Register.rdx)
 
-  // Ensure divisor is in a register
-  let rhsOrd = rmEnsureInRegister(regState, valueId: rightId, dstBlock: dstBlock, protect1: RM_NONE, protect2: RM_NONE)
-  // Ensure dividend is in a register
-  let lhsOrd = rmEnsureInRegister(regState, valueId: leftId, dstBlock: dstBlock, protect1: rhsOrd, protect2: RM_NONE)
+	// Ensure divisor is in a register
+	let rhsOrd = rmEnsureInRegister(regState, valueId: rightId, dstBlock: dstBlock, protect1: RM_NONE, protect2: RM_NONE)
+	// Ensure dividend is in a register
+	let lhsOrd = rmEnsureInRegister(regState, valueId: leftId, dstBlock: dstBlock, protect1: rhsOrd, protect2: RM_NONE)
 
-  // If divisor ended up in RAX or RDX, move it somewhere safe
-  var divisorOrd = rhsOrd
-  if divisorOrd == raxOrd or divisorOrd == rdxOrd 'divisorUnsafe'
-    let safeOrd = findSafeDivRegister(regState, lhsOrd: lhsOrd, rhsOrd: divisorOrd)
-    rmSpillRegisterIfOccupied(regState, regOrdinal: safeOrd, dstBlock: dstBlock)
-    let safeReg = ordinalToX64(safeOrd)
-    let divReg = ordinalToX64(divisorOrd)
-    dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.movRegReg(safeReg, divReg)))
-    divisorOrd = safeOrd
-  end 'divisorUnsafe'
+	// If divisor ended up in RAX or RDX, move it somewhere safe
+	var divisorOrd = rhsOrd
+	if divisorOrd == raxOrd or divisorOrd == rdxOrd 'divisorUnsafe'
+		let safeOrd = findSafeDivRegister(regState, lhsOrd: lhsOrd, rhsOrd: divisorOrd)
+		rmSpillRegisterIfOccupied(regState, regOrdinal: safeOrd, dstBlock: dstBlock)
+		let safeReg = ordinalToX64(safeOrd)
+		let divReg = ordinalToX64(divisorOrd)
+		dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.movRegReg(safeReg, divReg)))
+		divisorOrd = safeOrd
+	end 'divisorUnsafe'
 
-  // Spill RAX and RDX (they will be clobbered by IDIV)
-  rmSpillRegisterIfOccupied(regState, regOrdinal: raxOrd, dstBlock: dstBlock)
-  rmSpillRegisterIfOccupied(regState, regOrdinal: rdxOrd, dstBlock: dstBlock)
+	// Spill RAX and RDX (they will be clobbered by IDIV)
+	rmSpillRegisterIfOccupied(regState, regOrdinal: raxOrd, dstBlock: dstBlock)
+	rmSpillRegisterIfOccupied(regState, regOrdinal: rdxOrd, dstBlock: dstBlock)
 
-  // Move dividend to RAX if not already there
-  let dividendReg = ordinalToX64(lhsOrd)
-  if lhsOrd != raxOrd 'movDividend'
-    dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.movRegReg(X64Register.rax, dividendReg)))
-  end 'movDividend'
+	// Move dividend to RAX if not already there
+	let dividendReg = ordinalToX64(lhsOrd)
+	if lhsOrd != raxOrd 'movDividend'
+		dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.movRegReg(X64Register.rax, dividendReg)))
+	end 'movDividend'
 
-  // Emit CQO (sign-extend RAX into RDX:RAX) and IDIV
-  let divisorReg = ordinalToX64(divisorOrd)
-  dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.cqo))
-  dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.idivReg(divisorReg)))
+	// Emit CQO (sign-extend RAX into RDX:RAX) and IDIV
+	let divisorReg = ordinalToX64(divisorOrd)
+	dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.cqo))
+	dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.idivReg(divisorReg)))
 
-  // Result is in RAX (quotient) or RDX (remainder)
-  if isRem 'remainder'
-    rmAssign(regState, regOrdinal: rdxOrd, valueId: resultId)
-  end 'remainder' else 'quotient'
-    rmAssign(regState, regOrdinal: raxOrd, valueId: resultId)
-  end 'quotient'
+	// Result is in RAX (quotient) or RDX (remainder)
+	if isRem 'remainder'
+		rmAssign(regState, regOrdinal: rdxOrd, valueId: resultId)
+	end 'remainder' else 'quotient'
+		rmAssign(regState, regOrdinal: raxOrd, valueId: resultId)
+	end 'quotient'
 end 'lowerDivRemRA'
 
 // Find a register that is not RAX, RDX, or the dividend/divisor registers.
 function findSafeDivRegister(regState RegState, lhsOrd RegOrdinal, rhsOrd RegOrdinal) returns RegOrdinal
-  let raxOrd = x64RegToOrdinal(X64Register.rax)
-  let rdxOrd = x64RegToOrdinal(X64Register.rdx)
-  var i = 0
-  while i < regState.gprPoolSize 'scan'
-    let regOrd = try regState.gprPool.get(i) otherwise 'skip'
-      i = i + 1
-      continue
-    end 'skip'
-    if regOrd != raxOrd and regOrd != rdxOrd and regOrd != lhsOrd and regOrd != rhsOrd 'safe'
-      let occupant = rmGetOr(regState.registerContents, index: regOrd, fallback: RM_NONE)
-      if occupant == RM_NONE'free'
-        return regOrd
-      end 'free'
-    end 'safe'
-    i = i + 1
-  end 'scan'
-  // No free register found, pick any that's not rax/rdx/lhs/rhs
-  i = 0
-  while i < regState.gprPoolSize 'fallback'
-    let regOrd = try regState.gprPool.get(i) otherwise 'skip2'
-      i = i + 1
-      continue
-    end 'skip2'
-    if regOrd != raxOrd and regOrd != rdxOrd and regOrd != lhsOrd and regOrd != rhsOrd 'anyReg'
-      return regOrd
-    end 'anyReg'
-    i = i + 1
-  end 'fallback'
-  panic("findSafeDivRegister: no safe register available")
+	let raxOrd = x64RegToOrdinal(X64Register.rax)
+	let rdxOrd = x64RegToOrdinal(X64Register.rdx)
+	var i = 0
+	while i < regState.gprPoolSize 'scan'
+		let regOrd = try regState.gprPool.get(i) otherwise 'skip'
+			i = i + 1
+			continue
+		end 'skip'
+		if regOrd != raxOrd and regOrd != rdxOrd and regOrd != lhsOrd and regOrd != rhsOrd 'safe'
+			let occupant = rmGetOr(regState.registerContents, index: regOrd, fallback: RM_NONE)
+			if occupant == RM_NONE 'free'
+				return regOrd
+			end 'free'
+		end 'safe'
+		i = i + 1
+	end 'scan'
+	// No free register found, pick any that's not rax/rdx/lhs/rhs
+	i = 0
+	while i < regState.gprPoolSize 'fallback'
+		let regOrd = try regState.gprPool.get(i) otherwise 'skip2'
+			i = i + 1
+			continue
+		end 'skip2'
+		if regOrd != raxOrd and regOrd != rdxOrd and regOrd != lhsOrd and regOrd != rhsOrd 'anyReg'
+			return regOrd
+		end 'anyReg'
+		i = i + 1
+	end 'fallback'
+	panic("findSafeDivRegister: no safe register available")
 end 'findSafeDivRegister'
 
 // ============================================================
@@ -518,32 +518,32 @@ end 'findSafeDivRegister'
 // ============================================================
 
 function lowerMemRefOpRA(op MemRefOp, dstBlock MlirBlock, regState RegState, valueSlots ValueSlotMap)
-  match op 'lower'
-    storeSlot(slotId, valueId) then lowerStoreSlotRA(slotId, valueId: valueId, dstBlock: dstBlock, regState: regState, valueSlots: valueSlots)
-    loadSlot(resultId, slotId) then lowerLoadSlotRA(resultId, slotId: slotId, regState: regState, valueSlots: valueSlots)
-  end 'lower'
+	match op 'lower'
+		storeSlot(slotId, valueId) then lowerStoreSlotRA(slotId, valueId: valueId, dstBlock: dstBlock, regState: regState, valueSlots: valueSlots)
+		loadSlot(resultId, slotId) then lowerLoadSlotRA(resultId, slotId: slotId, regState: regState, valueSlots: valueSlots)
+	end 'lower'
 end 'lowerMemRefOpRA'
 
 function lowerStoreSlotRA(slotId VarSlot, valueId ValueId, dstBlock MlirBlock, regState RegState, valueSlots ValueSlotMap)
-  // Ensure the value is in a register
-  let valOrd = rmEnsureInRegister(regState, valueId: valueId, dstBlock: dstBlock, protect1: RM_NONE, protect2: RM_NONE)
-  let reg = ordinalToX64(valOrd)
-  // Emit store to the variable's stack slot
-  dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.movSlot(slotId, reg)))
-  // Record the stack home for this value
-  let slotOffset = 0 - (slotId + 1) * 8
-  rmNoteStoreToStack(regState, valueId: valueId, stackOffset: slotOffset)
-  // Also record in slot map for SysOps
-  valueSlotMapSet(valueSlots, valueId: valueId, slot: slotId)
+	// Ensure the value is in a register
+	let valOrd = rmEnsureInRegister(regState, valueId: valueId, dstBlock: dstBlock, protect1: RM_NONE, protect2: RM_NONE)
+	let reg = ordinalToX64(valOrd)
+	// Emit store to the variable's stack slot
+	dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.movSlot(slotId, reg)))
+	// Record the stack home for this value
+	let slotOffset = 0 - (slotId + 1) * 8
+	rmNoteStoreToStack(regState, valueId: valueId, stackOffset: slotOffset)
+	// Also record in slot map for SysOps
+	valueSlotMapSet(valueSlots, valueId: valueId, slot: slotId)
 end 'lowerStoreSlotRA'
 
 function lowerLoadSlotRA(resultId ValueId, slotId VarSlot, regState RegState, valueSlots ValueSlotMap)
-  // Lazy load: just record that this value lives on the stack.
-  // The value will be loaded when rmEnsureInRegister is called.
-  let slotOffset = 0 - (slotId + 1) * 8
-  rmNoteValueOnStack(regState, valueId: resultId, stackOffset: slotOffset)
-  // Also record in slot map for SysOps
-  valueSlotMapSet(valueSlots, valueId: resultId, slot: slotId)
+	// Lazy load: just record that this value lives on the stack.
+	// The value will be loaded when rmEnsureInRegister is called.
+	let slotOffset = 0 - (slotId + 1) * 8
+	rmNoteValueOnStack(regState, valueId: resultId, stackOffset: slotOffset)
+	// Also record in slot map for SysOps
+	valueSlotMapSet(valueSlots, valueId: resultId, slot: slotId)
 end 'lowerLoadSlotRA'
 
 // ============================================================
@@ -551,22 +551,22 @@ end 'lowerLoadSlotRA'
 // ============================================================
 
 function lowerRuntimeOpRA(op RuntimeOp, dstBlock MlirBlock, regState RegState)
-  match op 'lower'
-    printLiteral(data) then dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.printLiteral(data)))
-    printInt(valueId) then lowerPrintIntRA(valueId, dstBlock: dstBlock, regState: regState)
-  end 'lower'
+	match op 'lower'
+		printLiteral(data) then dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.printLiteral(data)))
+		printInt(valueId) then lowerPrintIntRA(valueId, dstBlock: dstBlock, regState: regState)
+	end 'lower'
 end 'lowerRuntimeOpRA'
 
 function lowerPrintIntRA(valueId ValueId, dstBlock MlirBlock, regState RegState)
-  // printInt expects the value in RAX
-  let raxOrd = x64RegToOrdinal(X64Register.rax)
-  let valOrd = rmEnsureInRegister(regState, valueId: valueId, dstBlock: dstBlock, protect1: RM_NONE, protect2: RM_NONE)
-  if valOrd != raxOrd 'moveToRax'
-    rmSpillRegisterIfOccupied(regState, regOrdinal: raxOrd, dstBlock: dstBlock)
-    let valReg = ordinalToX64(valOrd)
-    dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.movRegReg(X64Register.rax, valReg)))
-  end 'moveToRax'
-  dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.printInt))
+	// printInt expects the value in RAX
+	let raxOrd = x64RegToOrdinal(X64Register.rax)
+	let valOrd = rmEnsureInRegister(regState, valueId: valueId, dstBlock: dstBlock, protect1: RM_NONE, protect2: RM_NONE)
+	if valOrd != raxOrd 'moveToRax'
+		rmSpillRegisterIfOccupied(regState, regOrdinal: raxOrd, dstBlock: dstBlock)
+		let valReg = ordinalToX64(valOrd)
+		dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.movRegReg(X64Register.rax, valReg)))
+	end 'moveToRax'
+	dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.printInt))
 end 'lowerPrintIntRA'
 
 // ============================================================
@@ -574,19 +574,19 @@ end 'lowerPrintIntRA'
 // ============================================================
 
 function lowerFuncOpRA(op FuncOp, dstBlock MlirBlock, regState RegState)
-  match op 'lower'
-    call(resultId, callee, argIds) then rmEmitCall(regState, dstBlock: dstBlock, callee: callee, argIds: argIds, resultId: resultId)
-    tryCall(resultId, callee, argIds, errorFlagId) then rmEmitTryCall(regState, dstBlock: dstBlock, callee: callee, argIds: argIds, resultId: resultId, errorFlagId: errorFlagId)
-    indirectCall(resultId, calleeId, argIds) then rmEmitIndirectCallOp(regState, dstBlock: dstBlock, calleeId: calleeId, argIds: argIds, resultId: resultId)
-    funcRef(resultId, funcName) then lowerFuncRefRA(resultId, funcName: funcName, dstBlock: dstBlock, regState: regState)
-    ret then break 'lower'
-    tailCall then break 'lower'
-  end 'lower'
+	match op 'lower'
+		call(resultId, callee, argIds) then rmEmitCall(regState, dstBlock: dstBlock, callee: callee, argIds: argIds, resultId: resultId)
+		tryCall(resultId, callee, argIds, errorFlagId) then rmEmitTryCall(regState, dstBlock: dstBlock, callee: callee, argIds: argIds, resultId: resultId, errorFlagId: errorFlagId)
+		indirectCall(resultId, calleeId, argIds) then rmEmitIndirectCallOp(regState, dstBlock: dstBlock, calleeId: calleeId, argIds: argIds, resultId: resultId)
+		funcRef(resultId, funcName) then lowerFuncRefRA(resultId, funcName: funcName, dstBlock: dstBlock, regState: regState)
+		ret then break 'lower'
+		tailCall then break 'lower'
+	end 'lower'
 end 'lowerFuncOpRA'
 
 function lowerFuncRefRA(resultId ValueId, funcName ByteArray, dstBlock MlirBlock, regState RegState)
-  let reg = rmAllocateRegister(regState, valueId: resultId, dstBlock: dstBlock, protect1: RM_NONE, protect2: RM_NONE)
-  dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.leaFuncAddr(ordinalToX64(reg), funcName)))
+	let reg = rmAllocateRegister(regState, valueId: resultId, dstBlock: dstBlock, protect1: RM_NONE, protect2: RM_NONE)
+	dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.leaFuncAddr(ordinalToX64(reg), funcName)))
 end 'lowerFuncRefRA'
 
 // ============================================================
@@ -594,62 +594,62 @@ end 'lowerFuncRefRA'
 // ============================================================
 
 function lowerTerminatorRegAlloc(srcBlock MlirBlock, dstBlock MlirBlock, regState RegState)
-  match srcBlock.terminator 'dispatch'
-    maxhl to arith then break 'dispatch'
-    cf(cfOp) then lowerCfTerminatorRA(cfOp, srcBlock: srcBlock, dstBlock: dstBlock, regState: regState)
-    func(funcOp) then lowerFuncTerminatorRA(funcOp, dstBlock: dstBlock, regState: regState)
-    memref to sys then break 'dispatch'
-    maxx64(x64Op) then dstBlock.ops.push(MlirOp.maxx64(x64Op))
-    maxarm64 then break 'dispatch'
-  end 'dispatch'
+	match srcBlock.terminator 'dispatch'
+		maxhl to arith then break 'dispatch'
+		cf(cfOp) then lowerCfTerminatorRA(cfOp, srcBlock: srcBlock, dstBlock: dstBlock, regState: regState)
+		func(funcOp) then lowerFuncTerminatorRA(funcOp, dstBlock: dstBlock, regState: regState)
+		memref to sys then break 'dispatch'
+		maxx64(x64Op) then dstBlock.ops.push(MlirOp.maxx64(x64Op))
+		maxarm64 then break 'dispatch'
+	end 'dispatch'
 end 'lowerTerminatorRegAlloc'
 
 function lowerCfTerminatorRA(op CfOp, srcBlock MlirBlock, dstBlock MlirBlock, regState RegState)
-  match op 'lower'
-    br(target) then dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.jmp(target)))
-    condBr(condId, thenTarget, elseTarget) then lowerCondBrRA(condId, thenTarget: thenTarget, elseTarget: elseTarget, srcBlock: srcBlock, dstBlock: dstBlock, regState: regState)
-  end 'lower'
+	match op 'lower'
+		br(target) then dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.jmp(target)))
+		condBr(condId, thenTarget, elseTarget) then lowerCondBrRA(condId, thenTarget: thenTarget, elseTarget: elseTarget, srcBlock: srcBlock, dstBlock: dstBlock, regState: regState)
+	end 'lower'
 end 'lowerCfTerminatorRA'
 
 function lowerCondBrRA(condId ValueId, thenTarget BlockId, elseTarget BlockId, srcBlock MlirBlock, dstBlock MlirBlock, regState RegState)
-  let jumpKind = determineJumpKindInBlock(srcBlock)
-  // Emit inverted conditional jump to else block, then unconditional jump to then block.
-  match jumpKind 'emitJump'
-    eq then dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.condJump(X64JumpCondition.ne, elseTarget)))
-    ne then dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.condJump(X64JumpCondition.e, elseTarget)))
-    lt then dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.condJump(X64JumpCondition.ge, elseTarget)))
-    le then dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.condJump(X64JumpCondition.g, elseTarget)))
-    gt then dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.condJump(X64JumpCondition.le, elseTarget)))
-    ge then dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.condJump(X64JumpCondition.l, elseTarget)))
-    feq then dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.condJump(X64JumpCondition.ne, elseTarget)))
-    fne then dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.condJump(X64JumpCondition.e, elseTarget)))
-    flt then dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.condJump(X64JumpCondition.ae, elseTarget)))
-    fle then dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.condJump(X64JumpCondition.a, elseTarget)))
-    fgt then dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.condJump(X64JumpCondition.be, elseTarget)))
-    fge then dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.condJump(X64JumpCondition.b, elseTarget)))
-    boolTest then lowerBoolTestCondBrRA(condId, elseTarget: elseTarget, dstBlock: dstBlock, regState: regState)
-  end 'emitJump'
-  // Unconditional jump to then block
-  dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.jmp(thenTarget)))
+	let jumpKind = determineJumpKindInBlock(srcBlock)
+	// Emit inverted conditional jump to else block, then unconditional jump to then block.
+	match jumpKind 'emitJump'
+		eq then dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.condJump(X64JumpCondition.ne, elseTarget)))
+		ne then dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.condJump(X64JumpCondition.e, elseTarget)))
+		lt then dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.condJump(X64JumpCondition.ge, elseTarget)))
+		le then dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.condJump(X64JumpCondition.g, elseTarget)))
+		gt then dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.condJump(X64JumpCondition.le, elseTarget)))
+		ge then dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.condJump(X64JumpCondition.l, elseTarget)))
+		feq then dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.condJump(X64JumpCondition.ne, elseTarget)))
+		fne then dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.condJump(X64JumpCondition.e, elseTarget)))
+		flt then dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.condJump(X64JumpCondition.ae, elseTarget)))
+		fle then dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.condJump(X64JumpCondition.a, elseTarget)))
+		fgt then dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.condJump(X64JumpCondition.be, elseTarget)))
+		fge then dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.condJump(X64JumpCondition.b, elseTarget)))
+		boolTest then lowerBoolTestCondBrRA(condId, elseTarget: elseTarget, dstBlock: dstBlock, regState: regState)
+	end 'emitJump'
+	// Unconditional jump to then block
+	dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.jmp(thenTarget)))
 end 'lowerCondBrRA'
 
 function lowerBoolTestCondBrRA(condId ValueId, elseTarget BlockId, dstBlock MlirBlock, regState RegState)
-  let valOrd = rmEnsureInRegister(regState, valueId: condId, dstBlock: dstBlock, protect1: RM_NONE, protect2: RM_NONE)
-  let reg = ordinalToX64(valOrd)
-  dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.testRegReg(reg, reg)))
-  dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.condJump(X64JumpCondition.e, elseTarget)))
+	let valOrd = rmEnsureInRegister(regState, valueId: condId, dstBlock: dstBlock, protect1: RM_NONE, protect2: RM_NONE)
+	let reg = ordinalToX64(valOrd)
+	dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.testRegReg(reg, reg)))
+	dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.condJump(X64JumpCondition.e, elseTarget)))
 end 'lowerBoolTestCondBrRA'
 
 function lowerFuncTerminatorRA(op FuncOp, dstBlock MlirBlock, regState RegState)
-  match op 'lower'
-    ret(retValId) then lowerReturnOpRA(retValId, dstBlock: dstBlock, regState: regState)
-    call to tailCall then break 'lower'
-  end 'lower'
+	match op 'lower'
+		ret(retValId) then lowerReturnOpRA(retValId, dstBlock: dstBlock, regState: regState)
+		call to tailCall then break 'lower'
+	end 'lower'
 end 'lowerFuncTerminatorRA'
 
 function lowerReturnOpRA(retValId ValueId, dstBlock MlirBlock, regState RegState)
-  rmEnsureReturnValue(regState, dstBlock: dstBlock, retValId: retValId)
-  dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.epilogue))
+	rmEnsureReturnValue(regState, dstBlock: dstBlock, retValId: retValId)
+	dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.epilogue))
 end 'lowerReturnOpRA'
 
 // ============================================================
@@ -662,263 +662,263 @@ end 'lowerReturnOpRA'
 // binary emitters use hardcoded registers (rax, rcx, rdx, etc.) without the
 // allocator's knowledge.
 function lowerSysOpRA(op SysOp, dstBlock MlirBlock, regState RegState, valueSlots ValueSlotMap, nextTempSlot SlotIndex, osDesc OsDescriptor) returns SlotIndex
-  // Spill all live registers before the SysOp so values get stack homes
-  // before the SysOp emitter clobbers registers.
-  rmSpillAllCallerSaved(regState, dstBlock: dstBlock)
-  var result = nextTempSlot
-  match op 'lower'
-    syscall(resultId, number, argIds) then result = lowerSyscallRA(resultId, number: number, argIds: argIds, dstBlock: dstBlock, regState: regState, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
-    iatCall(resultId, slotIndex, argIds) then result = lowerIatCallRA(resultId, slotIndex: slotIndex, argIds: argIds, dstBlock: dstBlock, regState: regState, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
-    globalAddr(resultId, name) then result = lowerGlobalAddrRA(resultId, name: name, dstBlock: dstBlock, regState: regState, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
-    stackAddr(resultId, slotId) then result = lowerStackAddrRA(resultId, slotId: slotId, dstBlock: dstBlock, regState: regState, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
-    storeByte(baseId, offsetId, byteId) then result = lowerStoreByteRA(baseId, offsetId: offsetId, byteId: byteId, dstBlock: dstBlock, regState: regState, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
-    loadByte(resultId, baseId, offsetId) then result = lowerLoadByteRA(resultId, baseId: baseId, offsetId: offsetId, dstBlock: dstBlock, regState: regState, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
-    memcpy(dstId, srcId, lenId) then result = lowerMemcpyRA(dstId, srcId: srcId, lenId: lenId, dstBlock: dstBlock, regState: regState, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
-    osExit(codeId) then result = lowerOsExitRA(codeId, dstBlock: dstBlock, regState: regState, valueSlots: valueSlots, nextTempSlot: nextTempSlot, osDesc: osDesc)
-    osWrite(ptrId, lenId) then result = lowerOsWriteRA(ptrId, lenId: lenId, dstBlock: dstBlock, regState: regState, valueSlots: valueSlots, nextTempSlot: nextTempSlot, osDesc: osDesc)
-  end 'lower'
-  // SysOp binary emitters clobber registers (rax, rcx, rdx, rsi, rdi, etc.)
-  // without the allocator's knowledge. Invalidate all register mappings.
-  rmInvalidateCallerSaved(regState)
-  return result
+	// Spill all live registers before the SysOp so values get stack homes
+	// before the SysOp emitter clobbers registers.
+	rmSpillAllCallerSaved(regState, dstBlock: dstBlock)
+	var result = nextTempSlot
+	match op 'lower'
+		syscall(resultId, number, argIds) then result = lowerSyscallRA(resultId, number: number, argIds: argIds, dstBlock: dstBlock, regState: regState, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
+		iatCall(resultId, slotIndex, argIds) then result = lowerIatCallRA(resultId, slotIndex: slotIndex, argIds: argIds, dstBlock: dstBlock, regState: regState, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
+		globalAddr(resultId, name) then result = lowerGlobalAddrRA(resultId, name: name, dstBlock: dstBlock, regState: regState, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
+		stackAddr(resultId, slotId) then result = lowerStackAddrRA(resultId, slotId: slotId, dstBlock: dstBlock, regState: regState, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
+		storeByte(baseId, offsetId, byteId) then result = lowerStoreByteRA(baseId, offsetId: offsetId, byteId: byteId, dstBlock: dstBlock, regState: regState, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
+		loadByte(resultId, baseId, offsetId) then result = lowerLoadByteRA(resultId, baseId: baseId, offsetId: offsetId, dstBlock: dstBlock, regState: regState, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
+		memcpy(dstId, srcId, lenId) then result = lowerMemcpyRA(dstId, srcId: srcId, lenId: lenId, dstBlock: dstBlock, regState: regState, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
+		osExit(codeId) then result = lowerOsExitRA(codeId, dstBlock: dstBlock, regState: regState, valueSlots: valueSlots, nextTempSlot: nextTempSlot, osDesc: osDesc)
+		osWrite(ptrId, lenId) then result = lowerOsWriteRA(ptrId, lenId: lenId, dstBlock: dstBlock, regState: regState, valueSlots: valueSlots, nextTempSlot: nextTempSlot, osDesc: osDesc)
+	end 'lower'
+	// SysOp binary emitters clobber registers (rax, rcx, rdx, rsi, rdi, etc.)
+	// without the allocator's knowledge. Invalidate all register mappings.
+	rmInvalidateCallerSaved(regState)
+	return result
 end 'lowerSysOpRA'
 
 // Ensure a value has a VarSlot (by spilling to a temp slot if needed).
 // Returns the slot index.
 function ensureValueInSlot(valueId ValueId, regState RegState, valueSlots ValueSlotMap, nextTempSlot SlotIndex, dstBlock MlirBlock) returns VarSlot
-  // Check if we already have a slot assignment
-  if valueSlotMapHas(valueSlots, valueId: valueId) 'hasSlot'
-    let existingSlot = valueSlotMapGet(valueSlots, valueId: valueId)
-    // Re-store the current value to its existing slot
-    let valOrd = rmEnsureInRegister(regState, valueId: valueId, dstBlock: dstBlock, protect1: RM_NONE, protect2: RM_NONE)
-    let reg = ordinalToX64(valOrd)
-    dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.movSlot(existingSlot, reg)))
-    return existingSlot
-  end 'hasSlot'
-  // No slot yet -- assign a temp slot and spill
-  let valOrd = rmEnsureInRegister(regState, valueId: valueId, dstBlock: dstBlock, protect1: RM_NONE, protect2: RM_NONE)
-  let reg = ordinalToX64(valOrd)
-  dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.movSlot(nextTempSlot, reg)))
-  valueSlotMapSet(valueSlots, valueId: valueId, slot: nextTempSlot)
-  let slotOffset = 0 - (nextTempSlot + 1) * 8
-  rmNoteStoreToStack(regState, valueId: valueId, stackOffset: slotOffset)
-  return nextTempSlot
+	// Check if we already have a slot assignment
+	if valueSlotMapHas(valueSlots, valueId: valueId) 'hasSlot'
+		let existingSlot = valueSlotMapGet(valueSlots, valueId: valueId)
+		// Re-store the current value to its existing slot
+		let valOrd = rmEnsureInRegister(regState, valueId: valueId, dstBlock: dstBlock, protect1: RM_NONE, protect2: RM_NONE)
+		let reg = ordinalToX64(valOrd)
+		dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.movSlot(existingSlot, reg)))
+		return existingSlot
+	end 'hasSlot'
+	// No slot yet -- assign a temp slot and spill
+	let valOrd = rmEnsureInRegister(regState, valueId: valueId, dstBlock: dstBlock, protect1: RM_NONE, protect2: RM_NONE)
+	let reg = ordinalToX64(valOrd)
+	dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.movSlot(nextTempSlot, reg)))
+	valueSlotMapSet(valueSlots, valueId: valueId, slot: nextTempSlot)
+	let slotOffset = 0 - (nextTempSlot + 1) * 8
+	rmNoteStoreToStack(regState, valueId: valueId, stackOffset: slotOffset)
+	return nextTempSlot
 end 'ensureValueInSlot'
 
 function lowerSyscallRA(resultId ValueId, number MachineWord, argIds ValueIdArray, dstBlock MlirBlock, regState RegState, valueSlots ValueSlotMap, nextTempSlot SlotIndex) returns SlotIndex
-  var tempSlot = nextTempSlot
-  var argSlots = VarSlotArray{}
-  for argId in argIds 'mapArgs'
-    let slot = ensureValueInSlot(argId, regState: regState, valueSlots: valueSlots, nextTempSlot: tempSlot, dstBlock: dstBlock)
-    if slot == tempSlot 'usedTemp'
-      tempSlot = tempSlot + 1
-    end 'usedTemp'
-    argSlots.push(slot)
-  end 'mapArgs'
+	var tempSlot = nextTempSlot
+	var argSlots = VarSlotArray{}
+	for argId in argIds 'mapArgs'
+		let slot = ensureValueInSlot(argId, regState: regState, valueSlots: valueSlots, nextTempSlot: tempSlot, dstBlock: dstBlock)
+		if slot == tempSlot 'usedTemp'
+			tempSlot = tempSlot + 1
+		end 'usedTemp'
+		argSlots.push(slot)
+	end 'mapArgs'
 
-  let resultSlot = tempSlot
-  dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.syscall(resultSlot, number, argSlots)))
-  valueSlotMapSet(valueSlots, valueId: resultId, slot: resultSlot)
-  let slotOffset = 0 - (resultSlot + 1) * 8
-  rmNoteValueOnStack(regState, valueId: resultId, stackOffset: slotOffset)
-  // Invalidate all caller-saved after syscall
-  rmInvalidateCallerSaved(regState)
-  return tempSlot + 1
+	let resultSlot = tempSlot
+	dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.syscall(resultSlot, number, argSlots)))
+	valueSlotMapSet(valueSlots, valueId: resultId, slot: resultSlot)
+	let slotOffset = 0 - (resultSlot + 1) * 8
+	rmNoteValueOnStack(regState, valueId: resultId, stackOffset: slotOffset)
+	// Invalidate all caller-saved after syscall
+	rmInvalidateCallerSaved(regState)
+	return tempSlot + 1
 end 'lowerSyscallRA'
 
 function lowerIatCallRA(resultId ValueId, slotIndex MachineWord, argIds ValueIdArray, dstBlock MlirBlock, regState RegState, valueSlots ValueSlotMap, nextTempSlot SlotIndex) returns SlotIndex
-  var tempSlot = nextTempSlot
-  var argSlots = VarSlotArray{}
-  for argId in argIds 'mapArgs'
-    let slot = ensureValueInSlot(argId, regState: regState, valueSlots: valueSlots, nextTempSlot: tempSlot, dstBlock: dstBlock)
-    if slot == tempSlot 'usedTemp'
-      tempSlot = tempSlot + 1
-    end 'usedTemp'
-    argSlots.push(slot)
-  end 'mapArgs'
+	var tempSlot = nextTempSlot
+	var argSlots = VarSlotArray{}
+	for argId in argIds 'mapArgs'
+		let slot = ensureValueInSlot(argId, regState: regState, valueSlots: valueSlots, nextTempSlot: tempSlot, dstBlock: dstBlock)
+		if slot == tempSlot 'usedTemp'
+			tempSlot = tempSlot + 1
+		end 'usedTemp'
+		argSlots.push(slot)
+	end 'mapArgs'
 
-  let resultSlot = tempSlot
-  dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.iatCall(resultSlot, slotIndex, argSlots)))
-  valueSlotMapSet(valueSlots, valueId: resultId, slot: resultSlot)
-  let slotOffset = 0 - (resultSlot + 1) * 8
-  rmNoteValueOnStack(regState, valueId: resultId, stackOffset: slotOffset)
-  rmInvalidateCallerSaved(regState)
-  return tempSlot + 1
+	let resultSlot = tempSlot
+	dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.iatCall(resultSlot, slotIndex, argSlots)))
+	valueSlotMapSet(valueSlots, valueId: resultId, slot: resultSlot)
+	let slotOffset = 0 - (resultSlot + 1) * 8
+	rmNoteValueOnStack(regState, valueId: resultId, stackOffset: slotOffset)
+	rmInvalidateCallerSaved(regState)
+	return tempSlot + 1
 end 'lowerIatCallRA'
 
 function lowerGlobalAddrRA(resultId ValueId, name ByteArray, dstBlock MlirBlock, regState RegState, valueSlots ValueSlotMap, nextTempSlot SlotIndex) returns SlotIndex
-  let tempSlot = nextTempSlot
-  dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.globalAddr(tempSlot, name)))
-  valueSlotMapSet(valueSlots, valueId: resultId, slot: tempSlot)
-  let slotOffset = 0 - (tempSlot + 1) * 8
-  rmNoteValueOnStack(regState, valueId: resultId, stackOffset: slotOffset)
-  return nextTempSlot + 1
+	let tempSlot = nextTempSlot
+	dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.globalAddr(tempSlot, name)))
+	valueSlotMapSet(valueSlots, valueId: resultId, slot: tempSlot)
+	let slotOffset = 0 - (tempSlot + 1) * 8
+	rmNoteValueOnStack(regState, valueId: resultId, stackOffset: slotOffset)
+	return nextTempSlot + 1
 end 'lowerGlobalAddrRA'
 
 function lowerStackAddrRA(resultId ValueId, slotId VarSlot, dstBlock MlirBlock, regState RegState, valueSlots ValueSlotMap, nextTempSlot SlotIndex) returns SlotIndex
-  let tempSlot = nextTempSlot
-  dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.stackAddrOp(tempSlot, slotId)))
-  valueSlotMapSet(valueSlots, valueId: resultId, slot: tempSlot)
-  let slotOffset = 0 - (tempSlot + 1) * 8
-  rmNoteValueOnStack(regState, valueId: resultId, stackOffset: slotOffset)
-  return nextTempSlot + 1
+	let tempSlot = nextTempSlot
+	dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.stackAddrOp(tempSlot, slotId)))
+	valueSlotMapSet(valueSlots, valueId: resultId, slot: tempSlot)
+	let slotOffset = 0 - (tempSlot + 1) * 8
+	rmNoteValueOnStack(regState, valueId: resultId, stackOffset: slotOffset)
+	return nextTempSlot + 1
 end 'lowerStackAddrRA'
 
 function lowerStoreByteRA(baseId ValueId, offsetId ValueId, byteId ValueId, dstBlock MlirBlock, regState RegState, valueSlots ValueSlotMap, nextTempSlot SlotIndex) returns SlotIndex
-  var tempSlot = nextTempSlot
-  let baseSlot = ensureValueInSlot(baseId, regState: regState, valueSlots: valueSlots, nextTempSlot: tempSlot, dstBlock: dstBlock)
-  if baseSlot == tempSlot 'usedTemp1'
-    tempSlot = tempSlot + 1
-  end 'usedTemp1'
-  let offsetSlot = ensureValueInSlot(offsetId, regState: regState, valueSlots: valueSlots, nextTempSlot: tempSlot, dstBlock: dstBlock)
-  if offsetSlot == tempSlot 'usedTemp2'
-    tempSlot = tempSlot + 1
-  end 'usedTemp2'
-  let byteSlot = ensureValueInSlot(byteId, regState: regState, valueSlots: valueSlots, nextTempSlot: tempSlot, dstBlock: dstBlock)
-  if byteSlot == tempSlot 'usedTemp3'
-    tempSlot = tempSlot + 1
-  end 'usedTemp3'
-  dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.storeByteOp(baseSlot, offsetSlot, byteSlot)))
-  return tempSlot
+	var tempSlot = nextTempSlot
+	let baseSlot = ensureValueInSlot(baseId, regState: regState, valueSlots: valueSlots, nextTempSlot: tempSlot, dstBlock: dstBlock)
+	if baseSlot == tempSlot 'usedTemp1'
+		tempSlot = tempSlot + 1
+	end 'usedTemp1'
+	let offsetSlot = ensureValueInSlot(offsetId, regState: regState, valueSlots: valueSlots, nextTempSlot: tempSlot, dstBlock: dstBlock)
+	if offsetSlot == tempSlot 'usedTemp2'
+		tempSlot = tempSlot + 1
+	end 'usedTemp2'
+	let byteSlot = ensureValueInSlot(byteId, regState: regState, valueSlots: valueSlots, nextTempSlot: tempSlot, dstBlock: dstBlock)
+	if byteSlot == tempSlot 'usedTemp3'
+		tempSlot = tempSlot + 1
+	end 'usedTemp3'
+	dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.storeByteOp(baseSlot, offsetSlot, byteSlot)))
+	return tempSlot
 end 'lowerStoreByteRA'
 
 function lowerLoadByteRA(resultId ValueId, baseId ValueId, offsetId ValueId, dstBlock MlirBlock, regState RegState, valueSlots ValueSlotMap, nextTempSlot SlotIndex) returns SlotIndex
-  var tempSlot = nextTempSlot
-  let baseSlot = ensureValueInSlot(baseId, regState: regState, valueSlots: valueSlots, nextTempSlot: tempSlot, dstBlock: dstBlock)
-  if baseSlot == tempSlot 'usedTemp1'
-    tempSlot = tempSlot + 1
-  end 'usedTemp1'
-  let offsetSlot = ensureValueInSlot(offsetId, regState: regState, valueSlots: valueSlots, nextTempSlot: tempSlot, dstBlock: dstBlock)
-  if offsetSlot == tempSlot 'usedTemp2'
-    tempSlot = tempSlot + 1
-  end 'usedTemp2'
-  let resultSlot = tempSlot
-  dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.loadByteOp(resultSlot, baseSlot, offsetSlot)))
-  valueSlotMapSet(valueSlots, valueId: resultId, slot: resultSlot)
-  let slotOffset = 0 - (resultSlot + 1) * 8
-  rmNoteValueOnStack(regState, valueId: resultId, stackOffset: slotOffset)
-  return tempSlot + 1
+	var tempSlot = nextTempSlot
+	let baseSlot = ensureValueInSlot(baseId, regState: regState, valueSlots: valueSlots, nextTempSlot: tempSlot, dstBlock: dstBlock)
+	if baseSlot == tempSlot 'usedTemp1'
+		tempSlot = tempSlot + 1
+	end 'usedTemp1'
+	let offsetSlot = ensureValueInSlot(offsetId, regState: regState, valueSlots: valueSlots, nextTempSlot: tempSlot, dstBlock: dstBlock)
+	if offsetSlot == tempSlot 'usedTemp2'
+		tempSlot = tempSlot + 1
+	end 'usedTemp2'
+	let resultSlot = tempSlot
+	dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.loadByteOp(resultSlot, baseSlot, offsetSlot)))
+	valueSlotMapSet(valueSlots, valueId: resultId, slot: resultSlot)
+	let slotOffset = 0 - (resultSlot + 1) * 8
+	rmNoteValueOnStack(regState, valueId: resultId, stackOffset: slotOffset)
+	return tempSlot + 1
 end 'lowerLoadByteRA'
 
 function lowerMemcpyRA(dstId ValueId, srcId ValueId, lenId ValueId, dstBlock MlirBlock, regState RegState, valueSlots ValueSlotMap, nextTempSlot SlotIndex) returns SlotIndex
-  var tempSlot = nextTempSlot
-  let dstSlot = ensureValueInSlot(dstId, regState: regState, valueSlots: valueSlots, nextTempSlot: tempSlot, dstBlock: dstBlock)
-  if dstSlot == tempSlot 'usedTemp1'
-    tempSlot = tempSlot + 1
-  end 'usedTemp1'
-  let srcSlot = ensureValueInSlot(srcId, regState: regState, valueSlots: valueSlots, nextTempSlot: tempSlot, dstBlock: dstBlock)
-  if srcSlot == tempSlot 'usedTemp2'
-    tempSlot = tempSlot + 1
-  end 'usedTemp2'
-  let lenSlot = ensureValueInSlot(lenId, regState: regState, valueSlots: valueSlots, nextTempSlot: tempSlot, dstBlock: dstBlock)
-  if lenSlot == tempSlot 'usedTemp3'
-    tempSlot = tempSlot + 1
-  end 'usedTemp3'
-  dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.memcpyOp(dstSlot, srcSlot, lenSlot)))
-  return tempSlot
+	var tempSlot = nextTempSlot
+	let dstSlot = ensureValueInSlot(dstId, regState: regState, valueSlots: valueSlots, nextTempSlot: tempSlot, dstBlock: dstBlock)
+	if dstSlot == tempSlot 'usedTemp1'
+		tempSlot = tempSlot + 1
+	end 'usedTemp1'
+	let srcSlot = ensureValueInSlot(srcId, regState: regState, valueSlots: valueSlots, nextTempSlot: tempSlot, dstBlock: dstBlock)
+	if srcSlot == tempSlot 'usedTemp2'
+		tempSlot = tempSlot + 1
+	end 'usedTemp2'
+	let lenSlot = ensureValueInSlot(lenId, regState: regState, valueSlots: valueSlots, nextTempSlot: tempSlot, dstBlock: dstBlock)
+	if lenSlot == tempSlot 'usedTemp3'
+		tempSlot = tempSlot + 1
+	end 'usedTemp3'
+	dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.memcpyOp(dstSlot, srcSlot, lenSlot)))
+	return tempSlot
 end 'lowerMemcpyRA'
 
 // OS-neutral exit: expand to syscall or iatCall based on OsDescriptor.
 function lowerOsExitRA(codeId ValueId, dstBlock MlirBlock, regState RegState, valueSlots ValueSlotMap, nextTempSlot SlotIndex, osDesc OsDescriptor) returns SlotIndex
-  var tempSlot = nextTempSlot
-  let codeSlot = ensureValueInSlot(codeId, regState: regState, valueSlots: valueSlots, nextTempSlot: tempSlot, dstBlock: dstBlock)
-  if codeSlot == tempSlot 'usedTemp'
-    tempSlot = tempSlot + 1
-  end 'usedTemp'
-  match osDesc.exit 'strategy'
-    syscall(num) then return lowerOsExitSyscallX64(codeSlot, num: num, dstBlock: dstBlock, nextTempSlot: tempSlot)
-    iatCall(slotIdx) then return lowerOsExitIatX64(codeSlot, slotIdx: slotIdx, dstBlock: dstBlock, nextTempSlot: tempSlot)
-  end 'strategy'
+	var tempSlot = nextTempSlot
+	let codeSlot = ensureValueInSlot(codeId, regState: regState, valueSlots: valueSlots, nextTempSlot: tempSlot, dstBlock: dstBlock)
+	if codeSlot == tempSlot 'usedTemp'
+		tempSlot = tempSlot + 1
+	end 'usedTemp'
+	match osDesc.exit 'strategy'
+		syscall(num) then return lowerOsExitSyscallX64(codeSlot, num: num, dstBlock: dstBlock, nextTempSlot: tempSlot)
+		iatCall(slotIdx) then return lowerOsExitIatX64(codeSlot, slotIdx: slotIdx, dstBlock: dstBlock, nextTempSlot: tempSlot)
+	end 'strategy'
 end 'lowerOsExitRA'
 
 function lowerOsExitSyscallX64(codeSlot VarSlot, num MachineWord, dstBlock MlirBlock, nextTempSlot SlotIndex) returns SlotIndex
-  var argSlots = VarSlotArray{}
-  argSlots.push(codeSlot)
-  dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.syscall(nextTempSlot, num, argSlots)))
-  return nextTempSlot + 1
+	var argSlots = VarSlotArray{}
+	argSlots.push(codeSlot)
+	dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.syscall(nextTempSlot, num, argSlots)))
+	return nextTempSlot + 1
 end 'lowerOsExitSyscallX64'
 
 function lowerOsExitIatX64(codeSlot VarSlot, slotIdx MachineWord, dstBlock MlirBlock, nextTempSlot SlotIndex) returns SlotIndex
-  var argSlots = VarSlotArray{}
-  argSlots.push(codeSlot)
-  dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.iatCall(nextTempSlot, slotIdx, argSlots)))
-  return nextTempSlot + 1
+	var argSlots = VarSlotArray{}
+	argSlots.push(codeSlot)
+	dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.iatCall(nextTempSlot, slotIdx, argSlots)))
+	return nextTempSlot + 1
 end 'lowerOsExitIatX64'
 
 // OS-neutral write: expand to syscall or WinAPI sequence based on OsDescriptor.
 function lowerOsWriteRA(ptrId ValueId, lenId ValueId, dstBlock MlirBlock, regState RegState, valueSlots ValueSlotMap, nextTempSlot SlotIndex, osDesc OsDescriptor) returns SlotIndex
-  var tempSlot = nextTempSlot
-  let ptrSlot = ensureValueInSlot(ptrId, regState: regState, valueSlots: valueSlots, nextTempSlot: tempSlot, dstBlock: dstBlock)
-  if ptrSlot == tempSlot 'usedTemp1'
-    tempSlot = tempSlot + 1
-  end 'usedTemp1'
-  let lenSlot = ensureValueInSlot(lenId, regState: regState, valueSlots: valueSlots, nextTempSlot: tempSlot, dstBlock: dstBlock)
-  if lenSlot == tempSlot 'usedTemp2'
-    tempSlot = tempSlot + 1
-  end 'usedTemp2'
-  match osDesc.write 'strategy'
-    syscall(writeNum, fd) then return lowerOsWriteSyscallX64(ptrSlot, lenSlot: lenSlot, writeNum: writeNum, fd: fd, dstBlock: dstBlock, nextTempSlot: tempSlot)
-    winApi(getHandleSlot, handleConstant, writeFileSlot) then return lowerOsWriteWinApiX64(ptrSlot, lenSlot: lenSlot, getHandleSlot: getHandleSlot, handleConstant: handleConstant, writeFileSlot: writeFileSlot, dstBlock: dstBlock, nextTempSlot: tempSlot)
-    libcall then panic("x86_64 does not support libcall write strategy")
-  end 'strategy'
+	var tempSlot = nextTempSlot
+	let ptrSlot = ensureValueInSlot(ptrId, regState: regState, valueSlots: valueSlots, nextTempSlot: tempSlot, dstBlock: dstBlock)
+	if ptrSlot == tempSlot 'usedTemp1'
+		tempSlot = tempSlot + 1
+	end 'usedTemp1'
+	let lenSlot = ensureValueInSlot(lenId, regState: regState, valueSlots: valueSlots, nextTempSlot: tempSlot, dstBlock: dstBlock)
+	if lenSlot == tempSlot 'usedTemp2'
+		tempSlot = tempSlot + 1
+	end 'usedTemp2'
+	match osDesc.write 'strategy'
+		syscall(writeNum, fd) then return lowerOsWriteSyscallX64(ptrSlot, lenSlot: lenSlot, writeNum: writeNum, fd: fd, dstBlock: dstBlock, nextTempSlot: tempSlot)
+		winApi(getHandleSlot, handleConstant, writeFileSlot) then return lowerOsWriteWinApiX64(ptrSlot, lenSlot: lenSlot, getHandleSlot: getHandleSlot, handleConstant: handleConstant, writeFileSlot: writeFileSlot, dstBlock: dstBlock, nextTempSlot: tempSlot)
+		libcall then panic("x86_64 does not support libcall write strategy")
+	end 'strategy'
 end 'lowerOsWriteRA'
 
 function lowerOsWriteSyscallX64(ptrSlot VarSlot, lenSlot VarSlot, writeNum MachineWord, fd MachineWord, dstBlock MlirBlock, nextTempSlot SlotIndex) returns SlotIndex
-  // fd constant -> temp slot
-  let fdSlot = nextTempSlot
-  dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.movRegImm(X64Register.rax, fd)))
-  dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.movSlot(fdSlot, X64Register.rax)))
-  // syscall(writeNum, fd, ptr, len)
-  var argSlots = VarSlotArray{}
-  argSlots.push(fdSlot)
-  argSlots.push(ptrSlot)
-  argSlots.push(lenSlot)
-  let resultSlot = nextTempSlot + 1
-  dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.syscall(resultSlot, writeNum, argSlots)))
-  return nextTempSlot + 2
+	// fd constant -> temp slot
+	let fdSlot = nextTempSlot
+	dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.movRegImm(X64Register.rax, fd)))
+	dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.movSlot(fdSlot, X64Register.rax)))
+	// syscall(writeNum, fd, ptr, len)
+	var argSlots = VarSlotArray{}
+	argSlots.push(fdSlot)
+	argSlots.push(ptrSlot)
+	argSlots.push(lenSlot)
+	let resultSlot = nextTempSlot + 1
+	dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.syscall(resultSlot, writeNum, argSlots)))
+	return nextTempSlot + 2
 end 'lowerOsWriteSyscallX64'
 
 function lowerOsWriteWinApiX64(ptrSlot VarSlot, lenSlot VarSlot, getHandleSlot MachineWord, handleConstant MachineWord, writeFileSlot MachineWord, dstBlock MlirBlock, nextTempSlot SlotIndex) returns SlotIndex
-  var tempSlot = nextTempSlot
+	var tempSlot = nextTempSlot
 
-  // GetStdHandle(handleConstant)
-  let handleConstSlot = tempSlot
-  dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.movRegImm(X64Register.rax, handleConstant)))
-  dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.movSlot(handleConstSlot, X64Register.rax)))
-  tempSlot = tempSlot + 1
-  var getHandleArgs = VarSlotArray{}
-  getHandleArgs.push(handleConstSlot)
-  let handleResultSlot = tempSlot
-  dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.iatCall(handleResultSlot, getHandleSlot, getHandleArgs)))
-  tempSlot = tempSlot + 1
+	// GetStdHandle(handleConstant)
+	let handleConstSlot = tempSlot
+	dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.movRegImm(X64Register.rax, handleConstant)))
+	dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.movSlot(handleConstSlot, X64Register.rax)))
+	tempSlot = tempSlot + 1
+	var getHandleArgs = VarSlotArray{}
+	getHandleArgs.push(handleConstSlot)
+	let handleResultSlot = tempSlot
+	dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.iatCall(handleResultSlot, getHandleSlot, getHandleArgs)))
+	tempSlot = tempSlot + 1
 
-  // bytesWritten = 0 stored to a slot
-  let writtenSlot = tempSlot
-  dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.movRegImm(X64Register.rax, 0)))
-  dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.movSlot(writtenSlot, X64Register.rax)))
-  tempSlot = tempSlot + 1
+	// bytesWritten = 0 stored to a slot
+	let writtenSlot = tempSlot
+	dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.movRegImm(X64Register.rax, 0)))
+	dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.movSlot(writtenSlot, X64Register.rax)))
+	tempSlot = tempSlot + 1
 
-  // Get address of bytesWritten slot
-  let writtenAddrSlot = tempSlot
-  dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.stackAddrOp(writtenAddrSlot, writtenSlot)))
-  tempSlot = tempSlot + 1
+	// Get address of bytesWritten slot
+	let writtenAddrSlot = tempSlot
+	dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.stackAddrOp(writtenAddrSlot, writtenSlot)))
+	tempSlot = tempSlot + 1
 
-  // NULL for lpOverlapped
-  let nullSlot = tempSlot
-  dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.movRegImm(X64Register.rax, 0)))
-  dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.movSlot(nullSlot, X64Register.rax)))
-  tempSlot = tempSlot + 1
+	// NULL for lpOverlapped
+	let nullSlot = tempSlot
+	dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.movRegImm(X64Register.rax, 0)))
+	dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.movSlot(nullSlot, X64Register.rax)))
+	tempSlot = tempSlot + 1
 
-  // WriteFile(handle, ptr, len, &bytesWritten, NULL)
-  var writeArgs = VarSlotArray{}
-  writeArgs.push(handleResultSlot)
-  writeArgs.push(ptrSlot)
-  writeArgs.push(lenSlot)
-  writeArgs.push(writtenAddrSlot)
-  writeArgs.push(nullSlot)
-  let writeResultSlot = tempSlot
-  dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.iatCall(writeResultSlot, writeFileSlot, writeArgs)))
-  tempSlot = tempSlot + 1
+	// WriteFile(handle, ptr, len, &bytesWritten, NULL)
+	var writeArgs = VarSlotArray{}
+	writeArgs.push(handleResultSlot)
+	writeArgs.push(ptrSlot)
+	writeArgs.push(lenSlot)
+	writeArgs.push(writtenAddrSlot)
+	writeArgs.push(nullSlot)
+	let writeResultSlot = tempSlot
+	dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.iatCall(writeResultSlot, writeFileSlot, writeArgs)))
+	tempSlot = tempSlot + 1
 
-  return tempSlot
+	return tempSlot
 end 'lowerOsWriteWinApiX64'

@@ -43,16 +43,16 @@ Static methods are commonly used for:
 typealias Integer = int(i64.min to i64.max)
 
 type Box
-  export var value Integer
+	export var value Integer
 
-  static function make(v Integer) returns Box
-    return Box{value: v}
-  end 'make'
+	static function make(v Integer) returns Box
+		return Box{value: v}
+	end 'make'
 end 'Box'
 
 function main() returns ExitCode
-  var b = Box.make(42)
-  return b.value
+	var b = Box.make(42)
+	return b.value
 end 'main'
 ```
 ```exitcode
@@ -65,15 +65,15 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 type Math
-  var unused Integer
+	var unused Integer
 
-  static function add(a Integer, b Integer) returns Integer
-    return a + b
-  end 'add'
+	static function add(a Integer, b Integer) returns Integer
+		return a + b
+	end 'add'
 end 'Math'
 
 function main() returns ExitCode
-  return Math.add(20, b: 22)
+	return Math.add(20, b: 22)
 end 'main'
 ```
 ```exitcode
@@ -86,21 +86,21 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 type Factory
-  export var id Integer
+	export var id Integer
 
-  export static function create(val Integer) returns Factory
-    return Factory{id: val}
-  end 'create'
+	export static function create(val Integer) returns Factory
+		return Factory{id: val}
+	end 'create'
 
-  export static function zero() returns Factory
-    return Factory.create(0)
-  end 'zero'
+	export static function zero() returns Factory
+		return Factory.create(0)
+	end 'zero'
 end 'Factory'
 
 function main() returns ExitCode
-  var f1 = Factory.create(100)
-  var f2 = Factory.zero()
-  return f1.id + f2.id
+	var f1 = Factory.create(100)
+	var f2 = Factory.zero()
+	return f1.id + f2.id
 end 'main'
 ```
 ```exitcode

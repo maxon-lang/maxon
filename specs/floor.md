@@ -41,9 +41,9 @@ var i = trunc(floor(x))   // 3
 <!-- test: floor.positive -->
 ```maxon
 function main() returns ExitCode
-  var x = 3.9
-  var y = trunc(floor(x))
-  return y
+	var x = 3.9
+	var y = trunc(floor(x))
+	return y
 end 'main'
 ```
 ```exitcode
@@ -53,9 +53,9 @@ end 'main'
 <!-- test: floor.negative -->
 ```maxon
 function main() returns ExitCode
-  var neg = -3.2
-  var y = trunc(floor(neg))
-  return y + 10
+	var neg = -3.2
+	var y = trunc(floor(neg))
+	return y + 10
 end 'main'
 ```
 ```exitcode
@@ -65,10 +65,10 @@ end 'main'
 <!-- test: floor.with-ceil -->
 ```maxon
 function main() returns ExitCode
-  var x = 3.7
-  var a = trunc(floor(x))
-  var b = trunc(ceil(x))
-  return a + b
+	var x = 3.7
+	var a = trunc(floor(x))
+	var b = trunc(ceil(x))
+	return a + b
 end 'main'
 ```
 ```exitcode
@@ -79,9 +79,9 @@ end 'main'
 <!-- Args: 3.9 -->
 ```maxon
 function main() returns ExitCode
-  let args = CommandLine.args()
-  var x = try float.fromString(try args.get(0) otherwise "") otherwise 0.0
-  return trunc(floor(x))
+	let args = CommandLine.args()
+	var x = try float.fromString(try args.get(0) otherwise "") otherwise 0.0
+	return trunc(floor(x))
 end 'main'
 ```
 ```exitcode
@@ -92,9 +92,9 @@ end 'main'
 <!-- Args: -3.2 -->
 ```maxon
 function main() returns ExitCode
-  let args = CommandLine.args()
-  var x = try float.fromString(try args.get(0) otherwise "") otherwise 0.0
-  return trunc(floor(x)) + 10
+	let args = CommandLine.args()
+	var x = try float.fromString(try args.get(0) otherwise "") otherwise 0.0
+	return trunc(floor(x)) + 10
 end 'main'
 ```
 ```exitcode
@@ -105,11 +105,11 @@ end 'main'
 <!-- Args: 3.7 -->
 ```maxon
 function main() returns ExitCode
-  let args = CommandLine.args()
-  var x = try float.fromString(try args.get(0) otherwise "") otherwise 0.0
-  var a = trunc(floor(x))
-  var b = trunc(ceil(x))
-  return a + b
+	let args = CommandLine.args()
+	var x = try float.fromString(try args.get(0) otherwise "") otherwise 0.0
+	var a = trunc(floor(x))
+	var b = trunc(ceil(x))
+	return a + b
 end 'main'
 ```
 ```exitcode

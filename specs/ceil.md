@@ -41,9 +41,9 @@ var i = trunc(ceil(x))   // 4
 <!-- test: ceil.positive -->
 ```maxon
 function main() returns ExitCode
-  var x = 3.1
-  var y = trunc(ceil(x))
-  return y
+	var x = 3.1
+	var y = trunc(ceil(x))
+	return y
 end 'main'
 ```
 ```exitcode
@@ -53,9 +53,9 @@ end 'main'
 <!-- test: ceil.negative -->
 ```maxon
 function main() returns ExitCode
-  var neg = -3.9
-  var y = trunc(ceil(neg))
-  return y + 10
+	var neg = -3.9
+	var y = trunc(ceil(neg))
+	return y + 10
 end 'main'
 ```
 ```exitcode
@@ -65,9 +65,9 @@ end 'main'
 <!-- test: ceil.exact -->
 ```maxon
 function main() returns ExitCode
-  var x = 5.0
-  var y = trunc(ceil(x))
-  return y
+	var x = 5.0
+	var y = trunc(ceil(x))
+	return y
 end 'main'
 ```
 ```exitcode
@@ -78,9 +78,9 @@ end 'main'
 <!-- Args: 3.1 -->
 ```maxon
 function main() returns ExitCode
-  let args = CommandLine.args()
-  var x = try float.fromString(try args.get(0) otherwise "") otherwise 0.0
-  return trunc(ceil(x))
+	let args = CommandLine.args()
+	var x = try float.fromString(try args.get(0) otherwise "") otherwise 0.0
+	return trunc(ceil(x))
 end 'main'
 ```
 ```exitcode
@@ -91,9 +91,9 @@ end 'main'
 <!-- Args: -3.9 -->
 ```maxon
 function main() returns ExitCode
-  let args = CommandLine.args()
-  var x = try float.fromString(try args.get(0) otherwise "") otherwise 0.0
-  return trunc(ceil(x)) + 10
+	let args = CommandLine.args()
+	var x = try float.fromString(try args.get(0) otherwise "") otherwise 0.0
+	return trunc(ceil(x)) + 10
 end 'main'
 ```
 ```exitcode
@@ -104,9 +104,9 @@ end 'main'
 <!-- Args: 5.0 -->
 ```maxon
 function main() returns ExitCode
-  let args = CommandLine.args()
-  var x = try float.fromString(try args.get(0) otherwise "") otherwise 0.0
-  return trunc(ceil(x))
+	let args = CommandLine.args()
+	var x = try float.fromString(try args.get(0) otherwise "") otherwise 0.0
+	return trunc(ceil(x))
 end 'main'
 ```
 ```exitcode

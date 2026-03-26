@@ -87,16 +87,16 @@ The variable name `_` is a special discard identifier. It does not create a bind
 typealias Integer = int(i64.min to i64.max)
 
 function double(x Integer) returns Integer
-  return x * 2
+	return x * 2
 end 'double'
 
 function main() returns ExitCode
-  double(5)
-  return 0
+	double(5)
+	return 0
 end 'main'
 ```
 ```maxoncstderr
-error E3064: specs/fragments/discarded-results/pure-function-discarded.test:10:3: result of pure function 'double' must be used
+error E3064: specs/fragments/discarded-results/pure-function-discarded.test:10:2: result of pure function 'double' must be used
 ```
 
 <!-- test: pure-function-let-discard -->
@@ -105,16 +105,16 @@ error E3064: specs/fragments/discarded-results/pure-function-discarded.test:10:3
 typealias Integer = int(i64.min to i64.max)
 
 function double(x Integer) returns Integer
-  return x * 2
+	return x * 2
 end 'double'
 
 function main() returns ExitCode
-  let _ = double(5)
-  return 0
+	let _ = double(5)
+	return 0
 end 'main'
 ```
 ```maxoncstderr
-error E3064: specs/fragments/discarded-results/pure-function-let-discard.test:10:7: result of pure function 'double' must be used
+error E3064: specs/fragments/discarded-results/pure-function-let-discard.test:10:6: result of pure function 'double' must be used
 ```
 
 <!-- test: pure-function-used -->
@@ -123,12 +123,12 @@ error E3064: specs/fragments/discarded-results/pure-function-let-discard.test:10
 typealias Integer = int(i64.min to i64.max)
 
 function double(x Integer) returns Integer
-  return x * 2
+	return x * 2
 end 'double'
 
 function main() returns ExitCode
-  let result = double(5)
-  return result
+	let result = double(5)
+	return result
 end 'main'
 ```
 ```exitcode
@@ -143,17 +143,17 @@ typealias Integer = int(i64.min to i64.max)
 var counter = 0 as Integer
 
 function incrementAndGet() returns Integer
-  counter = counter + 1
-  return counter
+	counter = counter + 1
+	return counter
 end 'incrementAndGet'
 
 function main() returns ExitCode
-  incrementAndGet()
-  return 0
+	incrementAndGet()
+	return 0
 end 'main'
 ```
 ```maxoncstderr
-error E3065: specs/fragments/discarded-results/impure-function-discarded.test:13:3: result of 'incrementAndGet' is not used (assign to '_' to discard)
+error E3065: specs/fragments/discarded-results/impure-function-discarded.test:13:2: result of 'incrementAndGet' is not used (assign to '_' to discard)
 ```
 
 <!-- test: impure-function-let-discard -->
@@ -164,13 +164,13 @@ typealias Integer = int(i64.min to i64.max)
 var counter = 0 as Integer
 
 function incrementAndGet() returns Integer
-  counter = counter + 1
-  return counter
+	counter = counter + 1
+	return counter
 end 'incrementAndGet'
 
 function main() returns ExitCode
-  let _ = incrementAndGet()
-  return 0
+	let _ = incrementAndGet()
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -184,8 +184,8 @@ function doNothing()
 end 'doNothing'
 
 function main() returns ExitCode
-  doNothing()
-  return 0
+	doNothing()
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -198,18 +198,18 @@ end 'main'
 typealias Count = int(i64.min to i64.max)
 
 type Counter
-  export var value Count
+	export var value Count
 
-  function increment() returns Counter
-    value = value + 1
-    return self
-  end 'increment'
+	function increment() returns Counter
+		value = value + 1
+		return self
+	end 'increment'
 end 'Counter'
 
 function main() returns ExitCode
-  var c = Counter{value: 0}
-  c.increment()
-  return c.value
+	var c = Counter{value: 0}
+	c.increment()
+	return c.value
 end 'main'
 ```
 ```exitcode
@@ -222,13 +222,13 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 function computeAndPrint(x Integer) returns Integer
-  print("computing")
-  return x * 2
+	print("computing")
+	return x * 2
 end 'computeAndPrint'
 
 function main() returns ExitCode
-  let _ = computeAndPrint(5)
-  return 0
+	let _ = computeAndPrint(5)
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -244,14 +244,14 @@ computing
 typealias Integer = int(i64.min to i64.max)
 
 function doubleInPlace(x Integer) returns Integer
-  x = x * 2
-  return x
+	x = x * 2
+	return x
 end 'doubleInPlace'
 
 function main() returns ExitCode
-  var n = 5 as Integer
-  let _ = doubleInPlace(n)
-  return 0
+	var n = 5 as Integer
+	let _ = doubleInPlace(n)
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -262,24 +262,24 @@ end 'main'
 ```maxon
 
 function main() returns ExitCode
-  var _x = 42
-  return 0
+	var _x = 42
+	return 0
 end 'main'
 ```
 ```maxoncstderr
-error E3012: specs/fragments/discarded-results/underscore-not-prefix-suppression.test:4:7: unused variable: '_x'
+error E3012: specs/fragments/discarded-results/underscore-not-prefix-suppression.test:4:6: unused variable: '_x'
 ```
 
 <!-- test: underscore-exact-discard -->
 ```maxon
 
 function main() returns ExitCode
-  let _ = 42
-  return 0
+	let _ = 42
+	return 0
 end 'main'
 ```
 ```maxoncstderr
-error E3067: specs/fragments/discarded-results/underscore-exact-discard.test:4:7: expected a function call
+error E3067: specs/fragments/discarded-results/underscore-exact-discard.test:4:6: expected a function call
 ```
 
 <!-- test: tuple-partial-discard -->
@@ -288,12 +288,12 @@ error E3067: specs/fragments/discarded-results/underscore-exact-discard.test:4:7
 typealias Small = int(0 to 100)
 
 function makePair() returns (Small, Small)
-  return (10, 20)
+	return (10, 20)
 end 'makePair'
 
 function main() returns ExitCode
-  var (a, _) = makePair()
-  return a
+	var (a, _) = makePair()
+	return a
 end 'main'
 ```
 ```exitcode
@@ -306,16 +306,16 @@ end 'main'
 typealias Small = int(0 to 100)
 
 function makePair() returns (Small, Small)
-  return (10, 20)
+	return (10, 20)
 end 'makePair'
 
 function main() returns ExitCode
-  var (_, _) = makePair()
-  return 0
+	var (_, _) = makePair()
+	return 0
 end 'main'
 ```
 ```maxoncstderr
-error E3064: specs/fragments/discarded-results/tuple-all-discard-pure.test:10:7: result of pure function 'makePair' must be used
+error E3064: specs/fragments/discarded-results/tuple-all-discard-pure.test:10:6: result of pure function 'makePair' must be used
 ```
 
 <!-- test: transitive-impure -->
@@ -324,21 +324,21 @@ error E3064: specs/fragments/discarded-results/tuple-all-discard-pure.test:10:7:
 typealias Integer = int(i64.min to i64.max)
 
 function printValue(x Integer)
-  print("{x}")
+	print("{x}")
 end 'printValue'
 
 function computeAndPrint(x Integer) returns Integer
-  printValue(x)
-  return x * 2
+	printValue(x)
+	return x * 2
 end 'computeAndPrint'
 
 function main() returns ExitCode
-  computeAndPrint(5)
-  return 0
+	computeAndPrint(5)
+	return 0
 end 'main'
 ```
 ```maxoncstderr
-error E3065: specs/fragments/discarded-results/transitive-impure.test:15:3: result of 'computeAndPrint' is not used (assign to '_' to discard)
+error E3065: specs/fragments/discarded-results/transitive-impure.test:15:2: result of 'computeAndPrint' is not used (assign to '_' to discard)
 ```
 
 <!-- test: try-pure-let-discard -->
@@ -347,23 +347,23 @@ error E3065: specs/fragments/discarded-results/transitive-impure.test:15:3: resu
 typealias Integer = int(i64.min to i64.max)
 
 union ParseError implements Error
-  invalidFormat
+	invalidFormat
 end 'ParseError'
 
 function parseNum(s String) returns Integer throws ParseError
-  if s.byteLength() == 0 'empty'
-    throw ParseError.invalidFormat
-  end 'empty'
-  return s.byteLength()
+	if s.byteLength() == 0 'empty'
+		throw ParseError.invalidFormat
+	end 'empty'
+	return s.byteLength()
 end 'parseNum'
 
 function main() returns ExitCode
-  let _ = try parseNum("abc") otherwise 0
-  return 0
+	let _ = try parseNum("abc") otherwise 0
+	return 0
 end 'main'
 ```
 ```maxoncstderr
-error E3064: specs/fragments/discarded-results/try-pure-let-discard.test:17:7: result of pure function 'parseNum' must be used
+error E3064: specs/fragments/discarded-results/try-pure-let-discard.test:17:6: result of pure function 'parseNum' must be used
 ```
 
 <!-- test: try-impure-let-discard -->
@@ -374,17 +374,17 @@ typealias Integer = int(i64.min to i64.max)
 var counter = 0 as Integer
 
 union ParseError implements Error
-  invalidFormat
+	invalidFormat
 end 'ParseError'
 
 function parseNum(s String) returns Integer throws ParseError
-  counter = counter + s.byteLength()
-  throw ParseError.invalidFormat
+	counter = counter + s.byteLength()
+	throw ParseError.invalidFormat
 end 'parseNum'
 
 function main() returns ExitCode
-  let _ = try parseNum("abc") otherwise 0
-  return 0
+	let _ = try parseNum("abc") otherwise 0
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -399,17 +399,17 @@ typealias Integer = int(i64.min to i64.max)
 var counter = 0 as Integer
 
 union MyError implements Error
-  failed
+	failed
 end 'MyError'
 
 function doWork() returns Integer throws MyError
-  counter = counter + 1
-  throw MyError.failed
+	counter = counter + 1
+	throw MyError.failed
 end 'doWork'
 
 function main() returns ExitCode
-  try doWork() otherwise ignore
-  return 0
+	try doWork() otherwise ignore
+	return 0
 end 'main'
 ```
 ```exitcode

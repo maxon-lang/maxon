@@ -17,7 +17,7 @@ Maxon requires all function parameters to be used. Declaring unused parameters c
 typealias Score = int(i64.min to i64.max)
 
 function add(a Score, b Score) returns Score
-  return a  // Error: 'b' is unused
+	return a  // Error: 'b' is unused
 end 'add'
 ```
 Error message:
@@ -33,7 +33,7 @@ Only declare parameters you need:
 typealias Score = int(i64.min to i64.max)
 
 function identity(a Score) returns Score
-  return a  // OK: 'a' is used
+	return a  // OK: 'a' is used
 end 'identity'
 ```
 ## Tests
@@ -44,11 +44,11 @@ end 'identity'
 typealias Integer = int(i64.min to i64.max)
 
 function add(a Integer, b Integer) returns Integer
-  return a
+	return a
 end 'add'
 
 function main() returns ExitCode
-  return add(5, b: 10)
+	return add(5, b: 10)
 end 'main'
 ```
 ```maxoncstderr
@@ -61,11 +61,11 @@ error E3012: specs/fragments/unused-parameters/single-unused.test:5:25: unused v
 typealias Integer = int(i64.min to i64.max)
 
 function test(a Integer, b Integer, c Integer) returns Integer
-  return a
+	return a
 end 'test'
 
 function main() returns ExitCode
-  return test(1, b: 2, c: 3)
+	return test(1, b: 2, c: 3)
 end 'main'
 ```
 ```maxoncstderr
@@ -78,11 +78,11 @@ error E3012: specs/fragments/unused-parameters/multiple-unused.test:5:26: unused
 typealias Integer = int(i64.min to i64.max)
 
 function add(a Integer, b Integer) returns Integer
-  return a + b
+	return a + b
 end 'add'
 
 function main() returns ExitCode
-  return add(5, b: 10)
+	return add(5, b: 10)
 end 'main'
 ```
 ```exitcode
@@ -96,11 +96,11 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 function multiply(a Integer, b Integer) returns Integer
-  return a * b
+	return a * b
 end 'multiply'
 
 function main() returns ExitCode
-  return multiply(7, b: 6)
+	return multiply(7, b: 6)
 end 'main'
 ```
 ```exitcode
@@ -114,12 +114,12 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 function doNothing(x Integer, y Integer)
-  var z = 42
+	var z = 42
 end 'doNothing'
 
 function main() returns ExitCode
-  doNothing(1, 2)
-  return 0
+	doNothing(1, 2)
+	return 0
 end 'main'
 ```
 ```maxoncstderr

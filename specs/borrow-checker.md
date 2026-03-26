@@ -27,15 +27,15 @@ Getting an element then pushing must be rejected.
 typealias StringArray = Array with String
 
 function main() returns ExitCode
-  var arr = ["hello"]
-  var s = try arr.get(0) otherwise ""
-  arr.push("world")
-  print("{s}\n")
-  return 0
+	var arr = ["hello"]
+	var s = try arr.get(0) otherwise ""
+	arr.push("world")
+	print("{s}\n")
+	return 0
 end 'main'
 ```
 ```maxoncstderr
-error E3070: specs/fragments/borrow-checker/borrow-basic-conflict.test:7:7: cannot mutate 'arr' via 'push' while it is borrowed by 's' (borrowed at line 6)
+error E3070: specs/fragments/borrow-checker/borrow-basic-conflict.test:7:6: cannot mutate 'arr' via 'push' while it is borrowed by 's' (borrowed at line 6)
 ```
 
 <!-- test: borrow-nll-allowed -->
@@ -46,13 +46,13 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
 function main() returns ExitCode
-  var arr = IntArray{}
-  arr.push(42)
-  var v = try arr.get(0) otherwise 0
-  print("{v}\n")
-  // v is no longer used after this point — borrow has expired
-  arr.push(99)
-  return 0
+	var arr = IntArray{}
+	arr.push(42)
+	var v = try arr.get(0) otherwise 0
+	print("{v}\n")
+	// v is no longer used after this point — borrow has expired
+	arr.push(99)
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -69,12 +69,12 @@ Mutating a different array is fine.
 typealias StringArray = Array with String
 
 function main() returns ExitCode
-  var arr1 = ["hello"]
-  var arr2 = StringArray{}
-  var s = try arr1.get(0) otherwise ""
-  arr2.push("world")
-  print("{s}\n")
-  return 0
+	var arr1 = ["hello"]
+	var arr2 = StringArray{}
+	var s = try arr1.get(0) otherwise ""
+	arr2.push("world")
+	print("{s}\n")
+	return 0
 end 'main'
 ```
 ```exitcode

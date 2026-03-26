@@ -46,10 +46,10 @@ Types can have static fields that are shared across all instances. Static fields
 typealias Score = int(i64.min to i64.max)
 
 type Counter
-  static var count = 0       // Mutable static field
-  static let MAX = 100       // Compile-time static constant
+	static var count = 0       // Mutable static field
+	static let MAX = 100       // Compile-time static constant
 
-  export var value Score       // Instance field
+	export var value Score       // Instance field
 end 'Counter'
 ```
 
@@ -75,8 +75,8 @@ c.value = 20                        // Access instance field
 var counter = 0
 
 function main() returns ExitCode
-  counter = 42
-  return counter
+	counter = 42
+	return counter
 end 'main'
 ```
 ```exitcode
@@ -91,13 +91,13 @@ typealias Integer = int(i64.min to i64.max)
 var total = 10
 
 function add(n Integer)
-  total = total + n
+	total = total + n
 end 'add'
 
 function main() returns ExitCode
-  add(5)
-  add(27)
-  return total
+	add(5)
+	add(27)
+	return total
 end 'main'
 ```
 ```exitcode
@@ -111,10 +111,10 @@ var b = 2
 var c = 3
 
 function main() returns ExitCode
-  a = a * 10
-  b = b * 10
-  c = c * 10
-  return a + b + c
+	a = a * 10
+	b = b * 10
+	c = c * 10
+	return a + b + c
 end 'main'
 ```
 ```exitcode
@@ -127,8 +127,8 @@ let BASE = 40
 var offset = 0
 
 function main() returns ExitCode
-  offset = 2
-  return BASE + offset
+	offset = 2
+	return BASE + offset
 end 'main'
 ```
 ```exitcode
@@ -138,12 +138,12 @@ end 'main'
 <!-- test: static-var-basic -->
 ```maxon
 type Counter
-  static var count = 0
+	static var count = 0
 end 'Counter'
 
 function main() returns ExitCode
-  Counter.count = 42
-  return Counter.count
+	Counter.count = 42
+	return Counter.count
 end 'main'
 ```
 ```exitcode
@@ -153,18 +153,18 @@ end 'main'
 <!-- test: static-var-increment -->
 ```maxon
 type Counter
-  static var count = 0
+	static var count = 0
 
-  static function increment()
-    Counter.count = Counter.count + 1
-  end 'increment'
+	static function increment()
+		Counter.count = Counter.count + 1
+	end 'increment'
 end 'Counter'
 
 function main() returns ExitCode
-  Counter.increment()
-  Counter.increment()
-  Counter.increment()
-  return Counter.count
+	Counter.increment()
+	Counter.increment()
+	Counter.increment()
+	return Counter.count
 end 'main'
 ```
 ```exitcode
@@ -174,11 +174,11 @@ end 'main'
 <!-- test: static-let-basic -->
 ```maxon
 type Config
-  static let MAX_SIZE = 42
+	static let MAX_SIZE = 42
 end 'Config'
 
 function main() returns ExitCode
-  return Config.MAX_SIZE
+	return Config.MAX_SIZE
 end 'main'
 ```
 ```exitcode
@@ -188,17 +188,17 @@ end 'main'
 <!-- test: static-var-multiple-types -->
 ```maxon
 type TypeA
-  static var value = 10
+	static var value = 10
 end 'TypeA'
 
 type TypeB
-  static var value = 20
+	static var value = 20
 end 'TypeB'
 
 function main() returns ExitCode
-  TypeA.value = TypeA.value + 2
-  TypeB.value = TypeB.value + 10
-  return TypeA.value + TypeB.value
+	TypeA.value = TypeA.value + 2
+	TypeB.value = TypeB.value + 10
+	return TypeA.value + TypeB.value
 end 'main'
 ```
 ```exitcode
@@ -211,19 +211,19 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 type Thing
-  static var created = 0
-  export var id Integer
+	static var created = 0
+	export var id Integer
 
-  static function make(n Integer) returns Thing
-    Thing.created = Thing.created + 1
-    return Thing{id: n}
-  end 'make'
+	static function make(n Integer) returns Thing
+		Thing.created = Thing.created + 1
+		return Thing{id: n}
+	end 'make'
 end 'Thing'
 
 function main() returns ExitCode
-  var a = Thing.make(10)
-  var b = Thing.make(20)
-  return Thing.created + a.id + b.id
+	var a = Thing.make(10)
+	var b = Thing.make(20)
+	return Thing.created + a.id + b.id
 end 'main'
 ```
 ```exitcode
@@ -235,18 +235,18 @@ end 'main'
 var initialized = false
 
 function init()
-  initialized = true
+	initialized = true
 end 'init'
 
 function main() returns ExitCode
-  if initialized 'check1'
-    return 1
-  end 'check1'
-  init()
-  if initialized 'check2'
-    return 42
-  end 'check2'
-  return 0
+	if initialized 'check1'
+		return 1
+	end 'check1'
+	init()
+	if initialized 'check2'
+		return 42
+	end 'check2'
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -261,15 +261,15 @@ var flag = false
 var counter = 42
 
 function main() returns ExitCode
-  if flag 'checkFalse'
-    print("flag should be false\n")
-    return 1
-  end 'checkFalse'
-  if counter == 42 'checkCounter'
-    return 0
-  end 'checkCounter'
-  print("counter wrong\n")
-  return 1
+	if flag 'checkFalse'
+		print("flag should be false\n")
+		return 1
+	end 'checkFalse'
+	if counter == 42 'checkCounter'
+		return 0
+	end 'checkCounter'
+	print("counter wrong\n")
+	return 1
 end 'main'
 ```
 ```exitcode
@@ -279,31 +279,31 @@ end 'main'
 <!-- test: top-level-var-enum-initializer -->
 ```maxon
 union Color
-    Red
-    Green
-    Blue
+		Red
+		Green
+		Blue
 end 'Color'
 
 var current = Color.Green
 
 function main() returns ExitCode
-  var isGreen = match current 'check'
-    Green gives true
-    Red gives false
-    Blue gives false
-  end 'check'
-  if isGreen 'check'
-    current = Color.Blue
-    var isBlue = match current 'check2'
-      Blue gives true
-      Red gives false
-      Green gives false
-    end 'check2'
-    if isBlue 'check2'
-      return 42
-    end 'check2'
-  end 'check'
-  return 0
+	var isGreen = match current 'check'
+		Green gives true
+		Red gives false
+		Blue gives false
+	end 'check'
+	if isGreen 'check'
+		current = Color.Blue
+		var isBlue = match current 'check2'
+			Blue gives true
+			Red gives false
+			Green gives false
+		end 'check2'
+		if isBlue 'check2'
+			return 42
+		end 'check2'
+	end 'check'
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -316,8 +316,8 @@ let BASE = 20
 var offset = BASE + 1
 
 function main() returns ExitCode
-  offset = offset * 2
-  return offset
+	offset = offset * 2
+	return offset
 end 'main'
 ```
 ```exitcode
@@ -332,11 +332,11 @@ typealias IntArray = Array with Integer
 var items = [10, 20, 30]
 
 function main() returns ExitCode
-  items.set(1, value: 12)
-  let a = try items.get(0) otherwise 0
-  let b = try items.get(1) otherwise 0
-  let c = try items.get(2) otherwise 0
-  return a + b + c
+	items.set(1, value: 12)
+	let a = try items.get(0) otherwise 0
+	let b = try items.get(1) otherwise 0
+	let c = try items.get(2) otherwise 0
+	return a + b + c
 end 'main'
 ```
 ```exitcode
@@ -352,19 +352,19 @@ typealias IntArray = Array with Integer
 var scores = [10, 20, 30]
 
 function getTotal() returns Integer
-  let a = try scores.get(0) otherwise 0
-  let b = try scores.get(1) otherwise 0
-  let c = try scores.get(2) otherwise 0
-  return a + b + c
+	let a = try scores.get(0) otherwise 0
+	let b = try scores.get(1) otherwise 0
+	let c = try scores.get(2) otherwise 0
+	return a + b + c
 end 'getTotal'
 
 function setScore(index Integer, value Integer)
-  scores.set(index, value: value)
+	scores.set(index, value: value)
 end 'setScore'
 
 function main() returns ExitCode
-  setScore(1, value: 12)
-  return getTotal()
+	setScore(1, value: 12)
+	return getTotal()
 end 'main'
 ```
 ```exitcode
@@ -380,25 +380,25 @@ typealias IntArray = Array with Integer
 var counters = [0, 0, 0]
 
 function increment(index Integer)
-  let current = try counters.get(index) otherwise 0
-  counters.set(index, value: current + 1)
+	let current = try counters.get(index) otherwise 0
+	counters.set(index, value: current + 1)
 end 'increment'
 
 function total() returns Integer
-  let a = try counters.get(0) otherwise 0
-  let b = try counters.get(1) otherwise 0
-  let c = try counters.get(2) otherwise 0
-  return a + b + c
+	let a = try counters.get(0) otherwise 0
+	let b = try counters.get(1) otherwise 0
+	let c = try counters.get(2) otherwise 0
+	return a + b + c
 end 'total'
 
 function main() returns ExitCode
-  increment(0)
-  increment(0)
-  increment(1)
-  increment(2)
-  increment(2)
-  increment(2)
-  return total()
+	increment(0)
+	increment(0)
+	increment(1)
+	increment(2)
+	increment(2)
+	increment(2)
+	return total()
 end 'main'
 ```
 ```exitcode
@@ -412,10 +412,10 @@ A single bool global occupies 1 byte in the .data section.
 var flag = true
 
 function main() returns ExitCode
-  if flag 'read'
-    return 0
-  end 'read'
-  return 1
+	if flag 'read'
+		return 0
+	end 'read'
+	return 1
 end 'main'
 ```
 ```exitcode
@@ -432,7 +432,7 @@ A single i64 global occupies 8 bytes in the .data section.
 var counter = 42
 
 function main() returns ExitCode
-  return counter - 42
+	return counter - 42
 end 'main'
 ```
 ```exitcode
@@ -449,10 +449,10 @@ A single f64 global occupies 8 bytes in the .data section.
 var pi = 3.14
 
 function main() returns ExitCode
-  if pi > 3.0 'read'
-    return 0
-  end 'read'
-  return 1
+	if pi > 3.0 'read'
+		return 0
+	end 'read'
+	return 1
 end 'main'
 ```
 ```exitcode
@@ -470,10 +470,10 @@ var flag = false
 var counter = 42
 
 function main() returns ExitCode
-  if flag 'read'
-    return 1
-  end 'read'
-  return counter - 42
+	if flag 'read'
+		return 1
+	end 'read'
+	return counter - 42
 end 'main'
 ```
 ```exitcode
@@ -492,10 +492,10 @@ var flag = true
 var counter = 99
 
 function main() returns ExitCode
-  if flag 'read'
-    return counter - 99
-  end 'read'
-  return 1
+	if flag 'read'
+		return counter - 99
+	end 'read'
+	return 1
 end 'main'
 ```
 ```exitcode
@@ -514,10 +514,10 @@ var counter = 7
 var flag = true
 
 function main() returns ExitCode
-  if flag 'read'
-    return counter - 7
-  end 'read'
-  return 1
+	if flag 'read'
+		return counter - 7
+	end 'read'
+	return 1
 end 'main'
 ```
 ```exitcode
@@ -537,10 +537,10 @@ var b = false
 var c = true
 
 function main() returns ExitCode
-  if a and c and (b == false) 'read'
-    return 0
-  end 'read'
-  return 1
+	if a and c and (b == false) 'read'
+		return 0
+	end 'read'
+	return 1
 end 'main'
 ```
 ```exitcode
@@ -561,10 +561,10 @@ var count = 10
 var ratio = 2.5
 
 function main() returns ExitCode
-  if flag and (count == 10) and (ratio > 2.0) 'read'
-    return 0
-  end 'read'
-  return 1
+	if flag and (count == 10) and (ratio > 2.0) 'read'
+		return 0
+	end 'read'
+	return 1
 end 'main'
 ```
 ```exitcode
@@ -584,7 +584,7 @@ typealias SmallInt = int(0 to u8.max)
 var counter = SmallInt{42}
 
 function main() returns ExitCode
-    return counter
+		return counter
 end 'main'
 ```
 ```exitcode
@@ -597,32 +597,32 @@ Reassigning an immutable top-level `let` struct variable should error.
 typealias SmallInt = int(0 to u8.max)
 
 type Point
-    export var x SmallInt
-    export var y SmallInt
+		export var x SmallInt
+		export var y SmallInt
 end 'Point'
 
 let origin = Point{x: 0, y: 0}
 
 function main() returns ExitCode
-    origin = Point{x: 1, y: 1}
-    return 0
+		origin = Point{x: 1, y: 1}
+		return 0
 end 'main'
 ```
 ```maxoncstderr
-error E2013: specs/fragments/static-variables/top-level-let-struct-reassign-error.test:12:5: cannot assign to immutable variable: 'origin'
+error E2013: specs/fragments/static-variables/top-level-let-struct-reassign-error.test:12:3: cannot assign to immutable variable: 'origin'
 ```
 
 <!-- test: top-level-var-function-call-error -->
 Function calls are not allowed in module-level `var` initializers.
 ```maxon
 fn getDefault() -> Int
-  return 42
+	return 42
 end
 
 var value = getDefault()
 
 fn main()
-  println(value)
+	println(value)
 end
 ```
 ```maxoncstderr

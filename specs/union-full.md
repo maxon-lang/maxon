@@ -19,10 +19,10 @@ The simplest form of union defines named cases with no additional data:
 
 ```maxon
 union Direction
-  north
-  south
-  east
-  west
+	north
+	south
+	east
+	west
 end 'Direction'
 ```
 
@@ -40,9 +40,9 @@ Cases can carry additional data called associated values:
 typealias ID = int(i64.min to i64.max)
 
 union Result
-  success(value ID)
-  failure(code ID, message String)
-  pending
+	success(value ID)
+	failure(code ID, message String)
+	pending
 end 'Result'
 ```
 
@@ -60,9 +60,9 @@ Use `match` statements to extract associated values from union cases:
 
 ```maxon
 match result 'handle'
-  success(value) then return value
-  failure(code, msg) then print(msg)
-  pending then print("waiting...")
+	success(value) then return value
+	failure(code, msg) then print(msg)
+	pending then print("waiting...")
 end 'handle'
 ```
 
@@ -76,8 +76,8 @@ Use `_` to explicitly discard:
 
 ```maxon
 match container 'check'
-  value(_) then return 1
-  empty then return 0
+	value(_) then return 1
+	empty then return 0
 end 'check'
 ```
 
@@ -85,8 +85,8 @@ Or omit the parentheses entirely when you don't need the associated value:
 
 ```maxon
 match container 'check'
-  value then return 1
-  empty then return 0
+	value then return 1
+	empty then return 0
 end 'check'
 ```
 
@@ -96,8 +96,8 @@ Match expressions also support value extraction using `gives`:
 
 ```maxon
 var extracted = match container 'get'
-  empty gives 0
-  value(n) gives n
+	empty gives 0
+	value(n) gives n
 end 'get'
 ```
 
@@ -107,29 +107,29 @@ Unions can have methods, similar to structs:
 
 ```maxon
 union Direction
-  north
-  south
-  east
-  west
+	north
+	south
+	east
+	west
 
-  function opposite() returns Direction
-    match self 'check'
-      north then return Direction.south
-      south then return Direction.north
-      east then return Direction.west
-      west then return Direction.east
-    end 'check'
-  end 'opposite'
+	function opposite() returns Direction
+		match self 'check'
+			north then return Direction.south
+			south then return Direction.north
+			east then return Direction.west
+			west then return Direction.east
+		end 'check'
+	end 'opposite'
 
-  function isVertical() returns bool
-    var result = match self 'check'
-      north gives true
-      south gives true
-      east gives false
-      west gives false
-    end 'check'
-    return result
-  end 'isVertical'
+	function isVertical() returns bool
+		var result = match self 'check'
+			north gives true
+			south gives true
+			east gives false
+			west gives false
+		end 'check'
+		return result
+	end 'isVertical'
 end 'Direction'
 ```
 
@@ -146,21 +146,21 @@ var vert = dir.isVertical() // true
 <!-- test: simple-union -->
 ```maxon
 union Direction
-  north
-  south
-  east
-  west
+	north
+	south
+	east
+	west
 end 'Direction'
 
 function main() returns ExitCode
-  var dir = Direction.north
-  var result = match dir 'check'
-    north gives 1
-    south gives 0
-    east gives 0
-    west gives 0
-  end 'check'
-  return result
+	var dir = Direction.north
+	var result = match dir 'check'
+		north gives 1
+		south gives 0
+		east gives 0
+		west gives 0
+	end 'check'
+	return result
 end 'main'
 ```
 ```exitcode
@@ -170,20 +170,20 @@ end 'main'
 <!-- test: union-assignment -->
 ```maxon
 union Color
-  red
-  green
-  blue
+	red
+	green
+	blue
 end 'Color'
 
 function main() returns ExitCode
-  var c = Color.red
-  c = Color.blue
-  var result = match c 'check'
-    red gives 0
-    green gives 0
-    blue gives 1
-  end 'check'
-  return result
+	var c = Color.red
+	c = Color.blue
+	var result = match c 'check'
+		red gives 0
+		green gives 0
+		blue gives 1
+	end 'check'
+	return result
 end 'main'
 ```
 ```exitcode
@@ -193,19 +193,19 @@ end 'main'
 <!-- test: union-not-equal -->
 ```maxon
 union Status
-  pending
-  active
-  done
+	pending
+	active
+	done
 end 'Status'
 
 function main() returns ExitCode
-  var s = Status.pending
-  var result = match s 'check'
-    active gives 0
-    pending gives 1
-    done gives 1
-  end 'check'
-  return result
+	var s = Status.pending
+	var result = match s 'check'
+		active gives 0
+		pending gives 1
+		done gives 1
+	end 'check'
+	return result
 end 'main'
 ```
 ```exitcode
@@ -215,18 +215,18 @@ end 'main'
 <!-- test: union-comparison -->
 ```maxon
 union Status
-  pending
-  active
-  done
+	pending
+	active
+	done
 end 'Status'
 
 function main() returns ExitCode
-  var s1 = Status.pending
-  match s1 'check'
-    pending then return 1
-    active then return 0
-    done then return 0
-  end 'check'
+	var s1 = Status.pending
+	match s1 'check'
+		pending then return 1
+		active then return 0
+		done then return 0
+	end 'check'
 end 'main'
 ```
 ```exitcode
@@ -236,24 +236,24 @@ end 'main'
 <!-- test: union-function-param -->
 ```maxon
 union Status
-  on
-  off
+	on
+	off
 end 'Status'
 
 function isOn(s Status) returns bool
-  var result = match s 'check'
-    on gives true
-    off gives false
-  end 'check'
-  return result
+	var result = match s 'check'
+		on gives true
+		off gives false
+	end 'check'
+	return result
 end 'isOn'
 
 function main() returns ExitCode
-  var status = Status.on
-  if isOn(status) 'test'
-    return 1
-  end 'test'
-  return 0
+	var status = Status.on
+	if isOn(status) 'test'
+		return 1
+	end 'test'
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -263,24 +263,24 @@ end 'main'
 <!-- test: union-return-type -->
 ```maxon
 union Result
-  success
-  failure
+	success
+	failure
 end 'Result'
 
 function getResult(succeed bool) returns Result
-  if succeed 'check'
-    return Result.success
-  end 'check'
-  return Result.failure
+	if succeed 'check'
+		return Result.success
+	end 'check'
+	return Result.failure
 end 'getResult'
 
 function main() returns ExitCode
-  var r = getResult(true)
-  var result = match r 'handle'
-    success gives 1
-    failure gives 0
-  end 'handle'
-  return result
+	var r = getResult(true)
+	var result = match r 'handle'
+		success gives 1
+		failure gives 0
+	end 'handle'
+	return result
 end 'main'
 ```
 ```exitcode
@@ -293,16 +293,16 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 union Container
-  empty
-  value(n Integer)
+	empty
+	value(n Integer)
 end 'Container'
 
 function main() returns ExitCode
-  var c = Container.value(42)
-  match c 'check'
-    value(_) then return 1
-    empty then return 0
-  end 'check'
+	var c = Container.value(42)
+	match c 'check'
+		value(_) then return 1
+		empty then return 0
+	end 'check'
 end 'main'
 ```
 ```exitcode
@@ -315,20 +315,20 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 union Container
-    empty
-    value(n Integer)
+		empty
+		value(n Integer)
 end 'Container'
 
 function process(c Container) returns Integer
-    match c 'handle'
-        empty then return 0
-        value(n) then return n
-    end 'handle'
+		match c 'handle'
+				empty then return 0
+				value(n) then return n
+		end 'handle'
 end 'process'
 
 function main() returns ExitCode
-    var c = Container.value(42)
-    return process(c)
+		var c = Container.value(42)
+		return process(c)
 end 'main'
 ```
 ```exitcode
@@ -341,20 +341,20 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 union Container
-    empty
-    value(n Integer)
+		empty
+		value(n Integer)
 end 'Container'
 
 function process(c Container) returns Integer
-    match c 'handle'
-        empty then return 0
-        value(n) then return n
-    end 'handle'
+		match c 'handle'
+				empty then return 0
+				value(n) then return n
+		end 'handle'
 end 'process'
 
 function main() returns ExitCode
-    var c = Container.empty
-    return process(c)
+		var c = Container.empty
+		return process(c)
 end 'main'
 ```
 ```exitcode
@@ -367,23 +367,23 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 union Result
-    success(value Integer)
-    failure(code Integer)
+		success(value Integer)
+		failure(code Integer)
 end 'Result'
 
 function getResult(succeed bool) returns Result
-    if succeed 'check'
-        return Result.success(42)
-    end 'check'
-    return Result.failure(99)
+		if succeed 'check'
+				return Result.success(42)
+		end 'check'
+		return Result.failure(99)
 end 'getResult'
 
 function main() returns ExitCode
-    var r = getResult(true)
-    match r 'handle'
-        success(v) then return v
-        failure(c) then return c
-    end 'handle'
+		var r = getResult(true)
+		match r 'handle'
+				success(v) then return v
+				failure(c) then return c
+		end 'handle'
 end 'main'
 ```
 ```exitcode
@@ -396,20 +396,20 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 union TwoParts
-    none
-    values(a Integer, b Integer)
+		none
+		values(a Integer, b Integer)
 end 'TwoParts'
 
 function sum(p TwoParts) returns Integer
-    match p 'handle'
-        none then return 0
-        values(a, b) then return a + b
-    end 'handle'
+		match p 'handle'
+				none then return 0
+				values(a, b) then return a + b
+		end 'handle'
 end 'sum'
 
 function main() returns ExitCode
-    var p = TwoParts.values(10, 20)
-    return sum(p)
+		var p = TwoParts.values(10, 20)
+		return sum(p)
 end 'main'
 ```
 ```exitcode
@@ -422,22 +422,22 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 union Item
-    empty
-    value(n Integer)
+		empty
+		value(n Integer)
 end 'Item'
 
 typealias ItemArray = Array with Item
 
 function main() returns ExitCode
-    var items = ItemArray{}
-    items.push(Item.value(10))
-    items.push(Item.value(20))
-    items.push(Item.empty)
-    var first = try items.get(0) otherwise Item.empty
-    match first 'check'
-        empty then return 0
-        value(n) then return n
-    end 'check'
+		var items = ItemArray{}
+		items.push(Item.value(10))
+		items.push(Item.value(20))
+		items.push(Item.empty)
+		var first = try items.get(0) otherwise Item.empty
+		match first 'check'
+				empty then return 0
+				value(n) then return n
+		end 'check'
 end 'main'
 ```
 ```exitcode
@@ -450,25 +450,25 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 union Item
-    empty
-    value(n Integer)
+		empty
+		value(n Integer)
 end 'Item'
 
 typealias ItemArray = Array with Item
 
 function main() returns ExitCode
-    var items = ItemArray{}
-    items.push(Item.value(10))
-    items.push(Item.value(20))
-    items.push(Item.value(12))
-    var total = 0
-    for item in items 'loop'
-        match item 'add'
-            empty then break
-            value(n) then total = total + n
-        end 'add'
-    end 'loop'
-    return total
+		var items = ItemArray{}
+		items.push(Item.value(10))
+		items.push(Item.value(20))
+		items.push(Item.value(12))
+		var total = 0
+		for item in items 'loop'
+				match item 'add'
+						empty then break
+						value(n) then total = total + n
+				end 'add'
+		end 'loop'
+		return total
 end 'main'
 ```
 ```exitcode
@@ -481,25 +481,25 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 union Slot
-    none
-    val(n Integer)
+		none
+		val(n Integer)
 end 'Slot'
 
 typealias SlotArray = Array with Slot
 
 function main() returns ExitCode
-    var slots = SlotArray{}
-    slots.push(Slot.val(5))
-    slots.push(Slot.none)
-    slots.push(Slot.val(3))
-    var total = 0
-    for e in slots 'loop'
-        match e 'check'
-            none then total = total + 100
-            val(n) then total = total + n
-        end 'check'
-    end 'loop'
-    return total
+		var slots = SlotArray{}
+		slots.push(Slot.val(5))
+		slots.push(Slot.none)
+		slots.push(Slot.val(3))
+		var total = 0
+		for e in slots 'loop'
+				match e 'check'
+						none then total = total + 100
+						val(n) then total = total + n
+				end 'check'
+		end 'loop'
+		return total
 end 'main'
 ```
 ```exitcode
@@ -512,23 +512,23 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 union Box
-    empty
-    full(n Integer)
+		empty
+		full(n Integer)
 end 'Box'
 
 typealias BoxArray = Array with Box
 
 function main() returns ExitCode
-    var boxes = BoxArray{}
-    boxes.push(Box.full(42))
-    var result = 0
-    for b in boxes 'loop'
-        match b 'check'
-            empty then result = 0
-            full(n) then result = n
-        end 'check'
-    end 'loop'
-    return result
+		var boxes = BoxArray{}
+		boxes.push(Box.full(42))
+		var result = 0
+		for b in boxes 'loop'
+				match b 'check'
+						empty then result = 0
+						full(n) then result = n
+				end 'check'
+		end 'loop'
+		return result
 end 'main'
 ```
 ```exitcode
@@ -538,24 +538,24 @@ end 'main'
 <!-- test: union-method -->
 ```maxon
 union Direction
-  north
-  south
+	north
+	south
 
-  function isNorth() returns bool
-    var result = match self 'check'
-      north gives true
-      south gives false
-    end 'check'
-    return result
-  end 'isNorth'
+	function isNorth() returns bool
+		var result = match self 'check'
+			north gives true
+			south gives false
+		end 'check'
+		return result
+	end 'isNorth'
 end 'Direction'
 
 function main() returns ExitCode
-  let d = Direction.north
-  if d.isNorth() 'test'
-    return 1
-  end 'test'
-  return 0
+	let d = Direction.north
+	if d.isNorth() 'test'
+		return 1
+	end 'test'
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -565,26 +565,26 @@ end 'main'
 <!-- test: union-method-returns-union -->
 ```maxon
 union Toggle
-  on
-  off
+	on
+	off
 
-  function flip() returns Toggle
-    var result = match self 'check'
-      on gives Toggle.off
-      off gives Toggle.on
-    end 'check'
-    return result
-  end 'flip'
+	function flip() returns Toggle
+		var result = match self 'check'
+			on gives Toggle.off
+			off gives Toggle.on
+		end 'check'
+		return result
+	end 'flip'
 end 'Toggle'
 
 function main() returns ExitCode
-  let t = Toggle.on
-  let flipped = t.flip()
-  var result = match flipped 'check'
-    off gives 1
-    on gives 0
-  end 'check'
-  return result
+	let t = Toggle.on
+	let flipped = t.flip()
+	var result = match flipped 'check'
+		off gives 1
+		on gives 0
+	end 'check'
+	return result
 end 'main'
 ```
 ```exitcode
@@ -594,32 +594,32 @@ end 'main'
 <!-- test: error.duplicate-case -->
 ```maxon
 union Color
-  red
-  red
+	red
+	red
 end 'Color'
 
 function main() returns ExitCode
-  return 0
+	return 0
 end 'main'
 ```
 ```maxoncstderr
-error E3030: specs/fragments/union-full/error.duplicate-case.test:4:3: duplicate union case: 'red'
+error E3030: specs/fragments/union-full/error.duplicate-case.test:4:2: duplicate union case: 'red'
 ```
 
 <!-- test: error.unknown-union-case -->
 ```maxon
 union Color
-  red
-  blue
+	red
+	blue
 end 'Color'
 
 function main() returns ExitCode
-  let _c = Color.green
-  return 0
+	let _c = Color.green
+	return 0
 end 'main'
 ```
 ```maxoncstderr
-error E3034: specs/fragments/union-full/error.unknown-union-case.test:8:12: unknown union case: 'green'
+error E3034: specs/fragments/union-full/error.unknown-union-case.test:8:11: unknown union case: 'green'
 ```
 
 <!-- test: error.associated-value-wrong-count -->
@@ -628,17 +628,17 @@ error E3034: specs/fragments/union-full/error.unknown-union-case.test:8:12: unkn
 typealias Integer = int(i64.min to i64.max)
 
 union Result
-  success(value Integer)
-  failure
+	success(value Integer)
+	failure
 end 'Result'
 
 function main() returns ExitCode
-  let _r = Result.success(1, 2)
-  return 0
+	let _r = Result.success(1, 2)
+	return 0
 end 'main'
 ```
 ```maxoncstderr
-error E3036: specs/fragments/union-full/error.associated-value-wrong-count.test:11:12: wrong argument count: 'expected 1, got 2'
+error E3036: specs/fragments/union-full/error.associated-value-wrong-count.test:11:11: wrong argument count: 'expected 1, got 2'
 ```
 
 <!-- test: error.associated-value-type-mismatch -->
@@ -647,16 +647,16 @@ error E3036: specs/fragments/union-full/error.associated-value-wrong-count.test:
 typealias Integer = int(i64.min to i64.max)
 
 union Container
-  value(n Integer)
+	value(n Integer)
 end 'Container'
 
 function main() returns ExitCode
-  let _c = Container.value("hello")
-  return 0
+	let _c = Container.value("hello")
+	return 0
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/fragments/union-full/error.associated-value-type-mismatch.test:10:35: type mismatch: 'expected Integer, got String'
+error E3005: specs/fragments/union-full/error.associated-value-type-mismatch.test:10:34: type mismatch: 'expected Integer, got String'
 ```
 
 <!-- test: match-union-binding-simple -->
@@ -665,16 +665,16 @@ error E3005: specs/fragments/union-full/error.associated-value-type-mismatch.tes
 typealias Integer = int(i64.min to i64.max)
 
 union Container
-  empty
-  value(n Integer)
+	empty
+	value(n Integer)
 end 'Container'
 
 function main() returns ExitCode
-  var c = Container.value(42)
-  match c 'extract'
-    empty then return 0
-    value(n) then return n
-  end 'extract'
+	var c = Container.value(42)
+	match c 'extract'
+		empty then return 0
+		value(n) then return n
+	end 'extract'
 end 'main'
 ```
 ```exitcode
@@ -687,16 +687,16 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 union Result
-  success(value Integer)
-  failure(code Integer)
+	success(value Integer)
+	failure(code Integer)
 end 'Result'
 
 function main() returns ExitCode
-  var r = Result.failure(99)
-  match r 'handle'
-    success(v) then return v
-    failure(c) then return c
-  end 'handle'
+	var r = Result.failure(99)
+	match r 'handle'
+		success(v) then return v
+		failure(c) then return c
+	end 'handle'
 end 'main'
 ```
 ```exitcode
@@ -709,17 +709,17 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 union Container
-  empty
-  value(n Integer)
+	empty
+	value(n Integer)
 end 'Container'
 
 function main() returns ExitCode
-  var c = Container.value(10)
-  var result = match c 'get'
-    empty gives 0
-    value(n) gives n * 2
-  end 'get'
-  return result
+	var c = Container.value(10)
+	var result = match c 'get'
+		empty gives 0
+		value(n) gives n * 2
+	end 'get'
+	return result
 end 'main'
 ```
 ```exitcode
@@ -732,16 +732,16 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 union Container
-  empty
-  value(n Integer)
+	empty
+	value(n Integer)
 end 'Container'
 
 function main() returns ExitCode
-  var c = Container.empty
-  match c 'check'
-    empty then return 1
-    value(n) then return n
-  end 'check'
+	var c = Container.empty
+	match c 'check'
+		empty then return 1
+		value(n) then return n
+	end 'check'
 end 'main'
 ```
 ```exitcode
@@ -754,18 +754,18 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 union Container
-  value(n Integer)
+	value(n Integer)
 end 'Container'
 
 function main() returns ExitCode
-  var c = Container.value(42)
-  match c 'extract'
-    value(a, b) then return a
-  end 'extract'
+	var c = Container.value(42)
+	match c 'extract'
+		value(a, b) then return a
+	end 'extract'
 end 'main'
 ```
 ```maxoncstderr
-error E3035: specs/fragments/union-full/error.match-union-wrong-binding-count.test:12:5: wrong binding count: 'value'
+error E3035: specs/fragments/union-full/error.match-union-wrong-binding-count.test:12:3: wrong binding count: 'value'
 ```
 
 <!-- test: error.match-union-unknown-case -->
@@ -774,37 +774,37 @@ error E3035: specs/fragments/union-full/error.match-union-wrong-binding-count.te
 typealias Integer = int(i64.min to i64.max)
 
 union Container
-  empty
-  value(n Integer)
+	empty
+	value(n Integer)
 end 'Container'
 
 function main() returns ExitCode
-  var c = Container.value(42)
-  match c 'extract'
-    unknown(x) then return x
-  end 'extract'
+	var c = Container.value(42)
+	match c 'extract'
+		unknown(x) then return x
+	end 'extract'
 end 'main'
 ```
 ```maxoncstderr
-error E3034: specs/fragments/union-full/error.match-union-unknown-case.test:13:5: unknown union case: 'unknown'
+error E3034: specs/fragments/union-full/error.match-union-unknown-case.test:13:3: unknown union case: 'unknown'
 ```
 
 <!-- test: implicit-string-backed -->
 ```maxon
 union StringBacked
-  "North"
-  "South"
-  "East"
+	"North"
+	"South"
+	"East"
 end 'StringBacked'
 
 function main() returns ExitCode
-  var dir = StringBacked.North
-  var result = match dir 'check'
-    North gives 1
-    South gives 0
-    East gives 0
-  end 'check'
-  return result
+	var dir = StringBacked.North
+	var result = match dir 'check'
+		North gives 1
+		South gives 0
+		East gives 0
+	end 'check'
+	return result
 end 'main'
 ```
 ```exitcode
@@ -814,19 +814,19 @@ end 'main'
 <!-- test: implicit-char-backed -->
 ```maxon
 union CharBacked
-  'N'
-  'S'
-  'E'
+	'N'
+	'S'
+	'E'
 end 'CharBacked'
 
 function main() returns ExitCode
-  var dir = CharBacked.N
-  var result = match dir 'check'
-    N gives 1
-    S gives 0
-    E gives 0
-  end 'check'
-  return result
+	var dir = CharBacked.N
+	var result = match dir 'check'
+		N gives 1
+		S gives 0
+		E gives 0
+	end 'check'
+	return result
 end 'main'
 ```
 ```exitcode
@@ -836,19 +836,19 @@ end 'main'
 <!-- test: explicit-char-backed -->
 ```maxon
 union Direction
-  North = 'n'
-  South = 's'
-  East = 'e'
+	North = 'n'
+	South = 's'
+	East = 'e'
 end 'Direction'
 
 function main() returns ExitCode
-  var d = Direction.North
-  var result = match d 'check'
-    North gives 1
-    South gives 0
-    East gives 0
-  end 'check'
-  return result
+	var d = Direction.North
+	var result = match d 'check'
+		North gives 1
+		South gives 0
+		East gives 0
+	end 'check'
+	return result
 end 'main'
 ```
 ```exitcode
@@ -858,19 +858,19 @@ end 'main'
 <!-- test: float-backed -->
 ```maxon
 union FloatBacked
-  North = 1.1
-  South = 2.2
-  East = 3.3
+	North = 1.1
+	South = 2.2
+	East = 3.3
 end 'FloatBacked'
 
 function main() returns ExitCode
-  var f = FloatBacked.North
-  var result = match f 'check'
-    North gives 1
-    South gives 0
-    East gives 0
-  end 'check'
-  return result
+	var f = FloatBacked.North
+	var result = match f 'check'
+		North gives 1
+		South gives 0
+		East gives 0
+	end 'check'
+	return result
 end 'main'
 ```
 ```exitcode
@@ -880,46 +880,46 @@ end 'main'
 <!-- test: error.duplicate-raw-value -->
 ```maxon
 union Status
-  ok = 200
-  success = 200
+	ok = 200
+	success = 200
 end 'Status'
 
 function main() returns ExitCode
-  return 0
+	return 0
 end 'main'
 ```
 ```maxoncstderr
-error E3031: specs/fragments/union-full/error.duplicate-raw-value.test:4:3: duplicate raw value: '200'
+error E3031: specs/fragments/union-full/error.duplicate-raw-value.test:4:2: duplicate raw value: '200'
 ```
 
 <!-- test: error.raw-value-type-mismatch -->
 ```maxon
 union Status
-  ok = 100
-  fail = "error"
+	ok = 100
+	fail = "error"
 end 'Status'
 
 function main() returns ExitCode
-  return 0
+	return 0
 end 'main'
 ```
 ```maxoncstderr
-error E3032: specs/fragments/union-full/error.raw-value-type-mismatch.test:4:3: raw value type mismatch: 'expected int, got String'
+error E3032: specs/fragments/union-full/error.raw-value-type-mismatch.test:4:2: raw value type mismatch: 'expected int, got String'
 ```
 
 <!-- test: error.mixed-backing-types -->
 ```maxon
 union Mixed
-  first = 1
-  second = "two"
+	first = 1
+	second = "two"
 end 'Mixed'
 
 function main() returns ExitCode
-  return 0
+	return 0
 end 'main'
 ```
 ```maxoncstderr
-error E3032: specs/fragments/union-full/error.mixed-backing-types.test:4:3: raw value type mismatch: 'expected int, got String'
+error E3032: specs/fragments/union-full/error.mixed-backing-types.test:4:2: raw value type mismatch: 'expected int, got String'
 ```
 
 <!-- test: fromName-associated-compile-time -->
@@ -928,16 +928,16 @@ error E3032: specs/fragments/union-full/error.mixed-backing-types.test:4:3: raw 
 typealias Integer = int(i64.min to i64.max)
 
 union Container
-  empty
-  value(n Integer)
+	empty
+	value(n Integer)
 end 'Container'
 
 function main() returns ExitCode
-  var c = try Container.fromName("value", 42) otherwise Container.empty
-  match c 'check'
-    value(n) then return n
-    empty then return 0
-  end 'check'
+	var c = try Container.fromName("value", 42) otherwise Container.empty
+	match c 'check'
+		value(n) then return n
+		empty then return 0
+	end 'check'
 end 'main'
 ```
 ```exitcode
@@ -950,16 +950,16 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 union Container
-  empty
-  value(n Integer)
+	empty
+	value(n Integer)
 end 'Container'
 
 function main() returns ExitCode
-  var c = try Container.fromName("empty") otherwise Container.value(99)
-  match c 'check'
-    empty then return 1
-    value(_) then return 0
-  end 'check'
+	var c = try Container.fromName("empty") otherwise Container.value(99)
+	match c 'check'
+		empty then return 1
+		value(_) then return 0
+	end 'check'
 end 'main'
 ```
 ```exitcode
@@ -969,17 +969,17 @@ end 'main'
 <!-- test: error.fromName-invalid-case -->
 ```maxon
 union Direction
-  north
-  south
+	north
+	south
 end 'Direction'
 
 function main() returns ExitCode
-  let _d = try Direction.fromName("invalid_case_name_that_does_not_exist") otherwise Direction.north
-  return 0
+	let _d = try Direction.fromName("invalid_case_name_that_does_not_exist") otherwise Direction.north
+	return 0
 end 'main'
 ```
 ```maxoncstderr
-error E3034: specs/fragments/union-full/error.fromName-invalid-case.test:8:26: no union case named 'invalid_case_name_that_does_not_exist': 'Direction'
+error E3034: specs/fragments/union-full/error.fromName-invalid-case.test:8:25: no union case named 'invalid_case_name_that_does_not_exist': 'Direction'
 ```
 
 <!-- test: error.fromName-wrong-arg-count -->
@@ -988,16 +988,16 @@ error E3034: specs/fragments/union-full/error.fromName-invalid-case.test:8:26: n
 typealias Integer = int(i64.min to i64.max)
 
 union Container
-  value(n Integer)
+	value(n Integer)
 end 'Container'
 
 function main() returns ExitCode
-  let _c = try Container.fromName("value") otherwise Container.value(0)
-  return 0
+	let _c = try Container.fromName("value") otherwise Container.value(0)
+	return 0
 end 'main'
 ```
 ```maxoncstderr
-error E3036: specs/fragments/union-full/error.fromName-wrong-arg-count.test:10:26: wrong argument count: 'case 'value' requires 1 associated value(s)'
+error E3036: specs/fragments/union-full/error.fromName-wrong-arg-count.test:10:25: wrong argument count: 'case 'value' requires 1 associated value(s)'
 ```
 
 <!-- test: fromName-associated-runtime-empty -->
@@ -1006,21 +1006,21 @@ error E3036: specs/fragments/union-full/error.fromName-wrong-arg-count.test:10:2
 typealias Integer = int(i64.min to i64.max)
 
 union Container
-  empty
-  value(n Integer)
+	empty
+	value(n Integer)
 end 'Container'
 
 function getName() returns String
-  return "empty"
+	return "empty"
 end 'getName'
 
 function main() returns ExitCode
-  var name = getName()
-  var c = try Container.fromName(name) otherwise Container.value(99)
-  match c 'check'
-    empty then return 1
-    value(_) then return 0
-  end 'check'
+	var name = getName()
+	var c = try Container.fromName(name) otherwise Container.value(99)
+	match c 'check'
+		empty then return 1
+		value(_) then return 0
+	end 'check'
 end 'main'
 ```
 ```exitcode
@@ -1033,35 +1033,35 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 union Container
-  empty
-  value(n Integer)
+	empty
+	value(n Integer)
 end 'Container'
 
 function main() returns ExitCode
-  let _c = try Container.fromRawValue(0) otherwise Container.empty
-  return 0
+	let _c = try Container.fromRawValue(0) otherwise Container.empty
+	return 0
 end 'main'
 ```
 ```maxoncstderr
-error E3034: specs/fragments/union-full/error.fromRawValue-associated-values.test:11:16: unknown union case: 'fromRawValue'
+error E3034: specs/fragments/union-full/error.fromRawValue-associated-values.test:11:15: unknown union case: 'fromRawValue'
 ```
 
 <!-- test: union-member-constant -->
 ```maxon
 union Color
-  Red
-  Green
-  Blue
+	Red
+	Green
+	Blue
 end 'Color'
 
 let DEFAULT_COLOR = Color.Green
 
 function main() returns ExitCode
-  match DEFAULT_COLOR 'check'
-    Red then return 1
-    Green then return 2
-    Blue then return 3
-  end 'check'
+	match DEFAULT_COLOR 'check'
+		Red then return 1
+		Green then return 2
+		Blue then return 3
+	end 'check'
 end 'main'
 ```
 ```exitcode
@@ -1074,16 +1074,16 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 union StringResult
-  ok(value Integer)
-  err(message String)
+	ok(value Integer)
+	err(message String)
 end 'StringResult'
 
 function main() returns ExitCode
-  var r = StringResult.err("bad")
-  match r 'handle'
-    ok(v) then return v
-    err(msg) then return msg.byteLength()
-  end 'handle'
+	var r = StringResult.err("bad")
+	match r 'handle'
+		ok(v) then return v
+		err(msg) then return msg.byteLength()
+	end 'handle'
 end 'main'
 ```
 ```exitcode
@@ -1096,21 +1096,21 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 type EnumPoint
-  export var x Integer
-  export var y Integer
+	export var x Integer
+	export var y Integer
 end 'EnumPoint'
 
 union Shape
-  circle(radius Integer)
-  rect(origin EnumPoint)
+	circle(radius Integer)
+	rect(origin EnumPoint)
 end 'Shape'
 
 function main() returns ExitCode
-  var s = Shape.rect(EnumPoint{x: 10, y: 20})
-  match s 'handle'
-    circle(r) then return r
-    rect(p) then return p.x + p.y
-  end 'handle'
+	var s = Shape.rect(EnumPoint{x: 10, y: 20})
+	match s 'handle'
+		circle(r) then return r
+		rect(p) then return p.x + p.y
+	end 'handle'
 end 'main'
 ```
 ```exitcode

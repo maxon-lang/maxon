@@ -56,15 +56,15 @@ If the compiler cannot determine which overload to call based on argument types 
 typealias Integer = int(i64.min to i64.max)
 
 function process(value Integer) returns Integer
-  return value * 2
+	return value * 2
 end 'process'
 
 function process(value String) returns Integer
-  return value.count()
+	return value.count()
 end 'process'
 
 function main() returns ExitCode
-  return process(21)
+	return process(21)
 end 'main'
 ```
 ```exitcode
@@ -76,15 +76,15 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 function process(value Integer) returns Integer
-  return value * 2
+	return value * 2
 end 'process'
 
 function process(value String) returns Integer
-  return value.count()
+	return value.count()
 end 'process'
 
 function main() returns ExitCode
-  return process("hello world hello world hello world hello worl!")
+	return process("hello world hello world hello world hello worl!")
 end 'main'
 ```
 ```exitcode
@@ -96,15 +96,15 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 function slice(start Integer, endIndex Integer) returns Integer
-  return endIndex - start
+	return endIndex - start
 end 'slice'
 
 function slice(start Integer, length Integer) returns Integer
-  return start + length
+	return start + length
 end 'slice'
 
 function main() returns ExitCode
-  return slice(10, length: 32)
+	return slice(10, length: 32)
 end 'main'
 ```
 ```exitcode
@@ -116,19 +116,19 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 function create(name String) returns Integer
-  return name.count()
+	return name.count()
 end 'create'
 
 function create(label String) returns Integer
-  return label.count()
+	return label.count()
 end 'create'
 
 function main() returns ExitCode
-  return create("hello")
+	return create("hello")
 end 'main'
 ```
 ```maxoncstderr
-error E3007: specs/fragments/function-overloads/error.ambiguous-same-signature.test:13:10: Ambiguous overload for 'create': multiple overloads match. Candidates: (name String), (label String)
+error E3007: specs/fragments/function-overloads/error.ambiguous-same-signature.test:13:9: Ambiguous overload for 'create': multiple overloads match. Candidates: (name String), (label String)
 ```
 
 <!-- test: ambiguous-same-signature-with-named-args -->
@@ -136,15 +136,15 @@ error E3007: specs/fragments/function-overloads/error.ambiguous-same-signature.t
 typealias Integer = int(i64.min to i64.max)
 
 function create(name String) returns Integer
-  return name.count()
+	return name.count()
 end 'create'
 
 function create(label String) returns Integer
-  return label.count() + 1
+	return label.count() + 1
 end 'create'
 
 function main() returns ExitCode
-  return create(label: "hello world hello world hello world hello worl!")
+	return create(label: "hello world hello world hello world hello worl!")
 end 'main'
 ```
 ```exitcode
@@ -156,18 +156,18 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 type Converter
-  function convert(value Integer) returns Integer
-    return value * 2
-  end 'convert'
+	function convert(value Integer) returns Integer
+		return value * 2
+	end 'convert'
 
-  function convert(value String) returns Integer
-    return value.count()
-  end 'convert'
+	function convert(value String) returns Integer
+		return value.count()
+	end 'convert'
 end 'Converter'
 
 function main() returns ExitCode
-  let c = Converter{}
-  return c.convert(21)
+	let c = Converter{}
+	return c.convert(21)
 end 'main'
 ```
 ```exitcode
@@ -179,16 +179,16 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 function process(value Integer) returns Integer
-  return value * 2
+	return value * 2
 end 'process'
 
 function process(value String) returns Integer
-  return value.count()
+	return value.count()
 end 'process'
 
 function main() returns ExitCode
-  let x = 21
-  return process(x)
+	let x = 21
+	return process(x)
 end 'main'
 ```
 ```exitcode
@@ -198,12 +198,12 @@ end 'main'
 <!-- test: string-contains-char -->
 ```maxon
 function main() returns ExitCode
-  let text = "hello"
-  if text.contains('e') 'check'
-    return 1
-  end 'check' else 'other'
-    return 0
-  end 'other'
+	let text = "hello"
+	if text.contains('e') 'check'
+		return 1
+	end 'check' else 'other'
+		return 0
+	end 'other'
 end 'main'
 ```
 ```exitcode
@@ -213,12 +213,12 @@ end 'main'
 <!-- test: string-contains-string -->
 ```maxon
 function main() returns ExitCode
-  let text = "hello world"
-  if text.contains("world") 'check'
-    return 1
-  end 'check' else 'other'
-    return 0
-  end 'other'
+	let text = "hello world"
+	if text.contains("world") 'check'
+		return 1
+	end 'check' else 'other'
+		return 0
+	end 'other'
 end 'main'
 ```
 ```exitcode
@@ -230,19 +230,19 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 function check(value Integer) returns Integer
-  return value
+	return value
 end 'check'
 
 function check(value bool) returns Integer
-  if value 'branch'
-    return 1
-  end 'branch' else 'other'
-    return 0
-  end 'other'
+	if value 'branch'
+		return 1
+	end 'branch' else 'other'
+		return 0
+	end 'other'
 end 'check'
 
 function main() returns ExitCode
-  return check(true)
+	return check(true)
 end 'main'
 ```
 ```exitcode
@@ -255,15 +255,15 @@ typealias Integer = int(i64.min to i64.max)
 typealias Decimal = float(f64.min to f64.max)
 
 function measure(value Integer) returns Integer
-  return value
+	return value
 end 'measure'
 
 function measure(value Decimal) returns Integer
-  return trunc(value)
+	return trunc(value)
 end 'measure'
 
 function main() returns ExitCode
-  return measure(42.0)
+	return measure(42.0)
 end 'main'
 ```
 ```exitcode

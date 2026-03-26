@@ -8,55 +8,55 @@ let ELF_PHDR_SIZE = 56
 let ELF_PAGE_SIZE = 0x1000
 
 export function writeElf(outputPath FilePath, codeResult CodeResult, target Target)
-  let headerSize = ELF_HEADER_SIZE + ELF_PHDR_SIZE
-  let codeSize = codeResult.code.count()
-  let totalSize = headerSize + codeSize
-  let entryPoint = ELF_LOAD_ADDR + headerSize
+	let headerSize = ELF_HEADER_SIZE + ELF_PHDR_SIZE
+	let codeSize = codeResult.code.count()
+	let totalSize = headerSize + codeSize
+	let entryPoint = ELF_LOAD_ADDR + headerSize
 
-  logInfo(LogCategory.binary, message: () gives "Writing ELF file: {outputPath}")
-  logInfo(LogCategory.binary, message: () gives "Code size: {codeSize} bytes, entry point: {entryPoint}")
+	logInfo(LogCategory.binary, message: () gives "Writing ELF file: {outputPath}")
+	logInfo(LogCategory.binary, message: () gives "Code size: {codeSize} bytes, entry point: {entryPoint}")
 
-  var elf = ByteArray{}
-  elf.reserve(totalSize)
+	var elf = ByteArray{}
+	elf.reserve(totalSize)
 
-  // === ELF Header (64 bytes) ===
+	// === ELF Header (64 bytes) ===
 
-  // e_ident[0..16]: magic, class=64, data=LSB, version=1, OS/ABI=SysV, padding
-  elf.append(b"\x7fELF\x02\x01\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00")
+	// e_ident[0..16]: magic, class=64, data=LSB, version=1, OS/ABI=SysV, padding
+	elf.append(b"\x7fELF\x02\x01\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00")
 
-  // e_type: ET_EXEC (executable)
-  writeWord(elf, value: 2)
-  // e_machine: EM_X86_64=0x3E, EM_AARCH64=0xB7
-  let eMachine = match target.cpu 'cpuMachine'
-    x86_64 gives 0x3E
-    aarch64 gives 0xB7
-  end 'cpuMachine'
-  writeWord(elf, value: eMachine)
-  // e_version(1)
-  elf.append(b"\x01\x00\x00\x00")
-  // e_entry: entry point virtual address
-  writeQword(elf, value: entryPoint)
-  // e_phoff(64), e_shoff(0), e_flags(0)
-  elf.append(b"\x40\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00")
-  // e_ehsize(64), e_phentsize(56), e_phnum(1), e_shentsize(0), e_shnum(0), e_shstrndx(0)
-  elf.append(b"\x40\x00\x38\x00\x01\x00\x00\x00\x00\x00\x00\x00")
+	// e_type: ET_EXEC (executable)
+	writeWord(elf, value: 2)
+	// e_machine: EM_X86_64=0x3E, EM_AARCH64=0xB7
+	let eMachine = match target.cpu 'cpuMachine'
+		x86_64 gives 0x3E
+		aarch64 gives 0xB7
+	end 'cpuMachine'
+	writeWord(elf, value: eMachine)
+	// e_version(1)
+	elf.append(b"\x01\x00\x00\x00")
+	// e_entry: entry point virtual address
+	writeQword(elf, value: entryPoint)
+	// e_phoff(64), e_shoff(0), e_flags(0)
+	elf.append(b"\x40\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00")
+	// e_ehsize(64), e_phentsize(56), e_phnum(1), e_shentsize(0), e_shnum(0), e_shstrndx(0)
+	elf.append(b"\x40\x00\x38\x00\x01\x00\x00\x00\x00\x00\x00\x00")
 
-  // === Program Header (56 bytes) ===
-  // p_type(PT_LOAD=1), p_flags(PF_R|PF_X=5), p_offset(0)
-  elf.append(b"\x01\x00\x00\x00\x05\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00")
-  // p_vaddr, p_paddr (both ELF_LOAD_ADDR=0x400000)
-  elf.append(b"\x00\x00\x40\x00\x00\x00\x00\x00\x00\x00\x40\x00\x00\x00\x00\x00")
-  // p_filesz, p_memsz (both totalSize)
-  writeQword(elf, value: totalSize)
-  writeQword(elf, value: totalSize)
-  // p_align (0x1000)
-  elf.append(b"\x00\x10\x00\x00\x00\x00\x00\x00")
+	// === Program Header (56 bytes) ===
+	// p_type(PT_LOAD=1), p_flags(PF_R|PF_X=5), p_offset(0)
+	elf.append(b"\x01\x00\x00\x00\x05\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00")
+	// p_vaddr, p_paddr (both ELF_LOAD_ADDR=0x400000)
+	elf.append(b"\x00\x00\x40\x00\x00\x00\x00\x00\x00\x00\x40\x00\x00\x00\x00\x00")
+	// p_filesz, p_memsz (both totalSize)
+	writeQword(elf, value: totalSize)
+	writeQword(elf, value: totalSize)
+	// p_align (0x1000)
+	elf.append(b"\x00\x10\x00\x00\x00\x00\x00\x00")
 
-  // === Code ===
-  elf.append(codeResult.code)
+	// === Code ===
+	elf.append(codeResult.code)
 
-  // Write to file
-  try File.writeBinary(outputPath, content: elf, mode: FilePermission.executable) otherwise 'writeErr'
-    logError(LogCategory.binary, message: () gives "Failed to write ELF file: {outputPath}")
-  end 'writeErr'
+	// Write to file
+	try File.writeBinary(outputPath, content: elf, mode: FilePermission.executable) otherwise 'writeErr'
+		logError(LogCategory.binary, message: () gives "Failed to write ELF file: {outputPath}")
+	end 'writeErr'
 end 'writeElf'

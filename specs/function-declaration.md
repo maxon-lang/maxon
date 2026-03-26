@@ -21,19 +21,19 @@ Functions in Maxon are declared using the `function` keyword. Each function has:
 ```maxon
 // Function with return value
 function name(param1 type1, param2 type2) returns returnType
-  // statements
-  return value
+	// statements
+	return value
 end 'name'
 
 // Function with no return value (implicit void)
 function name(param1 type1, param2 type2)
-  // statements
+	// statements
 end 'name'
 
 // Function with discard parameter (unused parameter)
 function name(_ type1, param2 type2) returns returnType
-  // param2 is usable, _ is discarded
-  return value
+	// param2 is usable, _ is discarded
+	return value
 end 'name'
 ```
 
@@ -52,7 +52,7 @@ typealias ID = int(i64.min to i64.max)
 typealias Weight = float(f64.min to f64.max)
 
 function callback(_a ID, _b String, value Weight) returns Weight
-  return value * 2.0
+	return value * 2.0
 end 'callback'
 ```
 
@@ -68,11 +68,11 @@ Discard parameters:
 typealias Score = int(i64.min to i64.max)
 
 function add(a Score, b Score) returns Score
-  return a + b
+	return a + b
 end 'add'
 
 function main() returns ExitCode
-  return add(3, b: 4)
+	return add(3, b: 4)
 end 'main'
 ```
 ```exitcode
@@ -88,11 +88,11 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 function add() returns Integer
-  return 3 + 4
+	return 3 + 4
 end 'add'
 
 function main() returns ExitCode
-  return add()
+	return add()
 end 'main'
 ```
 ```exitcode
@@ -106,11 +106,11 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 function add(a Integer, b Integer) returns Integer
-  return a + b
+	return a + b
 end 'add'
 
 function main() returns ExitCode
-  return add(10, b: 20)
+	return add(10, b: 20)
 end 'main'
 ```
 ```exitcode
@@ -124,15 +124,15 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 function double(x Integer) returns Integer
-  return x * 2
+	return x * 2
 end 'double'
 
 function quadruple(x Integer) returns Integer
-  return double(double(x))
+	return double(double(x))
 end 'quadruple'
 
 function main() returns ExitCode
-  return quadruple(3)
+	return quadruple(3)
 end 'main'
 ```
 ```exitcode
@@ -146,8 +146,8 @@ function doNothing()
 end 'doNothing'
 
 function main() returns ExitCode
-  doNothing()
-  return 0
+	doNothing()
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -158,11 +158,11 @@ end 'main'
 <!-- test: missing-returns-keyword-error -->
 ```maxon
 function foo() int
-  return 0
+	return 0
 end 'foo'
 
 function main() returns ExitCode
-  return 0
+	return 0
 end 'main'
 ```
 ```maxoncstderr
@@ -176,11 +176,11 @@ error E3010: specs/fragments/function-declaration/missing-returns-keyword-error.
 typealias Integer = int(i64.min to i64.max)
 
 function useSecond(_ Integer, b Integer) returns Integer
-  return b
+	return b
 end 'useSecond'
 
 function main() returns ExitCode
-  return useSecond(10, b: 42)
+	return useSecond(10, b: 42)
 end 'main'
 ```
 ```exitcode

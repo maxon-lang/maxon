@@ -15,15 +15,15 @@ Using an undefined keyword or bare identifier as a statement causes a parse erro
 
 ```maxon
 function main() returns ExitCode
-  var x = 0
-  foo
-    x = 5
-  end 'foo'
-  return x
+	var x = 0
+	foo
+		x = 5
+	end 'foo'
+	return x
 end 'main'
 ```
 ```maxoncstderr
-error E3010: specs/fragments/unknown-keyword-error/docs-example-1.test:4:3: unexpected token: 'foo'
+error E3010: specs/fragments/unknown-keyword-error/docs-example-1.test:4:2: unexpected token: 'foo'
 ```
 
 
@@ -39,26 +39,26 @@ When you see this error, consider:
 <!-- test: bare-identifier -->
 ```maxon
 function main() returns ExitCode
-  var x = 0
-  foo
-    x = 5
-  end 'foo'
-  return x
+	var x = 0
+	foo
+		x = 5
+	end 'foo'
+	return x
 end 'main'
 ```
 ```maxoncstderr
-error E3010: specs/fragments/unknown-keyword-error/bare-identifier.test:4:3: unexpected token: 'foo'
+error E3010: specs/fragments/unknown-keyword-error/bare-identifier.test:4:2: unexpected token: 'foo'
 ```
 
 <!-- test: typo-keyword -->
 ```maxon
 function main() returns ExitCode
-  var x = 5
-  retur x
+	var x = 5
+	retur x
 end 'main'
 ```
 ```maxoncstderr
-error E3010: specs/fragments/unknown-keyword-error/typo-keyword.test:4:3: unexpected token: 'retur'
+error E3010: specs/fragments/unknown-keyword-error/typo-keyword.test:4:2: unexpected token: 'retur'
 ```
 
 <!-- test: missing-call-parens -->
@@ -67,14 +67,14 @@ error E3010: specs/fragments/unknown-keyword-error/typo-keyword.test:4:3: unexpe
 typealias Integer = int(i64.min to i64.max)
 
 function test() returns Integer
-  return 42
+	return 42
 end 'test'
 
 function main() returns ExitCode
-  test
-  return 0
+	test
+	return 0
 end 'main'
 ```
 ```maxoncstderr
-error E3010: specs/fragments/unknown-keyword-error/missing-call-parens.test:10:3: unexpected token: 'test'
+error E3010: specs/fragments/unknown-keyword-error/missing-call-parens.test:10:2: unexpected token: 'test'
 ```

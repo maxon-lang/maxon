@@ -61,7 +61,7 @@ private record SourceComment(string Text, bool WholeLine);
     return comments;
   }
 
-  public static string Format(string source, int indentSize = 2, bool useTabs = false) {
+  public static string Format(string source, int indentSize = 2, bool useTabs = true) {
     List<Token> tokens;
     try {
       tokens = new Lexer(source).Tokenize();

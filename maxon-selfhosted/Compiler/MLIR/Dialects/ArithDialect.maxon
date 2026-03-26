@@ -2,83 +2,83 @@
 // Split into const, unary, and binary sub-unions for type-safe dispatch.
 
 export union ArithOp
-  const(op ArithConst)
-  unary(op ArithUnaryOp)
-  binary(op ArithBinaryOp)
+	const(op ArithConst)
+	unary(op ArithUnaryOp)
+	binary(op ArithBinaryOp)
 end 'ArithOp'
 
 export enum ArithConstOpcode
-  constI64
-  constF64
+	constI64
+	constF64
 end 'ArithConstOpcode'
 
 export type ArithConst
-  export let opcode ArithConstOpcode
-  export let resultId ValueId
-  export let value ParsedInt
+	export let opcode ArithConstOpcode
+	export let resultId ValueId
+	export let value ParsedInt
 end 'ArithConst'
 
 export enum ArithUnaryOpcode
-  negI64
-  bitNotI64
+	negI64
+	bitNotI64
 end 'ArithUnaryOpcode'
 
 export type ArithUnaryOp
-  export let opcode ArithUnaryOpcode
-  export let resultId ValueId
-  export let operandId ValueId
+	export let opcode ArithUnaryOpcode
+	export let resultId ValueId
+	export let operandId ValueId
 end 'ArithUnaryOp'
 
 export enum ArithBinaryOpcode
-  addI64 = "addi"
-  subI64 = "subi"
-  mulI64 = "muli"
-  divI64 = "divsi"
-  remI64 = "remsi"
-  andI64 = "andi"
-  orI64 = "ori"
-  xorI64 = "xori"
-  shlI64 = "shli"
-  shrI64 = "shrsi"
-  cmpI64Eq = "cmpi eq,"
-  cmpI64Ne = "cmpi ne,"
-  cmpI64Lt = "cmpi lt,"
-  cmpI64Le = "cmpi le,"
-  cmpI64Gt = "cmpi gt,"
-  cmpI64Ge = "cmpi ge,"
-  cmpF64Eq = "cmpf eq,"
-  cmpF64Ne = "cmpf ne,"
-  cmpF64Lt = "cmpf lt,"
-  cmpF64Le = "cmpf le,"
-  cmpF64Gt = "cmpf gt,"
-  cmpF64Ge = "cmpf ge,"
+	addI64 = "addi"
+	subI64 = "subi"
+	mulI64 = "muli"
+	divI64 = "divsi"
+	remI64 = "remsi"
+	andI64 = "andi"
+	orI64 = "ori"
+	xorI64 = "xori"
+	shlI64 = "shli"
+	shrI64 = "shrsi"
+	cmpI64Eq = "cmpi eq,"
+	cmpI64Ne = "cmpi ne,"
+	cmpI64Lt = "cmpi lt,"
+	cmpI64Le = "cmpi le,"
+	cmpI64Gt = "cmpi gt,"
+	cmpI64Ge = "cmpi ge,"
+	cmpF64Eq = "cmpf eq,"
+	cmpF64Ne = "cmpf ne,"
+	cmpF64Lt = "cmpf lt,"
+	cmpF64Le = "cmpf le,"
+	cmpF64Gt = "cmpf gt,"
+	cmpF64Ge = "cmpf ge,"
 end 'ArithBinaryOpcode'
 
 export type ArithBinaryOp
-  export let opcode ArithBinaryOpcode
-  export let resultId ValueId
-  export let leftId ValueId
-  export let rightId ValueId
+	export let opcode ArithBinaryOpcode
+	export let resultId ValueId
+	export let leftId ValueId
+	export let rightId ValueId
 end 'ArithBinaryOp'
 
 export function arithOpToString(op ArithOp) returns String
-  return match op 'dispatch'
-    const(c) gives arithConstToString(c)
-    unary(u) gives arithUnaryOpToString(u)
-    binary(b) gives "%{b.resultId} = arith.{b.opcode.rawValue} %{b.leftId}, %{b.rightId}"
-  end 'dispatch'
+	return match op 'dispatch'
+		const(c) gives arithConstToString(c)
+		unary(u) gives arithUnaryOpToString(u)
+		binary(b) gives "%{b.resultId} = arith.{b.opcode.rawValue} %{b.leftId}, %{b.rightId}"
+	end 'dispatch'
 end 'arithOpToString'
 
 function arithConstToString(op ArithConst) returns String
-  return match op.opcode 'toString'
-    constI64 gives "%{op.resultId} = arith.constant \{value = {op.value} : i64\}"
-    constF64 gives "%{op.resultId} = arith.float_constant \{value = {op.value} : f64\}"
-  end 'toString'
+	return match op.opcode 'toString'
+		constI64 gives "%{op.resultId} = arith.constant \{value = {op.value} : i64\}"
+		constF64 gives "%{op.resultId} = arith.float_constant \{value = {op.value} : f64\}"
+	end 'toString'
 end 'arithConstToString'
 
 function arithUnaryOpToString(op ArithUnaryOp) returns String
-  return match op.opcode 'toString'
-    negI64 gives "%{op.resultId} = arith.negi %{op.operandId}"
-    bitNotI64 gives "%{op.resultId} = arith.noti %{op.operandId}"
-  end 'toString'
+	return match op.opcode 'toString'
+		negI64 gives "%{op.resultId} = arith.negi %{op.operandId}"
+		bitNotI64 gives "%{op.resultId} = arith.noti %{op.operandId}"
+	end 'toString'
 end 'arithUnaryOpToString'

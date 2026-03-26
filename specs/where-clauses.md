@@ -60,8 +60,8 @@ Map requires `Key is Hashable`. String implements Hashable, so this should work:
 <!-- test: where-clauses.map-basic -->
 ```maxon
 function main() returns ExitCode
-    var m = ["hello": 42]
-    return try m.get("hello") otherwise 0
+		var m = ["hello": 42]
+		return try m.get("hello") otherwise 0
 end 'main'
 ```
 ```exitcode
@@ -78,23 +78,23 @@ A user-defined type that implements Hashable can be used as a Map key:
 typealias Integer = int(i64.min to i64.max)
 
 type MyKey implements Hashable, Equatable
-    var value Integer
+		var value Integer
 
-    function hash() returns HashValue
-        return self.value * 31
-    end 'hash'
+		function hash() returns HashValue
+				return self.value * 31
+		end 'hash'
 
-    function equals(other MyKey) returns bool
-        return self.value == other.value
-    end 'equals'
+		function equals(other MyKey) returns bool
+				return self.value == other.value
+		end 'equals'
 end 'MyKey'
 
 typealias MyKeyMap = Map with (MyKey, Integer)
 
 function main() returns ExitCode
-    var m = MyKeyMap{}
-    m.insert(key: MyKey{value: 1}, value: 42)
-    return m.count()
+		var m = MyKeyMap{}
+		m.insert(key: MyKey{value: 1}, value: 42)
+		return m.count()
 end 'main'
 ```
 ```exitcode
@@ -111,13 +111,13 @@ Using a type that doesn't implement Hashable as a Map key should produce a compi
 typealias Integer = int(i64.min to i64.max)
 
 type NotHashable
-    var x Integer
+		var x Integer
 end 'NotHashable'
 
 typealias BadMap = Map with (NotHashable, Integer)
 
 function main() returns ExitCode
-    return 0
+		return 0
 end 'main'
 ```
 ```maxoncstderr
@@ -134,27 +134,27 @@ A user-defined generic type can use where clauses:
 typealias Integer = int(i64.min to i64.max)
 
 interface Valuable
-    function value() returns Integer
+		function value() returns Integer
 end 'Valuable'
 
 type Wrapper implements Valuable
-    var n Integer
+		var n Integer
 
-    function value() returns Integer
-        return self.n
-    end 'value'
+		function value() returns Integer
+				return self.n
+		end 'value'
 end 'Wrapper'
 
 type Holder uses T where T is Valuable
-    export var item T
+		export var item T
 end 'Holder'
 
 typealias WrapperHolder = Holder with Wrapper
 
 function main() returns ExitCode
-    var w = Wrapper{n: 10}
-    var h = WrapperHolder{item: w}
-    return h.item.value()
+		var w = Wrapper{n: 10}
+		var h = WrapperHolder{item: w}
+		return h.item.value()
 end 'main'
 ```
 ```exitcode
@@ -171,35 +171,35 @@ A type parameter can require multiple interface conformance:
 typealias Integer = int(i64.min to i64.max)
 
 interface HasName
-    function name() returns Integer
+		function name() returns Integer
 end 'HasName'
 
 interface HasAge
-    function age() returns Integer
+		function age() returns Integer
 end 'HasAge'
 
 type Person implements HasName, HasAge
-    var _age Integer
+		var _age Integer
 
-    function name() returns Integer
-        return 1
-    end 'name'
+		function name() returns Integer
+				return 1
+		end 'name'
 
-    function age() returns Integer
-        return self._age
-    end 'age'
+		function age() returns Integer
+				return self._age
+		end 'age'
 end 'Person'
 
 type Registry uses T where T is HasName and HasAge
-    export var item T
+		export var item T
 end 'Registry'
 
 typealias PersonRegistry = Registry with Person
 
 function main() returns ExitCode
-    var p = Person{_age: 30}
-    var r = PersonRegistry{item: p}
-    return r.item.age()
+		var p = Person{_age: 30}
+		var r = PersonRegistry{item: p}
+		return r.item.age()
 end 'main'
 ```
 ```exitcode
@@ -214,27 +214,27 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 interface Foo
-    function foo() returns Integer
+		function foo() returns Integer
 end 'Foo'
 
 interface Bar
-    function bar() returns Integer
+		function bar() returns Integer
 end 'Bar'
 
 type OnlyFoo implements Foo
-    function foo() returns Integer
-        return 1
-    end 'foo'
+		function foo() returns Integer
+				return 1
+		end 'foo'
 end 'OnlyFoo'
 
 type NeedsBoth uses T where T is Foo and Bar
-    var item T
+		var item T
 end 'NeedsBoth'
 
 typealias Bad = NeedsBoth with OnlyFoo
 
 function main() returns ExitCode
-    return 0
+		return 0
 end 'main'
 ```
 ```maxoncstderr
@@ -248,19 +248,19 @@ Using `==` or `!=` on a type parameter that isn't constrained with `where T is E
 <!-- test: where-clauses.eq-requires-equatable -->
 ```maxon
 type Box uses T
-    var item T
+		var item T
 
-    export function eq(other T) returns bool
-        return item == other
-    end 'eq'
+		export function eq(other T) returns bool
+				return item == other
+		end 'eq'
 end 'Box'
 
 function main() returns ExitCode
-    return 0
+		return 0
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/fragments/where-clauses/where-clauses.eq-requires-equatable.test:6:21: Operator '==' requires type parameter 'T' to be constrained with 'where T is Equatable'
+error E3005: specs/fragments/where-clauses/where-clauses.eq-requires-equatable.test:6:17: Operator '==' requires type parameter 'T' to be constrained with 'where T is Equatable'
 ```
 
 ### Equality on Equatable-constrained type parameter compiles
@@ -270,22 +270,22 @@ When the type parameter is properly constrained, `==` should work:
 <!-- test: where-clauses.eq-with-equatable -->
 ```maxon
 type Box uses T where T is Equatable
-    var item T
+		var item T
 
-    export function eq(other T) returns bool
-        return item == other
-    end 'eq'
+		export function eq(other T) returns bool
+				return item == other
+		end 'eq'
 end 'Box'
 
 typealias Int = int(i64.min to i64.max)
 typealias IntBox = Box with Int
 
 function main() returns ExitCode
-    var b = IntBox{item: 42}
-    if b.eq(other: 42) 'yes'
-        return 1
-    end 'yes'
-    return 0
+		var b = IntBox{item: 42}
+		if b.eq(other: 42) 'yes'
+				return 1
+		end 'yes'
+		return 0
 end 'main'
 ```
 ```exitcode

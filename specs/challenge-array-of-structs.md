@@ -20,17 +20,17 @@ Arrays can contain struct values. Each element is a complete copy of the struct.
 typealias Integer = int(i64.min to i64.max)
 
 type Point
-  export var x Integer
-  export var y Integer
+	export var x Integer
+	export var y Integer
 end 'Point'
 
 function main() returns ExitCode
-  var p1 = Point{x: 1, y: 2}
-  var p2 = Point{x: 3, y: 4}
-  var points = [p1, p2]
-  var pt0 = try points.get(0) otherwise Point{x: 0, y: 0}
-  var pt1 = try points.get(1) otherwise Point{x: 0, y: 0}
-  return pt0.x + pt1.y
+	var p1 = Point{x: 1, y: 2}
+	var p2 = Point{x: 3, y: 4}
+	var points = [p1, p2]
+	var pt0 = try points.get(0) otherwise Point{x: 0, y: 0}
+	var pt1 = try points.get(1) otherwise Point{x: 0, y: 0}
+	return pt0.x + pt1.y
 end 'main'
 ```
 ```exitcode
@@ -43,15 +43,15 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 type Pair
-  export var first Integer
-  export var second Integer
+	export var first Integer
+	export var second Integer
 end 'Pair'
 
 function main() returns ExitCode
-  var p = Pair{first: 10, second: 20}
-  var arr = [p]
-  var elem = try arr.get(0) otherwise Pair{first: 0, second: 0}
-  return elem.first + elem.second
+	var p = Pair{first: 10, second: 20}
+	var arr = [p]
+	var elem = try arr.get(0) otherwise Pair{first: 0, second: 0}
+	return elem.first + elem.second
 end 'main'
 ```
 ```exitcode
@@ -63,30 +63,30 @@ end 'main'
 // Regression test: structs with enum fields stored correctly in arrays
 // Previously, 8-byte structs were stored by pointer instead of by value
 enum Color
-  red
-  green
-  blue
+	red
+	green
+	blue
 end 'Color'
 
 type Item
-  export var color Color
+	export var color Color
 end 'Item'
 
 typealias ItemArray = Array with Item
 
 function main() returns ExitCode
-  var items = ItemArray{}
-  items.push(Item{color: Color.red})
-  items.push(Item{color: Color.green})
-  items.push(Item{color: Color.blue})
+	var items = ItemArray{}
+	items.push(Item{color: Color.red})
+	items.push(Item{color: Color.green})
+	items.push(Item{color: Color.blue})
 
-  // Verify union values are stored correctly (not pointers)
-  var item0 = try items.get(0) otherwise Item{color: Color.blue}
-  var item1 = try items.get(1) otherwise Item{color: Color.blue}
-  var item2 = try items.get(2) otherwise Item{color: Color.red}
+	// Verify union values are stored correctly (not pointers)
+	var item0 = try items.get(0) otherwise Item{color: Color.blue}
+	var item1 = try items.get(1) otherwise Item{color: Color.blue}
+	var item2 = try items.get(2) otherwise Item{color: Color.red}
 
-  // red=0, green=1, blue=2
-  return item0.color.rawValue + item1.color.rawValue * 10 + item2.color.rawValue * 100
+	// red=0, green=1, blue=2
+	return item0.color.rawValue + item1.color.rawValue * 10 + item2.color.rawValue * 100
 end 'main'
 ```
 ```exitcode
@@ -97,33 +97,33 @@ end 'main'
 ```maxon
 // Regression test: enum match works in for-in loop over struct array
 union Status
-  pending
-  active
-  done
+	pending
+	active
+	done
 end 'Status'
 
 type Task
-  export var status Status
+	export var status Status
 end 'Task'
 
 typealias TaskArray = Array with Task
 
 function main() returns ExitCode
-  var tasks = TaskArray{}
-  tasks.push(Task{status: Status.pending})
-  tasks.push(Task{status: Status.active})
-  tasks.push(Task{status: Status.done})
+	var tasks = TaskArray{}
+	tasks.push(Task{status: Status.pending})
+	tasks.push(Task{status: Status.active})
+	tasks.push(Task{status: Status.done})
 
-  var activeCount = 0
-  for task in tasks 'loop'
-    match task.status 'check'
-      active then activeCount = activeCount + 1
-      pending then break
-      done then break
-    end 'check'
-  end 'loop'
+	var activeCount = 0
+	for task in tasks 'loop'
+		match task.status 'check'
+			active then activeCount = activeCount + 1
+			pending then break
+			done then break
+		end 'check'
+	end 'loop'
 
-  return activeCount
+	return activeCount
 end 'main'
 ```
 ```exitcode

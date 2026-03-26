@@ -73,12 +73,12 @@ var result = paint()  // uses default Color.blue, result is 2
 <!-- test: default-values.string-default-omitted -->
 ```maxon
 function greet(name String = "World") returns ExitCode
-  print("Hello, {name}!")
-  return 0
+	print("Hello, {name}!")
+	return 0
 end 'greet'
 
 function main() returns ExitCode
-  return greet()
+	return greet()
 end 'main'
 ```
 ```stdout
@@ -91,12 +91,12 @@ Hello, World!
 <!-- test: default-values.string-default-provided -->
 ```maxon
 function greet(name String = "World") returns ExitCode
-  print("Hello, {name}!")
-  return 0
+	print("Hello, {name}!")
+	return 0
 end 'greet'
 
 function main() returns ExitCode
-  return greet(name: "Maxon")
+	return greet(name: "Maxon")
 end 'main'
 ```
 ```stdout
@@ -109,12 +109,12 @@ Hello, Maxon!
 <!-- test: default-values.string-default-empty -->
 ```maxon
 function show(label String = "") returns ExitCode
-  print("[{label}]")
-  return 0
+	print("[{label}]")
+	return 0
 end 'show'
 
 function main() returns ExitCode
-  return show()
+	return show()
 end 'main'
 ```
 ```stdout
@@ -130,15 +130,15 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
 function sum(items IntArray = [10, 20, 12]) returns Integer
-  var total = 0
-  for item in items 'loop'
-    total = total + item
-  end 'loop'
-  return total
+	var total = 0
+	for item in items 'loop'
+		total = total + item
+	end 'loop'
+	return total
 end 'sum'
 
 function main() returns ExitCode
-  return sum()
+	return sum()
 end 'main'
 ```
 ```exitcode
@@ -151,15 +151,15 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
 function sum(items IntArray = [10, 20, 12]) returns Integer
-  var total = 0
-  for item in items 'loop'
-    total = total + item
-  end 'loop'
-  return total
+	var total = 0
+	for item in items 'loop'
+		total = total + item
+	end 'loop'
+	return total
 end 'sum'
 
 function main() returns ExitCode
-  return sum(items: [1, 2, 3])
+	return sum(items: [1, 2, 3])
 end 'main'
 ```
 ```exitcode
@@ -171,15 +171,15 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 function choose(flag bool = true, a Integer = 40, b Integer = 10) returns Integer
-  if flag 'check'
-    return a + 2
-  end 'check' else 'other'
-    return b
-  end 'other'
+	if flag 'check'
+		return a + 2
+	end 'check' else 'other'
+		return b
+	end 'other'
 end 'choose'
 
 function main() returns ExitCode
-  return choose()
+	return choose()
 end 'main'
 ```
 ```exitcode
@@ -189,17 +189,17 @@ end 'main'
 <!-- test: default-values.enum-default-omitted -->
 ```maxon
 enum Color
-  red
-  green
-  blue
+	red
+	green
+	blue
 end 'Color'
 
 function paint(color Color = Color.blue) returns ExitCode
-  return color.rawValue
+	return color.rawValue
 end 'paint'
 
 function main() returns ExitCode
-  return paint()
+	return paint()
 end 'main'
 ```
 ```exitcode
@@ -211,12 +211,12 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 function process(label String = "result", value Integer = 42) returns ExitCode
-  print("{label}: {value}")
-  return 0
+	print("{label}: {value}")
+	return 0
 end 'process'
 
 function main() returns ExitCode
-  return process()
+	return process()
 end 'main'
 ```
 ```stdout
@@ -229,12 +229,12 @@ result: 42
 <!-- test: default-values.string-default-with-escape -->
 ```maxon
 function show(msg String = "line1\nline2") returns ExitCode
-  print(msg)
-  return 0
+	print(msg)
+	return 0
 end 'show'
 
 function main() returns ExitCode
-  return show()
+	return show()
 end 'main'
 ```
 ```stdout
@@ -250,12 +250,12 @@ line2
 typealias Number = float(f64.min to f64.max)
 
 function scale(factor Number = 2.5) returns ExitCode
-  print("{factor}")
-  return 0
+	print("{factor}")
+	return 0
 end 'scale'
 
 function main() returns ExitCode
-  return scale()
+	return scale()
 end 'main'
 ```
 ```stdout
@@ -270,16 +270,16 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 type Point
-  export var x Integer
-  export var y Integer
+	export var x Integer
+	export var y Integer
 end 'Point'
 
 function sum(p Point = Point{x: 10, y: 32}) returns Integer
-  return p.x + p.y
+	return p.x + p.y
 end 'sum'
 
 function main() returns ExitCode
-  return sum()
+	return sum()
 end 'main'
 ```
 ```exitcode
@@ -291,16 +291,16 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 type Point
-  export var x Integer
-  export var y Integer
+	export var x Integer
+	export var y Integer
 end 'Point'
 
 function sum(p Point = Point{x: 10, y: 32}) returns Integer
-  return p.x + p.y
+	return p.x + p.y
 end 'sum'
 
 function main() returns ExitCode
-  return sum(p: Point{x: 1, y: 2})
+	return sum(p: Point{x: 1, y: 2})
 end 'main'
 ```
 ```exitcode
@@ -310,12 +310,12 @@ end 'main'
 <!-- test: default-values.char-default-omitted -->
 ```maxon
 function initial(c Character = 'A') returns ExitCode
-  print("{c}")
-  return 0
+	print("{c}")
+	return 0
 end 'initial'
 
 function main() returns ExitCode
-  return initial()
+	return initial()
 end 'main'
 ```
 ```stdout
@@ -330,11 +330,11 @@ A
 typealias Integer = int(i64.min to i64.max)
 
 function checkLen(data ByteArray = b"hello") returns Integer
-  return data.count()
+	return data.count()
 end 'checkLen'
 
 function main() returns ExitCode
-  return checkLen()
+	return checkLen()
 end 'main'
 ```
 ```exitcode

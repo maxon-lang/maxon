@@ -56,8 +56,8 @@ When the value is a computed expression, a runtime check is emitted:
 typealias Year = int(i64.min to i64.max)
 typealias Age = int(0 to 150)
 function makeAge(n Year) returns Year
-  var a = Age{n}   // runtime check: panics if n < 0 or n > 150
-  return a
+	var a = Age{n}   // runtime check: panics if n < 0 or n > 150
+	return a
 end 'makeAge'
 ```
 
@@ -73,11 +73,11 @@ Functions with a ranged return type have their return values checked:
 typealias Score = int(0 to 100)
 
 function half(s Score) returns Score
-  return s / 2    // runtime range check on return value
+	return s / 2    // runtime range check on return value
 end 'half'
 
 function bad() returns Score
-  return 200       // compile error: outside range
+	return 200       // compile error: outside range
 end 'bad'
 ```
 
@@ -113,8 +113,8 @@ The compiler validates that ranges are representable:
 typealias Score = int(0 to 100)
 
 function main() returns ExitCode
-  var s = Score{42}
-  return s
+	var s = Score{42}
+	return s
 end 'main'
 ```
 ```exitcode
@@ -128,8 +128,8 @@ end 'main'
 typealias SmallInt = int(0 to 10)
 
 function main() returns ExitCode
-  var x = SmallInt{7}
-  return x
+	var x = SmallInt{7}
+	return x
 end 'main'
 ```
 ```exitcode
@@ -143,8 +143,8 @@ end 'main'
 typealias Temp = int(-50 to 50)
 
 function main() returns ExitCode
-  var t = Temp{-10}
-  return t + 60
+	var t = Temp{-10}
+	return t + 60
 end 'main'
 ```
 ```exitcode
@@ -158,8 +158,8 @@ end 'main'
 typealias FullInt = int(i64.min to i64.max)
 
 function main() returns ExitCode
-  var x = FullInt{42}
-  return x
+	var x = FullInt{42}
+	return x
 end 'main'
 ```
 ```exitcode
@@ -174,8 +174,8 @@ end 'main'
 typealias Pct = float(0.0 to 100.0)
 
 function main() returns ExitCode
-  var p = Pct{75.5}
-  return trunc(p)
+	var p = Pct{75.5}
+	return trunc(p)
 end 'main'
 ```
 ```exitcode
@@ -189,8 +189,8 @@ end 'main'
 typealias Idx = int(0 upto 10)
 
 function main() returns ExitCode
-  var i = Idx{9}
-  return i
+	var i = Idx{9}
+	return i
 end 'main'
 ```
 ```exitcode
@@ -204,9 +204,9 @@ end 'main'
 typealias Score = int(0 to 100)
 
 function main() returns ExitCode
-  var a = Score{30}
-  var b = Score{12}
-  return a + b
+	var a = Score{30}
+	var b = Score{12}
+	return a + b
 end 'main'
 ```
 ```exitcode
@@ -220,12 +220,12 @@ end 'main'
 typealias Score = int(0 to 100)
 
 function double(s Score) returns Score
-  return s * 2
+	return s * 2
 end 'double'
 
 function main() returns ExitCode
-  var s = Score{21}
-  return double(s)
+	var s = Score{21}
+	return double(s)
 end 'main'
 ```
 ```exitcode
@@ -240,12 +240,12 @@ typealias Integer = int(i64.min to i64.max)
 typealias Age = int(0 to 150)
 
 function makeAge(n Integer) returns Integer
-  var a = Age{n}
-  return a
+	var a = Age{n}
+	return a
 end 'makeAge'
 
 function main() returns ExitCode
-  return makeAge(50)
+	return makeAge(50)
 end 'main'
 ```
 ```exitcode
@@ -260,12 +260,12 @@ typealias Integer = int(i64.min to i64.max)
 typealias Age = int(0 to 150)
 
 function makeAge(n Integer) returns Integer
-  var a = Age{n}
-  return a
+	var a = Age{n}
+	return a
 end 'makeAge'
 
 function main() returns ExitCode
-  return makeAge(200)
+	return makeAge(200)
 end 'main'
 ```
 ```exitcode
@@ -287,8 +287,8 @@ typealias Integer = int(i64.min to i64.max)
 typealias AsciiCode = byte(0 to 127)
 
 function main() returns ExitCode
-  var c = AsciiCode{65}
-  return c as Integer
+	var c = AsciiCode{65}
+	return c as Integer
 end 'main'
 ```
 ```exitcode
@@ -300,9 +300,9 @@ end 'main'
 <!-- test: int-division-truncates -->
 ```maxon
 function main() returns ExitCode
-  var a = 7
-  var b = 2
-  return a / b
+	var a = 7
+	var b = 2
+	return a / b
 end 'main'
 ```
 ```exitcode
@@ -316,13 +316,13 @@ end 'main'
 typealias Score = int(0 to 100)
 
 type Player
-  export var name String
-  export var score Score
+	export var name String
+	export var score Score
 end 'Player'
 
 function main() returns ExitCode
-  var p = Player{name: "Alice", score: Score{42}}
-  return p.score
+	var p = Player{name: "Alice", score: Score{42}}
+	return p.score
 end 'main'
 ```
 ```exitcode
@@ -336,11 +336,11 @@ end 'main'
 typealias Score = int(0 to 100)
 
 function getScore() returns Score
-  return 42
+	return 42
 end 'getScore'
 
 function main() returns ExitCode
-  return getScore()
+	return getScore()
 end 'main'
 ```
 ```exitcode
@@ -354,12 +354,12 @@ end 'main'
 typealias Score = int(0 to 100)
 
 function half(s Score) returns Score
-  return s / 2
+	return s / 2
 end 'half'
 
 function main() returns ExitCode
-  var s = Score{84}
-  return half(s)
+	var s = Score{84}
+	return half(s)
 end 'main'
 ```
 ```exitcode
@@ -373,12 +373,12 @@ end 'main'
 typealias Score = int(0 to 100)
 
 function doubleScore(s Score) returns Score
-  return s * 2
+	return s * 2
 end 'doubleScore'
 
 function main() returns ExitCode
-  var s = Score{60}
-  return doubleScore(s)
+	var s = Score{60}
+	return doubleScore(s)
 end 'main'
 ```
 ```exitcode
@@ -400,11 +400,11 @@ typealias Float = float(f64.min to f64.max)
 typealias Pct = float(0.0 to 100.0)
 
 function clampedPct(x Float) returns Pct
-  return x
+	return x
 end 'clampedPct'
 
 function main() returns ExitCode
-  return trunc(clampedPct(42.5))
+	return trunc(clampedPct(42.5))
 end 'main'
 ```
 ```exitcode
@@ -418,15 +418,15 @@ end 'main'
 typealias SmallInt = int(0 to 10)
 
 function getVal() returns SmallInt
-  return 15
+	return 15
 end 'getVal'
 
 function main() returns ExitCode
-  return getVal()
+	return getVal()
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/fragments/ranged-typealias/error.return-literal-out-of-range.test:5:3: Value 15 is outside the range of 'SmallInt' (int(0 to 10))
+error E3005: specs/fragments/ranged-typealias/error.return-literal-out-of-range.test:5:2: Value 15 is outside the range of 'SmallInt' (int(0 to 10))
 ```
 
 ### Error: literal out of range
@@ -436,12 +436,12 @@ error E3005: specs/fragments/ranged-typealias/error.return-literal-out-of-range.
 typealias SmallInt = int(0 to 10)
 
 function main() returns ExitCode
-  var x = SmallInt{15}
-  return x
+	var x = SmallInt{15}
+	return x
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/fragments/ranged-typealias/error.literal-out-of-range.test:5:11: Value 15 is outside the range of 'SmallInt' (int(0 to 10))
+error E3005: specs/fragments/ranged-typealias/error.literal-out-of-range.test:5:10: Value 15 is outside the range of 'SmallInt' (int(0 to 10))
 ```
 
 ### Error: negative literal out of range
@@ -451,12 +451,12 @@ error E3005: specs/fragments/ranged-typealias/error.literal-out-of-range.test:5:
 typealias Positive = int(1 to 100)
 
 function main() returns ExitCode
-  var x = Positive{-5}
-  return x
+	var x = Positive{-5}
+	return x
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/fragments/ranged-typealias/error.negative-out-of-range.test:5:11: Value -5 is outside the range of 'Positive' (int(1 to 100))
+error E3005: specs/fragments/ranged-typealias/error.negative-out-of-range.test:5:10: Value -5 is outside the range of 'Positive' (int(1 to 100))
 ```
 
 ### Type-qualified bound: u32.max
@@ -466,8 +466,8 @@ error E3005: specs/fragments/ranged-typealias/error.negative-out-of-range.test:5
 typealias Handle = int(0 to u32.max)
 
 function main() returns ExitCode
-  var h = Handle{42}
-  return h
+	var h = Handle{42}
+	return h
 end 'main'
 ```
 ```exitcode
@@ -481,8 +481,8 @@ end 'main'
 typealias SmallSigned = int(i8.min to i8.max)
 
 function main() returns ExitCode
-  var s = SmallSigned{100}
-  return s
+	var s = SmallSigned{100}
+	return s
 end 'main'
 ```
 ```exitcode
@@ -496,8 +496,8 @@ end 'main'
 typealias Port = int(0 to u16.max)
 
 function main() returns ExitCode
-  var p = Port{8080}
-  return p
+	var p = Port{8080}
+	return p
 end 'main'
 ```
 ```exitcode
@@ -511,8 +511,8 @@ end 'main'
 typealias Handle = int(0 to u32.max)
 
 function main() returns ExitCode
-  var h = Handle{42}
-  return h
+	var h = Handle{42}
+	return h
 end 'main'
 ```
 ```exitcode
@@ -526,8 +526,8 @@ end 'main'
 typealias SmallInt = int(i8.min to i8.max)
 
 function main() returns ExitCode
-  var s = SmallInt{100}
-  return s
+	var s = SmallInt{100}
+	return s
 end 'main'
 ```
 ```exitcode
@@ -541,9 +541,9 @@ end 'main'
 typealias SmallFloat = float(f32.min to f32.max)
 
 function main() returns ExitCode
-  var x = SmallFloat{3.5}
-  var y = SmallFloat{1.5}
-  return trunc(x + y)
+	var x = SmallFloat{3.5}
+	var y = SmallFloat{1.5}
+	return trunc(x + y)
 end 'main'
 ```
 ```exitcode
@@ -557,13 +557,13 @@ end 'main'
 typealias F = float(f32.min to f32.max)
 
 function main() returns ExitCode
-  var a = F{10.0}
-  var b = F{3.0}
-  var sum = a + b
-  var diff = a - b
-  var prod = a * b
-  var quot = a / b
-  return trunc(sum + diff + prod + quot)
+	var a = F{10.0}
+	var b = F{3.0}
+	var sum = a + b
+	var diff = a - b
+	var prod = a * b
+	var quot = a / b
+	return trunc(sum + diff + prod + quot)
 end 'main'
 ```
 ```exitcode
@@ -577,12 +577,12 @@ end 'main'
 typealias F = float(f32.min to f32.max)
 
 function main() returns ExitCode
-  var a = F{3.0}
-  var b = F{5.0}
-  if a < b 'less'
-    return 1
-  end 'less'
-  return 0
+	var a = F{3.0}
+	var b = F{5.0}
+	if a < b 'less'
+		return 1
+	end 'less'
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -596,12 +596,12 @@ end 'main'
 typealias F = float(f32.min to f32.max)
 
 function double(x F) returns F
-  return x * 2.0
+	return x * 2.0
 end 'double'
 
 function main() returns ExitCode
-  var x = F{21.0}
-  return trunc(double(x))
+	var x = F{21.0}
+	return trunc(double(x))
 end 'main'
 ```
 ```exitcode
@@ -615,8 +615,8 @@ end 'main'
 typealias F = float(f32.min to f32.max)
 
 function main() returns ExitCode
-  var x = F{42.9}
-  return trunc(x)
+	var x = F{42.9}
+	return trunc(x)
 end 'main'
 ```
 ```exitcode
@@ -630,8 +630,8 @@ end 'main'
 typealias Handle = int(0 to 0xFFFF)
 
 function main() returns ExitCode
-  var h = Handle{255}
-  return h
+	var h = Handle{255}
+	return h
 end 'main'
 ```
 ```exitcode
@@ -645,7 +645,7 @@ end 'main'
 typealias Score = int(0 to 100)
 
 function main() returns ExitCode
-  return 0
+	return 0
 end 'main'
 ```
 ```maxoncstderr
@@ -660,8 +660,8 @@ typealias Score = int(0 to 100)
 typealias Age = int(0 to 150)
 
 function main() returns ExitCode
-  var s = Score{42}
-  return s
+	var s = Score{42}
+	return s
 end 'main'
 ```
 ```maxoncstderr
@@ -675,7 +675,7 @@ error E3062: specs/fragments/ranged-typealias/unused-typealias-with-used.test:3:
 typealias Bad = int(i64.min to u64.max)
 
 function main() returns ExitCode
-  return 0
+	return 0
 end 'main'
 ```
 ```maxoncstderr
@@ -689,7 +689,7 @@ error E3005: specs/fragments/ranged-typealias/error.unrepresentable-range.test:2
 typealias BadByte = byte(-1 to u8.max)
 
 function main() returns ExitCode
-  return 0
+	return 0
 end 'main'
 ```
 ```maxoncstderr
@@ -703,7 +703,7 @@ error E3005: specs/fragments/ranged-typealias/error.byte-range-negative.test:2:2
 typealias BadByte = byte(0 to 256)
 
 function main() returns ExitCode
-  return 0
+	return 0
 end 'main'
 ```
 ```maxoncstderr
@@ -717,7 +717,7 @@ error E3005: specs/fragments/ranged-typealias/error.byte-range-overflow.test:2:2
 typealias Bad = int(0 to i64.max)
 
 function main() returns ExitCode
-  return 0
+	return 0
 end 'main'
 ```
 ```maxoncstderr
@@ -731,7 +731,7 @@ error E3005: specs/fragments/ranged-typealias/error.literal-with-signed-max.test
 typealias Bad = int(i8.min to i32.max)
 
 function main() returns ExitCode
-  return 0
+	return 0
 end 'main'
 ```
 ```maxoncstderr
@@ -745,7 +745,7 @@ error E3005: specs/fragments/ranged-typealias/error.mismatched-type-bounds.test:
 typealias Integer = i64
 
 function main() returns ExitCode
-  return 0
+	return 0
 end 'main'
 ```
 ```maxoncstderr

@@ -103,11 +103,11 @@ Note: When there's no collision, unqualified names continue to work normally.
 typealias Integer = int(i64.min to i64.max)
 
 export function helper() returns Integer
-  return 21
+	return 21
 end 'helper'
 
 function main() returns ExitCode
-  return helper() + helper()
+	return helper() + helper()
 end 'main'
 ```
 ```exitcode
@@ -120,17 +120,17 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 export type Point
-  var x Integer
-  var y Integer
+	var x Integer
+	var y Integer
 
-  export function sum() returns Integer
-    return x + y
-  end 'sum'
+	export function sum() returns Integer
+		return x + y
+	end 'sum'
 end 'Point'
 
 function main() returns ExitCode
-  var p = Point{x: 20, y: 22}
-  return p.sum()
+	var p = Point{x: 20, y: 22}
+	return p.sum()
 end 'main'
 ```
 ```exitcode
@@ -143,11 +143,11 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 function helper() returns Integer
-  return 42
+	return 42
 end 'helper'
 
 function main() returns ExitCode
-  return helper()
+	return helper()
 end 'main'
 ```
 ```exitcode
@@ -160,15 +160,15 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 export function publicFunc() returns Integer
-  return privateFunc() + 20
+	return privateFunc() + 20
 end 'publicFunc'
 
 function privateFunc() returns Integer
-  return 22
+	return 22
 end 'privateFunc'
 
 function main() returns ExitCode
-  return publicFunc()
+	return publicFunc()
 end 'main'
 ```
 ```exitcode
@@ -183,9 +183,9 @@ typealias Integer = int(i64.min to i64.max)
 export typealias IntArray = Array with Integer
 
 function main() returns ExitCode
-  var arr = IntArray{}
-  arr.push(42)
-  return try arr.get(0) otherwise 0
+	var arr = IntArray{}
+	arr.push(42)
+	return try arr.get(0) otherwise 0
 end 'main'
 ```
 ```exitcode
@@ -200,30 +200,30 @@ typealias Integer = int(i64.min to i64.max)
 export typealias IntArray = Array with Integer
 
 type Container
-  export var items IntArray
+	export var items IntArray
 
-  static function create() returns Self
-    return Container{items: IntArray{}}
-  end 'create'
+	static function create() returns Self
+		return Container{items: IntArray{}}
+	end 'create'
 
-  function add(n Integer)
-    items.push(n)
-  end 'add'
+	function add(n Integer)
+		items.push(n)
+	end 'add'
 
-  function sum() returns Integer
-    var total = 0
-    for item in items 'loop'
-      total = total + item
-    end 'loop'
-    return total
-  end 'sum'
+	function sum() returns Integer
+		var total = 0
+		for item in items 'loop'
+			total = total + item
+		end 'loop'
+		return total
+	end 'sum'
 end 'Container'
 
 function main() returns ExitCode
-  var c = Container.create()
-  c.add(20)
-  c.add(22)
-  return c.sum()
+	var c = Container.create()
+	c.add(20)
+	c.add(22)
+	return c.sum()
 end 'main'
 ```
 ```exitcode
@@ -238,14 +238,14 @@ typealias Integer = int(i64.min to i64.max)
 export typealias IntArray = Array with Integer
 
 function makeArray() returns IntArray
-  var arr = IntArray{}
-  arr.push(42)
-  return arr
+	var arr = IntArray{}
+	arr.push(42)
+	return arr
 end 'makeArray'
 
 function main() returns ExitCode
-  var arr = makeArray()
-  return try arr.get(0) otherwise 0
+	var arr = makeArray()
+	return try arr.get(0) otherwise 0
 end 'main'
 ```
 ```exitcode
@@ -258,9 +258,9 @@ typealias Int = int(i64.min to i64.max)
 typealias IntArray = Array with Int
 
 function main() returns ExitCode
-  var arr = IntArray{}
-  arr.push(42)
-  return try arr.get(0) otherwise 0
+	var arr = IntArray{}
+	arr.push(42)
+	return try arr.get(0) otherwise 0
 end 'main'
 ```
 ```exitcode
@@ -273,12 +273,12 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 export function helper() returns Integer
-  return 42
+	return 42
 end 'helper'
 
 // --- file: main.maxon
 function main() returns ExitCode
-  return helper()
+	return helper()
 end 'main'
 ```
 ```exitcode
@@ -291,11 +291,11 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 function privateHelper() returns Integer
-  return 99
+	return 99
 end 'privateHelper'
 
 function main() returns ExitCode
-  return privateHelper()
+	return privateHelper()
 end 'main'
 ```
 ```exitcode
@@ -308,16 +308,16 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 function privateHelper() returns Integer
-  return 99
+	return 99
 end 'privateHelper'
 
 // --- file: main.maxon
 function main() returns ExitCode
-  return privateHelper()
+	return privateHelper()
 end 'main'
 ```
 ```maxoncstderr
-error E3008: main.maxon:2:10: function 'privateHelper' is not exported
+error E3008: main.maxon:2:9: function 'privateHelper' is not exported
 ```
 
 <!-- test: error.typealias-with-unknown-element-type -->
@@ -325,11 +325,11 @@ error E3008: main.maxon:2:10: function 'privateHelper' is not exported
 typealias BadArray = Array with UnknownType
 
 type Container
-  var items BadArray
+	var items BadArray
 end 'Container'
 
 function main() returns ExitCode
-  return 0
+	return 0
 end 'main'
 ```
 ```maxoncstderr
@@ -342,14 +342,14 @@ error E2003: specs/fragments/export-keyword/error.typealias-with-unknown-element
 typealias Integer = int(i64.min to i64.max)
 
 export type Point
-  export var x Integer
-  export var y Integer
+	export var x Integer
+	export var y Integer
 end 'Point'
 
 // --- file: main.maxon
 function main() returns ExitCode
-  var p = Point{x: 20, y: 22}
-  return p.x + p.y
+	var p = Point{x: 20, y: 22}
+	return p.x + p.y
 end 'main'
 ```
 ```exitcode
@@ -362,36 +362,36 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 type InternalPoint
-  export var x Integer
+	export var x Integer
 end 'InternalPoint'
 
 // --- file: main.maxon
 function main() returns ExitCode
-  var p = InternalPoint{x: 42}
-  return p.x
+	var p = InternalPoint{x: 42}
+	return p.x
 end 'main'
 ```
 ```maxoncstderr
-error E2004: main.maxon:2:11: Undefined variable 'InternalPoint'
+error E2004: main.maxon:2:10: Undefined variable 'InternalPoint'
 ```
 
 <!-- test: exported-enum-cross-file -->
 ```maxon
 // --- file: color.maxon
 export union Color
-  red
-  green
-  blue
+	red
+	green
+	blue
 end 'Color'
 
 // --- file: main.maxon
 function main() returns ExitCode
-  var c = Color.blue
-  match c 'check'
-    blue then return 42
-    red then return 0
-    green then return 0
-  end 'check'
+	var c = Color.blue
+	match c 'check'
+		blue then return 42
+		red then return 0
+		green then return 0
+	end 'check'
 end 'main'
 ```
 ```exitcode
@@ -402,18 +402,18 @@ end 'main'
 ```maxon
 // --- file: status.maxon
 union InternalStatus
-  ok
-  err
+	ok
+	err
 end 'InternalStatus'
 
 // --- file: main.maxon
 function main() returns ExitCode
-  var s = InternalStatus.ok
-  return 0
+	var s = InternalStatus.ok
+	return 0
 end 'main'
 ```
 ```maxoncstderr
-error E2004: main.maxon:2:11: Undefined variable 'InternalStatus'
+error E2004: main.maxon:2:10: Undefined variable 'InternalStatus'
 ```
 
 <!-- test: exported-typealias-cross-file -->
@@ -423,8 +423,8 @@ export typealias Score = int(0 to 100)
 
 // --- file: main.maxon
 function main() returns ExitCode
-  var s = Score{42}
-  return s
+	var s = Score{42}
+	return s
 end 'main'
 ```
 ```exitcode
@@ -438,8 +438,8 @@ typealias InternalScore = int(0 to 100)
 
 // --- file: main.maxon
 function main() returns ExitCode
-  var s = InternalScore{42}
-  return s
+	var s = InternalScore{42}
+	return s
 end 'main'
 ```
 ```maxoncstderr
@@ -452,7 +452,7 @@ typealias Score = int(0 to 100)
 typealias Score = int(0 to 200)
 
 function main() returns ExitCode
-  return 0
+	return 0
 end 'main'
 ```
 ```maxoncstderr
@@ -465,13 +465,13 @@ error E3061: specs/fragments/export-keyword/error.duplicate-typealias-same-file.
 typealias Integer = int(i64.min to i64.max)
 
 type InternalPoint
-  export var x Integer
-  export var y Integer
+	export var x Integer
+	export var y Integer
 end 'InternalPoint'
 
 function main() returns ExitCode
-  var p = InternalPoint{x: 20, y: 22}
-  return p.x + p.y
+	var p = InternalPoint{x: 20, y: 22}
+	return p.x + p.y
 end 'main'
 ```
 ```exitcode
@@ -486,7 +486,7 @@ export var counter = 10
 
 // --- file: main.maxon
 function main() returns ExitCode
-    return counter
+		return counter
 end 'main'
 ```
 ```exitcode
@@ -500,15 +500,15 @@ Cross-file access to an exported module-level struct var.
 typealias SmallInt = int(0 to u8.max)
 
 export type Counter
-    export var value SmallInt
+		export var value SmallInt
 end 'Counter'
 
 export var shared = Counter{value: 0}
 
 // --- file: main.maxon
 function main() returns ExitCode
-    shared.value = 42
-    return shared.value
+		shared.value = 42
+		return shared.value
 end 'main'
 ```
 ```exitcode
@@ -523,26 +523,26 @@ var secret = 99
 
 // --- file: main.maxon
 function main() returns ExitCode
-    return secret
+		return secret
 end 'main'
 ```
 ```maxoncstderr
-error E2004: main.maxon:2:12: Undefined variable 'secret'
+error E2004: main.maxon:2:10: Undefined variable 'secret'
 ```
 
 <!-- test: non-exported-enum-same-file -->
 ```maxon
 union Direction
-  up
-  down
+	up
+	down
 end 'Direction'
 
 function main() returns ExitCode
-  var d = Direction.up
-  match d 'check'
-    up then return 42
-    down then return 0
-  end 'check'
+	var d = Direction.up
+	match d 'check'
+		up then return 42
+		down then return 0
+	end 'check'
 end 'main'
 ```
 ```exitcode

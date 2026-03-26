@@ -30,19 +30,19 @@ Structs with String fields stored in arrays must have proper refcount management
 typealias Integer = int(i64.min to i64.max)
 
 type Item
-  export var name String
-  export var value Integer
+	export var name String
+	export var value Integer
 end 'Item'
 
 typealias ItemArray = Array with Item
 
 function main() returns ExitCode
-  var items = ItemArray{}
-  items.push(Item{name: "hello world that needs heap allocation", value: 1})
-  items.push(Item{name: "another long string for heap allocation", value: 2})
-  let first = try items.get(0) otherwise Item{name: "", value: 0}
-  print("{first.name}\n")
-  return first.value
+	var items = ItemArray{}
+	items.push(Item{name: "hello world that needs heap allocation", value: 1})
+	items.push(Item{name: "another long string for heap allocation", value: 2})
+	let first = try items.get(0) otherwise Item{name: "", value: 0}
+	print("{first.name}\n")
+	return first.value
 end 'main'
 ```
 ```exitcode
@@ -57,16 +57,16 @@ hello world that needs heap allocation
 When an array is cleaned up, each element's managed fields must be decremented.
 ```maxon
 type Pair
-  export var first String
-  export var second String
+	export var first String
+	export var second String
 end 'Pair'
 
 typealias PairArray = Array with Pair
 
 function main() returns ExitCode
-  var pairs = PairArray{}
-  pairs.push(Pair{first: "alpha string that is long for heap", second: "beta string that is long for heap"})
-  return 0
+	var pairs = PairArray{}
+	pairs.push(Pair{first: "alpha string that is long for heap", second: "beta string that is long for heap"})
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -81,19 +81,19 @@ Each managed field in a struct needs its own refcount tracking.
 typealias Integer = int(i64.min to i64.max)
 
 type MultiField
-  export var a String
-  export var b Integer
-  export var c String
-  export var d Integer
-  export var e String
+	export var a String
+	export var b Integer
+	export var c String
+	export var d Integer
+	export var e String
 end 'MultiField'
 
 typealias MultiArray = Array with MultiField
 
 function main() returns ExitCode
-  var items = MultiArray{}
-  items.push(MultiField{a: "string a that is long enough for heap", b: 1, c: "string c that is long enough for heap", d: 2, e: "string e that is long enough for heap"})
-  return 0
+	var items = MultiArray{}
+	items.push(MultiField{a: "string a that is long enough for heap", b: 1, c: "string c that is long enough for heap", d: 2, e: "string e that is long enough for heap"})
+	return 0
 end 'main'
 ```
 ```exitcode

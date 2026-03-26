@@ -4,31 +4,31 @@ typealias Integer = int(i64.min to i64.max)
 
 // Parsable can throw different errors for different conditions
 union MoneyParseError implements Error
-  InvalidFormat = 1
-  NegativeValue = 2
+	InvalidFormat = 1
+	NegativeValue = 2
 end 'MoneyParseError'
 
 type Money implements Parsable
-  export var cents Integer
+	export var cents Integer
 
-  static function fromString(input String) returns Self throws MoneyParseError
-    if input.byteLength() == 0 'empty'
-      throw MoneyParseError.InvalidFormat
-    end 'empty'
+	static function fromString(input String) returns Self throws MoneyParseError
+		if input.byteLength() == 0 'empty'
+			throw MoneyParseError.InvalidFormat
+		end 'empty'
 
-    if input.startsWith("-") 'negative'
-      throw MoneyParseError.NegativeValue
-    end 'negative'
+		if input.startsWith("-") 'negative'
+			throw MoneyParseError.NegativeValue
+		end 'negative'
 
-    return Money{cents: input.byteLength()}
-  end 'fromString'
+		return Money{cents: input.byteLength()}
+	end 'fromString'
 end 'Money'
 
 function main() returns ExitCode
-  var price = try Money.fromString("-50") otherwise 'err'
-    return 99
-  end 'err'
-  return price.cents
+	var price = try Money.fromString("-50") otherwise 'err'
+		return 99
+	end 'err'
+	return price.cents
 end 'main'
 ---
 ExitCode: 99

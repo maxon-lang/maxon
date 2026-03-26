@@ -42,17 +42,17 @@ end 'Color'
 <!-- test: enum-ordinal.simple -->
 ```maxon
 enum Color
-  red
-  green
-  blue
+	red
+	green
+	blue
 end 'Color'
 
 function main() returns ExitCode
-  var c = Color.green
-  if c.ordinal == 1 'check'
-    return 1
-  end 'check'
-  return 0
+	var c = Color.green
+	if c.ordinal == 1 'check'
+		return 1
+	end 'check'
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -64,21 +64,21 @@ end 'main'
 <!-- test: enum-ordinal.all-cases -->
 ```maxon
 enum Direction
-  north
-  south
-  east
-  west
+	north
+	south
+	east
+	west
 end 'Direction'
 
 function main() returns ExitCode
-  var n = Direction.north
-  var s = Direction.south
-  var e = Direction.east
-  var w = Direction.west
-  if n.ordinal == 0 and s.ordinal == 1 and e.ordinal == 2 and w.ordinal == 3 'check'
-    return 1
-  end 'check'
-  return 0
+	var n = Direction.north
+	var s = Direction.south
+	var e = Direction.east
+	var w = Direction.west
+	if n.ordinal == 0 and s.ordinal == 1 and e.ordinal == 2 and w.ordinal == 3 'check'
+		return 1
+	end 'check'
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -90,18 +90,18 @@ end 'main'
 <!-- test: enum-ordinal.int-backed -->
 ```maxon
 enum HttpStatus
-  ok = 200
-  notFound = 404
-  serverError = 500
+	ok = 200
+	notFound = 404
+	serverError = 500
 end 'HttpStatus'
 
 function main() returns ExitCode
-  var s = HttpStatus.serverError
-  // ordinal is 2 (third case), not 500 (the raw value)
-  if s.ordinal == 2 'check'
-    return 1
-  end 'check'
-  return 0
+	var s = HttpStatus.serverError
+	// ordinal is 2 (third case), not 500 (the raw value)
+	if s.ordinal == 2 'check'
+		return 1
+	end 'check'
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -113,17 +113,17 @@ end 'main'
 <!-- test: enum-ordinal.float-backed -->
 ```maxon
 enum Threshold
-  low = 0.1
-  medium = 0.5
-  high = 0.9
+	low = 0.1
+	medium = 0.5
+	high = 0.9
 end 'Threshold'
 
 function main() returns ExitCode
-  var t = Threshold.high
-  if t.ordinal == 2 'check'
-    return 1
-  end 'check'
-  return 0
+	var t = Threshold.high
+	if t.ordinal == 2 'check'
+		return 1
+	end 'check'
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -135,17 +135,17 @@ end 'main'
 <!-- test: enum-ordinal.string-backed -->
 ```maxon
 enum ContentType
-  json = "application/json"
-  html = "text/html"
-  plain = "text/plain"
+	json = "application/json"
+	html = "text/html"
+	plain = "text/plain"
 end 'ContentType'
 
 function main() returns ExitCode
-  var ct = ContentType.html
-  if ct.ordinal == 1 'check'
-    return 1
-  end 'check'
-  return 0
+	var ct = ContentType.html
+	if ct.ordinal == 1 'check'
+		return 1
+	end 'check'
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -157,17 +157,17 @@ end 'main'
 <!-- test: enum-ordinal.char-backed -->
 ```maxon
 enum Grade
-  a = 'A'
-  b = 'B'
-  c = 'C'
+	a = 'A'
+	b = 'B'
+	c = 'C'
 end 'Grade'
 
 function main() returns ExitCode
-  var g = Grade.c
-  if g.ordinal == 2 'check'
-    return 1
-  end 'check'
-  return 0
+	var g = Grade.c
+	if g.ordinal == 2 'check'
+		return 1
+	end 'check'
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -179,18 +179,18 @@ end 'main'
 <!-- test: enum-ordinal.arithmetic -->
 ```maxon
 enum Color
-  red
-  green
-  blue
+	red
+	green
+	blue
 end 'Color'
 
 function main() returns ExitCode
-  var c = Color.blue
-  var result = c.ordinal + 10
-  if result == 12 'check'
-    return 1
-  end 'check'
-  return 0
+	var c = Color.blue
+	var result = c.ordinal + 10
+	if result == 12 'check'
+		return 1
+	end 'check'
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -202,23 +202,23 @@ end 'main'
 <!-- test: enum-ordinal.from-function -->
 ```maxon
 enum Priority
-  low
-  medium
-  high
+	low
+	medium
+	high
 end 'Priority'
 
 typealias OrdinalValue = int(0 to 100)
 
 function getOrdinal(p Priority) returns OrdinalValue
-  return p.ordinal
+	return p.ordinal
 end 'getOrdinal'
 
 function main() returns ExitCode
-  var p = Priority.high
-  if getOrdinal(p) == 2 'check'
-    return 1
-  end 'check'
-  return 0
+	var p = Priority.high
+	if getOrdinal(p) == 2 'check'
+		return 1
+	end 'check'
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -230,16 +230,16 @@ end 'main'
 <!-- test: enum-ordinal.error-union-ordinal -->
 ```maxon
 union Shape
-  circle
-  square
+	circle
+	square
 end 'Shape'
 
 function main() returns ExitCode
-  var s = Shape.circle
-  var o = s.ordinal
-  return 0
+	var s = Shape.circle
+	var o = s.ordinal
+	return 0
 end 'main'
 ```
 ```maxoncstderr
-error E4006: specs/fragments/enum-ordinal/enum-ordinal.error-union-ordinal.test:9:13: union type 'Shape' has no property 'ordinal'
+error E4006: specs/fragments/enum-ordinal/enum-ordinal.error-union-ordinal.test:9:12: union type 'Shape' has no property 'ordinal'
 ```

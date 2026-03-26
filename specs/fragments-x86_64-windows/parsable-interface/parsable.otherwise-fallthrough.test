@@ -4,36 +4,36 @@ typealias Integer = int(i64.min to i64.max)
 
 // otherwise blocks execute code when error occurs, then continue execution
 union ParseError implements Error
-  Invalid = 1
+	Invalid = 1
 end 'ParseError'
 
 type Value implements Parsable
-  export var n Integer
+	export var n Integer
 
-  static function fromString(input String) returns Self throws ParseError
-    if input.startsWith("x") 'check'
-      throw ParseError.Invalid
-    end 'check'
-    return Value{n: input.byteLength()}
-  end 'fromString'
+	static function fromString(input String) returns Self throws ParseError
+		if input.startsWith("x") 'check'
+			throw ParseError.Invalid
+		end 'check'
+		return Value{n: input.byteLength()}
+	end 'fromString'
 end 'Value'
 
 function main() returns ExitCode
-  var result = 0
+	var result = 0
 
-  // First call succeeds - handler not executed
-  var v = try Value.fromString("hello") otherwise Value{n: 0}
-  result = result + v.n  // adds 5
+	// First call succeeds - handler not executed
+	var v = try Value.fromString("hello") otherwise Value{n: 0}
+	result = result + v.n  // adds 5
 
-  // Second call fails - use default value
-  var v2 = try Value.fromString("xbad") otherwise Value{n: 0}
-  result = result + v2.n  // adds 0
+	// Second call fails - use default value
+	var v2 = try Value.fromString("xbad") otherwise Value{n: 0}
+	result = result + v2.n  // adds 0
 
-  // Third call succeeds
-  var v3 = try Value.fromString("world") otherwise Value{n: 0}
-  result = result + v3.n  // adds 5
+	// Third call succeeds
+	var v3 = try Value.fromString("world") otherwise Value{n: 0}
+	result = result + v3.n  // adds 5
 
-  return result
+	return result
 end 'main'
 ---
 ExitCode: 10

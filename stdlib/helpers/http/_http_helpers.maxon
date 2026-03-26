@@ -2,147 +2,147 @@
 /// @category Internal
 
 export function _httpMethodToString(method HttpMethod) returns String
-  return method.name.toUpper()
+	return method.name.toUpper()
 end '_httpMethodToString'
 
 export function _httpBuildRequest(request HttpRequest) returns String
-  let url = request.url()
-  var path = url.path()
-  if path.isEmpty() 'noPath'
-    path = "/"
-  end 'noPath'
+	let url = request.url()
+	var path = url.path()
+	if path.isEmpty() 'noPath'
+		path = "/"
+	end 'noPath'
 
-  // Include query string if present
-  if let query = try url.query() 'hasQuery'
-    path = "{path}?{query}"
-  end 'hasQuery'
+	// Include query string if present
+	if let query = try url.query() 'hasQuery'
+		path = "{path}?{query}"
+	end 'hasQuery'
 
-  let method = _httpMethodToString(request.method())
+	let method = _httpMethodToString(request.method())
 
-  // Request line
-  var raw = "{method} {path} HTTP/1.1\r\n"
+	// Request line
+	var raw = "{method} {path} HTTP/1.1\r\n"
 
-  // Host header (auto-add if not set by user)
-  let host = try url.host() otherwise ""
-  if not request.headers().has("host") 'addHost'
-    let portNum = try url.port() otherwise 0
-    if portNum != 0 and portNum != 80 'nonDefaultPort'
-      raw = "{raw}Host: {host}:{portNum}\r\n"
-    end 'nonDefaultPort' else 'defaultPort'
-      raw = "{raw}Host: {host}\r\n"
-    end 'defaultPort'
-  end 'addHost'
+	// Host header (auto-add if not set by user)
+	let host = try url.host() otherwise ""
+	if not request.headers().has("host") 'addHost'
+		let portNum = try url.port() otherwise 0
+		if portNum != 0 and portNum != 80 'nonDefaultPort'
+			raw = "{raw}Host: {host}:{portNum}\r\n"
+		end 'nonDefaultPort' else 'defaultPort'
+			raw = "{raw}Host: {host}\r\n"
+		end 'defaultPort'
+	end 'addHost'
 
-  // Connection: close so server closes after response
-  if not request.headers().has("connection") 'addConn'
-    raw = "{raw}Connection: close\r\n"
-  end 'addConn'
+	// Connection: close so server closes after response
+	if not request.headers().has("connection") 'addConn'
+		raw = "{raw}Connection: close\r\n"
+	end 'addConn'
 
-  // Content-Length
-  let bodyLen = request.body().byteLength()
-  if bodyLen > 0 'hasBodyLen'
-    raw = "{raw}Content-Length: {bodyLen}\r\n"
-  end 'hasBodyLen'
+	// Content-Length
+	let bodyLen = request.body().byteLength()
+	if bodyLen > 0 'hasBodyLen'
+		raw = "{raw}Content-Length: {bodyLen}\r\n"
+	end 'hasBodyLen'
 
-  // User-set headers
-  for(hdrName, hdrValue) in request.headers().headers 'headerLoop'
-    // Skip headers we already handled
-    if hdrName != "host" and hdrName != "connection" and hdrName != "content-length" 'custom'
-      raw = "{raw}{hdrName}: {hdrValue}\r\n"
-    end 'custom'
-  end 'headerLoop'
+	// User-set headers
+	for(hdrName, hdrValue) in request.headers().headers 'headerLoop'
+		// Skip headers we already handled
+		if hdrName != "host" and hdrName != "connection" and hdrName != "content-length" 'custom'
+			raw = "{raw}{hdrName}: {hdrValue}\r\n"
+		end 'custom'
+	end 'headerLoop'
 
-  // End of headers
-  raw = "{raw}\r\n"
+	// End of headers
+	raw = "{raw}\r\n"
 
-  // Body
-  if bodyLen > 0 'hasBody'
-    raw = "{raw}{request.body()}"
-  end 'hasBody'
+	// Body
+	if bodyLen > 0 'hasBody'
+		raw = "{raw}{request.body()}"
+	end 'hasBody'
 
-  return raw
+	return raw
 end '_httpBuildRequest'
 
 export function _httpParseResponse(data String) returns HttpResponse throws HttpError
-  // Find header/body separator \r\n\r\n
-  let separatorIdx = try data.findFirst("\r\n\r\n") otherwise 'noSep'
-    throw HttpError.invalidResponse
-  end 'noSep'
+	// Find header/body separator \r\n\r\n
+	let separatorIdx = try data.findFirst("\r\n\r\n") otherwise 'noSep'
+		throw HttpError.invalidResponse
+	end 'noSep'
 
-  let headerSection = data.slice(data.startIndex(), endIndex: separatorIdx)
-  let headerBytes = headerSection.byteLength()
-  let totalBytes = data.byteLength()
+	let headerSection = data.slice(data.startIndex(), endIndex: separatorIdx)
+	let headerBytes = headerSection.byteLength()
+	let totalBytes = data.byteLength()
 
-  // Body starts after \r\n\r\n (4 bytes past end of header section)
-  var body = ""
-  if headerBytes + 4 < totalBytes 'hasBody'
-    let bodySlice = data.managed.slice(headerBytes + 4, totalBytes)
-    body = String{managed: bodySlice, _iterPos: 0}
-  end 'hasBody'
+	// Body starts after \r\n\r\n (4 bytes past end of header section)
+	var body = ""
+	if headerBytes + 4 < totalBytes 'hasBody'
+		let bodySlice = data.managed.slice(headerBytes + 4, totalBytes)
+		body = String{managed: bodySlice, _iterPos: 0}
+	end 'hasBody'
 
-  // Split header section into lines
-  let lines = headerSection.split("\r\n")
-  if lines.count() == 0 'empty'
-    throw HttpError.invalidResponse
-  end 'empty'
+	// Split header section into lines
+	let lines = headerSection.split("\r\n")
+	if lines.count() == 0 'empty'
+		throw HttpError.invalidResponse
+	end 'empty'
 
-  // Parse status line: "HTTP/1.x STATUS REASON"
-  let statusLine = try lines.get(0) otherwise 'noLine'
-    throw HttpError.invalidResponse
-  end 'noLine'
-  let statusParts = statusLine.split(" ")
-  if statusParts.count() < 2 'badStatus'
-    throw HttpError.invalidResponse
-  end 'badStatus'
+	// Parse status line: "HTTP/1.x STATUS REASON"
+	let statusLine = try lines.get(0) otherwise 'noLine'
+		throw HttpError.invalidResponse
+	end 'noLine'
+	let statusParts = statusLine.split(" ")
+	if statusParts.count() < 2 'badStatus'
+		throw HttpError.invalidResponse
+	end 'badStatus'
 
-  // Parse status code
-  let codeStr = try statusParts.get(1) otherwise 'noCode'
-    throw HttpError.invalidResponse
-  end 'noCode'
-  let codeInt = try int.fromString(codeStr) otherwise 'badCode'
-    throw HttpError.invalidResponse
-  end 'badCode'
-  let code = try StatusCode.fromRawValue(codeInt) otherwise 'unknownCode'
-    throw HttpError.invalidResponse
-  end 'unknownCode'
+	// Parse status code
+	let codeStr = try statusParts.get(1) otherwise 'noCode'
+		throw HttpError.invalidResponse
+	end 'noCode'
+	let codeInt = try int.fromString(codeStr) otherwise 'badCode'
+		throw HttpError.invalidResponse
+	end 'badCode'
+	let code = try StatusCode.fromRawValue(codeInt) otherwise 'unknownCode'
+		throw HttpError.invalidResponse
+	end 'unknownCode'
 
-  // Reason phrase (everything after second space)
-  var reason = ""
-  if statusParts.count() >= 3 'hasReason'
-    reason = try statusParts.get(2) otherwise ""
-    var i = 3
-    while i < statusParts.count() 'joinReason'
-      let part = try statusParts.get(i) otherwise ""
-      reason = "{reason} {part}"
-      i = i + 1
-    end 'joinReason'
-  end 'hasReason'
+	// Reason phrase (everything after second space)
+	var reason = ""
+	if statusParts.count() >= 3 'hasReason'
+		reason = try statusParts.get(2) otherwise ""
+		var i = 3
+		while i < statusParts.count() 'joinReason'
+			let part = try statusParts.get(i) otherwise ""
+			reason = "{reason} {part}"
+			i = i + 1
+		end 'joinReason'
+	end 'hasReason'
 
-  // Parse headers
-  var headers = HttpHeaders.create()
-  var lineIdx = 1
-  while lineIdx < lines.count() 'parseHeaders'
-    let line = try lines.get(lineIdx) otherwise ""
-    if line.isEmpty() 'emptyLine'
-      lineIdx = lineIdx + 1
-      break
-    end 'emptyLine'
-    // Find first ": " separator
-    if let colonIdx = try line.findFirst(": ") 'hasColon'
-      let name = line.slice(line.startIndex(), endIndex: colonIdx)
-      let colonBytePos = colonIdx.bytePos()
-      // Value starts 2 bytes after colon position (past ": ")
-      let valueSlice = line.managed.slice(colonBytePos + 2, line.byteLength())
-      let value = String{managed: valueSlice, _iterPos: 0}
-      headers.set(name, value: value)
-    end 'hasColon'
-    lineIdx = lineIdx + 1
-  end 'parseHeaders'
+	// Parse headers
+	var headers = HttpHeaders.create()
+	var lineIdx = 1
+	while lineIdx < lines.count() 'parseHeaders'
+		let line = try lines.get(lineIdx) otherwise ""
+		if line.isEmpty() 'emptyLine'
+			lineIdx = lineIdx + 1
+			break
+		end 'emptyLine'
+		// Find first ": " separator
+		if let colonIdx = try line.findFirst(": ") 'hasColon'
+			let name = line.slice(line.startIndex(), endIndex: colonIdx)
+			let colonBytePos = colonIdx.bytePos()
+			// Value starts 2 bytes after colon position (past ": ")
+			let valueSlice = line.managed.slice(colonBytePos + 2, line.byteLength())
+			let value = String{managed: valueSlice, _iterPos: 0}
+			headers.set(name, value: value)
+		end 'hasColon'
+		lineIdx = lineIdx + 1
+	end 'parseHeaders'
 
-  return HttpResponse{
-    code: code,
-    reasonPhrase: reason,
-    responseHeaders: headers,
-    responseBody: body
-  }
+	return HttpResponse{
+		code: code,
+		reasonPhrase: reason,
+		responseHeaders: headers,
+		responseBody: body
+	}
 end '_httpParseResponse'

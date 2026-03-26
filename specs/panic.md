@@ -48,8 +48,8 @@ Use `panic` for invariant violations and unreachable code paths — situations t
 <!-- test: panic.basic -->
 ```maxon
 function main() returns ExitCode
-    panic("something went wrong")
-    return 0
+		panic("something went wrong")
+		return 0
 end 'main'
 ```
 ```exitcode
@@ -65,12 +65,12 @@ Stack trace:
 <!-- test: panic.in-function -->
 ```maxon
 function fail()
-    panic("failure in helper")
+		panic("failure in helper")
 end 'fail'
 
 function main() returns ExitCode
-    fail()
-    return 0
+		fail()
+		return 0
 end 'main'
 ```
 ```exitcode
@@ -89,14 +89,14 @@ Stack trace:
 typealias Integer = int(i64.min to i64.max)
 
 function check(n Integer) returns Integer
-    if n < 0 'negative'
-        panic("negative value")
-    end 'negative'
-    return n
+		if n < 0 'negative'
+				panic("negative value")
+		end 'negative'
+		return n
 end 'check'
 
 function main() returns ExitCode
-    return check(Integer{-1})
+		return check(Integer{-1})
 end 'main'
 ```
 ```exitcode

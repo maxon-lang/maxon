@@ -85,21 +85,21 @@ end 'Point'
 typealias Integer = int(i64.min to i64.max)
 
 type Counter
-  var count Integer
+	var count Integer
 
-  function increment()
-    count = count + 1
-  end 'increment'
+	function increment()
+		count = count + 1
+	end 'increment'
 
-  function get() returns Integer
-    return count
-  end 'get'
+	function get() returns Integer
+		return count
+	end 'get'
 end 'Counter'
 
 function main() returns ExitCode
-  var c = Counter{count: 0}
-  c.increment()
-  return c.get()
+	var c = Counter{count: 0}
+	c.increment()
+	return c.get()
 end 'main'
 ```
 ```exitcode
@@ -112,22 +112,22 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 type Adder
-  var total Integer
+	var total Integer
 
-  function add(value Integer)
-    total = total + value
-  end 'add'
+	function add(value Integer)
+		total = total + value
+	end 'add'
 
-  function getTotal() returns Integer
-    return total
-  end 'getTotal'
+	function getTotal() returns Integer
+		return total
+	end 'getTotal'
 end 'Adder'
 
 function main() returns ExitCode
-  var a = Adder{total: 0}
-  a.add(10)
-  a.add(32)
-  return a.getTotal()
+	var a = Adder{total: 0}
+	a.add(10)
+	a.add(32)
+	return a.getTotal()
 end 'main'
 ```
 ```exitcode
@@ -140,16 +140,16 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 type Calculator
-  var value Integer
+	var value Integer
 
-  function double() returns Integer
-    return value * 2
-  end 'double'
+	function double() returns Integer
+		return value * 2
+	end 'double'
 end 'Calculator'
 
 function main() returns ExitCode
-  var c = Calculator{value: 21}
-  return c.double()
+	var c = Calculator{value: 21}
+	return c.double()
 end 'main'
 ```
 ```exitcode
@@ -162,31 +162,31 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 type Counter
-  var count Integer
+	var count Integer
 
-  function increment()
-    count = count + 1
-  end 'increment'
+	function increment()
+		count = count + 1
+	end 'increment'
 
-  function decrement()
-    count = count - 1
-  end 'decrement'
+	function decrement()
+		count = count - 1
+	end 'decrement'
 
-  function reset()
-    count = 0
-  end 'reset'
+	function reset()
+		count = 0
+	end 'reset'
 
-  function get() returns Integer
-    return count
-  end 'get'
+	function get() returns Integer
+		return count
+	end 'get'
 end 'Counter'
 
 function main() returns ExitCode
-  var c = Counter{count: 10}
-  c.increment()
-  c.increment()
-  c.decrement()
-  return c.get()
+	var c = Counter{count: 10}
+	c.increment()
+	c.increment()
+	c.decrement()
+	return c.get()
 end 'main'
 ```
 ```exitcode
@@ -199,23 +199,23 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 type Value
-  var n Integer
+	var n Integer
 
-  function add(x Integer)
-    n = n + x
-  end 'add'
+	function add(x Integer)
+		n = n + x
+	end 'add'
 
-  function get() returns Integer
-    return n
-  end 'get'
+	function get() returns Integer
+		return n
+	end 'get'
 end 'Value'
 
 function main() returns ExitCode
-  var v = Value{n: 0}
-  v.add(10)
-  v.add(20)
-  v.add(12)
-  return v.get()
+	var v = Value{n: 0}
+	v.add(10)
+	v.add(20)
+	v.add(12)
+	return v.get()
 end 'main'
 ```
 ```exitcode

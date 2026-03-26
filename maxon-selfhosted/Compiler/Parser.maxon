@@ -15,54 +15,54 @@ export typealias ScopeDepthArray = Array with ScopeDepth
 typealias TokenIndex = int(0 to u64.max)
 
 enum ParserError
-  unhandledToken
-  typeError
+	unhandledToken
+	typeError
 end 'ParserError'
 
 export function parse(project Project, tokens TokenArray, filePath FilePath) returns MlirModule
-  logDebug(LogCategory.parser, message: () gives "Starting parser")
+	logDebug(LogCategory.parser, message: () gives "Starting parser")
 
-  var module = createMlirModule()
-  var pos = skipNewlines(tokens, startPos: 0)
+	var module = createMlirModule()
+	var pos = skipNewlines(tokens, startPos: 0)
 
-  while pos < tokens.count() 'parseLoop'
-    let token = tokenAt(tokens, pos: pos)
-    let prevPos = pos
+	while pos < tokens.count() 'parseLoop'
+		let token = tokenAt(tokens, pos: pos)
+		let prevPos = pos
 
-    match token.kind 'dispatch'
-      eof then break 'parseLoop'
-      function then pos = parseFunction(project, module: module, tokens: tokens, startPos: pos, filePath: filePath)
-      let then pos = parseTopLevelLet(project, tokens: tokens, startPos: pos, filePath: filePath)
-      typealias then pos = parseTopLevelTypealias(project, tokens: tokens, startPos: pos)
-      export then pos = parseExport(project, tokens: tokens, startPos: pos)
-      if to newline then break
-      // temporary
-      print then break
-    end 'dispatch'
+		match token.kind 'dispatch'
+			eof then break 'parseLoop'
+			function then pos = parseFunction(project, module: module, tokens: tokens, startPos: pos, filePath: filePath)
+			let then pos = parseTopLevelLet(project, tokens: tokens, startPos: pos, filePath: filePath)
+			typealias then pos = parseTopLevelTypealias(project, tokens: tokens, startPos: pos)
+			export then pos = parseExport(project, tokens: tokens, startPos: pos)
+			if to newline then break
+			// temporary
+			print then break
+		end 'dispatch'
 
-    if pos <= prevPos 'stuck'
-      pos = prevPos + 1
-    end 'stuck'
+		if pos <= prevPos 'stuck'
+			pos = prevPos + 1
+		end 'stuck'
 
-    pos = skipNewlines(tokens, startPos: pos)
-  end 'parseLoop'
+		pos = skipNewlines(tokens, startPos: pos)
+	end 'parseLoop'
 
-  return module
+	return module
 end 'parse'
 
 // --- Block-based emission helpers ---
 
 function emitOp(block MlirBlock, op MlirOp)
-  block.ops.push(op)
+	block.ops.push(op)
 end 'emitOp'
 
 function finalizeBlock(block MlirBlock, terminator MlirOp)
-  block.terminator = terminator
-  block.hasTerminator = true
+	block.terminator = terminator
+	block.hasTerminator = true
 end 'finalizeBlock'
 
 function newBlock(func MlirFunction, label ByteArray) returns MlirBlock
-  return addBlock(func.region, label: label)
+	return addBlock(func.region, label: label)
 end 'newBlock'
 
 // --- Error recovery ---
@@ -70,133 +70,133 @@ end 'newBlock'
 // Skips tokens until a statement boundary (end/eof/newline).
 // Always advances at least 1 token to prevent infinite loops.
 function synchronizeToNextStatement(tokens TokenArray, startPos TokenIndex) returns TokenIndex
-  var pos = startPos
-  if pos < tokens.count() 'advance'
-    pos = pos + 1
-  end 'advance'
-  while pos < tokens.count() 'sync'
-    let t = tokenAt(tokens, pos: pos)
-    if t.kind == TokenKind.end or t.kind == TokenKind.eof 'atBoundary'
-      return pos
-    end 'atBoundary'
-    if t.kind == TokenKind.newline 'atNewline'
-      return pos + 1
-    end 'atNewline'
-    pos = pos + 1
-  end 'sync'
-  return pos
+	var pos = startPos
+	if pos < tokens.count() 'advance'
+		pos = pos + 1
+	end 'advance'
+	while pos < tokens.count() 'sync'
+		let t = tokenAt(tokens, pos: pos)
+		if t.kind == TokenKind.end or t.kind == TokenKind.eof 'atBoundary'
+			return pos
+		end 'atBoundary'
+		if t.kind == TokenKind.newline 'atNewline'
+			return pos + 1
+		end 'atNewline'
+		pos = pos + 1
+	end 'sync'
+	return pos
 end 'synchronizeToNextStatement'
 
 // Dispatches an identifier at statement level: assignment, function call, or error.
 function parseIdentifierStatement(project Project, block MlirBlock, tokens TokenArray, startPos TokenIndex, filePath FilePath) returns TokenIndex
-  let peekToken = tokenAt(tokens, pos: startPos + 1)
-  if peekToken.kind == TokenKind.equals 'isAssign'
-    return parseVarAssignment(project, block: block, tokens: tokens, startPos: startPos, filePath: filePath)
-  end 'isAssign' else if peekToken.kind == TokenKind.leftParen 'isCall'
-    // Statement-level function call — parse as expression, discard result
-    let callResult = parseExpression(project, block: block, tokens: tokens, startPos: startPos, filePath: filePath)
-    return callResult.nextPos
-  end 'isCall'
-  let stmtToken = tokenAt(tokens, pos: startPos)
-  reportCompileError(project, code: ErrorCode.parserExpectedToken, message: "Unexpected token '{tokenValueToString(stmtToken.value)}' in statement position", line: stmtToken.line, column: stmtToken.column, filePath: filePath)
-  return synchronizeToNextStatement(tokens, startPos: startPos)
+	let peekToken = tokenAt(tokens, pos: startPos + 1)
+	if peekToken.kind == TokenKind.equals 'isAssign'
+		return parseVarAssignment(project, block: block, tokens: tokens, startPos: startPos, filePath: filePath)
+	end 'isAssign' else if peekToken.kind == TokenKind.leftParen 'isCall'
+		// Statement-level function call — parse as expression, discard result
+		let callResult = parseExpression(project, block: block, tokens: tokens, startPos: startPos, filePath: filePath)
+		return callResult.nextPos
+	end 'isCall'
+	let stmtToken = tokenAt(tokens, pos: startPos)
+	reportCompileError(project, code: ErrorCode.parserExpectedToken, message: "Unexpected token '{tokenValueToString(stmtToken.value)}' in statement position", line: stmtToken.line, column: stmtToken.column, filePath: filePath)
+	return synchronizeToNextStatement(tokens, startPos: startPos)
 end 'parseIdentifierStatement'
 
 // Reports an unexpected token error and synchronizes to the next statement.
 function reportUnexpectedToken(project Project, tokens TokenArray, startPos TokenIndex, filePath FilePath) returns TokenIndex
-  let stmtToken = tokenAt(tokens, pos: startPos)
-  reportCompileError(project, code: ErrorCode.parserExpectedToken, message: "Unexpected token '{tokenValueToString(stmtToken.value)}' in statement position", line: stmtToken.line, column: stmtToken.column, filePath: filePath)
-  return synchronizeToNextStatement(tokens, startPos: startPos)
+	let stmtToken = tokenAt(tokens, pos: startPos)
+	reportCompileError(project, code: ErrorCode.parserExpectedToken, message: "Unexpected token '{tokenValueToString(stmtToken.value)}' in statement position", line: stmtToken.line, column: stmtToken.column, filePath: filePath)
+	return synchronizeToNextStatement(tokens, startPos: startPos)
 end 'reportUnexpectedToken'
 
 // --- Function parsing ---
 
 function parseFunction(project Project, module MlirModule, tokens TokenArray, startPos TokenIndex, filePath FilePath) returns TokenIndex
-  var pos = startPos
-  pos = pos + 1  // skip 'function'
+	var pos = startPos
+	pos = pos + 1  // skip 'function'
 
-  let nameToken = tokenAt(tokens, pos: pos)
-  logTrace(LogCategory.parser, message: () gives "Parsing function '{String.from(nameToken.value)}'")
-  pos = pos + 1
+	let nameToken = tokenAt(tokens, pos: pos)
+	logTrace(LogCategory.parser, message: () gives "Parsing function '{String.from(nameToken.value)}'")
+	pos = pos + 1
 
-  // Parse parameter list
-  pos = pos + 1  // skip '('
+	// Parse parameter list
+	pos = pos + 1  // skip '('
 
-  // Create function early so we can set paramCount, but defer symbol table setup
-  resetValueIds(project)
-  resetSymbolTable(project)
+	// Create function early so we can set paramCount, but defer symbol table setup
+	resetValueIds(project)
+	resetSymbolTable(project)
 
-  var paramCount = 0
-  let firstParamToken = tokenAt(tokens, pos: pos)
-  if firstParamToken.kind != TokenKind.rightParen 'hasParams'
-    // Parse parameters: name Type, name Type, ...
-    while pos < tokens.count() 'paramLoop'
-      let paramNameToken = tokenAt(tokens, pos: pos)
-      pos = pos + 1  // skip param name
-      pos = pos + 1  // skip param type
+	var paramCount = 0
+	let firstParamToken = tokenAt(tokens, pos: pos)
+	if firstParamToken.kind != TokenKind.rightParen 'hasParams'
+		// Parse parameters: name Type, name Type, ...
+		while pos < tokens.count() 'paramLoop'
+			let paramNameToken = tokenAt(tokens, pos: pos)
+			pos = pos + 1  // skip param name
+			pos = pos + 1  // skip param type
 
-      // Define the parameter as a variable so it's accessible in the body
-      let _ = defineVariable(project, name: paramNameToken.value, isFloat: false, isRefType: false)
-      paramCount = paramCount + 1
+			// Define the parameter as a variable so it's accessible in the body
+			let _ = defineVariable(project, name: paramNameToken.value, isFloat: false, isRefType: false)
+			paramCount = paramCount + 1
 
-      let nextParamTok = tokenAt(tokens, pos: pos)
-      if nextParamTok.kind == TokenKind.rightParen 'endParams'
-        break
-      end 'endParams'
-    end 'paramLoop'
-  end 'hasParams'
-  pos = pos + 1  // skip ')'
+			let nextParamTok = tokenAt(tokens, pos: pos)
+			if nextParamTok.kind == TokenKind.rightParen 'endParams'
+				break
+			end 'endParams'
+		end 'paramLoop'
+	end 'hasParams'
+	pos = pos + 1  // skip ')'
 
-  // Parse 'returns' type
-  var returnTypeName = ByteArray{}
-  let nextToken = tokenAt(tokens, pos: pos)
-  if nextToken.kind == TokenKind.returns 'hasReturns'
-    pos = pos + 1  // skip 'returns'
-    let typeToken = tokenAt(tokens, pos: pos)
-    returnTypeName = typeToken.value
-    pos = pos + 1  // skip type name
-  end 'hasReturns'
+	// Parse 'returns' type
+	var returnTypeName = ByteArray{}
+	let nextToken = tokenAt(tokens, pos: pos)
+	if nextToken.kind == TokenKind.returns 'hasReturns'
+		pos = pos + 1  // skip 'returns'
+		let typeToken = tokenAt(tokens, pos: pos)
+		returnTypeName = typeToken.value
+		pos = pos + 1  // skip type name
+	end 'hasReturns'
 
-  // Handle optional 'throws' clause by skipping it
-  let throwsToken = tokenAt(tokens, pos: pos)
-  if throwsToken.kind == TokenKind.throws 'hasThrows'
-    pos = pos + 1  // skip 'throws'
-    pos = pos + 1  // skip error type
-  end 'hasThrows'
+	// Handle optional 'throws' clause by skipping it
+	let throwsToken = tokenAt(tokens, pos: pos)
+	if throwsToken.kind == TokenKind.throws 'hasThrows'
+		pos = pos + 1  // skip 'throws'
+		pos = pos + 1  // skip error type
+	end 'hasThrows'
 
-  pos = skipNewlines(tokens, startPos: pos)
+	pos = skipNewlines(tokens, startPos: pos)
 
-  // Create function and entry block — qualify name with file-based namespace (except main)
-  var funcName = nameToken.value
-  if funcName != b"main" 'qualifyNonMain'
-    let ns = deriveNamespace(filePath)
-    funcName = qualifyName(ns, name: funcName)
-  end 'qualifyNonMain'
-  var func = createMlirFunction(funcName, returnType: returnTypeName)
-  func.paramCount = paramCount
-  var block = newBlock(func, label: b"entry")
+	// Create function and entry block — qualify name with file-based namespace (except main)
+	var funcName = nameToken.value
+	if funcName != b"main" 'qualifyNonMain'
+		let ns = deriveNamespace(filePath)
+		funcName = qualifyName(ns, name: funcName)
+	end 'qualifyNonMain'
+	var func = createMlirFunction(funcName, returnType: returnTypeName)
+	func.paramCount = paramCount
+	var block = newBlock(func, label: b"entry")
 
-  // Parse function body
-  var bodyReturns = false
-  (pos, block) = parseStatements(project, func: func, block: block, tokens: tokens, startPos: pos, filePath: filePath, lastWasReturn: bodyReturns)
+	// Parse function body
+	var bodyReturns = false
+	(pos, block) = parseStatements(project, func: func, block: block, tokens: tokens, startPos: pos, filePath: filePath, lastWasReturn: bodyReturns)
 
-  // Implicit void return if body did not end with a return
-  if not block.hasTerminator 'needsImplicitRet'
-    let zeroId = nextValueId(project)
-    emitOp(block, op: MlirOp.maxhl(MaxHLOp.literal(zeroId, 0, false)))
-    finalizeBlock(block, terminator: MlirOp.maxhl(MaxHLOp.ret(zeroId)))
-  end 'needsImplicitRet'
+	// Implicit void return if body did not end with a return
+	if not block.hasTerminator 'needsImplicitRet'
+		let zeroId = nextValueId(project)
+		emitOp(block, op: MlirOp.maxhl(MaxHLOp.literal(zeroId, 0, false)))
+		finalizeBlock(block, terminator: MlirOp.maxhl(MaxHLOp.ret(zeroId)))
+	end 'needsImplicitRet'
 
-  module.functions.push(func)
+	module.functions.push(func)
 
-  // Skip 'end' and optional label string
-  pos = pos + 1  // skip 'end'
-  let afterEnd = tokenAt(tokens, pos: pos)
-  if afterEnd.kind == TokenKind.stringLiteral 'hasLabel'
-    pos = pos + 1  // skip label
-  end 'hasLabel'
+	// Skip 'end' and optional label string
+	pos = pos + 1  // skip 'end'
+	let afterEnd = tokenAt(tokens, pos: pos)
+	if afterEnd.kind == TokenKind.stringLiteral 'hasLabel'
+		pos = pos + 1  // skip label
+	end 'hasLabel'
 
-  return pos
+	return pos
 end 'parseFunction'
 
 // --- Statement parsing ---
@@ -204,35 +204,35 @@ end 'parseFunction'
 // Parse statements until 'end' is reached. Returns the position at the 'end' token.
 // Sets lastWasReturn to true if the last statement was a return.
 function parseStatements(project Project, func MlirFunction, block MlirBlock, tokens TokenArray, startPos TokenIndex, filePath FilePath, lastWasReturn bool) returns(TokenIndex, MlirBlock)
-  var pos = startPos
-  lastWasReturn = false
+	var pos = startPos
+	lastWasReturn = false
 
-  while pos < tokens.count() 'body'
-    let stmtToken = tokenAt(tokens, pos: pos)
-    if stmtToken.kind == TokenKind.end 'isEnd'
-    break
-  end 'isEnd'
+	while pos < tokens.count() 'body'
+		let stmtToken = tokenAt(tokens, pos: pos)
+		if stmtToken.kind == TokenKind.end 'isEnd'
+		break
+	end 'isEnd'
 
-  lastWasReturn = false
+	lastWasReturn = false
 
-  if stmtToken.kind == TokenKind.return 'isReturn'
-    pos = parseReturnStatement(project, block: block, tokens: tokens, startPos: pos, filePath: filePath)
-    lastWasReturn = true
-  end 'isReturn' else if stmtToken.kind == TokenKind.var or stmtToken.kind == TokenKind.let 'isVarDecl'
-    pos = parseVarDecl(project, block: block, tokens: tokens, startPos: pos, filePath: filePath)
-  end 'isVarDecl' else if stmtToken.kind == TokenKind.print 'isPrint'
-    pos = parsePrintStatement(project, block: block, tokens: tokens, startPos: pos, filePath: filePath)
-  end 'isPrint' else if stmtToken.kind == TokenKind.if 'isIf'
-    (pos, block) = parseIfStatement(project, func: func, block: block, tokens: tokens, startPos: pos, filePath: filePath)
-  end 'isIf' else if stmtToken.kind == TokenKind.while 'isWhile'
-    (pos, block) = parseWhileStatement(project, func: func, block: block, tokens: tokens, startPos: pos, filePath: filePath)
-  end 'isWhile' else if stmtToken.kind == TokenKind.identifier 'isIdent'
-    pos = parseIdentifierStatement(project, block: block, tokens: tokens, startPos: pos, filePath: filePath)
-  end 'isIdent' else 'unexpectedToken'
-    pos = reportUnexpectedToken(project, tokens: tokens, startPos: pos, filePath: filePath)
-  end 'unexpectedToken'
+	if stmtToken.kind == TokenKind.return 'isReturn'
+		pos = parseReturnStatement(project, block: block, tokens: tokens, startPos: pos, filePath: filePath)
+		lastWasReturn = true
+	end 'isReturn' else if stmtToken.kind == TokenKind.var or stmtToken.kind == TokenKind.let 'isVarDecl'
+		pos = parseVarDecl(project, block: block, tokens: tokens, startPos: pos, filePath: filePath)
+	end 'isVarDecl' else if stmtToken.kind == TokenKind.print 'isPrint'
+		pos = parsePrintStatement(project, block: block, tokens: tokens, startPos: pos, filePath: filePath)
+	end 'isPrint' else if stmtToken.kind == TokenKind.if 'isIf'
+		(pos, block) = parseIfStatement(project, func: func, block: block, tokens: tokens, startPos: pos, filePath: filePath)
+	end 'isIf' else if stmtToken.kind == TokenKind.while 'isWhile'
+		(pos, block) = parseWhileStatement(project, func: func, block: block, tokens: tokens, startPos: pos, filePath: filePath)
+	end 'isWhile' else if stmtToken.kind == TokenKind.identifier 'isIdent'
+		pos = parseIdentifierStatement(project, block: block, tokens: tokens, startPos: pos, filePath: filePath)
+	end 'isIdent' else 'unexpectedToken'
+		pos = reportUnexpectedToken(project, tokens: tokens, startPos: pos, filePath: filePath)
+	end 'unexpectedToken'
 
-  pos = skipNewlines(tokens, startPos: pos)
+	pos = skipNewlines(tokens, startPos: pos)
 end 'body'
 
 return(pos, block)
@@ -240,1149 +240,1149 @@ end 'parseStatements'
 
 // Parse top-level `let NAME = "value"` — stores as compile-time string constant.
 function parseTopLevelLet(project Project, tokens TokenArray, startPos TokenIndex, filePath FilePath) returns TokenIndex
-  var pos = startPos + 1  // skip 'let'
+	var pos = startPos + 1  // skip 'let'
 
-  let nameToken = tokenAt(tokens, pos: pos)
-  pos = pos + 1  // skip name
+	let nameToken = tokenAt(tokens, pos: pos)
+	pos = pos + 1  // skip name
 
-  let equalsToken = tokenAt(tokens, pos: pos)
-  if equalsToken.kind != TokenKind.equals 'notEquals'
-    reportCompileError(project, code: ErrorCode.parserExpectedToken, message: "Expected '=' but got '{tokenValueToString(equalsToken.value)}'", line: equalsToken.line, column: equalsToken.column, filePath: filePath)
-    return synchronizeToNextStatement(tokens, startPos: pos)
-  end 'notEquals'
+	let equalsToken = tokenAt(tokens, pos: pos)
+	if equalsToken.kind != TokenKind.equals 'notEquals'
+		reportCompileError(project, code: ErrorCode.parserExpectedToken, message: "Expected '=' but got '{tokenValueToString(equalsToken.value)}'", line: equalsToken.line, column: equalsToken.column, filePath: filePath)
+		return synchronizeToNextStatement(tokens, startPos: pos)
+	end 'notEquals'
 
-  pos = pos + 1  // skip '='
-  let valueToken = tokenAt(tokens, pos: pos)
-  if valueToken.kind != TokenKind.doubleStringLiteral 'notString'
-    reportCompileError(project, code: ErrorCode.parserExpectedToken, message: "Top-level let only supports string literals", line: valueToken.line, column: valueToken.column, filePath: filePath)
-    return synchronizeToNextStatement(tokens, startPos: pos)
-  end 'notString'
+	pos = pos + 1  // skip '='
+	let valueToken = tokenAt(tokens, pos: pos)
+	if valueToken.kind != TokenKind.doubleStringLiteral 'notString'
+		reportCompileError(project, code: ErrorCode.parserExpectedToken, message: "Top-level let only supports string literals", line: valueToken.line, column: valueToken.column, filePath: filePath)
+		return synchronizeToNextStatement(tokens, startPos: pos)
+	end 'notString'
 
-  pos = pos + 1  // skip string value
+	pos = pos + 1  // skip string value
 
-  project.stringConstNames.push(nameToken.value)
-  project.stringConstValues.push(valueToken.value)
-  logTrace(LogCategory.parser, message: () gives "Registered top-level string constant '{String.from(nameToken.value)}'")
+	project.stringConstNames.push(nameToken.value)
+	project.stringConstValues.push(valueToken.value)
+	logTrace(LogCategory.parser, message: () gives "Registered top-level string constant '{String.from(nameToken.value)}'")
 
-  return pos
+	return pos
 end 'parseTopLevelLet'
 
 function parseExport(project Project, tokens TokenArray, startPos TokenIndex) returns TokenIndex
-  // Skip export prefix — check what follows
-  let afterExport = tokenAt(tokens, pos: startPos + 1)
+	// Skip export prefix — check what follows
+	let afterExport = tokenAt(tokens, pos: startPos + 1)
 
-  if afterExport.kind == TokenKind.function 'isExportFunc'
-    return startPos + 1
-  end 'isExportFunc' else if afterExport.kind == TokenKind.typealias 'isExportTypealias'
-    return parseTopLevelTypealias(project, tokens: tokens, startPos: startPos + 1)
-  end 'isExportTypealias' else 'isExportOther'
-    // Skip export type/other declarations
-    return skipToNextLine(tokens, startPos: startPos)
-  end 'isExportOther'
+	if afterExport.kind == TokenKind.function 'isExportFunc'
+		return startPos + 1
+	end 'isExportFunc' else if afterExport.kind == TokenKind.typealias 'isExportTypealias'
+		return parseTopLevelTypealias(project, tokens: tokens, startPos: startPos + 1)
+	end 'isExportTypealias' else 'isExportOther'
+		// Skip export type/other declarations
+		return skipToNextLine(tokens, startPos: startPos)
+	end 'isExportOther'
 end 'parseExport'
 
 // Parse: typealias Name = int(...) | float(...) | Array with T | ...
 // Registers primitive-backed typealiases in the project's type registry.
 // Computes optimal MLIR type from the range bounds (e.g. int(0 to u32.max) → u32).
 function parseTopLevelTypealias(project Project, tokens TokenArray, startPos TokenIndex) returns TokenIndex
-  var pos = startPos + 1  // skip 'typealias'
-  let nameToken = tokenAt(tokens, pos: pos)
-  pos = pos + 1  // skip alias name
+	var pos = startPos + 1  // skip 'typealias'
+	let nameToken = tokenAt(tokens, pos: pos)
+	pos = pos + 1  // skip alias name
 
-  let equalsToken = tokenAt(tokens, pos: pos)
-  if equalsToken.kind != TokenKind.equals 'noEquals'
-    return skipToNextLine(tokens, startPos: startPos)
-  end 'noEquals'
-  pos = pos + 1  // skip '='
+	let equalsToken = tokenAt(tokens, pos: pos)
+	if equalsToken.kind != TokenKind.equals 'noEquals'
+		return skipToNextLine(tokens, startPos: startPos)
+	end 'noEquals'
+	pos = pos + 1  // skip '='
 
-  let baseToken = tokenAt(tokens, pos: pos)
-  if baseToken.kind == TokenKind.float 'isFloat'
-    project.typealiases.insert(nameToken.value, value: b"f64")
-    return skipToNextLine(tokens, startPos: startPos)
-  end 'isFloat'
-  if baseToken.kind == TokenKind.bool 'isBool'
-    project.typealiases.insert(nameToken.value, value: b"i1")
-    return skipToNextLine(tokens, startPos: startPos)
-  end 'isBool'
-  if baseToken.kind != TokenKind.int 'notInt'
-    return skipToNextLine(tokens, startPos: startPos)
-  end 'notInt'
+	let baseToken = tokenAt(tokens, pos: pos)
+	if baseToken.kind == TokenKind.float 'isFloat'
+		project.typealiases.insert(nameToken.value, value: b"f64")
+		return skipToNextLine(tokens, startPos: startPos)
+	end 'isFloat'
+	if baseToken.kind == TokenKind.bool 'isBool'
+		project.typealiases.insert(nameToken.value, value: b"i1")
+		return skipToNextLine(tokens, startPos: startPos)
+	end 'isBool'
+	if baseToken.kind != TokenKind.int 'notInt'
+		return skipToNextLine(tokens, startPos: startPos)
+	end 'notInt'
 
-  // Parse int(LOWER to UPPER) to compute optimal type
-  pos = pos + 1  // skip 'int'
-  let parenToken = tokenAt(tokens, pos: pos)
-  if parenToken.kind != TokenKind.leftParen 'noParen'
-    project.typealiases.insert(nameToken.value, value: b"i64")
-    return skipToNextLine(tokens, startPos: startPos)
-  end 'noParen'
-  pos = pos + 1  // skip '('
+	// Parse int(LOWER to UPPER) to compute optimal type
+	pos = pos + 1  // skip 'int'
+	let parenToken = tokenAt(tokens, pos: pos)
+	if parenToken.kind != TokenKind.leftParen 'noParen'
+		project.typealiases.insert(nameToken.value, value: b"i64")
+		return skipToNextLine(tokens, startPos: startPos)
+	end 'noParen'
+	pos = pos + 1  // skip '('
 
-  // Parse lower bound
-  let lowerBound = parseTypeBound(tokens, pos: pos)
-  pos = lowerBound.nextPos
+	// Parse lower bound
+	let lowerBound = parseTypeBound(tokens, pos: pos)
+	pos = lowerBound.nextPos
 
-  // Skip 'to'
-  let toToken = tokenAt(tokens, pos: pos)
-  if toToken.kind == TokenKind.to 'hasTo'
-    pos = pos + 1
-  end 'hasTo'
+	// Skip 'to'
+	let toToken = tokenAt(tokens, pos: pos)
+	if toToken.kind == TokenKind.to 'hasTo'
+		pos = pos + 1
+	end 'hasTo'
 
-  // Parse upper bound
-  let upperBound = parseTypeBound(tokens, pos: pos)
+	// Parse upper bound
+	let upperBound = parseTypeBound(tokens, pos: pos)
 
-  let mlirType = computeOptimalIntType(lower: lowerBound.value, upper: upperBound.value)
-  project.typealiases.insert(nameToken.value, value: mlirType)
-  return skipToNextLine(tokens, startPos: startPos)
+	let mlirType = computeOptimalIntType(lower: lowerBound.value, upper: upperBound.value)
+	project.typealiases.insert(nameToken.value, value: mlirType)
+	return skipToNextLine(tokens, startPos: startPos)
 end 'parseTopLevelTypealias'
 
 typealias BoundValue = int(i64.min to i64.max)
 
 type ParsedBound
-  export var value BoundValue
-  export var nextPos TokenIndex
+	export var value BoundValue
+	export var nextPos TokenIndex
 end 'ParsedBound'
 
 // Parse a type bound: a number literal, negative literal, or T.min/T.max.
 // The lexer doesn't emit '.' tokens, so "u32.max" is tokenized as two
 // identifiers: "u32" and "max" (with '.' silently skipped).
 function parseTypeBound(tokens TokenArray, pos TokenIndex) returns ParsedBound
-  let token = tokenAt(tokens, pos: pos)
+	let token = tokenAt(tokens, pos: pos)
 
-  // Negative literal: - NUMBER
-  if token.kind == TokenKind.minus 'isNeg'
-    let numToken = tokenAt(tokens, pos: pos + 1)
-    let value = parseInt(numToken.value)
-    return ParsedBound{value: 0 - value, nextPos: pos + 2}
-  end 'isNeg'
+	// Negative literal: - NUMBER
+	if token.kind == TokenKind.minus 'isNeg'
+		let numToken = tokenAt(tokens, pos: pos + 1)
+		let value = parseInt(numToken.value)
+		return ParsedBound{value: 0 - value, nextPos: pos + 2}
+	end 'isNeg'
 
-  // Number literal
-  if token.kind == TokenKind.intLiteral 'isLit'
-    return ParsedBound{value: parseInt(token.value), nextPos: pos + 1}
-  end 'isLit'
+	// Number literal
+	if token.kind == TokenKind.intLiteral 'isLit'
+		return ParsedBound{value: parseInt(token.value), nextPos: pos + 1}
+	end 'isLit'
 
-  // T.min or T.max — lexed as two identifiers (T and min/max)
-  let fieldToken = tokenAt(tokens, pos: pos + 1)
-  if fieldToken.kind == TokenKind.identifier 'hasField'
-    let bound = resolveTypeBound(token.value, field: fieldToken.value)
-    return ParsedBound{value: bound, nextPos: pos + 2}
-  end 'hasField'
+	// T.min or T.max — lexed as two identifiers (T and min/max)
+	let fieldToken = tokenAt(tokens, pos: pos + 1)
+	if fieldToken.kind == TokenKind.identifier 'hasField'
+		let bound = resolveTypeBound(token.value, field: fieldToken.value)
+		return ParsedBound{value: bound, nextPos: pos + 2}
+	end 'hasField'
 
-  return ParsedBound{value: 0, nextPos: pos + 1}
+	return ParsedBound{value: 0, nextPos: pos + 1}
 end 'parseTypeBound'
 
 let typeBoundsTable = [
-  b"u8.max": 255, b"u16.max": 65535, b"u32.max": 4294967295, b"u64.max": 9223372036854775807,
-  b"i8.max": 127, b"i16.max": 32767, b"i32.max": 2147483647, b"i64.max": 9223372036854775807,
-  b"i8.min": -128, b"i16.min": -32768, b"i32.min": -2147483648, b"i64.min": -9223372036854775807
+	b"u8.max": 255, b"u16.max": 65535, b"u32.max": 4294967295, b"u64.max": 9223372036854775807,
+	b"i8.max": 127, b"i16.max": 32767, b"i32.max": 2147483647, b"i64.max": 9223372036854775807,
+	b"i8.min": -128, b"i16.min": -32768, b"i32.min": -2147483648, b"i64.min": -9223372036854775807
 ]
 
 function resolveTypeBound(typeName ByteArray, field ByteArray) returns BoundValue
-  var key = ByteArray{}
-  key.append(typeName)
-  key.push(46)
-  key.append(field)
-  return try typeBoundsTable.get(key) otherwise 0
+	var key = ByteArray{}
+	key.append(typeName)
+	key.push(46)
+	key.append(field)
+	return try typeBoundsTable.get(key) otherwise 0
 end 'resolveTypeBound'
 
 function computeOptimalIntType(lower BoundValue, upper BoundValue) returns ByteArray
-  if lower >= 0 'unsigned'
-    if upper <= 255 'u8'
-      return b"u8"
-    end 'u8'
-    if upper <= 65535 'u16'
-      return b"u16"
-    end 'u16'
-    if upper <= 4294967295 'u32'
-      return b"u32"
-    end 'u32'
-    return b"u64"
-  end 'unsigned'
-  return b"i64"
+	if lower >= 0 'unsigned'
+		if upper <= 255 'u8'
+			return b"u8"
+		end 'u8'
+		if upper <= 65535 'u16'
+			return b"u16"
+		end 'u16'
+		if upper <= 4294967295 'u32'
+			return b"u32"
+		end 'u32'
+		return b"u64"
+	end 'unsigned'
+	return b"i64"
 end 'computeOptimalIntType'
 
 function parseReturnStatement(project Project, block MlirBlock, tokens TokenArray, startPos TokenIndex, filePath FilePath) returns TokenIndex
-  var pos = startPos + 1  // skip 'return'
+	var pos = startPos + 1  // skip 'return'
 
-  // Bare 'return' without expression (void return)
-  let nextTok = tokenAt(tokens, pos: pos)
-  if nextTok.kind == TokenKind.newline or nextTok.kind == TokenKind.end or nextTok.kind == TokenKind.eof 'bareReturn'
-    let zeroId = nextValueId(project)
-    emitOp(block, op: MlirOp.maxhl(MaxHLOp.literal(zeroId, 0, false)))
-    finalizeBlock(block, terminator: MlirOp.maxhl(MaxHLOp.ret(zeroId)))
-    return pos
-  end 'bareReturn'
+	// Bare 'return' without expression (void return)
+	let nextTok = tokenAt(tokens, pos: pos)
+	if nextTok.kind == TokenKind.newline or nextTok.kind == TokenKind.end or nextTok.kind == TokenKind.eof 'bareReturn'
+		let zeroId = nextValueId(project)
+		emitOp(block, op: MlirOp.maxhl(MaxHLOp.literal(zeroId, 0, false)))
+		finalizeBlock(block, terminator: MlirOp.maxhl(MaxHLOp.ret(zeroId)))
+		return pos
+	end 'bareReturn'
 
-  let resultId = parseExpression(project, block: block, tokens: tokens, startPos: pos, filePath: filePath)
-  pos = resultId.nextPos
+	let resultId = parseExpression(project, block: block, tokens: tokens, startPos: pos, filePath: filePath)
+	pos = resultId.nextPos
 
-  finalizeBlock(block, terminator: MlirOp.maxhl(MaxHLOp.ret(resultId.valueId)))
-  return pos
+	finalizeBlock(block, terminator: MlirOp.maxhl(MaxHLOp.ret(resultId.valueId)))
+	return pos
 end 'parseReturnStatement'
 
 // Parse: if <condition> 'label' ... end 'label' [else 'label' ... end 'label']
 // Returns the next token position and the block to continue emitting into (the merge block).
 function parseIfStatement(project Project, func MlirFunction, block MlirBlock, tokens TokenArray, startPos TokenIndex, filePath FilePath) returns(TokenIndex, MlirBlock)
-  var pos = startPos + 1  // skip 'if'
+	var pos = startPos + 1  // skip 'if'
 
-  // Parse condition expression (emits ops to current block)
-  let condResult = parseExpression(project, block: block, tokens: tokens, startPos: pos, filePath: filePath)
-  pos = condResult.nextPos
+	// Parse condition expression (emits ops to current block)
+	let condResult = parseExpression(project, block: block, tokens: tokens, startPos: pos, filePath: filePath)
+	pos = condResult.nextPos
 
-  // Skip block label after condition
-  let thenLabelToken = tokenAt(tokens, pos: pos)
-  if thenLabelToken.kind == TokenKind.stringLiteral 'hasThenLabel'
-    pos = pos + 1
-  end 'hasThenLabel'
-  pos = skipNewlines(tokens, startPos: pos)
+	// Skip block label after condition
+	let thenLabelToken = tokenAt(tokens, pos: pos)
+	if thenLabelToken.kind == TokenKind.stringLiteral 'hasThenLabel'
+		pos = pos + 1
+	end 'hasThenLabel'
+	pos = skipNewlines(tokens, startPos: pos)
 
-  // Create blocks for the branches
-  var thenBlock = newBlock(func, label: b"then")
-  var elseBlock = newBlock(func, label: b"else")
-  var mergeBlock = newBlock(func, label: b"merge")
+	// Create blocks for the branches
+	var thenBlock = newBlock(func, label: b"then")
+	var elseBlock = newBlock(func, label: b"else")
+	var mergeBlock = newBlock(func, label: b"merge")
 
-  // Finalize the condition block with a conditional branch
-  finalizeBlock(block, terminator: MlirOp.maxhl(MaxHLOp.condBr(condResult.valueId, thenBlock.id, elseBlock.id)))
+	// Finalize the condition block with a conditional branch
+	finalizeBlock(block, terminator: MlirOp.maxhl(MaxHLOp.condBr(condResult.valueId, thenBlock.id, elseBlock.id)))
 
-  // Parse then block
-  pushScope(project)
-  var thenReturns = false
-  (pos, let thenExit) = parseStatements(project, func: func, block: thenBlock, tokens: tokens, startPos: pos, filePath: filePath, lastWasReturn: thenReturns)
-  popScope(project)
+	// Parse then block
+	pushScope(project)
+	var thenReturns = false
+	(pos, let thenExit) = parseStatements(project, func: func, block: thenBlock, tokens: tokens, startPos: pos, filePath: filePath, lastWasReturn: thenReturns)
+	popScope(project)
 
-  // Branch to merge if then block doesn't already have a terminator
-  if not thenExit.hasTerminator 'thenNeedsMerge'
-    finalizeBlock(thenExit, terminator: MlirOp.maxhl(MaxHLOp.br(mergeBlock.id)))
-  end 'thenNeedsMerge'
+	// Branch to merge if then block doesn't already have a terminator
+	if not thenExit.hasTerminator 'thenNeedsMerge'
+		finalizeBlock(thenExit, terminator: MlirOp.maxhl(MaxHLOp.br(mergeBlock.id)))
+	end 'thenNeedsMerge'
 
-  // Skip 'end' and label
-  pos = pos + 1  // skip 'end'
-  let afterThenEnd = tokenAt(tokens, pos: pos)
-  if afterThenEnd.kind == TokenKind.stringLiteral 'hasThenEndLabel'
-    pos = pos + 1
-  end 'hasThenEndLabel'
-  pos = skipNewlines(tokens, startPos: pos)
+	// Skip 'end' and label
+	pos = pos + 1  // skip 'end'
+	let afterThenEnd = tokenAt(tokens, pos: pos)
+	if afterThenEnd.kind == TokenKind.stringLiteral 'hasThenEndLabel'
+		pos = pos + 1
+	end 'hasThenEndLabel'
+	pos = skipNewlines(tokens, startPos: pos)
 
-  // Check for else
-  let maybeElse = tokenAt(tokens, pos: pos)
-  var hasElse = false
+	// Check for else
+	let maybeElse = tokenAt(tokens, pos: pos)
+	var hasElse = false
 
-  if maybeElse.kind == TokenKind.else 'isElse'
-    hasElse = true
-    pos = pos + 1  // skip 'else'
+	if maybeElse.kind == TokenKind.else 'isElse'
+		hasElse = true
+		pos = pos + 1  // skip 'else'
 
-    // Check for 'else if' chain
-    let maybeIf = tokenAt(tokens, pos: pos)
-    if maybeIf.kind == TokenKind.if 'isElseIf'
-      // Recurse into parseIfStatement for the chained if, starting from elseBlock
-      var elseIfExit = elseBlock
-      (pos, elseIfExit) = parseIfStatement(project, func: func, block: elseBlock, tokens: tokens, startPos: pos, filePath: filePath)
-      // After the recursive if, branch to merge if not terminated
-      if not elseIfExit.hasTerminator 'elseIfNeedsMerge'
-        finalizeBlock(elseIfExit, terminator: MlirOp.maxhl(MaxHLOp.br(mergeBlock.id)))
-      end 'elseIfNeedsMerge'
-    end 'isElseIf' else 'plainElse'
-      // Skip else block label
-      let elseLabelToken = tokenAt(tokens, pos: pos)
-      if elseLabelToken.kind == TokenKind.stringLiteral 'hasElseLabel'
-        pos = pos + 1
-      end 'hasElseLabel'
-      pos = skipNewlines(tokens, startPos: pos)
+		// Check for 'else if' chain
+		let maybeIf = tokenAt(tokens, pos: pos)
+		if maybeIf.kind == TokenKind.if 'isElseIf'
+			// Recurse into parseIfStatement for the chained if, starting from elseBlock
+			var elseIfExit = elseBlock
+			(pos, elseIfExit) = parseIfStatement(project, func: func, block: elseBlock, tokens: tokens, startPos: pos, filePath: filePath)
+			// After the recursive if, branch to merge if not terminated
+			if not elseIfExit.hasTerminator 'elseIfNeedsMerge'
+				finalizeBlock(elseIfExit, terminator: MlirOp.maxhl(MaxHLOp.br(mergeBlock.id)))
+			end 'elseIfNeedsMerge'
+		end 'isElseIf' else 'plainElse'
+			// Skip else block label
+			let elseLabelToken = tokenAt(tokens, pos: pos)
+			if elseLabelToken.kind == TokenKind.stringLiteral 'hasElseLabel'
+				pos = pos + 1
+			end 'hasElseLabel'
+			pos = skipNewlines(tokens, startPos: pos)
 
-      // Parse else block
-      pushScope(project)
-      var elseReturns = false
-      var elseExit = elseBlock
-      (pos, elseExit) = parseStatements(project, func: func, block: elseBlock, tokens: tokens, startPos: pos, filePath: filePath, lastWasReturn: elseReturns)
-      popScope(project)
+			// Parse else block
+			pushScope(project)
+			var elseReturns = false
+			var elseExit = elseBlock
+			(pos, elseExit) = parseStatements(project, func: func, block: elseBlock, tokens: tokens, startPos: pos, filePath: filePath, lastWasReturn: elseReturns)
+			popScope(project)
 
-      if not elseExit.hasTerminator 'elseNeedsMerge'
-        finalizeBlock(elseExit, terminator: MlirOp.maxhl(MaxHLOp.br(mergeBlock.id)))
-      end 'elseNeedsMerge'
+			if not elseExit.hasTerminator 'elseNeedsMerge'
+				finalizeBlock(elseExit, terminator: MlirOp.maxhl(MaxHLOp.br(mergeBlock.id)))
+			end 'elseNeedsMerge'
 
-      // Skip 'end' and label
-      pos = pos + 1  // skip 'end'
-      let afterElseEnd = tokenAt(tokens, pos: pos)
-      if afterElseEnd.kind == TokenKind.stringLiteral 'hasElseEndLabel'
-        pos = pos + 1
-      end 'hasElseEndLabel'
-    end 'plainElse'
-  end 'isElse'
+			// Skip 'end' and label
+			pos = pos + 1  // skip 'end'
+			let afterElseEnd = tokenAt(tokens, pos: pos)
+			if afterElseEnd.kind == TokenKind.stringLiteral 'hasElseEndLabel'
+				pos = pos + 1
+			end 'hasElseEndLabel'
+		end 'plainElse'
+	end 'isElse'
 
-  if not hasElse 'noElseBlock'
-    // No else: else block branches straight to merge
-    finalizeBlock(elseBlock, terminator: MlirOp.maxhl(MaxHLOp.br(mergeBlock.id)))
-  end 'noElseBlock'
+	if not hasElse 'noElseBlock'
+		// No else: else block branches straight to merge
+		finalizeBlock(elseBlock, terminator: MlirOp.maxhl(MaxHLOp.br(mergeBlock.id)))
+	end 'noElseBlock'
 
-  return(pos, mergeBlock)
+	return(pos, mergeBlock)
 end 'parseIfStatement'
 
 // Parse: while <condition> 'label' ... end 'label'
 // Returns the next token position and the exit block to continue emitting into.
 function parseWhileStatement(project Project, func MlirFunction, block MlirBlock, tokens TokenArray, startPos TokenIndex, filePath FilePath) returns(TokenIndex, MlirBlock)
-  var pos = startPos + 1  // skip 'while'
+	var pos = startPos + 1  // skip 'while'
 
-  // Create blocks for loop structure
-  var condBlock = newBlock(func, label: b"cond")
-  var bodyBlock = newBlock(func, label: b"body")
-  var exitBlock = newBlock(func, label: b"exit")
+	// Create blocks for loop structure
+	var condBlock = newBlock(func, label: b"cond")
+	var bodyBlock = newBlock(func, label: b"body")
+	var exitBlock = newBlock(func, label: b"exit")
 
-  // Branch from entry block to cond block
-  finalizeBlock(block, terminator: MlirOp.maxhl(MaxHLOp.br(condBlock.id)))
+	// Branch from entry block to cond block
+	finalizeBlock(block, terminator: MlirOp.maxhl(MaxHLOp.br(condBlock.id)))
 
-  // Parse condition in condBlock
-  let condResult = parseExpression(project, block: condBlock, tokens: tokens, startPos: pos, filePath: filePath)
-  pos = condResult.nextPos
+	// Parse condition in condBlock
+	let condResult = parseExpression(project, block: condBlock, tokens: tokens, startPos: pos, filePath: filePath)
+	pos = condResult.nextPos
 
-  // Skip block label after condition
-  let whileLabelToken = tokenAt(tokens, pos: pos)
-  if whileLabelToken.kind == TokenKind.stringLiteral 'hasWhileLabel'
-    pos = pos + 1
-  end 'hasWhileLabel'
-  pos = skipNewlines(tokens, startPos: pos)
+	// Skip block label after condition
+	let whileLabelToken = tokenAt(tokens, pos: pos)
+	if whileLabelToken.kind == TokenKind.stringLiteral 'hasWhileLabel'
+		pos = pos + 1
+	end 'hasWhileLabel'
+	pos = skipNewlines(tokens, startPos: pos)
 
-  // condBlock terminator: if true -> bodyBlock, if false -> exitBlock
-  finalizeBlock(condBlock, terminator: MlirOp.maxhl(MaxHLOp.condBr(condResult.valueId, bodyBlock.id, exitBlock.id)))
+	// condBlock terminator: if true -> bodyBlock, if false -> exitBlock
+	finalizeBlock(condBlock, terminator: MlirOp.maxhl(MaxHLOp.condBr(condResult.valueId, bodyBlock.id, exitBlock.id)))
 
-  // Parse body in bodyBlock
-  pushScope(project)
-  var bodyReturns = false
-  var bodyExit = bodyBlock
-  (pos, bodyExit) = parseStatements(project, func: func, block: bodyBlock, tokens: tokens, startPos: pos, filePath: filePath, lastWasReturn: bodyReturns)
-  popScope(project)
+	// Parse body in bodyBlock
+	pushScope(project)
+	var bodyReturns = false
+	var bodyExit = bodyBlock
+	(pos, bodyExit) = parseStatements(project, func: func, block: bodyBlock, tokens: tokens, startPos: pos, filePath: filePath, lastWasReturn: bodyReturns)
+	popScope(project)
 
-  // Loop back to cond block if body doesn't terminate
-  if not bodyExit.hasTerminator 'needsLoop'
-    finalizeBlock(bodyExit, terminator: MlirOp.maxhl(MaxHLOp.br(condBlock.id)))
-  end 'needsLoop'
+	// Loop back to cond block if body doesn't terminate
+	if not bodyExit.hasTerminator 'needsLoop'
+		finalizeBlock(bodyExit, terminator: MlirOp.maxhl(MaxHLOp.br(condBlock.id)))
+	end 'needsLoop'
 
-  // Skip 'end' and optional label string
-  pos = pos + 1  // skip 'end'
-  let afterEnd = tokenAt(tokens, pos: pos)
-  if afterEnd.kind == TokenKind.stringLiteral 'hasEndLabel'
-    pos = pos + 1
-  end 'hasEndLabel'
+	// Skip 'end' and optional label string
+	pos = pos + 1  // skip 'end'
+	let afterEnd = tokenAt(tokens, pos: pos)
+	if afterEnd.kind == TokenKind.stringLiteral 'hasEndLabel'
+		pos = pos + 1
+	end 'hasEndLabel'
 
-  return(pos, exitBlock)
+	return(pos, exitBlock)
 end 'parseWhileStatement'
 
 // Parse: identifier = expression (variable reassignment)
 function parseVarAssignment(project Project, block MlirBlock, tokens TokenArray, startPos TokenIndex, filePath FilePath) returns TokenIndex
-  var pos = startPos
-  let nameToken = tokenAt(tokens, pos: pos)
-  pos = pos + 1  // skip name
-  pos = pos + 1  // skip '='
+	var pos = startPos
+	let nameToken = tokenAt(tokens, pos: pos)
+	pos = pos + 1  // skip name
+	pos = pos + 1  // skip '='
 
-  let exprResult = parseExpression(project, block: block, tokens: tokens, startPos: pos, filePath: filePath)
-  pos = exprResult.nextPos
+	let exprResult = parseExpression(project, block: block, tokens: tokens, startPos: pos, filePath: filePath)
+	pos = exprResult.nextPos
 
-  let slot = lookupVariable(project, name: nameToken.value, token: nameToken, filePath: filePath)
-  emitOp(block, op: MlirOp.maxhl(MaxHLOp.varStore(slot, exprResult.valueId)))
+	let slot = lookupVariable(project, name: nameToken.value, token: nameToken, filePath: filePath)
+	emitOp(block, op: MlirOp.maxhl(MaxHLOp.varStore(slot, exprResult.valueId)))
 
-  return pos
+	return pos
 end 'parseVarAssignment'
 
 function appendIntBytes(dst ByteArray, n ParsedInt)
-  if n == 0 'zero'
-    dst.push(48)
-    return
-  end 'zero'
+	if n == 0 'zero'
+		dst.push(48)
+		return
+	end 'zero'
 
-  // Compute digits in reverse, then append in order
-  var digits = ByteArray{}
-  var remaining = n
-  while remaining > 0 'digitLoop'
-    digits.push(48 + (remaining mod 10))
-    remaining = remaining / 10
-  end 'digitLoop'
+	// Compute digits in reverse, then append in order
+	var digits = ByteArray{}
+	var remaining = n
+	while remaining > 0 'digitLoop'
+		digits.push(48 + (remaining mod 10))
+		remaining = remaining / 10
+	end 'digitLoop'
 
-  var i = digits.count() - 1
-  while i >= 0 'reverse'
-    dst.push(try digits.get(i) otherwise 48)
-    i = i - 1
-  end 'reverse'
+	var i = digits.count() - 1
+	while i >= 0 'reverse'
+		dst.push(try digits.get(i) otherwise 48)
+		i = i - 1
+	end 'reverse'
 end 'appendIntBytes'
 
 function parseVarDecl(project Project, block MlirBlock, tokens TokenArray, startPos TokenIndex, filePath FilePath) returns TokenIndex
-  var pos = startPos + 1  // skip 'var'/'let'
+	var pos = startPos + 1  // skip 'var'/'let'
 
-  let nameToken = tokenAt(tokens, pos: pos)
-  pos = pos + 1  // skip name
+	let nameToken = tokenAt(tokens, pos: pos)
+	pos = pos + 1  // skip name
 
-  let equalsToken = tokenAt(tokens, pos: pos)
-  if equalsToken.kind != TokenKind.equals 'notEquals'
-    let tokStr = tokenValueToString(equalsToken.value)
-    reportCompileError(project, code: ErrorCode.parserExpectedToken, message: "Expected '=' but got '{tokStr}'", line: equalsToken.line, column: equalsToken.column, filePath: filePath)
-    // Define the variable as a placeholder to prevent cascading "undefined variable" errors
-    let _ = defineVariable(project, name: nameToken.value, isFloat: false, isRefType: false)
-    return synchronizeToNextStatement(tokens, startPos: pos)
-  end 'notEquals'
+	let equalsToken = tokenAt(tokens, pos: pos)
+	if equalsToken.kind != TokenKind.equals 'notEquals'
+		let tokStr = tokenValueToString(equalsToken.value)
+		reportCompileError(project, code: ErrorCode.parserExpectedToken, message: "Expected '=' but got '{tokStr}'", line: equalsToken.line, column: equalsToken.column, filePath: filePath)
+		// Define the variable as a placeholder to prevent cascading "undefined variable" errors
+		let _ = defineVariable(project, name: nameToken.value, isFloat: false, isRefType: false)
+		return synchronizeToNextStatement(tokens, startPos: pos)
+	end 'notEquals'
 
-  pos = pos + 1  // skip '='
-  let exprResult = parseExpression(project, block: block, tokens: tokens, startPos: pos, filePath: filePath)
-  pos = exprResult.nextPos
+	pos = pos + 1  // skip '='
+	let exprResult = parseExpression(project, block: block, tokens: tokens, startPos: pos, filePath: filePath)
+	pos = exprResult.nextPos
 
-  let slot = defineVariable(project, name: nameToken.value, isFloat: exprResult.isFloat, isRefType: exprResult.isRefType)
-  emitOp(block, op: MlirOp.maxhl(MaxHLOp.varDecl(slot, exprResult.valueId)))
+	let slot = defineVariable(project, name: nameToken.value, isFloat: exprResult.isFloat, isRefType: exprResult.isRefType)
+	emitOp(block, op: MlirOp.maxhl(MaxHLOp.varDecl(slot, exprResult.valueId)))
 
-  return pos
+	return pos
 end 'parseVarDecl'
 
 function parsePrintStatement(project Project, block MlirBlock, tokens TokenArray, startPos TokenIndex, filePath FilePath) returns TokenIndex
-  var pos = startPos + 1  // skip 'print'
-  pos = pos + 1  // skip '('
-  let strToken = tokenAt(tokens, pos: pos)
-  pos = pos + 1  // skip string
-  pos = pos + 1  // skip ')'
+	var pos = startPos + 1  // skip 'print'
+	pos = pos + 1  // skip '('
+	let strToken = tokenAt(tokens, pos: pos)
+	pos = pos + 1  // skip string
+	pos = pos + 1  // skip ')'
 
-  // Parse the double-quoted string for interpolation segments
-  parseStringInterpolation(project, block: block, str: strToken.value, filePath: filePath)
+	// Parse the double-quoted string for interpolation segments
+	parseStringInterpolation(project, block: block, str: strToken.value, filePath: filePath)
 
-  return pos
+	return pos
 end 'parsePrintStatement'
 
 // --- String Interpolation ---
 
 function parseStringInterpolation(project Project, block MlirBlock, str ByteArray, filePath FilePath)
-  var buf = ByteArray{}
-  var i = 0
-  let len = str.count()
+	var buf = ByteArray{}
+	var i = 0
+	let len = str.count()
 
-  while i < len 'scan'
-    let ch = try str.get(i) otherwise 0
+	while i < len 'scan'
+		let ch = try str.get(i) otherwise 0
 
-    // Escape sequences
-    if ch == '\\' 'backslash'
-      if i + 1 < len 'hasNext'
-        let next = try str.get(i + 1) otherwise 0
-        if next == 'n' 'escN'
-          buf.push(10)
-          i = i + 2
-          continue
-        end 'escN'
-        if next == 't' 'escT'
-          buf.push(9)
-          i = i + 2
-          continue
-        end 'escT'
-        if next == '\\' 'escBS'
-          buf.push(92)
-          i = i + 2
-          continue
-        end 'escBS'
-        if next == '"' 'escDQ'
-          buf.push(34)
-          i = i + 2
-          continue
-        end 'escDQ'
-      end 'hasNext'
-      buf.push(ch)
-      i = i + 1
-      continue
-    end 'backslash'
+		// Escape sequences
+		if ch == '\\' 'backslash'
+			if i + 1 < len 'hasNext'
+				let next = try str.get(i + 1) otherwise 0
+				if next == 'n' 'escN'
+					buf.push(10)
+					i = i + 2
+					continue
+				end 'escN'
+				if next == 't' 'escT'
+					buf.push(9)
+					i = i + 2
+					continue
+				end 'escT'
+				if next == '\\' 'escBS'
+					buf.push(92)
+					i = i + 2
+					continue
+				end 'escBS'
+				if next == '"' 'escDQ'
+					buf.push(34)
+					i = i + 2
+					continue
+				end 'escDQ'
+			end 'hasNext'
+			buf.push(ch)
+			i = i + 1
+			continue
+		end 'backslash'
 
-    // Interpolation: { ... }
-    if ch == '{' 'openBrace'
-      // Flush literal buffer
-      if not buf.isEmpty() 'flushBuf'
-        emitOp(block, op: MlirOp.maxhl(MaxHLOp.printLiteral(buf)))
-        buf = ByteArray{}
-      end 'flushBuf'
+		// Interpolation: { ... }
+		if ch == '{' 'openBrace'
+			// Flush literal buffer
+			if not buf.isEmpty() 'flushBuf'
+				emitOp(block, op: MlirOp.maxhl(MaxHLOp.printLiteral(buf)))
+				buf = ByteArray{}
+			end 'flushBuf'
 
-      // Extract expression between braces
-      i = i + 1
-      let exprStart = i
-      var braceDepth = 1
+			// Extract expression between braces
+			i = i + 1
+			let exprStart = i
+			var braceDepth = 1
 
-      while i < len and braceDepth > 0 'findClose'
-        let bc = try str.get(i) otherwise 0
-        if bc == '{' 'nested'
-          braceDepth = braceDepth + 1
-        end 'nested'
-        if bc == '}' 'close'
-          braceDepth = braceDepth - 1
-        end 'close'
-        if braceDepth > 0 'notDone'
-          i = i + 1
-        end 'notDone'
-      end 'findClose'
+			while i < len and braceDepth > 0 'findClose'
+				let bc = try str.get(i) otherwise 0
+				if bc == '{' 'nested'
+					braceDepth = braceDepth + 1
+				end 'nested'
+				if bc == '}' 'close'
+					braceDepth = braceDepth - 1
+				end 'close'
+				if braceDepth > 0 'notDone'
+					i = i + 1
+				end 'notDone'
+			end 'findClose'
 
-      // Tokenize and parse the expression between braces
-      let exprBytes = sliceBytes(str, startPos: exprStart, endPos: i)
-      let exprTokens = tokenize(exprBytes)
-      let exprResult = parseExpression(project, block: block, tokens: exprTokens, startPos: 0, filePath: filePath)
-      emitOp(block, op: MlirOp.maxhl(MaxHLOp.printInt(exprResult.valueId)))
+			// Tokenize and parse the expression between braces
+			let exprBytes = sliceBytes(str, startPos: exprStart, endPos: i)
+			let exprTokens = tokenize(exprBytes)
+			let exprResult = parseExpression(project, block: block, tokens: exprTokens, startPos: 0, filePath: filePath)
+			emitOp(block, op: MlirOp.maxhl(MaxHLOp.printInt(exprResult.valueId)))
 
-      i = i + 1  // skip closing brace
-      continue
-    end 'openBrace'
+			i = i + 1  // skip closing brace
+			continue
+		end 'openBrace'
 
-    buf.push(ch)
-    i = i + 1
-  end 'scan'
+		buf.push(ch)
+		i = i + 1
+	end 'scan'
 
-  // Flush remaining literal buffer
-  if not buf.isEmpty() 'flushRemaining'
-    emitOp(block, op: MlirOp.maxhl(MaxHLOp.printLiteral(buf)))
-  end 'flushRemaining'
+	// Flush remaining literal buffer
+	if not buf.isEmpty() 'flushRemaining'
+		emitOp(block, op: MlirOp.maxhl(MaxHLOp.printLiteral(buf)))
+	end 'flushRemaining'
 end 'parseStringInterpolation'
 
 // --- Expression Parsing ---
 
 // Result of parsing an expression: the value ID and next token position
 export type ExprResult
-  export var valueId ValueId
-  export var nextPos TokenIndex
-  export var isFloat bool
-  export var isRefType bool
-  // For compile-time string constant folding
-  export var isStringConst bool
-  export var stringConstValue ByteArray
+	export var valueId ValueId
+	export var nextPos TokenIndex
+	export var isFloat bool
+	export var isRefType bool
+	// For compile-time string constant folding
+	export var isStringConst bool
+	export var stringConstValue ByteArray
 end 'ExprResult'
 
 typealias BindingPower = int(0 to 14)
 
 // Throws for non-operator tokens; the call site uses `otherwise 0` to stop the Pratt loop.
 function infixBindingPower(kind TokenKind) returns BindingPower throws ParserError
-  return match kind 'bp'
-    or gives 2
-    xor gives 4
-    and gives 6
-    shl gives 8
-    shr gives 8
-    equalsEquals gives 10
-    bangEquals gives 10
-    is gives 10
-    lessThan gives 10
-    lessEquals gives 10
-    greaterThan gives 10
-    greaterEquals gives 10
-    plus gives 12
-    minus gives 12
-    star gives 14
-    slash gives 14
-    mod gives 14
-    default throws ParserError.unhandledToken
-  end 'bp'
+	return match kind 'bp'
+		or gives 2
+		xor gives 4
+		and gives 6
+		shl gives 8
+		shr gives 8
+		equalsEquals gives 10
+		bangEquals gives 10
+		is gives 10
+		lessThan gives 10
+		lessEquals gives 10
+		greaterThan gives 10
+		greaterEquals gives 10
+		plus gives 12
+		minus gives 12
+		star gives 14
+		slash gives 14
+		mod gives 14
+		default throws ParserError.unhandledToken
+	end 'bp'
 end 'infixBindingPower'
 
 function emitBinaryOp(block MlirBlock, kind TokenKind, resultId ValueId, leftId ValueId, rightId ValueId, leftIsFloat bool, rightIsFloat bool) throws ParserError
-  let isFloat = leftIsFloat or rightIsFloat
-  let hlOp = match kind 'emit'
-    or gives MaxHLOp.binop(resultId, leftId, rightId, BinOpKind.bitOr)
-    xor gives MaxHLOp.binop(resultId, leftId, rightId, BinOpKind.bitXor)
-    and gives MaxHLOp.binop(resultId, leftId, rightId, BinOpKind.bitAnd)
-    shl gives MaxHLOp.binop(resultId, leftId, rightId, BinOpKind.shl)
-    shr gives MaxHLOp.binop(resultId, leftId, rightId, BinOpKind.shr)
-    equalsEquals gives MaxHLOp.cmp(resultId, leftId, rightId, CmpPredicate.eq, isFloat)
-    bangEquals gives MaxHLOp.cmp(resultId, leftId, rightId, CmpPredicate.ne, isFloat)
-    lessThan gives MaxHLOp.cmp(resultId, leftId, rightId, CmpPredicate.lt, isFloat)
-    lessEquals gives MaxHLOp.cmp(resultId, leftId, rightId, CmpPredicate.le, isFloat)
-    greaterThan gives MaxHLOp.cmp(resultId, leftId, rightId, CmpPredicate.gt, isFloat)
-    greaterEquals gives MaxHLOp.cmp(resultId, leftId, rightId, CmpPredicate.ge, isFloat)
-    plus gives MaxHLOp.binop(resultId, leftId, rightId, BinOpKind.add)
-    minus gives MaxHLOp.binop(resultId, leftId, rightId, BinOpKind.sub)
-    star gives MaxHLOp.binop(resultId, leftId, rightId, BinOpKind.mul)
-    slash gives MaxHLOp.binop(resultId, leftId, rightId, BinOpKind.div)
-    mod gives MaxHLOp.binop(resultId, leftId, rightId, BinOpKind.mod)
-    default throws ParserError.unhandledToken
-  end 'emit'
-  emitOp(block, op: MlirOp.maxhl(hlOp))
+	let isFloat = leftIsFloat or rightIsFloat
+	let hlOp = match kind 'emit'
+		or gives MaxHLOp.binop(resultId, leftId, rightId, BinOpKind.bitOr)
+		xor gives MaxHLOp.binop(resultId, leftId, rightId, BinOpKind.bitXor)
+		and gives MaxHLOp.binop(resultId, leftId, rightId, BinOpKind.bitAnd)
+		shl gives MaxHLOp.binop(resultId, leftId, rightId, BinOpKind.shl)
+		shr gives MaxHLOp.binop(resultId, leftId, rightId, BinOpKind.shr)
+		equalsEquals gives MaxHLOp.cmp(resultId, leftId, rightId, CmpPredicate.eq, isFloat)
+		bangEquals gives MaxHLOp.cmp(resultId, leftId, rightId, CmpPredicate.ne, isFloat)
+		lessThan gives MaxHLOp.cmp(resultId, leftId, rightId, CmpPredicate.lt, isFloat)
+		lessEquals gives MaxHLOp.cmp(resultId, leftId, rightId, CmpPredicate.le, isFloat)
+		greaterThan gives MaxHLOp.cmp(resultId, leftId, rightId, CmpPredicate.gt, isFloat)
+		greaterEquals gives MaxHLOp.cmp(resultId, leftId, rightId, CmpPredicate.ge, isFloat)
+		plus gives MaxHLOp.binop(resultId, leftId, rightId, BinOpKind.add)
+		minus gives MaxHLOp.binop(resultId, leftId, rightId, BinOpKind.sub)
+		star gives MaxHLOp.binop(resultId, leftId, rightId, BinOpKind.mul)
+		slash gives MaxHLOp.binop(resultId, leftId, rightId, BinOpKind.div)
+		mod gives MaxHLOp.binop(resultId, leftId, rightId, BinOpKind.mod)
+		default throws ParserError.unhandledToken
+	end 'emit'
+	emitOp(block, op: MlirOp.maxhl(hlOp))
 end 'emitBinaryOp'
 
 // Pratt expression parser: single loop handles all binary precedence levels.
 function parseExpression(project Project, block MlirBlock, tokens TokenArray, startPos TokenIndex, filePath FilePath) returns ExprResult
-  return parseExpressionBP(project, block: block, tokens: tokens, startPos: startPos, filePath: filePath, minBP: 0)
+	return parseExpressionBP(project, block: block, tokens: tokens, startPos: startPos, filePath: filePath, minBP: 0)
 end 'parseExpression'
 
 function parseExpressionBP(project Project, block MlirBlock, tokens TokenArray, startPos TokenIndex, filePath FilePath, minBP BindingPower) returns ExprResult
-  var left = parseUnary(project, block: block, tokens: tokens, startPos: startPos, filePath: filePath)
-  var pos = left.nextPos
-  var leftId = left.valueId
-  var leftIsFloat = left.isFloat
-  var leftIsRefType = left.isRefType
-  var leftIsStringConst = left.isStringConst
-  var leftStringConstValue = left.stringConstValue
+	var left = parseUnary(project, block: block, tokens: tokens, startPos: startPos, filePath: filePath)
+	var pos = left.nextPos
+	var leftId = left.valueId
+	var leftIsFloat = left.isFloat
+	var leftIsRefType = left.isRefType
+	var leftIsStringConst = left.isStringConst
+	var leftStringConstValue = left.stringConstValue
 
-  while pos < tokens.count() 'prattLoop'
-    let opToken = tokenAt(tokens, pos: pos)
-    let bp = try infixBindingPower(opToken.kind) otherwise 0
-    if bp == 0 'notOp'
-      break
-    end 'notOp'
-    if bp <= minBP 'tooLow'
-      break
-    end 'tooLow'
+	while pos < tokens.count() 'prattLoop'
+		let opToken = tokenAt(tokens, pos: pos)
+		let bp = try infixBindingPower(opToken.kind) otherwise 0
+		if bp == 0 'notOp'
+			break
+		end 'notOp'
+		if bp <= minBP 'tooLow'
+			break
+		end 'tooLow'
 
-    pos = pos + 1
+		pos = pos + 1
 
-    // Compile-time string constant folding for ==
-    if opToken.kind == TokenKind.equalsEquals 'checkStrFold'
-      if leftIsStringConst 'leftIsStr'
-        let right = parsePrimary(project, block: block, tokens: tokens, startPos: pos, filePath: filePath)
-        pos = right.nextPos
-        var foldedLeft = 1
-        if leftStringConstValue != right.stringConstValue 'strNeq'
-          foldedLeft = 0
-        end 'strNeq'
-        let leftLitId = nextValueId(project)
-        emitOp(block, op: MlirOp.maxhl(MaxHLOp.literal(leftLitId, foldedLeft, false)))
-        let rightLitId = nextValueId(project)
-        emitOp(block, op: MlirOp.maxhl(MaxHLOp.literal(rightLitId, 1, false)))
-        let resultId = nextValueId(project)
-        emitOp(block, op: MlirOp.maxhl(MaxHLOp.cmp(resultId, leftLitId, rightLitId, CmpPredicate.eq, false)))
-        leftId = resultId
-        leftIsFloat = false
-        leftIsRefType = false
-        leftIsStringConst = false
-        leftStringConstValue = ByteArray{}
-        continue
-      end 'leftIsStr'
-    end 'checkStrFold'
+		// Compile-time string constant folding for ==
+		if opToken.kind == TokenKind.equalsEquals 'checkStrFold'
+			if leftIsStringConst 'leftIsStr'
+				let right = parsePrimary(project, block: block, tokens: tokens, startPos: pos, filePath: filePath)
+				pos = right.nextPos
+				var foldedLeft = 1
+				if leftStringConstValue != right.stringConstValue 'strNeq'
+					foldedLeft = 0
+				end 'strNeq'
+				let leftLitId = nextValueId(project)
+				emitOp(block, op: MlirOp.maxhl(MaxHLOp.literal(leftLitId, foldedLeft, false)))
+				let rightLitId = nextValueId(project)
+				emitOp(block, op: MlirOp.maxhl(MaxHLOp.literal(rightLitId, 1, false)))
+				let resultId = nextValueId(project)
+				emitOp(block, op: MlirOp.maxhl(MaxHLOp.cmp(resultId, leftLitId, rightLitId, CmpPredicate.eq, false)))
+				leftId = resultId
+				leftIsFloat = false
+				leftIsRefType = false
+				leftIsStringConst = false
+				leftStringConstValue = ByteArray{}
+				continue
+			end 'leftIsStr'
+		end 'checkStrFold'
 
-    // Reference identity: is / is not
-    if opToken.kind == TokenKind.is 'isRefEq'
-      var negate = false
-      let maybeNot = tokenAt(tokens, pos: pos)
-      if maybeNot.kind == TokenKind.not 'isNot'
-        negate = true
-        pos = pos + 1
-      end 'isNot'
-      let right = parseExpressionBP(project, block: block, tokens: tokens, startPos: pos, filePath: filePath, minBP: bp)
-      pos = right.nextPos
-      if not leftIsRefType or not right.isRefType 'notRef'
-        reportCompileError(project, code: ErrorCode.semanticIsRequiresRefType, message: "'is' requires reference types (structs), not primitive values", line: opToken.line, column: opToken.column, filePath: filePath)
-      end 'notRef'
-      let resultId = nextValueId(project)
-      emitOp(block, op: MlirOp.maxhl(MaxHLOp.refEq(resultId, leftId, right.valueId, negate)))
-      leftId = resultId
-      leftIsFloat = false
-      leftIsRefType = false
-      leftIsStringConst = false
-      leftStringConstValue = ByteArray{}
-      continue
-    end 'isRefEq'
+		// Reference identity: is / is not
+		if opToken.kind == TokenKind.is 'isRefEq'
+			var negate = false
+			let maybeNot = tokenAt(tokens, pos: pos)
+			if maybeNot.kind == TokenKind.not 'isNot'
+				negate = true
+				pos = pos + 1
+			end 'isNot'
+			let right = parseExpressionBP(project, block: block, tokens: tokens, startPos: pos, filePath: filePath, minBP: bp)
+			pos = right.nextPos
+			if not leftIsRefType or not right.isRefType 'notRef'
+				reportCompileError(project, code: ErrorCode.semanticIsRequiresRefType, message: "'is' requires reference types (structs), not primitive values", line: opToken.line, column: opToken.column, filePath: filePath)
+			end 'notRef'
+			let resultId = nextValueId(project)
+			emitOp(block, op: MlirOp.maxhl(MaxHLOp.refEq(resultId, leftId, right.valueId, negate)))
+			leftId = resultId
+			leftIsFloat = false
+			leftIsRefType = false
+			leftIsStringConst = false
+			leftStringConstValue = ByteArray{}
+			continue
+		end 'isRefEq'
 
-    // Parse right operand with higher minimum binding power for left-associativity
-    let right = parseExpressionBP(project, block: block, tokens: tokens, startPos: pos, filePath: filePath, minBP: bp)
-    pos = right.nextPos
+		// Parse right operand with higher minimum binding power for left-associativity
+		let right = parseExpressionBP(project, block: block, tokens: tokens, startPos: pos, filePath: filePath, minBP: bp)
+		pos = right.nextPos
 
-    // Dispatch == and != to .equals() call for reference types (content comparison)
-    if(opToken.kind == TokenKind.equalsEquals or opToken.kind == TokenKind.bangEquals) and leftIsRefType and right.isRefType 'refEquals'
-      let equalsResultId = nextValueId(project)
-      var equalsArgIds = ValueIdArray{}
-      equalsArgIds.push(leftId)
-      equalsArgIds.push(right.valueId)
-      // TODO: use actual type name once type tracking is available (e.g., "ByteArray.equals")
-      emitOp(block, op: MlirOp.maxhl(MaxHLOp.call(equalsResultId, b"equals", equalsArgIds)))
-      if opToken.kind == TokenKind.bangEquals 'neq'
-        // != is !equals(): invert with bitNot
-        let notResultId = nextValueId(project)
-        emitOp(block, op: MlirOp.maxhl(MaxHLOp.unop(notResultId, equalsResultId, UnaryOpKind.bitNot)))
-        leftId = notResultId
-      end 'neq' else 'eq'
-        leftId = equalsResultId
-      end 'eq'
-      leftIsFloat = false
-      leftIsRefType = false
-      leftIsStringConst = false
-      leftStringConstValue = ByteArray{}
-      continue
-    end 'refEquals'
+		// Dispatch == and != to .equals() call for reference types (content comparison)
+		if(opToken.kind == TokenKind.equalsEquals or opToken.kind == TokenKind.bangEquals) and leftIsRefType and right.isRefType 'refEquals'
+			let equalsResultId = nextValueId(project)
+			var equalsArgIds = ValueIdArray{}
+			equalsArgIds.push(leftId)
+			equalsArgIds.push(right.valueId)
+			// TODO: use actual type name once type tracking is available (e.g., "ByteArray.equals")
+			emitOp(block, op: MlirOp.maxhl(MaxHLOp.call(equalsResultId, b"equals", equalsArgIds)))
+			if opToken.kind == TokenKind.bangEquals 'neq'
+				// != is !equals(): invert with bitNot
+				let notResultId = nextValueId(project)
+				emitOp(block, op: MlirOp.maxhl(MaxHLOp.unop(notResultId, equalsResultId, UnaryOpKind.bitNot)))
+				leftId = notResultId
+			end 'neq' else 'eq'
+				leftId = equalsResultId
+			end 'eq'
+			leftIsFloat = false
+			leftIsRefType = false
+			leftIsStringConst = false
+			leftStringConstValue = ByteArray{}
+			continue
+		end 'refEquals'
 
-    let resultId = nextValueId(project)
-    let eitherIsFloat = leftIsFloat or right.isFloat
-    try emitBinaryOp(block, kind: opToken.kind, resultId: resultId, leftId: leftId, rightId: right.valueId, leftIsFloat: leftIsFloat, rightIsFloat: right.isFloat) otherwise ignore
-    leftId = resultId
-    // Comparison ops produce int (bool), division always produces float, arithmetic on floats produces float
-    if opToken.kind == TokenKind.equalsEquals or opToken.kind == TokenKind.bangEquals or opToken.kind == TokenKind.lessThan or opToken.kind == TokenKind.lessEquals or opToken.kind == TokenKind.greaterThan or opToken.kind == TokenKind.greaterEquals 'isCmp'
-      leftIsFloat = false
-    end 'isCmp' else if opToken.kind == TokenKind.slash 'isDiv'
-      leftIsFloat = true
-    end 'isDiv' else 'notCmp'
-      leftIsFloat = eitherIsFloat
-    end 'notCmp'
-    leftIsRefType = false
-    leftIsStringConst = false
-    leftStringConstValue = ByteArray{}
-  end 'prattLoop'
+		let resultId = nextValueId(project)
+		let eitherIsFloat = leftIsFloat or right.isFloat
+		try emitBinaryOp(block, kind: opToken.kind, resultId: resultId, leftId: leftId, rightId: right.valueId, leftIsFloat: leftIsFloat, rightIsFloat: right.isFloat) otherwise ignore
+		leftId = resultId
+		// Comparison ops produce int (bool), division always produces float, arithmetic on floats produces float
+		if opToken.kind == TokenKind.equalsEquals or opToken.kind == TokenKind.bangEquals or opToken.kind == TokenKind.lessThan or opToken.kind == TokenKind.lessEquals or opToken.kind == TokenKind.greaterThan or opToken.kind == TokenKind.greaterEquals 'isCmp'
+			leftIsFloat = false
+		end 'isCmp' else if opToken.kind == TokenKind.slash 'isDiv'
+			leftIsFloat = true
+		end 'isDiv' else 'notCmp'
+			leftIsFloat = eitherIsFloat
+		end 'notCmp'
+		leftIsRefType = false
+		leftIsStringConst = false
+		leftStringConstValue = ByteArray{}
+	end 'prattLoop'
 
-  return ExprResult{valueId: leftId, nextPos: pos, isFloat: leftIsFloat, isRefType: leftIsRefType, isStringConst: leftIsStringConst, stringConstValue: leftStringConstValue}
+	return ExprResult{valueId: leftId, nextPos: pos, isFloat: leftIsFloat, isRefType: leftIsRefType, isStringConst: leftIsStringConst, stringConstValue: leftStringConstValue}
 end 'parseExpressionBP'
 
 // Unary: -expr | not expr | primary
 function parseUnary(project Project, block MlirBlock, tokens TokenArray, startPos TokenIndex, filePath FilePath) returns ExprResult
-  let token = tokenAt(tokens, pos: startPos)
+	let token = tokenAt(tokens, pos: startPos)
 
-  if token.kind == TokenKind.minus 'isNeg'
-    let operand = parseUnary(project, block: block, tokens: tokens, startPos: startPos + 1, filePath: filePath)
-    let resultId = nextValueId(project)
-    emitOp(block, op: MlirOp.maxhl(MaxHLOp.unop(resultId, operand.valueId, UnaryOpKind.neg)))
-    return ExprResult{valueId: resultId, nextPos: operand.nextPos, isFloat: operand.isFloat, isRefType: false, isStringConst: false, stringConstValue: ByteArray{}}
-  end 'isNeg' else if token.kind == TokenKind.not 'isNot'
-    let operand = parseUnary(project, block: block, tokens: tokens, startPos: startPos + 1, filePath: filePath)
-    let resultId = nextValueId(project)
-    emitOp(block, op: MlirOp.maxhl(MaxHLOp.unop(resultId, operand.valueId, UnaryOpKind.bitNot)))
-    return ExprResult{valueId: resultId, nextPos: operand.nextPos, isFloat: false, isRefType: false, isStringConst: false, stringConstValue: ByteArray{}}
-  end 'isNot'
+	if token.kind == TokenKind.minus 'isNeg'
+		let operand = parseUnary(project, block: block, tokens: tokens, startPos: startPos + 1, filePath: filePath)
+		let resultId = nextValueId(project)
+		emitOp(block, op: MlirOp.maxhl(MaxHLOp.unop(resultId, operand.valueId, UnaryOpKind.neg)))
+		return ExprResult{valueId: resultId, nextPos: operand.nextPos, isFloat: operand.isFloat, isRefType: false, isStringConst: false, stringConstValue: ByteArray{}}
+	end 'isNeg' else if token.kind == TokenKind.not 'isNot'
+		let operand = parseUnary(project, block: block, tokens: tokens, startPos: startPos + 1, filePath: filePath)
+		let resultId = nextValueId(project)
+		emitOp(block, op: MlirOp.maxhl(MaxHLOp.unop(resultId, operand.valueId, UnaryOpKind.bitNot)))
+		return ExprResult{valueId: resultId, nextPos: operand.nextPos, isFloat: false, isRefType: false, isStringConst: false, stringConstValue: ByteArray{}}
+	end 'isNot'
 
-  return parsePrimary(project, block: block, tokens: tokens, startPos: startPos, filePath: filePath)
+	return parsePrimary(project, block: block, tokens: tokens, startPos: startPos, filePath: filePath)
 end 'parseUnary'
 
 function parseIdentifierExpr(project Project, block MlirBlock, tokens TokenArray, startPos TokenIndex, token Token, filePath FilePath) returns ExprResult throws ParserError
-  let peekToken = tokenAt(tokens, pos: startPos + 1)
-  if peekToken.kind == TokenKind.leftParen 'isCall'
-    var pos = startPos + 2  // skip name and '('
-    var argIds = ValueIdArray{}
-    var lastArgIsFloat = false
+	let peekToken = tokenAt(tokens, pos: startPos + 1)
+	if peekToken.kind == TokenKind.leftParen 'isCall'
+		var pos = startPos + 2  // skip name and '('
+		var argIds = ValueIdArray{}
+		var lastArgIsFloat = false
 
-    // Parse arguments until ')'
-    let firstArgToken = tokenAt(tokens, pos: pos)
-    if firstArgToken.kind != TokenKind.rightParen 'hasArgs'
-      while pos < tokens.count() 'argLoop'
-        // Skip labeled argument names (e.g., "b:" in "b: 2")
-        let maybeLabel = tokenAt(tokens, pos: pos)
-        let afterLabel = tokenAt(tokens, pos: pos + 1)
-        if maybeLabel.kind == TokenKind.identifier and afterLabel.kind == TokenKind.colon 'isLabel'
-          pos = pos + 2  // skip "name:"
-        end 'isLabel'
+		// Parse arguments until ')'
+		let firstArgToken = tokenAt(tokens, pos: pos)
+		if firstArgToken.kind != TokenKind.rightParen 'hasArgs'
+			while pos < tokens.count() 'argLoop'
+				// Skip labeled argument names (e.g., "b:" in "b: 2")
+				let maybeLabel = tokenAt(tokens, pos: pos)
+				let afterLabel = tokenAt(tokens, pos: pos + 1)
+				if maybeLabel.kind == TokenKind.identifier and afterLabel.kind == TokenKind.colon 'isLabel'
+					pos = pos + 2  // skip "name:"
+				end 'isLabel'
 
-        let argResult = parseExpression(project, block: block, tokens: tokens, startPos: pos, filePath: filePath)
-        argIds.push(argResult.valueId)
-        lastArgIsFloat = argResult.isFloat
-        pos = argResult.nextPos
+				let argResult = parseExpression(project, block: block, tokens: tokens, startPos: pos, filePath: filePath)
+				argIds.push(argResult.valueId)
+				lastArgIsFloat = argResult.isFloat
+				pos = argResult.nextPos
 
-        let nextTok = tokenAt(tokens, pos: pos)
-        if nextTok.kind == TokenKind.rightParen 'endArgs'
-          break
-        end 'endArgs'
-      end 'argLoop'
-    end 'hasArgs'
-    pos = pos + 1  // skip ')'
+				let nextTok = tokenAt(tokens, pos: pos)
+				if nextTok.kind == TokenKind.rightParen 'endArgs'
+					break
+				end 'endArgs'
+			end 'argLoop'
+		end 'hasArgs'
+		pos = pos + 1  // skip ')'
 
-    // trunc() converts a float to int
-    if token.value == b"trunc" 'isTrunc'
-      if not lastArgIsFloat 'notFloat'
-        throw ParserError.typeError
-      end 'notFloat'
-      let truncArgId = try argIds.get(0) otherwise 0
-      return ExprResult{valueId: truncArgId, nextPos: pos, isFloat: false, isRefType: false, isStringConst: false, stringConstValue: ByteArray{}}
-    end 'isTrunc'
+		// trunc() converts a float to int
+		if token.value == b"trunc" 'isTrunc'
+			if not lastArgIsFloat 'notFloat'
+				throw ParserError.typeError
+			end 'notFloat'
+			let truncArgId = try argIds.get(0) otherwise 0
+			return ExprResult{valueId: truncArgId, nextPos: pos, isFloat: false, isRefType: false, isStringConst: false, stringConstValue: ByteArray{}}
+		end 'isTrunc'
 
-    // Qualify call target with file-based namespace (except main)
-    var calleeName = token.value
-    if calleeName != b"main" 'qualifyCall'
-      let callNs = deriveNamespace(filePath)
-      calleeName = qualifyName(callNs, name: calleeName)
-    end 'qualifyCall'
-    let callId = nextValueId(project)
-    emitOp(block, op: MlirOp.maxhl(MaxHLOp.call(callId, calleeName, argIds)))
-    return ExprResult{valueId: callId, nextPos: pos, isFloat: false, isRefType: false, isStringConst: false, stringConstValue: ByteArray{}}
-  end 'isCall'
+		// Qualify call target with file-based namespace (except main)
+		var calleeName = token.value
+		if calleeName != b"main" 'qualifyCall'
+			let callNs = deriveNamespace(filePath)
+			calleeName = qualifyName(callNs, name: calleeName)
+		end 'qualifyCall'
+		let callId = nextValueId(project)
+		emitOp(block, op: MlirOp.maxhl(MaxHLOp.call(callId, calleeName, argIds)))
+		return ExprResult{valueId: callId, nextPos: pos, isFloat: false, isRefType: false, isStringConst: false, stringConstValue: ByteArray{}}
+	end 'isCall'
 
-  // Check for compile-time string constant before variable lookup
-  let strConst = lookupStringConst(project, name: token.value)
-  if not strConst.isEmpty() 'isStrConst'
-    let id = nextValueId(project)
-    return ExprResult{valueId: id, nextPos: startPos + 1, isFloat: false, isRefType: false, isStringConst: true, stringConstValue: strConst}
-  end 'isStrConst'
+	// Check for compile-time string constant before variable lookup
+	let strConst = lookupStringConst(project, name: token.value)
+	if not strConst.isEmpty() 'isStrConst'
+		let id = nextValueId(project)
+		return ExprResult{valueId: id, nextPos: startPos + 1, isFloat: false, isRefType: false, isStringConst: true, stringConstValue: strConst}
+	end 'isStrConst'
 
-  let slot = lookupVariable(project, name: token.value, token: token, filePath: filePath)
-  let id = nextValueId(project)
-  emitOp(block, op: MlirOp.maxhl(MaxHLOp.varLoad(id, slot)))
-  let varIsFloat = isVariableFloat(project, name: token.value)
-  let varIsRef = isVariableRefType(project, name: token.value)
-  return ExprResult{valueId: id, nextPos: startPos + 1, isFloat: varIsFloat, isRefType: varIsRef, isStringConst: false, stringConstValue: ByteArray{}}
+	let slot = lookupVariable(project, name: token.value, token: token, filePath: filePath)
+	let id = nextValueId(project)
+	emitOp(block, op: MlirOp.maxhl(MaxHLOp.varLoad(id, slot)))
+	let varIsFloat = isVariableFloat(project, name: token.value)
+	let varIsRef = isVariableRefType(project, name: token.value)
+	return ExprResult{valueId: id, nextPos: startPos + 1, isFloat: varIsFloat, isRefType: varIsRef, isStringConst: false, stringConstValue: ByteArray{}}
 end 'parseIdentifierExpr'
 
 function parsePrimaryMatch(project Project, block MlirBlock, tokens TokenArray, startPos TokenIndex, token Token, filePath FilePath) returns ExprResult throws ParserError
-  match token.kind 'primary'
-    intLiteral then return parseIntLiteral(project, block: block, token: token, startPos: startPos)
-    floatLiteral then return parseFloatLiteral(project, block: block, token: token, startPos: startPos)
-    identifier then return try parseIdentifierExpr(project, block: block, tokens: tokens, startPos: startPos, token: token, filePath: filePath)
-    doubleStringLiteral then return parseStringLiteral(project, token: token, startPos: startPos)
-    true then return parseBoolLiteral(project, block: block, startPos: startPos, value: 1)
-    false then return parseBoolLiteral(project, block: block, startPos: startPos, value: 0)
-    leftParen then return parseParenExpr(project, block: block, tokens: tokens, startPos: startPos, filePath: filePath)
-    default throws ParserError.unhandledToken
-  end 'primary'
+	match token.kind 'primary'
+		intLiteral then return parseIntLiteral(project, block: block, token: token, startPos: startPos)
+		floatLiteral then return parseFloatLiteral(project, block: block, token: token, startPos: startPos)
+		identifier then return try parseIdentifierExpr(project, block: block, tokens: tokens, startPos: startPos, token: token, filePath: filePath)
+		doubleStringLiteral then return parseStringLiteral(project, token: token, startPos: startPos)
+		true then return parseBoolLiteral(project, block: block, startPos: startPos, value: 1)
+		false then return parseBoolLiteral(project, block: block, startPos: startPos, value: 0)
+		leftParen then return parseParenExpr(project, block: block, tokens: tokens, startPos: startPos, filePath: filePath)
+		default throws ParserError.unhandledToken
+	end 'primary'
 end 'parsePrimaryMatch'
 
 function parsePrimary(project Project, block MlirBlock, tokens TokenArray, startPos TokenIndex, filePath FilePath) returns ExprResult
-  let token = tokenAt(tokens, pos: startPos)
-  let result = try parsePrimaryMatch(project, block: block, tokens: tokens, startPos: startPos, token: token, filePath: filePath) otherwise 'unhandled'
-    return raiseUnexpectedToken(project, token: token, startPos: startPos, filePath: filePath)
-  end 'unhandled'
-  return result
+	let token = tokenAt(tokens, pos: startPos)
+	let result = try parsePrimaryMatch(project, block: block, tokens: tokens, startPos: startPos, token: token, filePath: filePath) otherwise 'unhandled'
+		return raiseUnexpectedToken(project, token: token, startPos: startPos, filePath: filePath)
+	end 'unhandled'
+	return result
 end 'parsePrimary'
 
 function raiseUnexpectedToken(project Project, token Token, startPos TokenIndex, filePath FilePath) returns ExprResult
-  reportCompileError(project, code: ErrorCode.parserExpectedExpression, message: "Expected expression but got '{tokenValueToString(token.value)}'", line: token.line, column: token.column, filePath: filePath)
-  return ExprResult{valueId: 0, nextPos: startPos + 1, isFloat: false, isRefType: false, isStringConst: false, stringConstValue: ByteArray{}}
+	reportCompileError(project, code: ErrorCode.parserExpectedExpression, message: "Expected expression but got '{tokenValueToString(token.value)}'", line: token.line, column: token.column, filePath: filePath)
+	return ExprResult{valueId: 0, nextPos: startPos + 1, isFloat: false, isRefType: false, isStringConst: false, stringConstValue: ByteArray{}}
 end 'raiseUnexpectedToken'
 
 function parseIntLiteral(project Project, block MlirBlock, token Token, startPos TokenIndex) returns ExprResult
-  let value = parseInt(token.value)
-  let id = nextValueId(project)
-  emitOp(block, op: MlirOp.maxhl(MaxHLOp.literal(id, value, false)))
-  return ExprResult{valueId: id, nextPos: startPos + 1, isFloat: false, isRefType: false, isStringConst: false, stringConstValue: ByteArray{}}
+	let value = parseInt(token.value)
+	let id = nextValueId(project)
+	emitOp(block, op: MlirOp.maxhl(MaxHLOp.literal(id, value, false)))
+	return ExprResult{valueId: id, nextPos: startPos + 1, isFloat: false, isRefType: false, isStringConst: false, stringConstValue: ByteArray{}}
 end 'parseIntLiteral'
 
 function parseFloatLiteral(project Project, block MlirBlock, token Token, startPos TokenIndex) returns ExprResult
-  let rawBits = parseFloatBits(token.value)
-  let id = nextValueId(project)
-  emitOp(block, op: MlirOp.maxhl(MaxHLOp.literal(id, rawBits, true)))
-  return ExprResult{valueId: id, nextPos: startPos + 1, isFloat: true, isRefType: false, isStringConst: false, stringConstValue: ByteArray{}}
+	let rawBits = parseFloatBits(token.value)
+	let id = nextValueId(project)
+	emitOp(block, op: MlirOp.maxhl(MaxHLOp.literal(id, rawBits, true)))
+	return ExprResult{valueId: id, nextPos: startPos + 1, isFloat: true, isRefType: false, isStringConst: false, stringConstValue: ByteArray{}}
 end 'parseFloatLiteral'
 
 function parseStringLiteral(project Project, token Token, startPos TokenIndex) returns ExprResult
-  let id = nextValueId(project)
-  return ExprResult{valueId: id, nextPos: startPos + 1, isFloat: false, isRefType: false, isStringConst: true, stringConstValue: token.value}
+	let id = nextValueId(project)
+	return ExprResult{valueId: id, nextPos: startPos + 1, isFloat: false, isRefType: false, isStringConst: true, stringConstValue: token.value}
 end 'parseStringLiteral'
 
 function parseBoolLiteral(project Project, block MlirBlock, startPos TokenIndex, value ParsedInt) returns ExprResult
-  let id = nextValueId(project)
-  emitOp(block, op: MlirOp.maxhl(MaxHLOp.literal(id, value, false)))
-  return ExprResult{valueId: id, nextPos: startPos + 1, isFloat: false, isRefType: false, isStringConst: false, stringConstValue: ByteArray{}}
+	let id = nextValueId(project)
+	emitOp(block, op: MlirOp.maxhl(MaxHLOp.literal(id, value, false)))
+	return ExprResult{valueId: id, nextPos: startPos + 1, isFloat: false, isRefType: false, isStringConst: false, stringConstValue: ByteArray{}}
 end 'parseBoolLiteral'
 
 function parseParenExpr(project Project, block MlirBlock, tokens TokenArray, startPos TokenIndex, filePath FilePath) returns ExprResult
-  let inner = parseExpression(project, block: block, tokens: tokens, startPos: startPos + 1, filePath: filePath)
-  return ExprResult{valueId: inner.valueId, nextPos: inner.nextPos + 1, isFloat: inner.isFloat, isRefType: inner.isRefType, isStringConst: inner.isStringConst, stringConstValue: inner.stringConstValue}
+	let inner = parseExpression(project, block: block, tokens: tokens, startPos: startPos + 1, filePath: filePath)
+	return ExprResult{valueId: inner.valueId, nextPos: inner.nextPos + 1, isFloat: inner.isFloat, isRefType: inner.isRefType, isStringConst: inner.isStringConst, stringConstValue: inner.stringConstValue}
 end 'parseParenExpr'
 
 // --- Helpers ---
 
 // Advance past all tokens on the current line until a newline or EOF is reached.
 function skipToNextLine(tokens TokenArray, startPos TokenIndex) returns TokenIndex
-  var pos = startPos
-  while pos < tokens.count() 'skip'
-    let token = tokenAt(tokens, pos: pos)
-    if token.kind == TokenKind.newline or token.kind == TokenKind.eof 'atEnd'
-      return pos
-    end 'atEnd'
-    pos = pos + 1
-  end 'skip'
-  return pos
+	var pos = startPos
+	while pos < tokens.count() 'skip'
+		let token = tokenAt(tokens, pos: pos)
+		if token.kind == TokenKind.newline or token.kind == TokenKind.eof 'atEnd'
+			return pos
+		end 'atEnd'
+		pos = pos + 1
+	end 'skip'
+	return pos
 end 'skipToNextLine'
 
 function skipNewlines(tokens TokenArray, startPos TokenIndex) returns TokenIndex
-  var pos = startPos
-  while pos < tokens.count() 'skip'
-    let token = tokenAt(tokens, pos: pos)
-    if token.kind == TokenKind.newline 'isNewline'
-      pos = pos + 1
-    end 'isNewline' else 'notNewline'
-      return pos
-    end 'notNewline'
-  end 'skip'
-  return pos
+	var pos = startPos
+	while pos < tokens.count() 'skip'
+		let token = tokenAt(tokens, pos: pos)
+		if token.kind == TokenKind.newline 'isNewline'
+			pos = pos + 1
+		end 'isNewline' else 'notNewline'
+			return pos
+		end 'notNewline'
+	end 'skip'
+	return pos
 end 'skipNewlines'
 
 function tokenAt(tokens TokenArray, pos TokenIndex) returns Token
-  return try tokens.get(pos) otherwise Token{kind: TokenKind.eof, value: ByteArray{}, line: 0, column: 0}
+	return try tokens.get(pos) otherwise Token{kind: TokenKind.eof, value: ByteArray{}, line: 0, column: 0}
 end 'tokenAt'
 
 // Convert a decimal float string (e.g. "3.14", "1.5e2", "2.0e-3") to IEEE 754 double raw bits.
 // Uses integer-only arithmetic: parses into integer/fraction parts,
 // then constructs the IEEE 754 representation manually.
 function parseFloatBits(s ByteArray) returns ParsedInt
-  // Parse integer and fractional parts as integers, skip underscores.
-  // Also parse optional exponent (e/E followed by optional +/- and digits).
-  var intPart = 0
-  var fracPart = 0
-  var fracDigits = 0
-  var pastDot = false
-  var sciExp = 0
-  var sciExpNeg = false
-  var inExponent = false
+	// Parse integer and fractional parts as integers, skip underscores.
+	// Also parse optional exponent (e/E followed by optional +/- and digits).
+	var intPart = 0
+	var fracPart = 0
+	var fracDigits = 0
+	var pastDot = false
+	var sciExp = 0
+	var sciExpNeg = false
+	var inExponent = false
 
-  var pi = 0
-  while pi < s.count() 'parse'
-    let b = try s.get(pi) otherwise 0
+	var pi = 0
+	while pi < s.count() 'parse'
+		let b = try s.get(pi) otherwise 0
 
-    // Skip underscores
-    if b == '_' 'skipUnderscore'
-      pi = pi + 1
-      continue
-    end 'skipUnderscore'
+		// Skip underscores
+		if b == '_' 'skipUnderscore'
+			pi = pi + 1
+			continue
+		end 'skipUnderscore'
 
-    if inExponent 'expPart'
-      if b >= '0' and b <= '9' 'expDigit'
-        sciExp = sciExp * 10 + (b - '0')
-      end 'expDigit'
-    end 'expPart' else 'mantissaPart'
-      if b == 'e' or b == 'E' 'startExp'
-        inExponent = true
-        // Check for sign on next byte
-        if pi + 1 < s.count() 'peekSign'
-          let signByte = try s.get(pi + 1) otherwise 0
-          if signByte == '-' 'negSign'
-            sciExpNeg = true
-            pi = pi + 1
-          end 'negSign' else if signByte == '+' 'posSign'
-            pi = pi + 1
-          end 'posSign'
-        end 'peekSign'
-      end 'startExp' else 'notExp'
-        if b == '.' 'isDot'
-          pastDot = true
-        end 'isDot' else 'notDot'
-          if b >= '0' and b <= '9' 'isDigit'
-            if pastDot 'frac'
-              fracPart = fracPart * 10 + (b - '0')
-              fracDigits = fracDigits + 1
-            end 'frac' else 'int'
-              intPart = intPart * 10 + (b - '0')
-            end 'int'
-          end 'isDigit'
-        end 'notDot'
-      end 'notExp'
-    end 'mantissaPart'
-    pi = pi + 1
-  end 'parse'
+		if inExponent 'expPart'
+			if b >= '0' and b <= '9' 'expDigit'
+				sciExp = sciExp * 10 + (b - '0')
+			end 'expDigit'
+		end 'expPart' else 'mantissaPart'
+			if b == 'e' or b == 'E' 'startExp'
+				inExponent = true
+				// Check for sign on next byte
+				if pi + 1 < s.count() 'peekSign'
+					let signByte = try s.get(pi + 1) otherwise 0
+					if signByte == '-' 'negSign'
+						sciExpNeg = true
+						pi = pi + 1
+					end 'negSign' else if signByte == '+' 'posSign'
+						pi = pi + 1
+					end 'posSign'
+				end 'peekSign'
+			end 'startExp' else 'notExp'
+				if b == '.' 'isDot'
+					pastDot = true
+				end 'isDot' else 'notDot'
+					if b >= '0' and b <= '9' 'isDigit'
+						if pastDot 'frac'
+							fracPart = fracPart * 10 + (b - '0')
+							fracDigits = fracDigits + 1
+						end 'frac' else 'int'
+							intPart = intPart * 10 + (b - '0')
+						end 'int'
+					end 'isDigit'
+				end 'notDot'
+			end 'notExp'
+		end 'mantissaPart'
+		pi = pi + 1
+	end 'parse'
 
-  // Compute fracDivisor = 10^fracDigits
-  var fracDivisor = 1
-  for _ in 0 upto fracDigits 'powLoop'
-    fracDivisor = fracDivisor * 10
-  end 'powLoop'
+	// Compute fracDivisor = 10^fracDigits
+	var fracDivisor = 1
+	for _ in 0 upto fracDigits 'powLoop'
+		fracDivisor = fracDivisor * 10
+	end 'powLoop'
 
-  // Build the mantissa by scaling: value = intPart + fracPart/fracDivisor
-  // Represent value as (intPart * fracDivisor + fracPart) / fracDivisor
-  var numerator = intPart * fracDivisor + fracPart
-  var denominator = fracDivisor
+	// Build the mantissa by scaling: value = intPart + fracPart/fracDivisor
+	// Represent value as (intPart * fracDivisor + fracPart) / fracDivisor
+	var numerator = intPart * fracDivisor + fracPart
+	var denominator = fracDivisor
 
-  // Apply scientific notation exponent: multiply or divide by 10^sciExp
-  if sciExp > 0 'applySciExp'
-    if sciExpNeg 'divByTen'
-      for _ in 0 upto sciExp 'divLoop'
-        denominator = denominator * 10
-      end 'divLoop'
-    end 'divByTen' else 'mulByTen'
-      for _ in 0 upto sciExp 'mulLoop'
-        numerator = numerator * 10
-      end 'mulLoop'
-    end 'mulByTen'
-  end 'applySciExp'
+	// Apply scientific notation exponent: multiply or divide by 10^sciExp
+	if sciExp > 0 'applySciExp'
+		if sciExpNeg 'divByTen'
+			for _ in 0 upto sciExp 'divLoop'
+				denominator = denominator * 10
+			end 'divLoop'
+		end 'divByTen' else 'mulByTen'
+			for _ in 0 upto sciExp 'mulLoop'
+				numerator = numerator * 10
+			end 'mulLoop'
+		end 'mulByTen'
+	end 'applySciExp'
 
-  // Handle zero
-  if numerator == 0 'isZero'
-    return 0
-  end 'isZero'
+	// Handle zero
+	if numerator == 0 'isZero'
+		return 0
+	end 'isZero'
 
-  // Find exponent: normalize so that 1 <= numerator/denominator < 2
-  // i.e., denominator <= numerator < 2*denominator
-  var exponent = 0
-  while numerator >= 2 * denominator 'shiftDown'
-    denominator = denominator * 2
-    exponent = exponent + 1
-  end 'shiftDown'
-  while numerator < denominator 'shiftUp'
-    numerator = numerator * 2
-    exponent = exponent - 1
-  end 'shiftUp'
+	// Find exponent: normalize so that 1 <= numerator/denominator < 2
+	// i.e., denominator <= numerator < 2*denominator
+	var exponent = 0
+	while numerator >= 2 * denominator 'shiftDown'
+		denominator = denominator * 2
+		exponent = exponent + 1
+	end 'shiftDown'
+	while numerator < denominator 'shiftUp'
+		numerator = numerator * 2
+		exponent = exponent - 1
+	end 'shiftUp'
 
-  // Now 1.0 <= numerator/denominator < 2.0
-  // Extract 52 bits of mantissa (implicit leading 1 is not stored)
-  numerator = numerator - denominator
-  var mantissa = 0
-  var bit = 51
-  while bit >= 0 'mantissaBits'
-    numerator = numerator * 2
-    if numerator >= denominator 'hasBit'
-      mantissa = mantissa + (1 shl bit)
-      numerator = numerator - denominator
-    end 'hasBit'
-    bit = bit - 1
-  end 'mantissaBits'
+	// Now 1.0 <= numerator/denominator < 2.0
+	// Extract 52 bits of mantissa (implicit leading 1 is not stored)
+	numerator = numerator - denominator
+	var mantissa = 0
+	var bit = 51
+	while bit >= 0 'mantissaBits'
+		numerator = numerator * 2
+		if numerator >= denominator 'hasBit'
+			mantissa = mantissa + (1 shl bit)
+			numerator = numerator - denominator
+		end 'hasBit'
+		bit = bit - 1
+	end 'mantissaBits'
 
-  // IEEE 754 double: sign(1) | exponent+1023(11) | mantissa(52)
-  let biasedExp = exponent + 1023
-  return(biasedExp shl 52) + mantissa
+	// IEEE 754 double: sign(1) | exponent+1023(11) | mantissa(52)
+	let biasedExp = exponent + 1023
+	return(biasedExp shl 52) + mantissa
 end 'parseFloatBits'
 
 function parseInt(s ByteArray) returns ParsedInt
-  let sLen = s.count()
+	let sLen = s.count()
 
-  if sLen < 1 'empty'
-    return 0
-  end 'empty'
+	if sLen < 1 'empty'
+		return 0
+	end 'empty'
 
-  // Check for 0x, 0b, 0o prefixes (need at least 2 bytes)
-  if sLen >= 2 'checkPrefix'
-    let first = try s.get(0) otherwise 0
-    let second = try s.get(1) otherwise 0
+	// Check for 0x, 0b, 0o prefixes (need at least 2 bytes)
+	if sLen >= 2 'checkPrefix'
+		let first = try s.get(0) otherwise 0
+		let second = try s.get(1) otherwise 0
 
-    // Hex: 0x or 0X
-    if first == '0' and(second == 'x' or second == 'X') 'isHex'
-      return parseHexInt(s, startIndex: 2)
-    end 'isHex' else if first == '0' and(second == 'b' or second == 'B') 'isBin'
-      return parseBinaryInt(s, startIndex: 2)
-    end 'isBin' else if first == '0' and(second == 'o' or second == 'O') 'isOct'
-      return parseOctalInt(s, startIndex: 2)
-    end 'isOct'
-  end 'checkPrefix'
+		// Hex: 0x or 0X
+		if first == '0' and(second == 'x' or second == 'X') 'isHex'
+			return parseHexInt(s, startIndex: 2)
+		end 'isHex' else if first == '0' and(second == 'b' or second == 'B') 'isBin'
+			return parseBinaryInt(s, startIndex: 2)
+		end 'isBin' else if first == '0' and(second == 'o' or second == 'O') 'isOct'
+			return parseOctalInt(s, startIndex: 2)
+		end 'isOct'
+	end 'checkPrefix'
 
-  // Decimal with underscore support
-  var result = 0
-  for pi in 0 upto sLen 'digits'
-    let b = try s.get(pi) otherwise 0
-    if b >= '0' and b <= '9' 'digit'
-      result = result * 10 + (b - '0')
-    end 'digit'
-    // Underscores are silently skipped
-  end 'digits'
-  return result
+	// Decimal with underscore support
+	var result = 0
+	for pi in 0 upto sLen 'digits'
+		let b = try s.get(pi) otherwise 0
+		if b >= '0' and b <= '9' 'digit'
+			result = result * 10 + (b - '0')
+		end 'digit'
+		// Underscores are silently skipped
+	end 'digits'
+	return result
 end 'parseInt'
 
 function parseHexInt(s ByteArray, startIndex CharOffset) returns ParsedInt
-  var result = 0
-  for pi in startIndex upto s.count() 'hexDigits'
-    let b = try s.get(pi) otherwise 0
-    if b >= '0' and b <= '9' 'decDigit'
-      result = result * 16 + (b - '0')
-    end 'decDigit' else if b >= 'a' and b <= 'f' 'lowerHex'
-      result = result * 16 + (b - 'a' + 10)
-    end 'lowerHex' else if b >= 'A' and b <= 'F' 'upperHex'
-      result = result * 16 + (b - 'A' + 10)
-    end 'upperHex'
-    // Underscores are silently skipped
-  end 'hexDigits'
-  return result
+	var result = 0
+	for pi in startIndex upto s.count() 'hexDigits'
+		let b = try s.get(pi) otherwise 0
+		if b >= '0' and b <= '9' 'decDigit'
+			result = result * 16 + (b - '0')
+		end 'decDigit' else if b >= 'a' and b <= 'f' 'lowerHex'
+			result = result * 16 + (b - 'a' + 10)
+		end 'lowerHex' else if b >= 'A' and b <= 'F' 'upperHex'
+			result = result * 16 + (b - 'A' + 10)
+		end 'upperHex'
+		// Underscores are silently skipped
+	end 'hexDigits'
+	return result
 end 'parseHexInt'
 
 function parseBinaryInt(s ByteArray, startIndex CharOffset) returns ParsedInt
-  var result = 0
-  for pi in startIndex upto s.count() 'binDigits'
-    let b = try s.get(pi) otherwise 0
-    if b == '0' 'zeroBit'
-      result = result * 2
-    end 'zeroBit' else if b == '1' 'oneBit'
-      result = result * 2 + 1
-    end 'oneBit'
-    // Underscores are silently skipped
-  end 'binDigits'
-  return result
+	var result = 0
+	for pi in startIndex upto s.count() 'binDigits'
+		let b = try s.get(pi) otherwise 0
+		if b == '0' 'zeroBit'
+			result = result * 2
+		end 'zeroBit' else if b == '1' 'oneBit'
+			result = result * 2 + 1
+		end 'oneBit'
+		// Underscores are silently skipped
+	end 'binDigits'
+	return result
 end 'parseBinaryInt'
 
 function parseOctalInt(s ByteArray, startIndex CharOffset) returns ParsedInt
-  var result = 0
-  for pi in startIndex upto s.count() 'octDigits'
-    let b = try s.get(pi) otherwise 0
-    if b >= '0' and b <= '7' 'octDigit'
-      result = result * 8 + (b - '0')
-    end 'octDigit'
-    // Underscores are silently skipped
-  end 'octDigits'
-  return result
+	var result = 0
+	for pi in startIndex upto s.count() 'octDigits'
+		let b = try s.get(pi) otherwise 0
+		if b >= '0' and b <= '7' 'octDigit'
+			result = result * 8 + (b - '0')
+		end 'octDigit'
+		// Underscores are silently skipped
+	end 'octDigits'
+	return result
 end 'parseOctalInt'
 
 function tokenValueToString(value ByteArray) returns String
-  let len = value.count()
-  if len == 0 'empty'
-    return "(empty)"
-  end 'empty'
-  return String.from(value)
+	let len = value.count()
+	if len == 0 'empty'
+		return "(empty)"
+	end 'empty'
+	return String.from(value)
 end 'tokenValueToString'
 
 function resetSymbolTable(project Project)
-  project.parserVarNames = ByteArrayArray{}
-  project.parserVarSlots = VarSlotArray{}
-  project.parserVarIsFloat = BoolArray{}
-  project.parserVarIsRefType = BoolArray{}
-  project.parserScopeStack = ScopeDepthArray{}
-  project.parserNextSlot = 0
+	project.parserVarNames = ByteArrayArray{}
+	project.parserVarSlots = VarSlotArray{}
+	project.parserVarIsFloat = BoolArray{}
+	project.parserVarIsRefType = BoolArray{}
+	project.parserScopeStack = ScopeDepthArray{}
+	project.parserNextSlot = 0
 end 'resetSymbolTable'
 
 function pushScope(project Project)
-  project.parserScopeStack.push(project.parserVarNames.count())
+	project.parserScopeStack.push(project.parserVarNames.count())
 end 'pushScope'
 
 function popScope(project Project)
-  let savedSize = try project.parserScopeStack.pop() otherwise 0
+	let savedSize = try project.parserScopeStack.pop() otherwise 0
 
-  // Remove variables added since the scope was pushed
-  while project.parserVarNames.count() > savedSize 'trim'
-    try project.parserVarNames.pop() otherwise ByteArray{}
-    try project.parserVarSlots.pop() otherwise 0
-    try project.parserVarIsFloat.pop() otherwise false
-    try project.parserVarIsRefType.pop() otherwise false
-  end 'trim'
+	// Remove variables added since the scope was pushed
+	while project.parserVarNames.count() > savedSize 'trim'
+		try project.parserVarNames.pop() otherwise ByteArray{}
+		try project.parserVarSlots.pop() otherwise 0
+		try project.parserVarIsFloat.pop() otherwise false
+		try project.parserVarIsRefType.pop() otherwise false
+	end 'trim'
 end 'popScope'
 
 function defineVariable(project Project, name ByteArray, isFloat bool, isRefType bool) returns VarSlot
-  let slot = project.parserNextSlot
-  project.parserVarNames.push(name)
-  project.parserVarSlots.push(slot)
-  project.parserVarIsFloat.push(isFloat)
-  project.parserVarIsRefType.push(isRefType)
-  project.parserNextSlot = project.parserNextSlot + 1
-  return slot
+	let slot = project.parserNextSlot
+	project.parserVarNames.push(name)
+	project.parserVarSlots.push(slot)
+	project.parserVarIsFloat.push(isFloat)
+	project.parserVarIsRefType.push(isRefType)
+	project.parserNextSlot = project.parserNextSlot + 1
+	return slot
 end 'defineVariable'
 
 function lookupVariable(project Project, name ByteArray, token Token, filePath FilePath) returns VarSlot
-  var i = project.parserVarNames.count() - 1
-  while i >= 0 'lookup'
-    let vn = try project.parserVarNames.get(i) otherwise ByteArray{}
-    if vn == name 'found'
-      return try project.parserVarSlots.get(i) otherwise 0
-    end 'found'
-    i = i - 1
-  end 'lookup'
-  reportCompileError(project, code: ErrorCode.parserExpectedExpression, message: "Undefined variable '{tokenValueToString(name)}'", line: token.line, column: token.column, filePath: filePath)
-  return 0
+	var i = project.parserVarNames.count() - 1
+	while i >= 0 'lookup'
+		let vn = try project.parserVarNames.get(i) otherwise ByteArray{}
+		if vn == name 'found'
+			return try project.parserVarSlots.get(i) otherwise 0
+		end 'found'
+		i = i - 1
+	end 'lookup'
+	reportCompileError(project, code: ErrorCode.parserExpectedExpression, message: "Undefined variable '{tokenValueToString(name)}'", line: token.line, column: token.column, filePath: filePath)
+	return 0
 end 'lookupVariable'
 
 // Look up a compile-time string constant. Returns empty ByteArray if not found.
 function lookupStringConst(project Project, name ByteArray) returns ByteArray
-  for(i, cn) in project.stringConstNames.enumerated() 'lookup'
-    if cn == name 'found'
-      return try project.stringConstValues.get(i) otherwise ByteArray{}
-    end 'found'
-  end 'lookup'
-  var empty = ByteArray{}
-  return empty
+	for(i, cn) in project.stringConstNames.enumerated() 'lookup'
+		if cn == name 'found'
+			return try project.stringConstValues.get(i) otherwise ByteArray{}
+		end 'found'
+	end 'lookup'
+	var empty = ByteArray{}
+	return empty
 end 'lookupStringConst'
 
 function isVariableFloat(project Project, name ByteArray) returns bool
-  var i = project.parserVarNames.count() - 1
-  while i >= 0 'lookup'
-    let vn = try project.parserVarNames.get(i) otherwise ByteArray{}
-    if vn == name 'found'
-      return try project.parserVarIsFloat.get(i) otherwise false
-    end 'found'
-    i = i - 1
-  end 'lookup'
-  return false
+	var i = project.parserVarNames.count() - 1
+	while i >= 0 'lookup'
+		let vn = try project.parserVarNames.get(i) otherwise ByteArray{}
+		if vn == name 'found'
+			return try project.parserVarIsFloat.get(i) otherwise false
+		end 'found'
+		i = i - 1
+	end 'lookup'
+	return false
 end 'isVariableFloat'
 
 function isVariableRefType(project Project, name ByteArray) returns bool
-  var i = project.parserVarNames.count() - 1
-  while i >= 0 'lookup'
-    let vn = try project.parserVarNames.get(i) otherwise ByteArray{}
-    if vn == name 'found'
-      return try project.parserVarIsRefType.get(i) otherwise false
-    end 'found'
-    i = i - 1
-  end 'lookup'
-  return false
+	var i = project.parserVarNames.count() - 1
+	while i >= 0 'lookup'
+		let vn = try project.parserVarNames.get(i) otherwise ByteArray{}
+		if vn == name 'found'
+			return try project.parserVarIsRefType.get(i) otherwise false
+		end 'found'
+		i = i - 1
+	end 'lookup'
+	return false
 end 'isVariableRefType'
 
 // Derive a namespace from the file path (filename without extension).
 // e.g. "/temp/basics.maxon" -> "basics", "C:\foo\bar.maxon" -> "bar"
 function deriveNamespace(filePath FilePath) returns ByteArray
-  return filePath.stem().toByteArray()
+	return filePath.stem().toByteArray()
 end 'deriveNamespace'
 
 // Qualify a function name with namespace: "ns.name".
 // Returns the raw name if namespace is empty.
 function qualifyName(ns ByteArray, name ByteArray) returns ByteArray
-  if ns.isEmpty() 'noNs'
-    return name
-  end 'noNs'
-  var qualified = ByteArray{}
-  qualified.append(ns)
-  qualified.push(46)  // '.'
-  qualified.append(name)
-  return qualified
+	if ns.isEmpty() 'noNs'
+		return name
+	end 'noNs'
+	var qualified = ByteArray{}
+	qualified.append(ns)
+	qualified.push(46)  // '.'
+	qualified.append(name)
+	return qualified
 end 'qualifyName'

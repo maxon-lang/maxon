@@ -128,7 +128,7 @@ t.1   // 20
 
 // Tuple as function return type
 function minMax(a int, b int) returns (int, int)
-    return (a, b)
+		return (a, b)
 end 'minMax'
 
 // Destructuring declaration (creates new variables)
@@ -153,15 +153,15 @@ var y = 0
 
 ```maxon
 function add(a int, b int) returns int
-    return a + b
+		return a + b
 end 'add'
 
 function greet(name String, title String = "Mr.")  // string default
-    print("Hello, {title} {name}")
+		print("Hello, {title} {name}")
 end 'greet'
 
 function process(items IntArray = [10, 20, 12]) returns Integer  // array default
-    return items.count()
+		return items.count()
 end 'process'
 
 // Any literal expression is supported as a default value:
@@ -207,13 +207,13 @@ export var sharedCounter = 0                    // visible to other files
 ## Conditional Compilation
 ```maxon
 #if os(Windows)
-  let sep = "\\"
+	let sep = "\\"
 #else
-  let sep = "/"
+	let sep = "/"
 #endif
 
 #if arch(x86_64)
-  // x86-specific code
+	// x86-specific code
 #endif
 ```
 Conditions: `os(Windows)`, `os(Linux)`, `os(Macos)`, `arch(x86_64)`, `arch(aarch64)`, `testing(true)`, `testing(false)`. Boolean operators: `not`, `and`, `or` (precedence: `or` < `and` < `not`). Can appear at top-level, inside functions, and inside type bodies. Nested `#if` blocks are supported.
@@ -223,19 +223,19 @@ Conditions: `os(Windows)`, `os(Linux)`, `os(Macos)`, `arch(x86_64)`, `arch(aarch
 ### If
 ```maxon
 if condition 'label'
-    // ...
+		// ...
 end 'label' else if other 'label2'
-    // ...
+		// ...
 end 'label2' else 'label3'
-    // ...
+		// ...
 end 'label3'
 ```
 
 ### While
 ```maxon
 while condition 'loop'
-    if done 'exit' break end 'exit'
-    if skip 'next' continue end 'next'
+		if done 'exit' break end 'exit'
+		if skip 'next' continue end 'next'
 end 'loop'
 
 break 'loop'      // labeled break
@@ -266,13 +266,13 @@ for (key, _) in pairs 'loop' ... end 'loop'   // discard value, keep key
 ### Match Statement
 ```maxon
 match value 'label'
-    1 then doSomething()
-    2 or 3 then doOther()
-    1..=10 then inRange()          // range pattern: 1 to 10 inclusive
-    11..<20 then nearRange()       // range pattern: 11 to 19 (exclusive upper)
-    pattern then action() and fallthrough
-    42 then break                  // exit match early
-    default then fallback()
+		1 then doSomething()
+		2 or 3 then doOther()
+		1..=10 then inRange()          // range pattern: 1 to 10 inclusive
+		11..<20 then nearRange()       // range pattern: 11 to 19 (exclusive upper)
+		pattern then action() and fallthrough
+		42 then break                  // exit match early
+		default then fallback()
 end 'label'
 
 break            // exits innermost match
@@ -288,9 +288,9 @@ Pattern bindings are checked for unused (E3012). Use `_` to discard: `success(_)
 ### Match Expression
 ```maxon
 let result = match value 'label'
-    1 gives "one"
-    2 gives "two"
-    default gives "other"
+		1 gives "one"
+		2 gives "two"
+		default gives "other"
 end 'label'
 ```
 
@@ -299,23 +299,23 @@ end 'label'
 // Statement form: throws an error for unmatched cases
 // Enclosing function must declare 'throws ErrorType'
 match shape 'draw'
-    circle(r) then drawCircle(r)
-    square(s) then drawSquare(s)
-    default throws ShapeError.unsupported
+		circle(r) then drawCircle(r)
+		square(s) then drawSquare(s)
+		default throws ShapeError.unsupported
 end 'draw'
 
 // Statement form: terminates with an error message
 match shape 'draw'
-    circle(r) then drawCircle(r)
-    square(s) then drawSquare(s)
-    default panic("unsupported shape")
+		circle(r) then drawCircle(r)
+		square(s) then drawSquare(s)
+		default panic("unsupported shape")
 end 'draw'
 
 // Expression form: also throws for unmatched cases
 let desc = match shape 'describe'
-    circle(r) gives "circle"
-    square(s) gives "square"
-    default throws ShapeError.unsupported
+		circle(r) gives "circle"
+		square(s) gives "square"
+		default throws ShapeError.unsupported
 end 'describe'
 ```
 
@@ -325,24 +325,24 @@ end 'describe'
 
 ```maxon
 type Point implements Hashable, Describable   // interface conformance
-    export var x int                   // public mutable field
-    export let name = "point"   // public immutable with default
-    var internal int                   // private field
+		export var x int                   // public mutable field
+		export let name = "point"   // public immutable with default
+		var internal int                   // private field
 
-    static var count = 0               // static mutable field
-    static let MAX = 100               // static immutable constant
+		static var count = 0               // static mutable field
+		static let MAX = 100               // static immutable constant
 
-    function hash() returns int   // interface method
-        return x * 31 + y
-    end 'hash'
+		function hash() returns int   // interface method
+				return x * 31 + y
+		end 'hash'
 
-    function magnitude() returns float     // regular method
-        return sqrt((x * x + y * y) as float)
-    end 'magnitude'
+		function magnitude() returns float     // regular method
+				return sqrt((x * x + y * y) as float)
+		end 'magnitude'
 
-    static function origin() returns Point  // static method
-        return Point{x: 0, y: 0}
-    end 'origin'
+		static function origin() returns Point  // static method
+				return Point{x: 0, y: 0}
+		end 'origin'
 end 'Point'
 
 // Instantiation
@@ -358,18 +358,18 @@ print(Point.MAX)
 
 ```maxon
 interface Hashable
-    function hash() returns int
+		function hash() returns int
 end 'Hashable'
 
 interface Container uses Element       // associated type
-    function get(index int) returns Element
+		function get(index int) returns Element
 end 'Container'
 
 typealias Integer = int(i64.min to i64.max)
 type IntBox implements Container with Integer  // specify associated type
-    function get(index int) returns Integer
-        // ...
-    end 'get'
+		function get(index int) returns Integer
+				// ...
+		end 'get'
 end 'IntBox'
 
 // Where clauses: constrain type parameters to require interface conformance
@@ -379,22 +379,22 @@ type Multi uses A, B where A is Hashable, B is Cloneable // multiple params with
 
 // Interface extensions: add methods to all conforming types
 extension Container
-  function first() returns Element
-    return self.get(0)
-  end 'first'
+	function first() returns Element
+		return self.get(0)
+	end 'first'
 end 'Container'
 
 // Conditional extensions: restrict by associated type constraints
 extension Iterable where Element is Equatable
-  function contains(element Element) returns bool
-    // only available when Element implements Equatable
-  end 'contains'
+	function contains(element Element) returns bool
+		// only available when Element implements Equatable
+	end 'contains'
 end 'Iterable'
 
 // Conditional conformance: add interface conformance when constraints are met
 extension Array implements Hashable, Equatable where Element is Hashable and Equatable
-  function hash() returns HashValue ... end 'hash'
-  function equals(other Self) returns bool ... end 'equals'
+	function hash() returns HashValue ... end 'hash'
+	function equals(other Self) returns bool ... end 'equals'
 end 'Array'
 ```
 
@@ -403,32 +403,32 @@ end 'Array'
 ```maxon
 // Simple
 union Direction
-    north
-    south
+		north
+		south
 end 'Direction'
 
 // Associated values
 union Result
-    success(value int)
-    failure(code int, message String)
-    pending
+		success(value int)
+		failure(code int, message String)
+		pending
 end 'Result'
 var r = Result.success(42)
 var r2 = Result.failure(404, message: "Not found")
 
 // Pattern matching
 match result 'handle'
-    success(v) then print("{v}")
-    failure(c, msg) then print("{c}: {msg}")
-    pending then print("waiting")
+		success(v) then print("{v}")
+		failure(c, msg) then print("{c}: {msg}")
+		pending then print("waiting")
 end 'handle'
 
 // Mutable match bindings (var union = write-back, let union = read-only)
 var box = Result.success(10)
 match box 'update'
-    success(v) then v = 42       // writes back to box in-place
-    failure(c, msg) then return
-    pending then return
+		success(v) then v = 42       // writes back to box in-place
+		failure(c, msg) then return
+		pending then return
 end 'update'
 
 // Create from name (throws UnionError.invalidName on unknown name)
@@ -437,14 +437,14 @@ var c = try Result.fromName("success", 42) otherwise Result.pending
 
 // Methods
 union Direction
-    north
-    south
-    function opposite() returns Direction
-        return match self 'c'
-            north gives Direction.south
-            south gives Direction.north
-        end 'c'
-    end 'opposite'
+		north
+		south
+		function opposite() returns Direction
+				return match self 'c'
+						north gives Direction.south
+						south gives Direction.north
+				end 'c'
+		end 'opposite'
 end 'Direction'
 ```
 
@@ -457,40 +457,40 @@ Enums are like unions but simpler: no methods, no associated values. Direct `==`
 ```maxon
 // Integer (auto-increment from 0)
 enum Color
-    red       // 0
-    green     // 1
-    blue      // 2
+		red       // 0
+		green     // 1
+		blue      // 2
 end 'Color'
 
 // Explicit integer values (mixed with auto-increment)
 enum HttpStatus
-    ok = 200
-    notFound = 404
-    serverError = 500
+		ok = 200
+		notFound = 404
+		serverError = 500
 end 'HttpStatus'
 
 // Float-backed
 enum Threshold
-    low = 0.1
-    medium = 0.5
-    high = 0.9
+		low = 0.1
+		medium = 0.5
+		high = 0.9
 end 'Threshold'
 
 // String-backed
 enum ContentType
-    json = "application/json"
-    html = "text/html"
+		json = "application/json"
+		html = "text/html"
 end 'ContentType'
 
 var s = HttpStatus.notFound
 if s == HttpStatus.notFound 'check'
-    // direct comparison allowed
+		// direct comparison allowed
 end 'check'
 
 var result = match s 'handle'
-    ok gives 1
-    notFound gives 2
-    serverError gives 3
+		ok gives 1
+		notFound gives 2
+		serverError gives 3
 end 'handle'
 
 // rawValue, name, ordinal, allCases, fromRawValue, fromName
@@ -498,15 +498,15 @@ var code = s.rawValue      // 404
 var name = s.name          // "notFound"
 var pos = s.ordinal        // 1 (declaration position, not raw value)
 for status in HttpStatus.allCases 'loop'  // iterate all cases
-    print("{status.name}\n")
+		print("{status.name}\n")
 end 'loop'
 var s2 = try HttpStatus.fromRawValue(200) otherwise HttpStatus.ok    // HttpStatus.ok
 var s3 = try HttpStatus.fromName("notFound") otherwise HttpStatus.ok // HttpStatus.notFound
 
 export enum Permission
-    none = 0
-    read = 1
-    write = 2
+		none = 0
+		read = 1
+		write = 2
 end 'Permission'
 ```
 
@@ -515,14 +515,14 @@ end 'Permission'
 ```maxon
 // Define error type (must be union conforming to Error)
 union FileError implements Error
-    notFound
-    permissionDenied
+		notFound
+		permissionDenied
 end 'FileError'
 
 // Throwing function
 function readFile(path String) returns String throws FileError
-    if not exists(path) 'c' throw FileError.notFound end 'c'
-    return contents
+		if not exists(path) 'c' throw FileError.notFound end 'c'
+		return contents
 end 'readFile'
 
 // Handle with default value
@@ -533,12 +533,12 @@ try mayFail() otherwise ignore
 
 // Block handler
 try mayFail() otherwise 'handler'
-    print("Failed")
+		print("Failed")
 end 'handler'
 
 // Block with error binding
 try mayFail() otherwise (e) 'handler'
-    print("Error: {e}")
+		print("Error: {e}")
 end 'handler'
 
 // Propagate (only in throwing functions)
@@ -546,9 +546,9 @@ let content = try readFile("x")   // propagates to caller
 
 // Conditional try
 if let value = try mayFail() 'ok'
-    print("{value}")
+		print("{value}")
 end 'ok' else (e) 'err'
-    print("Error")
+		print("Error")
 end 'err'
 
 // Panic (unrecoverable error — terminates with stack trace)

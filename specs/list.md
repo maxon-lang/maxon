@@ -95,8 +95,8 @@ Elements are iterated front to back. Iteration uses a cached cursor on the under
 <!-- test: basic.creation -->
 ```maxon
 function main() returns ExitCode
-  var list = List from [10, 20, 30]
-  return list.count()
+	var list = List from [10, 20, 30]
+	return list.count()
 end 'main'
 ```
 ```exitcode
@@ -109,11 +109,11 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntList = List with Integer
 
 function main() returns ExitCode
-  var list = IntList{}
-  if list.isEmpty() 'check'
-    return 0
-  end 'check'
-  return 1
+	var list = IntList{}
+	if list.isEmpty() 'check'
+		return 0
+	end 'check'
+	return 1
 end 'main'
 ```
 ```exitcode
@@ -123,12 +123,12 @@ end 'main'
 <!-- test: basic.first-last -->
 ```maxon
 function main() returns ExitCode
-  var list = List from [10, 20, 30]
-  var f = try list.first() otherwise 0
-  var l = try list.last() otherwise 0
-  print("{f}\n")
-  print("{l}\n")
-  return 0
+	var list = List from [10, 20, 30]
+	var f = try list.first() otherwise 0
+	var l = try list.last() otherwise 0
+	print("{f}\n")
+	print("{l}\n")
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -145,9 +145,9 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntList = List with Integer
 
 function main() returns ExitCode
-  var list = IntList{}
-  var f = try list.first() otherwise 99
-  return f
+	var list = IntList{}
+	var f = try list.first() otherwise 99
+	return f
 end 'main'
 ```
 ```exitcode
@@ -160,9 +160,9 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntList = List with Integer
 
 function main() returns ExitCode
-  var list = IntList{}
-  var l = try list.last() otherwise 99
-  return l
+	var list = IntList{}
+	var l = try list.last() otherwise 99
+	return l
 end 'main'
 ```
 ```exitcode
@@ -175,10 +175,10 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntList = List with Integer
 
 function main() returns ExitCode
-  var list = IntList{}
-  list.prepend(42)
-  var f = try list.first() otherwise 0
-  return f
+	var list = IntList{}
+	list.prepend(42)
+	var f = try list.first() otherwise 0
+	return f
 end 'main'
 ```
 ```exitcode
@@ -191,16 +191,16 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntList = List with Integer
 
 function main() returns ExitCode
-  var list = IntList{}
-  list.prepend(3)
-  list.prepend(2)
-  list.prepend(1)
-  var f = try list.first() otherwise 0
-  var l = try list.last() otherwise 0
-  print("{f}\n")
-  print("{l}\n")
-  print("{list.count()}\n")
-  return 0
+	var list = IntList{}
+	list.prepend(3)
+	list.prepend(2)
+	list.prepend(1)
+	var f = try list.first() otherwise 0
+	var l = try list.last() otherwise 0
+	print("{f}\n")
+	print("{l}\n")
+	print("{list.count()}\n")
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -218,10 +218,10 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntList = List with Integer
 
 function main() returns ExitCode
-  var list = IntList{}
-  list.append(42)
-  var f = try list.first() otherwise 0
-  return f
+	var list = IntList{}
+	list.append(42)
+	var f = try list.first() otherwise 0
+	return f
 end 'main'
 ```
 ```exitcode
@@ -234,16 +234,16 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntList = List with Integer
 
 function main() returns ExitCode
-  var list = IntList{}
-  list.append(1)
-  list.append(2)
-  list.append(3)
-  var f = try list.first() otherwise 0
-  var l = try list.last() otherwise 0
-  print("{f}\n")
-  print("{l}\n")
-  print("{list.count()}\n")
-  return 0
+	var list = IntList{}
+	list.append(1)
+	list.append(2)
+	list.append(3)
+	var f = try list.first() otherwise 0
+	var l = try list.last() otherwise 0
+	print("{f}\n")
+	print("{l}\n")
+	print("{list.count()}\n")
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -258,16 +258,16 @@ end 'main'
 <!-- test: get.valid -->
 ```maxon
 function main() returns ExitCode
-  var list = List from [10, 20, 30, 40]
-  var v0 = try list.get(0) otherwise 0
-  var v1 = try list.get(1) otherwise 0
-  var v2 = try list.get(2) otherwise 0
-  var v3 = try list.get(3) otherwise 0
-  print("{v0}\n")
-  print("{v1}\n")
-  print("{v2}\n")
-  print("{v3}\n")
-  return 0
+	var list = List from [10, 20, 30, 40]
+	var v0 = try list.get(0) otherwise 0
+	var v1 = try list.get(1) otherwise 0
+	var v2 = try list.get(2) otherwise 0
+	var v3 = try list.get(3) otherwise 0
+	print("{v0}\n")
+	print("{v1}\n")
+	print("{v2}\n")
+	print("{v3}\n")
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -283,9 +283,9 @@ end 'main'
 <!-- test: get.out-of-bounds -->
 ```maxon
 function main() returns ExitCode
-  var list = List from [10, 20, 30]
-  var v = try list.get(5) otherwise 99
-  return v
+	var list = List from [10, 20, 30]
+	var v = try list.get(5) otherwise 99
+	return v
 end 'main'
 ```
 ```exitcode
@@ -295,17 +295,17 @@ end 'main'
 <!-- test: insert.at-beginning -->
 ```maxon
 function main() returns ExitCode
-  var list = List from [20, 30]
-  try list.insert(at: 0, value: 10) otherwise 'err'
-    return 1
-  end 'err'
-  var v0 = try list.get(0) otherwise 0
-  var v1 = try list.get(1) otherwise 0
-  var v2 = try list.get(2) otherwise 0
-  print("{v0}\n")
-  print("{v1}\n")
-  print("{v2}\n")
-  return 0
+	var list = List from [20, 30]
+	try list.insert(at: 0, value: 10) otherwise 'err'
+		return 1
+	end 'err'
+	var v0 = try list.get(0) otherwise 0
+	var v1 = try list.get(1) otherwise 0
+	var v2 = try list.get(2) otherwise 0
+	print("{v0}\n")
+	print("{v1}\n")
+	print("{v2}\n")
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -320,17 +320,17 @@ end 'main'
 <!-- test: insert.at-middle -->
 ```maxon
 function main() returns ExitCode
-  var list = List from [10, 30]
-  try list.insert(at: 1, value: 20) otherwise 'err'
-    return 1
-  end 'err'
-  var v0 = try list.get(0) otherwise 0
-  var v1 = try list.get(1) otherwise 0
-  var v2 = try list.get(2) otherwise 0
-  print("{v0}\n")
-  print("{v1}\n")
-  print("{v2}\n")
-  return 0
+	var list = List from [10, 30]
+	try list.insert(at: 1, value: 20) otherwise 'err'
+		return 1
+	end 'err'
+	var v0 = try list.get(0) otherwise 0
+	var v1 = try list.get(1) otherwise 0
+	var v2 = try list.get(2) otherwise 0
+	print("{v0}\n")
+	print("{v1}\n")
+	print("{v2}\n")
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -345,17 +345,17 @@ end 'main'
 <!-- test: insert.at-end -->
 ```maxon
 function main() returns ExitCode
-  var list = List from [10, 20]
-  try list.insert(at: 2, value: 30) otherwise 'err'
-    return 1
-  end 'err'
-  var v0 = try list.get(0) otherwise 0
-  var v1 = try list.get(1) otherwise 0
-  var v2 = try list.get(2) otherwise 0
-  print("{v0}\n")
-  print("{v1}\n")
-  print("{v2}\n")
-  return 0
+	var list = List from [10, 20]
+	try list.insert(at: 2, value: 30) otherwise 'err'
+		return 1
+	end 'err'
+	var v0 = try list.get(0) otherwise 0
+	var v1 = try list.get(1) otherwise 0
+	var v2 = try list.get(2) otherwise 0
+	print("{v0}\n")
+	print("{v1}\n")
+	print("{v2}\n")
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -370,13 +370,13 @@ end 'main'
 <!-- test: remove-first -->
 ```maxon
 function main() returns ExitCode
-  var list = List from [10, 20, 30]
-  var removed = try list.removeFirst() otherwise 0
-  print("{removed}\n")
-  print("{list.count()}\n")
-  var f = try list.first() otherwise 0
-  print("{f}\n")
-  return 0
+	var list = List from [10, 20, 30]
+	var removed = try list.removeFirst() otherwise 0
+	print("{removed}\n")
+	print("{list.count()}\n")
+	var f = try list.first() otherwise 0
+	print("{f}\n")
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -391,13 +391,13 @@ end 'main'
 <!-- test: remove-last -->
 ```maxon
 function main() returns ExitCode
-  var list = List from [10, 20, 30]
-  var removed = try list.removeLast() otherwise 0
-  print("{removed}\n")
-  print("{list.count()}\n")
-  var l = try list.last() otherwise 0
-  print("{l}\n")
-  return 0
+	var list = List from [10, 20, 30]
+	var removed = try list.removeLast() otherwise 0
+	print("{removed}\n")
+	print("{list.count()}\n")
+	var l = try list.last() otherwise 0
+	print("{l}\n")
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -412,17 +412,17 @@ end 'main'
 <!-- test: remove.at-index -->
 ```maxon
 function main() returns ExitCode
-  var list = List from [10, 20, 30, 40]
-  var removed = try list.remove(at: 1) otherwise 0
-  print("{removed}\n")
-  print("{list.count()}\n")
-  var v0 = try list.get(0) otherwise 0
-  var v1 = try list.get(1) otherwise 0
-  var v2 = try list.get(2) otherwise 0
-  print("{v0}\n")
-  print("{v1}\n")
-  print("{v2}\n")
-  return 0
+	var list = List from [10, 20, 30, 40]
+	var removed = try list.remove(at: 1) otherwise 0
+	print("{removed}\n")
+	print("{list.count()}\n")
+	var v0 = try list.get(0) otherwise 0
+	var v1 = try list.get(1) otherwise 0
+	var v2 = try list.get(2) otherwise 0
+	print("{v0}\n")
+	print("{v1}\n")
+	print("{v2}\n")
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -439,11 +439,11 @@ end 'main'
 <!-- test: iteration.for-in -->
 ```maxon
 function main() returns ExitCode
-  var list = List from [10, 20, 30]
-  for item in list 'loop'
-    print("{item}\n")
-  end 'loop'
-  return 0
+	var list = List from [10, 20, 30]
+	for item in list 'loop'
+		print("{item}\n")
+	end 'loop'
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -461,15 +461,15 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntList = List with Integer
 
 function main() returns ExitCode
-  var list = IntList{}
-  for i in 1 to 100 'build'
-    list.append(i)
-  end 'build'
-  var sum = 0
-  for item in list 'loop'
-    sum = sum + item
-  end 'loop'
-  return sum - 5050
+	var list = IntList{}
+	for i in 1 to 100 'build'
+		list.append(i)
+	end 'build'
+	var sum = 0
+	for item in list 'loop'
+		sum = sum + item
+	end 'loop'
+	return sum - 5050
 end 'main'
 ```
 ```exitcode
@@ -479,19 +479,19 @@ end 'main'
 <!-- test: iteration.two-loops -->
 ```maxon
 function main() returns ExitCode
-  var list = List from [1, 2, 3]
-  var sum1 = 0
-  for item in list 'loop1'
-    sum1 = sum1 + item
-  end 'loop1'
-  var sum2 = 0
-  for item in list 'loop2'
-    sum2 = sum2 + item
-  end 'loop2'
-  if sum1 == sum2 'check'
-    return 0
-  end 'check'
-  return 1
+	var list = List from [1, 2, 3]
+	var sum1 = 0
+	for item in list 'loop1'
+		sum1 = sum1 + item
+	end 'loop1'
+	var sum2 = 0
+	for item in list 'loop2'
+		sum2 = sum2 + item
+	end 'loop2'
+	if sum1 == sum2 'check'
+		return 0
+	end 'check'
+	return 1
 end 'main'
 ```
 ```exitcode
@@ -504,21 +504,21 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntList = List with Integer
 
 function main() returns ExitCode
-  var list = IntList{}
-  list.append(2)
-  list.append(3)
-  list.prepend(1)
-  list.append(4)
-  var removed1 = try list.removeFirst() otherwise 0
-  var removed2 = try list.removeLast() otherwise 0
-  print("{removed1}\n")
-  print("{removed2}\n")
-  print("{list.count()}\n")
-  var v0 = try list.get(0) otherwise 0
-  var v1 = try list.get(1) otherwise 0
-  print("{v0}\n")
-  print("{v1}\n")
-  return 0
+	var list = IntList{}
+	list.append(2)
+	list.append(3)
+	list.prepend(1)
+	list.append(4)
+	var removed1 = try list.removeFirst() otherwise 0
+	var removed2 = try list.removeLast() otherwise 0
+	print("{removed1}\n")
+	print("{removed2}\n")
+	print("{list.count()}\n")
+	var v0 = try list.get(0) otherwise 0
+	var v1 = try list.get(1) otherwise 0
+	print("{v0}\n")
+	print("{v1}\n")
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -537,14 +537,14 @@ end 'main'
 typealias StringList = List with String
 
 function main() returns ExitCode
-  var list = StringList{}
-  list.append("hello")
-  list.append("world")
-  var f = try list.first() otherwise "none"
-  var l = try list.last() otherwise "none"
-  print("{f}\n")
-  print("{l}\n")
-  return 0
+	var list = StringList{}
+	list.append("hello")
+	list.append("world")
+	var f = try list.first() otherwise "none"
+	var l = try list.last() otherwise "none"
+	print("{f}\n")
+	print("{l}\n")
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -558,12 +558,12 @@ world
 <!-- test: clear -->
 ```maxon
 function main() returns ExitCode
-  var list = List from [1, 2, 3]
-  list.clear()
-  if list.isEmpty() 'check'
-    return 0
-  end 'check'
-  return 1
+	var list = List from [1, 2, 3]
+	list.clear()
+	if list.isEmpty() 'check'
+		return 0
+	end 'check'
+	return 1
 end 'main'
 ```
 ```exitcode
@@ -576,17 +576,17 @@ end 'main'
 typealias StringList = List with String
 
 function testRemove()
-  var list = StringList{}
-  list.append("hello world!!!!!!!!!!!!!!")
-  list.append("goodbye world!!!!!!!!!!!!!")
-  var removed = try list.removeFirst() otherwise "none"
-  print("{removed}\n")
-  print("{list.count()}\n")
+	var list = StringList{}
+	list.append("hello world!!!!!!!!!!!!!!")
+	list.append("goodbye world!!!!!!!!!!!!!")
+	var removed = try list.removeFirst() otherwise "none"
+	print("{removed}\n")
+	print("{list.count()}\n")
 end 'testRemove'
 
 function main() returns ExitCode
-  testRemove()
-  return 0
+	testRemove()
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -708,16 +708,16 @@ mm_raw_free #R4
 typealias StringList = List with String
 
 function testRemove() returns String
-  var list = StringList{}
-  list.append("hello world!!!!!!!!!!!!!!")
-  list.append("goodbye world!!!!!!!!!!!!!")
-  return try list.removeFirst() otherwise "none"
+	var list = StringList{}
+	list.append("hello world!!!!!!!!!!!!!!")
+	list.append("goodbye world!!!!!!!!!!!!!")
+	return try list.removeFirst() otherwise "none"
 end 'testRemove'
 
 function main() returns ExitCode
-  var removed = testRemove()
-  print("{removed}\n")
-  return 0
+	var removed = testRemove()
+	print("{removed}\n")
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -817,17 +817,17 @@ mm_raw_free #R2
 typealias StringList = List with String
 
 function testClear()
-  var list = StringList{}
-  list.append("alpha string!!!!!!!!!!!!!!!")
-  list.append("beta string!!!!!!!!!!!!!!!!")
-  list.append("gamma string!!!!!!!!!!!!!!!")
-  list.clear()
-  print("{list.count()}\n")
+	var list = StringList{}
+	list.append("alpha string!!!!!!!!!!!!!!!")
+	list.append("beta string!!!!!!!!!!!!!!!!")
+	list.append("gamma string!!!!!!!!!!!!!!!")
+	list.clear()
+	print("{list.count()}\n")
 end 'testClear'
 
 function main() returns ExitCode
-  testClear()
-  return 0
+	testClear()
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -943,17 +943,17 @@ mm_raw_free #R3
 typealias StringList = List with String
 
 function clearList(list StringList)
-  list.clear()
+	list.clear()
 end 'clearList'
 
 function main() returns ExitCode
-  var list = StringList{}
-  list.append("alpha string!!!!!!!!!!!!!!!")
-  list.append("beta string!!!!!!!!!!!!!!!!")
-  list.append("gamma string!!!!!!!!!!!!!!!")
-  clearList(list)
-  print("{list.count()}\n")
-  return 0
+	var list = StringList{}
+	list.append("alpha string!!!!!!!!!!!!!!!")
+	list.append("beta string!!!!!!!!!!!!!!!!")
+	list.append("gamma string!!!!!!!!!!!!!!!")
+	clearList(list)
+	print("{list.count()}\n")
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -1070,21 +1070,21 @@ Getting a value from a list and then clearing it is a borrow conflict, even in a
 typealias StringList = List with String
 
 function clearList(list StringList) returns String
-  var val = try list.first() otherwise "none"
-  list.clear()
-  return val
+	var val = try list.first() otherwise "none"
+	list.clear()
+	return val
 end 'clearList'
 
 function main() returns ExitCode
-  var list = StringList{}
-  list.append("hello world!!!!!!!!!!!!!!")
-  var result = clearList(list)
-  print("{result}\n")
-  return 0
+	var list = StringList{}
+	list.append("hello world!!!!!!!!!!!!!!")
+	var result = clearList(list)
+	print("{result}\n")
+	return 0
 end 'main'
 ```
 ```maxoncstderr
-error E3070: specs/fragments/list/memory.value-survives-clear-and-return.test:6:8: cannot mutate 'list' via 'clear' while it is borrowed by 'val' (borrowed at line 5)
+error E3070: specs/fragments/list/memory.value-survives-clear-and-return.test:6:7: cannot mutate 'list' via 'clear' while it is borrowed by 'val' (borrowed at line 5)
 ```
 
 <!-- test: memory.value-survives-clear-error -->
@@ -1094,20 +1094,20 @@ Passing a borrowed-from list to a function that clears it is a borrow conflict.
 typealias StringList = List with String
 
 function clearList(list StringList)
-  list.clear()
+	list.clear()
 end 'clearList'
 
 function main() returns ExitCode
-  var list = StringList{}
-  list.append("hello world!!!!!!!!!!!!!!")
-  var val = try list.first() otherwise "none"
-  clearList(list)
-  print("{val}\n")
-  return 0
+	var list = StringList{}
+	list.append("hello world!!!!!!!!!!!!!!")
+	var val = try list.first() otherwise "none"
+	clearList(list)
+	print("{val}\n")
+	return 0
 end 'main'
 ```
 ```maxoncstderr
-error E3070: specs/fragments/list/memory.value-survives-clear-error.test:12:3: cannot mutate 'list' via 'clearList' while it is borrowed by 'val' (borrowed at line 11)
+error E3070: specs/fragments/list/memory.value-survives-clear-error.test:12:2: cannot mutate 'list' via 'clearList' while it is borrowed by 'val' (borrowed at line 11)
 ```
 
 <!-- test: memory.value-survives-clear -->
@@ -1117,14 +1117,14 @@ Getting a value from a list and then clearing it is a borrow conflict.
 typealias StringList = List with String
 
 function main() returns ExitCode
-  var list = StringList{}
-  list.append("hello world!!!!!!!!!!!!!!")
-  var val = try list.first() otherwise "none"
-  list.clear()
-  print("{val}\n")
-  return 0
+	var list = StringList{}
+	list.append("hello world!!!!!!!!!!!!!!")
+	var val = try list.first() otherwise "none"
+	list.clear()
+	print("{val}\n")
+	return 0
 end 'main'
 ```
 ```maxoncstderr
-error E3070: specs/fragments/list/memory.value-survives-clear.test:8:8: cannot mutate 'list' via 'clear' while it is borrowed by 'val' (borrowed at line 7)
+error E3070: specs/fragments/list/memory.value-survives-clear.test:8:7: cannot mutate 'list' via 'clear' while it is borrowed by 'val' (borrowed at line 7)
 ```

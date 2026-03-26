@@ -43,12 +43,12 @@ To get a reference to a function, use the function name without parentheses:
 typealias Score = int(i64.min to i64.max)
 
 function double(x Score) returns Score
-  return x * 2
+	return x * 2
 end 'double'
 
 function main() returns ExitCode
-  var f = double      // f is a function reference
-  return f(21)        // calls double(21), returns 42
+	var f = double      // f is a function reference
+	return f(21)        // calls double(21), returns 42
 end 'main'
 ```
 ```exitcode
@@ -63,15 +63,15 @@ Functions can be passed to other functions:
 typealias Score = int(i64.min to i64.max)
 
 function apply(f (Score) returns Score, x Score) returns Score
-  return f(x)
+	return f(x)
 end 'apply'
 
 function triple(n Score) returns Score
-  return n * 3
+	return n * 3
 end 'triple'
 
 function main() returns ExitCode
-  return apply(triple, x: 10)  // returns 30
+	return apply(triple, x: 10)  // returns 30
 end 'main'
 ```
 ```exitcode
@@ -86,8 +86,8 @@ Closures are inline anonymous functions:
 typealias Score = int(i64.min to i64.max)
 
 function main() returns ExitCode
-  var f = (x Score) gives x * 2
-  return f(21)  // returns 42
+	var f = (x Score) gives x * 2
+	return f(21)  // returns 42
 end 'main'
 ```
 ```exitcode
@@ -100,11 +100,11 @@ Closures can be passed directly to higher-order functions:
 typealias Score = int(i64.min to i64.max)
 
 function apply(f (Score) returns Score, x Score) returns Score
-  return f(x)
+	return f(x)
 end 'apply'
 
 function main() returns ExitCode
-  return apply((n Score) gives n + 5, x: 10)  // returns 15
+	return apply((n Score) gives n + 5, x: 10)  // returns 15
 end 'main'
 ```
 ```exitcode
@@ -119,12 +119,12 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 function double(x Integer) returns Integer
-  return x * 2
+	return x * 2
 end 'double'
 
 function main() returns ExitCode
-  var f = double
-  return f(21)
+	var f = double
+	return f(21)
 end 'main'
 ```
 ```exitcode
@@ -137,15 +137,15 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 function apply(f (Integer) returns Integer, x Integer) returns Integer
-  return f(x)
+	return f(x)
 end 'apply'
 
 function triple(n Integer) returns Integer
-  return n * 3
+	return n * 3
 end 'triple'
 
 function main() returns ExitCode
-  return apply(triple, x: 10)
+	return apply(triple, x: 10)
 end 'main'
 ```
 ```exitcode
@@ -158,8 +158,8 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 function main() returns ExitCode
-  var f = (x Integer) gives x * 5
-  return f(8)
+	var f = (x Integer) gives x * 5
+	return f(8)
 end 'main'
 ```
 ```exitcode
@@ -172,11 +172,11 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 function apply(f (Integer) returns Integer, x Integer) returns Integer
-  return f(x)
+	return f(x)
 end 'apply'
 
 function main() returns ExitCode
-  return apply((n Integer) gives n + 7, x: 10)
+	return apply((n Integer) gives n + 7, x: 10)
 end 'main'
 ```
 ```exitcode
@@ -189,15 +189,15 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 function calculate(f (Integer, Integer) returns Integer, a Integer, b Integer) returns Integer
-  return f(a, b)
+	return f(a, b)
 end 'calculate'
 
 function add(x Integer, y Integer) returns Integer
-  return x + y
+	return x + y
 end 'add'
 
 function main() returns ExitCode
-  return calculate(add, a: 15, b: 27)
+	return calculate(add, a: 15, b: 27)
 end 'main'
 ```
 ```exitcode
@@ -210,19 +210,19 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 function double(x Integer) returns Integer
-  return x * 2
+	return x * 2
 end 'double'
 
 function triple(x Integer) returns Integer
-  return x * 3
+	return x * 3
 end 'triple'
 
 function main() returns ExitCode
-  var f = double
-  var a = f(10)
-  f = triple
-  var b = f(10)
-  return a + b
+	var f = double
+	var a = f(10)
+	f = triple
+	var b = f(10)
+	return a + b
 end 'main'
 ```
 ```exitcode

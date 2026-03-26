@@ -79,7 +79,7 @@ arr.set(1, value: 200)
 <!-- test: literal-first -->
 ```maxon
 function main() returns ExitCode
-  return try [10, 20, 30].get(0) otherwise 0
+	return try [10, 20, 30].get(0) otherwise 0
 end 'main'
 ```
 ```exitcode
@@ -89,8 +89,8 @@ end 'main'
 <!-- test: literal-middle -->
 ```maxon
 function main() returns ExitCode
-  var arr = [10, 20, 30]
-  return try arr.get(1) otherwise 0
+	var arr = [10, 20, 30]
+	return try arr.get(1) otherwise 0
 end 'main'
 ```
 ```exitcode
@@ -100,8 +100,8 @@ end 'main'
 <!-- test: literal-last -->
 ```maxon
 function main() returns ExitCode
-  var arr = [10, 20, 30]
-  return try arr.get(2) otherwise 0
+	var arr = [10, 20, 30]
+	return try arr.get(2) otherwise 0
 end 'main'
 ```
 ```exitcode
@@ -111,8 +111,8 @@ end 'main'
 <!-- test: five-elements -->
 ```maxon
 function main() returns ExitCode
-  var arr = [5, 10, 15, 20, 25]
-  return try arr.get(4) otherwise 0
+	var arr = [5, 10, 15, 20, 25]
+	return try arr.get(4) otherwise 0
 end 'main'
 ```
 ```exitcode
@@ -122,9 +122,9 @@ end 'main'
 <!-- test: index-assignment -->
 ```maxon
 function main() returns ExitCode
-  var arr = [10, 20, 30]
-  arr.set(0, value: 100)
-  return try arr.get(0) otherwise 0
+	var arr = [10, 20, 30]
+	arr.set(0, value: 100)
+	return try arr.get(0) otherwise 0
 end 'main'
 ```
 ```exitcode
@@ -134,9 +134,9 @@ end 'main'
 <!-- test: assignment-middle -->
 ```maxon
 function main() returns ExitCode
-  var arr = [1, 2, 3]
-  arr.set(1, value: 42)
-  return try arr.get(1) otherwise 0
+	var arr = [1, 2, 3]
+	arr.set(1, value: 42)
+	return try arr.get(1) otherwise 0
 end 'main'
 ```
 ```exitcode
@@ -146,9 +146,9 @@ end 'main'
 <!-- test: assignment-last -->
 ```maxon
 function main() returns ExitCode
-  var arr = [1, 2, 3, 4, 5]
-  arr.set(4, value: 99)
-  return try arr.get(4) otherwise 0
+	var arr = [1, 2, 3, 4, 5]
+	arr.set(4, value: 99)
+	return try arr.get(4) otherwise 0
 end 'main'
 ```
 ```exitcode
@@ -158,10 +158,10 @@ end 'main'
 <!-- test: multiple-access -->
 ```maxon
 function main() returns ExitCode
-  var arr = [5, 10, 15, 20, 25]
-  var a = try arr.get(2) otherwise 0
-  var b = try arr.get(4) otherwise 0
-  return a + b
+	var arr = [5, 10, 15, 20, 25]
+	var a = try arr.get(2) otherwise 0
+	var b = try arr.get(4) otherwise 0
+	return a + b
 end 'main'
 ```
 ```exitcode
@@ -171,9 +171,9 @@ end 'main'
 <!-- test: assignment-preserves-others -->
 ```maxon
 function main() returns ExitCode
-  var arr = [10, 20, 30]
-  arr.set(0, value: 100)
-  return try arr.get(1) otherwise 0
+	var arr = [10, 20, 30]
+	arr.set(0, value: 100)
+	return try arr.get(1) otherwise 0
 end 'main'
 ```
 ```exitcode
@@ -183,14 +183,14 @@ end 'main'
 <!-- test: multiple-assignments -->
 ```maxon
 function main() returns ExitCode
-  var arr = [0, 0, 0]
-  arr.set(0, value: 1)
-  arr.set(1, value: 2)
-  arr.set(2, value: 3)
-  var a = try arr.get(0) otherwise 0
-  var b = try arr.get(1) otherwise 0
-  var c = try arr.get(2) otherwise 0
-  return a + b + c
+	var arr = [0, 0, 0]
+	arr.set(0, value: 1)
+	arr.set(1, value: 2)
+	arr.set(2, value: 3)
+	var a = try arr.get(0) otherwise 0
+	var b = try arr.get(1) otherwise 0
+	var c = try arr.get(2) otherwise 0
+	return a + b + c
 end 'main'
 ```
 ```exitcode
@@ -200,8 +200,8 @@ end 'main'
 <!-- test: let-array-first -->
 ```maxon
 function main() returns ExitCode
-  let arr = [10, 20, 30]
-  return try arr.get(0) otherwise 0
+	let arr = [10, 20, 30]
+	return try arr.get(0) otherwise 0
 end 'main'
 ```
 ```exitcode
@@ -211,8 +211,8 @@ end 'main'
 <!-- test: let-array-middle -->
 ```maxon
 function main() returns ExitCode
-  let arr = [10, 20, 30]
-  return try arr.get(1) otherwise 0
+	let arr = [10, 20, 30]
+	return try arr.get(1) otherwise 0
 end 'main'
 ```
 ```exitcode
@@ -222,8 +222,8 @@ end 'main'
 <!-- test: let-array-last -->
 ```maxon
 function main() returns ExitCode
-  let arr = [10, 20, 30]
-  return try arr.get(2) otherwise 0
+	let arr = [10, 20, 30]
+	return try arr.get(2) otherwise 0
 end 'main'
 ```
 ```exitcode
@@ -233,10 +233,10 @@ end 'main'
 <!-- test: let-array-multiple-access -->
 ```maxon
 function main() returns ExitCode
-  let arr = [5, 10, 15, 20]
-  var a = try arr.get(0) otherwise 0
-  var b = try arr.get(3) otherwise 0
-  return a + b
+	let arr = [5, 10, 15, 20]
+	var a = try arr.get(0) otherwise 0
+	var b = try arr.get(3) otherwise 0
+	return a + b
 end 'main'
 ```
 ```exitcode
@@ -250,10 +250,10 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
 function main() returns ExitCode
-  var arr = IntArray{}
-  arr.reserve(5)
-  arr.push(42)
-  return try arr.get(0) otherwise 0
+	var arr = IntArray{}
+	arr.reserve(5)
+	arr.push(42)
+	return try arr.get(0) otherwise 0
 end 'main'
 ```
 ```exitcode
@@ -266,10 +266,10 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
 function main() returns ExitCode
-    var arr = IntArray{}
-    arr.resize(5)
-    arr.set(0, value: 99)
-    return try arr.get(0) otherwise 0
+		var arr = IntArray{}
+		arr.resize(5)
+		arr.set(0, value: 99)
+		return try arr.get(0) otherwise 0
 end 'main'
 ```
 ```exitcode
@@ -283,13 +283,13 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
 function main() returns ExitCode
-    var arr = IntArray{}
-    var i = 0
-    while i < 100 'loop'
-        arr.push(i)
-        i = i + 1
-    end 'loop'
-    return try arr.get(99) otherwise -1
+		var arr = IntArray{}
+		var i = 0
+		while i < 100 'loop'
+				arr.push(i)
+				i = i + 1
+		end 'loop'
+		return try arr.get(99) otherwise -1
 end 'main'
 ```
 ```exitcode
@@ -307,16 +307,16 @@ typealias Byte = byte(0 to u8.max)
 typealias ByteArray = Array with Byte
 
 function main() returns ExitCode
-  var arr = ByteArray{}
-  arr.push(10 as Byte)
-  arr.push(20 as Byte)
-  arr.push(30 as Byte)
+	var arr = ByteArray{}
+	arr.push(10 as Byte)
+	arr.push(20 as Byte)
+	arr.push(30 as Byte)
 
-  var v0 = try arr.get(0) otherwise 0 as Byte
-  var v1 = try arr.get(1) otherwise 0 as Byte
-  var v2 = try arr.get(2) otherwise 0 as Byte
+	var v0 = try arr.get(0) otherwise 0 as Byte
+	var v1 = try arr.get(1) otherwise 0 as Byte
+	var v2 = try arr.get(2) otherwise 0 as Byte
 
-  return (v0 as Integer) + (v1 as Integer) + (v2 as Integer)
+	return (v0 as Integer) + (v1 as Integer) + (v2 as Integer)
 end 'main'
 ```
 ```exitcode
@@ -334,16 +334,16 @@ typealias Byte = byte(0 to u8.max)
 typealias ByteArray = Array with Byte
 
 function main() returns ExitCode
-  var arr = ByteArray{}
-  arr.push(1 as Byte)
-  arr.push(2 as Byte)
-  arr.push(3 as Byte)
+	var arr = ByteArray{}
+	arr.push(1 as Byte)
+	arr.push(2 as Byte)
+	arr.push(3 as Byte)
 
-  var v0 = try arr.get(0) otherwise 0 as Byte
-  var v1 = try arr.get(1) otherwise 0 as Byte
-  var v2 = try arr.get(2) otherwise 0 as Byte
+	var v0 = try arr.get(0) otherwise 0 as Byte
+	var v1 = try arr.get(1) otherwise 0 as Byte
+	var v2 = try arr.get(2) otherwise 0 as Byte
 
-  return (v0 as Integer) + (v1 as Integer) + (v2 as Integer)
+	return (v0 as Integer) + (v1 as Integer) + (v2 as Integer)
 end 'main'
 ```
 ```exitcode
@@ -361,15 +361,15 @@ typealias Byte = byte(0 to u8.max)
 typealias ByteArray = Array with Byte
 
 function main() returns ExitCode
-  var arr = ByteArray{}
-  arr.push(10 as Byte)
-  arr.push(20 as Byte)
-  arr.push(30 as Byte)
+	var arr = ByteArray{}
+	arr.push(10 as Byte)
+	arr.push(20 as Byte)
+	arr.push(30 as Byte)
 
-  arr.set(1, value: 99 as Byte)
+	arr.set(1, value: 99 as Byte)
 
-  var val = try arr.get(1) otherwise 0 as Byte
-  return val as Integer
+	var val = try arr.get(1) otherwise 0 as Byte
+	return val as Integer
 end 'main'
 ```
 ```exitcode
@@ -387,26 +387,26 @@ typealias Byte = byte(0 to u8.max)
 typealias ByteArray = Array with Byte
 
 function main() returns ExitCode
-  var arr = ByteArray{}
-  arr.push(255 as Byte)
-  arr.push(0 as Byte)
-  arr.push(128 as Byte)
+	var arr = ByteArray{}
+	arr.push(255 as Byte)
+	arr.push(0 as Byte)
+	arr.push(128 as Byte)
 
-  var v0 = try arr.get(0) otherwise 0 as Byte
-  var v1 = try arr.get(1) otherwise 99 as Byte
-  var v2 = try arr.get(2) otherwise 0 as Byte
+	var v0 = try arr.get(0) otherwise 0 as Byte
+	var v1 = try arr.get(1) otherwise 99 as Byte
+	var v2 = try arr.get(2) otherwise 0 as Byte
 
-  if (v0 as Integer) != 255 'c0'
-    return 1
-  end 'c0'
-  if (v1 as Integer) != 0 'c1'
-    return 2
-  end 'c1'
-  if (v2 as Integer) != 128 'c2'
-    return 3
-  end 'c2'
+	if (v0 as Integer) != 255 'c0'
+		return 1
+	end 'c0'
+	if (v1 as Integer) != 0 'c1'
+		return 2
+	end 'c1'
+	if (v2 as Integer) != 128 'c2'
+		return 3
+	end 'c2'
 
-  return 0
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -423,14 +423,14 @@ typealias Byte = byte(0 to u8.max)
 typealias ByteArray = Array with Byte
 
 function main() returns ExitCode
-  var arr = ByteArray{}
-  arr.push(1 as Byte)
-  arr.push(2 as Byte)
-  arr.push(3 as Byte)
-  arr.push(4 as Byte)
-  arr.push(5 as Byte)
+	var arr = ByteArray{}
+	arr.push(1 as Byte)
+	arr.push(2 as Byte)
+	arr.push(3 as Byte)
+	arr.push(4 as Byte)
+	arr.push(5 as Byte)
 
-  return arr.count()
+	return arr.count()
 end 'main'
 ```
 ```exitcode
@@ -445,11 +445,11 @@ typealias IntArray = Array with Integer
 let numbers = [1, 2, 3, 4, 5]
 
 function main() returns ExitCode
-  var sum = 0
-  for n in numbers 'loop'
-    sum = sum + n
-  end 'loop'
-  return sum
+	var sum = 0
+	for n in numbers 'loop'
+		sum = sum + n
+	end 'loop'
+	return sum
 end 'main'
 ```
 ```exitcode
@@ -466,10 +466,10 @@ let SECOND = 20
 let values = [FIRST, SECOND, 30]
 
 function main() returns ExitCode
-  var v0 = try values.get(0) otherwise 0
-  var v1 = try values.get(1) otherwise 0
-  var v2 = try values.get(2) otherwise 0
-  return v0 + v1 + v2
+	var v0 = try values.get(0) otherwise 0
+	var v1 = try values.get(1) otherwise 0
+	var v2 = try values.get(2) otherwise 0
+	return v0 + v1 + v2
 end 'main'
 ```
 ```exitcode
@@ -481,12 +481,12 @@ end 'main'
 <!-- test: string-array-literal-basic -->
 ```maxon
 function main() returns ExitCode
-  var arr = ["hello", "world"]
-  var s = try arr.get(0) otherwise ""
-  if s == "hello" 'check'
-    return 0
-  end 'check'
-  return 1
+	var arr = ["hello", "world"]
+	var s = try arr.get(0) otherwise ""
+	if s == "hello" 'check'
+		return 0
+	end 'check'
+	return 1
 end 'main'
 ```
 ```exitcode
@@ -496,12 +496,12 @@ end 'main'
 <!-- test: string-array-literal-iterate -->
 ```maxon
 function main() returns ExitCode
-  var arr = ["aaa", "bbb", "ccc"]
-  var count = 0
-  for _ in arr 'loop'
-    count = count + 1
-  end 'loop'
-  return count
+	var arr = ["aaa", "bbb", "ccc"]
+	var count = 0
+	for _ in arr 'loop'
+		count = count + 1
+	end 'loop'
+	return count
 end 'main'
 ```
 ```exitcode
@@ -513,11 +513,11 @@ end 'main'
 var names = ["alice", "bob"]
 
 function main() returns ExitCode
-  var count = 0
-  for _ in names 'loop'
-    count = count + 1
-  end 'loop'
-  return count
+	var count = 0
+	for _ in names 'loop'
+		count = count + 1
+	end 'loop'
+	return count
 end 'main'
 ```
 ```exitcode
@@ -529,17 +529,17 @@ end 'main'
 var items = ["hello"]
 
 function useString(s String) returns ExitCode
-  if s == "hello" 'check'
-    return 42
-  end 'check'
-  return 0
+	if s == "hello" 'check'
+		return 42
+	end 'check'
+	return 0
 end 'useString'
 
 function main() returns ExitCode
-  for item in items 'loop'
-    return useString(item)
-  end 'loop'
-  return 1
+	for item in items 'loop'
+		return useString(item)
+	end 'loop'
+	return 1
 end 'main'
 ```
 ```exitcode
@@ -551,12 +551,12 @@ end 'main'
 <!-- test: slice-basic -->
 ```maxon
 function main() returns ExitCode
-  var arr = [10, 20, 30, 40, 50]
-  var sub = arr.slice(1, endIndex: 4)
-  var a = try sub.get(0) otherwise 0
-  var b = try sub.get(1) otherwise 0
-  var c = try sub.get(2) otherwise 0
-  return a + b + c
+	var arr = [10, 20, 30, 40, 50]
+	var sub = arr.slice(1, endIndex: 4)
+	var a = try sub.get(0) otherwise 0
+	var b = try sub.get(1) otherwise 0
+	var c = try sub.get(2) otherwise 0
+	return a + b + c
 end 'main'
 ```
 ```exitcode
@@ -566,9 +566,9 @@ end 'main'
 <!-- test: slice-from-start -->
 ```maxon
 function main() returns ExitCode
-  var arr = [10, 20, 30, 40, 50]
-  var sub = arr.slice(0, endIndex: 3)
-  return sub.count()
+	var arr = [10, 20, 30, 40, 50]
+	var sub = arr.slice(0, endIndex: 3)
+	return sub.count()
 end 'main'
 ```
 ```exitcode
@@ -578,11 +578,11 @@ end 'main'
 <!-- test: slice-to-end -->
 ```maxon
 function main() returns ExitCode
-  var arr = [10, 20, 30, 40, 50]
-  var sub = arr.slice(3, endIndex: 5)
-  var a = try sub.get(0) otherwise 0
-  var b = try sub.get(1) otherwise 0
-  return a + b
+	var arr = [10, 20, 30, 40, 50]
+	var sub = arr.slice(3, endIndex: 5)
+	var a = try sub.get(0) otherwise 0
+	var b = try sub.get(1) otherwise 0
+	return a + b
 end 'main'
 ```
 ```exitcode
@@ -592,9 +592,9 @@ end 'main'
 <!-- test: slice-empty -->
 ```maxon
 function main() returns ExitCode
-  var arr = [10, 20, 30]
-  var sub = arr.slice(1, endIndex: 1)
-  return sub.count()
+	var arr = [10, 20, 30]
+	var sub = arr.slice(1, endIndex: 1)
+	return sub.count()
 end 'main'
 ```
 ```exitcode
@@ -604,12 +604,12 @@ end 'main'
 <!-- test: slice-full -->
 ```maxon
 function main() returns ExitCode
-  var arr = [10, 20, 30]
-  var sub = arr.slice(0, endIndex: 3)
-  var a = try sub.get(0) otherwise 0
-  var b = try sub.get(1) otherwise 0
-  var c = try sub.get(2) otherwise 0
-  return a + b + c
+	var arr = [10, 20, 30]
+	var sub = arr.slice(0, endIndex: 3)
+	var a = try sub.get(0) otherwise 0
+	var b = try sub.get(1) otherwise 0
+	var c = try sub.get(2) otherwise 0
+	return a + b + c
 end 'main'
 ```
 ```exitcode
@@ -621,16 +621,16 @@ end 'main'
 <!-- test: append-basic -->
 ```maxon
 function main() returns ExitCode
-  var a = [1, 2, 3]
-  var b = [4, 5, 6]
-  a.append(b)
-  var sum = 0
-  var i = 0
-  while i < a.count() 'loop'
-    sum = sum + (try a.get(i) otherwise 0)
-    i = i + 1
-  end 'loop'
-  return sum
+	var a = [1, 2, 3]
+	var b = [4, 5, 6]
+	a.append(b)
+	var sum = 0
+	var i = 0
+	while i < a.count() 'loop'
+		sum = sum + (try a.get(i) otherwise 0)
+		i = i + 1
+	end 'loop'
+	return sum
 end 'main'
 ```
 ```exitcode
@@ -643,10 +643,10 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
 function main() returns ExitCode
-  var a = [1, 2, 3]
-  var b = IntArray{}
-  a.append(b)
-  return a.count()
+	var a = [1, 2, 3]
+	var b = IntArray{}
+	a.append(b)
+	return a.count()
 end 'main'
 ```
 ```exitcode
@@ -659,12 +659,12 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
 function main() returns ExitCode
-  var a = IntArray{}
-  var b = [10, 20]
-  a.append(b)
-  var first = try a.get(0) otherwise 0
-  var second = try a.get(1) otherwise 0
-  return first + second
+	var a = IntArray{}
+	var b = [10, 20]
+	a.append(b)
+	var first = try a.get(0) otherwise 0
+	var second = try a.get(1) otherwise 0
+	return first + second
 end 'main'
 ```
 ```exitcode
@@ -674,13 +674,13 @@ end 'main'
 <!-- test: append-preserves-originals -->
 ```maxon
 function main() returns ExitCode
-  var a = [1, 2]
-  var b = [3, 4]
-  a.append(b)
-  // b should still have its original elements
-  var b0 = try b.get(0) otherwise 0
-  var b1 = try b.get(1) otherwise 0
-  return b0 + b1
+	var a = [1, 2]
+	var b = [3, 4]
+	a.append(b)
+	// b should still have its original elements
+	var b0 = try b.get(0) otherwise 0
+	var b1 = try b.get(1) otherwise 0
+	return b0 + b1
 end 'main'
 ```
 ```exitcode
@@ -693,18 +693,18 @@ end 'main'
 Modifying a slice must not affect the original array.
 ```maxon
 function main() returns ExitCode
-  var arr = [10, 20, 30, 40, 50]
-  var sub = arr.slice(1, endIndex: 4)
-  sub.set(0, value: 99)
-  // Original should be unchanged
-  var original = try arr.get(1) otherwise 0
-  var modified = try sub.get(0) otherwise 0
-  if original == 20 'check'
-    if modified == 99 'check2'
-      return 0
-    end 'check2'
-  end 'check'
-  return 1
+	var arr = [10, 20, 30, 40, 50]
+	var sub = arr.slice(1, endIndex: 4)
+	sub.set(0, value: 99)
+	// Original should be unchanged
+	var original = try arr.get(1) otherwise 0
+	var modified = try sub.get(0) otherwise 0
+	if original == 20 'check'
+		if modified == 99 'check2'
+			return 0
+		end 'check2'
+	end 'check'
+	return 1
 end 'main'
 ```
 ```exitcode
@@ -715,18 +715,18 @@ end 'main'
 Modifying the original array must not affect an existing slice.
 ```maxon
 function main() returns ExitCode
-  var arr = [10, 20, 30, 40, 50]
-  var sub = arr.slice(1, endIndex: 4)
-  arr.set(1, value: 99)
-  // Slice should be unchanged
-  var sliceVal = try sub.get(0) otherwise 0
-  var origVal = try arr.get(1) otherwise 0
-  if sliceVal == 20 'check'
-    if origVal == 99 'check2'
-      return 0
-    end 'check2'
-  end 'check'
-  return 1
+	var arr = [10, 20, 30, 40, 50]
+	var sub = arr.slice(1, endIndex: 4)
+	arr.set(1, value: 99)
+	// Slice should be unchanged
+	var sliceVal = try sub.get(0) otherwise 0
+	var origVal = try arr.get(1) otherwise 0
+	if sliceVal == 20 'check'
+		if origVal == 99 'check2'
+			return 0
+		end 'check2'
+	end 'check'
+	return 1
 end 'main'
 ```
 ```exitcode
@@ -739,19 +739,19 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
 function makeNumbers() returns IntArray
-  var arr = IntArray{}
-  arr.push(10)
-  arr.push(20)
-  arr.push(30)
-  return arr
+	var arr = IntArray{}
+	arr.push(10)
+	arr.push(20)
+	arr.push(30)
+	return arr
 end 'makeNumbers'
 
 function main() returns ExitCode
-  var nums = makeNumbers()
-  var a = try nums.get(0) otherwise 0
-  var b = try nums.get(1) otherwise 0
-  var c = try nums.get(2) otherwise 0
-  return a + b + c
+	var nums = makeNumbers()
+	var a = try nums.get(0) otherwise 0
+	var b = try nums.get(1) otherwise 0
+	var c = try nums.get(2) otherwise 0
+	return a + b + c
 end 'main'
 ```
 ```exitcode
@@ -764,17 +764,17 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
 function makeNumbers(a Integer, b Integer) returns IntArray
-  var arr = IntArray{}
-  arr.push(a)
-  arr.push(b)
-  arr.push(a + b)
-  return arr
+	var arr = IntArray{}
+	arr.push(a)
+	arr.push(b)
+	arr.push(a + b)
+	return arr
 end 'makeNumbers'
 
 function main() returns ExitCode
-  var nums = makeNumbers(10, b: 20)
-  var c = try nums.get(2) otherwise 0
-  return c
+	var nums = makeNumbers(10, b: 20)
+	var c = try nums.get(2) otherwise 0
+	return c
 end 'main'
 ```
 ```exitcode
@@ -787,23 +787,23 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 type Point
-  export var x Integer
-  export var y Integer
+	export var x Integer
+	export var y Integer
 end 'Point'
 
 typealias PointArray = Array with Point
 
 function makePoints() returns PointArray
-  var p1 = Point{x: 1, y: 2}
-  var p2 = Point{x: 3, y: 4}
-  return [p1, p2]
+	var p1 = Point{x: 1, y: 2}
+	var p2 = Point{x: 3, y: 4}
+	return [p1, p2]
 end 'makePoints'
 
 function main() returns ExitCode
-  var pts = makePoints()
-  var p0 = try pts.get(0) otherwise Point{x: 0, y: 0}
-  var p1 = try pts.get(1) otherwise Point{x: 0, y: 0}
-  return p0.x + p1.y
+	var pts = makePoints()
+	var p0 = try pts.get(0) otherwise Point{x: 0, y: 0}
+	var p1 = try pts.get(1) otherwise Point{x: 0, y: 0}
+	return p0.x + p1.y
 end 'main'
 ```
 ```exitcode

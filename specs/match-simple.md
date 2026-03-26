@@ -14,9 +14,9 @@ Match statements provide pattern matching on values, allowing you to execute dif
 
 ```maxon
 match <expression> 'identifier'
-  <pattern> then <statement>
-  <pattern1> or <pattern2> then <statement>
-  default <statement>
+	<pattern> then <statement>
+	<pattern1> or <pattern2> then <statement>
+	default <statement>
 end 'identifier'
 ```
 
@@ -24,12 +24,12 @@ end 'identifier'
 
 ```maxon
 function main() returns ExitCode
-  var x = 2
-  match x 'check'
-    1 then return 10
-    2 then return 20
-    default then return 0
-  end 'check'
+	var x = 2
+	match x 'check'
+		1 then return 10
+		2 then return 20
+		default then return 0
+	end 'check'
 end 'main'
 ```
 ```exitcode
@@ -42,12 +42,12 @@ You can match multiple patterns in a single case using the `or` keyword:
 
 ```maxon
 function main() returns ExitCode
-  var input = 3
-  match input 'eval'
-    1 or 2 then return 10
-    3 or 4 or 5 then return 20
-    default then return 0
-  end 'eval'
+	var input = 3
+	match input 'eval'
+		1 or 2 then return 10
+		3 or 4 or 5 then return 20
+		default then return 0
+	end 'eval'
 end 'main'
 ```
 ```exitcode
@@ -60,14 +60,14 @@ Match expressions return a value and can be used in variable assignments. Use `g
 
 ```maxon
 function main() returns ExitCode
-  var x = 2
-  let result = match x 'convert'
-    1 gives 10
-    2 gives 20
-    3 gives 30
-    default gives 0
-  end 'convert'
-  return result
+	var x = 2
+	let result = match x 'convert'
+		1 gives 10
+		2 gives 20
+		3 gives 30
+		default gives 0
+	end 'convert'
+	return result
 end 'main'
 ```
 ```exitcode
@@ -80,15 +80,15 @@ By default, only the matching case executes. Use `and fallthrough` to continue t
 
 ```maxon
 function main() returns ExitCode
-  var role = 1
-  var permissions = 0
-  match role 'auth'
-    1 then permissions = permissions + 100 and fallthrough
-    2 then permissions = permissions + 10 and fallthrough
-    3 then permissions = permissions + 1
-    default then permissions = 0
-  end 'auth'
-  return permissions
+	var role = 1
+	var permissions = 0
+	match role 'auth'
+		1 then permissions = permissions + 100 and fallthrough
+		2 then permissions = permissions + 10 and fallthrough
+		3 then permissions = permissions + 1
+		default then permissions = 0
+	end 'auth'
+	return permissions
 end 'main'
 ```
 ```exitcode
@@ -105,20 +105,20 @@ When matching on enum or union values, all cases must be covered. Plain `default
 
 ```maxon
 union Direction
-  north
-  south
-  east
-  west
+	north
+	south
+	east
+	west
 end 'Direction'
 
 function main() returns ExitCode
-  var dir = Direction.north
-  match dir 'navigate'
-    north then return 1
-    south then return 2
-    east then return 3
-    west then return 4
-  end 'navigate'
+	var dir = Direction.north
+	match dir 'navigate'
+		north then return 1
+		south then return 2
+		east then return 3
+		west then return 4
+	end 'navigate'
 end 'main'
 ```
 ```exitcode
@@ -149,12 +149,12 @@ If any case is missing, the compiler reports an error listing the uncovered case
 <!-- test: match-statements.simple -->
 ```maxon
 function main() returns ExitCode
-  var x = 2
-  match x 'check'
-    1 then return 10
-    2 then return 20
-    default then return 0
-  end 'check'
+	var x = 2
+	match x 'check'
+		1 then return 10
+		2 then return 20
+		default then return 0
+	end 'check'
 end 'main'
 ```
 ```exitcode
@@ -164,12 +164,12 @@ end 'main'
 <!-- test: match-statements.default -->
 ```maxon
 function main() returns ExitCode
-  var x = 99
-  match x 'check'
-    1 then return 10
-    2 then return 20
-    default then return 0
-  end 'check'
+	var x = 99
+	match x 'check'
+		1 then return 10
+		2 then return 20
+		default then return 0
+	end 'check'
 end 'main'
 ```
 ```exitcode
@@ -179,12 +179,12 @@ end 'main'
 <!-- test: match-statements.first-case -->
 ```maxon
 function main() returns ExitCode
-  var x = 1
-  match x 'check'
-    1 then return 10
-    2 then return 20
-    default then return 0
-  end 'check'
+	var x = 1
+	match x 'check'
+		1 then return 10
+		2 then return 20
+		default then return 0
+	end 'check'
 end 'main'
 ```
 ```exitcode
@@ -194,12 +194,12 @@ end 'main'
 <!-- test: match-statements.or-patterns -->
 ```maxon
 function main() returns ExitCode
-  var x = 3
-  match x 'check'
-    1 or 2 then return 10
-    3 or 4 or 5 then return 20
-    default then return 0
-  end 'check'
+	var x = 3
+	match x 'check'
+		1 or 2 then return 10
+		3 or 4 or 5 then return 20
+		default then return 0
+	end 'check'
 end 'main'
 ```
 ```exitcode
@@ -209,12 +209,12 @@ end 'main'
 <!-- test: match-statements.or-patterns-first -->
 ```maxon
 function main() returns ExitCode
-  var x = 1
-  match x 'check'
-    1 or 2 then return 10
-    3 or 4 then return 20
-    default then return 0
-  end 'check'
+	var x = 1
+	match x 'check'
+		1 or 2 then return 10
+		3 or 4 then return 20
+		default then return 0
+	end 'check'
 end 'main'
 ```
 ```exitcode
@@ -224,12 +224,12 @@ end 'main'
 <!-- test: match-statements.or-patterns-second -->
 ```maxon
 function main() returns ExitCode
-  var x = 2
-  match x 'check'
-    1 or 2 then return 10
-    3 or 4 then return 20
-    default then return 0
-  end 'check'
+	var x = 2
+	match x 'check'
+		1 or 2 then return 10
+		3 or 4 then return 20
+		default then return 0
+	end 'check'
 end 'main'
 ```
 ```exitcode
@@ -240,13 +240,13 @@ end 'main'
 <!-- test: match-expression.basic -->
 ```maxon
 function main() returns ExitCode
-  var x = 2
-  let result = match x 'eval'
-    1 gives 10
-    2 gives 20
-    default gives 0
-  end 'eval'
-  return result
+	var x = 2
+	let result = match x 'eval'
+		1 gives 10
+		2 gives 20
+		default gives 0
+	end 'eval'
+	return result
 end 'main'
 ```
 ```exitcode
@@ -256,13 +256,13 @@ end 'main'
 <!-- test: match-expression.or-patterns -->
 ```maxon
 function main() returns ExitCode
-  var x = 4
-  let result = match x 'eval'
-    1 or 2 gives 10
-    3 or 4 gives 20
-    default gives 0
-  end 'eval'
-  return result
+	var x = 4
+	let result = match x 'eval'
+		1 or 2 gives 10
+		3 or 4 gives 20
+		default gives 0
+	end 'eval'
+	return result
 end 'main'
 ```
 ```exitcode
@@ -272,13 +272,13 @@ end 'main'
 <!-- test: match-expression.default -->
 ```maxon
 function main() returns ExitCode
-  var x = 99
-  let result = match x 'eval'
-    1 gives 10
-    2 gives 20
-    default gives 0
-  end 'eval'
-  return result
+	var x = 99
+	let result = match x 'eval'
+		1 gives 10
+		2 gives 20
+		default gives 0
+	end 'eval'
+	return result
 end 'main'
 ```
 ```exitcode
@@ -289,14 +289,14 @@ end 'main'
 <!-- test: match-statements.fallthrough -->
 ```maxon
 function main() returns ExitCode
-  var x = 1
-  var result = 0
-  match x 'check'
-    1 then result = result + 10 and fallthrough
-    2 then result = result + 20
-    default then result = result + 100
-  end 'check'
-  return result
+	var x = 1
+	var result = 0
+	match x 'check'
+		1 then result = result + 10 and fallthrough
+		2 then result = result + 20
+		default then result = result + 100
+	end 'check'
+	return result
 end 'main'
 ```
 ```exitcode
@@ -306,15 +306,15 @@ end 'main'
 <!-- test: match-statements.fallthrough-chain -->
 ```maxon
 function main() returns ExitCode
-  var x = 1
-  var result = 0
-  match x 'cascade'
-    1 then result = result + 10 and fallthrough
-    2 then result = result + 20 and fallthrough
-    3 then result = result + 30
-    default then result = 100
-  end 'cascade'
-  return result
+	var x = 1
+	var result = 0
+	match x 'cascade'
+		1 then result = result + 10 and fallthrough
+		2 then result = result + 20 and fallthrough
+		3 then result = result + 30
+		default then result = 100
+	end 'cascade'
+	return result
 end 'main'
 ```
 ```exitcode
@@ -324,15 +324,15 @@ end 'main'
 <!-- test: match-statements.fallthrough-to-default -->
 ```maxon
 function main() returns ExitCode
-  var x = 3
-  var result = 0
-  match x 'check'
-    1 then result = 10
-    2 then result = 20
-    3 then result = result + 30 and fallthrough
-    default then result = result + 100
-  end 'check'
-  return result
+	var x = 3
+	var result = 0
+	match x 'check'
+		1 then result = 10
+		2 then result = 20
+		3 then result = result + 30 and fallthrough
+		default then result = result + 100
+	end 'check'
+	return result
 end 'main'
 ```
 ```exitcode
@@ -345,15 +345,15 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 function categorize(n Integer) returns Integer
-  match n 'cat'
-    1 or 2 or 3 then return 1
-    4 or 5 or 6 then return 2
-    default then return 0
-  end 'cat'
+	match n 'cat'
+		1 or 2 or 3 then return 1
+		4 or 5 or 6 then return 2
+		default then return 0
+	end 'cat'
 end 'categorize'
 
 function main() returns ExitCode
-  return categorize(5)
+	return categorize(5)
 end 'main'
 ```
 ```exitcode
@@ -363,14 +363,14 @@ end 'main'
 <!-- test: match-statements.assignment -->
 ```maxon
 function main() returns ExitCode
-  var x = 2
-  var result = 0
-  match x 'process'
-    1 then result = 100
-    2 then result = 200
-    default then result = 0
-  end 'process'
-  return result
+	var x = 2
+	var result = 0
+	match x 'process'
+		1 then result = 100
+		2 then result = 200
+		default then result = 0
+	end 'process'
+	return result
 end 'main'
 ```
 ```exitcode
@@ -383,18 +383,18 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 function double(n Integer) returns Integer
-  return n * 2
+	return n * 2
 end 'double'
 
 function main() returns ExitCode
-  var x = 2
-  var result = 0
-  match x 'process'
-    1 then result = double(10)
-    2 then result = double(20)
-    default then result = 0
-  end 'process'
-  return result
+	var x = 2
+	var result = 0
+	match x 'process'
+		1 then result = double(10)
+		2 then result = double(20)
+		default then result = 0
+	end 'process'
+	return result
 end 'main'
 ```
 ```exitcode
@@ -404,18 +404,18 @@ end 'main'
 <!-- test: match-enum.exhaustive -->
 ```maxon
 union Color
-  red
-  green
-  blue
+	red
+	green
+	blue
 end 'Color'
 
 function main() returns ExitCode
-  var c = Color.green
-  match c 'check'
-    red then return 1
-    green then return 2
-    blue then return 3
-  end 'check'
+	var c = Color.green
+	match c 'check'
+		red then return 1
+		green then return 2
+		blue then return 3
+	end 'check'
 end 'main'
 ```
 ```exitcode
@@ -425,39 +425,39 @@ end 'main'
 <!-- test: error.match-enum-default -->
 ```maxon
 union Color
-  red
-  green
-  blue
+	red
+	green
+	blue
 end 'Color'
 
 function main() returns ExitCode
-  var c = Color.blue
-  match c 'check'
-    red then return 1
-    default then return 0
-  end 'check'
+	var c = Color.blue
+	match c 'check'
+		red then return 1
+		default then return 0
+	end 'check'
 end 'main'
 ```
 ```maxoncstderr
-error E2046: specs/fragments/match-simple/error.match-enum-default.test:12:5: 'default' in a match on union 'Color' must be followed by 'throws <error>' or 'panic("message")'
+error E2046: specs/fragments/match-simple/error.match-enum-default.test:12:3: 'default' in a match on union 'Color' must be followed by 'throws <error>' or 'panic("message")'
 ```
 
 <!-- test: match-enum.expression -->
 ```maxon
 union Status
-  pending
-  approved
-  rejected
+	pending
+	approved
+	rejected
 end 'Status'
 
 function main() returns ExitCode
-  var s = Status.approved
-  let code = match s 'eval'
-    pending gives 0
-    approved gives 1
-    rejected gives 2
-  end 'eval'
-  return code
+	var s = Status.approved
+	let code = match s 'eval'
+		pending gives 0
+		approved gives 1
+		rejected gives 2
+	end 'eval'
+	return code
 end 'main'
 ```
 ```exitcode
@@ -467,13 +467,13 @@ end 'main'
 <!-- test: match-expression.used-in-expression -->
 ```maxon
 function main() returns ExitCode
-  var x = 2
-  let doubled = match x 'eval'
-    1 gives 10
-    2 gives 20
-    default gives 0
-  end 'eval' * 2
-  return doubled
+	var x = 2
+	let doubled = match x 'eval'
+		1 gives 10
+		2 gives 20
+		default gives 0
+	end 'eval' * 2
+	return doubled
 end 'main'
 ```
 ```exitcode
@@ -483,106 +483,106 @@ end 'main'
 <!-- test: error.match-expression-fallthrough -->
 ```maxon
 function main() returns ExitCode
-  var x = 1
-  let result = match x 'eval'
-    1 gives 10 and fallthrough
-    default gives 0
-  end 'eval'
-  return result
+	var x = 1
+	let result = match x 'eval'
+		1 gives 10 and fallthrough
+		default gives 0
+	end 'eval'
+	return result
 end 'main'
 ```
 ```maxoncstderr
-error E2001: specs/fragments/match-simple/error.match-expression-fallthrough.test:5:16: unexpected token: 'and'
+error E2001: specs/fragments/match-simple/error.match-expression-fallthrough.test:5:14: unexpected token: 'and'
 ```
 
 <!-- test: error.match-fallthrough-with-return -->
 ```maxon
 function main() returns ExitCode
-  var x = 1
-  match x 'check'
-    1 then return 10 and fallthrough
-    default then return 0
-  end 'check'
+	var x = 1
+	match x 'check'
+		1 then return 10 and fallthrough
+		default then return 0
+	end 'check'
 end 'main'
 ```
 ```maxoncstderr
-error E2025: specs/fragments/match-simple/error.match-fallthrough-with-return.test:5:22: match fallthrough with return: 'cannot combine 'fallthrough' with 'return''
+error E2025: specs/fragments/match-simple/error.match-fallthrough-with-return.test:5:20: match fallthrough with return: 'cannot combine 'fallthrough' with 'return''
 ```
 
 <!-- test: error.match-enum-not-exhaustive -->
 ```maxon
 union Color
-  red
-  green
-  blue
+	red
+	green
+	blue
 end 'Color'
 
 function main() returns ExitCode
-  var c = Color.green
-  match c 'check'
-    red then return 1
-    green then return 2
-  end 'check'
+	var c = Color.green
+	match c 'check'
+		red then return 1
+		green then return 2
+	end 'check'
 end 'main'
 ```
 ```maxoncstderr
-error E2026: specs/fragments/match-simple/error.match-enum-not-exhaustive.test:13:3: match on union 'Color' is not exhaustive, missing: blue
+error E2026: specs/fragments/match-simple/error.match-enum-not-exhaustive.test:13:2: match on union 'Color' is not exhaustive, missing: blue
 ```
 
 <!-- test: error.match-duplicate-pattern -->
 ```maxon
 function main() returns ExitCode
-  var x = 1
-  match x 'check'
-    1 then return 10
-    1 then return 20
-    default then return 0
-  end 'check'
+	var x = 1
+	match x 'check'
+		1 then return 10
+		1 then return 20
+		default then return 0
+	end 'check'
 end 'main'
 ```
 ```maxoncstderr
-error E2027: specs/fragments/match-simple/error.match-duplicate-pattern.test:6:5: duplicate pattern in match: '1'
+error E2027: specs/fragments/match-simple/error.match-duplicate-pattern.test:6:3: duplicate pattern in match: '1'
 ```
 
 <!-- test: error.match-missing-block-id -->
 ```maxon
 function main() returns ExitCode
-  var x = 1
-  match x
-    1 then return 10
-    default then return 0
-  end
+	var x = 1
+	match x
+		1 then return 10
+		default then return 0
+	end
 end 'main'
 ```
 ```maxoncstderr
-error E2042: specs/fragments/match-simple/error.match-missing-block-id.test:4:10: missing block identifier
+error E2042: specs/fragments/match-simple/error.match-missing-block-id.test:4:9: missing block identifier
 ```
 
 <!-- test: error.match-mismatched-block-id -->
 ```maxon
 function main() returns ExitCode
-  var x = 1
-  match x 'check'
-    1 then return 10
-    default then return 0
-  end 'wrong'
+	var x = 1
+	match x 'check'
+		1 then return 10
+		default then return 0
+	end 'wrong'
 end 'main'
 ```
 ```maxoncstderr
-error E2043: specs/fragments/match-simple/error.match-mismatched-block-id.test:7:3: block identifier mismatch: expected 'check', got 'wrong'
+error E2043: specs/fragments/match-simple/error.match-mismatched-block-id.test:7:2: block identifier mismatch: expected 'check', got 'wrong'
 ```
 
 <!-- test: error.match-default-not-last -->
 ```maxon
 function main() returns ExitCode
-  var x = 1
-  match x 'check'
-    default then return 0
-    1 then return 10
-    2 then return 20
-  end 'check'
+	var x = 1
+	match x 'check'
+		default then return 0
+		1 then return 10
+		2 then return 20
+	end 'check'
 end 'main'
 ```
 ```maxoncstderr
-error E2029: specs/fragments/match-simple/error.match-default-not-last.test:6:5: 'default' case must be the last case in match
+error E2029: specs/fragments/match-simple/error.match-default-not-last.test:6:3: 'default' case must be the last case in match
 ```

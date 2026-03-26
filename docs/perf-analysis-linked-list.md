@@ -15,18 +15,18 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntList = List with Integer
 
 function main() returns ExitCode
-  var list = IntList{}
+	var list = IntList{}
 
-  list.append(10)
-  list.append(20)
-  list.append(30)
+	list.append(10)
+	list.append(20)
+	list.append(30)
 
-  var sum = 0
-  for item in list 'loop'
-    sum = sum + item
-  end 'loop'
+	var sum = 0
+	for item in list 'loop'
+		sum = sum + item
+	end 'loop'
 
-  return sum
+	return sum
 end 'main'
 ```
 

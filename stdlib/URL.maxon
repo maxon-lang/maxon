@@ -4,512 +4,512 @@
 typealias PortNumber = int(0 to 65535)
 
 export union URLError implements Error
-  invalidScheme
-  invalidHost
-  invalidPort
-  invalidEncoding
-  invalidPath
-  emptyInput
-  relativeWithoutBase
-  fieldNotPresent
+	invalidScheme
+	invalidHost
+	invalidPort
+	invalidEncoding
+	invalidPath
+	emptyInput
+	relativeWithoutBase
+	fieldNotPresent
 end 'URLError'
 
 export type URL implements Equatable, Stringable
-  var _scheme String
-  var _path String
-  var _userinfo String
-  var _host String
-  var _port PortNumber
-  var _query String
-  var _fragment String
-  var _hasHost bool
-  var _hasUserinfo bool
-  var _hasPort bool
-  var _hasQuery bool
-  var _hasFragment bool
+	var _scheme String
+	var _path String
+	var _userinfo String
+	var _host String
+	var _port PortNumber
+	var _query String
+	var _fragment String
+	var _hasHost bool
+	var _hasUserinfo bool
+	var _hasPort bool
+	var _hasQuery bool
+	var _hasFragment bool
 
-  // --- Always-available accessors ---
+	// --- Always-available accessors ---
 
-  export function scheme() returns String
-    return _scheme
-  end 'scheme'
+	export function scheme() returns String
+		return _scheme
+	end 'scheme'
 
-  export function path() returns String
-    return _path
-  end 'path'
+	export function path() returns String
+		return _path
+	end 'path'
 
-  // --- Throwing accessors for optional fields ---
+	// --- Throwing accessors for optional fields ---
 
-  export function host() returns String throws URLError
-    if not _hasHost 'absent'
-      throw URLError.fieldNotPresent
-    end 'absent'
-    return _host
-  end 'host'
+	export function host() returns String throws URLError
+		if not _hasHost 'absent'
+			throw URLError.fieldNotPresent
+		end 'absent'
+		return _host
+	end 'host'
 
-  export function port() returns PortNumber throws URLError
-    if not _hasPort 'absent'
-      throw URLError.fieldNotPresent
-    end 'absent'
-    return _port
-  end 'port'
+	export function port() returns PortNumber throws URLError
+		if not _hasPort 'absent'
+			throw URLError.fieldNotPresent
+		end 'absent'
+		return _port
+	end 'port'
 
-  export function userinfo() returns String throws URLError
-    if not _hasUserinfo 'absent'
-      throw URLError.fieldNotPresent
-    end 'absent'
-    return _userinfo
-  end 'userinfo'
+	export function userinfo() returns String throws URLError
+		if not _hasUserinfo 'absent'
+			throw URLError.fieldNotPresent
+		end 'absent'
+		return _userinfo
+	end 'userinfo'
 
-  export function query() returns String throws URLError
-    if not _hasQuery 'absent'
-      throw URLError.fieldNotPresent
-    end 'absent'
-    return _query
-  end 'query'
+	export function query() returns String throws URLError
+		if not _hasQuery 'absent'
+			throw URLError.fieldNotPresent
+		end 'absent'
+		return _query
+	end 'query'
 
-  export function fragment() returns String throws URLError
-    if not _hasFragment 'absent'
-      throw URLError.fieldNotPresent
-    end 'absent'
-    return _fragment
-  end 'fragment'
+	export function fragment() returns String throws URLError
+		if not _hasFragment 'absent'
+			throw URLError.fieldNotPresent
+		end 'absent'
+		return _fragment
+	end 'fragment'
 
-  // --- Parsing ---
+	// --- Parsing ---
 
-  export static function parse(input String) returns URL throws URLError
-    // 1. Trim whitespace
-    var trimmed = input.trim()
+	export static function parse(input String) returns URL throws URLError
+		// 1. Trim whitespace
+		var trimmed = input.trim()
 
-    // 2. Empty check
-    if trimmed.isEmpty() 'empty'
-      throw URLError.emptyInput
-    end 'empty'
+		// 2. Empty check
+		if trimmed.isEmpty() 'empty'
+			throw URLError.emptyInput
+		end 'empty'
 
-    // 3. Validate percent-encoding
-    try _urlValidatePercentEncoding(trimmed)
+		// 3. Validate percent-encoding
+		try _urlValidatePercentEncoding(trimmed)
 
-    let len = trimmed.byteLength()
-    var pos = 0
+		let len = trimmed.byteLength()
+		var pos = 0
 
-    // Result fields
-    var scheme = ""
-    var path = ""
-    var userinfo = ""
-    var host = ""
-    var portNum = 0
-    var query = ""
-    var fragment = ""
-    var hasHost = false
-    var hasUserinfo = false
-    var hasPort = false
-    var hasQuery = false
-    var hasFragment = false
+		// Result fields
+		var scheme = ""
+		var path = ""
+		var userinfo = ""
+		var host = ""
+		var portNum = 0
+		var query = ""
+		var fragment = ""
+		var hasHost = false
+		var hasUserinfo = false
+		var hasPort = false
+		var hasQuery = false
+		var hasFragment = false
 
-    // 4. Extract scheme
-    // First byte: if it's ':', that's invalid (://missing-scheme)
-    let firstByte = trimmed.managed.byteAt(0)
-    if firstByte == 58 'colonFirst'
-      throw URLError.invalidScheme
-    end 'colonFirst'
+		// 4. Extract scheme
+		// First byte: if it's ':', that's invalid (://missing-scheme)
+		let firstByte = trimmed.managed.byteAt(0)
+		if firstByte == 58 'colonFirst'
+			throw URLError.invalidScheme
+		end 'colonFirst'
 
-    // Scan for ':' to find potential scheme
-    var colonPos = 0
-    var foundColon = false
-    var scanPos = 0
-    while scanPos < len 'schemeSearch'
-      let b = trimmed.managed.byteAt(scanPos)
-      if b == 58 'colon'
-        colonPos = scanPos
-        foundColon = true
-        break
-      end 'colon'
-      // Stop scanning at characters that can't be in a scheme
-      if b == 47 or b == 63 or b == 35 'delimiter'
-        break
-      end 'delimiter'
-      scanPos = scanPos + 1
-    end 'schemeSearch'
+		// Scan for ':' to find potential scheme
+		var colonPos = 0
+		var foundColon = false
+		var scanPos = 0
+		while scanPos < len 'schemeSearch'
+			let b = trimmed.managed.byteAt(scanPos)
+			if b == 58 'colon'
+				colonPos = scanPos
+				foundColon = true
+				break
+			end 'colon'
+			// Stop scanning at characters that can't be in a scheme
+			if b == 47 or b == 63 or b == 35 'delimiter'
+				break
+			end 'delimiter'
+			scanPos = scanPos + 1
+		end 'schemeSearch'
 
-    if foundColon and colonPos > 0 'hasScheme'
-      // Validate scheme: first char must be alpha
-      if not _urlIsAlpha(firstByte) 'notAlpha'
-        throw URLError.invalidScheme
-      end 'notAlpha'
-      // Remaining chars must be valid scheme chars
-      var vi = 1
-      while vi < colonPos 'validateScheme'
-        if not _urlIsSchemeChar(trimmed.managed.byteAt(vi)) 'badChar'
-          throw URLError.invalidScheme
-        end 'badChar'
-        vi = vi + 1
-      end 'validateScheme'
-      // Extract and lowercase the scheme
-      let schemeSlice = trimmed.managed.slice(0, colonPos)
-      let rawScheme = String{managed: schemeSlice, _iterPos: 0}
-      scheme = rawScheme.toLower()
-      pos = colonPos + 1
-    end 'hasScheme'
+		if foundColon and colonPos > 0 'hasScheme'
+			// Validate scheme: first char must be alpha
+			if not _urlIsAlpha(firstByte) 'notAlpha'
+				throw URLError.invalidScheme
+			end 'notAlpha'
+			// Remaining chars must be valid scheme chars
+			var vi = 1
+			while vi < colonPos 'validateScheme'
+				if not _urlIsSchemeChar(trimmed.managed.byteAt(vi)) 'badChar'
+					throw URLError.invalidScheme
+				end 'badChar'
+				vi = vi + 1
+			end 'validateScheme'
+			// Extract and lowercase the scheme
+			let schemeSlice = trimmed.managed.slice(0, colonPos)
+			let rawScheme = String{managed: schemeSlice, _iterPos: 0}
+			scheme = rawScheme.toLower()
+			pos = colonPos + 1
+		end 'hasScheme'
 
-    // 5. Check for authority ("//")
-    if pos + 1 < len 'checkAuth'
-      if trimmed.managed.byteAt(pos) == 47 'slash1'
-        if trimmed.managed.byteAt(pos + 1) == 47 'slash2'
-          pos = pos + 2
-          hasHost = true
+		// 5. Check for authority ("//")
+		if pos + 1 < len 'checkAuth'
+			if trimmed.managed.byteAt(pos) == 47 'slash1'
+				if trimmed.managed.byteAt(pos + 1) == 47 'slash2'
+					pos = pos + 2
+					hasHost = true
 
-          // Find end of authority: first '/', '?', '#', or end
-          var authEnd = pos
-          while authEnd < len 'findAuthEnd'
-            let ab = trimmed.managed.byteAt(authEnd)
-            if ab == 47 or ab == 63 or ab == 35 'delim'
-              break
-            end 'delim'
-            authEnd = authEnd + 1
-          end 'findAuthEnd'
+					// Find end of authority: first '/', '?', '#', or end
+					var authEnd = pos
+					while authEnd < len 'findAuthEnd'
+						let ab = trimmed.managed.byteAt(authEnd)
+						if ab == 47 or ab == 63 or ab == 35 'delim'
+							break
+						end 'delim'
+						authEnd = authEnd + 1
+					end 'findAuthEnd'
 
-          // Parse authority from pos to authEnd
-          var authStart = pos
+					// Parse authority from pos to authEnd
+					var authStart = pos
 
-          // Check for userinfo: scan for '@'
-          var atPos = authStart
-          var foundAt = false
-          while atPos < authEnd 'findAt'
-            if trimmed.managed.byteAt(atPos) == 64 'at'
-              foundAt = true
-              break
-            end 'at'
-            atPos = atPos + 1
-          end 'findAt'
+					// Check for userinfo: scan for '@'
+					var atPos = authStart
+					var foundAt = false
+					while atPos < authEnd 'findAt'
+						if trimmed.managed.byteAt(atPos) == 64 'at'
+							foundAt = true
+							break
+						end 'at'
+						atPos = atPos + 1
+					end 'findAt'
 
-          if foundAt 'hasUserinfo'
-            hasUserinfo = true
-            let uiSlice = trimmed.managed.slice(authStart, atPos)
-            userinfo = String{managed: uiSlice, _iterPos: 0}
-            authStart = atPos + 1
-          end 'hasUserinfo'
+					if foundAt 'hasUserinfo'
+						hasUserinfo = true
+						let uiSlice = trimmed.managed.slice(authStart, atPos)
+						userinfo = String{managed: uiSlice, _iterPos: 0}
+						authStart = atPos + 1
+					end 'hasUserinfo'
 
-          // Parse host
-          if authStart < authEnd 'hasHostChars'
-            let hostFirstByte = trimmed.managed.byteAt(authStart)
-            if hostFirstByte == 91 'ipv6'
-              // IPv6: scan for ']'
-              var bracketEnd = authStart + 1
-              var foundBracket = false
-              while bracketEnd < authEnd 'findBracket'
-                if trimmed.managed.byteAt(bracketEnd) == 93 'closeBracket'
-                  foundBracket = true
-                  break
-                end 'closeBracket'
-                bracketEnd = bracketEnd + 1
-              end 'findBracket'
-              if not foundBracket 'noBracket'
-                throw URLError.invalidHost
-              end 'noBracket'
-              let hostSlice = trimmed.managed.slice(authStart, bracketEnd + 1)
-              host = String{managed: hostSlice, _iterPos: 0}
-              authStart = bracketEnd + 1
-            end 'ipv6' else 'notIpv6'
-              // Regular host: scan until ':' or end of authority
-              var hostEnd = authStart
-              while hostEnd < authEnd 'findHostEnd'
-                if trimmed.managed.byteAt(hostEnd) == 58 'colon2'
-                  break
-                end 'colon2'
-                hostEnd = hostEnd + 1
-              end 'findHostEnd'
-              let hostSlice = trimmed.managed.slice(authStart, hostEnd)
-              host = String{managed: hostSlice, _iterPos: 0}
-              authStart = hostEnd
-            end 'notIpv6'
-          end 'hasHostChars'
+					// Parse host
+					if authStart < authEnd 'hasHostChars'
+						let hostFirstByte = trimmed.managed.byteAt(authStart)
+						if hostFirstByte == 91 'ipv6'
+							// IPv6: scan for ']'
+							var bracketEnd = authStart + 1
+							var foundBracket = false
+							while bracketEnd < authEnd 'findBracket'
+								if trimmed.managed.byteAt(bracketEnd) == 93 'closeBracket'
+									foundBracket = true
+									break
+								end 'closeBracket'
+								bracketEnd = bracketEnd + 1
+							end 'findBracket'
+							if not foundBracket 'noBracket'
+								throw URLError.invalidHost
+							end 'noBracket'
+							let hostSlice = trimmed.managed.slice(authStart, bracketEnd + 1)
+							host = String{managed: hostSlice, _iterPos: 0}
+							authStart = bracketEnd + 1
+						end 'ipv6' else 'notIpv6'
+							// Regular host: scan until ':' or end of authority
+							var hostEnd = authStart
+							while hostEnd < authEnd 'findHostEnd'
+								if trimmed.managed.byteAt(hostEnd) == 58 'colon2'
+									break
+								end 'colon2'
+								hostEnd = hostEnd + 1
+							end 'findHostEnd'
+							let hostSlice = trimmed.managed.slice(authStart, hostEnd)
+							host = String{managed: hostSlice, _iterPos: 0}
+							authStart = hostEnd
+						end 'notIpv6'
+					end 'hasHostChars'
 
-          // Parse port
-          if authStart < authEnd 'maybePort'
-            if trimmed.managed.byteAt(authStart) == 58 'colonPort'
-              authStart = authStart + 1
-              // Port: remaining chars in authority must be digits
-              if authStart < authEnd 'hasPortDigits'
-                var portVal = 0
-                var pi = authStart
-                while pi < authEnd 'parsePort'
-                  let pb = trimmed.managed.byteAt(pi)
-                  if not _urlIsDigit(pb) 'notDigit'
-                    throw URLError.invalidPort
-                  end 'notDigit'
-                  portVal = portVal * 10 + (pb - 48)
-                  if portVal > 65535 'overflow'
-                    throw URLError.invalidPort
-                  end 'overflow'
-                  pi = pi + 1
-                end 'parsePort'
-                hasPort = true
-                portNum = portVal
-              end 'hasPortDigits'
-              // If no digits after ':', port is absent (edge case: http://host:/)
-            end 'colonPort'
-          end 'maybePort'
+					// Parse port
+					if authStart < authEnd 'maybePort'
+						if trimmed.managed.byteAt(authStart) == 58 'colonPort'
+							authStart = authStart + 1
+							// Port: remaining chars in authority must be digits
+							if authStart < authEnd 'hasPortDigits'
+								var portVal = 0
+								var pi = authStart
+								while pi < authEnd 'parsePort'
+									let pb = trimmed.managed.byteAt(pi)
+									if not _urlIsDigit(pb) 'notDigit'
+										throw URLError.invalidPort
+									end 'notDigit'
+									portVal = portVal * 10 + (pb - 48)
+									if portVal > 65535 'overflow'
+										throw URLError.invalidPort
+									end 'overflow'
+									pi = pi + 1
+								end 'parsePort'
+								hasPort = true
+								portNum = portVal
+							end 'hasPortDigits'
+							// If no digits after ':', port is absent (edge case: http://host:/)
+						end 'colonPort'
+					end 'maybePort'
 
-          pos = authEnd
-        end 'slash2'
-      end 'slash1'
-    end 'checkAuth'
+					pos = authEnd
+				end 'slash2'
+			end 'slash1'
+		end 'checkAuth'
 
-    // 6. Parse path: collect until '?', '#', or end
-    var pathStart = pos
-    while pos < len 'parsePath'
-      let pb = trimmed.managed.byteAt(pos)
-      if pb == 63 or pb == 35 'delim2'
-        break
-      end 'delim2'
-      pos = pos + 1
-    end 'parsePath'
-    if pos > pathStart 'hasPath'
-      let pathSlice = trimmed.managed.slice(pathStart, pos)
-      path = String{managed: pathSlice, _iterPos: 0}
-    end 'hasPath'
+		// 6. Parse path: collect until '?', '#', or end
+		var pathStart = pos
+		while pos < len 'parsePath'
+			let pb = trimmed.managed.byteAt(pos)
+			if pb == 63 or pb == 35 'delim2'
+				break
+			end 'delim2'
+			pos = pos + 1
+		end 'parsePath'
+		if pos > pathStart 'hasPath'
+			let pathSlice = trimmed.managed.slice(pathStart, pos)
+			path = String{managed: pathSlice, _iterPos: 0}
+		end 'hasPath'
 
-    // 7. Parse query
-    if pos < len 'checkQuery'
-      if trimmed.managed.byteAt(pos) == 63 'questionMark'
-        hasQuery = true
-        pos = pos + 1
-        var queryStart = pos
-        while pos < len 'parseQuery'
-          if trimmed.managed.byteAt(pos) == 35 'hash'
-            break
-          end 'hash'
-          pos = pos + 1
-        end 'parseQuery'
-        let querySlice = trimmed.managed.slice(queryStart, pos)
-        query = String{managed: querySlice, _iterPos: 0}
-      end 'questionMark'
-    end 'checkQuery'
+		// 7. Parse query
+		if pos < len 'checkQuery'
+			if trimmed.managed.byteAt(pos) == 63 'questionMark'
+				hasQuery = true
+				pos = pos + 1
+				var queryStart = pos
+				while pos < len 'parseQuery'
+					if trimmed.managed.byteAt(pos) == 35 'hash'
+						break
+					end 'hash'
+					pos = pos + 1
+				end 'parseQuery'
+				let querySlice = trimmed.managed.slice(queryStart, pos)
+				query = String{managed: querySlice, _iterPos: 0}
+			end 'questionMark'
+		end 'checkQuery'
 
-    // 8. Parse fragment
-    if pos < len 'checkFragment'
-      if trimmed.managed.byteAt(pos) == 35 'hashMark'
-        hasFragment = true
-        pos = pos + 1
-        let fragSlice = trimmed.managed.slice(pos, len)
-        fragment = String{managed: fragSlice, _iterPos: 0}
-      end 'hashMark'
-    end 'checkFragment'
+		// 8. Parse fragment
+		if pos < len 'checkFragment'
+			if trimmed.managed.byteAt(pos) == 35 'hashMark'
+				hasFragment = true
+				pos = pos + 1
+				let fragSlice = trimmed.managed.slice(pos, len)
+				fragment = String{managed: fragSlice, _iterPos: 0}
+			end 'hashMark'
+		end 'checkFragment'
 
-    return URL{
-      _scheme: scheme,
-      _path: path,
-      _userinfo: userinfo,
-      _host: host,
-      _port: portNum,
-      _query: query,
-      _fragment: fragment,
-      _hasHost: hasHost,
-      _hasUserinfo: hasUserinfo,
-      _hasPort: hasPort,
-      _hasQuery: hasQuery,
-      _hasFragment: hasFragment
-    }
-  end 'parse'
+		return URL{
+			_scheme: scheme,
+			_path: path,
+			_userinfo: userinfo,
+			_host: host,
+			_port: portNum,
+			_query: query,
+			_fragment: fragment,
+			_hasHost: hasHost,
+			_hasUserinfo: hasUserinfo,
+			_hasPort: hasPort,
+			_hasQuery: hasQuery,
+			_hasFragment: hasFragment
+		}
+	end 'parse'
 
-  // --- Serialization ---
+	// --- Serialization ---
 
-  export function toString() returns String
-    var result = ""
+	export function toString() returns String
+		var result = ""
 
-    if not _scheme.isEmpty() 'hasScheme'
-      result = "{_scheme}:"
-    end 'hasScheme'
+		if not _scheme.isEmpty() 'hasScheme'
+			result = "{_scheme}:"
+		end 'hasScheme'
 
-    if _hasHost 'hasAuthority'
-      result = "{result}//"
-      if _hasUserinfo 'hasUser'
-        result = "{result}{_userinfo}@"
-      end 'hasUser'
-      result = "{result}{_host}"
-      if _hasPort 'hasPort'
-        result = "{result}:{_port}"
-      end 'hasPort'
-    end 'hasAuthority'
+		if _hasHost 'hasAuthority'
+			result = "{result}//"
+			if _hasUserinfo 'hasUser'
+				result = "{result}{_userinfo}@"
+			end 'hasUser'
+			result = "{result}{_host}"
+			if _hasPort 'hasPort'
+				result = "{result}:{_port}"
+			end 'hasPort'
+		end 'hasAuthority'
 
-    result = "{result}{_path}"
+		result = "{result}{_path}"
 
-    if _hasQuery 'hasQ'
-      result = "{result}?{_query}"
-    end 'hasQ'
+		if _hasQuery 'hasQ'
+			result = "{result}?{_query}"
+		end 'hasQ'
 
-    if _hasFragment 'hasFrag'
-      result = "{result}#{_fragment}"
-    end 'hasFrag'
+		if _hasFragment 'hasFrag'
+			result = "{result}#{_fragment}"
+		end 'hasFrag'
 
-    return result
-  end 'toString'
+		return result
+	end 'toString'
 
-  // --- Reference Resolution ---
+	// --- Reference Resolution ---
 
-  export static function resolve(base URL, reference String) returns URL throws URLError
-    // Base must have a scheme
-    if base._scheme.isEmpty() 'noBaseScheme'
-      throw URLError.relativeWithoutBase
-    end 'noBaseScheme'
+	export static function resolve(base URL, reference String) returns URL throws URLError
+		// Base must have a scheme
+		if base._scheme.isEmpty() 'noBaseScheme'
+			throw URLError.relativeWithoutBase
+		end 'noBaseScheme'
 
-    // Empty reference returns base (with fragment cleared)
-    if reference.isEmpty() 'emptyRef'
-      return URL{
-        _scheme: base._scheme,
-        _path: base._path,
-        _userinfo: base._userinfo,
-        _host: base._host,
-        _port: base._port,
-        _query: base._query,
-        _fragment: "",
-        _hasHost: base._hasHost,
-        _hasUserinfo: base._hasUserinfo,
-        _hasPort: base._hasPort,
-        _hasQuery: base._hasQuery,
-        _hasFragment: false
-      }
-    end 'emptyRef'
+		// Empty reference returns base (with fragment cleared)
+		if reference.isEmpty() 'emptyRef'
+			return URL{
+				_scheme: base._scheme,
+				_path: base._path,
+				_userinfo: base._userinfo,
+				_host: base._host,
+				_port: base._port,
+				_query: base._query,
+				_fragment: "",
+				_hasHost: base._hasHost,
+				_hasUserinfo: base._hasUserinfo,
+				_hasPort: base._hasPort,
+				_hasQuery: base._hasQuery,
+				_hasFragment: false
+			}
+		end 'emptyRef'
 
-    var r = try URL.parse(reference)
+		var r = try URL.parse(reference)
 
-    // Target fields
-    var tScheme = ""
-    var tPath = ""
-    var tUserinfo = ""
-    var tHost = ""
-    var tPort = 0
-    var tQuery = ""
-    var tFragment = r._fragment
-    var tHasHost = false
-    var tHasUserinfo = false
-    var tHasPort = false
-    var tHasQuery = false
-    var tHasFragment = r._hasFragment
+		// Target fields
+		var tScheme = ""
+		var tPath = ""
+		var tUserinfo = ""
+		var tHost = ""
+		var tPort = 0
+		var tQuery = ""
+		var tFragment = r._fragment
+		var tHasHost = false
+		var tHasUserinfo = false
+		var tHasPort = false
+		var tHasQuery = false
+		var tHasFragment = r._hasFragment
 
-    if not r._scheme.isEmpty() 'refHasScheme'
-      // Reference is a URI (not relative)
-      tScheme = r._scheme
-      tHost = r._host
-      tHasHost = r._hasHost
-      tUserinfo = r._userinfo
-      tHasUserinfo = r._hasUserinfo
-      tPort = r._port
-      tHasPort = r._hasPort
-      tPath = _urlRemoveDotSegments(r._path)
-      tQuery = r._query
-      tHasQuery = r._hasQuery
-    end 'refHasScheme' else 'refRelative'
-      if r._hasHost 'refHasAuthority'
-        tHost = r._host
-        tHasHost = r._hasHost
-        tUserinfo = r._userinfo
-        tHasUserinfo = r._hasUserinfo
-        tPort = r._port
-        tHasPort = r._hasPort
-        tPath = _urlRemoveDotSegments(r._path)
-        tQuery = r._query
-        tHasQuery = r._hasQuery
-      end 'refHasAuthority' else 'refNoAuthority'
-        if r._path.isEmpty() 'emptyPath'
-          tPath = base._path
-          if r._hasQuery 'refHasQuery'
-            tQuery = r._query
-            tHasQuery = true
-          end 'refHasQuery' else 'noRefQuery'
-            tQuery = base._query
-            tHasQuery = base._hasQuery
-          end 'noRefQuery'
-        end 'emptyPath' else 'hasRefPath'
-          if r._path.byteLength() > 0 'checkAbsolute'
-            if r._path.managed.byteAt(0) == 47 'absolutePath'
-              tPath = _urlRemoveDotSegments(r._path)
-            end 'absolutePath' else 'relativePath'
-              let merged = _urlMergeBasePath(base._path, hasAuthority: base._hasHost, refPath: r._path)
-              tPath = _urlRemoveDotSegments(merged)
-            end 'relativePath'
-          end 'checkAbsolute'
-          tQuery = r._query
-          tHasQuery = r._hasQuery
-        end 'hasRefPath'
-        // Authority comes from base
-        tHost = base._host
-        tHasHost = base._hasHost
-        tUserinfo = base._userinfo
-        tHasUserinfo = base._hasUserinfo
-        tPort = base._port
-        tHasPort = base._hasPort
-      end 'refNoAuthority'
-      // Scheme comes from base
-      tScheme = base._scheme
-    end 'refRelative'
+		if not r._scheme.isEmpty() 'refHasScheme'
+			// Reference is a URI (not relative)
+			tScheme = r._scheme
+			tHost = r._host
+			tHasHost = r._hasHost
+			tUserinfo = r._userinfo
+			tHasUserinfo = r._hasUserinfo
+			tPort = r._port
+			tHasPort = r._hasPort
+			tPath = _urlRemoveDotSegments(r._path)
+			tQuery = r._query
+			tHasQuery = r._hasQuery
+		end 'refHasScheme' else 'refRelative'
+			if r._hasHost 'refHasAuthority'
+				tHost = r._host
+				tHasHost = r._hasHost
+				tUserinfo = r._userinfo
+				tHasUserinfo = r._hasUserinfo
+				tPort = r._port
+				tHasPort = r._hasPort
+				tPath = _urlRemoveDotSegments(r._path)
+				tQuery = r._query
+				tHasQuery = r._hasQuery
+			end 'refHasAuthority' else 'refNoAuthority'
+				if r._path.isEmpty() 'emptyPath'
+					tPath = base._path
+					if r._hasQuery 'refHasQuery'
+						tQuery = r._query
+						tHasQuery = true
+					end 'refHasQuery' else 'noRefQuery'
+						tQuery = base._query
+						tHasQuery = base._hasQuery
+					end 'noRefQuery'
+				end 'emptyPath' else 'hasRefPath'
+					if r._path.byteLength() > 0 'checkAbsolute'
+						if r._path.managed.byteAt(0) == 47 'absolutePath'
+							tPath = _urlRemoveDotSegments(r._path)
+						end 'absolutePath' else 'relativePath'
+							let merged = _urlMergeBasePath(base._path, hasAuthority: base._hasHost, refPath: r._path)
+							tPath = _urlRemoveDotSegments(merged)
+						end 'relativePath'
+					end 'checkAbsolute'
+					tQuery = r._query
+					tHasQuery = r._hasQuery
+				end 'hasRefPath'
+				// Authority comes from base
+				tHost = base._host
+				tHasHost = base._hasHost
+				tUserinfo = base._userinfo
+				tHasUserinfo = base._hasUserinfo
+				tPort = base._port
+				tHasPort = base._hasPort
+			end 'refNoAuthority'
+			// Scheme comes from base
+			tScheme = base._scheme
+		end 'refRelative'
 
-    return URL{
-      _scheme: tScheme,
-      _path: tPath,
-      _userinfo: tUserinfo,
-      _host: tHost,
-      _port: tPort,
-      _query: tQuery,
-      _fragment: tFragment,
-      _hasHost: tHasHost,
-      _hasUserinfo: tHasUserinfo,
-      _hasPort: tHasPort,
-      _hasQuery: tHasQuery,
-      _hasFragment: tHasFragment
-    }
-  end 'resolve'
+		return URL{
+			_scheme: tScheme,
+			_path: tPath,
+			_userinfo: tUserinfo,
+			_host: tHost,
+			_port: tPort,
+			_query: tQuery,
+			_fragment: tFragment,
+			_hasHost: tHasHost,
+			_hasUserinfo: tHasUserinfo,
+			_hasPort: tHasPort,
+			_hasQuery: tHasQuery,
+			_hasFragment: tHasFragment
+		}
+	end 'resolve'
 
-  // --- Equatable ---
+	// --- Equatable ---
 
-  export function equals(other URL) returns bool
-    if _scheme != other._scheme 'schemeDiff'
-      return false
-    end 'schemeDiff'
-    if _path != other._path 'pathDiff'
-      return false
-    end 'pathDiff'
-    if _hasHost != other._hasHost 'hasHostDiff'
-      return false
-    end 'hasHostDiff'
-    if _hasHost 'compareHost'
-      if _host != other._host 'hostDiff'
-        return false
-      end 'hostDiff'
-    end 'compareHost'
-    if _hasPort != other._hasPort 'hasPortDiff'
-      return false
-    end 'hasPortDiff'
-    if _hasPort 'comparePort'
-      if _port != other._port 'portDiff'
-        return false
-      end 'portDiff'
-    end 'comparePort'
-    if _hasUserinfo != other._hasUserinfo 'hasUIDiff'
-      return false
-    end 'hasUIDiff'
-    if _hasUserinfo 'compareUI'
-      if _userinfo != other._userinfo 'uiDiff'
-        return false
-      end 'uiDiff'
-    end 'compareUI'
-    if _hasQuery != other._hasQuery 'hasQDiff'
-      return false
-    end 'hasQDiff'
-    if _hasQuery 'compareQ'
-      if _query != other._query 'qDiff'
-        return false
-      end 'qDiff'
-    end 'compareQ'
-    if _hasFragment != other._hasFragment 'hasFragDiff'
-      return false
-    end 'hasFragDiff'
-    if _hasFragment 'compareFrag'
-      if _fragment != other._fragment 'fragDiff'
-        return false
-      end 'fragDiff'
-    end 'compareFrag'
-    return true
-  end 'equals'
+	export function equals(other URL) returns bool
+		if _scheme != other._scheme 'schemeDiff'
+			return false
+		end 'schemeDiff'
+		if _path != other._path 'pathDiff'
+			return false
+		end 'pathDiff'
+		if _hasHost != other._hasHost 'hasHostDiff'
+			return false
+		end 'hasHostDiff'
+		if _hasHost 'compareHost'
+			if _host != other._host 'hostDiff'
+				return false
+			end 'hostDiff'
+		end 'compareHost'
+		if _hasPort != other._hasPort 'hasPortDiff'
+			return false
+		end 'hasPortDiff'
+		if _hasPort 'comparePort'
+			if _port != other._port 'portDiff'
+				return false
+			end 'portDiff'
+		end 'comparePort'
+		if _hasUserinfo != other._hasUserinfo 'hasUIDiff'
+			return false
+		end 'hasUIDiff'
+		if _hasUserinfo 'compareUI'
+			if _userinfo != other._userinfo 'uiDiff'
+				return false
+			end 'uiDiff'
+		end 'compareUI'
+		if _hasQuery != other._hasQuery 'hasQDiff'
+			return false
+		end 'hasQDiff'
+		if _hasQuery 'compareQ'
+			if _query != other._query 'qDiff'
+				return false
+			end 'qDiff'
+		end 'compareQ'
+		if _hasFragment != other._hasFragment 'hasFragDiff'
+			return false
+		end 'hasFragDiff'
+		if _hasFragment 'compareFrag'
+			if _fragment != other._fragment 'fragDiff'
+				return false
+			end 'fragDiff'
+		end 'compareFrag'
+		return true
+	end 'equals'
 
 end 'URL'

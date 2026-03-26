@@ -34,11 +34,11 @@ The `unicodeGeneralCategory(cp)` function returns the Unicode General Category f
 <!-- test: cyrillic-letters -->
 ```maxon
 function main() returns ExitCode
-  var letters = CharacterSet.letters()
-  var a = '\u0410'
-  var b = '\u0430'
-  print("{letters.contains(a)}\n{letters.contains(b)}")
-  return 0
+	var letters = CharacterSet.letters()
+	var a = '\u0410'
+	var b = '\u0430'
+	print("{letters.contains(a)}\n{letters.contains(b)}")
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -52,10 +52,10 @@ true
 <!-- test: cjk-letters -->
 ```maxon
 function main() returns ExitCode
-  var letters = CharacterSet.letters()
-  var c = '\u4E00'
-  print("{letters.contains(c)}")
-  return 0
+	var letters = CharacterSet.letters()
+	var c = '\u4E00'
+	print("{letters.contains(c)}")
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -68,10 +68,10 @@ true
 <!-- test: arabic-digits -->
 ```maxon
 function main() returns ExitCode
-  var digits = CharacterSet.decimalDigits()
-  var d = '\u0660'
-  print("{digits.contains(d)}")
-  return 0
+	var digits = CharacterSet.decimalDigits()
+	var d = '\u0660'
+	print("{digits.contains(d)}")
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -84,11 +84,11 @@ true
 <!-- test: unicode-punctuation -->
 ```maxon
 function main() returns ExitCode
-  var punct = CharacterSet.punctuation()
-  var a = '\u00AB'
-  var b = '\u00BB'
-  print("{punct.contains(a)}\n{punct.contains(b)}")
-  return 0
+	var punct = CharacterSet.punctuation()
+	var a = '\u00AB'
+	var b = '\u00BB'
+	print("{punct.contains(a)}\n{punct.contains(b)}")
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -102,10 +102,10 @@ true
 <!-- test: unicode-symbols -->
 ```maxon
 function main() returns ExitCode
-  var syms = CharacterSet.symbols()
-  var c = '\u00A9'
-  print("{syms.contains(c)}")
-  return 0
+	var syms = CharacterSet.symbols()
+	var c = '\u00A9'
+	print("{syms.contains(c)}")
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -118,9 +118,9 @@ true
 <!-- test: custom-set-unchanged -->
 ```maxon
 function main() returns ExitCode
-  var cs = CharacterSet.from(CharSet from ['x', 'y', 'z'])
-  print("{cs.contains('x')}\n{cs.contains('a')}")
-  return 0
+	var cs = CharacterSet.from(CharSet from ['x', 'y', 'z'])
+	print("{cs.contains('x')}\n{cs.contains('a')}")
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -134,10 +134,10 @@ false
 <!-- test: trim-cyrillic -->
 ```maxon
 function main() returns ExitCode
-  var s = "\u0410\u0411\u0412 123 \u0410\u0411\u0412"
-  var result = s.trim(CharacterSet.letters())
-  print("[{result}]")
-  return 0
+	var s = "\u0410\u0411\u0412 123 \u0410\u0411\u0412"
+	var result = s.trim(CharacterSet.letters())
+	print("[{result}]")
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -150,10 +150,10 @@ end 'main'
 <!-- test: unicode-whitespace -->
 ```maxon
 function main() returns ExitCode
-  var ws = CharacterSet.whitespaces()
-  var c = '\u2003'
-  print("{ws.contains(c)}")
-  return 0
+	var ws = CharacterSet.whitespaces()
+	var c = '\u2003'
+	print("{ws.contains(c)}")
+	return 0
 end 'main'
 ```
 ```exitcode

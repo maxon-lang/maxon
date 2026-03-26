@@ -2,30 +2,30 @@
 // Regression test: structs with enum fields stored correctly in arrays
 // Previously, 8-byte structs were stored by pointer instead of by value
 enum Color
-  red
-  green
-  blue
+	red
+	green
+	blue
 end 'Color'
 
 type Item
-  export var color Color
+	export var color Color
 end 'Item'
 
 typealias ItemArray = Array with Item
 
 function main() returns ExitCode
-  var items = ItemArray{}
-  items.push(Item{color: Color.red})
-  items.push(Item{color: Color.green})
-  items.push(Item{color: Color.blue})
+	var items = ItemArray{}
+	items.push(Item{color: Color.red})
+	items.push(Item{color: Color.green})
+	items.push(Item{color: Color.blue})
 
-  // Verify union values are stored correctly (not pointers)
-  var item0 = try items.get(0) otherwise Item{color: Color.blue}
-  var item1 = try items.get(1) otherwise Item{color: Color.blue}
-  var item2 = try items.get(2) otherwise Item{color: Color.red}
+	// Verify union values are stored correctly (not pointers)
+	var item0 = try items.get(0) otherwise Item{color: Color.blue}
+	var item1 = try items.get(1) otherwise Item{color: Color.blue}
+	var item2 = try items.get(2) otherwise Item{color: Color.red}
 
-  // red=0, green=1, blue=2
-  return item0.color.rawValue + item1.color.rawValue * 10 + item2.color.rawValue * 100
+	// red=0, green=1, blue=2
+	return item0.color.rawValue + item1.color.rawValue * 10 + item2.color.rawValue * 100
 end 'main'
 ---
 ExitCode: 210

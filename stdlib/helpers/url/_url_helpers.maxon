@@ -4,239 +4,239 @@
 typealias ByteValue = int(0 to 255)
 
 export function _urlIsAlpha(b ByteValue) returns bool
-  // A-Z: 65-90, a-z: 97-122
-  if b >= 65 and b <= 90 'upper'
-    return true
-  end 'upper'
-  if b >= 97 and b <= 122 'lower'
-    return true
-  end 'lower'
-  return false
+	// A-Z: 65-90, a-z: 97-122
+	if b >= 65 and b <= 90 'upper'
+		return true
+	end 'upper'
+	if b >= 97 and b <= 122 'lower'
+		return true
+	end 'lower'
+	return false
 end '_urlIsAlpha'
 
 export function _urlIsDigit(b ByteValue) returns bool
-  // 0-9: 48-57
-  if b >= 48 and b <= 57 'digit'
-    return true
-  end 'digit'
-  return false
+	// 0-9: 48-57
+	if b >= 48 and b <= 57 'digit'
+		return true
+	end 'digit'
+	return false
 end '_urlIsDigit'
 
 export function _urlIsHexDigit(b ByteValue) returns bool
-  // 0-9: 48-57, A-F: 65-70, a-f: 97-102
-  if b >= 48 and b <= 57 'digit'
-    return true
-  end 'digit'
-  if b >= 65 and b <= 70 'upperHex'
-    return true
-  end 'upperHex'
-  if b >= 97 and b <= 102 'lowerHex'
-    return true
-  end 'lowerHex'
-  return false
+	// 0-9: 48-57, A-F: 65-70, a-f: 97-102
+	if b >= 48 and b <= 57 'digit'
+		return true
+	end 'digit'
+	if b >= 65 and b <= 70 'upperHex'
+		return true
+	end 'upperHex'
+	if b >= 97 and b <= 102 'lowerHex'
+		return true
+	end 'lowerHex'
+	return false
 end '_urlIsHexDigit'
 
 /// Valid scheme characters after the first: ALPHA / DIGIT / "+" / "-" / "."
 export function _urlIsSchemeChar(b ByteValue) returns bool
-  if _urlIsAlpha(b) 'alpha'
-    return true
-  end 'alpha'
-  if _urlIsDigit(b) 'digit'
-    return true
-  end 'digit'
-  // +: 43, -: 45, .: 46
-  if b == 43 or b == 45 or b == 46 'special'
-    return true
-  end 'special'
-  return false
+	if _urlIsAlpha(b) 'alpha'
+		return true
+	end 'alpha'
+	if _urlIsDigit(b) 'digit'
+		return true
+	end 'digit'
+	// +: 43, -: 45, .: 46
+	if b == 43 or b == 45 or b == 46 'special'
+		return true
+	end 'special'
+	return false
 end '_urlIsSchemeChar'
 
 /// Validate percent-encoding in a string. Throws URLError.invalidEncoding on malformed sequences.
 export function _urlValidatePercentEncoding(input String) throws URLError
-  let len = input.byteLength()
-  var i = 0
-  while i < len 'scan'
-    let b = input.managed.byteAt(i)
-    if b == 37 'percent'
-      // '%' = 37, need two hex digits after
-      if i + 2 >= len 'truncated'
-        throw URLError.invalidEncoding
-      end 'truncated'
-      let h1 = input.managed.byteAt(i + 1)
-      let h2 = input.managed.byteAt(i + 2)
-      if not _urlIsHexDigit(h1) 'badH1'
-        throw URLError.invalidEncoding
-      end 'badH1'
-      if not _urlIsHexDigit(h2) 'badH2'
-        throw URLError.invalidEncoding
-      end 'badH2'
-      i = i + 3
-    end 'percent' else 'notPercent'
-      i = i + 1
-    end 'notPercent'
-  end 'scan'
+	let len = input.byteLength()
+	var i = 0
+	while i < len 'scan'
+		let b = input.managed.byteAt(i)
+		if b == 37 'percent'
+			// '%' = 37, need two hex digits after
+			if i + 2 >= len 'truncated'
+				throw URLError.invalidEncoding
+			end 'truncated'
+			let h1 = input.managed.byteAt(i + 1)
+			let h2 = input.managed.byteAt(i + 2)
+			if not _urlIsHexDigit(h1) 'badH1'
+				throw URLError.invalidEncoding
+			end 'badH1'
+			if not _urlIsHexDigit(h2) 'badH2'
+				throw URLError.invalidEncoding
+			end 'badH2'
+			i = i + 3
+		end 'percent' else 'notPercent'
+			i = i + 1
+		end 'notPercent'
+	end 'scan'
 end '_urlValidatePercentEncoding'
 
 /// Remove dot segments from a path per RFC 3986 Section 5.2.4.
 export function _urlRemoveDotSegments(path String) returns String
-  let len = path.byteLength()
-  if len == 0 'empty'
-    return ""
-  end 'empty'
+	let len = path.byteLength()
+	if len == 0 'empty'
+		return ""
+	end 'empty'
 
-  // Work with the input as bytes, tracking position
-  var pos = 0
-  var output = ""
+	// Work with the input as bytes, tracking position
+	var pos = 0
+	var output = ""
 
-  while pos < len 'loop'
-    let remaining = len - pos
+	while pos < len 'loop'
+		let remaining = len - pos
 
-    // A: If input starts with "../" remove it
-    if remaining >= 3 'checkDotDotSlash'
-      if path.managed.byteAt(pos) == 46 'dot1'
-        if path.managed.byteAt(pos + 1) == 46 'dot2'
-          if path.managed.byteAt(pos + 2) == 47 'slash'
-            pos = pos + 3
-            continue
-          end 'slash'
-        end 'dot2'
-      end 'dot1'
-    end 'checkDotDotSlash'
+		// A: If input starts with "../" remove it
+		if remaining >= 3 'checkDotDotSlash'
+			if path.managed.byteAt(pos) == 46 'dot1'
+				if path.managed.byteAt(pos + 1) == 46 'dot2'
+					if path.managed.byteAt(pos + 2) == 47 'slash'
+						pos = pos + 3
+						continue
+					end 'slash'
+				end 'dot2'
+			end 'dot1'
+		end 'checkDotDotSlash'
 
-    // A: If input starts with "./" remove it
-    if remaining >= 2 'checkDotSlash'
-      if path.managed.byteAt(pos) == 46 'dot1b'
-        if path.managed.byteAt(pos + 1) == 47 'slash1b'
-          pos = pos + 2
-          continue
-        end 'slash1b'
-      end 'dot1b'
-    end 'checkDotSlash'
+		// A: If input starts with "./" remove it
+		if remaining >= 2 'checkDotSlash'
+			if path.managed.byteAt(pos) == 46 'dot1b'
+				if path.managed.byteAt(pos + 1) == 47 'slash1b'
+					pos = pos + 2
+					continue
+				end 'slash1b'
+			end 'dot1b'
+		end 'checkDotSlash'
 
-    // B: If input starts with "/./" replace with "/"
-    if remaining >= 3 'checkSlashDotSlash'
-      if path.managed.byteAt(pos) == 47 'sl1'
-        if path.managed.byteAt(pos + 1) == 46 'dt1'
-          if path.managed.byteAt(pos + 2) == 47 'sl2'
-            pos = pos + 2
-            continue
-          end 'sl2'
-        end 'dt1'
-      end 'sl1'
-    end 'checkSlashDotSlash'
+		// B: If input starts with "/./" replace with "/"
+		if remaining >= 3 'checkSlashDotSlash'
+			if path.managed.byteAt(pos) == 47 'sl1'
+				if path.managed.byteAt(pos + 1) == 46 'dt1'
+					if path.managed.byteAt(pos + 2) == 47 'sl2'
+						pos = pos + 2
+						continue
+					end 'sl2'
+				end 'dt1'
+			end 'sl1'
+		end 'checkSlashDotSlash'
 
-    // B: If input is exactly "/." replace with "/"
-    if remaining == 2 'checkSlashDot'
-      if path.managed.byteAt(pos) == 47 'sl1c'
-        if path.managed.byteAt(pos + 1) == 46 'dt1c'
-          output = "{output}/"
-          pos = len
-          continue
-        end 'dt1c'
-      end 'sl1c'
-    end 'checkSlashDot'
+		// B: If input is exactly "/." replace with "/"
+		if remaining == 2 'checkSlashDot'
+			if path.managed.byteAt(pos) == 47 'sl1c'
+				if path.managed.byteAt(pos + 1) == 46 'dt1c'
+					output = "{output}/"
+					pos = len
+					continue
+				end 'dt1c'
+			end 'sl1c'
+		end 'checkSlashDot'
 
-    // C: If input starts with "/../" replace with "/" and remove last segment from output
-    if remaining >= 4 'checkSlashDotDotSlash'
-      if path.managed.byteAt(pos) == 47 'sl1d'
-        if path.managed.byteAt(pos + 1) == 46 'dt1d'
-          if path.managed.byteAt(pos + 2) == 46 'dt2d'
-            if path.managed.byteAt(pos + 3) == 47 'sl2d'
-              output = _urlRemoveLastSegment(output)
-              pos = pos + 3
-              continue
-            end 'sl2d'
-          end 'dt2d'
-        end 'dt1d'
-      end 'sl1d'
-    end 'checkSlashDotDotSlash'
+		// C: If input starts with "/../" replace with "/" and remove last segment from output
+		if remaining >= 4 'checkSlashDotDotSlash'
+			if path.managed.byteAt(pos) == 47 'sl1d'
+				if path.managed.byteAt(pos + 1) == 46 'dt1d'
+					if path.managed.byteAt(pos + 2) == 46 'dt2d'
+						if path.managed.byteAt(pos + 3) == 47 'sl2d'
+							output = _urlRemoveLastSegment(output)
+							pos = pos + 3
+							continue
+						end 'sl2d'
+					end 'dt2d'
+				end 'dt1d'
+			end 'sl1d'
+		end 'checkSlashDotDotSlash'
 
-    // C: If input is exactly "/.." replace with "/" and remove last segment from output
-    if remaining == 3 'checkSlashDotDot'
-      if path.managed.byteAt(pos) == 47 'sl1e'
-        if path.managed.byteAt(pos + 1) == 46 'dt1e'
-          if path.managed.byteAt(pos + 2) == 46 'dt2e'
-            output = _urlRemoveLastSegment(output)
-            output = "{output}/"
-            pos = len
-            continue
-          end 'dt2e'
-        end 'dt1e'
-      end 'sl1e'
-    end 'checkSlashDotDot'
+		// C: If input is exactly "/.." replace with "/" and remove last segment from output
+		if remaining == 3 'checkSlashDotDot'
+			if path.managed.byteAt(pos) == 47 'sl1e'
+				if path.managed.byteAt(pos + 1) == 46 'dt1e'
+					if path.managed.byteAt(pos + 2) == 46 'dt2e'
+						output = _urlRemoveLastSegment(output)
+						output = "{output}/"
+						pos = len
+						continue
+					end 'dt2e'
+				end 'dt1e'
+			end 'sl1e'
+		end 'checkSlashDotDot'
 
-    // D: If input is exactly "." or ".." remove it
-    if remaining == 1 'checkLoneDot'
-      if path.managed.byteAt(pos) == 46 'isDot'
-        pos = len
-        continue
-      end 'isDot'
-    end 'checkLoneDot'
-    if remaining == 2 'checkLoneDotDot'
-      if path.managed.byteAt(pos) == 46 'isDot1'
-        if path.managed.byteAt(pos + 1) == 46 'isDot2'
-          pos = len
-          continue
-        end 'isDot2'
-      end 'isDot1'
-    end 'checkLoneDotDot'
+		// D: If input is exactly "." or ".." remove it
+		if remaining == 1 'checkLoneDot'
+			if path.managed.byteAt(pos) == 46 'isDot'
+				pos = len
+				continue
+			end 'isDot'
+		end 'checkLoneDot'
+		if remaining == 2 'checkLoneDotDot'
+			if path.managed.byteAt(pos) == 46 'isDot1'
+				if path.managed.byteAt(pos + 1) == 46 'isDot2'
+					pos = len
+					continue
+				end 'isDot2'
+			end 'isDot1'
+		end 'checkLoneDotDot'
 
-    // E: Move first path segment (including initial "/" if any) to output
-    var segEnd = pos
-    if path.managed.byteAt(segEnd) == 47 'startsWithSlash'
-      segEnd = segEnd + 1
-    end 'startsWithSlash'
-    // Find next "/" or end
-    while segEnd < len 'findSlash'
-      if path.managed.byteAt(segEnd) == 47 'foundSlash'
-        break
-      end 'foundSlash'
-      segEnd = segEnd + 1
-    end 'findSlash'
-    let segManaged = path.managed.slice(pos, segEnd)
-    let seg = String{managed: segManaged, _iterPos: 0}
-    output = "{output}{seg}"
-    pos = segEnd
-  end 'loop'
+		// E: Move first path segment (including initial "/" if any) to output
+		var segEnd = pos
+		if path.managed.byteAt(segEnd) == 47 'startsWithSlash'
+			segEnd = segEnd + 1
+		end 'startsWithSlash'
+		// Find next "/" or end
+		while segEnd < len 'findSlash'
+			if path.managed.byteAt(segEnd) == 47 'foundSlash'
+				break
+			end 'foundSlash'
+			segEnd = segEnd + 1
+		end 'findSlash'
+		let segManaged = path.managed.slice(pos, segEnd)
+		let seg = String{managed: segManaged, _iterPos: 0}
+		output = "{output}{seg}"
+		pos = segEnd
+	end 'loop'
 
-  return output
+	return output
 end '_urlRemoveDotSegments'
 
 /// Remove the last path segment from output (everything after and including the last "/").
 export function _urlRemoveLastSegment(output String) returns String
-  let len = output.byteLength()
-  if len == 0 'empty'
-    return ""
-  end 'empty'
-  var i = len
-  while i > 0 'scan'
-    i = i - 1
-    if output.managed.byteAt(i) == 47 'foundSlash'
-      if i == 0 'isRoot'
-        return ""
-      end 'isRoot'
-      let sliced = output.managed.slice(0, i)
-      return String{managed: sliced, _iterPos: 0}
-    end 'foundSlash'
-  end 'scan'
-  return ""
+	let len = output.byteLength()
+	if len == 0 'empty'
+		return ""
+	end 'empty'
+	var i = len
+	while i > 0 'scan'
+		i = i - 1
+		if output.managed.byteAt(i) == 47 'foundSlash'
+			if i == 0 'isRoot'
+				return ""
+			end 'isRoot'
+			let sliced = output.managed.slice(0, i)
+			return String{managed: sliced, _iterPos: 0}
+		end 'foundSlash'
+	end 'scan'
+	return ""
 end '_urlRemoveLastSegment'
 
 /// Merge base path with reference path per RFC 3986 Section 5.2.3.
 export function _urlMergeBasePath(basePath String, hasAuthority bool, refPath String) returns String
-  if hasAuthority and basePath.isEmpty() 'emptyBase'
-    return "/{refPath}"
-  end 'emptyBase'
-  // Find last "/" in basePath
-  let baseLen = basePath.byteLength()
-  var i = baseLen
-  while i > 0 'scan'
-    i = i - 1
-    if basePath.managed.byteAt(i) == 47 'foundSlash'
-      let prefix = basePath.managed.slice(0, i + 1)
-      let prefixStr = String{managed: prefix, _iterPos: 0}
-      return "{prefixStr}{refPath}"
-    end 'foundSlash'
-  end 'scan'
-  return refPath
+	if hasAuthority and basePath.isEmpty() 'emptyBase'
+		return "/{refPath}"
+	end 'emptyBase'
+	// Find last "/" in basePath
+	let baseLen = basePath.byteLength()
+	var i = baseLen
+	while i > 0 'scan'
+		i = i - 1
+		if basePath.managed.byteAt(i) == 47 'foundSlash'
+			let prefix = basePath.managed.slice(0, i + 1)
+			let prefixStr = String{managed: prefix, _iterPos: 0}
+			return "{prefixStr}{refPath}"
+		end 'foundSlash'
+	end 'scan'
+	return refPath
 end '_urlMergeBasePath'

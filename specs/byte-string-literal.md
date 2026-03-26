@@ -46,8 +46,8 @@ data.get(0)        // 104 (ASCII 'h')
 
 ```maxon
 function main() returns ExitCode
-    let bytes = b"hello"
-    return bytes.count()
+		let bytes = b"hello"
+		return bytes.count()
 end 'main'
 ```
 ```exitcode
@@ -58,8 +58,8 @@ end 'main'
 
 ```maxon
 function main() returns ExitCode
-    let bytes = b""
-    return bytes.count()
+		let bytes = b""
+		return bytes.count()
 end 'main'
 ```
 ```exitcode
@@ -70,8 +70,8 @@ end 'main'
 
 ```maxon
 function main() returns ExitCode
-    let bytes = b"a\nb"
-    return bytes.count()
+		let bytes = b"a\nb"
+		return bytes.count()
 end 'main'
 ```
 ```exitcode
@@ -82,11 +82,11 @@ end 'main'
 
 ```maxon
 function main() returns ExitCode
-    let bytes = b"AB"
-    let a = try bytes.get(0) otherwise 0
-    let b = try bytes.get(1) otherwise 0
-    print("{a} {b}")
-    return 0
+		let bytes = b"AB"
+		let a = try bytes.get(0) otherwise 0
+		let b = try bytes.get(1) otherwise 0
+		print("{a} {b}")
+		return 0
 end 'main'
 ```
 ```exitcode
@@ -100,11 +100,11 @@ end 'main'
 
 ```maxon
 function main() returns ExitCode
-    var m = [b"hello": 1, b"world": 2]
-    let v1 = try m.get(key: b"hello") otherwise 0
-    let v2 = try m.get(key: b"world") otherwise 0
-    print("{v1} {v2}")
-    return 0
+		var m = [b"hello": 1, b"world": 2]
+		let v1 = try m.get(key: b"hello") otherwise 0
+		let v2 = try m.get(key: b"world") otherwise 0
+		print("{v1} {v2}")
+		return 0
 end 'main'
 ```
 ```exitcode
@@ -120,10 +120,10 @@ end 'main'
 var m = [b"hello": 1, b"world": 2]
 
 function main() returns ExitCode
-    let v1 = try m.get(key: b"hello") otherwise 0
-    let v2 = try m.get(key: b"world") otherwise 0
-    print("{v1} {v2}")
-    return 0
+		let v1 = try m.get(key: b"hello") otherwise 0
+		let v2 = try m.get(key: b"world") otherwise 0
+		print("{v1} {v2}")
+		return 0
 end 'main'
 ```
 ```exitcode
@@ -139,16 +139,16 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 type Info
-    export var value Integer
+		export var value Integer
 end 'Info'
 
 var m = [b"hello": Info{value: 10}, b"world": Info{value: 20}]
 
 function main() returns ExitCode
-    let v1 = try m.get(key: b"hello") otherwise Info{value: 0}
-    let v2 = try m.get(key: b"world") otherwise Info{value: 0}
-    print("{v1.value} {v2.value}")
-    return 0
+		let v1 = try m.get(key: b"hello") otherwise Info{value: 0}
+		let v2 = try m.get(key: b"world") otherwise Info{value: 0}
+		print("{v1.value} {v2.value}")
+		return 0
 end 'main'
 ```
 ```exitcode
@@ -162,8 +162,8 @@ end 'main'
 
 ```maxon
 function main() returns ExitCode
-    let len = b"test".count()
-    return len
+		let len = b"test".count()
+		return len
 end 'main'
 ```
 ```exitcode

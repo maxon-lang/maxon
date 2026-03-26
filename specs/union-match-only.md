@@ -59,65 +59,65 @@ The enclosing function must declare `throws MyError`. Callers must use `try`/`ot
 <!-- test: error.union-eq -->
 ```maxon
 union Direction
-  north
-  south
+	north
+	south
 end 'Direction'
 
 function main() returns ExitCode
-  var d = Direction.north
-  if d == Direction.north 'check'
-    return 1
-  end 'check'
-  return 0
+	var d = Direction.north
+	if d == Direction.north 'check'
+		return 1
+	end 'check'
+	return 0
 end 'main'
 ```
 ```maxoncstderr
-error E3066: specs/fragments/union-match-only/error.union-eq.test:9:8: cannot compare union values with '==', use 'match' instead
+error E3066: specs/fragments/union-match-only/error.union-eq.test:9:7: cannot compare union values with '==', use 'match' instead
 ```
 
 <!-- test: error.union-ne -->
 ```maxon
 union Direction
-  north
-  south
+	north
+	south
 end 'Direction'
 
 function main() returns ExitCode
-  var d = Direction.north
-  if d != Direction.south 'check'
-    return 1
-  end 'check'
-  return 0
+	var d = Direction.north
+	if d != Direction.south 'check'
+		return 1
+	end 'check'
+	return 0
 end 'main'
 ```
 ```maxoncstderr
-error E3066: specs/fragments/union-match-only/error.union-ne.test:9:8: cannot compare union values with '!=', use 'match' instead
+error E3066: specs/fragments/union-match-only/error.union-ne.test:9:7: cannot compare union values with '!=', use 'match' instead
 ```
 
 <!-- test: error.union-eq-method -->
 ```maxon
 union Toggle
-  on
-  off
+	on
+	off
 
-  function isOn() returns bool
-    if self == Toggle.on 'check'
-      return true
-    end 'check'
-    return false
-  end 'isOn'
+	function isOn() returns bool
+		if self == Toggle.on 'check'
+			return true
+		end 'check'
+		return false
+	end 'isOn'
 end 'Toggle'
 
 function main() returns ExitCode
-  let t = Toggle.on
-  if t.isOn() 'test'
-    return 1
-  end 'test'
-  return 0
+	let t = Toggle.on
+	if t.isOn() 'test'
+		return 1
+	end 'test'
+	return 0
 end 'main'
 ```
 ```maxoncstderr
-error E3066: specs/fragments/union-match-only/error.union-eq-method.test:7:13: cannot compare union values with '==', use 'match' instead
+error E3066: specs/fragments/union-match-only/error.union-eq-method.test:7:11: cannot compare union values with '==', use 'match' instead
 ```
 
 <!-- test: error.union-eq-associated -->
@@ -126,66 +126,66 @@ error E3066: specs/fragments/union-match-only/error.union-eq-method.test:7:13: c
 typealias Integer = int(i64.min to i64.max)
 
 union Container
-  empty
-  value(n Integer)
+	empty
+	value(n Integer)
 end 'Container'
 
 function main() returns ExitCode
-  var a = Container.empty
-  var b = Container.empty
-  if a == b 'check'
-    return 1
-  end 'check'
-  return 0
+	var a = Container.empty
+	var b = Container.empty
+	if a == b 'check'
+		return 1
+	end 'check'
+	return 0
 end 'main'
 ```
 ```maxoncstderr
-error E3066: specs/fragments/union-match-only/error.union-eq-associated.test:13:8: cannot compare union values with '==', use 'match' instead
+error E3066: specs/fragments/union-match-only/error.union-eq-associated.test:13:7: cannot compare union values with '==', use 'match' instead
 ```
 
 <!-- test: error.default-without-throws -->
 ```maxon
 union Color
-  red
-  green
-  blue
+	red
+	green
+	blue
 end 'Color'
 
 function main() returns ExitCode
-  var c = Color.green
-  match c 'check'
-    green then return 1
-    default then return 0
-  end 'check'
+	var c = Color.green
+	match c 'check'
+		green then return 1
+		default then return 0
+	end 'check'
 end 'main'
 ```
 ```maxoncstderr
-error E2046: specs/fragments/union-match-only/error.default-without-throws.test:12:5: 'default' in a match on union 'Color' must be followed by 'throws <error>' or 'panic("message")'
+error E2046: specs/fragments/union-match-only/error.default-without-throws.test:12:3: 'default' in a match on union 'Color' must be followed by 'throws <error>' or 'panic("message")'
 ```
 
 <!-- test: default-throws-statement -->
 ```maxon
 union Color
-  red
-  green
-  blue
+	red
+	green
+	blue
 end 'Color'
 
 union MatchError
-  unmatched
+	unmatched
 end 'MatchError'
 
 function checkColor(c Color) returns ExitCode throws MatchError
-  match c 'check'
-    green then return 1
-    default throws MatchError.unmatched
-  end 'check'
+	match c 'check'
+		green then return 1
+		default throws MatchError.unmatched
+	end 'check'
 end 'checkColor'
 
 function main() returns ExitCode
-  var c = Color.green
-  var result = try checkColor(c) otherwise 0
-  return result
+	var c = Color.green
+	var result = try checkColor(c) otherwise 0
+	return result
 end 'main'
 ```
 ```exitcode
@@ -195,27 +195,27 @@ end 'main'
 <!-- test: default-throws-no-match -->
 ```maxon
 union Color
-  red
-  green
-  blue
+	red
+	green
+	blue
 end 'Color'
 
 union MatchError
-  unmatched
+	unmatched
 end 'MatchError'
 
 function checkColor(c Color) returns ExitCode throws MatchError
-  match c 'check'
-    red then return 1
-    green then return 2
-    default throws MatchError.unmatched
-  end 'check'
+	match c 'check'
+		red then return 1
+		green then return 2
+		default throws MatchError.unmatched
+	end 'check'
 end 'checkColor'
 
 function main() returns ExitCode
-  var c = Color.blue
-  var result = try checkColor(c) otherwise 99
-  return result
+	var c = Color.blue
+	var result = try checkColor(c) otherwise 99
+	return result
 end 'main'
 ```
 ```exitcode
@@ -225,28 +225,28 @@ end 'main'
 <!-- test: default-throws-expression -->
 ```maxon
 union Color
-  red
-  green
-  blue
+	red
+	green
+	blue
 end 'Color'
 
 union MatchError
-  unmatched
+	unmatched
 end 'MatchError'
 
 function colorValue(c Color) returns ExitCode throws MatchError
-  let result = match c 'check'
-    red gives 10
-    green gives 20
-    default throws MatchError.unmatched
-  end 'check'
-  return result
+	let result = match c 'check'
+		red gives 10
+		green gives 20
+		default throws MatchError.unmatched
+	end 'check'
+	return result
 end 'colorValue'
 
 function main() returns ExitCode
-  var c = Color.green
-  var result = try colorValue(c) otherwise 0
-  return result
+	var c = Color.green
+	var result = try colorValue(c) otherwise 0
+	return result
 end 'main'
 ```
 ```exitcode
@@ -259,27 +259,27 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 union Result
-  success(value Integer)
-  failure(code Integer)
-  pending
+	success(value Integer)
+	failure(code Integer)
+	pending
 end 'Result'
 
 union MatchError
-  unmatched
+	unmatched
 end 'MatchError'
 
 function getValue(r Result) returns ExitCode throws MatchError
-  match r 'check'
-    success(v) then return v
-    failure(c) then return c
-    default throws MatchError.unmatched
-  end 'check'
+	match r 'check'
+		success(v) then return v
+		failure(c) then return c
+		default throws MatchError.unmatched
+	end 'check'
 end 'getValue'
 
 function main() returns ExitCode
-  var r = Result.success(42)
-  var result = try getValue(r) otherwise 0
-  return result
+	var r = Result.success(42)
+	var result = try getValue(r) otherwise 0
+	return result
 end 'main'
 ```
 ```exitcode
@@ -289,20 +289,20 @@ end 'main'
 <!-- test: union-map-key-still-works -->
 ```maxon
 union Color
-  red
-  green
-  blue
+	red
+	green
+	blue
 end 'Color'
 
 typealias Int = int(i64.min to i64.max)
 typealias ColorMap = Map with (Color, Int)
 
 function main() returns ExitCode
-  var m = ColorMap{}
-  m.insert(Color.red, value: 10)
-  m.insert(Color.green, value: 20)
-  var result = try m.get(Color.green) otherwise 0
-  return result
+	var m = ColorMap{}
+	m.insert(Color.red, value: 10)
+	m.insert(Color.green, value: 20)
+	var result = try m.get(Color.green) otherwise 0
+	return result
 end 'main'
 ```
 ```exitcode

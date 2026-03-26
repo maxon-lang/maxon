@@ -3,56 +3,56 @@
 typealias Integer = int(i64.min to i64.max)
 
 interface Bucket uses Element
-  function next() returns Element throws IterationError
+	function next() returns Element throws IterationError
 end 'Bucket'
 
 extension Bucket where Element is Equatable and Hashable
-  function lookup(target Element) returns bool
-    for item in self 'loop'
-      if item == target 'found'
-        return true
-      end 'found'
-    end 'loop'
-    return false
-  end 'lookup'
+	function lookup(target Element) returns bool
+		for item in self 'loop'
+			if item == target 'found'
+				return true
+			end 'found'
+		end 'loop'
+		return false
+	end 'lookup'
 end 'Bucket'
 
 type HashItem implements Equatable, Hashable
-  export var v Integer
+	export var v Integer
 
-  function equals(other HashItem) returns bool
-    return v == other.v
-  end 'equals'
+	function equals(other HashItem) returns bool
+		return v == other.v
+	end 'equals'
 
-  function hash() returns HashValue
-    return v
-  end 'hash'
+	function hash() returns HashValue
+		return v
+	end 'hash'
 end 'HashItem'
 
 typealias HashItemArray = Array with HashItem
 
 type HashBucket implements Bucket with HashItem
-  var items HashItemArray
-  var idx Integer
+	var items HashItemArray
+	var idx Integer
 
-  function next() returns HashItem throws IterationError
-    if idx >= items.count() 'done'
-      throw IterationError.exhausted
-    end 'done'
-    var v = try items.get(idx) otherwise 'bail'
-      throw IterationError.exhausted
-    end 'bail'
-    idx = idx + 1
-    return v
-  end 'next'
+	function next() returns HashItem throws IterationError
+		if idx >= items.count() 'done'
+			throw IterationError.exhausted
+		end 'done'
+		var v = try items.get(idx) otherwise 'bail'
+			throw IterationError.exhausted
+		end 'bail'
+		idx = idx + 1
+		return v
+	end 'next'
 end 'HashBucket'
 
 function main() returns ExitCode
-  var b = HashBucket{items: [HashItem{v: 1}, HashItem{v: 2}, HashItem{v: 3}], idx: 0}
-  if b.lookup(HashItem{v: 2}) 'found'
-    return 1
-  end 'found'
-  return 0
+	var b = HashBucket{items: [HashItem{v: 1}, HashItem{v: 2}, HashItem{v: 3}], idx: 0}
+	if b.lookup(HashItem{v: 2}) 'found'
+		return 1
+	end 'found'
+	return 0
 end 'main'
 ---
 ExitCode: 1

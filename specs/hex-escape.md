@@ -37,11 +37,11 @@ let max_byte = b"\xFF"        // Byte 255
 
 ```maxon
 function main() returns ExitCode
-    let bytes = b"\x41\x42"
-    let a = try bytes.get(0) otherwise 0
-    let b = try bytes.get(1) otherwise 0
-    print("{a} {b}")
-    return bytes.count()
+		let bytes = b"\x41\x42"
+		let a = try bytes.get(0) otherwise 0
+		let b = try bytes.get(1) otherwise 0
+		print("{a} {b}")
+		return bytes.count()
 end 'main'
 ```
 ```exitcode
@@ -55,10 +55,10 @@ end 'main'
 
 ```maxon
 function main() returns ExitCode
-    let bytes = b"\xFF"
-    let v = try bytes.get(0) otherwise 0
-    print("{v}")
-    return bytes.count()
+		let bytes = b"\xFF"
+		let v = try bytes.get(0) otherwise 0
+		print("{v}")
+		return bytes.count()
 end 'main'
 ```
 ```exitcode
@@ -72,12 +72,12 @@ end 'main'
 
 ```maxon
 function main() returns ExitCode
-    let bytes = b"A\x42C"
-    let a = try bytes.get(0) otherwise 0
-    let b = try bytes.get(1) otherwise 0
-    let c = try bytes.get(2) otherwise 0
-    print("{a} {b} {c}")
-    return bytes.count()
+		let bytes = b"A\x42C"
+		let a = try bytes.get(0) otherwise 0
+		let b = try bytes.get(1) otherwise 0
+		let c = try bytes.get(2) otherwise 0
+		print("{a} {b} {c}")
+		return bytes.count()
 end 'main'
 ```
 ```exitcode
@@ -91,11 +91,11 @@ end 'main'
 
 ```maxon
 function main() returns ExitCode
-    let ch = '\x41'
-    if ch == 'A' 'check'
-        return 0
-    end 'check'
-    return 1
+		let ch = '\x41'
+		if ch == 'A' 'check'
+				return 0
+		end 'check'
+		return 1
 end 'main'
 ```
 ```exitcode
@@ -106,9 +106,9 @@ end 'main'
 
 ```maxon
 function main() returns ExitCode
-    let s = "\x48\x69"
-    print(s)
-    return 0
+		let s = "\x48\x69"
+		print(s)
+		return 0
 end 'main'
 ```
 ```exitcode
@@ -122,10 +122,10 @@ Hi
 
 ```maxon
 function main() returns ExitCode
-    let bytes = b"\x0a"
-    let v = try bytes.get(0) otherwise 0
-    print("{v}")
-    return 0
+		let bytes = b"\x0a"
+		let v = try bytes.get(0) otherwise 0
+		print("{v}")
+		return 0
 end 'main'
 ```
 ```exitcode
@@ -139,22 +139,22 @@ end 'main'
 
 ```maxon
 function main() returns ExitCode
-    let bytes = b"\xG0"
-    return 0
+		let bytes = b"\xG0"
+		return 0
 end 'main'
 ```
 ```maxoncstderr
-error E1004: specs/fragments/hex-escape/hex-escape.invalid-short.test:3:17: Invalid hex escape '\xG0': expected 2 hex digits in byte string literal
+error E1004: specs/fragments/hex-escape/hex-escape.invalid-short.test:3:15: Invalid hex escape '\xG0': expected 2 hex digits in byte string literal
 ```
 
 <!-- test: hex-escape.invalid-truncated -->
 
 ```maxon
 function main() returns ExitCode
-    let bytes = b"\x4"
-    return 0
+		let bytes = b"\x4"
+		return 0
 end 'main'
 ```
 ```maxoncstderr
-error E1004: specs/fragments/hex-escape/hex-escape.invalid-truncated.test:3:17: Invalid hex escape '\x4': expected 2 hex digits in byte string literal
+error E1004: specs/fragments/hex-escape/hex-escape.invalid-truncated.test:3:15: Invalid hex escape '\x4': expected 2 hex digits in byte string literal
 ```

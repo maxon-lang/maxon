@@ -14,7 +14,9 @@ public class FormattingHandler(LspServer server) : DocumentFormattingHandlerBase
     var content = _server.GetDocument(request.TextDocument.Uri);
     if (content == null) return Task.FromResult<TextEditContainer?>(null);
 
-    var formatted = MaxonFormatter.Format(content);
+    var useTabs = !request.Options.InsertSpaces;
+    var tabSize = (int)request.Options.TabSize;
+    var formatted = MaxonFormatter.Format(content, indentSize: tabSize, useTabs: useTabs);
 
     if (formatted == content) return Task.FromResult<TextEditContainer?>(null);
 

@@ -38,15 +38,15 @@ var z = Math.cos(pi)      // -1.0 (approximately)
 <!-- test: cos.basic -->
 ```maxon
 function main() returns ExitCode
-  var x1 = Math.cos(0.0)
-  var x2 = Math.cos(0.5)
-  var x3 = Math.cos(1.0)
-  var x4 = Math.cos(1.5708)
-  print("{x1}\n")
-  print("{x2}\n")
-  print("{x3}\n")
-  print("{x4}\n")
-  return 0
+	var x1 = Math.cos(0.0)
+	var x2 = Math.cos(0.5)
+	var x3 = Math.cos(1.0)
+	var x4 = Math.cos(1.5708)
+	print("{x1}\n")
+	print("{x2}\n")
+	print("{x3}\n")
+	print("{x4}\n")
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -63,11 +63,11 @@ end 'main'
 <!-- test: cos.zero -->
 ```maxon
 function main() returns ExitCode
-  var result = Math.cos(0.0)
-  if result == 1.0 'check'
-    return 0
-  end 'check'
-  return 1
+	var result = Math.cos(0.0)
+	if result == 1.0 'check'
+		return 0
+	end 'check'
+	return 1
 end 'main'
 ```
 ```exitcode
@@ -77,12 +77,12 @@ end 'main'
 <!-- test: cos.with-int-promotion -->
 ```maxon
 function main() returns ExitCode
-  var x = 0  // int
-  var result = Math.cos(x)  // x promoted to 0.0
-  if result == 1.0 'check'
-    return 0
-  end 'check'
-  return 1
+	var x = 0  // int
+	var result = Math.cos(x)  // x promoted to 0.0
+	if result == 1.0 'check'
+		return 0
+	end 'check'
+	return 1
 end 'main'
 ```
 ```exitcode

@@ -48,8 +48,8 @@ These tests verify the __Builtins type works both through stdlib wrappers and di
 <!-- test: builtins-type.print-via-stdlib -->
 ```maxon
 function main() returns ExitCode
-  print("hello\n")
-  return 0
+	print("hello\n")
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -63,8 +63,8 @@ hello
 <!-- Args: arg1 arg2 arg3 -->
 ```maxon
 function main() returns ExitCode
-  let args = CommandLine.args()
-  return args.count()
+	let args = CommandLine.args()
+	return args.count()
 end 'main'
 ```
 ```exitcode
@@ -74,11 +74,11 @@ end 'main'
 <!-- test: builtins-type.directory-exists -->
 ```maxon
 function main() returns ExitCode
-  let cwd = Directory.currentPath()
-  if Directory.exists(cwd) 'check'
-    return 0
-  end 'check'
-  return 1
+	let cwd = Directory.currentPath()
+	if Directory.exists(cwd) 'check'
+		return 0
+	end 'check'
+	return 1
 end 'main'
 ```
 ```exitcode
@@ -88,15 +88,15 @@ end 'main'
 <!-- test: builtins-type.process-execute -->
 ```maxon
 function main() returns ExitCode
-  #if os(Windows)
-  let result = Process.execute("cmd /c echo ok", timeoutMs: 5000)
-  #else
-  let result = Process.execute("/bin/echo ok", timeoutMs: 5000)
-  #endif
-  if result == 0 'check'
-    return 0
-  end 'check'
-  return 1
+	#if os(Windows)
+	let result = Process.execute("cmd /c echo ok", timeoutMs: 5000)
+	#else
+	let result = Process.execute("/bin/echo ok", timeoutMs: 5000)
+	#endif
+	if result == 0 'check'
+		return 0
+	end 'check'
+	return 1
 end 'main'
 ```
 ```exitcode
@@ -107,12 +107,12 @@ end 'main'
 <!-- Args: one -->
 ```maxon
 function main() returns ExitCode
-  let managed = __Builtins.commandLineArg(9999)
-  let s = String{managed: managed, _iterPos: 0}
-  if s == "" 'check'
-    return 0
-  end 'check'
-  return 1
+	let managed = __Builtins.commandLineArg(9999)
+	let s = String{managed: managed, _iterPos: 0}
+	if s == "" 'check'
+		return 0
+	end 'check'
+	return 1
 end 'main'
 ```
 ```exitcode
@@ -122,12 +122,12 @@ end 'main'
 <!-- test: builtins-type.float-to-bits -->
 ```maxon
 function main() returns ExitCode
-  let bits = __Builtins.floatToBits(1.0)
-  // IEEE 754: 1.0 = 0x3FF0000000000000 = 4607182418800017408
-  if bits == 4607182418800017408 'check'
-    return 0
-  end 'check'
-  return 1
+	let bits = __Builtins.floatToBits(1.0)
+	// IEEE 754: 1.0 = 0x3FF0000000000000 = 4607182418800017408
+	if bits == 4607182418800017408 'check'
+		return 0
+	end 'check'
+	return 1
 end 'main'
 ```
 ```exitcode
@@ -137,9 +137,9 @@ end 'main'
 <!-- test: builtins-type.direct-write-stdout -->
 ```maxon
 function main() returns ExitCode
-  let s = "direct\n"
-  __Builtins.writeStdout(s.managed)
-  return 0
+	let s = "direct\n"
+	__Builtins.writeStdout(s.managed)
+	return 0
 end 'main'
 ```
 ```exitcode

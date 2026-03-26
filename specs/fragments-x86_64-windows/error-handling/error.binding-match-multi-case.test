@@ -4,34 +4,34 @@ typealias Integer = int(i64.min to i64.max)
 
 // Test matching on error binding with multiple cases
 union MyError implements Error
-  failed
-  timeout
-  notFound
+	failed
+	timeout
+	notFound
 end 'MyError'
 
 var counter = 0 as Integer
 
 function mayFail(code Integer) returns Integer throws MyError
-  counter = counter + 1
-  if code == 1 'c1'
-    throw MyError.failed
-  end 'c1'
-  if code == 2 'c2'
-    throw MyError.timeout
-  end 'c2'
-  throw MyError.notFound
+	counter = counter + 1
+	if code == 1 'c1'
+		throw MyError.failed
+	end 'c1'
+	if code == 2 'c2'
+		throw MyError.timeout
+	end 'c2'
+	throw MyError.notFound
 end 'mayFail'
 
 function main() returns ExitCode
-  var result = 0
-  try mayFail(2) otherwise (e) 'handler'
-    match e 'check'
-      failed then result = 10
-      timeout then result = 20
-      notFound then result = 30
-    end 'check'
-  end 'handler'
-  return result
+	var result = 0
+	try mayFail(2) otherwise (e) 'handler'
+		match e 'check'
+			failed then result = 10
+			timeout then result = 20
+			notFound then result = 30
+		end 'check'
+	end 'handler'
+	return result
 end 'main'
 ---
 ExitCode: 20

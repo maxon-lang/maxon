@@ -28,9 +28,9 @@ Returns the number of elements in the collection.
 
 ```maxon
 function main() returns ExitCode
-  var arr = [1, 2, 3, 4, 5]
-  print("{arr.count()}\n")
-  return 0
+	var arr = [1, 2, 3, 4, 5]
+	print("{arr.count()}\n")
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -46,9 +46,9 @@ Returns the element at the specified index, or throws ArrayError if out of bound
 
 ```maxon
 function main() returns ExitCode
-  var arr = [10, 20, 30]
-  var val = try arr.get(1) otherwise 0
-  return val
+	var arr = [10, 20, 30]
+	var val = try arr.get(1) otherwise 0
+	return val
 end 'main'
 ```
 ```exitcode
@@ -61,11 +61,11 @@ Sets the element at the specified index. Returns self for method chaining.
 
 ```maxon
 function main() returns ExitCode
-  var arr = [1, 2, 3]
-  arr.set(1, value: 99)
-  var val = try arr.get(1) otherwise 0
-  print("{val}\n")
-  return 0
+	var arr = [1, 2, 3]
+	arr.set(1, value: 99)
+	var val = try arr.get(1) otherwise 0
+	print("{val}\n")
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -98,15 +98,15 @@ Transform an array using a named function:
 typealias Score = int(i64.min to i64.max)
 
 function double(x Score) returns Score
-  return x * 2
+	return x * 2
 end 'double'
 
 function main() returns ExitCode
-  var numbers = [1, 2, 3, 4, 5]
-  var doubled = numbers.map(double)
-  var val = try doubled.get(2) otherwise 0
-  print("{val}\n")
-  return 0
+	var numbers = [1, 2, 3, 4, 5]
+	var doubled = numbers.map(double)
+	var val = try doubled.get(2) otherwise 0
+	print("{val}\n")
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -124,15 +124,15 @@ Transform using an inline closure with `gives`:
 typealias Score = int(i64.min to i64.max)
 
 function main() returns ExitCode
-  var numbers = [1, 2, 3]
-  var squared = numbers.map((x Score) gives x * x)
-  var val0 = try squared.get(0) otherwise 0
-  var val1 = try squared.get(1) otherwise 0
-  var val2 = try squared.get(2) otherwise 0
-  print("{val0}\n")
-  print("{val1}\n")
-  print("{val2}\n")
-  return 0
+	var numbers = [1, 2, 3]
+	var squared = numbers.map((x Score) gives x * x)
+	var val0 = try squared.get(0) otherwise 0
+	var val1 = try squared.get(1) otherwise 0
+	var val2 = try squared.get(2) otherwise 0
+	print("{val0}\n")
+	print("{val1}\n")
+	print("{val2}\n")
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -149,9 +149,9 @@ end 'main'
 <!-- test: count-basic -->
 ```maxon
 function main() returns ExitCode
-  var arr = [1, 2, 3, 4, 5]
-  print("{arr.count()}\n")
-  return 0
+	var arr = [1, 2, 3, 4, 5]
+	print("{arr.count()}\n")
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -167,9 +167,9 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
 function main() returns ExitCode
-  var arr = IntArray{}
-  print("{arr.count()}\n")
-  return 0
+	var arr = IntArray{}
+	print("{arr.count()}\n")
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -182,10 +182,10 @@ end 'main'
 <!-- test: get-valid -->
 ```maxon
 function main() returns ExitCode
-  var arr = [10, 20, 30]
-  var val0 = try arr.get(0) otherwise 0
-  var val2 = try arr.get(2) otherwise 0
-  return val0 + val2
+	var arr = [10, 20, 30]
+	var val0 = try arr.get(0) otherwise 0
+	var val2 = try arr.get(2) otherwise 0
+	return val0 + val2
 end 'main'
 ```
 ```exitcode
@@ -195,9 +195,9 @@ end 'main'
 <!-- test: get-out-of-bounds -->
 ```maxon
 function main() returns ExitCode
-  var arr = [1, 2, 3]
-  var val = try arr.get(10) otherwise 6
-  return val
+	var arr = [1, 2, 3]
+	var val = try arr.get(10) otherwise 6
+	return val
 end 'main'
 ```
 ```exitcode
@@ -207,16 +207,16 @@ end 'main'
 <!-- test: set-basic -->
 ```maxon
 function main() returns ExitCode
-  var arr = [1, 2, 3]
-  arr.set(0, value: 100)
-  arr.set(2, value: 300)
-  var val0 = try arr.get(0) otherwise 0
-  var val1 = try arr.get(1) otherwise 0
-  var val2 = try arr.get(2) otherwise 0
-  print("{val0}\n")
-  print("{val1}\n")
-  print("{val2}\n")
-  return 0
+	var arr = [1, 2, 3]
+	arr.set(0, value: 100)
+	arr.set(2, value: 300)
+	var val0 = try arr.get(0) otherwise 0
+	var val1 = try arr.get(1) otherwise 0
+	var val2 = try arr.get(2) otherwise 0
+	print("{val0}\n")
+	print("{val1}\n")
+	print("{val2}\n")
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -234,23 +234,23 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
 function double(x Integer) returns Integer
-  return x * 2
+	return x * 2
 end 'double'
 
 function main() returns ExitCode
-  var arr = [1, 2, 3, 4, 5]
-  var result = arr.map(double)
-  var val0 = try result.get(0) otherwise 0
-  var val1 = try result.get(1) otherwise 0
-  var val2 = try result.get(2) otherwise 0
-  var val3 = try result.get(3) otherwise 0
-  var val4 = try result.get(4) otherwise 0
-  print("{val0}\n")
-  print("{val1}\n")
-  print("{val2}\n")
-  print("{val3}\n")
-  print("{val4}\n")
-  return 0
+	var arr = [1, 2, 3, 4, 5]
+	var result = arr.map(double)
+	var val0 = try result.get(0) otherwise 0
+	var val1 = try result.get(1) otherwise 0
+	var val2 = try result.get(2) otherwise 0
+	var val3 = try result.get(3) otherwise 0
+	var val4 = try result.get(4) otherwise 0
+	print("{val0}\n")
+	print("{val1}\n")
+	print("{val2}\n")
+	print("{val3}\n")
+	print("{val4}\n")
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -270,15 +270,15 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
 function main() returns ExitCode
-  var arr = [2, 3, 4]
-  var result = arr.map((x Integer) gives x * 3)
-  var val0 = try result.get(0) otherwise 0
-  var val1 = try result.get(1) otherwise 0
-  var val2 = try result.get(2) otherwise 0
-  print("{val0}\n")
-  print("{val1}\n")
-  print("{val2}\n")
-  return 0
+	var arr = [2, 3, 4]
+	var result = arr.map((x Integer) gives x * 3)
+	var val0 = try result.get(0) otherwise 0
+	var val1 = try result.get(1) otherwise 0
+	var val2 = try result.get(2) otherwise 0
+	print("{val0}\n")
+	print("{val1}\n")
+	print("{val2}\n")
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -296,17 +296,17 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
 function main() returns ExitCode
-  var arr = [1, 2, 3, 4]
-  var squared = arr.map((n Integer) gives n * n)
-  var val0 = try squared.get(0) otherwise 0
-  var val1 = try squared.get(1) otherwise 0
-  var val2 = try squared.get(2) otherwise 0
-  var val3 = try squared.get(3) otherwise 0
-  print("{val0}\n")
-  print("{val1}\n")
-  print("{val2}\n")
-  print("{val3}\n")
-  return 0
+	var arr = [1, 2, 3, 4]
+	var squared = arr.map((n Integer) gives n * n)
+	var val0 = try squared.get(0) otherwise 0
+	var val1 = try squared.get(1) otherwise 0
+	var val2 = try squared.get(2) otherwise 0
+	var val3 = try squared.get(3) otherwise 0
+	print("{val0}\n")
+	print("{val1}\n")
+	print("{val2}\n")
+	print("{val3}\n")
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -325,19 +325,19 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
 function identity(x Integer) returns Integer
-  return x
+	return x
 end 'identity'
 
 function main() returns ExitCode
-  var arr = [10, 20, 30]
-  var result = arr.map(identity)
-  var val0 = try result.get(0) otherwise 0
-  var val1 = try result.get(1) otherwise 0
-  var val2 = try result.get(2) otherwise 0
-  print("{val0}\n")
-  print("{val1}\n")
-  print("{val2}\n")
-  return 0
+	var arr = [10, 20, 30]
+	var result = arr.map(identity)
+	var val0 = try result.get(0) otherwise 0
+	var val1 = try result.get(1) otherwise 0
+	var val2 = try result.get(2) otherwise 0
+	print("{val0}\n")
+	print("{val1}\n")
+	print("{val2}\n")
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -355,19 +355,19 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
 function negate(x Integer) returns Integer
-  return 0 - x
+	return 0 - x
 end 'negate'
 
 function main() returns ExitCode
-  var arr = [1, 2, 3]
-  var result = arr.map(negate)
-  var val0 = try result.get(0) otherwise 0
-  var val1 = try result.get(1) otherwise 0
-  var val2 = try result.get(2) otherwise 0
-  print("{val0}\n")
-  print("{val1}\n")
-  print("{val2}\n")
-  return 0
+	var arr = [1, 2, 3]
+	var result = arr.map(negate)
+	var val0 = try result.get(0) otherwise 0
+	var val1 = try result.get(1) otherwise 0
+	var val2 = try result.get(2) otherwise 0
+	print("{val0}\n")
+	print("{val1}\n")
+	print("{val2}\n")
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -384,11 +384,11 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 function main() returns ExitCode
-  var arr = [42]
-  var result = arr.map((x Integer) gives x + 8)
-  var val = try result.get(0) otherwise 0
-  print("{val}\n")
-  return 0
+	var arr = [42]
+	var result = arr.map((x Integer) gives x + 8)
+	var val = try result.get(0) otherwise 0
+	print("{val}\n")
+	return 0
 end 'main'
 ```
 ```exitcode

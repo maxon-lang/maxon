@@ -35,24 +35,24 @@ User-defined types implement `Parsable` by providing a static `fromString` metho
 typealias Amount = int(i64.min to i64.max)
 
 union MoneyParseError implements Error
-  InvalidFormat = 1
-  NegativeValue = 2
+	InvalidFormat = 1
+	NegativeValue = 2
 end 'MoneyParseError'
 
 type Money implements Parsable
-  var cents Amount
+	var cents Amount
 
-  static function fromString(input String) returns Self throws MoneyParseError
-    if input.byteLength() == 0 'empty'
-      throw MoneyParseError.InvalidFormat
-    end 'empty'
+	static function fromString(input String) returns Self throws MoneyParseError
+		if input.byteLength() == 0 'empty'
+			throw MoneyParseError.InvalidFormat
+		end 'empty'
 
-    if input.startsWith("-") 'negative'
-      throw MoneyParseError.NegativeValue
-    end 'negative'
+		if input.startsWith("-") 'negative'
+			throw MoneyParseError.NegativeValue
+		end 'negative'
 
-    return Money{cents: input.byteLength()}
-  end 'fromString'
+		return Money{cents: input.byteLength()}
+	end 'fromString'
 end 'Money'
 ```
 
@@ -62,8 +62,8 @@ Use `otherwise` to handle parsing errors:
 
 ```maxon
 var price = try Money.fromString("4299") otherwise (e) 'err'
-  print("Failed to parse\n")
-  return  // must return or assign to price
+	print("Failed to parse\n")
+	return  // must return or assign to price
 end 'err'
 ```
 
@@ -73,7 +73,7 @@ end 'err'
 ```maxon
 // Parsable interface can be defined
 function main() returns ExitCode
-  return 0
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -87,19 +87,19 @@ typealias Integer = int(i64.min to i64.max)
 
 // Type can implement Parsable with throwing static method
 union ParseError implements Error
-  Invalid = 1
+	Invalid = 1
 end 'ParseError'
 
 type Value implements Parsable
-  var n Integer
+	var n Integer
 
-  static function fromString(input String) returns Self throws ParseError
-    return Value{n: input.byteLength()}
-  end 'fromString'
+	static function fromString(input String) returns Self throws ParseError
+		return Value{n: input.byteLength()}
+	end 'fromString'
 end 'Value'
 
 function main() returns ExitCode
-  return 0
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -113,22 +113,22 @@ typealias Integer = int(i64.min to i64.max)
 
 // Parsable.fromString returns struct on success
 union ParseError implements Error
-  Invalid = 1
+	Invalid = 1
 end 'ParseError'
 
 type Value implements Parsable
-  export var n Integer
+	export var n Integer
 
-  static function fromString(input String) returns Self throws ParseError
-    return Value{n: input.byteLength()}
-  end 'fromString'
+	static function fromString(input String) returns Self throws ParseError
+		return Value{n: input.byteLength()}
+	end 'fromString'
 end 'Value'
 
 function main() returns ExitCode
-  var v = try Value.fromString("hello") otherwise 'err'
-    return 0
-  end 'err'
-  return v.n
+	var v = try Value.fromString("hello") otherwise 'err'
+		return 0
+	end 'err'
+	return v.n
 end 'main'
 ```
 ```exitcode
@@ -142,25 +142,25 @@ typealias Integer = int(i64.min to i64.max)
 
 // Parsable.fromString throws error on invalid input
 union ParseError implements Error
-  Empty = 1
+	Empty = 1
 end 'ParseError'
 
 type Value implements Parsable
-  export var n Integer
+	export var n Integer
 
-  static function fromString(input String) returns Self throws ParseError
-    if input.byteLength() == 0 'check'
-      throw ParseError.Empty
-    end 'check'
-    return Value{n: input.byteLength()}
-  end 'fromString'
+	static function fromString(input String) returns Self throws ParseError
+		if input.byteLength() == 0 'check'
+			throw ParseError.Empty
+		end 'check'
+		return Value{n: input.byteLength()}
+	end 'fromString'
 end 'Value'
 
 function main() returns ExitCode
-  var v = try Value.fromString("") otherwise 'err'
-    return 42
-  end 'err'
-  return v.n
+	var v = try Value.fromString("") otherwise 'err'
+		return 42
+	end 'err'
+	return v.n
 end 'main'
 ```
 ```exitcode
@@ -174,31 +174,31 @@ typealias Integer = int(i64.min to i64.max)
 
 // Parsable can throw different errors for different conditions
 union MoneyParseError implements Error
-  InvalidFormat = 1
-  NegativeValue = 2
+	InvalidFormat = 1
+	NegativeValue = 2
 end 'MoneyParseError'
 
 type Money implements Parsable
-  export var cents Integer
+	export var cents Integer
 
-  static function fromString(input String) returns Self throws MoneyParseError
-    if input.byteLength() == 0 'empty'
-      throw MoneyParseError.InvalidFormat
-    end 'empty'
+	static function fromString(input String) returns Self throws MoneyParseError
+		if input.byteLength() == 0 'empty'
+			throw MoneyParseError.InvalidFormat
+		end 'empty'
 
-    if input.startsWith("-") 'negative'
-      throw MoneyParseError.NegativeValue
-    end 'negative'
+		if input.startsWith("-") 'negative'
+			throw MoneyParseError.NegativeValue
+		end 'negative'
 
-    return Money{cents: input.byteLength()}
-  end 'fromString'
+		return Money{cents: input.byteLength()}
+	end 'fromString'
 end 'Money'
 
 function main() returns ExitCode
-  var price = try Money.fromString("-50") otherwise 'err'
-    return 99
-  end 'err'
-  return price.cents
+	var price = try Money.fromString("-50") otherwise 'err'
+		return 99
+	end 'err'
+	return price.cents
 end 'main'
 ```
 ```exitcode
@@ -212,36 +212,36 @@ typealias Integer = int(i64.min to i64.max)
 
 // otherwise blocks execute code when error occurs, then continue execution
 union ParseError implements Error
-  Invalid = 1
+	Invalid = 1
 end 'ParseError'
 
 type Value implements Parsable
-  export var n Integer
+	export var n Integer
 
-  static function fromString(input String) returns Self throws ParseError
-    if input.startsWith("x") 'check'
-      throw ParseError.Invalid
-    end 'check'
-    return Value{n: input.byteLength()}
-  end 'fromString'
+	static function fromString(input String) returns Self throws ParseError
+		if input.startsWith("x") 'check'
+			throw ParseError.Invalid
+		end 'check'
+		return Value{n: input.byteLength()}
+	end 'fromString'
 end 'Value'
 
 function main() returns ExitCode
-  var result = 0
+	var result = 0
 
-  // First call succeeds - handler not executed
-  var v = try Value.fromString("hello") otherwise Value{n: 0}
-  result = result + v.n  // adds 5
+	// First call succeeds - handler not executed
+	var v = try Value.fromString("hello") otherwise Value{n: 0}
+	result = result + v.n  // adds 5
 
-  // Second call fails - use default value
-  var v2 = try Value.fromString("xbad") otherwise Value{n: 0}
-  result = result + v2.n  // adds 0
+	// Second call fails - use default value
+	var v2 = try Value.fromString("xbad") otherwise Value{n: 0}
+	result = result + v2.n  // adds 0
 
-  // Third call succeeds
-  var v3 = try Value.fromString("world") otherwise Value{n: 0}
-  result = result + v3.n  // adds 5
+	// Third call succeeds
+	var v3 = try Value.fromString("world") otherwise Value{n: 0}
+	result = result + v3.n  // adds 5
 
-  return result
+	return result
 end 'main'
 ```
 ```exitcode
@@ -255,15 +255,15 @@ typealias Integer = int(i64.min to i64.max)
 
 // Implementation must throw if interface requires it
 type Value implements Parsable
-  var n Integer
+	var n Integer
 
-  static function fromString(input String) returns Self
-    return Value{n: input.byteLength()}
-  end 'fromString'
+	static function fromString(input String) returns Self
+		return Value{n: input.byteLength()}
+	end 'fromString'
 end 'Value'
 
 function main() returns ExitCode
-  return 0
+	return 0
 end 'main'
 ```
 ```maxoncstderr
@@ -277,19 +277,19 @@ typealias Integer = int(i64.min to i64.max)
 
 // Implementation must throw a type that conforms to Error
 union NotAnError
-  Bad = 1
+	Bad = 1
 end 'NotAnError'
 
 type Value implements Parsable
-  var n Integer
+	var n Integer
 
-  static function fromString(input String) returns Self throws NotAnError
-    return Value{n: input.byteLength()}
-  end 'fromString'
+	static function fromString(input String) returns Self throws NotAnError
+		return Value{n: input.byteLength()}
+	end 'fromString'
 end 'Value'
 
 function main() returns ExitCode
-  return 0
+	return 0
 end 'main'
 ```
 ```maxoncstderr
@@ -299,8 +299,8 @@ error E3016: specs/fragments/parsable-interface/error.throws-non-error-type.test
 <!-- test: parsable.int-fromstring -->
 ```maxon
 function main() returns ExitCode
-  var n = try int.fromString("42") otherwise 0
-  return n
+	var n = try int.fromString("42") otherwise 0
+	return n
 end 'main'
 ```
 ```exitcode
@@ -310,8 +310,8 @@ end 'main'
 <!-- test: parsable.int-fromstring-negative -->
 ```maxon
 function main() returns ExitCode
-  var n = try int.fromString("-7") otherwise 0
-  return n + 10
+	var n = try int.fromString("-7") otherwise 0
+	return n + 10
 end 'main'
 ```
 ```exitcode
@@ -321,8 +321,8 @@ end 'main'
 <!-- test: parsable.int-fromstring-invalid -->
 ```maxon
 function main() returns ExitCode
-  var n = try int.fromString("abc") otherwise 99
-  return n
+	var n = try int.fromString("abc") otherwise 99
+	return n
 end 'main'
 ```
 ```exitcode
@@ -332,9 +332,9 @@ end 'main'
 <!-- test: parsable.float-fromstring -->
 ```maxon
 function main() returns ExitCode
-  var f = try float.fromString("3.14") otherwise 0.0
-  var check = f * 100.0
-  return trunc(check)
+	var f = try float.fromString("3.14") otherwise 0.0
+	var check = f * 100.0
+	return trunc(check)
 end 'main'
 ```
 ```exitcode
@@ -344,8 +344,8 @@ end 'main'
 <!-- test: parsable.float-fromstring-negative -->
 ```maxon
 function main() returns ExitCode
-  var f = try float.fromString("-2.5") otherwise 0.0
-  return trunc(f) + 10
+	var f = try float.fromString("-2.5") otherwise 0.0
+	return trunc(f) + 10
 end 'main'
 ```
 ```exitcode
@@ -355,11 +355,11 @@ end 'main'
 <!-- test: parsable.bool-fromstring-true -->
 ```maxon
 function main() returns ExitCode
-  var b = try bool.fromString("true") otherwise false
-  if b 'check'
-    return 1
-  end 'check'
-  return 0
+	var b = try bool.fromString("true") otherwise false
+	if b 'check'
+		return 1
+	end 'check'
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -369,11 +369,11 @@ end 'main'
 <!-- test: parsable.bool-fromstring-false -->
 ```maxon
 function main() returns ExitCode
-  var b = try bool.fromString("false") otherwise true
-  if b 'check'
-    return 1
-  end 'check'
-  return 0
+	var b = try bool.fromString("false") otherwise true
+	if b 'check'
+		return 1
+	end 'check'
+	return 0
 end 'main'
 ```
 ```exitcode

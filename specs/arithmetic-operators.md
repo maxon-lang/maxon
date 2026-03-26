@@ -29,22 +29,22 @@ Multiplication, division, and modulo have higher precedence than addition and su
 
 ```maxon
 function main() returns ExitCode
-  var a = 10
-  var b = 3
-  var sum = a + b          // 13
-  var diff = a - b         // 7
-  var prod = a * b         // 30
-  var div = a / b          // 3 (truncating integer division)
-  var rem = a mod b        // 1
+	var a = 10
+	var b = 3
+	var sum = a + b          // 13
+	var diff = a - b         // 7
+	var prod = a * b         // 30
+	var div = a / b          // 3 (truncating integer division)
+	var rem = a mod b        // 1
 
-  // Use the values
-  print("{sum}\n")
-  print("{diff}\n")
-  print("{prod}\n")
-  print("{div}\n")
-  print("{rem}\n")
+	// Use the values
+	print("{sum}\n")
+	print("{diff}\n")
+	print("{prod}\n")
+	print("{div}\n")
+	print("{rem}\n")
 
-  return 0
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -64,7 +64,7 @@ end 'main'
 <!-- test: addition -->
 ```maxon
 function main() returns ExitCode
-  return 5 + 3
+	return 5 + 3
 end 'main'
 ```
 ```exitcode
@@ -75,7 +75,7 @@ end 'main'
 <!-- test: multiplication -->
 ```maxon
 function main() returns ExitCode
-  return 6 * 7
+	return 6 * 7
 end 'main'
 ```
 ```exitcode
@@ -86,7 +86,7 @@ end 'main'
 <!-- test: precedence -->
 ```maxon
 function main() returns ExitCode
-  return 2 + 3 * 4
+	return 2 + 3 * 4
 end 'main'
 ```
 ```exitcode
@@ -97,7 +97,7 @@ end 'main'
 <!-- test: division-truncating-int -->
 ```maxon
 function main() returns ExitCode
-  return 20 / 3
+	return 20 / 3
 end 'main'
 ```
 ```exitcode
@@ -108,7 +108,7 @@ end 'main'
 <!-- test: trunc-division-optimizes -->
 ```maxon
 function main() returns ExitCode
-  return 20 / 3             // int/int = truncating int, returns 6
+	return 20 / 3             // int/int = truncating int, returns 6
 end 'main'
 ```
 ```exitcode
@@ -119,9 +119,9 @@ end 'main'
 <!-- test: variable-division-optimizes -->
 ```maxon
 function main() returns ExitCode
-  var a = 7
-  var b = 2
-  return a / b              // int/int = truncating int, returns 3
+	var a = 7
+	var b = 2
+	return a / b              // int/int = truncating int, returns 3
 end 'main'
 ```
 ```exitcode
@@ -132,12 +132,12 @@ end 'main'
 <!-- test: negative-division -->
 ```maxon
 function main() returns ExitCode
-  var neg = -7
-  let a = neg / 2           // -7/2 = -3 (truncating toward zero)
-  if a == -3 'pass'
-      return 0
-  end 'pass'
-  return 1
+	var neg = -7
+	let a = neg / 2           // -7/2 = -3 (truncating toward zero)
+	if a == -3 'pass'
+			return 0
+	end 'pass'
+	return 1
 end 'main'
 ```
 ```exitcode
@@ -148,7 +148,7 @@ end 'main'
 <!-- test: modulo -->
 ```maxon
 function main() returns ExitCode
-  return 17 mod 5
+	return 17 mod 5
 end 'main'
 ```
 ```exitcode
@@ -159,10 +159,10 @@ end 'main'
 <!-- test: complex-expression -->
 ```maxon
 function main() returns ExitCode
-  var a = 10
-  var b = 3
-  var result = (a + b) * 2 - a / b
-  return result
+	var a = 10
+	var b = 3
+	var result = (a + b) * 2 - a / b
+	return result
 end 'main'
 ```
 ```exitcode

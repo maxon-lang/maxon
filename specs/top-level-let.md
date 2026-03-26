@@ -66,7 +66,7 @@ let PRIMES = [2, 3, 5, 7, 11]
 let ANSWER = 42
 
 function main() returns ExitCode
-  return ANSWER
+	return ANSWER
 end 'main'
 ```
 ```exitcode
@@ -79,7 +79,7 @@ let PI = 3.14
 let PI_INT = 3
 
 function main() returns ExitCode
-  return PI_INT
+	return PI_INT
 end 'main'
 ```
 ```exitcode
@@ -92,7 +92,7 @@ let BASE = 10
 let DOUBLED = BASE * 2
 
 function main() returns ExitCode
-  return DOUBLED
+	return DOUBLED
 end 'main'
 ```
 ```exitcode
@@ -106,7 +106,7 @@ let FIRST = 30
 let SECOND = 12
 
 function main() returns ExitCode
-  return TOTAL
+	return TOTAL
 end 'main'
 ```
 ```exitcode
@@ -118,10 +118,10 @@ end 'main'
 let DEBUG = true
 
 function main() returns ExitCode
-  if DEBUG 'check'
-    return 1
-  end 'check'
-  return 0
+	if DEBUG 'check'
+		return 1
+	end 'check'
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -133,8 +133,8 @@ end 'main'
 let OFFSET = 10
 
 function main() returns ExitCode
-  let x = 5
-  return x + OFFSET
+	let x = 5
+	return x + OFFSET
 end 'main'
 ```
 ```exitcode
@@ -148,7 +148,7 @@ let B = 2
 let C = 3
 
 function main() returns ExitCode
-  return A + B + C
+	return A + B + C
 end 'main'
 ```
 ```exitcode
@@ -160,7 +160,7 @@ end 'main'
 let NEGATIVE = -42
 
 function main() returns ExitCode
-  return 0 - NEGATIVE
+	return 0 - NEGATIVE
 end 'main'
 ```
 ```exitcode
@@ -172,10 +172,10 @@ end 'main'
 let IS_LARGE = 100 > 50
 
 function main() returns ExitCode
-  if IS_LARGE 'check'
-    return 1
-  end 'check'
-  return 0
+	if IS_LARGE 'check'
+		return 1
+	end 'check'
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -189,10 +189,10 @@ let EITHER = false or true
 let NEITHER = not false
 
 function main() returns ExitCode
-  if BOTH and EITHER and NEITHER 'check'
-    return 1
-  end 'check'
-  return 0
+	if BOTH and EITHER and NEITHER 'check'
+		return 1
+	end 'check'
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -205,7 +205,7 @@ let OFFSET = 10
 let SCALED = OFFSET * 3
 
 function main() returns ExitCode
-  return SCALED
+	return SCALED
 end 'main'
 ```
 ```exitcode
@@ -220,7 +220,7 @@ let C = B + 4
 let D = C * 2
 
 function main() returns ExitCode
-  return D
+	return D
 end 'main'
 ```
 ```exitcode
@@ -231,13 +231,13 @@ end 'main'
 Function calls are not allowed in constant expressions.
 ```maxon
 fn compute() -> Int
-  return 42
+	return 42
 end
 
 let RESULT = compute()
 
 fn main()
-  println(RESULT)
+	println(RESULT)
 end
 ```
 ```maxoncstderr
@@ -250,7 +250,7 @@ let A = B + 1
 let B = A + 1
 
 function main() returns ExitCode
-  return 0
+	return 0
 end 'main'
 ```
 ```maxoncstderr

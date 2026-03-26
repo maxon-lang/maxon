@@ -44,12 +44,12 @@ returns int                    returns SomeTypealias
 ```maxon
 // WRONG — no labels
 if x > 0
-  print("yes")
+	print("yes")
 end
 
 // CORRECT
 if x > 0 'positive'
-  print("yes")
+	print("yes")
 end 'positive'
 ```
 
@@ -64,14 +64,14 @@ else 'other'
 
 // CORRECT
 end 'check' else 'other'
-  // ...
+	// ...
 end 'other'
 
 // else-if:
 end 'check' else if x == 0 'zero'
-  // ...
+	// ...
 end 'zero' else 'other'
-  // ...
+	// ...
 end 'other'
 ```
 
@@ -122,7 +122,7 @@ connect("localhost", port: 8080, timeout: 5000)
 
 ```maxon
 function main() returns ExitCode
-  return 0
+	return 0
 end 'main'
 ```
 
@@ -153,12 +153,12 @@ let content = try readFile(path) otherwise ""
 ```maxon
 // WRONG (E3075)
 match color 'c'
-  Color.red then doRed()
+	Color.red then doRed()
 end 'c'
 
 // CORRECT
 match color 'c'
-  red then doRed()
+	red then doRed()
 end 'c'
 ```
 
@@ -169,21 +169,21 @@ Cover all cases. If using `default` on enum/union match, it MUST be `default thr
 ```maxon
 // WRONG (E2046)
 match status 'handle'
-  ok then doOk()
-  default then doDefault()
+	ok then doOk()
+	default then doDefault()
 end 'handle'
 
 // CORRECT
 match status 'handle'
-  ok then doOk()
-  notFound then doNotFound()
-  serverError then doError()
+	ok then doOk()
+	notFound then doNotFound()
+	serverError then doError()
 end 'handle'
 
 // ALSO CORRECT (partial match)
 match status 'handle'
-  ok then doOk()
-  default throws StatusError.unhandled
+	ok then doOk()
+	default throws StatusError.unhandled
 end 'handle'
 ```
 
@@ -195,14 +195,14 @@ if result1 == result2 'cmp' ... end 'cmp'
 
 // CORRECT — use match
 match result 'check'
-  success(v) then handleSuccess(v)
-  failure(c, msg) then handleFailure(c, msg: msg)
+	success(v) then handleSuccess(v)
+	failure(c, msg) then handleFailure(c, msg: msg)
 end 'check'
 ```
 
-### 13. Indentation is 2 spaces
+### 13. Indentation uses tabs
 
-NEVER use tabs. NEVER use 4 spaces.
+NEVER use spaces for indentation.
 
 ### 14. Strings use `{expr}` interpolation
 
@@ -241,27 +241,27 @@ s.append(" {name}!")    // interpolation written directly into buffer
 
 ```maxon
 function name(param1 Type1, param2 Type2) returns ReturnType
-  // body
+	// body
 end 'name'
 
 // Throwing:
 function load(path FilePath) returns Config throws FileError
-  // ...
+	// ...
 end 'load'
 
 // Void (no returns clause):
 function printStatus()
-  print("OK\n")
+	print("OK\n")
 end 'printStatus'
 
 // Default parameters:
 function connect(host String, port Port = 8080) returns Connection
-  // ...
+	// ...
 end 'connect'
 
 // Static method:
 export static function create() returns MyType
-  return MyType{field: 0}
+	return MyType{field: 0}
 end 'create'
 ```
 
@@ -277,17 +277,17 @@ let _ = sideEffect() // discard (RHS MUST be a function call)
 
 ```maxon
 export type Point
-  export var x MathValue   // public mutable
-  export let name String   // public immutable
-  var internal Count       // private
+	export var x MathValue   // public mutable
+	export let name String   // public immutable
+	var internal Count       // private
 
-  function magnitude() returns MathValue
-    return sqrt((self.x * self.x + self.y * self.y) as float)
-  end 'magnitude'
+	function magnitude() returns MathValue
+		return sqrt((self.x * self.x + self.y * self.y) as float)
+	end 'magnitude'
 
-  static function origin() returns Point
-    return Point{x: 0.0, y: 0.0}
-  end 'origin'
+	static function origin() returns Point
+		return Point{x: 0.0, y: 0.0}
+	end 'origin'
 end 'Point'
 
 var p = Point{x: 1.5, y: 2.5}
@@ -298,15 +298,15 @@ var o = Point.origin()
 
 ```maxon
 enum Color
-  red       // 0
-  green     // 1
-  blue      // 2
+	red       // 0
+	green     // 1
+	blue      // 2
 end 'Color'
 
 enum HttpStatus
-  ok = 200
-  notFound = 404
-  serverError = 500
+	ok = 200
+	notFound = 404
+	serverError = 500
 end 'HttpStatus'
 ```
 
@@ -318,9 +318,9 @@ Methods: `fromRawValue()`, `fromName()` (throw — use with `try`).
 
 ```maxon
 union Result
-  success(value Integer)
-  failure(code Integer, message String)
-  pending
+	success(value Integer)
+	failure(code Integer, message String)
+	pending
 end 'Result'
 
 var r = Result.success(42)
@@ -333,8 +333,8 @@ var f = Result.failure(404, message: "Not found")
 
 ```maxon
 union FileError implements Error
-  notFound
-  permissionDenied
+	notFound
+	permissionDenied
 end 'FileError'
 ```
 
@@ -342,11 +342,11 @@ end 'FileError'
 
 ```maxon
 interface Describable
-  function describe() returns String
+	function describe() returns String
 end 'Describable'
 
 interface Container uses Element
-  function get(index Index) returns Element throws ArrayError
+	function get(index Index) returns Element throws ArrayError
 end 'Container'
 ```
 
@@ -354,9 +354,9 @@ end 'Container'
 
 ```maxon
 extension Array where Element is Equatable
-  export function contains(element Element) returns bool
-    // ...
-  end 'contains'
+	export function contains(element Element) returns bool
+		// ...
+	end 'contains'
 end 'Array'
 ```
 
@@ -384,11 +384,11 @@ var bad = Port{70000}       // compile error: out of range
 
 ```maxon
 if x > 0 'positive'
-  print("positive\n")
+	print("positive\n")
 end 'positive' else if x == 0 'zero'
-  print("zero\n")
+	print("zero\n")
 end 'zero' else 'negative'
-  print("negative\n")
+	print("negative\n")
 end 'negative'
 ```
 
@@ -396,7 +396,7 @@ end 'negative'
 
 ```maxon
 while count < 10 'loop'
-  count = count + 1
+	count = count + 1
 end 'loop'
 ```
 
@@ -425,10 +425,10 @@ continue 'outer'   // labeled continue
 
 ```maxon
 match value 'label'
-  1 then doOne()
-  2 or 3 then doTwoOrThree()
-  4 to 10 then doRange()
-  default then doDefault()
+	1 then doOne()
+	2 or 3 then doTwoOrThree()
+	4 to 10 then doRange()
+	default then doDefault()
 end 'label'
 ```
 
@@ -438,9 +438,9 @@ Each arm is ONE statement. `default` MUST be last. Fallthrough: `then action() a
 
 ```maxon
 let label = match status 'map'
-  ok gives "Success"
-  notFound gives "Not Found"
-  serverError gives "Error"
+	ok gives "Success"
+	notFound gives "Not Found"
+	serverError gives "Error"
 end 'map'
 ```
 
@@ -450,9 +450,9 @@ Use `gives` (not `then`) for expressions.
 
 ```maxon
 match result 'handle'
-  success(value) then print("{value}")
-  failure(code, msg) then print("{code}: {msg}")
-  pending then print("waiting")
+	success(value) then print("{value}")
+	failure(code, msg) then print("{code}: {msg}")
+	pending then print("waiting")
 end 'handle'
 ```
 
@@ -463,16 +463,16 @@ end 'handle'
 ```maxon
 // Define error type
 union FileError implements Error
-  notFound
-  permissionDenied
+	notFound
+	permissionDenied
 end 'FileError'
 
 // Throwing function
 function readFile(path FilePath) returns String throws FileError
-  if not path.fileExists() 'missing'
-    throw FileError.notFound
-  end 'missing'
-  return content
+	if not path.fileExists() 'missing'
+		throw FileError.notFound
+	end 'missing'
+	return content
 end 'readFile'
 
 // Default value
@@ -480,16 +480,16 @@ let content = try readFile(path) otherwise ""
 
 // Handler block
 try readFile(path) otherwise 'err'
-  print("Failed\n")
-  return 1
+	print("Failed\n")
+	return 1
 end 'err'
 
 // Error binding
 try readFile(path) otherwise (e) 'err'
-  match e 'handle'
-    notFound then print("Not found\n")
-    permissionDenied then print("Denied\n")
-  end 'handle'
+	match e 'handle'
+		notFound then print("Not found\n")
+		permissionDenied then print("Denied\n")
+	end 'handle'
 end 'err'
 
 // Ignore
@@ -500,9 +500,9 @@ let content = try readFile(path)
 
 // if-try
 if let value = try mayFail() 'ok'
-  print("{value}")
+	print("{value}")
 end 'ok' else (e) 'err'
-  print("Error\n")
+	print("Error\n")
 end 'err'
 
 // Panic (unrecoverable)
@@ -619,10 +619,10 @@ t.0   // 10
 t.1   // 20
 
 function minMax(a Offset, b Offset) returns (Offset, Offset)
-  if a < b 'less'
-    return (a, b)
-  end 'less'
-  return (b, a)
+	if a < b 'less'
+		return (a, b)
+	end 'less'
+	return (b, a)
 end 'minMax'
 
 var (lo, hi) = minMax(3, 7)
@@ -654,9 +654,9 @@ export var sharedState = 0
 
 ```maxon
 #if os(Windows)
-  let sep = "\\"
+	let sep = "\\"
 #else
-  let sep = "/"
+	let sep = "/"
 #endif
 ```
 

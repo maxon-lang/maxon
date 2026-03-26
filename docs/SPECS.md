@@ -49,8 +49,8 @@ For code that should compile and run successfully:
 
 ```maxon
 function main() returns ExitCode
-    var x = 10
-    return x
+		var x = 10
+		return x
 end 'main'
 ```
 ```exitcode
@@ -61,8 +61,8 @@ Optionally include stdout and/or stderr output:
 
 ```maxon
 function main() returns ExitCode
-    print("42")
-    return 0
+		print("42")
+		return 0
 end 'main'
 ```
 ```exitcode
@@ -79,12 +79,12 @@ typealias Integer = int(i64.min to i64.max)
 typealias Byte = int(0 to u8.max)
 
 function dangerous(value Integer) returns Byte
-  return Byte{value}
+	return Byte{value}
 end
 
 function main() returns ExitCode
-  let result = dangerous(Integer{300})
-  return 0 as ExitCode
+	let result = dangerous(Integer{300})
+	return 0 as ExitCode
 end
 ```
 ```exitcode
@@ -106,7 +106,7 @@ Current pipeline stages: `maxon`, `standard`, `x86`.
 
 ```maxon
 function main() returns ExitCode
-    return 42
+		return 42
 end 'main'
 ```
 ```exitcode
@@ -159,12 +159,12 @@ Example:
 
 ```maxon
 function main() returns ExitCode
-    var x = 3.14
-    if x == 3.14 'check'
-        return 1
-    end 'check' else 'other'
-        return 0
-    end 'other'
+		var x = 3.14
+		if x == 3.14 'check'
+				return 1
+		end 'check' else 'other'
+				return 0
+		end 'other'
 end 'main'
 ```
 ```exitcode
@@ -193,7 +193,7 @@ var flag = true
 var counter = 42
 
 function main() returns ExitCode
-  return 0
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -212,8 +212,8 @@ For code that demonstrates compile/parse errors:
 
 ```maxon
 function main() returns ExitCode
-    var x = "not a number"
-    return x + 5
+		var x = "not a number"
+		return x + 5
 end 'main'
 ```
 ```maxoncstderr
@@ -229,12 +229,12 @@ To test cross-file behavior (e.g., export visibility, multi-file builds), use `/
 ```maxon
 // --- file: helper.maxon
 export function helper() returns int
-    return 42
+		return 42
 end 'helper'
 
 // --- file: main.maxon
 function main() returns ExitCode
-    return helper()
+		return helper()
 end 'main'
 ```
 ```exitcode
@@ -246,12 +246,12 @@ When `// --- file:` markers are present, each section is written to a separate t
 ```maxon
 // --- file: helper.maxon
 function privateHelper() returns int
-    return 99
+		return 99
 end 'privateHelper'
 
 // --- file: main.maxon
 function main() returns ExitCode
-    return privateHelper()
+		return privateHelper()
 end 'main'
 ```
 ```maxoncstderr
@@ -288,9 +288,9 @@ Code examples in the **Documentation** section can be:
 1. **Illustrative only** - No `output` block, not extracted as tests
    ```markdown
    ```maxon
-   for i in numbers 'loop'
-       print(i)
-   end 'loop'
+	 for i in numbers 'loop'
+			 print(i)
+	 end 'loop'
    ```
    ```
    
@@ -299,9 +299,9 @@ Code examples in the **Documentation** section can be:
 2. **Executable examples** - With `output` block, extracted as tests
    ```markdown
    ```maxon
-   function main() returns ExitCode
-       return 42
-   end 'main'
+	 function main() returns ExitCode
+			 return 42
+	 end 'main'
    ```
    ```output
    ExitCode: 42
@@ -322,7 +322,7 @@ Tests in the **Tests** section are always extracted. Each test needs:
 <!-- test: basic-example -->
 ```maxon
 function main() returns ExitCode
-    return 0
+		return 0
 end 'main'
 ```
 ```output
@@ -359,8 +359,8 @@ var y = abs(x)  // Returns 5.5
 
 ```maxon
 function main() returns ExitCode
-    var x = abs(-5.0)
-    return trunc(x)
+		var x = abs(-5.0)
+		return trunc(x)
 end 'main'
 ```
 ```exitcode
@@ -372,8 +372,8 @@ end 'main'
 <!-- test: abs.float -->
 ```maxon
 function main() returns ExitCode
-    var x = abs(-5.5)
-    return trunc(x)
+		var x = abs(-5.5)
+		return trunc(x)
 end 'main'
 ```
 ```exitcode
@@ -383,7 +383,7 @@ end 'main'
 <!-- test: abs.zero -->
 ```maxon
 function main() returns ExitCode
-    return abs(0.0) as int
+		return abs(0.0) as int
 end 'main'
 ```
 ```exitcode

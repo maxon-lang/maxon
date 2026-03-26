@@ -1,71 +1,71 @@
 // Test: managed-directory.search-and-list
 type TestFile
-  export var _file __ManagedFile
+	export var _file __ManagedFile
 end 'TestFile'
 
 type TestDir
-  export var _dir __ManagedDirectory
+	export var _dir __ManagedDirectory
 end 'TestDir'
 
 function createFile(path String, content String)
-  let wr = __ManagedFile.openWrite(path.managed)
-  var f = TestFile{_file: wr}
-  let written = f._file.write(content.managed)
-  f._file.close()
-  if written < 0 'err'
-    panic("write failed")
-  end 'err'
+	let wr = __ManagedFile.openWrite(path.managed)
+	var f = TestFile{_file: wr}
+	let written = f._file.write(content.managed)
+	f._file.close()
+	if written < 0 'err'
+		panic("write failed")
+	end 'err'
 end 'createFile'
 
 function main() returns ExitCode
-  // Create a temp directory (may already exist from previous run)
-  let dirPath = "test_managed_dir_search"
-  if not __ManagedDirectory.exists(dirPath.managed) 'needCreate'
-    let created = __ManagedDirectory.create(dirPath.managed)
-    if not created 'createFail'
-      print("create failed")
-      return 1
-    end 'createFail'
-  end 'needCreate'
+	// Create a temp directory (may already exist from previous run)
+	let dirPath = "test_managed_dir_search"
+	if not __ManagedDirectory.exists(dirPath.managed) 'needCreate'
+		let created = __ManagedDirectory.create(dirPath.managed)
+		if not created 'createFail'
+			print("create failed")
+			return 1
+		end 'createFail'
+	end 'needCreate'
 
-  createFile("{dirPath}/file1.txt", content: "a")
-  createFile("{dirPath}/file2.txt", content: "b")
+	createFile("{dirPath}/file1.txt", content: "a")
+	createFile("{dirPath}/file2.txt", content: "b")
 
-  // Search the directory
-  let searchResult = __ManagedDirectory.openSearch("{dirPath}/*".managed)
-  if searchResult == 0 'searchFail'
-    print("search failed")
-    return 2
-  end 'searchFail'
-  var dir = TestDir{_dir: searchResult}
+	// Search the directory
+	let searchResult = __ManagedDirectory.openSearch("{dirPath}/*".managed)
+	if searchResult == 0 'searchFail'
+		print("search failed")
+		return 2
+	end 'searchFail'
+	var dir = TestDir{_dir: searchResult}
 
-  var fileCount = 0
-  var nameManaged = dir._dir.filename()
-  var name = String{managed: nameManaged, _iterPos: 0}
-  if name != "." and name != ".." 'notDot1'
-    fileCount = fileCount + 1
-  end 'notDot1'
-  while dir._dir.next() != 0 'loop'
-    nameManaged = dir._dir.filename()
-    name = String{managed: nameManaged, _iterPos: 0}
-    if name != "." and name != ".." 'notDot2'
-      fileCount = fileCount + 1
-    end 'notDot2'
-  end 'loop'
-  dir._dir.close()
+	var fileCount = 0
+	var nameManaged = dir._dir.filename()
+	var name = String{managed: nameManaged, _iterPos: 0}
+	if name != "." and name != ".." 'notDot1'
+		fileCount = fileCount + 1
+	end 'notDot1'
+	while dir._dir.next() != 0 'loop'
+		nameManaged = dir._dir.filename()
+		name = String{managed: nameManaged, _iterPos: 0}
+		if name != "." and name != ".." 'notDot2'
+			fileCount = fileCount + 1
+		end 'notDot2'
+	end 'loop'
+	dir._dir.close()
 
-  // Clean up
-  let del1 = __ManagedFile.delete("{dirPath}/file1.txt".managed)
-  let del2 = __ManagedFile.delete("{dirPath}/file2.txt".managed)
-  if del1 != 0 or del2 != 0 'delErr'
-    return 4
-  end 'delErr'
+	// Clean up
+	let del1 = __ManagedFile.delete("{dirPath}/file1.txt".managed)
+	let del2 = __ManagedFile.delete("{dirPath}/file2.txt".managed)
+	if del1 != 0 or del2 != 0 'delErr'
+		return 4
+	end 'delErr'
 
-  if fileCount == 2 'checkCount'
-    return 42
-  end 'checkCount'
-  print("unexpected count: {fileCount}")
-  return 3
+	if fileCount == 2 'checkCount'
+		return 42
+	end 'checkCount'
+	print("unexpected count: {fileCount}")
+	return 3
 end 'main'
 ---
 ExitCode: 42

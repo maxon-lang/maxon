@@ -13,243 +13,243 @@
 // --- Input query: source file content ---
 
 export function querySourceFile(project Project, path FilePath) returns ByteArray throws CompileError
-  recordDependency(project, dependency: QueryKey.sourceFile(path))
-  let entry = try project.db.sourceFiles.get(path) otherwise 'missing'
-    throw CompileError.fileNotFound
-  end 'missing'
-  return entry.content
+	recordDependency(project, dependency: QueryKey.sourceFile(path))
+	let entry = try project.db.sourceFiles.get(path) otherwise 'missing'
+		throw CompileError.fileNotFound
+	end 'missing'
+	return entry.content
 end 'querySourceFile'
 
 // --- Per-file derived query: tokenize ---
 
 export function queryTokens(project Project, path FilePath) returns TokenArray throws CompileError
-  let key = QueryKey.tokens(path)
-  recordDependency(project, dependency: key)
+	let key = QueryKey.tokens(path)
+	recordDependency(project, dependency: key)
 
-  // Check cache
-  if project.db.tokenCache.contains(path) 'checkCache'
-    var memo = try project.db.tokenCache.get(path) otherwise 'nope'
-      logDebug(LogCategory.compiler, message: () gives "queryTokens cache miss for {path}")
-    end 'nope'
-    if memo.computedAt > 0 'hasValue'
-      if areDepsValid(project, key: key, computedAt: memo.computedAt) 'valid'
-        logDebug(LogCategory.compiler, message: () gives "queryTokens cache hit for {path}")
-        project.db.tokenHits = project.db.tokenHits + 1
-        memo.verifiedAt = project.db.currentRevision
-        return memo.value
-      end 'valid'
-    end 'hasValue'
-  end 'checkCache'
+	// Check cache
+	if project.db.tokenCache.contains(path) 'checkCache'
+		var memo = try project.db.tokenCache.get(path) otherwise 'nope'
+			logDebug(LogCategory.compiler, message: () gives "queryTokens cache miss for {path}")
+		end 'nope'
+		if memo.computedAt > 0 'hasValue'
+			if areDepsValid(project, key: key, computedAt: memo.computedAt) 'valid'
+				logDebug(LogCategory.compiler, message: () gives "queryTokens cache hit for {path}")
+				project.db.tokenHits = project.db.tokenHits + 1
+				memo.verifiedAt = project.db.currentRevision
+				return memo.value
+			end 'valid'
+		end 'hasValue'
+	end 'checkCache'
 
-  logDebug(LogCategory.compiler, message: () gives "queryTokens computing for {path}")
-  project.db.tokenMisses = project.db.tokenMisses + 1
+	logDebug(LogCategory.compiler, message: () gives "queryTokens computing for {path}")
+	project.db.tokenMisses = project.db.tokenMisses + 1
 
-  // Compute
-  pushQuery(project, key: key)
-  clearDepsFor(project, key: key)
+	// Compute
+	pushQuery(project, key: key)
+	clearDepsFor(project, key: key)
 
-  let content = try querySourceFile(project, path: path)
-  let tokens = tokenize(content)
+	let content = try querySourceFile(project, path: path)
+	let tokens = tokenize(content)
 
-  popQuery(project)
+	popQuery(project)
 
-  // Store
-  let newMemo = TokenMemo{value: tokens, computedAt: project.db.currentRevision, verifiedAt: project.db.currentRevision}
-  project.db.tokenCache.insert(path, value: newMemo)
+	// Store
+	let newMemo = TokenMemo{value: tokens, computedAt: project.db.currentRevision, verifiedAt: project.db.currentRevision}
+	project.db.tokenCache.insert(path, value: newMemo)
 
-  return tokens
+	return tokens
 end 'queryTokens'
 
 // --- Per-file derived query: parse ---
 
 export function queryParseOps(project Project, path FilePath) returns MlirModule throws CompileError
-  let key = QueryKey.parseOps(path)
-  recordDependency(project, dependency: key)
+	let key = QueryKey.parseOps(path)
+	recordDependency(project, dependency: key)
 
-  // Check cache
-  if project.db.parseCache.contains(path) 'checkCache'
-    var memo = try project.db.parseCache.get(path) otherwise 'nope'
-      logDebug(LogCategory.compiler, message: () gives "queryParseOps cache miss for {path}")
-    end 'nope'
-    if memo.computedAt > 0 'hasValue'
-      if areDepsValid(project, key: key, computedAt: memo.computedAt) 'valid'
-        logDebug(LogCategory.compiler, message: () gives "queryParseOps cache hit for {path}")
-        project.db.parseHits = project.db.parseHits + 1
-        memo.verifiedAt = project.db.currentRevision
-        return memo.value
-      end 'valid'
-    end 'hasValue'
-  end 'checkCache'
+	// Check cache
+	if project.db.parseCache.contains(path) 'checkCache'
+		var memo = try project.db.parseCache.get(path) otherwise 'nope'
+			logDebug(LogCategory.compiler, message: () gives "queryParseOps cache miss for {path}")
+		end 'nope'
+		if memo.computedAt > 0 'hasValue'
+			if areDepsValid(project, key: key, computedAt: memo.computedAt) 'valid'
+				logDebug(LogCategory.compiler, message: () gives "queryParseOps cache hit for {path}")
+				project.db.parseHits = project.db.parseHits + 1
+				memo.verifiedAt = project.db.currentRevision
+				return memo.value
+			end 'valid'
+		end 'hasValue'
+	end 'checkCache'
 
-  logDebug(LogCategory.compiler, message: () gives "queryParseOps computing for {path}")
-  project.db.parseMisses = project.db.parseMisses + 1
+	logDebug(LogCategory.compiler, message: () gives "queryParseOps computing for {path}")
+	project.db.parseMisses = project.db.parseMisses + 1
 
-  // Compute
-  pushQuery(project, key: key)
-  clearDepsFor(project, key: key)
+	// Compute
+	pushQuery(project, key: key)
+	clearDepsFor(project, key: key)
 
-  let tokens = try queryTokens(project, path: path)
-  let errorCountBefore = project.diagnostics.count()
-  let module = parse(project, tokens: tokens, filePath: path)
-  let nextId = getNextValueId(project)
+	let tokens = try queryTokens(project, path: path)
+	let errorCountBefore = project.diagnostics.count()
+	let module = parse(project, tokens: tokens, filePath: path)
+	let nextId = getNextValueId(project)
 
-  popQuery(project)
+	popQuery(project)
 
-  // Only cache if no new errors were added during this file's parse
-  let hadErrors = project.diagnostics.count() > errorCountBefore
-  if not hadErrors 'cacheOk'
-    let newMemo = ParseMemo{value: module, computedAt: project.db.currentRevision, verifiedAt: project.db.currentRevision, nextValueIdAfterParse: nextId}
-    project.db.parseCache.insert(path, value: newMemo)
-  end 'cacheOk'
+	// Only cache if no new errors were added during this file's parse
+	let hadErrors = project.diagnostics.count() > errorCountBefore
+	if not hadErrors 'cacheOk'
+		let newMemo = ParseMemo{value: module, computedAt: project.db.currentRevision, verifiedAt: project.db.currentRevision, nextValueIdAfterParse: nextId}
+		project.db.parseCache.insert(path, value: newMemo)
+	end 'cacheOk'
 
-  return module
+	return module
 end 'queryParseOps'
 
 // --- Whole-program derived query: all modules merged ---
 
 export function queryAllModule(project Project) returns MlirModule throws CompileError
-  let key = QueryKey.allModule
-  recordDependency(project, dependency: key)
+	let key = QueryKey.allModule
+	recordDependency(project, dependency: key)
 
-  // Check cache
-  if project.db.allModuleCache.computedAt > 0 'hasCache'
-    if areDepsValid(project, key: key, computedAt: project.db.allModuleCache.computedAt) 'valid'
-      logDebug(LogCategory.compiler, message: () gives "queryAllModule cache hit")
-      project.db.allModuleHits = project.db.allModuleHits + 1
-      project.db.allModuleCache.verifiedAt = project.db.currentRevision
-      return project.db.allModuleCache.value
-    end 'valid'
-  end 'hasCache'
+	// Check cache
+	if project.db.allModuleCache.computedAt > 0 'hasCache'
+		if areDepsValid(project, key: key, computedAt: project.db.allModuleCache.computedAt) 'valid'
+			logDebug(LogCategory.compiler, message: () gives "queryAllModule cache hit")
+			project.db.allModuleHits = project.db.allModuleHits + 1
+			project.db.allModuleCache.verifiedAt = project.db.currentRevision
+			return project.db.allModuleCache.value
+		end 'valid'
+	end 'hasCache'
 
-  logDebug(LogCategory.compiler, message: () gives "queryAllModule computing")
-  project.db.allModuleMisses = project.db.allModuleMisses + 1
+	logDebug(LogCategory.compiler, message: () gives "queryAllModule computing")
+	project.db.allModuleMisses = project.db.allModuleMisses + 1
 
-  // Compute
-  pushQuery(project, key: key)
-  clearDepsFor(project, key: key)
+	// Compute
+	pushQuery(project, key: key)
+	clearDepsFor(project, key: key)
 
-  // ValueIds must be sequential across all files. When a file is served
-  // from cache, advance the counter past its IDs to avoid collisions.
-  resetValueIds(project)
+	// ValueIds must be sequential across all files. When a file is served
+	// from cache, advance the counter past its IDs to avoid collisions.
+	resetValueIds(project)
 
-  // Prepend cached stdlib module (shared across all projects)
-  let stdlibModule = getStdlibModule(project)
-  var allModule = createMlirModule()
-  mergeModules(allModule, source: stdlibModule)
-  setNextValueId(project, id: getStdlibNextValueId())
+	// Prepend cached stdlib module (shared across all projects)
+	let stdlibModule = getStdlibModule(project)
+	var allModule = createMlirModule()
+	mergeModules(allModule, source: stdlibModule)
+	setNextValueId(project, id: getStdlibNextValueId())
 
-  // Then parse user files
-  for path in project.db.sourcePaths 'eachFile'
-    let module = try queryParseOps(project, path: path)
-    // When a file was served from cache, the parser didn't run so the
-    // ValueId counter wasn't advanced. Restore it from the cached memo.
-    if project.db.parseCache.contains(path) 'hasCache'
-      let memo = try project.db.parseCache.get(path) otherwise 'skipAdv'
-        continue
-      end 'skipAdv'
-      if memo.nextValueIdAfterParse > getNextValueId(project) 'advance'
-        setNextValueId(project, id: memo.nextValueIdAfterParse)
-      end 'advance'
-    end 'hasCache'
-    mergeModules(allModule, source: module)
-  end 'eachFile'
+	// Then parse user files
+	for path in project.db.sourcePaths 'eachFile'
+		let module = try queryParseOps(project, path: path)
+		// When a file was served from cache, the parser didn't run so the
+		// ValueId counter wasn't advanced. Restore it from the cached memo.
+		if project.db.parseCache.contains(path) 'hasCache'
+			let memo = try project.db.parseCache.get(path) otherwise 'skipAdv'
+				continue
+			end 'skipAdv'
+			if memo.nextValueIdAfterParse > getNextValueId(project) 'advance'
+				setNextValueId(project, id: memo.nextValueIdAfterParse)
+			end 'advance'
+		end 'hasCache'
+		mergeModules(allModule, source: module)
+	end 'eachFile'
 
-  popQuery(project)
+	popQuery(project)
 
-  // Store
-  project.db.allModuleCache = MlirModuleMemo{value: allModule, computedAt: project.db.currentRevision, verifiedAt: project.db.currentRevision}
+	// Store
+	project.db.allModuleCache = MlirModuleMemo{value: allModule, computedAt: project.db.currentRevision, verifiedAt: project.db.currentRevision}
 
-  return allModule
+	return allModule
 end 'queryAllModule'
 
 // --- Whole-program derived query: mid-level ops ---
 
 export function queryAllMid(project Project) returns MlirModule throws CompileError
-  let key = QueryKey.allMid
-  recordDependency(project, dependency: key)
+	let key = QueryKey.allMid
+	recordDependency(project, dependency: key)
 
-  // Check cache
-  if project.db.allMidCache.computedAt > 0 'hasCache'
-    if areDepsValid(project, key: key, computedAt: project.db.allMidCache.computedAt) 'valid'
-      logDebug(LogCategory.compiler, message: () gives "queryAllMid cache hit")
-      project.db.allMidHits = project.db.allMidHits + 1
-      project.db.allMidCache.verifiedAt = project.db.currentRevision
-      return project.db.allMidCache.value
-    end 'valid'
-  end 'hasCache'
+	// Check cache
+	if project.db.allMidCache.computedAt > 0 'hasCache'
+		if areDepsValid(project, key: key, computedAt: project.db.allMidCache.computedAt) 'valid'
+			logDebug(LogCategory.compiler, message: () gives "queryAllMid cache hit")
+			project.db.allMidHits = project.db.allMidHits + 1
+			project.db.allMidCache.verifiedAt = project.db.currentRevision
+			return project.db.allMidCache.value
+		end 'valid'
+	end 'hasCache'
 
-  logDebug(LogCategory.compiler, message: () gives "queryAllMid computing")
-  project.db.allMidMisses = project.db.allMidMisses + 1
+	logDebug(LogCategory.compiler, message: () gives "queryAllMid computing")
+	project.db.allMidMisses = project.db.allMidMisses + 1
 
-  // Compute
-  pushQuery(project, key: key)
-  clearDepsFor(project, key: key)
+	// Compute
+	pushQuery(project, key: key)
+	clearDepsFor(project, key: key)
 
-  let module = try queryAllModule(project)
+	let module = try queryAllModule(project)
 
-  // Gate: if parse errors were collected, stop before semantic checks
-  if hasErrors(project) 'parseErrors'
-    popQuery(project)
-    throw CompileError.compileError
-  end 'parseErrors'
+	// Gate: if parse errors were collected, stop before semantic checks
+	if hasErrors(project) 'parseErrors'
+		popQuery(project)
+		throw CompileError.compileError
+	end 'parseErrors'
 
-  runSemanticChecks(project, module: module)
+	runSemanticChecks(project, module: module)
 
-  // Gate: if semantic errors were collected, stop before lowering
-  if hasErrors(project) 'semanticErrors'
-    popQuery(project)
-    throw CompileError.compileError
-  end 'semanticErrors'
+	// Gate: if semantic errors were collected, stop before lowering
+	if hasErrors(project) 'semanticErrors'
+		popQuery(project)
+		throw CompileError.compileError
+	end 'semanticErrors'
 
-  // Eliminate unreachable functions (e.g. unused stdlib)
-  let liveModule = eliminateDeadFunctions(module)
+	// Eliminate unreachable functions (e.g. unused stdlib)
+	let liveModule = eliminateDeadFunctions(module)
 
-  // Reset global data table for fresh lowering
-  project.globalData = createGlobalDataTable()
-  let valueIdRef = createValueIdRef(getNextValueId(project))
-  let result = lowerMaxHLToMid(liveModule, project: project, globalData: project.globalData, nextValueIdRef: valueIdRef)
-  // Update the project's value ID counter past any IDs allocated during lowering
-  setNextValueId(project, id: valueIdRef.nextId)
+	// Reset global data table for fresh lowering
+	project.globalData = createGlobalDataTable()
+	let valueIdRef = createValueIdRef(getNextValueId(project))
+	let result = lowerMaxHLToMid(liveModule, project: project, globalData: project.globalData, nextValueIdRef: valueIdRef)
+	// Update the project's value ID counter past any IDs allocated during lowering
+	setNextValueId(project, id: valueIdRef.nextId)
 
-  popQuery(project)
+	popQuery(project)
 
-  // Store
-  project.db.allMidCache = MlirModuleMemo{value: result, computedAt: project.db.currentRevision, verifiedAt: project.db.currentRevision}
+	// Store
+	project.db.allMidCache = MlirModuleMemo{value: result, computedAt: project.db.currentRevision, verifiedAt: project.db.currentRevision}
 
-  return result
+	return result
 end 'queryAllMid'
 
 // --- Whole-program derived query: code emission ---
 
 export function queryCodeResult(project Project) returns CodeResult throws CompileError
-  let key = QueryKey.codeResult
-  recordDependency(project, dependency: key)
+	let key = QueryKey.codeResult
+	recordDependency(project, dependency: key)
 
-  // Check cache
-  let ccAt = project.db.codeCache.computedAt
-  if ccAt > 0 'hasCache'
-    if areDepsValid(project, key: key, computedAt: ccAt) 'valid'
-      logDebug(LogCategory.compiler, message: () gives "queryCodeResult cache hit")
-      project.db.codeHits = project.db.codeHits + 1
-      project.db.codeCache.verifiedAt = project.db.currentRevision
-      return project.db.codeCache.value
-    end 'valid'
-  end 'hasCache'
+	// Check cache
+	let ccAt = project.db.codeCache.computedAt
+	if ccAt > 0 'hasCache'
+		if areDepsValid(project, key: key, computedAt: ccAt) 'valid'
+			logDebug(LogCategory.compiler, message: () gives "queryCodeResult cache hit")
+			project.db.codeHits = project.db.codeHits + 1
+			project.db.codeCache.verifiedAt = project.db.currentRevision
+			return project.db.codeCache.value
+		end 'valid'
+	end 'hasCache'
 
-  logDebug(LogCategory.compiler, message: () gives "queryCodeResult computing")
-  project.db.codeMisses = project.db.codeMisses + 1
+	logDebug(LogCategory.compiler, message: () gives "queryCodeResult computing")
+	project.db.codeMisses = project.db.codeMisses + 1
 
-  // Compute
-  pushQuery(project, key: key)
-  clearDepsFor(project, key: key)
+	// Compute
+	pushQuery(project, key: key)
+	clearDepsFor(project, key: key)
 
-  let midModule = try queryAllMid(project)
-  let result = try emitBackend(midModule, target: project.target, globalData: project.globalData)
+	let midModule = try queryAllMid(project)
+	let result = try emitBackend(midModule, target: project.target, globalData: project.globalData)
 
-  popQuery(project)
+	popQuery(project)
 
-  // Store
-  project.db.codeCache = CodeMemo{value: result, computedAt: project.db.currentRevision, verifiedAt: project.db.currentRevision}
+	// Store
+	project.db.codeCache = CodeMemo{value: result, computedAt: project.db.currentRevision, verifiedAt: project.db.currentRevision}
 
-  return result
+	return result
 end 'queryCodeResult'

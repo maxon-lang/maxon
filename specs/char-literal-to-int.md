@@ -15,9 +15,9 @@ When a character literal appears in a binary operation where the other operand i
 
 ```maxon
 for cp in "hello-world".codepoints() 'chars'
-  if cp == '-' 'dash'
-    // cp is int, '-' is coerced to 45
-  end 'dash'
+	if cp == '-' 'dash'
+		// cp is int, '-' is coerced to 45
+	end 'dash'
 end 'chars'
 ```
 
@@ -35,11 +35,11 @@ var value = digit - '0'  // '0' coerced to 48, result is 5
 
 ```maxon
 function main() returns ExitCode
-  var cp = 45
-  if cp == '-' 'check'
-    return 0
-  end 'check'
-  return 1
+	var cp = 45
+	if cp == '-' 'check'
+		return 0
+	end 'check'
+	return 1
 end 'main'
 ```
 ```exitcode
@@ -51,11 +51,11 @@ end 'main'
 
 ```maxon
 function main() returns ExitCode
-  var cp = 45
-  if cp != '.' 'check'
-    return 0
-  end 'check'
-  return 1
+	var cp = 45
+	if cp != '.' 'check'
+		return 0
+	end 'check'
+	return 1
 end 'main'
 ```
 ```exitcode
@@ -67,13 +67,13 @@ end 'main'
 
 ```maxon
 function main() returns ExitCode
-  var cp = 53
-  if cp >= '0' 'ge'
-    if cp <= '9' 'le'
-      return 0
-    end 'le'
-  end 'ge'
-  return 1
+	var cp = 53
+	if cp >= '0' 'ge'
+		if cp <= '9' 'le'
+			return 0
+		end 'le'
+	end 'ge'
+	return 1
 end 'main'
 ```
 ```exitcode
@@ -85,9 +85,9 @@ end 'main'
 
 ```maxon
 function main() returns ExitCode
-  var cp = 53
-  var digit = cp - '0'
-  return digit
+	var cp = 53
+	var digit = cp - '0'
+	return digit
 end 'main'
 ```
 ```exitcode
@@ -99,11 +99,11 @@ end 'main'
 
 ```maxon
 function main() returns ExitCode
-  var cp = 10
-  if cp == '\n' 'check'
-    return 0
-  end 'check'
-  return 1
+	var cp = 10
+	if cp == '\n' 'check'
+		return 0
+	end 'check'
+	return 1
 end 'main'
 ```
 ```exitcode
@@ -115,11 +115,11 @@ end 'main'
 
 ```maxon
 function main() returns ExitCode
-  var cp = 45
-  if '-' == cp 'check'
-    return 0
-  end 'check'
-  return 1
+	var cp = 45
+	if '-' == cp 'check'
+		return 0
+	end 'check'
+	return 1
 end 'main'
 ```
 ```exitcode
@@ -131,10 +131,10 @@ end 'main'
 
 ```maxon
 function main() returns ExitCode
-  if 'A' == 'A' 'check'
-    return 0
-  end 'check'
-  return 1
+	if 'A' == 'A' 'check'
+		return 0
+	end 'check'
+	return 1
 end 'main'
 ```
 ```exitcode
@@ -146,13 +146,13 @@ end 'main'
 
 ```maxon
 function main() returns ExitCode
-  var count = 0
-  for cp in "a-b-c".codepoints() 'chars'
-    if cp == '-' 'dash'
-      count = count + 1
-    end 'dash'
-  end 'chars'
-  return count
+	var count = 0
+	for cp in "a-b-c".codepoints() 'chars'
+		if cp == '-' 'dash'
+			count = count + 1
+		end 'dash'
+	end 'chars'
+	return count
 end 'main'
 ```
 ```exitcode

@@ -46,17 +46,17 @@ reference goes out of scope, the socket is automatically closed via the destruct
 <!-- test: tcp-client.echo -->
 ```maxon
 function runEcho() returns ExitCode throws NetworkError
-  let client = try TcpClient.connect("tcpbin.com", port: 4242)
-  let msg = "Hello Maxon\n"
-  let _ = try client.send(msg)
-  let response = try client.recv(1024)
-  print(response)
-  return 0
+	let client = try TcpClient.connect("tcpbin.com", port: 4242)
+	let msg = "Hello Maxon\n"
+	let _ = try client.send(msg)
+	let response = try client.recv(1024)
+	print(response)
+	return 0
 end 'runEcho'
 
 function main() returns ExitCode
-  let result = try runEcho() otherwise 1
-  return result
+	let result = try runEcho() otherwise 1
+	return result
 end 'main'
 ```
 ```exitcode
@@ -69,14 +69,14 @@ Hello Maxon
 <!-- test: tcp-client.connect-error -->
 ```maxon
 function main() returns ExitCode
-  if let client = try TcpClient.connect("192.0.2.1", port: 1) 'ok'
-    return 1
-  end 'ok' else (e) 'err'
-    match e 'check'
-      connectFailed then return 0
-      default throws NetworkError.resolveFailed
-    end 'check'
-  end 'err'
+	if let client = try TcpClient.connect("192.0.2.1", port: 1) 'ok'
+		return 1
+	end 'ok' else (e) 'err'
+		match e 'check'
+			connectFailed then return 0
+			default throws NetworkError.resolveFailed
+		end 'check'
+	end 'err'
 end 'main'
 ```
 ```exitcode
@@ -86,14 +86,14 @@ end 'main'
 <!-- test: tcp-client.resolve-error -->
 ```maxon
 function main() returns ExitCode
-  if let client = try TcpClient.connect("this.host.does.not.exist.invalid", port: 1) 'ok'
-    return 1
-  end 'ok' else (e) 'err'
-    match e 'check'
-      resolveFailed then return 0
-      default throws NetworkError.connectFailed
-    end 'check'
-  end 'err'
+	if let client = try TcpClient.connect("this.host.does.not.exist.invalid", port: 1) 'ok'
+		return 1
+	end 'ok' else (e) 'err'
+		match e 'check'
+			resolveFailed then return 0
+			default throws NetworkError.connectFailed
+		end 'check'
+	end 'err'
 end 'main'
 ```
 ```exitcode

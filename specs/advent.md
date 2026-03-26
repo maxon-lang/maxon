@@ -16,7 +16,7 @@ https://www.youtube.com/playlist?list=PL2HVqYf7If8cY4wLk7JUQ2f0JXY_xMQm2
 <!-- test: day1 -->
 ```maxon
 function main() returns ExitCode
-  return 0
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -83,11 +83,11 @@ module {
 typealias Integer = int(i64.min to i64.max)
 
 function add(x Integer, y Integer) returns Integer
-    return x + y
+		return x + y
 end 'add'
 
 function main() returns ExitCode
-  return add(3, y: 4)
+	return add(3, y: 4)
 end 'main'
 ```
 ```exitcode
@@ -284,16 +284,16 @@ module {
 typealias Integer = int(i64.min to i64.max)
 
 function multiply(x Integer) returns Integer
-    return x * 1
+		return x * 1
 end 'multiply'
 
 function main() returns ExitCode
-  let args = CommandLine.args()
-  let parsed = try int.fromString(try args.get(0) otherwise "") otherwise 0
-  if parsed > 1000 'guard'
-    return 99
-  end 'guard'
-  return multiply(3)
+	let args = CommandLine.args()
+	let parsed = try int.fromString(try args.get(0) otherwise "") otherwise 0
+	if parsed > 1000 'guard'
+		return 99
+	end 'guard'
+	return multiply(3)
 end 'main'
 ```
 ```exitcode
@@ -1354,16 +1354,16 @@ module {
 typealias Integer = int(i64.min to i64.max)
 
 function multiply(x Integer) returns Integer
-    return x * 2
+		return x * 2
 end 'multiply'
 
 function main() returns ExitCode
-  let args = CommandLine.args()
-  let parsed = try int.fromString(try args.get(0) otherwise "") otherwise 0
-  if parsed > 1000 'guard'
-    return 99
-  end 'guard'
-  return multiply(3)
+	let args = CommandLine.args()
+	let parsed = try int.fromString(try args.get(0) otherwise "") otherwise 0
+	if parsed > 1000 'guard'
+		return 99
+	end 'guard'
+	return multiply(3)
 end 'main'
 ```
 ```exitcode

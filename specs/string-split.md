@@ -31,13 +31,13 @@ var parts = "a,,b".split(",")   // ["a", "", "b"]
 <!-- test: split-by-space -->
 ```maxon
 function main() returns ExitCode
-  var s = "hello world foo"
-  var parts = s.split(" ")
-  print("{parts.count()}\n")
-  for p in parts 'loop'
-    print("{p}\n")
-  end 'loop'
-  return 0
+	var s = "hello world foo"
+	var parts = s.split(" ")
+	print("{parts.count()}\n")
+	for p in parts 'loop'
+		print("{p}\n")
+	end 'loop'
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -53,13 +53,13 @@ foo
 <!-- test: split-by-comma -->
 ```maxon
 function main() returns ExitCode
-  var s = "a,b,c"
-  var parts = s.split(",")
-  print("{parts.count()}\n")
-  for p in parts 'loop'
-    print("{p}\n")
-  end 'loop'
-  return 0
+	var s = "a,b,c"
+	var parts = s.split(",")
+	print("{parts.count()}\n")
+	for p in parts 'loop'
+		print("{p}\n")
+	end 'loop'
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -75,13 +75,13 @@ c
 <!-- test: split-no-match -->
 ```maxon
 function main() returns ExitCode
-  var s = "hello"
-  var parts = s.split("xyz")
-  print("{parts.count()}\n")
-  for p in parts 'loop'
-    print("{p}\n")
-  end 'loop'
-  return 0
+	var s = "hello"
+	var parts = s.split("xyz")
+	print("{parts.count()}\n")
+	for p in parts 'loop'
+		print("{p}\n")
+	end 'loop'
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -95,13 +95,13 @@ hello
 <!-- test: split-empty-string -->
 ```maxon
 function main() returns ExitCode
-  var s = ""
-  var parts = s.split(",")
-  print("{parts.count()}\n")
-  for p in parts 'loop'
-    print("[{p}]\n")
-  end 'loop'
-  return 0
+	var s = ""
+	var parts = s.split(",")
+	print("{parts.count()}\n")
+	for p in parts 'loop'
+		print("[{p}]\n")
+	end 'loop'
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -115,13 +115,13 @@ end 'main'
 <!-- test: split-consecutive-delimiters -->
 ```maxon
 function main() returns ExitCode
-  var s = "a,,b"
-  var parts = s.split(",")
-  print("{parts.count()}\n")
-  for p in parts 'loop'
-    print("[{p}]\n")
-  end 'loop'
-  return 0
+	var s = "a,,b"
+	var parts = s.split(",")
+	print("{parts.count()}\n")
+	for p in parts 'loop'
+		print("[{p}]\n")
+	end 'loop'
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -137,13 +137,13 @@ end 'main'
 <!-- test: split-delimiter-at-start -->
 ```maxon
 function main() returns ExitCode
-  var s = ",hello"
-  var parts = s.split(",")
-  print("{parts.count()}\n")
-  for p in parts 'loop'
-    print("[{p}]\n")
-  end 'loop'
-  return 0
+	var s = ",hello"
+	var parts = s.split(",")
+	print("{parts.count()}\n")
+	for p in parts 'loop'
+		print("[{p}]\n")
+	end 'loop'
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -158,13 +158,13 @@ end 'main'
 <!-- test: split-delimiter-at-end -->
 ```maxon
 function main() returns ExitCode
-  var s = "hello,"
-  var parts = s.split(",")
-  print("{parts.count()}\n")
-  for p in parts 'loop'
-    print("[{p}]\n")
-  end 'loop'
-  return 0
+	var s = "hello,"
+	var parts = s.split(",")
+	print("{parts.count()}\n")
+	for p in parts 'loop'
+		print("[{p}]\n")
+	end 'loop'
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -179,13 +179,13 @@ end 'main'
 <!-- test: split-empty-delimiter -->
 ```maxon
 function main() returns ExitCode
-  var s = "hello"
-  var parts = s.split("")
-  print("{parts.count()}\n")
-  for p in parts 'loop'
-    print("{p}\n")
-  end 'loop'
-  return 0
+	var s = "hello"
+	var parts = s.split("")
+	print("{parts.count()}\n")
+	for p in parts 'loop'
+		print("{p}\n")
+	end 'loop'
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -199,13 +199,13 @@ hello
 <!-- test: split-multi-char-delimiter -->
 ```maxon
 function main() returns ExitCode
-  var s = "one::two::three"
-  var parts = s.split("::")
-  print("{parts.count()}\n")
-  for p in parts 'loop'
-    print("{p}\n")
-  end 'loop'
-  return 0
+	var s = "one::two::three"
+	var parts = s.split("::")
+	print("{parts.count()}\n")
+	for p in parts 'loop'
+		print("{p}\n")
+	end 'loop'
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -221,13 +221,13 @@ three
 <!-- test: split-only-delimiters -->
 ```maxon
 function main() returns ExitCode
-  var s = ",,"
-  var parts = s.split(",")
-  print("{parts.count()}\n")
-  for p in parts 'loop'
-    print("[{p}]\n")
-  end 'loop'
-  return 0
+	var s = ",,"
+	var parts = s.split(",")
+	print("{parts.count()}\n")
+	for p in parts 'loop'
+		print("[{p}]\n")
+	end 'loop'
+	return 0
 end 'main'
 ```
 ```exitcode

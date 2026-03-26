@@ -74,23 +74,23 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 type Counter
-  var count Integer
+	var count Integer
 
-  function increment()
-    count = count + 1
-  end 'increment'
+	function increment()
+		count = count + 1
+	end 'increment'
 
-  function get() returns Integer
-    return count
-  end 'get'
+	function get() returns Integer
+		return count
+	end 'get'
 end 'Counter'
 
 function main() returns ExitCode
-  var c = Counter{count: 0}
-  c.increment()
-  c.increment()
-  c.increment()
-  return c.get()
+	var c = Counter{count: 0}
+	c.increment()
+	c.increment()
+	c.increment()
+	return c.get()
 end 'main'
 ```
 ```exitcode
@@ -103,23 +103,23 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 type Adder
-  var total Integer
+	var total Integer
 
-  function add(n Integer)
-    total = total + n
-  end 'add'
+	function add(n Integer)
+		total = total + n
+	end 'add'
 
-  function get() returns Integer
-    return total
-  end 'get'
+	function get() returns Integer
+		return total
+	end 'get'
 end 'Adder'
 
 function main() returns ExitCode
-  var a = Adder{total: 0}
-  a.add(10)
-  a.add(20)
-  a.add(12)
-  return a.get()
+	var a = Adder{total: 0}
+	a.add(10)
+	a.add(20)
+	a.add(12)
+	return a.get()
 end 'main'
 ```
 ```exitcode
@@ -132,16 +132,16 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 type Box
-  var value Integer
+	var value Integer
 
-  function getValue() returns Integer
-    return value
-  end 'getValue'
+	function getValue() returns Integer
+		return value
+	end 'getValue'
 end 'Box'
 
 function main() returns ExitCode
-  var b = Box{value: 40}
-  return b.getValue() + 2
+	var b = Box{value: 40}
+	return b.getValue() + 2
 end 'main'
 ```
 ```exitcode
@@ -154,21 +154,21 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 type Calculator
-  var result Integer
+	var result Integer
 
-  function addTwo(a Integer, b Integer)
-    result = result + a + b
-  end 'addTwo'
+	function addTwo(a Integer, b Integer)
+		result = result + a + b
+	end 'addTwo'
 
-  function get() returns Integer
-    return result
-  end 'get'
+	function get() returns Integer
+		return result
+	end 'get'
 end 'Calculator'
 
 function main() returns ExitCode
-  var calc = Calculator{result: 0}
-  calc.addTwo(20, b: 22)
-  return calc.get()
+	var calc = Calculator{result: 0}
+	calc.addTwo(20, b: 22)
+	return calc.get()
 end 'main'
 ```
 ```exitcode
@@ -181,24 +181,24 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 type Inner
-  var value Integer
+	var value Integer
 
-  function get() returns Integer
-    return value
-  end 'get'
+	function get() returns Integer
+		return value
+	end 'get'
 end 'Inner'
 
 type Outer
-  var inner Inner
+	var inner Inner
 
-  function getInnerValue() returns Integer
-    return inner.get()
-  end 'getInnerValue'
+	function getInnerValue() returns Integer
+		return inner.get()
+	end 'getInnerValue'
 end 'Outer'
 
 function main() returns ExitCode
-  var o = Outer{inner: Inner{value: 42}}
-  return o.getInnerValue()
+	var o = Outer{inner: Inner{value: 42}}
+	return o.getInnerValue()
 end 'main'
 ```
 ```exitcode
@@ -211,23 +211,23 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 type Point
-  var x Integer
-  var y Integer
+	var x Integer
+	var y Integer
 
-  function moveBy(dx Integer, dy Integer)
-    x = x + dx
-    y = y + dy
-  end 'moveBy'
+	function moveBy(dx Integer, dy Integer)
+		x = x + dx
+		y = y + dy
+	end 'moveBy'
 
-  function sum() returns Integer
-    return x + y
-  end 'sum'
+	function sum() returns Integer
+		return x + y
+	end 'sum'
 end 'Point'
 
 function main() returns ExitCode
-  var p = Point{x: 10, y: 10}
-  p.moveBy(10, dy: 12)
-  return p.sum()
+	var p = Point{x: 10, y: 10}
+	p.moveBy(10, dy: 12)
+	return p.sum()
 end 'main'
 ```
 ```exitcode
@@ -240,19 +240,19 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 type Value
-  var n Integer
+	var n Integer
 
-  function isPositive() returns Integer
-    if n > 0 'positive'
-      return 1
-    end 'positive'
-    return 0
-  end 'isPositive'
+	function isPositive() returns Integer
+		if n > 0 'positive'
+			return 1
+		end 'positive'
+		return 0
+	end 'isPositive'
 end 'Value'
 
 function main() returns ExitCode
-  var v = Value{n: 42}
-  return v.isPositive()
+	var v = Value{n: 42}
+	return v.isPositive()
 end 'main'
 ```
 ```exitcode
@@ -265,42 +265,42 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 type Adder
-  var total Integer
+	var total Integer
 
-  function addTwo(a Integer, b Integer)
-    total = total + a + b
-  end 'addTwo'
+	function addTwo(a Integer, b Integer)
+		total = total + a + b
+	end 'addTwo'
 end 'Adder'
 
 function main() returns ExitCode
-  var x = Adder{total: 0}
-  x.addTwo(10, 20)
-  return 0
+	var x = Adder{total: 0}
+	x.addTwo(10, 20)
+	return 0
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/fragments/method-calls/error-method-unnamed-args.test:15:5: Second and subsequent arguments must be named. Use 'name: value' syntax
+error E3005: specs/fragments/method-calls/error-method-unnamed-args.test:15:4: Second and subsequent arguments must be named. Use 'name: value' syntax
 ```
 ```maxon
 
 typealias Integer = int(i64.min to i64.max)
 
 type Calculator
-  var result Integer
+	var result Integer
 
-  function compute(a Integer, b Integer, c Integer)
-    result = a + b * c
-  end 'compute'
+	function compute(a Integer, b Integer, c Integer)
+		result = a + b * c
+	end 'compute'
 
-  function get() returns Integer
-    return result
-  end 'get'
+	function get() returns Integer
+		return result
+	end 'get'
 end 'Calculator'
 
 function main() returns ExitCode
-  var calc = Calculator{result: 0}
-  calc.compute(10, c: 4, b: 8)
-  return calc.get()
+	var calc = Calculator{result: 0}
+	calc.compute(10, c: 4, b: 8)
+	return calc.get()
 end 'main'
 ```
 ```exitcode
@@ -313,13 +313,13 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 type Factory
-  static function create(x Integer, y Integer) returns Integer
-    return x * 10 + y
-  end 'create'
+	static function create(x Integer, y Integer) returns Integer
+		return x * 10 + y
+	end 'create'
 end 'Factory'
 
 function main() returns ExitCode
-  return Factory.create(4, y: 2)
+	return Factory.create(4, y: 2)
 end 'main'
 ```
 ```exitcode
@@ -332,15 +332,15 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 type Factory
-  static function create(x Integer, y Integer) returns Integer
-    return x * 10 + y
-  end 'create'
+	static function create(x Integer, y Integer) returns Integer
+		return x * 10 + y
+	end 'create'
 end 'Factory'
 
 function main() returns ExitCode
-  return Factory.create(4, 2)
+	return Factory.create(4, 2)
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/fragments/method-calls/error-static-method-unnamed-args.test:12:18: Second and subsequent arguments must be named. Use 'name: value' syntax
+error E3005: specs/fragments/method-calls/error-static-method-unnamed-args.test:12:17: Second and subsequent arguments must be named. Use 'name: value' syntax
 ```

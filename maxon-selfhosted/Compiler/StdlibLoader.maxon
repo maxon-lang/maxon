@@ -4,65 +4,65 @@ var stdlibNextValueId = 0
 var stdlibTypealiases = TypealiasMap{}
 
 export function findStdlibPath() returns FilePath
-  var dir = Directory.currentPath()
-  for _ in 0 upto 10 'search'
-    let candidate = dir.join("stdlib_selfhosted")
-    if candidate.directoryExists() 'found'
-      return candidate
-    end 'found'
-    let parentDir = dir.parent()
-    if parentDir.isEmpty() 'noParent'
-      return FilePath from ""
-    end 'noParent'
-    dir = parentDir
-  end 'search'
-  return FilePath from ""
+	var dir = Directory.currentPath()
+	for _ in 0 upto 10 'search'
+		let candidate = dir.join("stdlib_selfhosted")
+		if candidate.directoryExists() 'found'
+			return candidate
+		end 'found'
+		let parentDir = dir.parent()
+		if parentDir.isEmpty() 'noParent'
+			return FilePath from ""
+		end 'noParent'
+		dir = parentDir
+	end 'search'
+	return FilePath from ""
 end 'findStdlibPath'
 
 export function getStdlibModule(project Project) returns MlirModule
-  if stdlibLoaded 'cached'
-    // Restore cached typealiases into the new project
-    for(name, baseType) in stdlibTypealiases 'restoreAliases'
-      project.typealiases.insert(name, value: baseType)
-    end 'restoreAliases'
-    return cachedStdlibModule
-  end 'cached'
+	if stdlibLoaded 'cached'
+		// Restore cached typealiases into the new project
+		for(name, baseType) in stdlibTypealiases 'restoreAliases'
+			project.typealiases.insert(name, value: baseType)
+		end 'restoreAliases'
+		return cachedStdlibModule
+	end 'cached'
 
-  let stdlibPath = findStdlibPath()
-  if stdlibPath.isEmpty() 'noStdlib'
-    logInfo(LogCategory.compiler, message: () gives "No stdlib_selfhosted/ found, skipping stdlib")
-    stdlibLoaded = true
-    return cachedStdlibModule
-  end 'noStdlib'
+	let stdlibPath = findStdlibPath()
+	if stdlibPath.isEmpty() 'noStdlib'
+		logInfo(LogCategory.compiler, message: () gives "No stdlib_selfhosted/ found, skipping stdlib")
+		stdlibLoaded = true
+		return cachedStdlibModule
+	end 'noStdlib'
 
-  logInfo(LogCategory.compiler, message: () gives "Loading stdlib from {stdlibPath}")
+	logInfo(LogCategory.compiler, message: () gives "Loading stdlib from {stdlibPath}")
 
-  // Whitelist of stdlib files to load
-  var stdlibFiles = FilePathArray{}
-  stdlibFiles.push(stdlibPath.join("StdlibTest.maxon"))
+	// Whitelist of stdlib files to load
+	var stdlibFiles = FilePathArray{}
+	stdlibFiles.push(stdlibPath.join("StdlibTest.maxon"))
 
-  var allModule = createMlirModule()
-  for fp in stdlibFiles 'eachFile'
-    if fp.fileExists() 'exists'
-      let bytes = try File.readBinary(fp) otherwise 'readErr'
-        logDebug(LogCategory.compiler, message: () gives "  Failed to read {fp}")
-        continue
-      end 'readErr'
-      logDebug(LogCategory.compiler, message: () gives "  Parsing {fp}")
-      let tokens = tokenize(bytes)
-      let parsed = parse(project, tokens: tokens, filePath: fp)
-      mergeModules(allModule, source: parsed)
-    end 'exists'
-  end 'eachFile'
+	var allModule = createMlirModule()
+	for fp in stdlibFiles 'eachFile'
+		if fp.fileExists() 'exists'
+			let bytes = try File.readBinary(fp) otherwise 'readErr'
+				logDebug(LogCategory.compiler, message: () gives "  Failed to read {fp}")
+				continue
+			end 'readErr'
+			logDebug(LogCategory.compiler, message: () gives "  Parsing {fp}")
+			let tokens = tokenize(bytes)
+			let parsed = parse(project, tokens: tokens, filePath: fp)
+			mergeModules(allModule, source: parsed)
+		end 'exists'
+	end 'eachFile'
 
-  cachedStdlibModule = allModule
-  stdlibNextValueId = getNextValueId(project)
-  stdlibTypealiases = project.typealiases
-  stdlibLoaded = true
+	cachedStdlibModule = allModule
+	stdlibNextValueId = getNextValueId(project)
+	stdlibTypealiases = project.typealiases
+	stdlibLoaded = true
 
-  return cachedStdlibModule
+	return cachedStdlibModule
 end 'getStdlibModule'
 
 export function getStdlibNextValueId() returns ValueId
-  return stdlibNextValueId
+	return stdlibNextValueId
 end 'getStdlibNextValueId'

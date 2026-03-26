@@ -24,11 +24,11 @@ functionName(arguments)  // if unambiguous
 typealias Score = int(i64.min to i64.max)
 
 export function add(a Score, b Score) returns Score
-  return a + b
+	return a + b
 end 'add'
 
 function main() returns ExitCode
-  return add(10, b: 20)  // Unqualified call within same namespace
+	return add(10, b: 20)  // Unqualified call within same namespace
 end 'main'
 ```
 ```exitcode

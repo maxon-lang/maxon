@@ -110,17 +110,17 @@ Maxon uses **monomorphization** for generic types like `Map from K to V`. Instea
 
 1. **Declaration:** Generic types are declared with type parameters:
    ```maxon
-   type Map from KeyType to ValueType
-       _keys [16]KeyType
-       _values [16]ValueType
-       ...
-   end 'map'
+	 type Map from KeyType to ValueType
+			 _keys [16]KeyType
+			 _values [16]ValueType
+			 ...
+	 end 'map'
    ```
 
 2. **Instantiation:** When used with concrete types, a specialized type is created:
    ```maxon
-   var ages = Map from string to int  ' Creates map<string,int>
-   var scores = Map from int to float ' Creates map<int,float>
+	 var ages = Map from string to int  ' Creates map<string,int>
+	 var scores = Map from int to float ' Creates map<int,float>
    ```
 
 3. **Specialization:** The compiler generates unique type types with concrete fields:

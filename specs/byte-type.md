@@ -44,8 +44,8 @@ typealias Integer = int(i64.min to i64.max)
 typealias Byte = byte(0 to u8.max)
 
 function main() returns ExitCode
-  var b = 42 as Byte
-  return b as Integer
+	var b = 42 as Byte
+	return b as Integer
 end 'main'
 ```
 ```exitcode
@@ -61,8 +61,8 @@ typealias Integer = int(i64.min to i64.max)
 typealias Byte = byte(0 to u8.max)
 
 function main() returns ExitCode
-  var b = 255 as Byte
-  return b as Integer
+	var b = 255 as Byte
+	return b as Integer
 end 'main'
 ```
 ```exitcode
@@ -78,8 +78,8 @@ typealias Integer = int(i64.min to i64.max)
 typealias Byte = byte(0 to u8.max)
 
 function main() returns ExitCode
-  var b = 0 as Byte
-  return b as Integer
+	var b = 0 as Byte
+	return b as Integer
 end 'main'
 ```
 ```exitcode
@@ -95,8 +95,8 @@ typealias Integer = int(i64.min to i64.max)
 typealias Byte = byte(0 to u8.max)
 
 function main() returns ExitCode
-  var b = 0xff as Byte
-  return b as Integer
+	var b = 0xff as Byte
+	return b as Integer
 end 'main'
 ```
 ```exitcode

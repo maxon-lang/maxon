@@ -41,10 +41,10 @@ var k = trunc(abs(-3.7))   // 3
 <!-- test: abs.float -->
 ```maxon
 function main() returns ExitCode
-  var neg = -5.5
-  var x = abs(neg)
-  var y = trunc(x)
-  return y
+	var neg = -5.5
+	var x = abs(neg)
+	var y = trunc(x)
+	return y
 end 'main'
 ```
 ```exitcode
@@ -54,9 +54,9 @@ end 'main'
 <!-- test: abs.negative-int-as-float -->
 ```maxon
 function main() returns ExitCode
-  var neg = -42.0
-  var x = abs(neg)
-  return trunc(x)
+	var neg = -42.0
+	var x = abs(neg)
+	return trunc(x)
 end 'main'
 ```
 ```exitcode
@@ -66,11 +66,11 @@ end 'main'
 <!-- test: abs.zero -->
 ```maxon
 function main() returns ExitCode
-  var x = abs(0.0)
-  if x == 0.0 'check'
-    return 0
-  end 'check'
-  return 1
+	var x = abs(0.0)
+	if x == 0.0 'check'
+		return 0
+	end 'check'
+	return 1
 end 'main'
 ```
 ```exitcode
@@ -81,9 +81,9 @@ end 'main'
 <!-- Args: -5.5 -->
 ```maxon
 function main() returns ExitCode
-  let args = CommandLine.args()
-  var x = try float.fromString(try args.get(0) otherwise "") otherwise 0.0
-  return trunc(abs(x))
+	let args = CommandLine.args()
+	var x = try float.fromString(try args.get(0) otherwise "") otherwise 0.0
+	return trunc(abs(x))
 end 'main'
 ```
 ```exitcode
@@ -94,9 +94,9 @@ end 'main'
 <!-- Args: -42.0 -->
 ```maxon
 function main() returns ExitCode
-  let args = CommandLine.args()
-  var x = try float.fromString(try args.get(0) otherwise "") otherwise 0.0
-  return trunc(abs(x))
+	let args = CommandLine.args()
+	var x = try float.fromString(try args.get(0) otherwise "") otherwise 0.0
+	return trunc(abs(x))
 end 'main'
 ```
 ```exitcode
@@ -107,13 +107,13 @@ end 'main'
 <!-- Args: 0.0 -->
 ```maxon
 function main() returns ExitCode
-  let args = CommandLine.args()
-  var x = try float.fromString(try args.get(0) otherwise "") otherwise 0.0
-  var result = abs(x)
-  if result == 0.0 'check'
-    return 0
-  end 'check'
-  return 1
+	let args = CommandLine.args()
+	var x = try float.fromString(try args.get(0) otherwise "") otherwise 0.0
+	var result = abs(x)
+	if result == 0.0 'check'
+		return 0
+	end 'check'
+	return 1
 end 'main'
 ```
 ```exitcode

@@ -56,7 +56,7 @@ Every Maxon program must have a `main()` function that returns `ExitCode`:
 
 ```maxon
 function main() returns ExitCode
-    return 0
+		return 0
 end 'main'
 ```
 
@@ -74,18 +74,18 @@ Maxon supports `#if`, `#else`, and `#endif` directives for platform-conditional 
 **Target OS:**
 ```maxon
 #if os(Windows)
-  let separator = "\\"
+	let separator = "\\"
 #else
-  let separator = "/"
+	let separator = "/"
 #endif
 ```
 
 **Target Architecture:**
 ```maxon
 #if arch(x86_64)
-  let pointerSize = 8
+	let pointerSize = 8
 #else
-  let pointerSize = 8
+	let pointerSize = 8
 #endif
 ```
 
@@ -97,15 +97,15 @@ Supported conditions:
 **Boolean operators** (precedence: `or` < `and` < `not`):
 ```maxon
 #if not os(Windows)
-    // runs on Linux and macOS
+		// runs on Linux and macOS
 #endif
 
 #if os(Linux) or os(Macos)
-    // runs on Linux and macOS
+		// runs on Linux and macOS
 #endif
 
 #if os(Linux) and arch(aarch64)
-    // runs on ARM Linux only
+		// runs on ARM Linux only
 #endif
 ```
 
@@ -225,7 +225,7 @@ When a single-codepoint character literal appears in a binary operation with an 
 ```maxon
 var cp = 45
 if cp == '-' 'check'    // '-' is coerced to 45
-  var digit = cp - '0'  // '0' is coerced to 48
+	var digit = cp - '0'  // '0' is coerced to 48
 end 'check'
 ```
 
@@ -294,7 +294,7 @@ Custom types can implement `FormattedStringable` to support format specifiers:
 
 ```maxon
 interface FormattedStringable
-    function toString(format String) returns String
+		function toString(format String) returns String
 end 'FormattedStringable'
 ```
 
@@ -430,8 +430,8 @@ When the value is a computed expression, a runtime range check is emitted that p
 typealias Port = int(0 to 65535)
 typealias RawValue = int(i64.min to i64.max)
 function makePort(n RawValue) returns RawValue
-  var p = Port{n}   // runtime check: panics if n < 0 or n > 65535
-  return p
+	var p = Port{n}   // runtime check: panics if n < 0 or n > 65535
+	return p
 end 'makePort'
 ```
 
@@ -446,7 +446,7 @@ Functions with a ranged return type have their return values checked:
 typealias Score = int(0 to 100)
 
 function half(s Score) returns Score
-  return s / 2    // runtime range check on return value
+	return s / 2    // runtime range check on return value
 end 'half'
 ```
 
@@ -517,14 +517,14 @@ This behavior means that using a ranged integer as a loop cursor is safe — adv
 
 ```maxon
 function skipSpaces(src ByteArray, startPos Pos) returns Pos
-    var pos = startPos          // pos starts at the same value as startPos
-    while pos < src.length 'loop'
-        if src[pos] != b' ' 'notSpace'
-            break 'loop'
-        end 'notSpace'
-        pos = pos + 1           // advances pos; startPos is unaffected
-    end 'loop'
-    return pos
+		var pos = startPos          // pos starts at the same value as startPos
+		while pos < src.length 'loop'
+				if src[pos] != b' ' 'notSpace'
+						break 'loop'
+				end 'notSpace'
+				pos = pos + 1           // advances pos; startPos is unaffected
+		end 'loop'
+		return pos
 end 'skipSpaces'
 ```
 
@@ -539,8 +539,8 @@ Types are user-defined composite types containing named fields. Use `var` for mu
 
 ```maxon
 type Point
-    var x int
-    var y int
+		var x int
+		var y int
 end 'Point'
 ```
 
@@ -567,16 +567,16 @@ Methods are defined **inside the type body** and can access fields directly (imp
 
 ```maxon
 type Point
-    var x int
-    var y int
+		var x int
+		var y int
 
-    function add(other Point) returns Point
-        return Point{x: x + other.x, y: y + other.y}
-    end 'add'
+		function add(other Point) returns Point
+				return Point{x: x + other.x, y: y + other.y}
+		end 'add'
 
-    export function magnitude() returns float
-        return sqrt((x * x + y * y) as float)
-    end 'magnitude'
+		export function magnitude() returns float
+				return sqrt((x * x + y * y) as float)
+		end 'magnitude'
 end 'Point'
 ```
 
@@ -603,20 +603,20 @@ Static methods belong to a type but don't have access to instance data. They are
 
 ```maxon
 type Point
-    var x int
-    var y int
+		var x int
+		var y int
 
-    static function origin() returns Point
-        return Point{x: 0, y: 0}
-    end 'origin'
+		static function origin() returns Point
+				return Point{x: 0, y: 0}
+		end 'origin'
 
-    static function create(x int, y int) returns Point
-        return Point{x: x, y: y}
-    end 'create'
+		static function create(x int, y int) returns Point
+				return Point{x: x, y: y}
+		end 'create'
 
-    function magnitude() returns float
-        return sqrt((x * x + y * y) as float)
-    end 'magnitude'
+		function magnitude() returns float
+				return sqrt((x * x + y * y) as float)
+		end 'magnitude'
 end 'Point'
 ```
 
@@ -649,15 +649,15 @@ Static fields are shared across all instances of a type. They are declared using
 
 ```maxon
 type Counter
-    static var count = 0
-    static let MAX_COUNT = 1000
+		static var count = 0
+		static let MAX_COUNT = 1000
 
-    var id int
+		var id int
 
-    static function create() returns Counter
-        Counter.count = Counter.count + 1
-        return Counter{id: Counter.count}
-    end 'create'
+		static function create() returns Counter
+				Counter.count = Counter.count + 1
+				return Counter{id: Counter.count}
+		end 'create'
 end 'Counter'
 ```
 
@@ -694,17 +694,17 @@ Static fields initialized with complex expressions -- function calls, struct lit
 
 ```maxon
 type Config
-    static var _instance = Config._create()
+		static var _instance = Config._create()
 
-    static function _create() returns Config
-        return Config{value: 42}
-    end '_create'
+		static function _create() returns Config
+				return Config{value: 42}
+		end '_create'
 
-    export var value Count
+		export var value Count
 
-    export static function instance() returns Config
-        return Config._instance   // initializer runs on first call only
-    end 'instance'
+		export static function instance() returns Config
+				return Config._instance   // initializer runs on first call only
+		end 'instance'
 end 'Config'
 ```
 
@@ -720,27 +720,27 @@ end 'Config'
 Caching expensive computations:
 ```maxon
 type WSCache
-    static var _ws = CharacterSet.whitespacesAndNewlines()
+		static var _ws = CharacterSet.whitespacesAndNewlines()
 
-    export static function isWhitespace(c Character) returns bool
-        return WSCache._ws.contains(c)
-    end 'isWhitespace'
+		export static function isWhitespace(c Character) returns bool
+				return WSCache._ws.contains(c)
+		end 'isWhitespace'
 end 'WSCache'
 ```
 
 Struct literal defaults:
 ```maxon
 type Point
-    export var x Count
-    export var y Count
+		export var x Count
+		export var y Count
 end 'Point'
 
 type Defaults
-    static var origin = Point{x: 0, y: 0}
+		static var origin = Point{x: 0, y: 0}
 
-    export static function getOrigin() returns Point
-        return Defaults.origin
-    end 'getOrigin'
+		export static function getOrigin() returns Point
+				return Defaults.origin
+		end 'getOrigin'
 end 'Defaults'
 ```
 
@@ -749,28 +749,28 @@ Array literal initialization:
 typealias Integer = int(i64.min to i64.max)
 
 type Lookup
-    static var _values = [10, 20, 30]
+		static var _values = [10, 20, 30]
 
-    export static function get(index Integer) returns Integer
-        return try Lookup._values.get(index) otherwise -1
-    end 'get'
+		export static function get(index Integer) returns Integer
+				return try Lookup._values.get(index) otherwise -1
+		end 'get'
 end 'Lookup'
 ```
 
 Multiple lazy statics in the same type are each initialized independently on first access:
 ```maxon
 type Cache
-    static var _a = Cache._buildA()
-    static var _b = Cache._buildB()
-    export var n Count
+		static var _a = Cache._buildA()
+		static var _b = Cache._buildB()
+		export var n Count
 
-    static function _buildA() returns Cache
-        return Cache{n: 10}
-    end '_buildA'
+		static function _buildA() returns Cache
+				return Cache{n: 10}
+		end '_buildA'
 
-    static function _buildB() returns Cache
-        return Cache{n: 20}
-    end '_buildB'
+		static function _buildB() returns Cache
+				return Cache{n: 20}
+		end '_buildB'
 end 'Cache'
 ```
 
@@ -780,7 +780,7 @@ Interfaces define a set of method signatures that types can implement:
 
 ```maxon
 interface Hashable
-    function hash() returns int
+		function hash() returns int
 end 'Hashable'
 ```
 
@@ -788,12 +788,12 @@ Structs declare conformance using the `implements` keyword:
 
 ```maxon
 type Point implements Hashable
-    var x int
-    var y int
+		var x int
+		var y int
 
-    function hash() returns int
-        return x + y * 31
-    end 'hash'
+		function hash() returns int
+				return x + y * 31
+		end 'hash'
 end 'Point'
 ```
 
@@ -813,7 +813,7 @@ The `where` clause constrains type parameters to require specific interface conf
 
 ```maxon
 type Map uses Key, Value implements BuiltinDictionaryLiteral where Key is Hashable
-    // Key is guaranteed to have hash() method
+		// Key is guaranteed to have hash() method
 end 'Map'
 ```
 
@@ -844,13 +844,13 @@ Extensions add methods to interfaces that are automatically available on all typ
 
 ```maxon
 extension Iterable
-  function count() returns int
-    var n = 0
-    for _ in self 'loop'
-      n = n + 1
-    end 'loop'
-    return n
-  end 'count'
+	function count() returns int
+		var n = 0
+		for _ in self 'loop'
+			n = n + 1
+		end 'loop'
+		return n
+	end 'count'
 end 'Iterable'
 ```
 
@@ -866,13 +866,13 @@ Extensions can use the interface's associated types. These are automatically sub
 
 ```maxon
 interface Container uses Element
-  function get(index int) returns Element
+	function get(index int) returns Element
 end 'Container'
 
 extension Container
-  function first() returns Element
-    return self.get(0)
-  end 'first'
+	function first() returns Element
+		return self.get(0)
+	end 'first'
 end 'Container'
 ```
 
@@ -896,14 +896,14 @@ Extensions can include a `where` clause to restrict which conforming types recei
 
 ```maxon
 extension Iterable where Element is Equatable
-  function contains(element Element) returns bool
-    for item in self 'loop'
-      if item == element 'found'
-        return true
-      end 'found'
-    end 'loop'
-    return false
-  end 'contains'
+	function contains(element Element) returns bool
+		for item in self 'loop'
+			if item == element 'found'
+				return true
+			end 'found'
+		end 'loop'
+		return false
+	end 'contains'
 end 'Iterable'
 ```
 
@@ -923,7 +923,7 @@ Multiple constraints on the same parameter use `and`:
 
 ```maxon
 extension Container where Key is Hashable and Equatable
-  // Methods available only when Key is both Hashable and Equatable
+	// Methods available only when Key is both Hashable and Equatable
 end 'Container'
 ```
 
@@ -933,24 +933,24 @@ An interface can have both unconditional extensions and conditional extensions. 
 
 ```maxon
 extension Seq
-  function countItems() returns int
-    var n = 0
-    for _ in self 'loop'
-      n = n + 1
-    end 'loop'
-    return n
-  end 'countItems'
+	function countItems() returns int
+		var n = 0
+		for _ in self 'loop'
+			n = n + 1
+		end 'loop'
+		return n
+	end 'countItems'
 end 'Seq'
 
 extension Seq where Element is Equatable
-  function includes(target Element) returns bool
-    for item in self 'loop'
-      if item == target 'yes'
-        return true
-      end 'yes'
-    end 'loop'
-    return false
-  end 'includes'
+	function includes(target Element) returns bool
+		for item in self 'loop'
+			if item == target 'yes'
+				return true
+			end 'yes'
+		end 'loop'
+		return false
+	end 'includes'
 end 'Seq'
 ```
 
@@ -964,13 +964,13 @@ Extensions can add interface conformance conditionally using both `implements` a
 
 ```maxon
 extension Array implements Hashable, Equatable where Element is Hashable and Equatable
-  function hash() returns HashValue
-    // ...
-  end 'hash'
+	function hash() returns HashValue
+		// ...
+	end 'hash'
 
-  function equals(other Self) returns bool
-    // ...
-  end 'equals'
+	function equals(other Self) returns bool
+		// ...
+	end 'equals'
 end 'Array'
 ```
 
@@ -992,10 +992,10 @@ The simplest form of union defines named cases with no additional data:
 
 ```maxon
 union Direction
-    north
-    south
-    east
-    west
+		north
+		south
+		east
+		west
 end 'Direction'
 ```
 
@@ -1011,9 +1011,9 @@ Cases can carry additional data called associated values:
 
 ```maxon
 union Result
-    success(value int)
-    failure(code int, message String)
-    pending
+		success(value int)
+		failure(code int, message String)
+		pending
 end 'Result'
 ```
 
@@ -1031,9 +1031,9 @@ Use `match` statements to extract associated values from union cases. Each bindi
 
 ```maxon
 match result 'handle'
-    success(value) then return value
-    failure(code, msg) then print(msg)
-    pending then print("waiting...")
+		success(value) then return value
+		failure(code, msg) then print(msg)
+		pending then print("waiting...")
 end 'handle'
 ```
 
@@ -1041,8 +1041,8 @@ Match expressions also support value extraction using `gives`:
 
 ```maxon
 var extracted = match container 'get'
-    empty gives 0
-    value(n) gives n * 2
+		empty gives 0
+		value(n) gives n * 2
 end 'get'
 ```
 
@@ -1050,8 +1050,8 @@ You can mix cases with and without bindings:
 
 ```maxon
 match result 'check'
-    success(v) then return v    // Extracts value
-    pending then return 0       // No extraction needed
+		success(v) then return v    // Extracts value
+		pending then return 0       // No extraction needed
 end 'check'
 ```
 
@@ -1059,13 +1059,13 @@ end 'check'
 
 ```maxon
 match container 'check'
-    value(_) then return 1     // discard with _
-    empty then return 0
+		value(_) then return 1     // discard with _
+		empty then return 0
 end 'check'
 
 match container 'check'
-    value then return 1        // omit parentheses entirely
-    empty then return 0
+		value then return 1        // omit parentheses entirely
+		empty then return 0
 end 'check'
 ```
 
@@ -1081,8 +1081,8 @@ When a union variable is declared with `var`, match bindings on its associated v
 ```maxon
 var box = Box.full(10)
 match box 'update'
-    full(value) then value = 42    // Writes 42 back into box
-    empty then return
+		full(value) then value = 42    // Writes 42 back into box
+		empty then return
 end 'update'
 // box is now Box.full(42)
 ```
@@ -1096,15 +1096,15 @@ Union values cannot be compared using `==` or `!=` (error E3066). The only way t
 ```maxon
 var dir = Direction.north
 if dir == Direction.north 'check'    // ERROR E3066: Cannot compare union values
-    print("Going north!")
+		print("Going north!")
 end 'check'
 
 // Use match instead
 match dir 'check'
-    north then print("Going north!")
-    south then print("Going south!")
-    east then print("Going east!")
-    west then print("Going west!")
+		north then print("Going north!")
+		south then print("Going south!")
+		east then print("Going east!")
+		west then print("Going west!")
 end 'check'
 ```
 
@@ -1116,10 +1116,10 @@ The `fromName` static method creates a union value from a string name. It return
 
 ```maxon
 union Direction
-    north
-    south
-    east
-    west
+		north
+		south
+		east
+		west
 end 'Direction'
 
 // Compile-time known name
@@ -1127,7 +1127,7 @@ var dir = try Direction.fromName("north") otherwise Direction.south
 
 // Runtime string
 function getDirection(name String) returns Direction
-    return try Direction.fromName(name) otherwise Direction.north
+		return try Direction.fromName(name) otherwise Direction.north
 end 'getDirection'
 ```
 
@@ -1135,8 +1135,8 @@ For unions with associated values, pass the values as additional arguments when 
 
 ```maxon
 union Container
-    empty
-    value(n int)
+		empty
+		value(n int)
 end 'Container'
 
 // With associated values (name must be compile-time literal)
@@ -1144,7 +1144,7 @@ var c = try Container.fromName("value", 42) otherwise Container.empty
 
 // Cases without associated values work with runtime strings
 function getContainer(name String) returns Container
-    return try Container.fromName(name) otherwise Container.empty
+		return try Container.fromName(name) otherwise Container.empty
 end 'getContainer'
 ```
 
@@ -1160,15 +1160,15 @@ Unions can have methods, similar to structs:
 
 ```maxon
 union Direction
-    north
-    south
+		north
+		south
 
-    function opposite() returns Direction
-        return match self 'check'
-            north gives Direction.south
-            south gives Direction.north
-        end 'check'
-    end 'opposite'
+		function opposite() returns Direction
+				return match self 'check'
+						north gives Direction.south
+						south gives Direction.north
+				end 'check'
+		end 'opposite'
 end 'Direction'
 ```
 
@@ -1185,22 +1185,22 @@ Unions can be used as function parameters and return types:
 
 ```maxon
 union Status
-    on
-    off
+		on
+		off
 end 'Status'
 
 function isOn(s Status) returns bool
-    return match s 'check'
-        on gives true
-        off gives false
-    end 'check'
+		return match s 'check'
+				on gives true
+				off gives false
+		end 'check'
 end 'isOn'
 
 function toggle(s Status) returns Status
-    return match s 'check'
-        on gives Status.off
-        off gives Status.on
-    end 'check'
+		return match s 'check'
+				on gives Status.off
+				off gives Status.on
+		end 'check'
 end 'toggle'
 ```
 
@@ -1210,15 +1210,15 @@ Unions can conform to interfaces using the `implements` keyword, similar to type
 
 ```maxon
 union FileError implements Error
-    notFound
-    permissionDenied
-    alreadyExists
+		notFound
+		permissionDenied
+		alreadyExists
 end 'FileError'
 
 union HttpError int implements Error
-    badRequest = 400
-    notFound = 404
-    serverError = 500
+		badRequest = 400
+		notFound = 404
+		serverError = 500
 end 'HttpError'
 ```
 
@@ -1262,8 +1262,8 @@ var globalCounter = 0
 let MAX_SIZE = 1024
 
 function main() returns ExitCode
-    globalCounter = globalCounter + 1
-    return globalCounter
+		globalCounter = globalCounter + 1
+		return globalCounter
 end 'main'
 ```
 
@@ -1289,9 +1289,9 @@ Enums define a named group of typed constant values. They support direct `==` an
 
 ```maxon
 enum HttpStatus
-    ok = 200
-    notFound = 404
-    serverError = 500
+		ok = 200
+		notFound = 404
+		serverError = 500
 end 'HttpStatus'
 ```
 
@@ -1299,16 +1299,16 @@ Cases without explicit values auto-increment from 0 (or from the previous explic
 
 ```maxon
 enum Color
-    red       // 0
-    green     // 1
-    blue      // 2
+		red       // 0
+		green     // 1
+		blue      // 2
 end 'Color'
 
 enum Priority
-    low         // 0
-    medium      // 1
-    high = 10
-    critical    // 11
+		low         // 0
+		medium      // 1
+		high = 10
+		critical    // 11
 end 'Priority'
 ```
 
@@ -1318,19 +1318,19 @@ Enums support the same backing types as unions: integer, float, String, and Char
 
 ```maxon
 enum Threshold
-    low = 0.1
-    medium = 0.5
-    high = 0.9
+		low = 0.1
+		medium = 0.5
+		high = 0.9
 end 'Threshold'
 
 enum ContentType
-    json = "application/json"
-    html = "text/html"
+		json = "application/json"
+		html = "text/html"
 end 'ContentType'
 
 enum Escape
-    newline = '\n'
-    tab = '\t'
+		newline = '\n'
+		tab = '\t'
 end 'Escape'
 ```
 
@@ -1340,9 +1340,9 @@ Negative integer values are supported:
 
 ```maxon
 enum Temperature
-    freezing = 0
-    cold = -10
-    warm = 25
+		freezing = 0
+		cold = -10
+		warm = 25
 end 'Temperature'
 ```
 
@@ -1353,10 +1353,10 @@ Unlike unions, enums allow direct `==` and `!=` comparison:
 ```maxon
 var s = HttpStatus.notFound
 if s == HttpStatus.notFound 'check'
-    // ...
+		// ...
 end 'check'
 if s != HttpStatus.ok 'check2'
-    // ...
+		// ...
 end 'check2'
 ```
 
@@ -1367,9 +1367,9 @@ Enum matches require exhaustive case coverage — all cases must be matched by e
 ```maxon
 // Exhaustive: all cases listed
 var result = match s 'handle'
-    ok gives 1
-    notFound gives 2
-    serverError gives 3
+		ok gives 1
+		notFound gives 2
+		serverError gives 3
 end 'handle'
 ```
 
@@ -1428,7 +1428,7 @@ All enums have a static `.allCases` property that returns an `Array` containing 
 
 ```maxon
 for color in Color.allCases 'loop'
-  print("{color.name}\n")
+	print("{color.name}\n")
 end 'loop'
 // Prints: red, green, blue
 
@@ -1454,7 +1454,7 @@ var s = try HttpStatus.fromName("notFound") otherwise HttpStatus.ok  // HttpStat
 
 // Runtime string
 function getStatus(name String) returns HttpStatus
-    return try HttpStatus.fromName(name) otherwise HttpStatus.ok
+		return try HttpStatus.fromName(name) otherwise HttpStatus.ok
 end 'getStatus'
 ```
 
@@ -1466,14 +1466,14 @@ end 'getStatus'
 
 ```maxon
 function isSuccess(s HttpStatus) returns bool
-    if s == HttpStatus.ok 'check'
-        return true
-    end 'check'
-    return false
+		if s == HttpStatus.ok 'check'
+				return true
+		end 'check'
+		return false
 end 'isSuccess'
 
 function getDefault() returns HttpStatus
-    return HttpStatus.ok
+		return HttpStatus.ok
 end 'getDefault'
 ```
 
@@ -1483,10 +1483,10 @@ Keywords can be used as case names (same as unions):
 
 ```maxon
 enum TokenKind
-    function
-    return
-    end
-    if
+		function
+		return
+		end
+		if
 end 'TokenKind'
 ```
 
@@ -1494,9 +1494,9 @@ end 'TokenKind'
 
 ```maxon
 export enum Permission
-    none = 0
-    read = 1
-    write = 2
+		none = 0
+		read = 1
+		write = 2
 end 'Permission'
 ```
 
@@ -1515,13 +1515,13 @@ end 'Permission'
 ```maxon
 // Function with return value
 function name(param type [= default], ...) returns returnType
-    // statements
-    return value
+		// statements
+		return value
 end 'name'
 
 // Function with no return value (implicit void)
 function name(param type [= default], ...)
-    // statements
+		// statements
 end 'name'
 ```
 
@@ -1541,20 +1541,20 @@ Maxon uses a **first-positional, rest-named** rule for function and method calls
 
 ```maxon
 function add(a int, b int) returns int
-    return a + b
+		return a + b
 end 'add'
 
 add(3, b: 4)      // First positional, second named
 
 function connect(host String, port int) returns bool
-    // ...
+		// ...
 end 'connect'
 
 connect("localhost", port: 8080)  // First positional, second named
 
 // Single parameter functions
 function greet(name String)
-    print("Hello, " + name)
+		print("Hello, " + name)
 end 'greet'
 
 greet("Alice")    // Single param is positional
@@ -1566,7 +1566,7 @@ Parameters can have default values. Parameters with defaults can be omitted at t
 
 ```maxon
 function greet(name String, title String = "Mr.")
-    print("Hello, {title} {name}")
+		print("Hello, {title} {name}")
 end 'greet'
 
 greet("Smith")                    // Uses default title
@@ -1574,47 +1574,47 @@ greet("Smith", title: "Dr.")      // Override default
 
 // String default
 function connect(host String = "localhost") returns ExitCode
-    // ...
+		// ...
 end 'connect'
 
 // Array default
 function process(items IntArray = [10, 20, 12]) returns Integer
-    // ...
+		// ...
 end 'process'
 
 // Integer default
 function retry(attempts Count = 3) returns ExitCode
-    // ...
+		// ...
 end 'retry'
 
 // Float default
 function scale(factor MathValue = 1.0) returns MathValue
-    // ...
+		// ...
 end 'scale'
 
 // Bool default
 function run(verbose bool = false) returns ExitCode
-    // ...
+		// ...
 end 'run'
 
 // Enum default
 function setLevel(level Priority = Priority.medium) returns ExitCode
-    // ...
+		// ...
 end 'setLevel'
 
 // Struct default
 function draw(origin Point = Point{x: 0, y: 0}) returns ExitCode
-    // ...
+		// ...
 end 'draw'
 
 // Character default
 function setSeparator(sep Character = '/') returns ExitCode
-    // ...
+		// ...
 end 'setSeparator'
 
 // Byte string default
 function send(header ByteArray = b"HTTP/1.1") returns ExitCode
-    // ...
+		// ...
 end 'send'
 ```
 
@@ -1634,11 +1634,11 @@ When overloads differ in their parameter types, the compiler automatically selec
 
 ```maxon
 function process(value int) returns int
-    return value * 2
+		return value * 2
 end 'process'
 
 function process(value String) returns int
-    return value.count()
+		return value.count()
 end 'process'
 
 process(42)        // calls process(value int)
@@ -1651,11 +1651,11 @@ When overloads have different parameter names, the caller uses named arguments t
 
 ```maxon
 function create(name String) returns String
-    return name
+		return name
 end 'create'
 
 function create(label String) returns String
-    return label
+		return label
 end 'create'
 
 create(name: "foo")    // calls first overload
@@ -1671,21 +1671,21 @@ If the compiler cannot determine which overload to call based on argument types 
 **No Parameters**
 ```maxon
 function getAnswer() returns int
-    return 42
+		return 42
 end 'getAnswer'
 ```
 
 **Void Return Type**
 ```maxon
 function greet(name String)
-    print("Hello, " + name)
+		print("Hello, " + name)
 end 'greet'
 ```
 
 **Multiple Parameters**
 ```maxon
 function add(a int, b int) returns int
-    return a + b
+		return a + b
 end 'add'
 
 var result = add(3, b: 4)
@@ -1694,7 +1694,7 @@ var result = add(3, b: 4)
 **Named Arguments for Clarity**
 ```maxon
 function divide(dividend int, divisor int) returns int
-    return dividend / divisor
+		return dividend / divisor
 end 'divide'
 
 var result = divide(dividend: 10, divisor: 2)
@@ -1706,11 +1706,11 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
 function sum(numbers IntArray) returns int
-    var total = 0
-    for num in numbers 'loop'
-        total = total + num
-    end 'loop'
-    return total
+		var total = 0
+		for num in numbers 'loop'
+				total = total + num
+		end 'loop'
+		return total
 end 'sum'
 ```
 
@@ -1734,13 +1734,13 @@ Maxon uses **automatic pass-by-reference** for parameters that are assigned to i
 
 ```maxon
 function increment(n int)
-    n = n + 1       // assigns to n — passed by reference
+		n = n + 1       // assigns to n — passed by reference
 end 'increment'
 
 function main() returns ExitCode
-    var x = 10
-    increment(x)    // x is now 11
-    return x
+		var x = 10
+		increment(x)    // x is now 11
+		return x
 end 'main'
 ```
 
@@ -1752,18 +1752,18 @@ end 'main'
 
 ```maxon
 function double(n int)
-    n = n * 2
+		n = n * 2
 end 'double'
 
 function main() returns ExitCode
-    var x = 5
-    double(x)       // OK — x is var; x becomes 10
+		var x = 5
+		double(x)       // OK — x is var; x becomes 10
 
-    let y = 5
-    double(y)       // ERROR E3063: cannot pass let variable to mutating parameter
+		let y = 5
+		double(y)       // ERROR E3063: cannot pass let variable to mutating parameter
 
-    double(5)       // OK — literal creates a temporary; mutation has no visible effect
-    return x
+		double(5)       // OK — literal creates a temporary; mutation has no visible effect
+		return x
 end 'main'
 ```
 
@@ -1781,11 +1781,11 @@ Closures are anonymous functions expressed inline using `gives` syntax:
 
 ```maxon
 function main() returns ExitCode
-    var x = 10
-    let addX = (n int) gives n + x   // captures x by reference
-    x = 20
-    var result = addX(5)             // evaluates with x == 20, result is 25
-    return result
+		var x = 10
+		let addX = (n int) gives n + x   // captures x by reference
+		x = 20
+		var result = addX(5)             // evaluates with x == 20, result is 25
+		return result
 end 'main'
 ```
 
@@ -1818,7 +1818,7 @@ Pure function results **must** be used -- they cannot be discarded, even with `l
 
 ```maxon
 function double(x int) returns int
-    return x * 2
+		return x * 2
 end 'double'
 
 double(5)               // Error E3064: result of pure function 'double' must be used
@@ -1833,8 +1833,8 @@ Impure function results **must** be explicitly acknowledged. A bare statement-le
 ```maxon
 var counter = 0
 function incrementAndGet() returns int
-    counter = counter + 1
-    return counter
+		counter = counter + 1
+		return counter
 end 'incrementAndGet'
 
 incrementAndGet()               // Error E3065: result of 'incrementAndGet' is not used
@@ -1848,12 +1848,12 @@ Methods that take `self` as their first parameter and return the same type are *
 
 ```maxon
 type Counter
-    var value int
+		var value int
 
-    function increment() returns Counter
-        value = value + 1
-        return self
-    end 'increment'
+		function increment() returns Counter
+				value = value + 1
+				return self
+		end 'increment'
 end 'Counter'
 
 var c = Counter{value: 0}
@@ -1943,7 +1943,7 @@ Using `==` or `!=` on struct types requires the type to implement the `Equatable
 
 ```maxon
 function areSame(a Point, b Point) returns bool
-  return a is b
+	return a is b
 end 'areSame'
 ```
 
@@ -2096,16 +2096,16 @@ var y = 0
 **Syntax**
 ```maxon
 if condition 'label'
-    statements
+		statements
 end 'label'
 ```
 
 **With Else**
 ```maxon
 if condition 'then'
-    statements
+		statements
 end 'then' else 'else'
-    statements
+		statements
 end 'else'
 ```
 
@@ -2118,7 +2118,7 @@ end 'else'
 ### While Loop
 ```maxon
 while condition 'label'
-    statements
+		statements
 end 'label'
 ```
 
@@ -2126,15 +2126,15 @@ end 'label'
 ```maxon
 var i = 0
 while i < 10 'loop'
-    print("{i}")
-    i = i + 1
+		print("{i}")
+		i = i + 1
 end 'loop'
 ```
 
 ### For Loop
 ```maxon
 for variable in iterable 'label'
-    statements
+		statements
 end 'label'
 ```
 
@@ -2142,7 +2142,7 @@ end 'label'
 ```maxon
 var numbers = [1, 2, 3, 4, 5]
 for num in numbers 'loop'
-    print("{num}")
+		print("{num}")
 end 'loop'
 ```
 
@@ -2153,17 +2153,17 @@ Ranges are created using `to` (inclusive) or `upto` (exclusive) expressions:
 ```maxon
 // Inclusive range: 1, 2, 3, 4, 5
 for i in 1 to 5 'loop'
-    print("{i}")
+		print("{i}")
 end 'loop'
 
 // Exclusive range: 1, 2, 3, 4
 for i in 1 upto 5 'loop'
-    print("{i}")
+		print("{i}")
 end 'loop'
 
 // Character ranges
 for c in 'a' to 'z' 'loop'
-    print("{c}")
+		print("{c}")
 end 'loop'
 ```
 
@@ -2171,7 +2171,7 @@ Ranges work with any type implementing the `Strideable` interface:
 
 ```maxon
 interface Strideable
-    function advancedBy(n int) returns Self
+		function advancedBy(n int) returns Self
 end 'Strideable'
 ```
 
@@ -2184,7 +2184,7 @@ Append `.enumerated()` to any iterable to get a zero-based index alongside each 
 ```maxon
 var names = ["Alice", "Bob", "Charlie"]
 for (i, name) in names.enumerated() 'loop'
-    print("{i}: {name}\n")
+		print("{i}: {name}\n")
 end 'loop'
 // 0: Alice
 // 1: Bob
@@ -2208,11 +2208,11 @@ Match statements provide pattern matching on values, executing different code ba
 **Syntax**
 ```maxon
 match expression 'label'
-    pattern then statement
-    pattern1 or pattern2 then statement
-    pattern then statement and fallthrough
-    pattern then break
-    default then statement
+		pattern then statement
+		pattern1 or pattern2 then statement
+		pattern then statement and fallthrough
+		pattern then break
+		default then statement
 end 'label'
 ```
 
@@ -2220,9 +2220,9 @@ end 'label'
 ```maxon
 var x = 2
 match x 'check'
-    1 then return 10
-    2 or 3 then return 20
-    default then return 0
+		1 then return 10
+		2 or 3 then return 20
+		default then return 0
 end 'check'
 ```
 
@@ -2230,9 +2230,9 @@ end 'check'
 ```maxon
 var result = 0
 match x 'cascade'
-    1 then result = result + 10 and fallthrough
-    2 then result = result + 20
-    default then result = 100
+		1 then result = result + 10 and fallthrough
+		2 then result = result + 20
+		default then result = 100
 end 'cascade'
 ```
 
@@ -2244,11 +2244,11 @@ Use `break` in a match arm to exit the match without executing any code for that
 
 ```maxon
 while running 'loop'
-    match state 'check'
-        0 then break              // exits match, continues loop
-        1 then break 'loop'       // exits loop
-        default then process()
-    end 'check'
+		match state 'check'
+				0 then break              // exits match, continues loop
+				1 then break 'loop'       // exits loop
+				default then process()
+		end 'check'
 end 'loop'
 ```
 
@@ -2260,14 +2260,14 @@ For unions with associated values, use `CaseName(bindings)` syntax to extract va
 
 ```maxon
 union Result
-    success(value int)
-    failure(code int)
+		success(value int)
+		failure(code int)
 end 'Result'
 
 var r = Result.success(42)
 match r 'handle'
-    success(v) then return v      // v binds to 42
-    failure(c) then return c
+		success(v) then return v      // v binds to 42
+		failure(c) then return c
 end 'handle'
 ```
 
@@ -2293,15 +2293,15 @@ Unions with associated values support range patterns on bare case names using `t
 
 ```maxon
 union MlirOp
-    maxhl(op MaxHLOp)
-    arith(op ArithOp)
-    cf(op CfOp)
-    func(op FuncOp)
+		maxhl(op MaxHLOp)
+		arith(op ArithOp)
+		cf(op CfOp)
+		func(op FuncOp)
 end 'MlirOp'
 
 match op 'dispatch'
-    maxhl(hlOp) then lowerMaxHLOp(hlOp, dstBlock: dstBlock)
-    arith to func then dstBlock.ops.push(op)
+		maxhl(hlOp) then lowerMaxHLOp(hlOp, dstBlock: dstBlock)
+		arith to func then dstBlock.ops.push(op)
 end 'dispatch'
 ```
 
@@ -2329,12 +2329,12 @@ Range patterns match numeric values within a range using Rust-style syntax:
 
 ```maxon
 function classify(n int) returns int
-    match n 'check'
-        1..=5 then return 1      // 1 to 5 inclusive
-        6..<10 then return 2     // 6 to 9 (exclusive of 10)
-        10.. then return 3       // 10 and above
-        default then return 0    // negative numbers
-    end 'check'
+		match n 'check'
+				1..=5 then return 1      // 1 to 5 inclusive
+				6..<10 then return 2     // 6 to 9 (exclusive of 10)
+				10.. then return 3       // 10 and above
+				default then return 0    // negative numbers
+		end 'check'
 end 'classify'
 ```
 
@@ -2342,12 +2342,12 @@ Range patterns work with integers, floats, and any type implementing the `Compar
 
 ```maxon
 function charType(c Character) returns int
-    match c 'classify'
-        'a'..='z' then return 1  // lowercase letters
-        'A'..='Z' then return 2  // uppercase letters
-        '0'..='9' then return 3  // digits
-        default then return 0    // other
-    end 'classify'
+		match c 'classify'
+				'a'..='z' then return 1  // lowercase letters
+				'A'..='Z' then return 2  // uppercase letters
+				'0'..='9' then return 3  // digits
+				default then return 0    // other
+		end 'classify'
 end 'charType'
 ```
 
@@ -2355,9 +2355,9 @@ Range patterns can be combined with `or`:
 
 ```maxon
 match score 'grade'
-    90..=100 or 85..=89 then return "A"
-    70..=84 then return "B"
-    default then return "C"
+		90..=100 or 85..=89 then return "A"
+		70..=84 then return "B"
+		default then return "C"
 end 'grade'
 ```
 
@@ -2368,9 +2368,9 @@ Match expressions return a value and can be assigned to variables. Use `gives` i
 **Syntax**
 ```maxon
 let result = match expression 'label'
-    pattern1 gives value1
-    pattern2 or pattern3 gives value2
-    default gives defaultValue
+		pattern1 gives value1
+		pattern2 or pattern3 gives value2
+		default gives defaultValue
 end 'label'
 ```
 
@@ -2378,24 +2378,24 @@ end 'label'
 ```maxon
 var grade = "B"
 let points = match grade 'convert'
-    "A" gives 4
-    "B" gives 3
-    "C" gives 2
-    default gives 0
+		"A" gives 4
+		"B" gives 3
+		"C" gives 2
+		default gives 0
 end 'convert'
 ```
 
 **Union Case Extraction:**
 ```maxon
 union Container
-    empty
-    value(n int)
+		empty
+		value(n int)
 end 'Container'
 
 var c = Container.value(10)
 var result = match c 'get'
-    empty gives 0
-    value(n) gives n * 2    // result = 20
+		empty gives 0
+		value(n) gives n * 2    // result = 20
 end 'get'
 ```
 
@@ -2415,9 +2415,9 @@ To handle only a subset of cases, you have two options:
 
 ```maxon
 match level 'filter'
-    error then handleError()
-    fatal then handleFatal()
-    trace to warning then break
+		error then handleError()
+		fatal then handleFatal()
+		trace to warning then break
 end 'filter'
 ```
 
@@ -2432,11 +2432,11 @@ Both forms work in all match types (enum, union, and primitive types).
 
 ```maxon
 function handleShape(shape Shape) throws ShapeError
-    match shape 'draw'
-        circle(r) then drawCircle(r)
-        square(s) then drawSquare(s)
-        default throws ShapeError.unsupported
-    end 'draw'
+		match shape 'draw'
+				circle(r) then drawCircle(r)
+				square(s) then drawSquare(s)
+				default throws ShapeError.unsupported
+		end 'draw'
 end 'handleShape'
 ```
 
@@ -2446,11 +2446,11 @@ If `shape` is `triangle`, the function throws `ShapeError.unsupported`, which th
 
 ```maxon
 function handleShape(shape Shape)
-    match shape 'draw'
-        circle(r) then drawCircle(r)
-        square(s) then drawSquare(s)
-        default panic("unsupported shape")
-    end 'draw'
+		match shape 'draw'
+				circle(r) then drawCircle(r)
+				square(s) then drawSquare(s)
+				default panic("unsupported shape")
+		end 'draw'
 end 'handleShape'
 ```
 
@@ -2460,12 +2460,12 @@ If `shape` is `triangle`, the program terminates with the message "unsupported s
 
 ```maxon
 function describeShape(shape Shape) returns String throws ShapeError
-    let desc = match shape 'describe'
-        circle(r) gives "circle with radius {r}"
-        square(s) gives "square with side {s}"
-        default throws ShapeError.unsupported
-    end 'describe'
-    return desc
+		let desc = match shape 'describe'
+				circle(r) gives "circle with radius {r}"
+				square(s) gives "square with side {s}"
+				default throws ShapeError.unsupported
+		end 'describe'
+		return desc
 end 'describeShape'
 ```
 
@@ -2473,28 +2473,28 @@ end 'describeShape'
 
 ```maxon
 union Shape
-    circle(radius float)
-    square(side float)
-    triangle(base float, height float)
+		circle(radius float)
+		square(side float)
+		triangle(base float, height float)
 end 'Shape'
 
 union ShapeError implements Error
-    unsupported
+		unsupported
 end 'ShapeError'
 
 function getArea(shape Shape) returns float throws ShapeError
-    return match shape 'calc'
-        circle(r) gives 3.14159 * r * r
-        square(s) gives s * s
-        default throws ShapeError.unsupported
-    end 'calc'
+		return match shape 'calc'
+				circle(r) gives 3.14159 * r * r
+				square(s) gives s * s
+				default throws ShapeError.unsupported
+		end 'calc'
 end 'getArea'
 
 function main() returns ExitCode
-    var shape = Shape.circle(5.0)
-    let area = try getArea(shape) otherwise 0.0
-    print("{area}")
-    return 0
+		var shape = Shape.circle(5.0)
+		let area = try getArea(shape) otherwise 0.0
+		print("{area}")
+		return 0
 end 'main'
 ```
 
@@ -2515,9 +2515,9 @@ Exits the innermost loop (while or for), or breaks to a specific labeled loop.
 **Example:**
 ```maxon
 while true 'outer'
-    while true 'inner'
-        break 'outer'  // Breaks out of outer loop
-    end 'inner'
+		while true 'inner'
+				break 'outer'  // Breaks out of outer loop
+		end 'inner'
 end 'outer'
 ```
 
@@ -2551,22 +2551,22 @@ Error types are unions that conform to the `Error` interface:
 ```maxon
 // Simple union error
 union FileError implements Error
-    notFound
-    permissionDenied
-    alreadyExists
+		notFound
+		permissionDenied
+		alreadyExists
 end 'FileError'
 
 // Int-backed union error (for error codes)
 union HttpError int implements Error
-    badRequest = 400
-    notFound = 404
-    serverError = 500
+		badRequest = 400
+		notFound = 404
+		serverError = 500
 end 'HttpError'
 
 // String-backed union error (for messages)
 union ValidationError String implements Error
-    emptyField = "Field cannot be empty"
-    invalidFormat = "Invalid format"
+		emptyField = "Field cannot be empty"
+		invalidFormat = "Invalid format"
 end 'ValidationError'
 ```
 
@@ -2578,18 +2578,18 @@ Functions that can throw errors declare the error type with `throws`:
 
 ```maxon
 function readFile(path String) returns String throws FileError
-    if not exists(path) 'check'
-        throw FileError.notFound
-    end 'check'
-    return contents
+		if not exists(path) 'check'
+				throw FileError.notFound
+		end 'check'
+		return contents
 end 'readFile'
 
 // Void function that throws
 function resetConfig() throws FileError
-    if not exists("config.json") 'check'
-        throw FileError.notFound
-    end 'check'
-    // reset logic...
+		if not exists("config.json") 'check'
+				throw FileError.notFound
+		end 'check'
+		// reset logic...
 end 'resetConfig'
 ```
 
@@ -2624,10 +2624,10 @@ The argument can be a plain string literal or an interpolated string. The progra
 
 ```maxon
 function processValue(x int) returns int
-    if x < 0 'negative'
-        panic("processValue: negative input, got {x}")
-    end 'negative'
-    return x * 2
+		if x < 0 'negative'
+				panic("processValue: negative input, got {x}")
+		end 'negative'
+		return x * 2
 end 'processValue'
 ```
 
@@ -2672,9 +2672,9 @@ If `mayFail()` throws, `value` is assigned `42`. The default expression must mat
 
 ```maxon
 function readConfig() returns String
-    // If readFile throws, use empty string as default
-    let contents = try readFile("config.json") otherwise ""
-    return contents
+		// If readFile throws, use empty string as default
+		let contents = try readFile("config.json") otherwise ""
+		return contents
 end 'readConfig'
 ```
 
@@ -2690,8 +2690,8 @@ This silently ignores any thrown error. Use sparingly—typically for cleanup op
 
 ```maxon
 function cleanup()
-    // Best-effort cleanup, ignore failures
-    try deleteFile("temp.txt") otherwise ignore
+		// Best-effort cleanup, ignore failures
+		try deleteFile("temp.txt") otherwise ignore
 end 'cleanup'
 ```
 
@@ -2701,8 +2701,8 @@ Execute a block of code when an error occurs:
 
 ```maxon
 try readFile("config.json") otherwise 'handler'
-    print("File not found, using defaults")
-    useDefaults()
+		print("File not found, using defaults")
+		useDefaults()
 end 'handler'
 ```
 
@@ -2710,12 +2710,12 @@ The block executes only if an error is thrown.
 
 ```maxon
 function loadData() returns int
-    var result = 0
-    try parseFile("data.txt") otherwise 'err'
-        result = -1  // Mark as failed
-        logError("Parse failed")
-    end 'err'
-    return result
+		var result = 0
+		try parseFile("data.txt") otherwise 'err'
+				result = -1  // Mark as failed
+				logError("Parse failed")
+		end 'err'
+		return result
 end 'loadData'
 ```
 
@@ -2725,11 +2725,11 @@ Capture the error as a typed union for inspection:
 
 ```maxon
 try readFile("config.json") otherwise (e) 'handler'
-    match e 'check'
-        notFound then print("File not found")
-        permissionDenied then print("Permission denied")
-        alreadyExists then print("Already exists")
-    end 'check'
+		match e 'check'
+				notFound then print("File not found")
+				permissionDenied then print("Permission denied")
+				alreadyExists then print("Already exists")
+		end 'check'
 end 'handler'
 ```
 
@@ -2737,10 +2737,10 @@ The error is bound to the variable `e` as a typed union value, allowing you to m
 
 ```maxon
 function processFile(path String)
-    try readFile(path) otherwise (err) 'handler'
-        // err contains the FileError value
-        print("Failed to read file")
-    end 'handler'
+		try readFile(path) otherwise (err) 'handler'
+				// err contains the FileError value
+				print("Failed to read file")
+		end 'handler'
 end 'processFile'
 ```
 
@@ -2750,9 +2750,9 @@ Use `try` without `otherwise` to propagate errors to the caller. This is only va
 
 ```maxon
 function loadConfig() returns Config throws FileError
-    // If readFile throws, the error propagates to our caller
-    let contents = try readFile("config.json")
-    return parse(contents)
+		// If readFile throws, the error propagates to our caller
+		let contents = try readFile("config.json")
+		return parse(contents)
 end 'loadConfig'
 ```
 
@@ -2771,7 +2771,7 @@ Check if an expression succeeds without binding the result:
 
 ```maxon
 if try mayFail() 'check'
-    print("Success!")
+		print("Success!")
 end 'check'
 ```
 
@@ -2783,7 +2783,7 @@ Unwrap and bind the success value:
 
 ```maxon
 if let value = try mayFail() 'check'
-    print("Got: {value}")
+		print("Got: {value}")
 end 'check'
 ```
 
@@ -2795,9 +2795,9 @@ Handle the error case:
 
 ```maxon
 if try mayFail() 'check'
-    print("Success!")
+		print("Success!")
 end 'check' else 'err'
-    print("Failed!")
+		print("Failed!")
 end 'err'
 ```
 
@@ -2807,9 +2807,9 @@ Capture the error value in the else block:
 
 ```maxon
 if let value = try mayFail() 'check'
-    print("Got: {value}")
+		print("Got: {value}")
 end 'check' else (e) 'err'
-    print("Error occurred")
+		print("Error occurred")
 end 'err'
 ```
 
@@ -2822,23 +2822,23 @@ The standard library provides error types for built-in operations:
 ```maxon
 // Array access errors
 union ArrayError implements Error
-    indexOutOfBounds  // index >= length
-    emptySlot         // slot pointer is null (e.g. after resize() without push())
+		indexOutOfBounds  // index >= length
+		emptySlot         // slot pointer is null (e.g. after resize() without push())
 end 'ArrayError'
 
 // Map key lookup
 union MapError implements Error
-    keyNotFound
+		keyNotFound
 end 'MapError'
 
 // Iterator exhaustion
 union IterationError implements Error
-    exhausted
+		exhausted
 end 'IterationError'
 
 // File metadata errors
 union FileInfoError implements Error
-    notFound              // file does not exist
+		notFound              // file does not exist
 end 'FileInfoError'
 ```
 
@@ -2874,34 +2874,34 @@ function readFile(path String) returns String throws FileError
 
 ```maxon
 union ParseError implements Error
-    invalidSyntax
-    unexpectedEnd
+		invalidSyntax
+		unexpectedEnd
 end 'ParseError'
 
 function parseNumber(s String) returns int throws ParseError
-    if s.isEmpty() 'empty'
-        throw ParseError.unexpectedEnd
-    end 'empty'
-    // parsing logic...
-    return result
+		if s.isEmpty() 'empty'
+				throw ParseError.unexpectedEnd
+		end 'empty'
+		// parsing logic...
+		return result
 end 'parseNumber'
 
 function main() returns ExitCode
-    // Use default value on error
-    let num1 = try parseNumber("42") otherwise 0
-    
-    // Handle error in block
-    var num2 = 0
-    try parseNumber("invalid") otherwise 'err'
-        num2 = -1
-    end 'err'
-    
-    // Handle with error binding
-    try parseNumber("") otherwise (e) 'handler'
-        print("Parse error occurred")
-    end 'handler'
-    
-    return num1
+		// Use default value on error
+		let num1 = try parseNumber("42") otherwise 0
+		
+		// Handle error in block
+		var num2 = 0
+		try parseNumber("invalid") otherwise 'err'
+				num2 = -1
+		end 'err'
+		
+		// Handle with error binding
+		try parseNumber("") otherwise (e) 'handler'
+				print("Parse error occurred")
+		end 'handler'
+		
+		return num1
 end 'main'
 ```
 
@@ -2926,11 +2926,11 @@ Functions, types, unions, enums, typealiases, and top-level variables are file-s
 typealias Score = int(i64.min to i64.max)
 
 export function publicAdd(a Score, b Score) returns Score
-    return a + b
+		return a + b
 end 'publicAdd'
 
 function privateHelper(x Score) returns Score
-    return x * 2
+		return x * 2
 end 'privateHelper'
 ```
 
@@ -2942,14 +2942,14 @@ Only `publicAdd` can be called from other files.
 typealias Coord = int(i64.min to i64.max)
 
 export type Point
-  export var x Coord
-  export var y Coord
+	export var x Coord
+	export var y Coord
 end 'Point'
 
 export union Color
-  red
-  green
-  blue
+	red
+	green
+	blue
 end 'Color'
 ```
 
@@ -2980,15 +2980,15 @@ Individual methods can be exported independently of the type itself:
 typealias Amount = int(i64.min to i64.max)
 
 export type Calculator
-  var result Amount
+	var result Amount
 
-  export function add(n Amount)
-    result = result + n
-  end 'add'
+	export function add(n Amount)
+		result = result + n
+	end 'add'
 
-  function internalReset()
-    result = 0
-  end 'internalReset'
+	function internalReset()
+		result = 0
+	end 'internalReset'
 end 'Calculator'
 ```
 
@@ -3225,12 +3225,12 @@ typealias Timestamp = int(0 to u64.max)    // Unix epoch seconds
 **FileInfo Type:**
 ```maxon
 type FileInfo
-  export let size FileSize
-  export let modifiedTime Timestamp
-  export let createdTime Timestamp
-  export let accessedTime Timestamp
-  export let isDirectory bool
-  export let isReadOnly bool
+	export let size FileSize
+	export let modifiedTime Timestamp
+	export let createdTime Timestamp
+	export let accessedTime Timestamp
+	export let isDirectory bool
+	export let isReadOnly bool
 end 'FileInfo'
 ```
 
@@ -3257,7 +3257,7 @@ end 'FileInfo'
 **Parsing:**
 ```maxon
 var url = try URL.parse("https://example.com:8080/path?q=1#top") otherwise 'err'
-  // handle error
+	// handle error
 end 'err'
 ```
 
@@ -3396,7 +3396,7 @@ The compiler also automatically optimizes the pattern `s = "{s}..."` into an in-
 ```maxon
 var s = ""
 while condition 'loop'
-  s = "{s}{value},"     // automatically optimized to in-place append
+	s = "{s}{value},"     // automatically optimized to in-place append
 end 'loop'
 ```
 
@@ -3453,7 +3453,7 @@ list.isEmpty()                   // true if empty
 `List` implements `Iterable with Element`, so it supports `for`-`in` loops:
 ```maxon
 for item in list 'loop'
-    print("{item}")
+		print("{item}")
 end 'loop'
 ```
 
@@ -3485,11 +3485,11 @@ typealias NetworkPort = int(1 to 65535)
 All networking operations throw `NetworkError`, a union conforming to `Error`:
 ```maxon
 union NetworkError implements Error
-    resolveFailed       // DNS lookup failed
-    connectFailed       // TCP connection refused or timed out
-    sendFailed          // OS-level send error
-    recvFailed          // OS-level recv error
-    connectionClosed    // peer closed the connection
+		resolveFailed       // DNS lookup failed
+		connectFailed       // TCP connection refused or timed out
+		sendFailed          // OS-level send error
+		recvFailed          // OS-level recv error
+		connectionClosed    // peer closed the connection
 end 'NetworkError'
 ```
 
@@ -3533,21 +3533,21 @@ client.close()
 **Example: Simple TCP Client**
 ```maxon
 function main() returns ExitCode
-    let client = try TcpClient.connect("localhost", port: 8080) otherwise 'err'
-        print("connection failed")
-        return 1
-    end 'err'
-    let _ = try client.send("GET / HTTP/1.0\r\n\r\n") otherwise 'err'
-        print("send failed")
-        return 1
-    end 'err'
-    let response = try client.recv(4096) otherwise 'err'
-        print("recv failed")
-        return 1
-    end 'err'
-    print(response)
-    client.close()
-    return 0
+		let client = try TcpClient.connect("localhost", port: 8080) otherwise 'err'
+				print("connection failed")
+				return 1
+		end 'err'
+		let _ = try client.send("GET / HTTP/1.0\r\n\r\n") otherwise 'err'
+				print("send failed")
+				return 1
+		end 'err'
+		let response = try client.recv(4096) otherwise 'err'
+				print("recv failed")
+				return 1
+		end 'err'
+		print(response)
+		client.close()
+		return 0
 end 'main'
 ```
 
@@ -3631,7 +3631,7 @@ For most projects, a single line suffices:
 
 ```maxon
 function main()
-    build("myapp")  // Executable name is required
+		build("myapp")  // Executable name is required
 end 'main'
 ```
 
@@ -3646,14 +3646,14 @@ For more control, use `BuildConfig`:
 
 ```maxon
 function main()
-    var config = BuildConfig{
-        name: "myapp",
-        output: "dist/myapp.exe",
-        sources: ["main.maxon", "lib.maxon"],
-        optimize: true,
-        debug_info: false
-    }
-    buildWithConfig(config)
+		var config = BuildConfig{
+				name: "myapp",
+				output: "dist/myapp.exe",
+				sources: ["main.maxon", "lib.maxon"],
+				optimize: true,
+				debug_info: false
+		}
+		buildWithConfig(config)
 end 'main'
 ```
 
@@ -3663,11 +3663,11 @@ end 'main'
 type StringArray is Array with String
 
 type BuildConfig
-    var name String           // Executable name
-    var output String         // Output path (e.g., "bin/app.exe")
-    var sources StringArray   // Source files (empty = auto-discover)
-    var optimize bool         // Enable optimizations
-    var debug_info bool       // Include debug symbols
+		var name String           // Executable name
+		var output String         // Output path (e.g., "bin/app.exe")
+		var sources StringArray   // Source files (empty = auto-discover)
+		var optimize bool         // Enable optimizations
+		var debug_info bool       // Include debug symbols
 end 'BuildConfig'
 ```
 
@@ -3731,8 +3731,8 @@ Assigning a struct-typed variable to another variable copies the **heap pointer*
 
 ```maxon
 type Point
-  export var x int
-  export var y int
+	export var x int
+	export var y int
 end 'Point'
 
 var a = Point{x: 1, y: 2}
@@ -3789,7 +3789,7 @@ The `Cloneable` interface is defined in the standard library:
 
 ```maxon
 interface Cloneable
-  function clone() returns Self
+	function clone() returns Self
 end 'Cloneable'
 ```
 
@@ -3808,15 +3808,15 @@ The compiler also auto-generates `Equatable` conformance for structs whose field
 
 ```maxon
 type Point
-  export var x int
-  export var y int
+	export var x int
+	export var y int
 end 'Point'
 
 // Point auto-conforms to Equatable (all fields are primitive)
 var a = Point{x: 1, y: 2}
 var b = Point{x: 1, y: 2}
 if a == b 'equal'           // true -- content equality
-  print("equal")
+	print("equal")
 end 'equal'
 ```
 
@@ -3838,9 +3838,9 @@ When a struct variable goes out of scope, the compiler automatically releases it
 
 ```maxon
 function compute() returns int
-  var a = Point{x: 10, y: 20}  // allocated on heap, refcount = 1
-  var b = Point{x: 30, y: 40}  // allocated on heap, refcount = 1
-  return a.x + b.y              // a and b released here (refcount -> 0 -> freed)
+	var a = Point{x: 10, y: 20}  // allocated on heap, refcount = 1
+	var b = Point{x: 30, y: 40}  // allocated on heap, refcount = 1
+	return a.x + b.y              // a and b released here (refcount -> 0 -> freed)
 end 'compute'
 ```
 
@@ -3848,8 +3848,8 @@ end 'compute'
 
 ```maxon
 function makePoint() returns Point
-  var p = Point{x: 1, y: 2}
-  return p                      // p is NOT freed; caller is responsible
+	var p = Point{x: 1, y: 2}
+	return p                      // p is NOT freed; caller is responsible
 end 'makePoint'
 ```
 
@@ -3859,11 +3859,11 @@ end 'makePoint'
 typealias TokenList = List with Token
 
 function example() returns int
-  var list = TokenList{}
-  list.append(Token{id: 1})   // Token incref'd by the managed list node
-  list.append(Token{id: 2})   // Token incref'd by the managed list node
-  return 0                     // list freed: each Token decref'd (rc→0→freed),
-                               // then managed list nodes freed, then managed list freed
+	var list = TokenList{}
+	list.append(Token{id: 1})   // Token incref'd by the managed list node
+	list.append(Token{id: 2})   // Token incref'd by the managed list node
+	return 0                     // list freed: each Token decref'd (rc→0→freed),
+															 // then managed list nodes freed, then managed list freed
 end 'example'
 ```
 
@@ -3901,7 +3901,7 @@ The borrow checker also detects indirect mutation through helper functions:
 
 ```maxon
 function clearList(list StringList)
-  list.clear()
+	list.clear()
 end 'clearList'
 
 var val = try list.first() otherwise "none"
@@ -3945,8 +3945,8 @@ clearList(list)       // ERROR E3070: cannot mutate 'list' via 'clearList' while
 ### Main Function Template
 ```maxon
 function main() returns ExitCode
-    // program logic
-    return 0
+		// program logic
+		return 0
 end 'main'
 ```
 
@@ -3954,11 +3954,11 @@ end 'main'
 ```maxon
 var i = 0
 while true 'forever'
-    if i >= 10 'done'
-        break
-    end 'done'
-    print("{i}")
-    i = i + 1
+		if i >= 10 'done'
+				break
+		end 'done'
+		print("{i}")
+		i = i + 1
 end 'forever'
 ```
 
@@ -3966,8 +3966,8 @@ end 'forever'
 ```maxon
 var numbers = [1, 2, 3, 4, 5]
 for i in numbers 'iter'
-    var num = try numbers.get(i) otherwise 0
-    print("{num}")
+		var num = try numbers.get(i) otherwise 0
+		print("{num}")
 end 'iter'
 ```
 
@@ -3975,16 +3975,16 @@ end 'iter'
 ### Factorial Example
 ```maxon
 function factorial(n int) returns int
-    if n <= 1 'base'
-        return 1
-    end 'base'
-    return n * factorial(n: n - 1)
+		if n <= 1 'base'
+				return 1
+		end 'base'
+		return n * factorial(n: n - 1)
 end 'factorial'
 
 function main() returns ExitCode
-    var result = factorial(n: 5)
-    print("{result}")  // 120
-    return 0
+		var result = factorial(n: 5)
+		print("{result}")  // 120
+		return 0
 end 'main'
 ```
 
@@ -4029,8 +4029,8 @@ var x = 5 + "string"    // ERROR: Type mismatch
 **Missing Return**
 ```maxon
 function test() returns int
-    var x = 5
-    // ERROR: Missing return statement
+		var x = 5
+		// ERROR: Missing return statement
 end 'test'
 ```
 
@@ -4066,7 +4066,7 @@ functon test()          // ERROR: Unknown keyword 'functon'
 **Mismatched Block Identifiers**
 ```maxon
 if x > 0 'check'
-    print("{x}")
+		print("{x}")
 end 'wrong'             // ERROR: Expected 'check', got 'wrong'
 ```
 
@@ -4088,86 +4088,86 @@ end 'wrong'             // ERROR: Expected 'check', got 'wrong'
 
 3. **Use clear initializers**: Type is always inferred from the value
    ```maxon
-   var count = 0    // Type inferred as int
+	 var count = 0    // Type inferred as int
    ```
 
 4. **Return from all code paths**:
    ```maxon
-   function test(x int) returns int
-       if x > 0 'pos'
-           return 1
-       end 'pos'
-       return -1        // Don't forget this
-   end 'test'
+	 function test(x int) returns int
+			 if x > 0 'pos'
+					 return 1
+			 end 'pos'
+			 return -1        // Don't forget this
+	 end 'test'
    ```
 
 5. **Remember int/float distinction**:
    ```maxon
-   var x = 5           // int
-   var y = 5.0         // float (note decimal point)
+	 var x = 5           // int
+	 var y = 5.0         // float (note decimal point)
    ```
 
 7. **Prefer `let` for immutability**:
    ```maxon
-   let pi = 3.14159    // Prevents accidental modification
+	 let pi = 3.14159    // Prevents accidental modification
    ```
 
 8. **Export only necessary functions**:
    ```maxon
-   export returns int    // Public API
-   returns int      // Private helper
+	 export returns int    // Public API
+	 returns int      // Private helper
    ```
 
 9. **Handle array access errors**:
    ```maxon
-   // Use otherwise for safe access with default
-   var val = try arr.get(index) otherwise 0
+	 // Use otherwise for safe access with default
+	 var val = try arr.get(index) otherwise 0
 
-   // Or check bounds first
-   if index < arr.count() 'safe'
-       var val = try arr.get(index) otherwise 0
-   end 'safe'
+	 // Or check bounds first
+	 if index < arr.count() 'safe'
+			 var val = try arr.get(index) otherwise 0
+	 end 'safe'
    ```
 
 10. **Use meaningful block identifiers**:
     ```maxon
-    while not done 'process'     // 'process' describes the loop
-        // ...
-    end 'process'
+		while not done 'process'     // 'process' describes the loop
+				// ...
+		end 'process'
     ```
 
 11. **First argument positional, rest named**:
     ```maxon
-    greet("Alice")                        // Single param is positional
-    connect("localhost", port: 8080)      // First positional, rest named
-    move(start, end: end)                 // First positional, rest named
+		greet("Alice")                        // Single param is positional
+		connect("localhost", port: 8080)      // First positional, rest named
+		move(start, end: end)                 // First positional, rest named
     ```
 
 12. **Parameters with defaults can be omitted**:
     ```maxon
-    function greet(name String, title String = "Mr.")
-    greet("Smith")                // Uses default
-    greet("Smith", title: "Dr.")  // Override default
+		function greet(name String, title String = "Mr.")
+		greet("Smith")                // Uses default
+		greet("Smith", title: "Dr.")  // Override default
     ```
 
 13. **Use `try otherwise` for error handling**:
     ```maxon
-    let value = try mayFail() otherwise 42  // Default value on error
-    try cleanup() otherwise ignore          // Ignore errors in cleanup
+		let value = try mayFail() otherwise 42  // Default value on error
+		try cleanup() otherwise ignore          // Ignore errors in cleanup
 
-    // Use block handler for complex error handling
-    try loadData() otherwise 'err'
-        logError("Failed to load data")
-        useDefaults()
-    end 'err'
+		// Use block handler for complex error handling
+		try loadData() otherwise 'err'
+				logError("Failed to load data")
+				useDefaults()
+		end 'err'
     ```
 
 14. **Propagate errors with `try` in throwing functions**:
     ```maxon
-    function process() returns Result throws ProcessError
-        let data = try loadData()  // Propagates error to caller
-        return transform(data)
-    end 'process'
+		function process() returns Result throws ProcessError
+				let data = try loadData()  // Propagates error to caller
+				return transform(data)
+		end 'process'
     ```
 
 ---

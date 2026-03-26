@@ -56,44 +56,44 @@ end 'Container'
 typealias Integer = int(i64.min to i64.max)
 
 interface HasItems uses Element
-  function next() returns Element throws IterationError
+	function next() returns Element throws IterationError
 end 'HasItems'
 
 extension HasItems where Element is Equatable
-  function has(target Element) returns bool
-    for item in self 'loop'
-      if item == target 'found'
-        return true
-      end 'found'
-    end 'loop'
-    return false
-  end 'has'
+	function has(target Element) returns bool
+		for item in self 'loop'
+			if item == target 'found'
+				return true
+			end 'found'
+		end 'loop'
+		return false
+	end 'has'
 end 'HasItems'
 
 typealias IntegerArray = Array with Integer
 
 type IntList implements HasItems with Integer
-  var data IntegerArray
-  var idx Integer
+	var data IntegerArray
+	var idx Integer
 
-  function next() returns Integer throws IterationError
-    if idx >= data.count() 'done'
-      throw IterationError.exhausted
-    end 'done'
-    var v = try data.get(idx) otherwise 'bail'
-      throw IterationError.exhausted
-    end 'bail'
-    idx = idx + 1
-    return v
-  end 'next'
+	function next() returns Integer throws IterationError
+		if idx >= data.count() 'done'
+			throw IterationError.exhausted
+		end 'done'
+		var v = try data.get(idx) otherwise 'bail'
+			throw IterationError.exhausted
+		end 'bail'
+		idx = idx + 1
+		return v
+	end 'next'
 end 'IntList'
 
 function main() returns ExitCode
-  var list = IntList{data: [10, 20, 30], idx: 0}
-  if list.has(20) 'yes'
-    return 1
-  end 'yes'
-  return 0
+	var list = IntList{data: [10, 20, 30], idx: 0}
+	if list.has(20) 'yes'
+		return 1
+	end 'yes'
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -110,36 +110,36 @@ When the associated type does not satisfy the where constraint, calling the meth
 typealias Integer = int(i64.min to i64.max)
 
 interface Holder uses Item
-  function get() returns Item
+	function get() returns Item
 end 'Holder'
 
 extension Holder where Item is Comparable
-  function isGreater(other Item) returns bool
-    return self.get().compare(other) == Ordering.greaterThan
-  end 'isGreater'
+	function isGreater(other Item) returns bool
+		return self.get().compare(other) == Ordering.greaterThan
+	end 'isGreater'
 end 'Holder'
 
 type NotComparable
-  var x Integer
+	var x Integer
 end 'NotComparable'
 
 type MyHolder implements Holder with NotComparable
-  var item NotComparable
+	var item NotComparable
 
-  function get() returns NotComparable
-    return item
-  end 'get'
+	function get() returns NotComparable
+		return item
+	end 'get'
 end 'MyHolder'
 
 function main() returns ExitCode
-  var h = MyHolder{item: NotComparable{x: 5}}
-  // isGreater should not exist on MyHolder since NotComparable doesn't implement Comparable
-  var r = h.isGreater(NotComparable{x: 3})
-  return 0
+	var h = MyHolder{item: NotComparable{x: 5}}
+	// isGreater should not exist on MyHolder since NotComparable doesn't implement Comparable
+	var r = h.isGreater(NotComparable{x: 3})
+	return 0
 end 'main'
 ```
 ```maxoncstderr
-error E4006: specs/fragments/conditional-extensions/conditional-extensions.constraint-not-met.test:30:13: Type 'MyHolder' has no field named 'isGreater' ('isGreater' is available as a conditional extension where Item is Comparable, but 'NotComparable' does not implement 'Comparable')
+error E4006: specs/fragments/conditional-extensions/conditional-extensions.constraint-not-met.test:30:12: Type 'MyHolder' has no field named 'isGreater' ('isGreater' is available as a conditional extension where Item is Comparable, but 'NotComparable' does not implement 'Comparable')
 ```
 
 ### Conditional extension on a type (not an interface)
@@ -149,24 +149,24 @@ Extensions can target types directly, not just interfaces. This is useful when t
 <!-- test: conditional-extensions.type-extension -->
 ```maxon
 type Box uses Item
-  export var item Item
+	export var item Item
 end 'Box'
 
 extension Box where Item is Equatable
-  function matches(other Item) returns bool
-    return item == other
-  end 'matches'
+	function matches(other Item) returns bool
+		return item == other
+	end 'matches'
 end 'Box'
 
 typealias Int = int(i64.min to i64.max)
 typealias IntBox = Box with Int
 
 function main() returns ExitCode
-  var b = IntBox{item: 42}
-  if b.matches(42) 'yes'
-    return 1
-  end 'yes'
-  return 0
+	var b = IntBox{item: 42}
+	if b.matches(42) 'yes'
+		return 1
+	end 'yes'
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -180,11 +180,11 @@ The real motivation: Array.contains requiring Element is Equatable.
 <!-- test: conditional-extensions.array-contains -->
 ```maxon
 function main() returns ExitCode
-  var nums = [10, 20, 30, 40]
-  if nums.contains([20]) 'found'
-    return 1
-  end 'found'
-  return 0
+	var nums = [10, 20, 30, 40]
+	if nums.contains([20]) 'found'
+		return 1
+	end 'found'
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -199,56 +199,56 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 interface Bucket uses Element
-  function next() returns Element throws IterationError
+	function next() returns Element throws IterationError
 end 'Bucket'
 
 extension Bucket where Element is Equatable and Hashable
-  function lookup(target Element) returns bool
-    for item in self 'loop'
-      if item == target 'found'
-        return true
-      end 'found'
-    end 'loop'
-    return false
-  end 'lookup'
+	function lookup(target Element) returns bool
+		for item in self 'loop'
+			if item == target 'found'
+				return true
+			end 'found'
+		end 'loop'
+		return false
+	end 'lookup'
 end 'Bucket'
 
 type HashItem implements Equatable, Hashable
-  export var v Integer
+	export var v Integer
 
-  function equals(other HashItem) returns bool
-    return v == other.v
-  end 'equals'
+	function equals(other HashItem) returns bool
+		return v == other.v
+	end 'equals'
 
-  function hash() returns HashValue
-    return v
-  end 'hash'
+	function hash() returns HashValue
+		return v
+	end 'hash'
 end 'HashItem'
 
 typealias HashItemArray = Array with HashItem
 
 type HashBucket implements Bucket with HashItem
-  var items HashItemArray
-  var idx Integer
+	var items HashItemArray
+	var idx Integer
 
-  function next() returns HashItem throws IterationError
-    if idx >= items.count() 'done'
-      throw IterationError.exhausted
-    end 'done'
-    var v = try items.get(idx) otherwise 'bail'
-      throw IterationError.exhausted
-    end 'bail'
-    idx = idx + 1
-    return v
-  end 'next'
+	function next() returns HashItem throws IterationError
+		if idx >= items.count() 'done'
+			throw IterationError.exhausted
+		end 'done'
+		var v = try items.get(idx) otherwise 'bail'
+			throw IterationError.exhausted
+		end 'bail'
+		idx = idx + 1
+		return v
+	end 'next'
 end 'HashBucket'
 
 function main() returns ExitCode
-  var b = HashBucket{items: [HashItem{v: 1}, HashItem{v: 2}, HashItem{v: 3}], idx: 0}
-  if b.lookup(HashItem{v: 2}) 'found'
-    return 1
-  end 'found'
-  return 0
+	var b = HashBucket{items: [HashItem{v: 1}, HashItem{v: 2}, HashItem{v: 3}], idx: 0}
+	if b.lookup(HashItem{v: 2}) 'found'
+		return 1
+	end 'found'
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -263,55 +263,55 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 interface Seq uses Element
-  function next() returns Element throws IterationError
+	function next() returns Element throws IterationError
 end 'Seq'
 
 extension Seq
-  function countItems() returns Integer
-    var n = 0
-    for _ in self 'loop'
-      n = n + 1
-    end 'loop'
-    return n
-  end 'countItems'
+	function countItems() returns Integer
+		var n = 0
+		for _ in self 'loop'
+			n = n + 1
+		end 'loop'
+		return n
+	end 'countItems'
 end 'Seq'
 
 extension Seq where Element is Equatable
-  function includes(target Element) returns bool
-    for item in self 'loop'
-      if item == target 'yes'
-        return true
-      end 'yes'
-    end 'loop'
-    return false
-  end 'includes'
+	function includes(target Element) returns bool
+		for item in self 'loop'
+			if item == target 'yes'
+				return true
+			end 'yes'
+		end 'loop'
+		return false
+	end 'includes'
 end 'Seq'
 
 type NotEq
-  export var n Integer
+	export var n Integer
 end 'NotEq'
 
 typealias NotEqArray = Array with NotEq
 
 type NotEqSeq implements Seq with NotEq
-  var items NotEqArray
-  var idx Integer
+	var items NotEqArray
+	var idx Integer
 
-  function next() returns NotEq throws IterationError
-    if idx >= items.count() 'done'
-      throw IterationError.exhausted
-    end 'done'
-    var v = try items.get(idx) otherwise 'bail'
-      throw IterationError.exhausted
-    end 'bail'
-    idx = idx + 1
-    return v
-  end 'next'
+	function next() returns NotEq throws IterationError
+		if idx >= items.count() 'done'
+			throw IterationError.exhausted
+		end 'done'
+		var v = try items.get(idx) otherwise 'bail'
+			throw IterationError.exhausted
+		end 'bail'
+		idx = idx + 1
+		return v
+	end 'next'
 end 'NotEqSeq'
 
 function main() returns ExitCode
-  var s = NotEqSeq{items: [NotEq{n: 1}, NotEq{n: 2}], idx: 0}
-  return s.countItems()
+	var s = NotEqSeq{items: [NotEq{n: 1}, NotEq{n: 2}], idx: 0}
+	return s.countItems()
 end 'main'
 ```
 ```exitcode

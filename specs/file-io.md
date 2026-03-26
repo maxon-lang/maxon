@@ -17,15 +17,15 @@ File operations use function-specific error types:
 
 ```maxon
 union FileReadError implements Error
-  notFound
+	notFound
 end 'FileReadError'
 
 union FileWriteError implements Error
-  failed
+	failed
 end 'FileWriteError'
 
 union FileDeleteError implements Error
-  notFound
+	notFound
 end 'FileDeleteError'
 ```
 
@@ -46,12 +46,12 @@ Read the entire contents of a text file as a UTF-8 encoded string.
 
 ```maxon
 function main() returns ExitCode
-  let content = try File.readText(FilePath from "example.txt") otherwise 'err'
-    print("Could not read file\n")
-    return 0
-  end 'err'
-  print("File content: {content}\n")
-  return 1
+	let content = try File.readText(FilePath from "example.txt") otherwise 'err'
+		print("Could not read file\n")
+		return 0
+	end 'err'
+	print("File content: {content}\n")
+	return 1
 end 'main'
 ```
 ```exitcode
@@ -92,12 +92,12 @@ where `type ByteArray implements Array with Byte`
 
 ```maxon
 function main() returns ExitCode
-  let bytes = try File.readBinary(FilePath from "data.bin") otherwise 'err'
-    print("Could not read file\n")
-    return 0
-  end 'err'
-  print("Read {bytes.count()} bytes\n")
-  return 1
+	let bytes = try File.readBinary(FilePath from "data.bin") otherwise 'err'
+		print("Could not read file\n")
+		return 0
+	end 'err'
+	print("Read {bytes.count()} bytes\n")
+	return 1
 end 'main'
 ```
 
@@ -130,12 +130,12 @@ Check if a file exists at the given path.
 
 ```maxon
 function main() returns ExitCode
-  if File.exists(FilePath from "temp/output.txt") 'check'
-    print("File exists")
-  end 'check' else 'nofile'
-    print("File does not exist")
-  end 'nofile'
-  return 0
+	if File.exists(FilePath from "temp/output.txt") 'check'
+		print("File exists")
+	end 'check' else 'nofile'
+		print("File does not exist")
+	end 'nofile'
+	return 0
 end 'main'
 ```
 
@@ -154,12 +154,12 @@ Delete a file at the given path.
 
 ```maxon
 function main() returns ExitCode
-  try File.delete(FilePath from "temp/old_file.txt") otherwise 'err'
-    print("Could not delete file")
-    return 1
-  end 'err'
-  print("File deleted")
-  return 0
+	try File.delete(FilePath from "temp/old_file.txt") otherwise 'err'
+		print("Could not delete file")
+		return 1
+	end 'err'
+	print("File deleted")
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -174,13 +174,13 @@ Could not delete file
 <!-- test: read-text-file -->
 ```maxon
 function main() returns ExitCode
-  // Try to read a nonexistent file - this tests the error path
-  let content = try File.readText(FilePath from "nonexistent_file_xyz.txt") otherwise 'err'
-    print("File not found")
-    return 42
-  end 'err'
-  print("Content:{content}\n")
-  return 0
+	// Try to read a nonexistent file - this tests the error path
+	let content = try File.readText(FilePath from "nonexistent_file_xyz.txt") otherwise 'err'
+		print("File not found")
+		return 42
+	end 'err'
+	print("Content:{content}\n")
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -193,12 +193,12 @@ File not found
 <!-- test: read-nonexistent-file -->
 ```maxon
 function main() returns ExitCode
-  let content = try File.readText(FilePath from "nonexistent.txt") otherwise 'err'
-    print("File not found")
-    return 0
-  end 'err'
-  print("Unexpected: {content}\n")
-  return 1
+	let content = try File.readText(FilePath from "nonexistent.txt") otherwise 'err'
+		print("File not found")
+		return 0
+	end 'err'
+	print("Unexpected: {content}\n")
+	return 1
 end 'main'
 ```
 ```exitcode
@@ -211,11 +211,11 @@ File not found
 <!-- test: file-exists -->
 ```maxon
 function main() returns ExitCode
-  // Test File.exists on a nonexistent file (returns false)
-  if File.exists(FilePath from "nonexistent_xyz_12345.txt") 'check'
-    return 1
-  end 'check'
-  return 42
+	// Test File.exists on a nonexistent file (returns false)
+	if File.exists(FilePath from "nonexistent_xyz_12345.txt") 'check'
+		return 1
+	end 'check'
+	return 42
 end 'main'
 ```
 ```exitcode
@@ -225,12 +225,12 @@ end 'main'
 <!-- test: read-binary-nonexistent -->
 ```maxon
 function main() returns ExitCode
-  var bytes = try File.readBinary(FilePath from "nonexistent_binary_file.bin") otherwise 'err'
-    print("File not found")
-    return 42
-  end 'err'
-  print("Unexpected read: {bytes.count()} bytes")
-  return 1
+	var bytes = try File.readBinary(FilePath from "nonexistent_binary_file.bin") otherwise 'err'
+		print("File not found")
+		return 42
+	end 'err'
+	print("Unexpected read: {bytes.count()} bytes")
+	return 1
 end 'main'
 ```
 ```exitcode
@@ -243,31 +243,31 @@ File not found
 <!-- test: write-and-read-text -->
 ```maxon
 function main() returns ExitCode
-  let path = FilePath from "test_readtext.txt"
-  // Write a text file
-  try File.writeText(path, content: "Hello World") otherwise 'write_err'
-    print("Write failed")
-    return 1
-  end 'write_err'
+	let path = FilePath from "test_readtext.txt"
+	// Write a text file
+	try File.writeText(path, content: "Hello World") otherwise 'write_err'
+		print("Write failed")
+		return 1
+	end 'write_err'
 
-  // Read it back with readText
-  var content = try File.readText(path) otherwise 'read_err'
-    print("Read failed")
-    return 2
-  end 'read_err'
+	// Read it back with readText
+	var content = try File.readText(path) otherwise 'read_err'
+		print("Read failed")
+		return 2
+	end 'read_err'
 
-  // Clean up
-  try File.delete(path) otherwise 'del_err'
-    print("Delete failed")
-  end 'del_err'
+	// Clean up
+	try File.delete(path) otherwise 'del_err'
+		print("Delete failed")
+	end 'del_err'
 
-  // Verify content
-  print("{content}")
-  if content.count() != 11 'len_check'
-    print("\nWrong length: {content.count()}")
-    return 3
-  end 'len_check'
-  return 42
+	// Verify content
+	print("{content}")
+	if content.count() != 11 'len_check'
+		print("\nWrong length: {content.count()}")
+		return 3
+	end 'len_check'
+	return 42
 end 'main'
 ```
 ```exitcode
@@ -281,48 +281,48 @@ Hello World
 ```maxon
 
 function main() returns ExitCode
-  let path = FilePath from "test_binary.bin"
-  // Create a byte array with known values
-  var data = ByteArray{}
-  data.push(65 as Byte)
-  data.push(66 as Byte)
-  data.push(67 as Byte)
+	let path = FilePath from "test_binary.bin"
+	// Create a byte array with known values
+	var data = ByteArray{}
+	data.push(65 as Byte)
+	data.push(66 as Byte)
+	data.push(67 as Byte)
 
-  // Write binary file
-  try File.writeBinary(path, content: data) otherwise 'write_err'
-    print("Write failed")
-    return 1
-  end 'write_err'
+	// Write binary file
+	try File.writeBinary(path, content: data) otherwise 'write_err'
+		print("Write failed")
+		return 1
+	end 'write_err'
 
-  // Read it back
-  var readData = try File.readBinary(path) otherwise 'read_err'
-    print("Read failed")
-    return 2
-  end 'read_err'
+	// Read it back
+	var readData = try File.readBinary(path) otherwise 'read_err'
+		print("Read failed")
+		return 2
+	end 'read_err'
 
-  // Clean up the temp file
-  try File.delete(path) otherwise 'del_err'
-    print("Delete failed")
-  end 'del_err'
+	// Clean up the temp file
+	try File.delete(path) otherwise 'del_err'
+		print("Delete failed")
+	end 'del_err'
 
-  // Verify count
-  if readData.count() != 3 'count_check'
-    print("Wrong count: {readData.count()}")
-    return 3
-  end 'count_check'
+	// Verify count
+	if readData.count() != 3 'count_check'
+		print("Wrong count: {readData.count()}")
+		return 3
+	end 'count_check'
 
-  // Verify first value
-  var b0 = try readData.get(0) otherwise 'e0'
-    return 10
-  end 'e0'
+	// Verify first value
+	var b0 = try readData.get(0) otherwise 'e0'
+		return 10
+	end 'e0'
 
-  if b0 != 65 as Byte 'check0'
-    print("Wrong value")
-    return 20
-  end 'check0'
+	if b0 != 65 as Byte 'check0'
+		print("Wrong value")
+		return 20
+	end 'check0'
 
-  print("Binary read/write OK")
-  return 42
+	print("Binary read/write OK")
+	return 42
 end 'main'
 ```
 ```exitcode

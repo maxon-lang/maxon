@@ -29,11 +29,11 @@ Values in 16-bit storage are zero-extended (unsigned) or sign-extended (signed) 
 typealias U16 = int(0 to 65535)
 
 function main() returns ExitCode
-  var arr = [U16{100}, U16{200}, U16{300}]
-  var a = try arr.get(0) otherwise 0
-  var b = try arr.get(1) otherwise 0
-  var c = try arr.get(2) otherwise 0
-  return a + b + c
+	var arr = [U16{100}, U16{200}, U16{300}]
+	var a = try arr.get(0) otherwise 0
+	var b = try arr.get(1) otherwise 0
+	var c = try arr.get(2) otherwise 0
+	return a + b + c
 end 'main'
 ```
 ```exitcode
@@ -48,11 +48,11 @@ typealias U16 = int(0 to 65535)
 typealias Result = int(0 to u32.max)
 
 function main() returns ExitCode
-  var arr = [U16{65535}, U16{0}, U16{1}]
-  var a = try arr.get(0) otherwise 0
-  var b = try arr.get(2) otherwise 0
-  var sum = a as Result + b as Result
-  return sum
+	var arr = [U16{65535}, U16{0}, U16{1}]
+	var a = try arr.get(0) otherwise 0
+	var b = try arr.get(2) otherwise 0
+	var sum = a as Result + b as Result
+	return sum
 end 'main'
 ```
 ```exitcode
@@ -66,10 +66,10 @@ end 'main'
 typealias I16 = int(-32768 to 32767)
 
 function main() returns ExitCode
-  var arr = [I16{100}, I16{-50}, I16{200}]
-  var a = try arr.get(0) otherwise 0
-  var c = try arr.get(2) otherwise 0
-  return a + c
+	var arr = [I16{100}, I16{-50}, I16{200}]
+	var a = try arr.get(0) otherwise 0
+	var c = try arr.get(2) otherwise 0
+	return a + c
 end 'main'
 ```
 ```exitcode
@@ -83,11 +83,11 @@ end 'main'
 typealias U16 = int(0 to 65535)
 
 function main() returns ExitCode
-  var arr = [U16{10}, U16{20}, U16{30}]
-  var a = try arr.get(0) otherwise 0
-  var b = try arr.get(1) otherwise 0
-  var c = try arr.get(2) otherwise 0
-  return a + b + c
+	var arr = [U16{10}, U16{20}, U16{30}]
+	var a = try arr.get(0) otherwise 0
+	var b = try arr.get(1) otherwise 0
+	var c = try arr.get(2) otherwise 0
+	return a + b + c
 end 'main'
 ```
 ```exitcode
@@ -104,9 +104,9 @@ u16 10 20 30
 typealias U16 = int(0 to 65535)
 
 function main() returns ExitCode
-  var a = U16{1000}
-  var b = U16{500}
-  return a - b
+	var a = U16{1000}
+	var b = U16{500}
+	return a - b
 end 'main'
 ```
 ```exitcode
@@ -122,7 +122,7 @@ typealias U16 = int(0 to 65535)
 var counter = U16{42}
 
 function main() returns ExitCode
-  return counter
+	return counter
 end 'main'
 ```
 ```exitcode
@@ -141,8 +141,8 @@ typealias U16 = int(0 to 65535)
 var counter = U16{0}
 
 function main() returns ExitCode
-  counter = U16{99}
-  return counter
+	counter = U16{99}
+	return counter
 end 'main'
 ```
 ```exitcode
@@ -156,10 +156,10 @@ end 'main'
 typealias U16 = int(0 to 65535)
 
 function main() returns ExitCode
-  var arr = [U16{0}, U16{0}, U16{0}]
-  arr.set(1, value: U16{42})
-  var v = try arr.get(1) otherwise 0
-  return v
+	var arr = [U16{0}, U16{0}, U16{0}]
+	arr.set(1, value: U16{42})
+	var v = try arr.get(1) otherwise 0
+	return v
 end 'main'
 ```
 ```exitcode

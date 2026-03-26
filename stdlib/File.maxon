@@ -3,17 +3,17 @@
 
 /// Error for file read operations
 export union FileReadError implements Error
-  notFound
+	notFound
 end 'FileReadError'
 
 /// Error for file write operations
 export union FileWriteError implements Error
-  failed
+	failed
 end 'FileWriteError'
 
 /// Error for file delete operations
 export union FileDeleteError implements Error
-  notFound
+	notFound
 end 'FileDeleteError'
 
 export typealias FileSize = int(0 to u64.max)
@@ -21,17 +21,17 @@ export typealias Timestamp = int(0 to u64.max)
 
 /// Error for file info operations
 export union FileInfoError implements Error
-  notFound
+	notFound
 end 'FileInfoError'
 
 /// Metadata about a file
 export type FileInfo
-  export let size FileSize
-  export let modifiedTime Timestamp
-  export let createdTime Timestamp
-  export let accessedTime Timestamp
-  export let isDirectory bool
-  export let isReadOnly bool
+	export let size FileSize
+	export let modifiedTime Timestamp
+	export let createdTime Timestamp
+	export let accessedTime Timestamp
+	export let isDirectory bool
+	export let isReadOnly bool
 end 'FileInfo'
 
 export typealias Byte = byte(0 to u8.max)
@@ -39,113 +39,113 @@ export typealias ByteArray = Array with Byte
 
 /// File permission mode for write operations
 export enum FilePermission
-  normal  // 0666 - standard file permissions
-  executable  // 0755 - executable permissions (Unix)
+	normal  // 0666 - standard file permissions
+	executable  // 0755 - executable permissions (Unix)
 end 'FilePermission'
 
 export type File
-  var _file __ManagedFile
+	var _file __ManagedFile
 
-  /// Open file for reading, throwing if not found
-  static function openForRead(path String) returns File throws FileReadError
-    let result = __ManagedFile.openRead(path.managed)
-    if result == -1 'notFound'
-      throw FileReadError.notFound
-    end 'notFound'
-    return File{_file: result}
-  end 'openForRead'
+	/// Open file for reading, throwing if not found
+	static function openForRead(path String) returns File throws FileReadError
+		let result = __ManagedFile.openRead(path.managed)
+		if result == -1 'notFound'
+			throw FileReadError.notFound
+		end 'notFound'
+		return File{_file: result}
+	end 'openForRead'
 
-  /// Read file into a managed memory
-  static function readFileData(path String, extraBytes Count) returns __ManagedMemory throws FileReadError
-    var file = try openForRead(path)
-    let size = file._file.size()
-    var managed = __ManagedMemory.create(size + extraBytes, 1)
-    let bytesRead = file._file.read(managed, size)
-    file._file.close()
-    managed.setLength(bytesRead)
-    return managed
-  end 'readFileData'
+	/// Read file into a managed memory
+	static function readFileData(path String, extraBytes Count) returns __ManagedMemory throws FileReadError
+		var file = try openForRead(path)
+		let size = file._file.size()
+		var managed = __ManagedMemory.create(size + extraBytes, 1)
+		let bytesRead = file._file.read(managed, size)
+		file._file.close()
+		managed.setLength(bytesRead)
+		return managed
+	end 'readFileData'
 
-  /// Read text file content as a UTF-8 string
-  export static function readText(path FilePath) returns String throws FileReadError
-    var managed = try readFileData(path._path, extraBytes: 1)
-    let len = managed.length()
-    // Write null terminator: len is within capacity (extraBytes=1) but at the
-    // length boundary, so temporarily extend length to allow setByte at that index
-    managed.setLength(len + 1)
-    managed.setByte(len, 0)
-    managed.setLength(len)
-    return String{managed: managed, _iterPos: 0}
-  end 'readText'
+	/// Read text file content as a UTF-8 string
+	export static function readText(path FilePath) returns String throws FileReadError
+		var managed = try readFileData(path._path, extraBytes: 1)
+		let len = managed.length()
+		// Write null terminator: len is within capacity (extraBytes=1) but at the
+		// length boundary, so temporarily extend length to allow setByte at that index
+		managed.setLength(len + 1)
+		managed.setByte(len, 0)
+		managed.setLength(len)
+		return String{managed: managed, _iterPos: 0}
+	end 'readText'
 
-  /// Read file content as raw bytes
-  export static function readBinary(path FilePath) returns ByteArray throws FileReadError
-    var managed = try readFileData(path._path, extraBytes: 0)
-    return ByteArray{managed: managed, iterIndex: 0}
-  end 'readBinary'
+	/// Read file content as raw bytes
+	export static function readBinary(path FilePath) returns ByteArray throws FileReadError
+		var managed = try readFileData(path._path, extraBytes: 0)
+		return ByteArray{managed: managed, iterIndex: 0}
+	end 'readBinary'
 
-  /// Open a file for writing with the given permission mode, throwing on failure
-  static function openForWrite(path __ManagedMemory, mode FilePermission) returns File throws FileWriteError
-    let fileHandle = match mode 'perm'
-      executable gives __ManagedFile.openWriteExecutable(path)
-      normal gives __ManagedFile.openWrite(path)
-    end 'perm'
-    if fileHandle == -1 'openFail'
-      throw FileWriteError.failed
-    end 'openFail'
-    return File{_file: fileHandle}
-  end 'openForWrite'
+	/// Open a file for writing with the given permission mode, throwing on failure
+	static function openForWrite(path __ManagedMemory, mode FilePermission) returns File throws FileWriteError
+		let fileHandle = match mode 'perm'
+			executable gives __ManagedFile.openWriteExecutable(path)
+			normal gives __ManagedFile.openWrite(path)
+		end 'perm'
+		if fileHandle == -1 'openFail'
+			throw FileWriteError.failed
+		end 'openFail'
+		return File{_file: fileHandle}
+	end 'openForWrite'
 
-  /// Write string content to a text file
-  export static function writeText(path FilePath, content String, mode FilePermission = FilePermission.normal) throws FileWriteError
-    var file = try openForWrite(path._path.managed, mode: mode)
-    let written = file._file.write(content.managed)
-    file._file.close()
-    if written < 0 'writeFail'
-      throw FileWriteError.failed
-    end 'writeFail'
-  end 'writeText'
+	/// Write string content to a text file
+	export static function writeText(path FilePath, content String, mode FilePermission = FilePermission.normal) throws FileWriteError
+		var file = try openForWrite(path._path.managed, mode: mode)
+		let written = file._file.write(content.managed)
+		file._file.close()
+		if written < 0 'writeFail'
+			throw FileWriteError.failed
+		end 'writeFail'
+	end 'writeText'
 
-  /// Write binary content to a file
-  export static function writeBinary(path FilePath, content ByteArray, mode FilePermission = FilePermission.normal) throws FileWriteError
-    var file = try openForWrite(path._path.managed, mode: mode)
-    let bufferRef = content.managed
-    let written = file._file.write(bufferRef)
-    file._file.close()
-    if written < 0 'writeFail'
-      throw FileWriteError.failed
-    end 'writeFail'
-  end 'writeBinary'
+	/// Write binary content to a file
+	export static function writeBinary(path FilePath, content ByteArray, mode FilePermission = FilePermission.normal) throws FileWriteError
+		var file = try openForWrite(path._path.managed, mode: mode)
+		let bufferRef = content.managed
+		let written = file._file.write(bufferRef)
+		file._file.close()
+		if written < 0 'writeFail'
+			throw FileWriteError.failed
+		end 'writeFail'
+	end 'writeBinary'
 
-  /// Check if a file exists at the given path
-  export static function exists(path FilePath) returns bool
-    let result = __ManagedFile.exists(path._path.managed)
-    return result != 0
-  end 'exists'
+	/// Check if a file exists at the given path
+	export static function exists(path FilePath) returns bool
+		let result = __ManagedFile.exists(path._path.managed)
+		return result != 0
+	end 'exists'
 
-  /// Delete a file at the given path
-  export static function delete(path FilePath) throws FileDeleteError
-    let res = __ManagedFile.delete(path._path.managed)
-    if res != 0 'failed'
-      throw FileDeleteError.notFound
-    end 'failed'
-  end 'delete'
+	/// Delete a file at the given path
+	export static function delete(path FilePath) throws FileDeleteError
+		let res = __ManagedFile.delete(path._path.managed)
+		if res != 0 'failed'
+			throw FileDeleteError.notFound
+		end 'failed'
+	end 'delete'
 
-  /// Get file metadata
-  export static function info(path FilePath) returns FileInfo throws FileInfoError
-    let statResult = __ManagedFile.stat(path._path.managed)
-    if statResult == -1 'notFound'
-      throw FileInfoError.notFound
-    end 'notFound'
-    let fileSize = __ManagedFile.statField(statResult, 0) as FileSize
-    let mtime = __ManagedFile.statField(statResult, 1) as Timestamp
-    let ctime = __ManagedFile.statField(statResult, 2) as Timestamp
-    let atime = __ManagedFile.statField(statResult, 3) as Timestamp
-    let attrs = __ManagedFile.statField(statResult, 4)
-    let isDir = attrs == 1
-    let roAttrs = __ManagedFile.statField(statResult, 5)
-    let isRo = roAttrs == 1
-    __ManagedFile.statFree(statResult)
-    return FileInfo{size: fileSize, modifiedTime: mtime, createdTime: ctime, accessedTime: atime, isDirectory: isDir, isReadOnly: isRo}
-  end 'info'
+	/// Get file metadata
+	export static function info(path FilePath) returns FileInfo throws FileInfoError
+		let statResult = __ManagedFile.stat(path._path.managed)
+		if statResult == -1 'notFound'
+			throw FileInfoError.notFound
+		end 'notFound'
+		let fileSize = __ManagedFile.statField(statResult, 0) as FileSize
+		let mtime = __ManagedFile.statField(statResult, 1) as Timestamp
+		let ctime = __ManagedFile.statField(statResult, 2) as Timestamp
+		let atime = __ManagedFile.statField(statResult, 3) as Timestamp
+		let attrs = __ManagedFile.statField(statResult, 4)
+		let isDir = attrs == 1
+		let roAttrs = __ManagedFile.statField(statResult, 5)
+		let isRo = roAttrs == 1
+		__ManagedFile.statFree(statResult)
+		return FileInfo{size: fileSize, modifiedTime: mtime, createdTime: ctime, accessedTime: atime, isDirectory: isDir, isReadOnly: isRo}
+	end 'info'
 end 'File'

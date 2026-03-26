@@ -15,23 +15,23 @@ Maxon detects self-assignment — assigning a variable to itself — and reports
 
 ```maxon
 function main() returns ExitCode
-  var x = 42
-  x = x  // Error: self-assignment has no effect
-  return 0
+	var x = 42
+	x = x  // Error: self-assignment has no effect
+	return 0
 end 'main'
 ```
 ```maxoncstderr
-error E3067: specs/fragments/self-assignment/docs-example-1.test:4:3: self-assignment has no effect: 'x = x'
+error E3067: specs/fragments/self-assignment/docs-example-1.test:4:2: self-assignment has no effect: 'x = x'
 ```
 
 ```maxon
 function main() returns ExitCode
-  let _ = 0  // Error: expected a function call
-  return 0
+	let _ = 0  // Error: expected a function call
+	return 0
 end 'main'
 ```
 ```maxoncstderr
-error E3067: specs/fragments/self-assignment/docs-example-2.test:3:7: expected a function call
+error E3067: specs/fragments/self-assignment/docs-example-2.test:3:6: expected a function call
 ```
 
 ## Tests
@@ -40,23 +40,23 @@ error E3067: specs/fragments/self-assignment/docs-example-2.test:3:7: expected a
 ```maxon
 
 function main() returns ExitCode
-  var x = 10
-  x = x
-  return 0
+	var x = 10
+	x = x
+	return 0
 end 'main'
 ```
 ```maxoncstderr
-error E3067: specs/fragments/self-assignment/self-assignment.basic.test:5:3: self-assignment has no effect: 'x = x'
+error E3067: specs/fragments/self-assignment/self-assignment.basic.test:5:2: self-assignment has no effect: 'x = x'
 ```
 
 <!-- test: self-assignment.different-var -->
 ```maxon
 
 function main() returns ExitCode
-  var x = 10
-  var y = 20
-  x = y
-  return x
+	var x = 10
+	var y = 20
+	x = y
+	return x
 end 'main'
 ```
 ```exitcode
@@ -67,9 +67,9 @@ end 'main'
 ```maxon
 
 function main() returns ExitCode
-  var x = 10
-  x = x + 1
-  return x
+	var x = 10
+	x = x + 1
+	return x
 end 'main'
 ```
 ```exitcode
@@ -82,28 +82,28 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 type Point
-  export var x Integer
-  export var y Integer
+	export var x Integer
+	export var y Integer
 end 'Point'
 
 function main() returns ExitCode
-  var p = Point{x: 1, y: 2}
-  p.x = p.x
-  return 0
+	var p = Point{x: 1, y: 2}
+	p.x = p.x
+	return 0
 end 'main'
 ```
 ```maxoncstderr
-error E3067: specs/fragments/self-assignment/self-assignment.field-self-assign.test:12:3: self-assignment has no effect: 'p.x = p.x'
+error E3067: specs/fragments/self-assignment/self-assignment.field-self-assign.test:12:2: self-assignment has no effect: 'p.x = p.x'
 ```
 
 <!-- test: self-assignment.discard-literal -->
 ```maxon
 
 function main() returns ExitCode
-  let _ = 42
-  return 0
+	let _ = 42
+	return 0
 end 'main'
 ```
 ```maxoncstderr
-error E3067: specs/fragments/self-assignment/self-assignment.discard-literal.test:4:7: expected a function call
+error E3067: specs/fragments/self-assignment/self-assignment.discard-literal.test:4:6: expected a function call
 ```

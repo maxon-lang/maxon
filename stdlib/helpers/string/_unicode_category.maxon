@@ -51,25 +51,25 @@ let _GC_MASK_LINE_PARA_SEP = 50331648
 let _UCD_SUPP_COUNT = 806
 
 export function unicodeGeneralCategory(cp Codepoint) returns GeneralCategory
-  if cp < 65536 'bmp'
-    return __Builtins.ucdByteAt("__ucd_bmp", cp)
-  end 'bmp'
-  var lo = 0
-  var hi = _UCD_SUPP_COUNT - 1
-  while lo <= hi 'bsearch'
-    var mid = (lo + hi) shr 1
-    var entry = __Builtins.ucdI64At("__ucd_supp", mid)
-    var rangeStart = entry and 2097151
-    var rangeEnd = (entry shr 21) and 2097151
-    if cp < rangeStart 'left'
-      hi = mid - 1
-    end 'left' else 'not_left'
-      if cp > rangeEnd 'right'
-        lo = mid + 1
-      end 'right' else 'found'
-        return(entry shr 42) and 31
-      end 'found'
-    end 'not_left'
-  end 'bsearch'
-  return 0
+	if cp < 65536 'bmp'
+		return __Builtins.ucdByteAt("__ucd_bmp", cp)
+	end 'bmp'
+	var lo = 0
+	var hi = _UCD_SUPP_COUNT - 1
+	while lo <= hi 'bsearch'
+		var mid = (lo + hi) shr 1
+		var entry = __Builtins.ucdI64At("__ucd_supp", mid)
+		var rangeStart = entry and 2097151
+		var rangeEnd = (entry shr 21) and 2097151
+		if cp < rangeStart 'left'
+			hi = mid - 1
+		end 'left' else 'not_left'
+			if cp > rangeEnd 'right'
+				lo = mid + 1
+			end 'right' else 'found'
+				return(entry shr 42) and 31
+			end 'found'
+		end 'not_left'
+	end 'bsearch'
+	return 0
 end 'unicodeGeneralCategory'

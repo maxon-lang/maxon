@@ -19,13 +19,13 @@ The first heap allocation triggers a single `os_alloc size=67108864` (64MB arena
 typealias Integer = int(i64.min to i64.max)
 
 type Point
-  export var x Integer
-  export var y Integer
+	export var x Integer
+	export var y Integer
 end 'Point'
 
 function main() returns ExitCode
-  @heap var p = Point{x: 1, y: 2}
-  return p.x
+	@heap var p = Point{x: 1, y: 2}
+	return p.x
 end 'main'
 ```
 ```exitcode
@@ -53,12 +53,12 @@ A struct with 8 bytes user data: `mm_alloc` requests 40 bytes (8+32), routes to 
 typealias Integer = int(i64.min to i64.max)
 
 type Tiny
-  export var x Integer
+	export var x Integer
 end 'Tiny'
 
 function main() returns ExitCode
-  @heap var t = Tiny{x: 7}
-  return t.x
+	@heap var t = Tiny{x: 7}
+	return t.x
 end 'main'
 ```
 ```exitcode
@@ -86,17 +86,17 @@ Two allocations of the same type produce only one `os_alloc`. The slab allocator
 typealias Integer = int(i64.min to i64.max)
 
 type Box
-  export var value Integer
+	export var value Integer
 end 'Box'
 
 function make_box(v Integer) returns Box
-  return Box{value: v}
+	return Box{value: v}
 end 'make_box'
 
 function main() returns ExitCode
-  var a = make_box(1)
-  var b = make_box(2)
-  return a.value + b.value
+	var a = make_box(1)
+	var b = make_box(2)
+	return a.value + b.value
 end 'main'
 ```
 ```exitcode
@@ -132,21 +132,21 @@ Two types with different sizes land in different size classes. Small (8 bytes us
 typealias Integer = int(i64.min to i64.max)
 
 type Small
-  export var x Integer
+	export var x Integer
 end 'Small'
 
 type Large
-  export var a Integer
-  export var b Integer
-  export var c Integer
-  export var d Integer
-  export var e Integer
+	export var a Integer
+	export var b Integer
+	export var c Integer
+	export var d Integer
+	export var e Integer
 end 'Large'
 
 function main() returns ExitCode
-  @heap var s = Small{x: 1}
-  @heap var l = Large{a: 1, b: 2, c: 3, d: 4, e: 5}
-  return s.x + l.a
+	@heap var s = Small{x: 1}
+	@heap var l = Large{a: 1, b: 2, c: 3, d: 4, e: 5}
+	return s.x + l.a
 end 'main'
 ```
 ```exitcode
@@ -181,9 +181,9 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
 function main() returns ExitCode
-  var arr = IntArray{}
-  arr.reserve(5000)
-  return arr.count()
+	var arr = IntArray{}
+	arr.reserve(5000)
+	return arr.count()
 end 'main'
 ```
 ```exitcode
@@ -223,15 +223,15 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
 function alloc_large() returns IntArray
-  var arr = IntArray{}
-  arr.reserve(4000)
-  return arr
+	var arr = IntArray{}
+	arr.reserve(4000)
+	return arr
 end 'alloc_large'
 
 function main() returns ExitCode
-  var a = alloc_large()
-  var b = alloc_large()
-  return a.count() + b.count()
+	var a = alloc_large()
+	var b = alloc_large()
+	return a.count() + b.count()
 end 'main'
 ```
 ```exitcode
@@ -289,20 +289,20 @@ A struct with exactly 2 `Integer` fields (16 bytes user data) needs `16 + 32 = 4
 typealias Integer = int(i64.min to i64.max)
 
 type TwoField
-  export var a Integer
-  export var b Integer
+	export var a Integer
+	export var b Integer
 end 'TwoField'
 
 type ThreeField
-  export var a Integer
-  export var b Integer
-  export var c Integer
+	export var a Integer
+	export var b Integer
+	export var c Integer
 end 'ThreeField'
 
 function main() returns ExitCode
-  @heap var t = TwoField{a: 1, b: 2}
-  @heap var h = ThreeField{a: 3, b: 4, c: 5}
-  return t.a + h.a
+	@heap var t = TwoField{a: 1, b: 2}
+	@heap var h = ThreeField{a: 3, b: 4, c: 5}
+	return t.a + h.a
 end 'main'
 ```
 ```exitcode
@@ -337,16 +337,16 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
 type Tag
-  export var id Integer
+	export var id Integer
 end 'Tag'
 
 function main() returns ExitCode
-  @heap var tag = Tag{id: 42}
-  var medium = IntArray{}
-  medium.reserve(5000)
-  var huge = IntArray{}
-  huge.reserve(10485760)
-  return tag.id
+	@heap var tag = Tag{id: 42}
+	var medium = IntArray{}
+	medium.reserve(5000)
+	var huge = IntArray{}
+	huge.reserve(10485760)
+	return tag.id
 end 'main'
 ```
 ```exitcode
@@ -412,9 +412,9 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
 function main() returns ExitCode
-  var arr = IntArray{}
-  arr.reserve(10485760)
-  return arr.count()
+	var arr = IntArray{}
+	arr.reserve(10485760)
+	return arr.count()
 end 'main'
 ```
 ```exitcode
@@ -457,15 +457,15 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
 function alloc_medium() returns IntArray
-  var arr = IntArray{}
-  arr.reserve(5000)
-  return arr
+	var arr = IntArray{}
+	arr.reserve(5000)
+	return arr
 end 'alloc_medium'
 
 function main() returns ExitCode
-  var a = alloc_medium()
-  var b = alloc_medium()
-  return a.count() + b.count()
+	var a = alloc_medium()
+	var b = alloc_medium()
+	return a.count() + b.count()
 end 'main'
 ```
 ```exitcode
@@ -524,15 +524,15 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
 function use_medium() returns Integer
-  var arr = IntArray{}
-  arr.reserve(5000)
-  return arr.count()
+	var arr = IntArray{}
+	arr.reserve(5000)
+	return arr.count()
 end 'use_medium'
 
 function main() returns ExitCode
-  var x = use_medium()
-  var y = use_medium()
-  return x + y
+	var x = use_medium()
+	var y = use_medium()
+	return x + y
 end 'main'
 ```
 ```exitcode
@@ -589,11 +589,11 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
 function main() returns ExitCode
-  var huge1 = IntArray{}
-  huge1.reserve(10485760)
-  var huge2 = IntArray{}
-  huge2.reserve(10485760)
-  return huge1.count() + huge2.count()
+	var huge1 = IntArray{}
+	huge1.reserve(10485760)
+	var huge2 = IntArray{}
+	huge2.reserve(10485760)
+	return huge1.count() + huge2.count()
 end 'main'
 ```
 ```exitcode
@@ -655,15 +655,15 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
 function use_huge() returns Integer
-  var arr = IntArray{}
-  arr.reserve(10485760)
-  return arr.count()
+	var arr = IntArray{}
+	arr.reserve(10485760)
+	return arr.count()
 end 'use_huge'
 
 function main() returns ExitCode
-  var x = use_huge()
-  var y = use_huge()
-  return x + y
+	var x = use_huge()
+	var y = use_huge()
+	return x + y
 end 'main'
 ```
 ```exitcode
@@ -725,15 +725,15 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
 function main() returns ExitCode
-  var a = IntArray{}
-  a.reserve(10485760)
-  var b = IntArray{}
-  b.reserve(10485760)
-  var c = IntArray{}
-  c.reserve(10485760)
-  var d = IntArray{}
-  d.reserve(10485760)
-  return a.count() + b.count() + c.count() + d.count()
+	var a = IntArray{}
+	a.reserve(10485760)
+	var b = IntArray{}
+	b.reserve(10485760)
+	var c = IntArray{}
+	c.reserve(10485760)
+	var d = IntArray{}
+	d.reserve(10485760)
+	return a.count() + b.count() + c.count() + d.count()
 end 'main'
 ```
 ```exitcode
@@ -831,9 +831,9 @@ A StringArray push triggers a realloc of the backing buffer. Managed String poin
 typealias StringArray = Array with String
 
 function main() returns ExitCode
-  var arr = StringArray{}
-  arr.push("hello")
-  return 0
+	var arr = StringArray{}
+	arr.push("hello")
+	return 0
 end 'main'
 ```
 ```exitcode

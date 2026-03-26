@@ -26,12 +26,12 @@ Compares two arrays byte-by-byte. Arrays are equal if they have the same length 
 <!-- test: array-hash-basic -->
 ```maxon
 function main() returns ExitCode
-  var arr = [10, 20, 30]
-  var h = arr.hash()
-  if h != 0 'nonzero'
-    return 1
-  end 'nonzero'
-  return 0
+	var arr = [10, 20, 30]
+	var h = arr.hash()
+	if h != 0 'nonzero'
+		return 1
+	end 'nonzero'
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -43,12 +43,12 @@ end 'main'
 <!-- test: array-equals-same -->
 ```maxon
 function main() returns ExitCode
-  var a = [1, 2, 3]
-  var b = [1, 2, 3]
-  if a.equals(b) 'eq'
-    return 1
-  end 'eq'
-  return 0
+	var a = [1, 2, 3]
+	var b = [1, 2, 3]
+	if a.equals(b) 'eq'
+		return 1
+	end 'eq'
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -60,12 +60,12 @@ end 'main'
 <!-- test: array-equals-different -->
 ```maxon
 function main() returns ExitCode
-  var a = [1, 2, 3]
-  var b = [1, 2, 4]
-  if a.equals(b) 'eq'
-    return 1
-  end 'eq'
-  return 0
+	var a = [1, 2, 3]
+	var b = [1, 2, 4]
+	if a.equals(b) 'eq'
+		return 1
+	end 'eq'
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -77,12 +77,12 @@ end 'main'
 <!-- test: array-equals-different-length -->
 ```maxon
 function main() returns ExitCode
-  var a = [1, 2, 3]
-  var b = [1, 2]
-  if a.equals(b) 'eq'
-    return 1
-  end 'eq'
-  return 0
+	var a = [1, 2, 3]
+	var b = [1, 2]
+	if a.equals(b) 'eq'
+		return 1
+	end 'eq'
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -98,20 +98,20 @@ typealias IntArr = Array with Val
 typealias IntArrMap = Map with (IntArr, Val)
 
 function main() returns ExitCode
-  var m = IntArrMap{}
-  var key = IntArr{}
-  key.push(1)
-  key.push(2)
-  key.push(3)
-  m.insert(key: key, value: 42)
-  var lookup = IntArr{}
-  lookup.push(1)
-  lookup.push(2)
-  lookup.push(3)
-  let val = try m.get(key: lookup) otherwise 'notFound'
-    return 0
-  end 'notFound'
-  return val
+	var m = IntArrMap{}
+	var key = IntArr{}
+	key.push(1)
+	key.push(2)
+	key.push(3)
+	m.insert(key: key, value: 42)
+	var lookup = IntArr{}
+	lookup.push(1)
+	lookup.push(2)
+	lookup.push(3)
+	let val = try m.get(key: lookup) otherwise 'notFound'
+		return 0
+	end 'notFound'
+	return val
 end 'main'
 ```
 ```exitcode
@@ -126,15 +126,15 @@ typealias ByteVal = byte(0 to u8.max)
 typealias ByteArr = Array with ByteVal
 
 function main() returns ExitCode
-  var arr = ByteArr{}
-  arr.push(65)
-  arr.push(66)
-  arr.push(67)
-  var h = arr.hash()
-  if h != 0 'nonzero'
-    return 1
-  end 'nonzero'
-  return 0
+	var arr = ByteArr{}
+	arr.push(65)
+	arr.push(66)
+	arr.push(67)
+	var h = arr.hash()
+	if h != 0 'nonzero'
+		return 1
+	end 'nonzero'
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -149,16 +149,16 @@ typealias ByteVal = byte(0 to u8.max)
 typealias ByteArr = Array with ByteVal
 
 function main() returns ExitCode
-  var a = ByteArr{}
-  a.push(65)
-  a.push(66)
-  var b = ByteArr{}
-  b.push(65)
-  b.push(66)
-  if a.equals(b) 'eq'
-    return 1
-  end 'eq'
-  return 0
+	var a = ByteArr{}
+	a.push(65)
+	a.push(66)
+	var b = ByteArr{}
+	b.push(65)
+	b.push(66)
+	if a.equals(b) 'eq'
+		return 1
+	end 'eq'
+	return 0
 end 'main'
 ```
 ```exitcode

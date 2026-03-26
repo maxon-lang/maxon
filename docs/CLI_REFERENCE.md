@@ -216,11 +216,11 @@ Functions must be exported to be visible from other files:
 ```maxon
 // utils.maxon
 export function helper(x int) returns int
-    return x * 2
+		return x * 2
 end 'helper'
 
 function internal(x int) returns int  // Not visible from other files
-    return x + 1
+		return x + 1
 end 'internal'
 ```
 

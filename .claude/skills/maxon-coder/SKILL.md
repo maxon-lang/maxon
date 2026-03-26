@@ -23,7 +23,7 @@ Read `docs/WRITING_MAXON_CODE.md` before writing any Maxon code. It contains man
 - Match arms MUST use bare case names (`red` not `Color.red`)
 - Enum/union match MUST be exhaustive; `default` on enum/union MUST use `throws` or `panic`
 - Union values CANNOT be compared with `==` — use `match`
-- Indentation is 2 spaces (not tabs, not 4 spaces)
+- Indentation uses tabs (not spaces)
 - Comments use `//`
 
 ## Stdlib type aliases to use
@@ -35,7 +35,7 @@ Read `docs/WRITING_MAXON_CODE.md` before writing any Maxon code. It contains man
 ```maxon
 // Function
 function name(param1 Type1, param2 Type2) returns ReturnType
-  // body
+	// body
 end 'name'
 
 // Variables (type inferred, NEVER annotated)
@@ -44,28 +44,28 @@ var y = 10
 
 // Struct
 type Point
-  export var x MathValue
-  export var y MathValue
+	export var x MathValue
+	export var y MathValue
 end 'Point'
 var p = Point{x: 1.0, y: 2.0}
 
 // Enum
 enum Color
-  red
-  green
-  blue
+	red
+	green
+	blue
 end 'Color'
 
 // Union
 union Result
-  success(value Offset)
-  failure(message String)
+	success(value Offset)
+	failure(message String)
 end 'Result'
 
 // Error union
 union MyError implements Error
-  notFound
-  invalid
+	notFound
+	invalid
 end 'MyError'
 
 // Typealias
@@ -74,38 +74,38 @@ typealias ScoreArray = Array with Score
 
 // If/else
 if condition 'label'
-  // ...
+	// ...
 end 'label' else 'other'
-  // ...
+	// ...
 end 'other'
 
 // While
 while condition 'loop'
-  // ...
+	// ...
 end 'loop'
 
 // For
 for i in 0 upto n 'loop'
-  // ...
+	// ...
 end 'loop'
 
 // Match statement
 match value 'label'
-  1 then doOne()
-  2 or 3 then doOther()
-  default then doDefault()
+	1 then doOne()
+	2 or 3 then doOther()
+	default then doDefault()
 end 'label'
 
 // Match expression
 let result = match value 'label'
-  1 gives "one"
-  default gives "other"
+	1 gives "one"
+	default gives "other"
 end 'label'
 
 // Error handling
 let val = try mayFail() otherwise defaultValue
 try mayFail() otherwise 'err'
-  // handle error
+	// handle error
 end 'err'
 
 // Closure

@@ -72,8 +72,8 @@ typealias Integer = int(i64.min to i64.max)
 typealias Byte = byte(0 to u8.max)
 
 function main() returns ExitCode
-  var b = 42 as Byte
-  return b as Integer
+	var b = 42 as Byte
+	return b as Integer
 end 'main'
 ```
 ```exitcode
@@ -87,8 +87,8 @@ typealias Integer = int(i64.min to i64.max)
 typealias Byte = byte(0 to u8.max)
 
 function main() returns ExitCode
-  var b = 0 as Byte
-  return b as Integer
+	var b = 0 as Byte
+	return b as Integer
 end 'main'
 ```
 ```exitcode
@@ -102,8 +102,8 @@ typealias Integer = int(i64.min to i64.max)
 typealias Byte = byte(0 to u8.max)
 
 function main() returns ExitCode
-  var b = 255 as Byte
-  return b as Integer
+	var b = 255 as Byte
+	return b as Integer
 end 'main'
 ```
 ```exitcode
@@ -117,8 +117,8 @@ typealias Integer = int(i64.min to i64.max)
 typealias Byte = byte(0 to u8.max)
 
 function main() returns ExitCode
-  var b = 100 as Byte
-  return b as Integer
+	var b = 100 as Byte
+	return b as Integer
 end 'main'
 ```
 ```exitcode
@@ -132,9 +132,9 @@ typealias Float = float(f64.min to f64.max)
 typealias Byte = byte(0 to u8.max)
 
 function main() returns ExitCode
-  var b = 50 as Byte
-  var f = b as Float
-  return trunc(f)
+	var b = 50 as Byte
+	var f = b as Float
+	return trunc(f)
 end 'main'
 ```
 ```exitcode
@@ -147,9 +147,9 @@ end 'main'
 typealias Float = float(f64.min to f64.max)
 
 function main() returns ExitCode
-  var x = 42
-  var f = x as Float
-  return trunc(f)
+	var x = 42
+	var f = x as Float
+	return trunc(f)
 end 'main'
 ```
 ```exitcode
@@ -162,8 +162,8 @@ end 'main'
 typealias Float = float(f64.min to f64.max)
 
 function main() returns ExitCode
-  var f = 99 as Float
-  return trunc(f)
+	var f = 99 as Float
+	return trunc(f)
 end 'main'
 ```
 ```exitcode
@@ -176,8 +176,8 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 function main() returns ExitCode
-  var x = 42
-  return x as Integer
+	var x = 42
+	return x as Integer
 end 'main'
 ```
 ```exitcode
@@ -190,9 +190,9 @@ end 'main'
 typealias Float = float(f64.min to f64.max)
 
 function main() returns ExitCode
-  var f = 42.0
-  var g = f as Float
-  return trunc(g)
+	var f = 42.0
+	var g = f as Float
+	return trunc(g)
 end 'main'
 ```
 ```exitcode
@@ -206,9 +206,9 @@ typealias Integer = int(i64.min to i64.max)
 typealias Byte = byte(0 to u8.max)
 
 function main() returns ExitCode
-  var b = 42 as Byte
-  var c = b as Byte
-  return c as Integer
+	var b = 42 as Byte
+	var c = b as Byte
+	return c as Integer
 end 'main'
 ```
 ```exitcode
@@ -222,9 +222,9 @@ typealias Integer = int(i64.min to i64.max)
 typealias Byte = byte(0 to u8.max)
 
 function main() returns ExitCode
-  var b = 10 as Byte
-  var result = b as Integer + 32
-  return result
+	var b = 10 as Byte
+	var result = b as Integer + 32
+	return result
 end 'main'
 ```
 ```exitcode
@@ -239,10 +239,10 @@ typealias Float = float(f64.min to f64.max)
 typealias Byte = byte(0 to u8.max)
 
 function main() returns ExitCode
-  var b = 25 as Byte
-  var i = b as Integer
-  var f = i as Float
-  return trunc(f)
+	var b = 25 as Byte
+	var i = b as Integer
+	var f = i as Float
+	return trunc(f)
 end 'main'
 ```
 ```exitcode
@@ -257,13 +257,13 @@ end 'main'
 typealias Byte = byte(0 to u8.max)
 
 function main() returns ExitCode
-  var x = 5
-  var b = x as Byte
-  return 0
+	var x = 5
+	var b = x as Byte
+	return 0
 end 'main'
 ```
 ```maxoncstderr
-error E3009: specs/fragments/type-casting/error.int-var-to-byte.test:7:13: Cannot cast from int to byte
+error E3009: specs/fragments/type-casting/error.int-var-to-byte.test:7:12: Cannot cast from int to byte
 ```
 
 <!-- test: error.int-literal-out-of-range -->
@@ -272,12 +272,12 @@ error E3009: specs/fragments/type-casting/error.int-var-to-byte.test:7:13: Canno
 typealias Byte = byte(0 to u8.max)
 
 function main() returns ExitCode
-  var x = 256 as Byte
-  return 0
+	var x = 256 as Byte
+	return 0
 end 'main'
 ```
 ```maxoncstderr
-error E3009: specs/fragments/type-casting/error.int-literal-out-of-range.test:6:15: Cannot cast from int to byte
+error E3009: specs/fragments/type-casting/error.int-literal-out-of-range.test:6:14: Cannot cast from int to byte
 ```
 
 <!-- test: error.negative-literal-to-byte -->
@@ -286,12 +286,12 @@ error E3009: specs/fragments/type-casting/error.int-literal-out-of-range.test:6:
 typealias Byte = byte(0 to u8.max)
 
 function main() returns ExitCode
-  var x = -1 as Byte
-  return 0
+	var x = -1 as Byte
+	return 0
 end 'main'
 ```
 ```maxoncstderr
-error E3009: specs/fragments/type-casting/error.negative-literal-to-byte.test:6:14: Cannot cast from int to byte
+error E3009: specs/fragments/type-casting/error.negative-literal-to-byte.test:6:13: Cannot cast from int to byte
 ```
 
 <!-- test: error.float-to-int -->
@@ -300,12 +300,12 @@ error E3009: specs/fragments/type-casting/error.negative-literal-to-byte.test:6:
 typealias Integer = int(i64.min to i64.max)
 
 function main() returns ExitCode
-  var x = 5.0 as Integer
-  return 0
+	var x = 5.0 as Integer
+	return 0
 end 'main'
 ```
 ```maxoncstderr
-error E3009: specs/fragments/type-casting/error.float-to-int.test:6:15: Cannot cast from float to int
+error E3009: specs/fragments/type-casting/error.float-to-int.test:6:14: Cannot cast from float to int
 ```
 
 <!-- test: error.float-to-byte -->
@@ -314,12 +314,12 @@ error E3009: specs/fragments/type-casting/error.float-to-int.test:6:15: Cannot c
 typealias Byte = byte(0 to u8.max)
 
 function main() returns ExitCode
-  var x = 5.0 as Byte
-  return 0
+	var x = 5.0 as Byte
+	return 0
 end 'main'
 ```
 ```maxoncstderr
-error E3009: specs/fragments/type-casting/error.float-to-byte.test:6:15: Cannot cast from float to byte
+error E3009: specs/fragments/type-casting/error.float-to-byte.test:6:14: Cannot cast from float to byte
 ```
 
 <!-- test: error.bool-to-int -->
@@ -328,13 +328,13 @@ error E3009: specs/fragments/type-casting/error.float-to-byte.test:6:15: Cannot 
 typealias Integer = int(i64.min to i64.max)
 
 function main() returns ExitCode
-  var b = true
-  var x = b as Integer
-  return 0
+	var b = true
+	var x = b as Integer
+	return 0
 end 'main'
 ```
 ```maxoncstderr
-error E3009: specs/fragments/type-casting/error.bool-to-int.test:7:13: Cannot cast from bool to int
+error E3009: specs/fragments/type-casting/error.bool-to-int.test:7:12: Cannot cast from bool to int
 ```
 
 <!-- test: error.bool-to-float -->
@@ -343,13 +343,13 @@ error E3009: specs/fragments/type-casting/error.bool-to-int.test:7:13: Cannot ca
 typealias Float = float(f64.min to f64.max)
 
 function main() returns ExitCode
-  var b = true
-  var x = b as Float
-  return 0
+	var b = true
+	var x = b as Float
+	return 0
 end 'main'
 ```
 ```maxoncstderr
-error E3009: specs/fragments/type-casting/error.bool-to-float.test:7:13: Cannot cast from bool to float
+error E3009: specs/fragments/type-casting/error.bool-to-float.test:7:12: Cannot cast from bool to float
 ```
 
 <!-- test: error.bool-to-byte -->
@@ -358,35 +358,35 @@ error E3009: specs/fragments/type-casting/error.bool-to-float.test:7:13: Cannot 
 typealias Byte = byte(0 to u8.max)
 
 function main() returns ExitCode
-  var b = true
-  var x = b as Byte
-  return 0
+	var b = true
+	var x = b as Byte
+	return 0
 end 'main'
 ```
 ```maxoncstderr
-error E3009: specs/fragments/type-casting/error.bool-to-byte.test:7:13: Cannot cast from bool to byte
+error E3009: specs/fragments/type-casting/error.bool-to-byte.test:7:12: Cannot cast from bool to byte
 ```
 
 <!-- test: error.int-to-bool -->
 ```maxon
 function main() returns ExitCode
-  var x = 0 as bool
-  return 0
+	var x = 0 as bool
+	return 0
 end 'main'
 ```
 ```maxoncstderr
-error E3009: specs/fragments/type-casting/error.int-to-bool.test:3:13: Cannot cast from int to bool
+error E3009: specs/fragments/type-casting/error.int-to-bool.test:3:12: Cannot cast from int to bool
 ```
 
 <!-- test: error.float-to-bool -->
 ```maxon
 function main() returns ExitCode
-  var x = 0.0 as bool
-  return 0
+	var x = 0.0 as bool
+	return 0
 end 'main'
 ```
 ```maxoncstderr
-error E3009: specs/fragments/type-casting/error.float-to-bool.test:3:15: Cannot cast from float to bool
+error E3009: specs/fragments/type-casting/error.float-to-bool.test:3:14: Cannot cast from float to bool
 ```
 
 <!-- test: error.byte-to-bool -->
@@ -395,11 +395,11 @@ error E3009: specs/fragments/type-casting/error.float-to-bool.test:3:15: Cannot 
 typealias Byte = byte(0 to u8.max)
 
 function main() returns ExitCode
-  var b = 42 as Byte
-  var x = b as bool
-  return 0
+	var b = 42 as Byte
+	var x = b as bool
+	return 0
 end 'main'
 ```
 ```maxoncstderr
-error E3009: specs/fragments/type-casting/error.byte-to-bool.test:7:13: Cannot cast from byte to bool
+error E3009: specs/fragments/type-casting/error.byte-to-bool.test:7:12: Cannot cast from byte to bool
 ```

@@ -30,11 +30,11 @@ typealias Score = int(i64.min to i64.max)
 typealias Weight = float(f64.min to f64.max)
 
 function takeFloat(x Weight) returns Score
-  return trunc(x)
+	return trunc(x)
 end 'takeFloat'
 
 function main() returns ExitCode
-  return takeFloat(42)
+	return takeFloat(42)
 end 'main'
 ```
 ```exitcode
@@ -50,11 +50,11 @@ typealias Integer = int(i64.min to i64.max)
 typealias Float = float(f64.min to f64.max)
 
 function takeFloat(x Float) returns Integer
-  return trunc(x)
+	return trunc(x)
 end 'takeFloat'
 
 function main() returns ExitCode
-  return takeFloat(42)
+	return takeFloat(42)
 end 'main'
 ```
 ```exitcode
@@ -68,12 +68,12 @@ typealias Integer = int(i64.min to i64.max)
 typealias Float = float(f64.min to f64.max)
 
 function takeFloat(x Float) returns Integer
-  return trunc(x)
+	return trunc(x)
 end 'takeFloat'
 
 function main() returns ExitCode
-  var i = 42
-  return takeFloat(i)
+	var i = 42
+	return takeFloat(i)
 end 'main'
 ```
 ```exitcode
@@ -87,12 +87,12 @@ typealias Integer = int(i64.min to i64.max)
 typealias Byte = byte(0 to u8.max)
 
 function takeInt(x Integer) returns Integer
-  return x
+	return x
 end 'takeInt'
 
 function main() returns ExitCode
-  var b = 42 as Byte
-  return takeInt(b)
+	var b = 42 as Byte
+	return takeInt(b)
 end 'main'
 ```
 ```exitcode
@@ -106,11 +106,11 @@ typealias Integer = int(i64.min to i64.max)
 typealias Byte = byte(0 to u8.max)
 
 function takeByte(x Byte) returns Integer
-  return x as Integer
+	return x as Integer
 end 'takeByte'
 
 function main() returns ExitCode
-  return takeByte(300)
+	return takeByte(300)
 end 'main'
 ```
 ```exitcode
@@ -124,12 +124,12 @@ typealias Integer = int(i64.min to i64.max)
 typealias Byte = byte(0 to u8.max)
 
 function takeByte(x Byte) returns Integer
-  return x as Integer
+	return x as Integer
 end 'takeByte'
 
 function main() returns ExitCode
-  var i = 300
-  return takeByte(i)
+	var i = 300
+	return takeByte(i)
 end 'main'
 ```
 ```exitcode
@@ -142,12 +142,12 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 function takeInt(x Integer) returns Integer
-  return x
+	return x
 end 'takeInt'
 
 function main() returns ExitCode
-  var f = 3.7
-  return takeInt(f)
+	var f = 3.7
+	return takeInt(f)
 end 'main'
 ```
 ```exitcode
@@ -161,12 +161,12 @@ typealias Integer = int(i64.min to i64.max)
 typealias Byte = byte(0 to u8.max)
 
 function takeByte(x Byte) returns Integer
-  return x as Integer
+	return x as Integer
 end 'takeByte'
 
 function main() returns ExitCode
-  var f = 300.9
-  return takeByte(f)
+	var f = 300.9
+	return takeByte(f)
 end 'main'
 ```
 ```exitcode
@@ -180,15 +180,15 @@ typealias Integer = int(i64.min to i64.max)
 typealias Byte = byte(0 to u8.max)
 
 function getInt() returns Integer
-  return 300
+	return 300
 end 'getInt'
 
 function takeByte(x Byte) returns Integer
-  return x as Integer
+	return x as Integer
 end 'takeByte'
 
 function main() returns ExitCode
-  return takeByte(getInt())
+	return takeByte(getInt())
 end 'main'
 ```
 ```exitcode
@@ -202,13 +202,13 @@ typealias Integer = int(i64.min to i64.max)
 typealias Float = float(f64.min to f64.max)
 
 function takeFloat(x Float) returns Integer
-  return trunc(x)
+	return trunc(x)
 end 'takeFloat'
 
 function main() returns ExitCode
-  var a = 20
-  var b = 22
-  return takeFloat(a + b)
+	var a = 20
+	var b = 22
+	return takeFloat(a + b)
 end 'main'
 ```
 ```exitcode
@@ -218,8 +218,8 @@ end 'main'
 <!-- test: math-intrinsic-int-promotion -->
 ```maxon
 function main() returns ExitCode
-  var result = sqrt(16)
-  return trunc(result)
+	var result = sqrt(16)
+	return trunc(result)
 end 'main'
 ```
 ```exitcode
@@ -232,16 +232,16 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 function takeInt(x Integer) returns Integer
-  return x
+	return x
 end 'takeInt'
 
 function main() returns ExitCode
-  var s = "hello"
-  return takeInt(s)
+	var s = "hello"
+	return takeInt(s)
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/fragments/implicit-type-conversion/no-string-to-int.test:11:10: argument type mismatch for 'x': expected 'Integer', got 'String'
+error E3005: specs/fragments/implicit-type-conversion/no-string-to-int.test:11:9: argument type mismatch for 'x': expected 'Integer', got 'String'
 ```
 
 <!-- test: no-bool-to-int -->
@@ -250,16 +250,16 @@ error E3005: specs/fragments/implicit-type-conversion/no-string-to-int.test:11:1
 typealias Integer = int(i64.min to i64.max)
 
 function takeInt(x Integer) returns Integer
-  return x
+	return x
 end 'takeInt'
 
 function main() returns ExitCode
-  var b = true
-  return takeInt(b)
+	var b = true
+	return takeInt(b)
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/fragments/implicit-type-conversion/no-bool-to-int.test:11:10: argument type mismatch for 'x': expected 'int', got 'bool'
+error E3005: specs/fragments/implicit-type-conversion/no-bool-to-int.test:11:9: argument type mismatch for 'x': expected 'int', got 'bool'
 ```
 
 <!-- test: no-int-to-bool -->
@@ -268,17 +268,17 @@ error E3005: specs/fragments/implicit-type-conversion/no-bool-to-int.test:11:10:
 typealias Integer = int(i64.min to i64.max)
 
 function takeBool(x bool) returns Integer
-  if x 'check'
-    return 1
-  end 'check'
-  return 0
+	if x 'check'
+		return 1
+	end 'check'
+	return 0
 end 'takeBool'
 
 function main() returns ExitCode
-  var i = 1
-  return takeBool(i)
+	var i = 1
+	return takeBool(i)
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/fragments/implicit-type-conversion/no-int-to-bool.test:14:10: argument type mismatch for 'x': expected 'bool', got 'int'
+error E3005: specs/fragments/implicit-type-conversion/no-int-to-bool.test:14:9: argument type mismatch for 'x': expected 'bool', got 'int'
 ```

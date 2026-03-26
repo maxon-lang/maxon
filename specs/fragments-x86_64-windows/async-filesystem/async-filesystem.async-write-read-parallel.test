@@ -1,29 +1,29 @@
 // Test: async-filesystem.async-write-read-parallel
 function main() returns ExitCode
-    let path1 = FilePath from "async_par_a.txt"
-    let path2 = FilePath from "async_par_b.txt"
+		let path1 = FilePath from "async_par_a.txt"
+		let path2 = FilePath from "async_par_b.txt"
 
-    // Write both files synchronously
-    try File.writeText(path1, content: "FileA") otherwise 'e1'
-        return 1
-    end 'e1'
-    try File.writeText(path2, content: "FileB") otherwise 'e2'
-        try File.delete(path1) otherwise ignore
-        return 2
-    end 'e2'
+		// Write both files synchronously
+		try File.writeText(path1, content: "FileA") otherwise 'e1'
+				return 1
+		end 'e1'
+		try File.writeText(path2, content: "FileB") otherwise 'e2'
+				try File.delete(path1) otherwise ignore
+				return 2
+		end 'e2'
 
-    // Read both asynchronously in parallel
-    var p1 = async File.readText(path1)
-    var p2 = async File.readText(path2)
-    var c1 = try await p1 otherwise "err"
-    var c2 = try await p2 otherwise "err"
+		// Read both asynchronously in parallel
+		var p1 = async File.readText(path1)
+		var p2 = async File.readText(path2)
+		var c1 = try await p1 otherwise "err"
+		var c2 = try await p2 otherwise "err"
 
-    // Clean up
-    try File.delete(path1) otherwise ignore
-    try File.delete(path2) otherwise ignore
+		// Clean up
+		try File.delete(path1) otherwise ignore
+		try File.delete(path2) otherwise ignore
 
-    print("{c1}{c2}")
-    return 42
+		print("{c1}{c2}")
+		return 42
 end 'main'
 ---
 ExitCode: 42

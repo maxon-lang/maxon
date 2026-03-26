@@ -14,16 +14,16 @@ The compiler prevents using the same block identifier for multiple blocks within
 
 ```maxon
 function main() returns ExitCode
-  var x = 0
-  if true 'outer'
-    x = 1
-  end 'outer'
+	var x = 0
+	if true 'outer'
+		x = 1
+	end 'outer'
 
-  if true 'inner'
-    x = 2
-  end 'inner'
+	if true 'inner'
+		x = 2
+	end 'inner'
 
-  return x
+	return x
 end 'main'
 ```
 ```exitcode
@@ -35,14 +35,14 @@ end 'main'
 
 ```maxon
 function main() returns ExitCode
-  var x = 0
-  if true 'check'
-    x = 1
-    if true 'check'
-      x = 2
-    end 'check'
-  end 'check'
-  return x
+	var x = 0
+	if true 'check'
+		x = 1
+		if true 'check'
+			x = 2
+		end 'check'
+	end 'check'
+	return x
 end 'main'
 ```
 ```exitcode
@@ -79,16 +79,16 @@ end 'main'
 <!-- test: duplicate-block-identifiers.different-blocks -->
 ```maxon
 function main() returns ExitCode
-  var x = 0
-  if true 'outer'
-    x = 1
-  end 'outer'
-  
-  if true 'inner'
-    x = 2
-  end 'inner'
-  
-  return x
+	var x = 0
+	if true 'outer'
+		x = 1
+	end 'outer'
+	
+	if true 'inner'
+		x = 2
+	end 'inner'
+	
+	return x
 end 'main'
 ```
 ```exitcode
@@ -98,14 +98,14 @@ end 'main'
 <!-- test: duplicate-block-identifiers.nested-same-id -->
 ```maxon
 function main() returns ExitCode
-  var x = 0
-  if true 'check'
-    x = 1
-    if true 'check'
-      x = 2
-    end 'check'
-  end 'check'
-  return x
+	var x = 0
+	if true 'check'
+		x = 1
+		if true 'check'
+			x = 2
+		end 'check'
+	end 'check'
+	return x
 end 'main'
 ```
 ```exitcode
@@ -115,15 +115,15 @@ end 'main'
 <!-- test: duplicate-block-identifiers.multiple-nested -->
 ```maxon
 function main() returns ExitCode
-  var x = 0
-  if true 'outer'
-    x = 1
-    while true 'inner'
-      x = 2
-      break
-    end 'inner'
-  end 'outer'
-  return x
+	var x = 0
+	if true 'outer'
+		x = 1
+		while true 'inner'
+			x = 2
+			break
+		end 'inner'
+	end 'outer'
+	return x
 end 'main'
 ```
 ```exitcode
@@ -133,15 +133,15 @@ end 'main'
 <!-- test: duplicate-block-identifiers.else-nested -->
 ```maxon
 function main() returns ExitCode
-  var x = 0
-  if false 'check'
-    x = 1
-  end 'check' else 'else_check'
-    if true 'nested'
-      x = 2
-    end 'nested'
-  end 'else_check'
-  return x
+	var x = 0
+	if false 'check'
+		x = 1
+	end 'check' else 'else_check'
+		if true 'nested'
+			x = 2
+		end 'nested'
+	end 'else_check'
+	return x
 end 'main'
 ```
 ```exitcode

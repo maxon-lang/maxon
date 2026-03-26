@@ -4,26 +4,26 @@ typealias Integer = int(i64.min to i64.max)
 
 // Test error union with associated value - second case
 union MyError implements Error
-  notFound(code Integer)
-  failed
+	notFound(code Integer)
+	failed
 end 'MyError'
 
 var counter = 0 as Integer
 
 function mayFail() returns Integer throws MyError
-  counter = counter + 1
-  throw MyError.notFound(42)
+	counter = counter + 1
+	throw MyError.notFound(42)
 end 'mayFail'
 
 function main() returns ExitCode
-  var result = 0
-  try mayFail() otherwise (e) 'handler'
-    match e 'check'
-      notFound(code) then result = code
-      failed then result = 0
-    end 'check'
-  end 'handler'
-  return result
+	var result = 0
+	try mayFail() otherwise (e) 'handler'
+		match e 'check'
+			notFound(code) then result = code
+			failed then result = 0
+		end 'check'
+	end 'handler'
+	return result
 end 'main'
 ---
 ExitCode: 42

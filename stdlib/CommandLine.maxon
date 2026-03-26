@@ -2,49 +2,49 @@
 /// @category System
 
 export type CommandLine
-  typealias StringArray = Array with String
+	typealias StringArray = Array with String
 
-  /// Get command line arguments (excluding executable path)
-  /// Returns fresh array on each call
-  export static function args() returns StringArray
-    let count = __Builtins.commandLineCount()
-    var result = StringArray{}
-    for i in 1 upto count 'loop'
-      let managed = __Builtins.commandLineArg(i)
-      result.push(String{managed: managed, _iterPos: 0})
-    end 'loop'
-    return result
-  end 'args'
+	/// Get command line arguments (excluding executable path)
+	/// Returns fresh array on each call
+	export static function args() returns StringArray
+		let count = __Builtins.commandLineCount()
+		var result = StringArray{}
+		for i in 1 upto count 'loop'
+			let managed = __Builtins.commandLineArg(i)
+			result.push(String{managed: managed, _iterPos: 0})
+		end 'loop'
+		return result
+	end 'args'
 
-  /// Get the executable path (argv[0])
-  /// Returns fresh string on each call
-  export static function executablePath() returns String
-    let managed = __Builtins.commandLineArg(0)
-    return String{managed: managed, _iterPos: 0}
-  end 'executablePath'
+	/// Get the executable path (argv[0])
+	/// Returns fresh string on each call
+	export static function executablePath() returns String
+		let managed = __Builtins.commandLineArg(0)
+		return String{managed: managed, _iterPos: 0}
+	end 'executablePath'
 
-  /// Extract the value from a "--key=value" argument string.
-  /// Returns the portion after the first "=" sign.
-  /// Throws StringError.notFound if "=" is not present.
-  export static function optionValue(arg String) returns String throws StringError
-    let parts = arg.split("=")
-    if parts.count() < 2 'noEquals'
-      throw StringError.notFound
-    end 'noEquals'
-    return try parts.get(1) otherwise 'unreachable'
-      throw StringError.notFound
-    end 'unreachable'
-  end 'optionValue'
+	/// Extract the value from a "--key=value" argument string.
+	/// Returns the portion after the first "=" sign.
+	/// Throws StringError.notFound if "=" is not present.
+	export static function optionValue(arg String) returns String throws StringError
+		let parts = arg.split("=")
+		if parts.count() < 2 'noEquals'
+			throw StringError.notFound
+		end 'noEquals'
+		return try parts.get(1) otherwise 'unreachable'
+			throw StringError.notFound
+		end 'unreachable'
+	end 'optionValue'
 
-  /// Search the process command line for "--name=value" and return the value.
-  /// Throws StringError.notFound if no matching option is found.
-  export static function getOptionValue(name String) returns String throws StringError
-    let prefix = "--{name}="
-    for arg in args() 'scan'
-      if arg.startsWith(prefix) 'match'
-        return try optionValue(arg)
-      end 'match'
-    end 'scan'
-    throw StringError.notFound
-  end 'getOptionValue'
+	/// Search the process command line for "--name=value" and return the value.
+	/// Throws StringError.notFound if no matching option is found.
+	export static function getOptionValue(name String) returns String throws StringError
+		let prefix = "--{name}="
+		for arg in args() 'scan'
+			if arg.startsWith(prefix) 'match'
+				return try optionValue(arg)
+			end 'match'
+		end 'scan'
+		throw StringError.notFound
+	end 'getOptionValue'
 end 'CommandLine'

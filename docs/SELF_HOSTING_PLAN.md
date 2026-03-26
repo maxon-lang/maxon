@@ -275,15 +275,15 @@ var exists = symbols.contains("foo")
 **Language Feature:**
 ```maxon
 enum TokenType
-    IDENTIFIER
-    INTEGER
-    PLUS
-    MINUS
+		IDENTIFIER
+		INTEGER
+		PLUS
+		MINUS
 end 'TokenType'
 
 var token = TokenType.IDENTIFIER
 if token == TokenType.IDENTIFIER 'check'
-    // ...
+		// ...
 end 'check'
 ```
 
@@ -306,16 +306,16 @@ end 'check'
 **Language Feature:**
 ```maxon
 union ASTNode
-    IntegerLiteral { value int }
-    BinaryOp { op TokenType, left ptr, right ptr }
-    Identifier { name String }
+		IntegerLiteral { value int }
+		BinaryOp { op TokenType, left ptr, right ptr }
+		Identifier { name String }
 end 'ASTNode'
 
 var node = ASTNode.IntegerLiteral(42)
 match node 'check'
-    case IntegerLiteral(val) then print(val)
-    case BinaryOp(op, l, r) then // handle binary op
-    case Identifier(name) then // handle identifier
+		case IntegerLiteral(val) then print(val)
+		case BinaryOp(op, l, r) then // handle binary op
+		case Identifier(name) then // handle identifier
 end 'check'
 ```
 
@@ -339,13 +339,13 @@ end 'check'
 **Language Feature:**
 ```maxon
 type Pair<T, U>
-    first T
-    second U
+		first T
+		second U
 end 'Pair'
 
 function makePair<T, U>(a T, b U) Pair<T, U>
-    var result = Pair<T, U>{a, b}
-    return result
+		var result = Pair<T, U>{a, b}
+		return result
 end 'makePair'
 ```
 
@@ -402,14 +402,14 @@ outFile.close()
 **Language additions:**
 ```maxon
 type Optional<T>
-    hasValue bool
-    value T
+		hasValue bool
+		value T
 end 'Optional'
 
 // Or proper option type
 union Option<T>
-    Some { value T }
-    None
+		Some { value T }
+		None
 end 'Option'
 ```
 
@@ -436,12 +436,12 @@ end 'Option'
 **Example:**
 ```maxon
 type TypeChecker
-    symbols HashMap<String, Type>
-    errors Vector<String>
+		symbols HashMap<String, Type>
+		errors Vector<String>
 
-    returns Type
-        // Method syntax with 'this' reference
-    end 'checkExpr'
+		returns Type
+				// Method syntax with 'this' reference
+		end 'checkExpr'
 end 'TypeChecker'
 ```
 

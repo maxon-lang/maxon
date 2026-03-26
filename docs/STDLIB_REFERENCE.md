@@ -157,12 +157,12 @@ Metadata about a file, returned by `File.info()`. All fields are obtained from a
 
 ```maxon
 export type FileInfo
-  export let size FileSize
-  export let modifiedTime Timestamp
-  export let createdTime Timestamp
-  export let accessedTime Timestamp
-  export let isDirectory bool
-  export let isReadOnly bool
+	export let size FileSize
+	export let modifiedTime Timestamp
+	export let createdTime Timestamp
+	export let accessedTime Timestamp
+	export let isDirectory bool
+	export let isReadOnly bool
 end 'FileInfo'
 ```
 
@@ -186,19 +186,19 @@ end 'FileInfo'
 
 ```maxon
 export union FileReadError implements Error
-  notFound              // file not found when reading
+	notFound              // file not found when reading
 end 'FileReadError'
 
 export union FileWriteError implements Error
-  failed                // write operation failed
+	failed                // write operation failed
 end 'FileWriteError'
 
 export union FileDeleteError implements Error
-  notFound              // file not found when deleting
+	notFound              // file not found when deleting
 end 'FileDeleteError'
 
 export union FileInfoError implements Error
-  notFound              // file not found when querying metadata
+	notFound              // file not found when querying metadata
 end 'FileInfoError'
 ```
 
@@ -232,8 +232,8 @@ export static function info(path FilePath) returns FileInfo throws FileInfoError
 ```maxon
 let fp = FilePath from "data.txt"
 let info = try File.info(fp) otherwise 'err'
-    print("file not found")
-    return 1
+		print("file not found")
+		return 1
 end 'err'
 print("size: {info.size}")
 print("modified: {info.modifiedTime}")
@@ -249,7 +249,7 @@ print("is directory: {info.isDirectory}")
 **Parsing:**
 ```maxon
 var url = try URL.parse("https://example.com:8080/path?q=1#top") otherwise 'err'
-  // handle error
+	// handle error
 end 'err'
 ```
 
@@ -444,7 +444,7 @@ list.isEmpty()                   // true if empty
 `List` implements `Iterable with Element`, so it supports `for`-`in` loops:
 ```maxon
 for item in list 'loop'
-    print("{item}")
+		print("{item}")
 end 'loop'
 ```
 
@@ -478,11 +478,11 @@ typealias NetworkPort = int(1 to 65535)
 All networking operations throw `NetworkError`, a union conforming to `Error`:
 ```maxon
 union NetworkError implements Error
-    resolveFailed       // DNS lookup failed
-    connectFailed       // TCP connection refused or timed out
-    sendFailed          // OS-level send error
-    recvFailed          // OS-level recv error
-    connectionClosed    // peer closed the connection
+		resolveFailed       // DNS lookup failed
+		connectFailed       // TCP connection refused or timed out
+		sendFailed          // OS-level send error
+		recvFailed          // OS-level recv error
+		connectionClosed    // peer closed the connection
 end 'NetworkError'
 ```
 
@@ -526,21 +526,21 @@ client.close()
 **Example: Simple TCP Client**
 ```maxon
 function main() returns ExitCode
-    let client = try TcpClient.connect("localhost", port: 8080) otherwise 'err'
-        print("connection failed")
-        return 1
-    end 'err'
-    let _ = try client.send("GET / HTTP/1.0\r\n\r\n") otherwise 'err'
-        print("send failed")
-        return 1
-    end 'err'
-    let response = try client.recv(4096) otherwise 'err'
-        print("recv failed")
-        return 1
-    end 'err'
-    print(response)
-    client.close()
-    return 0
+		let client = try TcpClient.connect("localhost", port: 8080) otherwise 'err'
+				print("connection failed")
+				return 1
+		end 'err'
+		let _ = try client.send("GET / HTTP/1.0\r\n\r\n") otherwise 'err'
+				print("send failed")
+				return 1
+		end 'err'
+		let response = try client.recv(4096) otherwise 'err'
+				print("recv failed")
+				return 1
+		end 'err'
+		print(response)
+		client.close()
+		return 0
 end 'main'
 ```
 
@@ -641,21 +641,21 @@ Stateless HTTP/1.1 client. All methods are static.
 **Example: Simple GET**
 ```maxon
 function fetchData() returns ExitCode throws HttpError
-  let response = try HttpClient.get("http://httpbin.org/get")
-  print(response.body())
-  return 0
+	let response = try HttpClient.get("http://httpbin.org/get")
+	print(response.body())
+	return 0
 end 'fetchData'
 ```
 
 **Example: POST with body**
 ```maxon
 function postData() returns ExitCode throws HttpError
-  var request = try HttpRequest.create(HttpMethod.post, url: "http://httpbin.org/post")
-  request.setHeader("content-type", value: "application/json")
-  request.setBody("{\"key\": \"value\"}")
-  let response = try HttpClient.send(request)
-  print(response.statusCode())
-  return 0
+	var request = try HttpRequest.create(HttpMethod.post, url: "http://httpbin.org/post")
+	request.setHeader("content-type", value: "application/json")
+	request.setBody("{\"key\": \"value\"}")
+	let response = try HttpClient.send(request)
+	print(response.statusCode())
+	return 0
 end 'postData'
 ```
 

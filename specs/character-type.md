@@ -36,7 +36,7 @@ Iterating over a string yields `character` values (EGCs):
 ```maxon
 var s = "café"
 for c in s 'chars'
-  // c is 'c', 'a', 'f', 'é' (4 iterations, not 5 bytes)
+	// c is 'c', 'a', 'f', 'é' (4 iterations, not 5 bytes)
 end 'chars'
 ```
 
@@ -75,11 +75,11 @@ For non-ASCII characters (multi-byte UTF-8 or values >= 128), `asciiValue()` ret
 
 ```maxon
 function main() returns ExitCode
-  var x = 'A'
-  if x == 'A' 'check'
-    return 0
-  end 'check'
-  return 1
+	var x = 'A'
+	if x == 'A' 'check'
+		return 0
+	end 'check'
+	return 1
 end 'main'
 ```
 ```exitcode
@@ -91,12 +91,12 @@ end 'main'
 
 ```maxon
 function main() returns ExitCode
-  var a = 'A'
-  var b = 'B'
-  if a < b 'check'
-    return 1
-  end 'check'
-  return 0
+	var a = 'A'
+	var b = 'B'
+	if a < b 'check'
+		return 1
+	end 'check'
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -108,11 +108,11 @@ end 'main'
 
 ```maxon
 function main() returns ExitCode
-  var letter = 'Z'
-  if letter == 'Z' 'check'
-    return 0
-  end 'check'
-  return 1
+	var letter = 'Z'
+	if letter == 'Z' 'check'
+		return 0
+	end 'check'
+	return 1
 end 'main'
 ```
 ```exitcode
@@ -124,9 +124,9 @@ end 'main'
 
 ```maxon
 function main() returns ExitCode
-  var c = 'é'
-  print("{c.bytes().count()}\n")
-  return 0
+	var c = 'é'
+	print("{c.bytes().count()}\n")
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -141,9 +141,9 @@ end 'main'
 
 ```maxon
 function main() returns ExitCode
-  var c = '中'
-  print("{c.bytes().count()}\n")
-  return 0
+	var c = '中'
+	print("{c.bytes().count()}\n")
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -158,9 +158,9 @@ end 'main'
 
 ```maxon
 function main() returns ExitCode
-  var c = '🎉'
-  print("{c.bytes().count()}\n")
-  return 0
+	var c = '🎉'
+	print("{c.bytes().count()}\n")
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -175,10 +175,10 @@ end 'main'
 
 ```maxon
 function main() returns ExitCode
-  var c = 'A'
-  var s = "{c}"
-  print(s)
-  return 0
+	var c = 'A'
+	var s = "{c}"
+	print(s)
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -193,10 +193,10 @@ A
 
 ```maxon
 function main() returns ExitCode
-  var c = '中'
-  var s = "{c}"
-  print(s)
-  return 0
+	var c = '中'
+	var s = "{c}"
+	print(s)
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -211,12 +211,12 @@ end 'main'
 
 ```maxon
 function main() returns ExitCode
-  var a = 'é'
-  var b = 'é'
-  if a == b 'check'
-    return 0
-  end 'check'
-  return 1
+	var a = 'é'
+	var b = 'é'
+	if a == b 'check'
+		return 0
+	end 'check'
+	return 1
 end 'main'
 ```
 ```exitcode
@@ -228,12 +228,12 @@ end 'main'
 
 ```maxon
 function main() returns ExitCode
-  var a = 'é'
-  var b = 'è'
-  if a != b 'check'
-    return 0
-  end 'check'
-  return 1
+	var a = 'é'
+	var b = 'è'
+	if a != b 'check'
+		return 0
+	end 'check'
+	return 1
 end 'main'
 ```
 ```exitcode
@@ -245,9 +245,9 @@ end 'main'
 
 ```maxon
 function main() returns ExitCode
-  var emoji = '🎉'
-  print("{emoji}\n")
-  return 0
+	var emoji = '🎉'
+	print("{emoji}\n")
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -262,10 +262,10 @@ end 'main'
 
 ```maxon
 function main() returns ExitCode
-  var flag = '🇺🇸'
-  print("{flag.bytes().count()}\n")
-  print("{flag}\n")
-  return 0
+	var flag = '🇺🇸'
+	print("{flag.bytes().count()}\n")
+	print("{flag}\n")
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -281,9 +281,9 @@ end 'main'
 
 ```maxon
 function main() returns ExitCode
-  var family = '👨‍👩‍👧'
-  print("{family.bytes().count()}\n")
-  return 0
+	var family = '👨‍👩‍👧'
+	print("{family.bytes().count()}\n")
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -298,9 +298,9 @@ end 'main'
 
 ```maxon
 function main() returns ExitCode
-  var wave = '👋🏽'
-  print("{wave.bytes().count()}\n")
-  return 0
+	var wave = '👋🏽'
+	print("{wave.bytes().count()}\n")
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -315,15 +315,15 @@ end 'main'
 
 ```maxon
 function main() returns ExitCode
-  var newline = '\n'
-  var tab = '\t'
-  var backslash = '\\'
-  var quote = '\''
-  print("{newline.bytes().count()}\n")
-  print("{tab.bytes().count()}\n")
-  print("{backslash.bytes().count()}\n")
-  print("{quote.bytes().count()}\n")
-  return 0
+	var newline = '\n'
+	var tab = '\t'
+	var backslash = '\\'
+	var quote = '\''
+	print("{newline.bytes().count()}\n")
+	print("{tab.bytes().count()}\n")
+	print("{backslash.bytes().count()}\n")
+	print("{quote.bytes().count()}\n")
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -341,10 +341,10 @@ end 'main'
 
 ```maxon
 function main() returns ExitCode
-  var c = 'A'
-  var val = try c.asciiValue() otherwise -1
-  print("{val}\n")
-  return 0
+	var c = 'A'
+	var val = try c.asciiValue() otherwise -1
+	print("{val}\n")
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -359,10 +359,10 @@ end 'main'
 
 ```maxon
 function main() returns ExitCode
-  var c = '0'
-  var val = try c.asciiValue() otherwise -1
-  print("{val}\n")
-  return 0
+	var c = '0'
+	var val = try c.asciiValue() otherwise -1
+	print("{val}\n")
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -377,10 +377,10 @@ end 'main'
 
 ```maxon
 function main() returns ExitCode
-  var c = 'a'
-  var val = try c.asciiValue() otherwise -1
-  print("{val}\n")
-  return 0
+	var c = 'a'
+	var val = try c.asciiValue() otherwise -1
+	print("{val}\n")
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -395,10 +395,10 @@ end 'main'
 
 ```maxon
 function main() returns ExitCode
-  var c = ' '
-  var val = try c.asciiValue() otherwise -1
-  print("{val}\n")
-  return 0
+	var c = ' '
+	var val = try c.asciiValue() otherwise -1
+	print("{val}\n")
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -413,10 +413,10 @@ end 'main'
 
 ```maxon
 function main() returns ExitCode
-  var c = '\n'
-  var val = try c.asciiValue() otherwise -1
-  print("{val}\n")
-  return 0
+	var c = '\n'
+	var val = try c.asciiValue() otherwise -1
+	print("{val}\n")
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -431,10 +431,10 @@ end 'main'
 
 ```maxon
 function main() returns ExitCode
-  var c = 'é'
-  var val = try c.asciiValue() otherwise -1
-  print("{val}")
-  return 0
+	var c = 'é'
+	var val = try c.asciiValue() otherwise -1
+	print("{val}")
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -449,10 +449,10 @@ end 'main'
 
 ```maxon
 function main() returns ExitCode
-  var c = '🎉'
-  var val = try c.asciiValue() otherwise -1
-  print("{val}")
-  return 0
+	var c = '🎉'
+	var val = try c.asciiValue() otherwise -1
+	print("{val}")
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -469,11 +469,11 @@ Character match patterns must correctly handle escape sequences like `'\n'`, `'\
 
 ```maxon
 function main() returns ExitCode
-  let c = '\n'
-  match c 'check'
-    '\n' then return 0
-    default then return 1
-  end 'check'
+	let c = '\n'
+	match c 'check'
+		'\n' then return 0
+		default then return 1
+	end 'check'
 end 'main'
 ```
 ```exitcode

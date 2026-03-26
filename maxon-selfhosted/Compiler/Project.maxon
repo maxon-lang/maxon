@@ -3,40 +3,40 @@
 // This enables multiple projects to be compiled independently (e.g., in an LSP server).
 
 export type Project
-  // Query database (incremental compilation cache)
-  export var db QueryDatabase
+	// Query database (incremental compilation cache)
+	export var db QueryDatabase
 
-  // SSA value ID counter (MLIR pipeline)
-  export var nextValueId_ ValueId
+	// SSA value ID counter (MLIR pipeline)
+	export var nextValueId_ ValueId
 
-  // Parser symbol table (reset per function parse)
-  export var parserVarNames ByteArrayArray
-  export var parserVarSlots VarSlotArray
-  export var parserNextSlot VarSlot
-  export var parserVarIsFloat BoolArray
-  export var parserVarIsRefType BoolArray
-  export var parserScopeStack ScopeDepthArray
+	// Parser symbol table (reset per function parse)
+	export var parserVarNames ByteArrayArray
+	export var parserVarSlots VarSlotArray
+	export var parserNextSlot VarSlot
+	export var parserVarIsFloat BoolArray
+	export var parserVarIsRefType BoolArray
+	export var parserScopeStack ScopeDepthArray
 
-  // Typealias registry: maps alias names to their MLIR base type (b"i64", b"f64", etc.)
-  export var typealiases TypealiasMap
+	// Typealias registry: maps alias names to their MLIR base type (b"i64", b"f64", etc.)
+	export var typealiases TypealiasMap
 
-  // Top-level string constants (compile-time known, used for constant folding)
-  export var stringConstNames ByteArrayArray
-  export var stringConstValues ByteArrayArray
+	// Top-level string constants (compile-time known, used for constant folding)
+	export var stringConstNames ByteArrayArray
+	export var stringConstValues ByteArrayArray
 
-  // Project metadata
-  export var rootPath FilePath
-  export var isSingleFile bool
+	// Project metadata
+	export var rootPath FilePath
+	export var isSingleFile bool
 
-  // Compilation target
-  export var target Target
+	// Compilation target
+	export var target Target
 
-  // Collected diagnostics (errors reported during compilation)
-  export var diagnostics DiagnosticArray
+	// Collected diagnostics (errors reported during compilation)
+	export var diagnostics DiagnosticArray
 
-  // Global data table for string literals and other read-only data.
-  // Populated during MaxHL->Mid lowering when printLiteral ops are lowered.
-  export var globalData GlobalDataTable
+	// Global data table for string literals and other read-only data.
+	// Populated during MaxHL->Mid lowering when printLiteral ops are lowered.
+	export var globalData GlobalDataTable
 
 end 'Project'
 
@@ -44,51 +44,51 @@ export typealias TypealiasMap = Map with(ByteArray, ByteArray)
 export typealias ProjectArray = Array with Project
 
 export function createProject(rootPath FilePath, isSingleFile bool, target Target) returns Project
-  let emptyModuleMemo = MlirModuleMemo{value: MlirModule{functions: MlirFunctionArray{}}, computedAt: 0, verifiedAt: 0}
-  let emptyCodeMemo = CodeMemo{value: CodeResult{code: ByteArray{}, mainCallFixupOffset: 0, relocations: RelocationArray{}, globalData: createGlobalDataTable(), targetModule: MlirModule{functions: MlirFunctionArray{}}}, computedAt: 0, verifiedAt: 0}
-  let db = QueryDatabase{
-    currentRevision: 1,
-    sourceFiles: SourceFileMap{},
-    sourcePaths: FilePathArray{},
-    tokenCache: TokenCacheMap{},
-    parseCache: ParseCacheMap{},
-    allModuleCache: emptyModuleMemo,
-    allMidCache: emptyModuleMemo,
-    codeCache: emptyCodeMemo,
-    dependencies: DependencyArray{},
-    activeQueryStack: QueryKeyArray{},
-    tokenHits: 0, tokenMisses: 0,
-    parseHits: 0, parseMisses: 0,
-    allModuleHits: 0, allModuleMisses: 0,
-    allMidHits: 0, allMidMisses: 0,
-    codeHits: 0, codeMisses: 0
-  }
-  return Project{
-    db: db,
-    nextValueId_: 0,
-    parserVarNames: ByteArrayArray{},
-    parserVarSlots: VarSlotArray{},
-    parserVarIsFloat: BoolArray{},
-    parserVarIsRefType: BoolArray{},
-    parserScopeStack: ScopeDepthArray{},
-    parserNextSlot: 0,
-    typealiases: TypealiasMap{},
-    stringConstNames: ByteArrayArray{},
-    stringConstValues: ByteArrayArray{},
-    rootPath: rootPath,
-    isSingleFile: isSingleFile,
-    target: target,
-    diagnostics: DiagnosticArray{},
-    globalData: createGlobalDataTable()
-  }
+	let emptyModuleMemo = MlirModuleMemo{value: MlirModule{functions: MlirFunctionArray{}}, computedAt: 0, verifiedAt: 0}
+	let emptyCodeMemo = CodeMemo{value: CodeResult{code: ByteArray{}, mainCallFixupOffset: 0, relocations: RelocationArray{}, globalData: createGlobalDataTable(), targetModule: MlirModule{functions: MlirFunctionArray{}}}, computedAt: 0, verifiedAt: 0}
+	let db = QueryDatabase{
+		currentRevision: 1,
+		sourceFiles: SourceFileMap{},
+		sourcePaths: FilePathArray{},
+		tokenCache: TokenCacheMap{},
+		parseCache: ParseCacheMap{},
+		allModuleCache: emptyModuleMemo,
+		allMidCache: emptyModuleMemo,
+		codeCache: emptyCodeMemo,
+		dependencies: DependencyArray{},
+		activeQueryStack: QueryKeyArray{},
+		tokenHits: 0, tokenMisses: 0,
+		parseHits: 0, parseMisses: 0,
+		allModuleHits: 0, allModuleMisses: 0,
+		allMidHits: 0, allMidMisses: 0,
+		codeHits: 0, codeMisses: 0
+	}
+	return Project{
+		db: db,
+		nextValueId_: 0,
+		parserVarNames: ByteArrayArray{},
+		parserVarSlots: VarSlotArray{},
+		parserVarIsFloat: BoolArray{},
+		parserVarIsRefType: BoolArray{},
+		parserScopeStack: ScopeDepthArray{},
+		parserNextSlot: 0,
+		typealiases: TypealiasMap{},
+		stringConstNames: ByteArrayArray{},
+		stringConstValues: ByteArrayArray{},
+		rootPath: rootPath,
+		isSingleFile: isSingleFile,
+		target: target,
+		diagnostics: DiagnosticArray{},
+		globalData: createGlobalDataTable()
+	}
 end 'createProject'
 
 export function hasErrors(project Project) returns bool
-  return project.diagnostics.count() > 0
+	return project.diagnostics.count() > 0
 end 'hasErrors'
 
 // Resolve a source-level type name to its MLIR base type.
 // Returns the original name if not a registered typealias.
 export function resolveTypeName(project Project, name ByteArray) returns ByteArray
-  return try project.typealiases.get(name) otherwise name
+	return try project.typealiases.get(name) otherwise name
 end 'resolveTypeName'

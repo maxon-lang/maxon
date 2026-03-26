@@ -44,16 +44,16 @@ areSame(p, b: p)  // true  — same reference passed twice
 typealias Integer = int(i64.min to i64.max)
 
 type Point
-  export var x Integer
-  export var y Integer
+	export var x Integer
+	export var y Integer
 end 'Point'
 
 function main() returns ExitCode
-  var a = Point{x: 1, y: 2}
-  if a is a 'check'
-    return 1
-  end 'check'
-  return 0
+	var a = Point{x: 1, y: 2}
+	if a is a 'check'
+		return 1
+	end 'check'
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -65,17 +65,17 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 type Point
-  export var x Integer
-  export var y Integer
+	export var x Integer
+	export var y Integer
 end 'Point'
 
 function main() returns ExitCode
-  var a = Point{x: 1, y: 2}
-  var b = a
-  if a is b 'check'
-    return 1
-  end 'check'
-  return 0
+	var a = Point{x: 1, y: 2}
+	var b = a
+	if a is b 'check'
+		return 1
+	end 'check'
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -87,17 +87,17 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 type Point
-  export var x Integer
-  export var y Integer
+	export var x Integer
+	export var y Integer
 end 'Point'
 
 function main() returns ExitCode
-  var a = Point{x: 1, y: 2}
-  var b = a.clone()
-  if a is b 'check'
-    return 1
-  end 'check'
-  return 0
+	var a = Point{x: 1, y: 2}
+	var b = a.clone()
+	if a is b 'check'
+		return 1
+	end 'check'
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -109,17 +109,17 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 type Point
-  export var x Integer
-  export var y Integer
+	export var x Integer
+	export var y Integer
 end 'Point'
 
 function main() returns ExitCode
-  var a = Point{x: 1, y: 2}
-  var b = Point{x: 1, y: 2}
-  if a is b 'check'
-    return 1
-  end 'check'
-  return 0
+	var a = Point{x: 1, y: 2}
+	var b = Point{x: 1, y: 2}
+	if a is b 'check'
+		return 1
+	end 'check'
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -131,17 +131,17 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 type Point
-  export var x Integer
-  export var y Integer
+	export var x Integer
+	export var y Integer
 end 'Point'
 
 function main() returns ExitCode
-  var a = Point{x: 1, y: 2}
-  var b = Point{x: 1, y: 2}
-  if a is not b 'check'
-    return 1
-  end 'check'
-  return 0
+	var a = Point{x: 1, y: 2}
+	var b = Point{x: 1, y: 2}
+	if a is not b 'check'
+		return 1
+	end 'check'
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -153,16 +153,16 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 type Point
-  export var x Integer
-  export var y Integer
+	export var x Integer
+	export var y Integer
 end 'Point'
 
 function main() returns ExitCode
-  var a = Point{x: 1, y: 2}
-  if a is not a 'check'
-    return 1
-  end 'check'
-  return 0
+	var a = Point{x: 1, y: 2}
+	if a is not a 'check'
+		return 1
+	end 'check'
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -174,24 +174,24 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 type Box
-  export var value Integer
+	export var value Integer
 end 'Box'
 
 function areSame(a Box, b Box) returns bool
-  return a is b
+	return a is b
 end 'areSame'
 
 function main() returns ExitCode
-  var x = Box{value: 42}
-  var y = Box{value: 42}
-  var result = 0
-  if areSame(x, b: x) 'same'
-    result = result + 1
-  end 'same'
-  if areSame(x, b: y) 'diff'
-    result = result + 10
-  end 'diff'
-  return result
+	var x = Box{value: 42}
+	var y = Box{value: 42}
+	var result = 0
+	if areSame(x, b: x) 'same'
+		result = result + 1
+	end 'same'
+	if areSame(x, b: y) 'diff'
+		result = result + 10
+	end 'diff'
+	return result
 end 'main'
 ```
 ```exitcode
@@ -201,16 +201,16 @@ end 'main'
 <!-- test: string-identity -->
 ```maxon
 function main() returns ExitCode
-  var a = "hello"
-  var b = "hello"
-  var result = 0
-  if a is a 'self'
-    result = result + 1
-  end 'self'
-  if a is b 'diff'
-    result = result + 10
-  end 'diff'
-  return result
+	var a = "hello"
+	var b = "hello"
+	var result = 0
+	if a is a 'self'
+		result = result + 1
+	end 'self'
+	if a is b 'diff'
+		result = result + 10
+	end 'diff'
+	return result
 end 'main'
 ```
 ```exitcode
@@ -222,15 +222,15 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 type Point
-  export var x Integer
-  export var y Integer
+	export var x Integer
+	export var y Integer
 end 'Point'
 
 function main() returns ExitCode
-  var a = Point{x: 1, y: 2}
-  var b = a
-  b.x = 99
-  return a.x
+	var a = Point{x: 1, y: 2}
+	var b = a
+	b.x = 99
+	return a.x
 end 'main'
 ```
 ```exitcode
@@ -242,15 +242,15 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 type Point
-  export var x Integer
-  export var y Integer
+	export var x Integer
+	export var y Integer
 end 'Point'
 
 function main() returns ExitCode
-  var a = Point{x: 1, y: 2}
-  var b = a.clone()
-  b.x = 99
-  return a.x
+	var a = Point{x: 1, y: 2}
+	var b = a.clone()
+	b.x = 99
+	return a.x
 end 'main'
 ```
 ```exitcode
@@ -260,14 +260,14 @@ end 'main'
 <!-- test: primitive-error -->
 ```maxon
 function main() returns ExitCode
-  var a = 42
-  var b = 42
-  if a is b 'check'
-    return 1
-  end 'check'
-  return 0
+	var a = 42
+	var b = 42
+	if a is b 'check'
+		return 1
+	end 'check'
+	return 0
 end 'main'
 ```
 ```maxoncstderr
-error E3068: specs/fragments/reference-identity/primitive-error.test:5:8: 'is' requires reference types (structs), not primitive values
+error E3068: specs/fragments/reference-identity/primitive-error.test:5:7: 'is' requires reference types (structs), not primitive values
 ```

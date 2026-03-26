@@ -63,12 +63,12 @@ Closures capture variables by reference. Changes to the original variable are vi
 typealias Integer = int(i64.min to i64.max)
 
 function readVal(x Integer) returns Integer
-  return x
+	return x
 end 'readVal'
 
 function main() returns ExitCode
-  var n = 42
-  return readVal(x: n)
+	var n = 42
+	return readVal(x: n)
 end 'main'
 ```
 ```exitcode
@@ -81,14 +81,14 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 function setTo99(x Integer)
-  x = 99
+	x = 99
 end 'setTo99'
 
 function main() returns ExitCode
-  var n = 0
-  setTo99(x: n)
-  print("{n}")
-  return 0
+	var n = 0
+	setTo99(x: n)
+	print("{n}")
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -104,12 +104,12 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 function readVal(x Integer) returns Integer
-  return x
+	return x
 end 'readVal'
 
 function main() returns ExitCode
-  let n = 37
-  return readVal(x: n)
+	let n = 37
+	return readVal(x: n)
 end 'main'
 ```
 ```exitcode
@@ -122,11 +122,11 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 function readVal(x Integer) returns Integer
-  return x
+	return x
 end 'readVal'
 
 function main() returns ExitCode
-  return readVal(x: 42)
+	return readVal(x: 42)
 end 'main'
 ```
 ```exitcode
@@ -139,13 +139,13 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 function readVal(x Integer) returns Integer
-  return x
+	return x
 end 'readVal'
 
 function main() returns ExitCode
-  var a = 20
-  var b = 22
-  return readVal(x: a + b)
+	var a = 20
+	var b = 22
+	return readVal(x: a + b)
 end 'main'
 ```
 ```exitcode
@@ -158,19 +158,19 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 type Point
-  export var x Integer
-  export var y Integer
+	export var x Integer
+	export var y Integer
 end 'Point'
 
 function setX(p Point)
-  p.x = 99
+	p.x = 99
 end 'setX'
 
 function main() returns ExitCode
-  var p = Point{x: 1, y: 2}
-  setX(p: p)
-  print("{p.x}")
-  return 0
+	var p = Point{x: 1, y: 2}
+	setX(p: p)
+	print("{p.x}")
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -186,20 +186,20 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 type Point
-  export var x Integer
-  export var y Integer
+	export var x Integer
+	export var y Integer
 end 'Point'
 
 function replacePoint(p Point)
-  p = Point{x: 99, y: 99}
+	p = Point{x: 99, y: 99}
 end 'replacePoint'
 
 function main() returns ExitCode
-  var p = Point{x: 1, y: 2}
-  replacePoint(p: p)
-  print("{p.x}\n")
-  print("{p.y}\n")
-  return 0
+	var p = Point{x: 1, y: 2}
+	replacePoint(p: p)
+	print("{p.x}\n")
+	print("{p.y}\n")
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -217,17 +217,17 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 function setTo99(x Integer)
-  x = 99
+	x = 99
 end 'setTo99'
 
 function main() returns ExitCode
-  let n = 5
-  setTo99(x: n)
-  return 0
+	let n = 5
+	setTo99(x: n)
+	return 0
 end 'main'
 ```
 ```maxoncstderr
-error E3063: specs/fragments/pass-by-reference/pass-by-reference.let-to-mutating-param-error.test:11:3: cannot pass immutable 'let' variable to function that mutates parameter 'x'
+error E3063: specs/fragments/pass-by-reference/pass-by-reference.let-to-mutating-param-error.test:11:2: cannot pass immutable 'let' variable to function that mutates parameter 'x'
 ```
 
 <!-- test: pass-by-reference.nested-calls -->
@@ -236,18 +236,18 @@ error E3063: specs/fragments/pass-by-reference/pass-by-reference.let-to-mutating
 typealias Integer = int(i64.min to i64.max)
 
 function inner(x Integer)
-  x = 77
+	x = 77
 end 'inner'
 
 function outer(x Integer)
-  inner(x: x)
+	inner(x: x)
 end 'outer'
 
 function main() returns ExitCode
-  var n = 0
-  outer(x: n)
-  print("{n}")
-  return 0
+	var n = 0
+	outer(x: n)
+	print("{n}")
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -263,18 +263,18 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 function process(a Integer, b Integer, c Integer)
-  b = a + c + 90
+	b = a + c + 90
 end 'process'
 
 function main() returns ExitCode
-  var x = 1
-  var y = 2
-  var z = 3
-  process(a: x, b: y, c: z)
-  print("{x}\n")
-  print("{y}\n")
-  print("{z}\n")
-  return 0
+	var x = 1
+	var y = 2
+	var z = 3
+	process(a: x, b: y, c: z)
+	print("{x}\n")
+	print("{y}\n")
+	print("{z}\n")
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -291,19 +291,19 @@ end 'main'
 ```maxon
 
 enum Color
-  red
-  blue
-  green
+	red
+	blue
+	green
 end 'Color'
 
 function switchColor(c Color)
-  c = Color.green
+	c = Color.green
 end 'switchColor'
 
 function main() returns ExitCode
-  var c = Color.red
-  switchColor(c: c)
-  return c.rawValue
+	var c = Color.red
+	switchColor(c: c)
+	return c.rawValue
 end 'main'
 ```
 ```exitcode
@@ -316,12 +316,12 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 function addOffset(x Integer, offset Integer = 10) returns Integer
-  return x + offset
+	return x + offset
 end 'addOffset'
 
 function main() returns ExitCode
-  var result = addOffset(x: 32)
-  return result
+	var result = addOffset(x: 32)
+	return result
 end 'main'
 ```
 ```exitcode
@@ -334,13 +334,13 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 function apply(f () returns Integer) returns Integer
-  return f()
+	return f()
 end 'apply'
 
 function main() returns ExitCode
-  var x = 42
-  var result = apply(f: () gives x)
-  return result
+	var x = 42
+	var result = apply(f: () gives x)
+	return result
 end 'main'
 ```
 ```exitcode
@@ -353,15 +353,15 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 function apply(f () returns Integer) returns Integer
-  return f()
+	return f()
 end 'apply'
 
 function main() returns ExitCode
-  var x = 10
-  var f = () gives x
-  x = 99
-  var result = apply(f: f)
-  return result
+	var x = 10
+	var f = () gives x
+	x = 99
+	var result = apply(f: f)
+	return result
 end 'main'
 ```
 ```exitcode

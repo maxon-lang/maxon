@@ -20,19 +20,19 @@ Structs can contain other structs as fields. The compiler must correctly compute
 typealias Integer = int(i64.min to i64.max)
 
 type Inner
-  export var x Integer
-  export var y Integer
+	export var x Integer
+	export var y Integer
 end 'Inner'
 
 type Outer
-  export var inner Inner
-  export var z Integer
+	export var inner Inner
+	export var z Integer
 end 'Outer'
 
 function main() returns ExitCode
-  var inner = Inner{x: 10, y: 20}
-  var outer = Outer{inner: inner, z: 30}
-  return outer.inner.x + outer.inner.y + outer.z
+	var inner = Inner{x: 10, y: 20}
+	var outer = Outer{inner: inner, z: 30}
+	return outer.inner.x + outer.inner.y + outer.z
 end 'main'
 ```
 ```exitcode
@@ -45,21 +45,21 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 type Inner
-  export var value Integer
+	export var value Integer
 end 'Inner'
 
 type Outer
-  export var inner Inner
+	export var inner Inner
 end 'Outer'
 
 function makeOuter() returns Outer
-  var i = Inner{value: 42}
-  return Outer{inner: i}
+	var i = Inner{value: 42}
+	return Outer{inner: i}
 end 'makeOuter'
 
 function main() returns ExitCode
-  var o = makeOuter()
-  return o.inner.value
+	var o = makeOuter()
+	return o.inner.value
 end 'main'
 ```
 ```exitcode
@@ -72,22 +72,22 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 type Level1
-  export var value Integer
+	export var value Integer
 end 'Level1'
 
 type Level2
-  export var inner Level1
+	export var inner Level1
 end 'Level2'
 
 type Level3
-  export var inner Level2
+	export var inner Level2
 end 'Level3'
 
 function main() returns ExitCode
-  var l1 = Level1{value: 42}
-  var l2 = Level2{inner: l1}
-  var l3 = Level3{inner: l2}
-  return l3.inner.inner.value
+	var l1 = Level1{value: 42}
+	var l2 = Level2{inner: l1}
+	var l3 = Level3{inner: l2}
+	return l3.inner.inner.value
 end 'main'
 ```
 ```exitcode
@@ -100,20 +100,20 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 type Point
-  export var x Integer
-  export var y Integer
+	export var x Integer
+	export var y Integer
 end 'Point'
 
 type Line
-  export var start Point
-  export var finish Point
+	export var start Point
+	export var finish Point
 end 'Line'
 
 function main() returns ExitCode
-  var p1 = Point{x: 1, y: 2}
-  var p2 = Point{x: 10, y: 20}
-  var line = Line{start: p1, finish: p2}
-  return line.start.x + line.start.y + line.finish.x + line.finish.y
+	var p1 = Point{x: 1, y: 2}
+	var p2 = Point{x: 10, y: 20}
+	var line = Line{start: p1, finish: p2}
+	return line.start.x + line.start.y + line.finish.x + line.finish.y
 end 'main'
 ```
 ```exitcode

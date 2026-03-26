@@ -1,35 +1,35 @@
 // Test: multiple-refs-survive-array-growth
 function main() returns ExitCode
-  var arr = ["alpha string that is long enough for heap allocation purposes",
-             "beta string that is long enough for heap allocation purposes",
-             "gamma string that is long enough for heap allocation purposes"]
+	var arr = ["alpha string that is long enough for heap allocation purposes",
+						 "beta string that is long enough for heap allocation purposes",
+						 "gamma string that is long enough for heap allocation purposes"]
 
-  var a = try arr.get(0) otherwise ""
-  var b = try arr.get(1) otherwise ""
-  var c = try arr.get(2) otherwise ""
+	var a = try arr.get(0) otherwise ""
+	var b = try arr.get(1) otherwise ""
+	var c = try arr.get(2) otherwise ""
 
-  // Force many growths
-  var i = 0
-  while i < 30 'grow'
-    arr.push("padding string that is long enough for heap allocation too x")
-    i = i + 1
-  end 'grow'
+	// Force many growths
+	var i = 0
+	while i < 30 'grow'
+		arr.push("padding string that is long enough for heap allocation too x")
+		i = i + 1
+	end 'grow'
 
-  // All original references must still work
-  if a == "alpha string that is long enough for heap allocation purposes" 'a'
-    if b == "beta string that is long enough for heap allocation purposes" 'b'
-      if c == "gamma string that is long enough for heap allocation purposes" 'c'
-        print("ok\n")
-        return 0
-      end 'c'
-    end 'b'
-  end 'a'
-  print("FAIL\n")
-  return 1
+	// All original references must still work
+	if a == "alpha string that is long enough for heap allocation purposes" 'a'
+		if b == "beta string that is long enough for heap allocation purposes" 'b'
+			if c == "gamma string that is long enough for heap allocation purposes" 'c'
+				print("ok\n")
+				return 0
+			end 'c'
+		end 'b'
+	end 'a'
+	print("FAIL\n")
+	return 1
 end 'main'
 ---
 MaxoncStderr: ```
-error E3070: specs/fragments/array-realloc-dangling-ref/multiple-refs-survive-array-growth.test:14:9: cannot mutate 'arr' via 'push' while it is borrowed by 'a' (borrowed at line 7)
+error E3070: specs/fragments/array-realloc-dangling-ref/multiple-refs-survive-array-growth.test:14:7: cannot mutate 'arr' via 'push' while it is borrowed by 'a' (borrowed at line 7)
 ```
 ---
 ---

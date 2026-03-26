@@ -36,11 +36,11 @@ All `Iterable` types (Array, String, Map, Set, List, etc.) via the `Iterable` ex
 <!-- test: enumerated.basic-int -->
 ```maxon
 function main() returns ExitCode
-  var arr = [10, 20, 30]
-  for (index, value) in arr.enumerated() 'loop'
-    print("{index}:{value}\n")
-  end 'loop'
-  return 0
+	var arr = [10, 20, 30]
+	for (index, value) in arr.enumerated() 'loop'
+		print("{index}:{value}\n")
+	end 'loop'
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -55,11 +55,11 @@ end 'main'
 <!-- test: enumerated.basic-string -->
 ```maxon
 function main() returns ExitCode
-  var arr = ["hello", "world"]
-  for (i, s) in arr.enumerated() 'loop'
-    print("{i}={s}\n")
-  end 'loop'
-  return 0
+	var arr = ["hello", "world"]
+	for (i, s) in arr.enumerated() 'loop'
+		print("{i}={s}\n")
+	end 'loop'
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -76,14 +76,14 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
 function main() returns ExitCode
-  var arr = IntArray{}
-  var count = 0
-  for (i, v) in arr.enumerated() 'loop'
-    print("{i}:{v}\n")
-    count = count + 1
-  end 'loop'
-  print("{count}\n")
-  return 0
+	var arr = IntArray{}
+	var count = 0
+	for (i, v) in arr.enumerated() 'loop'
+		print("{i}:{v}\n")
+		count = count + 1
+	end 'loop'
+	print("{count}\n")
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -96,11 +96,11 @@ end 'main'
 <!-- test: enumerated.single-element -->
 ```maxon
 function main() returns ExitCode
-  var arr = [42]
-  for (i, v) in arr.enumerated() 'loop'
-    print("{i}:{v}\n")
-  end 'loop'
-  return 0
+	var arr = [42]
+	for (i, v) in arr.enumerated() 'loop'
+		print("{i}:{v}\n")
+	end 'loop'
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -113,13 +113,13 @@ end 'main'
 <!-- test: enumerated.use-index -->
 ```maxon
 function main() returns ExitCode
-  var arr = [100, 200, 300, 400]
-  var total = 0
-  for (i, v) in arr.enumerated() 'loop'
-    total = total + i * v
-  end 'loop'
-  print("{total}\n")
-  return 0
+	var arr = [100, 200, 300, 400]
+	var total = 0
+	for (i, v) in arr.enumerated() 'loop'
+		total = total + i * v
+	end 'loop'
+	print("{total}\n")
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -134,16 +134,16 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 type Point
-  export var x Integer
-  export var y Integer
+	export var x Integer
+	export var y Integer
 end 'Point'
 
 function main() returns ExitCode
-  var points = [Point{x: 1, y: 2}, Point{x: 3, y: 4}]
-  for (i, p) in points.enumerated() 'loop'
-    print("{i}:({p.x},{p.y})\n")
-  end 'loop'
-  return 0
+	var points = [Point{x: 1, y: 2}, Point{x: 3, y: 4}]
+	for (i, p) in points.enumerated() 'loop'
+		print("{i}:({p.x},{p.y})\n")
+	end 'loop'
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -157,11 +157,11 @@ end 'main'
 <!-- test: enumerated.codepoints -->
 ```maxon
 function main() returns ExitCode
-  var s = "abc"
-  for (i, cp) in s.codepoints().enumerated() 'loop'
-    print("{i}:{cp}\n")
-  end 'loop'
-  return 0
+	var s = "abc"
+	for (i, cp) in s.codepoints().enumerated() 'loop'
+		print("{i}:{cp}\n")
+	end 'loop'
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -176,15 +176,15 @@ end 'main'
 <!-- test: enumerated.discard-index-error -->
 ```maxon
 function main() returns ExitCode
-  var arr = [10, 20, 30]
-  for (_, value) in arr.enumerated() 'loop'
-    print("{value}\n")
-  end 'loop'
-  return 0
+	var arr = [10, 20, 30]
+	for (_, value) in arr.enumerated() 'loop'
+		print("{value}\n")
+	end 'loop'
+	return 0
 end 'main'
 ```
 ```maxoncstderr
-error E3074: specs/fragments/enumerated/enumerated.discard-index-error.test:4:3: discarding the index of enumerated() is unnecessary; use 'for value in collection' instead
+error E3074: specs/fragments/enumerated/enumerated.discard-index-error.test:4:2: discarding the index of enumerated() is unnecessary; use 'for value in collection' instead
 ```
 
 <!-- test: enumerated.discard-both-error -->
@@ -193,13 +193,13 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
 function main() returns ExitCode
-  var arr = IntArray{}
-  for (_, _) in arr.enumerated() 'loop'
-    print("x\n")
-  end 'loop'
-  return 0
+	var arr = IntArray{}
+	for (_, _) in arr.enumerated() 'loop'
+		print("x\n")
+	end 'loop'
+	return 0
 end 'main'
 ```
 ```maxoncstderr
-error E3074: specs/fragments/enumerated/enumerated.discard-both-error.test:7:3: discarding the index of enumerated() is unnecessary; use 'for value in collection' instead
+error E3074: specs/fragments/enumerated/enumerated.discard-both-error.test:7:2: discarding the index of enumerated() is unnecessary; use 'for value in collection' instead
 ```

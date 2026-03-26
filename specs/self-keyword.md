@@ -58,22 +58,22 @@ end 'Point'
 typealias Integer = int(i64.min to i64.max)
 
 type Counter
-  var count Integer
+	var count Integer
 
-  function increment()
-    self.count = self.count + 1
-  end 'increment'
+	function increment()
+		self.count = self.count + 1
+	end 'increment'
 
-  function get() returns Integer
-    return self.count
-  end 'get'
+	function get() returns Integer
+		return self.count
+	end 'get'
 end 'Counter'
 
 function main() returns ExitCode
-  var c = Counter{count: 0}
-  c.increment()
-  c.increment()
-  return c.get()
+	var c = Counter{count: 0}
+	c.increment()
+	c.increment()
+	return c.get()
 end 'main'
 ```
 ```exitcode
@@ -86,23 +86,23 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 type Counter
-  var count Integer
+	var count Integer
 
-  function increment()
-    count = count + 1
-  end 'increment'
+	function increment()
+		count = count + 1
+	end 'increment'
 
-  function get() returns Integer
-    return count
-  end 'get'
+	function get() returns Integer
+		return count
+	end 'get'
 end 'Counter'
 
 function main() returns ExitCode
-  var c = Counter{count: 0}
-  c.increment()
-  c.increment()
-  c.increment()
-  return c.get()
+	var c = Counter{count: 0}
+	c.increment()
+	c.increment()
+	c.increment()
+	return c.get()
 end 'main'
 ```
 ```exitcode
@@ -115,23 +115,23 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 type Accumulator
-  var total Integer
+	var total Integer
 
-  function add(value Integer)
-    self.total = self.total + value
-  end 'add'
+	function add(value Integer)
+		self.total = self.total + value
+	end 'add'
 
-  function getTotal() returns Integer
-    return self.total
-  end 'getTotal'
+	function getTotal() returns Integer
+		return self.total
+	end 'getTotal'
 end 'Accumulator'
 
 function main() returns ExitCode
-  var acc = Accumulator{total: 0}
-  acc.add(10)
-  acc.add(20)
-  acc.add(12)
-  return acc.getTotal()
+	var acc = Accumulator{total: 0}
+	acc.add(10)
+	acc.add(20)
+	acc.add(12)
+	return acc.getTotal()
 end 'main'
 ```
 ```exitcode
@@ -144,21 +144,21 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 type Point
-  var x Integer
-  var y Integer
+	var x Integer
+	var y Integer
 
-  function sum() returns Integer
-    return self.x + self.y
-  end 'sum'
+	function sum() returns Integer
+		return self.x + self.y
+	end 'sum'
 
-  function setX(newX Integer)
-    self.x = newX
-  end 'setX'
+	function setX(newX Integer)
+		self.x = newX
+	end 'setX'
 end 'Point'
 
 function main() returns ExitCode
-  var p = Point{x: 10, y: 32}
-  return p.sum()
+	var p = Point{x: 10, y: 32}
+	return p.sum()
 end 'main'
 ```
 ```exitcode
@@ -171,21 +171,21 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 type Value
-  var n Integer
+	var n Integer
 
-  function double()
-    self.n = self.n * 2
-  end 'double'
+	function double()
+		self.n = self.n * 2
+	end 'double'
 
-  function get() returns Integer
-    return self.n
-  end 'get'
+	function get() returns Integer
+		return self.n
+	end 'get'
 end 'Value'
 
 function main() returns ExitCode
-  var v = Value{n: 21}
-  v.double()
-  return v.get()
+	var v = Value{n: 21}
+	v.double()
+	return v.get()
 end 'main'
 ```
 ```exitcode
@@ -198,17 +198,17 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 type Rectangle
-  var width Integer
-  var height Integer
+	var width Integer
+	var height Integer
 
-  function area() returns Integer
-    return width * height
-  end 'area'
+	function area() returns Integer
+		return width * height
+	end 'area'
 end 'Rectangle'
 
 function main() returns ExitCode
-  var r = Rectangle{width: 6, height: 7}
-  return r.area()
+	var r = Rectangle{width: 6, height: 7}
+	return r.area()
 end 'main'
 ```
 ```exitcode

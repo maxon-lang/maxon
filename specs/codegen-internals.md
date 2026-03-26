@@ -45,16 +45,16 @@ typealias BigVec = Vector with 2048 Integer
 typealias Depth = int(-1 to 50)
 
 function recurse(n Depth) returns Depth
-  var v = BigVec{skipZeroInit: true}
-  v.set(2047, value: n)
-  if n <= 0 'base'
-    return Depth{0}
-  end 'base'
-  return recurse(n - 1)
+	var v = BigVec{skipZeroInit: true}
+	v.set(2047, value: n)
+	if n <= 0 'base'
+		return Depth{0}
+	end 'base'
+	return recurse(n - 1)
 end 'recurse'
 
 function main() returns ExitCode
-  return recurse(50)
+	return recurse(50)
 end 'main'
 ```
 ```exitcode
@@ -67,10 +67,10 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
 function main() returns ExitCode
-  var arr = IntArray{}
-  arr.push(1)
-  arr.push(2)
-  return arr.count()
+	var arr = IntArray{}
+	arr.push(1)
+	arr.push(2)
+	return arr.count()
 end 'main'
 ```
 ```exitcode
@@ -83,15 +83,15 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
 function main() returns ExitCode
-  if true 'outer'
-    var outer_arr = IntArray{}
-    outer_arr.push(100)
-    if true 'inner'
-      var inner_arr = IntArray{}
-      inner_arr.push(200)
-    end 'inner'
-  end 'outer'
-  return 0
+	if true 'outer'
+		var outer_arr = IntArray{}
+		outer_arr.push(100)
+		if true 'inner'
+			var inner_arr = IntArray{}
+			inner_arr.push(200)
+		end 'inner'
+	end 'outer'
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -104,13 +104,13 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
 function main() returns ExitCode
-  var arr = IntArray{}
-  var i = 0
-  while i < 10 'loop'
-    arr.push(i)
-    i = i + 1
-  end 'loop'
-  return arr.count()
+	var arr = IntArray{}
+	var i = 0
+	while i < 10 'loop'
+		arr.push(i)
+		i = i + 1
+	end 'loop'
+	return arr.count()
 end 'main'
 ```
 ```exitcode
@@ -120,8 +120,8 @@ end 'main'
 <!-- test: managed-memory-fixed-size-array-literal-cleanup -->
 ```maxon
 function main() returns ExitCode
-  var arr = [10, 20, 30]
-  return try arr.get(1) otherwise 0
+	var arr = [10, 20, 30]
+	return try arr.get(1) otherwise 0
 end 'main'
 ```
 ```exitcode
@@ -131,8 +131,8 @@ end 'main'
 <!-- test: rdata-constant-array-uses-rdata -->
 ```maxon
 function main() returns ExitCode
-  let arr = [10, 20, 30]
-  return try arr.get(1) otherwise 0
+	let arr = [10, 20, 30]
+	return try arr.get(1) otherwise 0
 end 'main'
 ```
 ```exitcode
@@ -145,25 +145,25 @@ i64[] 10, 20, 30
 <!-- test: rdata-bool-array-uses-i8 -->
 ```maxon
 function main() returns ExitCode
-  let arr = [true, false, true, false]
-  var v0 = try arr.get(0) otherwise false
-  var v1 = try arr.get(1) otherwise true
-  var v2 = try arr.get(2) otherwise false
-  var v3 = try arr.get(3) otherwise true
-  var sum = 0
-  if v0 'c0'
-    sum = sum + 1
-  end 'c0'
-  if v1 'c1'
-    sum = sum + 1
-  end 'c1'
-  if v2 'c2'
-    sum = sum + 1
-  end 'c2'
-  if v3 'c3'
-    sum = sum + 1
-  end 'c3'
-  return sum
+	let arr = [true, false, true, false]
+	var v0 = try arr.get(0) otherwise false
+	var v1 = try arr.get(1) otherwise true
+	var v2 = try arr.get(2) otherwise false
+	var v3 = try arr.get(3) otherwise true
+	var sum = 0
+	if v0 'c0'
+		sum = sum + 1
+	end 'c0'
+	if v1 'c1'
+		sum = sum + 1
+	end 'c1'
+	if v2 'c2'
+		sum = sum + 1
+	end 'c2'
+	if v3 'c3'
+		sum = sum + 1
+	end 'c3'
+	return sum
 end 'main'
 ```
 ```exitcode
@@ -180,11 +180,11 @@ typealias Integer = int(i64.min to i64.max)
 typealias Byte = byte(0 to u8.max)
 
 function main() returns ExitCode
-  let arr = [10 as Byte, 20 as Byte, 30 as Byte]
-  var v0 = try arr.get(0) otherwise 0 as Byte
-  var v1 = try arr.get(1) otherwise 0 as Byte
-  var v2 = try arr.get(2) otherwise 0 as Byte
-  return (v0 as Integer) + (v1 as Integer) + (v2 as Integer)
+	let arr = [10 as Byte, 20 as Byte, 30 as Byte]
+	var v0 = try arr.get(0) otherwise 0 as Byte
+	var v1 = try arr.get(1) otherwise 0 as Byte
+	var v2 = try arr.get(2) otherwise 0 as Byte
+	return (v0 as Integer) + (v1 as Integer) + (v2 as Integer)
 end 'main'
 ```
 ```exitcode
@@ -201,9 +201,9 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
 function main() returns ExitCode
-  var arr = [42]
-  arr.set(0, value: 77)
-  return try arr.get(0) otherwise 0
+	var arr = [42]
+	arr.set(0, value: 77)
+	return try arr.get(0) otherwise 0
 end 'main'
 ```
 ```exitcode
@@ -851,15 +851,15 @@ module {
 <!-- test: rdata-cow-multiple-mutations -->
 ```maxon
 function main() returns ExitCode
-  var arr = [1, 2, 3]
-  arr.set(0, value: 10)
-  arr.set(1, value: 20)
-  arr.set(2, value: 30)
-  var sum = 0
-  sum = sum + (try arr.get(0) otherwise 0)
-  sum = sum + (try arr.get(1) otherwise 0)
-  sum = sum + (try arr.get(2) otherwise 0)
-  return sum
+	var arr = [1, 2, 3]
+	arr.set(0, value: 10)
+	arr.set(1, value: 20)
+	arr.set(2, value: 30)
+	var sum = 0
+	sum = sum + (try arr.get(0) otherwise 0)
+	sum = sum + (try arr.get(1) otherwise 0)
+	sum = sum + (try arr.get(2) otherwise 0)
+	return sum
 end 'main'
 ```
 ```exitcode
@@ -872,9 +872,9 @@ i64[] 1, 2, 3
 <!-- test: rdata-non-constant-array-uses-heap -->
 ```maxon
 function main() returns ExitCode
-  var x = 5
-  var arr = [1, x, 3]
-  return try arr.get(1) otherwise 0
+	var x = 5
+	var arr = [1, x, 3]
+	return try arr.get(1) otherwise 0
 end 'main'
 ```
 ```exitcode
@@ -889,7 +889,7 @@ typealias IntArray = Array with Integer
 let globalArr = [10, 20, 30]
 
 function main() returns ExitCode
-  return try globalArr.get(1) otherwise 0
+	return try globalArr.get(1) otherwise 0
 end 'main'
 ```
 ```exitcode
@@ -907,8 +907,8 @@ typealias IntArray = Array with Integer
 var globalArr = [1, 2, 3]
 
 function main() returns ExitCode
-  globalArr.set(0, value: 42)
-  return try globalArr.get(0) otherwise 0
+	globalArr.set(0, value: 42)
+	return try globalArr.get(0) otherwise 0
 end 'main'
 ```
 ```exitcode
@@ -926,12 +926,12 @@ typealias IntArray = Array with Integer
 var globalArr = [10, 20, 30]
 
 function readFirst() returns Integer
-  return try globalArr.get(0) otherwise 0
+	return try globalArr.get(0) otherwise 0
 end 'readFirst'
 
 function main() returns ExitCode
-  globalArr.set(0, value: 99)
-  return readFirst()
+	globalArr.set(0, value: 99)
+	return readFirst()
 end 'main'
 ```
 ```exitcode
@@ -946,7 +946,7 @@ i64[] 10, 20, 30
 let unusedTable = [100, 200, 300, 400]
 
 function main() returns ExitCode
-  return 42
+	return 42
 end 'main'
 ```
 ```exitcode
@@ -956,8 +956,8 @@ end 'main'
 <!-- test: managed-string-heap-string-generates-cleanup -->
 ```maxon
 function main() returns ExitCode
-  var s = "this is a heap allocated string!"
-  return s.byteLength()
+	var s = "this is a heap allocated string!"
+	return s.byteLength()
 end 'main'
 ```
 ```exitcode
@@ -970,9 +970,9 @@ utf8 "this is a heap allocated string!\0"
 <!-- test: managed-string-reassignment-handles-old-value -->
 ```maxon
 function main() returns ExitCode
-  var s = "first heap allocated value!!"
-  s = "second heap allocated here!!"
-  return s.byteLength()
+	var s = "first heap allocated value!!"
+	s = "second heap allocated here!!"
+	return s.byteLength()
 end 'main'
 ```
 ```exitcode
@@ -986,8 +986,8 @@ utf8 "second heap allocated here!!\0"
 <!-- test: managed-string-print-heap-string -->
 ```maxon
 function main() returns ExitCode
-  var s = "heap allocated string here!!"
-  return s.byteLength()
+	var s = "heap allocated string here!!"
+	return s.byteLength()
 end 'main'
 ```
 ```exitcode
@@ -1000,8 +1000,8 @@ utf8 "heap allocated string here!!\0"
 <!-- test: managed-string-short-string-sso -->
 ```maxon
 function main() returns ExitCode
-  var s = "short"
-  return s.byteLength()
+	var s = "short"
+	return s.byteLength()
 end 'main'
 ```
 ```exitcode
@@ -1014,14 +1014,14 @@ utf8 "short\0"
 <!-- test: managed-string-loop-concatenation-cleanup -->
 ```maxon
 function main() returns ExitCode
-  var s = ""
-  var a = "a"
-  var i = 0
-  while i < 5 'loop'
-    s = s.concat(a)
-    i = i + 1
-  end 'loop'
-  return s.byteLength()
+	var s = ""
+	var a = "a"
+	var i = 0
+	while i < 5 'loop'
+		s = s.concat(a)
+		i = i + 1
+	end 'loop'
+	return s.byteLength()
 end 'main'
 ```
 ```exitcode
@@ -1031,10 +1031,10 @@ end 'main'
 <!-- test: managed-string-literal-deduplication -->
 ```maxon
 function main() returns ExitCode
-  var a = "hello world"
-  var b = "hello world"
-  var c = "hello world"
-  return a.byteLength() + b.byteLength() + c.byteLength()
+	var a = "hello world"
+	var b = "hello world"
+	var c = "hello world"
+	return a.byteLength() + b.byteLength() + c.byteLength()
 end 'main'
 ```
 ```exitcode
@@ -1049,9 +1049,9 @@ utf8 "hello world\0"
 typealias SmallInt = int(0 to 1000)
 
 function main() returns ExitCode
-  var a = SmallInt{10}
-  var b = SmallInt{3}
-  return a + b
+	var a = SmallInt{10}
+	var b = SmallInt{3}
+	return a + b
 end 'main'
 ```
 ```exitcode
@@ -1214,9 +1214,9 @@ module {
 typealias SmallInt = int(0 to 1000)
 
 function main() returns ExitCode
-  var a = SmallInt{20}
-  var b = SmallInt{3}
-  return a / b
+	var a = SmallInt{20}
+	var b = SmallInt{3}
+	return a / b
 end 'main'
 ```
 ```exitcode
@@ -1380,9 +1380,9 @@ module {
 typealias Temp = int(-100000 to 100000)
 
 function main() returns ExitCode
-  var a = Temp{20}
-  var b = Temp{3}
-  return a / b
+	var a = Temp{20}
+	var b = Temp{3}
+	return a / b
 end 'main'
 ```
 ```exitcode
@@ -1560,12 +1560,12 @@ module {
 typealias SmallInt = int(0 to 1000)
 
 function main() returns ExitCode
-  var a = SmallInt{10}
-  var b = SmallInt{3}
-  if a > b 'check'
-    return 1
-  end 'check'
-  return 0
+	var a = SmallInt{10}
+	var b = SmallInt{3}
+	if a > b 'check'
+		return 1
+	end 'check'
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -1692,9 +1692,9 @@ module {
 typealias SmallInt = int(0 to 1000)
 
 function main() returns ExitCode
-  var a = SmallInt{20}
-  var b = SmallInt{3}
-  return a mod b
+	var a = SmallInt{20}
+	var b = SmallInt{3}
+	return a mod b
 end 'main'
 ```
 ```exitcode
@@ -1860,9 +1860,9 @@ module {
 typealias BigInt = int(-1000000000000 to 1000000000000)
 
 function main() returns ExitCode
-  var a = BigInt{20}
-  var b = BigInt{3}
-  return a / b
+	var a = BigInt{20}
+	var b = BigInt{3}
+	return a / b
 end 'main'
 ```
 ```exitcode
@@ -2022,9 +2022,9 @@ module {
 typealias Tiny = int(0 to 100)
 
 function main() returns ExitCode
-  var a = Tiny{21}
-  var b = Tiny{3}
-  return a / b
+	var a = Tiny{21}
+	var b = Tiny{3}
+	return a / b
 end 'main'
 ```
 ```exitcode
@@ -2202,9 +2202,9 @@ module {
 typealias F = float(f32.min to f32.max)
 
 function main() returns ExitCode
-  var a = F{10.0}
-  var b = F{3.0}
-  return trunc(a + b)
+	var a = F{10.0}
+	var b = F{3.0}
+	return trunc(a + b)
 end 'main'
 ```
 ```exitcode
@@ -2369,12 +2369,12 @@ module {
 typealias F = float(f32.min to f32.max)
 
 function main() returns ExitCode
-  var a = F{3.0}
-  var b = F{5.0}
-  if a < b 'less'
-    return 1
-  end 'less'
-  return 0
+	var a = F{3.0}
+	var b = F{5.0}
+	if a < b 'less'
+		return 1
+	end 'less'
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -2498,8 +2498,8 @@ module {
 typealias F = float(f32.min to f32.max)
 
 function main() returns ExitCode
-  var a = F{42.9}
-  return trunc(a)
+	var a = F{42.9}
+	return trunc(a)
 end 'main'
 ```
 ```exitcode

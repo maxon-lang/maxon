@@ -114,14 +114,14 @@ typealias Int = int(i64.min to i64.max)
 typealias IntArray = Array with Int
 
 function main() returns ExitCode
-  var arr = IntArray{}
-  if arr.count() != 0 'check'
-    return 1
-  end 'check'
-  if arr.isEmpty() == false 'empty'
-    return 2
-  end 'empty'
-  return 0
+	var arr = IntArray{}
+	if arr.count() != 0 'check'
+		return 1
+	end 'check'
+	if arr.isEmpty() == false 'empty'
+		return 2
+	end 'empty'
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -136,13 +136,13 @@ typealias Int = int(i64.min to i64.max)
 typealias IntArray = Array with Int
 
 function main() returns ExitCode
-  var arr = IntArray{}
-  arr.push(42)
-  var val = try arr.get(0) otherwise -1
-  if val != 42 'check'
-    return 1
-  end 'check'
-  return 0
+	var arr = IntArray{}
+	arr.push(42)
+	var val = try arr.get(0) otherwise -1
+	if val != 42 'check'
+		return 1
+	end 'check'
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -157,14 +157,14 @@ typealias Int = int(i64.min to i64.max)
 typealias IntArray = Array with Int
 
 function main() returns ExitCode
-  var arr = IntArray{}
-  arr.push(10)
-  arr.push(20)
-  arr.push(30)
-  if arr.count() != 3 'check'
-    return 1
-  end 'check'
-  return 0
+	var arr = IntArray{}
+	arr.push(10)
+	arr.push(20)
+	arr.push(30)
+	if arr.count() != 3 'check'
+		return 1
+	end 'check'
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -179,27 +179,27 @@ typealias Int = int(i64.min to i64.max)
 typealias IntArray = Array with Int
 
 function main() returns ExitCode
-  var arr = IntArray{}
-  arr.push(10)
-  arr.push(20)
-  arr.push(30)
+	var arr = IntArray{}
+	arr.push(10)
+	arr.push(20)
+	arr.push(30)
 
-  var v0 = try arr.get(0) otherwise -1
-  if v0 != 10 'c0'
-    return 1
-  end 'c0'
+	var v0 = try arr.get(0) otherwise -1
+	if v0 != 10 'c0'
+		return 1
+	end 'c0'
 
-  var v1 = try arr.get(1) otherwise -1
-  if v1 != 20 'c1'
-    return 2
-  end 'c1'
+	var v1 = try arr.get(1) otherwise -1
+	if v1 != 20 'c1'
+		return 2
+	end 'c1'
 
-  var v2 = try arr.get(2) otherwise -1
-  if v2 != 30 'c2'
-    return 3
-  end 'c2'
+	var v2 = try arr.get(2) otherwise -1
+	if v2 != 30 'c2'
+		return 3
+	end 'c2'
 
-  return 0
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -214,18 +214,18 @@ typealias Int = int(i64.min to i64.max)
 typealias IntArray = Array with Int
 
 function main() returns ExitCode
-  var arr = IntArray{}
-  arr.push(10)
-  arr.push(20)
-  arr.push(30)
+	var arr = IntArray{}
+	arr.push(10)
+	arr.push(20)
+	arr.push(30)
 
-  arr.set(1, value: 99)
+	arr.set(1, value: 99)
 
-  var val = try arr.get(1) otherwise -1
-  if val != 99 'check'
-    return 1
-  end 'check'
-  return 0
+	var val = try arr.get(1) otherwise -1
+	if val != 99 'check'
+		return 1
+	end 'check'
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -240,22 +240,22 @@ typealias Int = int(i64.min to i64.max)
 typealias IntArray = Array with Int
 
 function main() returns ExitCode
-  var arr = IntArray{}
-  arr.push(10)
-  arr.push(20)
-  arr.push(30)
+	var arr = IntArray{}
+	arr.push(10)
+	arr.push(20)
+	arr.push(30)
 
-  var f = try arr.first() otherwise -1
-  if f != 10 'fc'
-    return 1
-  end 'fc'
+	var f = try arr.first() otherwise -1
+	if f != 10 'fc'
+		return 1
+	end 'fc'
 
-  var l = try arr.last() otherwise -1
-  if l != 30 'lc'
-    return 3
-  end 'lc'
+	var l = try arr.last() otherwise -1
+	if l != 30 'lc'
+		return 3
+	end 'lc'
 
-  return 0
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -270,21 +270,21 @@ typealias Int = int(i64.min to i64.max)
 typealias IntArray = Array with Int
 
 function main() returns ExitCode
-  var arr = IntArray{}
-  arr.push(10)
-  arr.push(20)
-  arr.push(30)
+	var arr = IntArray{}
+	arr.push(10)
+	arr.push(20)
+	arr.push(30)
 
-  var val = try arr.pop() otherwise -1
-  if val != 30 'check'
-    return 1
-  end 'check'
+	var val = try arr.pop() otherwise -1
+	if val != 30 'check'
+		return 1
+	end 'check'
 
-  if arr.count() != 2 'cnt'
-    return 3
-  end 'cnt'
+	if arr.count() != 2 'cnt'
+		return 3
+	end 'cnt'
 
-  return 0
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -296,17 +296,17 @@ Initialize from array literal.
 
 ```maxon
 function main() returns ExitCode
-  var arr = [1, 2, 3]
-  
-  if arr.count() != 3 'cnt'
-    return 1
-  end 'cnt'
-  
-  var v = try arr.get(1) otherwise -1
-  if v != 2 'check'
-    return 2
-  end 'check'
-  return 0
+	var arr = [1, 2, 3]
+	
+	if arr.count() != 3 'cnt'
+		return 1
+	end 'cnt'
+	
+	var v = try arr.get(1) otherwise -1
+	if v != 2 'check'
+		return 2
+	end 'check'
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -321,21 +321,21 @@ typealias Int = int(i64.min to i64.max)
 typealias IntArray = Array with Int
 
 function main() returns ExitCode
-  var arr = IntArray{}
-  arr.push(10)
-  arr.push(20)
-  arr.push(30)
+	var arr = IntArray{}
+	arr.push(10)
+	arr.push(20)
+	arr.push(30)
 
-  var sum = 0
-  for item in arr 'loop'
-    sum = sum + item
-  end 'loop'
+	var sum = 0
+	for item in arr 'loop'
+		sum = sum + item
+	end 'loop'
 
-  if sum != 60 'check'
-    return 1
-  end 'check'
+	if sum != 60 'check'
+		return 1
+	end 'check'
 
-  return 0
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -350,25 +350,25 @@ typealias Int = int(i64.min to i64.max)
 typealias IntArray = Array with Int
 
 function main() returns ExitCode
-  var arr = IntArray{}
-  arr.push(10)
-  arr.push(20)
-  arr.push(30)
+	var arr = IntArray{}
+	arr.push(10)
+	arr.push(20)
+	arr.push(30)
 
-  var sum1 = 0
-  for item in arr 'loop1'
-    sum1 = sum1 + item
-  end 'loop1'
+	var sum1 = 0
+	for item in arr 'loop1'
+		sum1 = sum1 + item
+	end 'loop1'
 
-  var sum2 = 0
-  for item in arr 'loop2'
-    sum2 = sum2 + item
-  end 'loop2'
+	var sum2 = 0
+	for item in arr 'loop2'
+		sum2 = sum2 + item
+	end 'loop2'
 
-  if sum1 == 60 and sum2 == 60 'check'
-    return 0
-  end 'check'
-  return 1
+	if sum1 == 60 and sum2 == 60 'check'
+		return 0
+	end 'check'
+	return 1
 end 'main'
 ```
 ```exitcode
@@ -383,30 +383,30 @@ typealias Int = int(i64.min to i64.max)
 typealias IntArray = Array with Int
 
 function innerSum(arr IntArray) returns Int
-  var total = 0
-  for item in arr 'inner'
-    total = total + item
-  end 'inner'
-  return total
+	var total = 0
+	for item in arr 'inner'
+		total = total + item
+	end 'inner'
+	return total
 end 'innerSum'
 
 function main() returns ExitCode
-  var arr = IntArray{}
-  arr.push(1)
-  arr.push(2)
-  arr.push(3)
+	var arr = IntArray{}
+	arr.push(1)
+	arr.push(2)
+	arr.push(3)
 
-  var outerTotal = 0
-  for item in arr 'outer'
-    outerTotal = outerTotal + item + innerSum(arr)
-  end 'outer'
+	var outerTotal = 0
+	for item in arr 'outer'
+		outerTotal = outerTotal + item + innerSum(arr)
+	end 'outer'
 
-  // Each outer item: item + innerSum(arr) = item + 6
-  // Outer loop: (1+6) + (2+6) + (3+6) = 7+8+9 = 24
-  if outerTotal == 24 'check'
-    return 0
-  end 'check'
-  return 1
+	// Each outer item: item + innerSum(arr) = item + 6
+	// Outer loop: (1+6) + (2+6) + (3+6) = 7+8+9 = 24
+	if outerTotal == 24 'check'
+		return 0
+	end 'check'
+	return 1
 end 'main'
 ```
 ```exitcode
@@ -421,25 +421,25 @@ typealias Int = int(i64.min to i64.max)
 typealias IntArray = Array with Int
 
 function main() returns ExitCode
-  var arr = IntArray{}
+	var arr = IntArray{}
 
-  if arr.isEmpty() == false 'e1'
-    return 1
-  end 'e1'
+	if arr.isEmpty() == false 'e1'
+		return 1
+	end 'e1'
 
-  arr.push(42)
+	arr.push(42)
 
-  if arr.isEmpty() == true 'e2'
-    return 2
-  end 'e2'
+	if arr.isEmpty() == true 'e2'
+		return 2
+	end 'e2'
 
-  var _ = try arr.pop() otherwise 0
+	var _ = try arr.pop() otherwise 0
 
-  if arr.isEmpty() == false 'e3'
-    return 3
-  end 'e3'
+	if arr.isEmpty() == false 'e3'
+		return 3
+	end 'e3'
 
-  return 0
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -454,22 +454,22 @@ typealias Int = int(i64.min to i64.max)
 typealias IntArray = Array with Int
 
 function main() returns ExitCode
-  var arr = IntArray{}
-  arr.push(10)
-  arr.push(20)
-  arr.push(30)
+	var arr = IntArray{}
+	arr.push(10)
+	arr.push(20)
+	arr.push(30)
 
-  arr.clear()
+	arr.clear()
 
-  if arr.count() != 0 'cnt'
-    return 1
-  end 'cnt'
+	if arr.count() != 0 'cnt'
+		return 1
+	end 'cnt'
 
-  if arr.isEmpty() == false 'empty'
-    return 2
-  end 'empty'
+	if arr.isEmpty() == false 'empty'
+		return 2
+	end 'empty'
 
-  return 0
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -484,14 +484,14 @@ typealias Int = int(i64.min to i64.max)
 typealias IntArray = Array with Int
 
 function main() returns ExitCode
-  var arr = IntArray{}
-  arr.push(10)
+	var arr = IntArray{}
+	arr.push(10)
 
-  var val = try arr.get(5) otherwise -1
-  if val == -1 'check'
-    return 0
-  end 'check'
-  return 1
+	var val = try arr.get(5) otherwise -1
+	if val == -1 'check'
+		return 0
+	end 'check'
+	return 1
 end 'main'
 ```
 ```exitcode
@@ -506,13 +506,13 @@ typealias Int = int(i64.min to i64.max)
 typealias IntArray = Array with Int
 
 function main() returns ExitCode
-  var arr = IntArray{}
+	var arr = IntArray{}
 
-  var val = try arr.get(0) otherwise -1
-  if val == -1 'check'
-    return 0
-  end 'check'
-  return 1
+	var val = try arr.get(0) otherwise -1
+	if val == -1 'check'
+		return 0
+	end 'check'
+	return 1
 end 'main'
 ```
 ```exitcode
@@ -528,11 +528,11 @@ typealias IntArray = Array with Int
 var arr = IntArray{}
 
 function main() returns ExitCode
-  var val = try arr.get(0) otherwise -1
-  if val == -1 'check'
-    return 0
-  end 'check'
-  return 1
+	var val = try arr.get(0) otherwise -1
+	if val == -1 'check'
+		return 0
+	end 'check'
+	return 1
 end 'main'
 ```
 ```exitcode
@@ -547,18 +547,18 @@ typealias Int = int(i64.min to i64.max)
 typealias IntArray = Array with Int
 
 function main() returns ExitCode
-  var arr = IntArray{}
-  arr.reserve(100)
+	var arr = IntArray{}
+	arr.reserve(100)
 
-  if arr.capacity() < 100 'cap'
-    return 1
-  end 'cap'
+	if arr.capacity() < 100 'cap'
+		return 1
+	end 'cap'
 
-  if arr.count() != 0 'cnt'
-    return 2
-  end 'cnt'
+	if arr.count() != 0 'cnt'
+		return 2
+	end 'cnt'
 
-  return 0
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -572,19 +572,19 @@ Push string literals into an array and retrieve them.
 typealias StringArray = Array with String
 
 function main() returns ExitCode
-  var arr = StringArray{}
-  arr.push("hello")
-  arr.push("world")
+	var arr = StringArray{}
+	arr.push("hello")
+	arr.push("world")
 
-  if arr.count() != 2 'cnt'
-    return 1
-  end 'cnt'
+	if arr.count() != 2 'cnt'
+		return 1
+	end 'cnt'
 
-  var s0 = try arr.get(0) otherwise ""
-  var s1 = try arr.get(1) otherwise ""
-  print(s0)
-  print(s1)
-  return 0
+	var s0 = try arr.get(0) otherwise ""
+	var s1 = try arr.get(1) otherwise ""
+	print(s0)
+	print(s1)
+	return 0
 end 'main'
 ```
 ```stdout
@@ -601,19 +601,19 @@ Push longer string literals (heap-allocated) into an array.
 typealias StringArray = Array with String
 
 function main() returns ExitCode
-  var arr = StringArray{}
-  arr.push("hello this is a longer string")
-  arr.push("world this is also a longer string")
+	var arr = StringArray{}
+	arr.push("hello this is a longer string")
+	arr.push("world this is also a longer string")
 
-  if arr.count() != 2 'cnt'
-    return 1
-  end 'cnt'
+	if arr.count() != 2 'cnt'
+		return 1
+	end 'cnt'
 
-  var s0 = try arr.get(0) otherwise ""
-  var s1 = try arr.get(1) otherwise ""
-  print(s0)
-  print(s1)
-  return 0
+	var s0 = try arr.get(0) otherwise ""
+	var s1 = try arr.get(1) otherwise ""
+	print(s0)
+	print(s1)
+	return 0
 end 'main'
 ```
 ```stdout
@@ -630,17 +630,17 @@ Push string variables into an array.
 typealias StringArray = Array with String
 
 function main() returns ExitCode
-  var arr = StringArray{}
-  var s1 = "first"
-  var s2 = "second"
-  arr.push(s1)
-  arr.push(s2)
+	var arr = StringArray{}
+	var s1 = "first"
+	var s2 = "second"
+	arr.push(s1)
+	arr.push(s2)
 
-  var v0 = try arr.get(0) otherwise ""
-  var v1 = try arr.get(1) otherwise ""
-  print(v0)
-  print(v1)
-  return 0
+	var v0 = try arr.get(0) otherwise ""
+	var v1 = try arr.get(1) otherwise ""
+	print(v0)
+	print(v1)
+	return 0
 end 'main'
 ```
 ```stdout
@@ -657,15 +657,15 @@ Iterate over an array of strings.
 typealias StringArray = Array with String
 
 function main() returns ExitCode
-  var arr = StringArray{}
-  arr.push("a")
-  arr.push("b")
-  arr.push("c")
+	var arr = StringArray{}
+	arr.push("a")
+	arr.push("b")
+	arr.push("c")
 
-  for item in arr 'loop'
-    print(item)
-  end 'loop'
-  return 0
+	for item in arr 'loop'
+		print(item)
+	end 'loop'
+	return 0
 end 'main'
 ```
 ```stdout
@@ -682,14 +682,14 @@ Get strings from array using get method.
 typealias StringArray = Array with String
 
 function main() returns ExitCode
-  var arr = StringArray{}
-  arr.push("one")
-  arr.push("two")
-  arr.push("three")
+	var arr = StringArray{}
+	arr.push("one")
+	arr.push("two")
+	arr.push("three")
 
-  var val = try arr.get(1) otherwise ""
-  print(val)
-  return 0
+	var val = try arr.get(1) otherwise ""
+	print(val)
+	return 0
 end 'main'
 ```
 ```stdout
@@ -706,11 +706,11 @@ Verify string array memory is properly managed (no leaks).
 typealias StringArray = Array with String
 
 function main() returns ExitCode
-  var arr = StringArray{}
-  arr.push("test string one")
-  arr.push("test string two")
-  arr.push("test string three")
-  return 0
+	var arr = StringArray{}
+	arr.push("test string one")
+	arr.push("test string two")
+	arr.push("test string three")
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -727,18 +727,18 @@ typealias Int = int(i64.min to i64.max)
 typealias IntArray = Array with Int
 
 function main() returns ExitCode
-  var arr = IntArray{}
-  arr = arr.push(1)
-  arr = arr.push(2)
-  arr = arr.push(3)
+	var arr = IntArray{}
+	arr = arr.push(1)
+	arr = arr.push(2)
+	arr = arr.push(3)
 
-  var sum = 0
-  for n in arr 'loop'
-    sum = sum + n
-  end 'loop'
+	var sum = 0
+	for n in arr 'loop'
+		sum = sum + n
+	end 'loop'
 
-  // 1 + 2 + 3 = 6
-  return sum
+	// 1 + 2 + 3 = 6
+	return sum
 end 'main'
 ```
 ```exitcode

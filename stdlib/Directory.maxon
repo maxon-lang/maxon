@@ -3,63 +3,63 @@
 
 /// Error for directory list operations
 export union DirectoryListError implements Error
-  notFound
+	notFound
 end 'DirectoryListError'
 
 export type Directory
-  typealias StringArray = Array with String
-  var _dir __ManagedDirectory
+	typealias StringArray = Array with String
+	var _dir __ManagedDirectory
 
-  /// List files and directories at a path
-  export static function list(path FilePath) returns StringArray throws DirectoryListError
-    var pattern = "{path._path}{FilePath.separator()}*"
+	/// List files and directories at a path
+	export static function list(path FilePath) returns StringArray throws DirectoryListError
+		var pattern = "{path._path}{FilePath.separator()}*"
 
-    let searchResult = __ManagedDirectory.openSearch(pattern.managed)
-    if searchResult == 0 'notFound'
-      throw DirectoryListError.notFound
-    end 'notFound'
-    var dir = Directory{_dir: searchResult}
+		let searchResult = __ManagedDirectory.openSearch(pattern.managed)
+		if searchResult == 0 'notFound'
+			throw DirectoryListError.notFound
+		end 'notFound'
+		var dir = Directory{_dir: searchResult}
 
-    var result = StringArray{}
+		var result = StringArray{}
 
-    var managed = dir._dir.filename()
-    var name = String{managed: managed, _iterPos: 0}
-    if name != "." and name != ".." 'notDot1'
-      result.push(name)
-    end 'notDot1'
+		var managed = dir._dir.filename()
+		var name = String{managed: managed, _iterPos: 0}
+		if name != "." and name != ".." 'notDot1'
+			result.push(name)
+		end 'notDot1'
 
-    var nextResult = dir._dir.next()
-    while nextResult != 0 'loop'
-      managed = dir._dir.filename()
-      name = String{managed: managed, _iterPos: 0}
-      if name != "." and name != ".." 'notDot2'
-        result.push(name)
-      end 'notDot2'
-      nextResult = dir._dir.next()
-    end 'loop'
-    dir._dir.close()
-    return result
-  end 'list'
+		var nextResult = dir._dir.next()
+		while nextResult != 0 'loop'
+			managed = dir._dir.filename()
+			name = String{managed: managed, _iterPos: 0}
+			if name != "." and name != ".." 'notDot2'
+				result.push(name)
+			end 'notDot2'
+			nextResult = dir._dir.next()
+		end 'loop'
+		dir._dir.close()
+		return result
+	end 'list'
 
-  /// Check if a path exists and is a directory
-  export static function exists(path FilePath) returns bool
-    return __ManagedDirectory.exists(path._path.managed)
-  end 'exists'
+	/// Check if a path exists and is a directory
+	export static function exists(path FilePath) returns bool
+		return __ManagedDirectory.exists(path._path.managed)
+	end 'exists'
 
-  /// Alias for exists
-  export static function isDirectory(path FilePath) returns bool
-    return Directory.exists(path)
-  end 'isDirectory'
+	/// Alias for exists
+	export static function isDirectory(path FilePath) returns bool
+		return Directory.exists(path)
+	end 'isDirectory'
 
-  /// Create a directory at the given path. Returns true on success.
-  export static function create(path FilePath) returns bool
-    return __ManagedDirectory.create(path._path.managed)
-  end 'create'
+	/// Create a directory at the given path. Returns true on success.
+	export static function create(path FilePath) returns bool
+		return __ManagedDirectory.create(path._path.managed)
+	end 'create'
 
-  /// Get the current working directory as a FilePath
-  export static function currentPath() returns FilePath
-    let managed = __ManagedDirectory.currentPath()
-    let dirStr = String{managed: managed, _iterPos: 0}
-    return try FilePath.from(dirStr) otherwise panic("Directory.currentPath: invalid path")
-  end 'currentPath'
+	/// Get the current working directory as a FilePath
+	export static function currentPath() returns FilePath
+		let managed = __ManagedDirectory.currentPath()
+		let dirStr = String{managed: managed, _iterPos: 0}
+		return try FilePath.from(dirStr) otherwise panic("Directory.currentPath: invalid path")
+	end 'currentPath'
 end 'Directory'

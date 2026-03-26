@@ -17,8 +17,8 @@ Type fields can be marked with `export` to make them accessible from outside the
 typealias Score = int(i64.min to i64.max)
 
 type Value
-  export var n Score      // accessible from outside
-  var private Score       // only accessible within methods
+	export var n Score      // accessible from outside
+	var private Score       // only accessible within methods
 end 'Value'
 ```
 
@@ -40,23 +40,23 @@ Non-exported fields are only accessible within methods of the same type:
 typealias Score = int(i64.min to i64.max)
 
 type Counter
-  var count Score              // private
-  export var name Score     // public
+	var count Score              // private
+	export var name Score     // public
 
-  function increment()
-    count = count + 1      // OK - accessing within method
-  end 'increment'
+	function increment()
+		count = count + 1      // OK - accessing within method
+	end 'increment'
 
-  export function getCount() returns Score
-    return count           // OK - accessing within method
-  end 'getCount'
+	export function getCount() returns Score
+		return count           // OK - accessing within method
+	end 'getCount'
 end 'Counter'
 
 function main() returns ExitCode
-  var c = Counter{count: 0, name: 5}
-  c.increment()
-  return c.getCount()
-  // c.count would be an error - not exported
+	var c = Counter{count: 0, name: 5}
+	c.increment()
+	return c.getCount()
+	// c.count would be an error - not exported
 end 'main'
 ```
 ```exitcode
@@ -75,17 +75,17 @@ All fields (exported or not) can be initialized in struct literals, since the ty
 typealias Integer = int(i64.min to i64.max)
 
 type Value
-  export var n Integer
-  var private Integer
+	export var n Integer
+	var private Integer
 
-  static function create() returns Self
-    return Value{n: 42, private: 100}
-  end 'create'
+	static function create() returns Self
+		return Value{n: 42, private: 100}
+	end 'create'
 end 'Value'
 
 function main() returns ExitCode
-  var v = Value.create()
-  return v.n
+	var v = Value.create()
+	return v.n
 end 'main'
 ```
 ```exitcode
@@ -98,17 +98,17 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 type Value
-  export var n Integer
+	export var n Integer
 
-  static function create() returns Self
-    return Value{n: 10}
-  end 'create'
+	static function create() returns Self
+		return Value{n: 10}
+	end 'create'
 end 'Value'
 
 function main() returns ExitCode
-  var v = Value.create()
-  v.n = 42
-  return v.n
+	var v = Value.create()
+	v.n = 42
+	return v.n
 end 'main'
 ```
 ```exitcode
@@ -121,16 +121,16 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 type Config
-  export let version Integer
+	export let version Integer
 
-  static function create() returns Self
-    return Config{version: 42}
-  end 'create'
+	static function create() returns Self
+		return Config{version: 42}
+	end 'create'
 end 'Config'
 
 function main() returns ExitCode
-  var c = Config.create()
-  return c.version
+	var c = Config.create()
+	return c.version
 end 'main'
 ```
 ```exitcode
@@ -143,22 +143,22 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 type Counter
-  var count Integer
+	var count Integer
 
-  function increment()
-    count = count + 1
-  end 'increment'
+	function increment()
+		count = count + 1
+	end 'increment'
 
-  function getCount() returns Integer
-    return count
-  end 'getCount'
+	function getCount() returns Integer
+		return count
+	end 'getCount'
 end 'Counter'
 
 function main() returns ExitCode
-  var c = Counter{count: 40}
-  c.increment()
-  c.increment()
-  return c.getCount()
+	var c = Counter{count: 40}
+	c.increment()
+	c.increment()
+	return c.getCount()
 end 'main'
 ```
 ```exitcode
@@ -171,21 +171,21 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 type Box
-  export var value Integer
-  var secret Integer
+	export var value Integer
+	var secret Integer
 
-  static function create(v Integer, s Integer) returns Self
-    return Box{value: v, secret: s}
-  end 'create'
+	static function create(v Integer, s Integer) returns Self
+		return Box{value: v, secret: s}
+	end 'create'
 
-  function getSecret() returns Integer
-    return secret
-  end 'getSecret'
+	function getSecret() returns Integer
+		return secret
+	end 'getSecret'
 end 'Box'
 
 function main() returns ExitCode
-  var b = Box.create(20, s: 22)
-  return b.value + b.getSecret()
+	var b = Box.create(20, s: 22)
+	return b.value + b.getSecret()
 end 'main'
 ```
 ```exitcode
@@ -198,20 +198,20 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 type Value
-  var private Integer
+	var private Integer
 
-  static function create() returns Self
-    return Value{private: 42}
-  end 'create'
+	static function create() returns Self
+		return Value{private: 42}
+	end 'create'
 end 'Value'
 
 function main() returns ExitCode
-  var v = Value.create()
-  return v.private
+	var v = Value.create()
+	return v.private
 end 'main'
 ```
 ```maxoncstderr
-error E3014: specs/fragments/export-var-fields/error.unexported-field-read.test:15:12: cannot access unexported field: 'private' outside of type 'Value'
+error E3014: specs/fragments/export-var-fields/error.unexported-field-read.test:15:11: cannot access unexported field: 'private' outside of type 'Value'
 ```
 
 <!-- test: error.unexported-field-write -->
@@ -220,21 +220,21 @@ error E3014: specs/fragments/export-var-fields/error.unexported-field-read.test:
 typealias Integer = int(i64.min to i64.max)
 
 type Value
-  var private Integer
+	var private Integer
 
-  static function create() returns Self
-    return Value{private: 0}
-  end 'create'
+	static function create() returns Self
+		return Value{private: 0}
+	end 'create'
 end 'Value'
 
 function main() returns ExitCode
-  var v = Value.create()
-  v.private = 42
-  return 0
+	var v = Value.create()
+	v.private = 42
+	return 0
 end 'main'
 ```
 ```maxoncstderr
-error E3014: specs/fragments/export-var-fields/error.unexported-field-write.test:15:5: cannot access unexported field: 'private' outside of type 'Value'
+error E3014: specs/fragments/export-var-fields/error.unexported-field-write.test:15:4: cannot access unexported field: 'private' outside of type 'Value'
 ```
 
 <!-- test: all-fields-private-by-default -->
@@ -243,21 +243,21 @@ error E3014: specs/fragments/export-var-fields/error.unexported-field-write.test
 typealias Integer = int(i64.min to i64.max)
 
 type Simple
-  var x Integer
-  var y Integer
+	var x Integer
+	var y Integer
 
-  static function make(a Integer, b Integer) returns Self
-    return Simple{x: a, y: b}
-  end 'make'
+	static function make(a Integer, b Integer) returns Self
+		return Simple{x: a, y: b}
+	end 'make'
 
-  function sum() returns Integer
-    return x + y
-  end 'sum'
+	function sum() returns Integer
+		return x + y
+	end 'sum'
 end 'Simple'
 
 function main() returns ExitCode
-  var s = Simple.make(20, b: 22)
-  return s.sum()
+	var s = Simple.make(20, b: 22)
+	return s.sum()
 end 'main'
 ```
 ```exitcode

@@ -37,12 +37,12 @@ end 'check'
 <!-- test: default-panic.statement -->
 ```maxon
 function main() returns ExitCode
-  var x = 2
-  match x 'check'
-    1 then return 10
-    2 then return 20
-    default panic("unexpected value")
-  end 'check'
+	var x = 2
+	match x 'check'
+		1 then return 10
+		2 then return 20
+		default panic("unexpected value")
+	end 'check'
 end 'main'
 ```
 ```exitcode
@@ -52,12 +52,12 @@ end 'main'
 <!-- test: default-panic.statement-hit -->
 ```maxon
 function main() returns ExitCode
-  var x = 99
-  match x 'check'
-    1 then return 10
-    2 then return 20
-    default panic("unexpected value")
-  end 'check'
+	var x = 99
+	match x 'check'
+		1 then return 10
+		2 then return 20
+		default panic("unexpected value")
+	end 'check'
 end 'main'
 ```
 ```exitcode
@@ -73,14 +73,14 @@ Stack trace:
 <!-- test: default-panic.expression -->
 ```maxon
 function main() returns ExitCode
-  var x = 3
-  let result = match x 'eval'
-    1 gives 10
-    2 gives 20
-    3 gives 30
-    default panic("unexpected value")
-  end 'eval'
-  return result
+	var x = 3
+	let result = match x 'eval'
+		1 gives 10
+		2 gives 20
+		3 gives 30
+		default panic("unexpected value")
+	end 'eval'
+	return result
 end 'main'
 ```
 ```exitcode
@@ -90,17 +90,17 @@ end 'main'
 <!-- test: default-panic.enum-statement -->
 ```maxon
 enum Color
-    red
-    green
-    blue
+		red
+		green
+		blue
 end 'Color'
 
 function main() returns ExitCode
-  var c = Color.red
-  match c 'check'
-    red then return 1
-    default panic("unhandled color")
-  end 'check'
+	var c = Color.red
+	match c 'check'
+		red then return 1
+		default panic("unhandled color")
+	end 'check'
 end 'main'
 ```
 ```exitcode
@@ -110,19 +110,19 @@ end 'main'
 <!-- test: default-panic.enum-expression -->
 ```maxon
 enum Color
-    red
-    green
-    blue
+		red
+		green
+		blue
 end 'Color'
 
 function main() returns ExitCode
-  var c = Color.green
-  let result = match c 'eval'
-    red gives 1
-    green gives 2
-    default panic("unhandled color")
-  end 'eval'
-  return result
+	var c = Color.green
+	let result = match c 'eval'
+		red gives 1
+		green gives 2
+		default panic("unhandled color")
+	end 'eval'
+	return result
 end 'main'
 ```
 ```exitcode
@@ -134,18 +134,18 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 union Op
-  add
-  sub
-  mul
-  exec(code Integer)
+	add
+	sub
+	mul
+	exec(code Integer)
 end 'Op'
 
 function main() returns ExitCode
-  var op = Op.sub
-  match op 'check'
-    add to mul then return 1
-    default panic("unexpected op")
-  end 'check'
+	var op = Op.sub
+	match op 'check'
+		add to mul then return 1
+		default panic("unexpected op")
+	end 'check'
 end 'main'
 ```
 ```exitcode
@@ -157,20 +157,20 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 union Op
-  add
-  sub
-  mul
-  exec(code Integer)
+	add
+	sub
+	mul
+	exec(code Integer)
 end 'Op'
 
 function main() returns ExitCode
-  var op = Op.mul
-  let result = match op 'eval'
-    add to sub gives 1
-    mul gives 2
-    default panic("unexpected op")
-  end 'eval'
-  return result
+	var op = Op.mul
+	let result = match op 'eval'
+		add to sub gives 1
+		mul gives 2
+		default panic("unexpected op")
+	end 'eval'
+	return result
 end 'main'
 ```
 ```exitcode
@@ -180,48 +180,48 @@ end 'main'
 <!-- test: error.no-default-statement -->
 ```maxon
 function main() returns ExitCode
-  var x = 1
-  match x 'check'
-    1 then return 10
-    2 then return 20
-  end 'check'
+	var x = 1
+	match x 'check'
+		1 then return 10
+		2 then return 20
+	end 'check'
 end 'main'
 ```
 ```maxoncstderr
-error E2026: specs/fragments/match-exhaustive-default-panic/error.no-default-statement.test:7:3: match is not exhaustive: add a 'default' arm
+error E2026: specs/fragments/match-exhaustive-default-panic/error.no-default-statement.test:7:2: match is not exhaustive: add a 'default' arm
 ```
 
 <!-- test: error.no-default-expression -->
 ```maxon
 function main() returns ExitCode
-  var x = 1
-  let result = match x 'eval'
-    1 gives 10
-    2 gives 20
-  end 'eval'
-  return result
+	var x = 1
+	let result = match x 'eval'
+		1 gives 10
+		2 gives 20
+	end 'eval'
+	return result
 end 'main'
 ```
 ```maxoncstderr
-error E2026: specs/fragments/match-exhaustive-default-panic/error.no-default-expression.test:7:3: match expression is not exhaustive: add a 'default' arm
+error E2026: specs/fragments/match-exhaustive-default-panic/error.no-default-expression.test:7:2: match expression is not exhaustive: add a 'default' arm
 ```
 
 <!-- test: error.enum-default-plain -->
 ```maxon
 enum Color
-    red
-    green
-    blue
+		red
+		green
+		blue
 end 'Color'
 
 function main() returns ExitCode
-  var c = Color.blue
-  match c 'check'
-    red then return 1
-    default then return 0
-  end 'check'
+	var c = Color.blue
+	match c 'check'
+		red then return 1
+		default then return 0
+	end 'check'
 end 'main'
 ```
 ```maxoncstderr
-error E2046: specs/fragments/match-exhaustive-default-panic/error.enum-default-plain.test:12:5: 'default' in a match on enum 'Color' must be followed by 'throws <error>' or 'panic("message")'
+error E2046: specs/fragments/match-exhaustive-default-panic/error.enum-default-plain.test:12:3: 'default' in a match on enum 'Color' must be followed by 'throws <error>' or 'panic("message")'
 ```

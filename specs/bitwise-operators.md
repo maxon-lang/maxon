@@ -73,9 +73,9 @@ var b = a shr 2  // 0100 = 4
 <!-- test: bitwise-and -->
 ```maxon
 function main() returns ExitCode
-  var a = 12
-  var b = 10
-  return a and b
+	var a = 12
+	var b = 10
+	return a and b
 end 'main'
 ```
 ```exitcode
@@ -85,9 +85,9 @@ end 'main'
 <!-- test: bitwise-or -->
 ```maxon
 function main() returns ExitCode
-  var a = 12
-  var b = 10
-  return a or b
+	var a = 12
+	var b = 10
+	return a or b
 end 'main'
 ```
 ```exitcode
@@ -97,9 +97,9 @@ end 'main'
 <!-- test: bitwise-xor -->
 ```maxon
 function main() returns ExitCode
-  var a = 12
-  var b = 10
-  return a xor b
+	var a = 12
+	var b = 10
+	return a xor b
 end 'main'
 ```
 ```exitcode
@@ -109,8 +109,8 @@ end 'main'
 <!-- test: left-shift -->
 ```maxon
 function main() returns ExitCode
-  var a = 1
-  return a shl 3
+	var a = 1
+	return a shl 3
 end 'main'
 ```
 ```exitcode
@@ -120,8 +120,8 @@ end 'main'
 <!-- test: right-shift -->
 ```maxon
 function main() returns ExitCode
-  var a = 16
-  return a shr 2
+	var a = 16
+	return a shr 2
 end 'main'
 ```
 ```exitcode
@@ -131,8 +131,8 @@ end 'main'
 <!-- test: shift-chained -->
 ```maxon
 function main() returns ExitCode
-  var a = 1
-  return a shl 4 shr 2
+	var a = 1
+	return a shl 4 shr 2
 end 'main'
 ```
 ```exitcode
@@ -142,9 +142,9 @@ end 'main'
 <!-- test: bitwise-and-or-precedence -->
 ```maxon
 function main() returns ExitCode
-  // and has higher precedence than or
-  // 12 and 10 = 8, then 8 or 1 = 9
-  return 12 and 10 or 1
+	// and has higher precedence than or
+	// 12 and 10 = 8, then 8 or 1 = 9
+	return 12 and 10 or 1
 end 'main'
 ```
 ```exitcode
@@ -154,9 +154,9 @@ end 'main'
 <!-- test: bitwise-xor-precedence -->
 ```maxon
 function main() returns ExitCode
-  // and has higher precedence than xor
-  // 12 and 10 = 8, then 8 xor 3 = 11
-  return 12 and 10 xor 3
+	// and has higher precedence than xor
+	// 12 and 10 = 8, then 8 xor 3 = 11
+	return 12 and 10 xor 3
 end 'main'
 ```
 ```exitcode
@@ -166,12 +166,12 @@ end 'main'
 <!-- test: shift-vs-comparison -->
 ```maxon
 function main() returns ExitCode
-  // Shift has higher precedence than comparison
-  // 1 shl 3 = 8, then 8 > 5 = true
-  if 1 shl 3 > 5 'check'
-    return 1
-  end 'check'
-  return 0
+	// Shift has higher precedence than comparison
+	// 1 shl 3 = 8, then 8 > 5 = true
+	if 1 shl 3 > 5 'check'
+		return 1
+	end 'check'
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -181,11 +181,11 @@ end 'main'
 <!-- test: bitwise-with-logical -->
 ```maxon
 function main() returns ExitCode
-  var a = 5 and 3        // 1
-  if a > 0 'check'
-    return 1
-  end 'check'
-  return 0
+	var a = 5 and 3        // 1
+	if a > 0 'check'
+		return 1
+	end 'check'
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -195,8 +195,8 @@ end 'main'
 <!-- test: bit-masking -->
 ```maxon
 function main() returns ExitCode
-  var flags = 5         // binary 101 (bit 0 and bit 2 set)
-  return flags and 4    // returns 4 (bit 2 is set)
+	var flags = 5         // binary 101 (bit 0 and bit 2 set)
+	return flags and 4    // returns 4 (bit 2 is set)
 end 'main'
 ```
 ```exitcode
@@ -206,10 +206,10 @@ end 'main'
 <!-- test: bit-clear -->
 ```maxon
 function main() returns ExitCode
-  var flags = 7        // binary 111
-  // Clear bit 1 using xor
-  flags = flags xor 2
-  return flags         // 5 (binary 101)
+	var flags = 7        // binary 111
+	// Clear bit 1 using xor
+	flags = flags xor 2
+	return flags         // 5 (binary 101)
 end 'main'
 ```
 ```exitcode
@@ -219,9 +219,9 @@ end 'main'
 <!-- test: power-of-two -->
 ```maxon
 function main() returns ExitCode
-  // Calculate 2^n using shift
-  var n = 5
-  return 1 shl n        // 32
+	// Calculate 2^n using shift
+	var n = 5
+	return 1 shl n        // 32
 end 'main'
 ```
 ```exitcode
@@ -231,9 +231,9 @@ end 'main'
 <!-- test: divide-by-power-of-two -->
 ```maxon
 function main() returns ExitCode
-  // Divide by 4 using shift
-  var value = 100
-  return value shr 2    // 25
+	// Divide by 4 using shift
+	var value = 100
+	return value shr 2    // 25
 end 'main'
 ```
 ```exitcode
@@ -243,9 +243,9 @@ end 'main'
 <!-- test: multiply-by-power-of-two -->
 ```maxon
 function main() returns ExitCode
-  // Multiply by 8 using shift
-  var value = 25
-  return value shl 3    // 200
+	// Multiply by 8 using shift
+	var value = 25
+	return value shl 3    // 200
 end 'main'
 ```
 ```exitcode
@@ -255,8 +255,8 @@ end 'main'
 <!-- test: bitwise-not-basic -->
 ```maxon
 function main() returns ExitCode
-  print("{not 0}\n")
-  return 0
+	print("{not 0}\n")
+	return 0
 end 'main'
 ```
 ```stdout
@@ -269,9 +269,9 @@ end 'main'
 <!-- test: bitwise-not-value -->
 ```maxon
 function main() returns ExitCode
-  var a = 5
-  print("{not a}\n")
-  return 0
+	var a = 5
+	print("{not a}\n")
+	return 0
 end 'main'
 ```
 ```stdout
@@ -284,8 +284,8 @@ end 'main'
 <!-- test: bitwise-not-double -->
 ```maxon
 function main() returns ExitCode
-  var a = 42
-  return not not a
+	var a = 42
+	return not not a
 end 'main'
 ```
 ```exitcode
@@ -295,9 +295,9 @@ end 'main'
 <!-- test: bitwise-not-masking -->
 ```maxon
 function main() returns ExitCode
-  var value = 255    // 0xFF
-  // Clear lower 4 bits: 255 and not 15 = 240
-  return value and not 15
+	var value = 255    // 0xFF
+	// Clear lower 4 bits: 255 and not 15 = 240
+	return value and not 15
 end 'main'
 ```
 ```exitcode
@@ -309,8 +309,8 @@ end 'main'
 let MASK = not 0xFF
 
 function main() returns ExitCode
-  print("{MASK}\n")
-  return 0
+	print("{MASK}\n")
+	return 0
 end 'main'
 ```
 ```stdout
@@ -323,11 +323,11 @@ end 'main'
 <!-- test: shr-in-method-call-arg -->
 ```maxon
 function main() returns ExitCode
-  var buf = [0, 0]
-  buf.push(42)
-  let x = 0xABCD
-  buf.push(x shr 8)
-  return try buf.get(3) otherwise 0
+	var buf = [0, 0]
+	buf.push(42)
+	let x = 0xABCD
+	buf.push(x shr 8)
+	return try buf.get(3) otherwise 0
 end 'main'
 ```
 ```exitcode
@@ -337,29 +337,29 @@ end 'main'
 <!-- test: shr-consecutive-method-calls -->
 ```maxon
 function main() returns ExitCode
-  var buf = [0]
-  let value = 0xAABBCCDD
-  buf.push(value and 0xFF)
-  buf.push((value shr 8) and 0xFF)
-  buf.push((value shr 16) and 0xFF)
-  buf.push((value shr 24) and 0xFF)
-  let b0 = try buf.get(1) otherwise 0
-  let b1 = try buf.get(2) otherwise 0
-  let b2 = try buf.get(3) otherwise 0
-  let b3 = try buf.get(4) otherwise 0
-  if b0 != 0xDD 'c0'
-    return 10
-  end 'c0'
-  if b1 != 0xCC 'c1'
-    return 20
-  end 'c1'
-  if b2 != 0xBB 'c2'
-    return 30
-  end 'c2'
-  if b3 != 0xAA 'c3'
-    return 40
-  end 'c3'
-  return 0
+	var buf = [0]
+	let value = 0xAABBCCDD
+	buf.push(value and 0xFF)
+	buf.push((value shr 8) and 0xFF)
+	buf.push((value shr 16) and 0xFF)
+	buf.push((value shr 24) and 0xFF)
+	let b0 = try buf.get(1) otherwise 0
+	let b1 = try buf.get(2) otherwise 0
+	let b2 = try buf.get(3) otherwise 0
+	let b3 = try buf.get(4) otherwise 0
+	if b0 != 0xDD 'c0'
+		return 10
+	end 'c0'
+	if b1 != 0xCC 'c1'
+		return 20
+	end 'c1'
+	if b2 != 0xBB 'c2'
+		return 30
+	end 'c2'
+	if b3 != 0xAA 'c3'
+		return 40
+	end 'c3'
+	return 0
 end 'main'
 ```
 ```exitcode

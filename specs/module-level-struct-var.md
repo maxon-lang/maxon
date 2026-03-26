@@ -18,14 +18,14 @@ Module-level struct var field assignment.
 typealias SmallInt = int(0 to u8.max)
 
 type Counter
-    export var value SmallInt
+		export var value SmallInt
 end 'Counter'
 
 var state = Counter{value: 0}
 
 function main() returns ExitCode
-    state.value = 42
-    return state.value
+		state.value = 42
+		return state.value
 end 'main'
 ```
 ```exitcode
@@ -39,15 +39,15 @@ typealias Byte = byte(0 to u8.max)
 typealias ByteArray = Array with Byte
 
 type State
-    export var items ByteArray
+		export var items ByteArray
 end 'State'
 
 var state = State{items: ByteArray{}}
 
 function main() returns ExitCode
-    state.items.push(10)
-    state.items.push(20)
-    return state.items.count()
+		state.items.push(10)
+		state.items.push(20)
+		return state.items.count()
 end 'main'
 ```
 ```exitcode
@@ -60,18 +60,18 @@ Module-level struct var nested field assignment through chain.
 typealias SmallInt = int(0 to u8.max)
 
 type Inner
-    export var x SmallInt
+		export var x SmallInt
 end 'Inner'
 
 type Outer
-    export var inner Inner
+		export var inner Inner
 end 'Outer'
 
 var state = Outer{inner: Inner{x: 0}}
 
 function main() returns ExitCode
-    state.inner.x = 99
-    return state.inner.x
+		state.inner.x = 99
+		return state.inner.x
 end 'main'
 ```
 ```exitcode

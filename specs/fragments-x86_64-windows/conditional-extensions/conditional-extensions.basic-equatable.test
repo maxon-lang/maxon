@@ -3,44 +3,44 @@
 typealias Integer = int(i64.min to i64.max)
 
 interface HasItems uses Element
-  function next() returns Element throws IterationError
+	function next() returns Element throws IterationError
 end 'HasItems'
 
 extension HasItems where Element is Equatable
-  function has(target Element) returns bool
-    for item in self 'loop'
-      if item == target 'found'
-        return true
-      end 'found'
-    end 'loop'
-    return false
-  end 'has'
+	function has(target Element) returns bool
+		for item in self 'loop'
+			if item == target 'found'
+				return true
+			end 'found'
+		end 'loop'
+		return false
+	end 'has'
 end 'HasItems'
 
 typealias IntegerArray = Array with Integer
 
 type IntList implements HasItems with Integer
-  var data IntegerArray
-  var idx Integer
+	var data IntegerArray
+	var idx Integer
 
-  function next() returns Integer throws IterationError
-    if idx >= data.count() 'done'
-      throw IterationError.exhausted
-    end 'done'
-    var v = try data.get(idx) otherwise 'bail'
-      throw IterationError.exhausted
-    end 'bail'
-    idx = idx + 1
-    return v
-  end 'next'
+	function next() returns Integer throws IterationError
+		if idx >= data.count() 'done'
+			throw IterationError.exhausted
+		end 'done'
+		var v = try data.get(idx) otherwise 'bail'
+			throw IterationError.exhausted
+		end 'bail'
+		idx = idx + 1
+		return v
+	end 'next'
 end 'IntList'
 
 function main() returns ExitCode
-  var list = IntList{data: [10, 20, 30], idx: 0}
-  if list.has(20) 'yes'
-    return 1
-  end 'yes'
-  return 0
+	var list = IntList{data: [10, 20, 30], idx: 0}
+	if list.has(20) 'yes'
+		return 1
+	end 'yes'
+	return 0
 end 'main'
 ---
 ExitCode: 1

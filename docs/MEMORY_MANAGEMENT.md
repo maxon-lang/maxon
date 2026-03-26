@@ -214,8 +214,8 @@ When a variable goes out of scope, its refcount is decremented:
 
 ```maxon
 function test()
-  var p = Point{x: 1, y: 2}   // rc=1
-  // ... use p ...
+	var p = Point{x: 1, y: 2}   // rc=1
+	// ... use p ...
 end 'test'                     // mm_decref p -> rc=0 -> destructor -> free
 ```
 
@@ -227,13 +227,13 @@ Returning a struct **passes lifetime responsibility** to the caller. The returne
 
 ```maxon
 function makePoint() returns Point
-  var p = Point{x: 1, y: 2}   // rc=1
-  return p                     // p is NOT decref'd; caller is responsible
+	var p = Point{x: 1, y: 2}   // rc=1
+	return p                     // p is NOT decref'd; caller is responsible
 end 'makePoint'
 
 function main() returns ExitCode
-  var p = makePoint()          // caller now owns it, rc=1
-  return 0                     // mm_decref p -> rc=0 -> freed
+	var p = makePoint()          // caller now owns it, rc=1
+	return 0                     // mm_decref p -> rc=0 -> freed
 end 'main'
 ```
 
@@ -245,8 +245,8 @@ Function parameters are **not owned** by the callee. The caller retains ownershi
 
 ```maxon
 function readLevel(c Config) returns Integer
-  // c is not owned (IsParam flag); no incref on entry, no decref on exit
-  return c.level
+	// c is not owned (IsParam flag); no incref on entry, no decref on exit
+	return c.level
 end 'readLevel'
 ```
 
@@ -353,20 +353,20 @@ Reference cycles are a **compile-time error** (`E4014`). The compiler statically
 ```maxon
 // ERROR: type 'Node' contains a reference cycle (via Node -> next: Node)
 type Node
-  export var next Node
+	export var next Node
 end 'Node'
 
 // ERROR: mutual recursion A -> B -> A
 type A
-  export var b B
+	export var b B
 end 'A'
 type B
-  export var a A
+	export var a A
 end 'B'
 
 // ERROR: indirect via container
 type Folder
-  export var children Array with Folder
+	export var children Array with Folder
 end 'Folder'
 ```
 

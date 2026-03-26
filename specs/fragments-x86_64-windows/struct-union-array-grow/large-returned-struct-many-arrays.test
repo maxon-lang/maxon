@@ -4,126 +4,126 @@ typealias IntArray = Array with Integer
 typealias StringArray = Array with String
 
 export union CfOp
-    br(target Integer)
+		br(target Integer)
 end 'CfOp'
 
 export union MlirOp
-    cf(op CfOp)
+		cf(op CfOp)
 end 'MlirOp'
 
 typealias OpArray = Array with MlirOp
 
 export type Block
-    export var id Integer
-    export var label String
-    export var ops OpArray
-    export var terminator MlirOp
-    export var hasTerminator bool
+		export var id Integer
+		export var label String
+		export var ops OpArray
+		export var terminator MlirOp
+		export var hasTerminator bool
 end 'Block'
 
 export type Region
-    export var blocks IntArray
-    export var nextBlockId Integer
+		export var blocks IntArray
+		export var nextBlockId Integer
 end 'Region'
 
 export type Func
-    export var name String
-    export var returnType String
-    export var region Region
+		export var name String
+		export var returnType String
+		export var region Region
 end 'Func'
 
 typealias FuncArray = Array with Func
 
 export type Module
-    export var functions FuncArray
+		export var functions FuncArray
 end 'Module'
 
 export type ModuleMemo
-    export var value Module
-    export var computedAt Integer
-    export var verifiedAt Integer
+		export var value Module
+		export var computedAt Integer
+		export var verifiedAt Integer
 end 'ModuleMemo'
 
 export type CodeResult
-    export var code IntArray
-    export var offset Integer
+		export var code IntArray
+		export var offset Integer
 end 'CodeResult'
 
 export type CodeMemo
-    export var value CodeResult
-    export var computedAt Integer
-    export var verifiedAt Integer
+		export var value CodeResult
+		export var computedAt Integer
+		export var verifiedAt Integer
 end 'CodeMemo'
 
 export type QueryDatabase
-    export var currentRevision Integer
-    export var sourcePaths StringArray
-    export var allModuleCache ModuleMemo
-    export var allMidCache ModuleMemo
-    export var codeCache CodeMemo
-    export var dependencies IntArray
-    export var activeQueryStack IntArray
-    export var tokenHits Integer
-    export var tokenMisses Integer
-    export var parseHits Integer
-    export var parseMisses Integer
+		export var currentRevision Integer
+		export var sourcePaths StringArray
+		export var allModuleCache ModuleMemo
+		export var allMidCache ModuleMemo
+		export var codeCache CodeMemo
+		export var dependencies IntArray
+		export var activeQueryStack IntArray
+		export var tokenHits Integer
+		export var tokenMisses Integer
+		export var parseHits Integer
+		export var parseMisses Integer
 end 'QueryDatabase'
 
 export type Project
-    export var db QueryDatabase
-    export var dbInitialized bool
-    export var nextValueId Integer
-    export var parserVarNames StringArray
-    export var parserVarSlots IntArray
-    export var parserNextSlot Integer
-    export var rootPath String
-    export var isSingleFile bool
-    export var currentBlock Block
-    export var currentFunction Func
-    export var currentModule Module
+		export var db QueryDatabase
+		export var dbInitialized bool
+		export var nextValueId Integer
+		export var parserVarNames StringArray
+		export var parserVarSlots IntArray
+		export var parserNextSlot Integer
+		export var rootPath String
+		export var isSingleFile bool
+		export var currentBlock Block
+		export var currentFunction Func
+		export var currentModule Module
 end 'Project'
 
 function createProject(rootPath String) returns Project
-    let emptyModuleMemo = ModuleMemo{value: Module{functions: FuncArray{}}, computedAt: 0, verifiedAt: 0}
-    let emptyCodeMemo = CodeMemo{value: CodeResult{code: IntArray{}, offset: 0}, computedAt: 0, verifiedAt: 0}
-    let db = QueryDatabase{
-        currentRevision: 0,
-        sourcePaths: StringArray{},
-        allModuleCache: emptyModuleMemo,
-        allMidCache: emptyModuleMemo,
-        codeCache: emptyCodeMemo,
-        dependencies: IntArray{},
-        activeQueryStack: IntArray{},
-        tokenHits: 0, tokenMisses: 0,
-        parseHits: 0, parseMisses: 0
-    }
-    let emptyBlock = Block{id: 0, label: "", ops: OpArray{}, terminator: MlirOp.cf(CfOp.br(0)), hasTerminator: false}
-    let emptyFunc = Func{name: "", returnType: "", region: Region{blocks: IntArray{}, nextBlockId: 0}}
-    let emptyModule = Module{functions: FuncArray{}}
-    return Project{
-        db: db,
-        dbInitialized: false,
-        nextValueId: 0,
-        parserVarNames: StringArray{},
-        parserVarSlots: IntArray{},
-        parserNextSlot: 0,
-        rootPath: rootPath,
-        isSingleFile: false,
-        currentBlock: emptyBlock,
-        currentFunction: emptyFunc,
-        currentModule: emptyModule
-    }
+		let emptyModuleMemo = ModuleMemo{value: Module{functions: FuncArray{}}, computedAt: 0, verifiedAt: 0}
+		let emptyCodeMemo = CodeMemo{value: CodeResult{code: IntArray{}, offset: 0}, computedAt: 0, verifiedAt: 0}
+		let db = QueryDatabase{
+				currentRevision: 0,
+				sourcePaths: StringArray{},
+				allModuleCache: emptyModuleMemo,
+				allMidCache: emptyModuleMemo,
+				codeCache: emptyCodeMemo,
+				dependencies: IntArray{},
+				activeQueryStack: IntArray{},
+				tokenHits: 0, tokenMisses: 0,
+				parseHits: 0, parseMisses: 0
+		}
+		let emptyBlock = Block{id: 0, label: "", ops: OpArray{}, terminator: MlirOp.cf(CfOp.br(0)), hasTerminator: false}
+		let emptyFunc = Func{name: "", returnType: "", region: Region{blocks: IntArray{}, nextBlockId: 0}}
+		let emptyModule = Module{functions: FuncArray{}}
+		return Project{
+				db: db,
+				dbInitialized: false,
+				nextValueId: 0,
+				parserVarNames: StringArray{},
+				parserVarSlots: IntArray{},
+				parserNextSlot: 0,
+				rootPath: rootPath,
+				isSingleFile: false,
+				currentBlock: emptyBlock,
+				currentFunction: emptyFunc,
+				currentModule: emptyModule
+		}
 end 'createProject'
 
 function main() returns ExitCode
-    let p = createProject("test")
-    p.db.dependencies.push(1)
-    p.db.dependencies.push(2)
-    p.db.dependencies.push(3)
-    p.db.dependencies.push(4)
-    p.db.dependencies.push(5)
-    p.db.activeQueryStack.push(10)
-    return p.db.dependencies.count() + p.db.activeQueryStack.count()
+		let p = createProject("test")
+		p.db.dependencies.push(1)
+		p.db.dependencies.push(2)
+		p.db.dependencies.push(3)
+		p.db.dependencies.push(4)
+		p.db.dependencies.push(5)
+		p.db.activeQueryStack.push(10)
+		return p.db.dependencies.count() + p.db.activeQueryStack.count()
 end 'main'
 ---
 ExitCode: 6

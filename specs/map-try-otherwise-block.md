@@ -18,24 +18,24 @@ Map.get with try-otherwise block form returns correct String type.
 typealias StringMap = Map with (String, String)
 
 union TestError implements Error
-    notFound
+		notFound
 end 'TestError'
 
 function getValue(m StringMap, key String) returns String throws TestError
-    let entry = try m.get(key) otherwise 'missing'
-        throw TestError.notFound
-    end 'missing'
-    return entry
+		let entry = try m.get(key) otherwise 'missing'
+				throw TestError.notFound
+		end 'missing'
+		return entry
 end 'getValue'
 
 function main() returns ExitCode
-    var m = StringMap{}
-    m.insert("key", value: "hello")
-    let got = try getValue(m, key: "key") otherwise "none"
-    if got == "hello" 'ok'
-        return 1
-    end 'ok'
-    return 0
+		var m = StringMap{}
+		m.insert("key", value: "hello")
+		let got = try getValue(m, key: "key") otherwise "none"
+		if got == "hello" 'ok'
+				return 1
+		end 'ok'
+		return 0
 end 'main'
 ```
 ```exitcode
@@ -48,28 +48,28 @@ Map.get with try-otherwise block form returns correct struct type.
 typealias SmallInt = int(0 to u8.max)
 
 type Entry
-    export var name String
-    export var count SmallInt
+		export var name String
+		export var count SmallInt
 end 'Entry'
 
 typealias EntryMap = Map with (String, Entry)
 
 union TestError implements Error
-    notFound
+		notFound
 end 'TestError'
 
 function getEntry(m EntryMap, key String) returns Entry throws TestError
-    let entry = try m.get(key) otherwise 'missing'
-        throw TestError.notFound
-    end 'missing'
-    return entry
+		let entry = try m.get(key) otherwise 'missing'
+				throw TestError.notFound
+		end 'missing'
+		return entry
 end 'getEntry'
 
 function main() returns ExitCode
-    var m = EntryMap{}
-    m.insert("key", value: Entry{name: "hello", count: 7})
-    let got = try getEntry(m, key: "key") otherwise Entry{name: "none", count: 0}
-    return got.count
+		var m = EntryMap{}
+		m.insert("key", value: Entry{name: "hello", count: 7})
+		let got = try getEntry(m, key: "key") otherwise Entry{name: "none", count: 0}
+		return got.count
 end 'main'
 ```
 ```exitcode

@@ -42,13 +42,13 @@ typealias Int = int(i64.min to i64.max)
 typealias IntArray = Array with Int
 
 function main() returns ExitCode
-  var arr = IntArray{}
-  arr.push(10)
-  arr.push(20)
-  arr.push(30)
-  arr.push(40)
-  arr.push(50)
-  return arr.count()
+	var arr = IntArray{}
+	arr.push(10)
+	arr.push(20)
+	arr.push(30)
+	arr.push(40)
+	arr.push(50)
+	return arr.count()
 end 'main'
 ```
 ```exitcode
@@ -61,15 +61,15 @@ typealias Int = int(i64.min to i64.max)
 typealias IntArray = Array with Int
 
 function main() returns ExitCode
-  var arr = IntArray{}
-  arr.push(10)
-  arr.push(20)
-  arr.push(30)
-  arr.set(1, value: 99)
-  var v = try arr.get(1) otherwise 'err'
-    return 0
-  end 'err'
-  return v
+	var arr = IntArray{}
+	arr.push(10)
+	arr.push(20)
+	arr.push(30)
+	arr.set(1, value: 99)
+	var v = try arr.get(1) otherwise 'err'
+		return 0
+	end 'err'
+	return v
 end 'main'
 ```
 ```exitcode
@@ -82,14 +82,14 @@ typealias Int = int(i64.min to i64.max)
 typealias IntArray = Array with Int
 
 function main() returns ExitCode
-  var arr = IntArray{}
-  arr.push(10)
-  arr.push(20)
-  arr.push(30)
-  arr.push(40)
-  arr.push(50)
-  var sliced = arr.slice(1, endIndex: 4)
-  return sliced.count()
+	var arr = IntArray{}
+	arr.push(10)
+	arr.push(20)
+	arr.push(30)
+	arr.push(40)
+	arr.push(50)
+	var sliced = arr.slice(1, endIndex: 4)
+	return sliced.count()
 end 'main'
 ```
 ```exitcode
@@ -102,14 +102,14 @@ typealias Int = int(i64.min to i64.max)
 typealias IntArray = Array with Int
 
 function main() returns ExitCode
-  var arr = IntArray{}
-  arr.push(10)
-  arr.push(30)
-  arr.insert(1, value: 20)
-  var removed = try arr.remove(0) otherwise 'err'
-    return 99
-  end 'err'
-  return removed + arr.count()
+	var arr = IntArray{}
+	arr.push(10)
+	arr.push(30)
+	arr.insert(1, value: 20)
+	var removed = try arr.remove(0) otherwise 'err'
+		return 99
+	end 'err'
+	return removed + arr.count()
 end 'main'
 ```
 ```exitcode
@@ -119,8 +119,8 @@ end 'main'
 <!-- test: string-operations -->
 ```maxon
 function main() returns ExitCode
-  var s = "hello world"
-  return s.byteLength()
+	var s = "hello world"
+	return s.byteLength()
 end 'main'
 ```
 ```exitcode
@@ -130,10 +130,10 @@ end 'main'
 <!-- test: string-concat -->
 ```maxon
 function main() returns ExitCode
-  var a = "hello"
-  var b = " world"
-  var c = a.concat(b)
-  return c.byteLength()
+	var a = "hello"
+	var b = " world"
+	var c = a.concat(b)
+	return c.byteLength()
 end 'main'
 ```
 ```exitcode
@@ -143,11 +143,11 @@ end 'main'
 <!-- test: array-literal -->
 ```maxon
 function main() returns ExitCode
-  var arr = [10, 20, 30, 40]
-  var v = try arr.get(2) otherwise 'err'
-    return 0
-  end 'err'
-  return v
+	var arr = [10, 20, 30, 40]
+	var v = try arr.get(2) otherwise 'err'
+		return 0
+	end 'err'
+	return v
 end 'main'
 ```
 ```exitcode
@@ -160,13 +160,13 @@ typealias Int = int(i64.min to i64.max)
 typealias IntArray = Array with Int
 
 function main() returns ExitCode
-  var arr = IntArray{}
-  var i = 0
-  while i < 100 'fill'
-    arr.push(i)
-    i = i + 1
-  end 'fill'
-  return arr.count()
+	var arr = IntArray{}
+	var i = 0
+	while i < 100 'fill'
+		arr.push(i)
+		i = i + 1
+	end 'fill'
+	return arr.count()
 end 'main'
 ```
 ```exitcode
@@ -181,13 +181,13 @@ typealias Int = int(i64.min to i64.max)
 typealias IntArray = Array with Int
 
 function main() returns ExitCode
-  var arr = IntArray{}
-  arr.push(1)
-  arr.push(2)
-  arr.push(3)
-  arr.push(4)
-  var v = arr.managed.get(10)
-  return v
+	var arr = IntArray{}
+	arr.push(1)
+	arr.push(2)
+	arr.push(3)
+	arr.push(4)
+	var v = arr.managed.get(10)
+	return v
 end 'main'
 ```
 ```exitcode
@@ -206,13 +206,13 @@ typealias Int = int(i64.min to i64.max)
 typealias IntArray = Array with Int
 
 function main() returns ExitCode
-  var arr = IntArray{}
-  arr.push(1)
-  arr.push(2)
-  arr.push(3)
-  arr.push(4)
-  arr.managed.set(10, 99)
-  return 0
+	var arr = IntArray{}
+	arr.push(1)
+	arr.push(2)
+	arr.push(3)
+	arr.push(4)
+	arr.managed.set(10, 99)
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -231,10 +231,10 @@ typealias Int = int(i64.min to i64.max)
 typealias IntArray = Array with Int
 
 function main() returns ExitCode
-  var arr = IntArray{}
-  arr.push(1)
-  arr.managed.setLength(100)
-  return 0
+	var arr = IntArray{}
+	arr.push(1)
+	arr.managed.setLength(100)
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -253,11 +253,11 @@ typealias Int = int(i64.min to i64.max)
 typealias IntArray = Array with Int
 
 function main() returns ExitCode
-  var arr = IntArray{}
-  arr.push(1)
-  arr.push(2)
-  var b = arr.managed.byteAt(100)
-  return b
+	var arr = IntArray{}
+	arr.push(1)
+	arr.push(2)
+	var b = arr.managed.byteAt(100)
+	return b
 end 'main'
 ```
 ```exitcode
@@ -276,13 +276,13 @@ typealias Int = int(i64.min to i64.max)
 typealias IntArray = Array with Int
 
 function main() returns ExitCode
-  var arr = IntArray{}
-  arr.push(1)
-  arr.push(2)
-  arr.push(3)
-  arr.push(4)
-  let sliced = arr.managed.slice(0, 10)
-  return sliced.length()
+	var arr = IntArray{}
+	arr.push(1)
+	arr.push(2)
+	arr.push(3)
+	arr.push(4)
+	let sliced = arr.managed.slice(0, 10)
+	return sliced.length()
 end 'main'
 ```
 ```exitcode
@@ -301,15 +301,15 @@ typealias Int = int(i64.min to i64.max)
 typealias IntArray = Array with Int
 
 function main() returns ExitCode
-  var arr = IntArray{}
-  arr.managed.grow(8)
-  arr.managed.setLength(4)
-  arr.managed.set(0, 10)
-  arr.managed.set(1, 20)
-  arr.managed.set(2, 30)
-  arr.managed.set(3, 40)
-  var sum = arr.managed.get(0) + arr.managed.get(1) + arr.managed.get(2) + arr.managed.get(3)
-  return sum
+	var arr = IntArray{}
+	arr.managed.grow(8)
+	arr.managed.setLength(4)
+	arr.managed.set(0, 10)
+	arr.managed.set(1, 20)
+	arr.managed.set(2, 30)
+	arr.managed.set(3, 40)
+	var sum = arr.managed.get(0) + arr.managed.get(1) + arr.managed.get(2) + arr.managed.get(3)
+	return sum
 end 'main'
 ```
 ```exitcode
@@ -322,13 +322,13 @@ typealias Int = int(i64.min to i64.max)
 typealias IntArray = Array with Int
 
 function main() returns ExitCode
-  var arr = IntArray{}
-  arr.push(1)
-  arr.push(2)
-  arr.push(3)
-  arr.push(4)
-  var v = arr.managed.get(-1)
-  return v
+	var arr = IntArray{}
+	arr.push(1)
+	arr.push(2)
+	arr.push(3)
+	arr.push(4)
+	var v = arr.managed.get(-1)
+	return v
 end 'main'
 ```
 ```exitcode

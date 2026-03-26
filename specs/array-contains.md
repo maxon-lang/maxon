@@ -21,24 +21,24 @@ typealias ByteArray = Array with Byte
 typealias ByteArrayArray = Array with ByteArray
 
 function main() returns ExitCode
-  var names = ByteArrayArray{}
-  names.push(b"hello")
-  names.push(b"world")
+	var names = ByteArrayArray{}
+	names.push(b"hello")
+	names.push(b"world")
 
-  // Contains should match by content, not by pointer
-  if names.contains(b"hello") 'found'
-    print("found\n")
-  end 'found' else 'notFound'
-    print("not found\n")
-  end 'notFound'
+	// Contains should match by content, not by pointer
+	if names.contains(b"hello") 'found'
+		print("found\n")
+	end 'found' else 'notFound'
+		print("not found\n")
+	end 'notFound'
 
-  if names.contains(b"missing") 'found2'
-    print("found\n")
-  end 'found2' else 'notFound2'
-    print("not found\n")
-  end 'notFound2'
+	if names.contains(b"missing") 'found2'
+		print("found\n")
+	end 'found2' else 'notFound2'
+		print("not found\n")
+	end 'notFound2'
 
-  return 0
+	return 0
 end 'main'
 ```
 ```exitcode

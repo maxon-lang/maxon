@@ -19,11 +19,11 @@ All arguments must be named using `name: value` syntax:
 typealias Score = int(i64.min to i64.max)
 
 function add(a Score, b Score) returns Score
-  return a + b
+	return a + b
 end 'add'
 
 function main() returns ExitCode
-  return add(a: 3, b: 4)
+	return add(a: 3, b: 4)
 end 'main'
 ```
 ```exitcode
@@ -39,11 +39,11 @@ Named arguments can appear in any order:
 typealias Score = int(i64.min to i64.max)
 
 function subtract(a Score, b Score) returns Score
-  return a - b
+	return a - b
 end 'subtract'
 
 function main() returns ExitCode
-  return subtract(b: 3, a: 10)
+	return subtract(b: 3, a: 10)
 end 'main'
 ```
 ```exitcode
@@ -59,11 +59,11 @@ Parameters with default values can be omitted:
 typealias Score = int(i64.min to i64.max)
 
 function repeat(value Score, times Score = 1) returns Score
-  return value * times
+	return value * times
 end 'repeat'
 
 function main() returns ExitCode
-  return repeat(value: 7, times: 6)
+	return repeat(value: 7, times: 6)
 end 'main'
 ```
 ```exitcode
@@ -79,11 +79,11 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 function add(a Integer, b Integer) returns Integer
-  return a + b
+	return a + b
 end 'add'
 
 function main() returns ExitCode
-  return add(a: 3, b: 4)
+	return add(a: 3, b: 4)
 end 'main'
 ```
 ```exitcode
@@ -96,11 +96,11 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 function multiply(x Integer, y Integer) returns Integer
-  return x * y
+	return x * y
 end 'multiply'
 
 function main() returns ExitCode
-  return multiply(x: 6, y: 7)
+	return multiply(x: 6, y: 7)
 end 'main'
 ```
 ```exitcode
@@ -113,11 +113,11 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 function subtract(a Integer, b Integer) returns Integer
-  return a - b
+	return a - b
 end 'subtract'
 
 function main() returns ExitCode
-  return subtract(b: 3, a: 10)
+	return subtract(b: 3, a: 10)
 end 'main'
 ```
 ```exitcode
@@ -130,11 +130,11 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 function repeat(value Integer, times Integer = 1) returns Integer
-  return value * times
+	return value * times
 end 'repeat'
 
 function main() returns ExitCode
-  return repeat(value: 7, times: 6)
+	return repeat(value: 7, times: 6)
 end 'main'
 ```
 ```exitcode
@@ -147,11 +147,11 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 function repeat(value Integer, times Integer = 2) returns Integer
-  return value * times
+	return value * times
 end 'repeat'
 
 function main() returns ExitCode
-  return repeat(value: 21)
+	return repeat(value: 21)
 end 'main'
 ```
 ```exitcode
@@ -164,15 +164,15 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 function add(a Integer, b Integer) returns Integer
-  return a + b
+	return a + b
 end 'add'
 
 function main() returns ExitCode
-  return add(3, 4)
+	return add(3, 4)
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/fragments/parameter-labels/error-missing-param-name.test:10:10: Second and subsequent arguments must be named. Use 'name: value' syntax
+error E3005: specs/fragments/parameter-labels/error-missing-param-name.test:10:9: Second and subsequent arguments must be named. Use 'name: value' syntax
 ```
 
 <!-- test: error-unknown-param-name -->
@@ -181,14 +181,14 @@ error E3005: specs/fragments/parameter-labels/error-missing-param-name.test:10:1
 typealias Integer = int(i64.min to i64.max)
 
 function greet(name Integer) returns Integer
-  return name
+	return name
 end 'greet'
 
 function main() returns ExitCode
-  return greet(person: 42)
+	return greet(person: 42)
 end 'main'
 ```
 ```maxoncstderr
-error E3003: specs/fragments/parameter-labels/error-unknown-param-name.test:10:16: unknown parameter name: 'person'
+error E3003: specs/fragments/parameter-labels/error-unknown-param-name.test:10:15: unknown parameter name: 'person'
 ```
 

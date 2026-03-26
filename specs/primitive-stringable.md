@@ -36,12 +36,12 @@ print(s)   // prints "42"
 <!-- test: int.toString -->
 ```maxon
 function main() returns ExitCode
-  var x = 42
-  var s = x.toString()
-  if s == "42" 'ok'
-    return 1
-  end 'ok'
-  return 0
+	var x = 42
+	var s = x.toString()
+	if s == "42" 'ok'
+		return 1
+	end 'ok'
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -51,12 +51,12 @@ end 'main'
 <!-- test: float.toString -->
 ```maxon
 function main() returns ExitCode
-  var x = 3.14
-  var s = x.toString()
-  if s == "3.14" 'ok'
-    return 1
-  end 'ok'
-  return 0
+	var x = 3.14
+	var s = x.toString()
+	if s == "3.14" 'ok'
+		return 1
+	end 'ok'
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -66,12 +66,12 @@ end 'main'
 <!-- test: bool.toString.true -->
 ```maxon
 function main() returns ExitCode
-  var x = true
-  var s = x.toString()
-  if s == "true" 'ok'
-    return 1
-  end 'ok'
-  return 0
+	var x = true
+	var s = x.toString()
+	if s == "true" 'ok'
+		return 1
+	end 'ok'
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -81,12 +81,12 @@ end 'main'
 <!-- test: bool.toString.false -->
 ```maxon
 function main() returns ExitCode
-  var x = false
-  var s = x.toString()
-  if s == "false" 'ok'
-    return 1
-  end 'ok'
-  return 0
+	var x = false
+	var s = x.toString()
+	if s == "false" 'ok'
+		return 1
+	end 'ok'
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -99,12 +99,12 @@ end 'main'
 typealias Byte = byte(0 to u8.max)
 
 function main() returns ExitCode
-  var x = 65 as Byte
-  var s = x.toString()
-  if s == "65" 'ok'
-    return 1
-  end 'ok'
-  return 0
+	var x = 65 as Byte
+	var s = x.toString()
+	if s == "65" 'ok'
+		return 1
+	end 'ok'
+	return 0
 end 'main'
 ```
 ```exitcode

@@ -53,14 +53,14 @@ Use `_` to discard individual elements:
 typealias Integer = int(i64.min to i64.max)
 
 function makePair(a Integer, b Integer) returns (Integer, Integer)
-  return (a, b)
+	return (a, b)
 end 'makePair'
 
 function main() returns ExitCode
-  var x = 0
-  var y = 0
-  (x, y) = makePair(10, b: 32)
-  return x + y
+	var x = 0
+	var y = 0
+	(x, y) = makePair(10, b: 32)
+	return x + y
 end 'main'
 ```
 ```exitcode
@@ -72,18 +72,18 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 function step(n Integer) returns (Integer, Integer)
-  return (n + 1, n * 2)
+	return (n + 1, n * 2)
 end 'step'
 
 function main() returns ExitCode
-  var a = 0
-  var b = 0
-  var i = 0
-  while i < 3 'loop'
-    (a, b) = step(n: a)
-    i = i + 1
-  end 'loop'
-  return b
+	var a = 0
+	var b = 0
+	var i = 0
+	while i < 3 'loop'
+		(a, b) = step(n: a)
+		i = i + 1
+	end 'loop'
+	return b
 end 'main'
 ```
 ```exitcode
@@ -95,13 +95,13 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 function makePair(a Integer, b Integer) returns (Integer, Integer)
-  return (a, b)
+	return (a, b)
 end 'makePair'
 
 function main() returns ExitCode
-  var x = 0
-  (x, _) = makePair(42, b: 99)
-  return x
+	var x = 0
+	(x, _) = makePair(42, b: 99)
+	return x
 end 'main'
 ```
 ```exitcode
@@ -113,16 +113,16 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 function makePair(a Integer, b Integer) returns (Integer, Integer)
-  return (a, b)
+	return (a, b)
 end 'makePair'
 
 function main() returns ExitCode
-  (_, _) = makePair(10, b: 32)
-  return 0
+	(_, _) = makePair(10, b: 32)
+	return 0
 end 'main'
 ```
 ```maxoncstderr
-error E3064: specs/fragments/tuple-assign/tuple-assign-discard-all.test:9:3: result of pure function 'makePair' must be used
+error E3064: specs/fragments/tuple-assign/tuple-assign-discard-all.test:9:2: result of pure function 'makePair' must be used
 ```
 
 <!-- test: tuple-assign-error-immutable -->
@@ -130,18 +130,18 @@ error E3064: specs/fragments/tuple-assign/tuple-assign-discard-all.test:9:3: res
 typealias Integer = int(i64.min to i64.max)
 
 function makePair(a Integer, b Integer) returns (Integer, Integer)
-  return (a, b)
+	return (a, b)
 end 'makePair'
 
 function main() returns ExitCode
-  let x = 0
-  var y = 0
-  (x, y) = makePair(10, b: 32)
-  return x + y
+	let x = 0
+	var y = 0
+	(x, y) = makePair(10, b: 32)
+	return x + y
 end 'main'
 ```
 ```maxoncstderr
-error E2013: specs/fragments/tuple-assign/tuple-assign-error-immutable.test:11:4: cannot assign to immutable variable: 'x'
+error E2013: specs/fragments/tuple-assign/tuple-assign-error-immutable.test:11:3: cannot assign to immutable variable: 'x'
 ```
 
 <!-- test: tuple-assign-mixed-var-decl -->
@@ -149,13 +149,13 @@ error E2013: specs/fragments/tuple-assign/tuple-assign-error-immutable.test:11:4
 typealias Integer = int(i64.min to i64.max)
 
 function makePair(a Integer, b Integer) returns (Integer, Integer)
-  return (a, b)
+	return (a, b)
 end 'makePair'
 
 function main() returns ExitCode
-  var x = 0
-  (x, var y) = makePair(10, b: 32)
-  return x + y
+	var x = 0
+	(x, var y) = makePair(10, b: 32)
+	return x + y
 end 'main'
 ```
 ```exitcode
@@ -167,12 +167,12 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 function makePair(a Integer, b Integer) returns (Integer, Integer)
-  return (a, b)
+	return (a, b)
 end 'makePair'
 
 function main() returns ExitCode
-  (var x, var y) = makePair(10, b: 32)
-  return x + y
+	(var x, var y) = makePair(10, b: 32)
+	return x + y
 end 'main'
 ```
 ```exitcode
@@ -184,13 +184,13 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 function makePair(a Integer, b Integer) returns (Integer, Integer)
-  return (a, b)
+	return (a, b)
 end 'makePair'
 
 function main() returns ExitCode
-  var x = 0
-  (x, let y) = makePair(10, b: 32)
-  return x + y
+	var x = 0
+	(x, let y) = makePair(10, b: 32)
+	return x + y
 end 'main'
 ```
 ```exitcode
@@ -202,18 +202,18 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 function makePair(a Integer, b Integer) returns (Integer, Integer)
-  return (a, b)
+	return (a, b)
 end 'makePair'
 
 function main() returns ExitCode
-  var x = 0
-  (x, let y) = makePair(10, b: 32)
-  (x, y) = makePair(1, b: 2)
-  return x + y
+	var x = 0
+	(x, let y) = makePair(10, b: 32)
+	(x, y) = makePair(1, b: 2)
+	return x + y
 end 'main'
 ```
 ```maxoncstderr
-error E2013: specs/fragments/tuple-assign/tuple-assign-error-assign-to-let-decl.test:11:7: cannot assign to immutable variable: 'y'
+error E2013: specs/fragments/tuple-assign/tuple-assign-error-assign-to-let-decl.test:11:6: cannot assign to immutable variable: 'y'
 ```
 
 <!-- test: tuple-assign-error-count-mismatch -->
@@ -221,15 +221,15 @@ error E2013: specs/fragments/tuple-assign/tuple-assign-error-assign-to-let-decl.
 typealias Integer = int(i64.min to i64.max)
 
 function makePair(a Integer, b Integer) returns (Integer, Integer)
-  return (a, b)
+	return (a, b)
 end 'makePair'
 
 function main() returns ExitCode
-  var x = 0
-  (x) = makePair(10, b: 32)
-  return x
+	var x = 0
+	(x) = makePair(10, b: 32)
+	return x
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/fragments/tuple-assign/tuple-assign-error-count-mismatch.test:10:3: Tuple has 2 elements but destructuring has 1 bindings
+error E3005: specs/fragments/tuple-assign/tuple-assign-error-count-mismatch.test:10:2: Tuple has 2 elements but destructuring has 1 bindings
 ```

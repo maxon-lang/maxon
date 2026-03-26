@@ -2,33 +2,33 @@
 typealias Integer = int(i64.min to i64.max)
 
 export type Item
-    export var name String
-    export var value Integer
+		export var name String
+		export var value Integer
 end 'Item'
 
 typealias ItemArray = Array with Item
 
 function appendFromHelper(dest ItemArray)
-    var src = ItemArray{}
-    src.push(Item{name: "hello from source that is long enough", value: 10})
-    src.push(Item{name: "second item from source long enough", value: 20})
-    src.push(Item{name: "third item from source long enough", value: 30})
-    dest.append(src)
-    // src is freed when this function returns
+		var src = ItemArray{}
+		src.push(Item{name: "hello from source that is long enough", value: 10})
+		src.push(Item{name: "second item from source long enough", value: 20})
+		src.push(Item{name: "third item from source long enough", value: 30})
+		dest.append(src)
+		// src is freed when this function returns
 end 'appendFromHelper'
 
 function main() returns ExitCode
-    var dest = ItemArray{}
-    dest.push(Item{name: "dest item that is long enough for heap", value: 1})
-    appendFromHelper(dest)
+		var dest = ItemArray{}
+		dest.push(Item{name: "dest item that is long enough for heap", value: 1})
+		appendFromHelper(dest)
 
-    // Source array is freed. dest should still have valid elements.
-    if dest.count() != 4 'badCount'
-        return 99
-    end 'badCount'
+		// Source array is freed. dest should still have valid elements.
+		if dest.count() != 4 'badCount'
+				return 99
+		end 'badCount'
 
-    let item = try dest.get(1) otherwise Item{name: "", value: 0}
-    return item.value
+		let item = try dest.get(1) otherwise Item{name: "", value: 0}
+		return item.value
 end 'main'
 ---
 ExitCode: 10

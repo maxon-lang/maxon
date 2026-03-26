@@ -1,86 +1,86 @@
 // Compilation target: CPU architecture and operating system.
 
 export enum CpuArch
-  x86_64
-  aarch64
+	x86_64
+	aarch64
 end 'CpuArch'
 
 export enum Os
-  windows
-  linux
-  macos
+	windows
+	linux
+	macos
 end 'Os'
 
 export type Target
-  export let cpu CpuArch
-  export let os Os
+	export let cpu CpuArch
+	export let os Os
 end 'Target'
 
 export function detectHostTarget() returns Target
-  #if os(Windows)
-    let hostOs = Os.windows
-  #else
-    #if os(Macos)
-      let hostOs = Os.macos
-    #else
-      let hostOs = Os.linux
-    #endif
-  #endif
+	#if os(Windows)
+		let hostOs = Os.windows
+	#else
+		#if os(Macos)
+			let hostOs = Os.macos
+		#else
+			let hostOs = Os.linux
+		#endif
+	#endif
 
-  #if arch(x86_64)
-    let hostCpu = CpuArch.x86_64
-  #else
-    let hostCpu = CpuArch.aarch64
-  #endif
+	#if arch(x86_64)
+		let hostCpu = CpuArch.x86_64
+	#else
+		let hostCpu = CpuArch.aarch64
+	#endif
 
-  return Target{cpu: hostCpu, os: hostOs}
+	return Target{cpu: hostCpu, os: hostOs}
 end 'detectHostTarget'
 
 export function parseTarget(s String) returns Target
-  var cpu = CpuArch.x86_64
-  var os = Os.windows
+	var cpu = CpuArch.x86_64
+	var os = Os.windows
 
-  // Parse "cpu-os" format
-  if s.startsWith("x86_64") 'isX86'
-    cpu = CpuArch.x86_64
-  end 'isX86' else if s.startsWith("aarch64") 'isArm'
-    cpu = CpuArch.aarch64
-  end 'isArm' else 'unknownCpu'
-    panic("Unknown CPU architecture in target string: {s}")
-  end 'unknownCpu'
+	// Parse "cpu-os" format
+	if s.startsWith("x86_64") 'isX86'
+		cpu = CpuArch.x86_64
+	end 'isX86' else if s.startsWith("aarch64") 'isArm'
+		cpu = CpuArch.aarch64
+	end 'isArm' else 'unknownCpu'
+		panic("Unknown CPU architecture in target string: {s}")
+	end 'unknownCpu'
 
-  if s.contains("linux") 'isLinux'
-    os = Os.linux
-  end 'isLinux' else if s.contains("windows") 'isWindows'
-    os = Os.windows
-  end 'isWindows' else if s.contains("macos") 'isMacos'
-    os = Os.macos
-  end 'isMacos' else 'unknownOs'
-    panic("Unknown OS in target string: {s}")
-  end 'unknownOs'
+	if s.contains("linux") 'isLinux'
+		os = Os.linux
+	end 'isLinux' else if s.contains("windows") 'isWindows'
+		os = Os.windows
+	end 'isWindows' else if s.contains("macos") 'isMacos'
+		os = Os.macos
+	end 'isMacos' else 'unknownOs'
+		panic("Unknown OS in target string: {s}")
+	end 'unknownOs'
 
-  return Target{cpu: cpu, os: os}
+	return Target{cpu: cpu, os: os}
 end 'parseTarget'
 
 export function targetToString(t Target) returns String
-  let cpuStr = match t.cpu 'cpu'
-    x86_64 gives "x86_64"
-    aarch64 gives "aarch64"
-  end 'cpu'
+	let cpuStr = match t.cpu 'cpu'
+		x86_64 gives "x86_64"
+		aarch64 gives "aarch64"
+	end 'cpu'
 
-  let osStr = match t.os 'os'
-    windows gives "windows"
-    linux gives "linux"
-    macos gives "macos"
-  end 'os'
+	let osStr = match t.os 'os'
+		windows gives "windows"
+		linux gives "linux"
+		macos gives "macos"
+	end 'os'
 
-  return "{cpuStr}-{osStr}"
+	return "{cpuStr}-{osStr}"
 end 'targetToString'
 
 export function executableExtension(t Target) returns String
-  return match t.os 'os'
-    windows gives ".exe"
-    linux gives ""
-    macos gives ""
-  end 'os'
+	return match t.os 'os'
+		windows gives ".exe"
+		linux gives ""
+		macos gives ""
+	end 'os'
 end 'executableExtension'

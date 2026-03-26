@@ -17,17 +17,17 @@ A comprehensive guide to writing idiomatic and consistent Maxon code.
 
 ## Indentation
 
-### Use 2 Spaces
+### Use Tabs
 
-Always use **2 spaces for indentation**. One level per nested block.
+Always use **tabs for indentation**. One level per nested block.
 
 ```maxon
 function main() returns ExitCode
-  var x = 5
-  if x > 0 'check'
-    print(x)
-  end 'check'
-  return 0
+	var x = 5
+	if x > 0 'check'
+		print(x)
+	end 'check'
+	return 0
 end 'main'
 ```
 
@@ -39,14 +39,14 @@ Each block increases indentation by one level:
 
 ```maxon
 function calculate(value int) returns int
-  if value > 0 'positive'
-    while value > 0 'loop'
-      value = value - 1
-    end 'loop'
-  else
-    value = 0
-  end 'positive'
-  return value
+	if value > 0 'positive'
+		while value > 0 'loop'
+			value = value - 1
+		end 'loop'
+	else
+		value = 0
+	end 'positive'
+	return value
 end 'calculate'
 ```
 
@@ -70,12 +70,12 @@ Use **camelCase** for function names. Start with a lowercase letter.
 
 ```maxon
 function calculateSum(a int, b int) returns int
-  return a + b
+	return a + b
 end 'calculateSum'
 
 function printGreeting(name string) returns int
-  print(name)
-  return 0
+	print(name)
+	return 0
 end 'printGreeting'
 ```
 
@@ -104,11 +104,11 @@ Block identifiers (for `if`, `while`, `for`, `end`) should be descriptive and us
 
 ```maxon
 if value > 0 'check-positive'
-  ...
+	...
 end 'check-positive'
 
 while count < 10 'mainLoop'
-  ...
+	...
 end 'mainLoop'
 ```
 
@@ -120,7 +120,7 @@ end 'mainLoop'
 
 ```maxon
 returns returnType
-  ...
+	...
 end 'name'
 ```
 
@@ -130,7 +130,7 @@ Parameters should be on the same line. If the line is too long, break after the 
 
 ```maxon
 function processData(input string, offset int, length int) returns int
-  ...
+	...
 end 'processData'
 ```
 
@@ -148,7 +148,7 @@ Place the block identifier immediately after the condition:
 
 ```maxon
 if condition 'check'
-  ...
+	...
 end 'check'
 ```
 
@@ -158,9 +158,9 @@ Always include a matching block identifier for the `end` statement.
 
 ```maxon
 if x > 0 'positive'
-  print("{x}")
+	print("{x}")
 else
-  print("0")
+	print("0")
 end 'positive'
 ```
 
@@ -168,7 +168,7 @@ end 'positive'
 
 ```maxon
 while condition 'loop'
-  ...
+	...
 end 'loop'
 ```
 
@@ -176,7 +176,7 @@ end 'loop'
 
 ```maxon
 for i = 0 to 10 'count'
-  print(i)
+	print(i)
 end 'count'
 ```
 
@@ -186,9 +186,9 @@ Use `break` to exit loops early, with its corresponding block identifier nearby:
 
 ```maxon
 while true 'processLoop'
-  if shouldStop 'check'
-    break
-  end 'check'
+	if shouldStop 'check'
+		break
+	end 'check'
 end 'processLoop'
 ```
 
@@ -202,18 +202,18 @@ Use comments to explain **why**, not **what**. The code should be clear about wh
 
 ```maxon
 function processItems(count int) returns int
-  var result = 0
+	var result = 0
 
-  // Sum first N items (skipping zeros for optimization)
-  while count > 0 'loop'
-    var item = getItem(count)
-    if item != 0 'notZero'
-      result = result + item
-    end 'notZero'
-    count = count - 1
-  end 'loop'
+	// Sum first N items (skipping zeros for optimization)
+	while count > 0 'loop'
+		var item = getItem(count)
+		if item != 0 'notZero'
+			result = result + item
+		end 'notZero'
+		count = count - 1
+	end 'loop'
 
-  return result
+	return result
 end 'processItems'
 ```
 
@@ -246,17 +246,17 @@ Use blank lines to separate logical sections within functions:
 
 ```maxon
 function initialize() returns int
-  // Setup phase
-  var config = loadConfig()
-  var data = createData()
+	// Setup phase
+	var config = loadConfig()
+	var data = createData()
 
-  // Validation phase
-  if not isValid(config) 'invalid'
-    return 1
-  end 'invalid'
+	// Validation phase
+	if not isValid(config) 'invalid'
+		return 1
+	end 'invalid'
 
-  // Execution phase
-  return run(data)
+	// Execution phase
+	return run(data)
 end 'initialize'
 ```
 
@@ -266,11 +266,11 @@ Use a single blank line between function definitions:
 
 ```maxon
 function first() returns int
-  return 1
+	return 1
 end 'first'
 
 function second() returns int
-  return 2
+	return 2
 end 'second'
 ```
 
@@ -293,9 +293,9 @@ Keep lines reasonably short for readability. Aim for under 80 characters when pr
 ```maxon
 // Good: clear and readable
 function calculateDistance(x1 int, y1 int, x2 int, y2 int) returns int
-  var dx = x2 - x1
-  var dy = y2 - y1
-  return sqrt(dx * dx + dy * dy)
+	var dx = x2 - x1
+	var dy = y2 - y1
+	return sqrt(dx * dx + dy * dy)
 end 'calculateDistance'
 ```
 
@@ -325,12 +325,12 @@ Always use block identifiers with `end` statements:
 ```maxon
 // Good
 if condition 'check'
-  ...
+	...
 end 'check'
 
 // Avoid: missing identifier
 if condition
-  ...
+	...
 end
 ```
 
@@ -340,7 +340,7 @@ end
 
 The VSCode extension includes a built-in code formatter that will automatically:
 
-- Normalize indentation to 2 spaces
+- Normalize indentation to tabs
 - Consolidate multiple blank lines into one
 - Remove trailing whitespace
 - Ensure files end with a newline
@@ -360,42 +360,42 @@ Here's a complete program following all style guide conventions:
 ```maxon
 // Calculate the sum of integers from 1 to N
 function sum(n int) returns int
-  var result = 0
-  var i = 1
+	var result = 0
+	var i = 1
 
-  while i <= n 'loop'
-    result = result + i
-    i = i + 1
-  end 'loop'
+	while i <= n 'loop'
+		result = result + i
+		i = i + 1
+	end 'loop'
 
-  return result
+	return result
 end 'sum'
 
 // Check if a number is prime
 function isPrime(num int) returns int
-  if num <= 1 'notPrime'
-    return 0
-  end 'notPrime'
+	if num <= 1 'notPrime'
+		return 0
+	end 'notPrime'
 
-  var i = 2
-  while i * i <= num 'divisorCheck'
-    if num mod i == 0 'hasDivisor'
-      return 0
-    end 'hasDivisor'
-    i = i + 1
-  end 'divisorCheck'
+	var i = 2
+	while i * i <= num 'divisorCheck'
+		if num mod i == 0 'hasDivisor'
+			return 0
+		end 'hasDivisor'
+		i = i + 1
+	end 'divisorCheck'
 
-  return 1
+	return 1
 end 'isPrime'
 
 function main() returns ExitCode
-  var total = sum(10)
-  print(total)
+	var total = sum(10)
+	print(total)
 
-  var prime = isPrime(7)
-  print(prime)
+	var prime = isPrime(7)
+	print(prime)
 
-  return 0
+	return 0
 end 'main'
 ```
 
@@ -405,7 +405,7 @@ end 'main'
 
 Key takeaways:
 
-- **Indentation:** 2 spaces, one level per block
+- **Indentation:** tabs, one level per block
 - **Line Endings:** LF only
 - **Names:** camelCase for variables and functions
 - **Functions:** Single responsibility, clear names

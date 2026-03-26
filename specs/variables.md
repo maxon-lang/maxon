@@ -18,8 +18,8 @@ Maxon supports two kinds of variable declarations:
 <!-- test: let-declaration -->
 ```maxon
 function main() returns ExitCode
-  let x = 42
-  return x
+	let x = 42
+	return x
 end 'main'
 ```
 ```exitcode
@@ -29,8 +29,8 @@ end 'main'
 <!-- test: var-declaration -->
 ```maxon
 function main() returns ExitCode
-  var x = 10
-  return x
+	var x = 10
+	return x
 end 'main'
 ```
 ```exitcode
@@ -40,9 +40,9 @@ end 'main'
 <!-- test: multiple-variables -->
 ```maxon
 function main() returns ExitCode
-  let a = 10
-  let b = 20
-  return a + b
+	let a = 10
+	let b = 20
+	return a + b
 end 'main'
 ```
 ```exitcode
@@ -55,10 +55,10 @@ Top-level `let` with a string literal value.
 let GREETING = "hello"
 
 function main() returns ExitCode
-  if GREETING == "hello" 'check'
-    return 1
-  end 'check'
-  return 0
+	if GREETING == "hello" 'check'
+		return 1
+	end 'check'
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -69,22 +69,22 @@ end 'main'
 Explicit type annotations are not allowed on var declarations.
 ```maxon
 function main() returns ExitCode
-  var x: int = 0
-  return x
+	var x: int = 0
+	return x
 end 'main'
 ```
 ```maxoncstderr
-error E2010: specs/fragments/variables/var-explicit-type-error.test:3:8: Expected '=' but got ':'
+error E2010: specs/fragments/variables/var-explicit-type-error.test:3:7: Expected '=' but got ':'
 ```
 
 <!-- test: let-explicit-type-error -->
 Explicit type annotations are not allowed on let declarations.
 ```maxon
 function main() returns ExitCode
-  let x: int = 0
-  return x
+	let x: int = 0
+	return x
 end 'main'
 ```
 ```maxoncstderr
-error E2010: specs/fragments/variables/let-explicit-type-error.test:3:8: Expected '=' but got ':'
+error E2010: specs/fragments/variables/let-explicit-type-error.test:3:7: Expected '=' but got ':'
 ```

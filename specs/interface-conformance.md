@@ -61,27 +61,27 @@ end 'BadCounter'
 typealias Integer = int(i64.min to i64.max)
 
 interface Counter
-  function get() returns Integer
-  function increment()
+	function get() returns Integer
+	function increment()
 end 'Counter'
 
 type SimpleCounter implements Counter
-  var value Integer
+	var value Integer
 
-  function get() returns Integer
-    return value
-  end 'get'
+	function get() returns Integer
+		return value
+	end 'get'
 
-  function increment()
-    value = value + 1
-  end 'increment'
+	function increment()
+		value = value + 1
+	end 'increment'
 end 'SimpleCounter'
 
 function main() returns ExitCode
-  var c = SimpleCounter{value: 40}
-  c.increment()
-  c.increment()
-  return c.get()
+	var c = SimpleCounter{value: 40}
+	c.increment()
+	c.increment()
+	return c.get()
 end 'main'
 ```
 ```exitcode
@@ -94,29 +94,29 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 interface Readable
-  function read() returns Integer
+	function read() returns Integer
 end 'Readable'
 
 interface Writable
-  function write(value Integer)
+	function write(value Integer)
 end 'Writable'
 
 type Buffer implements Readable, Writable
-  var data Integer
+	var data Integer
 
-  function read() returns Integer
-    return data
-  end 'read'
+	function read() returns Integer
+		return data
+	end 'read'
 
-  function write(value Integer)
-    data = value
-  end 'write'
+	function write(value Integer)
+		data = value
+	end 'write'
 end 'Buffer'
 
 function main() returns ExitCode
-  var buf = Buffer{data: 0}
-  buf.write(42)
-  return buf.read()
+	var buf = Buffer{data: 0}
+	buf.write(42)
+	return buf.read()
 end 'main'
 ```
 ```exitcode
@@ -129,20 +129,20 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 interface Counter
-  function get() returns Integer
-  function increment()
+	function get() returns Integer
+	function increment()
 end 'Counter'
 
 type BadCounter implements Counter
-  var value Integer
+	var value Integer
 
-  function get() returns Integer
-    return value
-  end 'get'
+	function get() returns Integer
+		return value
+	end 'get'
 end 'BadCounter'
 
 function main() returns ExitCode
-  return 0
+	return 0
 end 'main'
 ```
 ```maxoncstderr
@@ -157,17 +157,17 @@ typealias Integer = int(i64.min to i64.max)
 typealias Float = float(f64.min to f64.max)
 
 interface Processor
-  function process(value Integer) returns Integer
+	function process(value Integer) returns Integer
 end 'Processor'
 
 type BadProcessor implements Processor
-  function process(value Float) returns Integer
-    return 0
-  end 'process'
+	function process(value Float) returns Integer
+		return 0
+	end 'process'
 end 'BadProcessor'
 
 function main() returns ExitCode
-  return 0
+	return 0
 end 'main'
 ```
 ```maxoncstderr
@@ -182,17 +182,17 @@ typealias Integer = int(i64.min to i64.max)
 typealias Float = float(f64.min to f64.max)
 
 interface Provider
-  function provide() returns Integer
+	function provide() returns Integer
 end 'Provider'
 
 type BadProvider implements Provider
-  function provide() returns Float
-    return 0.0
-  end 'provide'
+	function provide() returns Float
+		return 0.0
+	end 'provide'
 end 'BadProvider'
 
 function main() returns ExitCode
-  return 0
+	return 0
 end 'main'
 ```
 ```maxoncstderr
@@ -206,24 +206,24 @@ error E3016: specs/fragments/interface-conformance/conformance-wrong-return-type
 typealias Integer = int(i64.min to i64.max)
 
 interface Simple
-  function getValue() returns Integer
+	function getValue() returns Integer
 end 'Simple'
 
 type Extended implements Simple
-  var value Integer
+	var value Integer
 
-  function getValue() returns Integer
-    return value
-  end 'getValue'
+	function getValue() returns Integer
+		return value
+	end 'getValue'
 
-  function extraMethod() returns Integer
-    return 100
-  end 'extraMethod'
+	function extraMethod() returns Integer
+		return 100
+	end 'extraMethod'
 end 'Extended'
 
 function main() returns ExitCode
-  var e = Extended{value: 42}
-  return e.getValue()
+	var e = Extended{value: 42}
+	return e.getValue()
 end 'main'
 ```
 ```exitcode
@@ -236,16 +236,16 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 type Standalone
-  var value Integer
+	var value Integer
 
-  function get() returns Integer
-    return value
-  end 'get'
+	function get() returns Integer
+		return value
+	end 'get'
 end 'Standalone'
 
 function main() returns ExitCode
-  var s = Standalone{value: 42}
-  return s.get()
+	var s = Standalone{value: 42}
+	return s.get()
 end 'main'
 ```
 ```exitcode
@@ -255,15 +255,15 @@ end 'main'
 <!-- test: builtin-interface-user-code -->
 ```maxon
 type MyCollection uses Element implements BuiltinArrayLiteral
-  var managed __ManagedMemory
+	var managed __ManagedMemory
 
-  static function init(managed __ManagedMemory) returns Self
-    return MyCollection{managed: managed}
-  end 'init'
+	static function init(managed __ManagedMemory) returns Self
+		return MyCollection{managed: managed}
+	end 'init'
 end 'MyCollection'
 
 function main() returns ExitCode
-  return 0
+	return 0
 end 'main'
 ```
 ```exitcode

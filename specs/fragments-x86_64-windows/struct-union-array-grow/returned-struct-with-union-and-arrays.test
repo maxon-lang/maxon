@@ -2,49 +2,49 @@
 typealias Integer = int(i64.min to i64.max)
 
 export union CfOp
-    br(target Integer)
+		br(target Integer)
 end 'CfOp'
 
 export union MlirOp
-    cf(op CfOp)
+		cf(op CfOp)
 end 'MlirOp'
 
 typealias OpArray = Array with MlirOp
 
 export type Block
-    export var id Integer
-    export var ops OpArray
-    export var terminator MlirOp
-    export var hasTerminator bool
+		export var id Integer
+		export var ops OpArray
+		export var terminator MlirOp
+		export var hasTerminator bool
 end 'Block'
 
 typealias DepArray = Array with Integer
 
 export type QueryDatabase
-    export var revision Integer
-    export var deps DepArray
-    export var extra DepArray
+		export var revision Integer
+		export var deps DepArray
+		export var extra DepArray
 end 'QueryDatabase'
 
 export type Project
-    export var db QueryDatabase
-    export var block Block
+		export var db QueryDatabase
+		export var block Block
 end 'Project'
 
 function createProject() returns Project
-    let block = Block{id: 0, ops: OpArray{}, terminator: MlirOp.cf(CfOp.br(0)), hasTerminator: false}
-    let db = QueryDatabase{revision: 0, deps: DepArray{}, extra: DepArray{}}
-    return Project{db: db, block: block}
+		let block = Block{id: 0, ops: OpArray{}, terminator: MlirOp.cf(CfOp.br(0)), hasTerminator: false}
+		let db = QueryDatabase{revision: 0, deps: DepArray{}, extra: DepArray{}}
+		return Project{db: db, block: block}
 end 'createProject'
 
 function main() returns ExitCode
-    let p = createProject()
-    p.db.deps.push(1)
-    p.db.deps.push(2)
-    p.db.deps.push(3)
-    p.db.deps.push(4)
-    p.db.deps.push(5)
-    return p.db.deps.count()
+		let p = createProject()
+		p.db.deps.push(1)
+		p.db.deps.push(2)
+		p.db.deps.push(3)
+		p.db.deps.push(4)
+		p.db.deps.push(5)
+		return p.db.deps.count()
 end 'main'
 ---
 ExitCode: 5

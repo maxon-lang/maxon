@@ -26,11 +26,11 @@ Use `export` to make functions visible outside the file:
 typealias Score = int(i64.min to i64.max)
 
 export function public_add(a Score, b Score) returns Score
-  return a + b
+	return a + b
 end 'public_add'
 
 function private_helper(x Score) returns Score
-  return x * 2
+	return x * 2
 end 'private_helper'
 ```
 Only `public_add` can be called from other files. `private_helper` is file-private.
@@ -43,15 +43,15 @@ File: `math/operations.maxon`
 typealias Score = int(i64.min to i64.max)
 
 export function add(a Score, b Score) returns Score
-  return a + b
+	return a + b
 end 'add'
 
 export function multiply(x Score, y Score) returns Score
-  return x * y
+	return x * y
 end 'multiply'
 
 function main() returns ExitCode
-  return add(3, b: 4)  // Called from within same file
+	return add(3, b: 4)  // Called from within same file
 end 'main'
 ```
 ```exitcode
@@ -67,11 +67,11 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 export function add(a Integer, b Integer) returns Integer
-  return a + b
+	return a + b
 end 'add'
 
 function main() returns ExitCode
-  return add(10, b: 20)
+	return add(10, b: 20)
 end 'main'
 ```
 ```exitcode
@@ -85,15 +85,15 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 export function double(x Integer) returns Integer
-  return x * 2
+	return x * 2
 end 'double'
 
 export function triple(x Integer) returns Integer
-  return x * 3
+	return x * 3
 end 'triple'
 
 function main() returns ExitCode
-  return double(5) + triple(4)
+	return double(5) + triple(4)
 end 'main'
 ```
 ```exitcode
@@ -107,15 +107,15 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 function add(a Integer, b Integer) returns Integer
-  return a + b
+	return a + b
 end 'add'
 
 function sum_three(a Integer, b Integer, c Integer) returns Integer
-  return add(add(a, b: b), b: c)
+	return add(add(a, b: b), b: c)
 end 'sum_three'
 
 function main() returns ExitCode
-  return sum_three(1, b: 2, c: 3)
+	return sum_three(1, b: 2, c: 3)
 end 'main'
 ```
 ```exitcode

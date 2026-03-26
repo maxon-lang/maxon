@@ -3,36 +3,36 @@
 // They should not appear in user-level IR.
 
 export union SysOp
-  // Linux/ARM64 syscall. argIds passed in syscall ABI registers.
-  syscall(resultId ValueId, number MachineWord, argIds ValueIdArray)
-  // Windows IAT indirect call through an import slot.
-  iatCall(resultId ValueId, slotIndex MachineWord, argIds ValueIdArray)
-  // Load the address of a named data global (string literal in .rdata/.rodata).
-  globalAddr(resultId ValueId, name ByteArray)
-  // Copy len bytes from src to dst (rep movsb on x86, ldrb/strb loop on arm64).
-  memcpy(dstId ValueId, srcId ValueId, lenId ValueId)
-  // Get the address of a stack slot as a pointer. Used for local byte buffers.
-  stackAddr(resultId ValueId, slotId VarSlot)
-  // Store a byte value at base + offset.
-  storeByte(baseId ValueId, offsetId ValueId, byteId ValueId)
-  // Load a byte from base + offset into resultId.
-  loadByte(resultId ValueId, baseId ValueId, offsetId ValueId)
-  // OS-neutral process exit. Lowered to syscall or iatCall based on OsDescriptor.
-  osExit(codeId ValueId)
-  // OS-neutral stdout write. Lowered to syscall or iatCall based on OsDescriptor.
-  osWrite(ptrId ValueId, lenId ValueId)
+	// Linux/ARM64 syscall. argIds passed in syscall ABI registers.
+	syscall(resultId ValueId, number MachineWord, argIds ValueIdArray)
+	// Windows IAT indirect call through an import slot.
+	iatCall(resultId ValueId, slotIndex MachineWord, argIds ValueIdArray)
+	// Load the address of a named data global (string literal in .rdata/.rodata).
+	globalAddr(resultId ValueId, name ByteArray)
+	// Copy len bytes from src to dst (rep movsb on x86, ldrb/strb loop on arm64).
+	memcpy(dstId ValueId, srcId ValueId, lenId ValueId)
+	// Get the address of a stack slot as a pointer. Used for local byte buffers.
+	stackAddr(resultId ValueId, slotId VarSlot)
+	// Store a byte value at base + offset.
+	storeByte(baseId ValueId, offsetId ValueId, byteId ValueId)
+	// Load a byte from base + offset into resultId.
+	loadByte(resultId ValueId, baseId ValueId, offsetId ValueId)
+	// OS-neutral process exit. Lowered to syscall or iatCall based on OsDescriptor.
+	osExit(codeId ValueId)
+	// OS-neutral stdout write. Lowered to syscall or iatCall based on OsDescriptor.
+	osWrite(ptrId ValueId, lenId ValueId)
 end 'SysOp'
 
 export function sysOpToString(op SysOp) returns String
-  return match op 'print'
-    syscall(resultId, number, argIds) gives "%{resultId} = sys.syscall {number}({formatArgIds(argIds)})"
-    iatCall(resultId, slotIndex, argIds) gives "%{resultId} = sys.iat_call [{slotIndex}]({formatArgIds(argIds)})"
-    globalAddr(resultId, name) gives "%{resultId} = sys.global_addr @{String.from(name)}"
-    memcpy(dstId, srcId, lenId) gives "sys.memcpy %{dstId}, %{srcId}, %{lenId}"
-    stackAddr(resultId, slotId) gives "%{resultId} = sys.stack_addr slot_{slotId}"
-    storeByte(baseId, offsetId, byteId) gives "sys.store_byte %{baseId}, %{offsetId}, %{byteId}"
-    loadByte(resultId, baseId, offsetId) gives "%{resultId} = sys.load_byte %{baseId}, %{offsetId}"
-    osExit(codeId) gives "sys.os_exit %{codeId}"
-    osWrite(ptrId, lenId) gives "sys.os_write %{ptrId}, %{lenId}"
-  end 'print'
+	return match op 'print'
+		syscall(resultId, number, argIds) gives "%{resultId} = sys.syscall {number}({formatArgIds(argIds)})"
+		iatCall(resultId, slotIndex, argIds) gives "%{resultId} = sys.iat_call [{slotIndex}]({formatArgIds(argIds)})"
+		globalAddr(resultId, name) gives "%{resultId} = sys.global_addr @{String.from(name)}"
+		memcpy(dstId, srcId, lenId) gives "sys.memcpy %{dstId}, %{srcId}, %{lenId}"
+		stackAddr(resultId, slotId) gives "%{resultId} = sys.stack_addr slot_{slotId}"
+		storeByte(baseId, offsetId, byteId) gives "sys.store_byte %{baseId}, %{offsetId}, %{byteId}"
+		loadByte(resultId, baseId, offsetId) gives "%{resultId} = sys.load_byte %{baseId}, %{offsetId}"
+		osExit(codeId) gives "sys.os_exit %{codeId}"
+		osWrite(ptrId, lenId) gives "sys.os_write %{ptrId}, %{lenId}"
+	end 'print'
 end 'sysOpToString'

@@ -20,13 +20,13 @@ Simple struct with all-primitive fields, used only locally. Must produce NO mm_a
 typealias Integer = int(i64.min to i64.max)
 
 type Point
-  export var x Integer
-  export var y Integer
+	export var x Integer
+	export var y Integer
 end 'Point'
 
 function main() returns ExitCode
-  var p = Point{x: 10, y: 20}
-  return p.x + p.y
+	var p = Point{x: 10, y: 20}
+	return p.x + p.y
 end 'main'
 ```
 ```exitcode
@@ -48,14 +48,14 @@ Stack-promoted struct with field mutation. No heap allocation.
 typealias Integer = int(i64.min to i64.max)
 
 type Point
-  export var x Integer
-  export var y Integer
+	export var x Integer
+	export var y Integer
 end 'Point'
 
 function main() returns ExitCode
-  var p = Point{x: 1, y: 2}
-  p.x = 100
-  return p.x
+	var p = Point{x: 1, y: 2}
+	p.x = 100
+	return p.x
 end 'main'
 ```
 ```exitcode
@@ -77,14 +77,14 @@ Aliasing (`var b = a`) is safe for stack structs when neither alias escapes.
 typealias Integer = int(i64.min to i64.max)
 
 type Point
-  export var x Integer
-  export var y Integer
+	export var x Integer
+	export var y Integer
 end 'Point'
 
 function main() returns ExitCode
-  var a = Point{x: 1, y: 2}
-  var b = a
-  return b.x
+	var a = Point{x: 1, y: 2}
+	var b = a
+	return b.x
 end 'main'
 ```
 ```exitcode
@@ -106,17 +106,17 @@ Struct passed to a function that only reads it remains stack-allocated.
 typealias Integer = int(i64.min to i64.max)
 
 type Point
-  export var x Integer
-  export var y Integer
+	export var x Integer
+	export var y Integer
 end 'Point'
 
 function readX(p Point) returns Integer
-  return p.x
+	return p.x
 end 'readX'
 
 function main() returns ExitCode
-  var p = Point{x: 42, y: 0}
-  return readX(p)
+	var p = Point{x: 42, y: 0}
+	return readX(p)
 end 'main'
 ```
 ```exitcode
@@ -138,17 +138,17 @@ Struct pushed into a container must remain heap-allocated (the container stores 
 typealias Integer = int(i64.min to i64.max)
 
 type Item
-  export var value Integer
+	export var value Integer
 end 'Item'
 
 typealias ItemArray = Array with Item
 
 function main() returns ExitCode
-  var arr = ItemArray{}
-  var item = Item{value: 7}
-  arr.push(item)
-  var got = try arr.get(0) otherwise Item{value: 0}
-  return got.value
+	var arr = ItemArray{}
+	var item = Item{value: 7}
+	arr.push(item)
+	var got = try arr.get(0) otherwise Item{value: 0}
+	return got.value
 end 'main'
 ```
 ```exitcode
@@ -199,17 +199,17 @@ Struct returned from function must remain heap-allocated.
 typealias Integer = int(i64.min to i64.max)
 
 type Point
-  export var x Integer
-  export var y Integer
+	export var x Integer
+	export var y Integer
 end 'Point'
 
 function makePoint(x Integer, y Integer) returns Point
-  return Point{x: x, y: y}
+	return Point{x: x, y: y}
 end 'makePoint'
 
 function main() returns ExitCode
-  var p = makePoint(x: 5, y: 10)
-  return p.x
+	var p = makePoint(x: 5, y: 10)
+	return p.x
 end 'main'
 ```
 ```exitcode

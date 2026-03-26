@@ -3,68 +3,68 @@
 
 // How to terminate the process
 export union ExitStrategy
-  syscall(number MachineWord)
-  iatCall(slotIndex MachineWord)
+	syscall(number MachineWord)
+	iatCall(slotIndex MachineWord)
 end 'ExitStrategy'
 
 // How to write to stdout
 export union WriteStrategy
-  syscall(writeNumber MachineWord, fd MachineWord)
-  winApi(getHandleSlot MachineWord, handleConstant MachineWord, writeFileSlot MachineWord)
-  libcall(writeSlot MachineWord, fd MachineWord)
+	syscall(writeNumber MachineWord, fd MachineWord)
+	winApi(getHandleSlot MachineWord, handleConstant MachineWord, writeFileSlot MachineWord)
+	libcall(writeSlot MachineWord, fd MachineWord)
 end 'WriteStrategy'
 
 export type OsDescriptor
-  export var exit ExitStrategy
-  export var write WriteStrategy
-  export var startShadowSpace MachineWord
+	export var exit ExitStrategy
+	export var write WriteStrategy
+	export var startShadowSpace MachineWord
 end 'OsDescriptor'
 
 export function makeOsDescriptor(target Target) returns OsDescriptor
-  var result = OsDescriptor{
-    exit: ExitStrategy.syscall(0),
-    write: WriteStrategy.syscall(0, 0),
-    startShadowSpace: 0
-  }
+	var result = OsDescriptor{
+		exit: ExitStrategy.syscall(0),
+		write: WriteStrategy.syscall(0, 0),
+		startShadowSpace: 0
+	}
 
-  match target.os 'pickOs'
-    windows then result = makeWindowsDescriptor()
-    linux then result = makeLinuxDescriptor(target)
-    macos then result = makeMacOsDescriptor()
-  end 'pickOs'
+	match target.os 'pickOs'
+		windows then result = makeWindowsDescriptor()
+		linux then result = makeLinuxDescriptor(target)
+		macos then result = makeMacOsDescriptor()
+	end 'pickOs'
 
-  return result
+	return result
 end 'makeOsDescriptor'
 
 function makeWindowsDescriptor() returns OsDescriptor
-  return OsDescriptor{
-    exit: ExitStrategy.iatCall(0),
-    write: WriteStrategy.winApi(1, 0xFFFFFFF5, 2),
-    startShadowSpace: 0x28
-  }
+	return OsDescriptor{
+		exit: ExitStrategy.iatCall(0),
+		write: WriteStrategy.winApi(1, 0xFFFFFFF5, 2),
+		startShadowSpace: 0x28
+	}
 end 'makeWindowsDescriptor'
 
 function makeMacOsDescriptor() returns OsDescriptor
-  return OsDescriptor{
-    exit: ExitStrategy.iatCall(0),
-    write: WriteStrategy.libcall(1, 1),
-    startShadowSpace: 0
-  }
+	return OsDescriptor{
+		exit: ExitStrategy.iatCall(0),
+		write: WriteStrategy.libcall(1, 1),
+		startShadowSpace: 0
+	}
 end 'makeMacOsDescriptor'
 
 function makeLinuxDescriptor(target Target) returns OsDescriptor
-  let exitNum = match target.cpu 'cpuSyscalls'
-    x86_64 gives 60
-    aarch64 gives 93
-  end 'cpuSyscalls'
-  let writeNum = match target.cpu 'cpuWrite'
-    x86_64 gives 1
-    aarch64 gives 64
-  end 'cpuWrite'
+	let exitNum = match target.cpu 'cpuSyscalls'
+		x86_64 gives 60
+		aarch64 gives 93
+	end 'cpuSyscalls'
+	let writeNum = match target.cpu 'cpuWrite'
+		x86_64 gives 1
+		aarch64 gives 64
+	end 'cpuWrite'
 
-  return OsDescriptor{
-    exit: ExitStrategy.syscall(exitNum),
-    write: WriteStrategy.syscall(writeNum, 1),
-    startShadowSpace: 0
-  }
+	return OsDescriptor{
+		exit: ExitStrategy.syscall(exitNum),
+		write: WriteStrategy.syscall(writeNum, 1),
+		startShadowSpace: 0
+	}
 end 'makeLinuxDescriptor'

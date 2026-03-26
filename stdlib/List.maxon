@@ -3,143 +3,143 @@
 /// @category Collections
 
 export type List uses Element implements InitableFromArrayLiteral with Element, Iterable with Element
-  typealias ElementArray = Array with Element
-  typealias EManagedList = __ManagedList with Element
-  typealias ENode = __ManagedListNode with Element
+	typealias ElementArray = Array with Element
+	typealias EManagedList = __ManagedList with Element
+	typealias ENode = __ManagedListNode with Element
 
-  var chain EManagedList
-  var iterIndex Count
+	var chain EManagedList
+	var iterIndex Count
 
-  // InitableFromArrayLiteral conformance — called by compiler for `List from [1, 2, 3]`
-  static function init(arr ElementArray) returns Self
-    var result = Self{}
-    for item in arr 'build'
-      result.append(item)
-    end 'build'
-    return result
-  end 'init'
+	// InitableFromArrayLiteral conformance — called by compiler for `List from [1, 2, 3]`
+	static function init(arr ElementArray) returns Self
+		var result = Self{}
+		for item in arr 'build'
+			result.append(item)
+		end 'build'
+		return result
+	end 'init'
 
-  /// Get the number of elements in the list
-  export function count() returns Count
-    return chain.count()
-  end 'count'
+	/// Get the number of elements in the list
+	export function count() returns Count
+		return chain.count()
+	end 'count'
 
-  /// Check if the list is empty
-  export function isEmpty() returns bool
-    return chain.isEmpty()
-  end 'isEmpty'
+	/// Check if the list is empty
+	export function isEmpty() returns bool
+		return chain.isEmpty()
+	end 'isEmpty'
 
-  /// Get the first element, throws if empty
-  export function first() returns Element throws ArrayError
-    var node = try chain.head() otherwise 'err'
-      throw ArrayError.indexOutOfBounds
-    end 'err'
-    return node.value()
-  end 'first'
+	/// Get the first element, throws if empty
+	export function first() returns Element throws ArrayError
+		var node = try chain.head() otherwise 'err'
+			throw ArrayError.indexOutOfBounds
+		end 'err'
+		return node.value()
+	end 'first'
 
-  /// Get the last element, throws if empty
-  export function last() returns Element throws ArrayError
-    var node = try chain.tail() otherwise 'err'
-      throw ArrayError.indexOutOfBounds
-    end 'err'
-    return node.value()
-  end 'last'
+	/// Get the last element, throws if empty
+	export function last() returns Element throws ArrayError
+		var node = try chain.tail() otherwise 'err'
+			throw ArrayError.indexOutOfBounds
+		end 'err'
+		return node.value()
+	end 'last'
 
-  /// Walk from head to the node at the given offset.
-  function walkTo(offset Index) returns ENode throws ArrayError
-    var current = try chain.head() otherwise 'err'
-      throw ArrayError.indexOutOfBounds
-    end 'err'
-    for _ in 0 upto offset 'walk'
-      current = try current.next() otherwise 'err2'
-        throw ArrayError.indexOutOfBounds
-      end 'err2'
-    end 'walk'
-    return current
-  end 'walkTo'
+	/// Walk from head to the node at the given offset.
+	function walkTo(offset Index) returns ENode throws ArrayError
+		var current = try chain.head() otherwise 'err'
+			throw ArrayError.indexOutOfBounds
+		end 'err'
+		for _ in 0 upto offset 'walk'
+			current = try current.next() otherwise 'err2'
+				throw ArrayError.indexOutOfBounds
+			end 'err2'
+		end 'walk'
+		return current
+	end 'walkTo'
 
-  /// Get element at index (0-based, front to back), throws if out of bounds
-  export function get(index Index) returns Element throws ArrayError
-    var node = try walkTo(index)
-    return node.value()
-  end 'get'
+	/// Get element at index (0-based, front to back), throws if out of bounds
+	export function get(index Index) returns Element throws ArrayError
+		var node = try walkTo(index)
+		return node.value()
+	end 'get'
 
-  /// Add an element to the front of the list. O(1).
-  export function prepend(value Element)
-    chain.insertFirst(value)
-  end 'prepend'
+	/// Add an element to the front of the list. O(1).
+	export function prepend(value Element)
+		chain.insertFirst(value)
+	end 'prepend'
 
-  /// Add an element to the back of the list. O(1).
-  export function append(value Element)
-    chain.insertLast(value)
-  end 'append'
+	/// Add an element to the back of the list. O(1).
+	export function append(value Element)
+		chain.insertLast(value)
+	end 'append'
 
-  /// Insert an element at the given index. O(n).
-  export function insert(at Index, value Element) throws ArrayError
-    if at == 0 'front'
-      chain.insertFirst(value)
-      return
-    end 'front'
+	/// Insert an element at the given index. O(n).
+	export function insert(at Index, value Element) throws ArrayError
+		if at == 0 'front'
+			chain.insertFirst(value)
+			return
+		end 'front'
 
-    if at >= chain.count() 'back'
-      chain.insertLast(value)
-      return
-    end 'back'
+		if at >= chain.count() 'back'
+			chain.insertLast(value)
+			return
+		end 'back'
 
-    var current = try walkTo(at - 1)
-    chain.insertAfter(current, value: value)
-  end 'insert'
+		var current = try walkTo(at - 1)
+		chain.insertAfter(current, value: value)
+	end 'insert'
 
-  /// Remove and return the first element, throws if empty. O(1).
-  export function removeFirst() returns Element throws ArrayError
-    var node = try chain.head() otherwise 'err'
-      throw ArrayError.indexOutOfBounds
-    end 'err'
-    return chain.remove(node)
-  end 'removeFirst'
+	/// Remove and return the first element, throws if empty. O(1).
+	export function removeFirst() returns Element throws ArrayError
+		var node = try chain.head() otherwise 'err'
+			throw ArrayError.indexOutOfBounds
+		end 'err'
+		return chain.remove(node)
+	end 'removeFirst'
 
-  /// Remove and return the last element, throws if empty. O(1).
-  export function removeLast() returns Element throws ArrayError
-    var node = try chain.tail() otherwise 'err'
-      throw ArrayError.indexOutOfBounds
-    end 'err'
-    return chain.remove(node)
-  end 'removeLast'
+	/// Remove and return the last element, throws if empty. O(1).
+	export function removeLast() returns Element throws ArrayError
+		var node = try chain.tail() otherwise 'err'
+			throw ArrayError.indexOutOfBounds
+		end 'err'
+		return chain.remove(node)
+	end 'removeLast'
 
-  /// Remove and return element at index, throws if out of bounds. O(n).
-  export function remove(at Index) returns Element throws ArrayError
-    var node = try walkTo(at)
-    return chain.remove(node)
-  end 'remove'
+	/// Remove and return element at index, throws if out of bounds. O(n).
+	export function remove(at Index) returns Element throws ArrayError
+		var node = try walkTo(at)
+		return chain.remove(node)
+	end 'remove'
 
-  /// Remove all elements
-  export function clear()
-    chain.clear()
-  end 'clear'
+	/// Remove all elements
+	export function clear()
+		chain.clear()
+	end 'clear'
 
-  /// Reset iteration state for a fresh traversal
-  export function createIterator()
-    iterIndex = 0
-  end 'createIterator'
+	/// Reset iteration state for a fresh traversal
+	export function createIterator()
+		iterIndex = 0
+	end 'createIterator'
 
-  /// Get next element in iteration (front to back), throws when exhausted.
-  /// Uses the managed list's cursor for O(1) per-step iteration instead of re-walking from head.
-  export function next() returns Element throws IterationError
-    if iterIndex >= chain.count() 'done'
-      throw IterationError.exhausted
-    end 'done'
-    if iterIndex == 0 'first'
-      try chain.cursorStart() otherwise 'err'
-        throw IterationError.exhausted
-      end 'err'
-    end 'first'
-    var value = chain.cursorValue()
-    iterIndex = iterIndex + 1
-    if iterIndex < chain.count() 'has_next'
-      try chain.cursorAdvance() otherwise 'err2'
-        throw IterationError.exhausted
-      end 'err2'
-    end 'has_next'
-    return value
-  end 'next'
+	/// Get next element in iteration (front to back), throws when exhausted.
+	/// Uses the managed list's cursor for O(1) per-step iteration instead of re-walking from head.
+	export function next() returns Element throws IterationError
+		if iterIndex >= chain.count() 'done'
+			throw IterationError.exhausted
+		end 'done'
+		if iterIndex == 0 'first'
+			try chain.cursorStart() otherwise 'err'
+				throw IterationError.exhausted
+			end 'err'
+		end 'first'
+		var value = chain.cursorValue()
+		iterIndex = iterIndex + 1
+		if iterIndex < chain.count() 'has_next'
+			try chain.cursorAdvance() otherwise 'err2'
+				throw IterationError.exhausted
+			end 'err2'
+		end 'has_next'
+		return value
+	end 'next'
 end 'List'

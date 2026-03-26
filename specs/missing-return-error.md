@@ -17,7 +17,7 @@ Functions that declare a return type must return a value on all code paths.
 typealias Score = int(i64.min to i64.max)
 
 function test() returns Score
-  // Error: No return statement
+	// Error: No return statement
 end 'test'
 ```
 Error message:
@@ -34,10 +34,10 @@ Ensure every path returns:
 typealias Score = int(i64.min to i64.max)
 
 function test(x Score) returns Score
-  if x > 0 'check'
-    return 1
-  end 'check'
-  return 0  // Handles else case
+	if x > 0 'check'
+		return 1
+	end 'check'
+	return 0  // Handles else case
 end 'test'
 ```
 ## Tests
@@ -57,14 +57,14 @@ error E3013: specs/fragments/missing-return-error/no-return.test:2:10: missing r
 typealias Integer = int(i64.min to i64.max)
 
 function test(x Integer) returns Integer
-  if x > 0 'check'
-    return 1
-  end 'check'
-  // Missing return for else path
+	if x > 0 'check'
+		return 1
+	end 'check'
+	// Missing return for else path
 end 'test'
 
 function main() returns ExitCode
-  return test(5)
+	return test(5)
 end 'main'
 ```
 ```maxoncstderr
@@ -77,14 +77,14 @@ error E3013: specs/fragments/missing-return-error/missing-else-return.test:5:10:
 typealias Integer = int(i64.min to i64.max)
 
 function test(x Integer) returns Integer
-  if x > 0 'check'
-    return 1
-  end 'check'
-  return 0
+	if x > 0 'check'
+		return 1
+	end 'check'
+	return 0
 end 'test'
 
 function main() returns ExitCode
-  return test(5)
+	return test(5)
 end 'main'
 ```
 ```exitcode

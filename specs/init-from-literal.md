@@ -17,21 +17,21 @@ Types conforming to `InitableFromStringLiteral` can be initialized from string l
 typealias Score = int(i64.min to i64.max)
 
 type MyString implements InitableFromStringLiteral
-  var _value String
+	var _value String
 
-  static function init(value String) returns MyString
-    return MyString{_value: value}
-  end 'init'
+	static function init(value String) returns MyString
+		return MyString{_value: value}
+	end 'init'
 
-  export function len() returns Score
-    return _value.byteLength()
-  end 'len'
+	export function len() returns Score
+		return _value.byteLength()
+	end 'len'
 end 'MyString'
 
 function main() returns ExitCode
-  var ms = MyString from "hello"
-  print("{ms.len()}\n")
-  return 0
+	var ms = MyString from "hello"
+	print("{ms.len()}\n")
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -49,21 +49,21 @@ Types conforming to `InitableFromCharLiteral` can be initialized from character 
 typealias Score = int(i64.min to i64.max)
 
 type MyChar implements InitableFromCharLiteral
-  var _value Character
+	var _value Character
 
-  static function init(value Character) returns MyChar
-    return MyChar{_value: value}
-  end 'init'
+	static function init(value Character) returns MyChar
+		return MyChar{_value: value}
+	end 'init'
 
-  export function len() returns Score
-    return _value.byteLength()
-  end 'len'
+	export function len() returns Score
+		return _value.byteLength()
+	end 'len'
 end 'MyChar'
 
 function main() returns ExitCode
-  var mc = MyChar from 'A'
-  print("{mc.len()}\n")
-  return 0
+	var mc = MyChar from 'A'
+	print("{mc.len()}\n")
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -82,21 +82,21 @@ typealias Integer = int(i64.min to i64.max)
 
 // User-defined type that wraps a String and can be created from string literals
 type Wrapper implements InitableFromStringLiteral
-  var _value String
+	var _value String
 
-  static function init(value String) returns Wrapper
-    return Wrapper{_value: value}
-  end 'init'
+	static function init(value String) returns Wrapper
+		return Wrapper{_value: value}
+	end 'init'
 
-  export function len() returns Integer
-    return _value.byteLength()
-  end 'len'
+	export function len() returns Integer
+		return _value.byteLength()
+	end 'len'
 end 'Wrapper'
 
 function main() returns ExitCode
-  var w = Wrapper from "hello"
-  print("{w.len()}\n")
-  return 0
+	var w = Wrapper from "hello"
+	print("{w.len()}\n")
+	return 0
 end 'main'
 ```
 ```stdout
@@ -109,21 +109,21 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 type Wrapper implements InitableFromStringLiteral
-  var _value String
+	var _value String
 
-  static function init(value String) returns Wrapper
-    return Wrapper{_value: value}
-  end 'init'
+	static function init(value String) returns Wrapper
+		return Wrapper{_value: value}
+	end 'init'
 
-  export function len() returns Integer
-    return _value.byteLength()
-  end 'len'
+	export function len() returns Integer
+		return _value.byteLength()
+	end 'len'
 end 'Wrapper'
 
 function main() returns ExitCode
-  var w = Wrapper from ""
-  print("len: {w.len()}\n")
-  return 0
+	var w = Wrapper from ""
+	print("len: {w.len()}\n")
+	return 0
 end 'main'
 ```
 ```stdout
@@ -136,21 +136,21 @@ len: 0
 typealias Integer = int(i64.min to i64.max)
 
 type CharWrapper implements InitableFromCharLiteral
-  var _value Character
+	var _value Character
 
-  static function init(value Character) returns CharWrapper
-    return CharWrapper{_value: value}
-  end 'init'
+	static function init(value Character) returns CharWrapper
+		return CharWrapper{_value: value}
+	end 'init'
 
-  export function len() returns Integer
-    return _value.byteLength()
-  end 'len'
+	export function len() returns Integer
+		return _value.byteLength()
+	end 'len'
 end 'CharWrapper'
 
 function main() returns ExitCode
-  var cw = CharWrapper from 'X'
-  print("{cw.len()}\n")
-  return 0
+	var cw = CharWrapper from 'X'
+	print("{cw.len()}\n")
+	return 0
 end 'main'
 ```
 ```stdout

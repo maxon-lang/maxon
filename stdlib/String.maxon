@@ -3,537 +3,537 @@
 
 // String receives __ManagedMemory directly for literal initialization via BuiltinStringLiteral.
 export type String implements BuiltinStringLiteral, Hashable, Equatable, Iterable with Character, Cloneable
-  typealias ByteMemory = __ManagedMemory with Byte
-  export var managed ByteMemory
-  var _iterPos Index
-
-  // Default type for string literals - compiler discovers this via BuiltinStringLiteral interface
-  static function init(managed ByteMemory) returns String
-    return String{managed: managed, _iterPos: 0}
-  end 'init'
-
-  /// Create a String from a byte array (zero-copy slice of the array's backing memory)
-  export static function from(bytes ByteArray) returns String
-    return String{managed: bytes.managed, _iterPos: 0}
-  end 'from'
-
-  /// Return the raw UTF-8 bytes as a ByteArray (zero-copy, shares backing memory)
-  export function toByteArray() returns ByteArray
-    return ByteArray{managed: managed}
-  end 'toByteArray'
-
-  /// Create a deep copy of this string with independent backing storage
-  export function clone() returns String
-    var len = managed.length()
-    var newManaged = managed.slice(0, len)
-    return String{managed: newManaged, _iterPos: 0}
-  end 'clone'
-
-  export function byteLength() returns Count
-    return managed.length()
-  end 'byteLength'
-
-  export function isEmpty() returns bool
-    return managed.length() == 0
-  end 'isEmpty'
-
-  /// Get grapheme cluster count (number of user-perceived characters)
-  export function count() returns Count
-    return countGraphemesManaged(managed)
-  end 'count'
-
-  export function hash() returns HashValue
-    return hashManagedString(managed)
-  end 'hash'
-
-  export function equals(other String) returns bool
-    var lenA = managed.length()
-    var lenB = other.managed.length()
-    if lenA != lenB 'lenMismatch'
-      return false
-    end 'lenMismatch'
-    for i in 0 upto lenA 'byteCheck'
-      if managed.byteAt(i) != other.managed.byteAt(i) 'mismatch'
-        return false
-      end 'mismatch'
-    end 'byteCheck'
-    return true
-  end 'equals'
-
-  export function createIterator()
-    _iterPos = 0
-  end 'createIterator'
-
-  export function next() returns Character throws IterationError
-    if _iterPos < managed.length() 'check'
-      var len = managed.length()
-      var endPos = findGraphemeEndManagedRange(managed, offset: 0, startPos: _iterPos, len: len)
-      var graphemeLen = endPos - _iterPos
-      let grapheme = _makeCharFromBytes(_iterPos, len: graphemeLen)
-      _iterPos = endPos
-      return grapheme
-    end 'check'
-    throw IterationError.exhausted
-  end 'next'
-
-  function _makeCharFromBytes(pos Index, len Count) returns Character
-    return managed.makeCharFromBytes(pos, len)
-  end '_makeCharFromBytes'
-
-  // String index methods
-  export function startIndex() returns StringIndex
-    return StringIndex{_charIndex: 0, _bytePos: 0}
-  end 'startIndex'
-
-  export function endIndex() returns StringIndex
-    var charCount = countGraphemesManaged(managed)
-    return StringIndex{_charIndex: charCount, _bytePos: managed.length()}
-  end 'endIndex'
-
-  /// Get character at the given index. Returns the grapheme cluster at that position.
-  export function charAt(idx StringIndex) returns Character
-    // Calculate the byte length of this grapheme at the given byte position
-    var len = managed.length()
-    var byteStart = idx.bytePos()
-    var endPos = findGraphemeEndManagedRange(managed, offset: 0, startPos: byteStart, len: len)
-    var byteLen = endPos - byteStart
-    return _makeCharFromBytes(byteStart, len: byteLen)
-  end 'charAt'
-
-  /// Get the index after the given position (for iteration)
-  export function indexAfter(idx StringIndex) returns StringIndex throws StringError
-    var len = managed.length()
-    if idx.bytePos() >= len 'atEnd'
-      throw StringError.invalidIndex
-    end 'atEnd'
-    var byteStart = idx.bytePos()
-    var endPos = findGraphemeEndManagedRange(managed, offset: 0, startPos: byteStart, len: len)
-    var byteLen = endPos - byteStart
-    return StringIndex{_charIndex: idx.charIndex() + 1, _bytePos: byteStart + byteLen}
-  end 'indexAfter'
-
-  // concat method
-  export function concat(other String) returns String
-    var result = managed.concat(other.managed)
-    return String{managed: result, _iterPos: 0}
-  end 'concat'
-
-  /// Append another string's content to this string in place.
-  /// The compiler optimizes this to grow the buffer and copy directly,
-  /// avoiding intermediate allocations. When called with an interpolated
-  /// string argument, the interpolation parts are written directly into
-  /// the buffer without materializing a temporary string.
-  export function append(other String)
-    managed = managed.concat(other.managed)
-  end 'append'
-
-  // Search methods
-  export function startsWith(prefix String) returns bool
-    return startsWithManaged(managed, offset: 0, len: managed.length(), needle: prefix.managed)
-  end 'startsWith'
-
-  export function endsWith(suffix String) returns bool
-    return endsWithManaged(managed, offset: 0, len: managed.length(), needle: suffix.managed)
-  end 'endsWith'
-
-  export function contains(needle String) returns bool
-    if try findManaged(managed, offset: 0, len: managed.length(), needle: needle.managed) 'found'
-      return true
-    end 'found'
-    return false
-  end 'contains'
-
-  export function contains(character Character) returns bool
-    var charStr = character.toString()
-    if try findManaged(managed, offset: 0, len: managed.length(), needle: charStr.managed) 'found'
-      return true
-    end 'found'
-    return false
-  end 'contains'
-
-  export function findFirst(needle String) returns StringIndex throws StringError
-    var byteIdx = try findManaged(managed, offset: 0, len: managed.length(), needle: needle.managed)
-    var charIdx = byteIndexToGraphemeIndex(managed, byteIdx: byteIdx)
-    return StringIndex{_charIndex: charIdx, _bytePos: byteIdx}
-  end 'findFirst'
-
-  export function findLast(needle String) returns StringIndex throws StringError
-    var needleLen = needle.managed.length()
-    var selfLen = managed.length()
-    var found = false
-    var lastByteIdx = 0
-    var searchPos = 0
-    while searchPos <= selfLen - needleLen 'scan'
-      if let idx = try findManaged(managed, offset: searchPos, len: selfLen - searchPos, needle: needle.managed) 'try_find'
-        lastByteIdx = searchPos + idx
-        searchPos = lastByteIdx + 1
-        found = true
-      end 'try_find' else 'done'
-        break
-      end 'done'
-    end 'scan'
-    if not found 'not_found'
-      throw StringError.notFound
-    end 'not_found'
-    var charIdx = byteIndexToGraphemeIndex(managed, byteIdx: lastByteIdx)
-    return StringIndex{_charIndex: charIdx, _bytePos: lastByteIdx}
-  end 'findLast'
-
-  // Slicing - returns a new String backed by slice into this string's buffer
-  // Use endIndex for end position, or length for character count
-  export function slice(start StringIndex, endIndex StringIndex) returns String
-    var result = managed.slice(start.bytePos(), endIndex.bytePos())
-    return String{managed: result, _iterPos: 0}
-  end 'slice'
-
-  export function slice(start StringIndex, length Count) returns String
-    var endBytePos = graphemeOffsetToBytePos(managed, startBytePos: start.bytePos(), count: length)
-    var result = managed.slice(start.bytePos(), endBytePos)
-    return String{managed: result, _iterPos: 0}
-  end 'slice'
-
-  // View methods
-  export function bytes() returns ByteView
-    return ByteView{_managed: managed, _pos: 0}
-  end 'bytes'
-
-  export function codepoints() returns CodepointView
-    return CodepointView{_managed: managed, _pos: 0}
-  end 'codepoints'
-
-  export function utf16() returns UTF16View
-    return UTF16View{_managed: managed, _bytePos: 0, _pendingCodepoint: 0}
-  end 'utf16'
-
-  // Replace methods
-  export function replace(old String, with String) returns String
-    var oldLen = old.managed.length()
-    if oldLen == 0 'empty_old'
-      return String{managed: managed, _iterPos: 0}
-    end 'empty_old'
-
-    var selfLen = managed.length()
-
-    // First pass: count matches
-    var matchCount = 0
-    var searchPos = 0
-    while searchPos <= selfLen - oldLen 'count_loop'
-      if let idx = try findManaged(managed, offset: searchPos, len: selfLen - searchPos, needle: old.managed) 'try_count'
-        matchCount = matchCount + 1
-        searchPos = searchPos + idx + oldLen
-      end 'try_count' else 'done_count'
-        break
-      end 'done_count'
-    end 'count_loop'
-
-    if matchCount == 0 'no_matches'
-      return String{managed: managed, _iterPos: 0}
-    end 'no_matches'
-
-    // Build result by processing matches
-    var builtResult = managed.slice(0, 0)
-    var pos = 0
-    while pos <= selfLen - oldLen 'search'
-      if let idx = try findManaged(managed, offset: pos, len: selfLen - pos, needle: old.managed) 'try_find'
-        var matchPos = pos + idx
-        if matchPos > pos 'has_prefix'
-          var prefixSlice = managed.slice(pos, matchPos)
-          builtResult = builtResult.concat(prefixSlice)
-        end 'has_prefix'
-        builtResult = builtResult.concat(with.managed)
-        pos = matchPos + oldLen
-      end 'try_find' else 'no_more'
-        break
-      end 'no_more'
-    end 'search'
-
-    // Append remaining suffix
-    if pos < selfLen 'has_suffix'
-      var suffixSlice = managed.slice(pos, selfLen)
-      builtResult = builtResult.concat(suffixSlice)
-    end 'has_suffix'
-
-    return String{managed: builtResult, _iterPos: 0}
-  end 'replace'
-
-  export function replaceFirst(old String, with String) returns String
-    var oldLen = old.managed.length()
-    if oldLen == 0 'empty_old'
-      return String{managed: managed, _iterPos: 0}
-    end 'empty_old'
-
-    if let idx = try findManaged(managed, offset: 0, len: managed.length(), needle: old.managed) 'try_find'
-      var selfLen = managed.length()
-      var prefixSlice = managed.slice(0, idx)
-      var suffixSlice = managed.slice(idx + oldLen, selfLen)
-      var result = prefixSlice.concat(with.managed).concat(suffixSlice)
-      return String{managed: result, _iterPos: 0}
-    end 'try_find'
-    return String{managed: managed, _iterPos: 0}
-  end 'replaceFirst'
-
-  // Split method
-  typealias StringArray = Array with String
-
-  export function split(delimiter String) returns StringArray
-    var result = StringArray{}
-    var delimLen = delimiter.managed.length()
-
-    // Empty delimiter: return single-element array with original string
-    if delimLen == 0 'empty_delim'
-      result.push(String{managed: managed, _iterPos: 0})
-      return result
-    end 'empty_delim'
-
-    var selfLen = managed.length()
-    var pos = 0
-
-    while pos <= selfLen - delimLen 'search'
-      if let idx = try findManaged(managed, offset: pos, len: selfLen - pos, needle: delimiter.managed) 'try_find'
-        var matchPos = pos + idx
-        var part = managed.slice(pos, matchPos)
-        result.push(String{managed: part, _iterPos: 0})
-        pos = matchPos + delimLen
-      end 'try_find' else 'no_more'
-        break
-      end 'no_more'
-    end 'search'
-
-    // Append remaining suffix (always — even if empty, to handle trailing delimiters)
-    var tail = managed.slice(pos, selfLen)
-    result.push(String{managed: tail, _iterPos: 0})
-
-    return result
-  end 'split'
-
-  // Case conversion
-  export function toLower() returns String
-    var len = managed.length()
-    if len == 0 'empty'
-      return String{managed: managed, _iterPos: 0}
-    end 'empty'
-
-    for i in 0 upto len 'convert'
-      var b = managed.byteAt(i)
-      // ASCII uppercase A-Z (65-90) -> lowercase a-z (97-122)
-      if b >= 65 and b <= 90 'is_upper'
-        managed.setByte(i, b + 32)
-      end 'is_upper'
-    end 'convert'
-    return String{managed: managed, _iterPos: 0}
-  end 'toLower'
-
-  export function toUpper() returns String
-    var len = managed.length()
-    if len == 0 'empty'
-      return String{managed: managed, _iterPos: 0}
-    end 'empty'
-
-    for i in 0 upto len 'convert'
-      var b = managed.byteAt(i)
-      // ASCII lowercase a-z (97-122) -> uppercase A-Z (65-90)
-      if b >= 97 and b <= 122 'is_lower'
-        managed.setByte(i, b - 32)
-      end 'is_lower'
-    end 'convert'
-    return String{managed: managed, _iterPos: 0}
-  end 'toUpper'
-
-  /// Trim characters in the given set from both ends of the string.
-  export function trim(chars CharacterSet) returns String
-    var len = managed.length()
-    if len == 0 'empty'
-      return String{managed: managed, _iterPos: 0}
-    end 'empty'
-
-    // Forward scan: find first non-matching grapheme
-    var start = 0
-    while start < len 'scan_start'
-      var endByte = findGraphemeEndManagedRange(managed, offset: 0, startPos: start, len: len)
-      var graphemeLen = endByte - start
-      let ch = managed.makeCharFromBytes(start, graphemeLen)
-      if not chars.contains(ch) 'found_start'
-        break
-      end 'found_start'
-      start = endByte
-    end 'scan_start'
-
-    if start >= len 'all_match'
-      var empty = managed.slice(0, 0)
-      return String{managed: empty, _iterPos: 0}
-    end 'all_match'
-
-    // Forward scan from start: track last non-matching end position
-    var endPos = start
-    var pos = start
-    while pos < len 'scan_for_end'
-      var endByte = findGraphemeEndManagedRange(managed, offset: 0, startPos: pos, len: len)
-      var graphemeLen = endByte - pos
-      let ch = managed.makeCharFromBytes(pos, graphemeLen)
-      if not chars.contains(ch) 'not_match'
-        endPos = endByte
-      end 'not_match'
-      pos = endByte
-    end 'scan_for_end'
-
-    var result = managed.slice(start, endPos)
-    return String{managed: result, _iterPos: 0}
-  end 'trim'
-
-  /// Trim characters in the given set from the start of the string.
-  export function trimStart(chars CharacterSet) returns String
-    var len = managed.length()
-    if len == 0 'empty'
-      return String{managed: managed, _iterPos: 0}
-    end 'empty'
-
-    var start = 0
-    while start < len 'scan_start'
-      var endByte = findGraphemeEndManagedRange(managed, offset: 0, startPos: start, len: len)
-      var graphemeLen = endByte - start
-      let ch = managed.makeCharFromBytes(start, graphemeLen)
-      if not chars.contains(ch) 'found_start'
-        break
-      end 'found_start'
-      start = endByte
-    end 'scan_start'
-
-    if start >= len 'all_match'
-      var empty = managed.slice(0, 0)
-      return String{managed: empty, _iterPos: 0}
-    end 'all_match'
-
-    var result = managed.slice(start, len)
-    return String{managed: result, _iterPos: 0}
-  end 'trimStart'
-
-  /// Trim characters in the given set from the end of the string.
-  export function trimEnd(chars CharacterSet) returns String
-    var len = managed.length()
-    if len == 0 'empty'
-      return String{managed: managed, _iterPos: 0}
-    end 'empty'
-
-    // Forward scan tracking last non-matching end position
-    var endPos = 0
-    var pos = 0
-    while pos < len 'scan'
-      var endByte = findGraphemeEndManagedRange(managed, offset: 0, startPos: pos, len: len)
-      var graphemeLen = endByte - pos
-      let ch = managed.makeCharFromBytes(pos, graphemeLen)
-      if not chars.contains(ch) 'not_match'
-        endPos = endByte
-      end 'not_match'
-      pos = endByte
-    end 'scan'
-
-    if endPos == 0 'all_match'
-      var empty = managed.slice(0, 0)
-      return String{managed: empty, _iterPos: 0}
-    end 'all_match'
-
-    var result = managed.slice(0, endPos)
-    return String{managed: result, _iterPos: 0}
-  end 'trimEnd'
-
-  /// Trim Unicode whitespace from both ends.
-  export function trim() returns String
-    return trim(CharacterSet.whitespacesAndNewlines())
-  end 'trim'
-
-  /// Trim Unicode whitespace from the start.
-  export function trimStart() returns String
-    return trimStart(CharacterSet.whitespacesAndNewlines())
-  end 'trimStart'
-
-  /// Trim Unicode whitespace from the end.
-  export function trimEnd() returns String
-    return trimEnd(CharacterSet.whitespacesAndNewlines())
-  end 'trimEnd'
+	typealias ByteMemory = __ManagedMemory with Byte
+	export var managed ByteMemory
+	var _iterPos Index
+
+	// Default type for string literals - compiler discovers this via BuiltinStringLiteral interface
+	static function init(managed ByteMemory) returns String
+		return String{managed: managed, _iterPos: 0}
+	end 'init'
+
+	/// Create a String from a byte array (zero-copy slice of the array's backing memory)
+	export static function from(bytes ByteArray) returns String
+		return String{managed: bytes.managed, _iterPos: 0}
+	end 'from'
+
+	/// Return the raw UTF-8 bytes as a ByteArray (zero-copy, shares backing memory)
+	export function toByteArray() returns ByteArray
+		return ByteArray{managed: managed}
+	end 'toByteArray'
+
+	/// Create a deep copy of this string with independent backing storage
+	export function clone() returns String
+		var len = managed.length()
+		var newManaged = managed.slice(0, len)
+		return String{managed: newManaged, _iterPos: 0}
+	end 'clone'
+
+	export function byteLength() returns Count
+		return managed.length()
+	end 'byteLength'
+
+	export function isEmpty() returns bool
+		return managed.length() == 0
+	end 'isEmpty'
+
+	/// Get grapheme cluster count (number of user-perceived characters)
+	export function count() returns Count
+		return countGraphemesManaged(managed)
+	end 'count'
+
+	export function hash() returns HashValue
+		return hashManagedString(managed)
+	end 'hash'
+
+	export function equals(other String) returns bool
+		var lenA = managed.length()
+		var lenB = other.managed.length()
+		if lenA != lenB 'lenMismatch'
+			return false
+		end 'lenMismatch'
+		for i in 0 upto lenA 'byteCheck'
+			if managed.byteAt(i) != other.managed.byteAt(i) 'mismatch'
+				return false
+			end 'mismatch'
+		end 'byteCheck'
+		return true
+	end 'equals'
+
+	export function createIterator()
+		_iterPos = 0
+	end 'createIterator'
+
+	export function next() returns Character throws IterationError
+		if _iterPos < managed.length() 'check'
+			var len = managed.length()
+			var endPos = findGraphemeEndManagedRange(managed, offset: 0, startPos: _iterPos, len: len)
+			var graphemeLen = endPos - _iterPos
+			let grapheme = _makeCharFromBytes(_iterPos, len: graphemeLen)
+			_iterPos = endPos
+			return grapheme
+		end 'check'
+		throw IterationError.exhausted
+	end 'next'
+
+	function _makeCharFromBytes(pos Index, len Count) returns Character
+		return managed.makeCharFromBytes(pos, len)
+	end '_makeCharFromBytes'
+
+	// String index methods
+	export function startIndex() returns StringIndex
+		return StringIndex{_charIndex: 0, _bytePos: 0}
+	end 'startIndex'
+
+	export function endIndex() returns StringIndex
+		var charCount = countGraphemesManaged(managed)
+		return StringIndex{_charIndex: charCount, _bytePos: managed.length()}
+	end 'endIndex'
+
+	/// Get character at the given index. Returns the grapheme cluster at that position.
+	export function charAt(idx StringIndex) returns Character
+		// Calculate the byte length of this grapheme at the given byte position
+		var len = managed.length()
+		var byteStart = idx.bytePos()
+		var endPos = findGraphemeEndManagedRange(managed, offset: 0, startPos: byteStart, len: len)
+		var byteLen = endPos - byteStart
+		return _makeCharFromBytes(byteStart, len: byteLen)
+	end 'charAt'
+
+	/// Get the index after the given position (for iteration)
+	export function indexAfter(idx StringIndex) returns StringIndex throws StringError
+		var len = managed.length()
+		if idx.bytePos() >= len 'atEnd'
+			throw StringError.invalidIndex
+		end 'atEnd'
+		var byteStart = idx.bytePos()
+		var endPos = findGraphemeEndManagedRange(managed, offset: 0, startPos: byteStart, len: len)
+		var byteLen = endPos - byteStart
+		return StringIndex{_charIndex: idx.charIndex() + 1, _bytePos: byteStart + byteLen}
+	end 'indexAfter'
+
+	// concat method
+	export function concat(other String) returns String
+		var result = managed.concat(other.managed)
+		return String{managed: result, _iterPos: 0}
+	end 'concat'
+
+	/// Append another string's content to this string in place.
+	/// The compiler optimizes this to grow the buffer and copy directly,
+	/// avoiding intermediate allocations. When called with an interpolated
+	/// string argument, the interpolation parts are written directly into
+	/// the buffer without materializing a temporary string.
+	export function append(other String)
+		managed = managed.concat(other.managed)
+	end 'append'
+
+	// Search methods
+	export function startsWith(prefix String) returns bool
+		return startsWithManaged(managed, offset: 0, len: managed.length(), needle: prefix.managed)
+	end 'startsWith'
+
+	export function endsWith(suffix String) returns bool
+		return endsWithManaged(managed, offset: 0, len: managed.length(), needle: suffix.managed)
+	end 'endsWith'
+
+	export function contains(needle String) returns bool
+		if try findManaged(managed, offset: 0, len: managed.length(), needle: needle.managed) 'found'
+			return true
+		end 'found'
+		return false
+	end 'contains'
+
+	export function contains(character Character) returns bool
+		var charStr = character.toString()
+		if try findManaged(managed, offset: 0, len: managed.length(), needle: charStr.managed) 'found'
+			return true
+		end 'found'
+		return false
+	end 'contains'
+
+	export function findFirst(needle String) returns StringIndex throws StringError
+		var byteIdx = try findManaged(managed, offset: 0, len: managed.length(), needle: needle.managed)
+		var charIdx = byteIndexToGraphemeIndex(managed, byteIdx: byteIdx)
+		return StringIndex{_charIndex: charIdx, _bytePos: byteIdx}
+	end 'findFirst'
+
+	export function findLast(needle String) returns StringIndex throws StringError
+		var needleLen = needle.managed.length()
+		var selfLen = managed.length()
+		var found = false
+		var lastByteIdx = 0
+		var searchPos = 0
+		while searchPos <= selfLen - needleLen 'scan'
+			if let idx = try findManaged(managed, offset: searchPos, len: selfLen - searchPos, needle: needle.managed) 'try_find'
+				lastByteIdx = searchPos + idx
+				searchPos = lastByteIdx + 1
+				found = true
+			end 'try_find' else 'done'
+				break
+			end 'done'
+		end 'scan'
+		if not found 'not_found'
+			throw StringError.notFound
+		end 'not_found'
+		var charIdx = byteIndexToGraphemeIndex(managed, byteIdx: lastByteIdx)
+		return StringIndex{_charIndex: charIdx, _bytePos: lastByteIdx}
+	end 'findLast'
+
+	// Slicing - returns a new String backed by slice into this string's buffer
+	// Use endIndex for end position, or length for character count
+	export function slice(start StringIndex, endIndex StringIndex) returns String
+		var result = managed.slice(start.bytePos(), endIndex.bytePos())
+		return String{managed: result, _iterPos: 0}
+	end 'slice'
+
+	export function slice(start StringIndex, length Count) returns String
+		var endBytePos = graphemeOffsetToBytePos(managed, startBytePos: start.bytePos(), count: length)
+		var result = managed.slice(start.bytePos(), endBytePos)
+		return String{managed: result, _iterPos: 0}
+	end 'slice'
+
+	// View methods
+	export function bytes() returns ByteView
+		return ByteView{_managed: managed, _pos: 0}
+	end 'bytes'
+
+	export function codepoints() returns CodepointView
+		return CodepointView{_managed: managed, _pos: 0}
+	end 'codepoints'
+
+	export function utf16() returns UTF16View
+		return UTF16View{_managed: managed, _bytePos: 0, _pendingCodepoint: 0}
+	end 'utf16'
+
+	// Replace methods
+	export function replace(old String, with String) returns String
+		var oldLen = old.managed.length()
+		if oldLen == 0 'empty_old'
+			return String{managed: managed, _iterPos: 0}
+		end 'empty_old'
+
+		var selfLen = managed.length()
+
+		// First pass: count matches
+		var matchCount = 0
+		var searchPos = 0
+		while searchPos <= selfLen - oldLen 'count_loop'
+			if let idx = try findManaged(managed, offset: searchPos, len: selfLen - searchPos, needle: old.managed) 'try_count'
+				matchCount = matchCount + 1
+				searchPos = searchPos + idx + oldLen
+			end 'try_count' else 'done_count'
+				break
+			end 'done_count'
+		end 'count_loop'
+
+		if matchCount == 0 'no_matches'
+			return String{managed: managed, _iterPos: 0}
+		end 'no_matches'
+
+		// Build result by processing matches
+		var builtResult = managed.slice(0, 0)
+		var pos = 0
+		while pos <= selfLen - oldLen 'search'
+			if let idx = try findManaged(managed, offset: pos, len: selfLen - pos, needle: old.managed) 'try_find'
+				var matchPos = pos + idx
+				if matchPos > pos 'has_prefix'
+					var prefixSlice = managed.slice(pos, matchPos)
+					builtResult = builtResult.concat(prefixSlice)
+				end 'has_prefix'
+				builtResult = builtResult.concat(with.managed)
+				pos = matchPos + oldLen
+			end 'try_find' else 'no_more'
+				break
+			end 'no_more'
+		end 'search'
+
+		// Append remaining suffix
+		if pos < selfLen 'has_suffix'
+			var suffixSlice = managed.slice(pos, selfLen)
+			builtResult = builtResult.concat(suffixSlice)
+		end 'has_suffix'
+
+		return String{managed: builtResult, _iterPos: 0}
+	end 'replace'
+
+	export function replaceFirst(old String, with String) returns String
+		var oldLen = old.managed.length()
+		if oldLen == 0 'empty_old'
+			return String{managed: managed, _iterPos: 0}
+		end 'empty_old'
+
+		if let idx = try findManaged(managed, offset: 0, len: managed.length(), needle: old.managed) 'try_find'
+			var selfLen = managed.length()
+			var prefixSlice = managed.slice(0, idx)
+			var suffixSlice = managed.slice(idx + oldLen, selfLen)
+			var result = prefixSlice.concat(with.managed).concat(suffixSlice)
+			return String{managed: result, _iterPos: 0}
+		end 'try_find'
+		return String{managed: managed, _iterPos: 0}
+	end 'replaceFirst'
+
+	// Split method
+	typealias StringArray = Array with String
+
+	export function split(delimiter String) returns StringArray
+		var result = StringArray{}
+		var delimLen = delimiter.managed.length()
+
+		// Empty delimiter: return single-element array with original string
+		if delimLen == 0 'empty_delim'
+			result.push(String{managed: managed, _iterPos: 0})
+			return result
+		end 'empty_delim'
+
+		var selfLen = managed.length()
+		var pos = 0
+
+		while pos <= selfLen - delimLen 'search'
+			if let idx = try findManaged(managed, offset: pos, len: selfLen - pos, needle: delimiter.managed) 'try_find'
+				var matchPos = pos + idx
+				var part = managed.slice(pos, matchPos)
+				result.push(String{managed: part, _iterPos: 0})
+				pos = matchPos + delimLen
+			end 'try_find' else 'no_more'
+				break
+			end 'no_more'
+		end 'search'
+
+		// Append remaining suffix (always — even if empty, to handle trailing delimiters)
+		var tail = managed.slice(pos, selfLen)
+		result.push(String{managed: tail, _iterPos: 0})
+
+		return result
+	end 'split'
+
+	// Case conversion
+	export function toLower() returns String
+		var len = managed.length()
+		if len == 0 'empty'
+			return String{managed: managed, _iterPos: 0}
+		end 'empty'
+
+		for i in 0 upto len 'convert'
+			var b = managed.byteAt(i)
+			// ASCII uppercase A-Z (65-90) -> lowercase a-z (97-122)
+			if b >= 65 and b <= 90 'is_upper'
+				managed.setByte(i, b + 32)
+			end 'is_upper'
+		end 'convert'
+		return String{managed: managed, _iterPos: 0}
+	end 'toLower'
+
+	export function toUpper() returns String
+		var len = managed.length()
+		if len == 0 'empty'
+			return String{managed: managed, _iterPos: 0}
+		end 'empty'
+
+		for i in 0 upto len 'convert'
+			var b = managed.byteAt(i)
+			// ASCII lowercase a-z (97-122) -> uppercase A-Z (65-90)
+			if b >= 97 and b <= 122 'is_lower'
+				managed.setByte(i, b - 32)
+			end 'is_lower'
+		end 'convert'
+		return String{managed: managed, _iterPos: 0}
+	end 'toUpper'
+
+	/// Trim characters in the given set from both ends of the string.
+	export function trim(chars CharacterSet) returns String
+		var len = managed.length()
+		if len == 0 'empty'
+			return String{managed: managed, _iterPos: 0}
+		end 'empty'
+
+		// Forward scan: find first non-matching grapheme
+		var start = 0
+		while start < len 'scan_start'
+			var endByte = findGraphemeEndManagedRange(managed, offset: 0, startPos: start, len: len)
+			var graphemeLen = endByte - start
+			let ch = managed.makeCharFromBytes(start, graphemeLen)
+			if not chars.contains(ch) 'found_start'
+				break
+			end 'found_start'
+			start = endByte
+		end 'scan_start'
+
+		if start >= len 'all_match'
+			var empty = managed.slice(0, 0)
+			return String{managed: empty, _iterPos: 0}
+		end 'all_match'
+
+		// Forward scan from start: track last non-matching end position
+		var endPos = start
+		var pos = start
+		while pos < len 'scan_for_end'
+			var endByte = findGraphemeEndManagedRange(managed, offset: 0, startPos: pos, len: len)
+			var graphemeLen = endByte - pos
+			let ch = managed.makeCharFromBytes(pos, graphemeLen)
+			if not chars.contains(ch) 'not_match'
+				endPos = endByte
+			end 'not_match'
+			pos = endByte
+		end 'scan_for_end'
+
+		var result = managed.slice(start, endPos)
+		return String{managed: result, _iterPos: 0}
+	end 'trim'
+
+	/// Trim characters in the given set from the start of the string.
+	export function trimStart(chars CharacterSet) returns String
+		var len = managed.length()
+		if len == 0 'empty'
+			return String{managed: managed, _iterPos: 0}
+		end 'empty'
+
+		var start = 0
+		while start < len 'scan_start'
+			var endByte = findGraphemeEndManagedRange(managed, offset: 0, startPos: start, len: len)
+			var graphemeLen = endByte - start
+			let ch = managed.makeCharFromBytes(start, graphemeLen)
+			if not chars.contains(ch) 'found_start'
+				break
+			end 'found_start'
+			start = endByte
+		end 'scan_start'
+
+		if start >= len 'all_match'
+			var empty = managed.slice(0, 0)
+			return String{managed: empty, _iterPos: 0}
+		end 'all_match'
+
+		var result = managed.slice(start, len)
+		return String{managed: result, _iterPos: 0}
+	end 'trimStart'
+
+	/// Trim characters in the given set from the end of the string.
+	export function trimEnd(chars CharacterSet) returns String
+		var len = managed.length()
+		if len == 0 'empty'
+			return String{managed: managed, _iterPos: 0}
+		end 'empty'
+
+		// Forward scan tracking last non-matching end position
+		var endPos = 0
+		var pos = 0
+		while pos < len 'scan'
+			var endByte = findGraphemeEndManagedRange(managed, offset: 0, startPos: pos, len: len)
+			var graphemeLen = endByte - pos
+			let ch = managed.makeCharFromBytes(pos, graphemeLen)
+			if not chars.contains(ch) 'not_match'
+				endPos = endByte
+			end 'not_match'
+			pos = endByte
+		end 'scan'
+
+		if endPos == 0 'all_match'
+			var empty = managed.slice(0, 0)
+			return String{managed: empty, _iterPos: 0}
+		end 'all_match'
+
+		var result = managed.slice(0, endPos)
+		return String{managed: result, _iterPos: 0}
+	end 'trimEnd'
+
+	/// Trim Unicode whitespace from both ends.
+	export function trim() returns String
+		return trim(CharacterSet.whitespacesAndNewlines())
+	end 'trim'
+
+	/// Trim Unicode whitespace from the start.
+	export function trimStart() returns String
+		return trimStart(CharacterSet.whitespacesAndNewlines())
+	end 'trimStart'
+
+	/// Trim Unicode whitespace from the end.
+	export function trimEnd() returns String
+		return trimEnd(CharacterSet.whitespacesAndNewlines())
+	end 'trimEnd'
 end 'String'
 
 // StringIndex type - type-safe string position
 export type StringIndex implements Equatable, Comparable
-  var _charIndex Index
-  var _bytePos Index
+	var _charIndex Index
+	var _bytePos Index
 
-  export function charIndex() returns Index
-    return _charIndex
-  end 'charIndex'
+	export function charIndex() returns Index
+		return _charIndex
+	end 'charIndex'
 
-  export function bytePos() returns Index
-    return _bytePos
-  end 'bytePos'
+	export function bytePos() returns Index
+		return _bytePos
+	end 'bytePos'
 
-  export function equals(other StringIndex) returns bool
-    return _charIndex == other._charIndex
-  end 'equals'
+	export function equals(other StringIndex) returns bool
+		return _charIndex == other._charIndex
+	end 'equals'
 
-  export function compare(other StringIndex) returns Ordering
-    if _charIndex < other._charIndex 'less'
-      return Ordering.lessThan
-    end 'less'
-    if _charIndex > other._charIndex 'greater'
-      return Ordering.greaterThan
-    end 'greater'
-    return Ordering.equalTo
-  end 'compare'
+	export function compare(other StringIndex) returns Ordering
+		if _charIndex < other._charIndex 'less'
+			return Ordering.lessThan
+		end 'less'
+		if _charIndex > other._charIndex 'greater'
+			return Ordering.greaterThan
+		end 'greater'
+		return Ordering.equalTo
+	end 'compare'
 end 'StringIndex'
 
 function startsWithManaged(haystack __ManagedMemory, offset Index, len Count, needle __ManagedMemory) returns bool
-  var prefixLen = needle.length()
+	var prefixLen = needle.length()
 
-  if prefixLen > len 'length_check'
-    return false
-  end 'length_check'
+	if prefixLen > len 'length_check'
+		return false
+	end 'length_check'
 
-  for i in 0 upto prefixLen 'compare_loop'
-    if haystack.byteAt(offset + i) != needle.byteAt(i) 'byte_check'
-      return false
-    end 'byte_check'
-  end 'compare_loop'
-  return true
+	for i in 0 upto prefixLen 'compare_loop'
+		if haystack.byteAt(offset + i) != needle.byteAt(i) 'byte_check'
+			return false
+		end 'byte_check'
+	end 'compare_loop'
+	return true
 end 'startsWithManaged'
 
 function endsWithManaged(haystack __ManagedMemory, offset Index, len Count, needle __ManagedMemory) returns bool
-  var suffixLen = needle.length()
+	var suffixLen = needle.length()
 
-  if suffixLen > len 'length_check'
-    return false
-  end 'length_check'
+	if suffixLen > len 'length_check'
+		return false
+	end 'length_check'
 
-  var start = offset + (len - suffixLen)
-  for i in 0 upto suffixLen 'compare_loop'
-    if haystack.byteAt(start + i) != needle.byteAt(i) 'byte_check'
-      return false
-    end 'byte_check'
-  end 'compare_loop'
-  return true
+	var start = offset + (len - suffixLen)
+	for i in 0 upto suffixLen 'compare_loop'
+		if haystack.byteAt(start + i) != needle.byteAt(i) 'byte_check'
+			return false
+		end 'byte_check'
+	end 'compare_loop'
+	return true
 end 'endsWithManaged'
 
 function findManaged(haystack __ManagedMemory, offset Index, len Count, needle __ManagedMemory) returns Index throws StringError
-  var needleLen = needle.length()
+	var needleLen = needle.length()
 
-  if needleLen == 0 'empty_needle'
-    return 0
-  end 'empty_needle'
+	if needleLen == 0 'empty_needle'
+		return 0
+	end 'empty_needle'
 
-  if needleLen > len 'too_long'
-    throw StringError.notFound
-  end 'too_long'
+	if needleLen > len 'too_long'
+		throw StringError.notFound
+	end 'too_long'
 
-  for i in 0 to(len - needleLen) 'search_loop'
-    var found = true
-    for j in 0 upto needleLen 'compare_loop'
-      if haystack.byteAt(offset + i + j) != needle.byteAt(j) 'byte_check'
-        found = false
-        break
-      end 'byte_check'
-    end 'compare_loop'
+	for i in 0 to(len - needleLen) 'search_loop'
+		var found = true
+		for j in 0 upto needleLen 'compare_loop'
+			if haystack.byteAt(offset + i + j) != needle.byteAt(j) 'byte_check'
+				found = false
+				break
+			end 'byte_check'
+		end 'compare_loop'
 
-    if found 'found_check'
-      return i
-    end 'found_check'
-  end 'search_loop'
-  throw StringError.notFound
+		if found 'found_check'
+			return i
+		end 'found_check'
+	end 'search_loop'
+	throw StringError.notFound
 end 'findManaged'

@@ -17,7 +17,7 @@ Directory operations use function-specific error types:
 
 ```maxon
 union DirectoryListError implements Error
-  notFound
+	notFound
 end 'DirectoryListError'
 ```
 
@@ -40,14 +40,14 @@ where `type StringArray implements Array with String`
 
 ```maxon
 function main() returns ExitCode
-  let files = try Directory.list(FilePath from "./") otherwise 'err'
-    print("Failed to list directory")
-    return 1
-  end 'err'
-  for f in files 'loop'
-    print("{f}\n")
-  end 'loop'
-  return 0
+	let files = try Directory.list(FilePath from "./") otherwise 'err'
+		print("Failed to list directory")
+		return 1
+	end 'err'
+	for f in files 'loop'
+		print("{f}\n")
+	end 'loop'
+	return 0
 end 'main'
 ```
 
@@ -66,12 +66,12 @@ Check if a path exists and is a directory.
 
 ```maxon
 function main() returns ExitCode
-  if Directory.exists(FilePath from "bin") 'check'
-    print("bin is a directory")
-  end 'check' else 'nodir'
-    print("bin is not a directory")
-  end 'nodir'
-  return 0
+	if Directory.exists(FilePath from "bin") 'check'
+		print("bin is a directory")
+	end 'check' else 'nodir'
+		print("bin is not a directory")
+	end 'nodir'
+	return 0
 end 'main'
 ```
 
@@ -98,9 +98,9 @@ Get the current working directory as a FilePath.
 
 ```maxon
 function main() returns ExitCode
-  let cwd = Directory.currentPath()
-  print("{cwd}\n")
-  return 0
+	let cwd = Directory.currentPath()
+	print("{cwd}\n")
+	return 0
 end 'main'
 ```
 
@@ -109,20 +109,20 @@ end 'main'
 <!-- test: list-directory -->
 ```maxon
 function main() returns ExitCode
-  let files = try Directory.list(FilePath from "../bin") otherwise 'err'
-    return 0
-  end 'err'
-  // bin directory should contain the maxon executable
-  var foundMaxon = false
-  for f in files 'loop'
-    if f == "maxon.exe" or f == "maxon" 'check'
-      foundMaxon = true
-    end 'check'
-  end 'loop'
-  if foundMaxon 'result'
-    return 42
-  end 'result'
-  return 1
+	let files = try Directory.list(FilePath from "../bin") otherwise 'err'
+		return 0
+	end 'err'
+	// bin directory should contain the maxon executable
+	var foundMaxon = false
+	for f in files 'loop'
+		if f == "maxon.exe" or f == "maxon" 'check'
+			foundMaxon = true
+		end 'check'
+	end 'loop'
+	if foundMaxon 'result'
+		return 42
+	end 'result'
+	return 1
 end 'main'
 ```
 ```exitcode
@@ -132,14 +132,14 @@ end 'main'
 <!-- test: list-directory-count -->
 ```maxon
 function main() returns ExitCode
-  let files = try Directory.list(FilePath from "../bin") otherwise 'err'
-    return 99
-  end 'err'
-  // bin directory has at least maxon.exe
-  if files.count() >= 1 'ok'
-    return 42
-  end 'ok'
-  return files.count()
+	let files = try Directory.list(FilePath from "../bin") otherwise 'err'
+		return 99
+	end 'err'
+	// bin directory has at least maxon.exe
+	if files.count() >= 1 'ok'
+		return 42
+	end 'ok'
+	return files.count()
 end 'main'
 ```
 ```exitcode
@@ -149,12 +149,12 @@ end 'main'
 <!-- test: list-nonexistent-directory -->
 ```maxon
 function main() returns ExitCode
-  var files = try Directory.list(FilePath from "nonexistent_dir_12345") otherwise 'err'
-    print("Directory not found")
-    return 0
-  end 'err'
-  print("Found {files.count()} files\n")
-  return 1
+	var files = try Directory.list(FilePath from "nonexistent_dir_12345") otherwise 'err'
+		print("Directory not found")
+		return 0
+	end 'err'
+	print("Found {files.count()} files\n")
+	return 1
 end 'main'
 ```
 ```exitcode
@@ -167,10 +167,10 @@ Directory not found
 <!-- test: directory-exists -->
 ```maxon
 function main() returns ExitCode
-  if Directory.exists(FilePath from "../bin") 'check'
-    return 42
-  end 'check'
-  return 0
+	if Directory.exists(FilePath from "../bin") 'check'
+		return 42
+	end 'check'
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -180,10 +180,10 @@ end 'main'
 <!-- test: directory-is-directory -->
 ```maxon
 function main() returns ExitCode
-  if Directory.isDirectory(FilePath from "../bin") 'check'
-    return 42
-  end 'check'
-  return 0
+	if Directory.isDirectory(FilePath from "../bin") 'check'
+		return 42
+	end 'check'
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -193,11 +193,11 @@ end 'main'
 <!-- test: file-is-not-directory -->
 ```maxon
 function main() returns ExitCode
-  // Test that a nonexistent path is not a directory
-  if Directory.isDirectory(FilePath from "nonexistent_path_12345") 'check'
-    return 1
-  end 'check'
-  return 42
+	// Test that a nonexistent path is not a directory
+	if Directory.isDirectory(FilePath from "nonexistent_path_12345") 'check'
+		return 1
+	end 'check'
+	return 42
 end 'main'
 ```
 ```exitcode
@@ -207,11 +207,11 @@ end 'main'
 <!-- test: current-directory-not-empty -->
 ```maxon
 function main() returns ExitCode
-  let cwd = Directory.currentPath()
-  if cwd.toString().count() > 0 'ok'
-    return 42
-  end 'ok'
-  return 0
+	let cwd = Directory.currentPath()
+	if cwd.toString().count() > 0 'ok'
+		return 42
+	end 'ok'
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -221,11 +221,11 @@ end 'main'
 <!-- test: current-directory-is-directory -->
 ```maxon
 function main() returns ExitCode
-  let cwd = Directory.currentPath()
-  if Directory.exists(cwd) 'ok'
-    return 42
-  end 'ok'
-  return 0
+	let cwd = Directory.currentPath()
+	if Directory.exists(cwd) 'ok'
+		return 42
+	end 'ok'
+	return 0
 end 'main'
 ```
 ```exitcode

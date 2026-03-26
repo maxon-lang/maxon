@@ -4,300 +4,300 @@
 // Array receives __ManagedMemory directly for literal initialization via BuiltinArrayLiteral.
 
 export type Array uses Element implements BuiltinArrayLiteral, Iterable with Element, Cloneable
-  typealias ElementMemory = __ManagedMemory with Element
-  var iterIndex Index  // Current iteration position (now at offset 0)
-  export var managed ElementMemory  // Compiler-managed opaque array storage (now at offset 8)
+	typealias ElementMemory = __ManagedMemory with Element
+	var iterIndex Index  // Current iteration position (now at offset 0)
+	export var managed ElementMemory  // Compiler-managed opaque array storage (now at offset 8)
 
-  // =========================================================================
-  // Builtin initialization (compiler special-case)
-  // =========================================================================
+	// =========================================================================
+	// Builtin initialization (compiler special-case)
+	// =========================================================================
 
-  // Default type for array literals - compiler discovers this via BuiltinArrayLiteral interface
-  static function init(managed ElementMemory) returns Self
-    return Self{managed: managed, iterIndex: 0}
-  end 'init'
+	// Default type for array literals - compiler discovers this via BuiltinArrayLiteral interface
+	static function init(managed ElementMemory) returns Self
+		return Self{managed: managed, iterIndex: 0}
+	end 'init'
 
-  // =========================================================================
-  // Static Constructors
-  // =========================================================================
+	// =========================================================================
+	// Static Constructors
+	// =========================================================================
 
-  typealias ElementIterable = Iterable with Element
+	typealias ElementIterable = Iterable with Element
 
-  /// Create an array by collecting all elements from an iterable
-  export static function from(source ElementIterable) returns Self
-    var result = Self{}
-    for item in source 'collect'
-      result.push(item)
-    end 'collect'
-    return result
-  end 'from'
+	/// Create an array by collecting all elements from an iterable
+	export static function from(source ElementIterable) returns Self
+		var result = Self{}
+		for item in source 'collect'
+			result.push(item)
+		end 'collect'
+		return result
+	end 'from'
 
-  // =========================================================================
-  // Properties
-  // =========================================================================
+	// =========================================================================
+	// Properties
+	// =========================================================================
 
-  /// Create a deep copy of this array with independent backing storage
-  export function clone() returns Self
-    var len = managed.length()
-    var newManaged = managed.slice(0, len)
-    return Self{managed: newManaged, iterIndex: 0}
-  end 'clone'
+	/// Create a deep copy of this array with independent backing storage
+	export function clone() returns Self
+		var len = managed.length()
+		var newManaged = managed.slice(0, len)
+		return Self{managed: newManaged, iterIndex: 0}
+	end 'clone'
 
-  /// Get the number of elements in the array
-  export function count() returns Count
-    return managed.length()
-  end 'count'
+	/// Get the number of elements in the array
+	export function count() returns Count
+		return managed.length()
+	end 'count'
 
-  /// Get the current capacity (allocated space)
-  export function capacity() returns Count
-    return managed.capacity()
-  end 'capacity'
+	/// Get the current capacity (allocated space)
+	export function capacity() returns Count
+		return managed.capacity()
+	end 'capacity'
 
-  /// Check if array is empty
-  export function isEmpty() returns bool
-    return managed.length() == 0
-  end 'isEmpty'
+	/// Check if array is empty
+	export function isEmpty() returns bool
+		return managed.length() == 0
+	end 'isEmpty'
 
-  /// Get first element, throws if empty
-  export function first() returns Element throws ArrayError
-    if managed.length() == 0 'empty'
-      throw ArrayError.indexOutOfBounds
-    end 'empty'
-    return managed.get(0)
-  end 'first'
+	/// Get first element, throws if empty
+	export function first() returns Element throws ArrayError
+		if managed.length() == 0 'empty'
+			throw ArrayError.indexOutOfBounds
+		end 'empty'
+		return managed.get(0)
+	end 'first'
 
-  /// Get last element, throws if empty
-  export function last() returns Element throws ArrayError
-    var len = managed.length()
-    if len == 0 'empty'
-      throw ArrayError.indexOutOfBounds
-    end 'empty'
-    return managed.get(len - 1)
-  end 'last'
+	/// Get last element, throws if empty
+	export function last() returns Element throws ArrayError
+		var len = managed.length()
+		if len == 0 'empty'
+			throw ArrayError.indexOutOfBounds
+		end 'empty'
+		return managed.get(len - 1)
+	end 'last'
 
-  // =========================================================================
-  // Element Access
-  // =========================================================================
+	// =========================================================================
+	// Element Access
+	// =========================================================================
 
-  /// Get element at index, throws if out of bounds
-  export function get(index Index) returns Element throws ArrayError
-    var len = managed.length()
-    if index >= len 'upper'
-      throw ArrayError.indexOutOfBounds
-    end 'upper'
-    return managed.get(index)
-  end 'get'
+	/// Get element at index, throws if out of bounds
+	export function get(index Index) returns Element throws ArrayError
+		var len = managed.length()
+		if index >= len 'upper'
+			throw ArrayError.indexOutOfBounds
+		end 'upper'
+		return managed.get(index)
+	end 'get'
 
-  /// Set element at index (no-op if index out of bounds)
-  export function set(index Index, value Element)
-    var len = managed.length()
-    if index < len 'inbounds'
-      managed.set(index, value)
-    end 'inbounds'
-  end 'set'
+	/// Set element at index (no-op if index out of bounds)
+	export function set(index Index, value Element)
+		var len = managed.length()
+		if index < len 'inbounds'
+			managed.set(index, value)
+		end 'inbounds'
+	end 'set'
 
-  // =========================================================================
-  // Slicing
-  // =========================================================================
+	// =========================================================================
+	// Slicing
+	// =========================================================================
 
-  /// Create a new array from elements [start, endIndex)
-  export function slice(start Index, endIndex Index) returns Self
-    var len = managed.length()
-    var s = start
-    var e = endIndex
-    // Clamp to valid range
-    if e > len 'clamp_end'
-      e = len
-    end 'clamp_end'
-    if s >= e 'empty_slice'
-      return Self{managed: managed.slice(0, 0), iterIndex: 0}
-    end 'empty_slice'
-    return Self{managed: managed.slice(s, e), iterIndex: 0}
-  end 'slice'
+	/// Create a new array from elements [start, endIndex)
+	export function slice(start Index, endIndex Index) returns Self
+		var len = managed.length()
+		var s = start
+		var e = endIndex
+		// Clamp to valid range
+		if e > len 'clamp_end'
+			e = len
+		end 'clamp_end'
+		if s >= e 'empty_slice'
+			return Self{managed: managed.slice(0, 0), iterIndex: 0}
+		end 'empty_slice'
+		return Self{managed: managed.slice(s, e), iterIndex: 0}
+	end 'slice'
 
-  // =========================================================================
-  // Mutating Operations
-  // =========================================================================
+	// =========================================================================
+	// Mutating Operations
+	// =========================================================================
 
-  /// Ensure capacity for at least requiredLen elements, growing if needed
-  function ensureCapacity(requiredLen Count)
-    var cap = managed.capacity()
-    if requiredLen > cap 'grow'
-      // Double capacity until sufficient, minimum 4
-      var newCap = cap
-      if newCap < 4 'min'
-        newCap = 4
-      end 'min'
-      while newCap < requiredLen 'double'
-        newCap = newCap * 2
-      end 'double'
-      managed.grow(newCap)
-    end 'grow'
-  end 'ensureCapacity'
+	/// Ensure capacity for at least requiredLen elements, growing if needed
+	function ensureCapacity(requiredLen Count)
+		var cap = managed.capacity()
+		if requiredLen > cap 'grow'
+			// Double capacity until sufficient, minimum 4
+			var newCap = cap
+			if newCap < 4 'min'
+				newCap = 4
+			end 'min'
+			while newCap < requiredLen 'double'
+				newCap = newCap * 2
+			end 'double'
+			managed.grow(newCap)
+		end 'grow'
+	end 'ensureCapacity'
 
-  /// Append element to end
-  export function push(value Element)
-    var len = managed.length()
-    ensureCapacity(len + 1)
-    managed.set(len, value)
-    managed.setLength(len + 1)
-  end 'push'
+	/// Append element to end
+	export function push(value Element)
+		var len = managed.length()
+		ensureCapacity(len + 1)
+		managed.set(len, value)
+		managed.setLength(len + 1)
+	end 'push'
 
-  /// Append all elements from another array
-  export function append(other Self)
-    managed = managed.concat(other.managed)
-  end 'append'
+	/// Append all elements from another array
+	export function append(other Self)
+		managed = managed.concat(other.managed)
+	end 'append'
 
-  /// Remove and return last element, throws if empty
-  export function pop() returns Element throws ArrayError
-    var len = managed.length()
-    if len == 0 'empty'
-      throw ArrayError.indexOutOfBounds
-    end 'empty'
-    return managed.remove(len - 1)
-  end 'pop'
+	/// Remove and return last element, throws if empty
+	export function pop() returns Element throws ArrayError
+		var len = managed.length()
+		if len == 0 'empty'
+			throw ArrayError.indexOutOfBounds
+		end 'empty'
+		return managed.remove(len - 1)
+	end 'pop'
 
-  /// Insert element at index, shifting elements to the right (clamps index to [0, count])
-  export function insert(at Index, value Element)
-    var len = managed.length()
-    var index = at
+	/// Insert element at index, shifting elements to the right (clamps index to [0, count])
+	export function insert(at Index, value Element)
+		var len = managed.length()
+		var index = at
 
-    // Clamp index to valid range
-    if index > len 'clamp_high'
-      index = len
-    end 'clamp_high'
+		// Clamp index to valid range
+		if index > len 'clamp_high'
+			index = len
+		end 'clamp_high'
 
-    // Ensure capacity
-    ensureCapacity(len + 1)
+		// Ensure capacity
+		ensureCapacity(len + 1)
 
-    // Shift elements right to make room
-    if index < len 'shift'
-      managed.shiftRight(index, 1)
-    end 'shift'
+		// Shift elements right to make room
+		if index < len 'shift'
+			managed.shiftRight(index, 1)
+		end 'shift'
 
-    // Insert element and update length
-    managed.set(index, value)
-    managed.setLength(len + 1)
-  end 'insert'
+		// Insert element and update length
+		managed.set(index, value)
+		managed.setLength(len + 1)
+	end 'insert'
 
-  /// Remove and return element at index, shifting elements to the left (throws if out of bounds)
-  export function remove(at Index) returns Element throws ArrayError
-    return managed.remove(at)
-  end 'remove'
+	/// Remove and return element at index, shifting elements to the left (throws if out of bounds)
+	export function remove(at Index) returns Element throws ArrayError
+		return managed.remove(at)
+	end 'remove'
 
-  /// Remove all elements from the array (keeps capacity)
-  export function clear()
-    managed.clear()
-  end 'clear'
+	/// Remove all elements from the array (keeps capacity)
+	export function clear()
+		managed.clear()
+	end 'clear'
 
-  // =========================================================================
-  // Capacity Management
-  // =========================================================================
+	// =========================================================================
+	// Capacity Management
+	// =========================================================================
 
-  /// Reserve space by ensuring array has at least minCapacity slots
-  export function reserve(minCapacity Count)
-    var cap = managed.capacity()
-    if minCapacity > cap 'grow'
-      managed.grow(minCapacity)
-    end 'grow'
-  end 'reserve'
+	/// Reserve space by ensuring array has at least minCapacity slots
+	export function reserve(minCapacity Count)
+		var cap = managed.capacity()
+		if minCapacity > cap 'grow'
+			managed.grow(minCapacity)
+		end 'grow'
+	end 'reserve'
 
-  /// Resize array to newLength elements, allocating if needed
-  /// New elements are zero-initialized
-  export function resize(newLength Count)
-    reserve(newLength)
-    managed.setLength(newLength)
-  end 'resize'
+	/// Resize array to newLength elements, allocating if needed
+	/// New elements are zero-initialized
+	export function resize(newLength Count)
+		reserve(newLength)
+		managed.setLength(newLength)
+	end 'resize'
 
-  // =========================================================================
-  // Iterable Interface
-  // =========================================================================
+	// =========================================================================
+	// Iterable Interface
+	// =========================================================================
 
-  /// Reset iteration state for a fresh traversal
-  export function createIterator()
-    iterIndex = 0
-  end 'createIterator'
+	/// Reset iteration state for a fresh traversal
+	export function createIterator()
+		iterIndex = 0
+	end 'createIterator'
 
-  /// Get next element in iteration, throws when exhausted
-  export function next() returns Element throws IterationError
-    var len = managed.length()
-    if iterIndex >= len 'done'
-      throw IterationError.exhausted
-    end 'done'
-    var value = managed.get(iterIndex)
-    iterIndex = iterIndex + 1
-    return value
-  end 'next'
+	/// Get next element in iteration, throws when exhausted
+	export function next() returns Element throws IterationError
+		var len = managed.length()
+		if iterIndex >= len 'done'
+			throw IterationError.exhausted
+		end 'done'
+		var value = managed.get(iterIndex)
+		iterIndex = iterIndex + 1
+		return value
+	end 'next'
 end 'Array'
 
 // Conditional extension: contains is only available when Element is Equatable
 export extension Array where Element is Equatable
-  typealias ElementArray = Array with Element
+	typealias ElementArray = Array with Element
 
-  export function contains(element Element) returns bool
-    for item in self 'scan'
-      if item == element 'found'
-        return true
-      end 'found'
-    end 'scan'
-    return false
-  end 'contains'
+	export function contains(element Element) returns bool
+		for item in self 'scan'
+			if item == element 'found'
+				return true
+			end 'found'
+		end 'scan'
+		return false
+	end 'contains'
 
-  export function contains(sequence ElementArray) returns bool
-    let selfLen = count()
-    let elemLen = sequence.count()
+	export function contains(sequence ElementArray) returns bool
+		let selfLen = count()
+		let elemLen = sequence.count()
 
-    if elemLen == 0 'empty'
-      return true
-    end 'empty'
+		if elemLen == 0 'empty'
+			return true
+		end 'empty'
 
-    for i in 0 to(selfLen - elemLen) 'scan'
-      var matched = true
-      for j in 0 upto elemLen 'cmp'
-        let a = try get(i + j) otherwise 'a'
-          break
-        end 'a'
-        let b = try sequence.get(j) otherwise 'b'
-          break
-        end 'b'
-        if a != b 'ne'
-          matched = false
-          break
-        end 'ne'
-      end 'cmp'
-      if matched 'found'
-        return true
-      end 'found'
-    end 'scan'
-    return false
-  end 'contains'
+		for i in 0 to(selfLen - elemLen) 'scan'
+			var matched = true
+			for j in 0 upto elemLen 'cmp'
+				let a = try get(i + j) otherwise 'a'
+					break
+				end 'a'
+				let b = try sequence.get(j) otherwise 'b'
+					break
+				end 'b'
+				if a != b 'ne'
+					matched = false
+					break
+				end 'ne'
+			end 'cmp'
+			if matched 'found'
+				return true
+			end 'found'
+		end 'scan'
+		return false
+	end 'contains'
 end 'Array'
 
 // Conditional conformance: Array implements Hashable and Equatable when Element does
 // Uses raw byte-level hashing (djb2) over the managed memory buffer
 export extension Array implements Hashable, Equatable where Element is Hashable and Equatable
-  export function hash() returns HashValue
-    var byteLen = managed.length() * managed.elementSize()
-    var h = 5381
-    for i in 0 upto byteLen 'hash_loop'
-      var b = managed.byteAt(i)
-      h = h * 33 + b
-    end 'hash_loop'
-    return h and 0xFFFFFFFF
-  end 'hash'
+	export function hash() returns HashValue
+		var byteLen = managed.length() * managed.elementSize()
+		var h = 5381
+		for i in 0 upto byteLen 'hash_loop'
+			var b = managed.byteAt(i)
+			h = h * 33 + b
+		end 'hash_loop'
+		return h and 0xFFFFFFFF
+	end 'hash'
 
-  export function equals(other Self) returns bool
-    var selfLen = managed.length()
-    var otherLen = other.managed.length()
-    if selfLen != otherLen 'len'
-      return false
-    end 'len'
-    var byteLen = selfLen * managed.elementSize()
-    for i in 0 upto byteLen 'cmp'
-      if managed.byteAt(i) != other.managed.byteAt(i) 'ne'
-        return false
-      end 'ne'
-    end 'cmp'
-    return true
-  end 'equals'
+	export function equals(other Self) returns bool
+		var selfLen = managed.length()
+		var otherLen = other.managed.length()
+		if selfLen != otherLen 'len'
+			return false
+		end 'len'
+		var byteLen = selfLen * managed.elementSize()
+		for i in 0 upto byteLen 'cmp'
+			if managed.byteAt(i) != other.managed.byteAt(i) 'ne'
+				return false
+			end 'ne'
+		end 'cmp'
+		return true
+	end 'equals'
 end 'Array'

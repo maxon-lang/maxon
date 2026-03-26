@@ -310,8 +310,8 @@ Located in `maxon-runtime/runtime.mir`:
 
 ```maxon
 function createParser(tokens Array of Token) returns Parser
-    let result = Parser{tokens: tokens, pos: 0}  // BUG without deep copy!
-    return result
+		let result = Parser{tokens: tokens, pos: 0}  // BUG without deep copy!
+		return result
 end 'createParser'
 ```
 
@@ -364,8 +364,8 @@ The same deep copy logic exists in `codegen_mir_stmt.cpp` for return statements 
 
 ```maxon
 function createConfig() returns Config
-    var items = ["a", "b", "c"]
-    return Config{items: items}  // Deep copy happens here
+		var items = ["a", "b", "c"]
+		return Config{items: items}  // Deep copy happens here
 end 'createConfig'
 ```
 
@@ -379,7 +379,7 @@ When a struct has an `Array of T` field, special handling is required:
 
 ```maxon
 type Config
-    var sources Array of string
+		var sources Array of string
 end 'Config'
 ```
 

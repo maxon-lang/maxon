@@ -28,45 +28,45 @@ into a new array, then reassigns the field. The old array's destructor must safe
 decref all elements including their union payloads.
 ```maxon
 export union QueryKey
-    sourceFile(path String)
-    tokens(path String)
-    allModule
-    codeResult
+		sourceFile(path String)
+		tokens(path String)
+		allModule
+		codeResult
 end 'QueryKey'
 
 export type Dependency
-    export var dependent QueryKey
-    export var dependency QueryKey
+		export var dependent QueryKey
+		export var dependency QueryKey
 end 'Dependency'
 
 typealias DependencyArray = Array with Dependency
 
 export type Database
-    export var dependencies DependencyArray
+		export var dependencies DependencyArray
 end 'Database'
 
 function clearDepsFor(db Database)
-    var newDeps = DependencyArray{}
-    for dep in db.dependencies 'scan'
-        match dep.dependent 'check'
-            sourceFile(_) then newDeps.push(dep)
-            tokens(_) then newDeps.push(dep)
-            allModule then continue
-            codeResult then newDeps.push(dep)
-        end 'check'
-    end 'scan'
-    db.dependencies = newDeps
+		var newDeps = DependencyArray{}
+		for dep in db.dependencies 'scan'
+				match dep.dependent 'check'
+						sourceFile(_) then newDeps.push(dep)
+						tokens(_) then newDeps.push(dep)
+						allModule then continue
+						codeResult then newDeps.push(dep)
+				end 'check'
+		end 'scan'
+		db.dependencies = newDeps
 end 'clearDepsFor'
 
 function main() returns ExitCode
-    var deps = DependencyArray{}
-    deps.push(Dependency{dependent: QueryKey.allModule, dependency: QueryKey.sourceFile("test.maxon")})
-    deps.push(Dependency{dependent: QueryKey.codeResult, dependency: QueryKey.tokens("test.maxon")})
-    deps.push(Dependency{dependent: QueryKey.allModule, dependency: QueryKey.sourceFile("other.maxon")})
-    deps.push(Dependency{dependent: QueryKey.sourceFile("a.maxon"), dependency: QueryKey.tokens("a.maxon")})
-    let db = Database{dependencies: deps}
-    clearDepsFor(db)
-    return db.dependencies.count()
+		var deps = DependencyArray{}
+		deps.push(Dependency{dependent: QueryKey.allModule, dependency: QueryKey.sourceFile("test.maxon")})
+		deps.push(Dependency{dependent: QueryKey.codeResult, dependency: QueryKey.tokens("test.maxon")})
+		deps.push(Dependency{dependent: QueryKey.allModule, dependency: QueryKey.sourceFile("other.maxon")})
+		deps.push(Dependency{dependent: QueryKey.sourceFile("a.maxon"), dependency: QueryKey.tokens("a.maxon")})
+		let db = Database{dependencies: deps}
+		clearDepsFor(db)
+		return db.dependencies.count()
 end 'main'
 ```
 ```exitcode
@@ -80,36 +80,36 @@ Array of structs with String fields, filtered and reassigned.
 typealias Integer = int(i64.min to i64.max)
 
 type Item
-    export var name String
-    export var value Integer
+		export var name String
+		export var value Integer
 end 'Item'
 
 typealias ItemArray = Array with Item
 
 type Container
-    export var items ItemArray
+		export var items ItemArray
 end 'Container'
 
 function keepBigValues(c Container)
-    var newItems = ItemArray{}
-    for item in c.items 'scan'
-        if item.value > 3 'big'
-            newItems.push(item)
-        end 'big'
-    end 'scan'
-    c.items = newItems
+		var newItems = ItemArray{}
+		for item in c.items 'scan'
+				if item.value > 3 'big'
+						newItems.push(item)
+				end 'big'
+		end 'scan'
+		c.items = newItems
 end 'keepBigValues'
 
 function main() returns ExitCode
-    var items = ItemArray{}
-    items.push(Item{name: "alpha string long enough for heap allocation", value: 1})
-    items.push(Item{name: "beta string long enough for heap allocation", value: 2})
-    items.push(Item{name: "gamma string long enough for heap allocation", value: 3})
-    items.push(Item{name: "delta string long enough for heap allocation", value: 4})
-    items.push(Item{name: "epsilon string long enough for heap allocation", value: 5})
-    let c = Container{items: items}
-    keepBigValues(c)
-    return c.items.count()
+		var items = ItemArray{}
+		items.push(Item{name: "alpha string long enough for heap allocation", value: 1})
+		items.push(Item{name: "beta string long enough for heap allocation", value: 2})
+		items.push(Item{name: "gamma string long enough for heap allocation", value: 3})
+		items.push(Item{name: "delta string long enough for heap allocation", value: 4})
+		items.push(Item{name: "epsilon string long enough for heap allocation", value: 5})
+		let c = Container{items: items}
+		keepBigValues(c)
+		return c.items.count()
 end 'main'
 ```
 ```exitcode
@@ -123,46 +123,46 @@ Repeatedly filter and reassign an array field to stress destructor cleanup.
 typealias Integer = int(i64.min to i64.max)
 
 export union Tag
-    name(s String)
-    id(n Integer)
-    none
+		name(s String)
+		id(n Integer)
+		none
 end 'Tag'
 
 type Entry
-    export var tag Tag
+		export var tag Tag
 end 'Entry'
 
 typealias EntryArray = Array with Entry
 
 type Store
-    export var entries EntryArray
+		export var entries EntryArray
 end 'Store'
 
 function removeNone(store Store)
-    var kept = EntryArray{}
-    for e in store.entries 'scan'
-        match e.tag 'check'
-            none then continue
-            name(_) then kept.push(e)
-            id(_) then kept.push(e)
-        end 'check'
-    end 'scan'
-    store.entries = kept
+		var kept = EntryArray{}
+		for e in store.entries 'scan'
+				match e.tag 'check'
+						none then continue
+						name(_) then kept.push(e)
+						id(_) then kept.push(e)
+				end 'check'
+		end 'scan'
+		store.entries = kept
 end 'removeNone'
 
 function main() returns ExitCode
-    var entries = EntryArray{}
-    entries.push(Entry{tag: Tag.name("first long string for heap allocation purposes")})
-    entries.push(Entry{tag: Tag.none})
-    entries.push(Entry{tag: Tag.id(42)})
-    entries.push(Entry{tag: Tag.none})
-    entries.push(Entry{tag: Tag.name("second long string for heap allocation purposes")})
-    entries.push(Entry{tag: Tag.none})
-    let store = Store{entries: entries}
-    removeNone(store)
-    removeNone(store)
-    removeNone(store)
-    return store.entries.count()
+		var entries = EntryArray{}
+		entries.push(Entry{tag: Tag.name("first long string for heap allocation purposes")})
+		entries.push(Entry{tag: Tag.none})
+		entries.push(Entry{tag: Tag.id(42)})
+		entries.push(Entry{tag: Tag.none})
+		entries.push(Entry{tag: Tag.name("second long string for heap allocation purposes")})
+		entries.push(Entry{tag: Tag.none})
+		let store = Store{entries: entries}
+		removeNone(store)
+		removeNone(store)
+		removeNone(store)
+		return store.entries.count()
 end 'main'
 ```
 ```exitcode
@@ -174,33 +174,33 @@ end 'main'
 Replace a populated array with an empty one — all elements must be cleaned up.
 ```maxon
 export union Key
-    file(path String)
-    module
+		file(path String)
+		module
 end 'Key'
 
 type Dep
-    export var source Key
-    export var target Key
+		export var source Key
+		export var target Key
 end 'Dep'
 
 typealias DepArray = Array with Dep
 
 type State
-    export var deps DepArray
+		export var deps DepArray
 end 'State'
 
 function clearAll(state State)
-    state.deps = DepArray{}
+		state.deps = DepArray{}
 end 'clearAll'
 
 function main() returns ExitCode
-    var deps = DepArray{}
-    deps.push(Dep{source: Key.module, target: Key.file("a.maxon long enough for heap")})
-    deps.push(Dep{source: Key.module, target: Key.file("b.maxon long enough for heap")})
-    deps.push(Dep{source: Key.file("c.maxon long enough for heap"), target: Key.module})
-    let state = State{deps: deps}
-    clearAll(state)
-    return state.deps.count()
+		var deps = DepArray{}
+		deps.push(Dep{source: Key.module, target: Key.file("a.maxon long enough for heap")})
+		deps.push(Dep{source: Key.module, target: Key.file("b.maxon long enough for heap")})
+		deps.push(Dep{source: Key.file("c.maxon long enough for heap"), target: Key.module})
+		let state = State{deps: deps}
+		clearAll(state)
+		return state.deps.count()
 end 'main'
 ```
 ```exitcode

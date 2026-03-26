@@ -20,17 +20,17 @@ Structs returned from functions must have their data survive beyond the function
 typealias Integer = int(i64.min to i64.max)
 
 type Result
-  export var sum Integer
-  export var product Integer
+	export var sum Integer
+	export var product Integer
 end 'Result'
 
 function compute(a Integer, b Integer) returns Result
-  return Result{sum: a + b, product: a * b}
+	return Result{sum: a + b, product: a * b}
 end 'compute'
 
 function main() returns ExitCode
-  var r = compute(3, b: 4)
-  return r.sum + r.product
+	var r = compute(3, b: 4)
+	return r.sum + r.product
 end 'main'
 ```
 ```exitcode
@@ -43,17 +43,17 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 type Counter
-  export var value Integer
+	export var value Integer
 end 'Counter'
 
 function increment(c Counter) returns Counter
-  return Counter{value: c.value + 1}
+	return Counter{value: c.value + 1}
 end 'increment'
 
 function main() returns ExitCode
-  var c1 = Counter{value: 10}
-  var c2 = increment(c1)
-  return c2.value
+	var c1 = Counter{value: 10}
+	var c2 = increment(c1)
+	return c2.value
 end 'main'
 ```
 ```exitcode
@@ -66,26 +66,26 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 type Value
-  export var n Integer
+	export var n Integer
 end 'Value'
 
 function step1() returns Value
-  return Value{n: 1}
+	return Value{n: 1}
 end 'step1'
 
 function step2(v Value) returns Value
-  return Value{n: v.n + 10}
+	return Value{n: v.n + 10}
 end 'step2'
 
 function step3(v Value) returns Value
-  return Value{n: v.n + 100}
+	return Value{n: v.n + 100}
 end 'step3'
 
 function main() returns ExitCode
-  var v1 = step1()
-  var v2 = step2(v1)
-  var v3 = step3(v2)
-  return v3.n
+	var v1 = step1()
+	var v2 = step2(v1)
+	var v3 = step3(v2)
+	return v3.n
 end 'main'
 ```
 ```exitcode

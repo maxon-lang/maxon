@@ -39,15 +39,15 @@ Every program must have a `main` function. This is tested in the `basics` spec.
 typealias Integer = int(i64.min to i64.max)
 
 function helper() returns Integer
-  return 1
+	return 1
 end 'helper'
 
 function helper() returns Integer
-  return 2
+	return 2
 end 'helper'
 
 function main() returns ExitCode
-  return helper()
+	return helper()
 end 'main'
 ```
 ```maxoncstderr
@@ -57,11 +57,11 @@ error E3006: specs/fragments/duplicate-functions/error.same-file-duplicate.test:
 <!-- test: error.same-file-duplicate-main -->
 ```maxon
 function main() returns ExitCode
-  return 0
+	return 0
 end 'main'
 
 function main() returns ExitCode
-  return 1
+	return 1
 end 'main'
 ```
 ```maxoncstderr
@@ -72,12 +72,12 @@ error E3006: specs/fragments/duplicate-functions/error.same-file-duplicate-main.
 ```maxon
 // --- file: a.maxon
 function main() returns ExitCode
-  return 0
+	return 0
 end 'main'
 
 // --- file: b.maxon
 function main() returns ExitCode
-  return 1
+	return 1
 end 'main'
 ```
 ```maxoncstderr

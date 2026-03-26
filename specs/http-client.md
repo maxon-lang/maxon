@@ -55,11 +55,11 @@ end 'postData'
 <!-- test: http-client.invalid-url -->
 ```maxon
 function main() returns ExitCode
-  if let response = try HttpClient.get("not a url") 'ok'
-    return 1
-  end 'ok' else 'err'
-    return 0
-  end 'err'
+	if let response = try HttpClient.get("not a url") 'ok'
+		return 1
+	end 'ok' else 'err'
+		return 0
+	end 'err'
 end 'main'
 ```
 ```exitcode
@@ -71,19 +71,19 @@ end 'main'
 <!-- test: http-client.build-request -->
 ```maxon
 function main() returns ExitCode
-  var request = try HttpRequest.create(HttpMethod.get, url: "http://example.com/path?q=1") otherwise 'err'
-    return 1
-  end 'err'
-  let url = request.url()
-  let host = try url.host() otherwise ""
-  if host != "example.com" 'badHost'
-    return 2
-  end 'badHost'
-  let path = url.path()
-  if path != "/path" 'badPath'
-    return 3
-  end 'badPath'
-  return 0
+	var request = try HttpRequest.create(HttpMethod.get, url: "http://example.com/path?q=1") otherwise 'err'
+		return 1
+	end 'err'
+	let url = request.url()
+	let host = try url.host() otherwise ""
+	if host != "example.com" 'badHost'
+		return 2
+	end 'badHost'
+	let path = url.path()
+	if path != "/path" 'badPath'
+		return 3
+	end 'badPath'
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -95,17 +95,17 @@ end 'main'
 <!-- test: http-client.get -->
 ```maxon
 function doGet() returns ExitCode throws HttpError
-  let response = try HttpClient.get("http://httpbin.org/get")
-  if response.statusCode() == 200 'ok'
-    return 0
-  end 'ok'
-  return 1
+	let response = try HttpClient.get("http://httpbin.org/get")
+	if response.statusCode() == 200 'ok'
+		return 0
+	end 'ok'
+	return 1
 end 'doGet'
 
 function main() returns ExitCode
-  var p = async doGet()
-  let result = try await p otherwise 99
-  return result
+	var p = async doGet()
+	let result = try await p otherwise 99
+	return result
 end 'main'
 ```
 ```exitcode
@@ -117,17 +117,17 @@ end 'main'
 <!-- test: http-client.post -->
 ```maxon
 function doPost() returns ExitCode throws HttpError
-  let response = try HttpClient.post("http://httpbin.org/post", body: "hello=world")
-  if response.statusCode() == 200 'ok'
-    return 0
-  end 'ok'
-  return 1
+	let response = try HttpClient.post("http://httpbin.org/post", body: "hello=world")
+	if response.statusCode() == 200 'ok'
+		return 0
+	end 'ok'
+	return 1
 end 'doPost'
 
 function main() returns ExitCode
-  var p = async doPost()
-  let result = try await p otherwise 99
-  return result
+	var p = async doPost()
+	let result = try await p otherwise 99
+	return result
 end 'main'
 ```
 ```exitcode
@@ -139,17 +139,17 @@ end 'main'
 <!-- test: http-client.status-404 -->
 ```maxon
 function doGet() returns ExitCode throws HttpError
-  let response = try HttpClient.get("http://httpbin.org/status/404")
-  if response.statusCode() == 404 'notFound'
-    return 0
-  end 'notFound'
-  return 1
+	let response = try HttpClient.get("http://httpbin.org/status/404")
+	if response.statusCode() == 404 'notFound'
+		return 0
+	end 'notFound'
+	return 1
 end 'doGet'
 
 function main() returns ExitCode
-  var p = async doGet()
-  let result = try await p otherwise 99
-  return result
+	var p = async doGet()
+	let result = try await p otherwise 99
+	return result
 end 'main'
 ```
 ```exitcode
@@ -161,18 +161,18 @@ end 'main'
 <!-- test: http-client.response-body -->
 ```maxon
 function doGet() returns ExitCode throws HttpError
-  let response = try HttpClient.get("http://httpbin.org/get")
-  let body = response.body()
-  if body.contains("httpbin.org") 'hasContent'
-    return 0
-  end 'hasContent'
-  return 1
+	let response = try HttpClient.get("http://httpbin.org/get")
+	let body = response.body()
+	if body.contains("httpbin.org") 'hasContent'
+		return 0
+	end 'hasContent'
+	return 1
 end 'doGet'
 
 function main() returns ExitCode
-  var p = async doGet()
-  let result = try await p otherwise 99
-  return result
+	var p = async doGet()
+	let result = try await p otherwise 99
+	return result
 end 'main'
 ```
 ```exitcode
@@ -189,28 +189,28 @@ completing file_exists before the HTTP fiber (#1) begins net_connect.
 <!-- AsyncTrace -->
 ```maxon
 function doHttp() returns ExitCode throws HttpError
-  let response = try HttpClient.get("http://httpbin.org/get")
-  if response.statusCode() == StatusCode.ok 'ok'
-    return 0
-  end 'ok'
-  return 1
+	let response = try HttpClient.get("http://httpbin.org/get")
+	if response.statusCode() == StatusCode.ok 'ok'
+		return 0
+	end 'ok'
+	return 1
 end 'doHttp'
 
 function doFileIo() returns ExitCode
-  let exists = File.exists(FilePath from "no_such_file.txt")
-  if exists 'found'
-    return 1
-  end 'found'
-  return 0
+	let exists = File.exists(FilePath from "no_such_file.txt")
+	if exists 'found'
+		return 1
+	end 'found'
+	return 0
 end 'doFileIo'
 
 function main() returns ExitCode
-  var httpTask = async doHttp()
-  sleep(100)
-  var fileTask = async doFileIo()
-  var fileResult = await fileTask
-  var httpResult = try await httpTask otherwise 99
-  return httpResult + fileResult
+	var httpTask = async doHttp()
+	sleep(100)
+	var fileTask = async doFileIo()
+	var fileResult = await fileTask
+	var httpResult = try await httpTask otherwise 99
+	return httpResult + fileResult
 end 'main'
 ```
 ```exitcode
@@ -246,18 +246,18 @@ try_await #1 [yield]
 <!-- test: http-client.response-headers -->
 ```maxon
 function doGet() returns ExitCode throws HttpError
-  let response = try HttpClient.get("http://httpbin.org/get")
-  let contentType = try response.header("content-type")
-  if contentType.contains("application/json") 'ok'
-    return 0
-  end 'ok'
-  return 1
+	let response = try HttpClient.get("http://httpbin.org/get")
+	let contentType = try response.header("content-type")
+	if contentType.contains("application/json") 'ok'
+		return 0
+	end 'ok'
+	return 1
 end 'doGet'
 
 function main() returns ExitCode
-  var p = async doGet()
-  let result = try await p otherwise 99
-  return result
+	var p = async doGet()
+	let result = try await p otherwise 99
+	return result
 end 'main'
 ```
 ```exitcode

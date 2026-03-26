@@ -2,91 +2,91 @@
 // Mirrors maxon-sharp/Program.cs command structure.
 
 function main() returns ExitCode
-  let args = try MaxonArgs.parse() otherwise(e) 'badArgs'
-    match e 'matchErr'
-      invalidOption(a) then print("Invalid option: {a}\n")
-    end 'matchErr'
-    return 1
-  end 'badArgs'
+	let args = try MaxonArgs.parse() otherwise(e) 'badArgs'
+		match e 'matchErr'
+			invalidOption(a) then print("Invalid option: {a}\n")
+		end 'matchErr'
+		return 1
+	end 'badArgs'
 
-  match args.command 'cmd'
-    build then return runBuild(args)
-    specTest then return runSpecTests(args)
-    testIncremental then return runIncrementalTests()
-    unknown then printUsage()
-  end 'cmd'
+	match args.command 'cmd'
+		build then return runBuild(args)
+		specTest then return runSpecTests(args)
+		testIncremental then return runIncrementalTests()
+		unknown then printUsage()
+	end 'cmd'
 
-  return 1
+	return 1
 end 'main'
 
 function printUsage()
-  print("Usage: maxon <command> [options]\n")
-  print("\n")
-  print("Commands:\n")
-  print("  build [<file|directory>] Build a project (default: current directory)\n")
-  print("  run <file|directory>     Build and run\n")
-  print("  spec-test [options]      Run spec tests\n")
-  print("  test-incremental         Run incremental compilation tests\n")
-  print("\n")
-  print("Build options (build, run):\n")
-  print("  --emit-ir                Write .mlir file\n")
-  print("  --dump-stages            Write IR at each pipeline stage\n")
-  print("  --track-allocs           Track heap allocations and print memory stats\n")
-  print("\n")
-  print("Spec test options:\n")
-  print("  --filter=PATTERN         Run only tests matching pattern\n")
-  print("  --target=<TARGET|all>    Cross-compile tests for target (e.g. x86_64-linux)\n")
-  print("  --update-required        Update RequiredLowering/stderr blocks in spec files\n")
-  print("  --verbose                Show detailed failure messages\n")
-  print("\n")
-  print("Logging (all commands):\n")
-  print("  --log=LEVEL              Set all log categories to LEVEL\n")
-  print("  --log=CATEGORY:LEVEL     Set specific category to LEVEL\n")
-  print("\n")
-  print("Log levels: none, error, info, debug, trace\n")
-  print("Log categories: compiler, lexer, parser, semantic, mlir, codegen, pe, testing\n")
+	print("Usage: maxon <command> [options]\n")
+	print("\n")
+	print("Commands:\n")
+	print("  build [<file|directory>] Build a project (default: current directory)\n")
+	print("  run <file|directory>     Build and run\n")
+	print("  spec-test [options]      Run spec tests\n")
+	print("  test-incremental         Run incremental compilation tests\n")
+	print("\n")
+	print("Build options (build, run):\n")
+	print("  --emit-ir                Write .mlir file\n")
+	print("  --dump-stages            Write IR at each pipeline stage\n")
+	print("  --track-allocs           Track heap allocations and print memory stats\n")
+	print("\n")
+	print("Spec test options:\n")
+	print("  --filter=PATTERN         Run only tests matching pattern\n")
+	print("  --target=<TARGET|all>    Cross-compile tests for target (e.g. x86_64-linux)\n")
+	print("  --update-required        Update RequiredLowering/stderr blocks in spec files\n")
+	print("  --verbose                Show detailed failure messages\n")
+	print("\n")
+	print("Logging (all commands):\n")
+	print("  --log=LEVEL              Set all log categories to LEVEL\n")
+	print("  --log=CATEGORY:LEVEL     Set specific category to LEVEL\n")
+	print("\n")
+	print("Log levels: none, error, info, debug, trace\n")
+	print("Log categories: compiler, lexer, parser, semantic, mlir, codegen, pe, testing\n")
 end 'printUsage'
 
 function runBuild(args MaxonArgs) returns ExitCode
-  let fp = try FilePath.from(args.path) otherwise panic("invalid path: {args.path}")
+	let fp = try FilePath.from(args.path) otherwise panic("invalid path: {args.path}")
 
-  let outputPath = try compile(fp, target: args.target()) otherwise 'err'
-    return 1
-  end 'err'
+	let outputPath = try compile(fp, target: args.target()) otherwise 'err'
+		return 1
+	end 'err'
 
-  print("Compiled -> {outputPath}\n")
+	print("Compiled -> {outputPath}\n")
 
-  return 0
+	return 0
 end 'runBuild'
 
 function runSpecTests(args MaxonArgs) returns ExitCode
-  match args.targetOption 'dispatch'
-    host then return runSpecTestsForTarget(args)
-    all then return runAllTargetTests(args.filter)
-    x86_64Windows to aarch64Macos then return runSpecTestsForTarget(args)
-  end 'dispatch'
+	match args.targetOption 'dispatch'
+		host then return runSpecTestsForTarget(args)
+		all then return runAllTargetTests(args.filter)
+		x86_64Windows to aarch64Macos then return runSpecTestsForTarget(args)
+	end 'dispatch'
 end 'runSpecTests'
 
 function runSpecTestsForTarget(args MaxonArgs) returns ExitCode
-  let target = args.target()
-  logInfo(LogCategory.testing, message: () gives "Running self-hosted spec tests ({targetToString(target)})...")
-  return runAllSpecTests(args.filter, target: target, updateRequired: args.updateRequired)
+	let target = args.target()
+	logInfo(LogCategory.testing, message: () gives "Running self-hosted spec tests ({targetToString(target)})...")
+	return runAllSpecTests(args.filter, target: target, updateRequired: args.updateRequired)
 end 'runSpecTestsForTarget'
 
 function runAllTargetTests(filter String) returns ExitCode
-  var totalFailed = 0
+	var totalFailed = 0
 
-  for cpu in CpuArch.allCases 'cpus'
-    for os in Os.allCases 'oses'
-      let t = Target{cpu: cpu, os: os}
-      logInfo(LogCategory.testing, message: () gives "Testing target: {targetToString(t)}")
-      totalFailed = totalFailed + runAllSpecTests(filter, target: t)
-    end 'oses'
-  end 'cpus'
+	for cpu in CpuArch.allCases 'cpus'
+		for os in Os.allCases 'oses'
+			let t = Target{cpu: cpu, os: os}
+			logInfo(LogCategory.testing, message: () gives "Testing target: {targetToString(t)}")
+			totalFailed = totalFailed + runAllSpecTests(filter, target: t)
+		end 'oses'
+	end 'cpus'
 
-  if totalFailed > 0 'hasFail'
-    return 1
-  end 'hasFail'
+	if totalFailed > 0 'hasFail'
+		return 1
+	end 'hasFail'
 
-  return 0
+	return 0
 end 'runAllTargetTests'

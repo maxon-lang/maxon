@@ -2,68 +2,68 @@
 // Removes functions not reachable from main.
 
 export function eliminateDeadFunctions(module MlirModule) returns MlirModule
-  var reachable = ByteArrayArray{}
-  reachable.push(b"main")
+	var reachable = ByteArrayArray{}
+	reachable.push(b"main")
 
-  // Worklist: walk reachable functions, collecting callees.
-  // New names are pushed during iteration, so for...in cannot be used.
-  var i = 0
-  while i < reachable.count() 'worklist'
-    let name = try reachable.get(i) otherwise panic("worklist index {i} out of bounds")
-    collectCallees(module, funcName: name, reachable: reachable)
-    i = i + 1
-  end 'worklist'
+	// Worklist: walk reachable functions, collecting callees.
+	// New names are pushed during iteration, so for...in cannot be used.
+	var i = 0
+	while i < reachable.count() 'worklist'
+		let name = try reachable.get(i) otherwise panic("worklist index {i} out of bounds")
+		collectCallees(module, funcName: name, reachable: reachable)
+		i = i + 1
+	end 'worklist'
 
-  // Filter module to only reachable functions
-  var result = createMlirModule()
-  for func in module.functions 'filter'
-    if reachable.contains(func.name) 'keep'
-      result.functions.push(func)
-    end 'keep'
-  end 'filter'
-  return result
+	// Filter module to only reachable functions
+	var result = createMlirModule()
+	for func in module.functions 'filter'
+		if reachable.contains(func.name) 'keep'
+			result.functions.push(func)
+		end 'keep'
+	end 'filter'
+	return result
 end 'eliminateDeadFunctions'
 
 function collectCallees(module MlirModule, funcName ByteArray, reachable ByteArrayArray)
-  for func in module.functions 'findFunc'
-    if func.name != funcName 'notMatch'
-      continue
-    end 'notMatch'
+	for func in module.functions 'findFunc'
+		if func.name != funcName 'notMatch'
+			continue
+		end 'notMatch'
 
-    for block in func.region.blocks 'eachBlock'
-      for op in block.ops 'eachOp'
-        addCalleeFromOp(op, reachable: reachable)
-      end 'eachOp'
-      if block.hasTerminator 'hasTerm'
-        addCalleeFromOp(block.terminator, reachable: reachable)
-      end 'hasTerm'
-    end 'eachBlock'
-  end 'findFunc'
+		for block in func.region.blocks 'eachBlock'
+			for op in block.ops 'eachOp'
+				addCalleeFromOp(op, reachable: reachable)
+			end 'eachOp'
+			if block.hasTerminator 'hasTerm'
+				addCalleeFromOp(block.terminator, reachable: reachable)
+			end 'hasTerm'
+		end 'eachBlock'
+	end 'findFunc'
 end 'collectCallees'
 
 function addCalleeFromOp(op MlirOp, reachable ByteArrayArray)
-  let callee = extractCallee(op)
-  if callee.isEmpty() 'noCall'
-    return
-  end 'noCall'
-  if not reachable.contains(callee) 'new'
-    reachable.push(callee)
-  end 'new'
+	let callee = extractCallee(op)
+	if callee.isEmpty() 'noCall'
+		return
+	end 'noCall'
+	if not reachable.contains(callee) 'new'
+		reachable.push(callee)
+	end 'new'
 end 'addCalleeFromOp'
 
 function extractCallee(op MlirOp) returns ByteArray
-  return match op 'dispatch'
-    maxhl(hlOp) gives extractMaxHLCallee(hlOp)
-    arith to maxarm64 gives ByteArray{}
-  end 'dispatch'
+	return match op 'dispatch'
+		maxhl(hlOp) gives extractMaxHLCallee(hlOp)
+		arith to maxarm64 gives ByteArray{}
+	end 'dispatch'
 end 'extractCallee'
 
 function extractMaxHLCallee(hlOp MaxHLOp) returns ByteArray
-  return match hlOp 'extract'
-    call(_, callee, _) gives callee
-    literal to refEq gives ByteArray{}
-    condBr to br gives ByteArray{}
-    ret gives ByteArray{}
-    printLiteral to printInt gives ByteArray{}
-  end 'extract'
+	return match hlOp 'extract'
+		call(_, callee, _) gives callee
+		literal to refEq gives ByteArray{}
+		condBr to br gives ByteArray{}
+		ret gives ByteArray{}
+		printLiteral to printInt gives ByteArray{}
+	end 'extract'
 end 'extractMaxHLCallee'

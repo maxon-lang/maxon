@@ -19,13 +19,13 @@ Single struct allocated and freed in the same function scope.
 typealias Integer = int(i64.min to i64.max)
 
 type Point
-  export var x Integer
-  export var y Integer
+	export var x Integer
+	export var y Integer
 end 'Point'
 
 function main() returns ExitCode
-  @heap var p = Point{x: 1, y: 2}
-  return p.x
+	@heap var p = Point{x: 1, y: 2}
+	return p.x
 end 'main'
 ```
 ```exitcode
@@ -53,13 +53,13 @@ Aliasing a struct increfs it; both variables share refcount and object is freed 
 typealias Integer = int(i64.min to i64.max)
 
 type Box
-  export var value Integer
+	export var value Integer
 end 'Box'
 
 function main() returns ExitCode
-  @heap var a = Box{value: 42}
-  let b = a
-  return b.value
+	@heap var a = Box{value: 42}
+	let b = a
+	return b.value
 end 'main'
 ```
 ```exitcode
@@ -89,14 +89,14 @@ Reassigning a var decrefs the old object immediately; the old object must be fre
 typealias Integer = int(i64.min to i64.max)
 
 type Tag
-  export var id Integer
+	export var id Integer
 end 'Tag'
 
 function main() returns ExitCode
-  var t = Tag{id: 1}
-  t = Tag{id: 2}
-  t = Tag{id: 3}
-  return t.id
+	var t = Tag{id: 1}
+	t = Tag{id: 2}
+	t = Tag{id: 3}
+	return t.id
 end 'main'
 ```
 ```exitcode
@@ -140,16 +140,16 @@ Struct created in an inner if-block is freed when that block exits, before the o
 typealias Integer = int(i64.min to i64.max)
 
 type Widget
-  export var id Integer
+	export var id Integer
 end 'Widget'
 
 function main() returns ExitCode
-  var result = 0
-  if true 'inner'
-    @heap var w = Widget{id: 7}
-    result = w.id
-  end 'inner'
-  return result
+	var result = 0
+	if true 'inner'
+		@heap var w = Widget{id: 7}
+		result = w.id
+	end 'inner'
+	return result
 end 'main'
 ```
 ```exitcode
@@ -177,17 +177,17 @@ Returning a struct skips its decref; caller receives ownership and frees it at i
 typealias Integer = int(i64.min to i64.max)
 
 type Token
-  export var kind Integer
+	export var kind Integer
 end 'Token'
 
 function makeToken(k Integer) returns Token
-  var t = Token{kind: k}
-  return t
+	var t = Token{kind: k}
+	return t
 end 'makeToken'
 
 function main() returns ExitCode
-  var tok = makeToken(99)
-  return tok.kind
+	var tok = makeToken(99)
+	return tok.kind
 end 'main'
 ```
 ```exitcode
@@ -216,14 +216,14 @@ Aliased reference keeps object alive when the original var is reassigned.
 typealias Integer = int(i64.min to i64.max)
 
 type Num
-  export var v Integer
+	export var v Integer
 end 'Num'
 
 function main() returns ExitCode
-  var a = Num{v: 10}
-  let b = a
-  a = Num{v: 20}
-  return b.v + a.v
+	var a = Num{v: 10}
+	let b = a
+	a = Num{v: 20}
+	return b.v + a.v
 end 'main'
 ```
 ```exitcode
@@ -261,18 +261,18 @@ A struct allocated each loop iteration is freed at loop-block exit before the ne
 typealias Integer = int(i64.min to i64.max)
 
 type Counter
-  export var n Integer
+	export var n Integer
 end 'Counter'
 
 function main() returns ExitCode
-  var total = 0
-  var i = 0
-  while i < 4 'loop'
-    @heap var c = Counter{n: i}
-    total = total + c.n
-    i = i + 1
-  end 'loop'
-  return total
+	var total = 0
+	var i = 0
+	while i < 4 'loop'
+		@heap var c = Counter{n: i}
+		total = total + c.n
+		i = i + 1
+	end 'loop'
+	return total
 end 'main'
 ```
 ```exitcode
@@ -318,19 +318,19 @@ Struct allocated before a break is decref'd before the loop block is exited.
 typealias Integer = int(i64.min to i64.max)
 
 type Step
-  export var val Integer
+	export var val Integer
 end 'Step'
 
 function main() returns ExitCode
-  var i = 0
-  while i < 10 'loop'
-    @heap var s = Step{val: i}
-    if s.val == 3 'stop'
-      break
-    end 'stop'
-    i = i + 1
-  end 'loop'
-  return i
+	var i = 0
+	while i < 10 'loop'
+		@heap var s = Step{val: i}
+		if s.val == 3 'stop'
+			break
+		end 'stop'
+		i = i + 1
+	end 'loop'
+	return i
 end 'main'
 ```
 ```exitcode
@@ -376,21 +376,21 @@ Struct allocated before a continue is decref'd before the loop restarts.
 typealias Integer = int(i64.min to i64.max)
 
 type Item
-  export var v Integer
+	export var v Integer
 end 'Item'
 
 function main() returns ExitCode
-  var total = 0
-  var i = 0
-  while i < 5 'loop'
-    @heap var item = Item{v: i}
-    i = i + 1
-    if item.v == 2 'skip'
-      continue
-    end 'skip'
-    total = total + item.v
-  end 'loop'
-  return total
+	var total = 0
+	var i = 0
+	while i < 5 'loop'
+		@heap var item = Item{v: i}
+		i = i + 1
+		if item.v == 2 'skip'
+			continue
+		end 'skip'
+		total = total + item.v
+	end 'loop'
+	return total
 end 'main'
 ```
 ```exitcode
@@ -442,17 +442,17 @@ When a struct literal is assigned as a field, the field value is incref'd; both 
 typealias Integer = int(i64.min to i64.max)
 
 type Inner
-  export var val Integer
+	export var val Integer
 end 'Inner'
 
 type Outer
-  export var child Inner
+	export var child Inner
 end 'Outer'
 
 function main() returns ExitCode
-  var inner = Inner{val: 55}
-  var outer = Outer{child: inner}
-  return outer.child.val
+	var inner = Inner{val: 55}
+	var outer = Outer{child: inner}
+	return outer.child.val
 end 'main'
 ```
 ```exitcode
@@ -488,20 +488,20 @@ Three-level nested struct: all three levels are freed when the outermost var lea
 typealias Integer = int(i64.min to i64.max)
 
 type A
-  export var n Integer
+	export var n Integer
 end 'A'
 
 type B
-  export var a A
+	export var a A
 end 'B'
 
 type C
-  export var b B
+	export var b B
 end 'C'
 
 function main() returns ExitCode
-  var c = C{b: B{a: A{n: 7}}}
-  return c.b.a.n
+	var c = C{b: B{a: A{n: 7}}}
+	return c.b.a.n
 end 'main'
 ```
 ```exitcode
@@ -541,22 +541,22 @@ Overwriting a struct field via a method decrefs the old field value and increfs 
 typealias Integer = int(i64.min to i64.max)
 
 type Payload
-  export var data Integer
+	export var data Integer
 end 'Payload'
 
 type Container
-  export var payload Payload
+	export var payload Payload
 
-  export function setPayload(p Payload)
-    payload = p
-  end 'setPayload'
+	export function setPayload(p Payload)
+		payload = p
+	end 'setPayload'
 end 'Container'
 
 function main() returns ExitCode
-  var old = Payload{data: 1}
-  var c = Container{payload: old}
-  c.setPayload(Payload{data: 2})
-  return c.payload.data
+	var old = Payload{data: 1}
+	var c = Container{payload: old}
+	c.setPayload(Payload{data: 2})
+	return c.payload.data
 end 'main'
 ```
 ```exitcode
@@ -600,23 +600,23 @@ Overwriting a struct field three times; each old value must be freed promptly.
 typealias Integer = int(i64.min to i64.max)
 
 type Val
-  export var n Integer
+	export var n Integer
 end 'Val'
 
 type Holder
-  export var v Val
+	export var v Val
 
-  export function set(newV Val)
-    v = newV
-  end 'set'
+	export function set(newV Val)
+		v = newV
+	end 'set'
 end 'Holder'
 
 function main() returns ExitCode
-  var h = Holder{v: Val{n: 0}}
-  h.set(Val{n: 10})
-  h.set(Val{n: 20})
-  h.set(Val{n: 30})
-  return h.v.n
+	var h = Holder{v: Val{n: 0}}
+	h.set(Val{n: 10})
+	h.set(Val{n: 20})
+	h.set(Val{n: 30})
+	return h.v.n
 end 'main'
 ```
 ```exitcode
@@ -674,19 +674,19 @@ Pushing a struct into an array increfs it; after the local var leaves scope the 
 typealias Integer = int(i64.min to i64.max)
 
 type Node
-  export var id Integer
+	export var id Integer
 end 'Node'
 
 typealias NodeArray = Array with Node
 
 function main() returns ExitCode
-  var arr = NodeArray{}
-  if true 'scope'
-    var n = Node{id: 10}
-    arr.push(n)
-  end 'scope'
-  var got = try arr.get(0) otherwise Node{id: -1}
-  return got.id
+	var arr = NodeArray{}
+	if true 'scope'
+		var n = Node{id: 10}
+		arr.push(n)
+	end 'scope'
+	var got = try arr.get(0) otherwise Node{id: -1}
+	return got.id
 end 'main'
 ```
 ```exitcode
@@ -737,19 +737,19 @@ Popping the last element and discarding the result frees the element at scope ex
 typealias Integer = int(i64.min to i64.max)
 
 type Node
-  export var id Integer
+	export var id Integer
 end 'Node'
 
 typealias NodeArray = Array with Node
 
 function main() returns ExitCode
-  var arr = NodeArray{}
-  arr.push(Node{id: 1})
-  arr.push(Node{id: 2})
-  var popped = try arr.remove(arr.count() - 1) otherwise 'err'
-    return 99
-  end 'err'
-  return arr.count() + popped.id - popped.id
+	var arr = NodeArray{}
+	arr.push(Node{id: 1})
+	arr.push(Node{id: 2})
+	var popped = try arr.remove(arr.count() - 1) otherwise 'err'
+		return 99
+	end 'err'
+	return arr.count() + popped.id - popped.id
 end 'main'
 ```
 ```exitcode
@@ -806,17 +806,17 @@ Setting an element at an existing index must decref the old element and incref t
 typealias Integer = int(i64.min to i64.max)
 
 type Item
-  export var value Integer
+	export var value Integer
 end 'Item'
 
 typealias ItemArray = Array with Item
 
 function main() returns ExitCode
-  var arr = ItemArray{}
-  arr.push(Item{value: 100})
-  arr.set(0, value: Item{value: 200})
-  var got = try arr.get(0) otherwise Item{value: -1}
-  return got.value
+	var arr = ItemArray{}
+	arr.push(Item{value: 100})
+	arr.set(0, value: Item{value: 200})
+	var got = try arr.get(0) otherwise Item{value: -1}
+	return got.value
 end 'main'
 ```
 ```exitcode
@@ -875,18 +875,18 @@ Clearing an array decrefs every element; all elements freed when rc hits 0.
 typealias Integer = int(i64.min to i64.max)
 
 type Item
-  export var value Integer
+	export var value Integer
 end 'Item'
 
 typealias ItemArray = Array with Item
 
 function main() returns ExitCode
-  var arr = ItemArray{}
-  arr.push(Item{value: 1})
-  arr.push(Item{value: 2})
-  arr.push(Item{value: 3})
-  arr.clear()
-  return arr.count()
+	var arr = ItemArray{}
+	arr.push(Item{value: 1})
+	arr.push(Item{value: 2})
+	arr.push(Item{value: 3})
+	arr.clear()
+	return arr.count()
 end 'main'
 ```
 ```exitcode
@@ -949,22 +949,22 @@ When a container holding struct elements goes out of scope, all elements are dec
 typealias Integer = int(i64.min to i64.max)
 
 type Item
-  export var value Integer
+	export var value Integer
 end 'Item'
 
 typealias ItemArray = Array with Item
 
 function fill() returns Integer
-  var arr = ItemArray{}
-  arr.push(Item{value: 10})
-  arr.push(Item{value: 20})
-  arr.push(Item{value: 30})
-  return arr.count()
+	var arr = ItemArray{}
+	arr.push(Item{value: 10})
+	arr.push(Item{value: 20})
+	arr.push(Item{value: 30})
+	return arr.count()
 end 'fill'
 
 function main() returns ExitCode
-  var n = fill()
-  return n
+	var n = fill()
+	return n
 end 'main'
 ```
 ```exitcode
@@ -1027,26 +1027,26 @@ Insert many structs then remove them all; zero elements remain in memory.
 typealias Integer = int(i64.min to i64.max)
 
 type Entry
-  export var key Integer
+	export var key Integer
 end 'Entry'
 
 typealias EntryArray = Array with Entry
 
 function main() returns ExitCode
-  var arr = EntryArray{}
-  var i = 0
-  while i < 5 'push'
-    arr.push(Entry{key: i})
-    i = i + 1
-  end 'push'
-  var total = 0
-  while arr.count() > 0 'pop'
-    var e = try arr.remove(0) otherwise 'err'
-      return 99
-    end 'err'
-    total = total + e.key
-  end 'pop'
-  return total
+	var arr = EntryArray{}
+	var i = 0
+	while i < 5 'push'
+		arr.push(Entry{key: i})
+		i = i + 1
+	end 'push'
+	var total = 0
+	while arr.count() > 0 'pop'
+		var e = try arr.remove(0) otherwise 'err'
+			return 99
+		end 'err'
+		total = total + e.key
+	end 'pop'
+	return total
 end 'main'
 ```
 ```exitcode
@@ -1130,20 +1130,20 @@ Insert at index 0 into an existing array; shiftRight zeroes the gap so no double
 typealias Integer = int(i64.min to i64.max)
 
 type Val
-  export var n Integer
+	export var n Integer
 end 'Val'
 
 typealias ValArray = Array with Val
 
 function main() returns ExitCode
-  var arr = ValArray{}
-  arr.push(Val{n: 10})
-  arr.push(Val{n: 30})
-  arr.insert(1, value: Val{n: 20})
-  var a = try arr.get(0) otherwise Val{n: -1}
-  var b = try arr.get(1) otherwise Val{n: -1}
-  var c = try arr.get(2) otherwise Val{n: -1}
-  return a.n + b.n + c.n
+	var arr = ValArray{}
+	arr.push(Val{n: 10})
+	arr.push(Val{n: 30})
+	arr.insert(1, value: Val{n: 20})
+	var a = try arr.get(0) otherwise Val{n: -1}
+	var b = try arr.get(1) otherwise Val{n: -1}
+	var c = try arr.get(2) otherwise Val{n: -1}
+	return a.n + b.n + c.n
 end 'main'
 ```
 ```exitcode
@@ -1218,20 +1218,20 @@ Removing the middle element from an array; shiftLeft zeroes the trailing slot so
 typealias Integer = int(i64.min to i64.max)
 
 type Val
-  export var n Integer
+	export var n Integer
 end 'Val'
 
 typealias ValArray = Array with Val
 
 function main() returns ExitCode
-  var arr = ValArray{}
-  arr.push(Val{n: 1})
-  arr.push(Val{n: 2})
-  arr.push(Val{n: 3})
-  var removed = try arr.remove(1) otherwise 'err'
-    return 99
-  end 'err'
-  return removed.n + arr.count()
+	var arr = ValArray{}
+	arr.push(Val{n: 1})
+	arr.push(Val{n: 2})
+	arr.push(Val{n: 3})
+	var removed = try arr.remove(1) otherwise 'err'
+		return 99
+	end 'err'
+	return removed.n + arr.count()
 end 'main'
 ```
 ```exitcode
@@ -1296,20 +1296,20 @@ An array whose element type itself contains a struct field; freeing the outer ar
 typealias Integer = int(i64.min to i64.max)
 
 type Inner
-  export var v Integer
+	export var v Integer
 end 'Inner'
 
 type Wrapper
-  export var inner Inner
+	export var inner Inner
 end 'Wrapper'
 
 typealias WrapperArray = Array with Wrapper
 
 function main() returns ExitCode
-  var arr = WrapperArray{}
-  arr.push(Wrapper{inner: Inner{v: 1}})
-  arr.push(Wrapper{inner: Inner{v: 2}})
-  return arr.count()
+	var arr = WrapperArray{}
+	arr.push(Wrapper{inner: Inner{v: 1}})
+	arr.push(Wrapper{inner: Inner{v: 2}})
+	return arr.count()
 end 'main'
 ```
 ```exitcode
@@ -1376,20 +1376,20 @@ Returning from inside a nested block must decref all locals in every enclosing b
 typealias Integer = int(i64.min to i64.max)
 
 type Step
-  export var n Integer
+	export var n Integer
 end 'Step'
 
 function compute(flag bool) returns Integer
-  @heap var outer = Step{n: 1}
-  if flag 'inner'
-    @heap var inner = Step{n: 2}
-    return outer.n + inner.n
-  end 'inner'
-  return outer.n
+	@heap var outer = Step{n: 1}
+	if flag 'inner'
+		@heap var inner = Step{n: 2}
+		return outer.n + inner.n
+	end 'inner'
+	return outer.n
 end 'compute'
 
 function main() returns ExitCode
-  return compute(true)
+	return compute(true)
 end 'main'
 ```
 ```exitcode
@@ -1423,21 +1423,21 @@ Getting an element from a container and returning it; element rc stays above 0 w
 typealias Integer = int(i64.min to i64.max)
 
 type Item
-  export var value Integer
+	export var value Integer
 end 'Item'
 
 typealias ItemArray = Array with Item
 
 function getFirst(arr ItemArray) returns Item
-  var elem = try arr.get(0) otherwise Item{value: -1}
-  return elem
+	var elem = try arr.get(0) otherwise Item{value: -1}
+	return elem
 end 'getFirst'
 
 function main() returns ExitCode
-  var arr = ItemArray{}
-  arr.push(Item{value: 77})
-  var result = getFirst(arr)
-  return result.value
+	var arr = ItemArray{}
+	arr.push(Item{value: 77})
+	var result = getFirst(arr)
+	return result.value
 end 'main'
 ```
 ```exitcode
@@ -1489,18 +1489,18 @@ A global variable holds a struct that outlives the function that created it.
 typealias Integer = int(i64.min to i64.max)
 
 type Cfg
-  export var level Integer
+	export var level Integer
 end 'Cfg'
 
 var globalCfg = Cfg{level: 0}
 
 function setup()
-  globalCfg = Cfg{level: 42}
+	globalCfg = Cfg{level: 42}
 end 'setup'
 
 function main() returns ExitCode
-  setup()
-  return globalCfg.level
+	setup()
+	return globalCfg.level
 end 'main'
 ```
 ```exitcode
@@ -1540,20 +1540,20 @@ Reassigning a global struct var decrefs the old object and increfs the new one.
 typealias Integer = int(i64.min to i64.max)
 
 type State
-  export var val Integer
+	export var val Integer
 end 'State'
 
 var g = State{val: 0}
 
 function step(n Integer)
-  g = State{val: n}
+	g = State{val: n}
 end 'step'
 
 function main() returns ExitCode
-  step(10)
-  step(20)
-  step(30)
-  return g.val
+	step(10)
+	step(20)
+	step(30)
+	return g.val
 end 'main'
 ```
 ```exitcode
@@ -1609,23 +1609,23 @@ A simple enum union (no struct payload) is freed correctly at scope exit.
 typealias Integer = int(i64.min to i64.max)
 
 union Color
-  red
-  green
-  blue
+	red
+	green
+	blue
 end 'Color'
 
 function colorCode(c Color) returns Integer
-  let result = match c 'pick'
-    red   gives 1
-    green gives 2
-    blue  gives 3
-  end 'pick'
-  return result
+	let result = match c 'pick'
+		red   gives 1
+		green gives 2
+		blue  gives 3
+	end 'pick'
+	return result
 end 'colorCode'
 
 function main() returns ExitCode
-  var c = Color.green
-  return colorCode(c)
+	var c = Color.green
+	return colorCode(c)
 end 'main'
 ```
 ```exitcode
@@ -1647,24 +1647,24 @@ A union case with a struct-typed associated value; when the enum is freed its pa
 typealias Integer = int(i64.min to i64.max)
 
 type Body
-  export var mass Integer
+	export var mass Integer
 end 'Body'
 
 union Shape
-  empty
-  solid(body Body)
+	empty
+	solid(body Body)
 end 'Shape'
 
 function massOf(s Shape) returns Integer
-  match s 'check'
-    empty then return 0
-    solid(b) then return b.mass
-  end 'check'
+	match s 'check'
+		empty then return 0
+		solid(b) then return b.mass
+	end 'check'
 end 'massOf'
 
 function main() returns ExitCode
-  var s = Shape.solid(Body{mass: 5})
-  return massOf(s)
+	var s = Shape.solid(Body{mass: 5})
+	return massOf(s)
 end 'main'
 ```
 ```exitcode
@@ -1704,13 +1704,13 @@ Closure environment block is allocated as a struct and freed when the closure va
 typealias Integer = int(i64.min to i64.max)
 
 function apply(f (Integer) returns Integer, x Integer) returns Integer
-  return f(x)
+	return f(x)
 end 'apply'
 
 function main() returns ExitCode
-  var offset = 5
-  var result = apply(f: (n Integer) gives n + offset, x: 10)
-  return result
+	var offset = 5
+	var result = apply(f: (n Integer) gives n + offset, x: 10)
+	return result
 end 'main'
 ```
 ```exitcode
@@ -1738,17 +1738,17 @@ Closure captures a struct variable by address; the closure env is freed at scope
 typealias Integer = int(i64.min to i64.max)
 
 type Config
-  export var level Integer
+	export var level Integer
 end 'Config'
 
 function apply(f (Integer) returns Integer, x Integer) returns Integer
-  return f(x)
+	return f(x)
 end 'apply'
 
 function main() returns ExitCode
-  var cfg = Config{level: 3}
-  var result = apply(f: (_ Integer) gives cfg.level, x: 0)
-  return result
+	var cfg = Config{level: 3}
+	var result = apply(f: (_ Integer) gives cfg.level, x: 0)
+	return result
 end 'main'
 ```
 ```exitcode
@@ -1782,15 +1782,15 @@ On the error path of a try expression the locally allocated struct must still be
 typealias Integer = int(i64.min to i64.max)
 
 type Item
-  export var value Integer
+	export var value Integer
 end 'Item'
 
 typealias ItemArray = Array with Item
 
 function main() returns ExitCode
-  var arr = ItemArray{}
-  var got = try arr.get(0) otherwise Item{value: 99}
-  return got.value
+	var arr = ItemArray{}
+	var got = try arr.get(0) otherwise Item{value: 99}
+	return got.value
 end 'main'
 ```
 ```exitcode
@@ -1832,16 +1832,16 @@ Inserting a struct into a managed list increfs the value; the node holds the ref
 typealias Integer = int(i64.min to i64.max)
 
 type Token
-  export var id Integer
+	export var id Integer
 end 'Token'
 
 typealias TokenManagedList = __ManagedList with Token
 
 function main() returns ExitCode
-  var managedList = TokenManagedList.create()
-  var t = Token{id: 7}
-  var node = managedList.insertFirst(t)
-  return node.value().id
+	var managedList = TokenManagedList.create()
+	var t = Token{id: 7}
+	var node = managedList.insertFirst(t)
+	return node.value().id
 end 'main'
 ```
 ```exitcode
@@ -1885,16 +1885,16 @@ Removing a node from a managed list transfers ownership; value is freed when the
 typealias Integer = int(i64.min to i64.max)
 
 type Token
-  export var id Integer
+	export var id Integer
 end 'Token'
 
 typealias TokenManagedList = __ManagedList with Token
 
 function main() returns ExitCode
-  var managedList = TokenManagedList.create()
-  var node = managedList.insertFirst(Token{id: 9})
-  var removed = managedList.remove(node)
-  return removed.id + managedList.count()
+	var managedList = TokenManagedList.create()
+	var node = managedList.insertFirst(Token{id: 9})
+	var removed = managedList.remove(node)
+	return removed.id + managedList.count()
 end 'main'
 ```
 ```exitcode
@@ -1940,18 +1940,18 @@ Clearing a managed list decrefs every node value; all values freed when rc hits 
 typealias Integer = int(i64.min to i64.max)
 
 type Token
-  export var id Integer
+	export var id Integer
 end 'Token'
 
 typealias TokenManagedList = __ManagedList with Token
 
 function main() returns ExitCode
-  var managedList = TokenManagedList.create()
-  managedList.insertLast(Token{id: 1})
-  managedList.insertLast(Token{id: 2})
-  managedList.insertLast(Token{id: 3})
-  managedList.clear()
-  return managedList.count()
+	var managedList = TokenManagedList.create()
+	managedList.insertLast(Token{id: 1})
+	managedList.insertLast(Token{id: 2})
+	managedList.insertLast(Token{id: 3})
+	managedList.clear()
+	return managedList.count()
 end 'main'
 ```
 ```exitcode
@@ -2021,16 +2021,16 @@ Calling `setValue` on a managed list node decrefs the old value and increfs the 
 typealias Integer = int(i64.min to i64.max)
 
 type Token
-  export var id Integer
+	export var id Integer
 end 'Token'
 
 typealias TokenManagedList = __ManagedList with Token
 
 function main() returns ExitCode
-  var managedList = TokenManagedList.create()
-  var node = managedList.insertFirst(Token{id: 1})
-  node.setValue(Token{id: 99})
-  return node.value().id
+	var managedList = TokenManagedList.create()
+	var node = managedList.insertFirst(Token{id: 1})
+	node.setValue(Token{id: 99})
+	return node.value().id
 end 'main'
 ```
 ```exitcode
@@ -2082,21 +2082,21 @@ In a for-in loop over a struct array each element reference is decref'd at the e
 typealias Integer = int(i64.min to i64.max)
 
 type Score
-  export var pts Integer
+	export var pts Integer
 end 'Score'
 
 typealias ScoreArray = Array with Score
 
 function main() returns ExitCode
-  var scores = ScoreArray{}
-  scores.push(Score{pts: 10})
-  scores.push(Score{pts: 20})
-  scores.push(Score{pts: 30})
-  var total = 0
-  for s in scores 'loop'
-    total = total + s.pts
-  end 'loop'
-  return total
+	var scores = ScoreArray{}
+	scores.push(Score{pts: 10})
+	scores.push(Score{pts: 20})
+	scores.push(Score{pts: 30})
+	var total = 0
+	for s in scores 'loop'
+		total = total + s.pts
+	end 'loop'
+	return total
 end 'main'
 ```
 ```exitcode
@@ -2177,14 +2177,14 @@ Three aliases to the same object; the object is freed exactly once when the last
 typealias Integer = int(i64.min to i64.max)
 
 type Data
-  export var n Integer
+	export var n Integer
 end 'Data'
 
 function main() returns ExitCode
-  @heap var a = Data{n: 7}
-  var b = a
-  var c = a
-  return a.n + b.n + c.n
+	@heap var a = Data{n: 7}
+	var b = a
+	var c = a
+	return a.n + b.n + c.n
 end 'main'
 ```
 ```exitcode
@@ -2216,22 +2216,22 @@ An array of arrays of structs; freeing the outer array cascades through all leve
 typealias Integer = int(i64.min to i64.max)
 
 type Cell
-  export var val Integer
+	export var val Integer
 end 'Cell'
 
 typealias CellArray = Array with Cell
 typealias Grid = Array with CellArray
 
 function main() returns ExitCode
-  var grid = Grid{}
-  var row1 = CellArray{}
-  row1.push(Cell{val: 1})
-  row1.push(Cell{val: 2})
-  var row2 = CellArray{}
-  row2.push(Cell{val: 3})
-  grid.push(row1)
-  grid.push(row2)
-  return grid.count()
+	var grid = Grid{}
+	var row1 = CellArray{}
+	row1.push(Cell{val: 1})
+	row1.push(Cell{val: 2})
+	var row2 = CellArray{}
+	row2.push(Cell{val: 3})
+	grid.push(row1)
+	grid.push(row2)
+	return grid.count()
 end 'main'
 ```
 ```exitcode
@@ -2332,24 +2332,24 @@ A struct that owns an array field; when the struct is freed the array (and its e
 typealias Integer = int(i64.min to i64.max)
 
 type Entry
-  export var val Integer
+	export var val Integer
 end 'Entry'
 
 typealias EntryArray = Array with Entry
 
 type Bucket
-  export var items EntryArray
+	export var items EntryArray
 end 'Bucket'
 
 function fill() returns Integer
-  var b = Bucket{items: EntryArray{}}
-  b.items.push(Entry{val: 10})
-  b.items.push(Entry{val: 20})
-  return b.items.count()
+	var b = Bucket{items: EntryArray{}}
+	b.items.push(Entry{val: 10})
+	b.items.push(Entry{val: 20})
+	return b.items.count()
 end 'fill'
 
 function main() returns ExitCode
-  return fill()
+	return fill()
 end 'main'
 ```
 ```exitcode
@@ -2412,17 +2412,17 @@ ownership to the caller via KeepVars. The caller must not incref again.
 typealias Integer = int(i64.min to i64.max)
 
 type Pair
-  export var a Integer
-  export var b Integer
+	export var a Integer
+	export var b Integer
 end 'Pair'
 
 function makePair(x Integer, y Integer) returns Pair
-  return Pair{a: x, b: y}
+	return Pair{a: x, b: y}
 end 'makePair'
 
 function main() returns ExitCode
-  var p = makePair(x: 3, y: 7)
-  return p.a + p.b
+	var p = makePair(x: 3, y: 7)
+	return p.a + p.b
 end 'main'
 ```
 ```exitcode
@@ -2453,21 +2453,21 @@ The caller must decref the outer struct, which cascades to decref the managed fi
 typealias Integer = int(i64.min to i64.max)
 
 type Inner
-  export var value Integer
+	export var value Integer
 end 'Inner'
 
 type Wrapper
-  export var inner Inner
+	export var inner Inner
 end 'Wrapper'
 
 function wrap(i Inner) returns Wrapper
-  return Wrapper{inner: i}
+	return Wrapper{inner: i}
 end 'wrap'
 
 function main() returns ExitCode
-  var i = Inner{value: 5}
-  var w = wrap(i: i)
-  return w.inner.value
+	var i = Inner{value: 5}
+	var w = wrap(i: i)
+	return w.inner.value
 end 'main'
 ```
 ```exitcode
@@ -2504,9 +2504,9 @@ List (struct owning a managed list field) must walk and decref managed list node
 typealias StringList = List with String
 
 function main() returns ExitCode
-  var list = StringList{}
-  list.append("hello")
-  return 0
+	var list = StringList{}
+	list.append("hello")
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -2558,12 +2558,12 @@ mm_raw_free #R1
 Match pattern string literals must be freed after comparison, even when a case matches.
 ```maxon
 function main() returns ExitCode
-  var name = "alice"
-  match name 'greet'
-    "alice" then return 1
-    "bob" then return 2
-    default then return 0
-  end 'greet'
+	var name = "alice"
+	match name 'greet'
+		"alice" then return 1
+		"bob" then return 2
+		default then return 0
+	end 'greet'
 end 'main'
 ```
 ```exitcode
@@ -2611,8 +2611,8 @@ mm_raw_free #R1
 Single character allocated and freed in the same function scope; Character + child __ManagedMemory both cleaned up.
 ```maxon
 function main() returns ExitCode
-  var c = 'A'
-  return c.byteLength()
+	var c = 'A'
+	return c.byteLength()
 end 'main'
 ```
 ```exitcode
@@ -2646,9 +2646,9 @@ mm_raw_free #R1
 Aliasing a character increfs it; both variables share the same Character object.
 ```maxon
 function main() returns ExitCode
-  var a = 'X'
-  let b = a
-  return a.byteLength() + b.byteLength()
+	var a = 'X'
+	let b = a
+	return a.byteLength() + b.byteLength()
 end 'main'
 ```
 ```exitcode
@@ -2684,9 +2684,9 @@ mm_raw_free #R1
 Reassigning a character var decrefs and frees the old Character (with its managed child) before storing the new one.
 ```maxon
 function main() returns ExitCode
-  var c = 'A'
-  c = 'B'
-  return c.byteLength()
+	var c = 'A'
+	c = 'B'
+	return c.byteLength()
 end 'main'
 ```
 ```exitcode
@@ -2734,12 +2734,12 @@ mm_raw_free #R1
 Returning a character from a function transfers ownership to the caller.
 ```maxon
 function makeChar() returns Character
-  return 'Z'
+	return 'Z'
 end 'makeChar'
 
 function main() returns ExitCode
-  var c = makeChar()
-  return c.byteLength()
+	var c = makeChar()
+	return c.byteLength()
 end 'main'
 ```
 ```exitcode
@@ -2772,12 +2772,12 @@ mm_raw_free #R1
 A character created in an inner if-block is freed when that block exits.
 ```maxon
 function main() returns ExitCode
-  var result = 0
-  if true 'inner'
-    var c = 'Q'
-    result = c.byteLength()
-  end 'inner'
-  return result
+	var result = 0
+	if true 'inner'
+		var c = 'Q'
+		result = c.byteLength()
+	end 'inner'
+	return result
 end 'main'
 ```
 ```exitcode
@@ -2811,8 +2811,8 @@ mm_raw_free #R1
 A tuple of primitives is heap-allocated and freed at scope exit.
 ```maxon
 function main() returns ExitCode
-  @heap var t = (10, 32)
-  return t.0
+	@heap var t = (10, 32)
+	return t.0
 end 'main'
 ```
 ```exitcode
@@ -2838,9 +2838,9 @@ mm_raw_free #R1
 Aliasing a tuple increfs it; both variables share the same tuple object.
 ```maxon
 function main() returns ExitCode
-  @heap var a = (3, 7)
-  let b = a
-  return b.0 + b.1
+	@heap var a = (3, 7)
+	let b = a
+	return b.0 + b.1
 end 'main'
 ```
 ```exitcode
@@ -2868,9 +2868,9 @@ mm_raw_free #R1
 Reassigning a tuple var decrefs the old tuple before storing the new one.
 ```maxon
 function main() returns ExitCode
-  var t = (1, 2)
-  t = (3, 4)
-  return t.0 + t.1
+	var t = (1, 2)
+	t = (3, 4)
+	return t.0 + t.1
 end 'main'
 ```
 ```exitcode
@@ -2904,8 +2904,8 @@ mm_raw_free #R1
 A tuple containing a managed type (String); the destructor must cascade to decref the String field.
 ```maxon
 function main() returns ExitCode
-  var t = (42, "hello")
-  return t.0
+	var t = (42, "hello")
+	return t.0
 end 'main'
 ```
 ```exitcode
@@ -2947,12 +2947,12 @@ Returning a tuple from a function transfers ownership to the caller.
 typealias Integer = int(i64.min to i64.max)
 
 function makePair(a Integer, b Integer) returns (Integer, Integer)
-  return (a, b)
+	return (a, b)
 end 'makePair'
 
 function main() returns ExitCode
-  var t = makePair(a: 5, b: 3)
-  return t.0 + t.1
+	var t = makePair(a: 5, b: 3)
+	return t.0 + t.1
 end 'main'
 ```
 ```exitcode
@@ -2979,9 +2979,9 @@ mm_raw_free #R1
 Destructuring a tuple frees the tuple wrapper while the bindings remain live.
 ```maxon
 function main() returns ExitCode
-  var t = (10, 20)
-  var (x, y) = t
-  return x + y
+	var t = (10, 20)
+	var (x, y) = t
+	return x + y
 end 'main'
 ```
 ```exitcode
@@ -3011,13 +3011,13 @@ A tuple containing a user-defined struct; the destructor cascades through the tu
 typealias Integer = int(i64.min to i64.max)
 
 type Point
-  export var x Integer
-  export var y Integer
+	export var x Integer
+	export var y Integer
 end 'Point'
 
 function main() returns ExitCode
-  var t = (1, Point{x: 10, y: 20})
-  return t.0
+	var t = (1, Point{x: 10, y: 20})
+	return t.0
 end 'main'
 ```
 ```exitcode
@@ -3050,16 +3050,16 @@ Passing a struct literal directly as a function argument must still free the str
 typealias Integer = int(i64.min to i64.max)
 
 type Point
-  export var x Integer
-  export var y Integer
+	export var x Integer
+	export var y Integer
 end 'Point'
 
 function acceptPoint(p Point) returns Integer
-  return p.x + p.y
+	return p.x + p.y
 end 'acceptPoint'
 
 function main() returns ExitCode
-  return acceptPoint(Point{x: 3, y: 4})
+	return acceptPoint(Point{x: 3, y: 4})
 end 'main'
 ```
 ```exitcode
@@ -3072,12 +3072,12 @@ Returning a tuple from a function and destructuring it must not crash. Currently
 typealias Integer = int(i64.min to i64.max)
 
 function makePair(a Integer, b Integer) returns (Integer, Integer)
-  return (a, b)
+	return (a, b)
 end 'makePair'
 
 function main() returns ExitCode
-  var (x, y) = makePair(10, b: 32)
-  return x + y
+	var (x, y) = makePair(10, b: 32)
+	return x + y
 end 'main'
 ```
 ```exitcode
@@ -3088,22 +3088,22 @@ end 'main'
 Returning an enum's char rawValue through a function must not underflow the refcount. Currently the returned value is treated as a managed allocation when it's actually a raw constant, causing refcount underflow.
 ```maxon
 enum Grade
-  excellent = 'A'
-  good = 'B'
-  average = 'C'
+	excellent = 'A'
+	good = 'B'
+	average = 'C'
 end 'Grade'
 
 function getLetter(g Grade) returns Character
-  return g.rawValue
+	return g.rawValue
 end 'getLetter'
 
 function main() returns ExitCode
-  var grade = Grade.good
-  var letter = getLetter(grade)
-  if letter == 'B' 'check'
-    return 1
-  end 'check'
-  return 0
+	var grade = Grade.good
+	var letter = getLetter(grade)
+	if letter == 'B' 'check'
+		return 1
+	end 'check'
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -3114,23 +3114,23 @@ end 'main'
 Returning an enum's .name (String) through a function must not underflow the refcount. Currently the returned raw constant string is decremented as if it were a managed allocation.
 ```maxon
 enum Direction
-  north
-  south
-  east
-  west
+	north
+	south
+	east
+	west
 end 'Direction'
 
 function getName(d Direction) returns String
-  return d.name
+	return d.name
 end 'getName'
 
 function main() returns ExitCode
-  var d = Direction.west
-  var n = getName(d)
-  if n == "west" 'check'
-    return 1
-  end 'check'
-  return 0
+	var d = Direction.west
+	var n = getName(d)
+	if n == "west" 'check'
+		return 1
+	end 'check'
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -3141,22 +3141,22 @@ end 'main'
 Returning a string-backed enum's rawValue through a function must not underflow the refcount. Same root cause as the char variant: raw constant treated as managed allocation.
 ```maxon
 enum Planet
-  earth = "Earth"
-  mars = "Mars"
-  venus = "Venus"
+	earth = "Earth"
+	mars = "Mars"
+	venus = "Venus"
 end 'Planet'
 
 function getName(p Planet) returns String
-  return p.rawValue
+	return p.rawValue
 end 'getName'
 
 function main() returns ExitCode
-  var p = Planet.mars
-  var n = getName(p)
-  if n == "Mars" 'check'
-    return 1
-  end 'check'
-  return 0
+	var p = Planet.mars
+	var n = getName(p)
+	if n == "Mars" 'check'
+		return 1
+	end 'check'
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -3169,18 +3169,18 @@ When a self-returning method's result is discarded, the refcount must remain bal
 typealias Count = int(i64.min to i64.max)
 
 type Counter
-  export var value Count
+	export var value Count
 
-  function increment() returns Counter
-    value = value + 1
-    return self
-  end 'increment'
+	function increment() returns Counter
+		value = value + 1
+		return self
+	end 'increment'
 end 'Counter'
 
 function main() returns ExitCode
-  var c = Counter{value: 0}
-  c.increment()
-  return c.value
+	var c = Counter{value: 0}
+	c.increment()
+	return c.value
 end 'main'
 ```
 ```exitcode
@@ -3193,22 +3193,22 @@ Extracting and returning a struct field from a borrowed parameter must not crash
 typealias Integer = int(i64.min to i64.max)
 
 type Data
-  export var value Integer
+	export var value Integer
 end 'Data'
 
 type Wrapper
-  export var data Data
+	export var data Data
 end 'Wrapper'
 
 function extractData(w Wrapper) returns Data
-  return w.data
+	return w.data
 end 'extractData'
 
 function main() returns ExitCode
-  var d = Data{value: 42}
-  var w = Wrapper{data: d}
-  var result = extractData(w)
-  return result.value
+	var d = Data{value: 42}
+	var w = Wrapper{data: d}
+	var result = extractData(w)
+	return result.value
 end 'main'
 ```
 ```exitcode
@@ -3219,10 +3219,10 @@ end 'main'
 Interpolating a character into a string must not leak. Currently the intermediate ManagedMemory allocation from the Character is not freed.
 ```maxon
 function main() returns ExitCode
-  var c = 'A'
-  var s = "{c}"
-  print(s)
-  return 0
+	var c = 'A'
+	var s = "{c}"
+	print(s)
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -3236,13 +3236,13 @@ A
 Using character range patterns in a match statement must clean up all allocated Characters. Currently the range bound Characters leak.
 ```maxon
 function main() returns ExitCode
-  var c = 'G'
-  match c 'classify'
-    'a' to 'z' then return 1
-    'A' to 'Z' then return 2
-    '0' to '9' then return 3
-    default then return 0
-  end 'classify'
+	var c = 'G'
+	match c 'classify'
+		'a' to 'z' then return 1
+		'A' to 'Z' then return 2
+		'0' to '9' then return 3
+		default then return 0
+	end 'classify'
 end 'main'
 ```
 ```exitcode
@@ -3253,17 +3253,17 @@ end 'main'
 Comparing two string-backed enum values must not leak. Currently the Character/String allocations for enum case values are not freed.
 ```maxon
 enum ContentType
-  json = "application/json"
-  html = "text/html"
-  plain = "text/plain"
+	json = "application/json"
+	html = "text/html"
+	plain = "text/plain"
 end 'ContentType'
 
 function main() returns ExitCode
-  var ct = ContentType.json
-  if ct == ContentType.json 'check'
-    return 1
-  end 'check'
-  return 0
+	var ct = ContentType.json
+	if ct == ContentType.json 'check'
+		return 1
+	end 'check'
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -3274,16 +3274,16 @@ end 'main'
 Comparing two char-backed enum values must not leak. Currently the Character allocations for enum case values are not freed.
 ```maxon
 enum Escape
-  newline = '\n'
-  tab = '\t'
+	newline = '\n'
+	tab = '\t'
 end 'Escape'
 
 function main() returns ExitCode
-  var e = Escape.newline
-  if e == Escape.newline 'check'
-    return 1
-  end 'check'
-  return 0
+	var e = Escape.newline
+	if e == Escape.newline 'check'
+		return 1
+	end 'check'
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -3296,19 +3296,19 @@ Cloning a struct with a nested struct field must not leak the inner clone. Curre
 typealias Integer = int(i64.min to i64.max)
 
 type Inner
-  export var value Integer
+	export var value Integer
 end 'Inner'
 
 type Outer
-  export var a Inner
-  export var b Integer
+	export var a Inner
+	export var b Integer
 end 'Outer'
 
 function main() returns ExitCode
-  var x = Outer{a: Inner{value: 42}, b: 10}
-  var y = x.clone()
-  y.a.value = 99
-  return x.a.value
+	var x = Outer{a: Inner{value: 42}, b: 10}
+	var y = x.clone()
+	y.a.value = 99
+	return x.a.value
 end 'main'
 ```
 ```exitcode
@@ -3319,10 +3319,10 @@ end 'main'
 Cloning a string must not leak internal Slice/ManagedMemory allocations. Currently String.clone leaks 2 allocations (the Slice and its buffer).
 ```maxon
 function main() returns ExitCode
-  var a = "hello"
-  var b = a.clone()
-  print(b)
-  return 0
+	var a = "hello"
+	var b = a.clone()
+	print(b)
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -3336,10 +3336,10 @@ hello
 String.replace must not leak internal working allocations. Currently leaks 2 allocations (ManagedMemory buffers from the replace implementation).
 ```maxon
 function main() returns ExitCode
-  var s = "hello world"
-  var result = s.replace("world", with: "there")
-  print(result)
-  return 0
+	var s = "hello world"
+	var result = s.replace("world", with: "there")
+	print(result)
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -3353,10 +3353,10 @@ hello there
 String.replaceFirst must not leak internal working allocations. The intermediate ManagedMemory and Buffer created during the replacement must be freed.
 ```maxon
 function main() returns ExitCode
-  var s = "hello world"
-  var result = s.replaceFirst("o", with: "0")
-  print(result)
-  return 0
+	var s = "hello world"
+	var result = s.replaceFirst("o", with: "0")
+	print(result)
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -3370,14 +3370,14 @@ hell0 world
 Repeatedly concatenating strings in a loop must free intermediate ManagedMemory/Buffer pairs. Each concat creates a new string; the old one must be fully freed including its managed backing storage.
 ```maxon
 function main() returns ExitCode
-  var s = ""
-  var a = "x"
-  var i = 0
-  while i < 5 'loop'
-    s = s.concat(a)
-    i = i + 1
-  end 'loop'
-  return s.byteLength()
+	var s = ""
+	var a = "x"
+	var i = 0
+	while i < 5 'loop'
+		s = s.concat(a)
+		i = i + 1
+	end 'loop'
+	return s.byteLength()
 end 'main'
 ```
 ```exitcode
@@ -3388,12 +3388,12 @@ end 'main'
 String.slice must not leak internal allocations. The slice operation creates managed memory that must be properly tracked and freed.
 ```maxon
 function main() returns ExitCode
-  var s = "hello world"
-  var start = s.startIndex()
-  var spaceIdx = try s.findFirst(" ") otherwise s.endIndex()
-  var sub = s.slice(start, endIndex: spaceIdx)
-  print(sub)
-  return 0
+	var s = "hello world"
+	var start = s.startIndex()
+	var spaceIdx = try s.findFirst(" ") otherwise s.endIndex()
+	var sub = s.slice(start, endIndex: spaceIdx)
+	print(sub)
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -3407,17 +3407,17 @@ hello
 Accessing enum .name must not leak. The getName function allocates a String wrapper around the name data; both the wrapper and its managed memory must be freed.
 ```maxon
 enum Color
-  Red
-  Green
-  Blue
+	Red
+	Green
+	Blue
 end 'Color'
 
 function main() returns ExitCode
-  var c = Color.Green
-  if c.name == "Green" 'check'
-    return 1
-  end 'check'
-  return 0
+	var c = Color.Green
+	if c.name == "Green" 'check'
+		return 1
+	end 'check'
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -3428,18 +3428,18 @@ end 'main'
 Accessing enum .name after reassignment must not leak. Both the old and new enum name string allocations must be properly freed.
 ```maxon
 enum Status
-  pending
-  active
-  done
+	pending
+	active
+	done
 end 'Status'
 
 function main() returns ExitCode
-  var s = Status.pending
-  s = Status.done
-  if s.name == "done" 'check'
-    return 1
-  end 'check'
-  return 0
+	var s = Status.pending
+	s = Status.done
+	if s.name == "done" 'check'
+		return 1
+	end 'check'
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -3452,15 +3452,15 @@ Getting a struct from an array via try/otherwise must not leak. When the array i
 typealias Integer = int(i64.min to i64.max)
 
 type Pair
-  export var first Integer
-  export var second Integer
+	export var first Integer
+	export var second Integer
 end 'Pair'
 
 function main() returns ExitCode
-  var p = Pair{first: 10, second: 20}
-  var arr = [p]
-  var elem = try arr.get(0) otherwise Pair{first: 0, second: 0}
-  return elem.first + elem.second
+	var p = Pair{first: 10, second: 20}
+	var arr = [p]
+	var elem = try arr.get(0) otherwise Pair{first: 0, second: 0}
+	return elem.first + elem.second
 end 'main'
 ```
 ```exitcode
@@ -3473,17 +3473,17 @@ Creating an array literal of structs must not leak. All struct elements must be 
 typealias Integer = int(i64.min to i64.max)
 
 type Point
-  export var x Integer
-  export var y Integer
+	export var x Integer
+	export var y Integer
 end 'Point'
 
 function main() returns ExitCode
-  var p1 = Point{x: 1, y: 2}
-  var p2 = Point{x: 3, y: 4}
-  var points = [p1, p2]
-  var pt0 = try points.get(0) otherwise Point{x: 0, y: 0}
-  var pt1 = try points.get(1) otherwise Point{x: 0, y: 0}
-  return pt0.x + pt1.y
+	var p1 = Point{x: 1, y: 2}
+	var p2 = Point{x: 3, y: 4}
+	var points = [p1, p2]
+	var pt0 = try points.get(0) otherwise Point{x: 0, y: 0}
+	var pt1 = try points.get(1) otherwise Point{x: 0, y: 0}
+	return pt0.x + pt1.y
 end 'main'
 ```
 ```exitcode
@@ -3496,7 +3496,7 @@ Pushing a local struct into a global array must not leak. When the global array 
 typealias Integer = int(i64.min to i64.max)
 
 type Item
-  export var value Integer
+	export var value Integer
 end 'Item'
 
 typealias ItemArray = Array with Item
@@ -3504,14 +3504,14 @@ typealias ItemArray = Array with Item
 var globalArr = ItemArray{}
 
 function pushLocal()
-  var item = Item{value: 123}
-  globalArr.push(item)
+	var item = Item{value: 123}
+	globalArr.push(item)
 end 'pushLocal'
 
 function main() returns ExitCode
-  pushLocal()
-  var elem = try globalArr.get(0) otherwise Item{value: -1}
-  return elem.value
+	pushLocal()
+	var elem = try globalArr.get(0) otherwise Item{value: -1}
+	return elem.value
 end 'main'
 ```
 ```exitcode
@@ -3524,7 +3524,7 @@ Pushing many structs into a global array and then removing them all must not lea
 typealias Integer = int(i64.min to i64.max)
 
 type Item
-  export var value Integer
+	export var value Integer
 end 'Item'
 
 typealias ItemArray = Array with Item
@@ -3532,20 +3532,20 @@ typealias ItemArray = Array with Item
 var globalArr = ItemArray{}
 
 function main() returns ExitCode
-  var i = 0
-  while i < 10 'push'
-    globalArr.push(Item{value: i})
-    i = i + 1
-  end 'push'
-  var total = 0
-  while globalArr.count() > 0 'remove'
-    var elem = try globalArr.remove(0) otherwise 'err'
-      return 99
-    end 'err'
-    total = total + elem.value
-    i = i + 1
-  end 'remove'
-  return total
+	var i = 0
+	while i < 10 'push'
+		globalArr.push(Item{value: i})
+		i = i + 1
+	end 'push'
+	var total = 0
+	while globalArr.count() > 0 'remove'
+		var elem = try globalArr.remove(0) otherwise 'err'
+			return 99
+		end 'err'
+		total = total + elem.value
+		i = i + 1
+	end 'remove'
+	return total
 end 'main'
 ```
 ```exitcode
@@ -3559,29 +3559,29 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
 export type Inner
-    export var items IntArray
-    export var value Integer
+		export var items IntArray
+		export var value Integer
 end 'Inner'
 
 export type Outer
-    export var inner Inner
-    export var initialized bool
+		export var inner Inner
+		export var initialized bool
 end 'Outer'
 
 function initOuter(o Outer)
-    if not o.initialized 'init'
-        o.inner = Inner{items: IntArray{}, value: 42}
-        o.initialized = true
-    end 'init'
+		if not o.initialized 'init'
+				o.inner = Inner{items: IntArray{}, value: 42}
+				o.initialized = true
+		end 'init'
 end 'initOuter'
 
 function main() returns ExitCode
-    let o = Outer{inner: Inner{items: IntArray{}, value: 0}, initialized: false}
-    initOuter(o)
-    o.inner.items.push(1)
-    o.inner.items.push(2)
-    o.inner.items.push(3)
-    return o.inner.items.count()
+		let o = Outer{inner: Inner{items: IntArray{}, value: 0}, initialized: false}
+		initOuter(o)
+		o.inner.items.push(1)
+		o.inner.items.push(2)
+		o.inner.items.push(3)
+		return o.inner.items.count()
 end 'main'
 ```
 ```exitcode
@@ -3592,8 +3592,8 @@ end 'main'
 A map with string keys must free all string key allocations when the map is destroyed. The string used as a key is increffed into the map's key array; when the map is freed, these strings must be decreffed.
 ```maxon
 function main() returns ExitCode
-    var m = ["hello": 42]
-    return try m.get("hello") otherwise 0
+		var m = ["hello": 42]
+		return try m.get("hello") otherwise 0
 end 'main'
 ```
 ```exitcode
@@ -3604,11 +3604,11 @@ end 'main'
 A map with multiple string keys must free all key and value allocations. Each insert increfs the key string; the map destructor must decref all of them.
 ```maxon
 function main() returns ExitCode
-    var m = ["a": 1, "b": 2, "c": 3]
-    let a = try m.get("a") otherwise 0
-    let b = try m.get("b") otherwise 0
-    let c = try m.get("c") otherwise 0
-    return a + b + c
+		var m = ["a": 1, "b": 2, "c": 3]
+		let a = try m.get("a") otherwise 0
+		let b = try m.get("b") otherwise 0
+		let c = try m.get("c") otherwise 0
+		return a + b + c
 end 'main'
 ```
 ```exitcode
@@ -3621,14 +3621,14 @@ A closure that captures a string variable must properly manage the string's refc
 typealias Integer = int(i64.min to i64.max)
 
 function apply(f (Integer) returns String, x Integer) returns String
-  return f(x)
+	return f(x)
 end 'apply'
 
 function main() returns ExitCode
-  var prefix = "hello"
-  var result = apply(f: (_ Integer) gives prefix, x: 0)
-  print(result)
-  return 0
+	var prefix = "hello"
+	var result = apply(f: (_ Integer) gives prefix, x: 0)
+	print(result)
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -3644,16 +3644,16 @@ Removing a node from a managed list must properly decref the node's value. The m
 typealias Integer = int(i64.min to i64.max)
 
 type Item
-  export var value Integer
+	export var value Integer
 end 'Item'
 
 typealias ItemManagedList = __ManagedList with Item
 
 function main() returns ExitCode
-  var managedList = ItemManagedList.create()
-  var node = managedList.insertFirst(Item{value: 50})
-  managedList.remove(node)
-  return managedList.count()
+	var managedList = ItemManagedList.create()
+	var node = managedList.insertFirst(Item{value: 50})
+	managedList.remove(node)
+	return managedList.count()
 end 'main'
 ```
 ```exitcode
@@ -3666,18 +3666,18 @@ Assigning to a nested field of a module-level struct variable must not leak. The
 typealias SmallInt = int(0 to 255)
 
 type Inner
-    export var x SmallInt
+		export var x SmallInt
 end 'Inner'
 
 type Outer
-    export var inner Inner
+		export var inner Inner
 end 'Outer'
 
 var state = Outer{inner: Inner{x: 0}}
 
 function main() returns ExitCode
-    state.inner.x = 99
-    return state.inner.x
+		state.inner.x = 99
+		return state.inner.x
 end 'main'
 ```
 ```exitcode
@@ -3693,10 +3693,10 @@ typealias IntArray = Array with Integer
 var items = [10, 20, 30]
 
 function main() returns ExitCode
-  let a = try items.get(0) otherwise 0
-  let b = try items.get(1) otherwise 0
-  let c = try items.get(2) otherwise 0
-  return a + b + c
+	let a = try items.get(0) otherwise 0
+	let b = try items.get(1) otherwise 0
+	let c = try items.get(2) otherwise 0
+	return a + b + c
 end 'main'
 ```
 ```exitcode
@@ -3707,16 +3707,16 @@ end 'main'
 Array.append must not leak. Appending one array to another must properly manage the element storage and not leak the source array's data.
 ```maxon
 function main() returns ExitCode
-  var a = [1, 2, 3]
-  var b = [4, 5, 6]
-  a.append(b)
-  var sum = 0
-  var i = 0
-  while i < a.count() 'loop'
-    sum = sum + (try a.get(i) otherwise 0)
-    i = i + 1
-  end 'loop'
-  return sum
+	var a = [1, 2, 3]
+	var b = [4, 5, 6]
+	a.append(b)
+	var sum = 0
+	var i = 0
+	while i < a.count() 'loop'
+		sum = sum + (try a.get(i) otherwise 0)
+		i = i + 1
+	end 'loop'
+	return sum
 end 'main'
 ```
 ```exitcode
@@ -3727,22 +3727,22 @@ end 'main'
 Pushing structs that contain unions with string payloads into an array must not leak. The union destructors must handle string payload cleanup during array destruction.
 ```maxon
 export union QueryKey
-    sourceFile(path String)
-    allModule
+		sourceFile(path String)
+		allModule
 end 'QueryKey'
 
 export type Dependency
-    export var key QueryKey
+		export var key QueryKey
 end 'Dependency'
 
 typealias DependencyArray = Array with Dependency
 
 function main() returns ExitCode
-    var deps = DependencyArray{}
-    deps.push(Dependency{key: QueryKey.sourceFile("test.maxon")})
-    deps.push(Dependency{key: QueryKey.allModule})
-    deps.push(Dependency{key: QueryKey.sourceFile("other.maxon")})
-    return deps.count()
+		var deps = DependencyArray{}
+		deps.push(Dependency{key: QueryKey.sourceFile("test.maxon")})
+		deps.push(Dependency{key: QueryKey.allModule})
+		deps.push(Dependency{key: QueryKey.sourceFile("other.maxon")})
+		return deps.count()
 end 'main'
 ```
 ```exitcode
@@ -3755,23 +3755,23 @@ A map using a custom Hashable struct as key must not leak. The map's internal ar
 typealias Integer = int(i64.min to i64.max)
 
 type MyKey implements Hashable, Equatable
-    var value Integer
+		var value Integer
 
-    function hash() returns HashValue
-        return self.value * 31
-    end 'hash'
+		function hash() returns HashValue
+				return self.value * 31
+		end 'hash'
 
-    function equals(other MyKey) returns bool
-        return self.value == other.value
-    end 'equals'
+		function equals(other MyKey) returns bool
+				return self.value == other.value
+		end 'equals'
 end 'MyKey'
 
 typealias MyKeyMap = Map with (MyKey, Integer)
 
 function main() returns ExitCode
-    var m = MyKeyMap{}
-    m.insert(key: MyKey{value: 1}, value: 42)
-    return m.count()
+		var m = MyKeyMap{}
+		m.insert(key: MyKey{value: 1}, value: 42)
+		return m.count()
 end 'main'
 ```
 ```exitcode

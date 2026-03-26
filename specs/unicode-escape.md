@@ -44,11 +44,11 @@ var s2 = "hello\u0021 {name}" // "hello! world"
 
 ```maxon
 function main() returns ExitCode
-  var excl = '\u0021'
-  if excl == '!' 'check'
-    print("PASS")
-  end 'check'
-  return 0
+	var excl = '\u0021'
+	if excl == '!' 'check'
+		print("PASS")
+	end 'check'
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -63,9 +63,9 @@ PASS
 
 ```maxon
 function main() returns ExitCode
-  var sigma = '\u03A3'
-  print("{sigma}")
-  return 0
+	var sigma = '\u03A3'
+	print("{sigma}")
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -80,9 +80,9 @@ end 'main'
 
 ```maxon
 function main() returns ExitCode
-  var s = "hello\u0021"
-  print(s)
-  return 0
+	var s = "hello\u0021"
+	print(s)
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -97,10 +97,10 @@ hello!
 
 ```maxon
 function main() returns ExitCode
-  var name = "world"
-  var s = "hello\u0021 {name}"
-  print(s)
-  return 0
+	var name = "world"
+	var s = "hello\u0021 {name}"
+	print(s)
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -115,20 +115,20 @@ hello! world
 
 ```maxon
 function main() returns ExitCode
-  var ws = CharacterSet.whitespacesAndNewlines()
-  var nbsp = '\u00A0'
-  var enSpace = '\u2002'
-  var ideoSpace = '\u3000'
-  if ws.contains(nbsp) 'c1'
-    print("nbsp ")
-  end 'c1'
-  if ws.contains(enSpace) 'c2'
-    print("enSpace ")
-  end 'c2'
-  if ws.contains(ideoSpace) 'c3'
-    print("ideoSpace")
-  end 'c3'
-  return 0
+	var ws = CharacterSet.whitespacesAndNewlines()
+	var nbsp = '\u00A0'
+	var enSpace = '\u2002'
+	var ideoSpace = '\u3000'
+	if ws.contains(nbsp) 'c1'
+		print("nbsp ")
+	end 'c1'
+	if ws.contains(enSpace) 'c2'
+		print("enSpace ")
+	end 'c2'
+	if ws.contains(ideoSpace) 'c3'
+		print("ideoSpace")
+	end 'c3'
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -143,10 +143,10 @@ nbsp enSpace ideoSpace
 
 ```maxon
 function main() returns ExitCode
-  var x = '\u00'
-  return 0
+	var x = '\u00'
+	return 0
 end 'main'
 ```
 ```maxoncstderr
-error E1004: specs/fragments/unicode-escape/unicode-escape.invalid-too-few-digits.test:3:11: Invalid unicode escape '\u00': expected 4 hex digits in character literal
+error E1004: specs/fragments/unicode-escape/unicode-escape.invalid-too-few-digits.test:3:10: Invalid unicode escape '\u00': expected 4 hex digits in character literal
 ```

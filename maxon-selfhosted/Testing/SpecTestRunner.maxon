@@ -6,585 +6,585 @@ let whitelist = ["basics", "print-function", "variables", "arithmetic"]
 
 // Find the project root by walking up from cwd looking for a specs/ directory.
 function findProjectRoot() returns FilePath throws CompileError
-  var dir = Directory.currentPath()
-  for _ in 0 upto 10 'search'
-    let specsPath = dir.join("specs")
-    if specsPath.directoryExists() 'found'
-      return dir
-    end 'found'
-    let parentDir = dir.parent()
-    if parentDir.isEmpty() 'noParent'
-      throw CompileError.directoryNotFound
-    end 'noParent'
-    dir = parentDir
-  end 'search'
-  throw CompileError.directoryNotFound
+	var dir = Directory.currentPath()
+	for _ in 0 upto 10 'search'
+		let specsPath = dir.join("specs")
+		if specsPath.directoryExists() 'found'
+			return dir
+		end 'found'
+		let parentDir = dir.parent()
+		if parentDir.isEmpty() 'noParent'
+			throw CompileError.directoryNotFound
+		end 'noParent'
+		dir = parentDir
+	end 'search'
+	throw CompileError.directoryNotFound
 end 'findProjectRoot'
 
 // Check if a target matches the host.
 function isHostTarget(target Target) returns bool
-  let host = detectHostTarget()
-  let targetStr = targetToString(target)
-  let hostStr = targetToString(host)
-  return targetStr == hostStr
+	let host = detectHostTarget()
+	let targetStr = targetToString(target)
+	let hostStr = targetToString(host)
+	return targetStr == hostStr
 end 'isHostTarget'
 
 // Check if we can execute binaries for this target.
 function canExecuteTarget(target Target) returns bool
-  if isHostTarget(target) 'isHost'
-    return true
-  end 'isHost'
-  return match target.os 'checkOs'
-    linux gives true
-    windows gives false
-    macos gives false
-  end 'checkOs'
+	if isHostTarget(target) 'isHost'
+		return true
+	end 'isHost'
+	return match target.os 'checkOs'
+		linux gives true
+		windows gives false
+		macos gives false
+	end 'checkOs'
 end 'canExecuteTarget'
 
 // Build the command to run a compiled binary.
 function buildRunCommand(outputPath FilePath, target Target, projectRoot FilePath, testArgs String) returns String
-  if isHostTarget(target) 'isHost'
-    if not testArgs.isEmpty() 'hasArgs'
-      return "{outputPath} {testArgs}"
-    end 'hasArgs'
-    return outputPath.toString()
-  end 'isHost'
+	if isHostTarget(target) 'isHost'
+		if not testArgs.isEmpty() 'hasArgs'
+			return "{outputPath} {testArgs}"
+		end 'hasArgs'
+		return outputPath.toString()
+	end 'isHost'
 
-  let dockerArch = match target.cpu 'pickArch'
-    x86_64 gives "amd64"
-    aarch64 gives "arm64"
-  end 'pickArch'
+	let dockerArch = match target.cpu 'pickArch'
+		x86_64 gives "amd64"
+		aarch64 gives "arm64"
+	end 'pickArch'
 
-  let tempDir = projectRoot.join("temp")
-  var dockerCmd = "docker run --rm --platform linux/{dockerArch} -v {tempDir}:/work alpine /work/spectest_temp"
-  if not testArgs.isEmpty() 'hasDockerArgs'
-    dockerCmd = "docker run --rm --platform linux/{dockerArch} -v {tempDir}:/work alpine /work/spectest_temp {testArgs}"
-  end 'hasDockerArgs'
-  return dockerCmd
+	let tempDir = projectRoot.join("temp")
+	var dockerCmd = "docker run --rm --platform linux/{dockerArch} -v {tempDir}:/work alpine /work/spectest_temp"
+	if not testArgs.isEmpty() 'hasDockerArgs'
+		dockerCmd = "docker run --rm --platform linux/{dockerArch} -v {tempDir}:/work alpine /work/spectest_temp {testArgs}"
+	end 'hasDockerArgs'
+	return dockerCmd
 end 'buildRunCommand'
 
 // Check if a fragment file needs regeneration (missing or older than spec file).
 function isFragmentStale(fragmentPath FilePath, specModifiedTime Timestamp) returns bool
-  let fragInfo = try File.info(fragmentPath) otherwise 'noFile'
-    return true
-  end 'noFile'
-  return fragInfo.modifiedTime <= specModifiedTime
+	let fragInfo = try File.info(fragmentPath) otherwise 'noFile'
+		return true
+	end 'noFile'
+	return fragInfo.modifiedTime <= specModifiedTime
 end 'isFragmentStale'
 
 // Run all whitelisted spec tests for a specific target.
 export function runAllSpecTests(filter String, target Target, updateRequired bool = false) returns ExitCode
-  let root = try findProjectRoot() otherwise 'noRoot'
-    logError(LogCategory.testing, message: () gives "Could not find project root (no specs/ directory found)")
-    return 1
-  end 'noRoot'
+	let root = try findProjectRoot() otherwise 'noRoot'
+		logError(LogCategory.testing, message: () gives "Could not find project root (no specs/ directory found)")
+		return 1
+	end 'noRoot'
 
-  // Suppress compiler info/debug output during spec tests so only test results are visible
-  setLogLevel(LogLevel.ERROR)
-  setCategoryLogLevel(LogCategory.testing, level: LogLevel.INFO)
+	// Suppress compiler info/debug output during spec tests so only test results are visible
+	setLogLevel(LogLevel.ERROR)
+	setCategoryLogLevel(LogCategory.testing, level: LogLevel.INFO)
 
-  let targetKey = targetToString(target)
-  let specDir = root.join("specs")
-  let fragmentDir = specDir.join("fragments-{targetKey}")
+	let targetKey = targetToString(target)
+	let specDir = root.join("specs")
+	let fragmentDir = specDir.join("fragments-{targetKey}")
 
-  // Ensure fragment directory exists
-  if not fragmentDir.directoryExists() 'noFragDir'
-    let _ = Process.execute("mkdir -p {fragmentDir}", timeoutMs: 5000)
-  end 'noFragDir'
+	// Ensure fragment directory exists
+	if not fragmentDir.directoryExists() 'noFragDir'
+		let _ = Process.execute("mkdir -p {fragmentDir}", timeoutMs: 5000)
+	end 'noFragDir'
 
-  var totalPassed = 0
-  var totalFailed = 0
-  var totalTests = 0
-  var totalFragmentsWritten = 0
+	var totalPassed = 0
+	var totalFailed = 0
+	var totalTests = 0
+	var totalFragmentsWritten = 0
 
-  for specName in whitelist 'eachSpec'
-    let specPath = specDir.join("{specName}.md")
-    let content = try File.readText(specPath) otherwise 'readErr'
-      logError(LogCategory.testing, message: () gives "Could not read spec: {specPath}")
-      continue
-    end 'readErr'
+	for specName in whitelist 'eachSpec'
+		let specPath = specDir.join("{specName}.md")
+		let content = try File.readText(specPath) otherwise 'readErr'
+			logError(LogCategory.testing, message: () gives "Could not read spec: {specPath}")
+			continue
+		end 'readErr'
 
-    // Parse frontmatter — skip draft specs
-    let fm = parseFrontmatter(content)
-    if fm.status == "draft" 'isDraft'
-      logDebug(LogCategory.testing, message: () gives "Skipping draft spec: {specName}")
-      continue
-    end 'isDraft'
+		// Parse frontmatter — skip draft specs
+		let fm = parseFrontmatter(content)
+		if fm.status == "draft" 'isDraft'
+			logDebug(LogCategory.testing, message: () gives "Skipping draft spec: {specName}")
+			continue
+		end 'isDraft'
 
-    // Parse all tests from the spec
-    let tests = parseSpecFile(content, targetKey: targetKey)
+		// Parse all tests from the spec
+		let tests = parseSpecFile(content, targetKey: targetKey)
 
-    // Cache spec modification time for staleness checks
-    let specFileInfo = try File.info(specPath) otherwise 'noSpecInfo'
-      continue
-    end 'noSpecInfo'
-    let specMtime = specFileInfo.modifiedTime
+		// Cache spec modification time for staleness checks
+		let specFileInfo = try File.info(specPath) otherwise 'noSpecInfo'
+			continue
+		end 'noSpecInfo'
+		let specMtime = specFileInfo.modifiedTime
 
-    var specPassed = 0
-    var specFailed = 0
-    var specFailures = TextLineArray{}
-    var specResults = TestResultArray{}
+		var specPassed = 0
+		var specFailed = 0
+		var specFailures = TextLineArray{}
+		var specResults = TestResultArray{}
 
-    for test in tests 'eachTest'
-      // Apply filter
-      let testPath = "{specName}/{test.name}"
-      if not filter.isEmpty() 'hasFilter'
-        if not testPath.contains(filter) 'noMatch'
-          continue
-        end 'noMatch'
-      end 'hasFilter'
+		for test in tests 'eachTest'
+			// Apply filter
+			let testPath = "{specName}/{test.name}"
+			if not filter.isEmpty() 'hasFilter'
+				if not testPath.contains(filter) 'noMatch'
+					continue
+				end 'noMatch'
+			end 'hasFilter'
 
-      totalTests = totalTests + 1
+			totalTests = totalTests + 1
 
-      // Generate fragment only if stale (missing or older than spec file)
-      let fragPath = fragmentDir.join(specName).join("{test.name}.test")
-      if isFragmentStale(fragPath, specModifiedTime: specMtime) 'stale'
-        writeFragment(fragmentDir, specName: specName, test: test, compileIr: "")
-        totalFragmentsWritten = totalFragmentsWritten + 1
-      end 'stale'
+			// Generate fragment only if stale (missing or older than spec file)
+			let fragPath = fragmentDir.join(specName).join("{test.name}.test")
+			if isFragmentStale(fragPath, specModifiedTime: specMtime) 'stale'
+				writeFragment(fragmentDir, specName: specName, test: test, compileIr: "")
+				totalFragmentsWritten = totalFragmentsWritten + 1
+			end 'stale'
 
-      // Step 2: Parse the fragment back
-      let fragment = try parseFragment(fragPath) otherwise 'parseFailed'
-        logError(LogCategory.testing, message: () gives "[FAIL] {testPath} - could not parse fragment")
-        specFailed = specFailed + 1
-        specFailures.push("specs/fragments-{targetKey}/{specName}/{test.name}.test")
-        specFailures.push("  Failed to parse fragment file")
-        continue
-      end 'parseFailed'
+			// Step 2: Parse the fragment back
+			let fragment = try parseFragment(fragPath) otherwise 'parseFailed'
+				logError(LogCategory.testing, message: () gives "[FAIL] {testPath} - could not parse fragment")
+				specFailed = specFailed + 1
+				specFailures.push("specs/fragments-{targetKey}/{specName}/{test.name}.test")
+				specFailures.push("  Failed to parse fragment file")
+				continue
+			end 'parseFailed'
 
-      // Step 3: Run the test from fragment
-      let result = runTestFromFragment(fragment, projectRoot: root, target: target, captureTrace: updateRequired, specName: specName)
+			// Step 3: Run the test from fragment
+			let result = runTestFromFragment(fragment, projectRoot: root, target: target, captureTrace: updateRequired, specName: specName)
 
-      // Re-write fragment with compiled IR
-      if not result.compileIr.isEmpty() 'hasIr'
-        writeFragment(fragmentDir, specName: specName, test: test, compileIr: result.compileIr)
-      end 'hasIr'
-      if result.passed 'pass'
-        specPassed = specPassed + 1
-      end 'pass' else 'fail'
-        specFailed = specFailed + 1
-        specFailures.push("specs/fragments-{targetKey}/{specName}/{result.testName}.test")
-        if not result.errorMessage.isEmpty() 'hasErr'
-          specFailures.push("  {result.errorMessage}")
-        end 'hasErr'
-      end 'fail'
-      specResults.push(result)
-    end 'eachTest'
+			// Re-write fragment with compiled IR
+			if not result.compileIr.isEmpty() 'hasIr'
+				writeFragment(fragmentDir, specName: specName, test: test, compileIr: result.compileIr)
+			end 'hasIr'
+			if result.passed 'pass'
+				specPassed = specPassed + 1
+			end 'pass' else 'fail'
+				specFailed = specFailed + 1
+				specFailures.push("specs/fragments-{targetKey}/{specName}/{result.testName}.test")
+				if not result.errorMessage.isEmpty() 'hasErr'
+					specFailures.push("  {result.errorMessage}")
+				end 'hasErr'
+			end 'fail'
+			specResults.push(result)
+		end 'eachTest'
 
-    // Update RequiredLowering blocks in this spec if requested
-    if updateRequired 'updateSpec'
-      updateSpecLowering(specPath, targetKey: targetKey, results: specResults)
-    end 'updateSpec'
+		// Update RequiredLowering blocks in this spec if requested
+		if updateRequired 'updateSpec'
+			updateSpecLowering(specPath, targetKey: targetKey, results: specResults)
+		end 'updateSpec'
 
-    totalPassed = totalPassed + specPassed
-    totalFailed = totalFailed + specFailed
+		totalPassed = totalPassed + specPassed
+		totalFailed = totalFailed + specFailed
 
-    // Report per-spec failures
-    if specFailed > 0 'hasSpecFail'
-      let specTotal = specPassed + specFailed
-      logError(LogCategory.testing, message: () gives "[FAIL] {specName} ({specPassed}/{specTotal})")
-      for failMsg in specFailures 'printFails'
-        logError(LogCategory.testing, message: () gives failMsg)
-      end 'printFails'
-    end 'hasSpecFail'
-  end 'eachSpec'
+		// Report per-spec failures
+		if specFailed > 0 'hasSpecFail'
+			let specTotal = specPassed + specFailed
+			logError(LogCategory.testing, message: () gives "[FAIL] {specName} ({specPassed}/{specTotal})")
+			for failMsg in specFailures 'printFails'
+				logError(LogCategory.testing, message: () gives failMsg)
+			end 'printFails'
+		end 'hasSpecFail'
+	end 'eachSpec'
 
-  if totalTests == 0 'noTests'
-    logInfo(LogCategory.testing, message: () gives "No tests found")
-    return 0
-  end 'noTests'
+	if totalTests == 0 'noTests'
+		logInfo(LogCategory.testing, message: () gives "No tests found")
+		return 0
+	end 'noTests'
 
-  if totalFragmentsWritten > 0 'showFrags'
-    logInfo(LogCategory.testing, message: () gives "Wrote {totalFragmentsWritten} fragment(s)")
-  end 'showFrags'
+	if totalFragmentsWritten > 0 'showFrags'
+		logInfo(LogCategory.testing, message: () gives "Wrote {totalFragmentsWritten} fragment(s)")
+	end 'showFrags'
 
-  if totalFailed == 0 'allPass'
-    logInfo(LogCategory.testing, message: () gives "Tests: {totalPassed} passed (total: {totalTests})")
-  end 'allPass' else 'someFail'
-    logInfo(LogCategory.testing, message: () gives "Tests: {totalPassed} passed, {totalFailed} failed (total: {totalTests})")
-  end 'someFail'
+	if totalFailed == 0 'allPass'
+		logInfo(LogCategory.testing, message: () gives "Tests: {totalPassed} passed (total: {totalTests})")
+	end 'allPass' else 'someFail'
+		logInfo(LogCategory.testing, message: () gives "Tests: {totalPassed} passed, {totalFailed} failed (total: {totalTests})")
+	end 'someFail'
 
-  if totalFailed > 0 'hasFail'
-    return 1
-  end 'hasFail'
-  return 0
+	if totalFailed > 0 'hasFail'
+		return 1
+	end 'hasFail'
+	return 0
 end 'runAllSpecTests'
 
 // Run a single test from a parsed fragment. Returns TestResult.
 function runTestFromFragment(fragment Fragment, projectRoot FilePath, target Target, captureTrace bool = false, specName String) returns TestResult
-  let tempDir = projectRoot.join("temp")
-  let tempSource = tempDir.join("{specName}.maxon")
-  let ext = executableExtension(target)
-  let tempExe = tempDir.join("{specName}{ext}")
-  let testName = fragment.testName
+	let tempDir = projectRoot.join("temp")
+	let tempSource = tempDir.join("{specName}.maxon")
+	let ext = executableExtension(target)
+	let tempExe = tempDir.join("{specName}{ext}")
+	let testName = fragment.testName
 
-  // Enable trace capture for RequiredLowering validation or --update-required
-  let needTrace = fragment.expectation.hasRequiredLowering or captureTrace
-  if needTrace 'enableTrace'
-    setCategoryLogLevel(LogCategory.mlir, level: LogLevel.TRACE)
-    startCapturingTrace()
-  end 'enableTrace'
+	// Enable trace capture for RequiredLowering validation or --update-required
+	let needTrace = fragment.expectation.hasRequiredLowering or captureTrace
+	if needTrace 'enableTrace'
+		setCategoryLogLevel(LogCategory.mlir, level: LogLevel.TRACE)
+		startCapturingTrace()
+	end 'enableTrace'
 
-  // Compile source directly from memory, capturing any error output
-  startCapturingErrors()
-  let compileResult = try compileSourceWithIr(fragment.source, virtualPath: tempSource, target: target, outputPath: tempExe) otherwise 'compileFailed'
-    let capturedErrors = stopCapturingErrors()
-    if needTrace 'cancelTrace'
-      cancelCapturingTrace()
-      setCategoryLogLevel(LogCategory.mlir, level: LogLevel.ERROR)
-    end 'cancelTrace'
+	// Compile source directly from memory, capturing any error output
+	startCapturingErrors()
+	let compileResult = try compileSourceWithIr(fragment.source, virtualPath: tempSource, target: target, outputPath: tempExe) otherwise 'compileFailed'
+		let capturedErrors = stopCapturingErrors()
+		if needTrace 'cancelTrace'
+			cancelCapturingTrace()
+			setCategoryLogLevel(LogCategory.mlir, level: LogLevel.ERROR)
+		end 'cancelTrace'
 
-    if fragment.expectation.hasCompilerStderr 'expectedError'
-      // Compilation failed as expected — validate the error message
-      let expectedStderr = normalizeStderr(fragment.expectation.compilerStderr)
-      let actualStderr = normalizeStderr(capturedErrors)
-      if actualStderr != expectedStderr 'stderrMismatch'
-        cleanup(tempExe)
-        return TestResult{testName: testName, passed: false, errorMessage: "Stderr mismatch.\nExpected:\n  {expectedStderr}\nActual:\n  {actualStderr}", filePath: fragment.filePath, loweringLog: "", compileIr: ""}
-      end 'stderrMismatch'
-      cleanup(tempExe)
-      return TestResult{testName: testName, passed: true, errorMessage: "", filePath: fragment.filePath, loweringLog: "", compileIr: ""}
-    end 'expectedError'
+		if fragment.expectation.hasCompilerStderr 'expectedError'
+			// Compilation failed as expected — validate the error message
+			let expectedStderr = normalizeStderr(fragment.expectation.compilerStderr)
+			let actualStderr = normalizeStderr(capturedErrors)
+			if actualStderr != expectedStderr 'stderrMismatch'
+				cleanup(tempExe)
+				return TestResult{testName: testName, passed: false, errorMessage: "Stderr mismatch.\nExpected:\n  {expectedStderr}\nActual:\n  {actualStderr}", filePath: fragment.filePath, loweringLog: "", compileIr: ""}
+			end 'stderrMismatch'
+			cleanup(tempExe)
+			return TestResult{testName: testName, passed: true, errorMessage: "", filePath: fragment.filePath, loweringLog: "", compileIr: ""}
+		end 'expectedError'
 
-    cleanup(tempExe)
-    return TestResult{testName: testName, passed: false, errorMessage: "Compilation failed: {capturedErrors}", filePath: fragment.filePath, loweringLog: "", compileIr: ""}
-  end 'compileFailed'
-  cancelCapturingErrors()
-  let outputPath = compileResult.outputPath
-  let compileIr = compileResult.ir
+		cleanup(tempExe)
+		return TestResult{testName: testName, passed: false, errorMessage: "Compilation failed: {capturedErrors}", filePath: fragment.filePath, loweringLog: "", compileIr: ""}
+	end 'compileFailed'
+	cancelCapturingErrors()
+	let outputPath = compileResult.outputPath
+	let compileIr = compileResult.ir
 
-  // Capture lowering log if needed
-  var loweringLog = ""
-  if needTrace 'captureLowering'
-    loweringLog = stopCapturingTrace()
-    setCategoryLogLevel(LogCategory.mlir, level: LogLevel.ERROR)
-  end 'captureLowering'
+	// Capture lowering log if needed
+	var loweringLog = ""
+	if needTrace 'captureLowering'
+		loweringLog = stopCapturingTrace()
+		setCategoryLogLevel(LogCategory.mlir, level: LogLevel.ERROR)
+	end 'captureLowering'
 
-  if fragment.expectation.hasCompilerStderr 'unexpectedSuccess'
-    cleanup(tempExe)
-    return TestResult{testName: testName, passed: false, errorMessage: "Expected compilation error but compilation succeeded", filePath: fragment.filePath, loweringLog: "", compileIr: ""}
-  end 'unexpectedSuccess'
+	if fragment.expectation.hasCompilerStderr 'unexpectedSuccess'
+		cleanup(tempExe)
+		return TestResult{testName: testName, passed: false, errorMessage: "Expected compilation error but compilation succeeded", filePath: fragment.filePath, loweringLog: "", compileIr: ""}
+	end 'unexpectedSuccess'
 
-  // For targets we can't execute, compilation success is the test
-  if not canExecuteTarget(target) 'compileOnly'
-    cleanup(tempExe)
-    return TestResult{testName: testName, passed: true, errorMessage: "", filePath: fragment.filePath, loweringLog: "", compileIr: ""}
-  end 'compileOnly'
+	// For targets we can't execute, compilation success is the test
+	if not canExecuteTarget(target) 'compileOnly'
+		cleanup(tempExe)
+		return TestResult{testName: testName, passed: true, errorMessage: "", filePath: fragment.filePath, loweringLog: "", compileIr: ""}
+	end 'compileOnly'
 
-  // Run the compiled executable
-  let runCommand = buildRunCommand(outputPath, target: target, projectRoot: projectRoot, testArgs: fragment.args)
-  let runResult = Process.captureOutput(runCommand, timeoutMs: 5000)
-  let runStdout = runResult.stdout
-  let runStderr = runResult.stderr
-  let runEc = runResult.exitCode as Offset
+	// Run the compiled executable
+	let runCommand = buildRunCommand(outputPath, target: target, projectRoot: projectRoot, testArgs: fragment.args)
+	let runResult = Process.captureOutput(runCommand, timeoutMs: 5000)
+	let runStdout = runResult.stdout
+	let runStderr = runResult.stderr
+	let runEc = runResult.exitCode as Offset
 
-  var passed = true
-  var errorMsg = ""
+	var passed = true
+	var errorMsg = ""
 
-  // Check exit code
-  if fragment.expectation.hasExitCode 'checkEc'
-    if runEc != fragment.expectation.exitCode 'ecMismatch'
-      passed = false
-      errorMsg = "Expected exit code {fragment.expectation.exitCode}, got {runEc}"
-    end 'ecMismatch'
-  end 'checkEc'
+	// Check exit code
+	if fragment.expectation.hasExitCode 'checkEc'
+		if runEc != fragment.expectation.exitCode 'ecMismatch'
+			passed = false
+			errorMsg = "Expected exit code {fragment.expectation.exitCode}, got {runEc}"
+		end 'ecMismatch'
+	end 'checkEc'
 
-  // Check stdout
-  if fragment.expectation.hasStdout 'checkStdout'
-    let expectedOut = trimWhitespace(fragment.expectation.stdout)
-    let actualOut = trimWhitespace(runStdout)
-    if actualOut != expectedOut 'stdoutMismatch'
-      passed = false
-      if errorMsg.isEmpty() 'firstStdout'
-        errorMsg = "Stdout mismatch:\nExpected: {expectedOut}\nActual: {actualOut}"
-      end 'firstStdout' else 'appendStdout'
-        errorMsg = "{errorMsg}\nStdout mismatch:\nExpected: {expectedOut}\nActual: {actualOut}"
-      end 'appendStdout'
-    end 'stdoutMismatch'
-  end 'checkStdout'
+	// Check stdout
+	if fragment.expectation.hasStdout 'checkStdout'
+		let expectedOut = trimWhitespace(fragment.expectation.stdout)
+		let actualOut = trimWhitespace(runStdout)
+		if actualOut != expectedOut 'stdoutMismatch'
+			passed = false
+			if errorMsg.isEmpty() 'firstStdout'
+				errorMsg = "Stdout mismatch:\nExpected: {expectedOut}\nActual: {actualOut}"
+			end 'firstStdout' else 'appendStdout'
+				errorMsg = "{errorMsg}\nStdout mismatch:\nExpected: {expectedOut}\nActual: {actualOut}"
+			end 'appendStdout'
+		end 'stdoutMismatch'
+	end 'checkStdout'
 
-  // Check runtime stderr
-  if fragment.expectation.hasRuntimeStderr 'checkStderr'
-    let expectedErr = trimWhitespace(fragment.expectation.runtimeStderr)
-    let actualErr = trimWhitespace(runStderr)
-    if actualErr != expectedErr 'stderrMismatch'
-      passed = false
-      if errorMsg.isEmpty() 'firstStderr'
-        errorMsg = "Stderr mismatch:\nExpected: {expectedErr}\nActual: {actualErr}"
-      end 'firstStderr' else 'appendStderr'
-        errorMsg = "{errorMsg}\nStderr mismatch:\nExpected: {expectedErr}\nActual: {actualErr}"
-      end 'appendStderr'
-    end 'stderrMismatch'
-  end 'checkStderr' else 'noExpectedStderr'
-    // Unexpected stderr detection
-    let trimmedStderr = trimWhitespace(runStderr)
-    if not trimmedStderr.isEmpty() 'unexpectedStderr'
-      passed = false
-      if errorMsg.isEmpty() 'firstUnexpected'
-        errorMsg = "Unexpected stderr output:\n{trimmedStderr}"
-      end 'firstUnexpected' else 'appendUnexpected'
-        errorMsg = "{errorMsg}\nUnexpected stderr output:\n{trimmedStderr}"
-      end 'appendUnexpected'
-    end 'unexpectedStderr'
-  end 'noExpectedStderr'
+	// Check runtime stderr
+	if fragment.expectation.hasRuntimeStderr 'checkStderr'
+		let expectedErr = trimWhitespace(fragment.expectation.runtimeStderr)
+		let actualErr = trimWhitespace(runStderr)
+		if actualErr != expectedErr 'stderrMismatch'
+			passed = false
+			if errorMsg.isEmpty() 'firstStderr'
+				errorMsg = "Stderr mismatch:\nExpected: {expectedErr}\nActual: {actualErr}"
+			end 'firstStderr' else 'appendStderr'
+				errorMsg = "{errorMsg}\nStderr mismatch:\nExpected: {expectedErr}\nActual: {actualErr}"
+			end 'appendStderr'
+		end 'stderrMismatch'
+	end 'checkStderr' else 'noExpectedStderr'
+		// Unexpected stderr detection
+		let trimmedStderr = trimWhitespace(runStderr)
+		if not trimmedStderr.isEmpty() 'unexpectedStderr'
+			passed = false
+			if errorMsg.isEmpty() 'firstUnexpected'
+				errorMsg = "Unexpected stderr output:\n{trimmedStderr}"
+			end 'firstUnexpected' else 'appendUnexpected'
+				errorMsg = "{errorMsg}\nUnexpected stderr output:\n{trimmedStderr}"
+			end 'appendUnexpected'
+		end 'unexpectedStderr'
+	end 'noExpectedStderr'
 
-  // Check RequiredLowering
-  if fragment.expectation.hasRequiredLowering 'checkLowering'
-    let loweringResult = checkRequiredLowering(fragment.expectation.requiredLowering, actual: loweringLog)
-    if not loweringResult.passed 'loweringFailed'
-      passed = false
-      if errorMsg.isEmpty() 'firstLowering'
-        errorMsg = loweringResult.message
-      end 'firstLowering' else 'appendLowering'
-        errorMsg = "{errorMsg}\n{loweringResult.message}"
-      end 'appendLowering'
-    end 'loweringFailed'
-  end 'checkLowering'
+	// Check RequiredLowering
+	if fragment.expectation.hasRequiredLowering 'checkLowering'
+		let loweringResult = checkRequiredLowering(fragment.expectation.requiredLowering, actual: loweringLog)
+		if not loweringResult.passed 'loweringFailed'
+			passed = false
+			if errorMsg.isEmpty() 'firstLowering'
+				errorMsg = loweringResult.message
+			end 'firstLowering' else 'appendLowering'
+				errorMsg = "{errorMsg}\n{loweringResult.message}"
+			end 'appendLowering'
+		end 'loweringFailed'
+	end 'checkLowering'
 
-  if passed 'didPass'
-    logDebug(LogCategory.testing, message: () gives "[PASS] {testName}")
-  end 'didPass'
+	if passed 'didPass'
+		logDebug(LogCategory.testing, message: () gives "[PASS] {testName}")
+	end 'didPass'
 
-  cleanup(tempExe)
-  return TestResult{testName: testName, passed: passed, errorMessage: errorMsg, filePath: fragment.filePath, loweringLog: loweringLog, compileIr: compileIr}
+	cleanup(tempExe)
+	return TestResult{testName: testName, passed: passed, errorMessage: errorMsg, filePath: fragment.filePath, loweringLog: loweringLog, compileIr: compileIr}
 end 'runTestFromFragment'
 
 // Normalize stderr for comparison: trim, CRLF→LF, backslash→forward slash,
 // and strip file paths from error messages so temp paths match fragment paths.
 function normalizeStderr(s String) returns String
-  var result = trimWhitespace(s)
-  result = result.replace("\r\n", with: "\n")
-  result = result.replace("\\", with: "/")
-  let errorLines = result.split("\n")
-  var normalized = ""
-  var first = true
-  for errLine in errorLines 'eachLine'
-    let stripped = stripFilePathFromError(errLine)
-    if first 'isFirst'
-      normalized = stripped
-      first = false
-    end 'isFirst' else 'notFirst'
-      normalized = "{normalized}\n{stripped}"
-    end 'notFirst'
-  end 'eachLine'
-  return normalized
+	var result = trimWhitespace(s)
+	result = result.replace("\r\n", with: "\n")
+	result = result.replace("\\", with: "/")
+	let errorLines = result.split("\n")
+	var normalized = ""
+	var first = true
+	for errLine in errorLines 'eachLine'
+		let stripped = stripFilePathFromError(errLine)
+		if first 'isFirst'
+			normalized = stripped
+			first = false
+		end 'isFirst' else 'notFirst'
+			normalized = "{normalized}\n{stripped}"
+		end 'notFirst'
+	end 'eachLine'
+	return normalized
 end 'normalizeStderr'
 
 // Strip file path from an error line.
 // Input:  "error E2010: /some/path/file.maxon:3:8: Expected '=' but got ':'"
 // Output: "error E2010: Expected '=' but got ':'"
 function stripFilePathFromError(line String) returns String
-  if not line.contains("error E") 'notError'
-    return line
-  end 'notError'
-  try line.findFirst("error E") otherwise 'noE'
-    return line
-  end 'noE'
-  let firstColon = try line.findFirst(": ") otherwise 'noColon'
-    return line
-  end 'noColon'
-  let afterFirstColon = try line.indexAfter(firstColon) otherwise 'noAfter'
-    return line
-  end 'noAfter'
-  let afterFirstColonSpace = try line.indexAfter(afterFirstColon) otherwise 'noAfter2'
-    return line
-  end 'noAfter2'
-  let rest = line.slice(afterFirstColonSpace, endIndex: line.endIndex())
-  if not rest.contains("/") 'noPath'
-    return line
-  end 'noPath'
-  let prefix = line.slice(line.startIndex(), endIndex: afterFirstColonSpace)
-  let c1 = try rest.findFirst(":") otherwise 'simple'
-    return line
-  end 'simple'
-  let afterC1 = try rest.indexAfter(c1) otherwise 'simple2'
-    return line
-  end 'simple2'
-  let restAfterC1 = rest.slice(afterC1, endIndex: rest.endIndex())
-  let c2 = try restAfterC1.findFirst(":") otherwise 'simple3'
-    return line
-  end 'simple3'
-  let afterC2 = try restAfterC1.indexAfter(c2) otherwise 'simple4'
-    return line
-  end 'simple4'
-  let restAfterC2 = restAfterC1.slice(afterC2, endIndex: restAfterC1.endIndex())
-  let c3 = try restAfterC2.findFirst(": ") otherwise 'simple5'
-    return line
-  end 'simple5'
-  let afterC3 = try restAfterC2.indexAfter(c3) otherwise 'simple6'
-    return line
-  end 'simple6'
-  let afterC3Space = try restAfterC2.indexAfter(afterC3) otherwise 'simple7'
-    return line
-  end 'simple7'
-  let message = restAfterC2.slice(afterC3Space, endIndex: restAfterC2.endIndex())
-  return "{prefix}{message}"
+	if not line.contains("error E") 'notError'
+		return line
+	end 'notError'
+	try line.findFirst("error E") otherwise 'noE'
+		return line
+	end 'noE'
+	let firstColon = try line.findFirst(": ") otherwise 'noColon'
+		return line
+	end 'noColon'
+	let afterFirstColon = try line.indexAfter(firstColon) otherwise 'noAfter'
+		return line
+	end 'noAfter'
+	let afterFirstColonSpace = try line.indexAfter(afterFirstColon) otherwise 'noAfter2'
+		return line
+	end 'noAfter2'
+	let rest = line.slice(afterFirstColonSpace, endIndex: line.endIndex())
+	if not rest.contains("/") 'noPath'
+		return line
+	end 'noPath'
+	let prefix = line.slice(line.startIndex(), endIndex: afterFirstColonSpace)
+	let c1 = try rest.findFirst(":") otherwise 'simple'
+		return line
+	end 'simple'
+	let afterC1 = try rest.indexAfter(c1) otherwise 'simple2'
+		return line
+	end 'simple2'
+	let restAfterC1 = rest.slice(afterC1, endIndex: rest.endIndex())
+	let c2 = try restAfterC1.findFirst(":") otherwise 'simple3'
+		return line
+	end 'simple3'
+	let afterC2 = try restAfterC1.indexAfter(c2) otherwise 'simple4'
+		return line
+	end 'simple4'
+	let restAfterC2 = restAfterC1.slice(afterC2, endIndex: restAfterC1.endIndex())
+	let c3 = try restAfterC2.findFirst(": ") otherwise 'simple5'
+		return line
+	end 'simple5'
+	let afterC3 = try restAfterC2.indexAfter(c3) otherwise 'simple6'
+		return line
+	end 'simple6'
+	let afterC3Space = try restAfterC2.indexAfter(afterC3) otherwise 'simple7'
+		return line
+	end 'simple7'
+	let message = restAfterC2.slice(afterC3Space, endIndex: restAfterC2.endIndex())
+	return "{prefix}{message}"
 end 'stripFilePathFromError'
 
 function cleanup(tempExe FilePath)
-  if tempExe.fileExists() 'exe'
-    try File.delete(tempExe) otherwise 'delErr'
-    end 'delErr'
-  end 'exe'
+	if tempExe.fileExists() 'exe'
+		try File.delete(tempExe) otherwise 'delErr'
+		end 'delErr'
+	end 'exe'
 end 'cleanup'
 
 // --- RequiredLowering validation ---
 
 type LoweringCheckResult
-  export var passed bool
-  export var message String
+	export var passed bool
+	export var message String
 end 'LoweringCheckResult'
 
 function checkRequiredLowering(expected String, actual String) returns LoweringCheckResult
-  let expNorm = normalizeLowering(expected)
-  let actNorm = normalizeLowering(actual)
-  if expNorm != actNorm 'mismatch'
-    return LoweringCheckResult{passed: false, message: "Lowering mismatch.\nExpected:\n{expNorm}\nActual:\n{actNorm}"}
-  end 'mismatch'
-  return LoweringCheckResult{passed: true, message: ""}
+	let expNorm = normalizeLowering(expected)
+	let actNorm = normalizeLowering(actual)
+	if expNorm != actNorm 'mismatch'
+		return LoweringCheckResult{passed: false, message: "Lowering mismatch.\nExpected:\n{expNorm}\nActual:\n{actNorm}"}
+	end 'mismatch'
+	return LoweringCheckResult{passed: true, message: ""}
 end 'checkRequiredLowering'
 
 function normalizeLowering(text String) returns String
-  let lines = text.split("\n")
-  var result = ""
-  var first = true
+	let lines = text.split("\n")
+	var result = ""
+	var first = true
 
-  for line in lines 'eachLine'
-    let trimmed = trimWhitespace(line)
-    if trimmed.isEmpty() 'skipEmpty'
-      continue
-    end 'skipEmpty'
-    if first 'isFirst'
-      result = trimmed
-      first = false
-    end 'isFirst' else 'notFirst'
-      result = "{result}\n{trimmed}"
-    end 'notFirst'
-  end 'eachLine'
+	for line in lines 'eachLine'
+		let trimmed = trimWhitespace(line)
+		if trimmed.isEmpty() 'skipEmpty'
+			continue
+		end 'skipEmpty'
+		if first 'isFirst'
+			result = trimmed
+			first = false
+		end 'isFirst' else 'notFirst'
+			result = "{result}\n{trimmed}"
+		end 'notFirst'
+	end 'eachLine'
 
-  return result
+	return result
 end 'normalizeLowering'
 
 // --- Update RequiredLowering blocks in spec files ---
 
 // Update a single spec file with lowering logs collected during test runs.
 function updateSpecLowering(specPath FilePath, targetKey String, results TestResultArray)
-  var specContent = try File.readText(specPath) otherwise 'readErr'
-    return
-  end 'readErr'
+	var specContent = try File.readText(specPath) otherwise 'readErr'
+		return
+	end 'readErr'
 
-  var modified = false
-  var totalUpdated = 0
+	var modified = false
+	var totalUpdated = 0
 
-  for result in results 'eachResult'
-    if result.loweringLog.isEmpty() 'noLog'
-      continue
-    end 'noLog'
+	for result in results 'eachResult'
+		if result.loweringLog.isEmpty() 'noLog'
+			continue
+		end 'noLog'
 
-    let updatedContent = updateLoweringBlock(specContent, testName: result.testName, targetKey: targetKey, loweringLog: result.loweringLog)
-    if updatedContent != specContent 'changed'
-      specContent = updatedContent
-      modified = true
-      totalUpdated = totalUpdated + 1
-      logInfo(LogCategory.testing, message: () gives "Updated RequiredLowering:{targetKey} for {result.testName}")
-    end 'changed'
-  end 'eachResult'
+		let updatedContent = updateLoweringBlock(specContent, testName: result.testName, targetKey: targetKey, loweringLog: result.loweringLog)
+		if updatedContent != specContent 'changed'
+			specContent = updatedContent
+			modified = true
+			totalUpdated = totalUpdated + 1
+			logInfo(LogCategory.testing, message: () gives "Updated RequiredLowering:{targetKey} for {result.testName}")
+		end 'changed'
+	end 'eachResult'
 
-  if modified 'writeBack'
-    try File.writeText(specPath, content: specContent) otherwise 'writeErr'
-      logError(LogCategory.testing, message: () gives "Failed to write spec: {specPath}")
-    end 'writeErr'
-  end 'writeBack'
+	if modified 'writeBack'
+		try File.writeText(specPath, content: specContent) otherwise 'writeErr'
+			logError(LogCategory.testing, message: () gives "Failed to write spec: {specPath}")
+		end 'writeErr'
+	end 'writeBack'
 
-  if totalUpdated > 0 'showCount'
-    logInfo(LogCategory.testing, message: () gives "Updated {totalUpdated} RequiredLowering block(s) in {specPath}")
-  end 'showCount'
+	if totalUpdated > 0 'showCount'
+		logInfo(LogCategory.testing, message: () gives "Updated {totalUpdated} RequiredLowering block(s) in {specPath}")
+	end 'showCount'
 end 'updateSpecLowering'
 
 // Update or insert a RequiredLowering:{targetKey} block for a given test in spec content.
 function updateLoweringBlock(specContent String, testName String, targetKey String, loweringLog String) returns String
-  let lines = specContent.split("\n")
-  let lineCount = lines.count()
-  let testMarker = "<!-- test: {testName} -->"
-  let blockHeader = "```RequiredLowering:{targetKey}"
+	let lines = specContent.split("\n")
+	let lineCount = lines.count()
+	let testMarker = "<!-- test: {testName} -->"
+	let blockHeader = "```RequiredLowering:{targetKey}"
 
-  // Find the test marker line
-  var testLine = -1
-  for i in 0 upto lineCount 'findTest'
-    let line = try lines.get(i) otherwise 'skip'
-      continue
-    end 'skip'
-    let trimmed = trimWhitespace(line)
-    if trimmed == testMarker 'found'
-      testLine = i
-      break
-    end 'found'
-  end 'findTest'
+	// Find the test marker line
+	var testLine = -1
+	for i in 0 upto lineCount 'findTest'
+		let line = try lines.get(i) otherwise 'skip'
+			continue
+		end 'skip'
+		let trimmed = trimWhitespace(line)
+		if trimmed == testMarker 'found'
+			testLine = i
+			break
+		end 'found'
+	end 'findTest'
 
-  if testLine < 0 'notFound'
-    return specContent
-  end 'notFound'
+	if testLine < 0 'notFound'
+		return specContent
+	end 'notFound'
 
-  // Find the boundary: next test marker or end of file
-  var nextTestLine = lineCount
-  for i in(testLine + 1) upto lineCount 'findNext'
-    let line = try lines.get(i) otherwise 'skip'
-      continue
-    end 'skip'
-    let trimmed = trimWhitespace(line)
-    if trimmed.startsWith("<!-- test:") 'isNext'
-      nextTestLine = i
-      break
-    end 'isNext'
-    if trimmed.startsWith("<!-- disabled-test:") 'isDisabledNext'
-      nextTestLine = i
-      break
-    end 'isDisabledNext'
-  end 'findNext'
+	// Find the boundary: next test marker or end of file
+	var nextTestLine = lineCount
+	for i in(testLine + 1) upto lineCount 'findNext'
+		let line = try lines.get(i) otherwise 'skip'
+			continue
+		end 'skip'
+		let trimmed = trimWhitespace(line)
+		if trimmed.startsWith("<!-- test:") 'isNext'
+			nextTestLine = i
+			break
+		end 'isNext'
+		if trimmed.startsWith("<!-- disabled-test:") 'isDisabledNext'
+			nextTestLine = i
+			break
+		end 'isDisabledNext'
+	end 'findNext'
 
-  // Look for existing RequiredLowering:{targetKey} block in this test's range
-  var existingStart = -1
-  var existingEnd = -1
-  for i in(testLine + 1) upto nextTestLine 'findExisting'
-    let line = try lines.get(i) otherwise 'skip'
-      continue
-    end 'skip'
-    let trimmed = trimWhitespace(line)
-    if trimmed.startsWith(blockHeader) 'foundStart'
-      existingStart = i
-    end 'foundStart'
-    if existingStart >= 0 'inBlock'
-      if i > existingStart 'afterHeader'
-        if trimmed == "```" 'foundEnd'
-          existingEnd = i
-          break
-        end 'foundEnd'
-      end 'afterHeader'
-    end 'inBlock'
-  end 'findExisting'
+	// Look for existing RequiredLowering:{targetKey} block in this test's range
+	var existingStart = -1
+	var existingEnd = -1
+	for i in(testLine + 1) upto nextTestLine 'findExisting'
+		let line = try lines.get(i) otherwise 'skip'
+			continue
+		end 'skip'
+		let trimmed = trimWhitespace(line)
+		if trimmed.startsWith(blockHeader) 'foundStart'
+			existingStart = i
+		end 'foundStart'
+		if existingStart >= 0 'inBlock'
+			if i > existingStart 'afterHeader'
+				if trimmed == "```" 'foundEnd'
+					existingEnd = i
+					break
+				end 'foundEnd'
+			end 'afterHeader'
+		end 'inBlock'
+	end 'findExisting'
 
-  if existingStart >= 0 'replaceExisting'
-    if existingEnd < 0 'noEnd'
-      return specContent
-    end 'noEnd'
-    // Replace lines existingStart..existingEnd (inclusive) with new block
-    var result = ""
-    for i in 0 upto lineCount 'rebuild'
-      if i == existingStart 'insertNew'
-        result = "{result}{blockHeader}\n{loweringLog}\n```\n"
-      end 'insertNew' else if i > existingStart 'skipOld'
-        if i <= existingEnd 'inOldBlock'
-          continue
-        end 'inOldBlock'
-        let line = try lines.get(i) otherwise ""
-        result = "{result}{line}\n"
-      end 'skipOld' else 'keepLine'
-        let line = try lines.get(i) otherwise ""
-        result = "{result}{line}\n"
-      end 'keepLine'
-    end 'rebuild'
-    return result
-  end 'replaceExisting'
+	if existingStart >= 0 'replaceExisting'
+		if existingEnd < 0 'noEnd'
+			return specContent
+		end 'noEnd'
+		// Replace lines existingStart..existingEnd (inclusive) with new block
+		var result = ""
+		for i in 0 upto lineCount 'rebuild'
+			if i == existingStart 'insertNew'
+				result = "{result}{blockHeader}\n{loweringLog}\n```\n"
+			end 'insertNew' else if i > existingStart 'skipOld'
+				if i <= existingEnd 'inOldBlock'
+					continue
+				end 'inOldBlock'
+				let line = try lines.get(i) otherwise ""
+				result = "{result}{line}\n"
+			end 'skipOld' else 'keepLine'
+				let line = try lines.get(i) otherwise ""
+				result = "{result}{line}\n"
+			end 'keepLine'
+		end 'rebuild'
+		return result
+	end 'replaceExisting'
 
-  // No existing block — do not insert one. --update-required only updates existing blocks.
-  return specContent
+	// No existing block — do not insert one. --update-required only updates existing blocks.
+	return specContent
 end 'updateLoweringBlock'

@@ -1,177 +1,177 @@
 // MlirPrinter: serializes an MlirModule to text matching the C# MlirPrinter output.
 
 export function moduleToString(module MlirModule, skipStdlib bool) returns String
-  let lb = "\{"
-  let rb = "\}"
-  var sb = "module "
-  sb = "{sb}{lb}\n"
-  for func in module.functions 'eachFunc'
-    let funcName = String.from(func.name)
-    if skipStdlib 'filter'
-      if isRuntimeFunction(funcName) 'isRuntime'
-        continue
-      end 'isRuntime'
-    end 'filter'
-    sb = "{sb}{functionToString(func)}"
-  end 'eachFunc'
-  sb = "{sb}{rb}\n"
-  return sb
+	let lb = "\{"
+	let rb = "\}"
+	var sb = "module "
+	sb = "{sb}{lb}\n"
+	for func in module.functions 'eachFunc'
+		let funcName = String.from(func.name)
+		if skipStdlib 'filter'
+			if isRuntimeFunction(funcName) 'isRuntime'
+				continue
+			end 'isRuntime'
+		end 'filter'
+		sb = "{sb}{functionToString(func)}"
+	end 'eachFunc'
+	sb = "{sb}{rb}\n"
+	return sb
 end 'moduleToString'
 
 function functionToString(func MlirFunction) returns String
-  let lb = "\{"
-  let rb = "\}"
-  let funcName = String.from(func.name)
-  let retType = String.from(func.returnType)
-  var sb = "  func @{funcName}("
+	let lb = "\{"
+	let rb = "\}"
+	let funcName = String.from(func.name)
+	let retType = String.from(func.returnType)
+	var sb = "  func @{funcName}("
 
-  for i in 0 upto func.paramCount 'eachParam'
-    if i > 0 'comma'
-      sb = "{sb}, "
-    end 'comma'
-    sb = "{sb}ptr: i64"
-  end 'eachParam'
+	for i in 0 upto func.paramCount 'eachParam'
+		if i > 0 'comma'
+			sb = "{sb}, "
+		end 'comma'
+		sb = "{sb}ptr: i64"
+	end 'eachParam'
 
-  sb = "{sb})"
-  if not retType.isEmpty() 'hasReturn'
-    if retType != "void" 'notVoid'
-      sb = "{sb} -> {retType}"
-    end 'notVoid'
-  end 'hasReturn'
-  sb = "{sb} {lb}\n"
+	sb = "{sb})"
+	if not retType.isEmpty() 'hasReturn'
+		if retType != "void" 'notVoid'
+			sb = "{sb} -> {retType}"
+		end 'notVoid'
+	end 'hasReturn'
+	sb = "{sb} {lb}\n"
 
-  let blocks = func.region.blocks
-  for block in blocks 'eachBlock'
-    let blockLabel = String.from(block.label)
-    sb = "{sb}  {blockLabel}:\n"
-    for op in block.ops 'eachOp'
-      let opText = opToString(op, blocks: blocks)
-      sb = "{sb}    {opText}\n"
-    end 'eachOp'
-    if block.hasTerminator 'hasTerm'
-      let termText = opToString(block.terminator, blocks: blocks)
-      sb = "{sb}    {termText}\n"
-    end 'hasTerm'
-  end 'eachBlock'
+	let blocks = func.region.blocks
+	for block in blocks 'eachBlock'
+		let blockLabel = String.from(block.label)
+		sb = "{sb}  {blockLabel}:\n"
+		for op in block.ops 'eachOp'
+			let opText = opToString(op, blocks: blocks)
+			sb = "{sb}    {opText}\n"
+		end 'eachOp'
+		if block.hasTerminator 'hasTerm'
+			let termText = opToString(block.terminator, blocks: blocks)
+			sb = "{sb}    {termText}\n"
+		end 'hasTerm'
+	end 'eachBlock'
 
-  sb = "{sb}  {rb}\n"
-  return sb
+	sb = "{sb}  {rb}\n"
+	return sb
 end 'functionToString'
 
 // Runtime/stdlib functions loaded from runtime.mid should be excluded from IR output.
 export function isRuntimeFunction(name String) returns bool
-  if name == "_start" 'start'
-    return true
-  end 'start'
-  if name == "write_stdout" 'writeStdout'
-    return true
-  end 'writeStdout'
-  if name == "i64_to_string" 'i64ToString'
-    return true
-  end 'i64ToString'
-  if name.startsWith("__rt_") 'rtPrefix'
-    return true
-  end 'rtPrefix'
-  if name.startsWith("__destruct_") 'destructPrefix'
-    return true
-  end 'destructPrefix'
-  if name.startsWith("maxon_") 'maxonPrefix'
-    return true
-  end 'maxonPrefix'
-  if name.startsWith("mm_") 'mmPrefix'
-    return true
-  end 'mmPrefix'
-  if name.startsWith("stdlib.") 'stdlibPrefix'
-    return true
-  end 'stdlibPrefix'
-  if name.startsWith("stdlibTest") 'stdlibTestPrefix'
-    return true
-  end 'stdlibTestPrefix'
-  return false
+	if name == "_start" 'start'
+		return true
+	end 'start'
+	if name == "write_stdout" 'writeStdout'
+		return true
+	end 'writeStdout'
+	if name == "i64_to_string" 'i64ToString'
+		return true
+	end 'i64ToString'
+	if name.startsWith("__rt_") 'rtPrefix'
+		return true
+	end 'rtPrefix'
+	if name.startsWith("__destruct_") 'destructPrefix'
+		return true
+	end 'destructPrefix'
+	if name.startsWith("maxon_") 'maxonPrefix'
+		return true
+	end 'maxonPrefix'
+	if name.startsWith("mm_") 'mmPrefix'
+		return true
+	end 'mmPrefix'
+	if name.startsWith("stdlib.") 'stdlibPrefix'
+		return true
+	end 'stdlibPrefix'
+	if name.startsWith("stdlibTest") 'stdlibTestPrefix'
+		return true
+	end 'stdlibTestPrefix'
+	return false
 end 'isRuntimeFunction'
 
 // Format a lowering result: "sourceOp -> newOp1, newOp2, ..."
 // Used by conversion passes to log how each op was lowered.
 export function formatLoweringResult(sourceOp MlirOp, dstBlock MlirBlock, opsBefore Count) returns String
-  let sourceStr = opToString(sourceOp, blocks: MlirBlockArray{})
-  let opsAfter = dstBlock.ops.count()
-  var targetStr = ""
-  for k in opsBefore upto opsAfter 'eachNew'
-    let newOp = try dstBlock.ops.get(k) otherwise 'skipOp'
-      continue
-    end 'skipOp'
-    let newOpStr = opToString(newOp, blocks: MlirBlockArray{})
-    if targetStr.isEmpty() 'first'
-      targetStr = newOpStr
-    end 'first' else 'append'
-      targetStr = "{targetStr}, {newOpStr}"
-    end 'append'
-  end 'eachNew'
-  return "{sourceStr} -> {targetStr}"
+	let sourceStr = opToString(sourceOp, blocks: MlirBlockArray{})
+	let opsAfter = dstBlock.ops.count()
+	var targetStr = ""
+	for k in opsBefore upto opsAfter 'eachNew'
+		let newOp = try dstBlock.ops.get(k) otherwise 'skipOp'
+			continue
+		end 'skipOp'
+		let newOpStr = opToString(newOp, blocks: MlirBlockArray{})
+		if targetStr.isEmpty() 'first'
+			targetStr = newOpStr
+		end 'first' else 'append'
+			targetStr = "{targetStr}, {newOpStr}"
+		end 'append'
+	end 'eachNew'
+	return "{sourceStr} -> {targetStr}"
 end 'formatLoweringResult'
 
 // Format a terminator lowering result: "sourceOp -> newOp1, ..., terminator"
 // Includes both new ops added to dstBlock and the dstBlock terminator itself.
 export function formatTerminatorResult(sourceOp MlirOp, dstBlock MlirBlock, opsBefore Count) returns String
-  let sourceStr = opToString(sourceOp, blocks: MlirBlockArray{})
-  let opsAfter = dstBlock.ops.count()
-  var targetStr = ""
-  for k in opsBefore upto opsAfter 'eachNew'
-    let newOp = try dstBlock.ops.get(k) otherwise 'skipOp'
-      continue
-    end 'skipOp'
-    let newOpStr = opToString(newOp, blocks: MlirBlockArray{})
-    if targetStr.isEmpty() 'first'
-      targetStr = newOpStr
-    end 'first' else 'append'
-      targetStr = "{targetStr}, {newOpStr}"
-    end 'append'
-  end 'eachNew'
-  if dstBlock.hasTerminator 'hasDstTerm'
-    let termStr = opToString(dstBlock.terminator, blocks: MlirBlockArray{})
-    if targetStr.isEmpty() 'firstTerm'
-      targetStr = termStr
-    end 'firstTerm' else 'appendTerm'
-      targetStr = "{targetStr}, {termStr}"
-    end 'appendTerm'
-  end 'hasDstTerm'
-  return "{sourceStr} -> {targetStr}"
+	let sourceStr = opToString(sourceOp, blocks: MlirBlockArray{})
+	let opsAfter = dstBlock.ops.count()
+	var targetStr = ""
+	for k in opsBefore upto opsAfter 'eachNew'
+		let newOp = try dstBlock.ops.get(k) otherwise 'skipOp'
+			continue
+		end 'skipOp'
+		let newOpStr = opToString(newOp, blocks: MlirBlockArray{})
+		if targetStr.isEmpty() 'first'
+			targetStr = newOpStr
+		end 'first' else 'append'
+			targetStr = "{targetStr}, {newOpStr}"
+		end 'append'
+	end 'eachNew'
+	if dstBlock.hasTerminator 'hasDstTerm'
+		let termStr = opToString(dstBlock.terminator, blocks: MlirBlockArray{})
+		if targetStr.isEmpty() 'firstTerm'
+			targetStr = termStr
+		end 'firstTerm' else 'appendTerm'
+			targetStr = "{targetStr}, {termStr}"
+		end 'appendTerm'
+	end 'hasDstTerm'
+	return "{sourceStr} -> {targetStr}"
 end 'formatTerminatorResult'
 
 // Format a terminator lowering result with explicit block arrays for label resolution.
 // Used by ARM64 backend where source/dst blocks differ from the default.
 export function formatTerminatorResultWithBlocks(sourceOp MlirOp, dstBlock MlirBlock, opsBefore Count, sourceBlocks MlirBlockArray, dstBlocks MlirBlockArray) returns String
-  let sourceStr = opToString(sourceOp, blocks: sourceBlocks)
-  let opsAfter = dstBlock.ops.count()
-  var extraOpsStr = ""
-  for k in opsBefore upto opsAfter 'eachTermOp'
-    let newOp = try dstBlock.ops.get(k) otherwise 'skipTermOp'
-      continue
-    end 'skipTermOp'
-    let newOpStr = opToString(newOp, blocks: MlirBlockArray{})
-    if extraOpsStr.isEmpty() 'first'
-      extraOpsStr = newOpStr
-    end 'first' else 'append'
-      extraOpsStr = "{extraOpsStr}, {newOpStr}"
-    end 'append'
-  end 'eachTermOp'
-  let targetStr = opToString(dstBlock.terminator, blocks: dstBlocks)
-  if extraOpsStr.isEmpty() 'noExtra'
-    return "{sourceStr} -> {targetStr}"
-  end 'noExtra'
-  return "{sourceStr} -> {extraOpsStr}, {targetStr}"
+	let sourceStr = opToString(sourceOp, blocks: sourceBlocks)
+	let opsAfter = dstBlock.ops.count()
+	var extraOpsStr = ""
+	for k in opsBefore upto opsAfter 'eachTermOp'
+		let newOp = try dstBlock.ops.get(k) otherwise 'skipTermOp'
+			continue
+		end 'skipTermOp'
+		let newOpStr = opToString(newOp, blocks: MlirBlockArray{})
+		if extraOpsStr.isEmpty() 'first'
+			extraOpsStr = newOpStr
+		end 'first' else 'append'
+			extraOpsStr = "{extraOpsStr}, {newOpStr}"
+		end 'append'
+	end 'eachTermOp'
+	let targetStr = opToString(dstBlock.terminator, blocks: dstBlocks)
+	if extraOpsStr.isEmpty() 'noExtra'
+		return "{sourceStr} -> {targetStr}"
+	end 'noExtra'
+	return "{sourceStr} -> {extraOpsStr}, {targetStr}"
 end 'formatTerminatorResultWithBlocks'
 
 export function opToString(op MlirOp, blocks MlirBlockArray) returns String
-  return match op 'dispatch'
-    maxhl(hlOp) gives maxHLOpToString(hlOp, blocks: blocks)
-    arith(arithOp) gives arithOpToString(arithOp)
-    cf(cfOp) gives cfOpToString(cfOp, blocks: blocks)
-    func(funcOp) gives funcOpToString(funcOp)
-    memref(memOp) gives memRefOpToString(memOp)
-    runtime(rtOp) gives runtimeOpToString(rtOp)
-    sys(sysOp) gives sysOpToString(sysOp)
-    maxx64(x64Op) gives maxX64OpToString(x64Op, blocks: blocks)
-    maxarm64(a64Op) gives maxArm64OpToString(a64Op, blocks: blocks)
-  end 'dispatch'
+	return match op 'dispatch'
+		maxhl(hlOp) gives maxHLOpToString(hlOp, blocks: blocks)
+		arith(arithOp) gives arithOpToString(arithOp)
+		cf(cfOp) gives cfOpToString(cfOp, blocks: blocks)
+		func(funcOp) gives funcOpToString(funcOp)
+		memref(memOp) gives memRefOpToString(memOp)
+		runtime(rtOp) gives runtimeOpToString(rtOp)
+		sys(sysOp) gives sysOpToString(sysOp)
+		maxx64(x64Op) gives maxX64OpToString(x64Op, blocks: blocks)
+		maxarm64(a64Op) gives maxArm64OpToString(a64Op, blocks: blocks)
+	end 'dispatch'
 end 'opToString'

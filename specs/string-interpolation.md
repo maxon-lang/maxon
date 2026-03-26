@@ -74,9 +74,9 @@ Union values can be interpolated directly. For int-backed or simple unions, the 
 ```maxon
 // Int-backed union (type inferred from values)
 union Color
-  red = 1
-  green = 2
-  blue = 3
+	red = 1
+	green = 2
+	blue = 3
 end 'Color'
 
 var c = Color.green
@@ -84,8 +84,8 @@ print("Color value: {c}\n")  // "Color value: 2"
 
 // String-backed union (type inferred from values)
 union Status
-  active = "Active"
-  inactive = "Inactive"
+	active = "Active"
+	inactive = "Inactive"
 end 'Status'
 
 var s = Status.active
@@ -100,12 +100,12 @@ Custom types can be interpolated by implementing the `Stringable` interface:
 typealias Score = int(i64.min to i64.max)
 
 type Point implements Stringable
-  var x Score
-  var y Score
+	var x Score
+	var y Score
 
-  function toString() returns String
-    return {self.y})"
-  end 'toString'
+	function toString() returns String
+		return {self.y})"
+	end 'toString'
 end 'Point'
 
 var p = Point{x: 1, y: 2}
@@ -131,9 +131,9 @@ var msg = "Hello, {name}!"
 <!-- test: basic-variable -->
 ```maxon
 function main() returns ExitCode
-  var name = "World"
-  print("Hello, {name}!")
-  return 0
+	var name = "World"
+	print("Hello, {name}!")
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -148,10 +148,10 @@ Hello, World!
 <!-- test: multiple-variables -->
 ```maxon
 function main() returns ExitCode
-  var first = "Hello"
-  var second = "World"
-  print("{first}, {second}!")
-  return 0
+	var first = "Hello"
+	var second = "World"
+	print("{first}, {second}!")
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -166,9 +166,9 @@ Hello, World!
 <!-- test: integer-interpolation -->
 ```maxon
 function main() returns ExitCode
-  var x = 42
-  print("Value: {x}\n")
-  return 0
+	var x = 42
+	print("Value: {x}\n")
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -183,8 +183,8 @@ Value: 42
 <!-- test: integer-literal -->
 ```maxon
 function main() returns ExitCode
-  print("Answer: {42}\n")
-  return 0
+	print("Answer: {42}\n")
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -199,9 +199,9 @@ Answer: 42
 <!-- test: negative-integer -->
 ```maxon
 function main() returns ExitCode
-  var x = -5
-  print("Negative: {x}\n")
-  return 0
+	var x = -5
+	print("Negative: {x}\n")
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -216,8 +216,8 @@ Negative: -5
 <!-- test: negative-unary -->
 ```maxon
 function main() returns ExitCode
-  print("Value: {0-10}\n")
-  return 0
+	print("Value: {0-10}\n")
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -232,9 +232,9 @@ Value: -10
 <!-- test: float-interpolation -->
 ```maxon
 function main() returns ExitCode
-  var pi = 3.14159
-  print("Pi: {pi}\n")
-  return 0
+	var pi = 3.14159
+	print("Pi: {pi}\n")
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -249,8 +249,8 @@ Pi: 3.14159
 <!-- test: float-literal -->
 ```maxon
 function main() returns ExitCode
-  print("Value: {2.5}\n")
-  return 0
+	print("Value: {2.5}\n")
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -265,9 +265,9 @@ Value: 2.5
 <!-- test: negative-float -->
 ```maxon
 function main() returns ExitCode
-  var temp = -3.5
-  print("Temp: {temp}\n")
-  return 0
+	var temp = -3.5
+	print("Temp: {temp}\n")
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -282,9 +282,9 @@ Temp: -3.5
 <!-- test: bool-true -->
 ```maxon
 function main() returns ExitCode
-  var flag = true
-  print("Active: {flag}\n")
-  return 0
+	var flag = true
+	print("Active: {flag}\n")
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -299,9 +299,9 @@ Active: true
 <!-- test: bool-false -->
 ```maxon
 function main() returns ExitCode
-  var flag = false
-  print("Active: {flag}\n")
-  return 0
+	var flag = false
+	print("Active: {flag}\n")
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -316,8 +316,8 @@ Active: false
 <!-- test: bool-literal -->
 ```maxon
 function main() returns ExitCode
-  print("Yes: {true}, No: {false}\n")
-  return 0
+	print("Yes: {true}, No: {false}\n")
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -332,10 +332,10 @@ Yes: true, No: false
 <!-- test: expression-interpolation -->
 ```maxon
 function main() returns ExitCode
-  var a = 5
-  var b = 3
-  print("{a} + {b} = {a + b}\n")
-  return 0
+	var a = 5
+	var b = 3
+	print("{a} + {b} = {a + b}\n")
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -350,9 +350,9 @@ end 'main'
 <!-- test: complex-expression -->
 ```maxon
 function main() returns ExitCode
-  var x = 10
-  print("Double: {x * 2}, Triple: {x * 3}\n")
-  return 0
+	var x = 10
+	print("Double: {x * 2}, Triple: {x * 3}\n")
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -367,10 +367,10 @@ Double: 20, Triple: 30
 <!-- test: parenthesized-expression -->
 ```maxon
 function main() returns ExitCode
-  var a = 2
-  var b = 3
-  print("Result: {(a + b) * 2}\n")
-  return 0
+	var a = 2
+	var b = 3
+	print("Result: {(a + b) * 2}\n")
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -385,9 +385,9 @@ Result: 10
 <!-- test: empty-parts -->
 ```maxon
 function main() returns ExitCode
-  var x = 42
-  print("{x}\n")
-  return 0
+	var x = 42
+	print("{x}\n")
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -402,10 +402,10 @@ end 'main'
 <!-- test: adjacent-interpolations -->
 ```maxon
 function main() returns ExitCode
-  var a = "Hello"
-  var b = "World"
-  print("{a}{b}\n")
-  return 0
+	var a = "Hello"
+	var b = "World"
+	print("{a}{b}\n")
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -420,11 +420,11 @@ HelloWorld
 <!-- test: three-adjacent -->
 ```maxon
 function main() returns ExitCode
-  var a = "A"
-  var b = "B"
-  var c = "C"
-  print("{a}{b}{c}\n")
-  return 0
+	var a = "A"
+	var b = "B"
+	var c = "C"
+	print("{a}{b}{c}\n")
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -439,11 +439,11 @@ ABC
 <!-- test: string-variable -->
 ```maxon
 function main() returns ExitCode
-  var greeting = "Hello"
-  var target = "World"
-  var msg = "{greeting}, {target}!"
-  print(msg)
-  return 0
+	var greeting = "Hello"
+	var target = "World"
+	var msg = "{greeting}, {target}!"
+	print(msg)
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -458,8 +458,8 @@ Hello, World!
 <!-- test: escaped-braces -->
 ```maxon
 function main() returns ExitCode
-  print("Use \{expr\} for interpolation")
-  return 0
+	print("Use \{expr\} for interpolation")
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -474,9 +474,9 @@ Use {expr} for interpolation
 <!-- test: mixed-escaped -->
 ```maxon
 function main() returns ExitCode
-  var x = 42
-  print("Value \{x\} is {x}\n")
-  return 0
+	var x = 42
+	print("Value \{x\} is {x}\n")
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -491,12 +491,12 @@ Value {x} is 42
 <!-- test: interpolation-loop -->
 ```maxon
 function main() returns ExitCode
-  var i = 0
-  while i < 3 'loop'
-    print("Count: {i}\n")
-    i = i + 1
-  end 'loop'
-  return 0
+	var i = 0
+	while i < 3 'loop'
+		print("Count: {i}\n")
+		i = i + 1
+	end 'loop'
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -516,12 +516,12 @@ Count: 2
 typealias Integer = int(i64.min to i64.max)
 
 function double(x Integer) returns Integer
-  return x * 2
+	return x * 2
 end 'double'
 
 function main() returns ExitCode
-  print("Double of 5: {double(5)}\n")
-  return 0
+	print("Double of 5: {double(5)}\n")
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -536,9 +536,9 @@ Double of 5: 10
 <!-- test: method-call -->
 ```maxon
 function main() returns ExitCode
-  var s = "hello"
-  print("Length: {s.count()}\n")
-  return 0
+	var s = "hello"
+	print("Length: {s.count()}\n")
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -553,10 +553,10 @@ Length: 5
 <!-- test: comparison-interpolation -->
 ```maxon
 function main() returns ExitCode
-  var a = 5
-  var b = 3
-  print("a > b: {a > b}\n")
-  return 0
+	var a = 5
+	var b = 3
+	print("a > b: {a > b}\n")
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -571,10 +571,10 @@ a > b: true
 <!-- test: logical-expression -->
 ```maxon
 function main() returns ExitCode
-  var x = true
-  var y = false
-  print("x and y: {x and y}\n")
-  return 0
+	var x = true
+	var y = false
+	print("x and y: {x and y}\n")
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -589,9 +589,9 @@ x and y: false
 <!-- test: float-arithmetic -->
 ```maxon
 function main() returns ExitCode
-  var r = 2.0
-  print("Area: {3.14159 * r * r}\n")
-  return 0
+	var r = 2.0
+	print("Area: {3.14159 * r * r}\n")
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -606,11 +606,11 @@ Area: 12.56636
 <!-- test: mixed-types -->
 ```maxon
 function main() returns ExitCode
-  var name = "test"
-  var count = 5
-  var active = true
-  print("Name: {name}, Count: {count}, Active: {active}\n")
-  return 0
+	var name = "test"
+	var count = 5
+	var active = true
+	print("Name: {name}, Count: {count}, Active: {active}\n")
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -625,9 +625,9 @@ Name: test, Count: 5, Active: true
 <!-- test: large-integer -->
 ```maxon
 function main() returns ExitCode
-  var big = 2147483647
-  print("Max int: {big}\n")
-  return 0
+	var big = 2147483647
+	print("Max int: {big}\n")
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -642,10 +642,10 @@ Max int: 2147483647
 <!-- test: zero-values -->
 ```maxon
 function main() returns ExitCode
-  var i = 0
-  var f = 0.0
-  print("Int: {i}, Float: {f}\n")
-  return 0
+	var i = 0
+	var f = 0.0
+	print("Int: {i}, Float: {f}\n")
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -660,9 +660,9 @@ Int: 0, Float: 0.0
 <!-- test: newline-interpolation -->
 ```maxon
 function main() returns ExitCode
-  var x = 42
-  print("Line1: {x}\nLine2: done")
-  return 0
+	var x = 42
+	print("Line1: {x}\nLine2: done")
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -678,10 +678,10 @@ Line2: done
 <!-- test: tab-interpolation -->
 ```maxon
 function main() returns ExitCode
-  var a = 1
-  var b = 2
-  print("{a}\t{b}\n")
-  return 0
+	var a = 1
+	var b = 2
+	print("{a}\t{b}\n")
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -699,18 +699,18 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 type Pair implements Stringable
-  var first Integer
-  var second Integer
+	var first Integer
+	var second Integer
 
-  function toString() returns String
-    return "[{first}, {second}]"
-  end 'toString'
+	function toString() returns String
+		return "[{first}, {second}]"
+	end 'toString'
 end 'Pair'
 
 function main() returns ExitCode
-  var p = Pair{first: 1, second: 2}
-  print("{p}\n")
-  return 0
+	var p = Pair{first: 1, second: 2}
+	print("{p}\n")
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -728,25 +728,25 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 type Counter implements Stringable, FormattedStringable
-  var value Integer
+	var value Integer
 
-  function toString() returns String
-    return "{value}"
-  end 'toString'
+	function toString() returns String
+		return "{value}"
+	end 'toString'
 
-  function toString(format String) returns String
-    if format == "verbose" 'verbose'
-      return "Counter(value={value})"
-    end 'verbose'
-    return "{value}"
-  end 'toString'
+	function toString(format String) returns String
+		if format == "verbose" 'verbose'
+			return "Counter(value={value})"
+		end 'verbose'
+		return "{value}"
+	end 'toString'
 end 'Counter'
 
 function main() returns ExitCode
-  var c = Counter{value: 42}
-  print("{c}\n")
-  print("{c:verbose}\n")
-  return 0
+	var c = Counter{value: 42}
+	print("{c}\n")
+	print("{c:verbose}\n")
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -765,27 +765,27 @@ Counter(value=42)
 typealias Integer = int(i64.min to i64.max)
 
 type Name implements Stringable
-  var first String
-  var last String
+	var first String
+	var last String
 
-  function toString() returns String
-    return "{first} {last}"
-  end 'toString'
+	function toString() returns String
+		return "{first} {last}"
+	end 'toString'
 end 'Name'
 
 type Age implements Stringable
-  var years Integer
+	var years Integer
 
-  function toString() returns String
-    return "{years} years old"
-  end 'toString'
+	function toString() returns String
+		return "{years} years old"
+	end 'toString'
 end 'Age'
 
 function main() returns ExitCode
-  var name = Name{first: "John", last: "Doe"}
-  var age = Age{years: 30}
-  print("{name}, {age}\n")
-  return 0
+	var name = Name{first: "John", last: "Doe"}
+	var age = Age{years: 30}
+	print("{name}, {age}\n")
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -800,15 +800,15 @@ John Doe, 30 years old
 <!-- test: int-enum-interpolation -->
 ```maxon
 union Color
-  red = 1
-  green = 2
-  blue = 3
+	red = 1
+	green = 2
+	blue = 3
 end 'Color'
 
 function main() returns ExitCode
-  var c = Color.green
-  print("Color value: {c}\n")
-  return 0
+	var c = Color.green
+	print("Color value: {c}\n")
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -823,16 +823,16 @@ Color value: green
 <!-- test: simple-enum-interpolation -->
 ```maxon
 union Direction
-  north
-  south
-  east
-  west
+	north
+	south
+	east
+	west
 end 'Direction'
 
 function main() returns ExitCode
-  var d = Direction.east
-  print("Direction: {d}\n")
-  return 0
+	var d = Direction.east
+	print("Direction: {d}\n")
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -847,15 +847,15 @@ Direction: east
 <!-- test: string-enum-interpolation -->
 ```maxon
 union Status
-  active = "Active"
-  inactive = "Inactive"
-  pending = "Pending"
+	active = "Active"
+	inactive = "Inactive"
+	pending = "Pending"
 end 'Status'
 
 function main() returns ExitCode
-  var s = Status.active
-  print("Status: {s}\n")
-  return 0
+	var s = Status.active
+	print("Status: {s}\n")
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -870,16 +870,16 @@ Status: Active
 <!-- test: multiple-enum-interpolation -->
 ```maxon
 union Priority
-  low = 1
-  medium = 2
-  high = 3
+	low = 1
+	medium = 2
+	high = 3
 end 'Priority'
 
 function main() returns ExitCode
-  var p1 = Priority.low
-  var p2 = Priority.high
-  print("Priorities: {p1} and {p2}\n")
-  return 0
+	var p1 = Priority.low
+	var p2 = Priority.high
+	print("Priorities: {p1} and {p2}\n")
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -894,13 +894,13 @@ Priorities: low and high
 <!-- test: int-format-zero-pad -->
 ```maxon
 function main() returns ExitCode
-  var n = 42
-  print("{n:04}\n")
-  var m = 7
-  print("{m:04}\n")
-  var big = 12345
-  print("{big:04}\n")
-  return 0
+	var n = 42
+	print("{n:04}\n")
+	var m = 7
+	print("{m:04}\n")
+	var big = 12345
+	print("{big:04}\n")
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -917,14 +917,14 @@ end 'main'
 <!-- test: int-format-hex -->
 ```maxon
 function main() returns ExitCode
-  var n = 255
-  print("{n:x}\n")
-  print("{n:X}\n")
-  var m = 0
-  print("{m:x}\n")
-  var big = 65535
-  print("{big:x}\n")
-  return 0
+	var n = 255
+	print("{n:x}\n")
+	print("{n:X}\n")
+	var m = 0
+	print("{m:x}\n")
+	var big = 65535
+	print("{big:x}\n")
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -942,10 +942,10 @@ ffff
 <!-- test: int-format-width -->
 ```maxon
 function main() returns ExitCode
-  var n = 42
-  print("[{n:6}]\n")
-  print("[{n:2}]\n")
-  return 0
+	var n = 42
+	print("[{n:6}]\n")
+	print("[{n:2}]\n")
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -961,9 +961,9 @@ end 'main'
 <!-- test: int-format-neg-zero-pad -->
 ```maxon
 function main() returns ExitCode
-  var n = -42
-  print("{n:06}\n")
-  return 0
+	var n = -42
+	print("{n:06}\n")
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -978,12 +978,12 @@ end 'main'
 <!-- test: float-format-precision -->
 ```maxon
 function main() returns ExitCode
-  var f = 3.14159
-  print("{f:.2}\n")
-  print("{f:.4}\n")
-  var g = 2.0
-  print("{g:.3}\n")
-  return 0
+	var f = 3.14159
+	print("{f:.2}\n")
+	print("{f:.4}\n")
+	var g = 2.0
+	print("{g:.3}\n")
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -1000,9 +1000,9 @@ end 'main'
 <!-- test: float-format-width-precision -->
 ```maxon
 function main() returns ExitCode
-  var f = 3.14
-  print("[{f:8.2}]\n")
-  return 0
+	var f = 3.14
+	print("[{f:8.2}]\n")
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -1017,17 +1017,17 @@ end 'main'
 <!-- test: enum-rawvalue-format -->
 ```maxon
 enum ErrorCode
-  ok = 0
-  notFound = 404
-  serverError = 500
+	ok = 0
+	notFound = 404
+	serverError = 500
 end 'ErrorCode'
 
 function main() returns ExitCode
-  var code = ErrorCode.notFound
-  print("E{code.rawValue:04}\n")
-  var ok = ErrorCode.ok
-  print("E{ok.rawValue:04}\n")
-  return 0
+	var code = ErrorCode.notFound
+	print("E{code.rawValue:04}\n")
+	var ok = ErrorCode.ok
+	print("E{ok.rawValue:04}\n")
+	return 0
 end 'main'
 ```
 ```exitcode

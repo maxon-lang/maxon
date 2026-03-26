@@ -5,131 +5,131 @@
 export typealias ValueIdArray = Array with ValueId
 
 export enum BinOpKind
-  add = "add"
-  sub = "sub"
-  mul = "mul"
-  div = "div"
-  mod = "mod"
-  bitAnd = "bitAnd"
-  bitOr = "bitOr"
-  bitXor = "bitXor"
-  shl = "shl"
-  shr = "shr"
+	add = "add"
+	sub = "sub"
+	mul = "mul"
+	div = "div"
+	mod = "mod"
+	bitAnd = "bitAnd"
+	bitOr = "bitOr"
+	bitXor = "bitXor"
+	shl = "shl"
+	shr = "shr"
 end 'BinOpKind'
 
 export enum UnaryOpKind
-  neg = "neg"
-  bitNot = "bitNot"
+	neg = "neg"
+	bitNot = "bitNot"
 end 'UnaryOpKind'
 
 export enum CmpPredicate
-  eq = "eq"
-  ne = "ne"
-  lt = "lt"
-  le = "le"
-  gt = "gt"
-  ge = "ge"
+	eq = "eq"
+	ne = "ne"
+	lt = "lt"
+	le = "le"
+	gt = "gt"
+	ge = "ge"
 end 'CmpPredicate'
 
 export union MaxHLOp
-  // Literals
-  literal(resultId ValueId, value ParsedInt, isFloat bool)
+	// Literals
+	literal(resultId ValueId, value ParsedInt, isFloat bool)
 
-  // Variables
-  varDecl(slotId VarSlot, valueId ValueId)
-  varLoad(resultId ValueId, slotId VarSlot)
-  varStore(slotId VarSlot, valueId ValueId)
+	// Variables
+	varDecl(slotId VarSlot, valueId ValueId)
+	varLoad(resultId ValueId, slotId VarSlot)
+	varStore(slotId VarSlot, valueId ValueId)
 
-  // Arithmetic and bitwise binary ops
-  binop(resultId ValueId, leftId ValueId, rightId ValueId, opKind BinOpKind)
+	// Arithmetic and bitwise binary ops
+	binop(resultId ValueId, leftId ValueId, rightId ValueId, opKind BinOpKind)
 
-  // Unary ops
-  unop(resultId ValueId, operandId ValueId, opKind UnaryOpKind)
+	// Unary ops
+	unop(resultId ValueId, operandId ValueId, opKind UnaryOpKind)
 
-  // Comparisons
-  cmp(resultId ValueId, leftId ValueId, rightId ValueId, predicate CmpPredicate, isFloat bool)
+	// Comparisons
+	cmp(resultId ValueId, leftId ValueId, rightId ValueId, predicate CmpPredicate, isFloat bool)
 
-  // Reference identity (pointer comparison)
-  refEq(resultId ValueId, leftId ValueId, rightId ValueId, negate bool)
+	// Reference identity (pointer comparison)
+	refEq(resultId ValueId, leftId ValueId, rightId ValueId, negate bool)
 
-  // Control flow (terminators — placed as block terminators, not regular ops)
-  condBr(condId ValueId, thenTarget BlockId, elseTarget BlockId)
-  br(target BlockId)
+	// Control flow (terminators — placed as block terminators, not regular ops)
+	condBr(condId ValueId, thenTarget BlockId, elseTarget BlockId)
+	br(target BlockId)
 
-  // Functions
-  call(resultId ValueId, callee ByteArray, argIds ValueIdArray)
-  ret(retValId ValueId)
+	// Functions
+	call(resultId ValueId, callee ByteArray, argIds ValueIdArray)
+	ret(retValId ValueId)
 
-  // I/O (bootstrap, will move to runtime dialect)
-  printLiteral(data ByteArray)
-  printInt(valueId ValueId)
+	// I/O (bootstrap, will move to runtime dialect)
+	printLiteral(data ByteArray)
+	printInt(valueId ValueId)
 end 'MaxHLOp'
 
 export function maxHLOpToString(op MaxHLOp, blocks MlirBlockArray) returns String
-  let lb = "\{"
-  let rb = "\}"
-  return match op 'print'
-    literal(resultId, value, isFloat) gives "%{resultId} = maxon.literal {lb}value = {value} : {typeKind(isFloat)}{rb}"
-    varDecl(slotId, valueId) gives "maxon.var_decl slot_{slotId}, %{valueId}"
-    varLoad(resultId, slotId) gives "%{resultId} = maxon.var_load slot_{slotId}"
-    varStore(slotId, valueId) gives "maxon.var_store slot_{slotId}, %{valueId}"
-    binop(resultId, leftId, rightId, opKind) gives "%{resultId} = maxon.binop %{leftId}, %{rightId} {lb}op = {opKind.rawValue}{rb} {lb}kind = i64{rb}"
-    unop(resultId, operandId, opKind) gives "%{resultId} = maxon.unop %{operandId} {lb}op = {opKind.rawValue}{rb} {lb}kind = i64{rb}"
-    cmp(resultId, leftId, rightId, predicate, isFloat) gives "%{resultId} = maxon.binop %{leftId}, %{rightId} {lb}op = {predicate.rawValue}{rb} {lb}kind = {typeKind(isFloat)}{rb}"
-    refEq(resultId, leftId, rightId, negate) gives "%{resultId} = maxon.{refEqMnemonic(negate)} %{leftId}, %{rightId}"
-    condBr(condId, thenTarget, elseTarget) gives maxHLCondBrToString(condId, thenTarget: thenTarget, elseTarget: elseTarget, blocks: blocks)
-    br(target) gives maxHLBrToString(target, blocks: blocks)
-    call(resultId, callee, argIds) gives "%{resultId} = maxon.call @{String.from(callee)}({formatArgIds(argIds)})"
-    ret(retValId) gives "maxon.return %{retValId}"
-    printLiteral(data) gives "maxon.print_literal \"{String.from(data)}\""
-    printInt(valueId) gives "maxon.print_int %{valueId}"
-  end 'print'
+	let lb = "\{"
+	let rb = "\}"
+	return match op 'print'
+		literal(resultId, value, isFloat) gives "%{resultId} = maxon.literal {lb}value = {value} : {typeKind(isFloat)}{rb}"
+		varDecl(slotId, valueId) gives "maxon.var_decl slot_{slotId}, %{valueId}"
+		varLoad(resultId, slotId) gives "%{resultId} = maxon.var_load slot_{slotId}"
+		varStore(slotId, valueId) gives "maxon.var_store slot_{slotId}, %{valueId}"
+		binop(resultId, leftId, rightId, opKind) gives "%{resultId} = maxon.binop %{leftId}, %{rightId} {lb}op = {opKind.rawValue}{rb} {lb}kind = i64{rb}"
+		unop(resultId, operandId, opKind) gives "%{resultId} = maxon.unop %{operandId} {lb}op = {opKind.rawValue}{rb} {lb}kind = i64{rb}"
+		cmp(resultId, leftId, rightId, predicate, isFloat) gives "%{resultId} = maxon.binop %{leftId}, %{rightId} {lb}op = {predicate.rawValue}{rb} {lb}kind = {typeKind(isFloat)}{rb}"
+		refEq(resultId, leftId, rightId, negate) gives "%{resultId} = maxon.{refEqMnemonic(negate)} %{leftId}, %{rightId}"
+		condBr(condId, thenTarget, elseTarget) gives maxHLCondBrToString(condId, thenTarget: thenTarget, elseTarget: elseTarget, blocks: blocks)
+		br(target) gives maxHLBrToString(target, blocks: blocks)
+		call(resultId, callee, argIds) gives "%{resultId} = maxon.call @{String.from(callee)}({formatArgIds(argIds)})"
+		ret(retValId) gives "maxon.return %{retValId}"
+		printLiteral(data) gives "maxon.print_literal \"{String.from(data)}\""
+		printInt(valueId) gives "maxon.print_int %{valueId}"
+	end 'print'
 end 'maxHLOpToString'
 
 function maxHLCondBrToString(condId ValueId, thenTarget BlockId, elseTarget BlockId, blocks MlirBlockArray) returns String
-  let thenLabel = resolveBlockLabel(thenTarget, blocks: blocks)
-  let elseLabel = resolveBlockLabel(elseTarget, blocks: blocks)
-  return "maxon.cond_br %{condId} [then: {thenLabel}, else: {elseLabel}]"
+	let thenLabel = resolveBlockLabel(thenTarget, blocks: blocks)
+	let elseLabel = resolveBlockLabel(elseTarget, blocks: blocks)
+	return "maxon.cond_br %{condId} [then: {thenLabel}, else: {elseLabel}]"
 end 'maxHLCondBrToString'
 
 function maxHLBrToString(target BlockId, blocks MlirBlockArray) returns String
-  let label = resolveBlockLabel(target, blocks: blocks)
-  return "maxon.br {label}"
+	let label = resolveBlockLabel(target, blocks: blocks)
+	return "maxon.br {label}"
 end 'maxHLBrToString'
 
 function refEqMnemonic(negate bool) returns String
-  if negate 'neg'
-    return "ref_ne"
-  end 'neg'
-  return "ref_eq"
+	if negate 'neg'
+		return "ref_ne"
+	end 'neg'
+	return "ref_eq"
 end 'refEqMnemonic'
 
 function typeKind(isFloat bool) returns String
-  if isFloat 'float'
-    return "f64"
-  end 'float'
-  return "i64"
+	if isFloat 'float'
+		return "f64"
+	end 'float'
+	return "i64"
 end 'typeKind'
 
 export function formatArgIds(argIds ValueIdArray) returns String
-  var result = ""
-  for i in 0 upto argIds.count() 'each'
-    let argId = try argIds.get(i) otherwise 'skip'
-      continue
-    end 'skip'
-    if i > 0 'comma'
-      result = "{result}, "
-    end 'comma'
-    result = "{result}%{argId}"
-  end 'each'
-  return result
+	var result = ""
+	for i in 0 upto argIds.count() 'each'
+		let argId = try argIds.get(i) otherwise 'skip'
+			continue
+		end 'skip'
+		if i > 0 'comma'
+			result = "{result}, "
+		end 'comma'
+		result = "{result}%{argId}"
+	end 'each'
+	return result
 end 'formatArgIds'
 
 export function resolveBlockLabel(blockId BlockId, blocks MlirBlockArray) returns String
-  for block in blocks 'search'
-    if block.id == blockId 'found'
-      return String.from(block.label)
-    end 'found'
-  end 'search'
-  return "block_{blockId}"
+	for block in blocks 'search'
+		if block.id == blockId 'found'
+			return String.from(block.label)
+		end 'found'
+	end 'search'
+	return "block_{blockId}"
 end 'resolveBlockLabel'

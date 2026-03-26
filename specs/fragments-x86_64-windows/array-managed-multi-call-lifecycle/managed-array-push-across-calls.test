@@ -1,55 +1,55 @@
 // Test: managed-array-push-across-calls
 export union QueryKey
-    sourceFile(path String)
-    tokens(path String)
-    allModule
-    codeResult
+		sourceFile(path String)
+		tokens(path String)
+		allModule
+		codeResult
 end 'QueryKey'
 
 export type Dependency
-    export var dependent QueryKey
-    export var dependency QueryKey
+		export var dependent QueryKey
+		export var dependency QueryKey
 end 'Dependency'
 
 typealias DependencyArray = Array with Dependency
 
 export type Database
-    export var dependencies DependencyArray
+		export var dependencies DependencyArray
 end 'Database'
 
 function addDep(db Database, dep Dependency)
-    db.dependencies.push(dep)
+		db.dependencies.push(dep)
 end 'addDep'
 
 function clearAllModule(db Database)
-    var newDeps = DependencyArray{}
-    for dep in db.dependencies 'scan'
-        match dep.dependent 'check'
-            sourceFile(_) then newDeps.push(dep)
-            tokens(_) then newDeps.push(dep)
-            allModule then continue
-            codeResult then newDeps.push(dep)
-        end 'check'
-    end 'scan'
-    db.dependencies = newDeps
+		var newDeps = DependencyArray{}
+		for dep in db.dependencies 'scan'
+				match dep.dependent 'check'
+						sourceFile(_) then newDeps.push(dep)
+						tokens(_) then newDeps.push(dep)
+						allModule then continue
+						codeResult then newDeps.push(dep)
+				end 'check'
+		end 'scan'
+		db.dependencies = newDeps
 end 'clearAllModule'
 
 function main() returns ExitCode
-    let db = Database{dependencies: DependencyArray{}}
+		let db = Database{dependencies: DependencyArray{}}
 
-    // First cycle: add a dep, then clear
-    addDep(db, dep: Dependency{dependent: QueryKey.sourceFile("a.maxon long enough for heap"), dependency: QueryKey.tokens("a.maxon long enough for heap")})
-    clearAllModule(db)
+		// First cycle: add a dep, then clear
+		addDep(db, dep: Dependency{dependent: QueryKey.sourceFile("a.maxon long enough for heap"), dependency: QueryKey.tokens("a.maxon long enough for heap")})
+		clearAllModule(db)
 
-    // Second cycle: add another dep (now array has 2 elements total)
-    addDep(db, dep: Dependency{dependent: QueryKey.allModule, dependency: QueryKey.sourceFile("b.maxon long enough for heap")})
-    clearAllModule(db)
+		// Second cycle: add another dep (now array has 2 elements total)
+		addDep(db, dep: Dependency{dependent: QueryKey.allModule, dependency: QueryKey.sourceFile("b.maxon long enough for heap")})
+		clearAllModule(db)
 
-    // Third cycle: add more deps, then clear for allModule
-    addDep(db, dep: Dependency{dependent: QueryKey.allModule, dependency: QueryKey.sourceFile("c.maxon long enough for heap")})
-    clearAllModule(db)
+		// Third cycle: add more deps, then clear for allModule
+		addDep(db, dep: Dependency{dependent: QueryKey.allModule, dependency: QueryKey.sourceFile("c.maxon long enough for heap")})
+		clearAllModule(db)
 
-    return db.dependencies.count()
+		return db.dependencies.count()
 end 'main'
 ---
 ExitCode: 1

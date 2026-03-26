@@ -21,7 +21,7 @@ Maxon supports basic arithmetic operators for integers:
 <!-- test: addition -->
 ```maxon
 function main() returns ExitCode
-  return 10 + 5
+	return 10 + 5
 end 'main'
 ```
 ```exitcode
@@ -31,7 +31,7 @@ end 'main'
 <!-- test: subtraction -->
 ```maxon
 function main() returns ExitCode
-  return 20-8
+	return 20-8
 end 'main'
 ```
 ```exitcode
@@ -41,7 +41,7 @@ end 'main'
 <!-- test: multiplication -->
 ```maxon
 function main() returns ExitCode
-  return 6 * 7
+	return 6 * 7
 end 'main'
 ```
 ```exitcode
@@ -51,7 +51,7 @@ end 'main'
 <!-- test: division -->
 ```maxon
 function main() returns ExitCode
-  return trunc(100 / 4)
+	return trunc(100 / 4)
 end 'main'
 ```
 ```exitcode
@@ -61,7 +61,7 @@ end 'main'
 <!-- test: modulo -->
 ```maxon
 function main() returns ExitCode
-  return 17 mod 5
+	return 17 mod 5
 end 'main'
 ```
 ```exitcode
@@ -71,7 +71,7 @@ end 'main'
 <!-- test: complex-expression -->
 ```maxon
 function main() returns ExitCode
-  return 10 + 5 * 2
+	return 10 + 5 * 2
 end 'main'
 ```
 ```exitcode
@@ -84,13 +84,13 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 function divLive(a Integer, b Integer, x Integer) returns Integer
-  var preserved = x + 1
-  var result = a / b
-  return trunc(result + preserved)
+	var preserved = x + 1
+	var result = a / b
+	return trunc(result + preserved)
 end 'divLive'
 
 function main() returns ExitCode
-  return divLive(10, b: 2, x: 5)
+	return divLive(10, b: 2, x: 5)
 end 'main'
 ```
 ```exitcode
@@ -103,13 +103,13 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 function modLive(a Integer, b Integer, x Integer) returns Integer
-  var preserved = x + 1
-  var result = a mod b
-  return result + preserved
+	var preserved = x + 1
+	var result = a mod b
+	return result + preserved
 end 'modLive'
 
 function main() returns ExitCode
-  return modLive(10, b: 3, x: 5)
+	return modLive(10, b: 3, x: 5)
 end 'main'
 ```
 ```exitcode
@@ -122,17 +122,17 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 function divLoop(n Integer) returns Integer
-  var sum = 0
-  var i = 1
-  while i <= n 'loop'
-    sum = sum + trunc(100 / i)
-    i = i + 1
-  end 'loop'
-  return sum
+	var sum = 0
+	var i = 1
+	while i <= n 'loop'
+		sum = sum + trunc(100 / i)
+		i = i + 1
+	end 'loop'
+	return sum
 end 'divLoop'
 
 function main() returns ExitCode
-  return divLoop(5)
+	return divLoop(5)
 end 'main'
 ```
 ```exitcode
@@ -145,17 +145,17 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 function helper(x Integer) returns Integer
-  return x * 2
+	return x * 2
 end 'helper'
 
 function divCall(a Integer, b Integer) returns Integer
-  var temp = trunc(a / b)
-  var result = helper(temp)
-  return result + temp
+	var temp = trunc(a / b)
+	var result = helper(temp)
+	return result + temp
 end 'divCall'
 
 function main() returns ExitCode
-  return divCall(10, b: 2)
+	return divCall(10, b: 2)
 end 'main'
 ```
 ```exitcode
@@ -168,13 +168,13 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 function multiDiv(a Integer, b Integer, c Integer, d Integer) returns Integer
-  var r1 = a / b
-  var r2 = c / d
-  return trunc(r1 + r2)
+	var r1 = a / b
+	var r2 = c / d
+	return trunc(r1 + r2)
 end 'multiDiv'
 
 function main() returns ExitCode
-  return multiDiv(10, b: 2, c: 20, d: 4)
+	return multiDiv(10, b: 2, c: 20, d: 4)
 end 'main'
 ```
 ```exitcode
@@ -187,23 +187,23 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 function manyVars(a Integer, b Integer, c Integer, d Integer, e Integer, f Integer) returns Integer
-  var v1 = a + 1
-  var v2 = b + 2
-  var v3 = c + 3
-  var v4 = d + 4
-  var v5 = e + 5
-  var v6 = f + 6
-  var v7 = v1 + v2
-  var v8 = v3 + v4
-  var v9 = v5 + v6
-  var v10 = v7 + v8
-  var v11 = v9 + v10
-  var v12 = v11 + v1 + v2 + v3 + v4 + v5 + v6
-  return v12
+	var v1 = a + 1
+	var v2 = b + 2
+	var v3 = c + 3
+	var v4 = d + 4
+	var v5 = e + 5
+	var v6 = f + 6
+	var v7 = v1 + v2
+	var v8 = v3 + v4
+	var v9 = v5 + v6
+	var v10 = v7 + v8
+	var v11 = v9 + v10
+	var v12 = v11 + v1 + v2 + v3 + v4 + v5 + v6
+	return v12
 end 'manyVars'
 
 function main() returns ExitCode
-  return manyVars(1, b: 2, c: 3, d: 4, e: 5, f: 6)
+	return manyVars(1, b: 2, c: 3, d: 4, e: 5, f: 6)
 end 'main'
 ```
 ```exitcode

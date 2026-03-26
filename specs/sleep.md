@@ -22,9 +22,9 @@ sleep(500)  // sleep for 500 milliseconds
 <!-- test: sleep.basic -->
 ```maxon
 function main() returns ExitCode
-    sleep(10)
-    print("done\n")
-    return 0
+		sleep(10)
+		print("done\n")
+		return 0
 end 'main'
 ```
 ```stdout
@@ -36,24 +36,24 @@ done
 typealias Integer = int(i64.min to i64.max)
 
 function slowTask() returns Integer
-    sleep(200)
-    print("slow\n")
-    return 1
+		sleep(200)
+		print("slow\n")
+		return 1
 end 'slowTask'
 
 function fastTask() returns Integer
-    sleep(10)
-    print("fast\n")
-    return 2
+		sleep(10)
+		print("fast\n")
+		return 2
 end 'fastTask'
 
 function main() returns ExitCode
-    var p1 = async slowTask()
-    var p2 = async fastTask()
-    var r1 = await p1
-    var r2 = await p2
-    print("r1={r1} r2={r2}\n")
-    return 0
+		var p1 = async slowTask()
+		var p2 = async fastTask()
+		var r1 = await p1
+		var r2 = await p2
+		print("r1={r1} r2={r2}\n")
+		return 0
 end 'main'
 ```
 ```stdout
@@ -65,9 +65,9 @@ r1=1 r2=2
 <!-- test: sleep.zero -->
 ```maxon
 function main() returns ExitCode
-    sleep(0)
-    print("ok\n")
-    return 0
+		sleep(0)
+		print("ok\n")
+		return 0
 end 'main'
 ```
 ```stdout

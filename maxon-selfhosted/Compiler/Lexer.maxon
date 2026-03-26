@@ -8,198 +8,198 @@ export typealias ColumnNumber = int(0 to u64.max)
 export typealias CharOffset = int(0 to u64.max)
 
 type LexerState
-  export var pos CharOffset
-  export var line LineNumber
-  export var column ColumnNumber
+	export var pos CharOffset
+	export var line LineNumber
+	export var column ColumnNumber
 end 'LexerState'
 
 // --- Character classes ---
 enum CharClass
-  other
-  space
-  tab
-  cr
-  lf
-  lParen
-  rParen
-  lBrace
-  rBrace
-  equals
-  bang
-  less
-  greater
-  plus
-  minus
-  star
-  colon
-  slash
-  squote
-  dquote
-  backslash
-  dot
-  digit
-  alpha
-  eof
-  COUNT
+	other
+	space
+	tab
+	cr
+	lf
+	lParen
+	rParen
+	lBrace
+	rBrace
+	equals
+	bang
+	less
+	greater
+	plus
+	minus
+	star
+	colon
+	slash
+	squote
+	dquote
+	backslash
+	dot
+	digit
+	alpha
+	eof
+	COUNT
 end 'CharClass'
 
 // --- DFA states ---
 enum DfaState
-  // Live states (need more input)
-  start
-  sawEq
-  sawBang
-  sawLt
-  sawGt
-  sawSlash
-  // Terminal states
-  skipWs
-  skipCr
-  newline
-  lParen
-  rParen
-  lBrace
-  rBrace
-  plus
-  minus
-  star
-  colon
-  eq
-  eqEq
-  bangEq
-  lt
-  ltEq
-  gt
-  gtEq
-  skipBang
-  enterSquote
-  enterDquote
-  enterDigit
-  enterAlpha
-  enterComment
-  slash
-  skipOther
-  COUNT
+	// Live states (need more input)
+	start
+	sawEq
+	sawBang
+	sawLt
+	sawGt
+	sawSlash
+	// Terminal states
+	skipWs
+	skipCr
+	newline
+	lParen
+	rParen
+	lBrace
+	rBrace
+	plus
+	minus
+	star
+	colon
+	eq
+	eqEq
+	bangEq
+	lt
+	ltEq
+	gt
+	gtEq
+	skipBang
+	enterSquote
+	enterDquote
+	enterDigit
+	enterAlpha
+	enterComment
+	slash
+	skipOther
+	COUNT
 end 'DfaState'
 
 // --- Action codes ---
 // Start at 1 so 0 is never a valid action (catches uninitialized table entries)
 enum Action
-  skip = 1
-  skipCr
-  newline
-  emit
-  emit2
-  enterStrSq
-  enterStrDq
-  enterNumber
-  enterIdent
-  enterComment
+	skip = 1
+	skipCr
+	newline
+	emit
+	emit2
+	enterStrSq
+	enterStrDq
+	enterNumber
+	enterIdent
+	enterComment
 end 'Action'
 
 // --- Token kind enum ---
 // Integer-backed enum so parser can use == without exhaustive match.
 export enum TokenKind
-  // Top level
-  function
-  let
-  typealias
-  export
-  // Control flow
-  if
-  else
-  while
-  for
-  in
-  break
-  continue
-  return
-  end
-  match
-  then
-  fallthrough
-  default
-  upto
-  gives
-  try
-  otherwise
-  throw
-  ignore
-  // Declarations
-  returns
-  var
-  type
-  union
-  enum
-  static
-  interface
-  extension
-  extends
-  implements
-  uses
-  with
-  where
-  self
-  selfType
-  throws
-  from
-  to
-  mod
-  // Logical / bitwise operators
-  and
-  or
-  not
-  xor
-  shl
-  shr
-  as
-  is
-  // Literals
-  true
-  false
-  // Primitive types
-  int
-  float
-  bool
-  byte
-  // Other
-  array
-  of
-  // Literals
-  intLiteral
-  floatLiteral
-  stringLiteral
-  doubleStringLiteral
-  // Identifiers
-  identifier
-  // Punctuation
-  leftParen
-  rightParen
-  leftBrace
-  rightBrace
-  equals
-  equalsEquals
-  bangEquals
-  lessThan
-  lessEquals
-  greaterThan
-  greaterEquals
-  plus
-  minus
-  star
-  slash
-  colon
-  newline
-  eof
-  // Temporary for bootstrapping
-  print
+	// Top level
+	function
+	let
+	typealias
+	export
+	// Control flow
+	if
+	else
+	while
+	for
+	in
+	break
+	continue
+	return
+	end
+	match
+	then
+	fallthrough
+	default
+	upto
+	gives
+	try
+	otherwise
+	throw
+	ignore
+	// Declarations
+	returns
+	var
+	type
+	union
+	enum
+	static
+	interface
+	extension
+	extends
+	implements
+	uses
+	with
+	where
+	self
+	selfType
+	throws
+	from
+	to
+	mod
+	// Logical / bitwise operators
+	and
+	or
+	not
+	xor
+	shl
+	shr
+	as
+	is
+	// Literals
+	true
+	false
+	// Primitive types
+	int
+	float
+	bool
+	byte
+	// Other
+	array
+	of
+	// Literals
+	intLiteral
+	floatLiteral
+	stringLiteral
+	doubleStringLiteral
+	// Identifiers
+	identifier
+	// Punctuation
+	leftParen
+	rightParen
+	leftBrace
+	rightBrace
+	equals
+	equalsEquals
+	bangEquals
+	lessThan
+	lessEquals
+	greaterThan
+	greaterEquals
+	plus
+	minus
+	star
+	slash
+	colon
+	newline
+	eof
+	// Temporary for bootstrapping
+	print
 end 'TokenKind'
 
 export type Token
-  export let kind TokenKind
-  export let value ByteArray
-  export let line LineNumber
-  export let column ColumnNumber
+	export let kind TokenKind
+	export let value ByteArray
+	export let line LineNumber
+	export let column ColumnNumber
 end 'Token'
 
 export typealias TokenArray = Array with Token
@@ -207,535 +207,535 @@ export typealias TokenArray = Array with Token
 // --- Table variables ---
 // Static lookup: byte value → character class (256 entries, O(1) index)
 let charClassTable = [
-  // 0-15:                                                                       \t                \n                      \r
-  CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.tab, CharClass.lf, CharClass.other, CharClass.other, CharClass.cr, CharClass.other, CharClass.other,
-  // 16-31
-  CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other,
-  // 32-47:  sp              !               "               #               $               %               &               '               (               )               *               +               ,               -               .               /
-  CharClass.space, CharClass.bang, CharClass.dquote, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.squote, CharClass.lParen, CharClass.rParen, CharClass.star, CharClass.plus, CharClass.other, CharClass.minus, CharClass.dot, CharClass.slash,
-  // 48-63:  0-9                                                                                                           :               ;               <               =               >               ?
-  CharClass.digit, CharClass.digit, CharClass.digit, CharClass.digit, CharClass.digit, CharClass.digit, CharClass.digit, CharClass.digit, CharClass.digit, CharClass.digit, CharClass.colon, CharClass.other, CharClass.less, CharClass.equals, CharClass.greater, CharClass.other,
-  // 64-79:  @               A-O
-  CharClass.other, CharClass.alpha, CharClass.alpha, CharClass.alpha, CharClass.alpha, CharClass.alpha, CharClass.alpha, CharClass.alpha, CharClass.alpha, CharClass.alpha, CharClass.alpha, CharClass.alpha, CharClass.alpha, CharClass.alpha, CharClass.alpha, CharClass.alpha,
-  // 80-95:  P-Z                                                                             [               \               ]               ^               _
-  CharClass.alpha, CharClass.alpha, CharClass.alpha, CharClass.alpha, CharClass.alpha, CharClass.alpha, CharClass.alpha, CharClass.alpha, CharClass.alpha, CharClass.alpha, CharClass.alpha, CharClass.other, CharClass.backslash, CharClass.other, CharClass.other, CharClass.alpha,
-  // 96-111: `               a-o
-  CharClass.other, CharClass.alpha, CharClass.alpha, CharClass.alpha, CharClass.alpha, CharClass.alpha, CharClass.alpha, CharClass.alpha, CharClass.alpha, CharClass.alpha, CharClass.alpha, CharClass.alpha, CharClass.alpha, CharClass.alpha, CharClass.alpha, CharClass.alpha,
-  // 112-127: p-z                                                                             {               |               }               ~               DEL
-  CharClass.alpha, CharClass.alpha, CharClass.alpha, CharClass.alpha, CharClass.alpha, CharClass.alpha, CharClass.alpha, CharClass.alpha, CharClass.alpha, CharClass.alpha, CharClass.alpha, CharClass.lBrace, CharClass.other, CharClass.rBrace, CharClass.other, CharClass.other,
-  // 128-255: extended ASCII (all other)
-  CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other,
-  CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other,
-  CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other,
-  CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other,
-  CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other,
-  CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other,
-  CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other,
-  CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other
+	// 0-15:                                                                       \t                \n                      \r
+	CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.tab, CharClass.lf, CharClass.other, CharClass.other, CharClass.cr, CharClass.other, CharClass.other,
+	// 16-31
+	CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other,
+	// 32-47:  sp              !               "               #               $               %               &               '               (               )               *               +               ,               -               .               /
+	CharClass.space, CharClass.bang, CharClass.dquote, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.squote, CharClass.lParen, CharClass.rParen, CharClass.star, CharClass.plus, CharClass.other, CharClass.minus, CharClass.dot, CharClass.slash,
+	// 48-63:  0-9                                                                                                           :               ;               <               =               >               ?
+	CharClass.digit, CharClass.digit, CharClass.digit, CharClass.digit, CharClass.digit, CharClass.digit, CharClass.digit, CharClass.digit, CharClass.digit, CharClass.digit, CharClass.colon, CharClass.other, CharClass.less, CharClass.equals, CharClass.greater, CharClass.other,
+	// 64-79:  @               A-O
+	CharClass.other, CharClass.alpha, CharClass.alpha, CharClass.alpha, CharClass.alpha, CharClass.alpha, CharClass.alpha, CharClass.alpha, CharClass.alpha, CharClass.alpha, CharClass.alpha, CharClass.alpha, CharClass.alpha, CharClass.alpha, CharClass.alpha, CharClass.alpha,
+	// 80-95:  P-Z                                                                             [               \               ]               ^               _
+	CharClass.alpha, CharClass.alpha, CharClass.alpha, CharClass.alpha, CharClass.alpha, CharClass.alpha, CharClass.alpha, CharClass.alpha, CharClass.alpha, CharClass.alpha, CharClass.alpha, CharClass.other, CharClass.backslash, CharClass.other, CharClass.other, CharClass.alpha,
+	// 96-111: `               a-o
+	CharClass.other, CharClass.alpha, CharClass.alpha, CharClass.alpha, CharClass.alpha, CharClass.alpha, CharClass.alpha, CharClass.alpha, CharClass.alpha, CharClass.alpha, CharClass.alpha, CharClass.alpha, CharClass.alpha, CharClass.alpha, CharClass.alpha, CharClass.alpha,
+	// 112-127: p-z                                                                             {               |               }               ~               DEL
+	CharClass.alpha, CharClass.alpha, CharClass.alpha, CharClass.alpha, CharClass.alpha, CharClass.alpha, CharClass.alpha, CharClass.alpha, CharClass.alpha, CharClass.alpha, CharClass.alpha, CharClass.lBrace, CharClass.other, CharClass.rBrace, CharClass.other, CharClass.other,
+	// 128-255: extended ASCII (all other)
+	CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other,
+	CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other,
+	CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other,
+	CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other,
+	CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other,
+	CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other,
+	CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other,
+	CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other
 ]
 
 // transitionTable: 32 states x 25 char classes = 800 entries
 // Index as: state * CharClass.COUNT + charClass
 // Columns: other space tab  cr   lf   (    )    {    }    =    !    <    >    +    -    *    :    /    '    "    \    .    0-9  a-z  eof
 let transitionTable = [
-  // start: dispatch on first character
-  DfaState.skipOther, DfaState.skipWs, DfaState.skipWs, DfaState.skipCr, DfaState.newline, DfaState.lParen, DfaState.rParen, DfaState.lBrace, DfaState.rBrace, DfaState.sawEq, DfaState.sawBang, DfaState.sawLt, DfaState.sawGt, DfaState.plus, DfaState.minus, DfaState.star, DfaState.colon, DfaState.sawSlash, DfaState.enterSquote, DfaState.enterDquote, DfaState.skipOther, DfaState.skipOther, DfaState.enterDigit, DfaState.enterAlpha, DfaState.skipOther,
-  // sawEq: '=' seen, looking for '='
-  DfaState.eq, DfaState.eq, DfaState.eq, DfaState.eq, DfaState.eq, DfaState.eq, DfaState.eq, DfaState.eq, DfaState.eq, DfaState.eqEq, DfaState.eq, DfaState.eq, DfaState.eq, DfaState.eq, DfaState.eq, DfaState.eq, DfaState.eq, DfaState.eq, DfaState.eq, DfaState.eq, DfaState.eq, DfaState.eq, DfaState.eq, DfaState.eq, DfaState.eq,
-  // sawBang: '!' seen, looking for '='
-  DfaState.skipBang, DfaState.skipBang, DfaState.skipBang, DfaState.skipBang, DfaState.skipBang, DfaState.skipBang, DfaState.skipBang, DfaState.skipBang, DfaState.skipBang, DfaState.bangEq, DfaState.skipBang, DfaState.skipBang, DfaState.skipBang, DfaState.skipBang, DfaState.skipBang, DfaState.skipBang, DfaState.skipBang, DfaState.skipBang, DfaState.skipBang, DfaState.skipBang, DfaState.skipBang, DfaState.skipBang, DfaState.skipBang, DfaState.skipBang, DfaState.skipBang,
-  // sawLt: '<' seen, looking for '='
-  DfaState.lt, DfaState.lt, DfaState.lt, DfaState.lt, DfaState.lt, DfaState.lt, DfaState.lt, DfaState.lt, DfaState.lt, DfaState.ltEq, DfaState.lt, DfaState.lt, DfaState.lt, DfaState.lt, DfaState.lt, DfaState.lt, DfaState.lt, DfaState.lt, DfaState.lt, DfaState.lt, DfaState.lt, DfaState.lt, DfaState.lt, DfaState.lt, DfaState.lt,
-  // sawGt: '>' seen, looking for '='
-  DfaState.gt, DfaState.gt, DfaState.gt, DfaState.gt, DfaState.gt, DfaState.gt, DfaState.gt, DfaState.gt, DfaState.gt, DfaState.gtEq, DfaState.gt, DfaState.gt, DfaState.gt, DfaState.gt, DfaState.gt, DfaState.gt, DfaState.gt, DfaState.gt, DfaState.gt, DfaState.gt, DfaState.gt, DfaState.gt, DfaState.gt, DfaState.gt, DfaState.gt,
-  // sawSlash: '/' seen, looking for '/'
-  DfaState.slash, DfaState.slash, DfaState.slash, DfaState.slash, DfaState.slash, DfaState.slash, DfaState.slash, DfaState.slash, DfaState.slash, DfaState.slash, DfaState.slash, DfaState.slash, DfaState.slash, DfaState.slash, DfaState.slash, DfaState.slash, DfaState.slash, DfaState.enterComment, DfaState.slash, DfaState.slash, DfaState.slash, DfaState.slash, DfaState.slash, DfaState.slash, DfaState.slash,
-  // Terminal states (rows 6-31) — never transitioned from
-  DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther,
-  DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther,
-  DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther,
-  DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther,
-  DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther,
-  DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther,
-  DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther,
-  DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther,
-  DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther,
-  DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther,
-  DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther,
-  DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther,
-  DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther,
-  DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther,
-  DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther,
-  DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther,
-  DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther
+	// start: dispatch on first character
+	DfaState.skipOther, DfaState.skipWs, DfaState.skipWs, DfaState.skipCr, DfaState.newline, DfaState.lParen, DfaState.rParen, DfaState.lBrace, DfaState.rBrace, DfaState.sawEq, DfaState.sawBang, DfaState.sawLt, DfaState.sawGt, DfaState.plus, DfaState.minus, DfaState.star, DfaState.colon, DfaState.sawSlash, DfaState.enterSquote, DfaState.enterDquote, DfaState.skipOther, DfaState.skipOther, DfaState.enterDigit, DfaState.enterAlpha, DfaState.skipOther,
+	// sawEq: '=' seen, looking for '='
+	DfaState.eq, DfaState.eq, DfaState.eq, DfaState.eq, DfaState.eq, DfaState.eq, DfaState.eq, DfaState.eq, DfaState.eq, DfaState.eqEq, DfaState.eq, DfaState.eq, DfaState.eq, DfaState.eq, DfaState.eq, DfaState.eq, DfaState.eq, DfaState.eq, DfaState.eq, DfaState.eq, DfaState.eq, DfaState.eq, DfaState.eq, DfaState.eq, DfaState.eq,
+	// sawBang: '!' seen, looking for '='
+	DfaState.skipBang, DfaState.skipBang, DfaState.skipBang, DfaState.skipBang, DfaState.skipBang, DfaState.skipBang, DfaState.skipBang, DfaState.skipBang, DfaState.skipBang, DfaState.bangEq, DfaState.skipBang, DfaState.skipBang, DfaState.skipBang, DfaState.skipBang, DfaState.skipBang, DfaState.skipBang, DfaState.skipBang, DfaState.skipBang, DfaState.skipBang, DfaState.skipBang, DfaState.skipBang, DfaState.skipBang, DfaState.skipBang, DfaState.skipBang, DfaState.skipBang,
+	// sawLt: '<' seen, looking for '='
+	DfaState.lt, DfaState.lt, DfaState.lt, DfaState.lt, DfaState.lt, DfaState.lt, DfaState.lt, DfaState.lt, DfaState.lt, DfaState.ltEq, DfaState.lt, DfaState.lt, DfaState.lt, DfaState.lt, DfaState.lt, DfaState.lt, DfaState.lt, DfaState.lt, DfaState.lt, DfaState.lt, DfaState.lt, DfaState.lt, DfaState.lt, DfaState.lt, DfaState.lt,
+	// sawGt: '>' seen, looking for '='
+	DfaState.gt, DfaState.gt, DfaState.gt, DfaState.gt, DfaState.gt, DfaState.gt, DfaState.gt, DfaState.gt, DfaState.gt, DfaState.gtEq, DfaState.gt, DfaState.gt, DfaState.gt, DfaState.gt, DfaState.gt, DfaState.gt, DfaState.gt, DfaState.gt, DfaState.gt, DfaState.gt, DfaState.gt, DfaState.gt, DfaState.gt, DfaState.gt, DfaState.gt,
+	// sawSlash: '/' seen, looking for '/'
+	DfaState.slash, DfaState.slash, DfaState.slash, DfaState.slash, DfaState.slash, DfaState.slash, DfaState.slash, DfaState.slash, DfaState.slash, DfaState.slash, DfaState.slash, DfaState.slash, DfaState.slash, DfaState.slash, DfaState.slash, DfaState.slash, DfaState.slash, DfaState.enterComment, DfaState.slash, DfaState.slash, DfaState.slash, DfaState.slash, DfaState.slash, DfaState.slash, DfaState.slash,
+	// Terminal states (rows 6-31) — never transitioned from
+	DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther,
+	DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther,
+	DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther,
+	DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther,
+	DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther,
+	DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther,
+	DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther,
+	DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther,
+	DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther,
+	DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther,
+	DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther,
+	DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther,
+	DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther,
+	DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther,
+	DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther,
+	DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther,
+	DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther
 ]
 
 // actionTable: 32 entries indexed by state → action to perform
 //              start           sawEq          sawBang        sawLt          sawGt          sawSlash       skipWs         skipCr
 let actionTable = [Action.skip, Action.skip, Action.skip, Action.skip, Action.skip, Action.skip, Action.skip, Action.skipCr,
-  //              newline         lParen         rParen         lBrace         rBrace         plus           minus          star           colon
-  Action.newline, Action.emit, Action.emit, Action.emit, Action.emit, Action.emit, Action.emit, Action.emit, Action.emit,
-  //              eq              eqEq           bangEq         lt             ltEq           gt             gtEq
-  Action.emit, Action.emit2, Action.emit2, Action.emit, Action.emit2, Action.emit, Action.emit2,
-  //              skipBang        enterSquote      enterDquote      enterDigit      enterAlpha      enterComment   slash          skipOther
-  Action.skip, Action.enterStrSq, Action.enterStrDq, Action.enterNumber, Action.enterIdent, Action.enterComment, Action.emit, Action.skip
+	//              newline         lParen         rParen         lBrace         rBrace         plus           minus          star           colon
+	Action.newline, Action.emit, Action.emit, Action.emit, Action.emit, Action.emit, Action.emit, Action.emit, Action.emit,
+	//              eq              eqEq           bangEq         lt             ltEq           gt             gtEq
+	Action.emit, Action.emit2, Action.emit2, Action.emit, Action.emit2, Action.emit, Action.emit2,
+	//              skipBang        enterSquote      enterDquote      enterDigit      enterAlpha      enterComment   slash          skipOther
+	Action.skip, Action.enterStrSq, Action.enterStrDq, Action.enterNumber, Action.enterIdent, Action.enterComment, Action.emit, Action.skip
 ]
 
 // Single dispatch point for all fixed-text tokens (operators, punctuation).
 typealias DfaStateIndex = int(0 to 64)
 
 function emitFixedToken(stateIndex DfaStateIndex, tokens TokenArray, line LineNumber, column ColumnNumber)
-  // State indices correspond to DfaState enum raw values (int match can't use enum names).
-  match stateIndex 'dispatch'
-    9 then tokens.push(Token{kind: TokenKind.leftParen, value: b"(", line: line, column: column})
-    10 then tokens.push(Token{kind: TokenKind.rightParen, value: b")", line: line, column: column})
-    11 then tokens.push(Token{kind: TokenKind.leftBrace, value: b"\x7B", line: line, column: column})
-    12 then tokens.push(Token{kind: TokenKind.rightBrace, value: b"\x7D", line: line, column: column})
-    13 then tokens.push(Token{kind: TokenKind.plus, value: b"+", line: line, column: column})
-    14 then tokens.push(Token{kind: TokenKind.minus, value: b"-", line: line, column: column})
-    15 then tokens.push(Token{kind: TokenKind.star, value: b"*", line: line, column: column})
-    16 then tokens.push(Token{kind: TokenKind.colon, value: b":", line: line, column: column})
-    17 then tokens.push(Token{kind: TokenKind.equals, value: b"=", line: line, column: column})
-    18 then tokens.push(Token{kind: TokenKind.equalsEquals, value: b"==", line: line, column: column})
-    19 then tokens.push(Token{kind: TokenKind.bangEquals, value: b"!=", line: line, column: column})
-    20 then tokens.push(Token{kind: TokenKind.lessThan, value: b"<", line: line, column: column})
-    21 then tokens.push(Token{kind: TokenKind.lessEquals, value: b"<=", line: line, column: column})
-    22 then tokens.push(Token{kind: TokenKind.greaterThan, value: b">", line: line, column: column})
-    23 then tokens.push(Token{kind: TokenKind.greaterEquals, value: b">=", line: line, column: column})
-    30 then tokens.push(Token{kind: TokenKind.slash, value: b"/", line: line, column: column})
-    default then break
-  end 'dispatch'
+	// State indices correspond to DfaState enum raw values (int match can't use enum names).
+	match stateIndex 'dispatch'
+		9 then tokens.push(Token{kind: TokenKind.leftParen, value: b"(", line: line, column: column})
+		10 then tokens.push(Token{kind: TokenKind.rightParen, value: b")", line: line, column: column})
+		11 then tokens.push(Token{kind: TokenKind.leftBrace, value: b"\x7B", line: line, column: column})
+		12 then tokens.push(Token{kind: TokenKind.rightBrace, value: b"\x7D", line: line, column: column})
+		13 then tokens.push(Token{kind: TokenKind.plus, value: b"+", line: line, column: column})
+		14 then tokens.push(Token{kind: TokenKind.minus, value: b"-", line: line, column: column})
+		15 then tokens.push(Token{kind: TokenKind.star, value: b"*", line: line, column: column})
+		16 then tokens.push(Token{kind: TokenKind.colon, value: b":", line: line, column: column})
+		17 then tokens.push(Token{kind: TokenKind.equals, value: b"=", line: line, column: column})
+		18 then tokens.push(Token{kind: TokenKind.equalsEquals, value: b"==", line: line, column: column})
+		19 then tokens.push(Token{kind: TokenKind.bangEquals, value: b"!=", line: line, column: column})
+		20 then tokens.push(Token{kind: TokenKind.lessThan, value: b"<", line: line, column: column})
+		21 then tokens.push(Token{kind: TokenKind.lessEquals, value: b"<=", line: line, column: column})
+		22 then tokens.push(Token{kind: TokenKind.greaterThan, value: b">", line: line, column: column})
+		23 then tokens.push(Token{kind: TokenKind.greaterEquals, value: b">=", line: line, column: column})
+		30 then tokens.push(Token{kind: TokenKind.slash, value: b"/", line: line, column: column})
+		default then break
+	end 'dispatch'
 end 'emitFixedToken'
 
 // --- Main tokenize function ---
 
 export function tokenize(source ByteArray) returns TokenArray
-  logDebug(LogCategory.lexer, message: () gives "Starting lexer")
+	logDebug(LogCategory.lexer, message: () gives "Starting lexer")
 
-  var tokens = TokenArray{}
-  var s = LexerState{pos: 0, line: 1, column: 1}
-  let len = source.count()
+	var tokens = TokenArray{}
+	var s = LexerState{pos: 0, line: 1, column: 1}
+	let len = source.count()
 
-  while s.pos < len 'scan'
-    let ch = try source.get(s.pos) otherwise 'readCh'
-      panic("Lexer: source read at pos {s.pos} failed (len={len})")
-    end 'readCh'
-    let startLine = s.line
-    let startCol = s.column
+	while s.pos < len 'scan'
+		let ch = try source.get(s.pos) otherwise 'readCh'
+			panic("Lexer: source read at pos {s.pos} failed (len={len})")
+		end 'readCh'
+		let startLine = s.line
+		let startCol = s.column
 
-    // Look up character class
-    let charClass = try charClassTable.get(ch) otherwise 'readClass'
-      panic("Lexer: charClassTable lookup failed for byte {ch}")
-    end 'readClass'
+		// Look up character class
+		let charClass = try charClassTable.get(ch) otherwise 'readClass'
+			panic("Lexer: charClassTable lookup failed for byte {ch}")
+		end 'readClass'
 
-    // Consume the first character
-    s.pos = s.pos + 1
-    s.column = s.column + 1
+		// Consume the first character
+		s.pos = s.pos + 1
+		s.column = s.column + 1
 
-    // Look up first transition from START
-    var state = try transitionTable.get(DfaState.start * CharClass.COUNT + charClass) otherwise panic("Lexer: transitionTable lookup failed from START for charClass {charClass}")
+		// Look up first transition from START
+		var state = try transitionTable.get(DfaState.start * CharClass.COUNT + charClass) otherwise panic("Lexer: transitionTable lookup failed from START for charClass {charClass}")
 
-    // If we reached a live state (1-5), peek at the next character for a second transition
-    if state >= DfaState.sawEq and state <= DfaState.sawSlash 'live'
-      var nextClass = CharClass.eof
-      if s.pos < len 'hasNext'
-        let nextCh = try source.get(s.pos) otherwise panic("Lexer: source read at pos {s.pos} failed (len={len})")
-        nextClass = try charClassTable.get(nextCh) otherwise panic("Lexer: charClassTable lookup failed for byte {nextCh}")
-      end 'hasNext'
-      state = try transitionTable.get(state * CharClass.COUNT + nextClass) otherwise panic("Lexer: transitionTable lookup failed from state {state} for charClass {nextClass}")
-    end 'live'
+		// If we reached a live state (1-5), peek at the next character for a second transition
+		if state >= DfaState.sawEq and state <= DfaState.sawSlash 'live'
+			var nextClass = CharClass.eof
+			if s.pos < len 'hasNext'
+				let nextCh = try source.get(s.pos) otherwise panic("Lexer: source read at pos {s.pos} failed (len={len})")
+				nextClass = try charClassTable.get(nextCh) otherwise panic("Lexer: charClassTable lookup failed for byte {nextCh}")
+			end 'hasNext'
+			state = try transitionTable.get(state * CharClass.COUNT + nextClass) otherwise panic("Lexer: transitionTable lookup failed from state {state} for charClass {nextClass}")
+		end 'live'
 
-    // Look up the action for the terminal state
-    let action = try actionTable.get(state.rawValue) otherwise panic("Lexer: actionTable lookup failed for state {state}")
+		// Look up the action for the terminal state
+		let action = try actionTable.get(state.rawValue) otherwise panic("Lexer: actionTable lookup failed for state {state}")
 
-    match action 'dispatch'
-      skip then break 'dispatch'
-      skipCr then s.column = s.column - 1
-      newline then handleNewline(tokens, state: s, startLine: startLine, startCol: startCol)
-      emit then emitFixedToken(state.rawValue, tokens: tokens, line: startLine, column: startCol)
-      emit2 then handleEmit2(state: s, tokens: tokens, dfaState: state, startLine: startLine, startCol: startCol)
-      enterStrSq then scanSingleQuoteString(source, state: s, tokens: tokens, startLine: startLine, startCol: startCol)
-      enterStrDq then scanDoubleQuoteString(source, state: s, tokens: tokens, startLine: startLine, startCol: startCol)
-      enterNumber then handleEnterNumber(source, state: s, tokens: tokens, startLine: startLine, startCol: startCol)
-      enterIdent then handleEnterIdent(source, state: s, tokens: tokens, startLine: startLine, startCol: startCol)
-      enterComment then handleEnterComment(source, state: s)
-      default panic("Lexer: unhandled action {action}")
-    end 'dispatch'
-    continue
-  end 'scan'
+		match action 'dispatch'
+			skip then break 'dispatch'
+			skipCr then s.column = s.column - 1
+			newline then handleNewline(tokens, state: s, startLine: startLine, startCol: startCol)
+			emit then emitFixedToken(state.rawValue, tokens: tokens, line: startLine, column: startCol)
+			emit2 then handleEmit2(state: s, tokens: tokens, dfaState: state, startLine: startLine, startCol: startCol)
+			enterStrSq then scanSingleQuoteString(source, state: s, tokens: tokens, startLine: startLine, startCol: startCol)
+			enterStrDq then scanDoubleQuoteString(source, state: s, tokens: tokens, startLine: startLine, startCol: startCol)
+			enterNumber then handleEnterNumber(source, state: s, tokens: tokens, startLine: startLine, startCol: startCol)
+			enterIdent then handleEnterIdent(source, state: s, tokens: tokens, startLine: startLine, startCol: startCol)
+			enterComment then handleEnterComment(source, state: s)
+			default panic("Lexer: unhandled action {action}")
+		end 'dispatch'
+		continue
+	end 'scan'
 
-  tokens.push(Token{kind: TokenKind.eof, value: b"", line: s.line, column: s.column})
-  return tokens
+	tokens.push(Token{kind: TokenKind.eof, value: b"", line: s.line, column: s.column})
+	return tokens
 end 'tokenize'
 
 // --- Action dispatch helpers ---
 // Each helper handles a multi-statement action arm from the main lexer match.
 
 function handleNewline(tokens TokenArray, state LexerState, startLine LineNumber, startCol ColumnNumber)
-  tokens.push(Token{kind: TokenKind.newline, value: b"", line: startLine, column: startCol})
-  state.line = state.line + 1
-  state.column = 1
+	tokens.push(Token{kind: TokenKind.newline, value: b"", line: startLine, column: startCol})
+	state.line = state.line + 1
+	state.column = 1
 end 'handleNewline'
 
 function handleEmit2(state LexerState, tokens TokenArray, dfaState DfaState, startLine LineNumber, startCol ColumnNumber)
-  state.pos = state.pos + 1
-  state.column = state.column + 1
-  emitFixedToken(dfaState.rawValue, tokens: tokens, line: startLine, column: startCol)
+	state.pos = state.pos + 1
+	state.column = state.column + 1
+	emitFixedToken(dfaState.rawValue, tokens: tokens, line: startLine, column: startCol)
 end 'handleEmit2'
 
 function handleEnterNumber(source ByteArray, state LexerState, tokens TokenArray, startLine LineNumber, startCol ColumnNumber)
-  state.pos = state.pos - 1
-  state.column = state.column - 1
-  scanNumber(source, state: state, tokens: tokens, startLine: startLine, startCol: startCol)
+	state.pos = state.pos - 1
+	state.column = state.column - 1
+	scanNumber(source, state: state, tokens: tokens, startLine: startLine, startCol: startCol)
 end 'handleEnterNumber'
 
 function handleEnterIdent(source ByteArray, state LexerState, tokens TokenArray, startLine LineNumber, startCol ColumnNumber)
-  state.pos = state.pos - 1
-  state.column = state.column - 1
-  scanIdentifier(source, state: state, tokens: tokens, startLine: startLine, startCol: startCol)
+	state.pos = state.pos - 1
+	state.column = state.column - 1
+	scanIdentifier(source, state: state, tokens: tokens, startLine: startLine, startCol: startCol)
 end 'handleEnterIdent'
 
 function handleEnterComment(source ByteArray, state LexerState)
-  state.pos = state.pos + 1
-  state.column = state.column + 1
-  scanComment(source, state: state)
+	state.pos = state.pos + 1
+	state.column = state.column + 1
+	scanComment(source, state: state)
 end 'handleEnterComment'
 
 // --- Sub-scanner functions ---
 
 // Opening quote already consumed by main loop.
 function scanSingleQuoteString(source ByteArray, state LexerState, tokens TokenArray, startLine LineNumber, startCol ColumnNumber)
-  let len = source.count()
-  let strStart = state.pos
-  while state.pos < len 'strBody'
-    let sc = try source.get(state.pos) otherwise 0
-    if sc == Ascii.quote 'endStr'
-      break
-    end 'endStr'
-    if sc == Ascii.lf 'newlineInStr'
-      logError(LogCategory.lexer, message: () gives "error E1002: {startLine}:{startCol}: unterminated string literal")
-      break
-    end 'newlineInStr'
-    state.pos = state.pos + 1
-    state.column = state.column + 1
-  end 'strBody'
-  let strVal = sliceBytes(source, startPos: strStart, endPos: state.pos)
-  if state.pos >= len 'unterminatedAtEof'
-    logError(LogCategory.lexer, message: () gives "error E1002: {startLine}:{startCol}: unterminated string literal")
-  end 'unterminatedAtEof' else 'consumeClose'
-    // Consume the closing quote
-    state.pos = state.pos + 1
-    state.column = state.column + 1
-  end 'consumeClose'
-  tokens.push(Token{kind: TokenKind.stringLiteral, value: strVal, line: startLine, column: startCol})
+	let len = source.count()
+	let strStart = state.pos
+	while state.pos < len 'strBody'
+		let sc = try source.get(state.pos) otherwise 0
+		if sc == Ascii.quote 'endStr'
+			break
+		end 'endStr'
+		if sc == Ascii.lf 'newlineInStr'
+			logError(LogCategory.lexer, message: () gives "error E1002: {startLine}:{startCol}: unterminated string literal")
+			break
+		end 'newlineInStr'
+		state.pos = state.pos + 1
+		state.column = state.column + 1
+	end 'strBody'
+	let strVal = sliceBytes(source, startPos: strStart, endPos: state.pos)
+	if state.pos >= len 'unterminatedAtEof'
+		logError(LogCategory.lexer, message: () gives "error E1002: {startLine}:{startCol}: unterminated string literal")
+	end 'unterminatedAtEof' else 'consumeClose'
+		// Consume the closing quote
+		state.pos = state.pos + 1
+		state.column = state.column + 1
+	end 'consumeClose'
+	tokens.push(Token{kind: TokenKind.stringLiteral, value: strVal, line: startLine, column: startCol})
 end 'scanSingleQuoteString'
 
 // Opening double-quote already consumed by main loop.
 function scanDoubleQuoteString(source ByteArray, state LexerState, tokens TokenArray, startLine LineNumber, startCol ColumnNumber)
-  let len = source.count()
-  let dstrStart = state.pos
-  while state.pos < len 'dstrBody'
-    let dc = try source.get(state.pos) otherwise 0
-    if dc == Ascii.dquote 'endDstr'
-      break
-    end 'endDstr'
-    if dc == Ascii.lf 'newlineInStr'
-      logError(LogCategory.lexer, message: () gives "error E1002: {startLine}:{startCol}: unterminated string literal")
-      break
-    end 'newlineInStr'
-    if dc == Ascii.backslash 'esc'
-      state.pos = state.pos + 1
-      state.column = state.column + 1
-    end 'esc'
-    state.pos = state.pos + 1
-    state.column = state.column + 1
-  end 'dstrBody'
-  let dstrVal = sliceBytes(source, startPos: dstrStart, endPos: state.pos)
-  if state.pos >= len 'unterminatedAtEof'
-    logError(LogCategory.lexer, message: () gives "error E1002: {startLine}:{startCol}: unterminated string literal")
-  end 'unterminatedAtEof' else 'consumeClose'
-    // Consume the closing double-quote
-    state.pos = state.pos + 1
-    state.column = state.column + 1
-  end 'consumeClose'
-  tokens.push(Token{kind: TokenKind.doubleStringLiteral, value: dstrVal, line: startLine, column: startCol})
+	let len = source.count()
+	let dstrStart = state.pos
+	while state.pos < len 'dstrBody'
+		let dc = try source.get(state.pos) otherwise 0
+		if dc == Ascii.dquote 'endDstr'
+			break
+		end 'endDstr'
+		if dc == Ascii.lf 'newlineInStr'
+			logError(LogCategory.lexer, message: () gives "error E1002: {startLine}:{startCol}: unterminated string literal")
+			break
+		end 'newlineInStr'
+		if dc == Ascii.backslash 'esc'
+			state.pos = state.pos + 1
+			state.column = state.column + 1
+		end 'esc'
+		state.pos = state.pos + 1
+		state.column = state.column + 1
+	end 'dstrBody'
+	let dstrVal = sliceBytes(source, startPos: dstrStart, endPos: state.pos)
+	if state.pos >= len 'unterminatedAtEof'
+		logError(LogCategory.lexer, message: () gives "error E1002: {startLine}:{startCol}: unterminated string literal")
+	end 'unterminatedAtEof' else 'consumeClose'
+		// Consume the closing double-quote
+		state.pos = state.pos + 1
+		state.column = state.column + 1
+	end 'consumeClose'
+	tokens.push(Token{kind: TokenKind.doubleStringLiteral, value: dstrVal, line: startLine, column: startCol})
 end 'scanDoubleQuoteString'
 
 // pos points to the first digit (not yet consumed by this scanner).
 function scanNumber(source ByteArray, state LexerState, tokens TokenArray, startLine LineNumber, startCol ColumnNumber)
-  let len = source.count()
-  let numStart = state.pos
-  let firstByte = try source.get(state.pos) otherwise 0
+	let len = source.count()
+	let numStart = state.pos
+	let firstByte = try source.get(state.pos) otherwise 0
 
-  // Check for 0x, 0b, 0o prefixes
-  if firstByte == Ascii.zero and state.pos + 1 < len 'checkPrefix'
-    let prefixByte = try source.get(state.pos + 1) otherwise 0
+	// Check for 0x, 0b, 0o prefixes
+	if firstByte == Ascii.zero and state.pos + 1 < len 'checkPrefix'
+		let prefixByte = try source.get(state.pos + 1) otherwise 0
 
-    // Hex literal: 0x or 0X
-    if prefixByte == Ascii.lowerX or prefixByte == Ascii.upperX 'isHex'
-      state.pos = state.pos + 2
-      state.column = state.column + 2
-      while state.pos < len 'hexDigits'
-        let hc = try source.get(state.pos) otherwise 0
-        if not isHexDigit(hc) and hc != Ascii.underscore 'endHex'
-          break
-        end 'endHex'
-        state.pos = state.pos + 1
-        state.column = state.column + 1
-      end 'hexDigits'
-      let hexVal = sliceBytes(source, startPos: numStart, endPos: state.pos)
-      tokens.push(Token{kind: TokenKind.intLiteral, value: hexVal, line: startLine, column: startCol})
-      return
-    end 'isHex' else if prefixByte == Ascii.lowerB or prefixByte == Ascii.upperB 'isBin'
-      // Binary literal: 0b or 0B
-      state.pos = state.pos + 2
-      state.column = state.column + 2
-      while state.pos < len 'binDigits'
-        let bc = try source.get(state.pos) otherwise 0
-        if not isBinaryDigit(bc) and bc != Ascii.underscore 'endBin'
-          break
-        end 'endBin'
-        state.pos = state.pos + 1
-        state.column = state.column + 1
-      end 'binDigits'
-      let binVal = sliceBytes(source, startPos: numStart, endPos: state.pos)
-      tokens.push(Token{kind: TokenKind.intLiteral, value: binVal, line: startLine, column: startCol})
-      return
-    end 'isBin' else if prefixByte == Ascii.lowerO or prefixByte == Ascii.upperO 'isOct'
-      state.pos = state.pos + 2
-      state.column = state.column + 2
-      while state.pos < len 'octDigits'
-        let oc = try source.get(state.pos) otherwise 0
-        if not isOctalDigit(oc) and oc != Ascii.underscore 'endOct'
-          break
-        end 'endOct'
-        state.pos = state.pos + 1
-        state.column = state.column + 1
-      end 'octDigits'
-      let octVal = sliceBytes(source, startPos: numStart, endPos: state.pos)
-      tokens.push(Token{kind: TokenKind.intLiteral, value: octVal, line: startLine, column: startCol})
-      return
-    end 'isOct'
-  end 'checkPrefix'
+		// Hex literal: 0x or 0X
+		if prefixByte == Ascii.lowerX or prefixByte == Ascii.upperX 'isHex'
+			state.pos = state.pos + 2
+			state.column = state.column + 2
+			while state.pos < len 'hexDigits'
+				let hc = try source.get(state.pos) otherwise 0
+				if not isHexDigit(hc) and hc != Ascii.underscore 'endHex'
+					break
+				end 'endHex'
+				state.pos = state.pos + 1
+				state.column = state.column + 1
+			end 'hexDigits'
+			let hexVal = sliceBytes(source, startPos: numStart, endPos: state.pos)
+			tokens.push(Token{kind: TokenKind.intLiteral, value: hexVal, line: startLine, column: startCol})
+			return
+		end 'isHex' else if prefixByte == Ascii.lowerB or prefixByte == Ascii.upperB 'isBin'
+			// Binary literal: 0b or 0B
+			state.pos = state.pos + 2
+			state.column = state.column + 2
+			while state.pos < len 'binDigits'
+				let bc = try source.get(state.pos) otherwise 0
+				if not isBinaryDigit(bc) and bc != Ascii.underscore 'endBin'
+					break
+				end 'endBin'
+				state.pos = state.pos + 1
+				state.column = state.column + 1
+			end 'binDigits'
+			let binVal = sliceBytes(source, startPos: numStart, endPos: state.pos)
+			tokens.push(Token{kind: TokenKind.intLiteral, value: binVal, line: startLine, column: startCol})
+			return
+		end 'isBin' else if prefixByte == Ascii.lowerO or prefixByte == Ascii.upperO 'isOct'
+			state.pos = state.pos + 2
+			state.column = state.column + 2
+			while state.pos < len 'octDigits'
+				let oc = try source.get(state.pos) otherwise 0
+				if not isOctalDigit(oc) and oc != Ascii.underscore 'endOct'
+					break
+				end 'endOct'
+				state.pos = state.pos + 1
+				state.column = state.column + 1
+			end 'octDigits'
+			let octVal = sliceBytes(source, startPos: numStart, endPos: state.pos)
+			tokens.push(Token{kind: TokenKind.intLiteral, value: octVal, line: startLine, column: startCol})
+			return
+		end 'isOct'
+	end 'checkPrefix'
 
-  // Decimal digits (with underscore separators)
-  while state.pos < len 'digits'
-    let dc = try source.get(state.pos) otherwise 0
-    if not isDigit(dc) and dc != Ascii.underscore 'endNum'
-      break
-    end 'endNum'
-    state.pos = state.pos + 1
-    state.column = state.column + 1
-  end 'digits'
+	// Decimal digits (with underscore separators)
+	while state.pos < len 'digits'
+		let dc = try source.get(state.pos) otherwise 0
+		if not isDigit(dc) and dc != Ascii.underscore 'endNum'
+			break
+		end 'endNum'
+		state.pos = state.pos + 1
+		state.column = state.column + 1
+	end 'digits'
 
-  // Check for decimal point (float literal)
-  var isFloat = false
-  if state.pos < len 'checkDot'
-    let dotCh = try source.get(state.pos) otherwise 0
-    if dotCh == Ascii.dot 'hasDot'
-      isFloat = true
-      state.pos = state.pos + 1
-      state.column = state.column + 1
-      while state.pos < len 'fracDigits'
-        let fc = try source.get(state.pos) otherwise 0
-        if not isDigit(fc) and fc != Ascii.underscore 'endFrac'
-          break
-        end 'endFrac'
-        state.pos = state.pos + 1
-        state.column = state.column + 1
-      end 'fracDigits'
-    end 'hasDot'
-  end 'checkDot'
+	// Check for decimal point (float literal)
+	var isFloat = false
+	if state.pos < len 'checkDot'
+		let dotCh = try source.get(state.pos) otherwise 0
+		if dotCh == Ascii.dot 'hasDot'
+			isFloat = true
+			state.pos = state.pos + 1
+			state.column = state.column + 1
+			while state.pos < len 'fracDigits'
+				let fc = try source.get(state.pos) otherwise 0
+				if not isDigit(fc) and fc != Ascii.underscore 'endFrac'
+					break
+				end 'endFrac'
+				state.pos = state.pos + 1
+				state.column = state.column + 1
+			end 'fracDigits'
+		end 'hasDot'
+	end 'checkDot'
 
-  // Check for scientific notation exponent (e/E)
-  if state.pos < len 'checkExp'
-    let expCh = try source.get(state.pos) otherwise 0
-    if expCh == Ascii.lowerE or expCh == Ascii.upperE 'hasExp'
-      isFloat = true
-      state.pos = state.pos + 1
-      state.column = state.column + 1
-      // Optional sign
-      if state.pos < len 'checkSign'
-        let signCh = try source.get(state.pos) otherwise 0
-        if signCh == Ascii.plus or signCh == Ascii.minus 'hasSign'
-          state.pos = state.pos + 1
-          state.column = state.column + 1
-        end 'hasSign'
-      end 'checkSign'
-      // Exponent digits
-      while state.pos < len 'expDigits'
-        let ec = try source.get(state.pos) otherwise 0
-        if not isDigit(ec) 'endExp'
-          break
-        end 'endExp'
-        state.pos = state.pos + 1
-        state.column = state.column + 1
-      end 'expDigits'
-    end 'hasExp'
-  end 'checkExp'
+	// Check for scientific notation exponent (e/E)
+	if state.pos < len 'checkExp'
+		let expCh = try source.get(state.pos) otherwise 0
+		if expCh == Ascii.lowerE or expCh == Ascii.upperE 'hasExp'
+			isFloat = true
+			state.pos = state.pos + 1
+			state.column = state.column + 1
+			// Optional sign
+			if state.pos < len 'checkSign'
+				let signCh = try source.get(state.pos) otherwise 0
+				if signCh == Ascii.plus or signCh == Ascii.minus 'hasSign'
+					state.pos = state.pos + 1
+					state.column = state.column + 1
+				end 'hasSign'
+			end 'checkSign'
+			// Exponent digits
+			while state.pos < len 'expDigits'
+				let ec = try source.get(state.pos) otherwise 0
+				if not isDigit(ec) 'endExp'
+					break
+				end 'endExp'
+				state.pos = state.pos + 1
+				state.column = state.column + 1
+			end 'expDigits'
+		end 'hasExp'
+	end 'checkExp'
 
-  let numVal = sliceBytes(source, startPos: numStart, endPos: state.pos)
-  if isFloat 'emitFloat'
-    tokens.push(Token{kind: TokenKind.floatLiteral, value: numVal, line: startLine, column: startCol})
-  end 'emitFloat' else 'emitInt'
-    tokens.push(Token{kind: TokenKind.intLiteral, value: numVal, line: startLine, column: startCol})
-  end 'emitInt'
+	let numVal = sliceBytes(source, startPos: numStart, endPos: state.pos)
+	if isFloat 'emitFloat'
+		tokens.push(Token{kind: TokenKind.floatLiteral, value: numVal, line: startLine, column: startCol})
+	end 'emitFloat' else 'emitInt'
+		tokens.push(Token{kind: TokenKind.intLiteral, value: numVal, line: startLine, column: startCol})
+	end 'emitInt'
 end 'scanNumber'
 
 // pos points to the first alpha/underscore (not yet consumed by this scanner).
 function scanIdentifier(source ByteArray, state LexerState, tokens TokenArray, startLine LineNumber, startCol ColumnNumber)
-  let len = source.count()
-  let startPos = state.pos
-  while state.pos < len 'identBody'
-    let ic = try source.get(state.pos) otherwise 0
-    if not isAlphaNum(ic) 'endIdent'
-      break
-    end 'endIdent'
-    state.pos = state.pos + 1
-    state.column = state.column + 1
-  end 'identBody'
-  let identVal = sliceBytes(source, startPos: startPos, endPos: state.pos)
-  let kind = classifyIdentifier(identVal)
-  tokens.push(Token{kind: kind, value: identVal, line: startLine, column: startCol})
+	let len = source.count()
+	let startPos = state.pos
+	while state.pos < len 'identBody'
+		let ic = try source.get(state.pos) otherwise 0
+		if not isAlphaNum(ic) 'endIdent'
+			break
+		end 'endIdent'
+		state.pos = state.pos + 1
+		state.column = state.column + 1
+	end 'identBody'
+	let identVal = sliceBytes(source, startPos: startPos, endPos: state.pos)
+	let kind = classifyIdentifier(identVal)
+	tokens.push(Token{kind: kind, value: identVal, line: startLine, column: startCol})
 end 'scanIdentifier'
 
 // Both '/' characters already consumed. Advances to (but not past) the newline.
 function scanComment(source ByteArray, state LexerState)
-  let len = source.count()
-  while state.pos < len 'skipComment'
-    let cc = try source.get(state.pos) otherwise 0
-    if cc == Ascii.lf 'endComment'
-      break
-    end 'endComment'
-    state.pos = state.pos + 1
-  end 'skipComment'
+	let len = source.count()
+	while state.pos < len 'skipComment'
+		let cc = try source.get(state.pos) otherwise 0
+		if cc == Ascii.lf 'endComment'
+			break
+		end 'endComment'
+		state.pos = state.pos + 1
+	end 'skipComment'
 end 'scanComment'
 
 // --- Helpers ---
 
 function isDigit(b Byte) returns bool
-  return b >= '0' and b <= '9'
+	return b >= '0' and b <= '9'
 end 'isDigit'
 
 // Valid identifier start: letter (A-Z, a-z) or underscore
 function isAlpha(b Byte) returns bool
-  return(b >= 'A' and b <= 'Z') or(b >= 'a' and b <= 'z') or b == '_'
+	return(b >= 'A' and b <= 'Z') or(b >= 'a' and b <= 'z') or b == '_'
 end 'isAlpha'
 
 // Valid identifier continuation: letter, digit, or underscore
 function isAlphaNum(b Byte) returns bool
-  return isAlpha(b) or isDigit(b)
+	return isAlpha(b) or isDigit(b)
 end 'isAlphaNum'
 
 export function sliceBytes(source ByteArray, startPos CharOffset, endPos CharOffset) returns ByteArray
-  let sliced = source.slice(startPos, endIndex: endPos)
-  return ByteArray{managed: sliced.managed}
+	let sliced = source.slice(startPos, endIndex: endPos)
+	return ByteArray{managed: sliced.managed}
 end 'sliceBytes'
 
 export type KeywordInfo
-  export var kind TokenKind
-  export var helpText String
-  export var canHaveBlockLabel bool
+	export var kind TokenKind
+	export var helpText String
+	export var canHaveBlockLabel bool
 end 'KeywordInfo'
 
 var keywordMap = [
-  b"if": KeywordInfo{kind: TokenKind.if, helpText: "Conditional statement. Executes code if the condition is true.", canHaveBlockLabel: true},
-  b"else": KeywordInfo{kind: TokenKind.else, helpText: "Alternative branch in an if statement. Executed when the condition is false.", canHaveBlockLabel: true},
-  b"while": KeywordInfo{kind: TokenKind.while, helpText: "Loop that continues while the condition is true.", canHaveBlockLabel: true},
-  b"for": KeywordInfo{kind: TokenKind.for, helpText: "Loop that iterates over a range or collection.", canHaveBlockLabel: true},
-  b"in": KeywordInfo{kind: TokenKind.in, helpText: "Used in for loops to specify the range or collection to iterate over.", canHaveBlockLabel: false},
-  b"break": KeywordInfo{kind: TokenKind.break, helpText: "Exits the current loop or match statement.", canHaveBlockLabel: false},
-  b"continue": KeywordInfo{kind: TokenKind.continue, helpText: "Skips the rest of the current loop iteration and continues with the next iteration.", canHaveBlockLabel: false},
-  b"return": KeywordInfo{kind: TokenKind.return, helpText: "Returns a value from a function and exits the function.", canHaveBlockLabel: false},
-  b"end": KeywordInfo{kind: TokenKind.end, helpText: "Ends a block (function, type, if, for, while, etc.). Must be followed by the block's label in quotes.", canHaveBlockLabel: true},
-  b"match": KeywordInfo{kind: TokenKind.match, helpText: "Pattern matching statement for unions and values.", canHaveBlockLabel: false},
-  b"then": KeywordInfo{kind: TokenKind.then, helpText: "Used in match expressions to separate pattern from result.", canHaveBlockLabel: true},
-  b"fallthrough": KeywordInfo{kind: TokenKind.fallthrough, helpText: "Falls through to the next case in a match statement.", canHaveBlockLabel: false},
-  b"default": KeywordInfo{kind: TokenKind.default, helpText: "Default case in a match statement.", canHaveBlockLabel: false},
-  b"upto": KeywordInfo{kind: TokenKind.upto, helpText: "Exclusive upper bound in range patterns.", canHaveBlockLabel: false},
-  b"gives": KeywordInfo{kind: TokenKind.gives, helpText: "Used in iterator expressions.", canHaveBlockLabel: false},
-  b"try": KeywordInfo{kind: TokenKind.try, helpText: "Attempts an operation that may throw an error.", canHaveBlockLabel: false},
-  b"otherwise": KeywordInfo{kind: TokenKind.otherwise, helpText: "Provides a fallback for try expressions when an error occurs.", canHaveBlockLabel: true},
-  b"throw": KeywordInfo{kind: TokenKind.throw, helpText: "Throws an error that can be caught by a try-catch block.", canHaveBlockLabel: false},
-  b"ignore": KeywordInfo{kind: TokenKind.ignore, helpText: "Used with otherwise to silently ignore errors.", canHaveBlockLabel: false},
-  b"function": KeywordInfo{kind: TokenKind.function, helpText: "Declares a function. Functions contain executable code and can return values.", canHaveBlockLabel: false},
-  b"returns": KeywordInfo{kind: TokenKind.returns, helpText: "Specifies the return type of a function.", canHaveBlockLabel: false},
-  b"let": KeywordInfo{kind: TokenKind.let, helpText: "Declares an immutable variable. The value cannot be changed after initialization.", canHaveBlockLabel: false},
-  b"var": KeywordInfo{kind: TokenKind.var, helpText: "Declares a mutable variable. The value can be changed after initialization.", canHaveBlockLabel: false},
-  b"type": KeywordInfo{kind: TokenKind.type, helpText: "Declares a struct type with fields and methods.", canHaveBlockLabel: false},
-  b"union": KeywordInfo{kind: TokenKind.union, helpText: "Declares a union type with a fixed set of named cases, optional associated values, and methods.", canHaveBlockLabel: false},
-  b"enum": KeywordInfo{kind: TokenKind.enum, helpText: "Declares a named group of typed constant values with no methods.", canHaveBlockLabel: false},
-  b"typealias": KeywordInfo{kind: TokenKind.typealias, helpText: "Declares a type alias for an existing type or associated type in an interface.", canHaveBlockLabel: false},
-  b"export": KeywordInfo{kind: TokenKind.export, helpText: "Makes a function or type visible to other modules.", canHaveBlockLabel: false},
-  b"static": KeywordInfo{kind: TokenKind.static, helpText: "Declares a static method that doesn't require an instance.", canHaveBlockLabel: false},
-  b"interface": KeywordInfo{kind: TokenKind.interface, helpText: "Declares an interface that types can conform to.", canHaveBlockLabel: false},
-  b"extension": KeywordInfo{kind: TokenKind.extension, helpText: "Defines extension methods for an interface.", canHaveBlockLabel: false},
-  b"extends": KeywordInfo{kind: TokenKind.extends, helpText: "Indicates interface inheritance.", canHaveBlockLabel: false},
-  b"uses": KeywordInfo{kind: TokenKind.uses, helpText: "Declares associated types in an interface.", canHaveBlockLabel: false},
-  b"with": KeywordInfo{kind: TokenKind.with, helpText: "Specifies interface conformance requirements.", canHaveBlockLabel: false},
-  b"where": KeywordInfo{kind: TokenKind.where, helpText: "Constrains type parameters to require interface conformance.", canHaveBlockLabel: false},
-  b"self": KeywordInfo{kind: TokenKind.self, helpText: "Refers to the current instance in a method.", canHaveBlockLabel: false},
-  b"Self": KeywordInfo{kind: TokenKind.selfType, helpText: "Refers to the current type in a method signature.", canHaveBlockLabel: false},
-  b"throws": KeywordInfo{kind: TokenKind.throws, helpText: "Indicates that a function may throw an error.", canHaveBlockLabel: false},
-  b"from": KeywordInfo{kind: TokenKind.from, helpText: "Used in range expressions (from X to Y).", canHaveBlockLabel: false},
-  b"to": KeywordInfo{kind: TokenKind.to, helpText: "Used in range expressions (from X to Y).", canHaveBlockLabel: false},
-  b"mod": KeywordInfo{kind: TokenKind.mod, helpText: "Modulo operator. Returns the remainder of integer division.", canHaveBlockLabel: false},
-  b"and": KeywordInfo{kind: TokenKind.and, helpText: "AND operator. Logical AND on bools, bitwise AND on integers.", canHaveBlockLabel: false},
-  b"or": KeywordInfo{kind: TokenKind.or, helpText: "OR operator. Logical OR on bools, bitwise OR on integers.", canHaveBlockLabel: true},
-  b"not": KeywordInfo{kind: TokenKind.not, helpText: "NOT operator. Logical NOT on bools, bitwise NOT on integers.", canHaveBlockLabel: false},
-  b"xor": KeywordInfo{kind: TokenKind.xor, helpText: "XOR operator. Logical XOR on bools, bitwise XOR on integers.", canHaveBlockLabel: false},
-  b"shl": KeywordInfo{kind: TokenKind.shl, helpText: "Shift left operator. Shifts integer bits to the left.", canHaveBlockLabel: false},
-  b"shr": KeywordInfo{kind: TokenKind.shr, helpText: "Shift right operator. Shifts integer bits to the right.", canHaveBlockLabel: false},
-  b"as": KeywordInfo{kind: TokenKind.as, helpText: "Type cast operator. Converts a value to a different type.", canHaveBlockLabel: false},
-  b"is": KeywordInfo{kind: TokenKind.is, helpText: "Reference identity operator. Returns true if two references point to the same object.", canHaveBlockLabel: false},
-  b"implements": KeywordInfo{kind: TokenKind.implements, helpText: "Specifies that a type conforms to an interface.", canHaveBlockLabel: false},
-  b"true": KeywordInfo{kind: TokenKind.true, helpText: "Boolean literal representing true.", canHaveBlockLabel: false},
-  b"false": KeywordInfo{kind: TokenKind.false, helpText: "Boolean literal representing false.", canHaveBlockLabel: false},
-  b"int": KeywordInfo{kind: TokenKind.int, helpText: "Primitive integer type (64-bit signed).", canHaveBlockLabel: false},
-  b"float": KeywordInfo{kind: TokenKind.float, helpText: "Primitive floating-point type (64-bit double precision).", canHaveBlockLabel: false},
-  b"bool": KeywordInfo{kind: TokenKind.bool, helpText: "Primitive boolean type (true or false).", canHaveBlockLabel: false},
-  b"byte": KeywordInfo{kind: TokenKind.byte, helpText: "Primitive byte type (8-bit unsigned integer).", canHaveBlockLabel: false},
-  b"array": KeywordInfo{kind: TokenKind.array, helpText: "Used in array type declarations (array of int).", canHaveBlockLabel: false},
-  b"of": KeywordInfo{kind: TokenKind.of, helpText: "Used in array type declarations (array of int).", canHaveBlockLabel: false},
-  b"print": KeywordInfo{kind: TokenKind.print, helpText: "Built-in function for printing to the console. Not a real keyword.", canHaveBlockLabel: false}
+	b"if": KeywordInfo{kind: TokenKind.if, helpText: "Conditional statement. Executes code if the condition is true.", canHaveBlockLabel: true},
+	b"else": KeywordInfo{kind: TokenKind.else, helpText: "Alternative branch in an if statement. Executed when the condition is false.", canHaveBlockLabel: true},
+	b"while": KeywordInfo{kind: TokenKind.while, helpText: "Loop that continues while the condition is true.", canHaveBlockLabel: true},
+	b"for": KeywordInfo{kind: TokenKind.for, helpText: "Loop that iterates over a range or collection.", canHaveBlockLabel: true},
+	b"in": KeywordInfo{kind: TokenKind.in, helpText: "Used in for loops to specify the range or collection to iterate over.", canHaveBlockLabel: false},
+	b"break": KeywordInfo{kind: TokenKind.break, helpText: "Exits the current loop or match statement.", canHaveBlockLabel: false},
+	b"continue": KeywordInfo{kind: TokenKind.continue, helpText: "Skips the rest of the current loop iteration and continues with the next iteration.", canHaveBlockLabel: false},
+	b"return": KeywordInfo{kind: TokenKind.return, helpText: "Returns a value from a function and exits the function.", canHaveBlockLabel: false},
+	b"end": KeywordInfo{kind: TokenKind.end, helpText: "Ends a block (function, type, if, for, while, etc.). Must be followed by the block's label in quotes.", canHaveBlockLabel: true},
+	b"match": KeywordInfo{kind: TokenKind.match, helpText: "Pattern matching statement for unions and values.", canHaveBlockLabel: false},
+	b"then": KeywordInfo{kind: TokenKind.then, helpText: "Used in match expressions to separate pattern from result.", canHaveBlockLabel: true},
+	b"fallthrough": KeywordInfo{kind: TokenKind.fallthrough, helpText: "Falls through to the next case in a match statement.", canHaveBlockLabel: false},
+	b"default": KeywordInfo{kind: TokenKind.default, helpText: "Default case in a match statement.", canHaveBlockLabel: false},
+	b"upto": KeywordInfo{kind: TokenKind.upto, helpText: "Exclusive upper bound in range patterns.", canHaveBlockLabel: false},
+	b"gives": KeywordInfo{kind: TokenKind.gives, helpText: "Used in iterator expressions.", canHaveBlockLabel: false},
+	b"try": KeywordInfo{kind: TokenKind.try, helpText: "Attempts an operation that may throw an error.", canHaveBlockLabel: false},
+	b"otherwise": KeywordInfo{kind: TokenKind.otherwise, helpText: "Provides a fallback for try expressions when an error occurs.", canHaveBlockLabel: true},
+	b"throw": KeywordInfo{kind: TokenKind.throw, helpText: "Throws an error that can be caught by a try-catch block.", canHaveBlockLabel: false},
+	b"ignore": KeywordInfo{kind: TokenKind.ignore, helpText: "Used with otherwise to silently ignore errors.", canHaveBlockLabel: false},
+	b"function": KeywordInfo{kind: TokenKind.function, helpText: "Declares a function. Functions contain executable code and can return values.", canHaveBlockLabel: false},
+	b"returns": KeywordInfo{kind: TokenKind.returns, helpText: "Specifies the return type of a function.", canHaveBlockLabel: false},
+	b"let": KeywordInfo{kind: TokenKind.let, helpText: "Declares an immutable variable. The value cannot be changed after initialization.", canHaveBlockLabel: false},
+	b"var": KeywordInfo{kind: TokenKind.var, helpText: "Declares a mutable variable. The value can be changed after initialization.", canHaveBlockLabel: false},
+	b"type": KeywordInfo{kind: TokenKind.type, helpText: "Declares a struct type with fields and methods.", canHaveBlockLabel: false},
+	b"union": KeywordInfo{kind: TokenKind.union, helpText: "Declares a union type with a fixed set of named cases, optional associated values, and methods.", canHaveBlockLabel: false},
+	b"enum": KeywordInfo{kind: TokenKind.enum, helpText: "Declares a named group of typed constant values with no methods.", canHaveBlockLabel: false},
+	b"typealias": KeywordInfo{kind: TokenKind.typealias, helpText: "Declares a type alias for an existing type or associated type in an interface.", canHaveBlockLabel: false},
+	b"export": KeywordInfo{kind: TokenKind.export, helpText: "Makes a function or type visible to other modules.", canHaveBlockLabel: false},
+	b"static": KeywordInfo{kind: TokenKind.static, helpText: "Declares a static method that doesn't require an instance.", canHaveBlockLabel: false},
+	b"interface": KeywordInfo{kind: TokenKind.interface, helpText: "Declares an interface that types can conform to.", canHaveBlockLabel: false},
+	b"extension": KeywordInfo{kind: TokenKind.extension, helpText: "Defines extension methods for an interface.", canHaveBlockLabel: false},
+	b"extends": KeywordInfo{kind: TokenKind.extends, helpText: "Indicates interface inheritance.", canHaveBlockLabel: false},
+	b"uses": KeywordInfo{kind: TokenKind.uses, helpText: "Declares associated types in an interface.", canHaveBlockLabel: false},
+	b"with": KeywordInfo{kind: TokenKind.with, helpText: "Specifies interface conformance requirements.", canHaveBlockLabel: false},
+	b"where": KeywordInfo{kind: TokenKind.where, helpText: "Constrains type parameters to require interface conformance.", canHaveBlockLabel: false},
+	b"self": KeywordInfo{kind: TokenKind.self, helpText: "Refers to the current instance in a method.", canHaveBlockLabel: false},
+	b"Self": KeywordInfo{kind: TokenKind.selfType, helpText: "Refers to the current type in a method signature.", canHaveBlockLabel: false},
+	b"throws": KeywordInfo{kind: TokenKind.throws, helpText: "Indicates that a function may throw an error.", canHaveBlockLabel: false},
+	b"from": KeywordInfo{kind: TokenKind.from, helpText: "Used in range expressions (from X to Y).", canHaveBlockLabel: false},
+	b"to": KeywordInfo{kind: TokenKind.to, helpText: "Used in range expressions (from X to Y).", canHaveBlockLabel: false},
+	b"mod": KeywordInfo{kind: TokenKind.mod, helpText: "Modulo operator. Returns the remainder of integer division.", canHaveBlockLabel: false},
+	b"and": KeywordInfo{kind: TokenKind.and, helpText: "AND operator. Logical AND on bools, bitwise AND on integers.", canHaveBlockLabel: false},
+	b"or": KeywordInfo{kind: TokenKind.or, helpText: "OR operator. Logical OR on bools, bitwise OR on integers.", canHaveBlockLabel: true},
+	b"not": KeywordInfo{kind: TokenKind.not, helpText: "NOT operator. Logical NOT on bools, bitwise NOT on integers.", canHaveBlockLabel: false},
+	b"xor": KeywordInfo{kind: TokenKind.xor, helpText: "XOR operator. Logical XOR on bools, bitwise XOR on integers.", canHaveBlockLabel: false},
+	b"shl": KeywordInfo{kind: TokenKind.shl, helpText: "Shift left operator. Shifts integer bits to the left.", canHaveBlockLabel: false},
+	b"shr": KeywordInfo{kind: TokenKind.shr, helpText: "Shift right operator. Shifts integer bits to the right.", canHaveBlockLabel: false},
+	b"as": KeywordInfo{kind: TokenKind.as, helpText: "Type cast operator. Converts a value to a different type.", canHaveBlockLabel: false},
+	b"is": KeywordInfo{kind: TokenKind.is, helpText: "Reference identity operator. Returns true if two references point to the same object.", canHaveBlockLabel: false},
+	b"implements": KeywordInfo{kind: TokenKind.implements, helpText: "Specifies that a type conforms to an interface.", canHaveBlockLabel: false},
+	b"true": KeywordInfo{kind: TokenKind.true, helpText: "Boolean literal representing true.", canHaveBlockLabel: false},
+	b"false": KeywordInfo{kind: TokenKind.false, helpText: "Boolean literal representing false.", canHaveBlockLabel: false},
+	b"int": KeywordInfo{kind: TokenKind.int, helpText: "Primitive integer type (64-bit signed).", canHaveBlockLabel: false},
+	b"float": KeywordInfo{kind: TokenKind.float, helpText: "Primitive floating-point type (64-bit double precision).", canHaveBlockLabel: false},
+	b"bool": KeywordInfo{kind: TokenKind.bool, helpText: "Primitive boolean type (true or false).", canHaveBlockLabel: false},
+	b"byte": KeywordInfo{kind: TokenKind.byte, helpText: "Primitive byte type (8-bit unsigned integer).", canHaveBlockLabel: false},
+	b"array": KeywordInfo{kind: TokenKind.array, helpText: "Used in array type declarations (array of int).", canHaveBlockLabel: false},
+	b"of": KeywordInfo{kind: TokenKind.of, helpText: "Used in array type declarations (array of int).", canHaveBlockLabel: false},
+	b"print": KeywordInfo{kind: TokenKind.print, helpText: "Built-in function for printing to the console. Not a real keyword.", canHaveBlockLabel: false}
 ]
 
 function classifyIdentifier(name ByteArray) returns TokenKind
-  let info = try keywordMap.get(key: name) otherwise 'notFound'
-    return TokenKind.identifier
-  end 'notFound'
-  return info.kind
+	let info = try keywordMap.get(key: name) otherwise 'notFound'
+		return TokenKind.identifier
+	end 'notFound'
+	return info.kind
 end 'classifyIdentifier'
 
 // ASCII byte enum
 enum Ascii
-  lf = 10
-  quote = 39
-  dquote = 34
-  plus = 43
-  minus = 45
-  dot = 46
-  zero = 48
-  backslash = 92
-  upperB = 66
-  upperE = 69
-  upperO = 79
-  upperX = 88
-  underscore = 95
-  lowerB = 98
-  lowerE = 101
-  lowerO = 111
-  lowerX = 120
+	lf = 10
+	quote = 39
+	dquote = 34
+	plus = 43
+	minus = 45
+	dot = 46
+	zero = 48
+	backslash = 92
+	upperB = 66
+	upperE = 69
+	upperO = 79
+	upperX = 88
+	underscore = 95
+	lowerB = 98
+	lowerE = 101
+	lowerO = 111
+	lowerX = 120
 end 'Ascii'
 
 function isHexDigit(b Byte) returns bool
-  return(b >= '0' and b <= '9') or(b >= 'A' and b <= 'F') or(b >= 'a' and b <= 'f')
+	return(b >= '0' and b <= '9') or(b >= 'A' and b <= 'F') or(b >= 'a' and b <= 'f')
 end 'isHexDigit'
 
 function isBinaryDigit(b Byte) returns bool
-  return b == '0' or b == '1'
+	return b == '0' or b == '1'
 end 'isBinaryDigit'
 
 function isOctalDigit(b Byte) returns bool
-  return b >= '0' and b <= '7'
+	return b >= '0' and b <= '7'
 end 'isOctalDigit'

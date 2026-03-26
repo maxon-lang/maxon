@@ -3,222 +3,222 @@
 
 /// HTTP client errors
 export union HttpError implements Error
-  invalidUrl
-  connectFailed
-  sendFailed
-  recvFailed
-  invalidResponse
+	invalidUrl
+	connectFailed
+	sendFailed
+	recvFailed
+	invalidResponse
 end 'HttpError'
 
 /// HTTP request methods
 export enum HttpMethod
-  get
-  post
-  put
-  delete
-  head
-  patch
+	get
+	post
+	put
+	delete
+	head
+	patch
 end 'HttpMethod'
 
 /// Case-insensitive HTTP header map.
 export type HttpHeaders
-  typealias CaseInsensitiveHeaders = Map with String, String
+	typealias CaseInsensitiveHeaders = Map with String, String
 
-  export var headers CaseInsensitiveHeaders
+	export var headers CaseInsensitiveHeaders
 
-  export static function create() returns HttpHeaders
-    return HttpHeaders{headers: CaseInsensitiveHeaders{}}
-  end 'create'
+	export static function create() returns HttpHeaders
+		return HttpHeaders{headers: CaseInsensitiveHeaders{}}
+	end 'create'
 
-  /// Set a header (name is lowercased for case-insensitive storage).
-  export function set(name String, value String)
-    headers.insert(key: name.toLower(), value: value)
-  end 'set'
+	/// Set a header (name is lowercased for case-insensitive storage).
+	export function set(name String, value String)
+		headers.insert(key: name.toLower(), value: value)
+	end 'set'
 
-  /// Get a header value by name. Throws if not present.
-  export function get(name String) returns String throws HttpError
-    let val = try headers.get(name.toLower()) otherwise 'notFound'
-      throw HttpError.invalidResponse
-    end 'notFound'
-    return val
-  end 'get'
+	/// Get a header value by name. Throws if not present.
+	export function get(name String) returns String throws HttpError
+		let val = try headers.get(name.toLower()) otherwise 'notFound'
+			throw HttpError.invalidResponse
+		end 'notFound'
+		return val
+	end 'get'
 
-  /// Check if a header is present.
-  export function has(name String) returns bool
-    return headers.contains(name.toLower())
-  end 'has'
+	/// Check if a header is present.
+	export function has(name String) returns bool
+		return headers.contains(name.toLower())
+	end 'has'
 end 'HttpHeaders'
 
 /// An HTTP request with method, URL, headers, and body.
 export type HttpRequest
-  var httpMethod HttpMethod
-  var requestUrl URL
-  var requestHeaders HttpHeaders
-  var requestBody String
+	var httpMethod HttpMethod
+	var requestUrl URL
+	var requestHeaders HttpHeaders
+	var requestBody String
 
-  /// Create a request from a method and URL string.
-  export static function create(method HttpMethod, url String) returns HttpRequest throws HttpError
-    let parsed = try URL.parse(url) otherwise 'badUrl'
-      throw HttpError.invalidUrl
-    end 'badUrl'
-    return HttpRequest{
-      httpMethod: method,
-      requestUrl: parsed,
-      requestHeaders: HttpHeaders.create(),
-      requestBody: ""
-    }
-  end 'create'
+	/// Create a request from a method and URL string.
+	export static function create(method HttpMethod, url String) returns HttpRequest throws HttpError
+		let parsed = try URL.parse(url) otherwise 'badUrl'
+			throw HttpError.invalidUrl
+		end 'badUrl'
+		return HttpRequest{
+			httpMethod: method,
+			requestUrl: parsed,
+			requestHeaders: HttpHeaders.create(),
+			requestBody: ""
+		}
+	end 'create'
 
-  /// Set a request header.
-  export function setHeader(name String, value String)
-    requestHeaders.set(name, value: value)
-  end 'setHeader'
+	/// Set a request header.
+	export function setHeader(name String, value String)
+		requestHeaders.set(name, value: value)
+	end 'setHeader'
 
-  /// Set the request body.
-  export function setBody(body String)
-    requestBody = body
-  end 'setBody'
+	/// Set the request body.
+	export function setBody(body String)
+		requestBody = body
+	end 'setBody'
 
-  export function url() returns URL
-    return requestUrl
-  end 'url'
+	export function url() returns URL
+		return requestUrl
+	end 'url'
 
-  export function method() returns HttpMethod
-    return httpMethod
-  end 'method'
+	export function method() returns HttpMethod
+		return httpMethod
+	end 'method'
 
-  export function headers() returns HttpHeaders
-    return requestHeaders
-  end 'headers'
+	export function headers() returns HttpHeaders
+		return requestHeaders
+	end 'headers'
 
-  export function body() returns String
-    return requestBody
-  end 'body'
+	export function body() returns String
+		return requestBody
+	end 'body'
 end 'HttpRequest'
 
 /// HTTP status codes.
 export enum StatusCode
-  ok = 200
-  created = 201
-  noContent = 204
-  movedPermanently = 301
-  found = 302
-  notModified = 304
-  badRequest = 400
-  unauthorized = 401
-  forbidden = 403
-  notFound = 404
-  methodNotAllowed = 405
-  conflict = 409
-  gone = 410
-  internalServerError = 500
-  notImplemented = 501
-  badGateway = 502
-  serviceUnavailable = 503
+	ok = 200
+	created = 201
+	noContent = 204
+	movedPermanently = 301
+	found = 302
+	notModified = 304
+	badRequest = 400
+	unauthorized = 401
+	forbidden = 403
+	notFound = 404
+	methodNotAllowed = 405
+	conflict = 409
+	gone = 410
+	internalServerError = 500
+	notImplemented = 501
+	badGateway = 502
+	serviceUnavailable = 503
 end 'StatusCode'
 
 /// An HTTP response with status code, headers, and body.
 export type HttpResponse
-  var code StatusCode
-  var reasonPhrase String
-  var responseHeaders HttpHeaders
-  var responseBody String
+	var code StatusCode
+	var reasonPhrase String
+	var responseHeaders HttpHeaders
+	var responseBody String
 
-  export function statusCode() returns StatusCode
-    return code
-  end 'statusCode'
+	export function statusCode() returns StatusCode
+		return code
+	end 'statusCode'
 
-  export function reason() returns String
-    return reasonPhrase
-  end 'reason'
+	export function reason() returns String
+		return reasonPhrase
+	end 'reason'
 
-  export function headers() returns HttpHeaders
-    return responseHeaders
-  end 'headers'
+	export function headers() returns HttpHeaders
+		return responseHeaders
+	end 'headers'
 
-  export function body() returns String
-    return responseBody
-  end 'body'
+	export function body() returns String
+		return responseBody
+	end 'body'
 
-  /// Get a response header by name. Throws if not present.
-  export function header(name String) returns String throws HttpError
-    return try responseHeaders.get(name)
-  end 'header'
+	/// Get a response header by name. Throws if not present.
+	export function header(name String) returns String throws HttpError
+		return try responseHeaders.get(name)
+	end 'header'
 end 'HttpResponse'
 
 /// Stateless HTTP/1.1 client. All methods are static.
 /// HTTP only (no TLS). Uses Connection: close for simple response reading.
 export type HttpClient
 
-  /// Send an HTTP request and return the response.
-  export static function send(request HttpRequest) returns HttpResponse throws HttpError
-    let url = request.url()
-    let host = try url.host() otherwise 'noHost'
-      throw HttpError.invalidUrl
-    end 'noHost'
-    let port = try url.port() otherwise 80
+	/// Send an HTTP request and return the response.
+	export static function send(request HttpRequest) returns HttpResponse throws HttpError
+		let url = request.url()
+		let host = try url.host() otherwise 'noHost'
+			throw HttpError.invalidUrl
+		end 'noHost'
+		let port = try url.port() otherwise 80
 
-    // Build the raw HTTP request
-    let rawRequest = _httpBuildRequest(request)
+		// Build the raw HTTP request
+		let rawRequest = _httpBuildRequest(request)
 
-    // Connect via TcpClient
-    let client = try TcpClient.connect(host, port: port) otherwise 'connFail'
-      throw HttpError.connectFailed
-    end 'connFail'
+		// Connect via TcpClient
+		let client = try TcpClient.connect(host, port: port) otherwise 'connFail'
+			throw HttpError.connectFailed
+		end 'connFail'
 
-    // Send the request
-    let _ = try client.send(rawRequest) otherwise 'sendFail'
-      throw HttpError.sendFailed
-    end 'sendFail'
+		// Send the request
+		let _ = try client.send(rawRequest) otherwise 'sendFail'
+			throw HttpError.sendFailed
+		end 'sendFail'
 
-    #if testing(true)
-      // to ensure test output is deterministic we sleep briefly to allow the server to send the full response before we start receiving. In production this is not needed and would just add unnecessary latency.
-      sleep(100)
-    #endif
+		#if testing(true)
+			// to ensure test output is deterministic we sleep briefly to allow the server to send the full response before we start receiving. In production this is not needed and would just add unnecessary latency.
+			sleep(100)
+		#endif
 
-    // Receive response until server closes connection
-    var responseData = ""
-    var receiving = true
-    while receiving 'recvLoop'
-      if let chunk = try client.recv(4096) 'gotData'
-        responseData = responseData.concat(chunk)
-      end 'gotData' else 'recvDone'
-        receiving = false
-      end 'recvDone'
-    end 'recvLoop'
+		// Receive response until server closes connection
+		var responseData = ""
+		var receiving = true
+		while receiving 'recvLoop'
+			if let chunk = try client.recv(4096) 'gotData'
+				responseData = responseData.concat(chunk)
+			end 'gotData' else 'recvDone'
+				receiving = false
+			end 'recvDone'
+		end 'recvLoop'
 
-    // Close connection
-    client.close()
+		// Close connection
+		client.close()
 
-    // Parse the response
-    let response = try _httpParseResponse(responseData)
-    return response
-  end 'send'
+		// Parse the response
+		let response = try _httpParseResponse(responseData)
+		return response
+	end 'send'
 
-  /// Perform an HTTP GET request.
-  export static function get(url String) returns HttpResponse throws HttpError
-    var request = try HttpRequest.create(HttpMethod.get, url: url)
-    return try send(request)
-  end 'get'
+	/// Perform an HTTP GET request.
+	export static function get(url String) returns HttpResponse throws HttpError
+		var request = try HttpRequest.create(HttpMethod.get, url: url)
+		return try send(request)
+	end 'get'
 
-  /// Perform an HTTP POST request with a body.
-  export static function post(url String, body String) returns HttpResponse throws HttpError
-    var request = try HttpRequest.create(HttpMethod.post, url: url)
-    request.setBody(body)
-    request.setHeader("content-type", value: "application/x-www-form-urlencoded")
-    return try send(request)
-  end 'post'
+	/// Perform an HTTP POST request with a body.
+	export static function post(url String, body String) returns HttpResponse throws HttpError
+		var request = try HttpRequest.create(HttpMethod.post, url: url)
+		request.setBody(body)
+		request.setHeader("content-type", value: "application/x-www-form-urlencoded")
+		return try send(request)
+	end 'post'
 
-  /// Perform an HTTP PUT request with a body.
-  export static function put(url String, body String) returns HttpResponse throws HttpError
-    var request = try HttpRequest.create(HttpMethod.put, url: url)
-    request.setBody(body)
-    return try send(request)
-  end 'put'
+	/// Perform an HTTP PUT request with a body.
+	export static function put(url String, body String) returns HttpResponse throws HttpError
+		var request = try HttpRequest.create(HttpMethod.put, url: url)
+		request.setBody(body)
+		return try send(request)
+	end 'put'
 
-  /// Perform an HTTP DELETE request.
-  export static function delete(url String) returns HttpResponse throws HttpError
-    var request = try HttpRequest.create(HttpMethod.delete, url: url)
-    return try send(request)
-  end 'delete'
+	/// Perform an HTTP DELETE request.
+	export static function delete(url String) returns HttpResponse throws HttpError
+		var request = try HttpRequest.create(HttpMethod.delete, url: url)
+		return try send(request)
+	end 'delete'
 end 'HttpClient'

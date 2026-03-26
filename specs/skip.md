@@ -46,15 +46,15 @@ end 'loop'
 Basic skip: skip 1 skips one element.
 ```maxon
 function main() returns ExitCode
-    var items = [10, 20, 30, 40, 50]
-    var sum = 0
-    for item in items 'loop'
-        if item == 20 'check'
-            skip 1
-        end 'check'
-        sum = sum + item
-    end 'loop'
-    return sum
+		var items = [10, 20, 30, 40, 50]
+		var sum = 0
+		for item in items 'loop'
+				if item == 20 'check'
+						skip 1
+				end 'check'
+				sum = sum + item
+		end 'loop'
+		return sum
 end 'main'
 ```
 ```exitcode
@@ -67,15 +67,15 @@ end 'main'
 Skip multiple: skip 2 skips rest of current iteration plus the next two elements.
 ```maxon
 function main() returns ExitCode
-    var items = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
-    var sum = 0
-    for item in items 'loop'
-        if item == 3 'check'
-            skip 2
-        end 'check'
-        sum = sum + item
-    end 'loop'
-    return sum
+		var items = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+		var sum = 0
+		for item in items 'loop'
+				if item == 3 'check'
+						skip 2
+				end 'check'
+				sum = sum + item
+		end 'loop'
+		return sum
 end 'main'
 ```
 ```exitcode
@@ -88,15 +88,15 @@ end 'main'
 Skip zero: skip 0 behaves like continue.
 ```maxon
 function main() returns ExitCode
-    var items = [10, 20, 30, 40, 50]
-    var sum = 0
-    for item in items 'loop'
-        if item == 30 'check'
-            skip 0
-        end 'check'
-        sum = sum + item
-    end 'loop'
-    return sum
+		var items = [10, 20, 30, 40, 50]
+		var sum = 0
+		for item in items 'loop'
+				if item == 30 'check'
+						skip 0
+				end 'check'
+				sum = sum + item
+		end 'loop'
+		return sum
 end 'main'
 ```
 ```exitcode
@@ -109,15 +109,15 @@ end 'main'
 Skip past end: skip n where n exceeds remaining elements exits the loop.
 ```maxon
 function main() returns ExitCode
-    var items = [10, 20, 30, 40, 50]
-    var sum = 0
-    for item in items 'loop'
-        if item == 30 'check'
-            skip 100
-        end 'check'
-        sum = sum + item
-    end 'loop'
-    return sum
+		var items = [10, 20, 30, 40, 50]
+		var sum = 0
+		for item in items 'loop'
+				if item == 30 'check'
+						skip 100
+				end 'check'
+				sum = sum + item
+		end 'loop'
+		return sum
 end 'main'
 ```
 ```exitcode
@@ -130,16 +130,16 @@ end 'main'
 Skip with variable: skip someVar with runtime-computed skip count.
 ```maxon
 function main() returns ExitCode
-    var items = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
-    var sum = 0
-    var skipCount = 3
-    for item in items 'loop'
-        if item == 2 'check'
-            skip skipCount
-        end 'check'
-        sum = sum + item
-    end 'loop'
-    return sum
+		var items = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+		var sum = 0
+		var skipCount = 3
+		for item in items 'loop'
+				if item == 2 'check'
+						skip skipCount
+				end 'check'
+				sum = sum + item
+		end 'loop'
+		return sum
 end 'main'
 ```
 ```exitcode
@@ -152,17 +152,17 @@ end 'main'
 Skip in nested loops: skip in inner loop only affects inner loop.
 ```maxon
 function main() returns ExitCode
-    var sum = 0
-    for _ in 1 to 2 'outer'
-        var inner = [10, 20, 30, 40, 50]
-        for i in inner 'inner'
-            if i == 20 'check'
-                skip 1
-            end 'check'
-            sum = sum + i
-        end 'inner'
-    end 'outer'
-    return sum
+		var sum = 0
+		for _ in 1 to 2 'outer'
+				var inner = [10, 20, 30, 40, 50]
+				for i in inner 'inner'
+						if i == 20 'check'
+								skip 1
+						end 'check'
+						sum = sum + i
+				end 'inner'
+		end 'outer'
+		return sum
 end 'main'
 ```
 ```exitcode
@@ -175,15 +175,15 @@ end 'main'
 Skip with enumerated iterator: index advances correctly when skipping.
 ```maxon
 function main() returns ExitCode
-    var items = [10, 20, 30, 40, 50]
-    var sum = 0
-    for (i, item) in items.enumerated() 'loop'
-        if i == 1 'check'
-            skip 2
-        end 'check'
-        sum = sum + item
-    end 'loop'
-    return sum
+		var items = [10, 20, 30, 40, 50]
+		var sum = 0
+		for (i, item) in items.enumerated() 'loop'
+				if i == 1 'check'
+						skip 2
+				end 'check'
+				sum = sum + item
+		end 'loop'
+		return sum
 end 'main'
 ```
 ```exitcode
@@ -196,30 +196,30 @@ end 'main'
 Error: skip in while loop produces a compile error.
 ```maxon
 function main() returns ExitCode
-    var i = 0
-    while i < 10 'loop'
-        skip 1
-        i = i + 1
-    end 'loop'
-    return 0
+		var i = 0
+		while i < 10 'loop'
+				skip 1
+				i = i + 1
+		end 'loop'
+		return 0
 end 'main'
 ```
 ```maxoncstderr
-error E2047: specs/fragments/skip/skip.error-while-loop.test:5:9: 'skip' can only be used inside a for loop
+error E2047: specs/fragments/skip/skip.error-while-loop.test:5:5: 'skip' can only be used inside a for loop
 ```
 
 <!-- test: skip.range-basic -->
 Basic skip in range loop: skip 2 skips rest of current iteration and next two values.
 ```maxon
 function main() returns ExitCode
-    var sum = 0
-    for i in 1 to 10 'loop'
-        if i == 3 'check'
-            skip 2
-        end 'check'
-        sum = sum + i
-    end 'loop'
-    return sum
+		var sum = 0
+		for i in 1 to 10 'loop'
+				if i == 3 'check'
+						skip 2
+				end 'check'
+				sum = sum + i
+		end 'loop'
+		return sum
 end 'main'
 ```
 ```exitcode
@@ -232,14 +232,14 @@ end 'main'
 Skip 0 in range loop behaves like continue.
 ```maxon
 function main() returns ExitCode
-    var sum = 0
-    for i in 1 to 5 'loop'
-        if i == 3 'check'
-            skip 0
-        end 'check'
-        sum = sum + i
-    end 'loop'
-    return sum
+		var sum = 0
+		for i in 1 to 5 'loop'
+				if i == 3 'check'
+						skip 0
+				end 'check'
+				sum = sum + i
+		end 'loop'
+		return sum
 end 'main'
 ```
 ```exitcode
@@ -252,14 +252,14 @@ end 'main'
 Skip past end in range loop exits the loop gracefully.
 ```maxon
 function main() returns ExitCode
-    var sum = 0
-    for i in 1 to 5 'loop'
-        if i == 3 'check'
-            skip 100
-        end 'check'
-        sum = sum + i
-    end 'loop'
-    return sum
+		var sum = 0
+		for i in 1 to 5 'loop'
+				if i == 3 'check'
+						skip 100
+				end 'check'
+				sum = sum + i
+		end 'loop'
+		return sum
 end 'main'
 ```
 ```exitcode
@@ -272,10 +272,10 @@ end 'main'
 Error: skip outside any loop produces a compile error.
 ```maxon
 function main() returns ExitCode
-    skip 1
-    return 0
+		skip 1
+		return 0
 end 'main'
 ```
 ```maxoncstderr
-error E2001: specs/fragments/skip/skip.error-outside-loop.test:3:5: 'skip' can only be used inside a loop
+error E2001: specs/fragments/skip/skip.error-outside-loop.test:3:3: 'skip' can only be used inside a loop
 ```

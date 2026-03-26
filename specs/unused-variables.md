@@ -15,12 +15,12 @@ Maxon requires all local variables to be used. Declaring a variable with `var` o
 
 ```maxon
 function main() returns ExitCode
-  var x = 42  // Error: 'x' is unused
-  return 0
+	var x = 42  // Error: 'x' is unused
+	return 0
 end 'main'
 ```
 ```maxoncstderr
-error E3012: specs/fragments/unused-variables/docs-example-1.test:3:7: unused variable: 'x'
+error E3012: specs/fragments/unused-variables/docs-example-1.test:3:6: unused variable: 'x'
 ```
 
 ### Discarding Return Values
@@ -31,13 +31,13 @@ Use `let _ =` to discard a function's return value:
 typealias Integer = int(i64.min to i64.max)
 
 function sideEffect() returns Integer
-  print("hello\n")
-  return 42
+	print("hello\n")
+	return 42
 end 'sideEffect'
 
 function main() returns ExitCode
-  let _ = sideEffect()  // OK: underscore discards return value
-  return 0
+	let _ = sideEffect()  // OK: underscore discards return value
+	return 0
 end 'main'
 ```
 
@@ -47,32 +47,32 @@ end 'main'
 ```maxon
 
 function main() returns ExitCode
-  var x = 42
-  return 0
+	var x = 42
+	return 0
 end 'main'
 ```
 ```maxoncstderr
-error E3012: specs/fragments/unused-variables/unused-var.test:4:7: unused variable: 'x'
+error E3012: specs/fragments/unused-variables/unused-var.test:4:6: unused variable: 'x'
 ```
 
 <!-- test: unused-let -->
 ```maxon
 
 function main() returns ExitCode
-  let x = 42
-  return 0
+	let x = 42
+	return 0
 end 'main'
 ```
 ```maxoncstderr
-error E3012: specs/fragments/unused-variables/unused-let.test:4:7: unused variable: 'x'
+error E3012: specs/fragments/unused-variables/unused-let.test:4:6: unused variable: 'x'
 ```
 
 <!-- test: used-var -->
 ```maxon
 
 function main() returns ExitCode
-  var x = 42
-  return x
+	var x = 42
+	return x
 end 'main'
 ```
 ```exitcode
@@ -83,8 +83,8 @@ end 'main'
 ```maxon
 
 function main() returns ExitCode
-  let x = 10
-  return x
+	let x = 10
+	return x
 end 'main'
 ```
 ```exitcode
@@ -95,23 +95,23 @@ end 'main'
 ```maxon
 
 function main() returns ExitCode
-  let _ = 42
-  return 0
+	let _ = 42
+	return 0
 end 'main'
 ```
 ```maxoncstderr
-error E3067: specs/fragments/unused-variables/underscore-discard.test:4:7: expected a function call
+error E3067: specs/fragments/unused-variables/underscore-discard.test:4:6: expected a function call
 ```
 
 <!-- test: used-in-nested-scope -->
 ```maxon
 
 function main() returns ExitCode
-  var x = 42
-  if x > 0 'check'
-    return x
-  end 'check'
-  return 0
+	var x = 42
+	if x > 0 'check'
+		return x
+	end 'check'
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -124,57 +124,57 @@ end 'main'
 typealias Small = int(0 to 100)
 
 function makePair() returns (Small, Small)
-  return (10, 20)
+	return (10, 20)
 end 'makePair'
 
 function main() returns ExitCode
-  var (a, b) = makePair()
-  return a
+	var (a, b) = makePair()
+	return a
 end 'main'
 ```
 ```maxoncstderr
-error E3012: specs/fragments/unused-variables/tuple-destructuring-unused.test:10:11: unused variable: 'b'
+error E3012: specs/fragments/unused-variables/tuple-destructuring-unused.test:10:10: unused variable: 'b'
 ```
 
 <!-- test: multiple-unused-first-reported -->
 ```maxon
 
 function main() returns ExitCode
-  var x = 1
-  var y = 2
-  return 0
+	var x = 1
+	var y = 2
+	return 0
 end 'main'
 ```
 ```maxoncstderr
-error E3012: specs/fragments/unused-variables/multiple-unused-first-reported.test:4:7: unused variable: 'x'
+error E3012: specs/fragments/unused-variables/multiple-unused-first-reported.test:4:6: unused variable: 'x'
 ```
 
 <!-- test: unused-for-in-variable -->
 ```maxon
 
 function main() returns ExitCode
-  var arr = [1, 2, 3]
-  var count = 0
-  for s in arr 'loop'
-    count = count + 1
-  end 'loop'
-  return count
+	var arr = [1, 2, 3]
+	var count = 0
+	for s in arr 'loop'
+		count = count + 1
+	end 'loop'
+	return count
 end 'main'
 ```
 ```maxoncstderr
-error E3012: specs/fragments/unused-variables/unused-for-in-variable.test:6:7: unused variable: 's'
+error E3012: specs/fragments/unused-variables/unused-for-in-variable.test:6:6: unused variable: 's'
 ```
 
 <!-- test: used-for-in-variable -->
 ```maxon
 
 function main() returns ExitCode
-  var arr = [10, 20, 30]
-  var total = 0
-  for s in arr 'loop'
-    total = total + s
-  end 'loop'
-  return total
+	var arr = [10, 20, 30]
+	var total = 0
+	for s in arr 'loop'
+		total = total + s
+	end 'loop'
+	return total
 end 'main'
 ```
 ```exitcode
@@ -185,12 +185,12 @@ end 'main'
 ```maxon
 
 function main() returns ExitCode
-  var arr = [1, 2, 3]
-  var count = 0
-  for _ in arr 'loop'
-    count = count + 1
-  end 'loop'
-  return count
+	var arr = [1, 2, 3]
+	var count = 0
+	for _ in arr 'loop'
+		count = count + 1
+	end 'loop'
+	return count
 end 'main'
 ```
 ```exitcode
@@ -201,15 +201,15 @@ end 'main'
 ```maxon
 
 function main() returns ExitCode
-  var count = 0
-  for i in 0 upto 3 'loop'
-    count = count + 1
-  end 'loop'
-  return count
+	var count = 0
+	for i in 0 upto 3 'loop'
+		count = count + 1
+	end 'loop'
+	return count
 end 'main'
 ```
 ```maxoncstderr
-error E3012: specs/fragments/unused-variables/unused-for-range-variable.test:5:7: unused variable: 'i'
+error E3012: specs/fragments/unused-variables/unused-for-range-variable.test:5:6: unused variable: 'i'
 ```
 
 <!-- test: unused-match-binding -->
@@ -218,20 +218,20 @@ error E3012: specs/fragments/unused-variables/unused-for-range-variable.test:5:7
 typealias Integer = int(i64.min to i64.max)
 
 union Container
-  empty
-  value(n Integer)
+	empty
+	value(n Integer)
 end 'Container'
 
 function main() returns ExitCode
-  var c = Container.value(42)
-  match c 'check'
-    empty then return 1
-    value(n) then return 0
-  end 'check'
+	var c = Container.value(42)
+	match c 'check'
+		empty then return 1
+		value(n) then return 0
+	end 'check'
 end 'main'
 ```
 ```maxoncstderr
-error E3012: specs/fragments/unused-variables/unused-match-binding.test:14:11: unused variable: 'n'
+error E3012: specs/fragments/unused-variables/unused-match-binding.test:14:9: unused variable: 'n'
 ```
 
 <!-- test: used-match-binding -->
@@ -240,16 +240,16 @@ error E3012: specs/fragments/unused-variables/unused-match-binding.test:14:11: u
 typealias Integer = int(i64.min to i64.max)
 
 union Container
-  empty
-  value(n Integer)
+	empty
+	value(n Integer)
 end 'Container'
 
 function main() returns ExitCode
-  var c = Container.value(42)
-  match c 'check'
-    empty then return 1
-    value(n) then return n
-  end 'check'
+	var c = Container.value(42)
+	match c 'check'
+		empty then return 1
+		value(n) then return n
+	end 'check'
 end 'main'
 ```
 ```exitcode
@@ -262,16 +262,16 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 union Container
-  empty
-  value(n Integer)
+	empty
+	value(n Integer)
 end 'Container'
 
 function main() returns ExitCode
-  var c = Container.value(42)
-  match c 'check'
-    empty then return 1
-    value(_) then return 0
-  end 'check'
+	var c = Container.value(42)
+	match c 'check'
+		empty then return 1
+		value(_) then return 0
+	end 'check'
 end 'main'
 ```
 ```exitcode
@@ -284,16 +284,16 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 function apply(f (Integer) returns Integer, x Integer) returns Integer
-  return f(x)
+	return f(x)
 end 'apply'
 
 function main() returns ExitCode
-  var result = apply(f: (n Integer) gives 42, x: 10)
-  return result
+	var result = apply(f: (n Integer) gives 42, x: 10)
+	return result
 end 'main'
 ```
 ```maxoncstderr
-error E3012: specs/fragments/unused-variables/unused-closure-param.test:10:26: unused variable: 'n'
+error E3012: specs/fragments/unused-variables/unused-closure-param.test:10:25: unused variable: 'n'
 ```
 
 <!-- test: used-closure-param -->
@@ -302,12 +302,12 @@ error E3012: specs/fragments/unused-variables/unused-closure-param.test:10:26: u
 typealias Integer = int(i64.min to i64.max)
 
 function apply(f (Integer) returns Integer, x Integer) returns Integer
-  return f(x)
+	return f(x)
 end 'apply'
 
 function main() returns ExitCode
-  var result = apply(f: (n Integer) gives n + 1, x: 10)
-  return result
+	var result = apply(f: (n Integer) gives n + 1, x: 10)
+	return result
 end 'main'
 ```
 ```exitcode
@@ -320,12 +320,12 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 function apply(f (Integer) returns Integer, x Integer) returns Integer
-  return f(x)
+	return f(x)
 end 'apply'
 
 function main() returns ExitCode
-  var result = apply(f: (_ Integer) gives 42, x: 10)
-  return result
+	var result = apply(f: (_ Integer) gives 42, x: 10)
+	return result
 end 'main'
 ```
 ```exitcode

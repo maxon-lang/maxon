@@ -58,12 +58,12 @@ end
 <!-- test: managed-file.open-read-nonexistent -->
 ```maxon
 function main() returns ExitCode
-  let result = __ManagedFile.openRead("nonexistent_file_xyz_98765.txt".managed)
-  if result == -1 'notFound'
-    print("not found")
-    return 42
-  end 'notFound'
-  return 0
+	let result = __ManagedFile.openRead("nonexistent_file_xyz_98765.txt".managed)
+	if result == -1 'notFound'
+		print("not found")
+		return 42
+	end 'notFound'
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -76,51 +76,51 @@ not found
 <!-- test: managed-file.write-and-read -->
 ```maxon
 type TestFile
-  export var _file __ManagedFile
+	export var _file __ManagedFile
 end 'TestFile'
 
 function main() returns ExitCode
-  let path = "test_managed_file_rw.txt"
-  // Write a file
-  let writeResult = __ManagedFile.openWrite(path.managed)
-  if writeResult == -1 'writeFail'
-    print("write open failed")
-    return 1
-  end 'writeFail'
-  var wf = TestFile{_file: writeResult}
-  let content = "Hello Managed"
-  let written = wf._file.write(content.managed)
-  wf._file.close()
-  if written < 0 'writeErr'
-    return 3
-  end 'writeErr'
+	let path = "test_managed_file_rw.txt"
+	// Write a file
+	let writeResult = __ManagedFile.openWrite(path.managed)
+	if writeResult == -1 'writeFail'
+		print("write open failed")
+		return 1
+	end 'writeFail'
+	var wf = TestFile{_file: writeResult}
+	let content = "Hello Managed"
+	let written = wf._file.write(content.managed)
+	wf._file.close()
+	if written < 0 'writeErr'
+		return 3
+	end 'writeErr'
 
-  // Read it back
-  let readResult = __ManagedFile.openRead(path.managed)
-  if readResult == -1 'readFail'
-    print("read open failed")
-    return 2
-  end 'readFail'
-  var rf = TestFile{_file: readResult}
-  let size = rf._file.size()
-  var buffer = __ManagedMemory.create(size + 1, 1)
-  let bytesRead = rf._file.read(buffer, size)
-  rf._file.close()
-  buffer.setLength(bytesRead)
-  // Null-terminate
-  buffer.setLength(bytesRead + 1)
-  buffer.setByte(bytesRead, 0)
-  buffer.setLength(bytesRead)
-  let readContent = String{managed: buffer, _iterPos: 0}
-  print("{readContent}")
+	// Read it back
+	let readResult = __ManagedFile.openRead(path.managed)
+	if readResult == -1 'readFail'
+		print("read open failed")
+		return 2
+	end 'readFail'
+	var rf = TestFile{_file: readResult}
+	let size = rf._file.size()
+	var buffer = __ManagedMemory.create(size + 1, 1)
+	let bytesRead = rf._file.read(buffer, size)
+	rf._file.close()
+	buffer.setLength(bytesRead)
+	// Null-terminate
+	buffer.setLength(bytesRead + 1)
+	buffer.setByte(bytesRead, 0)
+	buffer.setLength(bytesRead)
+	let readContent = String{managed: buffer, _iterPos: 0}
+	print("{readContent}")
 
-  // Clean up
-  let delResult = __ManagedFile.delete(path.managed)
-  if delResult != 0 'delErr'
-    return 4
-  end 'delErr'
+	// Clean up
+	let delResult = __ManagedFile.delete(path.managed)
+	if delResult != 0 'delErr'
+		return 4
+	end 'delErr'
 
-  return 42
+	return 42
 end 'main'
 ```
 ```exitcode
@@ -133,34 +133,34 @@ Hello Managed
 <!-- test: managed-file.exists -->
 ```maxon
 type TestFile
-  export var _file __ManagedFile
+	export var _file __ManagedFile
 end 'TestFile'
 
 function createEmptyFile(path String)
-  let result = __ManagedFile.openWrite(path.managed)
-  var f = TestFile{_file: result}
-  f._file.close()
+	let result = __ManagedFile.openWrite(path.managed)
+	var f = TestFile{_file: result}
+	f._file.close()
 end 'createEmptyFile'
 
 function main() returns ExitCode
-  // Non-existent file
-  let e1 = __ManagedFile.exists("nonexistent_xyz_managed_12345.txt".managed)
-  if e1 != 0 'check1'
-    return 1
-  end 'check1'
+	// Non-existent file
+	let e1 = __ManagedFile.exists("nonexistent_xyz_managed_12345.txt".managed)
+	if e1 != 0 'check1'
+		return 1
+	end 'check1'
 
-  // Create a file, check exists, delete it
-  let path = "test_managed_exists.txt"
-  createEmptyFile(path)
-  let e2 = __ManagedFile.exists(path.managed)
-  if e2 != 1 'check2'
-    return 2
-  end 'check2'
-  let delResult = __ManagedFile.delete(path.managed)
-  if delResult != 0 'delErr'
-    return 4
-  end 'delErr'
-  return 42
+	// Create a file, check exists, delete it
+	let path = "test_managed_exists.txt"
+	createEmptyFile(path)
+	let e2 = __ManagedFile.exists(path.managed)
+	if e2 != 1 'check2'
+		return 2
+	end 'check2'
+	let delResult = __ManagedFile.delete(path.managed)
+	if delResult != 0 'delErr'
+		return 4
+	end 'delErr'
+	return 42
 end 'main'
 ```
 ```exitcode
@@ -170,12 +170,12 @@ end 'main'
 <!-- test: managed-file.delete-nonexistent -->
 ```maxon
 function main() returns ExitCode
-  let result = __ManagedFile.delete("nonexistent_delete_xyz.txt".managed)
-  if result != 0 'checkFail'
-    print("delete failed as expected")
-    return 42
-  end 'checkFail'
-  return 0
+	let result = __ManagedFile.delete("nonexistent_delete_xyz.txt".managed)
+	if result != 0 'checkFail'
+		print("delete failed as expected")
+		return 42
+	end 'checkFail'
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -188,40 +188,40 @@ delete failed as expected
 <!-- test: managed-file.auto-close -->
 ```maxon
 type TestFile
-  export var _file __ManagedFile
+	export var _file __ManagedFile
 end 'TestFile'
 
 function writeFile(path String)
-  let result = __ManagedFile.openWrite(path.managed)
-  var wf = TestFile{_file: result}
-  let written = wf._file.write("auto".managed)
-  if written < 0 'writeErr'
-    panic("write failed")
-  end 'writeErr'
-  // wf goes out of scope here, destructor closes handle
+	let result = __ManagedFile.openWrite(path.managed)
+	var wf = TestFile{_file: result}
+	let written = wf._file.write("auto".managed)
+	if written < 0 'writeErr'
+		panic("write failed")
+	end 'writeErr'
+	// wf goes out of scope here, destructor closes handle
 end 'writeFile'
 
 function main() returns ExitCode
-  let path = "test_managed_autoclose.txt"
-  writeFile(path)
+	let path = "test_managed_autoclose.txt"
+	writeFile(path)
 
-  // Verify we can read it (file was properly closed by destructor)
-  let readResult = __ManagedFile.openRead(path.managed)
-  if readResult == -1 'readFail'
-    print("read failed")
-    return 1
-  end 'readFail'
-  var rf = TestFile{_file: readResult}
-  let size = rf._file.size()
-  rf._file.close()
-  let delResult = __ManagedFile.delete(path.managed)
-  if delResult != 0 'delErr'
-    return 2
-  end 'delErr'
-  if size == 4 'sizeOk'
-    return 42
-  end 'sizeOk'
-  return 0
+	// Verify we can read it (file was properly closed by destructor)
+	let readResult = __ManagedFile.openRead(path.managed)
+	if readResult == -1 'readFail'
+		print("read failed")
+		return 1
+	end 'readFail'
+	var rf = TestFile{_file: readResult}
+	let size = rf._file.size()
+	rf._file.close()
+	let delResult = __ManagedFile.delete(path.managed)
+	if delResult != 0 'delErr'
+		return 2
+	end 'delErr'
+	if size == 4 'sizeOk'
+		return 42
+	end 'sizeOk'
+	return 0
 end 'main'
 ```
 ```exitcode
@@ -231,10 +231,10 @@ end 'main'
 <!-- test: managed-file.error-direct-construction -->
 ```maxon
 function main() returns ExitCode
-  let f = __ManagedFile{_handle: 0}
-  return 0
+	let f = __ManagedFile{_handle: 0}
+	return 0
 end 'main'
 ```
 ```maxoncstderr
-error E3072: specs/fragments/managed-file/managed-file.error-direct-construction.test:3:25: '__ManagedFile' is a compiler builtin type and cannot be constructed directly
+error E3072: specs/fragments/managed-file/managed-file.error-direct-construction.test:3:24: '__ManagedFile' is a compiler builtin type and cannot be constructed directly
 ```

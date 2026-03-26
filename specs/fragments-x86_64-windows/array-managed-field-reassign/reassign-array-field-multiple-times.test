@@ -2,46 +2,46 @@
 typealias Integer = int(i64.min to i64.max)
 
 export union Tag
-    name(s String)
-    id(n Integer)
-    none
+		name(s String)
+		id(n Integer)
+		none
 end 'Tag'
 
 type Entry
-    export var tag Tag
+		export var tag Tag
 end 'Entry'
 
 typealias EntryArray = Array with Entry
 
 type Store
-    export var entries EntryArray
+		export var entries EntryArray
 end 'Store'
 
 function removeNone(store Store)
-    var kept = EntryArray{}
-    for e in store.entries 'scan'
-        match e.tag 'check'
-            none then continue
-            name(_) then kept.push(e)
-            id(_) then kept.push(e)
-        end 'check'
-    end 'scan'
-    store.entries = kept
+		var kept = EntryArray{}
+		for e in store.entries 'scan'
+				match e.tag 'check'
+						none then continue
+						name(_) then kept.push(e)
+						id(_) then kept.push(e)
+				end 'check'
+		end 'scan'
+		store.entries = kept
 end 'removeNone'
 
 function main() returns ExitCode
-    var entries = EntryArray{}
-    entries.push(Entry{tag: Tag.name("first long string for heap allocation purposes")})
-    entries.push(Entry{tag: Tag.none})
-    entries.push(Entry{tag: Tag.id(42)})
-    entries.push(Entry{tag: Tag.none})
-    entries.push(Entry{tag: Tag.name("second long string for heap allocation purposes")})
-    entries.push(Entry{tag: Tag.none})
-    let store = Store{entries: entries}
-    removeNone(store)
-    removeNone(store)
-    removeNone(store)
-    return store.entries.count()
+		var entries = EntryArray{}
+		entries.push(Entry{tag: Tag.name("first long string for heap allocation purposes")})
+		entries.push(Entry{tag: Tag.none})
+		entries.push(Entry{tag: Tag.id(42)})
+		entries.push(Entry{tag: Tag.none})
+		entries.push(Entry{tag: Tag.name("second long string for heap allocation purposes")})
+		entries.push(Entry{tag: Tag.none})
+		let store = Store{entries: entries}
+		removeNone(store)
+		removeNone(store)
+		removeNone(store)
+		return store.entries.count()
 end 'main'
 ---
 ExitCode: 3
