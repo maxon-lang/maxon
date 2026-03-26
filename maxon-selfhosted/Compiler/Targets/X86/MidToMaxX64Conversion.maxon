@@ -5,6 +5,8 @@
 // Sentinel values matching RegisterManager's constants
 let RM_NONE = -1
 let RM_NO_STACK_HOME = -9223372036854775807
+// Sentinel for CC register reservation during call argument loading
+let RM_CALL_ARG_SENTINEL = -1000
 
 export function lowerMidToMaxX64(module MlirModule, target Target) returns MlirModule
   logDebug(LogCategory.mlir, message: () gives "Lowering Mid to MaxX64 dialect")
@@ -111,12 +113,11 @@ function lowerFunctionToX64(srcFunc MlirFunction, shadowSpace StackSize, osDesc 
   end 'eachBlock'
 
   // Phase 4: Compute final stack size and insert prologue at the front of the entry block.
+  // Recompute varStackSize from actual nextTempSlot, since ensureValueInSlot may
+  // have allocated additional temp slots beyond the pre-scanned sysOpTempCount.
+  let actualVarStackSize = nextTempSlot * 8
   let spillSize = rmTotalStackSize(regState)
-  var totalStackSize = varStackSize + spillSize + shadowSpace
-  if hasPrint and totalStackSize == 0 'needPrintBuf'
-    totalStackSize = 16
-  end 'needPrintBuf'
-  // Detect if function has calls -- if so, ensure we have a frame
+  // Detect if function has calls — shadow space is only needed for callers
   var hasCalls = false
   for blk in dstFunc.region.blocks 'scanCalls'
     for op in blk.ops 'scanOp'
@@ -125,6 +126,13 @@ function lowerFunctionToX64(srcFunc MlirFunction, shadowSpace StackSize, osDesc 
       end 'foundCall'
     end 'scanOp'
   end 'scanCalls'
+  var totalStackSize = actualVarStackSize + spillSize
+  if hasCalls 'addShadow'
+    totalStackSize = totalStackSize + shadowSpace
+  end 'addShadow'
+  if hasPrint and totalStackSize == 0 'needPrintBuf'
+    totalStackSize = 16
+  end 'needPrintBuf'
   if hasCalls and totalStackSize == 0 'needCallFrame'
     totalStackSize = 16
   end 'needCallFrame'
@@ -133,18 +141,14 @@ function lowerFunctionToX64(srcFunc MlirFunction, shadowSpace StackSize, osDesc 
     totalStackSize = totalStackSize + (16 - (totalStackSize mod 16))
   end 'align'
 
-  // Insert prologue at the front of the entry block
-  if totalStackSize > 0 'insertPrologue'
-    var newOps = MlirOpArray{}
-    newOps.push(MlirOp.maxx64(MaxX64Op.prologue(totalStackSize)))
-    for op in entryBlock.ops 'copyOps'
-      newOps.push(op)
-    end 'copyOps'
-    entryBlock.ops = newOps
-  end 'insertPrologue' else 'noPrologue'
-    // Remove epilogue ops if no stack frame needed
-    removeEpilogueOps(dstFunc)
-  end 'noPrologue'
+  // Insert prologue at the front of the entry block.
+  // Always emit prologue/epilogue (even for stackSize=0) so ret is present.
+  var newOps = MlirOpArray{}
+  newOps.push(MlirOp.maxx64(MaxX64Op.prologue(totalStackSize)))
+  for op in entryBlock.ops 'copyOps'
+    newOps.push(op)
+  end 'copyOps'
+  entryBlock.ops = newOps
 
   // Preserve region metadata
   dstFunc.region.nextBlockId = srcFunc.region.nextBlockId
@@ -170,45 +174,6 @@ function isX64CallDirect(op MaxX64Op) returns bool
   end 'check'
 end 'isX64CallDirect'
 
-// Check if an MlirOp is an epilogue
-function isEpilogueOp(op MlirOp) returns bool
-  var result = false
-  match op 'check'
-    maxhl to sys then break 'check'
-    maxx64(x64Op) then result = isX64Epilogue(x64Op)
-    maxarm64 then break 'check'
-  end 'check'
-  return result
-end 'isEpilogueOp'
-
-function isX64Epilogue(op MaxX64Op) returns bool
-  return match op 'check'
-    epilogue gives true
-    prologue gives false
-    movRegImm to reloadFromStack gives false
-    xorRegRegSelf gives false
-  end 'check'
-end 'isX64Epilogue'
-
-// Remove epilogue ops from all blocks when no stack frame is needed
-function removeEpilogueOps(func MlirFunction)
-  var bi = 0
-  while bi < func.region.blocks.count() 'eachBlock'
-    var block = try func.region.blocks.get(bi) otherwise 'skipBlock'
-      bi = bi + 1
-      continue
-    end 'skipBlock'
-    var newOps = MlirOpArray{}
-    for op in block.ops 'eachOp'
-      if not isEpilogueOp(op) 'keep'
-        newOps.push(op)
-      end 'keep'
-    end 'eachOp'
-    block.ops = newOps
-    bi = bi + 1
-  end 'eachBlock'
-end 'removeEpilogueOps'
-
 // Check if a runtime op (for print buffer allocation)
 function isPrintRuntime(op MlirOp) returns bool
   return match op 'check'
@@ -228,14 +193,15 @@ function sysOpTempSlotCount(op MlirOp) returns SlotIndex
 end 'sysOpTempSlotCount'
 
 function sysTempCount(op SysOp) returns SlotIndex
+  // Count temp slots needed: result slot + ensureValueInSlot calls (worst case each needs a temp).
   return match op 'check'
     syscall gives 1
     iatCall gives 1
     globalAddr gives 1
     stackAddr gives 1
-    loadByte gives 1
-    storeByte gives 0
-    memcpy gives 0
+    loadByte gives 3
+    storeByte gives 3
+    memcpy gives 3
     osExit gives 1
     osWrite gives 6
   end 'check'
@@ -639,6 +605,15 @@ function lowerCallOpRA(resultId ValueId, callee ByteArray, argIds ValueIdArray, 
     end 'pushStackArgs'
   end 'needStackSpace'
 
+  // Pre-reserve all CC registers for args so rmEnsureInRegister won't allocate into them.
+  var ri = 0
+  while ri < argCount and ri < regArgLimit 'reserveCC'
+    let ccReg = try callRegs.get(ri) otherwise X64Register.rcx
+    let ccOrd = x64RegToOrdinal(ccReg)
+    regState.registerContents.set(ccOrd, value: RM_CALL_ARG_SENTINEL - ri)
+    ri = ri + 1
+  end 'reserveCC'
+
   // Load non-scratch register args first (rcx, rdx, r8, r9, rsi, rdi)
   let nonScratchLimit = 6
   var i = 0
@@ -647,31 +622,43 @@ function lowerCallOpRA(resultId ValueId, callee ByteArray, argIds ValueIdArray, 
       i = i + 1
       continue
     end 'skipArg'
+    let targetReg = try callRegs.get(i) otherwise X64Register.rcx
+    let targetOrd = x64RegToOrdinal(targetReg)
+    // Unreserve this CC register before loading so rmEnsureInRegister can use it if needed
+    regState.registerContents.set(targetOrd, value: RM_NONE)
     let argOrd = rmEnsureInRegister(regState, valueId: argId, dstBlock: dstBlock, protect1: RM_NONE, protect2: RM_NONE)
     let argReg = ordinalToX64(argOrd)
-    let targetReg = try callRegs.get(i) otherwise X64Register.rcx
     if argReg != targetReg 'needMov'
+      rmSpillRegisterIfOccupied(regState, regOrdinal: targetOrd, dstBlock: dstBlock)
       dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.movRegReg(targetReg, argReg)))
     end 'needMov'
+    // Mark the CC register as occupied with a sentinel so it won't be reused
+    regState.registerContents.set(targetOrd, value: RM_CALL_ARG_SENTINEL - i)
     i = i + 1
   end 'loadNonScratch'
 
   // Load args 7-8 (rax, rbx) last since rax is used as scratch above
   if argCount >= 7 'arg6'
     let argId6 = try argIds.get(6) otherwise 0
+    let raxOrdCall = x64RegToOrdinal(X64Register.rax)
+    regState.registerContents.set(raxOrdCall, value: RM_NONE)
     let arg6Ord = rmEnsureInRegister(regState, valueId: argId6, dstBlock: dstBlock, protect1: RM_NONE, protect2: RM_NONE)
     let arg6Reg = ordinalToX64(arg6Ord)
     if arg6Reg != X64Register.rax 'moveArg6'
       dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.movRegReg(X64Register.rax, arg6Reg)))
     end 'moveArg6'
+    regState.registerContents.set(raxOrdCall, value: RM_CALL_ARG_SENTINEL - 6)
   end 'arg6'
   if argCount >= 8 'arg7'
     let argId7 = try argIds.get(7) otherwise 0
+    let rbxOrdCall = x64RegToOrdinal(X64Register.rbx)
+    regState.registerContents.set(rbxOrdCall, value: RM_NONE)
     let arg7Ord = rmEnsureInRegister(regState, valueId: argId7, dstBlock: dstBlock, protect1: RM_NONE, protect2: RM_NONE)
     let arg7Reg = ordinalToX64(arg7Ord)
     if arg7Reg != X64Register.rbx 'moveArg7'
       dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.movRegReg(X64Register.rbx, arg7Reg)))
     end 'moveArg7'
+    regState.registerContents.set(rbxOrdCall, value: RM_CALL_ARG_SENTINEL - 7)
   end 'arg7'
 
   dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.callDirect(callee)))
@@ -765,18 +752,29 @@ end 'lowerReturnOpRA'
 
 // SysOps still use VarSlot-based addressing internally.
 // We bridge by ensuring values are spilled to a known slot before the SysOp.
+// After any SysOp, invalidate all caller-saved registers because the SysOp
+// binary emitters use hardcoded registers (rax, rcx, rdx, etc.) without the
+// allocator's knowledge.
 function lowerSysOpRA(op SysOp, dstBlock MlirBlock, regState RegState, valueSlots ValueSlotMap, nextTempSlot SlotIndex, osDesc OsDescriptor) returns SlotIndex
+  // Spill all live registers before the SysOp so values get stack homes
+  // before the SysOp emitter clobbers registers.
+  rmSpillAllCallerSaved(regState, dstBlock: dstBlock)
+  var result = nextTempSlot
   match op 'lower'
-    syscall(resultId, number, argIds) then return lowerSyscallRA(resultId, number: number, argIds: argIds, dstBlock: dstBlock, regState: regState, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
-    iatCall(resultId, slotIndex, argIds) then return lowerIatCallRA(resultId, slotIndex: slotIndex, argIds: argIds, dstBlock: dstBlock, regState: regState, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
-    globalAddr(resultId, name) then return lowerGlobalAddrRA(resultId, name: name, dstBlock: dstBlock, regState: regState, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
-    stackAddr(resultId, slotId) then return lowerStackAddrRA(resultId, slotId: slotId, dstBlock: dstBlock, regState: regState, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
-    storeByte(baseId, offsetId, byteId) then return lowerStoreByteRA(baseId, offsetId: offsetId, byteId: byteId, dstBlock: dstBlock, regState: regState, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
-    loadByte(resultId, baseId, offsetId) then return lowerLoadByteRA(resultId, baseId: baseId, offsetId: offsetId, dstBlock: dstBlock, regState: regState, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
-    memcpy(dstId, srcId, lenId) then return lowerMemcpyRA(dstId, srcId: srcId, lenId: lenId, dstBlock: dstBlock, regState: regState, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
-    osExit(codeId) then return lowerOsExitRA(codeId, dstBlock: dstBlock, regState: regState, valueSlots: valueSlots, nextTempSlot: nextTempSlot, osDesc: osDesc)
-    osWrite(ptrId, lenId) then return lowerOsWriteRA(ptrId, lenId: lenId, dstBlock: dstBlock, regState: regState, valueSlots: valueSlots, nextTempSlot: nextTempSlot, osDesc: osDesc)
+    syscall(resultId, number, argIds) then result = lowerSyscallRA(resultId, number: number, argIds: argIds, dstBlock: dstBlock, regState: regState, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
+    iatCall(resultId, slotIndex, argIds) then result = lowerIatCallRA(resultId, slotIndex: slotIndex, argIds: argIds, dstBlock: dstBlock, regState: regState, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
+    globalAddr(resultId, name) then result = lowerGlobalAddrRA(resultId, name: name, dstBlock: dstBlock, regState: regState, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
+    stackAddr(resultId, slotId) then result = lowerStackAddrRA(resultId, slotId: slotId, dstBlock: dstBlock, regState: regState, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
+    storeByte(baseId, offsetId, byteId) then result = lowerStoreByteRA(baseId, offsetId: offsetId, byteId: byteId, dstBlock: dstBlock, regState: regState, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
+    loadByte(resultId, baseId, offsetId) then result = lowerLoadByteRA(resultId, baseId: baseId, offsetId: offsetId, dstBlock: dstBlock, regState: regState, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
+    memcpy(dstId, srcId, lenId) then result = lowerMemcpyRA(dstId, srcId: srcId, lenId: lenId, dstBlock: dstBlock, regState: regState, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
+    osExit(codeId) then result = lowerOsExitRA(codeId, dstBlock: dstBlock, regState: regState, valueSlots: valueSlots, nextTempSlot: nextTempSlot, osDesc: osDesc)
+    osWrite(ptrId, lenId) then result = lowerOsWriteRA(ptrId, lenId: lenId, dstBlock: dstBlock, regState: regState, valueSlots: valueSlots, nextTempSlot: nextTempSlot, osDesc: osDesc)
   end 'lower'
+  // SysOp binary emitters clobber registers (rax, rcx, rdx, rsi, rdi, etc.)
+  // without the allocator's knowledge. Invalidate all register mappings.
+  rmInvalidateCallerSaved(regState)
+  return result
 end 'lowerSysOpRA'
 
 // Ensure a value has a VarSlot (by spilling to a temp slot if needed).

@@ -94,6 +94,15 @@ function slotOffset(slotIndex VarSlot) returns StackSize
   return(slotIndex + 1) * 8
 end 'slotOffset'
 
+function formatSignedOffset(offset MachineWord) returns String
+  // MachineWord is unsigned; negative offsets wrap to large values (> i64.max).
+  if offset > 9223372036854775807 'negative'
+    let pos = 0 - offset
+    return "-{pos}"
+  end 'negative'
+  return "+{offset}"
+end 'formatSignedOffset'
+
 export function formatVarSlotArgs(argSlots VarSlotArray) returns String
   var result = ""
   for i in 0 upto argSlots.count() 'each'
@@ -154,8 +163,8 @@ export function maxX64OpToString(op MaxX64Op, blocks MlirBlockArray) returns Str
     testRegReg(reg1, reg2) gives "x86.test {reg1.name}, {reg2.name}"
     cqo gives "x86.cqo"
     idivReg(divisorReg) gives "x86.idiv {divisorReg.name}"
-    spillToStack(offset, srcReg) gives "x86.mov [rbp+{offset}], {srcReg.name}"
-    reloadFromStack(destReg, offset) gives "x86.mov {destReg.name}, [rbp+{offset}]"
+    spillToStack(offset, srcReg) gives "x86.mov [rbp{formatSignedOffset(offset)}], {srcReg.name}"
+    reloadFromStack(destReg, offset) gives "x86.mov {destReg.name}, [rbp{formatSignedOffset(offset)}]"
     xorRegRegSelf(reg) gives "x86.xor {reg.name}, {reg.name}"
   end 'toString'
 end 'maxX64OpToString'

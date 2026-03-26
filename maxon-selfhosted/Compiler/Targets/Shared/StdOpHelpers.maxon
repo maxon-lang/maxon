@@ -29,11 +29,14 @@ end 'JumpKind'
 // Maps ValueId -> VarSlot so binary ops can load operands from the right slots.
 export typealias ValueSlotMap = Array with VarSlot
 
+let VALUE_SLOT_NONE = 9223372036854775807
+
 export function valueSlotMapHas(m ValueSlotMap, valueId ValueId) returns bool
   if valueId >= m.count() 'outOfBounds'
     return false
   end 'outOfBounds'
-  return true
+  let slot = try m.get(valueId) otherwise VALUE_SLOT_NONE
+  return slot != VALUE_SLOT_NONE
 end 'valueSlotMapHas'
 
 export function valueSlotMapGet(m ValueSlotMap, valueId ValueId) returns VarSlot
@@ -44,7 +47,7 @@ end 'valueSlotMapGet'
 
 export function valueSlotMapSet(m ValueSlotMap, valueId ValueId, slot VarSlot)
   while m.count() <= valueId 'grow'
-    m.push(0)
+    m.push(VALUE_SLOT_NONE)
   end 'grow'
   m.set(valueId, value: slot)
 end 'valueSlotMapSet'

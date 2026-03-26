@@ -133,18 +133,13 @@ function lowerFunctionToArm64(srcFunc MlirFunction, osDesc OsDescriptor, logLowe
     totalStackSize = totalStackSize + (16 - (totalStackSize mod 16))
   end 'align'
 
-  // Insert prologue at the front of the entry block
-  if totalStackSize > 0 'insertPrologue'
-    var newOps = MlirOpArray{}
-    newOps.push(MlirOp.maxarm64(MaxArm64Op.prologue(totalStackSize)))
-    for op in entryBlock.ops 'copyOps'
-      newOps.push(op)
-    end 'copyOps'
-    entryBlock.ops = newOps
-  end 'insertPrologue' else 'noPrologue'
-    // Remove epilogue ops if no stack frame needed
-    removeArm64EpilogueOps(dstFunc)
-  end 'noPrologue'
+  // Always emit prologue/epilogue (even for stackSize=0) so ret is present.
+  var newOps = MlirOpArray{}
+  newOps.push(MlirOp.maxarm64(MaxArm64Op.prologue(totalStackSize)))
+  for op in entryBlock.ops 'copyOps'
+    newOps.push(op)
+  end 'copyOps'
+  entryBlock.ops = newOps
 
   // Preserve region metadata
   dstFunc.region.nextBlockId = srcFunc.region.nextBlockId
@@ -174,43 +169,6 @@ function isArm64BranchLink(op MaxArm64Op) returns bool
   end 'check'
 end 'isArm64BranchLink'
 
-// Check if an MlirOp is an epilogue
-function isArm64EpilogueOp(op MlirOp) returns bool
-  var result = false
-  match op 'check'
-    maxhl to sys then break 'check'
-    maxx64 then break 'check'
-    maxarm64(arm64Op) then result = isArm64Epilogue(arm64Op)
-  end 'check'
-  return result
-end 'isArm64EpilogueOp'
-
-function isArm64Epilogue(op MaxArm64Op) returns bool
-  return match op 'check'
-    prologue gives false
-    epilogue gives true
-    movImm to reloadFromStack gives false
-  end 'check'
-end 'isArm64Epilogue'
-
-// Remove epilogue ops from all blocks when no stack frame is needed
-function removeArm64EpilogueOps(func MlirFunction)
-  var bi = 0
-  while bi < func.region.blocks.count() 'eachBlock'
-    var block = try func.region.blocks.get(bi) otherwise 'err'
-      panic("removeArm64EpilogueOps: block index {bi} out of bounds")
-    end 'err'
-    var newOps = MlirOpArray{}
-    for op in block.ops 'eachOp'
-      if not isArm64EpilogueOp(op) 'keep'
-        newOps.push(op)
-      end 'keep'
-    end 'eachOp'
-    block.ops = newOps
-    bi = bi + 1
-  end 'eachBlock'
-end 'removeArm64EpilogueOps'
-
 // Runtime ops (printLiteral, printInt) need stack buffer space for digit conversion
 function isRuntimeOpArm64(op MlirOp) returns bool
   return match op 'check'
@@ -230,14 +188,15 @@ function sysOpTempSlotCountArm64(op MlirOp) returns SlotIndex
 end 'sysOpTempSlotCountArm64'
 
 function sysTempCountArm64(op SysOp) returns SlotIndex
+  // Count temp slots needed: result slot + ensureValueInSlot calls (worst case each needs a temp).
   return match op 'check'
     syscall gives 1
     iatCall gives 1
     globalAddr gives 1
     stackAddr gives 1
-    loadByte gives 1
-    storeByte gives 0
-    memcpy gives 0
+    loadByte gives 3
+    storeByte gives 3
+    memcpy gives 3
     osExit gives 1
     osWrite gives 6
   end 'check'
@@ -575,30 +534,31 @@ end 'lowerReturnOpArm64RA'
 // SysOps - bridge between regalloc and slot-based addressing
 // ============================================================
 
-// SysOp code emitters use x0, x1, x2 as scratch. Spill and clear them before
-// the SysOp so the RM doesn't lose track of clobbered values.
-function lowerSysOpWithSpillArm64(sysOp SysOp, dstBlock MlirBlock, regState RegState, valueSlots ValueSlotMap, nextTempSlot SlotIndex, osDesc OsDescriptor) returns SlotIndex
-  rmSpillRegisterIfOccupied(regState, regOrdinal: arm64RegToOrdinal(MaxArm64Register.x0), dstBlock: dstBlock)
-  rmSpillRegisterIfOccupied(regState, regOrdinal: arm64RegToOrdinal(MaxArm64Register.x1), dstBlock: dstBlock)
-  rmSpillRegisterIfOccupied(regState, regOrdinal: arm64RegToOrdinal(MaxArm64Register.x2), dstBlock: dstBlock)
-  return lowerSysOpArm64RA(sysOp, dstBlock: dstBlock, regState: regState, valueSlots: valueSlots, nextTempSlot: nextTempSlot, osDesc: osDesc)
-end 'lowerSysOpWithSpillArm64'
-
 // SysOps still use VarSlot-based addressing internally.
 // We bridge by ensuring values are spilled to a known slot before the SysOp.
-function lowerSysOpArm64RA(op SysOp, dstBlock MlirBlock, regState RegState, valueSlots ValueSlotMap, nextTempSlot SlotIndex, osDesc OsDescriptor) returns SlotIndex
-  match op 'lower'
-    syscall(resultId, number, argIds) then return lowerSyscallArm64RA(resultId, number: number, argIds: argIds, dstBlock: dstBlock, regState: regState, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
-    iatCall(resultId, slotIndex, argIds) then return lowerIatCallArm64RA(resultId, slotIndex: slotIndex, argIds: argIds, dstBlock: dstBlock, regState: regState, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
-    globalAddr(resultId, name) then return lowerGlobalAddrArm64RA(resultId, name: name, dstBlock: dstBlock, regState: regState, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
-    stackAddr(resultId, slotId) then return lowerStackAddrArm64RA(resultId, slotId: slotId, dstBlock: dstBlock, regState: regState, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
-    storeByte(baseId, offsetId, byteId) then return lowerStoreByteArm64RA(baseId, offsetId: offsetId, byteId: byteId, dstBlock: dstBlock, regState: regState, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
-    loadByte(resultId, baseId, offsetId) then return lowerLoadByteArm64RA(resultId, baseId: baseId, offsetId: offsetId, dstBlock: dstBlock, regState: regState, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
-    memcpy(dstId, srcId, lenId) then return lowerMemcpyArm64RA(dstId, srcId: srcId, lenId: lenId, dstBlock: dstBlock, regState: regState, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
-    osExit(codeId) then return lowerOsExitArm64RA(codeId, dstBlock: dstBlock, regState: regState, valueSlots: valueSlots, nextTempSlot: nextTempSlot, osDesc: osDesc)
-    osWrite(ptrId, lenId) then return lowerOsWriteArm64RA(ptrId, lenId: lenId, dstBlock: dstBlock, regState: regState, valueSlots: valueSlots, nextTempSlot: nextTempSlot, osDesc: osDesc)
+// After any SysOp, invalidate all caller-saved registers because the SysOp
+// binary emitters use hardcoded registers without the allocator's knowledge.
+function lowerSysOpWithSpillArm64(sysOp SysOp, dstBlock MlirBlock, regState RegState, valueSlots ValueSlotMap, nextTempSlot SlotIndex, osDesc OsDescriptor) returns SlotIndex
+  // Spill all live registers before the SysOp so values get stack homes
+  // before the SysOp emitter clobbers registers.
+  rmSpillAllCallerSaved(regState, dstBlock: dstBlock)
+  var result = nextTempSlot
+  match sysOp 'lower'
+    syscall(resultId, number, argIds) then result = lowerSyscallArm64RA(resultId, number: number, argIds: argIds, dstBlock: dstBlock, regState: regState, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
+    iatCall(resultId, slotIndex, argIds) then result = lowerIatCallArm64RA(resultId, slotIndex: slotIndex, argIds: argIds, dstBlock: dstBlock, regState: regState, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
+    globalAddr(resultId, name) then result = lowerGlobalAddrArm64RA(resultId, name: name, dstBlock: dstBlock, regState: regState, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
+    stackAddr(resultId, slotId) then result = lowerStackAddrArm64RA(resultId, slotId: slotId, dstBlock: dstBlock, regState: regState, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
+    storeByte(baseId, offsetId, byteId) then result = lowerStoreByteArm64RA(baseId, offsetId: offsetId, byteId: byteId, dstBlock: dstBlock, regState: regState, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
+    loadByte(resultId, baseId, offsetId) then result = lowerLoadByteArm64RA(resultId, baseId: baseId, offsetId: offsetId, dstBlock: dstBlock, regState: regState, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
+    memcpy(dstId, srcId, lenId) then result = lowerMemcpyArm64RA(dstId, srcId: srcId, lenId: lenId, dstBlock: dstBlock, regState: regState, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
+    osExit(codeId) then result = lowerOsExitArm64RA(codeId, dstBlock: dstBlock, regState: regState, valueSlots: valueSlots, nextTempSlot: nextTempSlot, osDesc: osDesc)
+    osWrite(ptrId, lenId) then result = lowerOsWriteArm64RA(ptrId, lenId: lenId, dstBlock: dstBlock, regState: regState, valueSlots: valueSlots, nextTempSlot: nextTempSlot, osDesc: osDesc)
   end 'lower'
-end 'lowerSysOpArm64RA'
+  // SysOp binary emitters clobber registers without the allocator's knowledge.
+  // Invalidate all register mappings.
+  rmInvalidateCallerSaved(regState)
+  return result
+end 'lowerSysOpWithSpillArm64'
 
 // Ensure a value has a VarSlot (by spilling to a temp slot if needed).
 // Returns the slot index.
