@@ -3,11 +3,19 @@
 export union FuncOp
   ret(retValId ValueId)
   call(resultId ValueId, callee ByteArray, argIds ValueIdArray)
+  tryCall(resultId ValueId, callee ByteArray, argIds ValueIdArray, errorFlagId ValueId)
+  indirectCall(resultId ValueId, calleeId ValueId, argIds ValueIdArray)
+  funcRef(resultId ValueId, funcName ByteArray)
+  tailCall(callee ByteArray, argIds ValueIdArray)
 end 'FuncOp'
 
 export function funcOpToString(op FuncOp) returns String
   return match op 'print'
     ret(retValId) gives "func.return %{retValId}"
     call(resultId, callee, argIds) gives "%{resultId} = func.call @{String.from(callee)}({formatArgIds(argIds)})"
+    tryCall(resultId, callee, argIds, errorFlagId) gives "%{resultId}, %{errorFlagId} = func.try_call @{String.from(callee)}({formatArgIds(argIds)})"
+    indirectCall(resultId, calleeId, argIds) gives "%{resultId} = func.indirect_call %{calleeId}({formatArgIds(argIds)})"
+    funcRef(resultId, funcName) gives "%{resultId} = func.ref @{String.from(funcName)}"
+    tailCall(callee, argIds) gives "func.tail_call @{String.from(callee)}({formatArgIds(argIds)})"
   end 'print'
 end 'funcOpToString'

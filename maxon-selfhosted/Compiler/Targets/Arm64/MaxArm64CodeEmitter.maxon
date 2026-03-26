@@ -240,6 +240,39 @@ function maxArm64EmitReloadFromStack(code ByteArray, rt MachineWord, byteOffset 
   maxArm64EmitInsn(code, insn: insn)
 end 'maxArm64EmitReloadFromStack'
 
+// STR Xt, [SP, #offset] — store to unsigned byte offset from stack pointer
+function maxArm64EmitStrSpOffset(code ByteArray, rt MachineWord, byteOffset MachineWord)
+  // STR (unsigned offset): 0xF9000000 | (imm12 << 10) | (Rn << 5) | Rt
+  // imm12 is byte_offset / 8 for 64-bit stores
+  let scaledOffset = (byteOffset / 8) and 0xFFF
+  let insn = 0xF9000000 or (scaledOffset shl 10) or (31 shl 5) or rt
+  maxArm64EmitInsn(code, insn: insn)
+end 'maxArm64EmitStrSpOffset'
+
+// FMOV Dd, Dn (double-precision float register move)
+function maxArm64EmitFmovDD(code ByteArray, rd MachineWord, rn MachineWord)
+  // FMOV Dd, Dn: 0x1E604000 | (Rn << 5) | Rd
+  let insn = 0x1E604000 or (rn shl 5) or rd
+  maxArm64EmitInsn(code, insn: insn)
+end 'maxArm64EmitFmovDD'
+
+// STR Dt, [X29, #offset] — store FP register to stack (unsigned offset, scaled by 8)
+function maxArm64EmitFpSpillToStack(code ByteArray, rt MachineWord, byteOffset MachineWord)
+  // STR (FP, unsigned offset): 0xFD000000 | (imm12 << 10) | (Rn << 5) | Rt
+  // imm12 = byte_offset / 8 for double-precision stores
+  let scaledOffset = (byteOffset / 8) and 0xFFF
+  let insn = 0xFD000000 or (scaledOffset shl 10) or (29 shl 5) or rt
+  maxArm64EmitInsn(code, insn: insn)
+end 'maxArm64EmitFpSpillToStack'
+
+// LDR Dt, [X29, #offset] — load FP register from stack (unsigned offset, scaled by 8)
+function maxArm64EmitFpReloadFromStack(code ByteArray, rt MachineWord, byteOffset MachineWord)
+  // LDR (FP, unsigned offset): 0xFD400000 | (imm12 << 10) | (Rn << 5) | Rt
+  let scaledOffset = (byteOffset / 8) and 0xFFF
+  let insn = 0xFD400000 or (scaledOffset shl 10) or (29 shl 5) or rt
+  maxArm64EmitInsn(code, insn: insn)
+end 'maxArm64EmitFpReloadFromStack'
+
 // CMP Xn, Xm => SUBS XZR, Xn, Xm
 function maxArm64EmitCmp(code ByteArray, rn MachineWord, rm MachineWord)
   let insn = 0xEB00001F or(rm shl 16) or(rn shl 5)
@@ -803,6 +836,16 @@ function emitMaxArm64Instruction(op MaxArm64Op, code ByteArray, jumpFixups Block
     movRegReg(dest, src) then maxArm64EmitMovRegReg(code, rd: dest.rawValue, rn: src.rawValue)
     spillToStack(offset, src) then maxArm64EmitSpillToStack(code, rt: src.rawValue, byteOffset: offset)
     reloadFromStack(dest, offset) then maxArm64EmitReloadFromStack(code, rt: dest.rawValue, byteOffset: offset)
+    branchLinkReg(reg) then maxArm64EmitBlr(code, rn: reg.rawValue)
+    subSpImm(value) then maxArm64EmitSubImm(code, rd: 31, rn: 31, imm12: value)
+    addSpImm(value) then maxArm64EmitAddImm(code, rd: 31, rn: 31, imm12: value)
+    strToSpOffset(offset, src) then maxArm64EmitStrSpOffset(code, rt: src.rawValue, byteOffset: offset)
+    // FP ops — emit using ARM64 FP instruction encodings
+    fmovRegReg(dest, src, _) then maxArm64EmitFmovDD(code, rd: dest.rawValue, rn: src.rawValue)
+    spillFpToStack(offset, src, _) then maxArm64EmitFpSpillToStack(code, rt: src.rawValue, byteOffset: offset)
+    reloadFpFromStack(dest, offset, _) then maxArm64EmitFpReloadFromStack(code, rt: dest.rawValue, byteOffset: offset)
+    fmovToFloat to frintn then panic("ARM64 FP op not yet implemented in binary emitter")
+    fpStoreIndirect to nullSafeLoad then panic("ARM64 extended op not yet implemented in binary emitter")
   end 'emit'
 end 'emitMaxArm64Instruction'
 

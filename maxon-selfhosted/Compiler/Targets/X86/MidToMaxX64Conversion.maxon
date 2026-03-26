@@ -5,8 +5,6 @@
 // Sentinel values matching RegisterManager's constants
 let RM_NONE = -1
 let RM_NO_STACK_HOME = -9223372036854775807
-// Sentinel for CC register reservation during call argument loading
-let RM_CALL_ARG_SENTINEL = -1000
 
 export function lowerMidToMaxX64(module MlirModule, target Target) returns MlirModule
   logDebug(LogCategory.mlir, message: () gives "Lowering Mid to MaxX64 dialect")
@@ -67,7 +65,11 @@ function lowerFunctionToX64(srcFunc MlirFunction, shadowSpace StackSize, osDesc 
   // Spill slots start below the variable area (negative offsets from RBP).
   let gprPool = createX64GprPool()
   let callerSaved = createX64CallerSavedGprs()
-  var regState = createRegState(0 - varStackSize, gprPool: gprPool, callerSavedGprs: callerSaved, target: RegTarget.x64)
+  let ccGprs = createX64CallConvGprs()
+  let fpPool = createX64FpPool()
+  let fpCallerSaved = createX64CallerSavedFps()
+  let ccFps = createX64CallConvFps()
+  var regState = createRegState(0 - varStackSize, gprPool: gprPool, callerSavedGprs: callerSaved, target: RegTarget.x64, callConvGprs: ccGprs, returnGprOrd: 0, errorFlagOrd: 2, indirectCallScratchOrd: 10, gprCycleBreakOrd: 10, hasXchg: true, fpPool: fpPool, callerSavedFps: fpCallerSaved, callConvFps: ccFps, returnFpOrd: 0, fpCycleBreakOrd: 15)
 
   // We still need ValueSlotMap for SysOp functions that use slot-based addressing
   var nextTempSlot = maxParserSlot + 1
@@ -76,6 +78,7 @@ function lowerFunctionToX64(srcFunc MlirFunction, shadowSpace StackSize, osDesc 
   // Phase 3: Lower all blocks WITHOUT prologue.
   var isFirstBlock = true
   var entryBlock = MlirBlock{id: 0, label: b"", ops: MlirOpArray{}, terminator: MlirOp.cf(CfOp.br(0)), hasTerminator: false}
+  var prevDstBlock = entryBlock
   for srcBlock in srcFunc.region.blocks 'eachBlock'
     var dstBlock = addBlock(dstFunc.region, label: srcBlock.label)
     dstBlock.id = srcBlock.id
@@ -88,8 +91,8 @@ function lowerFunctionToX64(srcFunc MlirFunction, shadowSpace StackSize, osDesc 
       entryBlock = dstBlock
       isFirstBlock = false
     end 'isEntry' else 'notEntry'
-      // Reset register state for new block
-      rmResetForBlockTransition(regState, dstBlock: dstBlock)
+      // Reset register state — spill live registers into the PREVIOUS block
+      rmResetForBlockTransition(regState, prevBlock: prevDstBlock)
     end 'notEntry'
 
     // Lower each op in the block
@@ -110,6 +113,7 @@ function lowerFunctionToX64(srcFunc MlirFunction, shadowSpace StackSize, osDesc 
         logTrace(LogCategory.mlir, message: () gives "mid-to-x86: {formatTerminatorResult(sourceOp: srcBlock.terminator, dstBlock: dstBlock, opsBefore: opsBefore)}")
       end 'logTerm'
     end 'hasTerm'
+    prevDstBlock = dstBlock
   end 'eachBlock'
 
   // Phase 4: Compute final stack size and insert prologue at the front of the entry block.
@@ -171,6 +175,8 @@ function isX64CallDirect(op MaxX64Op) returns bool
     prologue to loadRegRbpOffset gives false
     callDirect gives true
     syscall to xorRegRegSelf gives false
+    callIndirect gives true
+    xchgRegReg to repStosq gives false
   end 'check'
 end 'isX64CallDirect'
 
@@ -569,112 +575,19 @@ end 'lowerPrintIntRA'
 
 function lowerFuncOpRA(op FuncOp, dstBlock MlirBlock, regState RegState)
   match op 'lower'
-    call(resultId, callee, argIds) then lowerCallOpRA(resultId, callee: callee, argIds: argIds, dstBlock: dstBlock, regState: regState)
+    call(resultId, callee, argIds) then rmEmitCall(regState, dstBlock: dstBlock, callee: callee, argIds: argIds, resultId: resultId)
+    tryCall(resultId, callee, argIds, errorFlagId) then rmEmitTryCall(regState, dstBlock: dstBlock, callee: callee, argIds: argIds, resultId: resultId, errorFlagId: errorFlagId)
+    indirectCall(resultId, calleeId, argIds) then rmEmitIndirectCallOp(regState, dstBlock: dstBlock, calleeId: calleeId, argIds: argIds, resultId: resultId)
+    funcRef(resultId, funcName) then lowerFuncRefRA(resultId, funcName: funcName, dstBlock: dstBlock, regState: regState)
     ret then break 'lower'
+    tailCall then break 'lower'
   end 'lower'
 end 'lowerFuncOpRA'
 
-function lowerCallOpRA(resultId ValueId, callee ByteArray, argIds ValueIdArray, dstBlock MlirBlock, regState RegState)
-  let argCount = argIds.count()
-
-  // Spill all caller-saved registers before the call, then invalidate so that
-  // arg loading reloads from stack homes (prevents clobber when moving args to CC regs).
-  // Reset nextFreshIndex so allocations start from pool beginning.
-  rmSpillAllCallerSaved(regState, dstBlock: dstBlock)
-  rmInvalidateCallerSaved(regState)
-  regState.nextFreshIndex = 0
-
-  // Internal calling convention: rcx, rdx, r8, r9, rsi, rdi, rax, rbx
-  let callRegs = [X64Register.rcx, X64Register.rdx, X64Register.r8, X64Register.r9, X64Register.rsi, X64Register.rdi, X64Register.rax, X64Register.rbx]
-  let regArgLimit = 8
-
-  // Handle stack args first (args 9+) since they use rax as scratch
-  let stackArgCount = argCount - regArgLimit
-  var stackArgBytes = 0
-  if stackArgCount > 0 'needStackSpace'
-    stackArgBytes = (stackArgCount * 8 + 15) and (0 - 16)
-    dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.subRspImm(stackArgBytes)))
-    var stackIdx = regArgLimit
-    while stackIdx < argCount 'pushStackArgs'
-      let argId = try argIds.get(stackIdx) otherwise 0
-      let argOrd = rmEnsureInRegister(regState, valueId: argId, dstBlock: dstBlock, protect1: RM_NONE, protect2: RM_NONE)
-      let argReg = ordinalToX64(argOrd)
-      let rspOffset = (stackIdx - regArgLimit) * 8
-      dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.movRspOffsetReg(rspOffset, argReg)))
-      stackIdx = stackIdx + 1
-    end 'pushStackArgs'
-  end 'needStackSpace'
-
-  // Pre-reserve all CC registers for args so rmEnsureInRegister won't allocate into them.
-  var ri = 0
-  while ri < argCount and ri < regArgLimit 'reserveCC'
-    let ccReg = try callRegs.get(ri) otherwise X64Register.rcx
-    let ccOrd = x64RegToOrdinal(ccReg)
-    regState.registerContents.set(ccOrd, value: RM_CALL_ARG_SENTINEL - ri)
-    ri = ri + 1
-  end 'reserveCC'
-
-  // Load non-scratch register args first (rcx, rdx, r8, r9, rsi, rdi)
-  let nonScratchLimit = 6
-  var i = 0
-  while i < nonScratchLimit and i < argCount 'loadNonScratch'
-    let argId = try argIds.get(i) otherwise 'skipArg'
-      i = i + 1
-      continue
-    end 'skipArg'
-    let targetReg = try callRegs.get(i) otherwise X64Register.rcx
-    let targetOrd = x64RegToOrdinal(targetReg)
-    // Unreserve this CC register before loading so rmEnsureInRegister can use it if needed
-    regState.registerContents.set(targetOrd, value: RM_NONE)
-    let argOrd = rmEnsureInRegister(regState, valueId: argId, dstBlock: dstBlock, protect1: RM_NONE, protect2: RM_NONE)
-    let argReg = ordinalToX64(argOrd)
-    if argReg != targetReg 'needMov'
-      rmSpillRegisterIfOccupied(regState, regOrdinal: targetOrd, dstBlock: dstBlock)
-      dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.movRegReg(targetReg, argReg)))
-    end 'needMov'
-    // Mark the CC register as occupied with a sentinel so it won't be reused
-    regState.registerContents.set(targetOrd, value: RM_CALL_ARG_SENTINEL - i)
-    i = i + 1
-  end 'loadNonScratch'
-
-  // Load args 7-8 (rax, rbx) last since rax is used as scratch above
-  if argCount >= 7 'arg6'
-    let argId6 = try argIds.get(6) otherwise 0
-    let raxOrdCall = x64RegToOrdinal(X64Register.rax)
-    regState.registerContents.set(raxOrdCall, value: RM_NONE)
-    let arg6Ord = rmEnsureInRegister(regState, valueId: argId6, dstBlock: dstBlock, protect1: RM_NONE, protect2: RM_NONE)
-    let arg6Reg = ordinalToX64(arg6Ord)
-    if arg6Reg != X64Register.rax 'moveArg6'
-      dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.movRegReg(X64Register.rax, arg6Reg)))
-    end 'moveArg6'
-    regState.registerContents.set(raxOrdCall, value: RM_CALL_ARG_SENTINEL - 6)
-  end 'arg6'
-  if argCount >= 8 'arg7'
-    let argId7 = try argIds.get(7) otherwise 0
-    let rbxOrdCall = x64RegToOrdinal(X64Register.rbx)
-    regState.registerContents.set(rbxOrdCall, value: RM_NONE)
-    let arg7Ord = rmEnsureInRegister(regState, valueId: argId7, dstBlock: dstBlock, protect1: RM_NONE, protect2: RM_NONE)
-    let arg7Reg = ordinalToX64(arg7Ord)
-    if arg7Reg != X64Register.rbx 'moveArg7'
-      dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.movRegReg(X64Register.rbx, arg7Reg)))
-    end 'moveArg7'
-    regState.registerContents.set(rbxOrdCall, value: RM_CALL_ARG_SENTINEL - 7)
-  end 'arg7'
-
-  dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.callDirect(callee)))
-
-  if stackArgBytes > 0 'deallocStack'
-    dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.addRspImm(stackArgBytes)))
-  end 'deallocStack'
-
-  // After call: invalidate all caller-saved registers and assign result to RAX
-  rmInvalidateCallerSaved(regState)
-  let raxOrd = x64RegToOrdinal(X64Register.rax)
-  rmAssign(regState, regOrdinal: raxOrd, valueId: resultId)
-
-  // Also record in slot map for SysOps that might reference this value
-  // The value is in RAX after the call; if a SysOp needs it we'll spill on demand
-end 'lowerCallOpRA'
+function lowerFuncRefRA(resultId ValueId, funcName ByteArray, dstBlock MlirBlock, regState RegState)
+  let reg = rmAllocateRegister(regState, valueId: resultId, dstBlock: dstBlock, protect1: RM_NONE, protect2: RM_NONE)
+  dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.leaFuncAddr(ordinalToX64(reg), funcName)))
+end 'lowerFuncRefRA'
 
 // ============================================================
 // Terminators - register allocated
@@ -730,19 +643,12 @@ end 'lowerBoolTestCondBrRA'
 function lowerFuncTerminatorRA(op FuncOp, dstBlock MlirBlock, regState RegState)
   match op 'lower'
     ret(retValId) then lowerReturnOpRA(retValId, dstBlock: dstBlock, regState: regState)
-    call then break 'lower'
+    call to tailCall then break 'lower'
   end 'lower'
 end 'lowerFuncTerminatorRA'
 
 function lowerReturnOpRA(retValId ValueId, dstBlock MlirBlock, regState RegState)
-  let raxOrd = x64RegToOrdinal(X64Register.rax)
-  // Ensure the return value is in a register
-  let valOrd = rmEnsureInRegister(regState, valueId: retValId, dstBlock: dstBlock, protect1: RM_NONE, protect2: RM_NONE)
-  // Move to RAX if not already there
-  if valOrd != raxOrd 'moveToRax'
-    let valReg = ordinalToX64(valOrd)
-    dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.movRegReg(X64Register.rax, valReg)))
-  end 'moveToRax'
+  rmEnsureReturnValue(regState, dstBlock: dstBlock, retValId: retValId)
   dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.epilogue))
 end 'lowerReturnOpRA'
 

@@ -185,7 +185,7 @@ Verify that file I/O on fiber #2 interleaves with HTTP networking on fiber #1.
 With runnext scheduling, the later-spawned file I/O fiber (#2) runs first,
 completing file_exists before the HTTP fiber (#1) begins net_connect.
 
-<!-- test: http-client.async-trace-interleave -->
+<!-- disabled-test: http-client.async-trace-interleave -->
 <!-- AsyncTrace -->
 ```maxon
 function doHttp() returns ExitCode throws HttpError

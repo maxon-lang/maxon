@@ -44,11 +44,112 @@ export type RegState
   export var callerSavedGprs RegIntArray
   export var gprPoolSize RegInt
   export var target RegTarget
+
+  // Calling convention configuration
+  export var callConvGprs RegIntArray
+  export var callConvGprCount RegInt
+  export var returnGprOrd RegOrdinal
+  export var errorFlagOrd RegOrdinal
+  export var indirectCallScratchOrd RegOrdinal
+  export var gprCycleBreakOrd RegOrdinal
+  export var hasXchg bool
+
+  // FP register state
+  export var fpPool RegIntArray
+  export var callerSavedFps RegIntArray
+  export var fpPoolSize RegInt
+  export var nextFreshFpIndex RegInt
+  // fpContents[fpOrdinal] = valueId or RM_NONE
+  export var fpContents RegIntArray
+  // valueToFp[valueId] = fpOrdinal or RM_NONE
+  export var valueToFp RegIntArray
+  // valueFpStackHome[valueId] = stack offset or RM_NO_STACK_HOME
+  export var valueFpStackHome RegIntArray
+  // fpLastUsed[fpOrdinal] = op index of last use
+  export var fpLastUsed RegIntArray
+  // valuePreviousFp[valueId] = previous fp ordinal or RM_NONE (reuse hint)
+  export var valuePreviousFp RegIntArray
+
+  // FP calling convention
+  export var callConvFps RegIntArray
+  export var callConvFpCount RegInt
+  export var returnFpOrd RegOrdinal
+  export var fpCycleBreakOrd RegOrdinal
+
+  // Deferred values: values only consumed by sink ops (return/call)
+  // skip eager register allocation. deferredValues[valueId] = 1 if deferred.
+  export var deferredValues RegIntArray
 end 'RegState'
+
+// Snapshot of register allocator state for carrying assignments across diverging blocks.
+// Matches C# RegisterManagerBase.RegisterSnapshot.
+export type RegSnapshot
+  export var registerContents RegIntArray
+  export var valueToRegister RegIntArray
+  export var valueStackHome RegIntArray
+  export var constantValues RegIntArray
+  export var hasConstant RegIntArray
+  export var fpContents RegIntArray
+  export var valueToFp RegIntArray
+  export var valueFpStackHome RegIntArray
+  export var valuePreviousFp RegIntArray
+  export var nextSpillOffset RegInt
+  export var minSpillOffset RegInt
+end 'RegSnapshot'
+
+function rmCopyArray(src RegIntArray) returns RegIntArray
+  var dst = RegIntArray{}
+  for val in src 'copy'
+    dst.push(val)
+  end 'copy'
+  return dst
+end 'rmCopyArray'
+
+// Save current register allocator state for later restoration.
+export function rmSaveState(state RegState) returns RegSnapshot
+  return RegSnapshot{
+    registerContents: rmCopyArray(state.registerContents),
+    valueToRegister: rmCopyArray(state.valueToRegister),
+    valueStackHome: rmCopyArray(state.valueStackHome),
+    constantValues: rmCopyArray(state.constantValues),
+    hasConstant: rmCopyArray(state.hasConstant),
+    fpContents: rmCopyArray(state.fpContents),
+    valueToFp: rmCopyArray(state.valueToFp),
+    valueFpStackHome: rmCopyArray(state.valueFpStackHome),
+    valuePreviousFp: rmCopyArray(state.valuePreviousFp),
+    nextSpillOffset: state.nextSpillOffset,
+    minSpillOffset: state.minSpillOffset
+  }
+end 'rmSaveState'
+
+// Restore register allocator state from a snapshot.
+// Preserves spill offset watermarks if the saved offsets are more allocated.
+export function rmRestoreState(state RegState, snapshot RegSnapshot)
+  state.registerContents = rmCopyArray(snapshot.registerContents)
+  state.valueToRegister = rmCopyArray(snapshot.valueToRegister)
+  state.valueStackHome = rmCopyArray(snapshot.valueStackHome)
+  state.constantValues = rmCopyArray(snapshot.constantValues)
+  state.hasConstant = rmCopyArray(snapshot.hasConstant)
+  state.fpContents = rmCopyArray(snapshot.fpContents)
+  state.valueToFp = rmCopyArray(snapshot.valueToFp)
+  state.valueFpStackHome = rmCopyArray(snapshot.valueFpStackHome)
+  state.valuePreviousFp = rmCopyArray(snapshot.valuePreviousFp)
+  // Preserve spill offset watermarks — diverging blocks may have allocated
+  // spill slots that must not be reused.
+  if snapshot.nextSpillOffset < state.nextSpillOffset 'preserveNext'
+    state.nextSpillOffset = snapshot.nextSpillOffset
+  end 'preserveNext'
+  if snapshot.minSpillOffset < state.minSpillOffset 'preserveMin'
+    state.minSpillOffset = snapshot.minSpillOffset
+  end 'preserveMin'
+  state.nextFreshIndex = 0
+  state.nextFreshFpIndex = 0
+  state.currentOpIndex = 0
+end 'rmRestoreState'
 
 // --- Initialization ---
 
-export function createRegState(spillBase RegInt, gprPool RegIntArray, callerSavedGprs RegIntArray, target RegTarget) returns RegState
+export function createRegState(spillBase RegInt, gprPool RegIntArray, callerSavedGprs RegIntArray, target RegTarget, callConvGprs RegIntArray, returnGprOrd RegOrdinal, errorFlagOrd RegOrdinal, indirectCallScratchOrd RegOrdinal, gprCycleBreakOrd RegOrdinal, hasXchg bool, fpPool RegIntArray, callerSavedFps RegIntArray, callConvFps RegIntArray, returnFpOrd RegOrdinal, fpCycleBreakOrd RegOrdinal) returns RegState
   let poolSize = gprPool.count()
   // Find max ordinal to size registerContents and lastUsed arrays
   var maxOrd = 0
@@ -70,6 +171,27 @@ export function createRegState(spillBase RegInt, gprPool RegIntArray, callerSave
     initIdx = initIdx + 1
   end 'initRegs'
 
+  // Initialize FP register arrays
+  let fpPoolSz = fpPool.count()
+  var fpMaxOrd = 0
+  var fmi = 0
+  while fmi < fpPoolSz 'findFpMax'
+    let fOrd = try fpPool.get(fmi) otherwise 0
+    if fOrd > fpMaxOrd 'bigger'
+      fpMaxOrd = fOrd
+    end 'bigger'
+    fmi = fmi + 1
+  end 'findFpMax'
+  let fpArraySize = fpMaxOrd + 1
+  var fpCont = RegIntArray{}
+  var fpLU = RegIntArray{}
+  var fpInit = 0
+  while fpInit < fpArraySize 'initFpRegs'
+    fpCont.push(RM_NONE)
+    fpLU.push(0)
+    fpInit = fpInit + 1
+  end 'initFpRegs'
+
   return RegState{
     registerContents: regContents,
     valueToRegister: RegIntArray{},
@@ -86,7 +208,28 @@ export function createRegState(spillBase RegInt, gprPool RegIntArray, callerSave
     gprPool: gprPool,
     callerSavedGprs: callerSavedGprs,
     gprPoolSize: poolSize,
-    target: target
+    target: target,
+    callConvGprs: callConvGprs,
+    callConvGprCount: callConvGprs.count(),
+    returnGprOrd: returnGprOrd,
+    errorFlagOrd: errorFlagOrd,
+    indirectCallScratchOrd: indirectCallScratchOrd,
+    gprCycleBreakOrd: gprCycleBreakOrd,
+    hasXchg: hasXchg,
+    fpPool: fpPool,
+    callerSavedFps: callerSavedFps,
+    fpPoolSize: fpPoolSz,
+    nextFreshFpIndex: 0,
+    fpContents: fpCont,
+    valueToFp: RegIntArray{},
+    valueFpStackHome: RegIntArray{},
+    fpLastUsed: fpLU,
+    valuePreviousFp: RegIntArray{},
+    callConvFps: callConvFps,
+    callConvFpCount: callConvFps.count(),
+    returnFpOrd: returnFpOrd,
+    fpCycleBreakOrd: fpCycleBreakOrd,
+    deferredValues: RegIntArray{}
   }
 end 'createRegState'
 
@@ -278,6 +421,63 @@ end 'rmEmitMovImmArm64'
 function rmEmitMovRegArm64(dstBlock MlirBlock, destOrd RegOrdinal, srcOrd RegOrdinal)
   dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.movRegReg(ordinalToArm64(destOrd), ordinalToArm64(srcOrd))))
 end 'rmEmitMovRegArm64'
+
+// --- Call emission dispatch ---
+
+export function rmEmitCallDirect(state RegState, dstBlock MlirBlock, callee ByteArray)
+  match state.target 'dispatch'
+    x64 then dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.callDirect(callee)))
+    arm64 then dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.branchLink(callee)))
+  end 'dispatch'
+end 'rmEmitCallDirect'
+
+export function rmEmitCallIndirect(state RegState, dstBlock MlirBlock, regOrd RegOrdinal)
+  match state.target 'dispatch'
+    x64 then dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.callIndirect(ordinalToX64(regOrd))))
+    arm64 then dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.branchLinkReg(ordinalToArm64(regOrd))))
+  end 'dispatch'
+end 'rmEmitCallIndirect'
+
+export function rmEmitSubSp(state RegState, dstBlock MlirBlock, amount RegInt)
+  match state.target 'dispatch'
+    x64 then dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.subRspImm(amount)))
+    arm64 then dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.subSpImm(amount)))
+  end 'dispatch'
+end 'rmEmitSubSp'
+
+export function rmEmitAddSp(state RegState, dstBlock MlirBlock, amount RegInt)
+  match state.target 'dispatch'
+    x64 then dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.addRspImm(amount)))
+    arm64 then dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.addSpImm(amount)))
+  end 'dispatch'
+end 'rmEmitAddSp'
+
+export function rmEmitStoreToSpOffset(state RegState, dstBlock MlirBlock, regOrd RegOrdinal, offset RegInt)
+  match state.target 'dispatch'
+    x64 then dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.movRspOffsetReg(offset, ordinalToX64(regOrd))))
+    arm64 then dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.strToSpOffset(offset, ordinalToArm64(regOrd))))
+  end 'dispatch'
+end 'rmEmitStoreToSpOffset'
+
+export function rmEmitXchgOrSwap(state RegState, dstBlock MlirBlock, ord1 RegOrdinal, ord2 RegOrdinal)
+  if state.hasXchg 'xchg'
+    // X86: single XCHG instruction
+    dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.xchgRegReg(ordinalToX64(ord1), ordinalToX64(ord2))))
+  end 'xchg' else 'threeMov'
+    // ARM64: 3-mov swap via cycle-break scratch register
+    let scratch = state.gprCycleBreakOrd
+    rmEmitMovReg(state, dstBlock: dstBlock, destOrd: scratch, srcOrd: ord2)
+    rmEmitMovReg(state, dstBlock: dstBlock, destOrd: ord2, srcOrd: ord1)
+    rmEmitMovReg(state, dstBlock: dstBlock, destOrd: ord1, srcOrd: scratch)
+  end 'threeMov'
+end 'rmEmitXchgOrSwap'
+
+export function rmEmitEpilogue(state RegState, dstBlock MlirBlock)
+  match state.target 'dispatch'
+    x64 then dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.epilogue))
+    arm64 then dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.epilogue))
+  end 'dispatch'
+end 'rmEmitEpilogue'
 
 // --- Spill logic ---
 
@@ -471,13 +671,200 @@ export function rmEnsureInRegister(state RegState, valueId RegInt, dstBlock Mlir
   panic("rmEnsureInRegister: value {valueId} has no register, no constant, and no stack home")
 end 'rmEnsureInRegister'
 
+// --- FP register allocation ---
+
+export function rmAssignFp(state RegState, fpOrdinal RegOrdinal, valueId RegInt)
+  state.fpContents.set(fpOrdinal, value: valueId)
+  rmSet(state.valueToFp, index: valueId, value: fpOrdinal, sentinel: RM_NONE)
+  state.fpLastUsed.set(fpOrdinal, value: state.currentOpIndex)
+end 'rmAssignFp'
+
+export function rmSpillFpIfOccupied(state RegState, fpOrdinal RegOrdinal, dstBlock MlirBlock)
+  let existing = rmGetOr(state.fpContents, index: fpOrdinal, fallback: RM_NONE)
+  if existing == RM_NONE 'empty'
+    return
+  end 'empty'
+  let fpStackHome = rmGetOr(state.valueFpStackHome, index: existing, fallback: RM_NO_STACK_HOME)
+  if fpStackHome == RM_NO_STACK_HOME 'needsSpill'
+    let spillSlot = rmAllocateSpillSlot(state)
+    rmEmitSpillFp(state, dstBlock: dstBlock, fpOrdinal: fpOrdinal, stackOffset: spillSlot)
+    rmSet(state.valueFpStackHome, index: existing, value: spillSlot, sentinel: RM_NO_STACK_HOME)
+  end 'needsSpill'
+  rmSet(state.valueToFp, index: existing, value: RM_NONE, sentinel: RM_NONE)
+  state.fpContents.set(fpOrdinal, value: RM_NONE)
+  state.fpLastUsed.set(fpOrdinal, value: 0)
+end 'rmSpillFpIfOccupied'
+
+export function rmAllocateFpRegister(state RegState, valueId RegInt, dstBlock MlirBlock) returns RegOrdinal
+  // Try to reuse previous register for this value if it's free
+  let prevFp = rmGetOr(state.valuePreviousFp, index: valueId, fallback: RM_NONE)
+  if prevFp != RM_NONE 'tryPrev'
+    let prevOccupant = rmGetOr(state.fpContents, index: prevFp, fallback: RM_NONE)
+    if prevOccupant == RM_NONE 'prevFree'
+      rmSet(state.valuePreviousFp, index: valueId, value: RM_NONE, sentinel: RM_NONE)
+      rmAssignFp(state, fpOrdinal: prevFp, valueId: valueId)
+      return prevFp
+    end 'prevFree'
+  end 'tryPrev'
+
+  // Try sequential allocation from FP pool
+  if state.nextFreshFpIndex < state.fpPoolSize 'tryFresh'
+    let candidate = rmGetOr(state.fpPool, index: state.nextFreshFpIndex, fallback: RM_NONE)
+    if candidate != RM_NONE 'validCandidate'
+      let occupant = rmGetOr(state.fpContents, index: candidate, fallback: RM_NONE)
+      if occupant == RM_NONE 'freshFree'
+        state.nextFreshFpIndex = state.nextFreshFpIndex + 1
+        rmAssignFp(state, fpOrdinal: candidate, valueId: valueId)
+        return candidate
+      end 'freshFree'
+    end 'validCandidate'
+  end 'tryFresh'
+
+  // Find any free FP register
+  var i = 0
+  while i < state.fpPoolSize 'scanFree'
+    let fpOrd = try state.fpPool.get(i) otherwise 'skip'
+      i = i + 1
+      continue
+    end 'skip'
+    let occupant = rmGetOr(state.fpContents, index: fpOrd, fallback: RM_NONE)
+    if occupant == RM_NONE 'foundFree'
+      rmAssignFp(state, fpOrdinal: fpOrd, valueId: valueId)
+      return fpOrd
+    end 'foundFree'
+    i = i + 1
+  end 'scanFree'
+
+  // All FP registers occupied — spill LRU
+  var bestFp = RM_NONE
+  var bestLU = 9223372036854775807
+  i = 0
+  while i < state.fpPoolSize 'findLru'
+    let fpOrd = try state.fpPool.get(i) otherwise 'skip2'
+      i = i + 1
+      continue
+    end 'skip2'
+    let lu = rmGetOr(state.fpLastUsed, index: fpOrd, fallback: 0)
+    if lu < bestLU 'better'
+      bestLU = lu
+      bestFp = fpOrd
+    end 'better'
+    i = i + 1
+  end 'findLru'
+
+  if bestFp != RM_NONE 'evict'
+    rmSpillFpIfOccupied(state, fpOrdinal: bestFp, dstBlock: dstBlock)
+    rmAssignFp(state, fpOrdinal: bestFp, valueId: valueId)
+    return bestFp
+  end 'evict'
+
+  panic("rmAllocateFpRegister: no FP registers available")
+end 'rmAllocateFpRegister'
+
+export function rmEnsureInFpRegister(state RegState, valueId RegInt, dstBlock MlirBlock) returns RegOrdinal
+  // Already in an FP register?
+  let existing = rmGetOr(state.valueToFp, index: valueId, fallback: RM_NONE)
+  if existing != RM_NONE 'inFp'
+    state.fpLastUsed.set(existing, value: state.currentOpIndex)
+    return existing
+  end 'inFp'
+
+  // Reload from stack?
+  let fpStackHome = rmGetOr(state.valueFpStackHome, index: valueId, fallback: RM_NO_STACK_HOME)
+  if fpStackHome != RM_NO_STACK_HOME 'reload'
+    let fp = rmAllocateFpRegister(state, valueId: valueId, dstBlock: dstBlock)
+    rmEmitReloadFp(state, dstBlock: dstBlock, fpOrdinal: fp, stackOffset: fpStackHome)
+    return fp
+  end 'reload'
+
+  panic("rmEnsureInFpRegister: value {valueId} has no FP register and no FP stack home")
+end 'rmEnsureInFpRegister'
+
+export function rmNoteFpStoreToStack(state RegState, valueId RegInt, stackOffset RegInt)
+  rmSet(state.valueFpStackHome, index: valueId, value: stackOffset, sentinel: RM_NO_STACK_HOME)
+end 'rmNoteFpStoreToStack'
+
+// --- FP emission dispatch ---
+
+function rmEmitSpillFp(state RegState, dstBlock MlirBlock, fpOrdinal RegOrdinal, stackOffset RegInt)
+  match state.target 'dispatch'
+    x64 then rmEmitSpillFpX64(dstBlock, fpOrdinal: fpOrdinal, stackOffset: stackOffset)
+    arm64 then rmEmitSpillFpArm64(dstBlock, fpOrdinal: fpOrdinal, stackOffset: stackOffset)
+  end 'dispatch'
+end 'rmEmitSpillFp'
+
+function rmEmitReloadFp(state RegState, dstBlock MlirBlock, fpOrdinal RegOrdinal, stackOffset RegInt)
+  match state.target 'dispatch'
+    x64 then rmEmitReloadFpX64(dstBlock, fpOrdinal: fpOrdinal, stackOffset: stackOffset)
+    arm64 then rmEmitReloadFpArm64(dstBlock, fpOrdinal: fpOrdinal, stackOffset: stackOffset)
+  end 'dispatch'
+end 'rmEmitReloadFp'
+
+export function rmEmitMovFp(state RegState, dstBlock MlirBlock, destOrd RegOrdinal, srcOrd RegOrdinal)
+  match state.target 'dispatch'
+    x64 then rmEmitMovFpX64(dstBlock, destOrd: destOrd, srcOrd: srcOrd)
+    arm64 then rmEmitMovFpArm64(dstBlock, destOrd: destOrd, srcOrd: srcOrd)
+  end 'dispatch'
+end 'rmEmitMovFp'
+
+// --- X86-64 FP target emission ---
+
+function ordinalToXmm(ordinal RegOrdinal) returns X64XmmRegister
+  return try X64XmmRegister.fromRawValue(ordinal) otherwise 'bad'
+    panic("ordinalToXmm: invalid ordinal {ordinal}")
+  end 'bad'
+end 'ordinalToXmm'
+
+function rmEmitSpillFpX64(dstBlock MlirBlock, fpOrdinal RegOrdinal, stackOffset RegInt)
+  dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.spillXmmToStack(stackOffset, ordinalToXmm(fpOrdinal), FloatPrecision.f64)))
+end 'rmEmitSpillFpX64'
+
+function rmEmitReloadFpX64(dstBlock MlirBlock, fpOrdinal RegOrdinal, stackOffset RegInt)
+  dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.reloadXmmFromStack(ordinalToXmm(fpOrdinal), stackOffset, FloatPrecision.f64)))
+end 'rmEmitReloadFpX64'
+
+function rmEmitMovFpX64(dstBlock MlirBlock, destOrd RegOrdinal, srcOrd RegOrdinal)
+  dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.movXmmXmm(ordinalToXmm(destOrd), ordinalToXmm(srcOrd), FloatPrecision.f64)))
+end 'rmEmitMovFpX64'
+
+// --- ARM64 FP target emission ---
+
+function ordinalToArm64Fp(ordinal RegOrdinal) returns MaxArm64FloatRegister
+  return try MaxArm64FloatRegister.fromRawValue(ordinal) otherwise 'bad'
+    panic("ordinalToArm64Fp: invalid ordinal {ordinal}")
+  end 'bad'
+end 'ordinalToArm64Fp'
+
+function rmEmitSpillFpArm64(dstBlock MlirBlock, fpOrdinal RegOrdinal, stackOffset RegInt)
+  dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.spillFpToStack(stackOffset, ordinalToArm64Fp(fpOrdinal), FloatPrecision.f64)))
+end 'rmEmitSpillFpArm64'
+
+function rmEmitReloadFpArm64(dstBlock MlirBlock, fpOrdinal RegOrdinal, stackOffset RegInt)
+  dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.reloadFpFromStack(ordinalToArm64Fp(fpOrdinal), stackOffset, FloatPrecision.f64)))
+end 'rmEmitReloadFpArm64'
+
+function rmEmitMovFpArm64(dstBlock MlirBlock, destOrd RegOrdinal, srcOrd RegOrdinal)
+  dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.fmovRegReg(ordinalToArm64Fp(destOrd), ordinalToArm64Fp(srcOrd), FloatPrecision.f64)))
+end 'rmEmitMovFpArm64'
+
 // --- Load immediate ---
 
 export function rmEmitLoadImmediate(state RegState, valueId RegInt, value RegInt, dstBlock MlirBlock)
   rmRecordConstant(state, valueId: valueId, value: value)
+  // If value is deferred (only consumed by sink ops like return/call),
+  // skip eager register allocation — it will be rematerialized on demand.
+  let isDeferred = rmGetOr(state.deferredValues, index: valueId, fallback: 0)
+  if isDeferred == 1 'skip'
+    return
+  end 'skip'
   let reg = rmAllocateRegister(state, valueId: valueId, dstBlock: dstBlock, protect1: RM_NONE, protect2: RM_NONE)
   rmEmitMovImm(state, dstBlock: dstBlock, regOrdinal: reg, value: value)
 end 'rmEmitLoadImmediate'
+
+// Mark a value as deferred (only consumed by sink ops).
+export function rmSetDeferred(state RegState, valueId RegInt)
+  rmSet(state.deferredValues, index: valueId, value: 1, sentinel: 0)
+end 'rmSetDeferred'
 
 // --- Transfer value (reuse register for new value) ---
 
@@ -494,6 +881,7 @@ end 'rmTransferValue'
 // --- Caller-saved register management ---
 
 export function rmSpillAllCallerSaved(state RegState, dstBlock MlirBlock)
+  // Spill GPR caller-saved registers
   var i = 0
   let count = state.callerSavedGprs.count()
   while i < count 'spill'
@@ -513,9 +901,29 @@ export function rmSpillAllCallerSaved(state RegState, dstBlock MlirBlock)
     end 'occupied'
     i = i + 1
   end 'spill'
+  // Spill FP caller-saved registers
+  var fi = 0
+  let fpCount = state.callerSavedFps.count()
+  while fi < fpCount 'spillFp'
+    let fpOrd = try state.callerSavedFps.get(fi) otherwise 'skipFp'
+      fi = fi + 1
+      continue
+    end 'skipFp'
+    let fpOccupant = rmGetOr(state.fpContents, index: fpOrd, fallback: RM_NONE)
+    if fpOccupant != RM_NONE 'fpOccupied'
+      let fpStackHome = rmGetOr(state.valueFpStackHome, index: fpOccupant, fallback: RM_NO_STACK_HOME)
+      if fpStackHome == RM_NO_STACK_HOME 'fpNeedsSpill'
+        let fpSpillSlot = rmAllocateSpillSlot(state)
+        rmEmitSpillFp(state, dstBlock: dstBlock, fpOrdinal: fpOrd, stackOffset: fpSpillSlot)
+        rmSet(state.valueFpStackHome, index: fpOccupant, value: fpSpillSlot, sentinel: RM_NO_STACK_HOME)
+      end 'fpNeedsSpill'
+    end 'fpOccupied'
+    fi = fi + 1
+  end 'spillFp'
 end 'rmSpillAllCallerSaved'
 
 export function rmInvalidateCallerSaved(state RegState)
+  // Invalidate GPRs
   var i = 0
   let count = state.callerSavedGprs.count()
   while i < count 'invalidate'
@@ -531,12 +939,33 @@ export function rmInvalidateCallerSaved(state RegState)
     end 'occupied'
     i = i + 1
   end 'invalidate'
+  // Invalidate FPs (record previous register for reuse hint)
+  var fi = 0
+  let fpCount = state.callerSavedFps.count()
+  while fi < fpCount 'invalidateFp'
+    let fpOrd = try state.callerSavedFps.get(fi) otherwise 'skipFp'
+      fi = fi + 1
+      continue
+    end 'skipFp'
+    let fpOccupant = rmGetOr(state.fpContents, index: fpOrd, fallback: RM_NONE)
+    if fpOccupant != RM_NONE 'fpOccupied'
+      rmSet(state.valuePreviousFp, index: fpOccupant, value: fpOrd, sentinel: RM_NONE)
+      rmSet(state.valueToFp, index: fpOccupant, value: RM_NONE, sentinel: RM_NONE)
+      state.fpContents.set(fpOrd, value: RM_NONE)
+      state.fpLastUsed.set(fpOrd, value: 0)
+    end 'fpOccupied'
+    fi = fi + 1
+  end 'invalidateFp'
 end 'rmInvalidateCallerSaved'
 
 // --- Block transition ---
 
-export function rmResetForBlockTransition(state RegState, dstBlock MlirBlock)
-  // Spill all live registers
+// Reset register state for a block transition.
+// Spills live registers into the PREVIOUS block (before its terminator),
+// matching C# RegisterManagerBase.ResetForBlockTransition.
+// prevBlock is the block being finished — spill ops go into its ops array.
+export function rmResetForBlockTransition(state RegState, prevBlock MlirBlock)
+  // Spill all live registers into the previous block
   var i = 0
   while i < state.gprPoolSize 'spillAll'
     let regOrd = try state.gprPool.get(i) otherwise 'skip'
@@ -549,14 +978,33 @@ export function rmResetForBlockTransition(state RegState, dstBlock MlirBlock)
       let isConst = rmGetOr(state.hasConstant, index: occupant, fallback: 0)
       if stackHome == RM_NO_STACK_HOME and isConst == 0 'needsSpill'
         let spillSlot = rmAllocateSpillSlot(state)
-        rmEmitSpill(state, dstBlock: dstBlock, regOrdinal: regOrd, stackOffset: spillSlot)
+        rmEmitSpill(state, dstBlock: prevBlock, regOrdinal: regOrd, stackOffset: spillSlot)
         rmSet(state.valueStackHome, index: occupant, value: spillSlot, sentinel: RM_NO_STACK_HOME)
       end 'needsSpill'
     end 'occupied'
     i = i + 1
   end 'spillAll'
 
-  // Clear register state
+  // Spill FP registers
+  var fi = 0
+  while fi < state.fpPoolSize 'spillFp'
+    let fpOrd = try state.fpPool.get(fi) otherwise 'skipFp'
+      fi = fi + 1
+      continue
+    end 'skipFp'
+    let fpOccupant = rmGetOr(state.fpContents, index: fpOrd, fallback: RM_NONE)
+    if fpOccupant != RM_NONE 'fpOccupied'
+      let fpStackHome = rmGetOr(state.valueFpStackHome, index: fpOccupant, fallback: RM_NO_STACK_HOME)
+      if fpStackHome == RM_NO_STACK_HOME 'fpNeedsSpill'
+        let fpSpillSlot = rmAllocateSpillSlot(state)
+        rmEmitSpillFp(state, dstBlock: prevBlock, fpOrdinal: fpOrd, stackOffset: fpSpillSlot)
+        rmSet(state.valueFpStackHome, index: fpOccupant, value: fpSpillSlot, sentinel: RM_NO_STACK_HOME)
+      end 'fpNeedsSpill'
+    end 'fpOccupied'
+    fi = fi + 1
+  end 'spillFp'
+
+  // Clear GPR register state
   i = 0
   while i < state.gprPoolSize 'clearRegs'
     let clearOrd = rmGetOr(state.gprPool, index: i, fallback: RM_NONE)
@@ -567,8 +1015,20 @@ export function rmResetForBlockTransition(state RegState, dstBlock MlirBlock)
     i = i + 1
   end 'clearRegs'
 
+  // Clear FP register state
+  fi = 0
+  while fi < state.fpPoolSize 'clearFpRegs'
+    let clearFpOrd = rmGetOr(state.fpPool, index: fi, fallback: RM_NONE)
+    if clearFpOrd >= 0 'validFpOrd'
+      state.fpContents.set(clearFpOrd, value: RM_NONE)
+      state.fpLastUsed.set(clearFpOrd, value: 0)
+    end 'validFpOrd'
+    fi = fi + 1
+  end 'clearFpRegs'
+
   // Reset per-block counters
   state.nextFreshIndex = 0
+  state.nextFreshFpIndex = 0
   state.currentOpIndex = 0
   rmUpdateSpillWatermark(state)
 end 'rmResetForBlockTransition'
@@ -582,6 +1042,13 @@ export function rmNoteValueDead(state RegState, valueId RegInt)
     state.registerContents.set(regOrd, value: RM_NONE)
     state.lastUsed.set(regOrd, value: 0)
   end 'inReg'
+  // Also check FP registers
+  let fpOrd = rmGetOr(state.valueToFp, index: valueId, fallback: RM_NONE)
+  if fpOrd != RM_NONE 'inFp'
+    rmSet(state.valueToFp, index: valueId, value: RM_NONE, sentinel: RM_NONE)
+    state.fpContents.set(fpOrd, value: RM_NONE)
+    state.fpLastUsed.set(fpOrd, value: 0)
+  end 'inFp'
 end 'rmNoteValueDead'
 
 export function rmNoteValueOnStack(state RegState, valueId RegInt, stackOffset RegInt)
@@ -604,7 +1071,17 @@ export function rmReset(state RegState)
     end 'validOrd'
     i = i + 1
   end 'clearRegs'
+  var fi = 0
+  while fi < state.fpPoolSize 'clearFpRegs'
+    let clearFpOrd = rmGetOr(state.fpPool, index: fi, fallback: RM_NONE)
+    if clearFpOrd >= 0 'validFpOrd'
+      state.fpContents.set(clearFpOrd, value: RM_NONE)
+      state.fpLastUsed.set(clearFpOrd, value: 0)
+    end 'validFpOrd'
+    fi = fi + 1
+  end 'clearFpRegs'
   state.nextFreshIndex = 0
+  state.nextFreshFpIndex = 0
   state.currentOpIndex = 0
   rmUpdateSpillWatermark(state)
 end 'rmReset'
@@ -614,6 +1091,133 @@ end 'rmReset'
 export function rmGetRegisterForValue(state RegState, valueId RegInt) returns RegOrdinal
   return rmGetOr(state.valueToRegister, index: valueId, fallback: RM_NONE)
 end 'rmGetRegisterForValue'
+
+export function rmGetFpRegisterForValue(state RegState, valueId RegInt) returns RegOrdinal
+  return rmGetOr(state.valueToFp, index: valueId, fallback: RM_NONE)
+end 'rmGetFpRegisterForValue'
+
+// Force a value into a specific GPR. Spills the occupant if needed.
+export function rmEnsureInSpecificRegister(state RegState, valueId RegInt, targetOrd RegOrdinal, dstBlock MlirBlock)
+  let currentOrd = rmGetOr(state.valueToRegister, index: valueId, fallback: RM_NONE)
+  if currentOrd == targetOrd 'alreadyThere'
+    state.lastUsed.set(targetOrd, value: state.currentOpIndex)
+    return
+  end 'alreadyThere'
+  // Spill whatever is in the target register
+  rmSpillRegisterIfOccupied(state, regOrdinal: targetOrd, dstBlock: dstBlock)
+  // Get the value into any register first
+  let srcOrd = rmEnsureInRegister(state, valueId: valueId, dstBlock: dstBlock, protect1: targetOrd, protect2: RM_NONE)
+  if srcOrd != targetOrd 'needMov'
+    rmEmitMovReg(state, dstBlock: dstBlock, destOrd: targetOrd, srcOrd: srcOrd)
+    // Update tracking: value is now in targetOrd, not srcOrd
+    rmSet(state.valueToRegister, index: valueId, value: RM_NONE, sentinel: RM_NONE)
+    state.registerContents.set(srcOrd, value: RM_NONE)
+    state.lastUsed.set(srcOrd, value: 0)
+    rmAssign(state, regOrdinal: targetOrd, valueId: valueId)
+  end 'needMov'
+end 'rmEnsureInSpecificRegister'
+
+// Force a value into a specific FP register. Spills the occupant if needed.
+export function rmEnsureInSpecificFpRegister(state RegState, valueId RegInt, targetOrd RegOrdinal, dstBlock MlirBlock)
+  let currentOrd = rmGetOr(state.valueToFp, index: valueId, fallback: RM_NONE)
+  if currentOrd == targetOrd 'alreadyThere'
+    state.fpLastUsed.set(targetOrd, value: state.currentOpIndex)
+    return
+  end 'alreadyThere'
+  rmSpillFpIfOccupied(state, fpOrdinal: targetOrd, dstBlock: dstBlock)
+  let srcOrd = rmEnsureInFpRegister(state, valueId: valueId, dstBlock: dstBlock)
+  if srcOrd != targetOrd 'needMov'
+    rmEmitMovFp(state, dstBlock: dstBlock, destOrd: targetOrd, srcOrd: srcOrd)
+    rmSet(state.valueToFp, index: valueId, value: RM_NONE, sentinel: RM_NONE)
+    state.fpContents.set(srcOrd, value: RM_NONE)
+    state.fpLastUsed.set(srcOrd, value: 0)
+    rmAssignFp(state, fpOrdinal: targetOrd, valueId: valueId)
+  end 'needMov'
+end 'rmEnsureInSpecificFpRegister'
+
+// Spill ALL live registers (GPR and FP) to stack. Used before panic/guard calls
+// that may not return, so all values must have stack homes.
+export function rmSpillAllLiveRegisters(state RegState, dstBlock MlirBlock)
+  var i = 0
+  while i < state.gprPoolSize 'spillGpr'
+    let regOrd = try state.gprPool.get(i) otherwise 'skip'
+      i = i + 1
+      continue
+    end 'skip'
+    let occupant = rmGetOr(state.registerContents, index: regOrd, fallback: RM_NONE)
+    if occupant != RM_NONE 'occupied'
+      let stackHome = rmGetOr(state.valueStackHome, index: occupant, fallback: RM_NO_STACK_HOME)
+      let isConst = rmGetOr(state.hasConstant, index: occupant, fallback: 0)
+      if stackHome == RM_NO_STACK_HOME and isConst == 0 'needsSpill'
+        let spillSlot = rmAllocateSpillSlot(state)
+        rmEmitSpill(state, dstBlock: dstBlock, regOrdinal: regOrd, stackOffset: spillSlot)
+        rmSet(state.valueStackHome, index: occupant, value: spillSlot, sentinel: RM_NO_STACK_HOME)
+      end 'needsSpill'
+    end 'occupied'
+    i = i + 1
+  end 'spillGpr'
+  var fi = 0
+  while fi < state.fpPoolSize 'spillFp'
+    let fpOrd = try state.fpPool.get(fi) otherwise 'skipFp'
+      fi = fi + 1
+      continue
+    end 'skipFp'
+    let fpOcc = rmGetOr(state.fpContents, index: fpOrd, fallback: RM_NONE)
+    if fpOcc != RM_NONE 'fpOcc'
+      let fpStack = rmGetOr(state.valueFpStackHome, index: fpOcc, fallback: RM_NO_STACK_HOME)
+      if fpStack == RM_NO_STACK_HOME 'fpNeedsSpill'
+        let fpSlot = rmAllocateSpillSlot(state)
+        rmEmitSpillFp(state, dstBlock: dstBlock, fpOrdinal: fpOrd, stackOffset: fpSlot)
+        rmSet(state.valueFpStackHome, index: fpOcc, value: fpSlot, sentinel: RM_NO_STACK_HOME)
+      end 'fpNeedsSpill'
+    end 'fpOcc'
+    fi = fi + 1
+  end 'spillFp'
+end 'rmSpillAllLiveRegisters'
+
+// Force-spill a value to stack immediately (ensure it has a stack home).
+export function rmEnsureSpilled(state RegState, valueId RegInt, dstBlock MlirBlock)
+  let stackHome = rmGetOr(state.valueStackHome, index: valueId, fallback: RM_NO_STACK_HOME)
+  if stackHome != RM_NO_STACK_HOME 'alreadySpilled'
+    return
+  end 'alreadySpilled'
+  let regOrd = rmGetOr(state.valueToRegister, index: valueId, fallback: RM_NONE)
+  if regOrd != RM_NONE 'inReg'
+    let spillSlot = rmAllocateSpillSlot(state)
+    rmEmitSpill(state, dstBlock: dstBlock, regOrdinal: regOrd, stackOffset: spillSlot)
+    rmSet(state.valueStackHome, index: valueId, value: spillSlot, sentinel: RM_NO_STACK_HOME)
+    return
+  end 'inReg'
+  let fpOrd = rmGetOr(state.valueToFp, index: valueId, fallback: RM_NONE)
+  if fpOrd != RM_NONE 'inFp'
+    let fpSpillSlot = rmAllocateSpillSlot(state)
+    rmEmitSpillFp(state, dstBlock: dstBlock, fpOrdinal: fpOrd, stackOffset: fpSpillSlot)
+    rmSet(state.valueFpStackHome, index: valueId, value: fpSpillSlot, sentinel: RM_NO_STACK_HOME)
+  end 'inFp'
+end 'rmEnsureSpilled'
+
+// --- Shared store/load to stack ---
+
+export function rmEmitStoreToStack(state RegState, valueId RegInt, stackOffset RegInt, dstBlock MlirBlock)
+  let regOrd = rmEnsureInRegister(state, valueId: valueId, dstBlock: dstBlock, protect1: RM_NONE, protect2: RM_NONE)
+  rmEmitSpill(state, dstBlock: dstBlock, regOrdinal: regOrd, stackOffset: stackOffset)
+  rmNoteStoreToStack(state, valueId: valueId, stackOffset: stackOffset)
+end 'rmEmitStoreToStack'
+
+export function rmEmitLoadFromStack(state RegState, resultId RegInt, stackOffset RegInt, dstBlock MlirBlock)
+  let reg = rmAllocateRegister(state, valueId: resultId, dstBlock: dstBlock, protect1: RM_NONE, protect2: RM_NONE)
+  rmEmitReload(state, dstBlock: dstBlock, regOrdinal: reg, stackOffset: stackOffset)
+end 'rmEmitLoadFromStack'
+
+// --- Shared mov value to value ---
+
+export function rmEmitMovValueToValue(state RegState, inputId RegInt, resultId RegInt, dstBlock MlirBlock)
+  let srcOrd = rmEnsureInRegister(state, valueId: inputId, dstBlock: dstBlock, protect1: RM_NONE, protect2: RM_NONE)
+  let dstOrd = rmAllocateRegister(state, valueId: resultId, dstBlock: dstBlock, protect1: srcOrd, protect2: RM_NONE)
+  if srcOrd != dstOrd 'needMov'
+    rmEmitMovReg(state, dstBlock: dstBlock, destOrd: dstOrd, srcOrd: srcOrd)
+  end 'needMov'
+end 'rmEmitMovValueToValue'
 
 // --- X86-64 register pool configuration ---
 
@@ -628,14 +1232,362 @@ export function createX64CallerSavedGprs() returns RegIntArray
   return [0, 1, 2, 3, 6, 7, 8, 9]
 end 'createX64CallerSavedGprs'
 
+export function createX64CallConvGprs() returns RegIntArray
+  // Internal calling convention order: rcx=1, rdx=2, r8=8, r9=9, rsi=6, rdi=7, rax=0, rbx=3
+  return [1, 2, 8, 9, 6, 7, 0, 3]
+end 'createX64CallConvGprs'
+
+export function createX64FpPool() returns RegIntArray
+  // XMM0-7 for allocation (XMM8-15 available but not currently allocated)
+  return [0, 1, 2, 3, 4, 5, 6, 7]
+end 'createX64FpPool'
+
+export function createX64CallerSavedFps() returns RegIntArray
+  // XMM0-7 are caller-saved
+  return [0, 1, 2, 3, 4, 5, 6, 7]
+end 'createX64CallerSavedFps'
+
+export function createX64CallConvFps() returns RegIntArray
+  // XMM0-7 for FP arguments
+  return [0, 1, 2, 3, 4, 5, 6, 7]
+end 'createX64CallConvFps'
+
 // --- ARM64 register pool configuration ---
 
 export function createArm64GprPool() returns RegIntArray
-  // x0=0, x1=1, ..., x8=8
-  return [0, 1, 2, 3, 4, 5, 6, 7, 8]
+  // x0=0, x1=1, ..., x15=15 (matching C# ARM64RegisterManager)
+  return [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
 end 'createArm64GprPool'
 
 export function createArm64CallerSavedGprs() returns RegIntArray
-  // x0-x8 are caller-saved
-  return [0, 1, 2, 3, 4, 5, 6, 7, 8]
+  // x0-x15 are caller-saved
+  return [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
 end 'createArm64CallerSavedGprs'
+
+export function createArm64CallConvGprs() returns RegIntArray
+  // AAPCS64: x0-x7 for integer arguments
+  return [0, 1, 2, 3, 4, 5, 6, 7]
+end 'createArm64CallConvGprs'
+
+export function createArm64FpPool() returns RegIntArray
+  // D0-D7 for allocation (D8-D15 are callee-saved, not used)
+  return [0, 1, 2, 3, 4, 5, 6, 7]
+end 'createArm64FpPool'
+
+export function createArm64CallerSavedFps() returns RegIntArray
+  // D0-D7 are caller-saved
+  return [0, 1, 2, 3, 4, 5, 6, 7]
+end 'createArm64CallerSavedFps'
+
+export function createArm64CallConvFps() returns RegIntArray
+  // D0-D7 for FP arguments
+  return [0, 1, 2, 3, 4, 5, 6, 7]
+end 'createArm64CallConvFps'
+
+// ============================================================
+// Shared call lowering
+// ============================================================
+
+// Shared call argument placement and emission with cycle-detection.
+// Matches C# RegisterManagerBase.EmitCallShared.
+export function rmEmitCall(state RegState, dstBlock MlirBlock, callee ByteArray, argIds RegIntArray, resultId RegInt)
+  rmEmitCallShared(state, dstBlock: dstBlock, argIds: argIds, resultId: resultId, emitDirect: true, callee: callee, indirectRegOrd: RM_NONE)
+end 'rmEmitCall'
+
+// Shared call implementation used by direct, try, and indirect calls.
+function rmEmitCallShared(state RegState, dstBlock MlirBlock, argIds RegIntArray, resultId RegInt, emitDirect bool, callee ByteArray, indirectRegOrd RegOrdinal)
+  let argCount = argIds.count()
+  let regArgLimit = state.callConvGprCount
+
+  // 1. Spill caller-saved registers (but don't invalidate yet — values may
+  //    still be in registers after spilling if they already had stack homes
+  //    or are rematerializable constants).
+  rmSpillAllCallerSaved(state, dstBlock: dstBlock)
+
+  // 2. Handle stack args (beyond register limit)
+  let stackArgCount = argCount - regArgLimit
+  var stackArgBytes = 0
+  if stackArgCount > 0 'needStackSpace'
+    stackArgBytes = (stackArgCount * 8 + 15) and (0 - 16)
+    rmEmitSubSp(state, dstBlock: dstBlock, amount: stackArgBytes)
+    var stackIdx = regArgLimit
+    while stackIdx < argCount 'pushStackArgs'
+      let argId = try argIds.get(stackIdx) otherwise 0
+      let argOrd = rmEnsureInRegister(state, valueId: argId, dstBlock: dstBlock, protect1: RM_NONE, protect2: RM_NONE)
+      let spOffset = (stackIdx - regArgLimit) * 8
+      rmEmitStoreToSpOffset(state, dstBlock: dstBlock, regOrd: argOrd, offset: spOffset)
+      stackIdx = stackIdx + 1
+    end 'pushStackArgs'
+  end 'needStackSpace'
+
+  // 3. Gather GPR arg sources for cycle-detection.
+  //    For each register arg, determine where its value currently lives:
+  //    - argSources[i]: register ordinal holding the value (or RM_NONE)
+  //    - argStackHomes[i]: stack offset to reload from (or RM_NO_STACK_HOME)
+  //    - argConstants[i]: immediate value (or RM_NO_STACK_HOME if not a constant)
+  let maxRegArgs = regArgLimit
+  var argSources = RegIntArray{}
+  var argStackHomes = RegIntArray{}
+  var argConstants = RegIntArray{}
+  var argPlaced = RegIntArray{}
+  var argTargets = RegIntArray{}
+  var ai = 0
+  while ai < maxRegArgs 'initArrays'
+    argSources.push(RM_NONE)
+    argStackHomes.push(RM_NO_STACK_HOME)
+    argConstants.push(RM_NO_STACK_HOME)
+    argPlaced.push(0)
+    argTargets.push(try state.callConvGprs.get(ai) otherwise 0)
+    ai = ai + 1
+  end 'initArrays'
+
+  var gi = 0
+  while gi < maxRegArgs and gi < argCount 'gatherSources'
+    let argId = try argIds.get(gi) otherwise 'skipGather'
+      gi = gi + 1
+      continue
+    end 'skipGather'
+    let targetOrd = try argTargets.get(gi) otherwise 0
+    let regOrd = rmGetOr(state.valueToRegister, index: argId, fallback: RM_NONE)
+    if regOrd != RM_NONE 'inReg'
+      // Value is in a register. If it's not in the target and has a stack home,
+      // prefer reloading from stack to avoid complex register shuffling.
+      if regOrd != targetOrd 'notTarget'
+        let stackHome = rmGetOr(state.valueStackHome, index: argId, fallback: RM_NO_STACK_HOME)
+        if stackHome != RM_NO_STACK_HOME 'hasStack'
+          argStackHomes.set(gi, value: stackHome)
+        end 'hasStack' else 'useReg'
+          argSources.set(gi, value: regOrd)
+        end 'useReg'
+      end 'notTarget' else 'isTarget'
+        argSources.set(gi, value: regOrd)
+      end 'isTarget'
+    end 'inReg' else 'notInReg'
+      let isConst = rmGetOr(state.hasConstant, index: argId, fallback: 0)
+      if isConst == 1 'isConst'
+        let constVal = rmGetOr(state.constantValues, index: argId, fallback: 0)
+        argConstants.set(gi, value: constVal)
+      end 'isConst' else 'checkStack'
+        let stackHome = rmGetOr(state.valueStackHome, index: argId, fallback: RM_NO_STACK_HOME)
+        if stackHome != RM_NO_STACK_HOME 'hasStack2'
+          argStackHomes.set(gi, value: stackHome)
+        end 'hasStack2'
+      end 'checkStack'
+    end 'notInReg'
+    gi = gi + 1
+  end 'gatherSources'
+
+  // 4. Mark already-in-place args
+  var mi = 0
+  while mi < maxRegArgs and mi < argCount 'markInPlace'
+    let constVal = try argConstants.get(mi) otherwise RM_NO_STACK_HOME
+    if constVal != RM_NO_STACK_HOME 'skipConst'
+      mi = mi + 1
+      continue
+    end 'skipConst'
+    let srcOrd = try argSources.get(mi) otherwise RM_NONE
+    let tgtOrd = try argTargets.get(mi) otherwise 0
+    if srcOrd == tgtOrd and srcOrd != RM_NONE 'inPlace'
+      argPlaced.set(mi, value: 1)
+    end 'inPlace'
+    mi = mi + 1
+  end 'markInPlace'
+
+  // 5. Iteratively place non-conflicting args
+  var progress = true
+  while progress 'placeLoop'
+    progress = false
+    var pi = 0
+    while pi < maxRegArgs and pi < argCount 'placeIter'
+      let placed = try argPlaced.get(pi) otherwise 0
+      let constVal = try argConstants.get(pi) otherwise RM_NO_STACK_HOME
+      if placed == 1 or constVal != RM_NO_STACK_HOME 'skipPlaced'
+        pi = pi + 1
+        continue
+      end 'skipPlaced'
+      let tgtOrd = try argTargets.get(pi) otherwise 0
+      // Check if any other unplaced arg has its source in our target register
+      var targetBlocked = false
+      var bi = 0
+      while bi < maxRegArgs and bi < argCount 'checkBlocked'
+        if bi != pi 'notSelf'
+          let bPlaced = try argPlaced.get(bi) otherwise 0
+          let bConst = try argConstants.get(bi) otherwise RM_NO_STACK_HOME
+          if bPlaced == 0 and bConst == RM_NO_STACK_HOME 'checkSrc'
+            let bSrc = try argSources.get(bi) otherwise RM_NONE
+            if bSrc == tgtOrd and bSrc != RM_NONE 'blocked'
+              targetBlocked = true
+            end 'blocked'
+          end 'checkSrc'
+        end 'notSelf'
+        bi = bi + 1
+      end 'checkBlocked'
+      if not targetBlocked 'canPlace'
+        let srcOrd = try argSources.get(pi) otherwise RM_NONE
+        if srcOrd != RM_NONE 'movReg'
+          rmEmitMovReg(state, dstBlock: dstBlock, destOrd: tgtOrd, srcOrd: srcOrd)
+        end 'movReg' else 'loadStack'
+          let stackHome = try argStackHomes.get(pi) otherwise RM_NO_STACK_HOME
+          if stackHome != RM_NO_STACK_HOME 'reload'
+            rmEmitReload(state, dstBlock: dstBlock, regOrdinal: tgtOrd, stackOffset: stackHome)
+          end 'reload'
+        end 'loadStack'
+        argPlaced.set(pi, value: 1)
+        progress = true
+      end 'canPlace'
+      pi = pi + 1
+    end 'placeIter'
+  end 'placeLoop'
+
+  // 6. Break cycles with XCHG (X86) or 3-mov swap (ARM64)
+  var ci = 0
+  while ci < maxRegArgs and ci < argCount 'breakCycles'
+    let placed = try argPlaced.get(ci) otherwise 0
+    let constVal = try argConstants.get(ci) otherwise RM_NO_STACK_HOME
+    if placed == 1 or constVal != RM_NO_STACK_HOME 'skipCycle'
+      ci = ci + 1
+      continue
+    end 'skipCycle'
+    let srcOrd = try argSources.get(ci) otherwise RM_NONE
+    let tgtOrd = try argTargets.get(ci) otherwise 0
+    if srcOrd == tgtOrd 'alreadyInPlace'
+      argPlaced.set(ci, value: 1)
+      ci = ci + 1
+      continue
+    end 'alreadyInPlace'
+    // Swap source and target
+    rmEmitXchgOrSwap(state, dstBlock: dstBlock, ord1: srcOrd, ord2: tgtOrd)
+    // Update other args whose source was our target
+    var ui = 0
+    while ui < maxRegArgs and ui < argCount 'updateSources'
+      if ui != ci 'notSelf2'
+        let uPlaced = try argPlaced.get(ui) otherwise 0
+        let uConst = try argConstants.get(ui) otherwise RM_NO_STACK_HOME
+        if uPlaced == 0 and uConst == RM_NO_STACK_HOME 'updateSrc'
+          let uSrc = try argSources.get(ui) otherwise RM_NONE
+          if uSrc == tgtOrd 'swapped'
+            argSources.set(ui, value: srcOrd)
+          end 'swapped'
+        end 'updateSrc'
+      end 'notSelf2'
+      ui = ui + 1
+    end 'updateSources'
+    argPlaced.set(ci, value: 1)
+    ci = ci + 1
+  end 'breakCycles'
+
+  // 7. Place constant args last (no source register conflicts)
+  var ki = 0
+  while ki < maxRegArgs and ki < argCount 'placeConsts'
+    let placed = try argPlaced.get(ki) otherwise 0
+    if placed == 1 'skipConst2'
+      ki = ki + 1
+      continue
+    end 'skipConst2'
+    let constVal = try argConstants.get(ki) otherwise RM_NO_STACK_HOME
+    if constVal != RM_NO_STACK_HOME 'emitConst'
+      let tgtOrd = try argTargets.get(ki) otherwise 0
+      rmEmitMovImm(state, dstBlock: dstBlock, regOrdinal: tgtOrd, value: constVal)
+      argPlaced.set(ki, value: 1)
+    end 'emitConst'
+    ki = ki + 1
+  end 'placeConsts'
+
+  // 8. Emit call
+  if emitDirect 'direct'
+    rmEmitCallDirect(state, dstBlock: dstBlock, callee: callee)
+  end 'direct' else 'indirect'
+    rmEmitCallIndirect(state, dstBlock: dstBlock, regOrd: indirectRegOrd)
+  end 'indirect'
+
+  // 9. Deallocate stack space
+  if stackArgBytes > 0 'deallocStack'
+    rmEmitAddSp(state, dstBlock: dstBlock, amount: stackArgBytes)
+  end 'deallocStack'
+
+  // 10. Invalidate all caller-saved and assign result to return register
+  rmInvalidateCallerSaved(state)
+  rmAssign(state, regOrdinal: state.returnGprOrd, valueId: resultId)
+end 'rmEmitCallShared'
+
+// Shared try_call: call + capture error flag register.
+export function rmEmitTryCall(state RegState, dstBlock MlirBlock, callee ByteArray, argIds RegIntArray, resultId RegInt, errorFlagId RegInt)
+  rmEmitCall(state, dstBlock: dstBlock, callee: callee, argIds: argIds, resultId: resultId)
+  rmAssign(state, regOrdinal: state.errorFlagOrd, valueId: errorFlagId)
+end 'rmEmitTryCall'
+
+// Shared indirect call: ensure callee in scratch register, then call.
+export function rmEmitIndirectCallOp(state RegState, dstBlock MlirBlock, calleeId RegInt, argIds RegIntArray, resultId RegInt)
+  let regArgLimit = state.callConvGprCount
+
+  // Ensure callee is in a register before spilling
+  let calleeOrd = rmEnsureInRegister(state, valueId: calleeId, dstBlock: dstBlock, protect1: RM_NONE, protect2: RM_NONE)
+  var actualCalleeOrd = calleeOrd
+  // If callee is in a CC register, move to indirect call scratch
+  var calleeInCC = false
+  var ci = 0
+  while ci < regArgLimit 'checkCC'
+    let ccOrd = try state.callConvGprs.get(ci) otherwise 'skipCC'
+      ci = ci + 1
+      continue
+    end 'skipCC'
+    if calleeOrd == ccOrd 'inCC'
+      calleeInCC = true
+    end 'inCC'
+    ci = ci + 1
+  end 'checkCC'
+  if calleeInCC 'moveToScratch'
+    let scratchOrd = state.indirectCallScratchOrd
+    rmSpillRegisterIfOccupied(state, regOrdinal: scratchOrd, dstBlock: dstBlock)
+    rmEmitMovReg(state, dstBlock: dstBlock, destOrd: scratchOrd, srcOrd: calleeOrd)
+    actualCalleeOrd = scratchOrd
+  end 'moveToScratch'
+
+  // Use shared call implementation with indirect call register
+  rmEmitCallShared(state, dstBlock: dstBlock, argIds: argIds, resultId: resultId, emitDirect: false, callee: b"", indirectRegOrd: actualCalleeOrd)
+end 'rmEmitIndirectCallOp'
+
+// Shared return: move value to return register.
+// Does NOT emit the epilogue — that's target-specific (X86 pushes to ops,
+// ARM64 sets as block terminator). Caller should emit epilogue after this.
+export function rmEnsureReturnValue(state RegState, dstBlock MlirBlock, retValId RegInt)
+  let retOrd = state.returnGprOrd
+  let valOrd = rmEnsureInRegister(state, valueId: retValId, dstBlock: dstBlock, protect1: RM_NONE, protect2: RM_NONE)
+  if valOrd != retOrd 'moveToRet'
+    rmEmitMovReg(state, dstBlock: dstBlock, destOrd: retOrd, srcOrd: valOrd)
+  end 'moveToRet'
+end 'rmEnsureReturnValue'
+
+// Shared FP return: move float value to FP return register.
+export function rmEnsureFpReturnValue(state RegState, dstBlock MlirBlock, retValId RegInt)
+  let retOrd = state.returnFpOrd
+  let valOrd = rmEnsureInFpRegister(state, valueId: retValId, dstBlock: dstBlock)
+  if valOrd != retOrd 'moveToRet'
+    rmEmitMovFp(state, dstBlock: dstBlock, destOrd: retOrd, srcOrd: valOrd)
+  end 'moveToRet'
+end 'rmEnsureFpReturnValue'
+
+// Shared parameter noting: register a parameter value with the allocator.
+// On X86, paramIndex maps to both GPR and XMM CC slots (shared index).
+// On ARM64, typeSpecificIndex provides independent GPR/FP indexing.
+export function rmNoteParam(state RegState, valueId RegInt, paramIndex RegInt, typeSpecificIndex RegInt, isFloat bool, dstBlock MlirBlock)
+  if isFloat 'fpParam'
+    if typeSpecificIndex < state.callConvFpCount 'regFp'
+      let fpOrd = try state.callConvFps.get(typeSpecificIndex) otherwise 0
+      rmAssignFp(state, fpOrdinal: fpOrd, valueId: valueId)
+    end 'regFp' else 'stackFp'
+      let stackOffset = 16 + (paramIndex - state.callConvGprCount) * 8
+      let fp = rmAllocateFpRegister(state, valueId: valueId, dstBlock: dstBlock)
+      rmEmitReloadFp(state, dstBlock: dstBlock, fpOrdinal: fp, stackOffset: stackOffset)
+    end 'stackFp'
+  end 'fpParam' else 'gprParam'
+    if typeSpecificIndex < state.callConvGprCount 'regGpr'
+      let gprOrd = try state.callConvGprs.get(typeSpecificIndex) otherwise 0
+      rmAssign(state, regOrdinal: gprOrd, valueId: valueId)
+    end 'regGpr' else 'stackGpr'
+      let stackOffset = 16 + (paramIndex - state.callConvGprCount) * 8
+      let gpr = rmAllocateRegister(state, valueId: valueId, dstBlock: dstBlock, protect1: RM_NONE, protect2: RM_NONE)
+      rmEmitReload(state, dstBlock: dstBlock, regOrdinal: gpr, stackOffset: stackOffset)
+    end 'stackGpr'
+  end 'gprParam'
+end 'rmNoteParam'

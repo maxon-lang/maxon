@@ -119,6 +119,101 @@ function emitXorRegRegSelfOp(code ByteArray, reg X64Register)
   emitModRMReg(code, regField: reg, rmField: reg)
 end 'emitXorRegRegSelfOp'
 
+function emitCallIndirectOp(code ByteArray, reg X64Register)
+  // call reg  =>  REX FF /2 ModRM(reg)
+  emitRexWSingle(code, rmField: reg)
+  code.push(0xFF)
+  emitModRMExt(code, ext: 2, rmField: reg)
+end 'emitCallIndirectOp'
+
+function emitXchgRegRegOp(code ByteArray, reg1 X64Register, reg2 X64Register)
+  // xchg reg1, reg2  =>  REX.W 87 ModRM(reg1, reg2)
+  emitRexWPrefix(code, regField: reg1, rmField: reg2)
+  code.push(0x87)
+  emitModRMReg(code, regField: reg1, rmField: reg2)
+end 'emitXchgRegRegOp'
+
+// --- XMM emission helpers ---
+
+function xmmRegCode(reg X64XmmRegister) returns MachineWord
+  return reg.rawValue
+end 'xmmRegCode'
+
+// MOVSD xmm1, xmm2: F2 0F 10 ModRM (reg, reg)
+// MOVSS xmm1, xmm2: F3 0F 10 ModRM (reg, reg)
+function emitMovXmmXmmOp(code ByteArray, dest X64XmmRegister, src X64XmmRegister, precision FloatPrecision)
+  let destC = xmmRegCode(dest)
+  let srcC = xmmRegCode(src)
+  match precision 'pre'
+    f64 then code.push(0xF2)
+    f32 then code.push(0xF3)
+  end 'pre'
+  if destC >= 8 or srcC >= 8 'needRex'
+    var rex = 0x40
+    if destC >= 8 'rexR'
+      rex = rex or 0x04
+    end 'rexR'
+    if srcC >= 8 'rexB'
+      rex = rex or 0x01
+    end 'rexB'
+    code.push(rex)
+  end 'needRex'
+  code.push(0x0F)
+  code.push(0x10)
+  let modrm = 0xC0 or ((destC and 7) shl 3) or (srcC and 7)
+  code.push(modrm)
+end 'emitMovXmmXmmOp'
+
+// MOVSD [rbp+disp], xmm: F2 0F 11 ModRM
+function emitSpillXmmToStackOp(code ByteArray, offset MachineWord, src X64XmmRegister, precision FloatPrecision)
+  let srcC = xmmRegCode(src)
+  match precision 'pre'
+    f64 then code.push(0xF2)
+    f32 then code.push(0xF3)
+  end 'pre'
+  if srcC >= 8 'needRex'
+    code.push(0x44)
+  end 'needRex'
+  code.push(0x0F)
+  code.push(0x11)
+  let signedOffset = offset
+  if signedOffset >= -128 and signedOffset <= 127 'disp8'
+    let modrm = 0x45 or ((srcC and 7) shl 3)
+    code.push(modrm)
+    code.push(signedOffset and 0xFF)
+  end 'disp8' else 'disp32'
+    let modrm = 0x85 or ((srcC and 7) shl 3)
+    code.push(modrm)
+    writeDword(code, value: signedOffset)
+  end 'disp32'
+end 'emitSpillXmmToStackOp'
+
+// MOVSD xmm, [rbp+disp]: F2 0F 10 ModRM
+function emitReloadXmmFromStackOp(code ByteArray, dest X64XmmRegister, offset MachineWord, precision FloatPrecision)
+  let destC = xmmRegCode(dest)
+  match precision 'pre'
+    f64 then code.push(0xF2)
+    f32 then code.push(0xF3)
+  end 'pre'
+  if destC >= 8 'needRex'
+    code.push(0x44)
+  end 'needRex'
+  code.push(0x0F)
+  code.push(0x10)
+  let signedOffset = offset
+  if signedOffset >= -128 and signedOffset <= 127 'disp8'
+    let modrm = 0x45 or ((destC and 7) shl 3)
+    code.push(modrm)
+    code.push(signedOffset and 0xFF)
+  end 'disp8' else 'disp32'
+    let modrm = 0x85 or ((destC and 7) shl 3)
+    code.push(modrm)
+    writeDword(code, value: signedOffset)
+  end 'disp32'
+end 'emitReloadXmmFromStackOp'
+
+// --- End XMM emission helpers ---
+
 // Spill: mov [rbp+offset], srcReg (offset is negative for spill slots)
 function emitSpillToStackOp(code ByteArray, offset MachineWord, srcReg X64Register)
   let srcCode = regCode(srcReg)
@@ -900,6 +995,14 @@ function emitMaxX64Op(op MaxX64Op, code ByteArray, blockFixups BlockJumpFixupArr
     spillToStack(offset, srcReg) then emitSpillToStackOp(code, offset: offset, srcReg: srcReg)
     reloadFromStack(destReg, offset) then emitReloadFromStackOp(code, dest: destReg, offset: offset)
     xorRegRegSelf(reg) then emitXorRegRegSelfOp(code, reg: reg)
+    callIndirect(reg) then emitCallIndirectOp(code, reg: reg)
+    xchgRegReg(reg1, reg2) then emitXchgRegRegOp(code, reg1: reg1, reg2: reg2)
+    // XMM FP ops — emit XMM instruction encodings
+    movXmmXmm(dest, src, precision) then emitMovXmmXmmOp(code, dest: dest, src: src, precision: precision)
+    spillXmmToStack(offset, src, precision) then emitSpillXmmToStackOp(code, offset: offset, src: src, precision: precision)
+    reloadXmmFromStack(dest, offset, precision) then emitReloadXmmFromStackOp(code, dest: dest, offset: offset, precision: precision)
+    movXmmRipRel to andMaskRipRel then panic("X86 XMM op not yet implemented in binary emitter")
+    storeIndirect to repStosq then panic("X86 extended op not yet implemented in binary emitter")
   end 'emit'
 end 'emitMaxX64Op'
 

@@ -60,7 +60,11 @@ function lowerFunctionToArm64(srcFunc MlirFunction, osDesc OsDescriptor, logLowe
   let spillBase = 16 + varStackSize
   let gprPool = createArm64GprPool()
   let callerSaved = createArm64CallerSavedGprs()
-  var regState = createRegState(spillBase, gprPool: gprPool, callerSavedGprs: callerSaved, target: RegTarget.arm64)
+  let ccGprs = createArm64CallConvGprs()
+  let fpPool = createArm64FpPool()
+  let fpCallerSaved = createArm64CallerSavedFps()
+  let ccFps = createArm64CallConvFps()
+  var regState = createRegState(spillBase, gprPool: gprPool, callerSavedGprs: callerSaved, target: RegTarget.arm64, callConvGprs: ccGprs, returnGprOrd: 0, errorFlagOrd: 1, indirectCallScratchOrd: 9, gprCycleBreakOrd: 16, hasXchg: false, fpPool: fpPool, callerSavedFps: fpCallerSaved, callConvFps: ccFps, returnFpOrd: 0, fpCycleBreakOrd: 31)
 
   // We still need ValueSlotMap for SysOp functions that use slot-based addressing
   var nextTempSlot = maxParserSlot + 1
@@ -69,6 +73,7 @@ function lowerFunctionToArm64(srcFunc MlirFunction, osDesc OsDescriptor, logLowe
   // Phase 3: Lower all blocks WITHOUT prologue.
   var isFirstBlock = true
   var entryBlock = MlirBlock{id: 0, label: b"", ops: MlirOpArray{}, terminator: MlirOp.cf(CfOp.br(0)), hasTerminator: false}
+  var prevDstBlock = entryBlock
   for srcBlock in srcFunc.region.blocks 'eachBlock'
     var dstBlock = addBlock(dstFunc.region, label: srcBlock.label)
     dstBlock.id = srcBlock.id
@@ -81,8 +86,8 @@ function lowerFunctionToArm64(srcFunc MlirFunction, osDesc OsDescriptor, logLowe
       entryBlock = dstBlock
       isFirstBlock = false
     end 'isEntry' else 'notEntry'
-      // Reset register state for new block
-      rmResetForBlockTransition(regState, dstBlock: dstBlock)
+      // Reset register state — spill live registers into the PREVIOUS block
+      rmResetForBlockTransition(regState, prevBlock: prevDstBlock)
     end 'notEntry'
 
     // Lower each op in the block
@@ -103,6 +108,7 @@ function lowerFunctionToArm64(srcFunc MlirFunction, osDesc OsDescriptor, logLowe
         logTrace(LogCategory.mlir, message: () gives "mid-to-arm64: {formatTerminatorResultWithBlocks(sourceOp: srcBlock.terminator, dstBlock: dstBlock, opsBefore: opsBefore, sourceBlocks: srcFunc.region.blocks, dstBlocks: dstFunc.region.blocks)}")
       end 'logTerm'
     end 'hasTerm'
+    prevDstBlock = dstBlock
   end 'eachBlock'
 
   // Phase 4: Compute final stack size and insert prologue at the front of the entry block.
@@ -166,6 +172,8 @@ function isArm64BranchLink(op MaxArm64Op) returns bool
     prologue to branch gives false
     branchLink gives true
     printLiteral to reloadFromStack gives false
+    branchLinkReg gives true
+    subSpImm to nullSafeLoad gives false
   end 'check'
 end 'isArm64BranchLink'
 
@@ -413,51 +421,19 @@ end 'lowerPrintIntArm64RA'
 
 function lowerFuncOpArm64RA(op FuncOp, dstBlock MlirBlock, regState RegState)
   match op 'lower'
-    call(resultId, callee, argIds) then lowerCallOpArm64RA(resultId, callee: callee, argIds: argIds, dstBlock: dstBlock, regState: regState)
+    call(resultId, callee, argIds) then rmEmitCall(regState, dstBlock: dstBlock, callee: callee, argIds: argIds, resultId: resultId)
+    tryCall(resultId, callee, argIds, errorFlagId) then rmEmitTryCall(regState, dstBlock: dstBlock, callee: callee, argIds: argIds, resultId: resultId, errorFlagId: errorFlagId)
+    indirectCall(resultId, calleeId, argIds) then rmEmitIndirectCallOp(regState, dstBlock: dstBlock, calleeId: calleeId, argIds: argIds, resultId: resultId)
+    funcRef(resultId, funcName) then lowerFuncRefArm64RA(resultId, funcName: funcName, dstBlock: dstBlock, regState: regState)
     ret then break 'lower'
+    tailCall then break 'lower'
   end 'lower'
 end 'lowerFuncOpArm64RA'
 
-function lowerCallOpArm64RA(resultId ValueId, callee ByteArray, argIds ValueIdArray, dstBlock MlirBlock, regState RegState)
-  let argCount = argIds.count()
-
-  if argCount > 8 'tooManyArgs'
-    logError(LogCategory.codegen, message: () gives "ARM64 backend does not yet support more than 8 function arguments (got {argCount})")
-  end 'tooManyArgs'
-
-  // Spill all caller-saved registers before the call, then invalidate so that
-  // arg loading reloads from stack homes (prevents clobber when moving args to CC regs).
-  // Reset nextFreshIndex so allocations start from x0, naturally matching AAPCS64 CC regs.
-  rmSpillAllCallerSaved(regState, dstBlock: dstBlock)
-  rmInvalidateCallerSaved(regState)
-  regState.nextFreshIndex = 0
-
-  // AAPCS64: x0-x7 for first 8 integer arguments
-  let callRegs = [MaxArm64Register.x0, MaxArm64Register.x1, MaxArm64Register.x2, MaxArm64Register.x3, MaxArm64Register.x4, MaxArm64Register.x5, MaxArm64Register.x6, MaxArm64Register.x7]
-
-  // Load arguments into their AAPCS64 registers
-  var i = 0
-  while i < 8 and i < argCount 'loadArgs'
-    let argId = try argIds.get(i) otherwise 'skipArg'
-      i = i + 1
-      continue
-    end 'skipArg'
-    let argOrd = rmEnsureInRegister(regState, valueId: argId, dstBlock: dstBlock, protect1: RM_NONE_ARM64, protect2: RM_NONE_ARM64)
-    let argReg = ordinalToArm64(argOrd)
-    let targetReg = try callRegs.get(i) otherwise MaxArm64Register.x0
-    if argReg != targetReg 'needMov'
-      dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.movRegReg(targetReg, argReg)))
-    end 'needMov'
-    i = i + 1
-  end 'loadArgs'
-
-  dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.branchLink(callee)))
-
-  // After call: invalidate all caller-saved registers and assign result to x0
-  rmInvalidateCallerSaved(regState)
-  let x0Ord = arm64RegToOrdinal(MaxArm64Register.x0)
-  rmAssign(regState, regOrdinal: x0Ord, valueId: resultId)
-end 'lowerCallOpArm64RA'
+function lowerFuncRefArm64RA(resultId ValueId, funcName ByteArray, dstBlock MlirBlock, regState RegState)
+  let reg = rmAllocateRegister(regState, valueId: resultId, dstBlock: dstBlock, protect1: RM_NONE_ARM64, protect2: RM_NONE_ARM64)
+  dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.leaFuncAddr(ordinalToArm64(reg), funcName)))
+end 'lowerFuncRefArm64RA'
 
 // ============================================================
 // Terminators - register allocated
@@ -514,19 +490,12 @@ end 'lowerBoolTestCondBrArm64RA'
 function lowerFuncTerminatorArm64RA(op FuncOp, dstBlock MlirBlock, regState RegState)
   match op 'lower'
     ret(retValId) then lowerReturnOpArm64RA(retValId, dstBlock: dstBlock, regState: regState)
-    call then break 'lower'
+    call to tailCall then break 'lower'
   end 'lower'
 end 'lowerFuncTerminatorArm64RA'
 
 function lowerReturnOpArm64RA(retValId ValueId, dstBlock MlirBlock, regState RegState)
-  let x0Ord = arm64RegToOrdinal(MaxArm64Register.x0)
-  // Ensure the return value is in a register
-  let valOrd = rmEnsureInRegister(regState, valueId: retValId, dstBlock: dstBlock, protect1: RM_NONE_ARM64, protect2: RM_NONE_ARM64)
-  // Move to x0 if not already there
-  if valOrd != x0Ord 'moveToX0'
-    let valReg = ordinalToArm64(valOrd)
-    dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.movRegReg(MaxArm64Register.x0, valReg)))
-  end 'moveToX0'
+  rmEnsureReturnValue(regState, dstBlock: dstBlock, retValId: retValId)
   dstBlock.terminator = MlirOp.maxarm64(MaxArm64Op.epilogue)
 end 'lowerReturnOpArm64RA'
 
