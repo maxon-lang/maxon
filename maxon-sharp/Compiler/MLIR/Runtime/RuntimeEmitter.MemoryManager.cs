@@ -529,8 +529,18 @@ public partial class RuntimeEmitter {
     // Compute user_ptr = raw + MmHeaderSize
     _b.LoadLocal(VReg.Scratch0, 5); // Scratch0 = raw_ptr
     _b.AddRegImm(VReg.Scratch0, MmHeaderSize); // Scratch0 = user_ptr
+    _b.StoreLocal(6, VReg.Scratch0); // slot 6 = user_ptr (reuse packed_id slot)
+
+    // Zero the user area so managed pointers in uninitialized array slots are NULL.
+    // Without this, array.set on fresh capacity slots would decref garbage pointers.
+    _b.LoadLocal(VReg.Scratch0, 6); // ptr = user_ptr
+    _b.LoadLocal(VReg.Scratch1, 6); // end = user_ptr
+    _b.LoadLocal(VReg.Arg0, 0);     // size
+    _b.AddRegReg(VReg.Scratch1, VReg.Arg0); // end = user_ptr + size
+    EmitZeroFillLoop("mm_alloc");
 
     // Return user_ptr
+    _b.LoadLocal(VReg.Scratch0, 6);
     _b.ReturnValue(VReg.Scratch0);
   }
 
@@ -640,6 +650,18 @@ public partial class RuntimeEmitter {
       _b.StoreIndirect(VReg.Scratch0, 0, VReg.Scratch1);
     }
 
+    // Zero the new space beyond old_size to prevent use-after-free when
+    // array.set decrefs uninitialized slots after realloc.
+    _b.LoadLocal(VReg.Scratch0, 5); // new_raw_ptr
+    _b.AddRegImm(VReg.Scratch0, MmHeaderSize); // new_user_ptr
+    _b.LoadLocal(VReg.Scratch1, 1); // old_size
+    _b.AddRegReg(VReg.Scratch0, VReg.Scratch1); // Scratch0 = ptr = new_user_ptr + old_size
+    _b.LoadLocal(VReg.Scratch1, 5); // new_raw_ptr
+    _b.AddRegImm(VReg.Scratch1, MmHeaderSize); // new_user_ptr
+    _b.LoadLocal(VReg.Arg0, 2); // new_size
+    _b.AddRegReg(VReg.Scratch1, VReg.Arg0); // Scratch1 = end = new_user_ptr + new_size
+    EmitZeroFillLoop("mm_realloc");
+
     // Compute new_user_ptr = new_raw + MmHeaderSize
     _b.LoadLocal(VReg.Scratch0, 5); // Scratch0 = new_raw_ptr
     _b.AddRegImm(VReg.Scratch0, MmHeaderSize); // Scratch0 = new_user_ptr
@@ -717,6 +739,14 @@ public partial class RuntimeEmitter {
       _b.LoadLocal(VReg.Arg1, 3); // raw_alloc_id
       _b.Call("__mm_raw_id_insert");
     }
+
+    // Zero the allocated block to prevent use-after-free when managed array
+    // elements in uninitialized capacity slots get decreffed.
+    _b.LoadLocal(VReg.Scratch0, 2); // ptr
+    _b.LoadLocal(VReg.Scratch1, 2); // end = ptr
+    _b.LoadLocal(VReg.Arg0, 0);     // size
+    _b.AddRegReg(VReg.Scratch1, VReg.Arg0); // end = ptr + size
+    EmitZeroFillLoop("mm_raw_alloc");
 
     _b.LoadLocal(VReg.Scratch0, 2);
     _b.ReturnValue(VReg.Scratch0);
@@ -1706,5 +1736,20 @@ public partial class RuntimeEmitter {
 
     _b.DefineLabel(doneLabel);
     _b.FunctionEnd();
+  }
+
+  /// Zero-fill memory from Scratch0 (start) to Scratch1 (end) in 8-byte steps.
+  /// Caller must set up Scratch0 and Scratch1 before calling.
+  private void EmitZeroFillLoop(string labelPrefix) {
+    var zeroLoop = UniqueLabel($"{labelPrefix}_zero_loop");
+    var zeroDone = UniqueLabel($"{labelPrefix}_zero_done");
+    _b.DefineLabel(zeroLoop);
+    _b.CmpRegReg(VReg.Scratch0, VReg.Scratch1);
+    _b.JumpIf(Condition.AboveEqual, zeroDone);
+    _b.ZeroReg(VReg.Arg0);
+    _b.StoreIndirect(VReg.Scratch0, 0, VReg.Arg0); // *ptr = 0
+    _b.AddRegImm(VReg.Scratch0, 8); // ptr += 8
+    _b.Jump(zeroLoop);
+    _b.DefineLabel(zeroDone);
   }
 }

@@ -212,8 +212,9 @@ end 'maxArm64EmitUdiv'
 
 // Remainder: SDIV X2, X0, X1; MSUB X0, X2, X1, X0 => X0 = X0 - (X0/X1)*X1
 function maxArm64EmitRem(code ByteArray, rd MachineWord, rn MachineWord, rm MachineWord)
-  maxArm64EmitSdiv(code, rd: 2, rn: rn, rm: rm)
-  maxArm64EmitMsub(code, rd: rd, rn: 2, rm: rm, ra: rn)
+  // Use x16 (IP0) as scratch — guaranteed not in allocatable pool, avoids clobbering rd/rn/rm
+  maxArm64EmitSdiv(code, rd: 16, rn: rn, rm: rm)
+  maxArm64EmitMsub(code, rd: rd, rn: 16, rm: rm, ra: rn)
 end 'maxArm64EmitRem'
 
 // MOV Xd, Xn => ORR Xd, XZR, Xn

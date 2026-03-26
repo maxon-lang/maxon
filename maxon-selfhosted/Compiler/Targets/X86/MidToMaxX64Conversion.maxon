@@ -2,20 +2,9 @@
 // Uses the RegisterManager for greedy linear-scan register allocation
 // instead of the naive spill-everything-to-stack approach.
 
-// Local aliases matching RegisterManager types (for use in local function signatures)
-typealias RmOrdinal = int(i64.min to i64.max)
-
 // Sentinel values matching RegisterManager's constants
 let RM_NONE = -1
 let RM_NO_STACK_HOME = -9223372036854775807
-
-// Check if a value has a slot mapping
-function valueSlotMapHas(m ValueSlotMap, valueId ValueId) returns bool
-  if valueId >= m.count() 'outOfBounds'
-    return false
-  end 'outOfBounds'
-  return true
-end 'valueSlotMapHas'
 
 export function lowerMidToMaxX64(module MlirModule, target Target) returns MlirModule
   logDebug(LogCategory.mlir, message: () gives "Lowering Mid to MaxX64 dialect")
@@ -93,7 +82,7 @@ function lowerFunctionToX64(srcFunc MlirFunction, shadowSpace StackSize, osDesc 
       // Do NOT emit prologue here -- we'll insert it after all lowering.
       // Emit parameter saves: move params from ABI registers to their stack slots
       // and also register them with the register allocator.
-      emitParamSavesRegAlloc(dstBlock, paramCount: srcFunc.paramCount, regState: regState, valueSlots: valueSlots)
+      emitParamSavesRegAlloc(dstBlock, paramCount: srcFunc.paramCount)
       entryBlock = dstBlock
       isFirstBlock = false
     end 'isEntry' else 'notEntry'
@@ -254,11 +243,15 @@ end 'sysTempCount'
 
 // Save parameter registers to their stack slots AND register with the allocator.
 // Uses Maxon's internal calling convention: rcx, rdx, r8, r9, rsi, rdi, rax, rbx
-function emitParamSavesRegAlloc(dstBlock MlirBlock, paramCount ParamCount, regState RegState, valueSlots ValueSlotMap)
+function emitParamSavesRegAlloc(dstBlock MlirBlock, paramCount ParamCount)
   if paramCount == 0 'noParams'
     return
   end 'noParams'
 
+  // Save register params to their stack slots.
+  // Do NOT register with the register allocator — body SSA values start from valueId 0
+  // which would conflict with param valueIds. The body's memref.load operations will
+  // correctly register values with the allocator when they're needed.
   let regParams = [X64Register.rcx, X64Register.rdx, X64Register.r8, X64Register.r9, X64Register.rsi, X64Register.rdi, X64Register.rax, X64Register.rbx]
   for(regIdx, reg) in regParams.enumerated() 'regParams'
     if regIdx >= paramCount 'done'
@@ -266,11 +259,6 @@ function emitParamSavesRegAlloc(dstBlock MlirBlock, paramCount ParamCount, regSt
     end 'done'
     // Store param to its variable slot
     dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.movSlot(regIdx, reg)))
-    // Record the param value as being in the corresponding stack slot
-    let slotOffset = 0 - (regIdx + 1) * 8
-    rmNoteValueOnStack(regState, valueId: regIdx, stackOffset: slotOffset)
-    // Also record in the slot map for SysOps
-    valueSlotMapSet(valueSlots, valueId: regIdx, slot: regIdx)
   end 'regParams'
 
   // Params 9+ are passed on the stack by the caller at [RBP+16], [RBP+24], etc.
@@ -279,9 +267,6 @@ function emitParamSavesRegAlloc(dstBlock MlirBlock, paramCount ParamCount, regSt
     let rbpOffset = 16 + (paramIdx - 8) * 8
     dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.loadRegRbpOffset(X64Register.rax, rbpOffset)))
     dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.movSlot(paramIdx, X64Register.rax)))
-    let slotOffset = 0 - (paramIdx + 1) * 8
-    rmNoteValueOnStack(regState, valueId: paramIdx, stackOffset: slotOffset)
-    valueSlotMapSet(valueSlots, valueId: paramIdx, slot: paramIdx)
     paramIdx = paramIdx + 1
   end 'stackParams'
 end 'emitParamSavesRegAlloc'
@@ -524,7 +509,7 @@ function lowerDivRemRA(resultId ValueId, leftId ValueId, rightId ValueId, isRem 
 end 'lowerDivRemRA'
 
 // Find a register that is not RAX, RDX, or the dividend/divisor registers.
-function findSafeDivRegister(regState RegState, lhsOrd RmOrdinal, rhsOrd RmOrdinal) returns RmOrdinal
+function findSafeDivRegister(regState RegState, lhsOrd RegOrdinal, rhsOrd RegOrdinal) returns RegOrdinal
   let raxOrd = x64RegToOrdinal(X64Register.rax)
   let rdxOrd = x64RegToOrdinal(X64Register.rdx)
   var i = 0
@@ -626,8 +611,12 @@ end 'lowerFuncOpRA'
 function lowerCallOpRA(resultId ValueId, callee ByteArray, argIds ValueIdArray, dstBlock MlirBlock, regState RegState)
   let argCount = argIds.count()
 
-  // Spill all caller-saved registers before the call
+  // Spill all caller-saved registers before the call, then invalidate so that
+  // arg loading reloads from stack homes (prevents clobber when moving args to CC regs).
+  // Reset nextFreshIndex so allocations start from pool beginning.
   rmSpillAllCallerSaved(regState, dstBlock: dstBlock)
+  rmInvalidateCallerSaved(regState)
+  regState.nextFreshIndex = 0
 
   // Internal calling convention: rcx, rdx, r8, r9, rsi, rdi, rax, rbx
   let callRegs = [X64Register.rcx, X64Register.rdx, X64Register.r8, X64Register.r9, X64Register.rsi, X64Register.rdi, X64Register.rax, X64Register.rbx]

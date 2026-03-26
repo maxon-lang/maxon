@@ -73,16 +73,16 @@ end 'MaxArm64Op'
 export typealias MaxArm64OpArray = Array with MaxArm64Op
 
 function arm64SlotOffset(slotIndex VarSlot) returns StackSize
-  return(slotIndex + 1) * 8
+  return 16 + slotIndex * 8
 end 'arm64SlotOffset'
 
 export function maxArm64OpToString(op MaxArm64Op, blocks MlirBlockArray) returns String
   return match op 'toString'
     prologue(stackSize) gives "arm64.prologue stack_size={stackSize}"
-    epilogue gives "arm64.epilogue"
+    epilogue gives "arm64.epilogue\n    arm64.ret"
     movImm(dest, value) gives "arm64.mov {dest.name}, #{value}"
-    strToSlot(slotIndex, src) gives "arm64.str {src.name}, [x29, #-{arm64SlotOffset(slotIndex)}]"
-    ldrFromSlot(dest, slotIndex) gives "arm64.ldr {dest.name}, [x29, #-{arm64SlotOffset(slotIndex)}]"
+    strToSlot(slotIndex, src) gives "arm64.str {src.name}, [x29, #{arm64SlotOffset(slotIndex)}]"
+    ldrFromSlot(dest, slotIndex) gives "arm64.ldr {dest.name}, [x29, #{arm64SlotOffset(slotIndex)}]"
     addRegs(dest, src1, src2) gives "arm64.add {dest.name}, {src1.name}, {src2.name}"
     subRegs(dest, src1, src2) gives "arm64.sub {dest.name}, {src1.name}, {src2.name}"
     mulRegs(dest, src1, src2) gives "arm64.mul {dest.name}, {src1.name}, {src2.name}"
@@ -106,7 +106,7 @@ export function maxArm64OpToString(op MaxArm64Op, blocks MlirBlockArray) returns
     syscall(_, number, argSlots) gives "arm64.syscall {number}({formatVarSlotArgs(argSlots)})"
     iatCall(_, slotIndex, _) gives "arm64.call_import slot_{slotIndex}"
     globalAddr(_, name) gives "arm64.adrp_add_rdata x0, {String.from(name)}"
-    stackAddrOp(_, targetSlot) gives "arm64.add x0, x29, #-{arm64SlotOffset(targetSlot)}"
+    stackAddrOp(_, targetSlot) gives "arm64.add x0, x29, #{arm64SlotOffset(targetSlot)}"
     storeByteOp gives "arm64.strb w2, [x0, #0]"
     loadByteOp gives "arm64.ldrb w0, [x0, #0]"
     memcpyOp gives "arm64.memcpy"

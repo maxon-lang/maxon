@@ -131,16 +131,61 @@ export function rmAdvanceOp(state RegState)
   state.currentOpIndex = state.currentOpIndex + 1
 end 'rmAdvanceOp'
 
+// Allocate a new spill slot offset. Direction depends on spillBaseOffset:
+// - Negative base (x86): grow downward (nextSpillOffset -= 8, return new offset)
+// - Positive/zero base (ARM64): grow upward (return current offset, nextSpillOffset += 8)
+function rmAllocateSpillSlot(state RegState) returns RegInt
+  if state.spillBaseOffset < 0 'growDown'
+    state.nextSpillOffset = state.nextSpillOffset - 8
+    return state.nextSpillOffset
+  end 'growDown' else 'growUp'
+    let slot = state.nextSpillOffset
+    state.nextSpillOffset = state.nextSpillOffset + 8
+    return slot
+  end 'growUp'
+end 'rmAllocateSpillSlot'
+
+// Track the high-water mark of spill usage, then reset for the next block/function.
+// x86 spills grow downward so we track the minimum offset;
+// ARM64 spills grow upward so we track the maximum offset.
+function rmUpdateSpillWatermark(state RegState)
+  if state.spillBaseOffset < 0 'x86Wm'
+    if state.nextSpillOffset < state.minSpillOffset 'updateMin'
+      state.minSpillOffset = state.nextSpillOffset
+    end 'updateMin'
+  end 'x86Wm' else 'arm64Wm'
+    if state.nextSpillOffset > state.minSpillOffset 'updateMax'
+      state.minSpillOffset = state.nextSpillOffset
+    end 'updateMax'
+  end 'arm64Wm'
+  state.nextSpillOffset = state.spillBaseOffset
+end 'rmUpdateSpillWatermark'
+
 export function rmTotalStackSize(state RegState) returns RegInt
-  var minOffset = state.minSpillOffset
-  if state.nextSpillOffset < minOffset 'updateMin'
-    minOffset = state.nextSpillOffset
-  end 'updateMin'
-  let raw = 0 - minOffset
-  if raw > 0 'hasSpills'
-    return (raw + 15) and (0 - 16)
-  end 'hasSpills'
-  return 0
+  if state.spillBaseOffset < 0 'x86Style'
+    // x86: spills grow downward — minSpillOffset tracks the lowest offset
+    var minOffset = state.minSpillOffset
+    if state.nextSpillOffset < minOffset 'updateMin'
+      minOffset = state.nextSpillOffset
+    end 'updateMin'
+    let raw = 0 - minOffset
+    if raw > 0 'hasSpills'
+      return (raw + 15) and (0 - 16)
+    end 'hasSpills'
+    return 0
+  end 'x86Style' else 'arm64Style'
+    // ARM64: spills grow upward — minSpillOffset tracks the highest offset
+    // (we reuse minSpillOffset as maxSpillOffset for ARM64)
+    var maxOffset = state.minSpillOffset
+    if state.nextSpillOffset > maxOffset 'updateMax'
+      maxOffset = state.nextSpillOffset
+    end 'updateMax'
+    let spillExtent = maxOffset - state.spillBaseOffset
+    if spillExtent > 0 'hasSpills'
+      return (spillExtent + 15) and (0 - 16)
+    end 'hasSpills'
+    return 0
+  end 'arm64Style'
 end 'rmTotalStackSize'
 
 // --- Target dispatch: emit ops ---
@@ -245,9 +290,9 @@ export function rmSpillRegisterIfOccupied(state RegState, regOrdinal RegOrdinal,
   let stackHome = rmGetOr(state.valueStackHome, index: existing, fallback: RM_NO_STACK_HOME)
   let isConst = rmGetOr(state.hasConstant, index: existing, fallback: 0)
   if stackHome == RM_NO_STACK_HOME and isConst == 0 'needsSpill'
-    state.nextSpillOffset = state.nextSpillOffset - 8
-    rmEmitSpill(state, dstBlock: dstBlock, regOrdinal: regOrdinal, stackOffset: state.nextSpillOffset)
-    rmSet(state.valueStackHome, index: existing, value: state.nextSpillOffset, sentinel: RM_NO_STACK_HOME)
+    let spillSlot = rmAllocateSpillSlot(state)
+    rmEmitSpill(state, dstBlock: dstBlock, regOrdinal: regOrdinal, stackOffset: spillSlot)
+    rmSet(state.valueStackHome, index: existing, value: spillSlot, sentinel: RM_NO_STACK_HOME)
   end 'needsSpill'
   // Clear register mappings
   rmSet(state.valueToRegister, index: existing, value: RM_NONE, sentinel: RM_NONE)
@@ -461,9 +506,9 @@ export function rmSpillAllCallerSaved(state RegState, dstBlock MlirBlock)
       let stackHome = rmGetOr(state.valueStackHome, index: occupant, fallback: RM_NO_STACK_HOME)
       let isConst = rmGetOr(state.hasConstant, index: occupant, fallback: 0)
       if stackHome == RM_NO_STACK_HOME and isConst == 0 'needsSpill'
-        state.nextSpillOffset = state.nextSpillOffset - 8
-        rmEmitSpill(state, dstBlock: dstBlock, regOrdinal: regOrd, stackOffset: state.nextSpillOffset)
-        rmSet(state.valueStackHome, index: occupant, value: state.nextSpillOffset, sentinel: RM_NO_STACK_HOME)
+        let spillSlot = rmAllocateSpillSlot(state)
+        rmEmitSpill(state, dstBlock: dstBlock, regOrdinal: regOrd, stackOffset: spillSlot)
+        rmSet(state.valueStackHome, index: occupant, value: spillSlot, sentinel: RM_NO_STACK_HOME)
       end 'needsSpill'
     end 'occupied'
     i = i + 1
@@ -503,9 +548,9 @@ export function rmResetForBlockTransition(state RegState, dstBlock MlirBlock)
       let stackHome = rmGetOr(state.valueStackHome, index: occupant, fallback: RM_NO_STACK_HOME)
       let isConst = rmGetOr(state.hasConstant, index: occupant, fallback: 0)
       if stackHome == RM_NO_STACK_HOME and isConst == 0 'needsSpill'
-        state.nextSpillOffset = state.nextSpillOffset - 8
-        rmEmitSpill(state, dstBlock: dstBlock, regOrdinal: regOrd, stackOffset: state.nextSpillOffset)
-        rmSet(state.valueStackHome, index: occupant, value: state.nextSpillOffset, sentinel: RM_NO_STACK_HOME)
+        let spillSlot = rmAllocateSpillSlot(state)
+        rmEmitSpill(state, dstBlock: dstBlock, regOrdinal: regOrd, stackOffset: spillSlot)
+        rmSet(state.valueStackHome, index: occupant, value: spillSlot, sentinel: RM_NO_STACK_HOME)
       end 'needsSpill'
     end 'occupied'
     i = i + 1
@@ -525,11 +570,7 @@ export function rmResetForBlockTransition(state RegState, dstBlock MlirBlock)
   // Reset per-block counters
   state.nextFreshIndex = 0
   state.currentOpIndex = 0
-  // Update min spill offset watermark
-  if state.nextSpillOffset < state.minSpillOffset 'updateMin'
-    state.minSpillOffset = state.nextSpillOffset
-  end 'updateMin'
-  state.nextSpillOffset = state.spillBaseOffset
+  rmUpdateSpillWatermark(state)
 end 'rmResetForBlockTransition'
 
 // --- Value lifetime ---
@@ -565,10 +606,7 @@ export function rmReset(state RegState)
   end 'clearRegs'
   state.nextFreshIndex = 0
   state.currentOpIndex = 0
-  if state.nextSpillOffset < state.minSpillOffset 'updateMin'
-    state.minSpillOffset = state.nextSpillOffset
-  end 'updateMin'
-  state.nextSpillOffset = state.spillBaseOffset
+  rmUpdateSpillWatermark(state)
 end 'rmReset'
 
 // --- Utility: get ordinal for register holding a value ---
