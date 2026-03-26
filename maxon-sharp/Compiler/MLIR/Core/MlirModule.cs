@@ -70,6 +70,10 @@ public class MlirModule<TOp> where TOp : IPrintableOp {
   // Index 0 = null/no tag. Built during MaxonToStandard lowering, consumed by X86CodeEmitter.
   public List<string?> TagTable { get; set; } = [];
 
+  // Raw type name strings for each tag index (for debugstream tag table embedding).
+  // Same indexing as TagTable. Built during MaxonToStandard lowering.
+  public List<string?> TagNames { get; set; } = [];
+
   // Global variable metadata for cross-file seeding (name -> kind/mutability/type info)
   public Dictionary<string, GlobalVarMetadata> GlobalVarInfos { get; } = [];
 

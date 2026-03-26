@@ -1,5 +1,3 @@
-You are on WSL on Windows.
-
 You do not care if an issue is pre-existing. Just debug and fix it.
 
 Do not use "cmd /c" to run commands

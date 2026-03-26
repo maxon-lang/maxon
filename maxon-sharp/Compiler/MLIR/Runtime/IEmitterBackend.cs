@@ -262,6 +262,26 @@ public interface IEmitterBackend {
   /// </summary>
   void UDivRemainderReg(VReg dest, VReg dividend, VReg divisor);
 
+  // ---- Shared memory (debugstream) ----
+
+  /// <summary>
+  /// Open an existing named shared memory segment and map it read-write.
+  /// name_ptr = pointer to null-terminated name, size = bytes to map.
+  /// Returns the mapped base pointer in dest (NULL on failure).
+  /// Windows: OpenFileMappingA + MapViewOfFile.
+  /// macOS: shm_open + mmap.
+  /// Clobbers Arg0..Arg5, Scratch3.
+  /// </summary>
+  void OsOpenAndMapSharedMemory(VReg dest, VReg name_ptr, VReg size);
+
+  /// <summary>
+  /// Unmap a shared memory region. Does not destroy the named segment (monitor owns that).
+  /// Windows: UnmapViewOfFile(base).
+  /// macOS: munmap(base, size).
+  /// Clobbers Arg0..Arg1.
+  /// </summary>
+  void OsUnmapSharedMemory(VReg base_ptr, VReg size);
+
   // ---- Platform-specific labels ----
 
   /// <summary>Label of the platform write-null-terminated-cstr-to-stderr function.

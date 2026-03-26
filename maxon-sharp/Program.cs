@@ -23,6 +23,7 @@ class Program {
       "build" => RunBuild(args[1..]),
       "run" => RunRun(args[1..]),
       "fmt" => RunFmt(args[1..]),
+      "monitor" => RunMonitor(args[1..]),
       "spec-test" => RunSpecTests(args[1..]),
       "lsp-server" => await RunLspAsync(),
       _ => Fail()
@@ -37,6 +38,7 @@ class Program {
     Console.WriteLine("  build [<directory>]      Build a project (default: current directory)");
     Console.WriteLine("  run <file|directory>     Compile and run");
     Console.WriteLine("  fmt [<file|directory>]   Format .maxon source files in-place (default: current directory)");
+    Console.WriteLine("  monitor <exe> [args...]  Launch executable with shared-memory debug stream monitor");
     Console.WriteLine("  spec-test [options]      Run spec tests");
     Console.WriteLine("  lsp-server               Start language server (LSP)");
     Console.WriteLine();
@@ -48,6 +50,7 @@ class Program {
     Console.WriteLine("  --mm-trace               Enable runtime memory manager trace output (stderr)");
     Console.WriteLine("  --mm-debug               Enable runtime memory debug checks (magic, canary, poison)");
     Console.WriteLine("  --async-trace            Enable async/await runtime trace output (stderr)");
+    Console.WriteLine("  --debugstream            Enable shared-memory debug stream (use with 'maxon monitor')");
     Console.WriteLine();
     Console.WriteLine("Spec test options:");
     Console.WriteLine("  --filter=PATTERN         Run only tests matching pattern");
@@ -86,6 +89,8 @@ class Program {
         Compiler.Compiler.MmDebug = true;
       } else if (arg == "--async-trace") {
         Compiler.Compiler.AsyncTrace = true;
+      } else if (arg == "--debugstream") {
+        Compiler.Compiler.DebugStream = true;
       } else if (arg.StartsWith("--target=")) {
         // Recognized as first-class option; parsed individually in each command
       } else if (arg.StartsWith("--log=")) {
@@ -226,6 +231,11 @@ class Program {
 
     Console.WriteLine($"fmt: {changed} file(s) changed, {files.Count - changed} unchanged.");
     return 0;
+  }
+
+  static int RunMonitor(string[] args) {
+    var monitor = new DebugStreamMonitor();
+    return monitor.Run(args);
   }
 
   /// <summary>

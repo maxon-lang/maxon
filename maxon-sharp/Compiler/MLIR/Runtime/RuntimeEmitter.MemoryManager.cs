@@ -272,7 +272,8 @@ public partial class RuntimeEmitter {
   // =========================================================================
   // Stack slots: 0=user_ptr, 1=scope_cstr (trace only)
   public void EmitMmIncref(bool mmTrace) {
-    _b.FunctionStart("mm_incref", mmTrace ? 2 : 1, 0x30);
+    bool ds = Compiler.DebugStream;
+    _b.FunctionStart("mm_incref", (mmTrace || ds) ? 2 : 1, 0x30);
 
     // NULL check -- panic
     _b.LoadLocal(VReg.Scratch0, 0); // Scratch0 = user_ptr
@@ -292,6 +293,16 @@ public partial class RuntimeEmitter {
         ptrSlot: 0, scopeSlot: 1);
     }
 
+    if (ds) {
+      // __ds_emit_mm_refcount(event_type=DsEvMmIncref, packed_id, new_refcount, scope_ptr)
+      _b.MovRegImm(VReg.Arg0, DsEvMmIncref);
+      _b.LoadLocal(VReg.Scratch0, 0); // user_ptr
+      _b.LoadIndirect(VReg.Arg1, VReg.Scratch0, MmOffPackedId); // packed_id
+      _b.LoadIndirect(VReg.Arg2, VReg.Scratch0, MmOffRefcount); // new refcount
+      _b.LoadLocal(VReg.Arg3, 1); // scope_ptr
+      _b.Call("__ds_emit_mm_refcount");
+    }
+
     _b.FunctionEnd();
   }
 
@@ -305,7 +316,8 @@ public partial class RuntimeEmitter {
   // =========================================================================
   // Stack slots: 0=user_ptr, 1=scope_cstr (trace only)
   public void EmitMmDecref(bool mmTrace) {
-    _b.FunctionStart("mm_decref", mmTrace ? 2 : 1, 0x30);
+    bool ds = Compiler.DebugStream;
+    _b.FunctionStart("mm_decref", (mmTrace || ds) ? 2 : 1, 0x30);
 
     // NULL check -- panic
     _b.LoadLocal(VReg.Scratch0, 0); // Scratch0 = user_ptr
@@ -335,12 +347,34 @@ public partial class RuntimeEmitter {
     _b.LoadLocal(VReg.Scratch0, 0); // Scratch0 = user_ptr
     _b.AtomicDec(VReg.Scratch0, MmOffRefcount);
 
+    if (ds) {
+      // Emit decref event (after decrement, new rc = [ptr-8])
+      _b.MovRegImm(VReg.Arg0, DsEvMmDecref);
+      _b.LoadLocal(VReg.Scratch0, 0);
+      _b.LoadIndirect(VReg.Arg1, VReg.Scratch0, MmOffPackedId);
+      _b.LoadIndirect(VReg.Arg2, VReg.Scratch0, MmOffRefcount);
+      _b.LoadLocal(VReg.Arg3, 1);
+      _b.Call("__ds_emit_mm_refcount");
+    }
+
     // If refcount > 0 after decrement, we're done
     var done = UniqueLabel("mm_decref_done");
-    _b.JumpIf(Condition.NotEqual, done); // ZF=0 means refcount > 0
+    if (ds) {
+      // The ds call above clobbered flags, so re-read refcount
+      _b.LoadLocal(VReg.Scratch0, 0);
+      _b.LoadIndirect(VReg.Scratch1, VReg.Scratch0, MmOffRefcount);
+      _b.JumpIfNonZero(VReg.Scratch1, done);
+    } else {
+      // AtomicDec set zero flag — use it directly
+      _b.JumpIf(Condition.NotEqual, done);
+    }
 
     // refcount == 0: call destructor if non-null, then free
-    if (mmTrace) EmitTraceDepthInc(); // indent child operations (mm_free, sl_free, etc.)
+    if (mmTrace) EmitTraceDepthInc();
+    if (ds) {
+      _b.MovRegImm(VReg.Arg0, DsEvDepthInc);
+      _b.Call("__ds_emit_depth");
+    }
 
     _b.LoadLocal(VReg.Scratch0, 0); // Scratch0 = user_ptr
     _b.LoadIndirect(VReg.Scratch1, VReg.Scratch0, MmOffDestructor); // Scratch1 = destructor_fn_ptr
@@ -355,10 +389,14 @@ public partial class RuntimeEmitter {
 
     // mm_free(user_ptr, scope=NULL)
     _b.LoadLocal(VReg.Arg0, 0);
-    if (mmTrace) _b.ZeroReg(VReg.Arg1); // scope = NULL
+    if (mmTrace || ds) _b.ZeroReg(VReg.Arg1); // scope = NULL
     _b.Call("mm_free");
 
     if (mmTrace) EmitTraceDepthDec();
+    if (ds) {
+      _b.MovRegImm(VReg.Arg0, DsEvDepthDec);
+      _b.Call("__ds_emit_depth");
+    }
 
     _b.DefineLabel(done);
     _b.FunctionEnd();
@@ -373,7 +411,8 @@ public partial class RuntimeEmitter {
   // =========================================================================
   // Stack slots: 0=user_ptr, 1=scope_cstr (trace only)
   public void EmitMmFree(bool mmTrace, bool mmDebug) {
-    _b.FunctionStart("mm_free", mmTrace ? 2 : 1, 0x60);
+    bool ds = Compiler.DebugStream;
+    _b.FunctionStart("mm_free", (mmTrace || ds) ? 2 : 1, 0x60);
 
     // NULL check — silently return (mm_decref already ensures non-null, but be safe)
     _b.LoadLocal(VReg.Scratch0, 0); // Scratch0 = user_ptr
@@ -385,6 +424,14 @@ public partial class RuntimeEmitter {
     // Trace free
     if (mmTrace) {
       EmitInlineTraceFree(UniqueLabel("mm_free_trace"), ptrSlot: 0, scopeSlot: 1);
+    }
+
+    if (ds) {
+      // __ds_emit_mm_free(packed_id, scope_ptr)
+      _b.LoadLocal(VReg.Scratch0, 0); // user_ptr
+      _b.LoadIndirect(VReg.Arg0, VReg.Scratch0, MmOffPackedId);
+      _b.LoadLocal(VReg.Arg1, 1); // scope_ptr
+      _b.Call("__ds_emit_mm_free");
     }
 
     // Validate canary in debug mode: [user_ptr + size] must equal MmDebugCanaryValue
@@ -448,7 +495,8 @@ public partial class RuntimeEmitter {
   // Stack slots: 0=size, 1=destructor, 2=tag_index, 3=scope_cstr (trace only)
   //              4=alloc_size (scratch), 5=raw_ptr (scratch), 6=packed_id (trace only)
   public void EmitMmAlloc(bool mmTrace, bool mmDebug) {
-    _b.FunctionStart("mm_alloc", mmTrace ? 4 : 3, 0x80);
+    bool ds = Compiler.DebugStream;
+    _b.FunctionStart("mm_alloc", (mmTrace || ds) ? 4 : 3, 0x80);
 
     // Panic if size == 0
     _b.LoadLocal(VReg.Scratch0, 0);
@@ -485,6 +533,14 @@ public partial class RuntimeEmitter {
       EmitInlineTraceFromPackedId("__mm_tag_alloc", UniqueLabel("mm_alloc_trace"),
         packedIdSlot: 6, scopeSlot: 3, sizeSlot: 0);
       EmitTraceDepthInc();
+    }
+
+    if (ds) {
+      // __ds_emit_mm_alloc(packed_id, size, scope_ptr)
+      _b.LoadLocal(VReg.Arg0, 6); // packed_id
+      _b.LoadLocal(VReg.Arg1, 0); // size
+      _b.LoadLocal(VReg.Arg2, 3); // scope_ptr
+      _b.Call("__ds_emit_mm_alloc");
     }
 
     // Allocate alloc_size bytes via slab allocator (zero-initialized)

@@ -201,6 +201,7 @@ public partial class ARM64CodeEmitter {
     rawRt.EmitMmRawFree(Compiler.MmTrace);
     rawRt.EmitStringEnsureCap(Compiler.MmTrace);
     rawRt.EmitCurrentTimeMs();
+    // DebugStream functions are emitted from 4-ARM64CodeEmitter.cs
     EmitMaxonFileSize();
     EmitMaxonFileRead();
     EmitMaxonFileClose();

@@ -78,6 +78,9 @@ public class Compiler {
   [ThreadStatic] private static bool _asyncTrace;
   public static bool AsyncTrace { get => _asyncTrace; set => _asyncTrace = value; }
 
+  [ThreadStatic] private static bool _debugStream;
+  public static bool DebugStream { get => _debugStream; set => _debugStream = value; }
+
   [ThreadStatic] private static bool _testing;
   public static bool Testing { get => _testing; set => _testing = value; }
 

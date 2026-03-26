@@ -104,6 +104,9 @@ public class X86CodeEmitter {
     rt.EmitMmLeakCheck();
     rt.EmitMmValidatePtr();
     rt.EmitManagedListFunctions(Compiler.MmTrace);
+    if (Compiler.DebugStream) {
+      rt.EmitDebugStreamFunctions(module.TagNames ?? []);
+    }
 
     // Patch all __chkstk call sites
     emitter.PatchChkstkCalls();

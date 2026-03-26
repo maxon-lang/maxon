@@ -1187,6 +1187,11 @@ case ARM64MemcpyOp:
     // Initialize kqueue I/O subsystem
     EmitBranchLink("__io_init");
 
+    // Initialize debugstream (checks MAXON_DEBUGSTREAM env var, opens shared memory)
+    if (Compiler.DebugStream) {
+      EmitBranchLink("__debugstream_init");
+    }
+
     // Call main
     EmitBranchLink(mainFunctionName);
 
@@ -1202,6 +1207,11 @@ case ARM64MemcpyOp:
     // Call global cleanup if present
     if (!string.IsNullOrEmpty(globalCleanupFunctionName)) {
       EmitBranchLink(globalCleanupFunctionName);
+    }
+
+    // Shut down debugstream before leak check
+    if (Compiler.DebugStream) {
+      EmitBranchLink("__debugstream_shutdown");
     }
 
     // mm_leak_check(exit_code) — returns 101 if leaked, original exit_code otherwise

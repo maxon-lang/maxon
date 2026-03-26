@@ -29,10 +29,12 @@ public partial class X86CodeEmitter {
   /// </summary>
   public class X86EmitterBackend(X86CodeEmitter emitter) : IEmitterBackend {
     private readonly X86CodeEmitter _e = emitter;
+    private int _backendLabelCounter;
 
     public bool IsWindows => true;
     public bool IsMacOS => false;
 
+    private string BackendLabel(string prefix) => $"__be_{prefix}_{_backendLabelCounter++}";
     private static X86Register R(VReg v) => MapVReg(v);
 
     // ---- Function structure ----
@@ -323,6 +325,48 @@ public partial class X86CodeEmitter {
       _e.EmitXorRegReg(X86Register.Rdx, X86Register.Rdx); // dwSize = 0
       _e.EmitMovRegImm(X86Register.R8, 0x8000);            // MEM_RELEASE
       _e.EmitCallImportOnSystemStack("kernel32.dll", "VirtualFree");
+    }
+
+    // ---- Shared memory (debugstream) ----
+
+    public void OsOpenAndMapSharedMemory(VReg dest, VReg name_ptr, VReg size) {
+      // Save size in RBX (callee-saved) across API calls
+      _e.EmitMovRegReg(X86Register.Rbx, R(size));
+
+      // Step 1: OpenFileMappingA(FILE_MAP_ALL_ACCESS, FALSE, name)
+      // Move name_ptr to R8 first since name_ptr might be RCX (Arg0)
+      _e.EmitMovRegReg(X86Register.R8, R(name_ptr));            // lpName
+      _e.EmitMovRegImm(X86Register.Rcx, 0xF001F);              // FILE_MAP_ALL_ACCESS
+      _e.EmitXorRegReg(X86Register.Rdx, X86Register.Rdx);      // bInheritHandle = FALSE
+      _e.EmitCallImportOnSystemStack("kernel32.dll", "OpenFileMappingA");
+
+      var failLabel = BackendLabel("ds_shm_fail");
+      var doneLabel = BackendLabel("ds_shm_done");
+      _e.EmitTestRegReg(X86Register.Rax, X86Register.Rax);
+      _e.EmitJcc("z", failLabel);
+
+      // Step 2: MapViewOfFile(handle, FILE_MAP_ALL_ACCESS, 0, 0, size)
+      _e.EmitMovRegReg(X86Register.Rcx, X86Register.Rax);      // hFileMappingObject
+      _e.EmitMovRegImm(X86Register.Rdx, 0xF001F);              // FILE_MAP_ALL_ACCESS
+      _e.EmitXorRegReg(X86Register.R8, X86Register.R8);        // dwFileOffsetHigh = 0
+      _e.EmitXorRegReg(X86Register.R9, X86Register.R9);        // dwFileOffsetLow = 0
+      _e.EmitMovIndirectMemReg(X86Register.Rsp, 0x20, X86Register.Rbx); // [rsp+0x20] = size
+      _e.EmitCallImportOnSystemStack("kernel32.dll", "MapViewOfFile");
+      _e.EmitJmp(doneLabel);
+
+      _e.DefineLabel(failLabel);
+      _e.EmitXorRegReg(X86Register.Rax, X86Register.Rax);
+
+      _e.DefineLabel(doneLabel);
+      var destReg = R(dest);
+      if (destReg != X86Register.Rax)
+        _e.EmitMovRegReg(destReg, X86Register.Rax);
+    }
+
+    public void OsUnmapSharedMemory(VReg base_ptr, VReg size) {
+      // UnmapViewOfFile(lpBaseAddress)
+      _e.EmitMovRegReg(X86Register.Rcx, R(base_ptr));
+      _e.EmitCallImportOnSystemStack("kernel32.dll", "UnmapViewOfFile");
     }
 
     // ---- Bulk memory ----

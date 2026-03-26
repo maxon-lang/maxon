@@ -76,6 +76,9 @@ public class ARM64CodeEmitterStage {
     rt.EmitMmLeakCheck();
     rt.EmitMmValidatePtr();
     rt.EmitManagedListFunctions(Compiler.MmTrace);
+    if (Compiler.DebugStream) {
+      rt.EmitDebugStreamFunctions(module.TagNames ?? []);
+    }
 
     // Build symbol table (compiler-generated functions + runtime functions)
     var symbolEntries = new List<(string name, int codeOffset)>();

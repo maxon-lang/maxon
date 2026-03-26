@@ -433,6 +433,52 @@ public partial class ARM64CodeEmitter {
       _e.EmitCallImport("munmap");
     }
 
+    // ---- Shared memory (debugstream) ----
+
+    public void OsOpenAndMapSharedMemory(VReg dest, VReg name_ptr, VReg size) {
+      // Save size in callee-saved register X19 across calls
+      _e.EmitMovRegReg(ARM64Register.X19, R(size));
+
+      // shm_open(name, O_RDWR, 0) -> fd
+      _e.EmitMovRegReg(ARM64Register.X0, R(name_ptr));
+      _e.EmitMovRegImm(ARM64Register.X1, 2); // O_RDWR
+      _e.EmitMovRegImm(ARM64Register.X2, 0);
+      var resolvedOpen = ResolveImport("shm_open");
+      _e.EmitCallImport(resolvedOpen);
+      // X0 = fd (-1 on failure)
+      var failLabel = $"__ds_shm_fail_{_e._uniqueLabelCounter++}";
+      var doneLabel = $"__ds_shm_done_{_e._uniqueLabelCounter++}";
+      _e.EmitAddSubImm(ARM64Register.X9, ARM64Register.X0, 1, isAdd: true); // X9 = fd + 1
+      _e.EmitCbz(ARM64Register.X9, failLabel); // if fd == -1, fail
+
+      // mmap(NULL, size, PROT_READ|PROT_WRITE, MAP_SHARED, fd, 0)
+      _e.EmitMovRegReg(ARM64Register.X4, ARM64Register.X0); // fd
+      _e.EmitMovRegReg(ARM64Register.X1, ARM64Register.X19); // size
+      _e.EmitMovRegImm(ARM64Register.X0, 0);     // addr = NULL
+      _e.EmitMovRegImm(ARM64Register.X2, 3);     // PROT_READ | PROT_WRITE
+      _e.EmitMovRegImm(ARM64Register.X3, 1);     // MAP_SHARED
+      _e.EmitMovRegImm(ARM64Register.X5, 0);     // offset = 0
+      var resolvedMmap = ResolveImport("mmap");
+      _e.EmitCallImport(resolvedMmap);
+      _e.EmitBranch(doneLabel);
+
+      _e.DefineLabel(failLabel);
+      _e.EmitMovRegImm(ARM64Register.X0, 0); // return NULL
+
+      _e.DefineLabel(doneLabel);
+      var destReg = R(dest);
+      if (destReg != ARM64Register.X0)
+        _e.EmitMovRegReg(destReg, ARM64Register.X0);
+    }
+
+    public void OsUnmapSharedMemory(VReg base_ptr, VReg size) {
+      // munmap(base, size)
+      _e.EmitMovRegReg(ARM64Register.X0, R(base_ptr));
+      _e.EmitMovRegReg(ARM64Register.X1, R(size));
+      var resolvedMunmap = ResolveImport("munmap");
+      _e.EmitCallImport(resolvedMunmap);
+    }
+
     // ---- Bulk memory ----
 
     public void FillMemoryQwords(VReg destAddr, VReg value, VReg count) {

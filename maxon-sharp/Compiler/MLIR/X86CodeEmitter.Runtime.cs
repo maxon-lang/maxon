@@ -65,6 +65,7 @@ public partial class X86CodeEmitter {
     rawRt.EmitMmRawFree(Compiler.MmTrace);
     rawRt.EmitStringEnsureCap(Compiler.MmTrace);
     rawRt.EmitCurrentTimeMs();
+    // DebugStream functions are emitted from 4-X86CodeEmitter.cs
     EmitNetTcpConnect();
     EmitNetSend();
     EmitNetRecv();

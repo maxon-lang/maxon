@@ -12,6 +12,7 @@ public static class StandardToARM64Conversion {
     result.UcddataEntries.AddRange(module.UcddataEntries);
     result.Globals.AddRange(module.Globals);
     result.TagTable = module.TagTable;
+    result.TagNames = module.TagNames;
     foreach (var (k, v) in module.TypeDefs) result.TypeDefs[k] = v;
 
     foreach (var func in module.Functions) {

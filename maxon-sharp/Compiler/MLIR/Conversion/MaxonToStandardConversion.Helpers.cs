@@ -198,10 +198,13 @@ public static partial class MaxonToStandardConversion {
     if (_tagIndexMap == null || _tagIndexMap.Count == 0) return;
     var maxIndex = _nextTagIndex;
     var orderedLabels = new string?[maxIndex];
+    var orderedNames = new string?[maxIndex];
     foreach (var (tag, idx) in _tagIndexMap) {
       orderedLabels[idx] = SanitizeTagLabel(tag);
+      orderedNames[idx] = tag;
     }
     result.TagTable = [.. orderedLabels];
+    result.TagNames = [.. orderedNames];
   }
 
   /// Returns a tag pointer for memory manager calls. When --mm-trace is enabled,

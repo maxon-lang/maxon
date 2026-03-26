@@ -456,6 +456,13 @@ public partial class X86CodeEmitter() {
     _relCallFixups.Add((_code.Count, "__io_init"));
     EmitDword(0);
 
+    // Initialize debugstream (checks MAXON_DEBUGSTREAM env var, opens shared memory)
+    if (Compiler.DebugStream) {
+      EmitByte(0xE8);
+      _relCallFixups.Add((_code.Count, "__debugstream_init"));
+      EmitDword(0);
+    }
+
     // call __module_init (initializes globals)
     if (!string.IsNullOrEmpty(moduleInitFunctionName)) {
       EmitByte(0xE8);
@@ -484,6 +491,13 @@ public partial class X86CodeEmitter() {
     if (!string.IsNullOrEmpty(globalCleanupFunctionName)) {
       EmitByte(0xE8);
       _relCallFixups.Add((_code.Count, globalCleanupFunctionName));
+      EmitDword(0);
+    }
+
+    // Shut down debugstream before leak check (so monitor sees the shutdown)
+    if (Compiler.DebugStream) {
+      EmitByte(0xE8);
+      _relCallFixups.Add((_code.Count, "__debugstream_shutdown"));
       EmitDword(0);
     }
 
