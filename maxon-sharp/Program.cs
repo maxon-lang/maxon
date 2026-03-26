@@ -234,8 +234,7 @@ class Program {
   }
 
   static int RunMonitor(string[] args) {
-    var monitor = new DebugStreamMonitor();
-    return monitor.Run(args);
+    return DebugStreamMonitor.Run(args);
   }
 
   /// <summary>

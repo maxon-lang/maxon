@@ -532,6 +532,6 @@ public partial class RuntimeEmitter {
       blob.AddRange(nameBytes);
     }
 
-    _b.DefineSymdata("__ds_tag_table", blob.ToArray());
+    _b.DefineSymdata("__ds_tag_table", [.. blob]);
   }
 }

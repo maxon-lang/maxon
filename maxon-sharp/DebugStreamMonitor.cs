@@ -10,7 +10,7 @@ namespace MaxonSharp;
 /// </summary>
 public class DebugStreamMonitor {
 
-  public int Run(string[] args) {
+  public static int Run(string[] args) {
     // Parse args: [--filter=mm|sched] <exe> [exe-args...]
     string? filter = null;
     int exeIndex = 0;
@@ -137,7 +137,7 @@ public class DebugStreamMonitor {
           continue;
         }
 
-        string indent = new string(' ', depth * 2);
+        string indent = new(' ', depth * 2);
         string? line = FormatEvent(eventType, dataOffset, accessor, filter, tagNames);
 
         if (line != null) {
@@ -153,8 +153,10 @@ public class DebugStreamMonitor {
 
     // Wait for process exit
     process.WaitForExit();
+#pragma warning disable VSTHRD002 // No deadlock risk — synchronous entry point, no SyncContext
     stdoutTask.Wait();
     stderrTask.Wait();
+#pragma warning restore VSTHRD002
 
     // Final summary
     long totalEvents = accessor.ReadInt64(RuntimeEmitter.DsOffTotalEvents);
