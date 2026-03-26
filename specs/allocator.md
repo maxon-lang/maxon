@@ -32,35 +32,6 @@ end 'main'
 1
 ```
 ```stderr
-mm_raw_alloc #R1 size=64
-  sl_alloc size=64 class=-1
-    os_alloc size=64
-  os_alloc size=4096
-os_alloc size=67108864
-mm_raw_alloc #R2 size=296
-  sl_alloc size=296 class=-1
-    os_alloc size=296
-mm_raw_alloc #R3 size=296
-  sl_alloc size=296 class=-1
-    os_alloc size=296
-mm_raw_alloc #R4 size=296
-  sl_alloc size=296 class=-1
-    os_alloc size=296
-mm_raw_alloc #R5 size=296
-  sl_alloc size=296 class=-1
-    os_alloc size=296
-mm_raw_alloc #R6 size=296
-  sl_alloc size=296 class=-1
-    os_alloc size=296
-mm_raw_alloc #R7 size=296
-  sl_alloc size=296 class=-1
-    os_alloc size=296
-mm_raw_alloc #R8 size=296
-  sl_alloc size=296 class=-1
-    os_alloc size=296
-mm_raw_alloc #R9 size=296
-  sl_alloc size=296 class=-1
-    os_alloc size=296
 sl_init
   os_alloc size=67108864
 mm_alloc Point #1 size=16 [main]
@@ -69,6 +40,10 @@ mm_incref Point #1 rc=1 [main]
 mm_decref Point #1 rc=0 [main]
   mm_free Point #1
     sl_free Point #1 size=48 class=4
+mm_raw_alloc #R1 size=40
+  sl_alloc size=40 class=4
+mm_raw_free #R1
+  sl_free size=48 class=4
 ```
 
 <!-- test: slab-class-routing-8-byte-user-data -->
@@ -90,35 +65,6 @@ end 'main'
 7
 ```
 ```stderr
-mm_raw_alloc #R1 size=64
-  sl_alloc size=64 class=-1
-    os_alloc size=64
-  os_alloc size=4096
-os_alloc size=67108864
-mm_raw_alloc #R2 size=296
-  sl_alloc size=296 class=-1
-    os_alloc size=296
-mm_raw_alloc #R3 size=296
-  sl_alloc size=296 class=-1
-    os_alloc size=296
-mm_raw_alloc #R4 size=296
-  sl_alloc size=296 class=-1
-    os_alloc size=296
-mm_raw_alloc #R5 size=296
-  sl_alloc size=296 class=-1
-    os_alloc size=296
-mm_raw_alloc #R6 size=296
-  sl_alloc size=296 class=-1
-    os_alloc size=296
-mm_raw_alloc #R7 size=296
-  sl_alloc size=296 class=-1
-    os_alloc size=296
-mm_raw_alloc #R8 size=296
-  sl_alloc size=296 class=-1
-    os_alloc size=296
-mm_raw_alloc #R9 size=296
-  sl_alloc size=296 class=-1
-    os_alloc size=296
 sl_init
   os_alloc size=67108864
 mm_alloc Tiny #1 size=8 [main]
@@ -127,6 +73,10 @@ mm_incref Tiny #1 rc=1 [main]
 mm_decref Tiny #1 rc=0 [main]
   mm_free Tiny #1
     sl_free Tiny #1 size=48 class=4
+mm_raw_alloc #R1 size=40
+  sl_alloc size=40 class=4
+mm_raw_free #R1
+  sl_free size=48 class=4
 ```
 
 <!-- test: slab-free-reuses-slot-no-os-alloc -->
@@ -153,35 +103,6 @@ end 'main'
 3
 ```
 ```stderr
-mm_raw_alloc #R1 size=64
-  sl_alloc size=64 class=-1
-    os_alloc size=64
-  os_alloc size=4096
-os_alloc size=67108864
-mm_raw_alloc #R2 size=296
-  sl_alloc size=296 class=-1
-    os_alloc size=296
-mm_raw_alloc #R3 size=296
-  sl_alloc size=296 class=-1
-    os_alloc size=296
-mm_raw_alloc #R4 size=296
-  sl_alloc size=296 class=-1
-    os_alloc size=296
-mm_raw_alloc #R5 size=296
-  sl_alloc size=296 class=-1
-    os_alloc size=296
-mm_raw_alloc #R6 size=296
-  sl_alloc size=296 class=-1
-    os_alloc size=296
-mm_raw_alloc #R7 size=296
-  sl_alloc size=296 class=-1
-    os_alloc size=296
-mm_raw_alloc #R8 size=296
-  sl_alloc size=296 class=-1
-    os_alloc size=296
-mm_raw_alloc #R9 size=296
-  sl_alloc size=296 class=-1
-    os_alloc size=296
 sl_init
   os_alloc size=67108864
 mm_alloc Box #1 size=8 [allocator.make_box]
@@ -198,6 +119,10 @@ mm_decref Box #2 rc=0 [main]
 mm_decref Box #1 rc=0 [main]
   mm_free Box #1
     sl_free Box #1 size=48 class=4
+mm_raw_alloc #R1 size=40
+  sl_alloc size=40 class=4
+mm_raw_free #R1
+  sl_free size=48 class=4
 ```
 
 <!-- test: slab-two-types-two-classes -->
@@ -228,35 +153,6 @@ end 'main'
 2
 ```
 ```stderr
-mm_raw_alloc #R1 size=64
-  sl_alloc size=64 class=-1
-    os_alloc size=64
-  os_alloc size=4096
-os_alloc size=67108864
-mm_raw_alloc #R2 size=296
-  sl_alloc size=296 class=-1
-    os_alloc size=296
-mm_raw_alloc #R3 size=296
-  sl_alloc size=296 class=-1
-    os_alloc size=296
-mm_raw_alloc #R4 size=296
-  sl_alloc size=296 class=-1
-    os_alloc size=296
-mm_raw_alloc #R5 size=296
-  sl_alloc size=296 class=-1
-    os_alloc size=296
-mm_raw_alloc #R6 size=296
-  sl_alloc size=296 class=-1
-    os_alloc size=296
-mm_raw_alloc #R7 size=296
-  sl_alloc size=296 class=-1
-    os_alloc size=296
-mm_raw_alloc #R8 size=296
-  sl_alloc size=296 class=-1
-    os_alloc size=296
-mm_raw_alloc #R9 size=296
-  sl_alloc size=296 class=-1
-    os_alloc size=296
 sl_init
   os_alloc size=67108864
 mm_alloc Small #1 size=8 [main]
@@ -271,6 +167,10 @@ mm_decref Large #2 rc=0 [main]
 mm_decref Small #1 rc=0 [main]
   mm_free Small #1
     sl_free Small #1 size=48 class=4
+mm_raw_alloc #R1 size=40
+  sl_alloc size=40 class=4
+mm_raw_free #R1
+  sl_free size=48 class=4
 ```
 
 <!-- test: slab-arena-large-object -->
@@ -290,35 +190,6 @@ end 'main'
 0
 ```
 ```stderr
-mm_raw_alloc #R1 size=64
-  sl_alloc size=64 class=-1
-    os_alloc size=64
-  os_alloc size=4096
-os_alloc size=67108864
-mm_raw_alloc #R2 size=296
-  sl_alloc size=296 class=-1
-    os_alloc size=296
-mm_raw_alloc #R3 size=296
-  sl_alloc size=296 class=-1
-    os_alloc size=296
-mm_raw_alloc #R4 size=296
-  sl_alloc size=296 class=-1
-    os_alloc size=296
-mm_raw_alloc #R5 size=296
-  sl_alloc size=296 class=-1
-    os_alloc size=296
-mm_raw_alloc #R6 size=296
-  sl_alloc size=296 class=-1
-    os_alloc size=296
-mm_raw_alloc #R7 size=296
-  sl_alloc size=296 class=-1
-    os_alloc size=296
-mm_raw_alloc #R8 size=296
-  sl_alloc size=296 class=-1
-    os_alloc size=296
-mm_raw_alloc #R9 size=296
-  sl_alloc size=296 class=-1
-    os_alloc size=296
 sl_init
   os_alloc size=67108864
 mm_alloc __ManagedMemory_Integer #1 size=32 [main]
@@ -328,16 +199,20 @@ mm_alloc IntArray #2 size=16 [main]
 mm_incref __ManagedMemory_Integer #1 rc=1 [main]
 mm_incref IntArray #2 rc=1 [main]
 mm_realloc __ManagedMemory_Integer #1 size=40000
-  mm_raw_alloc #R10 size=40000 [realloc]
+  mm_raw_alloc #R1 size=40000 [realloc]
     sl_alloc size=40000 class=-1
 mm_decref IntArray #2 rc=0 [main]
   mm_decref __ManagedMemory_Integer #1 rc=0 [~IntArray]
-    mm_raw_free #R10
+    mm_raw_free #R1
       sl_free size=40960 class=-1
     mm_free __ManagedMemory_Integer #1
       sl_free __ManagedMemory_Integer #1 size=64 class=5
   mm_free IntArray #2
     sl_free IntArray #2 size=48 class=4
+mm_raw_alloc #R2 size=40
+  sl_alloc size=40 class=4
+mm_raw_free #R2
+  sl_free size=48 class=4
 ```
 
 <!-- test: slab-span-threshold-return -->
@@ -363,35 +238,6 @@ end 'main'
 0
 ```
 ```stderr
-mm_raw_alloc #R1 size=64
-  sl_alloc size=64 class=-1
-    os_alloc size=64
-  os_alloc size=4096
-os_alloc size=67108864
-mm_raw_alloc #R2 size=296
-  sl_alloc size=296 class=-1
-    os_alloc size=296
-mm_raw_alloc #R3 size=296
-  sl_alloc size=296 class=-1
-    os_alloc size=296
-mm_raw_alloc #R4 size=296
-  sl_alloc size=296 class=-1
-    os_alloc size=296
-mm_raw_alloc #R5 size=296
-  sl_alloc size=296 class=-1
-    os_alloc size=296
-mm_raw_alloc #R6 size=296
-  sl_alloc size=296 class=-1
-    os_alloc size=296
-mm_raw_alloc #R7 size=296
-  sl_alloc size=296 class=-1
-    os_alloc size=296
-mm_raw_alloc #R8 size=296
-  sl_alloc size=296 class=-1
-    os_alloc size=296
-mm_raw_alloc #R9 size=296
-  sl_alloc size=296 class=-1
-    os_alloc size=296
 sl_init
   os_alloc size=67108864
 mm_alloc __ManagedMemory_Integer #1 size=32 [allocator.alloc_large]
@@ -401,7 +247,7 @@ mm_alloc IntArray #2 size=16 [allocator.alloc_large]
 mm_incref __ManagedMemory_Integer #1 rc=1 [allocator.alloc_large]
 mm_incref IntArray #2 rc=1 [allocator.alloc_large]
 mm_realloc __ManagedMemory_Integer #1 size=32000
-  mm_raw_alloc #R10 size=32000 [realloc]
+  mm_raw_alloc #R1 size=32000 [realloc]
     sl_alloc size=32000 class=17
 mm_transfer IntArray #2 rc=1 [allocator.alloc_large]
 mm_alloc __ManagedMemory_Integer #3 size=32 [allocator.alloc_large]
@@ -411,12 +257,12 @@ mm_alloc IntArray #4 size=16 [allocator.alloc_large]
 mm_incref __ManagedMemory_Integer #3 rc=1 [allocator.alloc_large]
 mm_incref IntArray #4 rc=1 [allocator.alloc_large]
 mm_realloc __ManagedMemory_Integer #3 size=32000
-  mm_raw_alloc #R11 size=32000 [realloc]
+  mm_raw_alloc #R2 size=32000 [realloc]
     sl_alloc size=32000 class=17
 mm_transfer IntArray #4 rc=1 [allocator.alloc_large]
 mm_decref IntArray #4 rc=0 [main]
   mm_decref __ManagedMemory_Integer #3 rc=0 [~IntArray]
-    mm_raw_free #R11
+    mm_raw_free #R2
       sl_free size=32768 class=17
     mm_free __ManagedMemory_Integer #3
       sl_free __ManagedMemory_Integer #3 size=64 class=5
@@ -424,12 +270,16 @@ mm_decref IntArray #4 rc=0 [main]
     sl_free IntArray #4 size=48 class=4
 mm_decref IntArray #2 rc=0 [main]
   mm_decref __ManagedMemory_Integer #1 rc=0 [~IntArray]
-    mm_raw_free #R10
+    mm_raw_free #R1
       sl_free size=32768 class=17
     mm_free __ManagedMemory_Integer #1
       sl_free __ManagedMemory_Integer #1 size=64 class=5
   mm_free IntArray #2
     sl_free IntArray #2 size=48 class=4
+mm_raw_alloc #R3 size=40
+  sl_alloc size=40 class=4
+mm_raw_free #R3
+  sl_free size=48 class=4
 ```
 
 <!-- test: slab-class-boundary-exact -->
@@ -459,35 +309,6 @@ end 'main'
 4
 ```
 ```stderr
-mm_raw_alloc #R1 size=64
-  sl_alloc size=64 class=-1
-    os_alloc size=64
-  os_alloc size=4096
-os_alloc size=67108864
-mm_raw_alloc #R2 size=296
-  sl_alloc size=296 class=-1
-    os_alloc size=296
-mm_raw_alloc #R3 size=296
-  sl_alloc size=296 class=-1
-    os_alloc size=296
-mm_raw_alloc #R4 size=296
-  sl_alloc size=296 class=-1
-    os_alloc size=296
-mm_raw_alloc #R5 size=296
-  sl_alloc size=296 class=-1
-    os_alloc size=296
-mm_raw_alloc #R6 size=296
-  sl_alloc size=296 class=-1
-    os_alloc size=296
-mm_raw_alloc #R7 size=296
-  sl_alloc size=296 class=-1
-    os_alloc size=296
-mm_raw_alloc #R8 size=296
-  sl_alloc size=296 class=-1
-    os_alloc size=296
-mm_raw_alloc #R9 size=296
-  sl_alloc size=296 class=-1
-    os_alloc size=296
 sl_init
   os_alloc size=67108864
 mm_alloc TwoField #1 size=16 [main]
@@ -502,6 +323,10 @@ mm_decref ThreeField #2 rc=0 [main]
 mm_decref TwoField #1 rc=0 [main]
   mm_free TwoField #1
     sl_free TwoField #1 size=48 class=4
+mm_raw_alloc #R1 size=40
+  sl_alloc size=40 class=4
+mm_raw_free #R1
+  sl_free size=48 class=4
 ```
 
 <!-- test: slab-mixed-allocation-tiers -->
@@ -528,35 +353,6 @@ end 'main'
 42
 ```
 ```stderr
-mm_raw_alloc #R1 size=64
-  sl_alloc size=64 class=-1
-    os_alloc size=64
-  os_alloc size=4096
-os_alloc size=67108864
-mm_raw_alloc #R2 size=296
-  sl_alloc size=296 class=-1
-    os_alloc size=296
-mm_raw_alloc #R3 size=296
-  sl_alloc size=296 class=-1
-    os_alloc size=296
-mm_raw_alloc #R4 size=296
-  sl_alloc size=296 class=-1
-    os_alloc size=296
-mm_raw_alloc #R5 size=296
-  sl_alloc size=296 class=-1
-    os_alloc size=296
-mm_raw_alloc #R6 size=296
-  sl_alloc size=296 class=-1
-    os_alloc size=296
-mm_raw_alloc #R7 size=296
-  sl_alloc size=296 class=-1
-    os_alloc size=296
-mm_raw_alloc #R8 size=296
-  sl_alloc size=296 class=-1
-    os_alloc size=296
-mm_raw_alloc #R9 size=296
-  sl_alloc size=296 class=-1
-    os_alloc size=296
 sl_init
   os_alloc size=67108864
 mm_alloc Tag #1 size=8 [main]
@@ -569,7 +365,7 @@ mm_alloc IntArray #3 size=16 [main]
 mm_incref __ManagedMemory_Integer #2 rc=1 [main]
 mm_incref IntArray #3 rc=1 [main]
 mm_realloc __ManagedMemory_Integer #2 size=40000
-  mm_raw_alloc #R10 size=40000 [realloc]
+  mm_raw_alloc #R1 size=40000 [realloc]
     sl_alloc size=40000 class=-1
 mm_alloc __ManagedMemory_Integer #4 size=32 [main]
   sl_alloc __ManagedMemory_Integer #4 size=64 class=5
@@ -578,12 +374,13 @@ mm_alloc IntArray #5 size=16 [main]
 mm_incref __ManagedMemory_Integer #4 rc=1 [main]
 mm_incref IntArray #5 rc=1 [main]
 mm_realloc __ManagedMemory_Integer #4 size=83886080
-  mm_raw_alloc #R11 size=83886080 [realloc]
+  mm_raw_alloc #R2 size=83886080 [realloc]
     sl_alloc size=83886080 class=-1
       os_alloc size=83886080
+    os_alloc size=4096
 mm_decref IntArray #5 rc=0 [main]
   mm_decref __ManagedMemory_Integer #4 rc=0 [~IntArray]
-    mm_raw_free #R11
+    mm_raw_free #R2
       sl_free size=83886080 class=-1
         os_free size=83886080
     mm_free __ManagedMemory_Integer #4
@@ -592,7 +389,7 @@ mm_decref IntArray #5 rc=0 [main]
     sl_free IntArray #5 size=48 class=4
 mm_decref IntArray #3 rc=0 [main]
   mm_decref __ManagedMemory_Integer #2 rc=0 [~IntArray]
-    mm_raw_free #R10
+    mm_raw_free #R1
       sl_free size=40960 class=-1
     mm_free __ManagedMemory_Integer #2
       sl_free __ManagedMemory_Integer #2 size=64 class=5
@@ -601,6 +398,10 @@ mm_decref IntArray #3 rc=0 [main]
 mm_decref Tag #1 rc=0 [main]
   mm_free Tag #1
     sl_free Tag #1 size=48 class=4
+mm_raw_alloc #R3 size=40
+  sl_alloc size=40 class=4
+mm_raw_free #R3
+  sl_free size=48 class=4
 ```
 
 <!-- test: slab-os-direct-huge-object -->
@@ -620,35 +421,6 @@ end 'main'
 0
 ```
 ```stderr
-mm_raw_alloc #R1 size=64
-  sl_alloc size=64 class=-1
-    os_alloc size=64
-  os_alloc size=4096
-os_alloc size=67108864
-mm_raw_alloc #R2 size=296
-  sl_alloc size=296 class=-1
-    os_alloc size=296
-mm_raw_alloc #R3 size=296
-  sl_alloc size=296 class=-1
-    os_alloc size=296
-mm_raw_alloc #R4 size=296
-  sl_alloc size=296 class=-1
-    os_alloc size=296
-mm_raw_alloc #R5 size=296
-  sl_alloc size=296 class=-1
-    os_alloc size=296
-mm_raw_alloc #R6 size=296
-  sl_alloc size=296 class=-1
-    os_alloc size=296
-mm_raw_alloc #R7 size=296
-  sl_alloc size=296 class=-1
-    os_alloc size=296
-mm_raw_alloc #R8 size=296
-  sl_alloc size=296 class=-1
-    os_alloc size=296
-mm_raw_alloc #R9 size=296
-  sl_alloc size=296 class=-1
-    os_alloc size=296
 sl_init
   os_alloc size=67108864
 mm_alloc __ManagedMemory_Integer #1 size=32 [main]
@@ -658,18 +430,23 @@ mm_alloc IntArray #2 size=16 [main]
 mm_incref __ManagedMemory_Integer #1 rc=1 [main]
 mm_incref IntArray #2 rc=1 [main]
 mm_realloc __ManagedMemory_Integer #1 size=83886080
-  mm_raw_alloc #R10 size=83886080 [realloc]
+  mm_raw_alloc #R1 size=83886080 [realloc]
     sl_alloc size=83886080 class=-1
       os_alloc size=83886080
+    os_alloc size=4096
 mm_decref IntArray #2 rc=0 [main]
   mm_decref __ManagedMemory_Integer #1 rc=0 [~IntArray]
-    mm_raw_free #R10
+    mm_raw_free #R1
       sl_free size=83886080 class=-1
         os_free size=83886080
     mm_free __ManagedMemory_Integer #1
       sl_free __ManagedMemory_Integer #1 size=64 class=5
   mm_free IntArray #2
     sl_free IntArray #2 size=48 class=4
+mm_raw_alloc #R2 size=40
+  sl_alloc size=40 class=4
+mm_raw_free #R2
+  sl_free size=48 class=4
 ```
 
 <!-- test: slab-arena-large-chunk-reuse -->
@@ -695,35 +472,6 @@ end 'main'
 0
 ```
 ```stderr
-mm_raw_alloc #R1 size=64
-  sl_alloc size=64 class=-1
-    os_alloc size=64
-  os_alloc size=4096
-os_alloc size=67108864
-mm_raw_alloc #R2 size=296
-  sl_alloc size=296 class=-1
-    os_alloc size=296
-mm_raw_alloc #R3 size=296
-  sl_alloc size=296 class=-1
-    os_alloc size=296
-mm_raw_alloc #R4 size=296
-  sl_alloc size=296 class=-1
-    os_alloc size=296
-mm_raw_alloc #R5 size=296
-  sl_alloc size=296 class=-1
-    os_alloc size=296
-mm_raw_alloc #R6 size=296
-  sl_alloc size=296 class=-1
-    os_alloc size=296
-mm_raw_alloc #R7 size=296
-  sl_alloc size=296 class=-1
-    os_alloc size=296
-mm_raw_alloc #R8 size=296
-  sl_alloc size=296 class=-1
-    os_alloc size=296
-mm_raw_alloc #R9 size=296
-  sl_alloc size=296 class=-1
-    os_alloc size=296
 sl_init
   os_alloc size=67108864
 mm_alloc __ManagedMemory_Integer #1 size=32 [allocator.alloc_medium]
@@ -733,7 +481,7 @@ mm_alloc IntArray #2 size=16 [allocator.alloc_medium]
 mm_incref __ManagedMemory_Integer #1 rc=1 [allocator.alloc_medium]
 mm_incref IntArray #2 rc=1 [allocator.alloc_medium]
 mm_realloc __ManagedMemory_Integer #1 size=40000
-  mm_raw_alloc #R10 size=40000 [realloc]
+  mm_raw_alloc #R1 size=40000 [realloc]
     sl_alloc size=40000 class=-1
 mm_transfer IntArray #2 rc=1 [allocator.alloc_medium]
 mm_alloc __ManagedMemory_Integer #3 size=32 [allocator.alloc_medium]
@@ -743,12 +491,12 @@ mm_alloc IntArray #4 size=16 [allocator.alloc_medium]
 mm_incref __ManagedMemory_Integer #3 rc=1 [allocator.alloc_medium]
 mm_incref IntArray #4 rc=1 [allocator.alloc_medium]
 mm_realloc __ManagedMemory_Integer #3 size=40000
-  mm_raw_alloc #R11 size=40000 [realloc]
+  mm_raw_alloc #R2 size=40000 [realloc]
     sl_alloc size=40000 class=-1
 mm_transfer IntArray #4 rc=1 [allocator.alloc_medium]
 mm_decref IntArray #4 rc=0 [main]
   mm_decref __ManagedMemory_Integer #3 rc=0 [~IntArray]
-    mm_raw_free #R11
+    mm_raw_free #R2
       sl_free size=40960 class=-1
     mm_free __ManagedMemory_Integer #3
       sl_free __ManagedMemory_Integer #3 size=64 class=5
@@ -756,12 +504,16 @@ mm_decref IntArray #4 rc=0 [main]
     sl_free IntArray #4 size=48 class=4
 mm_decref IntArray #2 rc=0 [main]
   mm_decref __ManagedMemory_Integer #1 rc=0 [~IntArray]
-    mm_raw_free #R10
+    mm_raw_free #R1
       sl_free size=40960 class=-1
     mm_free __ManagedMemory_Integer #1
       sl_free __ManagedMemory_Integer #1 size=64 class=5
   mm_free IntArray #2
     sl_free IntArray #2 size=48 class=4
+mm_raw_alloc #R3 size=40
+  sl_alloc size=40 class=4
+mm_raw_free #R3
+  sl_free size=48 class=4
 ```
 
 <!-- test: slab-arena-large-sequential-reuse -->
@@ -787,35 +539,6 @@ end 'main'
 0
 ```
 ```stderr
-mm_raw_alloc #R1 size=64
-  sl_alloc size=64 class=-1
-    os_alloc size=64
-  os_alloc size=4096
-os_alloc size=67108864
-mm_raw_alloc #R2 size=296
-  sl_alloc size=296 class=-1
-    os_alloc size=296
-mm_raw_alloc #R3 size=296
-  sl_alloc size=296 class=-1
-    os_alloc size=296
-mm_raw_alloc #R4 size=296
-  sl_alloc size=296 class=-1
-    os_alloc size=296
-mm_raw_alloc #R5 size=296
-  sl_alloc size=296 class=-1
-    os_alloc size=296
-mm_raw_alloc #R6 size=296
-  sl_alloc size=296 class=-1
-    os_alloc size=296
-mm_raw_alloc #R7 size=296
-  sl_alloc size=296 class=-1
-    os_alloc size=296
-mm_raw_alloc #R8 size=296
-  sl_alloc size=296 class=-1
-    os_alloc size=296
-mm_raw_alloc #R9 size=296
-  sl_alloc size=296 class=-1
-    os_alloc size=296
 sl_init
   os_alloc size=67108864
 mm_alloc __ManagedMemory_Integer #1 size=32 [allocator.use_medium]
@@ -825,11 +548,11 @@ mm_alloc IntArray #2 size=16 [allocator.use_medium]
 mm_incref __ManagedMemory_Integer #1 rc=1 [allocator.use_medium]
 mm_incref IntArray #2 rc=1 [allocator.use_medium]
 mm_realloc __ManagedMemory_Integer #1 size=40000
-  mm_raw_alloc #R10 size=40000 [realloc]
+  mm_raw_alloc #R1 size=40000 [realloc]
     sl_alloc size=40000 class=-1
 mm_decref IntArray #2 rc=0 [allocator.use_medium]
   mm_decref __ManagedMemory_Integer #1 rc=0 [~IntArray]
-    mm_raw_free #R10
+    mm_raw_free #R1
       sl_free size=40960 class=-1
     mm_free __ManagedMemory_Integer #1
       sl_free __ManagedMemory_Integer #1 size=64 class=5
@@ -842,16 +565,20 @@ mm_alloc IntArray #4 size=16 [allocator.use_medium]
 mm_incref __ManagedMemory_Integer #3 rc=1 [allocator.use_medium]
 mm_incref IntArray #4 rc=1 [allocator.use_medium]
 mm_realloc __ManagedMemory_Integer #3 size=40000
-  mm_raw_alloc #R11 size=40000 [realloc]
+  mm_raw_alloc #R2 size=40000 [realloc]
     sl_alloc size=40000 class=-1
 mm_decref IntArray #4 rc=0 [allocator.use_medium]
   mm_decref __ManagedMemory_Integer #3 rc=0 [~IntArray]
-    mm_raw_free #R11
+    mm_raw_free #R2
       sl_free size=40960 class=-1
     mm_free __ManagedMemory_Integer #3
       sl_free __ManagedMemory_Integer #3 size=64 class=5
   mm_free IntArray #4
     sl_free IntArray #4 size=48 class=4
+mm_raw_alloc #R3 size=40
+  sl_alloc size=40 class=4
+mm_raw_free #R3
+  sl_free size=48 class=4
 ```
 
 <!-- test: slab-os-direct-multiple -->
@@ -873,35 +600,6 @@ end 'main'
 0
 ```
 ```stderr
-mm_raw_alloc #R1 size=64
-  sl_alloc size=64 class=-1
-    os_alloc size=64
-  os_alloc size=4096
-os_alloc size=67108864
-mm_raw_alloc #R2 size=296
-  sl_alloc size=296 class=-1
-    os_alloc size=296
-mm_raw_alloc #R3 size=296
-  sl_alloc size=296 class=-1
-    os_alloc size=296
-mm_raw_alloc #R4 size=296
-  sl_alloc size=296 class=-1
-    os_alloc size=296
-mm_raw_alloc #R5 size=296
-  sl_alloc size=296 class=-1
-    os_alloc size=296
-mm_raw_alloc #R6 size=296
-  sl_alloc size=296 class=-1
-    os_alloc size=296
-mm_raw_alloc #R7 size=296
-  sl_alloc size=296 class=-1
-    os_alloc size=296
-mm_raw_alloc #R8 size=296
-  sl_alloc size=296 class=-1
-    os_alloc size=296
-mm_raw_alloc #R9 size=296
-  sl_alloc size=296 class=-1
-    os_alloc size=296
 sl_init
   os_alloc size=67108864
 mm_alloc __ManagedMemory_Integer #1 size=32 [main]
@@ -911,9 +609,10 @@ mm_alloc IntArray #2 size=16 [main]
 mm_incref __ManagedMemory_Integer #1 rc=1 [main]
 mm_incref IntArray #2 rc=1 [main]
 mm_realloc __ManagedMemory_Integer #1 size=83886080
-  mm_raw_alloc #R10 size=83886080 [realloc]
+  mm_raw_alloc #R1 size=83886080 [realloc]
     sl_alloc size=83886080 class=-1
       os_alloc size=83886080
+    os_alloc size=4096
 mm_alloc __ManagedMemory_Integer #3 size=32 [main]
   sl_alloc __ManagedMemory_Integer #3 size=64 class=5
 mm_alloc IntArray #4 size=16 [main]
@@ -921,12 +620,12 @@ mm_alloc IntArray #4 size=16 [main]
 mm_incref __ManagedMemory_Integer #3 rc=1 [main]
 mm_incref IntArray #4 rc=1 [main]
 mm_realloc __ManagedMemory_Integer #3 size=83886080
-  mm_raw_alloc #R11 size=83886080 [realloc]
+  mm_raw_alloc #R2 size=83886080 [realloc]
     sl_alloc size=83886080 class=-1
       os_alloc size=83886080
 mm_decref IntArray #4 rc=0 [main]
   mm_decref __ManagedMemory_Integer #3 rc=0 [~IntArray]
-    mm_raw_free #R11
+    mm_raw_free #R2
       sl_free size=83886080 class=-1
         os_free size=83886080
     mm_free __ManagedMemory_Integer #3
@@ -935,13 +634,17 @@ mm_decref IntArray #4 rc=0 [main]
     sl_free IntArray #4 size=48 class=4
 mm_decref IntArray #2 rc=0 [main]
   mm_decref __ManagedMemory_Integer #1 rc=0 [~IntArray]
-    mm_raw_free #R10
+    mm_raw_free #R1
       sl_free size=83886080 class=-1
         os_free size=83886080
     mm_free __ManagedMemory_Integer #1
       sl_free __ManagedMemory_Integer #1 size=64 class=5
   mm_free IntArray #2
     sl_free IntArray #2 size=48 class=4
+mm_raw_alloc #R3 size=40
+  sl_alloc size=40 class=4
+mm_raw_free #R3
+  sl_free size=48 class=4
 ```
 
 <!-- test: slab-os-direct-sequential-reuse -->
@@ -967,35 +670,6 @@ end 'main'
 0
 ```
 ```stderr
-mm_raw_alloc #R1 size=64
-  sl_alloc size=64 class=-1
-    os_alloc size=64
-  os_alloc size=4096
-os_alloc size=67108864
-mm_raw_alloc #R2 size=296
-  sl_alloc size=296 class=-1
-    os_alloc size=296
-mm_raw_alloc #R3 size=296
-  sl_alloc size=296 class=-1
-    os_alloc size=296
-mm_raw_alloc #R4 size=296
-  sl_alloc size=296 class=-1
-    os_alloc size=296
-mm_raw_alloc #R5 size=296
-  sl_alloc size=296 class=-1
-    os_alloc size=296
-mm_raw_alloc #R6 size=296
-  sl_alloc size=296 class=-1
-    os_alloc size=296
-mm_raw_alloc #R7 size=296
-  sl_alloc size=296 class=-1
-    os_alloc size=296
-mm_raw_alloc #R8 size=296
-  sl_alloc size=296 class=-1
-    os_alloc size=296
-mm_raw_alloc #R9 size=296
-  sl_alloc size=296 class=-1
-    os_alloc size=296
 sl_init
   os_alloc size=67108864
 mm_alloc __ManagedMemory_Integer #1 size=32 [allocator.use_huge]
@@ -1005,12 +679,13 @@ mm_alloc IntArray #2 size=16 [allocator.use_huge]
 mm_incref __ManagedMemory_Integer #1 rc=1 [allocator.use_huge]
 mm_incref IntArray #2 rc=1 [allocator.use_huge]
 mm_realloc __ManagedMemory_Integer #1 size=83886080
-  mm_raw_alloc #R10 size=83886080 [realloc]
+  mm_raw_alloc #R1 size=83886080 [realloc]
     sl_alloc size=83886080 class=-1
       os_alloc size=83886080
+    os_alloc size=4096
 mm_decref IntArray #2 rc=0 [allocator.use_huge]
   mm_decref __ManagedMemory_Integer #1 rc=0 [~IntArray]
-    mm_raw_free #R10
+    mm_raw_free #R1
       sl_free size=83886080 class=-1
         os_free size=83886080
     mm_free __ManagedMemory_Integer #1
@@ -1024,18 +699,22 @@ mm_alloc IntArray #4 size=16 [allocator.use_huge]
 mm_incref __ManagedMemory_Integer #3 rc=1 [allocator.use_huge]
 mm_incref IntArray #4 rc=1 [allocator.use_huge]
 mm_realloc __ManagedMemory_Integer #3 size=83886080
-  mm_raw_alloc #R11 size=83886080 [realloc]
+  mm_raw_alloc #R2 size=83886080 [realloc]
     sl_alloc size=83886080 class=-1
       os_alloc size=83886080
 mm_decref IntArray #4 rc=0 [allocator.use_huge]
   mm_decref __ManagedMemory_Integer #3 rc=0 [~IntArray]
-    mm_raw_free #R11
+    mm_raw_free #R2
       sl_free size=83886080 class=-1
         os_free size=83886080
     mm_free __ManagedMemory_Integer #3
       sl_free __ManagedMemory_Integer #3 size=64 class=5
   mm_free IntArray #4
     sl_free IntArray #4 size=48 class=4
+mm_raw_alloc #R3 size=40
+  sl_alloc size=40 class=4
+mm_raw_free #R3
+  sl_free size=48 class=4
 ```
 
 <!-- test: slab-os-direct-sorted-array -->
@@ -1061,35 +740,6 @@ end 'main'
 0
 ```
 ```stderr
-mm_raw_alloc #R1 size=64
-  sl_alloc size=64 class=-1
-    os_alloc size=64
-  os_alloc size=4096
-os_alloc size=67108864
-mm_raw_alloc #R2 size=296
-  sl_alloc size=296 class=-1
-    os_alloc size=296
-mm_raw_alloc #R3 size=296
-  sl_alloc size=296 class=-1
-    os_alloc size=296
-mm_raw_alloc #R4 size=296
-  sl_alloc size=296 class=-1
-    os_alloc size=296
-mm_raw_alloc #R5 size=296
-  sl_alloc size=296 class=-1
-    os_alloc size=296
-mm_raw_alloc #R6 size=296
-  sl_alloc size=296 class=-1
-    os_alloc size=296
-mm_raw_alloc #R7 size=296
-  sl_alloc size=296 class=-1
-    os_alloc size=296
-mm_raw_alloc #R8 size=296
-  sl_alloc size=296 class=-1
-    os_alloc size=296
-mm_raw_alloc #R9 size=296
-  sl_alloc size=296 class=-1
-    os_alloc size=296
 sl_init
   os_alloc size=67108864
 mm_alloc __ManagedMemory_Integer #1 size=32 [main]
@@ -1099,9 +749,10 @@ mm_alloc IntArray #2 size=16 [main]
 mm_incref __ManagedMemory_Integer #1 rc=1 [main]
 mm_incref IntArray #2 rc=1 [main]
 mm_realloc __ManagedMemory_Integer #1 size=83886080
-  mm_raw_alloc #R10 size=83886080 [realloc]
+  mm_raw_alloc #R1 size=83886080 [realloc]
     sl_alloc size=83886080 class=-1
       os_alloc size=83886080
+    os_alloc size=4096
 mm_alloc __ManagedMemory_Integer #3 size=32 [main]
   sl_alloc __ManagedMemory_Integer #3 size=64 class=5
 mm_alloc IntArray #4 size=16 [main]
@@ -1109,7 +760,7 @@ mm_alloc IntArray #4 size=16 [main]
 mm_incref __ManagedMemory_Integer #3 rc=1 [main]
 mm_incref IntArray #4 rc=1 [main]
 mm_realloc __ManagedMemory_Integer #3 size=83886080
-  mm_raw_alloc #R11 size=83886080 [realloc]
+  mm_raw_alloc #R2 size=83886080 [realloc]
     sl_alloc size=83886080 class=-1
       os_alloc size=83886080
 mm_alloc __ManagedMemory_Integer #5 size=32 [main]
@@ -1119,7 +770,7 @@ mm_alloc IntArray #6 size=16 [main]
 mm_incref __ManagedMemory_Integer #5 rc=1 [main]
 mm_incref IntArray #6 rc=1 [main]
 mm_realloc __ManagedMemory_Integer #5 size=83886080
-  mm_raw_alloc #R12 size=83886080 [realloc]
+  mm_raw_alloc #R3 size=83886080 [realloc]
     sl_alloc size=83886080 class=-1
       os_alloc size=83886080
 mm_alloc __ManagedMemory_Integer #7 size=32 [main]
@@ -1129,12 +780,12 @@ mm_alloc IntArray #8 size=16 [main]
 mm_incref __ManagedMemory_Integer #7 rc=1 [main]
 mm_incref IntArray #8 rc=1 [main]
 mm_realloc __ManagedMemory_Integer #7 size=83886080
-  mm_raw_alloc #R13 size=83886080 [realloc]
+  mm_raw_alloc #R4 size=83886080 [realloc]
     sl_alloc size=83886080 class=-1
       os_alloc size=83886080
 mm_decref IntArray #8 rc=0 [main]
   mm_decref __ManagedMemory_Integer #7 rc=0 [~IntArray]
-    mm_raw_free #R13
+    mm_raw_free #R4
       sl_free size=83886080 class=-1
         os_free size=83886080
     mm_free __ManagedMemory_Integer #7
@@ -1143,7 +794,7 @@ mm_decref IntArray #8 rc=0 [main]
     sl_free IntArray #8 size=48 class=4
 mm_decref IntArray #6 rc=0 [main]
   mm_decref __ManagedMemory_Integer #5 rc=0 [~IntArray]
-    mm_raw_free #R12
+    mm_raw_free #R3
       sl_free size=83886080 class=-1
         os_free size=83886080
     mm_free __ManagedMemory_Integer #5
@@ -1152,7 +803,7 @@ mm_decref IntArray #6 rc=0 [main]
     sl_free IntArray #6 size=48 class=4
 mm_decref IntArray #4 rc=0 [main]
   mm_decref __ManagedMemory_Integer #3 rc=0 [~IntArray]
-    mm_raw_free #R11
+    mm_raw_free #R2
       sl_free size=83886080 class=-1
         os_free size=83886080
     mm_free __ManagedMemory_Integer #3
@@ -1161,13 +812,17 @@ mm_decref IntArray #4 rc=0 [main]
     sl_free IntArray #4 size=48 class=4
 mm_decref IntArray #2 rc=0 [main]
   mm_decref __ManagedMemory_Integer #1 rc=0 [~IntArray]
-    mm_raw_free #R10
+    mm_raw_free #R1
       sl_free size=83886080 class=-1
         os_free size=83886080
     mm_free __ManagedMemory_Integer #1
       sl_free __ManagedMemory_Integer #1 size=64 class=5
   mm_free IntArray #2
     sl_free IntArray #2 size=48 class=4
+mm_raw_alloc #R5 size=40
+  sl_alloc size=40 class=4
+mm_raw_free #R5
+  sl_free size=48 class=4
 ```
 
 <!-- test: slab-string-array-push -->

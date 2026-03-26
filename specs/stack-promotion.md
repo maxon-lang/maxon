@@ -33,37 +33,12 @@ end 'main'
 30
 ```
 ```stderr
-mm_raw_alloc #R1 size=64
-  sl_alloc size=64 class=-1
-    os_alloc size=64
-  os_alloc size=4096
-os_alloc size=67108864
-mm_raw_alloc #R2 size=296
-  sl_alloc size=296 class=-1
-    os_alloc size=296
-mm_raw_alloc #R3 size=296
-  sl_alloc size=296 class=-1
-    os_alloc size=296
-mm_raw_alloc #R4 size=296
-  sl_alloc size=296 class=-1
-    os_alloc size=296
-mm_raw_alloc #R5 size=296
-  sl_alloc size=296 class=-1
-    os_alloc size=296
-mm_raw_alloc #R6 size=296
-  sl_alloc size=296 class=-1
-    os_alloc size=296
-mm_raw_alloc #R7 size=296
-  sl_alloc size=296 class=-1
-    os_alloc size=296
-mm_raw_alloc #R8 size=296
-  sl_alloc size=296 class=-1
-    os_alloc size=296
-mm_raw_alloc #R9 size=296
-  sl_alloc size=296 class=-1
-    os_alloc size=296
 sl_init
   os_alloc size=67108864
+mm_raw_alloc #R1 size=40
+  sl_alloc size=40 class=4
+mm_raw_free #R1
+  sl_free size=48 class=4
 ```
 
 <!-- test: stack-local-field-mutation -->
@@ -87,37 +62,12 @@ end 'main'
 100
 ```
 ```stderr
-mm_raw_alloc #R1 size=64
-  sl_alloc size=64 class=-1
-    os_alloc size=64
-  os_alloc size=4096
-os_alloc size=67108864
-mm_raw_alloc #R2 size=296
-  sl_alloc size=296 class=-1
-    os_alloc size=296
-mm_raw_alloc #R3 size=296
-  sl_alloc size=296 class=-1
-    os_alloc size=296
-mm_raw_alloc #R4 size=296
-  sl_alloc size=296 class=-1
-    os_alloc size=296
-mm_raw_alloc #R5 size=296
-  sl_alloc size=296 class=-1
-    os_alloc size=296
-mm_raw_alloc #R6 size=296
-  sl_alloc size=296 class=-1
-    os_alloc size=296
-mm_raw_alloc #R7 size=296
-  sl_alloc size=296 class=-1
-    os_alloc size=296
-mm_raw_alloc #R8 size=296
-  sl_alloc size=296 class=-1
-    os_alloc size=296
-mm_raw_alloc #R9 size=296
-  sl_alloc size=296 class=-1
-    os_alloc size=296
 sl_init
   os_alloc size=67108864
+mm_raw_alloc #R1 size=40
+  sl_alloc size=40 class=4
+mm_raw_free #R1
+  sl_free size=48 class=4
 ```
 
 <!-- test: stack-when-aliased -->
@@ -141,37 +91,12 @@ end 'main'
 1
 ```
 ```stderr
-mm_raw_alloc #R1 size=64
-  sl_alloc size=64 class=-1
-    os_alloc size=64
-  os_alloc size=4096
-os_alloc size=67108864
-mm_raw_alloc #R2 size=296
-  sl_alloc size=296 class=-1
-    os_alloc size=296
-mm_raw_alloc #R3 size=296
-  sl_alloc size=296 class=-1
-    os_alloc size=296
-mm_raw_alloc #R4 size=296
-  sl_alloc size=296 class=-1
-    os_alloc size=296
-mm_raw_alloc #R5 size=296
-  sl_alloc size=296 class=-1
-    os_alloc size=296
-mm_raw_alloc #R6 size=296
-  sl_alloc size=296 class=-1
-    os_alloc size=296
-mm_raw_alloc #R7 size=296
-  sl_alloc size=296 class=-1
-    os_alloc size=296
-mm_raw_alloc #R8 size=296
-  sl_alloc size=296 class=-1
-    os_alloc size=296
-mm_raw_alloc #R9 size=296
-  sl_alloc size=296 class=-1
-    os_alloc size=296
 sl_init
   os_alloc size=67108864
+mm_raw_alloc #R1 size=40
+  sl_alloc size=40 class=4
+mm_raw_free #R1
+  sl_free size=48 class=4
 ```
 
 <!-- test: stack-when-passed-to-readonly-function -->
@@ -198,37 +123,12 @@ end 'main'
 42
 ```
 ```stderr
-mm_raw_alloc #R1 size=64
-  sl_alloc size=64 class=-1
-    os_alloc size=64
-  os_alloc size=4096
-os_alloc size=67108864
-mm_raw_alloc #R2 size=296
-  sl_alloc size=296 class=-1
-    os_alloc size=296
-mm_raw_alloc #R3 size=296
-  sl_alloc size=296 class=-1
-    os_alloc size=296
-mm_raw_alloc #R4 size=296
-  sl_alloc size=296 class=-1
-    os_alloc size=296
-mm_raw_alloc #R5 size=296
-  sl_alloc size=296 class=-1
-    os_alloc size=296
-mm_raw_alloc #R6 size=296
-  sl_alloc size=296 class=-1
-    os_alloc size=296
-mm_raw_alloc #R7 size=296
-  sl_alloc size=296 class=-1
-    os_alloc size=296
-mm_raw_alloc #R8 size=296
-  sl_alloc size=296 class=-1
-    os_alloc size=296
-mm_raw_alloc #R9 size=296
-  sl_alloc size=296 class=-1
-    os_alloc size=296
 sl_init
   os_alloc size=67108864
+mm_raw_alloc #R1 size=40
+  sl_alloc size=40 class=4
+mm_raw_free #R1
+  sl_free size=48 class=4
 ```
 
 <!-- test: heap-when-stored-in-container -->
@@ -255,35 +155,6 @@ end 'main'
 7
 ```
 ```stderr
-mm_raw_alloc #R1 size=64
-  sl_alloc size=64 class=-1
-    os_alloc size=64
-  os_alloc size=4096
-os_alloc size=67108864
-mm_raw_alloc #R2 size=296
-  sl_alloc size=296 class=-1
-    os_alloc size=296
-mm_raw_alloc #R3 size=296
-  sl_alloc size=296 class=-1
-    os_alloc size=296
-mm_raw_alloc #R4 size=296
-  sl_alloc size=296 class=-1
-    os_alloc size=296
-mm_raw_alloc #R5 size=296
-  sl_alloc size=296 class=-1
-    os_alloc size=296
-mm_raw_alloc #R6 size=296
-  sl_alloc size=296 class=-1
-    os_alloc size=296
-mm_raw_alloc #R7 size=296
-  sl_alloc size=296 class=-1
-    os_alloc size=296
-mm_raw_alloc #R8 size=296
-  sl_alloc size=296 class=-1
-    os_alloc size=296
-mm_raw_alloc #R9 size=296
-  sl_alloc size=296 class=-1
-    os_alloc size=296
 sl_init
   os_alloc size=67108864
 mm_alloc __ManagedMemory_Item #1 size=32 [main]
@@ -296,7 +167,7 @@ mm_alloc Item #3 size=8 [main]
   sl_alloc Item #3 size=40 class=4
 mm_incref Item #3 rc=1 [main]
 mm_realloc __ManagedMemory_Item #1 size=32
-  mm_raw_alloc #R10 size=32 [realloc]
+  mm_raw_alloc #R1 size=32 [realloc]
     sl_alloc size=32 class=3
 mm_incref Item #3 rc=2 [ItemArray.push]
 mm_incref Item #3 rc=3 [ItemArray.get]
@@ -309,12 +180,16 @@ mm_decref ItemArray #2 rc=0 [main]
     mm_decref Item #3 rc=0 [~ManagedElements]
       mm_free Item #3
         sl_free Item #3 size=48 class=4
-    mm_raw_free #R10
+    mm_raw_free #R1
       sl_free size=32 class=3
     mm_free __ManagedMemory_Item #1
       sl_free __ManagedMemory_Item #1 size=64 class=5
   mm_free ItemArray #2
     sl_free ItemArray #2 size=48 class=4
+mm_raw_alloc #R2 size=40
+  sl_alloc size=40 class=4
+mm_raw_free #R2
+  sl_free size=48 class=4
 ```
 
 <!-- test: heap-when-returned -->
@@ -341,35 +216,6 @@ end 'main'
 5
 ```
 ```stderr
-mm_raw_alloc #R1 size=64
-  sl_alloc size=64 class=-1
-    os_alloc size=64
-  os_alloc size=4096
-os_alloc size=67108864
-mm_raw_alloc #R2 size=296
-  sl_alloc size=296 class=-1
-    os_alloc size=296
-mm_raw_alloc #R3 size=296
-  sl_alloc size=296 class=-1
-    os_alloc size=296
-mm_raw_alloc #R4 size=296
-  sl_alloc size=296 class=-1
-    os_alloc size=296
-mm_raw_alloc #R5 size=296
-  sl_alloc size=296 class=-1
-    os_alloc size=296
-mm_raw_alloc #R6 size=296
-  sl_alloc size=296 class=-1
-    os_alloc size=296
-mm_raw_alloc #R7 size=296
-  sl_alloc size=296 class=-1
-    os_alloc size=296
-mm_raw_alloc #R8 size=296
-  sl_alloc size=296 class=-1
-    os_alloc size=296
-mm_raw_alloc #R9 size=296
-  sl_alloc size=296 class=-1
-    os_alloc size=296
 sl_init
   os_alloc size=67108864
 mm_alloc Point #1 size=16 [stack-promotion.makePoint]
@@ -379,4 +225,8 @@ mm_transfer Point #1 rc=1 [stack-promotion.makePoint]
 mm_decref Point #1 rc=0 [main]
   mm_free Point #1
     sl_free Point #1 size=48 class=4
+mm_raw_alloc #R1 size=40
+  sl_alloc size=40 class=4
+mm_raw_free #R1
+  sl_free size=48 class=4
 ```

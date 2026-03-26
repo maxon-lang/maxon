@@ -79,7 +79,7 @@ end 'main'
 ```stderr
 panic at panic.in-function.test:3: failure in helper
 Stack trace:
-  in maxon_write_stdout
+  in panic.fail
   in main
   in _start
 ```

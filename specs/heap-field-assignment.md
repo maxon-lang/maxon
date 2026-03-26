@@ -144,35 +144,6 @@ end 'main'
 20
 ```
 ```stderr
-mm_raw_alloc #R1 size=64
-  sl_alloc size=64 class=-1
-    os_alloc size=64
-  os_alloc size=4096
-os_alloc size=67108864
-mm_raw_alloc #R2 size=296
-  sl_alloc size=296 class=-1
-    os_alloc size=296
-mm_raw_alloc #R3 size=296
-  sl_alloc size=296 class=-1
-    os_alloc size=296
-mm_raw_alloc #R4 size=296
-  sl_alloc size=296 class=-1
-    os_alloc size=296
-mm_raw_alloc #R5 size=296
-  sl_alloc size=296 class=-1
-    os_alloc size=296
-mm_raw_alloc #R6 size=296
-  sl_alloc size=296 class=-1
-    os_alloc size=296
-mm_raw_alloc #R7 size=296
-  sl_alloc size=296 class=-1
-    os_alloc size=296
-mm_raw_alloc #R8 size=296
-  sl_alloc size=296 class=-1
-    os_alloc size=296
-mm_raw_alloc #R9 size=296
-  sl_alloc size=296 class=-1
-    os_alloc size=296
 sl_init
   os_alloc size=67108864
 mm_alloc Inner #1 size=8 [heap-field-assignment.testAssign]
@@ -188,21 +159,21 @@ mm_decref Inner #1 rc=0 [Container.replaceChild]
   mm_free Inner #1
     sl_free Inner #1 size=48 class=4
 mm_incref Inner #3 rc=2 [Container.replaceChild]
-mm_raw_alloc #R10 size=21 [toStr.buf [heap-field-assignment.testAssign]]
+mm_raw_alloc #R1 size=21 [toStr.buf [heap-field-assignment.testAssign]]
   sl_alloc size=21 class=2
 mm_alloc String #4 size=16 [heap-field-assignment.testAssign]
   sl_alloc String #4 size=48 class=4
 mm_alloc __ManagedMemory #5 size=32 [heap-field-assignment.testAssign]
   sl_alloc __ManagedMemory #5 size=64 class=5
-mm_raw_alloc #R11 size=4 [interp.buf [heap-field-assignment.testAssign]]
+mm_raw_alloc #R2 size=4 [interp.buf [heap-field-assignment.testAssign]]
   sl_alloc size=4 class=0
-mm_raw_free #R10
+mm_raw_free #R1
   sl_free size=24 class=2
 mm_incref __ManagedMemory #5 rc=1 [heap-field-assignment.testAssign]
 mm_incref String #4 rc=1 [heap-field-assignment.testAssign]
 mm_decref String #4 rc=0 [heap-field-assignment.testAssign]
   mm_decref __ManagedMemory #5 rc=0 [~String]
-    mm_raw_free #R11
+    mm_raw_free #R2
       sl_free size=8 class=0
     mm_free __ManagedMemory #5
       sl_free __ManagedMemory #5 size=64 class=5
@@ -215,6 +186,10 @@ mm_decref Container #2 rc=0 [heap-field-assignment.testAssign]
 mm_decref Inner #3 rc=0 [heap-field-assignment.testAssign]
   mm_free Inner #3
     sl_free Inner #3 size=48 class=4
+mm_raw_alloc #R3 size=40
+  sl_alloc size=40 class=4
+mm_raw_free #R3
+  sl_free size=48 class=4
 ```
 
 <!-- test: memory.qualified-field-overwrite-frees-old -->
@@ -250,35 +225,6 @@ end 'main'
 20
 ```
 ```stderr
-mm_raw_alloc #R1 size=64
-  sl_alloc size=64 class=-1
-    os_alloc size=64
-  os_alloc size=4096
-os_alloc size=67108864
-mm_raw_alloc #R2 size=296
-  sl_alloc size=296 class=-1
-    os_alloc size=296
-mm_raw_alloc #R3 size=296
-  sl_alloc size=296 class=-1
-    os_alloc size=296
-mm_raw_alloc #R4 size=296
-  sl_alloc size=296 class=-1
-    os_alloc size=296
-mm_raw_alloc #R5 size=296
-  sl_alloc size=296 class=-1
-    os_alloc size=296
-mm_raw_alloc #R6 size=296
-  sl_alloc size=296 class=-1
-    os_alloc size=296
-mm_raw_alloc #R7 size=296
-  sl_alloc size=296 class=-1
-    os_alloc size=296
-mm_raw_alloc #R8 size=296
-  sl_alloc size=296 class=-1
-    os_alloc size=296
-mm_raw_alloc #R9 size=296
-  sl_alloc size=296 class=-1
-    os_alloc size=296
 sl_init
   os_alloc size=67108864
 mm_alloc Right #1 size=8 [heap-field-assignment.testAssign]
@@ -294,21 +240,21 @@ mm_decref Right #1 rc=0 [heap-field-assignment.testAssign]
   mm_free Right #1
     sl_free Right #1 size=48 class=4
 mm_incref Right #3 rc=2 [heap-field-assignment.testAssign]
-mm_raw_alloc #R10 size=21 [toStr.buf [heap-field-assignment.testAssign]]
+mm_raw_alloc #R1 size=21 [toStr.buf [heap-field-assignment.testAssign]]
   sl_alloc size=21 class=2
 mm_alloc String #4 size=16 [heap-field-assignment.testAssign]
   sl_alloc String #4 size=48 class=4
 mm_alloc __ManagedMemory #5 size=32 [heap-field-assignment.testAssign]
   sl_alloc __ManagedMemory #5 size=64 class=5
-mm_raw_alloc #R11 size=4 [interp.buf [heap-field-assignment.testAssign]]
+mm_raw_alloc #R2 size=4 [interp.buf [heap-field-assignment.testAssign]]
   sl_alloc size=4 class=0
-mm_raw_free #R10
+mm_raw_free #R1
   sl_free size=24 class=2
 mm_incref __ManagedMemory #5 rc=1 [heap-field-assignment.testAssign]
 mm_incref String #4 rc=1 [heap-field-assignment.testAssign]
 mm_decref String #4 rc=0 [heap-field-assignment.testAssign]
   mm_decref __ManagedMemory #5 rc=0 [~String]
-    mm_raw_free #R11
+    mm_raw_free #R2
       sl_free size=8 class=0
     mm_free __ManagedMemory #5
       sl_free __ManagedMemory #5 size=64 class=5
@@ -321,4 +267,8 @@ mm_decref Pair #2 rc=0 [heap-field-assignment.testAssign]
 mm_decref Right #3 rc=0 [heap-field-assignment.testAssign]
   mm_free Right #3
     sl_free Right #3 size=48 class=4
+mm_raw_alloc #R3 size=40
+  sl_alloc size=40 class=4
+mm_raw_free #R3
+  sl_free size=48 class=4
 ```

@@ -11,5 +11,86 @@ function main() returns ExitCode
 end 'main'
 ---
 ExitCode: 42
+RequiredMLIR: ```
+=== maxon
+module {
+  func @basics.getValue() -> i64 {
+  entry:
+    %0 = maxon.literal {value = 42 : i64}
+    maxon.scope_end []
+    maxon.return %0
+  }
+  func @main() -> i64 {
+  entry:
+    %1 = maxon.call @basics.getValue
+    %2 = maxon.literal {value = 0 : i64}
+    %3 = maxon.binop %1, %2 {op = lt}
+    %4 = maxon.literal {value = 4294967295 : i64}
+    %5 = maxon.binop %1, %4 {op = gt}
+    %6 = maxon.binop %3, %5 {op = or}
+    maxon.cond_br %6 [then: __range_panic_0, else: __range_ok_0]
+  __range_panic_0:
+    maxon.panic "panic at return-function-call.test:10: Range check failed for type 'ExitCode': value outside int(0 to 4294967295)"
+  __range_ok_0:
+    maxon.scope_end []
+    maxon.return %1
+  }
+}
+=== standard
+module {
+  func @basics.getValue() -> i64 {
+  entry:
+    %0 = arith.constant {value = 42 : i64}
+    func.return %0
+  }
+  func @main() -> u32 {
+  entry:
+    %1 = func.call @basics.getValue
+    %2 = arith.constant {value = 0 : i64}
+    %3 = arith.cmpi lt %1, %2
+    %4 = arith.constant {value = 4294967295 : i64}
+    %5 = arith.cmpi gt %1, %4
+    %6 = arith.ori1 %3, %5
+    cf.cond_br %6 [then: __range_panic_0, else: __range_ok_0]
+  __range_panic_0:
+    %7 = memref.lea_symdata __panic_msg_0
+    %8 = std.ptr_to_i64 %7
+    std.call_runtime @maxon_panic %8
+  __range_ok_0:
+    func.return %1
+  }
+}
+=== x86
+module {
+  func @basics.getValue() -> i64 {
+  entry:
+    x86.mov rax, 42
+    x86.ret
+  }
+  func @main() -> u32 {
+  entry:
+    x86.prologue stack_size=16
+    x86.call basics.getValue
+    x86.xor rcx, rcx
+    x86.cmp rax, rcx
+    x86.setl rcx
+    x86.movzx rcx, rcxb
+    x86.mov rdx, 4294967295
+    x86.cmp rax, rdx
+    x86.setg rdx
+    x86.movzx rdx, rdxb
+    x86.or rcx, rdx
+    x86.test rcx, rcx
+    x86.je main.__range_ok_0
+  __range_panic_0:
+    x86.lea_symdata rax, [__panic_msg_0]
+    x86.mov rcx, rax
+    x86.call maxon_panic
+  __range_ok_0:
+    x86.epilogue
+    x86.ret
+  }
+}
+```
 ---
 ---

@@ -210,35 +210,6 @@ end 'main'
 77
 ```
 ```stderr
-mm_raw_alloc #R1 size=64
-  sl_alloc size=64 class=-1
-    os_alloc size=64
-  os_alloc size=4096
-os_alloc size=67108864
-mm_raw_alloc #R2 size=296
-  sl_alloc size=296 class=-1
-    os_alloc size=296
-mm_raw_alloc #R3 size=296
-  sl_alloc size=296 class=-1
-    os_alloc size=296
-mm_raw_alloc #R4 size=296
-  sl_alloc size=296 class=-1
-    os_alloc size=296
-mm_raw_alloc #R5 size=296
-  sl_alloc size=296 class=-1
-    os_alloc size=296
-mm_raw_alloc #R6 size=296
-  sl_alloc size=296 class=-1
-    os_alloc size=296
-mm_raw_alloc #R7 size=296
-  sl_alloc size=296 class=-1
-    os_alloc size=296
-mm_raw_alloc #R8 size=296
-  sl_alloc size=296 class=-1
-    os_alloc size=296
-mm_raw_alloc #R9 size=296
-  sl_alloc size=296 class=-1
-    os_alloc size=296
 sl_init
   os_alloc size=67108864
 mm_alloc __ManagedMemory #1 size=32 [main]
@@ -247,17 +218,21 @@ mm_alloc IntArray #2 size=16 [main]
   sl_alloc IntArray #2 size=48 class=4
 mm_incref __ManagedMemory #1 rc=1 [main]
 mm_incref IntArray #2 rc=1 [main]
-mm_raw_alloc #R10 size=8
+mm_raw_alloc #R1 size=8
   sl_alloc size=8 class=0
 mm_cow __ManagedMemory #1 rc=1 size=8
 mm_decref IntArray #2 rc=0 [main]
   mm_decref __ManagedMemory #1 rc=0 [~IntArray]
-    mm_raw_free #R10
+    mm_raw_free #R1
       sl_free size=8 class=0
     mm_free __ManagedMemory #1
       sl_free __ManagedMemory #1 size=64 class=5
   mm_free IntArray #2
     sl_free IntArray #2 size=48 class=4
+mm_raw_alloc #R2 size=40
+  sl_alloc size=40 class=4
+mm_raw_free #R2
+  sl_free size=48 class=4
 ```
 ```RequiredRdata
 i64 42
