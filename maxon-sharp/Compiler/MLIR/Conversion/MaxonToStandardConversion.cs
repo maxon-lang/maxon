@@ -606,7 +606,16 @@ public static partial class MaxonToStandardConversion {
               } else {
                 var loadOp = new StdLoadIndirectOp(heapPtr, byteOffset, MlirType.I64);
                 newBlock.AddOp(loadOp);
-                valueMap[enumPayloadOp.Result] = loadOp.Result;
+                if (enumPayloadOp.ResultKind == MaxonValueKind.Bool) {
+                  // Bool payloads are stored as i64 in heap slots; convert to i1 via != 0
+                  var zeroLit = new StdConstI64Op(0);
+                  newBlock.AddOp(zeroLit);
+                  var cmpOp = new StdCmpI64Op("ne", (StdI64)loadOp.Result, zeroLit.Result);
+                  newBlock.AddOp(cmpOp);
+                  valueMap[enumPayloadOp.Result] = cmpOp.Result;
+                } else {
+                  valueMap[enumPayloadOp.Result] = loadOp.Result;
+                }
               }
               break;
             }
