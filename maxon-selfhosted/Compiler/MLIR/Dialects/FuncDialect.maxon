@@ -1,5 +1,10 @@
 // Func Dialect — Function-level operations.
 
+export enum StdType
+	i64
+	f64
+end 'StdType'
+
 export union FuncOp
 	ret(retValId ValueId)
 	call(resultId ValueId, callee ByteArray, argIds ValueIdArray)
@@ -7,6 +12,7 @@ export union FuncOp
 	indirectCall(resultId ValueId, calleeId ValueId, argIds ValueIdArray)
 	funcRef(resultId ValueId, funcName ByteArray)
 	tailCall(callee ByteArray, argIds ValueIdArray)
+	param(resultId ValueId, paramIndex VarSlot, paramType StdType)
 end 'FuncOp'
 
 export function funcOpToString(op FuncOp) returns String
@@ -17,5 +23,27 @@ export function funcOpToString(op FuncOp) returns String
 		indirectCall(resultId, calleeId, argIds) gives "%{resultId} = func.indirect_call %{calleeId}({formatArgIds(argIds)})"
 		funcRef(resultId, funcName) gives "%{resultId} = func.ref @{String.from(funcName)}"
 		tailCall(callee, argIds) gives "func.tail_call @{String.from(callee)}({formatArgIds(argIds)})"
+		param(resultId, paramIndex, paramType) gives "%{resultId} = func.param {paramIndex} : {stdTypeToString(paramType)}"
 	end 'print'
 end 'funcOpToString'
+
+export function stdTypeToString(t StdType) returns String
+	return match t 'str'
+		i64 gives "StdI64"
+		f64 gives "StdF64"
+	end 'str'
+end 'stdTypeToString'
+
+export function stdTypeIsFloat(t StdType) returns bool
+	return match t 'check'
+		i64 gives false
+		f64 gives true
+	end 'check'
+end 'stdTypeIsFloat'
+
+export function resolvedTypeToStdType(resolved ByteArray) returns StdType
+	if resolved == b"f64" 'isF64'
+		return StdType.f64
+	end 'isF64'
+	return StdType.i64
+end 'resolvedTypeToStdType'

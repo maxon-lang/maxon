@@ -212,6 +212,79 @@ function emitReloadXmmFromStackOp(code ByteArray, dest X64XmmRegister, offset Ma
 	end 'disp32'
 end 'emitReloadXmmFromStackOp'
 
+// Emit optional REX prefix for XMM instructions when high registers are used.
+// rexBase 0x48 forces REX.W (64-bit operand), 0x40 emits REX only for high registers.
+function emitXmmRexIfNeeded(code ByteArray, regFieldCode MachineWord, rmFieldCode MachineWord, rexBase MachineWord)
+	let needsHighReg = regFieldCode >= 8 or rmFieldCode >= 8
+	let needsRexW = rexBase >= 0x48
+	if needsHighReg or needsRexW 'needRex'
+		var rex = rexBase
+		if regFieldCode >= 8 'rexR'
+			rex = rex or 0x04
+		end 'rexR'
+		if rmFieldCode >= 8 'rexB'
+			rex = rex or 0x01
+		end 'rexB'
+		code.push(rex)
+	end 'needRex'
+end 'emitXmmRexIfNeeded'
+
+// Emit 0F + opcode + ModRM(reg, rm) suffix shared by all SSE2 register-register ops
+function emitXmmOpModRM(code ByteArray, opcode Byte, regFieldCode MachineWord, rmFieldCode MachineWord)
+	code.push(0x0F)
+	code.push(opcode)
+	let modrm = 0xC0 or((regFieldCode and 7) shl 3) or(rmFieldCode and 7)
+	code.push(modrm)
+end 'emitXmmOpModRM'
+
+// SSE2 binary op: prefix + [REX] + 0F + opcode + ModRM (xmm, xmm)
+function emitXmmBinaryOp(code ByteArray, dest X64XmmRegister, src X64XmmRegister, precision FloatPrecision, opcode Byte)
+	let destC = xmmRegCode(dest)
+	let srcC = xmmRegCode(src)
+	match precision 'pre'
+		f64 then code.push(0xF2)
+		f32 then code.push(0xF3)
+	end 'pre'
+	emitXmmRexIfNeeded(code, regFieldCode: destC, rmFieldCode: srcC, rexBase: 0x40)
+	emitXmmOpModRM(code, opcode: opcode, regFieldCode: destC, rmFieldCode: srcC)
+end 'emitXmmBinaryOp'
+
+// UCOMISD/UCOMISS: compare two XMM registers and set flags
+function emitUcomisXmmOp(code ByteArray, src1 X64XmmRegister, src2 X64XmmRegister, precision FloatPrecision)
+	let src1C = xmmRegCode(src1)
+	let src2C = xmmRegCode(src2)
+	match precision 'pre'
+		f64 then code.push(0x66)
+		f32 then break 'pre'
+	end 'pre'
+	emitXmmRexIfNeeded(code, regFieldCode: src1C, rmFieldCode: src2C, rexBase: 0x40)
+	emitXmmOpModRM(code, opcode: 0x2E, regFieldCode: src1C, rmFieldCode: src2C)
+end 'emitUcomisXmmOp'
+
+// CVTSI2SD/CVTSI2SS: convert 64-bit integer GPR to XMM float
+function emitCvtSi2FloatOp(code ByteArray, dest X64XmmRegister, src X64Register, precision FloatPrecision)
+	let destC = xmmRegCode(dest)
+	let srcC = regCode(src)
+	match precision 'pre'
+		f64 then code.push(0xF2)
+		f32 then code.push(0xF3)
+	end 'pre'
+	emitXmmRexIfNeeded(code, regFieldCode: destC, rmFieldCode: srcC, rexBase: 0x48)
+	emitXmmOpModRM(code, opcode: 0x2A, regFieldCode: destC, rmFieldCode: srcC)
+end 'emitCvtSi2FloatOp'
+
+// CVTTSD2SI/CVTTSS2SI: truncate XMM float to 64-bit integer GPR
+function emitCvttFloat2SiOp(code ByteArray, dest X64Register, src X64XmmRegister, precision FloatPrecision)
+	let destC = regCode(dest)
+	let srcC = xmmRegCode(src)
+	match precision 'pre'
+		f64 then code.push(0xF2)
+		f32 then code.push(0xF3)
+	end 'pre'
+	emitXmmRexIfNeeded(code, regFieldCode: destC, rmFieldCode: srcC, rexBase: 0x48)
+	emitXmmOpModRM(code, opcode: 0x2C, regFieldCode: destC, rmFieldCode: srcC)
+end 'emitCvttFloat2SiOp'
+
 // --- End XMM emission helpers ---
 
 // Spill: mov [rbp+offset], srcReg (offset is negative for spill slots)
@@ -365,9 +438,13 @@ function emitPrologue(code ByteArray, stackSize StackSize)
 end 'emitPrologue'
 
 function emitEpilogue(code ByteArray)
-	// mov rsp, rbp; pop rbp; ret
-	code.append(b"\x48\x89\xec\x5d\xc3")
+	// mov rsp, rbp; pop rbp
+	code.append(b"\x48\x89\xec\x5d")
 end 'emitEpilogue'
+
+function emitRet(code ByteArray)
+	code.push(0xC3)
+end 'emitRet'
 
 function emitMovRegImm(code ByteArray, value MachineWord)
 	// Use 32-bit sign-extended form if value fits in signed 32-bit range
@@ -949,6 +1026,7 @@ function emitMaxX64Op(op MaxX64Op, code ByteArray, blockFixups BlockJumpFixupArr
 	match op 'emit'
 		prologue(stackSize) then emitPrologue(code, stackSize: stackSize)
 		epilogue then emitEpilogue(code)
+		ret then emitRet(code)
 		movRegImm(dest, value) then emitMovRegImmGeneric(code, dest: dest, value: value)
 		movSlot(slotIndex, srcReg) then emitMovSlot(code, slotIndex: slotIndex, srcReg: srcReg)
 		loadSlot(destReg, slotIndex) then emitLoadSlotToReg(code, slotIndex: slotIndex, dest: destReg)
@@ -1001,7 +1079,17 @@ function emitMaxX64Op(op MaxX64Op, code ByteArray, blockFixups BlockJumpFixupArr
 		movXmmXmm(dest, src, precision) then emitMovXmmXmmOp(code, dest: dest, src: src, precision: precision)
 		spillXmmToStack(offset, src, precision) then emitSpillXmmToStackOp(code, offset: offset, src: src, precision: precision)
 		reloadXmmFromStack(dest, offset, precision) then emitReloadXmmFromStackOp(code, dest: dest, offset: offset, precision: precision)
-		movXmmRipRel to andMaskRipRel then panic("X86 XMM op not yet implemented in binary emitter")
+		movXmmRipRel then panic("X86 movXmmRipRel not yet implemented in binary emitter")
+		addXmm(dest, src, precision) then emitXmmBinaryOp(code, dest: dest, src: src, precision: precision, opcode: 0x58)
+		subXmm(dest, src, precision) then emitXmmBinaryOp(code, dest: dest, src: src, precision: precision, opcode: 0x5C)
+		mulXmm(dest, src, precision) then emitXmmBinaryOp(code, dest: dest, src: src, precision: precision, opcode: 0x59)
+		divXmm(dest, src, precision) then emitXmmBinaryOp(code, dest: dest, src: src, precision: precision, opcode: 0x5E)
+		sqrtXmm(dest, src, precision) then emitXmmBinaryOp(code, dest: dest, src: src, precision: precision, opcode: 0x51)
+		roundXmm then panic("X86 roundXmm not yet implemented in binary emitter")
+		ucomisXmm(src1, src2, precision) then emitUcomisXmmOp(code, src1: src1, src2: src2, precision: precision)
+		cvtSi2Float(dest, src, precision) then emitCvtSi2FloatOp(code, dest: dest, src: src, precision: precision)
+		cvttFloat2Si(dest, src, precision) then emitCvttFloat2SiOp(code, dest: dest, src: src, precision: precision)
+		cvtSd2Ss to andMaskRipRel then panic("X86 extended XMM op not yet implemented in binary emitter")
 		storeIndirect to repStosq then panic("X86 extended op not yet implemented in binary emitter")
 	end 'emit'
 end 'emitMaxX64Op'

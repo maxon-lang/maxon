@@ -122,6 +122,7 @@ function funcOpTempCount(op FuncOp) returns TempSlotCount
 		funcRef gives 0
 		tailCall gives 1
 		ret gives 0
+		param gives 0
 	end 'check'
 end 'funcOpTempCount'
 
@@ -238,3 +239,43 @@ function getJumpKindFromBinaryArith(op ArithBinaryOp) returns JumpKind throws No
 		default throws NotComparison.notComparison
 	end 'check'
 end 'getJumpKindFromBinaryArith'
+
+// Sentinel valueIds for params: slot N uses sentinel PARAM_SENTINEL_BASE + N.
+// Body SSA valueIds are small (typically < 100), so 1000000+ won't conflict.
+let PARAM_SENTINEL_BASE = 1000000
+
+export function paramSentinel(slotIdx VarSlot) returns RegInt
+	return PARAM_SENTINEL_BASE + slotIdx
+end 'paramSentinel'
+
+// Scan function for func.param ops and return a BoolArray of promoted param indices.
+export function scanPromotedParams(func MlirFunction) returns BoolArray
+	var promoted = BoolArray{}
+	for block in func.region.blocks 'scanBlocks'
+		for op in block.ops 'scanOps'
+			match op 'checkParam'
+				func(funcOp) then match funcOp 'checkFuncParam'
+					param(_, paramIndex, _) then markParamPromoted(promoted, paramIndex: paramIndex)
+					ret to tailCall then break 'checkFuncParam'
+				end 'checkFuncParam'
+				maxhl to cf then break 'checkParam'
+				memref to maxarm64 then break 'checkParam'
+			end 'checkParam'
+		end 'scanOps'
+	end 'scanBlocks'
+	return promoted
+end 'scanPromotedParams'
+
+function markParamPromoted(promoted BoolArray, paramIndex VarSlot)
+	while promoted.count() <= paramIndex 'grow'
+		promoted.push(false)
+	end 'grow'
+	promoted.set(paramIndex, value: true)
+end 'markParamPromoted'
+
+export function isParamPromoted(promoted BoolArray, paramIndex VarSlot) returns bool
+	if paramIndex >= promoted.count() 'outOfBounds'
+		return false
+	end 'outOfBounds'
+	return try promoted.get(paramIndex) otherwise false
+end 'isParamPromoted'

@@ -10,35 +10,34 @@ export function lowerMidToMaxX64(module MlirModule, target Target) returns MlirM
 	logDebug(LogCategory.mlir, message: () gives "Lowering Mid to MaxX64 dialect")
 	var result = createMlirModule()
 
-	let shadowSpace = match target.os 'osShadow'
-		windows gives 32
-		linux gives 0
-		macos gives 0
-	end 'osShadow'
-
 	let osDesc = makeOsDescriptor(target)
 
 	for srcFunc in module.functions 'eachFunc'
 		let funcName = String.from(srcFunc.name)
 		let logLowering = not isRuntimeFunction(funcName)
-		let dstFunc = lowerFunctionToX64(srcFunc, shadowSpace: shadowSpace, osDesc: osDesc, logLowering: logLowering)
+		let dstFunc = lowerFunctionToX64(srcFunc, osDesc: osDesc, logLowering: logLowering, allFunctions: module.functions)
 		result.functions.push(dstFunc)
 	end 'eachFunc'
 
 	return result
 end 'lowerMidToMaxX64'
 
-function lowerFunctionToX64(srcFunc MlirFunction, shadowSpace StackSize, osDesc OsDescriptor, logLowering bool) returns MlirFunction
+function lowerFunctionToX64(srcFunc MlirFunction, osDesc OsDescriptor, logLowering bool, allFunctions MlirFunctionArray) returns MlirFunction
 	var dstFunc = createMlirFunction(srcFunc.name, returnType: srcFunc.returnType)
 	dstFunc.paramCount = srcFunc.paramCount
+	dstFunc.paramTypes = srcFunc.paramTypes
 
 	// Phase 1: Compute variable stack space from memref slots.
-	// Variable slots use the convention: [rbp - (slotIndex+1)*8]
-	let maxParserSlot = computeMaxParserSlotInFunc(srcFunc)
-	var varStackSize = 0
-	if maxParserSlot >= 0 'hasVarSlots'
-		varStackSize = (maxParserSlot + 1) * 8
-	end 'hasVarSlots'
+	// Only allocate space for slots that are actually loaded — param slots
+	// are handled by the sentinel approach and don't need dedicated stack space
+	// unless they're loaded in non-entry blocks.
+	let loadedSlots = scanLoadedSlots(srcFunc)
+	var liveSlotCount = 0
+	for slot in loadedSlots 'countLive'
+		if slot + 1 > liveSlotCount 'updateMax'
+			liveSlotCount = slot + 1
+		end 'updateMax'
+	end 'countLive'
 
 	// Also count temp slots needed by SysOps (they still use slot-based addressing)
 	var sysOpTempCount = 0
@@ -57,23 +56,38 @@ function lowerFunctionToX64(srcFunc MlirFunction, shadowSpace StackSize, osDesc 
 		end 'checkPrintOp'
 	end 'checkPrint'
 
-	// Total variable area includes parser slots + sysop temp slots
-	let totalVarSlots = maxParserSlot + 1 + sysOpTempCount
-	varStackSize = totalVarSlots * 8
+	// Total variable area: only slots that survive Mem2Reg need stack space.
+	// Slot indices map directly to stack offsets, so use the max live slot index.
+	let totalVarSlots = liveSlotCount + sysOpTempCount
+	var varStackSize = totalVarSlots * 8
 
 	// Phase 2: Initialize register allocator.
 	// Spill slots start below the variable area (negative offsets from RBP).
+	// Ensure spillBaseOffset is negative even with zero variable slots,
+	// so the spill allocator grows downward (toward lower addresses).
+	var spillBase = 0 - varStackSize
 	let gprPool = createX64GprPool()
 	let callerSaved = createX64CallerSavedGprs()
 	let ccGprs = createX64CallConvGprs()
 	let fpPool = createX64FpPool()
 	let fpCallerSaved = createX64CallerSavedFps()
 	let ccFps = createX64CallConvFps()
-	var regState = createRegState(0 - varStackSize, gprPool: gprPool, callerSavedGprs: callerSaved, target: RegTarget.x64, callConvGprs: ccGprs, returnGprOrd: 0, errorFlagOrd: 2, indirectCallScratchOrd: 10, gprCycleBreakOrd: 10, hasXchg: true, fpPool: fpPool, callerSavedFps: fpCallerSaved, callConvFps: ccFps, returnFpOrd: 0, fpCycleBreakOrd: 15)
+	var regState = createRegState(spillBase, gprPool: gprPool, callerSavedGprs: callerSaved, target: RegTarget.x64, callConvGprs: ccGprs, returnGprOrd: 0, errorFlagOrd: 2, indirectCallScratchOrd: 10, gprCycleBreakOrd: 10, hasXchg: true, fpPool: fpPool, callerSavedFps: fpCallerSaved, callConvFps: ccFps, returnFpOrd: 0, fpCycleBreakOrd: 15)
 
-	// We still need ValueSlotMap for SysOp functions that use slot-based addressing
-	var nextTempSlot = maxParserSlot + 1
+	// Temp slots start after the live variable slots (not all parser slots,
+	// since promoted slots no longer need stack space).
+	var nextTempSlot = liveSlotCount
 	var valueSlots = ValueSlotMap{}
+	// Track last valueId stored to each slot for register forwarding
+	var slotLastStored = RegIntArray{}
+
+	// Scan for promoted params (func.param ops) — these are handled by lowerParamRA
+	// and should NOT get store-to-stack in emitParamSavesRegAlloc.
+	let promotedParams = scanPromotedParams(srcFunc)
+
+	// Pre-scan: mark values that are only consumed by sink ops (call/ret/tailCall)
+	// as deferred so the register allocator can skip eager materialization.
+	scanDeferredValues(srcFunc, regState: regState)
 
 	// Phase 3: Lower all blocks WITHOUT prologue.
 	var isFirstBlock = true
@@ -87,7 +101,8 @@ function lowerFunctionToX64(srcFunc MlirFunction, shadowSpace StackSize, osDesc 
 			// Do NOT emit prologue here -- we'll insert it after all lowering.
 			// Emit parameter saves: move params from ABI registers to their stack slots
 			// and also register them with the register allocator.
-			emitParamSavesRegAlloc(dstBlock, paramCount: srcFunc.paramCount)
+			// Promoted params (with func.param ops) only get register assignment, no stack store.
+			emitParamSavesRegAlloc(dstBlock, paramCount: srcFunc.paramCount, regState: regState, promotedParams: promotedParams)
 			entryBlock = dstBlock
 			isFirstBlock = false
 		end 'isEntry' else 'notEntry'
@@ -98,7 +113,7 @@ function lowerFunctionToX64(srcFunc MlirFunction, shadowSpace StackSize, osDesc 
 		// Lower each op in the block
 		for op in srcBlock.ops 'eachOp'
 			let opsBefore = dstBlock.ops.count()
-			nextTempSlot = lowerMlirOpRegAlloc(op, dstBlock: dstBlock, regState: regState, valueSlots: valueSlots, nextTempSlot: nextTempSlot, osDesc: osDesc)
+			nextTempSlot = lowerMlirOpRegAlloc(op, dstBlock: dstBlock, regState: regState, valueSlots: valueSlots, nextTempSlot: nextTempSlot, osDesc: osDesc, allFunctions: allFunctions, slotLastStored: slotLastStored)
 			if logLowering 'logOp'
 				logTrace(LogCategory.mlir, message: () gives "mid-to-x86: {formatLoweringResult(sourceOp: op, dstBlock: dstBlock, opsBefore: opsBefore)}")
 			end 'logOp'
@@ -108,7 +123,7 @@ function lowerFunctionToX64(srcFunc MlirFunction, shadowSpace StackSize, osDesc 
 		// Lower terminator
 		if srcBlock.hasTerminator 'hasTerm'
 			let opsBefore = dstBlock.ops.count()
-			lowerTerminatorRegAlloc(srcBlock, dstBlock: dstBlock, regState: regState)
+			lowerTerminatorRegAlloc(srcBlock, dstBlock: dstBlock, regState: regState, returnType: srcFunc.returnType)
 			if logLowering 'logTerm'
 				logTrace(LogCategory.mlir, message: () gives "mid-to-x86: {formatTerminatorResult(sourceOp: srcBlock.terminator, dstBlock: dstBlock, opsBefore: opsBefore)}")
 			end 'logTerm'
@@ -121,7 +136,6 @@ function lowerFunctionToX64(srcFunc MlirFunction, shadowSpace StackSize, osDesc 
 	// have allocated additional temp slots beyond the pre-scanned sysOpTempCount.
 	let actualVarStackSize = nextTempSlot * 8
 	let spillSize = rmTotalStackSize(regState)
-	// Detect if function has calls — shadow space is only needed for callers
 	var hasCalls = false
 	for blk in dstFunc.region.blocks 'scanCalls'
 		for op in blk.ops 'scanOp'
@@ -131,9 +145,6 @@ function lowerFunctionToX64(srcFunc MlirFunction, shadowSpace StackSize, osDesc 
 		end 'scanOp'
 	end 'scanCalls'
 	var totalStackSize = actualVarStackSize + spillSize
-	if hasCalls 'addShadow'
-		totalStackSize = totalStackSize + shadowSpace
-	end 'addShadow'
 	if hasPrint and totalStackSize == 0 'needPrintBuf'
 		totalStackSize = 16
 	end 'needPrintBuf'
@@ -145,19 +156,85 @@ function lowerFunctionToX64(srcFunc MlirFunction, shadowSpace StackSize, osDesc 
 		totalStackSize = totalStackSize + (16 - (totalStackSize mod 16))
 	end 'align'
 
-	// Insert prologue at the front of the entry block.
-	// Always emit prologue/epilogue (even for stackSize=0) so ret is present.
-	var newOps = MlirOpArray{}
-	newOps.push(MlirOp.maxx64(MaxX64Op.prologue(totalStackSize)))
-	for op in entryBlock.ops 'copyOps'
-		newOps.push(op)
-	end 'copyOps'
-	entryBlock.ops = newOps
+	if totalStackSize > 0 'hasFrame'
+		// Insert prologue at the front of the entry block
+		var newOps = MlirOpArray{}
+		newOps.push(MlirOp.maxx64(MaxX64Op.prologue(totalStackSize)))
+		for op in entryBlock.ops 'copyOps'
+			newOps.push(op)
+		end 'copyOps'
+		entryBlock.ops = newOps
+	end 'hasFrame' else 'noFrame'
+		// No stack frame needed — strip epilogue ops, keep ret ops
+		stripEpilogueOps(dstFunc)
+	end 'noFrame'
 
 	// Preserve region metadata
 	dstFunc.region.nextBlockId = srcFunc.region.nextBlockId
 	return dstFunc
 end 'lowerFunctionToX64'
+
+// Scan which variable slots are read by memref.load ops.
+// Slots only written (never loaded) are dead and don't need stack space.
+function scanLoadedSlots(func MlirFunction) returns VarSlotArray
+	var loaded = VarSlotArray{}
+	for block in func.region.blocks 'eachBlock'
+		for op in block.ops 'eachOp'
+			match op 'check'
+				memref(memOp) then match memOp 'checkMem'
+					loadSlot(_, slotId) then loaded.push(slotId)
+					storeSlot then break 'checkMem'
+				end 'checkMem'
+				maxhl to func then break 'check'
+				runtime to maxarm64 then break 'check'
+			end 'check'
+		end 'eachOp'
+	end 'eachBlock'
+	return loaded
+end 'scanLoadedSlots'
+
+function isSlotLoaded(loadedSlots VarSlotArray, slotId VarSlot) returns bool
+	for slot in loadedSlots 'search'
+		if slot == slotId 'found'
+			return true
+		end 'found'
+	end 'search'
+	return false
+end 'isSlotLoaded'
+
+function stripEpilogueOps(func MlirFunction)
+	var blockIdx = 0
+	while blockIdx < func.region.blocks.count() 'eachBlock'
+		var blk = try func.region.blocks.get(blockIdx) otherwise 'skip'
+			blockIdx = blockIdx + 1
+			continue
+		end 'skip'
+		var filteredOps = MlirOpArray{}
+		for op in blk.ops 'filterOp'
+			if not isEpilogueOp(op) 'keep'
+				filteredOps.push(op)
+			end 'keep'
+		end 'filterOp'
+		blk.ops = filteredOps
+		blockIdx = blockIdx + 1
+	end 'eachBlock'
+end 'stripEpilogueOps'
+
+function isEpilogueOp(op MlirOp) returns bool
+	return match op 'check'
+		maxhl to sys gives false
+		maxx64(x64Op) gives isX64Epilogue(x64Op)
+		maxarm64 gives false
+	end 'check'
+end 'isEpilogueOp'
+
+function isX64Epilogue(op MaxX64Op) returns bool
+	return match op 'check'
+		prologue gives false
+		epilogue gives true
+		ret to repStosq gives false
+	end 'check'
+end 'isX64Epilogue'
 
 // Check if an MlirOp is a callDirect (for detecting if function has calls)
 function isCallDirectOp(op MlirOp) returns bool
@@ -213,44 +290,205 @@ function sysTempCount(op SysOp) returns SlotIndex
 	end 'check'
 end 'sysTempCount'
 
-// Save parameter registers to their stack slots AND register with the allocator.
+// Register parameters with the allocator and store to stack slots.
+// The sentinel approach lets the allocator reuse ABI registers directly
+// for memref.load of param slots, avoiding redundant reloads.
 // Uses Maxon's internal calling convention: rcx, rdx, r8, r9, rsi, rdi, rax, rbx
-function emitParamSavesRegAlloc(dstBlock MlirBlock, paramCount ParamCount)
+function emitParamSavesRegAlloc(dstBlock MlirBlock, paramCount ParamCount, regState RegState, promotedParams BoolArray)
 	if paramCount == 0 'noParams'
 		return
 	end 'noParams'
 
-	// Save register params to their stack slots.
-	// Do NOT register with the register allocator — body SSA values start from valueId 0
-	// which would conflict with param valueIds. The body's memref.load operations will
-	// correctly register values with the allocator when they're needed.
 	let regParams = [X64Register.rcx, X64Register.rdx, X64Register.r8, X64Register.r9, X64Register.rsi, X64Register.rdi, X64Register.rax, X64Register.rbx]
+	let regParamLimit = regParams.count()
+
+	// Register params: assign ABI register to sentinel.
+	// For promoted params (handled by func.param op): only register the sentinel,
+	// do NOT store to stack — the func.param op will transfer from sentinel to body valueId.
+	// For non-promoted params: store to stack as before.
 	for(regIdx, reg) in regParams.enumerated() 'regParams'
-		if regIdx >= paramCount 'done'
+		if regIdx >= paramCount or regIdx >= regParamLimit 'done'
 			break
 		end 'done'
-		// Store param to its variable slot
-		dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.movSlot(regIdx, reg)))
+		let sentinel = paramSentinel(regIdx)
+		let regOrd = x64RegToOrdinal(reg)
+		rmAssign(regState, regOrdinal: regOrd, valueId: sentinel)
+		if not isParamPromoted(promotedParams, paramIndex: regIdx) 'notPromoted'
+			// Non-promoted: store to stack slot and note stack home.
+			dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.movSlot(regIdx, reg)))
+			let slotOffset = 0 - (regIdx + 1) * 8
+			rmNoteStoreToStack(regState, valueId: sentinel, stackOffset: slotOffset)
+		end 'notPromoted'
+		// Promoted params: sentinel stays in register only, no stack store.
+		// If evicted, the register manager allocates a fresh spill slot.
 	end 'regParams'
 
 	// Params 9+ are passed on the stack by the caller at [RBP+16], [RBP+24], etc.
 	var paramIdx = 8
 	while paramIdx < paramCount 'stackParams'
-		let rbpOffset = 16 + (paramIdx - 8) * 8
-		dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.loadRegRbpOffset(X64Register.rax, rbpOffset)))
-		dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.movSlot(paramIdx, X64Register.rax)))
+		if not isParamPromoted(promotedParams, paramIndex: paramIdx) 'notPromotedStack'
+			let rbpOffset = 16 + (paramIdx - 8) * 8
+			dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.loadRegRbpOffset(X64Register.rax, rbpOffset)))
+			dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.movSlot(paramIdx, X64Register.rax)))
+		end 'notPromotedStack'
 		paramIdx = paramIdx + 1
 	end 'stackParams'
 end 'emitParamSavesRegAlloc'
 
+// ============================================================
+// Deferred value pre-scan
+// ============================================================
+
+// Mark a value ID in a bitset (RegIntArray used as a sparse bit vector).
+function deferredBitSet(arr RegIntArray, id ValueId)
+	while arr.count() <= id 'grow'
+		arr.push(0)
+	end 'grow'
+	arr.set(id, value: 1)
+end 'deferredBitSet'
+
+// Mark two value IDs in a bitset.
+function deferredBitSet2(arr RegIntArray, id1 ValueId, id2 ValueId)
+	deferredBitSet(arr, id: id1)
+	deferredBitSet(arr, id: id2)
+end 'deferredBitSet2'
+
+// Mark three value IDs in a bitset.
+function deferredBitSet3(arr RegIntArray, id1 ValueId, id2 ValueId, id3 ValueId)
+	deferredBitSet(arr, id: id1)
+	deferredBitSet(arr, id: id2)
+	deferredBitSet(arr, id: id3)
+end 'deferredBitSet3'
+
+// Test whether a value ID is present in a bitset.
+function deferredBitTest(arr RegIntArray, id RegInt) returns bool
+	if id < 0 or id >= arr.count() 'outOfBounds'
+		return false
+	end 'outOfBounds'
+	let val = try arr.get(id) otherwise 0
+	return val == 1
+end 'deferredBitTest'
+
+// Add all consumed value IDs from a ValueIdArray to the given bitset.
+function deferredMarkIds(arr RegIntArray, ids ValueIdArray)
+	for id in ids 'each'
+		deferredBitSet(arr, id: id)
+	end 'each'
+end 'deferredMarkIds'
+
+// Mark a single value ID plus all IDs in a ValueIdArray into a bitset.
+function deferredMarkIdAndArray(arr RegIntArray, id ValueId, ids ValueIdArray)
+	deferredBitSet(arr, id: id)
+	deferredMarkIds(arr, ids: ids)
+end 'deferredMarkIdAndArray'
+
+// Classify a single MlirOp and record its consumed value IDs into sinkUsed or nonSinkUsed.
+function classifyOpForDeferred(op MlirOp, sinkUsed RegIntArray, nonSinkUsed RegIntArray)
+	match op 'classify'
+		arith(arithOp) then classifyArithForDeferred(arithOp, nonSinkUsed: nonSinkUsed)
+		cf(cfOp) then classifyCfForDeferred(cfOp, nonSinkUsed: nonSinkUsed)
+		func(funcOp) then classifyFuncForDeferred(funcOp, sinkUsed: sinkUsed)
+		memref(memOp) then classifyMemRefForDeferred(memOp, nonSinkUsed: nonSinkUsed)
+		runtime(rtOp) then classifyRuntimeForDeferred(rtOp, nonSinkUsed: nonSinkUsed)
+		sys(sysOp) then classifySysForDeferred(sysOp, nonSinkUsed: nonSinkUsed)
+		maxhl then break 'classify'
+		maxx64 then break 'classify'
+		maxarm64 then break 'classify'
+	end 'classify'
+end 'classifyOpForDeferred'
+
+function classifyArithForDeferred(op ArithOp, nonSinkUsed RegIntArray)
+	match op 'arith'
+		const then break 'arith'
+		unary(u) then deferredBitSet(nonSinkUsed, id: u.operandId)
+		binary(b) then deferredBitSet2(nonSinkUsed, id1: b.leftId, id2: b.rightId)
+	end 'arith'
+end 'classifyArithForDeferred'
+
+function classifyCfForDeferred(op CfOp, nonSinkUsed RegIntArray)
+	match op 'cf'
+		br then break 'cf'
+		condBr(condId, _, _) then deferredBitSet(nonSinkUsed, id: condId)
+	end 'cf'
+end 'classifyCfForDeferred'
+
+function classifyFuncForDeferred(op FuncOp, sinkUsed RegIntArray)
+	match op 'func'
+		ret(retValId) then deferredBitSet(sinkUsed, id: retValId)
+		call(_, _, argIds) then deferredMarkIds(sinkUsed, ids: argIds)
+		tryCall(_, _, argIds, _) then deferredMarkIds(sinkUsed, ids: argIds)
+		indirectCall(_, calleeId, argIds) then deferredMarkIdAndArray(sinkUsed, id: calleeId, ids: argIds)
+		funcRef then break 'func'
+		tailCall(_, argIds) then deferredMarkIds(sinkUsed, ids: argIds)
+		param then break 'func'
+	end 'func'
+end 'classifyFuncForDeferred'
+
+function classifyMemRefForDeferred(op MemRefOp, nonSinkUsed RegIntArray)
+	match op 'memref'
+		storeSlot(_, valueId) then deferredBitSet(nonSinkUsed, id: valueId)
+		loadSlot then break 'memref'
+	end 'memref'
+end 'classifyMemRefForDeferred'
+
+function classifyRuntimeForDeferred(op RuntimeOp, nonSinkUsed RegIntArray)
+	match op 'runtime'
+		printLiteral then break 'runtime'
+		printInt(valueId) then deferredBitSet(nonSinkUsed, id: valueId)
+	end 'runtime'
+end 'classifyRuntimeForDeferred'
+
+function classifySysForDeferred(op SysOp, nonSinkUsed RegIntArray)
+	match op 'sys'
+		syscall(_, _, argIds) then deferredMarkIds(nonSinkUsed, ids: argIds)
+		iatCall(_, _, argIds) then deferredMarkIds(nonSinkUsed, ids: argIds)
+		globalAddr then break 'sys'
+		memcpy(dstId, srcId, lenId) then deferredBitSet3(nonSinkUsed, id1: dstId, id2: srcId, id3: lenId)
+		stackAddr then break 'sys'
+		storeByte(baseId, offsetId, byteId) then deferredBitSet3(nonSinkUsed, id1: baseId, id2: offsetId, id3: byteId)
+		loadByte(_, baseId, offsetId) then deferredBitSet2(nonSinkUsed, id1: baseId, id2: offsetId)
+		osExit(codeId) then deferredBitSet(nonSinkUsed, id: codeId)
+		osWrite(ptrId, lenId) then deferredBitSet2(nonSinkUsed, id1: ptrId, id2: lenId)
+	end 'sys'
+end 'classifySysForDeferred'
+
+// Scan all ops in srcFunc and mark values that are ONLY consumed by sink ops
+// (func.ret, func.call, func.tryCall, func.tailCall, func.indirectCall) as deferred.
+function scanDeferredValues(srcFunc MlirFunction, regState RegState)
+	var sinkUsed = RegIntArray{}
+	var nonSinkUsed = RegIntArray{}
+
+	for block in srcFunc.region.blocks 'eachBlock'
+		for op in block.ops 'eachOp'
+			classifyOpForDeferred(op, sinkUsed: sinkUsed, nonSinkUsed: nonSinkUsed)
+		end 'eachOp'
+		// Also scan the terminator — it can be func.ret (sink) or cf.condBr (non-sink)
+		if block.hasTerminator 'hasTerm'
+			classifyOpForDeferred(block.terminator, sinkUsed: sinkUsed, nonSinkUsed: nonSinkUsed)
+		end 'hasTerm'
+	end 'eachBlock'
+
+	// Walk sinkUsed: any value that is sink-consumed but NOT non-sink-consumed is deferred.
+	var id = 0
+	while id < sinkUsed.count() 'markDeferred'
+		let inSink = try sinkUsed.get(id) otherwise 0
+		if inSink == 1 'isSink'
+			if not deferredBitTest(nonSinkUsed, id: id) 'notNonSink'
+				rmSetDeferred(regState, valueId: id)
+			end 'notNonSink'
+		end 'isSink'
+		id = id + 1
+	end 'markDeferred'
+end 'scanDeferredValues'
+
 // Lower a single mid-level op using register allocation.
-function lowerMlirOpRegAlloc(op MlirOp, dstBlock MlirBlock, regState RegState, valueSlots ValueSlotMap, nextTempSlot SlotIndex, osDesc OsDescriptor) returns SlotIndex
+function lowerMlirOpRegAlloc(op MlirOp, dstBlock MlirBlock, regState RegState, valueSlots ValueSlotMap, nextTempSlot SlotIndex, osDesc OsDescriptor, allFunctions MlirFunctionArray, slotLastStored RegIntArray) returns SlotIndex
 	var result = nextTempSlot
 	match op 'dispatch'
 		arith(arithOp) then lowerArithOpRA(arithOp, dstBlock: dstBlock, regState: regState)
-		memref(memOp) then lowerMemRefOpRA(memOp, dstBlock: dstBlock, regState: regState, valueSlots: valueSlots)
+		memref(memOp) then lowerMemRefOpRA(memOp, dstBlock: dstBlock, regState: regState, valueSlots: valueSlots, slotLastStored: slotLastStored)
 		runtime(rtOp) then lowerRuntimeOpRA(rtOp, dstBlock: dstBlock, regState: regState)
-		func(funcOp) then lowerFuncOpRA(funcOp, dstBlock: dstBlock, regState: regState)
+		func(funcOp) then lowerFuncOpRA(funcOp, dstBlock: dstBlock, regState: regState, allFunctions: allFunctions)
 		maxx64(x64Op) then dstBlock.ops.push(MlirOp.maxx64(x64Op))
 		sys(sysOp) then result = lowerSysOpRA(sysOp, dstBlock: dstBlock, regState: regState, valueSlots: valueSlots, nextTempSlot: nextTempSlot, osDesc: osDesc)
 		maxhl then result = nextTempSlot
@@ -273,22 +511,63 @@ function lowerArithOpRA(op ArithOp, dstBlock MlirBlock, regState RegState)
 end 'lowerArithOpRA'
 
 function lowerArithConstRA(op ArithConst, dstBlock MlirBlock, regState RegState)
-	// Record constant and allocate a register for it
-	rmEmitLoadImmediate(regState, valueId: op.resultId, value: op.value, dstBlock: dstBlock)
+	match op.opcode 'dispatch'
+		constI64 then rmEmitLoadImmediate(regState, valueId: op.resultId, value: op.value, dstBlock: dstBlock)
+		constF64 then lowerFloatConstRA(op.resultId, rawBits: op.value, dstBlock: dstBlock, regState: regState)
+	end 'dispatch'
 end 'lowerArithConstRA'
 
+// Float constant: load raw bits into GPR, spill to stack, then note FP stack home
+// so rmEnsureInFpRegister can reload the bits into an XMM register.
+function lowerFloatConstRA(resultId ValueId, rawBits ParsedInt, dstBlock MlirBlock, regState RegState)
+	// Load the raw IEEE 754 bits into a GPR
+	let gprOrd = rmAllocateRegister(regState, valueId: resultId, dstBlock: dstBlock, protect1: RM_NONE, protect2: RM_NONE)
+	let gprReg = ordinalToX64(gprOrd)
+	dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.movRegImm(gprReg, rawBits)))
+	// Spill the GPR to stack so the float bits are accessible via memory
+	rmEnsureSpilled(regState, valueId: resultId, dstBlock: dstBlock)
+	// Note FP stack home at the same offset so rmEnsureInFpRegister can find it
+	let stackOffset = rmGetOr(regState.valueStackHome, index: resultId, fallback: RM_NO_STACK_HOME)
+	rmNoteFpStoreToStack(regState, valueId: resultId, stackOffset: stackOffset)
+end 'lowerFloatConstRA'
+
 function lowerArithUnaryRA(op ArithUnaryOp, dstBlock MlirBlock, regState RegState)
-	// Get operand into a register
+	match op.opcode 'dispatch'
+		negI64 then lowerIntUnaryRA(op, dstBlock: dstBlock, regState: regState)
+		bitNotI64 then lowerIntUnaryRA(op, dstBlock: dstBlock, regState: regState)
+		fpToSiI64 then lowerFpToSiRA(op.resultId, operandId: op.operandId, dstBlock: dstBlock, regState: regState)
+		siToFpF64 then lowerSiToFpRA(op.resultId, operandId: op.operandId, dstBlock: dstBlock, regState: regState)
+	end 'dispatch'
+end 'lowerArithUnaryRA'
+
+function lowerIntUnaryRA(op ArithUnaryOp, dstBlock MlirBlock, regState RegState)
 	let operandOrd = rmEnsureInRegister(regState, valueId: op.operandId, dstBlock: dstBlock, protect1: RM_NONE, protect2: RM_NONE)
-	// Transfer to result (reuses the register)
 	rmTransferValue(regState, oldValueId: op.operandId, regOrdinal: operandOrd, newValueId: op.resultId)
 	let reg = ordinalToX64(operandOrd)
-	// Emit the unary operation
 	match op.opcode 'emit'
 		negI64 then dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.negReg(reg)))
 		bitNotI64 then dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.bitNotReg(reg)))
+		fpToSiI64 to siToFpF64 then panic("lowerIntUnaryRA: unexpected float opcode")
 	end 'emit'
-end 'lowerArithUnaryRA'
+end 'lowerIntUnaryRA'
+
+// Float-to-integer truncation: cvttsd2si
+function lowerFpToSiRA(resultId ValueId, operandId ValueId, dstBlock MlirBlock, regState RegState)
+	let srcOrd = rmEnsureInFpRegister(regState, valueId: operandId, dstBlock: dstBlock)
+	let srcXmm = ordinalToXmm(srcOrd)
+	let destOrd = rmAllocateRegister(regState, valueId: resultId, dstBlock: dstBlock, protect1: RM_NONE, protect2: RM_NONE)
+	let destReg = ordinalToX64(destOrd)
+	dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.cvttFloat2Si(destReg, srcXmm, FloatPrecision.f64)))
+end 'lowerFpToSiRA'
+
+// Integer-to-float conversion: cvtsi2sd
+function lowerSiToFpRA(resultId ValueId, operandId ValueId, dstBlock MlirBlock, regState RegState)
+	let srcOrd = rmEnsureInRegister(regState, valueId: operandId, dstBlock: dstBlock, protect1: RM_NONE, protect2: RM_NONE)
+	let srcReg = ordinalToX64(srcOrd)
+	let destOrd = rmAllocateFpRegister(regState, valueId: resultId, dstBlock: dstBlock)
+	let destXmm = ordinalToXmm(destOrd)
+	dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.cvtSi2Float(destXmm, srcReg, FloatPrecision.f64)))
+end 'lowerSiToFpRA'
 
 function lowerArithBinaryRA(op ArithBinaryOp, dstBlock MlirBlock, regState RegState)
 	let resultId = op.resultId
@@ -311,6 +590,10 @@ function lowerArithBinaryRA(op ArithBinaryOp, dstBlock MlirBlock, regState RegSt
 		cmpI64Le then lowerCmpOpRA(leftId, rightId: rightId, dstBlock: dstBlock, regState: regState)
 		cmpI64Gt then lowerCmpOpRA(leftId, rightId: rightId, dstBlock: dstBlock, regState: regState)
 		cmpI64Ge then lowerCmpOpRA(leftId, rightId: rightId, dstBlock: dstBlock, regState: regState)
+		addF64 then lowerFloatBinaryOpRA(resultId, leftId: leftId, rightId: rightId, opKind: FloatBinKind.add, dstBlock: dstBlock, regState: regState)
+		subF64 then lowerFloatBinaryOpRA(resultId, leftId: leftId, rightId: rightId, opKind: FloatBinKind.sub, dstBlock: dstBlock, regState: regState)
+		mulF64 then lowerFloatBinaryOpRA(resultId, leftId: leftId, rightId: rightId, opKind: FloatBinKind.mul, dstBlock: dstBlock, regState: regState)
+		divF64 then lowerFloatBinaryOpRA(resultId, leftId: leftId, rightId: rightId, opKind: FloatBinKind.div, dstBlock: dstBlock, regState: regState)
 		cmpF64Eq then lowerFloatCmpOpRA(leftId, rightId: rightId, dstBlock: dstBlock, regState: regState)
 		cmpF64Ne then lowerFloatCmpOpRA(leftId, rightId: rightId, dstBlock: dstBlock, regState: regState)
 		cmpF64Lt then lowerFloatCmpOpRA(leftId, rightId: rightId, dstBlock: dstBlock, regState: regState)
@@ -348,6 +631,30 @@ function lowerBinaryOpRA(resultId ValueId, leftId ValueId, rightId ValueId, opKi
 		bitXor then dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.xorRegReg(lhsReg, rhsReg)))
 	end 'emit'
 end 'lowerBinaryOpRA'
+
+// Float binary operation kinds
+enum FloatBinKind
+	add
+	sub
+	mul
+	div
+end 'FloatBinKind'
+
+// Float binary op: both operands in XMM registers, result in XMM register
+function lowerFloatBinaryOpRA(resultId ValueId, leftId ValueId, rightId ValueId, opKind FloatBinKind, dstBlock MlirBlock, regState RegState)
+	let rhsOrd = rmEnsureInFpRegister(regState, valueId: rightId, dstBlock: dstBlock)
+	let lhsOrd = rmEnsureInFpRegister(regState, valueId: leftId, dstBlock: dstBlock)
+	// Transfer LHS register to result (LHS is consumed by the operation)
+	rmTransferFpValue(regState, oldValueId: leftId, fpOrdinal: lhsOrd, newValueId: resultId)
+	let lhsXmm = ordinalToXmm(lhsOrd)
+	let rhsXmm = ordinalToXmm(rhsOrd)
+	match opKind 'emit'
+		add then dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.addXmm(lhsXmm, rhsXmm, FloatPrecision.f64)))
+		sub then dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.subXmm(lhsXmm, rhsXmm, FloatPrecision.f64)))
+		mul then dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.mulXmm(lhsXmm, rhsXmm, FloatPrecision.f64)))
+		div then dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.divXmm(lhsXmm, rhsXmm, FloatPrecision.f64)))
+	end 'emit'
+end 'lowerFloatBinaryOpRA'
 
 // Shift op: shift count must be in RCX (cl register).
 function lowerShiftOpRA(resultId ValueId, leftId ValueId, rightId ValueId, isLeft bool, dstBlock MlirBlock, regState RegState)
@@ -406,33 +713,13 @@ function lowerCmpOpRA(leftId ValueId, rightId ValueId, dstBlock MlirBlock, regSt
 	dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.cmpRegReg(lhsReg, rhsReg)))
 end 'lowerCmpOpRA'
 
-// Float compare (ucomisd) -- load from stack slots since we only have integer regalloc
+// Float compare (ucomisd) using XMM register allocation
 function lowerFloatCmpOpRA(leftId ValueId, rightId ValueId, dstBlock MlirBlock, regState RegState)
-	// Float comparisons still use XMM registers via slot-based ops.
-	// We need a slot for the float values - use rmEnsureInRegister then store,
-	// or if they already have a stack home use that.
-	// Actually the float values are loaded via movsd from slots -- we need slots.
-	// Float cmp uses ucomisd which works with xmm0/xmm1.
-	// The float values should already be on the stack from their definition.
-	// For now, fall through to the existing slot-based approach.
-	// Float values get their slot from the stack home in regState.
-	let leftHome = rmGetOr(regState.valueStackHome, index: leftId, fallback: RM_NO_STACK_HOME)
-	let rightHome = rmGetOr(regState.valueStackHome, index: rightId, fallback: RM_NO_STACK_HOME)
-	if leftHome != RM_NO_STACK_HOME and rightHome != RM_NO_STACK_HOME 'bothOnStack'
-		// Convert stack offsets back to slot indices: offset = -(slotId+1)*8, so slotId = (-offset/8) - 1
-		let leftSlot = (0 - leftHome) / 8 - 1
-		let rightSlot = (0 - rightHome) / 8 - 1
-		dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.loadF64Slot(rightSlot)))
-		dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.loadF64Slot(leftSlot)))
-		dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.ucomisd))
-	end 'bothOnStack' else 'fallback'
-		// If not on stack, treat like integer cmp
-		let rhsOrd = rmEnsureInRegister(regState, valueId: rightId, dstBlock: dstBlock, protect1: RM_NONE, protect2: RM_NONE)
-		let lhsOrd = rmEnsureInRegister(regState, valueId: leftId, dstBlock: dstBlock, protect1: rhsOrd, protect2: RM_NONE)
-		let lhsReg = ordinalToX64(lhsOrd)
-		let rhsReg = ordinalToX64(rhsOrd)
-		dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.cmpRegReg(lhsReg, rhsReg)))
-	end 'fallback'
+	let rhsOrd = rmEnsureInFpRegister(regState, valueId: rightId, dstBlock: dstBlock)
+	let lhsOrd = rmEnsureInFpRegister(regState, valueId: leftId, dstBlock: dstBlock)
+	let lhsXmm = ordinalToXmm(lhsOrd)
+	let rhsXmm = ordinalToXmm(rhsOrd)
+	dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.ucomisXmm(lhsXmm, rhsXmm, FloatPrecision.f64)))
 end 'lowerFloatCmpOpRA'
 
 // Division: IDIV uses RAX:RDX (dividend in RAX, sign-extended to RDX via CQO).
@@ -517,31 +804,100 @@ end 'findSafeDivRegister'
 // MemRef ops - register allocated
 // ============================================================
 
-function lowerMemRefOpRA(op MemRefOp, dstBlock MlirBlock, regState RegState, valueSlots ValueSlotMap)
+function lowerMemRefOpRA(op MemRefOp, dstBlock MlirBlock, regState RegState, valueSlots ValueSlotMap, slotLastStored RegIntArray)
 	match op 'lower'
-		storeSlot(slotId, valueId) then lowerStoreSlotRA(slotId, valueId: valueId, dstBlock: dstBlock, regState: regState, valueSlots: valueSlots)
-		loadSlot(resultId, slotId) then lowerLoadSlotRA(resultId, slotId: slotId, regState: regState, valueSlots: valueSlots)
+		storeSlot(slotId, valueId) then lowerStoreSlotRA(slotId, valueId: valueId, dstBlock: dstBlock, regState: regState, valueSlots: valueSlots, slotLastStored: slotLastStored)
+		loadSlot(resultId, slotId) then lowerLoadSlotRA(resultId, slotId: slotId, regState: regState, valueSlots: valueSlots, slotLastStored: slotLastStored)
 	end 'lower'
 end 'lowerMemRefOpRA'
 
-function lowerStoreSlotRA(slotId VarSlot, valueId ValueId, dstBlock MlirBlock, regState RegState, valueSlots ValueSlotMap)
-	// Ensure the value is in a register
+function lowerStoreSlotRA(slotId VarSlot, valueId ValueId, dstBlock MlirBlock, regState RegState, valueSlots ValueSlotMap, slotLastStored RegIntArray)
+	let slotOffset = 0 - (slotId + 1) * 8
+	// Track which valueId was last stored to this slot for register forwarding
+	while slotLastStored.count() <= slotId 'growSlotMap'
+		slotLastStored.push(RM_NONE)
+	end 'growSlotMap'
+	slotLastStored.set(slotId, value: valueId)
+	// Check if the value is in an FP register (float variable)
+	let fpOrd = rmGetOr(regState.valueToFp, index: valueId, fallback: RM_NONE)
+	if fpOrd != RM_NONE 'isFpValue'
+		let xmm = ordinalToXmm(fpOrd)
+		dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.spillXmmToStack(slotOffset, xmm, FloatPrecision.f64)))
+		rmNoteFpStoreToStack(regState, valueId: valueId, stackOffset: slotOffset)
+		rmNoteStoreToStack(regState, valueId: valueId, stackOffset: slotOffset)
+		valueSlotMapSet(valueSlots, valueId: valueId, slot: slotId)
+		return
+	end 'isFpValue'
+	// Check if value has an FP stack home (float that was spilled from XMM)
+	let fpHome = rmGetOr(regState.valueFpStackHome, index: valueId, fallback: RM_NO_STACK_HOME)
+	if fpHome != RM_NO_STACK_HOME 'fpOnStack'
+		// Reload into XMM, then spill to the variable slot
+		let xmmOrd = rmAllocateFpRegister(regState, valueId: valueId, dstBlock: dstBlock)
+		let xmm = ordinalToXmm(xmmOrd)
+		dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.reloadXmmFromStack(xmm, fpHome, FloatPrecision.f64)))
+		dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.spillXmmToStack(slotOffset, xmm, FloatPrecision.f64)))
+		rmNoteFpStoreToStack(regState, valueId: valueId, stackOffset: slotOffset)
+		rmNoteStoreToStack(regState, valueId: valueId, stackOffset: slotOffset)
+		valueSlotMapSet(valueSlots, valueId: valueId, slot: slotId)
+		return
+	end 'fpOnStack'
+	// Integer value — store from GPR
 	let valOrd = rmEnsureInRegister(regState, valueId: valueId, dstBlock: dstBlock, protect1: RM_NONE, protect2: RM_NONE)
 	let reg = ordinalToX64(valOrd)
-	// Emit store to the variable's stack slot
 	dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.movSlot(slotId, reg)))
-	// Record the stack home for this value
-	let slotOffset = 0 - (slotId + 1) * 8
 	rmNoteStoreToStack(regState, valueId: valueId, stackOffset: slotOffset)
-	// Also record in slot map for SysOps
 	valueSlotMapSet(valueSlots, valueId: valueId, slot: slotId)
 end 'lowerStoreSlotRA'
 
-function lowerLoadSlotRA(resultId ValueId, slotId VarSlot, regState RegState, valueSlots ValueSlotMap)
-	// Lazy load: just record that this value lives on the stack.
-	// The value will be loaded when rmEnsureInRegister is called.
+function lowerLoadSlotRA(resultId ValueId, slotId VarSlot, regState RegState, valueSlots ValueSlotMap, slotLastStored RegIntArray)
 	let slotOffset = 0 - (slotId + 1) * 8
+	// Try to forward the value from the register it was stored from,
+	// avoiding a redundant store-then-reload cycle.
+	let lastStored = rmGetOr(slotLastStored, index: slotId, fallback: RM_NONE)
+	if lastStored != RM_NONE 'hasLastStored'
+		// Check if the stored value is still in a register
+		let storedReg = rmGetOr(regState.valueToRegister, index: lastStored, fallback: RM_NONE)
+		if storedReg != RM_NONE 'stillInReg'
+			let regOccupant = rmGetOr(regState.registerContents, index: storedReg, fallback: RM_NONE)
+			if regOccupant == lastStored 'verified'
+				rmTransferValue(regState, oldValueId: lastStored, regOrdinal: storedReg, newValueId: resultId)
+				rmNoteStoreToStack(regState, valueId: resultId, stackOffset: slotOffset)
+				rmNoteFpStoreToStack(regState, valueId: resultId, stackOffset: slotOffset)
+				valueSlotMapSet(valueSlots, valueId: resultId, slot: slotId)
+				return
+			end 'verified'
+		end 'stillInReg'
+		// Check FP registers too
+		let storedFp = rmGetOr(regState.valueToFp, index: lastStored, fallback: RM_NONE)
+		if storedFp != RM_NONE 'stillInFp'
+			let fpOccupant = rmGetOr(regState.fpContents, index: storedFp, fallback: RM_NONE)
+			if fpOccupant == lastStored 'verifiedFp'
+				rmTransferFpValue(regState, oldValueId: lastStored, fpOrdinal: storedFp, newValueId: resultId)
+				rmNoteFpStoreToStack(regState, valueId: resultId, stackOffset: slotOffset)
+				rmNoteStoreToStack(regState, valueId: resultId, stackOffset: slotOffset)
+				valueSlotMapSet(valueSlots, valueId: resultId, slot: slotId)
+				return
+			end 'verifiedFp'
+		end 'stillInFp'
+	end 'hasLastStored'
+	// If the param sentinel for this slot is still in a register, transfer ownership
+	let sentinel = paramSentinel(slotId)
+	let sentinelReg = rmGetOr(regState.valueToRegister, index: sentinel, fallback: RM_NONE)
+	if sentinelReg != RM_NONE 'maybeSentinel'
+		let regOccupant = rmGetOr(regState.registerContents, index: sentinelReg, fallback: RM_NONE)
+		if regOccupant == sentinel 'paramInReg'
+			rmTransferValue(regState, oldValueId: sentinel, regOrdinal: sentinelReg, newValueId: resultId)
+			rmNoteStoreToStack(regState, valueId: resultId, stackOffset: slotOffset)
+			rmNoteFpStoreToStack(regState, valueId: resultId, stackOffset: slotOffset)
+			valueSlotMapSet(valueSlots, valueId: resultId, slot: slotId)
+			return
+		end 'paramInReg'
+	end 'maybeSentinel'
+	// Lazy load: just record that this value lives on the stack.
+	// The value will be loaded when rmEnsureInRegister or rmEnsureInFpRegister is called.
 	rmNoteValueOnStack(regState, valueId: resultId, stackOffset: slotOffset)
+	// Also note FP stack home so float variables can be loaded into XMM registers
+	rmNoteFpStoreToStack(regState, valueId: resultId, stackOffset: slotOffset)
 	// Also record in slot map for SysOps
 	valueSlotMapSet(valueSlots, valueId: resultId, slot: slotId)
 end 'lowerLoadSlotRA'
@@ -573,31 +929,76 @@ end 'lowerPrintIntRA'
 // Func ops - register allocated
 // ============================================================
 
-function lowerFuncOpRA(op FuncOp, dstBlock MlirBlock, regState RegState)
+function lowerFuncOpRA(op FuncOp, dstBlock MlirBlock, regState RegState, allFunctions MlirFunctionArray)
 	match op 'lower'
-		call(resultId, callee, argIds) then rmEmitCall(regState, dstBlock: dstBlock, callee: callee, argIds: argIds, resultId: resultId)
+		call(resultId, callee, argIds) then lowerCallRA(resultId, callee: callee, argIds: argIds, dstBlock: dstBlock, regState: regState, allFunctions: allFunctions)
 		tryCall(resultId, callee, argIds, errorFlagId) then rmEmitTryCall(regState, dstBlock: dstBlock, callee: callee, argIds: argIds, resultId: resultId, errorFlagId: errorFlagId)
 		indirectCall(resultId, calleeId, argIds) then rmEmitIndirectCallOp(regState, dstBlock: dstBlock, calleeId: calleeId, argIds: argIds, resultId: resultId)
 		funcRef(resultId, funcName) then lowerFuncRefRA(resultId, funcName: funcName, dstBlock: dstBlock, regState: regState)
 		ret then break 'lower'
 		tailCall then break 'lower'
+		param(resultId, paramIndex, _) then lowerParamRA(resultId, paramIndex: paramIndex, regState: regState)
 	end 'lower'
 end 'lowerFuncOpRA'
+
+function lowerCallRA(resultId ValueId, callee ByteArray, argIds ValueIdArray, dstBlock MlirBlock, regState RegState, allFunctions MlirFunctionArray)
+	rmEmitCall(regState, dstBlock: dstBlock, callee: callee, argIds: argIds, resultId: resultId)
+	// If callee returns float, the result is in XMM0, not RAX.
+	// Reassign the result from GPR to FP register.
+	let calleeReturnType = lookupFuncReturnType(callee, allFunctions: allFunctions)
+	if calleeReturnType == b"f64" 'floatResult'
+		// The call lowering assigned result to RAX — move it to XMM0
+		rmNoteValueDead(regState, valueId: resultId)
+		rmAssignFp(regState, fpOrdinal: regState.returnFpOrd, valueId: resultId)
+	end 'floatResult'
+end 'lowerCallRA'
+
+function lookupFuncReturnType(callee ByteArray, allFunctions MlirFunctionArray) returns ByteArray
+	for func in allFunctions 'search'
+		if func.name == callee 'found'
+			return func.returnType
+		end 'found'
+	end 'search'
+	return b""
+end 'lookupFuncReturnType'
 
 function lowerFuncRefRA(resultId ValueId, funcName ByteArray, dstBlock MlirBlock, regState RegState)
 	let reg = rmAllocateRegister(regState, valueId: resultId, dstBlock: dstBlock, protect1: RM_NONE, protect2: RM_NONE)
 	dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.leaFuncAddr(ordinalToX64(reg), funcName)))
 end 'lowerFuncRefRA'
 
+// Lower func.param: transfer the param value from the ABI register sentinel
+// to the body's resultId. The sentinel was registered by emitParamSavesRegAlloc.
+// Lower func.param for integer params. Float params are not promoted
+// (they need the memref store/load path for GPR→stack→XMM conversion).
+function lowerParamRA(resultId ValueId, paramIndex VarSlot, regState RegState)
+	let sentinel = paramSentinel(paramIndex)
+	let sentinelReg = rmGetOr(regState.valueToRegister, index: sentinel, fallback: RM_NONE)
+	if sentinelReg != RM_NONE 'maybeSentinel'
+		let regOccupant = rmGetOr(regState.registerContents, index: sentinelReg, fallback: RM_NONE)
+		if regOccupant == sentinel 'paramInReg'
+			rmTransferValue(regState, oldValueId: sentinel, regOrdinal: sentinelReg, newValueId: resultId)
+			return
+		end 'paramInReg'
+	end 'maybeSentinel'
+	// Sentinel was evicted — it was spilled to a spill slot by the register manager.
+	let sentinelHome = rmGetOr(regState.valueStackHome, index: sentinel, fallback: RM_NO_STACK_HOME)
+	if sentinelHome != RM_NO_STACK_HOME 'hasSpillHome'
+		rmNoteValueOnStack(regState, valueId: resultId, stackOffset: sentinelHome)
+		return
+	end 'hasSpillHome'
+	panic("lowerParamRA: promoted param sentinel has no register and no stack home")
+end 'lowerParamRA'
+
 // ============================================================
 // Terminators - register allocated
 // ============================================================
 
-function lowerTerminatorRegAlloc(srcBlock MlirBlock, dstBlock MlirBlock, regState RegState)
+function lowerTerminatorRegAlloc(srcBlock MlirBlock, dstBlock MlirBlock, regState RegState, returnType ByteArray)
 	match srcBlock.terminator 'dispatch'
 		maxhl to arith then break 'dispatch'
 		cf(cfOp) then lowerCfTerminatorRA(cfOp, srcBlock: srcBlock, dstBlock: dstBlock, regState: regState)
-		func(funcOp) then lowerFuncTerminatorRA(funcOp, dstBlock: dstBlock, regState: regState)
+		func(funcOp) then lowerFuncTerminatorRA(funcOp, dstBlock: dstBlock, regState: regState, returnType: returnType)
 		memref to sys then break 'dispatch'
 		maxx64(x64Op) then dstBlock.ops.push(MlirOp.maxx64(x64Op))
 		maxarm64 then break 'dispatch'
@@ -640,16 +1041,21 @@ function lowerBoolTestCondBrRA(condId ValueId, elseTarget BlockId, dstBlock Mlir
 	dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.condJump(X64JumpCondition.e, elseTarget)))
 end 'lowerBoolTestCondBrRA'
 
-function lowerFuncTerminatorRA(op FuncOp, dstBlock MlirBlock, regState RegState)
+function lowerFuncTerminatorRA(op FuncOp, dstBlock MlirBlock, regState RegState, returnType ByteArray)
 	match op 'lower'
-		ret(retValId) then lowerReturnOpRA(retValId, dstBlock: dstBlock, regState: regState)
-		call to tailCall then break 'lower'
+		ret(retValId) then lowerReturnOpRA(retValId, dstBlock: dstBlock, regState: regState, returnType: returnType)
+		call to param then break 'lower'
 	end 'lower'
 end 'lowerFuncTerminatorRA'
 
-function lowerReturnOpRA(retValId ValueId, dstBlock MlirBlock, regState RegState)
-	rmEnsureReturnValue(regState, dstBlock: dstBlock, retValId: retValId)
+function lowerReturnOpRA(retValId ValueId, dstBlock MlirBlock, regState RegState, returnType ByteArray)
+	if returnType == b"f64" 'floatReturn'
+		rmEnsureFpReturnValue(regState, dstBlock: dstBlock, retValId: retValId)
+	end 'floatReturn' else 'intReturn'
+		rmEnsureReturnValue(regState, dstBlock: dstBlock, retValId: retValId)
+	end 'intReturn'
 	dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.epilogue))
+	dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.ret))
 end 'lowerReturnOpRA'
 
 // ============================================================

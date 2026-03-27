@@ -62,8 +62,8 @@ end 'main'
 ```RequiredLowering:x86_64-windows
 maxhl-to-mid: %0 = maxon.literal {value = 42 : i64} -> %0 = arith.constant {value = 42 : i64}
 maxhl-to-mid: maxon.return %0 -> func.return %0
-mid-to-x86: %0 = arith.constant {value = 42 : i64} -> x86.mov rax, 42, x86.mov [rbp-8], rax
-mid-to-x86: func.return %0 -> x86.mov rax, [rbp-8], x86.epilogue
+mid-to-x86: %0 = arith.constant {value = 42 : i64} -> x86.mov rax, 42
+mid-to-x86: func.return %0 -> x86.epilogue, x86.ret
 ```
 
 <!-- test: return-function-call -->
@@ -372,6 +372,9 @@ module {
   }
 }
 ```
+
+
+
 
 
 

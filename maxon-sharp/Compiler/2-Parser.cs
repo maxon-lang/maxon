@@ -6290,24 +6290,19 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
       var assignOp = new MaxonAssignOp(name, initValue, isDeclaration: true, isMutable: isMutable, kind);
       if (forceHeap) assignOp.ForceHeap = true;
       _currentBlock!.AddOp(assignOp);
-      if (!isDiscard) {
-        _variables.Declare(name, kind, isMutable, initValue, _currentBlock!, structTypeName: structVal.TypeName);
-        // Fix temp ownership AFTER adding named var so __try_result_ ends up after it in the dict.
-        FixupTempOwnership();
-      }
+      _variables.Declare(name, kind, isMutable, initValue, _currentBlock!, structTypeName: structVal.TypeName);
+      // Fix temp ownership AFTER adding named var so __try_result_ ends up after it in the dict.
+      FixupTempOwnership();
     } else if (initValue is MaxonEnum enumVal) {
       var kind = MaxonValueKind.Enum;
       _currentBlock!.AddOp(new MaxonAssignOp(name, initValue, isDeclaration: true, isMutable: isMutable, kind));
-      if (!isDiscard) {
-        _variables.Declare(name, kind, isMutable, initValue, _currentBlock!, structTypeName: enumVal.TypeName);
-        FixupTempOwnership();
-      }
+      _variables.Declare(name, kind, isMutable, initValue, _currentBlock!, structTypeName: enumVal.TypeName);
+      FixupTempOwnership();
     } else if (initValue is MaxonFunctionPtr) {
       var kind = MaxonValueKind.Function;
       var fnType = GetFunctionTypeFromLastOp();
       _currentBlock!.AddOp(new MaxonAssignOp(name, initValue, isDeclaration: true, isMutable: isMutable, kind));
-      if (!isDiscard)
-        _variables.Declare(name, kind, isMutable, initValue, _currentBlock!, fnTypeName: fnType);
+      _variables.Declare(name, kind, isMutable, initValue, _currentBlock!, fnTypeName: fnType);
     } else {
       var kind = DetermineValueKind(initValue);
       var rangedTypeName = _lastRangedTypeName;
@@ -6333,8 +6328,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
         kind = MaxonValueKind.Float32;
       }
       _currentBlock!.AddOp(new MaxonAssignOp(name, initValue, isDeclaration: true, isMutable: isMutable, kind));
-      if (!isDiscard)
-        _variables.Declare(name, kind, isMutable, initValue, _currentBlock!, structTypeName: rangedTypeName);
+      _variables.Declare(name, kind, isMutable, initValue, _currentBlock!, structTypeName: rangedTypeName);
     }
   }
 
@@ -9733,6 +9727,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
 
     var mergeLabel = $"{matchLabel}.merge";
     var caseBlocks = new List<MlirBlock<MaxonOp>>();
+    var caseEndBlocks = new List<MlirBlock<MaxonOp>?>();
     var caseIsDefault = new List<bool>();
     var caseFallthrough = new List<bool>();
     var caseOuterScopes = new List<List<string>>();
@@ -9771,6 +9766,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
               $"'default' in a match on {DeclKeyword(enumType)} '{enumTypeName}' must be followed by 'throws <error>' or 'panic(\"message\")'",
               defaultToken.Line, defaultToken.Column);
           }
+          caseEndBlocks.Add(null); // throws/panic always terminate — no merge block
           caseIndex++;
           SkipNewlines();
           continue;
@@ -9779,12 +9775,14 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
         // For non-enum matches, 'default throws' and 'default panic' are allowed
         if (Check(TokenType.Throws)) {
           ParseDefaultThrowsCase(defaultToken, matchLabel, caseIndex, cmpBlocks, caseBlocks, caseIsDefault, caseFallthrough, caseOuterScopes);
+          caseEndBlocks.Add(null);
           caseIndex++;
           SkipNewlines();
           continue;
         }
         if (Check(TokenType.Panic)) {
           ParseDefaultPanicCase(defaultToken, matchLabel, caseIndex, cmpBlocks, caseBlocks, caseIsDefault, caseFallthrough, caseOuterScopes);
+          caseEndBlocks.Add(null);
           caseIndex++;
           SkipNewlines();
           continue;
@@ -9840,6 +9838,11 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
       var caseInnerScope = _variables.KeysSince(caseOuterScope);
       PopScope();
 
+      // After ParseStatement, _currentBlock may differ from caseBodyBlock if the
+      // statement was a nested match (or other branching construct). The nested
+      // construct's merge block becomes the effective exit point for this case arm.
+      var caseEndBlock = _currentBlock;
+
       bool hasFallthrough = false;
       if (Check(TokenType.And) && PeekNext().Type == TokenType.Fallthrough) {
         var andToken = Advance(); // consume 'and'
@@ -9853,6 +9856,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
       }
 
       caseBlocks.Add(caseBodyBlock);
+      caseEndBlocks.Add(caseEndBlock);
       caseIsDefault.Add(isDefault);
       caseFallthrough.Add(hasFallthrough);
       caseOuterScopes.Add(caseInnerScope);
@@ -9880,7 +9884,9 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
     bool anyBranchesToMerge = false;
     for (int i = 0; i < caseBlocks.Count; i++) {
       var caseBlock = caseBlocks[i];
+      var endBlock = caseEndBlocks[i];
       if (!BlockEndsWithTerminator(caseBlock)) {
+        // Simple case: case body block doesn't branch away — emit scope_end + branch here
         allTerminate = false;
         anyBranchesToMerge = true;
         caseBlock.AddOp(new MaxonScopeEndOp(caseOuterScopes[i]) { VarMetadata = _variables.GetScopeEndVarMetadata() });
@@ -9888,6 +9894,21 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
           caseBlock.AddOp(new MaxonBrOp($"{matchLabel}.case{i + 1}"));
         } else {
           caseBlock.AddOp(new MaxonBrOp(mergeLabel));
+        }
+      } else if (endBlock != null && endBlock != caseBlock && !BlockEndsWithTerminator(endBlock)) {
+        // Nested construct (e.g. inner match): the case body block branches into the
+        // nested construct's comparison chain, and flow exits through the nested
+        // construct's merge block (endBlock). Emit scope_end for the outer arm's
+        // bindings here so they are properly decreffed.
+        allTerminate = false;
+        anyBranchesToMerge = true;
+        if (caseOuterScopes[i].Count > 0) {
+          endBlock.AddOp(new MaxonScopeEndOp(caseOuterScopes[i]) { VarMetadata = _variables.GetScopeEndVarMetadata() });
+        }
+        if (caseFallthrough[i] && i + 1 < caseBlocks.Count) {
+          endBlock.AddOp(new MaxonBrOp($"{matchLabel}.case{i + 1}"));
+        } else {
+          endBlock.AddOp(new MaxonBrOp(mergeLabel));
         }
       } else if (BlockEndsBranchingToLabel(caseBlock, mergeLabel)) {
         // Case ends with a branch to merge (e.g. break) — flow continues after match

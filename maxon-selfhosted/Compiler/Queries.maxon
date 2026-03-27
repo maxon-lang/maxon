@@ -207,7 +207,9 @@ export function queryAllMid(project Project) returns MlirModule throws CompileEr
 	// Reset global data table for fresh lowering
 	project.globalData = createGlobalDataTable()
 	let valueIdRef = createValueIdRef(getNextValueId(project))
-	let result = lowerMaxHLToMid(liveModule, project: project, globalData: project.globalData, nextValueIdRef: valueIdRef)
+	let rawMid = lowerMaxHLToMid(liveModule, project: project, globalData: project.globalData, nextValueIdRef: valueIdRef)
+	// Promote memref slots to SSA where possible (mem2reg)
+	let result = promoteMem2Reg(rawMid, nextValueIdRef: valueIdRef)
 	// Update the project's value ID counter past any IDs allocated during lowering
 	setNextValueId(project, id: valueIdRef.nextId)
 

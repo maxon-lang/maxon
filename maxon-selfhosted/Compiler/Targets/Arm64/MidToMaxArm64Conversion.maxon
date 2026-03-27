@@ -23,6 +23,7 @@ end 'lowerMidToMaxArm64'
 function lowerFunctionToArm64(srcFunc MlirFunction, osDesc OsDescriptor, logLowering bool) returns MlirFunction
 	var dstFunc = createMlirFunction(srcFunc.name, returnType: srcFunc.returnType)
 	dstFunc.paramCount = srcFunc.paramCount
+	dstFunc.paramTypes = srcFunc.paramTypes
 
 	// Phase 1: Compute variable stack space from memref slots.
 	// Variable slots use the convention: [x29 - (slotIndex+1)*8]
@@ -70,6 +71,9 @@ function lowerFunctionToArm64(srcFunc MlirFunction, osDesc OsDescriptor, logLowe
 	var nextTempSlot = maxParserSlot + 1
 	var valueSlots = ValueSlotMap{}
 
+	// Scan for promoted params (func.param ops)
+	let promotedParams = scanPromotedParams(srcFunc)
+
 	// Phase 3: Lower all blocks WITHOUT prologue.
 	var isFirstBlock = true
 	var entryBlock = MlirBlock{id: 0, label: b"", ops: MlirOpArray{}, terminator: MlirOp.cf(CfOp.br(0)), hasTerminator: false}
@@ -82,7 +86,7 @@ function lowerFunctionToArm64(srcFunc MlirFunction, osDesc OsDescriptor, logLowe
 			// Do NOT emit prologue here -- we'll insert it after all lowering.
 			// Emit parameter saves: move params from AAPCS64 registers to their stack slots
 			// and register them with the register allocator.
-			emitParamSavesArm64RA(dstBlock, paramCount: srcFunc.paramCount)
+			emitParamSavesArm64RA(dstBlock, paramCount: srcFunc.paramCount, regState: regState, promotedParams: promotedParams)
 			entryBlock = dstBlock
 			isFirstBlock = false
 		end 'isEntry' else 'notEntry'
@@ -216,22 +220,26 @@ end 'sysTempCountArm64'
 
 // Save AAPCS64 parameter registers to their stack slots AND register with the allocator.
 // AAPCS64: x0-x7 for first 8 integer arguments
-function emitParamSavesArm64RA(dstBlock MlirBlock, paramCount ParamCount)
+function emitParamSavesArm64RA(dstBlock MlirBlock, paramCount ParamCount, regState RegState, promotedParams BoolArray)
 	if paramCount == 0 'noParams'
 		return
 	end 'noParams'
 
 	// Save AAPCS64 register params to their stack slots.
-	// Do NOT register with the register allocator — body SSA values start from valueId 0
-	// which would conflict with param valueIds. The body's memref.load operations will
-	// correctly register values with the allocator when they're needed.
+	// Promoted params (with func.param ops) get register assignment only, no stack store.
 	let regParams = [MaxArm64Register.x0, MaxArm64Register.x1, MaxArm64Register.x2, MaxArm64Register.x3, MaxArm64Register.x4, MaxArm64Register.x5, MaxArm64Register.x6, MaxArm64Register.x7]
 	for(regIdx, reg) in regParams.enumerated() 'regParams'
 		if regIdx >= paramCount 'done'
 			break
 		end 'done'
-		// Store param to its variable slot
-		dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.strToSlot(regIdx, reg)))
+		if isParamPromoted(promotedParams, paramIndex: regIdx) 'promoted'
+			// Promoted: register sentinel in ABI register, do not store to stack.
+			let sentinel = paramSentinel(regIdx)
+			let regOrd = arm64RegToOrdinal(reg)
+			rmAssign(regState, regOrdinal: regOrd, valueId: sentinel)
+		end 'promoted' else 'notPromoted'
+			dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.strToSlot(regIdx, reg)))
+		end 'notPromoted'
 	end 'regParams'
 
 	// Params 9+ would be on the stack (not yet supported for ARM64)
@@ -288,6 +296,7 @@ function lowerArithUnaryArm64RA(op ArithUnaryOp, dstBlock MlirBlock, regState Re
 	match op.opcode 'emit'
 		negI64 then dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.negReg(reg, reg)))
 		bitNotI64 then dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.mvnReg(reg, reg)))
+		fpToSiI64 to siToFpF64 then panic("ARM64 float conversion ops not yet implemented")
 	end 'emit'
 end 'lowerArithUnaryArm64RA'
 
@@ -307,6 +316,7 @@ function lowerArithBinaryArm64RA(op ArithBinaryOp, dstBlock MlirBlock, regState 
 		shlI64 then lowerBinaryOpArm64RA(resultId, leftId: leftId, rightId: rightId, opKind: Arm64BinKind.shl, dstBlock: dstBlock, regState: regState)
 		shrI64 then lowerBinaryOpArm64RA(resultId, leftId: leftId, rightId: rightId, opKind: Arm64BinKind.shr, dstBlock: dstBlock, regState: regState)
 		cmpI64Eq to cmpF64Ge then lowerCmpOpArm64RA(leftId, rightId: rightId, dstBlock: dstBlock, regState: regState)
+		addF64 to divF64 then panic("ARM64 float arithmetic ops not yet implemented")
 	end 'lower'
 end 'lowerArithBinaryArm64RA'
 
@@ -427,6 +437,7 @@ function lowerFuncOpArm64RA(op FuncOp, dstBlock MlirBlock, regState RegState)
 		funcRef(resultId, funcName) then lowerFuncRefArm64RA(resultId, funcName: funcName, dstBlock: dstBlock, regState: regState)
 		ret then break 'lower'
 		tailCall then break 'lower'
+		param(resultId, paramIndex, _) then lowerParamArm64RA(resultId, paramIndex: paramIndex, regState: regState)
 	end 'lower'
 end 'lowerFuncOpArm64RA'
 
@@ -434,6 +445,22 @@ function lowerFuncRefArm64RA(resultId ValueId, funcName ByteArray, dstBlock Mlir
 	let reg = rmAllocateRegister(regState, valueId: resultId, dstBlock: dstBlock, protect1: RM_NONE_ARM64, protect2: RM_NONE_ARM64)
 	dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.leaFuncAddr(ordinalToArm64(reg), funcName)))
 end 'lowerFuncRefArm64RA'
+
+// Lower func.param: transfer param from ABI register sentinel to body valueId.
+function lowerParamArm64RA(resultId ValueId, paramIndex VarSlot, regState RegState)
+	let sentinel = paramSentinel(paramIndex)
+	let sentinelReg = rmGetOr(regState.valueToRegister, index: sentinel, fallback: RM_NONE_ARM64)
+	if sentinelReg != RM_NONE_ARM64 'maybeSentinel'
+		let regOccupant = rmGetOr(regState.registerContents, index: sentinelReg, fallback: RM_NONE_ARM64)
+		if regOccupant == sentinel 'paramInReg'
+			rmTransferValue(regState, oldValueId: sentinel, regOrdinal: sentinelReg, newValueId: resultId)
+			return
+		end 'paramInReg'
+	end 'maybeSentinel'
+	// Sentinel was evicted — note value on stack at the param's slot offset
+	let slotOffset = 16 + paramIndex * 8
+	rmNoteValueOnStack(regState, valueId: resultId, stackOffset: slotOffset)
+end 'lowerParamArm64RA'
 
 // ============================================================
 // Terminators - register allocated
@@ -490,7 +517,7 @@ end 'lowerBoolTestCondBrArm64RA'
 function lowerFuncTerminatorArm64RA(op FuncOp, dstBlock MlirBlock, regState RegState)
 	match op 'lower'
 		ret(retValId) then lowerReturnOpArm64RA(retValId, dstBlock: dstBlock, regState: regState)
-		call to tailCall then break 'lower'
+		call to param then break 'lower'
 	end 'lower'
 end 'lowerFuncTerminatorArm64RA'
 

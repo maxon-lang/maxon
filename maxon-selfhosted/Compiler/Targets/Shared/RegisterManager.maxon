@@ -274,11 +274,11 @@ export function rmAdvanceOp(state RegState)
 	state.currentOpIndex = state.currentOpIndex + 1
 end 'rmAdvanceOp'
 
-// Allocate a new spill slot offset. Direction depends on spillBaseOffset:
-// - Negative base (x86): grow downward (nextSpillOffset -= 8, return new offset)
-// - Positive/zero base (ARM64): grow upward (return current offset, nextSpillOffset += 8)
+// Allocate a new spill slot offset. Direction depends on target:
+// - x86: grow downward (nextSpillOffset -= 8, return new offset)
+// - ARM64: grow upward (return current offset, nextSpillOffset += 8)
 function rmAllocateSpillSlot(state RegState) returns RegInt
-	if state.spillBaseOffset < 0 'growDown'
+	if rmSpillsGrowDown(state) 'growDown'
 		state.nextSpillOffset = state.nextSpillOffset - 8
 		return state.nextSpillOffset
 	end 'growDown' else 'growUp'
@@ -292,7 +292,7 @@ end 'rmAllocateSpillSlot'
 // x86 spills grow downward so we track the minimum offset;
 // ARM64 spills grow upward so we track the maximum offset.
 function rmUpdateSpillWatermark(state RegState)
-	if state.spillBaseOffset < 0 'x86Wm'
+	if rmSpillsGrowDown(state) 'x86Wm'
 		if state.nextSpillOffset < state.minSpillOffset 'updateMin'
 			state.minSpillOffset = state.nextSpillOffset
 		end 'updateMin'
@@ -305,7 +305,7 @@ function rmUpdateSpillWatermark(state RegState)
 end 'rmUpdateSpillWatermark'
 
 export function rmTotalStackSize(state RegState) returns RegInt
-	if state.spillBaseOffset < 0 'x86Style'
+	if rmSpillsGrowDown(state) 'x86Style'
 		// x86: spills grow downward — minSpillOffset tracks the lowest offset
 		var minOffset = state.minSpillOffset
 		if state.nextSpillOffset < minOffset 'updateMin'
@@ -330,6 +330,13 @@ export function rmTotalStackSize(state RegState) returns RegInt
 		return 0
 	end 'arm64Style'
 end 'rmTotalStackSize'
+
+function rmSpillsGrowDown(state RegState) returns bool
+	return match state.target 'check'
+		x64 gives true
+		arm64 gives false
+	end 'check'
+end 'rmSpillsGrowDown'
 
 // --- Target dispatch: emit ops ---
 
@@ -809,7 +816,7 @@ end 'rmEmitMovFp'
 
 // --- X86-64 FP target emission ---
 
-function ordinalToXmm(ordinal RegOrdinal) returns X64XmmRegister
+export function ordinalToXmm(ordinal RegOrdinal) returns X64XmmRegister
 	return try X64XmmRegister.fromRawValue(ordinal) otherwise 'bad'
 		panic("ordinalToXmm: invalid ordinal {ordinal}")
 	end 'bad'
@@ -877,6 +884,17 @@ export function rmTransferValue(state RegState, oldValueId RegInt, regOrdinal Re
 	rmSet(state.valueToRegister, index: newValueId, value: regOrdinal, sentinel: RM_NONE)
 	state.lastUsed.set(regOrdinal, value: state.currentOpIndex)
 end 'rmTransferValue'
+
+// Transfer FP value (reuse XMM register for new value)
+export function rmTransferFpValue(state RegState, oldValueId RegInt, fpOrdinal RegOrdinal, newValueId RegInt)
+	let oldFp = rmGetOr(state.valueToFp, index: oldValueId, fallback: RM_NONE)
+	if oldFp == fpOrdinal 'match'
+		rmSet(state.valueToFp, index: oldValueId, value: RM_NONE, sentinel: RM_NONE)
+	end 'match'
+	state.fpContents.set(fpOrdinal, value: newValueId)
+	rmSet(state.valueToFp, index: newValueId, value: fpOrdinal, sentinel: RM_NONE)
+	state.fpLastUsed.set(fpOrdinal, value: state.currentOpIndex)
+end 'rmTransferFpValue'
 
 // --- Caller-saved register management ---
 

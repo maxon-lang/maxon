@@ -127,16 +127,23 @@ function parseFunction(project Project, module MlirModule, tokens TokenArray, st
 	resetSymbolTable(project)
 
 	var paramCount = 0
+	var paramTypes = StdTypeArray{}
 	let firstParamToken = tokenAt(tokens, pos: pos)
 	if firstParamToken.kind != TokenKind.rightParen 'hasParams'
 		// Parse parameters: name Type, name Type, ...
 		while pos < tokens.count() 'paramLoop'
 			let paramNameToken = tokenAt(tokens, pos: pos)
 			pos = pos + 1  // skip param name
+			let paramTypeToken = tokenAt(tokens, pos: pos)
 			pos = pos + 1  // skip param type
 
+			// Resolve the parameter type to detect floats
+			let resolvedType = resolveTypeName(project, name: paramTypeToken.value)
+			let paramIsFloat = resolvedType == b"f64"
+
 			// Define the parameter as a variable so it's accessible in the body
-			let _ = defineVariable(project, name: paramNameToken.value, isFloat: false, isRefType: false)
+			let _ = defineVariable(project, name: paramNameToken.value, isFloat: paramIsFloat, isRefType: false)
+			paramTypes.push(resolvedTypeToStdType(resolvedType))
 			paramCount = paramCount + 1
 
 			let nextParamTok = tokenAt(tokens, pos: pos)
@@ -174,6 +181,9 @@ function parseFunction(project Project, module MlirModule, tokens TokenArray, st
 	end 'qualifyNonMain'
 	var func = createMlirFunction(funcName, returnType: returnTypeName)
 	func.paramCount = paramCount
+	func.paramTypes = paramTypes
+	// Register return type so callers can determine if result is float
+	project.funcReturnTypes.insert(funcName, value: returnTypeName)
 	var block = newBlock(func, label: b"entry")
 
 	// Parse function body
@@ -765,25 +775,38 @@ function infixBindingPower(kind TokenKind) returns BindingPower throws ParserErr
 	end 'bp'
 end 'infixBindingPower'
 
-function emitBinaryOp(block MlirBlock, kind TokenKind, resultId ValueId, leftId ValueId, rightId ValueId, leftIsFloat bool, rightIsFloat bool) throws ParserError
+function emitBinaryOp(project Project, block MlirBlock, kind TokenKind, resultId ValueId, leftId ValueId, rightId ValueId, leftIsFloat bool, rightIsFloat bool) throws ParserError
 	let isFloat = leftIsFloat or rightIsFloat
+	// Promote int operand to float when mixing int and float in arithmetic/comparison
+	var actualLeftId = leftId
+	var actualRightId = rightId
+	if isFloat and not leftIsFloat 'promoteLeft'
+		let promId = nextValueId(project)
+		emitOp(block, op: MlirOp.maxhl(MaxHLOp.intToFloat(promId, leftId)))
+		actualLeftId = promId
+	end 'promoteLeft'
+	if isFloat and not rightIsFloat 'promoteRight'
+		let promId = nextValueId(project)
+		emitOp(block, op: MlirOp.maxhl(MaxHLOp.intToFloat(promId, rightId)))
+		actualRightId = promId
+	end 'promoteRight'
 	let hlOp = match kind 'emit'
-		or gives MaxHLOp.binop(resultId, leftId, rightId, BinOpKind.bitOr)
-		xor gives MaxHLOp.binop(resultId, leftId, rightId, BinOpKind.bitXor)
-		and gives MaxHLOp.binop(resultId, leftId, rightId, BinOpKind.bitAnd)
-		shl gives MaxHLOp.binop(resultId, leftId, rightId, BinOpKind.shl)
-		shr gives MaxHLOp.binop(resultId, leftId, rightId, BinOpKind.shr)
-		equalsEquals gives MaxHLOp.cmp(resultId, leftId, rightId, CmpPredicate.eq, isFloat)
-		bangEquals gives MaxHLOp.cmp(resultId, leftId, rightId, CmpPredicate.ne, isFloat)
-		lessThan gives MaxHLOp.cmp(resultId, leftId, rightId, CmpPredicate.lt, isFloat)
-		lessEquals gives MaxHLOp.cmp(resultId, leftId, rightId, CmpPredicate.le, isFloat)
-		greaterThan gives MaxHLOp.cmp(resultId, leftId, rightId, CmpPredicate.gt, isFloat)
-		greaterEquals gives MaxHLOp.cmp(resultId, leftId, rightId, CmpPredicate.ge, isFloat)
-		plus gives MaxHLOp.binop(resultId, leftId, rightId, BinOpKind.add)
-		minus gives MaxHLOp.binop(resultId, leftId, rightId, BinOpKind.sub)
-		star gives MaxHLOp.binop(resultId, leftId, rightId, BinOpKind.mul)
-		slash gives MaxHLOp.binop(resultId, leftId, rightId, BinOpKind.div)
-		mod gives MaxHLOp.binop(resultId, leftId, rightId, BinOpKind.mod)
+		or gives MaxHLOp.binop(resultId, actualLeftId, actualRightId, BinOpKind.bitOr, false)
+		xor gives MaxHLOp.binop(resultId, actualLeftId, actualRightId, BinOpKind.bitXor, false)
+		and gives MaxHLOp.binop(resultId, actualLeftId, actualRightId, BinOpKind.bitAnd, false)
+		shl gives MaxHLOp.binop(resultId, actualLeftId, actualRightId, BinOpKind.shl, false)
+		shr gives MaxHLOp.binop(resultId, actualLeftId, actualRightId, BinOpKind.shr, false)
+		equalsEquals gives MaxHLOp.cmp(resultId, actualLeftId, actualRightId, CmpPredicate.eq, isFloat)
+		bangEquals gives MaxHLOp.cmp(resultId, actualLeftId, actualRightId, CmpPredicate.ne, isFloat)
+		lessThan gives MaxHLOp.cmp(resultId, actualLeftId, actualRightId, CmpPredicate.lt, isFloat)
+		lessEquals gives MaxHLOp.cmp(resultId, actualLeftId, actualRightId, CmpPredicate.le, isFloat)
+		greaterThan gives MaxHLOp.cmp(resultId, actualLeftId, actualRightId, CmpPredicate.gt, isFloat)
+		greaterEquals gives MaxHLOp.cmp(resultId, actualLeftId, actualRightId, CmpPredicate.ge, isFloat)
+		plus gives MaxHLOp.binop(resultId, actualLeftId, actualRightId, BinOpKind.add, isFloat)
+		minus gives MaxHLOp.binop(resultId, actualLeftId, actualRightId, BinOpKind.sub, isFloat)
+		star gives MaxHLOp.binop(resultId, actualLeftId, actualRightId, BinOpKind.mul, isFloat)
+		slash gives MaxHLOp.binop(resultId, actualLeftId, actualRightId, BinOpKind.div, isFloat)
+		mod gives MaxHLOp.binop(resultId, actualLeftId, actualRightId, BinOpKind.mod, false)
 		default throws ParserError.unhandledToken
 	end 'emit'
 	emitOp(block, op: MlirOp.maxhl(hlOp))
@@ -891,14 +914,12 @@ function parseExpressionBP(project Project, block MlirBlock, tokens TokenArray, 
 
 		let resultId = nextValueId(project)
 		let eitherIsFloat = leftIsFloat or right.isFloat
-		try emitBinaryOp(block, kind: opToken.kind, resultId: resultId, leftId: leftId, rightId: right.valueId, leftIsFloat: leftIsFloat, rightIsFloat: right.isFloat) otherwise ignore
+		try emitBinaryOp(project, block: block, kind: opToken.kind, resultId: resultId, leftId: leftId, rightId: right.valueId, leftIsFloat: leftIsFloat, rightIsFloat: right.isFloat) otherwise ignore
 		leftId = resultId
-		// Comparison ops produce int (bool), division always produces float, arithmetic on floats produces float
+		// Comparison ops produce int (bool), arithmetic on floats produces float
 		if opToken.kind == TokenKind.equalsEquals or opToken.kind == TokenKind.bangEquals or opToken.kind == TokenKind.lessThan or opToken.kind == TokenKind.lessEquals or opToken.kind == TokenKind.greaterThan or opToken.kind == TokenKind.greaterEquals 'isCmp'
 			leftIsFloat = false
-		end 'isCmp' else if opToken.kind == TokenKind.slash 'isDiv'
-			leftIsFloat = true
-		end 'isDiv' else 'notCmp'
+		end 'isCmp' else 'notCmp'
 			leftIsFloat = eitherIsFloat
 		end 'notCmp'
 		leftIsRefType = false
@@ -959,12 +980,15 @@ function parseIdentifierExpr(project Project, block MlirBlock, tokens TokenArray
 		end 'hasArgs'
 		pos = pos + 1  // skip ')'
 
-		// trunc() converts a float to int
+		// trunc() converts a float to int via cvttsd2si, or is a no-op on integers
 		if token.value == b"trunc" 'isTrunc'
-			if not lastArgIsFloat 'notFloat'
-				throw ParserError.typeError
-			end 'notFloat'
 			let truncArgId = try argIds.get(0) otherwise 0
+			if lastArgIsFloat 'isFloat'
+				let truncResultId = nextValueId(project)
+				emitOp(block, op: MlirOp.maxhl(MaxHLOp.truncFloat(truncResultId, truncArgId)))
+				return ExprResult{valueId: truncResultId, nextPos: pos, isFloat: false, isRefType: false, isStringConst: false, stringConstValue: ByteArray{}}
+			end 'isFloat'
+			// Integer argument — trunc is a no-op
 			return ExprResult{valueId: truncArgId, nextPos: pos, isFloat: false, isRefType: false, isStringConst: false, stringConstValue: ByteArray{}}
 		end 'isTrunc'
 
@@ -976,7 +1000,11 @@ function parseIdentifierExpr(project Project, block MlirBlock, tokens TokenArray
 		end 'qualifyCall'
 		let callId = nextValueId(project)
 		emitOp(block, op: MlirOp.maxhl(MaxHLOp.call(callId, calleeName, argIds)))
-		return ExprResult{valueId: callId, nextPos: pos, isFloat: false, isRefType: false, isStringConst: false, stringConstValue: ByteArray{}}
+		// Check if the callee returns a float type
+		let calleeReturnType = try project.funcReturnTypes.get(calleeName) otherwise b""
+		let resolvedReturnType = resolveTypeName(project, name: calleeReturnType)
+		let callReturnsFloat = resolvedReturnType == b"f64"
+		return ExprResult{valueId: callId, nextPos: pos, isFloat: callReturnsFloat, isRefType: false, isStringConst: false, stringConstValue: ByteArray{}}
 	end 'isCall'
 
 	// Check for compile-time string constant before variable lookup

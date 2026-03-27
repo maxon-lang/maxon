@@ -41,10 +41,14 @@ export union MaxHLOp
 	varStore(slotId VarSlot, valueId ValueId)
 
 	// Arithmetic and bitwise binary ops
-	binop(resultId ValueId, leftId ValueId, rightId ValueId, opKind BinOpKind)
+	binop(resultId ValueId, leftId ValueId, rightId ValueId, opKind BinOpKind, isFloat bool)
 
 	// Unary ops
 	unop(resultId ValueId, operandId ValueId, opKind UnaryOpKind)
+
+	// Float conversions
+	truncFloat(resultId ValueId, operandId ValueId)
+	intToFloat(resultId ValueId, operandId ValueId)
 
 	// Comparisons
 	cmp(resultId ValueId, leftId ValueId, rightId ValueId, predicate CmpPredicate, isFloat bool)
@@ -73,8 +77,10 @@ export function maxHLOpToString(op MaxHLOp, blocks MlirBlockArray) returns Strin
 		varDecl(slotId, valueId) gives "maxon.var_decl slot_{slotId}, %{valueId}"
 		varLoad(resultId, slotId) gives "%{resultId} = maxon.var_load slot_{slotId}"
 		varStore(slotId, valueId) gives "maxon.var_store slot_{slotId}, %{valueId}"
-		binop(resultId, leftId, rightId, opKind) gives "%{resultId} = maxon.binop %{leftId}, %{rightId} {lb}op = {opKind.rawValue}{rb} {lb}kind = i64{rb}"
+		binop(resultId, leftId, rightId, opKind, isFloat) gives "%{resultId} = maxon.binop %{leftId}, %{rightId} {lb}op = {opKind.rawValue}{rb} {lb}kind = {typeKind(isFloat)}{rb}"
 		unop(resultId, operandId, opKind) gives "%{resultId} = maxon.unop %{operandId} {lb}op = {opKind.rawValue}{rb} {lb}kind = i64{rb}"
+		truncFloat(resultId, operandId) gives "%{resultId} = maxon.trunc_float %{operandId}"
+		intToFloat(resultId, operandId) gives "%{resultId} = maxon.int_to_float %{operandId}"
 		cmp(resultId, leftId, rightId, predicate, isFloat) gives "%{resultId} = maxon.binop %{leftId}, %{rightId} {lb}op = {predicate.rawValue}{rb} {lb}kind = {typeKind(isFloat)}{rb}"
 		refEq(resultId, leftId, rightId, negate) gives "%{resultId} = maxon.{refEqMnemonic(negate)} %{leftId}, %{rightId}"
 		condBr(condId, thenTarget, elseTarget) gives maxHLCondBrToString(condId, thenTarget: thenTarget, elseTarget: elseTarget, blocks: blocks)
