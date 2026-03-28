@@ -1,0 +1,262 @@
+// Pass pipeline registry for the Maxon self-hosted compiler.
+// Defines the full compilation pipeline as an explicit, typed, extensible
+// sequence of passes. Each pass is a named variant of PassKind, dispatched
+// through runPipeline which calls the corresponding pass function.
+//
+// Pipeline phases:
+//   Phase 2: Memory Safety     — semantic checks, dead function elimination,
+//                                 maxon-to-arith lowering, borrow checking, drop injection
+//   Phase 3: SSA Construction  — mem2reg promotion
+//   Phase 4: Mid-Level Opt     — canonicalize, CSE, DCE
+//   Phase 5: System Resolution — maxon-to-sys-and-runtime, ABI lowering
+//   Phase 6: Generic Machine   — runtime augmentation, MIR conversion
+//   Phase 7: Target Execution  — target-specific lowering, scheduling, regalloc, prologue/epilogue
+
+export union PassKind
+	// Phase 2: Memory Safety
+	semanticCheck
+	deadFunctionElimination
+	convertMaxonToArith
+	borrowCheck
+	injectDrops
+	// Phase 3: SSA Construction
+	mem2reg
+	// Phase 4: Mid-Level Optimization
+	canonicalize
+	cse
+	dce
+	// Phase 5: System Resolution
+	convertMaxonToSysAndRuntime
+	lowerABI
+	// Phase 6: Generic Machine Lowering
+	augmentWithRuntime
+	convertToMir
+	// Phase 7: Target Execution
+	convertMirToTarget
+	scheduleInstructions
+	allocateRegisters
+	insertPrologueEpilogue
+end 'PassKind'
+
+export typealias PassKindArray = Array with PassKind
+
+// Mutable context threaded through the pipeline.
+// Holds all state that passes may read or mutate.
+export type PipelineContext
+	export var module MlirModule
+	export var project Project
+	export var globalData GlobalDataTable
+	export var nextValueIdRef ValueIdRef
+	export var target Target
+end 'PipelineContext'
+
+// Returns the full 17-pass default pipeline (phases 2-7).
+export function buildDefaultPipeline() returns PassKindArray
+	var passes = PassKindArray{}
+	// Phase 2: Memory Safety
+	passes.push(PassKind.semanticCheck)
+	passes.push(PassKind.deadFunctionElimination)
+	passes.push(PassKind.convertMaxonToArith)
+	passes.push(PassKind.borrowCheck)
+	passes.push(PassKind.injectDrops)
+	// Phase 3: SSA Construction
+	passes.push(PassKind.mem2reg)
+	// Phase 4: Mid-Level Optimization
+	passes.push(PassKind.canonicalize)
+	passes.push(PassKind.cse)
+	passes.push(PassKind.dce)
+	// Phase 5: System Resolution
+	passes.push(PassKind.convertMaxonToSysAndRuntime)
+	passes.push(PassKind.lowerABI)
+	// Phase 6: Generic Machine Lowering
+	passes.push(PassKind.augmentWithRuntime)
+	passes.push(PassKind.convertToMir)
+	// Phase 7: Target Execution
+	passes.push(PassKind.scheduleInstructions)
+	passes.push(PassKind.convertMirToTarget)
+	passes.push(PassKind.allocateRegisters)
+	passes.push(PassKind.insertPrologueEpilogue)
+	return passes
+end 'buildDefaultPipeline'
+
+// Returns the mid-level pipeline (phases 2-5).
+// This covers everything from semantic checks through ABI lowering,
+// but stops before runtime augmentation and target-specific lowering.
+export function buildMidPipeline() returns PassKindArray
+	var passes = PassKindArray{}
+	// Phase 2: Memory Safety
+	passes.push(PassKind.semanticCheck)
+	passes.push(PassKind.deadFunctionElimination)
+	passes.push(PassKind.convertMaxonToArith)
+	passes.push(PassKind.borrowCheck)
+	passes.push(PassKind.injectDrops)
+	// Phase 3: SSA Construction
+	passes.push(PassKind.mem2reg)
+	// Phase 4: Mid-Level Optimization
+	passes.push(PassKind.canonicalize)
+	passes.push(PassKind.cse)
+	passes.push(PassKind.dce)
+	// Phase 5: System Resolution
+	passes.push(PassKind.convertMaxonToSysAndRuntime)
+	passes.push(PassKind.lowerABI)
+	return passes
+end 'buildMidPipeline'
+
+// Returns the backend pipeline (phases 6-7).
+// Covers runtime augmentation through final target lowering.
+export function buildBackendPipeline() returns PassKindArray
+	var passes = PassKindArray{}
+	// Phase 6: Generic Machine Lowering
+	passes.push(PassKind.augmentWithRuntime)
+	passes.push(PassKind.convertToMir)
+	// Phase 7: Target Execution
+	passes.push(PassKind.scheduleInstructions)
+	passes.push(PassKind.convertMirToTarget)
+	passes.push(PassKind.allocateRegisters)
+	passes.push(PassKind.insertPrologueEpilogue)
+	return passes
+end 'buildBackendPipeline'
+
+// Runs each pass in the given array sequentially.
+// After each pass, checks for errors and throws if any exist.
+export function runPipeline(ctx PipelineContext, passes PassKindArray) throws CompileError
+	for pass in passes 'eachPass'
+		let name = passKindToString(pass)
+		logDebug(LogCategory.mlir, message: () gives "=== Running pass: {name} ===")
+
+		dispatchPass(ctx, pass: pass)
+
+		logTrace(LogCategory.mlir, message: () gives dumpModuleSummary(ctx.module, passName: name))
+
+		// Gate: stop pipeline if errors were reported
+		if hasErrors(ctx.project) 'checkErrors'
+			throw CompileError.compileError
+		end 'checkErrors'
+	end 'eachPass'
+end 'runPipeline'
+
+// Dispatches a single pass to the corresponding function.
+function dispatchPass(ctx PipelineContext, pass PassKind)
+	match pass 'dispatch'
+		// Phase 2: Memory Safety
+		semanticCheck then runSemanticChecks(ctx.project, module: ctx.module)
+
+		deadFunctionElimination then ctx.module = eliminateDeadFunctions(ctx.module)
+
+		convertMaxonToArith then ctx.module = convertMaxonToArith(ctx.module, project: ctx.project)
+
+		borrowCheck then ctx.module = runBorrowCheck(ctx.project, module: ctx.module)
+
+		injectDrops then ctx.module = injectDrops(ctx.module)
+
+		// Phase 3: SSA Construction
+		mem2reg then ctx.module = promoteMem2Reg(ctx.module, nextValueIdRef: ctx.nextValueIdRef)
+
+		// Phase 4: Mid-Level Optimization
+		canonicalize then ctx.module = canonicalize(ctx.module)
+
+		cse then ctx.module = eliminateCommonSubexpressions(ctx.module)
+
+		dce then ctx.module = eliminateDeadCode(ctx.module)
+
+		// Phase 5: System Resolution
+		convertMaxonToSysAndRuntime then ctx.module = convertMaxonToSysAndRuntime(ctx.module, globalData: ctx.globalData, nextValueIdRef: ctx.nextValueIdRef)
+
+		lowerABI then ctx.module = lowerABI(ctx.module, target: ctx.target)
+
+		// Phase 6: Generic Machine Lowering
+		augmentWithRuntime then ctx.module = augmentWithRuntime(ctx.module)
+
+		// Phase 6: Convert mid-level ops to target-independent MIR
+		convertToMir then ctx.module = convertToMir(ctx.module)
+
+		// Phase 7: Target Execution
+		convertMirToTarget then ctx.module = lowerToTarget(ctx.module, target: ctx.target)
+
+		scheduleInstructions then ctx.module = scheduleInstructions(ctx.module, target: ctx.target)
+
+		allocateRegisters then ctx.module = allocateRegisters(ctx.module, target: ctx.target)
+
+		insertPrologueEpilogue then ctx.module = insertPrologueEpilogue(ctx.module, target: ctx.target)
+	end 'dispatch'
+end 'dispatchPass'
+
+// Produces a summary of the module state for pipeline tracing.
+// Counts functions, blocks, ops, and per-dialect op counts.
+export function dumpModuleSummary(module MlirModule, passName String) returns String
+	var totalFuncs = 0
+	var totalBlocks = 0
+	var totalOps = 0
+	var nMaxhl = 0
+	var nArith = 0
+	var nCf = 0
+	var nFunc = 0
+	var nMemref = 0
+	var nRuntime = 0
+	var nSys = 0
+	var nMir = 0
+	var nX64 = 0
+	var nArm64 = 0
+
+	for func in module.functions 'eachFunc'
+		totalFuncs = totalFuncs + 1
+		for block in func.region.blocks 'eachBlock'
+			totalBlocks = totalBlocks + 1
+			for op in block.ops 'eachOp'
+				totalOps = totalOps + 1
+				match op 'classify'
+					maxhl then nMaxhl = nMaxhl + 1
+					arith then nArith = nArith + 1
+					cf then nCf = nCf + 1
+					func then nFunc = nFunc + 1
+					memref then nMemref = nMemref + 1
+					runtime then nRuntime = nRuntime + 1
+					sys then nSys = nSys + 1
+					mir then nMir = nMir + 1
+					maxx64 then nX64 = nX64 + 1
+					maxarm64 then nArm64 = nArm64 + 1
+				end 'classify'
+			end 'eachOp'
+			if block.hasTerminator 'countTerm'
+				totalOps = totalOps + 1
+				match block.terminator 'classifyTerm'
+					maxhl then nMaxhl = nMaxhl + 1
+					arith then nArith = nArith + 1
+					cf then nCf = nCf + 1
+					func then nFunc = nFunc + 1
+					memref then nMemref = nMemref + 1
+					runtime then nRuntime = nRuntime + 1
+					sys then nSys = nSys + 1
+					mir then nMir = nMir + 1
+					maxx64 then nX64 = nX64 + 1
+					maxarm64 then nArm64 = nArm64 + 1
+				end 'classifyTerm'
+			end 'countTerm'
+		end 'eachBlock'
+	end 'eachFunc'
+
+	return "=== After {passName} ===\nFunctions: {totalFuncs}, Blocks: {totalBlocks}, Ops: {totalOps}\n  maxhl: {nMaxhl}, arith: {nArith}, cf: {nCf}, func: {nFunc}, memref: {nMemref}, runtime: {nRuntime}, sys: {nSys}, mir: {nMir}, x64: {nX64}, arm64: {nArm64}"
+end 'dumpModuleSummary'
+
+// Returns a human-readable name for a pass, used for logging.
+export function passKindToString(pass PassKind) returns String
+	return match pass 'name'
+		semanticCheck gives "semantic-check"
+		deadFunctionElimination gives "dead-function-elimination"
+		convertMaxonToArith gives "convert-maxon-to-arith"
+		borrowCheck gives "borrow-check"
+		injectDrops gives "inject-drops"
+		mem2reg gives "mem2reg"
+		canonicalize gives "canonicalize"
+		cse gives "cse"
+		dce gives "dce"
+		convertMaxonToSysAndRuntime gives "convert-maxon-to-sys-and-runtime"
+		lowerABI gives "lower-abi"
+		augmentWithRuntime gives "augment-with-runtime"
+		convertToMir gives "convert-to-mir"
+		convertMirToTarget gives "convert-mir-to-target"
+		scheduleInstructions gives "schedule-instructions"
+		allocateRegisters gives "allocate-registers"
+		insertPrologueEpilogue gives "insert-prologue-epilogue"
+	end 'name'
+end 'passKindToString'

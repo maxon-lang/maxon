@@ -1,8 +1,19 @@
 // MlirBlock: a basic block in the control flow graph.
 // Contains a sequence of non-terminator ops and exactly one terminator.
+// Block arguments represent φ-nodes in SSA form — values passed from
+// predecessor blocks via branch argument lists.
 
 export typealias BlockId = int(0 to u64.max)
 export typealias BlockIdArray = Array with BlockId
+
+// A block argument (φ-node): a value defined at block entry, bound by
+// the branch op that transfers control to this block.
+export type MlirBlockArg
+	export var valueId ValueId
+	export var argType StdType
+end 'MlirBlockArg'
+
+export typealias MlirBlockArgArray = Array with MlirBlockArg
 
 export type MlirBlock
 	export var id BlockId
@@ -10,6 +21,7 @@ export type MlirBlock
 	export var ops MlirOpArray
 	export var terminator MlirOp
 	export var hasTerminator bool
+	export var blockArgs MlirBlockArgArray
 end 'MlirBlock'
 
 export typealias MlirBlockArray = Array with MlirBlock
@@ -19,7 +31,8 @@ export function createMlirBlock(id BlockId, label ByteArray) returns MlirBlock
 		id: id,
 		label: label,
 		ops: MlirOpArray{},
-		terminator: MlirOp.cf(CfOp.br(0)),
-		hasTerminator: false
+		terminator: MlirOp.cf(CfOp.br(0, ValueIdArray{})),
+		hasTerminator: false,
+		blockArgs: MlirBlockArgArray{}
 	}
 end 'createMlirBlock'

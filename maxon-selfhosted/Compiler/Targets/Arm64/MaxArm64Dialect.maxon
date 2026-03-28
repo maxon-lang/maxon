@@ -44,26 +44,60 @@ export enum MaxArm64CondCode
 	le = 13
 end 'MaxArm64CondCode'
 
+// Virtual register unions — all VRegs are initially physical.
+export union Arm64VReg
+	physical(reg MaxArm64Register)
+	virtual(id ValueId)
+end 'Arm64VReg'
+
+export union Arm64FpVReg
+	physical(reg MaxArm64FloatRegister)
+	virtual(id ValueId)
+end 'Arm64FpVReg'
+
+export function arm64VRegToString(vreg Arm64VReg) returns String
+	return match vreg 'fmt'
+		physical(reg) gives reg.name
+		virtual(id) gives "v{id}"
+	end 'fmt'
+end 'arm64VRegToString'
+
+export function arm64FpVRegToString(vreg Arm64FpVReg) returns String
+	return match vreg 'fmt'
+		physical(reg) gives reg.name
+		virtual(id) gives "vf{id}"
+	end 'fmt'
+end 'arm64FpVRegToString'
+
+// Wrap a physical register as a VReg (used during transition period)
+export function arm64PhysReg(reg MaxArm64Register) returns Arm64VReg
+	return Arm64VReg.physical(reg)
+end 'arm64PhysReg'
+
+export function arm64PhysFpReg(reg MaxArm64FloatRegister) returns Arm64FpVReg
+	return Arm64FpVReg.physical(reg)
+end 'arm64PhysFpReg'
+
 export union MaxArm64Op
 	prologue(stackSize StackSize)
 	epilogue
-	movImm(dest MaxArm64Register, value MachineWord)
-	strToSlot(slotIndex VarSlot, src MaxArm64Register)
-	ldrFromSlot(dest MaxArm64Register, slotIndex VarSlot)
-	addRegs(dest MaxArm64Register, src1 MaxArm64Register, src2 MaxArm64Register)
-	subRegs(dest MaxArm64Register, src1 MaxArm64Register, src2 MaxArm64Register)
-	mulRegs(dest MaxArm64Register, src1 MaxArm64Register, src2 MaxArm64Register)
-	sdivRegs(dest MaxArm64Register, src1 MaxArm64Register, src2 MaxArm64Register)
-	remRegs(dest MaxArm64Register, src1 MaxArm64Register, src2 MaxArm64Register)
-	negReg(dest MaxArm64Register, src MaxArm64Register)
-	mvnReg(dest MaxArm64Register, src MaxArm64Register)
-	andRegs(dest MaxArm64Register, src1 MaxArm64Register, src2 MaxArm64Register)
-	orrRegs(dest MaxArm64Register, src1 MaxArm64Register, src2 MaxArm64Register)
-	eorRegs(dest MaxArm64Register, src1 MaxArm64Register, src2 MaxArm64Register)
-	lslRegs(dest MaxArm64Register, src1 MaxArm64Register, src2 MaxArm64Register)
-	asrRegs(dest MaxArm64Register, src1 MaxArm64Register, src2 MaxArm64Register)
-	cmpRegs(src1 MaxArm64Register, src2 MaxArm64Register)
-	cmpRegZero(src MaxArm64Register)
+	movImm(dest Arm64VReg, value MachineWord)
+	strToSlot(slotIndex VarSlot, src Arm64VReg)
+	ldrFromSlot(dest Arm64VReg, slotIndex VarSlot)
+	addRegs(dest Arm64VReg, src1 Arm64VReg, src2 Arm64VReg)
+	subRegs(dest Arm64VReg, src1 Arm64VReg, src2 Arm64VReg)
+	mulRegs(dest Arm64VReg, src1 Arm64VReg, src2 Arm64VReg)
+	sdivRegs(dest Arm64VReg, src1 Arm64VReg, src2 Arm64VReg)
+	remRegs(dest Arm64VReg, src1 Arm64VReg, src2 Arm64VReg)
+	negReg(dest Arm64VReg, src Arm64VReg)
+	mvnReg(dest Arm64VReg, src Arm64VReg)
+	andRegs(dest Arm64VReg, src1 Arm64VReg, src2 Arm64VReg)
+	orrRegs(dest Arm64VReg, src1 Arm64VReg, src2 Arm64VReg)
+	eorRegs(dest Arm64VReg, src1 Arm64VReg, src2 Arm64VReg)
+	lslRegs(dest Arm64VReg, src1 Arm64VReg, src2 Arm64VReg)
+	asrRegs(dest Arm64VReg, src1 Arm64VReg, src2 Arm64VReg)
+	cmpRegs(src1 Arm64VReg, src2 Arm64VReg)
+	cmpRegZero(src Arm64VReg)
 	condBranch(condition MaxArm64CondCode, targetBlock BlockId)
 	branch(targetBlock BlockId)
 	branchLink(target ByteArray)
@@ -85,58 +119,58 @@ export union MaxArm64Op
 	// SysOp lowering: byte-by-byte copy
 	memcpyOp(dstSlot VarSlot, srcSlot VarSlot, lenSlot VarSlot)
 	// Register allocator ops
-	movRegReg(dest MaxArm64Register, src MaxArm64Register)
-	spillToStack(offset MachineWord, src MaxArm64Register)
-	reloadFromStack(dest MaxArm64Register, offset MachineWord)
+	movRegReg(dest Arm64VReg, src Arm64VReg)
+	spillToStack(offset MachineWord, src Arm64VReg)
+	reloadFromStack(dest Arm64VReg, offset MachineWord)
 	// Call support ops
-	branchLinkReg(reg MaxArm64Register)
+	branchLinkReg(reg Arm64VReg)
 	subSpImm(value StackSize)
 	addSpImm(value StackSize)
-	strToSpOffset(offset StackSize, src MaxArm64Register)
+	strToSpOffset(offset StackSize, src Arm64VReg)
 	// FP ops
-	fmovRegReg(dest MaxArm64FloatRegister, src MaxArm64FloatRegister, precision FloatPrecision)
-	spillFpToStack(offset MachineWord, src MaxArm64FloatRegister, precision FloatPrecision)
-	reloadFpFromStack(dest MaxArm64FloatRegister, offset MachineWord, precision FloatPrecision)
-	fmovToFloat(dest MaxArm64FloatRegister, src MaxArm64Register, precision FloatPrecision)
-	fmovToGpr(dest MaxArm64Register, src MaxArm64FloatRegister, precision FloatPrecision)
-	fpLoadRdata(dest MaxArm64FloatRegister, rdataLabel ByteArray, precision FloatPrecision)
-	fadd(dest MaxArm64FloatRegister, src1 MaxArm64FloatRegister, src2 MaxArm64FloatRegister, precision FloatPrecision)
-	fsub(dest MaxArm64FloatRegister, src1 MaxArm64FloatRegister, src2 MaxArm64FloatRegister, precision FloatPrecision)
-	fmul(dest MaxArm64FloatRegister, src1 MaxArm64FloatRegister, src2 MaxArm64FloatRegister, precision FloatPrecision)
-	fdiv(dest MaxArm64FloatRegister, src1 MaxArm64FloatRegister, src2 MaxArm64FloatRegister, precision FloatPrecision)
-	fsqrt(dest MaxArm64FloatRegister, src MaxArm64FloatRegister, precision FloatPrecision)
-	fabs(dest MaxArm64FloatRegister, src MaxArm64FloatRegister, precision FloatPrecision)
-	fneg(dest MaxArm64FloatRegister, src MaxArm64FloatRegister, precision FloatPrecision)
-	fcmp(src1 MaxArm64FloatRegister, src2 MaxArm64FloatRegister, precision FloatPrecision)
-	scvtf(dest MaxArm64FloatRegister, src MaxArm64Register, precision FloatPrecision)
-	fcvtzs(dest MaxArm64Register, src MaxArm64FloatRegister, precision FloatPrecision)
-	fcvt(dest MaxArm64FloatRegister, src MaxArm64FloatRegister, destPrecision FloatPrecision)
-	frintm(dest MaxArm64FloatRegister, src MaxArm64FloatRegister, precision FloatPrecision)
-	frintp(dest MaxArm64FloatRegister, src MaxArm64FloatRegister, precision FloatPrecision)
-	frintz(dest MaxArm64FloatRegister, src MaxArm64FloatRegister, precision FloatPrecision)
-	frintn(dest MaxArm64FloatRegister, src MaxArm64FloatRegister, precision FloatPrecision)
+	fmovRegReg(dest Arm64FpVReg, src Arm64FpVReg, precision FloatPrecision)
+	spillFpToStack(offset MachineWord, src Arm64FpVReg, precision FloatPrecision)
+	reloadFpFromStack(dest Arm64FpVReg, offset MachineWord, precision FloatPrecision)
+	fmovToFloat(dest Arm64FpVReg, src Arm64VReg, precision FloatPrecision)
+	fmovToGpr(dest Arm64VReg, src Arm64FpVReg, precision FloatPrecision)
+	fpLoadRdata(dest Arm64FpVReg, rdataLabel ByteArray, precision FloatPrecision)
+	fadd(dest Arm64FpVReg, src1 Arm64FpVReg, src2 Arm64FpVReg, precision FloatPrecision)
+	fsub(dest Arm64FpVReg, src1 Arm64FpVReg, src2 Arm64FpVReg, precision FloatPrecision)
+	fmul(dest Arm64FpVReg, src1 Arm64FpVReg, src2 Arm64FpVReg, precision FloatPrecision)
+	fdiv(dest Arm64FpVReg, src1 Arm64FpVReg, src2 Arm64FpVReg, precision FloatPrecision)
+	fsqrt(dest Arm64FpVReg, src Arm64FpVReg, precision FloatPrecision)
+	fabs(dest Arm64FpVReg, src Arm64FpVReg, precision FloatPrecision)
+	fneg(dest Arm64FpVReg, src Arm64FpVReg, precision FloatPrecision)
+	fcmp(src1 Arm64FpVReg, src2 Arm64FpVReg, precision FloatPrecision)
+	scvtf(dest Arm64FpVReg, src Arm64VReg, precision FloatPrecision)
+	fcvtzs(dest Arm64VReg, src Arm64FpVReg, precision FloatPrecision)
+	fcvt(dest Arm64FpVReg, src Arm64FpVReg, destPrecision FloatPrecision)
+	frintm(dest Arm64FpVReg, src Arm64FpVReg, precision FloatPrecision)
+	frintp(dest Arm64FpVReg, src Arm64FpVReg, precision FloatPrecision)
+	frintz(dest Arm64FpVReg, src Arm64FpVReg, precision FloatPrecision)
+	frintn(dest Arm64FpVReg, src Arm64FpVReg, precision FloatPrecision)
 	// FP indirect memory ops
-	fpStoreIndirect(baseReg MaxArm64Register, offset MachineWord, src MaxArm64FloatRegister, precision FloatPrecision)
-	fpLoadIndirect(dest MaxArm64FloatRegister, baseReg MaxArm64Register, offset MachineWord, precision FloatPrecision)
+	fpStoreIndirect(baseReg Arm64VReg, offset MachineWord, src Arm64FpVReg, precision FloatPrecision)
+	fpLoadIndirect(dest Arm64FpVReg, baseReg Arm64VReg, offset MachineWord, precision FloatPrecision)
 	// Indirect memory ops (GPR)
-	storeIndirect(baseReg MaxArm64Register, offset MachineWord, srcReg MaxArm64Register, size MachineWord)
-	loadIndirect(destReg MaxArm64Register, baseReg MaxArm64Register, offset MachineWord, size MachineWord)
+	storeIndirect(baseReg Arm64VReg, offset MachineWord, srcReg Arm64VReg, size MachineWord)
+	loadIndirect(destReg Arm64VReg, baseReg Arm64VReg, offset MachineWord, size MachineWord)
 	// Global variable ops
-	globalLoad(dest MaxArm64Register, name ByteArray, size MachineWord)
-	globalStore(name ByteArray, src MaxArm64Register, size MachineWord)
-	globalLoadFloat(dest MaxArm64FloatRegister, name ByteArray, precision FloatPrecision)
-	globalStoreFloat(name ByteArray, src MaxArm64FloatRegister, precision FloatPrecision)
+	globalLoad(dest Arm64VReg, name ByteArray, size MachineWord)
+	globalStore(name ByteArray, src Arm64VReg, size MachineWord)
+	globalLoadFloat(dest Arm64FpVReg, name ByteArray, precision FloatPrecision)
+	globalStoreFloat(name ByteArray, src Arm64FpVReg, precision FloatPrecision)
 	// LEA ops
-	leaFromStack(dest MaxArm64Register, stackOffset MachineWord)
-	leaRdata(dest MaxArm64Register, rdataLabel ByteArray)
-	leaFuncAddr(dest MaxArm64Register, funcName ByteArray)
+	leaFromStack(dest Arm64VReg, stackOffset MachineWord)
+	leaRdata(dest Arm64VReg, rdataLabel ByteArray)
+	leaFuncAddr(dest Arm64VReg, funcName ByteArray)
 	// Conditional ops
-	cset(dest MaxArm64Register, condition MaxArm64CondCode)
-	csel(dest MaxArm64Register, src1 MaxArm64Register, src2 MaxArm64Register, condition MaxArm64CondCode)
+	cset(dest Arm64VReg, condition MaxArm64CondCode)
+	csel(dest Arm64VReg, src1 Arm64VReg, src2 Arm64VReg, condition MaxArm64CondCode)
 	// Width conversion ops
-	sxtw(dest MaxArm64Register, src MaxArm64Register)
+	sxtw(dest Arm64VReg, src Arm64VReg)
 	// Null-safe load
-	nullSafeLoad(dest MaxArm64Register, baseReg MaxArm64Register, offset MachineWord)
+	nullSafeLoad(dest Arm64VReg, baseReg Arm64VReg, offset MachineWord)
 end 'MaxArm64Op'
 
 export typealias MaxArm64OpArray = Array with MaxArm64Op
@@ -149,23 +183,23 @@ export function maxArm64OpToString(op MaxArm64Op, blocks MlirBlockArray) returns
 	return match op 'toString'
 		prologue(stackSize) gives "arm64.prologue stack_size={stackSize}"
 		epilogue gives "arm64.epilogue\n    arm64.ret"
-		movImm(dest, value) gives "arm64.mov {dest.name}, #{value}"
-		strToSlot(slotIndex, src) gives "arm64.str {src.name}, [x29, #{arm64SlotOffset(slotIndex)}]"
-		ldrFromSlot(dest, slotIndex) gives "arm64.ldr {dest.name}, [x29, #{arm64SlotOffset(slotIndex)}]"
-		addRegs(dest, src1, src2) gives "arm64.add {dest.name}, {src1.name}, {src2.name}"
-		subRegs(dest, src1, src2) gives "arm64.sub {dest.name}, {src1.name}, {src2.name}"
-		mulRegs(dest, src1, src2) gives "arm64.mul {dest.name}, {src1.name}, {src2.name}"
-		sdivRegs(dest, src1, src2) gives "arm64.sdiv {dest.name}, {src1.name}, {src2.name}"
-		remRegs(dest, src1, src2) gives "arm64.msub {dest.name}, {src1.name}, {src2.name}"
-		negReg(dest, src) gives "arm64.neg {dest.name}, {src.name}"
-		mvnReg(dest, src) gives "arm64.mvn {dest.name}, {src.name}"
-		andRegs(dest, src1, src2) gives "arm64.and {dest.name}, {src1.name}, {src2.name}"
-		orrRegs(dest, src1, src2) gives "arm64.orr {dest.name}, {src1.name}, {src2.name}"
-		eorRegs(dest, src1, src2) gives "arm64.eor {dest.name}, {src1.name}, {src2.name}"
-		lslRegs(dest, src1, src2) gives "arm64.lslv {dest.name}, {src1.name}, {src2.name}"
-		asrRegs(dest, src1, src2) gives "arm64.asrv {dest.name}, {src1.name}, {src2.name}"
-		cmpRegs(src1, src2) gives "arm64.cmp {src1.name}, {src2.name}"
-		cmpRegZero(src) gives "arm64.cmp {src.name}, #0"
+		movImm(dest, value) gives "arm64.mov {arm64VRegToString(dest)}, #{value}"
+		strToSlot(slotIndex, src) gives "arm64.str {arm64VRegToString(src)}, [x29, #{arm64SlotOffset(slotIndex)}]"
+		ldrFromSlot(dest, slotIndex) gives "arm64.ldr {arm64VRegToString(dest)}, [x29, #{arm64SlotOffset(slotIndex)}]"
+		addRegs(dest, src1, src2) gives "arm64.add {arm64VRegToString(dest)}, {arm64VRegToString(src1)}, {arm64VRegToString(src2)}"
+		subRegs(dest, src1, src2) gives "arm64.sub {arm64VRegToString(dest)}, {arm64VRegToString(src1)}, {arm64VRegToString(src2)}"
+		mulRegs(dest, src1, src2) gives "arm64.mul {arm64VRegToString(dest)}, {arm64VRegToString(src1)}, {arm64VRegToString(src2)}"
+		sdivRegs(dest, src1, src2) gives "arm64.sdiv {arm64VRegToString(dest)}, {arm64VRegToString(src1)}, {arm64VRegToString(src2)}"
+		remRegs(dest, src1, src2) gives "arm64.msub {arm64VRegToString(dest)}, {arm64VRegToString(src1)}, {arm64VRegToString(src2)}"
+		negReg(dest, src) gives "arm64.neg {arm64VRegToString(dest)}, {arm64VRegToString(src)}"
+		mvnReg(dest, src) gives "arm64.mvn {arm64VRegToString(dest)}, {arm64VRegToString(src)}"
+		andRegs(dest, src1, src2) gives "arm64.and {arm64VRegToString(dest)}, {arm64VRegToString(src1)}, {arm64VRegToString(src2)}"
+		orrRegs(dest, src1, src2) gives "arm64.orr {arm64VRegToString(dest)}, {arm64VRegToString(src1)}, {arm64VRegToString(src2)}"
+		eorRegs(dest, src1, src2) gives "arm64.eor {arm64VRegToString(dest)}, {arm64VRegToString(src1)}, {arm64VRegToString(src2)}"
+		lslRegs(dest, src1, src2) gives "arm64.lslv {arm64VRegToString(dest)}, {arm64VRegToString(src1)}, {arm64VRegToString(src2)}"
+		asrRegs(dest, src1, src2) gives "arm64.asrv {arm64VRegToString(dest)}, {arm64VRegToString(src1)}, {arm64VRegToString(src2)}"
+		cmpRegs(src1, src2) gives "arm64.cmp {arm64VRegToString(src1)}, {arm64VRegToString(src2)}"
+		cmpRegZero(src) gives "arm64.cmp {arm64VRegToString(src)}, #0"
 		condBranch(condition, targetBlock) gives "arm64.b.{condition.name} {resolveBlockLabel(targetBlock, blocks: blocks)}"
 		branch(targetBlock) gives "arm64.b {resolveBlockLabel(targetBlock, blocks: blocks)}"
 		branchLink(linkTarget) gives "arm64.bl {String.from(linkTarget)}"
@@ -179,48 +213,48 @@ export function maxArm64OpToString(op MaxArm64Op, blocks MlirBlockArray) returns
 		storeByteOp gives "arm64.strb w2, [x0, #0]"
 		loadByteOp gives "arm64.ldrb w0, [x0, #0]"
 		memcpyOp gives "arm64.memcpy"
-		movRegReg(dest, src) gives "arm64.mov {dest.name}, {src.name}"
-		spillToStack(offset, src) gives "arm64.str {src.name}, [x29, #{offset}]"
-		reloadFromStack(dest, offset) gives "arm64.ldr {dest.name}, [x29, #{offset}]"
-		branchLinkReg(reg) gives "arm64.blr {reg.name}"
+		movRegReg(dest, src) gives "arm64.mov {arm64VRegToString(dest)}, {arm64VRegToString(src)}"
+		spillToStack(offset, src) gives "arm64.str {arm64VRegToString(src)}, [x29, #{offset}]"
+		reloadFromStack(dest, offset) gives "arm64.ldr {arm64VRegToString(dest)}, [x29, #{offset}]"
+		branchLinkReg(reg) gives "arm64.blr {arm64VRegToString(reg)}"
 		subSpImm(value) gives "arm64.sub sp, sp, #{value}"
 		addSpImm(value) gives "arm64.add sp, sp, #{value}"
-		strToSpOffset(offset, src) gives "arm64.str {src.name}, [sp, #{offset}]"
-		fmovRegReg(dest, src, _) gives "arm64.fmov {dest.name}, {src.name}"
-		spillFpToStack(offset, src, _) gives "arm64.str {src.name}, [x29, #{offset}]"
-		reloadFpFromStack(dest, offset, _) gives "arm64.ldr {dest.name}, [x29, #{offset}]"
-		fmovToFloat(dest, src, _) gives "arm64.fmov {dest.name}, {src.name}"
-		fmovToGpr(dest, src, _) gives "arm64.fmov {dest.name}, {src.name}"
-		fpLoadRdata(dest, label, _) gives "arm64.ldr {dest.name}, [rdata+{String.from(label)}]"
-		fadd(dest, src1, src2, _) gives "arm64.fadd {dest.name}, {src1.name}, {src2.name}"
-		fsub(dest, src1, src2, _) gives "arm64.fsub {dest.name}, {src1.name}, {src2.name}"
-		fmul(dest, src1, src2, _) gives "arm64.fmul {dest.name}, {src1.name}, {src2.name}"
-		fdiv(dest, src1, src2, _) gives "arm64.fdiv {dest.name}, {src1.name}, {src2.name}"
-		fsqrt(dest, src, _) gives "arm64.fsqrt {dest.name}, {src.name}"
-		fabs(dest, src, _) gives "arm64.fabs {dest.name}, {src.name}"
-		fneg(dest, src, _) gives "arm64.fneg {dest.name}, {src.name}"
-		fcmp(src1, src2, _) gives "arm64.fcmp {src1.name}, {src2.name}"
-		scvtf(dest, src, _) gives "arm64.scvtf {dest.name}, {src.name}"
-		fcvtzs(dest, src, _) gives "arm64.fcvtzs {dest.name}, {src.name}"
-		fcvt(dest, src, _) gives "arm64.fcvt {dest.name}, {src.name}"
-		frintm(dest, src, _) gives "arm64.frintm {dest.name}, {src.name}"
-		frintp(dest, src, _) gives "arm64.frintp {dest.name}, {src.name}"
-		frintz(dest, src, _) gives "arm64.frintz {dest.name}, {src.name}"
-		frintn(dest, src, _) gives "arm64.frintn {dest.name}, {src.name}"
-		fpStoreIndirect(baseReg, offset, src, _) gives "arm64.str {src.name}, [{baseReg.name}, #{offset}]"
-		fpLoadIndirect(dest, baseReg, offset, _) gives "arm64.ldr {dest.name}, [{baseReg.name}, #{offset}]"
-		storeIndirect(baseReg, offset, srcReg, size) gives "arm64.str {srcReg.name}, [{baseReg.name}, #{offset}] ({size}b)"
-		loadIndirect(destReg, baseReg, offset, size) gives "arm64.ldr {destReg.name}, [{baseReg.name}, #{offset}] ({size}b)"
-		globalLoad(dest, name, _) gives "arm64.ldr {dest.name}, [{String.from(name)}]"
-		globalStore(name, src, _) gives "arm64.str {src.name}, [{String.from(name)}]"
-		globalLoadFloat(dest, name, _) gives "arm64.ldr {dest.name}, [{String.from(name)}]"
-		globalStoreFloat(name, src, _) gives "arm64.str {src.name}, [{String.from(name)}]"
-		leaFromStack(dest, offset) gives "arm64.add {dest.name}, x29, #{offset}"
-		leaRdata(dest, label) gives "arm64.adrp+add {dest.name}, {String.from(label)}"
-		leaFuncAddr(dest, funcName) gives "arm64.adrp+add {dest.name}, {String.from(funcName)}"
-		cset(dest, condition) gives "arm64.cset {dest.name}, {condition.name}"
-		csel(dest, src1, src2, condition) gives "arm64.csel {dest.name}, {src1.name}, {src2.name}, {condition.name}"
-		sxtw(dest, src) gives "arm64.sxtw {dest.name}, {src.name}"
-		nullSafeLoad(dest, baseReg, offset) gives "arm64.null_safe_load {dest.name}, [{baseReg.name}, #{offset}]"
+		strToSpOffset(offset, src) gives "arm64.str {arm64VRegToString(src)}, [sp, #{offset}]"
+		fmovRegReg(dest, src, _) gives "arm64.fmov {arm64FpVRegToString(dest)}, {arm64FpVRegToString(src)}"
+		spillFpToStack(offset, src, _) gives "arm64.str {arm64FpVRegToString(src)}, [x29, #{offset}]"
+		reloadFpFromStack(dest, offset, _) gives "arm64.ldr {arm64FpVRegToString(dest)}, [x29, #{offset}]"
+		fmovToFloat(dest, src, _) gives "arm64.fmov {arm64FpVRegToString(dest)}, {arm64VRegToString(src)}"
+		fmovToGpr(dest, src, _) gives "arm64.fmov {arm64VRegToString(dest)}, {arm64FpVRegToString(src)}"
+		fpLoadRdata(dest, label, _) gives "arm64.ldr {arm64FpVRegToString(dest)}, [rdata+{String.from(label)}]"
+		fadd(dest, src1, src2, _) gives "arm64.fadd {arm64FpVRegToString(dest)}, {arm64FpVRegToString(src1)}, {arm64FpVRegToString(src2)}"
+		fsub(dest, src1, src2, _) gives "arm64.fsub {arm64FpVRegToString(dest)}, {arm64FpVRegToString(src1)}, {arm64FpVRegToString(src2)}"
+		fmul(dest, src1, src2, _) gives "arm64.fmul {arm64FpVRegToString(dest)}, {arm64FpVRegToString(src1)}, {arm64FpVRegToString(src2)}"
+		fdiv(dest, src1, src2, _) gives "arm64.fdiv {arm64FpVRegToString(dest)}, {arm64FpVRegToString(src1)}, {arm64FpVRegToString(src2)}"
+		fsqrt(dest, src, _) gives "arm64.fsqrt {arm64FpVRegToString(dest)}, {arm64FpVRegToString(src)}"
+		fabs(dest, src, _) gives "arm64.fabs {arm64FpVRegToString(dest)}, {arm64FpVRegToString(src)}"
+		fneg(dest, src, _) gives "arm64.fneg {arm64FpVRegToString(dest)}, {arm64FpVRegToString(src)}"
+		fcmp(src1, src2, _) gives "arm64.fcmp {arm64FpVRegToString(src1)}, {arm64FpVRegToString(src2)}"
+		scvtf(dest, src, _) gives "arm64.scvtf {arm64FpVRegToString(dest)}, {arm64VRegToString(src)}"
+		fcvtzs(dest, src, _) gives "arm64.fcvtzs {arm64VRegToString(dest)}, {arm64FpVRegToString(src)}"
+		fcvt(dest, src, _) gives "arm64.fcvt {arm64FpVRegToString(dest)}, {arm64FpVRegToString(src)}"
+		frintm(dest, src, _) gives "arm64.frintm {arm64FpVRegToString(dest)}, {arm64FpVRegToString(src)}"
+		frintp(dest, src, _) gives "arm64.frintp {arm64FpVRegToString(dest)}, {arm64FpVRegToString(src)}"
+		frintz(dest, src, _) gives "arm64.frintz {arm64FpVRegToString(dest)}, {arm64FpVRegToString(src)}"
+		frintn(dest, src, _) gives "arm64.frintn {arm64FpVRegToString(dest)}, {arm64FpVRegToString(src)}"
+		fpStoreIndirect(baseReg, offset, src, _) gives "arm64.str {arm64FpVRegToString(src)}, [{arm64VRegToString(baseReg)}, #{offset}]"
+		fpLoadIndirect(dest, baseReg, offset, _) gives "arm64.ldr {arm64FpVRegToString(dest)}, [{arm64VRegToString(baseReg)}, #{offset}]"
+		storeIndirect(baseReg, offset, srcReg, size) gives "arm64.str {arm64VRegToString(srcReg)}, [{arm64VRegToString(baseReg)}, #{offset}] ({size}b)"
+		loadIndirect(destReg, baseReg, offset, size) gives "arm64.ldr {arm64VRegToString(destReg)}, [{arm64VRegToString(baseReg)}, #{offset}] ({size}b)"
+		globalLoad(dest, name, _) gives "arm64.ldr {arm64VRegToString(dest)}, [{String.from(name)}]"
+		globalStore(name, src, _) gives "arm64.str {arm64VRegToString(src)}, [{String.from(name)}]"
+		globalLoadFloat(dest, name, _) gives "arm64.ldr {arm64FpVRegToString(dest)}, [{String.from(name)}]"
+		globalStoreFloat(name, src, _) gives "arm64.str {arm64FpVRegToString(src)}, [{String.from(name)}]"
+		leaFromStack(dest, offset) gives "arm64.add {arm64VRegToString(dest)}, x29, #{offset}"
+		leaRdata(dest, label) gives "arm64.adrp+add {arm64VRegToString(dest)}, {String.from(label)}"
+		leaFuncAddr(dest, funcName) gives "arm64.adrp+add {arm64VRegToString(dest)}, {String.from(funcName)}"
+		cset(dest, condition) gives "arm64.cset {arm64VRegToString(dest)}, {condition.name}"
+		csel(dest, src1, src2, condition) gives "arm64.csel {arm64VRegToString(dest)}, {arm64VRegToString(src1)}, {arm64VRegToString(src2)}, {condition.name}"
+		sxtw(dest, src) gives "arm64.sxtw {arm64VRegToString(dest)}, {arm64VRegToString(src)}"
+		nullSafeLoad(dest, baseReg, offset) gives "arm64.null_safe_load {arm64VRegToString(dest)}, [{arm64VRegToString(baseReg)}, #{offset}]"
 	end 'toString'
 end 'maxArm64OpToString'

@@ -66,10 +66,20 @@ function getSlotFromMlirOp(op MlirOp) returns SlotIndex
 	match op 'outer'
 		maxhl to func then break 'outer'
 		memref(memOp) then result = getSlotFromMemRefOp(memOp)
-		runtime to maxarm64 then break 'outer'
+		runtime to sys then break 'outer'
+		mir(mirOp) then result = getSlotFromMirOp(mirOp)
+		maxx64 to maxarm64 then break 'outer'
 	end 'outer'
 	return result
 end 'getSlotFromMlirOp'
+
+function getSlotFromMirOp(op MirOp) returns SlotIndex
+	return match op 'check'
+		stackSlotAddr(_, slotId) gives slotId
+		movImm to store gives -1
+		globalAddr to loadByte gives -1
+	end 'check'
+end 'getSlotFromMirOp'
 
 function getSlotFromMemRefOp(op MemRefOp) returns SlotIndex
 	return match op 'check'
@@ -110,9 +120,25 @@ function tempSlotCountForOp(op MlirOp) returns TempSlotCount
 		memref gives 0
 		runtime gives 0
 		sys(sysOp) gives sysTempSlotCount(sysOp)
+		mir(mirOp) gives mirTempSlotCount(mirOp)
 		maxx64 to maxarm64 gives 0
 	end 'check'
 end 'tempSlotCountForOp'
+
+function mirTempSlotCount(op MirOp) returns TempSlotCount
+	return match op 'check'
+		syscall gives 1
+		iatCall gives 1
+		globalAddr gives 1
+		stackSlotAddr gives 1
+		storeByte gives 3
+		loadByte gives 3
+		memcpy gives 3
+		osExit gives 1
+		osWrite gives 6
+		movImm to store gives 0
+	end 'check'
+end 'mirTempSlotCount'
 
 function funcOpTempCount(op FuncOp) returns TempSlotCount
 	return match op 'check'
@@ -140,6 +166,7 @@ function sysTempSlotCount(op SysOp) returns TempSlotCount
 		memcpy gives 0
 		osExit gives 1
 		osWrite gives 6
+		free gives 1
 	end 'check'
 end 'sysTempSlotCount'
 
@@ -211,9 +238,34 @@ end 'determineJumpKindInBlock'
 function getJumpKindFromOp(op MlirOp) returns JumpKind throws NotComparison
 	return match op 'check'
 		arith(arithOp) gives try getJumpKindFromArith(arithOp)
+		mir(mirOp) gives try getJumpKindFromMir(mirOp)
 		default throws NotComparison.notComparison
 	end 'check'
 end 'getJumpKindFromOp'
+
+function getJumpKindFromMir(op MirOp) returns JumpKind throws NotComparison
+	return match op 'check'
+		cmp(_, _, _, predicate) gives mirPredicateToJumpKind(predicate)
+		default throws NotComparison.notComparison
+	end 'check'
+end 'getJumpKindFromMir'
+
+function mirPredicateToJumpKind(predicate MirCmpPredicate) returns JumpKind
+	return match predicate 'map'
+		eq gives JumpKind.eq
+		ne gives JumpKind.ne
+		lt gives JumpKind.lt
+		le gives JumpKind.le
+		gt gives JumpKind.gt
+		ge gives JumpKind.ge
+		feq gives JumpKind.feq
+		fne gives JumpKind.fne
+		flt gives JumpKind.flt
+		fle gives JumpKind.fle
+		fgt gives JumpKind.fgt
+		fge gives JumpKind.fge
+	end 'map'
+end 'mirPredicateToJumpKind'
 
 function getJumpKindFromArith(op ArithOp) returns JumpKind throws NotComparison
 	return match op 'check'
@@ -258,8 +310,14 @@ export function scanPromotedParams(func MlirFunction) returns BoolArray
 					param(_, paramIndex, _) then markParamPromoted(promoted, paramIndex: paramIndex)
 					ret to tailCall then break 'checkFuncParam'
 				end 'checkFuncParam'
+				mir(mirOp) then match mirOp 'checkMirParam'
+					param(_, paramIndex, _) then markParamPromoted(promoted, paramIndex: paramIndex)
+					movImm to ret then break 'checkMirParam'
+					load to loadByte then break 'checkMirParam'
+				end 'checkMirParam'
 				maxhl to cf then break 'checkParam'
-				memref to maxarm64 then break 'checkParam'
+				memref to sys then break 'checkParam'
+				maxx64 to maxarm64 then break 'checkParam'
 			end 'checkParam'
 		end 'scanOps'
 	end 'scanBlocks'

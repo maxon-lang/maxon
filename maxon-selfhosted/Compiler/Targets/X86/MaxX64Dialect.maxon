@@ -80,25 +80,58 @@ export enum X64JumpCondition
 	np = 139
 end 'X64JumpCondition'
 
+export union X64VReg
+	physical(reg X64Register)
+	virtual(id ValueId)
+end 'X64VReg'
+
+export union X64FpVReg
+	physical(reg X64XmmRegister)
+	virtual(id ValueId)
+end 'X64FpVReg'
+
+export function x64VRegToString(vreg X64VReg) returns String
+	return match vreg 'fmt'
+		physical(reg) gives reg.name
+		virtual(id) gives "v{id}"
+	end 'fmt'
+end 'x64VRegToString'
+
+export function x64FpVRegToString(vreg X64FpVReg) returns String
+	return match vreg 'fmt'
+		physical(reg) gives reg.name
+		virtual(id) gives "vf{id}"
+	end 'fmt'
+end 'x64FpVRegToString'
+
+// Convenience wrappers for creating VRegs from physical registers
+export function physReg(reg X64Register) returns X64VReg
+	return X64VReg.physical(reg)
+end 'physReg'
+
+export function physFpReg(reg X64XmmRegister) returns X64FpVReg
+	return X64FpVReg.physical(reg)
+end 'physFpReg'
+
 export union MaxX64Op
 	prologue(stackSize StackSize)
 	epilogue
 	ret
-	movRegImm(dest X64Register, value MachineWord)
-	movSlot(slotIndex VarSlot, srcReg X64Register)
-	loadSlot(destReg X64Register, slotIndex VarSlot)
-	addRegReg(destReg X64Register, srcReg X64Register)
-	subRegReg(destReg X64Register, srcReg X64Register)
-	imulRegReg(destReg X64Register, srcReg X64Register)
+	movRegImm(dest X64VReg, value MachineWord)
+	movSlot(slotIndex VarSlot, srcReg X64VReg)
+	loadSlot(destReg X64VReg, slotIndex VarSlot)
+	addRegReg(destReg X64VReg, srcReg X64VReg)
+	subRegReg(destReg X64VReg, srcReg X64VReg)
+	imulRegReg(destReg X64VReg, srcReg X64VReg)
 	idivRcx
 	iremRcx
-	negReg(reg X64Register)
-	bitNotReg(reg X64Register)
-	andRegReg(destReg X64Register, srcReg X64Register)
-	orRegReg(destReg X64Register, srcReg X64Register)
-	xorRegReg(destReg X64Register, srcReg X64Register)
-	shlRegCl(reg X64Register)
-	sarRegCl(reg X64Register)
+	negReg(reg X64VReg)
+	bitNotReg(reg X64VReg)
+	andRegReg(destReg X64VReg, srcReg X64VReg)
+	orRegReg(destReg X64VReg, srcReg X64VReg)
+	xorRegReg(destReg X64VReg, srcReg X64VReg)
+	shlRegCl(reg X64VReg)
+	sarRegCl(reg X64VReg)
 	cmpRaxRcx
 	testRaxRax
 	condJump(condition X64JumpCondition, targetBlock BlockId)
@@ -111,8 +144,8 @@ export union MaxX64Op
 	printInt
 	subRspImm(value StackSize)
 	addRspImm(value StackSize)
-	movRspOffsetReg(offset StackSize, srcReg X64Register)
-	loadRegRbpOffset(destReg X64Register, offset StackSize)
+	movRspOffsetReg(offset StackSize, srcReg X64VReg)
+	loadRegRbpOffset(destReg X64VReg, offset StackSize)
 	callDirect(target ByteArray)
 	// SysOp lowering: x86-64 syscall instruction
 	syscall(resultSlot VarSlot, number MachineWord, argSlots VarSlotArray)
@@ -129,57 +162,57 @@ export union MaxX64Op
 	// SysOp lowering: rep movsb (memcpy)
 	memcpyOp(dstSlot VarSlot, srcSlot VarSlot, lenSlot VarSlot)
 	// Register allocator ops
-	movRegReg(destReg X64Register, srcReg X64Register)
-	cmpRegReg(lhsReg X64Register, rhsReg X64Register)
-	testRegReg(reg1 X64Register, reg2 X64Register)
+	movRegReg(destReg X64VReg, srcReg X64VReg)
+	cmpRegReg(lhsReg X64VReg, rhsReg X64VReg)
+	testRegReg(reg1 X64VReg, reg2 X64VReg)
 	cqo
-	idivReg(divisorReg X64Register)
-	spillToStack(offset MachineWord, srcReg X64Register)
-	reloadFromStack(destReg X64Register, offset MachineWord)
-	xorRegRegSelf(reg X64Register)
+	idivReg(divisorReg X64VReg)
+	spillToStack(offset MachineWord, srcReg X64VReg)
+	reloadFromStack(destReg X64VReg, offset MachineWord)
+	xorRegRegSelf(reg X64VReg)
 	// Call support ops
-	callIndirect(reg X64Register)
-	xchgRegReg(reg1 X64Register, reg2 X64Register)
+	callIndirect(reg X64VReg)
+	xchgRegReg(reg1 X64VReg, reg2 X64VReg)
 	// XMM FP ops
-	movXmmXmm(dest X64XmmRegister, src X64XmmRegister, precision FloatPrecision)
-	spillXmmToStack(offset MachineWord, src X64XmmRegister, precision FloatPrecision)
-	reloadXmmFromStack(dest X64XmmRegister, offset MachineWord, precision FloatPrecision)
-	movXmmRipRel(dest X64XmmRegister, rdataLabel ByteArray, precision FloatPrecision)
-	addXmm(dest X64XmmRegister, src X64XmmRegister, precision FloatPrecision)
-	subXmm(dest X64XmmRegister, src X64XmmRegister, precision FloatPrecision)
-	mulXmm(dest X64XmmRegister, src X64XmmRegister, precision FloatPrecision)
-	divXmm(dest X64XmmRegister, src X64XmmRegister, precision FloatPrecision)
-	sqrtXmm(dest X64XmmRegister, src X64XmmRegister, precision FloatPrecision)
-	roundXmm(dest X64XmmRegister, src X64XmmRegister, mode MachineWord, precision FloatPrecision)
-	ucomisXmm(src1 X64XmmRegister, src2 X64XmmRegister, precision FloatPrecision)
-	cvtSi2Float(dest X64XmmRegister, src X64Register, precision FloatPrecision)
-	cvttFloat2Si(dest X64Register, src X64XmmRegister, precision FloatPrecision)
-	cvtSd2Ss(dest X64XmmRegister, src X64XmmRegister)
-	cvtSs2Sd(dest X64XmmRegister, src X64XmmRegister)
-	movqXmmToGpr(dest X64Register, src X64XmmRegister)
-	andMaskRipRel(dest X64XmmRegister, rdataLabel ByteArray, precision FloatPrecision)
+	movXmmXmm(dest X64FpVReg, src X64FpVReg, precision FloatPrecision)
+	spillXmmToStack(offset MachineWord, src X64FpVReg, precision FloatPrecision)
+	reloadXmmFromStack(dest X64FpVReg, offset MachineWord, precision FloatPrecision)
+	movXmmRipRel(dest X64FpVReg, rdataLabel ByteArray, precision FloatPrecision)
+	addXmm(dest X64FpVReg, src X64FpVReg, precision FloatPrecision)
+	subXmm(dest X64FpVReg, src X64FpVReg, precision FloatPrecision)
+	mulXmm(dest X64FpVReg, src X64FpVReg, precision FloatPrecision)
+	divXmm(dest X64FpVReg, src X64FpVReg, precision FloatPrecision)
+	sqrtXmm(dest X64FpVReg, src X64FpVReg, precision FloatPrecision)
+	roundXmm(dest X64FpVReg, src X64FpVReg, mode MachineWord, precision FloatPrecision)
+	ucomisXmm(src1 X64FpVReg, src2 X64FpVReg, precision FloatPrecision)
+	cvtSi2Float(dest X64FpVReg, src X64VReg, precision FloatPrecision)
+	cvttFloat2Si(dest X64VReg, src X64FpVReg, precision FloatPrecision)
+	cvtSd2Ss(dest X64FpVReg, src X64FpVReg)
+	cvtSs2Sd(dest X64FpVReg, src X64FpVReg)
+	movqXmmToGpr(dest X64VReg, src X64FpVReg)
+	andMaskRipRel(dest X64FpVReg, rdataLabel ByteArray, precision FloatPrecision)
 	// Indirect memory ops
-	storeIndirect(baseReg X64Register, offset MachineWord, srcReg X64Register, size MachineWord)
-	loadIndirect(destReg X64Register, baseReg X64Register, offset MachineWord, size MachineWord)
-	storeIndirectXmm(baseReg X64Register, offset MachineWord, src X64XmmRegister, precision FloatPrecision)
-	loadIndirectXmm(dest X64XmmRegister, baseReg X64Register, offset MachineWord, precision FloatPrecision)
+	storeIndirect(baseReg X64VReg, offset MachineWord, srcReg X64VReg, size MachineWord)
+	loadIndirect(destReg X64VReg, baseReg X64VReg, offset MachineWord, size MachineWord)
+	storeIndirectXmm(baseReg X64VReg, offset MachineWord, src X64FpVReg, precision FloatPrecision)
+	loadIndirectXmm(dest X64FpVReg, baseReg X64VReg, offset MachineWord, precision FloatPrecision)
 	// Global variable ops
-	globalLoad(dest X64Register, name ByteArray, size MachineWord)
-	globalStore(name ByteArray, src X64Register, size MachineWord)
-	globalLoadXmm(dest X64XmmRegister, name ByteArray, precision FloatPrecision)
-	globalStoreXmm(name ByteArray, src X64XmmRegister, precision FloatPrecision)
+	globalLoad(dest X64VReg, name ByteArray, size MachineWord)
+	globalStore(name ByteArray, src X64VReg, size MachineWord)
+	globalLoadXmm(dest X64FpVReg, name ByteArray, precision FloatPrecision)
+	globalStoreXmm(name ByteArray, src X64FpVReg, precision FloatPrecision)
 	// LEA ops
-	leaFromStack(dest X64Register, stackOffset MachineWord)
-	leaRipRelative(dest X64Register, rdataLabel ByteArray)
-	leaFuncAddr(dest X64Register, funcName ByteArray)
+	leaFromStack(dest X64VReg, stackOffset MachineWord)
+	leaRipRelative(dest X64VReg, rdataLabel ByteArray)
+	leaFuncAddr(dest X64VReg, funcName ByteArray)
 	// Conditional ops
-	setcc(dest X64Register, condition X64SetccCondition)
-	cmov(dest X64Register, src X64Register, condition X64CmovCondition)
+	setcc(dest X64VReg, condition X64SetccCondition)
+	cmov(dest X64VReg, src X64VReg, condition X64CmovCondition)
 	// Width conversion ops
-	movsxd(dest X64Register, src X64Register)
-	movzx32(dest X64Register, src X64Register)
+	movsxd(dest X64VReg, src X64VReg)
+	movzx32(dest X64VReg, src X64VReg)
 	// Null-safe load
-	nullSafeLoad(dest X64Register, baseReg X64Register, offset MachineWord)
+	nullSafeLoad(dest X64VReg, baseReg X64VReg, offset MachineWord)
 	// Memcopy/BulkZero
 	repMovsb
 	repStosq
@@ -219,21 +252,21 @@ export function maxX64OpToString(op MaxX64Op, blocks MlirBlockArray) returns Str
 		prologue(stackSize) gives "x86.prologue stack_size={stackSize}"
 		epilogue gives "x86.epilogue"
 		ret gives "x86.ret"
-		movRegImm(dest, value) gives "x86.mov {dest.name}, {value}"
-		movSlot(slotIndex, srcReg) gives "x86.mov [rbp-{slotOffset(slotIndex)}], {srcReg.name}"
-		loadSlot(destReg, slotIndex) gives "x86.mov {destReg.name}, [rbp-{slotOffset(slotIndex)}]"
-		addRegReg(destReg, srcReg) gives "x86.add {destReg.name}, {srcReg.name}"
-		subRegReg(destReg, srcReg) gives "x86.sub {destReg.name}, {srcReg.name}"
-		imulRegReg(destReg, srcReg) gives "x86.imul {destReg.name}, {srcReg.name}"
+		movRegImm(dest, value) gives "x86.mov {x64VRegToString(dest)}, {value}"
+		movSlot(slotIndex, srcReg) gives "x86.mov [rbp-{slotOffset(slotIndex)}], {x64VRegToString(srcReg)}"
+		loadSlot(destReg, slotIndex) gives "x86.mov {x64VRegToString(destReg)}, [rbp-{slotOffset(slotIndex)}]"
+		addRegReg(destReg, srcReg) gives "x86.add {x64VRegToString(destReg)}, {x64VRegToString(srcReg)}"
+		subRegReg(destReg, srcReg) gives "x86.sub {x64VRegToString(destReg)}, {x64VRegToString(srcReg)}"
+		imulRegReg(destReg, srcReg) gives "x86.imul {x64VRegToString(destReg)}, {x64VRegToString(srcReg)}"
 		idivRcx gives "x86.idiv rcx"
 		iremRcx gives "x86.idiv rcx"
-		negReg(reg) gives "x86.neg {reg.name}"
-		bitNotReg(reg) gives "x86.not {reg.name}"
-		andRegReg(destReg, srcReg) gives "x86.and {destReg.name}, {srcReg.name}"
-		orRegReg(destReg, srcReg) gives "x86.or {destReg.name}, {srcReg.name}"
-		xorRegReg(destReg, srcReg) gives "x86.xor {destReg.name}, {srcReg.name}"
-		shlRegCl(reg) gives "x86.shl {reg.name}, cl"
-		sarRegCl(reg) gives "x86.sar {reg.name}, cl"
+		negReg(reg) gives "x86.neg {x64VRegToString(reg)}"
+		bitNotReg(reg) gives "x86.not {x64VRegToString(reg)}"
+		andRegReg(destReg, srcReg) gives "x86.and {x64VRegToString(destReg)}, {x64VRegToString(srcReg)}"
+		orRegReg(destReg, srcReg) gives "x86.or {x64VRegToString(destReg)}, {x64VRegToString(srcReg)}"
+		xorRegReg(destReg, srcReg) gives "x86.xor {x64VRegToString(destReg)}, {x64VRegToString(srcReg)}"
+		shlRegCl(reg) gives "x86.shl {x64VRegToString(reg)}, cl"
+		sarRegCl(reg) gives "x86.sar {x64VRegToString(reg)}, cl"
 		cmpRaxRcx gives "x86.cmp rax, rcx"
 		testRaxRax gives "x86.test rax, rax"
 		condJump(condition, targetBlock) gives "x86.j{condition.name} {resolveBlockLabel(targetBlock, blocks: blocks)}"
@@ -246,8 +279,8 @@ export function maxX64OpToString(op MaxX64Op, blocks MlirBlockArray) returns Str
 		printInt gives "x86.print_int"
 		subRspImm(value) gives "x86.sub rsp, {value}"
 		addRspImm(value) gives "x86.add rsp, {value}"
-		movRspOffsetReg(offset, srcReg) gives "x86.mov [rsp+{offset}], {srcReg.name}"
-		loadRegRbpOffset(destReg, offset) gives "x86.mov {destReg.name}, [rbp-{offset}]"
+		movRspOffsetReg(offset, srcReg) gives "x86.mov [rsp+{offset}], {x64VRegToString(srcReg)}"
+		loadRegRbpOffset(destReg, offset) gives "x86.mov {x64VRegToString(destReg)}, [rbp-{offset}]"
 		callDirect(target) gives "x86.call {String.from(target)}"
 		syscall(_, number, argSlots) gives "x86.syscall {number}({formatVarSlotArgs(argSlots)})"
 		iatCall(_, slotIndex, _) gives "x86.call_import slot_{slotIndex}"
@@ -256,49 +289,49 @@ export function maxX64OpToString(op MaxX64Op, blocks MlirBlockArray) returns Str
 		storeByteOp(_, _, _) gives "x86.mov byte ptr [rax+0], cl"
 		loadByteOp(_, _, _) gives "x86.movzx rax, byte ptr [rax+0]"
 		memcpyOp(_, _, _) gives "x86.rep_movsb"
-		movRegReg(destReg, srcReg) gives "x86.mov {destReg.name}, {srcReg.name}"
-		cmpRegReg(lhsReg, rhsReg) gives "x86.cmp {lhsReg.name}, {rhsReg.name}"
-		testRegReg(reg1, reg2) gives "x86.test {reg1.name}, {reg2.name}"
+		movRegReg(destReg, srcReg) gives "x86.mov {x64VRegToString(destReg)}, {x64VRegToString(srcReg)}"
+		cmpRegReg(lhsReg, rhsReg) gives "x86.cmp {x64VRegToString(lhsReg)}, {x64VRegToString(rhsReg)}"
+		testRegReg(reg1, reg2) gives "x86.test {x64VRegToString(reg1)}, {x64VRegToString(reg2)}"
 		cqo gives "x86.cqo"
-		idivReg(divisorReg) gives "x86.idiv {divisorReg.name}"
-		spillToStack(offset, srcReg) gives "x86.mov [rbp{formatSignedOffset(offset)}], {srcReg.name}"
-		reloadFromStack(destReg, offset) gives "x86.mov {destReg.name}, [rbp{formatSignedOffset(offset)}]"
-		xorRegRegSelf(reg) gives "x86.xor {reg.name}, {reg.name}"
-		callIndirect(reg) gives "x86.call {reg.name}"
-		xchgRegReg(reg1, reg2) gives "x86.xchg {reg1.name}, {reg2.name}"
-		movXmmXmm(dest, src, _) gives "x86.movsd {dest.name}, {src.name}"
-		spillXmmToStack(offset, src, _) gives "x86.movsd [rbp{formatSignedOffset(offset)}], {src.name}"
-		reloadXmmFromStack(dest, offset, _) gives "x86.movsd {dest.name}, [rbp{formatSignedOffset(offset)}]"
-		movXmmRipRel(dest, label, _) gives "x86.movsd {dest.name}, [rip+{String.from(label)}]"
-		addXmm(dest, src, _) gives "x86.addsd {dest.name}, {src.name}"
-		subXmm(dest, src, _) gives "x86.subsd {dest.name}, {src.name}"
-		mulXmm(dest, src, _) gives "x86.mulsd {dest.name}, {src.name}"
-		divXmm(dest, src, _) gives "x86.divsd {dest.name}, {src.name}"
-		sqrtXmm(dest, src, _) gives "x86.sqrtsd {dest.name}, {src.name}"
-		roundXmm(dest, src, mode, _) gives "x86.roundsd {dest.name}, {src.name}, {mode}"
-		ucomisXmm(src1, src2, _) gives "x86.ucomisd {src1.name}, {src2.name}"
-		cvtSi2Float(dest, src, _) gives "x86.cvtsi2sd {dest.name}, {src.name}"
-		cvttFloat2Si(dest, src, _) gives "x86.cvttsd2si {dest.name}, {src.name}"
-		cvtSd2Ss(dest, src) gives "x86.cvtsd2ss {dest.name}, {src.name}"
-		cvtSs2Sd(dest, src) gives "x86.cvtss2sd {dest.name}, {src.name}"
-		movqXmmToGpr(dest, src) gives "x86.movq {dest.name}, {src.name}"
-		andMaskRipRel(dest, label, _) gives "x86.andpd {dest.name}, [rip+{String.from(label)}]"
-		storeIndirect(baseReg, offset, srcReg, size) gives "x86.mov [{baseReg.name}+{offset}], {srcReg.name} ({size}b)"
-		loadIndirect(destReg, baseReg, offset, size) gives "x86.mov {destReg.name}, [{baseReg.name}+{offset}] ({size}b)"
-		storeIndirectXmm(baseReg, offset, src, _) gives "x86.movsd [{baseReg.name}+{offset}], {src.name}"
-		loadIndirectXmm(dest, baseReg, offset, _) gives "x86.movsd {dest.name}, [{baseReg.name}+{offset}]"
-		globalLoad(dest, name, _) gives "x86.mov {dest.name}, [rip+{String.from(name)}]"
-		globalStore(name, src, _) gives "x86.mov [rip+{String.from(name)}], {src.name}"
-		globalLoadXmm(dest, name, _) gives "x86.movsd {dest.name}, [rip+{String.from(name)}]"
-		globalStoreXmm(name, src, _) gives "x86.movsd [rip+{String.from(name)}], {src.name}"
-		leaFromStack(dest, offset) gives "x86.lea {dest.name}, [rbp{formatSignedOffset(offset)}]"
-		leaRipRelative(dest, label) gives "x86.lea {dest.name}, [rip+{String.from(label)}]"
-		leaFuncAddr(dest, funcName) gives "x86.lea {dest.name}, [rip+{String.from(funcName)}]"
-		setcc(dest, condition) gives "x86.set{condition.name} {dest.name}"
-		cmov(dest, src, condition) gives "x86.cmov{condition.name} {dest.name}, {src.name}"
-		movsxd(dest, src) gives "x86.movsxd {dest.name}, {src.name}"
-		movzx32(dest, src) gives "x86.mov {dest.name}d, {src.name}d"
-		nullSafeLoad(dest, baseReg, offset) gives "x86.null_safe_load {dest.name}, [{baseReg.name}+{offset}]"
+		idivReg(divisorReg) gives "x86.idiv {x64VRegToString(divisorReg)}"
+		spillToStack(offset, srcReg) gives "x86.mov [rbp{formatSignedOffset(offset)}], {x64VRegToString(srcReg)}"
+		reloadFromStack(destReg, offset) gives "x86.mov {x64VRegToString(destReg)}, [rbp{formatSignedOffset(offset)}]"
+		xorRegRegSelf(reg) gives "x86.xor {x64VRegToString(reg)}, {x64VRegToString(reg)}"
+		callIndirect(reg) gives "x86.call {x64VRegToString(reg)}"
+		xchgRegReg(reg1, reg2) gives "x86.xchg {x64VRegToString(reg1)}, {x64VRegToString(reg2)}"
+		movXmmXmm(dest, src, _) gives "x86.movsd {x64FpVRegToString(dest)}, {x64FpVRegToString(src)}"
+		spillXmmToStack(offset, src, _) gives "x86.movsd [rbp{formatSignedOffset(offset)}], {x64FpVRegToString(src)}"
+		reloadXmmFromStack(dest, offset, _) gives "x86.movsd {x64FpVRegToString(dest)}, [rbp{formatSignedOffset(offset)}]"
+		movXmmRipRel(dest, label, _) gives "x86.movsd {x64FpVRegToString(dest)}, [rip+{String.from(label)}]"
+		addXmm(dest, src, _) gives "x86.addsd {x64FpVRegToString(dest)}, {x64FpVRegToString(src)}"
+		subXmm(dest, src, _) gives "x86.subsd {x64FpVRegToString(dest)}, {x64FpVRegToString(src)}"
+		mulXmm(dest, src, _) gives "x86.mulsd {x64FpVRegToString(dest)}, {x64FpVRegToString(src)}"
+		divXmm(dest, src, _) gives "x86.divsd {x64FpVRegToString(dest)}, {x64FpVRegToString(src)}"
+		sqrtXmm(dest, src, _) gives "x86.sqrtsd {x64FpVRegToString(dest)}, {x64FpVRegToString(src)}"
+		roundXmm(dest, src, mode, _) gives "x86.roundsd {x64FpVRegToString(dest)}, {x64FpVRegToString(src)}, {mode}"
+		ucomisXmm(src1, src2, _) gives "x86.ucomisd {x64FpVRegToString(src1)}, {x64FpVRegToString(src2)}"
+		cvtSi2Float(dest, src, _) gives "x86.cvtsi2sd {x64FpVRegToString(dest)}, {x64VRegToString(src)}"
+		cvttFloat2Si(dest, src, _) gives "x86.cvttsd2si {x64VRegToString(dest)}, {x64FpVRegToString(src)}"
+		cvtSd2Ss(dest, src) gives "x86.cvtsd2ss {x64FpVRegToString(dest)}, {x64FpVRegToString(src)}"
+		cvtSs2Sd(dest, src) gives "x86.cvtss2sd {x64FpVRegToString(dest)}, {x64FpVRegToString(src)}"
+		movqXmmToGpr(dest, src) gives "x86.movq {x64VRegToString(dest)}, {x64FpVRegToString(src)}"
+		andMaskRipRel(dest, label, _) gives "x86.andpd {x64FpVRegToString(dest)}, [rip+{String.from(label)}]"
+		storeIndirect(baseReg, offset, srcReg, size) gives "x86.mov [{x64VRegToString(baseReg)}+{offset}], {x64VRegToString(srcReg)} ({size}b)"
+		loadIndirect(destReg, baseReg, offset, size) gives "x86.mov {x64VRegToString(destReg)}, [{x64VRegToString(baseReg)}+{offset}] ({size}b)"
+		storeIndirectXmm(baseReg, offset, src, _) gives "x86.movsd [{x64VRegToString(baseReg)}+{offset}], {x64FpVRegToString(src)}"
+		loadIndirectXmm(dest, baseReg, offset, _) gives "x86.movsd {x64FpVRegToString(dest)}, [{x64VRegToString(baseReg)}+{offset}]"
+		globalLoad(dest, name, _) gives "x86.mov {x64VRegToString(dest)}, [rip+{String.from(name)}]"
+		globalStore(name, src, _) gives "x86.mov [rip+{String.from(name)}], {x64VRegToString(src)}"
+		globalLoadXmm(dest, name, _) gives "x86.movsd {x64FpVRegToString(dest)}, [rip+{String.from(name)}]"
+		globalStoreXmm(name, src, _) gives "x86.movsd [rip+{String.from(name)}], {x64FpVRegToString(src)}"
+		leaFromStack(dest, offset) gives "x86.lea {x64VRegToString(dest)}, [rbp{formatSignedOffset(offset)}]"
+		leaRipRelative(dest, label) gives "x86.lea {x64VRegToString(dest)}, [rip+{String.from(label)}]"
+		leaFuncAddr(dest, funcName) gives "x86.lea {x64VRegToString(dest)}, [rip+{String.from(funcName)}]"
+		setcc(dest, condition) gives "x86.set{condition.name} {x64VRegToString(dest)}"
+		cmov(dest, src, condition) gives "x86.cmov{condition.name} {x64VRegToString(dest)}, {x64VRegToString(src)}"
+		movsxd(dest, src) gives "x86.movsxd {x64VRegToString(dest)}, {x64VRegToString(src)}"
+		movzx32(dest, src) gives "x86.mov {x64VRegToString(dest)}d, {x64VRegToString(src)}d"
+		nullSafeLoad(dest, baseReg, offset) gives "x86.null_safe_load {x64VRegToString(dest)}, [{x64VRegToString(baseReg)}+{offset}]"
 		repMovsb gives "x86.rep movsb"
 		repStosq gives "x86.rep stosq"
 	end 'toString'

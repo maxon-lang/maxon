@@ -14,8 +14,8 @@ end
 // write_stdout(ptr len): writes len bytes at ptr to stdout.
 func write_stdout 2 void
   block entry:
-    v0 = memref loadSlot 0
-    v1 = memref loadSlot 1
+    v0 = func param 0 i64
+    v1 = func param 1 i64
     sys osWrite v0 v1
     v2 = arith constI64 0
     func ret v2
@@ -25,7 +25,10 @@ end
 // Returns number of bytes written.
 func i64_to_string 2 i64
   block entry:
-    v0 = memref loadSlot 0
+    v0 = func param 0 i64
+    memref storeSlot 0 v0
+    v46 = func param 1 i64
+    memref storeSlot 1 v46
     v1 = arith constI64 0
     v2 = arith cmpI64Eq v0 v1
     cf condBr v2 zero_case check_neg
@@ -115,7 +118,7 @@ end
 // __rt_printInt(value): converts to string and prints to stdout.
 func __rt_printInt 1 void
   block entry:
-    v0 = memref loadSlot 0
+    v0 = func param 0 i64
     v1 = sys stackAddr 1
     v2 = func call i64_to_string v0 v1
     v3 = sys stackAddr 1

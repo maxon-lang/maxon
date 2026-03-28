@@ -4,6 +4,25 @@
 // Uses BlockId -> code offset maps for jump resolution.
 // OS-specific stubs are parameterized by OsDescriptor.
 
+// VReg resolver functions — at emission time all VRegs must be physical.
+function resolveArm64Gpr(vreg Arm64VReg) returns MaxArm64Register
+	var result = MaxArm64Register.x0
+	match vreg 'resolve'
+		physical(reg) then result = reg
+		virtual(id) then panic("arm64 emitter: unresolved virtual GPR v{id}")
+	end 'resolve'
+	return result
+end 'resolveArm64Gpr'
+
+function resolveArm64Fp(vreg Arm64FpVReg) returns MaxArm64FloatRegister
+	var result = MaxArm64FloatRegister.d0
+	match vreg 'resolve'
+		physical(reg) then result = reg
+		virtual(id) then panic("arm64 emitter: unresolved virtual FP vf{id}")
+	end 'resolve'
+	return result
+end 'resolveArm64Fp'
+
 typealias MaxArm64Offset = int(0 to u64.max)
 typealias MaxArm64OffsetArray = Array with MaxArm64Offset
 
@@ -791,7 +810,7 @@ end 'emitMaxArm64'
 // Emit a single MlirOp (expected to be maxarm64 dialect).
 function emitMaxArm64Op(op MlirOp, code ByteArray, jumpFixups BlockIdFixupArray, callFixups MaxArm64CallFixupArray, stackTracker MaxArm64StackTracker, relocations RelocationArray, globalData GlobalDataTable)
 	match op 'dispatch'
-		maxhl to sys then break 'dispatch'
+		maxhl to mir then break 'dispatch'
 		maxx64 then break 'dispatch'
 		maxarm64(a64Op) then emitMaxArm64Instruction(a64Op, code: code, jumpFixups: jumpFixups, callFixups: callFixups, stackTracker: stackTracker, relocations: relocations, globalData: globalData)
 	end 'dispatch'
@@ -802,23 +821,23 @@ function emitMaxArm64Instruction(op MaxArm64Op, code ByteArray, jumpFixups Block
 	match op 'emit'
 		prologue(stackSize) then emitMaxArm64PrologueOp(code, stackSize: stackSize, tracker: stackTracker)
 		epilogue then maxArm64EmitEpilogue(code, stackSize: stackTracker.currentStackSize)
-		movImm(dest, value) then maxArm64EmitMovImm(code, rd: dest.rawValue, value: value)
-		strToSlot(slotIndex, src) then maxArm64EmitStrSlot(code, rt: src.rawValue, slotIndex: slotIndex)
-		ldrFromSlot(dest, slotIndex) then maxArm64EmitLdrSlot(code, rt: dest.rawValue, slotIndex: slotIndex)
-		addRegs(dest, src1, src2) then maxArm64EmitAdd(code, rd: dest.rawValue, rn: src1.rawValue, rm: src2.rawValue)
-		subRegs(dest, src1, src2) then maxArm64EmitSub(code, rd: dest.rawValue, rn: src1.rawValue, rm: src2.rawValue)
-		mulRegs(dest, src1, src2) then maxArm64EmitMul(code, rd: dest.rawValue, rn: src1.rawValue, rm: src2.rawValue)
-		sdivRegs(dest, src1, src2) then maxArm64EmitSdiv(code, rd: dest.rawValue, rn: src1.rawValue, rm: src2.rawValue)
-		remRegs(dest, src1, src2) then maxArm64EmitRem(code, rd: dest.rawValue, rn: src1.rawValue, rm: src2.rawValue)
-		negReg(dest, src) then maxArm64EmitNeg(code, rd: dest.rawValue, rn: src.rawValue)
-		mvnReg(dest, src) then maxArm64EmitMvn(code, rd: dest.rawValue, rn: src.rawValue)
-		andRegs(dest, src1, src2) then maxArm64EmitAnd(code, rd: dest.rawValue, rn: src1.rawValue, rm: src2.rawValue)
-		orrRegs(dest, src1, src2) then maxArm64EmitOrr(code, rd: dest.rawValue, rn: src1.rawValue, rm: src2.rawValue)
-		eorRegs(dest, src1, src2) then maxArm64EmitEor(code, rd: dest.rawValue, rn: src1.rawValue, rm: src2.rawValue)
-		lslRegs(dest, src1, src2) then maxArm64EmitLslv(code, rd: dest.rawValue, rn: src1.rawValue, rm: src2.rawValue)
-		asrRegs(dest, src1, src2) then maxArm64EmitAsrv(code, rd: dest.rawValue, rn: src1.rawValue, rm: src2.rawValue)
-		cmpRegs(src1, src2) then maxArm64EmitCmp(code, rn: src1.rawValue, rm: src2.rawValue)
-		cmpRegZero(src) then maxArm64EmitCmpRegZero(code, rn: src.rawValue)
+		movImm(dest, value) then maxArm64EmitMovImm(code, rd: resolveArm64Gpr(dest).rawValue, value: value)
+		strToSlot(slotIndex, src) then maxArm64EmitStrSlot(code, rt: resolveArm64Gpr(src).rawValue, slotIndex: slotIndex)
+		ldrFromSlot(dest, slotIndex) then maxArm64EmitLdrSlot(code, rt: resolveArm64Gpr(dest).rawValue, slotIndex: slotIndex)
+		addRegs(dest, src1, src2) then maxArm64EmitAdd(code, rd: resolveArm64Gpr(dest).rawValue, rn: resolveArm64Gpr(src1).rawValue, rm: resolveArm64Gpr(src2).rawValue)
+		subRegs(dest, src1, src2) then maxArm64EmitSub(code, rd: resolveArm64Gpr(dest).rawValue, rn: resolveArm64Gpr(src1).rawValue, rm: resolveArm64Gpr(src2).rawValue)
+		mulRegs(dest, src1, src2) then maxArm64EmitMul(code, rd: resolveArm64Gpr(dest).rawValue, rn: resolveArm64Gpr(src1).rawValue, rm: resolveArm64Gpr(src2).rawValue)
+		sdivRegs(dest, src1, src2) then maxArm64EmitSdiv(code, rd: resolveArm64Gpr(dest).rawValue, rn: resolveArm64Gpr(src1).rawValue, rm: resolveArm64Gpr(src2).rawValue)
+		remRegs(dest, src1, src2) then maxArm64EmitRem(code, rd: resolveArm64Gpr(dest).rawValue, rn: resolveArm64Gpr(src1).rawValue, rm: resolveArm64Gpr(src2).rawValue)
+		negReg(dest, src) then maxArm64EmitNeg(code, rd: resolveArm64Gpr(dest).rawValue, rn: resolveArm64Gpr(src).rawValue)
+		mvnReg(dest, src) then maxArm64EmitMvn(code, rd: resolveArm64Gpr(dest).rawValue, rn: resolveArm64Gpr(src).rawValue)
+		andRegs(dest, src1, src2) then maxArm64EmitAnd(code, rd: resolveArm64Gpr(dest).rawValue, rn: resolveArm64Gpr(src1).rawValue, rm: resolveArm64Gpr(src2).rawValue)
+		orrRegs(dest, src1, src2) then maxArm64EmitOrr(code, rd: resolveArm64Gpr(dest).rawValue, rn: resolveArm64Gpr(src1).rawValue, rm: resolveArm64Gpr(src2).rawValue)
+		eorRegs(dest, src1, src2) then maxArm64EmitEor(code, rd: resolveArm64Gpr(dest).rawValue, rn: resolveArm64Gpr(src1).rawValue, rm: resolveArm64Gpr(src2).rawValue)
+		lslRegs(dest, src1, src2) then maxArm64EmitLslv(code, rd: resolveArm64Gpr(dest).rawValue, rn: resolveArm64Gpr(src1).rawValue, rm: resolveArm64Gpr(src2).rawValue)
+		asrRegs(dest, src1, src2) then maxArm64EmitAsrv(code, rd: resolveArm64Gpr(dest).rawValue, rn: resolveArm64Gpr(src1).rawValue, rm: resolveArm64Gpr(src2).rawValue)
+		cmpRegs(src1, src2) then maxArm64EmitCmp(code, rn: resolveArm64Gpr(src1).rawValue, rm: resolveArm64Gpr(src2).rawValue)
+		cmpRegZero(src) then maxArm64EmitCmpRegZero(code, rn: resolveArm64Gpr(src).rawValue)
 		condBranch(condition, targetBlock) then maxArm64HandleCondBranch(code, jumpFixups: jumpFixups, condition: condition, targetBlock: targetBlock)
 		branch(targetBlock) then maxArm64HandleBranch(code, jumpFixups: jumpFixups, targetBlock: targetBlock)
 		branchLink(linkTarget) then maxArm64HandleBranchLink(code, callFixups: callFixups, linkTarget: linkTarget)
@@ -833,17 +852,17 @@ function emitMaxArm64Instruction(op MaxArm64Op, code ByteArray, jumpFixups Block
 		loadByteOp(resultSlot, baseSlot, offsetSlot) then maxArm64EmitLoadByteOp(code, resultSlot: resultSlot, baseSlot: baseSlot, offsetSlot: offsetSlot)
 		memcpyOp(dstSlot, srcSlot, lenSlot) then maxArm64EmitMemcpyOp(code, dstSlot: dstSlot, srcSlot: srcSlot, lenSlot: lenSlot)
 		// Register allocator ops
-		movRegReg(dest, src) then maxArm64EmitMovRegReg(code, rd: dest.rawValue, rn: src.rawValue)
-		spillToStack(offset, src) then maxArm64EmitSpillToStack(code, rt: src.rawValue, byteOffset: offset)
-		reloadFromStack(dest, offset) then maxArm64EmitReloadFromStack(code, rt: dest.rawValue, byteOffset: offset)
-		branchLinkReg(reg) then maxArm64EmitBlr(code, rn: reg.rawValue)
+		movRegReg(dest, src) then maxArm64EmitMovRegReg(code, rd: resolveArm64Gpr(dest).rawValue, rn: resolveArm64Gpr(src).rawValue)
+		spillToStack(offset, src) then maxArm64EmitSpillToStack(code, rt: resolveArm64Gpr(src).rawValue, byteOffset: offset)
+		reloadFromStack(dest, offset) then maxArm64EmitReloadFromStack(code, rt: resolveArm64Gpr(dest).rawValue, byteOffset: offset)
+		branchLinkReg(reg) then maxArm64EmitBlr(code, rn: resolveArm64Gpr(reg).rawValue)
 		subSpImm(value) then maxArm64EmitSubImm(code, rd: 31, rn: 31, imm12: value)
 		addSpImm(value) then maxArm64EmitAddImm(code, rd: 31, rn: 31, imm12: value)
-		strToSpOffset(offset, src) then maxArm64EmitStrSpOffset(code, rt: src.rawValue, byteOffset: offset)
+		strToSpOffset(offset, src) then maxArm64EmitStrSpOffset(code, rt: resolveArm64Gpr(src).rawValue, byteOffset: offset)
 		// FP ops — emit using ARM64 FP instruction encodings
-		fmovRegReg(dest, src, _) then maxArm64EmitFmovDD(code, rd: dest.rawValue, rn: src.rawValue)
-		spillFpToStack(offset, src, _) then maxArm64EmitFpSpillToStack(code, rt: src.rawValue, byteOffset: offset)
-		reloadFpFromStack(dest, offset, _) then maxArm64EmitFpReloadFromStack(code, rt: dest.rawValue, byteOffset: offset)
+		fmovRegReg(dest, src, _) then maxArm64EmitFmovDD(code, rd: resolveArm64Fp(dest).rawValue, rn: resolveArm64Fp(src).rawValue)
+		spillFpToStack(offset, src, _) then maxArm64EmitFpSpillToStack(code, rt: resolveArm64Fp(src).rawValue, byteOffset: offset)
+		reloadFpFromStack(dest, offset, _) then maxArm64EmitFpReloadFromStack(code, rt: resolveArm64Fp(dest).rawValue, byteOffset: offset)
 		fmovToFloat to frintn then panic("ARM64 FP op not yet implemented in binary emitter")
 		fpStoreIndirect to nullSafeLoad then panic("ARM64 extended op not yet implemented in binary emitter")
 	end 'emit'

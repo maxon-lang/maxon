@@ -1,0 +1,284 @@
+// Mid-to-MIR Conversion (Phase 6).
+// Converts mid-level dialect ops (arith, cf, func, memref, sys, runtime)
+// into target-independent MIR dialect ops. After this pass, only mir ops
+// remain (plus pass-through maxx64/maxarm64 ops).
+
+// ============================================================
+// Public entry point
+// ============================================================
+
+export function convertToMir(module MlirModule) returns MlirModule
+	logDebug(LogCategory.mlir, message: () gives "Running convert-to-mir pass")
+	var result = createMlirModule()
+
+	for srcFunc in module.functions 'eachFunc'
+		var dstFunc = createMlirFunction(srcFunc.name, returnType: srcFunc.returnType)
+		dstFunc.paramCount = srcFunc.paramCount
+		dstFunc.paramTypes = srcFunc.paramTypes
+
+		for srcBlock in srcFunc.region.blocks 'eachBlock'
+			var dstBlock = addBlock(dstFunc.region, label: srcBlock.label)
+			dstBlock.id = srcBlock.id
+			dstBlock.blockArgs = srcBlock.blockArgs
+
+			// Convert non-terminator ops
+			for op in srcBlock.ops 'eachOp'
+				convertOpToMir(op, dstBlock: dstBlock)
+			end 'eachOp'
+
+			// Convert terminator
+			if srcBlock.hasTerminator 'hasTerm'
+				convertTerminatorToMir(srcBlock.terminator, dstBlock: dstBlock)
+			end 'hasTerm'
+		end 'eachBlock'
+
+		dstFunc.region.nextBlockId = srcFunc.region.nextBlockId
+		result.functions.push(dstFunc)
+	end 'eachFunc'
+
+	return result
+end 'convertToMir'
+
+// ============================================================
+// Top-level op dispatch
+// ============================================================
+
+function convertOpToMir(op MlirOp, dstBlock MlirBlock)
+	match op 'dispatch'
+		maxhl then panic("convert-to-mir: unexpected maxhl op — should have been fully lowered by Phase 5")
+		arith(arithOp) then convertArithOpToMir(arithOp, dstBlock: dstBlock)
+		cf(cfOp) then convertCfOpToMir(cfOp, dstBlock: dstBlock)
+		func(funcOp) then convertFuncOpToMir(funcOp, dstBlock: dstBlock)
+		memref(memrefOp) then convertMemRefOpToMir(memrefOp, dstBlock: dstBlock)
+		runtime(rtOp) then convertRuntimeOpToMir(rtOp, dstBlock: dstBlock)
+		sys(sysOp) then convertSysOpToMir(sysOp, dstBlock: dstBlock)
+		mir to maxarm64 then dstBlock.ops.push(op)
+	end 'dispatch'
+end 'convertOpToMir'
+
+function convertTerminatorToMir(op MlirOp, dstBlock MlirBlock)
+	match op 'dispatch'
+		maxhl then panic("convert-to-mir: unexpected maxhl terminator — should have been fully lowered by Phase 5")
+		arith(arithOp) then convertArithOpToMir(arithOp, dstBlock: dstBlock)
+		cf(cfOp) then convertCfTerminatorToMir(cfOp, dstBlock: dstBlock)
+		func(funcOp) then convertFuncTerminatorToMir(funcOp, dstBlock: dstBlock)
+		memref(memrefOp) then convertMemRefOpToMir(memrefOp, dstBlock: dstBlock)
+		runtime(rtOp) then convertRuntimeOpToMir(rtOp, dstBlock: dstBlock)
+		sys(sysOp) then convertSysOpToMir(sysOp, dstBlock: dstBlock)
+		mir to maxarm64 then setTerminator(dstBlock, op: op)
+	end 'dispatch'
+end 'convertTerminatorToMir'
+
+// Helper to set the terminator on a block.
+function setTerminator(dstBlock MlirBlock, op MlirOp)
+	dstBlock.terminator = op
+	dstBlock.hasTerminator = true
+end 'setTerminator'
+
+// ============================================================
+// Arith dialect conversion
+// ============================================================
+
+function convertArithOpToMir(arithOp ArithOp, dstBlock MlirBlock)
+	match arithOp 'dispatch'
+		const(c) then convertArithConstToMir(c, dstBlock: dstBlock)
+		unary(u) then convertArithUnaryToMir(u, dstBlock: dstBlock)
+		binary(b) then convertArithBinaryToMir(b, dstBlock: dstBlock)
+	end 'dispatch'
+end 'convertArithOpToMir'
+
+function convertArithConstToMir(c ArithConst, dstBlock MlirBlock)
+	let isFloat = c.opcode == ArithConstOpcode.constF64
+	let mirOp = MirOp.movImm(c.resultId, c.value, isFloat)
+	dstBlock.ops.push(MlirOp.mir(mirOp))
+end 'convertArithConstToMir'
+
+function convertArithUnaryToMir(u ArithUnaryOp, dstBlock MlirBlock)
+	let mirOpcode = arithUnaryOpcodeToMir(u.opcode)
+	let mirOp = MirOp.unaryOp(u.resultId, u.operandId, mirOpcode)
+	dstBlock.ops.push(MlirOp.mir(mirOp))
+end 'convertArithUnaryToMir'
+
+function convertArithBinaryToMir(b ArithBinaryOp, dstBlock MlirBlock)
+	if isComparisonOpcode(b.opcode) 'isCmp'
+		let predicate = arithBinaryOpcodeToCmpPredicate(b.opcode)
+		let mirOp = MirOp.cmp(b.resultId, b.leftId, b.rightId, predicate)
+		dstBlock.ops.push(MlirOp.mir(mirOp))
+	end 'isCmp' else 'isArith'
+		let mirOpcode = arithBinaryOpcodeToMir(b.opcode)
+		let mirOp = MirOp.binOp(b.resultId, b.leftId, b.rightId, mirOpcode)
+		dstBlock.ops.push(MlirOp.mir(mirOp))
+	end 'isArith'
+end 'convertArithBinaryToMir'
+
+// ============================================================
+// Cf dialect conversion
+// ============================================================
+
+function convertCfOpToMir(cfOp CfOp, dstBlock MlirBlock)
+	let mirOp = convertCfToMirOp(cfOp)
+	dstBlock.ops.push(MlirOp.mir(mirOp))
+end 'convertCfOpToMir'
+
+function convertCfTerminatorToMir(cfOp CfOp, dstBlock MlirBlock)
+	let mirOp = convertCfToMirOp(cfOp)
+	dstBlock.terminator = MlirOp.mir(mirOp)
+	dstBlock.hasTerminator = true
+end 'convertCfTerminatorToMir'
+
+function convertCfToMirOp(cfOp CfOp) returns MirOp
+	return match cfOp 'dispatch'
+		br(target, argIds) gives MirOp.branch(target, argIds)
+		condBr(condId, thenTarget, thenArgIds, elseTarget, elseArgIds) gives MirOp.condBranch(condId, thenTarget, thenArgIds, elseTarget, elseArgIds)
+	end 'dispatch'
+end 'convertCfToMirOp'
+
+// ============================================================
+// Func dialect conversion
+// ============================================================
+
+function convertFuncOpToMir(funcOp FuncOp, dstBlock MlirBlock)
+	match funcOp 'dispatch'
+		call(resultId, callee, argIds) then dstBlock.ops.push(MlirOp.mir(MirOp.call(resultId, callee, argIds)))
+		ret(retValId) then dstBlock.ops.push(MlirOp.mir(MirOp.ret(retValId)))
+		param(resultId, paramIndex, paramType) then dstBlock.ops.push(MlirOp.mir(MirOp.param(resultId, paramIndex, paramType)))
+		indirectCall(resultId, calleeId, argIds) then dstBlock.ops.push(MlirOp.mir(MirOp.indirectCall(resultId, calleeId, argIds)))
+		funcRef(resultId, funcName) then dstBlock.ops.push(MlirOp.mir(MirOp.globalAddr(resultId, funcName)))
+		tailCall(callee, argIds) then dstBlock.ops.push(MlirOp.mir(MirOp.call(0, callee, argIds)))
+		tryCall(resultId, callee, argIds, _) then dstBlock.ops.push(MlirOp.mir(MirOp.call(resultId, callee, argIds)))
+	end 'dispatch'
+end 'convertFuncOpToMir'
+
+function convertFuncTerminatorToMir(funcOp FuncOp, dstBlock MlirBlock)
+	match funcOp 'dispatch'
+		ret(retValId) then setTerminator(dstBlock, op: MlirOp.mir(MirOp.ret(retValId)))
+		call(resultId, callee, argIds) then setTerminator(dstBlock, op: MlirOp.mir(MirOp.call(resultId, callee, argIds)))
+		tailCall(callee, argIds) then setTerminator(dstBlock, op: MlirOp.mir(MirOp.call(0, callee, argIds)))
+		tryCall(resultId, callee, argIds, _) then setTerminator(dstBlock, op: MlirOp.mir(MirOp.call(resultId, callee, argIds)))
+		param(resultId, paramIndex, paramType) then dstBlock.ops.push(MlirOp.mir(MirOp.param(resultId, paramIndex, paramType)))
+		indirectCall(resultId, calleeId, argIds) then setTerminator(dstBlock, op: MlirOp.mir(MirOp.indirectCall(resultId, calleeId, argIds)))
+		funcRef(resultId, funcName) then dstBlock.ops.push(MlirOp.mir(MirOp.globalAddr(resultId, funcName)))
+	end 'dispatch'
+end 'convertFuncTerminatorToMir'
+
+// ============================================================
+// MemRef dialect conversion
+// ============================================================
+// Remaining memref ops after mem2reg are passed through as-is.
+// The target backends (MidToMaxX64/Arm64) handle memref.storeSlot/loadSlot
+// natively with slot-based addressing (movSlot/loadSlot x64 ops), which is
+// more efficient than expanding to stackSlotAddr + store/load pairs.
+
+function convertMemRefOpToMir(memrefOp MemRefOp, dstBlock MlirBlock)
+	dstBlock.ops.push(MlirOp.memref(memrefOp))
+end 'convertMemRefOpToMir'
+
+// ============================================================
+// Sys dialect conversion
+// ============================================================
+
+function convertSysOpToMir(sysOp SysOp, dstBlock MlirBlock)
+	match sysOp 'dispatch'
+		syscall(resultId, number, argIds) then dstBlock.ops.push(MlirOp.mir(MirOp.syscall(resultId, number, argIds)))
+		iatCall(resultId, slotIndex, argIds) then dstBlock.ops.push(MlirOp.mir(MirOp.iatCall(resultId, slotIndex, argIds)))
+		globalAddr(resultId, name) then dstBlock.ops.push(MlirOp.mir(MirOp.globalAddr(resultId, name)))
+		memcpy(dstId, srcId, lenId) then dstBlock.ops.push(MlirOp.mir(MirOp.memcpy(dstId, srcId, lenId)))
+		stackAddr(resultId, slotId) then dstBlock.ops.push(MlirOp.mir(MirOp.stackSlotAddr(resultId, slotId)))
+		storeByte(baseId, offsetId, byteId) then dstBlock.ops.push(MlirOp.mir(MirOp.storeByte(baseId, offsetId, byteId)))
+		loadByte(resultId, baseId, offsetId) then dstBlock.ops.push(MlirOp.mir(MirOp.loadByte(resultId, baseId, offsetId)))
+		osExit(codeId) then dstBlock.ops.push(MlirOp.mir(MirOp.osExit(codeId)))
+		osWrite(ptrId, lenId) then dstBlock.ops.push(MlirOp.mir(MirOp.osWrite(ptrId, lenId)))
+		free(ptrId) then convertSysFreeToMir(ptrId, dstBlock: dstBlock)
+	end 'dispatch'
+end 'convertSysOpToMir'
+
+function convertSysFreeToMir(ptrId ValueId, dstBlock MlirBlock)
+	var argIds = ValueIdArray{}
+	argIds.push(ptrId)
+	dstBlock.ops.push(MlirOp.mir(MirOp.call(0, b"__rt_free", argIds)))
+end 'convertSysFreeToMir'
+
+// ============================================================
+// Runtime dialect conversion
+// ============================================================
+
+function convertRuntimeOpToMir(rtOp RuntimeOp, dstBlock MlirBlock)
+	match rtOp 'dispatch'
+		printLiteral then panic("convert-to-mir: runtime.printLiteral should have been lowered in Phase 5 ({dstBlock.id})")
+		printInt then panic("convert-to-mir: runtime.printInt should have been lowered in Phase 5")
+		// runtime.drop is a no-op for primitive types. Emit nothing.
+		drop then break 'dispatch'
+	end 'dispatch'
+end 'convertRuntimeOpToMir'
+
+// ============================================================
+// Opcode mapping helpers
+// ============================================================
+
+// Maps arithmetic binary opcodes to MIR binary opcodes.
+// Only call this for non-comparison opcodes.
+function arithBinaryOpcodeToMir(opcode ArithBinaryOpcode) returns MirBinOpcode
+	match opcode 'check'
+		cmpI64Eq to cmpF64Ge then panic("arithBinaryOpcodeToMir: comparison opcode passed to arithmetic mapping")
+		addI64 to divF64 then break 'check'
+	end 'check'
+	return match opcode 'map'
+		addI64 gives MirBinOpcode.addI64
+		subI64 gives MirBinOpcode.subI64
+		mulI64 gives MirBinOpcode.mulI64
+		divI64 gives MirBinOpcode.divI64
+		remI64 gives MirBinOpcode.remI64
+		andI64 gives MirBinOpcode.andI64
+		orI64 gives MirBinOpcode.orI64
+		xorI64 gives MirBinOpcode.xorI64
+		shlI64 gives MirBinOpcode.shlI64
+		shrI64 gives MirBinOpcode.shrI64
+		addF64 gives MirBinOpcode.addF64
+		subF64 gives MirBinOpcode.subF64
+		mulF64 gives MirBinOpcode.mulF64
+		divF64 gives MirBinOpcode.divF64
+		cmpI64Eq to cmpF64Ge gives MirBinOpcode.addI64
+	end 'map'
+end 'arithBinaryOpcodeToMir'
+
+// Maps comparison binary opcodes to MIR comparison predicates.
+// Only call this for comparison opcodes.
+function arithBinaryOpcodeToCmpPredicate(opcode ArithBinaryOpcode) returns MirCmpPredicate
+	match opcode 'check'
+		addI64 to divF64 then panic("arithBinaryOpcodeToCmpPredicate: arithmetic opcode passed to comparison mapping")
+		cmpI64Eq to cmpF64Ge then break 'check'
+	end 'check'
+	return match opcode 'map'
+		cmpI64Eq gives MirCmpPredicate.eq
+		cmpI64Ne gives MirCmpPredicate.ne
+		cmpI64Lt gives MirCmpPredicate.lt
+		cmpI64Le gives MirCmpPredicate.le
+		cmpI64Gt gives MirCmpPredicate.gt
+		cmpI64Ge gives MirCmpPredicate.ge
+		cmpF64Eq gives MirCmpPredicate.feq
+		cmpF64Ne gives MirCmpPredicate.fne
+		cmpF64Lt gives MirCmpPredicate.flt
+		cmpF64Le gives MirCmpPredicate.fle
+		cmpF64Gt gives MirCmpPredicate.fgt
+		cmpF64Ge gives MirCmpPredicate.fge
+		addI64 to divF64 gives MirCmpPredicate.eq
+	end 'map'
+end 'arithBinaryOpcodeToCmpPredicate'
+
+// Returns true if the ArithBinaryOpcode is a comparison (cmpI64* or cmpF64*).
+function isComparisonOpcode(opcode ArithBinaryOpcode) returns bool
+	return match opcode 'check'
+		addI64 to divF64 gives false
+		cmpI64Eq to cmpF64Ge gives true
+	end 'check'
+end 'isComparisonOpcode'
+
+// Maps unary opcodes from the arith dialect to MIR unary opcodes.
+function arithUnaryOpcodeToMir(opcode ArithUnaryOpcode) returns MirUnaryOpcode
+	return match opcode 'map'
+		negI64 gives MirUnaryOpcode.negI64
+		bitNotI64 gives MirUnaryOpcode.bitNotI64
+		fpToSiI64 gives MirUnaryOpcode.fpToSiI64
+		siToFpF64 gives MirUnaryOpcode.siToFpF64
+	end 'map'
+end 'arithUnaryOpcodeToMir'

@@ -1,0 +1,475 @@
+typealias OpIndex = int(0 to u64.max)
+
+// Borrow Check Pass — NLL-style borrow analysis.
+// Pure analysis pass: reports errors via project.diagnostics but does NOT modify the module.
+// Runs after MaxHLToMid lowering, when memref.loadSlot / memref.storeSlot ops are present.
+//
+// For each function, the pass:
+//   1. Builds a lifetime map: for each ValueId, records definition and last-use positions
+//   2. Builds a borrow graph: tracks which values borrow from which memory slots
+//   3. Checks for violations:
+//      - Mutating a slot while immutable borrows are active
+//      - Multiple simultaneous mutable borrows of the same slot
+//   4. Borrows expire when the borrowing value's last use has been passed
+//
+// Currently performs intra-block analysis only. Cross-block analysis is future work.
+
+// Sentinel meaning "no known definition or use"
+let BC_NONE = 9223372036854775807
+
+// ============================================================
+// Data types for borrow analysis
+// ============================================================
+
+// Lifetime information for a single ValueId: where it was defined and last used.
+export type LifetimeInfo
+	export var defBlock BlockId
+	export var defOpIndex OpIndex
+	export var lastUseBlock BlockId
+	export var lastUseOpIndex OpIndex
+end 'LifetimeInfo'
+
+export typealias LifetimeInfoArray = Array with LifetimeInfo
+
+// A borrow record: tracks that borrowValueId borrows from sourceSlot.
+export type BorrowRecord
+	export var sourceSlot VarSlot
+	export var borrowValueId ValueId
+	export var borrowBlock BlockId
+	export var borrowOpIndex OpIndex
+	export var isMutable bool
+end 'BorrowRecord'
+
+export typealias BorrowRecordArray = Array with BorrowRecord
+
+// Per-slot active borrow list: tracks all live borrows of a given slot.
+type SlotBorrowState
+	export var borrows BorrowRecordArray
+end 'SlotBorrowState'
+
+typealias SlotBorrowStateArray = Array with SlotBorrowState
+
+// Mutable analysis state for a single function.
+type BorrowAnalysisState
+	// Lifetime map: indexed by ValueId
+	export var lifetimes LifetimeInfoArray
+	export var maxValueId ValueId
+	export var hasAnyValue bool
+	// Per-slot borrow tracking: indexed by VarSlot
+	export var slotBorrows SlotBorrowStateArray
+	export var maxSlot VarSlot
+	export var hasAnySlot bool
+end 'BorrowAnalysisState'
+
+function createBorrowAnalysisState() returns BorrowAnalysisState
+	return BorrowAnalysisState{
+		lifetimes: LifetimeInfoArray{},
+		maxValueId: 0,
+		hasAnyValue: false,
+		slotBorrows: SlotBorrowStateArray{},
+		maxSlot: 0,
+		hasAnySlot: false
+	}
+end 'createBorrowAnalysisState'
+
+// ============================================================
+// Entry point
+// ============================================================
+
+export function runBorrowCheck(project Project, module MlirModule) returns MlirModule
+	logDebug(LogCategory.mlir, message: () gives "Running borrow check pass")
+
+	for func in module.functions 'eachFunc'
+		checkFunction(project, func: func)
+	end 'eachFunc'
+
+	// Analysis-only pass: return the module unchanged
+	return module
+end 'runBorrowCheck'
+
+// ============================================================
+// Per-function analysis
+// ============================================================
+
+function checkFunction(project Project, func MlirFunction)
+	var state = createBorrowAnalysisState()
+
+	// Phase 1: Build lifetime map — scan all ops for definitions and uses
+	for block in func.region.blocks 'scanLifetimes'
+		var opIndex = 0
+		for op in block.ops 'scanOps'
+			recordOpLifetimes(op, blockId: block.id, opIndex: opIndex, state: state)
+			opIndex = opIndex + 1
+		end 'scanOps'
+		if block.hasTerminator 'hasTerm'
+			recordOpLifetimes(block.terminator, blockId: block.id, opIndex: opIndex, state: state)
+		end 'hasTerm'
+	end 'scanLifetimes'
+
+	if not state.hasAnyValue 'noValues'
+		return
+	end 'noValues'
+
+	// Phase 2: Check borrows within each block
+	for block in func.region.blocks 'checkBlocks'
+		checkBlockBorrows(project, block: block, state: state, funcName: func.name)
+	end 'checkBlocks'
+end 'checkFunction'
+
+// ============================================================
+// Phase 1: Lifetime scanning
+// ============================================================
+
+// Record definition and use sites for all ValueIds referenced by an op.
+function recordOpLifetimes(op MlirOp, blockId BlockId, opIndex OpIndex, state BorrowAnalysisState)
+	match op 'dispatch'
+		arith(arithOp) then recordArithLifetimes(arithOp, blockId: blockId, opIndex: opIndex, state: state)
+		cf(cfOp) then recordCfLifetimes(cfOp, blockId: blockId, opIndex: opIndex, state: state)
+		func(funcOp) then recordFuncLifetimes(funcOp, blockId: blockId, opIndex: opIndex, state: state)
+		memref(memOp) then recordMemRefLifetimes(memOp, blockId: blockId, opIndex: opIndex, state: state)
+		runtime(rtOp) then recordRuntimeLifetimes(rtOp, blockId: blockId, opIndex: opIndex, state: state)
+		sys(sysOp) then recordSysLifetimes(sysOp, blockId: blockId, opIndex: opIndex, state: state)
+		maxhl then break 'dispatch'
+		mir to maxarm64 then break 'dispatch'
+	end 'dispatch'
+end 'recordOpLifetimes'
+
+function recordArithLifetimes(op ArithOp, blockId BlockId, opIndex OpIndex, state BorrowAnalysisState)
+	match op 'rec'
+		const(c) then recordDef(c.resultId, blockId: blockId, opIndex: opIndex, state: state)
+		unary(u) then recordDefAndUse(u.resultId, usedId: u.operandId, blockId: blockId, opIndex: opIndex, state: state)
+		binary(b) then recordDefAndTwoUses(b.resultId, usedId1: b.leftId, usedId2: b.rightId, blockId: blockId, opIndex: opIndex, state: state)
+	end 'rec'
+end 'recordArithLifetimes'
+
+function recordCfLifetimes(op CfOp, blockId BlockId, opIndex OpIndex, state BorrowAnalysisState)
+	match op 'rec'
+		br then break 'rec'
+		condBr(condId, _, _, _, _) then recordUse(condId, blockId: blockId, opIndex: opIndex, state: state)
+	end 'rec'
+end 'recordCfLifetimes'
+
+function recordFuncLifetimes(op FuncOp, blockId BlockId, opIndex OpIndex, state BorrowAnalysisState)
+	match op 'rec'
+		ret(retValId) then recordUse(retValId, blockId: blockId, opIndex: opIndex, state: state)
+		call(resultId, _, argIds) then recordDefAndArrayUses(resultId, usedIds: argIds, blockId: blockId, opIndex: opIndex, state: state)
+		tryCall(resultId, _, argIds, errorFlagId) then recordTryCallLifetimes(resultId, argIds: argIds, errorFlagId: errorFlagId, blockId: blockId, opIndex: opIndex, state: state)
+		indirectCall(resultId, calleeId, argIds) then recordIndirectCallLifetimes(resultId, calleeId: calleeId, argIds: argIds, blockId: blockId, opIndex: opIndex, state: state)
+		funcRef(resultId, _) then recordDef(resultId, blockId: blockId, opIndex: opIndex, state: state)
+		tailCall(_, argIds) then recordArrayUses(argIds, blockId: blockId, opIndex: opIndex, state: state)
+		param(resultId, _, _) then recordDef(resultId, blockId: blockId, opIndex: opIndex, state: state)
+	end 'rec'
+end 'recordFuncLifetimes'
+
+function recordTryCallLifetimes(resultId ValueId, argIds ValueIdArray, errorFlagId ValueId, blockId BlockId, opIndex OpIndex, state BorrowAnalysisState)
+	recordDefAndArrayUses(resultId, usedIds: argIds, blockId: blockId, opIndex: opIndex, state: state)
+	recordDef(errorFlagId, blockId: blockId, opIndex: opIndex, state: state)
+end 'recordTryCallLifetimes'
+
+function recordIndirectCallLifetimes(resultId ValueId, calleeId ValueId, argIds ValueIdArray, blockId BlockId, opIndex OpIndex, state BorrowAnalysisState)
+	recordDefAndArrayUses(resultId, usedIds: argIds, blockId: blockId, opIndex: opIndex, state: state)
+	recordUse(calleeId, blockId: blockId, opIndex: opIndex, state: state)
+end 'recordIndirectCallLifetimes'
+
+function recordMemRefLifetimes(op MemRefOp, blockId BlockId, opIndex OpIndex, state BorrowAnalysisState)
+	match op 'rec'
+		storeSlot(_, valueId) then recordUse(valueId, blockId: blockId, opIndex: opIndex, state: state)
+		loadSlot(resultId, _) then recordDef(resultId, blockId: blockId, opIndex: opIndex, state: state)
+	end 'rec'
+end 'recordMemRefLifetimes'
+
+function recordRuntimeLifetimes(op RuntimeOp, blockId BlockId, opIndex OpIndex, state BorrowAnalysisState)
+	match op 'rec'
+		printLiteral then break 'rec'
+		printInt(valueId) then recordUse(valueId, blockId: blockId, opIndex: opIndex, state: state)
+		drop(valueId) then recordUse(valueId, blockId: blockId, opIndex: opIndex, state: state)
+	end 'rec'
+end 'recordRuntimeLifetimes'
+
+function recordSysLifetimes(op SysOp, blockId BlockId, opIndex OpIndex, state BorrowAnalysisState)
+	match op 'rec'
+		syscall(resultId, _, argIds) then recordDefAndArrayUses(resultId, usedIds: argIds, blockId: blockId, opIndex: opIndex, state: state)
+		iatCall(resultId, _, argIds) then recordDefAndArrayUses(resultId, usedIds: argIds, blockId: blockId, opIndex: opIndex, state: state)
+		globalAddr(resultId, _) then recordDef(resultId, blockId: blockId, opIndex: opIndex, state: state)
+		memcpy(dstId, srcId, lenId) then recordThreeUses(dstId, usedId2: srcId, usedId3: lenId, blockId: blockId, opIndex: opIndex, state: state)
+		stackAddr(resultId, _) then recordDef(resultId, blockId: blockId, opIndex: opIndex, state: state)
+		storeByte(baseId, offsetId, byteId) then recordThreeUses(baseId, usedId2: offsetId, usedId3: byteId, blockId: blockId, opIndex: opIndex, state: state)
+		loadByte(resultId, baseId, offsetId) then recordDefAndTwoUses(resultId, usedId1: baseId, usedId2: offsetId, blockId: blockId, opIndex: opIndex, state: state)
+		osExit(codeId) then recordUse(codeId, blockId: blockId, opIndex: opIndex, state: state)
+		osWrite(ptrId, lenId) then recordTwoUses(ptrId, usedId2: lenId, blockId: blockId, opIndex: opIndex, state: state)
+		free(ptrId) then recordUse(ptrId, blockId: blockId, opIndex: opIndex, state: state)
+	end 'rec'
+end 'recordSysLifetimes'
+
+// ============================================================
+// Lifetime recording helpers
+// ============================================================
+
+function ensureLifetimeCapacity(valueId ValueId, state BorrowAnalysisState)
+	let needed = valueId + 1
+	while state.lifetimes.count() < needed 'grow'
+		state.lifetimes.push(LifetimeInfo{defBlock: BC_NONE, defOpIndex: BC_NONE, lastUseBlock: BC_NONE, lastUseOpIndex: BC_NONE})
+	end 'grow'
+	if not state.hasAnyValue or valueId > state.maxValueId 'updateMax'
+		state.maxValueId = valueId
+		state.hasAnyValue = true
+	end 'updateMax'
+end 'ensureLifetimeCapacity'
+
+function recordDef(valueId ValueId, blockId BlockId, opIndex OpIndex, state BorrowAnalysisState)
+	ensureLifetimeCapacity(valueId, state: state)
+	var info = try state.lifetimes.get(valueId) otherwise 'miss'
+		return
+	end 'miss'
+	info.defBlock = blockId
+	info.defOpIndex = opIndex
+	state.lifetimes.set(valueId, value: info)
+end 'recordDef'
+
+function recordUse(valueId ValueId, blockId BlockId, opIndex OpIndex, state BorrowAnalysisState)
+	ensureLifetimeCapacity(valueId, state: state)
+	var info = try state.lifetimes.get(valueId) otherwise 'miss'
+		return
+	end 'miss'
+	// Update last use if this use is later (same block: higher opIndex; different block: always update)
+	if info.lastUseBlock == BC_NONE 'firstUse'
+		info.lastUseBlock = blockId
+		info.lastUseOpIndex = opIndex
+	end 'firstUse' else 'subsequentUse'
+		if blockId == info.lastUseBlock 'sameBlock'
+			if opIndex > info.lastUseOpIndex 'later'
+				info.lastUseOpIndex = opIndex
+			end 'later'
+		end 'sameBlock' else 'differentBlock'
+			// Cross-block: update to newer block (conservative — always extend)
+			info.lastUseBlock = blockId
+			info.lastUseOpIndex = opIndex
+		end 'differentBlock'
+	end 'subsequentUse'
+	state.lifetimes.set(valueId, value: info)
+end 'recordUse'
+
+function recordDefAndUse(defId ValueId, usedId ValueId, blockId BlockId, opIndex OpIndex, state BorrowAnalysisState)
+	recordDef(defId, blockId: blockId, opIndex: opIndex, state: state)
+	recordUse(usedId, blockId: blockId, opIndex: opIndex, state: state)
+end 'recordDefAndUse'
+
+function recordDefAndTwoUses(defId ValueId, usedId1 ValueId, usedId2 ValueId, blockId BlockId, opIndex OpIndex, state BorrowAnalysisState)
+	recordDef(defId, blockId: blockId, opIndex: opIndex, state: state)
+	recordUse(usedId1, blockId: blockId, opIndex: opIndex, state: state)
+	recordUse(usedId2, blockId: blockId, opIndex: opIndex, state: state)
+end 'recordDefAndTwoUses'
+
+function recordTwoUses(usedId1 ValueId, usedId2 ValueId, blockId BlockId, opIndex OpIndex, state BorrowAnalysisState)
+	recordUse(usedId1, blockId: blockId, opIndex: opIndex, state: state)
+	recordUse(usedId2, blockId: blockId, opIndex: opIndex, state: state)
+end 'recordTwoUses'
+
+function recordThreeUses(usedId1 ValueId, usedId2 ValueId, usedId3 ValueId, blockId BlockId, opIndex OpIndex, state BorrowAnalysisState)
+	recordUse(usedId1, blockId: blockId, opIndex: opIndex, state: state)
+	recordUse(usedId2, blockId: blockId, opIndex: opIndex, state: state)
+	recordUse(usedId3, blockId: blockId, opIndex: opIndex, state: state)
+end 'recordThreeUses'
+
+function recordArrayUses(ids ValueIdArray, blockId BlockId, opIndex OpIndex, state BorrowAnalysisState)
+	for id in ids 'each'
+		recordUse(id, blockId: blockId, opIndex: opIndex, state: state)
+	end 'each'
+end 'recordArrayUses'
+
+function recordDefAndArrayUses(defId ValueId, usedIds ValueIdArray, blockId BlockId, opIndex OpIndex, state BorrowAnalysisState)
+	recordDef(defId, blockId: blockId, opIndex: opIndex, state: state)
+	recordArrayUses(usedIds, blockId: blockId, opIndex: opIndex, state: state)
+end 'recordDefAndArrayUses'
+
+// ============================================================
+// Phase 2: Intra-block borrow checking
+// ============================================================
+
+// Check all ops in a single block for borrow violations.
+// For each op:
+//   1. Expire any borrows whose borrowing value's last use has passed
+//   2. If the op is a memref.loadSlot, record a new immutable borrow
+//   3. If the op is a memref.storeSlot, check for active borrow violations
+function checkBlockBorrows(project Project, block MlirBlock, state BorrowAnalysisState, funcName ByteArray)
+	// Reset per-slot borrow tracking for this block
+	resetSlotBorrows(state)
+
+	var opIndex = 0
+	for op in block.ops 'checkOps'
+		// Step 1: Expire borrows whose borrowing value's last use is before this op
+		expireDeadBorrows(state, currentBlock: block.id, currentOpIndex: opIndex)
+
+		// Step 2: Process the op for borrow creation or violation checking
+		checkOpBorrows(project, op: op, blockId: block.id, opIndex: opIndex, state: state, funcName: funcName)
+
+		opIndex = opIndex + 1
+	end 'checkOps'
+
+	// Also check the terminator
+	if block.hasTerminator 'hasTerm'
+		expireDeadBorrows(state, currentBlock: block.id, currentOpIndex: opIndex)
+		checkOpBorrows(project, op: block.terminator, blockId: block.id, opIndex: opIndex, state: state, funcName: funcName)
+	end 'hasTerm'
+end 'checkBlockBorrows'
+
+function resetSlotBorrows(state BorrowAnalysisState)
+	// Clear all per-slot borrow lists
+	var i = 0
+	while i < state.slotBorrows.count() 'clearSlots'
+		var slotState = try state.slotBorrows.get(i) otherwise 'skip'
+			i = i + 1
+			continue
+		end 'skip'
+		slotState.borrows = BorrowRecordArray{}
+		state.slotBorrows.set(i, value: slotState)
+		i = i + 1
+	end 'clearSlots'
+end 'resetSlotBorrows'
+
+function ensureSlotBorrowCapacity(slotId VarSlot, state BorrowAnalysisState)
+	let needed = slotId + 1
+	while state.slotBorrows.count() < needed 'grow'
+		state.slotBorrows.push(SlotBorrowState{borrows: BorrowRecordArray{}})
+	end 'grow'
+	if not state.hasAnySlot or slotId > state.maxSlot 'updateMax'
+		state.maxSlot = slotId
+		state.hasAnySlot = true
+	end 'updateMax'
+end 'ensureSlotBorrowCapacity'
+
+// Expire borrows whose borrowing value's last use is at or before the current position.
+function expireDeadBorrows(state BorrowAnalysisState, currentBlock BlockId, currentOpIndex OpIndex)
+	var slotIdx = 0
+	while slotIdx < state.slotBorrows.count() 'eachSlot'
+		var slotState = try state.slotBorrows.get(slotIdx) otherwise 'skip'
+			slotIdx = slotIdx + 1
+			continue
+		end 'skip'
+
+		var liveBorrows = BorrowRecordArray{}
+		for borrow in slotState.borrows 'filterBorrows'
+			if isBorrowAlive(borrow, state: state, currentBlock: currentBlock, currentOpIndex: currentOpIndex) 'alive'
+				liveBorrows.push(borrow)
+			end 'alive'
+		end 'filterBorrows'
+
+		slotState.borrows = liveBorrows
+		state.slotBorrows.set(slotIdx, value: slotState)
+		slotIdx = slotIdx + 1
+	end 'eachSlot'
+end 'expireDeadBorrows'
+
+// A borrow is alive if the borrowing value's last use is at or after the current position.
+// For intra-block analysis: only consider borrows in the same block.
+function isBorrowAlive(borrow BorrowRecord, state BorrowAnalysisState, currentBlock BlockId, currentOpIndex OpIndex) returns bool
+	// Cross-block borrows are conservatively kept alive (future work)
+	if borrow.borrowBlock != currentBlock 'crossBlock'
+		return true
+	end 'crossBlock'
+
+	// Look up the borrow value's last use
+	if borrow.borrowValueId >= state.lifetimes.count() 'noLifetime'
+		return false
+	end 'noLifetime'
+	let info = try state.lifetimes.get(borrow.borrowValueId) otherwise 'miss'
+		return false
+	end 'miss'
+
+	// If the last use is in a different block, conservatively keep alive
+	if info.lastUseBlock != currentBlock 'crossBlockUse'
+		return true
+	end 'crossBlockUse'
+
+	// Borrow is alive if its last use is at or after the current op
+	return info.lastUseOpIndex >= currentOpIndex
+end 'isBorrowAlive'
+
+// ============================================================
+// Op-level borrow checking dispatch
+// ============================================================
+
+function checkOpBorrows(project Project, op MlirOp, blockId BlockId, opIndex OpIndex, state BorrowAnalysisState, funcName ByteArray)
+	match op 'dispatch'
+		memref(memOp) then checkMemRefBorrows(project, op: memOp, blockId: blockId, opIndex: opIndex, state: state, funcName: funcName)
+		maxhl to func then break 'dispatch'
+		runtime to sys then break 'dispatch'
+		mir to maxarm64 then break 'dispatch'
+	end 'dispatch'
+end 'checkOpBorrows'
+
+function checkMemRefBorrows(project Project, op MemRefOp, blockId BlockId, opIndex OpIndex, state BorrowAnalysisState, funcName ByteArray)
+	match op 'check'
+		loadSlot(resultId, slotId) then registerBorrow(resultId, slotId: slotId, blockId: blockId, opIndex: opIndex, state: state)
+		storeSlot(slotId, _) then checkStoreViolations(project, slotId: slotId, opIndex: opIndex, state: state, funcName: funcName)
+	end 'check'
+end 'checkMemRefBorrows'
+
+// A memref.loadSlot creates an immutable borrow: the result borrows from the slot.
+function registerBorrow(resultId ValueId, slotId VarSlot, blockId BlockId, opIndex OpIndex, state BorrowAnalysisState)
+	ensureSlotBorrowCapacity(slotId, state: state)
+	let record = BorrowRecord{
+		sourceSlot: slotId,
+		borrowValueId: resultId,
+		borrowBlock: blockId,
+		borrowOpIndex: opIndex,
+		isMutable: false
+	}
+	var slotState = try state.slotBorrows.get(slotId) otherwise 'miss'
+		return
+	end 'miss'
+	slotState.borrows.push(record)
+	state.slotBorrows.set(slotId, value: slotState)
+	logTrace(LogCategory.mlir, message: () gives "borrow-check: %{resultId} borrows slot_{slotId} at op {opIndex}")
+end 'registerBorrow'
+
+// A memref.storeSlot is a mutation of the slot. Check for violations:
+// - If there are active immutable borrows, that is an error
+// - If there are active mutable borrows, that is a double-mutable error
+function checkStoreViolations(project Project, slotId VarSlot, opIndex OpIndex, state BorrowAnalysisState, funcName ByteArray)
+	ensureSlotBorrowCapacity(slotId, state: state)
+	let slotState = try state.slotBorrows.get(slotId) otherwise 'miss'
+		return
+	end 'miss'
+
+	for borrow in slotState.borrows 'checkBorrows'
+		if not borrow.isMutable 'immutableBorrow'
+			// Mutating a slot while an immutable borrow is active
+			reportSemanticError(project, code: ErrorCode.borrowMutateWhileBorrowed, message: "cannot assign to slot_{slotId} in '{String.from(funcName)}': value %{borrow.borrowValueId} still borrows it (borrowed at op {borrow.borrowOpIndex}, store at op {opIndex})")
+			logTrace(LogCategory.mlir, message: () gives "borrow-check: VIOLATION mutate slot_{slotId} while %{borrow.borrowValueId} borrows it")
+		end 'immutableBorrow' else 'mutableBorrow'
+			// Multiple simultaneous mutable borrows
+			reportSemanticError(project, code: ErrorCode.borrowMultipleMutable, message: "cannot mutably borrow slot_{slotId} in '{String.from(funcName)}': already mutably borrowed by %{borrow.borrowValueId} (at op {borrow.borrowOpIndex})")
+			logTrace(LogCategory.mlir, message: () gives "borrow-check: VIOLATION double mutable borrow slot_{slotId}")
+		end 'mutableBorrow'
+	end 'checkBorrows'
+end 'checkStoreViolations'
+
+// ============================================================
+// Lifetime query helpers
+// ============================================================
+
+// Get the lifetime info for a ValueId, or a sentinel "unknown" info.
+function getLifetimeInfo(valueId ValueId, state BorrowAnalysisState) returns LifetimeInfo
+	if valueId >= state.lifetimes.count() 'outOfBounds'
+		return LifetimeInfo{defBlock: BC_NONE, defOpIndex: BC_NONE, lastUseBlock: BC_NONE, lastUseOpIndex: BC_NONE}
+	end 'outOfBounds'
+	return try state.lifetimes.get(valueId) otherwise LifetimeInfo{defBlock: BC_NONE, defOpIndex: BC_NONE, lastUseBlock: BC_NONE, lastUseOpIndex: BC_NONE}
+end 'getLifetimeInfo'
+
+// Check whether a value is live at a given position (has been defined and not yet past last use).
+function isValueLiveAt(valueId ValueId, blockId BlockId, opIndex OpIndex, state BorrowAnalysisState) returns bool
+	let info = getLifetimeInfo(valueId, state: state)
+	if info.defBlock == BC_NONE 'noDef'
+		return false
+	end 'noDef'
+	if info.lastUseBlock == BC_NONE 'noUse'
+		return false
+	end 'noUse'
+	// For intra-block: value is live if we are between def and last use in the same block
+	if info.defBlock == blockId and info.lastUseBlock == blockId 'sameBlock'
+		return opIndex >= info.defOpIndex and opIndex <= info.lastUseOpIndex
+	end 'sameBlock'
+	// Cross-block: conservatively assume live
+	return true
+end 'isValueLiveAt'

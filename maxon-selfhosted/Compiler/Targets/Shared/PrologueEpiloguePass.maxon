@@ -1,0 +1,516 @@
+// Prologue/Epilogue insertion pass.
+// Runs after register allocation. Walks each function in the module,
+// computes the final stack frame size, inserts prologue at the entry block
+// start, and inserts epilogue before every ret terminator.
+//
+// This pass is target-aware: it emits MaxX64Op or MaxArm64Op depending on
+// the compilation target. The actual machine code emission for prologue/epilogue
+// is handled downstream by the code emitters.
+
+// Frame layout information computed per function.
+export type FrameInfo
+	export var totalStackSize StackSize
+	export var spillAreaSize StackSize
+	export var varAreaSize StackSize
+	export var alignedSize StackSize
+end 'FrameInfo'
+
+// Round a size up to the next 16-byte boundary.
+// Both x86-64 and AArch64 require 16-byte stack alignment.
+export function alignTo16(size StackSize) returns StackSize
+	if size mod 16 != 0 'needsAlign'
+		return size + (16 - (size mod 16))
+	end 'needsAlign'
+	return size
+end 'alignTo16'
+
+// Mutable accumulator for frame scanning. Using a type (reference semantics)
+// so that nested function calls can update the fields.
+type FrameScanState
+	export var foundPrologue bool
+	export var existingPrologueSize StackSize
+	export var spillArea StackSize
+	export var hasCalls bool
+	export var hasPrint bool
+end 'FrameScanState'
+
+function createFrameScanState() returns FrameScanState
+	return FrameScanState{
+		foundPrologue: false,
+		existingPrologueSize: 0,
+		spillArea: 0,
+		hasCalls: false,
+		hasPrint: false
+	}
+end 'createFrameScanState'
+
+// Compute frame information for a single function by scanning its ops.
+//
+// Two modes:
+// 1. If an existing prologue op is present (current pipeline), its stack size
+//    already includes var area + spill area, properly aligned. We use it directly.
+// 2. If no prologue exists (future pipeline where isel skips prologue insertion),
+//    we independently compute var area from slot-based ops and spill area from
+//    spill/reload ops, then combine and align.
+export function computeFrameInfo(func MlirFunction, target Target) returns FrameInfo
+	var state = createFrameScanState()
+
+	// Scan all blocks to gather frame-relevant data.
+	for block in func.region.blocks 'eachBlock'
+		for op in block.ops 'eachOp'
+			scanOpForFrameInfo(op, target: target, state: state)
+		end 'eachOp'
+		// Also scan the terminator
+		if block.hasTerminator 'hasTerm'
+			scanOpForFrameInfo(block.terminator, target: target, state: state)
+		end 'hasTerm'
+	end 'eachBlock'
+
+	// Mode 1: existing prologue carries the already-computed total stack size.
+	// The MidToMax conversion already computed var+spill and aligned to 16.
+	if state.foundPrologue 'hasExistingPrologue'
+		return FrameInfo{
+			totalStackSize: state.existingPrologueSize,
+			spillAreaSize: 0,
+			varAreaSize: state.existingPrologueSize,
+			alignedSize: state.existingPrologueSize
+		}
+	end 'hasExistingPrologue'
+
+	// Mode 2: no existing prologue — compute from scratch.
+	// In this mode, spill ops tell us how much spill space regalloc used,
+	// and we need to ensure minimum frame sizes for calls/prints.
+	var totalSize = state.spillArea
+	if state.hasPrint and totalSize == 0 'needPrintBuf'
+		totalSize = 16
+	end 'needPrintBuf'
+	if state.hasCalls and totalSize == 0 'needCallFrame'
+		totalSize = 16
+	end 'needCallFrame'
+
+	let aligned = alignTo16(totalSize)
+
+	return FrameInfo{
+		totalStackSize: totalSize,
+		spillAreaSize: state.spillArea,
+		varAreaSize: 0,
+		alignedSize: aligned
+	}
+end 'computeFrameInfo'
+
+// Scan a single op for frame-relevant information.
+function scanOpForFrameInfo(op MlirOp, target Target, state FrameScanState)
+	match target.cpu 'cpuDispatch'
+		x86_64 then scanX64OpForFrameInfo(op, state: state)
+		aarch64 then scanArm64OpForFrameInfo(op, state: state)
+	end 'cpuDispatch'
+end 'scanOpForFrameInfo'
+
+function scanX64OpForFrameInfo(op MlirOp, state FrameScanState)
+	match op 'outer'
+		maxhl to sys then break 'outer'
+		mir then break 'outer'
+		maxx64(x64Op) then scanX64InstrForFrame(x64Op, state: state)
+		maxarm64 then break 'outer'
+	end 'outer'
+	// Runtime ops indicate print operations that need buffer space
+	match op 'checkPrint'
+		maxhl to memref then break 'checkPrint'
+		runtime then state.hasPrint = true
+		sys to maxarm64 then break 'checkPrint'
+	end 'checkPrint'
+end 'scanX64OpForFrameInfo'
+
+function scanX64InstrForFrame(op MaxX64Op, state FrameScanState)
+	match op 'scan'
+		prologue(stackSize) then markPrologueFound(state, stackSize: stackSize)
+		epilogue to movRegImm then break 'scan'
+		movSlot(slotIndex, _) then updateSpillAreaFromSlot(state, slotIndex: slotIndex)
+		loadSlot(_, slotIndex) then updateSpillAreaFromSlot(state, slotIndex: slotIndex)
+		addRegReg to loadRegRbpOffset then break 'scan'
+		callDirect then state.hasCalls = true
+		syscall(resultSlot, _, argSlots) then updateSpillAreaFromSysOp(state, resultSlot: resultSlot, argSlots: argSlots)
+		iatCall(resultSlot, _, argSlots) then updateSpillAreaFromSysOp(state, resultSlot: resultSlot, argSlots: argSlots)
+		globalAddr(resultSlot, _) then updateSpillAreaFromSlot(state, slotIndex: resultSlot)
+		stackAddrOp(resultSlot, targetSlot) then updateSpillAreaFromTwoSlots(state, slot1: resultSlot, slot2: targetSlot)
+		storeByteOp(s1, s2, s3) then updateSpillAreaFromThreeSlots(state, s1: s1, s2: s2, s3: s3)
+		loadByteOp(s1, s2, s3) then updateSpillAreaFromThreeSlots(state, s1: s1, s2: s2, s3: s3)
+		memcpyOp(s1, s2, s3) then updateSpillAreaFromThreeSlots(state, s1: s1, s2: s2, s3: s3)
+		movRegReg to idivReg then break 'scan'
+		spillToStack(offset, _) then updateSpillArea(state, offset: offset)
+		reloadFromStack(_, offset) then updateSpillArea(state, offset: offset)
+		xorRegRegSelf then break 'scan'
+		callIndirect then state.hasCalls = true
+		xchgRegReg to repStosq then break 'scan'
+	end 'scan'
+end 'scanX64InstrForFrame'
+
+function updateSpillAreaFromSlot(state FrameScanState, slotIndex VarSlot)
+	let offset = (slotIndex + 1) * 8
+	updateSpillArea(state, offset: 0 - offset)
+end 'updateSpillAreaFromSlot'
+
+function updateSpillAreaFromSysOp(state FrameScanState, resultSlot VarSlot, argSlots VarSlotArray)
+	updateSpillAreaFromSlot(state, slotIndex: resultSlot)
+	for s in argSlots 'eachArg'
+		updateSpillAreaFromSlot(state, slotIndex: s)
+	end 'eachArg'
+end 'updateSpillAreaFromSysOp'
+
+function updateSpillAreaFromTwoSlots(state FrameScanState, slot1 VarSlot, slot2 VarSlot)
+	updateSpillAreaFromSlot(state, slotIndex: slot1)
+	updateSpillAreaFromSlot(state, slotIndex: slot2)
+end 'updateSpillAreaFromTwoSlots'
+
+function updateSpillAreaFromThreeSlots(state FrameScanState, s1 VarSlot, s2 VarSlot, s3 VarSlot)
+	updateSpillAreaFromSlot(state, slotIndex: s1)
+	updateSpillAreaFromSlot(state, slotIndex: s2)
+	updateSpillAreaFromSlot(state, slotIndex: s3)
+end 'updateSpillAreaFromThreeSlots'
+
+function scanArm64OpForFrameInfo(op MlirOp, state FrameScanState)
+	match op 'outer'
+		maxhl to sys then break 'outer'
+		mir then break 'outer'
+		maxx64 then break 'outer'
+		maxarm64(a64Op) then scanArm64InstrForFrame(a64Op, state: state)
+	end 'outer'
+	// Runtime ops indicate print operations that need buffer space
+	match op 'checkPrint'
+		maxhl to memref then break 'checkPrint'
+		runtime then state.hasPrint = true
+		sys to maxarm64 then break 'checkPrint'
+	end 'checkPrint'
+end 'scanArm64OpForFrameInfo'
+
+function scanArm64InstrForFrame(op MaxArm64Op, state FrameScanState)
+	match op 'scan'
+		prologue(stackSize) then markPrologueFound(state, stackSize: stackSize)
+		epilogue to branch then break 'scan'
+		branchLink then state.hasCalls = true
+		printLiteral to movRegReg then break 'scan'
+		spillToStack(offset, _) then updateSpillArea(state, offset: offset)
+		reloadFromStack(_, offset) then updateSpillArea(state, offset: offset)
+		branchLinkReg then state.hasCalls = true
+		subSpImm to nullSafeLoad then break 'scan'
+	end 'scan'
+end 'scanArm64InstrForFrame'
+
+function markPrologueFound(state FrameScanState, stackSize StackSize)
+	state.foundPrologue = true
+	state.existingPrologueSize = stackSize
+end 'markPrologueFound'
+
+// Update the spill area size to accommodate the given offset.
+// Spill offsets are absolute values from the frame base; we track the maximum.
+function updateSpillArea(state FrameScanState, offset MachineWord)
+	// Offsets may be negative (x86 grows down from rbp) or positive (arm64 grows up).
+	// The spill area size is the absolute extent.
+	let absOffset = absoluteOffset(offset)
+	let needed = absOffset + 8
+	if needed > state.spillArea 'larger'
+		state.spillArea = needed
+	end 'larger'
+end 'updateSpillArea'
+
+function absoluteOffset(offset MachineWord) returns MachineWord
+	// MachineWord is unsigned; negative offsets wrap to large values (> i64.max).
+	if offset > 9223372036854775807 'negative'
+		return 0 - offset
+	end 'negative'
+	return offset
+end 'absoluteOffset'
+
+// ============================================================
+// Main pass entry point
+// ============================================================
+
+// Insert prologue and epilogue ops into every function in the module.
+// This pass runs after register allocation and before code emission.
+// It walks each function, computes the stack frame layout, inserts
+// prologue ops at the entry block start, and inserts epilogue ops
+// before every ret terminator.
+export function insertPrologueEpilogue(module MlirModule, target Target) returns MlirModule
+	logDebug(LogCategory.mlir, message: () gives "PrologueEpiloguePass: starting")
+
+	var result = createMlirModule()
+
+	for srcFunc in module.functions 'eachFunc'
+		let funcName = String.from(srcFunc.name)
+		logDebug(LogCategory.mlir, message: () gives "Inserting prologue/epilogue for {funcName}")
+
+		let dstFunc = insertPrologueEpilogueForFunc(srcFunc, target: target)
+		result.functions.push(dstFunc)
+	end 'eachFunc'
+
+	logDebug(LogCategory.mlir, message: () gives "PrologueEpiloguePass: complete")
+	return result
+end 'insertPrologueEpilogue'
+
+// Process a single function: compute frame info, strip any existing
+// prologue/epilogue ops, and re-insert them with the correct stack size.
+function insertPrologueEpilogueForFunc(srcFunc MlirFunction, target Target) returns MlirFunction
+	var dstFunc = createMlirFunction(srcFunc.name, returnType: srcFunc.returnType)
+	dstFunc.paramCount = srcFunc.paramCount
+	dstFunc.paramTypes = srcFunc.paramTypes
+
+	// First pass: compute the frame layout from the source function.
+	let frameInfo = computeFrameInfo(srcFunc, target: target)
+	let stackSize = frameInfo.alignedSize
+
+	logTrace(LogCategory.mlir, message: () gives "  frame: var={frameInfo.varAreaSize} spill={frameInfo.spillAreaSize} total={frameInfo.totalStackSize} aligned={stackSize}")
+
+	// Second pass: copy blocks, stripping existing prologue/epilogue ops
+	// and inserting new ones at the correct positions.
+	match target.cpu 'dispatchCpu'
+		x86_64 then insertX64PrologueEpilogue(srcFunc, dstFunc: dstFunc, stackSize: stackSize)
+		aarch64 then insertArm64PrologueEpilogue(srcFunc, dstFunc: dstFunc, stackSize: stackSize)
+	end 'dispatchCpu'
+
+	// Preserve region metadata
+	dstFunc.region.nextBlockId = srcFunc.region.nextBlockId
+	return dstFunc
+end 'insertPrologueEpilogueForFunc'
+
+// ============================================================
+// X86-64 prologue/epilogue insertion
+// ============================================================
+
+function insertX64PrologueEpilogue(srcFunc MlirFunction, dstFunc MlirFunction, stackSize StackSize)
+	var isFirstBlock = true
+
+	for srcBlock in srcFunc.region.blocks 'eachBlock'
+		var dstBlock = addBlock(dstFunc.region, label: srcBlock.label)
+		dstBlock.id = srcBlock.id
+		dstBlock.blockArgs = srcBlock.blockArgs
+
+		if isFirstBlock 'isEntry'
+			// Insert prologue at the start of the entry block (only if we need a frame).
+			if stackSize > 0 'hasFrame'
+				dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.prologue(stackSize)))
+			end 'hasFrame'
+			isFirstBlock = false
+		end 'isEntry'
+
+		// Copy ops, stripping only prologue and epilogue (keep ret).
+		// After copying, we reinsert epilogue before each ret.
+		for op in srcBlock.ops 'eachOp'
+			if isX64PrologueOrEpilogue(op) 'skipPeOp'
+				continue
+			end 'skipPeOp'
+			dstBlock.ops.push(op)
+		end 'eachOp'
+
+		// Copy terminator through. When the VReg-based isel is active,
+		// epilogue+ret are set as the block terminator (via setLastOpAsTerminator),
+		// so we must also handle ret ops in the terminator position.
+		if srcBlock.hasTerminator 'hasTerm'
+			if not isX64PrologueOrEpilogue(srcBlock.terminator) 'notPE'
+				// If the terminator is a ret, insert epilogue before it
+				if isX64RetOp(srcBlock.terminator) and stackSize > 0 'termRetNeedsEpi'
+					let prevIsEpi = checkPrevIsX64Epilogue(dstBlock.ops)
+					if not prevIsEpi 'insertEpi'
+						dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.epilogue))
+					end 'insertEpi'
+				end 'termRetNeedsEpi'
+				dstBlock.hasTerminator = srcBlock.hasTerminator
+				dstBlock.terminator = srcBlock.terminator
+			end 'notPE'
+		end 'hasTerm'
+
+		// Insert epilogue before each ret op in the block's ops.
+		// The x64 lowering emits epilogue+ret as regular ops (not terminators),
+		// so we find each ret and ensure it has an epilogue preceding it.
+		reinsertX64EpilogueBeforeRets(dstBlock, stackSize: stackSize)
+	end 'eachBlock'
+end 'insertX64PrologueEpilogue'
+
+// After copying ops (with existing prologue/epilogue/ret stripped),
+// scan for ret ops and insert epilogue before each one.
+// In the current x64 lowering, epilogue+ret are emitted as regular ops
+// (not as terminators), so we need to find ret ops in the ops array
+// and ensure each has an epilogue preceding it.
+function reinsertX64EpilogueBeforeRets(block MlirBlock, stackSize StackSize)
+	var newOps = MlirOpArray{}
+	var needsRewrite = false
+
+	// First check if any rewriting is needed
+	for op in block.ops 'scan'
+		if isX64RetOp(op) 'foundRet'
+			needsRewrite = true
+		end 'foundRet'
+	end 'scan'
+
+	if not needsRewrite 'noRewrite'
+		return
+	end 'noRewrite'
+
+	// Rebuild ops, inserting epilogue before each ret
+	for op in block.ops 'rebuild'
+		if isX64RetOp(op) 'isRet'
+			// Check if the preceding op is already an epilogue
+			let prevIsEpilogue = checkPrevIsX64Epilogue(newOps)
+			if not prevIsEpilogue 'insertEpilogue'
+				if stackSize > 0 'hasFrame'
+					newOps.push(MlirOp.maxx64(MaxX64Op.epilogue))
+				end 'hasFrame'
+			end 'insertEpilogue'
+			newOps.push(op)
+		end 'isRet' else 'notRet'
+			newOps.push(op)
+		end 'notRet'
+	end 'rebuild'
+
+	block.ops = newOps
+end 'reinsertX64EpilogueBeforeRets'
+
+function checkPrevIsX64Epilogue(ops MlirOpArray) returns bool
+	let count = ops.count()
+	if count == 0 'empty'
+		return false
+	end 'empty'
+	let prev = try ops.get(count - 1) otherwise 'noPrev'
+		return false
+	end 'noPrev'
+	return isX64EpilogueOp(prev)
+end 'checkPrevIsX64Epilogue'
+
+// Check if an MlirOp is an x64 prologue or epilogue (not ret).
+function isX64PrologueOrEpilogue(op MlirOp) returns bool
+	var result = false
+	match op 'check'
+		maxhl to sys then break 'check'
+		mir then break 'check'
+		maxx64(x64Op) then result = isX64PeOnly(x64Op)
+		maxarm64 then break 'check'
+	end 'check'
+	return result
+end 'isX64PrologueOrEpilogue'
+
+function isX64PeOnly(op MaxX64Op) returns bool
+	return match op 'check'
+		prologue gives true
+		epilogue gives true
+		ret to repStosq gives false
+	end 'check'
+end 'isX64PeOnly'
+
+function isX64RetOp(op MlirOp) returns bool
+	var result = false
+	match op 'check'
+		maxhl to sys then break 'check'
+		mir then break 'check'
+		maxx64(x64Op) then result = isX64Ret(x64Op)
+		maxarm64 then break 'check'
+	end 'check'
+	return result
+end 'isX64RetOp'
+
+function isX64Ret(op MaxX64Op) returns bool
+	return match op 'check'
+		prologue to epilogue gives false
+		ret gives true
+		movRegImm to repStosq gives false
+	end 'check'
+end 'isX64Ret'
+
+function isX64EpilogueOp(op MlirOp) returns bool
+	var result = false
+	match op 'check'
+		maxhl to sys then break 'check'
+		mir then break 'check'
+		maxx64(x64Op) then result = isX64Epilogue(x64Op)
+		maxarm64 then break 'check'
+	end 'check'
+	return result
+end 'isX64EpilogueOp'
+
+function isX64Epilogue(op MaxX64Op) returns bool
+	return match op 'check'
+		prologue gives false
+		epilogue gives true
+		ret to repStosq gives false
+	end 'check'
+end 'isX64Epilogue'
+
+// ============================================================
+// ARM64 prologue/epilogue insertion
+// ============================================================
+
+function insertArm64PrologueEpilogue(srcFunc MlirFunction, dstFunc MlirFunction, stackSize StackSize)
+	var isFirstBlock = true
+
+	for srcBlock in srcFunc.region.blocks 'eachBlock'
+		var dstBlock = addBlock(dstFunc.region, label: srcBlock.label)
+		dstBlock.id = srcBlock.id
+		dstBlock.blockArgs = srcBlock.blockArgs
+
+		if isFirstBlock 'isEntry'
+			// ARM64 always emits prologue (even for stackSize=0) because the
+			// prologue includes STP x29,x30 which is needed for unwinding.
+			dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.prologue(stackSize)))
+			isFirstBlock = false
+		end 'isEntry'
+
+		// Copy ops, stripping any existing prologue/epilogue ops.
+		for op in srcBlock.ops 'eachOp'
+			if isArm64PrologueOrEpilogue(op) 'skipPeOp'
+				continue
+			end 'skipPeOp'
+			dstBlock.ops.push(op)
+		end 'eachOp'
+
+		// Handle the terminator: ARM64 uses epilogue as the block terminator
+		// for return blocks. The epilogue op includes the ret instruction.
+		if srcBlock.hasTerminator 'hasTerm'
+			if isArm64EpilogueTerminator(srcBlock.terminator) 'termIsEpilogue'
+				// Re-emit the epilogue as the terminator with our computed stack size.
+				dstBlock.hasTerminator = true
+				dstBlock.terminator = MlirOp.maxarm64(MaxArm64Op.epilogue)
+			end 'termIsEpilogue' else 'otherTerm'
+				dstBlock.hasTerminator = srcBlock.hasTerminator
+				dstBlock.terminator = srcBlock.terminator
+			end 'otherTerm'
+		end 'hasTerm'
+	end 'eachBlock'
+end 'insertArm64PrologueEpilogue'
+
+// Check if an MlirOp is an ARM64 prologue or epilogue op.
+function isArm64PrologueOrEpilogue(op MlirOp) returns bool
+	var result = false
+	match op 'check'
+		maxhl to sys then break 'check'
+		mir then break 'check'
+		maxx64 then break 'check'
+		maxarm64(a64Op) then result = isArm64PeOp(a64Op)
+	end 'check'
+	return result
+end 'isArm64PrologueOrEpilogue'
+
+function isArm64PeOp(op MaxArm64Op) returns bool
+	return match op 'check'
+		prologue gives true
+		epilogue gives true
+		movImm to nullSafeLoad gives false
+	end 'check'
+end 'isArm64PeOp'
+
+// Check if a terminator op is an ARM64 epilogue.
+function isArm64EpilogueTerminator(op MlirOp) returns bool
+	var result = false
+	match op 'check'
+		maxhl to sys then break 'check'
+		mir then break 'check'
+		maxx64 then break 'check'
+		maxarm64(a64Op) then result = isArm64EpilogueVariant(a64Op)
+	end 'check'
+	return result
+end 'isArm64EpilogueTerminator'
+
+function isArm64EpilogueVariant(op MaxArm64Op) returns bool
+	return match op 'check'
+		prologue gives false
+		epilogue gives true
+		movImm to nullSafeLoad gives false
+	end 'check'
+end 'isArm64EpilogueVariant'

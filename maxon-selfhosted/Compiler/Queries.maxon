@@ -187,31 +187,20 @@ export function queryAllMid(project Project) returns MlirModule throws CompileEr
 
 	let module = try queryAllModule(project)
 
-	// Gate: if parse errors were collected, stop before semantic checks
+	// Gate: if parse errors were collected, stop before the pipeline
 	if hasErrors(project) 'parseErrors'
 		popQuery(project)
 		throw CompileError.compileError
 	end 'parseErrors'
 
-	runSemanticChecks(project, module: module)
-
-	// Gate: if semantic errors were collected, stop before lowering
-	if hasErrors(project) 'semanticErrors'
-		popQuery(project)
-		throw CompileError.compileError
-	end 'semanticErrors'
-
-	// Eliminate unreachable functions (e.g. unused stdlib)
-	let liveModule = eliminateDeadFunctions(module)
-
-	// Reset global data table for fresh lowering
+	// Run phases 2-5 through the typed pipeline
 	project.globalData = createGlobalDataTable()
 	let valueIdRef = createValueIdRef(getNextValueId(project))
-	let rawMid = lowerMaxHLToMid(liveModule, project: project, globalData: project.globalData, nextValueIdRef: valueIdRef)
-	// Promote memref slots to SSA where possible (mem2reg)
-	let result = promoteMem2Reg(rawMid, nextValueIdRef: valueIdRef)
-	// Update the project's value ID counter past any IDs allocated during lowering
-	setNextValueId(project, id: valueIdRef.nextId)
+	var ctx = PipelineContext{module: module, project: project, globalData: project.globalData, nextValueIdRef: valueIdRef, target: project.target}
+	let midPasses = buildMidPipeline()
+	try runPipeline(ctx, passes: midPasses)
+	setNextValueId(project, id: ctx.nextValueIdRef.nextId)
+	let result = ctx.module
 
 	popQuery(project)
 
@@ -246,7 +235,9 @@ export function queryCodeResult(project Project) returns CodeResult throws Compi
 	clearDepsFor(project, key: key)
 
 	let midModule = try queryAllMid(project)
-	let result = try emitBackend(midModule, target: project.target, globalData: project.globalData)
+	let valueIdRef = createValueIdRef(getNextValueId(project))
+	let result = try emitBackend(midModule, target: project.target, globalData: project.globalData, project: project, nextValueIdRef: valueIdRef)
+	setNextValueId(project, id: valueIdRef.nextId)
 
 	popQuery(project)
 

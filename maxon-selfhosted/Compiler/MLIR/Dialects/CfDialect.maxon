@@ -1,24 +1,52 @@
 // Cf (Control Flow) Dialect — Block terminators.
+// Branch ops carry block argument value lists for SSA φ-node semantics.
+// When branching to a block with block arguments, the argIds provide
+// the values to bind to those arguments.
 
 export union CfOp
-	br(target BlockId)
-	condBr(condId ValueId, thenTarget BlockId, elseTarget BlockId)
+	br(target BlockId, argIds ValueIdArray)
+	condBr(condId ValueId, thenTarget BlockId, thenArgIds ValueIdArray, elseTarget BlockId, elseArgIds ValueIdArray)
 end 'CfOp'
 
 export function cfOpToString(op CfOp, blocks MlirBlockArray) returns String
 	return match op 'print'
-		br(target) gives cfBrToString(target, blocks: blocks)
-		condBr(condId, thenTarget, elseTarget) gives cfCondBrToString(condId, thenTarget: thenTarget, elseTarget: elseTarget, blocks: blocks)
+		br(target, argIds) gives cfBrToString(target, argIds: argIds, blocks: blocks)
+		condBr(condId, thenTarget, thenArgIds, elseTarget, elseArgIds) gives cfCondBrToString(condId, thenTarget: thenTarget, thenArgIds: thenArgIds, elseTarget: elseTarget, elseArgIds: elseArgIds, blocks: blocks)
 	end 'print'
 end 'cfOpToString'
 
-function cfBrToString(target BlockId, blocks MlirBlockArray) returns String
+function cfBrToString(target BlockId, argIds ValueIdArray, blocks MlirBlockArray) returns String
 	let label = resolveBlockLabel(target, blocks: blocks)
-	return "cf.br {label}"
+	if argIds.count() == 0 'noArgs'
+		return "cf.br {label}"
+	end 'noArgs'
+	return "cf.br {label}({formatValueIdList(argIds)})"
 end 'cfBrToString'
 
-function cfCondBrToString(condId ValueId, thenTarget BlockId, elseTarget BlockId, blocks MlirBlockArray) returns String
+function cfCondBrToString(condId ValueId, thenTarget BlockId, thenArgIds ValueIdArray, elseTarget BlockId, elseArgIds ValueIdArray, blocks MlirBlockArray) returns String
 	let thenLabel = resolveBlockLabel(thenTarget, blocks: blocks)
 	let elseLabel = resolveBlockLabel(elseTarget, blocks: blocks)
-	return "cf.cond_br %{condId} [then: {thenLabel}, else: {elseLabel}]"
+	var thenArgsStr = ""
+	if thenArgIds.count() > 0 'hasThenArgs'
+		thenArgsStr = "({formatValueIdList(thenArgIds)})"
+	end 'hasThenArgs'
+	var elseArgsStr = ""
+	if elseArgIds.count() > 0 'hasElseArgs'
+		elseArgsStr = "({formatValueIdList(elseArgIds)})"
+	end 'hasElseArgs'
+	return "cf.cond_br %{condId} [then: {thenLabel}{thenArgsStr}, else: {elseLabel}{elseArgsStr}]"
 end 'cfCondBrToString'
+
+function formatValueIdList(ids ValueIdArray) returns String
+	var result = ""
+	for i in 0 upto ids.count() 'each'
+		let id = try ids.get(i) otherwise 'skip'
+			continue
+		end 'skip'
+		if i > 0 'comma'
+			result = "{result}, "
+		end 'comma'
+		result = "{result}%{id}"
+	end 'each'
+	return result
+end 'formatValueIdList'

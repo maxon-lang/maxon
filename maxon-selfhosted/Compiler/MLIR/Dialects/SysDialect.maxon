@@ -21,6 +21,8 @@ export union SysOp
 	osExit(codeId ValueId)
 	// OS-neutral stdout write. Lowered to syscall or iatCall based on OsDescriptor.
 	osWrite(ptrId ValueId, lenId ValueId)
+	// Free a heap-allocated pointer. Used by drop injection to release owned memory.
+	free(ptrId ValueId)
 end 'SysOp'
 
 export function sysOpToString(op SysOp) returns String
@@ -34,5 +36,6 @@ export function sysOpToString(op SysOp) returns String
 		loadByte(resultId, baseId, offsetId) gives "%{resultId} = sys.load_byte %{baseId}, %{offsetId}"
 		osExit(codeId) gives "sys.os_exit %{codeId}"
 		osWrite(ptrId, lenId) gives "sys.os_write %{ptrId}, %{lenId}"
+		free(ptrId) gives "sys.free %{ptrId}"
 	end 'print'
 end 'sysOpToString'

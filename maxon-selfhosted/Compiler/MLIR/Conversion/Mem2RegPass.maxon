@@ -1,33 +1,31 @@
-// Mem2Reg Pass — Promotes memref slots to pure SSA values.
-// Runs after MaxHLToMid, before the target backend.
+// Mem2Reg Pass — Promotes memref slots to pure SSA values using
+// iterated dominance frontier (IDF) based phi-placement.
 //
-// Tier 1: Local slots (>= paramCount) with exactly one store and all loads
-//         in the same block — replace with direct value forwarding.
-// Tier 2: Param slots (< paramCount) with zero stores — replace loads with
-//         func.param ops that the backend lowers via the sentinel mechanism.
+// Algorithm overview (Classic SSA Construction):
+//   1. Build CFG (predecessors, successors) from terminators
+//   2. Compute dominator tree (Cooper-Harvey-Kennedy algorithm)
+//   3. Compute dominance frontiers
+//   4. Identify promotable memref slots
+//   5. Place block arguments (phi-nodes) at iterated dominance frontiers
+//   6. Rename variables by walking the dominator tree
+//   7. Emit func.param ops for parameter slots
+//   8. Clean up: remove promoted stores/loads, apply remap
 
 // Sentinel value meaning "no remap for this valueId"
 let REMAP_NONE = 9223372036854775807
 
 let SLOT_NONE = 9223372036854775807
 
-// Mutable analysis state (avoids pass-by-value issues with scalars)
-type AnalysisState
-	export var slotStoreCount ValueIdArray
-	export var slotStoreValueId ValueIdArray
-	export var slotStoreBlock BlockIdArray
-	export var slotLoadCount ValueIdArray
-	export var slotHasCrossBlockLoad BoolArray
-	export var slotIsFloat BoolArray
-	// Maps loadResultId -> slotId (for detecting float usage of loads)
-	export var loadResultToSlot ValueIdArray
-	export var maxSlot VarSlot
-	export var hasAnySlot bool
-end 'AnalysisState'
+// Sentinel for "no block" in dominator computation
+let BLOCK_NONE = 9223372036854775807
 
-function createAnalysisState() returns AnalysisState
-	return AnalysisState{slotStoreCount: ValueIdArray{}, slotStoreValueId: ValueIdArray{}, slotStoreBlock: BlockIdArray{}, slotLoadCount: ValueIdArray{}, slotHasCrossBlockLoad: BoolArray{}, slotIsFloat: BoolArray{}, loadResultToSlot: ValueIdArray{}, maxSlot: 0, hasAnySlot: false}
-end 'createAnalysisState'
+// Nested array typealiases for function parameter types
+typealias DefStackArray = Array with ValueIdArray
+typealias BlockIdArrayArray = Array with BlockIdArray
+
+// ============================================================
+// Public entry point
+// ============================================================
 
 export function promoteMem2Reg(module MlirModule, nextValueIdRef ValueIdRef) returns MlirModule
 	var result = createMlirModule()
@@ -37,18 +35,412 @@ export function promoteMem2Reg(module MlirModule, nextValueIdRef ValueIdRef) ret
 	return result
 end 'promoteMem2Reg'
 
+// ============================================================
+// Per-function promotion
+// ============================================================
+
 function promoteFunction(func MlirFunction, globalValueIdRef ValueIdRef) returns MlirFunction
 	let paramCount = func.paramCount
+	let numBlocks = func.region.nextBlockId
 
-	// Phase 1: Analyze all memref ops — count stores/loads per slot
-	var state = createAnalysisState()
-	// Get entry block id — func.param ops will be placed here
+	// Bail out early if no blocks
+	if func.region.blocks.count() == 0 'noBlocks'
+		return func
+	end 'noBlocks'
+
 	let entryBlockId = getEntryBlockId(func)
 
+	// Phase 1: Build CFG
+	var cfg = buildCfg(func)
+
+	// Phase 2: Compute dominator tree (Cooper-Harvey-Kennedy)
+	var rpo = computeReversePostorder(entryBlockId, numBlocks: numBlocks, cfg: cfg)
+	var domInfo = computeDominators(entryBlockId, numBlocks: numBlocks, cfg: cfg, rpo: rpo)
+
+	// Phase 3: Compute dominance frontiers
+	var df = computeDominanceFrontiers(numBlocks, cfg: cfg, domInfo: domInfo)
+
+	// Phase 4: Identify promotable slots and gather store/load info
+	var slotInfo = analyzeSlots(func, paramCount: paramCount)
+	if not slotInfo.hasAnySlot 'noSlots'
+		return func
+	end 'noSlots'
+
+	var promotable = classifyPromotable(slotInfo, paramCount: paramCount)
+	if not promotable.anyPromoted 'nothingToPromote'
+		return func
+	end 'nothingToPromote'
+
+	// Allocate fresh value IDs starting after the max used in the function
+	let maxFuncId = scanMaxValueId(func)
+	var funcIdRef = createValueIdRef(maxFuncId + 1)
+
+	// Phase 5: Place block arguments (phi-nodes) at iterated dominance frontiers
+	// phiMap[blockId][slotIdx] = valueId of the block arg for that slot, or REMAP_NONE
+	var phiMap = placePhiNodes(slotInfo, promotable: promotable, df: df, numBlocks: numBlocks, funcIdRef: funcIdRef)
+
+	// Insert block args into the actual blocks for each placed phi
+	insertBlockArgs(func, phiMap: phiMap, slotInfo: slotInfo)
+
+	// Phase 6: Rename variables by walking the dominator tree
+	var renameState = createRenameState(slotInfo, paramCount: paramCount, funcIdRef: funcIdRef, promotable: promotable)
+	renameBlock(entryBlockId, func: func, renameState: renameState, domInfo: domInfo, numBlocks: numBlocks, phiMap: phiMap, promotable: promotable, cfg: cfg)
+
+	// Phase 7 & 8: Rebuild the function, removing promoted ops and applying remap
+	var dstFunc = rebuildFunction(func, renameState: renameState, promotable: promotable, phiMap: phiMap, cfg: cfg, paramCount: paramCount)
+
+	// Advance the global valueId ref past any IDs we allocated
+	if funcIdRef.nextId > globalValueIdRef.nextId 'advanceGlobal'
+		globalValueIdRef.nextId = funcIdRef.nextId
+	end 'advanceGlobal'
+
+	return dstFunc
+end 'promoteFunction'
+
+// ============================================================
+// Phase 1: CFG construction
+// ============================================================
+
+// CfgInfo holds predecessor and successor lists indexed by BlockId.
+// Each entry is a BlockIdArray of connected block IDs.
+type CfgInfo
+	export var predecessors BlockIdArrayArray
+	export var successors BlockIdArrayArray
+	export var numBlocks BlockId
+end 'CfgInfo'
+
+function createCfgInfo(numBlocks BlockId) returns CfgInfo
+	var preds = BlockIdArrayArray{}
+	var succs = BlockIdArrayArray{}
+	var i = 0
+	while i < numBlocks 'initCfg'
+		preds.push(BlockIdArray{})
+		succs.push(BlockIdArray{})
+		i = i + 1
+	end 'initCfg'
+	return CfgInfo{predecessors: preds, successors: succs, numBlocks: numBlocks}
+end 'createCfgInfo'
+
+function addCfgEdge(cfg CfgInfo, fromBlock BlockId, toBlock BlockId)
+	if fromBlock >= cfg.numBlocks or toBlock >= cfg.numBlocks 'outOfRange'
+		return
+	end 'outOfRange'
+	let succs = try cfg.successors.get(fromBlock) otherwise 'noSuccs'
+		return
+	end 'noSuccs'
+	// Avoid duplicate edges
+	if not blockIdArrayContains(succs, blockId: toBlock) 'notDup'
+		succs.push(toBlock)
+	end 'notDup'
+	let preds = try cfg.predecessors.get(toBlock) otherwise 'noPreds'
+		return
+	end 'noPreds'
+	if not blockIdArrayContains(preds, blockId: fromBlock) 'notDupPred'
+		preds.push(fromBlock)
+	end 'notDupPred'
+end 'addCfgEdge'
+
+function blockIdArrayContains(arr BlockIdArray, blockId BlockId) returns bool
+	for id in arr 'each'
+		if id == blockId 'found'
+			return true
+		end 'found'
+	end 'each'
+	return false
+end 'blockIdArrayContains'
+
+function buildCfg(func MlirFunction) returns CfgInfo
+	let numBlocks = func.region.nextBlockId
+	var cfg = createCfgInfo(numBlocks)
+	for block in func.region.blocks 'eachBlock'
+		if block.hasTerminator 'hasTerm'
+			extractCfgEdges(block.id, terminator: block.terminator, cfg: cfg)
+		end 'hasTerm'
+	end 'eachBlock'
+	return cfg
+end 'buildCfg'
+
+function extractCfgEdges(blockId BlockId, terminator MlirOp, cfg CfgInfo)
+	match terminator 'extract'
+		cf(cfOp) then extractCfEdges(blockId, cfOp: cfOp, cfg: cfg)
+		maxhl to arith then break 'extract'
+		func to maxarm64 then break 'extract'
+	end 'extract'
+end 'extractCfgEdges'
+
+function extractCfEdges(blockId BlockId, cfOp CfOp, cfg CfgInfo)
+	match cfOp 'extract'
+		br(target, _) then addCfgEdge(cfg, fromBlock: blockId, toBlock: target)
+		condBr(_, thenTarget, _, elseTarget, _) then extractCondBrEdges(blockId, thenTarget: thenTarget, elseTarget: elseTarget, cfg: cfg)
+	end 'extract'
+end 'extractCfEdges'
+
+function extractCondBrEdges(blockId BlockId, thenTarget BlockId, elseTarget BlockId, cfg CfgInfo)
+	addCfgEdge(cfg, fromBlock: blockId, toBlock: thenTarget)
+	addCfgEdge(cfg, fromBlock: blockId, toBlock: elseTarget)
+end 'extractCondBrEdges'
+
+// ============================================================
+// Phase 2: Dominator tree (Cooper-Harvey-Kennedy algorithm)
+// ============================================================
+
+// Reverse postorder numbering: rpoOrder[i] = blockId at position i,
+// rpoIndex[blockId] = position of blockId in reverse postorder.
+type RpoInfo
+	export var order BlockIdArray
+	export var index ValueIdArray
+end 'RpoInfo'
+
+type DomInfo
+	export var idom ValueIdArray
+end 'DomInfo'
+
+function computeReversePostorder(entryBlockId BlockId, numBlocks BlockId, cfg CfgInfo) returns RpoInfo
+	// DFS from entry to produce postorder, then reverse
+	var visited = BoolArray{}
+	growBoolArray(visited, size: numBlocks)
+	var postorder = BlockIdArray{}
+
+	dfsPostorder(entryBlockId, cfg: cfg, visited: visited, postorder: postorder)
+
+	// Reverse the postorder to get reverse postorder
+	var rpoOrder = BlockIdArray{}
+	var rpoIndex = ValueIdArray{}
+	growValueIdArray(rpoIndex, size: numBlocks)
+	// Initialize all indices to a sentinel
+	var initIdx = 0
+	while initIdx < numBlocks 'initRpoIdx'
+		rpoIndex.set(initIdx, value: BLOCK_NONE)
+		initIdx = initIdx + 1
+	end 'initRpoIdx'
+
+	let postCount = postorder.count()
+	var ri = 0
+	while ri < postCount 'reversePost'
+		let blockId = try postorder.get(postCount - 1 - ri) otherwise 'skip'
+			ri = ri + 1
+			continue
+		end 'skip'
+		rpoOrder.push(blockId)
+		rpoIndex.set(blockId, value: ri)
+		ri = ri + 1
+	end 'reversePost'
+
+	return RpoInfo{order: rpoOrder, index: rpoIndex}
+end 'computeReversePostorder'
+
+function dfsPostorder(blockId BlockId, cfg CfgInfo, visited BoolArray, postorder BlockIdArray)
+	if blockId >= visited.count() 'outOfRange'
+		return
+	end 'outOfRange'
+	let alreadyVisited = try visited.get(blockId) otherwise false
+	if alreadyVisited 'skip'
+		return
+	end 'skip'
+	visited.set(blockId, value: true)
+
+	let succs = try cfg.successors.get(blockId) otherwise 'noSuccs'
+		postorder.push(blockId)
+		return
+	end 'noSuccs'
+	for succ in succs 'eachSucc'
+		dfsPostorder(succ, cfg: cfg, visited: visited, postorder: postorder)
+	end 'eachSucc'
+	postorder.push(blockId)
+end 'dfsPostorder'
+
+function computeDominators(entryBlockId BlockId, numBlocks BlockId, cfg CfgInfo, rpo RpoInfo) returns DomInfo
+	// Initialize idom array with BLOCK_NONE (undefined)
+	var idom = ValueIdArray{}
+	var i = 0
+	while i < numBlocks 'initIdom'
+		idom.push(BLOCK_NONE)
+		i = i + 1
+	end 'initIdom'
+
+	// Entry block dominates itself
+	idom.set(entryBlockId, value: entryBlockId)
+
+	// Iterate until convergence
+	var changed = true
+	while changed 'converge'
+		changed = false
+		// Walk blocks in reverse postorder, skipping entry
+		var rpoIdx = 0
+		while rpoIdx < rpo.order.count() 'eachRpo'
+			let b = try rpo.order.get(rpoIdx) otherwise 'skipRpo'
+				rpoIdx = rpoIdx + 1
+				continue
+			end 'skipRpo'
+			if b == entryBlockId 'isEntry'
+				rpoIdx = rpoIdx + 1
+				continue
+			end 'isEntry'
+
+			// Find first processed predecessor
+			let preds = try cfg.predecessors.get(b) otherwise 'noPreds'
+				rpoIdx = rpoIdx + 1
+				continue
+			end 'noPreds'
+
+			var newIdom = BLOCK_NONE
+			var foundFirst = false
+			for p in preds 'findFirst'
+				let pIdom = try idom.get(p) otherwise BLOCK_NONE
+				if pIdom != BLOCK_NONE 'processed'
+					if not foundFirst 'setFirst'
+						newIdom = p
+						foundFirst = true
+					end 'setFirst' else 'intersectOther'
+						newIdom = intersectDom(newIdom, b2: p, idom: idom, rpo: rpo)
+					end 'intersectOther'
+				end 'processed'
+			end 'findFirst'
+
+			if foundFirst 'hasIdom'
+				let oldIdom = try idom.get(b) otherwise BLOCK_NONE
+				if newIdom != oldIdom 'changed'
+					idom.set(b, value: newIdom)
+					changed = true
+				end 'changed'
+			end 'hasIdom'
+
+			rpoIdx = rpoIdx + 1
+		end 'eachRpo'
+	end 'converge'
+
+	return DomInfo{idom: idom}
+end 'computeDominators'
+
+function intersectDom(b1 BlockId, b2 BlockId, idom ValueIdArray, rpo RpoInfo) returns BlockId
+	var finger1 = b1
+	var finger2 = b2
+	while finger1 != finger2 'intersect'
+		let rpo1 = try rpo.index.get(finger1) otherwise BLOCK_NONE
+		let rpo2 = try rpo.index.get(finger2) otherwise BLOCK_NONE
+		// Move the finger with the higher RPO number (further from root) up
+		if rpo1 == BLOCK_NONE or rpo2 == BLOCK_NONE 'unreachable'
+			// One of the blocks is unreachable; bail
+			return finger1
+		end 'unreachable'
+		if rpo1 > rpo2 'f1Higher'
+			finger1 = try idom.get(finger1) otherwise 'bail1'
+				return finger2
+			end 'bail1'
+		end 'f1Higher' else 'f2HigherOrEqual'
+			// rpo2 > rpo1 (they can't be equal since finger1 != finger2)
+			finger2 = try idom.get(finger2) otherwise 'bail2'
+				return finger1
+			end 'bail2'
+		end 'f2HigherOrEqual'
+	end 'intersect'
+	return finger1
+end 'intersectDom'
+
+// ============================================================
+// Phase 3: Dominance frontiers
+// ============================================================
+
+// DfInfo: df[blockId] = BlockIdArray of blocks in the dominance frontier.
+type DfInfo
+	export var frontiers BlockIdArrayArray
+end 'DfInfo'
+
+function computeDominanceFrontiers(numBlocks BlockId, cfg CfgInfo, domInfo DomInfo) returns DfInfo
+	var frontiers = BlockIdArrayArray{}
+	var i = 0
+	while i < numBlocks 'initDf'
+		frontiers.push(BlockIdArray{})
+		i = i + 1
+	end 'initDf'
+
+	// For each block b with >= 2 predecessors, walk each predecessor up
+	// to idom(b), adding b to each runner's dominance frontier.
+	var b = 0
+	while b < numBlocks 'eachBlock'
+		let preds = try cfg.predecessors.get(b) otherwise 'noPreds'
+			b = b + 1
+			continue
+		end 'noPreds'
+		if preds.count() >= 2 'hasMultiplePreds'
+			let bIdom = try domInfo.idom.get(b) otherwise BLOCK_NONE
+			for p in preds 'eachPred'
+				var runner = p
+				while runner != bIdom and runner != BLOCK_NONE 'walkUp'
+					let dfSet = try frontiers.get(runner) otherwise 'noDfSet'
+						break
+					end 'noDfSet'
+					if not blockIdArrayContains(dfSet, blockId: b) 'addToDf'
+						dfSet.push(b)
+					end 'addToDf'
+					runner = try domInfo.idom.get(runner) otherwise BLOCK_NONE
+				end 'walkUp'
+			end 'eachPred'
+		end 'hasMultiplePreds'
+		b = b + 1
+	end 'eachBlock'
+
+	return DfInfo{frontiers: frontiers}
+end 'computeDominanceFrontiers'
+
+// ============================================================
+// Phase 4: Slot analysis — identify promotable slots
+// ============================================================
+
+// SlotInfo tracks per-slot information gathered during analysis.
+type SlotInfo
+	// Which blocks contain stores for each slot: storeBlocks[slotId] = BlockIdArray
+	export var storeBlocks BlockIdArrayArray
+	// Whether a slot is float
+	export var slotIsFloat BoolArray
+	// Maps loadResultId -> slotId for float usage detection
+	export var loadResultToSlot ValueIdArray
+	export var maxSlot VarSlot
+	export var hasAnySlot bool
+	// Track which slots have any stores or loads at all
+	export var slotHasStore BoolArray
+	export var slotHasLoad BoolArray
+end 'SlotInfo'
+
+function createSlotInfo() returns SlotInfo
+	return SlotInfo{
+		storeBlocks: BlockIdArrayArray{},
+		slotIsFloat: BoolArray{},
+		loadResultToSlot: ValueIdArray{},
+		maxSlot: 0,
+		hasAnySlot: false,
+		slotHasStore: BoolArray{},
+		slotHasLoad: BoolArray{}
+	}
+end 'createSlotInfo'
+
+function growSlotInfo(slotId VarSlot, info SlotInfo)
+	let needed = slotId + 1
+	while info.storeBlocks.count() < needed 'growSB'
+		info.storeBlocks.push(BlockIdArray{})
+	end 'growSB'
+	while info.slotIsFloat.count() < needed 'growIF'
+		info.slotIsFloat.push(false)
+	end 'growIF'
+	while info.slotHasStore.count() < needed 'growHS'
+		info.slotHasStore.push(false)
+	end 'growHS'
+	while info.slotHasLoad.count() < needed 'growHL'
+		info.slotHasLoad.push(false)
+	end 'growHL'
+end 'growSlotInfo'
+
+function analyzeSlots(func MlirFunction, paramCount ParamCount) returns SlotInfo
+	var info = createSlotInfo()
+
+	// Scan all blocks for memref store/load ops
 	for block in func.region.blocks 'scanBlocks'
 		for op in block.ops 'scanOps'
-			analyzeOp(op, blockId: block.id, state: state, entryBlockId: entryBlockId)
+			analyzeSlotOp(op, blockId: block.id, info: info)
 		end 'scanOps'
+		if block.hasTerminator 'hasTerm'
+			analyzeSlotOp(block.terminator, blockId: block.id, info: info)
+		end 'hasTerm'
 	end 'scanBlocks'
 
 	// Mark param slots as float from the function's param type info
@@ -56,107 +448,581 @@ function promoteFunction(func MlirFunction, globalValueIdRef ValueIdRef) returns
 	while pti < paramCount and pti < func.paramTypes.count() 'markParamFloat'
 		let pt = try func.paramTypes.get(pti) otherwise StdType.i64
 		if stdTypeIsFloat(pt) 'isFloat'
-			growSlotArrays(pti, state: state)
-			state.slotIsFloat.set(pti, value: true)
+			growSlotInfo(pti, info: info)
+			info.slotIsFloat.set(pti, value: true)
 		end 'isFloat'
 		pti = pti + 1
 	end 'markParamFloat'
 
 	// Detect float local slots by checking if load results are used as float operands
-	markFloatSlotsFromUsage(func, state: state)
+	markFloatSlotsFromUsage(func, info: info)
 
-	// If there are params, extend maxSlot to cover all param slots
+	// Extend maxSlot to cover all param slots
 	if paramCount > 0 'extendForParams'
-		if not state.hasAnySlot or state.maxSlot < paramCount - 1 'growMax'
-			state.maxSlot = paramCount - 1
-			state.hasAnySlot = true
+		if not info.hasAnySlot or info.maxSlot < paramCount - 1 'growMax'
+			info.maxSlot = paramCount - 1
+			info.hasAnySlot = true
 		end 'growMax'
+		// Ensure arrays are large enough for all param slots
+		growSlotInfo(paramCount - 1, info: info)
 	end 'extendForParams'
 
-	if not state.hasAnySlot 'noSlots'
-		return func
-	end 'noSlots'
+	return info
+end 'analyzeSlots'
 
-	// Phase 2: Determine which slots are promotable
+function analyzeSlotOp(op MlirOp, blockId BlockId, info SlotInfo)
+	match op 'checkOp'
+		memref(memOp) then analyzeSlotMemRefOp(memOp, blockId: blockId, info: info)
+		maxhl to func then break 'checkOp'
+		runtime to maxarm64 then break 'checkOp'
+	end 'checkOp'
+end 'analyzeSlotOp'
+
+function analyzeSlotMemRefOp(memOp MemRefOp, blockId BlockId, info SlotInfo)
+	match memOp 'check'
+		storeSlot(slotId, _) then recordSlotStore(slotId, blockId: blockId, info: info)
+		loadSlot(resultId, slotId) then recordSlotLoad(resultId, slotId: slotId, info: info)
+	end 'check'
+end 'analyzeSlotMemRefOp'
+
+function recordSlotStore(slotId VarSlot, blockId BlockId, info SlotInfo)
+	growSlotInfo(slotId, info: info)
+	info.slotHasStore.set(slotId, value: true)
+	// Record this block as containing a store for the slot (no duplicates)
+	let blocks = try info.storeBlocks.get(slotId) otherwise 'noBlocks'
+		return
+	end 'noBlocks'
+	if not blockIdArrayContains(blocks, blockId: blockId) 'notDup'
+		blocks.push(blockId)
+	end 'notDup'
+	if not info.hasAnySlot or slotId > info.maxSlot 'updateMax'
+		info.maxSlot = slotId
+	end 'updateMax'
+	info.hasAnySlot = true
+end 'recordSlotStore'
+
+function recordSlotLoad(resultId ValueId, slotId VarSlot, info SlotInfo)
+	growSlotInfo(slotId, info: info)
+	info.slotHasLoad.set(slotId, value: true)
+	// Track loadResultId -> slotId for float usage detection
+	while info.loadResultToSlot.count() <= resultId 'growLRS'
+		info.loadResultToSlot.push(SLOT_NONE)
+	end 'growLRS'
+	info.loadResultToSlot.set(resultId, value: slotId)
+	if not info.hasAnySlot or slotId > info.maxSlot 'updateMax'
+		info.maxSlot = slotId
+	end 'updateMax'
+	info.hasAnySlot = true
+end 'recordSlotLoad'
+
+// Float detection: check if load results are used as float operands
+function markFloatSlotsFromUsage(func MlirFunction, info SlotInfo)
+	for block in func.region.blocks 'scanBlocks'
+		for op in block.ops 'scanOps'
+			markFloatOperandsAsFloatSlots(op, info: info)
+		end 'scanOps'
+	end 'scanBlocks'
+end 'markFloatSlotsFromUsage'
+
+function markFloatOperandsAsFloatSlots(op MlirOp, info SlotInfo)
+	match op 'check'
+		arith(arithOp) then markFloatArithOperands(arithOp, info: info)
+		maxhl then break 'check'
+		cf to func then break 'check'
+		memref to maxarm64 then break 'check'
+	end 'check'
+end 'markFloatOperandsAsFloatSlots'
+
+function markFloatArithOperands(op ArithOp, info SlotInfo)
+	match op 'check'
+		binary(b) then markFloatBinaryOperands(b, info: info)
+		unary(u) then markFloatUnaryOperands(u, info: info)
+		const then break 'check'
+	end 'check'
+end 'markFloatArithOperands'
+
+function markFloatBinaryOperands(op ArithBinaryOp, info SlotInfo)
+	match op.opcode 'check'
+		addF64 to divF64 then markBothOperandSlots(op.leftId, rightId: op.rightId, info: info)
+		cmpF64Eq to cmpF64Ge then markBothOperandSlots(op.leftId, rightId: op.rightId, info: info)
+		addI64 to shrI64 then break 'check'
+		cmpI64Eq to cmpI64Ge then break 'check'
+	end 'check'
+end 'markFloatBinaryOperands'
+
+function markBothOperandSlots(leftId ValueId, rightId ValueId, info SlotInfo)
+	markOperandSlotAsFloat(leftId, info: info)
+	markOperandSlotAsFloat(rightId, info: info)
+end 'markBothOperandSlots'
+
+function markFloatUnaryOperands(op ArithUnaryOp, info SlotInfo)
+	match op.opcode 'check'
+		siToFpF64 then markOperandSlotAsFloat(op.operandId, info: info)
+		fpToSiI64 then markOperandSlotAsFloat(op.operandId, info: info)
+		negI64 to bitNotI64 then break 'check'
+	end 'check'
+end 'markFloatUnaryOperands'
+
+function markOperandSlotAsFloat(valueId ValueId, info SlotInfo)
+	if valueId >= info.loadResultToSlot.count() 'noEntry'
+		return
+	end 'noEntry'
+	let slotId = try info.loadResultToSlot.get(valueId) otherwise SLOT_NONE
+	if slotId == SLOT_NONE 'notALoad'
+		return
+	end 'notALoad'
+	growSlotInfo(slotId, info: info)
+	info.slotIsFloat.set(slotId, value: true)
+end 'markOperandSlotAsFloat'
+
+// ============================================================
+// Promotability classification
+// ============================================================
+
+type PromotableInfo
+	export var isPromotable BoolArray
+	export var anyPromoted bool
+end 'PromotableInfo'
+
+function classifyPromotable(slotInfo SlotInfo, paramCount ParamCount) returns PromotableInfo
 	var promotable = BoolArray{}
 	var anyPromoted = false
 	var slotIdx = 0
-	while slotIdx <= state.maxSlot 'classifySlots'
-		let stores = getSlotCount(state.slotStoreCount, slotId: slotIdx)
-		let crossBlock = getSlotBool(state.slotHasCrossBlockLoad, slotId: slotIdx)
+	while slotIdx <= slotInfo.maxSlot 'classifySlots'
 		growBoolArray(promotable, size: slotIdx + 1)
-
-		let isFloat = getSlotBool(state.slotIsFloat, slotId: slotIdx)
-
+		// All slots that have stores or loads via memref are promotable.
+		// The IDF algorithm handles all cases: single-store, multi-store,
+		// cross-block, params, etc.
+		let hasStore = getSlotBool(slotInfo.slotHasStore, slotId: slotIdx)
+		let hasLoad = getSlotBool(slotInfo.slotHasLoad, slotId: slotIdx)
 		if slotIdx < paramCount 'isParam'
-			// Param slot: promotable if never written, not float, and all loads
-			// are in the entry block (no cross-block usage — params need a stack
-			// home for block transitions if used across blocks).
-			if stores == 0 and not isFloat and not crossBlock 'paramPromotable'
+			// Param slots are always promotable (they have an implicit
+			// definition via func.param at block entry)
+			if hasLoad 'paramUsed'
 				promotable.set(slotIdx, value: true)
 				anyPromoted = true
-			end 'paramPromotable'
+			end 'paramUsed'
 		end 'isParam' else 'isLocal'
-			// Local slot: promotable if exactly one store, exactly one load,
-			// no cross-block loads, and not float. Multiple loads would share
-			// a single valueId which breaks when the register allocator
-			// destroys it on first use.
-			let loads = getSlotCount(state.slotLoadCount, slotId: slotIdx)
-			if stores == 1 and loads == 1 and not crossBlock and not isFloat 'localPromotable'
+			// Local slots: promotable if they have any stores or loads
+			if hasStore or hasLoad 'localUsed'
 				promotable.set(slotIdx, value: true)
 				anyPromoted = true
-			end 'localPromotable'
+			end 'localUsed'
 		end 'isLocal'
 		slotIdx = slotIdx + 1
 	end 'classifySlots'
+	return PromotableInfo{isPromotable: promotable, anyPromoted: anyPromoted}
+end 'classifyPromotable'
 
-	if not anyPromoted 'nothingToPromote'
-		return func
-	end 'nothingToPromote'
+// ============================================================
+// Phase 5: Phi-node placement via iterated dominance frontier
+// ============================================================
 
-	// Phase 3: Build remap table (loadResultId -> replacementValueId)
-	// Allocate new valueIds per-function, starting after the max used ID in this function.
-	// (ValueIds are per-function, not global, so the global ref would collide.)
-	let maxFuncId = scanMaxValueId(func)
-	var funcIdRef = createValueIdRef(maxFuncId + 1)
+// PhiMap: phiMap[blockId] is a ValueIdArray of length (maxSlot+1).
+// phiMap[blockId][slotId] = fresh valueId for the block arg, or REMAP_NONE if no phi.
+typealias PhiMap = Array with ValueIdArray
 
-	var remap = ValueIdArray{}
+function placePhiNodes(slotInfo SlotInfo, promotable PromotableInfo, df DfInfo, numBlocks BlockId, funcIdRef ValueIdRef) returns PhiMap
+	let numSlots = slotInfo.maxSlot + 1
+	// Initialize phiMap: for each block, an array of REMAP_NONE
+	var phiMap = PhiMap{}
+	var bi = 0
+	while bi < numBlocks 'initPhiMap'
+		var blockSlots = ValueIdArray{}
+		var si = 0
+		while si < numSlots 'initSlots'
+			blockSlots.push(REMAP_NONE)
+			si = si + 1
+		end 'initSlots'
+		phiMap.push(blockSlots)
+		bi = bi + 1
+	end 'initPhiMap'
+
+	// For each promotable slot, run the IDF worklist algorithm
+	var slotIdx = 0
+	while slotIdx < numSlots 'eachSlot'
+		if not getSlotBool(promotable.isPromotable, slotId: slotIdx) 'skipSlot'
+			slotIdx = slotIdx + 1
+			continue
+		end 'skipSlot'
+
+		// hasPlacedPhi[blockId] = whether we've placed a phi for this slot here
+		var hasPlacedPhi = BoolArray{}
+		growBoolArray(hasPlacedPhi, size: numBlocks)
+		// inWorklist[blockId] = whether blockId is in the worklist
+		var inWorklist = BoolArray{}
+		growBoolArray(inWorklist, size: numBlocks)
+
+		// Initialize worklist with blocks that have stores for this slot
+		var worklist = BlockIdArray{}
+		let storeBlocksForSlot = try slotInfo.storeBlocks.get(slotIdx) otherwise 'noStoreBlocks'
+			slotIdx = slotIdx + 1
+			continue
+		end 'noStoreBlocks'
+		for sb in storeBlocksForSlot 'initWorklist'
+			worklist.push(sb)
+			inWorklist.set(sb, value: true)
+		end 'initWorklist'
+
+		// Process worklist
+		while worklist.count() > 0 'processWorklist'
+			let block = try worklist.pop() otherwise 'emptyWorklist'
+				break
+			end 'emptyWorklist'
+			inWorklist.set(block, value: false)
+
+			let dfSet = try df.frontiers.get(block) otherwise 'noDf'
+				continue
+			end 'noDf'
+			for dfBlock in dfSet 'eachDfBlock'
+				let alreadyPlaced = try hasPlacedPhi.get(dfBlock) otherwise false
+				if not alreadyPlaced 'place'
+					// Allocate a fresh valueId for this phi-node
+					let freshId = allocValueId(funcIdRef)
+					let blockSlots = try phiMap.get(dfBlock) otherwise 'noBlockSlots'
+						continue
+					end 'noBlockSlots'
+					blockSlots.set(slotIdx, value: freshId)
+					hasPlacedPhi.set(dfBlock, value: true)
+
+					// The phi itself is a definition, so add to worklist
+					let alreadyInWl = try inWorklist.get(dfBlock) otherwise false
+					if not alreadyInWl 'addToWl'
+						worklist.push(dfBlock)
+						inWorklist.set(dfBlock, value: true)
+					end 'addToWl'
+				end 'place'
+			end 'eachDfBlock'
+		end 'processWorklist'
+		slotIdx = slotIdx + 1
+	end 'eachSlot'
+
+	return phiMap
+end 'placePhiNodes'
+
+// Insert MlirBlockArg entries into blocks that have phis placed
+function insertBlockArgs(func MlirFunction, phiMap PhiMap, slotInfo SlotInfo)
+	let numSlots = slotInfo.maxSlot + 1
+	for block in func.region.blocks 'eachBlock'
+		let blockSlots = try phiMap.get(block.id) otherwise 'noSlots'
+			continue
+		end 'noSlots'
+		var si = 0
+		while si < numSlots 'eachSlot'
+			let phiValueId = try blockSlots.get(si) otherwise REMAP_NONE
+			if phiValueId != REMAP_NONE 'hasPhi'
+				let isFloat = getSlotBool(slotInfo.slotIsFloat, slotId: si)
+				var argType = StdType.i64
+				if isFloat 'floatSlot'
+					argType = StdType.f64
+				end 'floatSlot'
+				block.blockArgs.push(MlirBlockArg{valueId: phiValueId, argType: argType})
+			end 'hasPhi'
+			si = si + 1
+		end 'eachSlot'
+	end 'eachBlock'
+end 'insertBlockArgs'
+
+// ============================================================
+// Phase 6: Variable renaming — walk dominator tree in preorder
+// ============================================================
+
+// Per-slot definition stack: currentDef[slotId] is a ValueIdArray used as a stack.
+// The top of the stack is the current SSA value for that slot.
+type RenameState
+	export var currentDef DefStackArray
+	export var remap ValueIdArray
+	export var numSlots VarSlot
+	// Track param ops that need to be emitted in the entry block
+	export var paramValueIds ValueIdArray
+	export var paramSlotIsPromoted BoolArray
+end 'RenameState'
+
+function createRenameState(slotInfo SlotInfo, paramCount ParamCount, funcIdRef ValueIdRef, promotable PromotableInfo) returns RenameState
+	let numSlots = slotInfo.maxSlot + 1
+	var defStacks = DefStackArray{}
+	var si = 0
+	while si < numSlots 'initStacks'
+		defStacks.push(ValueIdArray{})
+		si = si + 1
+	end 'initStacks'
+
+	// Initialize param slot definitions: allocate a valueId for each promoted param
+	// and push it as the initial definition
 	var paramValueIds = ValueIdArray{}
+	var paramSlotIsPromoted = BoolArray{}
 	growValueIdArray(paramValueIds, size: paramCount)
+	growBoolArray(paramSlotIsPromoted, size: paramCount)
 
-	// Allocate param valueIds for promoted params
 	var pIdx = 0
-	while pIdx < paramCount 'allocParamIds'
-		if getSlotBool(promotable, slotId: pIdx) 'promoted'
-			let newId = allocValueId(funcIdRef)
-			paramValueIds.set(pIdx, value: newId)
+	while pIdx < paramCount 'initParams'
+		if getSlotBool(promotable.isPromotable, slotId: pIdx) 'promoted'
+			let paramId = allocValueId(funcIdRef)
+			paramValueIds.set(pIdx, value: paramId)
+			paramSlotIsPromoted.set(pIdx, value: true)
+			// Push the param valueId as the initial definition for this slot
+			let stack = try defStacks.get(pIdx) otherwise 'noStack'
+				pIdx = pIdx + 1
+				continue
+			end 'noStack'
+			stack.push(paramId)
 		end 'promoted'
 		pIdx = pIdx + 1
-	end 'allocParamIds'
+	end 'initParams'
 
-	// Walk all blocks to build the remap for load result IDs
-	for block in func.region.blocks 'buildRemap'
-		for op in block.ops 'buildRemapOps'
-			buildRemapFromOp(op, promotable: promotable, paramCount: paramCount, paramValueIds: paramValueIds, slotStoreValueId: state.slotStoreValueId, remap: remap)
-		end 'buildRemapOps'
-		if block.hasTerminator 'hasTermRemap'
-			buildRemapFromOp(block.terminator, promotable: promotable, paramCount: paramCount, paramValueIds: paramValueIds, slotStoreValueId: state.slotStoreValueId, remap: remap)
-		end 'hasTermRemap'
-	end 'buildRemap'
+	return RenameState{
+		currentDef: defStacks,
+		remap: ValueIdArray{},
+		numSlots: numSlots,
+		paramValueIds: paramValueIds,
+		paramSlotIsPromoted: paramSlotIsPromoted
+	}
+end 'createRenameState'
 
-	// Phase 4: Rewrite function — remove promoted memref ops, substitute values
+function getCurrentDef(renameState RenameState, slotId VarSlot) returns ValueId
+	if slotId >= renameState.currentDef.count() 'outOfRange'
+		return 0
+	end 'outOfRange'
+	let stack = try renameState.currentDef.get(slotId) otherwise 'noStack'
+		return 0
+	end 'noStack'
+	if stack.count() == 0 'empty'
+		// No definition yet — this is an undefined use.
+		// Return 0 as a fallback (the value is undefined).
+		return 0
+	end 'empty'
+	return try stack.get(stack.count() - 1) otherwise 0
+end 'getCurrentDef'
+
+function pushDef(renameState RenameState, slotId VarSlot, valueId ValueId)
+	if slotId >= renameState.currentDef.count() 'outOfRange'
+		return
+	end 'outOfRange'
+	let stack = try renameState.currentDef.get(slotId) otherwise 'noStack'
+		return
+	end 'noStack'
+	stack.push(valueId)
+end 'pushDef'
+
+function popDef(renameState RenameState, slotId VarSlot)
+	if slotId >= renameState.currentDef.count() 'outOfRange'
+		return
+	end 'outOfRange'
+	let stack = try renameState.currentDef.get(slotId) otherwise 'noStack'
+		return
+	end 'noStack'
+	if stack.count() > 0 'nonEmpty'
+		try stack.pop() otherwise 0
+	end 'nonEmpty'
+end 'popDef'
+
+function addRemap(renameState RenameState, fromId ValueId, toId ValueId)
+	while renameState.remap.count() <= fromId 'growRemap'
+		renameState.remap.push(REMAP_NONE)
+	end 'growRemap'
+	renameState.remap.set(fromId, value: toId)
+end 'addRemap'
+
+// Rename variables in a single block and recurse into dominated children
+function renameBlock(blockId BlockId, func MlirFunction, renameState RenameState, domInfo DomInfo, numBlocks BlockId, phiMap PhiMap, promotable PromotableInfo, cfg CfgInfo)
+	// Track how many definitions we push, so we can pop them when backtracking
+	var pushCounts = ValueIdArray{}
+	var pci = 0
+	while pci < renameState.numSlots 'initPushCounts'
+		pushCounts.push(0)
+		pci = pci + 1
+	end 'initPushCounts'
+
+	// At block entry: push phi-node (block arg) valueIds onto definition stacks
+	let blockSlots = try phiMap.get(blockId) otherwise 'noBlockSlots'
+		// Even without phis, we need to process the block
+		renameBlockOps(blockId, func: func, renameState: renameState, pushCounts: pushCounts, promotable: promotable)
+		renameDominatedChildren(blockId, func: func, renameState: renameState, domInfo: domInfo, numBlocks: numBlocks, phiMap: phiMap, promotable: promotable, cfg: cfg)
+		popAllDefs(renameState, pushCounts: pushCounts)
+		return
+	end 'noBlockSlots'
+
+	var si = 0
+	while si < renameState.numSlots 'pushPhiDefs'
+		let phiValueId = try blockSlots.get(si) otherwise REMAP_NONE
+		if phiValueId != REMAP_NONE 'hasPhi'
+			pushDef(renameState, slotId: si, valueId: phiValueId)
+			let pc = try pushCounts.get(si) otherwise 0
+			pushCounts.set(si, value: pc + 1)
+		end 'hasPhi'
+		si = si + 1
+	end 'pushPhiDefs'
+
+	// Process ops in the block
+	renameBlockOps(blockId, func: func, renameState: renameState, pushCounts: pushCounts, promotable: promotable)
+
+	// Recurse into dominated children in the dominator tree
+	renameDominatedChildren(blockId, func: func, renameState: renameState, domInfo: domInfo, numBlocks: numBlocks, phiMap: phiMap, promotable: promotable, cfg: cfg)
+
+	// Pop all definitions we pushed in this block
+	popAllDefs(renameState, pushCounts: pushCounts)
+end 'renameBlock'
+
+function renameBlockOps(blockId BlockId, func MlirFunction, renameState RenameState, pushCounts ValueIdArray, promotable PromotableInfo)
+	let block = findBlockById(func, blockId: blockId)
+
+	for op in block.ops 'eachOp'
+		match op 'renameOp'
+			memref(memOp) then renameMemRefOp(memOp, renameState: renameState, pushCounts: pushCounts, promotable: promotable)
+			maxhl to func then break 'renameOp'
+			runtime to maxarm64 then break 'renameOp'
+		end 'renameOp'
+	end 'eachOp'
+end 'renameBlockOps'
+
+function renameMemRefOp(memOp MemRefOp, renameState RenameState, pushCounts ValueIdArray, promotable PromotableInfo)
+	match memOp 'rename'
+		storeSlot(slotId, valueId) then renameStoreSlot(slotId, valueId: valueId, renameState: renameState, pushCounts: pushCounts, promotable: promotable)
+		loadSlot(resultId, slotId) then renameLoadSlot(resultId, slotId: slotId, renameState: renameState, promotable: promotable)
+	end 'rename'
+end 'renameMemRefOp'
+
+function renameStoreSlot(slotId VarSlot, valueId ValueId, renameState RenameState, pushCounts ValueIdArray, promotable PromotableInfo)
+	if not getSlotBool(promotable.isPromotable, slotId: slotId) 'notPromoted'
+		return
+	end 'notPromoted'
+	// Push the stored value as the new definition for this slot
+	pushDef(renameState, slotId: slotId, valueId: valueId)
+	let pc = try pushCounts.get(slotId) otherwise 0
+	pushCounts.set(slotId, value: pc + 1)
+end 'renameStoreSlot'
+
+function renameLoadSlot(resultId ValueId, slotId VarSlot, renameState RenameState, promotable PromotableInfo)
+	if not getSlotBool(promotable.isPromotable, slotId: slotId) 'notPromoted'
+		return
+	end 'notPromoted'
+	// Replace this load's result with the current definition
+	let currentVal = getCurrentDef(renameState, slotId: slotId)
+	addRemap(renameState, fromId: resultId, toId: currentVal)
+end 'renameLoadSlot'
+
+// Per-edge phi argument storage: edgePhiArgs is a flat 2D table
+// indexed by (fromBlockId * numBlocks + toBlockId) to avoid per-predecessor maps
+typealias EdgePhiArgTable = Array with ValueIdArray
+
+function getEdgeKey(fromBlock BlockId, toBlock BlockId, numBlocks BlockId) returns ValueId
+	return fromBlock * numBlocks + toBlock
+end 'getEdgeKey'
+
+function renameDominatedChildren(blockId BlockId, func MlirFunction, renameState RenameState, domInfo DomInfo, numBlocks BlockId, phiMap PhiMap, promotable PromotableInfo, cfg CfgInfo)
+	// Find all blocks whose immediate dominator is blockId (children in dom tree)
+	var childIdx = 0
+	while childIdx < numBlocks 'findChildren'
+		if childIdx != blockId 'notSelf'
+			let childIdom = try domInfo.idom.get(childIdx) otherwise BLOCK_NONE
+			if childIdom == blockId 'isDomChild'
+				renameBlock(childIdx, func: func, renameState: renameState, domInfo: domInfo, numBlocks: numBlocks, phiMap: phiMap, promotable: promotable, cfg: cfg)
+			end 'isDomChild'
+		end 'notSelf'
+		childIdx = childIdx + 1
+	end 'findChildren'
+end 'renameDominatedChildren'
+
+function popAllDefs(renameState RenameState, pushCounts ValueIdArray)
+	var si = 0
+	while si < renameState.numSlots 'popSlots'
+		let count = try pushCounts.get(si) otherwise 0
+		var popped = 0
+		while popped < count 'popEach'
+			popDef(renameState, slotId: si)
+			popped = popped + 1
+		end 'popEach'
+		si = si + 1
+	end 'popSlots'
+end 'popAllDefs'
+
+function findBlockById(func MlirFunction, blockId BlockId) returns MlirBlock
+	for block in func.region.blocks 'search'
+		if block.id == blockId 'found'
+			return block
+		end 'found'
+	end 'search'
+	panic("findBlockById: block not found — compiler bug")
+end 'findBlockById'
+
+// ============================================================
+// Phase 7 & 8: Rebuild function
+// ============================================================
+
+// The rebuild phase does the following:
+// 1. Emit func.param ops for promoted param slots in the entry block
+// 2. Remove promoted memref.storeSlot and memref.loadSlot ops
+// 3. Apply the remap to all remaining ops
+// 4. Rewrite terminators: append phi arg values for successor phis
+//
+// For step 4, we need the per-slot current definitions at each block's
+// terminator. Since rename already computed these (and stored results
+// in renameState.remap), we re-derive the phi arg values by doing a
+// second rename walk — but a simpler one that only tracks current defs
+// and fills branch args.
+
+function rebuildFunction(func MlirFunction, renameState RenameState, promotable PromotableInfo, phiMap PhiMap, cfg CfgInfo, paramCount ParamCount) returns MlirFunction
 	var dstFunc = createMlirFunction(func.name, returnType: func.returnType)
 	dstFunc.paramCount = func.paramCount
 	dstFunc.paramTypes = func.paramTypes
+
+	// We need to fill branch args for phi-nodes. To do this correctly,
+	// we need the current definition at each block's terminator.
+	// We'll do a second pass: for each block, determine which successor
+	// phis need arguments, and compute those arguments from the remap state.
+	//
+	// Strategy: Build an edge phi arg table during a second rename walk.
+	let numBlocks = func.region.nextBlockId
+	let numSlots = renameState.numSlots
+	var edgePhiArgs = EdgePhiArgTable{}
+	// Initialize edge phi arg table
+	let tableSize = numBlocks * numBlocks
+	var ei = 0
+	while ei < tableSize 'initEdgeTable'
+		edgePhiArgs.push(ValueIdArray{})
+		ei = ei + 1
+	end 'initEdgeTable'
+
+	// Do a second rename walk to fill edge phi args
+	let entryBlockId = getEntryBlockId(func)
+	var defStacks2 = DefStackArray{}
+	var si = 0
+	while si < numSlots 'initStacks2'
+		defStacks2.push(ValueIdArray{})
+		si = si + 1
+	end 'initStacks2'
+
+	// Push initial param definitions
+	var pIdx = 0
+	while pIdx < paramCount 'initParams2'
+		let isProm = try renameState.paramSlotIsPromoted.get(pIdx) otherwise false
+		if isProm 'promoted'
+			let paramId = try renameState.paramValueIds.get(pIdx) otherwise 0
+			let stack = try defStacks2.get(pIdx) otherwise 'noStack'
+				pIdx = pIdx + 1
+				continue
+			end 'noStack'
+			stack.push(paramId)
+		end 'promoted'
+		pIdx = pIdx + 1
+	end 'initParams2'
+
+	var domInfo2 = computeDominators(entryBlockId, numBlocks: numBlocks, cfg: cfg, rpo: computeReversePostorder(entryBlockId, numBlocks: numBlocks, cfg: cfg))
+	fillEdgePhiArgsWalk(entryBlockId, func: func, defStacks: defStacks2, domInfo: domInfo2, numBlocks: numBlocks, numSlots: numSlots, phiMap: phiMap, promotable: promotable, cfg: cfg, edgePhiArgs: edgePhiArgs)
+
+	// Now rebuild all blocks
+	let remap = renameState.remap
 	var isFirstBlock = true
 
 	for srcBlock in func.region.blocks 'rewriteBlocks'
 		var dstBlock = addBlock(dstFunc.region, label: srcBlock.label)
 		dstBlock.id = srcBlock.id
+		// Copy block args (which now include phi-node args from Phase 5)
+		dstBlock.blockArgs = srcBlock.blockArgs
 
-		// Insert func.param ops at the top of the entry block
+		// Emit func.param ops at the top of the entry block
 		if isFirstBlock 'entryBlock'
-			emitParamOps(dstBlock, paramCount: paramCount, promotable: promotable, paramValueIds: paramValueIds, paramTypes: func.paramTypes)
+			emitParamOps(dstBlock, renameState: renameState, paramCount: paramCount, paramTypes: func.paramTypes)
 			isFirstBlock = false
 		end 'entryBlock'
 
@@ -168,22 +1034,273 @@ function promoteFunction(func MlirFunction, globalValueIdRef ValueIdRef) returns
 			dstBlock.ops.push(substituteOp(op, remap: remap))
 		end 'rewriteOps'
 
-		// Rewrite terminator
+		// Rewrite terminator with phi args
 		if srcBlock.hasTerminator 'hasTerm'
-			dstBlock.terminator = substituteOp(srcBlock.terminator, remap: remap)
+			dstBlock.terminator = rewriteTerminatorWithPhiArgs(srcBlock.terminator, blockId: srcBlock.id, remap: remap, numBlocks: numBlocks, edgePhiArgs: edgePhiArgs)
 			dstBlock.hasTerminator = true
 		end 'hasTerm'
 	end 'rewriteBlocks'
 
 	dstFunc.region.nextBlockId = func.region.nextBlockId
-
-	// Advance the global valueId ref past any IDs we allocated for this function
-	if funcIdRef.nextId > globalValueIdRef.nextId 'advanceGlobal'
-		globalValueIdRef.nextId = funcIdRef.nextId
-	end 'advanceGlobal'
-
 	return dstFunc
-end 'promoteFunction'
+end 'rebuildFunction'
+
+// Second rename walk: walk dominator tree in preorder, track current defs,
+// and at each block's terminator, store the phi arg values for each edge.
+function fillEdgePhiArgsWalk(blockId BlockId, func MlirFunction, defStacks DefStackArray, domInfo DomInfo, numBlocks BlockId, numSlots VarSlot, phiMap PhiMap, promotable PromotableInfo, cfg CfgInfo, edgePhiArgs EdgePhiArgTable)
+	let block = findBlockById(func, blockId: blockId)
+
+	// Track push counts for backtracking
+	var pushCounts = ValueIdArray{}
+	var pci = 0
+	while pci < numSlots 'initPC'
+		pushCounts.push(0)
+		pci = pci + 1
+	end 'initPC'
+
+	// Push phi-node definitions
+	let blockSlots = try phiMap.get(blockId) otherwise 'noSlots'
+		// Process ops, fill edges, recurse, pop, return
+		fillEdgePhiArgsProcessOps(block, defStacks: defStacks, pushCounts: pushCounts, promotable: promotable)
+		fillEdgePhiArgsForTerminator(block, defStacks: defStacks, phiMap: phiMap, numBlocks: numBlocks, numSlots: numSlots, edgePhiArgs: edgePhiArgs)
+		fillEdgePhiArgsChildren(blockId, func: func, defStacks: defStacks, domInfo: domInfo, numBlocks: numBlocks, numSlots: numSlots, phiMap: phiMap, promotable: promotable, cfg: cfg, edgePhiArgs: edgePhiArgs)
+		popAllDefsFromStacks(defStacks, pushCounts: pushCounts, numSlots: numSlots)
+		return
+	end 'noSlots'
+
+	var si = 0
+	while si < numSlots 'pushPhis'
+		let phiValueId = try blockSlots.get(si) otherwise REMAP_NONE
+		if phiValueId != REMAP_NONE 'hasPhi'
+			let stack = try defStacks.get(si) otherwise 'noStack'
+				si = si + 1
+				continue
+			end 'noStack'
+			stack.push(phiValueId)
+			let pc = try pushCounts.get(si) otherwise 0
+			pushCounts.set(si, value: pc + 1)
+		end 'hasPhi'
+		si = si + 1
+	end 'pushPhis'
+
+	// Process ops (stores push new definitions)
+	fillEdgePhiArgsProcessOps(block, defStacks: defStacks, pushCounts: pushCounts, promotable: promotable)
+
+	// Fill edge phi args from terminator
+	fillEdgePhiArgsForTerminator(block, defStacks: defStacks, phiMap: phiMap, numBlocks: numBlocks, numSlots: numSlots, edgePhiArgs: edgePhiArgs)
+
+	// Recurse into dominated children
+	fillEdgePhiArgsChildren(blockId, func: func, defStacks: defStacks, domInfo: domInfo, numBlocks: numBlocks, numSlots: numSlots, phiMap: phiMap, promotable: promotable, cfg: cfg, edgePhiArgs: edgePhiArgs)
+
+	// Pop definitions
+	popAllDefsFromStacks(defStacks, pushCounts: pushCounts, numSlots: numSlots)
+end 'fillEdgePhiArgsWalk'
+
+function fillEdgePhiArgsProcessOps(block MlirBlock, defStacks DefStackArray, pushCounts ValueIdArray, promotable PromotableInfo)
+	for op in block.ops 'eachOp'
+		match op 'checkOp'
+			memref(memOp) then fillEdgePhiArgsProcessMemRef(memOp, defStacks: defStacks, pushCounts: pushCounts, promotable: promotable)
+			maxhl to func then break 'checkOp'
+			runtime to maxarm64 then break 'checkOp'
+		end 'checkOp'
+	end 'eachOp'
+end 'fillEdgePhiArgsProcessOps'
+
+function fillEdgePhiArgsProcessMemRef(memOp MemRefOp, defStacks DefStackArray, pushCounts ValueIdArray, promotable PromotableInfo)
+	match memOp 'check'
+		storeSlot(slotId, valueId) then fillEdgePhiArgsProcessStore(slotId, valueId: valueId, defStacks: defStacks, pushCounts: pushCounts, promotable: promotable)
+		loadSlot then break 'check'
+	end 'check'
+end 'fillEdgePhiArgsProcessMemRef'
+
+function fillEdgePhiArgsProcessStore(slotId VarSlot, valueId ValueId, defStacks DefStackArray, pushCounts ValueIdArray, promotable PromotableInfo)
+	if not getSlotBool(promotable.isPromotable, slotId: slotId) 'notPromoted'
+		return
+	end 'notPromoted'
+	let stack = try defStacks.get(slotId) otherwise 'noStack'
+		return
+	end 'noStack'
+	stack.push(valueId)
+	let pc = try pushCounts.get(slotId) otherwise 0
+	pushCounts.set(slotId, value: pc + 1)
+end 'fillEdgePhiArgsProcessStore'
+
+function fillEdgePhiArgsForTerminator(block MlirBlock, defStacks DefStackArray, phiMap PhiMap, numBlocks BlockId, numSlots VarSlot, edgePhiArgs EdgePhiArgTable)
+	if not block.hasTerminator 'noTerm'
+		return
+	end 'noTerm'
+	match block.terminator 'fill'
+		cf(cfOp) then fillEdgeCfPhiArgs(block.id, cfOp: cfOp, defStacks: defStacks, phiMap: phiMap, numBlocks: numBlocks, numSlots: numSlots, edgePhiArgs: edgePhiArgs)
+		maxhl to arith then break 'fill'
+		func to maxarm64 then break 'fill'
+	end 'fill'
+end 'fillEdgePhiArgsForTerminator'
+
+function fillEdgeCfPhiArgs(fromBlock BlockId, cfOp CfOp, defStacks DefStackArray, phiMap PhiMap, numBlocks BlockId, numSlots VarSlot, edgePhiArgs EdgePhiArgTable)
+	match cfOp 'fill'
+		br(target, _) then storeEdgePhiArgs(fromBlock, toBlock: target, defStacks: defStacks, phiMap: phiMap, numBlocks: numBlocks, numSlots: numSlots, edgePhiArgs: edgePhiArgs)
+		condBr(_, thenTarget, _, elseTarget, _) then storeCondBrEdgePhiArgs(fromBlock, thenTarget: thenTarget, elseTarget: elseTarget, defStacks: defStacks, phiMap: phiMap, numBlocks: numBlocks, numSlots: numSlots, edgePhiArgs: edgePhiArgs)
+	end 'fill'
+end 'fillEdgeCfPhiArgs'
+
+function storeCondBrEdgePhiArgs(fromBlock BlockId, thenTarget BlockId, elseTarget BlockId, defStacks DefStackArray, phiMap PhiMap, numBlocks BlockId, numSlots VarSlot, edgePhiArgs EdgePhiArgTable)
+	storeEdgePhiArgs(fromBlock, toBlock: thenTarget, defStacks: defStacks, phiMap: phiMap, numBlocks: numBlocks, numSlots: numSlots, edgePhiArgs: edgePhiArgs)
+	storeEdgePhiArgs(fromBlock, toBlock: elseTarget, defStacks: defStacks, phiMap: phiMap, numBlocks: numBlocks, numSlots: numSlots, edgePhiArgs: edgePhiArgs)
+end 'storeCondBrEdgePhiArgs'
+
+function storeEdgePhiArgs(fromBlock BlockId, toBlock BlockId, defStacks DefStackArray, phiMap PhiMap, numBlocks BlockId, numSlots VarSlot, edgePhiArgs EdgePhiArgTable)
+	let targetSlots = try phiMap.get(toBlock) otherwise 'noTargetSlots'
+		return
+	end 'noTargetSlots'
+
+	// Build the list of values to pass as phi args for this edge
+	var args = ValueIdArray{}
+	var si = 0
+	while si < numSlots 'eachSlot'
+		let phiValueId = try targetSlots.get(si) otherwise REMAP_NONE
+		if phiValueId != REMAP_NONE 'hasPhi'
+			// Get the current definition of this slot
+			let stack = try defStacks.get(si) otherwise 'noStack'
+				args.push(0)
+				si = si + 1
+				continue
+			end 'noStack'
+			if stack.count() == 0 'emptyStack'
+				args.push(0)
+			end 'emptyStack' else 'hasVal'
+				let topVal = try stack.get(stack.count() - 1) otherwise 0
+				args.push(topVal)
+			end 'hasVal'
+		end 'hasPhi'
+		si = si + 1
+	end 'eachSlot'
+
+	let edgeKey = getEdgeKey(fromBlock, toBlock: toBlock, numBlocks: numBlocks)
+	if edgeKey < edgePhiArgs.count() 'inRange'
+		edgePhiArgs.set(edgeKey, value: args)
+	end 'inRange'
+end 'storeEdgePhiArgs'
+
+function fillEdgePhiArgsChildren(blockId BlockId, func MlirFunction, defStacks DefStackArray, domInfo DomInfo, numBlocks BlockId, numSlots VarSlot, phiMap PhiMap, promotable PromotableInfo, cfg CfgInfo, edgePhiArgs EdgePhiArgTable)
+	var childIdx = 0
+	while childIdx < numBlocks 'findChildren'
+		if childIdx != blockId 'notSelf'
+			let childIdom = try domInfo.idom.get(childIdx) otherwise BLOCK_NONE
+			if childIdom == blockId 'isDomChild'
+				fillEdgePhiArgsWalk(childIdx, func: func, defStacks: defStacks, domInfo: domInfo, numBlocks: numBlocks, numSlots: numSlots, phiMap: phiMap, promotable: promotable, cfg: cfg, edgePhiArgs: edgePhiArgs)
+			end 'isDomChild'
+		end 'notSelf'
+		childIdx = childIdx + 1
+	end 'findChildren'
+end 'fillEdgePhiArgsChildren'
+
+function popAllDefsFromStacks(defStacks DefStackArray, pushCounts ValueIdArray, numSlots VarSlot)
+	var si = 0
+	while si < numSlots 'popSlots'
+		let count = try pushCounts.get(si) otherwise 0
+		if count > 0 'hasPushes'
+			let stack = try defStacks.get(si) otherwise 'noStack'
+				si = si + 1
+				continue
+			end 'noStack'
+			var popped = 0
+			while popped < count 'popEach'
+				if stack.count() > 0 'nonEmpty'
+					try stack.pop() otherwise 0
+				end 'nonEmpty'
+				popped = popped + 1
+			end 'popEach'
+		end 'hasPushes'
+		si = si + 1
+	end 'popSlots'
+end 'popAllDefsFromStacks'
+
+// ============================================================
+// Terminator rewriting: append phi args to branch ops
+// ============================================================
+
+function rewriteTerminatorWithPhiArgs(terminator MlirOp, blockId BlockId, remap ValueIdArray, numBlocks BlockId, edgePhiArgs EdgePhiArgTable) returns MlirOp
+	return match terminator 'rewrite'
+		cf(cfOp) gives MlirOp.cf(rewriteCfTerminatorWithPhiArgs(cfOp, blockId: blockId, remap: remap, numBlocks: numBlocks, edgePhiArgs: edgePhiArgs))
+		maxhl to arith gives substituteOp(terminator, remap: remap)
+		func to maxarm64 gives substituteOp(terminator, remap: remap)
+	end 'rewrite'
+end 'rewriteTerminatorWithPhiArgs'
+
+function rewriteCfTerminatorWithPhiArgs(cfOp CfOp, blockId BlockId, remap ValueIdArray, numBlocks BlockId, edgePhiArgs EdgePhiArgTable) returns CfOp
+	return match cfOp 'rewrite'
+		br(target, argIds) gives rewriteBrWithPhiArgs(target, argIds: argIds, blockId: blockId, remap: remap, numBlocks: numBlocks, edgePhiArgs: edgePhiArgs)
+		condBr(condId, thenTarget, thenArgIds, elseTarget, elseArgIds) gives rewriteCondBrWithPhiArgs(condId, thenTarget: thenTarget, thenArgIds: thenArgIds, elseTarget: elseTarget, elseArgIds: elseArgIds, blockId: blockId, remap: remap, numBlocks: numBlocks, edgePhiArgs: edgePhiArgs)
+	end 'rewrite'
+end 'rewriteCfTerminatorWithPhiArgs'
+
+function rewriteBrWithPhiArgs(target BlockId, argIds ValueIdArray, blockId BlockId, remap ValueIdArray, numBlocks BlockId, edgePhiArgs EdgePhiArgTable) returns CfOp
+	// Start with the existing args (remapped)
+	var newArgIds = remapValueIds(argIds, remap: remap)
+
+	// Append phi args for this edge
+	let edgeKey = getEdgeKey(blockId, toBlock: target, numBlocks: numBlocks)
+	if edgeKey < edgePhiArgs.count() 'hasEdge'
+		let phiArgs = try edgePhiArgs.get(edgeKey) otherwise 'noArgs'
+			return CfOp.br(target, newArgIds)
+		end 'noArgs'
+		for arg in phiArgs 'appendArgs'
+			newArgIds.push(remapValue(arg, remap: remap))
+		end 'appendArgs'
+	end 'hasEdge'
+
+	return CfOp.br(target, newArgIds)
+end 'rewriteBrWithPhiArgs'
+
+function rewriteCondBrWithPhiArgs(condId ValueId, thenTarget BlockId, thenArgIds ValueIdArray, elseTarget BlockId, elseArgIds ValueIdArray, blockId BlockId, remap ValueIdArray, numBlocks BlockId, edgePhiArgs EdgePhiArgTable) returns CfOp
+	let remappedCond = remapValue(condId, remap: remap)
+
+	// Then branch args
+	var newThenArgIds = remapValueIds(thenArgIds, remap: remap)
+	let thenEdgeKey = getEdgeKey(blockId, toBlock: thenTarget, numBlocks: numBlocks)
+	if thenEdgeKey < edgePhiArgs.count() 'hasThenEdge'
+		appendEdgePhiArgs(newThenArgIds, edgePhiArgs: edgePhiArgs, edgeKey: thenEdgeKey, remap: remap)
+	end 'hasThenEdge'
+
+	// Else branch args
+	var newElseArgIds = remapValueIds(elseArgIds, remap: remap)
+	let elseEdgeKey = getEdgeKey(blockId, toBlock: elseTarget, numBlocks: numBlocks)
+	if elseEdgeKey < edgePhiArgs.count() 'hasElseEdge'
+		appendEdgePhiArgs(newElseArgIds, edgePhiArgs: edgePhiArgs, edgeKey: elseEdgeKey, remap: remap)
+	end 'hasElseEdge'
+
+	return CfOp.condBr(remappedCond, thenTarget, newThenArgIds, elseTarget, newElseArgIds)
+end 'rewriteCondBrWithPhiArgs'
+
+// Helper: append phi arg values for a given edge key to an argIds array.
+function appendEdgePhiArgs(argIds ValueIdArray, edgePhiArgs EdgePhiArgTable, edgeKey ValueId, remap ValueIdArray)
+	let phiArgs = try edgePhiArgs.get(edgeKey) otherwise 'noArgs'
+		return
+	end 'noArgs'
+	for arg in phiArgs 'appendArgs'
+		argIds.push(remapValue(arg, remap: remap))
+	end 'appendArgs'
+end 'appendEdgePhiArgs'
+
+// ============================================================
+// Param op emission
+// ============================================================
+
+function emitParamOps(dstBlock MlirBlock, renameState RenameState, paramCount ParamCount, paramTypes StdTypeArray)
+	var pI = 0
+	while pI < paramCount 'insertParams'
+		let isProm = try renameState.paramSlotIsPromoted.get(pI) otherwise false
+		if isProm 'emitParam'
+			let paramId = try renameState.paramValueIds.get(pI) otherwise 'skipParam'
+				pI = pI + 1
+				continue
+			end 'skipParam'
+			let pt = try paramTypes.get(pI) otherwise StdType.i64
+			dstBlock.ops.push(MlirOp.func(FuncOp.param(paramId, pI, pt)))
+		end 'emitParam'
+		pI = pI + 1
+	end 'insertParams'
+end 'emitParamOps'
 
 // ============================================================
 // ValueId scanning — find the maximum valueId used in a function
@@ -217,7 +1334,7 @@ function maxValueIdInOp(op MlirOp) returns ValueId
 		runtime(rtOp) gives maxValueIdInRuntime(rtOp)
 		sys(sysOp) gives maxValueIdInSys(sysOp)
 		maxhl gives 0
-		maxx64 to maxarm64 gives 0
+		mir to maxarm64 gives 0
 	end 'scan'
 end 'maxValueIdInOp'
 
@@ -231,8 +1348,8 @@ end 'maxValueIdInArith'
 
 function maxValueIdInCf(op CfOp) returns ValueId
 	return match op 'scan'
-		br(_) gives 0
-		condBr(condId, _, _) gives condId
+		br(_, argIds) gives maxOfArray(argIds)
+		condBr(condId, _, thenArgIds, _, elseArgIds) gives maxOfThree(condId, b: maxOfArray(thenArgIds), c: maxOfArray(elseArgIds))
 	end 'scan'
 end 'maxValueIdInCf'
 
@@ -259,6 +1376,7 @@ function maxValueIdInRuntime(op RuntimeOp) returns ValueId
 	return match op 'scan'
 		printLiteral(_) gives 0
 		printInt(valueId) gives valueId
+		drop(valueId) gives valueId
 	end 'scan'
 end 'maxValueIdInRuntime'
 
@@ -273,6 +1391,7 @@ function maxValueIdInSys(op SysOp) returns ValueId
 		loadByte(resultId, baseId, offsetId) gives maxOfThree(resultId, b: baseId, c: offsetId)
 		osExit(codeId) gives codeId
 		osWrite(ptrId, lenId) gives maxOfTwo(ptrId, b: lenId)
+		free(ptrId) gives ptrId
 	end 'scan'
 end 'maxValueIdInSys'
 
@@ -315,235 +1434,10 @@ function maxOfIdAndArray(id ValueId, arr ValueIdArray) returns ValueId
 end 'maxOfIdAndArray'
 
 // ============================================================
-// Phase 1: Analysis
-// ============================================================
-
-// After the main analysis scan, detect float slots by checking if any load
-// result is used as a float operand (float arith, float conversion, etc.)
-function markFloatSlotsFromUsage(func MlirFunction, state AnalysisState)
-	for block in func.region.blocks 'scanBlocks'
-		for op in block.ops 'scanOps'
-			markFloatOperandsAsFloatSlots(op, state: state)
-		end 'scanOps'
-	end 'scanBlocks'
-end 'markFloatSlotsFromUsage'
-
-function markFloatOperandsAsFloatSlots(op MlirOp, state AnalysisState)
-	match op 'check'
-		arith(arithOp) then markFloatArithOperands(arithOp, state: state)
-		maxhl then break 'check'
-		cf to func then break 'check'
-		memref to maxarm64 then break 'check'
-	end 'check'
-end 'markFloatOperandsAsFloatSlots'
-
-function markFloatArithOperands(op ArithOp, state AnalysisState)
-	match op 'check'
-		binary(b) then markFloatBinaryOperands(b, state: state)
-		unary(u) then markFloatUnaryOperands(u, state: state)
-		const then break 'check'
-	end 'check'
-end 'markFloatArithOperands'
-
-function markFloatBinaryOperands(op ArithBinaryOp, state AnalysisState)
-	match op.opcode 'check'
-		addF64 to divF64 then markBothOperandSlots(op.leftId, rightId: op.rightId, state: state)
-		cmpF64Eq to cmpF64Ge then markBothOperandSlots(op.leftId, rightId: op.rightId, state: state)
-		addI64 to shrI64 then break 'check'
-		cmpI64Eq to cmpI64Ge then break 'check'
-	end 'check'
-end 'markFloatBinaryOperands'
-
-function markBothOperandSlots(leftId ValueId, rightId ValueId, state AnalysisState)
-	markOperandSlotAsFloat(leftId, state: state)
-	markOperandSlotAsFloat(rightId, state: state)
-end 'markBothOperandSlots'
-
-function markFloatUnaryOperands(op ArithUnaryOp, state AnalysisState)
-	match op.opcode 'check'
-		siToFpF64 then markOperandSlotAsFloat(op.operandId, state: state)
-		fpToSiI64 then markOperandSlotAsFloat(op.operandId, state: state)
-		negI64 to bitNotI64 then break 'check'
-	end 'check'
-end 'markFloatUnaryOperands'
-
-function markOperandSlotAsFloat(valueId ValueId, state AnalysisState)
-	if valueId >= state.loadResultToSlot.count() 'noEntry'
-		return
-	end 'noEntry'
-	let slotId = try state.loadResultToSlot.get(valueId) otherwise SLOT_NONE
-	if slotId == SLOT_NONE 'notALoad'
-		return
-	end 'notALoad'
-	growSlotArrays(slotId, state: state)
-	state.slotIsFloat.set(slotId, value: true)
-end 'markOperandSlotAsFloat'
-
-function analyzeOp(op MlirOp, blockId BlockId, state AnalysisState, entryBlockId BlockId)
-	match op 'checkOp'
-		memref(memOp) then analyzeMemRefOp(memOp, blockId: blockId, state: state, entryBlockId: entryBlockId)
-		maxhl to func then break 'checkOp'
-		runtime to maxarm64 then break 'checkOp'
-	end 'checkOp'
-end 'analyzeOp'
-
-function analyzeMemRefOp(memOp MemRefOp, blockId BlockId, state AnalysisState, entryBlockId BlockId)
-	match memOp 'check'
-		storeSlot(slotId, valueId) then recordStore(slotId, valueId: valueId, blockId: blockId, state: state)
-		loadSlot(resultId, slotId) then recordLoad(resultId, slotId: slotId, blockId: blockId, state: state, entryBlockId: entryBlockId)
-	end 'check'
-end 'analyzeMemRefOp'
-
-function recordStore(slotId VarSlot, valueId ValueId, blockId BlockId, state AnalysisState)
-	growSlotArrays(slotId, state: state)
-	let count = try state.slotStoreCount.get(slotId) otherwise 0
-	state.slotStoreCount.set(slotId, value: count + 1)
-	state.slotStoreValueId.set(slotId, value: valueId)
-	state.slotStoreBlock.set(slotId, value: blockId)
-	if not state.hasAnySlot or slotId > state.maxSlot 'updateMax'
-		state.maxSlot = slotId
-	end 'updateMax'
-	state.hasAnySlot = true
-end 'recordStore'
-
-function recordLoad(resultId ValueId, slotId VarSlot, blockId BlockId, state AnalysisState, entryBlockId BlockId)
-	growSlotArrays(slotId, state: state)
-	let count = try state.slotLoadCount.get(slotId) otherwise 0
-	state.slotLoadCount.set(slotId, value: count + 1)
-	// Track loadResultId -> slotId for float usage detection
-	while state.loadResultToSlot.count() <= resultId 'growLRS'
-		state.loadResultToSlot.push(SLOT_NONE)
-	end 'growLRS'
-	state.loadResultToSlot.set(resultId, value: slotId)
-	// Check if loads span multiple blocks.
-	// For locals: a load in a different block than the store is cross-block.
-	// For params (stores == 0): loads in any block other than the first load's block are cross-block.
-	let stores = try state.slotStoreCount.get(slotId) otherwise 0
-	if stores > 0 'hasStore'
-		let storeBlock = try state.slotStoreBlock.get(slotId) otherwise 0
-		if blockId != storeBlock 'crossBlock'
-			state.slotHasCrossBlockLoad.set(slotId, value: true)
-		end 'crossBlock'
-	end 'hasStore' else 'noStore'
-		// For params: func.param is placed in the entry block, so any load
-		// outside the entry block is cross-block.
-		if blockId != entryBlockId 'paramCrossBlock'
-			state.slotHasCrossBlockLoad.set(slotId, value: true)
-		end 'paramCrossBlock'
-	end 'noStore'
-	if not state.hasAnySlot or slotId > state.maxSlot 'updateMax'
-		state.maxSlot = slotId
-	end 'updateMax'
-	state.hasAnySlot = true
-end 'recordLoad'
-
-function growSlotArrays(slotId VarSlot, state AnalysisState)
-	let needed = slotId + 1
-	while state.slotStoreCount.count() < needed 'growSC'
-		state.slotStoreCount.push(0)
-	end 'growSC'
-	while state.slotStoreValueId.count() < needed 'growSV'
-		state.slotStoreValueId.push(0)
-	end 'growSV'
-	while state.slotStoreBlock.count() < needed 'growSB'
-		state.slotStoreBlock.push(0)
-	end 'growSB'
-	while state.slotLoadCount.count() < needed 'growLC'
-		state.slotLoadCount.push(0)
-	end 'growLC'
-	while state.slotHasCrossBlockLoad.count() < needed 'growCB'
-		state.slotHasCrossBlockLoad.push(false)
-	end 'growCB'
-	while state.slotIsFloat.count() < needed 'growIF'
-		state.slotIsFloat.push(false)
-	end 'growIF'
-end 'growSlotArrays'
-
-// ============================================================
-// Phase 3: Remap table construction
-// ============================================================
-
-function buildRemapFromOp(op MlirOp, promotable BoolArray, paramCount ParamCount, paramValueIds ValueIdArray, slotStoreValueId ValueIdArray, remap ValueIdArray)
-	match op 'check'
-		memref(memOp) then buildRemapFromMemRef(memOp, promotable: promotable, paramCount: paramCount, paramValueIds: paramValueIds, slotStoreValueId: slotStoreValueId, remap: remap)
-		maxhl to func then break 'check'
-		runtime to maxarm64 then break 'check'
-	end 'check'
-end 'buildRemapFromOp'
-
-function buildRemapFromMemRef(memOp MemRefOp, promotable BoolArray, paramCount ParamCount, paramValueIds ValueIdArray, slotStoreValueId ValueIdArray, remap ValueIdArray)
-	match memOp 'check'
-		loadSlot(resultId, slotId) then buildLoadRemap(resultId, slotId: slotId, promotable: promotable, paramCount: paramCount, paramValueIds: paramValueIds, slotStoreValueId: slotStoreValueId, remap: remap)
-		storeSlot then break 'check'
-	end 'check'
-end 'buildRemapFromMemRef'
-
-function buildLoadRemap(resultId ValueId, slotId VarSlot, promotable BoolArray, paramCount ParamCount, paramValueIds ValueIdArray, slotStoreValueId ValueIdArray, remap ValueIdArray)
-	if not getSlotBool(promotable, slotId: slotId) 'notPromoted'
-		return
-	end 'notPromoted'
-
-	var replacementId = resultId
-	if slotId < paramCount 'isParam'
-		replacementId = try paramValueIds.get(slotId) otherwise 'noParam'
-			return
-		end 'noParam'
-	end 'isParam' else 'isLocal'
-		replacementId = try slotStoreValueId.get(slotId) otherwise 'noStore'
-			return
-		end 'noStore'
-	end 'isLocal'
-
-	// Grow remap array and set mapping
-	while remap.count() <= resultId 'growRemap'
-		remap.push(REMAP_NONE)
-	end 'growRemap'
-	remap.set(resultId, value: replacementId)
-end 'buildLoadRemap'
-
-// ============================================================
-// Phase 4: Helpers
-// ============================================================
-
-function emitParamOps(dstBlock MlirBlock, paramCount ParamCount, promotable BoolArray, paramValueIds ValueIdArray, paramTypes StdTypeArray)
-	var pI = 0
-	while pI < paramCount 'insertParams'
-		if getSlotBool(promotable, slotId: pI) 'emitParam'
-			let paramId = try paramValueIds.get(pI) otherwise 'skipParam'
-				pI = pI + 1
-				continue
-			end 'skipParam'
-			let pt = try paramTypes.get(pI) otherwise StdType.i64
-			dstBlock.ops.push(MlirOp.func(FuncOp.param(paramId, pI, pt)))
-		end 'emitParam'
-		pI = pI + 1
-	end 'insertParams'
-end 'emitParamOps'
-
-function remapValue(valueId ValueId, remap ValueIdArray) returns ValueId
-	if valueId >= remap.count() 'noEntry'
-		return valueId
-	end 'noEntry'
-	let mapped = try remap.get(valueId) otherwise REMAP_NONE
-	if mapped == REMAP_NONE 'noRemap'
-		return valueId
-	end 'noRemap'
-	return mapped
-end 'remapValue'
-
-function remapValueIds(argIds ValueIdArray, remap ValueIdArray) returns ValueIdArray
-	var result = ValueIdArray{}
-	for argId in argIds 'each'
-		result.push(remapValue(argId, remap: remap))
-	end 'each'
-	return result
-end 'remapValueIds'
-
-// ============================================================
 // Check if a memref op is for a promoted slot (should be removed)
 // ============================================================
 
-function isPromotedMemrefOp(op MlirOp, promotable BoolArray) returns bool
+function isPromotedMemrefOp(op MlirOp, promotable PromotableInfo) returns bool
 	return match op 'check'
 		memref(memOp) gives isPromotedMemrefSlot(memOp, promotable: promotable)
 		maxhl to func gives false
@@ -551,10 +1445,10 @@ function isPromotedMemrefOp(op MlirOp, promotable BoolArray) returns bool
 	end 'check'
 end 'isPromotedMemrefOp'
 
-function isPromotedMemrefSlot(op MemRefOp, promotable BoolArray) returns bool
+function isPromotedMemrefSlot(op MemRefOp, promotable PromotableInfo) returns bool
 	return match op 'check'
-		storeSlot(slotId, _) gives getSlotBool(promotable, slotId: slotId)
-		loadSlot(_, slotId) gives getSlotBool(promotable, slotId: slotId)
+		storeSlot(slotId, _) gives getSlotBool(promotable.isPromotable, slotId: slotId)
+		loadSlot(_, slotId) gives getSlotBool(promotable.isPromotable, slotId: slotId)
 	end 'check'
 end 'isPromotedMemrefSlot'
 
@@ -570,8 +1464,8 @@ function substituteOp(op MlirOp, remap ValueIdArray) returns MlirOp
 		memref(memOp) gives MlirOp.memref(substituteMemRefOp(memOp, remap: remap))
 		runtime(rtOp) gives MlirOp.runtime(substituteRuntimeOp(rtOp, remap: remap))
 		sys(sysOp) gives MlirOp.sys(substituteSysOp(sysOp, remap: remap))
-		maxhl gives op
-		maxx64 to maxarm64 gives op
+		maxhl(hlOp) gives MlirOp.maxhl(substituteMaxHLOp(hlOp, remap: remap))
+		mir to maxarm64 gives op
 	end 'subst'
 end 'substituteOp'
 
@@ -585,8 +1479,8 @@ end 'substituteArithOp'
 
 function substituteCfOp(op CfOp, remap ValueIdArray) returns CfOp
 	return match op 'subst'
-		br(target) gives CfOp.br(target)
-		condBr(condId, thenTarget, elseTarget) gives CfOp.condBr(remapValue(condId, remap: remap), thenTarget, elseTarget)
+		br(target, argIds) gives CfOp.br(target, remapValueIds(argIds, remap: remap))
+		condBr(condId, thenTarget, thenArgIds, elseTarget, elseArgIds) gives CfOp.condBr(remapValue(condId, remap: remap), thenTarget, remapValueIds(thenArgIds, remap: remap), elseTarget, remapValueIds(elseArgIds, remap: remap))
 	end 'subst'
 end 'substituteCfOp'
 
@@ -613,8 +1507,30 @@ function substituteRuntimeOp(op RuntimeOp, remap ValueIdArray) returns RuntimeOp
 	return match op 'subst'
 		printLiteral(data) gives RuntimeOp.printLiteral(data)
 		printInt(valueId) gives RuntimeOp.printInt(remapValue(valueId, remap: remap))
+		drop(valueId) gives RuntimeOp.drop(remapValue(valueId, remap: remap))
 	end 'subst'
 end 'substituteRuntimeOp'
+
+function substituteMaxHLOp(op MaxHLOp, remap ValueIdArray) returns MaxHLOp
+	return match op 'subst'
+		literal(resultId, value, isFloat) gives MaxHLOp.literal(resultId, value, isFloat)
+		varDecl(slotId, valueId) gives MaxHLOp.varDecl(slotId, remapValue(valueId, remap: remap))
+		varLoad(resultId, slotId) gives MaxHLOp.varLoad(resultId, slotId)
+		varStore(slotId, valueId) gives MaxHLOp.varStore(slotId, remapValue(valueId, remap: remap))
+		binop(resultId, leftId, rightId, opKind, isFloat) gives MaxHLOp.binop(resultId, remapValue(leftId, remap: remap), remapValue(rightId, remap: remap), opKind, isFloat)
+		unop(resultId, operandId, opKind) gives MaxHLOp.unop(resultId, remapValue(operandId, remap: remap), opKind)
+		truncFloat(resultId, operandId) gives MaxHLOp.truncFloat(resultId, remapValue(operandId, remap: remap))
+		intToFloat(resultId, operandId) gives MaxHLOp.intToFloat(resultId, remapValue(operandId, remap: remap))
+		cmp(resultId, leftId, rightId, predicate, isFloat) gives MaxHLOp.cmp(resultId, remapValue(leftId, remap: remap), remapValue(rightId, remap: remap), predicate, isFloat)
+		refEq(resultId, leftId, rightId, negate) gives MaxHLOp.refEq(resultId, remapValue(leftId, remap: remap), remapValue(rightId, remap: remap), negate)
+		condBr(condId, thenTarget, elseTarget) gives MaxHLOp.condBr(remapValue(condId, remap: remap), thenTarget, elseTarget)
+		br(target) gives MaxHLOp.br(target)
+		call(resultId, callee, argIds) gives MaxHLOp.call(resultId, callee, remapValueIds(argIds, remap: remap))
+		ret(retValId) gives MaxHLOp.ret(remapValue(retValId, remap: remap))
+		printLiteral(data) gives MaxHLOp.printLiteral(data)
+		printInt(valueId) gives MaxHLOp.printInt(remapValue(valueId, remap: remap))
+	end 'subst'
+end 'substituteMaxHLOp'
 
 function substituteSysOp(op SysOp, remap ValueIdArray) returns SysOp
 	return match op 'subst'
@@ -627,8 +1543,32 @@ function substituteSysOp(op SysOp, remap ValueIdArray) returns SysOp
 		loadByte(resultId, baseId, offsetId) gives SysOp.loadByte(resultId, remapValue(baseId, remap: remap), remapValue(offsetId, remap: remap))
 		osExit(codeId) gives SysOp.osExit(remapValue(codeId, remap: remap))
 		osWrite(ptrId, lenId) gives SysOp.osWrite(remapValue(ptrId, remap: remap), remapValue(lenId, remap: remap))
+		free(ptrId) gives SysOp.free(remapValue(ptrId, remap: remap))
 	end 'subst'
 end 'substituteSysOp'
+
+// ============================================================
+// Remap helpers
+// ============================================================
+
+function remapValue(valueId ValueId, remap ValueIdArray) returns ValueId
+	if valueId >= remap.count() 'noEntry'
+		return valueId
+	end 'noEntry'
+	let mapped = try remap.get(valueId) otherwise REMAP_NONE
+	if mapped == REMAP_NONE 'noRemap'
+		return valueId
+	end 'noRemap'
+	return mapped
+end 'remapValue'
+
+function remapValueIds(argIds ValueIdArray, remap ValueIdArray) returns ValueIdArray
+	var result = ValueIdArray{}
+	for argId in argIds 'each'
+		result.push(remapValue(argId, remap: remap))
+	end 'each'
+	return result
+end 'remapValueIds'
 
 // ============================================================
 // Utility helpers
@@ -643,13 +1583,6 @@ function getEntryBlockId(func MlirFunction) returns BlockId
 	end 'fallback'
 	return entry.id
 end 'getEntryBlockId'
-
-function getSlotCount(arr ValueIdArray, slotId VarSlot) returns ValueId
-	if slotId >= arr.count() 'outOfBounds'
-		return 0
-	end 'outOfBounds'
-	return try arr.get(slotId) otherwise 0
-end 'getSlotCount'
 
 function getSlotBool(arr BoolArray, slotId VarSlot) returns bool
 	if slotId >= arr.count() 'outOfBounds'

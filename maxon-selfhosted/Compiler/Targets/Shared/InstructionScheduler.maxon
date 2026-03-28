@@ -1,0 +1,1011 @@
+// Register-pressure-aware bottom-up list scheduler.
+// Runs after instruction selection (MIR ops with virtual registers) but before
+// register allocation. Reorders instructions within each basic block to reduce
+// register pressure while respecting data dependencies and keeping long-latency
+// operations as early as possible on the critical path.
+
+// Sentinel for "no value defined" or "not found"
+let SCHED_NONE = -1
+
+// A dependency edge from one instruction to another.
+// fromIdx produces a value consumed by toIdx, or a memory ordering constraint.
+type DepEdge
+	export let fromIdx SchedInt
+	export let toIdx SchedInt
+end 'DepEdge'
+
+typealias DepEdgeArray = Array with DepEdge
+
+typealias SchedInt = int(i64.min to i64.max)
+typealias SchedIntArray = Array with SchedInt
+
+// Per-block scheduling state, built fresh for each basic block.
+type ScheduleState
+	export var ops MlirOpArray
+	export var opCount SchedInt
+	export var scheduled BoolArray
+	export var deps DepEdgeArray
+	export var successorCount SchedIntArray
+	export var predecessorCount SchedIntArray
+	export var criticalPathLen SchedIntArray
+	export var latencies SchedIntArray
+	export var liveVregs SchedIntArray
+	export var currentPressure SchedInt
+	export var latencyTable TargetLatencyTable
+end 'ScheduleState'
+
+// Entry point: schedule instructions across all functions in the module.
+export function scheduleInstructions(module MlirModule, target Target) returns MlirModule
+	let table = match target.cpu 'selectTable'
+		x86_64 gives createX64LatencyTable()
+		aarch64 gives createArm64LatencyTable()
+	end 'selectTable'
+
+	var result = createMlirModule()
+
+	for srcFunc in module.functions 'eachFunc'
+		let funcName = String.from(srcFunc.name)
+		logDebug(LogCategory.mlir, message: () gives "Scheduling instructions for {funcName}")
+
+		var dstFunc = createMlirFunction(srcFunc.name, returnType: srcFunc.returnType)
+		dstFunc.paramCount = srcFunc.paramCount
+		dstFunc.paramTypes = srcFunc.paramTypes
+
+		for srcBlock in srcFunc.region.blocks 'eachBlock'
+			let scheduled = scheduleBlock(srcBlock, table: table)
+			dstFunc.region.blocks.push(scheduled)
+		end 'eachBlock'
+
+		dstFunc.region.nextBlockId = srcFunc.region.nextBlockId
+		result.functions.push(dstFunc)
+	end 'eachFunc'
+
+	return result
+end 'scheduleInstructions'
+
+// Schedule a single basic block using bottom-up list scheduling with
+// register pressure awareness.
+function scheduleBlock(block MlirBlock, table TargetLatencyTable) returns MlirBlock
+	var dstBlock = createMlirBlock(block.id, label: block.label)
+	dstBlock.hasTerminator = block.hasTerminator
+	dstBlock.terminator = block.terminator
+	dstBlock.blockArgs = block.blockArgs
+
+	let opCount = block.ops.count()
+
+	// Blocks with 0 or 1 ops have nothing to schedule.
+	if opCount <= 1 'trivial'
+		for op in block.ops 'copy'
+			dstBlock.ops.push(op)
+		end 'copy'
+		return dstBlock
+	end 'trivial'
+
+	// Build the schedule state for this block.
+	var state = createScheduleState(block.ops, table: table)
+
+	// Step 1: Build dependency edges between ops.
+	buildDependencies(state)
+
+	// Step 2: Compute critical path lengths bottom-up.
+	computeCriticalPaths(state)
+
+	// Step 3: Bottom-up scheduling loop.
+	// We select ops from bottom to top, placing the last-scheduled op first.
+	var scheduleOrder = SchedIntArray{}
+	var scheduledCount = 0
+
+	while scheduledCount < state.opCount 'schedLoop'
+		// Build the ready set: ops whose all successors are already scheduled.
+		var readySet = SchedIntArray{}
+		for i in 0 upto state.opCount 'findReady'
+			let alreadyDone = try state.scheduled.get(i) otherwise false
+			if alreadyDone 'skip'
+				continue
+			end 'skip'
+			let succCount = try state.successorCount.get(i) otherwise 0
+			if succCount == 0 'isReady'
+				readySet.push(i)
+			end 'isReady'
+		end 'findReady'
+
+		// If no ops are ready, something went wrong. Break to avoid infinite loop.
+		if readySet.count() == 0 'noReady'
+			// Schedule remaining ops in original order as fallback.
+			for i in 0 upto state.opCount 'fallback'
+				let done = try state.scheduled.get(i) otherwise false
+				if not done 'notDone'
+					scheduleOrder.push(i)
+					state.scheduled.set(i, value: true)
+				end 'notDone'
+			end 'fallback'
+			scheduledCount = state.opCount
+			continue
+		end 'noReady'
+
+		// Pick the best ready op according to our priority heuristics.
+		let bestIdx = selectBestReady(readySet, state: state)
+
+		// Mark it as scheduled.
+		state.scheduled.set(bestIdx, value: true)
+		scheduleOrder.push(bestIdx)
+		scheduledCount = scheduledCount + 1
+
+		// Update successor counts: for each predecessor of bestIdx, decrement its
+		// successor count (since bestIdx is now scheduled).
+		for dep in state.deps 'updateSucc'
+			if dep.toIdx == bestIdx 'isPred'
+				let oldCount = try state.successorCount.get(dep.fromIdx) otherwise 0
+				if oldCount > 0 'decrement'
+					state.successorCount.set(dep.fromIdx, value: oldCount - 1)
+				end 'decrement'
+			end 'isPred'
+		end 'updateSucc'
+
+		// Update register pressure tracking.
+		updatePressureForScheduledOp(bestIdx, state: state)
+	end 'schedLoop'
+
+	// The schedule was built bottom-up, so reverse it to get top-down order.
+	for i in 0 upto scheduleOrder.count() 'buildResult'
+		let revIdx = scheduleOrder.count() - 1 - i
+		let opIdx = try scheduleOrder.get(revIdx) otherwise 'skip'
+			continue
+		end 'skip'
+		let op = try state.ops.get(opIdx) otherwise 'skip2'
+			continue
+		end 'skip2'
+		dstBlock.ops.push(op)
+	end 'buildResult'
+
+	return dstBlock
+end 'scheduleBlock'
+
+// Create and initialize the scheduling state for a block's ops.
+function createScheduleState(ops MlirOpArray, table TargetLatencyTable) returns ScheduleState
+	let opCount = ops.count()
+	var scheduled = BoolArray{}
+	var successorCount = SchedIntArray{}
+	var predecessorCount = SchedIntArray{}
+	var criticalPathLen = SchedIntArray{}
+	var latencies = SchedIntArray{}
+	var liveVregs = SchedIntArray{}
+
+	for i in 0 upto opCount 'init'
+		scheduled.push(false)
+		successorCount.push(0)
+		predecessorCount.push(0)
+		let op = try ops.get(i) otherwise 'skip'
+			latencies.push(table.defaultLatency)
+			criticalPathLen.push(0)
+			continue
+		end 'skip'
+		let lat = getLatencyForMlirOp(op, table: table)
+		latencies.push(lat)
+		criticalPathLen.push(0)
+	end 'init'
+
+	return ScheduleState{
+		ops: ops,
+		opCount: opCount,
+		scheduled: scheduled,
+		deps: DepEdgeArray{},
+		successorCount: successorCount,
+		predecessorCount: predecessorCount,
+		criticalPathLen: criticalPathLen,
+		latencies: latencies,
+		liveVregs: liveVregs,
+		currentPressure: 0,
+		latencyTable: table
+	}
+end 'createScheduleState'
+
+// ============================================================
+// Dependency analysis
+// ============================================================
+
+// Build dependency edges for the block:
+// - Data dependencies: from defining op to each using op (via ValueIds)
+// - Memory ordering: stores before subsequent loads (conservative)
+// - Param barrier: all param ops must complete before any non-param op.
+//   The register allocator pre-seeds CC register mappings for params, so
+//   scheduling non-param ops between params would clobber CC registers
+//   that later param ops still need to read.
+function buildDependencies(state ScheduleState)
+	// Map from valueId -> defining op index.
+	// We use a flat array indexed by valueId.
+	var defMap = SchedIntArray{}
+
+	// Track memory ops for ordering constraints.
+	var lastStoreIdx = SCHED_NONE
+	var lastCallIdx = SCHED_NONE
+
+	// Track the last param op index so we can barrier non-param ops after it.
+	var lastParamIdx = SCHED_NONE
+
+	for i in 0 upto state.opCount 'buildDeps'
+		let op = try state.ops.get(i) otherwise 'skip'
+			continue
+		end 'skip'
+
+		// Data dependencies: for each use, add edge from definer -> this op.
+		let useIds = extractUseValueIds(op)
+		for useId in useIds 'eachUse'
+			let defIdx = schedLookup(defMap, index: useId)
+			if defIdx != SCHED_NONE 'hasDef'
+				addDepEdge(state, fromIdx: defIdx, toIdx: i)
+			end 'hasDef'
+		end 'eachUse'
+
+		// Record the definition.
+		let defId = extractDefValueId(op)
+		if defId != SCHED_NONE 'hasDef'
+			schedGrow(defMap, size: defId + 1)
+			defMap.set(defId, value: i)
+		end 'hasDef'
+
+		// Memory ordering: stores/calls must be ordered conservatively.
+		let isMem = isMemoryOp(op)
+		let isStore = isStoreOp(op)
+		let isCall = isCallOp(op)
+
+		// A load must come after the most recent store or call.
+		if isMem and not isStore and not isCall 'loadAfterStore'
+			if lastStoreIdx != SCHED_NONE 'hasStore'
+				addDepEdge(state, fromIdx: lastStoreIdx, toIdx: i)
+			end 'hasStore'
+			if lastCallIdx != SCHED_NONE 'hasCall'
+				addDepEdge(state, fromIdx: lastCallIdx, toIdx: i)
+			end 'hasCall'
+		end 'loadAfterStore'
+
+		// A store must come after the previous store and previous call.
+		if isStore 'storeOrdering'
+			if lastStoreIdx != SCHED_NONE 'afterPrevStore'
+				addDepEdge(state, fromIdx: lastStoreIdx, toIdx: i)
+			end 'afterPrevStore'
+			if lastCallIdx != SCHED_NONE 'afterPrevCall'
+				addDepEdge(state, fromIdx: lastCallIdx, toIdx: i)
+			end 'afterPrevCall'
+			lastStoreIdx = i
+		end 'storeOrdering'
+
+		// A call must come after the previous store and previous call.
+		if isCall 'callOrdering'
+			if lastStoreIdx != SCHED_NONE 'afterStore'
+				addDepEdge(state, fromIdx: lastStoreIdx, toIdx: i)
+			end 'afterStore'
+			if lastCallIdx != SCHED_NONE 'afterCall'
+				addDepEdge(state, fromIdx: lastCallIdx, toIdx: i)
+			end 'afterCall'
+			lastCallIdx = i
+		end 'callOrdering'
+
+		// Track param ops for the param barrier.
+		if isMirParamOp(op) 'trackParam'
+			lastParamIdx = i
+		end 'trackParam'
+	end 'buildDeps'
+
+	// Param barrier: every non-param op must come after the last param op.
+	// This prevents the scheduler from interleaving computation between param ops,
+	// which would clobber calling-convention registers before later params read them.
+	if lastParamIdx != SCHED_NONE 'addParamBarrier'
+		var j = 0
+		while j < state.opCount 'barrierScan'
+			let barrierOp = try state.ops.get(j) otherwise 'skipBarrier'
+				j = j + 1
+				continue
+			end 'skipBarrier'
+			if j > lastParamIdx and not isMirParamOp(barrierOp) 'addBarrier'
+				addDepEdge(state, fromIdx: lastParamIdx, toIdx: j)
+			end 'addBarrier'
+			j = j + 1
+		end 'barrierScan'
+	end 'addParamBarrier'
+end 'buildDependencies'
+
+// Add a dependency edge and update successor/predecessor counts.
+function addDepEdge(state ScheduleState, fromIdx SchedInt, toIdx SchedInt)
+	state.deps.push(DepEdge{fromIdx: fromIdx, toIdx: toIdx})
+	let oldSucc = try state.successorCount.get(fromIdx) otherwise 0
+	state.successorCount.set(fromIdx, value: oldSucc + 1)
+	let oldPred = try state.predecessorCount.get(toIdx) otherwise 0
+	state.predecessorCount.set(toIdx, value: oldPred + 1)
+end 'addDepEdge'
+
+// ============================================================
+// Critical path computation
+// ============================================================
+
+// Compute critical path lengths bottom-up.
+// criticalPathLen[i] = latency[i] + max(criticalPathLen[succ] for succ in successors[i])
+function computeCriticalPaths(state ScheduleState)
+	// Process ops in reverse order. Since deps go from earlier to later ops,
+	// processing in reverse ensures successors are computed before predecessors.
+	var i = state.opCount - 1
+	while i >= 0 'bottomUp'
+		let ownLatency = try state.latencies.get(i) otherwise 1
+		var maxSuccPath = 0
+
+		// Find all successors of op i.
+		for dep in state.deps 'findSucc'
+			if dep.fromIdx == i 'isSucc'
+				let succPath = try state.criticalPathLen.get(dep.toIdx) otherwise 0
+				if succPath > maxSuccPath 'updateMax'
+					maxSuccPath = succPath
+				end 'updateMax'
+			end 'isSucc'
+		end 'findSucc'
+
+		state.criticalPathLen.set(i, value: ownLatency + maxSuccPath)
+		i = i - 1
+	end 'bottomUp'
+end 'computeCriticalPaths'
+
+// ============================================================
+// Scheduling heuristic
+// ============================================================
+
+// Select the best op from the ready set using priority heuristics:
+// 1. Under high pressure: prefer ops that reduce register pressure
+// 2. Otherwise: prefer ops on the critical path
+// 3. Tiebreak: prefer higher latency ops
+function selectBestReady(readySet SchedIntArray, state ScheduleState) returns SchedInt
+	let firstIdx = try readySet.get(0) otherwise 0
+	if readySet.count() == 1 'onlyOne'
+		return firstIdx
+	end 'onlyOne'
+
+	let highPressure = state.currentPressure >= state.latencyTable.pressureThreshold
+
+	var bestIdx = firstIdx
+	var bestScore = computeOpScore(firstIdx, state: state, highPressure: highPressure)
+
+	for i in 1 upto readySet.count() 'pickBest'
+		let candidateIdx = try readySet.get(i) otherwise 'skip'
+			continue
+		end 'skip'
+		let candidateScore = computeOpScore(candidateIdx, state: state, highPressure: highPressure)
+		if candidateScore > bestScore 'better'
+			bestIdx = candidateIdx
+			bestScore = candidateScore
+		end 'better'
+	end 'pickBest'
+
+	return bestIdx
+end 'selectBestReady'
+
+// Compute a priority score for an op. Higher is better.
+// Score layout (from most to least significant):
+//   - pressureReduction * 1000000 (when under high pressure)
+//   - criticalPathLen * 1000
+//   - latency
+function computeOpScore(opIdx SchedInt, state ScheduleState, highPressure bool) returns SchedInt
+	let critPath = try state.criticalPathLen.get(opIdx) otherwise 0
+	let latency = try state.latencies.get(opIdx) otherwise 1
+
+	var score = critPath * 1000 + latency
+
+	if highPressure 'pressureAware'
+		let op = try state.ops.get(opIdx) otherwise 'skip'
+			return score
+		end 'skip'
+		let pressureDelta = estimatePressureDelta(opIdx, op: op, state: state)
+		// Negative delta means the op reduces pressure. We want to prefer those,
+		// so negate it and add a large weight.
+		score = score + (0 - pressureDelta) * 1000000
+	end 'pressureAware'
+
+	return score
+end 'computeOpScore'
+
+// Estimate the register pressure change if this op were scheduled now.
+// In bottom-up scheduling, "scheduling" means this op executes BEFORE
+// already-scheduled ops. So:
+//   - If the op defines a value: that value becomes live (+1)
+//   - If the op is the last use (in bottom-up terms, the first encounter)
+//     of an operand: that operand dies (-1)
+// Actually, in our bottom-up model the sign convention is:
+//   - def: the result is born here (pressure increases when we cross this point upward)
+//   - use: if this is the only remaining unscheduled use, the operand dies
+// We return positive for pressure increase, negative for pressure decrease.
+function estimatePressureDelta(opIdx SchedInt, op MlirOp, state ScheduleState) returns SchedInt
+	var delta = 0
+
+	// If this op defines a value, that adds pressure.
+	let defId = extractDefValueId(op)
+	if defId != SCHED_NONE 'hasDef'
+		delta = delta + 1
+	end 'hasDef'
+
+	// For each operand used: if all other users of that value are already
+	// scheduled, then this is the last unscheduled use and the value dies.
+	let useIds2 = extractUseValueIds(op)
+	for useId in useIds2 'eachUse'
+		if isLastUnscheduledUse(useId, excludeIdx: opIdx, state: state) 'lastUse'
+			delta = delta - 1
+		end 'lastUse'
+	end 'eachUse'
+
+	return delta
+end 'estimatePressureDelta'
+
+// Check if opIdx is the last unscheduled op that uses the given valueId.
+// "Last unscheduled" means no other unscheduled op also uses this value.
+function isLastUnscheduledUse(valueId SchedInt, excludeIdx SchedInt, state ScheduleState) returns bool
+	for i in 0 upto state.opCount 'check'
+		if i == excludeIdx 'skipSelf'
+			continue
+		end 'skipSelf'
+		let done = try state.scheduled.get(i) otherwise true
+		if done 'alreadyDone'
+			continue
+		end 'alreadyDone'
+		let op = try state.ops.get(i) otherwise 'skip'
+			continue
+		end 'skip'
+		let useIds3 = extractUseValueIds(op)
+		for uid in useIds3 'checkUse'
+			if uid == valueId 'found'
+				return false
+			end 'found'
+		end 'checkUse'
+	end 'check'
+	return true
+end 'isLastUnscheduledUse'
+
+// ============================================================
+// Pressure tracking
+// ============================================================
+
+// Update the pressure model after scheduling an op (bottom-up).
+function updatePressureForScheduledOp(opIdx SchedInt, state ScheduleState)
+	let op = try state.ops.get(opIdx) otherwise 'skip'
+		return
+	end 'skip'
+
+	// In bottom-up order: scheduling an op means we're moving backward in time.
+	// A definition means the value is born — pressure goes up.
+	let defId = extractDefValueId(op)
+	if defId != SCHED_NONE 'hasDef'
+		let currentLive = schedLookupZero(state.liveVregs, index: defId)
+		if currentLive == 0 'notYetLive'
+			schedGrowZero(state.liveVregs, size: defId + 1)
+			state.liveVregs.set(defId, value: 1)
+			state.currentPressure = state.currentPressure + 1
+		end 'notYetLive'
+	end 'hasDef'
+
+	// Each use: if this is the first time we see this value used (bottom-up),
+	// it was live and now dies. But since we track all scheduled ops' uses,
+	// we check if the value is already in liveVregs.
+	let useIds4 = extractUseValueIds(op)
+	for useId in useIds4 'eachUse'
+		let currentLive = schedLookupZero(state.liveVregs, index: useId)
+		if currentLive == 0 'newLive'
+			// Value not yet seen — it was defined above us and dies at this use.
+			// In bottom-up terms: encountering a use means the value becomes live
+			// going upward... but if it was defined outside (or above), it stays live.
+			// For simplicity, mark it as live (we're seeing its use for first time).
+			schedGrowZero(state.liveVregs, size: useId + 1)
+			state.liveVregs.set(useId, value: 1)
+			// Don't increase pressure for uses — they represent values already live
+		end 'newLive'
+	end 'eachUse'
+end 'updatePressureForScheduledOp'
+
+// ============================================================
+// ValueId extraction from all MlirOp variants
+// ============================================================
+
+// Extract the result ValueId defined by this op, or SCHED_NONE if it defines nothing.
+function extractDefValueId(op MlirOp) returns SchedInt
+	return match op 'extract'
+		maxhl(hlOp) gives extractMaxHLDef(hlOp)
+		arith(arithOp) gives extractArithDef(arithOp)
+		cf gives SCHED_NONE
+		func(funcOp) gives extractFuncDef(funcOp)
+		memref(memOp) gives extractMemRefDef(memOp)
+		runtime gives SCHED_NONE
+		sys(sysOp) gives extractSysDef(sysOp)
+		mir(mirOp) gives extractMirDef(mirOp)
+		maxx64 gives SCHED_NONE
+		maxarm64 gives SCHED_NONE
+	end 'extract'
+end 'extractDefValueId'
+
+function extractMaxHLDef(op MaxHLOp) returns SchedInt
+	return match op 'def'
+		literal(resultId, _, _) gives resultId
+		varDecl gives SCHED_NONE
+		varLoad(resultId, _) gives resultId
+		varStore gives SCHED_NONE
+		binop(resultId, _, _, _, _) gives resultId
+		unop(resultId, _, _) gives resultId
+		truncFloat(resultId, _) gives resultId
+		intToFloat(resultId, _) gives resultId
+		cmp(resultId, _, _, _, _) gives resultId
+		refEq(resultId, _, _, _) gives resultId
+		condBr gives SCHED_NONE
+		br gives SCHED_NONE
+		call(resultId, _, _) gives resultId
+		ret gives SCHED_NONE
+		printLiteral gives SCHED_NONE
+		printInt gives SCHED_NONE
+	end 'def'
+end 'extractMaxHLDef'
+
+function extractArithDef(op ArithOp) returns SchedInt
+	return match op 'def'
+		const(c) gives c.resultId
+		unary(u) gives u.resultId
+		binary(b) gives b.resultId
+	end 'def'
+end 'extractArithDef'
+
+function extractFuncDef(op FuncOp) returns SchedInt
+	return match op 'def'
+		ret gives SCHED_NONE
+		call(resultId, _, _) gives resultId
+		tryCall(resultId, _, _, _) gives resultId
+		indirectCall(resultId, _, _) gives resultId
+		funcRef(resultId, _) gives resultId
+		tailCall gives SCHED_NONE
+		param(resultId, _, _) gives resultId
+	end 'def'
+end 'extractFuncDef'
+
+function extractMemRefDef(op MemRefOp) returns SchedInt
+	return match op 'def'
+		storeSlot gives SCHED_NONE
+		loadSlot(resultId, _) gives resultId
+	end 'def'
+end 'extractMemRefDef'
+
+function extractSysDef(op SysOp) returns SchedInt
+	return match op 'def'
+		syscall(resultId, _, _) gives resultId
+		iatCall(resultId, _, _) gives resultId
+		globalAddr(resultId, _) gives resultId
+		memcpy gives SCHED_NONE
+		stackAddr(resultId, _) gives resultId
+		storeByte gives SCHED_NONE
+		loadByte(resultId, _, _) gives resultId
+		osExit gives SCHED_NONE
+		osWrite gives SCHED_NONE
+		free gives SCHED_NONE
+	end 'def'
+end 'extractSysDef'
+
+function extractMirDef(op MirOp) returns SchedInt
+	return match op 'def'
+		movImm(resultId, _, _) gives resultId
+		movReg(resultId, _) gives resultId
+		binOp(resultId, _, _, _) gives resultId
+		unaryOp(resultId, _, _) gives resultId
+		cmp(resultId, _, _, _) gives resultId
+		condBranch gives SCHED_NONE
+		branch gives SCHED_NONE
+		call(resultId, _, _) gives resultId
+		indirectCall(resultId, _, _) gives resultId
+		ret gives SCHED_NONE
+		param(resultId, _, _) gives resultId
+		load(resultId, _, _) gives resultId
+		store gives SCHED_NONE
+		stackSlotAddr(resultId, _) gives resultId
+		globalAddr(resultId, _) gives resultId
+		syscall(resultId, _, _) gives resultId
+		iatCall(resultId, _, _) gives resultId
+		osExit gives SCHED_NONE
+		osWrite gives SCHED_NONE
+		memcpy gives SCHED_NONE
+		storeByte gives SCHED_NONE
+		loadByte(resultId, _, _) gives resultId
+	end 'def'
+end 'extractMirDef'
+
+// Extract all ValueIds used as operands by this op.
+function extractUseValueIds(op MlirOp) returns ValueIdArray
+	return match op 'extract'
+		maxhl(hlOp) gives extractMaxHLUses(hlOp)
+		arith(arithOp) gives extractArithUses(arithOp)
+		cf(cfOp) gives extractCfUses(cfOp)
+		func(funcOp) gives extractFuncUses(funcOp)
+		memref(memOp) gives extractMemRefUses(memOp)
+		runtime(rtOp) gives extractRuntimeUses(rtOp)
+		sys(sysOp) gives extractSysUses(sysOp)
+		mir(mirOp) gives extractMirUses(mirOp)
+		maxx64 gives ValueIdArray{}
+		maxarm64 gives ValueIdArray{}
+	end 'extract'
+end 'extractUseValueIds'
+
+function extractMaxHLUses(op MaxHLOp) returns ValueIdArray
+	var result = ValueIdArray{}
+	match op 'uses'
+		literal then break 'uses'
+		varDecl(_, valueId) then result.push(valueId)
+		varLoad then break 'uses'
+		varStore(_, valueId) then result.push(valueId)
+		binop(_, leftId, rightId, _, _) then pushTwo(result, a: leftId, b: rightId)
+		unop(_, operandId, _) then result.push(operandId)
+		truncFloat(_, operandId) then result.push(operandId)
+		intToFloat(_, operandId) then result.push(operandId)
+		cmp(_, leftId, rightId, _, _) then pushTwo(result, a: leftId, b: rightId)
+		refEq(_, leftId, rightId, _) then pushTwo(result, a: leftId, b: rightId)
+		condBr(condId, _, _) then result.push(condId)
+		br then break 'uses'
+		call(_, _, argIds) then appendAll(result, from: argIds)
+		ret(retValId) then result.push(retValId)
+		printLiteral then break 'uses'
+		printInt(valueId) then result.push(valueId)
+	end 'uses'
+	return result
+end 'extractMaxHLUses'
+
+function extractArithUses(op ArithOp) returns ValueIdArray
+	var result = ValueIdArray{}
+	match op 'uses'
+		const then break 'uses'
+		unary(u) then result.push(u.operandId)
+		binary(b) then pushTwo(result, a: b.leftId, b: b.rightId)
+	end 'uses'
+	return result
+end 'extractArithUses'
+
+function extractCfUses(op CfOp) returns ValueIdArray
+	var result = ValueIdArray{}
+	match op 'uses'
+		br(_, argIds) then appendAll(result, from: argIds)
+		condBr(condId, _, thenArgIds, _, elseArgIds) then extractCfCondBrUses(result, condId: condId, thenArgIds: thenArgIds, elseArgIds: elseArgIds)
+	end 'uses'
+	return result
+end 'extractCfUses'
+
+function extractCfCondBrUses(result ValueIdArray, condId ValueId, thenArgIds ValueIdArray, elseArgIds ValueIdArray)
+	result.push(condId)
+	appendAll(result, from: thenArgIds)
+	appendAll(result, from: elseArgIds)
+end 'extractCfCondBrUses'
+
+function extractFuncUses(op FuncOp) returns ValueIdArray
+	var result = ValueIdArray{}
+	match op 'uses'
+		ret(retValId) then result.push(retValId)
+		call(_, _, argIds) then appendAll(result, from: argIds)
+		tryCall(_, _, argIds, _) then appendAll(result, from: argIds)
+		indirectCall(_, calleeId, argIds) then extractIndirectCallUses(result, calleeId: calleeId, argIds: argIds)
+		funcRef then break 'uses'
+		tailCall(_, argIds) then appendAll(result, from: argIds)
+		param then break 'uses'
+	end 'uses'
+	return result
+end 'extractFuncUses'
+
+function extractIndirectCallUses(result ValueIdArray, calleeId ValueId, argIds ValueIdArray)
+	result.push(calleeId)
+	appendAll(result, from: argIds)
+end 'extractIndirectCallUses'
+
+function extractMemRefUses(op MemRefOp) returns ValueIdArray
+	var result = ValueIdArray{}
+	match op 'uses'
+		storeSlot(_, valueId) then result.push(valueId)
+		loadSlot then break 'uses'
+	end 'uses'
+	return result
+end 'extractMemRefUses'
+
+function extractRuntimeUses(op RuntimeOp) returns ValueIdArray
+	var result = ValueIdArray{}
+	match op 'uses'
+		printLiteral then break 'uses'
+		printInt(valueId) then result.push(valueId)
+		drop(valueId) then result.push(valueId)
+	end 'uses'
+	return result
+end 'extractRuntimeUses'
+
+function extractSysUses(op SysOp) returns ValueIdArray
+	var result = ValueIdArray{}
+	match op 'uses'
+		syscall(_, _, argIds) then appendAll(result, from: argIds)
+		iatCall(_, _, argIds) then appendAll(result, from: argIds)
+		globalAddr then break 'uses'
+		memcpy(dstId, srcId, lenId) then pushThree(result, a: dstId, b: srcId, c: lenId)
+		stackAddr then break 'uses'
+		storeByte(baseId, offsetId, byteId) then pushThree(result, a: baseId, b: offsetId, c: byteId)
+		loadByte(_, baseId, offsetId) then pushTwo(result, a: baseId, b: offsetId)
+		osExit(codeId) then result.push(codeId)
+		osWrite(ptrId, lenId) then pushTwo(result, a: ptrId, b: lenId)
+		free(ptrId) then result.push(ptrId)
+	end 'uses'
+	return result
+end 'extractSysUses'
+
+function extractMirUses(op MirOp) returns ValueIdArray
+	var result = ValueIdArray{}
+	match op 'uses'
+		movImm then break 'uses'
+		movReg(_, srcId) then result.push(srcId)
+		binOp(_, leftId, rightId, _) then pushTwo(result, a: leftId, b: rightId)
+		unaryOp(_, operandId, _) then result.push(operandId)
+		cmp(_, leftId, rightId, _) then pushTwo(result, a: leftId, b: rightId)
+		condBranch(condId, _, thenArgs, _, elseArgs) then extractMirCondBrUses(result, condId: condId, thenArgs: thenArgs, elseArgs: elseArgs)
+		branch(_, args) then appendAll(result, from: args)
+		call(_, _, argIds) then appendAll(result, from: argIds)
+		indirectCall(_, calleeId, argIds) then extractMirIndirectCallUses(result, calleeId: calleeId, argIds: argIds)
+		ret(retValId) then result.push(retValId)
+		param then break 'uses'
+		load(_, baseId, _) then result.push(baseId)
+		store(valueId, baseId, _) then pushTwo(result, a: valueId, b: baseId)
+		stackSlotAddr then break 'uses'
+		globalAddr then break 'uses'
+		syscall(_, _, argIds) then appendAll(result, from: argIds)
+		iatCall(_, _, argIds) then appendAll(result, from: argIds)
+		osExit(codeId) then result.push(codeId)
+		osWrite(ptrId, lenId) then pushTwo(result, a: ptrId, b: lenId)
+		memcpy(dstId, srcId, lenId) then pushThree(result, a: dstId, b: srcId, c: lenId)
+		storeByte(baseId, offsetId, byteId) then pushThree(result, a: baseId, b: offsetId, c: byteId)
+		loadByte(_, baseId, offsetId) then pushTwo(result, a: baseId, b: offsetId)
+	end 'uses'
+	return result
+end 'extractMirUses'
+
+function extractMirCondBrUses(result ValueIdArray, condId ValueId, thenArgs ValueIdArray, elseArgs ValueIdArray)
+	result.push(condId)
+	appendAll(result, from: thenArgs)
+	appendAll(result, from: elseArgs)
+end 'extractMirCondBrUses'
+
+function extractMirIndirectCallUses(result ValueIdArray, calleeId ValueId, argIds ValueIdArray)
+	result.push(calleeId)
+	appendAll(result, from: argIds)
+end 'extractMirIndirectCallUses'
+
+// ============================================================
+// Memory/store/call classification
+// ============================================================
+
+// Returns true if the op accesses memory (loads, stores, calls, syscalls).
+function isMemoryOp(op MlirOp) returns bool
+	return match op 'check'
+		mir(mirOp) gives isMirMemoryOp(mirOp)
+		func(funcOp) gives isFuncMemoryOp(funcOp)
+		sys(sysOp) gives isSysMemoryOp(sysOp)
+		memref gives true
+		runtime gives true
+		maxhl gives false
+		arith gives false
+		cf gives false
+		maxx64 to maxarm64 gives false
+	end 'check'
+end 'isMemoryOp'
+
+function isMirMemoryOp(op MirOp) returns bool
+	return match op 'check'
+		load gives true
+		store gives true
+		call gives true
+		indirectCall gives true
+		syscall gives true
+		iatCall gives true
+		osExit gives true
+		osWrite gives true
+		memcpy gives true
+		storeByte gives true
+		loadByte gives true
+		movImm to cmp gives false
+		condBranch to branch gives false
+		ret gives false
+		param gives false
+		stackSlotAddr to globalAddr gives false
+	end 'check'
+end 'isMirMemoryOp'
+
+function isFuncMemoryOp(op FuncOp) returns bool
+	return match op 'check'
+		call gives true
+		tryCall gives true
+		indirectCall gives true
+		tailCall gives true
+		ret gives false
+		funcRef gives false
+		param gives false
+	end 'check'
+end 'isFuncMemoryOp'
+
+function isSysMemoryOp(op SysOp) returns bool
+	return match op 'check'
+		syscall gives true
+		iatCall gives true
+		memcpy gives true
+		storeByte gives true
+		loadByte gives true
+		osExit gives true
+		osWrite gives true
+		free gives true
+		globalAddr gives false
+		stackAddr gives false
+	end 'check'
+end 'isSysMemoryOp'
+
+// Returns true if the op is a store (writes memory).
+function isStoreOp(op MlirOp) returns bool
+	return match op 'check'
+		mir(mirOp) gives isMirStoreOp(mirOp)
+		memref(memOp) gives isMemRefStoreOp(memOp)
+		sys(sysOp) gives isSysStoreOp(sysOp)
+		maxhl gives false
+		arith gives false
+		cf gives false
+		func gives false
+		runtime gives false
+		maxx64 to maxarm64 gives false
+	end 'check'
+end 'isStoreOp'
+
+function isMirStoreOp(op MirOp) returns bool
+	return match op 'check'
+		store gives true
+		storeByte gives true
+		memcpy gives true
+		movImm to cmp gives false
+		condBranch to ret gives false
+		param to load gives false
+		stackSlotAddr to globalAddr gives false
+		syscall to iatCall gives false
+		osExit to osWrite gives false
+		loadByte gives false
+	end 'check'
+end 'isMirStoreOp'
+
+function isMemRefStoreOp(op MemRefOp) returns bool
+	return match op 'check'
+		storeSlot gives true
+		loadSlot gives false
+	end 'check'
+end 'isMemRefStoreOp'
+
+function isSysStoreOp(op SysOp) returns bool
+	return match op 'check'
+		storeByte gives true
+		memcpy gives true
+		syscall to iatCall gives false
+		globalAddr gives false
+		stackAddr gives false
+		loadByte gives false
+		osExit to osWrite gives false
+		free gives false
+	end 'check'
+end 'isSysStoreOp'
+
+// Returns true if the op is a call (may have arbitrary side effects).
+function isCallOp(op MlirOp) returns bool
+	return match op 'check'
+		mir(mirOp) gives isMirCallOp(mirOp)
+		func(funcOp) gives isFuncCallOp(funcOp)
+		sys(sysOp) gives isSysCallOp(sysOp)
+		maxhl gives false
+		arith gives false
+		cf gives false
+		memref gives false
+		runtime gives false
+		maxx64 to maxarm64 gives false
+	end 'check'
+end 'isCallOp'
+
+// Returns true if the op is a MIR param op (reads from a CC register at function entry).
+function isMirParamOp(op MlirOp) returns bool
+	return match op 'check'
+		mir(mirOp) gives match mirOp 'checkMir'
+			param gives true
+			movImm to ret gives false
+			load to loadByte gives false
+		end 'checkMir'
+		maxhl to sys gives false
+		maxx64 to maxarm64 gives false
+	end 'check'
+end 'isMirParamOp'
+
+function isMirCallOp(op MirOp) returns bool
+	return match op 'check'
+		call gives true
+		indirectCall gives true
+		syscall gives true
+		iatCall gives true
+		osExit gives true
+		osWrite gives true
+		// param ops read from physical calling-convention registers and must
+		// be ordered with each other to avoid clobbering.
+		param gives true
+		movImm to cmp gives false
+		condBranch to branch gives false
+		ret gives false
+		load to globalAddr gives false
+		memcpy to loadByte gives false
+	end 'check'
+end 'isMirCallOp'
+
+function isFuncCallOp(op FuncOp) returns bool
+	return match op 'check'
+		call gives true
+		tryCall gives true
+		indirectCall gives true
+		tailCall gives true
+		ret gives false
+		funcRef gives false
+		param gives false
+	end 'check'
+end 'isFuncCallOp'
+
+function isSysCallOp(op SysOp) returns bool
+	return match op 'check'
+		syscall gives true
+		iatCall gives true
+		osExit gives true
+		osWrite gives true
+		free gives true
+		globalAddr gives false
+		memcpy to loadByte gives false
+	end 'check'
+end 'isSysCallOp'
+
+// ============================================================
+// Utility helpers
+// ============================================================
+
+// Push two values to a ValueIdArray.
+function pushTwo(arr ValueIdArray, a ValueId, b ValueId)
+	arr.push(a)
+	arr.push(b)
+end 'pushTwo'
+
+// Push three values to a ValueIdArray.
+function pushThree(arr ValueIdArray, a ValueId, b ValueId, c ValueId)
+	arr.push(a)
+	arr.push(b)
+	arr.push(c)
+end 'pushThree'
+
+// Append all values from one ValueIdArray to another.
+function appendAll(dst ValueIdArray, from ValueIdArray)
+	for v in from 'copy'
+		dst.push(v)
+	end 'copy'
+end 'appendAll'
+
+// Look up a value in a SchedIntArray, returning SCHED_NONE if out of bounds.
+// Used for defMap where SCHED_NONE means "no defining op".
+function schedLookup(arr SchedIntArray, index SchedInt) returns SchedInt
+	if index < 0 or index >= arr.count() 'outOfBounds'
+		return SCHED_NONE
+	end 'outOfBounds'
+	return try arr.get(index) otherwise SCHED_NONE
+end 'schedLookup'
+
+// Grow a SchedIntArray to at least the given size, filling with SCHED_NONE.
+// Used for defMap where SCHED_NONE means "no defining op".
+function schedGrow(arr SchedIntArray, size SchedInt)
+	while arr.count() < size 'grow'
+		arr.push(SCHED_NONE)
+	end 'grow'
+end 'schedGrow'
+
+// Look up a value in a SchedIntArray, returning 0 if out of bounds.
+// Used for liveVregs where 0 means "not live".
+function schedLookupZero(arr SchedIntArray, index SchedInt) returns SchedInt
+	if index < 0 or index >= arr.count() 'outOfBounds'
+		return 0
+	end 'outOfBounds'
+	return try arr.get(index) otherwise 0
+end 'schedLookupZero'
+
+// Grow a SchedIntArray to at least the given size, filling with 0.
+// Used for liveVregs where 0 means "not live".
+function schedGrowZero(arr SchedIntArray, size SchedInt)
+	while arr.count() < size 'grow'
+		arr.push(0)
+	end 'grow'
+end 'schedGrowZero'

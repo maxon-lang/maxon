@@ -1,0 +1,311 @@
+// Dead Code Elimination (DCE) Pass.
+// Walks module -> functions -> blocks -> ops in two phases.
+// Phase 1: Count uses of each ValueId across all ops.
+// Phase 2: Remove ops whose resultId has zero uses and no side effects.
+//
+// Side-effect ops that must NOT be removed (even with zero uses):
+//   func.call, func.tryCall, func.indirectCall, func.tailCall, func.ret,
+//   sys.*, runtime.*, memref.storeSlot, cf.* (terminators),
+//   any op without a resultId.
+//
+// Safe to remove with zero uses:
+//   arith.const, arith.binary, arith.unary, memref.loadSlot, func.param, func.funcRef.
+
+// Use-count table: maps ValueId -> number of times it appears as an operand.
+
+function incrementUse(table ValueIdArray, valueId ValueId)
+	while table.count() <= valueId 'grow'
+		table.push(0)
+	end 'grow'
+	let current = try table.get(valueId) otherwise 0
+	table.set(valueId, value: current + 1)
+end 'incrementUse'
+
+function getUseCount(table ValueIdArray, valueId ValueId) returns ValueId
+	if valueId >= table.count() 'outOfBounds'
+		return 0
+	end 'outOfBounds'
+	return try table.get(valueId) otherwise 0
+end 'getUseCount'
+
+export function eliminateDeadCode(module MlirModule) returns MlirModule
+	logDebug(LogCategory.mlir, message: () gives "Running DCE pass")
+	var result = createMlirModule()
+
+	for srcFunc in module.functions 'eachFunc'
+		var dstFunc = createMlirFunction(srcFunc.name, returnType: srcFunc.returnType)
+		dstFunc.paramCount = srcFunc.paramCount
+		dstFunc.paramTypes = srcFunc.paramTypes
+
+		// Phase 1: Count uses of every ValueId across the entire function
+		var useCount = ValueIdArray{}
+
+		for block in srcFunc.region.blocks 'countBlocks'
+			for op in block.ops 'countOps'
+				countOpUses(op, useCount: useCount)
+			end 'countOps'
+			if block.hasTerminator 'countTerm'
+				countOpUses(block.terminator, useCount: useCount)
+			end 'countTerm'
+		end 'countBlocks'
+
+		// Phase 2: Rebuild function, skipping dead ops
+		for srcBlock in srcFunc.region.blocks 'eachBlock'
+			var dstBlock = addBlock(dstFunc.region, label: srcBlock.label)
+			dstBlock.id = srcBlock.id
+			dstBlock.blockArgs = srcBlock.blockArgs
+
+			for op in srcBlock.ops 'filterOps'
+				if isDeadOp(op, useCount: useCount) 'dead'
+					logTrace(LogCategory.mlir, message: () gives "dce: removing dead op with resultId {getOpResultId(op)}")
+					continue
+				end 'dead'
+				dstBlock.ops.push(op)
+			end 'filterOps'
+
+			// Terminators are never removed — they control block flow
+			if srcBlock.hasTerminator 'hasTerm'
+				dstBlock.terminator = srcBlock.terminator
+				dstBlock.hasTerminator = true
+			end 'hasTerm'
+		end 'eachBlock'
+
+		dstFunc.region.nextBlockId = srcFunc.region.nextBlockId
+		result.functions.push(dstFunc)
+	end 'eachFunc'
+
+	return result
+end 'eliminateDeadCode'
+
+// ============================================================
+// Phase 1: Use counting — extract operand ValueIds from each op
+// ============================================================
+
+function countOpUses(op MlirOp, useCount ValueIdArray)
+	match op 'dispatch'
+		arith(arithOp) then countArithUses(arithOp, useCount: useCount)
+		cf(cfOp) then countCfUses(cfOp, useCount: useCount)
+		func(funcOp) then countFuncUses(funcOp, useCount: useCount)
+		memref(memOp) then countMemRefUses(memOp, useCount: useCount)
+		runtime(rtOp) then countRuntimeUses(rtOp, useCount: useCount)
+		sys(sysOp) then countSysUses(sysOp, useCount: useCount)
+		maxhl(hlOp) then countMaxHLUses(hlOp, useCount: useCount)
+		mir to maxarm64 then break 'dispatch'
+	end 'dispatch'
+end 'countOpUses'
+
+function countArithUses(op ArithOp, useCount ValueIdArray)
+	match op 'count'
+		const then break 'count'
+		unary(u) then incrementUse(useCount, valueId: u.operandId)
+		binary(b) then countBinaryUses(b, useCount: useCount)
+	end 'count'
+end 'countArithUses'
+
+function countBinaryUses(b ArithBinaryOp, useCount ValueIdArray)
+	incrementUse(useCount, valueId: b.leftId)
+	incrementUse(useCount, valueId: b.rightId)
+end 'countBinaryUses'
+
+function countCfUses(op CfOp, useCount ValueIdArray)
+	match op 'count'
+		br(_, argIds) then countBrArgUses(argIds, useCount: useCount)
+		condBr(condId, _, thenArgIds, _, elseArgIds) then countCondBrUses(condId, thenArgIds: thenArgIds, elseArgIds: elseArgIds, useCount: useCount)
+	end 'count'
+end 'countCfUses'
+
+function countBrArgUses(argIds ValueIdArray, useCount ValueIdArray)
+	for argId in argIds 'each'
+		incrementUse(useCount, valueId: argId)
+	end 'each'
+end 'countBrArgUses'
+
+function countCondBrUses(condId ValueId, thenArgIds ValueIdArray, elseArgIds ValueIdArray, useCount ValueIdArray)
+	incrementUse(useCount, valueId: condId)
+	for argId in thenArgIds 'thenArgs'
+		incrementUse(useCount, valueId: argId)
+	end 'thenArgs'
+	for argId in elseArgIds 'elseArgs'
+		incrementUse(useCount, valueId: argId)
+	end 'elseArgs'
+end 'countCondBrUses'
+
+function countFuncUses(op FuncOp, useCount ValueIdArray)
+	match op 'count'
+		ret(retValId) then incrementUse(useCount, valueId: retValId)
+		call(_, _, argIds) then countArrayUses(argIds, useCount: useCount)
+		tryCall(_, _, argIds, _) then countArrayUses(argIds, useCount: useCount)
+		indirectCall(_, calleeId, argIds) then countIndirectCallUses(calleeId, argIds: argIds, useCount: useCount)
+		funcRef then break 'count'
+		tailCall(_, argIds) then countArrayUses(argIds, useCount: useCount)
+		param then break 'count'
+	end 'count'
+end 'countFuncUses'
+
+function countIndirectCallUses(calleeId ValueId, argIds ValueIdArray, useCount ValueIdArray)
+	incrementUse(useCount, valueId: calleeId)
+	countArrayUses(argIds, useCount: useCount)
+end 'countIndirectCallUses'
+
+function countMemRefUses(op MemRefOp, useCount ValueIdArray)
+	match op 'count'
+		storeSlot(_, valueId) then incrementUse(useCount, valueId: valueId)
+		loadSlot then break 'count'
+	end 'count'
+end 'countMemRefUses'
+
+function countRuntimeUses(op RuntimeOp, useCount ValueIdArray)
+	match op 'count'
+		printLiteral then break 'count'
+		printInt(valueId) then incrementUse(useCount, valueId: valueId)
+		drop(valueId) then incrementUse(useCount, valueId: valueId)
+	end 'count'
+end 'countRuntimeUses'
+
+function countMaxHLUses(op MaxHLOp, useCount ValueIdArray)
+	match op 'count'
+		// Side-effect ops that reference value operands
+		printInt(valueId) then incrementUse(useCount, valueId: valueId)
+		varStore(_, valueId) then incrementUse(useCount, valueId: valueId)
+		ret(retValId) then incrementUse(useCount, valueId: retValId)
+		condBr(condId, _, _) then incrementUse(useCount, valueId: condId)
+		call(_, _, argIds) then countArrayUses(argIds, useCount: useCount)
+		// Pure ops that use operands
+		binop(_, leftId, rightId, _, _) then countTwoUses(leftId, b: rightId, useCount: useCount)
+		unop(_, operandId, _) then incrementUse(useCount, valueId: operandId)
+		truncFloat(_, operandId) then incrementUse(useCount, valueId: operandId)
+		intToFloat(_, operandId) then incrementUse(useCount, valueId: operandId)
+		cmp(_, leftId, rightId, _, _) then countTwoUses(leftId, b: rightId, useCount: useCount)
+		refEq(_, leftId, rightId, _) then countTwoUses(leftId, b: rightId, useCount: useCount)
+		// No operand uses
+		literal to varLoad then break 'count'
+		printLiteral then break 'count'
+		br then break 'count'
+	end 'count'
+end 'countMaxHLUses'
+
+function countSysUses(op SysOp, useCount ValueIdArray)
+	match op 'count'
+		syscall(_, _, argIds) then countArrayUses(argIds, useCount: useCount)
+		iatCall(_, _, argIds) then countArrayUses(argIds, useCount: useCount)
+		globalAddr then break 'count'
+		memcpy(dstId, srcId, lenId) then countThreeUses(dstId, b: srcId, c: lenId, useCount: useCount)
+		stackAddr then break 'count'
+		storeByte(baseId, offsetId, byteId) then countThreeUses(baseId, b: offsetId, c: byteId, useCount: useCount)
+		loadByte(_, baseId, offsetId) then countTwoUses(baseId, b: offsetId, useCount: useCount)
+		osExit(codeId) then incrementUse(useCount, valueId: codeId)
+		osWrite(ptrId, lenId) then countTwoUses(ptrId, b: lenId, useCount: useCount)
+		free(ptrId) then incrementUse(useCount, valueId: ptrId)
+	end 'count'
+end 'countSysUses'
+
+function countArrayUses(argIds ValueIdArray, useCount ValueIdArray)
+	for argId in argIds 'each'
+		incrementUse(useCount, valueId: argId)
+	end 'each'
+end 'countArrayUses'
+
+function countTwoUses(a ValueId, b ValueId, useCount ValueIdArray)
+	incrementUse(useCount, valueId: a)
+	incrementUse(useCount, valueId: b)
+end 'countTwoUses'
+
+function countThreeUses(a ValueId, b ValueId, c ValueId, useCount ValueIdArray)
+	incrementUse(useCount, valueId: a)
+	incrementUse(useCount, valueId: b)
+	incrementUse(useCount, valueId: c)
+end 'countThreeUses'
+
+// ============================================================
+// Phase 2: Dead op detection
+// ============================================================
+
+// An op is dead if:
+// 1. It has a resultId (is a value-producing op)
+// 2. That resultId has zero uses
+// 3. The op has no side effects
+function isDeadOp(op MlirOp, useCount ValueIdArray) returns bool
+	return match op 'check'
+		maxhl gives false
+		arith(arithOp) gives isDeadArithOp(arithOp, useCount: useCount)
+		cf gives false
+		func(funcOp) gives isDeadFuncOp(funcOp, useCount: useCount)
+		memref(memOp) gives isDeadMemRefOp(memOp, useCount: useCount)
+		// runtime, sys = side effects; maxx64, maxarm64 = backend ops
+		runtime to maxarm64 gives false
+	end 'check'
+end 'isDeadOp'
+
+function isDeadArithOp(op ArithOp, useCount ValueIdArray) returns bool
+	// All arith ops are pure (no side effects) — dead if unused
+	return match op 'check'
+		const(c) gives getUseCount(useCount, valueId: c.resultId) == 0
+		unary(u) gives getUseCount(useCount, valueId: u.resultId) == 0
+		binary(b) gives getUseCount(useCount, valueId: b.resultId) == 0
+	end 'check'
+end 'isDeadArithOp'
+
+function isDeadMemRefOp(op MemRefOp, useCount ValueIdArray) returns bool
+	return match op 'check'
+		// storeSlot has side effects (writes to memory) — never dead
+		storeSlot gives false
+		// loadSlot is pure — dead if unused
+		loadSlot(resultId, _) gives getUseCount(useCount, valueId: resultId) == 0
+	end 'check'
+end 'isDeadMemRefOp'
+
+function isDeadFuncOp(op FuncOp, useCount ValueIdArray) returns bool
+	return match op 'check'
+		// call, tryCall, indirectCall, tailCall, ret all have side effects
+		ret gives false
+		call gives false
+		tryCall gives false
+		indirectCall gives false
+		tailCall gives false
+		// funcRef and param are pure value-producing ops
+		funcRef(resultId, _) gives getUseCount(useCount, valueId: resultId) == 0
+		param(resultId, _, _) gives getUseCount(useCount, valueId: resultId) == 0
+	end 'check'
+end 'isDeadFuncOp'
+
+// ============================================================
+// Utility: extract resultId from an op (for logging)
+// ============================================================
+
+function getOpResultId(op MlirOp) returns ValueId
+	return match op 'get'
+		maxhl gives 0
+		arith(arithOp) gives getArithResultId(arithOp)
+		cf gives 0
+		func(funcOp) gives getFuncResultId(funcOp)
+		memref(memOp) gives getMemRefResultId(memOp)
+		runtime to maxarm64 gives 0
+	end 'get'
+end 'getOpResultId'
+
+function getArithResultId(op ArithOp) returns ValueId
+	return match op 'get'
+		const(c) gives c.resultId
+		unary(u) gives u.resultId
+		binary(b) gives b.resultId
+	end 'get'
+end 'getArithResultId'
+
+function getMemRefResultId(op MemRefOp) returns ValueId
+	return match op 'get'
+		storeSlot gives 0
+		loadSlot(resultId, _) gives resultId
+	end 'get'
+end 'getMemRefResultId'
+
+function getFuncResultId(op FuncOp) returns ValueId
+	return match op 'get'
+		ret gives 0
+		call(resultId, _, _) gives resultId
+		tryCall(resultId, _, _, _) gives resultId
+		indirectCall(resultId, _, _) gives resultId
+		funcRef(resultId, _) gives resultId
+		tailCall gives 0
+		param(resultId, _, _) gives resultId
+	end 'get'
+end 'getFuncResultId'

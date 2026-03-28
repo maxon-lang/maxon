@@ -60,10 +60,67 @@ end 'main'
 42
 ```
 ```RequiredLowering:x86_64-windows
-maxhl-to-mid: %0 = maxon.literal {value = 42 : i64} -> %0 = arith.constant {value = 42 : i64}
-maxhl-to-mid: maxon.return %0 -> func.return %0
-mid-to-x86: %0 = arith.constant {value = 42 : i64} -> x86.mov rax, 42
-mid-to-x86: func.return %0 -> x86.epilogue, x86.ret
+=== After semantic-check ===
+Functions: 2, Blocks: 2, Ops: 10
+  maxhl: 10, arith: 0, cf: 0, func: 0, memref: 0, runtime: 0, sys: 0, mir: 0, x64: 0, arm64: 0
+=== After dead-function-elimination ===
+Functions: 1, Blocks: 1, Ops: 2
+  maxhl: 2, arith: 0, cf: 0, func: 0, memref: 0, runtime: 0, sys: 0, mir: 0, x64: 0, arm64: 0
+=== After convert-maxon-to-arith ===
+Functions: 1, Blocks: 1, Ops: 2
+  maxhl: 0, arith: 1, cf: 0, func: 1, memref: 0, runtime: 0, sys: 0, mir: 0, x64: 0, arm64: 0
+=== After borrow-check ===
+Functions: 1, Blocks: 1, Ops: 2
+  maxhl: 0, arith: 1, cf: 0, func: 1, memref: 0, runtime: 0, sys: 0, mir: 0, x64: 0, arm64: 0
+=== After inject-drops ===
+Functions: 1, Blocks: 1, Ops: 2
+  maxhl: 0, arith: 1, cf: 0, func: 1, memref: 0, runtime: 0, sys: 0, mir: 0, x64: 0, arm64: 0
+=== After mem2reg ===
+Functions: 1, Blocks: 1, Ops: 2
+  maxhl: 0, arith: 1, cf: 0, func: 1, memref: 0, runtime: 0, sys: 0, mir: 0, x64: 0, arm64: 0
+=== After canonicalize ===
+Functions: 1, Blocks: 1, Ops: 2
+  maxhl: 0, arith: 1, cf: 0, func: 1, memref: 0, runtime: 0, sys: 0, mir: 0, x64: 0, arm64: 0
+=== After cse ===
+Functions: 1, Blocks: 1, Ops: 2
+  maxhl: 0, arith: 1, cf: 0, func: 1, memref: 0, runtime: 0, sys: 0, mir: 0, x64: 0, arm64: 0
+=== After dce ===
+Functions: 1, Blocks: 1, Ops: 2
+  maxhl: 0, arith: 1, cf: 0, func: 1, memref: 0, runtime: 0, sys: 0, mir: 0, x64: 0, arm64: 0
+=== After convert-maxon-to-sys-and-runtime ===
+Functions: 1, Blocks: 1, Ops: 2
+  maxhl: 0, arith: 1, cf: 0, func: 1, memref: 0, runtime: 0, sys: 0, mir: 0, x64: 0, arm64: 0
+=== After lower-abi ===
+Functions: 1, Blocks: 1, Ops: 2
+  maxhl: 0, arith: 1, cf: 0, func: 1, memref: 0, runtime: 0, sys: 0, mir: 0, x64: 0, arm64: 0
+=== After augment-with-runtime ===
+Functions: 5, Blocks: 13, Ops: 89
+  maxhl: 0, arith: 37, cf: 7, func: 14, memref: 20, runtime: 0, sys: 11, mir: 0, x64: 0, arm64: 0
+=== After convert-to-mir ===
+Functions: 5, Blocks: 13, Ops: 89
+  maxhl: 0, arith: 0, cf: 0, func: 0, memref: 20, runtime: 0, sys: 0, mir: 69, x64: 0, arm64: 0
+=== After schedule-instructions ===
+Functions: 5, Blocks: 13, Ops: 89
+  maxhl: 0, arith: 0, cf: 0, func: 0, memref: 20, runtime: 0, sys: 0, mir: 69, x64: 0, arm64: 0
+mid-to-x86: === lowering function: _start ===
+mid-to-x86: === lowering function: write_stdout ===
+mid-to-x86: === lowering function: i64_to_string ===
+mid-to-x86: === lowering function: __rt_printInt ===
+mid-to-x86: === lowering function: main ===
+=== After convert-mir-to-target ===
+Functions: 5, Blocks: 13, Ops: 159
+  maxhl: 0, arith: 0, cf: 0, func: 0, memref: 0, runtime: 0, sys: 0, mir: 0, x64: 159, arm64: 0
+=== After allocate-registers ===
+Functions: 5, Blocks: 13, Ops: 191
+  maxhl: 0, arith: 0, cf: 0, func: 0, memref: 0, runtime: 0, sys: 0, mir: 0, x64: 191, arm64: 0
+  frame: var=0 spill=32 total=32 aligned=32
+  frame: var=0 spill=88 total=88 aligned=96
+  frame: var=0 spill=328 total=328 aligned=336
+  frame: var=0 spill=64 total=64 aligned=64
+  frame: var=0 spill=0 total=0 aligned=0
+=== After insert-prologue-epilogue ===
+Functions: 5, Blocks: 13, Ops: 194
+  maxhl: 0, arith: 0, cf: 0, func: 0, memref: 0, runtime: 0, sys: 0, mir: 0, x64: 194, arm64: 0
 ```
 
 <!-- test: return-function-call -->
@@ -372,9 +429,4 @@ module {
   }
 }
 ```
-
-
-
-
-
 

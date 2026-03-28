@@ -64,16 +64,23 @@ export function augmentWithRuntime(module MlirModule) returns MlirModule
 	return augmented
 end 'augmentWithRuntime'
 
-export function emitBackend(module MlirModule, target Target, globalData GlobalDataTable) returns CodeResult throws CompileError
-	let augmentedModule = augmentWithRuntime(module)
+// Backend execution driven by the pipeline.
+// Phase 6-7 passes (augmentWithRuntime, convertMirToTarget, scheduleInstructions,
+// allocateRegisters, insertPrologueEpilogue) run through the PassPipeline,
+// then code emission converts the final target ops to machine code bytes.
+export function emitBackend(module MlirModule, target Target, globalData GlobalDataTable, project Project, nextValueIdRef ValueIdRef) returns CodeResult throws CompileError
+	// Run Phase 6-7 through the backend pipeline
+	var ctx = PipelineContext{module: module, project: project, globalData: globalData, nextValueIdRef: nextValueIdRef, target: target}
+	let backendPasses = buildBackendPipeline()
+	try runPipeline(ctx, passes: backendPasses)
 
-	let targetModule = lowerToTarget(augmentedModule, target: target)
-	var result = emitTargetCode(targetModule, target: target, globalData: globalData)
-	result.targetModule = targetModule
+	// Emit machine code from the fully-lowered target module
+	var result = emitTargetCode(ctx.module, target: target, globalData: globalData)
+	result.targetModule = ctx.module
 	return result
 end 'emitBackend'
 
-function lowerToTarget(module MlirModule, target Target) returns MlirModule
+export function lowerToTarget(module MlirModule, target Target) returns MlirModule
 	return match target.cpu 'cpu'
 		x86_64 gives lowerMidToMaxX64(module, target: target)
 		aarch64 gives lowerMidToMaxArm64(module, target: target)

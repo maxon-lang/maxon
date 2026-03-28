@@ -189,6 +189,17 @@ function midParseUnsignedInt(s ByteArray) returns ParsedInt
 	return result
 end 'midParseUnsignedInt'
 
+function midParseStdType(s ByteArray) returns StdType
+	if s == b"i64" 'isI64'
+		return StdType.i64
+	end 'isI64'
+	if s == b"f64" 'isF64'
+		return StdType.f64
+	end 'isF64'
+	panic("midParseStdType: unknown type '{String.from(s)}'")
+	return StdType.i64
+end 'midParseStdType'
+
 function midParseHex(s ByteArray, startIndex MidTokenIndex) returns ParsedInt
 	var result = 0
 	for pi in startIndex upto s.count() 'hexDigits'
@@ -494,7 +505,7 @@ function midParseCfOp(tokens TokenArray, startPos MidTokenIndex, block MlirBlock
 	// br: cf br <blockRef>
 	if opName == b"br" 'isBr'
 		let targetId = lookupBlockId(state, label: midTokenAt(tokens, pos: pos).value)
-		block.terminator = MlirOp.cf(CfOp.br(targetId))
+		block.terminator = MlirOp.cf(CfOp.br(targetId, ValueIdArray{}))
 		block.hasTerminator = true
 		return pos + 1
 	end 'isBr'
@@ -504,7 +515,7 @@ function midParseCfOp(tokens TokenArray, startPos MidTokenIndex, block MlirBlock
 		let condId = lookupValueId(state, name: midTokenAt(tokens, pos: pos).value)
 		let thenId = lookupBlockId(state, label: midTokenAt(tokens, pos: pos + 1).value)
 		let elseId = lookupBlockId(state, label: midTokenAt(tokens, pos: pos + 2).value)
-		block.terminator = MlirOp.cf(CfOp.condBr(condId, thenId, elseId))
+		block.terminator = MlirOp.cf(CfOp.condBr(condId, thenId, ValueIdArray{}, elseId, ValueIdArray{}))
 		block.hasTerminator = true
 		return pos + 3
 	end 'isCondBr'
@@ -564,6 +575,17 @@ function midParseFuncOp(tokens TokenArray, startPos MidTokenIndex, block MlirBlo
 	return pos
 end 'isCall'
 
-panic("MidLevelParser: unknown func op '{String.from(opName)}'")
-return pos
+	// param: func param <paramIndex> <paramType>
+	if opName == b"param" 'isParam'
+		let paramIndexToken = midTokenAt(tokens, pos: pos)
+		let paramIndex = midParseUnsignedInt(paramIndexToken.value)
+		pos = pos + 1
+		let paramTypeToken = midTokenAt(tokens, pos: pos)
+		let paramType = midParseStdType(paramTypeToken.value)
+		block.ops.push(MlirOp.func(FuncOp.param(resultId, paramIndex, paramType)))
+		return pos + 1
+	end 'isParam'
+
+	panic("MidLevelParser: unknown func op '{String.from(opName)}'")
+	return pos
 end 'midParseFuncOp'
