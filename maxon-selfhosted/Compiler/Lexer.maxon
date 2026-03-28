@@ -7,12 +7,6 @@ export typealias LineNumber = int(0 to u64.max)
 export typealias ColumnNumber = int(0 to u64.max)
 export typealias CharOffset = int(0 to u64.max)
 
-type LexerState
-	export var pos CharOffset
-	export var line LineNumber
-	export var column ColumnNumber
-end 'LexerState'
-
 // --- Character classes ---
 enum CharClass
 	other
@@ -264,9 +258,6 @@ let transitionTable = [
 	DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther,
 	DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther,
 	DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther,
-	DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther,
-	DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther,
-	DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther,
 	DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther
 ]
 
@@ -307,311 +298,328 @@ function emitFixedToken(stateIndex DfaStateIndex, tokens TokenArray, line LineNu
 	end 'dispatch'
 end 'emitFixedToken'
 
-// --- Main tokenize function ---
+// --- Lexer type ---
+
+type Lexer
+	var source ByteArray
+	var tokens TokenArray
+	var pos CharOffset
+	var line LineNumber
+	var column ColumnNumber
+
+	// --- Navigation helpers ---
+
+	function advance()
+		pos = pos + 1
+		column = column + 1
+	end 'advance'
+
+	function advanceBy(n CharOffset)
+		pos = pos + n
+		column = column + n
+	end 'advanceBy'
+
+	function retreat()
+		pos = pos - 1
+		column = column - 1
+	end 'retreat'
+
+	function emit(kind TokenKind, value ByteArray, startLine LineNumber, startCol ColumnNumber)
+		tokens.push(Token{kind: kind, value: value, line: startLine, column: startCol})
+	end 'emit'
+
+	function slice(startPos CharOffset) returns ByteArray
+		return source.slice(startPos, endIndex: pos)
+	end 'slice'
+
+	function newline(startLine LineNumber, startCol ColumnNumber)
+		tokens.push(Token{kind: TokenKind.newline, value: b"", line: startLine, column: startCol})
+		line = line + 1
+		column = 1
+	end 'newline'
+
+	// --- Action dispatch helpers ---
+
+	function handleEmit2(dfaState DfaState, startLine LineNumber, startCol ColumnNumber)
+		advance()
+		emitFixedToken(dfaState.rawValue, tokens: tokens, line: startLine, column: startCol)
+	end 'handleEmit2'
+
+	function handleEnterNumber(startLine LineNumber, startCol ColumnNumber)
+		retreat()
+		scanNumber(startLine: startLine, startCol: startCol)
+	end 'handleEnterNumber'
+
+	function handleEnterIdent(startLine LineNumber, startCol ColumnNumber)
+		retreat()
+		scanIdentifier(startLine: startLine, startCol: startCol)
+	end 'handleEnterIdent'
+
+	function handleEnterComment()
+		advance()
+		scanComment()
+	end 'handleEnterComment'
+
+	// --- Sub-scanners ---
+
+	// Opening quote already consumed by main loop.
+	function scanSingleQuoteString(startLine LineNumber, startCol ColumnNumber)
+		let len = source.count()
+		let strStart = pos
+		while pos < len 'strBody'
+			let sc = try source.get(pos) otherwise 0
+			if sc == Ascii.quote 'endStr'
+				break
+			end 'endStr'
+			if sc == Ascii.lf 'newlineInStr'
+				logError(LogCategory.lexer, message: () gives "error E1002: {startLine}:{startCol}: unterminated string literal")
+				break
+			end 'newlineInStr'
+			advance()
+		end 'strBody'
+		let strVal = slice(strStart)
+		if pos >= len 'unterminatedAtEof'
+			logError(LogCategory.lexer, message: () gives "error E1002: {startLine}:{startCol}: unterminated string literal")
+		end 'unterminatedAtEof' else 'consumeClose'
+			// Consume the closing quote
+			advance()
+		end 'consumeClose'
+		emit(TokenKind.stringLiteral, value: strVal, startLine: startLine, startCol: startCol)
+	end 'scanSingleQuoteString'
+
+	// Opening double-quote already consumed by main loop.
+	function scanDoubleQuoteString(startLine LineNumber, startCol ColumnNumber)
+		let len = source.count()
+		let dstrStart = pos
+		while pos < len 'dstrBody'
+			let dc = try source.get(pos) otherwise 0
+			if dc == Ascii.dquote 'endDstr'
+				break
+			end 'endDstr'
+			if dc == Ascii.lf 'newlineInStr'
+				logError(LogCategory.lexer, message: () gives "error E1002: {startLine}:{startCol}: unterminated string literal")
+				break
+			end 'newlineInStr'
+			if dc == Ascii.backslash 'esc'
+				advance()
+			end 'esc'
+			advance()
+		end 'dstrBody'
+		let dstrVal = slice(dstrStart)
+		if pos >= len 'unterminatedAtEof'
+			logError(LogCategory.lexer, message: () gives "error E1002: {startLine}:{startCol}: unterminated string literal")
+		end 'unterminatedAtEof' else 'consumeClose'
+			// Consume the closing double-quote
+			advance()
+		end 'consumeClose'
+		emit(TokenKind.doubleStringLiteral, value: dstrVal, startLine: startLine, startCol: startCol)
+	end 'scanDoubleQuoteString'
+
+	// pos points to the first digit (not yet consumed by this scanner).
+	function scanNumber(startLine LineNumber, startCol ColumnNumber)
+		let len = source.count()
+		let numStart = pos
+		let firstByte = try source.get(pos) otherwise 0
+
+		// Check for 0x, 0b, 0o prefixes
+		if firstByte == Ascii.zero and pos + 1 < len 'checkPrefix'
+			let prefixByte = try source.get(pos + 1) otherwise 0
+
+			// Hex literal: 0x or 0X
+			if prefixByte == Ascii.lowerX or prefixByte == Ascii.upperX 'isHex'
+				advanceBy(2)
+				while pos < len 'hexDigits'
+					let hc = try source.get(pos) otherwise 0
+					if not isHexDigit(hc) and hc != Ascii.underscore 'endHex'
+						break
+					end 'endHex'
+					advance()
+				end 'hexDigits'
+				let hexVal = slice(numStart)
+				emit(TokenKind.intLiteral, value: hexVal, startLine: startLine, startCol: startCol)
+				return
+			end 'isHex' else if prefixByte == Ascii.lowerB or prefixByte == Ascii.upperB 'isBin'
+				// Binary literal: 0b or 0B
+				advanceBy(2)
+				while pos < len 'binDigits'
+					let bc = try source.get(pos) otherwise 0
+					if not isBinaryDigit(bc) and bc != Ascii.underscore 'endBin'
+						break
+					end 'endBin'
+					advance()
+				end 'binDigits'
+				let binVal = slice(numStart)
+				emit(TokenKind.intLiteral, value: binVal, startLine: startLine, startCol: startCol)
+				return
+			end 'isBin' else if prefixByte == Ascii.lowerO or prefixByte == Ascii.upperO 'isOct'
+				advanceBy(2)
+				while pos < len 'octDigits'
+					let oc = try source.get(pos) otherwise 0
+					if not isOctalDigit(oc) and oc != Ascii.underscore 'endOct'
+						break
+					end 'endOct'
+					advance()
+				end 'octDigits'
+				let octVal = slice(numStart)
+				emit(TokenKind.intLiteral, value: octVal, startLine: startLine, startCol: startCol)
+				return
+			end 'isOct'
+		end 'checkPrefix'
+
+		// Decimal digits (with underscore separators)
+		while pos < len 'digits'
+			let dc = try source.get(pos) otherwise 0
+			if not isDigit(dc) and dc != Ascii.underscore 'endNum'
+				break
+			end 'endNum'
+			advance()
+		end 'digits'
+
+		// Check for decimal point (float literal)
+		var isFloat = false
+		if pos < len 'checkDot'
+			let dotCh = try source.get(pos) otherwise 0
+			if dotCh == Ascii.dot 'hasDot'
+				isFloat = true
+				advance()
+				while pos < len 'fracDigits'
+					let fc = try source.get(pos) otherwise 0
+					if not isDigit(fc) and fc != Ascii.underscore 'endFrac'
+						break
+					end 'endFrac'
+					advance()
+				end 'fracDigits'
+			end 'hasDot'
+		end 'checkDot'
+
+		// Check for scientific notation exponent (e/E)
+		if pos < len 'checkExp'
+			let expCh = try source.get(pos) otherwise 0
+			if expCh == Ascii.lowerE or expCh == Ascii.upperE 'hasExp'
+				isFloat = true
+				advance()
+				// Optional sign
+				if pos < len 'checkSign'
+					let signCh = try source.get(pos) otherwise 0
+					if signCh == Ascii.plus or signCh == Ascii.minus 'hasSign'
+						advance()
+					end 'hasSign'
+				end 'checkSign'
+				// Exponent digits
+				while pos < len 'expDigits'
+					let ec = try source.get(pos) otherwise 0
+					if not isDigit(ec) 'endExp'
+						break
+					end 'endExp'
+					advance()
+				end 'expDigits'
+			end 'hasExp'
+		end 'checkExp'
+
+		let numVal = slice(numStart)
+		if isFloat 'emitFloat'
+			emit(TokenKind.floatLiteral, value: numVal, startLine: startLine, startCol: startCol)
+		end 'emitFloat' else 'emitInt'
+			emit(TokenKind.intLiteral, value: numVal, startLine: startLine, startCol: startCol)
+		end 'emitInt'
+	end 'scanNumber'
+
+	// pos points to the first alpha/underscore (not yet consumed by this scanner).
+	function scanIdentifier(startLine LineNumber, startCol ColumnNumber)
+		let len = source.count()
+		let startPos = pos
+		while pos < len 'identBody'
+			let ic = try source.get(pos) otherwise 0
+			if not isAlphaNum(ic) 'endIdent'
+				break
+			end 'endIdent'
+			advance()
+		end 'identBody'
+		let identVal = slice(startPos)
+		let kind = classifyIdentifier(identVal)
+		emit(kind, value: identVal, startLine: startLine, startCol: startCol)
+	end 'scanIdentifier'
+
+	// Both '/' characters already consumed. Advances to (but not past) the newline.
+	// Only increments pos, not column — column will be reset by the newline handler.
+	function scanComment()
+		let len = source.count()
+		while pos < len 'skipComment'
+			let cc = try source.get(pos) otherwise 0
+			if cc == Ascii.lf 'endComment'
+				break
+			end 'endComment'
+			pos = pos + 1
+		end 'skipComment'
+	end 'scanComment'
+
+	// --- Main DFA loop ---
+
+	function run() returns TokenArray
+		logDebug(LogCategory.lexer, message: () gives "Starting lexer")
+
+		let len = source.count()
+
+		while pos < len 'scan'
+			let ch = try source.get(pos) otherwise 'readCh'
+				panic("Lexer: source read at pos {pos} failed (len={len})")
+			end 'readCh'
+			let startLine = line
+			let startCol = column
+
+			// Look up character class
+			let charClass = try charClassTable.get(ch) otherwise 'readClass'
+				panic("Lexer: charClassTable lookup failed for byte {ch}")
+			end 'readClass'
+
+			// Consume the first character
+			advance()
+
+			// Look up first transition from START
+			var state = try transitionTable.get(DfaState.start * CharClass.COUNT + charClass) otherwise panic("Lexer: transitionTable lookup failed from START for charClass {charClass}")
+
+			// If we reached a live state (1-5), peek at the next character for a second transition
+			if state >= DfaState.sawEq and state <= DfaState.sawSlash 'live'
+				var nextClass = CharClass.eof
+				if pos < len 'hasNext'
+					let nextCh = try source.get(pos) otherwise panic("Lexer: source read at pos {pos} failed (len={len})")
+					nextClass = try charClassTable.get(nextCh) otherwise panic("Lexer: charClassTable lookup failed for byte {nextCh}")
+				end 'hasNext'
+				state = try transitionTable.get(state * CharClass.COUNT + nextClass) otherwise panic("Lexer: transitionTable lookup failed from state {state} for charClass {nextClass}")
+			end 'live'
+
+			// Look up the action for the terminal state
+			let action = try actionTable.get(state.rawValue) otherwise panic("Lexer: actionTable lookup failed for state {state}")
+
+			match action 'dispatch'
+				skip then break 'dispatch'
+				skipCr then column = column - 1
+				newline then newline(startLine: startLine, startCol: startCol)
+				emit then emitFixedToken(state.rawValue, tokens: tokens, line: startLine, column: startCol)
+				emit2 then handleEmit2(dfaState: state, startLine: startLine, startCol: startCol)
+				enterStrSq then scanSingleQuoteString(startLine: startLine, startCol: startCol)
+				enterStrDq then scanDoubleQuoteString(startLine: startLine, startCol: startCol)
+				enterNumber then handleEnterNumber(startLine: startLine, startCol: startCol)
+				enterIdent then handleEnterIdent(startLine: startLine, startCol: startCol)
+				enterComment then handleEnterComment()
+				default panic("Lexer: unhandled action {action}")
+			end 'dispatch'
+			continue
+		end 'scan'
+
+		emit(TokenKind.eof, value: b"", startLine: line, startCol: column)
+		return tokens
+	end 'run'
+end 'Lexer'
+
+// --- Public API wrapper ---
 
 export function tokenize(source ByteArray) returns TokenArray
-	logDebug(LogCategory.lexer, message: () gives "Starting lexer")
-
-	var tokens = TokenArray{}
-	var s = LexerState{pos: 0, line: 1, column: 1}
-	let len = source.count()
-
-	while s.pos < len 'scan'
-		let ch = try source.get(s.pos) otherwise 'readCh'
-			panic("Lexer: source read at pos {s.pos} failed (len={len})")
-		end 'readCh'
-		let startLine = s.line
-		let startCol = s.column
-
-		// Look up character class
-		let charClass = try charClassTable.get(ch) otherwise 'readClass'
-			panic("Lexer: charClassTable lookup failed for byte {ch}")
-		end 'readClass'
-
-		// Consume the first character
-		s.pos = s.pos + 1
-		s.column = s.column + 1
-
-		// Look up first transition from START
-		var state = try transitionTable.get(DfaState.start * CharClass.COUNT + charClass) otherwise panic("Lexer: transitionTable lookup failed from START for charClass {charClass}")
-
-		// If we reached a live state (1-5), peek at the next character for a second transition
-		if state >= DfaState.sawEq and state <= DfaState.sawSlash 'live'
-			var nextClass = CharClass.eof
-			if s.pos < len 'hasNext'
-				let nextCh = try source.get(s.pos) otherwise panic("Lexer: source read at pos {s.pos} failed (len={len})")
-				nextClass = try charClassTable.get(nextCh) otherwise panic("Lexer: charClassTable lookup failed for byte {nextCh}")
-			end 'hasNext'
-			state = try transitionTable.get(state * CharClass.COUNT + nextClass) otherwise panic("Lexer: transitionTable lookup failed from state {state} for charClass {nextClass}")
-		end 'live'
-
-		// Look up the action for the terminal state
-		let action = try actionTable.get(state.rawValue) otherwise panic("Lexer: actionTable lookup failed for state {state}")
-
-		match action 'dispatch'
-			skip then break 'dispatch'
-			skipCr then s.column = s.column - 1
-			newline then handleNewline(tokens, state: s, startLine: startLine, startCol: startCol)
-			emit then emitFixedToken(state.rawValue, tokens: tokens, line: startLine, column: startCol)
-			emit2 then handleEmit2(state: s, tokens: tokens, dfaState: state, startLine: startLine, startCol: startCol)
-			enterStrSq then scanSingleQuoteString(source, state: s, tokens: tokens, startLine: startLine, startCol: startCol)
-			enterStrDq then scanDoubleQuoteString(source, state: s, tokens: tokens, startLine: startLine, startCol: startCol)
-			enterNumber then handleEnterNumber(source, state: s, tokens: tokens, startLine: startLine, startCol: startCol)
-			enterIdent then handleEnterIdent(source, state: s, tokens: tokens, startLine: startLine, startCol: startCol)
-			enterComment then handleEnterComment(source, state: s)
-			default panic("Lexer: unhandled action {action}")
-		end 'dispatch'
-		continue
-	end 'scan'
-
-	tokens.push(Token{kind: TokenKind.eof, value: b"", line: s.line, column: s.column})
-	return tokens
+	var lexer = Lexer{source: source, tokens: TokenArray{}, pos: 0, line: 1, column: 1}
+	return lexer.run()
 end 'tokenize'
 
-// --- Action dispatch helpers ---
-// Each helper handles a multi-statement action arm from the main lexer match.
-
-function handleNewline(tokens TokenArray, state LexerState, startLine LineNumber, startCol ColumnNumber)
-	tokens.push(Token{kind: TokenKind.newline, value: b"", line: startLine, column: startCol})
-	state.line = state.line + 1
-	state.column = 1
-end 'handleNewline'
-
-function handleEmit2(state LexerState, tokens TokenArray, dfaState DfaState, startLine LineNumber, startCol ColumnNumber)
-	state.pos = state.pos + 1
-	state.column = state.column + 1
-	emitFixedToken(dfaState.rawValue, tokens: tokens, line: startLine, column: startCol)
-end 'handleEmit2'
-
-function handleEnterNumber(source ByteArray, state LexerState, tokens TokenArray, startLine LineNumber, startCol ColumnNumber)
-	state.pos = state.pos - 1
-	state.column = state.column - 1
-	scanNumber(source, state: state, tokens: tokens, startLine: startLine, startCol: startCol)
-end 'handleEnterNumber'
-
-function handleEnterIdent(source ByteArray, state LexerState, tokens TokenArray, startLine LineNumber, startCol ColumnNumber)
-	state.pos = state.pos - 1
-	state.column = state.column - 1
-	scanIdentifier(source, state: state, tokens: tokens, startLine: startLine, startCol: startCol)
-end 'handleEnterIdent'
-
-function handleEnterComment(source ByteArray, state LexerState)
-	state.pos = state.pos + 1
-	state.column = state.column + 1
-	scanComment(source, state: state)
-end 'handleEnterComment'
-
-// --- Sub-scanner functions ---
-
-// Opening quote already consumed by main loop.
-function scanSingleQuoteString(source ByteArray, state LexerState, tokens TokenArray, startLine LineNumber, startCol ColumnNumber)
-	let len = source.count()
-	let strStart = state.pos
-	while state.pos < len 'strBody'
-		let sc = try source.get(state.pos) otherwise 0
-		if sc == Ascii.quote 'endStr'
-			break
-		end 'endStr'
-		if sc == Ascii.lf 'newlineInStr'
-			logError(LogCategory.lexer, message: () gives "error E1002: {startLine}:{startCol}: unterminated string literal")
-			break
-		end 'newlineInStr'
-		state.pos = state.pos + 1
-		state.column = state.column + 1
-	end 'strBody'
-	let strVal = sliceBytes(source, startPos: strStart, endPos: state.pos)
-	if state.pos >= len 'unterminatedAtEof'
-		logError(LogCategory.lexer, message: () gives "error E1002: {startLine}:{startCol}: unterminated string literal")
-	end 'unterminatedAtEof' else 'consumeClose'
-		// Consume the closing quote
-		state.pos = state.pos + 1
-		state.column = state.column + 1
-	end 'consumeClose'
-	tokens.push(Token{kind: TokenKind.stringLiteral, value: strVal, line: startLine, column: startCol})
-end 'scanSingleQuoteString'
-
-// Opening double-quote already consumed by main loop.
-function scanDoubleQuoteString(source ByteArray, state LexerState, tokens TokenArray, startLine LineNumber, startCol ColumnNumber)
-	let len = source.count()
-	let dstrStart = state.pos
-	while state.pos < len 'dstrBody'
-		let dc = try source.get(state.pos) otherwise 0
-		if dc == Ascii.dquote 'endDstr'
-			break
-		end 'endDstr'
-		if dc == Ascii.lf 'newlineInStr'
-			logError(LogCategory.lexer, message: () gives "error E1002: {startLine}:{startCol}: unterminated string literal")
-			break
-		end 'newlineInStr'
-		if dc == Ascii.backslash 'esc'
-			state.pos = state.pos + 1
-			state.column = state.column + 1
-		end 'esc'
-		state.pos = state.pos + 1
-		state.column = state.column + 1
-	end 'dstrBody'
-	let dstrVal = sliceBytes(source, startPos: dstrStart, endPos: state.pos)
-	if state.pos >= len 'unterminatedAtEof'
-		logError(LogCategory.lexer, message: () gives "error E1002: {startLine}:{startCol}: unterminated string literal")
-	end 'unterminatedAtEof' else 'consumeClose'
-		// Consume the closing double-quote
-		state.pos = state.pos + 1
-		state.column = state.column + 1
-	end 'consumeClose'
-	tokens.push(Token{kind: TokenKind.doubleStringLiteral, value: dstrVal, line: startLine, column: startCol})
-end 'scanDoubleQuoteString'
-
-// pos points to the first digit (not yet consumed by this scanner).
-function scanNumber(source ByteArray, state LexerState, tokens TokenArray, startLine LineNumber, startCol ColumnNumber)
-	let len = source.count()
-	let numStart = state.pos
-	let firstByte = try source.get(state.pos) otherwise 0
-
-	// Check for 0x, 0b, 0o prefixes
-	if firstByte == Ascii.zero and state.pos + 1 < len 'checkPrefix'
-		let prefixByte = try source.get(state.pos + 1) otherwise 0
-
-		// Hex literal: 0x or 0X
-		if prefixByte == Ascii.lowerX or prefixByte == Ascii.upperX 'isHex'
-			state.pos = state.pos + 2
-			state.column = state.column + 2
-			while state.pos < len 'hexDigits'
-				let hc = try source.get(state.pos) otherwise 0
-				if not isHexDigit(hc) and hc != Ascii.underscore 'endHex'
-					break
-				end 'endHex'
-				state.pos = state.pos + 1
-				state.column = state.column + 1
-			end 'hexDigits'
-			let hexVal = sliceBytes(source, startPos: numStart, endPos: state.pos)
-			tokens.push(Token{kind: TokenKind.intLiteral, value: hexVal, line: startLine, column: startCol})
-			return
-		end 'isHex' else if prefixByte == Ascii.lowerB or prefixByte == Ascii.upperB 'isBin'
-			// Binary literal: 0b or 0B
-			state.pos = state.pos + 2
-			state.column = state.column + 2
-			while state.pos < len 'binDigits'
-				let bc = try source.get(state.pos) otherwise 0
-				if not isBinaryDigit(bc) and bc != Ascii.underscore 'endBin'
-					break
-				end 'endBin'
-				state.pos = state.pos + 1
-				state.column = state.column + 1
-			end 'binDigits'
-			let binVal = sliceBytes(source, startPos: numStart, endPos: state.pos)
-			tokens.push(Token{kind: TokenKind.intLiteral, value: binVal, line: startLine, column: startCol})
-			return
-		end 'isBin' else if prefixByte == Ascii.lowerO or prefixByte == Ascii.upperO 'isOct'
-			state.pos = state.pos + 2
-			state.column = state.column + 2
-			while state.pos < len 'octDigits'
-				let oc = try source.get(state.pos) otherwise 0
-				if not isOctalDigit(oc) and oc != Ascii.underscore 'endOct'
-					break
-				end 'endOct'
-				state.pos = state.pos + 1
-				state.column = state.column + 1
-			end 'octDigits'
-			let octVal = sliceBytes(source, startPos: numStart, endPos: state.pos)
-			tokens.push(Token{kind: TokenKind.intLiteral, value: octVal, line: startLine, column: startCol})
-			return
-		end 'isOct'
-	end 'checkPrefix'
-
-	// Decimal digits (with underscore separators)
-	while state.pos < len 'digits'
-		let dc = try source.get(state.pos) otherwise 0
-		if not isDigit(dc) and dc != Ascii.underscore 'endNum'
-			break
-		end 'endNum'
-		state.pos = state.pos + 1
-		state.column = state.column + 1
-	end 'digits'
-
-	// Check for decimal point (float literal)
-	var isFloat = false
-	if state.pos < len 'checkDot'
-		let dotCh = try source.get(state.pos) otherwise 0
-		if dotCh == Ascii.dot 'hasDot'
-			isFloat = true
-			state.pos = state.pos + 1
-			state.column = state.column + 1
-			while state.pos < len 'fracDigits'
-				let fc = try source.get(state.pos) otherwise 0
-				if not isDigit(fc) and fc != Ascii.underscore 'endFrac'
-					break
-				end 'endFrac'
-				state.pos = state.pos + 1
-				state.column = state.column + 1
-			end 'fracDigits'
-		end 'hasDot'
-	end 'checkDot'
-
-	// Check for scientific notation exponent (e/E)
-	if state.pos < len 'checkExp'
-		let expCh = try source.get(state.pos) otherwise 0
-		if expCh == Ascii.lowerE or expCh == Ascii.upperE 'hasExp'
-			isFloat = true
-			state.pos = state.pos + 1
-			state.column = state.column + 1
-			// Optional sign
-			if state.pos < len 'checkSign'
-				let signCh = try source.get(state.pos) otherwise 0
-				if signCh == Ascii.plus or signCh == Ascii.minus 'hasSign'
-					state.pos = state.pos + 1
-					state.column = state.column + 1
-				end 'hasSign'
-			end 'checkSign'
-			// Exponent digits
-			while state.pos < len 'expDigits'
-				let ec = try source.get(state.pos) otherwise 0
-				if not isDigit(ec) 'endExp'
-					break
-				end 'endExp'
-				state.pos = state.pos + 1
-				state.column = state.column + 1
-			end 'expDigits'
-		end 'hasExp'
-	end 'checkExp'
-
-	let numVal = sliceBytes(source, startPos: numStart, endPos: state.pos)
-	if isFloat 'emitFloat'
-		tokens.push(Token{kind: TokenKind.floatLiteral, value: numVal, line: startLine, column: startCol})
-	end 'emitFloat' else 'emitInt'
-		tokens.push(Token{kind: TokenKind.intLiteral, value: numVal, line: startLine, column: startCol})
-	end 'emitInt'
-end 'scanNumber'
-
-// pos points to the first alpha/underscore (not yet consumed by this scanner).
-function scanIdentifier(source ByteArray, state LexerState, tokens TokenArray, startLine LineNumber, startCol ColumnNumber)
-	let len = source.count()
-	let startPos = state.pos
-	while state.pos < len 'identBody'
-		let ic = try source.get(state.pos) otherwise 0
-		if not isAlphaNum(ic) 'endIdent'
-			break
-		end 'endIdent'
-		state.pos = state.pos + 1
-		state.column = state.column + 1
-	end 'identBody'
-	let identVal = sliceBytes(source, startPos: startPos, endPos: state.pos)
-	let kind = classifyIdentifier(identVal)
-	tokens.push(Token{kind: kind, value: identVal, line: startLine, column: startCol})
-end 'scanIdentifier'
-
-// Both '/' characters already consumed. Advances to (but not past) the newline.
-function scanComment(source ByteArray, state LexerState)
-	let len = source.count()
-	while state.pos < len 'skipComment'
-		let cc = try source.get(state.pos) otherwise 0
-		if cc == Ascii.lf 'endComment'
-			break
-		end 'endComment'
-		state.pos = state.pos + 1
-	end 'skipComment'
-end 'scanComment'
-
-// --- Helpers ---
+// --- Pure helpers ---
 
 function isDigit(b Byte) returns bool
 	return b >= '0' and b <= '9'
@@ -626,11 +634,6 @@ end 'isAlpha'
 function isAlphaNum(b Byte) returns bool
 	return isAlpha(b) or isDigit(b)
 end 'isAlphaNum'
-
-export function sliceBytes(source ByteArray, startPos CharOffset, endPos CharOffset) returns ByteArray
-	let sliced = source.slice(startPos, endIndex: endPos)
-	return ByteArray{managed: sliced.managed}
-end 'sliceBytes'
 
 export type KeywordInfo
 	export var kind TokenKind

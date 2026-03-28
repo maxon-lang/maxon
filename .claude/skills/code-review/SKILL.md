@@ -3,7 +3,8 @@ name: code-review
 description: Conduct a code review of the recent changes in the project, ensuring code quality and consistency.
 ---
 
-Review the changes that have been made in the project to the c# and self hosted compilers.
+Review the changes that have been made in the project to the c# and self hosted compilers. If you find any issues that 
+are outside the current changes fix them as well. The goal is to ensure that the codebase maintains high quality and consistency, and that any issues are addressed before merging the changes.
 
 ## Steps
 
