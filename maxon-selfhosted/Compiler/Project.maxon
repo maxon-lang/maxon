@@ -20,6 +20,10 @@ export type Project
 	// Typealias registry: maps alias names to their MLIR base type (b"i64", b"f64", etc.)
 	export var typealiases TypealiasMap
 
+	// Typealias range bounds: maps alias names to their (lower, upper) bounds.
+	// Used by the parser to emit runtime range checks on return values.
+	export var typealiasRanges TypealiasRangeMap
+
 	// Function return type registry: maps qualified function names to their return type names
 	export var funcReturnTypes FuncReturnTypeMap
 
@@ -46,6 +50,14 @@ end 'Project'
 export typealias TypealiasMap = Map with(ByteArray, ByteArray)
 export typealias FuncReturnTypeMap = Map with(ByteArray, ByteArray)
 export typealias ProjectArray = Array with Project
+
+export typealias RangeBound = int(i64.min to i64.max)
+
+export type TypealiasRange
+	export var lower RangeBound
+	export var upper RangeBound
+end 'TypealiasRange'
+export typealias TypealiasRangeMap = Map with(ByteArray, TypealiasRange)
 
 export function createProject(rootPath FilePath, isSingleFile bool, target Target) returns Project
 	let emptyModuleMemo = MlirModuleMemo{value: MlirModule{functions: MlirFunctionArray{}}, computedAt: 0, verifiedAt: 0}
@@ -77,6 +89,7 @@ export function createProject(rootPath FilePath, isSingleFile bool, target Targe
 		parserScopeStack: ScopeDepthArray{},
 		parserNextSlot: 0,
 		typealiases: TypealiasMap{},
+		typealiasRanges: TypealiasRangeMap{},
 		funcReturnTypes: FuncReturnTypeMap{},
 		stringConstNames: ByteArrayArray{},
 		stringConstValues: ByteArrayArray{},

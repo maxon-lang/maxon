@@ -293,7 +293,7 @@ function parseExport(project Project, tokens TokenArray, startPos TokenIndex) re
 	end 'isExportOther'
 end 'parseExport'
 
-// Parse: typealias Name = int(...) | float(...) | Array with T | ...
+// Parse: typealias Name = int(LOWER to UPPER) | float(LOWER to UPPER) | bool | ...
 // Registers primitive-backed typealiases in the project's type registry.
 // Computes optimal MLIR type from the range bounds (e.g. int(0 to u32.max) → u32).
 function parseTopLevelTypealias(project Project, tokens TokenArray, startPos TokenIndex) returns TokenIndex
@@ -308,42 +308,49 @@ function parseTopLevelTypealias(project Project, tokens TokenArray, startPos Tok
 	pos = pos + 1  // skip '='
 
 	let baseToken = tokenAt(tokens, pos: pos)
-	if baseToken.kind == TokenKind.float 'isFloat'
-		project.typealiases.insert(nameToken.value, value: b"f64")
-		return skipToNextLine(tokens, startPos: startPos)
-	end 'isFloat'
+
 	if baseToken.kind == TokenKind.bool 'isBool'
 		project.typealiases.insert(nameToken.value, value: b"i1")
 		return skipToNextLine(tokens, startPos: startPos)
 	end 'isBool'
-	if baseToken.kind != TokenKind.int 'notInt'
-		return skipToNextLine(tokens, startPos: startPos)
-	end 'notInt'
 
-	// Parse int(LOWER to UPPER) to compute optimal type
-	pos = pos + 1  // skip 'int'
+	// int and float both require range bounds: base(LOWER to UPPER)
+	if baseToken.kind != TokenKind.int and baseToken.kind != TokenKind.float 'notNumeric'
+		return skipToNextLine(tokens, startPos: startPos)
+	end 'notNumeric'
+
+	let isFloat = baseToken.kind == TokenKind.float
+	pos = pos + 1  // skip 'int' or 'float'
+
 	let parenToken = tokenAt(tokens, pos: pos)
 	if parenToken.kind != TokenKind.leftParen 'noParen'
-		project.typealiases.insert(nameToken.value, value: b"i64")
+		var example = "int(0 to 100)"
+		if isFloat 'floatEx'
+			example = "float(f64.min to f64.max)"
+		end 'floatEx'
+		reportCompileError(project, code: ErrorCode.parserExpectedToken, message: "typealias '{String.from(nameToken.value)}' requires range bounds, e.g. {example}", line: baseToken.line, column: baseToken.column, filePath: FilePath from "")
 		return skipToNextLine(tokens, startPos: startPos)
 	end 'noParen'
 	pos = pos + 1  // skip '('
 
-	// Parse lower bound
 	let lowerBound = parseTypeBound(tokens, pos: pos)
 	pos = lowerBound.nextPos
 
-	// Skip 'to'
 	let toToken = tokenAt(tokens, pos: pos)
 	if toToken.kind == TokenKind.to 'hasTo'
 		pos = pos + 1
 	end 'hasTo'
 
-	// Parse upper bound
 	let upperBound = parseTypeBound(tokens, pos: pos)
 
-	let mlirType = computeOptimalIntType(lower: lowerBound.value, upper: upperBound.value)
-	project.typealiases.insert(nameToken.value, value: mlirType)
+	if isFloat 'registerFloat'
+		project.typealiases.insert(nameToken.value, value: b"f64")
+	end 'registerFloat' else 'registerInt'
+		let mlirType = computeOptimalIntType(lower: lowerBound.value, upper: upperBound.value)
+		project.typealiases.insert(nameToken.value, value: mlirType)
+		project.typealiasRanges.insert(nameToken.value, value: TypealiasRange{lower: lowerBound.value, upper: upperBound.value})
+	end 'registerInt'
+
 	return skipToNextLine(tokens, startPos: startPos)
 end 'parseTopLevelTypealias'
 

@@ -2,6 +2,7 @@ var cachedStdlibModule = MlirModule{functions: MlirFunctionArray{}}
 var stdlibLoaded = false
 var stdlibNextValueId = 0
 var stdlibTypealiases = TypealiasMap{}
+var stdlibTypealiasRanges = TypealiasRangeMap{}
 
 export function findStdlibPath() returns FilePath
 	var dir = Directory.currentPath()
@@ -25,6 +26,9 @@ export function getStdlibModule(project Project) returns MlirModule
 		for(name, baseType) in stdlibTypealiases 'restoreAliases'
 			project.typealiases.insert(name, value: baseType)
 		end 'restoreAliases'
+		for(name, range) in stdlibTypealiasRanges 'restoreRanges'
+			project.typealiasRanges.insert(name, value: range)
+		end 'restoreRanges'
 		return cachedStdlibModule
 	end 'cached'
 
@@ -58,6 +62,7 @@ export function getStdlibModule(project Project) returns MlirModule
 	cachedStdlibModule = allModule
 	stdlibNextValueId = getNextValueId(project)
 	stdlibTypealiases = project.typealiases
+	stdlibTypealiasRanges = project.typealiasRanges
 	stdlibLoaded = true
 
 	return cachedStdlibModule

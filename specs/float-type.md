@@ -102,5 +102,22 @@ end 'main'
 ```
 
 
-Note: Tests for many float parameters (>4) and float parameter preservation across calls are currently disabled due to known codegen bugs with float register allocation. See test fragments for the disabled tests.
+<!-- test: float-return-from-function -->
+```maxon
+typealias Float = float(f64.min to f64.max)
 
+function computePi() returns Float
+	return 3.14
+end 'computePi'
+
+function main() returns ExitCode
+	var x = computePi()
+	var result = trunc(x)
+	return result
+end 'main'
+```
+```exitcode
+3
+```
+
+Note: Tests for many float parameters (>4) and float parameter preservation across calls are currently disabled due to known codegen bugs with float register allocation. See test fragments for the disabled tests.

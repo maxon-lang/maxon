@@ -25,6 +25,8 @@ export union PassKind
 	canonicalize
 	cse
 	dce
+	// Phase 4b: Range Checks (after optimizations, before system lowering)
+	insertRangeChecks
 	// Phase 5: System Resolution
 	convertMaxonToSysAndRuntime
 	lowerABI
@@ -50,38 +52,8 @@ export type PipelineContext
 	export var target Target
 end 'PipelineContext'
 
-// Returns the full 17-pass default pipeline (phases 2-7).
-export function buildDefaultPipeline() returns PassKindArray
-	var passes = PassKindArray{}
-	// Phase 2: Memory Safety
-	passes.push(PassKind.semanticCheck)
-	passes.push(PassKind.deadFunctionElimination)
-	passes.push(PassKind.convertMaxonToArith)
-	passes.push(PassKind.borrowCheck)
-	passes.push(PassKind.injectDrops)
-	// Phase 3: SSA Construction
-	passes.push(PassKind.mem2reg)
-	// Phase 4: Mid-Level Optimization
-	passes.push(PassKind.canonicalize)
-	passes.push(PassKind.cse)
-	passes.push(PassKind.dce)
-	// Phase 5: System Resolution
-	passes.push(PassKind.convertMaxonToSysAndRuntime)
-	passes.push(PassKind.lowerABI)
-	// Phase 6: Generic Machine Lowering
-	passes.push(PassKind.augmentWithRuntime)
-	passes.push(PassKind.convertToMir)
-	// Phase 7: Target Execution
-	passes.push(PassKind.scheduleInstructions)
-	passes.push(PassKind.convertMirToTarget)
-	passes.push(PassKind.allocateRegisters)
-	passes.push(PassKind.insertPrologueEpilogue)
-	return passes
-end 'buildDefaultPipeline'
-
 // Returns the mid-level pipeline (phases 2-5).
-// This covers everything from semantic checks through ABI lowering,
-// but stops before runtime augmentation and target-specific lowering.
+// Shared foundation for both default and mid-only pipelines.
 export function buildMidPipeline() returns PassKindArray
 	var passes = PassKindArray{}
 	// Phase 2: Memory Safety
@@ -96,6 +68,8 @@ export function buildMidPipeline() returns PassKindArray
 	passes.push(PassKind.canonicalize)
 	passes.push(PassKind.cse)
 	passes.push(PassKind.dce)
+	// Phase 4b: Range Checks
+	passes.push(PassKind.insertRangeChecks)
 	// Phase 5: System Resolution
 	passes.push(PassKind.convertMaxonToSysAndRuntime)
 	passes.push(PassKind.lowerABI)
@@ -103,7 +77,6 @@ export function buildMidPipeline() returns PassKindArray
 end 'buildMidPipeline'
 
 // Returns the backend pipeline (phases 6-7).
-// Covers runtime augmentation through final target lowering.
 export function buildBackendPipeline() returns PassKindArray
 	var passes = PassKindArray{}
 	// Phase 6: Generic Machine Lowering
@@ -116,6 +89,13 @@ export function buildBackendPipeline() returns PassKindArray
 	passes.push(PassKind.insertPrologueEpilogue)
 	return passes
 end 'buildBackendPipeline'
+
+// Returns the full pipeline (phases 2-7): mid + backend.
+export function buildDefaultPipeline() returns PassKindArray
+	var passes = buildMidPipeline()
+	passes.append(buildBackendPipeline())
+	return passes
+end 'buildDefaultPipeline'
 
 // Runs each pass in the given array sequentially.
 // After each pass, checks for errors and throws if any exist.
@@ -158,6 +138,9 @@ function dispatchPass(ctx PipelineContext, pass PassKind)
 		cse then ctx.module = eliminateCommonSubexpressions(ctx.module)
 
 		dce then ctx.module = eliminateDeadCode(ctx.module)
+
+		// Phase 4b: Range Checks
+		insertRangeChecks then ctx.module = insertRangeChecks(ctx.module, funcReturnTypes: ctx.project.funcReturnTypes, typealiasRanges: ctx.project.typealiasRanges, nextValueIdRef: ctx.nextValueIdRef)
 
 		// Phase 5: System Resolution
 		convertMaxonToSysAndRuntime then ctx.module = convertMaxonToSysAndRuntime(ctx.module, globalData: ctx.globalData, nextValueIdRef: ctx.nextValueIdRef)
@@ -250,6 +233,7 @@ export function passKindToString(pass PassKind) returns String
 		canonicalize gives "canonicalize"
 		cse gives "cse"
 		dce gives "dce"
+		insertRangeChecks gives "insert-range-checks"
 		convertMaxonToSysAndRuntime gives "convert-maxon-to-sys-and-runtime"
 		lowerABI gives "lower-abi"
 		augmentWithRuntime gives "augment-with-runtime"

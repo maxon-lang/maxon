@@ -22,4 +22,4 @@ Review the changes that have been made in the project to the c# and self hosted 
     - Fix any compiler warnings
 2. Update documentation, including `LANGUAGE_REFERENCE.md` and `STDLIB_REFERENCE.md` and `QUICK_REFERENCE.md` and `BNF_SYNTAX.md` if necessary.
 3. Rebuild and run spec tests if you made any changes to the codebase, and ensure all tests pass.
-4. Write a git commit message
+4. Write a git commit message that summaries the changes in this commit, not what happened in the code review.

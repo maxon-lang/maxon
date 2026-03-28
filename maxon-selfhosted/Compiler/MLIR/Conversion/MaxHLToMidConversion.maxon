@@ -84,9 +84,10 @@ function lowerMaxHLOpToArith(hlOp MaxHLOp, dstBlock MlirBlock)
 		br(target) then dstBlock.ops.push(MlirOp.cf(CfOp.br(target, ValueIdArray{})))
 		call(resultId, callee, argIds) then dstBlock.ops.push(MlirOp.func(FuncOp.call(resultId, callee, argIds)))
 		ret(retValId) then dstBlock.ops.push(MlirOp.func(FuncOp.ret(retValId)))
-		// Print ops are NOT lowered here — they stay as maxhl for Phase 5
+		// Print and panic ops are NOT lowered here — they stay as maxhl for Phase 5
 		printLiteral(data) then dstBlock.ops.push(MlirOp.maxhl(MaxHLOp.printLiteral(data)))
 		printInt(valueId) then dstBlock.ops.push(MlirOp.maxhl(MaxHLOp.printInt(valueId)))
+		panic(message, panicId) then dstBlock.ops.push(MlirOp.maxhl(MaxHLOp.panic(message, panicId)))
 	end 'lower'
 end 'lowerMaxHLOpToArith'
 
@@ -104,7 +105,7 @@ function lowerMaxHLTerminatorToArith(hlOp MaxHLOp) returns MlirOp
 		ret(retValId) gives MlirOp.func(FuncOp.ret(retValId))
 		literal to refEq gives MlirOp.maxhl(hlOp)
 		call gives MlirOp.maxhl(hlOp)
-		printLiteral to printInt gives MlirOp.maxhl(hlOp)
+		printLiteral to panic gives MlirOp.maxhl(hlOp)
 	end 'lower'
 end 'lowerMaxHLTerminatorToArith'
 
@@ -159,6 +160,7 @@ function lowerMaxHLOpToSys(hlOp MaxHLOp, dstBlock MlirBlock, globalData GlobalDa
 	match hlOp 'lower'
 		printLiteral(data) then lowerPrintLiteral(data, dstBlock: dstBlock, globalData: globalData, nextValueIdRef: nextValueIdRef)
 		printInt(valueId) then lowerPrintIntToCall(valueId, dstBlock: dstBlock, nextValueIdRef: nextValueIdRef)
+		panic(message, panicId) then lowerPanicToSys(message, panicId: panicId, dstBlock: dstBlock, globalData: globalData, nextValueIdRef: nextValueIdRef)
 		// All other maxhl ops should have been lowered in Pass A.
 		// If any remain, it's a compiler bug.
 		literal to refEq then panic("convert-maxon-to-sys: unexpected maxhl op survived Pass A")
@@ -190,6 +192,7 @@ function binOpKindToArithOpcode(opKind BinOpKind, isFloat bool) returns ArithBin
 		mod gives ArithBinaryOpcode.remI64
 		bitAnd gives ArithBinaryOpcode.andI64
 		bitOr gives ArithBinaryOpcode.orI64
+		boolOr gives ArithBinaryOpcode.orI1
 		bitXor gives ArithBinaryOpcode.xorI64
 		shl gives ArithBinaryOpcode.shlI64
 		shr gives ArithBinaryOpcode.shrI64
@@ -278,3 +281,31 @@ function lowerPrintIntToCall(valueId ValueId, dstBlock MlirBlock, nextValueIdRef
 	argIds.push(valueId)
 	dstBlock.ops.push(MlirOp.func(FuncOp.call(callResultId, b"__rt_printInt", argIds)))
 end 'lowerPrintIntToCall'
+
+// Lower maxon.panic(message, panicId) to:
+//   sys.globalAddr(addrId, "__panic_msg_N")  // load address of null-terminated panic message
+//   func.call maxon_panic(addrId)            // call runtime panic handler (never returns)
+// Registers the panic message as global data with a null-terminated C-string.
+function lowerPanicToSys(message ByteArray, panicId ValueId, dstBlock MlirBlock, globalData GlobalDataTable, nextValueIdRef ValueIdRef)
+	// Build null-terminated message for global data
+	var nullTermMsg = ByteArray{}
+	nullTermMsg.append(message)
+	nullTermMsg.push(0x0A)  // newline
+	nullTermMsg.push(0)     // null terminator
+
+	// Register in global data as __panic_msg_N
+	var name = b"__panic_msg_"
+	name.append(intToBytes(panicId))
+	addNamedGlobalData(globalData, name: name, data: nullTermMsg)
+
+	// globalAddr -> addrId
+	let addrId = allocValueId(nextValueIdRef)
+	dstBlock.ops.push(MlirOp.sys(SysOp.globalAddr(addrId, name)))
+
+	// call maxon_panic(addrId)
+	let callResultId = allocValueId(nextValueIdRef)
+	var argIds = ValueIdArray{}
+	argIds.push(addrId)
+	dstBlock.ops.push(MlirOp.func(FuncOp.call(callResultId, b"maxon_panic", argIds)))
+end 'lowerPanicToSys'
+

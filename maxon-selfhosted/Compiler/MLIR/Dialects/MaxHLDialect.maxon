@@ -12,6 +12,7 @@ export enum BinOpKind
 	mod = "mod"
 	bitAnd = "bitAnd"
 	bitOr = "bitOr"
+	boolOr = "or"
 	bitXor = "bitXor"
 	shl = "shl"
 	shr = "shr"
@@ -67,6 +68,10 @@ export union MaxHLOp
 	// I/O (bootstrap, will move to runtime dialect)
 	printLiteral(data ByteArray)
 	printInt(valueId ValueId)
+
+	// Range check panic (emitted by parser, lowered to sys.globalAddr + func.call in Phase 5)
+	// panicId is used to generate __panic_msg_N global data label
+	panic(message ByteArray, panicId ValueId)
 end 'MaxHLOp'
 
 export function maxHLOpToString(op MaxHLOp, blocks MlirBlockArray) returns String
@@ -89,6 +94,7 @@ export function maxHLOpToString(op MaxHLOp, blocks MlirBlockArray) returns Strin
 		ret(retValId) gives "maxon.return %{retValId}"
 		printLiteral(data) gives "maxon.print_literal \"{String.from(data)}\""
 		printInt(valueId) gives "maxon.print_int %{valueId}"
+		panic(message, _) gives "maxon.panic \"{String.from(message)}\""
 	end 'print'
 end 'maxHLOpToString'
 

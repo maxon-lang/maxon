@@ -115,6 +115,42 @@ func i64_to_string 2 i64
 
 end
 
+// maxon_panic(msg_ptr): prints null-terminated panic message to stdout and exits with code 1.
+// Scans for the null terminator to compute the length, then calls write_stdout.
+func maxon_panic 1 void
+  block entry:
+    v0 = func param 0 i64
+    memref storeSlot 0 v0
+    v1 = arith constI64 0
+    memref storeSlot 1 v1
+    cf br scan
+
+  block scan:
+    v2 = memref loadSlot 0
+    v3 = memref loadSlot 1
+    v4 = sys loadByte v2 v3
+    v5 = arith constI64 0
+    v6 = arith cmpI64Eq v4 v5
+    cf condBr v6 write scan_next
+
+  block scan_next:
+    v7 = memref loadSlot 1
+    v8 = arith constI64 1
+    v9 = arith addI64 v7 v8
+    memref storeSlot 1 v9
+    cf br scan
+
+  block write:
+    v10 = memref loadSlot 0
+    v11 = memref loadSlot 1
+    v12 = func call write_stdout v10 v11
+    v13 = arith constI64 1
+    sys osExit v13
+    v14 = arith constI64 0
+    func ret v14
+
+end
+
 // __rt_printInt(value): converts to string and prints to stdout.
 func __rt_printInt 1 void
   block entry:

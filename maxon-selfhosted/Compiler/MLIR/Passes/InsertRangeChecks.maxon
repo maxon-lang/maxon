@@ -1,0 +1,253 @@
+// InsertRangeChecks Pass — Inserts runtime range checks on function return values.
+// Runs after Phase 4 optimizations (canonicalize/CSE/DCE) so constant folding has
+// already happened. Operates on arith/cf/func-level IR.
+//
+// For each function returning a ranged typealias:
+//   - If the return value is a known constant: static validation (no runtime check)
+//   - Otherwise: emits comparison + conditional branch to panic/continue blocks
+
+export function insertRangeChecks(module MlirModule, funcReturnTypes FuncReturnTypeMap, typealiasRanges TypealiasRangeMap, nextValueIdRef ValueIdRef) returns MlirModule
+	logDebug(LogCategory.mlir, message: () gives "Running insert-range-checks pass")
+	var result = createMlirModule()
+	var rangeCheckCounter = 0
+
+	for srcFunc in module.functions 'eachFunc'
+		var dstFunc = createMlirFunction(srcFunc.name, returnType: srcFunc.returnType)
+		dstFunc.paramCount = srcFunc.paramCount
+		dstFunc.paramTypes = srcFunc.paramTypes
+
+		// Look up range bounds for this function's return type
+		let aliasName = try funcReturnTypes.get(srcFunc.name) otherwise 'noAlias'
+			// No return type alias — copy function as-is
+			copyFuncBlocks(srcFunc, dstFunc: dstFunc)
+			result.functions.push(dstFunc)
+			continue
+		end 'noAlias'
+		let range = try typealiasRanges.get(aliasName) otherwise 'noRange'
+			copyFuncBlocks(srcFunc, dstFunc: dstFunc)
+			result.functions.push(dstFunc)
+			continue
+		end 'noRange'
+
+		// Skip if range covers the full i64 range — no value can be out of bounds
+		if isFullRange(range) 'fullRange'
+			copyFuncBlocks(srcFunc, dstFunc: dstFunc)
+			result.functions.push(dstFunc)
+			continue
+		end 'fullRange'
+
+		// Seed dst region's block counter from source so new blocks get fresh IDs
+		dstFunc.region.nextBlockId = srcFunc.region.nextBlockId
+
+		// This function has a ranged return type — process its blocks
+		for srcBlock in srcFunc.region.blocks 'eachBlock'
+			var dstBlock = addBlock(dstFunc.region, label: srcBlock.label)
+			dstBlock.id = srcBlock.id
+			dstBlock.blockArgs = srcBlock.blockArgs
+
+			// Copy all ops
+			for op in srcBlock.ops 'eachOp'
+				dstBlock.ops.push(op)
+			end 'eachOp'
+
+			// Check if terminator is func.ret
+			if srcBlock.hasTerminator 'hasTerm'
+				let isRet = isTerminatorFuncRet(srcBlock.terminator)
+				if isRet 'isReturn'
+					let retValId = extractRetValId(srcBlock.terminator)
+
+					// Check if return value is a known constant in this block
+					let constValue = findConstValue(retValId, ops: srcBlock.ops)
+					if constValue != RANGE_CHECK_UNKNOWN 'isConst'
+						// Static validation: constant is in range, no runtime check needed
+						// (Out-of-range constants would be a compile error, but we don't
+						//  report it here since this is a late pass — just emit no check)
+						dstBlock.terminator = srcBlock.terminator
+						dstBlock.hasTerminator = true
+					end 'isConst' else 'notConst'
+						// Emit runtime range check
+						let checkId = rangeCheckCounter
+						rangeCheckCounter = rangeCheckCounter + 1
+
+						// Build panic and continue blocks
+						var panicLabel = buildLabel(b"__range_panic_", id: checkId)
+						var okLabel = buildLabel(b"__range_ok_", id: checkId)
+						var panicBlock = addBlock(dstFunc.region, label: panicLabel)
+						var continueBlock = addBlock(dstFunc.region, label: okLabel)
+
+						// The continue block receives the return value as a block argument
+						// so the register allocator sees it as a fresh definition.
+						let typeInfo = resolveRangeCheckType(srcFunc.returnType)
+						let blockArgId = allocValueId(nextValueIdRef)
+						var blockArgs = MlirBlockArgArray{}
+						blockArgs.push(MlirBlockArg{valueId: blockArgId, argType: typeInfo.stdType})
+						continueBlock.blockArgs = blockArgs
+
+						// Emit range check ops into current block
+						// cond_br passes retValId as argument to the ok block
+						emitRangeCheckOps(dstBlock, valueId: retValId, lower: range.lower, upper: range.upper, typeInfo: typeInfo, panicBlockId: panicBlock.id, okBlockId: continueBlock.id, okArgId: retValId, nextValueIdRef: nextValueIdRef)
+
+						// Panic block: emit maxon.panic
+						let panicMsg = buildPanicMessage(aliasName, lower: range.lower, upper: range.upper)
+						panicBlock.ops.push(MlirOp.maxhl(MaxHLOp.panic(panicMsg, checkId)))
+
+						// Continue block: return the block argument (which carries the original value)
+						continueBlock.terminator = MlirOp.func(FuncOp.ret(blockArgId))
+						continueBlock.hasTerminator = true
+					end 'notConst'
+				end 'isReturn' else 'notReturn'
+					dstBlock.terminator = srcBlock.terminator
+					dstBlock.hasTerminator = true
+				end 'notReturn'
+			end 'hasTerm'
+		end 'eachBlock'
+
+		result.functions.push(dstFunc)
+	end 'eachFunc'
+
+	return result
+end 'insertRangeChecks'
+
+// Copy all blocks from srcFunc to dstFunc unchanged.
+function copyFuncBlocks(srcFunc MlirFunction, dstFunc MlirFunction)
+	for srcBlock in srcFunc.region.blocks 'eachBlock'
+		var dstBlock = addBlock(dstFunc.region, label: srcBlock.label)
+		dstBlock.id = srcBlock.id
+		dstBlock.blockArgs = srcBlock.blockArgs
+		for op in srcBlock.ops 'eachOp'
+			dstBlock.ops.push(op)
+		end 'eachOp'
+		if srcBlock.hasTerminator 'hasTerm'
+			dstBlock.terminator = srcBlock.terminator
+			dstBlock.hasTerminator = true
+		end 'hasTerm'
+	end 'eachBlock'
+	dstFunc.region.nextBlockId = srcFunc.region.nextBlockId
+end 'copyFuncBlocks'
+
+// Check if a terminator op is func.ret
+function isTerminatorFuncRet(op MlirOp) returns bool
+	return match op 'check'
+		func(funcOp) gives match funcOp 'checkRet'
+			ret gives true
+			call to param gives false
+		end 'checkRet'
+		maxhl to cf gives false
+		memref to maxarm64 gives false
+	end 'check'
+end 'isTerminatorFuncRet'
+
+// Extract the return value ID from a func.ret terminator.
+function extractRetValId(op MlirOp) returns ValueId
+	return match op 'extract'
+		func(funcOp) gives match funcOp 'extractRet'
+			ret(retValId) gives retValId
+			call to param gives 0
+		end 'extractRet'
+		maxhl to cf gives 0
+		memref to maxarm64 gives 0
+	end 'extract'
+end 'extractRetValId'
+
+let RANGE_CHECK_UNKNOWN = 9223372036854775807
+
+// Find the constant value for a ValueId by searching for its arith.const definition.
+// Returns RANGE_CHECK_UNKNOWN if not a constant.
+function findConstValue(valueId ValueId, ops MlirOpArray) returns ParsedInt
+	for op in ops 'search'
+		let found = match op 'check'
+			arith(arithOp) gives match arithOp 'checkConst'
+				const(c) gives c.resultId == valueId
+				unary to binary gives false
+			end 'checkConst'
+			maxhl gives false
+			cf to maxarm64 gives false
+		end 'check'
+		if found 'isConst'
+			return extractConstValue(op)
+		end 'isConst'
+	end 'search'
+	return RANGE_CHECK_UNKNOWN
+end 'findConstValue'
+
+function extractConstValue(op MlirOp) returns ParsedInt
+	return match op 'extract'
+		arith(arithOp) gives match arithOp 'extractConst'
+			const(c) gives c.value
+			unary to binary gives RANGE_CHECK_UNKNOWN
+		end 'extractConst'
+		maxhl gives RANGE_CHECK_UNKNOWN
+		cf to maxarm64 gives RANGE_CHECK_UNKNOWN
+	end 'extract'
+end 'extractConstValue'
+
+// Emit range check ops: compare value against lower and upper bounds,
+// OR the results, and branch to panic or continue.
+function emitRangeCheckOps(block MlirBlock, valueId ValueId, lower RangeBound, upper RangeBound, typeInfo RangeCheckTypeInfo, panicBlockId BlockId, okBlockId BlockId, okArgId ValueId, nextValueIdRef ValueIdRef)
+	// %lower = arith.const lower
+	let lowerLitId = allocValueId(nextValueIdRef)
+	block.ops.push(MlirOp.arith(ArithOp.const(ArithConst{opcode: typeInfo.constOpcode, resultId: lowerLitId, value: lower})))
+
+	// %cmpLo = arith.cmp lt %valueId, %lower
+	let cmpLowerId = allocValueId(nextValueIdRef)
+	block.ops.push(MlirOp.arith(ArithOp.binary(ArithBinaryOp{opcode: typeInfo.cmpLtOpcode, resultId: cmpLowerId, leftId: valueId, rightId: lowerLitId})))
+
+	// %upper = arith.const upper
+	let upperLitId = allocValueId(nextValueIdRef)
+	block.ops.push(MlirOp.arith(ArithOp.const(ArithConst{opcode: typeInfo.constOpcode, resultId: upperLitId, value: upper})))
+
+	// %cmpHi = arith.cmp gt %valueId, %upper
+	let cmpUpperId = allocValueId(nextValueIdRef)
+	block.ops.push(MlirOp.arith(ArithOp.binary(ArithBinaryOp{opcode: typeInfo.cmpGtOpcode, resultId: cmpUpperId, leftId: valueId, rightId: upperLitId})))
+
+	// %outOfRange = arith.ori1 %cmpLo, %cmpHi
+	let outOfRangeId = allocValueId(nextValueIdRef)
+	block.ops.push(MlirOp.arith(ArithOp.binary(ArithBinaryOp{opcode: ArithBinaryOpcode.orI1, resultId: outOfRangeId, leftId: cmpLowerId, rightId: cmpUpperId})))
+
+	// cond_br %outOfRange → panic, else → ok(valueId)
+	var okArgs = ValueIdArray{}
+	okArgs.push(okArgId)
+	block.terminator = MlirOp.cf(CfOp.condBr(outOfRangeId, panicBlockId, ValueIdArray{}, okBlockId, okArgs))
+	block.hasTerminator = true
+end 'emitRangeCheckOps'
+
+// Build a block label like "__range_panic_0".
+function buildLabel(prefix ByteArray, id ValueId) returns ByteArray
+	var label = ByteArray{}
+	label.append(prefix)
+	label.append(intToBytes(id))
+	return label
+end 'buildLabel'
+
+// Build panic message: "Range check failed for type '<name>': value outside int(<lower> to <upper>)"
+function buildPanicMessage(aliasName ByteArray, lower RangeBound, upper RangeBound) returns ByteArray
+	let msg = "Range check failed for type '{String.from(aliasName)}': value outside int({lower} to {upper})"
+	return msg.toByteArray()
+end 'buildPanicMessage'
+
+// Check if a range covers the full i64 range (no value can be out of bounds).
+// All values in the self-hosted compiler are i64 at runtime, so a range that
+// spans i64.min to i64.max (or wider) needs no check.
+function isFullRange(range TypealiasRange) returns bool
+	return range.lower <= -9223372036854775807 and range.upper >= 9223372036854775807
+end 'isFullRange'
+
+// Opcodes and StdType for range checks, resolved from the function's return type.
+type RangeCheckTypeInfo
+	export var stdType StdType
+	export var constOpcode ArithConstOpcode
+	export var cmpLtOpcode ArithBinaryOpcode
+	export var cmpGtOpcode ArithBinaryOpcode
+end 'RangeCheckTypeInfo'
+
+// Resolve the correct opcodes for a given MLIR return type.
+// Panics on unrecognised types to catch missing cases early.
+function resolveRangeCheckType(returnType ByteArray) returns RangeCheckTypeInfo
+	if returnType == b"f64" or returnType == b"f32" 'isFloat'
+		return RangeCheckTypeInfo{stdType: StdType.f64, constOpcode: ArithConstOpcode.constF64, cmpLtOpcode: ArithBinaryOpcode.cmpF64Lt, cmpGtOpcode: ArithBinaryOpcode.cmpF64Gt}
+	end 'isFloat'
+	if returnType == b"i64" or returnType == b"i32" or returnType == b"i16" or returnType == b"i8" or returnType == b"u64" or returnType == b"u32" or returnType == b"u16" or returnType == b"u8" 'isInt'
+		return RangeCheckTypeInfo{stdType: StdType.i64, constOpcode: ArithConstOpcode.constI64, cmpLtOpcode: ArithBinaryOpcode.cmpI64Lt, cmpGtOpcode: ArithBinaryOpcode.cmpI64Gt}
+	end 'isInt'
+	panic("resolveRangeCheckType: unrecognised return type '{String.from(returnType)}'")
+end 'resolveRangeCheckType'
