@@ -71,6 +71,7 @@ enum DfaState
 	enterDigit
 	enterAlpha
 	enterComment
+	enterBlockComment
 	slash
 	skipOther
 	COUNT
@@ -89,6 +90,7 @@ enum Action
 	enterNumber
 	enterIdent
 	enterComment
+	enterBlockComment
 end 'Action'
 
 // --- Token kind enum ---
@@ -229,7 +231,7 @@ let charClassTable = [
 	CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other
 ]
 
-// transitionTable: 32 states x 25 char classes = 800 entries
+// transitionTable: 33 states x 25 char classes = 825 entries
 // Index as: state * CharClass.COUNT + charClass
 // Columns: other space tab  cr   lf   (    )    {    }    =    !    <    >    +    -    *    :    /    '    "    \    .    0-9  a-z  eof
 let transitionTable = [
@@ -243,9 +245,10 @@ let transitionTable = [
 	DfaState.lt, DfaState.lt, DfaState.lt, DfaState.lt, DfaState.lt, DfaState.lt, DfaState.lt, DfaState.lt, DfaState.lt, DfaState.ltEq, DfaState.lt, DfaState.lt, DfaState.lt, DfaState.lt, DfaState.lt, DfaState.lt, DfaState.lt, DfaState.lt, DfaState.lt, DfaState.lt, DfaState.lt, DfaState.lt, DfaState.lt, DfaState.lt, DfaState.lt,
 	// sawGt: '>' seen, looking for '='
 	DfaState.gt, DfaState.gt, DfaState.gt, DfaState.gt, DfaState.gt, DfaState.gt, DfaState.gt, DfaState.gt, DfaState.gt, DfaState.gtEq, DfaState.gt, DfaState.gt, DfaState.gt, DfaState.gt, DfaState.gt, DfaState.gt, DfaState.gt, DfaState.gt, DfaState.gt, DfaState.gt, DfaState.gt, DfaState.gt, DfaState.gt, DfaState.gt, DfaState.gt,
-	// sawSlash: '/' seen, looking for '/'
-	DfaState.slash, DfaState.slash, DfaState.slash, DfaState.slash, DfaState.slash, DfaState.slash, DfaState.slash, DfaState.slash, DfaState.slash, DfaState.slash, DfaState.slash, DfaState.slash, DfaState.slash, DfaState.slash, DfaState.slash, DfaState.slash, DfaState.slash, DfaState.enterComment, DfaState.slash, DfaState.slash, DfaState.slash, DfaState.slash, DfaState.slash, DfaState.slash, DfaState.slash,
-	// Terminal states (rows 6-31) — never transitioned from
+	// sawSlash: '/' seen, looking for '/' or '*'
+	DfaState.slash, DfaState.slash, DfaState.slash, DfaState.slash, DfaState.slash, DfaState.slash, DfaState.slash, DfaState.slash, DfaState.slash, DfaState.slash, DfaState.slash, DfaState.slash, DfaState.slash, DfaState.slash, DfaState.slash, DfaState.enterBlockComment, DfaState.slash, DfaState.enterComment, DfaState.slash, DfaState.slash, DfaState.slash, DfaState.slash, DfaState.slash, DfaState.slash, DfaState.slash,
+	// Terminal states (rows 6-32) — never transitioned from
+	DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther,
 	DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther,
 	DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther,
 	DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther,
@@ -262,15 +265,15 @@ let transitionTable = [
 	DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther
 ]
 
-// actionTable: 32 entries indexed by state → action to perform
+// actionTable: 33 entries indexed by state → action to perform
 //              start           sawEq          sawBang        sawLt          sawGt          sawSlash       skipWs         skipCr
 let actionTable = [Action.skip, Action.skip, Action.skip, Action.skip, Action.skip, Action.skip, Action.skip, Action.skipCr,
 	//              newline         lParen         rParen         lBrace         rBrace         plus           minus          star           colon
 	Action.newline, Action.emit, Action.emit, Action.emit, Action.emit, Action.emit, Action.emit, Action.emit, Action.emit,
 	//              eq              eqEq           bangEq         lt             ltEq           gt             gtEq
 	Action.emit, Action.emit2, Action.emit2, Action.emit, Action.emit2, Action.emit, Action.emit2,
-	//              skipBang        enterSquote      enterDquote      enterDigit      enterAlpha      enterComment   slash          skipOther
-	Action.skip, Action.enterStrSq, Action.enterStrDq, Action.enterNumber, Action.enterIdent, Action.enterComment, Action.emit, Action.skip
+	//              skipBang        enterSquote      enterDquote      enterDigit       enterAlpha       enterComment        enterBlockComment  slash          skipOther
+	Action.skip, Action.enterStrSq, Action.enterStrDq, Action.enterNumber, Action.enterIdent, Action.enterComment, Action.enterBlockComment, Action.emit, Action.skip
 ]
 
 // Single dispatch point for all fixed-text tokens (operators, punctuation).
@@ -294,8 +297,8 @@ function emitFixedToken(stateIndex DfaStateIndex, tokens TokenArray, line LineNu
 		21 then tokens.push(Token{kind: TokenKind.lessEquals, value: b"<=", line: line, column: column})
 		22 then tokens.push(Token{kind: TokenKind.greaterThan, value: b">", line: line, column: column})
 		23 then tokens.push(Token{kind: TokenKind.greaterEquals, value: b">=", line: line, column: column})
-		30 then tokens.push(Token{kind: TokenKind.slash, value: b"/", line: line, column: column})
-		default then break
+		31 then tokens.push(Token{kind: TokenKind.slash, value: b"/", line: line, column: column})
+		default panic("emitFixedToken: unhandled state index {stateIndex}")
 	end 'dispatch'
 end 'emitFixedToken'
 
@@ -360,6 +363,11 @@ type Lexer
 		advance()
 		scanComment()
 	end 'handleEnterComment'
+
+	function handleEnterBlockComment(startLine LineNumber, startCol ColumnNumber)
+		advance()
+		scanBlockComment(startLine: startLine, startCol: startCol)
+	end 'handleEnterBlockComment'
 
 	// --- Sub-scanners ---
 
@@ -554,6 +562,33 @@ type Lexer
 		end 'skipComment'
 	end 'scanComment'
 
+	// Both '/' and '*' already consumed. Scans until '*/' is found.
+	// Tracks line/column across newlines within the comment.
+	function scanBlockComment(startLine LineNumber, startCol ColumnNumber)
+		let len = source.count()
+		while pos < len 'skipBlockComment'
+			let cc = try source.get(pos) otherwise 0
+			if cc == Ascii.star 'checkEnd'
+				if pos + 1 < len 'hasNext'
+					let next = try source.get(pos + 1) otherwise 0
+					if next == Ascii.slash 'foundEnd'
+						pos = pos + 2
+						column = column + 2
+						return
+					end 'foundEnd'
+				end 'hasNext'
+			end 'checkEnd'
+			if cc == Ascii.lf 'newlineInBlock'
+				line = line + 1
+				column = 1
+				pos = pos + 1
+			end 'newlineInBlock' else 'advanceInBlock'
+				advance()
+			end 'advanceInBlock'
+		end 'skipBlockComment'
+		logError(LogCategory.lexer, message: () gives "error E1002: {startLine}:{startCol}: unterminated block comment")
+	end 'scanBlockComment'
+
 	// --- Main DFA loop ---
 
 	function run() returns TokenArray
@@ -603,6 +638,7 @@ type Lexer
 				enterNumber then handleEnterNumber(startLine: startLine, startCol: startCol)
 				enterIdent then handleEnterIdent(startLine: startLine, startCol: startCol)
 				enterComment then handleEnterComment()
+				enterBlockComment then handleEnterBlockComment(startLine: startLine, startCol: startCol)
 				default panic("Lexer: unhandled action {action}")
 			end 'dispatch'
 			continue
@@ -715,17 +751,19 @@ end 'classifyIdentifier'
 // ASCII byte enum
 enum Ascii
 	lf = 10
-	quote = 39
 	dquote = 34
+	quote = 39
+	star = 42
 	plus = 43
 	minus = 45
 	dot = 46
+	slash = 47
 	zero = 48
-	backslash = 92
 	upperB = 66
 	upperE = 69
 	upperO = 79
 	upperX = 88
+	backslash = 92
 	underscore = 95
 	lowerB = 98
 	lowerE = 101

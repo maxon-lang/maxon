@@ -121,9 +121,15 @@ Nested `#if` blocks are supported.
 ## Lexical Elements
 
 ### Comments
-Single-line comments only:
 ```maxon
-// This is a comment
+// Line comment
+
+/* Block comment */
+
+/*
+  Multi-line
+  block comment
+*/
 ```
 
 ### Identifiers

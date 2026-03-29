@@ -12,71 +12,25 @@ end 'main'
 ExitCode: 5
 ---
 module {
-  func @write_stderr(ptr: i64, ptr: i64) {
-  entry:
-    x86.prologue stack_size=64
-    x86.mov [rbp-8], rcx
-    x86.mov [rbp-16], rdx
-    x86.mov rax, 4294967284
-    x86.mov [rbp-24], rax
-    x86.call_import slot_1
-    x86.mov rax, 0
-    x86.mov [rbp-40], rax
-    x86.lea rax, [rbp-40]
-    x86.mov rax, 0
-    x86.mov [rbp-56], rax
-    x86.call_import slot_2
-    x86.mov rax, 0
-    x86.epilogue
-    x86.ret
-  }
-  func @write_cstr_stderr(ptr: i64) {
-  entry:
-    x86.prologue stack_size=64
-    x86.mov [rbp-8], rcx
-    x86.xor rax, rax
-    x86.mov [rbp-16], rax
-  scan:
-    x86.mov rax, [rbp-16]
-    x86.mov rcx, [rbp-8]
-    x86.mov [rbp-24], rcx
-    x86.mov [rbp-32], rax
-    x86.movzx rax, byte ptr [rax+0]
-    x86.mov rdx, [rbp-40]
-    x86.test rdx, rdx
-    x86.sete rbx
-    x86.jne scan_next
-    x86.mov [rbp-48], rbx
-    x86.jmp write
-  scan_next:
-    x86.mov rax, [rbp-16]
-    x86.add rax, 1
-    x86.mov [rbp-16], rax
-    x86.jmp scan
-  write:
-    x86.mov rax, [rbp-16]
-    x86.mov rcx, [rbp-8]
-    x86.mov rdx, rax
-    x86.call write_stderr
-    x86.mov [rbp-56], rax
-    x86.mov rax, 0
-    x86.epilogue
-    x86.ret
-  }
-  func @range-check-panic.check(ptr: i64) -> u8 {
+  func @range-check-panic.check(x: i64) -> u8 {
   entry:
     x86.prologue stack_size=16
-    x86.test rcx, rcx
+    x86.xor rax, rax
+    x86.cmp rcx, rax
     x86.setl rax
-    x86.cmp rcx, 10
+    x86.movzx rax, raxb
+    x86.mov rdx, 10
+    x86.cmp rcx, rdx
     x86.setg rdx
+    x86.movzx rdx, rdxb
     x86.or rax, rdx
-    x86.je __range_ok_1
-  __range_panic_1:
-    x86.lea rax, [rip+__panic_msg_1]
+    x86.test rax, rax
+    x86.je range-check-panic.check.__range_ok_0
+  __range_panic_0:
+    x86.lea_symdata rax, [__panic_msg_0]
     x86.mov rcx, rax
     x86.call maxon_panic
-  __range_ok_1:
+  __range_ok_0:
     x86.mov rax, rcx
     x86.epilogue
     x86.ret
@@ -86,18 +40,22 @@ module {
     x86.prologue stack_size=16
     x86.mov rcx, 5
     x86.call range-check-panic.check
-    x86.test rax, rax
+    x86.xor rcx, rcx
+    x86.cmp rax, rcx
     x86.setl rcx
+    x86.movzx rcx, rcxb
     x86.mov rdx, 4294967295
     x86.cmp rax, rdx
     x86.setg rdx
+    x86.movzx rdx, rdxb
     x86.or rcx, rdx
-    x86.je __range_ok_2
-  __range_panic_2:
-    x86.lea rax, [rip+__panic_msg_2]
+    x86.test rcx, rcx
+    x86.je main.__range_ok_0
+  __range_panic_0:
+    x86.lea_symdata rax, [__panic_msg_1]
     x86.mov rcx, rax
     x86.call maxon_panic
-  __range_ok_2:
+  __range_ok_0:
     x86.epilogue
     x86.ret
   }

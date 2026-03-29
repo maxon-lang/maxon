@@ -106,7 +106,9 @@ LABEL         = "'" IDENTIFIER "'"
 ### 1.7 Comments
 
 ```
-comment       = '//' { <any character except newline> } NEWLINE
+comment       = line_comment | block_comment
+line_comment  = '//' { <any character except newline> } NEWLINE
+block_comment = '/*' { <any character> } '*/'
 doc_comment   = '///' { <any character except newline> } NEWLINE
 ```
 

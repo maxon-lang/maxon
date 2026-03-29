@@ -374,6 +374,23 @@ public class Lexer(string source) {
         while (!IsAtEnd() && Current() != '\n') Advance();
         return NextToken(); // Return next actual token
       }
+      if (Peek(1) == '*') {
+        Advance(); Advance(); // Skip /*
+        while (!IsAtEnd()) {
+          if (Current() == '*' && Peek(1) == '/') {
+            Advance(); Advance(); // Skip */
+            return NextToken();
+          }
+          if (Current() == '\n') {
+            Advance();
+            _line++;
+            _column = 1;
+          } else {
+            Advance();
+          }
+        }
+        return NextToken();
+      }
       Advance();
       return new Token(TokenType.Slash, "/", startLine, startColumn);
     }
