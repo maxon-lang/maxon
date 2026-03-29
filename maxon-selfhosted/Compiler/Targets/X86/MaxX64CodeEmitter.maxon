@@ -2,8 +2,6 @@
 // Block-based emitter: walks MlirModule -> functions -> blocks -> ops.
 // OS-specific stubs are parameterized by OsDescriptor.
 
-typealias CodeOffsetArray = Array with CodeOffset
-
 // Block jump fixup: records where a jump instruction needs its target patched.
 type BlockJumpFixup
 	export var codeOffset CodeOffset
@@ -1008,6 +1006,10 @@ export function emitX86(module MlirModule, target Target, globalData GlobalDataT
 	var relocations = RelocationArray{}
 	var callFixups = CallFixupArray{}
 
+	// Register panic string constants before emitting functions
+	// (globalAddr ops look up data during emission via data islands)
+	registerPanicStrings(globalData)
+
 	// Function label tables for inter-function call resolution
 	var funcLabelNames = ByteArrayArray{}
 	var funcLabelOffsets = CodeOffsetArray{}
@@ -1047,6 +1049,12 @@ export function emitX86(module MlirModule, target Target, globalData GlobalDataT
 		// Resolve block jump fixups for this function
 		resolveBlockFixups(code, blockOffsets: blockOffsets, blockFixups: blockFixups)
 	end 'eachFunc'
+
+	// Emit symbol table into code stream as a labeled data block.
+	// Record the label AFTER building the table so __symtable itself isn't included as a function entry.
+	let symtableOffset = code.count()
+	emitSymbolTable(code, labelNames: funcLabelNames, funcLabelOffsets: funcLabelOffsets)
+	recordLabel(funcLabelNames, labelOffsets: funcLabelOffsets, name: b"__symtable", offset: symtableOffset)
 
 	// Resolve inter-function call fixups
 	resolveCallFixups(code, labelNames: funcLabelNames, labelOffsets: funcLabelOffsets, callFixups: callFixups)

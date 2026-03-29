@@ -174,8 +174,9 @@ private record SourceComment(string Text, bool WholeLine);
       }
 
       // 'end label' closes a block — decrement indent and pop stack.
-      // Only applies when 'end' is followed by a CharacterLiteral (not a bare enum case).
-      if (tok.Type == TokenType.End) {
+      // Only applies when 'end' is at line start and followed by a CharacterLiteral (not a bare enum case).
+      // Mid-line 'end' (e.g. TokenKind.end) is a value reference, not a block closer.
+      if (tok.Type == TokenType.End && atLineStart) {
         int next = i + 1;
         while (next < tokens.Count && tokens[next].Type == TokenType.Newline) next++;
         bool nextIsLabel = next == i + 1 && next < tokens.Count && tokens[next].Type == TokenType.CharacterLiteral;

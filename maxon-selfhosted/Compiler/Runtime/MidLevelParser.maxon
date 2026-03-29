@@ -80,12 +80,17 @@ enum SysOpTag
 	stackAddr
 	osExit
 	osWrite
+	osWriteErr
 	loadByte
 	storeByte
 	memcpy
+	loadFramePtr
+	loadIndirect
+	funcAddr
+	globalAddr
 end 'SysOpTag'
 
-typealias SysTokenAdvance = int(1 to 4)
+typealias SysTokenAdvance = int(0 to 4)
 
 function midMakeSysStackAddr(tokens TokenArray, pos MidTokenIndex, resultId ValueId) returns(MlirOp, SysTokenAdvance)
 	let slotId = midParseUnsignedInt(midTokenAt(tokens, pos: pos).value)
@@ -122,6 +127,32 @@ function midMakeSysMemcpy(tokens TokenArray, pos MidTokenIndex, state MidFuncSta
 	let lenId = lookupValueId(state, name: midTokenAt(tokens, pos: pos + 2).value)
 	return(MlirOp.sys(SysOp.memcpy(dstId, srcId, lenId)), 3)
 end 'midMakeSysMemcpy'
+
+function midMakeSysOsWriteErr(tokens TokenArray, pos MidTokenIndex, state MidFuncState) returns(MlirOp, SysTokenAdvance)
+	let ptrId = lookupValueId(state, name: midTokenAt(tokens, pos: pos).value)
+	let lenId = lookupValueId(state, name: midTokenAt(tokens, pos: pos + 1).value)
+	return(MlirOp.sys(SysOp.osWriteErr(ptrId, lenId)), 2)
+end 'midMakeSysOsWriteErr'
+
+function midMakeSysLoadFramePtr(resultId ValueId) returns(MlirOp, SysTokenAdvance)
+	return(MlirOp.sys(SysOp.loadFramePtr(resultId)), 0)
+end 'midMakeSysLoadFramePtr'
+
+function midMakeSysLoadIndirect(tokens TokenArray, pos MidTokenIndex, state MidFuncState, resultId ValueId) returns(MlirOp, SysTokenAdvance)
+	let addrId = lookupValueId(state, name: midTokenAt(tokens, pos: pos).value)
+	let offset = midParseUnsignedInt(midTokenAt(tokens, pos: pos + 1).value)
+	return(MlirOp.sys(SysOp.loadIndirect(resultId, addrId, offset)), 2)
+end 'midMakeSysLoadIndirect'
+
+function midMakeSysFuncAddr(tokens TokenArray, pos MidTokenIndex, resultId ValueId) returns(MlirOp, SysTokenAdvance)
+	let name = midTokenAt(tokens, pos: pos).value
+	return(MlirOp.sys(SysOp.funcAddr(resultId, name)), 1)
+end 'midMakeSysFuncAddr'
+
+function midMakeSysGlobalAddr(tokens TokenArray, pos MidTokenIndex, resultId ValueId) returns(MlirOp, SysTokenAdvance)
+	let name = midTokenAt(tokens, pos: pos).value
+	return(MlirOp.sys(SysOp.globalAddr(resultId, name)), 1)
+end 'midMakeSysGlobalAddr'
 
 // --- Token helpers ---
 
@@ -536,9 +567,14 @@ function midParseSysOp(tokens TokenArray, startPos MidTokenIndex, block MlirBloc
 		stackAddr gives midMakeSysStackAddr(tokens, pos: pos, resultId: resultId)
 		osExit gives midMakeSysOsExit(tokens, pos: pos, state: state)
 		osWrite gives midMakeSysOsWrite(tokens, pos: pos, state: state)
+		osWriteErr gives midMakeSysOsWriteErr(tokens, pos: pos, state: state)
 		loadByte gives midMakeSysLoadByte(tokens, pos: pos, state: state, resultId: resultId)
 		storeByte gives midMakeSysStoreByte(tokens, pos: pos, state: state)
 		memcpy gives midMakeSysMemcpy(tokens, pos: pos, state: state)
+		loadFramePtr gives midMakeSysLoadFramePtr(resultId: resultId)
+		loadIndirect gives midMakeSysLoadIndirect(tokens, pos: pos, state: state, resultId: resultId)
+		funcAddr gives midMakeSysFuncAddr(tokens, pos: pos, resultId: resultId)
+		globalAddr gives midMakeSysGlobalAddr(tokens, pos: pos, resultId: resultId)
 	end 'dispatch'
 	block.ops.push(op)
 	return pos + advance

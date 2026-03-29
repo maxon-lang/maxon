@@ -21,6 +21,16 @@ func write_stdout 2 void
     func ret v2
 end
 
+// write_stderr(ptr len): writes len bytes at ptr to stderr.
+func write_stderr 2 void
+  block entry:
+    v0 = func param 0 i64
+    v1 = func param 1 i64
+    sys osWriteErr v0 v1
+    v2 = arith constI64 0
+    func ret v2
+end
+
 // i64_to_string(value buffer_ptr): converts integer to decimal string in buffer.
 // Returns number of bytes written.
 func i64_to_string 2 i64
@@ -115,9 +125,8 @@ func i64_to_string 2 i64
 
 end
 
-// maxon_panic(msg_ptr): prints null-terminated panic message to stdout and exits with code 1.
-// Scans for the null terminator to compute the length, then calls write_stdout.
-func maxon_panic 1 void
+// write_cstr_stderr(ptr): scans for null terminator, then writes to stderr.
+func write_cstr_stderr 1 void
   block entry:
     v0 = func param 0 i64
     memref storeSlot 0 v0
@@ -143,11 +152,227 @@ func maxon_panic 1 void
   block write:
     v10 = memref loadSlot 0
     v11 = memref loadSlot 1
-    v12 = func call write_stdout v10 v11
-    v13 = arith constI64 1
-    sys osExit v13
-    v14 = arith constI64 0
-    func ret v14
+    v12 = func call write_stderr v10 v11
+    v13 = arith constI64 0
+    func ret v13
+
+end
+
+// maxon_panic(msg_ptr): prints panic message + stack trace to stderr, then exits.
+// Walks the RBP/X29 chain to print up to 32 stack frames.
+//
+// Slot usage:
+//   slot 0 = msg_ptr (arg)
+//   slot 1 = text_base (_start address)
+//   slot 2 = symtable_ptr
+//   slot 3 = frame_ptr (current frame being walked)
+//   slot 4 = frame_counter
+func maxon_panic 1 void
+  block entry:
+    v0 = func param 0 i64
+    memref storeSlot 0 v0
+
+    // Print panic message to stderr
+    v1 = func call write_cstr_stderr v0
+
+    // Print "Stack trace:\n"
+    v2 = sys globalAddr __panic_stacktrace
+    v3 = func call write_cstr_stderr v2
+
+    // Get text_base and symtable for frame lookup
+    v4 = sys funcAddr _start
+    memref storeSlot 1 v4
+    v5 = sys funcAddr __symtable
+    memref storeSlot 2 v5
+
+    // Walk the frame chain starting from our caller
+    v6 = sys loadFramePtr
+    memref storeSlot 3 v6
+
+    // frame_counter = 32
+    v13 = arith constI64 32
+    memref storeSlot 4 v13
+    cf br walk_loop
+
+  block walk_loop:
+    // Check frame counter
+    v14 = memref loadSlot 4
+    v15 = arith constI64 0
+    v16 = arith cmpI64Eq v14 v15
+    cf condBr v16 walk_done check_frame_ptr
+
+  block check_frame_ptr:
+    // Decrement counter
+    v17 = memref loadSlot 4
+    v18 = arith constI64 1
+    v19 = arith subI64 v17 v18
+    memref storeSlot 4 v19
+
+    // Load current frame_ptr
+    v20 = memref loadSlot 3
+    v21 = arith constI64 0
+    v22 = arith cmpI64Eq v20 v21
+    cf condBr v22 walk_done get_return_addr
+
+  block get_return_addr:
+    // Get return address: [frame_ptr + 8]
+    v23 = memref loadSlot 3
+    v24 = sys loadIndirect v23 8
+    memref storeSlot 6 v24
+    v25 = arith constI64 0
+    v26 = arith cmpI64Eq v24 v25
+    cf condBr v26 walk_done compute_offset
+
+  block compute_offset:
+    // Compute text_offset = return_addr - text_base
+    v52 = memref loadSlot 6
+    v27 = memref loadSlot 1
+    v28 = arith subI64 v52 v27
+    memref storeSlot 5 v28
+
+    // Check if outside .text (negative or beyond code end)
+    v29 = arith constI64 0
+    v30 = arith cmpI64Lt v28 v29
+    cf condBr v30 walk_done check_upper_bound
+
+  block check_upper_bound:
+    v53 = memref loadSlot 5
+    v54 = memref loadSlot 2
+    v55 = memref loadSlot 1
+    v56 = arith subI64 v54 v55
+    v57 = arith cmpI64Lt v53 v56
+    cf condBr v57 print_frame walk_done
+
+  block print_frame:
+    // Print this frame
+    v51 = memref loadSlot 5
+    v31 = memref loadSlot 2
+    v32 = func call maxon_panic_print_frame v51 v31
+
+    // Advance frame_ptr to next frame: [frame_ptr] = prev frame pointer
+    v33 = memref loadSlot 3
+    v34 = sys loadIndirect v33 0
+    memref storeSlot 3 v34
+    cf br walk_loop
+
+  block walk_done:
+    v35 = arith constI64 1
+    sys osExit v35
+    v36 = arith constI64 0
+    func ret v36
+
+end
+
+// maxon_panic_print_frame(text_offset, symtable_ptr):
+// Looks up text_offset in the symbol table and prints "  in <funcName>\n".
+//
+// Symbol table format: count(i32) | entries[count] of {codeOffset(i32), nameOffset(i32)} | name strings
+// Finds the largest codeOffset <= text_offset (best match).
+//
+// Slot usage:
+//   slot 0 = text_offset (arg)
+//   slot 1 = symtable_ptr (arg)
+//   slot 2 = count (from symtable header)
+//   slot 3 = loop index
+//   slot 4 = best_name_offset (-1 = not found)
+//   slot 5 = entry_ptr (current entry address)
+func maxon_panic_print_frame 2 void
+  block entry:
+    v0 = func param 0 i64
+    memref storeSlot 0 v0
+    v1 = func param 1 i64
+    memref storeSlot 1 v1
+
+    // Print "  in "
+    v2 = sys globalAddr __panic_in
+    v3 = func call write_cstr_stderr v2
+
+    // Load count from symtable header (first 4 bytes as i32)
+    // Load 8 bytes and mask to lower 32 bits
+    v4 = sys loadIndirect v1 0
+    v5 = arith constI64 0xFFFFFFFF
+    v6 = arith andI64 v4 v5
+    memref storeSlot 2 v6
+
+    // Initialize loop: index = 0, best_name_offset = -1
+    v7 = arith constI64 0
+    memref storeSlot 3 v7
+    v8 = arith constI64 -1
+    memref storeSlot 4 v8
+    cf br lookup_loop
+
+  block lookup_loop:
+    // Check index < count
+    v9 = memref loadSlot 3
+    v10 = memref loadSlot 2
+    v11 = arith cmpI64Lt v9 v10
+    cf condBr v11 lookup_body lookup_done
+
+  block lookup_body:
+    // entry_ptr = symtable_ptr + 4 + index * 8
+    v12 = memref loadSlot 1
+    v13 = arith constI64 4
+    v14 = arith addI64 v12 v13
+    v15 = memref loadSlot 3
+    v16 = arith constI64 8
+    v17 = arith mulI64 v15 v16
+    v18 = arith addI64 v14 v17
+    memref storeSlot 5 v18
+
+    // Load entry codeOffset (i32 at [entry_ptr + 0])
+    v19 = sys loadIndirect v18 0
+    v20 = arith constI64 0xFFFFFFFF
+    v21 = arith andI64 v19 v20
+
+    // Check if text_offset >= codeOffset
+    v22 = memref loadSlot 0
+    v23 = arith cmpI64Lt v22 v21
+    cf condBr v23 lookup_next lookup_update
+
+  block lookup_update:
+    // Update best: load nameOffset (i32 at [entry_ptr + 4])
+    v24 = memref loadSlot 5
+    v25 = arith constI64 4
+    v26 = arith addI64 v24 v25
+    v27 = sys loadIndirect v26 0
+    v28 = arith constI64 0xFFFFFFFF
+    v29 = arith andI64 v27 v28
+    memref storeSlot 4 v29
+    cf br lookup_next
+
+  block lookup_next:
+    // index++
+    v30 = memref loadSlot 3
+    v31 = arith constI64 1
+    v32 = arith addI64 v30 v31
+    memref storeSlot 3 v32
+    cf br lookup_loop
+
+  block lookup_done:
+    // Check if found
+    v33 = memref loadSlot 4
+    v34 = arith constI64 -1
+    v35 = arith cmpI64Eq v33 v34
+    cf condBr v35 print_unknown print_name
+
+  block print_name:
+    // name_ptr = symtable_ptr + best_name_offset
+    v36 = memref loadSlot 1
+    v37 = memref loadSlot 4
+    v38 = arith addI64 v36 v37
+    v39 = func call write_cstr_stderr v38
+    cf br print_newline
+
+  block print_unknown:
+    v40 = sys globalAddr __panic_unknown
+    v41 = func call write_cstr_stderr v40
+    cf br print_newline
+
+  block print_newline:
+    v42 = sys globalAddr __panic_newline
+    v43 = func call write_cstr_stderr v42
+    v44 = arith constI64 0
+    func ret v44
 
 end
 

@@ -2,7 +2,7 @@
 // Parses spec files, generates fragments, and runs tests.
 // Uses the fragment-based pipeline matching the C# test runner.
 
-let whitelist = ["basics", "print-function", "variables", "arithmetic", "float-type"]
+let whitelist = ["basics", "print-function", "variables", "arithmetic", "float-type", "panic", "range-check-panic"]
 
 // Find the project root by walking up from cwd looking for a specs/ directory.
 function findProjectRoot() returns FilePath throws CompileError
@@ -212,7 +212,7 @@ end 'runAllSpecTests'
 // Run a single test from a parsed fragment. Returns TestResult.
 function runTestFromFragment(fragment Fragment, projectRoot FilePath, target Target, captureTrace bool = false, specName String) returns TestResult
 	let tempDir = projectRoot.join("temp")
-	let tempSource = tempDir.join("{specName}.maxon")
+	let tempSource = tempDir.join("{fragment.testName}.test")
 	let ext = executableExtension(target)
 	let tempExe = tempDir.join("{specName}{ext}")
 	let testName = fragment.testName

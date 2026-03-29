@@ -23,6 +23,14 @@ export union SysOp
 	osWrite(ptrId ValueId, lenId ValueId)
 	// Free a heap-allocated pointer. Used by drop injection to release owned memory.
 	free(ptrId ValueId)
+	// OS-neutral stderr write. Lowered to syscall or iatCall based on OsDescriptor.
+	osWriteErr(ptrId ValueId, lenId ValueId)
+	// Load the current frame pointer (RBP on x86, X29 on ARM64) into resultId.
+	loadFramePtr(resultId ValueId)
+	// Load 8 bytes from [addrId + offset] into resultId. Used for stack frame walking.
+	loadIndirect(resultId ValueId, addrId ValueId, offset MachineWord)
+	// Load the absolute address of a named function into resultId.
+	funcAddr(resultId ValueId, name ByteArray)
 end 'SysOp'
 
 export function sysOpToString(op SysOp) returns String
@@ -37,5 +45,9 @@ export function sysOpToString(op SysOp) returns String
 		osExit(codeId) gives "sys.os_exit %{codeId}"
 		osWrite(ptrId, lenId) gives "sys.os_write %{ptrId}, %{lenId}"
 		free(ptrId) gives "sys.free %{ptrId}"
+		osWriteErr(ptrId, lenId) gives "sys.os_write_err %{ptrId}, %{lenId}"
+		loadFramePtr(resultId) gives "%{resultId} = sys.load_frame_ptr"
+		loadIndirect(resultId, addrId, offset) gives "%{resultId} = sys.load_indirect %{addrId}, {offset}"
+		funcAddr(resultId, name) gives "%{resultId} = sys.func_addr @{String.from(name)}"
 	end 'print'
 end 'sysOpToString'

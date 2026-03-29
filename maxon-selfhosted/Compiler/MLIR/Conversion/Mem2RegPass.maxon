@@ -1392,6 +1392,10 @@ function maxValueIdInSys(op SysOp) returns ValueId
 		osExit(codeId) gives codeId
 		osWrite(ptrId, lenId) gives maxOfTwo(ptrId, b: lenId)
 		free(ptrId) gives ptrId
+		osWriteErr(ptrId, lenId) gives maxOfTwo(ptrId, b: lenId)
+		loadFramePtr(resultId) gives resultId
+		loadIndirect(resultId, addrId, _) gives maxOfTwo(resultId, b: addrId)
+		funcAddr(resultId, _) gives resultId
 	end 'scan'
 end 'maxValueIdInSys'
 
@@ -1545,6 +1549,10 @@ function substituteSysOp(op SysOp, remap ValueIdArray) returns SysOp
 		osExit(codeId) gives SysOp.osExit(remapValue(codeId, remap: remap))
 		osWrite(ptrId, lenId) gives SysOp.osWrite(remapValue(ptrId, remap: remap), remapValue(lenId, remap: remap))
 		free(ptrId) gives SysOp.free(remapValue(ptrId, remap: remap))
+		osWriteErr(ptrId, lenId) gives SysOp.osWriteErr(remapValue(ptrId, remap: remap), remapValue(lenId, remap: remap))
+		loadFramePtr(resultId) gives SysOp.loadFramePtr(resultId)
+		loadIndirect(resultId, addrId, offset) gives SysOp.loadIndirect(resultId, remapValue(addrId, remap: remap), offset)
+		funcAddr(resultId, name) gives SysOp.funcAddr(resultId, name)
 	end 'subst'
 end 'substituteSysOp'
 

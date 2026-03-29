@@ -268,10 +268,29 @@ function tokenValueToString(value ByteArray) returns String
 	return String.from(value)
 end 'tokenValueToString'
 
-// Derive a namespace from the file path (filename without extension).
-// e.g. "/temp/basics.maxon" -> "basics", "C:\foo\bar.maxon" -> "bar"
+// Derive a namespace from the file path.
+// For .test files, uses the spec category name (part before first dot in stem).
+// For .maxon files, uses the filename stem.
 function deriveNamespace(filePath FilePath) returns ByteArray
-	return filePath.stem().toByteArray()
+	let stem = filePath.stem().toByteArray()
+	// For spec test fragments (.test files), use the part before the first dot
+	// e.g. "panic.in-function" -> "panic"
+	let ext = filePath.fileExtension().toByteArray()
+	if ext == b".test" 'isTest'
+		let dotByte = 0x2E
+		for i in 0 upto stem.count() 'findDot'
+			let b = try stem.get(i) otherwise 0
+			if b == dotByte 'isDot'
+				var ns = ByteArray{}
+				for j in 0 upto i 'copy'
+					let c = try stem.get(j) otherwise 0
+					ns.push(c)
+				end 'copy'
+				return ns
+			end 'isDot'
+		end 'findDot'
+	end 'isTest'
+	return stem
 end 'deriveNamespace'
 
 // Qualify a function name with namespace: "ns.name".
@@ -696,7 +715,10 @@ type Parser
 				parseVarDecl(block)
 			end 'isVarDecl' else if stmtToken.kind == TokenKind.print 'isPrint'
 				parsePrintStatement(block)
-			end 'isPrint' else if stmtToken.kind == TokenKind.if 'isIf'
+			end 'isPrint' else if stmtToken.kind == TokenKind.panic 'isPanic'
+				parsePanicStatement(block)
+				lastWasReturn = true
+			end 'isPanic' else if stmtToken.kind == TokenKind.if 'isIf'
 				block = parseIfStatement(func, block: block)
 			end 'isIf' else if stmtToken.kind == TokenKind.while 'isWhile'
 				block = parseWhileStatement(func, block: block)
@@ -858,8 +880,7 @@ type Parser
 		if token.kind == TokenKind.minus 'isNeg'
 			let numToken = peekAt(1)
 			let value = parseInt(numToken.value)
-			advance()  // skip '-'
-			advance()  // skip number
+			pos = pos + 2
 			return 0 - value
 		end 'isNeg'
 
@@ -873,8 +894,7 @@ type Parser
 		let fieldToken = peekAt(1)
 		if fieldToken.kind == TokenKind.identifier 'hasField'
 			let bound = resolveTypeBound(token.value, field: fieldToken.value)
-			advance()  // skip type name
-			advance()  // skip field name
+			pos = pos + 2
 			return bound
 		end 'hasField'
 
@@ -898,6 +918,27 @@ type Parser
 
 		finalizeBlock(block, terminator: MlirOp.maxhl(MaxHLOp.ret(resultId.valueId)))
 	end 'parseReturnStatement'
+
+	// Emits MaxHLOp.panic with a location-prefixed message for the stack trace.
+	function parsePanicStatement(block MlirBlock)
+		let panicToken = consume()
+		advance()  // '('
+		let msgToken = consume()
+		advance()  // ')'
+
+		// Prefix with source location so the panic message includes file:line
+		let fileName = filePath.filename().toByteArray()
+		var fullMsg = b"panic at "
+		fullMsg.append(fileName)
+		fullMsg.push(0x3A)
+		fullMsg.append(intToBytes(panicToken.line))
+		fullMsg.push(0x3A)
+		fullMsg.push(0x20)
+		fullMsg.append(msgToken.value)
+
+		let panicId = nextValueId(project)
+		block.ops.push(MlirOp.maxhl(MaxHLOp.panic(fullMsg, panicId)))
+	end 'parsePanicStatement'
 
 	// --- If statement ---
 
@@ -1382,6 +1423,15 @@ type Parser
 			end 'isFloatReturn'
 			return makeExprResult(callId)
 		end 'isCall'
+
+		// Ranged primitive construction: TypeName{expression}
+		if peekToken.kind == TokenKind.leftBrace 'isTypedConstruct'
+			advance()  // skip type name
+			advance()  // skip '{'
+			let innerResult = parseExpression(block)
+			advance()  // skip '}'
+			return innerResult
+		end 'isTypedConstruct'
 
 		// Check for compile-time string constant before variable lookup
 		let strConst = lookupStringConst(token.value)

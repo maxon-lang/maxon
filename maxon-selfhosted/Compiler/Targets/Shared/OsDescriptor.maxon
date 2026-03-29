@@ -17,6 +17,7 @@ end 'WriteStrategy'
 export type OsDescriptor
 	export var exit ExitStrategy
 	export var write WriteStrategy
+	export var writeErr WriteStrategy
 	export var startShadowSpace MachineWord
 end 'OsDescriptor'
 
@@ -24,6 +25,7 @@ export function makeOsDescriptor(target Target) returns OsDescriptor
 	var result = OsDescriptor{
 		exit: ExitStrategy.syscall(0),
 		write: WriteStrategy.syscall(0, 0),
+		writeErr: WriteStrategy.syscall(0, 0),
 		startShadowSpace: 0
 	}
 
@@ -40,6 +42,7 @@ function makeWindowsDescriptor() returns OsDescriptor
 	return OsDescriptor{
 		exit: ExitStrategy.iatCall(0),
 		write: WriteStrategy.winApi(1, 0xFFFFFFF5, 2),
+		writeErr: WriteStrategy.winApi(1, 0xFFFFFFF4, 2),
 		startShadowSpace: 0x28
 	}
 end 'makeWindowsDescriptor'
@@ -48,6 +51,7 @@ function makeMacOsDescriptor() returns OsDescriptor
 	return OsDescriptor{
 		exit: ExitStrategy.iatCall(0),
 		write: WriteStrategy.libcall(1, 1),
+		writeErr: WriteStrategy.libcall(1, 2),
 		startShadowSpace: 0
 	}
 end 'makeMacOsDescriptor'
@@ -65,6 +69,7 @@ function makeLinuxDescriptor(target Target) returns OsDescriptor
 	return OsDescriptor{
 		exit: ExitStrategy.syscall(exitNum),
 		write: WriteStrategy.syscall(writeNum, 1),
+		writeErr: WriteStrategy.syscall(writeNum, 2),
 		startShadowSpace: 0
 	}
 end 'makeLinuxDescriptor'

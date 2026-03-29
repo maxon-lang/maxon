@@ -198,6 +198,10 @@ function recordSysLifetimes(op SysOp, blockId BlockId, opIndex OpIndex, state Bo
 		osExit(codeId) then recordUse(codeId, blockId: blockId, opIndex: opIndex, state: state)
 		osWrite(ptrId, lenId) then recordTwoUses(ptrId, usedId2: lenId, blockId: blockId, opIndex: opIndex, state: state)
 		free(ptrId) then recordUse(ptrId, blockId: blockId, opIndex: opIndex, state: state)
+		osWriteErr(ptrId, lenId) then recordTwoUses(ptrId, usedId2: lenId, blockId: blockId, opIndex: opIndex, state: state)
+		loadFramePtr(resultId) then recordDef(resultId, blockId: blockId, opIndex: opIndex, state: state)
+		loadIndirect(resultId, addrId, _) then recordDefAndUse(resultId, usedId: addrId, blockId: blockId, opIndex: opIndex, state: state)
+		funcAddr(resultId, _) then recordDef(resultId, blockId: blockId, opIndex: opIndex, state: state)
 	end 'rec'
 end 'recordSysLifetimes'
 

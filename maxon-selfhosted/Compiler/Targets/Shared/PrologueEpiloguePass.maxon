@@ -76,6 +76,11 @@ export function computeFrameInfo(func MlirFunction, target Target) returns Frame
 		totalSize = 16
 	end 'needPrintBuf'
 
+	// Any function with calls needs a frame for correct stack unwinding (panic stack traces).
+	if state.hasCalls and totalSize == 0 'needFrame'
+		totalSize = 16
+	end 'needFrame'
+
 	let aligned = alignTo16(totalSize)
 
 	return FrameInfo{

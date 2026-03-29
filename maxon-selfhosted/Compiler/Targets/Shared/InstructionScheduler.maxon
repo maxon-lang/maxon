@@ -576,6 +576,10 @@ function extractSysDef(op SysOp) returns SchedInt
 		osExit gives SCHED_NONE
 		osWrite gives SCHED_NONE
 		free gives SCHED_NONE
+		osWriteErr gives SCHED_NONE
+		loadFramePtr(resultId) gives resultId
+		loadIndirect(resultId, _, _) gives resultId
+		funcAddr(resultId, _) gives resultId
 	end 'def'
 end 'extractSysDef'
 
@@ -722,6 +726,10 @@ function extractSysUses(op SysOp) returns ValueIdArray
 		osExit(codeId) then result.push(codeId)
 		osWrite(ptrId, lenId) then pushTwo(result, a: ptrId, b: lenId)
 		free(ptrId) then result.push(ptrId)
+		osWriteErr(ptrId, lenId) then pushTwo(result, a: ptrId, b: lenId)
+		loadFramePtr then break 'uses'
+		loadIndirect(_, addrId, _) then result.push(addrId)
+		funcAddr then break 'uses'
 	end 'uses'
 	return result
 end 'extractSysUses'
@@ -830,6 +838,10 @@ function isSysMemoryOp(op SysOp) returns bool
 		free gives true
 		globalAddr gives false
 		stackAddr gives false
+		osWriteErr gives true
+		loadFramePtr gives false
+		loadIndirect gives true
+		funcAddr gives false
 	end 'check'
 end 'isSysMemoryOp'
 
@@ -880,6 +892,10 @@ function isSysStoreOp(op SysOp) returns bool
 		loadByte gives false
 		osExit to osWrite gives false
 		free gives false
+		osWriteErr gives false
+		loadFramePtr gives false
+		loadIndirect gives false
+		funcAddr gives false
 	end 'check'
 end 'isSysStoreOp'
 
@@ -951,6 +967,10 @@ function isSysCallOp(op SysOp) returns bool
 		free gives true
 		globalAddr gives false
 		memcpy to loadByte gives false
+		osWriteErr gives false
+		loadFramePtr gives false
+		loadIndirect gives false
+		funcAddr gives false
 	end 'check'
 end 'isSysCallOp'
 

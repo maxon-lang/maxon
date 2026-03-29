@@ -446,6 +446,14 @@ type MaxArm64CallFixup
 end 'MaxArm64CallFixup'
 typealias MaxArm64CallFixupArray = Array with MaxArm64CallFixup
 
+// ADR fixup: patch an ADR instruction to point at a named function.
+type MaxArm64AdrFixup
+	export var instrOffset MaxArm64Offset
+	export var destReg MachineWord
+	export var targetName ByteArray
+end 'MaxArm64AdrFixup'
+typealias MaxArm64AdrFixupArray = Array with MaxArm64AdrFixup
+
 // --- Fixup resolution ---
 
 // Resolve block-based jump fixups using BlockId -> offset map.
@@ -459,6 +467,23 @@ function maxArm64ResolveBlockJumpFixups(code ByteArray, blockOffsets BlockOffset
 		end 'uncond'
 	end 'resolve'
 end 'maxArm64ResolveBlockJumpFixups'
+
+// Patch an ADR instruction at instrOffset with a PC-relative offset.
+function maxArm64PatchAdr(code ByteArray, instrOffset MaxArm64Offset, rd MachineWord, targetOffset MaxArm64Offset)
+	let relBytes = targetOffset - instrOffset
+	let immlo = relBytes and 0x3
+	let immhi = (relBytes shr 2) and 0x7FFFF
+	let insn = (immlo shl 29) or 0x10000000 or(immhi shl 5) or rd
+	patchDword(code, offset: instrOffset, value: insn)
+end 'maxArm64PatchAdr'
+
+// Resolve ADR fixups using function name -> offset labels.
+function maxArm64ResolveAdrFixups(code ByteArray, labelNames ByteArrayArray, labelOffsets MaxArm64OffsetArray, adrFixups MaxArm64AdrFixupArray)
+	for fixup in adrFixups 'resolve'
+		let targetOffset = maxArm64LookupLabel(labelNames, labelOffsets: labelOffsets, name: fixup.targetName)
+		maxArm64PatchAdr(code, instrOffset: fixup.instrOffset, rd: fixup.destReg, targetOffset: targetOffset)
+	end 'resolve'
+end 'maxArm64ResolveAdrFixups'
 
 // Resolve call fixups using function name -> offset labels.
 function maxArm64ResolveCallFixups(code ByteArray, labelNames ByteArrayArray, labelOffsets MaxArm64OffsetArray, callFixups MaxArm64CallFixupArray)
@@ -768,8 +793,12 @@ export function emitMaxArm64(module MlirModule, target Target, globalData Global
 	var labelNames = ByteArrayArray{}
 	var labelOffsets = MaxArm64OffsetArray{}
 	var callFixups = MaxArm64CallFixupArray{}
+	var adrFixups = MaxArm64AdrFixupArray{}
 	var jumpFixups = BlockIdFixupArray{}
 	var blockOffsets = BlockOffsetMap{}
+
+	// Register panic string constants before emitting functions
+	registerPanicStrings(globalData)
 
 	// Track the current function's stack size for epilogue emission
 	var stackTracker = MaxArm64StackTracker{currentStackSize: 0}
@@ -787,18 +816,25 @@ export function emitMaxArm64(module MlirModule, target Target, globalData Global
 
 			// Emit ops
 			for op in block.ops 'eachOp'
-				emitMaxArm64Op(op, code: code, jumpFixups: jumpFixups, callFixups: callFixups, stackTracker: stackTracker, relocations: relocations, globalData: globalData)
+				emitMaxArm64Op(op, code: code, jumpFixups: jumpFixups, callFixups: callFixups, adrFixups: adrFixups, stackTracker: stackTracker, relocations: relocations, globalData: globalData)
 			end 'eachOp'
 
 			// Emit terminator
 			if block.hasTerminator 'hasTerm'
-				emitMaxArm64Op(block.terminator, code: code, jumpFixups: jumpFixups, callFixups: callFixups, stackTracker: stackTracker, relocations: relocations, globalData: globalData)
+				emitMaxArm64Op(block.terminator, code: code, jumpFixups: jumpFixups, callFixups: callFixups, adrFixups: adrFixups, stackTracker: stackTracker, relocations: relocations, globalData: globalData)
 			end 'hasTerm'
 		end 'eachBlock'
 	end 'eachFunc'
 
+	// Emit symbol table into code stream as a labeled data block.
+	// Record the label AFTER building the table so __symtable itself isn't included as a function entry.
+	let symtableOffset = code.count()
+	emitSymbolTable(code, labelNames: labelNames, funcLabelOffsets: labelOffsets)
+	maxArm64RecordLabel(labelNames, labelOffsets: labelOffsets, name: b"__symtable", offset: symtableOffset)
+
 	// Resolve all fixups
 	maxArm64ResolveCallFixups(code, labelNames: labelNames, labelOffsets: labelOffsets, callFixups: callFixups)
+	maxArm64ResolveAdrFixups(code, labelNames: labelNames, labelOffsets: labelOffsets, adrFixups: adrFixups)
 	maxArm64ResolveBlockJumpFixups(code, blockOffsets: blockOffsets, jumpFixups: jumpFixups)
 
 	// _start must be the entry point -- look up its offset
@@ -808,16 +844,16 @@ export function emitMaxArm64(module MlirModule, target Target, globalData Global
 end 'emitMaxArm64'
 
 // Emit a single MlirOp (expected to be maxarm64 dialect).
-function emitMaxArm64Op(op MlirOp, code ByteArray, jumpFixups BlockIdFixupArray, callFixups MaxArm64CallFixupArray, stackTracker MaxArm64StackTracker, relocations RelocationArray, globalData GlobalDataTable)
+function emitMaxArm64Op(op MlirOp, code ByteArray, jumpFixups BlockIdFixupArray, callFixups MaxArm64CallFixupArray, adrFixups MaxArm64AdrFixupArray, stackTracker MaxArm64StackTracker, relocations RelocationArray, globalData GlobalDataTable)
 	match op 'dispatch'
 		maxhl to mir then break 'dispatch'
 		maxx64 then break 'dispatch'
-		maxarm64(a64Op) then emitMaxArm64Instruction(a64Op, code: code, jumpFixups: jumpFixups, callFixups: callFixups, stackTracker: stackTracker, relocations: relocations, globalData: globalData)
+		maxarm64(a64Op) then emitMaxArm64Instruction(a64Op, code: code, jumpFixups: jumpFixups, callFixups: callFixups, adrFixups: adrFixups, stackTracker: stackTracker, relocations: relocations, globalData: globalData)
 	end 'dispatch'
 end 'emitMaxArm64Op'
 
 // Emit machine code for a single MaxArm64Op.
-function emitMaxArm64Instruction(op MaxArm64Op, code ByteArray, jumpFixups BlockIdFixupArray, callFixups MaxArm64CallFixupArray, stackTracker MaxArm64StackTracker, relocations RelocationArray, globalData GlobalDataTable)
+function emitMaxArm64Instruction(op MaxArm64Op, code ByteArray, jumpFixups BlockIdFixupArray, callFixups MaxArm64CallFixupArray, adrFixups MaxArm64AdrFixupArray, stackTracker MaxArm64StackTracker, relocations RelocationArray, globalData GlobalDataTable)
 	match op 'emit'
 		prologue(stackSize) then emitMaxArm64PrologueOp(code, stackSize: stackSize, tracker: stackTracker)
 		epilogue then maxArm64EmitEpilogue(code, stackSize: stackTracker.currentStackSize)
@@ -864,7 +900,13 @@ function emitMaxArm64Instruction(op MaxArm64Op, code ByteArray, jumpFixups Block
 		spillFpToStack(offset, src, _) then maxArm64EmitFpSpillToStack(code, rt: resolveArm64Fp(src).rawValue, byteOffset: offset)
 		reloadFpFromStack(dest, offset, _) then maxArm64EmitFpReloadFromStack(code, rt: resolveArm64Fp(dest).rawValue, byteOffset: offset)
 		fmovToFloat to frintn then panic("ARM64 FP op not yet implemented in binary emitter")
-		fpStoreIndirect to nullSafeLoad then panic("ARM64 extended op not yet implemented in binary emitter")
+		loadIndirect(destReg, baseReg, offset, size) then maxArm64EmitLoadIndirectOp(code, destReg: destReg, baseReg: baseReg, offset: offset, size: size)
+		leaFuncAddr(dest, funcName) then maxArm64EmitLeaFuncAddrOp(code, dest: dest, funcName: funcName, adrFixups: adrFixups)
+		fpStoreIndirect to fpLoadIndirect then panic("ARM64 FP indirect op not yet implemented in binary emitter")
+		storeIndirect then panic("ARM64 storeIndirect not yet implemented in binary emitter")
+		globalLoad to globalStoreFloat then panic("ARM64 global var op not yet implemented in binary emitter")
+		leaFromStack to leaRdata then panic("ARM64 LEA op not yet implemented in binary emitter")
+		cset to nullSafeLoad then panic("ARM64 extended op not yet implemented in binary emitter")
 	end 'emit'
 end 'emitMaxArm64Instruction'
 
@@ -1034,6 +1076,28 @@ function maxArm64EmitGlobalAddrOp(code ByteArray, globalData GlobalDataTable, re
 	// Store to resultSlot
 	maxArm64EmitStrSlot(code, rt: 0, slotIndex: resultSlot)
 end 'maxArm64EmitGlobalAddrOp'
+
+// loadIndirect: LDR dest, [base, #offset]
+function maxArm64EmitLoadIndirectOp(code ByteArray, destReg Arm64VReg, baseReg Arm64VReg, offset MachineWord, size MachineWord)
+	let rd = resolveArm64Gpr(destReg).rawValue
+	let rn = resolveArm64Gpr(baseReg).rawValue
+	if size == 8 'qword'
+		maxArm64EmitLdrImm(code, rt: rd, rn: rn, imm12: offset)
+	end 'qword' else if size == 4 'dword'
+		let insn = 0xB9400000 or(((offset / 4) and 0xFFF) shl 10) or(rn shl 5) or rd
+		maxArm64EmitInsn(code, insn: insn)
+	end 'dword' else 'unsupported'
+		panic("ARM64 loadIndirect: unsupported size {size}")
+	end 'unsupported'
+end 'maxArm64EmitLoadIndirectOp'
+
+// leaFuncAddr: ADR dest, funcName (resolved via ADR fixup)
+function maxArm64EmitLeaFuncAddrOp(code ByteArray, dest Arm64VReg, funcName ByteArray, adrFixups MaxArm64AdrFixupArray)
+	let rd = resolveArm64Gpr(dest).rawValue
+	// Emit placeholder ADR instruction, will be patched during fixup resolution
+	adrFixups.push(MaxArm64AdrFixup{instrOffset: code.count(), destReg: rd, targetName: funcName})
+	maxArm64EmitAdr(code, rd: rd, offset: 0)
+end 'maxArm64EmitLeaFuncAddrOp'
 
 // sys.stackAddr: ADD Xd, X29, #offset to get address of a stack slot
 function maxArm64EmitStackAddrOp(code ByteArray, resultSlot VarSlot, targetSlot VarSlot)

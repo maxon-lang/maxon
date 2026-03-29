@@ -65,3 +65,65 @@ export function intToBytes(value MachineWord) returns ByteArray
 	end 'reverse'
 	return result
 end 'intToBytes'
+
+// Emit a binary symbol table into the code stream as a pseudo-function labeled "__symtable".
+// Referenced by maxon_panic via funcAddr __symtable (resolved through call fixups).
+// Format: count(i32) | entries[count]{codeOffset(i32), nameOffset(i32)} | null-terminated name strings
+// Entries sorted by codeOffset ascending.
+export function emitSymbolTable(code ByteArray, labelNames ByteArrayArray, funcLabelOffsets CodeOffsetArray)
+	let count = labelNames.count()
+
+	// Build sorted indices by offset (insertion sort)
+	var sortedIndices = CodeOffsetArray{}
+	for i in 0 upto count 'init'
+		sortedIndices.push(i)
+	end 'init'
+	for i in 1 upto count 'sort'
+		let key = try sortedIndices.get(i) otherwise 0
+		let keyOffset = try funcLabelOffsets.get(key) otherwise 0
+		var j = i
+		while j > 0 'shift'
+			let prev = try sortedIndices.get(j - 1) otherwise 0
+			let prevOffset = try funcLabelOffsets.get(prev) otherwise 0
+			if prevOffset <= keyOffset 'done'
+				break
+			end 'done'
+			sortedIndices.set(j, value: prev)
+			j = j - 1
+		end 'shift'
+		sortedIndices.set(j, value: key)
+	end 'sort'
+
+	// Build name strings block and record offsets
+	var nameStrings = ByteArray{}
+	var nameOffsets = CodeOffsetArray{}
+	for i in 0 upto count 'buildNames'
+		let idx = try sortedIndices.get(i) otherwise 0
+		nameOffsets.push(nameStrings.count())
+		let name = try labelNames.get(idx) otherwise ByteArray{}
+		nameStrings.append(name)
+		nameStrings.push(0)
+	end 'buildNames'
+
+	// Header size: 4 (count) + 8 * count (entries)
+	let headerSize = 4 + 8 * count
+
+	// Emit directly into the code stream
+	writeDword(code, value: count)
+	for i in 0 upto count 'writeEntries'
+		let idx = try sortedIndices.get(i) otherwise 0
+		let codeOffset = try funcLabelOffsets.get(idx) otherwise 0
+		writeDword(code, value: codeOffset)
+		let nameOffset = headerSize + (try nameOffsets.get(i) otherwise 0)
+		writeDword(code, value: nameOffset)
+	end 'writeEntries'
+	code.append(nameStrings)
+end 'emitSymbolTable'
+
+// Register panic message string constants in globalData.
+export function registerPanicStrings(globalData GlobalDataTable)
+	addNamedGlobalData(globalData, name: b"__panic_stacktrace", data: b"Stack trace:\n\0")
+	addNamedGlobalData(globalData, name: b"__panic_in", data: b"  in \0")
+	addNamedGlobalData(globalData, name: b"__panic_newline", data: b"\n\0")
+	addNamedGlobalData(globalData, name: b"__panic_unknown", data: b"<unknown>\0")
+end 'registerPanicStrings'

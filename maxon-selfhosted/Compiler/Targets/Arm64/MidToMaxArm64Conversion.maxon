@@ -158,6 +158,10 @@ function sysTempCountArm64(op SysOp) returns SlotIndex
 		osExit gives 1
 		osWrite gives 6
 		free gives 1
+		osWriteErr gives 6
+		loadFramePtr gives 1
+		loadIndirect gives 2
+		funcAddr gives 1
 	end 'check'
 end 'sysTempCountArm64'
 
@@ -677,6 +681,10 @@ function lowerSysOpArm64(op SysOp, dstBlock MlirBlock, valueSlots ValueSlotMap, 
 		osExit(codeId) then result = lowerOsExitArm64(codeId, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot, osDesc: osDesc)
 		osWrite(ptrId, lenId) then result = lowerOsWriteArm64(ptrId, lenId: lenId, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot, osDesc: osDesc)
 		free then break 'lower'
+		osWriteErr(ptrId, lenId) then result = lowerOsWriteErrArm64(ptrId, lenId: lenId, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot, osDesc: osDesc)
+		loadFramePtr(resultId) then result = lowerLoadFramePtrArm64(resultId, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
+		loadIndirect(resultId, addrId, offset) then result = lowerLoadIndirectArm64(resultId, addrId: addrId, offset: offset, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
+		funcAddr(resultId, name) then result = lowerFuncAddrArm64(resultId, name: name, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
 	end 'lower'
 	return result
 end 'lowerSysOpArm64'
@@ -877,20 +885,7 @@ function lowerOsExitIatArm64(codeSlot VarSlot, slotIdx MachineWord, dstBlock Mli
 end 'lowerOsExitIatArm64'
 
 function lowerOsWriteArm64(ptrId ValueId, lenId ValueId, dstBlock MlirBlock, valueSlots ValueSlotMap, nextTempSlot SlotIndex, osDesc OsDescriptor) returns SlotIndex
-	var tempSlot = nextTempSlot
-	let ptrSlot = ensureValueInSlotArm64(ptrId, valueSlots: valueSlots, nextTempSlot: tempSlot, dstBlock: dstBlock)
-	if ptrSlot == tempSlot 'usedTemp1'
-		tempSlot = tempSlot + 1
-	end 'usedTemp1'
-	let lenSlot = ensureValueInSlotArm64(lenId, valueSlots: valueSlots, nextTempSlot: tempSlot, dstBlock: dstBlock)
-	if lenSlot == tempSlot 'usedTemp2'
-		tempSlot = tempSlot + 1
-	end 'usedTemp2'
-	match osDesc.write 'strategy'
-		syscall(writeNum, fd) then return lowerOsWriteSyscallArm64(ptrSlot, lenSlot: lenSlot, writeNum: writeNum, fd: fd, dstBlock: dstBlock, nextTempSlot: tempSlot)
-		winApi(getHandleSlot, handleConstant, writeFileSlot) then return lowerOsWriteWinApiArm64(ptrSlot, lenSlot: lenSlot, getHandleSlot: getHandleSlot, handleConstant: handleConstant, writeFileSlot: writeFileSlot, dstBlock: dstBlock, nextTempSlot: tempSlot)
-		libcall(writeSlot, fd) then return lowerOsWriteLibcallArm64(ptrSlot, lenSlot: lenSlot, writeSlot: writeSlot, fd: fd, dstBlock: dstBlock, nextTempSlot: tempSlot)
-	end 'strategy'
+	return lowerOsWriteWithStrategyArm64(ptrId, lenId: lenId, strategy: osDesc.write, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
 end 'lowerOsWriteArm64'
 
 function lowerOsWriteSyscallArm64(ptrSlot VarSlot, lenSlot VarSlot, writeNum MachineWord, fd MachineWord, dstBlock MlirBlock, nextTempSlot SlotIndex) returns SlotIndex
@@ -969,3 +964,52 @@ function lowerOsWriteLibcallArm64(ptrSlot VarSlot, lenSlot VarSlot, writeSlot Ma
 	dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.iatCall(resultSlot, writeSlot, argSlots)))
 	return nextTempSlot + 2
 end 'lowerOsWriteLibcallArm64'
+
+function lowerOsWriteErrArm64(ptrId ValueId, lenId ValueId, dstBlock MlirBlock, valueSlots ValueSlotMap, nextTempSlot SlotIndex, osDesc OsDescriptor) returns SlotIndex
+	return lowerOsWriteWithStrategyArm64(ptrId, lenId: lenId, strategy: osDesc.writeErr, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
+end 'lowerOsWriteErrArm64'
+
+function lowerOsWriteWithStrategyArm64(ptrId ValueId, lenId ValueId, strategy WriteStrategy, dstBlock MlirBlock, valueSlots ValueSlotMap, nextTempSlot SlotIndex) returns SlotIndex
+	var tempSlot = nextTempSlot
+	let ptrSlot = ensureValueInSlotArm64(ptrId, valueSlots: valueSlots, nextTempSlot: tempSlot, dstBlock: dstBlock)
+	if ptrSlot == tempSlot 'usedTemp1'
+		tempSlot = tempSlot + 1
+	end 'usedTemp1'
+	let lenSlot = ensureValueInSlotArm64(lenId, valueSlots: valueSlots, nextTempSlot: tempSlot, dstBlock: dstBlock)
+	if lenSlot == tempSlot 'usedTemp2'
+		tempSlot = tempSlot + 1
+	end 'usedTemp2'
+	match strategy 'dispatch'
+		syscall(writeNum, fd) then return lowerOsWriteSyscallArm64(ptrSlot, lenSlot: lenSlot, writeNum: writeNum, fd: fd, dstBlock: dstBlock, nextTempSlot: tempSlot)
+		winApi(getHandleSlot, handleConstant, writeFileSlot) then return lowerOsWriteWinApiArm64(ptrSlot, lenSlot: lenSlot, getHandleSlot: getHandleSlot, handleConstant: handleConstant, writeFileSlot: writeFileSlot, dstBlock: dstBlock, nextTempSlot: tempSlot)
+		libcall(writeSlot, fd) then return lowerOsWriteLibcallArm64(ptrSlot, lenSlot: lenSlot, writeSlot: writeSlot, fd: fd, dstBlock: dstBlock, nextTempSlot: tempSlot)
+	end 'dispatch'
+end 'lowerOsWriteWithStrategyArm64'
+
+function lowerLoadFramePtrArm64(resultId ValueId, dstBlock MlirBlock, valueSlots ValueSlotMap, nextTempSlot SlotIndex) returns SlotIndex
+	dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.movRegReg(Arm64VReg.virtual(resultId), arm64PhysReg(MaxArm64Register.x29))))
+	valueSlotMapSet(valueSlots, valueId: resultId, slot: nextTempSlot)
+	return nextTempSlot
+end 'lowerLoadFramePtrArm64'
+
+function lowerLoadIndirectArm64(resultId ValueId, addrId ValueId, offset MachineWord, dstBlock MlirBlock, valueSlots ValueSlotMap, nextTempSlot SlotIndex) returns SlotIndex
+	var tempSlot = nextTempSlot
+	let addrSlot = ensureValueInSlotArm64(addrId, valueSlots: valueSlots, nextTempSlot: tempSlot, dstBlock: dstBlock)
+	if addrSlot == tempSlot 'usedTemp'
+		tempSlot = tempSlot + 1
+	end 'usedTemp'
+	// loadIndirect needs the base address in a register
+	let addrVReg = Arm64VReg.virtual(addrId)
+	dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.ldrFromSlot(addrVReg, addrSlot)))
+	dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.loadIndirect(Arm64VReg.virtual(resultId), addrVReg, offset, 8)))
+	let resultSlot = tempSlot
+	dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.strToSlot(resultSlot, Arm64VReg.virtual(resultId))))
+	valueSlotMapSet(valueSlots, valueId: resultId, slot: resultSlot)
+	return tempSlot + 1
+end 'lowerLoadIndirectArm64'
+
+function lowerFuncAddrArm64(resultId ValueId, name ByteArray, dstBlock MlirBlock, valueSlots ValueSlotMap, nextTempSlot SlotIndex) returns SlotIndex
+	dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.leaFuncAddr(Arm64VReg.virtual(resultId), name)))
+	valueSlotMapSet(valueSlots, valueId: resultId, slot: nextTempSlot)
+	return nextTempSlot
+end 'lowerFuncAddrArm64'
