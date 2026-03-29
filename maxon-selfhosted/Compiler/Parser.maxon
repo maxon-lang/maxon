@@ -421,6 +421,15 @@ type Parser
 		return peek().kind == kind
 	end 'at'
 
+	function expect(kind TokenKind)
+		if at(kind) 'matched'
+			advance()
+			return
+		end 'matched'
+		let token = peek()
+		reportCompileError(project, code: ErrorCode.parserExpectedToken, message: "Expected {kind.name} but got '{tokenValueToString(token.value)}'", line: token.line, column: token.column, filePath: filePath)
+	end 'expect'
+
 	function skipNewlines()
 		while pos < tokens.count() 'skip'
 			if at(TokenKind.newline) 'isNewline'
@@ -432,7 +441,7 @@ type Parser
 	end 'skipNewlines'
 
 	function skipEndAndLabel()
-		advance()  // skip 'end'
+		expect(TokenKind.end)
 		if at(TokenKind.stringLiteral) 'hasLabel'
 			advance()
 		end 'hasLabel'
@@ -614,12 +623,12 @@ type Parser
 	// --- Function parsing ---
 
 	function parseFunction(module MlirModule)
-		advance()  // skip 'function'
+		expect(TokenKind.function)
 
 		let nameToken = consume()
 		logTrace(LogCategory.parser, message: () gives "Parsing function '{String.from(nameToken.value)}'")
 
-		advance()  // skip '('
+		expect(TokenKind.leftParen)
 
 		// Create function early so we can set paramCount, but defer symbol table setup
 		resetValueIds(project)
@@ -647,20 +656,20 @@ type Parser
 				end 'endParams'
 			end 'paramLoop'
 		end 'hasParams'
-		advance()  // skip ')'
+		expect(TokenKind.rightParen)
 
 		// Parse 'returns' type
 		var returnTypeName = ByteArray{}
 		if at(TokenKind.returns) 'hasReturns'
-			advance()  // skip 'returns'
+			expect(TokenKind.returns)
 			let typeToken = consume()
 			returnTypeName = typeToken.value
 		end 'hasReturns'
 
 		// Handle optional 'throws' clause by skipping it
 		if at(TokenKind.throws) 'hasThrows'
-			advance()  // skip 'throws'
-			advance()  // skip error type
+			expect(TokenKind.throws)
+			expect(TokenKind.identifier)
 		end 'hasThrows'
 
 		skipNewlines()
@@ -763,7 +772,7 @@ type Parser
 
 	// Parse top-level `let NAME = "value"` — stores as compile-time string constant.
 	function parseTopLevelLet()
-		advance()  // skip 'let'
+		expect(TokenKind.let)
 
 		let nameToken = consume()
 
@@ -774,7 +783,7 @@ type Parser
 			return
 		end 'notEquals'
 
-		advance()  // skip '='
+		expect(TokenKind.equals)
 		let valueToken = peek()
 		if valueToken.kind != TokenKind.doubleStringLiteral 'notString'
 			reportCompileError(project, code: ErrorCode.parserExpectedToken, message: "Top-level let only supports string literals", line: valueToken.line, column: valueToken.column, filePath: filePath)
@@ -782,7 +791,7 @@ type Parser
 			return
 		end 'notString'
 
-		advance()  // skip string value
+		expect(TokenKind.doubleStringLiteral)
 
 		project.stringConstNames.push(nameToken.value)
 		project.stringConstValues.push(valueToken.value)
@@ -792,7 +801,7 @@ type Parser
 	// --- Export dispatch ---
 
 	function parseExport()
-		advance()  // skip 'export'
+		expect(TokenKind.export)
 
 		if at(TokenKind.function) 'isExportFunc'
 			// Leave pos at 'function' — the main loop will re-dispatch on it next iteration
@@ -811,7 +820,7 @@ type Parser
 	// Registers primitive-backed typealiases in the project's type registry.
 	// Computes optimal MLIR type from the range bounds (e.g. int(0 to u32.max) → u32).
 	function parseTopLevelTypealias()
-		advance()  // skip 'typealias'
+		expect(TokenKind.typealias)
 		let nameToken = consume()
 
 		let equalsToken = peek()
@@ -819,7 +828,7 @@ type Parser
 			skipToNextLine()
 			return
 		end 'noEquals'
-		advance()  // skip '='
+		expect(TokenKind.equals)
 
 		let baseToken = peek()
 
@@ -848,12 +857,12 @@ type Parser
 			skipToNextLine()
 			return
 		end 'noParen'
-		advance()  // skip '('
+		expect(TokenKind.leftParen)
 
 		let lowerBound = parseTypeBound()
 
 		if at(TokenKind.to) 'hasTo'
-			advance()
+			expect(TokenKind.to)
 		end 'hasTo'
 
 		let upperBound = parseTypeBound()
@@ -880,13 +889,14 @@ type Parser
 		if token.kind == TokenKind.minus 'isNeg'
 			let numToken = peekAt(1)
 			let value = parseInt(numToken.value)
-			pos = pos + 2
+			expect(TokenKind.minus)
+			expect(TokenKind.intLiteral)
 			return 0 - value
 		end 'isNeg'
 
 		// Number literal
 		if token.kind == TokenKind.intLiteral 'isLit'
-			advance()
+			expect(TokenKind.intLiteral)
 			return parseInt(token.value)
 		end 'isLit'
 
@@ -894,7 +904,8 @@ type Parser
 		let fieldToken = peekAt(1)
 		if fieldToken.kind == TokenKind.identifier 'hasField'
 			let bound = resolveTypeBound(token.value, field: fieldToken.value)
-			pos = pos + 2
+			expect(TokenKind.identifier)
+			expect(TokenKind.identifier)
 			return bound
 		end 'hasField'
 
@@ -905,7 +916,7 @@ type Parser
 	// --- Return statement ---
 
 	function parseReturnStatement(block MlirBlock)
-		advance()  // skip 'return'
+		expect(TokenKind.return)
 
 		// Bare 'return' without expression (void return)
 		let nextTok = peek()
@@ -945,14 +956,14 @@ type Parser
 	// Parse: if <condition> 'label' ... end 'label' [else 'label' ... end 'label']
 	// Returns the merge block to continue emitting into.
 	function parseIfStatement(func MlirFunction, block MlirBlock) returns MlirBlock
-		advance()  // skip 'if'
+		expect(TokenKind.if)
 
 		// Parse condition expression (emits ops to current block)
 		let condResult = parseExpression(block)
 
 		// Skip block label after condition
 		if at(TokenKind.stringLiteral) 'hasThenLabel'
-			advance()
+			expect(TokenKind.stringLiteral)
 		end 'hasThenLabel'
 		skipNewlines()
 
@@ -979,7 +990,7 @@ type Parser
 
 		if at(TokenKind.else) 'isElse'
 			hasElse = true
-			advance()  // skip 'else'
+			expect(TokenKind.else)
 
 			// Check for 'else if' chain
 			if at(TokenKind.if) 'isElseIf'
@@ -990,7 +1001,7 @@ type Parser
 			end 'isElseIf' else 'plainElse'
 				// Skip else block label
 				if at(TokenKind.stringLiteral) 'hasElseLabel'
-					advance()
+					expect(TokenKind.stringLiteral)
 				end 'hasElseLabel'
 				skipNewlines()
 
@@ -1017,7 +1028,7 @@ type Parser
 	// Parse: while <condition> 'label' ... end 'label'
 	// Returns the exit block to continue emitting into.
 	function parseWhileStatement(func MlirFunction, block MlirBlock) returns MlirBlock
-		advance()  // skip 'while'
+		expect(TokenKind.while)
 
 		// Create blocks for loop structure
 		var condBlock = newBlock(func, label: b"cond")
@@ -1032,7 +1043,7 @@ type Parser
 
 		// Skip block label after condition
 		if at(TokenKind.stringLiteral) 'hasWhileLabel'
-			advance()
+			expect(TokenKind.stringLiteral)
 		end 'hasWhileLabel'
 		skipNewlines()
 
@@ -1056,7 +1067,7 @@ type Parser
 	// Parse: identifier = expression (variable reassignment)
 	function parseVarAssignment(block MlirBlock)
 		let nameToken = consume()
-		advance()  // skip '='
+		expect(TokenKind.equals)
 
 		let exprResult = parseExpression(block)
 
@@ -1081,7 +1092,7 @@ type Parser
 			return
 		end 'notEquals'
 
-		advance()  // skip '='
+		expect(TokenKind.equals)
 		let exprResult = parseExpression(block)
 
 		let slot = defineVariable(nameToken.value, isFloat: exprResult.isFloat, isRefType: exprResult.isRefType)
@@ -1091,10 +1102,10 @@ type Parser
 	// --- Print statement ---
 
 	function parsePrintStatement(block MlirBlock)
-		advance()  // skip 'print'
-		advance()  // skip '('
+		expect(TokenKind.print)
+		expect(TokenKind.leftParen)
 		let strToken = consume()
-		advance()  // skip ')'
+		expect(TokenKind.rightParen)
 
 		// Parse the double-quoted string for interpolation segments
 		parseStringInterpolation(block, str: strToken.value)
@@ -1240,7 +1251,7 @@ type Parser
 				var negate = false
 				if at(TokenKind.not) 'isNot'
 					negate = true
-					advance()
+					expect(TokenKind.not)
 				end 'isNot'
 				let right = parseExpressionBP(block, minBP: bp)
 				if not leftIsRefType or not right.isRefType 'notRef'
@@ -1346,13 +1357,13 @@ type Parser
 		let token = peek()
 
 		if token.kind == TokenKind.minus 'isNeg'
-			advance()
+			expect(TokenKind.minus)
 			let operand = parseUnary(block)
 			let resultId = nextValueId(project)
 			emitOp(block, op: MlirOp.maxhl(MaxHLOp.unop(resultId, operand.valueId, UnaryOpKind.neg)))
 			return ExprResult{valueId: resultId, isFloat: operand.isFloat, isRefType: false, isStringConst: false, stringConstValue: ByteArray{}}
 		end 'isNeg' else if token.kind == TokenKind.not 'isNot'
-			advance()
+			expect(TokenKind.not)
 			let operand = parseUnary(block)
 			let resultId = nextValueId(project)
 			emitOp(block, op: MlirOp.maxhl(MaxHLOp.unop(resultId, operand.valueId, UnaryOpKind.bitNot)))
@@ -1367,8 +1378,8 @@ type Parser
 	function parseIdentifierExpr(block MlirBlock, token Token) returns ExprResult throws ParserError
 		let peekToken = peekAt(1)
 		if peekToken.kind == TokenKind.leftParen 'isCall'
-			advance()  // skip name
-			advance()  // skip '('
+			expect(TokenKind.identifier)
+			expect(TokenKind.leftParen)
 			var argIds = ValueIdArray{}
 			var lastArgIsFloat = false
 
@@ -1379,8 +1390,8 @@ type Parser
 					let maybeLabel = peek()
 					let afterLabel = peekAt(1)
 					if maybeLabel.kind == TokenKind.identifier and afterLabel.kind == TokenKind.colon 'isLabel'
-						advance()  // skip label name
-						advance()  // skip ':'
+						expect(TokenKind.identifier)
+						expect(TokenKind.colon)
 					end 'isLabel'
 
 					let argResult = parseExpression(block)
@@ -1392,7 +1403,7 @@ type Parser
 					end 'endArgs'
 				end 'argLoop'
 			end 'hasArgs'
-			advance()  // skip ')'
+			expect(TokenKind.rightParen)
 
 			// trunc() converts a float to int via cvttsd2si, or is a no-op on integers
 			if token.value == b"trunc" 'isTrunc'
@@ -1437,7 +1448,7 @@ type Parser
 		let strConst = lookupStringConst(token.value)
 		if not strConst.isEmpty() 'isStrConst'
 			let id = nextValueId(project)
-			advance()
+			expect(TokenKind.identifier)
 			return ExprResult{valueId: id, isFloat: false, isRefType: false, isStringConst: true, stringConstValue: strConst}
 		end 'isStrConst'
 
@@ -1446,7 +1457,7 @@ type Parser
 		emitOp(block, op: MlirOp.maxhl(MaxHLOp.varLoad(id, slot)))
 		let varIsFloat = isVariableFloat(token.value)
 		let varIsRef = isVariableRefType(token.value)
-		advance()
+		expect(TokenKind.identifier)
 		return ExprResult{valueId: id, isFloat: varIsFloat, isRefType: varIsRef, isStringConst: false, stringConstValue: ByteArray{}}
 	end 'parseIdentifierExpr'
 
@@ -1480,33 +1491,33 @@ type Parser
 	function parseIntLiteral(block MlirBlock, token Token) returns ExprResult
 		let value = parseInt(token.value)
 		let id = emitLiteral(block, value: value, isFloat: false)
-		advance()
+		expect(TokenKind.intLiteral)
 		return makeExprResult(id)
 	end 'parseIntLiteral'
 
 	function parseFloatLiteral(block MlirBlock, token Token) returns ExprResult
 		let rawBits = parseFloatBits(token.value)
 		let id = emitLiteral(block, value: rawBits, isFloat: true)
-		advance()
+		expect(TokenKind.floatLiteral)
 		return makeFloatExprResult(id)
 	end 'parseFloatLiteral'
 
 	function parseStringLiteral(token Token) returns ExprResult
 		let id = nextValueId(project)
-		advance()
+		expect(TokenKind.doubleStringLiteral)
 		return ExprResult{valueId: id, isFloat: false, isRefType: false, isStringConst: true, stringConstValue: token.value}
 	end 'parseStringLiteral'
 
 	function parseBoolLiteral(block MlirBlock, value ParsedInt) returns ExprResult
 		let id = emitLiteral(block, value: value, isFloat: false)
-		advance()
+		advance()  // skip 'true' or 'false'
 		return makeExprResult(id)
 	end 'parseBoolLiteral'
 
 	function parseParenExpr(block MlirBlock) returns ExprResult
-		advance()  // skip '('
+		expect(TokenKind.leftParen)
 		let inner = parseExpression(block)
-		advance()  // skip ')'
+		expect(TokenKind.rightParen)
 		return inner
 	end 'parseParenExpr'
 
