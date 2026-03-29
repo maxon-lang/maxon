@@ -91,6 +91,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
   private readonly HashSet<string> _exportedTypeAliases = [];
   private readonly HashSet<string> _localTypeAliases = [];
   private readonly HashSet<string> _seededTypeAliases = [];
+  private readonly HashSet<string> _seededStdlibTypeAliases = [];
   private readonly HashSet<string> _usedTypeAliases = [];
   private readonly Dictionary<string, (int Line, int Column)> _typeAliasLocations = [];
   private readonly HashSet<string> _resolvingTypeAliases = [];
@@ -725,6 +726,8 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
       if (aliasInfo.IsExported || aliasInfo.IsStdlib) {
         if (_typeAliasSources.TryAdd(aliasName, aliasInfo.SourceTypeName))
           _seededTypeAliases.Add(aliasName);
+        if (aliasInfo.IsStdlib)
+          _seededStdlibTypeAliases.Add(aliasName);
       }
     }
     // Carry forward deferred global inits so the main() parser can emit cross-file inits
@@ -11640,10 +11643,11 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
   private string? FindArrayAliasByElementName(string elementTypeName) {
     foreach (var (aliasName, sourceTypeName) in _typeAliasSources) {
       if (sourceTypeName != "Array") continue;
-      // Only consider user-defined (local) aliases, not stdlib aliases.
-      // Stdlib array aliases (e.g. Sha256Words) should not be inferred for
-      // unrelated array literals — let the caller auto-create an __Array_ alias instead.
-      if (!_localTypeAliases.Contains(aliasName)) continue;
+      // Stdlib aliases (e.g. Sha256Words) should not be inferred for unrelated array
+      // literals — only consider local aliases and project-exported (non-stdlib) seeded aliases.
+      bool isProjectAlias = _localTypeAliases.Contains(aliasName)
+          || (_seededTypeAliases.Contains(aliasName) && !_seededStdlibTypeAliases.Contains(aliasName));
+      if (!isProjectAlias) continue;
       if (_typeRegistry.TryGetValue(aliasName, out var aliasType)
           && aliasType is MlirStructType st
           && st.TypeParams.TryGetValue("Element", out var elemType)) {
@@ -11652,9 +11656,38 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
         // Ranged type match (e.g., Element is "Int" which is int(min..max), we're looking for "i64")
         if (elemType is MlirRangedPrimitiveType rpt && rpt.BaseType.Name == elementTypeName)
           return aliasName;
+        // Alias equivalence: elementTypeName may be an auto-generated alias (e.g., "__Array_i8")
+        // that is structurally equivalent to a named alias (e.g., "ByteArray"). Check if both
+        // resolve to the same source type with matching type parameters after resolving ranged
+        // typealiases to their base primitives (e.g., "Byte" → MlirRangedPrimitiveType → "i8").
+        if (_typeRegistry.TryGetValue(elementTypeName, out var elemRegisteredType)
+            && elemRegisteredType is MlirStructType elemSt
+            && _typeRegistry.TryGetValue(elemType.Name, out var aliasElemRegisteredType)
+            && aliasElemRegisteredType is MlirStructType aliasElemSt
+            && _typeAliasSources.TryGetValue(elementTypeName, out var elemSource)
+            && _typeAliasSources.TryGetValue(elemType.Name, out var aliasElemSource)
+            && elemSource == aliasElemSource
+            && elemSt.TypeParams.Count == aliasElemSt.TypeParams.Count
+            && elemSt.TypeParams.All(kv =>
+                aliasElemSt.TypeParams.TryGetValue(kv.Key, out var v)
+                && ResolveTypeParamName(kv.Value) == ResolveTypeParamName(v)))
+          return aliasName;
       }
     }
     return null;
+  }
+
+  /// Resolves a type parameter value to its canonical MLIR primitive name.
+  /// Ranged typealiases like "Byte" (= byte(0 to 255)) resolve to their base type "i8".
+  private string ResolveTypeParamName(MlirType typeParam) {
+    // Inline ranged primitive types resolve directly
+    if (typeParam is MlirRangedPrimitiveType rpt)
+      return rpt.BaseType.Name;
+    // Look up in registry — typealiases like "Byte" register as MlirRangedPrimitiveType
+    if (_typeRegistry.TryGetValue(typeParam.Name, out var registered)
+        && registered is MlirRangedPrimitiveType regRpt)
+      return regRpt.BaseType.Name;
+    return typeParam.Name;
   }
 
   /// <summary>
