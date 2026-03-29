@@ -33,9 +33,13 @@ function lowerFunctionToArm64(srcFunc MlirFunction, osDesc OsDescriptor, allFunc
 		end 'updateMax'
 	end 'countLive'
 
-	// Count temp slots needed by SysOps (they still use slot-based addressing)
+	// Count temp slots needed by SysOps (they still use slot-based addressing).
+	// Skip diverging blocks (panic paths) since their slots are dead.
 	var sysOpTempCount = 0
 	for srcBlock in srcFunc.region.blocks 'countSysTemps'
+		if isMirDivergingBlock(srcBlock) 'skipDiverging'
+			continue
+		end 'skipDiverging'
 		for op in srcBlock.ops 'countOp'
 			sysOpTempCount = sysOpTempCount + sysOpTempSlotCountArm64(op)
 		end 'countOp'
@@ -87,6 +91,9 @@ function lowerFunctionToArm64(srcFunc MlirFunction, osDesc OsDescriptor, allFunc
 			setLastOpAsTerminatorArm64(dstBlock)
 		end 'hasTerm'
 	end 'eachBlock'
+
+	// Remove unconditional branches that fall through to the next block.
+	eliminateFallthroughJumps(dstFunc)
 
 	// Record the actual total slot count after lowering.
 	let actualSlotCount = nextTempSlot + blockArgSlotCount
@@ -626,7 +633,7 @@ function lowerCondBrArm64(condId ValueId, thenTarget BlockId, thenArgIds ValueId
 	// Store else-args first, then then-args.
 	emitBlockArgStoresArm64(elseArgIds, targetBlockId: elseTarget, dstBlock: dstBlock, srcBlocks: srcBlocks, blockArgSlots: blockArgSlots)
 	emitBlockArgStoresArm64(thenArgIds, targetBlockId: thenTarget, dstBlock: dstBlock, srcBlocks: srcBlocks, blockArgSlots: blockArgSlots)
-	let jumpKind = determineJumpKindInBlock(srcBlock)
+	let jumpKind = determineJumpKindForCond(srcBlock, condId: condId)
 	// Emit inverted conditional branch to else block, then unconditional branch to then block.
 	match jumpKind 'emitJump'
 		eq then dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.condBranch(MaxArm64CondCode.ne, elseTarget)))

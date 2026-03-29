@@ -10,6 +10,27 @@ export typealias RegOrdinal = int(i64.min to i64.max)
 let RM_NONE = -1
 let RM_NO_STACK_HOME = -9223372036854775807
 
+// Format a register ordinal as a name for trace logging.
+function rmRegName(state RegState, ord RegOrdinal) returns String
+	if ord == RM_NONE 'none'
+		return "none"
+	end 'none'
+	match state.target 'fmt'
+		x64 then return match ord 'x64name'
+			0 gives "rax"
+			1 gives "rcx"
+			2 gives "rdx"
+			3 gives "rbx"
+			6 gives "rsi"
+			7 gives "rdi"
+			8 gives "r8"
+			9 gives "r9"
+			default gives "r?{ord}"
+		end 'x64name'
+		arm64 then return "x{ord}"
+	end 'fmt'
+end 'rmRegName'
+
 export enum RegTarget
 	x64
 	arm64
@@ -80,8 +101,17 @@ export type RegState
 	// skip eager register allocation. deferredValues[valueId] = 1 if deferred.
 	export var deferredValues RegIntArray
 
+	// Remaining use counts: remainingUses[valueId] = number of remaining reads.
+	// Decremented each time a value is resolved via rmEnsureInRegister/ResolveGprUse.
+	// When it reaches 0, the value is dead and its register is freed immediately.
+	export var remainingUses RegIntArray
+
 	// Debug: function name for error messages
 	export var funcName ByteArray
+
+	// True when processing a diverging block (e.g. panic path).
+	// Spills are suppressed since the block never returns.
+	export var isInDivergingBlock bool
 end 'RegState'
 
 // Snapshot of register allocator state for carrying assignments across diverging blocks.
@@ -137,14 +167,11 @@ export function rmRestoreState(state RegState, snapshot RegSnapshot)
 	state.valueToFp = rmCopyArray(snapshot.valueToFp)
 	state.valueFpStackHome = rmCopyArray(snapshot.valueFpStackHome)
 	state.valuePreviousFp = rmCopyArray(snapshot.valuePreviousFp)
-	// Preserve spill offset watermarks — diverging blocks may have allocated
-	// spill slots that must not be reused.
-	if snapshot.nextSpillOffset < state.nextSpillOffset 'preserveNext'
-		state.nextSpillOffset = snapshot.nextSpillOffset
-	end 'preserveNext'
-	if snapshot.minSpillOffset < state.minSpillOffset 'preserveMin'
-		state.minSpillOffset = snapshot.minSpillOffset
-	end 'preserveMin'
+	// Unconditionally restore spill offsets from before the diverging block.
+	// Diverging blocks (panic paths) never return, so their spill slots are
+	// unreachable from the continuation and must not inflate the frame.
+	state.nextSpillOffset = snapshot.nextSpillOffset
+	state.minSpillOffset = snapshot.minSpillOffset
 	state.nextFreshIndex = 0
 	state.nextFreshFpIndex = 0
 	state.currentOpIndex = 0
@@ -233,7 +260,9 @@ export function createRegState(spillBase RegInt, gprPool RegIntArray, callerSave
 		returnFpOrd: returnFpOrd,
 		fpCycleBreakOrd: fpCycleBreakOrd,
 		deferredValues: RegIntArray{},
-		funcName: b""
+		remainingUses: RegIntArray{},
+		funcName: b"",
+		isInDivergingBlock: false
 	}
 end 'createRegState'
 
@@ -325,12 +354,15 @@ end 'rmUpdateSpillWatermark'
 
 export function rmTotalStackSize(state RegState) returns RegInt
 	if rmSpillsGrowDown(state) 'x86Style'
-		// x86: spills grow downward — minSpillOffset tracks the lowest offset
+		// x86: spills grow downward from spillBaseOffset.
+		// Only count the spill area (below the var area), not the var area itself,
+		// because patchPrologueStackSize adds this to the existing prologue size
+		// which already includes the var area.
 		var minOffset = state.minSpillOffset
 		if state.nextSpillOffset < minOffset 'updateMin'
 			minOffset = state.nextSpillOffset
 		end 'updateMin'
-		let raw = 0 - minOffset
+		let raw = state.spillBaseOffset - minOffset
 		if raw > 0 'hasSpills'
 			return(raw + 15) and(0 - 16)
 		end 'hasSpills'
@@ -513,19 +545,64 @@ export function rmSpillRegisterIfOccupied(state RegState, regOrdinal RegOrdinal,
 	if existing == RM_NONE 'empty'
 		return
 	end 'empty'
+
 	// If no stack home and not a constant, spill to stack
 	let stackHome = rmGetOr(state.valueStackHome, index: existing, fallback: RM_NO_STACK_HOME)
 	let isConst = rmGetOr(state.hasConstant, index: existing, fallback: 0)
 	if stackHome == RM_NO_STACK_HOME and isConst == 0 'needsSpill'
 		let spillSlot = rmAllocateSpillSlot(state)
+		logTrace(LogCategory.mlir, message: () gives "regalloc: spill v{existing} from {rmRegName(state, ord: regOrdinal)} to [rbp{spillSlot}] (func={String.from(state.funcName)})")
 		rmEmitSpill(state, dstBlock: dstBlock, regOrdinal: regOrdinal, stackOffset: spillSlot)
 		rmSet(state.valueStackHome, index: existing, value: spillSlot, sentinel: RM_NO_STACK_HOME)
-	end 'needsSpill'
+	end 'needsSpill' else 'noSpill'
+		if isConst == 1 'evictConst'
+			logTrace(LogCategory.mlir, message: () gives "regalloc: evict constant v{existing} from {rmRegName(state, ord: regOrdinal)} (func={String.from(state.funcName)})")
+		end 'evictConst'
+	end 'noSpill'
 	// Clear register mappings
 	rmSet(state.valueToRegister, index: existing, value: RM_NONE, sentinel: RM_NONE)
 	state.registerContents.set(regOrdinal, value: RM_NONE)
 	state.lastUsed.set(regOrdinal, value: 0)
 end 'rmSpillRegisterIfOccupied'
+
+// Relocate a value from one register to a free register, avoiding a stack spill.
+// protect1/protect2 are registers that must not be used as the destination.
+// Returns the new register ordinal, or RM_NONE if no free register was found
+// (caller should fall back to rmSpillRegisterIfOccupied).
+export function rmRelocateRegister(state RegState, regOrdinal RegOrdinal, dstBlock MlirBlock, protect1 RegOrdinal, protect2 RegOrdinal) returns RegOrdinal
+	let existing = rmGetOr(state.registerContents, index: regOrdinal, fallback: RM_NONE)
+	if existing == RM_NONE 'empty'
+		return RM_NONE
+	end 'empty'
+	// Try to find a free register in the pool
+	var i = 0
+	while i < state.gprPoolSize 'scanFree'
+		let candidate = try state.gprPool.get(i) otherwise 'skip'
+			i = i + 1
+			continue
+		end 'skip'
+		if candidate == regOrdinal or candidate == protect1 or candidate == protect2 'skipProtected'
+			i = i + 1
+			continue
+		end 'skipProtected'
+		let occupant = rmGetOr(state.registerContents, index: candidate, fallback: RM_NONE)
+		if occupant == RM_NONE 'found'
+			// Move the value to the free register
+			logTrace(LogCategory.mlir, message: () gives "regalloc: relocate v{existing} from {rmRegName(state, ord: regOrdinal)} to {rmRegName(state, ord: candidate)} (func={String.from(state.funcName)})")
+			rmEmitMovReg(state, dstBlock: dstBlock, destOrd: candidate, srcOrd: regOrdinal)
+			// Update mappings: value now in candidate, not regOrdinal
+			state.registerContents.set(candidate, value: existing)
+			rmSet(state.valueToRegister, index: existing, value: candidate, sentinel: RM_NONE)
+			state.lastUsed.set(candidate, value: state.currentOpIndex)
+			// Clear old register
+			state.registerContents.set(regOrdinal, value: RM_NONE)
+			state.lastUsed.set(regOrdinal, value: 0)
+			return candidate
+		end 'found'
+		i = i + 1
+	end 'scanFree'
+	return RM_NONE
+end 'rmRelocateRegister'
 
 // --- LRU eviction ---
 
@@ -648,6 +725,7 @@ export function rmAllocateRegister(state RegState, valueId RegInt, dstBlock Mlir
 	end 'scanFree'
 
 	// 3. All occupied — evict LRU
+	logTrace(LogCategory.mlir, message: () gives "regalloc: evicting for v{valueId} (protect={rmRegName(state, ord: protect1)},{rmRegName(state, ord: protect2)}) func={String.from(state.funcName)}")
 	rmEvict(state, dstBlock: dstBlock, protect1: protect1, protect2: protect2)
 
 	// Find the freed register (must also skip protected registers)
@@ -690,6 +768,7 @@ export function rmEnsureInRegister(state RegState, valueId RegInt, dstBlock Mlir
 	if isConst == 1 'remat'
 		let imm = rmGetOr(state.constantValues, index: valueId, fallback: 0)
 		let reg = rmAllocateRegister(state, valueId: valueId, dstBlock: dstBlock, protect1: protect1, protect2: protect2)
+		logTrace(LogCategory.mlir, message: () gives "regalloc: remat v{valueId}={imm} into {rmRegName(state, ord: reg)} (func={String.from(state.funcName)})")
 		rmEmitMovImm(state, dstBlock: dstBlock, regOrdinal: reg, value: imm)
 		return reg
 	end 'remat'
@@ -698,6 +777,7 @@ export function rmEnsureInRegister(state RegState, valueId RegInt, dstBlock Mlir
 	let stackHome = rmGetOr(state.valueStackHome, index: valueId, fallback: RM_NO_STACK_HOME)
 	if stackHome != RM_NO_STACK_HOME 'reload'
 		let reg = rmAllocateRegister(state, valueId: valueId, dstBlock: dstBlock, protect1: protect1, protect2: protect2)
+		logTrace(LogCategory.mlir, message: () gives "regalloc: reload v{valueId} from [rbp{stackHome}] into {rmRegName(state, ord: reg)} (func={String.from(state.funcName)})")
 		rmEmitReload(state, dstBlock: dstBlock, regOrdinal: reg, stackOffset: stackHome)
 		return reg
 	end 'reload'
@@ -841,6 +921,25 @@ export function rmEnsureInFpRegister(state RegState, valueId RegInt, dstBlock Ml
 			return fp
 		end 'verified'
 	end 'inGpr'
+
+	// Constant rematerialization: load raw bits into a scratch GPR, then movq to XMM.
+	let isConst = rmGetOr(state.hasConstant, index: valueId, fallback: 0)
+	if isConst == 1 'rematConst'
+		let imm = rmGetOr(state.constantValues, index: valueId, fallback: 0)
+		let gpr = rmAllocateRegister(state, valueId: valueId, dstBlock: dstBlock, protect1: RM_NONE, protect2: RM_NONE)
+		logTrace(LogCategory.mlir, message: () gives "regalloc: fp-remat v{valueId}={imm} via {rmRegName(state, ord: gpr)} (func={String.from(state.funcName)})")
+		rmEmitMovImm(state, dstBlock: dstBlock, regOrdinal: gpr, value: imm)
+		// Spill GPR to stack, then load into XMM from that slot
+		let spillSlot = rmAllocateSpillSlot(state)
+		rmEmitSpill(state, dstBlock: dstBlock, regOrdinal: gpr, stackOffset: spillSlot)
+		rmSet(state.valueStackHome, index: valueId, value: spillSlot, sentinel: RM_NO_STACK_HOME)
+		// Free the GPR — we only needed it as a transfer intermediary
+		rmNoteValueDead(state, valueId: valueId)
+		let fp = rmAllocateFpRegister(state, valueId: valueId, dstBlock: dstBlock)
+		rmEmitReloadFp(state, dstBlock: dstBlock, fpOrdinal: fp, stackOffset: spillSlot)
+		rmSet(state.valueFpStackHome, index: valueId, value: spillSlot, sentinel: RM_NO_STACK_HOME)
+		return fp
+	end 'rematConst'
 
 	panic("rmEnsureInFpRegister: value {valueId} has no FP register and no FP stack home")
 end 'rmEnsureInFpRegister'
@@ -1080,7 +1179,13 @@ end 'rmInvalidateCallerSaved'
 // before branch instructions that may make subsequent spill code unreachable.
 // Clobber all caller-saved registers before a call instruction.
 // Spills values in caller-saved registers to the stack, then clears those register mappings.
+// In diverging blocks (panic paths), skips spills since the block never returns.
 export function rmClobberCallerSaved(state RegState, dstBlock MlirBlock)
+	logTrace(LogCategory.mlir, message: () gives "regalloc: clobber caller-saved (func={String.from(state.funcName)})")
+	if state.isInDivergingBlock 'diverging'
+		rmClearCallerSavedMappings(state)
+		return
+	end 'diverging'
 	var i = 0
 	while i < state.callerSavedGprs.count() 'clobberGpr'
 		let regOrd = try state.callerSavedGprs.get(i) otherwise 'skip'
@@ -1102,7 +1207,41 @@ export function rmClobberCallerSaved(state RegState, dstBlock MlirBlock)
 	end 'clobberFp'
 end 'rmClobberCallerSaved'
 
+// Clear caller-saved register mappings without emitting spill instructions.
+// Used in diverging blocks where spills are dead code.
+function rmClearCallerSavedMappings(state RegState)
+	var i = 0
+	while i < state.callerSavedGprs.count() 'clearGpr'
+		let regOrd = try state.callerSavedGprs.get(i) otherwise 'skipGpr'
+			i = i + 1
+			continue
+		end 'skipGpr'
+		let existing = rmGetOr(state.registerContents, index: regOrd, fallback: RM_NONE)
+		if existing != RM_NONE 'occupied'
+			rmSet(state.valueToRegister, index: existing, value: RM_NONE, sentinel: RM_NONE)
+			state.registerContents.set(regOrd, value: RM_NONE)
+			state.lastUsed.set(regOrd, value: 0)
+		end 'occupied'
+		i = i + 1
+	end 'clearGpr'
+	var fi = 0
+	while fi < state.callerSavedFps.count() 'clearFp'
+		let fpOrd = try state.callerSavedFps.get(fi) otherwise 'skipFp'
+			fi = fi + 1
+			continue
+		end 'skipFp'
+		let existing = rmGetOr(state.fpContents, index: fpOrd, fallback: RM_NONE)
+		if existing != RM_NONE 'occupiedFp'
+			rmSet(state.valueToFp, index: existing, value: RM_NONE, sentinel: RM_NONE)
+			state.fpContents.set(fpOrd, value: RM_NONE)
+			state.fpLastUsed.set(fpOrd, value: 0)
+		end 'occupiedFp'
+		fi = fi + 1
+	end 'clearFp'
+end 'rmClearCallerSavedMappings'
+
 export function rmSpillAllBeforeTerminator(state RegState, dstBlock MlirBlock)
+	logTrace(LogCategory.mlir, message: () gives "regalloc: spill-all-before-terminator (func={String.from(state.funcName)})")
 	var i = 0
 	while i < state.gprPoolSize 'spillGpr'
 		let regOrd = try state.gprPool.get(i) otherwise 'skip'
@@ -1851,6 +1990,8 @@ function x64OpHasVirtualRegs(op MaxX64Op) returns bool
 		loadSlot(destReg, _) gives isVirtualGpr(destReg)
 		addRegReg(destReg, srcReg) gives isVirtualGpr(destReg) or isVirtualGpr(srcReg)
 		subRegReg(destReg, srcReg) gives isVirtualGpr(destReg) or isVirtualGpr(srcReg)
+		addRegImm(destReg, _) gives isVirtualGpr(destReg)
+		subRegImm(destReg, _) gives isVirtualGpr(destReg)
 		imulRegReg(destReg, srcReg) gives isVirtualGpr(destReg) or isVirtualGpr(srcReg)
 		idivRcx gives false
 		iremRcx gives false
@@ -1885,6 +2026,7 @@ function x64OpHasVirtualRegs(op MaxX64Op) returns bool
 		memcpyOp gives false
 		movRegReg(destReg, srcReg) gives isVirtualGpr(destReg) or isVirtualGpr(srcReg)
 		cmpRegReg(lhsReg, rhsReg) gives isVirtualGpr(lhsReg) or isVirtualGpr(rhsReg)
+		cmpRegImm(lhsReg, _) gives isVirtualGpr(lhsReg)
 		testRegReg(reg1, reg2) gives isVirtualGpr(reg1) or isVirtualGpr(reg2)
 		cqo gives false
 		idivReg(divisorReg) gives isVirtualGpr(divisorReg)
@@ -2083,26 +2225,84 @@ function preSeedX64ParamRegisters(state RegState, srcFunc MlirFunction)
 	let entryBlock = try srcFunc.region.blocks.get(0) otherwise 'noEntry'
 		return
 	end 'noEntry'
-	// Scan the entry block for param-related movRegReg ops in the isel output.
-	// These ops look like: maxx64(movRegReg(virtual(paramValueId), physical(ccReg)))
-	for op in entryBlock.ops 'scanOps'
+	// Scan the entry block for phys→virt movRegReg ops and pre-seed them.
+	// Skip division/modulo result extraction: movRegReg(virtual, physical(rax/rdx))
+	// immediately after idivReg — these are not params and must not be pre-seeded
+	// because they would incorrectly occupy rax/rdx for the entire function.
+	let opCount = entryBlock.ops.count()
+	var opIdx = 0
+	while opIdx < opCount 'scanOps'
+		let op = try entryBlock.ops.get(opIdx) otherwise 'skipOp'
+			opIdx = opIdx + 1
+			continue
+		end 'skipOp'
 		match op 'checkParam'
 			maxhl to mir then break 'checkParam'
-			maxx64(x64Op) then match x64Op 'checkMov'
-				prologue to memcpyOp then break 'checkMov'
-				movRegReg(destReg, srcReg) then match srcReg 'checkPhys'
-					physical(reg) then match destReg 'checkVirt'
-						virtual(valueId) then rmPreAssignParam(state, valueId: valueId, regOrdinal: x64RegToOrdinal(reg))
-						physical then break 'checkVirt'
-					end 'checkVirt'
-					virtual then break 'checkPhys'
-				end 'checkPhys'
-				cmpRegReg to repStosq then break 'checkMov'
-			end 'checkMov'
+			maxx64(x64Op) then preSeedIfNotDivResult(state, x64Op: x64Op, ops: entryBlock.ops, opIdx: opIdx)
 			maxarm64 then break 'checkParam'
 		end 'checkParam'
+		opIdx = opIdx + 1
 	end 'scanOps'
 end 'preSeedX64ParamRegisters'
+
+// Pre-seed a phys→virt movRegReg unless the previous op is idivReg
+// (which means this is a division/modulo result extraction, not a param).
+function preSeedIfNotDivResult(state RegState, x64Op MaxX64Op, ops MlirOpArray, opIdx RegInt)
+	match x64Op 'checkMov'
+		movRegReg(destReg, srcReg) then preSeedMovIfNotDivResult(state, destReg: destReg, srcReg: srcReg, ops: ops, opIdx: opIdx)
+		prologue to memcpyOp then break 'checkMov'
+		cmpRegReg to repStosq then break 'checkMov'
+	end 'checkMov'
+end 'preSeedIfNotDivResult'
+
+function preSeedMovIfNotDivResult(state RegState, destReg X64VReg, srcReg X64VReg, ops MlirOpArray, opIdx RegInt)
+	if not isVirtualGpr(destReg) 'destNotVirt'
+		return
+	end 'destNotVirt'
+	let destId = x64VRegId(destReg)
+	if destId < 0 'noId'
+		return
+	end 'noId'
+	let srcOrd = match srcReg 'getSrcOrd'
+		physical(reg) gives x64RegToOrdinal(reg)
+		virtual gives RM_NONE
+	end 'getSrcOrd'
+	if srcOrd == RM_NONE 'notPhys'
+		return
+	end 'notPhys'
+	// Skip if the previous op is idivReg (division result) or callDirect (call result)
+	// — these are not params and must not be pre-seeded.
+	if opIdx > 0 'checkPrev'
+		if isPrevOpIdivOrCall(ops, opIdx: opIdx) 'isResultExtraction'
+			return
+		end 'isResultExtraction'
+	end 'checkPrev'
+	rmPreAssignParam(state, valueId: destId, regOrdinal: srcOrd)
+end 'preSeedMovIfNotDivResult'
+
+// Check if the op immediately before opIdx is an idivReg, callDirect, or callIndirect.
+// These produce results in fixed physical registers that should not be pre-seeded as params.
+function isPrevOpIdivOrCall(ops MlirOpArray, opIdx RegInt) returns bool
+	let prevOp = try ops.get(opIdx - 1) otherwise 'noPrev'
+		return false
+	end 'noPrev'
+	var result = false
+	match prevOp 'checkPrev'
+		maxx64(prevX64) then match prevX64 'checkOp'
+			callDirect then result = true
+			idivReg then result = true
+			callIndirect then result = true
+			prologue to loadRegRbpOffset then break 'checkOp'
+			syscall to memcpyOp then break 'checkOp'
+			movRegReg to cqo then break 'checkOp'
+			spillToStack to xorRegRegSelf then break 'checkOp'
+			xchgRegReg to repStosq then break 'checkOp'
+		end 'checkOp'
+		maxhl to mir then break 'checkPrev'
+		maxarm64 then break 'checkPrev'
+	end 'checkPrev'
+	return result
+end 'isPrevOpIdivOrCall'
 
 function rmPreAssignParam(state RegState, valueId RegInt, regOrdinal RegOrdinal)
 	rmSet(state.valueToRegister, index: valueId, value: regOrdinal, sentinel: RM_NONE)
@@ -2144,10 +2344,555 @@ function rmRecordSlotHomeFromVReg(state RegState, vreg X64VReg, slotIndex VarSlo
 	end 'recordHome'
 end 'rmRecordSlotHomeFromVReg'
 
+// Check whether a terminator op is a return instruction (no successors).
+function isReturnTerminator(op MlirOp, isX64 bool) returns bool
+	if isX64 'checkX64'
+		return isX64RetTerminator(op)
+	end 'checkX64'
+	return isArm64RetTerminator(op)
+end 'isReturnTerminator'
+
+function isX64RetTerminator(op MlirOp) returns bool
+	var result = false
+	match op 'checkOp'
+		maxx64(x64Op) then match x64Op 'checkRet'
+			ret then result = true
+			prologue to epilogue then break 'checkRet'
+			movRegImm to repStosq then break 'checkRet'
+		end 'checkRet'
+		maxhl to mir then break 'checkOp'
+		maxarm64 then break 'checkOp'
+	end 'checkOp'
+	return result
+end 'isX64RetTerminator'
+
+function isArm64RetTerminator(op MlirOp) returns bool
+	var result = false
+	match op 'checkOp'
+		maxarm64(a64Op) then match a64Op 'checkRet'
+			ret then result = true
+			prologue to printInt then break 'checkRet'
+			syscall to nullSafeLoad then break 'checkRet'
+		end 'checkRet'
+		maxhl to maxx64 then break 'checkOp'
+	end 'checkOp'
+	return result
+end 'isArm64RetTerminator'
+
+// Extract virtual value ID from an X64VReg, or -1 if physical.
+function x64VRegId(vreg X64VReg) returns RegInt
+	return match vreg 'getId'
+		virtual(id) gives id
+		physical gives -1
+	end 'getId'
+end 'x64VRegId'
+
+// Extract virtual value ID from an X64FpVReg, or -1 if physical.
+function x64FpVRegId(vreg X64FpVReg) returns RegInt
+	return match vreg 'getId'
+		virtual(id) gives id
+		physical gives -1
+	end 'getId'
+end 'x64FpVRegId'
+
+// Extract virtual value ID from an Arm64VReg, or -1 if physical.
+function arm64VRegId(vreg Arm64VReg) returns RegInt
+	return match vreg 'getId'
+		virtual(id) gives id
+		physical gives -1
+	end 'getId'
+end 'arm64VRegId'
+
+// Extract virtual value ID from an Arm64FpVReg, or -1 if physical.
+function arm64FpVRegId(vreg Arm64FpVReg) returns RegInt
+	return match vreg 'getId'
+		virtual(id) gives id
+		physical gives -1
+	end 'getId'
+end 'arm64FpVRegId'
+
+// Increment the use count for a value. Called during pre-scan for each read operand.
+function incUse(counts RegIntArray, id RegInt)
+	if id < 0 'invalid'
+		return
+	end 'invalid'
+	let current = rmGetOr(counts, index: id, fallback: 0)
+	rmSet(counts, index: id, value: current + 1, sentinel: 0)
+end 'incUse'
+
+// Collect read VReg IDs from an X64 op and record their last use at opIdx.
+function countX64OpReads(counts RegIntArray, x64Op MaxX64Op)
+	match x64Op 'scan'
+		prologue to ret then break 'scan'
+		movRegImm then break 'scan'
+		movSlot(_, srcReg) then incUse(counts, id: x64VRegId(srcReg))
+		loadSlot then break 'scan'
+		addRegReg(destReg, srcReg) then countX64TwoReads(counts, reg1: destReg, reg2: srcReg)
+		subRegReg(destReg, srcReg) then countX64TwoReads(counts, reg1: destReg, reg2: srcReg)
+		addRegImm(destReg, _) then incUse(counts, id: x64VRegId(destReg))
+		subRegImm(destReg, _) then incUse(counts, id: x64VRegId(destReg))
+		imulRegReg(destReg, srcReg) then countX64TwoReads(counts, reg1: destReg, reg2: srcReg)
+		idivRcx to iremRcx then break 'scan'
+		negReg(reg) then incUse(counts, id: x64VRegId(reg))
+		bitNotReg(reg) then incUse(counts, id: x64VRegId(reg))
+		andRegReg(destReg, srcReg) then countX64TwoReads(counts, reg1: destReg, reg2: srcReg)
+		orRegReg(destReg, srcReg) then countX64TwoReads(counts, reg1: destReg, reg2: srcReg)
+		xorRegReg(destReg, srcReg) then countX64TwoReads(counts, reg1: destReg, reg2: srcReg)
+		shlRegCl(reg) then incUse(counts, id: x64VRegId(reg))
+		sarRegCl(reg) then incUse(counts, id: x64VRegId(reg))
+		cmpRaxRcx to testRaxRax then break 'scan'
+		condJump to jmp then break 'scan'
+		movF64Slot to ucomisd then break 'scan'
+		printLiteral to printInt then break 'scan'
+		subRspImm to addRspImm then break 'scan'
+		movRspOffsetReg(_, srcReg) then incUse(counts, id: x64VRegId(srcReg))
+		loadRegRbpOffset then break 'scan'
+		callDirect then break 'scan'
+		syscall to loadByteOp then break 'scan'
+		memcpyOp then break 'scan'
+		movRegReg(_, srcReg) then incUse(counts, id: x64VRegId(srcReg))
+		cmpRegReg(lhsReg, rhsReg) then countX64TwoReads(counts, reg1: lhsReg, reg2: rhsReg)
+		cmpRegImm(lhsReg, _) then incUse(counts, id: x64VRegId(lhsReg))
+		testRegReg(reg1, reg2) then countX64TwoReads(counts, reg1: reg1, reg2: reg2)
+		cqo then break 'scan'
+		idivReg(divisorReg) then incUse(counts, id: x64VRegId(divisorReg))
+		spillToStack(_, srcReg) then incUse(counts, id: x64VRegId(srcReg))
+		reloadFromStack then break 'scan'
+		xorRegRegSelf then break 'scan'
+		callIndirect(reg) then incUse(counts, id: x64VRegId(reg))
+		xchgRegReg(reg1, reg2) then countX64TwoReads(counts, reg1: reg1, reg2: reg2)
+		movXmmXmm(_, src, _) then incUse(counts, id: x64FpVRegId(src))
+		spillXmmToStack(_, src, _) then incUse(counts, id: x64FpVRegId(src))
+		reloadXmmFromStack then break 'scan'
+		movXmmRipRel then break 'scan'
+		addXmm(dest, src, _) then countX64FpTwoReads(counts, fp1: dest, fp2: src)
+		subXmm(dest, src, _) then countX64FpTwoReads(counts, fp1: dest, fp2: src)
+		mulXmm(dest, src, _) then countX64FpTwoReads(counts, fp1: dest, fp2: src)
+		divXmm(dest, src, _) then countX64FpTwoReads(counts, fp1: dest, fp2: src)
+		sqrtXmm(_, src, _) then incUse(counts, id: x64FpVRegId(src))
+		roundXmm(_, src, _, _) then incUse(counts, id: x64FpVRegId(src))
+		ucomisXmm(src1, src2, _) then countX64FpTwoReads(counts, fp1: src1, fp2: src2)
+		cvtSi2Float(_, src, _) then incUse(counts, id: x64VRegId(src))
+		cvttFloat2Si(_, src, _) then incUse(counts, id: x64FpVRegId(src))
+		cvtSd2Ss(_, src) then incUse(counts, id: x64FpVRegId(src))
+		cvtSs2Sd(_, src) then incUse(counts, id: x64FpVRegId(src))
+		movqXmmToGpr(_, src) then incUse(counts, id: x64FpVRegId(src))
+		andMaskRipRel(dest, _, _) then incUse(counts, id: x64FpVRegId(dest))
+		storeIndirect(baseReg, _, srcReg, _) then countX64TwoReads(counts, reg1: baseReg, reg2: srcReg)
+		loadIndirect(_, baseReg, _, _) then incUse(counts, id: x64VRegId(baseReg))
+		storeIndirectXmm(baseReg, _, src, _) then countX64MixedReads(counts, gpr: baseReg, fp: src)
+		loadIndirectXmm(_, baseReg, _, _) then incUse(counts, id: x64VRegId(baseReg))
+		globalLoad then break 'scan'
+		globalStore(_, src, _) then incUse(counts, id: x64VRegId(src))
+		globalLoadXmm then break 'scan'
+		globalStoreXmm(_, src, _) then incUse(counts, id: x64FpVRegId(src))
+		leaFromStack then break 'scan'
+		leaRipRelative then break 'scan'
+		leaFuncAddr then break 'scan'
+		setcc then break 'scan'
+		cmov(_, src, _) then incUse(counts, id: x64VRegId(src))
+		movsxd(_, src) then incUse(counts, id: x64VRegId(src))
+		movzx32(_, src) then incUse(counts, id: x64VRegId(src))
+		nullSafeLoad(_, baseReg, _) then incUse(counts, id: x64VRegId(baseReg))
+		repMovsb to repStosq then break 'scan'
+	end 'scan'
+end 'countX64OpReads'
+
+function countX64TwoReads(counts RegIntArray, reg1 X64VReg, reg2 X64VReg)
+	incUse(counts, id: x64VRegId(reg1))
+	incUse(counts, id: x64VRegId(reg2))
+end 'countX64TwoReads'
+
+function countX64FpTwoReads(counts RegIntArray, fp1 X64FpVReg, fp2 X64FpVReg)
+	incUse(counts, id: x64FpVRegId(fp1))
+	incUse(counts, id: x64FpVRegId(fp2))
+end 'countX64FpTwoReads'
+
+function countX64MixedReads(counts RegIntArray, gpr X64VReg, fp X64FpVReg)
+	incUse(counts, id: x64VRegId(gpr))
+	incUse(counts, id: x64FpVRegId(fp))
+end 'countX64MixedReads'
+
+// Collect read VReg IDs from an ARM64 op and record their last use at opIdx.
+function countArm64OpReads(counts RegIntArray, a64Op MaxArm64Op)
+	match a64Op 'scan'
+		prologue to epilogue then break 'scan'
+		movImm then break 'scan'
+		strToSlot(_, src) then incUse(counts, id: arm64VRegId(src))
+		ldrFromSlot then break 'scan'
+		addRegs(_, src1, src2) then countArm64TwoReads(counts, reg1: src1, reg2: src2)
+		subRegs(_, src1, src2) then countArm64TwoReads(counts, reg1: src1, reg2: src2)
+		mulRegs(_, src1, src2) then countArm64TwoReads(counts, reg1: src1, reg2: src2)
+		sdivRegs(_, src1, src2) then countArm64TwoReads(counts, reg1: src1, reg2: src2)
+		remRegs(_, src1, src2) then countArm64TwoReads(counts, reg1: src1, reg2: src2)
+		negReg(_, src) then incUse(counts, id: arm64VRegId(src))
+		mvnReg(_, src) then incUse(counts, id: arm64VRegId(src))
+		andRegs(_, src1, src2) then countArm64TwoReads(counts, reg1: src1, reg2: src2)
+		orrRegs(_, src1, src2) then countArm64TwoReads(counts, reg1: src1, reg2: src2)
+		eorRegs(_, src1, src2) then countArm64TwoReads(counts, reg1: src1, reg2: src2)
+		lslRegs(_, src1, src2) then countArm64TwoReads(counts, reg1: src1, reg2: src2)
+		asrRegs(_, src1, src2) then countArm64TwoReads(counts, reg1: src1, reg2: src2)
+		cmpRegs(src1, src2) then countArm64TwoReads(counts, reg1: src1, reg2: src2)
+		cmpRegZero(src) then incUse(counts, id: arm64VRegId(src))
+		condBranch to branchLink then break 'scan'
+		printLiteral to printInt then break 'scan'
+		ret then break 'scan'
+		syscall to memcpyOp then break 'scan'
+		movRegReg(_, src) then incUse(counts, id: arm64VRegId(src))
+		spillToStack(_, src) then incUse(counts, id: arm64VRegId(src))
+		reloadFromStack then break 'scan'
+		branchLinkReg(reg) then incUse(counts, id: arm64VRegId(reg))
+		subSpImm to addSpImm then break 'scan'
+		strToSpOffset(_, src) then incUse(counts, id: arm64VRegId(src))
+		fmovRegReg(_, src, _) then incUse(counts, id: arm64FpVRegId(src))
+		spillFpToStack(_, src, _) then incUse(counts, id: arm64FpVRegId(src))
+		reloadFpFromStack then break 'scan'
+		fmovToFloat(_, src, _) then incUse(counts, id: arm64VRegId(src))
+		fmovToGpr(_, src, _) then incUse(counts, id: arm64FpVRegId(src))
+		fpLoadRdata then break 'scan'
+		fadd(_, src1, src2, _) then countArm64FpTwoReads(counts, fp1: src1, fp2: src2)
+		fsub(_, src1, src2, _) then countArm64FpTwoReads(counts, fp1: src1, fp2: src2)
+		fmul(_, src1, src2, _) then countArm64FpTwoReads(counts, fp1: src1, fp2: src2)
+		fdiv(_, src1, src2, _) then countArm64FpTwoReads(counts, fp1: src1, fp2: src2)
+		fsqrt(_, src, _) then incUse(counts, id: arm64FpVRegId(src))
+		fabs(_, src, _) then incUse(counts, id: arm64FpVRegId(src))
+		fneg(_, src, _) then incUse(counts, id: arm64FpVRegId(src))
+		fcmp(src1, src2, _) then countArm64FpTwoReads(counts, fp1: src1, fp2: src2)
+		scvtf(_, src, _) then incUse(counts, id: arm64VRegId(src))
+		fcvtzs(_, src, _) then incUse(counts, id: arm64FpVRegId(src))
+		fcvt(_, src, _) then incUse(counts, id: arm64FpVRegId(src))
+		frintm(_, src, _) then incUse(counts, id: arm64FpVRegId(src))
+		frintp(_, src, _) then incUse(counts, id: arm64FpVRegId(src))
+		frintz(_, src, _) then incUse(counts, id: arm64FpVRegId(src))
+		frintn(_, src, _) then incUse(counts, id: arm64FpVRegId(src))
+		fpStoreIndirect(baseReg, _, src, _) then countArm64MixedReads(counts, gpr: baseReg, fp: src)
+		fpLoadIndirect(_, baseReg, _, _) then incUse(counts, id: arm64VRegId(baseReg))
+		storeIndirect(baseReg, _, srcReg, _) then countArm64TwoReads(counts, reg1: baseReg, reg2: srcReg)
+		loadIndirect(_, baseReg, _, _) then incUse(counts, id: arm64VRegId(baseReg))
+		globalLoad then break 'scan'
+		globalStore(_, src, _) then incUse(counts, id: arm64VRegId(src))
+		globalLoadFloat then break 'scan'
+		globalStoreFloat(_, src, _) then incUse(counts, id: arm64FpVRegId(src))
+		leaFromStack to leaFuncAddr then break 'scan'
+		cset then break 'scan'
+		csel(_, src1, src2, _) then countArm64TwoReads(counts, reg1: src1, reg2: src2)
+		sxtw(_, src) then incUse(counts, id: arm64VRegId(src))
+		nullSafeLoad(_, baseReg, _) then incUse(counts, id: arm64VRegId(baseReg))
+	end 'scan'
+end 'countArm64OpReads'
+
+function countArm64TwoReads(counts RegIntArray, reg1 Arm64VReg, reg2 Arm64VReg)
+	incUse(counts, id: arm64VRegId(reg1))
+	incUse(counts, id: arm64VRegId(reg2))
+end 'countArm64TwoReads'
+
+function countArm64FpTwoReads(counts RegIntArray, fp1 Arm64FpVReg, fp2 Arm64FpVReg)
+	incUse(counts, id: arm64FpVRegId(fp1))
+	incUse(counts, id: arm64FpVRegId(fp2))
+end 'countArm64FpTwoReads'
+
+function countArm64MixedReads(counts RegIntArray, gpr Arm64VReg, fp Arm64FpVReg)
+	incUse(counts, id: arm64VRegId(gpr))
+	incUse(counts, id: arm64FpVRegId(fp))
+end 'countArm64MixedReads'
+
+// Pre-scan all ops in a function to count how many times each virtual value is read.
+function computeUseCounts(srcFunc MlirFunction, isX64 bool) returns RegIntArray
+	var counts = RegIntArray{}
+	for srcBlock in srcFunc.region.blocks 'eachBlock'
+		for op in srcBlock.ops 'eachOp'
+			if isX64 'x64Path'
+				match op 'dispatch'
+					maxx64(x64Op) then countX64OpReads(counts, x64Op: x64Op)
+					maxhl to mir then break 'dispatch'
+					maxarm64 then break 'dispatch'
+				end 'dispatch'
+			end 'x64Path' else 'arm64Path'
+				match op 'dispatch2'
+					maxarm64(a64Op) then countArm64OpReads(counts, a64Op: a64Op)
+					maxhl to maxx64 then break 'dispatch2'
+				end 'dispatch2'
+			end 'arm64Path'
+		end 'eachOp'
+		if srcBlock.hasTerminator 'hasTerm'
+			if isX64 'x64Term'
+				match srcBlock.terminator 'dispatchTerm'
+					maxx64(x64Op) then countX64OpReads(counts, x64Op: x64Op)
+					maxhl to mir then break 'dispatchTerm'
+					maxarm64 then break 'dispatchTerm'
+				end 'dispatchTerm'
+			end 'x64Term' else 'arm64Term'
+				match srcBlock.terminator 'dispatchTerm2'
+					maxarm64(a64Op) then countArm64OpReads(counts, a64Op: a64Op)
+					maxhl to maxx64 then break 'dispatchTerm2'
+				end 'dispatchTerm2'
+			end 'arm64Term'
+		end 'hasTerm'
+	end 'eachBlock'
+	return counts
+end 'computeUseCounts'
+
+// Pre-scan to identify values only consumed by sink ops (call arg setup / return).
+// These values can be deferred — not eagerly materialized, rematerialized on demand.
+// A "sink" op is movRegReg(physical, virtual) — moving a virtual to a fixed register.
+function computeDeferredValues(srcFunc MlirFunction, isX64 bool) returns RegIntArray
+	var sinkOnly = RegIntArray{}
+	var usedByNonSink = RegIntArray{}
+	for srcBlock in srcFunc.region.blocks 'eachBlock'
+		for op in srcBlock.ops 'eachOp'
+			if isX64 'x64'
+				match op 'check'
+					maxx64(x64Op) then classifyX64OpReads(sinkOnly, usedByNonSink: usedByNonSink, x64Op: x64Op)
+					maxhl to mir then break 'check'
+					maxarm64 then break 'check'
+				end 'check'
+			end 'x64' else 'arm64'
+				match op 'check2'
+					maxarm64(a64Op) then classifyArm64OpReads(sinkOnly, usedByNonSink: usedByNonSink, a64Op: a64Op)
+					maxhl to maxx64 then break 'check2'
+				end 'check2'
+			end 'arm64'
+		end 'eachOp'
+		// Terminator reads are non-sink (branch args, etc.)
+		if srcBlock.hasTerminator 'hasTerm'
+			if isX64 'x64Term'
+				match srcBlock.terminator 'checkTerm'
+					maxx64(x64Op) then countX64OpReads(usedByNonSink, x64Op: x64Op)
+					maxhl to mir then break 'checkTerm'
+					maxarm64 then break 'checkTerm'
+				end 'checkTerm'
+			end 'x64Term' else 'arm64Term'
+				match srcBlock.terminator 'checkTerm2'
+					maxarm64(a64Op) then countArm64OpReads(usedByNonSink, a64Op: a64Op)
+					maxhl to maxx64 then break 'checkTerm2'
+				end 'checkTerm2'
+			end 'arm64Term'
+		end 'hasTerm'
+	end 'eachBlock'
+	// A value is deferrable if it appears in sinkOnly but not in usedByNonSink
+	var result = RegIntArray{}
+	var i = 0
+	while i < sinkOnly.count() 'filter'
+		let val = rmGetOr(sinkOnly, index: i, fallback: 0)
+		if val > 0 'isSink'
+			let nonSink = rmGetOr(usedByNonSink, index: i, fallback: 0)
+			if nonSink == 0 'notUsedElsewhere'
+				rmSet(result, index: i, value: 1, sentinel: 0)
+			end 'notUsedElsewhere'
+		end 'isSink'
+		i = i + 1
+	end 'filter'
+	return result
+end 'computeDeferredValues'
+
+// Pre-scan to identify division and shift setup patterns and set forward register hints.
+// Division: movRegReg(physical(rax), virtual(V)) followed by cqo → hint V to rax.
+// Shift: movRegReg(physical(rcx), virtual(V)) followed by shlRegCl/sarRegCl → hint V to rcx.
+// Returns hints[valueId] = regOrdinal for each hinted value.
+function computeForwardHints(srcFunc MlirFunction) returns RegIntArray
+	var hints = RegIntArray{}
+	let raxOrd = x64RegToOrdinal(X64Register.rax)
+	let rcxOrd = x64RegToOrdinal(X64Register.rcx)
+	for srcBlock in srcFunc.region.blocks 'eachBlock'
+		let opCount = srcBlock.ops.count()
+		var opIdx = 0
+		while opIdx < opCount 'eachOp'
+			let op = try srcBlock.ops.get(opIdx) otherwise 'skipOp'
+				opIdx = opIdx + 1
+				continue
+			end 'skipOp'
+			match op 'checkOp'
+				maxx64(x64Op) then scanForwardHintX64(hints, x64Op: x64Op, ops: srcBlock.ops, opIdx: opIdx, opCount: opCount, raxOrd: raxOrd, rcxOrd: rcxOrd)
+				maxhl to mir then break 'checkOp'
+				maxarm64 then break 'checkOp'
+			end 'checkOp'
+			opIdx = opIdx + 1
+		end 'eachOp'
+	end 'eachBlock'
+	return hints
+end 'computeForwardHints'
+
+// Check if an x64 op is movRegReg(physical(target), virtual(V)) and a confirming
+// instruction appears within the next 3 ops. If so, set a forward hint.
+function scanForwardHintX64(hints RegIntArray, x64Op MaxX64Op, ops MlirOpArray, opIdx RegInt, opCount RegInt, raxOrd RegOrdinal, rcxOrd RegOrdinal)
+	match x64Op 'checkMov'
+		movRegReg(destReg, srcReg) then scanForwardHintMovRegReg(hints, destReg: destReg, srcReg: srcReg, ops: ops, opIdx: opIdx, opCount: opCount, raxOrd: raxOrd, rcxOrd: rcxOrd)
+		prologue to memcpyOp then break 'checkMov'
+		cmpRegReg to repStosq then break 'checkMov'
+	end 'checkMov'
+end 'scanForwardHintX64'
+
+function scanForwardHintMovRegReg(hints RegIntArray, destReg X64VReg, srcReg X64VReg, ops MlirOpArray, opIdx RegInt, opCount RegInt, raxOrd RegOrdinal, rcxOrd RegOrdinal)
+	// Only interested in movRegReg(physical, virtual)
+	if isVirtualGpr(destReg) 'destIsVirt'
+		return
+	end 'destIsVirt'
+	let srcId = x64VRegId(srcReg)
+	if srcId < 0 'srcIsPhys'
+		return
+	end 'srcIsPhys'
+	let destOrd = match destReg 'getDestOrd'
+		physical(reg) gives x64RegToOrdinal(reg)
+		virtual gives RM_NONE
+	end 'getDestOrd'
+	if destOrd == RM_NONE 'noOrd'
+		return
+	end 'noOrd'
+	// Look ahead 1-3 ops for a confirming instruction (cqo for div, shlRegCl/sarRegCl for shift)
+	var lookIdx = opIdx + 1
+	let lookEnd = opIdx + 4
+	while lookIdx < opCount and lookIdx < lookEnd 'lookAhead'
+		let nextOp = try ops.get(lookIdx) otherwise 'skipLook'
+			lookIdx = lookIdx + 1
+			continue
+		end 'skipLook'
+		match nextOp 'checkNext'
+			maxx64(nextX64) then scanForwardHintConfirm(hints, nextX64: nextX64, srcId: srcId, destOrd: destOrd, raxOrd: raxOrd, rcxOrd: rcxOrd)
+			maxhl to mir then break 'checkNext'
+			maxarm64 then break 'checkNext'
+		end 'checkNext'
+		lookIdx = lookIdx + 1
+	end 'lookAhead'
+end 'scanForwardHintMovRegReg'
+
+function scanForwardHintConfirm(hints RegIntArray, nextX64 MaxX64Op, srcId RegInt, destOrd RegOrdinal, raxOrd RegOrdinal, rcxOrd RegOrdinal)
+	match nextX64 'confirm'
+		cqo then confirmDivHint(hints, srcId: srcId, destOrd: destOrd, raxOrd: raxOrd)
+		shlRegCl then confirmShiftHint(hints, srcId: srcId, destOrd: destOrd, rcxOrd: rcxOrd)
+		sarRegCl then confirmShiftHint(hints, srcId: srcId, destOrd: destOrd, rcxOrd: rcxOrd)
+		prologue to xorRegReg then break 'confirm'
+		cmpRaxRcx to memcpyOp then break 'confirm'
+		movRegReg to testRegReg then break 'confirm'
+		idivReg to repStosq then break 'confirm'
+	end 'confirm'
+end 'scanForwardHintConfirm'
+
+function confirmDivHint(hints RegIntArray, srcId RegInt, destOrd RegOrdinal, raxOrd RegOrdinal)
+	if destOrd == raxOrd 'isRax'
+		rmSet(hints, index: srcId, value: raxOrd, sentinel: RM_NONE)
+	end 'isRax'
+end 'confirmDivHint'
+
+function confirmShiftHint(hints RegIntArray, srcId RegInt, destOrd RegOrdinal, rcxOrd RegOrdinal)
+	if destOrd == rcxOrd 'isRcx'
+		rmSet(hints, index: srcId, value: rcxOrd, sentinel: RM_NONE)
+	end 'isRcx'
+end 'confirmShiftHint'
+
+// Apply forward hints to registerHints so the allocator prefers
+// the hinted register when allocating the dividend/shift-count value.
+function applyForwardHints(hints RegIntArray, state RegState)
+	var i = 0
+	let hintCount = hints.count()
+	while i < hintCount 'eachHint'
+		let regOrd = rmGetOr(hints, index: i, fallback: RM_NONE)
+		if regOrd != RM_NONE 'hasHint'
+			rmSetRegisterHint(state, valueId: i, regOrdinal: regOrd)
+		end 'hasHint'
+		i = i + 1
+	end 'eachHint'
+end 'applyForwardHints'
+
+// Classify an X64 op's reads as sink or non-sink.
+// Sink: movRegReg where dest is physical (call arg / return value setup).
+// Non-sink: everything else that reads a virtual register.
+function classifyX64OpReads(sinkOnly RegIntArray, usedByNonSink RegIntArray, x64Op MaxX64Op)
+	if isX64MovRegReg(x64Op) 'isMov'
+		match x64Op 'extractMov'
+			movRegReg(destReg, srcReg) then classifyX64MovRegReg(sinkOnly, usedByNonSink: usedByNonSink, destReg: destReg, srcReg: srcReg)
+			prologue to memcpyOp then break 'extractMov'
+			cmpRegReg to repStosq then break 'extractMov'
+		end 'extractMov'
+	end 'isMov' else 'other'
+		countX64OpReads(usedByNonSink, x64Op: x64Op)
+	end 'other'
+end 'classifyX64OpReads'
+
+function isX64MovRegReg(x64Op MaxX64Op) returns bool
+	var result = false
+	match x64Op 'check'
+		movRegReg then result = true
+		prologue to memcpyOp then break 'check'
+		cmpRegReg to repStosq then break 'check'
+	end 'check'
+	return result
+end 'isX64MovRegReg'
+
+function classifyX64MovRegReg(sinkOnly RegIntArray, usedByNonSink RegIntArray, destReg X64VReg, srcReg X64VReg)
+	let srcId = x64VRegId(srcReg)
+	if srcId < 0 'physSrc'
+		return
+	end 'physSrc'
+	// If dest is physical, this is a sink (call arg / return setup)
+	match destReg 'checkDest'
+		physical then incUse(sinkOnly, id: srcId)
+		virtual then incUse(usedByNonSink, id: srcId)
+	end 'checkDest'
+end 'classifyX64MovRegReg'
+
+// ARM64 classification (simplified — mark movRegReg with physical dest as sink)
+function classifyArm64OpReads(sinkOnly RegIntArray, usedByNonSink RegIntArray, a64Op MaxArm64Op)
+	if isArm64MovRegReg(a64Op) 'isMov'
+		match a64Op 'extractMov'
+			movRegReg(dest, src) then classifyArm64MovRegReg(sinkOnly, usedByNonSink: usedByNonSink, dest: dest, src: src)
+			prologue to memcpyOp then break 'extractMov'
+			spillToStack to nullSafeLoad then break 'extractMov'
+		end 'extractMov'
+	end 'isMov' else 'other'
+		countArm64OpReads(usedByNonSink, a64Op: a64Op)
+	end 'other'
+end 'classifyArm64OpReads'
+
+function isArm64MovRegReg(a64Op MaxArm64Op) returns bool
+	var result = false
+	match a64Op 'check'
+		movRegReg then result = true
+		prologue to memcpyOp then break 'check'
+		spillToStack to nullSafeLoad then break 'check'
+	end 'check'
+	return result
+end 'isArm64MovRegReg'
+
+function classifyArm64MovRegReg(sinkOnly RegIntArray, usedByNonSink RegIntArray, dest Arm64VReg, src Arm64VReg)
+	let srcId = arm64VRegId(src)
+	if srcId < 0 'physSrc'
+		return
+	end 'physSrc'
+	match dest 'checkDest'
+		physical then incUse(sinkOnly, id: srcId)
+		virtual then incUse(usedByNonSink, id: srcId)
+	end 'checkDest'
+end 'classifyArm64MovRegReg'
+
+// Check if a block is diverging (calls maxon_panic and never returns).
+function isDivergingBlock(block MlirBlock) returns bool
+	for op in block.ops 'checkOps'
+		match op 'checkCall'
+			maxx64(x64Op) then match x64Op 'checkX64Call'
+				callDirect(target) then if target == b"maxon_panic" 'isPanic'
+					return true
+				end 'isPanic'
+				prologue to loadRegRbpOffset then break 'checkX64Call'
+				syscall to repStosq then break 'checkX64Call'
+			end 'checkX64Call'
+			maxarm64(a64Op) then match a64Op 'checkArm64Call'
+				branchLink(target) then if target == b"maxon_panic" 'isPanic2'
+					return true
+				end 'isPanic2'
+				prologue to branch then break 'checkArm64Call'
+				printLiteral to nullSafeLoad then break 'checkArm64Call'
+			end 'checkArm64Call'
+			maxhl to mir then break 'checkCall'
+		end 'checkCall'
+	end 'checkOps'
+	return false
+end 'isDivergingBlock'
+
 function allocateRegistersForFunc(srcFunc MlirFunction, target Target) returns MlirFunction
 	var dstFunc = createMlirFunction(srcFunc.name, returnType: srcFunc.returnType)
 	dstFunc.paramCount = srcFunc.paramCount
 	dstFunc.paramTypes = srcFunc.paramTypes
+	dstFunc.varSlotCount = srcFunc.varSlotCount
 
 	let isX64 = match target.cpu 'checkCpu'
 		x86_64 gives true
@@ -2176,6 +2921,45 @@ function allocateRegistersForFunc(srcFunc MlirFunction, target Target) returns M
 	end 'preSeedX64Params'
 
 	let blockCount = srcFunc.region.blocks.count()
+
+	// Compute use counts for dead-value freeing during register resolution.
+	// Virtual registers are block-local (cross-block values flow through stack slots),
+	// so the linear pre-scan correctly identifies use counts for each value.
+	state.remainingUses = computeUseCounts(srcFunc, isX64: isX64)
+
+	// Identify deferred values: constants only consumed by sink ops (call arg / return setup).
+	// These skip eager register allocation and are rematerialized on demand.
+	state.deferredValues = computeDeferredValues(srcFunc, isX64: isX64)
+
+	// Forward register hints for division/shift: hint dividend values → rax,
+	// shift count values → rcx, so the allocator avoids placing unrelated values
+	// in these registers.
+	if isX64 'forwardHints'
+		let fwdHints = computeForwardHints(srcFunc)
+		applyForwardHints(fwdHints, state: state)
+	end 'forwardHints'
+
+	// Diverging block detection — pre-scan to identify panic blocks so we can
+	// save/restore register state around them and prevent their spills from
+	// inflating the frame for the continuation (happy path).
+	var divergingBlocks = RegIntArray{}
+	if isX64 'detectDiverging'
+		var di = 0
+		while di < blockCount 'scanBlocks'
+			let blk = try srcFunc.region.blocks.get(di) otherwise 'skipDetect'
+				di = di + 1
+				continue
+			end 'skipDetect'
+			if isDivergingBlock(blk) 'isDiverging'
+				rmSet(divergingBlocks, index: di, value: 1, sentinel: 0)
+			end 'isDiverging'
+			di = di + 1
+		end 'scanBlocks'
+	end 'detectDiverging'
+
+	var hasSavedState = false
+	var passedDivergingBlock = false
+	var savedSnapshot = rmSaveState(state)
 	var blockIdx = 0
 	while blockIdx < blockCount 'eachBlock'
 		let srcBlock = try srcFunc.region.blocks.get(blockIdx) otherwise 'skipBlock'
@@ -2183,7 +2967,21 @@ function allocateRegistersForFunc(srcFunc MlirFunction, target Target) returns M
 			continue
 		end 'skipBlock'
 
+		let isBlockDiverging = rmGetOr(divergingBlocks, index: blockIdx, fallback: 0) == 1
+		state.isInDivergingBlock = isBlockDiverging
+
+		// Restore saved state when entering the first non-diverging block after
+		// a diverging one. This carries register assignments across the panic block.
+		if not isBlockDiverging and passedDivergingBlock and hasSavedState 'restoreBeforeBlock'
+			logTrace(LogCategory.mlir, message: () gives "regalloc: restore state after diverging block (func={String.from(state.funcName)})")
+			rmRestoreState(state, snapshot: savedSnapshot)
+			hasSavedState = false
+			passedDivergingBlock = false
+		end 'restoreBeforeBlock'
+
 		// Create destination block
+		let blockLabel = String.from(srcBlock.label)
+		logTrace(LogCategory.mlir, message: () gives "regalloc: --- block '{blockLabel}' ({srcBlock.ops.count()} ops) func={String.from(state.funcName)} ---")
 		var dstBlock = createMlirBlock(srcBlock.id, label: srcBlock.label)
 		dstBlock.blockArgs = srcBlock.blockArgs
 
@@ -2224,8 +3022,25 @@ function allocateRegistersForFunc(srcFunc MlirFunction, target Target) returns M
 
 		// Handle terminator
 		if srcBlock.hasTerminator 'hasTerm'
-			// Spill all live registers before terminator (for cross-block liveness)
-			rmSpillAllBeforeTerminator(state, dstBlock: dstBlock)
+			// If the next block is diverging, save register state NOW (before spilling)
+			// so the continuation after the diverging block can restore register
+			// assignments (e.g. call result in rax) without needing stack reloads.
+			if not isBlockDiverging and not hasSavedState 'checkSaveBeforeSpill'
+				let nextIsDiverging = blockIdx + 1 < blockCount and rmGetOr(divergingBlocks, index: blockIdx + 1, fallback: 0) == 1
+				if nextIsDiverging 'saveNow'
+					logTrace(LogCategory.mlir, message: () gives "regalloc: save state before diverging block (func={String.from(state.funcName)})")
+					savedSnapshot = rmSaveState(state)
+					hasSavedState = true
+				end 'saveNow'
+			end 'checkSaveBeforeSpill'
+
+			// Spill all live registers before terminator (for cross-block liveness).
+			// Skip spilling if the terminator is a return — no successor will read them.
+			// Also skip if next block is diverging — we saved state above and the
+			// diverging block's spills will be discarded.
+			if not isReturnTerminator(srcBlock.terminator, isX64: isX64) and not hasSavedState and not isBlockDiverging 'notReturn'
+				rmSpillAllBeforeTerminator(state, dstBlock: dstBlock)
+			end 'notReturn'
 
 			// Process terminator op
 			if isX64 'x64Term'
@@ -2258,16 +3073,30 @@ function allocateRegistersForFunc(srcFunc MlirFunction, target Target) returns M
 
 		dstFunc.region.blocks.push(dstBlock)
 
-		// Reset register state for next block (spills already emitted before terminator)
+		// Reset register state for next block.
+		// For diverging blocks (panic paths), discard their register state and
+		// restore from the pre-saved snapshot so their spills don't inflate the frame.
 		if blockIdx < blockCount - 1 'notLastBlock'
-			rmResetForBlockTransition(state, prevBlock: dstBlock)
+			if isBlockDiverging 'diverging'
+				// Diverging block — discard its register state completely.
+				// Don't update the spill watermark (those slots are unreachable).
+				rmReset(state)
+				passedDivergingBlock = true
+			end 'diverging' else if hasSavedState 'skipSpillTransition'
+				// State was saved before spill-before-terminator — the continuation
+				// will restore register assignments, so we don't need to spill live
+				// values into the previous block. Just clear register state.
+				rmReset(state)
+			end 'skipSpillTransition' else 'normalTransition'
+				rmResetForBlockTransition(state, prevBlock: dstBlock)
+			end 'normalTransition'
 		end 'notLastBlock'
 
 		blockIdx = blockIdx + 1
 	end 'eachBlock'
 
-	// Patch prologue stack size in the first block
-	patchPrologueStackSize(dstFunc, state: state, isX64: isX64)
+	// Store the spill size on the function for the prologue/epilogue pass.
+	dstFunc.spillSize = rmTotalStackSize(state)
 
 	// Preserve region metadata so block IDs resolve correctly in code emission
 	dstFunc.region.nextBlockId = srcFunc.region.nextBlockId
@@ -2291,86 +3120,6 @@ function createArm64RegState() returns RegState
 	return createRegState(16, gprPool: createArm64GprPool(), callerSavedGprs: createArm64CallerSavedGprs(), target: RegTarget.arm64, callConvGprs: createArm64CallConvGprs(), returnGprOrd: arm64RegToOrdinal(MaxArm64Register.x0), errorFlagOrd: arm64RegToOrdinal(MaxArm64Register.x1), indirectCallScratchOrd: arm64RegToOrdinal(MaxArm64Register.x16), gprCycleBreakOrd: arm64RegToOrdinal(MaxArm64Register.x16), hasXchg: false, fpPool: createArm64FpPool(), callerSavedFps: createArm64CallerSavedFps(), callConvFps: createArm64CallConvFps(), returnFpOrd: 0, fpCycleBreakOrd: 31)
 end 'createArm64RegState'
 
-// Patch the prologue op's stack size after register allocation is complete.
-function patchPrologueStackSize(func MlirFunction, state RegState, isX64 bool)
-	let spillSize = rmTotalStackSize(state)
-	if spillSize == 0 'noSpills'
-		return
-	end 'noSpills'
-
-	let blockCount = func.region.blocks.count()
-	if blockCount == 0 'noBlocks'
-		return
-	end 'noBlocks'
-
-	let firstBlock = try func.region.blocks.get(0) otherwise 'noBlock'
-		return
-	end 'noBlock'
-
-	let opCount = firstBlock.ops.count()
-	var oi = 0
-	while oi < opCount 'findPrologue'
-		let op = try firstBlock.ops.get(oi) otherwise 'skip'
-			oi = oi + 1
-			continue
-		end 'skip'
-		let patchResult = tryPatchPrologueOp(op, block: firstBlock, opIndex: oi, spillSize: spillSize, isX64: isX64)
-		if patchResult 'patched'
-			return
-		end 'patched'
-		oi = oi + 1
-	end 'findPrologue'
-end 'patchPrologueStackSize'
-
-// Try to patch a single op as a prologue. Returns true if patched.
-function tryPatchPrologueOp(op MlirOp, block MlirBlock, opIndex RegInt, spillSize RegInt, isX64 bool) returns bool
-	if isX64 'x64'
-		return tryPatchX64Prologue(op, block: block, opIndex: opIndex, spillSize: spillSize)
-	end 'x64'
-	return tryPatchArm64Prologue(op, block: block, opIndex: opIndex, spillSize: spillSize)
-end 'tryPatchPrologueOp'
-
-function tryPatchX64Prologue(op MlirOp, block MlirBlock, opIndex RegInt, spillSize RegInt) returns bool
-	return match op 'check'
-		maxx64(x64Op) gives tryPatchX64PrologueOp(x64Op, block: block, opIndex: opIndex, spillSize: spillSize)
-		maxhl to mir gives false
-		maxarm64 gives false
-	end 'check'
-end 'tryPatchX64Prologue'
-
-function tryPatchX64PrologueOp(x64Op MaxX64Op, block MlirBlock, opIndex RegInt, spillSize RegInt) returns bool
-	return match x64Op 'check'
-		prologue(existingSize) gives patchX64PrologueSize(block, opIndex: opIndex, existingSize: existingSize, spillSize: spillSize)
-		epilogue to ret gives false
-		movRegImm to repStosq gives false
-	end 'check'
-end 'tryPatchX64PrologueOp'
-
-function patchX64PrologueSize(block MlirBlock, opIndex RegInt, existingSize StackSize, spillSize RegInt) returns bool
-	let newSize = existingSize + spillSize
-	block.ops.set(opIndex, value: MlirOp.maxx64(MaxX64Op.prologue(newSize)))
-	return true
-end 'patchX64PrologueSize'
-
-function tryPatchArm64Prologue(op MlirOp, block MlirBlock, opIndex RegInt, spillSize RegInt) returns bool
-	return match op 'check'
-		maxarm64(a64Op) gives tryPatchArm64PrologueOp(a64Op, block: block, opIndex: opIndex, spillSize: spillSize)
-		maxhl to maxx64 gives false
-	end 'check'
-end 'tryPatchArm64Prologue'
-
-function tryPatchArm64PrologueOp(a64Op MaxArm64Op, block MlirBlock, opIndex RegInt, spillSize RegInt) returns bool
-	return match a64Op 'check'
-		prologue(existingSize) gives patchArm64PrologueSize(block, opIndex: opIndex, existingSize: existingSize, spillSize: spillSize)
-		epilogue to nullSafeLoad gives false
-	end 'check'
-end 'tryPatchArm64PrologueOp'
-
-function patchArm64PrologueSize(block MlirBlock, opIndex RegInt, existingSize StackSize, spillSize RegInt) returns bool
-	let newSize = existingSize + spillSize
-	block.ops.set(opIndex, value: MlirOp.maxarm64(MaxArm64Op.prologue(newSize)))
-	return true
-end 'patchArm64PrologueSize'
 
 // ============================================================
 // X64 register allocation helpers
@@ -2381,9 +3130,23 @@ end 'patchArm64PrologueSize'
 function x64ResolveGprUse(state RegState, vreg X64VReg, dstBlock MlirBlock, protect1 RegOrdinal, protect2 RegOrdinal) returns RegOrdinal
 	return match vreg 'resolve'
 		physical(reg) gives x64RegToOrdinal(reg)
-		virtual(id) gives rmEnsureInRegister(state, valueId: id, dstBlock: dstBlock, protect1: protect1, protect2: protect2)
+		virtual(id) gives x64ResolveVirtualUse(state, id: id, dstBlock: dstBlock, protect1: protect1, protect2: protect2)
 	end 'resolve'
 end 'x64ResolveGprUse'
+
+function x64ResolveVirtualUse(state RegState, id ValueId, dstBlock MlirBlock, protect1 RegOrdinal, protect2 RegOrdinal) returns RegOrdinal
+	let reg = rmEnsureInRegister(state, valueId: id, dstBlock: dstBlock, protect1: protect1, protect2: protect2)
+	// Decrement remaining use count. If zero, value is dead — free the register.
+	let remaining = rmGetOr(state.remainingUses, index: id, fallback: -1)
+	if remaining > 0 'hasCount'
+		let newCount = remaining - 1
+		rmSet(state.remainingUses, index: id, value: newCount, sentinel: 0)
+		if newCount == 0 'dead'
+			rmNoteValueDead(state, valueId: id)
+		end 'dead'
+	end 'hasCount'
+	return reg
+end 'x64ResolveVirtualUse'
 
 // Resolve an X64VReg DEF to a physical register ordinal.
 // For virtual regs, calls rmAllocateRegister. For physical, spills the occupant.
@@ -2404,9 +3167,22 @@ end 'x64ResolvePhysDef'
 function x64ResolveFpUse(state RegState, vreg X64FpVReg, dstBlock MlirBlock) returns RegOrdinal
 	return match vreg 'resolve'
 		physical(reg) gives reg.rawValue
-		virtual(id) gives rmEnsureInFpRegister(state, valueId: id, dstBlock: dstBlock)
+		virtual(id) gives x64ResolveFpVirtualUse(state, id: id, dstBlock: dstBlock)
 	end 'resolve'
 end 'x64ResolveFpUse'
+
+function x64ResolveFpVirtualUse(state RegState, id ValueId, dstBlock MlirBlock) returns RegOrdinal
+	let reg = rmEnsureInFpRegister(state, valueId: id, dstBlock: dstBlock)
+	let remaining = rmGetOr(state.remainingUses, index: id, fallback: -1)
+	if remaining > 0 'hasCount'
+		let newCount = remaining - 1
+		rmSet(state.remainingUses, index: id, value: newCount, sentinel: 0)
+		if newCount == 0 'dead'
+			rmNoteValueDead(state, valueId: id)
+		end 'dead'
+	end 'hasCount'
+	return reg
+end 'x64ResolveFpVirtualUse'
 
 // Resolve an X64FpVReg DEF to a physical FP register ordinal.
 function x64ResolveFpDef(state RegState, vreg X64FpVReg, dstBlock MlirBlock) returns RegOrdinal
@@ -2439,9 +3215,22 @@ end 'x64FpPhysFromOrd'
 function arm64ResolveGprUse(state RegState, vreg Arm64VReg, dstBlock MlirBlock, protect1 RegOrdinal, protect2 RegOrdinal) returns RegOrdinal
 	return match vreg 'resolve'
 		physical(reg) gives arm64RegToOrdinal(reg)
-		virtual(id) gives rmEnsureInRegister(state, valueId: id, dstBlock: dstBlock, protect1: protect1, protect2: protect2)
+		virtual(id) gives arm64ResolveVirtualUse(state, id: id, dstBlock: dstBlock, protect1: protect1, protect2: protect2)
 	end 'resolve'
 end 'arm64ResolveGprUse'
+
+function arm64ResolveVirtualUse(state RegState, id ValueId, dstBlock MlirBlock, protect1 RegOrdinal, protect2 RegOrdinal) returns RegOrdinal
+	let reg = rmEnsureInRegister(state, valueId: id, dstBlock: dstBlock, protect1: protect1, protect2: protect2)
+	let remaining = rmGetOr(state.remainingUses, index: id, fallback: -1)
+	if remaining > 0 'hasCount'
+		let newCount = remaining - 1
+		rmSet(state.remainingUses, index: id, value: newCount, sentinel: 0)
+		if newCount == 0 'dead'
+			rmNoteValueDead(state, valueId: id)
+		end 'dead'
+	end 'hasCount'
+	return reg
+end 'arm64ResolveVirtualUse'
 
 function arm64ResolveGprDef(state RegState, vreg Arm64VReg, dstBlock MlirBlock, protect1 RegOrdinal, protect2 RegOrdinal) returns RegOrdinal
 	return match vreg 'resolve'
@@ -2459,9 +3248,22 @@ end 'arm64ResolvePhysDef'
 function arm64ResolveFpUse(state RegState, vreg Arm64FpVReg, dstBlock MlirBlock) returns RegOrdinal
 	return match vreg 'resolve'
 		physical(reg) gives reg.rawValue
-		virtual(id) gives rmEnsureInFpRegister(state, valueId: id, dstBlock: dstBlock)
+		virtual(id) gives arm64ResolveFpVirtualUse(state, id: id, dstBlock: dstBlock)
 	end 'resolve'
 end 'arm64ResolveFpUse'
+
+function arm64ResolveFpVirtualUse(state RegState, id ValueId, dstBlock MlirBlock) returns RegOrdinal
+	let reg = rmEnsureInFpRegister(state, valueId: id, dstBlock: dstBlock)
+	let remaining = rmGetOr(state.remainingUses, index: id, fallback: -1)
+	if remaining > 0 'hasCount'
+		let newCount = remaining - 1
+		rmSet(state.remainingUses, index: id, value: newCount, sentinel: 0)
+		if newCount == 0 'dead'
+			rmNoteValueDead(state, valueId: id)
+		end 'dead'
+	end 'hasCount'
+	return reg
+end 'arm64ResolveFpVirtualUse'
 
 function arm64ResolveFpDef(state RegState, vreg Arm64FpVReg, dstBlock MlirBlock) returns RegOrdinal
 	return match vreg 'resolve'
@@ -2495,6 +3297,13 @@ function ax64MovRegImm(state RegState, dest X64VReg, value MachineWord, dstBlock
 		virtual(id) then rmRecordConstant(state, valueId: id, value: value)
 		physical then break 'recordConst'
 	end 'recordConst'
+	// For virtual destinations, always defer constant materialization.
+	// Constants are rematerializable on demand via rmEnsureInRegister (for GPR uses)
+	// or rmEnsureInFpRegister (for float raw-bit constants used by XMM ops).
+	// Deferring avoids wasting registers on values loaded too early.
+	if isVirtualGpr(dest) 'deferVirtual'
+		return
+	end 'deferVirtual'
 	let d = x64ResolveGprDef(state, vreg: dest, dstBlock: dstBlock, protect1: RM_NONE, protect2: RM_NONE)
 	dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.movRegImm(x64PhysFromOrd(d), value)))
 end 'ax64MovRegImm'
@@ -2502,6 +3311,13 @@ end 'ax64MovRegImm'
 function ax64MovSlot(state RegState, slotIndex VarSlot, srcReg X64VReg, dstBlock MlirBlock)
 	let s = x64ResolveGprUse(state, vreg: srcReg, dstBlock: dstBlock, protect1: RM_NONE, protect2: RM_NONE)
 	dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.movSlot(slotIndex, x64PhysFromOrd(s))))
+	// Record the stack home for the source value so rmSpillAllBeforeTerminator
+	// knows this value already has a copy on the stack and skips the redundant spill.
+	let srcId = x64VRegId(srcReg)
+	if srcId >= 0 'recordHome'
+		let slotOffset = 0 - (slotIndex + 1) * 8
+		rmNoteStoreToStack(state, valueId: srcId, stackOffset: slotOffset)
+	end 'recordHome'
 end 'ax64MovSlot'
 
 function ax64LoadSlot(state RegState, destReg X64VReg, slotIndex VarSlot, dstBlock MlirBlock)
@@ -2551,6 +3367,21 @@ function ax64TwoAddr(state RegState, destReg X64VReg, srcReg X64VReg, dstBlock M
 	end 'invalidateSpill'
 end 'ax64TwoAddr'
 
+// Add/sub with immediate: dest is use+def, no src register.
+function ax64RegImm(state RegState, destReg X64VReg, value MachineWord, dstBlock MlirBlock, isAdd bool)
+	let d = x64ResolveGprUse(state, vreg: destReg, dstBlock: dstBlock, protect1: RM_NONE, protect2: RM_NONE)
+	let dp = x64PhysFromOrd(d)
+	if isAdd 'add'
+		dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.addRegImm(dp, value)))
+	end 'add' else 'sub'
+		dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.subRegImm(dp, value)))
+	end 'sub'
+	match destReg 'invalidateSpill'
+		virtual(id) then rmSet(state.valueStackHome, index: id, value: RM_NO_STACK_HOME, sentinel: RM_NO_STACK_HOME)
+		physical then break 'invalidateSpill'
+	end 'invalidateSpill'
+end 'ax64RegImm'
+
 // Unary in-place: reg is use+def
 function ax64UnaryInPlace(state RegState, reg X64VReg, dstBlock MlirBlock, opCode RegInt)
 	let r = x64ResolveGprUse(state, vreg: reg, dstBlock: dstBlock, protect1: RM_NONE, protect2: RM_NONE)
@@ -2579,16 +3410,33 @@ function ax64CmpRegReg(state RegState, lhsReg X64VReg, rhsReg X64VReg, dstBlock 
 	dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.cmpRegReg(x64PhysFromOrd(l), x64PhysFromOrd(r))))
 end 'ax64CmpRegReg'
 
+function ax64CmpRegImm(state RegState, lhsReg X64VReg, value MachineWord, dstBlock MlirBlock)
+	let l = x64ResolveGprUse(state, vreg: lhsReg, dstBlock: dstBlock, protect1: RM_NONE, protect2: RM_NONE)
+	dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.cmpRegImm(x64PhysFromOrd(l), value)))
+end 'ax64CmpRegImm'
+
 function ax64TestRegReg(state RegState, reg1 X64VReg, reg2 X64VReg, dstBlock MlirBlock)
 	let r1 = x64ResolveGprUse(state, vreg: reg1, dstBlock: dstBlock, protect1: RM_NONE, protect2: RM_NONE)
 	let r2 = x64ResolveGprUse(state, vreg: reg2, dstBlock: dstBlock, protect1: r1, protect2: RM_NONE)
 	dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.testRegReg(x64PhysFromOrd(r1), x64PhysFromOrd(r2))))
 end 'ax64TestRegReg'
 
-// CQO sign-extends RAX into RDX:RAX. It clobbers RDX, so spill it first.
+// CQO sign-extends RAX into RDX:RAX. It clobbers RDX.
+// Try to relocate the RDX value to a free register first (avoids stack spill
+// when the divisor was in RDX — matches C# PrepareDivisionRegisters behavior).
+// Falls back to stack spill if no free register is available.
 function ax64Cqo(state RegState, dstBlock MlirBlock)
+	let raxOrd = x64RegToOrdinal(X64Register.rax)
 	let rdxOrd = x64RegToOrdinal(X64Register.rdx)
-	rmSpillRegisterIfOccupied(state, regOrdinal: rdxOrd, dstBlock: dstBlock)
+	let rdxOccupant = rmGetOr(state.registerContents, index: rdxOrd, fallback: RM_NONE)
+	if rdxOccupant != RM_NONE 'hasValue'
+		// Try to move to a free register (protect rax since CQO reads it)
+		let relocated = rmRelocateRegister(state, regOrdinal: rdxOrd, dstBlock: dstBlock, protect1: raxOrd, protect2: RM_NONE)
+		if relocated == RM_NONE 'noFreeReg'
+			// No free register — fall back to stack spill
+			rmSpillRegisterIfOccupied(state, regOrdinal: rdxOrd, dstBlock: dstBlock)
+		end 'noFreeReg'
+	end 'hasValue'
 	dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.cqo))
 end 'ax64Cqo'
 
@@ -2637,6 +3485,70 @@ function ax64MemcpyOp(state RegState, x64Op MaxX64Op, dstBlock MlirBlock)
 end 'ax64MemcpyOp'
 
 function ax64MovRegReg(state RegState, destReg X64VReg, srcReg X64VReg, dstBlock MlirBlock)
+	// Optimization: movRegReg(physical:dest, virtual:src) where src is an
+	// unmaterialized constant — emit movRegImm directly into the physical dest,
+	// avoiding an intermediate register. Matches C# EmitLoadImmediate behavior.
+	if not isVirtualGpr(destReg) and isVirtualGpr(srcReg) 'constToPhys'
+		let srcId = x64VRegId(srcReg)
+		if srcId >= 0 'validSrc'
+			let srcInReg = rmGetOr(state.valueToRegister, index: srcId, fallback: RM_NONE)
+			if srcInReg == RM_NONE 'notInReg'
+				let isConst = rmGetOr(state.hasConstant, index: srcId, fallback: 0)
+				if isConst == 1 'isConst'
+					let imm = rmGetOr(state.constantValues, index: srcId, fallback: 0)
+					let destOrd = match destReg 'getDest'
+						physical(reg) gives x64RegToOrdinal(reg)
+						virtual gives RM_NONE
+					end 'getDest'
+					rmSpillRegisterIfOccupied(state, regOrdinal: destOrd, dstBlock: dstBlock)
+					dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.movRegImm(x64PhysFromOrd(destOrd), imm)))
+					rmAssign(state, regOrdinal: destOrd, valueId: srcId)
+					// Decrement remaining use count
+					let remaining = rmGetOr(state.remainingUses, index: srcId, fallback: -1)
+					if remaining > 0 'hasCount'
+						let newCount = remaining - 1
+						rmSet(state.remainingUses, index: srcId, value: newCount, sentinel: 0)
+						if newCount == 0 'dead'
+							rmNoteValueDead(state, valueId: srcId)
+						end 'dead'
+					end 'hasCount'
+					return
+				end 'isConst'
+			end 'notInReg'
+		end 'validSrc'
+	end 'constToPhys'
+	// Physical src → virtual dest: the value is already in the physical register.
+	// Just assign the virtual to that register — no instruction needed.
+	if not isVirtualGpr(srcReg) and isVirtualGpr(destReg) 'physToVirt'
+		let srcOrd = match srcReg 'getSrcOrd'
+			physical(reg) gives x64RegToOrdinal(reg)
+			virtual gives RM_NONE
+		end 'getSrcOrd'
+		let destId = x64VRegId(destReg)
+		if srcOrd != RM_NONE and destId >= 0 'valid'
+			let currentOccupant = rmGetOr(state.registerContents, index: srcOrd, fallback: RM_NONE)
+			if currentOccupant == destId 'alreadyAssigned'
+				return
+			end 'alreadyAssigned'
+			if currentOccupant != RM_NONE 'hasOccupant'
+				rmSpillRegisterIfOccupied(state, regOrdinal: srcOrd, dstBlock: dstBlock)
+			end 'hasOccupant'
+			rmAssign(state, regOrdinal: srcOrd, valueId: destId)
+			return
+		end 'valid'
+	end 'physToVirt'
+	// Virtual src → virtual dest: hint that dest should prefer src's register.
+	// This enables the allocator to coalesce the mov into a no-op.
+	if isVirtualGpr(srcReg) and isVirtualGpr(destReg) 'virtToVirt'
+		let srcId = x64VRegId(srcReg)
+		let destId2 = x64VRegId(destReg)
+		if srcId >= 0 and destId2 >= 0 'validIds'
+			let srcReg2 = rmGetOr(state.valueToRegister, index: srcId, fallback: RM_NONE)
+			if srcReg2 != RM_NONE 'hasSrcReg'
+				rmSetRegisterHint(state, valueId: destId2, regOrdinal: srcReg2)
+			end 'hasSrcReg'
+		end 'validIds'
+	end 'virtToVirt'
 	// When the dest is a physical register (e.g. call arg setup), protect it during
 	// source resolution so the allocator doesn't reload the source INTO the dest
 	// register, and after the move, transfer ownership of the virtual value to the
@@ -2647,7 +3559,14 @@ function ax64MovRegReg(state RegState, destReg X64VReg, srcReg X64VReg, dstBlock
 		virtual gives RM_NONE
 	end 'getDestProtect'
 	let s = x64ResolveGprUse(state, vreg: srcReg, dstBlock: dstBlock, protect1: destProtect, protect2: RM_NONE)
-	let d = x64ResolveGprDef(state, vreg: destReg, dstBlock: dstBlock, protect1: s, protect2: RM_NONE)
+	// If the source value died during resolution (use count → 0), its register is
+	// free and shouldn't be protected — the dest can reuse it directly.
+	let srcOccupant = rmGetOr(state.registerContents, index: s, fallback: RM_NONE)
+	var sProtect = s
+	if srcOccupant == RM_NONE 'srcFreed'
+		sProtect = RM_NONE
+	end 'srcFreed'
+	let d = x64ResolveGprDef(state, vreg: destReg, dstBlock: dstBlock, protect1: sProtect, protect2: RM_NONE)
 	if s != d 'needMov'
 		dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.movRegReg(x64PhysFromOrd(d), x64PhysFromOrd(s))))
 	end 'needMov'
@@ -2792,6 +3711,23 @@ end 'ax64LeaFuncAddr'
 
 // XMM FP helpers
 function ax64MovXmmXmm(state RegState, dest X64FpVReg, src X64FpVReg, precision FloatPrecision, dstBlock MlirBlock)
+	// Physical src → virtual dest: assign directly.
+	let srcPhysFpOrd = match src 'checkPhysSrc'
+		physical(reg) gives reg.rawValue
+		virtual gives RM_NONE
+	end 'checkPhysSrc'
+	let destVirtFpId = x64FpVRegId(dest)
+	if srcPhysFpOrd != RM_NONE and destVirtFpId >= 0 'physToVirt'
+		let occ = rmGetOr(state.fpContents, index: srcPhysFpOrd, fallback: RM_NONE)
+		if occ == destVirtFpId 'alreadyAssigned'
+			return
+		end 'alreadyAssigned'
+		if occ != RM_NONE 'hasOcc'
+			rmSpillFpIfOccupied(state, fpOrdinal: srcPhysFpOrd, dstBlock: dstBlock)
+		end 'hasOcc'
+		rmAssignFp(state, fpOrdinal: srcPhysFpOrd, valueId: destVirtFpId)
+		return
+	end 'physToVirt'
 	let s = x64ResolveFpUse(state, vreg: src, dstBlock: dstBlock)
 	let d = x64ResolveFpDef(state, vreg: dest, dstBlock: dstBlock)
 	if s != d 'needFpMov'
@@ -2920,6 +3856,8 @@ function allocX64Op(state RegState, x64Op MaxX64Op, dstBlock MlirBlock)
 		loadSlot(destReg, slotIndex) then ax64LoadSlot(state, destReg: destReg, slotIndex: slotIndex, dstBlock: dstBlock)
 		addRegReg(destReg, srcReg) then ax64TwoAddr(state, destReg: destReg, srcReg: srcReg, dstBlock: dstBlock, opCode: 0)
 		subRegReg(destReg, srcReg) then ax64TwoAddr(state, destReg: destReg, srcReg: srcReg, dstBlock: dstBlock, opCode: 1)
+		addRegImm(destReg, value) then ax64RegImm(state, destReg: destReg, value: value, dstBlock: dstBlock, isAdd: true)
+		subRegImm(destReg, value) then ax64RegImm(state, destReg: destReg, value: value, dstBlock: dstBlock, isAdd: false)
 		imulRegReg(destReg, srcReg) then ax64TwoAddr(state, destReg: destReg, srcReg: srcReg, dstBlock: dstBlock, opCode: 2)
 		idivRcx to iremRcx then dstBlock.ops.push(MlirOp.maxx64(x64Op))
 		negReg(reg) then ax64UnaryInPlace(state, reg: reg, dstBlock: dstBlock, opCode: 0)
@@ -2941,6 +3879,7 @@ function allocX64Op(state RegState, x64Op MaxX64Op, dstBlock MlirBlock)
 		memcpyOp then ax64MemcpyOp(state, x64Op: x64Op, dstBlock: dstBlock)
 		movRegReg(destReg, srcReg) then ax64MovRegReg(state, destReg: destReg, srcReg: srcReg, dstBlock: dstBlock)
 		cmpRegReg(lhsReg, rhsReg) then ax64CmpRegReg(state, lhsReg: lhsReg, rhsReg: rhsReg, dstBlock: dstBlock)
+		cmpRegImm(lhsReg, value) then ax64CmpRegImm(state, lhsReg: lhsReg, value: value, dstBlock: dstBlock)
 		testRegReg(reg1, reg2) then ax64TestRegReg(state, reg1: reg1, reg2: reg2, dstBlock: dstBlock)
 		cqo then ax64Cqo(state, dstBlock: dstBlock)
 		idivReg(divisorReg) then ax64IdivReg(state, divisorReg: divisorReg, dstBlock: dstBlock)
@@ -3058,6 +3997,31 @@ function aa64CmpRegZero(state RegState, src Arm64VReg, dstBlock MlirBlock)
 end 'aa64CmpRegZero'
 
 function aa64MovRegReg(state RegState, dest Arm64VReg, src Arm64VReg, dstBlock MlirBlock)
+	// Physical src → virtual dest: assign directly.
+	let srcPhysOrd = match src 'checkPhysSrc'
+		physical(reg) gives arm64RegToOrdinal(reg)
+		virtual gives RM_NONE
+	end 'checkPhysSrc'
+	let destVirtId = arm64VRegId(dest)
+	if srcPhysOrd != RM_NONE and destVirtId >= 0 'physToVirt'
+		let occ = rmGetOr(state.registerContents, index: srcPhysOrd, fallback: RM_NONE)
+		if occ == destVirtId 'alreadyAssigned'
+			return
+		end 'alreadyAssigned'
+		if occ != RM_NONE 'hasOcc'
+			rmSpillRegisterIfOccupied(state, regOrdinal: srcPhysOrd, dstBlock: dstBlock)
+		end 'hasOcc'
+		rmAssign(state, regOrdinal: srcPhysOrd, valueId: destVirtId)
+		return
+	end 'physToVirt'
+	// Virtual → virtual: hint dest to prefer src's register.
+	let srcVirtId = arm64VRegId(src)
+	if srcVirtId >= 0 and destVirtId >= 0 'virtToVirt'
+		let srcReg2 = rmGetOr(state.valueToRegister, index: srcVirtId, fallback: RM_NONE)
+		if srcReg2 != RM_NONE 'hasSrcReg'
+			rmSetRegisterHint(state, valueId: destVirtId, regOrdinal: srcReg2)
+		end 'hasSrcReg'
+	end 'virtToVirt'
 	let s = arm64ResolveGprUse(state, vreg: src, dstBlock: dstBlock, protect1: RM_NONE, protect2: RM_NONE)
 	let d = arm64ResolveGprDef(state, vreg: dest, dstBlock: dstBlock, protect1: s, protect2: RM_NONE)
 	if s != d 'needMov'

@@ -75,24 +75,22 @@ export function insertRangeChecks(module MlirModule, funcReturnTypes FuncReturnT
 						var panicBlock = addBlock(dstFunc.region, label: panicLabel)
 						var continueBlock = addBlock(dstFunc.region, label: okLabel)
 
-						// The continue block receives the return value as a block argument
-						// so the register allocator sees it as a fresh definition.
 						let typeInfo = resolveRangeCheckType(srcFunc.returnType)
-						let blockArgId = allocValueId(nextValueIdRef)
-						var blockArgs = MlirBlockArgArray{}
-						blockArgs.push(MlirBlockArg{valueId: blockArgId, argType: typeInfo.stdType})
-						continueBlock.blockArgs = blockArgs
 
-						// Emit range check ops into current block
-						// cond_br passes retValId as argument to the ok block
-						emitRangeCheckOps(dstBlock, valueId: retValId, lower: range.lower, upper: range.upper, typeInfo: typeInfo, panicBlockId: panicBlock.id, okBlockId: continueBlock.id, okArgId: retValId, nextValueIdRef: nextValueIdRef)
+						// Emit range check ops into current block.
+						// The condBr passes no block args — the panic block is diverging
+						// (never returns), so the register allocator's save/restore carries
+						// the return value in its register across to the continue block.
+						emitRangeCheckOps(dstBlock, valueId: retValId, lower: range.lower, upper: range.upper, typeInfo: typeInfo, panicBlockId: panicBlock.id, okBlockId: continueBlock.id, nextValueIdRef: nextValueIdRef)
 
 						// Panic block: emit maxon.panic
 						let panicMsg = buildPanicMessage(aliasName, lower: range.lower, upper: range.upper)
 						panicBlock.ops.push(MlirOp.maxhl(MaxHLOp.panic(panicMsg, checkId)))
 
-						// Continue block: return the block argument (which carries the original value)
-						continueBlock.terminator = MlirOp.func(FuncOp.ret(blockArgId))
+						// Continue block: return the original value directly.
+						// No block arg needed — diverging block state save/restore
+						// preserves the register assignment across the panic block.
+						continueBlock.terminator = MlirOp.func(FuncOp.ret(retValId))
 						continueBlock.hasTerminator = true
 					end 'notConst'
 				end 'isReturn' else 'notReturn'
@@ -183,15 +181,9 @@ end 'extractConstValue'
 
 // Emit range check ops: compare value against lower and upper bounds,
 // OR the results, and branch to panic or continue.
-function emitRangeCheckOps(block MlirBlock, valueId ValueId, lower RangeBound, upper RangeBound, typeInfo RangeCheckTypeInfo, panicBlockId BlockId, okBlockId BlockId, okArgId ValueId, nextValueIdRef ValueIdRef)
-	// %lower = arith.const lower
-	let lowerLitId = allocValueId(nextValueIdRef)
-	block.ops.push(MlirOp.arith(ArithOp.const(ArithConst{opcode: typeInfo.constOpcode, resultId: lowerLitId, value: lower})))
-
-	// %cmpLo = arith.cmp lt %valueId, %lower
-	let cmpLowerId = allocValueId(nextValueIdRef)
-	block.ops.push(MlirOp.arith(ArithOp.binary(ArithBinaryOp{opcode: typeInfo.cmpLtOpcode, resultId: cmpLowerId, leftId: valueId, rightId: lowerLitId})))
-
+// Upper bound is emitted first so that after x86 register allocation
+// the lower bound check appears first in the output (matching the C# compiler).
+function emitRangeCheckOps(block MlirBlock, valueId ValueId, lower RangeBound, upper RangeBound, typeInfo RangeCheckTypeInfo, panicBlockId BlockId, okBlockId BlockId, nextValueIdRef ValueIdRef)
 	// %upper = arith.const upper
 	let upperLitId = allocValueId(nextValueIdRef)
 	block.ops.push(MlirOp.arith(ArithOp.const(ArithConst{opcode: typeInfo.constOpcode, resultId: upperLitId, value: upper})))
@@ -200,14 +192,20 @@ function emitRangeCheckOps(block MlirBlock, valueId ValueId, lower RangeBound, u
 	let cmpUpperId = allocValueId(nextValueIdRef)
 	block.ops.push(MlirOp.arith(ArithOp.binary(ArithBinaryOp{opcode: typeInfo.cmpGtOpcode, resultId: cmpUpperId, leftId: valueId, rightId: upperLitId})))
 
+	// %lower = arith.const lower
+	let lowerLitId = allocValueId(nextValueIdRef)
+	block.ops.push(MlirOp.arith(ArithOp.const(ArithConst{opcode: typeInfo.constOpcode, resultId: lowerLitId, value: lower})))
+
+	// %cmpLo = arith.cmp lt %valueId, %lower
+	let cmpLowerId = allocValueId(nextValueIdRef)
+	block.ops.push(MlirOp.arith(ArithOp.binary(ArithBinaryOp{opcode: typeInfo.cmpLtOpcode, resultId: cmpLowerId, leftId: valueId, rightId: lowerLitId})))
+
 	// %outOfRange = arith.ori1 %cmpLo, %cmpHi
 	let outOfRangeId = allocValueId(nextValueIdRef)
 	block.ops.push(MlirOp.arith(ArithOp.binary(ArithBinaryOp{opcode: ArithBinaryOpcode.orI1, resultId: outOfRangeId, leftId: cmpLowerId, rightId: cmpUpperId})))
 
-	// cond_br %outOfRange → panic, else → ok(valueId)
-	var okArgs = ValueIdArray{}
-	okArgs.push(okArgId)
-	block.terminator = MlirOp.cf(CfOp.condBr(outOfRangeId, panicBlockId, ValueIdArray{}, okBlockId, okArgs))
+	// cond_br %outOfRange → panic, else → ok (no block args needed)
+	block.terminator = MlirOp.cf(CfOp.condBr(outOfRangeId, panicBlockId, ValueIdArray{}, okBlockId, ValueIdArray{}))
 	block.hasTerminator = true
 end 'emitRangeCheckOps'
 

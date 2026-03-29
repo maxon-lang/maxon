@@ -53,47 +53,35 @@ end 'createFrameScanState'
 //    we independently compute var area from slot-based ops and spill area from
 //    spill/reload ops, then combine and align.
 export function computeFrameInfo(func MlirFunction, target Target) returns FrameInfo
-	var state = createFrameScanState()
+	// The register allocator stores the spill size on the function.
+	// The var area is varSlotCount * 8 (slot-addressed variables from ISel).
+	// Total frame = var area + spill area, aligned to 16.
+	let varArea = func.varSlotCount * 8
+	let spillArea = func.spillSize
+	var totalSize = varArea + spillArea
 
-	// Scan all blocks to gather frame-relevant data.
+	// Scan for prints that require buffer space on the stack.
+	var state = createFrameScanState()
 	for block in func.region.blocks 'eachBlock'
 		for op in block.ops 'eachOp'
 			scanOpForFrameInfo(op, target: target, state: state)
 		end 'eachOp'
-		// Also scan the terminator
 		if block.hasTerminator 'hasTerm'
 			scanOpForFrameInfo(block.terminator, target: target, state: state)
 		end 'hasTerm'
 	end 'eachBlock'
 
-	// Mode 1: existing prologue carries the already-computed total stack size.
-	// The MidToMax conversion already computed var+spill and aligned to 16.
-	if state.foundPrologue 'hasExistingPrologue'
-		return FrameInfo{
-			totalStackSize: state.existingPrologueSize,
-			spillAreaSize: 0,
-			varAreaSize: state.existingPrologueSize,
-			alignedSize: state.existingPrologueSize
-		}
-	end 'hasExistingPrologue'
-
-	// Mode 2: no existing prologue — compute from scratch.
-	// In this mode, spill ops tell us how much spill space regalloc used,
-	// and we need to ensure minimum frame sizes for calls/prints.
-	var totalSize = state.spillArea
-	if state.hasPrint and totalSize == 0 'needPrintBuf'
+	// Print operations need stack buffer space for string formatting.
+	if state.hasPrint and totalSize < 16 'needPrintBuf'
 		totalSize = 16
 	end 'needPrintBuf'
-	if state.hasCalls and totalSize == 0 'needCallFrame'
-		totalSize = 16
-	end 'needCallFrame'
 
 	let aligned = alignTo16(totalSize)
 
 	return FrameInfo{
 		totalStackSize: totalSize,
-		spillAreaSize: state.spillArea,
-		varAreaSize: 0,
+		spillAreaSize: spillArea,
+		varAreaSize: varArea,
 		alignedSize: aligned
 	}
 end 'computeFrameInfo'

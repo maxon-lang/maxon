@@ -1,23 +1,14 @@
 // Convenience wrapper: compiles a file or directory and returns the output executable path.
 export function compile(path FilePath, target Target) returns FilePath throws CompileError
-	let project = createProject(path, isSingleFile: false, target: target)
+	let project = createProject(path, target: target)
 	return try compileProject(project)
 end 'compile'
 
-// Compiles and also returns the final target-level MLIR text (for test fragments).
-export function compileWithIr(path FilePath, target Target) returns CompileWithIrResult throws CompileError
-	let project = createProject(path, isSingleFile: false, target: target)
-	let outputPath = try compileProject(project)
-	let targetModule = project.db.codeCache.value.targetModule
-	let ir = moduleToString(targetModule, skipStdlib: true)
-	return CompileWithIrResult{outputPath: outputPath, ir: ir}
-end 'compileWithIr'
-
 // Compiles source code directly from memory (no temp file) and returns IR.
 export function compileSourceWithIr(source String, virtualPath FilePath, target Target, outputPath FilePath) returns CompileWithIrResult throws CompileError
-	let project = createProject(outputPath, isSingleFile: true, target: target)
+	let project = createProject(outputPath, target: target)
 	let bytes = source.toByteArray()
-	setSourceFile(project, path: virtualPath, content: bytes)
+	fileChanged(project, path: virtualPath, content: bytes)
 
 	logInfo(LogCategory.compiler, message: () gives "Starting in-memory compilation")
 	let codeResult = try queryCodeResult(project)
@@ -28,17 +19,6 @@ export function compileSourceWithIr(source String, virtualPath FilePath, target 
 	let ir = moduleToString(targetModule, skipStdlib: true)
 	return CompileWithIrResult{outputPath: outputPath, ir: ir}
 end 'compileSourceWithIr'
-
-// Compiles source code directly from memory without generating IR text.
-export function compileSource(source String, virtualPath FilePath, target Target, outputPath FilePath) returns FilePath throws CompileError
-	let project = createProject(outputPath, isSingleFile: true, target: target)
-	let bytes = source.toByteArray()
-	setSourceFile(project, path: virtualPath, content: bytes)
-
-	let codeResult = try queryCodeResult(project)
-	writeExecutable(outputPath, codeResult: codeResult, target: project.target)
-	return outputPath
-end 'compileSource'
 
 export type CompileWithIrResult
 	export var outputPath FilePath
@@ -66,11 +46,6 @@ export function compileProject(project Project) returns FilePath throws CompileE
 	return outputPath
 end 'compileProject'
 
-// Notify the query database that a single file has changed (for IDE use).
-export function fileChanged(project Project, path FilePath, content ByteArray)
-	setSourceFile(project, path: path, content: content)
-end 'fileChanged'
-
 // --- Source file loading ---
 
 function loadSourceFiles(project Project, path FilePath) throws CompileError
@@ -81,7 +56,7 @@ function loadSourceFiles(project Project, path FilePath) throws CompileError
 			throw CompileError.readError
 		end 'readErr'
 
-		setSourceFile(project, path: path, content: bytes)
+		fileChanged(project, path: path, content: bytes)
 	end 'isFile' else if path.directoryExists() 'isDir'
 		logTrace(LogCategory.compiler, message: () gives "Loading directory: {path}")
 
@@ -98,7 +73,7 @@ function loadSourceFiles(project Project, path FilePath) throws CompileError
 					continue
 				end 'skip'
 
-				setSourceFile(project, path: filePath, content: bytes)
+				fileChanged(project, path: filePath, content: bytes)
 			end 'isMaxon'
 		end 'loop'
 
@@ -110,5 +85,4 @@ function loadSourceFiles(project Project, path FilePath) throws CompileError
 	if project.db.sourcePaths.count() == 0 'noFiles'
 		throw CompileError.noSourceFiles
 	end 'noFiles'
-
 end 'loadSourceFiles'

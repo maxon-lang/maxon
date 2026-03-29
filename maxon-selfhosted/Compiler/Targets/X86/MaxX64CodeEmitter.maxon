@@ -93,6 +93,21 @@ function emitCmpRegRegOp(code ByteArray, lhs X64Register, rhs X64Register)
 	emitModRMReg(code, regField: rhs, rmField: lhs)
 end 'emitCmpRegRegOp'
 
+function emitCmpRegImmOp(code ByteArray, lhs X64Register, value MachineWord)
+	// cmp lhs, imm8   =>  REX.W 83 ModRM(/7, lhs) imm8
+	// cmp lhs, imm32  =>  REX.W 81 ModRM(/7, lhs) imm32
+	emitRexWSingle(code, rmField: lhs)
+	if value <= 127 'imm8'
+		code.push(0x83)
+		emitModRMExt(code, ext: 7, rmField: lhs)
+		code.push(value and 0xFF)
+	end 'imm8' else 'imm32'
+		code.push(0x81)
+		emitModRMExt(code, ext: 7, rmField: lhs)
+		writeDword(code, value: value)
+	end 'imm32'
+end 'emitCmpRegImmOp'
+
 function emitTestRegRegOp(code ByteArray, reg1 X64Register, reg2 X64Register)
 	// test reg1, reg2  =>  REX.W 85 ModRM(reg2 -> reg1)
 	emitRexWPrefix(code, regField: reg2, rmField: reg1)
@@ -365,6 +380,36 @@ function emitSubRegRegParam(code ByteArray, dest X64Register, src X64Register)
 	code.push(0x29)
 	emitModRMReg(code, regField: src, rmField: dest)
 end 'emitSubRegRegParam'
+
+function emitAddRegImmParam(code ByteArray, dest X64Register, value MachineWord)
+	// add dest, imm8   =>  REX.W 83 ModRM(/0, dest) imm8
+	// add dest, imm32  =>  REX.W 81 ModRM(/0, dest) imm32
+	emitRexWSingle(code, rmField: dest)
+	if value <= 127 'imm8'
+		code.push(0x83)
+		emitModRMExt(code, ext: 0, rmField: dest)
+		code.push(value and 0xFF)
+	end 'imm8' else 'imm32'
+		code.push(0x81)
+		emitModRMExt(code, ext: 0, rmField: dest)
+		writeDword(code, value: value)
+	end 'imm32'
+end 'emitAddRegImmParam'
+
+function emitSubRegImmParam(code ByteArray, dest X64Register, value MachineWord)
+	// sub dest, imm8   =>  REX.W 83 ModRM(/5, dest) imm8
+	// sub dest, imm32  =>  REX.W 81 ModRM(/5, dest) imm32
+	emitRexWSingle(code, rmField: dest)
+	if value <= 127 'imm8'
+		code.push(0x83)
+		emitModRMExt(code, ext: 5, rmField: dest)
+		code.push(value and 0xFF)
+	end 'imm8' else 'imm32'
+		code.push(0x81)
+		emitModRMExt(code, ext: 5, rmField: dest)
+		writeDword(code, value: value)
+	end 'imm32'
+end 'emitSubRegImmParam'
 
 function emitImulRegRegParam(code ByteArray, dest X64Register, src X64Register)
 	// imul dest, src  =>  REX.W 0F AF ModRM(dest -> src)
@@ -1188,8 +1233,35 @@ function emitLeaFromStackOp(code ByteArray, dest X64Register, offset MachineWord
 end 'emitLeaFromStackOp'
 
 // --- LEA RIP-relative: lea dest, [rip+label] ---
-function emitLeaRipRelOp(code ByteArray, dest X64Register, rdataLabel ByteArray)
-	panic("emitLeaRipRelOp: rdata label resolution not yet implemented (labelLen={rdataLabel.count()}, dest={dest}, codeLen={code.count()})")
+// Resolves named symdata/global data labels by embedding a data island in the
+// code section and emitting a RIP-relative LEA to any destination register.
+function emitLeaRipRelOp(code ByteArray, dest X64Register, rdataLabel ByteArray, globalData GlobalDataTable)
+	let data = lookupGlobalData(globalData, name: rdataLabel)
+	let dataLen = data.count()
+	if dataLen == 0 'noData'
+		// Label not found or empty — load 0
+		emitMovRegImmGeneric(code, dest: dest, value: 0)
+		return
+	end 'noData'
+	// Jump over data island
+	code.push(0xE9)
+	let jmpFixup = code.count()
+	writeDword(code, value: 0)
+	// Data island
+	let dataOffset = code.count()
+	code.append(data)
+	// Patch jump
+	let afterData = code.count()
+	patchDword(code, offset: jmpFixup, value: afterData - (jmpFixup + 4))
+	// lea dest, [rip + offset_to_data]
+	emitRexWPrefix(code, regField: dest, rmField: X64Register.rbp)
+	code.push(0x8D)
+	let destBits = regCode(dest)
+	let modrm2 = 0x05 or (destBits shl 3)
+	code.push(modrm2)
+	let leaEnd = code.count() + 4
+	let leaRel = dataOffset - leaEnd
+	writeDword(code, value: leaRel)
 end 'emitLeaRipRelOp'
 
 // --- LEA func addr: lea dest, [rip+funcName] ---
@@ -1298,6 +1370,8 @@ function emitMaxX64Op(op MaxX64Op, code ByteArray, blockFixups BlockJumpFixupArr
 		loadSlot(destReg, slotIndex) then emitLoadSlotToReg(code, slotIndex: slotIndex, dest: resolveGpr(destReg))
 		addRegReg(destReg, srcReg) then emitAddRegRegParam(code, dest: resolveGpr(destReg), src: resolveGpr(srcReg))
 		subRegReg(destReg, srcReg) then emitSubRegRegParam(code, dest: resolveGpr(destReg), src: resolveGpr(srcReg))
+		addRegImm(destReg, value) then emitAddRegImmParam(code, dest: resolveGpr(destReg), value: value)
+		subRegImm(destReg, value) then emitSubRegImmParam(code, dest: resolveGpr(destReg), value: value)
 		imulRegReg(destReg, srcReg) then emitImulRegRegParam(code, dest: resolveGpr(destReg), src: resolveGpr(srcReg))
 		idivRcx then emitIdivRcx(code)
 		iremRcx then emitIremRcx(code)
@@ -1333,6 +1407,7 @@ function emitMaxX64Op(op MaxX64Op, code ByteArray, blockFixups BlockJumpFixupArr
 		// Register allocator ops
 		movRegReg(destReg, srcReg) then emitMovRegRegOp(code, dest: resolveGpr(destReg), src: resolveGpr(srcReg))
 		cmpRegReg(lhsReg, rhsReg) then emitCmpRegRegOp(code, lhs: resolveGpr(lhsReg), rhs: resolveGpr(rhsReg))
+		cmpRegImm(lhsReg, value) then emitCmpRegImmOp(code, lhs: resolveGpr(lhsReg), value: value)
 		testRegReg(reg1, reg2) then emitTestRegRegOp(code, reg1: resolveGpr(reg1), reg2: resolveGpr(reg2))
 		cqo then emitCqoOp(code)
 		idivReg(divisorReg) then emitIdivRegOp(code, divisor: resolveGpr(divisorReg))
@@ -1368,7 +1443,7 @@ function emitMaxX64Op(op MaxX64Op, code ByteArray, blockFixups BlockJumpFixupArr
 		globalLoadXmm then panic("X86 globalLoadXmm not yet implemented in binary emitter")
 		globalStoreXmm then panic("X86 globalStoreXmm not yet implemented in binary emitter")
 		leaFromStack(dest, stackOffset) then emitLeaFromStackOp(code, dest: resolveGpr(dest), offset: stackOffset)
-		leaRipRelative(dest, rdataLabel) then emitLeaRipRelOp(code, dest: resolveGpr(dest), rdataLabel: rdataLabel)
+		leaRipRelative(dest, rdataLabel) then emitLeaRipRelOp(code, dest: resolveGpr(dest), rdataLabel: rdataLabel, globalData: globalData)
 		leaFuncAddr(dest, funcName) then emitLeaFuncAddrOp(code, dest: resolveGpr(dest), callFixups: callFixups, funcName: funcName)
 		setcc(dest, condition) then emitSetccOp(code, dest: resolveGpr(dest), condition: condition)
 		cmov(dest, src, condition) then emitCmovOp(code, dest: resolveGpr(dest), src: resolveGpr(src), condition: condition)

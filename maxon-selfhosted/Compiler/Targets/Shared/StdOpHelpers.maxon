@@ -220,6 +220,13 @@ end 'computeStackSizeForFunc'
 
 // Scan backward within a block's ops to find the comparison that produced the condition.
 export function determineJumpKindInBlock(block MlirBlock) returns JumpKind
+	return determineJumpKindForCond(block, condId: -1)
+end 'determineJumpKindInBlock'
+
+// Determine the jump kind, optionally verifying the comparison defines condId.
+// If condId >= 0, only a comparison that defines condId is accepted.
+// If condId < 0, the first comparison found (scanning backward) is used.
+export function determineJumpKindForCond(block MlirBlock, condId ValueId) returns JumpKind
 	var j = block.ops.count() - 1
 	while j >= 0 'scanBack'
 		let op = try block.ops.get(j) otherwise 'skipBack'
@@ -230,10 +237,44 @@ export function determineJumpKindInBlock(block MlirBlock) returns JumpKind
 			j = j - 1
 			continue
 		end 'notCmp'
+		// If condId specified, verify this comparison defines it
+		if condId >= 0 'checkResultId'
+			let defId = try getCmpResultId(op) otherwise 'noResultId'
+				j = j - 1
+				continue
+			end 'noResultId'
+			if defId != condId 'wrongCmp'
+				j = j - 1
+				continue
+			end 'wrongCmp'
+		end 'checkResultId'
 		return kind
 	end 'scanBack'
 	return JumpKind.boolTest
-end 'determineJumpKindInBlock'
+end 'determineJumpKindForCond'
+
+// Extract the result value ID from a comparison op.
+function getCmpResultId(op MlirOp) returns ValueId throws NotComparison
+	return match op 'check'
+		arith(arithOp) gives try getArithCmpResultId(arithOp)
+		mir(mirOp) gives try getMirCmpResultId(mirOp)
+		default throws NotComparison.notComparison
+	end 'check'
+end 'getCmpResultId'
+
+function getMirCmpResultId(op MirOp) returns ValueId throws NotComparison
+	return match op 'check'
+		cmp(resultId, _, _, _) gives resultId
+		default throws NotComparison.notComparison
+	end 'check'
+end 'getMirCmpResultId'
+
+function getArithCmpResultId(op ArithOp) returns ValueId throws NotComparison
+	return match op 'check'
+		binary(binOp) gives binOp.resultId
+		default throws NotComparison.notComparison
+	end 'check'
+end 'getArithCmpResultId'
 
 function getJumpKindFromOp(op MlirOp) returns JumpKind throws NotComparison
 	return match op 'check'
@@ -337,3 +378,92 @@ export function isParamPromoted(promoted BoolArray, paramIndex VarSlot) returns 
 	end 'outOfBounds'
 	return try promoted.get(paramIndex) otherwise false
 end 'isParamPromoted'
+
+// Check if a MIR-level block is diverging (calls maxon_panic).
+export function isMirDivergingBlock(block MlirBlock) returns bool
+	for op in block.ops 'checkOps'
+		match op 'check'
+			func(funcOp) then match funcOp 'checkFunc'
+				call(_, callee, _) then if callee == b"maxon_panic" 'isPanic'
+					return true
+				end 'isPanic'
+				ret then break 'checkFunc'
+				tryCall to param then break 'checkFunc'
+			end 'checkFunc'
+			mir(mirOp) then match mirOp 'checkMir'
+				call(_, callee, _) then if callee == b"maxon_panic" 'isPanic2'
+					return true
+				end 'isPanic2'
+				movImm to branch then break 'checkMir'
+				indirectCall to loadByte then break 'checkMir'
+			end 'checkMir'
+			maxhl then break 'check'
+			arith to cf then break 'check'
+			memref to sys then break 'check'
+			maxx64 to maxarm64 then break 'check'
+		end 'check'
+	end 'checkOps'
+	return false
+end 'isMirDivergingBlock'
+
+// Eliminate unconditional jumps/branches whose target is the immediately next block.
+// These are fallthrough jumps emitted by condBr lowering that add no value.
+export function eliminateFallthroughJumps(func MlirFunction)
+	let blockCount = func.region.blocks.count()
+	var i = 0
+	while i < blockCount - 1 'eachBlock'
+		var block = try func.region.blocks.get(i) otherwise 'skipBlock'
+			i = i + 1
+			continue
+		end 'skipBlock'
+		if not block.hasTerminator 'noTerm'
+			i = i + 1
+			continue
+		end 'noTerm'
+		let nextBlock = try func.region.blocks.get(i + 1) otherwise 'skipNext'
+			i = i + 1
+			continue
+		end 'skipNext'
+		let targetId = getUnconditionalJumpTarget(block.terminator)
+		if targetId != NOT_A_JUMP and targetId == nextBlock.id 'isFallthrough'
+			// The unconditional jump targets the next block — remove it.
+			// Promote the last op in the block to be the new terminator.
+			let lastOp = try block.ops.pop() otherwise 'noOps'
+				block.hasTerminator = false
+				i = i + 1
+				continue
+			end 'noOps'
+			block.terminator = lastOp
+		end 'isFallthrough'
+		i = i + 1
+	end 'eachBlock'
+end 'eliminateFallthroughJumps'
+
+typealias OptionalBlockId = int(i64.min to i64.max)
+let NOT_A_JUMP = -1
+
+// Extract the target block ID from an unconditional jump/branch.
+// Returns NOT_A_JUMP if the op is not an unconditional jump.
+function getUnconditionalJumpTarget(op MlirOp) returns OptionalBlockId
+	return match op 'check'
+		maxx64(x64Op) gives getX64JumpTarget(x64Op)
+		maxarm64(a64Op) gives getArm64BranchTarget(a64Op)
+		maxhl to mir gives NOT_A_JUMP
+	end 'check'
+end 'getUnconditionalJumpTarget'
+
+function getX64JumpTarget(op MaxX64Op) returns OptionalBlockId
+	return match op 'check'
+		jmp(targetBlock) gives targetBlock
+		prologue to condJump gives NOT_A_JUMP
+		movF64Slot to repStosq gives NOT_A_JUMP
+	end 'check'
+end 'getX64JumpTarget'
+
+function getArm64BranchTarget(op MaxArm64Op) returns OptionalBlockId
+	return match op 'check'
+		branch(targetBlock) gives targetBlock
+		prologue to condBranch gives NOT_A_JUMP
+		branchLink to nullSafeLoad gives NOT_A_JUMP
+	end 'check'
+end 'getArm64BranchTarget'

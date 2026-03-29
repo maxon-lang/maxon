@@ -122,6 +122,8 @@ export union MaxX64Op
 	loadSlot(destReg X64VReg, slotIndex VarSlot)
 	addRegReg(destReg X64VReg, srcReg X64VReg)
 	subRegReg(destReg X64VReg, srcReg X64VReg)
+	addRegImm(destReg X64VReg, value MachineWord)
+	subRegImm(destReg X64VReg, value MachineWord)
 	imulRegReg(destReg X64VReg, srcReg X64VReg)
 	idivRcx
 	iremRcx
@@ -164,6 +166,7 @@ export union MaxX64Op
 	// Register allocator ops
 	movRegReg(destReg X64VReg, srcReg X64VReg)
 	cmpRegReg(lhsReg X64VReg, rhsReg X64VReg)
+	cmpRegImm(lhsReg X64VReg, value MachineWord)
 	testRegReg(reg1 X64VReg, reg2 X64VReg)
 	cqo
 	idivReg(divisorReg X64VReg)
@@ -257,6 +260,8 @@ export function maxX64OpToString(op MaxX64Op, blocks MlirBlockArray) returns Str
 		loadSlot(destReg, slotIndex) gives "x86.mov {x64VRegToString(destReg)}, [rbp-{slotOffset(slotIndex)}]"
 		addRegReg(destReg, srcReg) gives "x86.add {x64VRegToString(destReg)}, {x64VRegToString(srcReg)}"
 		subRegReg(destReg, srcReg) gives "x86.sub {x64VRegToString(destReg)}, {x64VRegToString(srcReg)}"
+		addRegImm(destReg, value) gives "x86.add {x64VRegToString(destReg)}, {value}"
+		subRegImm(destReg, value) gives "x86.sub {x64VRegToString(destReg)}, {value}"
 		imulRegReg(destReg, srcReg) gives "x86.imul {x64VRegToString(destReg)}, {x64VRegToString(srcReg)}"
 		idivRcx gives "x86.idiv rcx"
 		iremRcx gives "x86.idiv rcx"
@@ -291,6 +296,7 @@ export function maxX64OpToString(op MaxX64Op, blocks MlirBlockArray) returns Str
 		memcpyOp(_, _, _) gives "x86.rep_movsb"
 		movRegReg(destReg, srcReg) gives "x86.mov {x64VRegToString(destReg)}, {x64VRegToString(srcReg)}"
 		cmpRegReg(lhsReg, rhsReg) gives "x86.cmp {x64VRegToString(lhsReg)}, {x64VRegToString(rhsReg)}"
+		cmpRegImm(lhsReg, value) gives "x86.cmp {x64VRegToString(lhsReg)}, {value}"
 		testRegReg(reg1, reg2) gives "x86.test {x64VRegToString(reg1)}, {x64VRegToString(reg2)}"
 		cqo gives "x86.cqo"
 		idivReg(divisorReg) gives "x86.idiv {x64VRegToString(divisorReg)}"

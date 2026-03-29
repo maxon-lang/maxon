@@ -3,6 +3,45 @@
 // Register allocation, prologue/epilogue, and stack frame sizing are handled
 // by standalone passes that run after this one.
 
+// Constant map: tracks valueId -> immediate value for integer movImm ops.
+// Enables addRegImm/subRegImm/cmpRegImm when an operand is a known constant.
+typealias ConstMap = Array with ParsedInt
+typealias ImmediateValue = int(i64.min to i64.max)
+let CONST_NOT_FOUND = -9223372036854775807
+
+function buildConstMap(func MlirFunction) returns ConstMap
+	var cm = ConstMap{}
+	for block in func.region.blocks 'eachBlock'
+		for op in block.ops 'eachOp'
+			match op 'check'
+				mir(mirOp) then match mirOp 'checkMir'
+					movImm(resultId, value, isFloat) then if not isFloat 'intConst'
+						constMapSet(cm, valueId: resultId, value: value)
+					end 'intConst'
+					movReg to loadByte then break 'checkMir'
+				end 'checkMir'
+				maxhl to sys then break 'check'
+				maxx64 to maxarm64 then break 'check'
+			end 'check'
+		end 'eachOp'
+	end 'eachBlock'
+	return cm
+end 'buildConstMap'
+
+function constMapSet(cm ConstMap, valueId ValueId, value ImmediateValue)
+	while cm.count() <= valueId 'grow'
+		cm.push(CONST_NOT_FOUND)
+	end 'grow'
+	cm.set(valueId, value: value)
+end 'constMapSet'
+
+function constMapGet(cm ConstMap, valueId ValueId) returns ImmediateValue
+	if valueId < 0 or valueId >= cm.count() 'outOfRange'
+		return CONST_NOT_FOUND
+	end 'outOfRange'
+	return try cm.get(valueId) otherwise CONST_NOT_FOUND
+end 'constMapGet'
+
 export function lowerMidToMaxX64(module MlirModule, target Target) returns MlirModule
 	logDebug(LogCategory.mlir, message: () gives "Lowering Mid to MaxX64 dialect")
 	var result = createMlirModule()
@@ -33,9 +72,13 @@ function lowerFunctionToX64(srcFunc MlirFunction, osDesc OsDescriptor, allFuncti
 		end 'updateMax'
 	end 'countLive'
 
-	// Count temp slots needed by SysOps (they still use slot-based addressing)
+	// Count temp slots needed by SysOps (they still use slot-based addressing).
+	// Skip diverging blocks (panic paths) since their slots are dead.
 	var sysOpTempCount = 0
 	for srcBlock in srcFunc.region.blocks 'countSysTemps'
+		if isMirDivergingBlock(srcBlock) 'skipDiverging'
+			continue
+		end 'skipDiverging'
 		for op in srcBlock.ops 'countOp'
 			sysOpTempCount = sysOpTempCount + sysOpTempSlotCount(op)
 		end 'countOp'
@@ -61,6 +104,10 @@ function lowerFunctionToX64(srcFunc MlirFunction, osDesc OsDescriptor, allFuncti
 	// Value-to-slot map for SysOps that need slot-based addressing
 	var valueSlots = ValueSlotMap{}
 
+	// Build constant map: valueId -> immediate value for integer movImm ops.
+	// Used by lowerIntBinOp to emit addRegImm/subRegImm instead of addRegReg.
+	var constMap = buildConstMap(srcFunc)
+
 	// Phase 2: Lower all blocks.
 	for srcBlock in srcFunc.region.blocks 'eachBlock'
 		var dstBlock = addBlock(dstFunc.region, label: srcBlock.label)
@@ -76,7 +123,7 @@ function lowerFunctionToX64(srcFunc MlirFunction, osDesc OsDescriptor, allFuncti
 
 		// Lower each op in the block
 		for op in srcBlock.ops 'eachOp'
-			nextTempSlot = lowerMlirOp(op, dstBlock: dstBlock, osDesc: osDesc, allFunctions: allFunctions, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
+			nextTempSlot = lowerMlirOp(op, dstBlock: dstBlock, osDesc: osDesc, allFunctions: allFunctions, valueSlots: valueSlots, nextTempSlot: nextTempSlot, constMap: constMap)
 		end 'eachOp'
 
 		// Lower terminator
@@ -88,6 +135,9 @@ function lowerFunctionToX64(srcFunc MlirFunction, osDesc OsDescriptor, allFuncti
 			setLastOpAsTerminator(dstBlock)
 		end 'hasTerm'
 	end 'eachBlock'
+
+	// Remove unconditional jumps that fall through to the next block.
+	eliminateFallthroughJumps(dstFunc)
 
 	// Record the actual total slot count after lowering.
 	// nextTempSlot tracks the high-water mark of all slots used by the ISel,
@@ -186,10 +236,10 @@ end 'setLastOpAsTerminator'
 // Op dispatch
 // ============================================================
 
-function lowerMlirOp(op MlirOp, dstBlock MlirBlock, osDesc OsDescriptor, allFunctions MlirFunctionArray, valueSlots ValueSlotMap, nextTempSlot SlotIndex) returns SlotIndex
+function lowerMlirOp(op MlirOp, dstBlock MlirBlock, osDesc OsDescriptor, allFunctions MlirFunctionArray, valueSlots ValueSlotMap, nextTempSlot SlotIndex, constMap ConstMap) returns SlotIndex
 	var result = nextTempSlot
 	match op 'dispatch'
-		mir(mirOp) then result = lowerMirOp(mirOp, dstBlock: dstBlock, osDesc: osDesc, allFunctions: allFunctions, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
+		mir(mirOp) then result = lowerMirOp(mirOp, dstBlock: dstBlock, osDesc: osDesc, allFunctions: allFunctions, valueSlots: valueSlots, nextTempSlot: nextTempSlot, constMap: constMap)
 		memref(memOp) then lowerMemRefOp(memOp, dstBlock: dstBlock)
 		runtime(rtOp) then lowerRuntimeOp(rtOp, dstBlock: dstBlock)
 		maxx64(x64Op) then dstBlock.ops.push(MlirOp.maxx64(x64Op))
@@ -206,14 +256,14 @@ end 'lowerMlirOp'
 // MIR op lowering — pure virtual register emission
 // ============================================================
 
-function lowerMirOp(op MirOp, dstBlock MlirBlock, osDesc OsDescriptor, allFunctions MlirFunctionArray, valueSlots ValueSlotMap, nextTempSlot SlotIndex) returns SlotIndex
+function lowerMirOp(op MirOp, dstBlock MlirBlock, osDesc OsDescriptor, allFunctions MlirFunctionArray, valueSlots ValueSlotMap, nextTempSlot SlotIndex, constMap ConstMap) returns SlotIndex
 	var result = nextTempSlot
 	match op 'dispatch'
 		movImm(resultId, value, isFloat) then lowerMovImm(resultId, value: value, isFloat: isFloat, dstBlock: dstBlock)
 		movReg(resultId, srcId) then lowerMovReg(resultId, srcId: srcId, dstBlock: dstBlock)
-		binOp(resultId, leftId, rightId, opcode) then lowerBinOp(resultId, leftId: leftId, rightId: rightId, opcode: opcode, dstBlock: dstBlock)
+		binOp(resultId, leftId, rightId, opcode) then lowerBinOp(resultId, leftId: leftId, rightId: rightId, opcode: opcode, dstBlock: dstBlock, constMap: constMap)
 		unaryOp(resultId, operandId, opcode) then lowerUnaryOp(resultId, operandId: operandId, opcode: opcode, dstBlock: dstBlock)
-		cmp(resultId, leftId, rightId, predicate) then lowerCmp(resultId, leftId: leftId, rightId: rightId, predicate: predicate, dstBlock: dstBlock)
+		cmp(resultId, leftId, rightId, predicate) then lowerCmp(resultId, leftId: leftId, rightId: rightId, predicate: predicate, dstBlock: dstBlock, constMap: constMap)
 		condBranch then result = nextTempSlot  // handled as terminator
 		branch then result = nextTempSlot  // handled as terminator
 		call(resultId, callee, argIds) then lowerCall(resultId, callee: callee, argIds: argIds, dstBlock: dstBlock, allFunctions: allFunctions)
@@ -256,16 +306,16 @@ end 'lowerMovReg'
 // Binary operations
 // ============================================================
 
-function lowerBinOp(resultId ValueId, leftId ValueId, rightId ValueId, opcode MirBinOpcode, dstBlock MlirBlock)
+function lowerBinOp(resultId ValueId, leftId ValueId, rightId ValueId, opcode MirBinOpcode, dstBlock MlirBlock, constMap ConstMap)
 	match opcode 'lower'
-		addI64 then lowerIntBinOp(resultId, leftId: leftId, rightId: rightId, kind: X64BinKind.add, dstBlock: dstBlock)
-		subI64 then lowerIntBinOp(resultId, leftId: leftId, rightId: rightId, kind: X64BinKind.sub, dstBlock: dstBlock)
-		mulI64 then lowerIntBinOp(resultId, leftId: leftId, rightId: rightId, kind: X64BinKind.mul, dstBlock: dstBlock)
+		addI64 then lowerIntBinOp(resultId, leftId: leftId, rightId: rightId, kind: X64BinKind.add, dstBlock: dstBlock, constMap: constMap)
+		subI64 then lowerIntBinOp(resultId, leftId: leftId, rightId: rightId, kind: X64BinKind.sub, dstBlock: dstBlock, constMap: constMap)
+		mulI64 then lowerIntBinOp(resultId, leftId: leftId, rightId: rightId, kind: X64BinKind.mul, dstBlock: dstBlock, constMap: constMap)
 		divI64 then lowerDivRem(resultId, leftId: leftId, rightId: rightId, isRem: false, dstBlock: dstBlock)
 		remI64 then lowerDivRem(resultId, leftId: leftId, rightId: rightId, isRem: true, dstBlock: dstBlock)
-		andI64 then lowerIntBinOp(resultId, leftId: leftId, rightId: rightId, kind: X64BinKind.bitAnd, dstBlock: dstBlock)
-		orI64 then lowerIntBinOp(resultId, leftId: leftId, rightId: rightId, kind: X64BinKind.bitOr, dstBlock: dstBlock)
-		xorI64 then lowerIntBinOp(resultId, leftId: leftId, rightId: rightId, kind: X64BinKind.bitXor, dstBlock: dstBlock)
+		andI64 then lowerIntBinOp(resultId, leftId: leftId, rightId: rightId, kind: X64BinKind.bitAnd, dstBlock: dstBlock, constMap: constMap)
+		orI64 then lowerIntBinOp(resultId, leftId: leftId, rightId: rightId, kind: X64BinKind.bitOr, dstBlock: dstBlock, constMap: constMap)
+		xorI64 then lowerIntBinOp(resultId, leftId: leftId, rightId: rightId, kind: X64BinKind.bitXor, dstBlock: dstBlock, constMap: constMap)
 		shlI64 then lowerShift(resultId, leftId: leftId, rightId: rightId, isLeft: true, dstBlock: dstBlock)
 		shrI64 then lowerShift(resultId, leftId: leftId, rightId: rightId, isLeft: false, dstBlock: dstBlock)
 		addF64 then lowerFloatBinOp(resultId, leftId: leftId, rightId: rightId, kind: FloatBinKind.add, dstBlock: dstBlock)
@@ -287,17 +337,28 @@ end 'X64BinKind'
 
 // x64 has destructive binary ops: dest = dest OP src.
 // Copy left to result first, then apply the operation.
-function lowerIntBinOp(resultId ValueId, leftId ValueId, rightId ValueId, kind X64BinKind, dstBlock MlirBlock)
+// For add/sub, if the right operand is a known small constant, emit addRegImm/subRegImm.
+function lowerIntBinOp(resultId ValueId, leftId ValueId, rightId ValueId, kind X64BinKind, dstBlock MlirBlock, constMap ConstMap)
 	let dest = X64VReg.virtual(resultId)
-	let src = X64VReg.virtual(rightId)
+	// Check if right operand is a known constant suitable for immediate encoding (fits imm32)
+	let constVal = constMapGet(constMap, valueId: rightId)
+	let useImm = constVal != CONST_NOT_FOUND and constVal >= 0 and constVal <= 2147483647
 	dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.movRegReg(dest, X64VReg.virtual(leftId))))
 	match kind 'emit'
-		add then dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.addRegReg(dest, src)))
-		sub then dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.subRegReg(dest, src)))
-		mul then dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.imulRegReg(dest, src)))
-		bitAnd then dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.andRegReg(dest, src)))
-		bitOr then dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.orRegReg(dest, src)))
-		bitXor then dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.xorRegReg(dest, src)))
+		add then if useImm 'addImm'
+			dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.addRegImm(dest, constVal)))
+		end 'addImm' else 'addReg'
+			dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.addRegReg(dest, X64VReg.virtual(rightId))))
+		end 'addReg'
+		sub then if useImm 'subImm'
+			dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.subRegImm(dest, constVal)))
+		end 'subImm' else 'subReg'
+			dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.subRegReg(dest, X64VReg.virtual(rightId))))
+		end 'subReg'
+		mul then dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.imulRegReg(dest, X64VReg.virtual(rightId))))
+		bitAnd then dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.andRegReg(dest, X64VReg.virtual(rightId))))
+		bitOr then dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.orRegReg(dest, X64VReg.virtual(rightId))))
+		bitXor then dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.xorRegReg(dest, X64VReg.virtual(rightId))))
 	end 'emit'
 end 'lowerIntBinOp'
 
@@ -396,16 +457,24 @@ end 'lowerSiToFp'
 // Compare
 // ============================================================
 
-function lowerCmp(resultId ValueId, leftId ValueId, rightId ValueId, predicate MirCmpPredicate, dstBlock MlirBlock)
+function lowerCmp(resultId ValueId, leftId ValueId, rightId ValueId, predicate MirCmpPredicate, dstBlock MlirBlock, constMap ConstMap)
 	match predicate 'kind'
-		eq to ge then lowerIntCmp(resultId, leftId: leftId, rightId: rightId, predicate: predicate, dstBlock: dstBlock)
+		eq to ge then lowerIntCmp(resultId, leftId: leftId, rightId: rightId, predicate: predicate, dstBlock: dstBlock, constMap: constMap)
 		feq to fge then lowerFloatCmp(resultId, leftId: leftId, rightId: rightId, predicate: predicate, dstBlock: dstBlock)
 	end 'kind'
 end 'lowerCmp'
 
-function lowerIntCmp(resultId ValueId, leftId ValueId, rightId ValueId, predicate MirCmpPredicate, dstBlock MlirBlock)
-	dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.cmpRegReg(X64VReg.virtual(leftId), X64VReg.virtual(rightId))))
-	// Materialize the boolean result via setcc
+function lowerIntCmp(resultId ValueId, leftId ValueId, rightId ValueId, predicate MirCmpPredicate, dstBlock MlirBlock, constMap ConstMap)
+	let constVal = constMapGet(constMap, valueId: rightId)
+	if constVal == 0 'testZero'
+		// test reg, reg is shorter and faster than cmp reg, 0
+		let lhs = X64VReg.virtual(leftId)
+		dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.testRegReg(lhs, lhs)))
+	end 'testZero' else if constVal != CONST_NOT_FOUND and constVal >= 0 and constVal <= 2147483647 'useImm'
+		dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.cmpRegImm(X64VReg.virtual(leftId), constVal)))
+	end 'useImm' else 'useReg'
+		dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.cmpRegReg(X64VReg.virtual(leftId), X64VReg.virtual(rightId))))
+	end 'useReg'
 	let condition = predicateToSetcc(predicate)
 	dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.setcc(X64VReg.virtual(resultId), condition)))
 end 'lowerIntCmp'
@@ -664,7 +733,7 @@ function lowerCondBr(condId ValueId, thenTarget BlockId, thenArgIds ValueIdArray
 	// Store else-args first, then then-args.
 	emitBlockArgStores(elseArgIds, targetBlockId: elseTarget, dstBlock: dstBlock, srcBlocks: srcBlocks, blockArgSlots: blockArgSlots)
 	emitBlockArgStores(thenArgIds, targetBlockId: thenTarget, dstBlock: dstBlock, srcBlocks: srcBlocks, blockArgSlots: blockArgSlots)
-	let jumpKind = determineJumpKindInBlock(srcBlock)
+	let jumpKind = determineJumpKindForCond(srcBlock, condId: condId)
 	// Emit inverted conditional jump to else block, then unconditional jump to then block.
 	match jumpKind 'emitJump'
 		eq then dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.condJump(X64JumpCondition.ne, elseTarget)))
@@ -686,10 +755,66 @@ function lowerCondBr(condId ValueId, thenTarget BlockId, thenArgIds ValueIdArray
 end 'lowerCondBr'
 
 function lowerBoolTestCondBr(condId ValueId, elseTarget BlockId, dstBlock MlirBlock)
-	let vr = X64VReg.virtual(condId)
-	dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.testRegReg(vr, vr)))
+	// If the previous op is an or/and/xor that defines condId, its flags are still
+	// live — skip the redundant test instruction.
+	if not lastOpSetsFlagsFor(dstBlock, condId: condId) 'needsTest'
+		let vr = X64VReg.virtual(condId)
+		dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.testRegReg(vr, vr)))
+	end 'needsTest'
 	dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.condJump(X64JumpCondition.e, elseTarget)))
 end 'lowerBoolTestCondBr'
+
+// Check if the last op in the block is an or/and/xor whose dest is condId.
+// These instructions set ZF based on their result, so a subsequent test is redundant.
+function lastOpSetsFlagsFor(block MlirBlock, condId ValueId) returns bool
+	let opCount = block.ops.count()
+	if opCount == 0 'empty'
+		return false
+	end 'empty'
+	let lastOp = try block.ops.get(opCount - 1) otherwise 'noOp'
+		return false
+	end 'noOp'
+	return match lastOp 'check'
+		maxx64(x64Op) gives lastX64OpSetsFlagsFor(x64Op, condId: condId)
+		maxhl to mir gives false
+		maxarm64 gives false
+	end 'check'
+end 'lastOpSetsFlagsFor'
+
+function lastX64OpSetsFlagsFor(op MaxX64Op, condId ValueId) returns bool
+	// Check if op is a flag-setting ALU instruction whose dest matches condId.
+	// x86 or/and/xor/add/sub all set ZF based on the result.
+	let destId = getX64OpDestId(op)
+	if destId < 0 'noFlagSetting'
+		return false
+	end 'noFlagSetting'
+	return destId == condId
+end 'lastX64OpSetsFlagsFor'
+
+// Extract the dest valueId from a binary ALU op that sets ZF, or -1 otherwise.
+// Used to detect when a preceding op already set flags for a condBr's condition.
+function getX64OpDestId(op MaxX64Op) returns ValueId
+	return match op 'check'
+		addRegReg(destReg, _) gives x64VRegToId(destReg)
+		subRegReg(destReg, _) gives x64VRegToId(destReg)
+		addRegImm(destReg, _) gives x64VRegToId(destReg)
+		subRegImm(destReg, _) gives x64VRegToId(destReg)
+		imulRegReg(destReg, _) gives x64VRegToId(destReg)
+		prologue to loadSlot gives -1
+		idivRcx to bitNotReg gives -1
+		andRegReg(destReg, _) gives x64VRegToId(destReg)
+		orRegReg(destReg, _) gives x64VRegToId(destReg)
+		xorRegReg(destReg, _) gives x64VRegToId(destReg)
+		shlRegCl to repStosq gives -1
+	end 'check'
+end 'getX64OpDestId'
+
+function x64VRegToId(vreg X64VReg) returns ValueId
+	return match vreg 'check'
+		virtual(vid) gives vid
+		physical gives -1
+	end 'check'
+end 'x64VRegToId'
 
 // ============================================================
 // SysOps — slot-based lowering (no register allocation)
@@ -790,12 +915,11 @@ function lowerMirIatCall(resultId ValueId, slotIndex MachineWord, argIds ValueId
 end 'lowerMirIatCall'
 
 function lowerGlobalAddr(resultId ValueId, name ByteArray, dstBlock MlirBlock, valueSlots ValueSlotMap, nextTempSlot SlotIndex) returns SlotIndex
-	let tempSlot = nextTempSlot
-	dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.globalAddr(tempSlot, name)))
-	valueSlotMapSet(valueSlots, valueId: resultId, slot: tempSlot)
-	// Also load the result into a virtual register so regular ops can use it
-	dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.loadSlot(X64VReg.virtual(resultId), tempSlot)))
-	return nextTempSlot + 1
+	// Emit LEA directly into a virtual register — no slot indirection needed.
+	// The code emitter resolves the label via a data island + RIP-relative LEA.
+	dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.leaRipRelative(X64VReg.virtual(resultId), name)))
+	valueSlotMapSet(valueSlots, valueId: resultId, slot: nextTempSlot)
+	return nextTempSlot
 end 'lowerGlobalAddr'
 
 function lowerStackAddr(resultId ValueId, slotId VarSlot, dstBlock MlirBlock, valueSlots ValueSlotMap, nextTempSlot SlotIndex) returns SlotIndex
