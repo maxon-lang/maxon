@@ -680,7 +680,7 @@ Operators: `and`, `or`, `not`.
 | | C# compiler | Self-hosted compiler |
 |---|---|---|
 | Location | `maxon-sharp/` | `maxon-selfhosted/` |
-| Executable | `bin/maxon.exe` | `maxon-selfhosted/Main.exe` |
+| Executable | `bin/maxon.exe` | `maxon-selfhosted/maxon-selfhosted.exe` |
 | Commands | compile, build, run, fmt, spec-test, lsp-server | build, spec-test, test-incremental |
 | Build | pre-built (NEVER use `dotnet run`) | `maxon.exe build` from `maxon-selfhosted/` |
 
@@ -708,10 +708,10 @@ maxon.exe spec-test --target=x86_64-linux      # cross-compile
 
 ```bash
 cd maxon-selfhosted
-./Main.exe spec-test                           # all tests
-./Main.exe spec-test --filter=arithmetic       # filter
-./Main.exe spec-test --verbose                 # verbose failures
-./Main.exe spec-test --target=x86_64-linux     # cross-compile
+./maxon-selfhosted.exe spec-test                           # all tests
+./maxon-selfhosted.exe spec-test --filter=arithmetic       # filter
+./maxon-selfhosted.exe spec-test --verbose                 # verbose failures
+./maxon-selfhosted.exe spec-test --target=x86_64-linux     # cross-compile
 ```
 
 ### Debugging

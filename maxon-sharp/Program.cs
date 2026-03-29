@@ -125,6 +125,28 @@ class Program {
     return Compiler.CompileTarget.Default;
   }
 
+  static string? ParseBuildName(string directory) {
+    var buildFile = Path.Combine(directory, "build.maxon");
+    if (!File.Exists(buildFile)) return null;
+    var content = File.ReadAllText(buildFile);
+    var marker = "build(\"";
+    var start = content.IndexOf(marker);
+    if (start < 0) return null;
+    start += marker.Length;
+    var end = content.IndexOf("\")", start);
+    if (end < 0) return null;
+    return content[start..end];
+  }
+
+  static string ResolveOutputPath(string? directory, string mainFile, string ext) {
+    if (directory != null) {
+      var buildName = ParseBuildName(directory);
+      if (buildName != null)
+        return Path.Combine(directory, buildName + ext);
+    }
+    return Path.ChangeExtension(mainFile, ext == "" ? null : ext);
+  }
+
   static string GetOutputExtension(Compiler.CompileTarget target) {
     return target.Os.ToLowerInvariant() switch {
       "windows" => ".exe",
@@ -177,7 +199,7 @@ class Program {
 
     var mainFile = FindMainFile(sourceFiles, directory);
     var ext = GetOutputExtension(target);
-    var outputPath = Path.ChangeExtension(mainFile, ext == "" ? null : ext);
+    var outputPath = ResolveOutputPath(directory, mainFile, ext);
 
     var (mlirOutputPath, dumpStagesBasePath) = GetOutputPaths(mainFile, emitIr, dumpStages);
 
@@ -196,7 +218,7 @@ class Program {
     if (sourceFiles == null || mainFile == null) return 1;
 
     var ext = GetOutputExtension(target);
-    var outputPath = Path.ChangeExtension(mainFile, ext == "" ? null : ext);
+    var outputPath = ResolveOutputPath(Directory.Exists(path) ? path : null, mainFile, ext);
     var (mlirOutputPath, dumpStagesBasePath) = GetOutputPaths(mainFile, emitIr, dumpStages);
 
     var compileResult = CompileAndReportResult(sourceFiles, outputPath, mlirOutputPath, dumpStagesBasePath, target);
@@ -260,6 +282,8 @@ class Program {
     var files = new List<SourceFile>();
 
     foreach (var file in Directory.GetFiles(directory, "*.maxon", SearchOption.AllDirectories)) {
+      if (Path.GetFileName(file).Equals("build.maxon", StringComparison.OrdinalIgnoreCase))
+        continue;
       var content = ReadFileContentUntilSeparator(file);
       files.Add(new SourceFile(file, content));
     }

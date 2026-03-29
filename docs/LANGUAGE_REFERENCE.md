@@ -3631,12 +3631,12 @@ For most projects, a single line suffices:
 
 ```maxon
 function main()
-		build("myapp")  // Executable name is required
+	build("myapp")  // Executable name is required
 end 'main'
 ```
 
 This automatically:
-- Sets output to `bin/myapp.exe`
+- Sets output to `myapp.exe` in the project root
 - Discovers all `.maxon` files in the project directory (recursively)
 - Uses default compilation settings
 

@@ -33,18 +33,52 @@ export function compileProject(project Project) returns FilePath throws CompileE
 
 	let codeResult = try queryCodeResult(project)
 
-	let firstPath = try project.db.sourcePaths.get(0) otherwise 'noFiles'
-		throw CompileError.noSourceFiles
-	end 'noFiles'
-
 	let ext = executableExtension(project.target)
-	let outputPath = firstPath.changeExtension(ext)
+	let buildName = parseBuildName(project.rootPath)
+	let outputPath = try resolveBuildOutputPath(project, buildName: buildName, ext: ext)
+
 	writeExecutable(outputPath, codeResult: codeResult, target: project.target)
 
 	logInfo(LogCategory.compiler, message: () gives "Wrote {codeResult.code.count()} bytes code to {outputPath}")
 
 	return outputPath
 end 'compileProject'
+
+// Resolves the output path: uses build name if available, otherwise falls back to first source file.
+function resolveBuildOutputPath(project Project, buildName String, ext String) returns FilePath throws CompileError
+	if not buildName.isEmpty() 'hasBuildName'
+		return project.rootPath.join("{buildName}{ext}")
+	end 'hasBuildName'
+	let firstPath = try project.db.sourcePaths.get(0) otherwise 'noFiles'
+		throw CompileError.noSourceFiles
+	end 'noFiles'
+	return firstPath.changeExtension(ext)
+end 'resolveBuildOutputPath'
+
+// Parses build.maxon in the project root to extract the build name.
+// Returns empty string if no build.maxon or no build("...") call found.
+function parseBuildName(projectRoot FilePath) returns String
+	let buildPath = projectRoot.join("build.maxon")
+	let content = try File.readText(buildPath) otherwise 'noBuild'
+		return ""
+	end 'noBuild'
+	let marker = "build(\""
+	let markerIdx = try content.findFirst(marker) otherwise 'noMarker'
+		return ""
+	end 'noMarker'
+	// Skip past 'build("' (7 chars) to get to the name
+	var nameStart = markerIdx
+	for _ in 0 upto 7 'skipMarker'
+		nameStart = try content.indexAfter(nameStart) otherwise 'bad'
+			return ""
+		end 'bad'
+	end 'skipMarker'
+	let rest = content.slice(nameStart, endIndex: content.endIndex())
+	let nameEnd = try rest.findFirst("\"") otherwise 'noEnd'
+		return ""
+	end 'noEnd'
+	return rest.slice(rest.startIndex(), endIndex: nameEnd)
+end 'parseBuildName'
 
 // --- Source file loading ---
 
@@ -65,6 +99,9 @@ function loadSourceFiles(project Project, path FilePath) throws CompileError
 		end 'listErr'
 
 		for name in dirEntries 'loop'
+			if name == "build.maxon" 'isBuildFile'
+				continue
+			end 'isBuildFile'
 			if name.endsWith(".maxon") 'isMaxon'
 				let filePath = path.join(name)
 				logTrace(LogCategory.compiler, message: () gives "Loading file: {filePath}")
