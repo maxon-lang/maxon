@@ -71,6 +71,59 @@ function isFragmentStale(fragmentPath FilePath, specModifiedTime Timestamp) retu
 	return fragInfo.modifiedTime <= specModifiedTime
 end 'isFragmentStale'
 
+// Compile a test and capture its lowering trace log. Returns empty string on failure.
+function captureLoweringLog(source String, testName String, specName String, tempDir FilePath, target Target) returns String
+	setCategoryLogLevel(LogCategory.mlir, level: LogLevel.TRACE)
+	startCapturingTrace()
+	let tempSource = tempDir.join("{testName}.test")
+	let ext = executableExtension(target)
+	let tempExe = tempDir.join("{specName}{ext}")
+	let _ = try compileSourceWithIr(source, virtualPath: tempSource, target: target, outputPath: tempExe) otherwise 'compileFailed'
+		cancelCapturingTrace()
+		setCategoryLogLevel(LogCategory.mlir, level: LogLevel.ERROR)
+		return ""
+	end 'compileFailed'
+	let loweringLog = stopCapturingTrace()
+	setCategoryLogLevel(LogCategory.mlir, level: LogLevel.ERROR)
+	cleanup(tempExe)
+	return loweringLog
+end 'captureLoweringLog'
+
+// Update RequiredLowering blocks in all spec files by compiling each test and capturing lowering output.
+function updateAllRequiredLowering(specDir FilePath, tempDir FilePath, filter String, target Target, targetKey String)
+	for specName in whitelist 'eachSpec'
+		let specPath = specDir.join("{specName}.md")
+		let content = try File.readText(specPath) otherwise 'readErr'
+			continue
+		end 'readErr'
+		let fm = parseFrontmatter(content)
+		if fm.status == "draft" 'isDraft'
+			continue
+		end 'isDraft'
+		let tests = parseSpecFile(content, targetKey: targetKey)
+		var results = TestResultArray{}
+		for test in tests 'eachTest'
+			if not filter.isEmpty() 'hasFilter'
+				let testPath = "{specName}/{test.name}"
+				if not testPath.contains(filter) 'noMatch'
+					continue
+				end 'noMatch'
+			end 'hasFilter'
+			if test.expectation.hasCompilerStderr 'skipErrorTest'
+				continue
+			end 'skipErrorTest'
+			let loweringLog = captureLoweringLog(test.source, testName: test.name, specName: specName, tempDir: tempDir, target: target)
+			if not loweringLog.isEmpty() 'hasLog'
+				results.push(TestResult{testName: test.name, passed: true, errorMessage: "", filePath: "", loweringLog: loweringLog, compileIr: ""})
+			end 'hasLog'
+		end 'eachTest'
+		if results.count() > 0 'hasResults'
+			updateSpecLowering(specPath, targetKey: targetKey, results: results)
+		end 'hasResults'
+	end 'eachSpec'
+	logInfo(LogCategory.testing, message: () gives "Updated RequiredLowering blocks in spec files")
+end 'updateAllRequiredLowering'
+
 // Run all whitelisted spec tests for a specific target.
 export function runAllSpecTests(filter String, target Target, updateRequired bool = false) returns ExitCode
 	let root = try findProjectRoot() otherwise 'noRoot'
@@ -85,11 +138,17 @@ export function runAllSpecTests(filter String, target Target, updateRequired boo
 	let targetKey = targetToString(target)
 	let specDir = root.join("specs")
 	let fragmentDir = specDir.join("fragments-{targetKey}")
+	let tempDir = root.join("temp")
 
 	// Ensure fragment directory exists
 	if not fragmentDir.directoryExists() 'noFragDir'
 		let _ = Process.execute("mkdir -p {fragmentDir}", timeoutMs: 5000)
 	end 'noFragDir'
+
+	// Update spec files before generating fragments so tests compare against current output
+	if updateRequired 'preUpdate'
+		updateAllRequiredLowering(specDir, tempDir: tempDir, filter: filter, target: target, targetKey: targetKey)
+	end 'preUpdate'
 
 	var totalPassed = 0
 	var totalFailed = 0
@@ -122,7 +181,6 @@ export function runAllSpecTests(filter String, target Target, updateRequired boo
 		var specPassed = 0
 		var specFailed = 0
 		var specFailures = TextLineArray{}
-		var specResults = TestResultArray{}
 
 		for test in tests 'eachTest'
 			// Apply filter
@@ -152,7 +210,7 @@ export function runAllSpecTests(filter String, target Target, updateRequired boo
 			end 'parseFailed'
 
 			// Step 3: Run the test from fragment
-			let result = runTestFromFragment(fragment, projectRoot: root, target: target, captureTrace: updateRequired, specName: specName)
+			let result = runTestFromFragment(fragment, projectRoot: root, target: target, specName: specName)
 
 			// Re-write fragment with compiled IR
 			if not result.compileIr.isEmpty() 'hasIr'
@@ -167,13 +225,7 @@ export function runAllSpecTests(filter String, target Target, updateRequired boo
 					specFailures.push("  {result.errorMessage}")
 				end 'hasErr'
 			end 'fail'
-			specResults.push(result)
 		end 'eachTest'
-
-		// Update RequiredLowering blocks in this spec if requested
-		if updateRequired 'updateSpec'
-			updateSpecLowering(specPath, targetKey: targetKey, results: specResults)
-		end 'updateSpec'
 
 		totalPassed = totalPassed + specPassed
 		totalFailed = totalFailed + specFailed
@@ -568,19 +620,23 @@ function updateLoweringBlock(specContent String, testName String, targetKey Stri
 		end 'noEnd'
 		// Replace lines existingStart..existingEnd (inclusive) with new block
 		var result = ""
+		let lastLine = lineCount - 1
 		for i in 0 upto lineCount 'rebuild'
 			if i == existingStart 'insertNew'
-				result = "{result}{blockHeader}\n{loweringLog}\n```\n"
+				result = "{result}{blockHeader}\n{loweringLog}\n```"
 			end 'insertNew' else if i > existingStart 'skipOld'
 				if i <= existingEnd 'inOldBlock'
 					continue
 				end 'inOldBlock'
 				let line = try lines.get(i) otherwise ""
-				result = "{result}{line}\n"
+				result = "{result}{line}"
 			end 'skipOld' else 'keepLine'
 				let line = try lines.get(i) otherwise ""
-				result = "{result}{line}\n"
+				result = "{result}{line}"
 			end 'keepLine'
+			if i < lastLine 'addNewline'
+				result = "{result}\n"
+			end 'addNewline'
 		end 'rebuild'
 		return result
 	end 'replaceExisting'

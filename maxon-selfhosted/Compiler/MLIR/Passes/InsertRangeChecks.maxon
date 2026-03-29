@@ -6,15 +6,13 @@
 //   - If the return value is a known constant: static validation (no runtime check)
 //   - Otherwise: emits comparison + conditional branch to panic/continue blocks
 
-export function insertRangeChecks(module MlirModule, funcReturnTypes FuncReturnTypeMap, typealiasRanges TypealiasRangeMap, nextValueIdRef ValueIdRef) returns MlirModule
+export function insertRangeChecks(module MlirModule, funcReturnTypes FuncReturnTypeMap, typealiasRanges TypealiasRangeMap, nextValueIdRef ValueIdRef, sourceFileName String) returns MlirModule
 	logDebug(LogCategory.mlir, message: () gives "Running insert-range-checks pass")
 	var result = createMlirModule()
 	var rangeCheckCounter = 0
 
 	for srcFunc in module.functions 'eachFunc'
-		var dstFunc = createMlirFunction(srcFunc.name, returnType: srcFunc.returnType)
-		dstFunc.paramCount = srcFunc.paramCount
-		dstFunc.paramTypes = srcFunc.paramTypes
+		var dstFunc = cloneFunctionShell(srcFunc)
 
 		// Look up range bounds for this function's return type
 		let aliasName = try funcReturnTypes.get(srcFunc.name) otherwise 'noAlias'
@@ -84,7 +82,7 @@ export function insertRangeChecks(module MlirModule, funcReturnTypes FuncReturnT
 						emitRangeCheckOps(dstBlock, valueId: retValId, lower: range.lower, upper: range.upper, typeInfo: typeInfo, panicBlockId: panicBlock.id, okBlockId: continueBlock.id, nextValueIdRef: nextValueIdRef)
 
 						// Panic block: emit maxon.panic
-						let panicMsg = buildPanicMessage(aliasName, lower: range.lower, upper: range.upper)
+						let panicMsg = buildPanicMessage(aliasName, sourceFileName: sourceFileName, sourceLine: srcFunc.returnLine)
 						panicBlock.ops.push(MlirOp.maxhl(MaxHLOp.panic(panicMsg, checkId)))
 
 						// Continue block: return the original value directly.
@@ -217,9 +215,8 @@ function buildLabel(prefix ByteArray, id ValueId) returns ByteArray
 	return label
 end 'buildLabel'
 
-// Build panic message: "Range check failed for type '<name>': value outside int(<lower> to <upper>)"
-function buildPanicMessage(aliasName ByteArray, lower RangeBound, upper RangeBound) returns ByteArray
-	let msg = "Range check failed for type '{String.from(aliasName)}': value outside int({lower} to {upper})"
+function buildPanicMessage(aliasName ByteArray, sourceFileName String, sourceLine LineNumber) returns ByteArray
+	let msg = "panic at {sourceFileName}:{sourceLine}: Range check failed: value outside typealias '{String.from(aliasName)}'"
 	return msg.toByteArray()
 end 'buildPanicMessage'
 

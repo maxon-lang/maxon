@@ -196,7 +196,9 @@ export function queryAllMid(project Project) returns MlirModule throws CompileEr
 	// Run phases 2-5 through the typed pipeline
 	project.globalData = createGlobalDataTable()
 	let valueIdRef = createValueIdRef(getNextValueId(project))
-	var ctx = PipelineContext{module: module, project: project, globalData: project.globalData, nextValueIdRef: valueIdRef, target: project.target}
+	let firstPath = try project.db.sourcePaths.get(0) otherwise FilePath from ""
+	let sourceFileName = firstPath.filename()
+	var ctx = PipelineContext{module: module, project: project, globalData: project.globalData, nextValueIdRef: valueIdRef, target: project.target, sourceFileName: sourceFileName}
 	let midPasses = buildMidPipeline()
 	try runPipeline(ctx, passes: midPasses)
 	setNextValueId(project, id: ctx.nextValueIdRef.nextId)

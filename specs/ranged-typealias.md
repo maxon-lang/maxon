@@ -272,7 +272,7 @@ end 'main'
 1
 ```
 ```stderr
-panic at runtime-check-fail.test:6: Range check failed for type 'Age': value outside int(0 to 150)
+panic at runtime-check-fail.test:6: Range check failed: value outside typealias 'Age'
 Stack trace:
   in ranged-typealias.makeAge
   in main
@@ -385,7 +385,7 @@ end 'main'
 1
 ```
 ```stderr
-panic at return-runtime-check-fail.test:5: Range check failed for type 'Score': value outside int(0 to 100)
+panic at return-runtime-check-fail.test:5: Range check failed: value outside typealias 'Score'
 Stack trace:
   in ranged-typealias.doubleScore
   in main
@@ -708,20 +708,6 @@ end 'main'
 ```
 ```maxoncstderr
 error E3005: specs/fragments/ranged-typealias/error.byte-range-overflow.test:2:21: Invalid byte range: bounds must be within 0 to u8.max
-```
-
-### Error: literal with signed type max
-
-<!-- test: error.literal-with-signed-max -->
-```maxon
-typealias Bad = int(0 to i64.max)
-
-function main() returns ExitCode
-	return 0
-end 'main'
-```
-```maxoncstderr
-error E3005: specs/fragments/ranged-typealias/error.literal-with-signed-max.test:2:17: Suspicious range: literal lower bound with 'i64.max' — did you mean 'i64.min to i64.max' or '0 to u64.max'?
 ```
 
 ### Error: mismatched type bounds

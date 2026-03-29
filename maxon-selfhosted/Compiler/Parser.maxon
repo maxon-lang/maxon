@@ -680,9 +680,7 @@ type Parser
 			let ns = deriveNamespace(filePath)
 			funcName = qualifyName(ns, name: funcName)
 		end 'qualifyNonMain'
-		var func = createMlirFunction(funcName, returnType: returnTypeName)
-		func.paramCount = paramCount
-		func.paramTypes = paramTypes
+		var func = createMlirFunction(funcName, returnType: returnTypeName, paramCount: paramCount, paramTypes: paramTypes, returnLine: 0)
 		// Register return type so callers can determine if result is float
 		project.funcReturnTypes.insert(funcName, value: returnTypeName)
 		var block = newBlock(func, label: b"entry")
@@ -718,6 +716,9 @@ type Parser
 			lastWasReturn = false
 
 			if stmtToken.kind == TokenKind.return 'isReturn'
+				if func.returnLine == 0 'noRetLine'
+					func.returnLine = stmtToken.line
+				end 'noRetLine'
 				parseReturnStatement(block)
 				lastWasReturn = true
 			end 'isReturn' else if stmtToken.kind == TokenKind.var or stmtToken.kind == TokenKind.let 'isVarDecl'

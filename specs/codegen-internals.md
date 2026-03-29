@@ -277,7 +277,7 @@ module {
     %24 = maxon.binop %21, %23 {op = or}
     maxon.cond_br %24 [then: __range_panic_5, else: __range_ok_5]
   __range_panic_5:
-    maxon.panic "panic at rdata-cow-mutation-copies-to-heap.test:8: Range check failed for type 'ExitCode': value outside int(0 to 4294967295)"
+    maxon.panic "panic at rdata-cow-mutation-copies-to-heap.test:8: Range check failed: value outside typealias 'ExitCode'"
   __range_ok_5:
     maxon.scope_end [arr, __try_default_2, __try_result_1]
     maxon.return %19
@@ -1076,7 +1076,7 @@ module {
     %9 = maxon.binop %6, %8 {op = or}
     maxon.cond_br %9 [then: __range_panic_0, else: __range_ok_0]
   __range_panic_0:
-    maxon.panic "panic at i32-unsigned-add.test:7: Range check failed for type 'ExitCode': value outside int(0 to 4294967295)"
+    maxon.panic "panic at i32-unsigned-add.test:7: Range check failed: value outside typealias 'ExitCode'"
   __range_ok_0:
     maxon.scope_end [a, b]
     maxon.return %4
@@ -1241,7 +1241,7 @@ module {
     %9 = maxon.binop %6, %8 {op = or}
     maxon.cond_br %9 [then: __range_panic_0, else: __range_ok_0]
   __range_panic_0:
-    maxon.panic "panic at i32-unsigned-div.test:7: Range check failed for type 'ExitCode': value outside int(0 to 4294967295)"
+    maxon.panic "panic at i32-unsigned-div.test:7: Range check failed: value outside typealias 'ExitCode'"
   __range_ok_0:
     maxon.scope_end [a, b]
     maxon.return %4
@@ -1405,7 +1405,7 @@ module {
     %7 = maxon.binop %4, %6 {op = or}
     maxon.cond_br %7 [then: __range_panic_0, else: __range_ok_0]
   __range_panic_0:
-    maxon.panic "panic at i32-signed-div.test:7: Range check failed for type 'ExitCode': value outside int(0 to 4294967295)"
+    maxon.panic "panic at i32-signed-div.test:7: Range check failed: value outside typealias 'ExitCode'"
   __range_ok_0:
     maxon.scope_end [a, b]
     maxon.return %2
@@ -1719,7 +1719,7 @@ module {
     %9 = maxon.binop %6, %8 {op = or}
     maxon.cond_br %9 [then: __range_panic_0, else: __range_ok_0]
   __range_panic_0:
-    maxon.panic "panic at i32-unsigned-mod.test:7: Range check failed for type 'ExitCode': value outside int(0 to 4294967295)"
+    maxon.panic "panic at i32-unsigned-mod.test:7: Range check failed: value outside typealias 'ExitCode'"
   __range_ok_0:
     maxon.scope_end [a, b]
     maxon.return %4
@@ -1885,7 +1885,7 @@ module {
     %7 = maxon.binop %4, %6 {op = or}
     maxon.cond_br %7 [then: __range_panic_0, else: __range_ok_0]
   __range_panic_0:
-    maxon.panic "panic at i64-signed-no-narrowing.test:7: Range check failed for type 'ExitCode': value outside int(0 to 4294967295)"
+    maxon.panic "panic at i64-signed-no-narrowing.test:7: Range check failed: value outside typealias 'ExitCode'"
   __range_ok_0:
     maxon.scope_end [a, b]
     maxon.return %2
@@ -2047,7 +2047,7 @@ module {
     %7 = maxon.binop %4, %6 {op = or}
     maxon.cond_br %7 [then: __range_panic_0, else: __range_ok_0]
   __range_panic_0:
-    maxon.panic "panic at i8-range-uses-i32-arithmetic.test:7: Range check failed for type 'ExitCode': value outside int(0 to 4294967295)"
+    maxon.panic "panic at i8-range-uses-i32-arithmetic.test:7: Range check failed: value outside typealias 'ExitCode'"
   __range_ok_0:
     maxon.scope_end [a, b]
     maxon.return %2
@@ -2228,7 +2228,7 @@ module {
     %8 = maxon.binop %5, %7 {op = or}
     maxon.cond_br %8 [then: __range_panic_0, else: __range_ok_0]
   __range_panic_0:
-    maxon.panic "panic at f32-arithmetic-uses-ss-instructions.test:7: Range check failed for type 'ExitCode': value outside int(0 to 4294967295)"
+    maxon.panic "panic at f32-arithmetic-uses-ss-instructions.test:7: Range check failed: value outside typealias 'ExitCode'"
   __range_ok_0:
     maxon.scope_end [a, b]
     maxon.return %3
@@ -2520,7 +2520,7 @@ module {
     %6 = maxon.binop %3, %5 {op = or}
     maxon.cond_br %6 [then: __range_panic_0, else: __range_ok_0]
   __range_panic_0:
-    maxon.panic "panic at f32-truncation-uses-cvttss2si.test:6: Range check failed for type 'ExitCode': value outside int(0 to 4294967295)"
+    maxon.panic "panic at f32-truncation-uses-cvttss2si.test:6: Range check failed: value outside typealias 'ExitCode'"
   __range_ok_0:
     maxon.scope_end [a]
     maxon.return %1

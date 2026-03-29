@@ -17,18 +17,35 @@ export type MlirFunction
 	// Spill area size in bytes, computed by the register allocator.
 	// The prologue/epilogue pass uses this directly instead of re-scanning ops.
 	export var spillSize StackSize
+	// Source line of the first return statement (for panic messages)
+	export var returnLine LineNumber
 end 'MlirFunction'
 
 export typealias MlirFunctionArray = Array with MlirFunction
 
-export function createMlirFunction(name ByteArray, returnType ByteArray) returns MlirFunction
+export function createMlirFunction(name ByteArray, returnType ByteArray, paramCount ParamCount, paramTypes StdTypeArray, returnLine LineNumber) returns MlirFunction
 	return MlirFunction{
 		name: name,
 		returnType: returnType,
-		paramCount: 0,
-		paramTypes: StdTypeArray{},
+		paramCount: paramCount,
+		paramTypes: paramTypes,
 		region: createMlirRegion(),
 		varSlotCount: 0,
-		spillSize: 0
+		spillSize: 0,
+		returnLine: returnLine
 	}
 end 'createMlirFunction'
+
+// Create a new function with a fresh region, copying all metadata from the source function.
+export function cloneFunctionShell(src MlirFunction) returns MlirFunction
+	return MlirFunction{
+		name: src.name,
+		returnType: src.returnType,
+		paramCount: src.paramCount,
+		paramTypes: src.paramTypes,
+		region: createMlirRegion(),
+		varSlotCount: src.varSlotCount,
+		spillSize: src.spillSize,
+		returnLine: src.returnLine
+	}
+end 'cloneFunctionShell'

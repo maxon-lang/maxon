@@ -282,7 +282,7 @@ module {
     %6 = maxon.binop %3, %5 {op = or}
     maxon.cond_br %6 [then: __range_panic_0, else: __range_ok_0]
   __range_panic_0:
-    maxon.panic "panic at return-function-call.test:10: Range check failed for type 'ExitCode': value outside int(0 to 4294967295)"
+    maxon.panic "panic at return-function-call.test:10: Range check failed: value outside typealias 'ExitCode'"
   __range_ok_0:
     maxon.scope_end []
     maxon.return %1

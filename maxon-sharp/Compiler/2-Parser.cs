@@ -3063,11 +3063,6 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
         // When both bounds use type qualifiers, they must reference the same type (e.g. i64.min to i64.max, not i32.min to u64.max)
         if (lowerQualifier != null && upperQualifier != null && lowerQualifier != upperQualifier)
           throw new CompileError(ErrorCode.SemanticTypeMismatch, $"Mismatched type bounds: '{lowerQualifier}.min' and '{upperQualifier}.max' must reference the same type", primitiveToken.Line, primitiveToken.Column);
-        // A type-qualified bound paired with a literal must form a natural range (e.g. 0 to u32.max, not 0 to i64.max)
-        if (lowerQualifier == null && upperQualifier != null && !upperQualifier.StartsWith('u') && baseType != MlirType.F64 && baseType != MlirType.F32)
-          throw new CompileError(ErrorCode.SemanticTypeMismatch, $"Suspicious range: literal lower bound with '{upperQualifier}.max' — did you mean '{upperQualifier}.min to {upperQualifier}.max' or '0 to u{upperQualifier[1..]}.max'?", primitiveToken.Line, primitiveToken.Column);
-        if (lowerQualifier != null && upperQualifier == null && !lowerQualifier.StartsWith('i') && baseType != MlirType.F64 && baseType != MlirType.F32)
-          throw new CompileError(ErrorCode.SemanticTypeMismatch, $"Suspicious range: '{lowerQualifier}.min' with literal upper bound — did you mean '{lowerQualifier}.min to {lowerQualifier}.max'?", primitiveToken.Line, primitiveToken.Column);
         var rangedType = new MlirRangedPrimitiveType(aliasName, baseType, lower, upper, upperInclusive);
         _typeRegistry[aliasName] = rangedType;
         _typeAliasSources[aliasName] = primitiveToken.Value;
@@ -11897,7 +11892,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
     var panicBlock = _currentFunction!.Body.AddBlock(panicLabel);
     var sourceFileName = sourceFilePath != null ? Path.GetFileName(sourceFilePath) : "unknown";
     panicBlock.AddOp(new MaxonPanicOp(
-      $"panic at {sourceFileName}:{sourceLine}: Range check failed for type '{rangedType.Name}': value outside {rangedType.FormatRange()}"));
+      $"panic at {sourceFileName}:{sourceLine}: Range check failed: value outside typealias '{rangedType.Name}'"));
 
     // Continue block — no reload needed because the panic block never returns,
     // so the register holding the original value is never clobbered on this path.

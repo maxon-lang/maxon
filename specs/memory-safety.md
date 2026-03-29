@@ -404,7 +404,7 @@ module {
     %26 = maxon.binop %23, %25 {op = or}
     maxon.cond_br %26 [then: __range_panic_1, else: __range_ok_1]
   __range_panic_1:
-    maxon.panic "panic at block-scope-struct-release.test:15: Range check failed for type 'ExitCode': value outside int(0 to 4294967295)"
+    maxon.panic "panic at block-scope-struct-release.test:15: Range check failed: value outside typealias 'ExitCode'"
   __range_ok_1:
     maxon.scope_end [result]
     maxon.return %21
@@ -754,7 +754,7 @@ module {
     %35 = maxon.binop %32, %34 {op = or}
     maxon.cond_br %35 [then: __range_panic_4, else: __range_ok_4]
   __range_panic_4:
-    maxon.panic "panic at array-push-struct-incref.test:15: Range check failed for type 'ExitCode': value outside int(0 to 4294967295)"
+    maxon.panic "panic at array-push-struct-incref.test:15: Range check failed: value outside typealias 'ExitCode'"
   __range_ok_4:
     maxon.scope_end [arr, item, got, __try_result_0]
     maxon.return %30
@@ -1681,7 +1681,7 @@ module {
     %30 = maxon.binop %27, %29 {op = or}
     maxon.cond_br %30 [then: __range_panic_2, else: __range_ok_2]
   __range_panic_2:
-    maxon.panic "panic at release-before-break.test:19: Range check failed for type 'ExitCode': value outside int(0 to 4294967295)"
+    maxon.panic "panic at release-before-break.test:19: Range check failed: value outside typealias 'ExitCode'"
   __range_ok_2:
     maxon.scope_end [result, i]
     maxon.return %25
@@ -2012,7 +2012,7 @@ module {
     %25 = maxon.binop %22, %24 {op = or}
     maxon.cond_br %25 [then: __range_panic_0, else: __range_ok_0]
   __range_panic_0:
-    maxon.panic "panic at release-before-return-in-block.test:17: Range check failed for type 'ExitCode': value outside int(0 to 4294967295)"
+    maxon.panic "panic at release-before-return-in-block.test:17: Range check failed: value outside typealias 'ExitCode'"
   __range_ok_0:
     maxon.scope_end []
     maxon.return %20

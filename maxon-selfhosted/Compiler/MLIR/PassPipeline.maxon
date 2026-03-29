@@ -50,6 +50,7 @@ export type PipelineContext
 	export var globalData GlobalDataTable
 	export var nextValueIdRef ValueIdRef
 	export var target Target
+	export var sourceFileName String
 end 'PipelineContext'
 
 // Returns the mid-level pipeline (phases 2-5).
@@ -140,7 +141,7 @@ function dispatchPass(ctx PipelineContext, pass PassKind)
 		dce then ctx.module = eliminateDeadCode(ctx.module)
 
 		// Phase 4b: Range Checks
-		insertRangeChecks then ctx.module = insertRangeChecks(ctx.module, funcReturnTypes: ctx.project.funcReturnTypes, typealiasRanges: ctx.project.typealiasRanges, nextValueIdRef: ctx.nextValueIdRef)
+		insertRangeChecks then ctx.module = insertRangeChecks(ctx.module, funcReturnTypes: ctx.project.funcReturnTypes, typealiasRanges: ctx.project.typealiasRanges, nextValueIdRef: ctx.nextValueIdRef, sourceFileName: ctx.sourceFileName)
 
 		// Phase 5: System Resolution
 		convertMaxonToSysAndRuntime then ctx.module = convertMaxonToSysAndRuntime(ctx.module, globalData: ctx.globalData, nextValueIdRef: ctx.nextValueIdRef)

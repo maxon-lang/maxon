@@ -31,7 +31,7 @@ end
 1
 ```
 ```stderr
-panic at simple-panic.test:6: Range check failed for type 'Byte': value outside int(0 to 255)
+panic at simple-panic.test:6: Range check failed: value outside typealias 'Byte'
 Stack trace:
   in panic-stack-trace.dangerous
   in main
@@ -65,7 +65,7 @@ end
 1
 ```
 ```stderr
-panic at nested-calls.test:6: Range check failed for type 'SmallInt': value outside int(0 to 100)
+panic at nested-calls.test:6: Range check failed: value outside typealias 'SmallInt'
 Stack trace:
   in panic-stack-trace.validate
   in panic-stack-trace.process
@@ -94,7 +94,7 @@ end
 1
 ```
 ```stderr
-panic at panic-in-main.test:10: Range check failed for type 'Bounded': value outside int(10 to 20)
+panic at panic-in-main.test:10: Range check failed: value outside typealias 'Bounded'
 Stack trace:
   in main
   in _start

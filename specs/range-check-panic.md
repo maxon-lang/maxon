@@ -23,7 +23,7 @@ end 'clamp'
 
 Calling `clamp(101)` produces:
 ```text
-Range check failed for type 'Percent': value outside int(0 to 100)
+Range check failed: value outside typealias 'Percent'
 Stack trace:
   in example.clamp
   in main
@@ -49,7 +49,7 @@ end 'main'
 1
 ```
 ```stderr
-Range check failed for type 'Percent': value outside int(0 to 100)
+panic at range-check-panic.upper-bound.test:5: Range check failed: value outside typealias 'Percent'
 Stack trace:
   in range-check-panic.clamp
   in main
@@ -73,7 +73,7 @@ end 'main'
 1
 ```
 ```stderr
-Range check failed for type 'Natural': value outside int(0 to 9223372036854775807)
+panic at range-check-panic.lower-bound.test:5: Range check failed: value outside typealias 'Natural'
 Stack trace:
   in range-check-panic.check
   in main
@@ -117,7 +117,7 @@ end 'main'
 1
 ```
 ```stderr
-Range check failed for type 'Score': value outside int(0 to 100)
+panic at range-check-panic.nested-call.test:5: Range check failed: value outside typealias 'Score'
 Stack trace:
   in range-check-panic.validate
   in range-check-panic.process

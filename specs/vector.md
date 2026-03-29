@@ -170,7 +170,7 @@ module {
     %24 = maxon.binop %21, %23 {op = or}
     maxon.cond_br %24 [then: __range_panic_5, else: __range_ok_5]
   __range_panic_5:
-    maxon.panic "panic at create-zero-initialized.test:7: Range check failed for type 'ExitCode': value outside int(0 to 4294967295)"
+    maxon.panic "panic at create-zero-initialized.test:7: Range check failed: value outside typealias 'ExitCode'"
   __range_ok_5:
     maxon.scope_end [v, __try_default_2, __try_result_1]
     maxon.return %19
@@ -871,7 +871,7 @@ module {
     %26 = maxon.binop %23, %25 {op = or}
     maxon.cond_br %26 [then: __range_panic_5, else: __range_ok_5]
   __range_panic_5:
-    maxon.panic "panic at set-and-get.test:8: Range check failed for type 'ExitCode': value outside int(0 to 4294967295)"
+    maxon.panic "panic at set-and-get.test:8: Range check failed: value outside typealias 'ExitCode'"
   __range_ok_5:
     maxon.scope_end [v, __try_default_2, __try_result_1]
     maxon.return %21

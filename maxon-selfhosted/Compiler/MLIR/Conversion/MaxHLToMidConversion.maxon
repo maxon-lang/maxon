@@ -33,9 +33,8 @@ export function convertMaxonToArith(module MlirModule, project Project) returns 
 	var result = createMlirModule()
 
 	for srcFunc in module.functions 'eachFunc'
-		var dstFunc = createMlirFunction(srcFunc.name, returnType: resolveTypeName(project, name: srcFunc.returnType))
-		dstFunc.paramCount = srcFunc.paramCount
-		dstFunc.paramTypes = srcFunc.paramTypes
+		var dstFunc = cloneFunctionShell(srcFunc)
+		dstFunc.returnType = resolveTypeName(project, name: srcFunc.returnType)
 
 		for srcBlock in srcFunc.region.blocks 'eachBlock'
 			var dstBlock = addBlock(dstFunc.region, label: srcBlock.label)
@@ -122,9 +121,7 @@ export function convertMaxonToSysAndRuntime(module MlirModule, globalData Global
 	var result = createMlirModule()
 
 	for srcFunc in module.functions 'eachFunc'
-		var dstFunc = createMlirFunction(srcFunc.name, returnType: srcFunc.returnType)
-		dstFunc.paramCount = srcFunc.paramCount
-		dstFunc.paramTypes = srcFunc.paramTypes
+		var dstFunc = cloneFunctionShell(srcFunc)
 
 		for srcBlock in srcFunc.region.blocks 'eachBlock'
 			var dstBlock = addBlock(dstFunc.region, label: srcBlock.label)
