@@ -666,6 +666,7 @@ primary       = INTEGER
               | from_expr
               | async_expr
               | await_expr
+              | type_bound_expr
               | IDENTIFIER
 
 array_literal = '[' [ expression { ',' expression } ] ']'
@@ -688,6 +689,9 @@ union_access  = IDENTIFIER '.' IDENTIFIER [ '(' [ arg_list ] ')' ]
               | IDENTIFIER '.' 'allCases'                            (* enum only: Array of all cases *)
 
 static_access = IDENTIFIER '.' IDENTIFIER [ '(' [ arg_list ] ')' ]
+
+type_bound_expr
+              = sized_type_name '.' ( 'min' | 'max' )         (* e.g., u64.max, i32.min *)
 
 from_expr     = IDENTIFIER 'from' '[' [ expression { ',' expression } ] ']'
 

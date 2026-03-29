@@ -724,6 +724,61 @@ end 'main'
 error E3005: specs/fragments/ranged-typealias/error.mismatched-type-bounds.test:2:17: Mismatched type bounds: 'i8.min' and 'i32.max' must reference the same type
 ```
 
+### Range identifier in variable assignment
+
+<!-- test: range-id-assign -->
+```maxon
+function main() returns ExitCode
+	var x = u16.max
+	return x - 65500
+end 'main'
+```
+```exitcode
+35
+```
+
+### Range identifier in comparison
+
+<!-- test: range-id-comparison -->
+```maxon
+function main() returns ExitCode
+	var x = i32.max
+	if x == 2147483647 'isMax'
+		return 1
+	end 'isMax'
+	return 0
+end 'main'
+```
+```exitcode
+1
+```
+
+### Range identifier i8.min in expression
+
+<!-- test: range-id-i8-min -->
+```maxon
+function main() returns ExitCode
+	var x = i8.min
+	return x + 178
+end 'main'
+```
+```exitcode
+50
+```
+
+### Range identifier in arithmetic
+
+<!-- test: range-id-arithmetic -->
+```maxon
+function main() returns ExitCode
+	var x = u8.max + 1
+	return x - 206
+end 'main'
+```
+```exitcode
+50
+```
+
 ### Error: bare sized type shorthand not allowed
 
 <!-- test: error.bare-shorthand -->

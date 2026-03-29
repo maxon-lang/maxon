@@ -3373,9 +3373,13 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
     ("f64", "max") => double.MaxValue,
     ("f32", "min") => (double)-float.MaxValue,
     ("f32", "max") => (double)float.MaxValue,
+    ("u8", "min") => 0,
     ("u8", "max") => 255,
+    ("u16", "min") => 0,
     ("u16", "max") => 65535,
+    ("u32", "min") => 0,
     ("u32", "max") => 4294967295,
+    ("u64", "min") => 0,
     ("u64", "max") => (double)ulong.MaxValue,
     ("i8", "min") => -128,
     ("i8", "max") => 127,
@@ -10541,6 +10545,19 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
       // Check for qualified name: TypeName.member
       if (Check(TokenType.Dot) && IsIdentifierLikeToken(PeekNext())) {
         var qualifiedName = $"{token.Value}.{PeekNext().Value}";
+
+        // Check for sized type bound: u64.max, i32.min, etc.
+        if (IsSizedTypeName(token.Value) && PeekNext().Value is "min" or "max") {
+          Advance(); // consume '.'
+          var keyword = Advance().Value; // consume 'min' or 'max'
+          var boundValue = ResolveTypeBound(token.Value, keyword);
+          if (token.Value is "f32" or "f64")
+            return EmitConstantLiteral(boundValue);
+          // Integer types: clamp to i64 range (u64.max maps to i64.max)
+          if (boundValue > (double)long.MaxValue) boundValue = (double)long.MaxValue;
+          if (boundValue < (double)long.MinValue) boundValue = (double)long.MinValue;
+          return EmitConstantLiteral((long)boundValue);
+        }
 
         // Check for builtin managed type static methods
         {

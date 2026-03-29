@@ -404,6 +404,18 @@ Supported types: `u8`, `u16`, `u32`, `u64`, `i8`, `i16`, `i32`, `i64`, `f32`, `f
 
 When both bounds use type qualifiers, they must reference the same type (e.g., `i64.min to i64.max`, not `i8.min to i32.max`). A type-qualified bound paired with a literal must form a natural range — `0 to u32.max` is valid, but `0 to i64.max` is an error (use `i64.min to i64.max` or `0 to u64.max` instead). Byte ranges must have bounds within 0 to u8.max.
 
+**Range identifiers as expressions:**
+
+`type.min` and `type.max` can also be used as expressions anywhere an integer literal is valid — in variable assignments, comparisons, arithmetic, function arguments, etc.:
+
+```maxon
+var x = u16.max            // 65535
+if value == i32.max 'check'
+	// ...
+end 'check'
+var y = u8.max + 1         // 256
+```
+
 **Construction:**
 
 Create values using `TypeName{value}` syntax:

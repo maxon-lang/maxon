@@ -95,7 +95,7 @@ function emitCmpRegImmOp(code ByteArray, lhs X64Register, value MachineWord)
 	// cmp lhs, imm8   =>  REX.W 83 ModRM(/7, lhs) imm8
 	// cmp lhs, imm32  =>  REX.W 81 ModRM(/7, lhs) imm32
 	emitRexWSingle(code, rmField: lhs)
-	if value <= 127 'imm8'
+	if value <= i8.max 'imm8'
 		code.push(0x83)
 		emitModRMExt(code, ext: 7, rmField: lhs)
 		code.push(value and 0xFF)
@@ -190,7 +190,7 @@ function emitSpillXmmToStackOp(code ByteArray, offset MachineWord, src X64XmmReg
 	code.push(0x0F)
 	code.push(0x11)
 	let signedOffset = offset
-	if signedOffset >= -128 and signedOffset <= 127 'disp8'
+	if signedOffset >= i8.min and signedOffset <= i8.max 'disp8'
 		let modrm = 0x45 or((srcC and 7) shl 3)
 		code.push(modrm)
 		code.push(signedOffset and 0xFF)
@@ -214,7 +214,7 @@ function emitReloadXmmFromStackOp(code ByteArray, dest X64XmmRegister, offset Ma
 	code.push(0x0F)
 	code.push(0x10)
 	let signedOffset = offset
-	if signedOffset >= -128 and signedOffset <= 127 'disp8'
+	if signedOffset >= i8.min and signedOffset <= i8.max 'disp8'
 		let modrm = 0x45 or((destC and 7) shl 3)
 		code.push(modrm)
 		code.push(signedOffset and 0xFF)
@@ -304,7 +304,7 @@ end 'emitCvttFloat2SiOp'
 function emitSpillToStackOp(code ByteArray, offset MachineWord, srcReg X64Register)
 	let srcCode = regCode(srcReg)
 	let signedOffset = offset
-	if signedOffset >= -128 and signedOffset <= 127 'disp8'
+	if signedOffset >= i8.min and signedOffset <= i8.max 'disp8'
 		emitRexWPrefix(code, regField: srcReg, rmField: X64Register.rbp)
 		code.push(0x89)
 		let modrm = 0x45 or(srcCode shl 3)
@@ -323,7 +323,7 @@ end 'emitSpillToStackOp'
 function emitReloadFromStackOp(code ByteArray, dest X64Register, offset MachineWord)
 	let destCode = regCode(dest)
 	let signedOffset = offset
-	if signedOffset >= -128 and signedOffset <= 127 'disp8'
+	if signedOffset >= i8.min and signedOffset <= i8.max 'disp8'
 		emitRexWPrefix(code, regField: dest, rmField: X64Register.rbp)
 		code.push(0x8B)
 		let modrm = 0x45 or(destCode shl 3)
@@ -344,7 +344,7 @@ function emitMovRegImmGeneric(code ByteArray, dest X64Register, value MachineWor
 		emitXorRegRegSelfOp(code, reg: dest)
 		return
 	end 'useXor'
-	if value >= -2147483648 and value <= 2147483647 'small'
+	if value >= i32.min and value <= i32.max 'small'
 		// mov r/m64, imm32 (sign-extended)  =>  REX.W C7 ModRM(/0, dest) + imm32
 		emitRexWSingle(code, rmField: dest)
 		code.push(0xC7)
@@ -383,7 +383,7 @@ function emitAddRegImmParam(code ByteArray, dest X64Register, value MachineWord)
 	// add dest, imm8   =>  REX.W 83 ModRM(/0, dest) imm8
 	// add dest, imm32  =>  REX.W 81 ModRM(/0, dest) imm32
 	emitRexWSingle(code, rmField: dest)
-	if value <= 127 'imm8'
+	if value <= i8.max 'imm8'
 		code.push(0x83)
 		emitModRMExt(code, ext: 0, rmField: dest)
 		code.push(value and 0xFF)
@@ -398,7 +398,7 @@ function emitSubRegImmParam(code ByteArray, dest X64Register, value MachineWord)
 	// sub dest, imm8   =>  REX.W 83 ModRM(/5, dest) imm8
 	// sub dest, imm32  =>  REX.W 81 ModRM(/5, dest) imm32
 	emitRexWSingle(code, rmField: dest)
-	if value <= 127 'imm8'
+	if value <= i8.max 'imm8'
 		code.push(0x83)
 		emitModRMExt(code, ext: 5, rmField: dest)
 		code.push(value and 0xFF)
@@ -469,7 +469,7 @@ function emitPrologue(code ByteArray, stackSize StackSize)
 	// push rbp; mov rbp, rsp
 	code.append(b"\x55\x48\x89\xe5")
 	// sub rsp, stackSize (only if non-zero)
-	if stackSize > 0 and stackSize <= 127 'smallSub'
+	if stackSize > 0 and stackSize <= i8.max 'smallSub'
 		// sub rsp, imm8
 		code.append(b"\x48\x83\xec")
 		code.push(stackSize and 0xFF)
@@ -491,7 +491,7 @@ end 'emitRet'
 
 function emitMovRegImm(code ByteArray, value MachineWord)
 	// Use 32-bit sign-extended form if value fits in signed 32-bit range
-	if value >= -2147483648 and value <= 2147483647 'small'
+	if value >= i32.min and value <= i32.max 'small'
 		// mov rax, imm32 (sign-extended)  =>  48 C7 C0 <dword>
 		code.append(b"\x48\xc7\xc0")
 		writeDword(code, value: value)
@@ -895,7 +895,7 @@ end 'emitX86WriteStdoutWinApi'
 // --- Stack argument passing helpers ---
 
 function emitSubRspImm(code ByteArray, value StackSize)
-	if value <= 127 'small'
+	if value <= i8.max 'small'
 		// sub rsp, imm8
 		code.append(b"\x48\x83\xec")
 		code.push(value and 0xFF)
@@ -907,7 +907,7 @@ function emitSubRspImm(code ByteArray, value StackSize)
 end 'emitSubRspImm'
 
 function emitAddRspImm(code ByteArray, value StackSize)
-	if value <= 127 'small'
+	if value <= i8.max 'small'
 		// add rsp, imm8
 		code.append(b"\x48\x83\xc4")
 		code.push(value and 0xFF)
@@ -1215,7 +1215,7 @@ function emitMemDisp(code ByteArray, regField X64Register, baseReg X64Register, 
 			code.push(0x24)
 		end 'needSib'
 	end 'noDisp' else 'hasDisp'
-		if offset >= -128 and offset <= 127 'disp8'
+		if offset >= i8.min and offset <= i8.max 'disp8'
 			let modrm = 0x40 or (regBits shl 3) or baseBits
 			code.push(modrm)
 			if baseBits == 4 'needSib'

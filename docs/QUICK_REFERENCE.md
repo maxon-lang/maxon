@@ -24,6 +24,12 @@ typealias FullInt = int(i64.min to i64.max)  // type.min/type.max for full range
 typealias Handle = int(0 to u32.max)         // full u32 range
 ```
 
+Range identifiers as expressions:
+```maxon
+var x = u16.max                     // 65535 — usable anywhere a literal is valid
+if value == i32.max 'check'         // comparisons, arithmetic, etc.
+```
+
 Construction and range checks:
 ```maxon
 var p = Port{8080}                  // construct with TypeName{value}

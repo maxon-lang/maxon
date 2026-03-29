@@ -339,9 +339,8 @@ end 'infixBindingPower'
 typealias BoundValue = int(i64.min to i64.max)
 
 let typeBoundsTable = [
-	b"u8.max": 255, b"u16.max": 65535, b"u32.max": 4294967295, b"u64.max": 9223372036854775807,
-	b"i8.max": 127, b"i16.max": 32767, b"i32.max": 2147483647, b"i64.max": 9223372036854775807,
-	b"i8.min": -128, b"i16.min": -32768, b"i32.min": -2147483648, b"i64.min": -9223372036854775807
+	b"u8.min": 0, b"u8.max": 255, b"u16.min": 0, b"u16.max": 65535, b"u32.min": 0, b"u32.max": 4294967295, b"u64.min": 0, b"u64.max": 9223372036854775807,
+	b"i8.min": -128, b"i8.max": 127, b"i16.min": -32768, b"i16.max": 32767, b"i32.min": -2147483648, b"i32.max": 2147483647, b"i64.min": -9223372036854775807, b"i64.max": 9223372036854775807
 ]
 
 function resolveTypeBound(typeName ByteArray, field ByteArray) returns BoundValue
@@ -354,13 +353,13 @@ end 'resolveTypeBound'
 
 function computeOptimalIntType(lower BoundValue, upper BoundValue) returns ByteArray
 	if lower >= 0 'unsigned'
-		if upper <= 255 'u8'
+		if upper <= u8.max 'u8'
 			return b"u8"
 		end 'u8'
-		if upper <= 65535 'u16'
+		if upper <= u16.max 'u16'
 			return b"u16"
 		end 'u16'
-		if upper <= 4294967295 'u32'
+		if upper <= u32.max 'u32'
 			return b"u32"
 		end 'u32'
 		return b"u64"
@@ -1435,6 +1434,16 @@ type Parser
 			end 'isFloatReturn'
 			return makeExprResult(callId)
 		end 'isCall'
+
+		// Sized type bound as expression: u64.max, i32.min, etc.
+		// The lexer skips '.', so "u64.max" arrives as two consecutive identifiers.
+		if peekToken.kind == TokenKind.identifier and (peekToken.value == b"min" or peekToken.value == b"max") and (token.value == b"u8" or token.value == b"u16" or token.value == b"u32" or token.value == b"u64" or token.value == b"i8" or token.value == b"i16" or token.value == b"i32" or token.value == b"i64") 'isTypeBound'
+			let bound = resolveTypeBound(token.value, field: peekToken.value)
+			expect(TokenKind.identifier)
+			expect(TokenKind.identifier)
+			let boundId = emitLiteral(block, value: bound, isFloat: false)
+			return makeExprResult(boundId)
+		end 'isTypeBound'
 
 		// Ranged primitive construction: TypeName{expression}
 		if peekToken.kind == TokenKind.leftBrace 'isTypedConstruct'

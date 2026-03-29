@@ -344,7 +344,7 @@ function lowerIntBinOp(resultId ValueId, leftId ValueId, rightId ValueId, kind X
 	let dest = X64VReg.virtual(resultId)
 	// Check if right operand is a known constant suitable for immediate encoding (fits imm32)
 	let constVal = constMapGet(constMap, valueId: rightId)
-	let useImm = constVal != CONST_NOT_FOUND and constVal >= 0 and constVal <= 2147483647
+	let useImm = constVal != CONST_NOT_FOUND and constVal >= 0 and constVal <= i32.max
 	dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.movRegReg(dest, X64VReg.virtual(leftId))))
 	match kind 'emit'
 		add then if useImm 'addImm'
@@ -472,7 +472,7 @@ function lowerIntCmp(resultId ValueId, leftId ValueId, rightId ValueId, predicat
 		// test reg, reg is shorter and faster than cmp reg, 0
 		let lhs = X64VReg.virtual(leftId)
 		dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.testRegReg(lhs, lhs)))
-	end 'testZero' else if constVal != CONST_NOT_FOUND and constVal >= 0 and constVal <= 2147483647 'useImm'
+	end 'testZero' else if constVal != CONST_NOT_FOUND and constVal >= 0 and constVal <= i32.max 'useImm'
 		dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.cmpRegImm(X64VReg.virtual(leftId), constVal)))
 	end 'useImm' else 'useReg'
 		dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.cmpRegReg(X64VReg.virtual(leftId), X64VReg.virtual(rightId))))
