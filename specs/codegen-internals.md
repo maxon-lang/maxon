@@ -359,7 +359,7 @@ module {
   __range_panic_5:
     %50 = memref.lea_symdata __panic_msg_0
     %51 = std.ptr_to_i64 %50
-    std.call_runtime @maxon_panic %51
+    std.call_runtime @mrt_panic %51
   __range_ok_5:
     %52 = memref.load arr : i64
     std.call_runtime_if_nonnull @mm_decref %52
@@ -490,7 +490,7 @@ module {
   __range_panic_5:
     x86.lea_symdata rax, [__panic_msg_0]
     x86.mov rcx, rax
-    x86.call maxon_panic
+    x86.call mrt_panic
   __range_ok_5:
     x86.mov rcx, [rbp-16]
     x86.test rcx, rcx
@@ -1098,7 +1098,7 @@ module {
   __range_panic_0:
     %8 = memref.lea_symdata __panic_msg_0
     %9 = std.ptr_to_i64 %8
-    std.call_runtime @maxon_panic %9
+    std.call_runtime @mrt_panic %9
   __range_ok_0:
     func.return %2
   }
@@ -1125,7 +1125,7 @@ module {
   __range_panic_0:
     x86.lea_symdata rax, [__panic_msg_0]
     x86.mov rcx, rax
-    x86.call maxon_panic
+    x86.call mrt_panic
   __range_ok_0:
     x86.epilogue
     x86.ret
@@ -1263,7 +1263,7 @@ module {
   __range_panic_0:
     %8 = memref.lea_symdata __panic_msg_0
     %9 = std.ptr_to_i64 %8
-    std.call_runtime @maxon_panic %9
+    std.call_runtime @mrt_panic %9
   __range_ok_0:
     func.return %2
   }
@@ -1291,7 +1291,7 @@ module {
   __range_panic_0:
     x86.lea_symdata rax, [__panic_msg_0]
     x86.mov rcx, rax
-    x86.call maxon_panic
+    x86.call mrt_panic
   __range_ok_0:
     x86.epilogue
     x86.ret
@@ -1431,7 +1431,7 @@ module {
   __range_panic_0:
     %12 = memref.lea_symdata __panic_msg_0
     %13 = std.ptr_to_i64 %12
-    std.call_runtime @maxon_panic %13
+    std.call_runtime @mrt_panic %13
   __range_ok_0:
     func.return %4
   }
@@ -1465,7 +1465,7 @@ module {
   __range_panic_0:
     x86.lea_symdata rax, [__panic_msg_0]
     x86.mov rcx, rax
-    x86.call maxon_panic
+    x86.call mrt_panic
   __range_ok_0:
     x86.epilogue
     x86.ret
@@ -1741,7 +1741,7 @@ module {
   __range_panic_0:
     %8 = memref.lea_symdata __panic_msg_0
     %9 = std.ptr_to_i64 %8
-    std.call_runtime @maxon_panic %9
+    std.call_runtime @mrt_panic %9
   __range_ok_0:
     func.return %2
   }
@@ -1769,7 +1769,7 @@ module {
   __range_panic_0:
     x86.lea_symdata rax, [__panic_msg_0]
     x86.mov rcx, rax
-    x86.call maxon_panic
+    x86.call mrt_panic
   __range_ok_0:
     x86.mov rax, rdx
     x86.epilogue
@@ -1907,7 +1907,7 @@ module {
   __range_panic_0:
     %8 = memref.lea_symdata __panic_msg_0
     %9 = std.ptr_to_i64 %8
-    std.call_runtime @maxon_panic %9
+    std.call_runtime @mrt_panic %9
   __range_ok_0:
     func.return %2
   }
@@ -1935,7 +1935,7 @@ module {
   __range_panic_0:
     x86.lea_symdata rax, [__panic_msg_0]
     x86.mov rcx, rax
-    x86.call maxon_panic
+    x86.call mrt_panic
   __range_ok_0:
     x86.epilogue
     x86.ret
@@ -2073,7 +2073,7 @@ module {
   __range_panic_0:
     %12 = memref.lea_symdata __panic_msg_0
     %13 = std.ptr_to_i64 %12
-    std.call_runtime @maxon_panic %13
+    std.call_runtime @mrt_panic %13
   __range_ok_0:
     func.return %4
   }
@@ -2107,7 +2107,7 @@ module {
   __range_panic_0:
     x86.lea_symdata rax, [__panic_msg_0]
     x86.mov rcx, rax
-    x86.call maxon_panic
+    x86.call mrt_panic
   __range_ok_0:
     x86.epilogue
     x86.ret
@@ -2251,7 +2251,7 @@ module {
   __range_panic_0:
     %9 = memref.lea_symdata __panic_msg_0
     %10 = std.ptr_to_i64 %9
-    std.call_runtime @maxon_panic %10
+    std.call_runtime @mrt_panic %10
   __range_ok_0:
     func.return %3
   }
@@ -2280,7 +2280,7 @@ module {
   __range_panic_0:
     x86.lea_symdata rax, [__panic_msg_0]
     x86.mov rcx, rax
-    x86.call maxon_panic
+    x86.call mrt_panic
   __range_ok_0:
     x86.epilogue
     x86.ret
@@ -2541,7 +2541,7 @@ module {
   __range_panic_0:
     %7 = memref.lea_symdata __panic_msg_0
     %8 = std.ptr_to_i64 %7
-    std.call_runtime @maxon_panic %8
+    std.call_runtime @mrt_panic %8
   __range_ok_0:
     func.return %1
   }
@@ -2567,7 +2567,7 @@ module {
   __range_panic_0:
     x86.lea_symdata rax, [__panic_msg_0]
     x86.mov rcx, rax
-    x86.call maxon_panic
+    x86.call mrt_panic
   __range_ok_0:
     x86.epilogue
     x86.ret

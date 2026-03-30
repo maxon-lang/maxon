@@ -659,6 +659,12 @@ public class ARM64MemcpyOp : ARM64Op {
   public override string Mnemonic => "arm64.memcpy";
 }
 
+// --- Backward memcpy for overlapping shift-right ---
+// Uses X0=dst, X1=src, X2=count (in bytes), copies from end to start
+public class ARM64MemcpyReverseOp : ARM64Op {
+  public override string Mnemonic => "arm64.memcpy_reverse";
+}
+
 // --- Bulk zero (loop-based) ---
 // Uses X0=dst, X1=count (in qwords), fills with zero
 public class ARM64BulkZeroOp : ARM64Op {

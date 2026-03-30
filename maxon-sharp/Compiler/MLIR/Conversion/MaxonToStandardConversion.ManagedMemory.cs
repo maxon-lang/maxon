@@ -131,14 +131,28 @@ public static partial class MaxonToStandardConversion {
 	/// </summary>
 	private static void LowerManagedMemRemove(
 	  MaxonManagedMemRemoveOp op,
-	  MlirBlock<StandardOp> block,
+	  MlirFunction<StandardOp> func,
+	  ref MlirBlock<StandardOp> block,
 	  Dictionary<MaxonValue, StdValue> valueMap,
 	  Dictionary<string, string> varTypes,
 	  VarRegistry temps) {
 		var managedVarName = ResolveManagedVarName(op.ManagedStruct, valueMap);
 		var length = (StdI64)EmitStructFieldLoad(block, managedVarName, ManagedFieldLength, MlirType.I64, varTypes);
 		var index = (StdI64)valueMap[op.Index];
-		EmitBoundsCheck(block, index, length, "__mm_panic_index_oob");
+
+		// Bounds check: if index >= length, return error (ArrayError.outOfBounds = ordinal 0, flag = 1)
+		var cmpOp = new StdCmpI64Op("lt", index, length);
+		block.AddOp(cmpOp);
+		var uid = MlirContext.Current.NextId();
+		var oobBlock = $"__remove_oob_{uid}";
+		var inBoundsBlock = $"__remove_ok_{uid}";
+		block.AddOp(new StdCondBrOp(cmpOp.Result, inBoundsBlock, oobBlock));
+		// Add in-bounds block first so it's the fall-through target after the conditional jump
+		block = func.Body.AddBlock(inBoundsBlock);
+		var errBlock = func.Body.AddBlock(oobBlock);
+		var errFlag = new StdConstI64Op(1);
+		errBlock.AddOp(errFlag);
+		errBlock.AddOp(new StdErrorReturnOp(errFlag.Result));
 		var elemSize = (StdI64)EmitStructFieldLoad(block, managedVarName, ManagedFieldElementSize, MlirType.I64, varTypes);
 
 		// COW check before mutation
@@ -368,8 +382,8 @@ public static partial class MaxonToStandardConversion {
 			// Byte count
 			var bytesOp = new StdMulI64Op(count, elemSize);
 			block.AddOp(bytesOp);
-			// Use memmove-style copy (handles overlapping regions)
-			block.AddOp(new StdMemCopyOp(srcAddr.Result, dstAddr.Result, bytesOp.Result));
+			// Use reverse copy for overlapping shift-right (dst > src)
+			block.AddOp(new StdMemCopyReverseOp(srcAddr.Result, dstAddr.Result, bytesOp.Result));
 			// Zero the source slot at buffer[index] to prevent the subsequent set() from
 			// decrefing a stale duplicate pointer (the original was copied to buffer[index+1])
 			var reloadedSrcAddr = EmitLoad(block, srcAddrVarName, varTypes);
@@ -682,7 +696,7 @@ public static partial class MaxonToStandardConversion {
 		block.AddOp(leaOp);
 		var ptrToI64 = new StdPtrToI64Op(leaOp.Result);
 		block.AddOp(ptrToI64);
-		block.AddOp(new StdCallRuntimeOp("maxon_panic", [ptrToI64.Result], null));
+		block.AddOp(new StdCallRuntimeOp("mrt_panic", [ptrToI64.Result], null));
 	}
 
 	private static void LowerPanicDynamic(
@@ -701,6 +715,6 @@ public static partial class MaxonToStandardConversion {
 		EmitStore(block, managedPtr, managedTempVar, varTypes);
 		// Load field 0 of __ManagedMemory = raw buffer pointer (C string)
 		var buffer = (StdI64)EmitStructFieldLoad(block, managedTempVar, ManagedFieldBuffer, MlirType.I64, varTypes);
-		block.AddOp(new StdCallRuntimeOp("maxon_panic", [buffer], null));
+		block.AddOp(new StdCallRuntimeOp("mrt_panic", [buffer], null));
 	}
 }

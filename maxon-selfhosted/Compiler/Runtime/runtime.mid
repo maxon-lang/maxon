@@ -2,8 +2,8 @@
 // Parsed by MidLevelParser into MlirFunction objects.
 // Uses sys osExit / sys osWrite for OS-independent runtime.
 
-// _start: process entry point. Calls main() and exits with its return code.
-func _start 0 void
+// mrt_start: process entry point. Calls main() and exits with its return code.
+func mrt_start 0 void
   block entry:
     v0 = func call main
     sys osExit v0
@@ -11,8 +11,8 @@ func _start 0 void
     func ret v1
 end
 
-// write_stdout(ptr len): writes len bytes at ptr to stdout.
-func write_stdout 2 void
+// mrt_write_stdout(ptr len): writes len bytes at ptr to stdout.
+func mrt_write_stdout 2 void
   block entry:
     v0 = func param 0 i64
     v1 = func param 1 i64
@@ -21,8 +21,8 @@ func write_stdout 2 void
     func ret v2
 end
 
-// write_stderr(ptr len): writes len bytes at ptr to stderr.
-func write_stderr 2 void
+// mrt_write_stderr(ptr len): writes len bytes at ptr to stderr.
+func mrt_write_stderr 2 void
   block entry:
     v0 = func param 0 i64
     v1 = func param 1 i64
@@ -31,9 +31,9 @@ func write_stderr 2 void
     func ret v2
 end
 
-// i64_to_string(value buffer_ptr): converts integer to decimal string in buffer.
+// mrt_i64_to_string(value buffer_ptr): converts integer to decimal string in buffer.
 // Returns number of bytes written.
-func i64_to_string 2 i64
+func mrt_i64_to_string 2 i64
   block entry:
     v0 = func param 0 i64
     memref storeSlot 0 v0
@@ -125,8 +125,8 @@ func i64_to_string 2 i64
 
 end
 
-// write_cstr_stderr(ptr): scans for null terminator, then writes to stderr.
-func write_cstr_stderr 1 void
+// mrt_write_cstr_stderr(ptr): scans for null terminator, then writes to stderr.
+func mrt_write_cstr_stderr 1 void
   block entry:
     v0 = func param 0 i64
     memref storeSlot 0 v0
@@ -152,35 +152,35 @@ func write_cstr_stderr 1 void
   block write:
     v10 = memref loadSlot 0
     v11 = memref loadSlot 1
-    v12 = func call write_stderr v10 v11
+    v12 = func call mrt_write_stderr v10 v11
     v13 = arith constI64 0
     func ret v13
 
 end
 
-// maxon_panic(msg_ptr): prints panic message + stack trace to stderr, then exits.
+// mrt_panic(msg_ptr): prints panic message + stack trace to stderr, then exits.
 // Walks the RBP/X29 chain to print up to 32 stack frames.
 //
 // Slot usage:
 //   slot 0 = msg_ptr (arg)
-//   slot 1 = text_base (_start address)
+//   slot 1 = text_base (mrt_start address)
 //   slot 2 = symtable_ptr
 //   slot 3 = frame_ptr (current frame being walked)
 //   slot 4 = frame_counter
-func maxon_panic 1 void
+func mrt_panic 1 void
   block entry:
     v0 = func param 0 i64
     memref storeSlot 0 v0
 
     // Print panic message to stderr
-    v1 = func call write_cstr_stderr v0
+    v1 = func call mrt_write_cstr_stderr v0
 
     // Print "Stack trace:\n"
     v2 = sys globalAddr __panic_stacktrace
-    v3 = func call write_cstr_stderr v2
+    v3 = func call mrt_write_cstr_stderr v2
 
     // Get text_base and symtable for frame lookup
-    v4 = sys funcAddr _start
+    v4 = sys funcAddr mrt_start
     memref storeSlot 1 v4
     v5 = sys funcAddr __symtable
     memref storeSlot 2 v5
@@ -247,7 +247,7 @@ func maxon_panic 1 void
     // Print this frame
     v51 = memref loadSlot 5
     v31 = memref loadSlot 2
-    v32 = func call maxon_panic_print_frame v51 v31
+    v32 = func call mrt_panic_print_frame v51 v31
 
     // Advance frame_ptr to next frame: [frame_ptr] = prev frame pointer
     v33 = memref loadSlot 3
@@ -263,7 +263,7 @@ func maxon_panic 1 void
 
 end
 
-// maxon_panic_print_frame(text_offset, symtable_ptr):
+// mrt_panic_print_frame(text_offset, symtable_ptr):
 // Looks up text_offset in the symbol table and prints "  in <funcName>\n".
 //
 // Symbol table format: count(i32) | entries[count] of {codeOffset(i32), nameOffset(i32)} | name strings
@@ -276,7 +276,7 @@ end
 //   slot 3 = loop index
 //   slot 4 = best_name_offset (-1 = not found)
 //   slot 5 = entry_ptr (current entry address)
-func maxon_panic_print_frame 2 void
+func mrt_panic_print_frame 2 void
   block entry:
     v0 = func param 0 i64
     memref storeSlot 0 v0
@@ -285,7 +285,7 @@ func maxon_panic_print_frame 2 void
 
     // Print "  in "
     v2 = sys globalAddr __panic_in
-    v3 = func call write_cstr_stderr v2
+    v3 = func call mrt_write_cstr_stderr v2
 
     // Load count from symtable header (first 4 bytes as i32)
     // Load 8 bytes and mask to lower 32 bits
@@ -360,30 +360,30 @@ func maxon_panic_print_frame 2 void
     v36 = memref loadSlot 1
     v37 = memref loadSlot 4
     v38 = arith addI64 v36 v37
-    v39 = func call write_cstr_stderr v38
+    v39 = func call mrt_write_cstr_stderr v38
     cf br print_newline
 
   block print_unknown:
     v40 = sys globalAddr __panic_unknown
-    v41 = func call write_cstr_stderr v40
+    v41 = func call mrt_write_cstr_stderr v40
     cf br print_newline
 
   block print_newline:
     v42 = sys globalAddr __panic_newline
-    v43 = func call write_cstr_stderr v42
+    v43 = func call mrt_write_cstr_stderr v42
     v44 = arith constI64 0
     func ret v44
 
 end
 
-// __rt_printInt(value): converts to string and prints to stdout.
-func __rt_printInt 1 void
+// mrt_printInt(value): converts to string and prints to stdout.
+func mrt_printInt 1 void
   block entry:
     v0 = func param 0 i64
     v1 = sys stackAddr 1
-    v2 = func call i64_to_string v0 v1
+    v2 = func call mrt_i64_to_string v0 v1
     v3 = sys stackAddr 1
-    v4 = func call write_stdout v3 v2
+    v4 = func call mrt_write_stdout v3 v2
     v5 = arith constI64 0
     func ret v5
 end

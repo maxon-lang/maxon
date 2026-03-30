@@ -762,6 +762,10 @@ public static class StandardToARM64Conversion {
         regManager.EmitMemCopy(memCopy.SrcPtr, memCopy.DstPtr, memCopy.ByteCount, block);
         break;
 
+      case StdMemCopyReverseOp memCopyRev:
+        regManager.EmitMemCopyReverse(memCopyRev.SrcPtr, memCopyRev.DstPtr, memCopyRev.ByteCount, block);
+        break;
+
       // === Parameter (handled in entry block setup above, skip here) ===
       case StdParamOp:
         break;

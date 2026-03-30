@@ -35,7 +35,7 @@ panic at simple-panic.test:6: Range check failed: value outside typealias 'Byte'
 Stack trace:
   in panic-stack-trace.dangerous
   in main
-  in _start
+  in mrt_start
 ```
 
 ### Nested call chain
@@ -71,7 +71,7 @@ Stack trace:
   in panic-stack-trace.process
   in panic-stack-trace.caller
   in main
-  in _start
+  in mrt_start
 ```
 
 ### Panic in main directly
@@ -97,5 +97,5 @@ end
 panic at panic-in-main.test:10: Range check failed: value outside typealias 'Bounded'
 Stack trace:
   in main
-  in _start
+  in mrt_start
 ```

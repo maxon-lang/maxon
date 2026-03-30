@@ -617,7 +617,7 @@ public abstract class RegisterManagerBase<TGpr, TFp, TOp>
 /// </summary>
 public static class BlockAnalysis {
   /// <summary>
-  /// Detect diverging blocks — blocks containing a noreturn call (maxon_panic, maxon_panic_dynamic)
+  /// Detect diverging blocks — blocks containing a noreturn call (mrt_panic, mrt_panic_dynamic)
   /// with no branch or return terminator. These blocks never transfer control to a successor,
   /// so register state can be carried across them to avoid unnecessary spills.
   /// </summary>
@@ -626,7 +626,7 @@ public static class BlockAnalysis {
     for (int bi = 0; bi < sourceBlocks.Count; bi++) {
       bool hasNoreturnCall = sourceBlocks[bi].Operations
         .OfType<StdCallRuntimeOp>()
-        .Any(op => op.Callee is "maxon_panic" or "maxon_panic_dynamic");
+        .Any(op => op.Callee is "mrt_panic" or "mrt_panic_dynamic");
       bool hasTerminator = sourceBlocks[bi].Operations
         .Any(op => op is StdCondBrOp or StdBrOp or StdReturnOp);
       if (hasNoreturnCall && !hasTerminator)

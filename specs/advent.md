@@ -145,7 +145,7 @@ module {
   __range_panic_0:
     %11 = memref.lea_symdata __panic_msg_0
     %12 = std.ptr_to_i64 %11
-    std.call_runtime @maxon_panic %12
+    std.call_runtime @mrt_panic %12
   __range_ok_0:
     func.return %5
   }
@@ -177,7 +177,7 @@ module {
   __range_panic_0:
     x86.lea_symdata rax, [__panic_msg_0]
     x86.mov rcx, rax
-    x86.call maxon_panic
+    x86.call mrt_panic
   __range_ok_0:
     x86.epilogue
     x86.ret
@@ -475,7 +475,7 @@ module {
   __range_panic_9:
     %64 = memref.lea_symdata __panic_msg_0
     %65 = std.ptr_to_i64 %64
-    std.call_runtime @maxon_panic %65
+    std.call_runtime @mrt_panic %65
   __range_ok_9:
     %66 = memref.load __try_result_0 : i64
     std.call_runtime_if_nonnull @mm_decref %66
@@ -699,7 +699,7 @@ module {
   __range_panic_9:
     x86.lea_symdata rax, [__panic_msg_0]
     x86.mov rcx, rax
-    x86.call maxon_panic
+    x86.call mrt_panic
   __range_ok_9:
     x86.mov rcx, [rbp-16]
     x86.mov [rbp-64], rax
@@ -1547,7 +1547,7 @@ module {
   __range_panic_9:
     %65 = memref.lea_symdata __panic_msg_0
     %66 = std.ptr_to_i64 %65
-    std.call_runtime @maxon_panic %66
+    std.call_runtime @mrt_panic %66
   __range_ok_9:
     %67 = memref.load __try_result_0 : i64
     std.call_runtime_if_nonnull @mm_decref %67
@@ -1773,7 +1773,7 @@ module {
   __range_panic_9:
     x86.lea_symdata rax, [__panic_msg_0]
     x86.mov rcx, rax
-    x86.call maxon_panic
+    x86.call mrt_panic
   __range_ok_9:
     x86.mov rcx, [rbp-16]
     x86.mov [rbp-64], rax

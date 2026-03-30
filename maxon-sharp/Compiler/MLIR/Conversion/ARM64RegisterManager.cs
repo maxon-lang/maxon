@@ -770,6 +770,22 @@ public class ARM64RegisterManager : RegisterManagerBase<ARM64Register, ARM64Floa
     InvalidateGpr(ARM64Register.X3);
   }
 
+  public void EmitMemCopyReverse(StdValue srcPtr, StdValue dstPtr, StdValue byteCount, MlirBlock<ARM64Op> block) {
+    // Backward memcpy for overlapping shift-right: X0=dst, X1=src, X2=count
+    SpillRegisterIfOccupied(ARM64Register.X0, block);
+    SpillRegisterIfOccupied(ARM64Register.X1, block);
+    SpillRegisterIfOccupied(ARM64Register.X2, block);
+    SpillRegisterIfOccupied(ARM64Register.X3, block);
+    EnsureInSpecificRegister(dstPtr, ARM64Register.X0, block);
+    EnsureInSpecificRegister(srcPtr, ARM64Register.X1, block);
+    EnsureInSpecificRegister(byteCount, ARM64Register.X2, block);
+    block.AddOp(new ARM64MemcpyReverseOp());
+    InvalidateGpr(ARM64Register.X0);
+    InvalidateGpr(ARM64Register.X1);
+    InvalidateGpr(ARM64Register.X2);
+    InvalidateGpr(ARM64Register.X3);
+  }
+
   public void EmitBulkZero(StdValue dstPtr, StdValue qwordCount, MlirBlock<ARM64Op> block) {
     SpillRegisterIfOccupied(ARM64Register.X0, block);
     SpillRegisterIfOccupied(ARM64Register.X1, block);

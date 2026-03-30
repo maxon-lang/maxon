@@ -2850,19 +2850,19 @@ function classifyArm64MovRegReg(sinkOnly RegIntArray, usedByNonSink RegIntArray,
 	end 'checkDest'
 end 'classifyArm64MovRegReg'
 
-// Check if a block is diverging (calls maxon_panic and never returns).
+// Check if a block is diverging (calls mrt_panic and never returns).
 function isDivergingBlock(block MlirBlock) returns bool
 	for op in block.ops 'checkOps'
 		match op 'checkCall'
 			maxx64(x64Op) then match x64Op 'checkX64Call'
-				callDirect(target) then if target == b"maxon_panic" 'isPanic'
+				callDirect(target) then if target == b"mrt_panic" 'isPanic'
 					return true
 				end 'isPanic'
 				prologue to loadRegRbpOffset then break 'checkX64Call'
 				syscall to repStosq then break 'checkX64Call'
 			end 'checkX64Call'
 			maxarm64(a64Op) then match a64Op 'checkArm64Call'
-				branchLink(target) then if target == b"maxon_panic" 'isPanic2'
+				branchLink(target) then if target == b"mrt_panic" 'isPanic2'
 					return true
 				end 'isPanic2'
 				prologue to branch then break 'checkArm64Call'

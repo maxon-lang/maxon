@@ -409,13 +409,13 @@ public partial class ARM64CodeEmitter {
     EmitRuntimeFunctionEnd();
   }
 
-  // --- maxon_panic(msg_ptr) ---
+  // --- mrt_panic(msg_ptr) ---
   // Prints panic message, walks stack, prints stack trace, exits with code 1.
   // Stack layout (all positive offsets within the allocated frame):
   //   [x29+0]  = saved X29
   //   [x29+8]  = saved X30
   //   [x29+16] = msg_ptr (arg 0)
-  //   [x29+24] = text_base (addr of _start)
+  //   [x29+24] = text_base (addr of mrt_start)
   //   [x29+32] = symtab_ptr (addr of __symtab)
   //   [x29+40] = current_frame_fp
   //   [x29+48] = frame_counter
@@ -429,7 +429,7 @@ public partial class ARM64CodeEmitter {
     if (!_symdataLabels.ContainsKey("__symdata_base"))
       _symdataLabels["__symdata_base"] = 0;
 
-    EmitRuntimeFunctionStart("maxon_panic", 1, 0x60);
+    EmitRuntimeFunctionStart("mrt_panic", 1, 0x60);
 
     // Save X19 (callee-saved) so we can use it
     EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X19, ARM64Register.X29, 72, 8);
@@ -438,8 +438,8 @@ public partial class ARM64CodeEmitter {
     EmitReloadArg(0); // X0 = msg_ptr
     EmitBranchLink("rt_write_cstr_stderr");
 
-    // Step 2: Compute text_base = address of _start
-    EmitAdrpAddFixup(ARM64Register.X0, _funcAddrAdrpFixups, "_start");
+    // Step 2: Compute text_base = address of mrt_start
+    EmitAdrpAddFixup(ARM64Register.X0, _funcAddrAdrpFixups, "mrt_start");
     EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X29, 24, 8);
 
     // Step 3: Load symtab pointer and count
@@ -464,7 +464,7 @@ public partial class ARM64CodeEmitter {
     EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X1, ARM64Register.X29, 24, 8); // X1 = text_base
     EmitAluRegReg(0xCB000000, ARM64Register.X0, ARM64Register.X0, ARM64Register.X1); // X0 = ret_addr - text_base
     EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X29, 64, 8); // text_offset
-    EmitBranchLink("maxon_panic_print_frame");
+    EmitBranchLink("mrt_panic_print_frame");
 
     // Step 6: Initialize stack walk
     // current_frame = [x29] (panic's caller's saved X29 — from our STP prologue)
@@ -513,7 +513,7 @@ public partial class ARM64CodeEmitter {
     EmitLoadStoreUnsignedImm(0xF9000000, ARM64Register.X0, ARM64Register.X29, 40, 8); // update current_frame
 
     // Print this frame
-    EmitBranchLink("maxon_panic_print_frame");
+    EmitBranchLink("mrt_panic_print_frame");
 
     _branchFixups.Add((_code.Count, "rt_panic_walk_loop"));
     EmitWord(0x14000000); // B rt_panic_walk_loop
@@ -537,7 +537,7 @@ public partial class ARM64CodeEmitter {
     EmitWord(0xD4200000); // BRK #0
   }
 
-  // --- maxon_panic_print_frame ---
+  // --- mrt_panic_print_frame ---
   // Looks up text_offset (from panic's frame) in the symbol table and prints "  in funcName\n".
   // Accesses panic's frame through saved X29 chain.
   // Stack layout:
@@ -551,7 +551,7 @@ public partial class ARM64CodeEmitter {
     DefineSymdata("__panic_in", System.Text.Encoding.UTF8.GetBytes("  in \0"));
     DefineSymdata("__panic_unknown", System.Text.Encoding.UTF8.GetBytes("<unknown>\0"));
 
-    EmitRuntimeFunctionStart("maxon_panic_print_frame", 0, 0x30);
+    EmitRuntimeFunctionStart("mrt_panic_print_frame", 0, 0x30);
 
     // Load caller's (panic's) frame pointer to access its locals
     EmitLoadStoreUnsignedImm(0xF9400000, ARM64Register.X19, ARM64Register.X29, 0, 8); // X19 = panic's x29
@@ -647,7 +647,7 @@ public partial class ARM64CodeEmitter {
   // --- maxon_bounds_check(index, limit, msg_ptr) ---
   // Frameless helper: args in X0=index, X1=limit, X2=msg_ptr.
   // If in bounds (index < limit unsigned), returns immediately.
-  // If out of bounds, tail-calls maxon_panic with msg_ptr in X0,
+  // If out of bounds, tail-calls mrt_panic with msg_ptr in X0,
   // preserving the caller's frame pointer chain for clean stack traces.
   private void EmitMaxonBoundsCheck() {
     DefineLabel("maxon_bounds_check");
@@ -658,10 +658,10 @@ public partial class ARM64CodeEmitter {
     _condBranchFixups.Add((_code.Count, okLabel));
     EmitWord(0x54000000 | CondCode(ARM64ConditionCode.Lo)); // B.LO
 
-    // Out of bounds — tail-call maxon_panic with msg_ptr in X0
+    // Out of bounds — tail-call mrt_panic with msg_ptr in X0
     EmitMovRegReg(ARM64Register.X0, ARM64Register.X2);
-    // B maxon_panic (not BL — tail call, preserves LR and frame chain)
-    _branchFixups.Add((_code.Count, "maxon_panic"));
+    // B mrt_panic (not BL — tail call, preserves LR and frame chain)
+    _branchFixups.Add((_code.Count, "mrt_panic"));
     EmitWord(0x14000000); // B <imm26>
 
     DefineLabel(okLabel);
@@ -2900,7 +2900,7 @@ public partial class ARM64CodeEmitter {
 
   /// <summary>
   /// __gt_init(): Initialize the main thread's GreenThread struct.
-  /// Called from _start before main. Sets status=running, sets X28 = P[0].
+  /// Called from mrt_start before main. Sets status=running, sets X28 = P[0].
   /// </summary>
   private void EmitGtInit() {
     // __gt_init(): Initialize the GMP scheduler.
@@ -3827,7 +3827,7 @@ public partial class ARM64CodeEmitter {
   }
 
   /// <summary>
-  /// __gt_cleanup(): Called from _start after main returns.
+  /// __gt_cleanup(): Called from mrt_start after main returns.
   /// Cancels all live green threads, then drains the run queue.
   /// </summary>
   private void EmitGtCleanup() {
@@ -5743,8 +5743,8 @@ public partial class ARM64CodeEmitter {
   private void EmitGtPanicIo() {
     EmitRuntimeFunctionStart("__gt_panic_io", 0, 0x20);
     EmitAdrpAddFixup(ARM64Register.X0, _symdataAdrpFixups, "__io_panic_msg");
-    EmitBranchLink("maxon_panic");
-    // maxon_panic does not return
+    EmitBranchLink("mrt_panic");
+    // mrt_panic does not return
   }
 
   /// <summary>

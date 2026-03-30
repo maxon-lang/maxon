@@ -1191,7 +1191,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
   /// <summary>
   /// Emit a separate __module_init function containing all deferred global inits.
   /// This function has NO function scope — it runs in the root scope so globals survive.
-  /// Called from _start before main.
+  /// Called from mrt_start before main.
   /// </summary>
   private void EmitModuleInitFunction(MlirModule<MaxonOp> module) {
     bool hasDeferred = _deferredExprLets.Count > 0 || _deferredExprVars.Count > 0

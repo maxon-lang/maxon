@@ -105,130 +105,130 @@ Functions: 9, Blocks: 35, Ops: 233
 === After schedule-instructions ===
 Functions: 9, Blocks: 35, Ops: 233
   maxhl: 0, arith: 0, cf: 0, func: 0, memref: 67, runtime: 0, sys: 9, mir: 157, x64: 0, arm64: 0
-mid-to-x86: === lowering function: _start ===
-mid-to-x86: === lowering function: write_stdout ===
-mid-to-x86: === lowering function: write_stderr ===
-mid-to-x86: === lowering function: i64_to_string ===
-mid-to-x86: === lowering function: write_cstr_stderr ===
-mid-to-x86: === lowering function: maxon_panic ===
-mid-to-x86: === lowering function: maxon_panic_print_frame ===
-mid-to-x86: === lowering function: __rt_printInt ===
+mid-to-x86: === lowering function: mrt_start ===
+mid-to-x86: === lowering function: mrt_write_stdout ===
+mid-to-x86: === lowering function: mrt_write_stderr ===
+mid-to-x86: === lowering function: mrt_i64_to_string ===
+mid-to-x86: === lowering function: mrt_write_cstr_stderr ===
+mid-to-x86: === lowering function: mrt_panic ===
+mid-to-x86: === lowering function: mrt_panic_print_frame ===
+mid-to-x86: === lowering function: mrt_printInt ===
 mid-to-x86: === lowering function: main ===
 === After convert-mir-to-target ===
 Functions: 9, Blocks: 35, Ops: 376
   maxhl: 0, arith: 0, cf: 0, func: 0, memref: 0, runtime: 0, sys: 0, mir: 0, x64: 376, arm64: 0
-regalloc: --- block 'entry' (7 ops) func=_start ---
-regalloc: clobber caller-saved (func=_start)
-regalloc: --- block 'entry' (16 ops) func=write_stdout ---
-regalloc: --- block 'entry' (16 ops) func=write_stderr ---
-regalloc: --- block 'entry' (7 ops) func=i64_to_string ---
-regalloc: spill-all-before-terminator (func=i64_to_string)
-regalloc: --- block 'zero_case' (10 ops) func=i64_to_string ---
-regalloc: remat v13=0 into rcx (func=i64_to_string)
-regalloc: remat v14=48 into rdx (func=i64_to_string)
-regalloc: --- block 'check_neg' (7 ops) func=i64_to_string ---
-regalloc: remat v16=0 into rax (func=i64_to_string)
-regalloc: spill-all-before-terminator (func=i64_to_string)
-regalloc: --- block 'negate' (5 ops) func=i64_to_string ---
-regalloc: spill-all-before-terminator (func=i64_to_string)
-regalloc: remat v22=1 into rcx (func=i64_to_string)
-regalloc: --- block 'setup' (11 ops) func=i64_to_string ---
-regalloc: remat v27=0 into rcx (func=i64_to_string)
-regalloc: remat v26=0 into rdx (func=i64_to_string)
-regalloc: spill-all-before-terminator (func=i64_to_string)
-regalloc: --- block 'digit_loop' (29 ops) func=i64_to_string ---
-regalloc: remat v32=10 into rcx (func=i64_to_string)
-regalloc: reload v31 from [rbp-56] into rbx (func=i64_to_string)
-regalloc: relocate v36 from rdx to rbx (func=i64_to_string)
-regalloc: reload v30 from [rbp-64] into rax (func=i64_to_string)
-regalloc: remat v37=0 into rdx (func=i64_to_string)
-regalloc: spill-all-before-terminator (func=i64_to_string)
-regalloc: --- block 'check_sign' (4 ops) func=i64_to_string ---
-regalloc: spill-all-before-terminator (func=i64_to_string)
-regalloc: --- block 'prepend_minus' (10 ops) func=i64_to_string ---
-regalloc: remat v48=0 into rcx (func=i64_to_string)
-regalloc: remat v47=45 into rdx (func=i64_to_string)
-regalloc: spill-all-before-terminator (func=i64_to_string)
-regalloc: --- block 'copy_phase' (15 ops) func=i64_to_string ---
-regalloc: reload v54 from [rbp-16] into rbx (func=i64_to_string)
-regalloc: --- block 'entry' (3 ops) func=write_cstr_stderr ---
-regalloc: spill-all-before-terminator (func=write_cstr_stderr)
-regalloc: remat v56=0 into rax (func=write_cstr_stderr)
-regalloc: --- block 'scan' (10 ops) func=write_cstr_stderr ---
-regalloc: spill-all-before-terminator (func=write_cstr_stderr)
-regalloc: --- block 'scan_next' (5 ops) func=write_cstr_stderr ---
-regalloc: spill-all-before-terminator (func=write_cstr_stderr)
-regalloc: --- block 'write' (9 ops) func=write_cstr_stderr ---
-regalloc: clobber caller-saved (func=write_cstr_stderr)
-regalloc: spill v67 from rax to [rbp-56] (func=write_cstr_stderr)
-regalloc: --- block 'entry' (16 ops) func=maxon_panic ---
-regalloc: clobber caller-saved (func=maxon_panic)
-regalloc: spill v74 from rax to [rbp-136] (func=maxon_panic)
-regalloc: spill v73 from rdx to [rbp-144] (func=maxon_panic)
-regalloc: spill v71 from rbx to [rbp-152] (func=maxon_panic)
-regalloc: reload v71 from [rbp-152] into rdx (func=maxon_panic)
-regalloc: clobber caller-saved (func=maxon_panic)
-regalloc: spill v70 from rax to [rbp-160] (func=maxon_panic)
-regalloc: reload v73 from [rbp-144] into rcx (func=maxon_panic)
-regalloc: reload v74 from [rbp-136] into rdx (func=maxon_panic)
-regalloc: spill-all-before-terminator (func=maxon_panic)
-regalloc: remat v76=32 into rbx (func=maxon_panic)
-regalloc: --- block 'walk_loop' (5 ops) func=maxon_panic ---
-regalloc: spill-all-before-terminator (func=maxon_panic)
-regalloc: --- block 'check_frame_ptr' (10 ops) func=maxon_panic ---
-regalloc: spill-all-before-terminator (func=maxon_panic)
-regalloc: --- block 'get_return_addr' (10 ops) func=maxon_panic ---
-regalloc: spill-all-before-terminator (func=maxon_panic)
-regalloc: --- block 'compute_offset' (9 ops) func=maxon_panic ---
-regalloc: spill-all-before-terminator (func=maxon_panic)
-regalloc: --- block 'check_upper_bound' (7 ops) func=maxon_panic ---
-regalloc: spill-all-before-terminator (func=maxon_panic)
-regalloc: --- block 'print_frame' (12 ops) func=maxon_panic ---
-regalloc: clobber caller-saved (func=maxon_panic)
-regalloc: spill-all-before-terminator (func=maxon_panic)
-regalloc: --- block 'walk_done' (6 ops) func=maxon_panic ---
-regalloc: remat v105=1 into rax (func=maxon_panic)
-regalloc: --- block 'entry' (19 ops) func=maxon_panic_print_frame ---
-regalloc: clobber caller-saved (func=maxon_panic_print_frame)
-regalloc: spill v109 from rcx to [rbp-128] (func=maxon_panic_print_frame)
-regalloc: reload v108 from [rbp-16] into rcx (func=maxon_panic_print_frame)
-regalloc: remat v112=4294967295 into rsi (func=maxon_panic_print_frame)
-regalloc: remat v114=0 into rdi (func=maxon_panic_print_frame)
-regalloc: spill-all-before-terminator (func=maxon_panic_print_frame)
-regalloc: remat v115=-1 into r8 (func=maxon_panic_print_frame)
-regalloc: --- block 'lookup_loop' (4 ops) func=maxon_panic_print_frame ---
-regalloc: spill-all-before-terminator (func=maxon_panic_print_frame)
-regalloc: --- block 'lookup_body' (22 ops) func=maxon_panic_print_frame ---
-regalloc: remat v123=8 into rdx (func=maxon_panic_print_frame)
-regalloc: remat v127=4294967295 into r8 (func=maxon_panic_print_frame)
-regalloc: spill-all-before-terminator (func=maxon_panic_print_frame)
-regalloc: --- block 'lookup_update' (11 ops) func=maxon_panic_print_frame ---
-regalloc: remat v135=4294967295 into rbx (func=maxon_panic_print_frame)
-regalloc: spill-all-before-terminator (func=maxon_panic_print_frame)
-regalloc: --- block 'lookup_next' (5 ops) func=maxon_panic_print_frame ---
-regalloc: spill-all-before-terminator (func=maxon_panic_print_frame)
-regalloc: --- block 'lookup_done' (5 ops) func=maxon_panic_print_frame ---
-regalloc: remat v141=-1 into rcx (func=maxon_panic_print_frame)
-regalloc: spill-all-before-terminator (func=maxon_panic_print_frame)
-regalloc: --- block 'print_name' (7 ops) func=maxon_panic_print_frame ---
-regalloc: clobber caller-saved (func=maxon_panic_print_frame)
-regalloc: spill v145 from rcx to [rbp-176] (func=maxon_panic_print_frame)
-regalloc: spill-all-before-terminator (func=maxon_panic_print_frame)
-regalloc: --- block 'print_unknown' (3 ops) func=maxon_panic_print_frame ---
-regalloc: clobber caller-saved (func=maxon_panic_print_frame)
-regalloc: spill v147 from rcx to [rbp-192] (func=maxon_panic_print_frame)
-regalloc: spill-all-before-terminator (func=maxon_panic_print_frame)
-regalloc: --- block 'print_newline' (7 ops) func=maxon_panic_print_frame ---
-regalloc: clobber caller-saved (func=maxon_panic_print_frame)
-regalloc: spill v149 from rcx to [rbp-208] (func=maxon_panic_print_frame)
-regalloc: spill v150 from rax to [rbp-216] (func=maxon_panic_print_frame)
-regalloc: --- block 'entry' (16 ops) func=__rt_printInt ---
-regalloc: clobber caller-saved (func=__rt_printInt)
-regalloc: spill v152 from rcx to [rbp-40] (func=__rt_printInt)
-regalloc: reload v155 from [rbp-24] into rdx (func=__rt_printInt)
-regalloc: clobber caller-saved (func=__rt_printInt)
-regalloc: spill v154 from rdx to [rbp-48] (func=__rt_printInt)
-regalloc: spill v156 from rax to [rbp-56] (func=__rt_printInt)
+regalloc: --- block 'entry' (7 ops) func=mrt_start ---
+regalloc: clobber caller-saved (func=mrt_start)
+regalloc: --- block 'entry' (16 ops) func=mrt_write_stdout ---
+regalloc: --- block 'entry' (16 ops) func=mrt_write_stderr ---
+regalloc: --- block 'entry' (7 ops) func=mrt_i64_to_string ---
+regalloc: spill-all-before-terminator (func=mrt_i64_to_string)
+regalloc: --- block 'zero_case' (10 ops) func=mrt_i64_to_string ---
+regalloc: remat v13=0 into rcx (func=mrt_i64_to_string)
+regalloc: remat v14=48 into rdx (func=mrt_i64_to_string)
+regalloc: --- block 'check_neg' (7 ops) func=mrt_i64_to_string ---
+regalloc: remat v16=0 into rax (func=mrt_i64_to_string)
+regalloc: spill-all-before-terminator (func=mrt_i64_to_string)
+regalloc: --- block 'negate' (5 ops) func=mrt_i64_to_string ---
+regalloc: spill-all-before-terminator (func=mrt_i64_to_string)
+regalloc: remat v22=1 into rcx (func=mrt_i64_to_string)
+regalloc: --- block 'setup' (11 ops) func=mrt_i64_to_string ---
+regalloc: remat v27=0 into rcx (func=mrt_i64_to_string)
+regalloc: remat v26=0 into rdx (func=mrt_i64_to_string)
+regalloc: spill-all-before-terminator (func=mrt_i64_to_string)
+regalloc: --- block 'digit_loop' (29 ops) func=mrt_i64_to_string ---
+regalloc: remat v32=10 into rcx (func=mrt_i64_to_string)
+regalloc: reload v31 from [rbp-56] into rbx (func=mrt_i64_to_string)
+regalloc: relocate v36 from rdx to rbx (func=mrt_i64_to_string)
+regalloc: reload v30 from [rbp-64] into rax (func=mrt_i64_to_string)
+regalloc: remat v37=0 into rdx (func=mrt_i64_to_string)
+regalloc: spill-all-before-terminator (func=mrt_i64_to_string)
+regalloc: --- block 'check_sign' (4 ops) func=mrt_i64_to_string ---
+regalloc: spill-all-before-terminator (func=mrt_i64_to_string)
+regalloc: --- block 'prepend_minus' (10 ops) func=mrt_i64_to_string ---
+regalloc: remat v48=0 into rcx (func=mrt_i64_to_string)
+regalloc: remat v47=45 into rdx (func=mrt_i64_to_string)
+regalloc: spill-all-before-terminator (func=mrt_i64_to_string)
+regalloc: --- block 'copy_phase' (15 ops) func=mrt_i64_to_string ---
+regalloc: reload v54 from [rbp-16] into rbx (func=mrt_i64_to_string)
+regalloc: --- block 'entry' (3 ops) func=mrt_write_cstr_stderr ---
+regalloc: spill-all-before-terminator (func=mrt_write_cstr_stderr)
+regalloc: remat v56=0 into rax (func=mrt_write_cstr_stderr)
+regalloc: --- block 'scan' (10 ops) func=mrt_write_cstr_stderr ---
+regalloc: spill-all-before-terminator (func=mrt_write_cstr_stderr)
+regalloc: --- block 'scan_next' (5 ops) func=mrt_write_cstr_stderr ---
+regalloc: spill-all-before-terminator (func=mrt_write_cstr_stderr)
+regalloc: --- block 'write' (9 ops) func=mrt_write_cstr_stderr ---
+regalloc: clobber caller-saved (func=mrt_write_cstr_stderr)
+regalloc: spill v67 from rax to [rbp-56] (func=mrt_write_cstr_stderr)
+regalloc: --- block 'entry' (16 ops) func=mrt_panic ---
+regalloc: clobber caller-saved (func=mrt_panic)
+regalloc: spill v74 from rax to [rbp-136] (func=mrt_panic)
+regalloc: spill v73 from rdx to [rbp-144] (func=mrt_panic)
+regalloc: spill v71 from rbx to [rbp-152] (func=mrt_panic)
+regalloc: reload v71 from [rbp-152] into rdx (func=mrt_panic)
+regalloc: clobber caller-saved (func=mrt_panic)
+regalloc: spill v70 from rax to [rbp-160] (func=mrt_panic)
+regalloc: reload v73 from [rbp-144] into rcx (func=mrt_panic)
+regalloc: reload v74 from [rbp-136] into rdx (func=mrt_panic)
+regalloc: spill-all-before-terminator (func=mrt_panic)
+regalloc: remat v76=32 into rbx (func=mrt_panic)
+regalloc: --- block 'walk_loop' (5 ops) func=mrt_panic ---
+regalloc: spill-all-before-terminator (func=mrt_panic)
+regalloc: --- block 'check_frame_ptr' (10 ops) func=mrt_panic ---
+regalloc: spill-all-before-terminator (func=mrt_panic)
+regalloc: --- block 'get_return_addr' (10 ops) func=mrt_panic ---
+regalloc: spill-all-before-terminator (func=mrt_panic)
+regalloc: --- block 'compute_offset' (9 ops) func=mrt_panic ---
+regalloc: spill-all-before-terminator (func=mrt_panic)
+regalloc: --- block 'check_upper_bound' (7 ops) func=mrt_panic ---
+regalloc: spill-all-before-terminator (func=mrt_panic)
+regalloc: --- block 'print_frame' (12 ops) func=mrt_panic ---
+regalloc: clobber caller-saved (func=mrt_panic)
+regalloc: spill-all-before-terminator (func=mrt_panic)
+regalloc: --- block 'walk_done' (6 ops) func=mrt_panic ---
+regalloc: remat v105=1 into rax (func=mrt_panic)
+regalloc: --- block 'entry' (19 ops) func=mrt_panic_print_frame ---
+regalloc: clobber caller-saved (func=mrt_panic_print_frame)
+regalloc: spill v109 from rcx to [rbp-128] (func=mrt_panic_print_frame)
+regalloc: reload v108 from [rbp-16] into rcx (func=mrt_panic_print_frame)
+regalloc: remat v112=4294967295 into rsi (func=mrt_panic_print_frame)
+regalloc: remat v114=0 into rdi (func=mrt_panic_print_frame)
+regalloc: spill-all-before-terminator (func=mrt_panic_print_frame)
+regalloc: remat v115=-1 into r8 (func=mrt_panic_print_frame)
+regalloc: --- block 'lookup_loop' (4 ops) func=mrt_panic_print_frame ---
+regalloc: spill-all-before-terminator (func=mrt_panic_print_frame)
+regalloc: --- block 'lookup_body' (22 ops) func=mrt_panic_print_frame ---
+regalloc: remat v123=8 into rdx (func=mrt_panic_print_frame)
+regalloc: remat v127=4294967295 into r8 (func=mrt_panic_print_frame)
+regalloc: spill-all-before-terminator (func=mrt_panic_print_frame)
+regalloc: --- block 'lookup_update' (11 ops) func=mrt_panic_print_frame ---
+regalloc: remat v135=4294967295 into rbx (func=mrt_panic_print_frame)
+regalloc: spill-all-before-terminator (func=mrt_panic_print_frame)
+regalloc: --- block 'lookup_next' (5 ops) func=mrt_panic_print_frame ---
+regalloc: spill-all-before-terminator (func=mrt_panic_print_frame)
+regalloc: --- block 'lookup_done' (5 ops) func=mrt_panic_print_frame ---
+regalloc: remat v141=-1 into rcx (func=mrt_panic_print_frame)
+regalloc: spill-all-before-terminator (func=mrt_panic_print_frame)
+regalloc: --- block 'print_name' (7 ops) func=mrt_panic_print_frame ---
+regalloc: clobber caller-saved (func=mrt_panic_print_frame)
+regalloc: spill v145 from rcx to [rbp-176] (func=mrt_panic_print_frame)
+regalloc: spill-all-before-terminator (func=mrt_panic_print_frame)
+regalloc: --- block 'print_unknown' (3 ops) func=mrt_panic_print_frame ---
+regalloc: clobber caller-saved (func=mrt_panic_print_frame)
+regalloc: spill v147 from rcx to [rbp-192] (func=mrt_panic_print_frame)
+regalloc: spill-all-before-terminator (func=mrt_panic_print_frame)
+regalloc: --- block 'print_newline' (7 ops) func=mrt_panic_print_frame ---
+regalloc: clobber caller-saved (func=mrt_panic_print_frame)
+regalloc: spill v149 from rcx to [rbp-208] (func=mrt_panic_print_frame)
+regalloc: spill v150 from rax to [rbp-216] (func=mrt_panic_print_frame)
+regalloc: --- block 'entry' (16 ops) func=mrt_printInt ---
+regalloc: clobber caller-saved (func=mrt_printInt)
+regalloc: spill v152 from rcx to [rbp-40] (func=mrt_printInt)
+regalloc: reload v155 from [rbp-24] into rdx (func=mrt_printInt)
+regalloc: clobber caller-saved (func=mrt_printInt)
+regalloc: spill v154 from rdx to [rbp-48] (func=mrt_printInt)
+regalloc: spill v156 from rax to [rbp-56] (func=mrt_printInt)
 regalloc: --- block 'entry' (3 ops) func=main ---
 === After allocate-registers ===
 Functions: 9, Blocks: 35, Ops: 339
@@ -307,7 +307,7 @@ module {
   __range_panic_0:
     %7 = memref.lea_symdata __panic_msg_0
     %8 = std.ptr_to_i64 %7
-    std.call_runtime @maxon_panic %8
+    std.call_runtime @mrt_panic %8
   __range_ok_0:
     func.return %1
   }
@@ -337,7 +337,7 @@ module {
   __range_panic_0:
     x86.lea_symdata rax, [__panic_msg_0]
     x86.mov rcx, rax
-    x86.call maxon_panic
+    x86.call mrt_panic
   __range_ok_0:
     x86.epilogue
     x86.ret

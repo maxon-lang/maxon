@@ -197,7 +197,7 @@ end 'main'
 __ManagedMemory: index out of bounds
 Stack trace:
   in main
-  in _start
+  in mrt_start
 ```
 
 <!-- test: bounds-set-oob -->
@@ -222,7 +222,7 @@ end 'main'
 __ManagedMemory: index out of bounds
 Stack trace:
   in main
-  in _start
+  in mrt_start
 ```
 
 <!-- test: bounds-setlength-exceeds-capacity -->
@@ -244,7 +244,7 @@ end 'main'
 __ManagedMemory: setLength exceeds capacity
 Stack trace:
   in main
-  in _start
+  in mrt_start
 ```
 
 <!-- test: bounds-byte-oob -->
@@ -267,7 +267,7 @@ end 'main'
 __ManagedMemory: byte index out of bounds
 Stack trace:
   in main
-  in _start
+  in mrt_start
 ```
 
 <!-- test: bounds-slice-oob -->
@@ -292,7 +292,7 @@ end 'main'
 __ManagedMemory: slice out of bounds
 Stack trace:
   in main
-  in _start
+  in mrt_start
 ```
 
 <!-- test: bounds-valid-operations -->
@@ -338,5 +338,5 @@ end 'main'
 __ManagedMemory: index out of bounds
 Stack trace:
   in main
-  in _start
+  in mrt_start
 ```

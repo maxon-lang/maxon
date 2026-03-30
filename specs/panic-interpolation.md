@@ -38,7 +38,7 @@ panic at example.maxon:3: processValue: got -5, expected non-negative
 Stack trace:
   in example.processValue
   in example.main
-  in _start
+  in mrt_start
 ```
 
 ## Tests
@@ -58,7 +58,7 @@ end 'main'
 panic at panic-interpolation.basic-int.test:4: value is 42
 Stack trace:
   in main
-  in _start
+  in mrt_start
 ```
 
 <!-- test: panic-interpolation.multiple-values -->
@@ -77,7 +77,7 @@ end 'main'
 panic at panic-interpolation.multiple-values.test:5: 10 != 20
 Stack trace:
   in main
-  in _start
+  in mrt_start
 ```
 
 <!-- test: panic-interpolation.expression -->
@@ -96,7 +96,7 @@ end 'main'
 panic at panic-interpolation.expression.test:5: result: 7
 Stack trace:
   in main
-  in _start
+  in mrt_start
 ```
 
 <!-- test: panic-interpolation.format-spec -->
@@ -114,7 +114,7 @@ end 'main'
 panic at panic-interpolation.format-spec.test:4: hex: 2a
 Stack trace:
   in main
-  in _start
+  in mrt_start
 ```
 
 <!-- test: panic-interpolation.in-function -->
@@ -140,7 +140,7 @@ panic at panic-interpolation.in-function.test:6: check failed: -5 is negative
 Stack trace:
   in panic-interpolation.check
   in main
-  in _start
+  in mrt_start
 ```
 
 <!-- test: panic-interpolation.plain-string-unchanged -->
@@ -157,5 +157,5 @@ end 'main'
 panic at panic-interpolation.plain-string-unchanged.test:3: simple message
 Stack trace:
   in main
-  in _start
+  in mrt_start
 ```

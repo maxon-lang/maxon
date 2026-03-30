@@ -383,19 +383,19 @@ export function isParamPromoted(promoted BoolArray, paramIndex VarSlot) returns 
 	return try promoted.get(paramIndex) otherwise false
 end 'isParamPromoted'
 
-// Check if a MIR-level block is diverging (calls maxon_panic).
+// Check if a MIR-level block is diverging (calls mrt_panic).
 export function isMirDivergingBlock(block MlirBlock) returns bool
 	for op in block.ops 'checkOps'
 		match op 'check'
 			func(funcOp) then match funcOp 'checkFunc'
-				call(_, callee, _) then if callee == b"maxon_panic" 'isPanic'
+				call(_, callee, _) then if callee == b"mrt_panic" 'isPanic'
 					return true
 				end 'isPanic'
 				ret then break 'checkFunc'
 				tryCall to param then break 'checkFunc'
 			end 'checkFunc'
 			mir(mirOp) then match mirOp 'checkMir'
-				call(_, callee, _) then if callee == b"maxon_panic" 'isPanic2'
+				call(_, callee, _) then if callee == b"mrt_panic" 'isPanic2'
 					return true
 				end 'isPanic2'
 				movImm to branch then break 'checkMir'

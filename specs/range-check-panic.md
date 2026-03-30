@@ -27,7 +27,7 @@ Range check failed: value outside typealias 'Percent'
 Stack trace:
   in example.clamp
   in main
-  in _start
+  in mrt_start
 ```
 
 ## Tests
@@ -53,7 +53,7 @@ panic at range-check-panic.upper-bound.test:5: Range check failed: value outside
 Stack trace:
   in range-check-panic.clamp
   in main
-  in _start
+  in mrt_start
 ```
 
 <!-- test: range-check-panic.lower-bound -->
@@ -77,7 +77,7 @@ panic at range-check-panic.lower-bound.test:5: Range check failed: value outside
 Stack trace:
   in range-check-panic.check
   in main
-  in _start
+  in mrt_start
 ```
 
 <!-- test: range-check-panic.in-range -->
@@ -122,5 +122,5 @@ Stack trace:
   in range-check-panic.validate
   in range-check-panic.process
   in main
-  in _start
+  in mrt_start
 ```

@@ -1905,7 +1905,7 @@ public static partial class MaxonToStandardConversion {
               }
               break;
             case MaxonManagedMemRemoveOp memRemoveOp:
-              LowerManagedMemRemove(memRemoveOp, newBlock, valueMap, varTypes, temps);
+              LowerManagedMemRemove(memRemoveOp, newFunc, ref newBlock, valueMap, varTypes, temps);
               if (valueMap[memRemoveOp.Result] is StdHeapPtr memRemoveHp) {
                 valueMap[memRemoveOp.Result] = new StdHeapPtr(memRemoveOp.Result.Id, memRemoveHp.TypeName, memRemoveHp.VarName!);
               }

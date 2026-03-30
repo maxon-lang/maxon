@@ -403,6 +403,12 @@ public partial class X86CodeEmitter() {
       case X86RepMovsbOp:
         EmitBytes(0xF3, 0xA4); // REP MOVSB
         break;
+      case X86StdOp:
+        EmitByte(0xFD); // STD
+        break;
+      case X86CldOp:
+        EmitByte(0xFC); // CLD
+        break;
       case X86RepStosqOp:
         EmitBytes(0xF3, 0x48, 0xAB); // REP STOSQ
         break;
@@ -426,7 +432,7 @@ public partial class X86CodeEmitter() {
   // --- Start wrapper (_start entry point) ---
 
   public void EmitStartWrapper(string mainFunctionName, string? globalCleanupFunctionName = null, string? moduleInitFunctionName = null) {
-    DefineLabel("_start");
+    DefineLabel("mrt_start");
 
     // sub rsp, 0x28 (0x20 shadow space + 0x8 local storage, keeps 16-byte alignment)
     // [rsp+0x20] = main return value

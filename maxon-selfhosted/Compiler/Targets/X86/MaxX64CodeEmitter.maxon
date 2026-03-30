@@ -703,7 +703,7 @@ end 'emitRelativeCall'
 
 // --- Runtime Stubs (OS-neutral) ---
 
-// i64_to_string(value_in_rcx, buffer_in_rdx) -> length in RAX
+// mrt_i64_to_string(value_in_rcx, buffer_in_rdx) -> length in RAX
 function emitI64ToString(code ByteArray) returns CodeOffset
 	let offset = code.count()
 
@@ -752,7 +752,7 @@ end 'emitI64ToString'
 
 // --- Print Operations ---
 
-// Emit printLiteral: jump over data island, then call write_stdout
+// Emit printLiteral: jump over data island, then call mrt_write_stdout
 function emitPrintLiteral(code ByteArray, data ByteArray, writeStdoutOffset CodeOffset)
 	let dataLen = data.count()
 	if dataLen == 0 'empty'
@@ -782,7 +782,7 @@ function emitPrintLiteral(code ByteArray, data ByteArray, writeStdoutOffset Code
 	code.append(b"\x48\xc7\xc2")
 	writeDword(code, value: dataLen)
 
-	// call write_stdout
+	// call mrt_write_stdout
 	emitRelativeCall(code, targetOffset: writeStdoutOffset)
 end 'emitPrintLiteral'
 
@@ -791,19 +791,19 @@ function emitPrintInt(code ByteArray, writeStdoutOffset CodeOffset, i64ToStringO
 	// mov rcx, rax; lea rdx, [rsp]
 	code.append(b"\x48\x89\xc1\x48\x8d\x14\x24")
 
-	// call i64_to_string (returns length in rax)
+	// call mrt_i64_to_string (returns length in rax)
 	emitRelativeCall(code, targetOffset: i64ToStringOffset)
 
 	// mov rdx, rax (length); lea rcx, [rsp] (buffer ptr)
 	code.append(b"\x48\x89\xc2\x48\x8d\x0c\x24")
 
-	// call write_stdout
+	// call mrt_write_stdout
 	emitRelativeCall(code, targetOffset: writeStdoutOffset)
 end 'emitPrintInt'
 
 // --- OS-parameterized stubs ---
 
-// Emit _start: optional shadow space, call main, then exit via OsDescriptor strategy
+// Emit mrt_start: optional shadow space, call main, then exit via OsDescriptor strategy
 function emitX86Start(code ByteArray, osDesc OsDescriptor, relocations RelocationArray, callFixups CallFixupArray) returns CodeOffset
 	// Shadow space (Windows x64 ABI requires it)
 	if osDesc.startShadowSpace > 0 'hasShadow'
@@ -847,7 +847,7 @@ function emitX86ExitIat(code ByteArray, relocations RelocationArray, slotIndex M
 	code.append(b"\x00\x00\x00\x00")
 end 'emitX86ExitIat'
 
-// Emit write_stdout stub parameterized by OsDescriptor
+// Emit mrt_write_stdout stub parameterized by OsDescriptor
 function emitX86WriteStdout(code ByteArray, osDesc OsDescriptor, relocations RelocationArray) returns CodeOffset
 	let offset = code.count()
 	match osDesc.write 'writeStrategy'
@@ -858,7 +858,7 @@ function emitX86WriteStdout(code ByteArray, osDesc OsDescriptor, relocations Rel
 	return offset
 end 'emitX86WriteStdout'
 
-// write_stdout via syscall (Linux): args in rcx=ptr, rdx=len
+// mrt_write_stdout via syscall (Linux): args in rcx=ptr, rdx=len
 function emitX86WriteStdoutSyscall(code ByteArray, writeNumber MachineWord, fd MachineWord)
 	// Prologue; mov rsi, rcx; mov edi, fd
 	code.append(b"\x55\x48\x89\xe5\x48\x89\xce\xbf")
@@ -869,7 +869,7 @@ function emitX86WriteStdoutSyscall(code ByteArray, writeNumber MachineWord, fd M
 	code.append(b"\x0f\x05\x5d\xc3")
 end 'emitX86WriteStdoutSyscall'
 
-// write_stdout via Win32 API (GetStdHandle + WriteFile through IAT)
+// mrt_write_stdout via Win32 API (GetStdHandle + WriteFile through IAT)
 function emitX86WriteStdoutWinApi(code ByteArray, relocations RelocationArray, getHandleSlot MachineWord, handleConstant MachineWord, writeFileSlot MachineWord)
 	// Prologue; save args; zero bytesWritten; mov ecx, handleConstant
 	code.append(b"\x55\x48\x89\xe5\x48\x83\xec\x40\x48\x89\x4d\xf8\x48\x89\x55\xf0\x48\xc7\x45\xe0\x00\x00\x00\x00\x48\xc7\xc1")
@@ -1014,7 +1014,7 @@ export function emitX86(module MlirModule, target Target, globalData GlobalDataT
 	var funcLabelNames = ByteArrayArray{}
 	var funcLabelOffsets = CodeOffsetArray{}
 
-	// Emit all functions (runtime functions like _start, write_stdout, i64_to_string
+	// Emit all functions (runtime functions like mrt_start, mrt_write_stdout, mrt_i64_to_string
 	// are now included in the module as regular functions)
 	for func in module.functions 'eachFunc'
 		// Record function name -> code offset
@@ -1059,8 +1059,8 @@ export function emitX86(module MlirModule, target Target, globalData GlobalDataT
 	// Resolve inter-function call fixups
 	resolveCallFixups(code, labelNames: funcLabelNames, labelOffsets: funcLabelOffsets, callFixups: callFixups)
 
-	// _start must be at offset 0 -- look up its offset for the main call fixup
-	let startOffset = lookupLabel(funcLabelNames, labelOffsets: funcLabelOffsets, name: b"_start")
+	// mrt_start must be at offset 0 -- look up its offset for the main call fixup
+	let startOffset = lookupLabel(funcLabelNames, labelOffsets: funcLabelOffsets, name: b"mrt_start")
 
 	return CodeResult{code: code, mainCallFixupOffset: startOffset, relocations: relocations, globalData: globalData, targetModule: MlirModule{functions: MlirFunctionArray{}}}
 end 'emitX86'
@@ -1465,7 +1465,7 @@ end 'emitMaxX64Op'
 
 // --- Inline print operations (legacy path, uses callFixups) ---
 
-// printLiteral: jump over data island, then call write_stdout via callFixup
+// printLiteral: jump over data island, then call mrt_write_stdout via callFixup
 function emitPrintLiteralInline(code ByteArray, data ByteArray, callFixups CallFixupArray)
 	let dataLen = data.count()
 	if dataLen == 0 'empty'
@@ -1495,8 +1495,8 @@ function emitPrintLiteralInline(code ByteArray, data ByteArray, callFixups CallF
 	code.append(b"\x48\xc7\xc2")
 	writeDword(code, value: dataLen)
 
-	// call write_stdout (via callFixup)
-	emitCallFixup(code, callFixups: callFixups, target: b"write_stdout")
+	// call mrt_write_stdout (via callFixup)
+	emitCallFixup(code, callFixups: callFixups, target: b"mrt_write_stdout")
 end 'emitPrintLiteralInline'
 
 // printInt: value in RAX, convert to string then print
@@ -1504,14 +1504,14 @@ function emitPrintIntInline(code ByteArray, callFixups CallFixupArray)
 	// mov rcx, rax; lea rdx, [rsp]
 	code.append(b"\x48\x89\xc1\x48\x8d\x14\x24")
 
-	// call i64_to_string (via callFixup)
-	emitCallFixup(code, callFixups: callFixups, target: b"i64_to_string")
+	// call mrt_i64_to_string (via callFixup)
+	emitCallFixup(code, callFixups: callFixups, target: b"mrt_i64_to_string")
 
 	// mov rdx, rax (length); lea rcx, [rsp] (buffer ptr)
 	code.append(b"\x48\x89\xc2\x48\x8d\x0c\x24")
 
-	// call write_stdout (via callFixup)
-	emitCallFixup(code, callFixups: callFixups, target: b"write_stdout")
+	// call mrt_write_stdout (via callFixup)
+	emitCallFixup(code, callFixups: callFixups, target: b"mrt_write_stdout")
 end 'emitPrintIntInline'
 
 // --- SysOp emission (x86-64) ---

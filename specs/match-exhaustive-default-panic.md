@@ -67,7 +67,7 @@ end 'main'
 panic at default-panic.statement-hit.test:7: unexpected value
 Stack trace:
   in main
-  in _start
+  in mrt_start
 ```
 
 <!-- test: default-panic.expression -->

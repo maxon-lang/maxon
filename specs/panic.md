@@ -36,7 +36,7 @@ panic at example.maxon:3: processValue: negative input not allowed
 Stack trace:
   in example.processValue
   in example.main
-  in _start
+  in mrt_start
 ```
 
 ### When to Use
@@ -59,7 +59,7 @@ end 'main'
 panic at panic.basic.test:3: something went wrong
 Stack trace:
   in main
-  in _start
+  in mrt_start
 ```
 
 <!-- test: panic.in-function -->
@@ -81,7 +81,7 @@ panic at panic.in-function.test:3: failure in helper
 Stack trace:
   in panic.fail
   in main
-  in _start
+  in mrt_start
 ```
 
 <!-- test: panic.after-condition -->
@@ -107,5 +107,5 @@ panic at panic.after-condition.test:6: negative value
 Stack trace:
   in panic.check
   in main
-  in _start
+  in mrt_start
 ```

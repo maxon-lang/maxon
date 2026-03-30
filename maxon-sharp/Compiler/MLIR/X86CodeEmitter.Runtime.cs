@@ -96,11 +96,11 @@ public partial class X86CodeEmitter {
     // CMP rcx, rdx (unsigned comparison: index vs limit)
     EmitCmpRegReg(X86Register.Rcx, X86Register.Rdx);
     EmitJcc("b", "rt_bounds_ok"); // JAE would panic; JB means index < limit → OK
-    // Tail-call maxon_panic so its stack walk sees the *caller's* frame, not ours
+    // Tail-call mrt_panic so its stack walk sees the *caller's* frame, not ours
     EmitMovRegMem(X86Register.Rcx, -0x18, 8); // RCX = msg_r8 (saved at [rbp-0x18])
     EmitMovRegReg(X86Register.Rsp, X86Register.Rbp);
     EmitPopReg(X86Register.Rbp);
-    EmitJmp("maxon_panic");
+    EmitJmp("mrt_panic");
     DefineLabel("rt_bounds_ok");
     EmitRuntimeFunctionEnd();
   }
@@ -302,10 +302,10 @@ public partial class X86CodeEmitter {
     EmitMaxonManagedWrite("maxon_managed_write_stderr", -12); // STD_ERROR_HANDLE
 
   /// <summary>
-  /// maxon_panic(cstr_ptr_in_rcx): write message to stderr, print stack trace, then ExitProcess(1).
+  /// mrt_panic(cstr_ptr_in_rcx): write message to stderr, print stack trace, then ExitProcess(1).
   /// Stack layout:
   ///   [rbp-0x08] = cstr_ptr (panic message)
-  ///   [rbp-0x10] = text_base (absolute address of _start)
+  ///   [rbp-0x10] = text_base (absolute address of mrt_start)
   ///   [rbp-0x18] = symtable_ptr (absolute address of __symtable in .symtab)
   ///   [rbp-0x20] = current frame rbp for stack walk
   ///   [rbp-0x28] = frame counter (counts down from 32)
@@ -318,7 +318,7 @@ public partial class X86CodeEmitter {
     DefineSymdata("__panic_newline", System.Text.Encoding.UTF8.GetBytes("\n\0"));
     DefineSymdata("__panic_unknown", System.Text.Encoding.UTF8.GetBytes("<unknown>\0"));
 
-    EmitRuntimeFunctionStart("maxon_panic", 1, 0x60);
+    EmitRuntimeFunctionStart("mrt_panic", 1, 0x60);
 
     // Print the panic message
     EmitMovRegMem(X86Register.Rcx, -0x08, 8);
@@ -326,8 +326,8 @@ public partial class X86CodeEmitter {
     _relCallFixups.Add((_code.Count, "maxon_write_stderr"));
     EmitDword(0);
 
-    // Compute text_base = absolute address of _start
-    EmitLeaFuncAddr(X86Register.Rax, "_start");
+    // Compute text_base = absolute address of mrt_start
+    EmitLeaFuncAddr(X86Register.Rax, "mrt_start");
     EmitMovMemReg(-0x10, X86Register.Rax, 8);
 
     // Load symtable pointer (from symdata section)
@@ -351,7 +351,7 @@ public partial class X86CodeEmitter {
     EmitBytes(0x48, 0x29, 0xD0); // SUB rax, rdx => text offset
     EmitMovMemReg(-0x38, X86Register.Rax, 8);
     EmitByte(0xE8);
-    _relCallFixups.Add((_code.Count, "maxon_panic_print_frame"));
+    _relCallFixups.Add((_code.Count, "mrt_panic_print_frame"));
     EmitDword(0);
 
     // Initialize: frame_rbp = [rbp] (caller's saved rbp), counter = 32
@@ -398,7 +398,7 @@ public partial class X86CodeEmitter {
 
     // Print this frame
     EmitByte(0xE8);
-    _relCallFixups.Add((_code.Count, "maxon_panic_print_frame"));
+    _relCallFixups.Add((_code.Count, "mrt_panic_print_frame"));
     EmitDword(0);
 
     EmitJmp("rt_panic_walk_loop");
@@ -412,10 +412,10 @@ public partial class X86CodeEmitter {
 
   /// <summary>
   /// Helper: looks up [rbp-0x38] (text_offset) in the symbol table and prints "  in funcName\n".
-  /// Shares maxon_panic's stack frame (accesses [rbp-0x18], [rbp-0x30], [rbp-0x38]).
+  /// Shares mrt_panic's stack frame (accesses [rbp-0x18], [rbp-0x30], [rbp-0x38]).
   /// </summary>
   private void EmitMaxonPanicPrintFrame() {
-    DefineLabel("maxon_panic_print_frame");
+    DefineLabel("mrt_panic_print_frame");
 
     // Print "  in "
     EmitLeaRegSymdataRel(X86Register.Rcx, "__panic_in");
@@ -7154,7 +7154,7 @@ public partial class X86CodeEmitter {
     var msgLabel = "__io_panic_msg";
     DefineRdata(msgLabel, System.Text.Encoding.ASCII.GetBytes("PANIC: unknown I/O op code\0"));
     EmitLeaRegRipRel(X86Register.Rcx, msgLabel);
-    EmitCallRuntimeLabel("maxon_panic");
+    EmitCallRuntimeLabel("mrt_panic");
     EmitRuntimeFunctionEnd();
   }
 

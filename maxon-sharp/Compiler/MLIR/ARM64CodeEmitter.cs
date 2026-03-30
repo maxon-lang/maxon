@@ -364,6 +364,9 @@ public partial class ARM64CodeEmitter() {
 case ARM64MemcpyOp:
         EmitMemcpyLoop();
         break;
+      case ARM64MemcpyReverseOp:
+        EmitMemcpyReverseLoop();
+        break;
       case ARM64BulkZeroOp:
         EmitBulkZeroLoop();
         break;
@@ -1007,6 +1010,44 @@ case ARM64MemcpyOp:
     DefineLabel(doneLabel);
   }
 
+  private void EmitMemcpyReverseLoop() {
+    // Backward memcpy: X0=dst, X1=src, X2=count (bytes)
+    // Adjust to point to last byte: X0 += X2-1, X1 += X2-1, then copy backward
+    var loopLabel = $"__memcpy_rev_loop_{_uniqueLabelCounter}";
+    var doneLabel = $"__memcpy_rev_done_{_uniqueLabelCounter}";
+    _uniqueLabelCounter++;
+
+    // CBZ X2, done
+    _condBranchFixups.Add((_code.Count, doneLabel));
+    EmitWord(0xB4000000 | Reg(ARM64Register.X2)); // CBZ X2
+
+    // X0 = dst + count - 1
+    EmitWord(0x8B020000); // ADD X0, X0, X2
+    EmitWord(0xD1000400); // SUB X0, X0, #1
+
+    // X1 = src + count - 1
+    EmitWord(0x8B020021); // ADD X1, X1, X2
+    EmitWord(0xD1000421); // SUB X1, X1, #1
+
+    DefineLabel(loopLabel);
+    // LDRB W3, [X1], #-1  (post-index -1)
+    // Encoding: 0x385FF423 = LDRB W3, [X1], #-1
+    EmitWord(0x385FF423);
+
+    // STRB W3, [X0], #-1
+    // Encoding: 0x381FF403 = STRB W3, [X0], #-1
+    EmitWord(0x381FF403);
+
+    // SUB X2, X2, #1
+    EmitWord(0xD1000442); // SUB X2, X2, #1
+
+    // CBNZ X2, loop
+    _condBranchFixups.Add((_code.Count, loopLabel));
+    EmitWord(0xB5000000 | Reg(ARM64Register.X2)); // CBNZ X2
+
+    DefineLabel(doneLabel);
+  }
+
   private void EmitBulkZeroLoop() {
     // X0 = dst, X1 = count (in qwords)
     var loopLabel = $"__bulkzero_loop_{_uniqueLabelCounter}";
@@ -1156,7 +1197,7 @@ case ARM64MemcpyOp:
     DefineGlobal("__argc_global", 8, 0);
     DefineGlobal("__argv_global", 8, 0);
 
-    DefineLabel("_start");
+    DefineLabel("mrt_start");
 
     // LC_MAIN entry: X0 = argc, X1 = argv — save before anything clobbers them
     // Use X9/X10 as scratch to preserve across the STP

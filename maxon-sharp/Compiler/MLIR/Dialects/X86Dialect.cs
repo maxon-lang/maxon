@@ -542,6 +542,16 @@ public class X86RepMovsbOp : X86Op {
   public override string Mnemonic => "x86.rep_movsb";
 }
 
+// STD - set direction flag (for backward REP MOVSB)
+public class X86StdOp : X86Op {
+  public override string Mnemonic => "x86.std";
+}
+
+// CLD - clear direction flag (restore forward direction)
+public class X86CldOp : X86Op {
+  public override string Mnemonic => "x86.cld";
+}
+
 // REP STOSQ - fill RCX qwords at RDI with RAX
 public class X86RepStosqOp : X86Op {
   public override string Mnemonic => "x86.rep_stosq";

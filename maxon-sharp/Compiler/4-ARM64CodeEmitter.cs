@@ -45,7 +45,7 @@ public class ARM64CodeEmitterStage {
     var mainFunc = module.Functions.FirstOrDefault(f => f.Name == "main")
       ?? throw new InvalidOperationException("No 'main' function found");
 
-    // Emit _start wrapper
+    // Emit mrt_start wrapper
     var globalCleanupName = module.Functions
       .Where(f => f.Name == "__maxon_global_cleanup")
       .Select(f => f.Name)
@@ -82,8 +82,8 @@ public class ARM64CodeEmitterStage {
 
     // Build symbol table (compiler-generated functions + runtime functions)
     var symbolEntries = new List<(string name, int codeOffset)>();
-    var startOffset = emitter.GetLabelOffset("_start");
-    if (startOffset >= 0) symbolEntries.Add(("_start", startOffset));
+    var startOffset = emitter.GetLabelOffset("mrt_start");
+    if (startOffset >= 0) symbolEntries.Add(("mrt_start", startOffset));
     foreach (var func in module.Functions) {
       var offset = emitter.GetLabelOffset(func.Name);
       if (offset >= 0) symbolEntries.Add((func.Name, offset));

@@ -205,7 +205,7 @@ public static class RefcountOptimizationPass {
   /// </summary>
   private static bool IsAliasingOp(StandardOp op) {
     if (op is StdCallOp or StdTryCallOp or StdTryCallRuntimeOp) return true;
-    if (op is StdStoreIndirectOp or StdMemCopyOp) return true;
+    if (op is StdStoreIndirectOp or StdMemCopyOp or StdMemCopyReverseOp) return true;
     // mm_decref can trigger destructors with arbitrary side effects
     if (op is StdCallRuntimeOp rt && rt.Callee != "mm_incref" && rt.Callee != "mm_trace_transfer") return true;
     if (op is StdCallRuntimeIfNonnullOp grt && grt.Callee != "mm_incref") return true;

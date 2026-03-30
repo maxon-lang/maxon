@@ -276,7 +276,7 @@ panic at runtime-check-fail.test:6: Range check failed: value outside typealias 
 Stack trace:
   in ranged-typealias.makeAge
   in main
-  in _start
+  in mrt_start
 ```
 
 ### Byte ranged typealias
@@ -389,7 +389,7 @@ panic at return-runtime-check-fail.test:5: Range check failed: value outside typ
 Stack trace:
   in ranged-typealias.doubleScore
   in main
-  in _start
+  in mrt_start
 ```
 
 ### Return value range check: float return

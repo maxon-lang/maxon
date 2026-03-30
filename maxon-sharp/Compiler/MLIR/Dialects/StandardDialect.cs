@@ -1255,3 +1255,15 @@ public class StdMemCopyOp(StdValue srcPtr, StdValue dstPtr, StdValue byteCount) 
   public override List<StdValue> ReadValues => [SrcPtr, DstPtr, ByteCount];
   public override int PureResultId => -1;
 }
+
+/// Backward memcopy for overlapping shift-right: copies from end to start.
+/// srcPtr and dstPtr point to the START of the regions (same as StdMemCopyOp).
+public class StdMemCopyReverseOp(StdValue srcPtr, StdValue dstPtr, StdValue byteCount) : StandardOp {
+  public override string Mnemonic => "std.memcopy_reverse";
+  public StdValue SrcPtr { get; } = srcPtr;
+  public StdValue DstPtr { get; } = dstPtr;
+  public StdValue ByteCount { get; } = byteCount;
+  public override IReadOnlyList<string> PrintableOperands => [SrcPtr.ToString(), DstPtr.ToString(), ByteCount.ToString()];
+  public override List<StdValue> ReadValues => [SrcPtr, DstPtr, ByteCount];
+  public override int PureResultId => -1;
+}

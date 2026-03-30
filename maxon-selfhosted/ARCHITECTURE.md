@@ -335,7 +335,7 @@ CPU emitters consume this data to emit platform-specific instruction sequences, 
 
 ### Runtime Functions
 
-Runtime support functions (`_start`, `write_stdout`, `i64_to_string`, `__rt_printInt`) are written as mid-level MLIR text in `runtime.mid` and parsed by `MidLevelParser.maxon`. They use `sys.osExit` and `sys.osWrite` ops for OS-neutral I/O, which the target backends lower to concrete syscalls or IAT calls based on the `OsDescriptor`. This avoids duplicating runtime logic across targets.
+Runtime support functions (`mrt_start`, `mrt_write_stdout`, `mrt_i64_to_string`, `mrt_printInt`) are written as mid-level MLIR text in `runtime.mid` and parsed by `MidLevelParser.maxon`. All runtime.mid functions use the `mrt_` prefix ("Maxon RunTime"). They use `sys.osExit` and `sys.osWrite` ops for OS-neutral I/O, which the target backends lower to concrete syscalls or IAT calls based on the `OsDescriptor`. This avoids duplicating runtime logic across targets.
 
 ### Executable Writers
 

@@ -992,6 +992,58 @@ public class RegisterManager : RegisterManagerBase<X86Register, X86XmmRegister, 
     InvalidateGpr(X86Register.Rcx);
   }
 
+  public void EmitMemCopyReverse(StdValue srcPtr, StdValue dstPtr, StdValue byteCount, MlirBlock<X86Op> block) {
+    // Backward memcopy for overlapping shift-right.
+    // Setup: RSI=src+count-1, RDI=dst+count-1, RCX=count
+    // Then: STD; REP MOVSB; CLD
+    //
+    // Strategy: spill src/dst/count to stack, then load into RSI/RDI/RCX
+    // with adjustments to avoid register conflicts.
+    var memCopyArgs = new HashSet<StdValue> { srcPtr, dstPtr, byteCount };
+    SpillRegisterIfNotArg(X86Register.Rsi, memCopyArgs, block);
+    SpillRegisterIfNotArg(X86Register.Rdi, memCopyArgs, block);
+    SpillRegisterIfNotArg(X86Register.Rcx, memCopyArgs, block);
+    SpillRegisterIfNotArg(X86Register.Rax, memCopyArgs, block);
+
+    // Get all three values into registers (avoiding conflicts)
+    var srcReg = EnsureInRegister(srcPtr, block);
+    var dstReg = EnsureInRegister(dstPtr, block, protect1: srcReg);
+    var cntReg = EnsureInRegister(byteCount, block, protect1: srcReg, protect2: dstReg);
+
+    // Spill all three to dedicated stack slots so we can freely clobber registers
+    _nextSpillOffset -= 8;
+    int srcSlot = _nextSpillOffset;
+    block.AddOp(new X86MovMemRegOp(srcSlot, srcReg, 8));
+
+    _nextSpillOffset -= 8;
+    int dstSlot = _nextSpillOffset;
+    block.AddOp(new X86MovMemRegOp(dstSlot, dstReg, 8));
+
+    _nextSpillOffset -= 8;
+    int cntSlot = _nextSpillOffset;
+    block.AddOp(new X86MovMemRegOp(cntSlot, cntReg, 8));
+
+    // RCX = count
+    block.AddOp(new X86MovRegMemOp(X86Register.Rcx, cntSlot, 8));
+    // RSI = src + count - 1
+    block.AddOp(new X86MovRegMemOp(X86Register.Rsi, srcSlot, 8));
+    block.AddOp(new X86AddRegRegOp(X86Register.Rsi, X86Register.Rcx));
+    block.AddOp(new X86SubRegImmOp(X86Register.Rsi, 1));
+    // RDI = dst + count - 1
+    block.AddOp(new X86MovRegMemOp(X86Register.Rdi, dstSlot, 8));
+    block.AddOp(new X86AddRegRegOp(X86Register.Rdi, X86Register.Rcx));
+    block.AddOp(new X86SubRegImmOp(X86Register.Rdi, 1));
+
+    // STD; REP MOVSB; CLD
+    block.AddOp(new X86StdOp());
+    block.AddOp(new X86RepMovsbOp());
+    block.AddOp(new X86CldOp());
+    InvalidateGpr(X86Register.Rsi);
+    InvalidateGpr(X86Register.Rdi);
+    InvalidateGpr(X86Register.Rcx);
+    InvalidateGpr(X86Register.Rax);
+  }
+
   public void EmitBulkZero(int baseOffset, int qwordCount, MlirBlock<X86Op> block) {
     SpillRegisterIfOccupied(X86Register.Rax, block);
     SpillRegisterIfOccupied(X86Register.Rdi, block);

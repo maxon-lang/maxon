@@ -496,7 +496,7 @@ end 'maxArm64ResolveCallFixups'
 
 // --- OS-parameterized stubs ---
 
-// Emit _start: BL main (patched later), then exit via OsDescriptor strategy
+// Emit mrt_start: BL main (patched later), then exit via OsDescriptor strategy
 function maxArm64EmitStart(code ByteArray, osDesc OsDescriptor, callFixups MaxArm64CallFixupArray, relocations RelocationArray) returns MaxArm64Offset
 	let mainCallFixupOffset = code.count()
 	var mainName = b"main"
@@ -525,7 +525,7 @@ function maxArm64EmitExitIat(code ByteArray, relocations RelocationArray, slotIn
 	maxArm64EmitBr(code, rn: 16)
 end 'maxArm64EmitExitIat'
 
-// Emit write_stdout stub parameterized by OsDescriptor
+// Emit mrt_write_stdout stub parameterized by OsDescriptor
 function maxArm64EmitWriteStdout(code ByteArray, osDesc OsDescriptor, relocations RelocationArray) returns MaxArm64Offset
 	let offset = code.count()
 	match osDesc.write 'writeStrategy'
@@ -536,7 +536,7 @@ function maxArm64EmitWriteStdout(code ByteArray, osDesc OsDescriptor, relocation
 	return offset
 end 'maxArm64EmitWriteStdout'
 
-// write_stdout via syscall: caller X0=ptr, X1=len
+// mrt_write_stdout via syscall: caller X0=ptr, X1=len
 function maxArm64EmitWriteStdoutSyscall(code ByteArray, writeNumber MachineWord, fd MachineWord)
 	maxArm64EmitStpPreIndex(code, frameSize: 32)
 	maxArm64EmitMovFpSp(code)
@@ -552,7 +552,7 @@ function maxArm64EmitWriteStdoutSyscall(code ByteArray, writeNumber MachineWord,
 	maxArm64EmitRet(code)
 end 'maxArm64EmitWriteStdoutSyscall'
 
-// write_stdout via libcall: write(fd, buf, len) through GOT slot.
+// mrt_write_stdout via libcall: write(fd, buf, len) through GOT slot.
 // Used for macOS (libSystem.B.dylib).
 // Caller: X0=ptr, X1=len
 function maxArm64EmitWriteStdoutLibcall(code ByteArray, relocations RelocationArray, writeSlot MachineWord, fd MachineWord)
@@ -574,7 +574,7 @@ function maxArm64EmitWriteStdoutLibcall(code ByteArray, relocations RelocationAr
 	maxArm64EmitRet(code)
 end 'maxArm64EmitWriteStdoutLibcall'
 
-// write_stdout via Win32 API (GetStdHandle + WriteFile through IAT)
+// mrt_write_stdout via Win32 API (GetStdHandle + WriteFile through IAT)
 // Caller: X0=ptr, X1=len
 function maxArm64EmitWriteStdoutWinApi(code ByteArray, relocations RelocationArray, getHandleSlot MachineWord, handleConstant MachineWord, writeFileSlot MachineWord)
 	maxArm64EmitStpPreIndex(code, frameSize: 80)
@@ -614,7 +614,7 @@ function maxArm64EmitWriteStdoutWinApi(code ByteArray, relocations RelocationArr
 	maxArm64EmitRet(code)
 end 'maxArm64EmitWriteStdoutWinApi'
 
-// --- i64_to_string stub ---
+// --- mrt_i64_to_string stub ---
 // Input: X0 = value to convert
 // Returns: X0 = pointer to string, X1 = length
 
@@ -693,7 +693,7 @@ end 'maxArm64EmitI64ToString'
 
 // --- Print operations ---
 
-// printLiteral: jump over data island, then ADR to data, call write_stdout
+// printLiteral: jump over data island, then ADR to data, call mrt_write_stdout
 function maxArm64EmitPrintLiteral(code ByteArray, data ByteArray, writeStdoutOffset MaxArm64Offset)
 	let dataLen = data.count()
 	if dataLen == 0 'empty'
@@ -725,18 +725,18 @@ function maxArm64EmitPrintLiteral(code ByteArray, data ByteArray, writeStdoutOff
 	// MOV X1, #dataLen
 	maxArm64EmitMovz(code, rd: 1, imm16: dataLen)
 
-	// BL write_stdout
+	// BL mrt_write_stdout
 	maxArm64EmitBranchLink(code)
 	maxArm64PatchBranch(code, instrOffset: code.count() - 4, targetOffset: writeStdoutOffset)
 end 'maxArm64EmitPrintLiteral'
 
 // printInt: value in X0, convert to string then print
 function maxArm64EmitPrintInt(code ByteArray, writeStdoutOffset MaxArm64Offset, i64ToStringOffset MaxArm64Offset)
-	// BL i64_to_string (returns X0=ptr, X1=len)
+	// BL mrt_i64_to_string (returns X0=ptr, X1=len)
 	maxArm64EmitBranchLink(code)
 	maxArm64PatchBranch(code, instrOffset: code.count() - 4, targetOffset: i64ToStringOffset)
 
-	// BL write_stdout (X0=ptr, X1=len already set)
+	// BL mrt_write_stdout (X0=ptr, X1=len already set)
 	maxArm64EmitBranchLink(code)
 	maxArm64PatchBranch(code, instrOffset: code.count() - 4, targetOffset: writeStdoutOffset)
 end 'maxArm64EmitPrintInt'
@@ -804,7 +804,7 @@ export function emitMaxArm64(module MlirModule, target Target, globalData Global
 	var stackTracker = MaxArm64StackTracker{currentStackSize: 0}
 
 	// Emit all function bodies from MlirModule
-	// (runtime functions like _start, write_stdout, i64_to_string are now
+	// (runtime functions like mrt_start, mrt_write_stdout, mrt_i64_to_string are now
 	//  included in the module as regular functions)
 	for func in module.functions 'eachFunc'
 		// Record function label for call fixup resolution
@@ -837,8 +837,8 @@ export function emitMaxArm64(module MlirModule, target Target, globalData Global
 	maxArm64ResolveAdrFixups(code, labelNames: labelNames, labelOffsets: labelOffsets, adrFixups: adrFixups)
 	maxArm64ResolveBlockJumpFixups(code, blockOffsets: blockOffsets, jumpFixups: jumpFixups)
 
-	// _start must be the entry point -- look up its offset
-	let startOffset = maxArm64LookupLabel(labelNames, labelOffsets: labelOffsets, name: b"_start")
+	// mrt_start must be the entry point -- look up its offset
+	let startOffset = maxArm64LookupLabel(labelNames, labelOffsets: labelOffsets, name: b"mrt_start")
 
 	return CodeResult{code: code, mainCallFixupOffset: startOffset, relocations: relocations, globalData: globalData, targetModule: MlirModule{functions: MlirFunctionArray{}}}
 end 'emitMaxArm64'
@@ -917,7 +917,7 @@ end 'emitMaxArm64PrologueOp'
 
 // --- Inline print operations (legacy path, uses callFixups) ---
 
-// printLiteral: B over data island, then ADR + BL write_stdout
+// printLiteral: B over data island, then ADR + BL mrt_write_stdout
 function maxArm64EmitPrintLiteralInline(code ByteArray, data ByteArray, callFixups MaxArm64CallFixupArray)
 	let dataLen = data.count()
 	if dataLen == 0 'empty'
@@ -949,17 +949,17 @@ function maxArm64EmitPrintLiteralInline(code ByteArray, data ByteArray, callFixu
 	// MOV X1, #dataLen
 	maxArm64EmitMovz(code, rd: 1, imm16: dataLen)
 
-	// BL write_stdout (via callFixup)
-	maxArm64HandleBranchLink(code, callFixups: callFixups, linkTarget: b"write_stdout")
+	// BL mrt_write_stdout (via callFixup)
+	maxArm64HandleBranchLink(code, callFixups: callFixups, linkTarget: b"mrt_write_stdout")
 end 'maxArm64EmitPrintLiteralInline'
 
 // printInt: value in X0, convert to string then print via callFixups
 function maxArm64EmitPrintIntInline(code ByteArray, callFixups MaxArm64CallFixupArray)
-	// BL i64_to_string (returns X0=ptr, X1=len)
-	maxArm64HandleBranchLink(code, callFixups: callFixups, linkTarget: b"i64_to_string")
+	// BL mrt_i64_to_string (returns X0=ptr, X1=len)
+	maxArm64HandleBranchLink(code, callFixups: callFixups, linkTarget: b"mrt_i64_to_string")
 
-	// BL write_stdout (X0=ptr, X1=len already set)
-	maxArm64HandleBranchLink(code, callFixups: callFixups, linkTarget: b"write_stdout")
+	// BL mrt_write_stdout (X0=ptr, X1=len already set)
+	maxArm64HandleBranchLink(code, callFixups: callFixups, linkTarget: b"mrt_write_stdout")
 end 'maxArm64EmitPrintIntInline'
 
 // --- SysOp emission (ARM64) ---

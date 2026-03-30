@@ -112,8 +112,8 @@ end 'lowerMaxHLTerminatorToArith'
 // Pass B: convert-maxon-to-sys-and-runtime (Phase 5)
 // ============================================================
 // Lowers remaining maxhl ops:
-//   maxon.printLiteral -> sys.globalAddr + arith.const + func.call write_stdout
-//   maxon.printInt     -> func.call __rt_printInt
+//   maxon.printLiteral -> sys.globalAddr + arith.const + func.call mrt_write_stdout
+//   maxon.printInt     -> func.call mrt_printInt
 // After this pass, zero maxhl ops remain in the module.
 
 export function convertMaxonToSysAndRuntime(module MlirModule, globalData GlobalDataTable, nextValueIdRef ValueIdRef) returns MlirModule
@@ -244,7 +244,7 @@ end 'refEqOpcode'
 // Lower printLiteral(data) to:
 //   globalAddr(addrId, "__str_N")
 //   constI64(lenId, len)
-//   call(_, "write_stdout", [addrId, lenId])
+//   call(_, "mrt_write_stdout", [addrId, lenId])
 function lowerPrintLiteral(data ByteArray, dstBlock MlirBlock, globalData GlobalDataTable, nextValueIdRef ValueIdRef)
 	let dataLen = data.count()
 	if dataLen == 0 'empty'
@@ -262,26 +262,26 @@ function lowerPrintLiteral(data ByteArray, dstBlock MlirBlock, globalData Global
 	let lenId = allocValueId(nextValueIdRef)
 	dstBlock.ops.push(MlirOp.arith(ArithOp.const(ArithConst{opcode: ArithConstOpcode.constI64, resultId: lenId, value: dataLen})))
 
-	// call write_stdout(addrId, lenId)
+	// call mrt_write_stdout(addrId, lenId)
 	let callResultId = allocValueId(nextValueIdRef)
 	var argIds = ValueIdArray{}
 	argIds.push(addrId)
 	argIds.push(lenId)
-	dstBlock.ops.push(MlirOp.func(FuncOp.call(callResultId, b"write_stdout", argIds)))
+	dstBlock.ops.push(MlirOp.func(FuncOp.call(callResultId, b"mrt_write_stdout", argIds)))
 end 'lowerPrintLiteral'
 
 // Lower printInt(valueId) to:
-//   call(__rt_printInt, [valueId])
+//   call(mrt_printInt, [valueId])
 function lowerPrintIntToCall(valueId ValueId, dstBlock MlirBlock, nextValueIdRef ValueIdRef)
 	let callResultId = allocValueId(nextValueIdRef)
 	var argIds = ValueIdArray{}
 	argIds.push(valueId)
-	dstBlock.ops.push(MlirOp.func(FuncOp.call(callResultId, b"__rt_printInt", argIds)))
+	dstBlock.ops.push(MlirOp.func(FuncOp.call(callResultId, b"mrt_printInt", argIds)))
 end 'lowerPrintIntToCall'
 
 // Lower maxon.panic(message, panicId) to:
 //   sys.globalAddr(addrId, "__panic_msg_N")  // load address of null-terminated panic message
-//   func.call maxon_panic(addrId)            // call runtime panic handler (never returns)
+//   func.call mrt_panic(addrId)              // call runtime panic handler (never returns)
 // Registers the panic message as global data with a null-terminated C-string.
 function lowerPanicToSys(message ByteArray, panicId ValueId, dstBlock MlirBlock, globalData GlobalDataTable, nextValueIdRef ValueIdRef)
 	// Build null-terminated message for global data
@@ -299,10 +299,10 @@ function lowerPanicToSys(message ByteArray, panicId ValueId, dstBlock MlirBlock,
 	let addrId = allocValueId(nextValueIdRef)
 	dstBlock.ops.push(MlirOp.sys(SysOp.globalAddr(addrId, name)))
 
-	// call maxon_panic(addrId)
+	// call mrt_panic(addrId)
 	let callResultId = allocValueId(nextValueIdRef)
 	var argIds = ValueIdArray{}
 	argIds.push(addrId)
-	dstBlock.ops.push(MlirOp.func(FuncOp.call(callResultId, b"maxon_panic", argIds)))
+	dstBlock.ops.push(MlirOp.func(FuncOp.call(callResultId, b"mrt_panic", argIds)))
 end 'lowerPanicToSys'
 

@@ -69,8 +69,8 @@ public class X86CodeEmitter {
     var mainFunc = module.Functions.FirstOrDefault(f => f.Name == "main")
       ?? throw new InvalidOperationException("No 'main' function found at code emission stage — semantic check should have caught this");
 
-    // Emit _start wrapper first (entry point at offset 0)
-    // _start calls main and then ExitProcess
+    // Emit mrt_start wrapper first (entry point at offset 0)
+    // mrt_start calls main and then ExitProcess
     var globalCleanupName = module.Functions
       .Where(f => f.Name == "__maxon_global_cleanup")
       .Select(f => f.Name)
@@ -113,9 +113,9 @@ public class X86CodeEmitter {
 
     // Build function symbol table for stack traces
     var symbolEntries = new List<(string name, int codeOffset)>();
-    // Add _start so the stack walker knows where to stop
-    var startOffset = emitter.GetLabelOffset("_start");
-    if (startOffset >= 0) symbolEntries.Add(("_start", startOffset));
+    // Add mrt_start so the stack walker knows where to stop
+    var startOffset = emitter.GetLabelOffset("mrt_start");
+    if (startOffset >= 0) symbolEntries.Add(("mrt_start", startOffset));
     foreach (var func in module.Functions) {
       var offset = emitter.GetLabelOffset(func.Name);
       if (offset >= 0) symbolEntries.Add((func.Name, offset));

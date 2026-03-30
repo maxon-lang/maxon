@@ -1025,6 +1025,12 @@ public static class StandardToX86Conversion {
             break;
           }
 
+          case StdMemCopyReverseOp memCopyRevOp: {
+            // Copy byteCount bytes from src to dst backwards (for overlapping shift-right)
+            regManager.EmitMemCopyReverse(memCopyRevOp.SrcPtr, memCopyRevOp.DstPtr, memCopyRevOp.ByteCount, x86Block);
+            break;
+          }
+
           case StdFuncRefOp funcRefOp: {
             // Load the address of a function (LEA RIP-relative to function)
             regManager.EmitFuncRef(funcRefOp.FunctionName, funcRefOp.Result, x86Block);

@@ -280,7 +280,7 @@ public partial class RuntimeEmitter {
     var notNull = UniqueLabel("mm_incref_not_null");
     _b.JumpIfNonZero(VReg.Scratch0, notNull);
     _b.LeaSymdata(VReg.Arg0, "__mm_panic_incref_null");
-    _b.Call("maxon_panic");
+    _b.Call("mrt_panic");
     _b.DefineLabel(notNull);
 
     // Atomic increment refcount at [user_ptr - 8]
@@ -324,7 +324,7 @@ public partial class RuntimeEmitter {
     var notNull = UniqueLabel("mm_decref_not_null");
     _b.JumpIfNonZero(VReg.Scratch0, notNull);
     _b.LeaSymdata(VReg.Arg0, "__mm_panic_decref_null");
-    _b.Call("maxon_panic");
+    _b.Call("mrt_panic");
     _b.DefineLabel(notNull);
 
     // Trace decref before modifying refcount (prints rc-1)
@@ -339,7 +339,7 @@ public partial class RuntimeEmitter {
     var hasRefs = UniqueLabel("mm_decref_has_refs");
     _b.JumpIfNonZero(VReg.Scratch1, hasRefs);
     _b.LeaSymdata(VReg.Arg0, "__mm_panic_decref_underflow");
-    _b.Call("maxon_panic");
+    _b.Call("mrt_panic");
     _b.DefineLabel(hasRefs);
 
     // Atomic decrement refcount: [ptr-8] -= 1
@@ -450,7 +450,7 @@ public partial class RuntimeEmitter {
       var canaryOk = UniqueLabel("mm_free_canary_ok");
       _b.JumpIf(Condition.Equal, canaryOk);
       _b.LeaSymdata(VReg.Arg0, "__mm_panic_canary");
-      _b.Call("maxon_panic");
+      _b.Call("mrt_panic");
       _b.DefineLabel(canaryOk);
     }
 
@@ -503,7 +503,7 @@ public partial class RuntimeEmitter {
     var sizeOk = UniqueLabel("mm_alloc_size_ok");
     _b.JumpIfNonZero(VReg.Scratch0, sizeOk);
     _b.LeaSymdata(VReg.Arg0, "__mm_panic_alloc_zero_size");
-    _b.Call("maxon_panic");
+    _b.Call("mrt_panic");
     _b.DefineLabel(sizeOk);
 
     // Compute alloc_size = size + MmHeaderSize (+ 8 for canary if MmDebug)
@@ -617,7 +617,7 @@ public partial class RuntimeEmitter {
     var sizeOk = UniqueLabel("mm_realloc_size_ok");
     _b.JumpIfNonZero(VReg.Scratch0, sizeOk);
     _b.LeaSymdata(VReg.Arg0, "__mm_panic_realloc_zero_size");
-    _b.Call("maxon_panic");
+    _b.Call("mrt_panic");
     _b.DefineLabel(sizeOk);
 
     // If ptr == NULL, delegate to mm_alloc(new_size, destructor=0, tag=0, scope)
@@ -861,7 +861,7 @@ public partial class RuntimeEmitter {
     var sizeOk = UniqueLabel("mm_raw_realloc_size_ok");
     _b.JumpIfNonZero(VReg.Scratch0, sizeOk);
     _b.LeaSymdata(VReg.Arg0, "__mm_panic_realloc_zero_size");
-    _b.Call("maxon_panic");
+    _b.Call("mrt_panic");
     _b.DefineLabel(sizeOk);
 
     // Trace mm_realloc BEFORE child operations (top-down order)
@@ -1411,7 +1411,7 @@ public partial class RuntimeEmitter {
     _b.LeaSymdata(VReg.Arg0, "__mm_tag_newline");
     _b.Call("mm_trace_print_tag");
     _b.LeaSymdata(VReg.Arg0, "__mm_validate_fail");
-    _b.Call("maxon_panic");
+    _b.Call("mrt_panic");
     _b.DefineLabel(doneLabel);
     _b.FunctionEnd();
   }
