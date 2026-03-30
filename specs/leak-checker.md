@@ -116,14 +116,14 @@ end 'main'
 42
 ```
 
-<!-- test: no-leak.union-arg-conditional-use -->
-### Union arguments cleaned up when conditionally used
-When a function receives two heap-allocated union arguments but only uses one
+<!-- test: no-leak.enum-arg-conditional-use -->
+### Enum arguments cleaned up when conditionally used
+When a function receives two heap-allocated enum arguments but only uses one
 based on a condition, the unused argument must still be freed by the caller.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
-union Op
+enum Op
 	addOp(left Integer, right Integer)
 	mulOp(left Integer, right Integer)
 end 'Op'

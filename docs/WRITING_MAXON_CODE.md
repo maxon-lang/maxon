@@ -53,7 +53,7 @@ if x > 0 'positive'
 end 'positive'
 ```
 
-This applies to: `if`, `else`, `while`, `for`, `match`, `try...otherwise` blocks, `function`, `type`, `union`, `enum`, `interface`, `extension`.
+This applies to: `if`, `else`, `while`, `for`, `match`, `try...otherwise` blocks, `function`, `type`, `enum`, `interface`, `extension`.
 
 ### 2. `else` MUST appear on the same line as its `end`
 
@@ -162,9 +162,9 @@ match color 'c'
 end 'c'
 ```
 
-### 11. Enum/union match MUST be exhaustive
+### 11. Enum match MUST be exhaustive
 
-Cover all cases. If using `default` on enum/union match, it MUST be `default throws` or `default panic`:
+Cover all cases. If using `default` on enum match, it MUST be `default throws` or `default panic`:
 
 ```maxon
 // WRONG (E2046)
@@ -187,10 +187,10 @@ match status 'handle'
 end 'handle'
 ```
 
-### 12. Union values CANNOT be compared with `==`
+### 12. Enum values with associated values CANNOT be compared with `==`
 
 ```maxon
-// WRONG (E3066)
+// WRONG (E3066) — enum with associated values
 if result1 == result2 'cmp' ... end 'cmp'
 
 // CORRECT — use match
@@ -314,10 +314,10 @@ Properties: `.rawValue`, `.name`, `.ordinal`, `.allCases`.
 Methods: `fromRawValue()`, `fromName()` (throw — use with `try`).
 `==` and `!=` work on enums.
 
-### Unions
+### Enums with Associated Values
 
 ```maxon
-union Result
+enum Result
 	success(value Integer)
 	failure(code Integer, message String)
 	pending
@@ -327,12 +327,12 @@ var r = Result.success(42)
 var f = Result.failure(404, message: "Not found")
 ```
 
-`==` does NOT work on unions. Use `match`.
+`==` does NOT work on enums with associated values. Use `match`.
 
-### Error unions
+### Error Enums
 
 ```maxon
-union FileError implements Error
+enum FileError implements Error
 	notFound
 	permissionDenied
 end 'FileError'
@@ -446,7 +446,7 @@ end 'map'
 
 Use `gives` (not `then`) for expressions.
 
-### Union destructuring
+### Enum destructuring
 
 ```maxon
 match result 'handle'
@@ -462,7 +462,7 @@ end 'handle'
 
 ```maxon
 // Define error type
-union FileError implements Error
+enum FileError implements Error
 	notFound
 	permissionDenied
 end 'FileError'
@@ -646,7 +646,6 @@ export function publicFunc() returns Count ...
 export type PublicType ...
 export typealias PublicAlias = int(0 to 100)
 export enum PublicEnum ...
-export union PublicUnion ...
 export var sharedState = 0
 ```
 
@@ -731,7 +730,7 @@ maxon.exe compile foo.maxon --mm-debug               # memory debug checks
 | Code | Meaning |
 |------|---------|
 | E2010 | Unexpected token (often: used `:` for type annotation) |
-| E2046 | `default` on enum/union match must use `throws` or `panic` |
+| E2046 | `default` on enum match must use `throws` or `panic` |
 | E3001 | No `main` function found |
 | E3002 | `main` must return `ExitCode` |
 | E3005 | Type mismatch |
@@ -741,7 +740,7 @@ maxon.exe compile foo.maxon --mm-debug               # memory debug checks
 | E3063 | Cannot pass `let` variable to mutating parameter |
 | E3064 | Pure function result must be used |
 | E3065 | Function result not used (use `let _ =` to discard) |
-| E3066 | Cannot compare union with `==` (use `match`) |
+| E3066 | Cannot compare enum with associated values using `==` (use `match`) |
 | E3067 | `let _ =` requires function call RHS |
 | E3068 | `is` requires struct (reference) types |
 | E3069 | `==` requires type to implement Equatable |

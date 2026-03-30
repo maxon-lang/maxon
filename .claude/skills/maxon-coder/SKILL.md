@@ -14,15 +14,15 @@ Read `docs/WRITING_MAXON_CODE.md` before writing any Maxon code. It contains man
 - NEVER use semicolons
 - NEVER use string concatenation (`+`) — use interpolation: `"hello {name}"`
 - NEVER use `null`/`nil`/`None` — use `try...otherwise`
-- EVERY block (if, else, while, for, match, try...otherwise, function, type, union, enum, interface, extension) MUST have a label and matching `end 'label'`
+- EVERY block (if, else, while, for, match, try...otherwise, function, type, enum, interface, extension) MUST have a label and matching `end 'label'`
 - `else` MUST appear on the same line as its `end`: `end 'check' else 'other'`
 - `main` MUST return `ExitCode` and MUST NOT throw
 - First argument is positional, all subsequent arguments MUST be named: `func(first, name: second)`
 - Collection `.get()` ALWAYS requires `try...otherwise`
 - Throwing functions MUST be called with `try`
 - Match arms MUST use bare case names (`red` not `Color.red`)
-- Enum/union match MUST be exhaustive; `default` on enum/union MUST use `throws` or `panic`
-- Union values CANNOT be compared with `==` — use `match`
+- Enum match MUST be exhaustive; `default` on enum MUST use `throws` or `panic`
+- Enum values with associated values CANNOT be compared with `==` — use `match`
 - Indentation uses tabs (not spaces)
 - Comments use `//`
 
@@ -56,14 +56,14 @@ enum Color
 	blue
 end 'Color'
 
-// Union
-union Result
+// Enum with associated values
+enum Result
 	success(value Offset)
 	failure(message String)
 end 'Result'
 
-// Error union
-union MyError implements Error
+// Error enum
+enum MyError implements Error
 	notFound
 	invalid
 end 'MyError'

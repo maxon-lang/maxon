@@ -110,9 +110,9 @@ destructor_Point(ptr):
         mm_decref(field_ptr)     // may trigger field's own destructor
 ```
 
-### Union Destructor
+### Enum Destructor (Associated Values)
 
-For unions with associated values that contain managed types:
+For enums with associated values that contain managed types:
 
 ```
 destructor_Result(ptr):
@@ -178,7 +178,7 @@ __ManagedMemory layout (32 bytes):
 | Arrays (`Array with T`) | Yes | Struct (count + `__ManagedMemory` pointer) with refcount |
 | ManagedLists (`__ManagedList with T`) | Yes | Doubly-linked list, each node is a separate allocation |
 | Tuples | Yes | Structs with `_0`, `_1`, etc. fields |
-| Unions (with associated values) | Yes | Tagged union with payload |
+| Enums (with associated values) | Yes | Tagged enum with payload |
 | Enums (no associated values) | No | Stored as integers |
 | Closures | Yes | Environment block is heap-allocated |
 

@@ -17,7 +17,7 @@ Map.get with try-otherwise block form returns correct String type.
 ```maxon
 typealias StringMap = Map with (String, String)
 
-union TestError implements Error
+enum TestError implements Error
 		notFound
 end 'TestError'
 
@@ -54,7 +54,7 @@ end 'Entry'
 
 typealias EntryMap = Map with (String, Entry)
 
-union TestError implements Error
+enum TestError implements Error
 		notFound
 end 'TestError'
 

@@ -338,7 +338,7 @@ public static partial class MaxonToStandardConversion {
 				} else if (exprValue is MaxonBool) {
 					AddToStringResult(EmitBoolToString((StdBool)valueMap[exprValue], block, varTypes));
 				} else if (exprValue is MaxonEnum enumValue) {
-					AddEnumToStringResult(EmitUnionToString(enumValue, valueMap, block, varTypes, result));
+					AddEnumToStringResult(EmitEnumToString(enumValue, valueMap, block, varTypes, result));
 				} else {
 					throw new InvalidOperationException(
 					  $"String {rdataPrefix}: unsupported expression type {exprValue.GetType().Name} for value %{exprValue.Id}");
@@ -681,14 +681,14 @@ public static partial class MaxonToStandardConversion {
 	/// Float-backed enums emit the raw float value.
 	/// String-backed enums emit the raw string value.
 	/// </summary>
-	private static (StdI64 Buffer, StdI64 Length, string? BufVarName) EmitUnionToString(
+	private static (StdI64 Buffer, StdI64 Length, string? BufVarName) EmitEnumToString(
 	  MaxonEnum enumValue,
 	  Dictionary<MaxonValue, StdValue> valueMap,
 	  MlirBlock<StandardOp> block,
 	  Dictionary<string, string> varTypes,
 	  MlirModule<StandardOp> result) {
 
-		if (!result.TypeDefs.TryGetValue(enumValue.TypeName, out var typeDef) || typeDef is not MlirUnionType enumType) {
+		if (!result.TypeDefs.TryGetValue(enumValue.TypeName, out var typeDef) || typeDef is not MlirEnumType enumType) {
 			throw new InvalidOperationException(
 			  $"String interpolation: enum type '{enumValue.TypeName}' not found in type definitions");
 		}
@@ -697,7 +697,7 @@ public static partial class MaxonToStandardConversion {
 		var stdValue = valueMap[enumValue];
 
 		if (enumType.BackingType is MlirStringBackingType or MlirCharBackingType) {
-			var r = EmitStringUnionToString(enumType, (StdI64)stdValue, block, result);
+			var r = EmitStringEnumToString(enumType, (StdI64)stdValue, block, result);
 			return (r.Buffer, r.Length, null);
 		}
 
@@ -705,11 +705,12 @@ public static partial class MaxonToStandardConversion {
 			return EmitF64ToString((StdF64)stdValue, block, varTypes);
 		}
 
-		// Constants interpolate as their backing value; enums interpolate as their case name
-		if (enumType is MlirEnumType) {
+		// Enums with explicit backing values interpolate as their raw value;
+		// auto-incremented enums interpolate as their case name.
+		if (enumType.HasExplicitBackingValues && !enumType.HasAssociatedValues) {
 			return EmitI64ToString((StdI64)stdValue, block, varTypes);
 		}
-		var r2 = EmitUnionCaseNameToString(enumType, (StdI64)stdValue, block, result);
+		var r2 = EmitEnumCaseNameToString(enumType, (StdI64)stdValue, block, result);
 		return (r2.Buffer, r2.Length, null);
 	}
 
@@ -717,8 +718,8 @@ public static partial class MaxonToStandardConversion {
 	/// Emits code to convert an enum ordinal to its case name string.
 	/// Generates a chain of select operations mapping each ordinal to its case name.
 	/// </summary>
-	private static (StdI64 Buffer, StdI64 Length) EmitUnionCaseNameToString(
-	  MlirUnionType enumType,
+	private static (StdI64 Buffer, StdI64 Length) EmitEnumCaseNameToString(
+	  MlirEnumType enumType,
 	  StdI64 ordinalValue,
 	  MlirBlock<StandardOp> block,
 	  MlirModule<StandardOp> result) {
@@ -754,8 +755,8 @@ public static partial class MaxonToStandardConversion {
 	/// Generates a chain of select operations: for each case, compares ordinal and selects
 	/// the matching string. Falls back to "?" for unknown ordinals.
 	/// </summary>
-	private static (StdI64 Buffer, StdI64 Length) EmitStringUnionToString(
-	  MlirUnionType enumType,
+	private static (StdI64 Buffer, StdI64 Length) EmitStringEnumToString(
+	  MlirEnumType enumType,
 	  StdI64 ordinalValue,
 	  MlirBlock<StandardOp> block,
 	  MlirModule<StandardOp> result) {
@@ -832,8 +833,8 @@ public static partial class MaxonToStandardConversion {
 	}
 
 	/// Converts an int-backed enum raw value to its ordinal via a select chain.
-	private static StdI64 EmitIntUnionToOrdinal(
-	  MlirUnionType enumType, StdI64 rawValue, MlirBlock<StandardOp> block) {
+	private static StdI64 EmitIntEnumToOrdinal(
+	  MlirEnumType enumType, StdI64 rawValue, MlirBlock<StandardOp> block) {
 		var fallbackOrd = new StdConstI64Op(0);
 		block.AddOp(fallbackOrd);
 		StdI64 currentOrd = fallbackOrd.Result;
@@ -853,8 +854,8 @@ public static partial class MaxonToStandardConversion {
 	}
 
 	/// Converts a float-backed enum raw value to its ordinal via a select chain.
-	private static StdI64 EmitFloatUnionToOrdinal(
-	  MlirUnionType enumType, StdF64 rawValue, MlirBlock<StandardOp> block) {
+	private static StdI64 EmitFloatEnumToOrdinal(
+	  MlirEnumType enumType, StdF64 rawValue, MlirBlock<StandardOp> block) {
 		var fallbackOrd = new StdConstI64Op(0);
 		block.AddOp(fallbackOrd);
 		StdI64 currentOrd = fallbackOrd.Result;
@@ -874,10 +875,10 @@ public static partial class MaxonToStandardConversion {
 	}
 
 	/// Converts an int-backed enum raw value to its zero-based declaration position via a select chain.
-	/// Unlike EmitIntUnionToOrdinal (which returns MlirEnumCase.Ordinal, used for internal name/rawValue lookup),
+	/// Unlike EmitIntEnumToOrdinal (which returns MlirEnumCase.Ordinal, used for internal name/rawValue lookup),
 	/// this returns the case's index in the Cases list — the true declaration position.
 	private static StdI64 EmitIntEnumToPositionIndex(
-	  MlirUnionType enumType, StdI64 rawValue, MlirBlock<StandardOp> block) {
+	  MlirEnumType enumType, StdI64 rawValue, MlirBlock<StandardOp> block) {
 		var fallbackOrd = new StdConstI64Op(0);
 		block.AddOp(fallbackOrd);
 		StdI64 currentOrd = fallbackOrd.Result;
@@ -899,7 +900,7 @@ public static partial class MaxonToStandardConversion {
 
 	/// Converts a float-backed enum raw value to its zero-based declaration position via a select chain.
 	private static StdI64 EmitFloatEnumToPositionIndex(
-	  MlirUnionType enumType, StdF64 rawValue, MlirBlock<StandardOp> block) {
+	  MlirEnumType enumType, StdF64 rawValue, MlirBlock<StandardOp> block) {
 		var fallbackOrd = new StdConstI64Op(0);
 		block.AddOp(fallbackOrd);
 		StdI64 currentOrd = fallbackOrd.Result;
@@ -920,8 +921,8 @@ public static partial class MaxonToStandardConversion {
 	}
 
 	/// Looks up an enum case name by ordinal via a select chain. Returns (buffer, length).
-	private static (StdI64 Buffer, StdI64 Length) EmitUnionNameLookup(
-	  MlirUnionType enumType, StdI64 ordinalValue,
+	private static (StdI64 Buffer, StdI64 Length) EmitEnumNameLookup(
+	  MlirEnumType enumType, StdI64 ordinalValue,
 	  MlirBlock<StandardOp> block, MlirModule<StandardOp> result) {
 		var fallbackLabel = $"__enumname_fallback_{NextRdataId()}";
 		var (currentBuf, currentLen) = EmitRdataLiteral("?", fallbackLabel, block, result);
@@ -1011,7 +1012,7 @@ public static partial class MaxonToStandardConversion {
 		EmitStructFieldStore(block, totalLenOp.Result, tempName, ManagedFieldCapacity, MlirType.I64, varTypes);
 		EmitStructFieldStore(block, lhsElemSize, tempName, ManagedFieldElementSize, MlirType.I64, varTypes);
 
-		// For managed elements (structs, unions): incref each copied element.
+		// For managed elements (structs, enums): incref each copied element.
 		// The memcpy above copied raw heap pointers without adjusting refcounts.
 		if (op.IsStructElement) {
 			var managedPtr = (StdI64)EmitLoad(block, tempName, varTypes);
@@ -1081,7 +1082,7 @@ public static partial class MaxonToStandardConversion {
 		EmitStructFieldStore(block, sliceLenOp.Result, tempName, ManagedFieldCapacity, MlirType.I64, varTypes);
 		EmitStructFieldStore(block, srcElemSize, tempName, ManagedFieldElementSize, MlirType.I64, varTypes);
 
-		// For managed elements (structs, unions): incref each copied element.
+		// For managed elements (structs, enums): incref each copied element.
 		// The memcpy above copied raw heap pointers without adjusting refcounts.
 		if (op.IsStructElement) {
 			var managedPtr = (StdI64)EmitLoad(block, tempName, varTypes);

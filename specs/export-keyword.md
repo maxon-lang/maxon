@@ -11,7 +11,7 @@ category: infrastructure
 
 ### Export Keyword
 
-All declarations — functions, types, unions, typealiases, and top-level variables — are file-scoped by default. The `export` keyword makes them visible to other modules. Without `export`, a declaration can only be used within the file where it is defined.
+All declarations — functions, types, enums, typealiases, and top-level variables — are file-scoped by default. The `export` keyword makes them visible to other modules. Without `export`, a declaration can only be used within the file where it is defined.
 
 ```text
 export function publicApi() returns Integer
@@ -36,19 +36,19 @@ export type Point
 end 'Point'
 ```
 
-### Exporting Unions
+### Exporting Enums
 
-Unions follow the same visibility rules as types:
+Enums follow the same visibility rules as types:
 
 ```text
-export union Color
+export enum Color
   red
   green
   blue
 end 'Color'
 ```
 
-Without `export`, a union is only visible within its declaring file.
+Without `export`, a enum is only visible within its declaring file.
 
 ### Exporting Type Aliases
 
@@ -378,7 +378,7 @@ error E2004: main.maxon:2:10: Undefined variable 'InternalPoint'
 <!-- test: exported-enum-cross-file -->
 ```maxon
 // --- file: color.maxon
-export union Color
+export enum Color
 	red
 	green
 	blue
@@ -401,7 +401,7 @@ end 'main'
 <!-- test: error.non-exported-enum-cross-file -->
 ```maxon
 // --- file: status.maxon
-union InternalStatus
+enum InternalStatus
 	ok
 	err
 end 'InternalStatus'
@@ -532,7 +532,7 @@ error E2004: main.maxon:2:10: Undefined variable 'secret'
 
 <!-- test: non-exported-enum-same-file -->
 ```maxon
-union Direction
+enum Direction
 	up
 	down
 end 'Direction'

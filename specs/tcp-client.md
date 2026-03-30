@@ -12,7 +12,7 @@ TCP client networking with automatic resource cleanup via the managed memory sys
 
 **Types:**
 - `TcpClient` — TCP client connection that auto-closes when it goes out of scope
-- `NetworkError` — Error union for network operations
+- `NetworkError` — Error enum for network operations
 - `NetworkPort` — Typed range for valid port numbers (1 to 65535)
 
 **NetworkError cases:**

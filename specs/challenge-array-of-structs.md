@@ -80,7 +80,7 @@ function main() returns ExitCode
 	items.push(Item{color: Color.green})
 	items.push(Item{color: Color.blue})
 
-	// Verify union values are stored correctly (not pointers)
+	// Verify enum values are stored correctly (not pointers)
 	var item0 = try items.get(0) otherwise Item{color: Color.blue}
 	var item1 = try items.get(1) otherwise Item{color: Color.blue}
 	var item2 = try items.get(2) otherwise Item{color: Color.red}
@@ -96,7 +96,7 @@ end 'main'
 <!-- test: array-of-structs-enum-for-in-loop -->
 ```maxon
 // Regression test: enum match works in for-in loop over struct array
-union Status
+enum Status
 	pending
 	active
 	done

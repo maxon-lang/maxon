@@ -4,7 +4,7 @@ using MaxonSharp.Compiler.Mlir.Dialects;
 namespace MaxonSharp.Compiler.Mlir.Conversion;
 
 public static partial class MaxonToStandardConversion {
-  private static MlirType ResolveEnumBackingMlirType(MlirUnionType enumType) {
+  private static MlirType ResolveEnumBackingMlirType(MlirEnumType enumType) {
     if (enumType.BackingType == MlirType.F64) return MlirType.F64;
     if (enumType.BackingType is MlirStringBackingType or MlirCharBackingType) return MlirType.I64;
     if (enumType.BackingType == MlirType.I64 || enumType.BackingType == null) return MlirType.I64;
@@ -105,7 +105,7 @@ public static partial class MaxonToStandardConversion {
     FlattenCallArgs(args, calleeFunc, block, valueMap, varTypes, newArgs, callee, fnEnvVarNames, argVarNames);
 
     // Check if callee returns an associated-value enum (passed as heap pointer)
-    bool calleeRetAssocEnum = calleeFunc.ReturnType is MlirUnionType cret && cret.HasAssociatedValues;
+    bool calleeRetAssocEnum = calleeFunc.ReturnType is MlirEnumType cret && cret.HasAssociatedValues;
 
     // Emit call or try_call
     StdValue? callResult = calleeRetStructType != null || calleeRetAssocEnum
@@ -139,7 +139,7 @@ public static partial class MaxonToStandardConversion {
             : new StdHeapPtr(callResult!.Id, calleeRetStructType.Name, retVarName);
       } else if (calleeRetAssocEnum && callResult != null) {
         // Associated-value enum return: store heap pointer (no unpacking needed)
-        var retEnumType = (MlirUnionType)calleeFunc.ReturnType!;
+        var retEnumType = (MlirEnumType)calleeFunc.ReturnType!;
         var retVarName = temps.CreateTemp("callret", result.Id, retEnumType.Name, OwnershipFlags.Orphan | OwnershipFlags.CallReturn);
 
         if (isTryCall) {
@@ -206,7 +206,7 @@ public static partial class MaxonToStandardConversion {
     if (retOp.Value != null
         && valueMap.TryGetValue(retOp.Value, out var retSv) && retSv is StdHeapPtr retHp
         && typeDefs.TryGetValue(retHp.TypeName, out var enumRetTypeDef)
-        && enumRetTypeDef is MlirUnionType enumRetType && enumRetType.HasAssociatedValues) {
+        && enumRetTypeDef is MlirEnumType enumRetType && enumRetType.HasAssociatedValues) {
       bool isEnumParam = _structParamNames != null && _structParamNames.Contains(retHp.VarName!)
             && retHp.VarName != "self";
       bool isEnumManagedTemp = temps.IsTempManaged(retHp.VarName!)
@@ -270,7 +270,7 @@ public static partial class MaxonToStandardConversion {
     // Check if this is an associated-value error enum
     if (valueMap.TryGetValue(throwOp.ErrorValue, out var throwSv) && throwSv is StdHeapPtr throwHp
         && typeDefs.TryGetValue(throwOp.ErrorTypeName, out var errorTypeDef)
-        && errorTypeDef is MlirUnionType errorEnumType && errorEnumType.HasAssociatedValues) {
+        && errorTypeDef is MlirEnumType errorEnumType && errorEnumType.HasAssociatedValues) {
       // Error return expects a heap pointer in RDX — already a heap pointer
       var heapPtr = EmitLoad(block, throwHp.VarName!, varTypes);
       block.AddOp(new StdErrorReturnOp(heapPtr));
@@ -296,15 +296,15 @@ public static partial class MaxonToStandardConversion {
     // Intercept synthetic enum static method calls
     if (tryCallOp.Callee.StartsWith("__enum_fromRawValue:")) {
       var enumTypeName = tryCallOp.Callee["__enum_fromRawValue:".Length..];
-      var enumType = (MlirUnionType)typeDefs[enumTypeName];
-      LowerUnionFromRawValue(tryCallOp, enumType, block, valueMap, varTypes);
+      var enumType = (MlirEnumType)typeDefs[enumTypeName];
+      LowerEnumFromRawValue(tryCallOp, enumType, block, valueMap, varTypes);
       // No temp release needed — scope handles cleanup
       return;
     }
     if (tryCallOp.Callee.StartsWith("__enum_fromName:")) {
       var enumTypeName = tryCallOp.Callee["__enum_fromName:".Length..];
-      var enumType = (MlirUnionType)typeDefs[enumTypeName];
-      LowerUnionFromName(tryCallOp, enumType, block, valueMap, varTypes, temps: temps);
+      var enumType = (MlirEnumType)typeDefs[enumTypeName];
+      LowerEnumFromName(tryCallOp, enumType, block, valueMap, varTypes, temps: temps);
       // No temp release needed — scope handles cleanup
       return;
     }

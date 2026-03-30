@@ -15,7 +15,7 @@ maxon-selfhosted/
     Parser.maxon                       Recursive descent parser -> MlirModule (maxon ops)
     SemanticCheck.maxon                Semantic validation pass
     MlirPipeline.maxon                 SSA value ID management
-    ErrorCode.maxon                    Error codes and CompileError union
+    ErrorCode.maxon                    Error codes and CompileError enum
     Logger.maxon                       Category-based logging system
     MaxonArgs.maxon                    CLI argument parsing
     Project.maxon                      Project type (central compilation context)
@@ -28,20 +28,20 @@ maxon-selfhosted/
 
     MLIR/
       Core/
-        MlirOp.maxon                   MlirOp wrapper union (9 dialect variants)
+        MlirOp.maxon                   MlirOp wrapper enum (9 dialect variants)
         MlirModule.maxon               Top-level module container
         MlirFunction.maxon             Named function with body region
         MlirBlock.maxon                Basic block within a region
         MlirRegion.maxon               Ordered list of blocks
         MlirPrinter.maxon              MLIR text format printer
       Dialects/
-        MaxonDialect.maxon             MaxonOp union (high-level IR, 16 variants)
-        ArithDialect.maxon             ArithOp union (typed arithmetic, const/unary/binary)
-        CfDialect.maxon                CfOp union (block terminators: br, condBr)
-        FuncDialect.maxon              FuncOp union (call, ret, param, funcRef, etc.)
-        MemRefDialect.maxon            MemRefOp union (storeSlot, loadSlot)
-        RuntimeDialect.maxon           RuntimeOp union (printLiteral, printInt)
-        SysDialect.maxon               SysOp union (syscall, iatCall, osExit, osWrite, etc.)
+        MaxonDialect.maxon             MaxonOp enum (high-level IR, 16 variants)
+        ArithDialect.maxon             ArithOp enum (typed arithmetic, const/unary/binary)
+        CfDialect.maxon                CfOp enum (block terminators: br, condBr)
+        FuncDialect.maxon              FuncOp enum (call, ret, param, funcRef, etc.)
+        MemRefDialect.maxon            MemRefOp enum (storeSlot, loadSlot)
+        RuntimeDialect.maxon           RuntimeOp enum (printLiteral, printInt)
+        SysDialect.maxon               SysOp enum (syscall, iatCall, osExit, osWrite, etc.)
       Passes/
         LowerMaxonToArith.maxon        MaxonOp -> arith/cf/func/memref lowering
         LowerMaxonToSysAndRuntime.maxon MaxonOp -> runtime/sys lowering
@@ -62,11 +62,11 @@ maxon-selfhosted/
         RegisterManager.maxon          Cross-platform greedy linear-scan register allocator
         StdOpHelpers.maxon             Shared helpers for mid->target conversion
       X86/
-        X64Dialect.maxon               X64Op union (85 variants), X64Register enum
+        X64Dialect.maxon               X64Op enum (85 variants), X64Register enum
         MidToX64Conversion.maxon       Mid-level -> X64Op lowering + register allocation
         X64CodeEmitter.maxon           X64Op -> machine code bytes
       Arm64/
-        Arm64Dialect.maxon             Arm64Op union (75 variants), Arm64Register enum
+        Arm64Dialect.maxon             Arm64Op enum (75 variants), Arm64Register enum
         MidToArm64Conversion.maxon     Mid-level -> Arm64Op lowering + register allocation
         Arm64CodeEmitter.maxon         Arm64Op -> machine code bytes
       Windows/
@@ -160,10 +160,10 @@ The parser emits a flat array of `MlirOp` operations directly -- there is no int
 
 ### Key Design Decision: Multi-Dialect IR
 
-Instead of separate IR types per stage (like a `MaxonOp[]` then a `StdOp[]`), the compiler uses a single `MlirOp` wrapper union that dispatches across 9 dialect variants:
+Instead of separate IR types per stage (like a `MaxonOp[]` then a `StdOp[]`), the compiler uses a single `MlirOp` wrapper enum that dispatches across 9 dialect variants:
 
 ```maxon
-export union MlirOp
+export enum MlirOp
   maxon(op MaxonOp)
   arith(op ArithOp)
   cf(op CfOp)
@@ -212,7 +212,7 @@ Currently the compiler implements Phases 1, 2, 3, and 7 (with 5-6 partially merg
 
 ## Dialects
 
-Each dialect is a Maxon `union` type (or a union of sub-unions). Operations carry SSA `ValueId` references for data flow.
+Each dialect is a Maxon `enum` type (or an enum of sub-enums). Operations carry SSA `ValueId` references for data flow.
 
 ### Maxon Dialect (MaxonDialect.maxon)
 
@@ -235,7 +235,7 @@ The Maxon dialect uses enums (`BinOpKind`, `UnaryOpKind`, `CmpPredicate`) to col
 
 ### Arith Dialect (ArithDialect.maxon)
 
-Target-independent typed arithmetic. Structured as a union of three sub-unions:
+Target-independent typed arithmetic. Structured as an enum of three sub-enums:
 
 - **ArithConst**: `constI64`, `constF64`
 - **ArithUnaryOp**: `negI64`, `bitNotI64`, `fpToSiI64`, `siToFpF64`
@@ -376,7 +376,7 @@ Each level calls the next-higher precedence level, then loops checking for its o
 
 **3. Maxon Dialect (MaxonDialect.maxon)**
 
-If the operator fits an existing enum (`BinOpKind`, `UnaryOpKind`, `CmpPredicate`), add a new enum case. Otherwise add a new variant to the `MaxonOp` union.
+If the operator fits an existing enum (`BinOpKind`, `UnaryOpKind`, `CmpPredicate`), add a new enum case. Otherwise add a new variant to the `MaxonOp` enum.
 
 **4. Maxon-to-Mid Lowering (LowerMaxonToArith.maxon / LowerMaxonToSysAndRuntime.maxon)**
 
@@ -424,7 +424,7 @@ Example: adding a `while` loop.
 ### Adding a New Target
 
 1. Create a new directory under `Targets/` (e.g., `Targets/Riscv/`)
-2. Define the target dialect: `RiscvDialect.maxon` with a `RiscvOp` union and register enum
+2. Define the target dialect: `RiscvDialect.maxon` with a `RiscvOp` enum and register enum
 3. Add a new variant to `MlirOp` in `MLIR/Core/MlirOp.maxon`
 4. Write the lowering pass: `MidToRiscvConversion.maxon` mapping mid-level ops -> `RiscvOp`
 5. Write the code emitter: `RiscvCodeEmitter.maxon` converting `RiscvOp` -> machine code bytes
@@ -437,7 +437,7 @@ Example: adding a `while` loop.
 ### Adding a New Semantic Check
 
 1. **SemanticCheck.maxon**: Add validation logic in `runSemanticChecks`. Iterate through the `MlirModule` functions and blocks matching on relevant op variants.
-2. **ErrorCode.maxon**: Add a new error code and add a variant to the `CompileError` union if needed.
+2. **ErrorCode.maxon**: Add a new error code and add a variant to the `CompileError` enum if needed.
 
 ### Adding a Spec Test to the Self-Hosted Runner
 
@@ -466,5 +466,5 @@ maxon build maxon-selfhosted
 
 ## Known Constraints and Gotchas
 
-- **Match exhaustiveness**: Maxon's `match` on unions requires exhaustive case listing -- every variant must be listed even if most are no-ops. This makes semantic check code verbose.
+- **Match exhaustiveness**: Maxon's `match` on enums requires exhaustive case listing -- every variant must be listed even if most are no-ops. This makes semantic check code verbose.
 - **Single-line match arms**: Match arms can only contain a single expression/statement.

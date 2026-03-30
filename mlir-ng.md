@@ -18,7 +18,7 @@ The Maxon compiler uses a progressive lowering pipeline built on the MLIR infras
 ### 2.1 `MaxHL` (Maxon High-Level Dialect)
 Preserves the source code's intent. Code here is not heavily optimized; it exists to run strict semantic verification passes.
 
-* **Types**: `!maxhl.ranged<base, min, max>` (e.g., `!maxhl.ranged<i64, 0, 150>`), `!maxhl.union<cases...>`, `!maxhl.enum<...>`, `!maxhl.struct<Name>`.
+* **Types**: `!maxhl.ranged<base, min, max>` (e.g., `!maxhl.ranged<i64, 0, 150>`), `!maxhl.enum<cases...>`, `!maxhl.enum<...>`, `!maxhl.struct<Name>`.
 * **Op: maxhl.move**: Marks a variable as moved (transferred ownership).
 * **Op: maxhl.clone**: Explicit deep copy of a `Cloneable` type (invoked via `.clone()`).
 * **Op: maxhl.assert_range**: Emits a runtime panic if an expression falls out of bounds.
@@ -28,10 +28,10 @@ Preserves the source code's intent. Code here is not heavily optimized; it exist
 ### 2.2 `MaxMid` (Maxon Mid-Level Dialect)
 The bridge between Maxon semantics and generic compiler concepts. Maxon-specific syntax sugar is removed.
 
-* **Types**: `!maxmid.ptr<T>` (heap references — all structs are reference types), `!maxmid.tagged_union<tag_type, payload_type>`.
+* **Types**: `!maxmid.ptr<T>` (heap references — all structs are reference types), `!maxmid.tagged_enum<tag_type, payload_type>`.
 * **Op: maxmid.alloc**: Heap allocation.
 * **Op: maxmid.retain / maxmid.release**: Reference counting ops for scope-based automatic cleanup.
-* **Op: maxmid.construct_tagged**: Lowers union cases and errors to memory layouts (0=ok, 1=err tag).
+* **Op: maxmid.construct_tagged**: Lowers enum cases and errors to memory layouts (0=ok, 1=err tag).
 * **Op: maxmid.extract_payload**: Safe extraction post-check.
 
 ### 2.3 `MaxLIR` (Maxon Low-Level IR)
@@ -60,7 +60,7 @@ These passes enforce the language reference rules before any code is modified.
 * **`-maxon-alias-analysis`**: Validates that struct assignments create references (aliases) and that `.clone()` is used for explicit deep copies when needed.
 
 ### Phase 2: Mid-Level Lowering (`MaxHL` to `MaxMid` & Core MLIR)
-* **`-maxon-lower-errors`**: Converts `throws ErrorType` functions to return a `!maxmid.tagged_union`. Lowers `maxhl.try` into conditional branches.
+* **`-maxon-lower-errors`**: Converts `throws ErrorType` functions to return a `!maxmid.tagged_enum`. Lowers `maxhl.try` into conditional branches.
 * **`-maxon-lower-match`**: Flattens `maxhl.match` into sequences of `scf.if` and `cf.switch`, handling range patterns like `1..=5`.
 * **`-maxon-inject-arc`**: Inserts `maxmid.release` at block exits for heap allocations and `maxmid.retain` for aliased references.
 * **`-maxon-lower-closures`**: Lambda lifting for closures, capturing variables by reference.

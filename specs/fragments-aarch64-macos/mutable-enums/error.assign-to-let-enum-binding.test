@@ -1,0 +1,22 @@
+// Test: error.assign-to-let-union-binding
+typealias Integer = int(i64.min to i64.max)
+
+enum Box
+  empty
+  full(value Integer)
+end 'Box'
+
+function main() returns ExitCode
+  let b = Box.full(10)
+  match b 'bad'
+    full(value) then value = 42
+    empty then return 0
+  end 'bad'
+  return 0
+end 'main'
+---
+MaxoncStderr: ```
+error E2013: specs/fragments/mutable-unions/error.assign-to-let-union-binding.test:12:22: cannot assign to immutable variable: 'value'
+```
+---
+---

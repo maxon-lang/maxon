@@ -1,7 +1,7 @@
 ---
 feature: array-managed-multi-call-lifecycle
 status: stable
-keywords: [array, struct, union, managed, refcount, push, reassign, lifecycle]
+keywords: [array, struct, enum, managed, refcount, push, reassign, lifecycle]
 category: memory
 ---
 # Array of Managed Structs: Multi-Call Lifecycle
@@ -22,7 +22,7 @@ When an array of managed structs is populated across multiple function calls, an
 Simulates the pattern from the query engine: recordDependency pushes elements
 between clearDepsFor calls.
 ```maxon
-export union QueryKey
+export enum QueryKey
 		sourceFile(path String)
 		tokens(path String)
 		allModule
@@ -86,7 +86,7 @@ then reassign the array field so the old array's destructor must clean up all el
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
-export union Tag
+export enum Tag
 		label(name String)
 		index(n Integer)
 end 'Tag'
@@ -133,7 +133,7 @@ end 'main'
 ### Interleaved push and clear cycles on same array field
 Multiple rounds of push-then-reassign, each round the old array is freed.
 ```maxon
-export union Key
+export enum Key
 		file(path String)
 		module
 end 'Key'

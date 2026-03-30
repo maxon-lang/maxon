@@ -28,7 +28,7 @@ var count = Color.allCases.count()  // 3
 
 This works with all backing types (simple, int, float, string, char). The array always contains the cases in their declaration order.
 
-`.allCases` is not available on unions with associated values.
+`.allCases` is not available on enums with associated values.
 
 ## Tests
 
@@ -198,22 +198,24 @@ end 'main'
 1
 ```
 
-### Error: allCases on Union
+### Error: allCases on Enum with Associated Values
 
-<!-- test: enum-allcases.error-union -->
+<!-- test: enum-allcases.error-enum -->
 ```maxon
-union Shape
-	circle
-	square
-end 'Shape'
+typealias Integer = int(i64.min to i64.max)
+
+enum Container
+	empty
+	value(n Integer)
+end 'Container'
 
 function main() returns ExitCode
-	for s in Shape.allCases 'loop'
+	for s in Container.allCases 'loop'
 		print("x")
 	end 'loop'
 	return 0
 end 'main'
 ```
 ```maxoncstderr
-error E4006: specs/fragments/enum-allcases/enum-allcases.error-union.test:8:11: allCases is not available on union types
+error E4006: specs/fragments/enum-allcases/enum-allcases.error-enum.test:10:11: allCases is not available on enums with associated values
 ```

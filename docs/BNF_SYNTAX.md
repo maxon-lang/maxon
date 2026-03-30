@@ -49,7 +49,7 @@ KEYWORD       = 'and' | 'as' | 'async' | 'await' | 'bool' | 'break' | 'byte' | '
               | 'match' | 'not' | 'of' | 'or' | 'otherwise' | 'panic'
               | 'return' | 'returns' | 'self' | 'Self' | 'shl' | 'shr'
               | 'skip' | 'static' | 'then' | 'throw' | 'throws' | 'to'
-              | 'true' | 'try' | 'type' | 'typealias' | 'union' | 'upto'
+              | 'true' | 'try' | 'type' | 'typealias' | 'upto'
               | 'uses' | 'var' | 'where' | 'while' | 'with' | 'xor'
 ```
 
@@ -147,7 +147,6 @@ top_level_decl
               = function_decl
               | extern_decl
               | type_decl
-              | union_decl
               | enum_decl
               | interface_decl
               | extension_block
@@ -232,37 +231,20 @@ static_method_decl
                 'end' LABEL
 ```
 
-### 3.4 Union Declaration
+### 3.4 Enum Declaration
 
 ```
-union_decl    = export_prefix 'union' IDENTIFIER [ backing_type ]
+enum_decl     = export_prefix 'enum' IDENTIFIER [ backing_type ]
                 [ conformance_clause ] NEWLINE
-                { union_case NEWLINE }
+                { enum_case NEWLINE }
                 { method_decl }
                 'end' LABEL
 
 backing_type  = 'int' | 'float' | 'String'
 
-union_case    = IDENTIFIER                                          (* simple case *)
+enum_case     = IDENTIFIER                                          (* simple case *)
               | IDENTIFIER '=' raw_value                            (* raw-value case *)
               | IDENTIFIER '(' assoc_fields ')'                     (* associated-value case *)
-
-raw_value     = [ '-' ] INTEGER
-              | [ '-' ] FLOAT
-              | STRING
-              | CHARACTER
-
-```
-
-### 3.5 Enum Declaration
-
-```
-enum_decl     = export_prefix 'enum' IDENTIFIER NEWLINE
-                { enum_case NEWLINE }
-                'end' LABEL
-
-enum_case     = IDENTIFIER                  (* auto-increment from 0; integer-backed only *)
-              | IDENTIFIER '=' raw_value    (* explicit value *)
 
 raw_value     = [ '-' ] INTEGER
               | [ '-' ] FLOAT
@@ -273,7 +255,7 @@ assoc_fields  = assoc_field { ',' assoc_field }
 assoc_field   = IDENTIFIER type_ref
 ```
 
-### 3.6 Interface Declaration
+### 3.5 Interface Declaration
 
 ```
 interface_decl
@@ -290,7 +272,7 @@ interface_method
                 '(' [ param_list ] ')' [ 'returns' type_ref ] [ throws_clause ]
 ```
 
-### 3.7 Extension Block
+### 3.6 Extension Block
 
 ```
 extension_block
@@ -299,7 +281,7 @@ extension_block
                 'end' LABEL
 ```
 
-### 3.8 Type Alias Declaration
+### 3.7 Type Alias Declaration
 
 ```
 typealias_decl
@@ -338,7 +320,7 @@ generic_type  = IDENTIFIER 'with' type_args
 tuple_type    = '(' type_ref ',' type_ref { ',' type_ref } ')'
 ```
 
-### 3.9 Top-Level Variables
+### 3.8 Top-Level Variables
 
 ```
 top_level_var = export_prefix 'var' IDENTIFIER '=' expression NEWLINE
@@ -506,7 +488,7 @@ match_stmt    = 'match' expression LABEL NEWLINE
 
 match_arm     = match_patterns 'then' match_action
               | 'default' 'then' match_action
-              | 'default' 'throws' expression                     (* enum/union: throws error for unmatched cases *)
+              | 'default' 'throws' expression                     (* enum: throws error for unmatched cases *)
               | 'default' 'panic' '(' STRING ')'                  (* terminates with error message *)
 
 match_action  = statement [ 'and' 'fallthrough' ]
@@ -527,7 +509,7 @@ literal_pattern
               | CHARACTER
               | BOOL
 
-case_pattern  = IDENTIFIER [ '(' binding_list ')' ]              (* bare case name; bindings for union associated values *)
+case_pattern  = IDENTIFIER [ '(' binding_list ')' ]              (* bare case name; bindings for enum associated values *)
 
 binding_list  = IDENTIFIER { ',' IDENTIFIER }                    (* '_' discards individual bindings *)
 
@@ -542,7 +524,7 @@ case_range_pattern
               | IDENTIFIER 'upto' IDENTIFIER            (* exclusive upper case range — bare case names *)
 ```
 
-Match arms for enum and union types use **bare case names** (e.g., `red`, `pending`), not
+Match arms for enum types use **bare case names** (e.g., `red`, `pending`), not
 qualified `Type.case` syntax. Using a qualified name such as `Color.red` in a match arm is
 a compile error (E3075).
 
@@ -660,7 +642,7 @@ primary       = INTEGER
               | paren_expr
               | struct_literal
               | ranged_construction
-              | union_access
+              | enum_access
               | static_access
               | closure
               | match_expr
@@ -687,8 +669,8 @@ field_init    = IDENTIFIER ':' expression
 ranged_construction
               = IDENTIFIER '{' expression '}'               (* e.g., Port{8080} *)
 
-union_access  = IDENTIFIER '.' IDENTIFIER [ '(' [ arg_list ] ')' ]
-              | IDENTIFIER '.' 'allCases'                            (* enum only: Array of all cases *)
+enum_access   = IDENTIFIER '.' IDENTIFIER [ '(' [ arg_list ] ')' ]
+              | IDENTIFIER '.' 'allCases'                            (* Array of all cases *)
 
 static_access = IDENTIFIER '.' IDENTIFIER [ '(' [ arg_list ] ')' ]
 
@@ -713,7 +695,7 @@ match_expr    = 'match' expression LABEL NEWLINE
 match_expr_arm
               = match_patterns 'gives' expression
               | 'default' 'gives' expression
-              | 'default' 'throws' expression                     (* enum/union: throws error for unmatched cases *)
+              | 'default' 'throws' expression                     (* enum: throws error for unmatched cases *)
               | 'default' 'panic' '(' STRING ')'                  (* terminates with error message *)
 ```
 
@@ -777,11 +759,11 @@ try <expr> otherwise 'label'  ...  end 'label'
 else 'label'  ...  end 'label'
 ```
 
-Type, union, enum, interface, and extension bodies also end with a matching label:
+Type, enum, interface, and extension bodies also end with a matching label:
 
 ```
 type Point  ...  end 'Point'
-union Color  ...  end 'Color'
+enum Color  ...  end 'Color'
 enum Status  ...  end 'Status'
 interface Hashable  ...  end 'Hashable'
 extension Iterable  ...  end 'Iterable'

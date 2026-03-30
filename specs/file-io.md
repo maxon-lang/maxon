@@ -16,15 +16,15 @@ File I/O operations using the `File` type. All File methods take a `FilePath` pa
 File operations use function-specific error types:
 
 ```maxon
-union FileReadError implements Error
+enum FileReadError implements Error
 	notFound
 end 'FileReadError'
 
-union FileWriteError implements Error
+enum FileWriteError implements Error
 	failed
 end 'FileWriteError'
 
-union FileDeleteError implements Error
+enum FileDeleteError implements Error
 	notFound
 end 'FileDeleteError'
 ```

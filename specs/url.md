@@ -56,7 +56,7 @@ print(resolved.toString())  // "http://a/b/g"
 ### Error Types
 
 ```text
-union URLError implements Error
+enum URLError implements Error
   invalidScheme
   invalidHost
   invalidPort

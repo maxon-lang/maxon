@@ -351,7 +351,7 @@ The highest-level dialect, representing Maxon language constructs directly. The 
 
 **Expression System:**
 
-The Maxon dialect uses a `MaxonExpr` discriminated union to represent expressions that may involve deferred evaluation:
+The Maxon dialect uses a `MaxonExpr` enum to represent expressions that may involve deferred evaluation:
 
 ```csharp
 public abstract record MaxonExpr {

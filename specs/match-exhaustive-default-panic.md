@@ -9,7 +9,7 @@ category: control-flow
 
 ## Documentation
 
-All match statements and expressions must be exhaustive. For enum and union types, this means every case must be explicitly covered, or a `default throws` / `default panic` must be provided. For other types (integers, strings, floats, characters), a `default` arm is always required since all values cannot be enumerated.
+All match statements and expressions must be exhaustive. For enum and enum types, this means every case must be explicitly covered, or a `default throws` / `default panic` must be provided. For other types (integers, strings, floats, characters), a `default` arm is always required since all values cannot be enumerated.
 
 ### `default panic("message")`
 
@@ -23,7 +23,7 @@ match statusCode 'handle'
 end 'handle'
 ```
 
-This works with both match statements and match expressions, and with all scrutinee types including enums, unions, and union range patterns:
+This works with both match statements and match expressions, and with all scrutinee types including enums, enums, and enum range patterns:
 
 ```text
 match color 'check'
@@ -129,11 +129,11 @@ end 'main'
 2
 ```
 
-<!-- test: default-panic.union-range-statement -->
+<!-- test: default-panic.enum-range-statement -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
-union Op
+enum Op
 	add
 	sub
 	mul
@@ -152,11 +152,11 @@ end 'main'
 1
 ```
 
-<!-- test: default-panic.union-range-expression -->
+<!-- test: default-panic.enum-range-expression -->
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
-union Op
+enum Op
 	add
 	sub
 	mul

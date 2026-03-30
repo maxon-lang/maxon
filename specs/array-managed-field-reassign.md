@@ -1,7 +1,7 @@
 ---
 feature: array-managed-field-reassign
 status: stable
-keywords: [array, struct, union, managed, refcount, reassign, field, destructor]
+keywords: [array, struct, enum, managed, refcount, reassign, field, destructor]
 category: memory
 ---
 # Array Field Reassignment with Managed Elements
@@ -14,20 +14,20 @@ When a struct field holding an array of managed elements is reassigned, the old 
 2. Decrementing the old array's refcount
 3. If the old array's refcount reaches zero, its destructor runs:
    - Decrefs each element in the backing buffer
-   - Each element's destructor decrefs its own managed fields (e.g., union associated values containing Strings)
+   - Each element's destructor decrefs its own managed fields (e.g., enum associated values containing Strings)
    - Frees the backing buffer
 
 The critical invariant is that during destructor cleanup of the old array, the backing buffer and its elements must remain valid until all elements have been processed. A use-after-free can occur if the backing buffer is freed before all elements are decreffed.
 
 ## Tests
 
-<!-- test: reassign-array-of-struct-with-string-union -->
-### Reassign Array Field Containing Structs with String Unions
-Filters an array of structs (each containing a union with String associated values)
+<!-- test: reassign-array-of-struct-with-string-enum -->
+### Reassign Array Field Containing Structs with String Enums
+Filters an array of structs (each containing an enum with String associated values)
 into a new array, then reassigns the field. The old array's destructor must safely
-decref all elements including their union payloads.
+decref all elements including their enum payloads.
 ```maxon
-export union QueryKey
+export enum QueryKey
 		sourceFile(path String)
 		tokens(path String)
 		allModule
@@ -122,7 +122,7 @@ Repeatedly filter and reassign an array field to stress destructor cleanup.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
-export union Tag
+export enum Tag
 		name(s String)
 		id(n Integer)
 		none
@@ -173,7 +173,7 @@ end 'main'
 ### Reassign to Empty Array
 Replace a populated array with an empty one — all elements must be cleaned up.
 ```maxon
-export union Key
+export enum Key
 		file(path String)
 		module
 end 'Key'

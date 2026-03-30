@@ -12,7 +12,7 @@ category: control-flow
 Enum match statements with 4 or more simple cases are optimized to use a jump table instead of a linear comparison chain. This provides O(1) dispatch instead of O(n) sequential comparisons.
 
 The optimization applies when:
-- The match is on an enum (simple or union tag)
+- The match is on an enum (simple or enum tag)
 - There are 4 or more cases
 - All cases are simple enum case patterns (no multi-pattern OR, no ranges)
 - Ordinals are dense (0 to N-1)
@@ -211,11 +211,11 @@ end 'main'
 blue
 ```
 
-<!-- test: jump-table.union-with-associated-values -->
+<!-- test: jump-table.enum-with-associated-values -->
 ```maxon
 typealias ID = int(i64.min to i64.max)
 
-union Shape
+enum Shape
 		circle(r ID)
 		square(s ID)
 		triangle(b ID, h ID)

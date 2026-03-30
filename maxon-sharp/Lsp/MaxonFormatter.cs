@@ -4,11 +4,11 @@ using MaxonSharp.Compiler;
 namespace MaxonSharp.Lsp;
 
 public static class MaxonFormatter {
-  private enum BlockKind { Other, Union, Enum, Interface, Match }
+  private enum BlockKind { Other, Enum, Interface, Match }
 
   // Labelless block openers: these keywords start a block declaration on the current line.
   private static readonly HashSet<TokenType> LabellessBlockOpeners = [
-    TokenType.Function, TokenType.Type, TokenType.Union, TokenType.Enum,
+    TokenType.Function, TokenType.Type, TokenType.Enum,
     TokenType.Interface, TokenType.Extension,
   ];
 
@@ -92,7 +92,7 @@ private record SourceComment(string Text, bool WholeLine);
     var blockStack = new Stack<BlockKind>();
 
     bool InDataBlock() => blockStack.Count > 0 &&
-      (blockStack.Peek() == BlockKind.Union || blockStack.Peek() == BlockKind.Enum);
+      blockStack.Peek() == BlockKind.Enum;
     bool InInterfaceBlock() => blockStack.Count > 0 && blockStack.Peek() == BlockKind.Interface;
     bool InMatchBlock() => blockStack.Count > 0 && blockStack.Peek() == BlockKind.Match;
 
@@ -283,7 +283,7 @@ private record SourceComment(string Text, bool WholeLine);
       var prevToken = prevNonNewline;
       prevNonNewline = tok.Type;
 
-      // Inside a union/enum body, only 'end label' matters for structure.
+      // Inside a enum body, only 'end label' matters for structure.
       // All other keyword/label-based indent rules are suppressed.
       if (InDataBlock()) continue;
 
@@ -295,7 +295,6 @@ private record SourceComment(string Text, bool WholeLine);
         bool bodylessDecl = InInterfaceBlock() && tok.Type == TokenType.Function;
         if (!bodylessDecl) {
           var kind = tok.Type switch {
-            TokenType.Union => BlockKind.Union,
             TokenType.Enum => BlockKind.Enum,
             TokenType.Interface => BlockKind.Interface,
             _ => BlockKind.Other,

@@ -150,22 +150,22 @@ internal class TypeSubstitution {
     return new TypeSubstitution(map);
   }
 
-  /// Builds a type substitution for a concrete alias of a generic union type.
-  public static TypeSubstitution BuildForUnion(
-      MlirUnionType sourceUnion,
+  /// Builds a type substitution for a concrete alias of a generic enum type.
+  public static TypeSubstitution BuildForEnum(
+      MlirEnumType sourceEnum,
       Dictionary<string, MlirType> typeParams,
       string concreteAliasName,
       MlirModule<MaxonOp> module) {
     MlirType concreteAliasType = module.TypeDefs.TryGetValue(concreteAliasName, out var existing)
       ? existing
-      : new MlirUnionType(concreteAliasName, []);
+      : new MlirEnumType(concreteAliasName, []);
 
     var map = new Dictionary<string, MlirType> {
-      [sourceUnion.Name] = concreteAliasType,
+      [sourceEnum.Name] = concreteAliasType,
       ["Self"] = concreteAliasType
     };
 
-    foreach (var assocTypeName in sourceUnion.AssociatedTypeNames) {
+    foreach (var assocTypeName in sourceEnum.AssociatedTypeNames) {
       if (typeParams.TryGetValue(assocTypeName, out var concreteType)) {
         if (module.TypeDefs.TryGetValue(concreteType.Name, out var resolved) && resolved != concreteType) {
           map[assocTypeName] = resolved;
@@ -175,12 +175,12 @@ internal class TypeSubstitution {
       }
     }
 
-    // Collect type names referenced by this union's TypeParams
+    // Collect type names referenced by this enum's TypeParams
     var referencedNames = new HashSet<string>();
-    foreach (var (_, paramValue) in sourceUnion.TypeParams)
+    foreach (var (_, paramValue) in sourceEnum.TypeParams)
       referencedNames.Add(paramValue.Name);
 
-    ResolveInnerTypeAliases(map, sourceUnion.TypeParams, module, referencedNames);
+    ResolveInnerTypeAliases(map, sourceEnum.TypeParams, module, referencedNames);
 
     return new TypeSubstitution(map);
   }
@@ -337,11 +337,11 @@ internal class TypeSubstitution {
       return newType;
     }
 
-    if (sourceType is MlirUnionType sourceUnion) {
-      // Self-referential substitution: source union name → concrete alias
-      var autoAliasPlaceholder = new MlirUnionType(autoAliasName, [],
-        sourceUnion.BackingType,
-        [.. sourceUnion.ConformingInterfaces],
+    if (sourceType is MlirEnumType sourceEnum) {
+      // Self-referential substitution: source enum name → concrete alias
+      var autoAliasPlaceholder = new MlirEnumType(autoAliasName, [],
+        sourceEnum.BackingType,
+        [.. sourceEnum.ConformingInterfaces],
         typeParams: resolvedParams);
       module.TypeDefs[autoAliasName] = autoAliasPlaceholder;
 
@@ -351,7 +351,7 @@ internal class TypeSubstitution {
       };
 
       var concreteCases = new List<MlirEnumCase>();
-      foreach (var c in sourceUnion.Cases) {
+      foreach (var c in sourceEnum.Cases) {
         if (c.AssociatedValues is { Count: > 0 }) {
           var concreteValues = new List<(string Name, MlirType Type)>();
           foreach (var (name, type) in c.AssociatedValues) {
@@ -364,13 +364,13 @@ internal class TypeSubstitution {
         }
       }
 
-      var newUnionType = new MlirUnionType(autoAliasName, concreteCases,
-        sourceUnion.BackingType,
-        [.. sourceUnion.ConformingInterfaces],
+      var newEnumType = new MlirEnumType(autoAliasName, concreteCases,
+        sourceEnum.BackingType,
+        [.. sourceEnum.ConformingInterfaces],
         typeParams: resolvedParams);
-      module.TypeDefs[autoAliasName] = newUnionType;
+      module.TypeDefs[autoAliasName] = newEnumType;
       module.TypeAliasSources[autoAliasName] = new TypeAliasInfo(sourceTypeName, resolvedParams);
-      return newUnionType;
+      return newEnumType;
     }
 
     return null;
@@ -430,7 +430,7 @@ internal class TypeSubstitution {
         return MlirStructType.CreateTupleType(resolvedFieldTypes);
       }
     }
-    if (type is MlirUnionType ut) {
+    if (type is MlirEnumType ut) {
       if (_map.TryGetValue(ut.Name, out var newType)) {
         return newType;
       }
@@ -465,8 +465,8 @@ internal class TypeSubstitution {
       { } t when t == MlirType.I8 => MaxonValueKind.Byte,
       { } t when t == MlirType.I16 || t == MlirType.U16 => MaxonValueKind.Short,
       MlirStructType => MaxonValueKind.Struct,
-      MlirUnionType ut when ut.HasAssociatedValues => MaxonValueKind.Enum,
-      MlirUnionType => MaxonValueKind.Integer,
+      MlirEnumType ut when ut.HasAssociatedValues => MaxonValueKind.Enum,
+      MlirEnumType => MaxonValueKind.Integer,
       MlirRangedPrimitiveType rpt => rpt.BaseType.ToValueKind(),
       MlirTypeParameterType => MaxonValueKind.TypeParameter,
       _ => throw new InvalidOperationException($"SubstituteValueKind: unsupported type '{concreteType}' for param '{paramKey}'")

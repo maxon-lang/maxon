@@ -34,18 +34,18 @@ public static class TypeCycleCheckPass {
 
   /// <summary>
   /// Builds a type reachability graph. Edges represent "type A references type B"
-  /// relationships through struct fields or union case associated values.
+  /// relationships through struct fields or enum case associated values.
   /// Each edge carries a label like "fieldName: TargetType" for error messages.
   /// </summary>
   private static Dictionary<string, List<(string Label, string Target)>> BuildTypeGraph(MlirModule<MaxonOp> module) {
     var graph = new Dictionary<string, List<(string Label, string Target)>>();
 
     foreach (var (typeName, typeDef) in module.TypeDefs) {
-      // Only struct and union types can participate in type reference cycles
-      if (typeDef is not (MlirStructType or MlirUnionType)) continue;
+      // Only struct and enum types can participate in type reference cycles
+      if (typeDef is not (MlirStructType or MlirEnumType)) continue;
       // Skip types with unresolved type parameters (generic templates)
       if (typeDef is MlirStructType st && st.Fields.Any(f => f.Type is MlirTypeParameterType)) continue;
-      if (typeDef is MlirUnionType ut && ut.Cases.Any(c =>
+      if (typeDef is MlirEnumType ut && ut.Cases.Any(c =>
             c.AssociatedValues != null && c.AssociatedValues.Any(av => av.Type is MlirTypeParameterType))) continue;
 
       var edges = new List<(string Label, string Target)>();
@@ -59,7 +59,7 @@ public static class TypeCycleCheckPass {
         foreach (var (_, paramType) in structType.TypeParams) {
           var paramTargetName = paramType switch {
             MlirStructType s => s.Name,
-            MlirUnionType u => u.Name,
+            MlirEnumType u => u.Name,
             _ => (string?)null
           };
           if (paramTargetName != null && module.TypeDefs.ContainsKey(paramTargetName)) {
@@ -68,8 +68,8 @@ public static class TypeCycleCheckPass {
         }
       }
 
-      if (typeDef is MlirUnionType unionType) {
-        foreach (var enumCase in unionType.Cases) {
+      if (typeDef is MlirEnumType enumType) {
+        foreach (var enumCase in enumType.Cases) {
           if (enumCase.AssociatedValues == null) continue;
           foreach (var (avName, avType) in enumCase.AssociatedValues) {
             var fieldPath = $"{enumCase.Name}.{avName}";
@@ -94,7 +94,7 @@ public static class TypeCycleCheckPass {
   private static void AddTypeReferenceEdge(List<(string Label, string Target)> edges, string fieldName, MlirType type, MlirModule<MaxonOp> module) {
     string? targetName = type switch {
       MlirStructType s => s.Name,
-      MlirUnionType u => u.Name,
+      MlirEnumType u => u.Name,
       _ => null
     };
     if (targetName != null && module.TypeDefs.ContainsKey(targetName)) {
@@ -106,7 +106,7 @@ public static class TypeCycleCheckPass {
   private static string FormatTypeDisplay(MlirType type) {
     return type switch {
       MlirStructType s => s.Name,
-      MlirUnionType u => u.Name,
+      MlirEnumType u => u.Name,
       _ => type.ToString() ?? "?"
     };
   }

@@ -346,7 +346,7 @@ error E3065: specs/fragments/discarded-results/transitive-impure.test:15:2: resu
 
 typealias Integer = int(i64.min to i64.max)
 
-union ParseError implements Error
+enum ParseError implements Error
 	invalidFormat
 end 'ParseError'
 
@@ -373,7 +373,7 @@ typealias Integer = int(i64.min to i64.max)
 
 var counter = 0 as Integer
 
-union ParseError implements Error
+enum ParseError implements Error
 	invalidFormat
 end 'ParseError'
 
@@ -398,7 +398,7 @@ typealias Integer = int(i64.min to i64.max)
 
 var counter = 0 as Integer
 
-union MyError implements Error
+enum MyError implements Error
 	failed
 end 'MyError'
 

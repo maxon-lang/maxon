@@ -178,18 +178,18 @@ public static partial class MaxonToStandardConversion {
           flatIdx++;
         } else if (isEnumInstanceMethod && i == 0) {
           // Enum instance method self param: pass as scalar
-          var enumType = (MlirUnionType)func.ParamTypes[0];
+          var enumType = (MlirEnumType)func.ParamTypes[0];
           var backingMlirType = ResolveEnumBackingMlirType(enumType);
           newParamNames.Add("self");
           newParamTypes.Add(backingMlirType);
           flatIdx++;
-        } else if (func.ParamTypes[i] is MlirUnionType { HasAssociatedValues: true }) {
+        } else if (func.ParamTypes[i] is MlirEnumType { HasAssociatedValues: true }) {
           // Associated-value enum param: pass as heap pointer (i64), like structs
           structParamPtrIndex[i] = flatIdx;
           newParamNames.Add(func.ParamNames[i]);
           newParamTypes.Add(MlirType.I64);
           flatIdx++;
-        } else if (func.ParamTypes[i] is MlirUnionType enumParamType) {
+        } else if (func.ParamTypes[i] is MlirEnumType enumParamType) {
           // Simple enum param: pass as scalar (or i64 pointer if mutated)
           var backingMlirType = ResolveEnumBackingMlirType(enumParamType);
           newParamNames.Add(func.ParamNames[i]);
@@ -209,7 +209,7 @@ public static partial class MaxonToStandardConversion {
           newParamNames.Add($"__env_{func.ParamNames[i]}");
           newParamTypes.Add(MlirType.I64);
           flatIdx++;
-        } else if (func.ParamTypes[i] is not MlirStructType and not MlirUnionType) {
+        } else if (func.ParamTypes[i] is not MlirStructType and not MlirEnumType) {
           newParamNames.Add(func.ParamNames[i]);
           // Mutated params receive a pointer (i64) instead of the original type
           newParamTypes.Add(refParamPtrVars.ContainsKey(func.ParamNames[i]) ? MlirType.I64 : func.ParamTypes[i]);
@@ -223,12 +223,12 @@ public static partial class MaxonToStandardConversion {
       if (retStructType != null) {
         // Struct return: return heap pointer as i64
         newReturnType = MlirType.I64;
-      } else if (func.ReturnType is MlirUnionType { HasAssociatedValues: true }) {
+      } else if (func.ReturnType is MlirEnumType { HasAssociatedValues: true }) {
         // Associated-value enum return: return heap pointer as i64
         newReturnType = MlirType.I64;
-      } else if (func.ReturnType is MlirUnionType retEnumType) {
+      } else if (func.ReturnType is MlirEnumType retEnumType) {
         newReturnType = ResolveEnumBackingMlirType(retEnumType);
-      } else if (func.ReturnType is not MlirStructType and not MlirUnionType) {
+      } else if (func.ReturnType is not MlirStructType and not MlirEnumType) {
         newReturnType = func.ReturnType;
       } else {
         throw new InvalidOperationException($"Unhandled return type: {func.ReturnType.GetType().Name} in function '{func.Name}'");
@@ -515,14 +515,14 @@ public static partial class MaxonToStandardConversion {
               var tempName = inlineTargets.TryGetValue(enumConstructOp.Result.Id, out var enumInlineTarget)
                 ? enumInlineTarget
                 : temps.CreateTemp("enum", enumConstructOp.Result.Id, enumConstructOp.EnumTypeName, OwnershipFlags.None);
-              var enumTypeDef = (MlirUnionType)module.TypeDefs[enumConstructOp.EnumTypeName];
+              var enumTypeDef = (MlirEnumType)module.TypeDefs[enumConstructOp.EnumTypeName];
               int maxPayload = GetMaxFlatPayloadSlots(enumTypeDef);
               int heapSize = 8 + maxPayload * 8;
               var enumPtr = EmitAlloc(newBlock, heapSize, enumConstructOp.EnumTypeName, scopeName: func.Name);
               EmitStore(newBlock, enumPtr, tempName, varTypes);
 
               // Store tag at offset 0
-              var tagOp = new StdConstI64Op(enumConstructOp.Ordinal);
+              var tagOp = new StdConstI64Op(enumConstructOp.TagValue);
               newBlock.AddOp(tagOp);
               newBlock.AddOp(new StdStoreIndirectOp(tagOp.Result, enumPtr, 0, MlirType.I64));
 
@@ -596,7 +596,7 @@ public static partial class MaxonToStandardConversion {
               } else if (enumPayloadOp.ResultKind == MaxonValueKind.Enum
                          && enumPayloadOp.ResultStructTypeName != null
                          && module.TypeDefs.TryGetValue(enumPayloadOp.ResultStructTypeName, out var payloadEnumDef)
-                         && payloadEnumDef is MlirUnionType payloadEnumType && payloadEnumType.HasAssociatedValues) {
+                         && payloadEnumDef is MlirEnumType payloadEnumType && payloadEnumType.HasAssociatedValues) {
                 // Associated-value enum payload: load heap pointer (no unpacking needed)
                 var tempName = temps.CreateTemp("enum_payload", enumPayloadOp.Result.Id, enumPayloadOp.ResultStructTypeName, OwnershipFlags.Borrowed);
                 var loadOp = new StdLoadIndirectOp(heapPtr, byteOffset, MlirType.I64);
@@ -622,7 +622,7 @@ public static partial class MaxonToStandardConversion {
             case MaxonEnumParamOp enumParamOp: {
               // Check if this is an associated-value enum (passed as heap pointer)
               if (module.TypeDefs.TryGetValue(enumParamOp.EnumTypeName, out var epType)
-                  && epType is MlirUnionType epEnumType && epEnumType.HasAssociatedValues) {
+                  && epType is MlirEnumType epEnumType && epEnumType.HasAssociatedValues) {
                 // Receive heap pointer — no unpacking needed, heap pointer IS the enum value
                 int ptrFlatIdx = structParamPtrIndex[enumParamOp.Index];
                 var ptrVal = new StdI64(MlirContext.Current.NextId());
@@ -672,7 +672,7 @@ public static partial class MaxonToStandardConversion {
             case MaxonEnumVarRefOp enumVarRef: {
               // Check if this is an associated-value enum (stored as flat vars)
               if (module.TypeDefs.TryGetValue(enumVarRef.EnumTypeName, out var evType)
-                  && evType is MlirUnionType evEnumType && evEnumType.HasAssociatedValues) {
+                  && evType is MlirEnumType evEnumType && evEnumType.HasAssociatedValues) {
                 // Resolve the struct prefix: either from varNameToStructPrefix or direct varName
                 string resolvedPrefix;
                 if (varNameToStructPrefix.TryGetValue(enumVarRef.VarName, out var existingPrefix)) {
@@ -714,9 +714,17 @@ public static partial class MaxonToStandardConversion {
               break;
             }
             case MaxonEnumRawValueOp rawValueOp: {
-              // The enum's backing value IS the raw value - just pass through
               var enumStdVal = valueMap[rawValueOp.EnumValue];
-              valueMap[rawValueOp.Result] = enumStdVal;
+              if (enumStdVal is StdHeapPtr rawHp) {
+                // Associated-value enum: load tag from heap offset 0
+                var heapPtr = (StdI64)EmitLoad(newBlock, rawHp.VarName!, varTypes);
+                var tagLoad = new StdLoadIndirectOp(heapPtr, 0, MlirType.I64);
+                newBlock.AddOp(tagLoad);
+                valueMap[rawValueOp.Result] = tagLoad.Result;
+              } else {
+                // Simple enum: the backing value IS the raw value - just pass through
+                valueMap[rawValueOp.Result] = enumStdVal;
+              }
               break;
             }
             case MaxonErrorFlagToEnumOp errToEnumOp: {
@@ -739,9 +747,9 @@ public static partial class MaxonToStandardConversion {
               break;
             }
             case MaxonEnumStringRawValueOp strRawOp: {
-              var enumType = (MlirUnionType)module.TypeDefs[strRawOp.EnumTypeName];
+              var enumType = (MlirEnumType)module.TypeDefs[strRawOp.EnumTypeName];
               var ordinalValue = (StdI64)valueMap[strRawOp.EnumValue];
-              var (buf, len) = EmitStringUnionToString(enumType, ordinalValue, newBlock, result);
+              var (buf, len) = EmitStringEnumToString(enumType, ordinalValue, newBlock, result);
               var isString = !strRawOp.IsChar;
               var rawValTypeName = isString ? "String" : "Character";
               var tempName = temps.CreateTemp("enum_rawval", strRawOp.Result.Id, rawValTypeName, OwnershipFlags.None);
@@ -752,10 +760,21 @@ public static partial class MaxonToStandardConversion {
               break;
             }
             case MaxonEnumOrdinalOp ordinalOp: {
-              var enumType = (MlirUnionType)module.TypeDefs[ordinalOp.EnumTypeName];
+              var enumType = (MlirEnumType)module.TypeDefs[ordinalOp.EnumTypeName];
               var stdValue = valueMap[ordinalOp.EnumValue];
               StdI64 ordinalValue;
-              if (enumType.BackingType == MlirType.I64) {
+              if (stdValue is StdHeapPtr ordHp) {
+                // Associated-value enum: load tag from heap, then convert to ordinal
+                var heapPtr = (StdI64)EmitLoad(newBlock, ordHp.VarName!, varTypes);
+                var tagLoad = new StdLoadIndirectOp(heapPtr, 0, MlirType.I64);
+                newBlock.AddOp(tagLoad);
+                if (enumType.BackingType == MlirType.I64) {
+                  ordinalValue = EmitIntEnumToPositionIndex(enumType, (StdI64)tagLoad.Result, newBlock);
+                } else {
+                  // Tag is the ordinal for non-int-backed or auto-incremented enums
+                  ordinalValue = (StdI64)tagLoad.Result;
+                }
+              } else if (enumType.BackingType == MlirType.I64) {
                 ordinalValue = EmitIntEnumToPositionIndex(enumType, (StdI64)stdValue, newBlock);
               } else if (enumType.BackingType == MlirType.F64) {
                 ordinalValue = EmitFloatEnumToPositionIndex(enumType, (StdF64)stdValue, newBlock);
@@ -767,18 +786,28 @@ public static partial class MaxonToStandardConversion {
               break;
             }
             case MaxonEnumNameOp enumNameOp: {
-              var enumType = (MlirUnionType)module.TypeDefs[enumNameOp.EnumTypeName];
+              var enumType = (MlirEnumType)module.TypeDefs[enumNameOp.EnumTypeName];
               var stdValue = valueMap[enumNameOp.EnumValue];
               StdI64 ordinalValue;
-              if (enumType.BackingType == MlirType.I64) {
-                ordinalValue = EmitIntUnionToOrdinal(enumType, (StdI64)stdValue, newBlock);
+              if (stdValue is StdHeapPtr nameHp) {
+                // Associated-value enum: load tag from heap, then convert to ordinal for name lookup
+                var heapPtr = (StdI64)EmitLoad(newBlock, nameHp.VarName!, varTypes);
+                var tagLoad = new StdLoadIndirectOp(heapPtr, 0, MlirType.I64);
+                newBlock.AddOp(tagLoad);
+                if (enumType.BackingType == MlirType.I64) {
+                  ordinalValue = EmitIntEnumToOrdinal(enumType, (StdI64)tagLoad.Result, newBlock);
+                } else {
+                  ordinalValue = (StdI64)tagLoad.Result;
+                }
+              } else if (enumType.BackingType == MlirType.I64) {
+                ordinalValue = EmitIntEnumToOrdinal(enumType, (StdI64)stdValue, newBlock);
               } else if (enumType.BackingType == MlirType.F64) {
-                ordinalValue = EmitFloatUnionToOrdinal(enumType, (StdF64)stdValue, newBlock);
+                ordinalValue = EmitFloatEnumToOrdinal(enumType, (StdF64)stdValue, newBlock);
               } else {
                 // Simple enums (no backing type) and string/char-backed enums store ordinals
                 ordinalValue = (StdI64)stdValue;
               }
-              var (nameBuf, nameLen) = EmitUnionNameLookup(enumType, ordinalValue, newBlock, result);
+              var (nameBuf, nameLen) = EmitEnumNameLookup(enumType, ordinalValue, newBlock, result);
               var tempName = temps.CreateTemp("enum_name", enumNameOp.Result.Id, "String", OwnershipFlags.None);
               var enumNameHp = EmitManagedStructFromBufLen(tempName, nameBuf, nameLen,
                 true, newBlock, varTypes,
@@ -1274,7 +1303,7 @@ public static partial class MaxonToStandardConversion {
               } else if (fieldAccess.ResultKind == MaxonValueKind.Enum
                          && fieldAccess.ResultStructTypeName != null
                          && module.TypeDefs.TryGetValue(fieldAccess.ResultStructTypeName, out var faEnumDef)
-                         && faEnumDef is MlirUnionType faEnumType && faEnumType.HasAssociatedValues) {
+                         && faEnumDef is MlirEnumType faEnumType && faEnumType.HasAssociatedValues) {
                 // Associated-value enum field: load heap pointer (no unpacking needed)
                 var tempVarName = temps.CreateTemp("field", fieldAccess.Result.Id, fieldAccess.ResultStructTypeName!, OwnershipFlags.Borrowed);
                 if (fieldDef != null) {
@@ -1340,14 +1369,14 @@ public static partial class MaxonToStandardConversion {
                 var slotName = $"{fsTag}.{Math.Max(fsFieldCount, 1) - 1 - (faFieldDef.Offset / 8)}";
                 EmitStore(newBlock, mappedVal, slotName, varTypes);
               } else if (faFieldDef != null) {
-                var storeType = faFieldDef.Type is MlirStructType or MlirUnionType { HasAssociatedValues: true } ? MlirType.I64 : faFieldDef.Type;
-                if (faFieldDef.Type is MlirStructType or MlirUnionType { HasAssociatedValues: true }) {
+                var storeType = faFieldDef.Type is MlirStructType or MlirEnumType { HasAssociatedValues: true } ? MlirType.I64 : faFieldDef.Type;
+                if (faFieldDef.Type is MlirStructType or MlirEnumType { HasAssociatedValues: true }) {
                   // Decref old field value before overwriting (may be null if field not yet initialized)
                   var oldFieldVal = (StdI64)EmitStructFieldLoad(newBlock, structName, faFieldDef.Offset, MlirType.I64, varTypes);
                   EmitDecrefValueIfNonnull(newBlock, oldFieldVal, scopeName: func.Name);
                 }
                 EmitStructFieldStore(newBlock, mappedVal, structName, faFieldDef.Offset, storeType, varTypes);
-                if (faFieldDef.Type is MlirStructType or MlirUnionType { HasAssociatedValues: true }) {
+                if (faFieldDef.Type is MlirStructType or MlirEnumType { HasAssociatedValues: true }) {
                   // Incref new value — the struct field holds a reference
                   EmitIncrefValue(newBlock, (StdI64)mappedVal, scopeName: func.Name);
                 }
@@ -2254,8 +2283,8 @@ public static partial class MaxonToStandardConversion {
       }
       _destructorRequests[typeName] = new DestructorRequest(typeName, managedFields,
         NeedsManagedElementCleanup: needsManagedElementCleanup);
-    } else if (typeDef is MlirUnionType unionType && unionType.HasAssociatedValues) {
-      // Union types with associated values — the destructor dispatches on tag
+    } else if (typeDef is MlirEnumType enumType && enumType.HasAssociatedValues) {
+      // Enum types with associated values — the destructor dispatches on tag
       _destructorRequests[typeName] = new DestructorRequest(typeName, []);
     }
   }
@@ -2277,11 +2306,11 @@ public static partial class MaxonToStandardConversion {
       var ptr = (StdI64)paramOp.Result;
       entry.AddOp(new StdStoreI64Op(ptr, "__destr_ptr"));
 
-      if (result.TypeDefs.TryGetValue(typeName, out var typeDef) && typeDef is MlirUnionType unionType && unionType.HasAssociatedValues) {
-        // Union destructor: load tag, dispatch to per-case cleanup
+      if (result.TypeDefs.TryGetValue(typeName, out var typeDef) && typeDef is MlirEnumType enumType && enumType.HasAssociatedValues) {
+        // Enum destructor: load tag, dispatch to per-case cleanup
         // For each case with managed payloads, check tag and mm_decref them
-        for (int ci = 0; ci < unionType.Cases.Count; ci++) {
-          var caseInfo = unionType.Cases[ci];
+        for (int ci = 0; ci < enumType.Cases.Count; ci++) {
+          var caseInfo = enumType.Cases[ci];
           var managedPayloads = new List<(int slotIndex, MlirType type)>();
           if (caseInfo.AssociatedValues != null) {
             for (int pi = 0; pi < caseInfo.AssociatedValues.Count; pi++) {
@@ -2301,7 +2330,7 @@ public static partial class MaxonToStandardConversion {
           var tagCmp = new StdCmpI64Op("eq", (StdI64)tagLoad.Result, tagConst.Result);
           entry.AddOp(tagCmp);
           var caseBlock = $"case_{ci}";
-          var nextBlock = ci < unionType.Cases.Count - 1 ? $"check_{ci + 1}" : "done";
+          var nextBlock = ci < enumType.Cases.Count - 1 ? $"check_{ci + 1}" : "done";
           entry.AddOp(new StdCondBrOp(tagCmp.Result, caseBlock, nextBlock));
 
           var caseBody = func.Body.AddBlock(caseBlock);
@@ -2316,7 +2345,7 @@ public static partial class MaxonToStandardConversion {
           caseBody.AddOp(new StdBrOp("done"));
 
           // Continue checking for next case
-          if (ci < unionType.Cases.Count - 1) {
+          if (ci < enumType.Cases.Count - 1) {
             entry = func.Body.AddBlock(nextBlock);
           }
         }

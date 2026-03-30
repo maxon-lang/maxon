@@ -15,7 +15,7 @@ Phase 5:  Structs                [ ] (depends on Phase 3, 4)
 Phase 6:  Managed Memory         [ ] (depends on Phase 5)
 Phase 7:  Strings                [ ] (depends on Phase 6)
 Phase 8:  Error Handling         [ ] (depends on Phase 2, 3)
-Phase 9:  Unions                 [ ] (depends on Phase 2, 5)
+Phase 9:  Enums                  [ ] (depends on Phase 2, 5)
 Phase 10: Closures               [ ] (depends on Phase 3, 5)
 Phase 11: Interfaces & Generics  [ ] (depends on Phase 5, 9, 10)
 Phase 12: Global Variables       [ ] (depends on Phase 5)
@@ -381,25 +381,24 @@ Phase 16: Optimization Passes    [ ] (depends on Phase 15)
 
 ---
 
-## Phase 9: Unions (Enums) & Match (~8 specs)
+## Phase 9: Enums & Match (~8 specs)
 
-**Goal**: Union type declarations, pattern matching with associated values.
+**Goal**: Enum type declarations, pattern matching with associated values.
 
 ### Specs to unlock
-`unions-simple`, `union-full`, `union-match-only`, `match-statements`, `match-union-typed-binding`, `constants` (enum keyword), `union-struct-field-match`
+`enums-simple`, `enum-full`, `enum-match-only`, `match-statements`, `match-enum-typed-binding`, `constants` (enum keyword), `enum-struct-field-match`
 
 ### Changes
 
 **Parser**:
-- Parse `union Name ... end` declarations
-- Parse `enum Name ... end` declarations (simple constants)
-- Parse match with union case extraction: `match val 'l' ... Case(x) then ... end 'l'`
-- Parse union construction: `UnionType.caseName(value)`
+- Parse `enum Name ... end` declarations (both simple enums and enums with associated values)
+- Parse match with enum case extraction: `match val 'l' ... Case(x) then ... end 'l'`
+- Parse enum construction: `EnumType.caseName(value)`
 
 **Maxon Dialect**:
 - Add: `enumLiteral`, `enumConstruct`, `enumTag`, `enumPayload`, `enumRawValue`, `enumName`
 
-**Memory model**: Unions stored as tag (i64) + max-payload-size buffer. Tag identifies the case, payload holds the associated value.
+**Memory model**: Enums stored as tag (i64) + max-payload-size buffer. Tag identifies the case, payload holds the associated value.
 
 ### Files to modify
 - All pipeline files
@@ -570,7 +569,7 @@ These are mostly stdlib types built on top of Array and generics. Requires:
 **Goal**: Everything else — tuples, namespaces, exports, panic/stack traces, command-line args, file I/O, etc.
 
 ### Specs to unlock
-`tuples`, `namespaces`, `export-keyword`, `command-line-args`, `file-io`, `directory`, `panic-stack-trace`, `alloc-tracking`, `codegen-internals`, `managed-memory-element-size`, `stdlib-basic`, `stdlib-autodiscovery`, `grapheme-clusters`, `slice-memory`, `array-managed-elements`, `array-of-bytearray`, `challenge-array-of-structs`, `challenge-struct-lifetime`, `register-allocator`, `unused-variables`, `unused-parameters`, `discarded-results`, `duplicate-functions`, `duplicate-block-identifiers`, `unknown-keyword-error`, `type-checking`, `function-overloads`, `method-calls`, `method-call-on-parameter`, `init-from-literal`, `initablefromarrayliteral`, `parsable-interface`, `ranged-typealias`, `union-hashable`, `advent`
+`tuples`, `namespaces`, `export-keyword`, `command-line-args`, `file-io`, `directory`, `panic-stack-trace`, `alloc-tracking`, `codegen-internals`, `managed-memory-element-size`, `stdlib-basic`, `stdlib-autodiscovery`, `grapheme-clusters`, `slice-memory`, `array-managed-elements`, `array-of-bytearray`, `challenge-array-of-structs`, `challenge-struct-lifetime`, `register-allocator`, `unused-variables`, `unused-parameters`, `discarded-results`, `duplicate-functions`, `duplicate-block-identifiers`, `unknown-keyword-error`, `type-checking`, `function-overloads`, `method-calls`, `method-call-on-parameter`, `init-from-literal`, `initablefromarrayliteral`, `parsable-interface`, `ranged-typealias`, `enum-hashable`, `advent`
 
 ### Sub-phases
 

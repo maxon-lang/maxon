@@ -70,7 +70,7 @@ The error is bound to `e` and available within the else-block.
 
 typealias Integer = int(i64.min to i64.max)
 
-union MyError implements Error
+enum MyError implements Error
 	failed
 end 'MyError'
 
@@ -98,7 +98,7 @@ end 'main'
 
 typealias Integer = int(i64.min to i64.max)
 
-union MyError implements Error
+enum MyError implements Error
 	failed
 end 'MyError'
 
@@ -126,7 +126,7 @@ end 'main'
 
 typealias Integer = int(i64.min to i64.max)
 
-union MyError implements Error
+enum MyError implements Error
 	failed
 end 'MyError'
 
@@ -153,7 +153,7 @@ end 'main'
 
 typealias Integer = int(i64.min to i64.max)
 
-union MyError implements Error
+enum MyError implements Error
 	failed
 end 'MyError'
 
@@ -180,7 +180,7 @@ end 'main'
 
 typealias Integer = int(i64.min to i64.max)
 
-union MyError implements Error
+enum MyError implements Error
 	failed
 end 'MyError'
 
@@ -210,7 +210,7 @@ end 'main'
 
 typealias Integer = int(i64.min to i64.max)
 
-union MyError implements Error
+enum MyError implements Error
 	failed
 end 'MyError'
 
@@ -240,7 +240,7 @@ end 'main'
 
 typealias Integer = int(i64.min to i64.max)
 
-union MyError implements Error
+enum MyError implements Error
 	failed
 end 'MyError'
 
@@ -268,7 +268,7 @@ end 'main'
 
 typealias Integer = int(i64.min to i64.max)
 
-union MyError implements Error
+enum MyError implements Error
 	failed
 end 'MyError'
 
@@ -296,7 +296,7 @@ end 'main'
 
 typealias Integer = int(i64.min to i64.max)
 
-union MyError implements Error
+enum MyError implements Error
 	first
 	second
 end 'MyError'
@@ -330,7 +330,7 @@ end 'main'
 
 typealias Integer = int(i64.min to i64.max)
 
-union MyError implements Error
+enum MyError implements Error
 	failed
 end 'MyError'
 
@@ -360,7 +360,7 @@ end 'main'
 
 typealias Integer = int(i64.min to i64.max)
 
-union MyError implements Error
+enum MyError implements Error
 	failed
 end 'MyError'
 
@@ -414,7 +414,7 @@ When using if-let with a struct that has multiple managed fields (like Array and
 all managed fields must be properly cleaned up when the binding goes out of scope.
 
 ```maxon
-union MyError implements Error
+enum MyError implements Error
 	failed
 end 'MyError'
 
@@ -457,7 +457,7 @@ end 'main'
 Test cleanup of deeply nested structs with multiple managed fields at function return.
 
 ```maxon
-union MyError implements Error
+enum MyError implements Error
 	failed
 end 'MyError'
 
@@ -500,7 +500,7 @@ Else-if containing try where the inner scope has no block_exit (all paths return
 The else path must not segfault when cleaning up the else-if scope.
 
 ```maxon
-union MyError implements Error
+enum MyError implements Error
 	failed
 end 'MyError'
 

@@ -185,19 +185,19 @@ end 'FileInfo'
 ### Error Types
 
 ```maxon
-export union FileReadError implements Error
+export enum FileReadError implements Error
 	notFound              // file not found when reading
 end 'FileReadError'
 
-export union FileWriteError implements Error
+export enum FileWriteError implements Error
 	failed                // write operation failed
 end 'FileWriteError'
 
-export union FileDeleteError implements Error
+export enum FileDeleteError implements Error
 	notFound              // file not found when deleting
 end 'FileDeleteError'
 
-export union FileInfoError implements Error
+export enum FileInfoError implements Error
 	notFound              // file not found when querying metadata
 end 'FileInfoError'
 ```
@@ -475,9 +475,9 @@ typealias NetworkPort = int(1 to 65535)
 
 **NetworkError**
 
-All networking operations throw `NetworkError`, a union conforming to `Error`:
+All networking operations throw `NetworkError`, an enum conforming to `Error`:
 ```maxon
-union NetworkError implements Error
+enum NetworkError implements Error
 		resolveFailed       // DNS lookup failed
 		connectFailed       // TCP connection refused or timed out
 		sendFailed          // OS-level send error
@@ -550,7 +550,7 @@ end 'main'
 
 HTTP/1.1 client for making HTTP requests over TCP connections. HTTP only (no HTTPS/TLS). Uses `Connection: close` for simple response reading.
 
-### `HttpError` (union, implements Error)
+### `HttpError` (enum, implements Error)
 
 | Variant | Description |
 |---------|-------------|

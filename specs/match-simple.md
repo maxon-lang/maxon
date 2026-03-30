@@ -99,12 +99,12 @@ When `role = 1`, the first case matches (adds 100), falls through to case 2 (add
 
 **Note:** Fallthrough is NOT allowed in match expressions since they must return a single value.
 
-## Exhaustiveness for Enums and Unions
+## Exhaustiveness for Enums and Enums
 
-When matching on enum or union values, all cases must be covered. Plain `default` is not allowed — use `default throws ErrorType.case` if you want a catch-all that throws an error.
+When matching on enum or enum values, all cases must be covered. Plain `default` is not allowed — use `default throws ErrorType.case` if you want a catch-all that throws an error.
 
 ```maxon
-union Direction
+enum Direction
 	north
 	south
 	east
@@ -139,8 +139,8 @@ If any case is missing, the compiler reports an error listing the uncovered case
 - `and fallthrough` not allowed in match expressions
 - `and fallthrough` cannot be combined with `return`
 - For enums, all cases must be covered by explicit or range patterns — plain `default` is forbidden (use `default throws`)
-- For unions, all cases must be covered explicitly — plain `default` is forbidden (use `default throws`)
-- `default` matches any value not matched by previous patterns (non-enum/union types only)
+- For enums, all cases must be covered explicitly — plain `default` is forbidden (use `default throws`)
+- `default` matches any value not matched by previous patterns (non-enum/enum types only)
 - Overlapping patterns are reported as errors
 - `default` must be the last case if present
 
@@ -403,7 +403,7 @@ end 'main'
 
 <!-- test: match-enum.exhaustive -->
 ```maxon
-union Color
+enum Color
 	red
 	green
 	blue
@@ -424,7 +424,7 @@ end 'main'
 
 <!-- test: error.match-enum-default -->
 ```maxon
-union Color
+enum Color
 	red
 	green
 	blue
@@ -439,12 +439,12 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2046: specs/fragments/match-simple/error.match-enum-default.test:12:3: 'default' in a match on union 'Color' must be followed by 'throws <error>' or 'panic("message")'
+error E2046: specs/fragments/match-simple/error.match-enum-default.test:12:3: 'default' in a match on enum 'Color' must be followed by 'throws <error>' or 'panic("message")'
 ```
 
 <!-- test: match-enum.expression -->
 ```maxon
-union Status
+enum Status
 	pending
 	approved
 	rejected
@@ -511,7 +511,7 @@ error E2025: specs/fragments/match-simple/error.match-fallthrough-with-return.te
 
 <!-- test: error.match-enum-not-exhaustive -->
 ```maxon
-union Color
+enum Color
 	red
 	green
 	blue
@@ -526,7 +526,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E2026: specs/fragments/match-simple/error.match-enum-not-exhaustive.test:13:2: match on union 'Color' is not exhaustive, missing: blue
+error E2026: specs/fragments/match-simple/error.match-enum-not-exhaustive.test:13:2: match on enum 'Color' is not exhaustive, missing: blue
 ```
 
 <!-- test: error.match-duplicate-pattern -->

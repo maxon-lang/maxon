@@ -95,19 +95,19 @@ public static class MonomorphizationPass {
           continue;
         }
         typeSubstitution = TypeSubstitution.Build(sourceStruct, aliasInfo.TypeParams, aliasName, module);
-      } else if (sourceType is MlirUnionType sourceUnion) {
-        assocTypeNames = sourceUnion.AssociatedTypeNames.Count > 0
-          ? sourceUnion.AssociatedTypeNames
-          : [.. sourceUnion.TypeParams
+      } else if (sourceType is MlirEnumType sourceEnum) {
+        assocTypeNames = sourceEnum.AssociatedTypeNames.Count > 0
+          ? sourceEnum.AssociatedTypeNames
+          : [.. sourceEnum.TypeParams
               .Where(kv => kv.Value is MlirTypeParameterType)
               .Select(kv => kv.Key)];
         if (assocTypeNames.Count == 0) {
-          Logger.Debug(LogCategory.Mlir, $"  SKIP {aliasName} -> {sourceTypeName}: no type params (union)");
+          Logger.Debug(LogCategory.Mlir, $"  SKIP {aliasName} -> {sourceTypeName}: no type params (enum)");
           continue;
         }
-        typeSubstitution = TypeSubstitution.BuildForUnion(sourceUnion, aliasInfo.TypeParams, aliasName, module);
+        typeSubstitution = TypeSubstitution.BuildForEnum(sourceEnum, aliasInfo.TypeParams, aliasName, module);
       } else {
-        Logger.Debug(LogCategory.Mlir, $"  SKIP {aliasName} -> {sourceTypeName}: not struct or union ({sourceType.GetType().Name})");
+        Logger.Debug(LogCategory.Mlir, $"  SKIP {aliasName} -> {sourceTypeName}: not struct or enum ({sourceType.GetType().Name})");
         continue;
       }
 
@@ -148,12 +148,12 @@ public static class MonomorphizationPass {
     foreach (var paramType in func.ParamTypes) {
       if (paramType is MlirTypeParameterType) return true;
       if (paramType is MlirStructType st && (st.Name == sourceTypeName || st.Name == "Self" || assocTypeNames.Any(n => st.Name.Contains(n)))) return true;
-      if (paramType is MlirUnionType ut && (ut.Name == sourceTypeName || ut.Name == "Self" || assocTypeNames.Any(n => ut.Name.Contains(n)))) return true;
+      if (paramType is MlirEnumType ut && (ut.Name == sourceTypeName || ut.Name == "Self" || assocTypeNames.Any(n => ut.Name.Contains(n)))) return true;
     }
 
     if (func.ReturnType is MlirTypeParameterType) return true;
     if (func.ReturnType is MlirStructType retSt && (retSt.Name == sourceTypeName || retSt.Name == "Self" || assocTypeNames.Any(n => retSt.Name.Contains(n)))) return true;
-    if (func.ReturnType is MlirUnionType retUt && (retUt.Name == sourceTypeName || retUt.Name == "Self" || assocTypeNames.Any(n => retUt.Name.Contains(n)))) return true;
+    if (func.ReturnType is MlirEnumType retUt && (retUt.Name == sourceTypeName || retUt.Name == "Self" || assocTypeNames.Any(n => retUt.Name.Contains(n)))) return true;
 
     return false;
   }
@@ -181,7 +181,7 @@ public static class MonomorphizationPass {
     if (module.TypeDefs.TryGetValue(typeName, out var typeEntry)) {
       if (typeEntry is MlirStructType st && st.ConformingInterfaces.Contains(interfaceName))
         return true;
-      if (typeEntry is MlirUnionType et && et.ConformingInterfaces.Contains(interfaceName))
+      if (typeEntry is MlirEnumType et && et.ConformingInterfaces.Contains(interfaceName))
         return true;
     }
     if (module.PrimitiveConformances.TryGetValue(typeName, out var extInterfaces)
@@ -276,7 +276,7 @@ public static class MonomorphizationPass {
     var kind = newFunc.ReturnType.ToValueKind();
     var typeName = newFunc.ReturnType switch {
       MlirStructType s => s.Name,
-      MlirUnionType e => e.Name,
+      MlirEnumType e => e.Name,
       _ => (string?)null
     };
     return (kind, typeName);

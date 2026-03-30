@@ -67,13 +67,13 @@ To include literal braces, escape them with backslash:
 print("Use \{expr\} syntax")  // "Use {expr} syntax"
 ```
 
-### Union Types
+### Enum Types
 
-Union values can be interpolated directly. For int-backed or simple unions, the numeric value is shown. For string-backed unions, the raw string value is displayed:
+Enum values can be interpolated directly. For int-backed enums, the numeric value is shown. For simple enums, the case name is shown. For string-backed enums, the raw string value is displayed:
 
 ```maxon
-// Int-backed union (type inferred from values)
-union Color
+// Int-backed enum (type inferred from values)
+enum Color
 	red = 1
 	green = 2
 	blue = 3
@@ -82,8 +82,8 @@ end 'Color'
 var c = Color.green
 print("Color value: {c}\n")  // "Color value: 2"
 
-// String-backed union (type inferred from values)
-union Status
+// String-backed enum (type inferred from values)
+enum Status
 	active = "Active"
 	inactive = "Inactive"
 end 'Status'
@@ -799,7 +799,7 @@ John Doe, 30 years old
 
 <!-- test: int-enum-interpolation -->
 ```maxon
-union Color
+enum Color
 	red = 1
 	green = 2
 	blue = 3
@@ -815,14 +815,14 @@ end 'main'
 0
 ```
 ```stdout
-Color value: green
+Color value: 2
 ```
 
 ### Simple Enum Interpolation
 
 <!-- test: simple-enum-interpolation -->
 ```maxon
-union Direction
+enum Direction
 	north
 	south
 	east
@@ -846,7 +846,7 @@ Direction: east
 
 <!-- test: string-enum-interpolation -->
 ```maxon
-union Status
+enum Status
 	active = "Active"
 	inactive = "Inactive"
 	pending = "Pending"
@@ -869,7 +869,7 @@ Status: Active
 
 <!-- test: multiple-enum-interpolation -->
 ```maxon
-union Priority
+enum Priority
 	low = 1
 	medium = 2
 	high = 3
@@ -886,7 +886,7 @@ end 'main'
 0
 ```
 ```stdout
-Priorities: low and high
+Priorities: 1 and 3
 ```
 
 ### Integer Format Specifier - Zero Padding

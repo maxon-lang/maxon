@@ -1602,13 +1602,13 @@ mm_decref State #4 rc=0 [__maxon_global_cleanup]
     sl_free State #4 size=48 class=4
 ```
 
-<!-- test: rc-union-no-struct-payload-freed -->
+<!-- test: rc-enum-no-struct-payload-freed -->
 <!-- MmTrace -->
-A simple enum union (no struct payload) is freed correctly at scope exit.
+A simple enum enum (no struct payload) is freed correctly at scope exit.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
-union Color
+enum Color
 	red
 	green
 	blue
@@ -1640,9 +1640,9 @@ mm_raw_free #R1
   sl_free size=48 class=4
 ```
 
-<!-- test: rc-union-struct-payload-freed -->
+<!-- test: rc-enum-struct-payload-freed -->
 <!-- MmTrace -->
-A union case with a struct-typed associated value; when the enum is freed its payload must be decref'd.
+A enum case with a struct-typed associated value; when the enum is freed its payload must be decref'd.
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
@@ -1650,7 +1650,7 @@ type Body
 	export var mass Integer
 end 'Body'
 
-union Shape
+enum Shape
 	empty
 	solid(body Body)
 end 'Shape'
@@ -3723,10 +3723,10 @@ end 'main'
 21
 ```
 
-<!-- test: rc-struct-with-string-union-in-array -->
-Pushing structs that contain unions with string payloads into an array must not leak. The union destructors must handle string payload cleanup during array destruction.
+<!-- test: rc-struct-with-string-enum-in-array -->
+Pushing structs that contain enums with string payloads into an array must not leak. The enum destructors must handle string payload cleanup during array destruction.
 ```maxon
-export union QueryKey
+export enum QueryKey
 		sourceFile(path String)
 		allModule
 end 'QueryKey'

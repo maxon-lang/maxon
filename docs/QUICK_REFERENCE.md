@@ -205,7 +205,7 @@ export function publicFunc() returns Score     // visible to other files
 function privateFunc() returns Score           // only this file
 
 export type Point                               // visible to other files
-export union Color                              // visible to other files
+export enum Color                               // visible to other files
 export typealias Score = int(0 to 100)          // visible to other files
 export var sharedCounter = 0                    // visible to other files
 ```
@@ -287,7 +287,7 @@ break 'label'    // exits match (or loop) with that label
 
 Range patterns: `a..=b` (inclusive), `a..<b` (exclusive upper), `a..` (open upper), `..=b`/`..<b` (open lower), `..` (wildcard).
 
-All matches must be exhaustive. For non-enum/union matches (int, float, string, char), a `default` arm is required. Enum and union matches must cover all cases explicitly. Enums support range patterns: `Priority.low to Priority.high`. Unions with associated values support range patterns on bare case names: `caseName1 to caseName2` (inclusive) or `caseName1 upto caseName2` (exclusive upper bound). A range arm cannot extract bindings, but can cover cases that have associated values. Use `default throws` or `default panic("message")` for non-exhaustive matching (see below).
+All matches must be exhaustive. For non-enum matches (int, float, string, char), a `default` arm is required. Enum matches must cover all cases explicitly. Enums support range patterns: `Priority.low to Priority.high`. Enums with associated values support range patterns on bare case names: `caseName1 to caseName2` (inclusive) or `caseName1 upto caseName2` (exclusive upper bound). A range arm cannot extract bindings, but can cover cases that have associated values. Use `default throws` or `default panic("message")` for non-exhaustive matching (see below).
 
 Pattern bindings are checked for unused (E3012). Use `_` to discard: `success(_)` or `pair(_, second)`. To discard all associated values, omit parentheses entirely: `success then ...`
 
@@ -300,7 +300,7 @@ let result = match value 'label'
 end 'label'
 ```
 
-### Default Throws / Default Panic (non-exhaustive enum/union match)
+### Default Throws / Default Panic (non-exhaustive enum match)
 ```maxon
 // Statement form: throws an error for unmatched cases
 // Enclosing function must declare 'throws ErrorType'
@@ -325,7 +325,7 @@ let desc = match shape 'describe'
 end 'describe'
 ```
 
-`default throws` and `default panic("message")` are the only forms of `default` allowed on enum and union matches (E2046). For non-enum/union matches, `default` with arbitrary code is still valid.
+`default throws` and `default panic("message")` are the only forms of `default` allowed on enum matches (E2046). For non-enum matches, `default` with arbitrary code is still valid.
 
 ## Types 
 
@@ -404,61 +404,11 @@ extension Array implements Hashable, Equatable where Element is Hashable and Equ
 end 'Array'
 ```
 
-## Unions
-
-```maxon
-// Simple
-union Direction
-		north
-		south
-end 'Direction'
-
-// Associated values
-union Result
-		success(value int)
-		failure(code int, message String)
-		pending
-end 'Result'
-var r = Result.success(42)
-var r2 = Result.failure(404, message: "Not found")
-
-// Pattern matching
-match result 'handle'
-		success(v) then print("{v}")
-		failure(c, msg) then print("{c}: {msg}")
-		pending then print("waiting")
-end 'handle'
-
-// Mutable match bindings (var union = write-back, let union = read-only)
-var box = Result.success(10)
-match box 'update'
-		success(v) then v = 42       // writes back to box in-place
-		failure(c, msg) then return
-		pending then return
-end 'update'
-
-// Create from name (throws UnionError.invalidName on unknown name)
-var dir = try Direction.fromName("north") otherwise Direction.south
-var c = try Result.fromName("success", 42) otherwise Result.pending
-
-// Methods
-union Direction
-		north
-		south
-		function opposite() returns Direction
-				return match self 'c'
-						north gives Direction.south
-						south gives Direction.north
-				end 'c'
-		end 'opposite'
-end 'Direction'
-```
-
-Union values cannot be compared with `==` or `!=` (error E3066). Use `match` to inspect unions. This prevents bugs when new cases are added to a union. Unions auto-conform to `Hashable` internally for Map/Set usage.
-
 ## Enums
 
-Enums are like unions but simpler: no methods, no associated values. Direct `==` and `!=` comparison is allowed. Enum matches require exhaustive coverage (all cases or range patterns). Enums support `.rawValue`, `.name`, `.ordinal`, `.allCases`, `fromRawValue()`, and `fromName()`.
+Enums define a fixed set of named cases. They can be simple (auto-increment integer values), have explicit raw values, or carry associated values. Enums without associated values support direct `==` and `!=` comparison, `.rawValue`, `.name`, `.ordinal`, `.allCases`, `fromRawValue()`, and `fromName()`. Enums with associated values support methods and pattern matching with value extraction.
+
+### Simple / Raw-Value Enums
 
 ```maxon
 // Integer (auto-increment from 0)
@@ -516,11 +466,57 @@ export enum Permission
 end 'Permission'
 ```
 
+### Enums with Associated Values
+
+```maxon
+// Associated values
+enum Result
+		success(value int)
+		failure(code int, message String)
+		pending
+end 'Result'
+var r = Result.success(42)
+var r2 = Result.failure(404, message: "Not found")
+
+// Pattern matching
+match result 'handle'
+		success(v) then print("{v}")
+		failure(c, msg) then print("{c}: {msg}")
+		pending then print("waiting")
+end 'handle'
+
+// Mutable match bindings (var enum = write-back, let enum = read-only)
+var box = Result.success(10)
+match box 'update'
+		success(v) then v = 42       // writes back to box in-place
+		failure(c, msg) then return
+		pending then return
+end 'update'
+
+// Create from name (throws EnumError.invalidName on unknown name)
+var dir = try Direction.fromName("north") otherwise Direction.south
+var c = try Result.fromName("success", 42) otherwise Result.pending
+
+// Methods
+enum Direction
+		north
+		south
+		function opposite() returns Direction
+				return match self 'c'
+						north gives Direction.south
+						south gives Direction.north
+				end 'c'
+		end 'opposite'
+end 'Direction'
+```
+
+Enum values with associated values cannot be compared with `==` or `!=` (error E3066). Use `match` to inspect them. This prevents bugs when new cases are added. Enums auto-conform to `Hashable` internally for Map/Set usage.
+
 ## Error Handling
 
 ```maxon
-// Define error type (must be union conforming to Error)
-union FileError implements Error
+// Define error type (must be enum conforming to Error)
+enum FileError implements Error
 		notFound
 		permissionDenied
 end 'FileError'
@@ -686,7 +682,7 @@ ceil(x)    // up
 | `FormattedStringable` | `toString(format) -> String` |
 | `Iterable uses E` | `createIterator()`, `next() -> E throws IterationError` |
 | `Strideable` | `advancedBy(n) -> Self` (enables range expressions) |
-| `Error` | (marker for throwable unions) |
+| `Error` | (marker for throwable enums) |
 
 ## File I/O
 

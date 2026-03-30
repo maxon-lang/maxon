@@ -52,7 +52,7 @@ public static partial class MaxonToStandardConversion {
   /// Resolve the standard-level result value type for a call or try_call.
   /// </summary>
   private static StdValue? ResolveCallResultType(MaxonValueKind? resultKind, MlirType? calleeReturnType) {
-    if (resultKind == MaxonValueKind.Enum && calleeReturnType is MlirUnionType retEnumType) {
+    if (resultKind == MaxonValueKind.Enum && calleeReturnType is MlirEnumType retEnumType) {
       var backingType = ResolveEnumBackingMlirType(retEnumType);
       if (backingType == MlirType.F64) return new StdF64(MlirContext.Current.NextId());
       if (backingType == MlirType.F32) return new StdF32(MlirContext.Current.NextId());
@@ -232,9 +232,9 @@ public static partial class MaxonToStandardConversion {
     var typeDefs = _resultModule!.TypeDefs;
     if (!typeDefs.TryGetValue(typeName, out var typeDef)) return null;
 
-    // Union types with associated values that have heap-allocated payloads need destructors
-    if (typeDef is MlirUnionType unionType && unionType.HasAssociatedValues) {
-      foreach (var c in unionType.Cases) {
+    // Enum types with associated values that have heap-allocated payloads need destructors
+    if (typeDef is MlirEnumType enumType && enumType.HasAssociatedValues) {
+      foreach (var c in enumType.Cases) {
         if (c.AssociatedValues == null) continue;
         foreach (var (_, avType) in c.AssociatedValues) {
           if (avType.IsHeapAllocated) return $"__destruct_{typeName}";
@@ -274,7 +274,7 @@ public static partial class MaxonToStandardConversion {
   /// <summary>
   /// Checks if a struct field holds a heap-allocated type, resolving through typeDefs
   /// when the field's own type object is a stale copy (e.g. tuple fields created before
-  /// the union type's associated value cases were populated).
+  /// the enum type's associated value cases were populated).
   /// </summary>
   private static bool IsFieldHeapAllocated(MlirStructField field, Dictionary<string, MlirType> typeDefs) {
     if (field.Type.IsHeapAllocated) return true;
@@ -493,7 +493,7 @@ public static partial class MaxonToStandardConversion {
       var candidateTypeName = parts[i - 1];
       if (module.TypeDefs.TryGetValue(candidateTypeName, out var ownerType)) {
         bool hasAssocTypes = (ownerType is MlirStructType st && st.AssociatedTypeNames.Count > 0)
-                          || (ownerType is MlirUnionType ut && ut.AssociatedTypeNames.Count > 0);
+                          || (ownerType is MlirEnumType ut && ut.AssociatedTypeNames.Count > 0);
         if (hasAssocTypes) {
           // Check if this type is used as a source for at least one concrete alias
           bool hasConcreteAlias = module.TypeAliasSources.Values
@@ -529,14 +529,14 @@ public static partial class MaxonToStandardConversion {
   private static bool IsEnumInstanceMethod<T>(MlirFunction<T> func) where T : IPrintableOp =>
     func.ParamNames.Count > 0
     && func.ParamNames[0] == "self"
-    && func.ParamTypes[0] is MlirUnionType;
+    && func.ParamTypes[0] is MlirEnumType;
 
   /// <summary>
   /// Calculates the max number of payload slots needed across all enum cases.
   /// Each associated value occupies exactly one slot: scalars store their value
   /// directly, structs and associated-value enums store a heap pointer.
   /// </summary>
-  private static int GetMaxFlatPayloadSlots(MlirUnionType enumType) {
+  private static int GetMaxFlatPayloadSlots(MlirEnumType enumType) {
     int max = 0;
     foreach (var c in enumType.Cases) {
       if (c.AssociatedValues == null) continue;

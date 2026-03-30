@@ -64,7 +64,7 @@ bool runOnBasicBlock(MIRBasicBlock &block) {
 
 **SIMD optimization:**
 - Use SIMD bitsets for def/use tracking (256-bit = 256 values tracked)
-- Vectorized set operations (union, intersection) for dataflow analysis
+- Vectorized set operations (enum, intersection) for dataflow analysis
 - Significantly faster for SSA optimization passes
 
 ---
@@ -87,7 +87,7 @@ for (auto *inst : instructions) {
 **SIMD optimization:**
 - Represent live sets as SIMD bitsets (256-bit = 256 virtual registers)
 - Vectorized liveness propagation through basic blocks
-- Fast set union/intersection operations
+- Fast set enum/intersection operations
 
 **Impact:** Register allocation is a significant compile-time bottleneck. SIMD could provide 4-8x speedup on liveness analysis.
 

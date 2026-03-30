@@ -128,7 +128,7 @@ MIR Optimization → Register Allocation → x86-64 Code Generation → PE/ELF B
 - **No reference types** - All parameters passed by value (except arrays)
 - **No return of complex types** - Can't return arrays from functions
 - **No enums** - Would need for AST node types, token types
-- **No unions/variants** - Critical for AST representation
+- **No enums with associated values** - Critical for AST representation
 - **No generics** - Would need for container types
 - **No operator overloading** - Limits expressiveness
 
@@ -301,11 +301,11 @@ end 'check'
 
 ---
 
-#### 2.2 Tagged Unions / Sum Types (Week 6-7)
+#### 2.2 Tagged Enums / Sum Types (Week 6-7)
 
 **Language Feature:**
 ```maxon
-union ASTNode
+enum ASTNode
 		IntegerLiteral { value int }
 		BinaryOp { op TokenType, left ptr, right ptr }
 		Identifier { name String }
@@ -320,15 +320,15 @@ end 'check'
 ```
 
 **Implementation needed:**
-- Union declaration syntax
-- Tagged union with discriminator
+- Enum with associated values declaration syntax
+- Tagged enum with discriminator
 - Pattern matching (or type checking methods)
 - Memory layout compatible with C++
 
 **Compiler component to rewrite:** AST nodes
 - ~30 AST node types currently in C++
 - Core of compiler representation
-- Validates union + pattern matching
+- Validates enum + pattern matching
 
 **Deliverable:** AST node definitions in Maxon
 
@@ -407,7 +407,7 @@ type Optional<T>
 end 'Optional'
 
 // Or proper option type
-union Option<T>
+enum Option<T>
 		Some { value T }
 		None
 end 'Option'
@@ -415,7 +415,7 @@ end 'Option'
 
 **Compiler component to rewrite:** Parser (~2,000 lines)
 - Largest single component so far
-- Uses all previous features: Vector, HashMap, String, File I/O, Enums, Unions
+- Uses all previous features: Vector, HashMap, String, File I/O, Enums
 - Parses Maxon syntax into AST
 - Comprehensive test via existing test suite
 
@@ -554,7 +554,7 @@ If you want true self-hosting:
 | **Dynamic Strings** | Medium | Very High | 2 | Week 2-3 |
 | **Hash Maps** | High | Very High | 3 | Week 3-4 |
 | **Enums** | Low | High | 4 | Week 5 |
-| **Tagged Unions** | High | Very High | 5 | Week 6-7 |
+| **Tagged Enums** | High | Very High | 5 | Week 6-7 |
 | **Generics** | Very High | Medium | 6 | Week 8-9 |
 | **File I/O** | Medium | Very High | 7 | Week 10 |
 | **Methods on Structs** | Medium | High | 8 | Week 11 |
@@ -606,7 +606,7 @@ At each phase:
 ✓ All backend tests passing
 
 ### Milestone 2: Type System (Month 2)
-✓ Enums, unions, generics working
+✓ Enums, generics working
 ✓ AST nodes in Maxon
 ✓ Type-safe compiler internals
 

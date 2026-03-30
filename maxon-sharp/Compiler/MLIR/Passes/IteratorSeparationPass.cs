@@ -536,7 +536,7 @@ public static class IteratorSeparationPass {
 
       case MaxonEnumConstructOp enumConstruct: {
         var newOp = new MaxonEnumConstructOp(enumConstruct.EnumTypeName, enumConstruct.CaseName,
-          enumConstruct.Ordinal, RemapAll(enumConstruct.Args));
+          enumConstruct.TagValue, RemapAll(enumConstruct.Args));
         valueMap[enumConstruct.Result.Id] = newOp.Result;
         targetBlock.AddOp(newOp);
         break;
@@ -827,7 +827,7 @@ public static class IteratorSeparationPass {
         var fieldKind = field.Type.ToValueKind();
         string? fieldStructTypeName = null;
         if (field.Type is MlirStructType fst) fieldStructTypeName = fst.Name;
-        else if (field.Type is MlirUnionType fut) fieldStructTypeName = fut.Name;
+        else if (field.Type is MlirEnumType fut) fieldStructTypeName = fut.Name;
 
         var access = new MaxonFieldAccessOp(selfParam.Result, info.ShortTypeName, field.Name,
           fieldKind, fieldStructTypeName);

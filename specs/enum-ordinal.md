@@ -225,21 +225,22 @@ end 'main'
 1
 ```
 
-### Error: Ordinal on Union
+### Ordinal on Simple Enum
 
-<!-- test: enum-ordinal.error-union-ordinal -->
+`.ordinal` is available on all enums.
+
+<!-- test: enum-ordinal.error-enum-ordinal -->
 ```maxon
-union Shape
+enum Shape
 	circle
 	square
 end 'Shape'
 
 function main() returns ExitCode
-	var s = Shape.circle
-	var o = s.ordinal
-	return 0
+	var s = Shape.square
+	return s.ordinal
 end 'main'
 ```
-```maxoncstderr
-error E4006: specs/fragments/enum-ordinal/enum-ordinal.error-union-ordinal.test:9:12: union type 'Shape' has no property 'ordinal'
+```exitcode
+1
 ```

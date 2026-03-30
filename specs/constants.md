@@ -9,7 +9,7 @@ category: type-system
 
 # Enum
 
-Enum define a named group of typed constant values. Unlike unions, enum support direct `==` and `!=` comparison and have no methods.
+Enum define a named group of typed constant values. Unlike enums, enum support direct `==` and `!=` comparison and have no methods.
 
 ### Integer Enum
 
@@ -121,7 +121,7 @@ var n = s.name         // "notFound"
 
 ### fromRawValue
 
-The `fromRawValue` static method converts a raw value back to an enum. It returns an error union that succeeds with the enum value if the raw value matches a case, or fails if no match is found.
+The `fromRawValue` static method converts a raw value back to an enum. It returns an error enum that succeeds with the enum value if the raw value matches a case, or fails if no match is found.
 
 For simple enum (no explicit backing values), the raw value is the ordinal (0, 1, 2, ...):
 
@@ -149,7 +149,7 @@ var status = try HttpStatus.fromRawValue(404) otherwise HttpStatus.ok
 
 ### fromName
 
-The `fromName` static method converts a string name back to an enum. It returns an error union that succeeds with the enum value if the name matches a case, or fails if no match is found.
+The `fromName` static method converts a string name back to an enum. It returns an error enum that succeeds with the enum value if the name matches a case, or fails if no match is found.
 
 ```text
 enum Color

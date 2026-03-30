@@ -9,7 +9,7 @@ category: control-flow
 
 ## Documentation
 
-Enum match expressions require exhaustive case coverage, just like union matches. Every enum case must be matched by either an explicit case pattern or a range pattern. Plain `default` is not allowed — use `default throws` if you want a catch-all that throws an error.
+Enum match expressions require exhaustive case coverage, just like enum matches. Every enum case must be matched by either an explicit case pattern or a range pattern. Plain `default` is not allowed — use `default throws` if you want a catch-all that throws an error.
 
 Range patterns use enum case references as bounds:
 

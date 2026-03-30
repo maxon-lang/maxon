@@ -157,10 +157,10 @@ end 'findUser'
 
 ### Define Domain-Specific Error Types
 
-Create error unions that describe failures in your domain. This produces clearer error messages and enables precise error handling.
+Create error enums that describe failures in your domain. This produces clearer error messages and enables precise error handling.
 
 ```maxon
-union ConfigError implements Error
+enum ConfigError implements Error
 	fileNotFound
 	invalidSyntax
 	missingRequiredField
@@ -333,9 +333,9 @@ builder.addField("name")
 
 ## Pattern Matching
 
-### Prefer `match` Over Chained `if` for Unions and Enums
+### Prefer `match` Over Chained `if` for Enums
 
-`match` guarantees exhaustiveness. If a new case is added to a union, the compiler forces you to handle it.
+`match` guarantees exhaustiveness. If a new case is added to an enum, the compiler forces you to handle it.
 
 ```maxon
 ' Good: exhaustive, compiler-checked
@@ -346,7 +346,7 @@ match direction 'navigate'
 	west then moveLeft()
 end 'navigate'
 
-' Avoid for unions: error-prone, not exhaustive
+' Avoid: error-prone, not exhaustive
 if dirString == "north" 'n'
 	moveUp()
 end 'n' else 'other'
@@ -407,10 +407,10 @@ end 'classify'
 
 ### Use Range Patterns with `break` to Skip Unhandled Cases
 
-When matching an enum or union where you only care about a few cases, you cannot use `default` (it must be `default throws` or `default panic`). Instead, use a range pattern covering the remaining cases with `break` to skip them silently.
+When matching an enum where you only care about a few cases, you cannot use `default` (it must be `default throws` or `default panic`). Instead, use a range pattern covering the remaining cases with `break` to skip them silently.
 
 ```maxon
-union Instruction
+enum Instruction
 	add(dst Register, src Register)
 	sub(dst Register, src Register)
 	load(dst Register, addr Address)
@@ -426,7 +426,7 @@ match instruction 'optimize'
 end 'optimize'
 ```
 
-This is preferable to `default throws` or `default panic` because the unhandled cases are not errors — they are simply not relevant. The range pattern still participates in exhaustiveness checking, so if a new case is added to the union, the compiler will tell you whether it falls inside or outside the range.
+This is preferable to `default throws` or `default panic` because the unhandled cases are not errors — they are simply not relevant. The range pattern still participates in exhaustiveness checking, so if a new case is added to the enum, the compiler will tell you whether it falls inside or outside the range.
 
 For enums, the same pattern works with enum-qualified range bounds:
 

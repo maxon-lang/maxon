@@ -34,7 +34,7 @@ User-defined types implement `Parsable` by providing a static `fromString` metho
 ```maxon
 typealias Amount = int(i64.min to i64.max)
 
-union MoneyParseError implements Error
+enum MoneyParseError implements Error
 	InvalidFormat = 1
 	NegativeValue = 2
 end 'MoneyParseError'
@@ -86,7 +86,7 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 // Type can implement Parsable with throwing static method
-union ParseError implements Error
+enum ParseError implements Error
 	Invalid = 1
 end 'ParseError'
 
@@ -112,7 +112,7 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 // Parsable.fromString returns struct on success
-union ParseError implements Error
+enum ParseError implements Error
 	Invalid = 1
 end 'ParseError'
 
@@ -141,7 +141,7 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 // Parsable.fromString throws error on invalid input
-union ParseError implements Error
+enum ParseError implements Error
 	Empty = 1
 end 'ParseError'
 
@@ -173,7 +173,7 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 // Parsable can throw different errors for different conditions
-union MoneyParseError implements Error
+enum MoneyParseError implements Error
 	InvalidFormat = 1
 	NegativeValue = 2
 end 'MoneyParseError'
@@ -211,7 +211,7 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 // otherwise blocks execute code when error occurs, then continue execution
-union ParseError implements Error
+enum ParseError implements Error
 	Invalid = 1
 end 'ParseError'
 
@@ -276,7 +276,7 @@ error E3016: specs/fragments/parsable-interface/error.missing-throws.test:6:6: M
 typealias Integer = int(i64.min to i64.max)
 
 // Implementation must throw a type that conforms to Error
-union NotAnError
+enum NotAnError
 	Bad = 1
 end 'NotAnError'
 

@@ -63,7 +63,7 @@ public static class MaxonValueKindExtensions {
     if (type == MlirType.I16 || type == MlirType.U16) return MaxonValueKind.Short;
     if (type == MlirType.I32 || type == MlirType.U32 || type == MlirType.U64) return MaxonValueKind.Integer;
     if (type is MlirRangedPrimitiveType rpt) return rpt.BaseType.ToValueKind();
-    if (type is MlirUnionType) return MaxonValueKind.Enum;
+    if (type is MlirEnumType) return MaxonValueKind.Enum;
     if (type is MlirTypeParameterType) return MaxonValueKind.TypeParameter;
     if (type is MlirStructType) return MaxonValueKind.Struct;
     if (type is MlirFunctionType) return MaxonValueKind.Function;
@@ -674,11 +674,11 @@ public class MaxonEnumLiteralOp : MaxonOp {
 
 // Constructs an associated-value enum case: Container.value(42)
 // For cases without associated values (e.g. Container.empty), Args is empty.
-public class MaxonEnumConstructOp(string enumTypeName, string caseName, int ordinal, List<MaxonValue> args) : MaxonOp {
+public class MaxonEnumConstructOp(string enumTypeName, string caseName, long tagValue, List<MaxonValue> args) : MaxonOp {
   public override string Mnemonic => $"maxon.enum_construct @{EnumTypeName}.{CaseName}";
   public string EnumTypeName { get; } = enumTypeName;
   public string CaseName { get; } = caseName;
-  public int Ordinal { get; } = ordinal;
+  public long TagValue { get; } = tagValue;
   public List<MaxonValue> Args { get; } = args;
   public MaxonEnum Result { get; } = new MaxonEnum(MlirContext.Current.NextId(), enumTypeName);
   public override IReadOnlyList<string> PrintableResults => [Result.ToString()];

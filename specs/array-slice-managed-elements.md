@@ -8,7 +8,7 @@ category: memory
 
 ## Documentation
 
-When `Array.slice` copies elements via `managed.slice()`, managed elements (structs, unions)
+When `Array.slice` copies elements via `managed.slice()`, managed elements (structs, enums)
 must have their reference counts incremented. The current implementation uses a raw `memcpy`
 which copies heap pointers without adjusting refcounts. When the source array is later freed,
 its destructor decrements each element's refcount — potentially freeing elements that the
@@ -52,12 +52,12 @@ end 'main'
 10
 ```
 
-<!-- test: slice-union-source-freed -->
-### Slice of union array, source freed before access
+<!-- test: slice-enum-source-freed -->
+### Slice of enum array, source freed before access
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
-export union Op
+export enum Op
 		add(value Integer)
 		sub(value Integer)
 		nop

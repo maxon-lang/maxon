@@ -9,7 +9,7 @@ category: memory
 ## Documentation
 
 When `Array.append` copies elements from one array to another via `managed.concat()`,
-managed elements (structs, unions, strings) must have their reference counts incremented.
+managed elements (structs, enums, strings) must have their reference counts incremented.
 The current implementation uses a raw `memcpy` which copies heap pointers without adjusting
 refcounts. When the source array is later freed, its destructor decrements each element's
 refcount — potentially freeing elements that the destination array still references.
@@ -58,12 +58,12 @@ end 'main'
 10
 ```
 
-<!-- test: append-union-source-freed -->
-### Append unions, source freed before access
+<!-- test: append-enum-source-freed -->
+### Append enums, source freed before access
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
-export union Op
+export enum Op
 		add(value Integer)
 		sub(value Integer)
 		nop

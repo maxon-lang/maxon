@@ -36,7 +36,7 @@ try await promise otherwise ignore
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
-union ComputeError implements Error
+enum ComputeError implements Error
 		overflow
 end 'ComputeError'
 
@@ -63,7 +63,7 @@ end 'main'
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
-union ComputeError implements Error
+enum ComputeError implements Error
 		overflow
 end 'ComputeError'
 
@@ -88,7 +88,7 @@ end 'main'
 
 <!-- test: async-filesystem.try-await-string-success -->
 ```maxon
-union TestError implements Error
+enum TestError implements Error
 		failed
 end 'TestError'
 
@@ -117,7 +117,7 @@ Alice
 
 <!-- test: async-filesystem.try-await-string-error -->
 ```maxon
-union TestError implements Error
+enum TestError implements Error
 		failed
 end 'TestError'
 
@@ -148,7 +148,7 @@ unknown
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
-union MathError implements Error
+enum MathError implements Error
 		divByZero
 end 'MathError'
 
@@ -179,7 +179,7 @@ end 'main'
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
-union TestError implements Error
+enum TestError implements Error
 		failed
 end 'TestError'
 

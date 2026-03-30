@@ -71,7 +71,7 @@ public static class CloneSynthesisPass {
       var fieldKind = field.Type.ToValueKind();
       string? fieldStructTypeName = null;
       if (field.Type is MlirStructType fst) fieldStructTypeName = fst.Name;
-      else if (field.Type is MlirUnionType fut) fieldStructTypeName = fut.Name;
+      else if (field.Type is MlirEnumType fut) fieldStructTypeName = fut.Name;
 
       var accessOp = new MaxonFieldAccessOp(selfParam.Result, typeName, field.Name, fieldKind, fieldStructTypeName);
       block.AddOp(accessOp);

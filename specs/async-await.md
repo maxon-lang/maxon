@@ -163,7 +163,7 @@ end 'main'
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
-union TestError implements Error
+enum TestError implements Error
 		failed
 end 'TestError'
 
@@ -192,7 +192,7 @@ end 'main'
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
-union TestError implements Error
+enum TestError implements Error
 		failed
 end 'TestError'
 
@@ -224,7 +224,7 @@ end 'main'
 ```maxon
 typealias Integer = int(i64.min to i64.max)
 
-union TestError implements Error
+enum TestError implements Error
 		failed
 end 'TestError'
 
@@ -248,7 +248,7 @@ end 'main'
 ```maxon
 var flag = 0
 
-union TestError implements Error
+enum TestError implements Error
 		failed
 end 'TestError'
 

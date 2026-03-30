@@ -17,7 +17,7 @@ HTTP/1.1 client for making HTTP requests over TCP connections.
 - `HttpResponse` — represents an HTTP response with status code, headers, body
 - `HttpHeaders` — case-insensitive header map
 - `HttpMethod` — enum of HTTP methods (get, post, put, delete, head, patch)
-- `HttpError` — error union for HTTP operations
+- `HttpError` — error enum for HTTP operations
 
 **Quick usage:**
 
