@@ -1,0 +1,250 @@
+// Target dispatch for register allocation.
+// This is the ONLY file that knows which targets exist.
+// Adding a new target: add an enum variant to RegTarget and add match arms below.
+
+export enum RegTarget
+	x64
+	arm64
+end 'RegTarget'
+
+// --- State creation dispatch ---
+
+export function targetCreateRegState(target Target) returns RegState
+	return match target.cpu 'dispatch'
+		x86_64 gives createX64RegState()
+		aarch64 gives createArm64RegState()
+	end 'dispatch'
+end 'targetCreateRegState'
+
+// --- GPR emission dispatch ---
+
+export function targetEmitSpill(state RegState, dstBlock MlirBlock, regOrdinal RegOrdinal, stackOffset RegInt)
+	match state.target 'dispatch'
+		x64 then rmEmitSpillX64(dstBlock, regOrdinal: regOrdinal, stackOffset: stackOffset)
+		arm64 then rmEmitSpillArm64(dstBlock, regOrdinal: regOrdinal, stackOffset: stackOffset)
+	end 'dispatch'
+end 'targetEmitSpill'
+
+export function targetEmitReload(state RegState, dstBlock MlirBlock, regOrdinal RegOrdinal, stackOffset RegInt)
+	match state.target 'dispatch'
+		x64 then rmEmitReloadX64(dstBlock, regOrdinal: regOrdinal, stackOffset: stackOffset)
+		arm64 then rmEmitReloadArm64(dstBlock, regOrdinal: regOrdinal, stackOffset: stackOffset)
+	end 'dispatch'
+end 'targetEmitReload'
+
+export function targetEmitMovImm(state RegState, dstBlock MlirBlock, regOrdinal RegOrdinal, value RegInt)
+	match state.target 'dispatch'
+		x64 then rmEmitMovImmX64(dstBlock, regOrdinal: regOrdinal, value: value)
+		arm64 then rmEmitMovImmArm64(dstBlock, regOrdinal: regOrdinal, value: value)
+	end 'dispatch'
+end 'targetEmitMovImm'
+
+export function targetEmitMovReg(state RegState, dstBlock MlirBlock, destOrd RegOrdinal, srcOrd RegOrdinal)
+	match state.target 'dispatch'
+		x64 then rmEmitMovRegX64(dstBlock, destOrd: destOrd, srcOrd: srcOrd)
+		arm64 then rmEmitMovRegArm64(dstBlock, destOrd: destOrd, srcOrd: srcOrd)
+	end 'dispatch'
+end 'targetEmitMovReg'
+
+// --- FP emission dispatch ---
+
+export function targetEmitSpillFp(state RegState, dstBlock MlirBlock, fpOrdinal RegOrdinal, stackOffset RegInt)
+	match state.target 'dispatch'
+		x64 then rmEmitSpillFpX64(dstBlock, fpOrdinal: fpOrdinal, stackOffset: stackOffset)
+		arm64 then rmEmitSpillFpArm64(dstBlock, fpOrdinal: fpOrdinal, stackOffset: stackOffset)
+	end 'dispatch'
+end 'targetEmitSpillFp'
+
+export function targetEmitReloadFp(state RegState, dstBlock MlirBlock, fpOrdinal RegOrdinal, stackOffset RegInt)
+	match state.target 'dispatch'
+		x64 then rmEmitReloadFpX64(dstBlock, fpOrdinal: fpOrdinal, stackOffset: stackOffset)
+		arm64 then rmEmitReloadFpArm64(dstBlock, fpOrdinal: fpOrdinal, stackOffset: stackOffset)
+	end 'dispatch'
+end 'targetEmitReloadFp'
+
+export function targetEmitMovFp(state RegState, dstBlock MlirBlock, destOrd RegOrdinal, srcOrd RegOrdinal)
+	match state.target 'dispatch'
+		x64 then rmEmitMovFpX64(dstBlock, destOrd: destOrd, srcOrd: srcOrd)
+		arm64 then rmEmitMovFpArm64(dstBlock, destOrd: destOrd, srcOrd: srcOrd)
+	end 'dispatch'
+end 'targetEmitMovFp'
+
+// --- Call/stack emission dispatch ---
+
+export function targetEmitCallDirect(state RegState, dstBlock MlirBlock, callee ByteArray)
+	match state.target 'dispatch'
+		x64 then rmEmitCallDirectX64(dstBlock, callee: callee)
+		arm64 then rmEmitCallDirectArm64(dstBlock, callee: callee)
+	end 'dispatch'
+end 'targetEmitCallDirect'
+
+export function targetEmitCallIndirect(state RegState, dstBlock MlirBlock, regOrd RegOrdinal)
+	match state.target 'dispatch'
+		x64 then rmEmitCallIndirectX64(dstBlock, regOrd: regOrd)
+		arm64 then rmEmitCallIndirectArm64(dstBlock, regOrd: regOrd)
+	end 'dispatch'
+end 'targetEmitCallIndirect'
+
+export function targetEmitSubSp(state RegState, dstBlock MlirBlock, amount RegInt)
+	match state.target 'dispatch'
+		x64 then rmEmitSubSpX64(dstBlock, amount: amount)
+		arm64 then rmEmitSubSpArm64(dstBlock, amount: amount)
+	end 'dispatch'
+end 'targetEmitSubSp'
+
+export function targetEmitAddSp(state RegState, dstBlock MlirBlock, amount RegInt)
+	match state.target 'dispatch'
+		x64 then rmEmitAddSpX64(dstBlock, amount: amount)
+		arm64 then rmEmitAddSpArm64(dstBlock, amount: amount)
+	end 'dispatch'
+end 'targetEmitAddSp'
+
+export function targetEmitStoreToSpOffset(state RegState, dstBlock MlirBlock, regOrd RegOrdinal, offset RegInt)
+	match state.target 'dispatch'
+		x64 then rmEmitStoreToSpOffsetX64(dstBlock, regOrd: regOrd, offset: offset)
+		arm64 then rmEmitStoreToSpOffsetArm64(dstBlock, regOrd: regOrd, offset: offset)
+	end 'dispatch'
+end 'targetEmitStoreToSpOffset'
+
+export function targetEmitXchgOrSwap(state RegState, dstBlock MlirBlock, ord1 RegOrdinal, ord2 RegOrdinal)
+	if state.hasXchg 'xchg'
+		match state.target 'dispatch'
+			x64 then rmEmitXchgX64(dstBlock, ord1: ord1, ord2: ord2)
+			arm64 then break 'dispatch'
+		end 'dispatch'
+	end 'xchg' else 'threeMov'
+		// No native xchg: 3-mov swap via cycle-break scratch register
+		let scratch = state.gprCycleBreakOrd
+		targetEmitMovReg(state, dstBlock: dstBlock, destOrd: scratch, srcOrd: ord2)
+		targetEmitMovReg(state, dstBlock: dstBlock, destOrd: ord2, srcOrd: ord1)
+		targetEmitMovReg(state, dstBlock: dstBlock, destOrd: ord1, srcOrd: scratch)
+	end 'threeMov'
+end 'targetEmitXchgOrSwap'
+
+export function targetEmitEpilogue(state RegState, dstBlock MlirBlock)
+	match state.target 'dispatch'
+		x64 then rmEmitEpilogueX64(dstBlock)
+		arm64 then rmEmitEpilogueArm64(dstBlock)
+	end 'dispatch'
+end 'targetEmitEpilogue'
+
+// --- Register name dispatch ---
+
+export function targetRegName(state RegState, ord RegOrdinal) returns String
+	if ord == RM_NONE 'none'
+		return "none"
+	end 'none'
+	return match state.target 'dispatch'
+		x64 gives rmRegNameX64(ord)
+		arm64 gives rmRegNameArm64(ord)
+	end 'dispatch'
+end 'targetRegName'
+
+// --- Per-op allocation dispatch ---
+
+export function targetAllocOp(state RegState, op MlirOp, dstBlock MlirBlock)
+	match state.target 'dispatch'
+		x64 then match op 'x64dispatch'
+			x64(x64Op) then allocX64Op(state, x64Op: x64Op, dstBlock: dstBlock)
+			maxon to mir then dstBlock.ops.push(op)
+			arm64 then dstBlock.ops.push(op)
+		end 'x64dispatch'
+		arm64 then match op 'arm64dispatch'
+			arm64(a64Op) then allocArm64Op(state, a64Op: a64Op, dstBlock: dstBlock)
+			maxon to x64 then dstBlock.ops.push(op)
+		end 'arm64dispatch'
+	end 'dispatch'
+end 'targetAllocOp'
+
+// --- Use count dispatch ---
+
+export function targetCountOpReads(state RegState, counts RegIntArray, op MlirOp)
+	match state.target 'dispatch'
+		x64 then match op 'x64dispatch'
+			x64(x64Op) then countX64OpReads(counts, x64Op: x64Op)
+			maxon to mir then break 'x64dispatch'
+			arm64 then break 'x64dispatch'
+		end 'x64dispatch'
+		arm64 then match op 'arm64dispatch'
+			arm64(a64Op) then countArm64OpReads(counts, a64Op: a64Op)
+			maxon to x64 then break 'arm64dispatch'
+		end 'arm64dispatch'
+	end 'dispatch'
+end 'targetCountOpReads'
+
+// --- Read classification dispatch ---
+
+export function targetClassifyOpReads(state RegState, sinkOnly RegIntArray, usedByNonSink RegIntArray, op MlirOp)
+	match state.target 'dispatch'
+		x64 then match op 'x64dispatch'
+			x64(x64Op) then classifyX64OpReads(sinkOnly, usedByNonSink: usedByNonSink, x64Op: x64Op)
+			maxon to mir then break 'x64dispatch'
+			arm64 then break 'x64dispatch'
+		end 'x64dispatch'
+		arm64 then match op 'arm64dispatch'
+			arm64(a64Op) then classifyArm64OpReads(sinkOnly, usedByNonSink: usedByNonSink, a64Op: a64Op)
+			maxon to x64 then break 'arm64dispatch'
+		end 'arm64dispatch'
+	end 'dispatch'
+end 'targetClassifyOpReads'
+
+// --- Virtual register check dispatch ---
+
+export function targetOpHasVirtualRegs(state RegState, op MlirOp) returns bool
+	return match state.target 'dispatch'
+		x64 gives match op 'x64dispatch'
+			x64(x64Op) gives x64OpHasVirtualRegs(x64Op)
+			maxon to mir gives false
+			arm64 gives false
+		end 'x64dispatch'
+		arm64 gives match op 'arm64dispatch'
+			arm64(a64Op) gives arm64OpHasVirtualRegs(a64Op)
+			maxon to x64 gives false
+		end 'arm64dispatch'
+	end 'dispatch'
+end 'targetOpHasVirtualRegs'
+
+// --- Return terminator dispatch ---
+
+export function targetIsReturnTerminator(state RegState, op MlirOp) returns bool
+	return match state.target 'dispatch'
+		x64 gives isX64RetTerminator(op)
+		arm64 gives isArm64RetTerminator(op)
+	end 'dispatch'
+end 'targetIsReturnTerminator'
+
+// --- Diverging block dispatch ---
+
+export function targetIsDivergingBlock(state RegState, block MlirBlock) returns bool
+	return match state.target 'dispatch'
+		x64 gives isX64DivergingBlock(block)
+		arm64 gives isArm64DivergingBlock(block)
+	end 'dispatch'
+end 'targetIsDivergingBlock'
+
+// --- Pre-seed params dispatch ---
+
+export function targetPreSeedParams(state RegState, srcFunc MlirFunction)
+	match state.target 'dispatch'
+		x64 then preSeedX64ParamRegisters(state, srcFunc: srcFunc)
+		arm64 then break 'dispatch'
+	end 'dispatch'
+end 'targetPreSeedParams'
+
+// --- Forward hints dispatch ---
+
+export function targetComputeAndApplyForwardHints(state RegState, srcFunc MlirFunction)
+	match state.target 'dispatch'
+		x64 then applyForwardHints(computeForwardHints(srcFunc), state: state)
+		arm64 then break 'dispatch'
+	end 'dispatch'
+end 'targetComputeAndApplyForwardHints'
+
+// --- Block arg slot homes dispatch ---
+
+export function targetPreRecordBlockArgSlotHomes(state RegState, srcBlock MlirBlock)
+	match state.target 'dispatch'
+		x64 then rmPreRecordBlockArgSlotHomes(state, srcBlock: srcBlock)
+		arm64 then break 'dispatch'
+	end 'dispatch'
+end 'targetPreRecordBlockArgSlotHomes'

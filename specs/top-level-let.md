@@ -256,3 +256,19 @@ end 'main'
 ```maxoncstderr
 error E2012: specs/fragments/top-level-let/circular-dependency-error.test:3:5: Circular dependency detected among global constants: A, B
 ```
+
+<!-- test: export-let-cross-file -->
+Exported constants are visible from other files.
+```maxon
+// --- file: constants.maxon
+export let MAGIC = 42
+export let OFFSET = -10
+
+// --- file: main.maxon
+function main() returns ExitCode
+	return MAGIC + OFFSET
+end 'main'
+```
+```exitcode
+32
+```

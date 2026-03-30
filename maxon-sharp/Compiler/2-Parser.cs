@@ -740,6 +740,10 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
       if (!source.NonExportedGlobalVarNames.Contains(name))
         _globalVars.TryAdd(name, meta);
     }
+    // Seed exported top-level constants so cross-file references resolve
+    foreach (var (name, value) in source.ExportedConstants) {
+      _topLevelConstants.TryAdd(name, value);
+    }
   }
 
   /// <summary>
@@ -776,7 +780,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
   // ===========================================================================
 
   // Raw constant declaration: stores the token range for the initializer expression
-  private record ConstantDecl(string Name, int TokenStart, int TokenEnd, int Line, int Column);
+  private record ConstantDecl(string Name, int TokenStart, int TokenEnd, int Line, int Column, bool IsExported = false);
 
   private void CollectAndEvaluateTopLevelDecls(MlirModule<MaxonOp> module) {
     var constDecls = new List<ConstantDecl>();
@@ -806,7 +810,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
           module.DeferredGlobalInits.Add(new DeferredGlobalInit(
             nameToken.Value, _tokens, exprStart, _pos, IsMutable: false, nameToken.Line, nameToken.Column, _sourceFilePath));
         } else {
-          constDecls.Add(new ConstantDecl(nameToken.Value, exprStart, _pos, nameToken.Line, nameToken.Column));
+          constDecls.Add(new ConstantDecl(nameToken.Value, exprStart, _pos, nameToken.Line, nameToken.Column, isExported));
         }
       } else if (Check(TokenType.Var)) {
         Advance(); // consume 'var'
@@ -858,8 +862,10 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
     ResolveAutoCloneableConformance(module);
     ResolveAutoEquatableConformance(module);
 
-    // Evaluate constants (handling forward references)
-    var evaluated = new Dictionary<string, object>();
+    // Evaluate constants (handling forward references).
+    // Pre-populate with seeded constants from other files so cross-file
+    // constant references (e.g., export let) resolve during evaluation.
+    var evaluated = new Dictionary<string, object>(_topLevelConstants);
     var evaluating = new HashSet<string>();
 
     foreach (var decl in constDecls) {
@@ -867,6 +873,13 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
     }
 
     _topLevelConstants = evaluated;
+
+    // Store exported constants on the module for cross-file seeding
+    foreach (var decl in constDecls) {
+      if (decl.IsExported && evaluated.TryGetValue(decl.Name, out var constVal)) {
+        module.ExportedConstants[decl.Name] = constVal;
+      }
+    }
 
     // Evaluate deferred global vars using the same constant expression evaluator
     foreach (var deferred in _deferredGlobalVars) {

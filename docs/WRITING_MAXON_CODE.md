@@ -574,6 +574,54 @@ for cp in s.codepoints() 'cp' ... end 'cp'  // codepoints
 
 ---
 
+## Builtin Functions
+
+### Compiler Intrinsics
+
+These are lowered directly to hardware instructions. They accept `float` (or `int`, which is auto-promoted to `float`). All return `float` except `trunc` which returns `int`.
+
+```maxon
+// Single-argument
+abs(x)       // absolute value
+sqrt(x)      // square root
+floor(x)     // round toward negative infinity
+ceil(x)      // round toward positive infinity
+round(x)     // round to nearest (banker's rounding)
+trunc(x)     // truncate toward zero, returns int
+
+// Two-argument (second arg is named)
+min(a, b: b)   // minimum of two values
+max(a, b: b)   // maximum of two values
+```
+
+### Standard Library Functions
+
+```maxon
+print("hello\n")             // print to stdout
+printError("fail\n")         // print to stderr
+panic("invariant violated")  // terminate with stack trace (unrecoverable)
+sleep(100)                   // sleep current green thread (milliseconds)
+```
+
+### Math Library (`Math.*`)
+
+All accept and return `MathValue` (float). Implemented in the standard library.
+
+```maxon
+Math.sin(x)                  // sine (radians)
+Math.cos(x)                  // cosine (radians)
+Math.tan(x)                  // tangent (radians)
+Math.atan(z)                 // arc tangent
+Math.atan2(y, x: x)         // two-argument arc tangent
+Math.exp(x)                  // e^x
+Math.log(x)                  // natural logarithm (ln)
+Math.log2(x)                 // base-2 logarithm
+Math.log10(x)                // base-10 logarithm
+Math.pow(base, exponent: e)  // base raised to exponent
+```
+
+---
+
 ## Operators (precedence high to low)
 
 | Precedence | Operators | Notes |

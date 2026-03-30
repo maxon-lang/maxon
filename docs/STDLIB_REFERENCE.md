@@ -54,17 +54,26 @@ print(value String)                     // Print string to stdout
 
 **Math Functions**
 ```maxon
-abs(x int) int                  // Absolute value
-abs(x float) float              // Absolute value (overloaded)
+abs(x float) float              // Absolute value (int auto-promoted to float)
 sqrt(x float) float             // Square root
-pow(base float, exp float) float // Power
-sin(x float) float              // Sine
-cos(x float) float              // Cosine
-tan(x float) float              // Tangent
-exp(x float) float              // e^x
-log(x float) float              // Natural logarithm
-log2(x float) float             // Base-2 logarithm
-log10(x float) float            // Base-10 logarithm
+floor(x float) float            // Round toward negative infinity
+ceil(x float) float             // Round toward positive infinity
+round(x float) float            // Round to nearest (banker's rounding)
+trunc(x float) int              // Truncate toward zero
+min(a float, b float) float     // Minimum of two values
+max(a float, b float) float     // Maximum of two values
+
+// Math library (stdlib) — called as Math.sin(x), Math.cos(x), etc.
+Math.sin(x float) float         // Sine (radians)
+Math.cos(x float) float         // Cosine (radians)
+Math.tan(x float) float         // Tangent (radians)
+Math.atan(z float) float        // Arc tangent
+Math.atan2(y float, x float) float // Two-argument arc tangent
+Math.exp(x float) float         // e^x
+Math.log(x float) float         // Natural logarithm
+Math.log2(x float) float        // Base-2 logarithm
+Math.log10(x float) float       // Base-10 logarithm
+Math.pow(base float, exponent float) float // Power
 floor(x float) int              // Round down
 ceil(x float) int               // Round up
 round(x float) int              // Round to nearest

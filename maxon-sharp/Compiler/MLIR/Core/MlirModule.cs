@@ -80,6 +80,9 @@ public class MlirModule<TOp> where TOp : IPrintableOp {
   // Non-exported global var names — filtered when seeding _globalVars to other files
   public HashSet<string> NonExportedGlobalVarNames { get; } = [];
 
+  // Exported top-level constants (simple `export let` declarations evaluated at compile time)
+  public Dictionary<string, object> ExportedConstants { get; } = [];
+
   // Source file path for each type/enum/typealias (for file-scoped visibility checks)
   public Dictionary<string, string> TypeDefSourceFiles { get; } = [];
 
