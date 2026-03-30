@@ -227,7 +227,6 @@ function recordDef(valueId ValueId, blockId BlockId, opIndex OpIndex, state Borr
 	end 'miss'
 	info.defBlock = blockId
 	info.defOpIndex = opIndex
-	state.lifetimes.set(valueId, value: info)
 end 'recordDef'
 
 function recordUse(valueId ValueId, blockId BlockId, opIndex OpIndex, state BorrowAnalysisState)
@@ -250,7 +249,6 @@ function recordUse(valueId ValueId, blockId BlockId, opIndex OpIndex, state Borr
 			info.lastUseOpIndex = opIndex
 		end 'differentBlock'
 	end 'subsequentUse'
-	state.lifetimes.set(valueId, value: info)
 end 'recordUse'
 
 function recordDefAndUse(defId ValueId, usedId ValueId, blockId BlockId, opIndex OpIndex, state BorrowAnalysisState)
@@ -326,7 +324,6 @@ function resetSlotBorrows(state BorrowAnalysisState)
 			continue
 		end 'skip'
 		slotState.borrows = BorrowRecordArray{}
-		state.slotBorrows.set(i, value: slotState)
 		i = i + 1
 	end 'clearSlots'
 end 'resetSlotBorrows'
@@ -359,7 +356,6 @@ function expireDeadBorrows(state BorrowAnalysisState, currentBlock BlockId, curr
 		end 'filterBorrows'
 
 		slotState.borrows = liveBorrows
-		state.slotBorrows.set(slotIdx, value: slotState)
 		slotIdx = slotIdx + 1
 	end 'eachSlot'
 end 'expireDeadBorrows'
@@ -423,7 +419,6 @@ function registerBorrow(resultId ValueId, slotId VarSlot, blockId BlockId, opInd
 		return
 	end 'miss'
 	slotState.borrows.push(record)
-	state.slotBorrows.set(slotId, value: slotState)
 	logTrace(LogCategory.mlir, message: () gives "borrow-check: %{resultId} borrows slot_{slotId} at op {opIndex}")
 end 'registerBorrow'
 
