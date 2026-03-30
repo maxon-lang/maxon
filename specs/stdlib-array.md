@@ -1,7 +1,7 @@
 ---
 feature: stdlib-array
 status: stable
-keywords: [stdlib, Array, generic, collection, push, pop, get, set, count, capacity, String, ownership]
+keywords: [stdlib, Array, generic, collection, push, pop, get, set, count, capacity, String, ownership, insert, remove, shiftRight, shiftLeft]
 category: stdlib
 ---
 
@@ -743,5 +743,611 @@ end 'main'
 ```
 ```exitcode
 6
+```
+
+### Insert
+
+<!-- test: insert-at-beginning -->
+Insert at index 0 shifts all elements right.
+
+```maxon
+typealias Int = int(i64.min to i64.max)
+typealias IntArray = Array with Int
+
+function main() returns ExitCode
+	var arr = IntArray{}
+	arr.push(10)
+	arr.push(20)
+	arr.push(30)
+
+	arr.insert(0, value: 5)
+
+	if arr.count() != 4 'cnt'
+		return 1
+	end 'cnt'
+
+	var v0 = try arr.get(0) otherwise -1
+	if v0 != 5 'c0'
+		return 2
+	end 'c0'
+
+	var v1 = try arr.get(1) otherwise -1
+	if v1 != 10 'c1'
+		return 3
+	end 'c1'
+
+	var v3 = try arr.get(3) otherwise -1
+	if v3 != 30 'c3'
+		return 4
+	end 'c3'
+
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: insert-at-middle -->
+Insert in the middle shifts later elements right.
+
+```maxon
+typealias Int = int(i64.min to i64.max)
+typealias IntArray = Array with Int
+
+function main() returns ExitCode
+	var arr = IntArray{}
+	arr.push(10)
+	arr.push(30)
+	arr.push(40)
+
+	arr.insert(1, value: 20)
+
+	if arr.count() != 4 'cnt'
+		return 1
+	end 'cnt'
+
+	var v1 = try arr.get(1) otherwise -1
+	if v1 != 20 'c1'
+		return 2
+	end 'c1'
+
+	var v2 = try arr.get(2) otherwise -1
+	if v2 != 30 'c2'
+		return 3
+	end 'c2'
+
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: insert-at-end -->
+Insert at index equal to count appends like push (no shift needed).
+
+```maxon
+typealias Int = int(i64.min to i64.max)
+typealias IntArray = Array with Int
+
+function main() returns ExitCode
+	var arr = IntArray{}
+	arr.push(10)
+	arr.push(20)
+
+	arr.insert(2, value: 30)
+
+	if arr.count() != 3 'cnt'
+		return 1
+	end 'cnt'
+
+	var v2 = try arr.get(2) otherwise -1
+	if v2 != 30 'c2'
+		return 2
+	end 'c2'
+
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: insert-into-empty -->
+Insert into an empty array at index 0.
+
+```maxon
+typealias Int = int(i64.min to i64.max)
+typealias IntArray = Array with Int
+
+function main() returns ExitCode
+	var arr = IntArray{}
+
+	arr.insert(0, value: 42)
+
+	if arr.count() != 1 'cnt'
+		return 1
+	end 'cnt'
+
+	var v0 = try arr.get(0) otherwise -1
+	if v0 != 42 'c0'
+		return 2
+	end 'c0'
+
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: insert-index-clamps-high -->
+Insert with index beyond count clamps to end position.
+
+```maxon
+typealias Int = int(i64.min to i64.max)
+typealias IntArray = Array with Int
+
+function main() returns ExitCode
+	var arr = IntArray{}
+	arr.push(10)
+	arr.push(20)
+
+	arr.insert(100, value: 30)
+
+	if arr.count() != 3 'cnt'
+		return 1
+	end 'cnt'
+
+	var v2 = try arr.get(2) otherwise -1
+	if v2 != 30 'c2'
+		return 2
+	end 'c2'
+
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: insert-multiple-positions -->
+Insert at various positions to build a specific order.
+
+```maxon
+typealias Int = int(i64.min to i64.max)
+typealias IntArray = Array with Int
+
+function main() returns ExitCode
+	var arr = IntArray{}
+	arr.push(10)
+	arr.push(30)
+	arr.push(50)
+
+	arr.insert(1, value: 20)
+	arr.insert(3, value: 40)
+
+	if arr.count() != 5 'cnt'
+		return 1
+	end 'cnt'
+
+	var v0 = try arr.get(0) otherwise -1
+	var v1 = try arr.get(1) otherwise -1
+	var v2 = try arr.get(2) otherwise -1
+	var v3 = try arr.get(3) otherwise -1
+	var v4 = try arr.get(4) otherwise -1
+
+	if v0 != 10 'c0'
+		return 2
+	end 'c0'
+	if v1 != 20 'c1'
+		return 3
+	end 'c1'
+	if v2 != 30 'c2'
+		return 4
+	end 'c2'
+	if v3 != 40 'c3'
+		return 5
+	end 'c3'
+	if v4 != 50 'c4'
+		return 6
+	end 'c4'
+
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
+### Remove
+
+<!-- test: remove-from-beginning -->
+Remove from index 0 shifts all remaining elements left and returns the removed value.
+
+```maxon
+typealias Int = int(i64.min to i64.max)
+typealias IntArray = Array with Int
+
+function main() returns ExitCode
+	var arr = IntArray{}
+	arr.push(10)
+	arr.push(20)
+	arr.push(30)
+
+	var removed = try arr.remove(0) otherwise 'err'
+		return 99
+	end 'err'
+
+	if removed != 10 'val'
+		return 1
+	end 'val'
+
+	if arr.count() != 2 'cnt'
+		return 2
+	end 'cnt'
+
+	var v0 = try arr.get(0) otherwise -1
+	if v0 != 20 'c0'
+		return 3
+	end 'c0'
+
+	var v1 = try arr.get(1) otherwise -1
+	if v1 != 30 'c1'
+		return 4
+	end 'c1'
+
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: remove-from-middle -->
+Remove from the middle shifts later elements left.
+
+```maxon
+typealias Int = int(i64.min to i64.max)
+typealias IntArray = Array with Int
+
+function main() returns ExitCode
+	var arr = IntArray{}
+	arr.push(10)
+	arr.push(20)
+	arr.push(30)
+
+	var removed = try arr.remove(1) otherwise 'err'
+		return 99
+	end 'err'
+
+	if removed != 20 'val'
+		return 1
+	end 'val'
+
+	if arr.count() != 2 'cnt'
+		return 2
+	end 'cnt'
+
+	var v0 = try arr.get(0) otherwise -1
+	if v0 != 10 'c0'
+		return 3
+	end 'c0'
+
+	var v1 = try arr.get(1) otherwise -1
+	if v1 != 30 'c1'
+		return 4
+	end 'c1'
+
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: remove-from-end -->
+Remove last element requires no shift, like pop.
+
+```maxon
+typealias Int = int(i64.min to i64.max)
+typealias IntArray = Array with Int
+
+function main() returns ExitCode
+	var arr = IntArray{}
+	arr.push(10)
+	arr.push(20)
+	arr.push(30)
+
+	var removed = try arr.remove(2) otherwise 'err'
+		return 99
+	end 'err'
+
+	if removed != 30 'val'
+		return 1
+	end 'val'
+
+	if arr.count() != 2 'cnt'
+		return 2
+	end 'cnt'
+
+	var v1 = try arr.get(1) otherwise -1
+	if v1 != 20 'c1'
+		return 3
+	end 'c1'
+
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: remove-all-one-by-one -->
+Remove all elements from the front, one at a time. Exercises repeated shiftLeft.
+
+```maxon
+typealias Int = int(i64.min to i64.max)
+typealias IntArray = Array with Int
+
+function main() returns ExitCode
+	var arr = IntArray{}
+	arr.push(10)
+	arr.push(20)
+	arr.push(30)
+	arr.push(40)
+	arr.push(50)
+
+	var sum = 0
+	while arr.count() > 0 'drain'
+		var elem = try arr.remove(0) otherwise 'err'
+			return 99
+		end 'err'
+		sum = sum + elem
+	end 'drain'
+
+	// 10+20+30+40+50 = 150
+	return sum
+end 'main'
+```
+```exitcode
+150
+```
+
+<!-- test: remove-out-of-bounds -->
+Remove from an out-of-bounds index throws an error caught by otherwise.
+
+```maxon
+typealias Int = int(i64.min to i64.max)
+typealias IntArray = Array with Int
+
+function main() returns ExitCode
+	var arr = IntArray{}
+	arr.push(10)
+	arr.push(20)
+
+	var removed = try arr.remove(5) otherwise -1
+	if removed == -1 'check'
+		return 0
+	end 'check'
+	return 1
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: remove-from-empty-array -->
+Remove from an empty array throws an error caught by otherwise.
+
+```maxon
+typealias Int = int(i64.min to i64.max)
+typealias IntArray = Array with Int
+
+function main() returns ExitCode
+	var arr = IntArray{}
+
+	var removed = try arr.remove(0) otherwise -1
+	if removed == -1 'check'
+		return 0
+	end 'check'
+	return 1
+end 'main'
+```
+```exitcode
+0
+```
+
+### Combined Insert and Remove
+
+<!-- test: insert-then-remove-same-position -->
+Insert then remove at the same position leaves the array unchanged.
+
+```maxon
+typealias Int = int(i64.min to i64.max)
+typealias IntArray = Array with Int
+
+function main() returns ExitCode
+	var arr = IntArray{}
+	arr.push(10)
+	arr.push(20)
+	arr.push(30)
+
+	arr.insert(1, value: 99)
+	var removed = try arr.remove(1) otherwise 'err'
+		return 99
+	end 'err'
+
+	if removed != 99 'val'
+		return 1
+	end 'val'
+
+	if arr.count() != 3 'cnt'
+		return 2
+	end 'cnt'
+
+	var v0 = try arr.get(0) otherwise -1
+	var v1 = try arr.get(1) otherwise -1
+	var v2 = try arr.get(2) otherwise -1
+
+	if v0 != 10 'c0'
+		return 3
+	end 'c0'
+	if v1 != 20 'c1'
+		return 4
+	end 'c1'
+	if v2 != 30 'c2'
+		return 5
+	end 'c2'
+
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
+<!-- test: build-sorted-with-inserts -->
+Build a sorted array by inserting elements at computed positions.
+
+```maxon
+typealias Int = int(i64.min to i64.max)
+typealias IntArray = Array with Int
+
+function main() returns ExitCode
+	var arr = IntArray{}
+
+	arr.insert(0, value: 30)
+	arr.insert(0, value: 10)
+	arr.insert(1, value: 20)
+	arr.insert(3, value: 40)
+
+	if arr.count() != 4 'cnt'
+		return 1
+	end 'cnt'
+
+	var v0 = try arr.get(0) otherwise -1
+	var v1 = try arr.get(1) otherwise -1
+	var v2 = try arr.get(2) otherwise -1
+	var v3 = try arr.get(3) otherwise -1
+
+	if v0 != 10 'c0'
+		return 2
+	end 'c0'
+	if v1 != 20 'c1'
+		return 3
+	end 'c1'
+	if v2 != 30 'c2'
+		return 4
+	end 'c2'
+	if v3 != 40 'c3'
+		return 5
+	end 'c3'
+
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+
+### Insert and Remove with Managed Types
+
+<!-- test: insert-strings -->
+Insert a string into the middle of a string array. Verifies shiftRight handles refcounted types.
+
+```maxon
+typealias StringArray = Array with String
+
+function main() returns ExitCode
+	var arr = StringArray{}
+	arr.push("alpha")
+	arr.push("gamma")
+
+	arr.insert(1, value: "beta")
+
+	if arr.count() != 3 'cnt'
+		return 1
+	end 'cnt'
+
+	var v0 = try arr.get(0) otherwise ""
+	var v1 = try arr.get(1) otherwise ""
+	var v2 = try arr.get(2) otherwise ""
+	print(v0)
+	print(v1)
+	print(v2)
+	return 0
+end 'main'
+```
+```stdout
+alphabetagamma
+```
+```exitcode
+0
+```
+
+<!-- test: remove-strings -->
+Remove a string from the middle of a string array. Verifies shiftLeft handles refcounted types.
+
+```maxon
+typealias StringArray = Array with String
+
+function main() returns ExitCode
+	var arr = StringArray{}
+	arr.push("x")
+	arr.push("y")
+	arr.push("z")
+
+	var removed = try arr.remove(1) otherwise ""
+	print(removed)
+
+	if arr.count() != 2 'cnt'
+		return 1
+	end 'cnt'
+
+	var v0 = try arr.get(0) otherwise ""
+	var v1 = try arr.get(1) otherwise ""
+	print(v0)
+	print(v1)
+	return 0
+end 'main'
+```
+```stdout
+yxz
+```
+```exitcode
+0
+```
+
+<!-- test: insert-remove-structs -->
+Insert and remove structs from an array. Exercises shift operations with managed struct types.
+
+```maxon
+typealias Int = int(i64.min to i64.max)
+
+type Item
+	export var id Int
+end 'Item'
+
+typealias ItemArray = Array with Item
+
+function main() returns ExitCode
+	var arr = ItemArray{}
+	arr.push(Item{id: 1})
+	arr.push(Item{id: 3})
+
+	arr.insert(1, value: Item{id: 2})
+
+	var removed = try arr.remove(0) otherwise 'err'
+		return 99
+	end 'err'
+
+	// removed.id==1, arr is now [Item{id:2}, Item{id:3}]
+	return removed.id + arr.count()
+end 'main'
+```
+```exitcode
+3
 ```
 
