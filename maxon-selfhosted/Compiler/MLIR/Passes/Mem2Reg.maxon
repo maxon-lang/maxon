@@ -163,8 +163,8 @@ end 'buildCfg'
 function extractCfgEdges(blockId BlockId, terminator MlirOp, cfg CfgInfo)
 	match terminator 'extract'
 		cf(cfOp) then extractCfEdges(blockId, cfOp: cfOp, cfg: cfg)
-		maxhl to arith then break 'extract'
-		func to maxarm64 then break 'extract'
+		maxon to arith then break 'extract'
+		func to arm64 then break 'extract'
 	end 'extract'
 end 'extractCfgEdges'
 
@@ -473,8 +473,8 @@ end 'analyzeSlots'
 function analyzeSlotOp(op MlirOp, blockId BlockId, info SlotInfo)
 	match op 'checkOp'
 		memref(memOp) then analyzeSlotMemRefOp(memOp, blockId: blockId, info: info)
-		maxhl to func then break 'checkOp'
-		runtime to maxarm64 then break 'checkOp'
+		maxon to func then break 'checkOp'
+		runtime to arm64 then break 'checkOp'
 	end 'checkOp'
 end 'analyzeSlotOp'
 
@@ -527,9 +527,9 @@ end 'markFloatSlotsFromUsage'
 function markFloatOperandsAsFloatSlots(op MlirOp, info SlotInfo)
 	match op 'check'
 		arith(arithOp) then markFloatArithOperands(arithOp, info: info)
-		maxhl then break 'check'
+		maxon then break 'check'
 		cf to func then break 'check'
-		memref to maxarm64 then break 'check'
+		memref to arm64 then break 'check'
 	end 'check'
 end 'markFloatOperandsAsFloatSlots'
 
@@ -869,8 +869,8 @@ function renameBlockOps(blockId BlockId, func MlirFunction, renameState RenameSt
 	for op in block.ops 'eachOp'
 		match op 'renameOp'
 			memref(memOp) then renameMemRefOp(memOp, renameState: renameState, pushCounts: pushCounts, promotable: promotable)
-			maxhl to func then break 'renameOp'
-			runtime to maxarm64 then break 'renameOp'
+			maxon to func then break 'renameOp'
+			runtime to arm64 then break 'renameOp'
 		end 'renameOp'
 	end 'eachOp'
 end 'renameBlockOps'
@@ -1098,8 +1098,8 @@ function fillEdgePhiArgsProcessOps(block MlirBlock, defStacks DefStackArray, pus
 	for op in block.ops 'eachOp'
 		match op 'checkOp'
 			memref(memOp) then fillEdgePhiArgsProcessMemRef(memOp, defStacks: defStacks, pushCounts: pushCounts, promotable: promotable)
-			maxhl to func then break 'checkOp'
-			runtime to maxarm64 then break 'checkOp'
+			maxon to func then break 'checkOp'
+			runtime to arm64 then break 'checkOp'
 		end 'checkOp'
 	end 'eachOp'
 end 'fillEdgePhiArgsProcessOps'
@@ -1129,8 +1129,8 @@ function fillEdgePhiArgsForTerminator(block MlirBlock, defStacks DefStackArray, 
 	end 'noTerm'
 	match block.terminator 'fill'
 		cf(cfOp) then fillEdgeCfPhiArgs(block.id, cfOp: cfOp, defStacks: defStacks, phiMap: phiMap, numBlocks: numBlocks, numSlots: numSlots, edgePhiArgs: edgePhiArgs)
-		maxhl to arith then break 'fill'
-		func to maxarm64 then break 'fill'
+		maxon to arith then break 'fill'
+		func to arm64 then break 'fill'
 	end 'fill'
 end 'fillEdgePhiArgsForTerminator'
 
@@ -1220,8 +1220,8 @@ end 'popAllDefsFromStacks'
 function rewriteTerminatorWithPhiArgs(terminator MlirOp, blockId BlockId, remap ValueIdArray, numBlocks BlockId, edgePhiArgs EdgePhiArgTable) returns MlirOp
 	return match terminator 'rewrite'
 		cf(cfOp) gives MlirOp.cf(rewriteCfTerminatorWithPhiArgs(cfOp, blockId: blockId, remap: remap, numBlocks: numBlocks, edgePhiArgs: edgePhiArgs))
-		maxhl to arith gives substituteOp(terminator, remap: remap)
-		func to maxarm64 gives substituteOp(terminator, remap: remap)
+		maxon to arith gives substituteOp(terminator, remap: remap)
+		func to arm64 gives substituteOp(terminator, remap: remap)
 	end 'rewrite'
 end 'rewriteTerminatorWithPhiArgs'
 
@@ -1331,8 +1331,8 @@ function maxValueIdInOp(op MlirOp) returns ValueId
 		memref(memOp) gives maxValueIdInMemRef(memOp)
 		runtime(rtOp) gives maxValueIdInRuntime(rtOp)
 		sys(sysOp) gives maxValueIdInSys(sysOp)
-		maxhl gives 0
-		mir to maxarm64 gives 0
+		maxon gives 0
+		mir to arm64 gives 0
 	end 'scan'
 end 'maxValueIdInOp'
 
@@ -1442,8 +1442,8 @@ end 'maxOfIdAndArray'
 function isPromotedMemrefOp(op MlirOp, promotable PromotableInfo) returns bool
 	return match op 'check'
 		memref(memOp) gives isPromotedMemrefSlot(memOp, promotable: promotable)
-		maxhl to func gives false
-		runtime to maxarm64 gives false
+		maxon to func gives false
+		runtime to arm64 gives false
 	end 'check'
 end 'isPromotedMemrefOp'
 
@@ -1466,8 +1466,8 @@ function substituteOp(op MlirOp, remap ValueIdArray) returns MlirOp
 		memref(memOp) gives MlirOp.memref(substituteMemRefOp(memOp, remap: remap))
 		runtime(rtOp) gives MlirOp.runtime(substituteRuntimeOp(rtOp, remap: remap))
 		sys(sysOp) gives MlirOp.sys(substituteSysOp(sysOp, remap: remap))
-		maxhl(hlOp) gives MlirOp.maxhl(substituteMaxHLOp(hlOp, remap: remap))
-		mir to maxarm64 gives op
+		maxon(hlOp) gives MlirOp.maxon(substituteMaxonOp(hlOp, remap: remap))
+		mir to arm64 gives op
 	end 'subst'
 end 'substituteOp'
 
@@ -1513,27 +1513,27 @@ function substituteRuntimeOp(op RuntimeOp, remap ValueIdArray) returns RuntimeOp
 	end 'subst'
 end 'substituteRuntimeOp'
 
-function substituteMaxHLOp(op MaxHLOp, remap ValueIdArray) returns MaxHLOp
+function substituteMaxonOp(op MaxonOp, remap ValueIdArray) returns MaxonOp
 	return match op 'subst'
-		literal(resultId, value, isFloat) gives MaxHLOp.literal(resultId, value, isFloat)
-		varDecl(slotId, valueId) gives MaxHLOp.varDecl(slotId, remapValue(valueId, remap: remap))
-		varLoad(resultId, slotId) gives MaxHLOp.varLoad(resultId, slotId)
-		varStore(slotId, valueId) gives MaxHLOp.varStore(slotId, remapValue(valueId, remap: remap))
-		binop(resultId, leftId, rightId, opKind, isFloat) gives MaxHLOp.binop(resultId, remapValue(leftId, remap: remap), remapValue(rightId, remap: remap), opKind, isFloat)
-		unop(resultId, operandId, opKind) gives MaxHLOp.unop(resultId, remapValue(operandId, remap: remap), opKind)
-		truncFloat(resultId, operandId) gives MaxHLOp.truncFloat(resultId, remapValue(operandId, remap: remap))
-		intToFloat(resultId, operandId) gives MaxHLOp.intToFloat(resultId, remapValue(operandId, remap: remap))
-		cmp(resultId, leftId, rightId, predicate, isFloat) gives MaxHLOp.cmp(resultId, remapValue(leftId, remap: remap), remapValue(rightId, remap: remap), predicate, isFloat)
-		refEq(resultId, leftId, rightId, negate) gives MaxHLOp.refEq(resultId, remapValue(leftId, remap: remap), remapValue(rightId, remap: remap), negate)
-		condBr(condId, thenTarget, elseTarget) gives MaxHLOp.condBr(remapValue(condId, remap: remap), thenTarget, elseTarget)
-		br(target) gives MaxHLOp.br(target)
-		call(resultId, callee, argIds) gives MaxHLOp.call(resultId, callee, remapValueIds(argIds, remap: remap))
-		ret(retValId) gives MaxHLOp.ret(remapValue(retValId, remap: remap))
-		printLiteral(data) gives MaxHLOp.printLiteral(data)
-		printInt(valueId) gives MaxHLOp.printInt(remapValue(valueId, remap: remap))
-		panic(message, panicId) gives MaxHLOp.panic(message, panicId)
+		literal(resultId, value, isFloat) gives MaxonOp.literal(resultId, value, isFloat)
+		varDecl(slotId, valueId) gives MaxonOp.varDecl(slotId, remapValue(valueId, remap: remap))
+		varLoad(resultId, slotId) gives MaxonOp.varLoad(resultId, slotId)
+		varStore(slotId, valueId) gives MaxonOp.varStore(slotId, remapValue(valueId, remap: remap))
+		binop(resultId, leftId, rightId, opKind, isFloat) gives MaxonOp.binop(resultId, remapValue(leftId, remap: remap), remapValue(rightId, remap: remap), opKind, isFloat)
+		unop(resultId, operandId, opKind) gives MaxonOp.unop(resultId, remapValue(operandId, remap: remap), opKind)
+		truncFloat(resultId, operandId) gives MaxonOp.truncFloat(resultId, remapValue(operandId, remap: remap))
+		intToFloat(resultId, operandId) gives MaxonOp.intToFloat(resultId, remapValue(operandId, remap: remap))
+		cmp(resultId, leftId, rightId, predicate, isFloat) gives MaxonOp.cmp(resultId, remapValue(leftId, remap: remap), remapValue(rightId, remap: remap), predicate, isFloat)
+		refEq(resultId, leftId, rightId, negate) gives MaxonOp.refEq(resultId, remapValue(leftId, remap: remap), remapValue(rightId, remap: remap), negate)
+		condBr(condId, thenTarget, elseTarget) gives MaxonOp.condBr(remapValue(condId, remap: remap), thenTarget, elseTarget)
+		br(target) gives MaxonOp.br(target)
+		call(resultId, callee, argIds) gives MaxonOp.call(resultId, callee, remapValueIds(argIds, remap: remap))
+		ret(retValId) gives MaxonOp.ret(remapValue(retValId, remap: remap))
+		printLiteral(data) gives MaxonOp.printLiteral(data)
+		printInt(valueId) gives MaxonOp.printInt(remapValue(valueId, remap: remap))
+		panic(message, panicId) gives MaxonOp.panic(message, panicId)
 	end 'subst'
-end 'substituteMaxHLOp'
+end 'substituteMaxonOp'
 
 function substituteSysOp(op SysOp, remap ValueIdArray) returns SysOp
 	return match op 'subst'

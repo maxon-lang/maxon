@@ -13,8 +13,8 @@ Union match expressions support range patterns using `to` (inclusive) and `upto`
 
 ```text
 match op 'dispatch'
-    maxhl(hlOp) then lowerMaxHLOp(hlOp, dstBlock: dstBlock)
-    arith to maxarm64 then dstBlock.ops.push(op)
+    maxon(hlOp) then lowerMaxonOp(hlOp, dstBlock: dstBlock)
+    arith to arm64 then dstBlock.ops.push(op)
 end 'dispatch'
 ```
 

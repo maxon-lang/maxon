@@ -65,7 +65,7 @@ export function augmentWithRuntime(module MlirModule) returns MlirModule
 end 'augmentWithRuntime'
 
 // Backend execution driven by the pipeline.
-// Phase 6-7 passes (augmentWithRuntime, convertMirToTarget, scheduleInstructions,
+// Phase 6-7 passes (augmentWithRuntime, lowerMirToTarget, scheduleInstructions,
 // allocateRegisters, insertPrologueEpilogue) run through the PassPipeline,
 // then code emission converts the final target ops to machine code bytes.
 export function emitBackend(module MlirModule, target Target, globalData GlobalDataTable, project Project, nextValueIdRef ValueIdRef) returns CodeResult throws CompileError
@@ -90,9 +90,9 @@ end 'createLatencyTable'
 export function getTargetLatency(op MlirOp, table TargetLatencyTable) returns Latency
 	return match op 'dispatch'
 		mir(mirOp) gives getMirLatency(mirOp, table: table)
-		maxx64(x64Op) gives getX64Latency(x64Op)
-		maxarm64(arm64Op) gives getArm64Latency(arm64Op)
-		maxhl to sys gives table.defaultLatency
+		x64(x64Op) gives getX64Latency(x64Op)
+		arm64(arm64Op) gives getArm64Latency(arm64Op)
+		maxon to sys gives table.defaultLatency
 	end 'dispatch'
 end 'getTargetLatency'
 
@@ -146,15 +146,15 @@ end 'getMirBinOpLatency'
 
 export function lowerToTarget(module MlirModule, target Target) returns MlirModule
 	return match target.cpu 'cpu'
-		x86_64 gives lowerMidToMaxX64(module, target: target)
-		aarch64 gives lowerMidToMaxArm64(module, target: target)
+		x86_64 gives lowerMidToX64(module, target: target)
+		aarch64 gives lowerMidToArm64(module, target: target)
 	end 'cpu'
 end 'lowerToTarget'
 
 function emitTargetCode(module MlirModule, target Target, globalData GlobalDataTable) returns CodeResult
 	return match target.cpu 'cpu'
 		x86_64 gives emitX86(module, target: target, globalData: globalData)
-		aarch64 gives emitMaxArm64(module, target: target, globalData: globalData)
+		aarch64 gives emitArm64(module, target: target, globalData: globalData)
 	end 'cpu'
 end 'emitTargetCode'
 

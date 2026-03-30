@@ -160,8 +160,8 @@ end 'scanHeapAllocations'
 function scanOpForHeapAlloc(op MlirOp, state DropInjectionState)
 	match op 'scan'
 		sys(sysOp) then scanSysForHeapAlloc(sysOp, state: state)
-		maxhl to runtime then break 'scan'
-		mir to maxarm64 then break 'scan'
+		maxon to runtime then break 'scan'
+		mir to arm64 then break 'scan'
 	end 'scan'
 end 'scanOpForHeapAlloc'
 
@@ -186,8 +186,8 @@ end 'scanSysForHeapAlloc'
 function injectDropsForOp(op MlirOp, dstBlock MlirBlock, state DropInjectionState)
 	match op 'dispatch'
 		memref(memOp) then injectDropsForMemRef(memOp, dstBlock: dstBlock, state: state, originalOp: op)
-		maxhl to func then dstBlock.ops.push(op)
-		runtime to maxarm64 then dstBlock.ops.push(op)
+		maxon to func then dstBlock.ops.push(op)
+		runtime to arm64 then dstBlock.ops.push(op)
 	end 'dispatch'
 end 'injectDropsForOp'
 
@@ -247,8 +247,8 @@ end 'injectDropsBeforeTerminator'
 function isReturnTerminator(op MlirOp) returns bool
 	return match op 'check'
 		func(funcOp) gives isReturnFuncOp(funcOp)
-		maxhl to cf gives false
-		memref to maxarm64 gives false
+		maxon to cf gives false
+		memref to arm64 gives false
 	end 'check'
 end 'isReturnTerminator'
 
@@ -263,8 +263,8 @@ end 'isReturnFuncOp'
 function isReturnedValue(op MlirOp, valueId ValueId) returns bool
 	return match op 'check'
 		func(funcOp) gives isReturnedByFuncOp(funcOp, valueId: valueId)
-		maxhl to cf gives false
-		memref to maxarm64 gives false
+		maxon to cf gives false
+		memref to arm64 gives false
 	end 'check'
 end 'isReturnedValue'
 

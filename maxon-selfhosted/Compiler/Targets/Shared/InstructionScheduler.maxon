@@ -482,7 +482,7 @@ end 'updatePressureForScheduledOp'
 // Extract the result ValueId defined by this op, or SCHED_NONE if it defines nothing.
 function extractDefValueId(op MlirOp) returns SchedInt
 	return match op 'extract'
-		maxhl(hlOp) gives extractMaxHLDef(hlOp)
+		maxon(hlOp) gives extractMaxonDef(hlOp)
 		arith(arithOp) gives extractArithDef(arithOp)
 		cf gives SCHED_NONE
 		func(funcOp) gives extractFuncDef(funcOp)
@@ -490,12 +490,12 @@ function extractDefValueId(op MlirOp) returns SchedInt
 		runtime gives SCHED_NONE
 		sys(sysOp) gives extractSysDef(sysOp)
 		mir(mirOp) gives extractMirDef(mirOp)
-		maxx64 gives SCHED_NONE
-		maxarm64 gives SCHED_NONE
+		x64 gives SCHED_NONE
+		arm64 gives SCHED_NONE
 	end 'extract'
 end 'extractDefValueId'
 
-function extractMaxHLDef(op MaxHLOp) returns SchedInt
+function extractMaxonDef(op MaxonOp) returns SchedInt
 	return match op 'def'
 		literal(resultId, _, _) gives resultId
 		varDecl gives SCHED_NONE
@@ -515,7 +515,7 @@ function extractMaxHLDef(op MaxHLOp) returns SchedInt
 		printInt gives SCHED_NONE
 		panic gives SCHED_NONE
 	end 'def'
-end 'extractMaxHLDef'
+end 'extractMaxonDef'
 
 function extractArithDef(op ArithOp) returns SchedInt
 	return match op 'def'
@@ -593,7 +593,7 @@ end 'extractMirDef'
 // Extract all ValueIds used as operands by this op.
 function extractUseValueIds(op MlirOp) returns ValueIdArray
 	return match op 'extract'
-		maxhl(hlOp) gives extractMaxHLUses(hlOp)
+		maxon(hlOp) gives extractMaxonUses(hlOp)
 		arith(arithOp) gives extractArithUses(arithOp)
 		cf(cfOp) gives extractCfUses(cfOp)
 		func(funcOp) gives extractFuncUses(funcOp)
@@ -601,12 +601,12 @@ function extractUseValueIds(op MlirOp) returns ValueIdArray
 		runtime(rtOp) gives extractRuntimeUses(rtOp)
 		sys(sysOp) gives extractSysUses(sysOp)
 		mir(mirOp) gives extractMirUses(mirOp)
-		maxx64 gives ValueIdArray{}
-		maxarm64 gives ValueIdArray{}
+		x64 gives ValueIdArray{}
+		arm64 gives ValueIdArray{}
 	end 'extract'
 end 'extractUseValueIds'
 
-function extractMaxHLUses(op MaxHLOp) returns ValueIdArray
+function extractMaxonUses(op MaxonOp) returns ValueIdArray
 	var result = ValueIdArray{}
 	match op 'uses'
 		literal then break 'uses'
@@ -628,7 +628,7 @@ function extractMaxHLUses(op MaxHLOp) returns ValueIdArray
 		panic then break 'uses'
 	end 'uses'
 	return result
-end 'extractMaxHLUses'
+end 'extractMaxonUses'
 
 function extractArithUses(op ArithOp) returns ValueIdArray
 	var result = ValueIdArray{}
@@ -766,10 +766,10 @@ function isMemoryOp(op MlirOp) returns bool
 		sys(sysOp) gives isSysMemoryOp(sysOp)
 		memref gives true
 		runtime gives true
-		maxhl gives false
+		maxon gives false
 		arith gives false
 		cf gives false
-		maxx64 to maxarm64 gives false
+		x64 to arm64 gives false
 	end 'check'
 end 'isMemoryOp'
 
@@ -831,12 +831,12 @@ function isStoreOp(op MlirOp) returns bool
 		mir(mirOp) gives isMirStoreOp(mirOp)
 		memref(memOp) gives isMemRefStoreOp(memOp)
 		sys(sysOp) gives isSysStoreOp(sysOp)
-		maxhl gives false
+		maxon gives false
 		arith gives false
 		cf gives false
 		func gives false
 		runtime gives false
-		maxx64 to maxarm64 gives false
+		x64 to arm64 gives false
 	end 'check'
 end 'isStoreOp'
 
@@ -885,12 +885,12 @@ function isCallOp(op MlirOp) returns bool
 		mir(mirOp) gives isMirCallOp(mirOp)
 		func(funcOp) gives isFuncCallOp(funcOp)
 		sys(sysOp) gives isSysCallOp(sysOp)
-		maxhl gives false
+		maxon gives false
 		arith gives false
 		cf gives false
 		memref gives false
 		runtime gives false
-		maxx64 to maxarm64 gives false
+		x64 to arm64 gives false
 	end 'check'
 end 'isCallOp'
 
@@ -902,8 +902,8 @@ function isMirParamOp(op MlirOp) returns bool
 			movImm to ret gives false
 			load to loadByte gives false
 		end 'checkMir'
-		maxhl to sys gives false
-		maxx64 to maxarm64 gives false
+		maxon to sys gives false
+		x64 to arm64 gives false
 	end 'check'
 end 'isMirParamOp'
 

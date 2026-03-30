@@ -3,7 +3,7 @@
 // computes the final stack frame size, inserts prologue at the entry block
 // start, and inserts epilogue before every ret terminator.
 //
-// This pass is target-aware: it emits MaxX64Op or MaxArm64Op depending on
+// This pass is target-aware: it emits X64Op or Arm64Op depending on
 // the compilation target. The actual machine code emission for prologue/epilogue
 // is handled downstream by the code emitters.
 
@@ -101,20 +101,20 @@ end 'scanOpForFrameInfo'
 
 function scanX64OpForFrameInfo(op MlirOp, state FrameScanState)
 	match op 'outer'
-		maxhl to sys then break 'outer'
+		maxon to sys then break 'outer'
 		mir then break 'outer'
-		maxx64(x64Op) then scanX64InstrForFrame(x64Op, state: state)
-		maxarm64 then break 'outer'
+		x64(x64Op) then scanX64InstrForFrame(x64Op, state: state)
+		arm64 then break 'outer'
 	end 'outer'
 	// Runtime ops indicate print operations that need buffer space
 	match op 'checkPrint'
-		maxhl to memref then break 'checkPrint'
+		maxon to memref then break 'checkPrint'
 		runtime then state.hasPrint = true
-		sys to maxarm64 then break 'checkPrint'
+		sys to arm64 then break 'checkPrint'
 	end 'checkPrint'
 end 'scanX64OpForFrameInfo'
 
-function scanX64InstrForFrame(op MaxX64Op, state FrameScanState)
+function scanX64InstrForFrame(op X64Op, state FrameScanState)
 	match op 'scan'
 		prologue(stackSize) then markPrologueFound(state, stackSize: stackSize)
 		epilogue to movRegImm then break 'scan'
@@ -163,20 +163,20 @@ end 'updateSpillAreaFromThreeSlots'
 
 function scanArm64OpForFrameInfo(op MlirOp, state FrameScanState)
 	match op 'outer'
-		maxhl to sys then break 'outer'
+		maxon to sys then break 'outer'
 		mir then break 'outer'
-		maxx64 then break 'outer'
-		maxarm64(a64Op) then scanArm64InstrForFrame(a64Op, state: state)
+		x64 then break 'outer'
+		arm64(a64Op) then scanArm64InstrForFrame(a64Op, state: state)
 	end 'outer'
 	// Runtime ops indicate print operations that need buffer space
 	match op 'checkPrint'
-		maxhl to memref then break 'checkPrint'
+		maxon to memref then break 'checkPrint'
 		runtime then state.hasPrint = true
-		sys to maxarm64 then break 'checkPrint'
+		sys to arm64 then break 'checkPrint'
 	end 'checkPrint'
 end 'scanArm64OpForFrameInfo'
 
-function scanArm64InstrForFrame(op MaxArm64Op, state FrameScanState)
+function scanArm64InstrForFrame(op Arm64Op, state FrameScanState)
 	match op 'scan'
 		prologue(stackSize) then markPrologueFound(state, stackSize: stackSize)
 		epilogue to branch then break 'scan'
@@ -278,7 +278,7 @@ function insertX64PrologueEpilogue(srcFunc MlirFunction, dstFunc MlirFunction, s
 		if isFirstBlock 'isEntry'
 			// Insert prologue at the start of the entry block (only if we need a frame).
 			if stackSize > 0 'hasFrame'
-				dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.prologue(stackSize)))
+				dstBlock.ops.push(MlirOp.x64(X64Op.prologue(stackSize)))
 			end 'hasFrame'
 			isFirstBlock = false
 		end 'isEntry'
@@ -301,7 +301,7 @@ function insertX64PrologueEpilogue(srcFunc MlirFunction, dstFunc MlirFunction, s
 				if isX64RetOp(srcBlock.terminator) and stackSize > 0 'termRetNeedsEpi'
 					let prevIsEpi = checkPrevIsX64Epilogue(dstBlock.ops)
 					if not prevIsEpi 'insertEpi'
-						dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.epilogue))
+						dstBlock.ops.push(MlirOp.x64(X64Op.epilogue))
 					end 'insertEpi'
 				end 'termRetNeedsEpi'
 				dstBlock.hasTerminator = srcBlock.hasTerminator
@@ -343,7 +343,7 @@ function reinsertX64EpilogueBeforeRets(block MlirBlock, stackSize StackSize)
 			let prevIsEpilogue = checkPrevIsX64Epilogue(newOps)
 			if not prevIsEpilogue 'insertEpilogue'
 				if stackSize > 0 'hasFrame'
-					newOps.push(MlirOp.maxx64(MaxX64Op.epilogue))
+					newOps.push(MlirOp.x64(X64Op.epilogue))
 				end 'hasFrame'
 			end 'insertEpilogue'
 			newOps.push(op)
@@ -370,15 +370,15 @@ end 'checkPrevIsX64Epilogue'
 function isX64PrologueOrEpilogue(op MlirOp) returns bool
 	var result = false
 	match op 'check'
-		maxhl to sys then break 'check'
+		maxon to sys then break 'check'
 		mir then break 'check'
-		maxx64(x64Op) then result = isX64PeOnly(x64Op)
-		maxarm64 then break 'check'
+		x64(x64Op) then result = isX64PeOnly(x64Op)
+		arm64 then break 'check'
 	end 'check'
 	return result
 end 'isX64PrologueOrEpilogue'
 
-function isX64PeOnly(op MaxX64Op) returns bool
+function isX64PeOnly(op X64Op) returns bool
 	return match op 'check'
 		prologue gives true
 		epilogue gives true
@@ -389,15 +389,15 @@ end 'isX64PeOnly'
 function isX64RetOp(op MlirOp) returns bool
 	var result = false
 	match op 'check'
-		maxhl to sys then break 'check'
+		maxon to sys then break 'check'
 		mir then break 'check'
-		maxx64(x64Op) then result = isX64Ret(x64Op)
-		maxarm64 then break 'check'
+		x64(x64Op) then result = isX64Ret(x64Op)
+		arm64 then break 'check'
 	end 'check'
 	return result
 end 'isX64RetOp'
 
-function isX64Ret(op MaxX64Op) returns bool
+function isX64Ret(op X64Op) returns bool
 	return match op 'check'
 		prologue to epilogue gives false
 		ret gives true
@@ -408,15 +408,15 @@ end 'isX64Ret'
 function isX64EpilogueOp(op MlirOp) returns bool
 	var result = false
 	match op 'check'
-		maxhl to sys then break 'check'
+		maxon to sys then break 'check'
 		mir then break 'check'
-		maxx64(x64Op) then result = isX64Epilogue(x64Op)
-		maxarm64 then break 'check'
+		x64(x64Op) then result = isX64Epilogue(x64Op)
+		arm64 then break 'check'
 	end 'check'
 	return result
 end 'isX64EpilogueOp'
 
-function isX64Epilogue(op MaxX64Op) returns bool
+function isX64Epilogue(op X64Op) returns bool
 	return match op 'check'
 		prologue gives false
 		epilogue gives true
@@ -439,7 +439,7 @@ function insertArm64PrologueEpilogue(srcFunc MlirFunction, dstFunc MlirFunction,
 		if isFirstBlock 'isEntry'
 			// ARM64 always emits prologue (even for stackSize=0) because the
 			// prologue includes STP x29,x30 which is needed for unwinding.
-			dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.prologue(stackSize)))
+			dstBlock.ops.push(MlirOp.arm64(Arm64Op.prologue(stackSize)))
 			isFirstBlock = false
 		end 'isEntry'
 
@@ -457,7 +457,7 @@ function insertArm64PrologueEpilogue(srcFunc MlirFunction, dstFunc MlirFunction,
 			if isArm64EpilogueTerminator(srcBlock.terminator) 'termIsEpilogue'
 				// Re-emit the epilogue as the terminator with our computed stack size.
 				dstBlock.hasTerminator = true
-				dstBlock.terminator = MlirOp.maxarm64(MaxArm64Op.epilogue)
+				dstBlock.terminator = MlirOp.arm64(Arm64Op.epilogue)
 			end 'termIsEpilogue' else 'otherTerm'
 				dstBlock.hasTerminator = srcBlock.hasTerminator
 				dstBlock.terminator = srcBlock.terminator
@@ -470,15 +470,15 @@ end 'insertArm64PrologueEpilogue'
 function isArm64PrologueOrEpilogue(op MlirOp) returns bool
 	var result = false
 	match op 'check'
-		maxhl to sys then break 'check'
+		maxon to sys then break 'check'
 		mir then break 'check'
-		maxx64 then break 'check'
-		maxarm64(a64Op) then result = isArm64PeOp(a64Op)
+		x64 then break 'check'
+		arm64(a64Op) then result = isArm64PeOp(a64Op)
 	end 'check'
 	return result
 end 'isArm64PrologueOrEpilogue'
 
-function isArm64PeOp(op MaxArm64Op) returns bool
+function isArm64PeOp(op Arm64Op) returns bool
 	return match op 'check'
 		prologue gives true
 		epilogue gives true
@@ -490,15 +490,15 @@ end 'isArm64PeOp'
 function isArm64EpilogueTerminator(op MlirOp) returns bool
 	var result = false
 	match op 'check'
-		maxhl to sys then break 'check'
+		maxon to sys then break 'check'
 		mir then break 'check'
-		maxx64 then break 'check'
-		maxarm64(a64Op) then result = isArm64EpilogueVariant(a64Op)
+		x64 then break 'check'
+		arm64(a64Op) then result = isArm64EpilogueVariant(a64Op)
 	end 'check'
 	return result
 end 'isArm64EpilogueTerminator'
 
-function isArm64EpilogueVariant(op MaxArm64Op) returns bool
+function isArm64EpilogueVariant(op Arm64Op) returns bool
 	return match op 'check'
 		prologue gives false
 		epilogue gives true

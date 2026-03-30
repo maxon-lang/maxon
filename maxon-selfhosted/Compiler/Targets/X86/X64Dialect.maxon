@@ -1,4 +1,4 @@
-// MaxX64 Dialect — x86-64 machine instructions.
+// X64 Dialect — x86-64 machine instructions.
 
 export enum FloatPrecision
 	f64
@@ -113,7 +113,7 @@ export function physFpReg(reg X64XmmRegister) returns X64FpVReg
 	return X64FpVReg.physical(reg)
 end 'physFpReg'
 
-export union MaxX64Op
+export union X64Op
 	prologue(stackSize StackSize)
 	epilogue
 	ret
@@ -219,9 +219,9 @@ export union MaxX64Op
 	// Memcopy/BulkZero
 	repMovsb
 	repStosq
-end 'MaxX64Op'
+end 'X64Op'
 
-export typealias MaxX64OpArray = Array with MaxX64Op
+export typealias X64OpArray = Array with X64Op
 
 function slotOffset(slotIndex VarSlot) returns StackSize
 	return(slotIndex + 1) * 8
@@ -250,7 +250,7 @@ export function formatVarSlotArgs(argSlots VarSlotArray) returns String
 	return result
 end 'formatVarSlotArgs'
 
-export function maxX64OpToString(op MaxX64Op, blocks MlirBlockArray) returns String
+export function x64OpToString(op X64Op, blocks MlirBlockArray) returns String
 	return match op 'toString'
 		prologue(stackSize) gives "x86.prologue stack_size={stackSize}"
 		epilogue gives "x86.epilogue"
@@ -341,4 +341,4 @@ export function maxX64OpToString(op MaxX64Op, blocks MlirBlockArray) returns Str
 		repMovsb gives "x86.rep movsb"
 		repStosq gives "x86.rep stosq"
 	end 'toString'
-end 'maxX64OpToString'
+end 'x64OpToString'

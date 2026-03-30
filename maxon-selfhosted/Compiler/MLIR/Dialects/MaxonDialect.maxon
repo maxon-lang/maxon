@@ -1,6 +1,6 @@
-// MaxHL (Maxon High-Level) Dialect
+// Maxon Dialect
 // Preserves source-level semantics. Parser emits these ops directly.
-// Lowered to arith/cf/func/memref/runtime by MaxHLToMid pass.
+// Lowered to arith/cf/func/memref/runtime by MaxonToMid pass.
 
 export typealias ValueIdArray = Array with ValueId
 
@@ -32,7 +32,7 @@ export enum CmpPredicate
 	ge = "ge"
 end 'CmpPredicate'
 
-export union MaxHLOp
+export union MaxonOp
 	// Literals
 	literal(resultId ValueId, value ParsedInt, isFloat bool)
 
@@ -72,9 +72,9 @@ export union MaxHLOp
 	// Range check panic (emitted by parser, lowered to sys.globalAddr + func.call in Phase 5)
 	// panicId is used to generate __panic_msg_N global data label
 	panic(message ByteArray, panicId ValueId)
-end 'MaxHLOp'
+end 'MaxonOp'
 
-export function maxHLOpToString(op MaxHLOp, blocks MlirBlockArray) returns String
+export function maxonOpToString(op MaxonOp, blocks MlirBlockArray) returns String
 	let lb = "\{"
 	let rb = "\}"
 	return match op 'print'
@@ -88,26 +88,26 @@ export function maxHLOpToString(op MaxHLOp, blocks MlirBlockArray) returns Strin
 		intToFloat(resultId, operandId) gives "%{resultId} = maxon.int_to_float %{operandId}"
 		cmp(resultId, leftId, rightId, predicate, isFloat) gives "%{resultId} = maxon.binop %{leftId}, %{rightId} {lb}op = {predicate.rawValue}{rb} {lb}kind = {typeKind(isFloat)}{rb}"
 		refEq(resultId, leftId, rightId, negate) gives "%{resultId} = maxon.{refEqMnemonic(negate)} %{leftId}, %{rightId}"
-		condBr(condId, thenTarget, elseTarget) gives maxHLCondBrToString(condId, thenTarget: thenTarget, elseTarget: elseTarget, blocks: blocks)
-		br(target) gives maxHLBrToString(target, blocks: blocks)
+		condBr(condId, thenTarget, elseTarget) gives maxonCondBrToString(condId, thenTarget: thenTarget, elseTarget: elseTarget, blocks: blocks)
+		br(target) gives maxonBrToString(target, blocks: blocks)
 		call(resultId, callee, argIds) gives "%{resultId} = maxon.call @{String.from(callee)}({formatArgIds(argIds)})"
 		ret(retValId) gives "maxon.return %{retValId}"
 		printLiteral(data) gives "maxon.print_literal \"{String.from(data)}\""
 		printInt(valueId) gives "maxon.print_int %{valueId}"
 		panic(message, _) gives "maxon.panic \"{String.from(message)}\""
 	end 'print'
-end 'maxHLOpToString'
+end 'maxonOpToString'
 
-function maxHLCondBrToString(condId ValueId, thenTarget BlockId, elseTarget BlockId, blocks MlirBlockArray) returns String
+function maxonCondBrToString(condId ValueId, thenTarget BlockId, elseTarget BlockId, blocks MlirBlockArray) returns String
 	let thenLabel = resolveBlockLabel(thenTarget, blocks: blocks)
 	let elseLabel = resolveBlockLabel(elseTarget, blocks: blocks)
 	return "maxon.cond_br %{condId} [then: {thenLabel}, else: {elseLabel}]"
-end 'maxHLCondBrToString'
+end 'maxonCondBrToString'
 
-function maxHLBrToString(target BlockId, blocks MlirBlockArray) returns String
+function maxonBrToString(target BlockId, blocks MlirBlockArray) returns String
 	let label = resolveBlockLabel(target, blocks: blocks)
 	return "maxon.br {label}"
-end 'maxHLBrToString'
+end 'maxonBrToString'
 
 function refEqMnemonic(negate bool) returns String
 	if negate 'neg'

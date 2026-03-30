@@ -2311,14 +2311,14 @@ Unions with associated values support range patterns on bare case names using `t
 
 ```maxon
 union MlirOp
-		maxhl(op MaxHLOp)
+		maxon(op MaxonOp)
 		arith(op ArithOp)
 		cf(op CfOp)
 		func(op FuncOp)
 end 'MlirOp'
 
 match op 'dispatch'
-		maxhl(hlOp) then lowerMaxHLOp(hlOp, dstBlock: dstBlock)
+		maxon(hlOp) then lowerMaxonOp(hlOp, dstBlock: dstBlock)
 		arith to func then dstBlock.ops.push(op)
 end 'dispatch'
 ```

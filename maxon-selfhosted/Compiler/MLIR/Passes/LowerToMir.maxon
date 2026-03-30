@@ -1,14 +1,14 @@
 // Mid-to-MIR Conversion (Phase 6).
 // Converts mid-level dialect ops (arith, cf, func, memref, sys, runtime)
 // into target-independent MIR dialect ops. After this pass, only mir ops
-// remain (plus pass-through maxx64/maxarm64 ops).
+// remain (plus pass-through x64/arm64 ops).
 
 // ============================================================
 // Public entry point
 // ============================================================
 
-export function convertToMir(module MlirModule) returns MlirModule
-	logDebug(LogCategory.mlir, message: () gives "Running convert-to-mir pass")
+export function lowerToMir(module MlirModule) returns MlirModule
+	logDebug(LogCategory.mlir, message: () gives "Running lower-to-mir pass")
 	var result = createMlirModule()
 
 	for srcFunc in module.functions 'eachFunc'
@@ -35,7 +35,7 @@ export function convertToMir(module MlirModule) returns MlirModule
 	end 'eachFunc'
 
 	return result
-end 'convertToMir'
+end 'lowerToMir'
 
 // ============================================================
 // Top-level op dispatch
@@ -43,27 +43,27 @@ end 'convertToMir'
 
 function convertOpToMir(op MlirOp, dstBlock MlirBlock)
 	match op 'dispatch'
-		maxhl then panic("convert-to-mir: unexpected maxhl op — should have been fully lowered by Phase 5")
+		maxon then panic("lower-to-mir: unexpected maxon op — should have been fully lowered by Phase 5")
 		arith(arithOp) then convertArithOpToMir(arithOp, dstBlock: dstBlock)
 		cf(cfOp) then convertCfOpToMir(cfOp, dstBlock: dstBlock)
 		func(funcOp) then convertFuncOpToMir(funcOp, dstBlock: dstBlock)
 		memref(memrefOp) then convertMemRefOpToMir(memrefOp, dstBlock: dstBlock)
 		runtime(rtOp) then convertRuntimeOpToMir(rtOp, dstBlock: dstBlock)
 		sys(sysOp) then convertSysOpToMir(sysOp, dstBlock: dstBlock)
-		mir to maxarm64 then dstBlock.ops.push(op)
+		mir to arm64 then dstBlock.ops.push(op)
 	end 'dispatch'
 end 'convertOpToMir'
 
 function convertTerminatorToMir(op MlirOp, dstBlock MlirBlock)
 	match op 'dispatch'
-		maxhl then panic("convert-to-mir: unexpected maxhl terminator — should have been fully lowered by Phase 5")
+		maxon then panic("lower-to-mir: unexpected maxon terminator — should have been fully lowered by Phase 5")
 		arith(arithOp) then convertArithOpToMir(arithOp, dstBlock: dstBlock)
 		cf(cfOp) then convertCfTerminatorToMir(cfOp, dstBlock: dstBlock)
 		func(funcOp) then convertFuncTerminatorToMir(funcOp, dstBlock: dstBlock)
 		memref(memrefOp) then convertMemRefOpToMir(memrefOp, dstBlock: dstBlock)
 		runtime(rtOp) then convertRuntimeOpToMir(rtOp, dstBlock: dstBlock)
 		sys(sysOp) then convertSysOpToMir(sysOp, dstBlock: dstBlock)
-		mir to maxarm64 then setTerminator(dstBlock, op: op)
+		mir to arm64 then setTerminator(dstBlock, op: op)
 	end 'dispatch'
 end 'convertTerminatorToMir'
 
@@ -163,7 +163,7 @@ end 'convertFuncTerminatorToMir'
 // MemRef dialect conversion
 // ============================================================
 // Remaining memref ops after mem2reg are passed through as-is.
-// The target backends (MidToMaxX64/Arm64) handle memref.storeSlot/loadSlot
+// The target backends (MidToX64/Arm64) handle memref.storeSlot/loadSlot
 // natively with slot-based addressing (movSlot/loadSlot x64 ops), which is
 // more efficient than expanding to stackSlotAddr + store/load pairs.
 
@@ -206,8 +206,8 @@ end 'convertSysFreeToMir'
 
 function convertRuntimeOpToMir(rtOp RuntimeOp, dstBlock MlirBlock)
 	match rtOp 'dispatch'
-		printLiteral then panic("convert-to-mir: runtime.printLiteral should have been lowered in Phase 5 ({dstBlock.id})")
-		printInt then panic("convert-to-mir: runtime.printInt should have been lowered in Phase 5")
+		printLiteral then panic("lower-to-mir: runtime.printLiteral should have been lowered in Phase 5 ({dstBlock.id})")
+		printInt then panic("lower-to-mir: runtime.printInt should have been lowered in Phase 5")
 		// runtime.drop is a no-op for primitive types. Emit nothing.
 		drop then break 'dispatch'
 	end 'dispatch'
@@ -240,7 +240,7 @@ function arithBinaryOpcodeToMir(opcode ArithBinaryOpcode) returns MirBinOpcode
 		subF64 gives MirBinOpcode.subF64
 		mulF64 gives MirBinOpcode.mulF64
 		divF64 gives MirBinOpcode.divF64
-		cmpI64Eq to cmpF64Ge gives MirBinOpcode.addI64
+		cmpI64Eq to cmpF64Ge gives panic("arithBinaryOpcodeToMir: comparison opcode in arithmetic mapping")
 	end 'map'
 end 'arithBinaryOpcodeToMir'
 
@@ -264,7 +264,7 @@ function arithBinaryOpcodeToCmpPredicate(opcode ArithBinaryOpcode) returns MirCm
 		cmpF64Le gives MirCmpPredicate.fle
 		cmpF64Gt gives MirCmpPredicate.fgt
 		cmpF64Ge gives MirCmpPredicate.fge
-		addI64 to divF64 gives MirCmpPredicate.eq
+		addI64 to divF64 gives panic("arithBinaryOpcodeToCmpPredicate: arithmetic opcode in comparison mapping")
 	end 'map'
 end 'arithBinaryOpcodeToCmpPredicate'
 

@@ -64,11 +64,11 @@ end 'maxOf'
 function getSlotFromMlirOp(op MlirOp) returns SlotIndex
 	var result = -1
 	match op 'outer'
-		maxhl to func then break 'outer'
+		maxon to func then break 'outer'
 		memref(memOp) then result = getSlotFromMemRefOp(memOp)
 		runtime to sys then break 'outer'
 		mir(mirOp) then result = getSlotFromMirOp(mirOp)
-		maxx64 to maxarm64 then break 'outer'
+		x64 to arm64 then break 'outer'
 	end 'outer'
 	return result
 end 'getSlotFromMlirOp'
@@ -113,7 +113,7 @@ end 'computeMaxParserSlotInFunc'
 // OS-neutral ops (osExit, osWrite) expand to multiple target ops; count the worst case.
 function tempSlotCountForOp(op MlirOp) returns TempSlotCount
 	return match op 'check'
-		maxhl gives 0
+		maxon gives 0
 		arith gives 1
 		cf gives 0
 		func(funcOp) gives funcOpTempCount(funcOp)
@@ -121,7 +121,7 @@ function tempSlotCountForOp(op MlirOp) returns TempSlotCount
 		runtime gives 0
 		sys(sysOp) gives sysTempSlotCount(sysOp)
 		mir(mirOp) gives mirTempSlotCount(mirOp)
-		maxx64 to maxarm64 gives 0
+		x64 to arm64 gives 0
 	end 'check'
 end 'tempSlotCountForOp'
 
@@ -177,9 +177,9 @@ end 'sysTempSlotCount'
 // Check if an MlirOp is a print operation (needs stack buffer).
 function isPrintOp(op MlirOp) returns bool
 	return match op 'check'
-		maxhl to memref gives false
+		maxon to memref gives false
 		runtime gives true
-		sys to maxarm64 gives false
+		sys to arm64 gives false
 	end 'check'
 end 'isPrintOp'
 
@@ -360,9 +360,9 @@ export function scanPromotedParams(func MlirFunction) returns BoolArray
 					movImm to ret then break 'checkMirParam'
 					load to loadByte then break 'checkMirParam'
 				end 'checkMirParam'
-				maxhl to cf then break 'checkParam'
+				maxon to cf then break 'checkParam'
 				memref to sys then break 'checkParam'
-				maxx64 to maxarm64 then break 'checkParam'
+				x64 to arm64 then break 'checkParam'
 			end 'checkParam'
 		end 'scanOps'
 	end 'scanBlocks'
@@ -401,10 +401,10 @@ export function isMirDivergingBlock(block MlirBlock) returns bool
 				movImm to branch then break 'checkMir'
 				indirectCall to loadByte then break 'checkMir'
 			end 'checkMir'
-			maxhl then break 'check'
+			maxon then break 'check'
 			arith to cf then break 'check'
 			memref to sys then break 'check'
-			maxx64 to maxarm64 then break 'check'
+			x64 to arm64 then break 'check'
 		end 'check'
 	end 'checkOps'
 	return false
@@ -450,13 +450,13 @@ let NOT_A_JUMP = -1
 // Returns NOT_A_JUMP if the op is not an unconditional jump.
 function getUnconditionalJumpTarget(op MlirOp) returns OptionalBlockId
 	return match op 'check'
-		maxx64(x64Op) gives getX64JumpTarget(x64Op)
-		maxarm64(a64Op) gives getArm64BranchTarget(a64Op)
-		maxhl to mir gives NOT_A_JUMP
+		x64(x64Op) gives getX64JumpTarget(x64Op)
+		arm64(a64Op) gives getArm64BranchTarget(a64Op)
+		maxon to mir gives NOT_A_JUMP
 	end 'check'
 end 'getUnconditionalJumpTarget'
 
-function getX64JumpTarget(op MaxX64Op) returns OptionalBlockId
+function getX64JumpTarget(op X64Op) returns OptionalBlockId
 	return match op 'check'
 		jmp(targetBlock) gives targetBlock
 		prologue to condJump gives NOT_A_JUMP
@@ -464,7 +464,7 @@ function getX64JumpTarget(op MaxX64Op) returns OptionalBlockId
 	end 'check'
 end 'getX64JumpTarget'
 
-function getArm64BranchTarget(op MaxArm64Op) returns OptionalBlockId
+function getArm64BranchTarget(op Arm64Op) returns OptionalBlockId
 	return match op 'check'
 		branch(targetBlock) gives targetBlock
 		prologue to condBranch gives NOT_A_JUMP

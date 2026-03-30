@@ -1,4 +1,4 @@
-// MaxX64 dialect ops to machine code bytes.
+// X64 dialect ops to machine code bytes.
 // Block-based emitter: walks MlirModule -> functions -> blocks -> ops.
 // OS-specific stubs are parameterized by OsDescriptor.
 
@@ -998,7 +998,7 @@ end 'recordLabel'
 
 // --- Main entry point ---
 
-// Emit x86-64 machine code from a block-based MlirModule containing MaxX64Ops.
+// Emit x86-64 machine code from a block-based MlirModule containing X64Ops.
 export function emitX86(module MlirModule, target Target, globalData GlobalDataTable) returns CodeResult
 	logInfo(LogCategory.codegen, message: () gives "Emitting block-based machine code ({targetToString(target)})")
 	var code = ByteArray{}
@@ -1036,13 +1036,13 @@ export function emitX86(module MlirModule, target Target, globalData GlobalDataT
 
 			// Emit all ops in the block
 			for op in block.ops 'emitOps'
-				emitMaxX64MlirOp(op, code: code, blockFixups: blockFixups, callFixups: callFixups, relocations: relocations, globalData: globalData)
+				emitX64MlirOp(op, code: code, blockFixups: blockFixups, callFixups: callFixups, relocations: relocations, globalData: globalData)
 			end 'emitOps'
 
-			// Emit terminator if present (should already be lowered to maxx64 ops
-			// pushed into block.ops by MidToMaxX64, but handle hasTerminator for safety)
+			// Emit terminator if present (should already be lowered to x64 ops
+			// pushed into block.ops by MidToX64, but handle hasTerminator for safety)
 			if block.hasTerminator 'hasTerm'
-				emitMaxX64MlirOp(block.terminator, code: code, blockFixups: blockFixups, callFixups: callFixups, relocations: relocations, globalData: globalData)
+				emitX64MlirOp(block.terminator, code: code, blockFixups: blockFixups, callFixups: callFixups, relocations: relocations, globalData: globalData)
 			end 'hasTerm'
 		end 'eachBlock'
 
@@ -1065,14 +1065,14 @@ export function emitX86(module MlirModule, target Target, globalData GlobalDataT
 	return CodeResult{code: code, mainCallFixupOffset: startOffset, relocations: relocations, globalData: globalData, targetModule: MlirModule{functions: MlirFunctionArray{}}}
 end 'emitX86'
 
-// Emit bytes for a single MlirOp (should be maxx64 at this stage).
-function emitMaxX64MlirOp(op MlirOp, code ByteArray, blockFixups BlockJumpFixupArray, callFixups CallFixupArray, relocations RelocationArray, globalData GlobalDataTable)
+// Emit bytes for a single MlirOp (should be x64 at this stage).
+function emitX64MlirOp(op MlirOp, code ByteArray, blockFixups BlockJumpFixupArray, callFixups CallFixupArray, relocations RelocationArray, globalData GlobalDataTable)
 	match op 'dispatch'
-		maxhl to mir then break 'dispatch'
-		maxx64(x64Op) then emitMaxX64Op(x64Op, code: code, blockFixups: blockFixups, callFixups: callFixups, relocations: relocations, globalData: globalData)
-		maxarm64 then break 'dispatch'
+		maxon to mir then break 'dispatch'
+		x64(x64Op) then emitX64Op(x64Op, code: code, blockFixups: blockFixups, callFixups: callFixups, relocations: relocations, globalData: globalData)
+		arm64 then break 'dispatch'
 	end 'dispatch'
-end 'emitMaxX64MlirOp'
+end 'emitX64MlirOp'
 
 function resolveGpr(vreg X64VReg) returns X64Register
 	var result = X64Register.rax
@@ -1367,8 +1367,8 @@ function emitMovqXmmToGprOp(code ByteArray, dest X64Register, src X64XmmRegister
 	code.push(modrm)
 end 'emitMovqXmmToGprOp'
 
-// Emit bytes for a single MaxX64Op.
-function emitMaxX64Op(op MaxX64Op, code ByteArray, blockFixups BlockJumpFixupArray, callFixups CallFixupArray, relocations RelocationArray, globalData GlobalDataTable)
+// Emit bytes for a single X64Op.
+function emitX64Op(op X64Op, code ByteArray, blockFixups BlockJumpFixupArray, callFixups CallFixupArray, relocations RelocationArray, globalData GlobalDataTable)
 	match op 'emit'
 		prologue(stackSize) then emitPrologue(code, stackSize: stackSize)
 		epilogue then emitEpilogue(code)
@@ -1461,7 +1461,7 @@ function emitMaxX64Op(op MaxX64Op, code ByteArray, blockFixups BlockJumpFixupArr
 		repMovsb then emitRepMovsbOp(code)
 		repStosq then emitRepStosqOp(code)
 	end 'emit'
-end 'emitMaxX64Op'
+end 'emitX64Op'
 
 // --- Inline print operations (legacy path, uses callFixups) ---
 

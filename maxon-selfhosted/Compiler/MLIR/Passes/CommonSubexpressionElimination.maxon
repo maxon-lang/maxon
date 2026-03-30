@@ -80,9 +80,9 @@ end 'eliminateCommonSubexpressions'
 // If a duplicate is found, add a remap entry. Otherwise, insert into the table.
 function cseAnalyzeOp(op MlirOp, vnTable ValueNumberTable, remap ValueIdArray)
 	match op 'dispatch'
-		maxhl then break 'dispatch'
+		maxon then break 'dispatch'
 		arith(arithOp) then cseAnalyzeArithOp(arithOp, vnTable: vnTable, remap: remap)
-		cf to maxarm64 then break 'dispatch'
+		cf to arm64 then break 'dispatch'
 	end 'dispatch'
 end 'cseAnalyzeOp'
 
@@ -111,9 +111,9 @@ end 'cseAnalyzeBinaryOp'
 // Check if an op is a duplicate binary op that should be removed.
 function isDuplicateBinaryOp(op MlirOp, remap ValueIdArray) returns bool
 	return match op 'check'
-		maxhl gives false
+		maxon gives false
 		arith(arithOp) gives isRemappedArithOp(arithOp, remap: remap)
-		cf to maxarm64 gives false
+		cf to arm64 gives false
 	end 'check'
 end 'isDuplicateBinaryOp'
 
@@ -173,8 +173,8 @@ function cseSubstituteOp(op MlirOp, remap ValueIdArray) returns MlirOp
 		memref(memOp) gives MlirOp.memref(cseSubstMemRef(memOp, remap: remap))
 		runtime(rtOp) gives MlirOp.runtime(cseSubstRuntime(rtOp, remap: remap))
 		sys(sysOp) gives MlirOp.sys(cseSubstSys(sysOp, remap: remap))
-		maxhl gives op
-		mir to maxarm64 gives op
+		maxon gives op
+		mir to arm64 gives op
 	end 'subst'
 end 'cseSubstituteOp'
 

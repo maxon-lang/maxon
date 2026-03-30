@@ -1,0 +1,174 @@
+// Maxon -> Mid-level conversion, Pass A (Phase 2): lowerMaxonToArith
+// Lowers maxon math/vars/cf/funcs to arith/memref/cf/func ops.
+// Leaves printLiteral/printInt/panic as maxon ops for Phase 5.
+//
+// Lowers:
+//   maxon.literal       -> arith.const
+//   maxon.binop         -> arith.binary
+//   maxon.unop          -> arith.unary
+//   maxon.truncFloat    -> arith.unary (fpToSiI64)
+//   maxon.intToFloat    -> arith.unary (siToFpF64)
+//   maxon.cmp           -> arith.binary (comparison)
+//   maxon.refEq         -> arith.binary (comparison)
+//   maxon.varDecl/Store -> memref.storeSlot
+//   maxon.varLoad       -> memref.loadSlot
+//   maxon.condBr/br     -> cf.condBr/br
+//   maxon.call/ret      -> func.call/ret
+// Passes through:
+//   maxon.printLiteral  -> unchanged (still maxon)
+//   maxon.printInt      -> unchanged (still maxon)
+
+export function lowerMaxonToArith(module MlirModule, project Project) returns MlirModule
+	logDebug(LogCategory.mlir, message: () gives "Running lower-maxon-to-arith pass")
+	var result = createMlirModule()
+
+	for srcFunc in module.functions 'eachFunc'
+		var dstFunc = cloneFunctionShell(srcFunc)
+		dstFunc.returnType = resolveTypeName(project, name: srcFunc.returnType)
+
+		for srcBlock in srcFunc.region.blocks 'eachBlock'
+			var dstBlock = addBlock(dstFunc.region, label: srcBlock.label)
+			dstBlock.id = srcBlock.id
+			dstBlock.blockArgs = srcBlock.blockArgs
+
+			// Lower ops
+			for op in srcBlock.ops 'eachOp'
+				lowerOpToArith(op, dstBlock: dstBlock)
+			end 'eachOp'
+
+			// Lower terminator
+			if srcBlock.hasTerminator 'hasTerm'
+				dstBlock.terminator = lowerTerminatorToArith(srcBlock.terminator)
+				dstBlock.hasTerminator = true
+			end 'hasTerm'
+		end 'eachBlock'
+
+		dstFunc.region.nextBlockId = srcFunc.region.nextBlockId
+		result.functions.push(dstFunc)
+	end 'eachFunc'
+
+	return result
+end 'lowerMaxonToArith'
+
+function lowerOpToArith(op MlirOp, dstBlock MlirBlock)
+	match op 'dispatch'
+		maxon(hlOp) then lowerMaxonOpToArith(hlOp, dstBlock: dstBlock)
+		arith to arm64 then dstBlock.ops.push(op)
+	end 'dispatch'
+end 'lowerOpToArith'
+
+function lowerMaxonOpToArith(hlOp MaxonOp, dstBlock MlirBlock)
+	match hlOp 'lower'
+		literal(resultId, value, isFloat) then dstBlock.ops.push(MlirOp.arith(ArithOp.const(ArithConst{opcode: literalToArithOpcode(isFloat), resultId: resultId, value: value})))
+		varDecl(slotId, valueId) then dstBlock.ops.push(MlirOp.memref(MemRefOp.storeSlot(slotId, valueId)))
+		varLoad(resultId, slotId) then dstBlock.ops.push(MlirOp.memref(MemRefOp.loadSlot(resultId, slotId)))
+		varStore(slotId, valueId) then dstBlock.ops.push(MlirOp.memref(MemRefOp.storeSlot(slotId, valueId)))
+		binop(resultId, leftId, rightId, opKind, isFloat) then dstBlock.ops.push(MlirOp.arith(ArithOp.binary(ArithBinaryOp{opcode: binOpKindToArithOpcode(opKind, isFloat: isFloat), resultId: resultId, leftId: leftId, rightId: rightId})))
+		unop(resultId, operandId, opKind) then dstBlock.ops.push(MlirOp.arith(ArithOp.unary(ArithUnaryOp{opcode: unaryOpKindToArithOpcode(opKind), resultId: resultId, operandId: operandId})))
+		truncFloat(resultId, operandId) then dstBlock.ops.push(MlirOp.arith(ArithOp.unary(ArithUnaryOp{opcode: ArithUnaryOpcode.fpToSiI64, resultId: resultId, operandId: operandId})))
+		intToFloat(resultId, operandId) then dstBlock.ops.push(MlirOp.arith(ArithOp.unary(ArithUnaryOp{opcode: ArithUnaryOpcode.siToFpF64, resultId: resultId, operandId: operandId})))
+		cmp(resultId, leftId, rightId, predicate, isFloat) then dstBlock.ops.push(MlirOp.arith(ArithOp.binary(ArithBinaryOp{opcode: cmpPredicateToArithOpcode(predicate, isFloat: isFloat), resultId: resultId, leftId: leftId, rightId: rightId})))
+		refEq(resultId, leftId, rightId, negate) then dstBlock.ops.push(MlirOp.arith(ArithOp.binary(ArithBinaryOp{opcode: refEqOpcode(negate), resultId: resultId, leftId: leftId, rightId: rightId})))
+		condBr(condId, thenTarget, elseTarget) then dstBlock.ops.push(MlirOp.cf(CfOp.condBr(condId, thenTarget, ValueIdArray{}, elseTarget, ValueIdArray{})))
+		br(target) then dstBlock.ops.push(MlirOp.cf(CfOp.br(target, ValueIdArray{})))
+		call(resultId, callee, argIds) then dstBlock.ops.push(MlirOp.func(FuncOp.call(resultId, callee, argIds)))
+		ret(retValId) then dstBlock.ops.push(MlirOp.func(FuncOp.ret(retValId)))
+		// Print and panic ops are NOT lowered here — they stay as maxon ops for Phase 5
+		printLiteral(data) then dstBlock.ops.push(MlirOp.maxon(MaxonOp.printLiteral(data)))
+		printInt(valueId) then dstBlock.ops.push(MlirOp.maxon(MaxonOp.printInt(valueId)))
+		panic(message, panicId) then dstBlock.ops.push(MlirOp.maxon(MaxonOp.panic(message, panicId)))
+	end 'lower'
+end 'lowerMaxonOpToArith'
+
+function lowerTerminatorToArith(op MlirOp) returns MlirOp
+	return match op 'dispatch'
+		maxon(hlOp) gives lowerMaxonTerminatorToArith(hlOp)
+		arith to arm64 gives op
+	end 'dispatch'
+end 'lowerTerminatorToArith'
+
+function lowerMaxonTerminatorToArith(hlOp MaxonOp) returns MlirOp
+	return match hlOp 'lower'
+		condBr(condId, thenTarget, elseTarget) gives MlirOp.cf(CfOp.condBr(condId, thenTarget, ValueIdArray{}, elseTarget, ValueIdArray{}))
+		br(target) gives MlirOp.cf(CfOp.br(target, ValueIdArray{}))
+		ret(retValId) gives MlirOp.func(FuncOp.ret(retValId))
+		literal to refEq gives MlirOp.maxon(hlOp)
+		call gives MlirOp.maxon(hlOp)
+		printLiteral to panic gives MlirOp.maxon(hlOp)
+	end 'lower'
+end 'lowerMaxonTerminatorToArith'
+
+// ============================================================
+// Helper functions
+// ============================================================
+
+function literalToArithOpcode(isFloat bool) returns ArithConstOpcode
+	if isFloat 'f'
+		return ArithConstOpcode.constF64
+	end 'f'
+	return ArithConstOpcode.constI64
+end 'literalToArithOpcode'
+
+function binOpKindToArithOpcode(opKind BinOpKind, isFloat bool) returns ArithBinaryOpcode
+	if isFloat 'floatOp'
+		return floatBinOpKindToArithOpcode(opKind)
+	end 'floatOp'
+	return match opKind 'map'
+		add gives ArithBinaryOpcode.addI64
+		sub gives ArithBinaryOpcode.subI64
+		mul gives ArithBinaryOpcode.mulI64
+		div gives ArithBinaryOpcode.divI64
+		mod gives ArithBinaryOpcode.remI64
+		bitAnd gives ArithBinaryOpcode.andI64
+		bitOr gives ArithBinaryOpcode.orI64
+		boolOr gives ArithBinaryOpcode.orI1
+		bitXor gives ArithBinaryOpcode.xorI64
+		shl gives ArithBinaryOpcode.shlI64
+		shr gives ArithBinaryOpcode.shrI64
+	end 'map'
+end 'binOpKindToArithOpcode'
+
+function floatBinOpKindToArithOpcode(opKind BinOpKind) returns ArithBinaryOpcode
+	match opKind 'dispatch'
+		add then return ArithBinaryOpcode.addF64
+		sub then return ArithBinaryOpcode.subF64
+		mul then return ArithBinaryOpcode.mulF64
+		div then return ArithBinaryOpcode.divF64
+		mod to shr then panic("floatBinOpKindToArithOpcode: bitwise/mod ops not supported on floats")
+	end 'dispatch'
+end 'floatBinOpKindToArithOpcode'
+
+function unaryOpKindToArithOpcode(opKind UnaryOpKind) returns ArithUnaryOpcode
+	return match opKind 'map'
+		neg gives ArithUnaryOpcode.negI64
+		bitNot gives ArithUnaryOpcode.bitNotI64
+	end 'map'
+end 'unaryOpKindToArithOpcode'
+
+function cmpPredicateToArithOpcode(predicate CmpPredicate, isFloat bool) returns ArithBinaryOpcode
+	if isFloat 'f'
+		return match predicate 'floatOp'
+			eq gives ArithBinaryOpcode.cmpF64Eq
+			ne gives ArithBinaryOpcode.cmpF64Ne
+			lt gives ArithBinaryOpcode.cmpF64Lt
+			le gives ArithBinaryOpcode.cmpF64Le
+			gt gives ArithBinaryOpcode.cmpF64Gt
+			ge gives ArithBinaryOpcode.cmpF64Ge
+		end 'floatOp'
+	end 'f'
+	return match predicate 'intOp'
+		eq gives ArithBinaryOpcode.cmpI64Eq
+		ne gives ArithBinaryOpcode.cmpI64Ne
+		lt gives ArithBinaryOpcode.cmpI64Lt
+		le gives ArithBinaryOpcode.cmpI64Le
+		gt gives ArithBinaryOpcode.cmpI64Gt
+		ge gives ArithBinaryOpcode.cmpI64Ge
+	end 'intOp'
+end 'cmpPredicateToArithOpcode'
+
+function refEqOpcode(negate bool) returns ArithBinaryOpcode
+	if negate 'ne'
+		return ArithBinaryOpcode.cmpI64Ne
+	end 'ne'
+	return ArithBinaryOpcode.cmpI64Eq
+end 'refEqOpcode'

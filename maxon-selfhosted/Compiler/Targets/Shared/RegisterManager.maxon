@@ -428,96 +428,96 @@ export function x64RegToOrdinal(reg X64Register) returns RegOrdinal
 end 'x64RegToOrdinal'
 
 function rmEmitSpillX64(dstBlock MlirBlock, regOrdinal RegOrdinal, stackOffset RegInt)
-	dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.spillToStack(stackOffset, physReg(ordinalToX64(regOrdinal)))))
+	dstBlock.ops.push(MlirOp.x64(X64Op.spillToStack(stackOffset, physReg(ordinalToX64(regOrdinal)))))
 end 'rmEmitSpillX64'
 
 function rmEmitReloadX64(dstBlock MlirBlock, regOrdinal RegOrdinal, stackOffset RegInt)
-	dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.reloadFromStack(physReg(ordinalToX64(regOrdinal)), stackOffset)))
+	dstBlock.ops.push(MlirOp.x64(X64Op.reloadFromStack(physReg(ordinalToX64(regOrdinal)), stackOffset)))
 end 'rmEmitReloadX64'
 
 function rmEmitMovImmX64(dstBlock MlirBlock, regOrdinal RegOrdinal, value RegInt)
 	let reg = ordinalToX64(regOrdinal)
 	if value == 0 'useXor'
-		dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.xorRegRegSelf(physReg(reg))))
+		dstBlock.ops.push(MlirOp.x64(X64Op.xorRegRegSelf(physReg(reg))))
 	end 'useXor' else 'useMov'
-		dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.movRegImm(physReg(reg), value)))
+		dstBlock.ops.push(MlirOp.x64(X64Op.movRegImm(physReg(reg), value)))
 	end 'useMov'
 end 'rmEmitMovImmX64'
 
 function rmEmitMovRegX64(dstBlock MlirBlock, destOrd RegOrdinal, srcOrd RegOrdinal)
-	dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.movRegReg(physReg(ordinalToX64(destOrd)), physReg(ordinalToX64(srcOrd)))))
+	dstBlock.ops.push(MlirOp.x64(X64Op.movRegReg(physReg(ordinalToX64(destOrd)), physReg(ordinalToX64(srcOrd)))))
 end 'rmEmitMovRegX64'
 
 // --- ARM64 target emission ---
 
 export function ordinalToArm64(ordinal RegOrdinal) returns Arm64VReg
-	let reg = try MaxArm64Register.fromRawValue(ordinal) otherwise 'bad'
+	let reg = try Arm64Register.fromRawValue(ordinal) otherwise 'bad'
 		panic("ordinalToArm64: invalid ordinal {ordinal}")
 	end 'bad'
 	return Arm64VReg.physical(reg)
 end 'ordinalToArm64'
 
-export function arm64RegToOrdinal(reg MaxArm64Register) returns RegOrdinal
+export function arm64RegToOrdinal(reg Arm64Register) returns RegOrdinal
 	return reg.rawValue
 end 'arm64RegToOrdinal'
 
 function rmEmitSpillArm64(dstBlock MlirBlock, regOrdinal RegOrdinal, stackOffset RegInt)
-	dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.spillToStack(stackOffset, ordinalToArm64(regOrdinal))))
+	dstBlock.ops.push(MlirOp.arm64(Arm64Op.spillToStack(stackOffset, ordinalToArm64(regOrdinal))))
 end 'rmEmitSpillArm64'
 
 function rmEmitReloadArm64(dstBlock MlirBlock, regOrdinal RegOrdinal, stackOffset RegInt)
-	dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.reloadFromStack(ordinalToArm64(regOrdinal), stackOffset)))
+	dstBlock.ops.push(MlirOp.arm64(Arm64Op.reloadFromStack(ordinalToArm64(regOrdinal), stackOffset)))
 end 'rmEmitReloadArm64'
 
 function rmEmitMovImmArm64(dstBlock MlirBlock, regOrdinal RegOrdinal, value RegInt)
-	dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.movImm(ordinalToArm64(regOrdinal), value)))
+	dstBlock.ops.push(MlirOp.arm64(Arm64Op.movImm(ordinalToArm64(regOrdinal), value)))
 end 'rmEmitMovImmArm64'
 
 function rmEmitMovRegArm64(dstBlock MlirBlock, destOrd RegOrdinal, srcOrd RegOrdinal)
-	dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.movRegReg(ordinalToArm64(destOrd), ordinalToArm64(srcOrd))))
+	dstBlock.ops.push(MlirOp.arm64(Arm64Op.movRegReg(ordinalToArm64(destOrd), ordinalToArm64(srcOrd))))
 end 'rmEmitMovRegArm64'
 
 // --- Call emission dispatch ---
 
 export function rmEmitCallDirect(state RegState, dstBlock MlirBlock, callee ByteArray)
 	match state.target 'dispatch'
-		x64 then dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.callDirect(callee)))
-		arm64 then dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.branchLink(callee)))
+		x64 then dstBlock.ops.push(MlirOp.x64(X64Op.callDirect(callee)))
+		arm64 then dstBlock.ops.push(MlirOp.arm64(Arm64Op.branchLink(callee)))
 	end 'dispatch'
 end 'rmEmitCallDirect'
 
 export function rmEmitCallIndirect(state RegState, dstBlock MlirBlock, regOrd RegOrdinal)
 	match state.target 'dispatch'
-		x64 then dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.callIndirect(physReg(ordinalToX64(regOrd)))))
-		arm64 then dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.branchLinkReg(ordinalToArm64(regOrd))))
+		x64 then dstBlock.ops.push(MlirOp.x64(X64Op.callIndirect(physReg(ordinalToX64(regOrd)))))
+		arm64 then dstBlock.ops.push(MlirOp.arm64(Arm64Op.branchLinkReg(ordinalToArm64(regOrd))))
 	end 'dispatch'
 end 'rmEmitCallIndirect'
 
 export function rmEmitSubSp(state RegState, dstBlock MlirBlock, amount RegInt)
 	match state.target 'dispatch'
-		x64 then dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.subRspImm(amount)))
-		arm64 then dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.subSpImm(amount)))
+		x64 then dstBlock.ops.push(MlirOp.x64(X64Op.subRspImm(amount)))
+		arm64 then dstBlock.ops.push(MlirOp.arm64(Arm64Op.subSpImm(amount)))
 	end 'dispatch'
 end 'rmEmitSubSp'
 
 export function rmEmitAddSp(state RegState, dstBlock MlirBlock, amount RegInt)
 	match state.target 'dispatch'
-		x64 then dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.addRspImm(amount)))
-		arm64 then dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.addSpImm(amount)))
+		x64 then dstBlock.ops.push(MlirOp.x64(X64Op.addRspImm(amount)))
+		arm64 then dstBlock.ops.push(MlirOp.arm64(Arm64Op.addSpImm(amount)))
 	end 'dispatch'
 end 'rmEmitAddSp'
 
 export function rmEmitStoreToSpOffset(state RegState, dstBlock MlirBlock, regOrd RegOrdinal, offset RegInt)
 	match state.target 'dispatch'
-		x64 then dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.movRspOffsetReg(offset, physReg(ordinalToX64(regOrd)))))
-		arm64 then dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.strToSpOffset(offset, ordinalToArm64(regOrd))))
+		x64 then dstBlock.ops.push(MlirOp.x64(X64Op.movRspOffsetReg(offset, physReg(ordinalToX64(regOrd)))))
+		arm64 then dstBlock.ops.push(MlirOp.arm64(Arm64Op.strToSpOffset(offset, ordinalToArm64(regOrd))))
 	end 'dispatch'
 end 'rmEmitStoreToSpOffset'
 
 export function rmEmitXchgOrSwap(state RegState, dstBlock MlirBlock, ord1 RegOrdinal, ord2 RegOrdinal)
 	if state.hasXchg 'xchg'
 		// X86: single XCHG instruction
-		dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.xchgRegReg(physReg(ordinalToX64(ord1)), physReg(ordinalToX64(ord2)))))
+		dstBlock.ops.push(MlirOp.x64(X64Op.xchgRegReg(physReg(ordinalToX64(ord1)), physReg(ordinalToX64(ord2)))))
 	end 'xchg' else 'threeMov'
 		// ARM64: 3-mov swap via cycle-break scratch register
 		let scratch = state.gprCycleBreakOrd
@@ -529,8 +529,8 @@ end 'rmEmitXchgOrSwap'
 
 export function rmEmitEpilogue(state RegState, dstBlock MlirBlock)
 	match state.target 'dispatch'
-		x64 then dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.epilogue))
-		arm64 then dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.epilogue))
+		x64 then dstBlock.ops.push(MlirOp.x64(X64Op.epilogue))
+		arm64 then dstBlock.ops.push(MlirOp.arm64(Arm64Op.epilogue))
 	end 'dispatch'
 end 'rmEmitEpilogue'
 
@@ -976,36 +976,36 @@ export function ordinalToXmm(ordinal RegOrdinal) returns X64XmmRegister
 end 'ordinalToXmm'
 
 function rmEmitSpillFpX64(dstBlock MlirBlock, fpOrdinal RegOrdinal, stackOffset RegInt)
-	dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.spillXmmToStack(stackOffset, physFpReg(ordinalToXmm(fpOrdinal)), FloatPrecision.f64)))
+	dstBlock.ops.push(MlirOp.x64(X64Op.spillXmmToStack(stackOffset, physFpReg(ordinalToXmm(fpOrdinal)), FloatPrecision.f64)))
 end 'rmEmitSpillFpX64'
 
 function rmEmitReloadFpX64(dstBlock MlirBlock, fpOrdinal RegOrdinal, stackOffset RegInt)
-	dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.reloadXmmFromStack(physFpReg(ordinalToXmm(fpOrdinal)), stackOffset, FloatPrecision.f64)))
+	dstBlock.ops.push(MlirOp.x64(X64Op.reloadXmmFromStack(physFpReg(ordinalToXmm(fpOrdinal)), stackOffset, FloatPrecision.f64)))
 end 'rmEmitReloadFpX64'
 
 function rmEmitMovFpX64(dstBlock MlirBlock, destOrd RegOrdinal, srcOrd RegOrdinal)
-	dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.movXmmXmm(physFpReg(ordinalToXmm(destOrd)), physFpReg(ordinalToXmm(srcOrd)), FloatPrecision.f64)))
+	dstBlock.ops.push(MlirOp.x64(X64Op.movXmmXmm(physFpReg(ordinalToXmm(destOrd)), physFpReg(ordinalToXmm(srcOrd)), FloatPrecision.f64)))
 end 'rmEmitMovFpX64'
 
 // --- ARM64 FP target emission ---
 
 export function ordinalToArm64Fp(ordinal RegOrdinal) returns Arm64FpVReg
-	let reg = try MaxArm64FloatRegister.fromRawValue(ordinal) otherwise 'bad'
+	let reg = try Arm64FloatRegister.fromRawValue(ordinal) otherwise 'bad'
 		panic("ordinalToArm64Fp: invalid ordinal {ordinal}")
 	end 'bad'
 	return Arm64FpVReg.physical(reg)
 end 'ordinalToArm64Fp'
 
 function rmEmitSpillFpArm64(dstBlock MlirBlock, fpOrdinal RegOrdinal, stackOffset RegInt)
-	dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.spillFpToStack(stackOffset, ordinalToArm64Fp(fpOrdinal), FloatPrecision.f64)))
+	dstBlock.ops.push(MlirOp.arm64(Arm64Op.spillFpToStack(stackOffset, ordinalToArm64Fp(fpOrdinal), FloatPrecision.f64)))
 end 'rmEmitSpillFpArm64'
 
 function rmEmitReloadFpArm64(dstBlock MlirBlock, fpOrdinal RegOrdinal, stackOffset RegInt)
-	dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.reloadFpFromStack(ordinalToArm64Fp(fpOrdinal), stackOffset, FloatPrecision.f64)))
+	dstBlock.ops.push(MlirOp.arm64(Arm64Op.reloadFpFromStack(ordinalToArm64Fp(fpOrdinal), stackOffset, FloatPrecision.f64)))
 end 'rmEmitReloadFpArm64'
 
 function rmEmitMovFpArm64(dstBlock MlirBlock, destOrd RegOrdinal, srcOrd RegOrdinal)
-	dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.fmovRegReg(ordinalToArm64Fp(destOrd), ordinalToArm64Fp(srcOrd), FloatPrecision.f64)))
+	dstBlock.ops.push(MlirOp.arm64(Arm64Op.fmovRegReg(ordinalToArm64Fp(destOrd), ordinalToArm64Fp(srcOrd), FloatPrecision.f64)))
 end 'rmEmitMovFpArm64'
 
 // --- Load immediate ---
@@ -1964,8 +1964,8 @@ function isVirtualArm64FpReg(vreg Arm64FpVReg) returns bool
 	return result
 end 'isVirtualArm64FpReg'
 
-// Check whether a single MaxX64Op contains any virtual registers.
-function x64OpHasVirtualRegs(op MaxX64Op) returns bool
+// Check whether a single X64Op contains any virtual registers.
+function x64OpHasVirtualRegs(op X64Op) returns bool
 	return match op 'check'
 		prologue gives false
 		epilogue gives false
@@ -2058,8 +2058,8 @@ function x64OpHasVirtualRegs(op MaxX64Op) returns bool
 	end 'check'
 end 'x64OpHasVirtualRegs'
 
-// Check whether a single MaxArm64Op contains any virtual registers.
-function arm64OpHasVirtualRegs(op MaxArm64Op) returns bool
+// Check whether a single Arm64Op contains any virtual registers.
+function arm64OpHasVirtualRegs(op Arm64Op) returns bool
 	return match op 'check'
 		prologue gives false
 		epilogue gives false
@@ -2142,9 +2142,9 @@ end 'arm64OpHasVirtualRegs'
 // Check whether a single MlirOp contains any virtual registers.
 function mlirOpHasVirtualRegs(op MlirOp) returns bool
 	return match op 'check'
-		maxhl to mir gives false
-		maxx64(x64Op) gives x64OpHasVirtualRegs(x64Op)
-		maxarm64(a64Op) gives arm64OpHasVirtualRegs(a64Op)
+		maxon to mir gives false
+		x64(x64Op) gives x64OpHasVirtualRegs(x64Op)
+		arm64(a64Op) gives arm64OpHasVirtualRegs(a64Op)
 	end 'check'
 end 'mlirOpHasVirtualRegs'
 
@@ -2222,9 +2222,9 @@ function preSeedX64ParamRegisters(state RegState, srcFunc MlirFunction)
 			continue
 		end 'skipOp'
 		match op 'checkParam'
-			maxhl to mir then break 'checkParam'
-			maxx64(x64Op) then preSeedIfNotDivResult(state, x64Op: x64Op, ops: entryBlock.ops, opIdx: opIdx)
-			maxarm64 then break 'checkParam'
+			maxon to mir then break 'checkParam'
+			x64(x64Op) then preSeedIfNotDivResult(state, x64Op: x64Op, ops: entryBlock.ops, opIdx: opIdx)
+			arm64 then break 'checkParam'
 		end 'checkParam'
 		opIdx = opIdx + 1
 	end 'scanOps'
@@ -2232,7 +2232,7 @@ end 'preSeedX64ParamRegisters'
 
 // Pre-seed a phys→virt movRegReg unless the previous op is idivReg
 // (which means this is a division/modulo result extraction, not a param).
-function preSeedIfNotDivResult(state RegState, x64Op MaxX64Op, ops MlirOpArray, opIdx RegInt)
+function preSeedIfNotDivResult(state RegState, x64Op X64Op, ops MlirOpArray, opIdx RegInt)
 	match x64Op 'checkMov'
 		movRegReg(destReg, srcReg) then preSeedMovIfNotDivResult(state, destReg: destReg, srcReg: srcReg, ops: ops, opIdx: opIdx)
 		prologue to memcpyOp then break 'checkMov'
@@ -2273,7 +2273,7 @@ function isPrevOpIdivOrCall(ops MlirOpArray, opIdx RegInt) returns bool
 	end 'noPrev'
 	var result = false
 	match prevOp 'checkPrev'
-		maxx64(prevX64) then match prevX64 'checkOp'
+		x64(prevX64) then match prevX64 'checkOp'
 			callDirect then result = true
 			idivReg then result = true
 			callIndirect then result = true
@@ -2283,8 +2283,8 @@ function isPrevOpIdivOrCall(ops MlirOpArray, opIdx RegInt) returns bool
 			spillToStack to xorRegRegSelf then break 'checkOp'
 			xchgRegReg to repStosq then break 'checkOp'
 		end 'checkOp'
-		maxhl to mir then break 'checkPrev'
-		maxarm64 then break 'checkPrev'
+		maxon to mir then break 'checkPrev'
+		arm64 then break 'checkPrev'
 	end 'checkPrev'
 	return result
 end 'isPrevOpIdivOrCall'
@@ -2307,15 +2307,15 @@ function rmPreRecordBlockArgSlotHomes(state RegState, srcBlock MlirBlock)
 			return
 		end 'done'
 		match op 'checkOp'
-			maxx64(x64Op) then rmCheckBlockArgLoadSlot(state, x64Op: x64Op)
-			maxhl to mir then return
-			maxarm64 then return
+			x64(x64Op) then rmCheckBlockArgLoadSlot(state, x64Op: x64Op)
+			maxon to mir then return
+			arm64 then return
 		end 'checkOp'
 		opIdx = opIdx + 1
 	end 'scanOps'
 end 'rmPreRecordBlockArgSlotHomes'
 
-function rmCheckBlockArgLoadSlot(state RegState, x64Op MaxX64Op)
+function rmCheckBlockArgLoadSlot(state RegState, x64Op X64Op)
 	match x64Op 'check'
 		prologue to movSlot then break 'check'
 		loadSlot(destReg, slotIndex) then rmRecordSlotHomeFromVReg(state, vreg: destReg, slotIndex: slotIndex)
@@ -2341,13 +2341,13 @@ end 'isReturnTerminator'
 function isX64RetTerminator(op MlirOp) returns bool
 	var result = false
 	match op 'checkOp'
-		maxx64(x64Op) then match x64Op 'checkRet'
+		x64(x64Op) then match x64Op 'checkRet'
 			ret then result = true
 			prologue to epilogue then break 'checkRet'
 			movRegImm to repStosq then break 'checkRet'
 		end 'checkRet'
-		maxhl to mir then break 'checkOp'
-		maxarm64 then break 'checkOp'
+		maxon to mir then break 'checkOp'
+		arm64 then break 'checkOp'
 	end 'checkOp'
 	return result
 end 'isX64RetTerminator'
@@ -2355,12 +2355,12 @@ end 'isX64RetTerminator'
 function isArm64RetTerminator(op MlirOp) returns bool
 	var result = false
 	match op 'checkOp'
-		maxarm64(a64Op) then match a64Op 'checkRet'
+		arm64(a64Op) then match a64Op 'checkRet'
 			ret then result = true
 			prologue to printInt then break 'checkRet'
 			syscall to nullSafeLoad then break 'checkRet'
 		end 'checkRet'
-		maxhl to maxx64 then break 'checkOp'
+		maxon to x64 then break 'checkOp'
 	end 'checkOp'
 	return result
 end 'isArm64RetTerminator'
@@ -2407,7 +2407,7 @@ function incUse(counts RegIntArray, id RegInt)
 end 'incUse'
 
 // Collect read VReg IDs from an X64 op and record their last use at opIdx.
-function countX64OpReads(counts RegIntArray, x64Op MaxX64Op)
+function countX64OpReads(counts RegIntArray, x64Op X64Op)
 	match x64Op 'scan'
 		prologue to ret then break 'scan'
 		movRegImm then break 'scan'
@@ -2500,7 +2500,7 @@ function countX64MixedReads(counts RegIntArray, gpr X64VReg, fp X64FpVReg)
 end 'countX64MixedReads'
 
 // Collect read VReg IDs from an ARM64 op and record their last use at opIdx.
-function countArm64OpReads(counts RegIntArray, a64Op MaxArm64Op)
+function countArm64OpReads(counts RegIntArray, a64Op Arm64Op)
 	match a64Op 'scan'
 		prologue to epilogue then break 'scan'
 		movImm then break 'scan'
@@ -2589,28 +2589,28 @@ function computeUseCounts(srcFunc MlirFunction, isX64 bool) returns RegIntArray
 		for op in srcBlock.ops 'eachOp'
 			if isX64 'x64Path'
 				match op 'dispatch'
-					maxx64(x64Op) then countX64OpReads(counts, x64Op: x64Op)
-					maxhl to mir then break 'dispatch'
-					maxarm64 then break 'dispatch'
+					x64(x64Op) then countX64OpReads(counts, x64Op: x64Op)
+					maxon to mir then break 'dispatch'
+					arm64 then break 'dispatch'
 				end 'dispatch'
 			end 'x64Path' else 'arm64Path'
 				match op 'dispatch2'
-					maxarm64(a64Op) then countArm64OpReads(counts, a64Op: a64Op)
-					maxhl to maxx64 then break 'dispatch2'
+					arm64(a64Op) then countArm64OpReads(counts, a64Op: a64Op)
+					maxon to x64 then break 'dispatch2'
 				end 'dispatch2'
 			end 'arm64Path'
 		end 'eachOp'
 		if srcBlock.hasTerminator 'hasTerm'
 			if isX64 'x64Term'
 				match srcBlock.terminator 'dispatchTerm'
-					maxx64(x64Op) then countX64OpReads(counts, x64Op: x64Op)
-					maxhl to mir then break 'dispatchTerm'
-					maxarm64 then break 'dispatchTerm'
+					x64(x64Op) then countX64OpReads(counts, x64Op: x64Op)
+					maxon to mir then break 'dispatchTerm'
+					arm64 then break 'dispatchTerm'
 				end 'dispatchTerm'
 			end 'x64Term' else 'arm64Term'
 				match srcBlock.terminator 'dispatchTerm2'
-					maxarm64(a64Op) then countArm64OpReads(counts, a64Op: a64Op)
-					maxhl to maxx64 then break 'dispatchTerm2'
+					arm64(a64Op) then countArm64OpReads(counts, a64Op: a64Op)
+					maxon to x64 then break 'dispatchTerm2'
 				end 'dispatchTerm2'
 			end 'arm64Term'
 		end 'hasTerm'
@@ -2628,14 +2628,14 @@ function computeDeferredValues(srcFunc MlirFunction, isX64 bool) returns RegIntA
 		for op in srcBlock.ops 'eachOp'
 			if isX64 'x64'
 				match op 'check'
-					maxx64(x64Op) then classifyX64OpReads(sinkOnly, usedByNonSink: usedByNonSink, x64Op: x64Op)
-					maxhl to mir then break 'check'
-					maxarm64 then break 'check'
+					x64(x64Op) then classifyX64OpReads(sinkOnly, usedByNonSink: usedByNonSink, x64Op: x64Op)
+					maxon to mir then break 'check'
+					arm64 then break 'check'
 				end 'check'
 			end 'x64' else 'arm64'
 				match op 'check2'
-					maxarm64(a64Op) then classifyArm64OpReads(sinkOnly, usedByNonSink: usedByNonSink, a64Op: a64Op)
-					maxhl to maxx64 then break 'check2'
+					arm64(a64Op) then classifyArm64OpReads(sinkOnly, usedByNonSink: usedByNonSink, a64Op: a64Op)
+					maxon to x64 then break 'check2'
 				end 'check2'
 			end 'arm64'
 		end 'eachOp'
@@ -2643,14 +2643,14 @@ function computeDeferredValues(srcFunc MlirFunction, isX64 bool) returns RegIntA
 		if srcBlock.hasTerminator 'hasTerm'
 			if isX64 'x64Term'
 				match srcBlock.terminator 'checkTerm'
-					maxx64(x64Op) then countX64OpReads(usedByNonSink, x64Op: x64Op)
-					maxhl to mir then break 'checkTerm'
-					maxarm64 then break 'checkTerm'
+					x64(x64Op) then countX64OpReads(usedByNonSink, x64Op: x64Op)
+					maxon to mir then break 'checkTerm'
+					arm64 then break 'checkTerm'
 				end 'checkTerm'
 			end 'x64Term' else 'arm64Term'
 				match srcBlock.terminator 'checkTerm2'
-					maxarm64(a64Op) then countArm64OpReads(usedByNonSink, a64Op: a64Op)
-					maxhl to maxx64 then break 'checkTerm2'
+					arm64(a64Op) then countArm64OpReads(usedByNonSink, a64Op: a64Op)
+					maxon to x64 then break 'checkTerm2'
 				end 'checkTerm2'
 			end 'arm64Term'
 		end 'hasTerm'
@@ -2688,9 +2688,9 @@ function computeForwardHints(srcFunc MlirFunction) returns RegIntArray
 				continue
 			end 'skipOp'
 			match op 'checkOp'
-				maxx64(x64Op) then scanForwardHintX64(hints, x64Op: x64Op, ops: srcBlock.ops, opIdx: opIdx, opCount: opCount, raxOrd: raxOrd, rcxOrd: rcxOrd)
-				maxhl to mir then break 'checkOp'
-				maxarm64 then break 'checkOp'
+				x64(x64Op) then scanForwardHintX64(hints, x64Op: x64Op, ops: srcBlock.ops, opIdx: opIdx, opCount: opCount, raxOrd: raxOrd, rcxOrd: rcxOrd)
+				maxon to mir then break 'checkOp'
+				arm64 then break 'checkOp'
 			end 'checkOp'
 			opIdx = opIdx + 1
 		end 'eachOp'
@@ -2700,7 +2700,7 @@ end 'computeForwardHints'
 
 // Check if an x64 op is movRegReg(physical(target), virtual(V)) and a confirming
 // instruction appears within the next 3 ops. If so, set a forward hint.
-function scanForwardHintX64(hints RegIntArray, x64Op MaxX64Op, ops MlirOpArray, opIdx RegInt, opCount RegInt, raxOrd RegOrdinal, rcxOrd RegOrdinal)
+function scanForwardHintX64(hints RegIntArray, x64Op X64Op, ops MlirOpArray, opIdx RegInt, opCount RegInt, raxOrd RegOrdinal, rcxOrd RegOrdinal)
 	match x64Op 'checkMov'
 		movRegReg(destReg, srcReg) then scanForwardHintMovRegReg(hints, destReg: destReg, srcReg: srcReg, ops: ops, opIdx: opIdx, opCount: opCount, raxOrd: raxOrd, rcxOrd: rcxOrd)
 		prologue to memcpyOp then break 'checkMov'
@@ -2733,15 +2733,15 @@ function scanForwardHintMovRegReg(hints RegIntArray, destReg X64VReg, srcReg X64
 			continue
 		end 'skipLook'
 		match nextOp 'checkNext'
-			maxx64(nextX64) then scanForwardHintConfirm(hints, nextX64: nextX64, srcId: srcId, destOrd: destOrd, raxOrd: raxOrd, rcxOrd: rcxOrd)
-			maxhl to mir then break 'checkNext'
-			maxarm64 then break 'checkNext'
+			x64(nextX64) then scanForwardHintConfirm(hints, nextX64: nextX64, srcId: srcId, destOrd: destOrd, raxOrd: raxOrd, rcxOrd: rcxOrd)
+			maxon to mir then break 'checkNext'
+			arm64 then break 'checkNext'
 		end 'checkNext'
 		lookIdx = lookIdx + 1
 	end 'lookAhead'
 end 'scanForwardHintMovRegReg'
 
-function scanForwardHintConfirm(hints RegIntArray, nextX64 MaxX64Op, srcId RegInt, destOrd RegOrdinal, raxOrd RegOrdinal, rcxOrd RegOrdinal)
+function scanForwardHintConfirm(hints RegIntArray, nextX64 X64Op, srcId RegInt, destOrd RegOrdinal, raxOrd RegOrdinal, rcxOrd RegOrdinal)
 	match nextX64 'confirm'
 		cqo then confirmDivHint(hints, srcId: srcId, destOrd: destOrd, raxOrd: raxOrd)
 		shlRegCl then confirmShiftHint(hints, srcId: srcId, destOrd: destOrd, rcxOrd: rcxOrd)
@@ -2782,7 +2782,7 @@ end 'applyForwardHints'
 // Classify an X64 op's reads as sink or non-sink.
 // Sink: movRegReg where dest is physical (call arg / return value setup).
 // Non-sink: everything else that reads a virtual register.
-function classifyX64OpReads(sinkOnly RegIntArray, usedByNonSink RegIntArray, x64Op MaxX64Op)
+function classifyX64OpReads(sinkOnly RegIntArray, usedByNonSink RegIntArray, x64Op X64Op)
 	if isX64MovRegReg(x64Op) 'isMov'
 		match x64Op 'extractMov'
 			movRegReg(destReg, srcReg) then classifyX64MovRegReg(sinkOnly, usedByNonSink: usedByNonSink, destReg: destReg, srcReg: srcReg)
@@ -2794,7 +2794,7 @@ function classifyX64OpReads(sinkOnly RegIntArray, usedByNonSink RegIntArray, x64
 	end 'other'
 end 'classifyX64OpReads'
 
-function isX64MovRegReg(x64Op MaxX64Op) returns bool
+function isX64MovRegReg(x64Op X64Op) returns bool
 	var result = false
 	match x64Op 'check'
 		movRegReg then result = true
@@ -2817,7 +2817,7 @@ function classifyX64MovRegReg(sinkOnly RegIntArray, usedByNonSink RegIntArray, d
 end 'classifyX64MovRegReg'
 
 // ARM64 classification (simplified — mark movRegReg with physical dest as sink)
-function classifyArm64OpReads(sinkOnly RegIntArray, usedByNonSink RegIntArray, a64Op MaxArm64Op)
+function classifyArm64OpReads(sinkOnly RegIntArray, usedByNonSink RegIntArray, a64Op Arm64Op)
 	if isArm64MovRegReg(a64Op) 'isMov'
 		match a64Op 'extractMov'
 			movRegReg(dest, src) then classifyArm64MovRegReg(sinkOnly, usedByNonSink: usedByNonSink, dest: dest, src: src)
@@ -2829,7 +2829,7 @@ function classifyArm64OpReads(sinkOnly RegIntArray, usedByNonSink RegIntArray, a
 	end 'other'
 end 'classifyArm64OpReads'
 
-function isArm64MovRegReg(a64Op MaxArm64Op) returns bool
+function isArm64MovRegReg(a64Op Arm64Op) returns bool
 	var result = false
 	match a64Op 'check'
 		movRegReg then result = true
@@ -2854,21 +2854,21 @@ end 'classifyArm64MovRegReg'
 function isDivergingBlock(block MlirBlock) returns bool
 	for op in block.ops 'checkOps'
 		match op 'checkCall'
-			maxx64(x64Op) then match x64Op 'checkX64Call'
+			x64(x64Op) then match x64Op 'checkX64Call'
 				callDirect(target) then if target == b"mrt_panic" 'isPanic'
 					return true
 				end 'isPanic'
 				prologue to loadRegRbpOffset then break 'checkX64Call'
 				syscall to repStosq then break 'checkX64Call'
 			end 'checkX64Call'
-			maxarm64(a64Op) then match a64Op 'checkArm64Call'
+			arm64(a64Op) then match a64Op 'checkArm64Call'
 				branchLink(target) then if target == b"mrt_panic" 'isPanic2'
 					return true
 				end 'isPanic2'
 				prologue to branch then break 'checkArm64Call'
 				printLiteral to nullSafeLoad then break 'checkArm64Call'
 			end 'checkArm64Call'
-			maxhl to mir then break 'checkCall'
+			maxon to mir then break 'checkCall'
 		end 'checkCall'
 	end 'checkOps'
 	return false
@@ -3006,14 +3006,14 @@ function allocateRegistersForFunc(srcFunc MlirFunction, target Target) returns M
 
 			if isX64 'x64Path'
 				match op 'dispatchOp'
-					maxx64(x64Op) then allocX64Op(state, x64Op: x64Op, dstBlock: dstBlock)
-					maxhl to mir then dstBlock.ops.push(op)
-					maxarm64 then dstBlock.ops.push(op)
+					x64(x64Op) then allocX64Op(state, x64Op: x64Op, dstBlock: dstBlock)
+					maxon to mir then dstBlock.ops.push(op)
+					arm64 then dstBlock.ops.push(op)
 				end 'dispatchOp'
 			end 'x64Path' else 'arm64Path'
 				match op 'dispatchOp2'
-					maxarm64(a64Op) then allocArm64Op(state, a64Op: a64Op, dstBlock: dstBlock)
-					maxhl to maxx64 then dstBlock.ops.push(op)
+					arm64(a64Op) then allocArm64Op(state, a64Op: a64Op, dstBlock: dstBlock)
+					maxon to x64 then dstBlock.ops.push(op)
 				end 'dispatchOp2'
 			end 'arm64Path'
 
@@ -3046,14 +3046,14 @@ function allocateRegistersForFunc(srcFunc MlirFunction, target Target) returns M
 			// Process terminator op
 			if isX64 'x64Term'
 				match srcBlock.terminator 'dispatchTerm'
-					maxx64(x64Op) then allocX64Op(state, x64Op: x64Op, dstBlock: dstBlock)
-					maxhl to mir then dstBlock.ops.push(srcBlock.terminator)
-					maxarm64 then dstBlock.ops.push(srcBlock.terminator)
+					x64(x64Op) then allocX64Op(state, x64Op: x64Op, dstBlock: dstBlock)
+					maxon to mir then dstBlock.ops.push(srcBlock.terminator)
+					arm64 then dstBlock.ops.push(srcBlock.terminator)
 				end 'dispatchTerm'
 			end 'x64Term' else 'arm64Term'
 				match srcBlock.terminator 'dispatchTerm2'
-					maxarm64(a64Op) then allocArm64Op(state, a64Op: a64Op, dstBlock: dstBlock)
-					maxhl to maxx64 then dstBlock.ops.push(srcBlock.terminator)
+					arm64(a64Op) then allocArm64Op(state, a64Op: a64Op, dstBlock: dstBlock)
+					maxon to x64 then dstBlock.ops.push(srcBlock.terminator)
 				end 'dispatchTerm2'
 			end 'arm64Term'
 
@@ -3118,7 +3118,7 @@ function createX64RegState() returns RegState
 end 'createX64RegState'
 
 function createArm64RegState() returns RegState
-	return createRegState(16, gprPool: createArm64GprPool(), callerSavedGprs: createArm64CallerSavedGprs(), target: RegTarget.arm64, callConvGprs: createArm64CallConvGprs(), returnGprOrd: arm64RegToOrdinal(MaxArm64Register.x0), errorFlagOrd: arm64RegToOrdinal(MaxArm64Register.x1), indirectCallScratchOrd: arm64RegToOrdinal(MaxArm64Register.x16), gprCycleBreakOrd: arm64RegToOrdinal(MaxArm64Register.x16), hasXchg: false, fpPool: createArm64FpPool(), callerSavedFps: createArm64CallerSavedFps(), callConvFps: createArm64CallConvFps(), returnFpOrd: 0, fpCycleBreakOrd: 31)
+	return createRegState(16, gprPool: createArm64GprPool(), callerSavedGprs: createArm64CallerSavedGprs(), target: RegTarget.arm64, callConvGprs: createArm64CallConvGprs(), returnGprOrd: arm64RegToOrdinal(Arm64Register.x0), errorFlagOrd: arm64RegToOrdinal(Arm64Register.x1), indirectCallScratchOrd: arm64RegToOrdinal(Arm64Register.x16), gprCycleBreakOrd: arm64RegToOrdinal(Arm64Register.x16), hasXchg: false, fpPool: createArm64FpPool(), callerSavedFps: createArm64CallerSavedFps(), callConvFps: createArm64CallConvFps(), returnFpOrd: 0, fpCycleBreakOrd: 31)
 end 'createArm64RegState'
 
 
@@ -3243,7 +3243,7 @@ function arm64ResolveGprDef(state RegState, vreg Arm64VReg, dstBlock MlirBlock, 
 	end 'resolve'
 end 'arm64ResolveGprDef'
 
-function arm64ResolvePhysDef(state RegState, reg MaxArm64Register, dstBlock MlirBlock) returns RegOrdinal
+function arm64ResolvePhysDef(state RegState, reg Arm64Register, dstBlock MlirBlock) returns RegOrdinal
 	let ord = arm64RegToOrdinal(reg)
 	rmSpillRegisterIfOccupied(state, regOrdinal: ord, dstBlock: dstBlock)
 	return ord
@@ -3277,7 +3277,7 @@ function arm64ResolveFpDef(state RegState, vreg Arm64FpVReg, dstBlock MlirBlock)
 	end 'resolve'
 end 'arm64ResolveFpDef'
 
-function arm64ResolvePhysFpDef(state RegState, reg MaxArm64FloatRegister, dstBlock MlirBlock) returns RegOrdinal
+function arm64ResolvePhysFpDef(state RegState, reg Arm64FloatRegister, dstBlock MlirBlock) returns RegOrdinal
 	let ord = reg.rawValue
 	rmSpillFpIfOccupied(state, fpOrdinal: ord, dstBlock: dstBlock)
 	return ord
@@ -3310,12 +3310,12 @@ function ax64MovRegImm(state RegState, dest X64VReg, value MachineWord, dstBlock
 		return
 	end 'deferVirtual'
 	let d = x64ResolveGprDef(state, vreg: dest, dstBlock: dstBlock, protect1: RM_NONE, protect2: RM_NONE)
-	dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.movRegImm(x64PhysFromOrd(d), value)))
+	dstBlock.ops.push(MlirOp.x64(X64Op.movRegImm(x64PhysFromOrd(d), value)))
 end 'ax64MovRegImm'
 
 function ax64MovSlot(state RegState, slotIndex VarSlot, srcReg X64VReg, dstBlock MlirBlock)
 	let s = x64ResolveGprUse(state, vreg: srcReg, dstBlock: dstBlock, protect1: RM_NONE, protect2: RM_NONE)
-	dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.movSlot(slotIndex, x64PhysFromOrd(s))))
+	dstBlock.ops.push(MlirOp.x64(X64Op.movSlot(slotIndex, x64PhysFromOrd(s))))
 	// Record the stack home for the source value so rmSpillAllBeforeTerminator
 	// knows this value already has a copy on the stack and skips the redundant spill.
 	let srcId = x64VRegId(srcReg)
@@ -3327,7 +3327,7 @@ end 'ax64MovSlot'
 
 function ax64LoadSlot(state RegState, destReg X64VReg, slotIndex VarSlot, dstBlock MlirBlock)
 	let d = x64ResolveGprDef(state, vreg: destReg, dstBlock: dstBlock, protect1: RM_NONE, protect2: RM_NONE)
-	dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.loadSlot(x64PhysFromOrd(d), slotIndex)))
+	dstBlock.ops.push(MlirOp.x64(X64Op.loadSlot(x64PhysFromOrd(d), slotIndex)))
 end 'ax64LoadSlot'
 
 function rmRecordSlotHome(state RegState, vreg X64VReg, slotIndex VarSlot)
@@ -3371,12 +3371,12 @@ function ax64TwoAddr(state RegState, destReg X64VReg, srcReg X64VReg, dstBlock M
 	let dp = x64PhysFromOrd(d)
 	let sp = x64PhysFromOrd(s)
 	match op 'emit'
-		add then dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.addRegReg(dp, sp)))
-		sub then dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.subRegReg(dp, sp)))
-		imul then dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.imulRegReg(dp, sp)))
-		bitwiseAnd then dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.andRegReg(dp, sp)))
-		bitwiseOr then dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.orRegReg(dp, sp)))
-		bitwiseXor then dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.xorRegReg(dp, sp)))
+		add then dstBlock.ops.push(MlirOp.x64(X64Op.addRegReg(dp, sp)))
+		sub then dstBlock.ops.push(MlirOp.x64(X64Op.subRegReg(dp, sp)))
+		imul then dstBlock.ops.push(MlirOp.x64(X64Op.imulRegReg(dp, sp)))
+		bitwiseAnd then dstBlock.ops.push(MlirOp.x64(X64Op.andRegReg(dp, sp)))
+		bitwiseOr then dstBlock.ops.push(MlirOp.x64(X64Op.orRegReg(dp, sp)))
+		bitwiseXor then dstBlock.ops.push(MlirOp.x64(X64Op.xorRegReg(dp, sp)))
 	end 'emit'
 	// The dest register was modified in-place. If the value had a prior spill slot,
 	// that slot now holds a stale (pre-operation) value. Invalidate it so that any
@@ -3392,9 +3392,9 @@ function ax64RegImm(state RegState, destReg X64VReg, value MachineWord, dstBlock
 	let d = x64ResolveGprUse(state, vreg: destReg, dstBlock: dstBlock, protect1: RM_NONE, protect2: RM_NONE)
 	let dp = x64PhysFromOrd(d)
 	if isAdd 'add'
-		dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.addRegImm(dp, value)))
+		dstBlock.ops.push(MlirOp.x64(X64Op.addRegImm(dp, value)))
 	end 'add' else 'sub'
-		dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.subRegImm(dp, value)))
+		dstBlock.ops.push(MlirOp.x64(X64Op.subRegImm(dp, value)))
 	end 'sub'
 	match destReg 'invalidateSpill'
 		virtual(id) then rmInvalidateStackHome(state, valueId: id)
@@ -3407,10 +3407,10 @@ function ax64UnaryInPlace(state RegState, reg X64VReg, dstBlock MlirBlock, op Un
 	let r = x64ResolveGprUse(state, vreg: reg, dstBlock: dstBlock, protect1: RM_NONE, protect2: RM_NONE)
 	let rp = x64PhysFromOrd(r)
 	match op 'emit'
-		neg then dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.negReg(rp)))
-		bitNot then dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.bitNotReg(rp)))
-		shl then dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.shlRegCl(rp)))
-		sar then dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.sarRegCl(rp)))
+		neg then dstBlock.ops.push(MlirOp.x64(X64Op.negReg(rp)))
+		bitNot then dstBlock.ops.push(MlirOp.x64(X64Op.bitNotReg(rp)))
+		shl then dstBlock.ops.push(MlirOp.x64(X64Op.shlRegCl(rp)))
+		sar then dstBlock.ops.push(MlirOp.x64(X64Op.sarRegCl(rp)))
 	end 'emit'
 	// The register was modified in-place — invalidate any stale spill slot.
 	match reg 'invalidateSpill'
@@ -3422,18 +3422,18 @@ end 'ax64UnaryInPlace'
 function ax64CmpRegReg(state RegState, lhsReg X64VReg, rhsReg X64VReg, dstBlock MlirBlock)
 	let l = x64ResolveGprUse(state, vreg: lhsReg, dstBlock: dstBlock, protect1: RM_NONE, protect2: RM_NONE)
 	let r = x64ResolveGprUse(state, vreg: rhsReg, dstBlock: dstBlock, protect1: l, protect2: RM_NONE)
-	dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.cmpRegReg(x64PhysFromOrd(l), x64PhysFromOrd(r))))
+	dstBlock.ops.push(MlirOp.x64(X64Op.cmpRegReg(x64PhysFromOrd(l), x64PhysFromOrd(r))))
 end 'ax64CmpRegReg'
 
 function ax64CmpRegImm(state RegState, lhsReg X64VReg, value MachineWord, dstBlock MlirBlock)
 	let l = x64ResolveGprUse(state, vreg: lhsReg, dstBlock: dstBlock, protect1: RM_NONE, protect2: RM_NONE)
-	dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.cmpRegImm(x64PhysFromOrd(l), value)))
+	dstBlock.ops.push(MlirOp.x64(X64Op.cmpRegImm(x64PhysFromOrd(l), value)))
 end 'ax64CmpRegImm'
 
 function ax64TestRegReg(state RegState, reg1 X64VReg, reg2 X64VReg, dstBlock MlirBlock)
 	let r1 = x64ResolveGprUse(state, vreg: reg1, dstBlock: dstBlock, protect1: RM_NONE, protect2: RM_NONE)
 	let r2 = x64ResolveGprUse(state, vreg: reg2, dstBlock: dstBlock, protect1: r1, protect2: RM_NONE)
-	dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.testRegReg(x64PhysFromOrd(r1), x64PhysFromOrd(r2))))
+	dstBlock.ops.push(MlirOp.x64(X64Op.testRegReg(x64PhysFromOrd(r1), x64PhysFromOrd(r2))))
 end 'ax64TestRegReg'
 
 // CQO sign-extends RAX into RDX:RAX. It clobbers RDX.
@@ -3452,7 +3452,7 @@ function ax64Cqo(state RegState, dstBlock MlirBlock)
 			rmSpillRegisterIfOccupied(state, regOrdinal: rdxOrd, dstBlock: dstBlock)
 		end 'noFreeReg'
 	end 'hasValue'
-	dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.cqo))
+	dstBlock.ops.push(MlirOp.x64(X64Op.cqo))
 end 'ax64Cqo'
 
 // IDIV divides RDX:RAX by the divisor. The divisor must NOT be in RAX or RDX.
@@ -3463,7 +3463,7 @@ function ax64IdivReg(state RegState, divisorReg X64VReg, dstBlock MlirBlock)
 	let raxOrd = x64RegToOrdinal(X64Register.rax)
 	let rdxOrd = x64RegToOrdinal(X64Register.rdx)
 	let d = x64ResolveGprUse(state, vreg: divisorReg, dstBlock: dstBlock, protect1: raxOrd, protect2: rdxOrd)
-	dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.idivReg(x64PhysFromOrd(d))))
+	dstBlock.ops.push(MlirOp.x64(X64Op.idivReg(x64PhysFromOrd(d))))
 	// Invalidate RAX and RDX: IDIV writes new values to both.
 	// Any virtual previously mapped to these registers must be evicted.
 	rmClearRegisterContents(state, regOrdinal: raxOrd)
@@ -3472,22 +3472,22 @@ end 'ax64IdivReg'
 
 function ax64SpillToStack(state RegState, offset MachineWord, srcReg X64VReg, dstBlock MlirBlock)
 	let s = x64ResolveGprUse(state, vreg: srcReg, dstBlock: dstBlock, protect1: RM_NONE, protect2: RM_NONE)
-	dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.spillToStack(offset, x64PhysFromOrd(s))))
+	dstBlock.ops.push(MlirOp.x64(X64Op.spillToStack(offset, x64PhysFromOrd(s))))
 end 'ax64SpillToStack'
 
 function ax64ReloadFromStack(state RegState, destReg X64VReg, offset MachineWord, dstBlock MlirBlock)
 	let d = x64ResolveGprDef(state, vreg: destReg, dstBlock: dstBlock, protect1: RM_NONE, protect2: RM_NONE)
-	dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.reloadFromStack(x64PhysFromOrd(d), offset)))
+	dstBlock.ops.push(MlirOp.x64(X64Op.reloadFromStack(x64PhysFromOrd(d), offset)))
 end 'ax64ReloadFromStack'
 
 function ax64XorSelf(state RegState, reg X64VReg, dstBlock MlirBlock)
 	let d = x64ResolveGprDef(state, vreg: reg, dstBlock: dstBlock, protect1: RM_NONE, protect2: RM_NONE)
-	dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.xorRegRegSelf(x64PhysFromOrd(d))))
+	dstBlock.ops.push(MlirOp.x64(X64Op.xorRegRegSelf(x64PhysFromOrd(d))))
 end 'ax64XorSelf'
 
 // memcpyOp uses rax as scratch, plus rep movsb clobbers rdi, rsi, rcx.
 // Spill all four registers before emitting the op.
-function ax64MemcpyOp(state RegState, x64Op MaxX64Op, dstBlock MlirBlock)
+function ax64MemcpyOp(state RegState, x64Op X64Op, dstBlock MlirBlock)
 	let raxOrd = x64RegToOrdinal(X64Register.rax)
 	let rcxOrd = x64RegToOrdinal(X64Register.rcx)
 	let rsiOrd = x64RegToOrdinal(X64Register.rsi)
@@ -3496,7 +3496,7 @@ function ax64MemcpyOp(state RegState, x64Op MaxX64Op, dstBlock MlirBlock)
 	rmSpillRegisterIfOccupied(state, regOrdinal: rcxOrd, dstBlock: dstBlock)
 	rmSpillRegisterIfOccupied(state, regOrdinal: rsiOrd, dstBlock: dstBlock)
 	rmSpillRegisterIfOccupied(state, regOrdinal: rdiOrd, dstBlock: dstBlock)
-	dstBlock.ops.push(MlirOp.maxx64(x64Op))
+	dstBlock.ops.push(MlirOp.x64(x64Op))
 end 'ax64MemcpyOp'
 
 function ax64MovRegReg(state RegState, destReg X64VReg, srcReg X64VReg, dstBlock MlirBlock)
@@ -3515,7 +3515,7 @@ function ax64MovRegReg(state RegState, destReg X64VReg, srcReg X64VReg, dstBlock
 						virtual gives RM_NONE
 					end 'getDest'
 					rmSpillRegisterIfOccupied(state, regOrdinal: destOrd, dstBlock: dstBlock)
-					dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.movRegImm(x64PhysFromOrd(destOrd), imm)))
+					dstBlock.ops.push(MlirOp.x64(X64Op.movRegImm(x64PhysFromOrd(destOrd), imm)))
 					rmAssign(state, regOrdinal: destOrd, valueId: srcId)
 					// Decrement remaining use count
 					let remaining = srcInfo.remainingUses
@@ -3582,7 +3582,7 @@ function ax64MovRegReg(state RegState, destReg X64VReg, srcReg X64VReg, dstBlock
 	end 'srcFreed'
 	let d = x64ResolveGprDef(state, vreg: destReg, dstBlock: dstBlock, protect1: sProtect, protect2: RM_NONE)
 	if s != d 'needMov'
-		dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.movRegReg(x64PhysFromOrd(d), x64PhysFromOrd(s))))
+		dstBlock.ops.push(MlirOp.x64(X64Op.movRegReg(x64PhysFromOrd(d), x64PhysFromOrd(s))))
 	end 'needMov'
 	// When moving a virtual value to a physical register (call arg setup),
 	// transfer the virtual's ownership to the physical dest register.
@@ -3622,105 +3622,105 @@ end 'ax64TransferVirtualToPhys'
 
 // Slot-based ops (syscall, iatCall, globalAddr, stackAddrOp, etc.) use rax as scratch.
 // Spill rax before emitting the op.
-function ax64SlotBasedOp(state RegState, x64Op MaxX64Op, dstBlock MlirBlock)
+function ax64SlotBasedOp(state RegState, x64Op X64Op, dstBlock MlirBlock)
 	let raxOrd = x64RegToOrdinal(X64Register.rax)
 	rmSpillRegisterIfOccupied(state, regOrdinal: raxOrd, dstBlock: dstBlock)
-	dstBlock.ops.push(MlirOp.maxx64(x64Op))
+	dstBlock.ops.push(MlirOp.x64(x64Op))
 end 'ax64SlotBasedOp'
 
-function ax64HandleCall(state RegState, x64Op MaxX64Op, dstBlock MlirBlock)
+function ax64HandleCall(state RegState, x64Op X64Op, dstBlock MlirBlock)
 	// Spill all caller-saved registers before the call
 	rmClobberCallerSaved(state, dstBlock: dstBlock)
-	dstBlock.ops.push(MlirOp.maxx64(x64Op))
+	dstBlock.ops.push(MlirOp.x64(x64Op))
 end 'ax64HandleCall'
 
 function ax64CallIndirect(state RegState, reg X64VReg, dstBlock MlirBlock)
 	let r = x64ResolveGprUse(state, vreg: reg, dstBlock: dstBlock, protect1: RM_NONE, protect2: RM_NONE)
 	// Spill all caller-saved registers before the call
 	rmClobberCallerSaved(state, dstBlock: dstBlock)
-	dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.callIndirect(x64PhysFromOrd(r))))
+	dstBlock.ops.push(MlirOp.x64(X64Op.callIndirect(x64PhysFromOrd(r))))
 end 'ax64CallIndirect'
 
 function ax64XchgRegReg(state RegState, reg1 X64VReg, reg2 X64VReg, dstBlock MlirBlock)
 	let r1 = x64ResolveGprUse(state, vreg: reg1, dstBlock: dstBlock, protect1: RM_NONE, protect2: RM_NONE)
 	let r2 = x64ResolveGprUse(state, vreg: reg2, dstBlock: dstBlock, protect1: r1, protect2: RM_NONE)
-	dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.xchgRegReg(x64PhysFromOrd(r1), x64PhysFromOrd(r2))))
+	dstBlock.ops.push(MlirOp.x64(X64Op.xchgRegReg(x64PhysFromOrd(r1), x64PhysFromOrd(r2))))
 end 'ax64XchgRegReg'
 
 function ax64MovRspOffsetReg(state RegState, offset StackSize, srcReg X64VReg, dstBlock MlirBlock)
 	let s = x64ResolveGprUse(state, vreg: srcReg, dstBlock: dstBlock, protect1: RM_NONE, protect2: RM_NONE)
-	dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.movRspOffsetReg(offset, x64PhysFromOrd(s))))
+	dstBlock.ops.push(MlirOp.x64(X64Op.movRspOffsetReg(offset, x64PhysFromOrd(s))))
 end 'ax64MovRspOffsetReg'
 
 function ax64LoadRegRbpOffset(state RegState, destReg X64VReg, offset StackSize, dstBlock MlirBlock)
 	let d = x64ResolveGprDef(state, vreg: destReg, dstBlock: dstBlock, protect1: RM_NONE, protect2: RM_NONE)
-	dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.loadRegRbpOffset(x64PhysFromOrd(d), offset)))
+	dstBlock.ops.push(MlirOp.x64(X64Op.loadRegRbpOffset(x64PhysFromOrd(d), offset)))
 end 'ax64LoadRegRbpOffset'
 
 function ax64Setcc(state RegState, dest X64VReg, condition X64SetccCondition, dstBlock MlirBlock)
 	let d = x64ResolveGprDef(state, vreg: dest, dstBlock: dstBlock, protect1: RM_NONE, protect2: RM_NONE)
-	dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.setcc(x64PhysFromOrd(d), condition)))
+	dstBlock.ops.push(MlirOp.x64(X64Op.setcc(x64PhysFromOrd(d), condition)))
 end 'ax64Setcc'
 
 function ax64Cmov(state RegState, dest X64VReg, src X64VReg, condition X64CmovCondition, dstBlock MlirBlock)
 	let s = x64ResolveGprUse(state, vreg: src, dstBlock: dstBlock, protect1: RM_NONE, protect2: RM_NONE)
 	let d = x64ResolveGprUse(state, vreg: dest, dstBlock: dstBlock, protect1: s, protect2: RM_NONE)
-	dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.cmov(x64PhysFromOrd(d), x64PhysFromOrd(s), condition)))
+	dstBlock.ops.push(MlirOp.x64(X64Op.cmov(x64PhysFromOrd(d), x64PhysFromOrd(s), condition)))
 end 'ax64Cmov'
 
 function ax64Movsxd(state RegState, dest X64VReg, src X64VReg, dstBlock MlirBlock)
 	let s = x64ResolveGprUse(state, vreg: src, dstBlock: dstBlock, protect1: RM_NONE, protect2: RM_NONE)
 	let d = x64ResolveGprDef(state, vreg: dest, dstBlock: dstBlock, protect1: s, protect2: RM_NONE)
-	dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.movsxd(x64PhysFromOrd(d), x64PhysFromOrd(s))))
+	dstBlock.ops.push(MlirOp.x64(X64Op.movsxd(x64PhysFromOrd(d), x64PhysFromOrd(s))))
 end 'ax64Movsxd'
 
 function ax64Movzx32(state RegState, dest X64VReg, src X64VReg, dstBlock MlirBlock)
 	let s = x64ResolveGprUse(state, vreg: src, dstBlock: dstBlock, protect1: RM_NONE, protect2: RM_NONE)
 	let d = x64ResolveGprDef(state, vreg: dest, dstBlock: dstBlock, protect1: s, protect2: RM_NONE)
-	dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.movzx32(x64PhysFromOrd(d), x64PhysFromOrd(s))))
+	dstBlock.ops.push(MlirOp.x64(X64Op.movzx32(x64PhysFromOrd(d), x64PhysFromOrd(s))))
 end 'ax64Movzx32'
 
 function ax64StoreIndirect(state RegState, baseReg X64VReg, offset MachineWord, srcReg X64VReg, size MachineWord, dstBlock MlirBlock)
 	let b = x64ResolveGprUse(state, vreg: baseReg, dstBlock: dstBlock, protect1: RM_NONE, protect2: RM_NONE)
 	let s = x64ResolveGprUse(state, vreg: srcReg, dstBlock: dstBlock, protect1: b, protect2: RM_NONE)
-	dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.storeIndirect(x64PhysFromOrd(b), offset, x64PhysFromOrd(s), size)))
+	dstBlock.ops.push(MlirOp.x64(X64Op.storeIndirect(x64PhysFromOrd(b), offset, x64PhysFromOrd(s), size)))
 end 'ax64StoreIndirect'
 
 function ax64LoadIndirect(state RegState, destReg X64VReg, baseReg X64VReg, offset MachineWord, size MachineWord, dstBlock MlirBlock)
 	let b = x64ResolveGprUse(state, vreg: baseReg, dstBlock: dstBlock, protect1: RM_NONE, protect2: RM_NONE)
 	let d = x64ResolveGprDef(state, vreg: destReg, dstBlock: dstBlock, protect1: b, protect2: RM_NONE)
-	dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.loadIndirect(x64PhysFromOrd(d), x64PhysFromOrd(b), offset, size)))
+	dstBlock.ops.push(MlirOp.x64(X64Op.loadIndirect(x64PhysFromOrd(d), x64PhysFromOrd(b), offset, size)))
 end 'ax64LoadIndirect'
 
 function ax64NullSafeLoad(state RegState, dest X64VReg, baseReg X64VReg, offset MachineWord, dstBlock MlirBlock)
 	let b = x64ResolveGprUse(state, vreg: baseReg, dstBlock: dstBlock, protect1: RM_NONE, protect2: RM_NONE)
 	let d = x64ResolveGprDef(state, vreg: dest, dstBlock: dstBlock, protect1: b, protect2: RM_NONE)
-	dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.nullSafeLoad(x64PhysFromOrd(d), x64PhysFromOrd(b), offset)))
+	dstBlock.ops.push(MlirOp.x64(X64Op.nullSafeLoad(x64PhysFromOrd(d), x64PhysFromOrd(b), offset)))
 end 'ax64NullSafeLoad'
 
 function ax64GlobalLoad(state RegState, dest X64VReg, name ByteArray, size MachineWord, dstBlock MlirBlock)
 	let d = x64ResolveGprDef(state, vreg: dest, dstBlock: dstBlock, protect1: RM_NONE, protect2: RM_NONE)
-	dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.globalLoad(x64PhysFromOrd(d), name, size)))
+	dstBlock.ops.push(MlirOp.x64(X64Op.globalLoad(x64PhysFromOrd(d), name, size)))
 end 'ax64GlobalLoad'
 
 function ax64GlobalStore(state RegState, name ByteArray, src X64VReg, size MachineWord, dstBlock MlirBlock)
 	let s = x64ResolveGprUse(state, vreg: src, dstBlock: dstBlock, protect1: RM_NONE, protect2: RM_NONE)
-	dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.globalStore(name, x64PhysFromOrd(s), size)))
+	dstBlock.ops.push(MlirOp.x64(X64Op.globalStore(name, x64PhysFromOrd(s), size)))
 end 'ax64GlobalStore'
 
 function ax64LeaFromStack(state RegState, dest X64VReg, stackOffset MachineWord, dstBlock MlirBlock)
 	let d = x64ResolveGprDef(state, vreg: dest, dstBlock: dstBlock, protect1: RM_NONE, protect2: RM_NONE)
-	dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.leaFromStack(x64PhysFromOrd(d), stackOffset)))
+	dstBlock.ops.push(MlirOp.x64(X64Op.leaFromStack(x64PhysFromOrd(d), stackOffset)))
 end 'ax64LeaFromStack'
 
 function ax64LeaRipRelative(state RegState, dest X64VReg, rdataLabel ByteArray, dstBlock MlirBlock)
 	let d = x64ResolveGprDef(state, vreg: dest, dstBlock: dstBlock, protect1: RM_NONE, protect2: RM_NONE)
-	dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.leaRipRelative(x64PhysFromOrd(d), rdataLabel)))
+	dstBlock.ops.push(MlirOp.x64(X64Op.leaRipRelative(x64PhysFromOrd(d), rdataLabel)))
 end 'ax64LeaRipRelative'
 
 function ax64LeaFuncAddr(state RegState, dest X64VReg, funcName ByteArray, dstBlock MlirBlock)
 	let d = x64ResolveGprDef(state, vreg: dest, dstBlock: dstBlock, protect1: RM_NONE, protect2: RM_NONE)
-	dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.leaFuncAddr(x64PhysFromOrd(d), funcName)))
+	dstBlock.ops.push(MlirOp.x64(X64Op.leaFuncAddr(x64PhysFromOrd(d), funcName)))
 end 'ax64LeaFuncAddr'
 
 // XMM FP helpers
@@ -3745,23 +3745,23 @@ function ax64MovXmmXmm(state RegState, dest X64FpVReg, src X64FpVReg, precision 
 	let s = x64ResolveFpUse(state, vreg: src, dstBlock: dstBlock)
 	let d = x64ResolveFpDef(state, vreg: dest, dstBlock: dstBlock)
 	if s != d 'needFpMov'
-		dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.movXmmXmm(x64FpPhysFromOrd(d), x64FpPhysFromOrd(s), precision)))
+		dstBlock.ops.push(MlirOp.x64(X64Op.movXmmXmm(x64FpPhysFromOrd(d), x64FpPhysFromOrd(s), precision)))
 	end 'needFpMov'
 end 'ax64MovXmmXmm'
 
 function ax64SpillXmmToStack(state RegState, offset MachineWord, src X64FpVReg, precision FloatPrecision, dstBlock MlirBlock)
 	let s = x64ResolveFpUse(state, vreg: src, dstBlock: dstBlock)
-	dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.spillXmmToStack(offset, x64FpPhysFromOrd(s), precision)))
+	dstBlock.ops.push(MlirOp.x64(X64Op.spillXmmToStack(offset, x64FpPhysFromOrd(s), precision)))
 end 'ax64SpillXmmToStack'
 
 function ax64ReloadXmmFromStack(state RegState, dest X64FpVReg, offset MachineWord, precision FloatPrecision, dstBlock MlirBlock)
 	let d = x64ResolveFpDef(state, vreg: dest, dstBlock: dstBlock)
-	dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.reloadXmmFromStack(x64FpPhysFromOrd(d), offset, precision)))
+	dstBlock.ops.push(MlirOp.x64(X64Op.reloadXmmFromStack(x64FpPhysFromOrd(d), offset, precision)))
 end 'ax64ReloadXmmFromStack'
 
 function ax64MovXmmRipRel(state RegState, dest X64FpVReg, rdataLabel ByteArray, precision FloatPrecision, dstBlock MlirBlock)
 	let d = x64ResolveFpDef(state, vreg: dest, dstBlock: dstBlock)
-	dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.movXmmRipRel(x64FpPhysFromOrd(d), rdataLabel, precision)))
+	dstBlock.ops.push(MlirOp.x64(X64Op.movXmmRipRel(x64FpPhysFromOrd(d), rdataLabel, precision)))
 end 'ax64MovXmmRipRel'
 
 // FP two-address: dest is use+def, src is use
@@ -3778,95 +3778,95 @@ function ax64FpTwoAddr(state RegState, dest X64FpVReg, src X64FpVReg, precision 
 	let dp = x64FpPhysFromOrd(d)
 	let sp = x64FpPhysFromOrd(s)
 	match op 'emit'
-		add then dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.addXmm(dp, sp, precision)))
-		sub then dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.subXmm(dp, sp, precision)))
-		mul then dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.mulXmm(dp, sp, precision)))
-		div then dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.divXmm(dp, sp, precision)))
+		add then dstBlock.ops.push(MlirOp.x64(X64Op.addXmm(dp, sp, precision)))
+		sub then dstBlock.ops.push(MlirOp.x64(X64Op.subXmm(dp, sp, precision)))
+		mul then dstBlock.ops.push(MlirOp.x64(X64Op.mulXmm(dp, sp, precision)))
+		div then dstBlock.ops.push(MlirOp.x64(X64Op.divXmm(dp, sp, precision)))
 	end 'emit'
 end 'ax64FpTwoAddr'
 
 function ax64SqrtXmm(state RegState, dest X64FpVReg, src X64FpVReg, precision FloatPrecision, dstBlock MlirBlock)
 	let s = x64ResolveFpUse(state, vreg: src, dstBlock: dstBlock)
 	let d = x64ResolveFpDef(state, vreg: dest, dstBlock: dstBlock)
-	dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.sqrtXmm(x64FpPhysFromOrd(d), x64FpPhysFromOrd(s), precision)))
+	dstBlock.ops.push(MlirOp.x64(X64Op.sqrtXmm(x64FpPhysFromOrd(d), x64FpPhysFromOrd(s), precision)))
 end 'ax64SqrtXmm'
 
 function ax64RoundXmm(state RegState, dest X64FpVReg, src X64FpVReg, mode MachineWord, precision FloatPrecision, dstBlock MlirBlock)
 	let s = x64ResolveFpUse(state, vreg: src, dstBlock: dstBlock)
 	let d = x64ResolveFpDef(state, vreg: dest, dstBlock: dstBlock)
-	dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.roundXmm(x64FpPhysFromOrd(d), x64FpPhysFromOrd(s), mode, precision)))
+	dstBlock.ops.push(MlirOp.x64(X64Op.roundXmm(x64FpPhysFromOrd(d), x64FpPhysFromOrd(s), mode, precision)))
 end 'ax64RoundXmm'
 
 function ax64UcomisXmm(state RegState, src1 X64FpVReg, src2 X64FpVReg, precision FloatPrecision, dstBlock MlirBlock)
 	let s1 = x64ResolveFpUse(state, vreg: src1, dstBlock: dstBlock)
 	let s2 = x64ResolveFpUse(state, vreg: src2, dstBlock: dstBlock)
-	dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.ucomisXmm(x64FpPhysFromOrd(s1), x64FpPhysFromOrd(s2), precision)))
+	dstBlock.ops.push(MlirOp.x64(X64Op.ucomisXmm(x64FpPhysFromOrd(s1), x64FpPhysFromOrd(s2), precision)))
 end 'ax64UcomisXmm'
 
 function ax64CvtSi2Float(state RegState, dest X64FpVReg, src X64VReg, precision FloatPrecision, dstBlock MlirBlock)
 	let s = x64ResolveGprUse(state, vreg: src, dstBlock: dstBlock, protect1: RM_NONE, protect2: RM_NONE)
 	let d = x64ResolveFpDef(state, vreg: dest, dstBlock: dstBlock)
-	dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.cvtSi2Float(x64FpPhysFromOrd(d), x64PhysFromOrd(s), precision)))
+	dstBlock.ops.push(MlirOp.x64(X64Op.cvtSi2Float(x64FpPhysFromOrd(d), x64PhysFromOrd(s), precision)))
 end 'ax64CvtSi2Float'
 
 function ax64CvttFloat2Si(state RegState, dest X64VReg, src X64FpVReg, precision FloatPrecision, dstBlock MlirBlock)
 	let s = x64ResolveFpUse(state, vreg: src, dstBlock: dstBlock)
 	let d = x64ResolveGprDef(state, vreg: dest, dstBlock: dstBlock, protect1: RM_NONE, protect2: RM_NONE)
-	dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.cvttFloat2Si(x64PhysFromOrd(d), x64FpPhysFromOrd(s), precision)))
+	dstBlock.ops.push(MlirOp.x64(X64Op.cvttFloat2Si(x64PhysFromOrd(d), x64FpPhysFromOrd(s), precision)))
 end 'ax64CvttFloat2Si'
 
 function ax64CvtSd2Ss(state RegState, dest X64FpVReg, src X64FpVReg, dstBlock MlirBlock)
 	let s = x64ResolveFpUse(state, vreg: src, dstBlock: dstBlock)
 	let d = x64ResolveFpDef(state, vreg: dest, dstBlock: dstBlock)
-	dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.cvtSd2Ss(x64FpPhysFromOrd(d), x64FpPhysFromOrd(s))))
+	dstBlock.ops.push(MlirOp.x64(X64Op.cvtSd2Ss(x64FpPhysFromOrd(d), x64FpPhysFromOrd(s))))
 end 'ax64CvtSd2Ss'
 
 function ax64CvtSs2Sd(state RegState, dest X64FpVReg, src X64FpVReg, dstBlock MlirBlock)
 	let s = x64ResolveFpUse(state, vreg: src, dstBlock: dstBlock)
 	let d = x64ResolveFpDef(state, vreg: dest, dstBlock: dstBlock)
-	dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.cvtSs2Sd(x64FpPhysFromOrd(d), x64FpPhysFromOrd(s))))
+	dstBlock.ops.push(MlirOp.x64(X64Op.cvtSs2Sd(x64FpPhysFromOrd(d), x64FpPhysFromOrd(s))))
 end 'ax64CvtSs2Sd'
 
 function ax64MovqXmmToGpr(state RegState, dest X64VReg, src X64FpVReg, dstBlock MlirBlock)
 	let s = x64ResolveFpUse(state, vreg: src, dstBlock: dstBlock)
 	let d = x64ResolveGprDef(state, vreg: dest, dstBlock: dstBlock, protect1: RM_NONE, protect2: RM_NONE)
-	dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.movqXmmToGpr(x64PhysFromOrd(d), x64FpPhysFromOrd(s))))
+	dstBlock.ops.push(MlirOp.x64(X64Op.movqXmmToGpr(x64PhysFromOrd(d), x64FpPhysFromOrd(s))))
 end 'ax64MovqXmmToGpr'
 
 function ax64AndMaskRipRel(state RegState, dest X64FpVReg, rdataLabel ByteArray, precision FloatPrecision, dstBlock MlirBlock)
 	let d = x64ResolveFpUse(state, vreg: dest, dstBlock: dstBlock)
-	dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.andMaskRipRel(x64FpPhysFromOrd(d), rdataLabel, precision)))
+	dstBlock.ops.push(MlirOp.x64(X64Op.andMaskRipRel(x64FpPhysFromOrd(d), rdataLabel, precision)))
 end 'ax64AndMaskRipRel'
 
 function ax64StoreIndirectXmm(state RegState, baseReg X64VReg, offset MachineWord, src X64FpVReg, precision FloatPrecision, dstBlock MlirBlock)
 	let b = x64ResolveGprUse(state, vreg: baseReg, dstBlock: dstBlock, protect1: RM_NONE, protect2: RM_NONE)
 	let s = x64ResolveFpUse(state, vreg: src, dstBlock: dstBlock)
-	dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.storeIndirectXmm(x64PhysFromOrd(b), offset, x64FpPhysFromOrd(s), precision)))
+	dstBlock.ops.push(MlirOp.x64(X64Op.storeIndirectXmm(x64PhysFromOrd(b), offset, x64FpPhysFromOrd(s), precision)))
 end 'ax64StoreIndirectXmm'
 
 function ax64LoadIndirectXmm(state RegState, dest X64FpVReg, baseReg X64VReg, offset MachineWord, precision FloatPrecision, dstBlock MlirBlock)
 	let b = x64ResolveGprUse(state, vreg: baseReg, dstBlock: dstBlock, protect1: RM_NONE, protect2: RM_NONE)
 	let d = x64ResolveFpDef(state, vreg: dest, dstBlock: dstBlock)
-	dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.loadIndirectXmm(x64FpPhysFromOrd(d), x64PhysFromOrd(b), offset, precision)))
+	dstBlock.ops.push(MlirOp.x64(X64Op.loadIndirectXmm(x64FpPhysFromOrd(d), x64PhysFromOrd(b), offset, precision)))
 end 'ax64LoadIndirectXmm'
 
 function ax64GlobalLoadXmm(state RegState, dest X64FpVReg, name ByteArray, precision FloatPrecision, dstBlock MlirBlock)
 	let d = x64ResolveFpDef(state, vreg: dest, dstBlock: dstBlock)
-	dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.globalLoadXmm(x64FpPhysFromOrd(d), name, precision)))
+	dstBlock.ops.push(MlirOp.x64(X64Op.globalLoadXmm(x64FpPhysFromOrd(d), name, precision)))
 end 'ax64GlobalLoadXmm'
 
 function ax64GlobalStoreXmm(state RegState, name ByteArray, src X64FpVReg, precision FloatPrecision, dstBlock MlirBlock)
 	let s = x64ResolveFpUse(state, vreg: src, dstBlock: dstBlock)
-	dstBlock.ops.push(MlirOp.maxx64(MaxX64Op.globalStoreXmm(name, x64FpPhysFromOrd(s), precision)))
+	dstBlock.ops.push(MlirOp.x64(X64Op.globalStoreXmm(name, x64FpPhysFromOrd(s), precision)))
 end 'ax64GlobalStoreXmm'
 
 // ============================================================
 // X64 per-op dispatch
 // ============================================================
 
-function allocX64Op(state RegState, x64Op MaxX64Op, dstBlock MlirBlock)
+function allocX64Op(state RegState, x64Op X64Op, dstBlock MlirBlock)
 	match x64Op 'dispatch'
-		prologue to ret then dstBlock.ops.push(MlirOp.maxx64(x64Op))
+		prologue to ret then dstBlock.ops.push(MlirOp.x64(x64Op))
 		movRegImm(dest, value) then ax64MovRegImm(state, dest: dest, value: value, dstBlock: dstBlock)
 		movSlot(slotIndex, srcReg) then ax64MovSlot(state, slotIndex: slotIndex, srcReg: srcReg, dstBlock: dstBlock)
 		loadSlot(destReg, slotIndex) then ax64LoadSlot(state, destReg: destReg, slotIndex: slotIndex, dstBlock: dstBlock)
@@ -3875,7 +3875,7 @@ function allocX64Op(state RegState, x64Op MaxX64Op, dstBlock MlirBlock)
 		addRegImm(destReg, value) then ax64RegImm(state, destReg: destReg, value: value, dstBlock: dstBlock, isAdd: true)
 		subRegImm(destReg, value) then ax64RegImm(state, destReg: destReg, value: value, dstBlock: dstBlock, isAdd: false)
 		imulRegReg(destReg, srcReg) then ax64TwoAddr(state, destReg: destReg, srcReg: srcReg, dstBlock: dstBlock, op: TwoAddrOp.imul)
-		idivRcx to iremRcx then dstBlock.ops.push(MlirOp.maxx64(x64Op))
+		idivRcx to iremRcx then dstBlock.ops.push(MlirOp.x64(x64Op))
 		negReg(reg) then ax64UnaryInPlace(state, reg: reg, dstBlock: dstBlock, op: UnaryInPlaceOp.neg)
 		bitNotReg(reg) then ax64UnaryInPlace(state, reg: reg, dstBlock: dstBlock, op: UnaryInPlaceOp.bitNot)
 		andRegReg(destReg, srcReg) then ax64TwoAddr(state, destReg: destReg, srcReg: srcReg, dstBlock: dstBlock, op: TwoAddrOp.bitwiseAnd)
@@ -3883,11 +3883,11 @@ function allocX64Op(state RegState, x64Op MaxX64Op, dstBlock MlirBlock)
 		xorRegReg(destReg, srcReg) then ax64TwoAddr(state, destReg: destReg, srcReg: srcReg, dstBlock: dstBlock, op: TwoAddrOp.bitwiseXor)
 		shlRegCl(reg) then ax64UnaryInPlace(state, reg: reg, dstBlock: dstBlock, op: UnaryInPlaceOp.shl)
 		sarRegCl(reg) then ax64UnaryInPlace(state, reg: reg, dstBlock: dstBlock, op: UnaryInPlaceOp.sar)
-		cmpRaxRcx to testRaxRax then dstBlock.ops.push(MlirOp.maxx64(x64Op))
-		condJump to jmp then dstBlock.ops.push(MlirOp.maxx64(x64Op))
-		movF64Slot to ucomisd then dstBlock.ops.push(MlirOp.maxx64(x64Op))
-		printLiteral to printInt then dstBlock.ops.push(MlirOp.maxx64(x64Op))
-		subRspImm to addRspImm then dstBlock.ops.push(MlirOp.maxx64(x64Op))
+		cmpRaxRcx to testRaxRax then dstBlock.ops.push(MlirOp.x64(x64Op))
+		condJump to jmp then dstBlock.ops.push(MlirOp.x64(x64Op))
+		movF64Slot to ucomisd then dstBlock.ops.push(MlirOp.x64(x64Op))
+		printLiteral to printInt then dstBlock.ops.push(MlirOp.x64(x64Op))
+		subRspImm to addRspImm then dstBlock.ops.push(MlirOp.x64(x64Op))
 		movRspOffsetReg(offset, srcReg) then ax64MovRspOffsetReg(state, offset: offset, srcReg: srcReg, dstBlock: dstBlock)
 		loadRegRbpOffset(destReg, offset) then ax64LoadRegRbpOffset(state, destReg: destReg, offset: offset, dstBlock: dstBlock)
 		callDirect then ax64HandleCall(state, x64Op: x64Op, dstBlock: dstBlock)
@@ -3937,7 +3937,7 @@ function allocX64Op(state RegState, x64Op MaxX64Op, dstBlock MlirBlock)
 		movsxd(dest, src) then ax64Movsxd(state, dest: dest, src: src, dstBlock: dstBlock)
 		movzx32(dest, src) then ax64Movzx32(state, dest: dest, src: src, dstBlock: dstBlock)
 		nullSafeLoad(dest, baseReg, offset) then ax64NullSafeLoad(state, dest: dest, baseReg: baseReg, offset: offset, dstBlock: dstBlock)
-		repMovsb to repStosq then dstBlock.ops.push(MlirOp.maxx64(x64Op))
+		repMovsb to repStosq then dstBlock.ops.push(MlirOp.x64(x64Op))
 	end 'dispatch'
 end 'allocX64Op'
 
@@ -3947,17 +3947,17 @@ end 'allocX64Op'
 
 function aa64MovImm(state RegState, dest Arm64VReg, value MachineWord, dstBlock MlirBlock)
 	let d = arm64ResolveGprDef(state, vreg: dest, dstBlock: dstBlock, protect1: RM_NONE, protect2: RM_NONE)
-	dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.movImm(arm64PhysFromOrd(d), value)))
+	dstBlock.ops.push(MlirOp.arm64(Arm64Op.movImm(arm64PhysFromOrd(d), value)))
 end 'aa64MovImm'
 
 function aa64StrToSlot(state RegState, slotIndex VarSlot, src Arm64VReg, dstBlock MlirBlock)
 	let s = arm64ResolveGprUse(state, vreg: src, dstBlock: dstBlock, protect1: RM_NONE, protect2: RM_NONE)
-	dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.strToSlot(slotIndex, arm64PhysFromOrd(s))))
+	dstBlock.ops.push(MlirOp.arm64(Arm64Op.strToSlot(slotIndex, arm64PhysFromOrd(s))))
 end 'aa64StrToSlot'
 
 function aa64LdrFromSlot(state RegState, dest Arm64VReg, slotIndex VarSlot, dstBlock MlirBlock)
 	let d = arm64ResolveGprDef(state, vreg: dest, dstBlock: dstBlock, protect1: RM_NONE, protect2: RM_NONE)
-	dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.ldrFromSlot(arm64PhysFromOrd(d), slotIndex)))
+	dstBlock.ops.push(MlirOp.arm64(Arm64Op.ldrFromSlot(arm64PhysFromOrd(d), slotIndex)))
 end 'aa64LdrFromSlot'
 
 // Three-address: dest=def, src1=use, src2=use
@@ -3982,16 +3982,16 @@ function aa64ThreeAddr(state RegState, dest Arm64VReg, src1 Arm64VReg, src2 Arm6
 	let s1p = arm64PhysFromOrd(s1)
 	let s2p = arm64PhysFromOrd(s2)
 	match op 'emit'
-		add then dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.addRegs(dp, s1p, s2p)))
-		sub then dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.subRegs(dp, s1p, s2p)))
-		mul then dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.mulRegs(dp, s1p, s2p)))
-		sdiv then dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.sdivRegs(dp, s1p, s2p)))
-		rem then dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.remRegs(dp, s1p, s2p)))
-		bitwiseAnd then dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.andRegs(dp, s1p, s2p)))
-		orr then dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.orrRegs(dp, s1p, s2p)))
-		eor then dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.eorRegs(dp, s1p, s2p)))
-		lsl then dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.lslRegs(dp, s1p, s2p)))
-		asr then dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.asrRegs(dp, s1p, s2p)))
+		add then dstBlock.ops.push(MlirOp.arm64(Arm64Op.addRegs(dp, s1p, s2p)))
+		sub then dstBlock.ops.push(MlirOp.arm64(Arm64Op.subRegs(dp, s1p, s2p)))
+		mul then dstBlock.ops.push(MlirOp.arm64(Arm64Op.mulRegs(dp, s1p, s2p)))
+		sdiv then dstBlock.ops.push(MlirOp.arm64(Arm64Op.sdivRegs(dp, s1p, s2p)))
+		rem then dstBlock.ops.push(MlirOp.arm64(Arm64Op.remRegs(dp, s1p, s2p)))
+		bitwiseAnd then dstBlock.ops.push(MlirOp.arm64(Arm64Op.andRegs(dp, s1p, s2p)))
+		orr then dstBlock.ops.push(MlirOp.arm64(Arm64Op.orrRegs(dp, s1p, s2p)))
+		eor then dstBlock.ops.push(MlirOp.arm64(Arm64Op.eorRegs(dp, s1p, s2p)))
+		lsl then dstBlock.ops.push(MlirOp.arm64(Arm64Op.lslRegs(dp, s1p, s2p)))
+		asr then dstBlock.ops.push(MlirOp.arm64(Arm64Op.asrRegs(dp, s1p, s2p)))
 	end 'emit'
 end 'aa64ThreeAddr'
 
@@ -3999,21 +3999,21 @@ function aa64UnaryDestSrc(state RegState, dest Arm64VReg, src Arm64VReg, dstBloc
 	let s = arm64ResolveGprUse(state, vreg: src, dstBlock: dstBlock, protect1: RM_NONE, protect2: RM_NONE)
 	let d = arm64ResolveGprDef(state, vreg: dest, dstBlock: dstBlock, protect1: s, protect2: RM_NONE)
 	if isNeg 'neg'
-		dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.negReg(arm64PhysFromOrd(d), arm64PhysFromOrd(s))))
+		dstBlock.ops.push(MlirOp.arm64(Arm64Op.negReg(arm64PhysFromOrd(d), arm64PhysFromOrd(s))))
 	end 'neg' else 'mvn'
-		dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.mvnReg(arm64PhysFromOrd(d), arm64PhysFromOrd(s))))
+		dstBlock.ops.push(MlirOp.arm64(Arm64Op.mvnReg(arm64PhysFromOrd(d), arm64PhysFromOrd(s))))
 	end 'mvn'
 end 'aa64UnaryDestSrc'
 
 function aa64CmpRegs(state RegState, src1 Arm64VReg, src2 Arm64VReg, dstBlock MlirBlock)
 	let s1 = arm64ResolveGprUse(state, vreg: src1, dstBlock: dstBlock, protect1: RM_NONE, protect2: RM_NONE)
 	let s2 = arm64ResolveGprUse(state, vreg: src2, dstBlock: dstBlock, protect1: s1, protect2: RM_NONE)
-	dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.cmpRegs(arm64PhysFromOrd(s1), arm64PhysFromOrd(s2))))
+	dstBlock.ops.push(MlirOp.arm64(Arm64Op.cmpRegs(arm64PhysFromOrd(s1), arm64PhysFromOrd(s2))))
 end 'aa64CmpRegs'
 
 function aa64CmpRegZero(state RegState, src Arm64VReg, dstBlock MlirBlock)
 	let s = arm64ResolveGprUse(state, vreg: src, dstBlock: dstBlock, protect1: RM_NONE, protect2: RM_NONE)
-	dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.cmpRegZero(arm64PhysFromOrd(s))))
+	dstBlock.ops.push(MlirOp.arm64(Arm64Op.cmpRegZero(arm64PhysFromOrd(s))))
 end 'aa64CmpRegZero'
 
 function aa64MovRegReg(state RegState, dest Arm64VReg, src Arm64VReg, dstBlock MlirBlock)
@@ -4045,89 +4045,89 @@ function aa64MovRegReg(state RegState, dest Arm64VReg, src Arm64VReg, dstBlock M
 	let s = arm64ResolveGprUse(state, vreg: src, dstBlock: dstBlock, protect1: RM_NONE, protect2: RM_NONE)
 	let d = arm64ResolveGprDef(state, vreg: dest, dstBlock: dstBlock, protect1: s, protect2: RM_NONE)
 	if s != d 'needMov'
-		dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.movRegReg(arm64PhysFromOrd(d), arm64PhysFromOrd(s))))
+		dstBlock.ops.push(MlirOp.arm64(Arm64Op.movRegReg(arm64PhysFromOrd(d), arm64PhysFromOrd(s))))
 	end 'needMov'
 end 'aa64MovRegReg'
 
 function aa64SpillToStack(state RegState, offset MachineWord, src Arm64VReg, dstBlock MlirBlock)
 	let s = arm64ResolveGprUse(state, vreg: src, dstBlock: dstBlock, protect1: RM_NONE, protect2: RM_NONE)
-	dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.spillToStack(offset, arm64PhysFromOrd(s))))
+	dstBlock.ops.push(MlirOp.arm64(Arm64Op.spillToStack(offset, arm64PhysFromOrd(s))))
 end 'aa64SpillToStack'
 
 function aa64ReloadFromStack(state RegState, dest Arm64VReg, offset MachineWord, dstBlock MlirBlock)
 	let d = arm64ResolveGprDef(state, vreg: dest, dstBlock: dstBlock, protect1: RM_NONE, protect2: RM_NONE)
-	dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.reloadFromStack(arm64PhysFromOrd(d), offset)))
+	dstBlock.ops.push(MlirOp.arm64(Arm64Op.reloadFromStack(arm64PhysFromOrd(d), offset)))
 end 'aa64ReloadFromStack'
 
 function aa64BranchLinkReg(state RegState, reg Arm64VReg, dstBlock MlirBlock)
 	let r = arm64ResolveGprUse(state, vreg: reg, dstBlock: dstBlock, protect1: RM_NONE, protect2: RM_NONE)
-	dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.branchLinkReg(arm64PhysFromOrd(r))))
+	dstBlock.ops.push(MlirOp.arm64(Arm64Op.branchLinkReg(arm64PhysFromOrd(r))))
 end 'aa64BranchLinkReg'
 
 function aa64StrToSpOffset(state RegState, offset StackSize, src Arm64VReg, dstBlock MlirBlock)
 	let s = arm64ResolveGprUse(state, vreg: src, dstBlock: dstBlock, protect1: RM_NONE, protect2: RM_NONE)
-	dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.strToSpOffset(offset, arm64PhysFromOrd(s))))
+	dstBlock.ops.push(MlirOp.arm64(Arm64Op.strToSpOffset(offset, arm64PhysFromOrd(s))))
 end 'aa64StrToSpOffset'
 
-function aa64Cset(state RegState, dest Arm64VReg, condition MaxArm64CondCode, dstBlock MlirBlock)
+function aa64Cset(state RegState, dest Arm64VReg, condition Arm64CondCode, dstBlock MlirBlock)
 	let d = arm64ResolveGprDef(state, vreg: dest, dstBlock: dstBlock, protect1: RM_NONE, protect2: RM_NONE)
-	dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.cset(arm64PhysFromOrd(d), condition)))
+	dstBlock.ops.push(MlirOp.arm64(Arm64Op.cset(arm64PhysFromOrd(d), condition)))
 end 'aa64Cset'
 
-function aa64Csel(state RegState, dest Arm64VReg, src1 Arm64VReg, src2 Arm64VReg, condition MaxArm64CondCode, dstBlock MlirBlock)
+function aa64Csel(state RegState, dest Arm64VReg, src1 Arm64VReg, src2 Arm64VReg, condition Arm64CondCode, dstBlock MlirBlock)
 	let s1 = arm64ResolveGprUse(state, vreg: src1, dstBlock: dstBlock, protect1: RM_NONE, protect2: RM_NONE)
 	let s2 = arm64ResolveGprUse(state, vreg: src2, dstBlock: dstBlock, protect1: s1, protect2: RM_NONE)
 	let d = arm64ResolveGprDef(state, vreg: dest, dstBlock: dstBlock, protect1: s1, protect2: s2)
-	dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.csel(arm64PhysFromOrd(d), arm64PhysFromOrd(s1), arm64PhysFromOrd(s2), condition)))
+	dstBlock.ops.push(MlirOp.arm64(Arm64Op.csel(arm64PhysFromOrd(d), arm64PhysFromOrd(s1), arm64PhysFromOrd(s2), condition)))
 end 'aa64Csel'
 
 function aa64Sxtw(state RegState, dest Arm64VReg, src Arm64VReg, dstBlock MlirBlock)
 	let s = arm64ResolveGprUse(state, vreg: src, dstBlock: dstBlock, protect1: RM_NONE, protect2: RM_NONE)
 	let d = arm64ResolveGprDef(state, vreg: dest, dstBlock: dstBlock, protect1: s, protect2: RM_NONE)
-	dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.sxtw(arm64PhysFromOrd(d), arm64PhysFromOrd(s))))
+	dstBlock.ops.push(MlirOp.arm64(Arm64Op.sxtw(arm64PhysFromOrd(d), arm64PhysFromOrd(s))))
 end 'aa64Sxtw'
 
 function aa64StoreIndirect(state RegState, baseReg Arm64VReg, offset MachineWord, srcReg Arm64VReg, size MachineWord, dstBlock MlirBlock)
 	let b = arm64ResolveGprUse(state, vreg: baseReg, dstBlock: dstBlock, protect1: RM_NONE, protect2: RM_NONE)
 	let s = arm64ResolveGprUse(state, vreg: srcReg, dstBlock: dstBlock, protect1: b, protect2: RM_NONE)
-	dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.storeIndirect(arm64PhysFromOrd(b), offset, arm64PhysFromOrd(s), size)))
+	dstBlock.ops.push(MlirOp.arm64(Arm64Op.storeIndirect(arm64PhysFromOrd(b), offset, arm64PhysFromOrd(s), size)))
 end 'aa64StoreIndirect'
 
 function aa64LoadIndirect(state RegState, destReg Arm64VReg, baseReg Arm64VReg, offset MachineWord, size MachineWord, dstBlock MlirBlock)
 	let b = arm64ResolveGprUse(state, vreg: baseReg, dstBlock: dstBlock, protect1: RM_NONE, protect2: RM_NONE)
 	let d = arm64ResolveGprDef(state, vreg: destReg, dstBlock: dstBlock, protect1: b, protect2: RM_NONE)
-	dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.loadIndirect(arm64PhysFromOrd(d), arm64PhysFromOrd(b), offset, size)))
+	dstBlock.ops.push(MlirOp.arm64(Arm64Op.loadIndirect(arm64PhysFromOrd(d), arm64PhysFromOrd(b), offset, size)))
 end 'aa64LoadIndirect'
 
 function aa64NullSafeLoad(state RegState, dest Arm64VReg, baseReg Arm64VReg, offset MachineWord, dstBlock MlirBlock)
 	let b = arm64ResolveGprUse(state, vreg: baseReg, dstBlock: dstBlock, protect1: RM_NONE, protect2: RM_NONE)
 	let d = arm64ResolveGprDef(state, vreg: dest, dstBlock: dstBlock, protect1: b, protect2: RM_NONE)
-	dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.nullSafeLoad(arm64PhysFromOrd(d), arm64PhysFromOrd(b), offset)))
+	dstBlock.ops.push(MlirOp.arm64(Arm64Op.nullSafeLoad(arm64PhysFromOrd(d), arm64PhysFromOrd(b), offset)))
 end 'aa64NullSafeLoad'
 
 function aa64GlobalLoad(state RegState, dest Arm64VReg, name ByteArray, size MachineWord, dstBlock MlirBlock)
 	let d = arm64ResolveGprDef(state, vreg: dest, dstBlock: dstBlock, protect1: RM_NONE, protect2: RM_NONE)
-	dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.globalLoad(arm64PhysFromOrd(d), name, size)))
+	dstBlock.ops.push(MlirOp.arm64(Arm64Op.globalLoad(arm64PhysFromOrd(d), name, size)))
 end 'aa64GlobalLoad'
 
 function aa64GlobalStore(state RegState, name ByteArray, src Arm64VReg, size MachineWord, dstBlock MlirBlock)
 	let s = arm64ResolveGprUse(state, vreg: src, dstBlock: dstBlock, protect1: RM_NONE, protect2: RM_NONE)
-	dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.globalStore(name, arm64PhysFromOrd(s), size)))
+	dstBlock.ops.push(MlirOp.arm64(Arm64Op.globalStore(name, arm64PhysFromOrd(s), size)))
 end 'aa64GlobalStore'
 
 function aa64LeaFromStack(state RegState, dest Arm64VReg, stackOffset MachineWord, dstBlock MlirBlock)
 	let d = arm64ResolveGprDef(state, vreg: dest, dstBlock: dstBlock, protect1: RM_NONE, protect2: RM_NONE)
-	dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.leaFromStack(arm64PhysFromOrd(d), stackOffset)))
+	dstBlock.ops.push(MlirOp.arm64(Arm64Op.leaFromStack(arm64PhysFromOrd(d), stackOffset)))
 end 'aa64LeaFromStack'
 
 function aa64LeaRdata(state RegState, dest Arm64VReg, rdataLabel ByteArray, dstBlock MlirBlock)
 	let d = arm64ResolveGprDef(state, vreg: dest, dstBlock: dstBlock, protect1: RM_NONE, protect2: RM_NONE)
-	dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.leaRdata(arm64PhysFromOrd(d), rdataLabel)))
+	dstBlock.ops.push(MlirOp.arm64(Arm64Op.leaRdata(arm64PhysFromOrd(d), rdataLabel)))
 end 'aa64LeaRdata'
 
 function aa64LeaFuncAddr(state RegState, dest Arm64VReg, funcName ByteArray, dstBlock MlirBlock)
 	let d = arm64ResolveGprDef(state, vreg: dest, dstBlock: dstBlock, protect1: RM_NONE, protect2: RM_NONE)
-	dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.leaFuncAddr(arm64PhysFromOrd(d), funcName)))
+	dstBlock.ops.push(MlirOp.arm64(Arm64Op.leaFuncAddr(arm64PhysFromOrd(d), funcName)))
 end 'aa64LeaFuncAddr'
 
 // ARM64 FP helpers
@@ -4135,47 +4135,47 @@ function aa64FmovRegReg(state RegState, dest Arm64FpVReg, src Arm64FpVReg, preci
 	let s = arm64ResolveFpUse(state, vreg: src, dstBlock: dstBlock)
 	let d = arm64ResolveFpDef(state, vreg: dest, dstBlock: dstBlock)
 	if s != d 'needFpMov'
-		dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.fmovRegReg(arm64FpPhysFromOrd(d), arm64FpPhysFromOrd(s), precision)))
+		dstBlock.ops.push(MlirOp.arm64(Arm64Op.fmovRegReg(arm64FpPhysFromOrd(d), arm64FpPhysFromOrd(s), precision)))
 	end 'needFpMov'
 end 'aa64FmovRegReg'
 
 function aa64SpillFpToStack(state RegState, offset MachineWord, src Arm64FpVReg, precision FloatPrecision, dstBlock MlirBlock)
 	let s = arm64ResolveFpUse(state, vreg: src, dstBlock: dstBlock)
-	dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.spillFpToStack(offset, arm64FpPhysFromOrd(s), precision)))
+	dstBlock.ops.push(MlirOp.arm64(Arm64Op.spillFpToStack(offset, arm64FpPhysFromOrd(s), precision)))
 end 'aa64SpillFpToStack'
 
 function aa64ReloadFpFromStack(state RegState, dest Arm64FpVReg, offset MachineWord, precision FloatPrecision, dstBlock MlirBlock)
 	let d = arm64ResolveFpDef(state, vreg: dest, dstBlock: dstBlock)
-	dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.reloadFpFromStack(arm64FpPhysFromOrd(d), offset, precision)))
+	dstBlock.ops.push(MlirOp.arm64(Arm64Op.reloadFpFromStack(arm64FpPhysFromOrd(d), offset, precision)))
 end 'aa64ReloadFpFromStack'
 
 function aa64FpLoadRdata(state RegState, dest Arm64FpVReg, rdataLabel ByteArray, precision FloatPrecision, dstBlock MlirBlock)
 	let d = arm64ResolveFpDef(state, vreg: dest, dstBlock: dstBlock)
-	dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.fpLoadRdata(arm64FpPhysFromOrd(d), rdataLabel, precision)))
+	dstBlock.ops.push(MlirOp.arm64(Arm64Op.fpLoadRdata(arm64FpPhysFromOrd(d), rdataLabel, precision)))
 end 'aa64FpLoadRdata'
 
 function aa64FmovToFloat(state RegState, dest Arm64FpVReg, src Arm64VReg, precision FloatPrecision, dstBlock MlirBlock)
 	let s = arm64ResolveGprUse(state, vreg: src, dstBlock: dstBlock, protect1: RM_NONE, protect2: RM_NONE)
 	let d = arm64ResolveFpDef(state, vreg: dest, dstBlock: dstBlock)
-	dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.fmovToFloat(arm64FpPhysFromOrd(d), arm64PhysFromOrd(s), precision)))
+	dstBlock.ops.push(MlirOp.arm64(Arm64Op.fmovToFloat(arm64FpPhysFromOrd(d), arm64PhysFromOrd(s), precision)))
 end 'aa64FmovToFloat'
 
 function aa64FmovToGpr(state RegState, dest Arm64VReg, src Arm64FpVReg, precision FloatPrecision, dstBlock MlirBlock)
 	let s = arm64ResolveFpUse(state, vreg: src, dstBlock: dstBlock)
 	let d = arm64ResolveGprDef(state, vreg: dest, dstBlock: dstBlock, protect1: RM_NONE, protect2: RM_NONE)
-	dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.fmovToGpr(arm64PhysFromOrd(d), arm64FpPhysFromOrd(s), precision)))
+	dstBlock.ops.push(MlirOp.arm64(Arm64Op.fmovToGpr(arm64PhysFromOrd(d), arm64FpPhysFromOrd(s), precision)))
 end 'aa64FmovToGpr'
 
 function aa64Scvtf(state RegState, dest Arm64FpVReg, src Arm64VReg, precision FloatPrecision, dstBlock MlirBlock)
 	let s = arm64ResolveGprUse(state, vreg: src, dstBlock: dstBlock, protect1: RM_NONE, protect2: RM_NONE)
 	let d = arm64ResolveFpDef(state, vreg: dest, dstBlock: dstBlock)
-	dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.scvtf(arm64FpPhysFromOrd(d), arm64PhysFromOrd(s), precision)))
+	dstBlock.ops.push(MlirOp.arm64(Arm64Op.scvtf(arm64FpPhysFromOrd(d), arm64PhysFromOrd(s), precision)))
 end 'aa64Scvtf'
 
 function aa64Fcvtzs(state RegState, dest Arm64VReg, src Arm64FpVReg, precision FloatPrecision, dstBlock MlirBlock)
 	let s = arm64ResolveFpUse(state, vreg: src, dstBlock: dstBlock)
 	let d = arm64ResolveGprDef(state, vreg: dest, dstBlock: dstBlock, protect1: RM_NONE, protect2: RM_NONE)
-	dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.fcvtzs(arm64PhysFromOrd(d), arm64FpPhysFromOrd(s), precision)))
+	dstBlock.ops.push(MlirOp.arm64(Arm64Op.fcvtzs(arm64PhysFromOrd(d), arm64FpPhysFromOrd(s), precision)))
 end 'aa64Fcvtzs'
 
 // FP three-address: dest=def, src1=use, src2=use
@@ -4187,10 +4187,10 @@ function aa64FpThreeAddr(state RegState, dest Arm64FpVReg, src1 Arm64FpVReg, src
 	let s1p = arm64FpPhysFromOrd(s1)
 	let s2p = arm64FpPhysFromOrd(s2)
 	match op 'emit'
-		add then dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.fadd(dp, s1p, s2p, precision)))
-		sub then dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.fsub(dp, s1p, s2p, precision)))
-		mul then dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.fmul(dp, s1p, s2p, precision)))
-		div then dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.fdiv(dp, s1p, s2p, precision)))
+		add then dstBlock.ops.push(MlirOp.arm64(Arm64Op.fadd(dp, s1p, s2p, precision)))
+		sub then dstBlock.ops.push(MlirOp.arm64(Arm64Op.fsub(dp, s1p, s2p, precision)))
+		mul then dstBlock.ops.push(MlirOp.arm64(Arm64Op.fmul(dp, s1p, s2p, precision)))
+		div then dstBlock.ops.push(MlirOp.arm64(Arm64Op.fdiv(dp, s1p, s2p, precision)))
 	end 'emit'
 end 'aa64FpThreeAddr'
 
@@ -4212,52 +4212,52 @@ function aa64FpUnary(state RegState, dest Arm64FpVReg, src Arm64FpVReg, precisio
 	let dp = arm64FpPhysFromOrd(d)
 	let sp = arm64FpPhysFromOrd(s)
 	match op 'emit'
-		sqrt then dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.fsqrt(dp, sp, precision)))
-		abs then dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.fabs(dp, sp, precision)))
-		neg then dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.fneg(dp, sp, precision)))
-		fcvt then dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.fcvt(dp, sp, precision)))
-		frintm then dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.frintm(dp, sp, precision)))
-		frintp then dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.frintp(dp, sp, precision)))
-		frintz then dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.frintz(dp, sp, precision)))
-		frintn then dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.frintn(dp, sp, precision)))
+		sqrt then dstBlock.ops.push(MlirOp.arm64(Arm64Op.fsqrt(dp, sp, precision)))
+		abs then dstBlock.ops.push(MlirOp.arm64(Arm64Op.fabs(dp, sp, precision)))
+		neg then dstBlock.ops.push(MlirOp.arm64(Arm64Op.fneg(dp, sp, precision)))
+		fcvt then dstBlock.ops.push(MlirOp.arm64(Arm64Op.fcvt(dp, sp, precision)))
+		frintm then dstBlock.ops.push(MlirOp.arm64(Arm64Op.frintm(dp, sp, precision)))
+		frintp then dstBlock.ops.push(MlirOp.arm64(Arm64Op.frintp(dp, sp, precision)))
+		frintz then dstBlock.ops.push(MlirOp.arm64(Arm64Op.frintz(dp, sp, precision)))
+		frintn then dstBlock.ops.push(MlirOp.arm64(Arm64Op.frintn(dp, sp, precision)))
 	end 'emit'
 end 'aa64FpUnary'
 
 function aa64Fcmp(state RegState, src1 Arm64FpVReg, src2 Arm64FpVReg, precision FloatPrecision, dstBlock MlirBlock)
 	let s1 = arm64ResolveFpUse(state, vreg: src1, dstBlock: dstBlock)
 	let s2 = arm64ResolveFpUse(state, vreg: src2, dstBlock: dstBlock)
-	dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.fcmp(arm64FpPhysFromOrd(s1), arm64FpPhysFromOrd(s2), precision)))
+	dstBlock.ops.push(MlirOp.arm64(Arm64Op.fcmp(arm64FpPhysFromOrd(s1), arm64FpPhysFromOrd(s2), precision)))
 end 'aa64Fcmp'
 
 function aa64FpStoreIndirect(state RegState, baseReg Arm64VReg, offset MachineWord, src Arm64FpVReg, precision FloatPrecision, dstBlock MlirBlock)
 	let b = arm64ResolveGprUse(state, vreg: baseReg, dstBlock: dstBlock, protect1: RM_NONE, protect2: RM_NONE)
 	let s = arm64ResolveFpUse(state, vreg: src, dstBlock: dstBlock)
-	dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.fpStoreIndirect(arm64PhysFromOrd(b), offset, arm64FpPhysFromOrd(s), precision)))
+	dstBlock.ops.push(MlirOp.arm64(Arm64Op.fpStoreIndirect(arm64PhysFromOrd(b), offset, arm64FpPhysFromOrd(s), precision)))
 end 'aa64FpStoreIndirect'
 
 function aa64FpLoadIndirect(state RegState, dest Arm64FpVReg, baseReg Arm64VReg, offset MachineWord, precision FloatPrecision, dstBlock MlirBlock)
 	let b = arm64ResolveGprUse(state, vreg: baseReg, dstBlock: dstBlock, protect1: RM_NONE, protect2: RM_NONE)
 	let d = arm64ResolveFpDef(state, vreg: dest, dstBlock: dstBlock)
-	dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.fpLoadIndirect(arm64FpPhysFromOrd(d), arm64PhysFromOrd(b), offset, precision)))
+	dstBlock.ops.push(MlirOp.arm64(Arm64Op.fpLoadIndirect(arm64FpPhysFromOrd(d), arm64PhysFromOrd(b), offset, precision)))
 end 'aa64FpLoadIndirect'
 
 function aa64GlobalLoadFloat(state RegState, dest Arm64FpVReg, name ByteArray, precision FloatPrecision, dstBlock MlirBlock)
 	let d = arm64ResolveFpDef(state, vreg: dest, dstBlock: dstBlock)
-	dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.globalLoadFloat(arm64FpPhysFromOrd(d), name, precision)))
+	dstBlock.ops.push(MlirOp.arm64(Arm64Op.globalLoadFloat(arm64FpPhysFromOrd(d), name, precision)))
 end 'aa64GlobalLoadFloat'
 
 function aa64GlobalStoreFloat(state RegState, name ByteArray, src Arm64FpVReg, precision FloatPrecision, dstBlock MlirBlock)
 	let s = arm64ResolveFpUse(state, vreg: src, dstBlock: dstBlock)
-	dstBlock.ops.push(MlirOp.maxarm64(MaxArm64Op.globalStoreFloat(name, arm64FpPhysFromOrd(s), precision)))
+	dstBlock.ops.push(MlirOp.arm64(Arm64Op.globalStoreFloat(name, arm64FpPhysFromOrd(s), precision)))
 end 'aa64GlobalStoreFloat'
 
 // ============================================================
 // ARM64 per-op dispatch
 // ============================================================
 
-function allocArm64Op(state RegState, a64Op MaxArm64Op, dstBlock MlirBlock)
+function allocArm64Op(state RegState, a64Op Arm64Op, dstBlock MlirBlock)
 	match a64Op 'dispatch'
-		prologue to epilogue then dstBlock.ops.push(MlirOp.maxarm64(a64Op))
+		prologue to epilogue then dstBlock.ops.push(MlirOp.arm64(a64Op))
 		movImm(dest, value) then aa64MovImm(state, dest: dest, value: value, dstBlock: dstBlock)
 		strToSlot(slotIndex, src) then aa64StrToSlot(state, slotIndex: slotIndex, src: src, dstBlock: dstBlock)
 		ldrFromSlot(dest, slotIndex) then aa64LdrFromSlot(state, dest: dest, slotIndex: slotIndex, dstBlock: dstBlock)
@@ -4275,16 +4275,16 @@ function allocArm64Op(state RegState, a64Op MaxArm64Op, dstBlock MlirBlock)
 		asrRegs(dest, src1, src2) then aa64ThreeAddr(state, dest: dest, src1: src1, src2: src2, dstBlock: dstBlock, op: Arm64ThreeAddrOp.asr)
 		cmpRegs(src1, src2) then aa64CmpRegs(state, src1: src1, src2: src2, dstBlock: dstBlock)
 		cmpRegZero(src) then aa64CmpRegZero(state, src: src, dstBlock: dstBlock)
-		condBranch to branch then dstBlock.ops.push(MlirOp.maxarm64(a64Op))
-		branchLink then dstBlock.ops.push(MlirOp.maxarm64(a64Op))
-		printLiteral to printInt then dstBlock.ops.push(MlirOp.maxarm64(a64Op))
-		ret then dstBlock.ops.push(MlirOp.maxarm64(a64Op))
-		syscall to memcpyOp then dstBlock.ops.push(MlirOp.maxarm64(a64Op))
+		condBranch to branch then dstBlock.ops.push(MlirOp.arm64(a64Op))
+		branchLink then dstBlock.ops.push(MlirOp.arm64(a64Op))
+		printLiteral to printInt then dstBlock.ops.push(MlirOp.arm64(a64Op))
+		ret then dstBlock.ops.push(MlirOp.arm64(a64Op))
+		syscall to memcpyOp then dstBlock.ops.push(MlirOp.arm64(a64Op))
 		movRegReg(dest, src) then aa64MovRegReg(state, dest: dest, src: src, dstBlock: dstBlock)
 		spillToStack(offset, src) then aa64SpillToStack(state, offset: offset, src: src, dstBlock: dstBlock)
 		reloadFromStack(dest, offset) then aa64ReloadFromStack(state, dest: dest, offset: offset, dstBlock: dstBlock)
 		branchLinkReg(reg) then aa64BranchLinkReg(state, reg: reg, dstBlock: dstBlock)
-		subSpImm to addSpImm then dstBlock.ops.push(MlirOp.maxarm64(a64Op))
+		subSpImm to addSpImm then dstBlock.ops.push(MlirOp.arm64(a64Op))
 		strToSpOffset(offset, src) then aa64StrToSpOffset(state, offset: offset, src: src, dstBlock: dstBlock)
 		fmovRegReg(dest, src, precision) then aa64FmovRegReg(state, dest: dest, src: src, precision: precision, dstBlock: dstBlock)
 		spillFpToStack(offset, src, precision) then aa64SpillFpToStack(state, offset: offset, src: src, precision: precision, dstBlock: dstBlock)

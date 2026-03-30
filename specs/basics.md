@@ -62,61 +62,61 @@ end 'main'
 ```RequiredLowering:x86_64-windows
 === After semantic-check ===
 Functions: 2, Blocks: 2, Ops: 10
-  maxhl: 10, arith: 0, cf: 0, func: 0, memref: 0, runtime: 0, sys: 0, mir: 0, x64: 0, arm64: 0
+  maxon: 10, arith: 0, cf: 0, func: 0, memref: 0, runtime: 0, sys: 0, mir: 0, x64: 0, arm64: 0
 === After dead-function-elimination ===
 Functions: 1, Blocks: 1, Ops: 2
-  maxhl: 2, arith: 0, cf: 0, func: 0, memref: 0, runtime: 0, sys: 0, mir: 0, x64: 0, arm64: 0
-=== After convert-maxon-to-arith ===
+  maxon: 2, arith: 0, cf: 0, func: 0, memref: 0, runtime: 0, sys: 0, mir: 0, x64: 0, arm64: 0
+=== After lower-maxon-to-arith ===
 Functions: 1, Blocks: 1, Ops: 2
-  maxhl: 0, arith: 1, cf: 0, func: 1, memref: 0, runtime: 0, sys: 0, mir: 0, x64: 0, arm64: 0
+  maxon: 0, arith: 1, cf: 0, func: 1, memref: 0, runtime: 0, sys: 0, mir: 0, x64: 0, arm64: 0
 === After borrow-check ===
 Functions: 1, Blocks: 1, Ops: 2
-  maxhl: 0, arith: 1, cf: 0, func: 1, memref: 0, runtime: 0, sys: 0, mir: 0, x64: 0, arm64: 0
+  maxon: 0, arith: 1, cf: 0, func: 1, memref: 0, runtime: 0, sys: 0, mir: 0, x64: 0, arm64: 0
 === After inject-drops ===
 Functions: 1, Blocks: 1, Ops: 2
-  maxhl: 0, arith: 1, cf: 0, func: 1, memref: 0, runtime: 0, sys: 0, mir: 0, x64: 0, arm64: 0
+  maxon: 0, arith: 1, cf: 0, func: 1, memref: 0, runtime: 0, sys: 0, mir: 0, x64: 0, arm64: 0
 === After mem2reg ===
 Functions: 1, Blocks: 1, Ops: 2
-  maxhl: 0, arith: 1, cf: 0, func: 1, memref: 0, runtime: 0, sys: 0, mir: 0, x64: 0, arm64: 0
+  maxon: 0, arith: 1, cf: 0, func: 1, memref: 0, runtime: 0, sys: 0, mir: 0, x64: 0, arm64: 0
 === After canonicalize ===
 Functions: 1, Blocks: 1, Ops: 2
-  maxhl: 0, arith: 1, cf: 0, func: 1, memref: 0, runtime: 0, sys: 0, mir: 0, x64: 0, arm64: 0
+  maxon: 0, arith: 1, cf: 0, func: 1, memref: 0, runtime: 0, sys: 0, mir: 0, x64: 0, arm64: 0
 === After cse ===
 Functions: 1, Blocks: 1, Ops: 2
-  maxhl: 0, arith: 1, cf: 0, func: 1, memref: 0, runtime: 0, sys: 0, mir: 0, x64: 0, arm64: 0
+  maxon: 0, arith: 1, cf: 0, func: 1, memref: 0, runtime: 0, sys: 0, mir: 0, x64: 0, arm64: 0
 === After dce ===
 Functions: 1, Blocks: 1, Ops: 2
-  maxhl: 0, arith: 1, cf: 0, func: 1, memref: 0, runtime: 0, sys: 0, mir: 0, x64: 0, arm64: 0
+  maxon: 0, arith: 1, cf: 0, func: 1, memref: 0, runtime: 0, sys: 0, mir: 0, x64: 0, arm64: 0
 === After insert-range-checks ===
 Functions: 1, Blocks: 1, Ops: 2
-  maxhl: 0, arith: 1, cf: 0, func: 1, memref: 0, runtime: 0, sys: 0, mir: 0, x64: 0, arm64: 0
-=== After convert-maxon-to-sys-and-runtime ===
+  maxon: 0, arith: 1, cf: 0, func: 1, memref: 0, runtime: 0, sys: 0, mir: 0, x64: 0, arm64: 0
+=== After lower-maxon-to-sys-and-runtime ===
 Functions: 1, Blocks: 1, Ops: 2
-  maxhl: 0, arith: 1, cf: 0, func: 1, memref: 0, runtime: 0, sys: 0, mir: 0, x64: 0, arm64: 0
+  maxon: 0, arith: 1, cf: 0, func: 1, memref: 0, runtime: 0, sys: 0, mir: 0, x64: 0, arm64: 0
 === After lower-abi ===
 Functions: 1, Blocks: 1, Ops: 2
-  maxhl: 0, arith: 1, cf: 0, func: 1, memref: 0, runtime: 0, sys: 0, mir: 0, x64: 0, arm64: 0
+  maxon: 0, arith: 1, cf: 0, func: 1, memref: 0, runtime: 0, sys: 0, mir: 0, x64: 0, arm64: 0
 === After augment-with-runtime ===
 Functions: 9, Blocks: 35, Ops: 233
-  maxhl: 0, arith: 83, cf: 25, func: 32, memref: 67, runtime: 0, sys: 26, mir: 0, x64: 0, arm64: 0
-=== After convert-to-mir ===
+  maxon: 0, arith: 83, cf: 25, func: 32, memref: 67, runtime: 0, sys: 26, mir: 0, x64: 0, arm64: 0
+=== After lower-to-mir ===
 Functions: 9, Blocks: 35, Ops: 233
-  maxhl: 0, arith: 0, cf: 0, func: 0, memref: 67, runtime: 0, sys: 9, mir: 157, x64: 0, arm64: 0
+  maxon: 0, arith: 0, cf: 0, func: 0, memref: 67, runtime: 0, sys: 9, mir: 157, x64: 0, arm64: 0
 === After schedule-instructions ===
 Functions: 9, Blocks: 35, Ops: 233
-  maxhl: 0, arith: 0, cf: 0, func: 0, memref: 67, runtime: 0, sys: 9, mir: 157, x64: 0, arm64: 0
-mid-to-x86: === lowering function: mrt_start ===
-mid-to-x86: === lowering function: mrt_write_stdout ===
-mid-to-x86: === lowering function: mrt_write_stderr ===
-mid-to-x86: === lowering function: mrt_i64_to_string ===
-mid-to-x86: === lowering function: mrt_write_cstr_stderr ===
-mid-to-x86: === lowering function: mrt_panic ===
-mid-to-x86: === lowering function: mrt_panic_print_frame ===
-mid-to-x86: === lowering function: mrt_printInt ===
-mid-to-x86: === lowering function: main ===
-=== After convert-mir-to-target ===
+  maxon: 0, arith: 0, cf: 0, func: 0, memref: 67, runtime: 0, sys: 9, mir: 157, x64: 0, arm64: 0
+mid-to-x64: === lowering function: mrt_start ===
+mid-to-x64: === lowering function: mrt_write_stdout ===
+mid-to-x64: === lowering function: mrt_write_stderr ===
+mid-to-x64: === lowering function: mrt_i64_to_string ===
+mid-to-x64: === lowering function: mrt_write_cstr_stderr ===
+mid-to-x64: === lowering function: mrt_panic ===
+mid-to-x64: === lowering function: mrt_panic_print_frame ===
+mid-to-x64: === lowering function: mrt_printInt ===
+mid-to-x64: === lowering function: main ===
+=== After lower-mir-to-target ===
 Functions: 9, Blocks: 35, Ops: 376
-  maxhl: 0, arith: 0, cf: 0, func: 0, memref: 0, runtime: 0, sys: 0, mir: 0, x64: 376, arm64: 0
+  maxon: 0, arith: 0, cf: 0, func: 0, memref: 0, runtime: 0, sys: 0, mir: 0, x64: 376, arm64: 0
 regalloc: --- block 'entry' (7 ops) func=mrt_start ---
 regalloc: clobber caller-saved (func=mrt_start)
 regalloc: --- block 'entry' (16 ops) func=mrt_write_stdout ---
@@ -232,7 +232,7 @@ regalloc: spill v156 from rax to [rbp-56] (func=mrt_printInt)
 regalloc: --- block 'entry' (3 ops) func=main ---
 === After allocate-registers ===
 Functions: 9, Blocks: 35, Ops: 339
-  maxhl: 0, arith: 0, cf: 0, func: 0, memref: 0, runtime: 0, sys: 0, mir: 0, x64: 339, arm64: 0
+  maxon: 0, arith: 0, cf: 0, func: 0, memref: 0, runtime: 0, sys: 0, mir: 0, x64: 339, arm64: 0
   frame: var=16 spill=0 total=16 aligned=16
   frame: var=64 spill=0 total=64 aligned=64
   frame: var=64 spill=0 total=64 aligned=64
@@ -244,7 +244,7 @@ Functions: 9, Blocks: 35, Ops: 339
   frame: var=0 spill=0 total=0 aligned=0
 === After insert-prologue-epilogue ===
 Functions: 9, Blocks: 35, Ops: 346
-  maxhl: 0, arith: 0, cf: 0, func: 0, memref: 0, runtime: 0, sys: 0, mir: 0, x64: 346, arm64: 0
+  maxon: 0, arith: 0, cf: 0, func: 0, memref: 0, runtime: 0, sys: 0, mir: 0, x64: 346, arm64: 0
 ```
 
 <!-- test: return-function-call -->

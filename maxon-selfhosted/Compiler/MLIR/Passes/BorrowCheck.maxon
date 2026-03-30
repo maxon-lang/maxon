@@ -2,7 +2,7 @@ typealias OpIndex = int(0 to u64.max)
 
 // Borrow Check Pass — NLL-style borrow analysis.
 // Pure analysis pass: reports errors via project.diagnostics but does NOT modify the module.
-// Runs after MaxHLToMid lowering, when memref.loadSlot / memref.storeSlot ops are present.
+// Runs after MaxonToMid lowering, when memref.loadSlot / memref.storeSlot ops are present.
 //
 // For each function, the pass:
 //   1. Builds a lifetime map: for each ValueId, records definition and last-use positions
@@ -129,8 +129,8 @@ function recordOpLifetimes(op MlirOp, blockId BlockId, opIndex OpIndex, state Bo
 		memref(memOp) then recordMemRefLifetimes(memOp, blockId: blockId, opIndex: opIndex, state: state)
 		runtime(rtOp) then recordRuntimeLifetimes(rtOp, blockId: blockId, opIndex: opIndex, state: state)
 		sys(sysOp) then recordSysLifetimes(sysOp, blockId: blockId, opIndex: opIndex, state: state)
-		maxhl then break 'dispatch'
-		mir to maxarm64 then break 'dispatch'
+		maxon then break 'dispatch'
+		mir to arm64 then break 'dispatch'
 	end 'dispatch'
 end 'recordOpLifetimes'
 
@@ -392,9 +392,9 @@ end 'isBorrowAlive'
 function checkOpBorrows(project Project, op MlirOp, blockId BlockId, opIndex OpIndex, state BorrowAnalysisState, funcName ByteArray)
 	match op 'dispatch'
 		memref(memOp) then checkMemRefBorrows(project, op: memOp, blockId: blockId, opIndex: opIndex, state: state, funcName: funcName)
-		maxhl to func then break 'dispatch'
+		maxon to func then break 'dispatch'
 		runtime to sys then break 'dispatch'
-		mir to maxarm64 then break 'dispatch'
+		mir to arm64 then break 'dispatch'
 	end 'dispatch'
 end 'checkOpBorrows'
 

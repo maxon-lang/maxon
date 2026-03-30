@@ -87,8 +87,8 @@ function countOpUses(op MlirOp, useCount ValueIdArray)
 		memref(memOp) then countMemRefUses(memOp, useCount: useCount)
 		runtime(rtOp) then countRuntimeUses(rtOp, useCount: useCount)
 		sys(sysOp) then countSysUses(sysOp, useCount: useCount)
-		maxhl(hlOp) then countMaxHLUses(hlOp, useCount: useCount)
-		mir to maxarm64 then break 'dispatch'
+		maxon(hlOp) then countMaxonUses(hlOp, useCount: useCount)
+		mir to arm64 then break 'dispatch'
 	end 'dispatch'
 end 'countOpUses'
 
@@ -160,7 +160,7 @@ function countRuntimeUses(op RuntimeOp, useCount ValueIdArray)
 	end 'count'
 end 'countRuntimeUses'
 
-function countMaxHLUses(op MaxHLOp, useCount ValueIdArray)
+function countMaxonUses(op MaxonOp, useCount ValueIdArray)
 	match op 'count'
 		// Side-effect ops that reference value operands
 		printInt(valueId) then incrementUse(useCount, valueId: valueId)
@@ -181,7 +181,7 @@ function countMaxHLUses(op MaxHLOp, useCount ValueIdArray)
 		panic then break 'count'
 		br then break 'count'
 	end 'count'
-end 'countMaxHLUses'
+end 'countMaxonUses'
 
 function countSysUses(op SysOp, useCount ValueIdArray)
 	match op 'count'
@@ -229,13 +229,13 @@ end 'countThreeUses'
 // 3. The op has no side effects
 function isDeadOp(op MlirOp, useCount ValueIdArray) returns bool
 	return match op 'check'
-		maxhl gives false
+		maxon gives false
 		arith(arithOp) gives isDeadArithOp(arithOp, useCount: useCount)
 		cf gives false
 		func(funcOp) gives isDeadFuncOp(funcOp, useCount: useCount)
 		memref(memOp) gives isDeadMemRefOp(memOp, useCount: useCount)
-		// runtime, sys = side effects; maxx64, maxarm64 = backend ops
-		runtime to maxarm64 gives false
+		// runtime, sys = side effects; x64, arm64 = backend ops
+		runtime to arm64 gives false
 	end 'check'
 end 'isDeadOp'
 
@@ -277,12 +277,12 @@ end 'isDeadFuncOp'
 
 function getOpResultId(op MlirOp) returns ValueId
 	return match op 'get'
-		maxhl gives 0
+		maxon gives 0
 		arith(arithOp) gives getArithResultId(arithOp)
 		cf gives 0
 		func(funcOp) gives getFuncResultId(funcOp)
 		memref(memOp) gives getMemRefResultId(memOp)
-		runtime to maxarm64 gives 0
+		runtime to arm64 gives 0
 	end 'get'
 end 'getOpResultId'
 

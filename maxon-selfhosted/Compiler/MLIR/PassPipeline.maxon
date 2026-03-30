@@ -16,7 +16,7 @@ export union PassKind
 	// Phase 2: Memory Safety
 	semanticCheck
 	deadFunctionElimination
-	convertMaxonToArith
+	lowerMaxonToArith
 	borrowCheck
 	injectDrops
 	// Phase 3: SSA Construction
@@ -28,13 +28,13 @@ export union PassKind
 	// Phase 4b: Range Checks (after optimizations, before system lowering)
 	insertRangeChecks
 	// Phase 5: System Resolution
-	convertMaxonToSysAndRuntime
+	lowerMaxonToSysAndRuntime
 	lowerABI
 	// Phase 6: Generic Machine Lowering
 	augmentWithRuntime
-	convertToMir
+	lowerToMir
 	// Phase 7: Target Execution
-	convertMirToTarget
+	lowerMirToTarget
 	scheduleInstructions
 	allocateRegisters
 	insertPrologueEpilogue
@@ -60,7 +60,7 @@ export function buildMidPipeline() returns PassKindArray
 	// Phase 2: Memory Safety
 	passes.push(PassKind.semanticCheck)
 	passes.push(PassKind.deadFunctionElimination)
-	passes.push(PassKind.convertMaxonToArith)
+	passes.push(PassKind.lowerMaxonToArith)
 	passes.push(PassKind.borrowCheck)
 	passes.push(PassKind.injectDrops)
 	// Phase 3: SSA Construction
@@ -72,7 +72,7 @@ export function buildMidPipeline() returns PassKindArray
 	// Phase 4b: Range Checks
 	passes.push(PassKind.insertRangeChecks)
 	// Phase 5: System Resolution
-	passes.push(PassKind.convertMaxonToSysAndRuntime)
+	passes.push(PassKind.lowerMaxonToSysAndRuntime)
 	passes.push(PassKind.lowerABI)
 	return passes
 end 'buildMidPipeline'
@@ -82,10 +82,10 @@ export function buildBackendPipeline() returns PassKindArray
 	var passes = PassKindArray{}
 	// Phase 6: Generic Machine Lowering
 	passes.push(PassKind.augmentWithRuntime)
-	passes.push(PassKind.convertToMir)
+	passes.push(PassKind.lowerToMir)
 	// Phase 7: Target Execution
 	passes.push(PassKind.scheduleInstructions)
-	passes.push(PassKind.convertMirToTarget)
+	passes.push(PassKind.lowerMirToTarget)
 	passes.push(PassKind.allocateRegisters)
 	passes.push(PassKind.insertPrologueEpilogue)
 	return passes
@@ -124,7 +124,7 @@ function dispatchPass(ctx PipelineContext, pass PassKind)
 
 		deadFunctionElimination then ctx.module = eliminateDeadFunctions(ctx.module)
 
-		convertMaxonToArith then ctx.module = convertMaxonToArith(ctx.module, project: ctx.project)
+		lowerMaxonToArith then ctx.module = lowerMaxonToArith(ctx.module, project: ctx.project)
 
 		borrowCheck then ctx.module = runBorrowCheck(ctx.project, module: ctx.module)
 
@@ -144,18 +144,18 @@ function dispatchPass(ctx PipelineContext, pass PassKind)
 		insertRangeChecks then ctx.module = insertRangeChecks(ctx.module, funcReturnTypes: ctx.project.funcReturnTypes, typealiasRanges: ctx.project.typealiasRanges, nextValueIdRef: ctx.nextValueIdRef, sourceFileName: ctx.sourceFileName)
 
 		// Phase 5: System Resolution
-		convertMaxonToSysAndRuntime then ctx.module = convertMaxonToSysAndRuntime(ctx.module, globalData: ctx.globalData, nextValueIdRef: ctx.nextValueIdRef)
+		lowerMaxonToSysAndRuntime then ctx.module = lowerMaxonToSysAndRuntime(ctx.module, globalData: ctx.globalData, nextValueIdRef: ctx.nextValueIdRef)
 
 		lowerABI then ctx.module = lowerABI(ctx.module, target: ctx.target)
 
 		// Phase 6: Generic Machine Lowering
 		augmentWithRuntime then ctx.module = augmentWithRuntime(ctx.module)
 
-		// Phase 6: Convert mid-level ops to target-independent MIR
-		convertToMir then ctx.module = convertToMir(ctx.module)
+		// Phase 6: Lower mid-level ops to target-independent MIR
+		lowerToMir then ctx.module = lowerToMir(ctx.module)
 
 		// Phase 7: Target Execution
-		convertMirToTarget then ctx.module = lowerToTarget(ctx.module, target: ctx.target)
+		lowerMirToTarget then ctx.module = lowerToTarget(ctx.module, target: ctx.target)
 
 		scheduleInstructions then ctx.module = scheduleInstructions(ctx.module, target: ctx.target)
 
@@ -171,7 +171,7 @@ export function dumpModuleSummary(module MlirModule, passName String) returns St
 	var totalFuncs = 0
 	var totalBlocks = 0
 	var totalOps = 0
-	var nMaxhl = 0
+	var nMaxon = 0
 	var nArith = 0
 	var nCf = 0
 	var nFunc = 0
@@ -189,7 +189,7 @@ export function dumpModuleSummary(module MlirModule, passName String) returns St
 			for op in block.ops 'eachOp'
 				totalOps = totalOps + 1
 				match op 'classify'
-					maxhl then nMaxhl = nMaxhl + 1
+					maxon then nMaxon = nMaxon + 1
 					arith then nArith = nArith + 1
 					cf then nCf = nCf + 1
 					func then nFunc = nFunc + 1
@@ -197,14 +197,14 @@ export function dumpModuleSummary(module MlirModule, passName String) returns St
 					runtime then nRuntime = nRuntime + 1
 					sys then nSys = nSys + 1
 					mir then nMir = nMir + 1
-					maxx64 then nX64 = nX64 + 1
-					maxarm64 then nArm64 = nArm64 + 1
+					x64 then nX64 = nX64 + 1
+					arm64 then nArm64 = nArm64 + 1
 				end 'classify'
 			end 'eachOp'
 			if block.hasTerminator 'countTerm'
 				totalOps = totalOps + 1
 				match block.terminator 'classifyTerm'
-					maxhl then nMaxhl = nMaxhl + 1
+					maxon then nMaxon = nMaxon + 1
 					arith then nArith = nArith + 1
 					cf then nCf = nCf + 1
 					func then nFunc = nFunc + 1
@@ -212,14 +212,14 @@ export function dumpModuleSummary(module MlirModule, passName String) returns St
 					runtime then nRuntime = nRuntime + 1
 					sys then nSys = nSys + 1
 					mir then nMir = nMir + 1
-					maxx64 then nX64 = nX64 + 1
-					maxarm64 then nArm64 = nArm64 + 1
+					x64 then nX64 = nX64 + 1
+					arm64 then nArm64 = nArm64 + 1
 				end 'classifyTerm'
 			end 'countTerm'
 		end 'eachBlock'
 	end 'eachFunc'
 
-	return "=== After {passName} ===\nFunctions: {totalFuncs}, Blocks: {totalBlocks}, Ops: {totalOps}\n  maxhl: {nMaxhl}, arith: {nArith}, cf: {nCf}, func: {nFunc}, memref: {nMemref}, runtime: {nRuntime}, sys: {nSys}, mir: {nMir}, x64: {nX64}, arm64: {nArm64}"
+	return "=== After {passName} ===\nFunctions: {totalFuncs}, Blocks: {totalBlocks}, Ops: {totalOps}\n  maxon: {nMaxon}, arith: {nArith}, cf: {nCf}, func: {nFunc}, memref: {nMemref}, runtime: {nRuntime}, sys: {nSys}, mir: {nMir}, x64: {nX64}, arm64: {nArm64}"
 end 'dumpModuleSummary'
 
 // Returns a human-readable name for a pass, used for logging.
@@ -227,7 +227,7 @@ export function passKindToString(pass PassKind) returns String
 	return match pass 'name'
 		semanticCheck gives "semantic-check"
 		deadFunctionElimination gives "dead-function-elimination"
-		convertMaxonToArith gives "convert-maxon-to-arith"
+		lowerMaxonToArith gives "lower-maxon-to-arith"
 		borrowCheck gives "borrow-check"
 		injectDrops gives "inject-drops"
 		mem2reg gives "mem2reg"
@@ -235,11 +235,11 @@ export function passKindToString(pass PassKind) returns String
 		cse gives "cse"
 		dce gives "dce"
 		insertRangeChecks gives "insert-range-checks"
-		convertMaxonToSysAndRuntime gives "convert-maxon-to-sys-and-runtime"
+		lowerMaxonToSysAndRuntime gives "lower-maxon-to-sys-and-runtime"
 		lowerABI gives "lower-abi"
 		augmentWithRuntime gives "augment-with-runtime"
-		convertToMir gives "convert-to-mir"
-		convertMirToTarget gives "convert-mir-to-target"
+		lowerToMir gives "lower-to-mir"
+		lowerMirToTarget gives "lower-mir-to-target"
 		scheduleInstructions gives "schedule-instructions"
 		allocateRegisters gives "allocate-registers"
 		insertPrologueEpilogue gives "insert-prologue-epilogue"

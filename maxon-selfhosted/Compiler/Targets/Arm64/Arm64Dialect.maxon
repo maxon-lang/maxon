@@ -1,6 +1,6 @@
-// MaxArm64 Dialect — ARM64 machine instructions.
+// Arm64 Dialect — ARM64 machine instructions.
 
-export enum MaxArm64FloatRegister
+export enum Arm64FloatRegister
 	d0 = 0
 	d1 = 1
 	d2 = 2
@@ -10,9 +10,9 @@ export enum MaxArm64FloatRegister
 	d6 = 6
 	d7 = 7
 	d31 = 31
-end 'MaxArm64FloatRegister'
+end 'Arm64FloatRegister'
 
-export enum MaxArm64Register
+export enum Arm64Register
 	x0 = 0
 	x1 = 1
 	x2 = 2
@@ -33,25 +33,25 @@ export enum MaxArm64Register
 	x29 = 29
 	x30 = 30
 	sp = 31
-end 'MaxArm64Register'
+end 'Arm64Register'
 
-export enum MaxArm64CondCode
+export enum Arm64CondCode
 	eq = 0
 	ne = 1
 	ge = 10
 	lt = 11
 	gt = 12
 	le = 13
-end 'MaxArm64CondCode'
+end 'Arm64CondCode'
 
 // Virtual register unions — all VRegs are initially physical.
 export union Arm64VReg
-	physical(reg MaxArm64Register)
+	physical(reg Arm64Register)
 	virtual(id ValueId)
 end 'Arm64VReg'
 
 export union Arm64FpVReg
-	physical(reg MaxArm64FloatRegister)
+	physical(reg Arm64FloatRegister)
 	virtual(id ValueId)
 end 'Arm64FpVReg'
 
@@ -70,15 +70,15 @@ export function arm64FpVRegToString(vreg Arm64FpVReg) returns String
 end 'arm64FpVRegToString'
 
 // Wrap a physical register as a VReg (used during transition period)
-export function arm64PhysReg(reg MaxArm64Register) returns Arm64VReg
+export function arm64PhysReg(reg Arm64Register) returns Arm64VReg
 	return Arm64VReg.physical(reg)
 end 'arm64PhysReg'
 
-export function arm64PhysFpReg(reg MaxArm64FloatRegister) returns Arm64FpVReg
+export function arm64PhysFpReg(reg Arm64FloatRegister) returns Arm64FpVReg
 	return Arm64FpVReg.physical(reg)
 end 'arm64PhysFpReg'
 
-export union MaxArm64Op
+export union Arm64Op
 	prologue(stackSize StackSize)
 	epilogue
 	movImm(dest Arm64VReg, value MachineWord)
@@ -98,7 +98,7 @@ export union MaxArm64Op
 	asrRegs(dest Arm64VReg, src1 Arm64VReg, src2 Arm64VReg)
 	cmpRegs(src1 Arm64VReg, src2 Arm64VReg)
 	cmpRegZero(src Arm64VReg)
-	condBranch(condition MaxArm64CondCode, targetBlock BlockId)
+	condBranch(condition Arm64CondCode, targetBlock BlockId)
 	branch(targetBlock BlockId)
 	branchLink(target ByteArray)
 	printLiteral(data ByteArray)
@@ -165,21 +165,21 @@ export union MaxArm64Op
 	leaRdata(dest Arm64VReg, rdataLabel ByteArray)
 	leaFuncAddr(dest Arm64VReg, funcName ByteArray)
 	// Conditional ops
-	cset(dest Arm64VReg, condition MaxArm64CondCode)
-	csel(dest Arm64VReg, src1 Arm64VReg, src2 Arm64VReg, condition MaxArm64CondCode)
+	cset(dest Arm64VReg, condition Arm64CondCode)
+	csel(dest Arm64VReg, src1 Arm64VReg, src2 Arm64VReg, condition Arm64CondCode)
 	// Width conversion ops
 	sxtw(dest Arm64VReg, src Arm64VReg)
 	// Null-safe load
 	nullSafeLoad(dest Arm64VReg, baseReg Arm64VReg, offset MachineWord)
-end 'MaxArm64Op'
+end 'Arm64Op'
 
-export typealias MaxArm64OpArray = Array with MaxArm64Op
+export typealias Arm64OpArray = Array with Arm64Op
 
 function arm64SlotOffset(slotIndex VarSlot) returns StackSize
 	return 16 + slotIndex * 8
 end 'arm64SlotOffset'
 
-export function maxArm64OpToString(op MaxArm64Op, blocks MlirBlockArray) returns String
+export function arm64OpToString(op Arm64Op, blocks MlirBlockArray) returns String
 	return match op 'toString'
 		prologue(stackSize) gives "arm64.prologue stack_size={stackSize}"
 		epilogue gives "arm64.epilogue\n    arm64.ret"
@@ -257,4 +257,4 @@ export function maxArm64OpToString(op MaxArm64Op, blocks MlirBlockArray) returns
 		sxtw(dest, src) gives "arm64.sxtw {arm64VRegToString(dest)}, {arm64VRegToString(src)}"
 		nullSafeLoad(dest, baseReg, offset) gives "arm64.null_safe_load {arm64VRegToString(dest)}, [{arm64VRegToString(baseReg)}, #{offset}]"
 	end 'toString'
-end 'maxArm64OpToString'
+end 'arm64OpToString'
