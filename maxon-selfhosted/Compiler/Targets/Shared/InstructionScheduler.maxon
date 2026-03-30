@@ -1,8 +1,21 @@
 // Register-pressure-aware bottom-up list scheduler.
-// Runs after instruction selection (MIR ops with virtual registers) but before
-// register allocation. Reorders instructions within each basic block to reduce
-// register pressure while respecting data dependencies and keeping long-latency
-// operations as early as possible on the critical path.
+// Runs after MIR lowering (SSA virtual registers) but before target lowering,
+// because target ops use physical VRegs/slots instead of SSA ValueIds.
+// Reorders instructions within each basic block to reduce register pressure
+// while respecting data dependencies and keeping long-latency operations as
+// early as possible on the critical path.
+
+export typealias Latency = int(0 to 50)
+export typealias RegCount = int(0 to 64)
+
+export type TargetLatencyTable
+	export let defaultLatency Latency
+	export let intDivLatency Latency
+	export let fpDivLatency Latency
+	export let gprCount RegCount
+	export let fpCount RegCount
+	export let pressureThreshold RegCount
+end 'TargetLatencyTable'
 
 // Sentinel for "no value defined" or "not found"
 let SCHED_NONE = -1
@@ -22,7 +35,6 @@ typealias SchedIntArray = Array with SchedInt
 // Per-block scheduling state, built fresh for each basic block.
 type ScheduleState
 	export var ops MlirOpArray
-	export var opCount SchedInt
 	export var scheduled BoolArray
 	export var deps DepEdgeArray
 	export var successorCount SchedIntArray
@@ -36,10 +48,7 @@ end 'ScheduleState'
 
 // Entry point: schedule instructions across all functions in the module.
 export function scheduleInstructions(module MlirModule, target Target) returns MlirModule
-	let table = match target.cpu 'selectTable'
-		x86_64 gives createX64LatencyTable()
-		aarch64 gives createArm64LatencyTable()
-	end 'selectTable'
+	let table = createLatencyTable(target)
 
 	var result = createMlirModule()
 
@@ -93,11 +102,10 @@ function scheduleBlock(block MlirBlock, table TargetLatencyTable) returns MlirBl
 	var scheduleOrder = SchedIntArray{}
 	var scheduledCount = 0
 
-	while scheduledCount < state.opCount 'schedLoop'
+	while scheduledCount < state.ops.count() 'schedLoop'
 		// Build the ready set: ops whose all successors are already scheduled.
 		var readySet = SchedIntArray{}
-		for i in 0 upto state.opCount 'findReady'
-			let alreadyDone = try state.scheduled.get(i) otherwise false
+		for(i, alreadyDone) in state.scheduled.enumerated() 'findReady'
 			if alreadyDone 'skip'
 				continue
 			end 'skip'
@@ -110,14 +118,13 @@ function scheduleBlock(block MlirBlock, table TargetLatencyTable) returns MlirBl
 		// If no ops are ready, something went wrong. Break to avoid infinite loop.
 		if readySet.count() == 0 'noReady'
 			// Schedule remaining ops in original order as fallback.
-			for i in 0 upto state.opCount 'fallback'
-				let done = try state.scheduled.get(i) otherwise false
+			for(i, done) in state.scheduled.enumerated() 'fallback'
 				if not done 'notDone'
 					scheduleOrder.push(i)
 					state.scheduled.set(i, value: true)
 				end 'notDone'
 			end 'fallback'
-			scheduledCount = state.opCount
+			scheduledCount = state.ops.count()
 			continue
 		end 'noReady'
 
@@ -161,7 +168,6 @@ end 'scheduleBlock'
 
 // Create and initialize the scheduling state for a block's ops.
 function createScheduleState(ops MlirOpArray, table TargetLatencyTable) returns ScheduleState
-	let opCount = ops.count()
 	var scheduled = BoolArray{}
 	var successorCount = SchedIntArray{}
 	var predecessorCount = SchedIntArray{}
@@ -169,23 +175,17 @@ function createScheduleState(ops MlirOpArray, table TargetLatencyTable) returns 
 	var latencies = SchedIntArray{}
 	var liveVregs = SchedIntArray{}
 
-	for i in 0 upto opCount 'init'
+	for op in ops 'init'
 		scheduled.push(false)
 		successorCount.push(0)
 		predecessorCount.push(0)
-		let op = try ops.get(i) otherwise 'skip'
-			latencies.push(table.defaultLatency)
-			criticalPathLen.push(0)
-			continue
-		end 'skip'
-		let lat = getLatencyForMlirOp(op, table: table)
+		let lat = getTargetLatency(op, table: table)
 		latencies.push(lat)
 		criticalPathLen.push(0)
 	end 'init'
 
 	return ScheduleState{
 		ops: ops,
-		opCount: opCount,
 		scheduled: scheduled,
 		deps: DepEdgeArray{},
 		successorCount: successorCount,
@@ -221,10 +221,7 @@ function buildDependencies(state ScheduleState)
 	// Track the last param op index so we can barrier non-param ops after it.
 	var lastParamIdx = SCHED_NONE
 
-	for i in 0 upto state.opCount 'buildDeps'
-		let op = try state.ops.get(i) otherwise 'skip'
-			continue
-		end 'skip'
+	for(i, op) in state.ops.enumerated() 'buildDeps'
 
 		// Data dependencies: for each use, add edge from definer -> this op.
 		let useIds = extractUseValueIds(op)
@@ -289,16 +286,10 @@ function buildDependencies(state ScheduleState)
 	// This prevents the scheduler from interleaving computation between param ops,
 	// which would clobber calling-convention registers before later params read them.
 	if lastParamIdx != SCHED_NONE 'addParamBarrier'
-		var j = 0
-		while j < state.opCount 'barrierScan'
-			let barrierOp = try state.ops.get(j) otherwise 'skipBarrier'
-				j = j + 1
-				continue
-			end 'skipBarrier'
+		for(j, barrierOp) in state.ops.enumerated() 'barrierScan'
 			if j > lastParamIdx and not isMirParamOp(barrierOp) 'addBarrier'
 				addDepEdge(state, fromIdx: lastParamIdx, toIdx: j)
 			end 'addBarrier'
-			j = j + 1
 		end 'barrierScan'
 	end 'addParamBarrier'
 end 'buildDependencies'
@@ -321,7 +312,7 @@ end 'addDepEdge'
 function computeCriticalPaths(state ScheduleState)
 	// Process ops in reverse order. Since deps go from earlier to later ops,
 	// processing in reverse ensures successors are computed before predecessors.
-	var i = state.opCount - 1
+	var i = state.ops.count() - 1
 	while i >= 0 'bottomUp'
 		let ownLatency = try state.latencies.get(i) otherwise 1
 		var maxSuccPath = 0
@@ -350,20 +341,12 @@ end 'computeCriticalPaths'
 // 2. Otherwise: prefer ops on the critical path
 // 3. Tiebreak: prefer higher latency ops
 function selectBestReady(readySet SchedIntArray, state ScheduleState) returns SchedInt
-	let firstIdx = try readySet.get(0) otherwise 0
-	if readySet.count() == 1 'onlyOne'
-		return firstIdx
-	end 'onlyOne'
-
 	let highPressure = state.currentPressure >= state.latencyTable.pressureThreshold
 
-	var bestIdx = firstIdx
-	var bestScore = computeOpScore(firstIdx, state: state, highPressure: highPressure)
+	var bestIdx = 0
+	var bestScore = i64.min
 
-	for i in 1 upto readySet.count() 'pickBest'
-		let candidateIdx = try readySet.get(i) otherwise 'skip'
-			continue
-		end 'skip'
+	for candidateIdx in readySet 'pickBest'
 		let candidateScore = computeOpScore(candidateIdx, state: state, highPressure: highPressure)
 		if candidateScore > bestScore 'better'
 			bestIdx = candidateIdx
@@ -432,11 +415,10 @@ end 'estimatePressureDelta'
 // Check if opIdx is the last unscheduled op that uses the given valueId.
 // "Last unscheduled" means no other unscheduled op also uses this value.
 function isLastUnscheduledUse(valueId SchedInt, excludeIdx SchedInt, state ScheduleState) returns bool
-	for i in 0 upto state.opCount 'check'
+	for(i, done) in state.scheduled.enumerated() 'check'
 		if i == excludeIdx 'skipSelf'
 			continue
 		end 'skipSelf'
-		let done = try state.scheduled.get(i) otherwise true
 		if done 'alreadyDone'
 			continue
 		end 'alreadyDone'

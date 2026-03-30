@@ -80,6 +80,70 @@ export function emitBackend(module MlirModule, target Target, globalData GlobalD
 	return result
 end 'emitBackend'
 
+export function createLatencyTable(target Target) returns TargetLatencyTable
+	return match target.cpu 'cpu'
+		x86_64 gives createX64LatencyTable()
+		aarch64 gives createArm64LatencyTable()
+	end 'cpu'
+end 'createLatencyTable'
+
+export function getTargetLatency(op MlirOp, table TargetLatencyTable) returns Latency
+	return match op 'dispatch'
+		mir(mirOp) gives getMirLatency(mirOp, table: table)
+		maxx64(x64Op) gives getX64Latency(x64Op)
+		maxarm64(arm64Op) gives getArm64Latency(arm64Op)
+		maxhl to sys gives table.defaultLatency
+	end 'dispatch'
+end 'getTargetLatency'
+
+// MIR-level latency estimates, parameterized by the target's latency table
+// so division and other high-variance ops reflect the actual target CPU.
+function getMirLatency(op MirOp, table TargetLatencyTable) returns Latency
+	return match op 'dispatch'
+		movImm gives 1
+		movReg gives 1
+		binOp(_, _, _, opcode) gives getMirBinOpLatency(opcode, table: table)
+		unaryOp gives 1
+		cmp gives 1
+		condBranch gives 1
+		branch gives 1
+		call gives 5
+		indirectCall gives 5
+		ret gives 1
+		param gives 1
+		load gives 4
+		store gives 3
+		stackSlotAddr gives 1
+		globalAddr gives 1
+		syscall gives 5
+		iatCall gives 5
+		osExit gives 1
+		osWrite gives 5
+		memcpy gives 5
+		storeByte gives 3
+		loadByte gives 4
+	end 'dispatch'
+end 'getMirLatency'
+
+function getMirBinOpLatency(opcode MirBinOpcode, table TargetLatencyTable) returns Latency
+	return match opcode 'dispatch'
+		addI64 gives 1
+		subI64 gives 1
+		mulI64 gives 3
+		divI64 gives table.intDivLatency
+		remI64 gives table.intDivLatency
+		andI64 gives 1
+		orI64 gives 1
+		xorI64 gives 1
+		shlI64 gives 1
+		shrI64 gives 1
+		addF64 gives 4
+		subF64 gives 4
+		mulF64 gives 4
+		divF64 gives table.fpDivLatency
+	end 'dispatch'
+end 'getMirBinOpLatency'
+
 export function lowerToTarget(module MlirModule, target Target) returns MlirModule
 	return match target.cpu 'cpu'
 		x86_64 gives lowerMidToMaxX64(module, target: target)
