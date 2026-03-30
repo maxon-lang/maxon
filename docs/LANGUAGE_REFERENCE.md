@@ -1332,7 +1332,7 @@ end 'Priority'
 
 ### Backing Types
 
-Enums support integer, float, String, and Character backing types.
+Enums support integer, float, String, Character, and struct backing types.
 
 ```maxon
 enum Threshold
@@ -1351,6 +1351,25 @@ enum Escape
 		tab = '\t'
 end 'Escape'
 ```
+
+Struct backing attaches compile-time constant metadata to each case. The struct values must be literals with scalar fields:
+
+```maxon
+type OpInfo
+		export let latency int(0 to 100)
+		export let throughput int(0 to 10)
+end 'OpInfo'
+
+enum Instruction
+		add = OpInfo{latency: 1, throughput: 2}
+		mul = OpInfo{latency: 3, throughput: 1}
+		div = OpInfo{latency: 40, throughput: 1}
+end 'Instruction'
+
+let lat = Instruction.div.rawValue.latency  // 40
+```
+
+At runtime, struct-backed enums are stored as ordinals. The struct is reconstructed on `.rawValue` access. `fromRawValue()` is not available for struct-backed enums.
 
 Auto-increment (bare case names with no explicit value) is only valid for integer-backed enums. Mixing bare names with non-integer explicit values is a compile error.
 

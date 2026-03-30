@@ -234,6 +234,15 @@ public class MlirStringBackingType() : MlirType("string_enum", 8);
 /// are stored as ordinals (i64), but their display value is the associated character.
 public class MlirCharBackingType() : MlirType("char_enum", 8);
 
+/// Stores compile-time constant field values for a struct-backed enum case.
+public record StructRawValue(string StructTypeName, List<(string FieldName, long Value)> Fields);
+
+/// Marker type for struct-backed enum backing types. At runtime, struct-backed enums
+/// are stored as ordinals (i64). Each case has an associated struct value accessible via .rawValue.
+public class MlirStructBackingType(string structTypeName) : MlirType("struct_enum", 8) {
+  public string StructTypeName { get; } = structTypeName;
+}
+
 public class MlirTypeParameterType(string parameterName) : MlirType(parameterName) {
   public string ParameterName { get; } = parameterName;
   public override int SizeInBytes => throw new InvalidOperationException($"Type parameter '{ParameterName}' has no size");

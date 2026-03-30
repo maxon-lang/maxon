@@ -2177,7 +2177,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
             backingType = MlirType.I64;
           } else if (backingType != MlirType.I64) {
             throw new CompileError(ErrorCode.SemanticEnumRawValueTypeMismatch,
-              $"raw value type mismatch: 'expected {(backingType == MlirType.F64 ? "float" : "int")}, got int'",
+              $"raw value type mismatch: 'expected {(backingType == MlirType.F64 ? "float" : backingType is MlirStructBackingType sbtI ? sbtI.StructTypeName : "int")}, got int'",
               caseToken.Line, caseToken.Column);
           }
 
@@ -2261,6 +2261,84 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
           }
 
           cases.Add(new MlirEnumCase(caseName, ordinal, rawVal, assocValues));
+        } else if (Check(TokenType.Identifier) && PeekNext().Type == TokenType.LeftBrace) {
+          if (isNegative) {
+            throw new CompileError(ErrorCode.SemanticEnumRawValueTypeMismatch,
+              "cannot negate a struct raw value", caseToken.Line, caseToken.Column);
+          }
+
+          var structTypeName = Advance().Value; // consume struct type name
+          Advance(); // consume '{'
+
+          if (!_typeRegistry.TryGetValue(structTypeName, out var structTypeDef) || structTypeDef is not MlirStructType structType) {
+            throw new CompileError(ErrorCode.SemanticUnknownType,
+              $"unknown struct type: '{structTypeName}'", caseToken.Line, caseToken.Column);
+          }
+
+          if (backingType == null) {
+            backingType = new MlirStructBackingType(structTypeName);
+          } else if (backingType is not MlirStructBackingType sbt || sbt.StructTypeName != structTypeName) {
+            throw new CompileError(ErrorCode.SemanticEnumRawValueTypeMismatch,
+              $"raw value type mismatch: all cases must use the same struct type '{(backingType is MlirStructBackingType existingSbt ? existingSbt.StructTypeName : "non-struct")}'",
+              caseToken.Line, caseToken.Column);
+          }
+
+          var fields = new List<(string FieldName, long Value)>();
+          var providedFieldNames = new HashSet<string>();
+          SkipNewlines();
+          while (!Check(TokenType.RightBrace) && !IsAtEnd()) {
+            var fieldNameToken = Expect(TokenType.Identifier);
+            var fieldDef = structType.GetField(fieldNameToken.Value)
+              ?? throw new CompileError(ErrorCode.SemanticUnknownField,
+                $"struct type '{structTypeName}' has no field '{fieldNameToken.Value}'",
+                fieldNameToken.Line, fieldNameToken.Column);
+            if (!providedFieldNames.Add(fieldNameToken.Value)) {
+              throw new CompileError(ErrorCode.SemanticDuplicateDefinition,
+                $"duplicate field '{fieldNameToken.Value}' in struct raw value",
+                fieldNameToken.Line, fieldNameToken.Column);
+            }
+            Expect(TokenType.Colon);
+
+            bool fieldNegative = false;
+            if (Check(TokenType.Minus)) {
+              fieldNegative = true;
+              Advance();
+            }
+
+            long fieldValue;
+            if (Check(TokenType.IntegerLiteral)) {
+              fieldValue = ParseIntegerLiteral(Advance());
+              if (fieldNegative) fieldValue = -fieldValue;
+            } else if (Check(TokenType.FloatLiteral)) {
+              var fv = ParseFloatLiteral(Advance());
+              if (fieldNegative) fv = -fv;
+              fieldValue = BitConverter.DoubleToInt64Bits(fv);
+            } else {
+              throw new CompileError(ErrorCode.ParserExpectedExpression,
+                "expected integer or float literal for struct raw value field",
+                Current().Line, Current().Column);
+            }
+            fields.Add((fieldNameToken.Value, fieldValue));
+
+            SkipNewlines();
+            if (Check(TokenType.Comma)) {
+              Advance();
+              SkipNewlines();
+            }
+          }
+          Expect(TokenType.RightBrace);
+
+          // Validate all struct fields are provided
+          foreach (var requiredField in structType.Fields) {
+            if (!providedFieldNames.Contains(requiredField.Name)) {
+              throw new CompileError(ErrorCode.SemanticUnknownField,
+                $"missing field '{requiredField.Name}' in struct raw value for '{structTypeName}'",
+                caseToken.Line, caseToken.Column);
+            }
+          }
+
+          var structRawValue = new StructRawValue(structTypeName, fields);
+          cases.Add(new MlirEnumCase(caseName, ordinal, structRawValue, assocValues));
         } else {
           throw new CompileError(ErrorCode.ParserExpectedExpression,
             $"expected integer, float, string, or character literal for enum raw value",
@@ -2273,7 +2351,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
           cases.Add(new MlirEnumCase(caseName, ordinal, (long)ordinal, assocValues));
         } else {
           throw new CompileError(ErrorCode.SemanticEnumRawValueTypeMismatch,
-            $"bare case name requires integer backing; cannot mix with {(backingType == MlirType.F64 ? "float" : backingType is MlirStringBackingType ? "String" : "char")} values",
+            $"bare case name requires integer backing; cannot mix with {(backingType == MlirType.F64 ? "float" : backingType is MlirStringBackingType ? "String" : backingType is MlirStructBackingType sbt2 ? sbt2.StructTypeName : "char")} values",
             caseToken.Line, caseToken.Column);
         }
       }
@@ -3997,6 +4075,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
     if (useTag) backingTypeName = "int";
     else if (enumType.BackingType is MlirStringBackingType) backingTypeName = "String";
     else if (enumType.BackingType is MlirCharBackingType) backingTypeName = "Character";
+    else if (enumType.BackingType is MlirStructBackingType) backingTypeName = "int";
     else if (enumType.BackingType == MlirType.F64) backingTypeName = "float";
     else if (enumType.BackingType == MlirType.I64 || enumType.BackingType == null) backingTypeName = "int";
     else throw new InvalidOperationException($"Unsupported enum backing type for Hashable: {enumType.BackingType}");
@@ -4022,6 +4101,9 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
       var tagOp = new MaxonEnumTagOp(selfParam.Result, enumName);
       hashBlock.AddOp(tagOp);
       hashValue = tagOp.Result;
+    } else if (enumType.BackingType is MlirStructBackingType) {
+      // Struct-backed enums: hash/equals uses the ordinal directly (selfParam is already the ordinal i64)
+      hashValue = selfParam.Result;
     } else {
       hashValue = EmitEnumRawValueExtraction(hashBlock, selfParam.Result, enumType, enumName, backingKind);
       // For string/char backing, the raw value is a heap-allocated struct that must be cleaned up
@@ -4062,6 +4144,10 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
       var otherTag = new MaxonEnumTagOp(otherParam.Result, enumName);
       equalsBlock.AddOp(otherTag);
       otherCmp = otherTag.Result;
+    } else if (enumType.BackingType is MlirStructBackingType) {
+      // Struct-backed enums: compare ordinals directly
+      selfCmp = selfParam2.Result;
+      otherCmp = otherParam.Result;
     } else {
       selfCmp = EmitEnumRawValueExtraction(equalsBlock, selfParam2.Result, enumType, enumName, backingKind);
       otherCmp = EmitEnumRawValueExtraction(equalsBlock, otherParam.Result, enumType, enumName, backingKind);
@@ -4096,6 +4182,11 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
       block.AddOp(rawOp);
       return rawOp.Result;
     }
+    if (enumType.BackingType is MlirStructBackingType sbt) {
+      var rawOp = new MaxonEnumStructRawValueOp(enumValue, enumName, sbt.StructTypeName);
+      block.AddOp(rawOp);
+      return rawOp.Result;
+    }
     var numericRawOp = new MaxonEnumRawValueOp(enumValue, enumName, backingKind);
     block.AddOp(numericRawOp);
     return numericRawOp.Result;
@@ -4105,6 +4196,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
     if (enumType.BackingType == MlirType.F64) return MaxonValueKind.Float;
     if (enumType.BackingType is MlirStringBackingType) return MaxonValueKind.Integer;
     if (enumType.BackingType is MlirCharBackingType) return MaxonValueKind.Integer;
+    if (enumType.BackingType is MlirStructBackingType) return MaxonValueKind.Integer;
     if (enumType.BackingType == MlirType.I64 || enumType.BackingType == null) return MaxonValueKind.Integer;
     throw new InvalidOperationException($"Unsupported enum backing type: {enumType.BackingType}");
   }
@@ -4143,7 +4235,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
         enumLitOp = new MaxonEnumLiteralOp(enumType.Name, enumCase.Name, (double)enumCase.RawValue!);
       } else if (enumType.BackingType == MlirType.I64) {
         enumLitOp = new MaxonEnumLiteralOp(enumType.Name, enumCase.Name, (long)enumCase.RawValue!);
-      } else if (enumType.BackingType is null or MlirStringBackingType or MlirCharBackingType) {
+      } else if (enumType.BackingType is null or MlirStringBackingType or MlirCharBackingType or MlirStructBackingType) {
         enumLitOp = new MaxonEnumLiteralOp(enumType.Name, enumCase.Name, (long)enumCase.Ordinal);
       } else {
         throw new InvalidOperationException($"Unsupported enum backing type: {enumType.BackingType}");
@@ -10525,9 +10617,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
               enumLitOp = new MaxonEnumLiteralOp(token.Value, memberName, (double)enumCase.RawValue!);
             } else if (enumType.BackingType == MlirType.I64) {
               enumLitOp = new MaxonEnumLiteralOp(token.Value, memberName, (long)enumCase.RawValue!);
-            } else if (enumType.BackingType is MlirStringBackingType or MlirCharBackingType) {
-              enumLitOp = new MaxonEnumLiteralOp(token.Value, memberName, (long)enumCase.Ordinal);
-            } else if (enumType.BackingType == null) {
+            } else if (enumType.BackingType is null or MlirStringBackingType or MlirCharBackingType or MlirStructBackingType) {
               enumLitOp = new MaxonEnumLiteralOp(token.Value, memberName, (long)enumCase.Ordinal);
             } else {
               throw new InvalidOperationException($"Unsupported enum backing type: {enumType.BackingType}");
@@ -10554,7 +10644,8 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
           }
 
           // fromRawValue cannot populate associated values, so block it for enums with payloads
-          if (memberName == "fromRawValue" && enumType.HasAssociatedValues)
+          // Also block fromRawValue for struct-backed enums (no meaningful raw value conversion)
+          if (memberName == "fromRawValue" && (enumType.HasAssociatedValues || enumType.BackingType is MlirStructBackingType))
             throw new CompileError(ErrorCode.SemanticEnumUnknownCase,
               $"unknown enum case: 'fromRawValue'", token.Line, token.Column);
           if (memberName is "fromRawValue" or "fromName")
@@ -10788,6 +10879,13 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
         // .rawValue access
         if (fieldName == "rawValue") {
           var enumVal = ResolveExprValue(result);
+          if (enumType.BackingType is MlirStructBackingType sbt) {
+            var structRawOp = new MaxonEnumStructRawValueOp(enumVal, userTypeName, sbt.StructTypeName);
+            _currentBlock!.AddOp(structRawOp);
+            EmitLiteralTempAssign(structRawOp.Result);
+            result = new ExprResult.Direct(structRawOp.Result);
+            continue;
+          }
           if (enumType.BackingType is MlirStringBackingType) {
             var stringRawOp = new MaxonEnumStringRawValueOp(enumVal, userTypeName, isChar: false);
             _currentBlock!.AddOp(stringRawOp);
@@ -11210,7 +11308,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
         enumLitOp = new MaxonEnumLiteralOp(ec.EnumTypeName, ec.CaseName, (double)enumCase.RawValue!);
       } else if (enumType.BackingType == MlirType.I64) {
         enumLitOp = new MaxonEnumLiteralOp(ec.EnumTypeName, ec.CaseName, (long)enumCase.RawValue!);
-      } else if (enumType.BackingType == null || enumType.BackingType is MlirStringBackingType or MlirCharBackingType) {
+      } else if (enumType.BackingType == null || enumType.BackingType is MlirStringBackingType or MlirCharBackingType or MlirStructBackingType) {
         enumLitOp = new MaxonEnumLiteralOp(ec.EnumTypeName, ec.CaseName, (long)enumCase.Ordinal);
       } else {
         throw new InvalidOperationException($"Unsupported enum backing type for constant: {enumType.BackingType}");
@@ -12459,6 +12557,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
     if (value is not MaxonEnum me) return false;
     if (!_typeRegistry.TryGetValue(me.TypeName, out var type)) return false;
     if (type is not MlirEnumType constantsType || constantsType.HasAssociatedValues) return false;
+    if (constantsType.BackingType is MlirStructBackingType) return false;
     if (constantsType.BackingType is MlirStringBackingType or MlirCharBackingType) {
       backingKind = MaxonValueKind.Struct;
       raw = EmitEnumRawValueExtraction(_currentBlock!, value, constantsType, me.TypeName, MaxonValueKind.Integer);

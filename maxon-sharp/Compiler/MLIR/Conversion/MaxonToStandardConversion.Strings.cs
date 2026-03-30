@@ -701,6 +701,12 @@ public static partial class MaxonToStandardConversion {
 			return (r.Buffer, r.Length, null);
 		}
 
+		if (enumType.BackingType is MlirStructBackingType) {
+			// Struct-backed enums interpolate as their case name
+			var r = EmitEnumCaseNameToString(enumType, (StdI64)stdValue, block, result);
+			return (r.Buffer, r.Length, null);
+		}
+
 		if (backingMlirType == MlirType.F64) {
 			return EmitF64ToString((StdF64)stdValue, block, varTypes);
 		}

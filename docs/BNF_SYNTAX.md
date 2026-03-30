@@ -245,10 +245,13 @@ backing_type  = 'int' | 'float' | 'String'
 enum_case     = IDENTIFIER                                          (* simple case *)
               | IDENTIFIER '=' raw_value                            (* raw-value case *)
               | IDENTIFIER '(' assoc_fields ')'                     (* associated-value case *)
+              | IDENTIFIER '(' assoc_fields ')' '=' raw_value       (* associated-value with raw value *)
 
 raw_value     = [ '-' ] INTEGER
               | [ '-' ] FLOAT
               | STRING
+              | CHARACTER
+              | struct_literal                                      (* struct-backed: TypeName{field: value, ...} *)
               | CHARACTER
 
 assoc_fields  = assoc_field { ',' assoc_field }

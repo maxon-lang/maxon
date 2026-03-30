@@ -781,6 +781,17 @@ public class MaxonEnumStringRawValueOp(MaxonValue enumValue, string enumTypeName
   public override IReadOnlyList<string> PrintableOperands => [EnumValue.ToString()];
 }
 
+// Accesses .rawValue on a struct-backed enum, returning the backing struct type
+public class MaxonEnumStructRawValueOp(MaxonValue enumValue, string enumTypeName, string structTypeName) : MaxonOp {
+  public override string Mnemonic => $"maxon.enum_struct_rawvalue @{EnumTypeName}";
+  public MaxonValue EnumValue { get; } = enumValue;
+  public string EnumTypeName { get; } = enumTypeName;
+  public string StructTypeName { get; } = structTypeName;
+  public MaxonStruct Result { get; } = new MaxonStruct(MlirContext.Current.NextId(), structTypeName);
+  public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
+  public override IReadOnlyList<string> PrintableOperands => [EnumValue.ToString()];
+}
+
 // Accesses .name on an enum value, returning the case name as a String
 public class MaxonEnumNameOp(MaxonValue enumValue, string enumTypeName) : MaxonOp {
   public override string Mnemonic => $"maxon.enum_name @{EnumTypeName}";

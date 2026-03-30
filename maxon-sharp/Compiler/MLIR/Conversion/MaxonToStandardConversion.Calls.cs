@@ -7,6 +7,7 @@ public static partial class MaxonToStandardConversion {
   private static MlirType ResolveEnumBackingMlirType(MlirEnumType enumType) {
     if (enumType.BackingType == MlirType.F64) return MlirType.F64;
     if (enumType.BackingType is MlirStringBackingType or MlirCharBackingType) return MlirType.I64;
+    if (enumType.BackingType is MlirStructBackingType) return MlirType.I64;
     if (enumType.BackingType == MlirType.I64 || enumType.BackingType == null) return MlirType.I64;
     throw new InvalidOperationException($"Unsupported enum backing type: {enumType.BackingType}");
   }
