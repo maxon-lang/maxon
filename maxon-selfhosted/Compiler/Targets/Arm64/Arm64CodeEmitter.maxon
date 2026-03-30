@@ -84,6 +84,62 @@ function arm64EmitLdpPostIndex(code ByteArray, frameSize StackSize)
 	arm64EmitInsn(code, insn: insn)
 end 'arm64EmitLdpPostIndex'
 
+// STP Xt1, Xt2, [Xn, #offset] (signed offset, 64-bit GPR pair store)
+function arm64EmitStpOffset(code ByteArray, rt1 MachineWord, rt2 MachineWord, baseReg MachineWord, offset MachineWord)
+	let imm7 = (offset / 8) and 0x7F
+	let insn = 0xA9000000 or(imm7 shl 15) or(rt2 shl 10) or(baseReg shl 5) or rt1
+	arm64EmitInsn(code, insn: insn)
+end 'arm64EmitStpOffset'
+
+// LDP Xt1, Xt2, [Xn, #offset] (signed offset, 64-bit GPR pair load)
+function arm64EmitLdpOffset(code ByteArray, rt1 MachineWord, rt2 MachineWord, baseReg MachineWord, offset MachineWord)
+	let imm7 = (offset / 8) and 0x7F
+	let insn = 0xA9400000 or(imm7 shl 15) or(rt2 shl 10) or(baseReg shl 5) or rt1
+	arm64EmitInsn(code, insn: insn)
+end 'arm64EmitLdpOffset'
+
+// STP Dt1, Dt2, [Xn, #offset] (signed offset, 64-bit FP pair store)
+function arm64EmitFpStpOffset(code ByteArray, rt1 MachineWord, rt2 MachineWord, baseReg MachineWord, offset MachineWord)
+	let imm7 = (offset / 8) and 0x7F
+	let insn = 0x6D000000 or(imm7 shl 15) or(rt2 shl 10) or(baseReg shl 5) or rt1
+	arm64EmitInsn(code, insn: insn)
+end 'arm64EmitFpStpOffset'
+
+// LDP Dt1, Dt2, [Xn, #offset] (signed offset, 64-bit FP pair load)
+function arm64EmitFpLdpOffset(code ByteArray, rt1 MachineWord, rt2 MachineWord, baseReg MachineWord, offset MachineWord)
+	let imm7 = (offset / 8) and 0x7F
+	let insn = 0x6D400000 or(imm7 shl 15) or(rt2 shl 10) or(baseReg shl 5) or rt1
+	arm64EmitInsn(code, insn: insn)
+end 'arm64EmitFpLdpOffset'
+
+// STR Xt, [Xn, #offset] (single GPR store, unsigned offset)
+function arm64EmitStrRegOffset(code ByteArray, rt MachineWord, baseReg MachineWord, offset MachineWord)
+	let imm12 = (offset / 8) and 0xFFF
+	let insn = 0xF9000000 or(imm12 shl 10) or(baseReg shl 5) or rt
+	arm64EmitInsn(code, insn: insn)
+end 'arm64EmitStrRegOffset'
+
+// LDR Xt, [Xn, #offset] (single GPR load, unsigned offset)
+function arm64EmitLdrRegOffset(code ByteArray, rt MachineWord, baseReg MachineWord, offset MachineWord)
+	let imm12 = (offset / 8) and 0xFFF
+	let insn = 0xF9400000 or(imm12 shl 10) or(baseReg shl 5) or rt
+	arm64EmitInsn(code, insn: insn)
+end 'arm64EmitLdrRegOffset'
+
+// STR Dt, [Xn, #offset] (single FP store, unsigned offset)
+function arm64EmitFpStrRegOffset(code ByteArray, rt MachineWord, baseReg MachineWord, offset MachineWord)
+	let imm12 = (offset / 8) and 0xFFF
+	let insn = 0xFD000000 or(imm12 shl 10) or(baseReg shl 5) or rt
+	arm64EmitInsn(code, insn: insn)
+end 'arm64EmitFpStrRegOffset'
+
+// LDR Dt, [Xn, #offset] (single FP load, unsigned offset)
+function arm64EmitFpLdrRegOffset(code ByteArray, rt MachineWord, baseReg MachineWord, offset MachineWord)
+	let imm12 = (offset / 8) and 0xFFF
+	let insn = 0xFD400000 or(imm12 shl 10) or(baseReg shl 5) or rt
+	arm64EmitInsn(code, insn: insn)
+end 'arm64EmitFpLdrRegOffset'
+
 // RET (return via X30)
 function arm64EmitRet(code ByteArray)
 	code.append(b"\xc0\x03\x5f\xd6")
@@ -749,21 +805,138 @@ function arm64ComputeFrameSize(stackSize StackSize) returns StackSize
 	return aligned
 end 'arm64ComputeFrameSize'
 
-function arm64EmitPrologue(code ByteArray, stackSize StackSize)
+function arm64EmitPrologue(code ByteArray, stackSize StackSize, tracker Arm64StackTracker)
 	let frameSize = arm64ComputeFrameSize(stackSize)
 	arm64EmitStpPreIndex(code, frameSize: frameSize)
 	arm64EmitMovFpSp(code)
+	// Save callee-saved registers after frame setup.
+	// They are stored at the end of the frame, after the var+spill area.
+	let calleeSaveBase = arm64CalleeSaveBaseOffset(stackSize, tracker: tracker)
+	arm64EmitCalleeSavedSaves(code, tracker: tracker, baseOffset: calleeSaveBase)
 end 'arm64EmitPrologue'
 
-function arm64EmitEpilogue(code ByteArray, stackSize StackSize)
+function arm64EmitEpilogue(code ByteArray, stackSize StackSize, tracker Arm64StackTracker)
 	let frameSize = arm64ComputeFrameSize(stackSize)
+	// Restore callee-saved registers before frame teardown.
+	let calleeSaveBase = arm64CalleeSaveBaseOffset(stackSize, tracker: tracker)
+	arm64EmitCalleeSavedRestores(code, tracker: tracker, baseOffset: calleeSaveBase)
 	arm64EmitLdpPostIndex(code, frameSize: frameSize)
 	arm64EmitRet(code)
 end 'arm64EmitEpilogue'
 
-// Mutable tracker for the current function's stack size
+// Compute the byte offset from x29 where callee-saved registers are stored.
+// Layout: [x29/x30 (16 bytes)] [var+spill area] [callee-save GPRs] [callee-save FPs]
+function arm64CalleeSaveBaseOffset(stackSize StackSize, tracker Arm64StackTracker) returns StackSize
+	let gprCount = tracker.calleeSavedGprs.count()
+	let fpCount = tracker.calleeSavedFps.count()
+	let gprPairs = (gprCount + 1) / 2
+	let fpPairs = (fpCount + 1) / 2
+	let calleeSaveArea = (gprPairs + fpPairs) * 16
+	// The callee-save area sits at the end of the stack frame.
+	// stackSize includes the callee-save area, so the base is at:
+	return 16 + stackSize - calleeSaveArea
+end 'arm64CalleeSaveBaseOffset'
+
+// Emit save instructions for callee-saved GPRs and FPs.
+// Uses STP pairs when offset fits in signed imm7 range (<=504), otherwise individual STR.
+function arm64EmitCalleeSavedSaves(code ByteArray, tracker Arm64StackTracker, baseOffset StackSize)
+	var offset = baseOffset
+	let gprCount = tracker.calleeSavedGprs.count()
+	var i = 0
+	while i + 1 < gprCount 'gprPairs'
+		let r1 = try tracker.calleeSavedGprs.get(i) otherwise 0
+		let r2 = try tracker.calleeSavedGprs.get(i + 1) otherwise 0
+		if offset <= 504 'useStp'
+			arm64EmitStpOffset(code, rt1: r1, rt2: r2, baseReg: 29, offset: offset)
+		end 'useStp' else 'useStr'
+			arm64EmitStrRegOffset(code, rt: r1, baseReg: 29, offset: offset)
+			arm64EmitStrRegOffset(code, rt: r2, baseReg: 29, offset: offset + 8)
+		end 'useStr'
+		offset = offset + 16
+		i = i + 2
+	end 'gprPairs'
+	if i < gprCount 'oddGpr'
+		let r1 = try tracker.calleeSavedGprs.get(i) otherwise 0
+		arm64EmitStrRegOffset(code, rt: r1, baseReg: 29, offset: offset)
+		offset = offset + 8
+	end 'oddGpr'
+	// Align to 16 after GPRs for FP pair alignment
+	if gprCount mod 2 != 0 'alignAfterOddGpr'
+		offset = offset + 8
+	end 'alignAfterOddGpr'
+
+	let fpCount = tracker.calleeSavedFps.count()
+	var j = 0
+	while j + 1 < fpCount 'fpPairs'
+		let r1 = try tracker.calleeSavedFps.get(j) otherwise 0
+		let r2 = try tracker.calleeSavedFps.get(j + 1) otherwise 0
+		if offset <= 504 'useStp'
+			arm64EmitFpStpOffset(code, rt1: r1, rt2: r2, baseReg: 29, offset: offset)
+		end 'useStp' else 'useStr'
+			arm64EmitFpStrRegOffset(code, rt: r1, baseReg: 29, offset: offset)
+			arm64EmitFpStrRegOffset(code, rt: r2, baseReg: 29, offset: offset + 8)
+		end 'useStr'
+		offset = offset + 16
+		j = j + 2
+	end 'fpPairs'
+	if j < fpCount 'oddFp'
+		let r1 = try tracker.calleeSavedFps.get(j) otherwise 0
+		arm64EmitFpStrRegOffset(code, rt: r1, baseReg: 29, offset: offset)
+	end 'oddFp'
+end 'arm64EmitCalleeSavedSaves'
+
+// Emit restore instructions for callee-saved GPRs and FPs.
+function arm64EmitCalleeSavedRestores(code ByteArray, tracker Arm64StackTracker, baseOffset StackSize)
+	var offset = baseOffset
+	let gprCount = tracker.calleeSavedGprs.count()
+	var i = 0
+	while i + 1 < gprCount 'gprPairs'
+		let r1 = try tracker.calleeSavedGprs.get(i) otherwise 0
+		let r2 = try tracker.calleeSavedGprs.get(i + 1) otherwise 0
+		if offset <= 504 'useLdp'
+			arm64EmitLdpOffset(code, rt1: r1, rt2: r2, baseReg: 29, offset: offset)
+		end 'useLdp' else 'useLdr'
+			arm64EmitLdrRegOffset(code, rt: r1, baseReg: 29, offset: offset)
+			arm64EmitLdrRegOffset(code, rt: r2, baseReg: 29, offset: offset + 8)
+		end 'useLdr'
+		offset = offset + 16
+		i = i + 2
+	end 'gprPairs'
+	if i < gprCount 'oddGpr'
+		let r1 = try tracker.calleeSavedGprs.get(i) otherwise 0
+		arm64EmitLdrRegOffset(code, rt: r1, baseReg: 29, offset: offset)
+		offset = offset + 8
+	end 'oddGpr'
+	// Align to 16 after GPRs for FP pair alignment
+	if gprCount mod 2 != 0 'alignAfterOddGpr'
+		offset = offset + 8
+	end 'alignAfterOddGpr'
+
+	let fpCount = tracker.calleeSavedFps.count()
+	var j = 0
+	while j + 1 < fpCount 'fpPairs'
+		let r1 = try tracker.calleeSavedFps.get(j) otherwise 0
+		let r2 = try tracker.calleeSavedFps.get(j + 1) otherwise 0
+		if offset <= 504 'useLdp'
+			arm64EmitFpLdpOffset(code, rt1: r1, rt2: r2, baseReg: 29, offset: offset)
+		end 'useLdp' else 'useLdr'
+			arm64EmitFpLdrRegOffset(code, rt: r1, baseReg: 29, offset: offset)
+			arm64EmitFpLdrRegOffset(code, rt: r2, baseReg: 29, offset: offset + 8)
+		end 'useLdr'
+		offset = offset + 16
+		j = j + 2
+	end 'fpPairs'
+	if j < fpCount 'oddFp'
+		let r1 = try tracker.calleeSavedFps.get(j) otherwise 0
+		arm64EmitFpLdrRegOffset(code, rt: r1, baseReg: 29, offset: offset)
+	end 'oddFp'
+end 'arm64EmitCalleeSavedRestores'
+
+// Mutable tracker for the current function's stack size and callee-saved registers
 type Arm64StackTracker
 	export var currentStackSize StackSize
+	export var calleeSavedGprs RegIntArray
+	export var calleeSavedFps RegIntArray
 end 'Arm64StackTracker'
 
 // --- Block jump handlers ---
@@ -801,7 +974,7 @@ export function emitArm64(module MlirModule, target Target, globalData GlobalDat
 	registerPanicStrings(globalData)
 
 	// Track the current function's stack size for epilogue emission
-	var stackTracker = Arm64StackTracker{currentStackSize: 0}
+	var stackTracker = Arm64StackTracker{currentStackSize: 0, calleeSavedGprs: RegIntArray{}, calleeSavedFps: RegIntArray{}}
 
 	// Emit all function bodies from MlirModule
 	// (runtime functions like mrt_start, mrt_write_stdout, mrt_i64_to_string are now
@@ -809,6 +982,10 @@ export function emitArm64(module MlirModule, target Target, globalData GlobalDat
 	for func in module.functions 'eachFunc'
 		// Record function label for call fixup resolution
 		arm64RecordLabel(labelNames, labelOffsets: labelOffsets, name: func.name, offset: code.count())
+
+		// Set callee-saved register lists for this function
+		stackTracker.calleeSavedGprs = func.calleeSavedGprs
+		stackTracker.calleeSavedFps = func.calleeSavedFps
 
 		for block in func.region.blocks 'eachBlock'
 			// Record block offset for jump fixup resolution
@@ -856,7 +1033,7 @@ end 'emitArm64Op'
 function emitArm64Instruction(op Arm64Op, code ByteArray, jumpFixups BlockIdFixupArray, callFixups Arm64CallFixupArray, adrFixups Arm64AdrFixupArray, stackTracker Arm64StackTracker, relocations RelocationArray, globalData GlobalDataTable)
 	match op 'emit'
 		prologue(stackSize) then emitArm64PrologueOp(code, stackSize: stackSize, tracker: stackTracker)
-		epilogue then arm64EmitEpilogue(code, stackSize: stackTracker.currentStackSize)
+		epilogue then arm64EmitEpilogue(code, stackSize: stackTracker.currentStackSize, tracker: stackTracker)
 		movImm(dest, value) then arm64EmitMovImm(code, rd: resolveArm64Gpr(dest).rawValue, value: value)
 		strToSlot(slotIndex, src) then arm64EmitStrSlot(code, rt: resolveArm64Gpr(src).rawValue, slotIndex: slotIndex)
 		ldrFromSlot(dest, slotIndex) then arm64EmitLdrSlot(code, rt: resolveArm64Gpr(dest).rawValue, slotIndex: slotIndex)
@@ -912,7 +1089,7 @@ end 'emitArm64Instruction'
 
 function emitArm64PrologueOp(code ByteArray, stackSize StackSize, tracker Arm64StackTracker)
 	tracker.currentStackSize = stackSize
-	arm64EmitPrologue(code, stackSize: stackSize)
+	arm64EmitPrologue(code, stackSize: stackSize, tracker: tracker)
 end 'emitArm64PrologueOp'
 
 // --- Inline print operations (legacy path, uses callFixups) ---

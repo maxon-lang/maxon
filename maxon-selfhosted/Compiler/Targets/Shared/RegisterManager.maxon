@@ -1,5 +1,5 @@
 // Cross-platform register allocator.
-// Greedy linear-scan with LRU eviction, matching the C# RegisterManagerBase.
+// Greedy linear-scan with LRU eviction
 // Works with integer register ordinals (0..N) — each target maps to/from its register enum.
 // Emits target-specific spill/reload/mov ops via RegTarget dispatch.
 
@@ -1586,12 +1586,13 @@ end 'createX64CallConvFps'
 // --- ARM64 register pool configuration ---
 
 export function createArm64GprPool() returns RegIntArray
-	// x0=0, x1=1, ..., x15=15 (matching C# ARM64RegisterManager)
-	return [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
+	// x0-x15 (caller-saved) + x19-x28 (callee-saved)
+	// x16/x17 = IP0/IP1 (linker scratch), x18 = platform reserved, x29 = FP, x30 = LR, x31 = SP
+	return [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28]
 end 'createArm64GprPool'
 
 export function createArm64CallerSavedGprs() returns RegIntArray
-	// x0-x15 are caller-saved
+	// x0-x15 are caller-saved (x19-x28 are callee-saved, not listed here)
 	return [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15]
 end 'createArm64CallerSavedGprs'
 
@@ -1601,13 +1602,13 @@ export function createArm64CallConvGprs() returns RegIntArray
 end 'createArm64CallConvGprs'
 
 export function createArm64FpPool() returns RegIntArray
-	// D0-D7 for allocation (D8-D15 are callee-saved, not used)
-	return [0, 1, 2, 3, 4, 5, 6, 7]
+	// d0-d7 (caller-saved) + d8-d15 (callee-saved) + d16-d31 (caller-saved)
+	return [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31]
 end 'createArm64FpPool'
 
 export function createArm64CallerSavedFps() returns RegIntArray
-	// D0-D7 are caller-saved
-	return [0, 1, 2, 3, 4, 5, 6, 7]
+	// d0-d7 and d16-d31 are caller-saved (d8-d15 are callee-saved, not listed here)
+	return [0, 1, 2, 3, 4, 5, 6, 7, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31]
 end 'createArm64CallerSavedFps'
 
 export function createArm64CallConvFps() returns RegIntArray
@@ -2856,22 +2857,22 @@ function isDivergingBlock(block MlirBlock) returns bool
 		match op 'checkCall'
 			x64(x64Op) then match x64Op 'checkX64Call'
 				callDirect(target) then if target == b"mrt_panic" 'isPanic'
-					return true
-				end 'isPanic'
-				prologue to loadRegRbpOffset then break 'checkX64Call'
-				syscall to repStosq then break 'checkX64Call'
-			end 'checkX64Call'
-			arm64(a64Op) then match a64Op 'checkArm64Call'
-				branchLink(target) then if target == b"mrt_panic" 'isPanic2'
-					return true
-				end 'isPanic2'
-				prologue to branch then break 'checkArm64Call'
-				printLiteral to nullSafeLoad then break 'checkArm64Call'
-			end 'checkArm64Call'
-			maxon to mir then break 'checkCall'
-		end 'checkCall'
-	end 'checkOps'
-	return false
+				return true
+			end 'isPanic'
+			prologue to loadRegRbpOffset then break 'checkX64Call'
+			syscall to repStosq then break 'checkX64Call'
+		end 'checkX64Call'
+		arm64(a64Op) then match a64Op 'checkArm64Call'
+			branchLink(target) then if target == b"mrt_panic" 'isPanic2'
+			return true
+		end 'isPanic2'
+		prologue to branch then break 'checkArm64Call'
+		printLiteral to nullSafeLoad then break 'checkArm64Call'
+	end 'checkArm64Call'
+	maxon to mir then break 'checkCall'
+end 'checkCall'
+end 'checkOps'
+return false
 end 'isDivergingBlock'
 
 function allocateRegistersForFunc(srcFunc MlirFunction, target Target) returns MlirFunction
@@ -3120,7 +3121,6 @@ end 'createX64RegState'
 function createArm64RegState() returns RegState
 	return createRegState(16, gprPool: createArm64GprPool(), callerSavedGprs: createArm64CallerSavedGprs(), target: RegTarget.arm64, callConvGprs: createArm64CallConvGprs(), returnGprOrd: arm64RegToOrdinal(Arm64Register.x0), errorFlagOrd: arm64RegToOrdinal(Arm64Register.x1), indirectCallScratchOrd: arm64RegToOrdinal(Arm64Register.x16), gprCycleBreakOrd: arm64RegToOrdinal(Arm64Register.x16), hasXchg: false, fpPool: createArm64FpPool(), callerSavedFps: createArm64CallerSavedFps(), callConvFps: createArm64CallConvFps(), returnFpOrd: 0, fpCycleBreakOrd: 31)
 end 'createArm64RegState'
-
 
 // ============================================================
 // X64 register allocation helpers

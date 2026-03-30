@@ -19,6 +19,10 @@ export type MlirFunction
 	export var spillSize StackSize
 	// Source line of the first return statement (for panic messages)
 	export var returnLine LineNumber
+	// Callee-saved registers used by this function (set by PrologueEpiloguePass).
+	// The code emitter saves these in the prologue and restores them in the epilogue.
+	export var calleeSavedGprs RegIntArray
+	export var calleeSavedFps RegIntArray
 end 'MlirFunction'
 
 export typealias MlirFunctionArray = Array with MlirFunction
@@ -32,7 +36,9 @@ export function createMlirFunction(name ByteArray, returnType ByteArray, paramCo
 		region: createMlirRegion(),
 		varSlotCount: 0,
 		spillSize: 0,
-		returnLine: returnLine
+		returnLine: returnLine,
+		calleeSavedGprs: RegIntArray{},
+		calleeSavedFps: RegIntArray{}
 	}
 end 'createMlirFunction'
 
@@ -46,6 +52,8 @@ export function cloneFunctionShell(src MlirFunction) returns MlirFunction
 		region: createMlirRegion(),
 		varSlotCount: src.varSlotCount,
 		spillSize: src.spillSize,
-		returnLine: src.returnLine
+		returnLine: src.returnLine,
+		calleeSavedGprs: src.calleeSavedGprs,
+		calleeSavedFps: src.calleeSavedFps
 	}
 end 'cloneFunctionShell'
