@@ -2945,7 +2945,7 @@ module {
     maxon.assign %1 {var = x} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
     %2 = maxon.call @register-allocator.getForty
     maxon.assign %2 {var = y} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
-    %3 = maxon.binop %1, %2 {op = add}
+    %3 = maxon.binop %1, %2 {op = add} {optimalType = i64}
     %4 = maxon.literal {value = 0 : i64}
     %5 = maxon.binop %3, %4 {op = lt}
     %6 = maxon.literal {value = 4294967295 : i64}
@@ -3162,9 +3162,9 @@ module {
     maxon.assign %4 {var = c} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
     %5 = maxon.call @register-allocator.getTwo
     maxon.assign %5 {var = d} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
-    %6 = maxon.binop %2, %3 {op = add}
+    %6 = maxon.binop %2, %3 {op = add} {optimalType = i64}
     %7 = maxon.binop %6, %4 {op = add}
-    %8 = maxon.binop %7, %5 {op = add}
+    %8 = maxon.binop %7, %5 {op = add} {optimalType = i64}
     %9 = maxon.literal {value = 0 : i64}
     %10 = maxon.binop %8, %9 {op = lt}
     %11 = maxon.literal {value = 4294967295 : i64}
@@ -3419,7 +3419,7 @@ module {
     maxon.assign %1 {var = a} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
     %2 = maxon.call @register-allocator.compute
     maxon.assign %2 {var = b} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
-    %3 = maxon.binop %1, %2 {op = add}
+    %3 = maxon.binop %1, %2 {op = add} {optimalType = i64}
     %4 = maxon.literal {value = 256 : i64}
     %5 = maxon.binop %3, %4 {op = mod}
     %6 = maxon.literal {value = 0 : i64}
@@ -9730,7 +9730,7 @@ module {
     %11 = maxon.literal {value = 4 : i64}
     %12 = maxon.call @register-allocator.useRegs %8, %9, %10, %11
     maxon.assign %12 {var = result} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
-    %13 = maxon.binop %7, %12 {op = add}
+    %13 = maxon.binop %7, %12 {op = add} {optimalType = i64}
     %14 = maxon.literal {value = 0 : i64}
     %15 = maxon.binop %13, %14 {op = lt}
     %16 = maxon.literal {value = 4294967295 : i64}
@@ -9978,7 +9978,7 @@ module {
     %2 = maxon.call @register-allocator.getInt
     maxon.assign %2 {var = x} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
     %3 = maxon.trunc %1
-    %4 = maxon.binop %3, %2 {op = add}
+    %4 = maxon.binop %3, %2 {op = add} {optimalType = i64}
     %5 = maxon.literal {value = 0 : i64}
     %6 = maxon.binop %4, %5 {op = lt}
     %7 = maxon.literal {value = 4294967295 : i64}
@@ -10387,7 +10387,7 @@ module {
     %5 = maxon.call @register-allocator.sub %4, %3
     maxon.assign %5 {var = result} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
     %6 = maxon.literal {value = 45 : i64}
-    %7 = maxon.binop %5, %6 {op = add}
+    %7 = maxon.binop %5, %6 {op = add} {optimalType = i64}
     %8 = maxon.literal {value = 0 : i64}
     %9 = maxon.binop %7, %8 {op = lt}
     %10 = maxon.literal {value = 4294967295 : i64}
@@ -14681,7 +14681,7 @@ module {
     %35 = maxon.var_ref {var = a} {type = i64}
     %36 = maxon.var_ref {var = b} {type = i64}
     %37 = maxon.binop %35, %36 {op = add}
-    %38 = maxon.binop %37, %34 {op = add}
+    %38 = maxon.binop %37, %34 {op = add} {optimalType = i64}
     %39 = maxon.literal {value = 0 : i64}
     %40 = maxon.binop %38, %39 {op = lt}
     %41 = maxon.literal {value = 4294967295 : i64}
@@ -15225,7 +15225,7 @@ module {
     %35 = maxon.var_ref {var = __try_result_4} {type = i64}
     maxon.assign %35 {var = b} {kind = i64} {decl = 1 : i1}
     %36 = maxon.literal {value = 256 : i64}
-    %37 = maxon.binop %35, %36 {op = mod}
+    %37 = maxon.binop %35, %36 {op = mod} {optimalType = i64}
     %38 = maxon.var_ref {var = a} {type = i64}
     %39 = maxon.binop %38, %37 {op = add}
     %40 = maxon.literal {value = 0 : i64}
