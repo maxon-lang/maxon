@@ -12165,7 +12165,20 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
         "Cannot infer element type: no element assignments found in array literal",
         Current().Line, Current().Column);
 
-    return KindToMlirType(elemAssign.ValueKind) ?? throw new CompileError(ErrorCode.SemanticTypeMismatch,
+    var primitiveType = KindToMlirType(elemAssign.ValueKind);
+    if (primitiveType != null) return primitiveType;
+
+    // For struct/enum types, extract the type name from the value
+    string? typeName = elemAssign.Value switch {
+      MaxonStruct s => s.TypeName,
+      MaxonEnum e => e.TypeName,
+      _ => null
+    };
+
+    if (typeName != null && _typeRegistry.TryGetValue(typeName, out var resolvedType))
+      return resolvedType;
+
+    throw new CompileError(ErrorCode.SemanticTypeMismatch,
       $"Cannot infer element type from value kind '{elemAssign.ValueKind}'",
       Current().Line, Current().Column);
   }

@@ -20,6 +20,9 @@ public class DidChangeWatchedFilesHandler(LspServer server, ILanguageServerFacad
           Diagnostics = new Container<Diagnostic>()
         });
         _server.RemoveDocument(change.Uri);
+      } else if (change.Type == FileChangeType.Changed || change.Type == FileChangeType.Created) {
+        // Reload file from disk if it's not currently open in the editor
+        _server.ReloadFromDiskIfNotOpen(change.Uri);
       }
     }
     return Unit.Task;
@@ -27,5 +30,12 @@ public class DidChangeWatchedFilesHandler(LspServer server, ILanguageServerFacad
 
   public DidChangeWatchedFilesRegistrationOptions GetRegistrationOptions(
     DidChangeWatchedFilesCapability capability, ClientCapabilities clientCapabilities
-  ) => new();
+  ) => new() {
+    Watchers = new Container<OmniSharp.Extensions.LanguageServer.Protocol.Models.FileSystemWatcher>(
+      new OmniSharp.Extensions.LanguageServer.Protocol.Models.FileSystemWatcher {
+        GlobPattern = new GlobPattern("**/*.maxon"),
+        Kind = WatchKind.Create | WatchKind.Change | WatchKind.Delete
+      }
+    )
+  };
 }

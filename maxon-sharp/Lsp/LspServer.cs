@@ -66,6 +66,23 @@ public class LspServer {
     project.NotifyFileChanged(filePath, content);
   }
 
+  public void ReloadFromDiskIfNotOpen(DocumentUri uri) {
+    if (!IsMaxonFile(uri)) return;
+    // If the file is open in the editor, the editor's content takes precedence
+    if (_documents.ContainsKey(uri)) return;
+    var filePath = uri.GetFileSystemPath()!;
+    if (Path.GetFileName(filePath).Equals("build.maxon", StringComparison.OrdinalIgnoreCase))
+      return;
+    try {
+      var content = File.ReadAllText(filePath);
+      var forceSingleFile = filePath.EndsWith(".test", StringComparison.OrdinalIgnoreCase);
+      var project = ProjectManager.GetOrCreateProject(filePath, forceSingleFile);
+      project.NotifyFileChanged(filePath, content);
+    } catch {
+      // File may have been deleted between notification and read
+    }
+  }
+
   public void RemoveDocument(DocumentUri uri) {
     if (!IsMaxonFile(uri)) return;
 
