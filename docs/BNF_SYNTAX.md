@@ -48,7 +48,7 @@ KEYWORD       = 'and' | 'as' | 'async' | 'await' | 'bool' | 'break' | 'byte' | '
               | 'implements' | 'in' | 'int' | 'interface' | 'is' | 'let'
               | 'match' | 'not' | 'of' | 'or' | 'otherwise' | 'panic'
               | 'return' | 'returns' | 'self' | 'Self' | 'shl' | 'shr'
-              | 'skip' | 'static' | 'then' | 'throw' | 'throws' | 'to'
+              | 'sizeof' | 'skip' | 'static' | 'then' | 'throw' | 'throws' | 'to'
               | 'true' | 'try' | 'type' | 'typealias' | 'upto'
               | 'uses' | 'var' | 'where' | 'while' | 'with' | 'xor'
 ```
@@ -659,6 +659,7 @@ primary       = INTEGER
               | async_expr
               | await_expr
               | type_bound_expr
+              | sizeof_expr
               | IDENTIFIER
 
 array_literal = '[' [ expression { ',' expression } ] ']'
@@ -684,6 +685,8 @@ static_access = IDENTIFIER '.' IDENTIFIER [ '(' [ arg_list ] ')' ]
 
 type_bound_expr
               = sized_type_name '.' ( 'min' | 'max' )         (* e.g., u64.max, i32.min *)
+
+sizeof_expr   = 'sizeof' '(' type_ref ')'                     (* compile-time size in bytes *)
 
 from_expr     = IDENTIFIER 'from' '[' [ expression { ',' expression } ] ']'
 

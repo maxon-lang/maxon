@@ -80,6 +80,13 @@ round(x float) int              // Round to nearest
 trunc(x float) int              // Truncate toward zero
 ```
 
+**Compile-Time Functions**
+```maxon
+sizeof(TypeName) int            // Size of a type in bytes (compile-time constant)
+```
+
+`sizeof` accepts a type name and returns its storage size in bytes as a compile-time integer constant. No runtime cost. Primitive sizes: `int` (8), `float` (8), `bool` (1), `byte` (1). Struct types use 8 bytes per field (minimum 8). Enum types use 8 bytes. Ranged type aliases use the optimal storage width for their range.
+
 **Concurrency Functions**
 ```maxon
 sleep(milliseconds int)         // Suspend current green thread for given duration

@@ -4831,6 +4831,22 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
     }
   }
 
+  private MlirType ParseSizeofTypeArg() {
+    if (Check(TokenType.Int)) { Advance(); return MlirType.I64; }
+    if (Check(TokenType.Float)) { Advance(); return MlirType.F64; }
+    if (Check(TokenType.Bool)) { Advance(); return MlirType.I1; }
+    if (Check(TokenType.Byte)) { Advance(); return MlirType.I8; }
+    if (CheckIdentifierLike()) {
+      var nameToken = Advance();
+      if (_typeRegistry.TryGetValue(nameToken.Value, out var type))
+        return type;
+      throw new CompileError(ErrorCode.ParserExpectedType,
+        $"Unknown type in sizeof: '{nameToken.Value}'", nameToken.Line, nameToken.Column);
+    }
+    throw new CompileError(ErrorCode.ParserExpectedType,
+      "Expected type name in sizeof(...)", Current().Line, Current().Column);
+  }
+
   private MlirType ParseTypeRef() {
     // Parenthesized types: function type or tuple type
     if (Check(TokenType.LeftParen)) {
@@ -10270,6 +10286,16 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
 
     if (Check(TokenType.Identifier)) {
       var token = Advance();
+
+      // sizeof(TypeName) — compile-time type size query
+      if (token.Value == "sizeof" && Check(TokenType.LeftParen)) {
+        Advance(); // consume '('
+        var sizeType = ParseSizeofTypeArg();
+        Expect(TokenType.RightParen);
+        var litOp = new MaxonLiteralOp((long)sizeType.SizeInBytes);
+        _currentBlock!.AddOp(litOp);
+        return new ExprResult.Direct(litOp.Result);
+      }
 
       // Check for ranged primitive construction: TypeName{value}
       if (_typeRegistry.TryGetValue(token.Value, out var regType) && regType is MlirRangedPrimitiveType rangedType && Check(TokenType.LeftBrace)) {

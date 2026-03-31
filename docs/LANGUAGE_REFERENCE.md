@@ -3200,6 +3200,13 @@ Math.log10(x float) float       // Base-10 logarithm
 Math.pow(base float, exponent float) float // Power
 ```
 
+**Compile-Time Functions**
+```maxon
+sizeof(TypeName) int            // Size of a type in bytes (compile-time constant)
+```
+
+`sizeof` accepts a type name (not a variable) and returns its storage size in bytes as a compile-time integer constant. Primitive sizes: `int` (8), `float` (8), `bool` (1), `byte` (1). Struct types use 8 bytes per field (minimum 8). Enum types use 8 bytes. Ranged type aliases use the optimal storage width for their range.
+
 **Formatting Functions**
 ```maxon
 format_int(value int) String    // Format int as string
