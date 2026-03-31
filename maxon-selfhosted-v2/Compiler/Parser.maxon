@@ -1,0 +1,246 @@
+// Recursive descent parser.
+// Consumes tokens and emits Maxon ops into an MlirModule with block-based CFG.
+
+typealias TokenIndex = int(0 to u64.max)
+
+// --- Block-based emission helpers ---
+
+function emitOp(block MlirBlock, op MlirOp)
+	block.ops.push(op)
+end 'emitOp'
+
+function finalizeBlock(block MlirBlock, terminator MlirOp)
+	block.terminator = terminator
+	block.hasTerminator = true
+end 'finalizeBlock'
+
+// --- Pure number parsing ---
+
+function parseInt(s ByteArray) returns ParsedInt
+	var result = 0
+	for i in 0 upto s.count() 'digits'
+		let b = try s.get(i) otherwise 0
+		if b >= 48 and b <= 57 'isDigit'
+			result = result * 10 + (b - 48)
+		end 'isDigit'
+	end 'digits'
+	return result
+end 'parseInt'
+
+// --- Token helper ---
+
+function tokenAt(tokens TokenArray, pos TokenIndex) returns Token
+	return try tokens.get(pos) otherwise Token{kind: TokenKind.eof, value: ByteArray{}, line: 0, column: 0}
+end 'tokenAt'
+
+// --- Parser type ---
+
+type Parser
+	var tokens TokenArray
+	var pos TokenIndex
+	var nextId ValueId
+
+	// --- Token navigation ---
+
+	function peek() returns Token
+		return tokenAt(tokens, pos: pos)
+	end 'peek'
+
+	function advance()
+		pos = pos + 1
+	end 'advance'
+
+	function consume() returns Token
+		let token = tokenAt(tokens, pos: pos)
+		pos = pos + 1
+		return token
+	end 'consume'
+
+	function at(kind TokenKind) returns bool
+		return peek().kind == kind
+	end 'at'
+
+	function expect(kind TokenKind)
+		if at(kind) 'matched'
+			advance()
+			return
+		end 'matched'
+		let token = peek()
+		panic("Expected {kind.name} but got '{String.from(token.value)}'")
+	end 'expect'
+
+	function skipNewlines()
+		while pos < tokens.count() 'skip'
+			if at(TokenKind.newline) 'isNewline'
+				advance()
+			end 'isNewline' else 'done'
+				return
+			end 'done'
+		end 'skip'
+	end 'skipNewlines'
+
+	function skipEndAndLabel()
+		expect(TokenKind.end)
+		if at(TokenKind.stringLiteral) 'hasLabel'
+			advance()
+		end 'hasLabel'
+	end 'skipEndAndLabel'
+
+	// --- Value ID allocation ---
+
+	function nextValueId() returns ValueId
+		let id = nextId
+		nextId = nextId + 1
+		return id
+	end 'nextValueId'
+
+	// --- Emission helpers ---
+
+	function emitLiteral(block MlirBlock, value ParsedInt, isFloat bool) returns ValueId
+		let id = nextValueId()
+		emitOp(block, op: MlirOp.maxon(MaxonOp.literal(id, value, isFloat)))
+		return id
+	end 'emitLiteral'
+
+	function emitImplicitReturn(block MlirBlock)
+		let zeroId = emitLiteral(block, value: 0, isFloat: false)
+		finalizeBlock(block, terminator: MlirOp.maxon(MaxonOp.ret(zeroId)))
+	end 'emitImplicitReturn'
+
+	// --- Top-level parsing ---
+
+	export function parseModule() returns MlirModule
+		var module = createMlirModule()
+		skipNewlines()
+
+		while pos < tokens.count() 'parseLoop'
+			let token = peek()
+
+			if token.kind == TokenKind.eof 'isEof'
+				break
+			end 'isEof'
+
+			if token.kind == TokenKind.function 'isFunc'
+				parseFunction(module)
+			end 'isFunc' else 'skipOther'
+				advance()
+			end 'skipOther'
+
+			skipNewlines()
+		end 'parseLoop'
+
+		return module
+	end 'parseModule'
+
+	// --- Function parsing ---
+
+	function parseFunction(module MlirModule)
+		expect(TokenKind.function)
+
+		let nameToken = consume()
+		expect(TokenKind.leftParen)
+
+		// Parse parameters (count only — no types tracked yet)
+		var paramCount = 0
+		if not at(TokenKind.rightParen) 'hasParams'
+			while pos < tokens.count() 'paramLoop'
+				advance()  // param name
+				advance()  // param type
+				paramCount = paramCount + 1
+				if at(TokenKind.rightParen) 'endParams'
+					break
+				end 'endParams'
+			end 'paramLoop'
+		end 'hasParams'
+		expect(TokenKind.rightParen)
+
+		// Parse optional 'returns Type'
+		var returnTypeName = ByteArray{}
+		if at(TokenKind.returns) 'hasReturns'
+			expect(TokenKind.returns)
+			let typeToken = consume()
+			returnTypeName = typeToken.value
+		end 'hasReturns'
+
+		skipNewlines()
+
+		// Reset value IDs per function
+		nextId = 0
+
+		// Create function and entry block
+		var func = createMlirFunction(nameToken.value, returnType: returnTypeName, paramCount: paramCount)
+		var block = addBlock(func.region, label: b"entry")
+
+		// Parse function body
+		parseStatements(block)
+
+		// Implicit void return if body did not end with a return
+		if not block.hasTerminator 'needsImplicitRet'
+			emitImplicitReturn(block)
+		end 'needsImplicitRet'
+
+		module.functions.push(func)
+
+		// Skip 'end' and optional label string
+		skipEndAndLabel()
+	end 'parseFunction'
+
+	// --- Statement parsing ---
+
+	function parseStatements(block MlirBlock)
+		while pos < tokens.count() 'body'
+			let stmtToken = peek()
+			if stmtToken.kind == TokenKind.end 'isEnd'
+				break
+			end 'isEnd'
+
+			if stmtToken.kind == TokenKind.return 'isReturn'
+				parseReturnStatement(block)
+			end 'isReturn' else 'skipOther'
+				advance()
+			end 'skipOther'
+
+			skipNewlines()
+		end 'body'
+	end 'parseStatements'
+
+	function parseReturnStatement(block MlirBlock)
+		expect(TokenKind.return)
+
+		// Bare 'return' without expression (void return)
+		let nextTok = peek()
+		if nextTok.kind == TokenKind.newline or nextTok.kind == TokenKind.end or nextTok.kind == TokenKind.eof 'bareReturn'
+			emitImplicitReturn(block)
+			return
+		end 'bareReturn'
+
+		let resultId = parseExpression(block)
+		finalizeBlock(block, terminator: MlirOp.maxon(MaxonOp.ret(resultId)))
+	end 'parseReturnStatement'
+
+	// --- Expression parsing ---
+
+	function parseExpression(block MlirBlock) returns ValueId
+		return parsePrimary(block)
+	end 'parseExpression'
+
+	function parsePrimary(block MlirBlock) returns ValueId
+		let token = peek()
+
+		if token.kind == TokenKind.intLiteral 'isInt'
+			advance()
+			let value = parseInt(token.value)
+			return emitLiteral(block, value: value, isFloat: false)
+		end 'isInt'
+
+		panic("Unexpected token in expression: '{String.from(token.value)}'")
+		return 0
+	end 'parsePrimary'
+end 'Parser'
+
+// --- Public API ---
+
+export function parse(tokens TokenArray) returns MlirModule
+	var parser = Parser{tokens: tokens, pos: 0, nextId: 0}
+	return parser.parseModule()
+end 'parse'

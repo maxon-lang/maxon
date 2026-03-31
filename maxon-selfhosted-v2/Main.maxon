@@ -1,0 +1,25 @@
+// Self-hosted Maxon compiler v2 — entry point.
+// Reads a source file, lexes, parses, and prints the IR.
+
+function main() returns ExitCode
+	let allArgs = CommandLine.args()
+
+	let filePath = try allArgs.get(0) otherwise 'noArgs'
+		print("Usage: maxon-selfhosted-v2 <file.maxon>\n")
+		return 1
+	end 'noArgs'
+
+	let fp = try FilePath.from(filePath) otherwise panic("Invalid file path")
+
+	let source = try File.readBinary(fp) otherwise 'readErr'
+		print("Error: could not read file\n")
+		return 1
+	end 'readErr'
+
+	let tokens = tokenize(source)
+	let module = parse(tokens)
+	let ir = moduleToString(module)
+	print(ir)
+
+	return 0
+end 'main'
