@@ -60,6 +60,8 @@ public class LspServer {
     // build.maxon is a project metadata file, not a source file — don't compile it
     if (Path.GetFileName(filePath).Equals("build.maxon", StringComparison.OrdinalIgnoreCase))
       return;
+    if (Compiler.MaxonIgnore.IsIgnored(filePath))
+      return;
     // .test files are always single-file projects, never part of a multi-file build
     var forceSingleFile = filePath.EndsWith(".test", StringComparison.OrdinalIgnoreCase);
     var project = ProjectManager.GetOrCreateProject(filePath, forceSingleFile);
@@ -72,6 +74,8 @@ public class LspServer {
     if (_documents.ContainsKey(uri)) return;
     var filePath = uri.GetFileSystemPath()!;
     if (Path.GetFileName(filePath).Equals("build.maxon", StringComparison.OrdinalIgnoreCase))
+      return;
+    if (Compiler.MaxonIgnore.IsIgnored(filePath))
       return;
     try {
       var content = File.ReadAllText(filePath);

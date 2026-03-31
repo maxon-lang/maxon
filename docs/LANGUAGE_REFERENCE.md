@@ -3759,6 +3759,7 @@ end 'main'
 This automatically:
 - Sets output to `myapp.exe` in the project root
 - Discovers all `.maxon` files in the project directory (recursively)
+- Skips directories containing a `.maxonignore` flag file
 - Uses default compilation settings
 
 ### Custom Build Configuration

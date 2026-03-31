@@ -86,6 +86,10 @@ function loadSourceFiles(project Project, path FilePath) throws CompileError
 	if path.fileExists() 'isFile'
 		logTrace(LogCategory.compiler, message: () gives "Loading single file: {path}")
 
+		if isIgnoredPath(path) 'ignored'
+			return
+		end 'ignored'
+
 		let bytes = try File.readBinary(path) otherwise 'readErr'
 			throw CompileError.readError
 		end 'readErr'
@@ -93,6 +97,10 @@ function loadSourceFiles(project Project, path FilePath) throws CompileError
 		fileChanged(project, path: path, content: bytes)
 	end 'isFile' else if path.directoryExists() 'isDir'
 		logTrace(LogCategory.compiler, message: () gives "Loading directory: {path}")
+
+		if isIgnoredPath(path) 'ignored'
+			return
+		end 'ignored'
 
 		let dirEntries = try Directory.list(path) otherwise 'listErr'
 			throw CompileError.directoryNotFound
@@ -123,3 +131,14 @@ function loadSourceFiles(project Project, path FilePath) throws CompileError
 		throw CompileError.noSourceFiles
 	end 'noFiles'
 end 'loadSourceFiles'
+
+function isIgnoredPath(path FilePath) returns bool
+	var dir = path.parent()
+	while not dir.isEmpty() 'walk'
+		if dir.join(".maxonignore").fileExists() 'found'
+			return true
+		end 'found'
+		dir = dir.parent()
+	end 'walk'
+	return false
+end 'isIgnoredPath'

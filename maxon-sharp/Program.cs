@@ -235,7 +235,8 @@ class Program {
       files = [path];
     } else if (Directory.Exists(path)) {
       files = [.. Directory.GetFiles(path, "*.maxon", SearchOption.AllDirectories)
-        .Where(f => !Path.GetFileName(f).Equals("build.maxon", StringComparison.OrdinalIgnoreCase))];
+        .Where(f => !Path.GetFileName(f).Equals("build.maxon", StringComparison.OrdinalIgnoreCase))
+        .Where(f => !MaxonIgnore.IsIgnored(f))];
     } else {
       Console.Error.WriteLine($"fmt: path not found: {path}");
       return 1;
@@ -284,6 +285,8 @@ class Program {
 
     foreach (var file in Directory.GetFiles(directory, "*.maxon", SearchOption.AllDirectories)) {
       if (Path.GetFileName(file).Equals("build.maxon", StringComparison.OrdinalIgnoreCase))
+        continue;
+      if (MaxonIgnore.IsIgnored(file))
         continue;
       var content = ReadFileContentUntilSeparator(file);
       files.Add(new SourceFile(file, content));

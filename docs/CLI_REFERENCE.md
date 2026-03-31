@@ -165,6 +165,20 @@ myproject/
 
 All `.maxon` files in subdirectories are automatically included when running `maxon build`.
 
+### Ignoring Directories
+
+Place a `.maxonignore` file in any directory to exclude it and all its subdirectories from compilation, formatting, and LSP processing. The file is a flag — its contents are ignored.
+
+```
+myproject/
+├── main.maxon
+├── tests/
+│   ├── .maxonignore     # This directory is skipped
+│   └── test_data.maxon
+└── src/
+    └── app.maxon
+```
+
 ### Rules
 
 1. **One main function** - Exactly one file must contain a `main()` function

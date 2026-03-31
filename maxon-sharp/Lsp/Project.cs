@@ -75,6 +75,8 @@ public class Project(
       foreach (var file in files) {
         if (Path.GetFileName(file).Equals("build.maxon", StringComparison.OrdinalIgnoreCase))
           continue;
+        if (Compiler.MaxonIgnore.IsIgnored(file))
+          continue;
         var normalized = NormalizePath(file);
         // Don't overwrite files already provided by the editor
         if (!_fileContents.ContainsKey(normalized)) {
