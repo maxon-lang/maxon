@@ -1675,10 +1675,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
 
     ValidateInterfaceConformance(module, typeName, conformingInterfaces, conformanceTypeParams, typeNameToken);
 
-    // consume 'end'
-    if (Check(TokenType.End)) Advance();
-    // Skip end label
-    if (Check(TokenType.CharacterLiteral)) Advance();
+    ConsumeBlockEnd();
   }
 
   /// <summary>
@@ -2067,6 +2064,20 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
     return token;
   }
 
+  private void ConsumeBlockEnd() {
+    if (Check(TokenType.End)) Advance();
+    if (Check(TokenType.CharacterLiteral)) Advance();
+  }
+
+  private static void ValidateUniqueRawValue<T>(T rawVal, List<MlirEnumCase> cases, int line, int column) where T : IEquatable<T> {
+    foreach (var existing in cases) {
+      if (existing.RawValue is T existingVal && existingVal.Equals(rawVal)) {
+        throw new CompileError(ErrorCode.SemanticEnumDuplicateRawValue,
+          $"duplicate raw value: '{rawVal}'", line, column);
+      }
+    }
+  }
+
   private void PreScanEnum(MlirModule<MaxonOp> module, bool isExported = false) {
     Advance(); // consume 'enum'
     var nameToken = Expect(TokenType.Identifier);
@@ -2123,12 +2134,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
             litToken.Line, litToken.Column);
         }
 
-        foreach (var existing in cases) {
-          if (existing.RawValue is string existingVal && existingVal == litName) {
-            throw new CompileError(ErrorCode.SemanticEnumDuplicateRawValue,
-              $"duplicate raw value: '{litName}'", litToken.Line, litToken.Column);
-          }
-        }
+        ValidateUniqueRawValue(litName, cases, litToken.Line, litToken.Column);
 
         cases.Add(new MlirEnumCase(litName, ordinal, litName));
         ordinal++;
@@ -2163,61 +2169,37 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
 
         hasExplicitBacking = true;
 
-        bool isNegative = false;
-        if (Check(TokenType.Minus)) {
-          isNegative = true;
-          Advance();
-        }
-
-        if (Check(TokenType.IntegerLiteral)) {
-          var rawVal = ParseIntegerLiteral(Advance());
-          if (isNegative) rawVal = -rawVal;
-
-          if (backingType == null) {
-            backingType = MlirType.I64;
-          } else if (backingType != MlirType.I64) {
-            throw new CompileError(ErrorCode.SemanticEnumRawValueTypeMismatch,
-              $"raw value type mismatch: 'expected {(backingType == MlirType.F64 ? "float" : backingType is MlirStructBackingType sbtI ? sbtI.StructTypeName : "int")}, got int'",
-              caseToken.Line, caseToken.Column);
-          }
-
-          foreach (var existing in cases) {
-            if (existing.RawValue is long existingVal && existingVal == rawVal) {
-              throw new CompileError(ErrorCode.SemanticEnumDuplicateRawValue,
-                $"duplicate raw value: '{rawVal}'", caseToken.Line, caseToken.Column);
+        if (TryParseSignedNumericLiteral(out var num)) {
+          if (num.IsFloat) {
+            if (backingType == null) {
+              backingType = MlirType.F64;
+            } else if (backingType != MlirType.F64) {
+              throw new CompileError(ErrorCode.SemanticEnumRawValueTypeMismatch,
+                $"raw value type mismatch: 'expected int, got float'",
+                caseToken.Line, caseToken.Column);
             }
-          }
 
-          cases.Add(new MlirEnumCase(caseName, ordinal, rawVal, assocValues));
-          // Next auto-increment starts from this value + 1
-          ordinal = (int)(rawVal + 1);
-          SkipNewlines();
-          continue;
-        } else if (Check(TokenType.FloatLiteral)) {
-          var rawVal = ParseFloatLiteral(Advance());
-          if (isNegative) rawVal = -rawVal;
+            ValidateUniqueRawValue(num.FloatValue, cases, caseToken.Line, caseToken.Column);
 
-          if (backingType == null) {
-            backingType = MlirType.F64;
-          } else if (backingType != MlirType.F64) {
-            throw new CompileError(ErrorCode.SemanticEnumRawValueTypeMismatch,
-              $"raw value type mismatch: 'expected int, got float'",
-              caseToken.Line, caseToken.Column);
-          }
-
-          foreach (var existing in cases) {
-            if (existing.RawValue is double existingVal && existingVal == rawVal) {
-              throw new CompileError(ErrorCode.SemanticEnumDuplicateRawValue,
-                $"duplicate raw value: '{rawVal}'", caseToken.Line, caseToken.Column);
+            cases.Add(new MlirEnumCase(caseName, ordinal, num.FloatValue, assocValues));
+          } else {
+            if (backingType == null) {
+              backingType = MlirType.I64;
+            } else if (backingType != MlirType.I64) {
+              throw new CompileError(ErrorCode.SemanticEnumRawValueTypeMismatch,
+                $"raw value type mismatch: 'expected {(backingType == MlirType.F64 ? "float" : backingType is MlirStructBackingType sbtI ? sbtI.StructTypeName : "int")}, got int'",
+                caseToken.Line, caseToken.Column);
             }
-          }
 
-          cases.Add(new MlirEnumCase(caseName, ordinal, rawVal, assocValues));
+            ValidateUniqueRawValue(num.IntValue, cases, caseToken.Line, caseToken.Column);
+
+            cases.Add(new MlirEnumCase(caseName, ordinal, num.IntValue, assocValues));
+            // Next auto-increment starts from this value + 1
+            ordinal = (int)(num.IntValue + 1);
+            SkipNewlines();
+            continue;
+          }
         } else if (Check(TokenType.StringLiteral)) {
-          if (isNegative) {
-            throw new CompileError(ErrorCode.SemanticEnumRawValueTypeMismatch,
-              "cannot negate a string raw value", caseToken.Line, caseToken.Column);
-          }
 
           var rawVal = Advance().Value;
 
@@ -2229,19 +2211,10 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
               caseToken.Line, caseToken.Column);
           }
 
-          foreach (var existing in cases) {
-            if (existing.RawValue is string existingVal && existingVal == rawVal) {
-              throw new CompileError(ErrorCode.SemanticEnumDuplicateRawValue,
-                $"duplicate raw value: '{rawVal}'", caseToken.Line, caseToken.Column);
-            }
-          }
+          ValidateUniqueRawValue(rawVal, cases, caseToken.Line, caseToken.Column);
 
           cases.Add(new MlirEnumCase(caseName, ordinal, rawVal, assocValues));
         } else if (Check(TokenType.CharacterLiteral)) {
-          if (isNegative) {
-            throw new CompileError(ErrorCode.SemanticEnumRawValueTypeMismatch,
-              "cannot negate a character raw value", caseToken.Line, caseToken.Column);
-          }
 
           var rawVal = StringUtils.ResolveEscapes(Advance().Value);
 
@@ -2253,19 +2226,10 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
               caseToken.Line, caseToken.Column);
           }
 
-          foreach (var existing in cases) {
-            if (existing.RawValue is string existingVal && existingVal == rawVal) {
-              throw new CompileError(ErrorCode.SemanticEnumDuplicateRawValue,
-                $"duplicate raw value: '{rawVal}'", caseToken.Line, caseToken.Column);
-            }
-          }
+          ValidateUniqueRawValue(rawVal, cases, caseToken.Line, caseToken.Column);
 
           cases.Add(new MlirEnumCase(caseName, ordinal, rawVal, assocValues));
         } else if (Check(TokenType.Identifier) && PeekNext().Type == TokenType.LeftBrace) {
-          if (isNegative) {
-            throw new CompileError(ErrorCode.SemanticEnumRawValueTypeMismatch,
-              "cannot negate a struct raw value", caseToken.Line, caseToken.Column);
-          }
 
           var structTypeName = Advance().Value; // consume struct type name
           Advance(); // consume '{'
@@ -2304,30 +2268,13 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
             }
             Expect(TokenType.Colon);
 
-            bool fieldNegative = false;
-            if (Check(TokenType.Minus)) {
-              fieldNegative = true;
-              Advance();
-            }
-
             long fieldValue;
-            if (Check(TokenType.IntegerLiteral)) {
-              fieldValue = ParseIntegerLiteral(Advance());
-              if (fieldNegative) fieldValue = -fieldValue;
-            } else if (Check(TokenType.FloatLiteral)) {
-              var fv = ParseFloatLiteral(Advance());
-              if (fieldNegative) fv = -fv;
-              fieldValue = BitConverter.DoubleToInt64Bits(fv);
+            if (TryParseSignedNumericLiteral(out var fieldNum, "expected numeric literal for struct raw value field")) {
+              fieldValue = fieldNum.IsFloat ? BitConverter.DoubleToInt64Bits(fieldNum.FloatValue) : fieldNum.IntValue;
             } else if (Check(TokenType.True)) {
-              if (fieldNegative)
-                throw new CompileError(ErrorCode.SemanticEnumRawValueTypeMismatch,
-                  "cannot negate a boolean value", Current().Line, Current().Column);
               Advance();
               fieldValue = 1;
             } else if (Check(TokenType.False)) {
-              if (fieldNegative)
-                throw new CompileError(ErrorCode.SemanticEnumRawValueTypeMismatch,
-                  "cannot negate a boolean value", Current().Line, Current().Column);
               Advance();
               fieldValue = 0;
             } else {
@@ -2417,10 +2364,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
 
     if (isExported) _exportedTypes.Add(enumName);
 
-    // consume 'end'
-    if (Check(TokenType.End)) Advance();
-    // Skip end label
-    if (Check(TokenType.CharacterLiteral)) Advance();
+    ConsumeBlockEnd();
   }
 
   /// <summary>
@@ -2548,10 +2492,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
       SkipNewlines();
     }
 
-    // consume 'end'
-    if (Check(TokenType.End)) Advance();
-    // Skip end label
-    if (Check(TokenType.CharacterLiteral)) Advance();
+    ConsumeBlockEnd();
 
     _currentTypeName = null;
     RemoveAssociatedTypePlaceholders(associatedTypeNames);
@@ -3252,20 +3193,8 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
       var keyword = Advance().Value;
       return (ResolveTypeBound(typeName, keyword), typeName);
     }
-    // Negative literal
-    bool negative = false;
-    if (Check(TokenType.Minus)) {
-      Advance();
-      negative = true;
-    }
-    if (Check(TokenType.IntegerLiteral)) {
-      var val = (double)ParseIntegerLiteral(Advance());
-      return (negative ? -val : val, null);
-    }
-    if (Check(TokenType.FloatLiteral)) {
-      var val = ParseFloatLiteral(Advance());
-      return (negative ? -val : val, null);
-    }
+    if (TryParseSignedNumericLiteral(out var num, "Expected numeric literal in range bound"))
+      return (num.AsDouble, null);
     throw new CompileError(ErrorCode.ParserExpectedToken, "Expected numeric literal, 'min', 'max', or 'type.min'/'type.max' in range bound", Current().Line, Current().Column);
   }
 
@@ -3717,10 +3646,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
       SkipToEndOfLine();
       SkipNewlines();
     }
-    // consume 'end'
-    if (Check(TokenType.End)) Advance();
-    // Skip end label
-    if (Check(TokenType.CharacterLiteral)) Advance();
+    ConsumeBlockEnd();
   }
 
   private void ParseTypeDecl(MlirModule<MaxonOp> module) {
@@ -6871,6 +6797,39 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
     }
   }
 
+  // Parse a single builtin method argument and closing paren.
+  private MaxonValue ParseOneArg() {
+    TrySkipArgLabel();
+    var value = ResolveExprValue(ParseExpression());
+    Expect(TokenType.RightParen);
+    return value;
+  }
+
+  // Parse two builtin method arguments and closing paren.
+  private (MaxonValue, MaxonValue) ParseTwoArgs() {
+    TrySkipArgLabel();
+    var a = ResolveExprValue(ParseExpression());
+    Expect(TokenType.Comma);
+    TrySkipArgLabel();
+    var b = ResolveExprValue(ParseExpression());
+    Expect(TokenType.RightParen);
+    return (a, b);
+  }
+
+  // Parse three builtin method arguments and closing paren.
+  private (MaxonValue, MaxonValue, MaxonValue) ParseThreeArgs() {
+    TrySkipArgLabel();
+    var a = ResolveExprValue(ParseExpression());
+    Expect(TokenType.Comma);
+    TrySkipArgLabel();
+    var b = ResolveExprValue(ParseExpression());
+    Expect(TokenType.Comma);
+    TrySkipArgLabel();
+    var c = ResolveExprValue(ParseExpression());
+    Expect(TokenType.RightParen);
+    return (a, b, c);
+  }
+
   /// Tries to emit a builtin ManagedList or ManagedListNode method call directly as MaxonOps.
   /// Returns (true, result) if handled, (false, null) if not a builtin managed list method.
   /// The opening '(' has already been consumed.
@@ -6884,9 +6843,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
       switch (methodName) {
         case "insertFirst": {
           // insertFirst(value Element) returns ManagedListNode
-          TrySkipArgLabel();
-          var value = ResolveExprValue(ParseExpression());
-          Expect(TokenType.RightParen);
+          var value = ParseOneArg();
           var op = new MaxonManagedListInsertValueOp(selfValue, value, atHead: true, valueKind);
           _currentBlock!.AddOp(op);
           op.Result.TypeName = concreteNodeAlias;
@@ -6894,9 +6851,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
         }
         case "insertLast": {
           // insertLast(value Element) returns ManagedListNode
-          TrySkipArgLabel();
-          var value = ResolveExprValue(ParseExpression());
-          Expect(TokenType.RightParen);
+          var value = ParseOneArg();
           var op = new MaxonManagedListInsertValueOp(selfValue, value, atHead: false, valueKind);
           _currentBlock!.AddOp(op);
           op.Result.TypeName = concreteNodeAlias;
@@ -6904,12 +6859,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
         }
         case "insertAfter": {
           // insertAfter(target ManagedListNode, value Element) returns ManagedListNode
-          TrySkipArgLabel();
-          var target = ResolveExprValue(ParseExpression());
-          Expect(TokenType.Comma);
-          TrySkipArgLabel();
-          var value = ResolveExprValue(ParseExpression());
-          Expect(TokenType.RightParen);
+          var (target, value) = ParseTwoArgs();
           var op = new MaxonManagedListInsertRelativeValueOp(selfValue, target, value, after: true, valueKind);
           _currentBlock!.AddOp(op);
           op.Result.TypeName = concreteNodeAlias;
@@ -6917,12 +6867,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
         }
         case "insertBefore": {
           // insertBefore(target ManagedListNode, value Element) returns ManagedListNode
-          TrySkipArgLabel();
-          var target = ResolveExprValue(ParseExpression());
-          Expect(TokenType.Comma);
-          TrySkipArgLabel();
-          var value = ResolveExprValue(ParseExpression());
-          Expect(TokenType.RightParen);
+          var (target, value) = ParseTwoArgs();
           var op = new MaxonManagedListInsertRelativeValueOp(selfValue, target, value, after: false, valueKind);
           _currentBlock!.AddOp(op);
           op.Result.TypeName = concreteNodeAlias;
@@ -6930,60 +6875,42 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
         }
         case "reinsertFirst": {
           // reinsertFirst(node ManagedListNode)
-          TrySkipArgLabel();
-          var node = ResolveExprValue(ParseExpression());
-          Expect(TokenType.RightParen);
+          var node = ParseOneArg();
           var op = new MaxonManagedListReinsertOp(selfValue, node, atHead: true);
           _currentBlock!.AddOp(op);
           return (true, null);
         }
         case "reinsertLast": {
           // reinsertLast(node ManagedListNode)
-          TrySkipArgLabel();
-          var node = ResolveExprValue(ParseExpression());
-          Expect(TokenType.RightParen);
+          var node = ParseOneArg();
           var op = new MaxonManagedListReinsertOp(selfValue, node, atHead: false);
           _currentBlock!.AddOp(op);
           return (true, null);
         }
         case "reinsertAfter": {
           // reinsertAfter(target ManagedListNode, node ManagedListNode)
-          TrySkipArgLabel();
-          var target = ResolveExprValue(ParseExpression());
-          Expect(TokenType.Comma);
-          TrySkipArgLabel();
-          var node = ResolveExprValue(ParseExpression());
-          Expect(TokenType.RightParen);
+          var (target, node) = ParseTwoArgs();
           var op = new MaxonManagedListReinsertRelativeOp(selfValue, target, node, after: true);
           _currentBlock!.AddOp(op);
           return (true, null);
         }
         case "reinsertBefore": {
           // reinsertBefore(target ManagedListNode, node ManagedListNode)
-          TrySkipArgLabel();
-          var target = ResolveExprValue(ParseExpression());
-          Expect(TokenType.Comma);
-          TrySkipArgLabel();
-          var node = ResolveExprValue(ParseExpression());
-          Expect(TokenType.RightParen);
+          var (target, node) = ParseTwoArgs();
           var op = new MaxonManagedListReinsertRelativeOp(selfValue, target, node, after: false);
           _currentBlock!.AddOp(op);
           return (true, null);
         }
         case "detach": {
           // detach(node ManagedListNode)
-          TrySkipArgLabel();
-          var node = ResolveExprValue(ParseExpression());
-          Expect(TokenType.RightParen);
+          var node = ParseOneArg();
           var op = new MaxonManagedListDetachOp(selfValue, node);
           _currentBlock!.AddOp(op);
           return (true, null);
         }
         case "remove": {
           // remove(node ManagedListNode) returns Element
-          TrySkipArgLabel();
-          var node = ResolveExprValue(ParseExpression());
-          Expect(TokenType.RightParen);
+          var node = ParseOneArg();
           var op = new MaxonManagedListRemoveOp(selfValue, node, valueKind, elementKind);
           _currentBlock!.AddOp(op);
           return (true, op.Result);
@@ -7085,9 +7012,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
         }
         case "setValue": {
           // setValue(v Element)
-          TrySkipArgLabel();
-          var value = ResolveExprValue(ParseExpression());
-          Expect(TokenType.RightParen);
+          var value = ParseOneArg();
           var op = new MaxonManagedListNodeSetValueOp(selfValue, value, valueKind);
           _currentBlock!.AddOp(op);
           return (true, null);
@@ -7152,17 +7077,13 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
         return (true, null);
       }
       case "setLength": {
-        TrySkipArgLabel();
-        var newLen = ResolveExprValue(ParseExpression());
-        Expect(TokenType.RightParen);
+        var newLen = ParseOneArg();
         var op = new MaxonManagedMemSetLengthOp(selfValue, newLen);
         _currentBlock!.AddOp(op);
         return (true, null);
       }
       case "get": {
-        TrySkipArgLabel();
-        var index = ResolveExprValue(ParseExpression());
-        Expect(TokenType.RightParen);
+        var index = ParseOneArg();
         var (elementKind, typeParamName) = GetManagedMemElementKind(structTypeName);
         var op = new MaxonManagedMemGetOp(selfValue, index, elementKind) {
           TypeParamName = typeParamName
@@ -7171,9 +7092,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
         return (true, op.Result);
       }
       case "remove": {
-        TrySkipArgLabel();
-        var index = ResolveExprValue(ParseExpression());
-        Expect(TokenType.RightParen);
+        var index = ParseOneArg();
         var (elementKind, typeParamName) = GetManagedMemElementKind(structTypeName);
         var op = new MaxonManagedMemRemoveOp(selfValue, index, elementKind) {
           TypeParamName = typeParamName
@@ -7182,12 +7101,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
         return (true, op.Result);
       }
       case "set": {
-        TrySkipArgLabel();
-        var index = ResolveExprValue(ParseExpression());
-        Expect(TokenType.Comma);
-        TrySkipArgLabel();
-        var value = ResolveExprValue(ParseExpression());
-        Expect(TokenType.RightParen);
+        var (index, value) = ParseTwoArgs();
         var (elementKind, typeParamName) = GetManagedMemElementKind(structTypeName);
         var op = new MaxonManagedMemSetOp(selfValue, index, value, elementKind) {
           TypeParamName = typeParamName
@@ -7196,58 +7110,37 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
         return (true, null);
       }
       case "grow": {
-        TrySkipArgLabel();
-        var newCap = ResolveExprValue(ParseExpression());
-        Expect(TokenType.RightParen);
+        var newCap = ParseOneArg();
         var op = new MaxonManagedMemGrowOp(selfValue, newCap);
         _currentBlock!.AddOp(op);
         return (true, null);
       }
       case "shiftRight": {
-        TrySkipArgLabel();
-        var index = ResolveExprValue(ParseExpression());
-        Expect(TokenType.Comma);
-        TrySkipArgLabel();
-        var count = ResolveExprValue(ParseExpression());
-        Expect(TokenType.RightParen);
+        var (index, count) = ParseTwoArgs();
         var op = new MaxonManagedMemShiftOp(selfValue, index, count, shiftRight: true);
         _currentBlock!.AddOp(op);
         return (true, null);
       }
       case "shiftLeft": {
-        TrySkipArgLabel();
-        var index = ResolveExprValue(ParseExpression());
-        Expect(TokenType.Comma);
-        TrySkipArgLabel();
-        var count = ResolveExprValue(ParseExpression());
-        Expect(TokenType.RightParen);
+        var (index, count) = ParseTwoArgs();
         var op = new MaxonManagedMemShiftOp(selfValue, index, count, shiftRight: false);
         _currentBlock!.AddOp(op);
         return (true, null);
       }
       case "byteAt": {
-        TrySkipArgLabel();
-        var index = ResolveExprValue(ParseExpression());
-        Expect(TokenType.RightParen);
+        var index = ParseOneArg();
         var op = new MaxonManagedMemByteGetOp(selfValue, index);
         _currentBlock!.AddOp(op);
         return (true, op.Result);
       }
       case "setByte": {
-        TrySkipArgLabel();
-        var index = ResolveExprValue(ParseExpression());
-        Expect(TokenType.Comma);
-        TrySkipArgLabel();
-        var value = ResolveExprValue(ParseExpression());
-        Expect(TokenType.RightParen);
+        var (index, value) = ParseTwoArgs();
         var op = new MaxonManagedMemByteSetOp(selfValue, index, value);
         _currentBlock!.AddOp(op);
         return (true, null);
       }
       case "concat": {
-        TrySkipArgLabel();
-        var other = ResolveExprValue(ParseExpression());
-        Expect(TokenType.RightParen);
+        var other = ParseOneArg();
         var (elementKind, typeParamName) = GetManagedMemElementKind(structTypeName);
         var isStructElem = elementKind == MaxonValueKind.Struct || elementKind == MaxonValueKind.Enum;
         var op = new MaxonManagedMemConcatOp(selfValue, other) {
@@ -7259,12 +7152,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
         return (true, op.Result);
       }
       case "slice": {
-        TrySkipArgLabel();
-        var start = ResolveExprValue(ParseExpression());
-        Expect(TokenType.Comma);
-        TrySkipArgLabel();
-        var end = ResolveExprValue(ParseExpression());
-        Expect(TokenType.RightParen);
+        var (start, end) = ParseTwoArgs();
         var (elementKind, typeParamName) = GetManagedMemElementKind(structTypeName);
         var isStructElem = elementKind == MaxonValueKind.Struct || elementKind == MaxonValueKind.Enum;
         var op = new MaxonManagedMemSliceOp(selfValue, start, end) {
@@ -7282,12 +7170,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
         return (true, op.Result);
       }
       case "makeCharFromBytes": {
-        TrySkipArgLabel();
-        var pos = ResolveExprValue(ParseExpression());
-        Expect(TokenType.Comma);
-        TrySkipArgLabel();
-        var len = ResolveExprValue(ParseExpression());
-        Expect(TokenType.RightParen);
+        var (pos, len) = ParseTwoArgs();
         var op = new MaxonMakeCharFromBytesOp(selfValue, pos, len);
         _currentBlock!.AddOp(op);
         return (true, op.Result);
@@ -7312,9 +7195,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
         return (true, op.Result);
       }
       case "fromCString": {
-        TrySkipArgLabel();
-        var cstrPtr = ResolveExprValue(ParseExpression());
-        Expect(TokenType.RightParen);
+        var cstrPtr = ParseOneArg();
         var op = new MaxonCStringToManagedOp(cstrPtr);
         _currentBlock!.AddOp(op);
         return (true, op.Result);
@@ -7332,15 +7213,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
     switch (methodName) {
       case "sendFrom": {
         // sendFrom(managed, offset, length) → maxon_net_send(handle, buf+offset, length)
-        TrySkipArgLabel();
-        var managed = ResolveExprValue(ParseExpression());
-        Expect(TokenType.Comma);
-        TrySkipArgLabel();
-        var offset = ResolveExprValue(ParseExpression());
-        Expect(TokenType.Comma);
-        TrySkipArgLabel();
-        var length = ResolveExprValue(ParseExpression());
-        Expect(TokenType.RightParen);
+        var (managed, offset, length) = ParseThreeArgs();
         var handleRef = new MaxonFieldAccessOp(selfValue, "__ManagedSocket", "_handle", MaxonValueKind.Integer);
         _currentBlock!.AddOp(handleRef);
         var bufferRef = new MaxonFieldAccessOp(managed, "__ManagedMemory", "buffer", MaxonValueKind.Integer);
@@ -7353,9 +7226,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
       }
       case "recv": {
         // recv(managed) → maxon_net_recv(handle, buf, capacity)
-        TrySkipArgLabel();
-        var managed = ResolveExprValue(ParseExpression());
-        Expect(TokenType.RightParen);
+        var managed = ParseOneArg();
         var handleRef = new MaxonFieldAccessOp(selfValue, "__ManagedSocket", "_handle", MaxonValueKind.Integer);
         _currentBlock!.AddOp(handleRef);
         var bufferRef = new MaxonFieldAccessOp(managed, "__ManagedMemory", "buffer", MaxonValueKind.Integer);
@@ -7423,12 +7294,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
       }
       case "read": {
         // read(managed, size) → maxon_file_read(handle, buffer, size, capacity)
-        TrySkipArgLabel();
-        var managed = ResolveExprValue(ParseExpression());
-        Expect(TokenType.Comma);
-        TrySkipArgLabel();
-        var size = ResolveExprValue(ParseExpression());
-        Expect(TokenType.RightParen);
+        var (managed, size) = ParseTwoArgs();
         var handleRef = new MaxonFieldAccessOp(selfValue, "__ManagedFile", "_handle", MaxonValueKind.Integer);
         _currentBlock!.AddOp(handleRef);
         var bufferRef = new MaxonFieldAccessOp(managed, "__ManagedMemory", "buffer", MaxonValueKind.Integer);
@@ -7441,9 +7307,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
       }
       case "write": {
         // write(managed) → maxon_managed_file_write(handle, buffer, length)
-        TrySkipArgLabel();
-        var managed = ResolveExprValue(ParseExpression());
-        Expect(TokenType.RightParen);
+        var managed = ParseOneArg();
         var handleRef = new MaxonFieldAccessOp(selfValue, "__ManagedFile", "_handle", MaxonValueKind.Integer);
         _currentBlock!.AddOp(handleRef);
         var bufferRef = new MaxonFieldAccessOp(managed, "__ManagedMemory", "buffer", MaxonValueKind.Integer);
@@ -8769,6 +8633,18 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
   private sealed record FloatRangeBound(double Value) : RangeBound;
   private sealed record CharRangeBound(string Value) : RangeBound;
 
+  private readonly struct NumericLiteral {
+    public readonly bool IsFloat;
+    public readonly long IntValue;
+    public readonly double FloatValue;
+    private NumericLiteral(bool isFloat, long intValue, double floatValue) {
+      IsFloat = isFloat; IntValue = intValue; FloatValue = floatValue;
+    }
+    public static NumericLiteral Integer(long value) => new(false, value, 0);
+    public static NumericLiteral Float(double value) => new(true, 0, value);
+    public double AsDouble => IsFloat ? FloatValue : (double)IntValue;
+  }
+
   /// <summary>
   /// Parses match case patterns. Supports integer, float, string, character literals,
   /// enum member access, and range patterns (to/upto/min/max).
@@ -8926,40 +8802,20 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
             patternLine, patternCol);
         }
         patterns.Add(new RangePattern(null, upper, upperInclusive, displayName, patternLine, patternCol));
-      } else if (Check(TokenType.IntegerLiteral) || (Check(TokenType.Minus) && _pos + 1 < _tokens.Count
+      } else if (Check(TokenType.IntegerLiteral) || Check(TokenType.FloatLiteral) || (Check(TokenType.Minus) && _pos + 1 < _tokens.Count
           && (_tokens[_pos + 1].Type == TokenType.IntegerLiteral || _tokens[_pos + 1].Type == TokenType.FloatLiteral))) {
-        // Integer or negative integer/float, possibly followed by range
+        // Numeric literal (possibly negative), possibly followed by range
         if (compareKind == MaxonValueKind.Struct) {
           throw new CompileError(ErrorCode.ParserMatchTypeMismatch,
-            $"pattern type 'int' does not match scrutinee type '{structTypeName}'",
+            $"pattern type 'number' does not match scrutinee type '{structTypeName}'",
             patternLine, patternCol);
         }
-        bool negative = false;
-        if (Check(TokenType.Minus)) {
-          Advance(); // consume '-'
-          negative = true;
-        }
-        if (Check(TokenType.FloatLiteral)) {
-          // Negative float
-          var litToken = Advance();
-          var litValue = double.Parse(litToken.Value, System.Globalization.CultureInfo.InvariantCulture);
-          if (negative) litValue = -litValue;
-          patterns.Add(ParseFloatPatternOrRange(litValue, compareKind, seenPatternKeys, patternLine, patternCol));
+        TryParseSignedNumericLiteral(out var num, "expected numeric literal after '-' in match pattern");
+        if (num.IsFloat) {
+          patterns.Add(ParseFloatPatternOrRange(num.FloatValue, compareKind, seenPatternKeys, patternLine, patternCol));
         } else {
-          var litToken = Advance();
-          var litValue = ParseIntegerLiteral(litToken);
-          if (negative) litValue = -litValue;
-          patterns.Add(ParseIntPatternOrRange(litValue, compareKind, seenPatternKeys, patternLine, patternCol));
+          patterns.Add(ParseIntPatternOrRange(num.IntValue, compareKind, seenPatternKeys, patternLine, patternCol));
         }
-      } else if (Check(TokenType.FloatLiteral)) {
-        if (compareKind == MaxonValueKind.Struct) {
-          throw new CompileError(ErrorCode.ParserMatchTypeMismatch,
-            $"pattern type 'float' does not match scrutinee type '{structTypeName}'",
-            patternLine, patternCol);
-        }
-        var litToken = Advance();
-        var litValue = double.Parse(litToken.Value, System.Globalization.CultureInfo.InvariantCulture);
-        patterns.Add(ParseFloatPatternOrRange(litValue, compareKind, seenPatternKeys, patternLine, patternCol));
       } else if (Check(TokenType.StringLiteral)) {
         if (compareKind != MaxonValueKind.Struct || structTypeName == null ||
             !(_typeRegistry[structTypeName] is MlirStructType st && st.ConformingInterfaces.Contains("BuiltinStringLiteral"))) {
@@ -9087,29 +8943,15 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
   }
 
   private RangeBound ParseRangeEndpoint(MaxonValueKind compareKind) {
-    bool negative = false;
-    if (Check(TokenType.Minus)) {
-      Advance();
-      negative = true;
+    if (!TryParseSignedNumericLiteral(out var num, $"Expected range endpoint, got '{Current().Value}'")) {
+      throw new CompileError(ErrorCode.ParserExpectedExpression,
+        $"Expected range endpoint, got '{Current().Value}'",
+        Current().Line, Current().Column);
     }
-    if (Check(TokenType.FloatLiteral)) {
-      var tok = Advance();
-      var val = double.Parse(tok.Value, System.Globalization.CultureInfo.InvariantCulture);
-      if (negative) val = -val;
-      return new FloatRangeBound(val);
-    }
-    if (Check(TokenType.IntegerLiteral)) {
-      var tok = Advance();
-      var val = ParseIntegerLiteral(tok);
-      if (negative) val = -val;
-      if (compareKind is MaxonValueKind.Float or MaxonValueKind.Float32) {
-        return new FloatRangeBound(val);
-      }
-      return new IntRangeBound(val);
-    }
-    throw new CompileError(ErrorCode.ParserExpectedExpression,
-      $"Expected range endpoint, got '{Current().Value}'",
-      Current().Line, Current().Column);
+    if (num.IsFloat) return new FloatRangeBound(num.FloatValue);
+    if (compareKind is MaxonValueKind.Float or MaxonValueKind.Float32)
+      return new FloatRangeBound(num.IntValue);
+    return new IntRangeBound(num.IntValue);
   }
 
   private static string RangeBoundDisplay(RangeBound bound) {
@@ -14115,6 +13957,34 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
         $"Float literal '{token.Value}' is outside the range of float",
         token.Line, token.Column);
     }
+  }
+
+  /// Tries to consume an optional minus sign followed by an integer or float literal.
+  /// Returns true if a numeric literal was consumed. Throws if minus was consumed but
+  /// no number follows. Returns false without consuming tokens if no minus and no number.
+  private bool TryParseSignedNumericLiteral(out NumericLiteral result, string? errorOnDanglingMinus = null) {
+    result = default;
+    bool negative = false;
+    if (Check(TokenType.Minus)) {
+      Advance();
+      negative = true;
+    }
+    if (Check(TokenType.IntegerLiteral)) {
+      var val = ParseIntegerLiteral(Advance());
+      result = NumericLiteral.Integer(negative ? -val : val);
+      return true;
+    }
+    if (Check(TokenType.FloatLiteral)) {
+      var val = ParseFloatLiteral(Advance());
+      result = NumericLiteral.Float(negative ? -val : val);
+      return true;
+    }
+    if (negative) {
+      throw new CompileError(ErrorCode.ParserExpectedExpression,
+        errorOnDanglingMinus ?? "expected numeric literal after '-'",
+        Current().Line, Current().Column);
+    }
+    return false;
   }
 
   /// <summary>

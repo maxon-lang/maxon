@@ -1,6 +1,6 @@
 # Self-Hosted Maxon Compiler Architecture
 
-The self-hosted Maxon compiler is written in Maxon itself (~15,800 lines across 54 files). It compiles Maxon source code to native executables for 6 target combinations (x86_64/aarch64 x windows/linux/macos) using an MLIR-inspired multi-dialect pipeline with incremental compilation support.
+The self-hosted Maxon compiler is written in Maxon itself (~25,400 lines across 72 files). It compiles Maxon source code to native executables for 6 target combinations (x86_64/aarch64 x windows/linux/macos) using an MLIR-inspired multi-dialect pipeline with incremental compilation support.
 
 ## Project Structure
 
@@ -28,24 +28,34 @@ maxon-selfhosted/
 
     MLIR/
       Core/
-        MlirOp.maxon                   MlirOp wrapper enum (9 dialect variants)
+        MlirOp.maxon                   MlirOp wrapper enum (10 dialect variants)
         MlirModule.maxon               Top-level module container
         MlirFunction.maxon             Named function with body region
         MlirBlock.maxon                Basic block within a region
         MlirRegion.maxon               Ordered list of blocks
         MlirPrinter.maxon              MLIR text format printer
       Dialects/
-        MaxonDialect.maxon             MaxonOp enum (high-level IR, 16 variants)
+        MaxonDialect.maxon             MaxonOp enum (high-level IR, ~58 variants)
         ArithDialect.maxon             ArithOp enum (typed arithmetic, const/unary/binary)
         CfDialect.maxon                CfOp enum (block terminators: br, condBr)
         FuncDialect.maxon              FuncOp enum (call, ret, param, funcRef, etc.)
         MemRefDialect.maxon            MemRefOp enum (storeSlot, loadSlot)
+        MirDialect.maxon               MirOp enum (target-independent machine IR, ~24 variants)
         RuntimeDialect.maxon           RuntimeOp enum (printLiteral, printInt)
-        SysDialect.maxon               SysOp enum (syscall, iatCall, osExit, osWrite, etc.)
+        SysDialect.maxon               SysOp enum (syscall, iatCall, osExit, osWrite, etc., 16 variants)
+      PassPipeline.maxon               Pass registry, pipeline builder, pass runner
       Passes/
         LowerMaxonToArith.maxon        MaxonOp -> arith/cf/func/memref lowering
         LowerMaxonToSysAndRuntime.maxon MaxonOp -> runtime/sys lowering
+        LowerToMir.maxon               Mid-level dialects -> MirOp lowering
+        LowerABI.maxon                 ABI lowering (calling conventions)
         Mem2Reg.maxon                  Promote memref slots to SSA values
+        BorrowCheck.maxon              Borrow checking pass
+        InjectDrops.maxon              Insert destructor calls for owned values
+        InsertRangeChecks.maxon        Insert runtime range checks for typed integers
+        Canonicalize.maxon             Algebraic simplification pass
+        CommonSubexpressionElimination.maxon  CSE pass
+        DeadCodeElimination.maxon      DCE pass
         DeadFunctionElimination.maxon  Remove unreachable functions (unused stdlib)
 
     Runtime/
@@ -58,16 +68,23 @@ maxon-selfhosted/
       Shared/
         BinaryHelpers.maxon            Byte-writing utilities
         CodeResult.maxon               CodeResult, Relocation types
+        InstructionScheduler.maxon     Register-pressure-aware bottom-up list scheduler
         OsDescriptor.maxon             OS abstraction (exit/write strategies)
+        PrologueEpiloguePass.maxon     Insert function prologue/epilogue
         RegisterManager.maxon          Cross-platform greedy linear-scan register allocator
         StdOpHelpers.maxon             Shared helpers for mid->target conversion
+        TargetRegAllocDispatch.maxon   Target-specific register allocation dispatch
       X86/
-        X64Dialect.maxon               X64Op enum (85 variants), X64Register enum
-        MidToX64Conversion.maxon       Mid-level -> X64Op lowering + register allocation
+        X64Dialect.maxon               X64Op enum (96 variants, OpMeta-backed), X64Register enum
+        X64Latency.maxon               X64 latency table creation
+        X64RegisterAlloc.maxon         X64-specific register allocation
+        MidToX64Conversion.maxon       Mid-level -> X64Op lowering
         X64CodeEmitter.maxon           X64Op -> machine code bytes
       Arm64/
-        Arm64Dialect.maxon             Arm64Op enum (75 variants), Arm64Register enum
-        MidToArm64Conversion.maxon     Mid-level -> Arm64Op lowering + register allocation
+        Arm64Dialect.maxon             Arm64Op enum (77 variants, OpMeta-backed), Arm64Register enum
+        Arm64Latency.maxon             ARM64 latency table creation
+        Arm64RegisterAlloc.maxon       ARM64-specific register allocation
+        MidToArm64Conversion.maxon     Mid-level -> Arm64Op lowering
         Arm64CodeEmitter.maxon         Arm64Op -> machine code bytes
       Windows/
         PeWriter.maxon                 PE64 executable writer
@@ -87,6 +104,22 @@ maxon-selfhosted/
 
 The compiler transforms source code through a multi-dialect IR, where ops from different dialects coexist in the same module and each lowering pass handles the ops it cares about while passing others through.
 
+### Pipeline Phases
+
+The pipeline is defined in `PassPipeline.maxon` as an explicit sequence of named passes:
+
+```
+Phase 1 (Frontend):              Parser -> maxon/func/cf/memref
+Phase 2 (Memory Safety):         semanticCheck -> deadFuncElim -> lowerMaxonToArith
+                                 -> borrowCheck -> injectDrops
+Phase 3 (SSA Construction):      mem2reg (eliminates memref)
+Phase 4 (Mid-Level Optimization): canonicalize -> cse -> dce -> insertRangeChecks
+Phase 5 (System Resolution):     lowerMaxonToSysAndRuntime -> lowerABI
+Phase 6 (Generic Machine Lower): augmentWithRuntime -> lowerToMir
+Phase 7 (Target Execution):      lowerMirToTarget -> scheduleInstructions
+                                 -> allocateRegisters -> insertPrologueEpilogue
+```
+
 ### Current Flow
 
 ```
@@ -99,30 +132,16 @@ Source (.maxon files)
   Parser             parse()                   Token[] -> MlirModule (maxon/func/cf/memref ops)
     |
     v
-  Semantic           runSemanticChecks()        Validates MlirModule
+  Phase 2-5          runPipeline(midPipeline)   Progressive lowering through dialects
     |
     v
-  DeadFuncElim       eliminateDeadFunctions()   Removes unreachable functions
+  Phase 6-7          runPipeline(backendPipeline) Runtime augmentation, MIR, target lowering
     |
     v
-  MaxonToMid         lowerMaxonToArith()         maxon -> arith/cf/func/memref
-                     lowerMaxonToSysAndRuntime() maxon -> runtime/sys
+  Emitter            emitTargetCode()           Target ops -> machine code bytes
     |
     v
-  Mem2Reg            promoteMem2Reg()           Promotes memref slots to SSA values
-    |
-    v
-  Runtime            augmentWithRuntime()        Prepends runtime functions from runtime.mid
-    |
-    v
-  MidToTarget        lowerMidToX64()             Mid -> X64Op (or Arm64Op)
-                     (includes register allocation)
-    |
-    v
-  Emitter            emitX64() / emitArm64()     Target ops -> machine code bytes
-    |
-    v
-  Exe Writer         writePe() / writeElf()      bytes -> executable file
+  Exe Writer         writePe() / writeElf()     bytes -> executable file
                      / writeMachO()
 ```
 
@@ -142,15 +161,10 @@ compile(path, target)
                 -> tokenize(content)
               -> parse(project, tokens, filePath)
           -> merge all MlirModules
-        -> runSemanticChecks(project, module)
-        -> eliminateDeadFunctions(module)
-        -> lowerMaxonToArith(module)
-        -> lowerMaxonToSysAndRuntime(module)
-        -> promoteMem2Reg(midModule)
+        -> runPipeline(midPipeline)          phases 2-5
       -> emitBackend(midModule, target)
-        -> augmentWithRuntime(module)        prepend runtime.mid functions
-        -> lowerMidToX64(module)             (or Arm64)
-        -> emitX64(module)                   (or Arm64)
+        -> runPipeline(backendPipeline)      phases 6-7
+        -> emitTargetCode(module, target)
     -> writeExecutable(outputPath, codeResult, target)
 ```
 
@@ -160,7 +174,7 @@ The parser emits a flat array of `MlirOp` operations directly -- there is no int
 
 ### Key Design Decision: Multi-Dialect IR
 
-Instead of separate IR types per stage (like a `MaxonOp[]` then a `StdOp[]`), the compiler uses a single `MlirOp` wrapper enum that dispatches across 9 dialect variants:
+Instead of separate IR types per stage (like a `MaxonOp[]` then a `StdOp[]`), the compiler uses a single `MlirOp` wrapper enum that dispatches across 10 dialect variants:
 
 ```maxon
 export enum MlirOp
@@ -171,6 +185,7 @@ export enum MlirOp
   memref(op MemRefOp)
   runtime(op RuntimeOp)
   sys(op SysOp)
+  mir(op MirOp)
   x64(op X64Op)
   arm64(op Arm64Op)
 end 'MlirOp'
@@ -178,20 +193,27 @@ end 'MlirOp'
 
 Ops from different dialects coexist in the same block. Each lowering pass handles the ops it cares about and passes others through, progressively replacing higher-level ops with lower-level ones.
 
-## Target 7-Phase Pipeline
+### Key Design Decision: Struct-Backed Target Op Enums
 
-The architectural goal is a clean 7-phase pipeline with well-defined dialect lifespans:
+Target instruction enums (`X64Op`, `Arm64Op`) are backed by an `OpMeta` struct that carries per-instruction metadata inline:
 
+```maxon
+type OpMeta
+  export let latency Latency
+  export let isMemory bool
+  export let isStore bool
+  export let isCall bool
+end 'OpMeta'
+
+export enum X64Op
+  addRegReg(destReg X64VReg, srcReg X64VReg) = OpMeta{latency: 1, isMemory: false, isStore: false, isCall: false}
+  loadSlot(destReg X64VReg, slotIndex VarSlot) = OpMeta{latency: 4, isMemory: true, isStore: false, isCall: false}
+  callDirect(target ByteArray) = OpMeta{latency: 5, isMemory: true, isStore: false, isCall: true}
+  // ...
+end 'X64Op'
 ```
-Phase 1 (Frontend):              Parser -> maxon/func/cf/memref
-Phase 2 (Memory Safety):         convertMaxonToArith -> borrowCheck -> injectDrops
-Phase 3 (SSA Construction):      mem2reg (eliminates memref)
-Phase 4 (Mid-Level Optimization): canonicalize -> cse -> dce
-Phase 5 (System Resolution):     convertMaxonToSysAndRuntime -> lowerABI
-Phase 6 (Generic Machine Lower): augmentWithRuntime -> convertToMir
-Phase 7 (Target Execution):      convertMirToTarget -> scheduleInstructions
-                                  -> allocateRegisters -> insertPrologueEpilogue
-```
+
+The instruction scheduler and other passes access metadata via `.rawValue` (e.g., `op.rawValue.latency`, `op.rawValue.isMemory`), eliminating large match-based dispatch tables.
 
 ### Dialect Lifespans
 
@@ -204,11 +226,9 @@ Phase 7 (Target Execution):      convertMirToTarget -> scheduleInstructions
 | arith   | Phase 2   | Phase 6    | Typed arithmetic (addI64, cmpI64Eq, constF64, etc.) |
 | runtime | Phase 2   | Phase 6    | I/O intrinsics (printLiteral, printInt) |
 | sys     | Phase 5   | Phase 6    | OS primitives (syscall, iatCall, osExit, osWrite) |
-| mir     | Phase 6   | Phase 7    | Generic machine IR (future; not yet implemented) |
+| mir     | Phase 6   | Phase 7    | Target-independent machine IR (virtual registers, SSA) |
 | x64     | Phase 7   | emission   | x86-64 machine instructions |
 | arm64   | Phase 7   | emission   | ARM64 machine instructions |
-
-Currently the compiler implements Phases 1, 2, 3, and 7 (with 5-6 partially merged into the target lowering passes). Phases 4 and 6 are future work.
 
 ## Dialects
 
@@ -216,7 +236,7 @@ Each dialect is a Maxon `enum` type (or an enum of sub-enums). Operations carry 
 
 ### Maxon Dialect (MaxonDialect.maxon)
 
-High-level operations emitted directly by the parser. 16 variants organized by category:
+High-level operations emitted directly by the parser. ~58 variants organized by category:
 
 | Category | Operations |
 |----------|-----------|
@@ -253,20 +273,33 @@ Function-level operations: `ret`, `call`, `tryCall`, `indirectCall`, `funcRef`, 
 
 Stack slot operations: `storeSlot(slotId, valueId)` and `loadSlot(resultId, slotId)`. Eliminated by the mem2reg pass which promotes slots to SSA values.
 
+### MIR Dialect (MirDialect.maxon)
+
+Target-independent machine IR with ~24 variants. Uses virtual registers (ValueIds) in SSA form. Sits between the mid-level dialects (arith/cf/func/memref/sys) and the target-specific dialects (x64/arm64). Categories:
+
+| Category | Operations |
+|----------|-----------|
+| Constants & moves | `movImm`, `movReg` |
+| ALU | `binOp` (parameterized by `MirBinOpcode`), `unaryOp` |
+| Compare & branch | `cmp`, `condBranch`, `branch` |
+| Functions | `call`, `indirectCall`, `ret`, `param` |
+| Memory | `load`, `store`, `stackSlotAddr`, `globalAddr` |
+| System | `syscall`, `iatCall`, `osExit`, `osWrite`, `memcpy`, `storeByte`, `loadByte` |
+
 ### Runtime Dialect (RuntimeDialect.maxon)
 
 I/O intrinsics: `printLiteral(data)` and `printInt(valueId)`. These are lowered to `func.call` ops targeting runtime functions.
 
 ### Sys Dialect (SysDialect.maxon)
 
-Low-level OS primitives used by the runtime. 9 variants: `syscall`, `iatCall`, `globalAddr`, `memcpy`, `stackAddr`, `storeByte`, `loadByte`, `osExit`, `osWrite`. These appear only in runtime functions (from `runtime.mid`) and are lowered directly to target machine ops.
+Low-level OS primitives used by the runtime. 16 variants including `syscall`, `iatCall`, `globalAddr`, `memcpy`, `stackAddr`, `storeByte`, `loadByte`, `osExit`, `osWrite`, `free`, `osWriteErr`, `loadFramePtr`, `loadIndirect`, `funcAddr`. These appear only in runtime functions (from `runtime.mid`) and are lowered directly to target machine ops.
 
 ### Target Dialects (X64Dialect.maxon, Arm64Dialect.maxon)
 
-Machine-level operations for each CPU target:
+Machine-level operations for each CPU target, backed by `OpMeta` structs carrying latency and classification metadata:
 
-- **X64Op** (85 variants): GPR ops (`movRegImm`, `addRegReg`, `imulRegReg`, `idivReg`, `cmpRegReg`, `setcc`, `cmov`, ...), XMM float ops (`addXmm`, `subXmm`, `mulXmm`, `divXmm`, `ucomisXmm`, `cvtSi2Float`, ...), memory ops (`storeIndirect`, `loadIndirect`, `globalLoad`, `globalStore`, ...), register allocator ops (`movRegReg`, `spillToStack`, `reloadFromStack`, `xchgRegReg`), control flow (`condJump`, `jmp`, `callDirect`, `callIndirect`), and structural ops (`prologue`, `epilogue`, `ret`).
-- **Arm64Op** (75 variants): GPR ops (`movImm`, `addRegs`, `subRegs`, `mulRegs`, `sdivRegs`, `cmpRegs`, `cset`, `csel`, ...), FP ops (`fadd`, `fsub`, `fmul`, `fdiv`, `fcmp`, `scvtf`, `fcvtzs`, ...), memory ops (`storeIndirect`, `loadIndirect`, `globalLoad`, `globalStore`, ...), register allocator ops (`movRegReg`, `spillToStack`, `reloadFromStack`), control flow (`condBranch`, `branch`, `branchLink`, `branchLinkReg`), and structural ops (`prologue`, `epilogue`, `ret`).
+- **X64Op** (96 variants): GPR ops (`movRegImm`, `addRegReg`, `imulRegReg`, `idivReg`, `cmpRegReg`, `setcc`, `cmov`, ...), XMM float ops (`addXmm`, `subXmm`, `mulXmm`, `divXmm`, `ucomisXmm`, `cvtSi2Float`, ...), memory ops (`storeIndirect`, `loadIndirect`, `globalLoad`, `globalStore`, ...), register allocator ops (`movRegReg`, `spillToStack`, `reloadFromStack`, `xchgRegReg`), control flow (`condJump`, `jmp`, `callDirect`, `callIndirect`), and structural ops (`prologue`, `epilogue`, `ret`).
+- **Arm64Op** (77 variants): GPR ops (`movImm`, `addRegs`, `subRegs`, `mulRegs`, `sdivRegs`, `cmpRegs`, `cset`, `csel`, ...), FP ops (`fadd`, `fsub`, `fmul`, `fdiv`, `fcmp`, `scvtf`, `fcvtzs`, ...), memory ops (`storeIndirect`, `loadIndirect`, `globalLoad`, `globalStore`, ...), register allocator ops (`movRegReg`, `spillToStack`, `reloadFromStack`), control flow (`condBranch`, `branch`, `branchLink`, `branchLinkReg`), and structural ops (`prologue`, `epilogue`, `ret`).
 
 ## Key Data Structures
 
@@ -285,6 +318,10 @@ Incremental compilation state: current revision, source file entries, per-file c
 ### Target (Target.maxon)
 
 `cpu: CpuArch` (x86_64 | aarch64) x `os: Os` (windows | linux | macos).
+
+### OpMeta (InstructionScheduler.maxon)
+
+Compile-time metadata attached to each target instruction variant via struct-backed enums. Contains `latency` (cycle count), `isMemory` (accesses memory), `isStore` (writes memory), and `isCall` (call/syscall). Accessed at runtime via `.rawValue` on the enum.
 
 ### OsDescriptor (OsDescriptor.maxon)
 
@@ -314,6 +351,17 @@ This is validated by `IncrementalTestRunner.maxon` which checks:
 
 ## Code Generation Strategy
 
+### Instruction Scheduling (InstructionScheduler.maxon)
+
+A register-pressure-aware bottom-up list scheduler runs after MIR lowering but before register allocation. It reorders instructions within each basic block to:
+- Keep long-latency operations (division, loads) as early as possible on the critical path
+- Respect data dependencies and memory ordering constraints
+- Reduce register pressure by preferring pressure-reducing operations when nearing the threshold
+
+The scheduler reads instruction metadata directly from the `OpMeta` backing struct on each target op (`latency`, `isMemory`, `isStore`, `isCall`).
+
+### Register Allocation
+
 The codegen uses a **greedy linear-scan register allocator** (`RegisterManager.maxon`) that works across both x86-64 and ARM64 targets:
 
 1. The register allocator maintains a `RegState` tracking which SSA values are in which physical registers, with LRU eviction when registers are exhausted
@@ -325,7 +373,7 @@ The codegen uses a **greedy linear-scan register allocator** (`RegisterManager.m
 7. Separate pools for GPR and FP (XMM/D-register) allocation with independent spill tracking
 8. **Cross-block state**: `RegSnapshot` captures register assignments at block boundaries to handle control flow merges
 
-The register allocator is target-independent and dispatches to target-specific ops via the `RegTarget` enum (x64, arm64). Each target's conversion pass (`MidToX64Conversion`, `MidToArm64Conversion`) integrates register allocation during lowering.
+Target-specific register allocation logic lives in `X64RegisterAlloc.maxon` and `Arm64RegisterAlloc.maxon`, dispatched via `TargetRegAllocDispatch.maxon`.
 
 ### OS Abstraction (OsDescriptor Pattern)
 
@@ -382,57 +430,35 @@ If the operator fits an existing enum (`BinOpKind`, `UnaryOpKind`, `CmpPredicate
 
 Add a case in the appropriate lowering pass mapping the new `MaxonOp` variant (or `BinOpKind` case) to the appropriate `ArithOp` opcode (in `LowerMaxonToArith.maxon`) or `RuntimeOp`/`SysOp` (in `LowerMaxonToSysAndRuntime.maxon`).
 
-**5. MidToX64 Conversion (MidToX64Conversion.maxon)**
+**5. MIR Lowering (LowerToMir.maxon)**
 
-Add a case handling the new `ArithOp` opcode, emitting the appropriate `X64Op` instructions with register allocation through `RegisterManager`.
+Add a case handling the new `ArithOp` opcode, mapping it to the corresponding `MirOp`.
 
-**6. MidToArm64 Conversion (MidToArm64Conversion.maxon)**
+**6. Target Conversion (MidToX64Conversion.maxon / MidToArm64Conversion.maxon)**
 
-Same pattern for ARM64 using the appropriate instructions.
+Add a case handling the new `MirOp`, emitting the appropriate target ops with register allocation through `RegisterManager`.
 
 **7. X86/Arm64 Code Emitter**
 
-If you added new target dialect ops, add machine code emission for them in `X64CodeEmitter.maxon` or `Arm64CodeEmitter.maxon`.
+If you added new target dialect ops, add machine code emission for them in `X64CodeEmitter.maxon` or `Arm64CodeEmitter.maxon`. Add the `OpMeta` backing value to the new enum case.
 
 **8. Tests**
 
 Add test cases to the relevant spec file in `/specs/`. Then add the spec name to the whitelist in `Testing/SpecTestRunner.maxon` if it's a new spec.
 
-### Adding a New Statement
-
-Example: adding a `while` loop.
-
-1. **Parser**: Add a case in `parseStatement` that recognizes the keyword, parses the condition and body, and emits MaxonOps using blocks and branches for control flow:
-   - Create loop start block with `label`
-   - Parse condition -> `condBr(cond, bodyBlock, exitBlock)`
-   - Create body block, parse body
-   - `br(loopStartBlock)`
-   - Create exit block
-
-2. **Dialect ops**: If `while` can be expressed using existing ops (`cf.br`, `cf.condBr`), no new dialect variants are needed. The parser desugars structured control flow into these primitives.
-
-3. **Everything downstream** (MaxonToMid, MidToTarget, emitter) already handles the underlying ops.
-
-### Adding a New Type
-
-1. **Parser**: Update type parsing to recognize the new type name
-2. **Maxon Dialect**: Use existing parameterized ops (e.g., `literal` with `isFloat`, `binop` with `isFloat`, `cmp` with `isFloat`) or add new variants
-3. **Arith Dialect**: Add typed opcodes (e.g., `addF32` alongside `addF64`)
-4. **Conversion passes**: Add cases for the new typed ops
-5. **Target emitters**: Add machine code sequences for the new typed operations
-
 ### Adding a New Target
 
 1. Create a new directory under `Targets/` (e.g., `Targets/Riscv/`)
-2. Define the target dialect: `RiscvDialect.maxon` with a `RiscvOp` enum and register enum
+2. Define the target dialect: `RiscvDialect.maxon` with a `RiscvOp` enum (backed by `OpMeta`) and register enum
 3. Add a new variant to `MlirOp` in `MLIR/Core/MlirOp.maxon`
-4. Write the lowering pass: `MidToRiscvConversion.maxon` mapping mid-level ops -> `RiscvOp`
+4. Write the lowering pass: `MidToRiscvConversion.maxon` mapping MIR ops -> `RiscvOp`
 5. Write the code emitter: `RiscvCodeEmitter.maxon` converting `RiscvOp` -> machine code bytes
 6. Add the CPU variant to `CpuArch` in `Target.maxon`
-7. Add a `RegTarget` variant in `RegisterManager.maxon` and implement the target dispatch
-8. Add dispatch cases in `BackendDispatch.maxon`
-9. If targeting a new OS, add an executable writer under `Targets/<Os>/`
-10. Add an `OsDescriptor` for the new CPU x OS combination
+7. Create `RiscvRegisterAlloc.maxon` and add dispatch in `TargetRegAllocDispatch.maxon`
+8. Create `RiscvLatency.maxon` with `createRiscvLatencyTable()`
+9. Add dispatch cases in `BackendDispatch.maxon`
+10. If targeting a new OS, add an executable writer under `Targets/<Os>/`
+11. Add an `OsDescriptor` for the new CPU x OS combination
 
 ### Adding a New Semantic Check
 
@@ -466,5 +492,6 @@ maxon build maxon-selfhosted
 
 ## Known Constraints and Gotchas
 
-- **Match exhaustiveness**: Maxon's `match` on enums requires exhaustive case listing -- every variant must be listed even if most are no-ops. This makes semantic check code verbose.
+- **Match exhaustiveness**: Maxon's `match` on enums requires exhaustive case listing -- every variant must be listed even if most are no-ops. Range syntax (`a to b gives ...`) helps reduce verbosity.
 - **Single-line match arms**: Match arms can only contain a single expression/statement.
+- **Struct-backed enum field ordering**: During `PreScanEnum`, cross-file struct field resolution is deferred when the backing struct hasn't been fully defined yet (file processing order within the PreScan pass).
