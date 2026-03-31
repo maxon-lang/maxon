@@ -251,8 +251,13 @@ raw_value     = [ '-' ] INTEGER
               | [ '-' ] FLOAT
               | STRING
               | CHARACTER
-              | struct_literal                                      (* struct-backed: TypeName{field: value, ...} *)
-              | CHARACTER
+              | struct_raw_literal                                   (* struct-backed: TypeName{field: value, ...} *)
+
+struct_raw_literal
+              = IDENTIFIER '{' raw_field_init { ',' raw_field_init } '}'
+
+raw_field_init
+              = IDENTIFIER ':' ( [ '-' ] INTEGER | [ '-' ] FLOAT | 'true' | 'false' )
 
 assoc_fields  = assoc_field { ',' assoc_field }
 assoc_field   = IDENTIFIER type_ref

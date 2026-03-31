@@ -10,6 +10,9 @@ export typealias RegCount = int(0 to 64)
 
 export type OpMeta
 	export let latency Latency
+	export let isMemory bool
+	export let isStore bool
+	export let isCall bool
 end 'OpMeta'
 
 export type TargetLatencyTable
@@ -773,7 +776,8 @@ function isMemoryOp(op MlirOp) returns bool
 		maxon gives false
 		arith gives false
 		cf gives false
-		x64 to arm64 gives false
+		x64(x64Op) gives x64Op.rawValue.isMemory
+		arm64(arm64Op) gives arm64Op.rawValue.isMemory
 	end 'check'
 end 'isMemoryOp'
 
@@ -840,7 +844,8 @@ function isStoreOp(op MlirOp) returns bool
 		cf gives false
 		func gives false
 		runtime gives false
-		x64 to arm64 gives false
+		x64(x64Op) gives x64Op.rawValue.isStore
+		arm64(arm64Op) gives arm64Op.rawValue.isStore
 	end 'check'
 end 'isStoreOp'
 
@@ -894,7 +899,8 @@ function isCallOp(op MlirOp) returns bool
 		cf gives false
 		memref gives false
 		runtime gives false
-		x64 to arm64 gives false
+		x64(x64Op) gives x64Op.rawValue.isCall
+		arm64(arm64Op) gives arm64Op.rawValue.isCall
 	end 'check'
 end 'isCallOp'
 

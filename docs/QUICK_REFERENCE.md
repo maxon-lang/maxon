@@ -512,6 +512,27 @@ end 'Direction'
 
 Enum values with associated values cannot be compared with `==` or `!=` (error E3066). Use `match` to inspect them. This prevents bugs when new cases are added. Enums auto-conform to `Hashable` internally for Map/Set usage.
 
+### Struct-Backed Enums
+
+```maxon
+typealias Cycles = int(0 to 50)
+type OpMeta
+	export let latency Cycles
+	export let isMemory bool
+end 'OpMeta'
+
+enum Instruction
+	add = OpMeta{latency: 1, isMemory: false}
+	load = OpMeta{latency: 4, isMemory: true}
+end 'Instruction'
+
+// Access backing struct via .rawValue
+let lat = Instruction.load.rawValue.latency   // 4
+let mem = Instruction.load.rawValue.isMemory  // true
+```
+
+All cases must use the same struct type. Field values must be compile-time constants (integers, floats, or booleans). Cases with associated values can also have struct backing.
+
 ## Error Handling
 
 ```maxon

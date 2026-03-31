@@ -28,6 +28,7 @@ You *Are* Going To Read It
 - extensions
 - MlirStructType: All fields are 8 bytes: scalars use 64-bit slots, struct fields store heap pointers
 - dedup struct literals with COW ie = OpMeta{latency: 40}
+- check for missing fields in struct literals
 
 ## Ideas
 - codelens to show the complexity/cost of a function

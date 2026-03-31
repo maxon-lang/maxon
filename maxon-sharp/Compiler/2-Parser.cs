@@ -2318,9 +2318,21 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
               var fv = ParseFloatLiteral(Advance());
               if (fieldNegative) fv = -fv;
               fieldValue = BitConverter.DoubleToInt64Bits(fv);
+            } else if (Check(TokenType.True)) {
+              if (fieldNegative)
+                throw new CompileError(ErrorCode.SemanticEnumRawValueTypeMismatch,
+                  "cannot negate a boolean value", Current().Line, Current().Column);
+              Advance();
+              fieldValue = 1;
+            } else if (Check(TokenType.False)) {
+              if (fieldNegative)
+                throw new CompileError(ErrorCode.SemanticEnumRawValueTypeMismatch,
+                  "cannot negate a boolean value", Current().Line, Current().Column);
+              Advance();
+              fieldValue = 0;
             } else {
               throw new CompileError(ErrorCode.ParserExpectedExpression,
-                "expected integer or float literal for struct raw value field",
+                "expected integer, float, or boolean literal for struct raw value field",
                 Current().Line, Current().Column);
             }
             fields.Add((fieldNameToken.Value, fieldValue));

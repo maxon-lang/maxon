@@ -1222,6 +1222,44 @@ function toggle(s Status) returns Status
 end 'toggle'
 ```
 
+### Struct-Backed Enums
+
+Enums can be backed by a struct type, associating compile-time constant metadata with each case. Access the backing struct via `.rawValue`:
+
+```maxon
+typealias Latency = int(0 to 50)
+
+type OpMeta
+	export let latency Latency
+	export let isMemory bool
+end 'OpMeta'
+
+enum Instruction
+	add = OpMeta{latency: 1, isMemory: false}
+	load = OpMeta{latency: 4, isMemory: true}
+	store = OpMeta{latency: 3, isMemory: true}
+end 'Instruction'
+
+let op = Instruction.load
+let lat = op.rawValue.latency     // 4
+let mem = op.rawValue.isMemory    // true
+```
+
+Struct-backed enums can also have associated values:
+
+```maxon
+enum X64Op
+	movReg(dest Register, src Register) = OpMeta{latency: 1, isMemory: false}
+	loadMem(dest Register, addr Address) = OpMeta{latency: 4, isMemory: true}
+end 'X64Op'
+```
+
+**Notes:**
+- All cases must use the same struct type
+- Every case must provide a backing value (no bare cases)
+- Struct field values must be compile-time constants (integers, floats, or booleans)
+- At runtime, the enum is stored as an ordinal; `.rawValue` constructs the backing struct
+
 ### Enum Interface Conformance
 
 Enums can conform to interfaces using the `implements` keyword, similar to types:

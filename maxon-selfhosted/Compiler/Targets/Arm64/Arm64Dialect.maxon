@@ -115,99 +115,93 @@ end 'arm64PhysFpReg'
 
 export enum Arm64Op
 	// Control flow / bookkeeping
-	prologue(stackSize StackSize) = OpMeta{latency: 1}
-	epilogue = OpMeta{latency: 1}
-	// Simple ALU: 1 cycle
-	movImm(dest Arm64VReg, value MachineWord) = OpMeta{latency: 1}
-	strToSlot(slotIndex VarSlot, src Arm64VReg) = OpMeta{latency: 3}
-	ldrFromSlot(dest Arm64VReg, slotIndex VarSlot) = OpMeta{latency: 4}
-	addRegs(dest Arm64VReg, src1 Arm64VReg, src2 Arm64VReg) = OpMeta{latency: 1}
-	subRegs(dest Arm64VReg, src1 Arm64VReg, src2 Arm64VReg) = OpMeta{latency: 1}
-	mulRegs(dest Arm64VReg, src1 Arm64VReg, src2 Arm64VReg) = OpMeta{latency: 3}
-	sdivRegs(dest Arm64VReg, src1 Arm64VReg, src2 Arm64VReg) = OpMeta{latency: 12}
-	remRegs(dest Arm64VReg, src1 Arm64VReg, src2 Arm64VReg) = OpMeta{latency: 12}
-	negReg(dest Arm64VReg, src Arm64VReg) = OpMeta{latency: 1}
-	mvnReg(dest Arm64VReg, src Arm64VReg) = OpMeta{latency: 1}
-	andRegs(dest Arm64VReg, src1 Arm64VReg, src2 Arm64VReg) = OpMeta{latency: 1}
-	orrRegs(dest Arm64VReg, src1 Arm64VReg, src2 Arm64VReg) = OpMeta{latency: 1}
-	eorRegs(dest Arm64VReg, src1 Arm64VReg, src2 Arm64VReg) = OpMeta{latency: 1}
-	lslRegs(dest Arm64VReg, src1 Arm64VReg, src2 Arm64VReg) = OpMeta{latency: 1}
-	asrRegs(dest Arm64VReg, src1 Arm64VReg, src2 Arm64VReg) = OpMeta{latency: 1}
-	cmpRegs(src1 Arm64VReg, src2 Arm64VReg) = OpMeta{latency: 1}
-	cmpRegZero(src Arm64VReg) = OpMeta{latency: 1}
-	condBranch(condition Arm64CondCode, targetBlock BlockId) = OpMeta{latency: 1}
-	branch(targetBlock BlockId) = OpMeta{latency: 1}
-	branchLink(target ByteArray) = OpMeta{latency: 5}
-	printLiteral(data ByteArray) = OpMeta{latency: 5}
-	printInt = OpMeta{latency: 5}
-	ret = OpMeta{latency: 1}
-	// SysOp lowering: Linux ARM64 syscall (svc #0)
-	syscall(resultSlot VarSlot, number MachineWord, argSlots VarSlotArray) = OpMeta{latency: 5}
-	// SysOp lowering: indirect call through IAT slot
-	iatCall(resultSlot VarSlot, slotIndex MachineWord, argSlots VarSlotArray) = OpMeta{latency: 5}
-	// SysOp lowering: data island + ADR for named global data
-	globalAddr(resultSlot VarSlot, name ByteArray) = OpMeta{latency: 1}
-	// SysOp lowering: address of a stack slot
-	stackAddrOp(resultSlot VarSlot, targetSlot VarSlot) = OpMeta{latency: 1}
-	// SysOp lowering: strb byte at base+offset
-	storeByteOp(baseSlot VarSlot, offsetSlot VarSlot, byteSlot VarSlot) = OpMeta{latency: 3}
-	// SysOp lowering: ldrb byte from base+offset
-	loadByteOp(resultSlot VarSlot, baseSlot VarSlot, offsetSlot VarSlot) = OpMeta{latency: 4}
-	// SysOp lowering: byte-by-byte copy
-	memcpyOp(dstSlot VarSlot, srcSlot VarSlot, lenSlot VarSlot) = OpMeta{latency: 3}
+	prologue(stackSize StackSize) = OpMeta{latency: 1, isMemory: false, isStore: false, isCall: false}
+	epilogue = OpMeta{latency: 1, isMemory: false, isStore: false, isCall: false}
+	// Simple ALU
+	movImm(dest Arm64VReg, value MachineWord) = OpMeta{latency: 1, isMemory: false, isStore: false, isCall: false}
+	strToSlot(slotIndex VarSlot, src Arm64VReg) = OpMeta{latency: 3, isMemory: true, isStore: true, isCall: false}
+	ldrFromSlot(dest Arm64VReg, slotIndex VarSlot) = OpMeta{latency: 4, isMemory: true, isStore: false, isCall: false}
+	addRegs(dest Arm64VReg, src1 Arm64VReg, src2 Arm64VReg) = OpMeta{latency: 1, isMemory: false, isStore: false, isCall: false}
+	subRegs(dest Arm64VReg, src1 Arm64VReg, src2 Arm64VReg) = OpMeta{latency: 1, isMemory: false, isStore: false, isCall: false}
+	mulRegs(dest Arm64VReg, src1 Arm64VReg, src2 Arm64VReg) = OpMeta{latency: 3, isMemory: false, isStore: false, isCall: false}
+	sdivRegs(dest Arm64VReg, src1 Arm64VReg, src2 Arm64VReg) = OpMeta{latency: 12, isMemory: false, isStore: false, isCall: false}
+	remRegs(dest Arm64VReg, src1 Arm64VReg, src2 Arm64VReg) = OpMeta{latency: 12, isMemory: false, isStore: false, isCall: false}
+	negReg(dest Arm64VReg, src Arm64VReg) = OpMeta{latency: 1, isMemory: false, isStore: false, isCall: false}
+	mvnReg(dest Arm64VReg, src Arm64VReg) = OpMeta{latency: 1, isMemory: false, isStore: false, isCall: false}
+	andRegs(dest Arm64VReg, src1 Arm64VReg, src2 Arm64VReg) = OpMeta{latency: 1, isMemory: false, isStore: false, isCall: false}
+	orrRegs(dest Arm64VReg, src1 Arm64VReg, src2 Arm64VReg) = OpMeta{latency: 1, isMemory: false, isStore: false, isCall: false}
+	eorRegs(dest Arm64VReg, src1 Arm64VReg, src2 Arm64VReg) = OpMeta{latency: 1, isMemory: false, isStore: false, isCall: false}
+	lslRegs(dest Arm64VReg, src1 Arm64VReg, src2 Arm64VReg) = OpMeta{latency: 1, isMemory: false, isStore: false, isCall: false}
+	asrRegs(dest Arm64VReg, src1 Arm64VReg, src2 Arm64VReg) = OpMeta{latency: 1, isMemory: false, isStore: false, isCall: false}
+	cmpRegs(src1 Arm64VReg, src2 Arm64VReg) = OpMeta{latency: 1, isMemory: false, isStore: false, isCall: false}
+	cmpRegZero(src Arm64VReg) = OpMeta{latency: 1, isMemory: false, isStore: false, isCall: false}
+	condBranch(condition Arm64CondCode, targetBlock BlockId) = OpMeta{latency: 1, isMemory: false, isStore: false, isCall: false}
+	branch(targetBlock BlockId) = OpMeta{latency: 1, isMemory: false, isStore: false, isCall: false}
+	branchLink(target ByteArray) = OpMeta{latency: 5, isMemory: true, isStore: false, isCall: true}
+	printLiteral(data ByteArray) = OpMeta{latency: 5, isMemory: true, isStore: false, isCall: true}
+	printInt = OpMeta{latency: 5, isMemory: true, isStore: false, isCall: true}
+	ret = OpMeta{latency: 1, isMemory: false, isStore: false, isCall: false}
+	// SysOp lowering
+	syscall(resultSlot VarSlot, number MachineWord, argSlots VarSlotArray) = OpMeta{latency: 5, isMemory: true, isStore: false, isCall: true}
+	iatCall(resultSlot VarSlot, slotIndex MachineWord, argSlots VarSlotArray) = OpMeta{latency: 5, isMemory: true, isStore: false, isCall: true}
+	globalAddr(resultSlot VarSlot, name ByteArray) = OpMeta{latency: 1, isMemory: false, isStore: false, isCall: false}
+	stackAddrOp(resultSlot VarSlot, targetSlot VarSlot) = OpMeta{latency: 1, isMemory: false, isStore: false, isCall: false}
+	storeByteOp(baseSlot VarSlot, offsetSlot VarSlot, byteSlot VarSlot) = OpMeta{latency: 3, isMemory: true, isStore: true, isCall: false}
+	loadByteOp(resultSlot VarSlot, baseSlot VarSlot, offsetSlot VarSlot) = OpMeta{latency: 4, isMemory: true, isStore: false, isCall: false}
+	memcpyOp(dstSlot VarSlot, srcSlot VarSlot, lenSlot VarSlot) = OpMeta{latency: 3, isMemory: true, isStore: true, isCall: false}
 	// Register allocator ops
-	movRegReg(dest Arm64VReg, src Arm64VReg) = OpMeta{latency: 1}
-	spillToStack(offset MachineWord, src Arm64VReg) = OpMeta{latency: 3}
-	reloadFromStack(dest Arm64VReg, offset MachineWord) = OpMeta{latency: 4}
+	movRegReg(dest Arm64VReg, src Arm64VReg) = OpMeta{latency: 1, isMemory: false, isStore: false, isCall: false}
+	spillToStack(offset MachineWord, src Arm64VReg) = OpMeta{latency: 3, isMemory: true, isStore: true, isCall: false}
+	reloadFromStack(dest Arm64VReg, offset MachineWord) = OpMeta{latency: 4, isMemory: true, isStore: false, isCall: false}
 	// Call support ops
-	branchLinkReg(reg Arm64VReg) = OpMeta{latency: 5}
-	subSpImm(value StackSize) = OpMeta{latency: 1}
-	addSpImm(value StackSize) = OpMeta{latency: 1}
-	strToSpOffset(offset StackSize, src Arm64VReg) = OpMeta{latency: 3}
+	branchLinkReg(reg Arm64VReg) = OpMeta{latency: 5, isMemory: true, isStore: false, isCall: true}
+	subSpImm(value StackSize) = OpMeta{latency: 1, isMemory: false, isStore: false, isCall: false}
+	addSpImm(value StackSize) = OpMeta{latency: 1, isMemory: false, isStore: false, isCall: false}
+	strToSpOffset(offset StackSize, src Arm64VReg) = OpMeta{latency: 3, isMemory: true, isStore: true, isCall: false}
 	// FP ops
-	fmovRegReg(dest Arm64FpVReg, src Arm64FpVReg, precision FloatPrecision) = OpMeta{latency: 1}
-	spillFpToStack(offset MachineWord, src Arm64FpVReg, precision FloatPrecision) = OpMeta{latency: 3}
-	reloadFpFromStack(dest Arm64FpVReg, offset MachineWord, precision FloatPrecision) = OpMeta{latency: 4}
-	fmovToFloat(dest Arm64FpVReg, src Arm64VReg, precision FloatPrecision) = OpMeta{latency: 2}
-	fmovToGpr(dest Arm64VReg, src Arm64FpVReg, precision FloatPrecision) = OpMeta{latency: 2}
-	fpLoadRdata(dest Arm64FpVReg, rdataLabel ByteArray, precision FloatPrecision) = OpMeta{latency: 4}
-	fadd(dest Arm64FpVReg, src1 Arm64FpVReg, src2 Arm64FpVReg, precision FloatPrecision) = OpMeta{latency: 4}
-	fsub(dest Arm64FpVReg, src1 Arm64FpVReg, src2 Arm64FpVReg, precision FloatPrecision) = OpMeta{latency: 4}
-	fmul(dest Arm64FpVReg, src1 Arm64FpVReg, src2 Arm64FpVReg, precision FloatPrecision) = OpMeta{latency: 4}
-	fdiv(dest Arm64FpVReg, src1 Arm64FpVReg, src2 Arm64FpVReg, precision FloatPrecision) = OpMeta{latency: 15}
-	fsqrt(dest Arm64FpVReg, src Arm64FpVReg, precision FloatPrecision) = OpMeta{latency: 20}
-	fabs(dest Arm64FpVReg, src Arm64FpVReg, precision FloatPrecision) = OpMeta{latency: 2}
-	fneg(dest Arm64FpVReg, src Arm64FpVReg, precision FloatPrecision) = OpMeta{latency: 2}
-	fcmp(src1 Arm64FpVReg, src2 Arm64FpVReg, precision FloatPrecision) = OpMeta{latency: 3}
-	scvtf(dest Arm64FpVReg, src Arm64VReg, precision FloatPrecision) = OpMeta{latency: 4}
-	fcvtzs(dest Arm64VReg, src Arm64FpVReg, precision FloatPrecision) = OpMeta{latency: 4}
-	fcvt(dest Arm64FpVReg, src Arm64FpVReg, destPrecision FloatPrecision) = OpMeta{latency: 3}
-	frintm(dest Arm64FpVReg, src Arm64FpVReg, precision FloatPrecision) = OpMeta{latency: 4}
-	frintp(dest Arm64FpVReg, src Arm64FpVReg, precision FloatPrecision) = OpMeta{latency: 4}
-	frintz(dest Arm64FpVReg, src Arm64FpVReg, precision FloatPrecision) = OpMeta{latency: 4}
-	frintn(dest Arm64FpVReg, src Arm64FpVReg, precision FloatPrecision) = OpMeta{latency: 4}
+	fmovRegReg(dest Arm64FpVReg, src Arm64FpVReg, precision FloatPrecision) = OpMeta{latency: 1, isMemory: false, isStore: false, isCall: false}
+	spillFpToStack(offset MachineWord, src Arm64FpVReg, precision FloatPrecision) = OpMeta{latency: 3, isMemory: true, isStore: true, isCall: false}
+	reloadFpFromStack(dest Arm64FpVReg, offset MachineWord, precision FloatPrecision) = OpMeta{latency: 4, isMemory: true, isStore: false, isCall: false}
+	fmovToFloat(dest Arm64FpVReg, src Arm64VReg, precision FloatPrecision) = OpMeta{latency: 2, isMemory: false, isStore: false, isCall: false}
+	fmovToGpr(dest Arm64VReg, src Arm64FpVReg, precision FloatPrecision) = OpMeta{latency: 2, isMemory: false, isStore: false, isCall: false}
+	fpLoadRdata(dest Arm64FpVReg, rdataLabel ByteArray, precision FloatPrecision) = OpMeta{latency: 4, isMemory: true, isStore: false, isCall: false}
+	fadd(dest Arm64FpVReg, src1 Arm64FpVReg, src2 Arm64FpVReg, precision FloatPrecision) = OpMeta{latency: 4, isMemory: false, isStore: false, isCall: false}
+	fsub(dest Arm64FpVReg, src1 Arm64FpVReg, src2 Arm64FpVReg, precision FloatPrecision) = OpMeta{latency: 4, isMemory: false, isStore: false, isCall: false}
+	fmul(dest Arm64FpVReg, src1 Arm64FpVReg, src2 Arm64FpVReg, precision FloatPrecision) = OpMeta{latency: 4, isMemory: false, isStore: false, isCall: false}
+	fdiv(dest Arm64FpVReg, src1 Arm64FpVReg, src2 Arm64FpVReg, precision FloatPrecision) = OpMeta{latency: 15, isMemory: false, isStore: false, isCall: false}
+	fsqrt(dest Arm64FpVReg, src Arm64FpVReg, precision FloatPrecision) = OpMeta{latency: 20, isMemory: false, isStore: false, isCall: false}
+	fabs(dest Arm64FpVReg, src Arm64FpVReg, precision FloatPrecision) = OpMeta{latency: 2, isMemory: false, isStore: false, isCall: false}
+	fneg(dest Arm64FpVReg, src Arm64FpVReg, precision FloatPrecision) = OpMeta{latency: 2, isMemory: false, isStore: false, isCall: false}
+	fcmp(src1 Arm64FpVReg, src2 Arm64FpVReg, precision FloatPrecision) = OpMeta{latency: 3, isMemory: false, isStore: false, isCall: false}
+	scvtf(dest Arm64FpVReg, src Arm64VReg, precision FloatPrecision) = OpMeta{latency: 4, isMemory: false, isStore: false, isCall: false}
+	fcvtzs(dest Arm64VReg, src Arm64FpVReg, precision FloatPrecision) = OpMeta{latency: 4, isMemory: false, isStore: false, isCall: false}
+	fcvt(dest Arm64FpVReg, src Arm64FpVReg, destPrecision FloatPrecision) = OpMeta{latency: 3, isMemory: false, isStore: false, isCall: false}
+	frintm(dest Arm64FpVReg, src Arm64FpVReg, precision FloatPrecision) = OpMeta{latency: 4, isMemory: false, isStore: false, isCall: false}
+	frintp(dest Arm64FpVReg, src Arm64FpVReg, precision FloatPrecision) = OpMeta{latency: 4, isMemory: false, isStore: false, isCall: false}
+	frintz(dest Arm64FpVReg, src Arm64FpVReg, precision FloatPrecision) = OpMeta{latency: 4, isMemory: false, isStore: false, isCall: false}
+	frintn(dest Arm64FpVReg, src Arm64FpVReg, precision FloatPrecision) = OpMeta{latency: 4, isMemory: false, isStore: false, isCall: false}
 	// FP indirect memory ops
-	fpStoreIndirect(baseReg Arm64VReg, offset MachineWord, src Arm64FpVReg, precision FloatPrecision) = OpMeta{latency: 3}
-	fpLoadIndirect(dest Arm64FpVReg, baseReg Arm64VReg, offset MachineWord, precision FloatPrecision) = OpMeta{latency: 4}
+	fpStoreIndirect(baseReg Arm64VReg, offset MachineWord, src Arm64FpVReg, precision FloatPrecision) = OpMeta{latency: 3, isMemory: true, isStore: true, isCall: false}
+	fpLoadIndirect(dest Arm64FpVReg, baseReg Arm64VReg, offset MachineWord, precision FloatPrecision) = OpMeta{latency: 4, isMemory: true, isStore: false, isCall: false}
 	// Indirect memory ops (GPR)
-	storeIndirect(baseReg Arm64VReg, offset MachineWord, srcReg Arm64VReg, size MachineWord) = OpMeta{latency: 3}
-	loadIndirect(destReg Arm64VReg, baseReg Arm64VReg, offset MachineWord, size MachineWord) = OpMeta{latency: 4}
+	storeIndirect(baseReg Arm64VReg, offset MachineWord, srcReg Arm64VReg, size MachineWord) = OpMeta{latency: 3, isMemory: true, isStore: true, isCall: false}
+	loadIndirect(destReg Arm64VReg, baseReg Arm64VReg, offset MachineWord, size MachineWord) = OpMeta{latency: 4, isMemory: true, isStore: false, isCall: false}
 	// Global variable ops
-	globalLoad(dest Arm64VReg, name ByteArray, size MachineWord) = OpMeta{latency: 4}
-	globalStore(name ByteArray, src Arm64VReg, size MachineWord) = OpMeta{latency: 3}
-	globalLoadFloat(dest Arm64FpVReg, name ByteArray, precision FloatPrecision) = OpMeta{latency: 4}
-	globalStoreFloat(name ByteArray, src Arm64FpVReg, precision FloatPrecision) = OpMeta{latency: 3}
+	globalLoad(dest Arm64VReg, name ByteArray, size MachineWord) = OpMeta{latency: 4, isMemory: true, isStore: false, isCall: false}
+	globalStore(name ByteArray, src Arm64VReg, size MachineWord) = OpMeta{latency: 3, isMemory: true, isStore: true, isCall: false}
+	globalLoadFloat(dest Arm64FpVReg, name ByteArray, precision FloatPrecision) = OpMeta{latency: 4, isMemory: true, isStore: false, isCall: false}
+	globalStoreFloat(name ByteArray, src Arm64FpVReg, precision FloatPrecision) = OpMeta{latency: 3, isMemory: true, isStore: true, isCall: false}
 	// LEA ops
-	leaFromStack(dest Arm64VReg, stackOffset MachineWord) = OpMeta{latency: 1}
-	leaRdata(dest Arm64VReg, rdataLabel ByteArray) = OpMeta{latency: 2}
-	leaFuncAddr(dest Arm64VReg, funcName ByteArray) = OpMeta{latency: 2}
+	leaFromStack(dest Arm64VReg, stackOffset MachineWord) = OpMeta{latency: 1, isMemory: false, isStore: false, isCall: false}
+	leaRdata(dest Arm64VReg, rdataLabel ByteArray) = OpMeta{latency: 2, isMemory: false, isStore: false, isCall: false}
+	leaFuncAddr(dest Arm64VReg, funcName ByteArray) = OpMeta{latency: 2, isMemory: false, isStore: false, isCall: false}
 	// Conditional ops
-	cset(dest Arm64VReg, condition Arm64CondCode) = OpMeta{latency: 1}
-	csel(dest Arm64VReg, src1 Arm64VReg, src2 Arm64VReg, condition Arm64CondCode) = OpMeta{latency: 1}
+	cset(dest Arm64VReg, condition Arm64CondCode) = OpMeta{latency: 1, isMemory: false, isStore: false, isCall: false}
+	csel(dest Arm64VReg, src1 Arm64VReg, src2 Arm64VReg, condition Arm64CondCode) = OpMeta{latency: 1, isMemory: false, isStore: false, isCall: false}
 	// Width conversion ops
-	sxtw(dest Arm64VReg, src Arm64VReg) = OpMeta{latency: 1}
+	sxtw(dest Arm64VReg, src Arm64VReg) = OpMeta{latency: 1, isMemory: false, isStore: false, isCall: false}
 	// Null-safe load
-	nullSafeLoad(dest Arm64VReg, baseReg Arm64VReg, offset MachineWord) = OpMeta{latency: 4}
+	nullSafeLoad(dest Arm64VReg, baseReg Arm64VReg, offset MachineWord) = OpMeta{latency: 4, isMemory: true, isStore: false, isCall: false}
 end 'Arm64Op'
 
 export typealias Arm64OpArray = Array with Arm64Op
