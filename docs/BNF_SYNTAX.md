@@ -357,6 +357,7 @@ constraint    = IDENTIFIER 'is' IDENTIFIER { 'and' IDENTIFIER }
 
 type_ref      = 'bool'
               | 'Self'
+              | IDENTIFIER '.' IDENTIFIER
               | IDENTIFIER
               | function_type
               | tuple_type

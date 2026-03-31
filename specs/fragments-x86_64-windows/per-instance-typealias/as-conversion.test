@@ -1,0 +1,67 @@
+// Test: as-conversion
+typealias Integer = int(i64.min to i64.max)
+
+type Wrapper uses T
+	export typealias Idx = int(0 to u64.max)
+
+	export var value T
+	export var tag Idx
+end 'Wrapper'
+
+typealias IntWrapper = Wrapper with Integer
+typealias StrWrapper = Wrapper with String
+
+function takeStrTag(t StrWrapper.Idx) returns StrWrapper.Idx
+	return t
+end 'takeStrTag'
+
+function main() returns ExitCode
+	var iw = IntWrapper{value: 1, tag: 7}
+	let intTag = iw.tag
+	let strTag = intTag as StrWrapper.Idx
+	let result = takeStrTag(strTag)
+	if result == 7 'check'
+		return 0
+	end 'check'
+	return 1
+end 'main'
+---
+ExitCode: 0
+---
+module {
+  func @per-instance-typealias.takeStrTag(t: i64) -> u64 {
+  entry:
+    x86.prologue stack_size=16
+    x86.xor rax, rax
+    x86.cmp rcx, rax
+    x86.jge per-instance-typealias.takeStrTag.__range_ok_0
+  __range_panic_0:
+    x86.lea_symdata rax, [__panic_msg_0]
+    x86.mov rcx, rax
+    x86.call mrt_panic
+  __range_ok_0:
+    x86.mov rax, rcx
+    x86.epilogue
+    x86.ret
+  }
+  func @main() -> u32 {
+  entry:
+    x86.prologue stack_size=16
+    x86.mov rax, 7
+    x86.mov [rbp-8], rax
+    x86.mov rcx, [rbp-8]
+    x86.call per-instance-typealias.takeStrTag
+    x86.mov rdx, 7
+    x86.cmp rax, rdx
+    x86.jne main.check_0.after
+  check_0:
+    x86.xor rax, rax
+    x86.epilogue
+    x86.ret
+  check_0.after:
+    x86.mov rax, 1
+    x86.epilogue
+    x86.ret
+  }
+}
+---

@@ -147,6 +147,15 @@ internal class TypeSubstitution {
 
     ResolveInnerTypeAliases(map, sourceStruct.TypeParams, module, referencedNames);
 
+    // Map inner ranged typealiases to their per-instance concrete aliases.
+    // E.g., "Index" → MlirRangedPrimitiveType("FunctionPool__Index", ...)
+    if (module.TypeDefs.TryGetValue(concreteAliasName, out var concreteAliasDef)
+        && concreteAliasDef is MlirStructType concreteStructDef) {
+      foreach (var (innerName, concreteRanged) in concreteStructDef.InnerRangedAliases) {
+        map[innerName] = concreteRanged;
+      }
+    }
+
     return new TypeSubstitution(map);
   }
 
@@ -434,6 +443,10 @@ internal class TypeSubstitution {
       if (_map.TryGetValue(ut.Name, out var newType)) {
         return newType;
       }
+    }
+    if (type is MlirRangedPrimitiveType rpt) {
+      if (_map.TryGetValue(rpt.Name, out var newRangedType))
+        return newRangedType;
     }
     if (type is MlirFunctionType ft) {
       var newParams = ft.ParameterTypes.Select(p => SubstituteType(p)).ToList();

@@ -1,0 +1,72 @@
+// Test: dot-construction
+typealias Integer = int(i64.min to i64.max)
+
+type Wrapper uses T
+	export typealias Idx = int(0 to u64.max)
+
+	export var value T
+	export var tag Idx
+
+	export function getTag() returns Idx
+		return self.tag
+	end 'getTag'
+end 'Wrapper'
+
+typealias IntWrapper = Wrapper with Integer
+
+function main() returns ExitCode
+	let idx = IntWrapper.Idx{42}
+	var w = IntWrapper{value: 99, tag: idx}
+	let t = w.getTag()
+	if t == 42 'check'
+		return 0
+	end 'check'
+	return 1
+end 'main'
+---
+ExitCode: 0
+---
+module {
+  func @main() -> u32 {
+  entry:
+    x86.prologue stack_size=16
+    x86.mov rax, 42
+    x86.mov rcx, 99
+    x86.mov [rbp-16], rcx
+    x86.mov [rbp-8], rax
+    x86.lea rdx, [rbp-16]
+    x86.mov rbx, rdx
+    x86.mov rcx, rbx
+    x86.call IntWrapper.getTag
+    x86.mov rsi, 42
+    x86.cmp rax, rsi
+    x86.jne main.check_0.after
+  check_0:
+    x86.xor rax, rax
+    x86.epilogue
+    x86.ret
+  check_0.after:
+    x86.mov rax, 1
+    x86.epilogue
+    x86.ret
+  }
+  func @IntWrapper.getTag(__self_ptr: i64) -> u64 {
+  entry:
+    x86.prologue stack_size=16
+    x86.mov [rbp-8], rcx
+    x86.mov rax, [rbp-8]
+    x86.mov rdx, [rax+8]
+    x86.xor rax, rax
+    x86.cmp rdx, rax
+    x86.jge IntWrapper.getTag.__range_ok_0
+  __range_panic_0:
+    x86.lea_symdata rax, [__panic_msg_0]
+    x86.mov rcx, rax
+    x86.call mrt_panic
+  __range_ok_0:
+    x86.mov rax, rdx
+    x86.epilogue
+    x86.ret
+  }
+}
+---

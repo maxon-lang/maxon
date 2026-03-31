@@ -383,6 +383,15 @@ type Map uses Key, Value where Key is Hashable           // single constraint
 type Pair uses A, B where A is Hashable and Equatable    // multiple interfaces with 'and'
 type Multi uses A, B where A is Hashable, B is Cloneable // multiple params with ','
 
+// Per-instance typealiases: ranged aliases inside generics are distinct per instantiation
+type Pool uses T
+	export typealias Idx = int(0 to u64.max)
+	export function get(index Idx) returns T
+end 'Pool'
+// PoolA.Idx and PoolB.Idx are incompatible types
+// Use 'as' to explicitly convert: aIdx as PoolB.Idx
+// Construct with dot-syntax: PoolA.Idx{0}
+
 // Interface extensions: add methods to all conforming types
 extension Container
 	function first() returns Element

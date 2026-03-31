@@ -94,6 +94,9 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
   private readonly HashSet<string> _seededStdlibTypeAliases = [];
   private readonly HashSet<string> _usedTypeAliases = [];
   private readonly Dictionary<string, (int Line, int Column)> _typeAliasLocations = [];
+  // Inner ranged typealiases collected during type body parsing, keyed by owning type name.
+  // Applied to the completed struct after the type body is fully parsed.
+  private readonly Dictionary<string, Dictionary<string, MlirRangedPrimitiveType>> _pendingInnerRangedAliases = [];
   private readonly HashSet<string> _resolvingTypeAliases = [];
 
   // Interface associated type names (interfaceName -> list of associated type names from 'uses' clause)
@@ -1672,6 +1675,13 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
       SourceLine = typeNameToken.Line,
       SourceColumn = typeNameToken.Column
     };
+    // Apply any inner ranged typealiases collected during body parsing
+    if (_pendingInnerRangedAliases.TryGetValue(typeName, out var pendingRanged)) {
+      foreach (var (innerName, innerRanged) in pendingRanged) {
+        completedStruct.InnerRangedAliases[innerName] = innerRanged;
+      }
+      _pendingInnerRangedAliases.Remove(typeName);
+    }
     _typeRegistry[typeName] = completedStruct;
     _locallyDefinedTypes.Add(typeName);
     if (isExported) _exportedTypes.Add(typeName);
@@ -2920,6 +2930,12 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
         var rangedType = new MlirRangedPrimitiveType(aliasName, baseType, lower, upper, upperInclusive);
         _typeRegistry[aliasName] = rangedType;
         _typeAliasSources[aliasName] = primitiveToken.Value;
+        // When inside a generic type body, record the alias so each concrete
+        // instantiation gets a nominally distinct copy.
+        if (_currentTypeName != null) {
+          _pendingInnerRangedAliases.TryAdd(_currentTypeName, []);
+          _pendingInnerRangedAliases[_currentTypeName][aliasName] = rangedType;
+        }
         return;
       }
 
@@ -3118,6 +3134,22 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
           if (!newStruct.ConformingInterfaces.Contains(iface))
             newStruct.ConformingInterfaces.Add(iface);
       }
+    }
+
+    // Instantiate inner ranged typealiases as per-instance distinct types.
+    // E.g., SegmentedPool.Index becomes FunctionPool__Index when aliasName = "FunctionPool".
+    foreach (var (innerName, innerRanged) in sourceStruct.InnerRangedAliases) {
+      var concreteInnerName = $"{aliasName}__{innerName}";
+      var concreteRanged = new MlirRangedPrimitiveType(
+        concreteInnerName, innerRanged.BaseType,
+        innerRanged.LowerBound, innerRanged.UpperBound, innerRanged.UpperInclusive);
+      _typeRegistry[concreteInnerName] = concreteRanged;
+      _typeAliasSources[concreteInnerName] = innerRanged.Name;
+      // Also register with dot-syntax name for user-facing access (e.g., FunctionPool.Index)
+      var dotName = $"{aliasName}.{innerName}";
+      _typeRegistry[dotName] = concreteRanged;
+      _typeAliasSources[dotName] = innerRanged.Name;
+      newStruct.InnerRangedAliases[innerName] = concreteRanged;
     }
 
     Logger.Debug(LogCategory.Parser, $"Registering type alias: {aliasName} -> {sourceName}");
@@ -4954,7 +4986,19 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
       if (_currentTypeName == null) throw new CompileError(ErrorCode.ParserExpectedType, "'Self' can only be used inside a type declaration", Current().Line, Current().Column);
       return _currentTypeName;
     }
-    if (Check(TokenType.Identifier)) return Advance().Value;
+    if (Check(TokenType.Identifier)) {
+      var name = Advance().Value;
+      // Dot-syntax for per-instance inner aliases: FunctionPool.Index
+      if (Check(TokenType.Dot) && PeekNext().Type == TokenType.Identifier) {
+        var dotName = $"{name}.{PeekNext().Value}";
+        if (_typeRegistry.ContainsKey(dotName)) {
+          Advance(); // consume '.'
+          Advance(); // consume inner name
+          return dotName;
+        }
+      }
+      return name;
+    }
     throw new CompileError(ErrorCode.ParserExpectedType, "Expected type name", Current().Line, Current().Column);
   }
 
@@ -4963,7 +5007,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
     if (Check(TokenType.Float)) { Advance(); return MaxonValueKind.Float; }
     if (Check(TokenType.Bool)) { Advance(); return MaxonValueKind.Bool; }
     if (Check(TokenType.Byte)) { Advance(); return MaxonValueKind.Byte; }
-    // Accept ranged typealias names (e.g., "value as Age")
+    // Accept ranged typealias names (e.g., "value as Age" or "value as FunctionPool.Index")
     if (Check(TokenType.Identifier)) {
       var name = Current().Value;
       if (_typeRegistry.TryGetValue(name, out var type) && type is MlirRangedPrimitiveType rpt) {
@@ -4971,6 +5015,19 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
         _usedTypeAliases.Add(name);
         _lastCastRangedType = rpt;
         return rpt.BaseType.ToValueKind();
+      }
+      // Dot-syntax for per-instance inner aliases: "FunctionPool.Index"
+      if (PeekNext().Type == TokenType.Dot) {
+        var outerName = Advance().Value; // consume outer type name
+        Advance(); // consume '.'
+        var innerName = Expect(TokenType.Identifier).Value;
+        var dotName = $"{outerName}.{innerName}";
+        if (_typeRegistry.TryGetValue(dotName, out var dotType) && dotType is MlirRangedPrimitiveType dotRpt) {
+          _usedTypeAliases.Add(outerName);
+          _lastCastRangedType = dotRpt;
+          return dotRpt.BaseType.ToValueKind();
+        }
+        throw new CompileError(ErrorCode.ParserExpectedType, $"Unknown type: '{dotName}'", Current().Line, Current().Column);
       }
     }
     throw new CompileError(ErrorCode.ParserExpectedType, "Expected type name after 'as'", Current().Line, Current().Column);
@@ -9029,6 +9086,30 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
   }
 
   /// <summary>
+  /// Returns the ranged typealias name for a primitive argument value, if it has one.
+  /// Looks up the value's source variable in the variable registry to find its StructTypeName
+  /// (which stores the ranged alias name for ranged primitive variables).
+  /// Returns null for literals or values without a tracked ranged type.
+  /// </summary>
+  private string? GetArgRangedTypeName(MaxonValue value) {
+    foreach (var info in _variables.Values) {
+      if (info.Value.Id == value.Id && info.StructTypeName != null
+          && _typeRegistry.TryGetValue(info.StructTypeName, out var rt)
+          && rt is MlirRangedPrimitiveType) {
+        return info.StructTypeName;
+      }
+    }
+    return null;
+  }
+
+  /// Converts internal per-instance alias names (e.g., "FunctionPool__Index") to
+  /// user-facing dot-syntax (e.g., "FunctionPool.Index") for error messages.
+  private static string FormatPerInstanceAliasName(string name) {
+    var idx = name.IndexOf("__");
+    return idx >= 0 ? $"{name[..idx]}.{name[(idx + 2)..]}" : name;
+  }
+
+  /// <summary>
   /// Checks if argTypeName is compatible with paramTypeName, considering typealiases.
   /// A typealias like StringArray (source: Array) is compatible with Array.
   /// </summary>
@@ -10313,10 +10394,22 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
         return new ExprResult.Direct(litOp.Result);
       }
 
-      // Check for ranged primitive construction: TypeName{value}
+      // Check for ranged primitive construction: TypeName{value} or TypeName.InnerAlias{value}
       if (_typeRegistry.TryGetValue(token.Value, out var regType) && regType is MlirRangedPrimitiveType rangedType && Check(TokenType.LeftBrace)) {
         _usedTypeAliases.Add(token.Value);
         return ParseRangedPrimitiveConstruction(token, rangedType);
+      }
+      // Dot-syntax ranged primitive construction: FunctionPool.Index{value}
+      // Peek ahead to verify the full pattern (Dot Identifier LeftBrace) before consuming
+      if (Check(TokenType.Dot) && PeekNext().Type == TokenType.Identifier
+          && _pos + 2 < _tokens.Count && _tokens[_pos + 2].Type == TokenType.LeftBrace) {
+        var dotName = $"{token.Value}.{PeekNext().Value}";
+        if (_typeRegistry.TryGetValue(dotName, out var dotRegType) && dotRegType is MlirRangedPrimitiveType dotRangedType) {
+          Advance(); // consume '.'
+          var innerToken = Advance(); // consume inner alias name
+          _usedTypeAliases.Add(token.Value);
+          return ParseRangedPrimitiveConstruction(innerToken, dotRangedType);
+        }
       }
 
       // Check for struct literal: TypeName{...} or TypeName { ... }
@@ -13134,6 +13227,33 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
         continue;
       }
 
+      // Per-instance ranged primitive parameter: check nominal type match.
+      // When the param type is a ranged alias that's an inner alias of a generic type,
+      // resolve it to the per-instance alias and verify the argument carries the same type.
+      if (paramType is MlirRangedPrimitiveType paramRanged) {
+        var expectedRangedName = paramRanged.Name;
+        // Resolve inner alias through self's concrete type
+        if (i > 0 && args[0] is MaxonStruct selfArgForRanged
+            && _typeRegistry.TryGetValue(selfArgForRanged.TypeName, out var selfTypeForRanged)
+            && selfTypeForRanged is MlirStructType selfStructForRanged
+            && selfStructForRanged.InnerRangedAliases.TryGetValue(paramRanged.Name, out var concreteInnerRanged)) {
+          expectedRangedName = concreteInnerRanged.Name;
+        }
+        // Check if the expected type is a per-instance alias (has a source that's an inner alias)
+        bool isPerInstanceAlias = _typeAliasSources.TryGetValue(expectedRangedName, out var rangedSource)
+            && rangedSource != "int" && rangedSource != "float" && rangedSource != "byte";
+        if (isPerInstanceAlias) {
+          // Get the argument's ranged type name from its variable info
+          var argRangedName = GetArgRangedTypeName(args[i]!);
+          if (argRangedName != null && argRangedName != expectedRangedName) {
+            throw new CompileError(ErrorCode.SemanticTypeMismatch,
+              $"argument type mismatch for '{callee.ParamNames[i]}': expected '{FormatPerInstanceAliasName(expectedRangedName)}', got '{FormatPerInstanceAliasName(argRangedName)}'",
+              functionNameToken.Line, functionNameToken.Column);
+          }
+          // If argRangedName is null, it's a literal or untyped — allow if kind matches
+        }
+      }
+
       // Primitive parameter: arg must not be a struct/enum
       if (argKind is MaxonValueKind.Struct or MaxonValueKind.Enum) {
         throw new CompileError(ErrorCode.SemanticTypeMismatch,
@@ -13578,6 +13698,24 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
     return type;
   }
 
+  /// <summary>
+  /// When a function returns a ranged primitive type that is an inner alias of a generic type,
+  /// resolves it to the per-instance alias name through the self argument's concrete type.
+  /// E.g., SegmentedPool.push() returns "Index" → resolved to "FunctionPool__Index" when
+  /// called on a FunctionPool instance. Returns null if the return type is not a ranged alias.
+  /// </summary>
+  private string? ResolveCallReturnRangedType(MlirType? returnType, List<MaxonValue> args) {
+    if (returnType is not MlirRangedPrimitiveType directRanged) return null;
+    // Resolve through the self argument's concrete type to find the per-instance alias
+    if (args.Count > 0 && args[0] is MaxonStruct selfStruct
+        && _typeRegistry.TryGetValue(selfStruct.TypeName, out var selfType)
+        && selfType is MlirStructType selfStructType
+        && selfStructType.InnerRangedAliases.TryGetValue(directRanged.Name, out var concreteRanged)) {
+      return concreteRanged.Name;
+    }
+    return directRanged.Name;
+  }
+
   /// Validates that a throwing function is called within a try context.
   private void ValidateThrowingCallContext(MlirFunction<MaxonOp> callee, Token functionNameToken, string displayName) {
     if (callee.ThrowsType == null || _inTryContext) return;
@@ -13612,7 +13750,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
     _lastArgMutabilities = null;
     _lastArgVarNames = null;
     _currentBlock!.AddOp(callOp);
-    _lastRangedTypeName = null;
+    _lastRangedTypeName = ResolveCallReturnRangedType(callee.ReturnType, args);
     // Struct call returns need a temp variable so refcounting tracks the intermediate
     if (callOp.Result != null && resultKind == MaxonValueKind.Struct) {
       EmitCallReturnTempAssign(callOp, resultKind.Value, resultStructTypeName);
@@ -13639,7 +13777,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
     _lastArgMutabilities = null;
     _lastArgVarNames = null;
     _currentBlock!.AddOp(callOp);
-    _lastRangedTypeName = null;
+    _lastRangedTypeName = ResolveCallReturnRangedType(callee.ReturnType, args);
     // Struct call returns need a temp variable so refcounting tracks the intermediate
     if (callOp.Result != null && resultKind == MaxonValueKind.Struct) {
       EmitCallReturnTempAssign(callOp, resultKind.Value, resultStructTypeName);

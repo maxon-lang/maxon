@@ -854,6 +854,40 @@ typealias Integer = int(i64.min to i64.max)
 typealias StringMap = Map with (String, Integer)  // OK: String implements Hashable
 ```
 
+### Per-Instance Typealiases
+
+A ranged typealias declared inside a generic type body produces a nominally distinct type for each concrete instantiation. This prevents accidentally mixing values between different instances of the same generic type.
+
+```maxon
+type Pool uses T
+	export typealias Idx = int(0 to u64.max)
+
+	export function push(item T) returns Idx
+		// ...
+	end 'push'
+
+	export function get(index Idx) returns T
+		// ...
+	end 'get'
+end 'Pool'
+
+typealias Integer = int(i64.min to i64.max)
+typealias PoolA = Pool with Integer
+typealias PoolB = Pool with Integer
+```
+
+`PoolA.Idx` and `PoolB.Idx` are distinct types — passing one where the other is expected produces a compile error. Literal integers that fit the range are still accepted. To explicitly convert between compatible per-instance aliases, use `as`:
+
+```text
+let bIdx = aIdx as PoolB.Idx
+```
+
+Dot-syntax construction is also supported:
+
+```text
+let idx = PoolA.Idx{0}
+```
+
 ### Interface Extensions
 
 Extensions add methods to interfaces that are automatically available on all types conforming to that interface. Unlike regular interface methods that each conforming type must implement, extension methods have a single implementation that works for all conformers.

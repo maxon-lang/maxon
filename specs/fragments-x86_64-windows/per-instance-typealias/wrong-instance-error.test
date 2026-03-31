@@ -1,0 +1,34 @@
+// Test: wrong-instance-error
+typealias Integer = int(i64.min to i64.max)
+
+type Wrapper uses T
+	export typealias Idx = int(0 to u64.max)
+
+	export var value T
+	export var tag Idx
+
+	export function getTag() returns Idx
+		return self.tag
+	end 'getTag'
+
+	export function setTag(t Idx)
+		self.tag = t
+	end 'setTag'
+end 'Wrapper'
+
+typealias WrapperA = Wrapper with Integer
+typealias WrapperB = Wrapper with Integer
+
+function main() returns ExitCode
+	var a = WrapperA{value: 1, tag: 5}
+	var b = WrapperB{value: 2, tag: 0}
+	let aTag = a.getTag()
+	b.setTag(aTag)
+	return 0
+end 'main'
+---
+MaxoncStderr: ```
+error E3005: specs/fragments/per-instance-typealias/wrong-instance-error.test:26:4: argument type mismatch for 't': expected 'WrapperB.Idx', got 'WrapperA.Idx'
+```
+---
+---

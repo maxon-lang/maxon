@@ -5,12 +5,12 @@
 // bit shifts and masks instead of division.
 
 export typealias SegmentShift = int(0 to 63)
-export typealias PoolIndex = int(0 to u64.max)
 export typealias PoolSize = int(0 to u64.max)
 
 export type SegmentedPool uses T
 	typealias ElementArray = Array with T
 	typealias SegmentArray = Array with ElementArray
+	export typealias Index = int(0 to u64.max)
 
 	export var segments SegmentArray
 	export var totalCount PoolSize
@@ -19,6 +19,7 @@ export type SegmentedPool uses T
 
 	export static function create() returns Self
 		let cap = 8192 / sizeof(T)
+
 		// Round down to largest power of 2 <= cap
 		var s = 0
 		var n = cap
@@ -26,6 +27,7 @@ export type SegmentedPool uses T
 			n = n shr 1
 			s = s + 1
 		end 'findShift'
+
 		return Self{
 			segments: SegmentArray{},
 			totalCount: 0,
@@ -34,29 +36,35 @@ export type SegmentedPool uses T
 		}
 	end 'create'
 
-	export function push(item T) returns PoolIndex
+	export function push(item T) returns Index
 		let index = self.totalCount
 		let segIndex = index shr self.shift
 		if segIndex == self.segments.count() 'needNewSegment'
-			self.segments.push(ElementArray{})
+			var seg = ElementArray{}
+			seg.reserve(1 shl self.shift)
+			self.segments.push(seg)
 		end 'needNewSegment'
+
 		let seg = try self.segments.get(segIndex) otherwise panic("SegmentedPool: invalid segment index")
 		seg.push(item)
 		self.totalCount = self.totalCount + 1
+
 		return index
 	end 'push'
 
-	export function get(index PoolIndex) returns T
+	export function get(index Index) returns T
 		let segIndex = index shr self.shift
 		let offset = index and self.mask
 		let seg = try self.segments.get(segIndex) otherwise panic("SegmentedPool.get: index out of bounds")
+
 		return try seg.get(offset) otherwise panic("SegmentedPool.get: offset out of bounds")
 	end 'get'
 
-	export function set(index PoolIndex, item T)
+	export function set(index Index, item T)
 		let segIndex = index shr self.shift
 		let offset = index and self.mask
 		let seg = try self.segments.get(segIndex) otherwise panic("SegmentedPool.set: index out of bounds")
+
 		seg.set(offset, value: item)
 	end 'set'
 

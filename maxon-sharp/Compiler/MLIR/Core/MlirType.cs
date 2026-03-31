@@ -105,6 +105,9 @@ public class MlirStructType : MlirType {
   public bool IsInterfaceAlias { get; }
   // Maps type parameter names to required interface names (from where clauses)
   public Dictionary<string, List<string>> WhereConstraints { get; }
+  // Inner ranged primitive typealiases declared inside this generic type body.
+  // Each concrete instantiation gets a nominally distinct copy of these aliases.
+  public Dictionary<string, MlirRangedPrimitiveType> InnerRangedAliases { get; } = [];
   public MlirStructType(string name, List<MlirStructField> fields, List<string>? associatedTypeNames = null, List<string>? conformingInterfaces = null, Dictionary<string, long>? constParams = null, Dictionary<string, MlirType>? typeParams = null, bool isTuple = false, Dictionary<string, List<string>>? whereConstraints = null, bool isInterfaceAlias = false) : base(name, ComputeSize(fields)) {
     Fields = fields;
     AssociatedTypeNames = associatedTypeNames ?? [];
