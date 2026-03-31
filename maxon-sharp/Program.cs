@@ -234,7 +234,8 @@ class Program {
     if (File.Exists(path)) {
       files = [path];
     } else if (Directory.Exists(path)) {
-      files = [.. Directory.GetFiles(path, "*.maxon", SearchOption.AllDirectories)];
+      files = [.. Directory.GetFiles(path, "*.maxon", SearchOption.AllDirectories)
+        .Where(f => !Path.GetFileName(f).Equals("build.maxon", StringComparison.OrdinalIgnoreCase))];
     } else {
       Console.Error.WriteLine($"fmt: path not found: {path}");
       return 1;

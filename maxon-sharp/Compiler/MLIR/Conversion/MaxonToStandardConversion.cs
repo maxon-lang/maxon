@@ -762,7 +762,19 @@ public static partial class MaxonToStandardConversion {
             case MaxonEnumStructRawValueOp structRawOp: {
               var enumType = (MlirEnumType)module.TypeDefs[structRawOp.EnumTypeName];
               var structType = (MlirStructType)module.TypeDefs[structRawOp.StructTypeName];
-              var ordinalValue = (StdI64)valueMap[structRawOp.EnumValue];
+              var stdValue = valueMap[structRawOp.EnumValue];
+
+              // Extract ordinal from the enum value
+              StdI64 ordinalValue;
+              if (stdValue is StdHeapPtr rawHp) {
+                // Associated-value enum: load tag from heap offset 0
+                var heapPtr = (StdI64)EmitLoad(newBlock, rawHp.VarName!, varTypes);
+                var tagLoad = new StdLoadIndirectOp(heapPtr, 0, MlirType.I64);
+                newBlock.AddOp(tagLoad);
+                ordinalValue = (StdI64)tagLoad.Result;
+              } else {
+                ordinalValue = (StdI64)stdValue;
+              }
 
               // Allocate struct on the heap
               var tempName = temps.CreateTemp("enum_rawval", structRawOp.Result.Id, structRawOp.StructTypeName, OwnershipFlags.None);

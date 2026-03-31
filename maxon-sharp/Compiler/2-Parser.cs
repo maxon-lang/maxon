@@ -2285,13 +2285,18 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
 
           var fields = new List<(string FieldName, long Value)>();
           var providedFieldNames = new HashSet<string>();
+          // Struct may not have its fields populated yet (cross-file ordering
+          // within PreScan pass), so only validate fields when available.
+          bool structFullyDefined = structType.Fields.Count > 0;
           SkipNewlines();
           while (!Check(TokenType.RightBrace) && !IsAtEnd()) {
             var fieldNameToken = Expect(TokenType.Identifier);
-            var fieldDef = structType.GetField(fieldNameToken.Value)
-              ?? throw new CompileError(ErrorCode.SemanticUnknownField,
-                $"struct type '{structTypeName}' has no field '{fieldNameToken.Value}'",
-                fieldNameToken.Line, fieldNameToken.Column);
+            if (structFullyDefined) {
+              var fieldDef = structType.GetField(fieldNameToken.Value)
+                ?? throw new CompileError(ErrorCode.SemanticUnknownField,
+                  $"struct type '{structTypeName}' has no field '{fieldNameToken.Value}'",
+                  fieldNameToken.Line, fieldNameToken.Column);
+            }
             if (!providedFieldNames.Add(fieldNameToken.Value)) {
               throw new CompileError(ErrorCode.SemanticDuplicateDefinition,
                 $"duplicate field '{fieldNameToken.Value}' in struct raw value",
@@ -2328,12 +2333,14 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
           }
           Expect(TokenType.RightBrace);
 
-          // Validate all struct fields are provided
-          foreach (var requiredField in structType.Fields) {
-            if (!providedFieldNames.Contains(requiredField.Name)) {
-              throw new CompileError(ErrorCode.SemanticUnknownField,
-                $"missing field '{requiredField.Name}' in struct raw value for '{structTypeName}'",
-                caseToken.Line, caseToken.Column);
+          // Validate all struct fields are provided (skip if struct not yet fully defined)
+          if (structFullyDefined) {
+            foreach (var requiredField in structType.Fields) {
+              if (!providedFieldNames.Contains(requiredField.Name)) {
+                throw new CompileError(ErrorCode.SemanticUnknownField,
+                  $"missing field '{requiredField.Name}' in struct raw value for '{structTypeName}'",
+                  caseToken.Line, caseToken.Column);
+              }
             }
           }
 

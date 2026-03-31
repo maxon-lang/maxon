@@ -73,6 +73,8 @@ public class Project(
     try {
       var files = Directory.GetFiles(RootPath, "*.maxon", SearchOption.AllDirectories);
       foreach (var file in files) {
+        if (Path.GetFileName(file).Equals("build.maxon", StringComparison.OrdinalIgnoreCase))
+          continue;
         var normalized = NormalizePath(file);
         // Don't overwrite files already provided by the editor
         if (!_fileContents.ContainsKey(normalized)) {
