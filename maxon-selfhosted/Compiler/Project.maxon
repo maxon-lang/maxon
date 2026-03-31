@@ -43,19 +43,21 @@ export type Project
 	// Populated during Maxon->Mid lowering when printLiteral ops are lowered.
 	export var globalData GlobalDataTable
 
+	// Segmented pool for MlirFunction storage.
+	export var functionPool FunctionPool
 end 'Project'
 
+export typealias FunctionPool = SegmentedPool with MlirFunction
 export typealias TypealiasMap = Map with(ByteArray, ByteArray)
 export typealias FuncReturnTypeMap = Map with(ByteArray, ByteArray)
 export typealias ProjectArray = Array with Project
-
 export typealias RangeBound = int(i64.min to i64.max)
+export typealias TypealiasRangeMap = Map with(ByteArray, TypealiasRange)
 
 export type TypealiasRange
 	export var lower RangeBound
 	export var upper RangeBound
 end 'TypealiasRange'
-export typealias TypealiasRangeMap = Map with(ByteArray, TypealiasRange)
 
 export function createProject(rootPath FilePath, target Target) returns Project
 	let emptyModuleMemo = MlirModuleMemo{value: MlirModule{functions: MlirFunctionArray{}}, computedAt: 0, verifiedAt: 0}
@@ -94,7 +96,8 @@ export function createProject(rootPath FilePath, target Target) returns Project
 		rootPath: rootPath,
 		target: target,
 		diagnostics: DiagnosticArray{},
-		globalData: createGlobalDataTable()
+		globalData: createGlobalDataTable(),
+		functionPool: FunctionPool.create()
 	}
 end 'createProject'
 

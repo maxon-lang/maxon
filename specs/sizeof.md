@@ -145,3 +145,54 @@ end 'main'
 ```exitcode
 8
 ```
+
+<!-- test: sizeof.type-parameter -->
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Sizer uses T
+	export var dummy T
+
+	export function typeSize() returns Integer
+		return sizeof(T)
+	end 'typeSize'
+end 'Sizer'
+
+typealias BoolSizer = Sizer with bool
+
+function main() returns ExitCode
+	var s = BoolSizer{dummy: false}
+	return s.typeSize()
+end 'main'
+```
+```exitcode
+1
+```
+
+<!-- test: sizeof.type-parameter-struct -->
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+type Pair
+	export var a Integer
+	export var b Integer
+end 'Pair'
+
+type Sizer uses T
+	export var dummy T
+
+	export function typeSize() returns Integer
+		return sizeof(T)
+	end 'typeSize'
+end 'Sizer'
+
+typealias PairSizer = Sizer with Pair
+
+function main() returns ExitCode
+	var s = PairSizer{dummy: Pair{a: 0, b: 0}}
+	return s.typeSize()
+end 'main'
+```
+```exitcode
+16
+```

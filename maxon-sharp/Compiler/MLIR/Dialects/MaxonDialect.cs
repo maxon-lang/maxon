@@ -453,6 +453,15 @@ public class MaxonCastOp(MaxonValue input, MaxonValueKind targetKind,
     new Dictionary<string, MlirAttribute> { ["target"] = new TypeAttr(TargetKind.ToMlirType()) };
 }
 
+public class MaxonSizeofOp(string typeName) : MaxonOp {
+  public override string Mnemonic => "maxon.sizeof";
+  public string TypeName { get; set; } = typeName;
+  public MaxonInteger Result { get; } = new MaxonInteger(MlirContext.Current.NextId());
+  public override IReadOnlyList<string> PrintableResults => [Result.ToString()];
+  public override IReadOnlyDictionary<string, MlirAttribute> PrintableAttributes =>
+    new Dictionary<string, MlirAttribute> { ["type"] = new StringAttr(TypeName) };
+}
+
 public class MaxonAbsOp(MaxonValue input) : MaxonOp {
   public override string Mnemonic => "maxon.abs";
   public MaxonValue Input { get; } = input;

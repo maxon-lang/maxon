@@ -1640,6 +1640,13 @@ public static partial class MaxonToStandardConversion {
               valueMap[intToFloatOp.Result] = stdOp.Result;
               break;
             }
+            case MaxonSizeofOp sizeofOp: {
+              var sizeofType = ResolveSizeofType(sizeofOp.TypeName, module);
+              var constOp = new StdConstI64Op((long)sizeofType.SizeInBytes);
+              newBlock.AddOp(constOp);
+              valueMap[sizeofOp.Result] = constOp.Result;
+              break;
+            }
             case MaxonAbsOp absOp:
               LowerUnaryFloat(valueMap, newBlock, absOp.Input, absOp.Result, i => new StdAbsF32Op(i), i => new StdAbsF64Op(i));
               break;

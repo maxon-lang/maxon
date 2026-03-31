@@ -80,6 +80,24 @@ public static partial class MaxonToStandardConversion {
     }
   }
 
+  private static MlirType ResolveSizeofType(string typeName, MlirModule<MaxonOp> module) {
+    if (module.TypeDefs.TryGetValue(typeName, out var t)) return t;
+    return typeName switch {
+      "i1" => MlirType.I1,
+      "i8" => MlirType.I8,
+      "i16" => MlirType.I16,
+      "i32" => MlirType.I32,
+      "i64" => MlirType.I64,
+      "u8" => MlirType.U8,
+      "u16" => MlirType.U16,
+      "u32" => MlirType.U32,
+      "u64" => MlirType.U64,
+      "f32" => MlirType.F32,
+      "f64" => MlirType.F64,
+      _ => throw new InvalidOperationException($"sizeof: unknown type '{typeName}'"),
+    };
+  }
+
   private static void LowerUnaryFloat(
     Dictionary<MaxonValue, StdValue> valueMap,
     MlirBlock<StandardOp> block,

@@ -1,0 +1,56 @@
+// Test: sizeof.type-parameter
+typealias Integer = int(i64.min to i64.max)
+
+type Sizer uses T
+	export var dummy T
+
+	export function typeSize() returns Integer
+		return sizeof(T)
+	end 'typeSize'
+end 'Sizer'
+
+typealias BoolSizer = Sizer with bool
+
+function main() returns ExitCode
+	var s = BoolSizer{dummy: false}
+	return s.typeSize()
+end 'main'
+---
+ExitCode: 1
+---
+module {
+  func @main() -> u32 {
+  entry:
+    x86.prologue stack_size=16
+    x86.xor rax, rax
+    x86.mov [rbp-8], rax
+    x86.lea rcx, [rbp-8]
+    x86.mov rdx, rcx
+    x86.mov rcx, rdx
+    x86.call BoolSizer.typeSize
+    x86.xor rbx, rbx
+    x86.cmp rax, rbx
+    x86.setl rsi
+    x86.movzx rsi, rsib
+    x86.mov rdi, 4294967295
+    x86.cmp rax, rdi
+    x86.setg r8
+    x86.movzx r8, r8b
+    x86.or rsi, r8
+    x86.test rsi, rsi
+    x86.je main.__range_ok_0
+  __range_panic_0:
+    x86.lea_symdata rax, [__panic_msg_0]
+    x86.mov rcx, rax
+    x86.call mrt_panic
+  __range_ok_0:
+    x86.epilogue
+    x86.ret
+  }
+  func @BoolSizer.typeSize(__self_ptr: i64) -> i64 {
+  entry:
+    x86.mov rax, 1
+    x86.ret
+  }
+}
+---

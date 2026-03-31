@@ -1640,6 +1640,11 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
           (fieldType, defaultValue) = ParseFieldDefault();
         } else {
           fieldType = ParseTypeRef();
+          if (Check(TokenType.With)) {
+            throw new CompileError(ErrorCode.SemanticTypeMismatch,
+              $"Cannot use 'with' in a field declaration. Define a typealias first, e.g., typealias MyAlias = {_tokens[_pos - 1].Value} with T",
+              Current().Line, Current().Column);
+          }
         }
 
         fields.Add(new MlirStructField(fieldName, fieldType, isFieldExported, isMutable, defaultValue));
@@ -3733,6 +3738,11 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
           ParseFieldDefault();
         } else {
           ParseTypeRef();
+          if (Check(TokenType.With)) {
+            throw new CompileError(ErrorCode.SemanticTypeMismatch,
+              $"Cannot use 'with' in a field declaration. Define a typealias first, e.g., typealias MyAlias = {_tokens[_pos - 1].Value} with T",
+              Current().Line, Current().Column);
+          }
         }
 
         SkipNewlines();
@@ -10292,6 +10302,12 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
         Advance(); // consume '('
         var sizeType = ParseSizeofTypeArg();
         Expect(TokenType.RightParen);
+        if (sizeType is MlirTypeParameterType) {
+          // Type parameter — defer to lowering (after monomorphization resolves T)
+          var sizeofOp = new MaxonSizeofOp(sizeType.Name);
+          _currentBlock!.AddOp(sizeofOp);
+          return new ExprResult.Direct(sizeofOp.Result);
+        }
         var litOp = new MaxonLiteralOp((long)sizeType.SizeInBytes);
         _currentBlock!.AddOp(litOp);
         return new ExprResult.Direct(litOp.Result);
