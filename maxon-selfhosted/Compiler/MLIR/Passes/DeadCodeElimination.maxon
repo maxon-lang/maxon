@@ -38,7 +38,7 @@ export function eliminateDeadCode(module MlirModule) returns MlirModule
 		// Phase 1: Count uses of every ValueId across the entire function
 		var useCount = ValueIdArray{}
 
-		for block in srcFunc.region.blocks 'countBlocks'
+		for block in srcFunc.blocks 'countBlocks'
 			for op in block.ops 'countOps'
 				countOpUses(op, useCount: useCount)
 			end 'countOps'
@@ -48,8 +48,8 @@ export function eliminateDeadCode(module MlirModule) returns MlirModule
 		end 'countBlocks'
 
 		// Phase 2: Rebuild function, skipping dead ops
-		for srcBlock in srcFunc.region.blocks 'eachBlock'
-			var dstBlock = addBlock(dstFunc.region, label: srcBlock.label)
+		for srcBlock in srcFunc.blocks 'eachBlock'
+			var dstBlock = addBlock(dstFunc, label: srcBlock.label)
 			dstBlock.id = srcBlock.id
 			dstBlock.blockArgs = srcBlock.blockArgs
 
@@ -68,7 +68,7 @@ export function eliminateDeadCode(module MlirModule) returns MlirModule
 			end 'hasTerm'
 		end 'eachBlock'
 
-		dstFunc.region.nextBlockId = srcFunc.region.nextBlockId
+		dstFunc.nextBlockId = srcFunc.nextBlockId
 		result.functions.push(dstFunc)
 	end 'eachFunc'
 

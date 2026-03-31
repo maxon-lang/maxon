@@ -32,7 +32,7 @@ maxon-selfhosted/
         MlirModule.maxon               Top-level module container
         MlirFunction.maxon             Named function with body region
         MlirBlock.maxon                Basic block within a region
-        MlirRegion.maxon               Ordered list of blocks
+        (blocks are stored directly in MlirFunction)
         MlirPrinter.maxon              MLIR text format printer
       Dialects/
         MaxonDialect.maxon             MaxonOp enum (high-level IR, ~58 variants)
@@ -305,7 +305,7 @@ Machine-level operations for each CPU target, backed by `OpMeta` structs carryin
 
 ### MlirModule / MlirFunction / MlirBlock
 
-The IR is organized in a nested structure: `MlirModule` contains `MlirFunction[]`, each function has a `MlirRegion` containing `MlirBlock[]`, and each block contains `MlirOp[]`. This mirrors MLIR's module/function/region/block hierarchy.
+The IR is organized in a nested structure: `MlirModule` contains `MlirFunction[]`, each function contains `MlirBlock[]`, and each block contains `MlirOp[]`.
 
 ### Project (Project.maxon)
 

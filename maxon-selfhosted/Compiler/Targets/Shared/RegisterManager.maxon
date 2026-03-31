@@ -1611,7 +1611,7 @@ end 'rmNoteParam'
 function moduleHasVirtualRegs(module MlirModule, target Target) returns bool
 	let state = targetCreateRegState(target)
 	for func in module.functions 'eachFunc'
-		for block in func.region.blocks 'eachBlock'
+		for block in func.blocks 'eachBlock'
 			for op in block.ops 'eachOp'
 				if targetOpHasVirtualRegs(state, op: op) 'foundVirtual'
 					return true
@@ -1676,7 +1676,7 @@ end 'FpTwoAddrOp'
 // Pre-scan all ops in a function to count how many times each virtual value is read.
 function computeUseCounts(srcFunc MlirFunction, state RegState) returns RegIntArray
 	var counts = RegIntArray{}
-	for srcBlock in srcFunc.region.blocks 'eachBlock'
+	for srcBlock in srcFunc.blocks 'eachBlock'
 		for op in srcBlock.ops 'eachOp'
 			targetCountOpReads(state, counts: counts, op: op)
 		end 'eachOp'
@@ -1692,7 +1692,7 @@ end 'computeUseCounts'
 function computeDeferredValues(srcFunc MlirFunction, state RegState) returns RegIntArray
 	var sinkOnly = RegIntArray{}
 	var usedByNonSink = RegIntArray{}
-	for srcBlock in srcFunc.region.blocks 'eachBlock'
+	for srcBlock in srcFunc.blocks 'eachBlock'
 		for op in srcBlock.ops 'eachOp'
 			targetClassifyOpReads(state, sinkOnly: sinkOnly, usedByNonSink: usedByNonSink, op: op)
 		end 'eachOp'
@@ -1742,7 +1742,7 @@ function allocateRegistersForFunc(srcFunc MlirFunction, target Target) returns M
 		targetPreSeedParams(state, srcFunc: srcFunc)
 	end 'preSeedParams'
 
-	let blockCount = srcFunc.region.blocks.count()
+	let blockCount = srcFunc.blocks.count()
 
 	// Compute use counts for dead-value freeing during register resolution.
 	let useCounts = computeUseCounts(srcFunc, state: state)
@@ -1780,7 +1780,7 @@ function allocateRegistersForFunc(srcFunc MlirFunction, target Target) returns M
 	var divergingBlocks = RegIntArray{}
 	var di = 0
 	while di < blockCount 'scanBlocks'
-		let blk = try srcFunc.region.blocks.get(di) otherwise 'skipDetect'
+		let blk = try srcFunc.blocks.get(di) otherwise 'skipDetect'
 			di = di + 1
 			continue
 		end 'skipDetect'
@@ -1795,7 +1795,7 @@ function allocateRegistersForFunc(srcFunc MlirFunction, target Target) returns M
 	var savedSnapshot = rmSaveState(state)
 	var blockIdx = 0
 	while blockIdx < blockCount 'eachBlock'
-		let srcBlock = try srcFunc.region.blocks.get(blockIdx) otherwise 'skipBlock'
+		let srcBlock = try srcFunc.blocks.get(blockIdx) otherwise 'skipBlock'
 			blockIdx = blockIdx + 1
 			continue
 		end 'skipBlock'
@@ -1874,7 +1874,7 @@ function allocateRegistersForFunc(srcFunc MlirFunction, target Target) returns M
 			end 'noOps'
 		end 'hasTerm'
 
-		dstFunc.region.blocks.push(dstBlock)
+		dstFunc.blocks.push(dstBlock)
 
 		// Reset register state for next block.
 		if blockIdx < blockCount - 1 'notLastBlock'
@@ -1895,7 +1895,7 @@ function allocateRegistersForFunc(srcFunc MlirFunction, target Target) returns M
 	dstFunc.spillSize = rmTotalStackSize(state)
 
 	// Preserve region metadata so block IDs resolve correctly in code emission
-	dstFunc.region.nextBlockId = srcFunc.region.nextBlockId
+	dstFunc.nextBlockId = srcFunc.nextBlockId
 
 	return dstFunc
 end 'allocateRegistersForFunc'

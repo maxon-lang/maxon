@@ -41,10 +41,10 @@ end 'promoteMem2Reg'
 
 function promoteFunction(func MlirFunction, globalValueIdRef ValueIdRef) returns MlirFunction
 	let paramCount = func.paramCount
-	let numBlocks = func.region.nextBlockId
+	let numBlocks = func.nextBlockId
 
 	// Bail out early if no blocks
-	if func.region.blocks.count() == 0 'noBlocks'
+	if func.blocks.count() == 0 'noBlocks'
 		return func
 	end 'noBlocks'
 
@@ -150,9 +150,9 @@ function blockIdArrayContains(arr BlockIdArray, blockId BlockId) returns bool
 end 'blockIdArrayContains'
 
 function buildCfg(func MlirFunction) returns CfgInfo
-	let numBlocks = func.region.nextBlockId
+	let numBlocks = func.nextBlockId
 	var cfg = createCfgInfo(numBlocks)
-	for block in func.region.blocks 'eachBlock'
+	for block in func.blocks 'eachBlock'
 		if block.hasTerminator 'hasTerm'
 			extractCfgEdges(block.id, terminator: block.terminator, cfg: cfg)
 		end 'hasTerm'
@@ -434,7 +434,7 @@ function analyzeSlots(func MlirFunction, paramCount ParamCount) returns SlotInfo
 	var info = createSlotInfo()
 
 	// Scan all blocks for memref store/load ops
-	for block in func.region.blocks 'scanBlocks'
+	for block in func.blocks 'scanBlocks'
 		for op in block.ops 'scanOps'
 			analyzeSlotOp(op, blockId: block.id, info: info)
 		end 'scanOps'
@@ -517,7 +517,7 @@ end 'recordSlotLoad'
 
 // Float detection: check if load results are used as float operands
 function markFloatSlotsFromUsage(func MlirFunction, info SlotInfo)
-	for block in func.region.blocks 'scanBlocks'
+	for block in func.blocks 'scanBlocks'
 		for op in block.ops 'scanOps'
 			markFloatOperandsAsFloatSlots(op, info: info)
 		end 'scanOps'
@@ -703,7 +703,7 @@ end 'placePhiNodes'
 // Insert MlirBlockArg entries into blocks that have phis placed
 function insertBlockArgs(func MlirFunction, phiMap PhiMap, slotInfo SlotInfo)
 	let numSlots = slotInfo.maxSlot + 1
-	for block in func.region.blocks 'eachBlock'
+	for block in func.blocks 'eachBlock'
 		let blockSlots = try phiMap.get(block.id) otherwise 'noSlots'
 			continue
 		end 'noSlots'
@@ -937,7 +937,7 @@ function popAllDefs(renameState RenameState, pushCounts ValueIdArray)
 end 'popAllDefs'
 
 function findBlockById(func MlirFunction, blockId BlockId) returns MlirBlock
-	for block in func.region.blocks 'search'
+	for block in func.blocks 'search'
 		if block.id == blockId 'found'
 			return block
 		end 'found'
@@ -970,7 +970,7 @@ function rebuildFunction(func MlirFunction, renameState RenameState, promotable 
 	// phis need arguments, and compute those arguments from the remap state.
 	//
 	// Strategy: Build an edge phi arg table during a second rename walk.
-	let numBlocks = func.region.nextBlockId
+	let numBlocks = func.nextBlockId
 	let numSlots = renameState.numSlots
 	var edgePhiArgs = EdgePhiArgTable{}
 	// Initialize edge phi arg table
@@ -1012,8 +1012,8 @@ function rebuildFunction(func MlirFunction, renameState RenameState, promotable 
 	let remap = renameState.remap
 	var isFirstBlock = true
 
-	for srcBlock in func.region.blocks 'rewriteBlocks'
-		var dstBlock = addBlock(dstFunc.region, label: srcBlock.label)
+	for srcBlock in func.blocks 'rewriteBlocks'
+		var dstBlock = addBlock(dstFunc, label: srcBlock.label)
 		dstBlock.id = srcBlock.id
 		// Copy block args (which now include phi-node args from Phase 5)
 		dstBlock.blockArgs = srcBlock.blockArgs
@@ -1039,7 +1039,7 @@ function rebuildFunction(func MlirFunction, renameState RenameState, promotable 
 		end 'hasTerm'
 	end 'rewriteBlocks'
 
-	dstFunc.region.nextBlockId = func.region.nextBlockId
+	dstFunc.nextBlockId = func.nextBlockId
 	return dstFunc
 end 'rebuildFunction'
 
@@ -1306,7 +1306,7 @@ end 'emitParamOps'
 
 function scanMaxValueId(func MlirFunction) returns ValueId
 	var maxId = 0
-	for block in func.region.blocks 'scanBlocks'
+	for block in func.blocks 'scanBlocks'
 		for op in block.ops 'scanOps'
 			let opMax = maxValueIdInOp(op)
 			if opMax > maxId 'updateMax'
@@ -1582,10 +1582,10 @@ end 'remapValueIds'
 // ============================================================
 
 function getEntryBlockId(func MlirFunction) returns BlockId
-	if func.region.blocks.count() == 0 'noBlocks'
+	if func.blocks.count() == 0 'noBlocks'
 		return 0
 	end 'noBlocks'
-	let entry = try func.region.blocks.get(0) otherwise 'fallback'
+	let entry = try func.blocks.get(0) otherwise 'fallback'
 		return 0
 	end 'fallback'
 	return entry.id

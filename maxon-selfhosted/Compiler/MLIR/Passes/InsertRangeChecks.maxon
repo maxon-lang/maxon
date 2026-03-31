@@ -35,11 +35,11 @@ export function insertRangeChecks(module MlirModule, funcReturnTypes FuncReturnT
 		end 'fullRange'
 
 		// Seed dst region's block counter from source so new blocks get fresh IDs
-		dstFunc.region.nextBlockId = srcFunc.region.nextBlockId
+		dstFunc.nextBlockId = srcFunc.nextBlockId
 
 		// This function has a ranged return type — process its blocks
-		for srcBlock in srcFunc.region.blocks 'eachBlock'
-			var dstBlock = addBlock(dstFunc.region, label: srcBlock.label)
+		for srcBlock in srcFunc.blocks 'eachBlock'
+			var dstBlock = addBlock(dstFunc, label: srcBlock.label)
 			dstBlock.id = srcBlock.id
 			dstBlock.blockArgs = srcBlock.blockArgs
 
@@ -70,8 +70,8 @@ export function insertRangeChecks(module MlirModule, funcReturnTypes FuncReturnT
 						// Build panic and continue blocks
 						var panicLabel = buildLabel(b"__range_panic_", id: checkId)
 						var okLabel = buildLabel(b"__range_ok_", id: checkId)
-						var panicBlock = addBlock(dstFunc.region, label: panicLabel)
-						var continueBlock = addBlock(dstFunc.region, label: okLabel)
+						var panicBlock = addBlock(dstFunc, label: panicLabel)
+						var continueBlock = addBlock(dstFunc, label: okLabel)
 
 						let typeInfo = resolveRangeCheckType(srcFunc.returnType)
 
@@ -106,8 +106,8 @@ end 'insertRangeChecks'
 
 // Copy all blocks from srcFunc to dstFunc unchanged.
 function copyFuncBlocks(srcFunc MlirFunction, dstFunc MlirFunction)
-	for srcBlock in srcFunc.region.blocks 'eachBlock'
-		var dstBlock = addBlock(dstFunc.region, label: srcBlock.label)
+	for srcBlock in srcFunc.blocks 'eachBlock'
+		var dstBlock = addBlock(dstFunc, label: srcBlock.label)
 		dstBlock.id = srcBlock.id
 		dstBlock.blockArgs = srcBlock.blockArgs
 		for op in srcBlock.ops 'eachOp'
@@ -118,7 +118,7 @@ function copyFuncBlocks(srcFunc MlirFunction, dstFunc MlirFunction)
 			dstBlock.hasTerminator = true
 		end 'hasTerm'
 	end 'eachBlock'
-	dstFunc.region.nextBlockId = srcFunc.region.nextBlockId
+	dstFunc.nextBlockId = srcFunc.nextBlockId
 end 'copyFuncBlocks'
 
 // Check if a terminator op is func.ret

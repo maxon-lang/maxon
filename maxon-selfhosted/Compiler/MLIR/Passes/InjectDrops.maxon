@@ -118,8 +118,8 @@ function injectDropsInFunction(func MlirFunction) returns MlirFunction
 	scanHeapAllocations(func, state: state)
 
 	// Phase 2: Walk blocks and inject drops
-	for srcBlock in func.region.blocks 'eachBlock'
-		var dstBlock = addBlock(dstFunc.region, label: srcBlock.label)
+	for srcBlock in func.blocks 'eachBlock'
+		var dstBlock = addBlock(dstFunc, label: srcBlock.label)
 		dstBlock.id = srcBlock.id
 		dstBlock.blockArgs = srcBlock.blockArgs
 
@@ -141,7 +141,7 @@ function injectDropsInFunction(func MlirFunction) returns MlirFunction
 		end 'hasTerm'
 	end 'eachBlock'
 
-	dstFunc.region.nextBlockId = func.region.nextBlockId
+	dstFunc.nextBlockId = func.nextBlockId
 	return dstFunc
 end 'injectDropsInFunction'
 
@@ -150,7 +150,7 @@ end 'injectDropsInFunction'
 // ============================================================
 
 function scanHeapAllocations(func MlirFunction, state DropInjectionState)
-	for block in func.region.blocks 'scanBlocks'
+	for block in func.blocks 'scanBlocks'
 		for op in block.ops 'scanOps'
 			scanOpForHeapAlloc(op, state: state)
 		end 'scanOps'

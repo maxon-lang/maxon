@@ -91,7 +91,7 @@ end 'getSlotFromMemRefOp'
 // Compute max parser-allocated slot across all blocks in a function.
 export function computeMaxParserSlotInFunc(func MlirFunction) returns SlotIndex
 	var maxSlot = -1
-	for block in func.region.blocks 'eachBlock'
+	for block in func.blocks 'eachBlock'
 		for op in block.ops 'eachOp'
 			let slot = getSlotFromMlirOp(op)
 			if slot >= 0 'hasSlot'
@@ -189,7 +189,7 @@ export function computeStackSizeForFunc(func MlirFunction, shadowSpace StackSize
 	var hasPrint = false
 	var tempSlotCount = 0
 
-	for block in func.region.blocks 'eachBlock'
+	for block in func.blocks 'eachBlock'
 		for op in block.ops 'eachOp'
 			let slot = getSlotFromMlirOp(op)
 			if slot >= 0 'hasSlot'
@@ -348,7 +348,7 @@ end 'paramSentinel'
 // Scan function for func.param ops and return a BoolArray of promoted param indices.
 export function scanPromotedParams(func MlirFunction) returns BoolArray
 	var promoted = BoolArray{}
-	for block in func.region.blocks 'scanBlocks'
+	for block in func.blocks 'scanBlocks'
 		for op in block.ops 'scanOps'
 			match op 'checkParam'
 				func(funcOp) then match funcOp 'checkFuncParam'
@@ -413,10 +413,10 @@ end 'isMirDivergingBlock'
 // Eliminate unconditional jumps/branches whose target is the immediately next block.
 // These are fallthrough jumps emitted by condBr lowering that add no value.
 export function eliminateFallthroughJumps(func MlirFunction)
-	let blockCount = func.region.blocks.count()
+	let blockCount = func.blocks.count()
 	var i = 0
 	while i < blockCount - 1 'eachBlock'
-		var block = try func.region.blocks.get(i) otherwise 'skipBlock'
+		var block = try func.blocks.get(i) otherwise 'skipBlock'
 			i = i + 1
 			continue
 		end 'skipBlock'
@@ -424,7 +424,7 @@ export function eliminateFallthroughJumps(func MlirFunction)
 			i = i + 1
 			continue
 		end 'noTerm'
-		let nextBlock = try func.region.blocks.get(i + 1) otherwise 'skipNext'
+		let nextBlock = try func.blocks.get(i + 1) otherwise 'skipNext'
 			i = i + 1
 			continue
 		end 'skipNext'

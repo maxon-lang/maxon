@@ -1,4 +1,5 @@
-// MlirFunction: a named function with a body region.
+// MlirFunction: a named function containing an ordered list of basic blocks.
+// The first block is the entry block.
 
 // effectively limited by system memory
 export typealias ParamCount = int(0 to u64.max)
@@ -10,7 +11,8 @@ export type MlirFunction
 	export var returnType ByteArray
 	export var paramCount ParamCount
 	export var paramTypes StdTypeArray
-	export var region MlirRegion
+	export var blocks MlirBlockArray
+	export var nextBlockId BlockId
 	// Total number of slot-addressed variables used by the ISel.
 	// The register allocator uses this to place spill slots below the variable area.
 	export var varSlotCount VarSlot
@@ -33,7 +35,8 @@ export function createMlirFunction(name ByteArray, returnType ByteArray, paramCo
 		returnType: returnType,
 		paramCount: paramCount,
 		paramTypes: paramTypes,
-		region: createMlirRegion(),
+		blocks: MlirBlockArray{},
+		nextBlockId: 0,
 		varSlotCount: 0,
 		spillSize: 0,
 		returnLine: returnLine,
@@ -49,7 +52,8 @@ export function cloneFunctionShell(src MlirFunction) returns MlirFunction
 		returnType: src.returnType,
 		paramCount: src.paramCount,
 		paramTypes: src.paramTypes,
-		region: createMlirRegion(),
+		blocks: MlirBlockArray{},
+		nextBlockId: 0,
 		varSlotCount: src.varSlotCount,
 		spillSize: src.spillSize,
 		returnLine: src.returnLine,
@@ -57,3 +61,11 @@ export function cloneFunctionShell(src MlirFunction) returns MlirFunction
 		calleeSavedFps: src.calleeSavedFps
 	}
 end 'cloneFunctionShell'
+
+export function addBlock(func MlirFunction, label ByteArray) returns MlirBlock
+	let id = func.nextBlockId
+	func.nextBlockId = func.nextBlockId + 1
+	let block = createMlirBlock(id, label: label)
+	func.blocks.push(block)
+	return block
+end 'addBlock'

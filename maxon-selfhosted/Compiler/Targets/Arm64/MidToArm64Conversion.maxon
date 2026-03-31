@@ -34,7 +34,7 @@ function lowerFunctionToArm64(srcFunc MlirFunction, osDesc OsDescriptor, allFunc
 	// Count temp slots needed by SysOps (they still use slot-based addressing).
 	// Skip diverging blocks (panic paths) since their slots are dead.
 	var sysOpTempCount = 0
-	for srcBlock in srcFunc.region.blocks 'countSysTemps'
+	for srcBlock in srcFunc.blocks 'countSysTemps'
 		if isMirDivergingBlock(srcBlock) 'skipDiverging'
 			continue
 		end 'skipDiverging'
@@ -46,7 +46,7 @@ function lowerFunctionToArm64(srcFunc MlirFunction, osDesc OsDescriptor, allFunc
 	// Phase 1b: Allocate stack slots for block arguments (phi nodes).
 	var blockArgSlots = ValueSlotMap{}
 	var blockArgSlotCount = 0
-	for baBlock in srcFunc.region.blocks 'scanBlockArgs'
+	for baBlock in srcFunc.blocks 'scanBlockArgs'
 		for bArg in baBlock.blockArgs 'eachBlockArg'
 			let baSlot = liveSlotCount + sysOpTempCount + blockArgSlotCount
 			valueSlotMapSet(blockArgSlots, valueId: bArg.valueId, slot: baSlot)
@@ -64,8 +64,8 @@ function lowerFunctionToArm64(srcFunc MlirFunction, osDesc OsDescriptor, allFunc
 	var valueSlots = ValueSlotMap{}
 
 	// Phase 2: Lower all blocks.
-	for srcBlock in srcFunc.region.blocks 'eachBlock'
-		var dstBlock = addBlock(dstFunc.region, label: srcBlock.label)
+	for srcBlock in srcFunc.blocks 'eachBlock'
+		var dstBlock = addBlock(dstFunc, label: srcBlock.label)
 		dstBlock.id = srcBlock.id
 
 		// Load block arguments (phi nodes) at block entry.
@@ -83,7 +83,7 @@ function lowerFunctionToArm64(srcFunc MlirFunction, osDesc OsDescriptor, allFunc
 
 		// Lower terminator
 		if srcBlock.hasTerminator 'hasTerm'
-			lowerTerminatorArm64(srcBlock, dstBlock: dstBlock, returnType: srcFunc.returnType, srcBlocks: srcFunc.region.blocks, blockArgSlots: blockArgSlots)
+			lowerTerminatorArm64(srcBlock, dstBlock: dstBlock, returnType: srcFunc.returnType, srcBlocks: srcFunc.blocks, blockArgSlots: blockArgSlots)
 			// Set the last emitted op as the block terminator so that the register
 			// allocator can distinguish it from regular ops.
 			setLastOpAsTerminatorArm64(dstBlock)
@@ -102,7 +102,7 @@ function lowerFunctionToArm64(srcFunc MlirFunction, osDesc OsDescriptor, allFunc
 	end 'usePrecomputed'
 
 	// Preserve region metadata
-	dstFunc.region.nextBlockId = srcFunc.region.nextBlockId
+	dstFunc.nextBlockId = srcFunc.nextBlockId
 	return dstFunc
 end 'lowerFunctionToArm64'
 
@@ -113,7 +113,7 @@ end 'lowerFunctionToArm64'
 // Scan which variable slots are read by memref.load ops.
 function scanLoadedSlotsArm64(func MlirFunction) returns VarSlotArray
 	var loaded = VarSlotArray{}
-	for block in func.region.blocks 'eachBlock'
+	for block in func.blocks 'eachBlock'
 		for op in block.ops 'eachOp'
 			match op 'check'
 				memref(memOp) then match memOp 'checkMem'
