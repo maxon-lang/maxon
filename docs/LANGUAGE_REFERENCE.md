@@ -1424,7 +1424,7 @@ enum Escape
 end 'Escape'
 ```
 
-Struct backing attaches compile-time constant metadata to each case. The struct values must be literals with scalar fields:
+Struct backing attaches compile-time constant metadata to each case. Field values must be compile-time constants (integers, floats, booleans) or nested struct literals:
 
 ```maxon
 type OpInfo

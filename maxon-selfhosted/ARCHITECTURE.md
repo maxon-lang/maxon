@@ -195,26 +195,26 @@ Ops from different dialects coexist in the same block. Each lowering pass handle
 
 ### Key Design Decision: Struct-Backed Target Op Enums
 
-Target instruction enums (`X64Op`, `Arm64Op`) are backed by an `OpMeta` struct that carries per-instruction metadata inline:
+Each target defines its own backing type with shared fields (`latency`, `isMemory`, `isStore`, `isCall`) plus target-specific fields (e.g., `setsFlags` for x86/ARM):
 
 ```maxon
-type OpMeta
+type X64OpMeta
   export let latency Latency
   export let isMemory bool
   export let isStore bool
   export let isCall bool
   export let setsFlags bool
-end 'OpMeta'
+end 'X64OpMeta'
 
 export enum X64Op
-  addRegReg(destReg X64VReg, srcReg X64VReg) = OpMeta{latency: 1, isMemory: false, isStore: false, isCall: false, setsFlags: true}
-  loadSlot(destReg X64VReg, slotIndex VarSlot) = OpMeta{latency: 4, isMemory: true, isStore: false, isCall: false, setsFlags: false}
-  callDirect(target ByteArray) = OpMeta{latency: 5, isMemory: true, isStore: false, isCall: true, setsFlags: false}
+  addRegReg(destReg X64VReg, srcReg X64VReg) = X64OpMeta{latency: 1, isMemory: false, isStore: false, isCall: false, setsFlags: true}
+  loadSlot(destReg X64VReg, slotIndex VarSlot) = X64OpMeta{latency: 4, isMemory: true, isStore: false, isCall: false, setsFlags: false}
+  callDirect(target ByteArray) = X64OpMeta{latency: 5, isMemory: true, isStore: false, isCall: true, setsFlags: false}
   // ...
 end 'X64Op'
 ```
 
-The instruction scheduler and other passes access metadata via `.rawValue` (e.g., `op.rawValue.latency`, `op.rawValue.isMemory`), eliminating large match-based dispatch tables.
+The instruction scheduler and other passes access metadata via `.rawValue` (e.g., `op.rawValue.latency`, `op.rawValue.isMemory`). Target-specific passes access their own fields (e.g., `op.rawValue.setsFlags`). Targets that don't need a field simply omit it from their backing type.
 
 ### Dialect Lifespans
 

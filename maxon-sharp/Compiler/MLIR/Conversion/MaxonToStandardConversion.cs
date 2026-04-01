@@ -783,35 +783,8 @@ public static partial class MaxonToStandardConversion {
               EmitStore(newBlock, structPtr, tempName, varTypes);
 
               // For each struct field, emit a select chain mapping ordinal -> field value
-              foreach (var field in structType.Fields) {
-                // Start with a default value of 0
-                var defaultVal = new StdConstI64Op(0);
-                newBlock.AddOp(defaultVal);
-                StdI64 currentFieldVal = defaultVal.Result;
-
-                foreach (var enumCase in enumType.Cases) {
-                  if (enumCase.RawValue is not StructRawValue srv) continue;
-                  long fieldValue = srv.Fields.First(f => f.FieldName == field.Name).Value;
-
-                  var ordConst = new StdConstI64Op(enumCase.Ordinal);
-                  newBlock.AddOp(ordConst);
-                  var cmpOp = new StdCmpI64Op("eq", ordinalValue, ordConst.Result);
-                  newBlock.AddOp(cmpOp);
-
-                  // Emit the field value constant
-                  var fieldConst = new StdConstI64Op(fieldValue);
-                  newBlock.AddOp(fieldConst);
-
-                  // Select: if ordinal matches, use this case's field value; otherwise keep current
-                  var selectOp = new StdSelectI64Op(cmpOp.Result, fieldConst.Result, currentFieldVal);
-                  newBlock.AddOp(selectOp);
-                  currentFieldVal = selectOp.Result;
-                }
-
-                // Store the selected field value into the struct at the correct offset
-                var storeType = field.Type is MlirStructType ? MlirType.I64 : field.Type;
-                EmitStructFieldStore(newBlock, currentFieldVal, tempName, field.Offset, storeType, varTypes);
-              }
+              EmitStructRawValueFields(newBlock, structType, enumType, ordinalValue,
+                tempName, "", temps, varTypes, func.Name, module.TypeDefs);
 
               valueMap[structRawOp.Result] = new StdHeapPtr(structRawOp.Result.Id, structRawOp.StructTypeName, tempName);
               break;

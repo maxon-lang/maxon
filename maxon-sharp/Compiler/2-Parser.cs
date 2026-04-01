@@ -2263,60 +2263,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
           }
 
           var fields = new List<(string FieldName, long Value)>();
-          var providedFieldNames = new HashSet<string>();
-          // Struct may not have its fields populated yet (cross-file ordering
-          // within PreScan pass), so only validate fields when available.
-          bool structFullyDefined = structType.Fields.Count > 0;
-          SkipNewlines();
-          while (!Check(TokenType.RightBrace) && !IsAtEnd()) {
-            var fieldNameToken = Expect(TokenType.Identifier);
-            if (structFullyDefined) {
-              var fieldDef = structType.GetField(fieldNameToken.Value)
-                ?? throw new CompileError(ErrorCode.SemanticUnknownField,
-                  $"struct type '{structTypeName}' has no field '{fieldNameToken.Value}'",
-                  fieldNameToken.Line, fieldNameToken.Column);
-            }
-            if (!providedFieldNames.Add(fieldNameToken.Value)) {
-              throw new CompileError(ErrorCode.SemanticDuplicateDefinition,
-                $"duplicate field '{fieldNameToken.Value}' in struct raw value",
-                fieldNameToken.Line, fieldNameToken.Column);
-            }
-            Expect(TokenType.Colon);
-
-            long fieldValue;
-            if (TryParseSignedNumericLiteral(out var fieldNum, "expected numeric literal for struct raw value field")) {
-              fieldValue = fieldNum.IsFloat ? BitConverter.DoubleToInt64Bits(fieldNum.FloatValue) : fieldNum.IntValue;
-            } else if (Check(TokenType.True)) {
-              Advance();
-              fieldValue = 1;
-            } else if (Check(TokenType.False)) {
-              Advance();
-              fieldValue = 0;
-            } else {
-              throw new CompileError(ErrorCode.ParserExpectedExpression,
-                "expected integer, float, or boolean literal for struct raw value field",
-                Current().Line, Current().Column);
-            }
-            fields.Add((fieldNameToken.Value, fieldValue));
-
-            SkipNewlines();
-            if (Check(TokenType.Comma)) {
-              Advance();
-              SkipNewlines();
-            }
-          }
-          Expect(TokenType.RightBrace);
-
-          // Validate all struct fields are provided (skip if struct not yet fully defined)
-          if (structFullyDefined) {
-            foreach (var requiredField in structType.Fields) {
-              if (!providedFieldNames.Contains(requiredField.Name)) {
-                throw new CompileError(ErrorCode.SemanticUnknownField,
-                  $"missing field '{requiredField.Name}' in struct raw value for '{structTypeName}'",
-                  caseToken.Line, caseToken.Column);
-              }
-            }
-          }
+          ParseStructRawValueFields(fields, structTypeName, caseToken, prefix: "");
 
           var structRawValue = new StructRawValue(structTypeName, fields);
           cases.Add(new MlirEnumCase(caseName, ordinal, structRawValue, assocValues));
@@ -2380,6 +2327,76 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
     if (isExported) _exportedTypes.Add(enumName);
 
     ConsumeBlockEnd();
+  }
+
+  /// <summary>
+  /// Parse struct literal fields for enum raw values, supporting nested struct literals.
+  /// Nested fields are flattened with dot-separated prefixes (e.g., "meta.latency").
+  /// The opening '{' has already been consumed; this method consumes through the closing '}'.
+  /// </summary>
+  private void ParseStructRawValueFields(
+      List<(string FieldName, long Value)> fields,
+      string structTypeName, Token caseToken, string prefix) {
+    var providedFieldNames = new HashSet<string>();
+    _typeRegistry.TryGetValue(structTypeName, out var structTypeDef);
+    var structType = structTypeDef as MlirStructType;
+    bool structFullyDefined = structType != null && structType.Fields.Count > 0;
+
+    SkipNewlines();
+    while (!Check(TokenType.RightBrace) && !IsAtEnd()) {
+      var fieldNameToken = Expect(TokenType.Identifier);
+      if (structFullyDefined) {
+        _ = structType!.GetField(fieldNameToken.Value)
+          ?? throw new CompileError(ErrorCode.SemanticUnknownField,
+            $"struct type '{structTypeName}' has no field '{fieldNameToken.Value}'",
+            fieldNameToken.Line, fieldNameToken.Column);
+      }
+      if (!providedFieldNames.Add(fieldNameToken.Value)) {
+        throw new CompileError(ErrorCode.SemanticDuplicateDefinition,
+          $"duplicate field '{fieldNameToken.Value}' in struct raw value",
+          fieldNameToken.Line, fieldNameToken.Column);
+      }
+      Expect(TokenType.Colon);
+
+      var qualifiedName = prefix.Length > 0 ? $"{prefix}.{fieldNameToken.Value}" : fieldNameToken.Value;
+
+      if (Check(TokenType.Identifier) && PeekNext().Type == TokenType.LeftBrace) {
+        // Nested struct literal: recurse
+        var nestedTypeName = Advance().Value;
+        Advance(); // consume '{'
+        ParseStructRawValueFields(fields, nestedTypeName, caseToken, prefix: qualifiedName);
+      } else if (TryParseSignedNumericLiteral(out var fieldNum, "expected numeric literal for struct raw value field")) {
+        long fieldValue = fieldNum.IsFloat ? BitConverter.DoubleToInt64Bits(fieldNum.FloatValue) : fieldNum.IntValue;
+        fields.Add((qualifiedName, fieldValue));
+      } else if (Check(TokenType.True)) {
+        Advance();
+        fields.Add((qualifiedName, 1));
+      } else if (Check(TokenType.False)) {
+        Advance();
+        fields.Add((qualifiedName, 0));
+      } else {
+        throw new CompileError(ErrorCode.ParserExpectedExpression,
+          "expected integer, float, boolean literal, or struct literal for struct raw value field",
+          Current().Line, Current().Column);
+      }
+
+      SkipNewlines();
+      if (Check(TokenType.Comma)) {
+        Advance();
+        SkipNewlines();
+      }
+    }
+    Expect(TokenType.RightBrace);
+
+    if (structFullyDefined) {
+      foreach (var requiredField in structType!.Fields) {
+        if (!providedFieldNames.Contains(requiredField.Name)) {
+          throw new CompileError(ErrorCode.SemanticUnknownField,
+            $"missing field '{requiredField.Name}' in struct raw value for '{structTypeName}'",
+            caseToken.Line, caseToken.Column);
+        }
+      }
+    }
   }
 
   /// <summary>

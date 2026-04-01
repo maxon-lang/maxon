@@ -1,0 +1,380 @@
+// Test: nested-struct-backing-multi
+typealias Latency = int(0 to 50)
+
+type OpMeta
+	export let latency Latency
+	export let isMemory bool
+	export let isCall bool
+end 'OpMeta'
+
+type X64OpMeta
+	export let meta OpMeta
+	export let setsFlags bool
+end 'X64OpMeta'
+
+enum X64Op
+	load = X64OpMeta{meta: OpMeta{latency: 4, isMemory: true, isCall: false}, setsFlags: false}
+	add = X64OpMeta{meta: OpMeta{latency: 1, isMemory: false, isCall: false}, setsFlags: true}
+	call = X64OpMeta{meta: OpMeta{latency: 5, isMemory: true, isCall: true}, setsFlags: false}
+end 'X64Op'
+
+function main() returns ExitCode
+	let op = X64Op.load
+	if op.rawValue.meta.isMemory 'check'
+		return op.rawValue.meta.latency
+	end 'check'
+	return 0
+end 'main'
+---
+ExitCode: 4
+---
+module {
+  func @main() -> u32 {
+  entry:
+    x86.prologue stack_size=80
+    x86.xor rax, rax
+    x86.mov [rbp-8], rax
+    x86.mov rcx, [rbp-8]
+    x86.lea_func rdx, [__destruct_X64OpMeta]
+    x86.mov rbx, rdx
+    x86.mov rdx, rbx
+    x86.mov rcx, 16
+    x86.mov r8, 1
+    x86.call mm_alloc
+    x86.mov [rbp-16], rax
+    x86.mov rcx, 24
+    x86.xor rdx, rdx
+    x86.mov r8, 2
+    x86.call mm_alloc
+    x86.mov [rbp-24], rax
+    x86.xor rsi, rsi
+    x86.xor rdi, rdi
+    x86.mov r8, [rbp-8]
+    x86.cmp r8, rdi
+    x86.sete r9
+    x86.movzx r9, r9b
+    x86.mov rax, 4
+    x86.test r9, r9
+    x86.mov rcx, rsi
+    x86.cmovne rcx, rax
+    x86.mov rax, 1
+    x86.cmp r8, rax
+    x86.sete rax
+    x86.movzx rax, raxb
+    x86.mov rdx, 1
+    x86.test rax, rax
+    x86.mov rbx, rcx
+    x86.cmovne rbx, rdx
+    x86.mov rax, 2
+    x86.cmp r8, rax
+    x86.sete rax
+    x86.movzx rax, raxb
+    x86.mov rcx, 5
+    x86.test rax, rax
+    x86.mov rdx, rbx
+    x86.cmovne rdx, rcx
+    x86.mov rax, [rbp-24]
+    x86.mov [rax+0], rdx
+    x86.xor rax, rax
+    x86.xor rcx, rcx
+    x86.cmp r8, rcx
+    x86.sete rcx
+    x86.movzx rcx, rcxb
+    x86.mov rdx, 1
+    x86.test rcx, rcx
+    x86.mov rbx, rax
+    x86.cmovne rbx, rdx
+    x86.mov rax, 1
+    x86.cmp r8, rax
+    x86.sete rax
+    x86.movzx rax, raxb
+    x86.xor rcx, rcx
+    x86.test rax, rax
+    x86.mov rdx, rbx
+    x86.cmovne rdx, rcx
+    x86.mov rax, 2
+    x86.cmp r8, rax
+    x86.sete rax
+    x86.movzx rax, raxb
+    x86.mov rcx, 1
+    x86.test rax, rax
+    x86.mov rbx, rdx
+    x86.cmovne rbx, rcx
+    x86.mov rax, [rbp-24]
+    x86.mov byte ptr [rax+8], rbxb
+    x86.xor rax, rax
+    x86.xor rcx, rcx
+    x86.cmp r8, rcx
+    x86.sete rcx
+    x86.movzx rcx, rcxb
+    x86.xor rdx, rdx
+    x86.test rcx, rcx
+    x86.mov rbx, rax
+    x86.cmovne rbx, rdx
+    x86.mov rax, 1
+    x86.cmp r8, rax
+    x86.sete rax
+    x86.movzx rax, raxb
+    x86.xor rcx, rcx
+    x86.test rax, rax
+    x86.mov rdx, rbx
+    x86.cmovne rdx, rcx
+    x86.mov rax, 2
+    x86.cmp r8, rax
+    x86.sete rax
+    x86.movzx rax, raxb
+    x86.mov rcx, 1
+    x86.test rax, rax
+    x86.mov rbx, rdx
+    x86.cmovne rbx, rcx
+    x86.mov rax, [rbp-24]
+    x86.mov byte ptr [rax+16], rbxb
+    x86.mov rax, [rbp-24]
+    x86.mov rcx, [rbp-16]
+    x86.mov [rcx+0], rax
+    x86.mov rcx, [rbp-24]
+    x86.call mm_incref
+    x86.xor rax, rax
+    x86.xor rcx, rcx
+    x86.mov rdx, [rbp-8]
+    x86.cmp rdx, rcx
+    x86.sete rcx
+    x86.movzx rcx, rcxb
+    x86.xor rbx, rbx
+    x86.test rcx, rcx
+    x86.mov rsi, rax
+    x86.cmovne rsi, rbx
+    x86.mov rax, 1
+    x86.cmp rdx, rax
+    x86.sete rax
+    x86.movzx rax, raxb
+    x86.mov rcx, 1
+    x86.test rax, rax
+    x86.mov rbx, rsi
+    x86.cmovne rbx, rcx
+    x86.mov rax, 2
+    x86.cmp rdx, rax
+    x86.sete rax
+    x86.movzx rax, raxb
+    x86.xor rcx, rcx
+    x86.test rax, rax
+    x86.mov rdx, rbx
+    x86.cmovne rdx, rcx
+    x86.mov rax, [rbp-16]
+    x86.mov byte ptr [rax+8], rdxb
+    x86.mov rax, [rbp-16]
+    x86.mov [rbp-32], rax
+    x86.mov rax, [rbp-32]
+    x86.mov rcx, [rbp-32]
+    x86.call mm_incref
+    x86.mov rax, [rbp-32]
+    x86.mov rcx, [rax+0]
+    x86.mov [rbp-40], rcx
+    x86.mov rax, [rbp-40]
+    x86.movzx rcx, byte ptr [rax+8]
+    x86.test rcx, rcx
+    x86.je main.check_0.after
+  check_0:
+    x86.mov rax, [rbp-8]
+    x86.lea_func rcx, [__destruct_X64OpMeta]
+    x86.mov rdx, rcx
+    x86.mov rcx, 16
+    x86.mov r8, 1
+    x86.call mm_alloc
+    x86.mov [rbp-48], rax
+    x86.mov rcx, 24
+    x86.xor rdx, rdx
+    x86.mov r8, 2
+    x86.call mm_alloc
+    x86.mov [rbp-56], rax
+    x86.xor rbx, rbx
+    x86.xor rsi, rsi
+    x86.mov rdi, [rbp-8]
+    x86.cmp rdi, rsi
+    x86.sete r8
+    x86.movzx r8, r8b
+    x86.mov r9, 4
+    x86.test r8, r8
+    x86.mov rax, rbx
+    x86.cmovne rax, r9
+    x86.mov rcx, 1
+    x86.cmp rdi, rcx
+    x86.sete rcx
+    x86.movzx rcx, rcxb
+    x86.mov rdx, 1
+    x86.test rcx, rcx
+    x86.mov rbx, rax
+    x86.cmovne rbx, rdx
+    x86.mov rax, 2
+    x86.cmp rdi, rax
+    x86.sete rax
+    x86.movzx rax, raxb
+    x86.mov rcx, 5
+    x86.test rax, rax
+    x86.mov rdx, rbx
+    x86.cmovne rdx, rcx
+    x86.mov rax, [rbp-56]
+    x86.mov [rax+0], rdx
+    x86.xor rax, rax
+    x86.xor rcx, rcx
+    x86.cmp rdi, rcx
+    x86.sete rcx
+    x86.movzx rcx, rcxb
+    x86.mov rdx, 1
+    x86.test rcx, rcx
+    x86.mov rbx, rax
+    x86.cmovne rbx, rdx
+    x86.mov rax, 1
+    x86.cmp rdi, rax
+    x86.sete rax
+    x86.movzx rax, raxb
+    x86.xor rcx, rcx
+    x86.test rax, rax
+    x86.mov rdx, rbx
+    x86.cmovne rdx, rcx
+    x86.mov rax, 2
+    x86.cmp rdi, rax
+    x86.sete rax
+    x86.movzx rax, raxb
+    x86.mov rcx, 1
+    x86.test rax, rax
+    x86.mov rbx, rdx
+    x86.cmovne rbx, rcx
+    x86.mov rax, [rbp-56]
+    x86.mov byte ptr [rax+8], rbxb
+    x86.xor rax, rax
+    x86.xor rcx, rcx
+    x86.cmp rdi, rcx
+    x86.sete rcx
+    x86.movzx rcx, rcxb
+    x86.xor rdx, rdx
+    x86.test rcx, rcx
+    x86.mov rbx, rax
+    x86.cmovne rbx, rdx
+    x86.mov rax, 1
+    x86.cmp rdi, rax
+    x86.sete rax
+    x86.movzx rax, raxb
+    x86.xor rcx, rcx
+    x86.test rax, rax
+    x86.mov rdx, rbx
+    x86.cmovne rdx, rcx
+    x86.mov rax, 2
+    x86.cmp rdi, rax
+    x86.sete rax
+    x86.movzx rax, raxb
+    x86.mov rcx, 1
+    x86.test rax, rax
+    x86.mov rbx, rdx
+    x86.cmovne rbx, rcx
+    x86.mov rax, [rbp-56]
+    x86.mov byte ptr [rax+16], rbxb
+    x86.mov rax, [rbp-56]
+    x86.mov rcx, [rbp-48]
+    x86.mov [rcx+0], rax
+    x86.mov rcx, [rbp-56]
+    x86.call mm_incref
+    x86.xor rax, rax
+    x86.xor rcx, rcx
+    x86.mov rdx, [rbp-8]
+    x86.cmp rdx, rcx
+    x86.sete rcx
+    x86.movzx rcx, rcxb
+    x86.xor rbx, rbx
+    x86.test rcx, rcx
+    x86.mov rsi, rax
+    x86.cmovne rsi, rbx
+    x86.mov rax, 1
+    x86.cmp rdx, rax
+    x86.sete rax
+    x86.movzx rax, raxb
+    x86.mov rcx, 1
+    x86.test rax, rax
+    x86.mov rbx, rsi
+    x86.cmovne rbx, rcx
+    x86.mov rax, 2
+    x86.cmp rdx, rax
+    x86.sete rax
+    x86.movzx rax, raxb
+    x86.xor rcx, rcx
+    x86.test rax, rax
+    x86.mov rdx, rbx
+    x86.cmovne rdx, rcx
+    x86.mov rax, [rbp-48]
+    x86.mov byte ptr [rax+8], rdxb
+    x86.mov rax, [rbp-48]
+    x86.mov [rbp-64], rax
+    x86.mov rax, [rbp-64]
+    x86.mov rcx, [rbp-64]
+    x86.call mm_incref
+    x86.mov rax, [rbp-64]
+    x86.mov rcx, [rax+0]
+    x86.mov [rbp-72], rcx
+    x86.mov rax, [rbp-72]
+    x86.mov rcx, [rax+0]
+    x86.xor rax, rax
+    x86.cmp rcx, rax
+    x86.setl rax
+    x86.movzx rax, raxb
+    x86.mov rdx, 4294967295
+    x86.cmp rcx, rdx
+    x86.setg rdx
+    x86.movzx rdx, rdxb
+    x86.or rax, rdx
+    x86.test rax, rax
+    x86.je main.__range_ok_1
+  __range_panic_1:
+    x86.lea_symdata rax, [__panic_msg_0]
+    x86.mov rcx, rax
+    x86.call mrt_panic
+  __range_ok_1:
+    x86.mov rax, [rbp-64]
+    x86.mov [rbp-80], rcx
+    x86.test rax, rax
+    x86.jz __nonnull_skip_0
+    x86.mov rcx, [rbp-64]
+    x86.call mm_decref
+    x86.label __nonnull_skip_0
+    x86.mov rcx, [rbp-32]
+    x86.test rcx, rcx
+    x86.jz __nonnull_skip_1
+    x86.call mm_decref
+    x86.label __nonnull_skip_1
+    x86.mov rax, [rbp-80]
+    x86.epilogue
+    x86.ret
+  check_0.after:
+    x86.mov rax, [rbp-32]
+    x86.test rax, rax
+    x86.jz __nonnull_skip_2
+    x86.mov rcx, [rbp-32]
+    x86.call mm_decref
+    x86.label __nonnull_skip_2
+    x86.xor rax, rax
+    x86.epilogue
+    x86.ret
+  }
+  func @__destruct_X64OpMeta(ptr: i64) {
+  entry:
+    x86.prologue stack_size=16
+    x86.mov [rbp-8], rcx
+    x86.mov rax, [rbp-8]
+    x86.mov rcx, [rax+0]
+    x86.mov [rbp-16], rcx
+    x86.test rcx, rcx
+    x86.jz __nonnull_skip_3
+    x86.call mm_decref
+    x86.label __nonnull_skip_3
+    x86.jmp __destruct_X64OpMeta.done
+  done:
+    x86.epilogue
+    x86.ret
+  }
+  func @__destruct_OpMeta(ptr: i64) {
+  entry:
+    x86.jmp __destruct_OpMeta.done
+  done:
+    x86.ret
+  }
+}
+---

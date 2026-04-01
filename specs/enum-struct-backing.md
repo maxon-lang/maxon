@@ -25,7 +25,7 @@ let op = Instruction.mul
 let lat = op.rawValue.latency  // 3
 ```
 
-All cases must use the same struct type. Struct field values must be compile-time integer or float constants.
+All cases must use the same struct type. Struct field values must be compile-time integer, float, or boolean constants, or nested struct literals.
 
 ## Tests
 

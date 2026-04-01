@@ -1,0 +1,79 @@
+// Test: nested-struct-backing-match
+typealias Latency = int(0 to 50)
+
+type Inner
+	export let latency Latency
+end 'Inner'
+
+type Outer
+	export let inner Inner
+	export let fast bool
+end 'Outer'
+
+enum Op
+	add = Outer{inner: Inner{latency: 1}, fast: true}
+	div = Outer{inner: Inner{latency: 40}, fast: false}
+end 'Op'
+
+function main() returns ExitCode
+	let op = Op.div
+	return match op 'dispatch'
+		add gives 10
+		div gives 20
+	end 'dispatch'
+end 'main'
+---
+ExitCode: 20
+---
+module {
+  func @main() -> u32 {
+  entry:
+    x86.prologue stack_size=32
+    x86.mov rax, 1
+    x86.mov [rbp-8], rax
+    x86.mov rcx, [rbp-8]
+    x86.xor rdx, rdx
+    x86.mov [rbp-16], rdx
+    x86.mov [rbp-24], rcx
+    x86.jmp main.dispatch_0.cmp0
+  dispatch_0.cmp0:
+    x86.mov rax, [rbp-24]
+    x86.xor rcx, rcx
+    x86.cmp rax, rcx
+    x86.jne main.dispatch_0.cmp1
+  dispatch_0.case0:
+    x86.mov rax, 10
+    x86.mov [rbp-16], rax
+    x86.jmp main.dispatch_0.merge
+  dispatch_0.cmp1:
+    x86.mov rax, [rbp-24]
+    x86.mov rcx, 1
+    x86.cmp rax, rcx
+    x86.jne main.dispatch_0.merge
+  dispatch_0.case1:
+    x86.mov rax, 20
+    x86.mov [rbp-16], rax
+    x86.jmp main.dispatch_0.merge
+  dispatch_0.merge:
+    x86.mov rax, [rbp-16]
+    x86.xor rcx, rcx
+    x86.cmp rax, rcx
+    x86.setl rdx
+    x86.movzx rdx, rdxb
+    x86.mov rbx, 4294967295
+    x86.cmp rax, rbx
+    x86.setg rsi
+    x86.movzx rsi, rsib
+    x86.or rdx, rsi
+    x86.test rdx, rdx
+    x86.je main.__range_ok_1
+  __range_panic_1:
+    x86.lea_symdata rax, [__panic_msg_0]
+    x86.mov rcx, rax
+    x86.call mrt_panic
+  __range_ok_1:
+    x86.epilogue
+    x86.ret
+  }
+}
+---

@@ -1,3 +1,47 @@
+// Build the C# bootstrap compiler (maxon-sharp)
+export function build_sharp() returns ExitCode
+	print("Building maxon-sharp...\n")
+	let result = Process.execute("dotnet build maxon-sharp/MaxonSharp.csproj", timeoutMs: 120000)
+	if result != 0 'failed'
+		print("Failed to build maxon-sharp\n")
+		return 1
+	end 'failed'
+	print("maxon-sharp built successfully\n")
+	return 0
+end 'build_sharp'
+
+// Build the C# compiler and run its spec tests
+export function spec_test_sharp() returns ExitCode
+	print("Building maxon-sharp...\n")
+	let buildResult = Process.execute("dotnet build maxon-sharp/MaxonSharp.csproj", timeoutMs: 120000)
+	if buildResult != 0 'buildFailed'
+		print("Failed to build maxon-sharp\n")
+		return 1
+	end 'buildFailed'
+
+	print("Running sharp spec tests...\n")
+	let testResult = Process.execute("bin/maxon.exe spec-test", timeoutMs: 600000)
+	if testResult != 0 'testFailed'
+		print("Sharp spec tests failed\n")
+		return 1
+	end 'testFailed'
+
+	print("All sharp spec tests passed\n")
+	return 0
+end 'spec_test_sharp'
+
+// Compile the self-hosted compiler using the bootstrap compiler
+export function build_selfhosted() returns ExitCode
+	print("Compiling self-hosted compiler...\n")
+	let result = Process.execute("bin/maxon.exe compile maxon-selfhosted", timeoutMs: 120000)
+	if result != 0 'failed'
+		print("Failed to compile self-hosted compiler\n")
+		return 1
+	end 'failed'
+	print("Self-hosted compiler built successfully\n")
+	return 0
+end 'build_selfhosted'
+
 // Compile the self-hosted compiler and run its spec tests
 export function spec_test_selfhosted() returns ExitCode
 	// Compile the self-hosted compiler using the bootstrap compiler

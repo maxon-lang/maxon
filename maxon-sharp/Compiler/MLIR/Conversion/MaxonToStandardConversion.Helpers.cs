@@ -1,3 +1,4 @@
+using MaxonSharp.Compiler;
 using MaxonSharp.Compiler.Mlir.Core;
 using MaxonSharp.Compiler.Mlir.Dialects;
 using MaxonSharp.Compiler.Mlir.Passes;
@@ -441,6 +442,60 @@ public static partial class MaxonToStandardConversion {
     int fieldOffset, MlirType fieldType, Dictionary<string, string> varTypes) {
     var heapPtr = EmitLoad(block, structVarName, varTypes);
     block.AddOp(new StdStoreIndirectOp(value, heapPtr, fieldOffset, fieldType));
+  }
+
+  /// Emit select chains for struct-backed enum raw value fields, recursing into nested struct fields.
+  private static void EmitStructRawValueFields(
+      MlirBlock<StandardOp> block, MlirStructType structType, MlirEnumType enumType,
+      StdI64 ordinalValue, string parentVarName, string fieldPrefix,
+      VarRegistry temps, Dictionary<string, string> varTypes, string scopeName,
+      Dictionary<string, MlirType> typeDefs) {
+    foreach (var field in structType.Fields) {
+      var qualifiedName = fieldPrefix.Length > 0 ? $"{fieldPrefix}.{field.Name}" : field.Name;
+
+      if (field.Type is MlirStructType nestedStructType) {
+        // Resolve the struct type in case it was forward-declared with no fields
+        var resolved = typeDefs.TryGetValue(nestedStructType.Name, out var td) && td is MlirStructType rst
+          ? rst : nestedStructType;
+
+        // Allocate nested struct, populate its fields recursively, then store pointer in parent
+        var nestedTempName = temps.CreateTemp("nested_rawval", MlirContext.Current.NextId(), resolved.Name, OwnershipFlags.Borrowed);
+        var nestedPtr = EmitAlloc(block, resolved.SizeInBytes, resolved.Name, scopeName: scopeName);
+        EmitStore(block, nestedPtr, nestedTempName, varTypes);
+
+        EmitStructRawValueFields(block, resolved, enumType, ordinalValue,
+          nestedTempName, qualifiedName, temps, varTypes, scopeName, typeDefs);
+
+        // Store nested struct pointer into parent and incref (parent holds a reference)
+        var nestedHeapPtr = (StdI64)EmitLoad(block, nestedTempName, varTypes);
+        EmitStructFieldStore(block, nestedHeapPtr, parentVarName, field.Offset, MlirType.I64, varTypes);
+        EmitIncrefValue(block, nestedHeapPtr, scopeName: scopeName);
+      } else {
+        // Leaf field: emit select chain mapping ordinal -> field value
+        var defaultVal = new StdConstI64Op(0);
+        block.AddOp(defaultVal);
+        StdI64 currentFieldVal = defaultVal.Result;
+
+        foreach (var enumCase in enumType.Cases) {
+          if (enumCase.RawValue is not StructRawValue srv) continue;
+          long fieldValue = srv.Fields.First(f => f.FieldName == qualifiedName).Value;
+
+          var ordConst = new StdConstI64Op(enumCase.Ordinal);
+          block.AddOp(ordConst);
+          var cmpOp = new StdCmpI64Op("eq", ordinalValue, ordConst.Result);
+          block.AddOp(cmpOp);
+
+          var fieldConst = new StdConstI64Op(fieldValue);
+          block.AddOp(fieldConst);
+
+          var selectOp = new StdSelectI64Op(cmpOp.Result, fieldConst.Result, currentFieldVal);
+          block.AddOp(selectOp);
+          currentFieldVal = selectOp.Result;
+        }
+
+        EmitStructFieldStore(block, currentFieldVal, parentVarName, field.Offset, field.Type, varTypes);
+      }
+    }
   }
 
   private static StdValue EmitLoad(MlirBlock<StandardOp> block, string varName, Dictionary<string, string> varTypes) {
