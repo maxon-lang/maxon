@@ -3753,7 +3753,7 @@ The `build.maxon` file contains exported functions that serve as runnable comman
 ```maxon
 // Build the project
 export function build() returns ExitCode
-	let result = Process.execute("maxon compile .", timeoutMs: 60000)
+	let result = Process.execute("maxon build .", timeoutMs: 60000)
 	if result != 0 'failed'
 		return 1
 	end 'failed'
@@ -3763,7 +3763,7 @@ end 'build'
 // Compile the self-hosted compiler and run its spec tests
 export function spec_test_selfhosted() returns ExitCode
 	print("Compiling...\n")
-	let result = Process.execute("bin/maxon.exe compile maxon-selfhosted", timeoutMs: 120000)
+	let result = Process.execute("bin/maxon.exe build maxon-selfhosted", timeoutMs: 120000)
 	if result != 0 'failed'
 		return 1
 	end 'failed'
@@ -4092,16 +4092,16 @@ end 'main'
 maxon program.maxon
 
 # Compile to executable
-maxon compile program.maxon -o program.exe
+maxon build program.maxon -o program.exe
 
 # Emit IR alongside executable
-maxon compile program.maxon --emit-ir
+maxon build program.maxon --emit-ir
 
 # Emit assembly alongside executable
-maxon compile program.maxon --emit-asm
+maxon build program.maxon --emit-asm
 
 # Enable verbose output
-maxon compile program.maxon -v
+maxon build program.maxon -v
 
 # Run language tests
 maxon test

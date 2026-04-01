@@ -48,14 +48,14 @@ For users who need Visual Studio or WinDbg, provide optional PDB conversion:
 
 ```bash
 # Compile and then convert to PDB
-maxon compile program.maxon
+maxon build program.maxon
 cv2pdb program.exe  # Creates program.pdb
 ```
 
 **Build script integration:**
 ```makefile
 %.exe: %.maxon
-	maxon compile $<
+	maxon build $<
 	@if command -v cv2pdb >/dev/null; then \
 		cv2pdb $@; \
 	fi
@@ -342,7 +342,7 @@ ext install vadimcn.vscode-lldb
 **Option 1: Use cv2pdb**
 ```bash
 # Compile and convert to PDB
-maxon compile program.maxon
+maxon build program.maxon
 cv2pdb program.exe
 # Now works in Visual Studio
 ```
@@ -400,7 +400,7 @@ cv2pdb program.exe
 ### Manual Testing
 ```bash
 # 1. Compile (debug info is included by default)
-maxon compile test.maxon
+maxon build test.maxon
 
 # 2. Verify DWARF is present
 dwarfdump --verify test.exe

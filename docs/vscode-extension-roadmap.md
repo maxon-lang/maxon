@@ -297,7 +297,7 @@ These features have been implemented and are available in the extension:
 **Implementation Steps**:
 1. Create task provider in extension
 2. Auto-detect `.maxon` files and offer:
-   - "Build" task: `maxon compile file.maxon`
+   - "Build" task: `maxon build file.maxon`
    - "Run" task: `maxon file.maxon`
    - "Run with arguments" task (prompt for args)
 3. Add problem matcher for compiler errors

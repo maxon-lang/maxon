@@ -792,8 +792,7 @@ info.isReadOnly        // bool
 
 ### Commands
 ```bash
-maxon compile <file|dir>     # Compile single file or directory → .exe
-maxon build                  # Shorthand for maxon run build
+maxon build [file|dir]       # Compile file, directory, or project → .exe
 maxon run <function>         # Run exported function from build.maxon (dashes → underscores)
 maxon run                    # List available commands in build.maxon (shown with dashes)
 maxon spec-test              # Run spec fragment tests

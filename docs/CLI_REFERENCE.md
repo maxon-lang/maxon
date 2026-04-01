@@ -8,8 +8,7 @@ This document covers the Maxon command-line interface and project system.
 
 | Command | Description |
 |---------|-------------|
-| `maxon compile <file\|directory>` | Compile a single source file or directory |
-| `maxon build` | Shorthand for `maxon run build` |
+| `maxon build [file\|directory]` | Compile a file, directory, or project (default: current directory) |
 | `maxon run <function>` | Run an exported function from `build.maxon` |
 | `maxon test` | Run spec fragment tests |
 
@@ -17,74 +16,44 @@ This document covers the Maxon command-line interface and project system.
 
 ## Commands
 
-### `maxon compile`
+### `maxon build`
 
-Compiles a single Maxon source file or a directory of source files to an executable.
+Compiles a single Maxon source file, a directory of source files, or a project with `build.maxon`.
 
 **Usage:**
 ```bash
-maxon compile <source.maxon|directory> [options]
+maxon build [file|directory] [options]
 ```
 
 **Arguments:**
-- `<source.maxon|directory>` - Path to a source file or directory (required). When given a directory, discovers all `.maxon` files recursively and compiles them together.
+- `[file|directory]` - Path to a source file or directory (default: current directory). When given a directory, discovers all `.maxon` files recursively and compiles them together.
 
 **Options:**
 
 | Option | Description |
 |--------|-------------|
-| `-v` | Enable verbose/debug output |
 | `--emit-ir` | Emit IR output to `<source>.ir` |
-| `--emit-asm` | Emit assembly output to `<source>.asm` |
-
-**Output:**
-- Creates `<source>.exe` in the same directory as the source file
-- For `.maxon` files: `foo.maxon` → `foo.exe`
-- For `.test` files: `foo.test` → `foo.exe`
-
-**Examples:**
-```bash
-# Basic compilation
-maxon compile hello.maxon
-
-# Compile with verbose output
-maxon compile app.maxon -v
-
-# Emit IR output
-maxon compile app.maxon --emit-ir
-
-# Emit assembly output
-maxon compile app.maxon --emit-asm
-
-# Compile an entire directory
-maxon compile myproject/
-```
-
----
-
-### `maxon build`
-
-Shorthand for `maxon run build`. Looks for `build.maxon` in the current directory and runs its exported `build()` function.
-
-**Usage:**
-```bash
-maxon build
-```
+| `--dump-stages` | Write IR at each pipeline stage |
 
 **Behavior:**
-1. Finds `build.maxon` in the current directory
-2. Compiles and runs the `build()` function from `build.maxon`
+- **Single file:** Compiles the file directly. Output name comes from the source filename (`foo.maxon` → `foo.exe`).
+- **Directory with `build.maxon`:** Runs the `build()` function from `build.maxon` to get the build config (output path, name, etc.), then compiles all `.maxon` files in the directory.
+- **Directory without `build.maxon`:** Compiles all `.maxon` files and names the output after the file containing `main()`.
 
 **Examples:**
 ```bash
-# Build project in current directory
-cd myproject
+# Compile a single file
+maxon build hello.maxon
+
+# Compile with IR output
+maxon build app.maxon --emit-ir
+
+# Build a project directory (uses build.maxon if present)
+maxon build myproject/
+
+# Build current directory
 maxon build
 ```
-
-**Error Conditions:**
-- `No build.maxon found` - No `build.maxon` in the current directory
-- `No build() function found` - `build.maxon` does not export a `build()` function
 
 ---
 
@@ -131,7 +100,7 @@ maxon run build
 // Compile the self-hosted compiler and run its spec tests
 export function spec_test_selfhosted() returns ExitCode
 	print("Compiling...\n")
-	let result = Process.execute("bin/maxon.exe compile maxon-selfhosted", timeoutMs: 120000)
+	let result = Process.execute("bin/maxon.exe build maxon-selfhosted", timeoutMs: 120000)
 	if result != 0 'failed'
 		return 1
 	end 'failed'
@@ -206,7 +175,7 @@ myproject/
     └── helpers.maxon
 ```
 
-All `.maxon` files in subdirectories are automatically included when compiling a directory with `maxon compile`.
+All `.maxon` files in subdirectories are automatically included when compiling a directory with `maxon build`.
 
 ### Ignoring Directories
 
@@ -302,8 +271,8 @@ The compiler looks for the standard library in these locations (in order):
 
 ### Working Directory
 
-- `maxon compile` - Output is relative to the source file location
-- `maxon build` / `maxon run` - Runs from the current working directory (requires `build.maxon`)
+- `maxon build` - Output is relative to the source file/directory location
+- `maxon run` - Runs from the current working directory (requires `build.maxon`)
 - `maxon test` - Runs from the `maxon-bin/` directory
 
 ---
@@ -313,8 +282,8 @@ The compiler looks for the standard library in these locations (in order):
 ### Developing a Single File
 
 ```bash
-# Edit and compile
-maxon compile program.maxon
+# Edit and build
+maxon build program.maxon
 
 # Run the result
 ./program.exe
@@ -355,13 +324,10 @@ cd maxon-bin
 ### Debugging Compilation Issues
 
 ```bash
-# Enable verbose output (shows compilation progress)
-maxon compile problem.maxon -v
-
 # Emit IR for inspection
-maxon compile problem.maxon --emit-ir
+maxon build problem.maxon --emit-ir
 
-# Emit assembly for inspection
-maxon compile problem.maxon --emit-asm
+# Emit IR at each pipeline stage
+maxon build problem.maxon --dump-stages
 
 ```

@@ -19,7 +19,6 @@ class Program {
     var command = args[0];
 
     return command switch {
-      "compile" => RunCompile(args[1..]),
       "build" => RunBuild(args[1..]),
       "run" => RunRun(args[1..]),
       "fmt" => RunFmt(args[1..]),
@@ -34,15 +33,14 @@ class Program {
     Console.WriteLine("Usage: maxon <command> [options]");
     Console.WriteLine();
     Console.WriteLine("Commands:");
-    Console.WriteLine("  compile <file|directory> Compile a .maxon file or project directory");
-    Console.WriteLine("  build [options]          Shorthand for 'maxon run build'");
+    Console.WriteLine("  build [file|directory]   Compile a .maxon file or project directory");
     Console.WriteLine("  run <function>           Compile build.maxon and run the specified function");
     Console.WriteLine("  fmt [<file|directory>]   Format .maxon source files in-place (default: current directory)");
     Console.WriteLine("  monitor <exe> [args...]  Launch executable with shared-memory debug stream monitor");
     Console.WriteLine("  spec-test [options]      Run spec tests");
     Console.WriteLine("  lsp-server               Start language server (LSP)");
     Console.WriteLine();
-    Console.WriteLine("Build options (compile, build, run):");
+    Console.WriteLine("Build options (build, run):");
     Console.WriteLine("  --target=ARCH-OS         Set compilation target (default: x86_64-windows)");
     Console.WriteLine("                           Examples: x86_64-windows, aarch64-macos, x86_64-linux");
     Console.WriteLine("  --emit-ir                Write .mlir file");
@@ -134,63 +132,43 @@ class Program {
     };
   }
 
-  static int RunCompile(string[] args) {
-    var (emitIr, dumpStages, valid) = ParseOptions(args);
-    if (!valid) return Fail();
-
-    var target = ParseTarget(args);
-    var path = GetNonOptionArg(args);
-    if (path == null) return Fail();
-
-    SourceFile[] sources;
-    string mainFile;
-
-    if (Directory.Exists(path)) {
-      sources = CollectFilesFromDirectory(path);
-      if (sources.Length == 0) {
-        Console.WriteLine($"No .maxon files found in: {path}");
-        return 1;
-      }
-      mainFile = FindMainFile(sources, path);
-    } else if (File.Exists(path)) {
-      var content = ReadFileContentUntilSeparator(path);
-      sources = [new(path, content)];
-      mainFile = path;
-    } else {
-      Console.WriteLine($"File or directory not found: {path}");
-      return 1;
-    }
-
-    var ext = GetOutputExtension(target);
-    var outputPath = ResolveOutputPath(mainFile, ext);
-    var (mlirOutputPath, dumpStagesBasePath) = GetOutputPaths(mainFile, emitIr, dumpStages);
-
-    return CompileAndReportResult(sources, outputPath, mlirOutputPath, dumpStagesBasePath, target);
-  }
-
   static int RunBuild(string[] args) {
     var (emitIr, dumpStages, valid) = ParseOptions(args);
     if (!valid) return Fail();
 
     var target = ParseTarget(args);
-    var directory = Directory.GetCurrentDirectory();
-    var buildFile = Path.Combine(directory, "build.maxon");
+    var path = GetNonOptionArg(args) ?? Directory.GetCurrentDirectory();
 
-    // If build.maxon has an exported build() function, compile and run it to get config
+    if (File.Exists(path)) {
+      // Single file: compile directly
+      var content = ReadFileContentUntilSeparator(path);
+      var ext = GetOutputExtension(target);
+      var outputPath = ResolveOutputPath(path, ext);
+      var (mlirOutputPath, dumpStagesBasePath) = GetOutputPaths(path, emitIr, dumpStages);
+      return CompileAndReportResult([new(path, content)], outputPath, mlirOutputPath, dumpStagesBasePath, target);
+    }
+
+    if (!Directory.Exists(path)) {
+      Console.Error.WriteLine($"File or directory not found: {path}");
+      return 1;
+    }
+
+    // Directory: check for build.maxon with a build() function
+    var buildFile = Path.Combine(path, "build.maxon");
     if (File.Exists(buildFile)) {
-      var content = ReadFileContentUntilSeparator(buildFile);
-      if (HasMainFunction(content)) {
+      var buildContent = ReadFileContentUntilSeparator(buildFile);
+      if (HasMainFunction(buildContent)) {
         Console.Error.WriteLine("build.maxon must not contain a main() function.");
         return 1;
       }
-      var exportedFunctions = ListBuildFunctions(content);
+      var exportedFunctions = ListBuildFunctions(buildContent);
       if (exportedFunctions.Any(f => f.name == "build")) {
-        var sources = new SourceFile[] { new(buildFile, content) };
         var ext = GetOutputExtension(target);
-        var runPath = Path.Combine(directory, $".maxon-run{ext}");
+        var buildSources = new SourceFile[] { new(buildFile, buildContent) };
+        var runPath = Path.Combine(path, $".maxon-run{ext}");
         var (mlirOutputPath, dumpStagesBasePath) = GetOutputPaths(buildFile, emitIr, dumpStages);
 
-        var compileResult = CompileAndReportResult(sources, runPath, mlirOutputPath,
+        var compileResult = CompileAndReportResult(buildSources, runPath, mlirOutputPath,
             dumpStagesBasePath, target, entryFunction: "build");
         if (compileResult != 0) return compileResult;
 
@@ -198,20 +176,29 @@ class Program {
         try { File.Delete(runPath); } catch { /* best effort */ }
         if (exitCode != 0) return exitCode;
 
-        // Parse the build config JSON
-        var config = System.Text.Json.JsonSerializer.Deserialize<BuildConfig>(json);
+        var config = System.Text.Json.JsonSerializer.Deserialize<BuildConfig>(json,
+            new System.Text.Json.JsonSerializerOptions { PropertyNameCaseInsensitive = true });
         if (config == null) {
           Console.Error.WriteLine("build.maxon produced invalid build configuration.");
           return 1;
         }
 
-        // Use config name for output path, fall back to generic compile
-        var outputName = !string.IsNullOrEmpty(config.Name) ? config.Name : "output";
-        var outputPath = Path.Combine(directory, outputName + ext);
+        string outputPath;
+        if (!string.IsNullOrEmpty(config.Output)) {
+          outputPath = Path.Combine(path, config.Output);
+        } else if (!string.IsNullOrEmpty(config.Name)) {
+          outputPath = Path.Combine(path, config.Name + ext);
+        } else {
+          outputPath = Path.Combine(path, "output" + ext);
+        }
 
-        var projectSources = CollectFilesFromDirectory(directory);
+        var outputDir = Path.GetDirectoryName(outputPath);
+        if (outputDir != null && !Directory.Exists(outputDir))
+          Directory.CreateDirectory(outputDir);
+
+        var projectSources = CollectFilesFromDirectory(path);
         if (projectSources.Length == 0) {
-          Console.Error.WriteLine($"No .maxon files found in: {directory}");
+          Console.Error.WriteLine($"No .maxon files found in: {path}");
           return 1;
         }
 
@@ -220,8 +207,19 @@ class Program {
       }
     }
 
-    // Otherwise, do a generic build: compile the current directory
-    return RunCompile([directory, .. args]);
+    // No build.maxon or no build() function: compile all files in directory
+    var sources = CollectFilesFromDirectory(path);
+    if (sources.Length == 0) {
+      Console.Error.WriteLine($"No .maxon files found in: {path}");
+      return 1;
+    }
+    var mainFile = FindMainFile(sources, path);
+    {
+      var ext = GetOutputExtension(target);
+      var outputPath = ResolveOutputPath(mainFile, ext);
+      var (mlirOutputPath, dumpStagesBasePath) = GetOutputPaths(mainFile, emitIr, dumpStages);
+      return CompileAndReportResult(sources, outputPath, mlirOutputPath, dumpStagesBasePath, target);
+    }
   }
 
   record BuildConfig {
@@ -229,7 +227,7 @@ class Program {
     public string? Output { get; init; }
     public string[]? Sources { get; init; }
     public bool Optimize { get; init; }
-    public bool Debug_info { get; init; }
+    public bool Debuag_info { get; init; }
   }
 
   static (int exitCode, string stdout) RunExecutableCapture(string executablePath) {

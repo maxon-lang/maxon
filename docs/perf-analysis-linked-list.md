@@ -102,10 +102,10 @@ int main(void) {
 
 ```bash
 # Compile
-./maxon-sharp/bin/Debug/net8.0/win-x64/maxon.exe compile temp/list_bench.maxon
+./maxon-sharp/bin/Debug/net8.0/win-x64/maxon.exe build temp/list_bench.maxon
 
 # Compile with IR dumps at each pipeline stage
-./maxon-sharp/bin/Debug/net8.0/win-x64/maxon.exe compile temp/list_bench.maxon --dump-stages
+./maxon-sharp/bin/Debug/net8.0/win-x64/maxon.exe build temp/list_bench.maxon --dump-stages
 # Produces: temp/list_bench.1-maxon.mlir, temp/list_bench.2-standard.mlir, temp/list_bench.3-x86.mlir
 
 # Run

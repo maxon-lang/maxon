@@ -8,7 +8,7 @@ By default spec tests will only show the name of failing tests, but you can use 
 
 ## Steps
 0. Run the `maxon-coder` skill to load Maxon syntax rules before writing any Maxon code.
-1. Run the spec tests: `./maxon-selfhosted/maxon-selfhosted.exe spec-test`
+1. Run the spec tests: `./maxon-selfhosted/bin/maxon-selfhosted.exe spec-test`
 2. Analyze the output to identify which tests are failing and why.
 3. Fix the compiler code in `maxon-selfhosted/` to make the failing tests pass. If new features need to be implemented you
 can use the maxon-sharp compiler for reference.

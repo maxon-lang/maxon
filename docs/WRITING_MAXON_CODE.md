@@ -730,18 +730,18 @@ Operators: `and`, `or`, `not`.
 | | C# compiler | Self-hosted compiler |
 |---|---|---|
 | Location | `maxon-sharp/` | `maxon-selfhosted/` |
-| Executable | `bin/maxon.exe` | `maxon-selfhosted/maxon-selfhosted.exe` |
-| Commands | compile, build, run, fmt, spec-test, lsp-server | build, spec-test, test-incremental |
+| Executable | `bin/maxon.exe` | `maxon-selfhosted/bin/maxon-selfhosted.exe` |
+| Commands | build, run, fmt, spec-test, lsp-server | build, spec-test, test-incremental |
 | Build | pre-built (NEVER use `dotnet run`) | `maxon.exe build` from `maxon-selfhosted/` |
 
 ### Compiling
 
 ```bash
-maxon.exe compile hello.maxon          # single file
+maxon.exe build hello.maxon          # single file
 maxon.exe build                        # multi-file project (from project dir)
 maxon.exe run hello.maxon              # compile and run
-maxon.exe compile hello.maxon --emit-ir       # emit IR
-maxon.exe compile hello.maxon --dump-stages   # IR at each stage
+maxon.exe build hello.maxon --emit-ir       # emit IR
+maxon.exe build hello.maxon --dump-stages   # IR at each stage
 ```
 
 ### Spec tests (C# compiler)
@@ -767,11 +767,11 @@ cd maxon-selfhosted
 ### Debugging
 
 ```bash
-maxon.exe compile foo.maxon --log=trace              # all logging
-maxon.exe compile foo.maxon --log=parser:debug       # category-specific
-maxon.exe compile foo.maxon --log=codegen:trace
-maxon.exe compile foo.maxon --mm-trace               # memory manager trace
-maxon.exe compile foo.maxon --mm-debug               # memory debug checks
+maxon.exe build foo.maxon --log=trace              # all logging
+maxon.exe build foo.maxon --log=parser:debug       # category-specific
+maxon.exe build foo.maxon --log=codegen:trace
+maxon.exe build foo.maxon --mm-trace               # memory manager trace
+maxon.exe build foo.maxon --mm-debug               # memory debug checks
 ```
 
 ---
