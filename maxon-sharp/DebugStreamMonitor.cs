@@ -59,6 +59,7 @@ public class DebugStreamMonitor {
     accessor.Write(RuntimeEmitter.DsOffDroppedEvents, 0L);
     accessor.Write(RuntimeEmitter.DsOffTagTableOffset, (long)(RuntimeEmitter.DsHeaderSize + RuntimeEmitter.DsDefaultBufferSize));
     accessor.Write(RuntimeEmitter.DsOffTagTableCount, 0L);
+    accessor.Write(RuntimeEmitter.DsOffPeakUsed, 0L);
 
     // Spawn target process with MAXON_DEBUGSTREAM env var
     var psi = new System.Diagnostics.ProcessStartInfo {
@@ -82,16 +83,32 @@ public class DebugStreamMonitor {
     long readCursor = 0;
     long bufferSize = RuntimeEmitter.DsDefaultBufferSize;
     long bufferMask = bufferSize - 1;
-    var startTs = accessor.ReadInt64(RuntimeEmitter.DsOffStartTimestamp);
-
     // Read tag names from the executable's .symtab section
     string[] tagNames = ReadTagsFromExecutable(Path.GetFullPath(exePath));
+
+    // Buffered output for event lines (avoids per-line Console.WriteLine overhead)
+    using var stdout = new StreamWriter(Console.OpenStandardOutput(), bufferSize: 65536);
+    stdout.AutoFlush = false;
+
+    // Pre-allocate private buffer for copy-then-process
+    var localBuf = new byte[bufferSize];
+
+    // Cached indent strings by depth
+    var indentCache = new string[64];
+    for (int i = 0; i < indentCache.Length; i++)
+      indentCache[i] = new string(' ', i * 2);
+
+    // Synchronize writes to stdout between event loop and forwarding task
+    var stdoutLock = new object();
 
     // Forward stdout/stderr in background
     var stdoutTask = Task.Run(() => {
       var sr = process.StandardOutput;
-      while (sr.ReadLine() is { } line)
-        Console.WriteLine(line);
+      while (sr.ReadLine() is { } line) {
+        lock (stdoutLock) {
+          stdout.WriteLine(line);
+        }
+      }
     });
     var stderrTask = Task.Run(() => {
       var sr = process.StandardError;
@@ -103,16 +120,31 @@ public class DebugStreamMonitor {
       long writeCursor = accessor.ReadInt64(RuntimeEmitter.DsOffWriteCursor);
 
       if (readCursor >= writeCursor) {
+        lock (stdoutLock) { stdout.Flush(); }
         Thread.Sleep(1);
         continue;
       }
 
-      while (readCursor < writeCursor) {
-        long pos = readCursor & bufferMask;
-        long dataOffset = RuntimeEmitter.DsHeaderSize + pos;
+      // Copy pending data from ring buffer into private buffer, then immediately
+      // advance read_cursor to free ring buffer space for the producer.
+      long pending = writeCursor - readCursor;
+      long startPos = readCursor & bufferMask;
+      long firstChunk = Math.Min(pending, bufferSize - startPos);
+      accessor.ReadArray(RuntimeEmitter.DsHeaderSize + startPos, localBuf, 0, (int)firstChunk);
+      if (firstChunk < pending) {
+        // Wrap-around: copy the second chunk from the start of the ring buffer
+        accessor.ReadArray(RuntimeEmitter.DsHeaderSize, localBuf, (int)firstChunk, (int)(pending - firstChunk));
+      }
 
+      // Release ring buffer immediately
+      readCursor = writeCursor;
+      accessor.Write(RuntimeEmitter.DsOffReadCursor, readCursor);
+
+      // Process events from private copy
+      long localOffset = 0;
+      while (localOffset < pending) {
         // Read entry header (8 bytes)
-        long header = accessor.ReadInt64(dataOffset);
+        long header = BitConverter.ToInt64(localBuf, (int)localOffset);
         byte eventType = (byte)(header & 0xFF);
         ushort entrySize = (ushort)((header >> 16) & 0xFFFF);
         uint timestampDelta = (uint)((header >> 32) & 0xFFFFFFFF);
@@ -120,36 +152,55 @@ public class DebugStreamMonitor {
         if (entrySize == 0) break; // safety
 
         if (eventType == RuntimeEmitter.DsEvPadding) {
-          readCursor += entrySize;
+          localOffset += entrySize;
           continue;
         }
 
-        string timestamp = FormatTimestamp(timestampDelta);
-
         if (eventType == RuntimeEmitter.DsEvDepthInc) {
           depth++;
-          readCursor += entrySize;
+          localOffset += entrySize;
           continue;
         }
         if (eventType == RuntimeEmitter.DsEvDepthDec) {
           if (depth > 0) depth--;
-          readCursor += entrySize;
+          localOffset += entrySize;
           continue;
         }
 
-        string indent = new(' ', depth * 2);
-        string? line = FormatEvent(eventType, dataOffset, accessor, filter, tagNames);
-
-        if (line != null) {
-          Console.WriteLine($"{timestamp} {indent}{line}");
+        // Pre-filter before formatting
+        if (filter == "sched" && eventType <= RuntimeEmitter.DsEvMmRawFree) {
+          localOffset += entrySize;
+          continue;
+        }
+        if (filter == "mm" && eventType >= RuntimeEmitter.DsEvSchedSpawn) {
+          localOffset += entrySize;
+          continue;
         }
 
-        readCursor += entrySize;
-      }
+        string? line = FormatEventFromBuffer(eventType, localBuf, (int)localOffset, tagNames);
 
-      // Update read cursor so producer knows we've consumed
-      accessor.Write(RuntimeEmitter.DsOffReadCursor, readCursor);
+        if (line != null) {
+          string indent = depth < indentCache.Length ? indentCache[depth] : new string(' ', depth * 2);
+          lock (stdoutLock) {
+            stdout.Write('[');
+            stdout.Write('+');
+            uint seconds = timestampDelta / 1000;
+            uint ms = timestampDelta % 1000;
+            stdout.Write(seconds.ToString("D4"));
+            stdout.Write('.');
+            stdout.Write(ms.ToString("D3"));
+            stdout.Write(']');
+            stdout.Write(' ');
+            stdout.Write(indent);
+            stdout.WriteLine(line);
+          }
+        }
+
+        localOffset += entrySize;
+      }
     }
+
+    lock (stdoutLock) { stdout.Flush(); }
 
     // Wait for process exit
     process.WaitForExit();
@@ -161,8 +212,12 @@ public class DebugStreamMonitor {
     // Final summary
     long totalEvents = accessor.ReadInt64(RuntimeEmitter.DsOffTotalEvents);
     long droppedEvents = accessor.ReadInt64(RuntimeEmitter.DsOffDroppedEvents);
+    long peakUsed = accessor.ReadInt64(RuntimeEmitter.DsOffPeakUsed);
     if (totalEvents > 0 || droppedEvents > 0) {
-      Console.Error.WriteLine($"[debugstream] {totalEvents} events, {droppedEvents} dropped");
+      double peakMB = peakUsed / (1024.0 * 1024.0);
+      double bufMB = bufferSize / (1024.0 * 1024.0);
+      int peakPct = bufferSize > 0 ? (int)(peakUsed * 100 / bufferSize) : 0;
+      Console.Error.WriteLine($"[debugstream] {totalEvents} events, {droppedEvents} dropped, peak buffer: {peakMB:F1} MB / {bufMB:F1} MB ({peakPct}%)");
     }
 
     return process.ExitCode;
@@ -259,55 +314,58 @@ public class DebugStreamMonitor {
     return $"tag={tagIndex}";
   }
 
-  private static string FormatTimestamp(uint deltaMs) {
-    uint seconds = deltaMs / 1000;
-    uint ms = deltaMs % 1000;
-    return $"[+{seconds:D4}.{ms:D3}]";
-  }
-
-  private static string? FormatEvent(byte eventType, long dataOffset, MemoryMappedViewAccessor accessor, string? filter, string[] tagNames) {
+  private static string? FormatEventFromBuffer(byte eventType, byte[] buf, int offset, string[] tagNames) {
     switch (eventType) {
       case RuntimeEmitter.DsEvMmAlloc: {
-        if (filter == "sched") return null;
-        long allocId = accessor.ReadInt64(dataOffset + 8);
-        long tagAndSize = accessor.ReadInt64(dataOffset + 16);
+        long allocId = BitConverter.ToInt64(buf, offset + 8);
+        long tagAndSize = BitConverter.ToInt64(buf, offset + 16);
         int tagIndex = (int)(tagAndSize & 0xFFFF);
         int size = (int)((tagAndSize >> 32) & 0xFFFFFFFF);
         return $"mm_alloc {ResolveTag(tagIndex, tagNames)} #{allocId} size={size}";
       }
       case RuntimeEmitter.DsEvMmFree: {
-        if (filter == "sched") return null;
-        long allocId = accessor.ReadInt64(dataOffset + 8);
-        long tagField = accessor.ReadInt64(dataOffset + 16);
+        long allocId = BitConverter.ToInt64(buf, offset + 8);
+        long tagField = BitConverter.ToInt64(buf, offset + 16);
         int tagIndex = (int)(tagField & 0xFFFF);
         return $"mm_free {ResolveTag(tagIndex, tagNames)} #{allocId}";
       }
       case RuntimeEmitter.DsEvMmIncref:
       case RuntimeEmitter.DsEvMmDecref:
       case RuntimeEmitter.DsEvMmTransfer: {
-        if (filter == "sched") return null;
         string name = eventType switch {
           RuntimeEmitter.DsEvMmIncref => "mm_incref",
           RuntimeEmitter.DsEvMmDecref => "mm_decref",
           RuntimeEmitter.DsEvMmTransfer => "mm_transfer",
           _ => throw new InvalidOperationException($"Unexpected refcount event type: 0x{eventType:X2}")
         };
-        long allocId = accessor.ReadInt64(dataOffset + 8);
-        long tagAndRc = accessor.ReadInt64(dataOffset + 16);
+        long allocId = BitConverter.ToInt64(buf, offset + 8);
+        long tagAndRc = BitConverter.ToInt64(buf, offset + 16);
         int tagIndex = (int)(tagAndRc & 0xFFFF);
         int rc = (int)((tagAndRc >> 32) & 0xFFFFFFFF);
         return $"{name} {ResolveTag(tagIndex, tagNames)} #{allocId} rc={rc}";
       }
       case RuntimeEmitter.DsEvMmRawAlloc: {
-        if (filter == "sched") return null;
-        long rawId = accessor.ReadInt64(dataOffset + 8);
-        long size = accessor.ReadInt64(dataOffset + 16);
+        long rawId = BitConverter.ToInt64(buf, offset + 8);
+        long size = BitConverter.ToInt64(buf, offset + 16);
         return $"mm_raw_alloc #{rawId} size={size}";
       }
       case RuntimeEmitter.DsEvMmRawFree: {
-        if (filter == "sched") return null;
-        long rawId = accessor.ReadInt64(dataOffset + 8);
+        long rawId = BitConverter.ToInt64(buf, offset + 8);
         return $"mm_raw_free #{rawId}";
+      }
+      case RuntimeEmitter.DsEvMmRealloc: {
+        long allocId = BitConverter.ToInt64(buf, offset + 8);
+        long tagAndSize = BitConverter.ToInt64(buf, offset + 16);
+        int tagIndex = (int)(tagAndSize & 0xFFFF);
+        int size = (int)((tagAndSize >> 32) & 0xFFFFFFFF);
+        return $"mm_realloc {ResolveTag(tagIndex, tagNames)} #{allocId} size={size}";
+      }
+      case RuntimeEmitter.DsEvMmCow: {
+        long allocId = BitConverter.ToInt64(buf, offset + 8);
+        long tagAndSize = BitConverter.ToInt64(buf, offset + 16);
+        int tagIndex = (int)(tagAndSize & 0xFFFF);
+        int size = (int)((tagAndSize >> 32) & 0xFFFFFFFF);
+        return $"mm_cow {ResolveTag(tagIndex, tagNames)} #{allocId} size={size}";
       }
       case RuntimeEmitter.DsEvSchedSpawn:
       case RuntimeEmitter.DsEvSchedAwait:
@@ -315,7 +373,6 @@ public class DebugStreamMonitor {
       case RuntimeEmitter.DsEvSchedResume:
       case RuntimeEmitter.DsEvIoYield:
       case RuntimeEmitter.DsEvIoResume: {
-        if (filter == "mm") return null;
         string name = eventType switch {
           RuntimeEmitter.DsEvSchedSpawn => "sched_spawn",
           RuntimeEmitter.DsEvSchedAwait => "sched_await",
@@ -325,13 +382,16 @@ public class DebugStreamMonitor {
           RuntimeEmitter.DsEvIoResume => "io_resume",
           _ => throw new InvalidOperationException($"Unexpected sched event type: 0x{eventType:X2}")
         };
-        long traceId = accessor.ReadInt64(dataOffset + 8);
+        long traceId = BitConverter.ToInt64(buf, offset + 8);
         return $"{name} #{traceId}";
       }
       case RuntimeEmitter.DsEvHeartbeat:
         return null;
-      default:
-        return $"unknown_event(0x{eventType:X2})";
+      case RuntimeEmitter.DsEvDepthInc:
+      case RuntimeEmitter.DsEvDepthDec:
+      case RuntimeEmitter.DsEvPadding:
+        throw new InvalidOperationException($"Event type 0x{eventType:X2} should be handled before FormatEventFromBuffer");
     }
+    throw new InvalidOperationException($"Unknown debug stream event type: 0x{eventType:X2}");
   }
 }

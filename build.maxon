@@ -1,10 +1,19 @@
+// Run a command with a status message, returning its exit code
+function run(description String, command String, timeoutMs Count) returns ExitCode
+	print("{description}...\n")
+	let result = Process.execute(command, timeoutMs: timeoutMs)
+	if result != 0 'failed'
+		print("{description} failed\n")
+		return result
+	end 'failed'
+	return 0
+end 'run'
+
 // Build the C# bootstrap compiler (maxon-sharp)
 export function build_sharp() returns ExitCode
-	print("Building maxon-sharp...\n")
-	let result = Process.execute("dotnet build maxon-sharp/MaxonSharp.csproj", timeoutMs: 120000)
+	let result = run("Building maxon-sharp", command: "dotnet build maxon-sharp/MaxonSharp.csproj", timeoutMs: 120000)
 	if result != 0 'failed'
-		print("Failed to build maxon-sharp\n")
-		return 1
+		return result
 	end 'failed'
 	print("maxon-sharp built successfully\n")
 	return 0
@@ -12,19 +21,15 @@ end 'build_sharp'
 
 // Build the C# compiler and run its spec tests
 export function spec_test_sharp() returns ExitCode
-	print("Building maxon-sharp...\n")
-	let buildResult = Process.execute("dotnet build maxon-sharp/MaxonSharp.csproj", timeoutMs: 120000)
-	if buildResult != 0 'buildFailed'
-		print("Failed to build maxon-sharp\n")
-		return 1
-	end 'buildFailed'
+	let buildResult = build_sharp()
+	if buildResult != 0 'failed'
+		return buildResult
+	end 'failed'
 
-	print("Running sharp spec tests...\n")
-	let testResult = Process.execute("bin/maxon.exe spec-test", timeoutMs: 600000)
-	if testResult != 0 'testFailed'
-		print("Sharp spec tests failed\n")
-		return 1
-	end 'testFailed'
+	let testResult = run("Running sharp spec tests", command: "bin/maxon.exe spec-test", timeoutMs: 600000)
+	if testResult != 0 'failed2'
+		return testResult
+	end 'failed2'
 
 	print("All sharp spec tests passed\n")
 	return 0
@@ -32,11 +37,9 @@ end 'spec_test_sharp'
 
 // Compile the self-hosted compiler using the bootstrap compiler
 export function build_selfhosted() returns ExitCode
-	print("Compiling self-hosted compiler...\n")
-	let result = Process.execute("bin/maxon.exe build maxon-selfhosted", timeoutMs: 120000)
+	let result = run("Compiling self-hosted compiler", command: "bin/maxon.exe build maxon-selfhosted", timeoutMs: 120000)
 	if result != 0 'failed'
-		print("Failed to compile self-hosted compiler\n")
-		return 1
+		return result
 	end 'failed'
 	print("Self-hosted compiler built successfully\n")
 	return 0
@@ -44,21 +47,15 @@ end 'build_selfhosted'
 
 // Compile the self-hosted compiler and run its spec tests
 export function spec_test_selfhosted() returns ExitCode
-	// Compile the self-hosted compiler using the bootstrap compiler
-	print("Compiling self-hosted compiler...\n")
-	let compileResult = Process.execute("bin/maxon.exe build maxon-selfhosted", timeoutMs: 120000)
-	if compileResult != 0 'compileFailed'
-		print("Failed to compile self-hosted compiler\n")
-		return 1
-	end 'compileFailed'
+	let compileResult = build_selfhosted()
+	if compileResult != 0 'failed'
+		return compileResult
+	end 'failed'
 
-	// Run the self-hosted compiler's spec tests
-	print("Running self-hosted spec tests...\n")
-	let testResult = Process.execute("maxon-selfhosted/bin/maxon-selfhosted.exe spec-test", timeoutMs: 600000)
-	if testResult != 0 'testFailed'
-		print("Self-hosted spec tests failed\n")
-		return 1
-	end 'testFailed'
+	let testResult = run("Running self-hosted spec tests", command: "maxon-selfhosted/bin/maxon-selfhosted.exe spec-test", timeoutMs: 600000)
+	if testResult != 0 'failed2'
+		return testResult
+	end 'failed2'
 
 	print("All self-hosted spec tests passed\n")
 	return 0

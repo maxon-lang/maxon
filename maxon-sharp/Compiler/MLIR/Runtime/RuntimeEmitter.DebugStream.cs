@@ -207,6 +207,15 @@ public partial class RuntimeEmitter {
     // Check space: used = wr - rd; if used + entry_size > buf_size, drop
     _b.MovRegReg(VReg.Scratch3, VReg.Scratch1); // wr
     _b.SubRegReg(VReg.Scratch3, VReg.Scratch2); // used = wr - rd
+
+    // Track peak buffer usage (Scratch0 = base, Scratch3 = used)
+    var peakOkLabel = UniqueLabel("ds_reserve_peak_ok");
+    _b.LoadIndirect(VReg.Arg0, VReg.Scratch0, DsOffPeakUsed); // current peak
+    _b.CmpRegReg(VReg.Scratch3, VReg.Arg0);
+    _b.JumpIf(Condition.BelowEqual, peakOkLabel);
+    _b.StoreIndirect(VReg.Scratch0, DsOffPeakUsed, VReg.Scratch3); // new peak
+    _b.DefineLabel(peakOkLabel);
+
     _b.LoadLocal(VReg.Arg0, 1); // entry_size
     _b.AddRegReg(VReg.Scratch3, VReg.Arg0); // used + entry_size
     _b.LoadLocal(VReg.Arg1, 3); // buf_size

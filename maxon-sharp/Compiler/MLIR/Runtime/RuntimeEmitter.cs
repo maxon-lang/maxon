@@ -106,6 +106,7 @@ public partial class RuntimeEmitter(IEmitterBackend backend) {
   public const int DsOffDroppedEvents = 0x48;
   public const int DsOffTagTableOffset = 0x50;
   public const int DsOffTagTableCount = 0x58;
+  public const int DsOffPeakUsed = 0x60;
 
   // Flags bits
   public const long DsFlagProducerAlive = 1;
