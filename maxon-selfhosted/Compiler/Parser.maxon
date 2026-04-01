@@ -1061,10 +1061,8 @@ type Parser
 	function parseWhileStatement(func MlirFunction, block MlirBlock) returns MlirBlock
 		expect(TokenKind.while)
 
-		// Create blocks for loop structure
+		// Create cond block first (we need it to parse the condition into)
 		var condBlock = newBlock(func, label: b"cond")
-		var bodyBlock = newBlock(func, label: b"body")
-		var exitBlock = newBlock(func, label: b"exit")
 
 		// Branch from entry block to cond block
 		finalizeBlock(block, terminator: MlirOp.maxon(MaxonOp.br(condBlock.id)))
@@ -1072,11 +1070,32 @@ type Parser
 		// Parse condition in condBlock
 		let condResult = parseExpression(condBlock)
 
-		// Skip block label after condition
+		// Read the user's block label and derive unique labels
+		var userLabel = b"loop"
 		if at(TokenKind.stringLiteral) 'hasWhileLabel'
-			expect(TokenKind.stringLiteral)
+			userLabel = peek().value
+			advance()
 		end 'hasWhileLabel'
 		skipNewlines()
+
+		// Derive base label: userLabel_<blockId>
+		var baseLabel = ByteArray{}
+		baseLabel.append(userLabel)
+		baseLabel.push(0x5F) // '_'
+		baseLabel.append(intToBytes(condBlock.id))
+
+		// Rename condBlock to baseLabel.header
+		var headerLabel = ByteArray{}
+		headerLabel.append(baseLabel)
+		headerLabel.append(b".header")
+		condBlock.label = headerLabel
+
+		// Create body and exit blocks with derived labels
+		var exitLabel = ByteArray{}
+		exitLabel.append(baseLabel)
+		exitLabel.append(b".exit")
+		var bodyBlock = newBlock(func, label: baseLabel)
+		var exitBlock = newBlock(func, label: exitLabel)
 
 		// condBlock terminator: if true -> bodyBlock, if false -> exitBlock
 		finalizeBlock(condBlock, terminator: MlirOp.maxon(MaxonOp.condBr(condResult.valueId, bodyBlock.id, exitBlock.id)))
