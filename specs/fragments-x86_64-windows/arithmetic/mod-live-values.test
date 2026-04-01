@@ -15,17 +15,24 @@ end 'main'
 ExitCode: 7
 ---
 module {
-  func @arithmetic.modLive(a: i64, b: i64, x: i64) -> i64 {
+  func @mod-live-values.modLive(ptr: i64, ptr: i64, ptr: i64) -> i64 {
   entry:
     x86.prologue stack_size=16
-    x86.mov rax, 1
-    x86.add r8, rax
-    x86.mov rbx, rdx
-    x86.mov [rbp-8], rdx
+    x86.add r8, 1
     x86.mov rax, rcx
+    x86.mov rcx, rdx
     x86.cqo
-    x86.idiv rbx
-    x86.lea rax, [rdx + r8]
+    x86.idiv rcx
+    x86.add rdx, r8
+    x86.mov rax, -9223372036854775807
+    x86.cmp rdx, rax
+    x86.jge __range_ok_1
+  __range_panic_1:
+    x86.lea rax, [rip+__panic_msg_1]
+    x86.mov rcx, rax
+    x86.call mrt_panic
+  __range_ok_1:
+    x86.mov rax, rdx
     x86.epilogue
     x86.ret
   }
@@ -35,19 +42,19 @@ module {
     x86.mov rcx, 10
     x86.mov rdx, 3
     x86.mov r8, 5
-    x86.call arithmetic.modLive
-    x86.xor rcx, rcx
+    x86.call mod-live-values.modLive
+    x86.test rax, rax
+    x86.setl rcx
     x86.mov rdx, 4294967295
     x86.cmp rax, rdx
-    x86.jg main.__range_panic_0
-    x86.cmp rax, rcx
-    x86.jl main.__range_panic_0
-    x86.jmp main.__range_ok_0
-  __range_panic_0:
-    x86.lea_symdata rax, [__panic_msg_0]
+    x86.setg rdx
+    x86.or rcx, rdx
+    x86.je __range_ok_2
+  __range_panic_2:
+    x86.lea rax, [rip+__panic_msg_2]
     x86.mov rcx, rax
     x86.call mrt_panic
-  __range_ok_0:
+  __range_ok_2:
     x86.epilogue
     x86.ret
   }

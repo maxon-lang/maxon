@@ -784,15 +784,14 @@ type Parser
 			let _ = parseExpression(block)
 			return
 		end 'isCall'
-		let stmtToken = peek()
-		reportCompileError(project, code: ErrorCode.parserExpectedToken, message: "Unexpected token '{tokenValueToString(stmtToken.value)}' in statement position", line: stmtToken.line, column: stmtToken.column, filePath: filePath)
-		synchronize()
+
+		reportUnexpectedToken()
 	end 'parseIdentifierStatement'
 
 	// Reports an unexpected token error and synchronizes to the next statement.
 	function reportUnexpectedToken()
 		let stmtToken = peek()
-		reportCompileError(project, code: ErrorCode.parserExpectedToken, message: "Unexpected token '{tokenValueToString(stmtToken.value)}' in statement position", line: stmtToken.line, column: stmtToken.column, filePath: filePath)
+		reportCompileError(project, code: ErrorCode.parserUnexpectedToken, message: "unexpected token: '{tokenValueToString(stmtToken.value)}'", line: stmtToken.line, column: stmtToken.column, filePath: filePath)
 		synchronize()
 	end 'reportUnexpectedToken'
 
@@ -1001,7 +1000,7 @@ type Parser
 		var thenBlock = newBlock(func, label: userLabel)
 		var baseLabel = ByteArray{}
 		baseLabel.append(userLabel)
-		baseLabel.push(0x5F) // '_'
+		baseLabel.push(0x5F)  // '_'
 		baseLabel.append(intToBytes(thenBlock.id))
 		thenBlock.label = baseLabel
 
@@ -1031,7 +1030,7 @@ type Parser
 				if at(TokenKind.stringLiteral) 'hasElseLabel'
 					elseLabel = ByteArray{}
 					elseLabel.append(peek().value)
-					elseLabel.push(0x5F) // '_'
+					elseLabel.push(0x5F)  // '_'
 					elseLabel.append(intToBytes(func.nextBlockId))
 					advance()
 				end 'hasElseLabel'
@@ -1081,7 +1080,7 @@ type Parser
 		// Derive base label: userLabel_<blockId>
 		var baseLabel = ByteArray{}
 		baseLabel.append(userLabel)
-		baseLabel.push(0x5F) // '_'
+		baseLabel.push(0x5F)  // '_'
 		baseLabel.append(intToBytes(condBlock.id))
 
 		// Rename condBlock to baseLabel.header
@@ -1487,7 +1486,7 @@ type Parser
 
 		// Sized type bound as expression: u64.max, i32.min, etc.
 		// The lexer skips '.', so "u64.max" arrives as two consecutive identifiers.
-		if peekToken.kind == TokenKind.identifier and (peekToken.value == b"min" or peekToken.value == b"max") and (token.value == b"u8" or token.value == b"u16" or token.value == b"u32" or token.value == b"u64" or token.value == b"i8" or token.value == b"i16" or token.value == b"i32" or token.value == b"i64") 'isTypeBound'
+		if peekToken.kind == TokenKind.identifier and(peekToken.value == b"min" or peekToken.value == b"max") and(token.value == b"u8" or token.value == b"u16" or token.value == b"u32" or token.value == b"u64" or token.value == b"i8" or token.value == b"i16" or token.value == b"i32" or token.value == b"i64") 'isTypeBound'
 			let bound = resolveTypeBound(token.value, field: peekToken.value)
 			expect(TokenKind.identifier)
 			expect(TokenKind.identifier)

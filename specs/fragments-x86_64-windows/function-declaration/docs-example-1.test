@@ -9,14 +9,24 @@ end 'add'
 function main() returns ExitCode
 	return add(3, b: 4)
 end 'main'
-
 ---
 ExitCode: 7
 ---
 module {
-  func @function-declaration.add(a: i64, b: i64) -> i64 {
+  func @docs-example-1.add(ptr: i64, ptr: i64) -> i64 {
   entry:
-    x86.lea rax, [rcx + rdx]
+    x86.prologue stack_size=16
+    x86.add rcx, rdx
+    x86.mov rax, -9223372036854775807
+    x86.cmp rcx, rax
+    x86.jge __range_ok_1
+  __range_panic_1:
+    x86.lea rax, [rip+__panic_msg_1]
+    x86.mov rcx, rax
+    x86.call mrt_panic
+  __range_ok_1:
+    x86.mov rax, rcx
+    x86.epilogue
     x86.ret
   }
   func @main() -> u32 {
@@ -24,19 +34,19 @@ module {
     x86.prologue stack_size=16
     x86.mov rcx, 3
     x86.mov rdx, 4
-    x86.call function-declaration.add
-    x86.xor rcx, rcx
+    x86.call docs-example-1.add
+    x86.test rax, rax
+    x86.setl rcx
     x86.mov rdx, 4294967295
     x86.cmp rax, rdx
-    x86.jg main.__range_panic_0
-    x86.cmp rax, rcx
-    x86.jl main.__range_panic_0
-    x86.jmp main.__range_ok_0
-  __range_panic_0:
-    x86.lea_symdata rax, [__panic_msg_0]
+    x86.setg rdx
+    x86.or rcx, rdx
+    x86.je __range_ok_2
+  __range_panic_2:
+    x86.lea rax, [rip+__panic_msg_2]
     x86.mov rcx, rax
     x86.call mrt_panic
-  __range_ok_0:
+  __range_ok_2:
     x86.epilogue
     x86.ret
   }

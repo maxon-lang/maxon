@@ -23,7 +23,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3010: specs/fragments/unknown-keyword-error/docs-example-1.test:4:2: unexpected token: 'foo'
+error E2001: specs/fragments/unknown-keyword-error/docs-example-1.test:4:2: unexpected token: 'foo'
 ```
 
 
@@ -47,7 +47,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3010: specs/fragments/unknown-keyword-error/bare-identifier.test:4:2: unexpected token: 'foo'
+error E2001: specs/fragments/unknown-keyword-error/bare-identifier.test:4:2: unexpected token: 'foo'
 ```
 
 <!-- test: typo-keyword -->
@@ -58,7 +58,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3010: specs/fragments/unknown-keyword-error/typo-keyword.test:4:2: unexpected token: 'retur'
+error E2001: specs/fragments/unknown-keyword-error/typo-keyword.test:4:2: unexpected token: 'retur'
 ```
 
 <!-- test: missing-call-parens -->
@@ -76,5 +76,5 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3010: specs/fragments/unknown-keyword-error/missing-call-parens.test:10:2: unexpected token: 'test'
+error E2001: specs/fragments/unknown-keyword-error/missing-call-parens.test:10:2: unexpected token: 'test'
 ```

@@ -5208,7 +5208,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
       var awaitToken = Advance();
       ParseAwaitExpression(awaitToken);
     } else {
-      throw new CompileError(ErrorCode.SemanticUnexpectedToken, $"unexpected token: '{Current().Value}'", Current().Line, Current().Column);
+      throw new CompileError(ErrorCode.ParserUnexpectedToken, $"unexpected token: '{Current().Value}'", Current().Line, Current().Column);
     }
   }
 
@@ -5564,7 +5564,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
     var fieldToken = Expect(TokenType.Identifier);
 
     var selfInfo = (ResolveVariable("self") as ResolvedVar.Local)?.Info
-      ?? throw new CompileError(ErrorCode.SemanticUnexpectedToken, "'self' can only be used inside instance methods", selfToken.Line, selfToken.Column);
+      ?? throw new CompileError(ErrorCode.ParserUnexpectedToken, "'self' can only be used inside instance methods", selfToken.Line, selfToken.Column);
 
     if (Check(TokenType.Equals)) {
       // self.field = value
@@ -5649,7 +5649,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
         "Expected method call or assignment at end of field access chain",
         Current().Line, Current().Column);
     } else {
-      throw new CompileError(ErrorCode.SemanticUnexpectedToken, $"Expected '=' or '(' after 'self.{fieldToken.Value}'", fieldToken.Line, fieldToken.Column);
+      throw new CompileError(ErrorCode.ParserUnexpectedToken, $"Expected '=' or '(' after 'self.{fieldToken.Value}'", fieldToken.Line, fieldToken.Column);
     }
   }
 
@@ -5836,7 +5836,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
       // try await <promise>
       var promise = awaitOp.Promise;
       if (promise is not MaxonPromise promiseVal) {
-        throw new CompileError(ErrorCode.SemanticUnexpectedToken, "try await requires a promise value", tryToken.Line, tryToken.Column);
+        throw new CompileError(ErrorCode.ParserUnexpectedToken, "try await requires a promise value", tryToken.Line, tryToken.Column);
       }
       if (!promiseVal.Throws) {
         throw new CompileError(ErrorCode.SemanticTypeMismatch,
@@ -5867,7 +5867,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
         lastOp = _currentBlock!.Operations[^1];
       }
       if (lastOp is not MaxonCallOp foundCallOp) {
-        throw new CompileError(ErrorCode.SemanticUnexpectedToken, "try requires a function call or await expression", tryToken.Line, tryToken.Column);
+        throw new CompileError(ErrorCode.ParserUnexpectedToken, "try requires a function call or await expression", tryToken.Line, tryToken.Column);
       }
       var callOp = foundCallOp;
 
@@ -5905,7 +5905,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
     if (!Check(TokenType.Otherwise)) {
       // Propagation form: try func() - propagates error to caller
       if (_currentFunction?.ThrowsType == null) {
-        throw new CompileError(ErrorCode.SemanticUnexpectedToken,
+        throw new CompileError(ErrorCode.ParserUnexpectedToken,
           "try without otherwise requires the enclosing function to have 'throws'",
           tryToken.Line, tryToken.Column);
       }
@@ -7972,7 +7972,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
       lastOp = _currentBlock!.Operations[^1];
     }
     if (lastOp is not MaxonCallOp callOp) {
-      throw new CompileError(ErrorCode.SemanticUnexpectedToken, "try requires a function call", tryToken.Line, tryToken.Column);
+      throw new CompileError(ErrorCode.ParserUnexpectedToken, "try requires a function call", tryToken.Line, tryToken.Column);
     }
 
     // Validate the callee actually throws
@@ -10437,7 +10437,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
     if (Check(TokenType.Self)) {
       var selfToken = Advance(); // consume 'self'
       var selfVarInfo = (ResolveVariable("self") as ResolvedVar.Local)?.Info
-        ?? throw new CompileError(ErrorCode.SemanticUnexpectedToken, "'self' can only be used inside instance methods", selfToken.Line, selfToken.Column);
+        ?? throw new CompileError(ErrorCode.ParserUnexpectedToken, "'self' can only be used inside instance methods", selfToken.Line, selfToken.Column);
       return ParseFieldAccessChain(new ExprResult.VarRef("self", selfVarInfo), selfToken);
     }
 
