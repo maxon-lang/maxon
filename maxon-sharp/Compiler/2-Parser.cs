@@ -1323,7 +1323,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
     } else {
       // Top-level function: prepend file-based namespace (except main)
       var namespace_ = DeriveNamespace();
-      funcName = (baseName == "main" || string.IsNullOrEmpty(namespace_)) ? baseName : $"{namespace_}.{baseName}";
+      funcName = (baseName == "main" || baseName == seedModule?.EntryFunctionName || string.IsNullOrEmpty(namespace_)) ? baseName : $"{namespace_}.{baseName}";
     }
     Logger.Trace(LogCategory.Parser, $"PreScanFunction: {funcName} (base: {baseName}, file: {_sourceFilePath})");
 
@@ -4802,7 +4802,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
 
     // Top-level functions get qualified with file-based namespace (except main)
     var namespace_ = DeriveNamespace();
-    var name = (baseName == "main" || string.IsNullOrEmpty(namespace_)) ? baseName : $"{namespace_}.{baseName}";
+    var name = (baseName == "main" || baseName == seedModule?.EntryFunctionName || string.IsNullOrEmpty(namespace_)) ? baseName : $"{namespace_}.{baseName}";
 
     Logger.Debug(LogCategory.Parser, $"Parsing function: {name} (base: {baseName}, namespace: {namespace_})");
 
@@ -4829,9 +4829,9 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
     FinishFunctionBody(baseName, nameToken, returnType);
 
     // Emit deferred top-level expression lets/vars into a separate __module_init function
-    // that runs in the root scope (before main), so globals survive main's scope exit.
-    // Emitted after main so __module_init's IDs don't shift main's labels.
-    if (baseName == "main") {
+    // that runs in the root scope (before the entry function), so globals survive its scope exit.
+    // Emitted after the entry function so __module_init's IDs don't shift its labels.
+    if (baseName == "main" || baseName == seedModule?.EntryFunctionName) {
       EmitModuleInitFunction(module);
     }
   }

@@ -34,9 +34,9 @@ class Program {
     Console.WriteLine("Usage: maxon <command> [options]");
     Console.WriteLine();
     Console.WriteLine("Commands:");
-    Console.WriteLine("  compile <file>           Compile a single .maxon file");
-    Console.WriteLine("  build [<directory>]      Build a project (default: current directory)");
-    Console.WriteLine("  run <file|directory>     Compile and run");
+    Console.WriteLine("  compile <file|directory> Compile a .maxon file or project directory");
+    Console.WriteLine("  build [options]          Shorthand for 'maxon run build'");
+    Console.WriteLine("  run <function>           Compile build.maxon and run the specified function");
     Console.WriteLine("  fmt [<file|directory>]   Format .maxon source files in-place (default: current directory)");
     Console.WriteLine("  monitor <exe> [args...]  Launch executable with shared-memory debug stream monitor");
     Console.WriteLine("  spec-test [options]      Run spec tests");
@@ -125,28 +125,6 @@ class Program {
     return Compiler.CompileTarget.Default;
   }
 
-  static string? ParseBuildName(string directory) {
-    var buildFile = Path.Combine(directory, "build.maxon");
-    if (!File.Exists(buildFile)) return null;
-    var content = File.ReadAllText(buildFile);
-    var marker = "build(\"";
-    var start = content.IndexOf(marker);
-    if (start < 0) return null;
-    start += marker.Length;
-    var end = content.IndexOf("\")", start);
-    if (end < 0) return null;
-    return content[start..end];
-  }
-
-  static string ResolveOutputPath(string? directory, string mainFile, string ext) {
-    if (directory != null) {
-      var buildName = ParseBuildName(directory);
-      if (buildName != null)
-        return Path.Combine(directory, buildName + ext);
-    }
-    return Path.ChangeExtension(mainFile, ext == "" ? null : ext);
-  }
-
   static string GetOutputExtension(Compiler.CompileTarget target) {
     return target.Os.ToLowerInvariant() switch {
       "windows" => ".exe",
@@ -161,49 +139,40 @@ class Program {
     if (!valid) return Fail();
 
     var target = ParseTarget(args);
-    var sourceFile = GetNonOptionArg(args);
-    if (sourceFile == null) return Fail();
+    var path = GetNonOptionArg(args);
+    if (path == null) return Fail();
 
-    if (!File.Exists(sourceFile)) {
-      Console.WriteLine($"File not found: {sourceFile}");
+    SourceFile[] sources;
+    string mainFile;
+    string? directory = null;
+
+    if (Directory.Exists(path)) {
+      directory = path;
+      sources = CollectFilesFromDirectory(path);
+      if (sources.Length == 0) {
+        Console.WriteLine($"No .maxon files found in: {path}");
+        return 1;
+      }
+      mainFile = FindMainFile(sources, path);
+    } else if (File.Exists(path)) {
+      var content = ReadFileContentUntilSeparator(path);
+      sources = [new(path, content)];
+      mainFile = path;
+    } else {
+      Console.WriteLine($"File or directory not found: {path}");
       return 1;
     }
 
-    var content = ReadFileContentUntilSeparator(sourceFile);
-    var sources = new SourceFile[] { new(sourceFile, content) };
     var ext = GetOutputExtension(target);
-    var outputPath = Path.ChangeExtension(sourceFile, ext == "" ? null : ext);
-
-    var (mlirOutputPath, dumpStagesBasePath) = GetOutputPaths(sourceFile, emitIr, dumpStages);
+    var outputPath = ResolveOutputPath(directory, mainFile, ext);
+    var (mlirOutputPath, dumpStagesBasePath) = GetOutputPaths(mainFile, emitIr, dumpStages);
 
     return CompileAndReportResult(sources, outputPath, mlirOutputPath, dumpStagesBasePath, target);
   }
 
   static int RunBuild(string[] args) {
-    var (emitIr, dumpStages, valid) = ParseOptions(args);
-    if (!valid) return Fail();
-
-    var target = ParseTarget(args);
-    var directory = GetNonOptionArg(args) ?? Directory.GetCurrentDirectory();
-
-    if (!Directory.Exists(directory)) {
-      Console.WriteLine($"Directory not found: {directory}");
-      return 1;
-    }
-
-    var sourceFiles = CollectFilesFromDirectory(directory);
-    if (sourceFiles.Length == 0) {
-      Console.WriteLine($"No .maxon files found in: {directory}");
-      return 1;
-    }
-
-    var mainFile = FindMainFile(sourceFiles, directory);
-    var ext = GetOutputExtension(target);
-    var outputPath = ResolveOutputPath(directory, mainFile, ext);
-
-    var (mlirOutputPath, dumpStagesBasePath) = GetOutputPaths(mainFile, emitIr, dumpStages);
-
-    return CompileAndReportResult(sourceFiles, outputPath, mlirOutputPath, dumpStagesBasePath, target);
+    // "maxon build" is shorthand for "maxon run build"
+    return RunRun(["build", ..args]);
   }
 
   static int RunRun(string[] args) {
@@ -211,20 +180,64 @@ class Program {
     if (!valid) return Fail();
 
     var target = ParseTarget(args);
-    var path = GetNonOptionArg(args);
-    if (path == null) return Fail();
+    var cliName = GetNonOptionArg(args);
+    // Translate dashes to underscores so CLI uses dashes but Maxon uses underscores
+    var functionName = cliName?.Replace('-', '_');
 
-    var (sourceFiles, mainFile) = ResolveSourceFilesAndMain(path);
-    if (sourceFiles == null || mainFile == null) return 1;
+    var directory = Directory.GetCurrentDirectory();
+    var buildFile = Path.Combine(directory, "build.maxon");
+    if (!File.Exists(buildFile)) {
+      Console.Error.WriteLine("No build.maxon found in current directory.");
+      return 1;
+    }
+
+    var content = ReadFileContentUntilSeparator(buildFile);
+
+    var exportedFunctions = ListBuildFunctions(content);
+
+    if (functionName == null) {
+      if (exportedFunctions.Count == 0) {
+        Console.Error.WriteLine("No exported functions found in build.maxon.");
+      } else {
+        PrintAvailableCommands(exportedFunctions);
+      }
+      return 1;
+    }
+
+    // Validate that the requested function exists before compiling
+    var allFunctions = ListBuildFunctions(content, exportedOnly: false);
+    var isKnown = allFunctions.Any(f => f.name == functionName);
+    var isExported = exportedFunctions.Any(f => f.name == functionName);
+
+    if (!isKnown) {
+      Console.Error.WriteLine($"Unknown command '{cliName}'.");
+      if (exportedFunctions.Count > 0) {
+        Console.Error.WriteLine();
+        PrintAvailableCommands(exportedFunctions, Console.Error);
+      }
+      return 1;
+    }
+
+    if (!isExported) {
+      Console.Error.WriteLine($"Function '{cliName}' is not exported in build.maxon.");
+      return 1;
+    }
+
+    var sources = new SourceFile[] { new(buildFile, content) };
 
     var ext = GetOutputExtension(target);
-    var outputPath = ResolveOutputPath(Directory.Exists(path) ? path : null, mainFile, ext);
-    var (mlirOutputPath, dumpStagesBasePath) = GetOutputPaths(mainFile, emitIr, dumpStages);
+    var outputPath = Path.Combine(directory, $".maxon-run{ext}");
+    var (mlirOutputPath, dumpStagesBasePath) = GetOutputPaths(buildFile, emitIr, dumpStages);
 
-    var compileResult = CompileAndReportResult(sourceFiles, outputPath, mlirOutputPath, dumpStagesBasePath, target);
+    var compileResult = CompileAndReportResult(sources, outputPath, mlirOutputPath,
+        dumpStagesBasePath, target, entryFunction: functionName);
     if (compileResult != 0) return compileResult;
 
-    return RunExecutable(outputPath);
+    var exitCode = RunExecutable(outputPath);
+
+    try { File.Delete(outputPath); } catch { /* best effort */ }
+
+    return exitCode;
   }
 
   static int RunFmt(string[] args) {
@@ -255,6 +268,54 @@ class Program {
 
     Console.WriteLine($"fmt: {changed} file(s) changed, {files.Count - changed} unchanged.");
     return 0;
+  }
+
+  /// <summary>
+  /// Extracts top-level function names from build.maxon content.
+  /// Returns (name, comment) pairs where comment is the preceding // comment line, if any.
+  /// </summary>
+  static void PrintAvailableCommands(List<(string name, string? comment)> functions, TextWriter? writer = null) {
+    writer ??= Console.Out;
+    writer.WriteLine("Available commands (from build.maxon):");
+    writer.WriteLine();
+    foreach (var (name, comment) in functions) {
+      var displayName = name.Replace('_', '-');
+      if (comment != null)
+        writer.WriteLine($"  {displayName,-24}{comment}");
+      else
+        writer.WriteLine($"  {displayName}");
+    }
+  }
+
+  /// <summary>
+  /// Extracts top-level function names from build.maxon content.
+  /// Returns (name, comment) pairs where comment is the preceding // comment line, if any.
+  /// </summary>
+  static List<(string name, string? comment)> ListBuildFunctions(string content, bool exportedOnly = true) {
+    var results = new List<(string name, string? comment)>();
+    var lines = content.Split('\n');
+    string? lastComment = null;
+
+    foreach (var rawLine in lines) {
+      var line = rawLine.Trim();
+      if (line.StartsWith("//")) {
+        lastComment = line[2..].Trim();
+      } else if (line.StartsWith("export function ") || (!exportedOnly && line.StartsWith("function "))) {
+        var rest = line.StartsWith("export function ")
+          ? line["export function ".Length..]
+          : line["function ".Length..];
+        var parenIndex = rest.IndexOf('(');
+        if (parenIndex > 0) {
+          var name = rest[..parenIndex].Trim();
+          results.Add((name, lastComment));
+        }
+        lastComment = null;
+      } else if (line.Length > 0) {
+        lastComment = null;
+      }
+    }
+
+    return results;
   }
 
   static int RunMonitor(string[] args) {
@@ -299,27 +360,42 @@ class Program {
   /// Finds the main file (containing main function) or uses the originally specified file.
   /// </summary>
   static string FindMainFile(SourceFile[] files, string originalPath) {
-    // If original path was a file, prefer it
-    if (File.Exists(originalPath)) {
+    if (File.Exists(originalPath))
       return originalPath;
-    }
 
-    // Look for a file containing 'function main'
     foreach (var file in files) {
-      if (file.Content.Contains("function main")) {
+      if (file.Content.Contains("function main"))
         return file.Path;
-      }
     }
 
-    // Look for main.maxon
     foreach (var file in files) {
-      if (Path.GetFileName(file.Path).Equals("main.maxon", StringComparison.OrdinalIgnoreCase)) {
+      if (Path.GetFileName(file.Path).Equals("main.maxon", StringComparison.OrdinalIgnoreCase))
         return file.Path;
-      }
     }
 
-    // Fall back to first file
     return files.Length > 0 ? files[0].Path : originalPath;
+  }
+
+  static string? ParseBuildName(string directory) {
+    var buildFile = Path.Combine(directory, "build.maxon");
+    if (!File.Exists(buildFile)) return null;
+    var content = File.ReadAllText(buildFile);
+    var marker = "build(\"";
+    var start = content.IndexOf(marker);
+    if (start < 0) return null;
+    start += marker.Length;
+    var end = content.IndexOf("\")", start);
+    if (end < 0) return null;
+    return content[start..end];
+  }
+
+  static string ResolveOutputPath(string? directory, string mainFile, string ext) {
+    if (directory != null) {
+      var buildName = ParseBuildName(directory);
+      if (buildName != null)
+        return Path.Combine(directory, buildName + ext);
+    }
+    return Path.ChangeExtension(mainFile, ext == "" ? null : ext);
   }
 
   /// <summary>
@@ -354,34 +430,12 @@ class Program {
   /// <summary>
   /// Compiles source files and reports the result.
   /// </summary>
-  static int CompileAndReportResult(SourceFile[] sources, string outputPath, string? mlirOutputPath, string? dumpStagesBasePath, Compiler.CompileTarget? target = null) {
-    var result = new Compiler.Compiler().Compile(sources, outputPath, mlirOutputPath, dumpStagesBasePath: dumpStagesBasePath, target: target);
+  static int CompileAndReportResult(SourceFile[] sources, string outputPath, string? mlirOutputPath, string? dumpStagesBasePath, Compiler.CompileTarget? target = null, string entryFunction = "main") {
+    var result = new Compiler.Compiler().Compile(sources, outputPath, mlirOutputPath, dumpStagesBasePath: dumpStagesBasePath, target: target, entryFunction: entryFunction);
     if (!result.Success && result.Error != null) {
       Logger.Error(LogCategory.Compiler, result.Error);
     }
     return result.Success ? 0 : 1;
-  }
-
-  /// <summary>
-  /// Resolves source files and main file from either a file or directory path.
-  /// </summary>
-  static (SourceFile[]? sourceFiles, string? mainFile) ResolveSourceFilesAndMain(string path) {
-    if (Directory.Exists(path)) {
-      var sourceFiles = CollectFilesFromDirectory(path);
-      if (sourceFiles.Length == 0) {
-        Console.WriteLine($"No .maxon files found in: {path}");
-        return (null, null);
-      }
-      var mainFile = FindMainFile(sourceFiles, path);
-      return (sourceFiles, mainFile);
-    } else if (File.Exists(path)) {
-      var content = ReadFileContentUntilSeparator(path);
-      var sourceFiles = new SourceFile[] { new(path, content) };
-      return (sourceFiles, path);
-    } else {
-      Console.WriteLine($"File or directory not found: {path}");
-      return (null, null);
-    }
   }
 
   /// <summary>

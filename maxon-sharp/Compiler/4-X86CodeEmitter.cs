@@ -66,8 +66,8 @@ public class X86CodeEmitter {
       emitter.DefineGlobal(global.Name, size, initValue);
     }
 
-    var mainFunc = module.Functions.FirstOrDefault(f => f.Name == "main")
-      ?? throw new InvalidOperationException("No 'main' function found at code emission stage — semantic check should have caught this");
+    var mainFunc = module.Functions.FirstOrDefault(f => f.Name == module.EntryFunctionName)
+      ?? throw new InvalidOperationException($"No '{module.EntryFunctionName}' function found at code emission stage — semantic check should have caught this");
 
     // Emit mrt_start wrapper first (entry point at offset 0)
     // mrt_start calls main and then ExitProcess

@@ -13,7 +13,9 @@ public static class StandardToX86Conversion {
   [ThreadStatic] private static bool _inStdlib;
   public static int NextLabelId() => _labelCounter++;
   public static MlirModule<X86Op> Run(MlirModule<StandardOp> module) {
-    var result = new MlirModule<X86Op>();
+    var result = new MlirModule<X86Op> {
+      EntryFunctionName = module.EntryFunctionName
+    };
     result.RdataEntries.AddRange(module.RdataEntries);
     result.SymdataEntries.AddRange(module.SymdataEntries);
     result.UcddataEntries.AddRange(module.UcddataEntries);

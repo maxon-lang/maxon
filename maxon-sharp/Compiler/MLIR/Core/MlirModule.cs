@@ -36,6 +36,7 @@ public record GlobalVarMetadata(MaxonValueKind Kind, bool Mutable, string? EnumT
 public record DeferredGlobalInit(string Name, List<Token> Tokens, int TokenStart, int TokenEnd, bool IsMutable, int Line, int Column, string? SourceFilePath = null);
 
 public class MlirModule<TOp> where TOp : IPrintableOp {
+  public string EntryFunctionName { get; set; } = "main";
   public List<MlirFunction<TOp>> Functions { get; } = [];
   public List<(string label, byte[] bytes, int alignment)> RdataEntries { get; } = [];
   public List<(string label, byte[] bytes, int alignment)> SymdataEntries { get; } = [];
@@ -125,7 +126,9 @@ public class MlirModule<TOp> where TOp : IPrintableOp {
   }
 
   public MlirModule<TOp> Clone() {
-    var clone = new MlirModule<TOp>();
+    var clone = new MlirModule<TOp> {
+      EntryFunctionName = EntryFunctionName
+    };
     clone.Functions.AddRange(Functions);
     clone.RdataEntries.AddRange(RdataEntries);
     clone.SymdataEntries.AddRange(SymdataEntries);

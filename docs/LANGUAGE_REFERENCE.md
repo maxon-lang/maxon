@@ -3731,7 +3731,7 @@ Wraps an OS directory search handle (Windows `FindFirstFile`/`FindNextFile` or L
 
 ## Build System
 
-Maxon uses a `build.maxon` file to define project structure and build configuration. This file marks the project root and contains executable Maxon code that outputs build configuration.
+Maxon uses a `build.maxon` file as a script file with exported functions that can be run via `maxon run`. This file serves as both a project root marker and a task runner.
 
 ### Project Structure
 
@@ -3739,21 +3739,41 @@ A Maxon project is defined by the presence of a `build.maxon` file:
 
 ```
 myproject/
-├── build.maxon          # Project root marker and build config
+├── build.maxon          # Script file with exported functions
 ├── main.maxon           # Entry point
 ├── lib.maxon            # Project file
 └── utils/
     └── math.maxon       # Files in subdirectories are included
 ```
 
-### Simple Build Configuration
+### build.maxon
 
-For most projects, a single line suffices:
+The `build.maxon` file contains exported functions that serve as runnable commands. Each exported function must return `ExitCode` and must not throw. Private helper functions (without `export`) are not listed or runnable.
 
 ```maxon
-function main()
-	build("myapp")  // Executable name is required
-end 'main'
+// Build the project
+export function build() returns ExitCode
+	let result = Process.execute("maxon compile .", timeoutMs: 60000)
+	if result != 0 'failed'
+		return 1
+	end 'failed'
+	return 0
+end 'build'
+
+// Compile the self-hosted compiler and run its spec tests
+export function spec_test_selfhosted() returns ExitCode
+	print("Compiling...\n")
+	let result = Process.execute("bin/maxon.exe compile maxon-selfhosted", timeoutMs: 120000)
+	if result != 0 'failed'
+		return 1
+	end 'failed'
+	return 0
+end 'spec_test_selfhosted'
+
+// Private helper - not listed or runnable via maxon run
+function log(msg String)
+	print(msg)
+end 'log'
 ```
 
 This automatically:
@@ -3762,67 +3782,20 @@ This automatically:
 - Skips directories containing a `.maxonignore` flag file
 - Uses default compilation settings
 
-### Custom Build Configuration
-
-For more control, use `BuildConfig`:
-
-```maxon
-function main()
-		var config = BuildConfig{
-				name: "myapp",
-				output: "dist/myapp.exe",
-				sources: ["main.maxon", "lib.maxon"],
-				optimize: true,
-				debug_info: false
-		}
-		buildWithConfig(config)
-end 'main'
-```
-
-### BuildConfig Type
-
-```maxon
-type StringArray is Array with String
-
-type BuildConfig
-		var name String           // Executable name
-		var output String         // Output path (e.g., "bin/app.exe")
-		var sources StringArray   // Source files (empty = auto-discover)
-		var optimize bool         // Enable optimizations
-		var debug_info bool       // Include debug symbols
-end 'BuildConfig'
-```
-
-### Build Functions
-
-| Function | Description |
-|----------|-------------|
-| `build(name String)` | Simple build with defaults |
-| `buildWithConfig(config BuildConfig)` | Custom build with full control |
-
-### Creating a New Project
-
-Initialize a new project with:
+Use `maxon run` to execute exported functions from `build.maxon`:
 
 ```bash
-maxon init myproject
-```
+# List available commands (names shown with dashes)
+maxon run
 
-This creates a `build.maxon` file with the project name pre-filled.
+# Run a specific function (dashes are translated to underscores)
+maxon run spec-test-selfhosted
 
-### Building a Project
-
-From the project directory:
-
-```bash
+# maxon build is shorthand for maxon run build
 maxon build
 ```
 
-The compiler:
-1. Finds `build.maxon` in the current or parent directory
-2. Compiles and executes `build.maxon`
-3. Parses the JSON output for build configuration
-4. Compiles the project with those settings
+> **Note:** The CLI translates dashes to underscores, so `maxon run spec-test-selfhosted` runs the function `spec_test_selfhosted`. The listing displays function names with dashes for convenience.
 
 ### Multi-Project Workspaces
 

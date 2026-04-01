@@ -5,29 +5,35 @@ namespace MaxonSharp.Compiler.Mlir.Passes;
 
 public static class SemanticCheckPass {
   public static void Run(MlirModule<MaxonOp> module) {
-    // E3001: main function must exist
-    Logger.Debug(LogCategory.Semantic, $"SemanticCheckPass: Checking for main function among {module.Functions.Count} functions");
-    var mainMatches = module.Functions.Where(f => f.Name == "main").ToList();
-    Logger.Debug(LogCategory.Semantic, $"  Found {mainMatches.Count} main candidates: {string.Join(", ", mainMatches.Select(f => f.Name))}");
+    // E3001: entry function must exist
+    var entryName = module.EntryFunctionName;
+    Logger.Debug(LogCategory.Semantic, $"SemanticCheckPass: Checking for '{entryName}' function among {module.Functions.Count} functions");
+    var mainMatches = module.Functions.Where(f => f.Name == entryName).ToList();
+    Logger.Debug(LogCategory.Semantic, $"  Found {mainMatches.Count} '{entryName}' candidates: {string.Join(", ", mainMatches.Select(f => f.Name))}");
     var mainFunc = mainMatches.FirstOrDefault()
-      ?? throw new CompileError(ErrorCode.SemanticNoMain, "No 'main' function found");
+      ?? throw new CompileError(ErrorCode.SemanticNoMain, $"No '{entryName}' function found");
 
     if (mainMatches.Count > 1) {
       var second = mainMatches[1];
       throw new CompileError(ErrorCode.SemanticDuplicateDefinition,
-        $"Multiple 'main' functions found", second.SourceLine, second.SourceColumn) {
+        $"Multiple '{entryName}' functions found", second.SourceLine, second.SourceColumn) {
         FilePath = second.SourceFilePath
       };
     }
 
-    // E3002: main must return ExitCode
+    // E3002: entry function must return ExitCode
     if (mainFunc.ReturnType is not MlirRangedPrimitiveType { Name: "ExitCode" }) {
-      throw new CompileError(ErrorCode.SemanticMainWrongReturnType, "Function 'main' must return ExitCode");
+      throw new CompileError(ErrorCode.SemanticMainWrongReturnType, $"Function '{entryName}' must return ExitCode");
     }
 
-    // E054: main cannot throw
+    // E054: entry function cannot throw
     if (mainFunc.ThrowsType != null) {
-      throw new CompileError(ErrorCode.SemanticMainCannotThrow, "main cannot throw: 'main'", mainFunc.SourceLine, mainFunc.SourceColumn);
+      throw new CompileError(ErrorCode.SemanticMainCannotThrow, $"{entryName} cannot throw: '{entryName}'", mainFunc.SourceLine, mainFunc.SourceColumn);
+    }
+
+    // Non-main entry functions (from "maxon run") must be exported
+    if (entryName != "main" && !mainFunc.IsExported) {
+      throw new CompileError(ErrorCode.SemanticNoMain, $"Function '{entryName}' is not exported", mainFunc.SourceLine, mainFunc.SourceColumn);
     }
 
     // Check discarded function results

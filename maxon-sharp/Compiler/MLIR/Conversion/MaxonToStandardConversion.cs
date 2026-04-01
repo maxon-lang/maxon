@@ -37,6 +37,7 @@ public static partial class MaxonToStandardConversion {
     _nextRdataId = 0;
     var result = new MlirModule<StandardOp>();
     _resultModule = result;
+    result.EntryFunctionName = module.EntryFunctionName;
     result.RdataEntries.AddRange(module.RdataEntries);
     result.Globals.AddRange(module.Globals);
     foreach (var (k, v) in module.TypeDefs) result.TypeDefs[k] = v;

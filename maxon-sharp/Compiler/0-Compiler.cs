@@ -84,7 +84,7 @@ public class Compiler {
   [ThreadStatic] private static bool _testing;
   public static bool Testing { get => _testing; set => _testing = value; }
 
-  public CompileResult Compile(SourceFile[] sources, string outputPath, string? mlirOutputPath = null, bool returnIr = false, string? dumpStagesBasePath = null, CompileTarget? target = null) {
+  public CompileResult Compile(SourceFile[] sources, string outputPath, string? mlirOutputPath = null, bool returnIr = false, string? dumpStagesBasePath = null, CompileTarget? target = null, string entryFunction = "main") {
     target ??= CompileTarget.Default;
     var userSourceFile = sources.Length == 1 ? sources[0].Path : null;
 
@@ -97,6 +97,7 @@ public class Compiler {
       // Stage 1-2: Lex and parse all source files into MLIR modules
       // Use cached stdlib module, then parse user code into a clone
       var module = StdlibLoader.GetStdlibModule();
+      module.EntryFunctionName = entryFunction;
 
       // Reset IDs so user code starts at %0
       _context.ResetIds();

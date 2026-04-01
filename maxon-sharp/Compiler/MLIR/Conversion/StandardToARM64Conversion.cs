@@ -6,7 +6,9 @@ namespace MaxonSharp.Compiler.Mlir.Conversion;
 
 public static class StandardToARM64Conversion {
   public static MlirModule<ARM64Op> Run(MlirModule<StandardOp> module) {
-    var result = new MlirModule<ARM64Op>();
+    var result = new MlirModule<ARM64Op> {
+      EntryFunctionName = module.EntryFunctionName
+    };
     result.RdataEntries.AddRange(module.RdataEntries);
     result.SymdataEntries.AddRange(module.SymdataEntries);
     result.UcddataEntries.AddRange(module.UcddataEntries);

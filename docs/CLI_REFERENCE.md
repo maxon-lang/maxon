@@ -8,8 +8,9 @@ This document covers the Maxon command-line interface and project system.
 
 | Command | Description |
 |---------|-------------|
-| `maxon compile <file>` | Compile a single source file |
-| `maxon build` | Build a project from the current directory |
+| `maxon compile <file\|directory>` | Compile a single source file or directory |
+| `maxon build` | Shorthand for `maxon run build` |
+| `maxon run <function>` | Run an exported function from `build.maxon` |
 | `maxon test` | Run spec fragment tests |
 
 ---
@@ -18,15 +19,15 @@ This document covers the Maxon command-line interface and project system.
 
 ### `maxon compile`
 
-Compiles a single Maxon source file to an executable.
+Compiles a single Maxon source file or a directory of source files to an executable.
 
 **Usage:**
 ```bash
-maxon compile <source.maxon> [options]
+maxon compile <source.maxon|directory> [options]
 ```
 
 **Arguments:**
-- `<source.maxon>` - Path to the source file (required)
+- `<source.maxon|directory>` - Path to a source file or directory (required). When given a directory, discovers all `.maxon` files recursively and compiles them together.
 
 **Options:**
 
@@ -54,49 +55,89 @@ maxon compile app.maxon --emit-ir
 
 # Emit assembly output
 maxon compile app.maxon --emit-asm
+
+# Compile an entire directory
+maxon compile myproject/
 ```
 
 ---
 
 ### `maxon build`
 
-Builds a multi-file project from the current directory. Automatically discovers all `.maxon` files and compiles them together.
+Shorthand for `maxon run build`. Looks for `build.maxon` in the current directory and runs its exported `build()` function.
 
 **Usage:**
 ```bash
-maxon build [options]
+maxon build
 ```
 
-**Options:**
-
-| Option | Description |
-|--------|-------------|
-| `-v` | Enable verbose/debug output |
-| `--emit-ir` | Emit IR output |
-| `--emit-asm` | Emit assembly output |
-
 **Behavior:**
-1. Scans the current directory recursively for `.maxon` files
-2. Finds the file containing the `main()` function
-3. Compiles all files together with the standard library
-4. Creates `<directory-name>.exe` in the current directory
-
-**Output:**
-- Executable named after the current directory
-- Example: Running `maxon build` in `myproject/` creates `myproject.exe`
+1. Finds `build.maxon` in the current directory
+2. Compiles and runs the `build()` function from `build.maxon`
 
 **Examples:**
 ```bash
 # Build project in current directory
 cd myproject
 maxon build
-
 ```
 
 **Error Conditions:**
-- `No .maxon files found` - No source files in current directory
-- `No main() function found` - None of the files contain a main function
-- `Multiple main() functions found` - More than one file has a main function
+- `No build.maxon found` - No `build.maxon` in the current directory
+- `No build() function found` - `build.maxon` does not export a `build()` function
+
+---
+
+### `maxon run`
+
+Compiles `build.maxon` in the current directory and runs the specified exported function as the entry point. If no function name is given, lists available commands.
+
+**Usage:**
+```bash
+maxon run [function]
+```
+
+**Arguments:**
+- `[function]` - Name of an exported function in `build.maxon` (optional). If omitted, lists all available exported functions.
+
+**Behavior:**
+1. Finds `build.maxon` in the current directory
+2. Compiles `build.maxon`
+3. Runs the specified exported function as the entry point
+
+**Dash-to-underscore translation:** Since Maxon does not allow dashes in identifiers, the CLI automatically translates dashes to underscores. You can type `maxon run spec-test-selfhosted` and it will run the function `spec_test_selfhosted`. When listing available commands (`maxon run` with no arguments), function names are displayed with underscores replaced by dashes.
+
+**Requirements for runnable functions:**
+- Must be declared with `export function`
+- Must return `ExitCode`
+- Must not throw
+
+Private helper functions (without `export`) are not listed or runnable.
+
+**Examples:**
+```bash
+# List available commands
+maxon run
+
+# Run a specific function (dashes are translated to underscores)
+maxon run spec-test-selfhosted
+
+# maxon build is equivalent to:
+maxon run build
+```
+
+**Example `build.maxon`:**
+```maxon
+// Compile the self-hosted compiler and run its spec tests
+export function spec_test_selfhosted() returns ExitCode
+	print("Compiling...\n")
+	let result = Process.execute("bin/maxon.exe compile maxon-selfhosted", timeoutMs: 120000)
+	if result != 0 'failed'
+		return 1
+	end 'failed'
+	return 0
+end 'spec_test_selfhosted'
+```
 
 ---
 
@@ -140,12 +181,13 @@ maxon test --filter "string" --verbose
 
 ## Project Structure
 
-A Maxon project is simply a directory containing `.maxon` files. The `maxon build` command automatically discovers and compiles all source files.
+A Maxon project is a directory containing `.maxon` files. The `build.maxon` file serves as a script file with exported functions that can be run via `maxon run`.
 
 ### Basic Project
 
 ```
 myproject/
+├── build.maxon      # Script file with exported build/run functions
 ├── main.maxon       # Entry point (contains main function)
 ├── utils.maxon      # Utility functions
 └── types.maxon      # Type definitions
@@ -155,6 +197,7 @@ myproject/
 
 ```
 myproject/
+├── build.maxon
 ├── main.maxon
 ├── lib/
 │   ├── math.maxon
@@ -163,7 +206,7 @@ myproject/
     └── helpers.maxon
 ```
 
-All `.maxon` files in subdirectories are automatically included when running `maxon build`.
+All `.maxon` files in subdirectories are automatically included when compiling a directory with `maxon compile`.
 
 ### Ignoring Directories
 
@@ -181,10 +224,10 @@ myproject/
 
 ### Rules
 
-1. **One main function** - Exactly one file must contain a `main()` function
-2. **Automatic discovery** - All `.maxon` files are found recursively
+1. **`build.maxon` as script** - Contains exported functions runnable via `maxon run`
+2. **Automatic discovery** - All `.maxon` files are found recursively when compiling a directory
 3. **Standard library** - The stdlib is automatically included
-4. **Output naming** - The executable is named after the directory
+4. **Export visibility** - Only `export function` declarations in `build.maxon` are listed and runnable
 
 ---
 
@@ -260,7 +303,7 @@ The compiler looks for the standard library in these locations (in order):
 ### Working Directory
 
 - `maxon compile` - Output is relative to the source file location
-- `maxon build` - Output is in the current working directory
+- `maxon build` / `maxon run` - Runs from the current working directory (requires `build.maxon`)
 - `maxon test` - Runs from the `maxon-bin/` directory
 
 ---
@@ -283,11 +326,14 @@ maxon compile program.maxon
 # Navigate to project
 cd myproject
 
+# List available commands from build.maxon
+maxon run
+
 # Build the project
 maxon build
 
-# Run the result
-./myproject.exe
+# Run a specific task (dashes translate to underscores)
+maxon run spec-test-selfhosted
 ```
 
 ### Running Tests During Development

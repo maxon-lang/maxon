@@ -10,9 +10,9 @@ public static class DeadFunctionElimination {
     foreach (var func in module.Functions)
       funcByName[func.Name] = func;
 
-    // BFS from main and runtime entry points
+    // BFS from entry function and runtime entry points
     var queue = new Queue<string>();
-    var mainFunc = module.Functions.FirstOrDefault(f => f.Name == "main");
+    var mainFunc = module.Functions.FirstOrDefault(f => f.Name == module.EntryFunctionName);
     if (mainFunc != null) {
       queue.Enqueue(mainFunc.Name);
       reachable.Add(mainFunc.Name);

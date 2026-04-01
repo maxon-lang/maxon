@@ -792,8 +792,10 @@ info.isReadOnly        // bool
 
 ### Commands
 ```bash
-maxon compile <file.maxon>   # Compile single file → file.exe
-maxon build                  # Build project in current directory
+maxon compile <file|dir>     # Compile single file or directory → .exe
+maxon build                  # Shorthand for maxon run build
+maxon run <function>         # Run exported function from build.maxon (dashes → underscores)
+maxon run                    # List available commands in build.maxon (shown with dashes)
 maxon spec-test              # Run spec fragment tests
 maxon lsp-server             # Start LSP server for IDE integration
 ```
@@ -817,4 +819,4 @@ maxon lsp-server             # Start LSP server for IDE integration
 
 ## The self hosted compiler (currently in development)
 - The source is in maxon-bin-selfhosted
-- To build it run `maxon build` in /maxon-bin-selfhosted
+- To build it run `maxon build` (or `maxon run build`) in /maxon-bin-selfhosted

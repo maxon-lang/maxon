@@ -41,9 +41,9 @@ public class ARM64CodeEmitterStage {
       emitter.DefineGlobal(global.Name, size, initValue);
     }
 
-    // Find main function
-    var mainFunc = module.Functions.FirstOrDefault(f => f.Name == "main")
-      ?? throw new InvalidOperationException("No 'main' function found");
+    // Find entry function
+    var mainFunc = module.Functions.FirstOrDefault(f => f.Name == module.EntryFunctionName)
+      ?? throw new InvalidOperationException($"No '{module.EntryFunctionName}' function found");
 
     // Emit mrt_start wrapper
     var globalCleanupName = module.Functions
