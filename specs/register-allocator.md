@@ -101,15 +101,6 @@ module {
   entry:
     %0 = maxon.literal {value = 99 : i64}
     maxon.assign %0 {var = x} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
-    %1 = maxon.literal {value = 0 : i64}
-    %2 = maxon.binop %0, %1 {op = lt}
-    %3 = maxon.literal {value = 4294967295 : i64}
-    %4 = maxon.binop %0, %3 {op = gt}
-    %5 = maxon.binop %2, %4 {op = or}
-    maxon.cond_br %5 [then: __range_panic_0, else: __range_ok_0]
-  __range_panic_0:
-    maxon.panic "panic at int-var-roundtrip.test:4: Range check failed: value outside typealias 'ExitCode'"
-  __range_ok_0:
     maxon.scope_end [x]
     maxon.return %0
   }
@@ -119,17 +110,6 @@ module {
   func @main() -> u32 {
   entry:
     %0 = arith.constant {value = 99 : i64}
-    %1 = arith.constant {value = 0 : i64}
-    %2 = arith.cmpi lt %0, %1
-    %3 = arith.constant {value = 4294967295 : i64}
-    %4 = arith.cmpi gt %0, %3
-    %5 = arith.ori1 %2, %4
-    cf.cond_br %5 [then: __range_panic_0, else: __range_ok_0]
-  __range_panic_0:
-    %6 = memref.lea_symdata __panic_msg_0
-    %7 = std.ptr_to_i64 %6
-    std.call_runtime @mrt_panic %7
-  __range_ok_0:
     func.return %0
   }
 }
@@ -137,21 +117,7 @@ module {
 module {
   func @main() -> u32 {
   entry:
-    x86.prologue stack_size=16
     x86.mov rax, 99
-    x86.xor rcx, rcx
-    x86.mov rdx, 4294967295
-    x86.cmp rax, rdx
-    x86.jg main.__range_panic_0
-    x86.cmp rax, rcx
-    x86.jl main.__range_panic_0
-    x86.jmp main.__range_ok_0
-  __range_panic_0:
-    x86.lea_symdata rax, [__panic_msg_0]
-    x86.mov rcx, rax
-    x86.call mrt_panic
-  __range_ok_0:
-    x86.epilogue
     x86.ret
   }
 }

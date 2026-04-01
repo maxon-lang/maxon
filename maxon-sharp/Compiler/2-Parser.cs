@@ -11851,7 +11851,16 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
   /// </summary>
   private MaxonValue ValidateAndEmitRangeCheck(MaxonValue value, MlirRangedPrimitiveType rangedType, MaxonValueKind expectedKind, Token errorToken) {
     bool isLiteral = false;
-    if (_currentBlock!.Operations.LastOrDefault() is MaxonLiteralOp litOp && litOp.Result == value) {
+    // Search all blocks in the current function for the literal that defined this value,
+    // not just the last op — the value may have been defined earlier (e.g. before an assign).
+    MaxonLiteralOp? litOp = null;
+    foreach (var block in _currentFunction!.Body.Blocks) {
+      foreach (var op in block.Operations) {
+        if (op is MaxonLiteralOp lit && lit.Result == value) { litOp = lit; break; }
+      }
+      if (litOp != null) break;
+    }
+    if (litOp != null) {
       if (rangedType.IsFloatBased) {
         if (litOp.ValueKind is MaxonValueKind.Float or MaxonValueKind.Float32) {
           isLiteral = true;
