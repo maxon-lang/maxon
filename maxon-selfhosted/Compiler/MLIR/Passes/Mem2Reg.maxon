@@ -1559,14 +1559,20 @@ end 'substituteSysOp'
 // ============================================================
 
 function remapValue(valueId ValueId, remap ValueIdArray) returns ValueId
-	if valueId >= remap.count() 'noEntry'
-		return valueId
-	end 'noEntry'
-	let mapped = try remap.get(valueId) otherwise REMAP_NONE
-	if mapped == REMAP_NONE 'noRemap'
-		return valueId
-	end 'noRemap'
-	return mapped
+	var current = valueId
+	var steps = 0
+	while steps < 100 'followChain'
+		if current >= remap.count() 'noEntry'
+			return current
+		end 'noEntry'
+		let mapped = try remap.get(current) otherwise REMAP_NONE
+		if mapped == REMAP_NONE 'noRemap'
+			return current
+		end 'noRemap'
+		current = mapped
+		steps = steps + 1
+	end 'followChain'
+	return current
 end 'remapValue'
 
 function remapValueIds(argIds ValueIdArray, remap ValueIdArray) returns ValueIdArray

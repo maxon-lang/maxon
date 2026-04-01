@@ -784,39 +784,29 @@ function lastOpSetsFlagsFor(block MlirBlock, condId ValueId) returns bool
 end 'lastOpSetsFlagsFor'
 
 function lastX64OpSetsFlagsFor(op X64Op, condId ValueId) returns bool
-	// Check if op is a flag-setting ALU instruction whose dest matches condId.
-	// x86 or/and/xor/add/sub all set ZF based on the result.
-	let destId = getX64OpDestId(op)
-	if destId < 0 'noFlagSetting'
+	// Check if op is a flag-setting ALU instruction whose virtual dest matches condId.
+	if not op.rawValue.setsFlags 'notFlagSetting'
 		return false
-	end 'noFlagSetting'
-	return destId == condId
+	end 'notFlagSetting'
+	return match op 'extractDest'
+		addRegReg(destReg, _) gives x64VRegMatchesId(destReg, condId: condId)
+		subRegReg(destReg, _) gives x64VRegMatchesId(destReg, condId: condId)
+		addRegImm(destReg, _) gives x64VRegMatchesId(destReg, condId: condId)
+		subRegImm(destReg, _) gives x64VRegMatchesId(destReg, condId: condId)
+		imulRegReg(destReg, _) gives x64VRegMatchesId(destReg, condId: condId)
+		andRegReg(destReg, _) gives x64VRegMatchesId(destReg, condId: condId)
+		orRegReg(destReg, _) gives x64VRegMatchesId(destReg, condId: condId)
+		xorRegReg(destReg, _) gives x64VRegMatchesId(destReg, condId: condId)
+		default panic("unexpected flag-setting op without dest register")
+	end 'extractDest'
 end 'lastX64OpSetsFlagsFor'
 
-// Extract the dest valueId from a binary ALU op that sets ZF, or -1 otherwise.
-// Used to detect when a preceding op already set flags for a condBr's condition.
-function getX64OpDestId(op X64Op) returns ValueId
-	return match op 'check'
-		addRegReg(destReg, _) gives x64VRegToId(destReg)
-		subRegReg(destReg, _) gives x64VRegToId(destReg)
-		addRegImm(destReg, _) gives x64VRegToId(destReg)
-		subRegImm(destReg, _) gives x64VRegToId(destReg)
-		imulRegReg(destReg, _) gives x64VRegToId(destReg)
-		prologue to loadSlot gives -1
-		idivRcx to bitNotReg gives -1
-		andRegReg(destReg, _) gives x64VRegToId(destReg)
-		orRegReg(destReg, _) gives x64VRegToId(destReg)
-		xorRegReg(destReg, _) gives x64VRegToId(destReg)
-		shlRegCl to repStosq gives -1
-	end 'check'
-end 'getX64OpDestId'
-
-function x64VRegToId(vreg X64VReg) returns ValueId
+function x64VRegMatchesId(vreg X64VReg, condId ValueId) returns bool
 	return match vreg 'check'
-		virtual(vid) gives vid
-		physical gives -1
+		virtual(vid) gives vid == condId
+		physical gives false
 	end 'check'
-end 'x64VRegToId'
+end 'x64VRegMatchesId'
 
 // ============================================================
 // SysOps — slot-based lowering (no register allocation)

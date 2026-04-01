@@ -203,12 +203,13 @@ type OpMeta
   export let isMemory bool
   export let isStore bool
   export let isCall bool
+  export let setsFlags bool
 end 'OpMeta'
 
 export enum X64Op
-  addRegReg(destReg X64VReg, srcReg X64VReg) = OpMeta{latency: 1, isMemory: false, isStore: false, isCall: false}
-  loadSlot(destReg X64VReg, slotIndex VarSlot) = OpMeta{latency: 4, isMemory: true, isStore: false, isCall: false}
-  callDirect(target ByteArray) = OpMeta{latency: 5, isMemory: true, isStore: false, isCall: true}
+  addRegReg(destReg X64VReg, srcReg X64VReg) = OpMeta{latency: 1, isMemory: false, isStore: false, isCall: false, setsFlags: true}
+  loadSlot(destReg X64VReg, slotIndex VarSlot) = OpMeta{latency: 4, isMemory: true, isStore: false, isCall: false, setsFlags: false}
+  callDirect(target ByteArray) = OpMeta{latency: 5, isMemory: true, isStore: false, isCall: true, setsFlags: false}
   // ...
 end 'X64Op'
 ```

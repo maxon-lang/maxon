@@ -222,10 +222,20 @@ function arm64EmitAdd(code ByteArray, rd MachineWord, rn MachineWord, rm Machine
 	arm64EmitRRR(code, opcode: 0x8B000000, rd: rd, rn: rn, rm: rm)
 end 'arm64EmitAdd'
 
+// ADDS Xd, Xn, Xm (64-bit register, sets flags)
+function arm64EmitAdds(code ByteArray, rd MachineWord, rn MachineWord, rm MachineWord)
+	arm64EmitRRR(code, opcode: 0xAB000000, rd: rd, rn: rn, rm: rm)
+end 'arm64EmitAdds'
+
 // SUB Xd, Xn, Xm (64-bit register)
 function arm64EmitSub(code ByteArray, rd MachineWord, rn MachineWord, rm MachineWord)
 	arm64EmitRRR(code, opcode: 0xCB000000, rd: rd, rn: rn, rm: rm)
 end 'arm64EmitSub'
+
+// SUBS Xd, Xn, Xm (64-bit register, sets flags)
+function arm64EmitSubs(code ByteArray, rd MachineWord, rn MachineWord, rm MachineWord)
+	arm64EmitRRR(code, opcode: 0xEB000000, rd: rd, rn: rn, rm: rm)
+end 'arm64EmitSubs'
 
 // MUL Xd, Xn, Xm (64-bit register)
 function arm64EmitMul(code ByteArray, rd MachineWord, rn MachineWord, rm MachineWord)
@@ -253,6 +263,11 @@ end 'arm64EmitMvn'
 function arm64EmitAnd(code ByteArray, rd MachineWord, rn MachineWord, rm MachineWord)
 	arm64EmitRRR(code, opcode: 0x8A000000, rd: rd, rn: rn, rm: rm)
 end 'arm64EmitAnd'
+
+// ANDS Xd, Xn, Xm (sets flags)
+function arm64EmitAnds(code ByteArray, rd MachineWord, rn MachineWord, rm MachineWord)
+	arm64EmitRRR(code, opcode: 0xEA000000, rd: rd, rn: rn, rm: rm)
+end 'arm64EmitAnds'
 
 // ORR Xd, Xn, Xm
 function arm64EmitOrr(code ByteArray, rd MachineWord, rn MachineWord, rm MachineWord)
@@ -1038,13 +1053,16 @@ function emitArm64Instruction(op Arm64Op, code ByteArray, jumpFixups BlockIdFixu
 		strToSlot(slotIndex, src) then arm64EmitStrSlot(code, rt: resolveArm64Gpr(src).rawValue, slotIndex: slotIndex)
 		ldrFromSlot(dest, slotIndex) then arm64EmitLdrSlot(code, rt: resolveArm64Gpr(dest).rawValue, slotIndex: slotIndex)
 		addRegs(dest, src1, src2) then arm64EmitAdd(code, rd: resolveArm64Gpr(dest).rawValue, rn: resolveArm64Gpr(src1).rawValue, rm: resolveArm64Gpr(src2).rawValue)
+		addsRegs(dest, src1, src2) then arm64EmitAdds(code, rd: resolveArm64Gpr(dest).rawValue, rn: resolveArm64Gpr(src1).rawValue, rm: resolveArm64Gpr(src2).rawValue)
 		subRegs(dest, src1, src2) then arm64EmitSub(code, rd: resolveArm64Gpr(dest).rawValue, rn: resolveArm64Gpr(src1).rawValue, rm: resolveArm64Gpr(src2).rawValue)
+		subsRegs(dest, src1, src2) then arm64EmitSubs(code, rd: resolveArm64Gpr(dest).rawValue, rn: resolveArm64Gpr(src1).rawValue, rm: resolveArm64Gpr(src2).rawValue)
 		mulRegs(dest, src1, src2) then arm64EmitMul(code, rd: resolveArm64Gpr(dest).rawValue, rn: resolveArm64Gpr(src1).rawValue, rm: resolveArm64Gpr(src2).rawValue)
 		sdivRegs(dest, src1, src2) then arm64EmitSdiv(code, rd: resolveArm64Gpr(dest).rawValue, rn: resolveArm64Gpr(src1).rawValue, rm: resolveArm64Gpr(src2).rawValue)
 		remRegs(dest, src1, src2) then arm64EmitRem(code, rd: resolveArm64Gpr(dest).rawValue, rn: resolveArm64Gpr(src1).rawValue, rm: resolveArm64Gpr(src2).rawValue)
 		negReg(dest, src) then arm64EmitNeg(code, rd: resolveArm64Gpr(dest).rawValue, rn: resolveArm64Gpr(src).rawValue)
 		mvnReg(dest, src) then arm64EmitMvn(code, rd: resolveArm64Gpr(dest).rawValue, rn: resolveArm64Gpr(src).rawValue)
 		andRegs(dest, src1, src2) then arm64EmitAnd(code, rd: resolveArm64Gpr(dest).rawValue, rn: resolveArm64Gpr(src1).rawValue, rm: resolveArm64Gpr(src2).rawValue)
+		andsRegs(dest, src1, src2) then arm64EmitAnds(code, rd: resolveArm64Gpr(dest).rawValue, rn: resolveArm64Gpr(src1).rawValue, rm: resolveArm64Gpr(src2).rawValue)
 		orrRegs(dest, src1, src2) then arm64EmitOrr(code, rd: resolveArm64Gpr(dest).rawValue, rn: resolveArm64Gpr(src1).rawValue, rm: resolveArm64Gpr(src2).rawValue)
 		eorRegs(dest, src1, src2) then arm64EmitEor(code, rd: resolveArm64Gpr(dest).rawValue, rn: resolveArm64Gpr(src1).rawValue, rm: resolveArm64Gpr(src2).rawValue)
 		lslRegs(dest, src1, src2) then arm64EmitLslv(code, rd: resolveArm64Gpr(dest).rawValue, rn: resolveArm64Gpr(src1).rawValue, rm: resolveArm64Gpr(src2).rawValue)

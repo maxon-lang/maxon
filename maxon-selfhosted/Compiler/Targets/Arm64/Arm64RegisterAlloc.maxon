@@ -157,13 +157,16 @@ export function arm64OpHasVirtualRegs(op Arm64Op) returns bool
 		strToSlot(_, src) gives isVirtualArm64Gpr(src)
 		ldrFromSlot(dest, _) gives isVirtualArm64Gpr(dest)
 		addRegs(dest, src1, src2) gives isVirtualArm64Gpr(dest) or isVirtualArm64Gpr(src1) or isVirtualArm64Gpr(src2)
+		addsRegs(dest, src1, src2) gives isVirtualArm64Gpr(dest) or isVirtualArm64Gpr(src1) or isVirtualArm64Gpr(src2)
 		subRegs(dest, src1, src2) gives isVirtualArm64Gpr(dest) or isVirtualArm64Gpr(src1) or isVirtualArm64Gpr(src2)
+		subsRegs(dest, src1, src2) gives isVirtualArm64Gpr(dest) or isVirtualArm64Gpr(src1) or isVirtualArm64Gpr(src2)
 		mulRegs(dest, src1, src2) gives isVirtualArm64Gpr(dest) or isVirtualArm64Gpr(src1) or isVirtualArm64Gpr(src2)
 		sdivRegs(dest, src1, src2) gives isVirtualArm64Gpr(dest) or isVirtualArm64Gpr(src1) or isVirtualArm64Gpr(src2)
 		remRegs(dest, src1, src2) gives isVirtualArm64Gpr(dest) or isVirtualArm64Gpr(src1) or isVirtualArm64Gpr(src2)
 		negReg(dest, src) gives isVirtualArm64Gpr(dest) or isVirtualArm64Gpr(src)
 		mvnReg(dest, src) gives isVirtualArm64Gpr(dest) or isVirtualArm64Gpr(src)
 		andRegs(dest, src1, src2) gives isVirtualArm64Gpr(dest) or isVirtualArm64Gpr(src1) or isVirtualArm64Gpr(src2)
+		andsRegs(dest, src1, src2) gives isVirtualArm64Gpr(dest) or isVirtualArm64Gpr(src1) or isVirtualArm64Gpr(src2)
 		orrRegs(dest, src1, src2) gives isVirtualArm64Gpr(dest) or isVirtualArm64Gpr(src1) or isVirtualArm64Gpr(src2)
 		eorRegs(dest, src1, src2) gives isVirtualArm64Gpr(dest) or isVirtualArm64Gpr(src1) or isVirtualArm64Gpr(src2)
 		lslRegs(dest, src1, src2) gives isVirtualArm64Gpr(dest) or isVirtualArm64Gpr(src1) or isVirtualArm64Gpr(src2)
@@ -257,13 +260,16 @@ export function countArm64OpReads(counts RegIntArray, a64Op Arm64Op)
 		strToSlot(_, src) then incUse(counts, id: arm64VRegId(src))
 		ldrFromSlot then break 'scan'
 		addRegs(_, src1, src2) then countArm64TwoReads(counts, reg1: src1, reg2: src2)
+		addsRegs(_, src1, src2) then countArm64TwoReads(counts, reg1: src1, reg2: src2)
 		subRegs(_, src1, src2) then countArm64TwoReads(counts, reg1: src1, reg2: src2)
+		subsRegs(_, src1, src2) then countArm64TwoReads(counts, reg1: src1, reg2: src2)
 		mulRegs(_, src1, src2) then countArm64TwoReads(counts, reg1: src1, reg2: src2)
 		sdivRegs(_, src1, src2) then countArm64TwoReads(counts, reg1: src1, reg2: src2)
 		remRegs(_, src1, src2) then countArm64TwoReads(counts, reg1: src1, reg2: src2)
 		negReg(_, src) then incUse(counts, id: arm64VRegId(src))
 		mvnReg(_, src) then incUse(counts, id: arm64VRegId(src))
 		andRegs(_, src1, src2) then countArm64TwoReads(counts, reg1: src1, reg2: src2)
+		andsRegs(_, src1, src2) then countArm64TwoReads(counts, reg1: src1, reg2: src2)
 		orrRegs(_, src1, src2) then countArm64TwoReads(counts, reg1: src1, reg2: src2)
 		eorRegs(_, src1, src2) then countArm64TwoReads(counts, reg1: src1, reg2: src2)
 		lslRegs(_, src1, src2) then countArm64TwoReads(counts, reg1: src1, reg2: src2)
@@ -501,11 +507,14 @@ end 'aa64LdrFromSlot'
 // Three-address: dest=def, src1=use, src2=use
 enum Arm64ThreeAddrOp
 	add
+	adds
 	sub
+	subs
 	mul
 	sdiv
 	rem
 	bitwiseAnd
+	ands
 	orr
 	eor
 	lsl
@@ -521,11 +530,14 @@ function aa64ThreeAddr(state RegState, dest Arm64VReg, src1 Arm64VReg, src2 Arm6
 	let s2p = arm64PhysFromOrd(s2)
 	match op 'emit'
 		add then dstBlock.ops.push(MlirOp.arm64(Arm64Op.addRegs(dp, s1p, s2p)))
+		adds then dstBlock.ops.push(MlirOp.arm64(Arm64Op.addsRegs(dp, s1p, s2p)))
 		sub then dstBlock.ops.push(MlirOp.arm64(Arm64Op.subRegs(dp, s1p, s2p)))
+		subs then dstBlock.ops.push(MlirOp.arm64(Arm64Op.subsRegs(dp, s1p, s2p)))
 		mul then dstBlock.ops.push(MlirOp.arm64(Arm64Op.mulRegs(dp, s1p, s2p)))
 		sdiv then dstBlock.ops.push(MlirOp.arm64(Arm64Op.sdivRegs(dp, s1p, s2p)))
 		rem then dstBlock.ops.push(MlirOp.arm64(Arm64Op.remRegs(dp, s1p, s2p)))
 		bitwiseAnd then dstBlock.ops.push(MlirOp.arm64(Arm64Op.andRegs(dp, s1p, s2p)))
+		ands then dstBlock.ops.push(MlirOp.arm64(Arm64Op.andsRegs(dp, s1p, s2p)))
 		orr then dstBlock.ops.push(MlirOp.arm64(Arm64Op.orrRegs(dp, s1p, s2p)))
 		eor then dstBlock.ops.push(MlirOp.arm64(Arm64Op.eorRegs(dp, s1p, s2p)))
 		lsl then dstBlock.ops.push(MlirOp.arm64(Arm64Op.lslRegs(dp, s1p, s2p)))
@@ -798,13 +810,16 @@ export function allocArm64Op(state RegState, a64Op Arm64Op, dstBlock MlirBlock)
 		strToSlot(slotIndex, src) then aa64StrToSlot(state, slotIndex: slotIndex, src: src, dstBlock: dstBlock)
 		ldrFromSlot(dest, slotIndex) then aa64LdrFromSlot(state, dest: dest, slotIndex: slotIndex, dstBlock: dstBlock)
 		addRegs(dest, src1, src2) then aa64ThreeAddr(state, dest: dest, src1: src1, src2: src2, dstBlock: dstBlock, op: Arm64ThreeAddrOp.add)
+		addsRegs(dest, src1, src2) then aa64ThreeAddr(state, dest: dest, src1: src1, src2: src2, dstBlock: dstBlock, op: Arm64ThreeAddrOp.adds)
 		subRegs(dest, src1, src2) then aa64ThreeAddr(state, dest: dest, src1: src1, src2: src2, dstBlock: dstBlock, op: Arm64ThreeAddrOp.sub)
+		subsRegs(dest, src1, src2) then aa64ThreeAddr(state, dest: dest, src1: src1, src2: src2, dstBlock: dstBlock, op: Arm64ThreeAddrOp.subs)
 		mulRegs(dest, src1, src2) then aa64ThreeAddr(state, dest: dest, src1: src1, src2: src2, dstBlock: dstBlock, op: Arm64ThreeAddrOp.mul)
 		sdivRegs(dest, src1, src2) then aa64ThreeAddr(state, dest: dest, src1: src1, src2: src2, dstBlock: dstBlock, op: Arm64ThreeAddrOp.sdiv)
 		remRegs(dest, src1, src2) then aa64ThreeAddr(state, dest: dest, src1: src1, src2: src2, dstBlock: dstBlock, op: Arm64ThreeAddrOp.rem)
 		negReg(dest, src) then aa64UnaryDestSrc(state, dest: dest, src: src, dstBlock: dstBlock, isNeg: true)
 		mvnReg(dest, src) then aa64UnaryDestSrc(state, dest: dest, src: src, dstBlock: dstBlock, isNeg: false)
 		andRegs(dest, src1, src2) then aa64ThreeAddr(state, dest: dest, src1: src1, src2: src2, dstBlock: dstBlock, op: Arm64ThreeAddrOp.bitwiseAnd)
+		andsRegs(dest, src1, src2) then aa64ThreeAddr(state, dest: dest, src1: src1, src2: src2, dstBlock: dstBlock, op: Arm64ThreeAddrOp.ands)
 		orrRegs(dest, src1, src2) then aa64ThreeAddr(state, dest: dest, src1: src1, src2: src2, dstBlock: dstBlock, op: Arm64ThreeAddrOp.orr)
 		eorRegs(dest, src1, src2) then aa64ThreeAddr(state, dest: dest, src1: src1, src2: src2, dstBlock: dstBlock, op: Arm64ThreeAddrOp.eor)
 		lslRegs(dest, src1, src2) then aa64ThreeAddr(state, dest: dest, src1: src1, src2: src2, dstBlock: dstBlock, op: Arm64ThreeAddrOp.lsl)

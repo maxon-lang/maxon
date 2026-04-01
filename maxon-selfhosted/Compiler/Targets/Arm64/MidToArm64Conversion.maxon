@@ -657,10 +657,57 @@ function lowerCondBrArm64(condId ValueId, thenTarget BlockId, thenArgIds ValueId
 end 'lowerCondBrArm64'
 
 function lowerBoolTestCondBrArm64(condId ValueId, elseTarget BlockId, dstBlock MlirBlock)
-	let vr = Arm64VReg.virtual(condId)
-	dstBlock.ops.push(MlirOp.arm64(Arm64Op.cmpRegZero(vr)))
+	if not tryReplaceLastWithFlagSettingArm64(dstBlock, condId: condId) 'needsCmp'
+		let vr = Arm64VReg.virtual(condId)
+		dstBlock.ops.push(MlirOp.arm64(Arm64Op.cmpRegZero(vr)))
+	end 'needsCmp'
 	dstBlock.ops.push(MlirOp.arm64(Arm64Op.condBranch(Arm64CondCode.eq, elseTarget)))
 end 'lowerBoolTestCondBrArm64'
+
+// Check if the last op in the block is an add/sub/and whose dest matches condId.
+// If so, replace it with the S-variant (adds/subs/ands) and return true.
+function tryReplaceLastWithFlagSettingArm64(block MlirBlock, condId ValueId) returns bool
+	let opCount = block.ops.count()
+	if opCount == 0 'empty'
+		return false
+	end 'empty'
+	let lastOp = try block.ops.get(opCount - 1) otherwise 'noOp'
+		return false
+	end 'noOp'
+	return match lastOp 'check'
+		arm64(a64Op) gives tryReplaceArm64OpWithFlagSetting(block, opIndex: opCount - 1, a64Op: a64Op, condId: condId)
+		maxon to mir gives false
+		x64 gives false
+	end 'check'
+end 'tryReplaceLastWithFlagSettingArm64'
+
+function tryReplaceArm64OpWithFlagSetting(block MlirBlock, opIndex Index, a64Op Arm64Op, condId ValueId) returns bool
+	return match a64Op 'replace'
+		addRegs(dest, src1, src2) gives trySwapArm64ThreeAddr(block, opIndex: opIndex, dest: dest, condId: condId, replacement: MlirOp.arm64(Arm64Op.addsRegs(dest, src1, src2)))
+		subRegs(dest, src1, src2) gives trySwapArm64ThreeAddr(block, opIndex: opIndex, dest: dest, condId: condId, replacement: MlirOp.arm64(Arm64Op.subsRegs(dest, src1, src2)))
+		andRegs(dest, src1, src2) gives trySwapArm64ThreeAddr(block, opIndex: opIndex, dest: dest, condId: condId, replacement: MlirOp.arm64(Arm64Op.andsRegs(dest, src1, src2)))
+		prologue to ldrFromSlot gives false
+		addsRegs gives false
+		subsRegs to remRegs gives false
+		negReg to mvnReg gives false
+		andsRegs to nullSafeLoad gives false
+	end 'replace'
+end 'tryReplaceArm64OpWithFlagSetting'
+
+function trySwapArm64ThreeAddr(block MlirBlock, opIndex Index, dest Arm64VReg, condId ValueId, replacement MlirOp) returns bool
+	if not arm64VRegMatchesCondId(dest, condId: condId) 'noMatch'
+		return false
+	end 'noMatch'
+	block.ops.set(opIndex, value: replacement)
+	return true
+end 'trySwapArm64ThreeAddr'
+
+function arm64VRegMatchesCondId(vreg Arm64VReg, condId ValueId) returns bool
+	return match vreg 'check'
+		virtual(vid) gives vid == condId
+		physical gives false
+	end 'check'
+end 'arm64VRegMatchesCondId'
 
 // ============================================================
 // SysOps — slot-based lowering (no register allocation)
