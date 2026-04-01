@@ -144,10 +144,8 @@ class Program {
 
     SourceFile[] sources;
     string mainFile;
-    string? directory = null;
 
     if (Directory.Exists(path)) {
-      directory = path;
       sources = CollectFilesFromDirectory(path);
       if (sources.Length == 0) {
         Console.WriteLine($"No .maxon files found in: {path}");
@@ -164,15 +162,99 @@ class Program {
     }
 
     var ext = GetOutputExtension(target);
-    var outputPath = ResolveOutputPath(directory, mainFile, ext);
+    var outputPath = ResolveOutputPath(mainFile, ext);
     var (mlirOutputPath, dumpStagesBasePath) = GetOutputPaths(mainFile, emitIr, dumpStages);
 
     return CompileAndReportResult(sources, outputPath, mlirOutputPath, dumpStagesBasePath, target);
   }
 
   static int RunBuild(string[] args) {
-    // "maxon build" is shorthand for "maxon run build"
-    return RunRun(["build", ..args]);
+    var (emitIr, dumpStages, valid) = ParseOptions(args);
+    if (!valid) return Fail();
+
+    var target = ParseTarget(args);
+    var directory = Directory.GetCurrentDirectory();
+    var buildFile = Path.Combine(directory, "build.maxon");
+
+    // If build.maxon has an exported build() function, compile and run it to get config
+    if (File.Exists(buildFile)) {
+      var content = ReadFileContentUntilSeparator(buildFile);
+      if (HasMainFunction(content)) {
+        Console.Error.WriteLine("build.maxon must not contain a main() function.");
+        return 1;
+      }
+      var exportedFunctions = ListBuildFunctions(content);
+      if (exportedFunctions.Any(f => f.name == "build")) {
+        var sources = new SourceFile[] { new(buildFile, content) };
+        var ext = GetOutputExtension(target);
+        var runPath = Path.Combine(directory, $".maxon-run{ext}");
+        var (mlirOutputPath, dumpStagesBasePath) = GetOutputPaths(buildFile, emitIr, dumpStages);
+
+        var compileResult = CompileAndReportResult(sources, runPath, mlirOutputPath,
+            dumpStagesBasePath, target, entryFunction: "build");
+        if (compileResult != 0) return compileResult;
+
+        var (exitCode, json) = RunExecutableCapture(runPath);
+        try { File.Delete(runPath); } catch { /* best effort */ }
+        if (exitCode != 0) return exitCode;
+
+        // Parse the build config JSON
+        var config = System.Text.Json.JsonSerializer.Deserialize<BuildConfig>(json);
+        if (config == null) {
+          Console.Error.WriteLine("build.maxon produced invalid build configuration.");
+          return 1;
+        }
+
+        // Use config name for output path, fall back to generic compile
+        var outputName = !string.IsNullOrEmpty(config.Name) ? config.Name : "output";
+        var outputPath = Path.Combine(directory, outputName + ext);
+
+        var projectSources = CollectFilesFromDirectory(directory);
+        if (projectSources.Length == 0) {
+          Console.Error.WriteLine($"No .maxon files found in: {directory}");
+          return 1;
+        }
+
+        return CompileAndReportResult(projectSources, outputPath, mlirOutputPath,
+            dumpStagesBasePath, target);
+      }
+    }
+
+    // Otherwise, do a generic build: compile the current directory
+    return RunCompile([directory, .. args]);
+  }
+
+  record BuildConfig {
+    public string? Name { get; init; }
+    public string? Output { get; init; }
+    public string[]? Sources { get; init; }
+    public bool Optimize { get; init; }
+    public bool Debug_info { get; init; }
+  }
+
+  static (int exitCode, string stdout) RunExecutableCapture(string executablePath) {
+    var process = new Process {
+      StartInfo = new ProcessStartInfo {
+        FileName = Path.GetFullPath(executablePath),
+        UseShellExecute = false,
+        RedirectStandardOutput = true,
+        RedirectStandardError = true,
+        CreateNoWindow = true
+      }
+    };
+
+    process.Start();
+
+    var stdout = process.StandardOutput.ReadToEnd();
+    var stderr = process.StandardError.ReadToEnd();
+
+    process.WaitForExit();
+
+    if (!string.IsNullOrEmpty(stderr)) {
+      Console.Error.Write(stderr);
+    }
+
+    return (process.ExitCode, stdout);
   }
 
   static int RunRun(string[] args) {
@@ -192,6 +274,11 @@ class Program {
     }
 
     var content = ReadFileContentUntilSeparator(buildFile);
+
+    if (HasMainFunction(content)) {
+      Console.Error.WriteLine("build.maxon must not contain a main() function.");
+      return 1;
+    }
 
     var exportedFunctions = ListBuildFunctions(content);
 
@@ -287,6 +374,15 @@ class Program {
     }
   }
 
+  static bool HasMainFunction(string content) {
+    foreach (var rawLine in content.Split('\n')) {
+      var line = rawLine.Trim();
+      if (line.StartsWith("function main(") || line.StartsWith("export function main("))
+        return true;
+    }
+    return false;
+  }
+
   /// <summary>
   /// Extracts top-level function names from build.maxon content.
   /// Returns (name, comment) pairs where comment is the preceding // comment line, if any.
@@ -376,25 +472,7 @@ class Program {
     return files.Length > 0 ? files[0].Path : originalPath;
   }
 
-  static string? ParseBuildName(string directory) {
-    var buildFile = Path.Combine(directory, "build.maxon");
-    if (!File.Exists(buildFile)) return null;
-    var content = File.ReadAllText(buildFile);
-    var marker = "build(\"";
-    var start = content.IndexOf(marker);
-    if (start < 0) return null;
-    start += marker.Length;
-    var end = content.IndexOf("\")", start);
-    if (end < 0) return null;
-    return content[start..end];
-  }
-
-  static string ResolveOutputPath(string? directory, string mainFile, string ext) {
-    if (directory != null) {
-      var buildName = ParseBuildName(directory);
-      if (buildName != null)
-        return Path.Combine(directory, buildName + ext);
-    }
+  static string ResolveOutputPath(string mainFile, string ext) {
     return Path.ChangeExtension(mainFile, ext == "" ? null : ext);
   }
 

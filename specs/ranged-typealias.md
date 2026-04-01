@@ -474,6 +474,30 @@ end 'main'
 42
 ```
 
+### Type-qualified bound: u64.max
+
+A typealias with `int(0 to u64.max)` covers all 64-bit values and should not emit runtime range checks.
+
+<!-- test: type-qualified-u64-max -->
+```maxon
+typealias BigId = int(0 to u64.max)
+
+function getValue() returns BigId
+	return u64.max
+end 'getValue'
+
+function main() returns ExitCode
+	let v = getValue()
+	if v == u64.max 'check'
+		return 0
+	end 'check'
+	return 1
+end 'main'
+```
+```exitcode
+0
+```
+
 ### Type-qualified bound: i8 range
 
 <!-- test: type-qualified-i8-range -->
@@ -679,7 +703,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/fragments/ranged-typealias/error.unrepresentable-range.test:2:17: Invalid range: range -9.223372036854776E+18 to 1.8446744073709552E+19 exceeds any representable integer type
+error E3005: specs/fragments/ranged-typealias/error.unrepresentable-range.test:2:17: Mismatched type bounds: 'i64.min' and 'u64.max' must reference the same type
 ```
 
 ### Error: byte range below zero

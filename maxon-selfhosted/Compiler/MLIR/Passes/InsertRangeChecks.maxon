@@ -145,7 +145,7 @@ function extractRetValId(op MlirOp) returns ValueId
 	end 'extract'
 end 'extractRetValId'
 
-let RANGE_CHECK_UNKNOWN = 9223372036854775807
+let RANGE_CHECK_UNKNOWN = i64.max
 
 // Find the constant value for a ValueId by searching for its arith.const definition.
 // Returns RANGE_CHECK_UNKNOWN if not a constant.
@@ -181,30 +181,54 @@ end 'extractConstValue'
 // OR the results, and branch to panic or continue.
 // Upper bound is emitted first so that after x86 register allocation
 // the lower bound check appears first in the output (matching the C# compiler).
+//
+// Skips upper check when upper == i64.max. Skips lower check when lower == i64.min.
 function emitRangeCheckOps(block MlirBlock, valueId ValueId, lower RangeBound, upper RangeBound, typeInfo RangeCheckTypeInfo, panicBlockId BlockId, okBlockId BlockId, nextValueIdRef ValueIdRef)
-	// %upper = arith.const upper
-	let upperLitId = allocValueId(nextValueIdRef)
-	block.ops.push(MlirOp.arith(ArithOp.const(ArithConst{opcode: typeInfo.constOpcode, resultId: upperLitId, value: upper})))
+	let needsLowerCheck = lower > i64.min
+	// Upper check not needed only when upper == i64.max (no signed i64 can exceed it)
+	let needsUpperCheck = upper < i64.max
 
-	// %cmpHi = arith.cmp gt %valueId, %upper
-	let cmpUpperId = allocValueId(nextValueIdRef)
-	block.ops.push(MlirOp.arith(ArithOp.binary(ArithBinaryOp{opcode: typeInfo.cmpGtOpcode, resultId: cmpUpperId, leftId: valueId, rightId: upperLitId})))
+	if needsUpperCheck and needsLowerCheck 'bothChecks'
+		// %upper = arith.const upper
+		let upperLitId = allocValueId(nextValueIdRef)
+		block.ops.push(MlirOp.arith(ArithOp.const(ArithConst{opcode: typeInfo.constOpcode, resultId: upperLitId, value: upper})))
 
-	// %lower = arith.const lower
-	let lowerLitId = allocValueId(nextValueIdRef)
-	block.ops.push(MlirOp.arith(ArithOp.const(ArithConst{opcode: typeInfo.constOpcode, resultId: lowerLitId, value: lower})))
+		// %cmpHi = arith.cmp gt %valueId, %upper
+		let cmpUpperId = allocValueId(nextValueIdRef)
+		block.ops.push(MlirOp.arith(ArithOp.binary(ArithBinaryOp{opcode: typeInfo.cmpGtOpcode, resultId: cmpUpperId, leftId: valueId, rightId: upperLitId})))
 
-	// %cmpLo = arith.cmp lt %valueId, %lower
-	let cmpLowerId = allocValueId(nextValueIdRef)
-	block.ops.push(MlirOp.arith(ArithOp.binary(ArithBinaryOp{opcode: typeInfo.cmpLtOpcode, resultId: cmpLowerId, leftId: valueId, rightId: lowerLitId})))
+		// %lower = arith.const lower
+		let lowerLitId = allocValueId(nextValueIdRef)
+		block.ops.push(MlirOp.arith(ArithOp.const(ArithConst{opcode: typeInfo.constOpcode, resultId: lowerLitId, value: lower})))
 
-	// %outOfRange = arith.ori1 %cmpLo, %cmpHi
-	let outOfRangeId = allocValueId(nextValueIdRef)
-	block.ops.push(MlirOp.arith(ArithOp.binary(ArithBinaryOp{opcode: ArithBinaryOpcode.orI1, resultId: outOfRangeId, leftId: cmpLowerId, rightId: cmpUpperId})))
+		// %cmpLo = arith.cmp lt %valueId, %lower
+		let cmpLowerId = allocValueId(nextValueIdRef)
+		block.ops.push(MlirOp.arith(ArithOp.binary(ArithBinaryOp{opcode: typeInfo.cmpLtOpcode, resultId: cmpLowerId, leftId: valueId, rightId: lowerLitId})))
 
-	// cond_br %outOfRange → panic, else → ok (no block args needed)
-	block.terminator = MlirOp.cf(CfOp.condBr(outOfRangeId, panicBlockId, ValueIdArray{}, okBlockId, ValueIdArray{}))
-	block.hasTerminator = true
+		// %outOfRange = arith.ori1 %cmpLo, %cmpHi
+		let outOfRangeId = allocValueId(nextValueIdRef)
+		block.ops.push(MlirOp.arith(ArithOp.binary(ArithBinaryOp{opcode: ArithBinaryOpcode.orI1, resultId: outOfRangeId, leftId: cmpLowerId, rightId: cmpUpperId})))
+
+		// cond_br %outOfRange → panic, else → ok
+		block.terminator = MlirOp.cf(CfOp.condBr(outOfRangeId, panicBlockId, ValueIdArray{}, okBlockId, ValueIdArray{}))
+		block.hasTerminator = true
+	end 'bothChecks' else 'singleCheck'
+		if needsUpperCheck 'upperOnly'
+			let upperLitId = allocValueId(nextValueIdRef)
+			block.ops.push(MlirOp.arith(ArithOp.const(ArithConst{opcode: typeInfo.constOpcode, resultId: upperLitId, value: upper})))
+			let cmpUpperId = allocValueId(nextValueIdRef)
+			block.ops.push(MlirOp.arith(ArithOp.binary(ArithBinaryOp{opcode: typeInfo.cmpGtOpcode, resultId: cmpUpperId, leftId: valueId, rightId: upperLitId})))
+			block.terminator = MlirOp.cf(CfOp.condBr(cmpUpperId, panicBlockId, ValueIdArray{}, okBlockId, ValueIdArray{}))
+			block.hasTerminator = true
+		end 'upperOnly' else 'lowerOnly'
+			let lowerLitId = allocValueId(nextValueIdRef)
+			block.ops.push(MlirOp.arith(ArithOp.const(ArithConst{opcode: typeInfo.constOpcode, resultId: lowerLitId, value: lower})))
+			let cmpLowerId = allocValueId(nextValueIdRef)
+			block.ops.push(MlirOp.arith(ArithOp.binary(ArithBinaryOp{opcode: typeInfo.cmpLtOpcode, resultId: cmpLowerId, leftId: valueId, rightId: lowerLitId})))
+			block.terminator = MlirOp.cf(CfOp.condBr(cmpLowerId, panicBlockId, ValueIdArray{}, okBlockId, ValueIdArray{}))
+			block.hasTerminator = true
+		end 'lowerOnly'
+	end 'singleCheck'
 end 'emitRangeCheckOps'
 
 // Build a block label like "__range_panic_0".
@@ -222,9 +246,9 @@ end 'buildPanicMessage'
 
 // Check if a range covers the full i64 range (no value can be out of bounds).
 // All values in the self-hosted compiler are i64 at runtime, so a range that
-// spans i64.min to i64.max (or wider) needs no check.
+// spans i64.min to i64.max needs no check.
 function isFullRange(range TypealiasRange) returns bool
-	return range.lower <= i64.min and range.upper >= i64.max
+	return range.lower <= i64.min and range.upper == i64.max
 end 'isFullRange'
 
 // Opcodes and StdType for range checks, resolved from the function's return type.

@@ -7,7 +7,7 @@
 // Enables addRegImm/subRegImm/cmpRegImm when an operand is a known constant.
 typealias ConstMap = Array with ParsedInt
 typealias ImmediateValue = int(i64.min to i64.max)
-let CONST_NOT_FOUND = -9223372036854775807
+let CONST_NOT_FOUND = -i64.max
 
 function buildConstMap(func MlirFunction) returns ConstMap
 	var cm = ConstMap{}
@@ -41,6 +41,168 @@ function constMapGet(cm ConstMap, valueId ValueId) returns ImmediateValue
 	end 'outOfRange'
 	return try cm.get(valueId) otherwise CONST_NOT_FOUND
 end 'constMapGet'
+
+// Use count map: tracks how many times each ValueId is read as an operand.
+// Used by isFlagsOnly to detect cmp results whose sole consumer is a condBr.
+typealias UseCountMap = Array with ParsedInt
+
+function buildUseCountMap(func MlirFunction) returns UseCountMap
+	var uc = UseCountMap{}
+	for block in func.blocks 'eachBlock'
+		for op in block.ops 'eachOp'
+			countMlirOpUses(op, uc: uc)
+		end 'eachOp'
+		if block.hasTerminator 'hasTerm'
+			countMlirOpUses(block.terminator, uc: uc)
+		end 'hasTerm'
+	end 'eachBlock'
+	return uc
+end 'buildUseCountMap'
+
+function ucIncrement(uc UseCountMap, valueId ValueId)
+	while uc.count() <= valueId 'grow'
+		uc.push(0)
+	end 'grow'
+	let current = try uc.get(valueId) otherwise 0
+	uc.set(valueId, value: current + 1)
+end 'ucIncrement'
+
+function ucGet(uc UseCountMap, valueId ValueId) returns ParsedInt
+	if valueId < 0 or valueId >= uc.count() 'outOfRange'
+		return 0
+	end 'outOfRange'
+	return try uc.get(valueId) otherwise 0
+end 'ucGet'
+
+function ucIncrementArray(uc UseCountMap, ids ValueIdArray)
+	for id in ids 'each'
+		ucIncrement(uc, valueId: id)
+	end 'each'
+end 'ucIncrementArray'
+
+function countMlirOpUses(op MlirOp, uc UseCountMap)
+	match op 'dispatch'
+		mir(mirOp) then countMirOpUses(mirOp, uc: uc)
+		cf(cfOp) then countCfOpUses(cfOp, uc: uc)
+		memref(memOp) then match memOp 'mem'
+			storeSlot(_, valueId) then ucIncrement(uc, valueId: valueId)
+			loadSlot then break 'mem'
+		end 'mem'
+		runtime(rtOp) then match rtOp 'rt'
+			printInt(valueId) then ucIncrement(uc, valueId: valueId)
+			drop(valueId) then ucIncrement(uc, valueId: valueId)
+			printLiteral then break 'rt'
+		end 'rt'
+		sys(sysOp) then countSysOpUses(sysOp, uc: uc)
+		maxon to arith then break 'dispatch'
+		func then break 'dispatch'
+		x64 to arm64 then break 'dispatch'
+	end 'dispatch'
+end 'countMlirOpUses'
+
+function ucIncrementTwo(uc UseCountMap, a ValueId, b ValueId)
+	ucIncrement(uc, valueId: a)
+	ucIncrement(uc, valueId: b)
+end 'ucIncrementTwo'
+
+function ucIncrementThree(uc UseCountMap, a ValueId, b ValueId, c ValueId)
+	ucIncrement(uc, valueId: a)
+	ucIncrement(uc, valueId: b)
+	ucIncrement(uc, valueId: c)
+end 'ucIncrementThree'
+
+function ucIncrementIdAndArray(uc UseCountMap, id ValueId, arr ValueIdArray)
+	ucIncrement(uc, valueId: id)
+	ucIncrementArray(uc, ids: arr)
+end 'ucIncrementIdAndArray'
+
+function ucIncrementCondBr(uc UseCountMap, condId ValueId, thenArgs ValueIdArray, elseArgs ValueIdArray)
+	ucIncrement(uc, valueId: condId)
+	ucIncrementArray(uc, ids: thenArgs)
+	ucIncrementArray(uc, ids: elseArgs)
+end 'ucIncrementCondBr'
+
+function countMirOpUses(op MirOp, uc UseCountMap)
+	match op 'count'
+		movImm then break 'count'
+		movReg(_, srcId) then ucIncrement(uc, valueId: srcId)
+		binOp(_, leftId, rightId, _) then ucIncrementTwo(uc, a: leftId, b: rightId)
+		unaryOp(_, operandId, _) then ucIncrement(uc, valueId: operandId)
+		cmp(_, leftId, rightId, _) then ucIncrementTwo(uc, a: leftId, b: rightId)
+		condBranch(condId, _, thenArgs, _, elseArgs) then ucIncrementCondBr(uc, condId: condId, thenArgs: thenArgs, elseArgs: elseArgs)
+		branch(_, args) then ucIncrementArray(uc, ids: args)
+		call(_, _, argIds) then ucIncrementArray(uc, ids: argIds)
+		indirectCall(_, calleeId, argIds) then ucIncrementIdAndArray(uc, id: calleeId, arr: argIds)
+		ret(retValId) then ucIncrement(uc, valueId: retValId)
+		param then break 'count'
+		load(_, baseId, _) then ucIncrement(uc, valueId: baseId)
+		store(valueId, baseId, _) then ucIncrementTwo(uc, a: valueId, b: baseId)
+		stackSlotAddr to globalAddr then break 'count'
+		syscall(_, _, argIds) then ucIncrementArray(uc, ids: argIds)
+		iatCall(_, _, argIds) then ucIncrementArray(uc, ids: argIds)
+		osExit(codeId) then ucIncrement(uc, valueId: codeId)
+		osWrite(ptrId, lenId) then ucIncrementTwo(uc, a: ptrId, b: lenId)
+		memcpy(dstId, srcId, lenId) then ucIncrementThree(uc, a: dstId, b: srcId, c: lenId)
+		storeByte(baseId, offsetId, byteId) then ucIncrementThree(uc, a: baseId, b: offsetId, c: byteId)
+		loadByte(_, baseId, offsetId) then ucIncrementTwo(uc, a: baseId, b: offsetId)
+	end 'count'
+end 'countMirOpUses'
+
+function countCfOpUses(op CfOp, uc UseCountMap)
+	match op 'count'
+		br(_, argIds) then ucIncrementArray(uc, ids: argIds)
+		condBr(condId, _, thenArgIds, _, elseArgIds) then ucIncrementCondBr(uc, condId: condId, thenArgs: thenArgIds, elseArgs: elseArgIds)
+	end 'count'
+end 'countCfOpUses'
+
+function countSysOpUses(op SysOp, uc UseCountMap)
+	match op 'count'
+		syscall(_, _, argIds) then ucIncrementArray(uc, ids: argIds)
+		iatCall(_, _, argIds) then ucIncrementArray(uc, ids: argIds)
+		globalAddr then break 'count'
+		memcpy(dstId, srcId, lenId) then ucIncrementThree(uc, a: dstId, b: srcId, c: lenId)
+		stackAddr then break 'count'
+		storeByte(baseId, offsetId, byteId) then ucIncrementThree(uc, a: baseId, b: offsetId, c: byteId)
+		loadByte(_, baseId, offsetId) then ucIncrementTwo(uc, a: baseId, b: offsetId)
+		osExit(codeId) then ucIncrement(uc, valueId: codeId)
+		osWrite(ptrId, lenId) then ucIncrementTwo(uc, a: ptrId, b: lenId)
+		free(ptrId) then ucIncrement(uc, valueId: ptrId)
+		osWriteErr(ptrId, lenId) then ucIncrementTwo(uc, a: ptrId, b: lenId)
+		loadFramePtr then break 'count'
+		loadIndirect(_, addrId, _) then ucIncrement(uc, valueId: addrId)
+		funcAddr then break 'count'
+	end 'count'
+end 'countSysOpUses'
+
+// Extract the condId from a block's terminator if it is a condBr.
+let NOT_CONDBR = u64.max
+
+function getTerminatorCondId(block MlirBlock) returns ValueId
+	if not block.hasTerminator 'noTerm'
+		return NOT_CONDBR
+	end 'noTerm'
+	return match block.terminator 'check'
+		cf(cfOp) gives match cfOp 'cfCheck'
+			condBr(condId, _, _, _, _) gives condId
+			br gives NOT_CONDBR
+		end 'cfCheck'
+		mir(mirOp) gives match mirOp 'mirCheck'
+			condBranch(condId, _, _, _, _) gives condId
+			movImm to cmp gives NOT_CONDBR
+			branch to loadByte gives NOT_CONDBR
+		end 'mirCheck'
+		maxon to arith gives NOT_CONDBR
+		func to sys gives NOT_CONDBR
+		x64 to arm64 gives NOT_CONDBR
+	end 'check'
+end 'getTerminatorCondId'
+
+// A cmp result is flags-only when it has exactly 1 use and that use is the
+// block's condBr terminator. The condBr reads CPU flags directly via condJump,
+// so the setcc (which materializes the boolean into a register) can be skipped.
+function isFlagsOnly(useCounts UseCountMap, resultId ValueId, condBrCondId ValueId) returns bool
+	return ucGet(useCounts, valueId: resultId) <= 1 and condBrCondId == resultId
+end 'isFlagsOnly'
 
 export function lowerMidToX64(module MlirModule, target Target) returns MlirModule
 	logDebug(LogCategory.mlir, message: () gives "Lowering Mid to X64 dialect")
@@ -106,6 +268,11 @@ function lowerFunctionToX64(srcFunc MlirFunction, osDesc OsDescriptor, allFuncti
 	// Used by lowerIntBinOp to emit addRegImm/subRegImm instead of addRegReg.
 	var constMap = buildConstMap(srcFunc)
 
+	// Build use count map: valueId -> number of reads across the function.
+	// Used to skip setcc when a cmp result is only consumed by condBr (use count == 1
+	// and the block's terminator is a condBr whose condId matches the cmp result).
+	var useCounts = buildUseCountMap(srcFunc)
+
 	// Phase 2: Lower all blocks.
 	for srcBlock in srcFunc.blocks 'eachBlock'
 		var dstBlock = addBlock(dstFunc, label: srcBlock.label)
@@ -119,9 +286,12 @@ function lowerFunctionToX64(srcFunc MlirFunction, osDesc OsDescriptor, allFuncti
 			end 'hasSlot'
 		end 'loadBlockArgs'
 
+		// Identify the condBr's condId so we can skip setcc for flags-only cmp results.
+		let condBrCondId = getTerminatorCondId(srcBlock)
+
 		// Lower each op in the block
 		for op in srcBlock.ops 'eachOp'
-			nextTempSlot = lowerMlirOp(op, dstBlock: dstBlock, osDesc: osDesc, allFunctions: allFunctions, valueSlots: valueSlots, nextTempSlot: nextTempSlot, constMap: constMap)
+			nextTempSlot = lowerMlirOp(op, dstBlock: dstBlock, osDesc: osDesc, allFunctions: allFunctions, valueSlots: valueSlots, nextTempSlot: nextTempSlot, constMap: constMap, useCounts: useCounts, condBrCondId: condBrCondId)
 		end 'eachOp'
 
 		// Lower terminator
@@ -238,10 +408,10 @@ end 'setLastOpAsTerminator'
 // Op dispatch
 // ============================================================
 
-function lowerMlirOp(op MlirOp, dstBlock MlirBlock, osDesc OsDescriptor, allFunctions MlirFunctionArray, valueSlots ValueSlotMap, nextTempSlot SlotIndex, constMap ConstMap) returns SlotIndex
+function lowerMlirOp(op MlirOp, dstBlock MlirBlock, osDesc OsDescriptor, allFunctions MlirFunctionArray, valueSlots ValueSlotMap, nextTempSlot SlotIndex, constMap ConstMap, useCounts UseCountMap, condBrCondId ValueId) returns SlotIndex
 	var result = nextTempSlot
 	match op 'dispatch'
-		mir(mirOp) then result = lowerMirOp(mirOp, dstBlock: dstBlock, osDesc: osDesc, allFunctions: allFunctions, valueSlots: valueSlots, nextTempSlot: nextTempSlot, constMap: constMap)
+		mir(mirOp) then result = lowerMirOp(mirOp, dstBlock: dstBlock, osDesc: osDesc, allFunctions: allFunctions, valueSlots: valueSlots, nextTempSlot: nextTempSlot, constMap: constMap, useCounts: useCounts, condBrCondId: condBrCondId)
 		memref(memOp) then lowerMemRefOp(memOp, dstBlock: dstBlock)
 		runtime(rtOp) then lowerRuntimeOp(rtOp, dstBlock: dstBlock)
 		x64(x64Op) then dstBlock.ops.push(MlirOp.x64(x64Op))
@@ -258,14 +428,14 @@ end 'lowerMlirOp'
 // MIR op lowering — pure virtual register emission
 // ============================================================
 
-function lowerMirOp(op MirOp, dstBlock MlirBlock, osDesc OsDescriptor, allFunctions MlirFunctionArray, valueSlots ValueSlotMap, nextTempSlot SlotIndex, constMap ConstMap) returns SlotIndex
+function lowerMirOp(op MirOp, dstBlock MlirBlock, osDesc OsDescriptor, allFunctions MlirFunctionArray, valueSlots ValueSlotMap, nextTempSlot SlotIndex, constMap ConstMap, useCounts UseCountMap, condBrCondId ValueId) returns SlotIndex
 	var result = nextTempSlot
 	match op 'dispatch'
 		movImm(resultId, value, isFloat) then lowerMovImm(resultId, value: value, isFloat: isFloat, dstBlock: dstBlock)
 		movReg(resultId, srcId) then lowerMovReg(resultId, srcId: srcId, dstBlock: dstBlock)
 		binOp(resultId, leftId, rightId, opcode) then lowerBinOp(resultId, leftId: leftId, rightId: rightId, opcode: opcode, dstBlock: dstBlock, constMap: constMap)
 		unaryOp(resultId, operandId, opcode) then lowerUnaryOp(resultId, operandId: operandId, opcode: opcode, dstBlock: dstBlock)
-		cmp(resultId, leftId, rightId, predicate) then lowerCmp(resultId, leftId: leftId, rightId: rightId, predicate: predicate, dstBlock: dstBlock, constMap: constMap)
+		cmp(resultId, leftId, rightId, predicate) then lowerCmp(resultId, leftId: leftId, rightId: rightId, predicate: predicate, dstBlock: dstBlock, constMap: constMap, useCounts: useCounts, condBrCondId: condBrCondId)
 		condBranch then result = nextTempSlot  // handled as terminator
 		branch then result = nextTempSlot  // handled as terminator
 		call(resultId, callee, argIds) then lowerCall(resultId, callee: callee, argIds: argIds, dstBlock: dstBlock, allFunctions: allFunctions)
@@ -459,14 +629,14 @@ end 'lowerSiToFp'
 // Compare
 // ============================================================
 
-function lowerCmp(resultId ValueId, leftId ValueId, rightId ValueId, predicate MirCmpPredicate, dstBlock MlirBlock, constMap ConstMap)
+function lowerCmp(resultId ValueId, leftId ValueId, rightId ValueId, predicate MirCmpPredicate, dstBlock MlirBlock, constMap ConstMap, useCounts UseCountMap, condBrCondId ValueId)
 	match predicate 'kind'
-		eq to ge then lowerIntCmp(resultId, leftId: leftId, rightId: rightId, predicate: predicate, dstBlock: dstBlock, constMap: constMap)
-		feq to fge then lowerFloatCmp(resultId, leftId: leftId, rightId: rightId, predicate: predicate, dstBlock: dstBlock)
+		eq to ge then lowerIntCmp(resultId, leftId: leftId, rightId: rightId, predicate: predicate, dstBlock: dstBlock, constMap: constMap, useCounts: useCounts, condBrCondId: condBrCondId)
+		feq to fge then lowerFloatCmp(resultId, leftId: leftId, rightId: rightId, predicate: predicate, dstBlock: dstBlock, useCounts: useCounts, condBrCondId: condBrCondId)
 	end 'kind'
 end 'lowerCmp'
 
-function lowerIntCmp(resultId ValueId, leftId ValueId, rightId ValueId, predicate MirCmpPredicate, dstBlock MlirBlock, constMap ConstMap)
+function lowerIntCmp(resultId ValueId, leftId ValueId, rightId ValueId, predicate MirCmpPredicate, dstBlock MlirBlock, constMap ConstMap, useCounts UseCountMap, condBrCondId ValueId)
 	let constVal = constMapGet(constMap, valueId: rightId)
 	if constVal == 0 'testZero'
 		// test reg, reg is shorter and faster than cmp reg, 0
@@ -477,15 +647,20 @@ function lowerIntCmp(resultId ValueId, leftId ValueId, rightId ValueId, predicat
 	end 'useImm' else 'useReg'
 		dstBlock.ops.push(MlirOp.x64(X64Op.cmpRegReg(X64VReg.virtual(leftId), X64VReg.virtual(rightId))))
 	end 'useReg'
-	let condition = predicateToSetcc(predicate)
-	dstBlock.ops.push(MlirOp.x64(X64Op.setcc(X64VReg.virtual(resultId), condition)))
+	// Skip setcc when the sole consumer is a condBr (which reads flags directly).
+	if not isFlagsOnly(useCounts, resultId: resultId, condBrCondId: condBrCondId) 'needsSetcc'
+		let condition = predicateToSetcc(predicate)
+		dstBlock.ops.push(MlirOp.x64(X64Op.setcc(X64VReg.virtual(resultId), condition)))
+	end 'needsSetcc'
 end 'lowerIntCmp'
 
-function lowerFloatCmp(resultId ValueId, leftId ValueId, rightId ValueId, predicate MirCmpPredicate, dstBlock MlirBlock)
+function lowerFloatCmp(resultId ValueId, leftId ValueId, rightId ValueId, predicate MirCmpPredicate, dstBlock MlirBlock, useCounts UseCountMap, condBrCondId ValueId)
 	dstBlock.ops.push(MlirOp.x64(X64Op.ucomisXmm(X64FpVReg.virtual(leftId), X64FpVReg.virtual(rightId), FloatPrecision.f64)))
-	// Materialize the boolean result via setcc
-	let condition = predicateToSetcc(predicate)
-	dstBlock.ops.push(MlirOp.x64(X64Op.setcc(X64VReg.virtual(resultId), condition)))
+	// Skip setcc when the sole consumer is a condBr (which reads flags directly).
+	if not isFlagsOnly(useCounts, resultId: resultId, condBrCondId: condBrCondId) 'needsSetcc'
+		let condition = predicateToSetcc(predicate)
+		dstBlock.ops.push(MlirOp.x64(X64Op.setcc(X64VReg.virtual(resultId), condition)))
+	end 'needsSetcc'
 end 'lowerFloatCmp'
 
 function predicateToSetcc(predicate MirCmpPredicate) returns X64SetccCondition

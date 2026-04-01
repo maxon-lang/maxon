@@ -36,6 +36,15 @@ public class MlirType {
   // Sentinel type for function-typed parameters (higher-order functions)
   public static MlirType Fn { get; } = new("fn", 8);
 
+  public static MlirType? FromSizedName(string name) => name switch {
+    "u8" => U8, "u16" => U16, "u32" => U32, "u64" => U64,
+    "i8" => I8, "i16" => I16, "i32" => I32, "i64" => I64,
+    "f32" => F32, "f64" => F64,
+    _ => null
+  };
+
+  public bool IsFloat => this == F32 || this == F64;
+
   // Bare primitives cannot be used as type arguments in `with` clauses — users must create a ranged typealias first.
   // Excludes bool (I1) since it's already a constrained type.
   public bool IsBarePrimitive => this == I8 || this == I64 || this == F64;
@@ -253,13 +262,37 @@ public class MlirTypeParameterType(string parameterName) : MlirType(parameterNam
 
 /// Represents a primitive type (int, float, byte) with mandatory range constraints.
 /// At the source level this is the alias name (e.g., "Age"); at codegen it lowers to OptimalType.
-public class MlirRangedPrimitiveType(string aliasName, MlirType baseType, double lowerBound, double upperBound, bool upperInclusive)
-    : MlirType(aliasName, ComputeOptimalSize(baseType, lowerBound, upperBound)) {
-  public MlirType BaseType { get; } = baseType;
-  public double LowerBound { get; } = lowerBound;
-  public double UpperBound { get; } = upperBound;
-  public bool UpperInclusive { get; } = upperInclusive;
-  public MlirType OptimalType { get; } = ComputeOptimalType(baseType, lowerBound, upperBound);
+/// Integer bounds use long; float bounds use double.
+public class MlirRangedPrimitiveType : MlirType {
+  public MlirType BaseType { get; }
+  public long IntLower { get; }
+  public long IntUpper { get; }
+  public double FloatLower { get; }
+  public double FloatUpper { get; }
+  public bool UpperInclusive { get; }
+  public MlirType OptimalType { get; }
+
+  /// Constructor for integer-based ranges (int, byte).
+  public MlirRangedPrimitiveType(string aliasName, MlirType baseType, long lower, long upper, bool upperInclusive)
+      : base(aliasName, ComputeOptimalIntType(lower, upper).SizeInBytes) {
+    BaseType = baseType;
+    IntLower = lower;
+    IntUpper = upper;
+    UpperInclusive = upperInclusive;
+    OptimalType = ComputeOptimalIntType(lower, upper);
+  }
+
+  /// Constructor for float-based ranges.
+  public MlirRangedPrimitiveType(string aliasName, MlirType baseType, double lower, double upper, bool upperInclusive)
+      : base(aliasName, baseType.SizeInBytes) {
+    BaseType = baseType;
+    FloatLower = lower;
+    FloatUpper = upper;
+    UpperInclusive = upperInclusive;
+    OptimalType = baseType; // F32 or F64
+  }
+
+  public bool IsFloatBased => BaseType.IsFloat;
 
   /// True when the range is entirely non-negative — derived from OptimalType.
   public new bool IsUnsigned => OptimalType.IsUnsigned;
@@ -268,30 +301,42 @@ public class MlirRangedPrimitiveType(string aliasName, MlirType baseType, double
 
   /// Pick the smallest x86-64-optimal type that can represent the range.
   /// Returns unsigned types (U8/U16/U32/U64) when range is non-negative.
-  /// i16/u16 are storage-only; all arithmetic uses 32-bit ops.
-  private static MlirType ComputeOptimalType(MlirType baseType, double lower, double upper) {
-    if (baseType == F64) return F64;
-    if (baseType == F32) return F32;
-    bool unsigned = lower >= 0;
-    if (lower >= -128 && upper <= 127) return unsigned ? U8 : I8;
-    if (lower >= 0 && upper <= 255) return U8;
-    if (lower >= -32768 && upper <= 32767) return unsigned ? U16 : I16;
-    if (lower >= 0 && upper <= 65535) return U16;
-    if (lower >= -2147483648 && upper <= 2147483647) return unsigned ? U32 : I32;
-    if (lower >= 0 && upper <= 4294967295) return U32;
-    return unsigned ? U64 : I64;
-  }
-
-  private static int ComputeOptimalSize(MlirType baseType, double lower, double upper) {
-    return ComputeOptimalType(baseType, lower, upper).SizeInBytes;
+  private static MlirType ComputeOptimalIntType(long lower, long upper) {
+    if (lower >= 0) {
+      // Unsigned path: compare as unsigned to handle u64.max (-1 as signed)
+      var u = (ulong)upper;
+      if (u <= 127) return U8;
+      if (u <= 255) return U8;
+      if (u <= 32767) return U16;
+      if (u <= 65535) return U16;
+      if (u <= 2147483647) return U32;
+      if (u <= 4294967295) return U32;
+      return U64;
+    }
+    // Signed path
+    if (lower >= -128 && upper <= 127) return I8;
+    if (lower >= -32768 && upper <= 32767) return I16;
+    if (lower >= -2147483648 && upper <= 2147483647) return I32;
+    return I64;
   }
 
   /// Returns true if this type's range is entirely contained within other's range.
   public bool IsSubsetOf(MlirRangedPrimitiveType other) {
     if (BaseType != other.BaseType) return false;
-    var thisUpper = UpperInclusive ? UpperBound : UpperBound - 1;
-    var otherUpper = other.UpperInclusive ? other.UpperBound : other.UpperBound - 1;
-    return LowerBound >= other.LowerBound && thisUpper <= otherUpper;
+    if (IsFloatBased) {
+      var thisUpper = UpperInclusive ? FloatUpper : FloatUpper - 1;
+      var otherUpper = other.UpperInclusive ? other.FloatUpper : other.FloatUpper - 1;
+      return FloatLower >= other.FloatLower && thisUpper <= otherUpper;
+    } else if (IntLower >= 0 && other.IntLower >= 0) {
+      // Both unsigned: compare as unsigned
+      var thisUpper = UpperInclusive ? (ulong)IntUpper : (ulong)IntUpper - 1;
+      var otherUpper = other.UpperInclusive ? (ulong)other.IntUpper : (ulong)other.IntUpper - 1;
+      return (ulong)IntLower >= (ulong)other.IntLower && thisUpper <= otherUpper;
+    } else {
+      var thisUpper = UpperInclusive ? IntUpper : IntUpper - 1;
+      var otherUpper = other.UpperInclusive ? other.IntUpper : other.IntUpper - 1;
+      return IntLower >= other.IntLower && thisUpper <= otherUpper;
+    }
   }
 
   /// Returns the type with the wider range, or null if ranges are incompatible (different base types).
@@ -303,23 +348,42 @@ public class MlirRangedPrimitiveType(string aliasName, MlirType baseType, double
   }
 
   /// True when the range covers the full representable range of the base type,
-  /// making runtime range checks unnecessary. Checks against the base type
-  /// (not the optimal type) because values arrive as full-width base type
-  /// values that could be outside a narrower optimal type's range.
+  /// making runtime range checks unnecessary.
   public bool IsFullBaseRange {
     get {
-      var effectiveUpper = UpperInclusive ? UpperBound : UpperBound - 1;
-      if (BaseType == I64) return LowerBound <= (double)long.MinValue && effectiveUpper >= (double)long.MaxValue;
-      if (BaseType == F64) return LowerBound <= double.MinValue && effectiveUpper >= double.MaxValue;
-      if (BaseType == F32) return LowerBound <= (double)-float.MaxValue && effectiveUpper >= (double)float.MaxValue;
-      if (BaseType == I8) return LowerBound <= 0 && effectiveUpper >= 255;
-      return false;
+      if (IsFloatBased) {
+        var effectiveUpper = UpperInclusive ? FloatUpper : FloatUpper - 1;
+        if (BaseType == F64) return FloatLower <= double.MinValue && effectiveUpper >= double.MaxValue;
+        if (BaseType == F32) return FloatLower <= (double)-float.MaxValue && effectiveUpper >= (double)float.MaxValue;
+        return false;
+      } else {
+        // Check against the base type, not optimal type — values arrive as full-width base type.
+        // Full range means ALL possible bit patterns of the base type are covered.
+        // Both signed (i64.min to i64.max) and unsigned (0 to u64.max) cover all i64 bits.
+        if (BaseType == I64) {
+          var effectiveUpper = UpperInclusive ? IntUpper : IntUpper - 1;
+          // Signed full range
+          if (IntLower <= long.MinValue && effectiveUpper >= long.MaxValue) return true;
+          // Unsigned full range: 0 to u64.max (-1 as signed) covers all bit patterns
+          if (IntLower == 0 && (ulong)effectiveUpper >= ulong.MaxValue) return true;
+          return false;
+        }
+        if (BaseType == I8) {
+          var effectiveUpper = UpperInclusive ? IntUpper : IntUpper - 1;
+          return IntLower <= 0 && effectiveUpper >= 255;
+        }
+        return false;
+      }
     }
   }
 
   public string FormatRange() {
     var upperOp = UpperInclusive ? "to" : "upto";
-    return $"{FormatAsSourceName(BaseType)}({LowerBound} {upperOp} {UpperBound})";
+    if (IsFloatBased)
+      return $"{FormatAsSourceName(BaseType)}({FloatLower} {upperOp} {FloatUpper})";
+    if (IntLower >= 0)
+      return $"{FormatAsSourceName(BaseType)}({(ulong)IntLower} {upperOp} {(ulong)IntUpper})";
+    return $"{FormatAsSourceName(BaseType)}({IntLower} {upperOp} {IntUpper})";
   }
 }
 

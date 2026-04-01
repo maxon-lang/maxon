@@ -1,0 +1,41 @@
+// Test: type-qualified-u64-max
+typealias BigId = int(0 to u64.max)
+
+function getValue() returns BigId
+	return u64.max
+end 'getValue'
+
+function main() returns ExitCode
+	let v = getValue()
+	if v == u64.max 'check'
+		return 0
+	end 'check'
+	return 1
+end 'main'
+---
+ExitCode: 0
+---
+module {
+  func @ranged-typealias.getValue() -> u64 {
+  entry:
+    x86.mov rax, -1
+    x86.ret
+  }
+  func @main() -> u32 {
+  entry:
+    x86.prologue stack_size=16
+    x86.call ranged-typealias.getValue
+    x86.mov rcx, -1
+    x86.cmp rax, rcx
+    x86.jne main.check_0.after
+  check_0:
+    x86.xor rax, rax
+    x86.epilogue
+    x86.ret
+  check_0.after:
+    x86.mov rax, 1
+    x86.epilogue
+    x86.ret
+  }
+}
+---

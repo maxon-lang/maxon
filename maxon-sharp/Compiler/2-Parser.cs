@@ -2928,23 +2928,36 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
           _ => throw new InvalidOperationException()
         };
         Expect(TokenType.LeftParen);
-        var (lower, lowerQualifier) = ParseRangeBound();
         bool upperInclusive;
-        if (Check(TokenType.To)) { Advance(); upperInclusive = true; } else if (Check(TokenType.Upto)) { Advance(); upperInclusive = false; } else throw new CompileError(ErrorCode.ParserExpectedToken, "Expected 'to' or 'upto' in range", Current().Line, Current().Column);
-        var (upper, upperQualifier) = ParseRangeBound();
-        Expect(TokenType.RightParen);
-        if (lower > upper || (lower == upper && !upperInclusive))
-          throw new CompileError(ErrorCode.SemanticTypeMismatch, $"Invalid range: lower bound {lower} must be less than upper bound {upper}", primitiveToken.Line, primitiveToken.Column);
-        // Ranges that span negative and above i64.max are unrepresentable in any single 64-bit type
-        if (baseType != MlirType.F64 && baseType != MlirType.F32 && lower < 0 && upper > (double)long.MaxValue)
-          throw new CompileError(ErrorCode.SemanticTypeMismatch, $"Invalid range: range {lower} to {upper} exceeds any representable integer type", primitiveToken.Line, primitiveToken.Column);
-        // byte ranges must fit within 0..255
-        if (baseType == MlirType.I8 && (lower < 0 || upper > 255))
-          throw new CompileError(ErrorCode.SemanticTypeMismatch, $"Invalid byte range: bounds must be within 0 to u8.max", primitiveToken.Line, primitiveToken.Column);
-        // When both bounds use type qualifiers, they must reference the same type (e.g. i64.min to i64.max, not i32.min to u64.max)
-        if (lowerQualifier != null && upperQualifier != null && lowerQualifier != upperQualifier)
-          throw new CompileError(ErrorCode.SemanticTypeMismatch, $"Mismatched type bounds: '{lowerQualifier}.min' and '{upperQualifier}.max' must reference the same type", primitiveToken.Line, primitiveToken.Column);
-        var rangedType = new MlirRangedPrimitiveType(aliasName, baseType, lower, upper, upperInclusive);
+        MlirRangedPrimitiveType rangedType;
+        if (baseType.IsFloat) {
+          var (lower, lowerQualifier) = ParseFloatRangeBound();
+          if (Check(TokenType.To)) { Advance(); upperInclusive = true; } else if (Check(TokenType.Upto)) { Advance(); upperInclusive = false; } else throw new CompileError(ErrorCode.ParserExpectedToken, "Expected 'to' or 'upto' in range", Current().Line, Current().Column);
+          var (upper, upperQualifier) = ParseFloatRangeBound();
+          Expect(TokenType.RightParen);
+          if (lower > upper || (lower == upper && !upperInclusive))
+            throw new CompileError(ErrorCode.SemanticTypeMismatch, $"Invalid range: lower bound {lower} must be less than upper bound {upper}", primitiveToken.Line, primitiveToken.Column);
+          if (lowerQualifier != null && upperQualifier != null && lowerQualifier != upperQualifier)
+            throw new CompileError(ErrorCode.SemanticTypeMismatch, $"Mismatched type bounds: '{lowerQualifier}.min' and '{upperQualifier}.max' must reference the same type", primitiveToken.Line, primitiveToken.Column);
+          rangedType = new MlirRangedPrimitiveType(aliasName, baseType, lower, upper, upperInclusive);
+        } else {
+          var (lower, lowerQualifier) = ParseIntRangeBound();
+          if (Check(TokenType.To)) { Advance(); upperInclusive = true; } else if (Check(TokenType.Upto)) { Advance(); upperInclusive = false; } else throw new CompileError(ErrorCode.ParserExpectedToken, "Expected 'to' or 'upto' in range", Current().Line, Current().Column);
+          var (upper, upperQualifier) = ParseIntRangeBound();
+          Expect(TokenType.RightParen);
+          // Use unsigned comparison when lower is non-negative (e.g. 0 to u64.max where u64.max is -1 as signed)
+          bool invalidRange = lower >= 0
+            ? (ulong)lower > (ulong)upper || ((ulong)lower == (ulong)upper && !upperInclusive)
+            : lower > upper || (lower == upper && !upperInclusive);
+          if (invalidRange)
+            throw new CompileError(ErrorCode.SemanticTypeMismatch, $"Invalid range: lower bound {lower} must be less than upper bound {upper}", primitiveToken.Line, primitiveToken.Column);
+          // byte ranges must fit within 0..255
+          if (baseType == MlirType.I8 && (lower < 0 || upper > 255))
+            throw new CompileError(ErrorCode.SemanticTypeMismatch, $"Invalid byte range: bounds must be within 0 to u8.max", primitiveToken.Line, primitiveToken.Column);
+          if (lowerQualifier != null && upperQualifier != null && lowerQualifier != upperQualifier)
+            throw new CompileError(ErrorCode.SemanticTypeMismatch, $"Mismatched type bounds: '{lowerQualifier}.min' and '{upperQualifier}.max' must reference the same type", primitiveToken.Line, primitiveToken.Column);
+          rangedType = new MlirRangedPrimitiveType(aliasName, baseType, lower, upper, upperInclusive);
+        }
         _typeRegistry[aliasName] = rangedType;
         _typeAliasSources[aliasName] = primitiveToken.Value;
         // When inside a generic type body, record the alias so each concrete
@@ -3157,9 +3170,9 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
     // E.g., SegmentedPool.Index becomes FunctionPool__Index when aliasName = "FunctionPool".
     foreach (var (innerName, innerRanged) in sourceStruct.InnerRangedAliases) {
       var concreteInnerName = $"{aliasName}__{innerName}";
-      var concreteRanged = new MlirRangedPrimitiveType(
-        concreteInnerName, innerRanged.BaseType,
-        innerRanged.LowerBound, innerRanged.UpperBound, innerRanged.UpperInclusive);
+      var concreteRanged = innerRanged.IsFloatBased
+        ? new MlirRangedPrimitiveType(concreteInnerName, innerRanged.BaseType, innerRanged.FloatLower, innerRanged.FloatUpper, innerRanged.UpperInclusive)
+        : new MlirRangedPrimitiveType(concreteInnerName, innerRanged.BaseType, innerRanged.IntLower, innerRanged.IntUpper, innerRanged.UpperInclusive);
       _typeRegistry[concreteInnerName] = concreteRanged;
       _typeAliasSources[concreteInnerName] = innerRanged.Name;
       // Also register with dot-syntax name for user-facing access (e.g., FunctionPool.Index)
@@ -3234,51 +3247,68 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
     }
   }
 
-  /// Parses a range bound in a ranged typealias: a numeric literal, negative literal, or type.min/type.max.
-  /// Returns the value and the type qualifier name (e.g. "i64") if a type-qualified bound was used, null otherwise.
-  private (double value, string? qualifier) ParseRangeBound() {
-    // type.min / type.max (e.g., u32.max, i8.min)
+  private (long value, string? qualifier) ParseIntRangeBound() {
     if (Check(TokenType.Identifier) && _pos + 2 < _tokens.Count
         && _tokens[_pos + 1].Type == TokenType.Dot
-        && (_tokens[_pos + 2].Value == "min" || _tokens[_pos + 2].Value == "max")
-        && IsSizedTypeName(Current().Value)) {
-      var typeName = Advance().Value;
-      Advance(); // consume dot
-      var keyword = Advance().Value;
-      return (ResolveTypeBound(typeName, keyword), typeName);
+        && (_tokens[_pos + 2].Value == "min" || _tokens[_pos + 2].Value == "max")) {
+      var sizedType = MlirType.FromSizedName(Current().Value);
+      if (sizedType != null && !sizedType.IsFloat) {
+        var typeName = Advance().Value;
+        Advance(); // consume dot
+        var keyword = Advance().Value;
+        return (ResolveIntTypeBound(sizedType, keyword), typeName);
+      }
+    }
+    if (TryParseSignedNumericLiteral(out var num, "Expected numeric literal in range bound"))
+      return (num.IntValue, null);
+    throw new CompileError(ErrorCode.ParserExpectedToken, "Expected numeric literal, 'min', 'max', or 'type.min'/'type.max' in range bound", Current().Line, Current().Column);
+  }
+
+  private (double value, string? qualifier) ParseFloatRangeBound() {
+    if (Check(TokenType.Identifier) && _pos + 2 < _tokens.Count
+        && _tokens[_pos + 1].Type == TokenType.Dot
+        && (_tokens[_pos + 2].Value == "min" || _tokens[_pos + 2].Value == "max")) {
+      var sizedType = MlirType.FromSizedName(Current().Value);
+      if (sizedType != null && sizedType.IsFloat) {
+        var typeName = Advance().Value;
+        Advance(); // consume dot
+        var keyword = Advance().Value;
+        return (ResolveFloatTypeBound(sizedType, keyword), typeName);
+      }
     }
     if (TryParseSignedNumericLiteral(out var num, "Expected numeric literal in range bound"))
       return (num.AsDouble, null);
     throw new CompileError(ErrorCode.ParserExpectedToken, "Expected numeric literal, 'min', 'max', or 'type.min'/'type.max' in range bound", Current().Line, Current().Column);
   }
 
-  private static bool IsSizedTypeName(string name) => name is
-    "u8" or "u16" or "u32" or "u64" or
-    "i8" or "i16" or "i32" or "i64" or
-    "f32" or "f64";
+  private static bool IsSizedTypeName(string name) => MlirType.FromSizedName(name) != null;
 
-  private static double ResolveTypeBound(string typeName, string keyword) => (typeName, keyword) switch {
-    ("i64", "min") => (double)long.MinValue,
-    ("i64", "max") => (double)long.MaxValue,
-    ("f64", "min") => double.MinValue,
-    ("f64", "max") => double.MaxValue,
-    ("f32", "min") => (double)-float.MaxValue,
-    ("f32", "max") => (double)float.MaxValue,
-    ("u8", "min") => 0,
-    ("u8", "max") => 255,
-    ("u16", "min") => 0,
-    ("u16", "max") => 65535,
-    ("u32", "min") => 0,
-    ("u32", "max") => 4294967295,
-    ("u64", "min") => 0,
-    ("u64", "max") => (double)ulong.MaxValue,
-    ("i8", "min") => -128,
-    ("i8", "max") => 127,
-    ("i16", "min") => -32768,
-    ("i16", "max") => 32767,
-    ("i32", "min") => -2147483648,
-    ("i32", "max") => 2147483647,
-    _ => throw new InvalidOperationException($"Unknown type bound: {typeName}.{keyword}")
+  private static long ResolveIntTypeBound(MlirType type, string keyword) => (type, keyword) switch {
+    _ when type == MlirType.U8 && keyword == "min" => 0,
+    _ when type == MlirType.U8 && keyword == "max" => 255,
+    _ when type == MlirType.U16 && keyword == "min" => 0,
+    _ when type == MlirType.U16 && keyword == "max" => 65535,
+    _ when type == MlirType.U32 && keyword == "min" => 0,
+    _ when type == MlirType.U32 && keyword == "max" => 4294967295,
+    _ when type == MlirType.U64 && keyword == "min" => 0,
+    _ when type == MlirType.U64 && keyword == "max" => unchecked((long)ulong.MaxValue),
+    _ when type == MlirType.I8 && keyword == "min" => -128,
+    _ when type == MlirType.I8 && keyword == "max" => 127,
+    _ when type == MlirType.I16 && keyword == "min" => -32768,
+    _ when type == MlirType.I16 && keyword == "max" => 32767,
+    _ when type == MlirType.I32 && keyword == "min" => -2147483648,
+    _ when type == MlirType.I32 && keyword == "max" => 2147483647,
+    _ when type == MlirType.I64 && keyword == "min" => long.MinValue,
+    _ when type == MlirType.I64 && keyword == "max" => long.MaxValue,
+    _ => throw new InvalidOperationException($"Unknown int type bound: {type.Name}.{keyword}")
+  };
+
+  private static double ResolveFloatTypeBound(MlirType type, string keyword) => (type, keyword) switch {
+    _ when type == MlirType.F64 && keyword == "min" => double.MinValue,
+    _ when type == MlirType.F64 && keyword == "max" => double.MaxValue,
+    _ when type == MlirType.F32 && keyword == "min" => -float.MaxValue,
+    _ when type == MlirType.F32 && keyword == "max" => float.MaxValue,
+    _ => throw new InvalidOperationException($"Unknown float type bound: {type.Name}.{keyword}")
   };
 
   private void PreScanInstanceMethod(MlirModule<MaxonOp> module, string typeName, bool isExported = false) {
@@ -3599,14 +3629,42 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
         var innerVal = EvalConstExpr(decls, evaluated, evaluating);
         Expect(TokenType.RightBrace);
         // Validate range at compile time
-        double numericVal = innerVal is long lv ? (double)lv : innerVal is double dv ? dv : throw new CompileError(
-          ErrorCode.SemanticTypeMismatch, $"Cannot construct '{rangedConst.Name}' from non-numeric value", token.Line, token.Column);
-        var upperLimit = rangedConst.UpperInclusive ? rangedConst.UpperBound : rangedConst.UpperBound - 1;
-        if (numericVal < rangedConst.LowerBound || numericVal > upperLimit) {
-          throw new CompileError(ErrorCode.SemanticTypeMismatch,
-            $"Value {innerVal} is outside the range of '{rangedConst.Name}' ({rangedConst.FormatRange()})", token.Line, token.Column);
+        if (rangedConst.IsFloatBased) {
+          double numericVal = innerVal is long lv ? (double)lv : innerVal is double dv ? dv : throw new CompileError(
+            ErrorCode.SemanticTypeMismatch, $"Cannot construct '{rangedConst.Name}' from non-numeric value", token.Line, token.Column);
+          var upperLimit = rangedConst.UpperInclusive ? rangedConst.FloatUpper : rangedConst.FloatUpper - 1;
+          if (numericVal < rangedConst.FloatLower || numericVal > upperLimit) {
+            throw new CompileError(ErrorCode.SemanticTypeMismatch,
+              $"Value {innerVal} is outside the range of '{rangedConst.Name}' ({rangedConst.FormatRange()})", token.Line, token.Column);
+          }
+        } else {
+          long numericVal = innerVal is long lv ? lv : throw new CompileError(
+            ErrorCode.SemanticTypeMismatch, $"Cannot construct '{rangedConst.Name}' from non-integer value", token.Line, token.Column);
+          bool constOutOfRange;
+          if (rangedConst.IntLower >= 0) {
+            var upperLimit = rangedConst.UpperInclusive ? (ulong)rangedConst.IntUpper : (ulong)rangedConst.IntUpper - 1;
+            constOutOfRange = (ulong)numericVal < (ulong)rangedConst.IntLower || (ulong)numericVal > upperLimit;
+          } else {
+            var upperLimit = rangedConst.UpperInclusive ? rangedConst.IntUpper : rangedConst.IntUpper - 1;
+            constOutOfRange = numericVal < rangedConst.IntLower || numericVal > upperLimit;
+          }
+          if (constOutOfRange) {
+            throw new CompileError(ErrorCode.SemanticTypeMismatch,
+              $"Value {innerVal} is outside the range of '{rangedConst.Name}' ({rangedConst.FormatRange()})", token.Line, token.Column);
+          }
         }
         return innerVal;
+      }
+      // Handle sized type bound: u64.max, i32.min, etc.
+      if (Check(TokenType.Dot) && _pos + 1 < _tokens.Count && _tokens[_pos + 1].Value is "min" or "max") {
+        var sizedType = MlirType.FromSizedName(token.Value);
+        if (sizedType != null) {
+          Advance(); // consume '.'
+          var keyword = Advance().Value; // consume 'min' or 'max'
+          if (sizedType.IsFloat)
+            return ResolveFloatTypeBound(sizedType, keyword);
+          return ResolveIntTypeBound(sizedType, keyword);
+        }
       }
       // Handle enum constant: EnumType.caseName
       if (Check(TokenType.Dot) && _typeRegistry.TryGetValue(token.Value, out var constType) && constType is MlirEnumType constEnumType) {
@@ -10484,16 +10542,15 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
         var qualifiedName = $"{token.Value}.{PeekNext().Value}";
 
         // Check for sized type bound: u64.max, i32.min, etc.
-        if (IsSizedTypeName(token.Value) && PeekNext().Value is "min" or "max") {
-          Advance(); // consume '.'
-          var keyword = Advance().Value; // consume 'min' or 'max'
-          var boundValue = ResolveTypeBound(token.Value, keyword);
-          if (token.Value is "f32" or "f64")
-            return EmitConstantLiteral(boundValue);
-          // Integer types: clamp to i64 range (u64.max maps to i64.max)
-          if (boundValue > (double)long.MaxValue) boundValue = (double)long.MaxValue;
-          if (boundValue < (double)long.MinValue) boundValue = (double)long.MinValue;
-          return EmitConstantLiteral((long)boundValue);
+        if (PeekNext().Value is "min" or "max") {
+          var sizedType = MlirType.FromSizedName(token.Value);
+          if (sizedType != null) {
+            Advance(); // consume '.'
+            var keyword = Advance().Value; // consume 'min' or 'max'
+            if (sizedType.IsFloat)
+              return EmitConstantLiteral(ResolveFloatTypeBound(sizedType, keyword));
+            return EmitConstantLiteral(ResolveIntTypeBound(sizedType, keyword));
+          }
         }
 
         // Check for builtin managed type static methods
@@ -11792,16 +11849,27 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
   private MaxonValue ValidateAndEmitRangeCheck(MaxonValue value, MlirRangedPrimitiveType rangedType, MaxonValueKind expectedKind, Token errorToken) {
     bool isLiteral = false;
     if (_currentBlock!.Operations.LastOrDefault() is MaxonLiteralOp litOp && litOp.Result == value) {
-      double numericValue = litOp.ValueKind switch {
-        MaxonValueKind.Integer => (double)litOp.IntValue,
-        MaxonValueKind.Float or MaxonValueKind.Float32 => litOp.FloatValue,
-        MaxonValueKind.Byte => (double)litOp.IntValue,
-        _ => double.NaN
-      };
-      if (!double.IsNaN(numericValue)) {
+      if (rangedType.IsFloatBased) {
+        if (litOp.ValueKind is MaxonValueKind.Float or MaxonValueKind.Float32) {
+          isLiteral = true;
+          var upperLimit = rangedType.UpperInclusive ? rangedType.FloatUpper : rangedType.FloatUpper - 1;
+          if (litOp.FloatValue < rangedType.FloatLower || litOp.FloatValue > upperLimit) {
+            throw new CompileError(ErrorCode.SemanticTypeMismatch,
+              $"Value {litOp.FloatValue} is outside the range of '{rangedType.Name}' ({rangedType.FormatRange()})",
+              errorToken.Line, errorToken.Column);
+          }
+        }
+      } else if (litOp.ValueKind is MaxonValueKind.Integer or MaxonValueKind.Byte) {
         isLiteral = true;
-        var upperLimit = rangedType.UpperInclusive ? rangedType.UpperBound : rangedType.UpperBound - 1;
-        if (numericValue < rangedType.LowerBound || numericValue > upperLimit) {
+        bool outOfRange;
+        if (rangedType.IntLower >= 0) {
+          var upperLimit = rangedType.UpperInclusive ? (ulong)rangedType.IntUpper : (ulong)rangedType.IntUpper - 1;
+          outOfRange = (ulong)litOp.IntValue < (ulong)rangedType.IntLower || (ulong)litOp.IntValue > upperLimit;
+        } else {
+          var upperLimit = rangedType.UpperInclusive ? rangedType.IntUpper : rangedType.IntUpper - 1;
+          outOfRange = litOp.IntValue < rangedType.IntLower || litOp.IntValue > upperLimit;
+        }
+        if (outOfRange) {
           throw new CompileError(ErrorCode.SemanticTypeMismatch,
             $"Value {litOp.IntValue} is outside the range of '{rangedType.Name}' ({rangedType.FormatRange()})",
             errorToken.Line, errorToken.Column);
@@ -11826,21 +11894,25 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
     // For comparisons, use the appropriate float kind or Integer for int/byte
     var cmpKind = kind is MaxonValueKind.Float or MaxonValueKind.Float32 ? kind : MaxonValueKind.Integer;
 
-    bool isFloatBase = rangedType.BaseType == MlirType.F64 || rangedType.BaseType == MlirType.F32;
-    bool needsLowerCheck = !isFloatBase
-      ? rangedType.LowerBound > (double)long.MinValue
-      : rangedType.LowerBound > double.MinValue;
-    bool needsUpperCheck = !isFloatBase
-      ? rangedType.UpperBound < (double)long.MaxValue
-      : rangedType.UpperBound < double.MaxValue;
+    bool needsLowerCheck, needsUpperCheck;
+    if (rangedType.IsFloatBased) {
+      needsLowerCheck = rangedType.FloatLower > double.MinValue;
+      needsUpperCheck = rangedType.FloatUpper < double.MaxValue;
+    } else {
+      // Values arrive as signed i64, so comparisons are signed.
+      // Upper bound: u64.max (-1 as signed) means no upper check is possible
+      // in signed arithmetic — the range effectively caps at i64.max.
+      needsLowerCheck = rangedType.IntLower > long.MinValue;
+      needsUpperCheck = rangedType.IntUpper >= 0 && rangedType.IntUpper < long.MaxValue;
+    }
 
     MaxonValue? outOfRange = null;
 
     // Emit lower bound check: value < lowerBound
     if (needsLowerCheck) {
-      MaxonLiteralOp lowerLit = rangedType.BaseType == MlirType.F64
-        ? new MaxonLiteralOp(rangedType.LowerBound)
-        : new MaxonLiteralOp((long)rangedType.LowerBound);
+      MaxonLiteralOp lowerLit = rangedType.IsFloatBased
+        ? new MaxonLiteralOp(rangedType.FloatLower)
+        : new MaxonLiteralOp(rangedType.IntLower);
       _currentBlock!.AddOp(lowerLit);
       var cmpLower = new MaxonBinOp(MaxonBinOperator.Lt, value, lowerLit.Result, cmpKind);
       _currentBlock!.AddOp(cmpLower);
@@ -11850,9 +11922,9 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
     // Emit upper bound check: value > upperBound (or value >= for upto)
     if (needsUpperCheck) {
       var upperOp = rangedType.UpperInclusive ? MaxonBinOperator.Gt : MaxonBinOperator.Ge;
-      MaxonLiteralOp upperLit = rangedType.BaseType == MlirType.F64
-        ? new MaxonLiteralOp(rangedType.UpperBound)
-        : new MaxonLiteralOp((long)rangedType.UpperBound);
+      MaxonLiteralOp upperLit = rangedType.IsFloatBased
+        ? new MaxonLiteralOp(rangedType.FloatUpper)
+        : new MaxonLiteralOp(rangedType.IntUpper);
       _currentBlock!.AddOp(upperLit);
       var cmpUpper = new MaxonBinOp(upperOp, value, upperLit.Result, cmpKind);
       _currentBlock!.AddOp(cmpUpper);

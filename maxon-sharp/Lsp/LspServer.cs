@@ -680,34 +680,39 @@ public class LspServer {
 
   private static string FormatRangedType(MlirRangedPrimitiveType ranged) {
     var baseName = ranged.BaseType.Name;
-    var lower = FormatRangeBound(ranged.LowerBound);
-    var upper = FormatRangeBound(ranged.UpperBound);
-    return $"{baseName}({lower} to {upper})";
+    if (ranged.IsFloatBased) {
+      var lower = FormatFloatRangeBound(ranged.FloatLower);
+      var upper = FormatFloatRangeBound(ranged.FloatUpper);
+      return $"{baseName}({lower} to {upper})";
+    } else {
+      var lower = FormatIntRangeBound(ranged.IntLower);
+      var upper = FormatIntRangeBound(ranged.IntUpper);
+      return $"{baseName}({lower} to {upper})";
+    }
   }
 
-  private static string FormatRangeBound(double value) {
-    // Show well-known bounds as type qualifiers
-    if (value == 0) return "0";
-    if (value == 255) return "u8.max";
-    if (value == 127) return "i8.max";
-    if (value == -128) return "i8.min";
-    if (value == 65535) return "u16.max";
-    if (value == 32767) return "i16.max";
-    if (value == -32768) return "i16.min";
-    if (value == 4294967295) return "u32.max";
-    if (value == 2147483647) return "i32.max";
-    if (value == -2147483648) return "i32.min";
-    if (value == 18446744073709551615.0) return "u64.max";
-    if (value == 9223372036854775807.0) return "i64.max";
-    if (value == -9223372036854775808.0) return "i64.min";
-    // For float bounds
+  private static string FormatIntRangeBound(long value) => value switch {
+    0 => "0",
+    255 => "u8.max",
+    127 => "i8.max",
+    -128 => "i8.min",
+    65535 => "u16.max",
+    32767 => "i16.max",
+    -32768 => "i16.min",
+    4294967295 => "u32.max",
+    2147483647 => "i32.max",
+    -2147483648 => "i32.min",
+    long.MaxValue => "i64.max",
+    long.MinValue => "i64.min",
+    -1 when value == unchecked((long)ulong.MaxValue) => "u64.max",
+    _ => value.ToString()
+  };
+
+  private static string FormatFloatRangeBound(double value) {
     if (value == double.MaxValue) return "f64.max";
     if (value == double.MinValue) return "f64.min";
     if (value == float.MaxValue) return "f32.max";
-    if (value == float.MinValue) return "f32.min";
-    // Fallback: format as integer if whole number, else as float
-    if (value == Math.Floor(value) && !double.IsInfinity(value))
-      return ((long)value).ToString();
+    if (value == -float.MaxValue) return "f32.min";
     return value.ToString();
   }
 

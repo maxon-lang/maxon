@@ -8,7 +8,7 @@ export typealias RegIntArray = Array with RegInt
 export typealias RegOrdinal = int(i64.min to i64.max)
 
 export let RM_NONE = -1
-export let RM_NO_STACK_HOME = -9223372036854775807
+export let RM_NO_STACK_HOME = -i64.max
 
 // Per-value state: consolidates all value-indexed register allocator fields.
 export type ValueInfo
@@ -415,7 +415,7 @@ end 'rmRelocateRegister'
 
 function rmFindLruRegister(state RegState, protect1 RegOrdinal, protect2 RegOrdinal, requireConstant bool, requireStackHome bool) returns RegOrdinal
 	var bestReg = RM_NONE
-	var bestLastUsed = 9223372036854775807
+	var bestLastUsed = i64.max
 
 	var i = 0
 	while i < state.gprPoolSize 'scan'
@@ -659,7 +659,7 @@ export function rmAllocateFpRegister(state RegState, valueId RegInt, dstBlock Ml
 
 	// All FP registers occupied — spill LRU
 	var bestFp = RM_NONE
-	var bestLU = 9223372036854775807
+	var bestLU = i64.max
 	i = 0
 	while i < state.fpPoolSize 'findLru'
 		let fpOrd = try state.fpPool.get(i) otherwise 'skip2'
@@ -996,7 +996,8 @@ export function rmSpillAllBeforeTerminator(state RegState, dstBlock MlirBlock)
 		let occupant = rmGetOr(state.registerContents, index: regOrd, fallback: RM_NONE)
 		if occupant != RM_NONE 'occupied'
 			var occInfo = rmGetValueInfo(state, valueId: occupant)
-			if occInfo.stackHome == RM_NO_STACK_HOME and not occInfo.isConstant 'needsSpill'
+			// Skip dead values (remainingUses == 0) — no successor will read them.
+			if occInfo.stackHome == RM_NO_STACK_HOME and not occInfo.isConstant and occInfo.remainingUses > 0 'needsSpill'
 				let spillSlot = rmAllocateSpillSlot(state)
 				targetEmitSpill(state, dstBlock: dstBlock, regOrdinal: regOrd, stackOffset: spillSlot)
 				occInfo.stackHome = spillSlot
@@ -1013,7 +1014,8 @@ export function rmSpillAllBeforeTerminator(state RegState, dstBlock MlirBlock)
 		let fpOccupant = rmGetOr(state.fpContents, index: fpOrd, fallback: RM_NONE)
 		if fpOccupant != RM_NONE 'fpOccupied'
 			var fpOccInfo = rmGetValueInfo(state, valueId: fpOccupant)
-			if fpOccInfo.fpStackHome == RM_NO_STACK_HOME 'fpNeedsSpill'
+			// Skip dead FP values too.
+			if fpOccInfo.fpStackHome == RM_NO_STACK_HOME and fpOccInfo.remainingUses > 0 'fpNeedsSpill'
 				let fpSpillSlot = rmAllocateSpillSlot(state)
 				targetEmitSpillFp(state, dstBlock: dstBlock, fpOrdinal: fpOrd, stackOffset: fpSpillSlot)
 				fpOccInfo.fpStackHome = fpSpillSlot
@@ -1034,7 +1036,8 @@ export function rmResetForBlockTransition(state RegState, prevBlock MlirBlock)
 		let occupant = rmGetOr(state.registerContents, index: regOrd, fallback: RM_NONE)
 		if occupant != RM_NONE 'occupied'
 			var occInfo = rmGetValueInfo(state, valueId: occupant)
-			if occInfo.stackHome == RM_NO_STACK_HOME and not occInfo.isConstant 'needsSpill'
+			// Skip dead values (remainingUses == 0) — no successor will read them.
+			if occInfo.stackHome == RM_NO_STACK_HOME and not occInfo.isConstant and occInfo.remainingUses > 0 'needsSpill'
 				let spillSlot = rmAllocateSpillSlot(state)
 				targetEmitSpill(state, dstBlock: prevBlock, regOrdinal: regOrd, stackOffset: spillSlot)
 				occInfo.stackHome = spillSlot
@@ -1053,7 +1056,8 @@ export function rmResetForBlockTransition(state RegState, prevBlock MlirBlock)
 		let fpOccupant = rmGetOr(state.fpContents, index: fpOrd, fallback: RM_NONE)
 		if fpOccupant != RM_NONE 'fpOccupied'
 			var fpOccInfo = rmGetValueInfo(state, valueId: fpOccupant)
-			if fpOccInfo.fpStackHome == RM_NO_STACK_HOME 'fpNeedsSpill'
+			// Skip dead FP values too.
+			if fpOccInfo.fpStackHome == RM_NO_STACK_HOME and fpOccInfo.remainingUses > 0 'fpNeedsSpill'
 				let fpSpillSlot = rmAllocateSpillSlot(state)
 				targetEmitSpillFp(state, dstBlock: prevBlock, fpOrdinal: fpOrd, stackOffset: fpSpillSlot)
 				fpOccInfo.fpStackHome = fpSpillSlot
