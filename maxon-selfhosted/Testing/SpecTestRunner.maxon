@@ -2,11 +2,19 @@
 // Parses spec files, generates fragments, and runs tests.
 // Uses the fragment-based pipeline matching the C# test runner.
 
-let whitelist = ["basics", "print-function", "variables", "arithmetic", "float-type", "panic", "range-check-panic", "assignment", "comparison-operators"]
+let whitelist = ["basics",
+	"print-function",
+	"variables",
+	"arithmetic",
+	"float-type",
+	"panic",
+	"range-check-panic",
+	"assignment",
+	"comparison-operators",
+	"expressions",
+]
 
 // ## Easiest (Simple Compiler Changes)
-// comparison-operators.md - Comparison operators (likely already working)
-// expressions.md - Basic expression evaluation (likely already working)
 // function-declaration.md - Function declarations (already working)
 // if-statements.md - If/else control flow (likely already working)
 // int-type.md - Basic integer type (already working)
@@ -152,12 +160,23 @@ function buildRunCommand(outputPath FilePath, target Target, projectRoot FilePat
 	return dockerCmd
 end 'buildRunCommand'
 
-// Check if a fragment file needs regeneration (missing or older than spec file).
-function isFragmentStale(fragmentPath FilePath, specModifiedTime Timestamp) returns bool
+// Returns the compiler executable's modification time, or max timestamp if it can't be determined.
+function getCompilerModifiedTime() returns Timestamp
+	let exePath = try FilePath.from(CommandLine.executablePath()) otherwise 'noPath'
+		return u64.max as Timestamp
+	end 'noPath'
+	let info = try File.info(exePath) otherwise 'noInfo'
+		return u64.max as Timestamp
+	end 'noInfo'
+	return info.modifiedTime
+end 'getCompilerModifiedTime'
+
+// Check if a fragment file needs regeneration (missing, older than spec file, or older than compiler).
+function isFragmentStale(fragmentPath FilePath, specModifiedTime Timestamp, compilerModifiedTime Timestamp) returns bool
 	let fragInfo = try File.info(fragmentPath) otherwise 'noFile'
 		return true
 	end 'noFile'
-	return fragInfo.modifiedTime <= specModifiedTime
+	return fragInfo.modifiedTime <= specModifiedTime or fragInfo.modifiedTime <= compilerModifiedTime
 end 'isFragmentStale'
 
 // Compile a test and capture its lowering trace log. Returns empty string on failure.
@@ -239,6 +258,10 @@ export function runAllSpecTests(filter String, target Target, updateRequired boo
 		updateAllRequiredLowering(specDir, tempDir: tempDir, filter: filter, target: target, targetKey: targetKey)
 	end 'preUpdate'
 
+	// Get compiler modification time so fragments are regenerated when the compiler changes.
+	// Falls back to max timestamp to force regeneration if the path can't be resolved.
+	let compilerMtime = getCompilerModifiedTime()
+
 	var totalPassed = 0
 	var totalFailed = 0
 	var totalTests = 0
@@ -282,9 +305,9 @@ export function runAllSpecTests(filter String, target Target, updateRequired boo
 
 			totalTests = totalTests + 1
 
-			// Generate fragment only if stale (missing or older than spec file)
+			// Generate fragment only if stale (missing, older than spec file, or older than compiler)
 			let fragPath = fragmentDir.join(specName).join("{test.name}.test")
-			if isFragmentStale(fragPath, specModifiedTime: specMtime) 'stale'
+			if isFragmentStale(fragPath, specModifiedTime: specMtime, compilerModifiedTime: compilerMtime) 'stale'
 				writeFragment(fragmentDir, specName: specName, test: test, compileIr: "")
 				totalFragmentsWritten = totalFragmentsWritten + 1
 			end 'stale'

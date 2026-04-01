@@ -42,6 +42,14 @@ function newBlock(func MlirFunction, label ByteArray) returns MlirBlock
 	return addBlock(func, label: label)
 end 'newBlock'
 
+// Create a block that is not added to the function's block list.
+// Used as a sink for dead code after fully-terminated if/else branches.
+function newDetachedBlock(func MlirFunction) returns MlirBlock
+	let id = func.nextBlockId
+	func.nextBlockId = func.nextBlockId + 1
+	return createMlirBlock(id, label: b"dead")
+end 'newDetachedBlock'
+
 // --- Pure number parsing ---
 
 // Convert a decimal float string (e.g. "3.14", "1.5e2", "2.0e-3") to IEEE 754 double raw bits.
@@ -489,6 +497,22 @@ type Parser
 		let zeroId = emitLiteral(block, value: 0, isFloat: false)
 		finalizeBlock(block, terminator: MlirOp.maxon(MaxonOp.ret(zeroId)))
 	end 'emitImplicitReturn'
+
+	// Finalize an if/else by emitting the condBr and returning either a
+	// detached block (both branches terminated) or a new merge block.
+	function finalizeIfElse(func MlirFunction, condBlock MlirBlock, condValueId ValueId, thenBlock MlirBlock, thenExit MlirBlock, elseBlock MlirBlock, elseExit MlirBlock, baseLabel ByteArray) returns MlirBlock
+		finalizeBlock(condBlock, terminator: MlirOp.maxon(MaxonOp.condBr(condValueId, thenBlock.id, elseBlock.id)))
+		if thenExit.hasTerminator and elseExit.hasTerminator 'bothTerminated'
+			return newDetachedBlock(func)
+		end 'bothTerminated'
+		var mergeLabel = ByteArray{}
+		mergeLabel.append(baseLabel)
+		mergeLabel.append(b".merge")
+		var mergeBlock = newBlock(func, label: mergeLabel)
+		branchIfNeeded(thenExit, target: mergeBlock.id)
+		branchIfNeeded(elseExit, target: mergeBlock.id)
+		return mergeBlock
+	end 'finalizeIfElse'
 
 	function branchIfNeeded(block MlirBlock, target BlockId)
 		if not block.hasTerminator 'needsBranch'
@@ -965,66 +989,69 @@ type Parser
 		// Parse condition expression (emits ops to current block)
 		let condResult = parseExpression(block)
 
-		// Skip block label after condition
+		// Capture the user's block label for deriving block names
+		var userLabel = b"if"
 		if at(TokenKind.stringLiteral) 'hasThenLabel'
-			expect(TokenKind.stringLiteral)
+			userLabel = peek().value
+			advance()
 		end 'hasThenLabel'
 		skipNewlines()
 
-		// Create blocks for the branches
-		var thenBlock = newBlock(func, label: b"then")
-		var elseBlock = newBlock(func, label: b"else")
-		var mergeBlock = newBlock(func, label: b"merge")
+		// Create then block — its ID provides a unique suffix for all derived labels
+		var thenBlock = newBlock(func, label: userLabel)
+		var baseLabel = ByteArray{}
+		baseLabel.append(userLabel)
+		baseLabel.push(0x5F) // '_'
+		baseLabel.append(intToBytes(thenBlock.id))
+		thenBlock.label = baseLabel
 
-		// Finalize the condition block with a conditional branch
-		finalizeBlock(block, terminator: MlirOp.maxon(MaxonOp.condBr(condResult.valueId, thenBlock.id, elseBlock.id)))
-
-		// Parse then block
+		// Parse then block body
 		let thenExit = parseScopedStatements(func, block: thenBlock)
-
-		// Branch to merge if then block doesn't already have a terminator
-		branchIfNeeded(thenExit, target: mergeBlock.id)
 
 		// Skip 'end' and label
 		skipEndAndLabel()
 		skipNewlines()
 
-		// Check for else
-		var hasElse = false
-
-		if at(TokenKind.else) 'isElse'
-			hasElse = true
+		// Check for else clause
+		if at(TokenKind.else) 'hasElse'
 			expect(TokenKind.else)
+
+			// Derive else label from the base label
+			var elseLabel = ByteArray{}
+			elseLabel.append(baseLabel)
+			elseLabel.append(b".else")
 
 			// Check for 'else if' chain
 			if at(TokenKind.if) 'isElseIf'
-				// Recurse into parseIfStatement for the chained if, starting from elseBlock
+				var elseBlock = newBlock(func, label: elseLabel)
 				let elseIfExit = parseIfStatement(func, block: elseBlock)
-				// After the recursive if, branch to merge if not terminated
-				branchIfNeeded(elseIfExit, target: mergeBlock.id)
+				return finalizeIfElse(func, condBlock: block, condValueId: condResult.valueId, thenBlock: thenBlock, thenExit: thenExit, elseBlock: elseBlock, elseExit: elseIfExit, baseLabel: baseLabel)
 			end 'isElseIf' else 'plainElse'
-				// Skip else block label
+				// Capture the else block label if present, otherwise use derived name
 				if at(TokenKind.stringLiteral) 'hasElseLabel'
-					expect(TokenKind.stringLiteral)
+					elseLabel = ByteArray{}
+					elseLabel.append(peek().value)
+					elseLabel.push(0x5F) // '_'
+					elseLabel.append(intToBytes(func.nextBlockId))
+					advance()
 				end 'hasElseLabel'
 				skipNewlines()
 
-				// Parse else block
+				var elseBlock = newBlock(func, label: elseLabel)
 				let elseExit = parseScopedStatements(func, block: elseBlock)
-
-				branchIfNeeded(elseExit, target: mergeBlock.id)
-
-				// Skip 'end' and label
 				skipEndAndLabel()
+				return finalizeIfElse(func, condBlock: block, condValueId: condResult.valueId, thenBlock: thenBlock, thenExit: thenExit, elseBlock: elseBlock, elseExit: elseExit, baseLabel: baseLabel)
 			end 'plainElse'
-		end 'isElse'
+		end 'hasElse'
 
-		if not hasElse 'noElseBlock'
-			// No else: else block branches straight to merge
-			finalizeBlock(elseBlock, terminator: MlirOp.maxon(MaxonOp.br(mergeBlock.id)))
-		end 'noElseBlock'
-
-		return mergeBlock
+		// No else clause: false branch goes directly to after block
+		var afterLabel = ByteArray{}
+		afterLabel.append(baseLabel)
+		afterLabel.append(b".after")
+		var afterBlock = newBlock(func, label: afterLabel)
+		branchIfNeeded(thenExit, target: afterBlock.id)
+		finalizeBlock(block, terminator: MlirOp.maxon(MaxonOp.condBr(condResult.valueId, thenBlock.id, afterBlock.id)))
+		return afterBlock
 	end 'parseIfStatement'
 
 	// --- While statement ---

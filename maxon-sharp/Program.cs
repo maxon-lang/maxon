@@ -138,14 +138,25 @@ class Program {
 
     var target = ParseTarget(args);
     var path = GetNonOptionArg(args) ?? Directory.GetCurrentDirectory();
+    var useCache = !emitIr && !dumpStages;
 
     if (File.Exists(path)) {
       // Single file: compile directly
       var content = ReadFileContentUntilSeparator(path);
       var ext = GetOutputExtension(target);
       var outputPath = ResolveOutputPath(path, ext);
+      var fileSources = new SourceFile[] { new(path, content) };
+      var projectDir = Path.GetDirectoryName(Path.GetFullPath(path))!;
+
+      if (useCache && BuildCache.IsCacheValid(projectDir, fileSources, outputPath, target)) {
+        Console.WriteLine($"Compiled -> {outputPath} (cached)");
+        return 0;
+      }
+
       var (mlirOutputPath, dumpStagesBasePath) = GetOutputPaths(path, emitIr, dumpStages);
-      return CompileAndReportResult([new(path, content)], outputPath, mlirOutputPath, dumpStagesBasePath, target);
+      var result = CompileAndReportResult(fileSources, outputPath, mlirOutputPath, dumpStagesBasePath, target);
+      if (result == 0 && useCache) BuildCache.WriteCache(projectDir, fileSources, outputPath, target);
+      return result;
     }
 
     if (!Directory.Exists(path)) {
@@ -164,16 +175,37 @@ class Program {
       var exportedFunctions = ListBuildFunctions(buildContent);
       if (exportedFunctions.Any(f => f.name == "build")) {
         var ext = GetOutputExtension(target);
-        var buildSources = new SourceFile[] { new(buildFile, buildContent) };
-        var runPath = Path.Combine(path, $".maxon-run{ext}");
-        var (mlirOutputPath, dumpStagesBasePath) = GetOutputPaths(buildFile, emitIr, dumpStages);
 
-        var compileResult = CompileAndReportResult(buildSources, runPath, mlirOutputPath,
-            dumpStagesBasePath, target, entryFunction: "build");
-        if (compileResult != 0) return compileResult;
+        var projectSources = CollectFilesFromDirectory(path);
+        if (projectSources.Length == 0) {
+          Console.Error.WriteLine($"No .maxon files found in: {path}");
+          return 1;
+        }
+
+        // Check project cache (includes build.maxon to detect config changes)
+        var allSources = new SourceFile[] { new(buildFile, buildContent) }.Concat(projectSources).ToArray();
+        if (useCache && BuildCache.IsCacheValid(path, allSources, null, target)) {
+          var cachedOutput = BuildCache.GetCachedOutputPath(path);
+          if (cachedOutput != null) {
+            Console.WriteLine($"Compiled -> {cachedOutput} (cached)");
+            return 0;
+          }
+        }
+
+        // Cache build.maxon → .maxon-run.exe separately (only depends on build.maxon + compiler)
+        var buildSources = new SourceFile[] { new(buildFile, buildContent) };
+        BuildCache.EnsureCacheDir(path);
+        var runPath = Path.Combine(BuildCache.GetCacheDir(path), $".maxon-run{ext}");
+
+        if (!(useCache && BuildCache.IsCacheValid(path, buildSources, runPath, target, name: "build-runner"))) {
+          var (mlirOutputPath, dumpStagesBasePath) = GetOutputPaths(buildFile, emitIr, dumpStages);
+          var compileResult = CompileAndReportResult(buildSources, runPath, mlirOutputPath,
+              dumpStagesBasePath, target, entryFunction: "build");
+          if (compileResult != 0) return compileResult;
+          if (useCache) BuildCache.WriteCache(path, buildSources, runPath, target, name: "build-runner");
+        }
 
         var (exitCode, json) = RunExecutableCapture(runPath);
-        try { File.Delete(runPath); } catch { /* best effort */ }
         if (exitCode != 0) return exitCode;
 
 #pragma warning disable CA1869 // Cache and reuse 'JsonSerializerOptions' instances
@@ -198,14 +230,11 @@ class Program {
         if (outputDir != null && !Directory.Exists(outputDir))
           Directory.CreateDirectory(outputDir);
 
-        var projectSources = CollectFilesFromDirectory(path);
-        if (projectSources.Length == 0) {
-          Console.Error.WriteLine($"No .maxon files found in: {path}");
-          return 1;
-        }
-
-        return CompileAndReportResult(projectSources, outputPath, mlirOutputPath,
-            dumpStagesBasePath, target);
+        var (mlirOut, dumpBase) = GetOutputPaths(buildFile, emitIr, dumpStages);
+        var result = CompileAndReportResult(projectSources, outputPath, mlirOut,
+            dumpBase, target);
+        if (result == 0 && useCache) BuildCache.WriteCache(path, allSources, outputPath, target);
+        return result;
       }
     }
 
@@ -219,8 +248,16 @@ class Program {
     {
       var ext = GetOutputExtension(target);
       var outputPath = ResolveOutputPath(mainFile, ext);
+
+      if (useCache && BuildCache.IsCacheValid(path, sources, outputPath, target)) {
+        Console.WriteLine($"Compiled -> {outputPath} (cached)");
+        return 0;
+      }
+
       var (mlirOutputPath, dumpStagesBasePath) = GetOutputPaths(mainFile, emitIr, dumpStages);
-      return CompileAndReportResult(sources, outputPath, mlirOutputPath, dumpStagesBasePath, target);
+      var result = CompileAndReportResult(sources, outputPath, mlirOutputPath, dumpStagesBasePath, target);
+      if (result == 0 && useCache) BuildCache.WriteCache(path, sources, outputPath, target);
+      return result;
     }
   }
 
@@ -313,18 +350,22 @@ class Program {
     var sources = new SourceFile[] { new(buildFile, content) };
 
     var ext = GetOutputExtension(target);
-    var outputPath = Path.Combine(directory, $".maxon-run{ext}");
-    var (mlirOutputPath, dumpStagesBasePath) = GetOutputPaths(buildFile, emitIr, dumpStages);
+    var useCache = !emitIr && !dumpStages;
+    BuildCache.EnsureCacheDir(directory);
+    var outputPath = Path.Combine(BuildCache.GetCacheDir(directory), $".maxon-run-{functionName}{ext}");
+    var cacheName = $"run-{functionName}";
 
-    var compileResult = CompileAndReportResult(sources, outputPath, mlirOutputPath,
-        dumpStagesBasePath, target, entryFunction: functionName);
-    if (compileResult != 0) return compileResult;
+    if (useCache && BuildCache.IsCacheValid(directory, sources, outputPath, target, name: cacheName)) {
+      Console.WriteLine($"Using cached build runner for '{cliName}'");
+    } else {
+      var (mlirOutputPath, dumpStagesBasePath) = GetOutputPaths(buildFile, emitIr, dumpStages);
+      var compileResult = CompileAndReportResult(sources, outputPath, mlirOutputPath,
+          dumpStagesBasePath, target, entryFunction: functionName);
+      if (compileResult != 0) return compileResult;
+      if (useCache) BuildCache.WriteCache(directory, sources, outputPath, target, name: cacheName);
+    }
 
-    var exitCode = RunExecutable(outputPath);
-
-    try { File.Delete(outputPath); } catch { /* best effort */ }
-
-    return exitCode;
+    return RunExecutable(outputPath);
   }
 
   static int RunFmt(string[] args) {
