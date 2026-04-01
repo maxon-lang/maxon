@@ -21,34 +21,30 @@ end 'main'
 ExitCode: 42
 ---
 module {
-  func @if-statements.test(c: i64, next: i64) -> i64 {
+  func @if-statements.test(ptr: i64, ptr: i64) -> i64 {
   entry:
     x86.prologue stack_size=16
-    x86.mov [rbp-8], rdx
-    x86.xor rax, rax
-    x86.cmp rcx, rax
-    x86.jne if-statements.test.maybePrefix_0.merge
-  maybePrefix_0:
-    x86.mov rax, 1
-    x86.mov rcx, [rbp-8]
-    x86.cmp rcx, rax
-    x86.jne if-statements.test.isHex_1.after
-  isHex_1:
+    x86.test rcx, rcx
+    x86.mov [rbp+-8], rdx
+    x86.jne maybePrefix_1.after
+  maybePrefix_1:
+    x86.mov rax, [rbp+-8]
+    x86.cmp rax, 1
+    x86.jne isHex_2.after
+  isHex_2:
     x86.mov rax, 1
     x86.epilogue
     x86.ret
-  isHex_1.after:
-    x86.mov rax, 2
-    x86.mov rcx, [rbp-8]
-    x86.cmp rcx, rax
-    x86.jne if-statements.test.isBinary_2.after
-  isBinary_2:
+  isHex_2.after:
+    x86.mov rax, [rbp+-8]
+    x86.cmp rax, 2
+    x86.jne isBinary_4.after
+  isBinary_4:
     x86.mov rax, 2
     x86.epilogue
     x86.ret
-  isBinary_2.after:
-    x86.jmp if-statements.test.maybePrefix_0.merge
-  maybePrefix_0.merge:
+  isBinary_4.after:
+  maybePrefix_1.after:
     x86.mov rax, 42
     x86.epilogue
     x86.ret
@@ -57,20 +53,20 @@ module {
   entry:
     x86.prologue stack_size=16
     x86.mov rcx, 5
-    x86.xor rdx, rdx
+    x86.mov rdx, 0
     x86.call if-statements.test
-    x86.xor rcx, rcx
+    x86.test rax, rax
+    x86.setl rcx
     x86.mov rdx, 4294967295
     x86.cmp rax, rdx
-    x86.jg main.__range_panic_0
-    x86.cmp rax, rcx
-    x86.jl main.__range_panic_0
-    x86.jmp main.__range_ok_0
-  __range_panic_0:
-    x86.lea_symdata rax, [__panic_msg_0]
+    x86.setg rdx
+    x86.or rcx, rdx
+    x86.je __range_ok_1
+  __range_panic_1:
+    x86.lea rax, [rip+__panic_msg_1]
     x86.mov rcx, rax
     x86.call mrt_panic
-  __range_ok_0:
+  __range_ok_1:
     x86.epilogue
     x86.ret
   }

@@ -451,6 +451,14 @@ type Parser
 		end 'skip'
 	end 'skipNewlines'
 
+	function expectNewlineAfterLabel()
+		if not at(TokenKind.newline) 'noNewline'
+			let token = peek()
+			reportCompileError(project, code: ErrorCode.parserUnexpectedToken, message: "Expected newline after block label, got '{tokenValueToString(token.value)}'", line: token.line, column: token.column, filePath: filePath)
+		end 'noNewline'
+		skipNewlines()
+	end 'expectNewlineAfterLabel'
+
 	function skipEndAndLabel()
 		expect(TokenKind.end)
 		if at(TokenKind.stringLiteral) 'hasLabel'
@@ -500,8 +508,9 @@ type Parser
 
 	// Finalize an if/else by emitting the condBr and returning either a
 	// detached block (both branches terminated) or a new merge block.
-	function finalizeIfElse(func MlirFunction, condBlock MlirBlock, condValueId ValueId, thenBlock MlirBlock, thenExit MlirBlock, elseBlock MlirBlock, elseExit MlirBlock, baseLabel ByteArray) returns MlirBlock
-		finalizeBlock(condBlock, terminator: MlirOp.maxon(MaxonOp.condBr(condValueId, thenBlock.id, elseBlock.id)))
+	// Uses captured block IDs to avoid stale references from nested parsing.
+	function finalizeIfElseById(func MlirFunction, condBlock MlirBlock, condValueId ValueId, thenBlockId BlockId, thenExit MlirBlock, elseBlockId BlockId, elseExit MlirBlock, baseLabel ByteArray) returns MlirBlock
+		finalizeBlock(condBlock, terminator: MlirOp.maxon(MaxonOp.condBr(condValueId, thenBlockId, elseBlockId)))
 		if thenExit.hasTerminator and elseExit.hasTerminator 'bothTerminated'
 			return newDetachedBlock(func)
 		end 'bothTerminated'
@@ -512,7 +521,7 @@ type Parser
 		branchIfNeeded(thenExit, target: mergeBlock.id)
 		branchIfNeeded(elseExit, target: mergeBlock.id)
 		return mergeBlock
-	end 'finalizeIfElse'
+	end 'finalizeIfElseById'
 
 	function branchIfNeeded(block MlirBlock, target BlockId)
 		if not block.hasTerminator 'needsBranch'
@@ -993,15 +1002,18 @@ type Parser
 		if at(TokenKind.stringLiteral) 'hasThenLabel'
 			userLabel = peek().value
 			advance()
-		end 'hasThenLabel'
-		skipNewlines()
+			expectNewlineAfterLabel()
+		end 'hasThenLabel' else 'noLabel'
+			skipNewlines()
+		end 'noLabel'
 
 		// Create then block — its ID provides a unique suffix for all derived labels
 		var thenBlock = newBlock(func, label: userLabel)
+		let thenBlockId = thenBlock.id
 		var baseLabel = ByteArray{}
 		baseLabel.append(userLabel)
 		baseLabel.push(0x5F)  // '_'
-		baseLabel.append(intToBytes(thenBlock.id))
+		baseLabel.append(intToBytes(thenBlockId))
 		thenBlock.label = baseLabel
 
 		// Parse then block body
@@ -1023,8 +1035,9 @@ type Parser
 			// Check for 'else if' chain
 			if at(TokenKind.if) 'isElseIf'
 				var elseBlock = newBlock(func, label: elseLabel)
+				let elseBlockId = elseBlock.id
 				let elseIfExit = parseIfStatement(func, block: elseBlock)
-				return finalizeIfElse(func, condBlock: block, condValueId: condResult.valueId, thenBlock: thenBlock, thenExit: thenExit, elseBlock: elseBlock, elseExit: elseIfExit, baseLabel: baseLabel)
+				return finalizeIfElseById(func, condBlock: block, condValueId: condResult.valueId, thenBlockId: thenBlockId, thenExit: thenExit, elseBlockId: elseBlockId, elseExit: elseIfExit, baseLabel: baseLabel)
 			end 'isElseIf' else 'plainElse'
 				// Capture the else block label if present, otherwise use derived name
 				if at(TokenKind.stringLiteral) 'hasElseLabel'
@@ -1033,13 +1046,16 @@ type Parser
 					elseLabel.push(0x5F)  // '_'
 					elseLabel.append(intToBytes(func.nextBlockId))
 					advance()
-				end 'hasElseLabel'
-				skipNewlines()
+					expectNewlineAfterLabel()
+				end 'hasElseLabel' else 'noElseLabel'
+					skipNewlines()
+				end 'noElseLabel'
 
 				var elseBlock = newBlock(func, label: elseLabel)
+				let elseBlockId = elseBlock.id
 				let elseExit = parseScopedStatements(func, block: elseBlock)
 				skipEndAndLabel()
-				return finalizeIfElse(func, condBlock: block, condValueId: condResult.valueId, thenBlock: thenBlock, thenExit: thenExit, elseBlock: elseBlock, elseExit: elseExit, baseLabel: baseLabel)
+				return finalizeIfElseById(func, condBlock: block, condValueId: condResult.valueId, thenBlockId: thenBlockId, thenExit: thenExit, elseBlockId: elseBlockId, elseExit: elseExit, baseLabel: baseLabel)
 			end 'plainElse'
 		end 'hasElse'
 
@@ -1049,7 +1065,7 @@ type Parser
 		afterLabel.append(b".after")
 		var afterBlock = newBlock(func, label: afterLabel)
 		branchIfNeeded(thenExit, target: afterBlock.id)
-		finalizeBlock(block, terminator: MlirOp.maxon(MaxonOp.condBr(condResult.valueId, thenBlock.id, afterBlock.id)))
+		finalizeBlock(block, terminator: MlirOp.maxon(MaxonOp.condBr(condResult.valueId, thenBlockId, afterBlock.id)))
 		return afterBlock
 	end 'parseIfStatement'
 
@@ -1062,9 +1078,10 @@ type Parser
 
 		// Create cond block first (we need it to parse the condition into)
 		var condBlock = newBlock(func, label: b"cond")
+		let condBlockId = condBlock.id
 
 		// Branch from entry block to cond block
-		finalizeBlock(block, terminator: MlirOp.maxon(MaxonOp.br(condBlock.id)))
+		finalizeBlock(block, terminator: MlirOp.maxon(MaxonOp.br(condBlockId)))
 
 		// Parse condition in condBlock
 		let condResult = parseExpression(condBlock)
@@ -1074,14 +1091,16 @@ type Parser
 		if at(TokenKind.stringLiteral) 'hasWhileLabel'
 			userLabel = peek().value
 			advance()
-		end 'hasWhileLabel'
-		skipNewlines()
+			expectNewlineAfterLabel()
+		end 'hasWhileLabel' else 'noWhileLabel'
+			skipNewlines()
+		end 'noWhileLabel'
 
 		// Derive base label: userLabel_<blockId>
 		var baseLabel = ByteArray{}
 		baseLabel.append(userLabel)
 		baseLabel.push(0x5F)  // '_'
-		baseLabel.append(intToBytes(condBlock.id))
+		baseLabel.append(intToBytes(condBlockId))
 
 		// Rename condBlock to baseLabel.header
 		var headerLabel = ByteArray{}
@@ -1094,16 +1113,18 @@ type Parser
 		exitLabel.append(baseLabel)
 		exitLabel.append(b".exit")
 		var bodyBlock = newBlock(func, label: baseLabel)
+		let bodyBlockId = bodyBlock.id
 		var exitBlock = newBlock(func, label: exitLabel)
+		let exitBlockId = exitBlock.id
 
 		// condBlock terminator: if true -> bodyBlock, if false -> exitBlock
-		finalizeBlock(condBlock, terminator: MlirOp.maxon(MaxonOp.condBr(condResult.valueId, bodyBlock.id, exitBlock.id)))
+		finalizeBlock(condBlock, terminator: MlirOp.maxon(MaxonOp.condBr(condResult.valueId, bodyBlockId, exitBlockId)))
 
 		// Parse body in bodyBlock
 		let bodyExit = parseScopedStatements(func, block: bodyBlock)
 
 		// Loop back to cond block if body doesn't terminate
-		branchIfNeeded(bodyExit, target: condBlock.id)
+		branchIfNeeded(bodyExit, target: condBlockId)
 
 		// Skip 'end' and optional label string
 		skipEndAndLabel()
@@ -1127,6 +1148,7 @@ type Parser
 	// --- Variable declaration ---
 
 	function parseVarDecl(block MlirBlock)
+		let isLet = peek().kind == TokenKind.let
 		advance()  // skip 'var'/'let'
 
 		let nameToken = consume()
@@ -1143,6 +1165,16 @@ type Parser
 
 		expect(TokenKind.equals)
 		let exprResult = parseExpression(block)
+
+		// Register let-bound string literals as compile-time string constants
+		// so later comparisons like `inner == "hello"` can be folded.
+		// Skip runtime storage since the value is resolved at compile time.
+		if isLet and exprResult.isStringConst 'registerStringConst'
+			project.stringConstNames.push(nameToken.value)
+			project.stringConstValues.push(exprResult.stringConstValue)
+			let _ = defineVariable(nameToken.value, isFloat: exprResult.isFloat, isRefType: exprResult.isRefType)
+			return
+		end 'registerStringConst'
 
 		let slot = defineVariable(nameToken.value, isFloat: exprResult.isFloat, isRefType: exprResult.isRefType)
 		emitOp(block, op: MlirOp.maxon(MaxonOp.varDecl(slot, exprResult.valueId)))
