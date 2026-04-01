@@ -19,32 +19,33 @@ module {
     x86.mov [rbp-8], rax
     x86.mov rcx, 1
     x86.mov [rbp-16], rcx
-  cond:
+    x86.jmp main.loop_0.header
+  loop_0.header:
+    x86.mov rax, 5
+    x86.mov rcx, [rbp-16]
+    x86.cmp rcx, rax
+    x86.jg main.loop_0.exit
+  loop_0:
     x86.mov rax, [rbp-8]
     x86.mov rcx, [rbp-16]
-    x86.cmp rcx, 5
-    x86.jg exit
-  body:
-    x86.mov rax, [rbp+-16]
-    x86.mov rcx, rax
-    x86.add rcx, 1
-    x86.mov rdx, [rbp+-8]
-    x86.mov rbx, rdx
-    x86.add rbx, rax
-    x86.mov [rbp-8], rbx
-    x86.mov [rbp-16], rcx
-    x86.jmp cond
-  exit:
-    x86.mov rax, [rbp+-8]
-    x86.test rax, rax
-    x86.setl rcx
+    x86.add rax, rcx
+    x86.mov [rbp-8], rax
+    x86.mov rdx, 1
+    x86.mov rbx, [rbp-16]
+    x86.add rbx, rdx
+    x86.mov [rbp-16], rbx
+    x86.jmp main.loop_0.header
+  loop_0.exit:
+    x86.mov rax, [rbp-8]
+    x86.xor rcx, rcx
     x86.mov rdx, 4294967295
     x86.cmp rax, rdx
-    x86.setg rbx
-    x86.or rcx, rbx
-    x86.je __range_ok_1
+    x86.jg main.__range_panic_1
+    x86.cmp rax, rcx
+    x86.jl main.__range_panic_1
+    x86.jmp main.__range_ok_1
   __range_panic_1:
-    x86.lea rax, [rip+__panic_msg_1]
+    x86.lea_symdata rax, [__panic_msg_0]
     x86.mov rcx, rax
     x86.call mrt_panic
   __range_ok_1:
