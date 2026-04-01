@@ -501,16 +501,12 @@ module {
   block_0.merge:
     x86.mov rax, [rbp-8]
     x86.xor rcx, rcx
+    x86.mov rdx, 4294967295
+    x86.cmp rax, rdx
+    x86.jg main.__range_panic_1
     x86.cmp rax, rcx
-    x86.setl rdx
-    x86.movzx rdx, rdxb
-    x86.mov rbx, 4294967295
-    x86.cmp rax, rbx
-    x86.setg rsi
-    x86.movzx rsi, rsib
-    x86.or rdx, rsi
-    x86.test rdx, rdx
-    x86.je main.__range_ok_1
+    x86.jl main.__range_panic_1
+    x86.jmp main.__range_ok_1
   __range_panic_1:
     x86.lea_symdata rax, [__panic_msg_0]
     x86.mov rcx, rax
@@ -1065,16 +1061,12 @@ module {
     x86.mov rdx, [rbp-48]
     x86.mov rbx, [rdx+0]
     x86.xor rsi, rsi
+    x86.mov rdi, 4294967295
+    x86.cmp rbx, rdi
+    x86.jg main.__range_panic_4
     x86.cmp rbx, rsi
-    x86.setl rdi
-    x86.movzx rdi, rdib
-    x86.mov r8, 4294967295
-    x86.cmp rbx, r8
-    x86.setg r9
-    x86.movzx r9, r9b
-    x86.or rdi, r9
-    x86.test rdi, rdi
-    x86.je main.__range_ok_4
+    x86.jl main.__range_panic_4
+    x86.jmp main.__range_ok_4
   __range_panic_4:
     x86.lea_symdata rax, [__panic_msg_0]
     x86.mov rcx, rax
@@ -1770,16 +1762,12 @@ module {
   loop_0.exit:
     x86.mov rax, [rbp-8]
     x86.xor rcx, rcx
+    x86.mov rdx, 4294967295
+    x86.cmp rax, rdx
+    x86.jg main.__range_panic_2
     x86.cmp rax, rcx
-    x86.setl rdx
-    x86.movzx rdx, rdxb
-    x86.mov rbx, 4294967295
-    x86.cmp rax, rbx
-    x86.setg rsi
-    x86.movzx rsi, rsib
-    x86.or rdx, rsi
-    x86.test rdx, rdx
-    x86.je main.__range_ok_2
+    x86.jl main.__range_panic_2
+    x86.jmp main.__range_ok_2
   __range_panic_2:
     x86.lea_symdata rax, [__panic_msg_0]
     x86.mov rcx, rax
@@ -1984,7 +1972,7 @@ module {
   entry:
     %9 = maxon.param {index = 0 : i32} {name = flag} {type = i64}
     %10 = maxon.literal {value = 0 : i64}
-    %11 = maxon.binop %9, %10 {op = gt} {optimalType = i64}
+    %11 = maxon.binop %9, %10 {op = gt}
     maxon.cond_br %11 [then: check_0, else: check_0.after]
   check_0:
     %12 = maxon.var_ref {var = flag} {type = i64}
@@ -2121,16 +2109,12 @@ module {
     x86.mov rcx, 5
     x86.call memory-safety.compute
     x86.xor rcx, rcx
-    x86.cmp rax, rcx
-    x86.setl rcx
-    x86.movzx rcx, rcxb
     x86.mov rdx, 4294967295
     x86.cmp rax, rdx
-    x86.setg rdx
-    x86.movzx rdx, rdxb
-    x86.or rcx, rdx
-    x86.test rcx, rcx
-    x86.je main.__range_ok_0
+    x86.jg main.__range_panic_0
+    x86.cmp rax, rcx
+    x86.jl main.__range_panic_0
+    x86.jmp main.__range_ok_0
   __range_panic_0:
     x86.lea_symdata rax, [__panic_msg_0]
     x86.mov rcx, rax

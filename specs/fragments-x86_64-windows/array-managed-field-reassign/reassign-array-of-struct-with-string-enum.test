@@ -725,25 +725,22 @@ module {
     x86.mov rcx, [rbp-208]
     x86.call DependencyArray.count
     x86.xor rcx, rcx
-    x86.cmp rax, rcx
-    x86.setl rcx
-    x86.movzx rcx, rcxb
     x86.mov rdx, 4294967295
     x86.cmp rax, rdx
-    x86.setg rdx
-    x86.movzx rdx, rdxb
-    x86.or rcx, rdx
-    x86.test rcx, rcx
-    x86.je main.__range_ok_0
+    x86.jg main.__range_panic_0
+    x86.cmp rax, rcx
+    x86.jl main.__range_panic_0
+    x86.jmp main.__range_ok_0
   __range_panic_0:
     x86.lea_symdata rax, [__panic_msg_0]
     x86.mov rcx, rax
     x86.call mrt_panic
   __range_ok_0:
-    x86.mov rcx, [rbp-168]
+    x86.mov rbx, [rbp-168]
     x86.mov [rbp-256], rax
-    x86.test rcx, rcx
+    x86.test rbx, rbx
     x86.jz __nonnull_skip_12
+    x86.mov rcx, [rbp-168]
     x86.call mm_decref
     x86.label __nonnull_skip_12
     x86.mov rax, [rbp-144]

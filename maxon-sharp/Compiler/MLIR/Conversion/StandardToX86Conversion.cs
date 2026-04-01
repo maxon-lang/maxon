@@ -140,6 +140,8 @@ public static class StandardToX86Conversion {
 
     // Pre-scan: compute last use index for each StdValue (for dead-value freeing)
     var lastUseOfValue = new Dictionary<StdValue, int>();
+    // Track which value IDs have any read — pure ops defining unused values can be skipped.
+    var usedValueIds = new HashSet<int>();
     // Values only consumed by return/call ops can be deferred (not eagerly materialized).
     // Call arg placement and return handling will materialize them on demand from
     // their stack home or constant record, avoiding redundant register loads.
@@ -150,6 +152,7 @@ public static class StandardToX86Conversion {
       foreach (var op in block.Operations) {
         foreach (var val in op.ReadValues) {
           lastUseOfValue[val] = scanIdx;
+          usedValueIds.Add(val.Id);
           if (op is StdReturnOp or StdCallOp or StdCallRuntimeOp or StdCallRuntimeIfNonnullOp or StdTryCallOp or StdTryCallRuntimeOp)
             sinkOnlyValues.Add(val);
           else
@@ -247,7 +250,13 @@ public static class StandardToX86Conversion {
         regManager.RestoreState(savedRegState);
         savedRegState = null;
       } else if (needsCrossBlockSpill.Contains(prevBlockIdx)) {
-        regManager.ResetForBlockTransition(prevX86Block!);
+        // Identify values whose last use has already passed — no need to spill them.
+        HashSet<StdValue>? deadAtTransition = null;
+        foreach (var (val, lastUse) in lastUseOfValue) {
+          if (lastUse < currentOpIndex)
+            (deadAtTransition ??= []).Add(val);
+        }
+        regManager.ResetForBlockTransition(prevX86Block!, deadAtTransition);
       } else {
         regManager.Reset();
       }
@@ -311,8 +320,46 @@ public static class StandardToX86Conversion {
         }
       }
 
+      // Pre-scan: detect or-of-two-cmps → condBr patterns for two-jump optimization.
+      // When both cmps are integer, single-use, and feed an Or whose result is
+      // the condBr condition, we can emit two cmp+jcc instead of setcc+setcc+or+test+je.
+      var twoJumpCondBrs = new Dictionary<StdCondBrOp, (StandardOp Cmp1, string Pred1, ComparisonKind Kind1, StandardOp Cmp2, string Pred2, ComparisonKind Kind2)>();
+      var twoJumpSkipOps = new HashSet<StandardOp>();
+      {
+        var opList = srcBlock.Operations;
+        var resultToOp = new Dictionary<int, StandardOp>();
+        foreach (var scanOp in opList) {
+          if (scanOp.AnyResultId >= 0)
+            resultToOp[scanOp.AnyResultId] = scanOp;
+        }
+        foreach (var scanOp in opList) {
+          if (scanOp is not StdCondBrOp condBrScan) continue;
+          if (!resultToOp.TryGetValue(condBrScan.Condition.Id, out var orCandidate)) continue;
+          if (orCandidate is not StdBinaryI1Op { Operator: StdBinaryOperator.Or } orOp) continue;
+          if (!resultToOp.TryGetValue(orOp.Lhs.Id, out var cmp1Op)) continue;
+          if (!resultToOp.TryGetValue(orOp.Rhs.Id, out var cmp2Op)) continue;
+
+          static (string pred, ComparisonKind kind)? GetCmpInfo(StandardOp c) => c switch {
+            StdCmpI64Op i64 => (i64.Predicate, ComparisonKind.Integer),
+            StdCmpU64Op u64 => (u64.Predicate, ComparisonKind.UnsignedInteger),
+            StdCmpI32Op i32 => (i32.Predicate, ComparisonKind.Integer),
+            StdCmpU32Op u32 => (u32.Predicate, ComparisonKind.UnsignedInteger),
+            _ => null
+          };
+
+          var info1 = GetCmpInfo(cmp1Op);
+          var info2 = GetCmpInfo(cmp2Op);
+          if (info1 == null || info2 == null) continue;
+
+          twoJumpCondBrs[condBrScan] = (cmp1Op, info1.Value.pred, info1.Value.kind, cmp2Op, info2.Value.pred, info2.Value.kind);
+          twoJumpSkipOps.Add(cmp1Op);
+          twoJumpSkipOps.Add(cmp2Op);
+          twoJumpSkipOps.Add(orOp);
+        }
+      }
+
       foreach (var op in srcBlock.Operations) {
-        if (preHandledOps.Contains(op)) { currentOpIndex++; continue; }
+        if (preHandledOps.Contains(op) || twoJumpSkipOps.Contains(op)) { currentOpIndex++; continue; }
         // If there's a pending comparison result and this op is NOT a condBr
         // that uses it, materialize the comparison into a register via setcc.
         if (lastCmpResult != null && !(op is StdCondBrOp cb && cb.Condition == lastCmpResult)) {
@@ -329,6 +376,12 @@ public static class StandardToX86Conversion {
           lastCmpResult = null;
           lastCmpKind = null;
           lastCmpPredicate = null;
+        }
+
+        // Skip pure ops whose result is never used — dead code that survived DCE
+        if (op.PureResultId >= 0 && !usedValueIds.Contains(op.PureResultId)) {
+          currentOpIndex++;
+          continue;
         }
 
         switch (op) {
@@ -813,7 +866,20 @@ public static class StandardToX86Conversion {
 
           case StdCondBrOp condBr: {
             var scopedElse = $"{func.Name}.{condBr.ElseBlock}";
-            if (lastCmpResult != null && condBr.Condition == lastCmpResult) {
+            if (twoJumpCondBrs.TryGetValue(condBr, out var tj)) {
+              // Two-jump optimization: emit cmp+jcc for each bound, jumping to
+              // the then (panic) block. Explicit jmp to else (ok) after both pass.
+              // Emit upper check (cmp2) first so each constant load is adjacent to its cmp.
+              var scopedThen = $"{func.Name}.{condBr.ThenBlock}";
+              EmitCmpFromOp(tj.Cmp2, regManager, x86Block);
+              x86Block.AddOp(new X86JccOp(IntegerPredicateToJcc(tj.Pred2, tj.Kind2), scopedThen));
+              EmitCmpFromOp(tj.Cmp1, regManager, x86Block);
+              x86Block.AddOp(new X86JccOp(IntegerPredicateToJcc(tj.Pred1, tj.Kind1), scopedThen));
+              x86Block.AddOp(new X86JmpOp(scopedElse));
+              // Free the cmp operand values that have reached their last use
+              foreach (var cmpOp in new[] { tj.Cmp1, tj.Cmp2 })
+                FreeDeadValues(regManager, lastUseOfValue, currentOpIndex, cmpOp.ReadValues);
+            } else if (lastCmpResult != null && condBr.Condition == lastCmpResult) {
               switch (lastCmpKind!.Value) {
                 case ComparisonKind.Integer:
                   x86Block.AddOp(new X86JccOp(InvertIntegerPredicate(lastCmpPredicate!), scopedElse));
@@ -1145,6 +1211,25 @@ public static class StandardToX86Conversion {
     "uge" => "ae",
     _ => throw new InvalidOperationException($"Unknown unsigned comparison predicate: {predicate}")
   };
+
+  /// Map a comparison predicate to a jcc condition code (non-inverted — jump when true).
+  private static string IntegerPredicateToJcc(string predicate, ComparisonKind kind) => kind switch {
+    ComparisonKind.Integer => IntegerPredicateToSetcc(predicate),
+    ComparisonKind.UnsignedInteger => UnsignedPredicateToSetcc(predicate),
+    _ => throw new InvalidOperationException($"Unsupported comparison kind for two-jump: {kind}")
+  };
+
+  /// Emit a cmp instruction from a previously-skipped comparison op.
+  private static void EmitCmpFromOp(StandardOp cmpOp, RegisterManager regManager, MlirBlock<X86Op> block) {
+    var (lhs, rhs) = cmpOp switch {
+      StdCmpI64Op c => ((StdValue)c.Lhs, (StdValue)c.Rhs),
+      StdCmpU64Op c => (c.Lhs, c.Rhs),
+      StdCmpI32Op c => (c.Lhs, c.Rhs),
+      StdCmpU32Op c => (c.Lhs, c.Rhs),
+      _ => throw new InvalidOperationException($"Unsupported cmp op in two-jump pattern: {cmpOp.GetType().Name}")
+    };
+    regManager.EmitIntegerCompare(lhs, rhs, block);
+  }
 
   /// <summary>
   /// Emit conditional branch(es) for a float comparison.

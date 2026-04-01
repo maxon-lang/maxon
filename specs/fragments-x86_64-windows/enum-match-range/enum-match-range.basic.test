@@ -77,24 +77,21 @@ module {
   check_0.merge:
     x86.mov rax, [rbp-24]
     x86.xor rcx, rcx
+    x86.mov rdx, 4294967295
+    x86.cmp rax, rdx
+    x86.jg main.__range_panic_1
     x86.cmp rax, rcx
-    x86.setl rdx
-    x86.movzx rdx, rdxb
-    x86.mov rbx, 4294967295
-    x86.cmp rax, rbx
-    x86.setg rsi
-    x86.movzx rsi, rsib
-    x86.or rdx, rsi
-    x86.test rdx, rdx
-    x86.je main.__range_ok_1
+    x86.jl main.__range_panic_1
+    x86.jmp main.__range_ok_1
   __range_panic_1:
     x86.lea_symdata rax, [__panic_msg_0]
     x86.mov rcx, rax
     x86.call mrt_panic
   __range_ok_1:
-    x86.mov rcx, [rbp-16]
-    x86.test rcx, rcx
+    x86.mov rbx, [rbp-16]
+    x86.test rbx, rbx
     x86.jz __nonnull_skip_0
+    x86.mov rcx, [rbp-16]
     x86.call mm_decref
     x86.label __nonnull_skip_0
     x86.mov rax, [rbp-8]

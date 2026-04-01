@@ -176,8 +176,10 @@ class Program {
         try { File.Delete(runPath); } catch { /* best effort */ }
         if (exitCode != 0) return exitCode;
 
+#pragma warning disable CA1869 // Cache and reuse 'JsonSerializerOptions' instances
         var config = System.Text.Json.JsonSerializer.Deserialize<BuildConfig>(json,
             new System.Text.Json.JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+#pragma warning restore CA1869 // Cache and reuse 'JsonSerializerOptions' instances
         if (config == null) {
           Console.Error.WriteLine("build.maxon produced invalid build configuration.");
           return 1;

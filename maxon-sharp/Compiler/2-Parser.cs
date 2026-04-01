@@ -10255,7 +10255,10 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
       }
 
       MlirType? optimalType = null;
-      if (kind == MaxonValueKind.Integer) {
+      if (kind == MaxonValueKind.Integer
+          && resolvedOp is not (MaxonBinOperator.Eq or MaxonBinOperator.Ne
+            or MaxonBinOperator.Lt or MaxonBinOperator.Gt
+            or MaxonBinOperator.Le or MaxonBinOperator.Ge)) {
         optimalType = GetOptimalType(promotedLhs) ?? GetOptimalType(promotedRhs);
       }
       var binOp = new MaxonBinOp(resolvedOp, promotedLhs, promotedRhs, kind, optimalType);

@@ -91,50 +91,39 @@ module {
     x86.mov rbx, [rdx+0]
     x86.mov rsi, [rbp-24]
     x86.add rsi, rbx
-    x86.xor rdi, rdi
-    x86.cmp rsi, rdi
+    x86.mov rdi, [rbp-8]
     x86.mov [rbp-32], rsi
-    x86.jge Cache.sum.__range_ok_0
-  __lazy_init_6:
-    x86.call Cache._b.__lazy_init
-    x86.jmp Cache.sum.__lazy_merge_6
-  __range_panic_0:
-    x86.lea_symdata rax, [__panic_msg_0]
-    x86.mov rcx, rax
-    x86.call mrt_panic
-  __range_ok_0:
-    x86.mov rax, [rbp-8]
-    x86.test rax, rax
+    x86.test rdi, rdi
     x86.jz __nonnull_skip_0
     x86.mov rcx, [rbp-8]
     x86.call mm_decref
     x86.label __nonnull_skip_0
-    x86.mov rcx, [rbp-16]
-    x86.test rcx, rcx
+    x86.mov r8, [rbp-16]
+    x86.test r8, r8
     x86.jz __nonnull_skip_1
+    x86.mov rcx, [rbp-16]
     x86.call mm_decref
     x86.label __nonnull_skip_1
     x86.mov rax, [rbp-32]
     x86.epilogue
     x86.ret
+  __lazy_init_6:
+    x86.call Cache._b.__lazy_init
+    x86.jmp Cache.sum.__lazy_merge_6
   }
   func @main() -> u32 {
   entry:
     x86.prologue stack_size=16
     x86.call Cache.sum
     x86.xor rcx, rcx
-    x86.cmp rax, rcx
-    x86.setl rcx
-    x86.movzx rcx, rcxb
     x86.mov rdx, 4294967295
     x86.cmp rax, rdx
-    x86.setg rdx
-    x86.movzx rdx, rdxb
-    x86.or rcx, rdx
-    x86.test rcx, rcx
-    x86.je main.__range_ok_0
+    x86.jg main.__range_panic_0
+    x86.cmp rax, rcx
+    x86.jl main.__range_panic_0
+    x86.jmp main.__range_ok_0
   __range_panic_0:
-    x86.lea_symdata rax, [__panic_msg_1]
+    x86.lea_symdata rax, [__panic_msg_0]
     x86.mov rcx, rax
     x86.call mrt_panic
   __range_ok_0:

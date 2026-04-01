@@ -140,16 +140,12 @@ module {
     x86.prologue stack_size=16
     x86.mov rax, 99
     x86.xor rcx, rcx
+    x86.mov rdx, 4294967295
+    x86.cmp rax, rdx
+    x86.jg main.__range_panic_0
     x86.cmp rax, rcx
-    x86.setl rdx
-    x86.movzx rdx, rdxb
-    x86.mov rbx, 4294967295
-    x86.cmp rax, rbx
-    x86.setg rsi
-    x86.movzx rsi, rsib
-    x86.or rdx, rsi
-    x86.test rdx, rdx
-    x86.je main.__range_ok_0
+    x86.jl main.__range_panic_0
+    x86.jmp main.__range_ok_0
   __range_panic_0:
     x86.lea_symdata rax, [__panic_msg_0]
     x86.mov rcx, rax
@@ -287,16 +283,12 @@ module {
     x86.mov rcx, 12
     x86.add rax, rcx
     x86.xor rdx, rdx
+    x86.mov rbx, 4294967295
+    x86.cmp rax, rbx
+    x86.jg main.__range_panic_0
     x86.cmp rax, rdx
-    x86.setl rbx
-    x86.movzx rbx, rbxb
-    x86.mov rsi, 4294967295
-    x86.cmp rax, rsi
-    x86.setg rdi
-    x86.movzx rdi, rdib
-    x86.or rbx, rdi
-    x86.test rbx, rbx
-    x86.je main.__range_ok_0
+    x86.jl main.__range_panic_0
+    x86.jmp main.__range_ok_0
   __range_panic_0:
     x86.lea_symdata rax, [__panic_msg_0]
     x86.mov rcx, rax
@@ -446,16 +438,12 @@ module {
     x86.mov rcx, 12
     x86.add rax, rcx
     x86.xor rdx, rdx
+    x86.mov rbx, 4294967295
+    x86.cmp rax, rbx
+    x86.jg main.__range_panic_0
     x86.cmp rax, rdx
-    x86.setl rbx
-    x86.movzx rbx, rbxb
-    x86.mov rsi, 4294967295
-    x86.cmp rax, rsi
-    x86.setg rdi
-    x86.movzx rdi, rdib
-    x86.or rbx, rdi
-    x86.test rbx, rbx
-    x86.je main.__range_ok_0
+    x86.jl main.__range_panic_0
+    x86.jmp main.__range_ok_0
   __range_panic_0:
     x86.lea_symdata rax, [__panic_msg_0]
     x86.mov rcx, rax
@@ -600,16 +588,12 @@ module {
     x86.mov rax, 21
     x86.add rax, rax
     x86.xor rcx, rcx
+    x86.mov rdx, 4294967295
+    x86.cmp rax, rdx
+    x86.jg main.__range_panic_0
     x86.cmp rax, rcx
-    x86.setl rdx
-    x86.movzx rdx, rdxb
-    x86.mov rbx, 4294967295
-    x86.cmp rax, rbx
-    x86.setg rsi
-    x86.movzx rsi, rsib
-    x86.or rdx, rsi
-    x86.test rdx, rdx
-    x86.je main.__range_ok_0
+    x86.jl main.__range_panic_0
+    x86.jmp main.__range_ok_0
   __range_panic_0:
     x86.lea_symdata rax, [__panic_msg_0]
     x86.mov rcx, rax
@@ -771,16 +755,12 @@ module {
     x86.mov rbx, 20
     x86.add rax, rbx
     x86.xor rsi, rsi
+    x86.mov rdi, 4294967295
+    x86.cmp rax, rdi
+    x86.jg main.__range_panic_0
     x86.cmp rax, rsi
-    x86.setl rdi
-    x86.movzx rdi, rdib
-    x86.mov r8, 4294967295
-    x86.cmp rax, r8
-    x86.setg r9
-    x86.movzx r9, r9b
-    x86.or rdi, r9
-    x86.test rdi, rdi
-    x86.je main.__range_ok_0
+    x86.jl main.__range_panic_0
+    x86.jmp main.__range_ok_0
   __range_panic_0:
     x86.lea_symdata rax, [__panic_msg_0]
     x86.mov rcx, rax
@@ -952,16 +932,12 @@ module {
     x86.mov rdx, 22
     x86.add rdx, rax
     x86.xor rbx, rbx
+    x86.mov rsi, 4294967295
+    x86.cmp rdx, rsi
+    x86.jg main.__range_panic_0
     x86.cmp rdx, rbx
-    x86.setl rsi
-    x86.movzx rsi, rsib
-    x86.mov rdi, 4294967295
-    x86.cmp rdx, rdi
-    x86.setg r8
-    x86.movzx r8, r8b
-    x86.or rsi, r8
-    x86.test rsi, rsi
-    x86.je main.__range_ok_0
+    x86.jl main.__range_panic_0
+    x86.jmp main.__range_ok_0
   __range_panic_0:
     x86.lea_symdata rax, [__panic_msg_0]
     x86.mov rcx, rax
@@ -1153,16 +1129,12 @@ module {
     x86.add rax, rsi
     x86.add rax, rdi
     x86.xor r8, r8
+    x86.mov r9, 4294967295
+    x86.cmp rax, r9
+    x86.jg main.__range_panic_0
     x86.cmp rax, r8
-    x86.setl r9
-    x86.movzx r9, r9b
-    x86.mov rcx, 4294967295
-    x86.cmp rax, rcx
-    x86.setg rcx
-    x86.movzx rcx, rcxb
-    x86.or r9, rcx
-    x86.test r9, r9
-    x86.je main.__range_ok_0
+    x86.jl main.__range_panic_0
+    x86.jmp main.__range_ok_0
   __range_panic_0:
     x86.lea_symdata rax, [__panic_msg_0]
     x86.mov rcx, rax
@@ -1408,16 +1380,12 @@ module {
     x86.add rbx, rax
     x86.add rbx, rcx
     x86.xor rax, rax
-    x86.cmp rbx, rax
-    x86.setl rax
-    x86.movzx rax, raxb
     x86.mov rcx, 4294967295
     x86.cmp rbx, rcx
-    x86.setg rcx
-    x86.movzx rcx, rcxb
-    x86.or rax, rcx
-    x86.test rax, rax
-    x86.je main.__range_ok_0
+    x86.jg main.__range_panic_0
+    x86.cmp rbx, rax
+    x86.jl main.__range_panic_0
+    x86.jmp main.__range_ok_0
   __range_panic_0:
     x86.lea_symdata rax, [__panic_msg_0]
     x86.mov rcx, rax
@@ -1754,16 +1722,12 @@ module {
     x86.cqo
     x86.idiv rbx
     x86.xor rax, rax
-    x86.cmp rdx, rax
-    x86.setl rax
-    x86.movzx rax, raxb
     x86.mov rcx, 4294967295
     x86.cmp rdx, rcx
-    x86.setg rcx
-    x86.movzx rcx, rcxb
-    x86.or rax, rcx
-    x86.test rax, rax
-    x86.je main.__range_ok_0
+    x86.jg main.__range_panic_0
+    x86.cmp rdx, rax
+    x86.jl main.__range_panic_0
+    x86.jmp main.__range_ok_0
   __range_panic_0:
     x86.lea_symdata rax, [__panic_msg_0]
     x86.mov rcx, rax
@@ -2187,16 +2151,12 @@ module {
     x86.cqo
     x86.idiv rcx
     x86.xor rax, rax
-    x86.cmp rdx, rax
-    x86.setl rax
-    x86.movzx rax, raxb
     x86.mov rcx, 4294967295
     x86.cmp rdx, rcx
-    x86.setg rcx
-    x86.movzx rcx, rcxb
-    x86.or rax, rcx
-    x86.test rax, rax
-    x86.je main.__range_ok_0
+    x86.jg main.__range_panic_0
+    x86.cmp rdx, rax
+    x86.jl main.__range_panic_0
+    x86.jmp main.__range_ok_0
   __range_panic_0:
     x86.lea_symdata rax, [__panic_msg_0]
     x86.mov rcx, rax
@@ -2535,16 +2495,12 @@ module {
     x86.cqo
     x86.idiv r8
     x86.xor r9, r9
+    x86.mov rax, 4294967295
+    x86.cmp rdx, rax
+    x86.jg main.__range_panic_0
     x86.cmp rdx, r9
-    x86.setl rax
-    x86.movzx rax, raxb
-    x86.mov rcx, 4294967295
-    x86.cmp rdx, rcx
-    x86.setg rcx
-    x86.movzx rcx, rcxb
-    x86.or rax, rcx
-    x86.test rax, rax
-    x86.je main.__range_ok_0
+    x86.jl main.__range_panic_0
+    x86.jmp main.__range_ok_0
   __range_panic_0:
     x86.lea_symdata rax, [__panic_msg_0]
     x86.mov rcx, rax
@@ -2778,16 +2734,12 @@ module {
     x86.add rax, rcx
     x86.add rax, rdx
     x86.xor r8, r8
+    x86.mov r9, 4294967295
+    x86.cmp rax, r9
+    x86.jg main.__range_panic_0
     x86.cmp rax, r8
-    x86.setl r9
-    x86.movzx r9, r9b
-    x86.mov rcx, 4294967295
-    x86.cmp rax, rcx
-    x86.setg rcx
-    x86.movzx rcx, rcxb
-    x86.or r9, rcx
-    x86.test r9, r9
-    x86.je main.__range_ok_0
+    x86.jl main.__range_panic_0
+    x86.jmp main.__range_ok_0
   __range_panic_0:
     x86.lea_symdata rax, [__panic_msg_0]
     x86.mov rcx, rax
@@ -3000,16 +2952,12 @@ module {
     x86.mov rcx, 2
     x86.add rcx, rax
     x86.xor rdx, rdx
+    x86.mov rbx, 4294967295
+    x86.cmp rcx, rbx
+    x86.jg main.__range_panic_0
     x86.cmp rcx, rdx
-    x86.setl rbx
-    x86.movzx rbx, rbxb
-    x86.mov rsi, 4294967295
-    x86.cmp rcx, rsi
-    x86.setg rdi
-    x86.movzx rdi, rdib
-    x86.or rbx, rdi
-    x86.test rbx, rbx
-    x86.je main.__range_ok_0
+    x86.jl main.__range_panic_0
+    x86.jmp main.__range_ok_0
   __range_panic_0:
     x86.lea_symdata rax, [__panic_msg_0]
     x86.mov rcx, rax
@@ -3240,16 +3188,12 @@ module {
     x86.add rbx, rsi
     x86.add rbx, rax
     x86.xor rdi, rdi
+    x86.mov r8, 4294967295
+    x86.cmp rbx, r8
+    x86.jg main.__range_panic_0
     x86.cmp rbx, rdi
-    x86.setl r8
-    x86.movzx r8, r8b
-    x86.mov r9, 4294967295
-    x86.cmp rbx, r9
-    x86.setg rax
-    x86.movzx rax, raxb
-    x86.or r8, rax
-    x86.test r8, r8
-    x86.je main.__range_ok_0
+    x86.jl main.__range_panic_0
+    x86.jmp main.__range_ok_0
   __range_panic_0:
     x86.lea_symdata rax, [__panic_msg_0]
     x86.mov rcx, rax
@@ -3484,16 +3428,12 @@ module {
     x86.cqo
     x86.idiv rbx
     x86.xor rcx, rcx
+    x86.mov rax, 4294967295
+    x86.cmp rdx, rax
+    x86.jg main.__range_panic_0
     x86.cmp rdx, rcx
-    x86.setl rax
-    x86.movzx rax, raxb
-    x86.mov rcx, 4294967295
-    x86.cmp rdx, rcx
-    x86.setg rcx
-    x86.movzx rcx, rcxb
-    x86.or rax, rcx
-    x86.test rax, rax
-    x86.je main.__range_ok_0
+    x86.jl main.__range_panic_0
+    x86.jmp main.__range_ok_0
   __range_panic_0:
     x86.lea_symdata rax, [__panic_msg_0]
     x86.mov rcx, rax
@@ -3718,16 +3658,12 @@ module {
     x86.mov rdx, 12
     x86.call register-allocator.add
     x86.xor rcx, rcx
-    x86.cmp rax, rcx
-    x86.setl rcx
-    x86.movzx rcx, rcxb
     x86.mov rdx, 4294967295
     x86.cmp rax, rdx
-    x86.setg rdx
-    x86.movzx rdx, rdxb
-    x86.or rcx, rdx
-    x86.test rcx, rcx
-    x86.je main.__range_ok_0
+    x86.jg main.__range_panic_0
+    x86.cmp rax, rcx
+    x86.jl main.__range_panic_0
+    x86.jmp main.__range_ok_0
   __range_panic_0:
     x86.lea_symdata rax, [__panic_msg_0]
     x86.mov rcx, rax
@@ -3922,16 +3858,12 @@ module {
     x86.mov rdx, 20
     x86.call register-allocator.add
     x86.xor rcx, rcx
-    x86.cmp rax, rcx
-    x86.setl rcx
-    x86.movzx rcx, rcxb
     x86.mov rdx, 4294967295
     x86.cmp rax, rdx
-    x86.setg rdx
-    x86.movzx rdx, rdxb
-    x86.or rcx, rdx
-    x86.test rcx, rcx
-    x86.je main.__range_ok_0
+    x86.jg main.__range_panic_0
+    x86.cmp rax, rcx
+    x86.jl main.__range_panic_0
+    x86.jmp main.__range_ok_0
   __range_panic_0:
     x86.lea_symdata rax, [__panic_msg_0]
     x86.mov rcx, rax
@@ -4281,16 +4213,12 @@ module {
     x86.mov rcx, [rbp-16]
     x86.add rax, rcx
     x86.xor rdx, rdx
+    x86.mov rbx, 4294967295
+    x86.cmp rax, rbx
+    x86.jg main.__range_panic_2
     x86.cmp rax, rdx
-    x86.setl rbx
-    x86.movzx rbx, rbxb
-    x86.mov rsi, 4294967295
-    x86.cmp rax, rsi
-    x86.setg rdi
-    x86.movzx rdi, rdib
-    x86.or rbx, rdi
-    x86.test rbx, rbx
-    x86.je main.__range_ok_2
+    x86.jl main.__range_panic_2
+    x86.jmp main.__range_ok_2
   __range_panic_2:
     x86.lea_symdata rax, [__panic_msg_0]
     x86.mov rcx, rax
@@ -4531,16 +4459,12 @@ module {
   loop_0.exit:
     x86.mov rax, [rbp-8]
     x86.xor rcx, rcx
+    x86.mov rdx, 4294967295
+    x86.cmp rax, rdx
+    x86.jg main.__range_panic_1
     x86.cmp rax, rcx
-    x86.setl rdx
-    x86.movzx rdx, rdxb
-    x86.mov rbx, 4294967295
-    x86.cmp rax, rbx
-    x86.setg rsi
-    x86.movzx rsi, rsib
-    x86.or rdx, rsi
-    x86.test rdx, rdx
-    x86.je main.__range_ok_1
+    x86.jl main.__range_panic_1
+    x86.jmp main.__range_ok_1
   __range_panic_1:
     x86.lea_symdata rax, [__panic_msg_0]
     x86.mov rcx, rax
@@ -4799,16 +4723,12 @@ module {
     x86.cqo
     x86.idiv rbx
     x86.xor rax, rax
-    x86.cmp rdx, rax
-    x86.setl rax
-    x86.movzx rax, raxb
     x86.mov rcx, 4294967295
     x86.cmp rdx, rcx
-    x86.setg rcx
-    x86.movzx rcx, rcxb
-    x86.or rax, rcx
-    x86.test rax, rax
-    x86.je main.__range_ok_1
+    x86.jg main.__range_panic_1
+    x86.cmp rdx, rax
+    x86.jl main.__range_panic_1
+    x86.jmp main.__range_ok_1
   __range_panic_1:
     x86.lea_symdata rax, [__panic_msg_0]
     x86.mov rcx, rax
@@ -5186,16 +5106,12 @@ module {
     x86.cqo
     x86.idiv rbx
     x86.xor rsi, rsi
+    x86.mov rdi, 4294967295
+    x86.cmp rdx, rdi
+    x86.jg main.__range_panic_3
     x86.cmp rdx, rsi
-    x86.setl rdi
-    x86.movzx rdi, rdib
-    x86.mov r8, 4294967295
-    x86.cmp rdx, r8
-    x86.setg r9
-    x86.movzx r9, r9b
-    x86.or rdi, r9
-    x86.test rdi, rdi
-    x86.je main.__range_ok_3
+    x86.jl main.__range_panic_3
+    x86.jmp main.__range_ok_3
   __range_panic_3:
     x86.lea_symdata rax, [__panic_msg_0]
     x86.mov rcx, rax
@@ -5619,16 +5535,12 @@ module {
     x86.cqo
     x86.idiv rbx
     x86.xor rax, rax
-    x86.cmp rdx, rax
-    x86.setl rax
-    x86.movzx rax, raxb
     x86.mov rcx, 4294967295
     x86.cmp rdx, rcx
-    x86.setg rcx
-    x86.movzx rcx, rcxb
-    x86.or rax, rcx
-    x86.test rax, rax
-    x86.je main.__range_ok_3
+    x86.jg main.__range_panic_3
+    x86.cmp rdx, rax
+    x86.jl main.__range_panic_3
+    x86.jmp main.__range_ok_3
   __range_panic_3:
     x86.lea_symdata rax, [__panic_msg_0]
     x86.mov rcx, rax
@@ -6005,16 +5917,12 @@ module {
   outer_0.exit:
     x86.mov rax, [rbp-8]
     x86.xor rcx, rcx
+    x86.mov rdx, 4294967295
+    x86.cmp rax, rdx
+    x86.jg main.__range_panic_2
     x86.cmp rax, rcx
-    x86.setl rdx
-    x86.movzx rdx, rdxb
-    x86.mov rbx, 4294967295
-    x86.cmp rax, rbx
-    x86.setg rsi
-    x86.movzx rsi, rsib
-    x86.or rdx, rsi
-    x86.test rdx, rdx
-    x86.je main.__range_ok_2
+    x86.jl main.__range_panic_2
+    x86.jmp main.__range_ok_2
   __range_panic_2:
     x86.lea_symdata rax, [__panic_msg_0]
     x86.mov rcx, rax
@@ -6381,16 +6289,12 @@ module {
   outer_0.exit:
     x86.mov rax, [rbp-8]
     x86.xor rcx, rcx
+    x86.mov rdx, 4294967295
+    x86.cmp rax, rdx
+    x86.jg main.__range_panic_2
     x86.cmp rax, rcx
-    x86.setl rdx
-    x86.movzx rdx, rdxb
-    x86.mov rbx, 4294967295
-    x86.cmp rax, rbx
-    x86.setg rsi
-    x86.movzx rsi, rsib
-    x86.or rdx, rsi
-    x86.test rdx, rdx
-    x86.je main.__range_ok_2
+    x86.jl main.__range_panic_2
+    x86.jmp main.__range_ok_2
   __range_panic_2:
     x86.lea_symdata rax, [__panic_msg_0]
     x86.mov rcx, rax
@@ -6740,16 +6644,12 @@ module {
   loop_0.exit:
     x86.mov rax, [rbp-8]
     x86.xor rcx, rcx
+    x86.mov rdx, 4294967295
+    x86.cmp rax, rdx
+    x86.jg main.__range_panic_1
     x86.cmp rax, rcx
-    x86.setl rdx
-    x86.movzx rdx, rdxb
-    x86.mov rbx, 4294967295
-    x86.cmp rax, rbx
-    x86.setg rsi
-    x86.movzx rsi, rsib
-    x86.or rdx, rsi
-    x86.test rdx, rdx
-    x86.je main.__range_ok_1
+    x86.jl main.__range_panic_1
+    x86.jmp main.__range_ok_1
   __range_panic_1:
     x86.lea_symdata rax, [__panic_msg_0]
     x86.mov rcx, rax
@@ -7004,16 +6904,12 @@ module {
     x86.mov rdi, 6
     x86.add rax, rdi
     x86.xor r8, r8
+    x86.mov r9, 4294967295
+    x86.cmp rax, r9
+    x86.jg main.__range_panic_0
     x86.cmp rax, r8
-    x86.setl r9
-    x86.movzx r9, r9b
-    x86.mov rcx, 4294967295
-    x86.cmp rax, rcx
-    x86.setg rcx
-    x86.movzx rcx, rcxb
-    x86.or r9, rcx
-    x86.test r9, r9
-    x86.je main.__range_ok_0
+    x86.jl main.__range_panic_0
+    x86.jmp main.__range_ok_0
   __range_panic_0:
     x86.lea_symdata rax, [__panic_msg_0]
     x86.mov rcx, rax
@@ -7201,16 +7097,12 @@ module {
     x86.sub rdx, rbx
     x86.imul rax, rdx
     x86.xor rsi, rsi
+    x86.mov rdi, 4294967295
+    x86.cmp rax, rdi
+    x86.jg main.__range_panic_0
     x86.cmp rax, rsi
-    x86.setl rdi
-    x86.movzx rdi, rdib
-    x86.mov r8, 4294967295
-    x86.cmp rax, r8
-    x86.setg r9
-    x86.movzx r9, r9b
-    x86.or rdi, r9
-    x86.test rdi, rdi
-    x86.je main.__range_ok_0
+    x86.jl main.__range_panic_0
+    x86.jmp main.__range_ok_0
   __range_panic_0:
     x86.lea_symdata rax, [__panic_msg_0]
     x86.mov rcx, rax
@@ -7421,16 +7313,12 @@ module {
     x86.mov rsi, 7
     x86.call register-allocator.sum5
     x86.xor rcx, rcx
-    x86.cmp rax, rcx
-    x86.setl rcx
-    x86.movzx rcx, rcxb
     x86.mov rdx, 4294967295
     x86.cmp rax, rdx
-    x86.setg rdx
-    x86.movzx rdx, rdxb
-    x86.or rcx, rdx
-    x86.test rcx, rcx
-    x86.je main.__range_ok_0
+    x86.jg main.__range_panic_0
+    x86.cmp rax, rcx
+    x86.jl main.__range_panic_0
+    x86.jmp main.__range_ok_0
   __range_panic_0:
     x86.lea_symdata rax, [__panic_msg_0]
     x86.mov rcx, rax
@@ -7711,16 +7599,12 @@ module {
     x86.call register-allocator.sum9
     x86.add rsp, 16
     x86.xor rcx, rcx
+    x86.mov rdx, 4294967295
+    x86.cmp rax, rdx
+    x86.jg main.__range_panic_0
     x86.cmp rax, rcx
-    x86.setl rdx
-    x86.movzx rdx, rdxb
-    x86.mov rbx, 4294967295
-    x86.cmp rax, rbx
-    x86.setg rsi
-    x86.movzx rsi, rsib
-    x86.or rdx, rsi
-    x86.test rdx, rdx
-    x86.je main.__range_ok_0
+    x86.jl main.__range_panic_0
+    x86.jmp main.__range_ok_0
   __range_panic_0:
     x86.lea_symdata rax, [__panic_msg_0]
     x86.mov rcx, rax
@@ -7912,7 +7796,7 @@ module {
   entry:
     %0 = maxon.param {index = 0 : i32} {name = n} {type = i64}
     %1 = maxon.literal {value = 1 : i64}
-    %2 = maxon.binop %0, %1 {op = le} {optimalType = i64}
+    %2 = maxon.binop %0, %1 {op = le}
     maxon.cond_br %2 [then: base_0, else: base_0.after]
   base_0:
     %3 = maxon.literal {value = 1 : i64}
@@ -8022,16 +7906,12 @@ module {
     x86.cqo
     x86.idiv rcx
     x86.xor rax, rax
+    x86.mov rcx, 4294967295
+    x86.cmp rdx, rcx
+    x86.jg main.__range_panic_0
     x86.cmp rdx, rax
-    x86.setl rcx
-    x86.movzx rcx, rcxb
-    x86.mov rax, 4294967295
-    x86.cmp rdx, rax
-    x86.setg rax
-    x86.movzx rax, raxb
-    x86.or rcx, rax
-    x86.test rcx, rcx
-    x86.je main.__range_ok_0
+    x86.jl main.__range_panic_0
+    x86.jmp main.__range_ok_0
   __range_panic_0:
     x86.lea_symdata rax, [__panic_msg_0]
     x86.mov rcx, rax
@@ -8437,16 +8317,12 @@ module {
     x86.cqo
     x86.idiv rdi
     x86.xor r8, r8
+    x86.mov r9, 4294967295
+    x86.cmp rdx, r9
+    x86.jg main.__range_panic_1
     x86.cmp rdx, r8
-    x86.setl r9
-    x86.movzx r9, r9b
-    x86.mov rax, 4294967295
-    x86.cmp rdx, rax
-    x86.setg rax
-    x86.movzx rax, raxb
-    x86.or r9, rax
-    x86.test r9, r9
-    x86.je main.__range_ok_1
+    x86.jl main.__range_panic_1
+    x86.jmp main.__range_ok_1
   __range_panic_1:
     x86.lea_symdata rax, [__panic_msg_0]
     x86.mov rcx, rax
@@ -8791,16 +8667,12 @@ module {
     x86.cvttsd2si rdx, xmm2
     x86.add rdx, rax
     x86.xor rbx, rbx
+    x86.mov rsi, 4294967295
+    x86.cmp rdx, rsi
+    x86.jg main.__range_panic_0
     x86.cmp rdx, rbx
-    x86.setl rsi
-    x86.movzx rsi, rsib
-    x86.mov rdi, 4294967295
-    x86.cmp rdx, rdi
-    x86.setg r8
-    x86.movzx r8, r8b
-    x86.or rsi, r8
-    x86.test rsi, rsi
-    x86.je main.__range_ok_0
+    x86.jl main.__range_panic_0
+    x86.jmp main.__range_ok_0
   __range_panic_0:
     x86.lea_symdata rax, [__panic_msg_0]
     x86.mov rcx, rax
@@ -9117,16 +8989,12 @@ module {
     x86.mov rcx, [rbp-16]
     x86.add rax, rcx
     x86.xor rdx, rdx
+    x86.mov rbx, 4294967295
+    x86.cmp rax, rbx
+    x86.jg main.__range_panic_3
     x86.cmp rax, rdx
-    x86.setl rbx
-    x86.movzx rbx, rbxb
-    x86.mov rsi, 4294967295
-    x86.cmp rax, rsi
-    x86.setg rdi
-    x86.movzx rdi, rdib
-    x86.or rbx, rdi
-    x86.test rbx, rbx
-    x86.je main.__range_ok_3
+    x86.jl main.__range_panic_3
+    x86.jmp main.__range_ok_3
   __range_panic_3:
     x86.lea_symdata rax, [__panic_msg_0]
     x86.mov rcx, rax
@@ -9497,16 +9365,12 @@ module {
   loop_0.exit:
     x86.mov rax, [rbp-8]
     x86.xor rcx, rcx
+    x86.mov rdx, 4294967295
+    x86.cmp rax, rdx
+    x86.jg main.__range_panic_1
     x86.cmp rax, rcx
-    x86.setl rdx
-    x86.movzx rdx, rdxb
-    x86.mov rbx, 4294967295
-    x86.cmp rax, rbx
-    x86.setg rsi
-    x86.movzx rsi, rsib
-    x86.or rdx, rsi
-    x86.test rdx, rdx
-    x86.je main.__range_ok_1
+    x86.jl main.__range_panic_1
+    x86.jmp main.__range_ok_1
   __range_panic_1:
     x86.lea_symdata rax, [__panic_msg_0]
     x86.mov rcx, rax
@@ -9801,16 +9665,12 @@ module {
     x86.mov rcx, 42
     x86.add rcx, rax
     x86.xor rdx, rdx
+    x86.mov rbx, 4294967295
+    x86.cmp rcx, rbx
+    x86.jg main.__range_panic_0
     x86.cmp rcx, rdx
-    x86.setl rbx
-    x86.movzx rbx, rbxb
-    x86.mov rsi, 4294967295
-    x86.cmp rcx, rsi
-    x86.setg rdi
-    x86.movzx rdi, rdib
-    x86.or rbx, rdi
-    x86.test rbx, rbx
-    x86.je main.__range_ok_0
+    x86.jl main.__range_panic_0
+    x86.jmp main.__range_ok_0
   __range_panic_0:
     x86.lea_symdata rax, [__panic_msg_0]
     x86.mov rcx, rax
@@ -10036,16 +9896,12 @@ module {
     x86.cvttsd2si rcx, xmm0
     x86.add rcx, rax
     x86.xor rax, rax
-    x86.cmp rcx, rax
-    x86.setl rax
-    x86.movzx rax, raxb
     x86.mov rdx, 4294967295
     x86.cmp rcx, rdx
-    x86.setg rdx
-    x86.movzx rdx, rdxb
-    x86.or rax, rdx
-    x86.test rax, rax
-    x86.je main.__range_ok_0
+    x86.jg main.__range_panic_0
+    x86.cmp rcx, rax
+    x86.jl main.__range_panic_0
+    x86.jmp main.__range_ok_0
   __range_panic_0:
     x86.lea_symdata rax, [__panic_msg_0]
     x86.mov rcx, rax
@@ -10243,16 +10099,12 @@ module {
     x86.mov rbx, 10
     x86.imul rdx, rbx
     x86.xor rsi, rsi
+    x86.mov rdi, 4294967295
+    x86.cmp rdx, rdi
+    x86.jg main.__range_panic_0
     x86.cmp rdx, rsi
-    x86.setl rdi
-    x86.movzx rdi, rdib
-    x86.mov r8, 4294967295
-    x86.cmp rdx, r8
-    x86.setg r9
-    x86.movzx r9, r9b
-    x86.or rdi, r9
-    x86.test rdi, rdi
-    x86.je main.__range_ok_0
+    x86.jl main.__range_panic_0
+    x86.jmp main.__range_ok_0
   __range_panic_0:
     x86.lea_symdata rax, [__panic_msg_0]
     x86.mov rcx, rax
@@ -10448,16 +10300,12 @@ module {
     x86.mov rcx, 45
     x86.add rax, rcx
     x86.xor rcx, rcx
-    x86.cmp rax, rcx
-    x86.setl rcx
-    x86.movzx rcx, rcxb
     x86.mov rdx, 4294967295
     x86.cmp rax, rdx
-    x86.setg rdx
-    x86.movzx rdx, rdxb
-    x86.or rcx, rdx
-    x86.test rcx, rcx
-    x86.je main.__range_ok_0
+    x86.jg main.__range_panic_0
+    x86.cmp rax, rcx
+    x86.jl main.__range_panic_0
+    x86.jmp main.__range_ok_0
   __range_panic_0:
     x86.lea_symdata rax, [__panic_msg_0]
     x86.mov rcx, rax
@@ -10683,16 +10531,12 @@ module {
     x86.sub rax, r8
     x86.sub rax, r9
     x86.xor rcx, rcx
-    x86.cmp rax, rcx
-    x86.setl rcx
-    x86.movzx rcx, rcxb
     x86.mov rdx, 4294967295
     x86.cmp rax, rdx
-    x86.setg rdx
-    x86.movzx rdx, rdxb
-    x86.or rcx, rdx
-    x86.test rcx, rcx
-    x86.je main.__range_ok_0
+    x86.jg main.__range_panic_0
+    x86.cmp rax, rcx
+    x86.jl main.__range_panic_0
+    x86.jmp main.__range_ok_0
   __range_panic_0:
     x86.lea_symdata rax, [__panic_msg_0]
     x86.mov rcx, rax
@@ -10969,16 +10813,12 @@ module {
     x86.mov rdx, [rbp-24]
     x86.add rax, rdx
     x86.xor rbx, rbx
+    x86.mov rsi, 4294967295
+    x86.cmp rax, rsi
+    x86.jg main.__range_panic_2
     x86.cmp rax, rbx
-    x86.setl rsi
-    x86.movzx rsi, rsib
-    x86.mov rdi, 4294967295
-    x86.cmp rax, rdi
-    x86.setg r8
-    x86.movzx r8, r8b
-    x86.or rsi, r8
-    x86.test rsi, rsi
-    x86.je main.__range_ok_2
+    x86.jl main.__range_panic_2
+    x86.jmp main.__range_ok_2
   __range_panic_2:
     x86.lea_symdata rax, [__panic_msg_0]
     x86.mov rcx, rax
@@ -11504,16 +11344,12 @@ module {
   process_0.merge:
     x86.mov rax, [rbp-16]
     x86.xor rcx, rcx
+    x86.mov rdx, 4294967295
+    x86.cmp rax, rdx
+    x86.jg main.__range_panic_1
     x86.cmp rax, rcx
-    x86.setl rdx
-    x86.movzx rdx, rdxb
-    x86.mov rbx, 4294967295
-    x86.cmp rax, rbx
-    x86.setg rsi
-    x86.movzx rsi, rsib
-    x86.or rdx, rsi
-    x86.test rdx, rdx
-    x86.je main.__range_ok_1
+    x86.jl main.__range_panic_1
+    x86.jmp main.__range_ok_1
   __range_panic_1:
     x86.lea_symdata rax, [__panic_msg_0]
     x86.mov rcx, rax
@@ -11784,17 +11620,13 @@ module {
   check_0.cmp0:
     x86.mov rax, [rbp-8]
     x86.mov rcx, 1
+    x86.mov rdx, [rbp-8]
+    x86.mov rbx, 2
+    x86.cmp rdx, rbx
+    x86.je main.check_0.case0
     x86.cmp rax, rcx
-    x86.sete rdx
-    x86.movzx rdx, rdxb
-    x86.mov rbx, [rbp-8]
-    x86.mov rsi, 2
-    x86.cmp rbx, rsi
-    x86.sete rdi
-    x86.movzx rdi, rdib
-    x86.or rdx, rdi
-    x86.test rdx, rdx
-    x86.je main.check_0.cmp1
+    x86.je main.check_0.case0
+    x86.jmp main.check_0.cmp1
   check_0.case0:
     x86.mov rax, 10
     x86.epilogue
@@ -11802,17 +11634,13 @@ module {
   check_0.cmp1:
     x86.mov rax, [rbp-8]
     x86.mov rcx, 3
+    x86.mov rdx, [rbp-8]
+    x86.mov rbx, 4
+    x86.cmp rdx, rbx
+    x86.je main.check_0.case1
     x86.cmp rax, rcx
-    x86.sete rdx
-    x86.movzx rdx, rdxb
-    x86.mov rbx, [rbp-8]
-    x86.mov rsi, 4
-    x86.cmp rbx, rsi
-    x86.sete rdi
-    x86.movzx rdi, rdib
-    x86.or rdx, rdi
-    x86.test rdx, rdx
-    x86.je main.check_0.case2
+    x86.je main.check_0.case1
+    x86.jmp main.check_0.case2
   check_0.case1:
     x86.mov rax, 20
     x86.epilogue
@@ -12151,16 +11979,12 @@ module {
   cascade_0.merge:
     x86.mov rax, [rbp-8]
     x86.xor rcx, rcx
+    x86.mov rdx, 4294967295
+    x86.cmp rax, rdx
+    x86.jg main.__range_panic_1
     x86.cmp rax, rcx
-    x86.setl rdx
-    x86.movzx rdx, rdxb
-    x86.mov rbx, 4294967295
-    x86.cmp rax, rbx
-    x86.setg rsi
-    x86.movzx rsi, rsib
-    x86.or rdx, rsi
-    x86.test rdx, rdx
-    x86.je main.__range_ok_1
+    x86.jl main.__range_panic_1
+    x86.jmp main.__range_ok_1
   __range_panic_1:
     x86.lea_symdata rax, [__panic_msg_0]
     x86.mov rcx, rax
@@ -12522,16 +12346,12 @@ module {
   eval_0.merge:
     x86.mov rax, [rbp-16]
     x86.xor rcx, rcx
+    x86.mov rdx, 4294967295
+    x86.cmp rax, rdx
+    x86.jg main.__range_panic_1
     x86.cmp rax, rcx
-    x86.setl rdx
-    x86.movzx rdx, rdxb
-    x86.mov rbx, 4294967295
-    x86.cmp rax, rbx
-    x86.setg rsi
-    x86.movzx rsi, rsib
-    x86.or rdx, rsi
-    x86.test rdx, rdx
-    x86.je main.__range_ok_1
+    x86.jl main.__range_panic_1
+    x86.jmp main.__range_ok_1
   __range_panic_1:
     x86.lea_symdata rax, [__panic_msg_0]
     x86.mov rcx, rax
@@ -12832,17 +12652,13 @@ module {
   eval_0.cmp0:
     x86.mov rax, [rbp-8]
     x86.mov rcx, 1
+    x86.mov rdx, [rbp-8]
+    x86.mov rbx, 2
+    x86.cmp rdx, rbx
+    x86.je main.eval_0.case0
     x86.cmp rax, rcx
-    x86.sete rdx
-    x86.movzx rdx, rdxb
-    x86.mov rbx, [rbp-8]
-    x86.mov rsi, 2
-    x86.cmp rbx, rsi
-    x86.sete rdi
-    x86.movzx rdi, rdib
-    x86.or rdx, rdi
-    x86.test rdx, rdx
-    x86.je main.eval_0.cmp1
+    x86.je main.eval_0.case0
+    x86.jmp main.eval_0.cmp1
   eval_0.case0:
     x86.mov rax, 10
     x86.mov [rbp-16], rax
@@ -12850,17 +12666,13 @@ module {
   eval_0.cmp1:
     x86.mov rax, [rbp-8]
     x86.mov rcx, 3
+    x86.mov rdx, [rbp-8]
+    x86.mov rbx, 4
+    x86.cmp rdx, rbx
+    x86.je main.eval_0.case1
     x86.cmp rax, rcx
-    x86.sete rdx
-    x86.movzx rdx, rdxb
-    x86.mov rbx, [rbp-8]
-    x86.mov rsi, 4
-    x86.cmp rbx, rsi
-    x86.sete rdi
-    x86.movzx rdi, rdib
-    x86.or rdx, rdi
-    x86.test rdx, rdx
-    x86.je main.eval_0.case2
+    x86.je main.eval_0.case1
+    x86.jmp main.eval_0.case2
   eval_0.case1:
     x86.mov rax, 20
     x86.mov [rbp-16], rax
@@ -12872,16 +12684,12 @@ module {
   eval_0.merge:
     x86.mov rax, [rbp-16]
     x86.xor rcx, rcx
+    x86.mov rdx, 4294967295
+    x86.cmp rax, rdx
+    x86.jg main.__range_panic_1
     x86.cmp rax, rcx
-    x86.setl rdx
-    x86.movzx rdx, rdxb
-    x86.mov rbx, 4294967295
-    x86.cmp rax, rbx
-    x86.setg rsi
-    x86.movzx rsi, rsib
-    x86.or rdx, rsi
-    x86.test rdx, rdx
-    x86.je main.__range_ok_1
+    x86.jl main.__range_panic_1
+    x86.jmp main.__range_ok_1
   __range_panic_1:
     x86.lea_symdata rax, [__panic_msg_0]
     x86.mov rcx, rax
@@ -13220,16 +13028,12 @@ module {
     x86.mov rcx, 2
     x86.imul rax, rcx
     x86.xor rdx, rdx
+    x86.mov rbx, 4294967295
+    x86.cmp rax, rbx
+    x86.jg main.__range_panic_1
     x86.cmp rax, rdx
-    x86.setl rbx
-    x86.movzx rbx, rbxb
-    x86.mov rsi, 4294967295
-    x86.cmp rax, rsi
-    x86.setg rdi
-    x86.movzx rdi, rdib
-    x86.or rbx, rdi
-    x86.test rbx, rbx
-    x86.je main.__range_ok_1
+    x86.jl main.__range_panic_1
+    x86.jmp main.__range_ok_1
   __range_panic_1:
     x86.lea_symdata rax, [__panic_msg_0]
     x86.mov rcx, rax
@@ -13581,16 +13385,12 @@ module {
   process_0.merge:
     x86.mov rax, [rbp-16]
     x86.xor rcx, rcx
+    x86.mov rdx, 4294967295
+    x86.cmp rax, rdx
+    x86.jg main.__range_panic_1
     x86.cmp rax, rcx
-    x86.setl rdx
-    x86.movzx rdx, rdxb
-    x86.mov rbx, 4294967295
-    x86.cmp rax, rbx
-    x86.setg rsi
-    x86.movzx rsi, rsib
-    x86.or rdx, rsi
-    x86.test rdx, rdx
-    x86.je main.__range_ok_1
+    x86.jl main.__range_panic_1
+    x86.jmp main.__range_ok_1
   __range_panic_1:
     x86.lea_symdata rax, [__panic_msg_0]
     x86.mov rcx, rax
@@ -14047,16 +13847,12 @@ module {
   otherwise_continue_1:
     x86.mov rax, [rbp-8]
     x86.xor rcx, rcx
+    x86.mov rdx, 4294967295
+    x86.cmp rax, rdx
+    x86.jg main.__range_panic_4
     x86.cmp rax, rcx
-    x86.setl rdx
-    x86.movzx rdx, rdxb
-    x86.mov rbx, 4294967295
-    x86.cmp rax, rbx
-    x86.setg rsi
-    x86.movzx rsi, rsib
-    x86.or rdx, rsi
-    x86.test rdx, rdx
-    x86.je main.__range_ok_4
+    x86.jl main.__range_panic_4
+    x86.jmp main.__range_ok_4
   __range_panic_4:
     x86.lea_symdata rax, [__panic_msg_0]
     x86.mov rcx, rax
@@ -14377,16 +14173,12 @@ module {
   otherwise_default_continue_3:
     x86.mov rax, [rbp-16]
     x86.xor rcx, rcx
+    x86.mov rdx, 4294967295
+    x86.cmp rax, rdx
+    x86.jg main.__range_panic_4
     x86.cmp rax, rcx
-    x86.setl rdx
-    x86.movzx rdx, rdxb
-    x86.mov rbx, 4294967295
-    x86.cmp rax, rbx
-    x86.setg rsi
-    x86.movzx rsi, rsib
-    x86.or rdx, rsi
-    x86.test rdx, rdx
-    x86.je main.__range_ok_4
+    x86.jl main.__range_panic_4
+    x86.jmp main.__range_ok_4
   __range_panic_4:
     x86.lea_symdata rax, [__panic_msg_0]
     x86.mov rcx, rax
@@ -14847,16 +14639,12 @@ module {
     x86.add rcx, rdx
     x86.add rcx, rax
     x86.xor rbx, rbx
+    x86.mov rsi, 4294967295
+    x86.cmp rcx, rsi
+    x86.jg main.__range_panic_12
     x86.cmp rcx, rbx
-    x86.setl rsi
-    x86.movzx rsi, rsib
-    x86.mov rdi, 4294967295
-    x86.cmp rcx, rdi
-    x86.setg r8
-    x86.movzx r8, r8b
-    x86.or rsi, r8
-    x86.test rsi, rsi
-    x86.je main.__range_ok_12
+    x86.jl main.__range_panic_12
+    x86.jmp main.__range_ok_12
   __range_panic_12:
     x86.lea_symdata rax, [__panic_msg_0]
     x86.mov rcx, rax
@@ -15395,16 +15183,12 @@ module {
     x86.mov rax, [rbp-24]
     x86.add rax, rdx
     x86.xor rdx, rdx
+    x86.mov rbx, 4294967295
+    x86.cmp rax, rbx
+    x86.jg main.__range_panic_8
     x86.cmp rax, rdx
-    x86.setl rbx
-    x86.movzx rbx, rbxb
-    x86.mov rsi, 4294967295
-    x86.cmp rax, rsi
-    x86.setg rdi
-    x86.movzx rdi, rdib
-    x86.or rbx, rdi
-    x86.test rbx, rbx
-    x86.je main.__range_ok_8
+    x86.jl main.__range_panic_8
+    x86.jmp main.__range_ok_8
   __range_panic_8:
     x86.lea_symdata rax, [__panic_msg_0]
     x86.mov rcx, rax

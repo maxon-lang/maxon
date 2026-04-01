@@ -25,49 +25,40 @@ Stack trace:
 ```
 ---
 module {
-  func @range-check-panic.validate(s: i64) -> u8 {
+  func @range-check-panic.validate(ptr: i64) -> u8 {
   entry:
     x86.prologue stack_size=16
-    x86.xor rax, rax
-    x86.cmp rcx, rax
+    x86.test rcx, rcx
     x86.setl rax
-    x86.movzx rax, raxb
-    x86.mov rdx, 100
-    x86.cmp rcx, rdx
+    x86.cmp rcx, 100
     x86.setg rdx
-    x86.movzx rdx, rdxb
     x86.or rax, rdx
-    x86.test rax, rax
-    x86.je range-check-panic.validate.__range_ok_0
-  __range_panic_0:
-    x86.lea_symdata rax, [__panic_msg_0]
+    x86.je __range_ok_1
+  __range_panic_1:
+    x86.lea rax, [rip+__panic_msg_1]
     x86.mov rcx, rax
     x86.call mrt_panic
-  __range_ok_0:
+  __range_ok_1:
     x86.mov rax, rcx
     x86.epilogue
     x86.ret
   }
-  func @range-check-panic.process(x: i64) -> u8 {
+  func @range-check-panic.process(ptr: i64) -> u8 {
   entry:
     x86.prologue stack_size=16
+    x86.mov [rbp+-8], rcx
     x86.call range-check-panic.validate
-    x86.xor rcx, rcx
-    x86.cmp rax, rcx
+    x86.test rax, rax
     x86.setl rcx
-    x86.movzx rcx, rcxb
-    x86.mov rdx, 100
-    x86.cmp rax, rdx
+    x86.cmp rax, 100
     x86.setg rdx
-    x86.movzx rdx, rdxb
     x86.or rcx, rdx
-    x86.test rcx, rcx
-    x86.je range-check-panic.process.__range_ok_0
-  __range_panic_0:
-    x86.lea_symdata rax, [__panic_msg_1]
+    x86.je __range_ok_2
+  __range_panic_2:
+    x86.lea rax, [rip+__panic_msg_2]
     x86.mov rcx, rax
     x86.call mrt_panic
-  __range_ok_0:
+  __range_ok_2:
     x86.epilogue
     x86.ret
   }
@@ -76,22 +67,18 @@ module {
     x86.prologue stack_size=16
     x86.mov rcx, 200
     x86.call range-check-panic.process
-    x86.xor rcx, rcx
-    x86.cmp rax, rcx
+    x86.test rax, rax
     x86.setl rcx
-    x86.movzx rcx, rcxb
     x86.mov rdx, 4294967295
     x86.cmp rax, rdx
     x86.setg rdx
-    x86.movzx rdx, rdxb
     x86.or rcx, rdx
-    x86.test rcx, rcx
-    x86.je main.__range_ok_0
-  __range_panic_0:
-    x86.lea_symdata rax, [__panic_msg_2]
+    x86.je __range_ok_3
+  __range_panic_3:
+    x86.lea rax, [rip+__panic_msg_3]
     x86.mov rcx, rax
     x86.call mrt_panic
-  __range_ok_0:
+  __range_ok_3:
     x86.epilogue
     x86.ret
   }

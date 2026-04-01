@@ -25,34 +25,37 @@ end 'main'
 ExitCode: 84
 ---
 module {
-  func @arithmetic.manyVars(a: i64, b: i64, c: i64, d: i64, e: i64, f: i64) -> i64 {
+  func @register-pressure.manyVars(ptr: i64, ptr: i64, ptr: i64, ptr: i64, ptr: i64, ptr: i64) -> i64 {
   entry:
     x86.prologue stack_size=16
-    x86.mov rax, 1
-    x86.add rcx, rax
-    x86.mov rax, 2
-    x86.add rdx, rax
-    x86.mov rax, 3
-    x86.add r8, rax
-    x86.mov rax, 4
-    x86.add r9, rax
-    x86.mov rax, 5
-    x86.add rsi, rax
-    x86.mov rax, 6
-    x86.add rdi, rax
-    x86.lea rax, [rcx + rdx]
-    x86.lea rbx, [r8 + r9]
-    x86.mov [rbp-8], rcx
-    x86.lea rcx, [rsi + rdi]
+    x86.add r9, 4
+    x86.add r8, 3
+    x86.mov rax, r8
+    x86.add rax, r9
+    x86.add rdx, 2
+    x86.add rcx, 1
+    x86.mov rbx, rcx
+    x86.add rbx, rdx
+    x86.add rbx, rax
+    x86.add rdi, 6
+    x86.add rsi, 5
+    x86.mov rax, rsi
+    x86.add rax, rdi
     x86.add rax, rbx
-    x86.add rcx, rax
-    x86.mov rax, [rbp-8]
-    x86.add rcx, rax
-    x86.add rcx, rdx
-    x86.add rcx, r8
-    x86.add rcx, r9
-    x86.add rcx, rsi
-    x86.lea rax, [rcx + rdi]
+    x86.add rax, rcx
+    x86.add rax, rdx
+    x86.add rax, r8
+    x86.add rax, r9
+    x86.add rax, rsi
+    x86.add rax, rdi
+    x86.mov rcx, -9223372036854775807
+    x86.cmp rax, rcx
+    x86.jge __range_ok_1
+  __range_panic_1:
+    x86.lea rax, [rip+__panic_msg_1]
+    x86.mov rcx, rax
+    x86.call mrt_panic
+  __range_ok_1:
     x86.epilogue
     x86.ret
   }
@@ -65,23 +68,19 @@ module {
     x86.mov r9, 4
     x86.mov rsi, 5
     x86.mov rdi, 6
-    x86.call arithmetic.manyVars
-    x86.xor rcx, rcx
-    x86.cmp rax, rcx
+    x86.call register-pressure.manyVars
+    x86.test rax, rax
     x86.setl rcx
-    x86.movzx rcx, rcxb
     x86.mov rdx, 4294967295
     x86.cmp rax, rdx
     x86.setg rdx
-    x86.movzx rdx, rdxb
     x86.or rcx, rdx
-    x86.test rcx, rcx
-    x86.je main.__range_ok_0
-  __range_panic_0:
-    x86.lea_symdata rax, [__panic_msg_0]
+    x86.je __range_ok_2
+  __range_panic_2:
+    x86.lea rax, [rip+__panic_msg_2]
     x86.mov rcx, rax
     x86.call mrt_panic
-  __range_ok_0:
+  __range_ok_2:
     x86.epilogue
     x86.ret
   }

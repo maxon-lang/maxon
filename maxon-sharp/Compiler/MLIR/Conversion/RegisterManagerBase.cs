@@ -421,13 +421,14 @@ public abstract class RegisterManagerBase<TGpr, TFp, TOp>
     _nextSpillOffset = _spillBaseOffset;
   }
 
-  public void ResetForBlockTransition(MlirBlock<TOp> block) {
+  public void ResetForBlockTransition(MlirBlock<TOp> block, HashSet<StdValue>? deadValues = null) {
     var spillOps = new List<TOp>();
 
     foreach (var reg in GprPool) {
       if (_registerContents.TryGetValue(reg, out var value)
         && !_valueStackHome.ContainsKey(value)
-        && !_constantValues.ContainsKey(value)) {
+        && !_constantValues.ContainsKey(value)
+        && !(deadValues?.Contains(value) == true)) {
         _nextSpillOffset -= 8;
         EmitSpillGprToStackCollect(spillOps, _nextSpillOffset, reg);
         _valueStackHome[value] = _nextSpillOffset;
@@ -435,7 +436,8 @@ public abstract class RegisterManagerBase<TGpr, TFp, TOp>
     }
     foreach (var fp in FpPool) {
       if (_fpContents.TryGetValue(fp, out var value)
-        && !_valueFpStackHome.ContainsKey(value)) {
+        && !_valueFpStackHome.ContainsKey(value)
+        && !(deadValues?.Contains(value) == true)) {
         _nextSpillOffset -= 8;
         EmitSpillFpToStackCollect(spillOps, _nextSpillOffset, fp);
         _valueFpStackHome[value] = _nextSpillOffset;
