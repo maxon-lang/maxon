@@ -372,7 +372,7 @@ end 'lowerSiToFpArm64'
 
 function lowerCmpArm64(resultId ValueId, leftId ValueId, rightId ValueId, predicate MirCmpPredicate, dstBlock MlirBlock)
 	match predicate 'kind'
-		eq to ge then lowerIntCmpArm64(resultId, leftId: leftId, rightId: rightId, predicate: predicate, dstBlock: dstBlock)
+		eq to ugt then lowerIntCmpArm64(resultId, leftId: leftId, rightId: rightId, predicate: predicate, dstBlock: dstBlock)
 		feq to fge then lowerFloatCmpArm64(resultId, leftId: leftId, rightId: rightId, predicate: predicate, dstBlock: dstBlock)
 	end 'kind'
 end 'lowerCmpArm64'
@@ -397,6 +397,7 @@ function mirPredicateToArm64CondCode(predicate MirCmpPredicate) returns Arm64Con
 		le gives Arm64CondCode.le
 		gt gives Arm64CondCode.gt
 		ge gives Arm64CondCode.ge
+		ugt gives Arm64CondCode.hi
 		feq gives Arm64CondCode.eq
 		fne gives Arm64CondCode.ne
 		flt gives Arm64CondCode.lt
@@ -668,6 +669,7 @@ function lowerCondBrArm64(condId ValueId, thenTarget BlockId, thenArgIds ValueId
 		le then dstBlock.ops.push(MlirOp.arm64(Arm64Op.condBranch(Arm64CondCode.gt, elseTarget)))
 		gt then dstBlock.ops.push(MlirOp.arm64(Arm64Op.condBranch(Arm64CondCode.le, elseTarget)))
 		ge then dstBlock.ops.push(MlirOp.arm64(Arm64Op.condBranch(Arm64CondCode.lt, elseTarget)))
+		ugt then dstBlock.ops.push(MlirOp.arm64(Arm64Op.condBranch(Arm64CondCode.ls, elseTarget)))
 		feq then dstBlock.ops.push(MlirOp.arm64(Arm64Op.condBranch(Arm64CondCode.ne, elseTarget)))
 		fne then dstBlock.ops.push(MlirOp.arm64(Arm64Op.condBranch(Arm64CondCode.eq, elseTarget)))
 		flt then dstBlock.ops.push(MlirOp.arm64(Arm64Op.condBranch(Arm64CondCode.ge, elseTarget)))

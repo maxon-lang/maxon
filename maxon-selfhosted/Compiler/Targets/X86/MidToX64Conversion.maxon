@@ -628,7 +628,7 @@ end 'lowerSiToFp'
 
 function lowerCmp(resultId ValueId, leftId ValueId, rightId ValueId, predicate MirCmpPredicate, dstBlock MlirBlock, constMap ConstMap, useCounts UseCountMap, condBrCondId ValueId)
 	match predicate 'kind'
-		eq to ge then lowerIntCmp(resultId, leftId: leftId, rightId: rightId, predicate: predicate, dstBlock: dstBlock, constMap: constMap, useCounts: useCounts, condBrCondId: condBrCondId)
+		eq to ugt then lowerIntCmp(resultId, leftId: leftId, rightId: rightId, predicate: predicate, dstBlock: dstBlock, constMap: constMap, useCounts: useCounts, condBrCondId: condBrCondId)
 		feq to fge then lowerFloatCmp(resultId, leftId: leftId, rightId: rightId, predicate: predicate, dstBlock: dstBlock, useCounts: useCounts, condBrCondId: condBrCondId)
 	end 'kind'
 end 'lowerCmp'
@@ -668,6 +668,7 @@ function predicateToSetcc(predicate MirCmpPredicate) returns X64SetccCondition
 		le gives X64SetccCondition.le
 		gt gives X64SetccCondition.g
 		ge gives X64SetccCondition.ge
+		ugt gives X64SetccCondition.a
 		feq gives X64SetccCondition.e
 		fne gives X64SetccCondition.ne
 		flt gives X64SetccCondition.b
@@ -938,6 +939,7 @@ function lowerCondBr(condId ValueId, thenTarget BlockId, thenArgIds ValueIdArray
 		le then dstBlock.ops.push(MlirOp.x64(X64Op.condJump(X64JumpCondition.g, elseTarget)))
 		gt then dstBlock.ops.push(MlirOp.x64(X64Op.condJump(X64JumpCondition.le, elseTarget)))
 		ge then dstBlock.ops.push(MlirOp.x64(X64Op.condJump(X64JumpCondition.l, elseTarget)))
+		ugt then dstBlock.ops.push(MlirOp.x64(X64Op.condJump(X64JumpCondition.be, elseTarget)))
 		feq then dstBlock.ops.push(MlirOp.x64(X64Op.condJump(X64JumpCondition.ne, elseTarget)))
 		fne then dstBlock.ops.push(MlirOp.x64(X64Op.condJump(X64JumpCondition.e, elseTarget)))
 		flt then dstBlock.ops.push(MlirOp.x64(X64Op.condJump(X64JumpCondition.ae, elseTarget)))
