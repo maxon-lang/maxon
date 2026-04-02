@@ -342,3 +342,69 @@ end 'main'
 ```stdout
 [hello]
 ```
+
+<!-- test: trim-end-emoji -->
+```maxon
+function main() returns ExitCode
+	var s = "hello 🎉  "
+	var result = s.trimEnd()
+	print("[{result}]")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+[hello 🎉]
+```
+
+<!-- test: trim-end-only-multibyte -->
+```maxon
+function main() returns ExitCode
+	var s = "中文日本語"
+	var result = s.trimEnd()
+	print("[{result}]")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+[中文日本語]
+```
+
+<!-- test: trim-end-combining-mark -->
+```maxon
+function main() returns ExitCode
+	var s = "café  "
+	var result = s.trimEnd()
+	print("{result.count()}\n")
+	print("{result.byteLength()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+4
+5
+```
+
+<!-- test: trim-both-multibyte -->
+```maxon
+function main() returns ExitCode
+	var s = "  中文  "
+	var result = s.trim()
+	print("[{result}]")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+[中文]
+```

@@ -5,16 +5,25 @@
 export type String implements BuiltinStringLiteral, Hashable, Equatable, Iterable with Character, Cloneable
 	typealias ByteMemory = __ManagedMemory with Byte
 	export var managed ByteMemory
-	var _iterPos Index
+	var iterPos Index
+	var graphemeCount Offset
+	var isAsciiFlag bool
 
-	// Default type for string literals - compiler discovers this via BuiltinStringLiteral interface
-	static function init(managed ByteMemory) returns String
-		return String{managed: managed, _iterPos: 0}
+	/// Check whether this string contains only ASCII bytes
+	export function isAscii() returns bool
+		return isAsciiFlag
+	end 'isAscii'
+
+	// Default type for string literals - compiler discovers this via BuiltinStringLiteral interface.
+	// The C# compiler bypasses this for literals and writes fields directly (including isAsciiFlag).
+	// For runtime-created strings, scan the bytes to determine ASCII status.
+	export static function init(managed ByteMemory) returns String
+		return String{managed: managed, iterPos: 0, graphemeCount: -1, isAsciiFlag: scanIsAscii(managed)}
 	end 'init'
 
 	/// Create a String from a byte array (zero-copy slice of the array's backing memory)
 	export static function from(bytes ByteArray) returns String
-		return String{managed: bytes.managed, _iterPos: 0}
+		return String{managed: bytes.managed, iterPos: 0, graphemeCount: -1, isAsciiFlag: scanIsAscii(bytes.managed)}
 	end 'from'
 
 	/// Return the raw UTF-8 bytes as a ByteArray (zero-copy, shares backing memory)
@@ -26,7 +35,7 @@ export type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 	export function clone() returns String
 		var len = managed.length()
 		var newManaged = managed.slice(0, len)
-		return String{managed: newManaged, _iterPos: 0}
+		return String{managed: newManaged, iterPos: 0, graphemeCount: graphemeCount, isAsciiFlag: isAsciiFlag}
 	end 'clone'
 
 	export function byteLength() returns Count
@@ -39,7 +48,11 @@ export type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 
 	/// Get grapheme cluster count (number of user-perceived characters)
 	export function count() returns Count
-		return countGraphemesManaged(managed)
+		if graphemeCount >= 0 'cached'
+			return graphemeCount
+		end 'cached'
+		graphemeCount = countGraphemesManaged(managed)
+		return graphemeCount
 	end 'count'
 
 	export function hash() returns HashValue
@@ -61,43 +74,51 @@ export type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 	end 'equals'
 
 	export function createIterator()
-		_iterPos = 0
+		iterPos = 0
 	end 'createIterator'
 
 	export function next() returns Character throws IterationError
-		if _iterPos < managed.length() 'check'
+		if iterPos < managed.length() 'check'
+			if isAsciiFlag 'asciiPath'
+				let grapheme = makeCharFromBytesAt(iterPos, len: 1)
+				iterPos = iterPos + 1
+				return grapheme
+			end 'asciiPath'
 			var len = managed.length()
-			var endPos = findGraphemeEndManagedRange(managed, offset: 0, startPos: _iterPos, len: len)
-			var graphemeLen = endPos - _iterPos
-			let grapheme = _makeCharFromBytes(_iterPos, len: graphemeLen)
-			_iterPos = endPos
+			var endPos = findGraphemeEndManagedRange(managed, offset: 0, startPos: iterPos, len: len)
+			var graphemeLen = endPos - iterPos
+			let grapheme = makeCharFromBytesAt(iterPos, len: graphemeLen)
+			iterPos = endPos
 			return grapheme
 		end 'check'
 		throw IterationError.exhausted
 	end 'next'
 
-	function _makeCharFromBytes(pos Index, len Count) returns Character
+	function makeCharFromBytesAt(pos Index, len Count) returns Character
 		return managed.makeCharFromBytes(pos, len)
-	end '_makeCharFromBytes'
+	end 'makeCharFromBytesAt'
 
 	// String index methods
 	export function startIndex() returns StringIndex
-		return StringIndex{_charIndex: 0, _bytePos: 0}
+		return StringIndex{charIdx: 0, bytePosition: 0}
 	end 'startIndex'
 
 	export function endIndex() returns StringIndex
-		var charCount = countGraphemesManaged(managed)
-		return StringIndex{_charIndex: charCount, _bytePos: managed.length()}
+		var charCount = count()
+		return StringIndex{charIdx: charCount, bytePosition: managed.length()}
 	end 'endIndex'
 
 	/// Get character at the given index. Returns the grapheme cluster at that position.
 	export function charAt(idx StringIndex) returns Character
+		if isAsciiFlag 'asciiPath'
+			return makeCharFromBytesAt(idx.bytePos(), len: 1)
+		end 'asciiPath'
 		// Calculate the byte length of this grapheme at the given byte position
 		var len = managed.length()
 		var byteStart = idx.bytePos()
 		var endPos = findGraphemeEndManagedRange(managed, offset: 0, startPos: byteStart, len: len)
 		var byteLen = endPos - byteStart
-		return _makeCharFromBytes(byteStart, len: byteLen)
+		return makeCharFromBytesAt(byteStart, len: byteLen)
 	end 'charAt'
 
 	/// Get the index after the given position (for iteration)
@@ -106,16 +127,19 @@ export type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 		if idx.bytePos() >= len 'atEnd'
 			throw StringError.invalidIndex
 		end 'atEnd'
+		if isAsciiFlag 'asciiPath'
+			return StringIndex{charIdx: idx.charIndex() + 1, bytePosition: idx.bytePos() + 1}
+		end 'asciiPath'
 		var byteStart = idx.bytePos()
 		var endPos = findGraphemeEndManagedRange(managed, offset: 0, startPos: byteStart, len: len)
 		var byteLen = endPos - byteStart
-		return StringIndex{_charIndex: idx.charIndex() + 1, _bytePos: byteStart + byteLen}
+		return StringIndex{charIdx: idx.charIndex() + 1, bytePosition: byteStart + byteLen}
 	end 'indexAfter'
 
 	// concat method
 	export function concat(other String) returns String
 		var result = managed.concat(other.managed)
-		return String{managed: result, _iterPos: 0}
+		return String{managed: result, iterPos: 0, graphemeCount: -1, isAsciiFlag: isAsciiFlag and other.isAsciiFlag}
 	end 'concat'
 
 	/// Append another string's content to this string in place.
@@ -125,6 +149,10 @@ export type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 	/// the buffer without materializing a temporary string.
 	export function append(other String)
 		managed = managed.concat(other.managed)
+		if not other.isAsciiFlag 'clearAscii'
+			isAsciiFlag = false
+		end 'clearAscii'
+		graphemeCount = -1
 	end 'append'
 
 	// Search methods
@@ -153,43 +181,38 @@ export type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 
 	export function findFirst(needle String) returns StringIndex throws StringError
 		var byteIdx = try findManaged(managed, offset: 0, len: managed.length(), needle: needle.managed)
+		if isAsciiFlag 'asciiPath'
+			return StringIndex{charIdx: byteIdx, bytePosition: byteIdx}
+		end 'asciiPath'
 		var charIdx = byteIndexToGraphemeIndex(managed, byteIdx: byteIdx)
-		return StringIndex{_charIndex: charIdx, _bytePos: byteIdx}
+		return StringIndex{charIdx: charIdx, bytePosition: byteIdx}
 	end 'findFirst'
 
 	export function findLast(needle String) returns StringIndex throws StringError
-		var needleLen = needle.managed.length()
-		var selfLen = managed.length()
-		var found = false
-		var lastByteIdx = 0
-		var searchPos = 0
-		while searchPos <= selfLen - needleLen 'scan'
-			if let idx = try findManaged(managed, offset: searchPos, len: selfLen - searchPos, needle: needle.managed) 'try_find'
-				lastByteIdx = searchPos + idx
-				searchPos = lastByteIdx + 1
-				found = true
-			end 'try_find' else 'done'
-				break
-			end 'done'
-		end 'scan'
-		if not found 'not_found'
-			throw StringError.notFound
-		end 'not_found'
-		var charIdx = byteIndexToGraphemeIndex(managed, byteIdx: lastByteIdx)
-		return StringIndex{_charIndex: charIdx, _bytePos: lastByteIdx}
+		var byteIdx = try findLastManaged(managed, offset: 0, len: managed.length(), needle: needle.managed)
+		if isAsciiFlag 'asciiPath'
+			return StringIndex{charIdx: byteIdx, bytePosition: byteIdx}
+		end 'asciiPath'
+		var charIdx = byteIndexToGraphemeIndex(managed, byteIdx: byteIdx)
+		return StringIndex{charIdx: charIdx, bytePosition: byteIdx}
 	end 'findLast'
 
 	// Slicing - returns a new String backed by slice into this string's buffer
 	// Use endIndex for end position, or length for character count
 	export function slice(start StringIndex, endIndex StringIndex) returns String
 		var result = managed.slice(start.bytePos(), endIndex.bytePos())
-		return String{managed: result, _iterPos: 0}
+		return String{managed: result, iterPos: 0, graphemeCount: -1, isAsciiFlag: isAsciiFlag}
 	end 'slice'
 
 	export function slice(start StringIndex, length Count) returns String
+		if isAsciiFlag 'asciiPath'
+			var endBytePos = start.bytePos() + length
+			var result = managed.slice(start.bytePos(), endBytePos)
+			return String{managed: result, iterPos: 0, graphemeCount: -1, isAsciiFlag: true}
+		end 'asciiPath'
 		var endBytePos = graphemeOffsetToBytePos(managed, startBytePos: start.bytePos(), count: length)
 		var result = managed.slice(start.bytePos(), endBytePos)
-		return String{managed: result, _iterPos: 0}
+		return String{managed: result, iterPos: 0, graphemeCount: -1, isAsciiFlag: isAsciiFlag}
 	end 'slice'
 
 	// View methods
@@ -209,10 +232,11 @@ export type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 	export function replace(old String, with String) returns String
 		var oldLen = old.managed.length()
 		if oldLen == 0 'empty_old'
-			return String{managed: managed, _iterPos: 0}
+			return String{managed: managed, iterPos: 0, graphemeCount: -1, isAsciiFlag: isAsciiFlag}
 		end 'empty_old'
 
 		var selfLen = managed.length()
+		var resultIsAscii = isAsciiFlag and with.isAsciiFlag
 
 		// First pass: count matches
 		var matchCount = 0
@@ -227,7 +251,7 @@ export type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 		end 'count_loop'
 
 		if matchCount == 0 'no_matches'
-			return String{managed: managed, _iterPos: 0}
+			return String{managed: managed, iterPos: 0, graphemeCount: -1, isAsciiFlag: isAsciiFlag}
 		end 'no_matches'
 
 		// Build result by processing matches
@@ -253,23 +277,24 @@ export type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 			builtResult = builtResult.concat(suffixSlice)
 		end 'has_suffix'
 
-		return String{managed: builtResult, _iterPos: 0}
+		return String{managed: builtResult, iterPos: 0, graphemeCount: -1, isAsciiFlag: resultIsAscii}
 	end 'replace'
 
 	export function replaceFirst(old String, with String) returns String
 		var oldLen = old.managed.length()
 		if oldLen == 0 'empty_old'
-			return String{managed: managed, _iterPos: 0}
+			return String{managed: managed, iterPos: 0, graphemeCount: -1, isAsciiFlag: isAsciiFlag}
 		end 'empty_old'
 
+		var resultIsAscii = isAsciiFlag and with.isAsciiFlag
 		if let idx = try findManaged(managed, offset: 0, len: managed.length(), needle: old.managed) 'try_find'
 			var selfLen = managed.length()
 			var prefixSlice = managed.slice(0, idx)
 			var suffixSlice = managed.slice(idx + oldLen, selfLen)
 			var result = prefixSlice.concat(with.managed).concat(suffixSlice)
-			return String{managed: result, _iterPos: 0}
+			return String{managed: result, iterPos: 0, graphemeCount: -1, isAsciiFlag: resultIsAscii}
 		end 'try_find'
-		return String{managed: managed, _iterPos: 0}
+		return String{managed: managed, iterPos: 0, graphemeCount: -1, isAsciiFlag: isAsciiFlag}
 	end 'replaceFirst'
 
 	// Split method
@@ -281,7 +306,7 @@ export type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 
 		// Empty delimiter: return single-element array with original string
 		if delimLen == 0 'empty_delim'
-			result.push(String{managed: managed, _iterPos: 0})
+			result.push(String{managed: managed, iterPos: 0, graphemeCount: -1, isAsciiFlag: isAsciiFlag})
 			return result
 		end 'empty_delim'
 
@@ -292,7 +317,7 @@ export type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 			if let idx = try findManaged(managed, offset: pos, len: selfLen - pos, needle: delimiter.managed) 'try_find'
 				var matchPos = pos + idx
 				var part = managed.slice(pos, matchPos)
-				result.push(String{managed: part, _iterPos: 0})
+				result.push(String{managed: part, iterPos: 0, graphemeCount: -1, isAsciiFlag: isAsciiFlag})
 				pos = matchPos + delimLen
 			end 'try_find' else 'no_more'
 				break
@@ -301,7 +326,7 @@ export type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 
 		// Append remaining suffix (always — even if empty, to handle trailing delimiters)
 		var tail = managed.slice(pos, selfLen)
-		result.push(String{managed: tail, _iterPos: 0})
+		result.push(String{managed: tail, iterPos: 0, graphemeCount: -1, isAsciiFlag: isAsciiFlag})
 
 		return result
 	end 'split'
@@ -310,7 +335,7 @@ export type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 	export function toLower() returns String
 		var len = managed.length()
 		if len == 0 'empty'
-			return String{managed: managed, _iterPos: 0}
+			return String{managed: managed, iterPos: 0, graphemeCount: graphemeCount, isAsciiFlag: isAsciiFlag}
 		end 'empty'
 
 		for i in 0 upto len 'convert'
@@ -320,13 +345,13 @@ export type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 				managed.setByte(i, b + 32)
 			end 'is_upper'
 		end 'convert'
-		return String{managed: managed, _iterPos: 0}
+		return String{managed: managed, iterPos: 0, graphemeCount: graphemeCount, isAsciiFlag: isAsciiFlag}
 	end 'toLower'
 
 	export function toUpper() returns String
 		var len = managed.length()
 		if len == 0 'empty'
-			return String{managed: managed, _iterPos: 0}
+			return String{managed: managed, iterPos: 0, graphemeCount: graphemeCount, isAsciiFlag: isAsciiFlag}
 		end 'empty'
 
 		for i in 0 upto len 'convert'
@@ -336,15 +361,46 @@ export type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 				managed.setByte(i, b - 32)
 			end 'is_lower'
 		end 'convert'
-		return String{managed: managed, _iterPos: 0}
+		return String{managed: managed, iterPos: 0, graphemeCount: graphemeCount, isAsciiFlag: isAsciiFlag}
 	end 'toUpper'
 
 	/// Trim characters in the given set from both ends of the string.
 	export function trim(chars CharacterSet) returns String
 		var len = managed.length()
 		if len == 0 'empty'
-			return String{managed: managed, _iterPos: 0}
+			return String{managed: managed, iterPos: 0, graphemeCount: -1, isAsciiFlag: isAsciiFlag}
 		end 'empty'
+
+		if isAsciiFlag 'asciiPath'
+			// Forward scan: each ASCII byte is one grapheme
+			var start = 0
+			while start < len 'scanStartAscii'
+				let ch = managed.makeCharFromBytes(start, 1)
+				if not chars.contains(ch) 'foundStartAscii'
+					break
+				end 'foundStartAscii'
+				start = start + 1
+			end 'scanStartAscii'
+
+			if start >= len 'allMatchAscii'
+				var empty = managed.slice(0, 0)
+				return String{managed: empty, iterPos: 0, graphemeCount: -1, isAsciiFlag: true}
+			end 'allMatchAscii'
+
+			// Backward scan
+			var endPos = len
+			while endPos > start 'scanEndAscii'
+				endPos = endPos - 1
+				let ch = managed.makeCharFromBytes(endPos, 1)
+				if not chars.contains(ch) 'foundEndAscii'
+					endPos = endPos + 1
+					break
+				end 'foundEndAscii'
+			end 'scanEndAscii'
+
+			var result = managed.slice(start, endPos)
+			return String{managed: result, iterPos: 0, graphemeCount: -1, isAsciiFlag: true}
+		end 'asciiPath'
 
 		// Forward scan: find first non-matching grapheme
 		var start = 0
@@ -360,32 +416,50 @@ export type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 
 		if start >= len 'all_match'
 			var empty = managed.slice(0, 0)
-			return String{managed: empty, _iterPos: 0}
+			return String{managed: empty, iterPos: 0, graphemeCount: -1, isAsciiFlag: true}
 		end 'all_match'
 
-		// Forward scan from start: track last non-matching end position
-		var endPos = start
-		var pos = start
-		while pos < len 'scan_for_end'
-			var endByte = findGraphemeEndManagedRange(managed, offset: 0, startPos: pos, len: len)
-			var graphemeLen = endByte - pos
-			let ch = managed.makeCharFromBytes(pos, graphemeLen)
-			if not chars.contains(ch) 'not_match'
-				endPos = endByte
-			end 'not_match'
-			pos = endByte
-		end 'scan_for_end'
+		// Backward scan from end: find last non-matching grapheme
+		var endPos = len
+		while endPos > start 'scan_end'
+			var graphemeStart = findGraphemeStartManaged(managed, offset: 0, beforePos: endPos)
+			var graphemeLen = endPos - graphemeStart
+			let ch = managed.makeCharFromBytes(graphemeStart, graphemeLen)
+			if not chars.contains(ch) 'found_end'
+				break
+			end 'found_end'
+			endPos = graphemeStart
+		end 'scan_end'
 
 		var result = managed.slice(start, endPos)
-		return String{managed: result, _iterPos: 0}
+		return String{managed: result, iterPos: 0, graphemeCount: -1, isAsciiFlag: isAsciiFlag}
 	end 'trim'
 
 	/// Trim characters in the given set from the start of the string.
 	export function trimStart(chars CharacterSet) returns String
 		var len = managed.length()
 		if len == 0 'empty'
-			return String{managed: managed, _iterPos: 0}
+			return String{managed: managed, iterPos: 0, graphemeCount: -1, isAsciiFlag: isAsciiFlag}
 		end 'empty'
+
+		if isAsciiFlag 'asciiPath'
+			var start = 0
+			while start < len 'scanStartAscii'
+				let ch = managed.makeCharFromBytes(start, 1)
+				if not chars.contains(ch) 'foundStartAscii'
+					break
+				end 'foundStartAscii'
+				start = start + 1
+			end 'scanStartAscii'
+
+			if start >= len 'allMatchAscii'
+				var empty = managed.slice(0, 0)
+				return String{managed: empty, iterPos: 0, graphemeCount: -1, isAsciiFlag: true}
+			end 'allMatchAscii'
+
+			var result = managed.slice(start, len)
+			return String{managed: result, iterPos: 0, graphemeCount: -1, isAsciiFlag: true}
+		end 'asciiPath'
 
 		var start = 0
 		while start < len 'scan_start'
@@ -400,40 +474,53 @@ export type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 
 		if start >= len 'all_match'
 			var empty = managed.slice(0, 0)
-			return String{managed: empty, _iterPos: 0}
+			return String{managed: empty, iterPos: 0, graphemeCount: -1, isAsciiFlag: true}
 		end 'all_match'
 
 		var result = managed.slice(start, len)
-		return String{managed: result, _iterPos: 0}
+		return String{managed: result, iterPos: 0, graphemeCount: -1, isAsciiFlag: isAsciiFlag}
 	end 'trimStart'
 
 	/// Trim characters in the given set from the end of the string.
 	export function trimEnd(chars CharacterSet) returns String
 		var len = managed.length()
 		if len == 0 'empty'
-			return String{managed: managed, _iterPos: 0}
+			return String{managed: managed, iterPos: 0, graphemeCount: -1, isAsciiFlag: isAsciiFlag}
 		end 'empty'
 
-		// Forward scan tracking last non-matching end position
-		var endPos = 0
-		var pos = 0
-		while pos < len 'scan'
-			var endByte = findGraphemeEndManagedRange(managed, offset: 0, startPos: pos, len: len)
-			var graphemeLen = endByte - pos
-			let ch = managed.makeCharFromBytes(pos, graphemeLen)
+		if isAsciiFlag 'asciiPath'
+			var pos = len
+			while pos > 0 'scanAscii'
+				pos = pos - 1
+				let ch = managed.makeCharFromBytes(pos, 1)
+				if not chars.contains(ch) 'notMatch'
+					var result = managed.slice(0, pos + 1)
+					return String{managed: result, iterPos: 0, graphemeCount: -1, isAsciiFlag: true}
+				end 'notMatch'
+			end 'scanAscii'
+			var empty = managed.slice(0, 0)
+			return String{managed: empty, iterPos: 0, graphemeCount: -1, isAsciiFlag: true}
+		end 'asciiPath'
+
+		// Backward scan from end: find first non-matching grapheme
+		var pos = len
+		while pos > 0 'scan'
+			var graphemeStart = findGraphemeStartManaged(managed, offset: 0, beforePos: pos)
+			var graphemeLen = pos - graphemeStart
+			let ch = managed.makeCharFromBytes(graphemeStart, graphemeLen)
 			if not chars.contains(ch) 'not_match'
-				endPos = endByte
+				break
 			end 'not_match'
-			pos = endByte
+			pos = graphemeStart
 		end 'scan'
 
-		if endPos == 0 'all_match'
+		if pos == 0 'all_match'
 			var empty = managed.slice(0, 0)
-			return String{managed: empty, _iterPos: 0}
+			return String{managed: empty, iterPos: 0, graphemeCount: -1, isAsciiFlag: true}
 		end 'all_match'
 
-		var result = managed.slice(0, endPos)
-		return String{managed: result, _iterPos: 0}
+		var result = managed.slice(0, pos)
+		return String{managed: result, iterPos: 0, graphemeCount: -1, isAsciiFlag: isAsciiFlag}
 	end 'trimEnd'
 
 	/// Trim Unicode whitespace from both ends.
@@ -454,26 +541,26 @@ end 'String'
 
 // StringIndex type - type-safe string position
 export type StringIndex implements Equatable, Comparable
-	var _charIndex Index
-	var _bytePos Index
+	var charIdx Index
+	var bytePosition Index
 
 	export function charIndex() returns Index
-		return _charIndex
+		return charIdx
 	end 'charIndex'
 
 	export function bytePos() returns Index
-		return _bytePos
+		return bytePosition
 	end 'bytePos'
 
 	export function equals(other StringIndex) returns bool
-		return _charIndex == other._charIndex
+		return charIdx == other.charIdx
 	end 'equals'
 
 	export function compare(other StringIndex) returns Ordering
-		if _charIndex < other._charIndex 'less'
+		if charIdx < other.charIdx 'less'
 			return Ordering.lessThan
 		end 'less'
-		if _charIndex > other._charIndex 'greater'
+		if charIdx > other.charIdx 'greater'
 			return Ordering.greaterThan
 		end 'greater'
 		return Ordering.equalTo
@@ -537,3 +624,43 @@ function findManaged(haystack __ManagedMemory, offset Index, len Count, needle _
 	end 'search_loop'
 	throw StringError.notFound
 end 'findManaged'
+
+function findLastManaged(haystack __ManagedMemory, offset Index, len Count, needle __ManagedMemory) returns Index throws StringError
+	var needleLen = needle.length()
+
+	if needleLen == 0 'empty_needle'
+		return len
+	end 'empty_needle'
+
+	if needleLen > len 'too_long'
+		throw StringError.notFound
+	end 'too_long'
+
+	var i = len - needleLen
+	while i >= 0 'search_loop'
+		var found = true
+		for j in 0 upto needleLen 'compare_loop'
+			if haystack.byteAt(offset + i + j) != needle.byteAt(j) 'byte_check'
+				found = false
+				break
+			end 'byte_check'
+		end 'compare_loop'
+
+		if found 'found_check'
+			return i
+		end 'found_check'
+
+		i = i - 1
+	end 'search_loop'
+	throw StringError.notFound
+end 'findLastManaged'
+
+function scanIsAscii(managed __ManagedMemory) returns bool
+	var len = managed.length()
+	for i in 0 upto len 'scan'
+		if managed.byteAt(i) >= 128 'nonAscii'
+			return false
+		end 'nonAscii'
+	end 'scan'
+	return true
+end 'scanIsAscii'

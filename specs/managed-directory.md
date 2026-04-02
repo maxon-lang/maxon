@@ -39,7 +39,7 @@ Instance methods are called on variables declared with type `__ManagedDirectory`
 
 ```text
 type DirSearch
-  var _dir __ManagedDirectory
+  var dir __ManagedDirectory
 
   static function open(pattern String) returns DirSearch
     let result = __ManagedDirectory.openSearch(pattern.managed)
@@ -120,11 +120,11 @@ not found
 <!-- test: managed-directory.search-and-list -->
 ```maxon
 type TestFile
-	export var _file __ManagedFile
+	export var file __ManagedFile
 end 'TestFile'
 
 type TestDir
-	export var _dir __ManagedDirectory
+	export var dir __ManagedDirectory
 end 'TestDir'
 
 function createFile(path String, content String)

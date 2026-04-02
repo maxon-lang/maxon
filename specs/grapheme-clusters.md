@@ -344,3 +344,106 @@ end 'main'
 ```stdout
 1
 ```
+
+<!-- test: grapheme-boundary-combining-accent -->
+### Grapheme Boundary - Combining Accent
+
+A base character followed by a combining acute accent (U+0301) forms one grapheme:
+
+```maxon
+function main() returns ExitCode
+	var s = "e\u0301"  // e + combining acute = é (1 grapheme, 3 bytes)
+	print("{s.count()}\n")
+	print("{s.byteLength()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+1
+3
+```
+
+<!-- test: grapheme-boundary-multiple-combiners -->
+### Grapheme Boundary - Multiple Combining Marks
+
+A base character with multiple combining marks forms one grapheme:
+
+```maxon
+function main() returns ExitCode
+	var s = "a\u0308\u0301"  // a + diaeresis + acute = 1 grapheme
+	print("{s.count()}\n")
+	print("{s.byteLength()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+1
+5
+```
+
+<!-- test: grapheme-boundary-combining-iteration -->
+### Grapheme Boundary - Combining Mark Iteration
+
+Iterating a string with combining marks yields grapheme clusters:
+
+```maxon
+function main() returns ExitCode
+	var s = "caf\u0065\u0301"  // c, a, f, e+combining accent = 4 graphemes
+	var count = 0
+	for _ in s 'loop'
+		count = count + 1
+	end 'loop'
+	print("{count}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+4
+```
+
+<!-- test: grapheme-boundary-odd-ri -->
+### Grapheme Boundary - Odd Number of Regional Indicators
+
+Three regional indicators: first two pair into a flag, third is standalone = 2 graphemes:
+
+```maxon
+function main() returns ExitCode
+	var s = "🇺🇸🇬"  // US flag (2 RIs) + standalone G (1 RI) = 2 graphemes
+	print("{s.count()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+2
+```
+
+<!-- test: grapheme-boundary-four-ri -->
+### Grapheme Boundary - Four Regional Indicators
+
+Four regional indicators pair into two flags = 2 graphemes:
+
+```maxon
+function main() returns ExitCode
+	var s = "🇺🇸🇬🇧"  // US flag + GB flag = 2 graphemes
+	print("{s.count()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+2
+```

@@ -96,9 +96,9 @@ let MAX_SIZE = 1024     // immutable constant
 
 // Lazy static fields (inside types)
 // Complex initializers (function calls, struct/array literals) run on first access
-static var _ws = CharacterSet.whitespacesAndNewlines()   // lazy, cached after first use
+static var ws = CharacterSet.whitespacesAndNewlines()   // lazy, cached after first use
 static var origin = Point{x: 0, y: 0}       // lazy struct literal
-static var _data = [10, 20, 30]              // lazy array literal
+static var data = [10, 20, 30]              // lazy array literal
 static let MAX = 100                         // constant, evaluated at compile time
 
 // Reference-by-default for structs

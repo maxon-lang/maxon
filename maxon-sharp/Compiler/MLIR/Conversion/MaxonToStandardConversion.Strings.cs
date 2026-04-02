@@ -73,7 +73,8 @@ public static partial class MaxonToStandardConversion {
 
 		var tempName = inlineTarget
 			?? temps.CreateTemp(tempPrefix, resultId, allocTag ?? "unknown", OwnershipFlags.None);
-		var outerPtr = (StdHeapPtr)EmitAlloc(block, 16, allocTag, scopeName: _currentFuncName);
+		int outerSize = allocTag == "String" ? StringStructSize : CharacterStructSize;
+		var outerPtr = (StdHeapPtr)EmitAlloc(block, outerSize, allocTag, scopeName: _currentFuncName);
 		EmitStore(block, outerPtr, tempName, varTypes);
 
 		var managedName = $"__{tempPrefix}_managed_{resultId}";
@@ -93,10 +94,25 @@ public static partial class MaxonToStandardConversion {
 		var heapPtr = EmitManagedMemoryLiteral(op.Value, op.Result.Id, "str", "strtmp", block, varTypes, result, temps, "String", inlineTarget);
 		valueMap[op.Result] = heapPtr;
 
-		// Store _iterPos at offset 8 (second field in String struct)
+		// Store iterPos
 		var iterConst = new StdConstI64Op(0);
 		block.AddOp(iterConst);
-		EmitStructFieldStore(block, iterConst.Result, heapPtr.VarName!, 8, MlirType.I64, varTypes);
+		EmitStructFieldStore(block, iterConst.Result, heapPtr.VarName!, StringFieldIterPos, MlirType.I64, varTypes);
+
+		// Compute isAscii at compile time
+		bool isAscii = op.Value.All(c => c < 128);
+
+		// Store graphemeCount = -1 (uncached)
+		// Note: even for ASCII strings, we don't pre-populate the count because
+		// CRLF sequences are ASCII but count as 1 grapheme (not 2 bytes).
+		var graphemeCountConst = new StdConstI64Op(-1);
+		block.AddOp(graphemeCountConst);
+		EmitStructFieldStore(block, graphemeCountConst.Result, heapPtr.VarName!, StringFieldGraphemeCount, MlirType.I64, varTypes);
+
+		// Store isAscii
+		var isAsciiConst = new StdConstI64Op(isAscii ? 1 : 0);
+		block.AddOp(isAsciiConst);
+		EmitStructFieldStore(block, isAsciiConst.Result, heapPtr.VarName!, StringFieldIsAscii, MlirType.I64, varTypes);
 	}
 
 	private static void LowerByteStringLiteral(
@@ -157,6 +173,12 @@ public static partial class MaxonToStandardConversion {
 			var iterConst = new StdConstI64Op(0);
 			block.AddOp(iterConst);
 			EmitStore(block, iterConst.Result, $"{heapPtr.VarName!}._iterPos", varTypes);
+			var gcConst = new StdConstI64Op(-1);
+			block.AddOp(gcConst);
+			EmitStructFieldStore(block, gcConst.Result, heapPtr.VarName!, StringFieldGraphemeCount, MlirType.I64, varTypes);
+			var iaConst = new StdConstI64Op(0);
+			block.AddOp(iaConst);
+			EmitStructFieldStore(block, iaConst.Result, heapPtr.VarName!, StringFieldIsAscii, MlirType.I64, varTypes);
 			return;
 		}
 
@@ -178,7 +200,7 @@ public static partial class MaxonToStandardConversion {
 		// Allocate outer String struct, then ManagedMemory, then raw buffer
 		var tempName2 = inlineTarget
 			?? temps.CreateTemp("interptmp", op.Result.Id, "String", OwnershipFlags.None);
-		var interpOuterPtr = (StdHeapPtr)EmitAlloc(block, 16, "String", scopeName: _currentFuncName);
+		var interpOuterPtr = (StdHeapPtr)EmitAlloc(block, StringStructSize, "String", scopeName: _currentFuncName);
 		EmitStore(block, interpOuterPtr, tempName2, varTypes);
 
 		var interpManagedName = $"__interp_managed_{op.Result.Id}";
@@ -268,13 +290,23 @@ public static partial class MaxonToStandardConversion {
 
 		// Store _managed heap pointer at offset 0 and incref it
 		var interpManagedReload = EmitLoad(block, interpManagedName, varTypes);
-		EmitStructFieldStore(block, interpManagedReload, tempName2, 0, MlirType.I64, varTypes);
+		EmitStructFieldStore(block, interpManagedReload, tempName2, StringFieldManaged, MlirType.I64, varTypes);
 		EmitIncref(block, interpManagedName, varTypes, scopeName: _currentFuncName);
 
-		// Store _iterPos at offset 8
+		// Store iterPos
 		var iterPosConst = new StdConstI64Op(0);
 		block.AddOp(iterPosConst);
-		EmitStructFieldStore(block, iterPosConst.Result, tempName2, 8, MlirType.I64, varTypes);
+		EmitStructFieldStore(block, iterPosConst.Result, tempName2, StringFieldIterPos, MlirType.I64, varTypes);
+
+		// Store graphemeCount = -1 (uncached)
+		var graphemeCountConst2 = new StdConstI64Op(-1);
+		block.AddOp(graphemeCountConst2);
+		EmitStructFieldStore(block, graphemeCountConst2.Result, tempName2, StringFieldGraphemeCount, MlirType.I64, varTypes);
+
+		// Store isAscii = 0 (conservative default)
+		var isAsciiConst2 = new StdConstI64Op(0);
+		block.AddOp(isAsciiConst2);
+		EmitStructFieldStore(block, isAsciiConst2.Result, tempName2, StringFieldIsAscii, MlirType.I64, varTypes);
 
 		valueMap[op.Result] = new StdHeapPtr(interpOuterPtr.Id, interpOuterPtr.TypeName, tempName2);
 	}
@@ -512,6 +544,12 @@ public static partial class MaxonToStandardConversion {
 		// --- Step 8: Update managed length ---
 		var finalLen = (StdI64)EmitLoad(block, offsetVar, varTypes);
 		EmitStructFieldStore(block, finalLen, selfManagedTempVar, ManagedFieldLength, MlirType.I64, varTypes);
+
+		// --- Step 8b: Invalidate cached graphemeCount on the String struct ---
+		// After appending, the grapheme count is no longer valid.
+		var negOneConst = new StdConstI64Op(-1);
+		block.AddOp(negOneConst);
+		EmitStructFieldStore(block, negOneConst.Result, selfVarName, StringFieldGraphemeCount, MlirType.I64, varTypes);
 
 		// --- Step 9: Free intermediate toString buffers ---
 		foreach (var bufVar in interpTempBufVars) {
@@ -822,7 +860,7 @@ public static partial class MaxonToStandardConversion {
 	  bool hasIterPos, MlirBlock<StandardOp> block,
 	  Dictionary<string, string> varTypes,
 	  string? allocTag = null) {
-		int outerSize = hasIterPos ? 16 : 8;
+		int outerSize = hasIterPos ? StringStructSize : CharacterStructSize;
 		var outerPtr = (StdHeapPtr)EmitAlloc(block, outerSize, allocTag, scopeName: _currentFuncName);
 		EmitStore(block, outerPtr, tempName, varTypes);
 
@@ -832,7 +870,15 @@ public static partial class MaxonToStandardConversion {
 		if (hasIterPos) {
 			var iterConst = new StdConstI64Op(0);
 			block.AddOp(iterConst);
-			EmitStructFieldStore(block, iterConst.Result, tempName, 8, MlirType.I64, varTypes);
+			EmitStructFieldStore(block, iterConst.Result, tempName, StringFieldIterPos, MlirType.I64, varTypes);
+
+			var graphemeCountConst = new StdConstI64Op(-1);
+			block.AddOp(graphemeCountConst);
+			EmitStructFieldStore(block, graphemeCountConst.Result, tempName, StringFieldGraphemeCount, MlirType.I64, varTypes);
+
+			var isAsciiConst = new StdConstI64Op(0);
+			block.AddOp(isAsciiConst);
+			EmitStructFieldStore(block, isAsciiConst.Result, tempName, StringFieldIsAscii, MlirType.I64, varTypes);
 		}
 
 		return new StdHeapPtr(outerPtr.Id, outerPtr.TypeName, tempName);

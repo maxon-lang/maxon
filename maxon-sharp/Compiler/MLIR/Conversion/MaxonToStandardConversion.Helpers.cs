@@ -425,6 +425,14 @@ public static partial class MaxonToStandardConversion {
   private const int ManagedFieldCapacity = 16;
   private const int ManagedFieldElementSize = 24;
 
+  // String struct field offsets (all fields are 8 bytes)
+  private const int StringFieldManaged = 0;
+  private const int StringFieldIterPos = 8;
+  private const int StringFieldGraphemeCount = 16;
+  private const int StringFieldIsAscii = 24;
+  private const int StringStructSize = 32;
+  private const int CharacterStructSize = 8;
+
   /// Load a field from a heap-allocated struct. Loads the struct's heap pointer from
   /// its variable, then reads the field at the given offset.
   private static StdValue EmitStructFieldLoad(

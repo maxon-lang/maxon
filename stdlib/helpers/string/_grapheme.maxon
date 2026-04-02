@@ -2,7 +2,7 @@
 //
 // Purpose: Centralize grapheme cluster operations (UAX #29 algorithm) for string types.
 
-typealias BreakProperty = int(0 to 20)
+typealias BreakProperty = int(0 to 13)
 
 // ============================================
 // Find grapheme end helpers (UAX #29)
@@ -14,12 +14,13 @@ export function findGraphemeEndManagedRange(managed __ManagedMemory, offset Inde
 		return startPos
 	end 'atEnd'
 
-	// Fast path: ASCII bytes (< 0x80) are single-byte graphemes,
-	// except CR (0x0D) which may combine with LF (0x0A) per UAX #29 GB3.
+	// Fast path: ASCII bytes (< 0x80) are single-byte codepoints.
+	// However, a combining mark (Extend/ZWJ/SpacingMark) may follow an ASCII base,
+	// e.g. "e\u0301" (e + combining acute). Check the next byte before returning.
+	// CR may combine with LF per UAX #29 GB3.
 	let firstByte = managed.byteAt(offset + startPos)
 	if firstByte < 128 'isAscii'
 		if firstByte == 13 'isCR'
-			// Check if next byte is LF — if so, fall through to full algorithm
 			if startPos + 1 < len 'hasNext'
 				let nextByte = managed.byteAt(offset + startPos + 1)
 				if nextByte == 10 'isCRLF'
@@ -27,7 +28,25 @@ export function findGraphemeEndManagedRange(managed __ManagedMemory, offset Inde
 				end 'isCRLF'
 			end 'hasNext'
 		end 'isCR'
-		return startPos + 1
+		// Check if a non-ASCII byte follows that could be a combining mark
+		if startPos + 1 < len 'hasNextByte'
+			let nextByte = managed.byteAt(offset + startPos + 1)
+			if nextByte >= 128 'nextIsMultibyte'
+				// Decode the next codepoint and check if it's Extend, ZWJ, or SpacingMark
+				var nextCp = utf8DecodeAt(managed, pos: offset + startPos + 1)
+				var nextGbp = graphemeBreakProperty(nextCp)
+				// GB9: don't break before Extend(4) or ZWJ(5); GB9a: don't break before SpacingMark(8)
+				if nextGbp == 4 or nextGbp == 5 or nextGbp == 8 'isCombining'
+					// Fall through to the full algorithm below
+				end 'isCombining' else 'notCombining'
+					return startPos + 1
+				end 'notCombining'
+			end 'nextIsMultibyte' else 'nextIsAscii'
+				return startPos + 1
+			end 'nextIsAscii'
+		end 'hasNextByte' else 'atStringEnd'
+			return startPos + 1
+		end 'atStringEnd'
 	end 'isAscii'
 
 	// Decode first codepoint at startPos (with offset)
@@ -63,6 +82,219 @@ export function findGraphemeEndManagedRange(managed __ManagedMemory, offset Inde
 
 	return pos
 end 'findGraphemeEndManagedRange'
+
+// ============================================
+// Find grapheme start helpers (backward scanning, UAX #29)
+// ============================================
+
+// findPrevCodepointStart - Find the start byte position of the codepoint before pos.
+// Walks backward skipping UTF-8 continuation bytes (10xxxxxx).
+function findPrevCodepointStart(managed __ManagedMemory, offset Index, pos Index) returns Index
+	var p = pos - 1
+	while p > 0 and utf8IsContinuation(managed.byteAt(offset + p)) 'back'
+		p = p - 1
+	end 'back'
+	return p
+end 'findPrevCodepointStart'
+
+// findGraphemeStartManaged - Find the start of the grapheme cluster ending at beforePos.
+// Scans backward from beforePos applying UAX #29 rules in reverse.
+// Returns the byte position where the grapheme cluster begins.
+export function findGraphemeStartManaged(managed __ManagedMemory, offset Index, beforePos Index) returns Index
+	if beforePos <= 0 'atStart'
+		return 0
+	end 'atStart'
+
+	// Step back one codepoint to get the last codepoint of this grapheme
+	var pos = findPrevCodepointStart(managed, offset: offset, pos: beforePos)
+	var cp = utf8DecodeAt(managed, pos: offset + pos)
+	var gbp = graphemeBreakProperty(cp)
+
+	// The simple case: if this codepoint is Control/CR/LF, the grapheme is just this codepoint
+	// GB4/GB5: break around Control/CR/LF
+	if gbp == 3 or gbp == 1 or gbp == 2 'control_stop'
+		// Special case GB3: CR+LF is a single grapheme
+		if gbp == 2 and pos > 0 'check_crlf'
+			var prevPos = findPrevCodepointStart(managed, offset: offset, pos: pos)
+			var prevCp = utf8DecodeAt(managed, pos: offset + prevPos)
+			if prevCp == 13 'is_crlf'
+				return prevPos
+			end 'is_crlf'
+		end 'check_crlf'
+		return pos
+	end 'control_stop'
+
+	// GB9: Extend(4) and ZWJ(5) don't break from what precedes them
+	// GB9a: SpacingMark(8) doesn't break from what precedes it
+	// Keep stepping backward through these combining characters
+	while pos > 0 and (gbp == 4 or gbp == 5 or gbp == 8) 'extend_back'
+		var prevPos = findPrevCodepointStart(managed, offset: offset, pos: pos)
+		var prevCp = utf8DecodeAt(managed, pos: offset + prevPos)
+		var prevGbp = graphemeBreakProperty(prevCp)
+
+		// GB4: break after Control/CR/LF - the Extend attaches to nothing before
+		if prevGbp == 3 or prevGbp == 1 or prevGbp == 2 'control_before_extend'
+			return pos
+		end 'control_before_extend'
+
+		// GB11: Extended_Pictographic Extend* ZWJ x Extended_Pictographic
+		// We are scanning backward through Extend/ZWJ. If we find an Extended_Pictographic,
+		// check if it is part of an emoji ZWJ sequence by looking at what follows pos.
+		// The forward-facing check is: if the current trailing part (from pos to beforePos)
+		// starts with ZWJ followed by Extended_Pictographic, and we just found an
+		// Extended_Pictographic with possible Extend* before the ZWJ.
+		// But since we're accumulating backward, we handle this by just continuing
+		// to absorb the Extended_Pictographic as the base character.
+
+		pos = prevPos
+		cp = prevCp
+		gbp = prevGbp
+	end 'extend_back'
+
+	// Now pos points to the "base" character. Handle special base types.
+
+	// GB11: If we arrived at an Extended_Pictographic that might be part of an emoji ZWJ sequence,
+	// check if there's a ZWJ+Extend*+Extended_Pictographic before it.
+	if isExtendedPictographic(cp) and pos > 0 'check_emoji_zwj'
+		// Look backward for ZWJ (possibly preceded by Extend*)
+		var scanPos = pos
+		var prevPos = findPrevCodepointStart(managed, offset: offset, pos: scanPos)
+		var prevCp = utf8DecodeAt(managed, pos: offset + prevPos)
+		var prevGbp = graphemeBreakProperty(prevCp)
+
+		// Skip Extend characters before ZWJ
+		while prevGbp == 4 and prevPos > 0 'skip_extend_before_zwj'
+			prevPos = findPrevCodepointStart(managed, offset: offset, pos: prevPos)
+			prevCp = utf8DecodeAt(managed, pos: offset + prevPos)
+			prevGbp = graphemeBreakProperty(prevCp)
+		end 'skip_extend_before_zwj'
+
+		if prevGbp == 5 and prevPos > 0 'found_zwj'
+			// Found ZWJ, now check if Extended_Pictographic precedes it
+			var epPos = findPrevCodepointStart(managed, offset: offset, pos: prevPos)
+			var epCp = utf8DecodeAt(managed, pos: offset + epPos)
+			if isExtendedPictographic(epCp) 'found_emoji_base'
+				// This is an emoji ZWJ sequence - recurse to find the full start
+				return findGraphemeStartManaged(managed, offset: offset, beforePos: pos)
+			end 'found_emoji_base'
+		end 'found_zwj'
+	end 'check_emoji_zwj'
+
+	// GB9b: Prepend x (don't break after Prepend)
+	if pos > 0 and gbp != 3 and gbp != 1 and gbp != 2 'check_prepend'
+		var prevPos = findPrevCodepointStart(managed, offset: offset, pos: pos)
+		var prevCp = utf8DecodeAt(managed, pos: offset + prevPos)
+		var prevGbp = graphemeBreakProperty(prevCp)
+		if prevGbp == 7 'is_prepend'
+			pos = prevPos
+		end 'is_prepend'
+	end 'check_prepend'
+
+	// GB6-8: Hangul syllable sequences
+	if gbp == 11 'hangul_t'
+		// T can be preceded by T, LVT, LV, or V
+		while pos > 0 'hangul_t_back'
+			var prevPos = findPrevCodepointStart(managed, offset: offset, pos: pos)
+			var prevCp = utf8DecodeAt(managed, pos: offset + prevPos)
+			var prevGbp = graphemeBreakProperty(prevCp)
+			if prevGbp == 11 'more_t'
+				pos = prevPos
+			end 'more_t' else 'not_t'
+				if prevGbp == 13 or prevGbp == 12 'lvt_or_lv'
+					pos = prevPos
+					gbp = prevGbp
+					break
+				end 'lvt_or_lv' else 'not_hangul_before_t'
+					if prevGbp == 10 'v_before_t'
+						pos = prevPos
+						gbp = prevGbp
+					end 'v_before_t'
+					break
+				end 'not_hangul_before_t'
+			end 'not_t'
+		end 'hangul_t_back'
+	end 'hangul_t'
+
+	if gbp == 10 or gbp == 12 'hangul_v_lv'
+		// V or LV can be preceded by V or L; LV can be preceded by L
+		while pos > 0 'hangul_v_back'
+			var prevPos = findPrevCodepointStart(managed, offset: offset, pos: pos)
+			var prevCp = utf8DecodeAt(managed, pos: offset + prevPos)
+			var prevGbp = graphemeBreakProperty(prevCp)
+			if prevGbp == 10 and gbp == 10 'more_v'
+				pos = prevPos
+			end 'more_v' else 'not_v'
+				if prevGbp == 9 'l_before_v'
+					pos = prevPos
+					break
+				end 'l_before_v'
+				break
+			end 'not_v'
+		end 'hangul_v_back'
+	end 'hangul_v_lv'
+
+	if gbp == 13 'hangul_lvt'
+		// LVT can be preceded by L
+		if pos > 0 'check_l_before_lvt'
+			var prevPos = findPrevCodepointStart(managed, offset: offset, pos: pos)
+			var prevCp = utf8DecodeAt(managed, pos: offset + prevPos)
+			var prevGbp = graphemeBreakProperty(prevCp)
+			if prevGbp == 9 'l_before_lvt'
+				pos = prevPos
+			end 'l_before_lvt'
+		end 'check_l_before_lvt'
+	end 'hangul_lvt'
+
+	if gbp == 9 'hangul_l'
+		// L can be preceded by more L
+		while pos > 0 'hangul_l_back'
+			var prevPos = findPrevCodepointStart(managed, offset: offset, pos: pos)
+			var prevCp = utf8DecodeAt(managed, pos: offset + prevPos)
+			var prevGbp = graphemeBreakProperty(prevCp)
+			if prevGbp == 9 'more_l'
+				pos = prevPos
+			end 'more_l' else 'not_l'
+				break
+			end 'not_l'
+		end 'hangul_l_back'
+	end 'hangul_l'
+
+	// GB12-13: Regional Indicators pair up from the start of the run.
+	// Walk backward to find the start of the RI run, count total RIs.
+	// If even count, break at pairs; if odd, the first RI is unpaired.
+	if gbp == 6 'ri_check'
+		var riStart = pos
+		var riCount = 1
+		while riStart > 0 'ri_back'
+			var prevPos = findPrevCodepointStart(managed, offset: offset, pos: riStart)
+			var prevCp = utf8DecodeAt(managed, pos: offset + prevPos)
+			var prevGbp = graphemeBreakProperty(prevCp)
+			if prevGbp == 6 'more_ri'
+				riStart = prevPos
+				riCount = riCount + 1
+			end 'more_ri' else 'not_ri'
+				break
+			end 'not_ri'
+		end 'ri_back'
+		// RIs pair from the start. If total count is even, pos is the start of the last pair.
+		// If odd, the first RI is unpaired, then pairs follow.
+		// We need the start of the pair that contains 'pos'.
+		// The number of RIs from riStart to pos (inclusive of pos) = riCount.
+		// The number of RIs after pos up to beforePos = 1 (the one at pos).
+		// Actually, pos is the last RI before beforePos. Count how many from riStart to pos.
+		// Pairs form left-to-right: (0,1), (2,3), (4,5), ...
+		// pos is at index (riCount-1) from riStart. If riCount is even, pos is at an odd index
+		// (second of a pair), so the pair starts one RI before pos. If riCount is odd, pos is
+		// at an even index (first of a pair or unpaired).
+		if riCount mod 2 == 0 'even_count'
+			// pos is the second RI in its pair. Step back one RI for the pair start.
+			pos = findPrevCodepointStart(managed, offset: offset, pos: pos)
+		end 'even_count'
+		// else: pos is already at the start of its pair (or unpaired)
+	end 'ri_check'
+
+	return pos
+end 'findGraphemeStartManaged'
 
 // ============================================
 // Count grapheme helpers
@@ -347,24 +579,24 @@ end 'isGraphemeBreak'
 
 // Update grapheme state after processing a codepoint
 function graphemeStateUpdate(state GraphemeState, gbp BreakProperty, cp Codepoint) returns GraphemeState
-	var new_state = GraphemeState{riCount: 0, inEmojiSeq: false}
+	var newState = GraphemeState{riCount: 0, inEmojiSeq: false}
 
 	// Track Regional Indicator sequences (gbp == 6)
 	if gbp == 6 'ri_update'
-		new_state.riCount = state.riCount + 1
+		newState.riCount = state.riCount + 1
 	end 'ri_update'
 
 	// Track emoji sequences for GB11
 	if isExtendedPictographic(cp) 'emoji_base'
-		new_state.inEmojiSeq = true
+		newState.inEmojiSeq = true
 	end 'emoji_base' else 'not_emoji_base'
 		if state.inEmojiSeq 'emoji_continue'
 			// gbp == 4 (Extend) or 5 (ZWJ)
 			if gbp == 4 or gbp == 5 'emoji_extend'
-				new_state.inEmojiSeq = true
+				newState.inEmojiSeq = true
 			end 'emoji_extend'
 		end 'emoji_continue'
 	end 'not_emoji_base'
 
-	return new_state
+	return newState
 end 'graphemeStateUpdate'

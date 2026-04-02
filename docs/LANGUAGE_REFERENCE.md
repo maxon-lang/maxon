@@ -712,7 +712,7 @@ Static fields initialized with complex expressions -- function calls, struct lit
 
 ```maxon
 type Config
-		static var _instance = Config._create()
+		static var instance = Config._create()
 
 		static function _create() returns Config
 				return Config{value: 42}
@@ -738,7 +738,7 @@ end 'Config'
 Caching expensive computations:
 ```maxon
 type WSCache
-		static var _ws = CharacterSet.whitespacesAndNewlines()
+		static var ws = CharacterSet.whitespacesAndNewlines()
 
 		export static function isWhitespace(c Character) returns bool
 				return WSCache._ws.contains(c)
@@ -767,7 +767,7 @@ Array literal initialization:
 typealias Integer = int(i64.min to i64.max)
 
 type Lookup
-		static var _values = [10, 20, 30]
+		static var values = [10, 20, 30]
 
 		export static function get(index Integer) returns Integer
 				return try Lookup._values.get(index) otherwise -1
@@ -778,8 +778,8 @@ end 'Lookup'
 Multiple lazy statics in the same type are each initialized independently on first access:
 ```maxon
 type Cache
-		static var _a = Cache._buildA()
-		static var _b = Cache._buildB()
+		static var a = Cache._buildA()
+		static var b = Cache._buildB()
 		export var n Count
 
 		static function _buildA() returns Cache

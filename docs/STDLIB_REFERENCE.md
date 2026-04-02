@@ -395,6 +395,49 @@ The no-argument convenience methods are equivalent to calling the `CharacterSet`
 
 ---
 
+## String Search
+
+Search for substrings within a string. Returns a `StringIndex` with both the character position and byte offset.
+
+```maxon
+var s = "hello world hello"
+var first = try s.findFirst("hello") otherwise s.endIndex()
+print("{first.charIndex()}\n")  // 0
+
+var last = try s.findLast("hello") otherwise s.endIndex()
+print("{last.charIndex()}\n")   // 12
+```
+
+| Method | Returns | Description |
+|--------|---------|-------------|
+| `findFirst(needle String)` | `StringIndex throws StringError` | Find first occurrence of needle |
+| `findLast(needle String)` | `StringIndex throws StringError` | Find last occurrence of needle |
+| `contains(needle String)` | `bool` | Check if string contains substring |
+| `contains(character Character)` | `bool` | Check if string contains character |
+| `startsWith(prefix String)` | `bool` | Check if string starts with prefix |
+| `endsWith(suffix String)` | `bool` | Check if string ends with suffix |
+
+---
+
+## String Properties
+
+```maxon
+var s = "hello"
+print("{s.count()}\n")        // 5 (grapheme cluster count)
+print("{s.byteLength()}\n")   // 5 (UTF-8 byte count)
+print("{s.isEmpty()}\n")      // false
+print("{s.isAscii()}\n")      // true
+```
+
+| Method | Returns | Description |
+|--------|---------|-------------|
+| `count()` | `Count` | Number of user-perceived characters (grapheme clusters). Cached after first call. |
+| `byteLength()` | `Count` | Number of UTF-8 bytes |
+| `isEmpty()` | `bool` | True if the string has no content |
+| `isAscii()` | `bool` | True if all bytes are in the ASCII range (< 128). Enables optimized code paths. |
+
+---
+
 ## String Append
 
 `String.append` grows a string's buffer in place, avoiding the allocation of a new string. When called with an interpolated string argument, the interpolation parts are written directly into the buffer without materializing a temporary string.

@@ -404,6 +404,107 @@ end 'main'
 -1
 ```
 
+<!-- test: find-last-basic -->
+```maxon
+function main() returns ExitCode
+	var s = "abcabc"
+	var idx = try s.findLast("abc") otherwise s.endIndex()
+	print("{idx.charIndex()}\n")
+	print("{idx.bytePos()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+3
+3
+```
+
+<!-- test: find-last-single -->
+```maxon
+function main() returns ExitCode
+	var s = "hello world"
+	var idx = try s.findLast("world") otherwise s.endIndex()
+	print("{idx.charIndex()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+6
+```
+
+<!-- test: find-last-not-found -->
+```maxon
+function main() returns ExitCode
+	var s = "hello world"
+	if try s.findLast("xyz") 'found'
+		print("FOUND\n")
+	end 'found' else 'not_found'
+		print("NOT_FOUND\n")
+	end 'not_found'
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+NOT_FOUND
+```
+
+<!-- test: find-last-at-end -->
+```maxon
+function main() returns ExitCode
+	var s = "hello world"
+	var idx = try s.findLast("world") otherwise s.endIndex()
+	print("{idx.charIndex()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+6
+```
+
+<!-- test: find-last-at-start -->
+```maxon
+function main() returns ExitCode
+	var s = "abcdef"
+	var idx = try s.findLast("abc") otherwise s.endIndex()
+	print("{idx.charIndex()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+0
+```
+
+<!-- test: find-last-overlapping -->
+```maxon
+function main() returns ExitCode
+	var s = "aaa"
+	var idx = try s.findLast("aa") otherwise s.endIndex()
+	print("{idx.charIndex()}\n")
+	return 0
+end 'main'
+```
+```exitcode
+0
+```
+```stdout
+1
+```
+
 <!-- test: replace-single -->
 ```maxon
 function main() returns ExitCode

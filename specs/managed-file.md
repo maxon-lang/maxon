@@ -40,7 +40,7 @@ Instance methods are called on variables declared with type `__ManagedFile`:
 
 ```text
 type FileWrapper
-  export var _file __ManagedFile
+  export var file __ManagedFile
 
   static function open(path String) returns FileWrapper
     let result = __ManagedFile.openRead(path.managed)
@@ -76,7 +76,7 @@ not found
 <!-- test: managed-file.write-and-read -->
 ```maxon
 type TestFile
-	export var _file __ManagedFile
+	export var file __ManagedFile
 end 'TestFile'
 
 function main() returns ExitCode
@@ -133,7 +133,7 @@ Hello Managed
 <!-- test: managed-file.exists -->
 ```maxon
 type TestFile
-	export var _file __ManagedFile
+	export var file __ManagedFile
 end 'TestFile'
 
 function createEmptyFile(path String)
@@ -188,7 +188,7 @@ delete failed as expected
 <!-- test: managed-file.auto-close -->
 ```maxon
 type TestFile
-	export var _file __ManagedFile
+	export var file __ManagedFile
 end 'TestFile'
 
 function writeFile(path String)

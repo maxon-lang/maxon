@@ -34,7 +34,7 @@ Caching expensive computations:
 
 ```text
 type CharacterSet
-  static var _cachedWhitespace = CharacterSet._buildWhitespace()
+  static var cachedWhitespace = CharacterSet._buildWhitespace()
 
   export static function whitespace() returns CharacterSet
     return CharacterSet._cachedWhitespace
@@ -49,7 +49,7 @@ end 'CharacterSet'
 
 ```maxon
 type Config
-	static var _value = Config._makeValue()
+	static var value = Config._makeValue()
 	export var n Count
 
 	static function _makeValue() returns Config
@@ -75,8 +75,8 @@ end 'main'
 
 ```maxon
 type Counter
-	static var _callCount = 0
-	static var _instance = Counter._create()
+	static var callCount = 0
+	static var instance = Counter._create()
 	export var id Count
 
 	static function _create() returns Counter
@@ -143,7 +143,7 @@ end 'main'
 
 ```maxon
 type State
-	static var _current = State._default()
+	static var current = State._default()
 	export var value Count
 
 	static function _default() returns State
@@ -180,8 +180,8 @@ end 'main'
 
 ```maxon
 type Cache
-	static var _a = Cache._buildA()
-	static var _b = Cache._buildB()
+	static var a = Cache._buildA()
+	static var b = Cache._buildB()
 	export var n Count
 
 	static function _buildA() returns Cache
@@ -213,7 +213,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
 type Lookup
-	static var _values = [10, 20, 30]
+	static var values = [10, 20, 30]
 
 	export static function get(index Integer) returns Integer
 		return try Lookup._values.get(index) otherwise -1
@@ -237,7 +237,7 @@ end 'main'
 
 ```maxon
 type WSCache
-	static var _ws = CharacterSet.whitespacesAndNewlines()
+	static var ws = CharacterSet.whitespacesAndNewlines()
 
 	export static function isWhitespace(c Character) returns bool
 		return WSCache._ws.contains(c)

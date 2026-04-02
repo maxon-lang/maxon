@@ -179,7 +179,7 @@ interface HasAge
 end 'HasAge'
 
 type Person implements HasName, HasAge
-		var _age Integer
+		var age Integer
 
 		function name() returns Integer
 				return 1

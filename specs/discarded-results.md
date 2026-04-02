@@ -262,7 +262,7 @@ end 'main'
 ```maxon
 
 function main() returns ExitCode
-	var _x = 42
+	var x = 42
 	return 0
 end 'main'
 ```

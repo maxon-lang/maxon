@@ -131,7 +131,7 @@ export type FilePath implements InitableFromStringLiteral, Equatable, Hashable, 
 					if filePath.managed.byteAt(2) == 58 'hasColon'
 						if(driveByte >= 65 and driveByte <= 90) or(driveByte >= 97 and driveByte <= 122) 'isDrive'
 							let trimmed = filePath.managed.slice(1, pathLen)
-							filePath = String{managed: trimmed, _iterPos: 0}
+							filePath = String.init(trimmed)
 						end 'isDrive'
 					end 'hasColon'
 				end 'leadingSlash'
@@ -238,7 +238,7 @@ export type FilePath implements InitableFromStringLiteral, Equatable, Hashable, 
 		end 'noSep'
 		let len = _path.byteLength()
 		let nameManaged = _path.managed.slice(sepPlusOne, len)
-		return String{managed: nameManaged, _iterPos: 0}
+		return String.init(nameManaged)
 	end 'filename'
 
 	/// Get the file extension including the dot, or empty string if none.
@@ -255,7 +255,7 @@ export type FilePath implements InitableFromStringLiteral, Equatable, Hashable, 
 			i = i - 1
 			if name.managed.byteAt(i) == 46 'isDot'
 				let extManaged = name.managed.slice(i, nameLen)
-				return String{managed: extManaged, _iterPos: 0}
+				return String.init(extManaged)
 			end 'isDot'
 		end 'scan'
 		return ""
@@ -273,7 +273,7 @@ export type FilePath implements InitableFromStringLiteral, Equatable, Hashable, 
 			i = i - 1
 			if name.managed.byteAt(i) == 46 'isDot'
 				let stemManaged = name.managed.slice(0, i)
-				return String{managed: stemManaged, _iterPos: 0}
+				return String.init(stemManaged)
 			end 'isDot'
 		end 'scan'
 		return name
@@ -286,7 +286,7 @@ export type FilePath implements InitableFromStringLiteral, Equatable, Hashable, 
 			return FilePath{_path: ""}
 		end 'noSep'
 		let parentManaged = _path.managed.slice(0, sepPlusOne - 1)
-		let parentStr = String{managed: parentManaged, _iterPos: 0}
+		let parentStr = String.init(parentManaged)
 		return FilePath{_path: parentStr}
 	end 'parent'
 
@@ -334,13 +334,13 @@ export type FilePath implements InitableFromStringLiteral, Equatable, Hashable, 
 		var stemStr = name
 		if foundDot 'hasDot'
 			let stemManaged = name.managed.slice(0, dotPos)
-			stemStr = String{managed: stemManaged, _iterPos: 0}
+			stemStr = String.init(stemManaged)
 		end 'hasDot'
 		if sepPlusOne == 0 'noParent'
 			return FilePath{_path: "{stemStr}{newExt}"}
 		end 'noParent'
 		let parentManaged = _path.managed.slice(0, sepPlusOne)
-		let parentStr = String{managed: parentManaged, _iterPos: 0}
+		let parentStr = String.init(parentManaged)
 		return FilePath{_path: "{parentStr}{stemStr}{newExt}"}
 	end 'changeExtension'
 
