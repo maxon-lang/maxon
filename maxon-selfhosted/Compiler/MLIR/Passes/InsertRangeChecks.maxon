@@ -191,41 +191,41 @@ function emitRangeCheckOps(block MlirBlock, valueId ValueId, lower RangeBound, u
 	if needsUpperCheck and needsLowerCheck 'bothChecks'
 		// %upper = arith.const upper
 		let upperLitId = allocValueId(nextValueIdRef)
-		block.ops.push(MlirOp.arith(ArithOp.const(ArithConst{opcode: typeInfo.constOpcode, resultId: upperLitId, value: upper})))
+		block.ops.push(MlirOp.arith(ArithOp.const(ArithConst.create(typeInfo.constOpcode, resultId: upperLitId, value: upper))))
 
 		// %cmpHi = arith.cmp gt %valueId, %upper
 		let cmpUpperId = allocValueId(nextValueIdRef)
-		block.ops.push(MlirOp.arith(ArithOp.binary(ArithBinaryOp{opcode: typeInfo.cmpGtOpcode, resultId: cmpUpperId, leftId: valueId, rightId: upperLitId})))
+		block.ops.push(MlirOp.arith(ArithOp.binary(ArithBinaryOp.create(typeInfo.cmpGtOpcode, resultId: cmpUpperId, leftId: valueId, rightId: upperLitId))))
 
 		// %lower = arith.const lower
 		let lowerLitId = allocValueId(nextValueIdRef)
-		block.ops.push(MlirOp.arith(ArithOp.const(ArithConst{opcode: typeInfo.constOpcode, resultId: lowerLitId, value: lower})))
+		block.ops.push(MlirOp.arith(ArithOp.const(ArithConst.create(typeInfo.constOpcode, resultId: lowerLitId, value: lower))))
 
 		// %cmpLo = arith.cmp lt %valueId, %lower
 		let cmpLowerId = allocValueId(nextValueIdRef)
-		block.ops.push(MlirOp.arith(ArithOp.binary(ArithBinaryOp{opcode: typeInfo.cmpLtOpcode, resultId: cmpLowerId, leftId: valueId, rightId: lowerLitId})))
+		block.ops.push(MlirOp.arith(ArithOp.binary(ArithBinaryOp.create(typeInfo.cmpLtOpcode, resultId: cmpLowerId, leftId: valueId, rightId: lowerLitId))))
 
 		// %outOfRange = arith.ori1 %cmpLo, %cmpHi
 		let outOfRangeId = allocValueId(nextValueIdRef)
-		block.ops.push(MlirOp.arith(ArithOp.binary(ArithBinaryOp{opcode: ArithBinaryOpcode.orI1, resultId: outOfRangeId, leftId: cmpLowerId, rightId: cmpUpperId})))
+		block.ops.push(MlirOp.arith(ArithOp.binary(ArithBinaryOp.create(ArithBinaryOpcode.orI1, resultId: outOfRangeId, leftId: cmpLowerId, rightId: cmpUpperId))))
 
 		// cond_br %outOfRange → panic, else → ok
-		block.terminator = MlirOp.cf(CfOp.condBr(outOfRangeId, panicBlockId, ValueIdArray{}, okBlockId, ValueIdArray{}))
+		block.terminator = MlirOp.cf(CfOp.condBr(outOfRangeId, panicBlockId, ValueIdArray.empty(), okBlockId, ValueIdArray.empty()))
 		block.hasTerminator = true
 	end 'bothChecks' else 'singleCheck'
 		if needsUpperCheck 'upperOnly'
 			let upperLitId = allocValueId(nextValueIdRef)
-			block.ops.push(MlirOp.arith(ArithOp.const(ArithConst{opcode: typeInfo.constOpcode, resultId: upperLitId, value: upper})))
+			block.ops.push(MlirOp.arith(ArithOp.const(ArithConst.create(typeInfo.constOpcode, resultId: upperLitId, value: upper))))
 			let cmpUpperId = allocValueId(nextValueIdRef)
-			block.ops.push(MlirOp.arith(ArithOp.binary(ArithBinaryOp{opcode: typeInfo.cmpGtOpcode, resultId: cmpUpperId, leftId: valueId, rightId: upperLitId})))
-			block.terminator = MlirOp.cf(CfOp.condBr(cmpUpperId, panicBlockId, ValueIdArray{}, okBlockId, ValueIdArray{}))
+			block.ops.push(MlirOp.arith(ArithOp.binary(ArithBinaryOp.create(typeInfo.cmpGtOpcode, resultId: cmpUpperId, leftId: valueId, rightId: upperLitId))))
+			block.terminator = MlirOp.cf(CfOp.condBr(cmpUpperId, panicBlockId, ValueIdArray.empty(), okBlockId, ValueIdArray.empty()))
 			block.hasTerminator = true
 		end 'upperOnly' else 'lowerOnly'
 			let lowerLitId = allocValueId(nextValueIdRef)
-			block.ops.push(MlirOp.arith(ArithOp.const(ArithConst{opcode: typeInfo.constOpcode, resultId: lowerLitId, value: lower})))
+			block.ops.push(MlirOp.arith(ArithOp.const(ArithConst.create(typeInfo.constOpcode, resultId: lowerLitId, value: lower))))
 			let cmpLowerId = allocValueId(nextValueIdRef)
-			block.ops.push(MlirOp.arith(ArithOp.binary(ArithBinaryOp{opcode: typeInfo.cmpLtOpcode, resultId: cmpLowerId, leftId: valueId, rightId: lowerLitId})))
-			block.terminator = MlirOp.cf(CfOp.condBr(cmpLowerId, panicBlockId, ValueIdArray{}, okBlockId, ValueIdArray{}))
+			block.ops.push(MlirOp.arith(ArithOp.binary(ArithBinaryOp.create(typeInfo.cmpLtOpcode, resultId: cmpLowerId, leftId: valueId, rightId: lowerLitId))))
+			block.terminator = MlirOp.cf(CfOp.condBr(cmpLowerId, panicBlockId, ValueIdArray.empty(), okBlockId, ValueIdArray.empty()))
 			block.hasTerminator = true
 		end 'lowerOnly'
 	end 'singleCheck'
@@ -233,7 +233,7 @@ end 'emitRangeCheckOps'
 
 // Build a block label like "__range_panic_0".
 function buildLabel(prefix ByteArray, id ValueId) returns ByteArray
-	var label = ByteArray{}
+	var label = ByteArray.empty()
 	label.append(prefix)
 	label.append(intToBytes(id))
 	return label
@@ -257,16 +257,20 @@ type RangeCheckTypeInfo
 	export var constOpcode ArithConstOpcode
 	export var cmpLtOpcode ArithBinaryOpcode
 	export var cmpGtOpcode ArithBinaryOpcode
+
+	static function create(stdType StdType, constOpcode ArithConstOpcode, cmpLtOpcode ArithBinaryOpcode, cmpGtOpcode ArithBinaryOpcode) returns RangeCheckTypeInfo
+		return Self{stdType: stdType, constOpcode: constOpcode, cmpLtOpcode: cmpLtOpcode, cmpGtOpcode: cmpGtOpcode}
+	end 'create'
 end 'RangeCheckTypeInfo'
 
 // Resolve the correct opcodes for a given MLIR return type.
 // Panics on unrecognised types to catch missing cases early.
 function resolveRangeCheckType(returnType ByteArray) returns RangeCheckTypeInfo
 	if returnType == b"f64" or returnType == b"f32" 'isFloat'
-		return RangeCheckTypeInfo{stdType: StdType.f64, constOpcode: ArithConstOpcode.constF64, cmpLtOpcode: ArithBinaryOpcode.cmpF64Lt, cmpGtOpcode: ArithBinaryOpcode.cmpF64Gt}
+		return RangeCheckTypeInfo.create(StdType.f64, constOpcode: ArithConstOpcode.constF64, cmpLtOpcode: ArithBinaryOpcode.cmpF64Lt, cmpGtOpcode: ArithBinaryOpcode.cmpF64Gt)
 	end 'isFloat'
 	if returnType == b"i64" or returnType == b"i32" or returnType == b"i16" or returnType == b"i8" or returnType == b"u64" or returnType == b"u32" or returnType == b"u16" or returnType == b"u8" 'isInt'
-		return RangeCheckTypeInfo{stdType: StdType.i64, constOpcode: ArithConstOpcode.constI64, cmpLtOpcode: ArithBinaryOpcode.cmpI64Lt, cmpGtOpcode: ArithBinaryOpcode.cmpI64Gt}
+		return RangeCheckTypeInfo.create(StdType.i64, constOpcode: ArithConstOpcode.constI64, cmpLtOpcode: ArithBinaryOpcode.cmpI64Lt, cmpGtOpcode: ArithBinaryOpcode.cmpI64Gt)
 	end 'isInt'
 	panic("resolveRangeCheckType: unrecognised return type '{String.from(returnType)}'")
 end 'resolveRangeCheckType'

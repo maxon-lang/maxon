@@ -25,41 +25,49 @@ export type MlirFunction
 	// The code emitter saves these in the prologue and restores them in the epilogue.
 	export var calleeSavedGprs RegIntArray
 	export var calleeSavedFps RegIntArray
+
+	export static function create(name ByteArray, returnType ByteArray, paramCount ParamCount, paramTypes StdTypeArray, returnLine LineNumber) returns MlirFunction
+		return Self{
+			name: name,
+			returnType: returnType,
+			paramCount: paramCount,
+			paramTypes: paramTypes,
+			blocks: MlirBlockArray.empty(),
+			nextBlockId: 0,
+			varSlotCount: 0,
+			spillSize: 0,
+			returnLine: returnLine,
+			calleeSavedGprs: RegIntArray.empty(),
+			calleeSavedFps: RegIntArray.empty()
+		}
+	end 'create'
+
+	export static function clone(src MlirFunction) returns MlirFunction
+		return Self{
+			name: src.name,
+			returnType: src.returnType,
+			paramCount: src.paramCount,
+			paramTypes: src.paramTypes,
+			blocks: MlirBlockArray.empty(),
+			nextBlockId: 0,
+			varSlotCount: src.varSlotCount,
+			spillSize: src.spillSize,
+			returnLine: src.returnLine,
+			calleeSavedGprs: src.calleeSavedGprs,
+			calleeSavedFps: src.calleeSavedFps
+		}
+	end 'clone'
 end 'MlirFunction'
 
 export typealias MlirFunctionArray = Array with MlirFunction
 
 export function createMlirFunction(name ByteArray, returnType ByteArray, paramCount ParamCount, paramTypes StdTypeArray, returnLine LineNumber) returns MlirFunction
-	return MlirFunction{
-		name: name,
-		returnType: returnType,
-		paramCount: paramCount,
-		paramTypes: paramTypes,
-		blocks: MlirBlockArray{},
-		nextBlockId: 0,
-		varSlotCount: 0,
-		spillSize: 0,
-		returnLine: returnLine,
-		calleeSavedGprs: RegIntArray{},
-		calleeSavedFps: RegIntArray{}
-	}
+	return MlirFunction.create(name, returnType: returnType, paramCount: paramCount, paramTypes: paramTypes, returnLine: returnLine)
 end 'createMlirFunction'
 
 // Create a new function with a fresh region, copying all metadata from the source function.
 export function cloneFunctionShell(src MlirFunction) returns MlirFunction
-	return MlirFunction{
-		name: src.name,
-		returnType: src.returnType,
-		paramCount: src.paramCount,
-		paramTypes: src.paramTypes,
-		blocks: MlirBlockArray{},
-		nextBlockId: 0,
-		varSlotCount: src.varSlotCount,
-		spillSize: src.spillSize,
-		returnLine: src.returnLine,
-		calleeSavedGprs: src.calleeSavedGprs,
-		calleeSavedFps: src.calleeSavedFps
-	}
+	return MlirFunction.clone(src)
 end 'cloneFunctionShell'
 
 export function addBlock(func MlirFunction, label ByteArray) returns MlirBlock

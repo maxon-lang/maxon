@@ -21,7 +21,7 @@ export function fileChanged(project Project, path FilePath, content ByteArray)
 
 	project.db.currentRevision = project.db.currentRevision + 1
 	logTrace(LogCategory.compiler, message: () gives "  changed at revision {project.db.currentRevision}")
-	let entry = SourceFileEntry{content: content, changedAtRevision: project.db.currentRevision}
+	let entry = SourceFileEntry.create(content, changedAtRevision: project.db.currentRevision)
 	project.db.sourceFiles.insert(path, value: entry)
 end 'fileChanged'
 
@@ -51,13 +51,13 @@ export function recordDependency(project Project, dependency QueryKey)
 	let dependent = try project.db.activeQueryStack.get(stackLen - 1) otherwise 'err'
 		return
 	end 'err'
-	let dep = Dependency{dependent: dependent, dependency: dependency}
+	let dep = Dependency.create(dependent, dependency: dependency)
 	project.db.dependencies.push(dep)
 end 'recordDependency'
 
 // Remove all dependency entries where `dependent` matches `key`.
 export function clearDepsFor(project Project, key QueryKey)
-	var newDeps = DependencyArray{}
+	var newDeps = DependencyArray.empty()
 	for dep in project.db.dependencies 'scan'
 		if not queryKeysEqual(dep.dependent, b: key) 'keep'
 			newDeps.push(dep)
@@ -173,7 +173,7 @@ function isTokensCacheValidDeep(project Project, path FilePath) returns bool
 		end 'recentlyVerified'
 		let key = QueryKey.tokens(path)
 		if areDepsValid(project, key: key, computedAt: memo.computedAt) 'depsOk'
-			let verified = TokenMemo{value: memo.value, computedAt: memo.computedAt, verifiedAt: project.db.currentRevision}
+			let verified = TokenMemo.create(memo.value, computedAt: memo.computedAt, verifiedAt: project.db.currentRevision)
 			project.db.tokenCache.insert(path, value: verified)
 			return true
 		end 'depsOk'
@@ -191,7 +191,7 @@ function isParseCacheValidDeep(project Project, path FilePath) returns bool
 		end 'recentlyVerified'
 		let key = QueryKey.parseOps(path)
 		if areDepsValid(project, key: key, computedAt: memo.computedAt) 'depsOk'
-			let verified = ParseMemo{value: memo.value, computedAt: memo.computedAt, verifiedAt: project.db.currentRevision, nextValueIdAfterParse: memo.nextValueIdAfterParse}
+			let verified = ParseMemo.create(memo.value, computedAt: memo.computedAt, verifiedAt: project.db.currentRevision, nextValueIdAfterParse: memo.nextValueIdAfterParse)
 			project.db.parseCache.insert(path, value: verified)
 			return true
 		end 'depsOk'

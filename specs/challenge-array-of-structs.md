@@ -22,14 +22,18 @@ typealias Integer = int(i64.min to i64.max)
 type Point
 	export var x Integer
 	export var y Integer
+
+	static function create(x Integer, y Integer) returns Self
+		return Self{x: x, y: y}
+	end 'create'
 end 'Point'
 
 function main() returns ExitCode
-	var p1 = Point{x: 1, y: 2}
-	var p2 = Point{x: 3, y: 4}
+	var p1 = Point.create(x: 1, y: 2)
+	var p2 = Point.create(x: 3, y: 4)
 	var points = [p1, p2]
-	var pt0 = try points.get(0) otherwise Point{x: 0, y: 0}
-	var pt1 = try points.get(1) otherwise Point{x: 0, y: 0}
+	var pt0 = try points.get(0) otherwise Point.create(x: 0, y: 0)
+	var pt1 = try points.get(1) otherwise Point.create(x: 0, y: 0)
 	return pt0.x + pt1.y
 end 'main'
 ```
@@ -45,12 +49,16 @@ typealias Integer = int(i64.min to i64.max)
 type Pair
 	export var first Integer
 	export var second Integer
+
+	static function create(first Integer, second Integer) returns Self
+		return Self{first: first, second: second}
+	end 'create'
 end 'Pair'
 
 function main() returns ExitCode
-	var p = Pair{first: 10, second: 20}
+	var p = Pair.create(first: 10, second: 20)
 	var arr = [p]
-	var elem = try arr.get(0) otherwise Pair{first: 0, second: 0}
+	var elem = try arr.get(0) otherwise Pair.create(first: 0, second: 0)
 	return elem.first + elem.second
 end 'main'
 ```
@@ -70,20 +78,24 @@ end 'Color'
 
 type Item
 	export var color Color
+
+	static function create(color Color) returns Self
+		return Self{color: color}
+	end 'create'
 end 'Item'
 
 typealias ItemArray = Array with Item
 
 function main() returns ExitCode
-	var items = ItemArray{}
-	items.push(Item{color: Color.red})
-	items.push(Item{color: Color.green})
-	items.push(Item{color: Color.blue})
+	var items = ItemArray.empty()
+	items.push(Item.create(color: Color.red))
+	items.push(Item.create(color: Color.green))
+	items.push(Item.create(color: Color.blue))
 
 	// Verify enum values are stored correctly (not pointers)
-	var item0 = try items.get(0) otherwise Item{color: Color.blue}
-	var item1 = try items.get(1) otherwise Item{color: Color.blue}
-	var item2 = try items.get(2) otherwise Item{color: Color.red}
+	var item0 = try items.get(0) otherwise Item.create(color: Color.blue)
+	var item1 = try items.get(1) otherwise Item.create(color: Color.blue)
+	var item2 = try items.get(2) otherwise Item.create(color: Color.red)
 
 	// red=0, green=1, blue=2
 	return item0.color.rawValue + item1.color.rawValue * 10 + item2.color.rawValue * 100
@@ -104,15 +116,19 @@ end 'Status'
 
 type Task
 	export var status Status
+
+	static function create(status Status) returns Self
+		return Self{status: status}
+	end 'create'
 end 'Task'
 
 typealias TaskArray = Array with Task
 
 function main() returns ExitCode
-	var tasks = TaskArray{}
-	tasks.push(Task{status: Status.pending})
-	tasks.push(Task{status: Status.active})
-	tasks.push(Task{status: Status.done})
+	var tasks = TaskArray.empty()
+	tasks.push(Task.create(status: Status.pending))
+	tasks.push(Task.create(status: Status.active))
+	tasks.push(Task.create(status: Status.done))
 
 	var activeCount = 0
 	for task in tasks 'loop'

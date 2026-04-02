@@ -5,6 +5,10 @@ typealias Integer = int(i64.min to i64.max)
 type Vec2
 	export var x Integer
 	export var y Integer
+
+	static function create(x Integer, y Integer) returns Self
+		return Self{x: x, y: y}
+	end 'create'
 end 'Vec2'
 
 function dot(a Vec2, b Vec2) returns Integer
@@ -12,14 +16,37 @@ function dot(a Vec2, b Vec2) returns Integer
 end 'dot'
 
 function main() returns ExitCode
-	var v1 = Vec2 { x: 3, y: 4 }
-	var v2 = Vec2 { x: 2, y: 1 }
+	var v1 = Vec2.create(3, y: 4)
+	var v2 = Vec2.create(2, y: 1)
 	return dot(v1, b: v2)
 end 'main'
 ---
 ExitCode: 10
 ---
 module {
+  func @Vec2.create(x: i64, y: i64) -> i64 {
+  entry:
+    x86.prologue stack_size=32
+    x86.mov [rbp-16], rcx
+    x86.mov [rbp-24], rdx
+    x86.mov rcx, 16
+    x86.xor rdx, rdx
+    x86.mov r8, 1
+    x86.call mm_alloc
+    x86.mov [rbp-8], rax
+    x86.mov rax, [rbp-8]
+    x86.mov rcx, [rbp-16]
+    x86.mov [rax+0], rcx
+    x86.mov rdx, [rbp-8]
+    x86.mov rbx, [rbp-24]
+    x86.mov [rdx+8], rbx
+    x86.mov rsi, [rbp-8]
+    x86.mov rcx, [rbp-8]
+    x86.call mm_incref
+    x86.mov rax, [rbp-8]
+    x86.epilogue
+    x86.ret
+  }
   func @structs.dot(a: i64, b: i64) -> i64 {
   entry:
     x86.prologue stack_size=16
@@ -42,26 +69,24 @@ module {
   func @main() -> u32 {
   entry:
     x86.prologue stack_size=32
-    x86.mov rax, 3
-    x86.mov rcx, 4
+    x86.mov rcx, 3
+    x86.mov rdx, 4
+    x86.call Vec2.create
+    x86.mov [rbp-8], rax
+    x86.mov rcx, 2
+    x86.mov rdx, 1
+    x86.call Vec2.create
     x86.mov [rbp-16], rax
-    x86.mov [rbp-8], rcx
-    x86.mov rdx, 2
-    x86.mov rbx, 1
-    x86.mov [rbp-32], rdx
-    x86.mov [rbp-24], rbx
-    x86.lea rsi, [rbp-16]
-    x86.mov rdi, rsi
-    x86.lea r8, [rbp-32]
-    x86.mov r9, r8
-    x86.mov rcx, rdi
-    x86.mov rdx, r9
+    x86.mov rax, [rbp-8]
+    x86.mov rcx, [rbp-16]
+    x86.mov rcx, [rbp-8]
+    x86.mov rdx, [rbp-16]
     x86.call structs.dot
-    x86.xor rcx, rcx
-    x86.mov rdx, 4294967295
-    x86.cmp rax, rdx
+    x86.xor rdx, rdx
+    x86.mov rbx, 4294967295
+    x86.cmp rax, rbx
     x86.jg main.__range_panic_0
-    x86.cmp rax, rcx
+    x86.cmp rax, rdx
     x86.jl main.__range_panic_0
     x86.jmp main.__range_ok_0
   __range_panic_0:
@@ -69,7 +94,26 @@ module {
     x86.mov rcx, rax
     x86.call mrt_panic
   __range_ok_0:
+    x86.mov rcx, [rbp-16]
+    x86.mov [rbp-24], rax
+    x86.test rcx, rcx
+    x86.jz __nonnull_skip_0
+    x86.call mm_decref
+    x86.label __nonnull_skip_0
+    x86.mov rax, [rbp-8]
+    x86.test rax, rax
+    x86.jz __nonnull_skip_1
+    x86.mov rcx, [rbp-8]
+    x86.call mm_decref
+    x86.label __nonnull_skip_1
+    x86.mov rax, [rbp-24]
     x86.epilogue
+    x86.ret
+  }
+  func @__destruct_Vec2(ptr: i64) {
+  entry:
+    x86.jmp __destruct_Vec2.done
+  done:
     x86.ret
   }
 }

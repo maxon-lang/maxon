@@ -29,7 +29,7 @@ function getValue(m StringMap, key String) returns String throws TestError
 end 'getValue'
 
 function main() returns ExitCode
-		var m = StringMap{}
+		var m = StringMap.empty()
 		m.insert("key", value: "hello")
 		let got = try getValue(m, key: "key") otherwise "none"
 		if got == "hello" 'ok'
@@ -50,6 +50,10 @@ typealias SmallInt = int(0 to u8.max)
 type Entry
 		export var name String
 		export var count SmallInt
+
+		static function create(name String, count SmallInt) returns Self
+			return Self{name: name, count: count}
+		end 'create'
 end 'Entry'
 
 typealias EntryMap = Map with (String, Entry)
@@ -66,9 +70,9 @@ function getEntry(m EntryMap, key String) returns Entry throws TestError
 end 'getEntry'
 
 function main() returns ExitCode
-		var m = EntryMap{}
-		m.insert("key", value: Entry{name: "hello", count: 7})
-		let got = try getEntry(m, key: "key") otherwise Entry{name: "none", count: 0}
+		var m = EntryMap.empty()
+		m.insert("key", value: Entry.create(name: "hello", count: 7))
+		let got = try getEntry(m, key: "key") otherwise Entry.create(name: "none", count: 0)
 		return got.count
 end 'main'
 ```

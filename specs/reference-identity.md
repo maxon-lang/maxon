@@ -46,10 +46,14 @@ typealias Integer = int(i64.min to i64.max)
 type Point
 	export var x Integer
 	export var y Integer
+
+	static function create(x Integer, y Integer) returns Self
+		return Self{x: x, y: y}
+	end 'create'
 end 'Point'
 
 function main() returns ExitCode
-	var a = Point{x: 1, y: 2}
+	var a = Point.create(x: 1, y: 2)
 	if a is a 'check'
 		return 1
 	end 'check'
@@ -67,10 +71,14 @@ typealias Integer = int(i64.min to i64.max)
 type Point
 	export var x Integer
 	export var y Integer
+
+	static function create(x Integer, y Integer) returns Self
+		return Self{x: x, y: y}
+	end 'create'
 end 'Point'
 
 function main() returns ExitCode
-	var a = Point{x: 1, y: 2}
+	var a = Point.create(x: 1, y: 2)
 	var b = a
 	if a is b 'check'
 		return 1
@@ -89,10 +97,14 @@ typealias Integer = int(i64.min to i64.max)
 type Point
 	export var x Integer
 	export var y Integer
+
+	static function create(x Integer, y Integer) returns Self
+		return Self{x: x, y: y}
+	end 'create'
 end 'Point'
 
 function main() returns ExitCode
-	var a = Point{x: 1, y: 2}
+	var a = Point.create(x: 1, y: 2)
 	var b = a.clone()
 	if a is b 'check'
 		return 1
@@ -111,11 +123,15 @@ typealias Integer = int(i64.min to i64.max)
 type Point
 	export var x Integer
 	export var y Integer
+
+	static function create(x Integer, y Integer) returns Self
+		return Self{x: x, y: y}
+	end 'create'
 end 'Point'
 
 function main() returns ExitCode
-	var a = Point{x: 1, y: 2}
-	var b = Point{x: 1, y: 2}
+	var a = Point.create(x: 1, y: 2)
+	var b = Point.create(x: 1, y: 2)
 	if a is b 'check'
 		return 1
 	end 'check'
@@ -133,11 +149,15 @@ typealias Integer = int(i64.min to i64.max)
 type Point
 	export var x Integer
 	export var y Integer
+
+	static function create(x Integer, y Integer) returns Self
+		return Self{x: x, y: y}
+	end 'create'
 end 'Point'
 
 function main() returns ExitCode
-	var a = Point{x: 1, y: 2}
-	var b = Point{x: 1, y: 2}
+	var a = Point.create(x: 1, y: 2)
+	var b = Point.create(x: 1, y: 2)
 	if a is not b 'check'
 		return 1
 	end 'check'
@@ -155,10 +175,14 @@ typealias Integer = int(i64.min to i64.max)
 type Point
 	export var x Integer
 	export var y Integer
+
+	static function create(x Integer, y Integer) returns Self
+		return Self{x: x, y: y}
+	end 'create'
 end 'Point'
 
 function main() returns ExitCode
-	var a = Point{x: 1, y: 2}
+	var a = Point.create(x: 1, y: 2)
 	if a is not a 'check'
 		return 1
 	end 'check'
@@ -175,6 +199,10 @@ typealias Integer = int(i64.min to i64.max)
 
 type Box
 	export var value Integer
+
+	static function create(value Integer) returns Self
+		return Self{value: value}
+	end 'create'
 end 'Box'
 
 function areSame(a Box, b Box) returns bool
@@ -182,8 +210,8 @@ function areSame(a Box, b Box) returns bool
 end 'areSame'
 
 function main() returns ExitCode
-	var x = Box{value: 42}
-	var y = Box{value: 42}
+	var x = Box.create(value: 42)
+	var y = Box.create(value: 42)
 	var result = 0
 	if areSame(x, b: x) 'same'
 		result = result + 1
@@ -224,10 +252,14 @@ typealias Integer = int(i64.min to i64.max)
 type Point
 	export var x Integer
 	export var y Integer
+
+	static function create(x Integer, y Integer) returns Self
+		return Self{x: x, y: y}
+	end 'create'
 end 'Point'
 
 function main() returns ExitCode
-	var a = Point{x: 1, y: 2}
+	var a = Point.create(x: 1, y: 2)
 	var b = a
 	b.x = 99
 	return a.x
@@ -244,10 +276,14 @@ typealias Integer = int(i64.min to i64.max)
 type Point
 	export var x Integer
 	export var y Integer
+
+	static function create(x Integer, y Integer) returns Self
+		return Self{x: x, y: y}
+	end 'create'
 end 'Point'
 
 function main() returns ExitCode
-	var a = Point{x: 1, y: 2}
+	var a = Point.create(x: 1, y: 2)
 	var b = a.clone()
 	b.x = 99
 	return a.x

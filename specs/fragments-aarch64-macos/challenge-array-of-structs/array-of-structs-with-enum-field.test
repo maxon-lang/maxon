@@ -9,20 +9,24 @@ end 'Color'
 
 type Item
   export var color Color
+
+  static function create(color Color) returns Self
+  	return Self{color: color}
+  end 'create'
 end 'Item'
 
 typealias ItemArray = Array with Item
 
 function main() returns ExitCode
-  var items = ItemArray{}
-  items.push(Item{color: Color.red})
-  items.push(Item{color: Color.green})
-  items.push(Item{color: Color.blue})
+  var items = ItemArray.empty()
+  items.push(Item.create(color: Color.red))
+  items.push(Item.create(color: Color.green))
+  items.push(Item.create(color: Color.blue))
 
   // Verify enum values are stored correctly (not pointers)
-  var item0 = try items.get(0) otherwise Item{color: Color.blue}
-  var item1 = try items.get(1) otherwise Item{color: Color.blue}
-  var item2 = try items.get(2) otherwise Item{color: Color.red}
+  var item0 = try items.get(0) otherwise Item.create(color: Color.blue)
+  var item1 = try items.get(1) otherwise Item.create(color: Color.blue)
+  var item2 = try items.get(2) otherwise Item.create(color: Color.red)
 
   // red=0, green=1, blue=2
   return item0.color.rawValue + item1.color.rawValue * 10 + item2.color.rawValue * 100

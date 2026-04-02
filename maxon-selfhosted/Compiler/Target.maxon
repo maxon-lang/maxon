@@ -14,6 +14,10 @@ end 'Os'
 export type Target
 	export let cpu CpuArch
 	export let os Os
+
+	export static function create(cpu CpuArch, os Os) returns Target
+		return Self{cpu: cpu, os: os}
+	end 'create'
 end 'Target'
 
 export function detectHostTarget() returns Target
@@ -33,7 +37,7 @@ export function detectHostTarget() returns Target
 		let hostCpu = CpuArch.aarch64
 	#endif
 
-	return Target{cpu: hostCpu, os: hostOs}
+	return Target.create(hostCpu, os: hostOs)
 end 'detectHostTarget'
 
 export function parseTarget(s String) returns Target
@@ -59,7 +63,7 @@ export function parseTarget(s String) returns Target
 		panic("Unknown OS in target string: {s}")
 	end 'unknownOs'
 
-	return Target{cpu: cpu, os: os}
+	return Target.create(cpu, os: os)
 end 'parseTarget'
 
 export function targetToString(t Target) returns String

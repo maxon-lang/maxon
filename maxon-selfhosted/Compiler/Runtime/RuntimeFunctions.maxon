@@ -5,10 +5,14 @@ export type GlobalDataTable
 	export var names ByteArrayArray
 	export var values ByteArrayArray
 	export var nextStringId MachineWord
+
+	export static function create() returns GlobalDataTable
+		return Self{names: ByteArrayArray.empty(), values: ByteArrayArray.empty(), nextStringId: 0}
+	end 'create'
 end 'GlobalDataTable'
 
 export function createGlobalDataTable() returns GlobalDataTable
-	return GlobalDataTable{names: ByteArrayArray{}, values: ByteArrayArray{}, nextStringId: 0}
+	return GlobalDataTable.create()
 end 'createGlobalDataTable'
 
 // Look up a named entry in the global data table.
@@ -16,10 +20,10 @@ end 'createGlobalDataTable'
 export function lookupGlobalData(table GlobalDataTable, name ByteArray) returns ByteArray
 	for(i, tableName) in table.names.enumerated() 'findData'
 		if tableName == name 'found'
-			return try table.values.get(i) otherwise ByteArray{}
+			return try table.values.get(i) otherwise ByteArray.empty()
 		end 'found'
 	end 'findData'
-	return ByteArray{}
+	return ByteArray.empty()
 end 'lookupGlobalData'
 
 export function addGlobalData(table GlobalDataTable, data ByteArray) returns ByteArray
@@ -45,7 +49,7 @@ export function intToBytes(value MachineWord) returns ByteArray
 	if value == 0 'zero'
 		return b"0"
 	end 'zero'
-	var result = ByteArray{}
+	var result = ByteArray.empty()
 	var remaining = value
 	while remaining > 0 'digits'
 		let digit = remaining mod 10
@@ -74,7 +78,7 @@ export function emitSymbolTable(code ByteArray, labelNames ByteArrayArray, funcL
 	let count = labelNames.count()
 
 	// Build sorted indices by offset (insertion sort)
-	var sortedIndices = CodeOffsetArray{}
+	var sortedIndices = CodeOffsetArray.empty()
 	for i in 0 upto count 'init'
 		sortedIndices.push(i)
 	end 'init'
@@ -95,12 +99,12 @@ export function emitSymbolTable(code ByteArray, labelNames ByteArrayArray, funcL
 	end 'sort'
 
 	// Build name strings block and record offsets
-	var nameStrings = ByteArray{}
-	var nameOffsets = CodeOffsetArray{}
+	var nameStrings = ByteArray.empty()
+	var nameOffsets = CodeOffsetArray.empty()
 	for i in 0 upto count 'buildNames'
 		let idx = try sortedIndices.get(i) otherwise 0
 		nameOffsets.push(nameStrings.count())
-		let name = try labelNames.get(idx) otherwise ByteArray{}
+		let name = try labelNames.get(idx) otherwise ByteArray.empty()
 		nameStrings.append(name)
 		nameStrings.push(0)
 	end 'buildNames'

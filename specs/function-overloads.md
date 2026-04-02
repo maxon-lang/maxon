@@ -156,6 +156,10 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 
 type Converter
+	static function create() returns Self
+		return Self{}
+	end 'create'
+
 	function convert(value Integer) returns Integer
 		return value * 2
 	end 'convert'
@@ -166,7 +170,7 @@ type Converter
 end 'Converter'
 
 function main() returns ExitCode
-	let c = Converter{}
+	let c = Converter.create()
 	return c.convert(21)
 end 'main'
 ```

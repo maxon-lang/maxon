@@ -471,7 +471,7 @@ typealias IntArray = Array with Int
 
 // Calling a throwing method without try is an error
 function main() returns ExitCode
-	let arr = IntArray{}
+	let arr = IntArray.empty()
 	let val = arr.get(0)
 	return 0
 end 'main'
@@ -506,7 +506,7 @@ typealias IntArray = Array with Int
 
 // Using try on a non-throwing method is an error
 function main() returns ExitCode
-	let arr = IntArray{}
+	let arr = IntArray.empty()
 	let val = try arr.count() otherwise 0
 	return val
 end 'main'
@@ -522,7 +522,7 @@ typealias IntArray = Array with Int
 
 // Using otherwise without try is an error
 function main() returns ExitCode
-	let arr = IntArray{}
+	let arr = IntArray.empty()
 	let val = arr.get(0) otherwise 0
 	return val
 end 'main'

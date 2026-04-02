@@ -4,10 +4,14 @@ typealias Integer = int(i64.min to i64.max)
 
 type Level
 	export var rawValue Integer
+
+	static function create(rawValue Integer) returns Self
+		return Self{rawValue: rawValue}
+	end 'create'
 end 'Level'
 
 function main() returns ExitCode
-	var level = Level{rawValue: 5}
+	var level = Level.create(rawValue: 5)
 	var arr = [1, 2, 3]
 	var result = arr.map((_ Integer) gives level.rawValue)
 	return result.count()
@@ -16,35 +20,45 @@ end 'main'
 ExitCode: 3
 ---
 module {
-  func @main() -> u32 {
+  func @Level.create(rawValue: i64) -> i64 {
   entry:
-    x86.prologue stack_size=64
-    x86.mov rax, 5
+    x86.prologue stack_size=16
+    x86.mov [rbp-16], rcx
     x86.mov rcx, 8
     x86.xor rdx, rdx
     x86.mov r8, 1
     x86.call mm_alloc
     x86.mov [rbp-8], rax
-    x86.mov rcx, [rbp-8]
-    x86.mov rdx, 5
-    x86.mov [rcx+0], rdx
-    x86.mov rbx, [rbp-8]
+    x86.mov rax, [rbp-8]
+    x86.mov rcx, [rbp-16]
+    x86.mov [rax+0], rcx
+    x86.mov rdx, [rbp-8]
     x86.mov rcx, [rbp-8]
     x86.call mm_incref
-    x86.xor rsi, rsi
-    x86.mov rdi, 3
-    x86.xor r8, r8
-    x86.mov r9, 8
-    x86.lea_func rax, [__destruct___ManagedMemory]
-    x86.mov rcx, rax
-    x86.mov rdx, rcx
+    x86.mov rax, [rbp-8]
+    x86.epilogue
+    x86.ret
+  }
+  func @main() -> u32 {
+  entry:
+    x86.prologue stack_size=64
+    x86.mov rcx, 5
+    x86.call Level.create
+    x86.mov [rbp-8], rax
+    x86.xor rax, rax
+    x86.mov rcx, 3
+    x86.xor rdx, rdx
+    x86.mov rbx, 8
+    x86.lea_func rsi, [__destruct___ManagedMemory]
+    x86.mov rdi, rsi
+    x86.mov rdx, rdi
     x86.mov rcx, 32
     x86.mov r8, 2
     x86.call mm_alloc
     x86.mov [rbp-16], rax
-    x86.mov rax, [rbp-16]
-    x86.xor rcx, rcx
-    x86.mov [rax+0], rcx
+    x86.mov r8, [rbp-16]
+    x86.xor r9, r9
+    x86.mov [r8+0], r9
     x86.mov rax, [rbp-16]
     x86.mov rcx, 3
     x86.mov [rax+8], rcx
@@ -126,19 +140,20 @@ module {
     x86.mov rcx, [rbp-40]
     x86.call mm_decref
     x86.label __nonnull_skip_0
-    x86.mov rax, [rbp-24]
+    x86.mov rax, [rbp-8]
     x86.test rax, rax
     x86.jz __nonnull_skip_1
-    x86.mov rcx, [rbp-24]
+    x86.mov rcx, [rbp-8]
     x86.call mm_decref
     x86.label __nonnull_skip_1
-    x86.mov rcx, [rbp-8]
-    x86.test rcx, rcx
+    x86.xor rcx, rcx
+    x86.mov [rbp-8], rcx
+    x86.mov rdx, [rbp-24]
+    x86.test rdx, rdx
     x86.jz __nonnull_skip_2
+    x86.mov rcx, [rbp-24]
     x86.call mm_decref
     x86.label __nonnull_skip_2
-    x86.xor rdx, rdx
-    x86.mov [rbp-8], rdx
     x86.mov rbx, [rbp-32]
     x86.test rbx, rbx
     x86.jz __nonnull_skip_3

@@ -318,10 +318,14 @@ typealias Score = int(0 to 100)
 type Player
 	export var name String
 	export var score Score
+
+	static function create(name String, score Score) returns Self
+		return Self{name: name, score: score}
+	end 'create'
 end 'Player'
 
 function main() returns ExitCode
-	var p = Player{name: "Alice", score: Score{42}}
+	var p = Player.create(name: "Alice", score: Score{42})
 	return p.score
 end 'main'
 ```

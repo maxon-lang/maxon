@@ -144,7 +144,7 @@ public static class MonomorphizationPass {
     return specializations;
   }
 
-  private static bool NeedsSpecializationForType(MlirFunction<MaxonOp> func, List<string> assocTypeNames, string sourceTypeName) {
+  internal static bool NeedsSpecializationForType(MlirFunction<MaxonOp> func, List<string> assocTypeNames, string sourceTypeName) {
     foreach (var paramType in func.ParamTypes) {
       if (paramType is MlirTypeParameterType) return true;
       if (paramType is MlirStructType st && (st.Name == sourceTypeName || st.Name == "Self" || assocTypeNames.Any(n => st.Name.Contains(n)))) return true;

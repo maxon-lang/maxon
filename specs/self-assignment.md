@@ -84,16 +84,20 @@ typealias Integer = int(i64.min to i64.max)
 type Point
 	export var x Integer
 	export var y Integer
+
+	static function create(x Integer, y Integer) returns Self
+		return Self{x: x, y: y}
+	end 'create'
 end 'Point'
 
 function main() returns ExitCode
-	var p = Point{x: 1, y: 2}
+	var p = Point.create(x: 1, y: 2)
 	p.x = p.x
 	return 0
 end 'main'
 ```
 ```maxoncstderr
-error E3067: specs/fragments/self-assignment/self-assignment.field-self-assign.test:12:2: self-assignment has no effect: 'p.x = p.x'
+error E3067: specs/fragments/self-assignment/self-assignment.field-self-assign.test:16:2: self-assignment has no effect: 'p.x = p.x'
 ```
 
 <!-- test: self-assignment.discard-literal -->

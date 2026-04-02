@@ -17,59 +17,38 @@ end 'main'
 ExitCode: 12
 ---
 module {
-  func @nested-calls.double(ptr: i64) -> i64 {
+  func @function-declaration.double(x: i64) -> i64 {
   entry:
-    x86.prologue stack_size=16
     x86.mov rax, 2
     x86.imul rcx, rax
-    x86.mov rax, -9223372036854775807
-    x86.cmp rcx, rax
-    x86.jge __range_ok_1
-  __range_panic_1:
-    x86.lea rax, [rip+__panic_msg_1]
-    x86.mov rcx, rax
-    x86.call mrt_panic
-  __range_ok_1:
     x86.mov rax, rcx
-    x86.epilogue
     x86.ret
   }
-  func @nested-calls.quadruple(ptr: i64) -> i64 {
+  func @function-declaration.quadruple(x: i64) -> i64 {
   entry:
     x86.prologue stack_size=16
-    x86.mov [rbp+-8], rcx
-    x86.call nested-calls.double
+    x86.call function-declaration.double
     x86.mov rcx, rax
-    x86.mov [rbp+-16], rcx
-    x86.call nested-calls.double
-    x86.mov rcx, -9223372036854775807
-    x86.cmp rax, rcx
-    x86.jge __range_ok_2
-  __range_panic_2:
-    x86.lea rax, [rip+__panic_msg_2]
-    x86.mov rcx, rax
-    x86.call mrt_panic
-  __range_ok_2:
     x86.epilogue
-    x86.ret
+    x86.jmp function-declaration.double
   }
   func @main() -> u32 {
   entry:
     x86.prologue stack_size=16
     x86.mov rcx, 3
-    x86.call nested-calls.quadruple
-    x86.test rax, rax
-    x86.setl rcx
+    x86.call function-declaration.quadruple
+    x86.xor rcx, rcx
     x86.mov rdx, 4294967295
     x86.cmp rax, rdx
-    x86.setg rdx
-    x86.or rcx, rdx
-    x86.je __range_ok_3
-  __range_panic_3:
-    x86.lea rax, [rip+__panic_msg_3]
+    x86.jg main.__range_panic_0
+    x86.cmp rax, rcx
+    x86.jl main.__range_panic_0
+    x86.jmp main.__range_ok_0
+  __range_panic_0:
+    x86.lea_symdata rax, [__panic_msg_0]
     x86.mov rcx, rax
     x86.call mrt_panic
-  __range_ok_3:
+  __range_ok_0:
     x86.epilogue
     x86.ret
   }

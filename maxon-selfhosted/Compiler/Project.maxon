@@ -42,6 +42,28 @@ export type Project
 	// Global data table for string literals and other read-only data.
 	// Populated during Maxon->Mid lowering when printLiteral ops are lowered.
 	export var globalData GlobalDataTable
+
+	export static function create(db QueryDatabase, rootPath FilePath, target Target) returns Project
+		return Self{
+			db: db,
+			nextValueId_: 0,
+			parserVarNames: ByteArrayArray.empty(),
+			parserVarSlots: VarSlotArray.empty(),
+			parserVarIsFloat: BoolArray.empty(),
+			parserVarIsRefType: BoolArray.empty(),
+			parserScopeStack: ScopeDepthArray.empty(),
+			parserNextSlot: 0,
+			typealiases: TypealiasMap.empty(),
+			typealiasRanges: TypealiasRangeMap.empty(),
+			funcReturnTypes: FuncReturnTypeMap.empty(),
+			stringConstNames: ByteArrayArray.empty(),
+			stringConstValues: ByteArrayArray.empty(),
+			rootPath: rootPath,
+			target: target,
+			diagnostics: DiagnosticArray.empty(),
+			globalData: createGlobalDataTable()
+		}
+	end 'create'
 end 'Project'
 
 export typealias TypealiasMap = Map with(ByteArray, ByteArray)
@@ -53,47 +75,17 @@ export typealias TypealiasRangeMap = Map with(ByteArray, TypealiasRange)
 export type TypealiasRange
 	export var lower RangeBound
 	export var upper RangeBound
+
+	export static function create(lower RangeBound, upper RangeBound) returns TypealiasRange
+		return Self{lower: lower, upper: upper}
+	end 'create'
 end 'TypealiasRange'
 
 export function createProject(rootPath FilePath, target Target) returns Project
-	let emptyModuleMemo = MlirModuleMemo{value: MlirModule{functions: MlirFunctionArray{}}, computedAt: 0, verifiedAt: 0}
-	let emptyCodeMemo = CodeMemo{value: CodeResult{code: ByteArray{}, mainCallFixupOffset: 0, relocations: RelocationArray{}, globalData: createGlobalDataTable(), targetModule: MlirModule{functions: MlirFunctionArray{}}}, computedAt: 0, verifiedAt: 0}
-	let db = QueryDatabase{
-		currentRevision: 1,
-		sourceFiles: SourceFileMap{},
-		sourcePaths: FilePathArray{},
-		tokenCache: TokenCacheMap{},
-		parseCache: ParseCacheMap{},
-		allModuleCache: emptyModuleMemo,
-		allMidCache: emptyModuleMemo,
-		codeCache: emptyCodeMemo,
-		dependencies: DependencyArray{},
-		activeQueryStack: QueryKeyArray{},
-		tokenHits: 0, tokenMisses: 0,
-		parseHits: 0, parseMisses: 0,
-		allModuleHits: 0, allModuleMisses: 0,
-		allMidHits: 0, allMidMisses: 0,
-		codeHits: 0, codeMisses: 0
-	}
-	return Project{
-		db: db,
-		nextValueId_: 0,
-		parserVarNames: ByteArrayArray{},
-		parserVarSlots: VarSlotArray{},
-		parserVarIsFloat: BoolArray{},
-		parserVarIsRefType: BoolArray{},
-		parserScopeStack: ScopeDepthArray{},
-		parserNextSlot: 0,
-		typealiases: TypealiasMap{},
-		typealiasRanges: TypealiasRangeMap{},
-		funcReturnTypes: FuncReturnTypeMap{},
-		stringConstNames: ByteArrayArray{},
-		stringConstValues: ByteArrayArray{},
-		rootPath: rootPath,
-		target: target,
-		diagnostics: DiagnosticArray{},
-		globalData: createGlobalDataTable()
-	}
+	let emptyModuleMemo = MlirModuleMemo.create(createMlirModule(), computedAt: 0, verifiedAt: 0)
+	let emptyCodeMemo = CodeMemo.create(CodeResult.create(ByteArray.empty(), mainCallFixupOffset: 0, relocations: RelocationArray.empty(), globalData: createGlobalDataTable(), targetModule: createMlirModule()), computedAt: 0, verifiedAt: 0)
+	let db = QueryDatabase.create(emptyModuleMemo, emptyCodeMemo: emptyCodeMemo)
+	return Project.create(db, rootPath: rootPath, target: target)
 end 'createProject'
 
 export function hasErrors(project Project) returns bool

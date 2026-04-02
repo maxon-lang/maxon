@@ -32,6 +32,10 @@ export type FileInfo
 	export let accessedTime Timestamp
 	export let isDirectory bool
 	export let isReadOnly bool
+
+	export static function create(size FileSize, modifiedTime Timestamp, createdTime Timestamp, accessedTime Timestamp, isDirectory bool, isReadOnly bool) returns FileInfo
+		return FileInfo{size: size, modifiedTime: modifiedTime, createdTime: createdTime, accessedTime: accessedTime, isDirectory: isDirectory, isReadOnly: isReadOnly}
+	end 'create'
 end 'FileInfo'
 
 export typealias Byte = byte(0 to u8.max)
@@ -81,7 +85,7 @@ export type File
 	/// Read file content as raw bytes
 	export static function readBinary(path FilePath) returns ByteArray throws FileReadError
 		var managed = try readFileData(path._path, extraBytes: 0)
-		return ByteArray{managed: managed, iterIndex: 0}
+		return ByteArray.init(managed)
 	end 'readBinary'
 
 	/// Open a file for writing with the given permission mode, throwing on failure
@@ -146,6 +150,6 @@ export type File
 		let roAttrs = __ManagedFile.statField(statResult, 5)
 		let isRo = roAttrs == 1
 		__ManagedFile.statFree(statResult)
-		return FileInfo{size: fileSize, modifiedTime: mtime, createdTime: ctime, accessedTime: atime, isDirectory: isDir, isReadOnly: isRo}
+		return FileInfo.create(fileSize, modifiedTime: mtime, createdTime: ctime, accessedTime: atime, isDirectory: isDir, isReadOnly: isRo)
 	end 'info'
 end 'File'

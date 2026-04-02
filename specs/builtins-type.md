@@ -108,7 +108,7 @@ end 'main'
 ```maxon
 function main() returns ExitCode
 	let managed = __Builtins.commandLineArg(9999)
-	let s = String{managed: managed, _iterPos: 0}
+	let s = String.init(managed)
 	if s == "" 'check'
 		return 0
 	end 'check'

@@ -62,9 +62,13 @@ typealias Integer = int(i64.min to i64.max)
 type Point
 		export var x Integer
 		export var y Integer
+
+		static function create(x Integer, y Integer) returns Self
+			return Self{x: x, y: y}
+		end 'create'
 end 'Point'
 function main() returns ExitCode
-		var a = Point{x: 10, y: 20}
+		var a = Point.create(x: 10, y: 20)
 		var b = a
 		return a.x + b.y
 end 'main'
@@ -78,11 +82,15 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 type Box
 		export var value Integer
+
+		static function create(value Integer) returns Self
+			return Self{value: value}
+		end 'create'
 end 'Box'
 function main() returns ExitCode
-		var result = Box{value: 0}
+		var result = Box.create(value: 0)
 		if true 'blk'
-				var inner = Box{value: 42}
+				var inner = Box.create(value: 42)
 				result = inner
 		end 'blk'
 		return result.value
@@ -97,10 +105,14 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 type Item
 		export var val Integer
+
+		static function create(val Integer) returns Self
+			return Self{val: val}
+		end 'create'
 end 'Item'
 function main() returns ExitCode
-		var a = Item{val: 10}
-		a = Item{val: 20}
+		var a = Item.create(val: 10)
+		a = Item.create(val: 20)
 		return a.val
 end 'main'
 ```
@@ -113,9 +125,13 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 type Data
 		export var n Integer
+
+		static function create(n Integer) returns Self
+			return Self{n: n}
+		end 'create'
 end 'Data'
 function main() returns ExitCode
-		var a = Data{n: 7}
+		var a = Data.create(n: 7)
 		var b = a
 		var c = a
 		return a.n + b.n + c.n
@@ -131,11 +147,15 @@ typealias Integer = int(i64.min to i64.max)
 type Pair
 		export var a Integer
 		export var b Integer
+
+		static function create(a Integer, b Integer) returns Self
+			return Self{a: a, b: b}
+		end 'create'
 end 'Pair'
 function main() returns ExitCode
-		var x = Pair{a: 3, b: 4}
+		var x = Pair.create(a: 3, b: 4)
 		var y = x.clone()
-		x = Pair{a: 0, b: 0}
+		x = Pair.create(a: 0, b: 0)
 		return y.a + y.b
 end 'main'
 ```
@@ -148,16 +168,24 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 type Inner
 		export var val Integer
+
+		static function create(val Integer) returns Self
+			return Self{val: val}
+		end 'create'
 end 'Inner'
 type Outer
 		export var child Inner
 		export function setChild(c Inner)
 				child = c
 		end 'setChild'
+
+		static function create(child Inner) returns Self
+			return Self{child: child}
+		end 'create'
 end 'Outer'
 function main() returns ExitCode
-		var o = Outer{child: Inner{val: 0}}
-		var i = Inner{val: 55}
+		var o = Outer.create(child: Inner.create(val: 0))
+		var i = Inner.create(val: 55)
 		o.setChild(i)
 		return o.child.val
 end 'main'
@@ -171,9 +199,13 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 type Result
 		export var code Integer
+
+		static function create(code Integer) returns Self
+			return Self{code: code}
+		end 'create'
 end 'Result'
 function makeResult(n Integer) returns Result
-		var r = Result{code: n}
+		var r = Result.create(code: n)
 		return r
 end 'makeResult'
 function main() returns ExitCode
@@ -190,13 +222,17 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 type Entry
 		export var id Integer
+
+		static function create(id Integer) returns Self
+			return Self{id: id}
+		end 'create'
 end 'Entry'
 typealias EntryArray = Array with Entry
 function main() returns ExitCode
-		var arr = EntryArray{}
-		var e = Entry{id: 15}
+		var arr = EntryArray.empty()
+		var e = Entry.create(id: 15)
 		arr.push(e)
-		var got = try arr.get(0) otherwise Entry{id: 0}
+		var got = try arr.get(0) otherwise Entry.create(id: 0)
 		return got.id
 end 'main'
 ```
@@ -209,12 +245,16 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 type Counter
 		export var val Integer
+
+		static function create(val Integer) returns Self
+			return Self{val: val}
+		end 'create'
 end 'Counter'
 function main() returns ExitCode
 		var total = 0
 		var i = 0
 		while i < 5 'loop'
-				var c = Counter{val: i}
+				var c = Counter.create(val: i)
 				if i == 3 'brk'
 						total = total + c.val
 						break
@@ -234,6 +274,10 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 type Wrapper
 		export var n Integer
+
+		static function create(n Integer) returns Self
+			return Self{n: n}
+		end 'create'
 end 'Wrapper'
 typealias WrapperArray = Array with Wrapper
 function getFirst(arr WrapperArray) returns Wrapper throws ArrayError
@@ -241,9 +285,9 @@ function getFirst(arr WrapperArray) returns Wrapper throws ArrayError
 		return result
 end 'getFirst'
 function main() returns ExitCode
-		var arr = WrapperArray{}
-		arr.push(Wrapper{n: 99})
-		var w = try getFirst(arr) otherwise Wrapper{n: 0}
+		var arr = WrapperArray.empty()
+		arr.push(Wrapper.create(n: 99))
+		var w = try getFirst(arr) otherwise Wrapper.create(n: 0)
 		return w.n
 end 'main'
 ```
@@ -256,11 +300,15 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 type Val
 		export var n Integer
+
+		static function create(n Integer) returns Self
+			return Self{n: n}
+		end 'create'
 end 'Val'
 function main() returns ExitCode
-		var a = Val{n: 10}
+		var a = Val.create(n: 10)
 		var b = a
-		a = Val{n: 20}
+		a = Val.create(n: 20)
 		return a.n + b.n
 end 'main'
 ```
@@ -273,11 +321,15 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 type Tag
 		export var id Integer
+
+		static function create(id Integer) returns Self
+			return Self{id: id}
+		end 'create'
 end 'Tag'
 function main() returns ExitCode
-		var a = Tag{id: 1}
-		a = Tag{id: 2}
-		a = Tag{id: 3}
+		var a = Tag.create(id: 1)
+		a = Tag.create(id: 2)
+		a = Tag.create(id: 3)
 		return a.id
 end 'main'
 ```
@@ -290,13 +342,17 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 type Cell
 		export var value Integer
+
+		static function create(value Integer) returns Self
+			return Self{value: value}
+		end 'create'
 end 'Cell'
 function main() returns ExitCode
-		var a = Cell{value: 10}
+		var a = Cell.create(value: 10)
 		var result = 0
 		if true 'inner'
 				var b = a
-				a = Cell{value: 20}
+				a = Cell.create(value: 20)
 				result = b.value
 		end 'inner'
 		return result + a.value
@@ -311,11 +367,15 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 type Token
 		export var kind Integer
+
+		static function create(kind Integer) returns Self
+			return Self{kind: kind}
+		end 'create'
 end 'Token'
 function main() returns ExitCode
-		var t = Token{kind: 0}
+		var t = Token.create(kind: 0)
 		if true 'a'
-				var inner = Token{kind: 50}
+				var inner = Token.create(kind: 50)
 				t = inner
 		end 'a'
 		return t.kind
@@ -330,13 +390,17 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 type Fallback
 		export var n Integer
+
+		static function create(n Integer) returns Self
+			return Self{n: n}
+		end 'create'
 end 'Fallback'
 typealias FallbackArray = Array with Fallback
 function main() returns ExitCode
-		var arr = FallbackArray{}
-		arr.push(Fallback{n: 10})
-		var a = try arr.get(0) otherwise Fallback{n: 99}
-		var b = try arr.get(5) otherwise Fallback{n: 42}
+		var arr = FallbackArray.empty()
+		arr.push(Fallback.create(n: 10))
+		var a = try arr.get(0) otherwise Fallback.create(n: 99)
+		var b = try arr.get(5) otherwise Fallback.create(n: 42)
 		return a.n + b.n
 end 'main'
 ```
@@ -349,13 +413,17 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 type Score
 		export var points Integer
+
+		static function create(points Integer) returns Self
+			return Self{points: points}
+		end 'create'
 end 'Score'
 typealias ScoreArray = Array with Score
 function main() returns ExitCode
-		var scores = ScoreArray{}
-		scores.push(Score{points: 10})
-		scores.push(Score{points: 20})
-		scores.push(Score{points: 30})
+		var scores = ScoreArray.empty()
+		scores.push(Score.create(points: 10))
+		scores.push(Score.create(points: 20))
+		scores.push(Score.create(points: 30))
 		var total = 0
 		for s in scores 'loop'
 				total = total + s.points
@@ -372,12 +440,16 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 type Num
 		export var v Integer
+
+		static function create(v Integer) returns Self
+			return Self{v: v}
+		end 'create'
 end 'Num'
 function makeNum(n Integer) returns Num
-		return Num{v: n}
+		return Num.create(v: n)
 end 'makeNum'
 function addOne(x Num) returns Num
-		return Num{v: x.v + 1}
+		return Num.create(v: x.v + 1)
 end 'addOne'
 function main() returns ExitCode
 		var result = addOne(makeNum(10))
@@ -393,12 +465,16 @@ end 'main'
 typealias Integer = int(i64.min to i64.max)
 type Config
 		export var level Integer
+
+		static function create(level Integer) returns Self
+			return Self{level: level}
+		end 'create'
 end 'Config'
 function readLevel(c Config) returns Integer
 		return c.level
 end 'readLevel'
 function main() returns ExitCode
-		var cfg = Config{level: 77}
+		var cfg = Config.create(level: 77)
 		let l = readLevel(cfg)
 		return l + cfg.level - 77
 end 'main'
@@ -413,20 +489,24 @@ typealias Integer = int(i64.min to i64.max)
 type Item
 		export var name String
 		export var id Integer
+
+		static function create(name String, id Integer) returns Self
+			return Self{name: name, id: id}
+		end 'create'
 end 'Item'
 
 function findItem(a Integer, b Integer, target Integer) returns Item
 		if a == target 'check_a'
-				var result = Item{name: "first", id: a}
+				var result = Item.create(name: "first", id: a)
 				return result
 		end 'check_a'
 		if b == target 'check_b'
 				if true 'inner'
-						var result = Item{name: "second", id: b}
+						var result = Item.create(name: "second", id: b)
 						return result
 				end 'inner'
 		end 'check_b'
-		return Item{name: "default", id: 0}
+		return Item.create(name: "default", id: 0)
 end 'findItem'
 
 function main() returns ExitCode
@@ -447,16 +527,24 @@ second
 typealias Integer = int(i64.min to i64.max)
 type Inner
 		export var val Integer
+
+		static function create(val Integer) returns Self
+			return Self{val: val}
+		end 'create'
 end 'Inner'
 type Outer
 		export var child Inner
+
+		static function create(child Inner) returns Self
+			return Self{child: child}
+		end 'create'
 end 'Outer'
 function readChild(o Outer) returns Integer
 		var c = o.child
 		return c.val
 end 'readChild'
 function main() returns ExitCode
-		var o = Outer{child: Inner{val: 88}}
+		var o = Outer.create(child: Inner.create(val: 88))
 		let result = readChild(o)
 		return result
 end 'main'

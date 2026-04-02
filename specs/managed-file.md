@@ -75,43 +75,59 @@ not found
 
 <!-- test: managed-file.write-and-read -->
 ```maxon
+export enum TestFileError implements Error
+	openFailed
+end 'TestFileError'
+
 type TestFile
 	export var file __ManagedFile
+
+	export static function openWrite(path __ManagedMemory) returns TestFile throws TestFileError
+		let handle = __ManagedFile.openWrite(path)
+		if handle == -1 'fail'
+			throw TestFileError.openFailed
+		end 'fail'
+		return TestFile{file: handle}
+	end 'openWrite'
+
+	export static function openRead(path __ManagedMemory) returns TestFile throws TestFileError
+		let handle = __ManagedFile.openRead(path)
+		if handle == -1 'fail'
+			throw TestFileError.openFailed
+		end 'fail'
+		return TestFile{file: handle}
+	end 'openRead'
 end 'TestFile'
 
 function main() returns ExitCode
 	let path = "test_managed_file_rw.txt"
 	// Write a file
-	let writeResult = __ManagedFile.openWrite(path.managed)
-	if writeResult == -1 'writeFail'
+	var wf = try TestFile.openWrite(path.managed) otherwise 'writeFail'
 		print("write open failed")
 		return 1
 	end 'writeFail'
-	var wf = TestFile{_file: writeResult}
 	let content = "Hello Managed"
-	let written = wf._file.write(content.managed)
-	wf._file.close()
+	let written = wf.file.write(content.managed)
+	wf.file.close()
 	if written < 0 'writeErr'
 		return 3
 	end 'writeErr'
 
 	// Read it back
-	let readResult = __ManagedFile.openRead(path.managed)
-	if readResult == -1 'readFail'
+	var rf = try TestFile.openRead(path.managed) otherwise 'readFail'
 		print("read open failed")
 		return 2
 	end 'readFail'
-	var rf = TestFile{_file: readResult}
-	let size = rf._file.size()
+	let size = rf.file.size()
 	var buffer = __ManagedMemory.create(size + 1, 1)
-	let bytesRead = rf._file.read(buffer, size)
-	rf._file.close()
+	let bytesRead = rf.file.read(buffer, size)
+	rf.file.close()
 	buffer.setLength(bytesRead)
 	// Null-terminate
 	buffer.setLength(bytesRead + 1)
 	buffer.setByte(bytesRead, 0)
 	buffer.setLength(bytesRead)
-	let readContent = String{managed: buffer, _iterPos: 0}
+	let readContent = String.init(buffer)
 	print("{readContent}")
 
 	// Clean up
@@ -134,12 +150,16 @@ Hello Managed
 ```maxon
 type TestFile
 	export var file __ManagedFile
+
+	export static function openWrite(path __ManagedMemory) returns TestFile
+		let handle = __ManagedFile.openWrite(path)
+		return TestFile{file: handle}
+	end 'openWrite'
 end 'TestFile'
 
 function createEmptyFile(path String)
-	let result = __ManagedFile.openWrite(path.managed)
-	var f = TestFile{_file: result}
-	f._file.close()
+	var f = TestFile.openWrite(path.managed)
+	f.file.close()
 end 'createEmptyFile'
 
 function main() returns ExitCode
@@ -187,14 +207,33 @@ delete failed as expected
 
 <!-- test: managed-file.auto-close -->
 ```maxon
+export enum TestFileError implements Error
+	openFailed
+end 'TestFileError'
+
 type TestFile
 	export var file __ManagedFile
+
+	export static function openWrite(path __ManagedMemory) returns TestFile throws TestFileError
+		let handle = __ManagedFile.openWrite(path)
+		if handle == -1 'fail'
+			throw TestFileError.openFailed
+		end 'fail'
+		return TestFile{file: handle}
+	end 'openWrite'
+
+	export static function openRead(path __ManagedMemory) returns TestFile throws TestFileError
+		let handle = __ManagedFile.openRead(path)
+		if handle == -1 'fail'
+			throw TestFileError.openFailed
+		end 'fail'
+		return TestFile{file: handle}
+	end 'openRead'
 end 'TestFile'
 
 function writeFile(path String)
-	let result = __ManagedFile.openWrite(path.managed)
-	var wf = TestFile{_file: result}
-	let written = wf._file.write("auto".managed)
+	var wf = try TestFile.openWrite(path.managed) otherwise panic("write open failed")
+	let written = wf.file.write("auto".managed)
 	if written < 0 'writeErr'
 		panic("write failed")
 	end 'writeErr'
@@ -206,14 +245,12 @@ function main() returns ExitCode
 	writeFile(path)
 
 	// Verify we can read it (file was properly closed by destructor)
-	let readResult = __ManagedFile.openRead(path.managed)
-	if readResult == -1 'readFail'
+	var rf = try TestFile.openRead(path.managed) otherwise 'readFail'
 		print("read failed")
 		return 1
 	end 'readFail'
-	var rf = TestFile{_file: readResult}
-	let size = rf._file.size()
-	rf._file.close()
+	let size = rf.file.size()
+	rf.file.close()
 	let delResult = __ManagedFile.delete(path.managed)
 	if delResult != 0 'delErr'
 		return 2

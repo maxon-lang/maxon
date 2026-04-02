@@ -13,6 +13,10 @@ export type FrameInfo
 	export var spillAreaSize StackSize
 	export var varAreaSize StackSize
 	export var alignedSize StackSize
+
+	export static function create(totalStackSize StackSize, spillAreaSize StackSize, varAreaSize StackSize, alignedSize StackSize) returns FrameInfo
+		return Self{totalStackSize: totalStackSize, spillAreaSize: spillAreaSize, varAreaSize: varAreaSize, alignedSize: alignedSize}
+	end 'create'
 end 'FrameInfo'
 
 // Round a size up to the next 16-byte boundary.
@@ -32,16 +36,20 @@ type FrameScanState
 	export var spillArea StackSize
 	export var hasCalls bool
 	export var hasPrint bool
+
+	static function create() returns FrameScanState
+		return Self{
+			foundPrologue: false,
+			existingPrologueSize: 0,
+			spillArea: 0,
+			hasCalls: false,
+			hasPrint: false
+		}
+	end 'create'
 end 'FrameScanState'
 
 function createFrameScanState() returns FrameScanState
-	return FrameScanState{
-		foundPrologue: false,
-		existingPrologueSize: 0,
-		spillArea: 0,
-		hasCalls: false,
-		hasPrint: false
-	}
+	return FrameScanState.create()
 end 'createFrameScanState'
 
 // Compute frame information for a single function by scanning its ops.
@@ -83,12 +91,7 @@ export function computeFrameInfo(func MlirFunction, target Target) returns Frame
 
 	let aligned = alignTo16(totalSize)
 
-	return FrameInfo{
-		totalStackSize: totalSize,
-		spillAreaSize: spillArea,
-		varAreaSize: varArea,
-		alignedSize: aligned
-	}
+	return FrameInfo.create(totalSize, spillAreaSize: spillArea, varAreaSize: varArea, alignedSize: aligned)
 end 'computeFrameInfo'
 
 // Scan a single op for frame-relevant information.
@@ -322,7 +325,7 @@ end 'insertX64PrologueEpilogue'
 // (not as terminators), so we need to find ret ops in the ops array
 // and ensure each has an epilogue preceding it.
 function reinsertX64EpilogueBeforeRets(block MlirBlock, stackSize StackSize)
-	var newOps = MlirOpArray{}
+	var newOps = MlirOpArray.empty()
 	var needsRewrite = false
 
 	// First check if any rewriting is needed
@@ -564,8 +567,8 @@ end 'arm64ScanGprAndFp'
 
 // Scan all ops in a function to find callee-saved registers that need saving.
 function arm64DetectCalleeSavedRegs(srcFunc MlirFunction, dstFunc MlirFunction)
-	var gprSeen = RegIntArray{}
-	var fpSeen = RegIntArray{}
+	var gprSeen = RegIntArray.empty()
+	var fpSeen = RegIntArray.empty()
 
 	for block in srcFunc.blocks 'eachBlock'
 		for op in block.ops 'eachOp'

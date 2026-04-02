@@ -181,7 +181,7 @@ let maxRetries = 3               ' constant, never changes
 let userName = getUserName()     ' assigned once from a function
 
 var retryCount = 0               ' needs to be incremented
-var buffer = ByteArray{}         ' needs push/set operations
+var buffer = ByteArray.empty()         ' needs push/set operations
 ```
 
 ### Keep Variable Scope Narrow
@@ -469,7 +469,7 @@ end 'handle'
 When you know how many elements you will add, reserve capacity upfront to avoid repeated reallocations.
 
 ```maxon
-var results = ResultArray{}
+var results = ResultArray.empty()
 results.reserve(inputCount)
 for item in inputs 'process'
 	results.push(transform(item))
@@ -495,16 +495,16 @@ let first = try list.first() otherwise emptyItem
 
 ```maxon
 ' Array: ordered data with index access
-var scores = ScoreArray{}
+var scores = ScoreArray.empty()
 
 ' Map: fast lookup by key
-var userCache = UserMap{}
+var userCache = UserMap.empty()
 
 ' Set: track unique items
-var visited = CitySet{}
+var visited = CitySet.empty()
 
 ' List: queue with O(1) push/pop at both ends
-var taskQueue = TaskList{}
+var taskQueue = TaskList.empty()
 ```
 
 ### Iterate Collections Directly
@@ -579,7 +579,7 @@ type Classifier
 	static let _digits = CharacterSet.decimalDigits()
 
 	export static function isWhitespace(c Character) returns bool
-		return Classifier._whitespace.contains(c)
+		return Classifier.whitespace.contains(c)
 	end 'isWhitespace'
 end 'Classifier'
 ```

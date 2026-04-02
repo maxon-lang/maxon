@@ -58,7 +58,7 @@ end
 ```maxon
 function main() returns ExitCode
 	let cwd = __ManagedDirectory.currentPath()
-	let cwdStr = String{managed: cwd, _iterPos: 0}
+	let cwdStr = String.init(cwd)
 	let exists = __ManagedDirectory.exists(cwdStr.managed)
 	if exists 'check'
 		return 42
@@ -88,7 +88,7 @@ end 'main'
 ```maxon
 function main() returns ExitCode
 	let cwd = __ManagedDirectory.currentPath()
-	let cwdStr = String{managed: cwd, _iterPos: 0}
+	let cwdStr = String.init(cwd)
 	if cwdStr.count() > 0 'hasPath'
 		return 42
 	end 'hasPath'
@@ -121,17 +121,33 @@ not found
 ```maxon
 type TestFile
 	export var file __ManagedFile
+
+	export static function openWrite(path __ManagedMemory) returns TestFile
+		let wr = __ManagedFile.openWrite(path)
+		return TestFile{file: wr}
+	end 'openWrite'
 end 'TestFile'
+
+export enum TestDirError implements Error
+	searchFailed
+end 'TestDirError'
 
 type TestDir
 	export var dir __ManagedDirectory
+
+	export static function search(pattern __ManagedMemory) returns TestDir throws TestDirError
+		let handle = __ManagedDirectory.openSearch(pattern)
+		if handle == 0 'fail'
+			throw TestDirError.searchFailed
+		end 'fail'
+		return TestDir{dir: handle}
+	end 'search'
 end 'TestDir'
 
 function createFile(path String, content String)
-	let wr = __ManagedFile.openWrite(path.managed)
-	var f = TestFile{_file: wr}
-	let written = f._file.write(content.managed)
-	f._file.close()
+	var f = TestFile.openWrite(path.managed)
+	let written = f.file.write(content.managed)
+	f.file.close()
 	if written < 0 'err'
 		panic("write failed")
 	end 'err'
@@ -152,27 +168,25 @@ function main() returns ExitCode
 	createFile("{dirPath}/file2.txt", content: "b")
 
 	// Search the directory
-	let searchResult = __ManagedDirectory.openSearch("{dirPath}/*".managed)
-	if searchResult == 0 'searchFail'
+	var dir = try TestDir.search("{dirPath}/*".managed) otherwise 'searchFail'
 		print("search failed")
 		return 2
 	end 'searchFail'
-	var dir = TestDir{_dir: searchResult}
 
 	var fileCount = 0
-	var nameManaged = dir._dir.filename()
-	var name = String{managed: nameManaged, _iterPos: 0}
+	var nameManaged = dir.dir.filename()
+	var name = String.init(nameManaged)
 	if name != "." and name != ".." 'notDot1'
 		fileCount = fileCount + 1
 	end 'notDot1'
-	while dir._dir.next() != 0 'loop'
-		nameManaged = dir._dir.filename()
-		name = String{managed: nameManaged, _iterPos: 0}
+	while dir.dir.next() != 0 'loop'
+		nameManaged = dir.dir.filename()
+		name = String.init(nameManaged)
 		if name != "." and name != ".." 'notDot2'
 			fileCount = fileCount + 1
 		end 'notDot2'
 	end 'loop'
-	dir._dir.close()
+	dir.dir.close()
 
 	// Clean up
 	let del1 = __ManagedFile.delete("{dirPath}/file1.txt".managed)

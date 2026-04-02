@@ -37,8 +37,8 @@ end 'Config'
 
 Create type instances with literal syntax:
 ```maxon
-var p = Point{x: 10, y: 20}
-let config = Config{version: 1, count: 0}
+var p = Point.create(x: 10, y: 20)
+let config = Config.create(version: 1, count: 0)
 ```
 
 ### Instance Mutability
@@ -47,13 +47,13 @@ The mutability of a type instance is determined by `let` vs `var`:
 
 **var type** - Can modify `var` fields:
 ```maxon
-var p = Point{x: 10, y: 20}
+var p = Point.create(x: 10, y: 20)
 p.x = 30   // OK: type is mutable, field is var
 ```
 
 **let type** - Cannot modify any fields:
 ```maxon
-let p = Point{x: 10, y: 20}
+let p = Point.create(x: 10, y: 20)
 // p.x = 30   // ERROR: type instance is immutable
 ```
 
@@ -61,7 +61,7 @@ let p = Point{x: 10, y: 20}
 
 Even on a `var` type, `let` fields cannot be modified:
 ```maxon
-var c = Config{version: 1, count: 0}
+var c = Config.create(version: 1, count: 0)
 c.count = 5     // OK: field is var
 // c.version = 2   // ERROR: field is let
 ```
@@ -76,10 +76,14 @@ typealias Integer = int(i64.min to i64.max)
 type Point
 	export var x Integer
 	export var y Integer
+
+	static function create(x Integer, y Integer) returns Self
+		return Self{x: x, y: y}
+	end 'create'
 end 'Point'
 
 function main() returns ExitCode
-	var p = Point{x: 10, y: 20}
+	var p = Point.create(x: 10, y: 20)
 	p.x = 30
 	return p.x
 end 'main'
@@ -96,10 +100,14 @@ typealias Integer = int(i64.min to i64.max)
 type Config
 	export let version Integer
 	export var count Integer
+
+	static function create(version Integer, count Integer) returns Self
+		return Self{version: version, count: count}
+	end 'create'
 end 'Config'
 
 function main() returns ExitCode
-	var c = Config{version: 1, count: 0}
+	var c = Config.create(version: 1, count: 0)
 	c.count = 5
 	return c.count
 end 'main'
@@ -116,16 +124,20 @@ typealias Integer = int(i64.min to i64.max)
 type Point
 	export var x Integer
 	export var y Integer
+
+	static function create(x Integer, y Integer) returns Self
+		return Self{x: x, y: y}
+	end 'create'
 end 'Point'
 
 function main() returns ExitCode
-	let p = Point{x: 10, y: 20}
+	let p = Point.create(x: 10, y: 20)
 	p.x = 30
 	return p.x
 end 'main'
 ```
 ```maxoncstderr
-error E2013: specs/fragments/structs/error.let-struct-field-assign.test:12:2: cannot assign to immutable variable: 'p'
+error E2013: specs/fragments/structs/error.let-struct-field-assign.test:16:2: cannot assign to immutable variable: 'p'
 ```
 
 <!-- test: error.let-field-assign -->
@@ -136,16 +148,20 @@ typealias Integer = int(i64.min to i64.max)
 type Config
 	export let version Integer
 	export var count Integer
+
+	static function create(version Integer, count Integer) returns Self
+		return Self{version: version, count: count}
+	end 'create'
 end 'Config'
 
 function main() returns ExitCode
-	var c = Config{version: 1, count: 0}
+	var c = Config.create(version: 1, count: 0)
 	c.version = 2
 	return c.version
 end 'main'
 ```
 ```maxoncstderr
-error E2013: specs/fragments/structs/error.let-field-assign.test:12:2: cannot assign to field 'Config.version' because it is immutable (declare with 'var' to make it mutable)
+error E2013: specs/fragments/structs/error.let-field-assign.test:16:2: cannot assign to field 'Config.version' because it is immutable (declare with 'var' to make it mutable)
 ```
 
 <!-- test: simple-type -->
@@ -156,10 +172,14 @@ typealias Integer = int(i64.min to i64.max)
 type Point
 	export var x Integer
 	export var y Integer
+
+	static function create(x Integer, y Integer) returns Self
+		return Self{x: x, y: y}
+	end 'create'
 end 'Point'
 
 function main() returns ExitCode
-	var p = Point { x: 3, y: 4 }
+	var p = Point.create(3, y: 4)
 	return p.x + p.y
 end 'main'
 ```
@@ -175,10 +195,14 @@ typealias Integer = int(i64.min to i64.max)
 type Rect
 	export var width Integer
 	export var height Integer
+
+	static function create(width Integer, height Integer) returns Self
+		return Self{width: width, height: height}
+	end 'create'
 end 'Rect'
 
 function main() returns ExitCode
-	var r = Rect { width: 5, height: 10 }
+	var r = Rect.create(5, height: 10)
 	return r.width * r.height
 end 'main'
 ```
@@ -194,6 +218,10 @@ typealias Integer = int(i64.min to i64.max)
 type Vec2
 	export var x Integer
 	export var y Integer
+
+	static function create(x Integer, y Integer) returns Self
+		return Self{x: x, y: y}
+	end 'create'
 end 'Vec2'
 
 function dot(a Vec2, b Vec2) returns Integer
@@ -201,8 +229,8 @@ function dot(a Vec2, b Vec2) returns Integer
 end 'dot'
 
 function main() returns ExitCode
-	var v1 = Vec2 { x: 3, y: 4 }
-	var v2 = Vec2 { x: 2, y: 1 }
+	var v1 = Vec2.create(3, y: 4)
+	var v2 = Vec2.create(2, y: 1)
 	return dot(v1, b: v2)
 end 'main'
 ```
@@ -218,10 +246,14 @@ typealias Integer = int(i64.min to i64.max)
 type Pair
 	export var first Integer
 	export var second Integer
+
+	static function create(first Integer, second Integer) returns Self
+		return Self{first: first, second: second}
+	end 'create'
 end 'Pair'
 
 function makePair(a Integer, b Integer) returns Pair
-	return Pair{ first: a, second: b }
+	return Pair.create(first: a, second: b)
 end 'makePair'
 
 function main() returns ExitCode
@@ -241,6 +273,10 @@ typealias Integer = int(i64.min to i64.max)
 type Point
 	export var x Integer
 	export var y Integer
+
+	static function create(x Integer, y Integer) returns Self
+		return Self{x: x, y: y}
+	end 'create'
 end 'Point'
 
 function acceptPoint(p Point) returns Integer
@@ -248,7 +284,7 @@ function acceptPoint(p Point) returns Integer
 end 'acceptPoint'
 
 function main() returns ExitCode
-	return acceptPoint(Point{x: 3, y: 4})
+	return acceptPoint(Point.create(x: 3, y: 4))
 end 'main'
 ```
 ```exitcode
@@ -260,12 +296,20 @@ end 'main'
 type Counter
 	export var value = 0
 	export var step = 1
+
+	static function create() returns Self
+		return Self{}
+	end 'create'
+
+	static function create(value Count, step Count) returns Self
+		return Self{value: value, step: step}
+	end 'create'
 end 'Counter'
 
 function main() returns ExitCode
-	var c1 = Counter{}
-	var c2 = Counter{value: 40}
-	var c3 = Counter{value: 10, step: 2}
+	var c1 = Counter.create()
+	var c2 = Counter.create(40, step: 1)
+	var c3 = Counter.create(10, step: 2)
 	return c1.value + c2.value + c3.step
 end 'main'
 ```
@@ -278,10 +322,14 @@ end 'main'
 type Settings
 	export let maxRetries = 5
 	export var timeout = 50.0
+
+	static function create() returns Self
+		return Self{}
+	end 'create'
 end 'Settings'
 
 function main() returns ExitCode
-	var s = Settings{}
+	var s = Settings.create()
 	return s.maxRetries + trunc(s.timeout)
 end 'main'
 ```

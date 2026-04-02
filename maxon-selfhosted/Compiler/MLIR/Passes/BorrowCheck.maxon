@@ -27,6 +27,10 @@ export type LifetimeInfo
 	export var defOpIndex OpIndex
 	export var lastUseBlock BlockId
 	export var lastUseOpIndex OpIndex
+
+	export static function none() returns LifetimeInfo
+		return Self{defBlock: BC_NONE, defOpIndex: BC_NONE, lastUseBlock: BC_NONE, lastUseOpIndex: BC_NONE}
+	end 'none'
 end 'LifetimeInfo'
 
 export typealias LifetimeInfoArray = Array with LifetimeInfo
@@ -38,6 +42,10 @@ export type BorrowRecord
 	export var borrowBlock BlockId
 	export var borrowOpIndex OpIndex
 	export var isMutable bool
+
+	export static function create(sourceSlot VarSlot, borrowValueId ValueId, borrowBlock BlockId, borrowOpIndex OpIndex, isMutable bool) returns BorrowRecord
+		return Self{sourceSlot: sourceSlot, borrowValueId: borrowValueId, borrowBlock: borrowBlock, borrowOpIndex: borrowOpIndex, isMutable: isMutable}
+	end 'create'
 end 'BorrowRecord'
 
 export typealias BorrowRecordArray = Array with BorrowRecord
@@ -45,6 +53,10 @@ export typealias BorrowRecordArray = Array with BorrowRecord
 // Per-slot active borrow list: tracks all live borrows of a given slot.
 type SlotBorrowState
 	export var borrows BorrowRecordArray
+
+	static function create() returns SlotBorrowState
+		return Self{borrows: BorrowRecordArray.empty()}
+	end 'create'
 end 'SlotBorrowState'
 
 typealias SlotBorrowStateArray = Array with SlotBorrowState
@@ -59,17 +71,21 @@ type BorrowAnalysisState
 	export var slotBorrows SlotBorrowStateArray
 	export var maxSlot VarSlot
 	export var hasAnySlot bool
+
+	static function create() returns BorrowAnalysisState
+		return Self{
+			lifetimes: LifetimeInfoArray.empty(),
+			maxValueId: 0,
+			hasAnyValue: false,
+			slotBorrows: SlotBorrowStateArray.empty(),
+			maxSlot: 0,
+			hasAnySlot: false
+		}
+	end 'create'
 end 'BorrowAnalysisState'
 
 function createBorrowAnalysisState() returns BorrowAnalysisState
-	return BorrowAnalysisState{
-		lifetimes: LifetimeInfoArray{},
-		maxValueId: 0,
-		hasAnyValue: false,
-		slotBorrows: SlotBorrowStateArray{},
-		maxSlot: 0,
-		hasAnySlot: false
-	}
+	return BorrowAnalysisState.create()
 end 'createBorrowAnalysisState'
 
 // ============================================================
@@ -212,7 +228,7 @@ end 'recordSysLifetimes'
 function ensureLifetimeCapacity(valueId ValueId, state BorrowAnalysisState)
 	let needed = valueId + 1
 	while state.lifetimes.count() < needed 'grow'
-		state.lifetimes.push(LifetimeInfo{defBlock: BC_NONE, defOpIndex: BC_NONE, lastUseBlock: BC_NONE, lastUseOpIndex: BC_NONE})
+		state.lifetimes.push(LifetimeInfo.none())
 	end 'grow'
 	if not state.hasAnyValue or valueId > state.maxValueId 'updateMax'
 		state.maxValueId = valueId
@@ -323,7 +339,7 @@ function resetSlotBorrows(state BorrowAnalysisState)
 			i = i + 1
 			continue
 		end 'skip'
-		slotState.borrows = BorrowRecordArray{}
+		slotState.borrows = BorrowRecordArray.empty()
 		i = i + 1
 	end 'clearSlots'
 end 'resetSlotBorrows'
@@ -331,7 +347,7 @@ end 'resetSlotBorrows'
 function ensureSlotBorrowCapacity(slotId VarSlot, state BorrowAnalysisState)
 	let needed = slotId + 1
 	while state.slotBorrows.count() < needed 'grow'
-		state.slotBorrows.push(SlotBorrowState{borrows: BorrowRecordArray{}})
+		state.slotBorrows.push(SlotBorrowState.create())
 	end 'grow'
 	if not state.hasAnySlot or slotId > state.maxSlot 'updateMax'
 		state.maxSlot = slotId
@@ -348,7 +364,7 @@ function expireDeadBorrows(state BorrowAnalysisState, currentBlock BlockId, curr
 			continue
 		end 'skip'
 
-		var liveBorrows = BorrowRecordArray{}
+		var liveBorrows = BorrowRecordArray.empty()
 		for borrow in slotState.borrows 'filterBorrows'
 			if isBorrowAlive(borrow, state: state, currentBlock: currentBlock, currentOpIndex: currentOpIndex) 'alive'
 				liveBorrows.push(borrow)
@@ -408,13 +424,7 @@ end 'checkMemRefBorrows'
 // A memref.loadSlot creates an immutable borrow: the result borrows from the slot.
 function registerBorrow(resultId ValueId, slotId VarSlot, blockId BlockId, opIndex OpIndex, state BorrowAnalysisState)
 	ensureSlotBorrowCapacity(slotId, state: state)
-	let record = BorrowRecord{
-		sourceSlot: slotId,
-		borrowValueId: resultId,
-		borrowBlock: blockId,
-		borrowOpIndex: opIndex,
-		isMutable: false
-	}
+	let record = BorrowRecord.create(slotId, borrowValueId: resultId, borrowBlock: blockId, borrowOpIndex: opIndex, isMutable: false)
 	var slotState = try state.slotBorrows.get(slotId) otherwise 'miss'
 		return
 	end 'miss'
@@ -451,9 +461,9 @@ end 'checkStoreViolations'
 // Get the lifetime info for a ValueId, or a sentinel "unknown" info.
 function getLifetimeInfo(valueId ValueId, state BorrowAnalysisState) returns LifetimeInfo
 	if valueId >= state.lifetimes.count() 'outOfBounds'
-		return LifetimeInfo{defBlock: BC_NONE, defOpIndex: BC_NONE, lastUseBlock: BC_NONE, lastUseOpIndex: BC_NONE}
+		return LifetimeInfo.none()
 	end 'outOfBounds'
-	return try state.lifetimes.get(valueId) otherwise LifetimeInfo{defBlock: BC_NONE, defOpIndex: BC_NONE, lastUseBlock: BC_NONE, lastUseOpIndex: BC_NONE}
+	return try state.lifetimes.get(valueId) otherwise LifetimeInfo.none()
 end 'getLifetimeInfo'
 
 // Check whether a value is live at a given position (has been defined and not yet past last use).

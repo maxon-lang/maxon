@@ -37,7 +37,7 @@ export function canonicalize(module MlirModule) returns MlirModule
 			dstBlock.blockArgs = srcBlock.blockArgs
 
 			// Build a per-block constant map and fold ops
-			var constMap = ValueIdArray{}
+			var constMap = ValueIdArray.empty()
 
 			for op in srcBlock.ops 'eachOp'
 				let folded = tryFoldOp(op, constMap: constMap)
@@ -108,7 +108,7 @@ function tryFoldBinaryOp(b ArithBinaryOp, constMap ValueIdArray) returns MlirOp
 	// Register the folded value so downstream ops can also fold
 	constMapSet(constMap, valueId: b.resultId, value: foldResult)
 	logTrace(LogCategory.mlir, message: () gives "canonicalize: folded %{b.resultId} = {b.opcode.rawValue} %{b.leftId}, %{b.rightId} -> const {foldResult}")
-	return MlirOp.arith(ArithOp.const(ArithConst{opcode: ArithConstOpcode.constI64, resultId: b.resultId, value: foldResult}))
+	return MlirOp.arith(ArithOp.const(ArithConst.create(ArithConstOpcode.constI64, resultId: b.resultId, value: foldResult)))
 end 'tryFoldBinaryOp'
 
 // Compute the folded value for an integer binary op.

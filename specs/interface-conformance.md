@@ -75,10 +75,14 @@ type SimpleCounter implements Counter
 	function increment()
 		value = value + 1
 	end 'increment'
+
+	static function create(value Integer) returns Self
+		return Self{value: value}
+	end 'create'
 end 'SimpleCounter'
 
 function main() returns ExitCode
-	var c = SimpleCounter{value: 40}
+	var c = SimpleCounter.create(value: 40)
 	c.increment()
 	c.increment()
 	return c.get()
@@ -111,10 +115,14 @@ type Buffer implements Readable, Writable
 	function write(value Integer)
 		data = value
 	end 'write'
+
+	static function create(data Integer) returns Self
+		return Self{data: data}
+	end 'create'
 end 'Buffer'
 
 function main() returns ExitCode
-	var buf = Buffer{data: 0}
+	var buf = Buffer.create(data: 0)
 	buf.write(42)
 	return buf.read()
 end 'main'
@@ -219,10 +227,14 @@ type Extended implements Simple
 	function extraMethod() returns Integer
 		return 100
 	end 'extraMethod'
+
+	static function create(value Integer) returns Self
+		return Self{value: value}
+	end 'create'
 end 'Extended'
 
 function main() returns ExitCode
-	var e = Extended{value: 42}
+	var e = Extended.create(value: 42)
 	return e.getValue()
 end 'main'
 ```
@@ -241,10 +253,14 @@ type Standalone
 	function get() returns Integer
 		return value
 	end 'get'
+
+	static function create(value Integer) returns Self
+		return Self{value: value}
+	end 'create'
 end 'Standalone'
 
 function main() returns ExitCode
-	var s = Standalone{value: 42}
+	var s = Standalone.create(value: 42)
 	return s.get()
 end 'main'
 ```

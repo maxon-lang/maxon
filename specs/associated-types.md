@@ -140,10 +140,14 @@ type ScorePair implements Summable with Score
 	function sum() returns Score
 		return a + b
 	end 'sum'
+
+	static function create(a Score, b Score) returns Self
+		return Self{a: a, b: b}
+	end 'create'
 end 'ScorePair'
 
 function main() returns ExitCode
-	var p = ScorePair{a: 10, b: 32}
+	var p = ScorePair.create(a: 10, b: 32)
 	return p.sum()
 end 'main'
 ```
@@ -156,7 +160,7 @@ end 'main'
 Methods are called using the method call syntax:
 
 ```maxon
-var p = IntPair{a: 10, b: 32}
+var p = IntPair.create(a: 10, b: 32)
 var result = p.sum()    // Call sum() method on instance p
 ```
 
@@ -263,10 +267,14 @@ type IntBox implements Wrapper with Integer
 	function unwrap() returns Integer
 		return value
 	end 'unwrap'
+
+	static function create(value Integer) returns Self
+		return Self{value: value}
+	end 'create'
 end 'IntBox'
 
 function main() returns ExitCode
-	var box = IntBox{value: 42}
+	var box = IntBox.create(value: 42)
 	return box.unwrap()
 end 'main'
 ```
@@ -295,10 +303,14 @@ type IntSum implements Accumulator with Integer
 	function total() returns Integer
 		return sum
 	end 'total'
+
+	static function create(sum Integer) returns Self
+		return Self{sum: sum}
+	end 'create'
 end 'IntSum'
 
 function main() returns ExitCode
-	var acc = IntSum{sum: 0}
+	var acc = IntSum.create(sum: 0)
 	acc = acc.add(10)
 	acc = acc.add(32)
 	return acc.total()
@@ -331,10 +343,14 @@ type IntFloat implements Pair with Integer, Float
 	function getSecond() returns Float
 		return b
 	end 'getSecond'
+
+	static function create(a Integer, b Float) returns Self
+		return Self{a: a, b: b}
+	end 'create'
 end 'IntFloat'
 
 function main() returns ExitCode
-	var p = IntFloat{a: 40, b: 2.5}
+	var p = IntFloat.create(a: 40, b: 2.5)
 	var x = p.getFirst()
 	var y = trunc(p.getSecond())
 	return x + y
@@ -358,10 +374,14 @@ type SingleChar implements CharSource with Character
 	function getChar() returns Character
 		return ch
 	end 'getChar'
+
+	static function create(ch Character) returns Self
+		return Self{ch: ch}
+	end 'create'
 end 'SingleChar'
 
 function main() returns ExitCode
-	var s = SingleChar{ch: 'A'}
+	var s = SingleChar.create(ch: 'A')
 	var c = s.getChar()
 	for cp in c.codepoints() 'loop'
 		return cp
@@ -390,10 +410,14 @@ type SingleByte implements ByteSource with Byte
 	function getByte() returns Byte
 		return b
 	end 'getByte'
+
+	static function create(b Byte) returns Self
+		return Self{b: b}
+	end 'create'
 end 'SingleByte'
 
 function main() returns ExitCode
-	var s = SingleByte{b: 42 as Byte}
+	var s = SingleByte.create(b: 42 as Byte)
 	var b = s.getByte()
 	return b as Integer
 end 'main'
@@ -528,10 +552,14 @@ type Counter implements Countable
 	function getCount() returns Integer
 		return count
 	end 'getCount'
+
+	static function create(count Integer) returns Self
+		return Self{count: count}
+	end 'create'
 end 'Counter'
 
 function main() returns ExitCode
-	var c = Counter{count: 42}
+	var c = Counter.create(count: 42)
 	return c.getCount()
 end 'main'
 ```
@@ -555,10 +583,14 @@ type Number implements Addable
 	function addOne() returns Integer
 		return value + 1
 	end 'addOne'
+
+	static function create(value Integer) returns Self
+		return Self{value: value}
+	end 'create'
 end 'Number'
 
 function main() returns ExitCode
-	var n = Number{value: 41}
+	var n = Number.create(value: 41)
 	return n.addOne()
 end 'main'
 ```

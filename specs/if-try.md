@@ -425,16 +425,20 @@ type MultiManaged
 	export var numbers IntArray
 	export var text String
 	export var tag String
+
+	static function create(numbers IntArray, text String, tag String) returns Self
+		return Self{numbers: numbers, text: text, tag: tag}
+	end 'create'
 end 'MultiManaged'
 
 function mayFail(succeed bool) returns MultiManaged throws MyError
 	if not succeed 'check'
 		throw MyError.failed
 	end 'check'
-	var nums = IntArray{}
+	var nums = IntArray.empty()
 	nums.push(10)
 	nums.push(20)
-	return MultiManaged{numbers: nums, text: "hello", tag: "world"}
+	return MultiManaged.create(numbers: nums, text: "hello", tag: "world")
 end 'mayFail'
 
 function main() returns ExitCode
@@ -468,19 +472,27 @@ typealias StringArray = Array with String
 type Inner
 	export var name String
 	export var values IntArray
+
+	static function create(name String, values IntArray) returns Self
+		return Self{name: name, values: values}
+	end 'create'
 end 'Inner'
 
 type Outer
 	export var label String
 	export var inner Inner
 	export var tags StringArray
+
+	static function create(label String, inner Inner, tags StringArray) returns Self
+		return Self{label: label, inner: inner, tags: tags}
+	end 'create'
 end 'Outer'
 
 function createOuter() returns Outer
-	var inner = Inner{name: "test", values: IntArray{}}
+	var inner = Inner.create(name: "test", values: IntArray.empty())
 	inner.values.push(1)
 	inner.values.push(2)
-	var outer = Outer{label: "outer", inner: inner, tags: StringArray{}}
+	var outer = Outer.create(label: "outer", inner: inner, tags: StringArray.empty())
 	outer.tags.push("tag1")
 	outer.tags.push("tag2")
 	return outer

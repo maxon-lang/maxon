@@ -9,16 +9,24 @@ end 'QueryKey'
 export type Dependency
     export var dependent QueryKey
     export var dependency QueryKey
+
+    static function create(dependent QueryKey, dependency QueryKey) returns Self
+    	return Self{dependent: dependent, dependency: dependency}
+    end 'create'
 end 'Dependency'
 
 typealias DependencyArray = Array with Dependency
 
 export type Database
     export var dependencies DependencyArray
+
+    static function create(dependencies DependencyArray) returns Self
+    	return Self{dependencies: dependencies}
+    end 'create'
 end 'Database'
 
 function clearDepsFor(db Database)
-    var newDeps = DependencyArray{}
+    var newDeps = DependencyArray.empty()
     for dep in db.dependencies 'scan'
         match dep.dependent 'check'
             sourceFile(_) then newDeps.push(dep)
@@ -31,12 +39,12 @@ function clearDepsFor(db Database)
 end 'clearDepsFor'
 
 function main() returns ExitCode
-    var deps = DependencyArray{}
-    deps.push(Dependency{dependent: QueryKey.allModule, dependency: QueryKey.sourceFile("test.maxon")})
-    deps.push(Dependency{dependent: QueryKey.codeResult, dependency: QueryKey.tokens("test.maxon")})
-    deps.push(Dependency{dependent: QueryKey.allModule, dependency: QueryKey.sourceFile("other.maxon")})
-    deps.push(Dependency{dependent: QueryKey.sourceFile("a.maxon"), dependency: QueryKey.tokens("a.maxon")})
-    let db = Database{dependencies: deps}
+    var deps = DependencyArray.empty()
+    deps.push(Dependency.create(dependent: QueryKey.allModule, dependency: QueryKey.sourceFile("test.maxon")))
+    deps.push(Dependency.create(dependent: QueryKey.codeResult, dependency: QueryKey.tokens("test.maxon")))
+    deps.push(Dependency.create(dependent: QueryKey.allModule, dependency: QueryKey.sourceFile("other.maxon")))
+    deps.push(Dependency.create(dependent: QueryKey.sourceFile("a.maxon"), dependency: QueryKey.tokens("a.maxon")))
+    let db = Database.create(dependencies: deps)
     clearDepsFor(db)
     return db.dependencies.count()
 end 'main'

@@ -9,12 +9,20 @@ end 'QueryKey'
 export type Dependency
     export var dependent QueryKey
     export var dependency QueryKey
+
+    static function create(dependent QueryKey, dependency QueryKey) returns Self
+    	return Self{dependent: dependent, dependency: dependency}
+    end 'create'
 end 'Dependency'
 
 typealias DependencyArray = Array with Dependency
 
 export type Database
     export var dependencies DependencyArray
+
+    static function create(dependencies DependencyArray) returns Self
+    	return Self{dependencies: dependencies}
+    end 'create'
 end 'Database'
 
 function addDep(db Database, dep Dependency)
@@ -22,7 +30,7 @@ function addDep(db Database, dep Dependency)
 end 'addDep'
 
 function clearAllModule(db Database)
-    var newDeps = DependencyArray{}
+    var newDeps = DependencyArray.empty()
     for dep in db.dependencies 'scan'
         match dep.dependent 'check'
             sourceFile(_) then newDeps.push(dep)
@@ -35,18 +43,18 @@ function clearAllModule(db Database)
 end 'clearAllModule'
 
 function main() returns ExitCode
-    let db = Database{dependencies: DependencyArray{}}
+    let db = Database.create(dependencies: DependencyArray.empty())
 
     // First cycle: add a dep, then clear
-    addDep(db, dep: Dependency{dependent: QueryKey.sourceFile("a.maxon long enough for heap"), dependency: QueryKey.tokens("a.maxon long enough for heap")})
+    addDep(db, dep: Dependency.create(dependent: QueryKey.sourceFile("a.maxon long enough for heap"), dependency: QueryKey.tokens("a.maxon long enough for heap")))
     clearAllModule(db)
 
     // Second cycle: add another dep (now array has 2 elements total)
-    addDep(db, dep: Dependency{dependent: QueryKey.allModule, dependency: QueryKey.sourceFile("b.maxon long enough for heap")})
+    addDep(db, dep: Dependency.create(dependent: QueryKey.allModule, dependency: QueryKey.sourceFile("b.maxon long enough for heap")))
     clearAllModule(db)
 
     // Third cycle: add more deps, then clear for allModule
-    addDep(db, dep: Dependency{dependent: QueryKey.allModule, dependency: QueryKey.sourceFile("c.maxon long enough for heap")})
+    addDep(db, dep: Dependency.create(dependent: QueryKey.allModule, dependency: QueryKey.sourceFile("c.maxon long enough for heap")))
     clearAllModule(db)
 
     return db.dependencies.count()

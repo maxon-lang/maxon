@@ -10,44 +10,39 @@ function main() returns ExitCode
 	var area = circleArea(5.0)
 	return trunc(area)  // Returns 78
 end 'main'
+
 ---
 ExitCode: 78
 ---
 module {
-  func @docs-example-1.circleArea(ptr: i64) -> f64 {
+  func @float-type.circleArea(radius: f64) -> f64 {
   entry:
-    x86.prologue stack_size=16
-    x86.mov rax, 4614256650576692846
-    x86.mov [rbp+-8], rax
-    x86.movsd xmm0, [rbp+-8]
-    x86.movsd xmm1, xmm0
-    x86.mov [rbp+-16], rcx
-    x86.movsd xmm2, [rbp+-16]
-    x86.mulsd xmm1, xmm2
-    x86.movsd xmm3, xmm1
-    x86.mulsd xmm3, xmm2
-    x86.movsd xmm0, xmm3
-    x86.epilogue
+    x86.movsd xmm1, [rip+__float_3.14159]
+    x86.movsd xmm2, xmm1
+    x86.mulsd xmm2, xmm0
+    x86.movsd xmm1, xmm2
+    x86.mulsd xmm1, xmm0
+    x86.movsd xmm0, xmm1
     x86.ret
   }
   func @main() -> u32 {
   entry:
     x86.prologue stack_size=16
-    x86.mov rcx, 4617315517961601024
-    x86.call docs-example-1.circleArea
+    x86.movsd xmm0, [rip+__float_5]
+    x86.call float-type.circleArea
     x86.cvttsd2si rax, xmm0
-    x86.test rax, rax
-    x86.setl rcx
+    x86.xor rcx, rcx
     x86.mov rdx, 4294967295
     x86.cmp rax, rdx
-    x86.setg rbx
-    x86.or rcx, rbx
-    x86.je __range_ok_1
-  __range_panic_1:
-    x86.lea rax, [rip+__panic_msg_1]
+    x86.jg main.__range_panic_0
+    x86.cmp rax, rcx
+    x86.jl main.__range_panic_0
+    x86.jmp main.__range_ok_0
+  __range_panic_0:
+    x86.lea_symdata rax, [__panic_msg_0]
     x86.mov rcx, rax
     x86.call mrt_panic
-  __range_ok_1:
+  __range_ok_0:
     x86.epilogue
     x86.ret
   }

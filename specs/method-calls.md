@@ -83,10 +83,14 @@ type Counter
 	function get() returns Integer
 		return count
 	end 'get'
+
+	static function create(count Integer) returns Self
+		return Self{count: count}
+	end 'create'
 end 'Counter'
 
 function main() returns ExitCode
-	var c = Counter{count: 0}
+	var c = Counter.create(count: 0)
 	c.increment()
 	c.increment()
 	c.increment()
@@ -112,10 +116,14 @@ type Adder
 	function get() returns Integer
 		return total
 	end 'get'
+
+	static function create(total Integer) returns Self
+		return Self{total: total}
+	end 'create'
 end 'Adder'
 
 function main() returns ExitCode
-	var a = Adder{total: 0}
+	var a = Adder.create(total: 0)
 	a.add(10)
 	a.add(20)
 	a.add(12)
@@ -137,10 +145,14 @@ type Box
 	function getValue() returns Integer
 		return value
 	end 'getValue'
+
+	static function create(value Integer) returns Self
+		return Self{value: value}
+	end 'create'
 end 'Box'
 
 function main() returns ExitCode
-	var b = Box{value: 40}
+	var b = Box.create(value: 40)
 	return b.getValue() + 2
 end 'main'
 ```
@@ -163,10 +175,14 @@ type Calculator
 	function get() returns Integer
 		return result
 	end 'get'
+
+	static function create(result Integer) returns Self
+		return Self{result: result}
+	end 'create'
 end 'Calculator'
 
 function main() returns ExitCode
-	var calc = Calculator{result: 0}
+	var calc = Calculator.create(result: 0)
 	calc.addTwo(20, b: 22)
 	return calc.get()
 end 'main'
@@ -186,6 +202,10 @@ type Inner
 	function get() returns Integer
 		return value
 	end 'get'
+
+	static function create(value Integer) returns Self
+		return Self{value: value}
+	end 'create'
 end 'Inner'
 
 type Outer
@@ -194,10 +214,14 @@ type Outer
 	function getInnerValue() returns Integer
 		return inner.get()
 	end 'getInnerValue'
+
+	static function create(inner Inner) returns Self
+		return Self{inner: inner}
+	end 'create'
 end 'Outer'
 
 function main() returns ExitCode
-	var o = Outer{inner: Inner{value: 42}}
+	var o = Outer.create(inner: Inner.create(value: 42))
 	return o.getInnerValue()
 end 'main'
 ```
@@ -222,10 +246,14 @@ type Point
 	function sum() returns Integer
 		return x + y
 	end 'sum'
+
+	static function create(x Integer, y Integer) returns Self
+		return Self{x: x, y: y}
+	end 'create'
 end 'Point'
 
 function main() returns ExitCode
-	var p = Point{x: 10, y: 10}
+	var p = Point.create(x: 10, y: 10)
 	p.moveBy(10, dy: 12)
 	return p.sum()
 end 'main'
@@ -248,10 +276,14 @@ type Value
 		end 'positive'
 		return 0
 	end 'isPositive'
+
+	static function create(n Integer) returns Self
+		return Self{n: n}
+	end 'create'
 end 'Value'
 
 function main() returns ExitCode
-	var v = Value{n: 42}
+	var v = Value.create(n: 42)
 	return v.isPositive()
 end 'main'
 ```
@@ -270,16 +302,20 @@ type Adder
 	function addTwo(a Integer, b Integer)
 		total = total + a + b
 	end 'addTwo'
+
+	static function create(total Integer) returns Self
+		return Self{total: total}
+	end 'create'
 end 'Adder'
 
 function main() returns ExitCode
-	var x = Adder{total: 0}
+	var x = Adder.create(total: 0)
 	x.addTwo(10, 20)
 	return 0
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/fragments/method-calls/error-method-unnamed-args.test:15:4: Second and subsequent arguments must be named. Use 'name: value' syntax
+error E3005: specs/fragments/method-calls/error-method-unnamed-args.test:19:4: Second and subsequent arguments must be named. Use 'name: value' syntax
 ```
 ```maxon
 
@@ -295,10 +331,14 @@ type Calculator
 	function get() returns Integer
 		return result
 	end 'get'
+
+	static function create(result Integer) returns Self
+		return Self{result: result}
+	end 'create'
 end 'Calculator'
 
 function main() returns ExitCode
-	var calc = Calculator{result: 0}
+	var calc = Calculator.create(result: 0)
 	calc.compute(10, c: 4, b: 8)
 	return calc.get()
 end 'main'

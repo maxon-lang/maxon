@@ -336,7 +336,7 @@ The compiler (`generateStructLiteral` in `codegen_mir_expr.cpp`) must:
     builder->createStore(srcArray, fieldPtr);
     
     // 2. Check if there's data to copy
-    mir::MIRValue *length = ...; // load from managed._len
+    mir::MIRValue *length = ...; // load from managed.len
     mir::MIRValue *hasData = builder->createICmpSGT(length, builder->getInt64(0));
     builder->createCondBr(hasData, copyBlock, doneBlock);
     

@@ -3,12 +3,16 @@ typealias Integer = int(i64.min to i64.max)
 
 type Widget
 	export var id Integer
+
+	static function create(id Integer) returns Self
+		return Self{id: id}
+	end 'create'
 end 'Widget'
 
 function main() returns ExitCode
 	var result = 0
 	if true 'inner'
-		@heap var w = Widget{id: 7}
+		@heap var w = Widget.create(id: 7)
 		result = w.id
 	end 'inner'
 	return result
@@ -19,9 +23,10 @@ ExitCode: 7
 Stderr: ```
 sl_init
   os_alloc size=67108864
-mm_alloc Widget #1 size=8 [main]
+mm_alloc Widget #1 size=8 [Widget.create]
   sl_alloc Widget #1 size=40 class=4
-mm_incref Widget #1 rc=1 [main]
+mm_incref Widget #1 rc=1 [Widget.create]
+mm_transfer Widget #1 rc=1 [Widget.create]
 mm_decref Widget #1 rc=0 [main]
   mm_free Widget #1
     sl_free Widget #1 size=48 class=4
@@ -32,6 +37,25 @@ mm_raw_free #R1
 ```
 ---
 module {
+  func @Widget.create(id: i64) -> i64 {
+  entry:
+    x86.prologue stack_size=16
+    x86.mov [rbp-16], rcx
+    x86.mov rcx, 8
+    x86.xor rdx, rdx
+    x86.mov r8, 1
+    x86.call mm_alloc
+    x86.mov [rbp-8], rax
+    x86.mov rax, [rbp-8]
+    x86.mov rcx, [rbp-16]
+    x86.mov [rax+0], rcx
+    x86.mov rdx, [rbp-8]
+    x86.mov rcx, [rbp-8]
+    x86.call mm_incref
+    x86.mov rax, [rbp-8]
+    x86.epilogue
+    x86.ret
+  }
   func @main() -> u32 {
   entry:
     x86.prologue stack_size=16
@@ -41,23 +65,14 @@ module {
     x86.test rcx, rcx
     x86.je main.inner_0.merge
   inner_0:
-    x86.mov rax, 7
-    x86.mov rcx, 8
-    x86.xor rdx, rdx
-    x86.mov r8, 1
-    x86.call mm_alloc
+    x86.mov rcx, 7
+    x86.call Widget.create
     x86.mov [rbp-16], rax
-    x86.mov rcx, [rbp-16]
-    x86.mov rdx, 7
-    x86.mov [rcx+0], rdx
-    x86.mov rbx, [rbp-16]
-    x86.mov rcx, [rbp-16]
-    x86.call mm_incref
-    x86.mov rsi, [rbp-16]
-    x86.mov rdi, [rsi+0]
-    x86.mov [rbp-8], rdi
-    x86.mov r8, [rbp-16]
-    x86.test r8, r8
+    x86.mov rax, [rbp-16]
+    x86.mov rcx, [rax+0]
+    x86.mov [rbp-8], rcx
+    x86.mov rdx, [rbp-16]
+    x86.test rdx, rdx
     x86.jz __nonnull_skip_0
     x86.mov rcx, [rbp-16]
     x86.call mm_decref

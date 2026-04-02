@@ -25,6 +25,10 @@ end 'Color'
 export type Palette
 		export var primary Color
 		export var secondary Color
+
+		static function create(primary Color, secondary Color) returns Self
+			return Self{primary: primary, secondary: secondary}
+		end 'create'
 end 'Palette'
 
 function checkPrimary(p Palette) returns bool
@@ -36,7 +40,7 @@ function checkPrimary(p Palette) returns bool
 end 'checkPrimary'
 
 function main() returns ExitCode
-		let p = Palette{primary: Color.red(255), secondary: Color.blue}
+		let p = Palette.create(primary: Color.red(255), secondary: Color.blue)
 		if checkPrimary(p) 'ok'
 				return 1
 		end 'ok'
@@ -59,6 +63,10 @@ end 'Shape'
 
 export type Drawing
 		export var shape Shape
+
+		static function create(shape Shape) returns Self
+			return Self{shape: shape}
+		end 'create'
 end 'Drawing'
 
 function isCircle(d Drawing) returns bool
@@ -69,7 +77,7 @@ function isCircle(d Drawing) returns bool
 end 'isCircle'
 
 function main() returns ExitCode
-		let d = Drawing{shape: Shape.circle(10)}
+		let d = Drawing.create(shape: Shape.circle(10))
 		if isCircle(d) 'ok'
 				return 1
 		end 'ok'
@@ -92,6 +100,10 @@ end 'Value'
 
 export type Container
 		export var item Value
+
+		static function create(item Value) returns Self
+			return Self{item: item}
+		end 'create'
 end 'Container'
 
 function getNumber(c Container) returns SmallInt
@@ -103,7 +115,7 @@ function getNumber(c Container) returns SmallInt
 end 'getNumber'
 
 function main() returns ExitCode
-		let c = Container{item: Value.number(42)}
+		let c = Container.create(item: Value.number(42))
 		return getNumber(c)
 end 'main'
 ```

@@ -7,12 +7,20 @@ end 'Key'
 type Dep
     export var source Key
     export var target Key
+
+    static function create(source Key, target Key) returns Self
+    	return Self{source: source, target: target}
+    end 'create'
 end 'Dep'
 
 typealias DepArray = Array with Dep
 
 type State
     export var deps DepArray
+
+    static function create(deps DepArray) returns Self
+    	return Self{deps: deps}
+    end 'create'
 end 'State'
 
 function record(state State, dep Dep)
@@ -20,7 +28,7 @@ function record(state State, dep Dep)
 end 'record'
 
 function clearFor(state State)
-    var kept = DepArray{}
+    var kept = DepArray.empty()
     for dep in state.deps 'scan'
         match dep.source 'check'
             module then continue
@@ -31,15 +39,15 @@ function clearFor(state State)
 end 'clearFor'
 
 function main() returns ExitCode
-    let state = State{deps: DepArray{}}
+    let state = State.create(deps: DepArray.empty())
 
-    record(state, dep: Dep{source: Key.file("x.maxon long enough for heap"), target: Key.module})
+    record(state, dep: Dep.create(source: Key.file("x.maxon long enough for heap"), target: Key.module))
     clearFor(state)
 
-    record(state, dep: Dep{source: Key.module, target: Key.file("y.maxon long enough for heap")})
+    record(state, dep: Dep.create(source: Key.module, target: Key.file("y.maxon long enough for heap")))
     clearFor(state)
 
-    record(state, dep: Dep{source: Key.module, target: Key.file("z.maxon long enough for heap")})
+    record(state, dep: Dep.create(source: Key.module, target: Key.file("z.maxon long enough for heap")))
     clearFor(state)
 
     return state.deps.count()

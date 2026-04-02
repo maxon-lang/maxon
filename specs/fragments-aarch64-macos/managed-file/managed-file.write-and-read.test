@@ -1,6 +1,10 @@
 // Test: managed-file.write-and-read
 type TestFile
   export var _file __ManagedFile
+
+  static function create(_file __ManagedFile) returns Self
+  	return Self{_file: _file}
+  end 'create'
 end 'TestFile'
 
 function main() returns ExitCode
@@ -11,7 +15,7 @@ function main() returns ExitCode
     print("write open failed")
     return 1
   end 'writeFail'
-  var wf = TestFile{_file: writeResult}
+  var wf = TestFile.create(_file: writeResult)
   let content = "Hello Managed"
   let written = wf._file.write(content.managed)
   wf._file.close()
@@ -25,7 +29,7 @@ function main() returns ExitCode
     print("read open failed")
     return 2
   end 'readFail'
-  var rf = TestFile{_file: readResult}
+  var rf = TestFile.create(_file: readResult)
   let size = rf._file.size()
   var buffer = __ManagedMemory.create(size + 1, 1)
   let bytesRead = rf._file.read(buffer, size)
@@ -35,7 +39,7 @@ function main() returns ExitCode
   buffer.setLength(bytesRead + 1)
   buffer.setByte(bytesRead, 0)
   buffer.setLength(bytesRead)
-  let readContent = String{managed: buffer, _iterPos: 0}
+  let readContent = String.init(managed: buffer, _iterPos: 0)
   print("{readContent}")
 
   // Clean up

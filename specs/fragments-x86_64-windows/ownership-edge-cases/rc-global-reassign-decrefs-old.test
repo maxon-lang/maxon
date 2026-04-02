@@ -3,12 +3,16 @@ typealias Integer = int(i64.min to i64.max)
 
 type State
 	export var val Integer
+
+	static function create(val Integer) returns Self
+		return Self{val: val}
+	end 'create'
 end 'State'
 
-var g = State{val: 0}
+var g = State.create(val: 0)
 
 function step(n Integer)
-	g = State{val: n}
+	g = State.create(val: n)
 end 'step'
 
 function main() returns ExitCode
@@ -23,30 +27,34 @@ ExitCode: 30
 Stderr: ```
 sl_init
   os_alloc size=67108864
-mm_alloc State #1 size=8 [__module_init]
+mm_alloc State #1 size=8 [State.create]
   sl_alloc State #1 size=40 class=4
-mm_incref State #1 rc=1 [__module_init]
+mm_incref State #1 rc=1 [State.create]
+mm_transfer State #1 rc=1 [State.create]
 mm_incref State #1 rc=2 [__module_init]
 mm_decref State #1 rc=1 [__module_init]
-mm_alloc State #2 size=8 [ownership-edge-cases.step]
+mm_alloc State #2 size=8 [State.create]
   sl_alloc State #2 size=40 class=4
-mm_incref State #2 rc=1 [ownership-edge-cases.step]
+mm_incref State #2 rc=1 [State.create]
+mm_transfer State #2 rc=1 [State.create]
 mm_decref State #1 rc=0 [ownership-edge-cases.step]
   mm_free State #1
     sl_free State #1 size=48 class=4
 mm_incref State #2 rc=2 [ownership-edge-cases.step]
 mm_decref State #2 rc=1 [ownership-edge-cases.step]
-mm_alloc State #3 size=8 [ownership-edge-cases.step]
+mm_alloc State #3 size=8 [State.create]
   sl_alloc State #3 size=40 class=4
-mm_incref State #3 rc=1 [ownership-edge-cases.step]
+mm_incref State #3 rc=1 [State.create]
+mm_transfer State #3 rc=1 [State.create]
 mm_decref State #2 rc=0 [ownership-edge-cases.step]
   mm_free State #2
     sl_free State #2 size=48 class=4
 mm_incref State #3 rc=2 [ownership-edge-cases.step]
 mm_decref State #3 rc=1 [ownership-edge-cases.step]
-mm_alloc State #4 size=8 [ownership-edge-cases.step]
+mm_alloc State #4 size=8 [State.create]
   sl_alloc State #4 size=40 class=4
-mm_incref State #4 rc=1 [ownership-edge-cases.step]
+mm_incref State #4 rc=1 [State.create]
+mm_transfer State #4 rc=1 [State.create]
 mm_decref State #3 rc=0 [ownership-edge-cases.step]
   mm_free State #3
     sl_free State #3 size=48 class=4
@@ -64,23 +72,33 @@ mm_decref State #4 rc=0 [__maxon_global_cleanup]
 ```
 ---
 module {
-  func @ownership-edge-cases.step(n: i64) {
+  func @State.create(val: i64) -> i64 {
   entry:
-    x86.prologue stack_size=32
+    x86.prologue stack_size=16
     x86.mov [rbp-16], rcx
     x86.mov rcx, 8
     x86.xor rdx, rdx
     x86.mov r8, 1
     x86.call mm_alloc
     x86.mov [rbp-8], rax
-    x86.mov rcx, [rbp-8]
-    x86.mov rdx, [rbp-16]
-    x86.mov [rcx+0], rdx
+    x86.mov rax, [rbp-8]
+    x86.mov rcx, [rbp-16]
+    x86.mov [rax+0], rcx
+    x86.mov rdx, [rbp-8]
     x86.mov rcx, [rbp-8]
     x86.call mm_incref
     x86.mov rax, [rbp-8]
+    x86.epilogue
+    x86.ret
+  }
+  func @ownership-edge-cases.step(n: i64) {
+  entry:
+    x86.prologue stack_size=16
+    x86.call State.create
+    x86.mov [rbp-8], rax
+    x86.mov rax, [rbp-8]
     x86.mov rcx, qword [rip+g]
-    x86.mov [rbp-24], rcx
+    x86.mov [rbp-16], rcx
     x86.test rcx, rcx
     x86.jz __nonnull_skip_0
     x86.call mm_decref
@@ -139,24 +157,16 @@ module {
   func @__module_init() {
   entry:
     x86.prologue stack_size=16
-    x86.xor rax, rax
-    x86.mov rcx, 8
-    x86.xor rdx, rdx
-    x86.mov r8, 1
-    x86.call mm_alloc
+    x86.xor rcx, rcx
+    x86.call State.create
     x86.mov [rbp-8], rax
-    x86.mov rcx, [rbp-8]
-    x86.xor rdx, rdx
-    x86.mov [rcx+0], rdx
+    x86.mov rax, [rbp-8]
     x86.mov rcx, [rbp-8]
     x86.call mm_incref
-    x86.mov rbx, [rbp-8]
     x86.mov rcx, [rbp-8]
-    x86.call mm_incref
-    x86.mov rsi, [rbp-8]
-    x86.mov qword [rip+g], rsi
-    x86.mov rdi, [rbp-8]
-    x86.test rdi, rdi
+    x86.mov qword [rip+g], rcx
+    x86.mov rdx, [rbp-8]
+    x86.test rdx, rdx
     x86.jz __nonnull_skip_3
     x86.mov rcx, [rbp-8]
     x86.call mm_decref

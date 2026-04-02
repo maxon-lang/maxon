@@ -21,10 +21,14 @@ let DROP_SLOT_EMPTY = i64.max
 // Tracks which ValueId is currently stored in each VarSlot.
 type SlotValueMap
 	export var values ValueIdArray
+
+	static function create() returns SlotValueMap
+		return Self{values: ValueIdArray.empty()}
+	end 'create'
 end 'SlotValueMap'
 
 function createSlotValueMap() returns SlotValueMap
-	return SlotValueMap{values: ValueIdArray{}}
+	return SlotValueMap.create()
 end 'createSlotValueMap'
 
 function slotValueGet(m SlotValueMap, slotId VarSlot) returns ValueId
@@ -48,10 +52,14 @@ end 'slotValueSet'
 // Tracks which ValueIds are heap-allocated (produced by sys.globalAddr or similar).
 type HeapValueSet
 	export var flags BoolArray
+
+	static function create() returns HeapValueSet
+		return Self{flags: BoolArray.empty()}
+	end 'create'
 end 'HeapValueSet'
 
 function createHeapValueSet() returns HeapValueSet
-	return HeapValueSet{flags: BoolArray{}}
+	return HeapValueSet.create()
 end 'createHeapValueSet'
 
 function markHeapAllocated(set HeapValueSet, valueId ValueId)
@@ -80,16 +88,16 @@ type DropInjectionState
 	// Maximum slot index seen
 	export var maxSlot VarSlot
 	export var hasAnySlot bool
-end 'DropInjectionState'
 
-function createDropInjectionState() returns DropInjectionState
-	return DropInjectionState{
-		slotValues: createSlotValueMap(),
-		heapValues: createHeapValueSet(),
-		maxSlot: 0,
-		hasAnySlot: false
-	}
-end 'createDropInjectionState'
+	static function create() returns DropInjectionState
+		return Self{
+			slotValues: createSlotValueMap(),
+			heapValues: createHeapValueSet(),
+			maxSlot: 0,
+			hasAnySlot: false
+		}
+	end 'create'
+end 'DropInjectionState'
 
 // ============================================================
 // Entry point
@@ -114,7 +122,7 @@ function injectDropsInFunction(func MlirFunction) returns MlirFunction
 	var dstFunc = cloneFunctionShell(func)
 
 	// Phase 1: Scan all blocks for heap-allocated values (sys.globalAddr results)
-	var state = createDropInjectionState()
+	var state = DropInjectionState.create()
 	scanHeapAllocations(func, state: state)
 
 	// Phase 2: Walk blocks and inject drops

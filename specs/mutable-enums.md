@@ -234,6 +234,10 @@ typealias Integer = int(i64.min to i64.max)
 type Point
 	export var x Integer
 	export var y Integer
+
+	static function create(x Integer, y Integer) returns Self
+		return Self{x: x, y: y}
+	end 'create'
 end 'Point'
 
 enum Shape
@@ -242,9 +246,9 @@ enum Shape
 end 'Shape'
 
 function main() returns ExitCode
-	var s = Shape.located(Point{x: 1, y: 2})
+	var s = Shape.located(Point.create(x: 1, y: 2))
 	match s 'update'
-		located(pos) then pos = Point{x: 10, y: 32}
+		located(pos) then pos = Point.create(x: 10, y: 32)
 		nothing then return 0
 	end 'update'
 	match s 'read'

@@ -3,15 +3,23 @@ typealias Integer = int(i64.min to i64.max)
 
 type Inner
 	export var val Integer
+
+	static function create(val Integer) returns Self
+		return Self{val: val}
+	end 'create'
 end 'Inner'
 
 type Outer
 	export var child Inner
+
+	static function create(child Inner) returns Self
+		return Self{child: child}
+	end 'create'
 end 'Outer'
 
 function main() returns ExitCode
-	var inner = Inner{val: 55}
-	var outer = Outer{child: inner}
+	var inner = Inner.create(val: 55)
+	var outer = Outer.create(child: inner)
 	return outer.child.val
 end 'main'
 ---
@@ -20,13 +28,15 @@ ExitCode: 55
 Stderr: ```
 sl_init
   os_alloc size=67108864
-mm_alloc Inner #1 size=8 [main]
+mm_alloc Inner #1 size=8 [Inner.create]
   sl_alloc Inner #1 size=40 class=4
-mm_incref Inner #1 rc=1 [main]
-mm_alloc Outer #2 size=8 [main]
+mm_incref Inner #1 rc=1 [Inner.create]
+mm_transfer Inner #1 rc=1 [Inner.create]
+mm_alloc Outer #2 size=8 [Outer.create]
   sl_alloc Outer #2 size=40 class=4
-mm_incref Inner #1 rc=2 [main]
-mm_incref Outer #2 rc=1 [main]
+mm_incref Inner #1 rc=2 [Outer.create]
+mm_incref Outer #2 rc=1 [Outer.create]
+mm_transfer Outer #2 rc=1 [Outer.create]
 mm_decref Outer #2 rc=0 [main]
   mm_decref Inner #1 rc=1 [~Outer]
   mm_free Outer #2
@@ -41,46 +51,66 @@ mm_raw_free #R1
 ```
 ---
 module {
-  func @main() -> u32 {
+  func @Inner.create(val: i64) -> i64 {
   entry:
-    x86.prologue stack_size=32
-    x86.mov rax, 55
+    x86.prologue stack_size=16
+    x86.mov [rbp-16], rcx
     x86.mov rcx, 8
     x86.xor rdx, rdx
     x86.mov r8, 1
     x86.call mm_alloc
     x86.mov [rbp-8], rax
-    x86.mov rcx, [rbp-8]
-    x86.mov rdx, 55
-    x86.mov [rcx+0], rdx
-    x86.mov rbx, [rbp-8]
+    x86.mov rax, [rbp-8]
+    x86.mov rcx, [rbp-16]
+    x86.mov [rax+0], rcx
+    x86.mov rdx, [rbp-8]
     x86.mov rcx, [rbp-8]
     x86.call mm_incref
-    x86.lea_func rsi, [__destruct_Outer]
-    x86.mov rdi, rsi
-    x86.mov rdx, rdi
+    x86.mov rax, [rbp-8]
+    x86.epilogue
+    x86.ret
+  }
+  func @Outer.create(child: i64) -> i64 {
+  entry:
+    x86.prologue stack_size=16
+    x86.mov [rbp-8], rcx
+    x86.lea_func rax, [__destruct_Outer]
+    x86.mov rdx, rax
     x86.mov rcx, 8
     x86.mov r8, 2
     x86.call mm_alloc
     x86.mov [rbp-16], rax
-    x86.mov r8, [rbp-8]
-    x86.mov r9, [rbp-16]
-    x86.mov [r9+0], r8
     x86.mov rcx, [rbp-8]
+    x86.mov rdx, [rbp-16]
+    x86.mov [rdx+0], rcx
     x86.call mm_incref
-    x86.mov rax, [rbp-16]
+    x86.mov rbx, [rbp-16]
     x86.mov rcx, [rbp-16]
     x86.call mm_incref
     x86.mov rax, [rbp-16]
-    x86.mov rcx, [rax+0]
-    x86.mov [rbp-24], rcx
-    x86.mov rax, [rbp-24]
-    x86.mov rcx, [rax+0]
-    x86.xor rax, rax
-    x86.mov rdx, 4294967295
-    x86.cmp rcx, rdx
+    x86.epilogue
+    x86.ret
+  }
+  func @main() -> u32 {
+  entry:
+    x86.prologue stack_size=32
+    x86.mov rcx, 55
+    x86.call Inner.create
+    x86.mov [rbp-8], rax
+    x86.mov rax, [rbp-8]
+    x86.mov rcx, [rbp-8]
+    x86.call Outer.create
+    x86.mov [rbp-16], rax
+    x86.mov rcx, [rbp-16]
+    x86.mov rdx, [rcx+0]
+    x86.mov [rbp-24], rdx
+    x86.mov rbx, [rbp-24]
+    x86.mov rsi, [rbx+0]
+    x86.xor rdi, rdi
+    x86.mov r8, 4294967295
+    x86.cmp rsi, r8
     x86.jg main.__range_panic_0
-    x86.cmp rcx, rax
+    x86.cmp rsi, rdi
     x86.jl main.__range_panic_0
     x86.jmp main.__range_ok_0
   __range_panic_0:
@@ -88,17 +118,16 @@ module {
     x86.mov rcx, rax
     x86.call mrt_panic
   __range_ok_0:
-    x86.mov rbx, [rbp-16]
-    x86.mov [rbp-32], rcx
-    x86.test rbx, rbx
+    x86.mov rax, [rbp-16]
+    x86.mov [rbp-32], rsi
+    x86.test rax, rax
     x86.jz __nonnull_skip_0
     x86.mov rcx, [rbp-16]
     x86.call mm_decref
     x86.label __nonnull_skip_0
-    x86.mov rax, [rbp-8]
-    x86.test rax, rax
-    x86.jz __nonnull_skip_1
     x86.mov rcx, [rbp-8]
+    x86.test rcx, rcx
+    x86.jz __nonnull_skip_1
     x86.call mm_decref
     x86.label __nonnull_skip_1
     x86.mov rax, [rbp-32]

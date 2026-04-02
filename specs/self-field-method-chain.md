@@ -29,10 +29,14 @@ type Container
 		function getCount() returns Integer
 				return self.items.count()
 		end 'getCount'
+
+		static function create(items IntArray) returns Self
+			return Self{items: items}
+		end 'create'
 end 'Container'
 
 function main() returns ExitCode
-		var c = Container{items: IntArray{}}
+		var c = Container.create(items: IntArray.empty())
 		c.addItem(10)
 		c.addItem(20)
 		return c.getCount()
@@ -58,10 +62,14 @@ type NumberList
 		function first() returns Integer
 				return try self.data.get(0) otherwise -1
 		end 'first'
+
+		static function create(data IntArray) returns Self
+			return Self{data: data}
+		end 'create'
 end 'NumberList'
 
 function main() returns ExitCode
-		var list = NumberList{data: IntArray{}}
+		var list = NumberList.create(data: IntArray.empty())
 		list.add(42)
 		return list.first()
 end 'main'
@@ -82,6 +90,10 @@ type Inner
 		function total() returns Integer
 				return self.values.count()
 		end 'total'
+
+		static function create(values IntArray) returns Self
+			return Self{values: values}
+		end 'create'
 end 'Inner'
 
 type Outer
@@ -90,11 +102,15 @@ type Outer
 		function getInnerCount() returns Integer
 				return self.inner.values.count()
 		end 'getInnerCount'
+
+		static function create(inner Inner) returns Self
+			return Self{inner: inner}
+		end 'create'
 end 'Outer'
 
 function main() returns ExitCode
-		var inner = Inner{values: [1, 2, 3]}
-		var outer = Outer{inner: inner}
+		var inner = Inner.create(values: [1, 2, 3])
+		var outer = Outer.create(inner: inner)
 		return outer.getInnerCount()
 end 'main'
 ```
@@ -115,10 +131,14 @@ type Accumulator
 				self.items.push(value)
 				return self.items.count()
 		end 'addAndCount'
+
+		static function create(items IntArray) returns Self
+			return Self{items: items}
+		end 'create'
 end 'Accumulator'
 
 function main() returns ExitCode
-		var acc = Accumulator{items: IntArray{}}
+		var acc = Accumulator.create(items: IntArray.empty())
 		let _ = acc.addAndCount(1)
 		let _ = acc.addAndCount(2)
 		return acc.addAndCount(3)

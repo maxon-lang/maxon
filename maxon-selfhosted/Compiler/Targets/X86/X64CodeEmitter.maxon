@@ -6,6 +6,10 @@
 type BlockJumpFixup
 	export var codeOffset CodeOffset
 	export var targetBlockId BlockId
+
+	static function create(codeOffset CodeOffset, targetBlockId BlockId) returns BlockJumpFixup
+		return Self{codeOffset: codeOffset, targetBlockId: targetBlockId}
+	end 'create'
 end 'BlockJumpFixup'
 typealias BlockJumpFixupArray = Array with BlockJumpFixup
 
@@ -668,7 +672,7 @@ typealias CondJumpOpcode = int(0x80 to 0x8F)
 function emitCondJumpBlock(code ByteArray, blockFixups BlockJumpFixupArray, opcode CondJumpOpcode, targetBlock BlockId)
 	code.push(0x0F)
 	code.push(opcode)
-	blockFixups.push(BlockJumpFixup{codeOffset: code.count(), targetBlockId: targetBlock})
+	blockFixups.push(BlockJumpFixup.create(code.count(), targetBlockId: targetBlock))
 	writeDword(code, value: 0)
 end 'emitCondJumpBlock'
 
@@ -676,7 +680,7 @@ end 'emitCondJumpBlock'
 function emitJmpBlock(code ByteArray, blockFixups BlockJumpFixupArray, targetBlock BlockId)
 	// jmp rel32  =>  E9 <rel32>
 	code.push(0xE9)
-	blockFixups.push(BlockJumpFixup{codeOffset: code.count(), targetBlockId: targetBlock})
+	blockFixups.push(BlockJumpFixup.create(code.count(), targetBlockId: targetBlock))
 	writeDword(code, value: 0)
 end 'emitJmpBlock'
 
@@ -816,7 +820,7 @@ function emitX86Start(code ByteArray, osDesc OsDescriptor, relocations Relocatio
 	code.push(0xE8)
 	let mainCallFixupOffset = code.count()
 	var mainName = b"main"
-	callFixups.push(CallFixup{codeOffset: mainCallFixupOffset, targetName: mainName})
+	callFixups.push(CallFixup.create(mainCallFixupOffset, targetName: mainName))
 	code.append(b"\x00\x00\x00\x00")
 
 	// Exit using the OS-specified strategy
@@ -843,7 +847,7 @@ end 'emitX86ExitSyscall'
 function emitX86ExitIat(code ByteArray, relocations RelocationArray, slotIndex MachineWord)
 	// mov ecx, eax; call [rip+disp32]
 	code.append(b"\x89\xc1\xff\x15")
-	relocations.push(Relocation{codeOffset: code.count(), slotIndex: slotIndex})
+	relocations.push(Relocation.create(code.count(), slotIndex: slotIndex))
 	code.append(b"\x00\x00\x00\x00")
 end 'emitX86ExitIat'
 
@@ -877,7 +881,7 @@ function emitX86WriteStdoutWinApi(code ByteArray, relocations RelocationArray, g
 
 	// call [rip+disp32] GetStdHandle
 	code.append(b"\xff\x15")
-	relocations.push(Relocation{codeOffset: code.count(), slotIndex: getHandleSlot})
+	relocations.push(Relocation.create(code.count(), slotIndex: getHandleSlot))
 	writeDword(code, value: 0)
 
 	// Save handle; load WriteFile args; mov qword [rsp+0x20], 0
@@ -885,7 +889,7 @@ function emitX86WriteStdoutWinApi(code ByteArray, relocations RelocationArray, g
 
 	// call [rip+disp32] WriteFile
 	code.append(b"\xff\x15")
-	relocations.push(Relocation{codeOffset: code.count(), slotIndex: writeFileSlot})
+	relocations.push(Relocation.create(code.count(), slotIndex: writeFileSlot))
 	writeDword(code, value: 0)
 
 	// Epilogue: mov rsp, rbp; pop rbp; ret
@@ -966,7 +970,7 @@ function emitCallFixup(code ByteArray, callFixups CallFixupArray, target ByteArr
 	logTrace(LogCategory.codegen, message: () gives "Call fixup to '{String.from(target)}' at offset {code.count()}")
 	code.push(0xE8)
 	let fixupOffset = code.count()
-	callFixups.push(CallFixup{codeOffset: fixupOffset, targetName: target})
+	callFixups.push(CallFixup.create(fixupOffset, targetName: target))
 	code.append(b"\x00\x00\x00\x00")
 end 'emitCallFixup'
 
@@ -1001,18 +1005,18 @@ end 'recordLabel'
 // Emit x86-64 machine code from a block-based MlirModule containing X64Ops.
 export function emitX86(module MlirModule, target Target, globalData GlobalDataTable) returns CodeResult
 	logInfo(LogCategory.codegen, message: () gives "Emitting block-based machine code ({targetToString(target)})")
-	var code = ByteArray{}
+	var code = ByteArray.empty()
 	code.reserve(1024)
-	var relocations = RelocationArray{}
-	var callFixups = CallFixupArray{}
+	var relocations = RelocationArray.empty()
+	var callFixups = CallFixupArray.empty()
 
 	// Register panic string constants before emitting functions
 	// (globalAddr ops look up data during emission via data islands)
 	registerPanicStrings(globalData)
 
 	// Function label tables for inter-function call resolution
-	var funcLabelNames = ByteArrayArray{}
-	var funcLabelOffsets = CodeOffsetArray{}
+	var funcLabelNames = ByteArrayArray.empty()
+	var funcLabelOffsets = CodeOffsetArray.empty()
 
 	// Emit all functions (runtime functions like mrt_start, mrt_write_stdout, mrt_i64_to_string
 	// are now included in the module as regular functions)
@@ -1021,13 +1025,13 @@ export function emitX86(module MlirModule, target Target, globalData GlobalDataT
 		recordLabel(funcLabelNames, labelOffsets: funcLabelOffsets, name: func.name, offset: code.count())
 
 		// Block offset table for this function (indexed by BlockId)
-		var blockOffsets = CodeOffsetArray{}
+		var blockOffsets = CodeOffsetArray.empty()
 		for _ in 0 upto func.nextBlockId 'alloc'
 			blockOffsets.push(0)
 		end 'alloc'
 
 		// Block jump fixups collected during emission, resolved per function
-		var blockFixups = BlockJumpFixupArray{}
+		var blockFixups = BlockJumpFixupArray.empty()
 
 		// Emit all blocks in order
 		for block in func.blocks 'eachBlock'
@@ -1062,7 +1066,7 @@ export function emitX86(module MlirModule, target Target, globalData GlobalDataT
 	// mrt_start must be at offset 0 -- look up its offset for the main call fixup
 	let startOffset = lookupLabel(funcLabelNames, labelOffsets: funcLabelOffsets, name: b"mrt_start")
 
-	return CodeResult{code: code, mainCallFixupOffset: startOffset, relocations: relocations, globalData: globalData, targetModule: MlirModule{functions: MlirFunctionArray{}}}
+	return CodeResult.create(code, mainCallFixupOffset: startOffset, relocations: relocations, globalData: globalData, targetModule: createMlirModule())
 end 'emitX86'
 
 // Emit bytes for a single MlirOp (should be x64 at this stage).
@@ -1282,7 +1286,7 @@ function emitLeaFuncAddrOp(code ByteArray, dest X64Register, callFixups CallFixu
 	// Add a call fixup for the function address
 	let fixupOffset = code.count()
 	writeDword(code, value: 0)
-	callFixups.push(CallFixup{codeOffset: fixupOffset, targetName: funcName})
+	callFixups.push(CallFixup.create(fixupOffset, targetName: funcName))
 end 'emitLeaFuncAddrOp'
 
 // --- MOVSXD: sign-extend 32-bit to 64-bit ---
@@ -1604,7 +1608,7 @@ function emitX86IatCallOp(code ByteArray, relocations RelocationArray, resultSlo
 
 	// call [rip + disp32] (IAT indirect call)
 	code.append(b"\xff\x15")
-	relocations.push(Relocation{codeOffset: code.count(), slotIndex: slotIndex})
+	relocations.push(Relocation.create(code.count(), slotIndex: slotIndex))
 	writeDword(code, value: 0)
 
 	// Deallocate stack space

@@ -3,11 +3,15 @@ typealias Integer = int(i64.min to i64.max)
 
 type Wrapper
 	export var val Integer
+
+	static function create(val Integer) returns Self
+		return Self{val: val}
+	end 'create'
 end 'Wrapper'
 
 function compute(flag Integer) returns Integer
 	if flag > 0 'check'
-		@heap var w = Wrapper{val: flag}
+		@heap var w = Wrapper.create(val: flag)
 		return w.val + 1
 	end 'check'
 	return 0
@@ -21,95 +25,111 @@ ExitCode: 6
 RequiredMLIR: ```
 === maxon
 module {
+  func @Wrapper.create(val: i64) -> Wrapper {
+  entry:
+    %0 = maxon.param {index = 0 : i32} {name = val} {type = i64}
+    %1 = maxon.struct_literal @Wrapper
+    maxon.scope_end [val]
+    maxon.return %1
+  }
   func @memory-safety.compute(flag: i64) -> i64 {
   entry:
-    %9 = maxon.param {index = 0 : i32} {name = flag} {type = i64}
-    %10 = maxon.literal {value = 0 : i64}
-    %11 = maxon.binop %9, %10 {op = gt}
-    maxon.cond_br %11 [then: check_0, else: check_0.after]
+    %11 = maxon.param {index = 0 : i32} {name = flag} {type = i64}
+    %12 = maxon.literal {value = 0 : i64}
+    %13 = maxon.binop %11, %12 {op = gt}
+    maxon.cond_br %13 [then: check_0, else: check_0.after]
   check_0:
-    %12 = maxon.var_ref {var = flag} {type = i64}
-    %13 = maxon.struct_literal @Wrapper
-    maxon.assign %13 {var = w} {decl = 1 : i1} {mut = 1 : i1}
-    %14 = maxon.struct_var_ref w
-    %15 = maxon.field_access .val %14
-    %16 = maxon.literal {value = 1 : i64}
-    %17 = maxon.binop %15, %16 {op = add}
+    %14 = maxon.var_ref {var = flag} {type = i64}
+    %15 = maxon.call @Wrapper.create %14
+    maxon.assign %15 {var = __call_tmp_15} {decl = 1 : i1}
+    maxon.assign %15 {var = w} {decl = 1 : i1} {mut = 1 : i1}
+    %16 = maxon.struct_var_ref w
+    %17 = maxon.field_access .val %16
+    %18 = maxon.literal {value = 1 : i64}
+    %19 = maxon.binop %17, %18 {op = add}
     maxon.scope_end [flag, w]
-    maxon.return %17
+    maxon.return %19
   check_0.after:
-    %18 = maxon.literal {value = 0 : i64}
+    %20 = maxon.literal {value = 0 : i64}
     maxon.scope_end [flag]
-    maxon.return %18
+    maxon.return %20
   }
   func @main() -> i64 {
   entry:
-    %19 = maxon.literal {value = 5 : i64}
-    %20 = maxon.call @memory-safety.compute %19
-    %21 = maxon.literal {value = 0 : i64}
-    %22 = maxon.binop %20, %21 {op = lt}
-    %23 = maxon.literal {value = 4294967295 : i64}
-    %24 = maxon.binop %20, %23 {op = gt}
-    %25 = maxon.binop %22, %24 {op = or}
-    maxon.cond_br %25 [then: __range_panic_0, else: __range_ok_0]
+    %21 = maxon.literal {value = 5 : i64}
+    %22 = maxon.call @memory-safety.compute %21
+    %23 = maxon.literal {value = 0 : i64}
+    %24 = maxon.binop %22, %23 {op = lt}
+    %25 = maxon.literal {value = 4294967295 : i64}
+    %26 = maxon.binop %22, %25 {op = gt}
+    %27 = maxon.binop %24, %26 {op = or}
+    maxon.cond_br %27 [then: __range_panic_0, else: __range_ok_0]
   __range_panic_0:
-    maxon.panic "panic at release-before-return-in-block.test:17: Range check failed: value outside typealias 'ExitCode'"
+    maxon.panic "panic at release-before-return-in-block.test:21: Range check failed: value outside typealias 'ExitCode'"
   __range_ok_0:
     maxon.scope_end []
-    maxon.return %20
+    maxon.return %22
   }
 }
 === standard
 module {
+  func @Wrapper.create(val: i64) -> i64 {
+  entry:
+    %0 = func.param val : StdI64
+    %1 = arith.constant {value = 8 : i64}
+    %2 = arith.constant {value = 0 : i64}
+    %3 = arith.constant {value = 1 : i64}
+    %4 = std.call_runtime @mm_alloc %1, %2, %3
+    memref.store %4, __struct_1
+    %5 = memref.load __struct_1 : i64
+    memref.store_indirect %0, %5+0
+    %6 = memref.load __struct_1 : i64
+    std.call_runtime @mm_incref %6
+    %7 = memref.load __struct_1 : i64
+    func.return %7
+  }
   func @memory-safety.compute(flag: i64) -> i64 {
   entry:
-    %0 = func.param flag : StdI64
-    memref.store %0, flag
-    %1 = arith.constant {value = 0 : i64}
-    %2 = arith.cmpi gt %0, %1
-    cf.cond_br %2 [then: check_0, else: check_0.after]
+    %8 = func.param flag : StdI64
+    memref.store %8, flag
+    %9 = arith.constant {value = 0 : i64}
+    %10 = arith.cmpi gt %8, %9
+    cf.cond_br %10 [then: check_0, else: check_0.after]
   check_0:
-    %3 = memref.load flag : i64
-    %4 = arith.constant {value = 8 : i64}
-    %5 = arith.constant {value = 0 : i64}
-    %6 = arith.constant {value = 1 : i64}
-    %7 = std.call_runtime @mm_alloc %4, %5, %6
-    memref.store %7, w
-    %8 = memref.load w : i64
-    memref.store_indirect %3, %8+0
-    %9 = memref.load w : i64
-    std.call_runtime @mm_incref %9
-    %10 = memref.load w : i64
-    %11 = memref.load_indirect %10+0
-    %12 = arith.constant {value = 1 : i64}
-    %13 = arith.addi %11, %12
-    %14 = memref.load w : i64
-    std.call_runtime_if_nonnull @mm_decref %14
-    func.return %13
+    %11 = memref.load flag : i64
+    %12 = func.call @Wrapper.create %11
+    memref.store %12, w
+    %15 = memref.load w : i64
+    %16 = memref.load_indirect %15+0
+    %17 = arith.constant {value = 1 : i64}
+    %18 = arith.addi %16, %17
+    %19 = memref.load w : i64
+    std.call_runtime_if_nonnull @mm_decref %19
+    func.return %18
   check_0.after:
-    %16 = arith.constant {value = 0 : i64}
-    func.return %16
+    %21 = arith.constant {value = 0 : i64}
+    func.return %21
   }
   func @main() -> u32 {
   entry:
-    %18 = arith.constant {value = 5 : i64}
-    %19 = func.call @memory-safety.compute %18
-    %20 = arith.constant {value = 0 : i64}
-    %21 = arith.cmpi lt %19, %20
-    %22 = arith.constant {value = 4294967295 : i64}
-    %23 = arith.cmpi gt %19, %22
-    %24 = arith.ori1 %21, %23
-    cf.cond_br %24 [then: __range_panic_0, else: __range_ok_0]
+    %23 = arith.constant {value = 5 : i64}
+    %24 = func.call @memory-safety.compute %23
+    %25 = arith.constant {value = 0 : i64}
+    %26 = arith.cmpi lt %24, %25
+    %27 = arith.constant {value = 4294967295 : i64}
+    %28 = arith.cmpi gt %24, %27
+    %29 = arith.ori1 %26, %28
+    cf.cond_br %29 [then: __range_panic_0, else: __range_ok_0]
   __range_panic_0:
-    %25 = memref.lea_symdata __panic_msg_0
-    %26 = std.ptr_to_i64 %25
-    std.call_runtime @mrt_panic %26
+    %30 = memref.lea_symdata __panic_msg_0
+    %31 = std.ptr_to_i64 %30
+    std.call_runtime @mrt_panic %31
   __range_ok_0:
-    func.return %19
+    func.return %24
   }
   func @__destruct_Wrapper(ptr: i64) {
   entry:
-    %27 = func.param ptr : StdI64
+    %32 = func.param ptr : StdI64
     cf.br done
   done:
     func.return
@@ -117,6 +137,25 @@ module {
 }
 === x86
 module {
+  func @Wrapper.create(val: i64) -> i64 {
+  entry:
+    x86.prologue stack_size=16
+    x86.mov [rbp-16], rcx
+    x86.mov rcx, 8
+    x86.xor rdx, rdx
+    x86.mov r8, 1
+    x86.call mm_alloc
+    x86.mov [rbp-8], rax
+    x86.mov rax, [rbp-8]
+    x86.mov rcx, [rbp-16]
+    x86.mov [rax+0], rcx
+    x86.mov rdx, [rbp-8]
+    x86.mov rcx, [rbp-8]
+    x86.call mm_incref
+    x86.mov rax, [rbp-8]
+    x86.epilogue
+    x86.ret
+  }
   func @memory-safety.compute(flag: i64) -> i64 {
   entry:
     x86.prologue stack_size=32
@@ -126,24 +165,16 @@ module {
     x86.jle memory-safety.compute.check_0.after
   check_0:
     x86.mov rax, [rbp-8]
-    x86.mov rcx, 8
-    x86.xor rdx, rdx
-    x86.mov r8, 1
-    x86.call mm_alloc
+    x86.mov rcx, [rbp-8]
+    x86.call Wrapper.create
     x86.mov [rbp-16], rax
     x86.mov rcx, [rbp-16]
-    x86.mov rdx, [rbp-8]
-    x86.mov [rcx+0], rdx
-    x86.mov rbx, [rbp-16]
-    x86.mov rcx, [rbp-16]
-    x86.call mm_incref
+    x86.mov rdx, [rcx+0]
+    x86.mov rbx, 1
+    x86.add rdx, rbx
     x86.mov rsi, [rbp-16]
-    x86.mov rdi, [rsi+0]
-    x86.mov r8, 1
-    x86.add rdi, r8
-    x86.mov r9, [rbp-16]
-    x86.mov [rbp-24], rdi
-    x86.test r9, r9
+    x86.mov [rbp-24], rdx
+    x86.test rsi, rsi
     x86.jz __nonnull_skip_0
     x86.mov rcx, [rbp-16]
     x86.call mm_decref

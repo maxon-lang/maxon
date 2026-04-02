@@ -3,10 +3,10 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
 type Lookup
-	static var _values = [10, 20, 30]
+	static var values = [10, 20, 30]
 
 	export static function get(index Integer) returns Integer
-		return try Lookup._values.get(index) otherwise -1
+		return try Lookup.values.get(index) otherwise -1
 	end 'get'
 end 'Lookup'
 
@@ -24,12 +24,12 @@ module {
   func @Lookup.get(index: i64) -> i64 {
   entry:
     x86.prologue stack_size=32
-    x86.movzx rax, byte [rip+Lookup._values.__initialized]
+    x86.movzx rax, byte [rip+Lookup.values.__initialized]
     x86.test rax, rax
     x86.mov [rbp-32], rcx
     x86.je Lookup.get.__lazy_init_1
   __lazy_merge_1:
-    x86.mov rax, qword [rip+Lookup._values]
+    x86.mov rax, qword [rip+Lookup.values]
     x86.mov [rbp-8], rax
     x86.mov rcx, [rbp-8]
     x86.call mm_incref
@@ -44,7 +44,7 @@ module {
     x86.cmp rdx, rsi
     x86.je Lookup.get.otherwise_default_continue_3
   __lazy_init_1:
-    x86.call Lookup._values.__lazy_init
+    x86.call Lookup.values.__lazy_init
     x86.jmp Lookup.get.__lazy_merge_1
   otherwise_default_error_2:
     x86.mov rax, [rbp-16]
@@ -116,7 +116,7 @@ module {
     x86.mov rdx, r9
     x86.mov [rbp-208], rax
     x86.mov [rbp-216], rsi
-    x86.mov rcx, 16
+    x86.mov rcx, 32
     x86.mov r8, 1
     x86.call mm_alloc
     x86.mov [rbp-32], rax
@@ -252,6 +252,12 @@ module {
     x86.xor rax, rax
     x86.mov rcx, [rbp-32]
     x86.mov [rcx+8], rax
+    x86.mov rax, -1
+    x86.mov rcx, [rbp-32]
+    x86.mov [rcx+16], rax
+    x86.xor rax, rax
+    x86.mov rcx, [rbp-32]
+    x86.mov [rcx+24], rax
     x86.mov rax, [rbp-32]
     x86.mov rcx, [rbp-32]
     x86.call mm_incref
@@ -268,11 +274,11 @@ module {
     x86.epilogue
     x86.ret
   }
-  func @Lookup._values.__lazy_init() {
+  func @Lookup.values.__lazy_init() {
   entry:
     x86.prologue stack_size=32
     x86.mov rax, 1
-    x86.mov byte [rip+Lookup._values.__initialized], rax
+    x86.mov byte [rip+Lookup.values.__initialized], rax
     x86.xor rcx, rcx
     x86.mov rdx, 3
     x86.xor rbx, rbx
@@ -318,7 +324,7 @@ module {
     x86.mov rdx, [rbp-16]
     x86.mov [rdx+8], rcx
     x86.call mm_incref
-    x86.lea_rdata rax, [__const_array_Lookup._values.__lazy_init_Lookup._values]
+    x86.lea_rdata rax, [__const_array_Lookup.values.__lazy_init_Lookup.values]
     x86.mov rcx, rax
     x86.mov rax, [rbp-16]
     x86.mov rdx, [rax+8]
@@ -326,7 +332,7 @@ module {
     x86.mov rcx, [rbp-16]
     x86.call mm_incref
     x86.mov rax, [rbp-16]
-    x86.mov rcx, qword [rip+Lookup._values]
+    x86.mov rcx, qword [rip+Lookup.values]
     x86.mov [rbp-24], rcx
     x86.test rcx, rcx
     x86.jz __nonnull_skip_2
@@ -335,7 +341,7 @@ module {
     x86.mov rcx, [rbp-16]
     x86.call mm_incref
     x86.mov rax, [rbp-16]
-    x86.mov qword [rip+Lookup._values], rax
+    x86.mov qword [rip+Lookup.values], rax
     x86.mov rax, [rbp-16]
     x86.test rax, rax
     x86.jz __nonnull_skip_3
@@ -348,19 +354,19 @@ module {
   func @__maxon_global_cleanup() {
   entry:
     x86.prologue stack_size=16
-    x86.movzx rax, byte [rip+Lookup._values.__initialized]
+    x86.movzx rax, byte [rip+Lookup.values.__initialized]
     x86.test rax, rax
-    x86.je __maxon_global_cleanup.__cleanup_skip_Lookup__values
-  __cleanup_Lookup__values:
-    x86.mov rax, qword [rip+Lookup._values]
+    x86.je __maxon_global_cleanup.__cleanup_skip_Lookup_values
+  __cleanup_Lookup_values:
+    x86.mov rax, qword [rip+Lookup.values]
     x86.mov [rbp-8], rax
     x86.test rax, rax
     x86.jz __nonnull_skip_4
     x86.mov rcx, [rbp-8]
     x86.call mm_decref
     x86.label __nonnull_skip_4
-    x86.jmp __maxon_global_cleanup.__cleanup_skip_Lookup__values
-  __cleanup_skip_Lookup__values:
+    x86.jmp __maxon_global_cleanup.__cleanup_skip_Lookup_values
+  __cleanup_skip_Lookup_values:
     x86.epilogue
     x86.ret
   }

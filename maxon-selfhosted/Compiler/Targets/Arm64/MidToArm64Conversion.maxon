@@ -44,7 +44,7 @@ function lowerFunctionToArm64(srcFunc MlirFunction, osDesc OsDescriptor, allFunc
 	end 'countSysTemps'
 
 	// Phase 1b: Allocate stack slots for block arguments (phi nodes).
-	var blockArgSlots = ValueSlotMap{}
+	var blockArgSlots = ValueSlotMap.empty()
 	var blockArgSlotCount = 0
 	for baBlock in srcFunc.blocks 'scanBlockArgs'
 		for bArg in baBlock.blockArgs 'eachBlockArg'
@@ -61,7 +61,7 @@ function lowerFunctionToArm64(srcFunc MlirFunction, osDesc OsDescriptor, allFunc
 	var nextTempSlot = liveSlotCount
 
 	// Value-to-slot map for SysOps that need slot-based addressing
-	var valueSlots = ValueSlotMap{}
+	var valueSlots = ValueSlotMap.empty()
 
 	// Phase 2: Lower all blocks.
 	for srcBlock in srcFunc.blocks 'eachBlock'
@@ -112,7 +112,7 @@ end 'lowerFunctionToArm64'
 
 // Scan which variable slots are read by memref.load ops.
 function scanLoadedSlotsArm64(func MlirFunction) returns VarSlotArray
-	var loaded = VarSlotArray{}
+	var loaded = VarSlotArray.empty()
 	for block in func.blocks 'eachBlock'
 		for op in block.ops 'eachOp'
 			match op 'check'
@@ -600,7 +600,7 @@ function emitBlockArgStoresArm64(argIds ValueIdArray, targetBlockId BlockId, dst
 		return
 	end 'noArgs'
 	// Find the target block to get its block args
-	var targetBlockArgs = MlirBlockArgArray{}
+	var targetBlockArgs = MlirBlockArgArray.empty()
 	for blk in srcBlocks 'findTarget'
 		if blk.id == targetBlockId 'found'
 			targetBlockArgs = blk.blockArgs
@@ -770,7 +770,7 @@ end 'ensureValueInSlotArm64'
 // SysOp syscall: args come from ValueId (SysOp dialect uses ValueId args)
 function lowerSyscallArm64(resultId ValueId, number MachineWord, argIds ValueIdArray, dstBlock MlirBlock, valueSlots ValueSlotMap, nextTempSlot SlotIndex) returns SlotIndex
 	var tempSlot = nextTempSlot
-	var argSlots = VarSlotArray{}
+	var argSlots = VarSlotArray.empty()
 	for argId in argIds 'mapArgs'
 		let slot = ensureValueInSlotArm64(argId, valueSlots: valueSlots, nextTempSlot: tempSlot, dstBlock: dstBlock)
 		if slot == tempSlot 'usedTemp'
@@ -787,7 +787,7 @@ end 'lowerSyscallArm64'
 
 function lowerIatCallArm64(resultId ValueId, slotIndex MachineWord, argIds ValueIdArray, dstBlock MlirBlock, valueSlots ValueSlotMap, nextTempSlot SlotIndex) returns SlotIndex
 	var tempSlot = nextTempSlot
-	var argSlots = VarSlotArray{}
+	var argSlots = VarSlotArray.empty()
 	for argId in argIds 'mapArgs'
 		let slot = ensureValueInSlotArm64(argId, valueSlots: valueSlots, nextTempSlot: tempSlot, dstBlock: dstBlock)
 		if slot == tempSlot 'usedTemp'
@@ -916,14 +916,14 @@ function lowerOsExitArm64(codeId ValueId, dstBlock MlirBlock, valueSlots ValueSl
 end 'lowerOsExitArm64'
 
 function lowerOsExitSyscallArm64(codeSlot VarSlot, num MachineWord, dstBlock MlirBlock, nextTempSlot SlotIndex) returns SlotIndex
-	var argSlots = VarSlotArray{}
+	var argSlots = VarSlotArray.empty()
 	argSlots.push(codeSlot)
 	dstBlock.ops.push(MlirOp.arm64(Arm64Op.syscall(nextTempSlot, num, argSlots)))
 	return nextTempSlot + 1
 end 'lowerOsExitSyscallArm64'
 
 function lowerOsExitIatArm64(codeSlot VarSlot, slotIdx MachineWord, dstBlock MlirBlock, nextTempSlot SlotIndex) returns SlotIndex
-	var argSlots = VarSlotArray{}
+	var argSlots = VarSlotArray.empty()
 	argSlots.push(codeSlot)
 	dstBlock.ops.push(MlirOp.arm64(Arm64Op.iatCall(nextTempSlot, slotIdx, argSlots)))
 	return nextTempSlot + 1
@@ -939,7 +939,7 @@ function lowerOsWriteSyscallArm64(ptrSlot VarSlot, lenSlot VarSlot, writeNum Mac
 	dstBlock.ops.push(MlirOp.arm64(Arm64Op.movImm(arm64PhysReg(Arm64Register.x0), fd)))
 	dstBlock.ops.push(MlirOp.arm64(Arm64Op.strToSlot(fdSlot, arm64PhysReg(Arm64Register.x0))))
 	// syscall(writeNum, fd, ptr, len)
-	var argSlots = VarSlotArray{}
+	var argSlots = VarSlotArray.empty()
 	argSlots.push(fdSlot)
 	argSlots.push(ptrSlot)
 	argSlots.push(lenSlot)
@@ -956,7 +956,7 @@ function lowerOsWriteWinApiArm64(ptrSlot VarSlot, lenSlot VarSlot, getHandleSlot
 	dstBlock.ops.push(MlirOp.arm64(Arm64Op.movImm(arm64PhysReg(Arm64Register.x0), handleConstant)))
 	dstBlock.ops.push(MlirOp.arm64(Arm64Op.strToSlot(handleConstSlot, arm64PhysReg(Arm64Register.x0))))
 	tempSlot = tempSlot + 1
-	var getHandleArgs = VarSlotArray{}
+	var getHandleArgs = VarSlotArray.empty()
 	getHandleArgs.push(handleConstSlot)
 	let handleResultSlot = tempSlot
 	dstBlock.ops.push(MlirOp.arm64(Arm64Op.iatCall(handleResultSlot, getHandleSlot, getHandleArgs)))
@@ -980,7 +980,7 @@ function lowerOsWriteWinApiArm64(ptrSlot VarSlot, lenSlot VarSlot, getHandleSlot
 	tempSlot = tempSlot + 1
 
 	// WriteFile(handle, ptr, len, &bytesWritten, NULL)
-	var writeArgs = VarSlotArray{}
+	var writeArgs = VarSlotArray.empty()
 	writeArgs.push(handleResultSlot)
 	writeArgs.push(ptrSlot)
 	writeArgs.push(lenSlot)
@@ -1001,7 +1001,7 @@ function lowerOsWriteLibcallArm64(ptrSlot VarSlot, lenSlot VarSlot, writeSlot Ma
 	dstBlock.ops.push(MlirOp.arm64(Arm64Op.movImm(arm64PhysReg(Arm64Register.x0), fd)))
 	dstBlock.ops.push(MlirOp.arm64(Arm64Op.strToSlot(fdSlot, arm64PhysReg(Arm64Register.x0))))
 	// iatCall write(fd, ptr, len)
-	var argSlots = VarSlotArray{}
+	var argSlots = VarSlotArray.empty()
 	argSlots.push(fdSlot)
 	argSlots.push(ptrSlot)
 	argSlots.push(lenSlot)

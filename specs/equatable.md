@@ -60,11 +60,15 @@ type Point implements Equatable
 	function equals(other Point) returns bool
 		return x == other.x and y == other.y
 	end 'equals'
+
+	static function create(x Integer, y Integer) returns Self
+		return Self{x: x, y: y}
+	end 'create'
 end 'Point'
 
 function main() returns ExitCode
-	var a = Point{x: 1, y: 2}
-	var b = Point{x: 1, y: 2}
+	var a = Point.create(x: 1, y: 2)
+	var b = Point.create(x: 1, y: 2)
 	if a.equals(b) 'check'
 		return 0
 	end 'check'
@@ -87,11 +91,15 @@ type Point implements Equatable
 	function equals(other Point) returns bool
 		return x == other.x and y == other.y
 	end 'equals'
+
+	static function create(x Integer, y Integer) returns Self
+		return Self{x: x, y: y}
+	end 'create'
 end 'Point'
 
 function main() returns ExitCode
-	var a = Point{x: 1, y: 2}
-	var b = Point{x: 3, y: 4}
+	var a = Point.create(x: 1, y: 2)
+	var b = Point.create(x: 3, y: 4)
 	if a.equals(b) 'check'
 		return 1
 	end 'check'
@@ -113,12 +121,16 @@ type Wrapper implements Equatable
 	function equals(other Wrapper) returns bool
 		return value == other.value
 	end 'equals'
+
+	static function create(value Integer) returns Self
+		return Self{value: value}
+	end 'create'
 end 'Wrapper'
 
 function main() returns ExitCode
-	var a = Wrapper{value: 42}
-	var b = Wrapper{value: 42}
-	var c = Wrapper{value: 99}
+	var a = Wrapper.create(value: 42)
+	var b = Wrapper.create(value: 42)
+	var c = Wrapper.create(value: 99)
 	if a.equals(b) 'eq'
 		if a.equals(c) 'neq'
 			return 1
@@ -144,11 +156,15 @@ type Point implements Equatable
 	function equals(other Point) returns bool
 		return x == other.x and y == other.y
 	end 'equals'
+
+	static function create(x Integer, y Integer) returns Self
+		return Self{x: x, y: y}
+	end 'create'
 end 'Point'
 
 function main() returns ExitCode
-	var a = Point{x: 1, y: 2}
-	var b = Point{x: 1, y: 99}
+	var a = Point.create(x: 1, y: 2)
+	var b = Point.create(x: 1, y: 99)
 	if a.equals(b) 'check'
 		return 1
 	end 'check'
@@ -170,10 +186,14 @@ type Box implements Equatable
 	function equals(other Box) returns bool
 		return value == other.value
 	end 'equals'
+
+	static function create(value Integer) returns Self
+		return Self{value: value}
+	end 'create'
 end 'Box'
 
 function main() returns ExitCode
-	var a = Box{value: 7}
+	var a = Box.create(value: 7)
 	if a.equals(a) 'check'
 		return 0
 	end 'check'
@@ -195,6 +215,10 @@ type Id implements Equatable
 	function equals(other Id) returns bool
 		return n == other.n
 	end 'equals'
+
+	static function create(n Integer) returns Self
+		return Self{n: n}
+	end 'create'
 end 'Id'
 
 function areEqual(a Id, b Id) returns bool
@@ -202,9 +226,9 @@ function areEqual(a Id, b Id) returns bool
 end 'areEqual'
 
 function main() returns ExitCode
-	var x = Id{n: 5}
-	var y = Id{n: 5}
-	var z = Id{n: 6}
+	var x = Id.create(n: 5)
+	var y = Id.create(n: 5)
+	var z = Id.create(n: 6)
 	if areEqual(x, b: y) 'eq'
 		if areEqual(x, b: z) 'neq'
 			return 1
@@ -229,12 +253,16 @@ type Token implements Equatable
 	function equals(other Token) returns bool
 		return id == other.id
 	end 'equals'
+
+	static function create(id Integer) returns Self
+		return Self{id: id}
+	end 'create'
 end 'Token'
 
 function main() returns ExitCode
-	var a = Token{id: 10}
-	var b = Token{id: 10}
-	var c = Token{id: 20}
+	var a = Token.create(id: 10)
+	var b = Token.create(id: 10)
+	var c = Token.create(id: 20)
 	var result = 0
 	if a.equals(b) 'first'
 		result = result + 1

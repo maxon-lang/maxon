@@ -167,7 +167,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
 function main() returns ExitCode
-	var arr = IntArray{}
+	var arr = IntArray.empty()
 	print("{arr.count()}\n")
 	return 0
 end 'main'

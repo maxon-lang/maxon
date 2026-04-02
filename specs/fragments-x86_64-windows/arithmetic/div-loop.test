@@ -19,44 +19,35 @@ end 'main'
 ExitCode: 228
 ---
 module {
-  func @div-loop.divLoop(ptr: i64) -> i64 {
+  func @arithmetic.divLoop(n: i64) -> i64 {
   entry:
     x86.prologue stack_size=32
+    x86.mov [rbp-8], rcx
     x86.xor rax, rax
-    x86.mov [rbp-8], rax
-    x86.mov [rbp+-24], rcx
-    x86.mov rax, 1
     x86.mov [rbp-16], rax
-  loop_1.header:
-    x86.mov rax, [rbp-8]
-    x86.mov rcx, [rbp-16]
-    x86.mov rdx, [rbp+-24]
-    x86.cmp rcx, rdx
-    x86.jg loop_1.exit
-  loop_1:
-    x86.mov rax, [rbp+-16]
-    x86.mov rcx, rax
-    x86.add rcx, 1
-    x86.mov rax, 100
-    x86.cqo
-    x86.mov rbx, [rbp+-16]
-    x86.idiv rbx
-    x86.mov rdx, [rbp+-8]
-    x86.mov rbx, rdx
-    x86.add rbx, rax
-    x86.mov [rbp-8], rbx
-    x86.mov [rbp-16], rcx
-    x86.jmp loop_1.header
-  loop_1.exit:
-    x86.mov rax, [rbp+-8]
-    x86.mov rcx, -9223372036854775807
+    x86.mov rax, 1
+    x86.mov [rbp-24], rax
+    x86.jmp arithmetic.divLoop.loop_0.header
+  loop_0.header:
+    x86.mov rax, [rbp-24]
+    x86.mov rcx, [rbp-8]
     x86.cmp rax, rcx
-    x86.jge __range_ok_1
-  __range_panic_1:
-    x86.lea rax, [rip+__panic_msg_1]
-    x86.mov rcx, rax
-    x86.call mrt_panic
-  __range_ok_1:
+    x86.jg arithmetic.divLoop.loop_0.exit
+  loop_0:
+    x86.mov rax, 100
+    x86.mov rcx, [rbp-24]
+    x86.cqo
+    x86.idiv rcx
+    x86.mov rdx, [rbp-16]
+    x86.add rdx, rax
+    x86.mov [rbp-16], rdx
+    x86.mov rbx, 1
+    x86.mov rsi, [rbp-24]
+    x86.add rsi, rbx
+    x86.mov [rbp-24], rsi
+    x86.jmp arithmetic.divLoop.loop_0.header
+  loop_0.exit:
+    x86.mov rax, [rbp-16]
     x86.epilogue
     x86.ret
   }
@@ -64,19 +55,19 @@ module {
   entry:
     x86.prologue stack_size=16
     x86.mov rcx, 5
-    x86.call div-loop.divLoop
-    x86.test rax, rax
-    x86.setl rcx
+    x86.call arithmetic.divLoop
+    x86.xor rcx, rcx
     x86.mov rdx, 4294967295
     x86.cmp rax, rdx
-    x86.setg rdx
-    x86.or rcx, rdx
-    x86.je __range_ok_2
-  __range_panic_2:
-    x86.lea rax, [rip+__panic_msg_2]
+    x86.jg main.__range_panic_0
+    x86.cmp rax, rcx
+    x86.jl main.__range_panic_0
+    x86.jmp main.__range_ok_0
+  __range_panic_0:
+    x86.lea_symdata rax, [__panic_msg_0]
     x86.mov rcx, rax
     x86.call mrt_panic
-  __range_ok_2:
+  __range_ok_0:
     x86.epilogue
     x86.ret
   }

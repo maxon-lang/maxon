@@ -17,7 +17,7 @@ The compiler validates that function and method arguments match the expected par
 typealias StringArray = Array with String
 
 function main() returns ExitCode
-	var arr = StringArray{}
+	var arr = StringArray.empty()
 	arr.append("hello")
 	return 0
 end 'main'
@@ -32,7 +32,7 @@ typealias Int = int(i64.min to i64.max)
 typealias IntArray = Array with Int
 
 function main() returns ExitCode
-	var arr = IntArray{}
+	var arr = IntArray.empty()
 	arr.push("hello")
 	return 0
 end 'main'
@@ -92,6 +92,10 @@ end 'Point'
 type Size
 	export var w Integer
 	export var h Integer
+
+	static function create(w Integer, h Integer) returns Self
+		return Self{w: w, h: h}
+	end 'create'
 end 'Size'
 
 function takePoint(p Point) returns Integer
@@ -99,13 +103,13 @@ function takePoint(p Point) returns Integer
 end 'takePoint'
 
 function main() returns ExitCode
-	var s = Size{}
+	var s = Size.create(5, h: 10)
 	takePoint(s)
 	return 0
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/fragments/type-checking/function-call-wrong-struct-type.test:21:2: argument type mismatch for 'p': expected 'Point', got 'Size'
+error E3005: specs/fragments/type-checking/function-call-wrong-struct-type.test:25:2: argument type mismatch for 'p': expected 'Point', got 'Size'
 ```
 
 <!-- test: stdlib-function-call-wrong-type -->
@@ -147,8 +151,8 @@ typealias IntArray = Array with Int
 typealias StringArray = Array with String
 
 function main() returns ExitCode
-	var ints = IntArray{}
-	var strings = StringArray{}
+	var ints = IntArray.empty()
+	var strings = StringArray.empty()
 	ints.append(strings)
 	return 0
 end 'main'
@@ -166,11 +170,15 @@ typealias FooArray = Array with Foo
 
 type Foo
 	let value Integer
+
+	static function create(value Integer) returns Self
+		return Self{value: value}
+	end 'create'
 end 'Foo'
 
 function main() returns ExitCode
-	var arr = FooArray{}
-	arr.push(Foo{value: 42})
+	var arr = FooArray.empty()
+	arr.push(Foo.create(value: 42))
 	return arr.count() - 1
 end 'main'
 ```
@@ -186,17 +194,25 @@ typealias Integer = int(i64.min to i64.max)
 
 type Container
 	export var items ItemArray
+
+	static function create(items ItemArray) returns Self
+		return Self{items: items}
+	end 'create'
 end 'Container'
 
 typealias ItemArray = Array with Item
 
 type Item
 	export let value Integer
+
+	static function create(value Integer) returns Self
+		return Self{value: value}
+	end 'create'
 end 'Item'
 
 function main() returns ExitCode
-	var c = Container{items: ItemArray{}}
-	c.items.push(Item{value: 7})
+	var c = Container.create(items: ItemArray.empty())
+	c.items.push(Item.create(value: 7))
 	return c.items.count()
 end 'main'
 ```

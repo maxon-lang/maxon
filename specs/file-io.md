@@ -283,7 +283,7 @@ Hello World
 function main() returns ExitCode
 	let path = FilePath from "test_binary.bin"
 	// Create a byte array with known values
-	var data = ByteArray{}
+	var data = ByteArray.empty()
 	data.push(65 as Byte)
 	data.push(66 as Byte)
 	data.push(67 as Byte)

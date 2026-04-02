@@ -10,6 +10,10 @@ export type BuildConfig
 	export var sources StringArray
 	export var optimize bool
 	export var debug_info bool
+
+	export static function create(name String, output String, sources StringArray, optimize bool, debug_info bool) returns BuildConfig
+		return BuildConfig{name: name, output: output, sources: sources, optimize: optimize, debug_info: debug_info}
+	end 'create'
 end 'BuildConfig'
 
 export type Build
@@ -18,15 +22,9 @@ export type Build
 	/// Simple build - emits JSON config for the compiler to parse
 	/// name: the executable name (required)
 	export static function build(name String)
-		var emptySources = StringArray{}
+		var emptySources = StringArray.empty()
 		var outputPath = "bin/{name}.exe"
-		var config = BuildConfig{
-			name: name,
-			output: outputPath,
-			sources: emptySources,
-			optimize: false,
-			debug_info: false
-		}
+		var config = BuildConfig.create(name, output: outputPath, sources: emptySources, optimize: false, debug_info: false)
 		Build.emitBuildConfig(config: config)
 	end 'build'
 

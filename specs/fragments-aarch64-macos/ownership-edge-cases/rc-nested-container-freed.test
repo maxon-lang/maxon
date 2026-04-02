@@ -3,18 +3,26 @@ typealias Integer = int(i64.min to i64.max)
 
 type Inner
   export var v Integer
+
+  static function create(v Integer) returns Self
+  	return Self{v: v}
+  end 'create'
 end 'Inner'
 
 type Wrapper
   export var inner Inner
+
+  static function create(inner Inner) returns Self
+  	return Self{inner: inner}
+  end 'create'
 end 'Wrapper'
 
 typealias WrapperArray = Array with Wrapper
 
 function main() returns ExitCode
-  var arr = WrapperArray{}
-  arr.push(Wrapper{inner: Inner{v: 1}})
-  arr.push(Wrapper{inner: Inner{v: 2}})
+  var arr = WrapperArray.empty()
+  arr.push(Wrapper.create(inner: Inner.create(v: 1)))
+  arr.push(Wrapper.create(inner: Inner.create(v: 2)))
   return arr.count()
 end 'main'
 ---

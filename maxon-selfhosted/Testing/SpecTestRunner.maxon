@@ -209,7 +209,7 @@ function updateAllRequiredLowering(specDir FilePath, tempDir FilePath, filter St
 			continue
 		end 'isDraft'
 		let tests = parseSpecFile(content, targetKey: targetKey)
-		var results = TestResultArray{}
+		var results = TestResultArray.empty()
 		for test in tests 'eachTest'
 			if not filter.isEmpty() 'hasFilter'
 				let testPath = "{specName}/{test.name}"
@@ -222,7 +222,7 @@ function updateAllRequiredLowering(specDir FilePath, tempDir FilePath, filter St
 			end 'skipErrorTest'
 			let loweringLog = captureLoweringLog(test.source, testName: test.name, specName: specName, tempDir: tempDir, target: target)
 			if not loweringLog.isEmpty() 'hasLog'
-				results.push(TestResult{testName: test.name, passed: true, errorMessage: "", filePath: "", loweringLog: loweringLog, compileIr: ""})
+				results.push(TestResult.create(test.name, passed: true, errorMessage: "", filePath: "", loweringLog: loweringLog, compileIr: ""))
 			end 'hasLog'
 		end 'eachTest'
 		if results.count() > 0 'hasResults'
@@ -292,7 +292,7 @@ export function runAllSpecTests(filter String, target Target, updateRequired boo
 
 		var specPassed = 0
 		var specFailed = 0
-		var specFailures = TextLineArray{}
+		var specFailures = TextLineArray.empty()
 
 		for test in tests 'eachTest'
 			// Apply filter
@@ -403,14 +403,14 @@ function runTestFromFragment(fragment Fragment, projectRoot FilePath, target Tar
 			let actualStderr = normalizeStderr(capturedErrors)
 			if actualStderr != expectedStderr 'stderrMismatch'
 				cleanup(tempExe)
-				return TestResult{testName: testName, passed: false, errorMessage: "Stderr mismatch.\nExpected:\n  {expectedStderr}\nActual:\n  {actualStderr}", filePath: fragment.filePath, loweringLog: "", compileIr: ""}
+				return TestResult.create(testName, passed: false, errorMessage: "Stderr mismatch.\nExpected:\n  {expectedStderr}\nActual:\n  {actualStderr}", filePath: fragment.filePath, loweringLog: "", compileIr: "")
 			end 'stderrMismatch'
 			cleanup(tempExe)
-			return TestResult{testName: testName, passed: true, errorMessage: "", filePath: fragment.filePath, loweringLog: "", compileIr: ""}
+			return TestResult.create(testName, passed: true, errorMessage: "", filePath: fragment.filePath, loweringLog: "", compileIr: "")
 		end 'expectedError'
 
 		cleanup(tempExe)
-		return TestResult{testName: testName, passed: false, errorMessage: "Compilation failed: {capturedErrors}", filePath: fragment.filePath, loweringLog: "", compileIr: ""}
+		return TestResult.create(testName, passed: false, errorMessage: "Compilation failed: {capturedErrors}", filePath: fragment.filePath, loweringLog: "", compileIr: "")
 	end 'compileFailed'
 	cancelCapturingErrors()
 	let outputPath = compileResult.outputPath
@@ -425,13 +425,13 @@ function runTestFromFragment(fragment Fragment, projectRoot FilePath, target Tar
 
 	if fragment.expectation.hasCompilerStderr 'unexpectedSuccess'
 		cleanup(tempExe)
-		return TestResult{testName: testName, passed: false, errorMessage: "Expected compilation error but compilation succeeded", filePath: fragment.filePath, loweringLog: "", compileIr: ""}
+		return TestResult.create(testName, passed: false, errorMessage: "Expected compilation error but compilation succeeded", filePath: fragment.filePath, loweringLog: "", compileIr: "")
 	end 'unexpectedSuccess'
 
 	// For targets we can't execute, compilation success is the test
 	if not canExecuteTarget(target) 'compileOnly'
 		cleanup(tempExe)
-		return TestResult{testName: testName, passed: true, errorMessage: "", filePath: fragment.filePath, loweringLog: "", compileIr: ""}
+		return TestResult.create(testName, passed: true, errorMessage: "", filePath: fragment.filePath, loweringLog: "", compileIr: "")
 	end 'compileOnly'
 
 	// Run the compiled executable
@@ -509,7 +509,7 @@ function runTestFromFragment(fragment Fragment, projectRoot FilePath, target Tar
 	end 'didPass'
 
 	cleanup(tempExe)
-	return TestResult{testName: testName, passed: passed, errorMessage: errorMsg, filePath: fragment.filePath, loweringLog: loweringLog, compileIr: compileIr}
+	return TestResult.create(testName, passed: passed, errorMessage: errorMsg, filePath: fragment.filePath, loweringLog: loweringLog, compileIr: compileIr)
 end 'runTestFromFragment'
 
 // Normalize stderr for comparison: trim, CRLF→LF, backslash→forward slash,
@@ -596,15 +596,19 @@ end 'cleanup'
 type LoweringCheckResult
 	export var passed bool
 	export var message String
+
+	static function create(passed bool, message String) returns LoweringCheckResult
+		return Self{passed: passed, message: message}
+	end 'create'
 end 'LoweringCheckResult'
 
 function checkRequiredLowering(expected String, actual String) returns LoweringCheckResult
 	let expNorm = normalizeLowering(expected)
 	let actNorm = normalizeLowering(actual)
 	if expNorm != actNorm 'mismatch'
-		return LoweringCheckResult{passed: false, message: "Lowering mismatch.\nExpected:\n{expNorm}\nActual:\n{actNorm}"}
+		return LoweringCheckResult.create(false, message: "Lowering mismatch.\nExpected:\n{expNorm}\nActual:\n{actNorm}")
 	end 'mismatch'
-	return LoweringCheckResult{passed: true, message: ""}
+	return LoweringCheckResult.create(true, message: "")
 end 'checkRequiredLowering'
 
 function normalizeLowering(text String) returns String

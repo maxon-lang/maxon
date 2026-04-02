@@ -26,7 +26,7 @@ You can also create an empty map with a type alias:
 ```text
 typealias Integer = int(i64.min to i64.max)
 typealias IntIntMap = Map with (Integer, Integer)
-var m = IntIntMap{}
+var m = IntIntMap.empty()
 ```
 
 ## Methods
@@ -313,12 +313,16 @@ typealias StrMap = Map with (String, String)
 
 type Container
 	export var data StrMap
+
+	static function create(data StrMap) returns Self
+		return Self{data: data}
+	end 'create'
 end 'Container'
 
 function main() returns ExitCode
-	var m = StrMap{}
+	var m = StrMap.empty()
 	m.insert("key", value: "val")
-	var c = Container{data: m}
+	var c = Container.create(data: m)
 	var result = try c.data.get("key") otherwise ""
 	if result == "val" 'check'
 		return 42

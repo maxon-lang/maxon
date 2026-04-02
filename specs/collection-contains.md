@@ -143,7 +143,7 @@ typealias Int = int(i64.min to i64.max)
 typealias IntArray = Array with Int
 
 function main() returns ExitCode
-	var arr = IntArray{}
+	var arr = IntArray.empty()
 	if arr.contains(1) 'check'
 		return 1
 	end 'check'
@@ -267,7 +267,7 @@ typealias IntArray = Array with Int
 
 function main() returns ExitCode
 	var arr = [1, 2, 3]
-	if arr.contains(sequence: IntArray{}) 'check'
+	if arr.contains(sequence: IntArray.empty()) 'check'
 		return 1
 	end 'check'
 	return 0

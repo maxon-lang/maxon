@@ -7,12 +7,20 @@ typealias RelocSlotIndex = int(0 to u64.max)
 export type Relocation
 	export var codeOffset CodeOffset
 	export var slotIndex RelocSlotIndex
+
+	export static function create(codeOffset CodeOffset, slotIndex RelocSlotIndex) returns Relocation
+		return Self{codeOffset: codeOffset, slotIndex: slotIndex}
+	end 'create'
 end 'Relocation'
 export typealias RelocationArray = Array with Relocation
 
 export type CallFixup
 	export var codeOffset CodeOffset
 	export var targetName ByteArray
+
+	export static function create(codeOffset CodeOffset, targetName ByteArray) returns CallFixup
+		return Self{codeOffset: codeOffset, targetName: targetName}
+	end 'create'
 end 'CallFixup'
 export typealias CallFixupArray = Array with CallFixup
 
@@ -22,4 +30,8 @@ export type CodeResult
 	export var relocations RelocationArray
 	export var globalData GlobalDataTable
 	export var targetModule MlirModule
+
+	export static function create(code ByteArray, mainCallFixupOffset CodeOffset, relocations RelocationArray, globalData GlobalDataTable, targetModule MlirModule) returns CodeResult
+		return Self{code: code, mainCallFixupOffset: mainCallFixupOffset, relocations: relocations, globalData: globalData, targetModule: targetModule}
+	end 'create'
 end 'CodeResult'

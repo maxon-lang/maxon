@@ -476,11 +476,15 @@ end 'isExtendedPictographic'
 type GraphemeState
 	export var riCount Count  // Count of consecutive Regional Indicators (for GB12-13)
 	export var inEmojiSeq bool  // Inside Extended_Pictographic...ZWJ sequence (for GB11)
+
+	static function create(riCount Count, inEmojiSeq bool) returns GraphemeState
+		return GraphemeState{riCount: riCount, inEmojiSeq: inEmojiSeq}
+	end 'create'
 end 'GraphemeState'
 
 // Create initial grapheme state
 function graphemeStateInit() returns GraphemeState
-	return GraphemeState{riCount: 0, inEmojiSeq: false}
+	return GraphemeState.create(0, inEmojiSeq: false)
 end 'graphemeStateInit'
 
 // Check if there should be a grapheme break between two codepoints
@@ -579,7 +583,7 @@ end 'isGraphemeBreak'
 
 // Update grapheme state after processing a codepoint
 function graphemeStateUpdate(state GraphemeState, gbp BreakProperty, cp Codepoint) returns GraphemeState
-	var newState = GraphemeState{riCount: 0, inEmojiSeq: false}
+	var newState = GraphemeState.create(0, inEmojiSeq: false)
 
 	// Track Regional Indicator sequences (gbp == 6)
 	if gbp == 6 'ri_update'

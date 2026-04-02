@@ -1,14 +1,14 @@
 // Test: lazy-static.basic-function-call
 type Config
-	static var _value = Config._makeValue()
+	static var value = Config.makeValue()
 	export var n Count
 
-	static function _makeValue() returns Config
+	static function makeValue() returns Config
 		return Config{n: 42}
-	end '_makeValue'
+	end 'makeValue'
 
 	export static function getValue() returns Config
-		return Config._value
+		return Config.value
 	end 'getValue'
 end 'Config'
 
@@ -20,7 +20,7 @@ end 'main'
 ExitCode: 42
 ---
 module {
-  func @Config._makeValue() -> i64 {
+  func @Config.makeValue() -> i64 {
   entry:
     x86.prologue stack_size=16
     x86.mov rax, 42
@@ -42,11 +42,11 @@ module {
   func @Config.getValue() -> i64 {
   entry:
     x86.prologue stack_size=16
-    x86.movzx rax, byte [rip+Config._value.__initialized]
+    x86.movzx rax, byte [rip+Config.value.__initialized]
     x86.test rax, rax
     x86.je Config.getValue.__lazy_init_2
   __lazy_merge_2:
-    x86.mov rax, qword [rip+Config._value]
+    x86.mov rax, qword [rip+Config.value]
     x86.mov [rbp-8], rax
     x86.mov rcx, [rbp-8]
     x86.call mm_incref
@@ -54,7 +54,7 @@ module {
     x86.epilogue
     x86.ret
   __lazy_init_2:
-    x86.call Config._value.__lazy_init
+    x86.call Config.value.__lazy_init
     x86.jmp Config.getValue.__lazy_merge_2
   }
   func @main() -> u32 {
@@ -87,15 +87,15 @@ module {
     x86.epilogue
     x86.ret
   }
-  func @Config._value.__lazy_init() {
+  func @Config.value.__lazy_init() {
   entry:
     x86.prologue stack_size=16
     x86.mov rax, 1
-    x86.mov byte [rip+Config._value.__initialized], rax
-    x86.call Config._makeValue
+    x86.mov byte [rip+Config.value.__initialized], rax
+    x86.call Config.makeValue
     x86.mov [rbp-8], rax
     x86.mov rcx, [rbp-8]
-    x86.mov rdx, qword [rip+Config._value]
+    x86.mov rdx, qword [rip+Config.value]
     x86.mov [rbp-16], rdx
     x86.test rdx, rdx
     x86.jz __nonnull_skip_1
@@ -105,7 +105,7 @@ module {
     x86.mov rcx, [rbp-8]
     x86.call mm_incref
     x86.mov rbx, [rbp-8]
-    x86.mov qword [rip+Config._value], rbx
+    x86.mov qword [rip+Config.value], rbx
     x86.mov rsi, [rbp-8]
     x86.test rsi, rsi
     x86.jz __nonnull_skip_2
@@ -118,19 +118,19 @@ module {
   func @__maxon_global_cleanup() {
   entry:
     x86.prologue stack_size=16
-    x86.movzx rax, byte [rip+Config._value.__initialized]
+    x86.movzx rax, byte [rip+Config.value.__initialized]
     x86.test rax, rax
-    x86.je __maxon_global_cleanup.__cleanup_skip_Config__value
-  __cleanup_Config__value:
-    x86.mov rax, qword [rip+Config._value]
+    x86.je __maxon_global_cleanup.__cleanup_skip_Config_value
+  __cleanup_Config_value:
+    x86.mov rax, qword [rip+Config.value]
     x86.mov [rbp-8], rax
     x86.test rax, rax
     x86.jz __nonnull_skip_3
     x86.mov rcx, [rbp-8]
     x86.call mm_decref
     x86.label __nonnull_skip_3
-    x86.jmp __maxon_global_cleanup.__cleanup_skip_Config__value
-  __cleanup_skip_Config__value:
+    x86.jmp __maxon_global_cleanup.__cleanup_skip_Config_value
+  __cleanup_skip_Config_value:
     x86.epilogue
     x86.ret
   }

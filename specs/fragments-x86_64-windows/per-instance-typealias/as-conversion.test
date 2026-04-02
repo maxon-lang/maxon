@@ -6,6 +6,10 @@ type Wrapper uses T
 
 	export var value T
 	export var tag Idx
+
+	export static function create(value T, tag Idx) returns Self
+		return Self{value: value, tag: tag}
+	end 'create'
 end 'Wrapper'
 
 typealias IntWrapper = Wrapper with Integer
@@ -16,7 +20,7 @@ function takeStrTag(t StrWrapper.Idx) returns StrWrapper.Idx
 end 'takeStrTag'
 
 function main() returns ExitCode
-	var iw = IntWrapper{value: 1, tag: 7}
+	var iw = IntWrapper.create(value: 1, tag: 7)
 	let intTag = iw.tag
 	let strTag = intTag as StrWrapper.Idx
 	let result = takeStrTag(strTag)
@@ -37,20 +41,64 @@ module {
   func @main() -> u32 {
   entry:
     x86.prologue stack_size=16
-    x86.mov rax, 7
+    x86.mov rcx, 1
+    x86.mov rdx, 7
+    x86.call IntWrapper.create
     x86.mov [rbp-8], rax
-    x86.mov rcx, [rbp-8]
+    x86.mov rax, [rbp-8]
+    x86.mov rcx, [rax+8]
     x86.call per-instance-typealias.takeStrTag
     x86.mov rdx, 7
     x86.cmp rax, rdx
     x86.jne main.check_0.after
   check_0:
+    x86.mov rax, [rbp-8]
+    x86.test rax, rax
+    x86.jz __nonnull_skip_0
+    x86.mov rcx, [rbp-8]
+    x86.call mm_decref
+    x86.label __nonnull_skip_0
     x86.xor rax, rax
     x86.epilogue
     x86.ret
   check_0.after:
+    x86.mov rax, [rbp-8]
+    x86.test rax, rax
+    x86.jz __nonnull_skip_1
+    x86.mov rcx, [rbp-8]
+    x86.call mm_decref
+    x86.label __nonnull_skip_1
     x86.mov rax, 1
     x86.epilogue
+    x86.ret
+  }
+  func @IntWrapper.create(value: i64, tag: i64) -> i64 {
+  entry:
+    x86.prologue stack_size=32
+    x86.mov [rbp-16], rcx
+    x86.mov [rbp-24], rdx
+    x86.mov rcx, 16
+    x86.xor rdx, rdx
+    x86.mov r8, 1
+    x86.call mm_alloc
+    x86.mov [rbp-8], rax
+    x86.mov rax, [rbp-8]
+    x86.mov rcx, [rbp-16]
+    x86.mov [rax+0], rcx
+    x86.mov rdx, [rbp-8]
+    x86.mov rbx, [rbp-24]
+    x86.mov [rdx+8], rbx
+    x86.mov rsi, [rbp-8]
+    x86.mov rcx, [rbp-8]
+    x86.call mm_incref
+    x86.mov rax, [rbp-8]
+    x86.epilogue
+    x86.ret
+  }
+  func @__destruct_IntWrapper(ptr: i64) {
+  entry:
+    x86.jmp __destruct_IntWrapper.done
+  done:
     x86.ret
   }
 }

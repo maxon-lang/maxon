@@ -94,10 +94,14 @@ type Counter
 	function get() returns Integer
 		return count
 	end 'get'
+
+	static function create(count Integer) returns Self
+		return Self{count: count}
+	end 'create'
 end 'Counter'
 
 function main() returns ExitCode
-	var c = Counter{count: 0}
+	var c = Counter.create(count: 0)
 	c.increment()
 	return c.get()
 end 'main'
@@ -121,10 +125,14 @@ type Adder
 	function getTotal() returns Integer
 		return total
 	end 'getTotal'
+
+	static function create(total Integer) returns Self
+		return Self{total: total}
+	end 'create'
 end 'Adder'
 
 function main() returns ExitCode
-	var a = Adder{total: 0}
+	var a = Adder.create(total: 0)
 	a.add(10)
 	a.add(32)
 	return a.getTotal()
@@ -145,10 +153,14 @@ type Calculator
 	function double() returns Integer
 		return value * 2
 	end 'double'
+
+	static function create(value Integer) returns Self
+		return Self{value: value}
+	end 'create'
 end 'Calculator'
 
 function main() returns ExitCode
-	var c = Calculator{value: 21}
+	var c = Calculator.create(value: 21)
 	return c.double()
 end 'main'
 ```
@@ -179,10 +191,14 @@ type Counter
 	function get() returns Integer
 		return count
 	end 'get'
+
+	static function create(count Integer) returns Self
+		return Self{count: count}
+	end 'create'
 end 'Counter'
 
 function main() returns ExitCode
-	var c = Counter{count: 10}
+	var c = Counter.create(count: 10)
 	c.increment()
 	c.increment()
 	c.decrement()
@@ -208,10 +224,14 @@ type Value
 	function get() returns Integer
 		return n
 	end 'get'
+
+	static function create(n Integer) returns Self
+		return Self{n: n}
+	end 'create'
 end 'Value'
 
 function main() returns ExitCode
-	var v = Value{n: 0}
+	var v = Value.create(n: 0)
 	v.add(10)
 	v.add(20)
 	v.add(12)

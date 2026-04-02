@@ -5,10 +5,14 @@ typealias Integer = int(i64.min to i64.max)
 type Result
 	export var sum Integer
 	export var product Integer
+
+	static function create(sum Integer, product Integer) returns Self
+		return Self{sum: sum, product: product}
+	end 'create'
 end 'Result'
 
 function compute(a Integer, b Integer) returns Result
-	return Result{sum: a + b, product: a * b}
+	return Result.create(sum: a + b, product: a * b)
 end 'compute'
 
 function main() returns ExitCode
@@ -19,27 +23,38 @@ end 'main'
 ExitCode: 19
 ---
 module {
-  func @challenge-struct-lifetime.compute(a: i64, b: i64) -> i64 {
+  func @Result.create(sum: i64, product: i64) -> i64 {
   entry:
     x86.prologue stack_size=32
-    x86.lea rax, [rcx + rdx]
-    x86.imul rcx, rdx
-    x86.mov [rbp-16], rax
-    x86.mov [rbp-24], rcx
+    x86.mov [rbp-16], rcx
+    x86.mov [rbp-24], rdx
     x86.mov rcx, 16
     x86.xor rdx, rdx
     x86.mov r8, 1
     x86.call mm_alloc
     x86.mov [rbp-8], rax
-    x86.mov rcx, [rbp-8]
-    x86.mov rdx, [rbp-16]
-    x86.mov [rcx+0], rdx
-    x86.mov rbx, [rbp-8]
-    x86.mov rsi, [rbp-24]
-    x86.mov [rbx+8], rsi
-    x86.mov rdi, [rbp-8]
+    x86.mov rax, [rbp-8]
+    x86.mov rcx, [rbp-16]
+    x86.mov [rax+0], rcx
+    x86.mov rdx, [rbp-8]
+    x86.mov rbx, [rbp-24]
+    x86.mov [rdx+8], rbx
+    x86.mov rsi, [rbp-8]
     x86.mov rcx, [rbp-8]
     x86.call mm_incref
+    x86.mov rax, [rbp-8]
+    x86.epilogue
+    x86.ret
+  }
+  func @challenge-struct-lifetime.compute(a: i64, b: i64) -> i64 {
+  entry:
+    x86.prologue stack_size=16
+    x86.lea rax, [rcx + rdx]
+    x86.imul rcx, rdx
+    x86.mov rdx, rcx
+    x86.mov rcx, rax
+    x86.call Result.create
+    x86.mov [rbp-8], rax
     x86.mov rax, [rbp-8]
     x86.epilogue
     x86.ret

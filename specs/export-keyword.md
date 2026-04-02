@@ -126,10 +126,14 @@ export type Point
 	export function sum() returns Integer
 		return x + y
 	end 'sum'
+
+	static function create(x Integer, y Integer) returns Self
+		return Self{x: x, y: y}
+	end 'create'
 end 'Point'
 
 function main() returns ExitCode
-	var p = Point{x: 20, y: 22}
+	var p = Point.create(x: 20, y: 22)
 	return p.sum()
 end 'main'
 ```
@@ -183,7 +187,7 @@ typealias Integer = int(i64.min to i64.max)
 export typealias IntArray = Array with Integer
 
 function main() returns ExitCode
-	var arr = IntArray{}
+	var arr = IntArray.empty()
 	arr.push(42)
 	return try arr.get(0) otherwise 0
 end 'main'
@@ -203,7 +207,7 @@ type Container
 	export var items IntArray
 
 	static function create() returns Self
-		return Container{items: IntArray{}}
+		return Container{items: IntArray.empty()}
 	end 'create'
 
 	function add(n Integer)
@@ -238,7 +242,7 @@ typealias Integer = int(i64.min to i64.max)
 export typealias IntArray = Array with Integer
 
 function makeArray() returns IntArray
-	var arr = IntArray{}
+	var arr = IntArray.empty()
 	arr.push(42)
 	return arr
 end 'makeArray'
@@ -258,7 +262,7 @@ typealias Int = int(i64.min to i64.max)
 typealias IntArray = Array with Int
 
 function main() returns ExitCode
-	var arr = IntArray{}
+	var arr = IntArray.empty()
 	arr.push(42)
 	return try arr.get(0) otherwise 0
 end 'main'
@@ -344,11 +348,15 @@ typealias Integer = int(i64.min to i64.max)
 export type Point
 	export var x Integer
 	export var y Integer
+
+	export static function create(x Integer, y Integer) returns Self
+		return Self{x: x, y: y}
+	end 'create'
 end 'Point'
 
 // --- file: main.maxon
 function main() returns ExitCode
-	var p = Point{x: 20, y: 22}
+	var p = Point.create(x: 20, y: 22)
 	return p.x + p.y
 end 'main'
 ```
@@ -363,16 +371,20 @@ typealias Integer = int(i64.min to i64.max)
 
 type InternalPoint
 	export var x Integer
+
+	static function create(x Integer) returns Self
+		return Self{x: x}
+	end 'create'
 end 'InternalPoint'
 
 // --- file: main.maxon
 function main() returns ExitCode
-	var p = InternalPoint{x: 42}
+	var p = InternalPoint.create(x: 42)
 	return p.x
 end 'main'
 ```
 ```maxoncstderr
-error E2004: main.maxon:2:10: Undefined variable 'InternalPoint'
+error E3008: main.maxon:2:24: function 'InternalPoint.create' is not exported
 ```
 
 <!-- test: exported-enum-cross-file -->
@@ -467,10 +479,14 @@ typealias Integer = int(i64.min to i64.max)
 type InternalPoint
 	export var x Integer
 	export var y Integer
+
+	static function create(x Integer, y Integer) returns Self
+		return Self{x: x, y: y}
+	end 'create'
 end 'InternalPoint'
 
 function main() returns ExitCode
-	var p = InternalPoint{x: 20, y: 22}
+	var p = InternalPoint.create(x: 20, y: 22)
 	return p.x + p.y
 end 'main'
 ```
@@ -501,9 +517,13 @@ typealias SmallInt = int(0 to u8.max)
 
 export type Counter
 		export var value SmallInt
+
+		export static function create(value SmallInt) returns Self
+			return Self{value: value}
+		end 'create'
 end 'Counter'
 
-export var shared = Counter{value: 0}
+export var shared = Counter.create(value: 0)
 
 // --- file: main.maxon
 function main() returns ExitCode

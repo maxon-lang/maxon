@@ -429,7 +429,7 @@ end 'Item'
 typealias ItemArray = Array with Item
 
 function main() returns ExitCode
-		var items = ItemArray{}
+		var items = ItemArray.empty()
 		items.push(Item.value(10))
 		items.push(Item.value(20))
 		items.push(Item.empty)
@@ -457,7 +457,7 @@ end 'Item'
 typealias ItemArray = Array with Item
 
 function main() returns ExitCode
-		var items = ItemArray{}
+		var items = ItemArray.empty()
 		items.push(Item.value(10))
 		items.push(Item.value(20))
 		items.push(Item.value(12))
@@ -488,7 +488,7 @@ end 'Slot'
 typealias SlotArray = Array with Slot
 
 function main() returns ExitCode
-		var slots = SlotArray{}
+		var slots = SlotArray.empty()
 		slots.push(Slot.val(5))
 		slots.push(Slot.none)
 		slots.push(Slot.val(3))
@@ -519,7 +519,7 @@ end 'Box'
 typealias BoxArray = Array with Box
 
 function main() returns ExitCode
-		var boxes = BoxArray{}
+		var boxes = BoxArray.empty()
 		boxes.push(Box.full(42))
 		var result = 0
 		for b in boxes 'loop'
@@ -1098,6 +1098,10 @@ typealias Integer = int(i64.min to i64.max)
 type EnumPoint
 	export var x Integer
 	export var y Integer
+
+	static function create(x Integer, y Integer) returns Self
+		return Self{x: x, y: y}
+	end 'create'
 end 'EnumPoint'
 
 enum Shape
@@ -1106,7 +1110,7 @@ enum Shape
 end 'Shape'
 
 function main() returns ExitCode
-	var s = Shape.rect(EnumPoint{x: 10, y: 20})
+	var s = Shape.rect(EnumPoint.create(x: 10, y: 20))
 	match s 'handle'
 		circle(r) then return r
 		rect(p) then return p.x + p.y

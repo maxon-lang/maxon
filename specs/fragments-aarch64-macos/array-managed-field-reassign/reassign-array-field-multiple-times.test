@@ -9,16 +9,24 @@ end 'Tag'
 
 type Entry
     export var tag Tag
+
+    static function create(tag Tag) returns Self
+    	return Self{tag: tag}
+    end 'create'
 end 'Entry'
 
 typealias EntryArray = Array with Entry
 
 type Store
     export var entries EntryArray
+
+    static function create(entries EntryArray) returns Self
+    	return Self{entries: entries}
+    end 'create'
 end 'Store'
 
 function removeNone(store Store)
-    var kept = EntryArray{}
+    var kept = EntryArray.empty()
     for e in store.entries 'scan'
         match e.tag 'check'
             none then continue
@@ -30,14 +38,14 @@ function removeNone(store Store)
 end 'removeNone'
 
 function main() returns ExitCode
-    var entries = EntryArray{}
-    entries.push(Entry{tag: Tag.name("first long string for heap allocation purposes")})
-    entries.push(Entry{tag: Tag.none})
-    entries.push(Entry{tag: Tag.id(42)})
-    entries.push(Entry{tag: Tag.none})
-    entries.push(Entry{tag: Tag.name("second long string for heap allocation purposes")})
-    entries.push(Entry{tag: Tag.none})
-    let store = Store{entries: entries}
+    var entries = EntryArray.empty()
+    entries.push(Entry.create(tag: Tag.name("first long string for heap allocation purposes")))
+    entries.push(Entry.create(tag: Tag.none))
+    entries.push(Entry.create(tag: Tag.id(42)))
+    entries.push(Entry.create(tag: Tag.none))
+    entries.push(Entry.create(tag: Tag.name("second long string for heap allocation purposes")))
+    entries.push(Entry.create(tag: Tag.none))
+    let store = Store.create(entries: entries)
     removeNone(store)
     removeNone(store)
     removeNone(store)

@@ -37,11 +37,15 @@ typealias Latency = int(0 to 50)
 
 type Meta
 	export let value Latency
+
+	static function create(value Latency) returns Self
+		return Self{value: value}
+	end 'create'
 end 'Meta'
 
 enum TestOp
-	add = Meta{value: 1}
-	mul = Meta{value: 3}
+	add = Meta.create(value: 1)
+	mul = Meta.create(value: 3)
 end 'TestOp'
 
 function main() returns ExitCode
@@ -63,12 +67,16 @@ typealias Throughput = int(0 to 10)
 type OpInfo
 	export let latency Latency
 	export let throughput Throughput
+
+	static function create(latency Latency, throughput Throughput) returns Self
+		return Self{latency: latency, throughput: throughput}
+	end 'create'
 end 'OpInfo'
 
 enum Instruction
-	add = OpInfo{latency: 1, throughput: 1}
-	mul = OpInfo{latency: 3, throughput: 2}
-	div = OpInfo{latency: 40, throughput: 1}
+	add = OpInfo.create(latency: 1, throughput: 1)
+	mul = OpInfo.create(latency: 3, throughput: 2)
+	div = OpInfo.create(latency: 40, throughput: 1)
 end 'Instruction'
 
 function main() returns ExitCode
@@ -88,12 +96,16 @@ typealias Weight = int(0 to 100)
 
 type Info
 	export let weight Weight
+
+	static function create(weight Weight) returns Self
+		return Self{weight: weight}
+	end 'create'
 end 'Info'
 
 enum Priority
-	low = Info{weight: 1}
-	medium = Info{weight: 5}
-	high = Info{weight: 10}
+	low = Info.create(weight: 1)
+	medium = Info.create(weight: 5)
+	high = Info.create(weight: 10)
 end 'Priority'
 
 function main() returns ExitCode
@@ -113,11 +125,15 @@ typealias Cost = int(0 to 100)
 
 type Metadata
 	export let cost Cost
+
+	static function create(cost Cost) returns Self
+		return Self{cost: cost}
+	end 'create'
 end 'Metadata'
 
 enum Op
-	read = Metadata{cost: 1}
-	write = Metadata{cost: 5}
+	read = Metadata.create(cost: 1)
+	write = Metadata.create(cost: 5)
 end 'Op'
 
 function main() returns ExitCode
@@ -140,12 +156,16 @@ typealias Latency = int(0 to 50)
 
 type Meta
 	export let latency Latency
+
+	static function create(latency Latency) returns Self
+		return Self{latency: latency}
+	end 'create'
 end 'Meta'
 
 enum TestOp
-	add = Meta{latency: 1}
-	sub = Meta{latency: 1}
-	mul = Meta{latency: 3}
+	add = Meta.create(latency: 1)
+	sub = Meta.create(latency: 1)
+	mul = Meta.create(latency: 3)
 end 'TestOp'
 
 function main() returns ExitCode
@@ -171,11 +191,15 @@ typealias Throughput = int(0 to 10)
 type OpInfo
 	export let latency Latency
 	export let throughput Throughput
+
+	static function create(latency Latency, throughput Throughput) returns Self
+		return Self{latency: latency, throughput: throughput}
+	end 'create'
 end 'OpInfo'
 
 enum Instruction
-	add = OpInfo{latency: 1, throughput: 2}
-	mul = OpInfo{latency: 3, throughput: 1}
+	add = OpInfo.create(latency: 1, throughput: 2)
+	mul = OpInfo.create(latency: 3, throughput: 1)
 end 'Instruction'
 
 function main() returns ExitCode
@@ -195,10 +219,14 @@ typealias Value = int(0 to 100)
 
 type Meta
 	export let value Value
+
+	static function create(value Value) returns Self
+		return Self{value: value}
+	end 'create'
 end 'Meta'
 
 enum Mixed
-	a = Meta{value: 1}
+	a = Meta.create(value: 1)
 	b = 42
 end 'Mixed'
 
@@ -207,7 +235,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3032: specs/fragments/enum-struct-backing/error.struct-backing-mixed.test:10:2: raw value type mismatch: 'expected Meta, got int'
+error E3032: specs/fragments/enum-struct-backing/error.struct-backing-mixed.test:14:2: raw value type mismatch: 'expected Meta, got int'
 ```
 
 ### Error: fromRawValue blocked
@@ -218,10 +246,14 @@ typealias Value = int(0 to 100)
 
 type Meta
 	export let value Value
+
+	static function create(value Value) returns Self
+		return Self{value: value}
+	end 'create'
 end 'Meta'
 
 enum TestOp
-	add = Meta{value: 1}
+	add = Meta.create(value: 1)
 end 'TestOp'
 
 function main() returns ExitCode
@@ -230,5 +262,5 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3034: specs/fragments/enum-struct-backing/error.struct-backing-fromRawValue.test:13:15: unknown enum case: 'fromRawValue'
+error E3034: specs/fragments/enum-struct-backing/error.struct-backing-fromRawValue.test:17:15: unknown enum case: 'fromRawValue'
 ```

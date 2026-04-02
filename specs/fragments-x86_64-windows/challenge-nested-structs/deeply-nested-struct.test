@@ -4,84 +4,125 @@ typealias Integer = int(i64.min to i64.max)
 
 type Level1
 	export var value Integer
+
+	static function create(value Integer) returns Self
+		return Self{value: value}
+	end 'create'
 end 'Level1'
 
 type Level2
 	export var inner Level1
+
+	static function create(inner Level1) returns Self
+		return Self{inner: inner}
+	end 'create'
 end 'Level2'
 
 type Level3
 	export var inner Level2
+
+	static function create(inner Level2) returns Self
+		return Self{inner: inner}
+	end 'create'
 end 'Level3'
 
 function main() returns ExitCode
-	var l1 = Level1{value: 42}
-	var l2 = Level2{inner: l1}
-	var l3 = Level3{inner: l2}
+	var l1 = Level1.create(value: 42)
+	var l2 = Level2.create(inner: l1)
+	var l3 = Level3.create(inner: l2)
 	return l3.inner.inner.value
 end 'main'
 ---
 ExitCode: 42
 ---
 module {
-  func @main() -> u32 {
+  func @Level1.create(value: i64) -> i64 {
   entry:
-    x86.prologue stack_size=48
-    x86.mov rax, 42
+    x86.prologue stack_size=16
+    x86.mov [rbp-16], rcx
     x86.mov rcx, 8
     x86.xor rdx, rdx
     x86.mov r8, 1
     x86.call mm_alloc
     x86.mov [rbp-8], rax
-    x86.mov rcx, [rbp-8]
-    x86.mov rdx, 42
-    x86.mov [rcx+0], rdx
-    x86.mov rbx, [rbp-8]
+    x86.mov rax, [rbp-8]
+    x86.mov rcx, [rbp-16]
+    x86.mov [rax+0], rcx
+    x86.mov rdx, [rbp-8]
     x86.mov rcx, [rbp-8]
     x86.call mm_incref
-    x86.lea_func rsi, [__destruct_Level2]
-    x86.mov rdi, rsi
-    x86.mov rdx, rdi
+    x86.mov rax, [rbp-8]
+    x86.epilogue
+    x86.ret
+  }
+  func @Level2.create(inner: i64) -> i64 {
+  entry:
+    x86.prologue stack_size=16
+    x86.mov [rbp-8], rcx
+    x86.lea_func rax, [__destruct_Level2]
+    x86.mov rdx, rax
     x86.mov rcx, 8
     x86.mov r8, 2
     x86.call mm_alloc
     x86.mov [rbp-16], rax
-    x86.mov r8, [rbp-8]
-    x86.mov r9, [rbp-16]
-    x86.mov [r9+0], r8
     x86.mov rcx, [rbp-8]
+    x86.mov rdx, [rbp-16]
+    x86.mov [rdx+0], rcx
     x86.call mm_incref
-    x86.mov rax, [rbp-16]
+    x86.mov rbx, [rbp-16]
     x86.mov rcx, [rbp-16]
     x86.call mm_incref
+    x86.mov rax, [rbp-16]
+    x86.epilogue
+    x86.ret
+  }
+  func @Level3.create(inner: i64) -> i64 {
+  entry:
+    x86.prologue stack_size=16
+    x86.mov [rbp-8], rcx
     x86.lea_func rax, [__destruct_Level3]
-    x86.mov rcx, rax
-    x86.mov rdx, rcx
+    x86.mov rdx, rax
     x86.mov rcx, 8
     x86.mov r8, 3
     x86.call mm_alloc
-    x86.mov [rbp-24], rax
-    x86.mov rax, [rbp-16]
-    x86.mov rcx, [rbp-24]
-    x86.mov [rcx+0], rax
+    x86.mov [rbp-16], rax
+    x86.mov rcx, [rbp-8]
+    x86.mov rdx, [rbp-16]
+    x86.mov [rdx+0], rcx
+    x86.call mm_incref
+    x86.mov rbx, [rbp-16]
     x86.mov rcx, [rbp-16]
     x86.call mm_incref
-    x86.mov rax, [rbp-24]
-    x86.mov rcx, [rbp-24]
-    x86.call mm_incref
-    x86.mov rax, [rbp-24]
-    x86.mov rcx, [rax+0]
-    x86.mov [rbp-32], rcx
-    x86.mov rax, [rbp-32]
-    x86.mov rcx, [rax+0]
-    x86.mov [rbp-40], rcx
-    x86.mov rax, [rbp-40]
-    x86.mov rcx, [rax+0]
+    x86.mov rax, [rbp-16]
+    x86.epilogue
+    x86.ret
+  }
+  func @main() -> u32 {
+  entry:
+    x86.prologue stack_size=48
+    x86.mov rcx, 42
+    x86.call Level1.create
+    x86.mov [rbp-8], rax
+    x86.mov rax, [rbp-8]
+    x86.mov rcx, [rbp-8]
+    x86.call Level2.create
+    x86.mov [rbp-16], rax
+    x86.mov rcx, [rbp-16]
+    x86.call Level3.create
+    x86.mov [rbp-24], rax
+    x86.mov rdx, [rbp-24]
+    x86.mov rbx, [rdx+0]
+    x86.mov [rbp-32], rbx
+    x86.mov rsi, [rbp-32]
+    x86.mov rdi, [rsi+0]
+    x86.mov [rbp-40], rdi
+    x86.mov r8, [rbp-40]
+    x86.mov r9, [r8+0]
     x86.xor rax, rax
-    x86.mov rdx, 4294967295
-    x86.cmp rcx, rdx
+    x86.mov rcx, 4294967295
+    x86.cmp r9, rcx
     x86.jg main.__range_panic_0
-    x86.cmp rcx, rax
+    x86.cmp r9, rax
     x86.jl main.__range_panic_0
     x86.jmp main.__range_ok_0
   __range_panic_0:
@@ -89,9 +130,9 @@ module {
     x86.mov rcx, rax
     x86.call mrt_panic
   __range_ok_0:
-    x86.mov rbx, [rbp-24]
-    x86.mov [rbp-48], rcx
-    x86.test rbx, rbx
+    x86.mov rdx, [rbp-24]
+    x86.mov [rbp-48], r9
+    x86.test rdx, rdx
     x86.jz __nonnull_skip_0
     x86.mov rcx, [rbp-24]
     x86.call mm_decref

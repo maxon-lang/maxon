@@ -4,33 +4,46 @@ typealias IntArray = Array with Integer
 
 export type Module
     export var items IntArray
+
+    static function create(items IntArray) returns Self
+    	return Self{items: items}
+    end 'create'
 end 'Module'
 
 export type Memo
     export var value Module
     export var rev Integer
+
+    static function create(value Module, rev Integer) returns Self
+    	return Self{value: value, rev: rev}
+    end 'create'
 end 'Memo'
 
 export type Database
     export var memo Memo
     export var deps IntArray
+
+    static function create(memo Memo, deps IntArray) returns Self
+    	return Self{memo: memo, deps: deps}
+    end 'create'
 end 'Database'
 
 export type Project
     export var db Database
     export var ready bool
+
+    static function create(db Database, ready bool) returns Self
+    	return Self{db: db, ready: ready}
+    end 'create'
 end 'Project'
 
 function createModule() returns Module
-    return Module{items: IntArray{}}
+    return Module.create(items: IntArray.empty())
 end 'createModule'
 
 function initProject(p Project)
     if not p.ready 'init'
-        p.db = Database{
-            memo: Memo{value: createModule(), rev: 0},
-            deps: IntArray{}
-        }
+        p.db = Database.create(memo: Memo.create(value: createModule(), rev: 0), deps: IntArray.empty())
         p.ready = true
     end 'init'
 end 'initProject'
@@ -43,7 +56,7 @@ function useProject(p Project) returns Integer
 end 'useProject'
 
 function main() returns ExitCode
-    let p = Project{db: Database{memo: Memo{value: Module{items: IntArray{}}, rev: 0}, deps: IntArray{}}, ready: false}
+    let p = Project.create(db: Database{memo: Memo{value: Module{items: IntArray.empty()}, rev: 0}, deps: IntArray.empty()}, ready: false)
     initProject(p)
     return useProject(p)
 end 'main'

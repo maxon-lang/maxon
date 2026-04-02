@@ -76,11 +76,11 @@ function lowerPrintLiteral(data ByteArray, dstBlock MlirBlock, globalData Global
 
 	// constI64 -> lenId
 	let lenId = allocValueId(nextValueIdRef)
-	dstBlock.ops.push(MlirOp.arith(ArithOp.const(ArithConst{opcode: ArithConstOpcode.constI64, resultId: lenId, value: dataLen})))
+	dstBlock.ops.push(MlirOp.arith(ArithOp.const(ArithConst.create(ArithConstOpcode.constI64, resultId: lenId, value: dataLen))))
 
 	// call mrt_write_stdout(addrId, lenId)
 	let callResultId = allocValueId(nextValueIdRef)
-	var argIds = ValueIdArray{}
+	var argIds = ValueIdArray.empty()
 	argIds.push(addrId)
 	argIds.push(lenId)
 	dstBlock.ops.push(MlirOp.func(FuncOp.call(callResultId, b"mrt_write_stdout", argIds)))
@@ -90,7 +90,7 @@ end 'lowerPrintLiteral'
 //   call(mrt_printInt, [valueId])
 function lowerPrintIntToCall(valueId ValueId, dstBlock MlirBlock, nextValueIdRef ValueIdRef)
 	let callResultId = allocValueId(nextValueIdRef)
-	var argIds = ValueIdArray{}
+	var argIds = ValueIdArray.empty()
 	argIds.push(valueId)
 	dstBlock.ops.push(MlirOp.func(FuncOp.call(callResultId, b"mrt_printInt", argIds)))
 end 'lowerPrintIntToCall'
@@ -101,7 +101,7 @@ end 'lowerPrintIntToCall'
 // Registers the panic message as global data with a null-terminated C-string.
 function lowerPanicToSys(message ByteArray, panicId ValueId, dstBlock MlirBlock, globalData GlobalDataTable, nextValueIdRef ValueIdRef)
 	// Build null-terminated message for global data
-	var nullTermMsg = ByteArray{}
+	var nullTermMsg = ByteArray.empty()
 	nullTermMsg.append(message)
 	nullTermMsg.push(0x0A)  // newline
 	nullTermMsg.push(0)     // null terminator
@@ -117,7 +117,7 @@ function lowerPanicToSys(message ByteArray, panicId ValueId, dstBlock MlirBlock,
 
 	// call mrt_panic(addrId)
 	let callResultId = allocValueId(nextValueIdRef)
-	var argIds = ValueIdArray{}
+	var argIds = ValueIdArray.empty()
 	argIds.push(addrId)
 	dstBlock.ops.push(MlirOp.func(FuncOp.call(callResultId, b"mrt_panic", argIds)))
 end 'lowerPanicToSys'

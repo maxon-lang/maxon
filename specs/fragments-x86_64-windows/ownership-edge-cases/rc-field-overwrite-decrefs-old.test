@@ -3,6 +3,10 @@ typealias Integer = int(i64.min to i64.max)
 
 type Payload
 	export var data Integer
+
+	static function create(data Integer) returns Self
+		return Self{data: data}
+	end 'create'
 end 'Payload'
 
 type Container
@@ -11,12 +15,16 @@ type Container
 	export function setPayload(p Payload)
 		payload = p
 	end 'setPayload'
+
+	static function create(payload Payload) returns Self
+		return Self{payload: payload}
+	end 'create'
 end 'Container'
 
 function main() returns ExitCode
-	var old = Payload{data: 1}
-	var c = Container{payload: old}
-	c.setPayload(Payload{data: 2})
+	var old = Payload.create(data: 1)
+	var c = Container.create(payload: old)
+	c.setPayload(Payload.create(data: 2))
 	return c.payload.data
 end 'main'
 ---
@@ -25,28 +33,31 @@ ExitCode: 2
 Stderr: ```
 sl_init
   os_alloc size=67108864
-mm_alloc Payload #1 size=8 [main]
+mm_alloc Payload #1 size=8 [Payload.create]
   sl_alloc Payload #1 size=40 class=4
-mm_incref Payload #1 rc=1 [main]
-mm_alloc Container #2 size=8 [main]
+mm_incref Payload #1 rc=1 [Payload.create]
+mm_transfer Payload #1 rc=1 [Payload.create]
+mm_alloc Container #2 size=8 [Container.create]
   sl_alloc Container #2 size=40 class=4
-mm_incref Payload #1 rc=2 [main]
-mm_incref Container #2 rc=1 [main]
-mm_alloc Payload #3 size=8 [main]
+mm_incref Payload #1 rc=2 [Container.create]
+mm_incref Container #2 rc=1 [Container.create]
+mm_transfer Container #2 rc=1 [Container.create]
+mm_alloc Payload #3 size=8 [Payload.create]
   sl_alloc Payload #3 size=40 class=4
-mm_incref Payload #3 rc=1 [main]
+mm_incref Payload #3 rc=1 [Payload.create]
+mm_transfer Payload #3 rc=1 [Payload.create]
 mm_decref Payload #1 rc=1 [Container.setPayload]
 mm_incref Payload #3 rc=2 [Container.setPayload]
+mm_decref Payload #3 rc=1 [main]
 mm_decref Container #2 rc=0 [main]
-  mm_decref Payload #3 rc=1 [~Container]
+  mm_decref Payload #3 rc=0 [~Container]
+    mm_free Payload #3
+      sl_free Payload #3 size=48 class=4
   mm_free Container #2
     sl_free Container #2 size=48 class=4
 mm_decref Payload #1 rc=0 [main]
   mm_free Payload #1
     sl_free Payload #1 size=48 class=4
-mm_decref Payload #3 rc=0 [main]
-  mm_free Payload #3
-    sl_free Payload #3 size=48 class=4
 mm_raw_alloc #R1 size=40
   sl_alloc size=40 class=4
 mm_raw_free #R1
@@ -54,6 +65,25 @@ mm_raw_free #R1
 ```
 ---
 module {
+  func @Payload.create(data: i64) -> i64 {
+  entry:
+    x86.prologue stack_size=16
+    x86.mov [rbp-16], rcx
+    x86.mov rcx, 8
+    x86.xor rdx, rdx
+    x86.mov r8, 1
+    x86.call mm_alloc
+    x86.mov [rbp-8], rax
+    x86.mov rax, [rbp-8]
+    x86.mov rcx, [rbp-16]
+    x86.mov [rax+0], rcx
+    x86.mov rdx, [rbp-8]
+    x86.mov rcx, [rbp-8]
+    x86.call mm_incref
+    x86.mov rax, [rbp-8]
+    x86.epilogue
+    x86.ret
+  }
   func @Container.setPayload(__self_ptr: i64, p: i64) {
   entry:
     x86.prologue stack_size=32
@@ -79,62 +109,53 @@ module {
     x86.epilogue
     x86.ret
   }
-  func @main() -> u32 {
+  func @Container.create(payload: i64) -> i64 {
   entry:
-    x86.prologue stack_size=48
-    x86.mov rax, 1
-    x86.mov rcx, 8
-    x86.xor rdx, rdx
-    x86.mov r8, 1
-    x86.call mm_alloc
-    x86.mov [rbp-8], rax
-    x86.mov rcx, [rbp-8]
-    x86.mov rdx, 1
-    x86.mov [rcx+0], rdx
-    x86.mov rbx, [rbp-8]
-    x86.mov rcx, [rbp-8]
-    x86.call mm_incref
-    x86.lea_func rsi, [__destruct_Container]
-    x86.mov rdi, rsi
-    x86.mov rdx, rdi
+    x86.prologue stack_size=16
+    x86.mov [rbp-8], rcx
+    x86.lea_func rax, [__destruct_Container]
+    x86.mov rdx, rax
     x86.mov rcx, 8
     x86.mov r8, 2
     x86.call mm_alloc
     x86.mov [rbp-16], rax
-    x86.mov r8, [rbp-8]
-    x86.mov r9, [rbp-16]
-    x86.mov [r9+0], r8
     x86.mov rcx, [rbp-8]
+    x86.mov rdx, [rbp-16]
+    x86.mov [rdx+0], rcx
     x86.call mm_incref
-    x86.mov rax, [rbp-16]
+    x86.mov rbx, [rbp-16]
     x86.mov rcx, [rbp-16]
     x86.call mm_incref
-    x86.mov rax, 2
-    x86.mov rcx, 8
-    x86.xor rdx, rdx
-    x86.mov r8, 1
-    x86.call mm_alloc
-    x86.mov [rbp-24], rax
-    x86.mov rcx, [rbp-24]
-    x86.mov rdx, 2
-    x86.mov [rcx+0], rdx
-    x86.mov rcx, [rbp-24]
-    x86.call mm_incref
     x86.mov rax, [rbp-16]
-    x86.mov rcx, [rbp-24]
+    x86.epilogue
+    x86.ret
+  }
+  func @main() -> u32 {
+  entry:
+    x86.prologue stack_size=48
+    x86.mov rcx, 1
+    x86.call Payload.create
+    x86.mov [rbp-8], rax
+    x86.mov rax, [rbp-8]
+    x86.mov rcx, [rbp-8]
+    x86.call Container.create
+    x86.mov [rbp-16], rax
+    x86.mov rcx, 2
+    x86.call Payload.create
+    x86.mov [rbp-24], rax
     x86.mov rcx, [rbp-16]
     x86.mov rdx, [rbp-24]
     x86.call Container.setPayload
-    x86.mov rax, [rbp-16]
-    x86.mov rcx, [rax+0]
-    x86.mov [rbp-32], rcx
-    x86.mov rax, [rbp-32]
-    x86.mov rcx, [rax+0]
-    x86.xor rax, rax
-    x86.mov rdx, 4294967295
-    x86.cmp rcx, rdx
+    x86.mov rbx, [rbp-16]
+    x86.mov rsi, [rbx+0]
+    x86.mov [rbp-32], rsi
+    x86.mov rdi, [rbp-32]
+    x86.mov r8, [rdi+0]
+    x86.xor r9, r9
+    x86.mov rax, 4294967295
+    x86.cmp r8, rax
     x86.jg main.__range_panic_0
-    x86.cmp rcx, rax
+    x86.cmp r8, r9
     x86.jl main.__range_panic_0
     x86.jmp main.__range_ok_0
   __range_panic_0:
@@ -142,20 +163,19 @@ module {
     x86.mov rcx, rax
     x86.call mrt_panic
   __range_ok_0:
-    x86.mov rbx, [rbp-16]
-    x86.mov [rbp-40], rcx
-    x86.test rbx, rbx
+    x86.mov rcx, [rbp-24]
+    x86.mov [rbp-40], r8
+    x86.test rcx, rcx
     x86.jz __nonnull_skip_1
-    x86.mov rcx, [rbp-16]
     x86.call mm_decref
     x86.label __nonnull_skip_1
-    x86.mov rax, [rbp-8]
+    x86.mov rax, [rbp-16]
     x86.test rax, rax
     x86.jz __nonnull_skip_2
-    x86.mov rcx, [rbp-8]
+    x86.mov rcx, [rbp-16]
     x86.call mm_decref
     x86.label __nonnull_skip_2
-    x86.mov rcx, [rbp-24]
+    x86.mov rcx, [rbp-8]
     x86.test rcx, rcx
     x86.jz __nonnull_skip_3
     x86.call mm_decref

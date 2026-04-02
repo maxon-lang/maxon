@@ -10,7 +10,27 @@ ExitCode: 22
 module {
   func @main() -> u32 {
   entry:
-    x86.mov rax, 22
+    x86.prologue stack_size=16
+    x86.mov rax, 10
+    x86.mov rcx, 3
+    x86.mov rdx, 2
+    x86.imul rax, rdx
+    x86.add rax, rcx
+    x86.mov rbx, 1
+    x86.sub rax, rbx
+    x86.xor rsi, rsi
+    x86.mov rdi, 4294967295
+    x86.cmp rax, rdi
+    x86.jg main.__range_panic_0
+    x86.cmp rax, rsi
+    x86.jl main.__range_panic_0
+    x86.jmp main.__range_ok_0
+  __range_panic_0:
+    x86.lea_symdata rax, [__panic_msg_0]
+    x86.mov rcx, rax
+    x86.call mrt_panic
+  __range_ok_0:
+    x86.epilogue
     x86.ret
   }
 }

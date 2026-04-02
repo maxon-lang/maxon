@@ -51,12 +51,16 @@ export type PipelineContext
 	export var nextValueIdRef ValueIdRef
 	export var target Target
 	export var sourceFileName String
+
+	export static function create(module MlirModule, project Project, globalData GlobalDataTable, nextValueIdRef ValueIdRef, target Target, sourceFileName String) returns PipelineContext
+		return Self{module: module, project: project, globalData: globalData, nextValueIdRef: nextValueIdRef, target: target, sourceFileName: sourceFileName}
+	end 'create'
 end 'PipelineContext'
 
 // Returns the mid-level pipeline (phases 2-5).
 // Shared foundation for both default and mid-only pipelines.
 export function buildMidPipeline() returns PassKindArray
-	var passes = PassKindArray{}
+	var passes = PassKindArray.empty()
 	// Phase 2: Memory Safety
 	passes.push(PassKind.semanticCheck)
 	passes.push(PassKind.deadFunctionElimination)
@@ -79,7 +83,7 @@ end 'buildMidPipeline'
 
 // Returns the backend pipeline (phases 6-7).
 export function buildBackendPipeline() returns PassKindArray
-	var passes = PassKindArray{}
+	var passes = PassKindArray.empty()
 	// Phase 6: Generic Machine Lowering
 	passes.push(PassKind.augmentWithRuntime)
 	passes.push(PassKind.lowerToMir)

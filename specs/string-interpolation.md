@@ -104,11 +104,15 @@ type Point implements Stringable
 	var y Score
 
 	function toString() returns String
-		return {self.y})"
+		return "({self.x}, {self.y})"
 	end 'toString'
+
+	static function create(x Score, y Score) returns Self
+		return Self{x: x, y: y}
+	end 'create'
 end 'Point'
 
-var p = Point{x: 1, y: 2}
+var p = Point.create(x: 1, y: 2)
 print("Location: {p}\n")  // "Location: (1, 2)"
 ```
 
@@ -705,10 +709,14 @@ type Pair implements Stringable
 	function toString() returns String
 		return "[{first}, {second}]"
 	end 'toString'
+
+	static function create(first Integer, second Integer) returns Self
+		return Self{first: first, second: second}
+	end 'create'
 end 'Pair'
 
 function main() returns ExitCode
-	var p = Pair{first: 1, second: 2}
+	var p = Pair.create(first: 1, second: 2)
 	print("{p}\n")
 	return 0
 end 'main'
@@ -740,10 +748,14 @@ type Counter implements Stringable, FormattedStringable
 		end 'verbose'
 		return "{value}"
 	end 'toString'
+
+	static function create(value Integer) returns Self
+		return Self{value: value}
+	end 'create'
 end 'Counter'
 
 function main() returns ExitCode
-	var c = Counter{value: 42}
+	var c = Counter.create(value: 42)
 	print("{c}\n")
 	print("{c:verbose}\n")
 	return 0
@@ -771,6 +783,10 @@ type Name implements Stringable
 	function toString() returns String
 		return "{first} {last}"
 	end 'toString'
+
+	static function create(first String, last String) returns Self
+		return Self{first: first, last: last}
+	end 'create'
 end 'Name'
 
 type Age implements Stringable
@@ -779,11 +795,15 @@ type Age implements Stringable
 	function toString() returns String
 		return "{years} years old"
 	end 'toString'
+
+	static function create(years Integer) returns Self
+		return Self{years: years}
+	end 'create'
 end 'Age'
 
 function main() returns ExitCode
-	var name = Name{first: "John", last: "Doe"}
-	var age = Age{years: 30}
+	var name = Name.create(first: "John", last: "Doe")
+	var age = Age.create(years: 30)
 	print("{name}, {age}\n")
 	return 0
 end 'main'

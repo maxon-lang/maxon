@@ -3,12 +3,16 @@ typealias Integer = int(i64.min to i64.max)
 
 type Widget
 	export var id Integer
+
+	static function create(id Integer) returns Self
+		return Self{id: id}
+	end 'create'
 end 'Widget'
 
 function testNestedBlock(cond bool)
 	var result = 0
 	if cond 'check'
-		@heap var w = Widget{id: 42}
+		@heap var w = Widget.create(id: 42)
 		result = w.id
 	end 'check'
 	print("{result}\n")
@@ -25,6 +29,25 @@ Stdout: ```
 ```
 ---
 module {
+  func @Widget.create(id: i64) -> i64 {
+  entry:
+    x86.prologue stack_size=16
+    x86.mov [rbp-16], rcx
+    x86.mov rcx, 8
+    x86.xor rdx, rdx
+    x86.mov r8, 1
+    x86.call mm_alloc
+    x86.mov [rbp-8], rax
+    x86.mov rax, [rbp-8]
+    x86.mov rcx, [rbp-16]
+    x86.mov [rax+0], rcx
+    x86.mov rdx, [rbp-8]
+    x86.mov rcx, [rbp-8]
+    x86.call mm_incref
+    x86.mov rax, [rbp-8]
+    x86.epilogue
+    x86.ret
+  }
   func @ownership.testNestedBlock(cond: i1) {
   entry:
     x86.prologue stack_size=128
@@ -33,23 +56,14 @@ module {
     x86.test rcx, rcx
     x86.je ownership.testNestedBlock.check_0.merge
   check_0:
-    x86.mov rax, 42
-    x86.mov rcx, 8
-    x86.xor rdx, rdx
-    x86.mov r8, 1
-    x86.call mm_alloc
+    x86.mov rcx, 42
+    x86.call Widget.create
     x86.mov [rbp-16], rax
-    x86.mov rcx, [rbp-16]
-    x86.mov rdx, 42
-    x86.mov [rcx+0], rdx
-    x86.mov rbx, [rbp-16]
-    x86.mov rcx, [rbp-16]
-    x86.call mm_incref
-    x86.mov rsi, [rbp-16]
-    x86.mov rdi, [rsi+0]
-    x86.mov [rbp-8], rdi
-    x86.mov r8, [rbp-16]
-    x86.test r8, r8
+    x86.mov rax, [rbp-16]
+    x86.mov rcx, [rax+0]
+    x86.mov [rbp-8], rcx
+    x86.mov rdx, [rbp-16]
+    x86.test rdx, rdx
     x86.jz __nonnull_skip_0
     x86.mov rcx, [rbp-16]
     x86.call mm_decref
@@ -74,7 +88,7 @@ module {
     x86.mov [rbp-112], rbx
     x86.mov [rbp-120], rdi
     x86.mov rdx, r9
-    x86.mov rcx, 16
+    x86.mov rcx, 32
     x86.mov r8, 2
     x86.call mm_alloc
     x86.mov [rbp-32], rax
@@ -153,6 +167,12 @@ module {
     x86.xor rax, rax
     x86.mov rcx, [rbp-32]
     x86.mov [rcx+8], rax
+    x86.mov rax, -1
+    x86.mov rcx, [rbp-32]
+    x86.mov [rcx+16], rax
+    x86.xor rax, rax
+    x86.mov rcx, [rbp-32]
+    x86.mov [rcx+24], rax
     x86.mov rax, [rbp-32]
     x86.mov rcx, [rbp-32]
     x86.call mm_incref

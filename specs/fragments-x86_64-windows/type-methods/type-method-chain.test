@@ -12,10 +12,14 @@ type Value
 	function get() returns Integer
 		return n
 	end 'get'
+
+	static function create(n Integer) returns Self
+		return Self{n: n}
+	end 'create'
 end 'Value'
 
 function main() returns ExitCode
-	var v = Value{n: 0}
+	var v = Value.create(n: 0)
 	v.add(10)
 	v.add(20)
 	v.add(12)
@@ -47,35 +51,50 @@ module {
     x86.epilogue
     x86.ret
   }
+  func @Value.create(n: i64) -> i64 {
+  entry:
+    x86.prologue stack_size=16
+    x86.mov [rbp-16], rcx
+    x86.mov rcx, 8
+    x86.xor rdx, rdx
+    x86.mov r8, 1
+    x86.call mm_alloc
+    x86.mov [rbp-8], rax
+    x86.mov rax, [rbp-8]
+    x86.mov rcx, [rbp-16]
+    x86.mov [rax+0], rcx
+    x86.mov rdx, [rbp-8]
+    x86.mov rcx, [rbp-8]
+    x86.call mm_incref
+    x86.mov rax, [rbp-8]
+    x86.epilogue
+    x86.ret
+  }
   func @main() -> u32 {
   entry:
     x86.prologue stack_size=16
-    x86.xor rax, rax
+    x86.xor rcx, rcx
+    x86.call Value.create
     x86.mov [rbp-8], rax
-    x86.lea rcx, [rbp-8]
-    x86.mov rdx, rcx
-    x86.mov rcx, rdx
+    x86.mov rax, [rbp-8]
+    x86.mov rcx, [rbp-8]
     x86.mov rdx, 10
     x86.call Value.add
-    x86.lea rbx, [rbp-8]
-    x86.mov rsi, rbx
-    x86.mov rcx, rsi
+    x86.mov rcx, [rbp-8]
     x86.mov rdx, 20
     x86.call Value.add
-    x86.lea rdi, [rbp-8]
-    x86.mov r8, rdi
-    x86.mov rcx, r8
+    x86.mov rdx, [rbp-8]
+    x86.mov rcx, [rbp-8]
     x86.mov rdx, 12
     x86.call Value.add
-    x86.lea r9, [rbp-8]
-    x86.mov rax, r9
-    x86.mov rcx, rax
+    x86.mov rbx, [rbp-8]
+    x86.mov rcx, [rbp-8]
     x86.call Value.get
-    x86.xor rcx, rcx
-    x86.mov rdx, 4294967295
-    x86.cmp rax, rdx
+    x86.xor rsi, rsi
+    x86.mov rdi, 4294967295
+    x86.cmp rax, rdi
     x86.jg main.__range_panic_0
-    x86.cmp rax, rcx
+    x86.cmp rax, rsi
     x86.jl main.__range_panic_0
     x86.jmp main.__range_ok_0
   __range_panic_0:
@@ -83,7 +102,20 @@ module {
     x86.mov rcx, rax
     x86.call mrt_panic
   __range_ok_0:
+    x86.mov rcx, [rbp-8]
+    x86.mov [rbp-16], rax
+    x86.test rcx, rcx
+    x86.jz __nonnull_skip_0
+    x86.call mm_decref
+    x86.label __nonnull_skip_0
+    x86.mov rax, [rbp-16]
     x86.epilogue
+    x86.ret
+  }
+  func @__destruct_Value(ptr: i64) {
+  entry:
+    x86.jmp __destruct_Value.done
+  done:
     x86.ret
   }
 }

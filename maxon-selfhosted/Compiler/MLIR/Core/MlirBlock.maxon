@@ -11,6 +11,10 @@ export typealias BlockIdArray = Array with BlockId
 export type MlirBlockArg
 	export var valueId ValueId
 	export var argType StdType
+
+	export static function create(valueId ValueId, argType StdType) returns MlirBlockArg
+		return Self{valueId: valueId, argType: argType}
+	end 'create'
 end 'MlirBlockArg'
 
 export typealias MlirBlockArgArray = Array with MlirBlockArg
@@ -22,17 +26,21 @@ export type MlirBlock
 	export var terminator MlirOp
 	export var hasTerminator bool
 	export var blockArgs MlirBlockArgArray
+
+	export static function create(id BlockId, label ByteArray) returns MlirBlock
+		return Self{
+			id: id,
+			label: label,
+			ops: MlirOpArray.empty(),
+			terminator: MlirOp.cf(CfOp.br(0, ValueIdArray.empty())),
+			hasTerminator: false,
+			blockArgs: MlirBlockArgArray.empty()
+		}
+	end 'create'
 end 'MlirBlock'
 
 export typealias MlirBlockArray = Array with MlirBlock
 
 export function createMlirBlock(id BlockId, label ByteArray) returns MlirBlock
-	return MlirBlock{
-		id: id,
-		label: label,
-		ops: MlirOpArray{},
-		terminator: MlirOp.cf(CfOp.br(0, ValueIdArray{})),
-		hasTerminator: false,
-		blockArgs: MlirBlockArgArray{}
-	}
+	return MlirBlock.create(id, label: label)
 end 'createMlirBlock'

@@ -64,10 +64,14 @@ typealias Integer = int(i64.min to i64.max)
 type Point
 	export var x Integer
 	export var y Integer
+
+	static function create(x Integer, y Integer) returns Self
+		return Self{x: x, y: y}
+	end 'create'
 end 'Point'
 
 function main() returns ExitCode
-	var a = Point{x: 1, y: 2}
+	var a = Point.create(x: 1, y: 2)
 	var b = a
 	b.x = 99
 	print("{a.x}")
@@ -88,12 +92,16 @@ typealias Integer = int(i64.min to i64.max)
 type Point
 	export var x Integer
 	export var y Integer
+
+	static function create(x Integer, y Integer) returns Self
+		return Self{x: x, y: y}
+	end 'create'
 end 'Point'
 
 function main() returns ExitCode
-	var a = Point{x: 1, y: 2}
+	var a = Point.create(x: 1, y: 2)
 	var b = a
-	b = Point{x: 99, y: 99}
+	b = Point.create(x: 99, y: 99)
 	print("{a.x}")
 	return 0
 end 'main'
@@ -118,10 +126,14 @@ end 'Color'
 type Item
 	export var color Color
 	export var value Integer
+
+	static function create(color Color, value Integer) returns Self
+		return Self{color: color, value: value}
+	end 'create'
 end 'Item'
 
 function main() returns ExitCode
-	var a = Item{color: Color.red, value: 42}
+	var a = Item.create(color: Color.red, value: 42)
 	var b = a
 	b.value = 99
 	return a.value
@@ -138,10 +150,14 @@ typealias Integer = int(i64.min to i64.max)
 type Point
 	export var x Integer
 	export var y Integer
+
+	static function create(x Integer, y Integer) returns Self
+		return Self{x: x, y: y}
+	end 'create'
 end 'Point'
 
 function main() returns ExitCode
-	var a = Point{x: 10, y: 20}
+	var a = Point.create(x: 10, y: 20)
 	var b = a.clone()
 	b.x = 99
 	if a is not b 'diff'
@@ -190,15 +206,23 @@ typealias Integer = int(i64.min to i64.max)
 
 type Inner
 	export var value Integer
+
+	static function create(value Integer) returns Self
+		return Self{value: value}
+	end 'create'
 end 'Inner'
 
 type Outer
 	export var a Inner
 	export var b Integer
+
+	static function create(a Inner, b Integer) returns Self
+		return Self{a: a, b: b}
+	end 'create'
 end 'Outer'
 
 function main() returns ExitCode
-	var x = Outer{a: Inner{value: 42}, b: 10}
+	var x = Outer.create(a: Inner.create(value: 42), b: 10)
 	var y = x.clone()
 	y.a.value = 99
 	y.b = 0
@@ -221,11 +245,15 @@ typealias Integer = int(i64.min to i64.max)
 
 type Callback
 	export var fn () returns Integer
+
+	static function create(fn () returns Integer) returns Self
+		return Self{fn: fn}
+	end 'create'
 end 'Callback'
 
 function main() returns ExitCode
-	var a = Callback{fn: main}
-	var b = Callback{fn: main}
+	var a = Callback.create(fn: main)
+	var b = Callback.create(fn: main)
 	if a == b 'eq'
 		return 1
 	end 'eq'
@@ -233,7 +261,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3069: specs/fragments/memory-safety/eq-requires-equatable.test:11:7: '==' requires type 'Callback' to implement 'Equatable'
+error E3069: specs/fragments/memory-safety/eq-requires-equatable.test:15:7: '==' requires type 'Callback' to implement 'Equatable'
 ```
 
 <!-- test: auto-equatable -->
@@ -243,12 +271,16 @@ typealias Integer = int(i64.min to i64.max)
 type Point
 	export var x Integer
 	export var y Integer
+
+	static function create(x Integer, y Integer) returns Self
+		return Self{x: x, y: y}
+	end 'create'
 end 'Point'
 
 function main() returns ExitCode
-	var a = Point{x: 1, y: 2}
-	var b = Point{x: 1, y: 2}
-	var c = Point{x: 3, y: 4}
+	var a = Point.create(x: 1, y: 2)
+	var b = Point.create(x: 1, y: 2)
+	var c = Point.create(x: 3, y: 4)
 	var result = 0
 	if a == b 'eq1'
 		result = result + 1
@@ -270,10 +302,14 @@ typealias Integer = int(i64.min to i64.max)
 type Point
 	export var x Integer
 	export var y Integer
+
+	static function create(x Integer, y Integer) returns Self
+		return Self{x: x, y: y}
+	end 'create'
 end 'Point'
 
 function main() returns ExitCode
-	var a = Point{x: 1, y: 2}
+	var a = Point.create(x: 1, y: 2)
 	var b = a
 	if a is b 'same'
 		return 1
@@ -292,10 +328,14 @@ typealias Integer = int(i64.min to i64.max)
 type Point
 	export var x Integer
 	export var y Integer
+
+	static function create(x Integer, y Integer) returns Self
+		return Self{x: x, y: y}
+	end 'create'
 end 'Point'
 
 function main() returns ExitCode
-	var a = Point{x: 1, y: 2}
+	var a = Point.create(x: 1, y: 2)
 	var b = a.clone()
 	if a is not b 'diff'
 		return 1
@@ -313,10 +353,14 @@ typealias Integer = int(i64.min to i64.max)
 
 type Resource
 	export var id Integer
+
+	static function create(id Integer) returns Self
+		return Self{id: id}
+	end 'create'
 end 'Resource'
 
 function createAndDrop() returns Integer
-	@heap var r = Resource{id: 42}
+	@heap var r = Resource.create(id: 42)
 	return r.id
 end 'createAndDrop'
 
@@ -335,10 +379,14 @@ typealias Integer = int(i64.min to i64.max)
 type Point
 	export var x Integer
 	export var y Integer
+
+	static function create(x Integer, y Integer) returns Self
+		return Self{x: x, y: y}
+	end 'create'
 end 'Point'
 
 function makeRef() returns Point
-	var local = Point{x: 1, y: 2}
+	var local = Point.create(x: 1, y: 2)
 	return local
 end 'makeRef'
 
@@ -362,12 +410,16 @@ typealias Integer = int(i64.min to i64.max)
 type Point
 	export var x Integer
 	export var y Integer
+
+	static function create(x Integer, y Integer) returns Self
+		return Self{x: x, y: y}
+	end 'create'
 end 'Point'
 
 function main() returns ExitCode
 	var result = 0
 	if true 'block'
-		@heap var p = Point{x: 10, y: 20}
+		@heap var p = Point.create(x: 10, y: 20)
 		result = p.x
 	end 'block'
 	return result
@@ -379,83 +431,101 @@ end 'main'
 ```RequiredMLIR:x86_64-windows
 === maxon
 module {
+  func @Point.create(x: i64, y: i64) -> Point {
+  entry:
+    %0 = maxon.param {index = 0 : i32} {name = x} {type = i64}
+    %1 = maxon.param {index = 1 : i32} {name = y} {type = i64}
+    %2 = maxon.struct_literal @Point
+    maxon.scope_end [x, y]
+    maxon.return %2
+  }
   func @main() -> i64 {
   entry:
-    %14 = maxon.literal {value = 0 : i64}
-    maxon.assign %14 {var = result} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
-    %15 = maxon.literal {value = 1 : i1}
-    maxon.cond_br %15 [then: block_0, else: block_0.merge]
+    %17 = maxon.literal {value = 0 : i64}
+    maxon.assign %17 {var = result} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %18 = maxon.literal {value = 1 : i1}
+    maxon.cond_br %18 [then: block_0, else: block_0.merge]
   block_0:
-    %16 = maxon.literal {value = 10 : i64}
-    %17 = maxon.literal {value = 20 : i64}
-    %18 = maxon.struct_literal @Point
-    maxon.assign %18 {var = p} {decl = 1 : i1} {mut = 1 : i1}
-    %19 = maxon.struct_var_ref p
-    %20 = maxon.field_access .x %19
-    maxon.assign %20 {var = result} {kind = i64} {mut = 1 : i1}
+    %19 = maxon.literal {value = 10 : i64}
+    %20 = maxon.literal {value = 20 : i64}
+    %21 = maxon.call @Point.create %19, %20
+    maxon.assign %21 {var = __call_tmp_21} {decl = 1 : i1}
+    maxon.assign %21 {var = p} {decl = 1 : i1} {mut = 1 : i1}
+    %22 = maxon.struct_var_ref p
+    %23 = maxon.field_access .x %22
+    maxon.assign %23 {var = result} {kind = i64} {mut = 1 : i1}
     maxon.scope_end [p]
     maxon.br block_0.merge
   block_0.merge:
-    %21 = maxon.var_ref {var = result} {type = i64}
-    %22 = maxon.literal {value = 0 : i64}
-    %23 = maxon.binop %21, %22 {op = lt}
-    %24 = maxon.literal {value = 4294967295 : i64}
-    %25 = maxon.binop %21, %24 {op = gt}
-    %26 = maxon.binop %23, %25 {op = or}
-    maxon.cond_br %26 [then: __range_panic_1, else: __range_ok_1]
+    %24 = maxon.var_ref {var = result} {type = i64}
+    %25 = maxon.literal {value = 0 : i64}
+    %26 = maxon.binop %24, %25 {op = lt}
+    %27 = maxon.literal {value = 4294967295 : i64}
+    %28 = maxon.binop %24, %27 {op = gt}
+    %29 = maxon.binop %26, %28 {op = or}
+    maxon.cond_br %29 [then: __range_panic_1, else: __range_ok_1]
   __range_panic_1:
-    maxon.panic "panic at block-scope-struct-release.test:15: Range check failed: value outside typealias 'ExitCode'"
+    maxon.panic "panic at block-scope-struct-release.test:19: Range check failed: value outside typealias 'ExitCode'"
   __range_ok_1:
     maxon.scope_end [result]
-    maxon.return %21
+    maxon.return %24
   }
 }
 === standard
 module {
+  func @Point.create(x: i64, y: i64) -> i64 {
+  entry:
+    %0 = func.param x : StdI64
+    %1 = func.param y : StdI64
+    %2 = arith.constant {value = 16 : i64}
+    %3 = arith.constant {value = 0 : i64}
+    %4 = arith.constant {value = 1 : i64}
+    %5 = std.call_runtime @mm_alloc %2, %3, %4
+    memref.store %5, __struct_2
+    %6 = memref.load __struct_2 : i64
+    memref.store_indirect %0, %6+0
+    %7 = memref.load __struct_2 : i64
+    memref.store_indirect %1, %7+8
+    %8 = memref.load __struct_2 : i64
+    std.call_runtime @mm_incref %8
+    %9 = memref.load __struct_2 : i64
+    func.return %9
+  }
   func @main() -> u32 {
   entry:
-    %0 = arith.constant {value = 0 : i64}
-    memref.store %0, result
-    %1 = arith.constant {value = 1 : i1}
-    cf.cond_br %1 [then: block_0, else: block_0.merge]
+    %10 = arith.constant {value = 0 : i64}
+    memref.store %10, result
+    %11 = arith.constant {value = 1 : i1}
+    cf.cond_br %11 [then: block_0, else: block_0.merge]
   block_0:
-    %2 = arith.constant {value = 10 : i64}
-    %3 = arith.constant {value = 20 : i64}
-    %4 = arith.constant {value = 16 : i64}
-    %5 = arith.constant {value = 0 : i64}
-    %6 = arith.constant {value = 1 : i64}
-    %7 = std.call_runtime @mm_alloc %4, %5, %6
-    memref.store %7, p
-    %8 = memref.load p : i64
-    memref.store_indirect %2, %8+0
-    %9 = memref.load p : i64
-    memref.store_indirect %3, %9+8
-    %10 = memref.load p : i64
-    std.call_runtime @mm_incref %10
-    %11 = memref.load p : i64
-    %12 = memref.load_indirect %11+0
-    memref.store %12, result
-    %13 = memref.load p : i64
-    std.call_runtime_if_nonnull @mm_decref %13
+    %12 = arith.constant {value = 10 : i64}
+    %13 = arith.constant {value = 20 : i64}
+    %14 = func.call @Point.create %12, %13
+    memref.store %14, p
+    %17 = memref.load p : i64
+    %18 = memref.load_indirect %17+0
+    memref.store %18, result
+    %19 = memref.load p : i64
+    std.call_runtime_if_nonnull @mm_decref %19
     cf.br block_0.merge
   block_0.merge:
-    %15 = memref.load result : i64
-    %16 = arith.constant {value = 0 : i64}
-    %17 = arith.cmpi lt %15, %16
-    %18 = arith.constant {value = 4294967295 : i64}
-    %19 = arith.cmpi gt %15, %18
-    %20 = arith.ori1 %17, %19
-    cf.cond_br %20 [then: __range_panic_1, else: __range_ok_1]
+    %21 = memref.load result : i64
+    %22 = arith.constant {value = 0 : i64}
+    %23 = arith.cmpi lt %21, %22
+    %24 = arith.constant {value = 4294967295 : i64}
+    %25 = arith.cmpi gt %21, %24
+    %26 = arith.ori1 %23, %25
+    cf.cond_br %26 [then: __range_panic_1, else: __range_ok_1]
   __range_panic_1:
-    %21 = memref.lea_symdata __panic_msg_0
-    %22 = std.ptr_to_i64 %21
-    std.call_runtime @mrt_panic %22
+    %27 = memref.lea_symdata __panic_msg_0
+    %28 = std.ptr_to_i64 %27
+    std.call_runtime @mrt_panic %28
   __range_ok_1:
-    func.return %15
+    func.return %21
   }
   func @__destruct_Point(ptr: i64) {
   entry:
-    %24 = func.param ptr : StdI64
+    %30 = func.param ptr : StdI64
     cf.br done
   done:
     func.return
@@ -463,6 +533,29 @@ module {
 }
 === x86
 module {
+  func @Point.create(x: i64, y: i64) -> i64 {
+  entry:
+    x86.prologue stack_size=32
+    x86.mov [rbp-16], rcx
+    x86.mov [rbp-24], rdx
+    x86.mov rcx, 16
+    x86.xor rdx, rdx
+    x86.mov r8, 1
+    x86.call mm_alloc
+    x86.mov [rbp-8], rax
+    x86.mov rax, [rbp-8]
+    x86.mov rcx, [rbp-16]
+    x86.mov [rax+0], rcx
+    x86.mov rdx, [rbp-8]
+    x86.mov rbx, [rbp-24]
+    x86.mov [rdx+8], rbx
+    x86.mov rsi, [rbp-8]
+    x86.mov rcx, [rbp-8]
+    x86.call mm_incref
+    x86.mov rax, [rbp-8]
+    x86.epilogue
+    x86.ret
+  }
   func @main() -> u32 {
   entry:
     x86.prologue stack_size=16
@@ -472,27 +565,15 @@ module {
     x86.test rcx, rcx
     x86.je main.block_0.merge
   block_0:
-    x86.mov rax, 10
-    x86.mov rcx, 20
-    x86.mov rcx, 16
-    x86.xor rdx, rdx
-    x86.mov r8, 1
-    x86.call mm_alloc
+    x86.mov rcx, 10
+    x86.mov rdx, 20
+    x86.call Point.create
     x86.mov [rbp-16], rax
-    x86.mov rdx, [rbp-16]
-    x86.mov rbx, 10
-    x86.mov [rdx+0], rbx
-    x86.mov rsi, [rbp-16]
-    x86.mov rdi, 20
-    x86.mov [rsi+8], rdi
-    x86.mov r8, [rbp-16]
-    x86.mov rcx, [rbp-16]
-    x86.call mm_incref
-    x86.mov r9, [rbp-16]
-    x86.mov rax, [r9+0]
-    x86.mov [rbp-8], rax
     x86.mov rax, [rbp-16]
-    x86.test rax, rax
+    x86.mov rcx, [rax+0]
+    x86.mov [rbp-8], rcx
+    x86.mov rdx, [rbp-16]
+    x86.test rdx, rdx
     x86.jz __nonnull_skip_0
     x86.mov rcx, [rbp-16]
     x86.call mm_decref
@@ -682,15 +763,19 @@ typealias Integer = int(i64.min to i64.max)
 
 type Item
 	export var value Integer
+
+	static function create(value Integer) returns Self
+		return Self{value: value}
+	end 'create'
 end 'Item'
 
 typealias ItemArray = Array with Item
 
 function main() returns ExitCode
-	var arr = ItemArray{}
-	var item = Item{value: 7}
+	var arr = ItemArray.empty()
+	var item = Item.create(value: 7)
 	arr.push(item)
-	var got = try arr.get(0) otherwise Item{value: 0}
+	var got = try arr.get(0) otherwise Item.create(value: 0)
 	return got.value
 end 'main'
 ```
@@ -700,213 +785,188 @@ end 'main'
 ```RequiredMLIR:x86_64-windows
 === maxon
 module {
+  func @Item.create(value: i64) -> Item {
+  entry:
+    %0 = maxon.param {index = 0 : i32} {name = value} {type = i64}
+    %1 = maxon.struct_literal @Item
+    maxon.scope_end [value]
+    maxon.return %1
+  }
   func @Item.clone(self: Item) -> Item {
   entry:
-    %0 = maxon.struct_param @Item
-    %1 = maxon.field_access .value %0
-    %2 = maxon.struct_literal @Item
-    maxon.assign %2 {var = __retval_3} {decl = 1 : i1}
-    maxon.scope_end [__retval_3]
-    maxon.return %2
+    %2 = maxon.struct_param @Item
+    %3 = maxon.field_access .value %2
+    %4 = maxon.struct_literal @Item
+    maxon.assign %4 {var = __retval_5} {decl = 1 : i1}
+    maxon.scope_end [__retval_5]
+    maxon.return %4
   }
   func @main() -> i64 {
   entry:
-    %9 = maxon.literal {value = 0 : i64}
-    %10 = maxon.literal {value = 0 : i64}
-    %11 = maxon.literal {value = 0 : i64}
-    %12 = maxon.literal {value = 0 : i64}
-    %13 = maxon.literal {value = 8 : i64}
-    %14 = maxon.struct_literal @__ManagedMemory_Item
-    %15 = maxon.struct_literal @ItemArray
-    maxon.assign %15 {var = arr} {decl = 1 : i1} {mut = 1 : i1}
-    %16 = maxon.literal {value = 7 : i64}
-    %17 = maxon.struct_literal @Item
-    maxon.assign %17 {var = item} {decl = 1 : i1} {mut = 1 : i1}
-    %18 = maxon.struct_var_ref item
-    maxon.call @ItemArray.push %15, %18
-    %19 = maxon.struct_var_ref arr
-    %20 = maxon.literal {value = 0 : i64}
-    %23, %22 = maxon.try_call @ItemArray.get %19, %20
-    %26 = maxon.literal {value = 0 : i64}
-    %27 = maxon.binop %22, %26 {op = ne}
-    maxon.cond_br %27 [then: otherwise_default_error_1, else: otherwise_default_success_2]
+    %11 = maxon.call @ItemArray.empty
+    maxon.assign %11 {var = __call_tmp_11} {decl = 1 : i1}
+    maxon.assign %11 {var = arr} {decl = 1 : i1} {mut = 1 : i1}
+    %12 = maxon.literal {value = 7 : i64}
+    %13 = maxon.call @Item.create %12
+    maxon.assign %13 {var = __call_tmp_13} {decl = 1 : i1}
+    maxon.assign %13 {var = item} {decl = 1 : i1} {mut = 1 : i1}
+    %14 = maxon.struct_var_ref item
+    maxon.call @ItemArray.push %11, %14
+    %15 = maxon.struct_var_ref arr
+    %16 = maxon.literal {value = 0 : i64}
+    %19, %18 = maxon.try_call @ItemArray.get %15, %16
+    %22 = maxon.literal {value = 0 : i64}
+    %23 = maxon.binop %18, %22 {op = ne}
+    maxon.cond_br %23 [then: otherwise_default_error_1, else: otherwise_default_success_2]
   otherwise_default_error_1:
-    %24 = maxon.literal {value = 0 : i64}
-    %25 = maxon.struct_literal @Item
-    maxon.assign %25 {var = __try_result_0} {decl = 1 : i1} {mut = 1 : i1}
+    %20 = maxon.literal {value = 0 : i64}
+    %21 = maxon.call @Item.create %20
+    maxon.assign %21 {var = __call_tmp_21} {decl = 1 : i1}
+    maxon.assign %21 {var = __try_result_0} {decl = 1 : i1} {mut = 1 : i1}
     maxon.br otherwise_default_continue_3
   otherwise_default_success_2:
-    maxon.assign %23 {var = __try_result_0} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %19 {var = __try_result_0} {decl = 1 : i1} {mut = 1 : i1}
     maxon.br otherwise_default_continue_3
   otherwise_default_continue_3:
-    %28 = maxon.struct_var_ref __try_result_0
-    maxon.assign %28 {var = got} {decl = 1 : i1} {mut = 1 : i1}
-    %29 = maxon.struct_var_ref got
-    %30 = maxon.field_access .value %29
-    %31 = maxon.literal {value = 0 : i64}
-    %32 = maxon.binop %30, %31 {op = lt}
-    %33 = maxon.literal {value = 4294967295 : i64}
-    %34 = maxon.binop %30, %33 {op = gt}
-    %35 = maxon.binop %32, %34 {op = or}
-    maxon.cond_br %35 [then: __range_panic_4, else: __range_ok_4]
+    %24 = maxon.struct_var_ref __try_result_0
+    maxon.assign %24 {var = got} {decl = 1 : i1} {mut = 1 : i1}
+    %25 = maxon.struct_var_ref got
+    %26 = maxon.field_access .value %25
+    %27 = maxon.literal {value = 0 : i64}
+    %28 = maxon.binop %26, %27 {op = lt}
+    %29 = maxon.literal {value = 4294967295 : i64}
+    %30 = maxon.binop %26, %29 {op = gt}
+    %31 = maxon.binop %28, %30 {op = or}
+    maxon.cond_br %31 [then: __range_panic_4, else: __range_ok_4]
   __range_panic_4:
-    maxon.panic "panic at array-push-struct-incref.test:15: Range check failed: value outside typealias 'ExitCode'"
+    maxon.panic "panic at array-push-struct-incref.test:19: Range check failed: value outside typealias 'ExitCode'"
   __range_ok_4:
-    maxon.scope_end [arr, item, got, __try_result_0]
-    maxon.return %30
+    maxon.scope_end [arr, item, got, __call_tmp_21, __try_result_0]
+    maxon.return %26
   }
 }
 === standard
 module {
+  func @Item.create(value: i64) -> i64 {
+  entry:
+    %0 = func.param value : StdI64
+    %1 = arith.constant {value = 8 : i64}
+    %2 = arith.constant {value = 0 : i64}
+    %3 = arith.constant {value = 1 : i64}
+    %4 = std.call_runtime @mm_alloc %1, %2, %3
+    memref.store %4, __struct_1
+    %5 = memref.load __struct_1 : i64
+    memref.store_indirect %0, %5+0
+    %6 = memref.load __struct_1 : i64
+    std.call_runtime @mm_incref %6
+    %7 = memref.load __struct_1 : i64
+    func.return %7
+  }
   func @Item.clone(__self_ptr: i64) -> i64 {
   entry:
-    %0 = func.param self : StdI64
-    memref.store %0, self
-    %1 = memref.load self : i64
-    %2 = memref.load_indirect %1+0
-    %3 = arith.constant {value = 8 : i64}
-    %4 = arith.constant {value = 0 : i64}
-    %5 = arith.constant {value = 1 : i64}
-    %6 = std.call_runtime @mm_alloc %3, %4, %5
-    memref.store %6, __retval_3
-    %7 = memref.load __retval_3 : i64
-    memref.store_indirect %2, %7+0
-    %8 = memref.load __retval_3 : i64
-    std.call_runtime @mm_incref %8
-    %9 = memref.load __retval_3 : i64
-    func.return %9
+    %8 = func.param self : StdI64
+    memref.store %8, self
+    %9 = memref.load self : i64
+    %10 = memref.load_indirect %9+0
+    %11 = arith.constant {value = 8 : i64}
+    %12 = arith.constant {value = 0 : i64}
+    %13 = arith.constant {value = 1 : i64}
+    %14 = std.call_runtime @mm_alloc %11, %12, %13
+    memref.store %14, __retval_5
+    %15 = memref.load __retval_5 : i64
+    memref.store_indirect %10, %15+0
+    %16 = memref.load __retval_5 : i64
+    std.call_runtime @mm_incref %16
+    %17 = memref.load __retval_5 : i64
+    func.return %17
   }
   func @main() -> u32 {
   entry:
-    %85 = arith.constant {value = 0 : i64}
-    memref.store %85, __try_result_0
-    %11 = arith.constant {value = 0 : i64}
-    %12 = arith.constant {value = 0 : i64}
-    %13 = arith.constant {value = 0 : i64}
-    %14 = arith.constant {value = 0 : i64}
-    %15 = arith.constant {value = 8 : i64}
-    %16 = arith.constant {value = 32 : i64}
-    %17 = func.ref @__destruct___ManagedMemory_Item
-    %18 = std.ptr_to_i64 %17
-    %19 = arith.constant {value = 2 : i64}
-    %20 = std.call_runtime @mm_alloc %16, %18, %19
-    memref.store %20, __struct_14
-    %21 = memref.load __struct_14 : i64
-    memref.store_indirect %12, %21+0
-    %22 = memref.load __struct_14 : i64
-    memref.store_indirect %13, %22+8
-    %23 = memref.load __struct_14 : i64
-    memref.store_indirect %14, %23+16
-    %24 = memref.load __struct_14 : i64
-    memref.store_indirect %15, %24+24
-    %25 = memref.load __struct_14 : i64
-    %26 = memref.load_indirect %25+24
-    %27 = arith.constant {value = 0 : i64}
-    %28 = memref.lea_symdata __mm_panic_element_size_zero
-    %29 = std.ptr_to_i64 %28
-    std.call_runtime @maxon_bounds_check %27, %26, %29
-    %30 = arith.constant {value = 16 : i64}
-    %31 = func.ref @__destruct_ItemArray
-    %32 = std.ptr_to_i64 %31
-    %33 = arith.constant {value = 3 : i64}
-    %34 = std.call_runtime @mm_alloc %30, %32, %33
-    memref.store %34, arr
-    %35 = memref.load arr : i64
-    memref.store_indirect %11, %35+0
-    %36 = memref.load __struct_14 : i64
-    %37 = memref.load arr : i64
-    memref.store_indirect %36, %37+8
-    std.call_runtime @mm_incref %36
-    %38 = memref.load arr : i64
-    std.call_runtime @mm_incref %38
-    %39 = arith.constant {value = 7 : i64}
-    %40 = arith.constant {value = 8 : i64}
-    %41 = arith.constant {value = 0 : i64}
-    %42 = arith.constant {value = 1 : i64}
-    %43 = std.call_runtime @mm_alloc %40, %41, %42
-    memref.store %43, item
-    %44 = memref.load item : i64
-    memref.store_indirect %39, %44+0
-    %45 = memref.load item : i64
-    std.call_runtime @mm_incref %45
-    %46 = memref.load arr : i64
-    %47 = memref.load item : i64
-    func.call @ItemArray.push %46, %47
-    %48 = arith.constant {value = 0 : i64}
-    %49 = memref.load arr : i64
-    %50, %51 = func.try_call @ItemArray.get %49, %48
-    memref.store %50, __callret_23
-    %52 = arith.constant {value = 0 : i64}
-    %53 = arith.cmpi ne %51, %52
-    cf.cond_br %53 [then: otherwise_default_error_1, else: otherwise_default_success_2]
+    %65 = arith.constant {value = 0 : i64}
+    memref.store %65, __call_tmp_21
+    %66 = arith.constant {value = 0 : i64}
+    memref.store %66, __try_result_0
+    %19 = func.call @ItemArray.empty
+    memref.store %19, arr
+    %22 = arith.constant {value = 7 : i64}
+    %23 = func.call @Item.create %22
+    memref.store %23, item
+    %26 = memref.load arr : i64
+    %27 = memref.load item : i64
+    func.call @ItemArray.push %26, %27
+    %28 = arith.constant {value = 0 : i64}
+    %29 = memref.load arr : i64
+    %30, %31 = func.try_call @ItemArray.get %29, %28
+    memref.store %30, __callret_19
+    %32 = arith.constant {value = 0 : i64}
+    %33 = arith.cmpi ne %31, %32
+    cf.cond_br %33 [then: otherwise_default_error_1, else: otherwise_default_success_2]
   otherwise_default_error_1:
-    %54 = arith.constant {value = 0 : i64}
-    %55 = arith.constant {value = 8 : i64}
-    %56 = arith.constant {value = 0 : i64}
-    %57 = arith.constant {value = 1 : i64}
-    %58 = std.call_runtime @mm_alloc %55, %56, %57
-    memref.store %58, __try_result_0
-    %59 = memref.load __try_result_0 : i64
-    memref.store_indirect %54, %59+0
-    %60 = memref.load __try_result_0 : i64
-    std.call_runtime @mm_incref %60
+    %34 = arith.constant {value = 0 : i64}
+    %35 = func.call @Item.create %34
+    memref.store %35, __call_tmp_21
+    memref.store %35, __try_result_0
+    %38 = memref.load __try_result_0 : i64
+    std.call_runtime @mm_incref %38
     cf.br otherwise_default_continue_3
   otherwise_default_success_2:
-    %61 = memref.load __try_result_0 : i64
-    std.call_runtime_if_nonnull @mm_decref %61
-    %62 = memref.load __callret_23 : i64
-    memref.store %62, __try_result_0
+    %39 = memref.load __try_result_0 : i64
+    std.call_runtime_if_nonnull @mm_decref %39
+    %40 = memref.load __callret_19 : i64
+    memref.store %40, __try_result_0
     cf.br otherwise_default_continue_3
   otherwise_default_continue_3:
-    %63 = memref.load __try_result_0 : i64
-    memref.store %63, got
-    %64 = memref.load got : i64
-    std.call_runtime @mm_incref %64
-    %65 = memref.load got : i64
-    %66 = memref.load_indirect %65+0
-    %67 = arith.constant {value = 0 : i64}
-    %68 = arith.cmpi lt %66, %67
-    %69 = arith.constant {value = 4294967295 : i64}
-    %70 = arith.cmpi gt %66, %69
-    %71 = arith.ori1 %68, %70
-    cf.cond_br %71 [then: __range_panic_4, else: __range_ok_4]
+    %41 = memref.load __try_result_0 : i64
+    memref.store %41, got
+    %42 = memref.load got : i64
+    std.call_runtime @mm_incref %42
+    %43 = memref.load got : i64
+    %44 = memref.load_indirect %43+0
+    %45 = arith.constant {value = 0 : i64}
+    %46 = arith.cmpi lt %44, %45
+    %47 = arith.constant {value = 4294967295 : i64}
+    %48 = arith.cmpi gt %44, %47
+    %49 = arith.ori1 %46, %48
+    cf.cond_br %49 [then: __range_panic_4, else: __range_ok_4]
   __range_panic_4:
-    %72 = memref.lea_symdata __panic_msg_0
-    %73 = std.ptr_to_i64 %72
-    std.call_runtime @mrt_panic %73
+    %50 = memref.lea_symdata __panic_msg_0
+    %51 = std.ptr_to_i64 %50
+    std.call_runtime @mrt_panic %51
   __range_ok_4:
-    %74 = memref.load __try_result_0 : i64
-    std.call_runtime_if_nonnull @mm_decref %74
-    %76 = memref.load got : i64
-    std.call_runtime_if_nonnull @mm_decref %76
-    %78 = memref.load item : i64
-    std.call_runtime_if_nonnull @mm_decref %78
-    %80 = memref.load arr : i64
-    std.call_runtime_if_nonnull @mm_decref %80
-    func.return %66
+    %52 = memref.load __try_result_0 : i64
+    std.call_runtime_if_nonnull @mm_decref %52
+    %54 = memref.load __call_tmp_21 : i64
+    std.call_runtime_if_nonnull @mm_decref %54
+    %56 = memref.load got : i64
+    std.call_runtime_if_nonnull @mm_decref %56
+    %58 = memref.load item : i64
+    std.call_runtime_if_nonnull @mm_decref %58
+    %60 = memref.load arr : i64
+    std.call_runtime_if_nonnull @mm_decref %60
+    func.return %44
   }
   func @__destruct_Item(ptr: i64) {
   entry:
-    %226 = func.param ptr : StdI64
+    %237 = func.param ptr : StdI64
     cf.br done
   done:
     func.return
   }
   func @__destruct___ManagedMemory_Item(ptr: i64) {
   entry:
-    %227 = func.param ptr : StdI64
-    memref.store %227, __destr_ptr
-    %230 = memref.load __destr_ptr : i64
-    %231 = memref.load_indirect %230+16
-    %232 = arith.constant {value = 0 : i64}
-    %233 = arith.cmpi ne %231, %232
-    cf.cond_br %233 [then: free_buf_0, else: skip_buf_0]
+    %238 = func.param ptr : StdI64
+    memref.store %238, __destr_ptr
+    %241 = memref.load __destr_ptr : i64
+    %242 = memref.load_indirect %241+16
+    %243 = arith.constant {value = 0 : i64}
+    %244 = arith.cmpi ne %242, %243
+    cf.cond_br %244 [then: free_buf_0, else: skip_buf_0]
   free_buf_0:
-    %234 = memref.load __destr_ptr : i64
-    std.call_runtime @mm_decref_managed_elements %234
-    %235 = memref.load __destr_ptr : i64
-    %236 = memref.load_indirect %235+0
-    std.call_runtime @mm_raw_free %236
+    %245 = memref.load __destr_ptr : i64
+    std.call_runtime @mm_decref_managed_elements %245
+    %246 = memref.load __destr_ptr : i64
+    %247 = memref.load_indirect %246+0
+    std.call_runtime @mm_raw_free %247
     cf.br skip_buf_0
   skip_buf_0:
     cf.br done
@@ -915,11 +975,11 @@ module {
   }
   func @__destruct_ItemArray(ptr: i64) {
   entry:
-    %237 = func.param ptr : StdI64
-    memref.store %237, __destr_ptr
-    %238 = memref.load __destr_ptr : i64
-    %239 = memref.load_indirect %238+8
-    std.call_runtime_if_nonnull @mm_decref %239
+    %248 = func.param ptr : StdI64
+    memref.store %248, __destr_ptr
+    %249 = memref.load __destr_ptr : i64
+    %250 = memref.load_indirect %249+8
+    std.call_runtime_if_nonnull @mm_decref %250
     cf.br done
   done:
     func.return
@@ -927,6 +987,25 @@ module {
 }
 === x86
 module {
+  func @Item.create(value: i64) -> i64 {
+  entry:
+    x86.prologue stack_size=16
+    x86.mov [rbp-16], rcx
+    x86.mov rcx, 8
+    x86.xor rdx, rdx
+    x86.mov r8, 1
+    x86.call mm_alloc
+    x86.mov [rbp-8], rax
+    x86.mov rax, [rbp-8]
+    x86.mov rcx, [rbp-16]
+    x86.mov [rax+0], rcx
+    x86.mov rdx, [rbp-8]
+    x86.mov rcx, [rbp-8]
+    x86.call mm_incref
+    x86.mov rax, [rbp-8]
+    x86.epilogue
+    x86.ret
+  }
   func @Item.clone(__self_ptr: i64) -> i64 {
   entry:
     x86.prologue stack_size=32
@@ -955,106 +1034,46 @@ module {
     x86.xor rax, rax
     x86.mov [rbp-8], rax
     x86.xor rcx, rcx
-    x86.xor rdx, rdx
-    x86.xor rbx, rbx
-    x86.xor rsi, rsi
-    x86.mov rdi, 8
-    x86.lea_func r8, [__destruct___ManagedMemory_Item]
-    x86.mov r9, r8
-    x86.mov rdx, r9
-    x86.mov rcx, 32
-    x86.mov r8, 2
-    x86.call mm_alloc
-    x86.mov [rbp-16], rax
-    x86.mov rax, [rbp-16]
-    x86.xor rcx, rcx
-    x86.mov [rax+0], rcx
-    x86.mov rax, [rbp-16]
-    x86.xor rcx, rcx
-    x86.mov [rax+8], rcx
-    x86.mov rax, [rbp-16]
-    x86.xor rcx, rcx
-    x86.mov [rax+16], rcx
-    x86.mov rax, [rbp-16]
-    x86.mov rcx, 8
-    x86.mov [rax+24], rcx
-    x86.mov rax, [rbp-16]
-    x86.mov rcx, [rax+24]
-    x86.lea_symdata rax, [__mm_panic_element_size_zero]
-    x86.mov rdx, rax
-    x86.mov r8, rdx
-    x86.mov rdx, rcx
-    x86.xor rcx, rcx
-    x86.call maxon_bounds_check
-    x86.lea_func rax, [__destruct_ItemArray]
-    x86.mov rcx, rax
-    x86.mov rdx, rcx
-    x86.mov rcx, 16
-    x86.mov r8, 3
-    x86.call mm_alloc
+    x86.mov [rbp-16], rcx
+    x86.call ItemArray.empty
     x86.mov [rbp-24], rax
-    x86.mov rax, [rbp-24]
-    x86.xor rcx, rcx
-    x86.mov [rax+0], rcx
-    x86.mov rax, [rbp-16]
-    x86.mov rcx, [rbp-24]
-    x86.mov [rcx+8], rax
-    x86.mov rcx, [rbp-16]
-    x86.call mm_incref
-    x86.mov rax, [rbp-24]
-    x86.mov rcx, [rbp-24]
-    x86.call mm_incref
-    x86.mov rax, 7
-    x86.mov rcx, 8
-    x86.xor rdx, rdx
-    x86.mov r8, 1
-    x86.call mm_alloc
-    x86.mov [rbp-32], rax
-    x86.mov rax, [rbp-32]
     x86.mov rcx, 7
-    x86.mov [rax+0], rcx
-    x86.mov rax, [rbp-32]
-    x86.mov rcx, [rbp-32]
-    x86.call mm_incref
-    x86.mov rax, [rbp-24]
-    x86.mov rcx, [rbp-32]
+    x86.call Item.create
+    x86.mov [rbp-32], rax
+    x86.mov rdx, [rbp-24]
+    x86.mov rbx, [rbp-32]
     x86.mov rcx, [rbp-24]
     x86.mov rdx, [rbp-32]
     x86.call ItemArray.push
-    x86.mov rax, [rbp-24]
+    x86.mov rsi, [rbp-24]
     x86.mov rcx, [rbp-24]
     x86.xor rdx, rdx
     x86.call ItemArray.get
     x86.mov [rbp-40], rax
-    x86.xor rax, rax
-    x86.cmp rdx, rax
+    x86.xor rdi, rdi
+    x86.cmp rdx, rdi
     x86.je main.otherwise_default_success_2
   otherwise_default_error_1:
-    x86.xor rax, rax
-    x86.mov rcx, 8
-    x86.xor rdx, rdx
-    x86.mov r8, 1
-    x86.call mm_alloc
+    x86.xor rcx, rcx
+    x86.call Item.create
     x86.mov [rbp-8], rax
-    x86.mov rcx, [rbp-8]
-    x86.xor rdx, rdx
-    x86.mov [rcx+0], rdx
-    x86.mov rbx, [rbp-8]
-    x86.mov rcx, [rbp-8]
+    x86.mov [rbp-16], rax
+    x86.mov rax, [rbp-16]
+    x86.mov rcx, [rbp-16]
     x86.call mm_incref
     x86.jmp main.otherwise_default_continue_3
   otherwise_default_success_2:
-    x86.mov rax, [rbp-8]
+    x86.mov rax, [rbp-16]
     x86.test rax, rax
     x86.jz __nonnull_skip_0
-    x86.mov rcx, [rbp-8]
+    x86.mov rcx, [rbp-16]
     x86.call mm_decref
     x86.label __nonnull_skip_0
     x86.mov rcx, [rbp-40]
-    x86.mov [rbp-8], rcx
+    x86.mov [rbp-16], rcx
     x86.jmp main.otherwise_default_continue_3
   otherwise_default_continue_3:
-    x86.mov rax, [rbp-8]
+    x86.mov rax, [rbp-16]
     x86.mov [rbp-48], rax
     x86.mov rcx, [rbp-48]
     x86.call mm_incref
@@ -1072,30 +1091,36 @@ module {
     x86.mov rcx, rax
     x86.call mrt_panic
   __range_ok_4:
-    x86.mov rax, [rbp-8]
+    x86.mov rax, [rbp-16]
     x86.mov [rbp-56], rbx
     x86.test rax, rax
     x86.jz __nonnull_skip_1
-    x86.mov rcx, [rbp-8]
+    x86.mov rcx, [rbp-16]
     x86.call mm_decref
     x86.label __nonnull_skip_1
-    x86.mov rcx, [rbp-48]
+    x86.mov rcx, [rbp-8]
     x86.test rcx, rcx
     x86.jz __nonnull_skip_2
     x86.call mm_decref
     x86.label __nonnull_skip_2
-    x86.mov rdx, [rbp-32]
+    x86.mov rdx, [rbp-48]
     x86.test rdx, rdx
     x86.jz __nonnull_skip_3
-    x86.mov rcx, [rbp-32]
+    x86.mov rcx, [rbp-48]
     x86.call mm_decref
     x86.label __nonnull_skip_3
-    x86.mov rbx, [rbp-24]
+    x86.mov rbx, [rbp-32]
     x86.test rbx, rbx
     x86.jz __nonnull_skip_4
-    x86.mov rcx, [rbp-24]
+    x86.mov rcx, [rbp-32]
     x86.call mm_decref
     x86.label __nonnull_skip_4
+    x86.mov rsi, [rbp-24]
+    x86.test rsi, rsi
+    x86.jz __nonnull_skip_5
+    x86.mov rcx, [rbp-24]
+    x86.call mm_decref
+    x86.label __nonnull_skip_5
     x86.mov rax, [rbp-56]
     x86.epilogue
     x86.ret
@@ -1138,9 +1163,9 @@ module {
     x86.mov rcx, [rax+8]
     x86.mov [rbp-16], rcx
     x86.test rcx, rcx
-    x86.jz __nonnull_skip_6
+    x86.jz __nonnull_skip_7
     x86.call mm_decref
-    x86.label __nonnull_skip_6
+    x86.label __nonnull_skip_7
     x86.jmp __destruct_ItemArray.done
   done:
     x86.epilogue
@@ -1608,13 +1633,17 @@ typealias Integer = int(i64.min to i64.max)
 
 type Counter
 	export var n Integer
+
+	static function create(n Integer) returns Self
+		return Self{n: n}
+	end 'create'
 end 'Counter'
 
 function main() returns ExitCode
 	var result = 0
 	var i = 0
 	while i < 3 'loop'
-		var c = Counter{n: i}
+		var c = Counter.create(n: i)
 		if c.n == 1 'check'
 			result = c.n
 			break
@@ -1630,105 +1659,160 @@ end 'main'
 ```RequiredMLIR:x86_64-windows
 === maxon
 module {
+  func @Counter.create(n: i64) -> Counter {
+  entry:
+    %0 = maxon.param {index = 0 : i32} {name = n} {type = i64}
+    %1 = maxon.struct_literal @Counter
+    maxon.scope_end [n]
+    maxon.return %1
+  }
   func @main() -> i64 {
   entry:
-    %9 = maxon.literal {value = 0 : i64}
-    maxon.assign %9 {var = result} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
-    %10 = maxon.literal {value = 0 : i64}
-    maxon.assign %10 {var = i} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %11 = maxon.literal {value = 0 : i64}
+    maxon.assign %11 {var = result} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %12 = maxon.literal {value = 0 : i64}
+    maxon.assign %12 {var = i} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
     maxon.br loop_0.header
   loop_0.header:
-    %11 = maxon.literal {value = 3 : i64}
-    %12 = maxon.var_ref {var = i} {type = i64}
-    %13 = maxon.binop %12, %11 {op = lt}
-    maxon.cond_br %13 [then: loop_0, else: loop_0.exit]
-  loop_0:
+    %13 = maxon.literal {value = 3 : i64}
     %14 = maxon.var_ref {var = i} {type = i64}
-    %15 = maxon.struct_literal @Counter
-    maxon.assign %15 {var = c} {decl = 1 : i1} {mut = 1 : i1}
-    %16 = maxon.struct_var_ref c
-    %17 = maxon.field_access .n %16
-    %18 = maxon.literal {value = 1 : i64}
-    %19 = maxon.binop %17, %18 {op = eq}
-    maxon.cond_br %19 [then: check_1, else: check_1.after]
+    %15 = maxon.binop %14, %13 {op = lt}
+    maxon.cond_br %15 [then: loop_0, else: loop_0.exit]
+  loop_0:
+    %16 = maxon.var_ref {var = i} {type = i64}
+    %17 = maxon.call @Counter.create %16
+    maxon.assign %17 {var = __call_tmp_17} {decl = 1 : i1}
+    maxon.assign %17 {var = c} {decl = 1 : i1} {mut = 1 : i1}
+    %18 = maxon.struct_var_ref c
+    %19 = maxon.field_access .n %18
+    %20 = maxon.literal {value = 1 : i64}
+    %21 = maxon.binop %19, %20 {op = eq}
+    maxon.cond_br %21 [then: check_1, else: check_1.after]
   check_1:
-    %20 = maxon.struct_var_ref c
-    %21 = maxon.field_access .n %20
-    maxon.assign %21 {var = result} {kind = i64} {mut = 1 : i1}
+    %22 = maxon.struct_var_ref c
+    %23 = maxon.field_access .n %22
+    maxon.assign %23 {var = result} {kind = i64} {mut = 1 : i1}
     maxon.scope_end [c]
     maxon.br loop_0.exit
   check_1.after:
-    %22 = maxon.literal {value = 1 : i64}
-    %23 = maxon.var_ref {var = i} {type = i64}
-    %24 = maxon.binop %23, %22 {op = add}
-    maxon.assign %24 {var = i} {kind = i64} {mut = 1 : i1}
+    %24 = maxon.literal {value = 1 : i64}
+    %25 = maxon.var_ref {var = i} {type = i64}
+    %26 = maxon.binop %25, %24 {op = add}
+    maxon.assign %26 {var = i} {kind = i64} {mut = 1 : i1}
     maxon.scope_end [c]
     maxon.br loop_0.header
   loop_0.exit:
-    %25 = maxon.var_ref {var = result} {type = i64}
-    %26 = maxon.literal {value = 0 : i64}
-    %27 = maxon.binop %25, %26 {op = lt}
-    %28 = maxon.literal {value = 4294967295 : i64}
-    %29 = maxon.binop %25, %28 {op = gt}
-    %30 = maxon.binop %27, %29 {op = or}
-    maxon.cond_br %30 [then: __range_panic_2, else: __range_ok_2]
+    %27 = maxon.var_ref {var = result} {type = i64}
+    %28 = maxon.literal {value = 0 : i64}
+    %29 = maxon.binop %27, %28 {op = lt}
+    %30 = maxon.literal {value = 4294967295 : i64}
+    %31 = maxon.binop %27, %30 {op = gt}
+    %32 = maxon.binop %29, %31 {op = or}
+    maxon.cond_br %32 [then: __range_panic_2, else: __range_ok_2]
   __range_panic_2:
-    maxon.panic "panic at release-before-break.test:19: Range check failed: value outside typealias 'ExitCode'"
+    maxon.panic "panic at release-before-break.test:23: Range check failed: value outside typealias 'ExitCode'"
   __range_ok_2:
     maxon.scope_end [result, i]
-    maxon.return %25
+    maxon.return %27
   }
 }
 === standard
 module {
+  func @Counter.create(n: i64) -> i64 {
+  entry:
+    %0 = func.param n : StdI64
+    %1 = arith.constant {value = 8 : i64}
+    %2 = arith.constant {value = 0 : i64}
+    %3 = arith.constant {value = 1 : i64}
+    %4 = std.call_runtime @mm_alloc %1, %2, %3
+    memref.store %4, __struct_1
+    %5 = memref.load __struct_1 : i64
+    memref.store_indirect %0, %5+0
+    %6 = memref.load __struct_1 : i64
+    std.call_runtime @mm_incref %6
+    %7 = memref.load __struct_1 : i64
+    func.return %7
+  }
   func @main() -> u32 {
   entry:
-    %0 = arith.constant {value = 0 : i64}
-    memref.store %0, result
-    %1 = arith.constant {value = 0 : i64}
-    memref.store %1, i
+    %8 = arith.constant {value = 0 : i64}
+    memref.store %8, result
+    %9 = arith.constant {value = 0 : i64}
+    memref.store %9, i
     cf.br loop_0.header
   loop_0.header:
-    %2 = arith.constant {value = 3 : i64}
-    %3 = memref.load i : i64
-    %4 = arith.cmpi lt %3, %2
-    cf.cond_br %4 [then: loop_0, else: loop_0.exit]
+    %10 = arith.constant {value = 3 : i64}
+    %11 = memref.load i : i64
+    %12 = arith.cmpi lt %11, %10
+    cf.cond_br %12 [then: loop_0, else: loop_0.exit]
   loop_0:
-    %5 = memref.load i : i64
-    memref.bulk_zero __stk_c, 1
-    memref.store %5, __stk_c.0
-    %6 = memref.load __stk_c.0 : i64
-    %7 = arith.constant {value = 1 : i64}
-    %8 = arith.cmpi eq %6, %7
-    cf.cond_br %8 [then: check_1, else: check_1.after]
+    %13 = memref.load i : i64
+    %14 = func.call @Counter.create %13
+    memref.store %14, c
+    %17 = memref.load c : i64
+    %18 = memref.load_indirect %17+0
+    %19 = arith.constant {value = 1 : i64}
+    %20 = arith.cmpi eq %18, %19
+    cf.cond_br %20 [then: check_1, else: check_1.after]
   check_1:
-    %9 = memref.load __stk_c.0 : i64
-    memref.store %9, result
+    %21 = memref.load c : i64
+    %22 = memref.load_indirect %21+0
+    memref.store %22, result
+    %23 = memref.load c : i64
+    std.call_runtime_if_nonnull @mm_decref %23
     cf.br loop_0.exit
   check_1.after:
-    %10 = arith.constant {value = 1 : i64}
-    %11 = memref.load i : i64
-    %12 = arith.addi %11, %10
-    memref.store %12, i
+    %25 = arith.constant {value = 1 : i64}
+    %26 = memref.load i : i64
+    %27 = arith.addi %26, %25
+    memref.store %27, i
+    %28 = memref.load c : i64
+    std.call_runtime_if_nonnull @mm_decref %28
     cf.br loop_0.header
   loop_0.exit:
-    %13 = memref.load result : i64
-    %14 = arith.constant {value = 0 : i64}
-    %15 = arith.cmpi lt %13, %14
-    %16 = arith.constant {value = 4294967295 : i64}
-    %17 = arith.cmpi gt %13, %16
-    %18 = arith.ori1 %15, %17
-    cf.cond_br %18 [then: __range_panic_2, else: __range_ok_2]
+    %30 = memref.load result : i64
+    %31 = arith.constant {value = 0 : i64}
+    %32 = arith.cmpi lt %30, %31
+    %33 = arith.constant {value = 4294967295 : i64}
+    %34 = arith.cmpi gt %30, %33
+    %35 = arith.ori1 %32, %34
+    cf.cond_br %35 [then: __range_panic_2, else: __range_ok_2]
   __range_panic_2:
-    %19 = memref.lea_symdata __panic_msg_0
-    %20 = std.ptr_to_i64 %19
-    std.call_runtime @mrt_panic %20
+    %36 = memref.lea_symdata __panic_msg_0
+    %37 = std.ptr_to_i64 %36
+    std.call_runtime @mrt_panic %37
   __range_ok_2:
-    func.return %13
+    func.return %30
+  }
+  func @__destruct_Counter(ptr: i64) {
+  entry:
+    %39 = func.param ptr : StdI64
+    cf.br done
+  done:
+    func.return
   }
 }
 === x86
 module {
+  func @Counter.create(n: i64) -> i64 {
+  entry:
+    x86.prologue stack_size=16
+    x86.mov [rbp-16], rcx
+    x86.mov rcx, 8
+    x86.xor rdx, rdx
+    x86.mov r8, 1
+    x86.call mm_alloc
+    x86.mov [rbp-8], rax
+    x86.mov rax, [rbp-8]
+    x86.mov rcx, [rbp-16]
+    x86.mov [rax+0], rcx
+    x86.mov rdx, [rbp-8]
+    x86.mov rcx, [rbp-8]
+    x86.call mm_incref
+    x86.mov rax, [rbp-8]
+    x86.epilogue
+    x86.ret
+  }
   func @main() -> u32 {
   entry:
     x86.prologue stack_size=32
@@ -1744,20 +1828,36 @@ module {
     x86.jge main.loop_0.exit
   loop_0:
     x86.mov rax, [rbp-16]
+    x86.mov rcx, [rbp-16]
+    x86.call Counter.create
     x86.mov [rbp-24], rax
     x86.mov rcx, [rbp-24]
-    x86.mov rdx, 1
-    x86.cmp rcx, rdx
+    x86.mov rdx, [rcx+0]
+    x86.mov rbx, 1
+    x86.cmp rdx, rbx
     x86.jne main.check_1.after
   check_1:
     x86.mov rax, [rbp-24]
-    x86.mov [rbp-8], rax
+    x86.mov rcx, [rax+0]
+    x86.mov [rbp-8], rcx
+    x86.mov rdx, [rbp-24]
+    x86.test rdx, rdx
+    x86.jz __nonnull_skip_0
+    x86.mov rcx, [rbp-24]
+    x86.call mm_decref
+    x86.label __nonnull_skip_0
     x86.jmp main.loop_0.exit
   check_1.after:
     x86.mov rax, 1
     x86.mov rcx, [rbp-16]
     x86.add rcx, rax
     x86.mov [rbp-16], rcx
+    x86.mov rdx, [rbp-24]
+    x86.test rdx, rdx
+    x86.jz __nonnull_skip_1
+    x86.mov rcx, [rbp-24]
+    x86.call mm_decref
+    x86.label __nonnull_skip_1
     x86.jmp main.loop_0.header
   loop_0.exit:
     x86.mov rax, [rbp-8]
@@ -1774,6 +1874,12 @@ module {
     x86.call mrt_panic
   __range_ok_2:
     x86.epilogue
+    x86.ret
+  }
+  func @__destruct_Counter(ptr: i64) {
+  entry:
+    x86.jmp __destruct_Counter.done
+  done:
     x86.ret
   }
 }
@@ -1948,11 +2054,15 @@ typealias Integer = int(i64.min to i64.max)
 
 type Wrapper
 	export var val Integer
+
+	static function create(val Integer) returns Self
+		return Self{val: val}
+	end 'create'
 end 'Wrapper'
 
 function compute(flag Integer) returns Integer
 	if flag > 0 'check'
-		@heap var w = Wrapper{val: flag}
+		@heap var w = Wrapper.create(val: flag)
 		return w.val + 1
 	end 'check'
 	return 0
@@ -1968,95 +2078,111 @@ end 'main'
 ```RequiredMLIR:x86_64-windows
 === maxon
 module {
+  func @Wrapper.create(val: i64) -> Wrapper {
+  entry:
+    %0 = maxon.param {index = 0 : i32} {name = val} {type = i64}
+    %1 = maxon.struct_literal @Wrapper
+    maxon.scope_end [val]
+    maxon.return %1
+  }
   func @memory-safety.compute(flag: i64) -> i64 {
   entry:
-    %9 = maxon.param {index = 0 : i32} {name = flag} {type = i64}
-    %10 = maxon.literal {value = 0 : i64}
-    %11 = maxon.binop %9, %10 {op = gt}
-    maxon.cond_br %11 [then: check_0, else: check_0.after]
+    %11 = maxon.param {index = 0 : i32} {name = flag} {type = i64}
+    %12 = maxon.literal {value = 0 : i64}
+    %13 = maxon.binop %11, %12 {op = gt}
+    maxon.cond_br %13 [then: check_0, else: check_0.after]
   check_0:
-    %12 = maxon.var_ref {var = flag} {type = i64}
-    %13 = maxon.struct_literal @Wrapper
-    maxon.assign %13 {var = w} {decl = 1 : i1} {mut = 1 : i1}
-    %14 = maxon.struct_var_ref w
-    %15 = maxon.field_access .val %14
-    %16 = maxon.literal {value = 1 : i64}
-    %17 = maxon.binop %15, %16 {op = add}
+    %14 = maxon.var_ref {var = flag} {type = i64}
+    %15 = maxon.call @Wrapper.create %14
+    maxon.assign %15 {var = __call_tmp_15} {decl = 1 : i1}
+    maxon.assign %15 {var = w} {decl = 1 : i1} {mut = 1 : i1}
+    %16 = maxon.struct_var_ref w
+    %17 = maxon.field_access .val %16
+    %18 = maxon.literal {value = 1 : i64}
+    %19 = maxon.binop %17, %18 {op = add}
     maxon.scope_end [flag, w]
-    maxon.return %17
+    maxon.return %19
   check_0.after:
-    %18 = maxon.literal {value = 0 : i64}
+    %20 = maxon.literal {value = 0 : i64}
     maxon.scope_end [flag]
-    maxon.return %18
+    maxon.return %20
   }
   func @main() -> i64 {
   entry:
-    %19 = maxon.literal {value = 5 : i64}
-    %20 = maxon.call @memory-safety.compute %19
-    %21 = maxon.literal {value = 0 : i64}
-    %22 = maxon.binop %20, %21 {op = lt}
-    %23 = maxon.literal {value = 4294967295 : i64}
-    %24 = maxon.binop %20, %23 {op = gt}
-    %25 = maxon.binop %22, %24 {op = or}
-    maxon.cond_br %25 [then: __range_panic_0, else: __range_ok_0]
+    %21 = maxon.literal {value = 5 : i64}
+    %22 = maxon.call @memory-safety.compute %21
+    %23 = maxon.literal {value = 0 : i64}
+    %24 = maxon.binop %22, %23 {op = lt}
+    %25 = maxon.literal {value = 4294967295 : i64}
+    %26 = maxon.binop %22, %25 {op = gt}
+    %27 = maxon.binop %24, %26 {op = or}
+    maxon.cond_br %27 [then: __range_panic_0, else: __range_ok_0]
   __range_panic_0:
-    maxon.panic "panic at release-before-return-in-block.test:17: Range check failed: value outside typealias 'ExitCode'"
+    maxon.panic "panic at release-before-return-in-block.test:21: Range check failed: value outside typealias 'ExitCode'"
   __range_ok_0:
     maxon.scope_end []
-    maxon.return %20
+    maxon.return %22
   }
 }
 === standard
 module {
+  func @Wrapper.create(val: i64) -> i64 {
+  entry:
+    %0 = func.param val : StdI64
+    %1 = arith.constant {value = 8 : i64}
+    %2 = arith.constant {value = 0 : i64}
+    %3 = arith.constant {value = 1 : i64}
+    %4 = std.call_runtime @mm_alloc %1, %2, %3
+    memref.store %4, __struct_1
+    %5 = memref.load __struct_1 : i64
+    memref.store_indirect %0, %5+0
+    %6 = memref.load __struct_1 : i64
+    std.call_runtime @mm_incref %6
+    %7 = memref.load __struct_1 : i64
+    func.return %7
+  }
   func @memory-safety.compute(flag: i64) -> i64 {
   entry:
-    %0 = func.param flag : StdI64
-    memref.store %0, flag
-    %1 = arith.constant {value = 0 : i64}
-    %2 = arith.cmpi gt %0, %1
-    cf.cond_br %2 [then: check_0, else: check_0.after]
+    %8 = func.param flag : StdI64
+    memref.store %8, flag
+    %9 = arith.constant {value = 0 : i64}
+    %10 = arith.cmpi gt %8, %9
+    cf.cond_br %10 [then: check_0, else: check_0.after]
   check_0:
-    %3 = memref.load flag : i64
-    %4 = arith.constant {value = 8 : i64}
-    %5 = arith.constant {value = 0 : i64}
-    %6 = arith.constant {value = 1 : i64}
-    %7 = std.call_runtime @mm_alloc %4, %5, %6
-    memref.store %7, w
-    %8 = memref.load w : i64
-    memref.store_indirect %3, %8+0
-    %9 = memref.load w : i64
-    std.call_runtime @mm_incref %9
-    %10 = memref.load w : i64
-    %11 = memref.load_indirect %10+0
-    %12 = arith.constant {value = 1 : i64}
-    %13 = arith.addi %11, %12
-    %14 = memref.load w : i64
-    std.call_runtime_if_nonnull @mm_decref %14
-    func.return %13
+    %11 = memref.load flag : i64
+    %12 = func.call @Wrapper.create %11
+    memref.store %12, w
+    %15 = memref.load w : i64
+    %16 = memref.load_indirect %15+0
+    %17 = arith.constant {value = 1 : i64}
+    %18 = arith.addi %16, %17
+    %19 = memref.load w : i64
+    std.call_runtime_if_nonnull @mm_decref %19
+    func.return %18
   check_0.after:
-    %16 = arith.constant {value = 0 : i64}
-    func.return %16
+    %21 = arith.constant {value = 0 : i64}
+    func.return %21
   }
   func @main() -> u32 {
   entry:
-    %18 = arith.constant {value = 5 : i64}
-    %19 = func.call @memory-safety.compute %18
-    %20 = arith.constant {value = 0 : i64}
-    %21 = arith.cmpi lt %19, %20
-    %22 = arith.constant {value = 4294967295 : i64}
-    %23 = arith.cmpi gt %19, %22
-    %24 = arith.ori1 %21, %23
-    cf.cond_br %24 [then: __range_panic_0, else: __range_ok_0]
+    %23 = arith.constant {value = 5 : i64}
+    %24 = func.call @memory-safety.compute %23
+    %25 = arith.constant {value = 0 : i64}
+    %26 = arith.cmpi lt %24, %25
+    %27 = arith.constant {value = 4294967295 : i64}
+    %28 = arith.cmpi gt %24, %27
+    %29 = arith.ori1 %26, %28
+    cf.cond_br %29 [then: __range_panic_0, else: __range_ok_0]
   __range_panic_0:
-    %25 = memref.lea_symdata __panic_msg_0
-    %26 = std.ptr_to_i64 %25
-    std.call_runtime @mrt_panic %26
+    %30 = memref.lea_symdata __panic_msg_0
+    %31 = std.ptr_to_i64 %30
+    std.call_runtime @mrt_panic %31
   __range_ok_0:
-    func.return %19
+    func.return %24
   }
   func @__destruct_Wrapper(ptr: i64) {
   entry:
-    %27 = func.param ptr : StdI64
+    %32 = func.param ptr : StdI64
     cf.br done
   done:
     func.return
@@ -2064,6 +2190,25 @@ module {
 }
 === x86
 module {
+  func @Wrapper.create(val: i64) -> i64 {
+  entry:
+    x86.prologue stack_size=16
+    x86.mov [rbp-16], rcx
+    x86.mov rcx, 8
+    x86.xor rdx, rdx
+    x86.mov r8, 1
+    x86.call mm_alloc
+    x86.mov [rbp-8], rax
+    x86.mov rax, [rbp-8]
+    x86.mov rcx, [rbp-16]
+    x86.mov [rax+0], rcx
+    x86.mov rdx, [rbp-8]
+    x86.mov rcx, [rbp-8]
+    x86.call mm_incref
+    x86.mov rax, [rbp-8]
+    x86.epilogue
+    x86.ret
+  }
   func @memory-safety.compute(flag: i64) -> i64 {
   entry:
     x86.prologue stack_size=32
@@ -2073,24 +2218,16 @@ module {
     x86.jle memory-safety.compute.check_0.after
   check_0:
     x86.mov rax, [rbp-8]
-    x86.mov rcx, 8
-    x86.xor rdx, rdx
-    x86.mov r8, 1
-    x86.call mm_alloc
+    x86.mov rcx, [rbp-8]
+    x86.call Wrapper.create
     x86.mov [rbp-16], rax
     x86.mov rcx, [rbp-16]
-    x86.mov rdx, [rbp-8]
-    x86.mov [rcx+0], rdx
-    x86.mov rbx, [rbp-16]
-    x86.mov rcx, [rbp-16]
-    x86.call mm_incref
+    x86.mov rdx, [rcx+0]
+    x86.mov rbx, 1
+    x86.add rdx, rbx
     x86.mov rsi, [rbp-16]
-    x86.mov rdi, [rsi+0]
-    x86.mov r8, 1
-    x86.add rdi, r8
-    x86.mov r9, [rbp-16]
-    x86.mov [rbp-24], rdi
-    x86.test r9, r9
+    x86.mov [rbp-24], rdx
+    x86.test rsi, rsi
     x86.jz __nonnull_skip_0
     x86.mov rcx, [rbp-16]
     x86.call mm_decref
@@ -2317,6 +2454,10 @@ typealias Integer = int(i64.min to i64.max)
 
 type Counter
 	export var n Integer
+
+	static function create(n Integer) returns Self
+		return Self{n: n}
+	end 'create'
 end 'Counter'
 
 function main() returns ExitCode
@@ -2324,7 +2465,7 @@ function main() returns ExitCode
 	var i = 0
 	while i < 5 'loop'
 		i = i + 1
-		var c = Counter{n: i}
+		var c = Counter.create(n: i)
 		if c.n == 3 'skip'
 			continue
 		end 'skip'
@@ -2349,16 +2490,20 @@ typealias Integer = int(i64.min to i64.max)
 type Pair
 	export var a Integer
 	export var b Integer
+
+	static function create(a Integer, b Integer) returns Self
+		return Self{a: a, b: b}
+	end 'create'
 end 'Pair'
 
 function main() returns ExitCode
 	var result = 0
 	var i = 0
 	while i < 3 'outer'
-		var p = Pair{a: i, b: i * 10}
+		var p = Pair.create(a: i, b: i * 10)
 		var j = 0
 		while j < 3 'inner'
-			var q = Pair{a: j, b: j * 10}
+			var q = Pair.create(a: j, b: j * 10)
 			if p.a == 1 'check'
 				if q.a == 2 'found'
 					result = p.b + q.b
@@ -2387,13 +2532,17 @@ typealias Integer = int(i64.min to i64.max)
 
 type Item
 	export var val Integer
+
+	static function create(val Integer) returns Self
+		return Self{val: val}
+	end 'create'
 end 'Item'
 
 function main() returns ExitCode
 	var items = [10, 20, 30, 40, 50]
 	var result = 0
 	for item in items 'search'
-		var wrapped = Item{val: item}
+		var wrapped = Item.create(val: item)
 		if wrapped.val == 30 'found'
 			result = wrapped.val
 			break
@@ -2417,6 +2566,10 @@ typealias Integer = int(i64.min to i64.max)
 
 type Resource
 	export var id Integer
+
+	static function create(id Integer) returns Self
+		return Self{id: id}
+	end 'create'
 end 'Resource'
 
 enum ResourceError
@@ -2428,7 +2581,7 @@ function loadResource() returns Resource throws ResourceError
 end 'loadResource'
 
 function process() returns Integer throws ResourceError
-	@heap var marker = Resource{id: 42}
+	@heap var marker = Resource.create(id: 42)
 	var res = try loadResource()
 	return res.id + marker.id
 end 'process'
@@ -2455,6 +2608,10 @@ typealias Integer = int(i64.min to i64.max)
 
 type Wrapper
 	export var val Integer
+
+	static function create(val Integer) returns Self
+		return Self{val: val}
+	end 'create'
 end 'Wrapper'
 
 enum LookupError
@@ -2466,9 +2623,9 @@ function failingLookup() returns Integer throws LookupError
 end 'failingLookup'
 
 function compute(flag Integer) returns Integer throws LookupError
-	var w = Wrapper{val: flag}
+	var w = Wrapper.create(val: flag)
 	if w.val > 0 'positive'
-		var inner = Wrapper{val: w.val * 2}
+		var inner = Wrapper.create(val: w.val * 2)
 		var result = try failingLookup()
 		return result + inner.val
 	end 'positive'
@@ -2498,19 +2655,23 @@ typealias Integer = int(i64.min to i64.max)
 
 type Wrapper
 	export var value Integer
+
+	static function create(value Integer) returns Self
+		return Self{value: value}
+	end 'create'
 end 'Wrapper'
 
 typealias WrapperArray = Array with Wrapper
 
 function firstOrDefault(arr WrapperArray) returns Wrapper
-	var fallback = Wrapper{value: 0}
+	var fallback = Wrapper.create(value: 0)
 	var result = try arr.get(0) otherwise fallback
 	return result
 end 'firstOrDefault'
 
 function main() returns ExitCode
-	var arr = WrapperArray{}
-	var w = Wrapper{value: 42}
+	var arr = WrapperArray.empty()
+	var w = Wrapper.create(value: 42)
 	arr.push(w)
 	var got = firstOrDefault(arr: arr)
 	return got.value
@@ -2531,6 +2692,10 @@ typealias Integer = int(i64.min to i64.max)
 
 type Box
 	export var value Integer
+
+	static function create(value Integer) returns Self
+		return Self{value: value}
+	end 'create'
 end 'Box'
 
 function isSame(a Box, b Box) returns Integer
@@ -2541,9 +2706,9 @@ function isSame(a Box, b Box) returns Integer
 end 'isSame'
 
 function main() returns ExitCode
-	var x = Box{value: 10}
+	var x = Box.create(value: 10)
 	var y = x
-	var z = Box{value: 10}
+	var z = Box.create(value: 10)
 	var same = isSame(a: x, b: y)
 	var diff = isSame(a: x, b: z)
 	return same + diff

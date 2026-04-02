@@ -28,7 +28,7 @@ export type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 
 	/// Return the raw UTF-8 bytes as a ByteArray (zero-copy, shares backing memory)
 	export function toByteArray() returns ByteArray
-		return ByteArray{managed: managed}
+		return ByteArray.init(managed)
 	end 'toByteArray'
 
 	/// Create a deep copy of this string with independent backing storage
@@ -100,12 +100,12 @@ export type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 
 	// String index methods
 	export function startIndex() returns StringIndex
-		return StringIndex{charIdx: 0, bytePosition: 0}
+		return StringIndex.create(0, bytePos: 0)
 	end 'startIndex'
 
 	export function endIndex() returns StringIndex
 		var charCount = count()
-		return StringIndex{charIdx: charCount, bytePosition: managed.length()}
+		return StringIndex.create(charCount, bytePos: managed.length())
 	end 'endIndex'
 
 	/// Get character at the given index. Returns the grapheme cluster at that position.
@@ -128,12 +128,12 @@ export type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 			throw StringError.invalidIndex
 		end 'atEnd'
 		if isAsciiFlag 'asciiPath'
-			return StringIndex{charIdx: idx.charIndex() + 1, bytePosition: idx.bytePos() + 1}
+			return StringIndex.create(idx.charIndex() + 1, bytePos: idx.bytePos() + 1)
 		end 'asciiPath'
 		var byteStart = idx.bytePos()
 		var endPos = findGraphemeEndManagedRange(managed, offset: 0, startPos: byteStart, len: len)
 		var byteLen = endPos - byteStart
-		return StringIndex{charIdx: idx.charIndex() + 1, bytePosition: byteStart + byteLen}
+		return StringIndex.create(idx.charIndex() + 1, bytePos: byteStart + byteLen)
 	end 'indexAfter'
 
 	// concat method
@@ -182,19 +182,19 @@ export type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 	export function findFirst(needle String) returns StringIndex throws StringError
 		var byteIdx = try findManaged(managed, offset: 0, len: managed.length(), needle: needle.managed)
 		if isAsciiFlag 'asciiPath'
-			return StringIndex{charIdx: byteIdx, bytePosition: byteIdx}
+			return StringIndex.create(byteIdx, bytePos: byteIdx)
 		end 'asciiPath'
 		var charIdx = byteIndexToGraphemeIndex(managed, byteIdx: byteIdx)
-		return StringIndex{charIdx: charIdx, bytePosition: byteIdx}
+		return StringIndex.create(charIdx, bytePos: byteIdx)
 	end 'findFirst'
 
 	export function findLast(needle String) returns StringIndex throws StringError
 		var byteIdx = try findLastManaged(managed, offset: 0, len: managed.length(), needle: needle.managed)
 		if isAsciiFlag 'asciiPath'
-			return StringIndex{charIdx: byteIdx, bytePosition: byteIdx}
+			return StringIndex.create(byteIdx, bytePos: byteIdx)
 		end 'asciiPath'
 		var charIdx = byteIndexToGraphemeIndex(managed, byteIdx: byteIdx)
-		return StringIndex{charIdx: charIdx, bytePosition: byteIdx}
+		return StringIndex.create(charIdx, bytePos: byteIdx)
 	end 'findLast'
 
 	// Slicing - returns a new String backed by slice into this string's buffer
@@ -217,15 +217,15 @@ export type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 
 	// View methods
 	export function bytes() returns ByteView
-		return ByteView{_managed: managed, _pos: 0}
+		return ByteView.create(managed)
 	end 'bytes'
 
 	export function codepoints() returns CodepointView
-		return CodepointView{_managed: managed, _pos: 0}
+		return CodepointView.create(managed)
 	end 'codepoints'
 
 	export function utf16() returns UTF16View
-		return UTF16View{_managed: managed, _bytePos: 0, _pendingCodepoint: 0}
+		return UTF16View.create(managed)
 	end 'utf16'
 
 	// Replace methods
@@ -301,7 +301,7 @@ export type String implements BuiltinStringLiteral, Hashable, Equatable, Iterabl
 	typealias StringArray = Array with String
 
 	export function split(delimiter String) returns StringArray
-		var result = StringArray{}
+		var result = StringArray.empty()
 		var delimLen = delimiter.managed.length()
 
 		// Empty delimiter: return single-element array with original string
@@ -543,6 +543,10 @@ end 'String'
 export type StringIndex implements Equatable, Comparable
 	var charIdx Index
 	var bytePosition Index
+
+	export static function create(charIndex Index, bytePos Index) returns StringIndex
+		return StringIndex{charIdx: charIndex, bytePosition: bytePos}
+	end 'create'
 
 	export function charIndex() returns Index
 		return charIdx

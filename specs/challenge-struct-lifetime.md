@@ -22,10 +22,14 @@ typealias Integer = int(i64.min to i64.max)
 type Result
 	export var sum Integer
 	export var product Integer
+
+	static function create(sum Integer, product Integer) returns Self
+		return Self{sum: sum, product: product}
+	end 'create'
 end 'Result'
 
 function compute(a Integer, b Integer) returns Result
-	return Result{sum: a + b, product: a * b}
+	return Result.create(sum: a + b, product: a * b)
 end 'compute'
 
 function main() returns ExitCode
@@ -44,14 +48,18 @@ typealias Integer = int(i64.min to i64.max)
 
 type Counter
 	export var value Integer
+
+	static function create(value Integer) returns Self
+		return Self{value: value}
+	end 'create'
 end 'Counter'
 
 function increment(c Counter) returns Counter
-	return Counter{value: c.value + 1}
+	return Counter.create(value: c.value + 1)
 end 'increment'
 
 function main() returns ExitCode
-	var c1 = Counter{value: 10}
+	var c1 = Counter.create(value: 10)
 	var c2 = increment(c1)
 	return c2.value
 end 'main'
@@ -67,18 +75,22 @@ typealias Integer = int(i64.min to i64.max)
 
 type Value
 	export var n Integer
+
+	static function create(n Integer) returns Self
+		return Self{n: n}
+	end 'create'
 end 'Value'
 
 function step1() returns Value
-	return Value{n: 1}
+	return Value.create(n: 1)
 end 'step1'
 
 function step2(v Value) returns Value
-	return Value{n: v.n + 10}
+	return Value.create(n: v.n + 10)
 end 'step2'
 
 function step3(v Value) returns Value
-	return Value{n: v.n + 100}
+	return Value.create(n: v.n + 100)
 end 'step3'
 
 function main() returns ExitCode

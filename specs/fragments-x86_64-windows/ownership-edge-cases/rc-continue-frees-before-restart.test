@@ -3,13 +3,17 @@ typealias Integer = int(i64.min to i64.max)
 
 type Item
 	export var v Integer
+
+	static function create(v Integer) returns Self
+		return Self{v: v}
+	end 'create'
 end 'Item'
 
 function main() returns ExitCode
 	var total = 0
 	var i = 0
 	while i < 5 'loop'
-		@heap var item = Item{v: i}
+		@heap var item = Item.create(v: i)
 		i = i + 1
 		if item.v == 2 'skip'
 			continue
@@ -24,33 +28,38 @@ ExitCode: 8
 Stderr: ```
 sl_init
   os_alloc size=67108864
-mm_alloc Item #1 size=8 [main]
+mm_alloc Item #1 size=8 [Item.create]
   sl_alloc Item #1 size=40 class=4
-mm_incref Item #1 rc=1 [main]
+mm_incref Item #1 rc=1 [Item.create]
+mm_transfer Item #1 rc=1 [Item.create]
 mm_decref Item #1 rc=0 [main]
   mm_free Item #1
     sl_free Item #1 size=48 class=4
-mm_alloc Item #2 size=8 [main]
+mm_alloc Item #2 size=8 [Item.create]
   sl_alloc Item #2 size=40 class=4
-mm_incref Item #2 rc=1 [main]
+mm_incref Item #2 rc=1 [Item.create]
+mm_transfer Item #2 rc=1 [Item.create]
 mm_decref Item #2 rc=0 [main]
   mm_free Item #2
     sl_free Item #2 size=48 class=4
-mm_alloc Item #3 size=8 [main]
+mm_alloc Item #3 size=8 [Item.create]
   sl_alloc Item #3 size=40 class=4
-mm_incref Item #3 rc=1 [main]
+mm_incref Item #3 rc=1 [Item.create]
+mm_transfer Item #3 rc=1 [Item.create]
 mm_decref Item #3 rc=0 [main]
   mm_free Item #3
     sl_free Item #3 size=48 class=4
-mm_alloc Item #4 size=8 [main]
+mm_alloc Item #4 size=8 [Item.create]
   sl_alloc Item #4 size=40 class=4
-mm_incref Item #4 rc=1 [main]
+mm_incref Item #4 rc=1 [Item.create]
+mm_transfer Item #4 rc=1 [Item.create]
 mm_decref Item #4 rc=0 [main]
   mm_free Item #4
     sl_free Item #4 size=48 class=4
-mm_alloc Item #5 size=8 [main]
+mm_alloc Item #5 size=8 [Item.create]
   sl_alloc Item #5 size=40 class=4
-mm_incref Item #5 rc=1 [main]
+mm_incref Item #5 rc=1 [Item.create]
+mm_transfer Item #5 rc=1 [Item.create]
 mm_decref Item #5 rc=0 [main]
   mm_free Item #5
     sl_free Item #5 size=48 class=4
@@ -61,6 +70,25 @@ mm_raw_free #R1
 ```
 ---
 module {
+  func @Item.create(v: i64) -> i64 {
+  entry:
+    x86.prologue stack_size=16
+    x86.mov [rbp-16], rcx
+    x86.mov rcx, 8
+    x86.xor rdx, rdx
+    x86.mov r8, 1
+    x86.call mm_alloc
+    x86.mov [rbp-8], rax
+    x86.mov rax, [rbp-8]
+    x86.mov rcx, [rbp-16]
+    x86.mov [rax+0], rcx
+    x86.mov rdx, [rbp-8]
+    x86.mov rcx, [rbp-8]
+    x86.call mm_incref
+    x86.mov rax, [rbp-8]
+    x86.epilogue
+    x86.ret
+  }
   func @main() -> u32 {
   entry:
     x86.prologue stack_size=32
@@ -76,25 +104,17 @@ module {
     x86.jge main.loop_0.exit
   loop_0:
     x86.mov rax, [rbp-16]
-    x86.mov rcx, 8
-    x86.xor rdx, rdx
-    x86.mov r8, 1
-    x86.call mm_alloc
+    x86.mov rcx, [rbp-16]
+    x86.call Item.create
     x86.mov [rbp-24], rax
-    x86.mov rcx, [rbp-24]
+    x86.mov rcx, 1
     x86.mov rdx, [rbp-16]
-    x86.mov [rcx+0], rdx
+    x86.add rdx, rcx
+    x86.mov [rbp-16], rdx
     x86.mov rbx, [rbp-24]
-    x86.mov rcx, [rbp-24]
-    x86.call mm_incref
-    x86.mov rsi, 1
-    x86.mov rdi, [rbp-16]
-    x86.add rdi, rsi
-    x86.mov [rbp-16], rdi
-    x86.mov r8, [rbp-24]
-    x86.mov r9, [r8+0]
-    x86.mov rax, 2
-    x86.cmp r9, rax
+    x86.mov rsi, [rbx+0]
+    x86.mov rdi, 2
+    x86.cmp rsi, rdi
     x86.jne main.skip_1.after
   skip_1:
     x86.mov rax, [rbp-24]

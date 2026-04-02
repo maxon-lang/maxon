@@ -12,20 +12,21 @@ end 'main'
 ExitCode: 5
 ---
 module {
-  func @range-check-panic.check(ptr: i64) -> u8 {
+  func @range-check-panic.check(x: i64) -> u8 {
   entry:
     x86.prologue stack_size=16
-    x86.test rcx, rcx
-    x86.setl rax
-    x86.cmp rcx, 10
-    x86.setg rdx
-    x86.or rax, rdx
-    x86.je __range_ok_1
-  __range_panic_1:
-    x86.lea rax, [rip+__panic_msg_1]
+    x86.xor rax, rax
+    x86.mov rdx, 10
+    x86.cmp rcx, rdx
+    x86.jg range-check-panic.check.__range_panic_0
+    x86.cmp rcx, rax
+    x86.jl range-check-panic.check.__range_panic_0
+    x86.jmp range-check-panic.check.__range_ok_0
+  __range_panic_0:
+    x86.lea_symdata rax, [__panic_msg_0]
     x86.mov rcx, rax
     x86.call mrt_panic
-  __range_ok_1:
+  __range_ok_0:
     x86.mov rax, rcx
     x86.epilogue
     x86.ret
@@ -35,18 +36,18 @@ module {
     x86.prologue stack_size=16
     x86.mov rcx, 5
     x86.call range-check-panic.check
-    x86.test rax, rax
-    x86.setl rcx
+    x86.xor rcx, rcx
     x86.mov rdx, 4294967295
     x86.cmp rax, rdx
-    x86.setg rdx
-    x86.or rcx, rdx
-    x86.je __range_ok_2
-  __range_panic_2:
-    x86.lea rax, [rip+__panic_msg_2]
+    x86.jg main.__range_panic_0
+    x86.cmp rax, rcx
+    x86.jl main.__range_panic_0
+    x86.jmp main.__range_ok_0
+  __range_panic_0:
+    x86.lea_symdata rax, [__panic_msg_1]
     x86.mov rcx, rax
     x86.call mrt_panic
-  __range_ok_2:
+  __range_ok_0:
     x86.epilogue
     x86.ret
   }

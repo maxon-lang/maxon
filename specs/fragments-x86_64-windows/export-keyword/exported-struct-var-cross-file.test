@@ -4,9 +4,13 @@ typealias SmallInt = int(0 to u8.max)
 
 export type Counter
 		export var value SmallInt
+
+		export static function create(value SmallInt) returns Self
+			return Self{value: value}
+		end 'create'
 end 'Counter'
 
-export var shared = Counter{value: 0}
+export var shared = Counter.create(value: 0)
 
 // --- file: main.maxon
 function main() returns ExitCode
@@ -17,6 +21,25 @@ end 'main'
 ExitCode: 42
 ---
 module {
+  func @Counter.create(value: i64) -> i64 {
+  entry:
+    x86.prologue stack_size=16
+    x86.mov [rbp-16], rcx
+    x86.mov rcx, 8
+    x86.xor rdx, rdx
+    x86.mov r8, 1
+    x86.call mm_alloc
+    x86.mov [rbp-8], rax
+    x86.mov rax, [rbp-8]
+    x86.mov rcx, [rbp-16]
+    x86.mov [rax+0], rcx
+    x86.mov rdx, [rbp-8]
+    x86.mov rcx, [rbp-8]
+    x86.call mm_incref
+    x86.mov rax, [rbp-8]
+    x86.epilogue
+    x86.ret
+  }
   func @main() -> u32 {
   entry:
     x86.prologue stack_size=32
@@ -66,24 +89,16 @@ module {
   func @__module_init() {
   entry:
     x86.prologue stack_size=16
-    x86.xor rax, rax
-    x86.mov rcx, 8
-    x86.xor rdx, rdx
-    x86.mov r8, 1
-    x86.call mm_alloc
+    x86.xor rcx, rcx
+    x86.call Counter.create
     x86.mov [rbp-8], rax
-    x86.mov rcx, [rbp-8]
-    x86.xor rdx, rdx
-    x86.mov [rcx+0], rdx
+    x86.mov rax, [rbp-8]
     x86.mov rcx, [rbp-8]
     x86.call mm_incref
-    x86.mov rbx, [rbp-8]
     x86.mov rcx, [rbp-8]
-    x86.call mm_incref
-    x86.mov rsi, [rbp-8]
-    x86.mov qword [rip+shared], rsi
-    x86.mov rdi, [rbp-8]
-    x86.test rdi, rdi
+    x86.mov qword [rip+shared], rcx
+    x86.mov rdx, [rbp-8]
+    x86.test rdx, rdx
     x86.jz __nonnull_skip_2
     x86.mov rcx, [rbp-8]
     x86.call mm_decref

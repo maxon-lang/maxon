@@ -4,7 +4,7 @@ typealias IntArray = Array with Integer
 
 function main() returns ExitCode
 	var a = [1, 2, 3]
-	var b = IntArray{}
+	var b = IntArray.empty()
 	a.append(b)
 	return a.count()
 end 'main'
@@ -14,7 +14,7 @@ ExitCode: 3
 module {
   func @main() -> u32 {
   entry:
-    x86.prologue stack_size=48
+    x86.prologue stack_size=32
     x86.xor rax, rax
     x86.mov rcx, 3
     x86.xor rdx, rdx
@@ -69,60 +69,12 @@ module {
     x86.mov rax, [rbp-16]
     x86.mov rcx, [rbp-16]
     x86.call mm_incref
-    x86.xor rax, rax
-    x86.xor rcx, rcx
-    x86.xor rdx, rdx
-    x86.xor rbx, rbx
-    x86.mov rsi, 8
-    x86.lea_func rdi, [__destruct___ManagedMemory_Integer]
-    x86.mov r8, rdi
-    x86.mov rdx, r8
-    x86.mov rcx, 32
-    x86.mov r8, 3
-    x86.call mm_alloc
+    x86.call IntArray.empty
     x86.mov [rbp-24], rax
-    x86.mov rax, [rbp-24]
-    x86.xor rcx, rcx
-    x86.mov [rax+0], rcx
-    x86.mov rax, [rbp-24]
-    x86.xor rcx, rcx
-    x86.mov [rax+8], rcx
-    x86.mov rax, [rbp-24]
-    x86.xor rcx, rcx
-    x86.mov [rax+16], rcx
-    x86.mov rax, [rbp-24]
-    x86.mov rcx, 8
-    x86.mov [rax+24], rcx
-    x86.mov rax, [rbp-24]
-    x86.mov rcx, [rax+24]
-    x86.lea_symdata rax, [__mm_panic_element_size_zero]
-    x86.mov rdx, rax
-    x86.mov r8, rdx
-    x86.mov rdx, rcx
-    x86.xor rcx, rcx
-    x86.call maxon_bounds_check
-    x86.lea_func rax, [__destruct_IntArray]
-    x86.mov rcx, rax
-    x86.mov rdx, rcx
-    x86.mov rcx, 16
-    x86.mov r8, 2
-    x86.call mm_alloc
-    x86.mov [rbp-32], rax
-    x86.mov rax, [rbp-32]
-    x86.xor rcx, rcx
-    x86.mov [rax+0], rcx
-    x86.mov rax, [rbp-24]
-    x86.mov rcx, [rbp-32]
-    x86.mov [rcx+8], rax
-    x86.mov rcx, [rbp-24]
-    x86.call mm_incref
-    x86.mov rax, [rbp-32]
-    x86.mov rcx, [rbp-32]
-    x86.call mm_incref
     x86.mov rax, [rbp-16]
-    x86.mov rcx, [rbp-32]
+    x86.mov rcx, [rbp-24]
     x86.mov rcx, [rbp-16]
-    x86.mov rdx, [rbp-32]
+    x86.mov rdx, [rbp-24]
     x86.call IntArray.append
     x86.mov rax, [rbp-16]
     x86.mov rcx, [rbp-16]
@@ -139,11 +91,11 @@ module {
     x86.mov rcx, rax
     x86.call mrt_panic
   __range_ok_1:
-    x86.mov rbx, [rbp-32]
-    x86.mov [rbp-40], rax
+    x86.mov rbx, [rbp-24]
+    x86.mov [rbp-32], rax
     x86.test rbx, rbx
     x86.jz __nonnull_skip_0
-    x86.mov rcx, [rbp-32]
+    x86.mov rcx, [rbp-24]
     x86.call mm_decref
     x86.label __nonnull_skip_0
     x86.mov rax, [rbp-16]
@@ -152,7 +104,7 @@ module {
     x86.mov rcx, [rbp-16]
     x86.call mm_decref
     x86.label __nonnull_skip_1
-    x86.mov rax, [rbp-40]
+    x86.mov rax, [rbp-32]
     x86.epilogue
     x86.ret
   }

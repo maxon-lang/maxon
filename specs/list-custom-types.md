@@ -21,16 +21,20 @@ typealias Integer = int(i64.min to i64.max)
 type Point
 	export var x Integer
 	export var y Integer
+
+	static function create(x Integer, y Integer) returns Self
+		return Self{x: x, y: y}
+	end 'create'
 end 'Point'
 
 typealias PointList = List with Point
 
 function main() returns ExitCode
-	var list = PointList{}
-	list.append(Point{x: 10, y: 20})
-	list.append(Point{x: 30, y: 40})
-	var first = try list.first() otherwise Point{x: 0, y: 0}
-	var second = try list.get(1) otherwise Point{x: 0, y: 0}
+	var list = PointList.empty()
+	list.append(Point.create(x: 10, y: 20))
+	list.append(Point.create(x: 30, y: 40))
+	var first = try list.first() otherwise Point.create(x: 0, y: 0)
+	var second = try list.get(1) otherwise Point.create(x: 0, y: 0)
 	print("{first.x}\n")
 	print("{first.y}\n")
 	print("{second.x}\n")
@@ -56,15 +60,19 @@ typealias Integer = int(i64.min to i64.max)
 type Entry
 	export var id Integer
 	export var value Integer
+
+	static function create(id Integer, value Integer) returns Self
+		return Self{id: id, value: value}
+	end 'create'
 end 'Entry'
 
 typealias EntryList = List with Entry
 
 function main() returns ExitCode
-	var list = EntryList{}
-	list.append(Entry{id: 1, value: 100})
-	list.append(Entry{id: 2, value: 200})
-	list.append(Entry{id: 3, value: 300})
+	var list = EntryList.empty()
+	list.append(Entry.create(id: 1, value: 100))
+	list.append(Entry.create(id: 2, value: 200))
+	list.append(Entry.create(id: 3, value: 300))
 	var sum = 0
 	for item in list 'loop'
 		sum = sum + item.value
@@ -88,15 +96,19 @@ typealias Integer = int(i64.min to i64.max)
 type Person
 	export var name String
 	export var age Integer
+
+	static function create(name String, age Integer) returns Self
+		return Self{name: name, age: age}
+	end 'create'
 end 'Person'
 
 typealias PersonList = List with Person
 
 function main() returns ExitCode
-	var list = PersonList{}
-	list.append(Person{name: "Alice has a long name for heap", age: 30})
-	list.append(Person{name: "Bob also has a long name for heap", age: 25})
-	var first = try list.first() otherwise Person{name: "", age: 0}
+	var list = PersonList.empty()
+	list.append(Person.create(name: "Alice has a long name for heap", age: 30))
+	list.append(Person.create(name: "Bob also has a long name for heap", age: 25))
+	var first = try list.first() otherwise Person.create(name: "", age: 0)
 	print("{first.name}\n")
 	print("{first.age}\n")
 	return 0
@@ -118,16 +130,20 @@ typealias Integer = int(i64.min to i64.max)
 type Pair
 	export var a Integer
 	export var b Integer
+
+	static function create(a Integer, b Integer) returns Self
+		return Self{a: a, b: b}
+	end 'create'
 end 'Pair'
 
 typealias PairList = List with Pair
 
 function main() returns ExitCode
-	var list = PairList{}
-	list.prepend(Pair{a: 3, b: 30})
-	list.prepend(Pair{a: 2, b: 20})
-	list.prepend(Pair{a: 1, b: 10})
-	var removed = try list.removeFirst() otherwise Pair{a: 0, b: 0}
+	var list = PairList.empty()
+	list.prepend(Pair.create(a: 3, b: 30))
+	list.prepend(Pair.create(a: 2, b: 20))
+	list.prepend(Pair.create(a: 1, b: 10))
+	var removed = try list.removeFirst() otherwise Pair.create(a: 0, b: 0)
 	print("{removed.a}\n")
 	print("{removed.b}\n")
 	print("{list.count()}\n")
@@ -151,10 +167,14 @@ typealias Integer = int(i64.min to i64.max)
 type Vec2
 	export var x Integer
 	export var y Integer
+
+	static function create(x Integer, y Integer) returns Self
+		return Self{x: x, y: y}
+	end 'create'
 end 'Vec2'
 
 function main() returns ExitCode
-	var list = List from [Vec2{x: 1, y: 2}, Vec2{x: 3, y: 4}, Vec2{x: 5, y: 6}]
+	var list = List from [Vec2.create(x: 1, y: 2), Vec2.create(x: 3, y: 4), Vec2.create(x: 5, y: 6)]
 	for item in list 'loop'
 		print("{item.x},{item.y}\n")
 	end 'loop'

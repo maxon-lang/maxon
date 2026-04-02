@@ -1,11 +1,15 @@
 // Test: managed-file.auto-close
 type TestFile
   export var _file __ManagedFile
+
+  static function create(_file __ManagedFile) returns Self
+  	return Self{_file: _file}
+  end 'create'
 end 'TestFile'
 
 function writeFile(path String)
   let result = __ManagedFile.openWrite(path.managed)
-  var wf = TestFile{_file: result}
+  var wf = TestFile.create(_file: result)
   let written = wf._file.write("auto".managed)
   if written < 0 'writeErr'
     panic("write failed")
@@ -23,7 +27,7 @@ function main() returns ExitCode
     print("read failed")
     return 1
   end 'readFail'
-  var rf = TestFile{_file: readResult}
+  var rf = TestFile.create(_file: readResult)
   let size = rf._file.size()
   rf._file.close()
   let delResult = __ManagedFile.delete(path.managed)

@@ -25,6 +25,10 @@ export type ABICallInfo
 	export let callee ByteArray
 	export let argCount VarSlot
 	export let hasReturn bool
+
+	export static function create(callee ByteArray, argCount VarSlot, hasReturn bool) returns ABICallInfo
+		return Self{callee: callee, argCount: argCount, hasReturn: hasReturn}
+	end 'create'
 end 'ABICallInfo'
 
 export typealias ABICallInfoArray = Array with ABICallInfo
@@ -122,7 +126,7 @@ end 'processFuncOp'
 // Future: rewrite to split args into register-bound and stack-bound.
 // Current: pass through unchanged.
 function processCall(resultId ValueId, callee ByteArray, argIds ValueIdArray, dstBlock MlirBlock, convention ABIConvention)
-	let callInfo = ABICallInfo{callee: callee, argCount: argIds.count(), hasReturn: true}
+	let callInfo = ABICallInfo.create(callee, argCount: argIds.count(), hasReturn: true)
 	logTrace(LogCategory.mlir, message: () gives "abi: call @{String.from(callInfo.callee)} args={callInfo.argCount} hasReturn={callInfo.hasReturn}")
 
 	// Classify each argument (infrastructure for future rewriting)

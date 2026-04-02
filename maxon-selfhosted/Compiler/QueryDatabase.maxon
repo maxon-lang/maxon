@@ -9,6 +9,10 @@ export type TokenMemo
 	export var value TokenArray
 	export var computedAt Revision
 	export var verifiedAt Revision
+
+	export static function create(value TokenArray, computedAt Revision, verifiedAt Revision) returns TokenMemo
+		return Self{value: value, computedAt: computedAt, verifiedAt: verifiedAt}
+	end 'create'
 end 'TokenMemo'
 
 export type ParseMemo
@@ -18,6 +22,10 @@ export type ParseMemo
 	// Tracks the next ValueId after parsing this file, so cached results
 	// can advance the counter to avoid ID collisions with subsequent files.
 	export var nextValueIdAfterParse ValueId
+
+	export static function create(value MlirModule, computedAt Revision, verifiedAt Revision, nextValueIdAfterParse ValueId) returns ParseMemo
+		return Self{value: value, computedAt: computedAt, verifiedAt: verifiedAt, nextValueIdAfterParse: nextValueIdAfterParse}
+	end 'create'
 end 'ParseMemo'
 
 // Whole-program memo types.
@@ -25,12 +33,20 @@ export type MlirModuleMemo
 	export var value MlirModule
 	export var computedAt Revision
 	export var verifiedAt Revision
+
+	export static function create(value MlirModule, computedAt Revision, verifiedAt Revision) returns MlirModuleMemo
+		return Self{value: value, computedAt: computedAt, verifiedAt: verifiedAt}
+	end 'create'
 end 'MlirModuleMemo'
 
 export type CodeMemo
 	export var value CodeResult
 	export var computedAt Revision
 	export var verifiedAt Revision
+
+	export static function create(value CodeResult, computedAt Revision, verifiedAt Revision) returns CodeMemo
+		return Self{value: value, computedAt: computedAt, verifiedAt: verifiedAt}
+	end 'create'
 end 'CodeMemo'
 
 // Map typealiases for per-file caches.
@@ -41,6 +57,10 @@ export typealias ParseCacheMap = Map with(FilePath, ParseMemo)
 export type SourceFileEntry
 	export var content ByteArray
 	export var changedAtRevision Revision
+
+	export static function create(content ByteArray, changedAtRevision Revision) returns SourceFileEntry
+		return Self{content: content, changedAtRevision: changedAtRevision}
+	end 'create'
 end 'SourceFileEntry'
 
 export typealias SourceFileMap = Map with(FilePath, SourceFileEntry)
@@ -61,6 +81,10 @@ export typealias QueryKeyArray = Array with QueryKey
 export type Dependency
 	export var dependent QueryKey
 	export var dependency QueryKey
+
+	export static function create(dependent QueryKey, dependency QueryKey) returns Dependency
+		return Self{dependent: dependent, dependency: dependency}
+	end 'create'
 end 'Dependency'
 
 export typealias DependencyArray = Array with Dependency
@@ -97,4 +121,24 @@ export type QueryDatabase
 	export var allMidMisses Revision
 	export var codeHits Revision
 	export var codeMisses Revision
+
+	export static function create(emptyModuleMemo MlirModuleMemo, emptyCodeMemo CodeMemo) returns QueryDatabase
+		return Self{
+			currentRevision: 1,
+			sourceFiles: SourceFileMap.empty(),
+			sourcePaths: FilePathArray.empty(),
+			tokenCache: TokenCacheMap.empty(),
+			parseCache: ParseCacheMap.empty(),
+			allModuleCache: emptyModuleMemo,
+			allMidCache: emptyModuleMemo,
+			codeCache: emptyCodeMemo,
+			dependencies: DependencyArray.empty(),
+			activeQueryStack: QueryKeyArray.empty(),
+			tokenHits: 0, tokenMisses: 0,
+			parseHits: 0, parseMisses: 0,
+			allModuleHits: 0, allModuleMisses: 0,
+			allMidHits: 0, allMidMisses: 0,
+			codeHits: 0, codeMisses: 0
+		}
+	end 'create'
 end 'QueryDatabase'

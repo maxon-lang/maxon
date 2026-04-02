@@ -21,10 +21,14 @@ typealias Integer = int(i64.min to i64.max)
 
 type Counter
 	export var value Integer
+
+	static function create(value Integer) returns Self
+		return Self{value: value}
+	end 'create'
 end 'Counter'
 
 function main() returns ExitCode
-	var c = Counter{value: 10}
+	var c = Counter.create(value: 10)
 	c.value = 42
 	return c.value
 end 'main'
@@ -43,16 +47,20 @@ typealias Integer = int(i64.min to i64.max)
 type Config
 	export let id Integer
 	export var count Integer
+
+	static function create(id Integer, count Integer) returns Self
+		return Self{id: id, count: count}
+	end 'create'
 end 'Config'
 
 function main() returns ExitCode
-	var c = Config{id: 1, count: 0}
+	var c = Config.create(id: 1, count: 0)
 	c.id = 2
 	return c.id
 end 'main'
 ```
 ```maxoncstderr
-error E2013: specs/fragments/challenge-struct-field-assign/immutable-field-assign-error.test:12:2: cannot assign to field 'Config.id' because it is immutable (declare with 'var' to make it mutable)
+error E2013: specs/fragments/challenge-struct-field-assign/immutable-field-assign-error.test:16:2: cannot assign to field 'Config.id' because it is immutable (declare with 'var' to make it mutable)
 ```
 
 <!-- test: nested-struct-field-reassignment -->
@@ -62,15 +70,23 @@ typealias Integer = int(i64.min to i64.max)
 
 type Inner
 	export var x Integer
+
+	static function create(x Integer) returns Self
+		return Self{x: x}
+	end 'create'
 end 'Inner'
 
 type Outer
 	export var inner Inner
+
+	static function create(inner Inner) returns Self
+		return Self{inner: inner}
+	end 'create'
 end 'Outer'
 
 function main() returns ExitCode
-	var i = Inner{x: 10}
-	var o = Outer{inner: i}
+	var i = Inner.create(x: 10)
+	var o = Outer.create(inner: i)
 	o.inner.x = 42
 	return o.inner.x
 end 'main'

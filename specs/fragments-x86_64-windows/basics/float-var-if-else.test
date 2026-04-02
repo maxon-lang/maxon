@@ -9,30 +9,62 @@ function main() returns ExitCode
 end 'main'
 ---
 ExitCode: 1
+RequiredMLIR: ```
+=== maxon
+module {
+  func @main() -> i64 {
+  entry:
+    %0 = maxon.literal {value = 3.14 : f64}
+    maxon.assign %0 {var = x} {kind = f64} {decl = 1 : i1} {mut = 1 : i1}
+    %1 = maxon.literal {value = 3.14 : f64}
+    %2 = maxon.binop %0, %1 {op = eq} {kind = f64}
+    maxon.cond_br %2 [then: check_0, else: other_1]
+  check_0:
+    %3 = maxon.literal {value = 1 : i64}
+    maxon.scope_end [x]
+    maxon.return %3
+  other_1:
+    %4 = maxon.literal {value = 0 : i64}
+    maxon.scope_end [x]
+    maxon.return %4
+  }
+}
+=== standard
+module {
+  func @main() -> u32 {
+  entry:
+    %0 = arith.float_constant {value = 3.14 : f64}
+    %1 = arith.float_constant {value = 3.14 : f64}
+    %2 = arith.cmpf eq %0, %1
+    cf.cond_br %2 [then: check_0, else: other_1]
+  check_0:
+    %3 = arith.constant {value = 1 : i64}
+    func.return %3
+  other_1:
+    %4 = arith.constant {value = 0 : i64}
+    func.return %4
+  }
+}
+=== x86
+module {
+  func @main() -> u32 {
+  entry:
+    x86.movsd xmm0, [rip+__float_3.14]
+    x86.movsd xmm1, [rip+__float_3.14]
+    x86.ucomisd xmm0, xmm1
+    x86.jne main.other_1
+    x86.jp main.other_1
+  check_0:
+    x86.mov rax, 1
+    x86.ret
+  other_1:
+    x86.xor rax, rax
+    x86.ret
+  }
+}
+```
 RequiredRdata: ```
 f64 3.14
 ```
 ---
-module {
-  func @main() -> u32 {
-  entry:
-    x86.prologue stack_size=16
-    x86.mov rax, 4614253070214989086
-    x86.mov [rbp+-8], rax
-    x86.movsd xmm0, [rbp+-8]
-    x86.mov rcx, 4614253070214989086
-    x86.mov [rbp+-16], rcx
-    x86.movsd xmm1, [rbp+-16]
-    x86.ucomisd xmm0, xmm1
-    x86.jne other_2
-  check_1:
-    x86.mov rax, 1
-    x86.epilogue
-    x86.ret
-  other_2:
-    x86.mov rax, 0
-    x86.epilogue
-    x86.ret
-  }
-}
 ---

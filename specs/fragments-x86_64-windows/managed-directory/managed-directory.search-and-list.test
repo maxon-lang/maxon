@@ -1,17 +1,33 @@
 // Test: managed-directory.search-and-list
 type TestFile
-	export var _file __ManagedFile
+	export var file __ManagedFile
+
+	export static function openWrite(path __ManagedMemory) returns TestFile
+		let wr = __ManagedFile.openWrite(path)
+		return TestFile{file: wr}
+	end 'openWrite'
 end 'TestFile'
 
+export enum TestDirError implements Error
+	searchFailed
+end 'TestDirError'
+
 type TestDir
-	export var _dir __ManagedDirectory
+	export var dir __ManagedDirectory
+
+	export static function search(pattern __ManagedMemory) returns TestDir throws TestDirError
+		let handle = __ManagedDirectory.openSearch(pattern)
+		if handle == 0 'fail'
+			throw TestDirError.searchFailed
+		end 'fail'
+		return TestDir{dir: handle}
+	end 'search'
 end 'TestDir'
 
 function createFile(path String, content String)
-	let wr = __ManagedFile.openWrite(path.managed)
-	var f = TestFile{_file: wr}
-	let written = f._file.write(content.managed)
-	f._file.close()
+	var f = TestFile.openWrite(path.managed)
+	let written = f.file.write(content.managed)
+	f.file.close()
 	if written < 0 'err'
 		panic("write failed")
 	end 'err'
@@ -32,27 +48,25 @@ function main() returns ExitCode
 	createFile("{dirPath}/file2.txt", content: "b")
 
 	// Search the directory
-	let searchResult = __ManagedDirectory.openSearch("{dirPath}/*".managed)
-	if searchResult == 0 'searchFail'
+	var dir = try TestDir.search("{dirPath}/*".managed) otherwise 'searchFail'
 		print("search failed")
 		return 2
 	end 'searchFail'
-	var dir = TestDir{_dir: searchResult}
 
 	var fileCount = 0
-	var nameManaged = dir._dir.filename()
-	var name = String{managed: nameManaged, _iterPos: 0}
+	var nameManaged = dir.dir.filename()
+	var name = String.init(nameManaged)
 	if name != "." and name != ".." 'notDot1'
 		fileCount = fileCount + 1
 	end 'notDot1'
-	while dir._dir.next() != 0 'loop'
-		nameManaged = dir._dir.filename()
-		name = String{managed: nameManaged, _iterPos: 0}
+	while dir.dir.next() != 0 'loop'
+		nameManaged = dir.dir.filename()
+		name = String.init(nameManaged)
 		if name != "." and name != ".." 'notDot2'
 			fileCount = fileCount + 1
 		end 'notDot2'
 	end 'loop'
-	dir._dir.close()
+	dir.dir.close()
 
 	// Clean up
 	let del1 = __ManagedFile.delete("{dirPath}/file1.txt".managed)
@@ -71,62 +85,122 @@ end 'main'
 ExitCode: 42
 ---
 module {
+  func @TestFile.openWrite(path: i64) -> i64 {
+  entry:
+    x86.prologue stack_size=32
+    x86.mov [rbp-8], rcx
+    x86.mov rax, [rbp-8]
+    x86.mov rdx, [rax+0]
+    x86.mov rax, [rbp-8]
+    x86.mov rbx, [rax+8]
+    x86.mov rcx, rdx
+    x86.mov rdx, rbx
+    x86.call maxon_to_cstring
+    x86.mov rcx, rax
+    x86.call maxon_managed_file_open_write
+    x86.lea_func rcx, [__destruct_TestFile]
+    x86.mov rdx, rcx
+    x86.mov [rbp-24], rax
+    x86.mov rcx, 8
+    x86.mov r8, 2
+    x86.call mm_alloc
+    x86.mov [rbp-16], rax
+    x86.mov rbx, [rbp-16]
+    x86.mov rsi, [rbp-24]
+    x86.mov [rbx+0], rsi
+    x86.mov rcx, [rbp-24]
+    x86.call mm_incref
+    x86.mov rdi, [rbp-16]
+    x86.mov rcx, [rbp-16]
+    x86.call mm_incref
+    x86.mov rax, [rbp-16]
+    x86.epilogue
+    x86.ret
+  }
+  func @TestDir.search(pattern: i64) -> i64 {
+  entry:
+    x86.prologue stack_size=32
+    x86.mov [rbp-8], rcx
+    x86.mov rax, [rbp-8]
+    x86.mov rdx, [rax+0]
+    x86.mov rax, [rbp-8]
+    x86.mov rbx, [rax+8]
+    x86.mov rcx, rdx
+    x86.mov rdx, rbx
+    x86.call maxon_to_cstring
+    x86.mov rcx, rax
+    x86.call maxon_managed_dir_open_search
+    x86.mov [rbp-16], rax
+    x86.xor rcx, rcx
+    x86.cmp rax, rcx
+    x86.jne TestDir.search.fail_0.after
+  fail_0:
+    x86.xor rax, rax
+    x86.mov rcx, 1
+    x86.add rax, rcx
+    x86.mov rdx, rax
+    x86.xor rax, rax
+    x86.epilogue
+    x86.ret
+  fail_0.after:
+    x86.mov rax, [rbp-16]
+    x86.lea_func rcx, [__destruct_TestDir]
+    x86.mov rdx, rcx
+    x86.mov rcx, 8
+    x86.mov r8, 3
+    x86.call mm_alloc
+    x86.mov [rbp-24], rax
+    x86.mov rbx, [rbp-24]
+    x86.mov rsi, [rbp-16]
+    x86.mov [rbx+0], rsi
+    x86.mov rcx, [rbp-16]
+    x86.call mm_incref
+    x86.mov rdi, [rbp-24]
+    x86.mov rcx, [rbp-24]
+    x86.call mm_incref
+    x86.mov rax, [rbp-24]
+    x86.xor rdx, rdx
+    x86.epilogue
+    x86.ret
+  }
   func @managed-directory.createFile(path: i64, content: i64) {
   entry:
-    x86.prologue stack_size=80
+    x86.prologue stack_size=64
     x86.mov [rbp-8], rcx
     x86.mov [rbp-16], rdx
     x86.mov rax, [rbp-8]
     x86.mov rbx, [rax+0]
     x86.mov [rbp-24], rbx
     x86.mov rax, [rbp-24]
-    x86.mov rbx, [rax+0]
-    x86.mov rax, [rbp-24]
-    x86.mov rsi, [rax+8]
-    x86.mov rcx, rbx
-    x86.mov rdx, rsi
-    x86.call maxon_to_cstring
-    x86.mov rcx, rax
-    x86.call maxon_managed_file_open_write
-    x86.lea_func rcx, [__destruct_TestFile]
-    x86.mov rdx, rcx
-    x86.mov [rbp-64], rax
-    x86.mov rcx, 8
-    x86.mov r8, 1
-    x86.call mm_alloc
+    x86.mov rcx, [rbp-24]
+    x86.call TestFile.openWrite
     x86.mov [rbp-32], rax
-    x86.mov rbx, [rbp-32]
-    x86.mov rsi, [rbp-64]
-    x86.mov [rbx+0], rsi
-    x86.mov rcx, [rbp-64]
-    x86.call mm_incref
-    x86.mov rdi, [rbp-32]
     x86.mov rcx, [rbp-32]
-    x86.call mm_incref
-    x86.mov r8, [rbp-32]
-    x86.mov r9, [r8+0]
-    x86.mov [rbp-40], r9
-    x86.mov rax, [rbp-16]
-    x86.mov rcx, [rax+0]
-    x86.mov [rbp-48], rcx
-    x86.mov rax, [rbp-40]
-    x86.mov rcx, [rax+0]
-    x86.mov rax, [rbp-48]
-    x86.mov rdx, [rax+0]
-    x86.mov rax, [rbp-48]
-    x86.mov rbx, [rax+8]
-    x86.mov r8, rbx
+    x86.mov rdx, [rcx+0]
+    x86.mov [rbp-40], rdx
+    x86.mov rbx, [rbp-16]
+    x86.mov rsi, [rbx+0]
+    x86.mov [rbp-48], rsi
+    x86.mov rdi, [rbp-40]
+    x86.mov r8, [rdi+0]
+    x86.mov r9, [rbp-48]
+    x86.mov rax, [r9+0]
+    x86.mov rcx, [rbp-48]
+    x86.mov rdx, [rcx+8]
+    x86.mov rcx, r8
+    x86.mov r8, rdx
+    x86.mov rdx, rax
     x86.call maxon_managed_file_write
     x86.mov rcx, [rbp-32]
     x86.mov rdx, [rcx+0]
     x86.mov [rbp-56], rdx
     x86.mov rcx, [rbp-56]
     x86.mov rdx, [rcx+0]
-    x86.mov [rbp-72], rax
+    x86.mov [rbp-64], rax
     x86.mov rcx, rdx
     x86.call maxon_file_close
     x86.xor rax, rax
-    x86.mov rcx, [rbp-72]
+    x86.mov rcx, [rbp-64]
     x86.cmp rcx, rax
     x86.jge managed-directory.createFile.err_0.after
   err_0:
@@ -145,7 +219,7 @@ module {
   }
   func @main() -> u32 {
   entry:
-    x86.prologue stack_size=928
+    x86.prologue stack_size=912
     x86.xor rax, rax
     x86.mov [rbp-8], rax
     x86.lea_rdata rcx, [__str_0]
@@ -153,21 +227,21 @@ module {
     x86.mov rbx, 23
     x86.lea_func rsi, [__destruct_String]
     x86.mov rdi, rsi
-    x86.mov [rbp-816], rdx
+    x86.mov [rbp-808], rdx
     x86.mov rdx, rdi
-    x86.mov rcx, 24
-    x86.mov r8, 2
+    x86.mov rcx, 32
+    x86.mov r8, 1
     x86.call mm_alloc
     x86.mov [rbp-16], rax
     x86.lea_func r8, [__destruct___ManagedMemory]
     x86.mov r9, r8
     x86.mov rdx, r9
     x86.mov rcx, 32
-    x86.mov r8, 3
+    x86.mov r8, 4
     x86.call mm_alloc
     x86.mov [rbp-24], rax
     x86.mov rax, [rbp-24]
-    x86.mov rcx, [rbp-816]
+    x86.mov rcx, [rbp-808]
     x86.mov [rax+0], rcx
     x86.mov rax, [rbp-24]
     x86.mov rcx, 23
@@ -190,6 +264,9 @@ module {
     x86.mov rax, -1
     x86.mov rcx, [rbp-16]
     x86.mov [rcx+16], rax
+    x86.mov rax, 1
+    x86.mov rcx, [rbp-16]
+    x86.mov [rcx+24], rax
     x86.mov rax, [rbp-16]
     x86.mov rcx, [rbp-16]
     x86.call mm_incref
@@ -243,21 +320,21 @@ module {
     x86.mov rdx, 13
     x86.lea_func rbx, [__destruct_String]
     x86.mov rsi, rbx
-    x86.mov [rbp-816], rcx
+    x86.mov [rbp-808], rcx
     x86.mov rdx, rsi
-    x86.mov rcx, 24
-    x86.mov r8, 2
+    x86.mov rcx, 32
+    x86.mov r8, 1
     x86.call mm_alloc
     x86.mov [rbp-56], rax
     x86.lea_func rdi, [__destruct___ManagedMemory]
     x86.mov r8, rdi
     x86.mov rdx, r8
     x86.mov rcx, 32
-    x86.mov r8, 3
+    x86.mov r8, 4
     x86.call mm_alloc
     x86.mov [rbp-64], rax
     x86.mov r9, [rbp-64]
-    x86.mov rax, [rbp-816]
+    x86.mov rax, [rbp-808]
     x86.mov [r9+0], rax
     x86.mov rax, [rbp-64]
     x86.mov rcx, 13
@@ -280,6 +357,9 @@ module {
     x86.mov rax, -1
     x86.mov rcx, [rbp-56]
     x86.mov [rcx+16], rax
+    x86.mov rax, 1
+    x86.mov rcx, [rbp-56]
+    x86.mov [rcx+24], rax
     x86.mov rax, [rbp-56]
     x86.mov rcx, [rbp-56]
     x86.call mm_incref
@@ -323,37 +403,37 @@ module {
     x86.lea rcx, [rdi + rax]
     x86.lea_func rdx, [__destruct_String]
     x86.mov rsi, rdx
-    x86.mov [rbp-816], rcx
-    x86.mov [rbp-824], rbx
-    x86.mov [rbp-832], rdi
-    x86.mov [rbp-840], r9
+    x86.mov [rbp-808], rcx
+    x86.mov [rbp-816], rbx
+    x86.mov [rbp-824], rdi
+    x86.mov [rbp-832], r9
     x86.mov rdx, rsi
-    x86.mov rcx, 24
-    x86.mov r8, 2
+    x86.mov rcx, 32
+    x86.mov r8, 1
     x86.call mm_alloc
     x86.mov [rbp-80], rax
     x86.lea_func rax, [__destruct___ManagedMemory]
     x86.mov rcx, rax
     x86.mov rdx, rcx
     x86.mov rcx, 32
-    x86.mov r8, 3
+    x86.mov r8, 4
     x86.call mm_alloc
     x86.mov [rbp-88], rax
     x86.mov rax, 1
-    x86.mov rcx, [rbp-816]
+    x86.mov rcx, [rbp-808]
     x86.lea rdx, [rcx + rax]
     x86.mov rcx, rdx
     x86.call mm_raw_alloc
     x86.xor rcx, rcx
     x86.mov [rbp-96], rcx
     x86.mov [rbp-104], rax
-    x86.mov rax, [rbp-816]
+    x86.mov rax, [rbp-808]
     x86.mov [rbp-112], rax
-    x86.mov rax, [rbp-824]
+    x86.mov rax, [rbp-816]
     x86.mov [rbp-120], rax
-    x86.mov rax, [rbp-832]
+    x86.mov rax, [rbp-824]
     x86.mov [rbp-128], rax
-    x86.mov rax, [rbp-840]
+    x86.mov rax, [rbp-832]
     x86.mov [rbp-136], rax
     x86.mov rax, 10
     x86.mov [rbp-144], rax
@@ -407,6 +487,9 @@ module {
     x86.mov rax, -1
     x86.mov rcx, [rbp-80]
     x86.mov [rcx+16], rax
+    x86.xor rax, rax
+    x86.mov rcx, [rbp-80]
+    x86.mov [rcx+24], rax
     x86.mov rax, [rbp-80]
     x86.mov rcx, [rbp-80]
     x86.call mm_incref
@@ -415,21 +498,21 @@ module {
     x86.mov rax, 1
     x86.lea_func rdx, [__destruct_String]
     x86.mov rbx, rdx
-    x86.mov [rbp-848], rcx
+    x86.mov [rbp-840], rcx
     x86.mov rdx, rbx
-    x86.mov rcx, 24
-    x86.mov r8, 2
+    x86.mov rcx, 32
+    x86.mov r8, 1
     x86.call mm_alloc
     x86.mov [rbp-152], rax
     x86.lea_func rax, [__destruct___ManagedMemory]
     x86.mov rcx, rax
     x86.mov rdx, rcx
     x86.mov rcx, 32
-    x86.mov r8, 3
+    x86.mov r8, 4
     x86.call mm_alloc
     x86.mov [rbp-160], rax
     x86.mov rax, [rbp-160]
-    x86.mov rcx, [rbp-848]
+    x86.mov rcx, [rbp-840]
     x86.mov [rax+0], rcx
     x86.mov rax, [rbp-160]
     x86.mov rcx, 1
@@ -452,6 +535,9 @@ module {
     x86.mov rax, -1
     x86.mov rcx, [rbp-152]
     x86.mov [rcx+16], rax
+    x86.mov rax, 1
+    x86.mov rcx, [rbp-152]
+    x86.mov [rcx+24], rax
     x86.mov rax, [rbp-152]
     x86.mov rcx, [rbp-152]
     x86.call mm_incref
@@ -473,37 +559,37 @@ module {
     x86.lea rsi, [rdx + rax]
     x86.lea_func rdi, [__destruct_String]
     x86.mov r8, rdi
-    x86.mov [rbp-856], rcx
-    x86.mov [rbp-864], rdx
-    x86.mov [rbp-872], rbx
-    x86.mov [rbp-880], rsi
+    x86.mov [rbp-848], rcx
+    x86.mov [rbp-856], rdx
+    x86.mov [rbp-864], rbx
+    x86.mov [rbp-872], rsi
     x86.mov rdx, r8
-    x86.mov rcx, 24
-    x86.mov r8, 2
+    x86.mov rcx, 32
+    x86.mov r8, 1
     x86.call mm_alloc
     x86.mov [rbp-176], rax
     x86.lea_func rax, [__destruct___ManagedMemory]
     x86.mov rcx, rax
     x86.mov rdx, rcx
     x86.mov rcx, 32
-    x86.mov r8, 3
+    x86.mov r8, 4
     x86.call mm_alloc
     x86.mov [rbp-184], rax
     x86.mov rax, 1
-    x86.mov rcx, [rbp-880]
+    x86.mov rcx, [rbp-872]
     x86.lea rdx, [rcx + rax]
     x86.mov rcx, rdx
     x86.call mm_raw_alloc
     x86.xor rcx, rcx
     x86.mov [rbp-192], rcx
     x86.mov [rbp-200], rax
-    x86.mov rax, [rbp-880]
-    x86.mov [rbp-208], rax
-    x86.mov rax, [rbp-856]
-    x86.mov [rbp-216], rax
-    x86.mov rax, [rbp-864]
-    x86.mov [rbp-224], rax
     x86.mov rax, [rbp-872]
+    x86.mov [rbp-208], rax
+    x86.mov rax, [rbp-848]
+    x86.mov [rbp-216], rax
+    x86.mov rax, [rbp-856]
+    x86.mov [rbp-224], rax
+    x86.mov rax, [rbp-864]
     x86.mov [rbp-232], rax
     x86.mov rax, 10
     x86.mov [rbp-240], rax
@@ -557,6 +643,9 @@ module {
     x86.mov rax, -1
     x86.mov rcx, [rbp-176]
     x86.mov [rcx+16], rax
+    x86.xor rax, rax
+    x86.mov rcx, [rbp-176]
+    x86.mov [rcx+24], rax
     x86.mov rax, [rbp-176]
     x86.mov rcx, [rbp-176]
     x86.call mm_incref
@@ -565,21 +654,21 @@ module {
     x86.mov rax, 1
     x86.lea_func rdx, [__destruct_String]
     x86.mov rbx, rdx
-    x86.mov [rbp-888], rcx
+    x86.mov [rbp-880], rcx
     x86.mov rdx, rbx
-    x86.mov rcx, 24
-    x86.mov r8, 2
+    x86.mov rcx, 32
+    x86.mov r8, 1
     x86.call mm_alloc
     x86.mov [rbp-248], rax
     x86.lea_func rax, [__destruct___ManagedMemory]
     x86.mov rcx, rax
     x86.mov rdx, rcx
     x86.mov rcx, 32
-    x86.mov r8, 3
+    x86.mov r8, 4
     x86.call mm_alloc
     x86.mov [rbp-256], rax
     x86.mov rax, [rbp-256]
-    x86.mov rcx, [rbp-888]
+    x86.mov rcx, [rbp-880]
     x86.mov [rax+0], rcx
     x86.mov rax, [rbp-256]
     x86.mov rcx, 1
@@ -602,6 +691,9 @@ module {
     x86.mov rax, -1
     x86.mov rcx, [rbp-248]
     x86.mov [rcx+16], rax
+    x86.mov rax, 1
+    x86.mov rcx, [rbp-248]
+    x86.mov [rcx+24], rax
     x86.mov rax, [rbp-248]
     x86.mov rcx, [rbp-248]
     x86.call mm_incref
@@ -623,37 +715,37 @@ module {
     x86.lea rsi, [rdx + rax]
     x86.lea_func rdi, [__destruct_String]
     x86.mov r8, rdi
-    x86.mov [rbp-896], rcx
-    x86.mov [rbp-904], rdx
-    x86.mov [rbp-912], rbx
-    x86.mov [rbp-920], rsi
+    x86.mov [rbp-888], rcx
+    x86.mov [rbp-896], rdx
+    x86.mov [rbp-904], rbx
+    x86.mov [rbp-912], rsi
     x86.mov rdx, r8
-    x86.mov rcx, 24
-    x86.mov r8, 2
+    x86.mov rcx, 32
+    x86.mov r8, 1
     x86.call mm_alloc
     x86.mov [rbp-272], rax
     x86.lea_func rax, [__destruct___ManagedMemory]
     x86.mov rcx, rax
     x86.mov rdx, rcx
     x86.mov rcx, 32
-    x86.mov r8, 3
+    x86.mov r8, 4
     x86.call mm_alloc
     x86.mov [rbp-280], rax
     x86.mov rax, 1
-    x86.mov rcx, [rbp-920]
+    x86.mov rcx, [rbp-912]
     x86.lea rdx, [rcx + rax]
     x86.mov rcx, rdx
     x86.call mm_raw_alloc
     x86.xor rcx, rcx
     x86.mov [rbp-288], rcx
     x86.mov [rbp-296], rax
-    x86.mov rax, [rbp-920]
-    x86.mov [rbp-304], rax
-    x86.mov rax, [rbp-896]
-    x86.mov [rbp-312], rax
-    x86.mov rax, [rbp-904]
-    x86.mov [rbp-320], rax
     x86.mov rax, [rbp-912]
+    x86.mov [rbp-304], rax
+    x86.mov rax, [rbp-888]
+    x86.mov [rbp-312], rax
+    x86.mov rax, [rbp-896]
+    x86.mov [rbp-320], rax
+    x86.mov rax, [rbp-904]
     x86.mov [rbp-328], rax
     x86.mov rax, 2
     x86.mov [rbp-336], rax
@@ -707,6 +799,9 @@ module {
     x86.mov rax, -1
     x86.mov rcx, [rbp-272]
     x86.mov [rcx+16], rax
+    x86.xor rax, rax
+    x86.mov rcx, [rbp-272]
+    x86.mov [rcx+24], rax
     x86.mov rax, [rbp-272]
     x86.mov rcx, [rbp-272]
     x86.call mm_incref
@@ -714,256 +809,235 @@ module {
     x86.mov rcx, [rax+0]
     x86.mov [rbp-344], rcx
     x86.mov rax, [rbp-344]
-    x86.mov rcx, [rax+0]
-    x86.mov rax, [rbp-344]
-    x86.mov rdx, [rax+8]
-    x86.call maxon_to_cstring
-    x86.mov rcx, rax
-    x86.call maxon_managed_dir_open_search
+    x86.mov rcx, [rbp-344]
+    x86.call TestDir.search
     x86.mov [rbp-352], rax
-    x86.xor rcx, rcx
-    x86.cmp rax, rcx
-    x86.jne main.searchFail_2.after
-  searchFail_2:
+    x86.xor rax, rax
+    x86.cmp rdx, rax
+    x86.je main.otherwise_continue_3
+  otherwise_error_2:
     x86.lea_rdata rax, [__str_7]
     x86.mov rcx, rax
     x86.mov rdx, 13
     x86.lea_func rbx, [__destruct_String]
     x86.mov rsi, rbx
-    x86.mov [rbp-816], rcx
+    x86.mov [rbp-808], rcx
     x86.mov rdx, rsi
-    x86.mov rcx, 24
-    x86.mov r8, 2
+    x86.mov rcx, 32
+    x86.mov r8, 1
     x86.call mm_alloc
-    x86.mov [rbp-360], rax
+    x86.mov [rbp-8], rax
     x86.lea_func rdi, [__destruct___ManagedMemory]
     x86.mov r8, rdi
     x86.mov rdx, r8
     x86.mov rcx, 32
-    x86.mov r8, 3
+    x86.mov r8, 4
     x86.call mm_alloc
-    x86.mov [rbp-368], rax
-    x86.mov r9, [rbp-368]
-    x86.mov rax, [rbp-816]
+    x86.mov [rbp-360], rax
+    x86.mov r9, [rbp-360]
+    x86.mov rax, [rbp-808]
     x86.mov [r9+0], rax
-    x86.mov rax, [rbp-368]
+    x86.mov rax, [rbp-360]
     x86.mov rcx, 13
     x86.mov [rax+8], rcx
     x86.xor rax, rax
-    x86.mov rcx, [rbp-368]
+    x86.mov rcx, [rbp-360]
     x86.mov [rcx+16], rax
     x86.mov rax, 1
-    x86.mov rcx, [rbp-368]
-    x86.mov [rcx+24], rax
-    x86.mov rax, [rbp-368]
     x86.mov rcx, [rbp-360]
+    x86.mov [rcx+24], rax
+    x86.mov rax, [rbp-360]
+    x86.mov rcx, [rbp-8]
     x86.mov [rcx+0], rax
-    x86.mov rax, [rbp-368]
-    x86.mov rcx, [rbp-368]
+    x86.mov rax, [rbp-360]
+    x86.mov rcx, [rbp-360]
     x86.call mm_incref
     x86.xor rax, rax
-    x86.mov rcx, [rbp-360]
+    x86.mov rcx, [rbp-8]
     x86.mov [rcx+8], rax
     x86.mov rax, -1
-    x86.mov rcx, [rbp-360]
+    x86.mov rcx, [rbp-8]
     x86.mov [rcx+16], rax
-    x86.mov rax, [rbp-360]
-    x86.mov rcx, [rbp-360]
+    x86.mov rax, 1
+    x86.mov rcx, [rbp-8]
+    x86.mov [rcx+24], rax
+    x86.mov rax, [rbp-8]
+    x86.mov rcx, [rbp-8]
     x86.call mm_incref
-    x86.mov rax, [rbp-360]
-    x86.mov rcx, [rbp-360]
+    x86.mov rax, [rbp-8]
+    x86.mov rcx, [rbp-8]
     x86.call stdlib.Print.print
-    x86.mov rax, [rbp-360]
+    x86.mov rax, [rbp-8]
     x86.test rax, rax
     x86.jz __nonnull_skip_4
-    x86.mov rcx, [rbp-360]
+    x86.mov rcx, [rbp-8]
     x86.call mm_decref
     x86.label __nonnull_skip_4
-    x86.mov rax, [rbp-272]
+    x86.mov rax, [rbp-352]
     x86.test rax, rax
     x86.jz __nonnull_skip_5
-    x86.mov rcx, [rbp-272]
+    x86.mov rcx, [rbp-352]
     x86.call mm_decref
     x86.label __nonnull_skip_5
-    x86.mov rax, [rbp-248]
+    x86.mov rax, [rbp-272]
     x86.test rax, rax
     x86.jz __nonnull_skip_6
-    x86.mov rcx, [rbp-248]
+    x86.mov rcx, [rbp-272]
     x86.call mm_decref
     x86.label __nonnull_skip_6
-    x86.mov rax, [rbp-176]
+    x86.mov rax, [rbp-248]
     x86.test rax, rax
     x86.jz __nonnull_skip_7
-    x86.mov rcx, [rbp-176]
+    x86.mov rcx, [rbp-248]
     x86.call mm_decref
     x86.label __nonnull_skip_7
-    x86.mov rax, [rbp-152]
+    x86.mov rax, [rbp-176]
     x86.test rax, rax
     x86.jz __nonnull_skip_8
-    x86.mov rcx, [rbp-152]
+    x86.mov rcx, [rbp-176]
     x86.call mm_decref
     x86.label __nonnull_skip_8
-    x86.mov rax, [rbp-80]
+    x86.mov rax, [rbp-152]
     x86.test rax, rax
     x86.jz __nonnull_skip_9
-    x86.mov rcx, [rbp-80]
+    x86.mov rcx, [rbp-152]
     x86.call mm_decref
     x86.label __nonnull_skip_9
-    x86.mov rax, [rbp-16]
+    x86.mov rax, [rbp-80]
     x86.test rax, rax
     x86.jz __nonnull_skip_10
-    x86.mov rcx, [rbp-16]
+    x86.mov rcx, [rbp-80]
     x86.call mm_decref
     x86.label __nonnull_skip_10
-    x86.mov rax, [rbp-32]
+    x86.mov rax, [rbp-16]
     x86.test rax, rax
     x86.jz __nonnull_skip_11
-    x86.mov rcx, [rbp-32]
+    x86.mov rcx, [rbp-16]
     x86.call mm_decref
     x86.label __nonnull_skip_11
+    x86.mov rax, [rbp-32]
+    x86.test rax, rax
+    x86.jz __nonnull_skip_12
+    x86.mov rcx, [rbp-32]
+    x86.call mm_decref
+    x86.label __nonnull_skip_12
     x86.mov rax, 2
     x86.epilogue
     x86.ret
-  searchFail_2.after:
+  otherwise_continue_3:
     x86.mov rax, [rbp-352]
-    x86.lea_func rcx, [__destruct_TestDir]
-    x86.mov rdx, rcx
-    x86.mov rcx, 8
-    x86.mov r8, 4
-    x86.call mm_alloc
-    x86.mov [rbp-376], rax
-    x86.mov rbx, [rbp-376]
-    x86.mov rsi, [rbp-352]
-    x86.mov [rbx+0], rsi
-    x86.mov rcx, [rbp-352]
+    x86.mov [rbp-368], rax
+    x86.mov rcx, [rbp-368]
     x86.call mm_incref
-    x86.mov rdi, [rbp-376]
-    x86.mov rcx, [rbp-376]
-    x86.call mm_incref
-    x86.xor r8, r8
-    x86.mov [rbp-384], r8
-    x86.mov r9, [rbp-376]
-    x86.mov rax, [r9+0]
-    x86.mov [rbp-392], rax
-    x86.mov rax, [rbp-392]
-    x86.mov rcx, [rax+0]
+    x86.xor rdx, rdx
+    x86.mov [rbp-376], rdx
+    x86.mov rbx, [rbp-368]
+    x86.mov rsi, [rbx+0]
+    x86.mov [rbp-384], rsi
+    x86.mov rdi, [rbp-384]
+    x86.mov r8, [rdi+0]
+    x86.mov rcx, r8
     x86.call maxon_find_filename
-    x86.mov [rbp-816], rax
-    x86.mov rcx, [rbp-816]
+    x86.mov [rbp-808], rax
+    x86.mov rcx, [rbp-808]
     x86.call maxon_strlen
-    x86.mov [rbp-400], rax
-    x86.mov rax, [rbp-816]
-    x86.mov [rbp-408], rax
+    x86.mov [rbp-392], rax
+    x86.mov r9, [rbp-808]
+    x86.mov [rbp-400], r9
     x86.lea_func rax, [__destruct___ManagedMemory]
     x86.mov rcx, rax
     x86.mov rdx, rcx
     x86.mov rcx, 32
-    x86.mov r8, 3
+    x86.mov r8, 4
     x86.call mm_alloc
-    x86.mov [rbp-416], rax
-    x86.mov rax, [rbp-400]
+    x86.mov [rbp-408], rax
+    x86.mov rax, [rbp-392]
     x86.mov rcx, 1
     x86.add rax, rcx
     x86.mov rcx, rax
     x86.call mm_raw_alloc
-    x86.mov [rbp-424], rax
-    x86.mov rax, [rbp-424]
-    x86.mov rcx, [rbp-408]
-    x86.mov rdx, [rbp-400]
+    x86.mov [rbp-416], rax
+    x86.mov rax, [rbp-416]
+    x86.mov rcx, [rbp-400]
+    x86.mov rdx, [rbp-392]
     x86.mov rbx, 1
     x86.add rdx, rbx
-    x86.mov rcx, [rbp-424]
+    x86.mov rcx, [rbp-416]
     x86.mov r8, rdx
-    x86.mov rdx, [rbp-408]
-    x86.call maxon_memcpy
-    x86.mov rcx, [rbp-424]
     x86.mov rdx, [rbp-400]
+    x86.call maxon_memcpy
+    x86.mov rcx, [rbp-416]
+    x86.mov rdx, [rbp-392]
     x86.mov rbx, 1
     x86.lea rsi, [rdx + rbx]
     x86.mov rbx, 1
-    x86.mov rdi, [rbp-416]
+    x86.mov rdi, [rbp-408]
     x86.mov [rdi+0], rcx
-    x86.mov rcx, [rbp-416]
+    x86.mov rcx, [rbp-408]
     x86.mov [rcx+8], rdx
-    x86.mov rcx, [rbp-416]
+    x86.mov rcx, [rbp-408]
     x86.mov [rcx+16], rsi
-    x86.mov rcx, [rbp-416]
+    x86.mov rcx, [rbp-408]
     x86.mov [rcx+24], rbx
-    x86.mov rcx, [rbp-416]
-    x86.mov [rbp-824], rax
+    x86.mov rcx, [rbp-408]
+    x86.mov [rbp-816], rax
     x86.call mm_incref
-    x86.xor rax, rax
-    x86.xor rcx, rcx
-    x86.lea_func rdx, [__destruct_String]
-    x86.mov rbx, rdx
-    x86.mov rdx, rbx
-    x86.mov rcx, 24
-    x86.mov r8, 2
-    x86.call mm_alloc
-    x86.mov [rbp-432], rax
-    x86.mov rax, [rbp-416]
-    x86.mov rcx, [rbp-432]
-    x86.mov [rcx+0], rax
-    x86.mov rcx, [rbp-416]
-    x86.call mm_incref
-    x86.mov rax, [rbp-432]
-    x86.xor rcx, rcx
-    x86.mov [rax+8], rcx
-    x86.mov rax, [rbp-432]
-    x86.xor rcx, rcx
-    x86.mov [rax+16], rcx
-    x86.mov rax, [rbp-432]
-    x86.mov rcx, [rbp-432]
-    x86.call mm_incref
+    x86.mov rax, [rbp-408]
+    x86.mov rcx, [rbp-408]
+    x86.call stdlib.String.init
+    x86.mov [rbp-424], rax
     x86.lea_rdata rax, [__str_8]
     x86.mov rcx, rax
     x86.mov rax, 1
     x86.lea_func rdx, [__destruct_String]
     x86.mov rbx, rdx
-    x86.mov [rbp-832], rcx
+    x86.mov [rbp-824], rcx
     x86.mov rdx, rbx
-    x86.mov rcx, 24
-    x86.mov r8, 2
+    x86.mov rcx, 32
+    x86.mov r8, 1
     x86.call mm_alloc
-    x86.mov [rbp-440], rax
+    x86.mov [rbp-432], rax
     x86.lea_func rax, [__destruct___ManagedMemory]
     x86.mov rcx, rax
     x86.mov rdx, rcx
     x86.mov rcx, 32
-    x86.mov r8, 3
+    x86.mov r8, 4
     x86.call mm_alloc
-    x86.mov [rbp-448], rax
-    x86.mov rax, [rbp-448]
-    x86.mov rcx, [rbp-832]
+    x86.mov [rbp-440], rax
+    x86.mov rax, [rbp-440]
+    x86.mov rcx, [rbp-824]
     x86.mov [rax+0], rcx
-    x86.mov rax, [rbp-448]
+    x86.mov rax, [rbp-440]
     x86.mov rcx, 1
     x86.mov [rax+8], rcx
     x86.xor rax, rax
-    x86.mov rcx, [rbp-448]
+    x86.mov rcx, [rbp-440]
     x86.mov [rcx+16], rax
     x86.mov rax, 1
-    x86.mov rcx, [rbp-448]
+    x86.mov rcx, [rbp-440]
     x86.mov [rcx+24], rax
-    x86.mov rax, [rbp-448]
-    x86.mov rcx, [rbp-440]
+    x86.mov rax, [rbp-440]
+    x86.mov rcx, [rbp-432]
     x86.mov [rcx+0], rax
-    x86.mov rax, [rbp-448]
-    x86.mov rcx, [rbp-448]
-    x86.call mm_incref
-    x86.xor rax, rax
-    x86.mov rcx, [rbp-440]
-    x86.mov [rcx+8], rax
-    x86.mov rax, -1
-    x86.mov rcx, [rbp-440]
-    x86.mov [rcx+16], rax
     x86.mov rax, [rbp-440]
     x86.mov rcx, [rbp-440]
     x86.call mm_incref
-    x86.mov rax, [rbp-432]
-    x86.mov rcx, [rbp-440]
+    x86.xor rax, rax
     x86.mov rcx, [rbp-432]
-    x86.mov rdx, [rbp-440]
+    x86.mov [rcx+8], rax
+    x86.mov rax, -1
+    x86.mov rcx, [rbp-432]
+    x86.mov [rcx+16], rax
+    x86.mov rax, 1
+    x86.mov rcx, [rbp-432]
+    x86.mov [rcx+24], rax
+    x86.mov rax, [rbp-432]
+    x86.mov rcx, [rbp-432]
+    x86.call mm_incref
+    x86.mov rax, [rbp-424]
+    x86.mov rcx, [rbp-432]
+    x86.mov rcx, [rbp-424]
+    x86.mov rdx, [rbp-432]
     x86.call stdlib.String.equals
     x86.mov rcx, 1
     x86.xor rax, rcx
@@ -972,169 +1046,151 @@ module {
     x86.mov rcx, 2
     x86.lea_func rbx, [__destruct_String]
     x86.mov rsi, rbx
-    x86.mov [rbp-840], rax
-    x86.mov [rbp-848], rdx
+    x86.mov [rbp-832], rax
+    x86.mov [rbp-840], rdx
     x86.mov rdx, rsi
-    x86.mov rcx, 24
-    x86.mov r8, 2
+    x86.mov rcx, 32
+    x86.mov r8, 1
     x86.call mm_alloc
-    x86.mov [rbp-456], rax
+    x86.mov [rbp-448], rax
     x86.lea_func rax, [__destruct___ManagedMemory]
     x86.mov rcx, rax
     x86.mov rdx, rcx
     x86.mov rcx, 32
-    x86.mov r8, 3
+    x86.mov r8, 4
     x86.call mm_alloc
-    x86.mov [rbp-464], rax
-    x86.mov rax, [rbp-464]
-    x86.mov rcx, [rbp-848]
+    x86.mov [rbp-456], rax
+    x86.mov rax, [rbp-456]
+    x86.mov rcx, [rbp-840]
     x86.mov [rax+0], rcx
-    x86.mov rax, [rbp-464]
+    x86.mov rax, [rbp-456]
     x86.mov rcx, 2
     x86.mov [rax+8], rcx
     x86.xor rax, rax
-    x86.mov rcx, [rbp-464]
+    x86.mov rcx, [rbp-456]
     x86.mov [rcx+16], rax
     x86.mov rax, 1
-    x86.mov rcx, [rbp-464]
+    x86.mov rcx, [rbp-456]
     x86.mov [rcx+24], rax
-    x86.mov rax, [rbp-464]
-    x86.mov rcx, [rbp-456]
+    x86.mov rax, [rbp-456]
+    x86.mov rcx, [rbp-448]
     x86.mov [rcx+0], rax
-    x86.mov rax, [rbp-464]
-    x86.mov rcx, [rbp-464]
-    x86.call mm_incref
-    x86.xor rax, rax
-    x86.mov rcx, [rbp-456]
-    x86.mov [rcx+8], rax
-    x86.mov rax, -1
-    x86.mov rcx, [rbp-456]
-    x86.mov [rcx+16], rax
     x86.mov rax, [rbp-456]
     x86.mov rcx, [rbp-456]
     x86.call mm_incref
-    x86.mov rax, [rbp-432]
-    x86.mov rcx, [rbp-456]
-    x86.mov rcx, [rbp-432]
-    x86.mov rdx, [rbp-456]
+    x86.xor rax, rax
+    x86.mov rcx, [rbp-448]
+    x86.mov [rcx+8], rax
+    x86.mov rax, -1
+    x86.mov rcx, [rbp-448]
+    x86.mov [rcx+16], rax
+    x86.mov rax, 1
+    x86.mov rcx, [rbp-448]
+    x86.mov [rcx+24], rax
+    x86.mov rax, [rbp-448]
+    x86.mov rcx, [rbp-448]
+    x86.call mm_incref
+    x86.mov rax, [rbp-424]
+    x86.mov rcx, [rbp-448]
+    x86.mov rcx, [rbp-424]
+    x86.mov rdx, [rbp-448]
     x86.call stdlib.String.equals
     x86.mov rcx, 1
     x86.xor rax, rcx
-    x86.mov rcx, [rbp-840]
+    x86.mov rcx, [rbp-832]
     x86.and rcx, rax
     x86.test rcx, rcx
-    x86.je main.notDot1_3.merge
-  notDot1_3:
+    x86.je main.notDot1_6.merge
+  notDot1_6:
     x86.mov rax, 1
-    x86.mov rcx, [rbp-384]
+    x86.mov rcx, [rbp-376]
     x86.add rcx, rax
-    x86.mov [rbp-384], rcx
-    x86.jmp main.notDot1_3.merge
-  notDot1_3.merge:
-    x86.jmp main.loop_4.header
-  loop_4.header:
-    x86.mov rax, [rbp-376]
+    x86.mov [rbp-376], rcx
+    x86.jmp main.notDot1_6.merge
+  notDot1_6.merge:
+    x86.jmp main.loop_7.header
+  loop_7.header:
+    x86.mov rax, [rbp-368]
     x86.mov rcx, [rax+0]
-    x86.mov [rbp-472], rcx
-    x86.mov rdx, [rbp-472]
+    x86.mov [rbp-464], rcx
+    x86.mov rdx, [rbp-464]
     x86.mov rbx, [rdx+0]
     x86.mov rcx, rbx
     x86.call maxon_find_next_file
     x86.xor rsi, rsi
     x86.cmp rax, rsi
-    x86.je main.loop_4.exit
-  loop_4:
-    x86.mov rax, [rbp-376]
+    x86.je main.loop_7.exit
+  loop_7:
+    x86.mov rax, [rbp-368]
     x86.mov rcx, [rax+0]
-    x86.mov [rbp-480], rcx
-    x86.mov rdx, [rbp-480]
+    x86.mov [rbp-472], rcx
+    x86.mov rdx, [rbp-472]
     x86.mov rbx, [rdx+0]
     x86.mov rcx, rbx
     x86.call maxon_find_filename
-    x86.mov [rbp-816], rax
-    x86.mov rcx, [rbp-816]
+    x86.mov [rbp-808], rax
+    x86.mov rcx, [rbp-808]
     x86.call maxon_strlen
-    x86.mov [rbp-488], rax
-    x86.mov rsi, [rbp-816]
-    x86.mov [rbp-496], rsi
+    x86.mov [rbp-480], rax
+    x86.mov rsi, [rbp-808]
+    x86.mov [rbp-488], rsi
     x86.lea_func rdi, [__destruct___ManagedMemory]
     x86.mov r8, rdi
     x86.mov rdx, r8
     x86.mov rcx, 32
-    x86.mov r8, 3
+    x86.mov r8, 4
     x86.call mm_alloc
-    x86.mov [rbp-504], rax
-    x86.mov r9, [rbp-488]
+    x86.mov [rbp-496], rax
+    x86.mov r9, [rbp-480]
     x86.mov rcx, 1
     x86.add r9, rcx
     x86.mov rcx, r9
     x86.call mm_raw_alloc
-    x86.mov [rbp-512], rax
-    x86.mov rax, [rbp-512]
-    x86.mov rcx, [rbp-496]
-    x86.mov rdx, [rbp-488]
+    x86.mov [rbp-504], rax
+    x86.mov rax, [rbp-504]
+    x86.mov rcx, [rbp-488]
+    x86.mov rdx, [rbp-480]
     x86.mov rbx, 1
     x86.add rdx, rbx
-    x86.mov rcx, [rbp-512]
+    x86.mov rcx, [rbp-504]
     x86.mov r8, rdx
-    x86.mov rdx, [rbp-496]
-    x86.call maxon_memcpy
-    x86.mov rcx, [rbp-512]
     x86.mov rdx, [rbp-488]
+    x86.call maxon_memcpy
+    x86.mov rcx, [rbp-504]
+    x86.mov rdx, [rbp-480]
     x86.mov rbx, 1
     x86.lea rsi, [rdx + rbx]
     x86.mov rbx, 1
-    x86.mov rdi, [rbp-504]
+    x86.mov rdi, [rbp-496]
     x86.mov [rdi+0], rcx
-    x86.mov rcx, [rbp-504]
+    x86.mov rcx, [rbp-496]
     x86.mov [rcx+8], rdx
-    x86.mov rcx, [rbp-504]
+    x86.mov rcx, [rbp-496]
     x86.mov [rcx+16], rsi
-    x86.mov rcx, [rbp-504]
+    x86.mov rcx, [rbp-496]
     x86.mov [rcx+24], rbx
-    x86.mov rcx, [rbp-416]
-    x86.mov [rbp-824], rax
+    x86.mov rcx, [rbp-408]
+    x86.mov [rbp-816], rax
     x86.test rcx, rcx
-    x86.jz __nonnull_skip_12
-    x86.call mm_decref
-    x86.label __nonnull_skip_12
-    x86.mov rax, [rbp-504]
-    x86.mov [rbp-416], rax
-    x86.mov rax, [rbp-416]
-    x86.mov rcx, [rbp-416]
-    x86.call mm_incref
-    x86.xor rax, rax
-    x86.xor rcx, rcx
-    x86.lea_func rdx, [__destruct_String]
-    x86.mov rbx, rdx
-    x86.mov rdx, rbx
-    x86.mov rcx, 24
-    x86.mov r8, 2
-    x86.call mm_alloc
-    x86.mov [rbp-8], rax
-    x86.mov rcx, [rbp-416]
-    x86.mov rdx, [rbp-8]
-    x86.mov [rdx+0], rcx
-    x86.call mm_incref
-    x86.mov rax, [rbp-8]
-    x86.xor rcx, rcx
-    x86.mov [rax+8], rcx
-    x86.mov rax, [rbp-8]
-    x86.xor rcx, rcx
-    x86.mov [rax+16], rcx
-    x86.mov rcx, [rbp-8]
-    x86.call mm_incref
-    x86.mov rax, [rbp-432]
-    x86.test rax, rax
     x86.jz __nonnull_skip_13
-    x86.mov rcx, [rbp-432]
     x86.call mm_decref
     x86.label __nonnull_skip_13
-    x86.mov rax, [rbp-8]
-    x86.mov [rbp-432], rax
-    x86.mov rax, [rbp-432]
-    x86.mov rcx, [rbp-432]
+    x86.mov rax, [rbp-496]
+    x86.mov [rbp-408], rax
+    x86.mov rax, [rbp-408]
+    x86.mov rcx, [rbp-408]
     x86.call mm_incref
+    x86.mov rax, [rbp-408]
+    x86.mov rcx, [rbp-408]
+    x86.call stdlib.String.init
+    x86.mov rcx, [rbp-424]
+    x86.mov [rbp-824], rax
+    x86.test rcx, rcx
+    x86.jz __nonnull_skip_14
+    x86.call mm_decref
+    x86.label __nonnull_skip_14
+    x86.mov rax, [rbp-824]
+    x86.mov [rbp-424], rax
     x86.lea_rdata rax, [__str_8]
     x86.mov rcx, rax
     x86.mov rax, 1
@@ -1142,48 +1198,51 @@ module {
     x86.mov rbx, rdx
     x86.mov [rbp-832], rcx
     x86.mov rdx, rbx
-    x86.mov rcx, 24
-    x86.mov r8, 2
+    x86.mov rcx, 32
+    x86.mov r8, 1
     x86.call mm_alloc
-    x86.mov [rbp-520], rax
+    x86.mov [rbp-512], rax
     x86.lea_func rax, [__destruct___ManagedMemory]
     x86.mov rcx, rax
     x86.mov rdx, rcx
     x86.mov rcx, 32
-    x86.mov r8, 3
+    x86.mov r8, 4
     x86.call mm_alloc
-    x86.mov [rbp-528], rax
-    x86.mov rax, [rbp-528]
+    x86.mov [rbp-520], rax
+    x86.mov rax, [rbp-520]
     x86.mov rcx, [rbp-832]
     x86.mov [rax+0], rcx
-    x86.mov rax, [rbp-528]
+    x86.mov rax, [rbp-520]
     x86.mov rcx, 1
     x86.mov [rax+8], rcx
     x86.xor rax, rax
-    x86.mov rcx, [rbp-528]
+    x86.mov rcx, [rbp-520]
     x86.mov [rcx+16], rax
     x86.mov rax, 1
-    x86.mov rcx, [rbp-528]
+    x86.mov rcx, [rbp-520]
     x86.mov [rcx+24], rax
-    x86.mov rax, [rbp-528]
-    x86.mov rcx, [rbp-520]
+    x86.mov rax, [rbp-520]
+    x86.mov rcx, [rbp-512]
     x86.mov [rcx+0], rax
-    x86.mov rax, [rbp-528]
-    x86.mov rcx, [rbp-528]
-    x86.call mm_incref
-    x86.xor rax, rax
-    x86.mov rcx, [rbp-520]
-    x86.mov [rcx+8], rax
-    x86.mov rax, -1
-    x86.mov rcx, [rbp-520]
-    x86.mov [rcx+16], rax
     x86.mov rax, [rbp-520]
     x86.mov rcx, [rbp-520]
     x86.call mm_incref
-    x86.mov rax, [rbp-432]
-    x86.mov rcx, [rbp-520]
-    x86.mov rcx, [rbp-432]
-    x86.mov rdx, [rbp-520]
+    x86.xor rax, rax
+    x86.mov rcx, [rbp-512]
+    x86.mov [rcx+8], rax
+    x86.mov rax, -1
+    x86.mov rcx, [rbp-512]
+    x86.mov [rcx+16], rax
+    x86.mov rax, 1
+    x86.mov rcx, [rbp-512]
+    x86.mov [rcx+24], rax
+    x86.mov rax, [rbp-512]
+    x86.mov rcx, [rbp-512]
+    x86.call mm_incref
+    x86.mov rax, [rbp-424]
+    x86.mov rcx, [rbp-512]
+    x86.mov rcx, [rbp-424]
+    x86.mov rdx, [rbp-512]
     x86.call stdlib.String.equals
     x86.mov rcx, 1
     x86.xor rax, rcx
@@ -1195,104 +1254,91 @@ module {
     x86.mov [rbp-840], rax
     x86.mov [rbp-848], rdx
     x86.mov rdx, rsi
-    x86.mov rcx, 24
-    x86.mov r8, 2
+    x86.mov rcx, 32
+    x86.mov r8, 1
     x86.call mm_alloc
-    x86.mov [rbp-536], rax
+    x86.mov [rbp-528], rax
     x86.lea_func rax, [__destruct___ManagedMemory]
     x86.mov rcx, rax
     x86.mov rdx, rcx
     x86.mov rcx, 32
-    x86.mov r8, 3
+    x86.mov r8, 4
     x86.call mm_alloc
-    x86.mov [rbp-544], rax
-    x86.mov rax, [rbp-544]
+    x86.mov [rbp-536], rax
+    x86.mov rax, [rbp-536]
     x86.mov rcx, [rbp-848]
     x86.mov [rax+0], rcx
-    x86.mov rax, [rbp-544]
+    x86.mov rax, [rbp-536]
     x86.mov rcx, 2
     x86.mov [rax+8], rcx
     x86.xor rax, rax
-    x86.mov rcx, [rbp-544]
+    x86.mov rcx, [rbp-536]
     x86.mov [rcx+16], rax
     x86.mov rax, 1
-    x86.mov rcx, [rbp-544]
+    x86.mov rcx, [rbp-536]
     x86.mov [rcx+24], rax
-    x86.mov rax, [rbp-544]
-    x86.mov rcx, [rbp-536]
+    x86.mov rax, [rbp-536]
+    x86.mov rcx, [rbp-528]
     x86.mov [rcx+0], rax
-    x86.mov rax, [rbp-544]
-    x86.mov rcx, [rbp-544]
-    x86.call mm_incref
-    x86.xor rax, rax
-    x86.mov rcx, [rbp-536]
-    x86.mov [rcx+8], rax
-    x86.mov rax, -1
-    x86.mov rcx, [rbp-536]
-    x86.mov [rcx+16], rax
     x86.mov rax, [rbp-536]
     x86.mov rcx, [rbp-536]
     x86.call mm_incref
-    x86.mov rax, [rbp-432]
-    x86.mov rcx, [rbp-536]
-    x86.mov rcx, [rbp-432]
-    x86.mov rdx, [rbp-536]
+    x86.xor rax, rax
+    x86.mov rcx, [rbp-528]
+    x86.mov [rcx+8], rax
+    x86.mov rax, -1
+    x86.mov rcx, [rbp-528]
+    x86.mov [rcx+16], rax
+    x86.mov rax, 1
+    x86.mov rcx, [rbp-528]
+    x86.mov [rcx+24], rax
+    x86.mov rax, [rbp-528]
+    x86.mov rcx, [rbp-528]
+    x86.call mm_incref
+    x86.mov rax, [rbp-424]
+    x86.mov rcx, [rbp-528]
+    x86.mov rcx, [rbp-424]
+    x86.mov rdx, [rbp-528]
     x86.call stdlib.String.equals
     x86.mov rcx, 1
     x86.xor rax, rcx
     x86.mov rcx, [rbp-840]
     x86.and rcx, rax
     x86.test rcx, rcx
-    x86.je main.notDot2_5.merge
-  notDot2_5:
+    x86.je main.notDot2_8.merge
+  notDot2_8:
     x86.mov rax, 1
-    x86.mov rcx, [rbp-384]
+    x86.mov rcx, [rbp-376]
     x86.add rcx, rax
-    x86.mov [rbp-384], rcx
-    x86.mov rdx, [rbp-8]
-    x86.test rdx, rdx
-    x86.jz __nonnull_skip_14
-    x86.mov rcx, [rbp-8]
-    x86.call mm_decref
-    x86.label __nonnull_skip_14
-    x86.xor rbx, rbx
-    x86.mov [rbp-8], rbx
-    x86.jmp main.notDot2_5.merge
-  notDot2_5.merge:
-    x86.mov rax, [rbp-536]
+    x86.mov [rbp-376], rcx
+    x86.jmp main.notDot2_8.merge
+  notDot2_8.merge:
+    x86.mov rax, [rbp-528]
     x86.test rax, rax
     x86.jz __nonnull_skip_15
-    x86.mov rcx, [rbp-536]
+    x86.mov rcx, [rbp-528]
     x86.call mm_decref
     x86.label __nonnull_skip_15
-    x86.mov rcx, [rbp-520]
+    x86.mov rcx, [rbp-512]
     x86.test rcx, rcx
     x86.jz __nonnull_skip_16
     x86.call mm_decref
     x86.label __nonnull_skip_16
-    x86.mov rdx, [rbp-8]
-    x86.test rdx, rdx
-    x86.jz __nonnull_skip_17
-    x86.mov rcx, [rbp-8]
-    x86.call mm_decref
-    x86.label __nonnull_skip_17
-    x86.xor rbx, rbx
-    x86.mov [rbp-8], rbx
-    x86.jmp main.loop_4.header
-  loop_4.exit:
-    x86.mov rax, [rbp-376]
+    x86.jmp main.loop_7.header
+  loop_7.exit:
+    x86.mov rax, [rbp-368]
     x86.mov rcx, [rax+0]
-    x86.mov [rbp-552], rcx
-    x86.mov rdx, [rbp-552]
+    x86.mov [rbp-544], rcx
+    x86.mov rdx, [rbp-544]
     x86.mov rbx, [rdx+0]
     x86.mov rcx, rbx
     x86.call maxon_managed_dir_close
     x86.mov rsi, [rbp-32]
     x86.mov rdi, [rsi+0]
-    x86.mov [rbp-560], rdi
-    x86.mov r8, [rbp-560]
+    x86.mov [rbp-552], rdi
+    x86.mov r8, [rbp-552]
     x86.mov r9, [r8+0]
-    x86.mov rax, [rbp-560]
+    x86.mov rax, [rbp-552]
     x86.mov rcx, [rax+8]
     x86.lea_rdata rax, [__interp_lit_2]
     x86.mov rdx, rax
@@ -1300,109 +1346,112 @@ module {
     x86.lea rbx, [rcx + rax]
     x86.lea_func rsi, [__destruct_String]
     x86.mov rdi, rsi
-    x86.mov [rbp-816], rcx
-    x86.mov [rbp-824], rdx
-    x86.mov [rbp-832], rbx
-    x86.mov [rbp-840], r9
+    x86.mov [rbp-808], rcx
+    x86.mov [rbp-816], rdx
+    x86.mov [rbp-824], rbx
+    x86.mov [rbp-832], r9
     x86.mov rdx, rdi
-    x86.mov rcx, 24
-    x86.mov r8, 2
+    x86.mov rcx, 32
+    x86.mov r8, 1
     x86.call mm_alloc
-    x86.mov [rbp-568], rax
+    x86.mov [rbp-560], rax
     x86.lea_func rax, [__destruct___ManagedMemory]
     x86.mov rcx, rax
     x86.mov rdx, rcx
     x86.mov rcx, 32
-    x86.mov r8, 3
+    x86.mov r8, 4
     x86.call mm_alloc
-    x86.mov [rbp-576], rax
+    x86.mov [rbp-568], rax
     x86.mov rax, 1
-    x86.mov rcx, [rbp-832]
+    x86.mov rcx, [rbp-824]
     x86.lea rdx, [rcx + rax]
     x86.mov rcx, rdx
     x86.call mm_raw_alloc
     x86.xor rcx, rcx
-    x86.mov [rbp-584], rcx
+    x86.mov [rbp-576], rcx
+    x86.mov [rbp-584], rax
+    x86.mov rax, [rbp-824]
     x86.mov [rbp-592], rax
     x86.mov rax, [rbp-832]
     x86.mov [rbp-600], rax
-    x86.mov rax, [rbp-840]
+    x86.mov rax, [rbp-808]
     x86.mov [rbp-608], rax
     x86.mov rax, [rbp-816]
     x86.mov [rbp-616], rax
-    x86.mov rax, [rbp-824]
-    x86.mov [rbp-624], rax
     x86.mov rax, 10
-    x86.mov [rbp-632], rax
-    x86.mov rax, [rbp-592]
-    x86.mov rcx, [rbp-584]
+    x86.mov [rbp-624], rax
+    x86.mov rax, [rbp-584]
+    x86.mov rcx, [rbp-576]
     x86.add rax, rcx
+    x86.mov rcx, [rbp-600]
+    x86.mov rdx, [rbp-608]
+    x86.mov rsi, rcx
+    x86.mov rdi, rax
+    x86.mov rcx, rdx
+    x86.rep_movsb
+    x86.mov rax, [rbp-576]
     x86.mov rcx, [rbp-608]
-    x86.mov rdx, [rbp-616]
+    x86.add rax, rcx
+    x86.mov [rbp-576], rax
+    x86.mov rax, [rbp-584]
+    x86.mov rcx, [rbp-576]
+    x86.add rax, rcx
+    x86.mov rcx, [rbp-616]
+    x86.mov rdx, [rbp-624]
     x86.mov rsi, rcx
     x86.mov rdi, rax
     x86.mov rcx, rdx
     x86.rep_movsb
     x86.mov rax, [rbp-584]
-    x86.mov rcx, [rbp-616]
-    x86.add rax, rcx
-    x86.mov [rbp-584], rax
-    x86.mov rax, [rbp-592]
-    x86.mov rcx, [rbp-584]
-    x86.add rax, rcx
-    x86.mov rcx, [rbp-624]
-    x86.mov rdx, [rbp-632]
-    x86.mov rsi, rcx
-    x86.mov rdi, rax
-    x86.mov rcx, rdx
-    x86.rep_movsb
-    x86.mov rax, [rbp-592]
-    x86.mov rcx, [rbp-600]
+    x86.mov rcx, [rbp-592]
     x86.add rax, rcx
     x86.xor rcx, rcx
     x86.mov byte ptr [rax+0], rcxb
-    x86.mov rax, [rbp-592]
-    x86.mov rcx, [rbp-576]
+    x86.mov rax, [rbp-584]
+    x86.mov rcx, [rbp-568]
     x86.mov [rcx+0], rax
-    x86.mov rax, [rbp-600]
-    x86.mov rcx, [rbp-576]
+    x86.mov rax, [rbp-592]
+    x86.mov rcx, [rbp-568]
     x86.mov [rcx+8], rax
-    x86.mov rcx, [rbp-576]
+    x86.mov rcx, [rbp-568]
     x86.mov [rcx+16], rax
     x86.mov rax, 1
-    x86.mov rcx, [rbp-576]
-    x86.mov [rcx+24], rax
-    x86.mov rax, [rbp-576]
     x86.mov rcx, [rbp-568]
+    x86.mov [rcx+24], rax
+    x86.mov rax, [rbp-568]
+    x86.mov rcx, [rbp-560]
     x86.mov [rcx+0], rax
-    x86.mov rax, [rbp-576]
-    x86.mov rcx, [rbp-576]
+    x86.mov rax, [rbp-568]
+    x86.mov rcx, [rbp-568]
     x86.call mm_incref
     x86.xor rax, rax
-    x86.mov rcx, [rbp-568]
+    x86.mov rcx, [rbp-560]
     x86.mov [rcx+8], rax
     x86.mov rax, -1
-    x86.mov rcx, [rbp-568]
+    x86.mov rcx, [rbp-560]
     x86.mov [rcx+16], rax
-    x86.mov rax, [rbp-568]
-    x86.mov rcx, [rbp-568]
+    x86.xor rax, rax
+    x86.mov rcx, [rbp-560]
+    x86.mov [rcx+24], rax
+    x86.mov rax, [rbp-560]
+    x86.mov rcx, [rbp-560]
     x86.call mm_incref
-    x86.mov rax, [rbp-568]
+    x86.mov rax, [rbp-560]
     x86.mov rcx, [rax+0]
-    x86.mov [rbp-640], rcx
-    x86.mov rax, [rbp-640]
+    x86.mov [rbp-632], rcx
+    x86.mov rax, [rbp-632]
     x86.mov rcx, [rax+0]
-    x86.mov rax, [rbp-640]
+    x86.mov rax, [rbp-632]
     x86.mov rdx, [rax+8]
     x86.call maxon_to_cstring
     x86.mov rcx, rax
     x86.call maxon_file_delete
     x86.mov rcx, [rbp-32]
     x86.mov rdx, [rcx+0]
-    x86.mov [rbp-648], rdx
-    x86.mov rcx, [rbp-648]
+    x86.mov [rbp-640], rdx
+    x86.mov rcx, [rbp-640]
     x86.mov rdx, [rcx+0]
-    x86.mov rcx, [rbp-648]
+    x86.mov rcx, [rbp-640]
     x86.mov rbx, [rcx+8]
     x86.lea_rdata rcx, [__interp_lit_4]
     x86.mov rsi, rcx
@@ -1410,100 +1459,103 @@ module {
     x86.lea rdi, [rbx + rcx]
     x86.lea_func r8, [__destruct_String]
     x86.mov r9, r8
-    x86.mov [rbp-848], rax
-    x86.mov [rbp-856], rdx
-    x86.mov [rbp-864], rbx
-    x86.mov [rbp-872], rsi
-    x86.mov [rbp-880], rdi
+    x86.mov [rbp-840], rax
+    x86.mov [rbp-848], rdx
+    x86.mov [rbp-856], rbx
+    x86.mov [rbp-864], rsi
+    x86.mov [rbp-872], rdi
     x86.mov rdx, r9
-    x86.mov rcx, 24
-    x86.mov r8, 2
+    x86.mov rcx, 32
+    x86.mov r8, 1
     x86.call mm_alloc
-    x86.mov [rbp-656], rax
+    x86.mov [rbp-648], rax
     x86.lea_func rax, [__destruct___ManagedMemory]
     x86.mov rcx, rax
     x86.mov rdx, rcx
     x86.mov rcx, 32
-    x86.mov r8, 3
+    x86.mov r8, 4
     x86.call mm_alloc
-    x86.mov [rbp-664], rax
+    x86.mov [rbp-656], rax
     x86.mov rax, 1
-    x86.mov rcx, [rbp-880]
+    x86.mov rcx, [rbp-872]
     x86.lea rdx, [rcx + rax]
     x86.mov rcx, rdx
     x86.call mm_raw_alloc
     x86.xor rcx, rcx
-    x86.mov [rbp-672], rcx
+    x86.mov [rbp-664], rcx
+    x86.mov [rbp-672], rax
+    x86.mov rax, [rbp-872]
     x86.mov [rbp-680], rax
-    x86.mov rax, [rbp-880]
+    x86.mov rax, [rbp-848]
     x86.mov [rbp-688], rax
     x86.mov rax, [rbp-856]
     x86.mov [rbp-696], rax
     x86.mov rax, [rbp-864]
     x86.mov [rbp-704], rax
-    x86.mov rax, [rbp-872]
-    x86.mov [rbp-712], rax
     x86.mov rax, 10
-    x86.mov [rbp-720], rax
-    x86.mov rax, [rbp-680]
-    x86.mov rcx, [rbp-672]
+    x86.mov [rbp-712], rax
+    x86.mov rax, [rbp-672]
+    x86.mov rcx, [rbp-664]
     x86.add rax, rcx
+    x86.mov rcx, [rbp-688]
+    x86.mov rdx, [rbp-696]
+    x86.mov rsi, rcx
+    x86.mov rdi, rax
+    x86.mov rcx, rdx
+    x86.rep_movsb
+    x86.mov rax, [rbp-664]
     x86.mov rcx, [rbp-696]
-    x86.mov rdx, [rbp-704]
+    x86.add rax, rcx
+    x86.mov [rbp-664], rax
+    x86.mov rax, [rbp-672]
+    x86.mov rcx, [rbp-664]
+    x86.add rax, rcx
+    x86.mov rcx, [rbp-704]
+    x86.mov rdx, [rbp-712]
     x86.mov rsi, rcx
     x86.mov rdi, rax
     x86.mov rcx, rdx
     x86.rep_movsb
     x86.mov rax, [rbp-672]
-    x86.mov rcx, [rbp-704]
-    x86.add rax, rcx
-    x86.mov [rbp-672], rax
-    x86.mov rax, [rbp-680]
-    x86.mov rcx, [rbp-672]
-    x86.add rax, rcx
-    x86.mov rcx, [rbp-712]
-    x86.mov rdx, [rbp-720]
-    x86.mov rsi, rcx
-    x86.mov rdi, rax
-    x86.mov rcx, rdx
-    x86.rep_movsb
-    x86.mov rax, [rbp-680]
-    x86.mov rcx, [rbp-688]
+    x86.mov rcx, [rbp-680]
     x86.add rax, rcx
     x86.xor rcx, rcx
     x86.mov byte ptr [rax+0], rcxb
-    x86.mov rax, [rbp-680]
-    x86.mov rcx, [rbp-664]
+    x86.mov rax, [rbp-672]
+    x86.mov rcx, [rbp-656]
     x86.mov [rcx+0], rax
-    x86.mov rax, [rbp-688]
-    x86.mov rcx, [rbp-664]
+    x86.mov rax, [rbp-680]
+    x86.mov rcx, [rbp-656]
     x86.mov [rcx+8], rax
-    x86.mov rcx, [rbp-664]
+    x86.mov rcx, [rbp-656]
     x86.mov [rcx+16], rax
     x86.mov rax, 1
-    x86.mov rcx, [rbp-664]
-    x86.mov [rcx+24], rax
-    x86.mov rax, [rbp-664]
     x86.mov rcx, [rbp-656]
+    x86.mov [rcx+24], rax
+    x86.mov rax, [rbp-656]
+    x86.mov rcx, [rbp-648]
     x86.mov [rcx+0], rax
-    x86.mov rax, [rbp-664]
-    x86.mov rcx, [rbp-664]
+    x86.mov rax, [rbp-656]
+    x86.mov rcx, [rbp-656]
     x86.call mm_incref
     x86.xor rax, rax
-    x86.mov rcx, [rbp-656]
+    x86.mov rcx, [rbp-648]
     x86.mov [rcx+8], rax
     x86.mov rax, -1
-    x86.mov rcx, [rbp-656]
+    x86.mov rcx, [rbp-648]
     x86.mov [rcx+16], rax
-    x86.mov rax, [rbp-656]
-    x86.mov rcx, [rbp-656]
+    x86.xor rax, rax
+    x86.mov rcx, [rbp-648]
+    x86.mov [rcx+24], rax
+    x86.mov rax, [rbp-648]
+    x86.mov rcx, [rbp-648]
     x86.call mm_incref
-    x86.mov rax, [rbp-656]
+    x86.mov rax, [rbp-648]
     x86.mov rcx, [rax+0]
-    x86.mov [rbp-728], rcx
-    x86.mov rax, [rbp-728]
+    x86.mov [rbp-720], rcx
+    x86.mov rax, [rbp-720]
     x86.mov rcx, [rax+0]
-    x86.mov rax, [rbp-728]
+    x86.mov rax, [rbp-720]
     x86.mov rdx, [rax+8]
     x86.call maxon_to_cstring
     x86.mov rcx, rax
@@ -1511,423 +1563,428 @@ module {
     x86.xor rcx, rcx
     x86.xor rdx, rdx
     x86.cmp rax, rdx
-    x86.jne main.delErr_6
-    x86.mov rbx, [rbp-848]
+    x86.jne main.delErr_9
+    x86.mov rbx, [rbp-840]
     x86.cmp rbx, rcx
-    x86.jne main.delErr_6
-    x86.jmp main.delErr_6.after
-  delErr_6:
-    x86.mov rax, [rbp-656]
+    x86.jne main.delErr_9
+    x86.jmp main.delErr_9.after
+  delErr_9:
+    x86.mov rax, [rbp-648]
     x86.test rax, rax
+    x86.jz __nonnull_skip_17
+    x86.mov rcx, [rbp-648]
+    x86.call mm_decref
+    x86.label __nonnull_skip_17
+    x86.mov rcx, [rbp-560]
+    x86.test rcx, rcx
     x86.jz __nonnull_skip_18
-    x86.mov rcx, [rbp-656]
     x86.call mm_decref
     x86.label __nonnull_skip_18
-    x86.mov rcx, [rbp-568]
-    x86.test rcx, rcx
+    x86.mov rdx, [rbp-448]
+    x86.test rdx, rdx
     x86.jz __nonnull_skip_19
+    x86.mov rcx, [rbp-448]
     x86.call mm_decref
     x86.label __nonnull_skip_19
-    x86.mov rdx, [rbp-456]
-    x86.test rdx, rdx
-    x86.jz __nonnull_skip_20
-    x86.mov rcx, [rbp-456]
-    x86.call mm_decref
-    x86.label __nonnull_skip_20
-    x86.mov rbx, [rbp-440]
+    x86.mov rbx, [rbp-432]
     x86.test rbx, rbx
-    x86.jz __nonnull_skip_21
-    x86.mov rcx, [rbp-440]
-    x86.call mm_decref
-    x86.label __nonnull_skip_21
-    x86.mov rsi, [rbp-272]
-    x86.test rsi, rsi
-    x86.jz __nonnull_skip_22
-    x86.mov rcx, [rbp-272]
-    x86.call mm_decref
-    x86.label __nonnull_skip_22
-    x86.mov rdi, [rbp-248]
-    x86.test rdi, rdi
-    x86.jz __nonnull_skip_23
-    x86.mov rcx, [rbp-248]
-    x86.call mm_decref
-    x86.label __nonnull_skip_23
-    x86.mov r8, [rbp-176]
-    x86.test r8, r8
-    x86.jz __nonnull_skip_24
-    x86.mov rcx, [rbp-176]
-    x86.call mm_decref
-    x86.label __nonnull_skip_24
-    x86.mov r9, [rbp-152]
-    x86.test r9, r9
-    x86.jz __nonnull_skip_25
-    x86.mov rcx, [rbp-152]
-    x86.call mm_decref
-    x86.label __nonnull_skip_25
-    x86.mov rax, [rbp-80]
-    x86.test rax, rax
-    x86.jz __nonnull_skip_26
-    x86.mov rcx, [rbp-80]
-    x86.call mm_decref
-    x86.label __nonnull_skip_26
-    x86.mov rax, [rbp-16]
-    x86.test rax, rax
-    x86.jz __nonnull_skip_27
-    x86.mov rcx, [rbp-16]
-    x86.call mm_decref
-    x86.label __nonnull_skip_27
-    x86.mov rax, [rbp-432]
-    x86.test rax, rax
-    x86.jz __nonnull_skip_28
+    x86.jz __nonnull_skip_20
     x86.mov rcx, [rbp-432]
     x86.call mm_decref
+    x86.label __nonnull_skip_20
+    x86.mov rsi, [rbp-8]
+    x86.test rsi, rsi
+    x86.jz __nonnull_skip_21
+    x86.mov rcx, [rbp-8]
+    x86.call mm_decref
+    x86.label __nonnull_skip_21
+    x86.mov rdi, [rbp-352]
+    x86.test rdi, rdi
+    x86.jz __nonnull_skip_22
+    x86.mov rcx, [rbp-352]
+    x86.call mm_decref
+    x86.label __nonnull_skip_22
+    x86.mov r8, [rbp-272]
+    x86.test r8, r8
+    x86.jz __nonnull_skip_23
+    x86.mov rcx, [rbp-272]
+    x86.call mm_decref
+    x86.label __nonnull_skip_23
+    x86.mov r9, [rbp-248]
+    x86.test r9, r9
+    x86.jz __nonnull_skip_24
+    x86.mov rcx, [rbp-248]
+    x86.call mm_decref
+    x86.label __nonnull_skip_24
+    x86.mov rax, [rbp-176]
+    x86.test rax, rax
+    x86.jz __nonnull_skip_25
+    x86.mov rcx, [rbp-176]
+    x86.call mm_decref
+    x86.label __nonnull_skip_25
+    x86.mov rax, [rbp-152]
+    x86.test rax, rax
+    x86.jz __nonnull_skip_26
+    x86.mov rcx, [rbp-152]
+    x86.call mm_decref
+    x86.label __nonnull_skip_26
+    x86.mov rax, [rbp-80]
+    x86.test rax, rax
+    x86.jz __nonnull_skip_27
+    x86.mov rcx, [rbp-80]
+    x86.call mm_decref
+    x86.label __nonnull_skip_27
+    x86.mov rax, [rbp-16]
+    x86.test rax, rax
+    x86.jz __nonnull_skip_28
+    x86.mov rcx, [rbp-16]
+    x86.call mm_decref
     x86.label __nonnull_skip_28
-    x86.mov rax, [rbp-416]
+    x86.mov rax, [rbp-424]
     x86.test rax, rax
     x86.jz __nonnull_skip_29
-    x86.mov rcx, [rbp-416]
+    x86.mov rcx, [rbp-424]
     x86.call mm_decref
     x86.label __nonnull_skip_29
-    x86.mov rax, [rbp-376]
+    x86.mov rax, [rbp-408]
     x86.test rax, rax
     x86.jz __nonnull_skip_30
-    x86.mov rcx, [rbp-376]
+    x86.mov rcx, [rbp-408]
     x86.call mm_decref
     x86.label __nonnull_skip_30
-    x86.mov rax, [rbp-32]
+    x86.mov rax, [rbp-368]
     x86.test rax, rax
     x86.jz __nonnull_skip_31
-    x86.mov rcx, [rbp-32]
+    x86.mov rcx, [rbp-368]
     x86.call mm_decref
     x86.label __nonnull_skip_31
-    x86.mov rax, [rbp-8]
+    x86.mov rax, [rbp-32]
     x86.test rax, rax
     x86.jz __nonnull_skip_32
-    x86.mov rcx, [rbp-8]
+    x86.mov rcx, [rbp-32]
     x86.call mm_decref
     x86.label __nonnull_skip_32
     x86.mov rax, 4
     x86.epilogue
     x86.ret
-  delErr_6.after:
+  delErr_9.after:
     x86.mov rax, 2
-    x86.mov rcx, [rbp-384]
+    x86.mov rcx, [rbp-376]
     x86.cmp rcx, rax
-    x86.jne main.checkCount_7.after
-  checkCount_7:
-    x86.mov rax, [rbp-656]
+    x86.jne main.checkCount_10.after
+  checkCount_10:
+    x86.mov rax, [rbp-648]
     x86.test rax, rax
     x86.jz __nonnull_skip_33
-    x86.mov rcx, [rbp-656]
+    x86.mov rcx, [rbp-648]
     x86.call mm_decref
     x86.label __nonnull_skip_33
-    x86.mov rcx, [rbp-568]
+    x86.mov rcx, [rbp-560]
     x86.test rcx, rcx
     x86.jz __nonnull_skip_34
     x86.call mm_decref
     x86.label __nonnull_skip_34
-    x86.mov rdx, [rbp-456]
+    x86.mov rdx, [rbp-448]
     x86.test rdx, rdx
     x86.jz __nonnull_skip_35
-    x86.mov rcx, [rbp-456]
+    x86.mov rcx, [rbp-448]
     x86.call mm_decref
     x86.label __nonnull_skip_35
-    x86.mov rbx, [rbp-440]
+    x86.mov rbx, [rbp-432]
     x86.test rbx, rbx
     x86.jz __nonnull_skip_36
-    x86.mov rcx, [rbp-440]
-    x86.call mm_decref
-    x86.label __nonnull_skip_36
-    x86.mov rsi, [rbp-272]
-    x86.test rsi, rsi
-    x86.jz __nonnull_skip_37
-    x86.mov rcx, [rbp-272]
-    x86.call mm_decref
-    x86.label __nonnull_skip_37
-    x86.mov rdi, [rbp-248]
-    x86.test rdi, rdi
-    x86.jz __nonnull_skip_38
-    x86.mov rcx, [rbp-248]
-    x86.call mm_decref
-    x86.label __nonnull_skip_38
-    x86.mov r8, [rbp-176]
-    x86.test r8, r8
-    x86.jz __nonnull_skip_39
-    x86.mov rcx, [rbp-176]
-    x86.call mm_decref
-    x86.label __nonnull_skip_39
-    x86.mov r9, [rbp-152]
-    x86.test r9, r9
-    x86.jz __nonnull_skip_40
-    x86.mov rcx, [rbp-152]
-    x86.call mm_decref
-    x86.label __nonnull_skip_40
-    x86.mov rax, [rbp-80]
-    x86.test rax, rax
-    x86.jz __nonnull_skip_41
-    x86.mov rcx, [rbp-80]
-    x86.call mm_decref
-    x86.label __nonnull_skip_41
-    x86.mov rax, [rbp-16]
-    x86.test rax, rax
-    x86.jz __nonnull_skip_42
-    x86.mov rcx, [rbp-16]
-    x86.call mm_decref
-    x86.label __nonnull_skip_42
-    x86.mov rax, [rbp-432]
-    x86.test rax, rax
-    x86.jz __nonnull_skip_43
     x86.mov rcx, [rbp-432]
     x86.call mm_decref
-    x86.label __nonnull_skip_43
-    x86.mov rax, [rbp-416]
-    x86.test rax, rax
-    x86.jz __nonnull_skip_44
-    x86.mov rcx, [rbp-416]
-    x86.call mm_decref
-    x86.label __nonnull_skip_44
-    x86.mov rax, [rbp-376]
-    x86.test rax, rax
-    x86.jz __nonnull_skip_45
-    x86.mov rcx, [rbp-376]
-    x86.call mm_decref
-    x86.label __nonnull_skip_45
-    x86.mov rax, [rbp-32]
-    x86.test rax, rax
-    x86.jz __nonnull_skip_46
-    x86.mov rcx, [rbp-32]
-    x86.call mm_decref
-    x86.label __nonnull_skip_46
-    x86.mov rax, [rbp-8]
-    x86.test rax, rax
-    x86.jz __nonnull_skip_47
+    x86.label __nonnull_skip_36
+    x86.mov rsi, [rbp-8]
+    x86.test rsi, rsi
+    x86.jz __nonnull_skip_37
     x86.mov rcx, [rbp-8]
     x86.call mm_decref
+    x86.label __nonnull_skip_37
+    x86.mov rdi, [rbp-352]
+    x86.test rdi, rdi
+    x86.jz __nonnull_skip_38
+    x86.mov rcx, [rbp-352]
+    x86.call mm_decref
+    x86.label __nonnull_skip_38
+    x86.mov r8, [rbp-272]
+    x86.test r8, r8
+    x86.jz __nonnull_skip_39
+    x86.mov rcx, [rbp-272]
+    x86.call mm_decref
+    x86.label __nonnull_skip_39
+    x86.mov r9, [rbp-248]
+    x86.test r9, r9
+    x86.jz __nonnull_skip_40
+    x86.mov rcx, [rbp-248]
+    x86.call mm_decref
+    x86.label __nonnull_skip_40
+    x86.mov rax, [rbp-176]
+    x86.test rax, rax
+    x86.jz __nonnull_skip_41
+    x86.mov rcx, [rbp-176]
+    x86.call mm_decref
+    x86.label __nonnull_skip_41
+    x86.mov rax, [rbp-152]
+    x86.test rax, rax
+    x86.jz __nonnull_skip_42
+    x86.mov rcx, [rbp-152]
+    x86.call mm_decref
+    x86.label __nonnull_skip_42
+    x86.mov rax, [rbp-80]
+    x86.test rax, rax
+    x86.jz __nonnull_skip_43
+    x86.mov rcx, [rbp-80]
+    x86.call mm_decref
+    x86.label __nonnull_skip_43
+    x86.mov rax, [rbp-16]
+    x86.test rax, rax
+    x86.jz __nonnull_skip_44
+    x86.mov rcx, [rbp-16]
+    x86.call mm_decref
+    x86.label __nonnull_skip_44
+    x86.mov rax, [rbp-424]
+    x86.test rax, rax
+    x86.jz __nonnull_skip_45
+    x86.mov rcx, [rbp-424]
+    x86.call mm_decref
+    x86.label __nonnull_skip_45
+    x86.mov rax, [rbp-408]
+    x86.test rax, rax
+    x86.jz __nonnull_skip_46
+    x86.mov rcx, [rbp-408]
+    x86.call mm_decref
+    x86.label __nonnull_skip_46
+    x86.mov rax, [rbp-368]
+    x86.test rax, rax
+    x86.jz __nonnull_skip_47
+    x86.mov rcx, [rbp-368]
+    x86.call mm_decref
     x86.label __nonnull_skip_47
+    x86.mov rax, [rbp-32]
+    x86.test rax, rax
+    x86.jz __nonnull_skip_48
+    x86.mov rcx, [rbp-32]
+    x86.call mm_decref
+    x86.label __nonnull_skip_48
     x86.mov rax, 42
     x86.epilogue
     x86.ret
-  checkCount_7.after:
-    x86.mov rax, [rbp-384]
+  checkCount_10.after:
+    x86.mov rax, [rbp-376]
     x86.lea_rdata rcx, [__interp_lit_14]
     x86.mov rdx, rcx
     x86.mov rbx, 18
-    x86.mov [rbp-816], rdx
+    x86.mov [rbp-808], rdx
     x86.mov rcx, 21
     x86.call mm_raw_alloc
-    x86.mov [rbp-736], rax
-    x86.mov rcx, [rbp-384]
-    x86.mov rdx, [rbp-736]
+    x86.mov [rbp-728], rax
+    x86.mov rcx, [rbp-376]
+    x86.mov rdx, [rbp-728]
     x86.call maxon_i64_to_string
-    x86.mov rsi, [rbp-736]
+    x86.mov rsi, [rbp-728]
     x86.mov rdi, 18
     x86.lea r8, [rdi + rax]
     x86.lea_func r9, [__destruct_String]
     x86.mov rcx, r9
-    x86.mov [rbp-824], rax
-    x86.mov [rbp-832], r8
+    x86.mov [rbp-816], rax
+    x86.mov [rbp-824], r8
     x86.mov rdx, rcx
-    x86.mov rcx, 24
-    x86.mov r8, 2
+    x86.mov rcx, 32
+    x86.mov r8, 1
     x86.call mm_alloc
-    x86.mov [rbp-744], rax
+    x86.mov [rbp-736], rax
     x86.lea_func rax, [__destruct___ManagedMemory]
     x86.mov rcx, rax
     x86.mov rdx, rcx
     x86.mov rcx, 32
-    x86.mov r8, 3
+    x86.mov r8, 4
     x86.call mm_alloc
-    x86.mov [rbp-752], rax
+    x86.mov [rbp-744], rax
     x86.mov rax, 1
-    x86.mov rcx, [rbp-832]
+    x86.mov rcx, [rbp-824]
     x86.lea rdx, [rcx + rax]
     x86.mov rcx, rdx
     x86.call mm_raw_alloc
     x86.xor rcx, rcx
-    x86.mov [rbp-760], rcx
-    x86.mov [rbp-768], rax
-    x86.mov rax, [rbp-832]
-    x86.mov [rbp-776], rax
-    x86.mov rax, [rbp-816]
-    x86.mov [rbp-784], rax
-    x86.mov rax, 18
-    x86.mov [rbp-792], rax
-    x86.mov rax, [rbp-736]
-    x86.mov [rbp-800], rax
+    x86.mov [rbp-752], rcx
+    x86.mov [rbp-760], rax
     x86.mov rax, [rbp-824]
-    x86.mov [rbp-808], rax
-    x86.mov rax, [rbp-768]
-    x86.mov rcx, [rbp-760]
+    x86.mov [rbp-768], rax
+    x86.mov rax, [rbp-808]
+    x86.mov [rbp-776], rax
+    x86.mov rax, 18
+    x86.mov [rbp-784], rax
+    x86.mov rax, [rbp-728]
+    x86.mov [rbp-792], rax
+    x86.mov rax, [rbp-816]
+    x86.mov [rbp-800], rax
+    x86.mov rax, [rbp-760]
+    x86.mov rcx, [rbp-752]
     x86.add rax, rcx
+    x86.mov rcx, [rbp-776]
+    x86.mov rdx, [rbp-784]
+    x86.mov rsi, rcx
+    x86.mov rdi, rax
+    x86.mov rcx, rdx
+    x86.rep_movsb
+    x86.mov rax, [rbp-752]
     x86.mov rcx, [rbp-784]
-    x86.mov rdx, [rbp-792]
+    x86.add rax, rcx
+    x86.mov [rbp-752], rax
+    x86.mov rax, [rbp-760]
+    x86.mov rcx, [rbp-752]
+    x86.add rax, rcx
+    x86.mov rcx, [rbp-792]
+    x86.mov rdx, [rbp-800]
     x86.mov rsi, rcx
     x86.mov rdi, rax
     x86.mov rcx, rdx
     x86.rep_movsb
     x86.mov rax, [rbp-760]
-    x86.mov rcx, [rbp-792]
-    x86.add rax, rcx
-    x86.mov [rbp-760], rax
-    x86.mov rax, [rbp-768]
-    x86.mov rcx, [rbp-760]
-    x86.add rax, rcx
-    x86.mov rcx, [rbp-800]
-    x86.mov rdx, [rbp-808]
-    x86.mov rsi, rcx
-    x86.mov rdi, rax
-    x86.mov rcx, rdx
-    x86.rep_movsb
-    x86.mov rax, [rbp-768]
-    x86.mov rcx, [rbp-776]
+    x86.mov rcx, [rbp-768]
     x86.add rax, rcx
     x86.xor rcx, rcx
     x86.mov byte ptr [rax+0], rcxb
-    x86.mov rax, [rbp-736]
-    x86.mov rcx, [rbp-736]
+    x86.mov rax, [rbp-728]
+    x86.mov rcx, [rbp-728]
     x86.call mm_raw_free
-    x86.mov rax, [rbp-768]
-    x86.mov rcx, [rbp-752]
+    x86.mov rax, [rbp-760]
+    x86.mov rcx, [rbp-744]
     x86.mov [rcx+0], rax
-    x86.mov rax, [rbp-776]
-    x86.mov rcx, [rbp-752]
+    x86.mov rax, [rbp-768]
+    x86.mov rcx, [rbp-744]
     x86.mov [rcx+8], rax
-    x86.mov rcx, [rbp-752]
+    x86.mov rcx, [rbp-744]
     x86.mov [rcx+16], rax
     x86.mov rax, 1
-    x86.mov rcx, [rbp-752]
-    x86.mov [rcx+24], rax
-    x86.mov rax, [rbp-752]
     x86.mov rcx, [rbp-744]
+    x86.mov [rcx+24], rax
+    x86.mov rax, [rbp-744]
+    x86.mov rcx, [rbp-736]
     x86.mov [rcx+0], rax
-    x86.mov rax, [rbp-752]
-    x86.mov rcx, [rbp-752]
+    x86.mov rax, [rbp-744]
+    x86.mov rcx, [rbp-744]
     x86.call mm_incref
     x86.xor rax, rax
-    x86.mov rcx, [rbp-744]
+    x86.mov rcx, [rbp-736]
     x86.mov [rcx+8], rax
     x86.mov rax, -1
-    x86.mov rcx, [rbp-744]
+    x86.mov rcx, [rbp-736]
     x86.mov [rcx+16], rax
-    x86.mov rax, [rbp-744]
-    x86.mov rcx, [rbp-744]
+    x86.xor rax, rax
+    x86.mov rcx, [rbp-736]
+    x86.mov [rcx+24], rax
+    x86.mov rax, [rbp-736]
+    x86.mov rcx, [rbp-736]
     x86.call mm_incref
-    x86.mov rax, [rbp-744]
-    x86.mov rcx, [rbp-744]
+    x86.mov rax, [rbp-736]
+    x86.mov rcx, [rbp-736]
     x86.call stdlib.Print.print
-    x86.mov rax, [rbp-744]
-    x86.test rax, rax
-    x86.jz __nonnull_skip_48
-    x86.mov rcx, [rbp-744]
-    x86.call mm_decref
-    x86.label __nonnull_skip_48
-    x86.mov rax, [rbp-656]
+    x86.mov rax, [rbp-736]
     x86.test rax, rax
     x86.jz __nonnull_skip_49
-    x86.mov rcx, [rbp-656]
+    x86.mov rcx, [rbp-736]
     x86.call mm_decref
     x86.label __nonnull_skip_49
-    x86.mov rax, [rbp-568]
+    x86.mov rax, [rbp-648]
     x86.test rax, rax
     x86.jz __nonnull_skip_50
-    x86.mov rcx, [rbp-568]
+    x86.mov rcx, [rbp-648]
     x86.call mm_decref
     x86.label __nonnull_skip_50
-    x86.mov rax, [rbp-456]
+    x86.mov rax, [rbp-560]
     x86.test rax, rax
     x86.jz __nonnull_skip_51
-    x86.mov rcx, [rbp-456]
+    x86.mov rcx, [rbp-560]
     x86.call mm_decref
     x86.label __nonnull_skip_51
-    x86.mov rax, [rbp-440]
+    x86.mov rax, [rbp-448]
     x86.test rax, rax
     x86.jz __nonnull_skip_52
-    x86.mov rcx, [rbp-440]
+    x86.mov rcx, [rbp-448]
     x86.call mm_decref
     x86.label __nonnull_skip_52
-    x86.mov rax, [rbp-272]
-    x86.test rax, rax
-    x86.jz __nonnull_skip_53
-    x86.mov rcx, [rbp-272]
-    x86.call mm_decref
-    x86.label __nonnull_skip_53
-    x86.mov rax, [rbp-248]
-    x86.test rax, rax
-    x86.jz __nonnull_skip_54
-    x86.mov rcx, [rbp-248]
-    x86.call mm_decref
-    x86.label __nonnull_skip_54
-    x86.mov rax, [rbp-176]
-    x86.test rax, rax
-    x86.jz __nonnull_skip_55
-    x86.mov rcx, [rbp-176]
-    x86.call mm_decref
-    x86.label __nonnull_skip_55
-    x86.mov rax, [rbp-152]
-    x86.test rax, rax
-    x86.jz __nonnull_skip_56
-    x86.mov rcx, [rbp-152]
-    x86.call mm_decref
-    x86.label __nonnull_skip_56
-    x86.mov rax, [rbp-80]
-    x86.test rax, rax
-    x86.jz __nonnull_skip_57
-    x86.mov rcx, [rbp-80]
-    x86.call mm_decref
-    x86.label __nonnull_skip_57
-    x86.mov rax, [rbp-16]
-    x86.test rax, rax
-    x86.jz __nonnull_skip_58
-    x86.mov rcx, [rbp-16]
-    x86.call mm_decref
-    x86.label __nonnull_skip_58
     x86.mov rax, [rbp-432]
     x86.test rax, rax
-    x86.jz __nonnull_skip_59
+    x86.jz __nonnull_skip_53
     x86.mov rcx, [rbp-432]
     x86.call mm_decref
-    x86.label __nonnull_skip_59
-    x86.mov rax, [rbp-416]
-    x86.test rax, rax
-    x86.jz __nonnull_skip_60
-    x86.mov rcx, [rbp-416]
-    x86.call mm_decref
-    x86.label __nonnull_skip_60
-    x86.mov rax, [rbp-376]
-    x86.test rax, rax
-    x86.jz __nonnull_skip_61
-    x86.mov rcx, [rbp-376]
-    x86.call mm_decref
-    x86.label __nonnull_skip_61
-    x86.mov rax, [rbp-32]
-    x86.test rax, rax
-    x86.jz __nonnull_skip_62
-    x86.mov rcx, [rbp-32]
-    x86.call mm_decref
-    x86.label __nonnull_skip_62
+    x86.label __nonnull_skip_53
     x86.mov rax, [rbp-8]
     x86.test rax, rax
-    x86.jz __nonnull_skip_63
+    x86.jz __nonnull_skip_54
     x86.mov rcx, [rbp-8]
     x86.call mm_decref
+    x86.label __nonnull_skip_54
+    x86.mov rax, [rbp-352]
+    x86.test rax, rax
+    x86.jz __nonnull_skip_55
+    x86.mov rcx, [rbp-352]
+    x86.call mm_decref
+    x86.label __nonnull_skip_55
+    x86.mov rax, [rbp-272]
+    x86.test rax, rax
+    x86.jz __nonnull_skip_56
+    x86.mov rcx, [rbp-272]
+    x86.call mm_decref
+    x86.label __nonnull_skip_56
+    x86.mov rax, [rbp-248]
+    x86.test rax, rax
+    x86.jz __nonnull_skip_57
+    x86.mov rcx, [rbp-248]
+    x86.call mm_decref
+    x86.label __nonnull_skip_57
+    x86.mov rax, [rbp-176]
+    x86.test rax, rax
+    x86.jz __nonnull_skip_58
+    x86.mov rcx, [rbp-176]
+    x86.call mm_decref
+    x86.label __nonnull_skip_58
+    x86.mov rax, [rbp-152]
+    x86.test rax, rax
+    x86.jz __nonnull_skip_59
+    x86.mov rcx, [rbp-152]
+    x86.call mm_decref
+    x86.label __nonnull_skip_59
+    x86.mov rax, [rbp-80]
+    x86.test rax, rax
+    x86.jz __nonnull_skip_60
+    x86.mov rcx, [rbp-80]
+    x86.call mm_decref
+    x86.label __nonnull_skip_60
+    x86.mov rax, [rbp-16]
+    x86.test rax, rax
+    x86.jz __nonnull_skip_61
+    x86.mov rcx, [rbp-16]
+    x86.call mm_decref
+    x86.label __nonnull_skip_61
+    x86.mov rax, [rbp-424]
+    x86.test rax, rax
+    x86.jz __nonnull_skip_62
+    x86.mov rcx, [rbp-424]
+    x86.call mm_decref
+    x86.label __nonnull_skip_62
+    x86.mov rax, [rbp-408]
+    x86.test rax, rax
+    x86.jz __nonnull_skip_63
+    x86.mov rcx, [rbp-408]
+    x86.call mm_decref
     x86.label __nonnull_skip_63
-    x86.mov rax, 3
-    x86.epilogue
-    x86.ret
-  }
-  func @__destruct_TestFile(ptr: i64) {
-  entry:
-    x86.prologue stack_size=16
-    x86.mov [rbp-8], rcx
-    x86.mov rax, [rbp-8]
-    x86.mov rcx, [rax+0]
-    x86.mov [rbp-16], rcx
-    x86.test rcx, rcx
+    x86.mov rax, [rbp-368]
+    x86.test rax, rax
     x86.jz __nonnull_skip_64
+    x86.mov rcx, [rbp-368]
     x86.call mm_decref
     x86.label __nonnull_skip_64
-    x86.jmp __destruct_TestFile.done
-  done:
+    x86.mov rax, [rbp-32]
+    x86.test rax, rax
+    x86.jz __nonnull_skip_65
+    x86.mov rcx, [rbp-32]
+    x86.call mm_decref
+    x86.label __nonnull_skip_65
+    x86.mov rax, 3
     x86.epilogue
     x86.ret
   }
@@ -1939,10 +1996,42 @@ module {
     x86.mov rcx, [rax+0]
     x86.mov [rbp-16], rcx
     x86.test rcx, rcx
-    x86.jz __nonnull_skip_65
+    x86.jz __nonnull_skip_66
     x86.call mm_decref
-    x86.label __nonnull_skip_65
+    x86.label __nonnull_skip_66
     x86.jmp __destruct_String.done
+  done:
+    x86.epilogue
+    x86.ret
+  }
+  func @__destruct_TestFile(ptr: i64) {
+  entry:
+    x86.prologue stack_size=16
+    x86.mov [rbp-8], rcx
+    x86.mov rax, [rbp-8]
+    x86.mov rcx, [rax+0]
+    x86.mov [rbp-16], rcx
+    x86.test rcx, rcx
+    x86.jz __nonnull_skip_67
+    x86.call mm_decref
+    x86.label __nonnull_skip_67
+    x86.jmp __destruct_TestFile.done
+  done:
+    x86.epilogue
+    x86.ret
+  }
+  func @__destruct_TestDir(ptr: i64) {
+  entry:
+    x86.prologue stack_size=16
+    x86.mov [rbp-8], rcx
+    x86.mov rax, [rbp-8]
+    x86.mov rcx, [rax+0]
+    x86.mov [rbp-16], rcx
+    x86.test rcx, rcx
+    x86.jz __nonnull_skip_68
+    x86.call mm_decref
+    x86.label __nonnull_skip_68
+    x86.jmp __destruct_TestDir.done
   done:
     x86.epilogue
     x86.ret
@@ -1963,22 +2052,6 @@ module {
     x86.jmp __destruct___ManagedMemory.skip_buf_0
   skip_buf_0:
     x86.jmp __destruct___ManagedMemory.done
-  done:
-    x86.epilogue
-    x86.ret
-  }
-  func @__destruct_TestDir(ptr: i64) {
-  entry:
-    x86.prologue stack_size=16
-    x86.mov [rbp-8], rcx
-    x86.mov rax, [rbp-8]
-    x86.mov rcx, [rax+0]
-    x86.mov [rbp-16], rcx
-    x86.test rcx, rcx
-    x86.jz __nonnull_skip_66
-    x86.call mm_decref
-    x86.label __nonnull_skip_66
-    x86.jmp __destruct_TestDir.done
   done:
     x86.epilogue
     x86.ret

@@ -4,10 +4,14 @@ typealias Integer = int(i64.min to i64.max)
 type Point
 	export var x Integer
 	export var y Integer
+
+	static function create(x Integer, y Integer) returns Self
+		return Self{x: x, y: y}
+	end 'create'
 end 'Point'
 
 function testLocal()
-	@heap var p = Point{x: 1, y: 2}
+	@heap var p = Point.create(x: 1, y: 2)
 	print("{p.x}\n")
 end 'testLocal'
 
@@ -22,46 +26,57 @@ Stdout: ```
 ```
 ---
 module {
-  func @ownership.testLocal() {
+  func @Point.create(x: i64, y: i64) -> i64 {
   entry:
-    x86.prologue stack_size=128
-    x86.mov rax, 1
-    x86.mov rcx, 2
+    x86.prologue stack_size=32
+    x86.mov [rbp-16], rcx
+    x86.mov [rbp-24], rdx
     x86.mov rcx, 16
     x86.xor rdx, rdx
     x86.mov r8, 1
     x86.call mm_alloc
     x86.mov [rbp-8], rax
+    x86.mov rax, [rbp-8]
+    x86.mov rcx, [rbp-16]
+    x86.mov [rax+0], rcx
     x86.mov rdx, [rbp-8]
-    x86.mov rbx, 1
-    x86.mov [rdx+0], rbx
+    x86.mov rbx, [rbp-24]
+    x86.mov [rdx+8], rbx
     x86.mov rsi, [rbp-8]
-    x86.mov rdi, 2
-    x86.mov [rsi+8], rdi
-    x86.mov r8, [rbp-8]
     x86.mov rcx, [rbp-8]
     x86.call mm_incref
-    x86.mov r9, [rbp-8]
-    x86.mov rax, [r9+0]
-    x86.mov [rbp-96], rax
+    x86.mov rax, [rbp-8]
+    x86.epilogue
+    x86.ret
+  }
+  func @ownership.testLocal() {
+  entry:
+    x86.prologue stack_size=128
+    x86.mov rcx, 1
+    x86.mov rdx, 2
+    x86.call Point.create
+    x86.mov [rbp-8], rax
+    x86.mov rax, [rbp-8]
+    x86.mov rcx, [rax+0]
+    x86.mov [rbp-96], rcx
     x86.mov rcx, 21
     x86.call mm_raw_alloc
     x86.mov [rbp-16], rax
     x86.mov rcx, [rbp-96]
     x86.mov rdx, [rbp-16]
     x86.call maxon_i64_to_string
-    x86.mov rcx, [rbp-16]
-    x86.lea_rdata rdx, [__interp_lit_0]
-    x86.mov rbx, rdx
-    x86.mov rdx, 1
-    x86.lea rsi, [rax + rdx]
-    x86.lea_func rdi, [__destruct_String]
-    x86.mov r8, rdi
+    x86.mov rdx, [rbp-16]
+    x86.lea_rdata rbx, [__interp_lit_0]
+    x86.mov rsi, rbx
+    x86.mov rdi, 1
+    x86.lea r8, [rax + rdi]
+    x86.lea_func r9, [__destruct_String]
+    x86.mov rcx, r9
     x86.mov [rbp-104], rax
-    x86.mov [rbp-112], rbx
-    x86.mov [rbp-120], rsi
-    x86.mov rdx, r8
-    x86.mov rcx, 16
+    x86.mov [rbp-112], rsi
+    x86.mov [rbp-120], r8
+    x86.mov rdx, rcx
+    x86.mov rcx, 32
     x86.mov r8, 2
     x86.call mm_alloc
     x86.mov [rbp-24], rax
@@ -140,6 +155,12 @@ module {
     x86.xor rax, rax
     x86.mov rcx, [rbp-24]
     x86.mov [rcx+8], rax
+    x86.mov rax, -1
+    x86.mov rcx, [rbp-24]
+    x86.mov [rcx+16], rax
+    x86.xor rax, rax
+    x86.mov rcx, [rbp-24]
+    x86.mov [rcx+24], rax
     x86.mov rax, [rbp-24]
     x86.mov rcx, [rbp-24]
     x86.call mm_incref

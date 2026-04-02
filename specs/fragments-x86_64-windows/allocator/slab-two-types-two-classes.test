@@ -3,6 +3,10 @@ typealias Integer = int(i64.min to i64.max)
 
 type Small
 	export var x Integer
+
+	static function create(x Integer) returns Self
+		return Self{x: x}
+	end 'create'
 end 'Small'
 
 type Large
@@ -11,11 +15,15 @@ type Large
 	export var c Integer
 	export var d Integer
 	export var e Integer
+
+	static function create(a Integer, b Integer, c Integer, d Integer, e Integer) returns Self
+		return Self{a: a, b: b, c: c, d: d, e: e}
+	end 'create'
 end 'Large'
 
 function main() returns ExitCode
-	@heap var s = Small{x: 1}
-	@heap var l = Large{a: 1, b: 2, c: 3, d: 4, e: 5}
+	@heap var s = Small.create(x: 1)
+	@heap var l = Large.create(a: 1, b: 2, c: 3, d: 4, e: 5)
 	return s.x + l.a
 end 'main'
 ---
@@ -24,12 +32,14 @@ ExitCode: 2
 Stderr: ```
 sl_init
   os_alloc size=67108864
-mm_alloc Small #1 size=8 [main]
+mm_alloc Small #1 size=8 [Small.create]
   sl_alloc Small #1 size=40 class=4
-mm_incref Small #1 rc=1 [main]
-mm_alloc Large #2 size=40 [main]
+mm_incref Small #1 rc=1 [Small.create]
+mm_transfer Small #1 rc=1 [Small.create]
+mm_alloc Large #2 size=40 [Large.create]
   sl_alloc Large #2 size=72 class=6
-mm_incref Large #2 rc=1 [main]
+mm_incref Large #2 rc=1 [Large.create]
+mm_transfer Large #2 rc=1 [Large.create]
 mm_decref Large #2 rc=0 [main]
   mm_free Large #2
     sl_free Large #2 size=96 class=6
@@ -43,59 +53,83 @@ mm_raw_free #R1
 ```
 ---
 module {
-  func @main() -> u32 {
+  func @Small.create(x: i64) -> i64 {
   entry:
-    x86.prologue stack_size=32
-    x86.mov rax, 1
+    x86.prologue stack_size=16
+    x86.mov [rbp-16], rcx
     x86.mov rcx, 8
     x86.xor rdx, rdx
     x86.mov r8, 1
     x86.call mm_alloc
     x86.mov [rbp-8], rax
-    x86.mov rcx, [rbp-8]
-    x86.mov rdx, 1
-    x86.mov [rcx+0], rdx
-    x86.mov rbx, [rbp-8]
+    x86.mov rax, [rbp-8]
+    x86.mov rcx, [rbp-16]
+    x86.mov [rax+0], rcx
+    x86.mov rdx, [rbp-8]
     x86.mov rcx, [rbp-8]
     x86.call mm_incref
-    x86.mov rsi, 1
-    x86.mov rdi, 2
-    x86.mov r8, 3
-    x86.mov r9, 4
-    x86.mov rax, 5
+    x86.mov rax, [rbp-8]
+    x86.epilogue
+    x86.ret
+  }
+  func @Large.create(a: i64, b: i64, c: i64, d: i64, e: i64) -> i64 {
+  entry:
+    x86.prologue stack_size=48
+    x86.mov [rbp-16], rcx
+    x86.mov [rbp-24], rdx
+    x86.mov [rbp-32], rsi
+    x86.mov [rbp-40], r8
+    x86.mov [rbp-48], r9
     x86.mov rcx, 40
     x86.xor rdx, rdx
     x86.mov r8, 2
     x86.call mm_alloc
-    x86.mov [rbp-16], rax
-    x86.mov rax, [rbp-16]
-    x86.mov rcx, 1
-    x86.mov [rax+0], rcx
-    x86.mov rax, [rbp-16]
-    x86.mov rcx, 2
-    x86.mov [rax+8], rcx
-    x86.mov rax, [rbp-16]
-    x86.mov rcx, 3
-    x86.mov [rax+16], rcx
-    x86.mov rax, [rbp-16]
-    x86.mov rcx, 4
-    x86.mov [rax+24], rcx
-    x86.mov rax, [rbp-16]
-    x86.mov rcx, 5
-    x86.mov [rax+32], rcx
-    x86.mov rax, [rbp-16]
+    x86.mov [rbp-8], rax
+    x86.mov rax, [rbp-8]
     x86.mov rcx, [rbp-16]
+    x86.mov [rax+0], rcx
+    x86.mov rdx, [rbp-8]
+    x86.mov rbx, [rbp-24]
+    x86.mov [rdx+8], rbx
+    x86.mov rsi, [rbp-8]
+    x86.mov rdi, [rbp-40]
+    x86.mov [rsi+16], rdi
+    x86.mov r8, [rbp-8]
+    x86.mov r9, [rbp-48]
+    x86.mov [r8+24], r9
+    x86.mov rax, [rbp-8]
+    x86.mov rcx, [rbp-32]
+    x86.mov [rax+32], rcx
+    x86.mov rax, [rbp-8]
+    x86.mov rcx, [rbp-8]
     x86.call mm_incref
     x86.mov rax, [rbp-8]
+    x86.epilogue
+    x86.ret
+  }
+  func @main() -> u32 {
+  entry:
+    x86.prologue stack_size=32
+    x86.mov rcx, 1
+    x86.call Small.create
+    x86.mov [rbp-8], rax
+    x86.mov rcx, 1
+    x86.mov rdx, 2
+    x86.mov r8, 3
+    x86.mov r9, 4
+    x86.mov rsi, 5
+    x86.call Large.create
+    x86.mov [rbp-16], rax
+    x86.mov rax, [rbp-8]
     x86.mov rcx, [rax+0]
-    x86.mov rax, [rbp-16]
-    x86.mov rdx, [rax+0]
-    x86.add rcx, rdx
-    x86.xor rax, rax
-    x86.mov rdx, 4294967295
-    x86.cmp rcx, rdx
+    x86.mov rdx, [rbp-16]
+    x86.mov rbx, [rdx+0]
+    x86.add rcx, rbx
+    x86.xor rsi, rsi
+    x86.mov rdi, 4294967295
+    x86.cmp rcx, rdi
     x86.jg main.__range_panic_0
-    x86.cmp rcx, rax
+    x86.cmp rcx, rsi
     x86.jl main.__range_panic_0
     x86.jmp main.__range_ok_0
   __range_panic_0:
@@ -103,17 +137,16 @@ module {
     x86.mov rcx, rax
     x86.call mrt_panic
   __range_ok_0:
-    x86.mov rbx, [rbp-16]
+    x86.mov rax, [rbp-16]
     x86.mov [rbp-24], rcx
-    x86.test rbx, rbx
+    x86.test rax, rax
     x86.jz __nonnull_skip_0
     x86.mov rcx, [rbp-16]
     x86.call mm_decref
     x86.label __nonnull_skip_0
-    x86.mov rax, [rbp-8]
-    x86.test rax, rax
-    x86.jz __nonnull_skip_1
     x86.mov rcx, [rbp-8]
+    x86.test rcx, rcx
+    x86.jz __nonnull_skip_1
     x86.call mm_decref
     x86.label __nonnull_skip_1
     x86.mov rax, [rbp-24]

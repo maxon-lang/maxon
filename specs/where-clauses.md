@@ -87,13 +87,17 @@ type MyKey implements Hashable, Equatable
 		function equals(other MyKey) returns bool
 				return self.value == other.value
 		end 'equals'
+
+		static function create(value Integer) returns Self
+			return Self{value: value}
+		end 'create'
 end 'MyKey'
 
 typealias MyKeyMap = Map with (MyKey, Integer)
 
 function main() returns ExitCode
-		var m = MyKeyMap{}
-		m.insert(key: MyKey{value: 1}, value: 42)
+		var m = MyKeyMap.empty()
+		m.insert(key: MyKey.create(value: 1), value: 42)
 		return m.count()
 end 'main'
 ```
@@ -143,17 +147,25 @@ type Wrapper implements Valuable
 		function value() returns Integer
 				return self.n
 		end 'value'
+
+		static function create(n Integer) returns Self
+			return Self{n: n}
+		end 'create'
 end 'Wrapper'
 
 type Holder uses T where T is Valuable
 		export var item T
+
+		static function create(item T) returns Self
+			return Self{item: item}
+		end 'create'
 end 'Holder'
 
 typealias WrapperHolder = Holder with Wrapper
 
 function main() returns ExitCode
-		var w = Wrapper{n: 10}
-		var h = WrapperHolder{item: w}
+		var w = Wrapper.create(n: 10)
+		var h = WrapperHolder.create(item: w)
 		return h.item.value()
 end 'main'
 ```
@@ -186,19 +198,27 @@ type Person implements HasName, HasAge
 		end 'name'
 
 		function age() returns Integer
-				return self._age
+				return self.age
 		end 'age'
+
+		static function create(age Integer) returns Self
+			return Self{age: age}
+		end 'create'
 end 'Person'
 
 type Registry uses T where T is HasName and HasAge
 		export var item T
+
+		static function create(item T) returns Self
+			return Self{item: item}
+		end 'create'
 end 'Registry'
 
 typealias PersonRegistry = Registry with Person
 
 function main() returns ExitCode
-		var p = Person{_age: 30}
-		var r = PersonRegistry{item: p}
+		var p = Person.create(age: 30)
+		var r = PersonRegistry.create(item: p)
 		return r.item.age()
 end 'main'
 ```
@@ -272,6 +292,10 @@ When the type parameter is properly constrained, `==` should work:
 type Box uses T where T is Equatable
 		var item T
 
+		static function create(item T) returns Self
+			return Self{item: item}
+		end 'create'
+
 		export function eq(other T) returns bool
 				return item == other
 		end 'eq'
@@ -281,7 +305,7 @@ typealias Int = int(i64.min to i64.max)
 typealias IntBox = Box with Int
 
 function main() returns ExitCode
-		var b = IntBox{item: 42}
+		var b = IntBox.create(item: 42)
 		if b.eq(other: 42) 'yes'
 				return 1
 		end 'yes'

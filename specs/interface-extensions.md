@@ -72,7 +72,7 @@ extension Iterable
 	typealias ElementArray = Array with Element
 
 	function map(transform (Element) returns Element) returns ElementArray
-		var result = ElementArray{}
+		var result = ElementArray.empty()
 		for item in self 'loop'
 			result.push(transform(item))
 		end 'loop'
@@ -106,10 +106,14 @@ type IntList implements Countable
 	function value() returns Integer
 		return data
 	end 'value'
+
+	static function create(data Integer) returns Self
+		return Self{data: data}
+	end 'create'
 end 'IntList'
 
 function main() returns ExitCode
-	var list = IntList{data: 5}
+	var list = IntList.create(data: 5)
 	return list.count()
 end 'main'
 ```
@@ -139,10 +143,14 @@ type Number implements Summable
 	function value() returns Integer
 		return n
 	end 'value'
+
+	static function create(n Integer) returns Self
+		return Self{n: n}
+	end 'create'
 end 'Number'
 
 function main() returns ExitCode
-	var num = Number{n: 21}
+	var num = Number.create(n: 21)
 	return num.doubled()
 end 'main'
 ```
@@ -171,6 +179,10 @@ type TypeA implements Valued
 	function val() returns Integer
 		return a
 	end 'val'
+
+	static function create(a Integer) returns Self
+		return Self{a: a}
+	end 'create'
 end 'TypeA'
 
 type TypeB implements Valued
@@ -178,11 +190,15 @@ type TypeB implements Valued
 	function val() returns Integer
 		return b * 2
 	end 'val'
+
+	static function create(b Integer) returns Self
+		return Self{b: b}
+	end 'create'
 end 'TypeB'
 
 function main() returns ExitCode
-	var ta = TypeA{a: 5}
-	var tb = TypeB{b: 10}
+	var ta = TypeA.create(a: 5)
+	var tb = TypeB.create(b: 10)
 	return ta.valPlusTen() + tb.valPlusTen()
 end 'main'
 ```
@@ -212,10 +228,14 @@ type Amount implements Scalable
 	function base() returns Integer
 		return amount
 	end 'base'
+
+	static function create(amount Integer) returns Self
+		return Self{amount: amount}
+	end 'create'
 end 'Amount'
 
 function main() returns ExitCode
-	var a = Amount{amount: 7}
+	var a = Amount.create(amount: 7)
 	return a.scale(6)
 end 'main'
 ```
@@ -237,11 +257,15 @@ end 'Pointlike'
 type SimplePoint
 	export var x Integer
 	export var y Integer
+
+	static function create(x Integer, y Integer) returns Self
+		return Self{x: x, y: y}
+	end 'create'
 end 'SimplePoint'
 
 extension Pointlike
 	function asSimple() returns SimplePoint
-		return SimplePoint{x: self.getX(), y: self.getY()}
+		return SimplePoint.create(x: self.getX(), y: self.getY())
 	end 'asSimple'
 end 'Pointlike'
 
@@ -256,10 +280,14 @@ type Coord implements Pointlike
 	function getY() returns Integer
 		return cy
 	end 'getY'
+
+	static function create(cx Integer, cy Integer) returns Self
+		return Self{cx: cx, cy: cy}
+	end 'create'
 end 'Coord'
 
 function main() returns ExitCode
-	var c = Coord{cx: 10, cy: 32}
+	var c = Coord.create(cx: 10, cy: 32)
 	var p = c.asSimple()
 	return p.x + p.y
 end 'main'

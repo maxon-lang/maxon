@@ -1,15 +1,23 @@
 // Test: managed-directory.search-and-list
 type TestFile
   export var _file __ManagedFile
+
+  static function create(_file __ManagedFile) returns Self
+  	return Self{_file: _file}
+  end 'create'
 end 'TestFile'
 
 type TestDir
   export var _dir __ManagedDirectory
+
+  static function create(_dir __ManagedDirectory) returns Self
+  	return Self{_dir: _dir}
+  end 'create'
 end 'TestDir'
 
 function createFile(path String, content String)
   let wr = __ManagedFile.openWrite(path.managed)
-  var f = TestFile{_file: wr}
+  var f = TestFile.create(_file: wr)
   let written = f._file.write(content.managed)
   f._file.close()
   if written < 0 'err'
@@ -37,17 +45,17 @@ function main() returns ExitCode
     print("search failed")
     return 2
   end 'searchFail'
-  var dir = TestDir{_dir: searchResult}
+  var dir = TestDir.create(_dir: searchResult)
 
   var fileCount = 0
   var nameManaged = dir._dir.filename()
-  var name = String{managed: nameManaged, _iterPos: 0}
+  var name = String.init(managed: nameManaged, _iterPos: 0)
   if name != "." and name != ".." 'notDot1'
     fileCount = fileCount + 1
   end 'notDot1'
   while dir._dir.next() != 0 'loop'
     nameManaged = dir._dir.filename()
-    name = String{managed: nameManaged, _iterPos: 0}
+    name = String.init(managed: nameManaged, _iterPos: 0)
     if name != "." and name != ".." 'notDot2'
       fileCount = fileCount + 1
     end 'notDot2'

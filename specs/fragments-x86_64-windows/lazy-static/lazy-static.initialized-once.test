@@ -1,28 +1,28 @@
 // Test: lazy-static.initialized-once
 type Counter
-	static var _callCount = 0
-	static var _instance = Counter._create()
+	static var initCount = 0
+	static var cached = Counter.createInstance()
 	export var id Count
 
-	static function _create() returns Counter
-		Counter._callCount = Counter._callCount + 1
-		return Counter{id: Counter._callCount}
-	end '_create'
+	static function createInstance() returns Counter
+		Counter.initCount = Counter.initCount + 1
+		return Counter{id: Counter.initCount}
+	end 'createInstance'
 
-	export static function instance() returns Counter
-		return Counter._instance
-	end 'instance'
+	export static function getInstance() returns Counter
+		return Counter.cached
+	end 'getInstance'
 
-	export static function callCount() returns Count
-		return Counter._callCount
-	end 'callCount'
+	export static function getInitCount() returns Count
+		return Counter.initCount
+	end 'getInitCount'
 end 'Counter'
 
 function main() returns ExitCode
-	var a = Counter.instance()
-	var b = Counter.instance()
-	var c = Counter.instance()
-	print("{a.id} {b.id} {c.id} {Counter.callCount()}")
+	var a = Counter.getInstance()
+	var b = Counter.getInstance()
+	var c = Counter.getInstance()
+	print("{a.id} {b.id} {c.id} {Counter.getInitCount()}")
 	return 0
 end 'main'
 ---
@@ -32,14 +32,14 @@ Stdout: ```
 ```
 ---
 module {
-  func @Counter._create() -> i64 {
+  func @Counter.createInstance() -> i64 {
   entry:
     x86.prologue stack_size=16
-    x86.mov rax, qword [rip+Counter._callCount]
+    x86.mov rax, qword [rip+Counter.initCount]
     x86.mov rcx, 1
     x86.add rax, rcx
-    x86.mov qword [rip+Counter._callCount], rax
-    x86.mov rdx, qword [rip+Counter._callCount]
+    x86.mov qword [rip+Counter.initCount], rax
+    x86.mov rdx, qword [rip+Counter.initCount]
     x86.mov [rbp-16], rdx
     x86.mov rcx, 8
     x86.xor rdx, rdx
@@ -56,14 +56,14 @@ module {
     x86.epilogue
     x86.ret
   }
-  func @Counter.instance() -> i64 {
+  func @Counter.getInstance() -> i64 {
   entry:
     x86.prologue stack_size=16
-    x86.movzx rax, byte [rip+Counter._instance.__initialized]
+    x86.movzx rax, byte [rip+Counter.cached.__initialized]
     x86.test rax, rax
-    x86.je Counter.instance.__lazy_init_5
+    x86.je Counter.getInstance.__lazy_init_5
   __lazy_merge_5:
-    x86.mov rax, qword [rip+Counter._instance]
+    x86.mov rax, qword [rip+Counter.cached]
     x86.mov [rbp-8], rax
     x86.mov rcx, [rbp-8]
     x86.call mm_incref
@@ -71,22 +71,22 @@ module {
     x86.epilogue
     x86.ret
   __lazy_init_5:
-    x86.call Counter._instance.__lazy_init
-    x86.jmp Counter.instance.__lazy_merge_5
+    x86.call Counter.cached.__lazy_init
+    x86.jmp Counter.getInstance.__lazy_merge_5
   }
-  func @Counter.callCount() -> u64 {
+  func @Counter.getInitCount() -> u64 {
   entry:
-    x86.mov rax, qword [rip+Counter._callCount]
+    x86.mov rax, qword [rip+Counter.initCount]
     x86.ret
   }
   func @main() -> u32 {
   entry:
     x86.prologue stack_size=304
-    x86.call Counter.instance
+    x86.call Counter.getInstance
     x86.mov [rbp-8], rax
-    x86.call Counter.instance
+    x86.call Counter.getInstance
     x86.mov [rbp-16], rax
-    x86.call Counter.instance
+    x86.call Counter.getInstance
     x86.mov [rbp-24], rax
     x86.mov rax, [rbp-8]
     x86.mov rcx, [rax+0]
@@ -97,7 +97,7 @@ module {
     x86.mov [rbp-216], rcx
     x86.mov [rbp-224], rbx
     x86.mov [rbp-232], rdi
-    x86.call Counter.callCount
+    x86.call Counter.getInitCount
     x86.mov [rbp-240], rax
     x86.mov rcx, 21
     x86.call mm_raw_alloc
@@ -158,7 +158,7 @@ module {
     x86.mov rdx, r8
     x86.mov [rbp-296], rax
     x86.mov [rbp-304], rsi
-    x86.mov rcx, 16
+    x86.mov rcx, 32
     x86.mov r8, 2
     x86.call mm_alloc
     x86.mov [rbp-64], rax
@@ -331,6 +331,12 @@ module {
     x86.xor rax, rax
     x86.mov rcx, [rbp-64]
     x86.mov [rcx+8], rax
+    x86.mov rax, -1
+    x86.mov rcx, [rbp-64]
+    x86.mov [rcx+16], rax
+    x86.xor rax, rax
+    x86.mov rcx, [rbp-64]
+    x86.mov [rcx+24], rax
     x86.mov rax, [rbp-64]
     x86.mov rcx, [rbp-64]
     x86.call mm_incref
@@ -365,15 +371,15 @@ module {
     x86.epilogue
     x86.ret
   }
-  func @Counter._instance.__lazy_init() {
+  func @Counter.cached.__lazy_init() {
   entry:
     x86.prologue stack_size=16
     x86.mov rax, 1
-    x86.mov byte [rip+Counter._instance.__initialized], rax
-    x86.call Counter._create
+    x86.mov byte [rip+Counter.cached.__initialized], rax
+    x86.call Counter.createInstance
     x86.mov [rbp-8], rax
     x86.mov rcx, [rbp-8]
-    x86.mov rdx, qword [rip+Counter._instance]
+    x86.mov rdx, qword [rip+Counter.cached]
     x86.mov [rbp-16], rdx
     x86.test rdx, rdx
     x86.jz __nonnull_skip_4
@@ -383,7 +389,7 @@ module {
     x86.mov rcx, [rbp-8]
     x86.call mm_incref
     x86.mov rbx, [rbp-8]
-    x86.mov qword [rip+Counter._instance], rbx
+    x86.mov qword [rip+Counter.cached], rbx
     x86.mov rsi, [rbp-8]
     x86.test rsi, rsi
     x86.jz __nonnull_skip_5
@@ -396,19 +402,19 @@ module {
   func @__maxon_global_cleanup() {
   entry:
     x86.prologue stack_size=16
-    x86.movzx rax, byte [rip+Counter._instance.__initialized]
+    x86.movzx rax, byte [rip+Counter.cached.__initialized]
     x86.test rax, rax
-    x86.je __maxon_global_cleanup.__cleanup_skip_Counter__instance
-  __cleanup_Counter__instance:
-    x86.mov rax, qword [rip+Counter._instance]
+    x86.je __maxon_global_cleanup.__cleanup_skip_Counter_cached
+  __cleanup_Counter_cached:
+    x86.mov rax, qword [rip+Counter.cached]
     x86.mov [rbp-8], rax
     x86.test rax, rax
     x86.jz __nonnull_skip_6
     x86.mov rcx, [rbp-8]
     x86.call mm_decref
     x86.label __nonnull_skip_6
-    x86.jmp __maxon_global_cleanup.__cleanup_skip_Counter__instance
-  __cleanup_skip_Counter__instance:
+    x86.jmp __maxon_global_cleanup.__cleanup_skip_Counter_cached
+  __cleanup_skip_Counter_cached:
     x86.epilogue
     x86.ret
   }

@@ -3,18 +3,26 @@ typealias Integer = int(i64.min to i64.max)
 
 type Inner
 	export var value Integer
+
+	static function create(value Integer) returns Self
+		return Self{value: value}
+	end 'create'
 end 'Inner'
 
 type Wrapper
 	export var inner Inner
+
+	static function create(inner Inner) returns Self
+		return Self{inner: inner}
+	end 'create'
 end 'Wrapper'
 
 function wrap(i Inner) returns Wrapper
-	return Wrapper{inner: i}
+	return Wrapper.create(inner: i)
 end 'wrap'
 
 function main() returns ExitCode
-	var i = Inner{value: 5}
+	var i = Inner.create(value: 5)
 	var w = wrap(i: i)
 	return w.inner.value
 end 'main'
@@ -24,13 +32,15 @@ ExitCode: 5
 Stderr: ```
 sl_init
   os_alloc size=67108864
-mm_alloc Inner #1 size=8 [main]
+mm_alloc Inner #1 size=8 [Inner.create]
   sl_alloc Inner #1 size=40 class=4
-mm_incref Inner #1 rc=1 [main]
-mm_alloc Wrapper #2 size=8 [ownership-edge-cases.wrap]
+mm_incref Inner #1 rc=1 [Inner.create]
+mm_transfer Inner #1 rc=1 [Inner.create]
+mm_alloc Wrapper #2 size=8 [Wrapper.create]
   sl_alloc Wrapper #2 size=40 class=4
-mm_incref Inner #1 rc=2 [ownership-edge-cases.wrap]
-mm_incref Wrapper #2 rc=1 [ownership-edge-cases.wrap]
+mm_incref Inner #1 rc=2 [Wrapper.create]
+mm_incref Wrapper #2 rc=1 [Wrapper.create]
+mm_transfer Wrapper #2 rc=1 [Wrapper.create]
 mm_transfer Wrapper #2 rc=1 [ownership-edge-cases.wrap]
 mm_decref Wrapper #2 rc=0 [main]
   mm_decref Inner #1 rc=1 [~Wrapper]
@@ -46,14 +56,33 @@ mm_raw_free #R1
 ```
 ---
 module {
-  func @ownership-edge-cases.wrap(i: i64) -> i64 {
+  func @Inner.create(value: i64) -> i64 {
+  entry:
+    x86.prologue stack_size=16
+    x86.mov [rbp-16], rcx
+    x86.mov rcx, 8
+    x86.xor rdx, rdx
+    x86.mov r8, 1
+    x86.call mm_alloc
+    x86.mov [rbp-8], rax
+    x86.mov rax, [rbp-8]
+    x86.mov rcx, [rbp-16]
+    x86.mov [rax+0], rcx
+    x86.mov rdx, [rbp-8]
+    x86.mov rcx, [rbp-8]
+    x86.call mm_incref
+    x86.mov rax, [rbp-8]
+    x86.epilogue
+    x86.ret
+  }
+  func @Wrapper.create(inner: i64) -> i64 {
   entry:
     x86.prologue stack_size=16
     x86.mov [rbp-8], rcx
     x86.lea_func rax, [__destruct_Wrapper]
     x86.mov rdx, rax
     x86.mov rcx, 8
-    x86.mov r8, 1
+    x86.mov r8, 2
     x86.call mm_alloc
     x86.mov [rbp-16], rax
     x86.mov rcx, [rbp-8]
@@ -67,35 +96,38 @@ module {
     x86.epilogue
     x86.ret
   }
+  func @ownership-edge-cases.wrap(i: i64) -> i64 {
+  entry:
+    x86.prologue stack_size=16
+    x86.mov [rbp-8], rcx
+    x86.mov rax, [rbp-8]
+    x86.mov rcx, [rbp-8]
+    x86.call Wrapper.create
+    x86.mov [rbp-16], rax
+    x86.mov rax, [rbp-16]
+    x86.epilogue
+    x86.ret
+  }
   func @main() -> u32 {
   entry:
     x86.prologue stack_size=32
-    x86.mov rax, 5
-    x86.mov rcx, 8
-    x86.xor rdx, rdx
-    x86.mov r8, 2
-    x86.call mm_alloc
+    x86.mov rcx, 5
+    x86.call Inner.create
     x86.mov [rbp-8], rax
-    x86.mov rcx, [rbp-8]
-    x86.mov rdx, 5
-    x86.mov [rcx+0], rdx
-    x86.mov rbx, [rbp-8]
-    x86.mov rcx, [rbp-8]
-    x86.call mm_incref
-    x86.mov rsi, [rbp-8]
+    x86.mov rax, [rbp-8]
     x86.mov rcx, [rbp-8]
     x86.call ownership-edge-cases.wrap
     x86.mov [rbp-16], rax
-    x86.mov rdi, [rbp-16]
-    x86.mov r8, [rdi+0]
-    x86.mov [rbp-24], r8
-    x86.mov r9, [rbp-24]
-    x86.mov rax, [r9+0]
-    x86.xor rcx, rcx
-    x86.mov rdx, 4294967295
-    x86.cmp rax, rdx
+    x86.mov rcx, [rbp-16]
+    x86.mov rdx, [rcx+0]
+    x86.mov [rbp-24], rdx
+    x86.mov rbx, [rbp-24]
+    x86.mov rsi, [rbx+0]
+    x86.xor rdi, rdi
+    x86.mov r8, 4294967295
+    x86.cmp rsi, r8
     x86.jg main.__range_panic_0
-    x86.cmp rax, rcx
+    x86.cmp rsi, rdi
     x86.jl main.__range_panic_0
     x86.jmp main.__range_ok_0
   __range_panic_0:
@@ -103,21 +135,26 @@ module {
     x86.mov rcx, rax
     x86.call mrt_panic
   __range_ok_0:
-    x86.mov rbx, [rbp-16]
-    x86.mov [rbp-32], rax
-    x86.test rbx, rbx
+    x86.mov rax, [rbp-16]
+    x86.mov [rbp-32], rsi
+    x86.test rax, rax
     x86.jz __nonnull_skip_0
     x86.mov rcx, [rbp-16]
     x86.call mm_decref
     x86.label __nonnull_skip_0
-    x86.mov rax, [rbp-8]
-    x86.test rax, rax
-    x86.jz __nonnull_skip_1
     x86.mov rcx, [rbp-8]
+    x86.test rcx, rcx
+    x86.jz __nonnull_skip_1
     x86.call mm_decref
     x86.label __nonnull_skip_1
     x86.mov rax, [rbp-32]
     x86.epilogue
+    x86.ret
+  }
+  func @__destruct_Inner(ptr: i64) {
+  entry:
+    x86.jmp __destruct_Inner.done
+  done:
     x86.ret
   }
   func @__destruct_Wrapper(ptr: i64) {
@@ -134,12 +171,6 @@ module {
     x86.jmp __destruct_Wrapper.done
   done:
     x86.epilogue
-    x86.ret
-  }
-  func @__destruct_Inner(ptr: i64) {
-  entry:
-    x86.jmp __destruct_Inner.done
-  done:
     x86.ret
   }
 }

@@ -19,40 +19,68 @@ export type Block
     export var ops OpArray
     export var terminator MlirOp
     export var hasTerminator bool
+
+    static function create(id Integer, label String, ops OpArray, terminator MlirOp, hasTerminator bool) returns Self
+    	return Self{id: id, label: label, ops: ops, terminator: terminator, hasTerminator: hasTerminator}
+    end 'create'
 end 'Block'
 
 export type Region
     export var blocks IntArray
     export var nextBlockId Integer
+
+    static function create(blocks IntArray, nextBlockId Integer) returns Self
+    	return Self{blocks: blocks, nextBlockId: nextBlockId}
+    end 'create'
 end 'Region'
 
 export type Func
     export var name String
     export var returnType String
     export var region Region
+
+    static function create(name String, returnType String, region Region) returns Self
+    	return Self{name: name, returnType: returnType, region: region}
+    end 'create'
 end 'Func'
 
 typealias FuncArray = Array with Func
 
 export type Module
     export var functions FuncArray
+
+    static function create(functions FuncArray) returns Self
+    	return Self{functions: functions}
+    end 'create'
 end 'Module'
 
 export type ModuleMemo
     export var value Module
     export var computedAt Integer
     export var verifiedAt Integer
+
+    static function create(value Module, computedAt Integer, verifiedAt Integer) returns Self
+    	return Self{value: value, computedAt: computedAt, verifiedAt: verifiedAt}
+    end 'create'
 end 'ModuleMemo'
 
 export type CodeResult
     export var code IntArray
     export var offset Integer
+
+    static function create(code IntArray, offset Integer) returns Self
+    	return Self{code: code, offset: offset}
+    end 'create'
 end 'CodeResult'
 
 export type CodeMemo
     export var value CodeResult
     export var computedAt Integer
     export var verifiedAt Integer
+
+    static function create(value CodeResult, computedAt Integer, verifiedAt Integer) returns Self
+    	return Self{value: value, computedAt: computedAt, verifiedAt: verifiedAt}
+    end 'create'
 end 'CodeMemo'
 
 export type QueryDatabase
@@ -67,6 +95,10 @@ export type QueryDatabase
     export var tokenMisses Integer
     export var parseHits Integer
     export var parseMisses Integer
+
+    static function create(currentRevision Integer, sourcePaths StringArray, allModuleCache ModuleMemo, allMidCache ModuleMemo, codeCache CodeMemo, dependencies IntArray, activeQueryStack IntArray, tokenHits Integer, tokenMisses Integer, parseHits Integer, parseMisses Integer) returns Self
+    	return Self{currentRevision: currentRevision, sourcePaths: sourcePaths, allModuleCache: allModuleCache, allMidCache: allMidCache, codeCache: codeCache, dependencies: dependencies, activeQueryStack: activeQueryStack, tokenHits: tokenHits, tokenMisses: tokenMisses, parseHits: parseHits, parseMisses: parseMisses}
+    end 'create'
 end 'QueryDatabase'
 
 export type Project
@@ -81,38 +113,20 @@ export type Project
     export var currentBlock Block
     export var currentFunction Func
     export var currentModule Module
+
+    static function create(db QueryDatabase, dbInitialized bool, nextValueId Integer, parserVarNames StringArray, parserVarSlots IntArray, parserNextSlot Integer, rootPath String, isSingleFile bool, currentBlock Block, currentFunction Func, currentModule Module) returns Self
+    	return Self{db: db, dbInitialized: dbInitialized, nextValueId: nextValueId, parserVarNames: parserVarNames, parserVarSlots: parserVarSlots, parserNextSlot: parserNextSlot, rootPath: rootPath, isSingleFile: isSingleFile, currentBlock: currentBlock, currentFunction: currentFunction, currentModule: currentModule}
+    end 'create'
 end 'Project'
 
 function createProject(rootPath String) returns Project
-    let emptyModuleMemo = ModuleMemo{value: Module{functions: FuncArray{}}, computedAt: 0, verifiedAt: 0}
-    let emptyCodeMemo = CodeMemo{value: CodeResult{code: IntArray{}, offset: 0}, computedAt: 0, verifiedAt: 0}
-    let db = QueryDatabase{
-        currentRevision: 0,
-        sourcePaths: StringArray{},
-        allModuleCache: emptyModuleMemo,
-        allMidCache: emptyModuleMemo,
-        codeCache: emptyCodeMemo,
-        dependencies: IntArray{},
-        activeQueryStack: IntArray{},
-        tokenHits: 0, tokenMisses: 0,
-        parseHits: 0, parseMisses: 0
-    }
-    let emptyBlock = Block{id: 0, label: "", ops: OpArray{}, terminator: MlirOp.cf(CfOp.br(0)), hasTerminator: false}
-    let emptyFunc = Func{name: "", returnType: "", region: Region{blocks: IntArray{}, nextBlockId: 0}}
-    let emptyModule = Module{functions: FuncArray{}}
-    return Project{
-        db: db,
-        dbInitialized: false,
-        nextValueId: 0,
-        parserVarNames: StringArray{},
-        parserVarSlots: IntArray{},
-        parserNextSlot: 0,
-        rootPath: rootPath,
-        isSingleFile: false,
-        currentBlock: emptyBlock,
-        currentFunction: emptyFunc,
-        currentModule: emptyModule
-    }
+    let emptyModuleMemo = ModuleMemo.create(value: Module{functions: FuncArray.empty()}, computedAt: 0, verifiedAt: 0)
+    let emptyCodeMemo = CodeMemo.create(value: CodeResult{code: IntArray.empty(), offset: 0}, computedAt: 0, verifiedAt: 0)
+    let db = QueryDatabase.create(currentRevision: 0, sourcePaths: StringArray.empty(), allModuleCache: emptyModuleMemo, allMidCache: emptyModuleMemo, codeCache: emptyCodeMemo, dependencies: IntArray.empty(), activeQueryStack: IntArray.empty(), tokenHits: 0, tokenMisses: 0, parseHits: 0, parseMisses: 0)
+    let emptyBlock = Block.create(id: 0, label: "", ops: OpArray.empty(), terminator: MlirOp.cf(CfOp.br(0)), hasTerminator: false)
+    let emptyFunc = Func.create(name: "", returnType: "", region: Region{blocks: IntArray.empty(), nextBlockId: 0})
+    let emptyModule = Module.create(functions: FuncArray.empty())
+    return Project.create(db: db, dbInitialized: false, nextValueId: 0, parserVarNames: StringArray.empty(), parserVarSlots: IntArray.empty(), parserNextSlot: 0, rootPath: rootPath, isSingleFile: false, currentBlock: emptyBlock, currentFunction: emptyFunc, currentModule: emptyModule)
 end 'createProject'
 
 function main() returns ExitCode

@@ -24,15 +24,19 @@ typealias Integer = int(i64.min to i64.max)
 export type Item
 		export var name String
 		export var value Integer
+
+		static function create(name String, value Integer) returns Self
+			return Self{name: name, value: value}
+		end 'create'
 end 'Item'
 
 typealias ItemArray = Array with Item
 
 function makeSlice() returns ItemArray
-		var src = ItemArray{}
-		src.push(Item{name: "first item long enough for heap allocation", value: 10})
-		src.push(Item{name: "second item long enough for heap allocation", value: 20})
-		src.push(Item{name: "third item long enough for heap allocation", value: 30})
+		var src = ItemArray.empty()
+		src.push(Item.create(name: "first item long enough for heap allocation", value: 10))
+		src.push(Item.create(name: "second item long enough for heap allocation", value: 20))
+		src.push(Item.create(name: "third item long enough for heap allocation", value: 30))
 		return src.slice(0, endIndex: 2)
 		// src is freed when this function returns
 end 'makeSlice'
@@ -44,7 +48,7 @@ function main() returns ExitCode
 				return 99
 		end 'badCount'
 
-		let item = try sliced.get(0) otherwise Item{name: "", value: 0}
+		let item = try sliced.get(0) otherwise Item.create(name: "", value: 0)
 		return item.value
 end 'main'
 ```
@@ -66,7 +70,7 @@ end 'Op'
 typealias OpArray = Array with Op
 
 function makeSlice() returns OpArray
-		var src = OpArray{}
+		var src = OpArray.empty()
 		src.push(Op.add(10))
 		src.push(Op.sub(20))
 		src.push(Op.add(30))

@@ -36,6 +36,10 @@ type BlockIdFixup
 	export var instrOffset Arm64Offset
 	export var targetBlock BlockId
 	export var isCond bool
+
+	static function create(instrOffset Arm64Offset, targetBlock BlockId, isCond bool) returns BlockIdFixup
+		return Self{instrOffset: instrOffset, targetBlock: targetBlock, isCond: isCond}
+	end 'create'
 end 'BlockIdFixup'
 
 function blockOffsetMapGet(m BlockOffsetMap, blockId BlockId) returns Arm64Offset
@@ -514,6 +518,10 @@ end 'arm64LookupLabel'
 type Arm64CallFixup
 	export var instrOffset Arm64Offset
 	export var targetName ByteArray
+
+	static function create(instrOffset Arm64Offset, targetName ByteArray) returns Arm64CallFixup
+		return Self{instrOffset: instrOffset, targetName: targetName}
+	end 'create'
 end 'Arm64CallFixup'
 typealias Arm64CallFixupArray = Array with Arm64CallFixup
 
@@ -522,6 +530,10 @@ type Arm64AdrFixup
 	export var instrOffset Arm64Offset
 	export var destReg MachineWord
 	export var targetName ByteArray
+
+	static function create(instrOffset Arm64Offset, destReg MachineWord, targetName ByteArray) returns Arm64AdrFixup
+		return Self{instrOffset: instrOffset, destReg: destReg, targetName: targetName}
+	end 'create'
 end 'Arm64AdrFixup'
 typealias Arm64AdrFixupArray = Array with Arm64AdrFixup
 
@@ -571,7 +583,7 @@ end 'arm64ResolveCallFixups'
 function arm64EmitStart(code ByteArray, osDesc OsDescriptor, callFixups Arm64CallFixupArray, relocations RelocationArray) returns Arm64Offset
 	let mainCallFixupOffset = code.count()
 	var mainName = b"main"
-	callFixups.push(Arm64CallFixup{instrOffset: mainCallFixupOffset, targetName: mainName})
+	callFixups.push(Arm64CallFixup.create(mainCallFixupOffset, targetName: mainName))
 	arm64EmitBranchLink(code)
 
 	match osDesc.exit 'exitStrategy'
@@ -590,7 +602,7 @@ end 'arm64EmitExitSyscall'
 
 // Exit via IAT (Windows): load ExitProcess from IAT, tail-call with exit code in X0
 function arm64EmitExitIat(code ByteArray, relocations RelocationArray, slotIndex MachineWord)
-	relocations.push(Relocation{codeOffset: code.count(), slotIndex: slotIndex})
+	relocations.push(Relocation.create(code.count(), slotIndex: slotIndex))
 	arm64EmitAdrp(code, rd: 16)
 	arm64EmitLdrImm(code, rt: 16, rn: 16, imm12: 0)
 	arm64EmitBr(code, rn: 16)
@@ -636,7 +648,7 @@ function arm64EmitWriteStdoutLibcall(code ByteArray, relocations RelocationArray
 	arm64EmitMovz(code, rd: 0, imm16: fd)
 
 	// Call write through GOT slot
-	relocations.push(Relocation{codeOffset: code.count(), slotIndex: writeSlot})
+	relocations.push(Relocation.create(code.count(), slotIndex: writeSlot))
 	arm64EmitAdrp(code, rd: 16)
 	arm64EmitLdrImm(code, rt: 16, rn: 16, imm12: 0)
 	arm64EmitBlr(code, rn: 16)
@@ -661,7 +673,7 @@ function arm64EmitWriteStdoutWinApi(code ByteArray, relocations RelocationArray,
 
 	// GetStdHandle(STD_OUTPUT_HANDLE): X0 = handleConstant
 	arm64EmitMovImm(code, rd: 0, value: handleConstant)
-	relocations.push(Relocation{codeOffset: code.count(), slotIndex: getHandleSlot})
+	relocations.push(Relocation.create(code.count(), slotIndex: getHandleSlot))
 	arm64EmitAdrp(code, rd: 16)
 	arm64EmitLdrImm(code, rt: 16, rn: 16, imm12: 0)
 	arm64EmitBlr(code, rn: 16)
@@ -676,7 +688,7 @@ function arm64EmitWriteStdoutWinApi(code ByteArray, relocations RelocationArray,
 	arm64EmitAddImm(code, rd: 3, rn: 29, imm12: 32)
 	arm64EmitMovz(code, rd: 4, imm16: 0)
 
-	relocations.push(Relocation{codeOffset: code.count(), slotIndex: writeFileSlot})
+	relocations.push(Relocation.create(code.count(), slotIndex: writeFileSlot))
 	arm64EmitAdrp(code, rd: 16)
 	arm64EmitLdrImm(code, rt: 16, rn: 16, imm12: 0)
 	arm64EmitBlr(code, rn: 16)
@@ -952,22 +964,26 @@ type Arm64StackTracker
 	export var currentStackSize StackSize
 	export var calleeSavedGprs RegIntArray
 	export var calleeSavedFps RegIntArray
+
+	static function create() returns Arm64StackTracker
+		return Self{currentStackSize: 0, calleeSavedGprs: RegIntArray.empty(), calleeSavedFps: RegIntArray.empty()}
+	end 'create'
 end 'Arm64StackTracker'
 
 // --- Block jump handlers ---
 
 function arm64HandleCondBranch(code ByteArray, jumpFixups BlockIdFixupArray, condition Arm64CondCode, targetBlock BlockId)
-	jumpFixups.push(BlockIdFixup{instrOffset: code.count(), targetBlock: targetBlock, isCond: true})
+	jumpFixups.push(BlockIdFixup.create(code.count(), targetBlock: targetBlock, isCond: true))
 	arm64EmitCondBranch(code, cond: condition.rawValue)
 end 'arm64HandleCondBranch'
 
 function arm64HandleBranch(code ByteArray, jumpFixups BlockIdFixupArray, targetBlock BlockId)
-	jumpFixups.push(BlockIdFixup{instrOffset: code.count(), targetBlock: targetBlock, isCond: false})
+	jumpFixups.push(BlockIdFixup.create(code.count(), targetBlock: targetBlock, isCond: false))
 	arm64EmitBranch(code)
 end 'arm64HandleBranch'
 
 function arm64HandleBranchLink(code ByteArray, callFixups Arm64CallFixupArray, linkTarget ByteArray)
-	callFixups.push(Arm64CallFixup{instrOffset: code.count(), targetName: linkTarget})
+	callFixups.push(Arm64CallFixup.create(code.count(), targetName: linkTarget))
 	arm64EmitBranchLink(code)
 end 'arm64HandleBranchLink'
 
@@ -975,21 +991,21 @@ end 'arm64HandleBranchLink'
 
 export function emitArm64(module MlirModule, target Target, globalData GlobalDataTable) returns CodeResult
 	logInfo(LogCategory.codegen, message: () gives "ARM64: Emitting machine code from MlirModule ({targetToString(target)})")
-	var code = ByteArray{}
+	var code = ByteArray.empty()
 	code.reserve(1024)
-	var relocations = RelocationArray{}
-	var labelNames = ByteArrayArray{}
-	var labelOffsets = Arm64OffsetArray{}
-	var callFixups = Arm64CallFixupArray{}
-	var adrFixups = Arm64AdrFixupArray{}
-	var jumpFixups = BlockIdFixupArray{}
-	var blockOffsets = BlockOffsetMap{}
+	var relocations = RelocationArray.empty()
+	var labelNames = ByteArrayArray.empty()
+	var labelOffsets = Arm64OffsetArray.empty()
+	var callFixups = Arm64CallFixupArray.empty()
+	var adrFixups = Arm64AdrFixupArray.empty()
+	var jumpFixups = BlockIdFixupArray.empty()
+	var blockOffsets = BlockOffsetMap.empty()
 
 	// Register panic string constants before emitting functions
 	registerPanicStrings(globalData)
 
 	// Track the current function's stack size for epilogue emission
-	var stackTracker = Arm64StackTracker{currentStackSize: 0, calleeSavedGprs: RegIntArray{}, calleeSavedFps: RegIntArray{}}
+	var stackTracker = Arm64StackTracker.create()
 
 	// Emit all function bodies from MlirModule
 	// (runtime functions like mrt_start, mrt_write_stdout, mrt_i64_to_string are now
@@ -1032,7 +1048,7 @@ export function emitArm64(module MlirModule, target Target, globalData GlobalDat
 	// mrt_start must be the entry point -- look up its offset
 	let startOffset = arm64LookupLabel(labelNames, labelOffsets: labelOffsets, name: b"mrt_start")
 
-	return CodeResult{code: code, mainCallFixupOffset: startOffset, relocations: relocations, globalData: globalData, targetModule: MlirModule{functions: MlirFunctionArray{}}}
+	return CodeResult.create(code, mainCallFixupOffset: startOffset, relocations: relocations, globalData: globalData, targetModule: createMlirModule())
 end 'emitArm64'
 
 // Emit a single MlirOp (expected to be arm64 dialect).
@@ -1227,7 +1243,7 @@ function arm64EmitIatCallOp(code ByteArray, relocations RelocationArray, resultS
 	end 'arg4'
 
 	// Load IAT slot address via ADRP + LDR, then BLR
-	relocations.push(Relocation{codeOffset: code.count(), slotIndex: slotIndex})
+	relocations.push(Relocation.create(code.count(), slotIndex: slotIndex))
 	arm64EmitAdrp(code, rd: 16)
 	arm64EmitLdrImm(code, rt: 16, rn: 16, imm12: 0)
 	arm64EmitBlr(code, rn: 16)
@@ -1290,7 +1306,7 @@ end 'arm64EmitLoadIndirectOp'
 function arm64EmitLeaFuncAddrOp(code ByteArray, dest Arm64VReg, funcName ByteArray, adrFixups Arm64AdrFixupArray)
 	let rd = resolveArm64Gpr(dest).rawValue
 	// Emit placeholder ADR instruction, will be patched during fixup resolution
-	adrFixups.push(Arm64AdrFixup{instrOffset: code.count(), destReg: rd, targetName: funcName})
+	adrFixups.push(Arm64AdrFixup.create(code.count(), destReg: rd, targetName: funcName))
 	arm64EmitAdr(code, rd: rd, offset: 0)
 end 'arm64EmitLeaFuncAddrOp'
 

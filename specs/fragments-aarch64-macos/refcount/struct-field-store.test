@@ -2,16 +2,24 @@
 typealias Integer = int(i64.min to i64.max)
 type Inner
     export var val Integer
+
+    static function create(val Integer) returns Self
+    	return Self{val: val}
+    end 'create'
 end 'Inner'
 type Outer
     export var child Inner
     export function setChild(c Inner)
         child = c
     end 'setChild'
+
+    static function create(child Inner) returns Self
+    	return Self{child: child}
+    end 'create'
 end 'Outer'
 function main() returns ExitCode
-    var o = Outer{child: Inner{val: 0}}
-    var i = Inner{val: 55}
+    var o = Outer.create(child: Inner.create(val: 0))
+    var i = Inner.create(val: 55)
     o.setChild(i)
     return o.child.val
 end 'main'

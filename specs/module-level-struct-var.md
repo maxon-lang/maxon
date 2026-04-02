@@ -19,9 +19,13 @@ typealias SmallInt = int(0 to u8.max)
 
 type Counter
 		export var value SmallInt
+
+		static function create(value SmallInt) returns Self
+			return Self{value: value}
+		end 'create'
 end 'Counter'
 
-var state = Counter{value: 0}
+var state = Counter.create(value: 0)
 
 function main() returns ExitCode
 		state.value = 42
@@ -40,9 +44,13 @@ typealias ByteArray = Array with Byte
 
 type State
 		export var items ByteArray
+
+		static function create(items ByteArray) returns Self
+			return Self{items: items}
+		end 'create'
 end 'State'
 
-var state = State{items: ByteArray{}}
+var state = State.create(items: ByteArray.empty())
 
 function main() returns ExitCode
 		state.items.push(10)
@@ -61,13 +69,21 @@ typealias SmallInt = int(0 to u8.max)
 
 type Inner
 		export var x SmallInt
+
+		static function create(x SmallInt) returns Self
+			return Self{x: x}
+		end 'create'
 end 'Inner'
 
 type Outer
 		export var inner Inner
+
+		static function create(inner Inner) returns Self
+			return Self{inner: inner}
+		end 'create'
 end 'Outer'
 
-var state = Outer{inner: Inner{x: 0}}
+var state = Outer.create(inner: Inner.create(x: 0))
 
 function main() returns ExitCode
 		state.inner.x = 99

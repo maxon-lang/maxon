@@ -5,21 +5,29 @@ typealias IntArray = Array with Integer
 export type Func
     export var name String
     export var body IntArray
+
+    static function create(name String, body IntArray) returns Self
+    	return Self{name: name, body: body}
+    end 'create'
 end 'Func'
 
 typealias FuncArray = Array with Func
 
 export type Module
     export var functions FuncArray
+
+    static function create(functions FuncArray) returns Self
+    	return Self{functions: functions}
+    end 'create'
 end 'Module'
 
 function createModule() returns Module
-    return Module{functions: FuncArray{}}
+    return Module.create(functions: FuncArray.empty())
 end 'createModule'
 
 function parseAndMerge(dest Module, name String)
     let source = createModule()
-    source.functions.push(Func{name: name, body: IntArray{}})
+    source.functions.push(Func.create(name: name, body: IntArray.empty()))
     dest.functions.append(source.functions)
     // source is freed when this function returns
 end 'parseAndMerge'
@@ -33,7 +41,7 @@ function main() returns ExitCode
         return 99
     end 'badCount'
 
-    let first = try allModule.functions.get(0) otherwise Func{name: "", body: IntArray{}}
+    let first = try allModule.functions.get(0) otherwise Func.create(name: "", body: IntArray.empty())
     if first.name == "func_a_with_long_name_for_heap" 'correct'
         return 0
     end 'correct'

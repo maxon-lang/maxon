@@ -41,16 +41,24 @@ typealias Latency = int(0 to 50)
 
 type OpMeta
 	export let latency Latency
+
+	static function create(latency Latency) returns Self
+		return Self{latency: latency}
+	end 'create'
 end 'OpMeta'
 
 type X64OpMeta
 	export let meta OpMeta
 	export let setsFlags bool
+
+	static function create(meta OpMeta, setsFlags bool) returns Self
+		return Self{meta: meta, setsFlags: setsFlags}
+	end 'create'
 end 'X64OpMeta'
 
 enum X64Op
-	add = X64OpMeta{meta: OpMeta{latency: 1}, setsFlags: true}
-	mov = X64OpMeta{meta: OpMeta{latency: 3}, setsFlags: false}
+	add = X64OpMeta.create(OpMeta.create(1), setsFlags: true)
+	mov = X64OpMeta.create(OpMeta.create(3), setsFlags: false)
 end 'X64Op'
 
 function main() returns ExitCode
@@ -70,16 +78,24 @@ typealias Latency = int(0 to 50)
 
 type OpMeta
 	export let latency Latency
+
+	static function create(latency Latency) returns Self
+		return Self{latency: latency}
+	end 'create'
 end 'OpMeta'
 
 type TargetMeta
 	export let meta OpMeta
 	export let setsFlags bool
+
+	static function create(meta OpMeta, setsFlags bool) returns Self
+		return Self{meta: meta, setsFlags: setsFlags}
+	end 'create'
 end 'TargetMeta'
 
 enum Op
-	add = TargetMeta{meta: OpMeta{latency: 1}, setsFlags: true}
-	mov = TargetMeta{meta: OpMeta{latency: 2}, setsFlags: false}
+	add = TargetMeta.create(OpMeta.create(1), setsFlags: true)
+	mov = TargetMeta.create(OpMeta.create(2), setsFlags: false)
 end 'Op'
 
 function main() returns ExitCode
@@ -104,17 +120,25 @@ type OpMeta
 	export let latency Latency
 	export let isMemory bool
 	export let isCall bool
+
+	static function create(latency Latency, isMemory bool, isCall bool) returns Self
+		return Self{latency: latency, isMemory: isMemory, isCall: isCall}
+	end 'create'
 end 'OpMeta'
 
 type X64OpMeta
 	export let meta OpMeta
 	export let setsFlags bool
+
+	static function create(meta OpMeta, setsFlags bool) returns Self
+		return Self{meta: meta, setsFlags: setsFlags}
+	end 'create'
 end 'X64OpMeta'
 
 enum X64Op
-	load = X64OpMeta{meta: OpMeta{latency: 4, isMemory: true, isCall: false}, setsFlags: false}
-	add = X64OpMeta{meta: OpMeta{latency: 1, isMemory: false, isCall: false}, setsFlags: true}
-	call = X64OpMeta{meta: OpMeta{latency: 5, isMemory: true, isCall: true}, setsFlags: false}
+	load = X64OpMeta.create(meta: OpMeta.create(latency: 4, isMemory: true, isCall: false), setsFlags: false)
+	add = X64OpMeta.create(meta: OpMeta.create(latency: 1, isMemory: false, isCall: false), setsFlags: true)
+	call = X64OpMeta.create(meta: OpMeta.create(latency: 5, isMemory: true, isCall: true), setsFlags: false)
 end 'X64Op'
 
 function main() returns ExitCode
@@ -137,16 +161,24 @@ typealias Latency = int(0 to 50)
 
 type Inner
 	export let latency Latency
+
+	static function create(latency Latency) returns Self
+		return Self{latency: latency}
+	end 'create'
 end 'Inner'
 
 type Outer
 	export let inner Inner
 	export let fast bool
+
+	static function create(inner Inner, fast bool) returns Self
+		return Self{inner: inner, fast: fast}
+	end 'create'
 end 'Outer'
 
 enum Op
-	add = Outer{inner: Inner{latency: 1}, fast: true}
-	div = Outer{inner: Inner{latency: 40}, fast: false}
+	add = Outer.create(inner: Inner.create(latency: 1), fast: true)
+	div = Outer.create(inner: Inner.create(latency: 40), fast: false)
 end 'Op'
 
 function main() returns ExitCode

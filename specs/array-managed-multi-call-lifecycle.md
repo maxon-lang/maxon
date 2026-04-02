@@ -32,12 +32,20 @@ end 'QueryKey'
 export type Dependency
 		export var dependent QueryKey
 		export var dependency QueryKey
+
+		static function create(dependent QueryKey, dependency QueryKey) returns Self
+			return Self{dependent: dependent, dependency: dependency}
+		end 'create'
 end 'Dependency'
 
 typealias DependencyArray = Array with Dependency
 
 export type Database
 		export var dependencies DependencyArray
+
+		static function create(dependencies DependencyArray) returns Self
+			return Self{dependencies: dependencies}
+		end 'create'
 end 'Database'
 
 function addDep(db Database, dep Dependency)
@@ -45,7 +53,7 @@ function addDep(db Database, dep Dependency)
 end 'addDep'
 
 function clearAllModule(db Database)
-		var newDeps = DependencyArray{}
+		var newDeps = DependencyArray.empty()
 		for dep in db.dependencies 'scan'
 				match dep.dependent 'check'
 						sourceFile(_) then newDeps.push(dep)
@@ -58,18 +66,18 @@ function clearAllModule(db Database)
 end 'clearAllModule'
 
 function main() returns ExitCode
-		let db = Database{dependencies: DependencyArray{}}
+		let db = Database.create(dependencies: DependencyArray.empty())
 
 		// First cycle: add a dep, then clear
-		addDep(db, dep: Dependency{dependent: QueryKey.sourceFile("a.maxon long enough for heap"), dependency: QueryKey.tokens("a.maxon long enough for heap")})
+		addDep(db, dep: Dependency.create(dependent: QueryKey.sourceFile("a.maxon long enough for heap"), dependency: QueryKey.tokens("a.maxon long enough for heap")))
 		clearAllModule(db)
 
 		// Second cycle: add another dep (now array has 2 elements total)
-		addDep(db, dep: Dependency{dependent: QueryKey.allModule, dependency: QueryKey.sourceFile("b.maxon long enough for heap")})
+		addDep(db, dep: Dependency.create(dependent: QueryKey.allModule, dependency: QueryKey.sourceFile("b.maxon long enough for heap")))
 		clearAllModule(db)
 
 		// Third cycle: add more deps, then clear for allModule
-		addDep(db, dep: Dependency{dependent: QueryKey.allModule, dependency: QueryKey.sourceFile("c.maxon long enough for heap")})
+		addDep(db, dep: Dependency.create(dependent: QueryKey.allModule, dependency: QueryKey.sourceFile("c.maxon long enough for heap")))
 		clearAllModule(db)
 
 		return db.dependencies.count()
@@ -93,12 +101,20 @@ end 'Tag'
 
 type Entry
 		export var tag Tag
+
+		static function create(tag Tag) returns Self
+			return Self{tag: tag}
+		end 'create'
 end 'Entry'
 
 typealias EntryArray = Array with Entry
 
 type Store
 		export var entries EntryArray
+
+		static function create(entries EntryArray) returns Self
+			return Self{entries: entries}
+		end 'create'
 end 'Store'
 
 function addEntry(store Store, entry Entry)
@@ -106,21 +122,21 @@ function addEntry(store Store, entry Entry)
 end 'addEntry'
 
 function replaceAll(store Store)
-		store.entries = EntryArray{}
+		store.entries = EntryArray.empty()
 end 'replaceAll'
 
 function main() returns ExitCode
-		let store = Store{entries: EntryArray{}}
+		let store = Store.create(entries: EntryArray.empty())
 		// Push enough to trigger multiple reallocations (initial cap is usually 4)
-		addEntry(store, entry: Entry{tag: Tag.label("entry zero long enough for heap allocation")})
-		addEntry(store, entry: Entry{tag: Tag.label("entry one long enough for heap allocation")})
-		addEntry(store, entry: Entry{tag: Tag.label("entry two long enough for heap allocation")})
-		addEntry(store, entry: Entry{tag: Tag.label("entry three long enough for heap allocation")})
-		addEntry(store, entry: Entry{tag: Tag.label("entry four long enough for heap allocation")})
-		addEntry(store, entry: Entry{tag: Tag.label("entry five long enough for heap allocation")})
-		addEntry(store, entry: Entry{tag: Tag.label("entry six long enough for heap allocation")})
-		addEntry(store, entry: Entry{tag: Tag.label("entry seven long enough for heap allocation")})
-		addEntry(store, entry: Entry{tag: Tag.label("entry eight long enough for heap allocation")})
+		addEntry(store, entry: Entry.create(tag: Tag.label("entry zero long enough for heap allocation")))
+		addEntry(store, entry: Entry.create(tag: Tag.label("entry one long enough for heap allocation")))
+		addEntry(store, entry: Entry.create(tag: Tag.label("entry two long enough for heap allocation")))
+		addEntry(store, entry: Entry.create(tag: Tag.label("entry three long enough for heap allocation")))
+		addEntry(store, entry: Entry.create(tag: Tag.label("entry four long enough for heap allocation")))
+		addEntry(store, entry: Entry.create(tag: Tag.label("entry five long enough for heap allocation")))
+		addEntry(store, entry: Entry.create(tag: Tag.label("entry six long enough for heap allocation")))
+		addEntry(store, entry: Entry.create(tag: Tag.label("entry seven long enough for heap allocation")))
+		addEntry(store, entry: Entry.create(tag: Tag.label("entry eight long enough for heap allocation")))
 		replaceAll(store)
 		return store.entries.count()
 end 'main'
@@ -141,12 +157,20 @@ end 'Key'
 type Dep
 		export var source Key
 		export var target Key
+
+		static function create(source Key, target Key) returns Self
+			return Self{source: source, target: target}
+		end 'create'
 end 'Dep'
 
 typealias DepArray = Array with Dep
 
 type State
 		export var deps DepArray
+
+		static function create(deps DepArray) returns Self
+			return Self{deps: deps}
+		end 'create'
 end 'State'
 
 function record(state State, dep Dep)
@@ -154,7 +178,7 @@ function record(state State, dep Dep)
 end 'record'
 
 function clearFor(state State)
-		var kept = DepArray{}
+		var kept = DepArray.empty()
 		for dep in state.deps 'scan'
 				match dep.source 'check'
 						module then continue
@@ -165,15 +189,15 @@ function clearFor(state State)
 end 'clearFor'
 
 function main() returns ExitCode
-		let state = State{deps: DepArray{}}
+		let state = State.create(deps: DepArray.empty())
 
-		record(state, dep: Dep{source: Key.file("x.maxon long enough for heap"), target: Key.module})
+		record(state, dep: Dep.create(source: Key.file("x.maxon long enough for heap"), target: Key.module))
 		clearFor(state)
 
-		record(state, dep: Dep{source: Key.module, target: Key.file("y.maxon long enough for heap")})
+		record(state, dep: Dep.create(source: Key.module, target: Key.file("y.maxon long enough for heap")))
 		clearFor(state)
 
-		record(state, dep: Dep{source: Key.module, target: Key.file("z.maxon long enough for heap")})
+		record(state, dep: Dep.create(source: Key.module, target: Key.file("z.maxon long enough for heap")))
 		clearFor(state)
 
 		return state.deps.count()

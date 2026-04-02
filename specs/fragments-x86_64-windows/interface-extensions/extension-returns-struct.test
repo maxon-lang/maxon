@@ -10,11 +10,15 @@ end 'Pointlike'
 type SimplePoint
 	export var x Integer
 	export var y Integer
+
+	static function create(x Integer, y Integer) returns Self
+		return Self{x: x, y: y}
+	end 'create'
 end 'SimplePoint'
 
 extension Pointlike
 	function asSimple() returns SimplePoint
-		return SimplePoint{x: self.getX(), y: self.getY()}
+		return SimplePoint.create(x: self.getX(), y: self.getY())
 	end 'asSimple'
 end 'Pointlike'
 
@@ -29,10 +33,14 @@ type Coord implements Pointlike
 	function getY() returns Integer
 		return cy
 	end 'getY'
+
+	static function create(cx Integer, cy Integer) returns Self
+		return Self{cx: cx, cy: cy}
+	end 'create'
 end 'Coord'
 
 function main() returns ExitCode
-	var c = Coord{cx: 10, cy: 32}
+	var c = Coord.create(cx: 10, cy: 32)
 	var p = c.asSimple()
 	return p.x + p.y
 end 'main'
@@ -40,6 +48,29 @@ end 'main'
 ExitCode: 42
 ---
 module {
+  func @SimplePoint.create(x: i64, y: i64) -> i64 {
+  entry:
+    x86.prologue stack_size=32
+    x86.mov [rbp-16], rcx
+    x86.mov [rbp-24], rdx
+    x86.mov rcx, 16
+    x86.xor rdx, rdx
+    x86.mov r8, 1
+    x86.call mm_alloc
+    x86.mov [rbp-8], rax
+    x86.mov rax, [rbp-8]
+    x86.mov rcx, [rbp-16]
+    x86.mov [rax+0], rcx
+    x86.mov rdx, [rbp-8]
+    x86.mov rbx, [rbp-24]
+    x86.mov [rdx+8], rbx
+    x86.mov rsi, [rbp-8]
+    x86.mov rcx, [rbp-8]
+    x86.call mm_incref
+    x86.mov rax, [rbp-8]
+    x86.epilogue
+    x86.ret
+  }
   func @Coord.asSimple(__self_ptr: i64) -> i64 {
   entry:
     x86.prologue stack_size=32
@@ -50,21 +81,10 @@ module {
     x86.mov rcx, [rbp-8]
     x86.mov [rbp-24], rax
     x86.call Coord.getY
-    x86.mov [rbp-32], rax
-    x86.mov rcx, 16
-    x86.xor rdx, rdx
-    x86.mov r8, 1
-    x86.call mm_alloc
+    x86.mov rcx, [rbp-24]
+    x86.mov rdx, rax
+    x86.call SimplePoint.create
     x86.mov [rbp-16], rax
-    x86.mov rdx, [rbp-16]
-    x86.mov rbx, [rbp-24]
-    x86.mov [rdx+0], rbx
-    x86.mov rsi, [rbp-16]
-    x86.mov rdi, [rbp-32]
-    x86.mov [rsi+8], rdi
-    x86.mov r8, [rbp-16]
-    x86.mov rcx, [rbp-16]
-    x86.call mm_incref
     x86.mov rax, [rbp-16]
     x86.epilogue
     x86.ret
@@ -89,28 +109,50 @@ module {
     x86.epilogue
     x86.ret
   }
+  func @Coord.create(cx: i64, cy: i64) -> i64 {
+  entry:
+    x86.prologue stack_size=32
+    x86.mov [rbp-16], rcx
+    x86.mov [rbp-24], rdx
+    x86.mov rcx, 16
+    x86.xor rdx, rdx
+    x86.mov r8, 2
+    x86.call mm_alloc
+    x86.mov [rbp-8], rax
+    x86.mov rax, [rbp-8]
+    x86.mov rcx, [rbp-16]
+    x86.mov [rax+0], rcx
+    x86.mov rdx, [rbp-8]
+    x86.mov rbx, [rbp-24]
+    x86.mov [rdx+8], rbx
+    x86.mov rsi, [rbp-8]
+    x86.mov rcx, [rbp-8]
+    x86.call mm_incref
+    x86.mov rax, [rbp-8]
+    x86.epilogue
+    x86.ret
+  }
   func @main() -> u32 {
   entry:
     x86.prologue stack_size=32
-    x86.mov rax, 10
-    x86.mov rcx, 32
-    x86.mov [rbp-16], rax
-    x86.mov [rbp-8], rcx
-    x86.lea rdx, [rbp-16]
-    x86.mov rbx, rdx
-    x86.mov rcx, rbx
+    x86.mov rcx, 10
+    x86.mov rdx, 32
+    x86.call Coord.create
+    x86.mov [rbp-8], rax
+    x86.mov rax, [rbp-8]
+    x86.mov rcx, [rbp-8]
     x86.call Coord.asSimple
-    x86.mov [rbp-24], rax
-    x86.mov rsi, [rbp-24]
-    x86.mov rdi, [rsi+0]
-    x86.mov r8, [rbp-24]
-    x86.mov r9, [r8+8]
-    x86.add rdi, r9
-    x86.xor rax, rax
-    x86.mov rcx, 4294967295
-    x86.cmp rdi, rcx
+    x86.mov [rbp-16], rax
+    x86.mov rcx, [rbp-16]
+    x86.mov rdx, [rcx+0]
+    x86.mov rbx, [rbp-16]
+    x86.mov rsi, [rbx+8]
+    x86.add rdx, rsi
+    x86.xor rdi, rdi
+    x86.mov r8, 4294967295
+    x86.cmp rdx, r8
     x86.jg main.__range_panic_0
-    x86.cmp rdi, rax
+    x86.cmp rdx, rdi
     x86.jl main.__range_panic_0
     x86.jmp main.__range_ok_0
   __range_panic_0:
@@ -118,20 +160,31 @@ module {
     x86.mov rcx, rax
     x86.call mrt_panic
   __range_ok_0:
-    x86.mov rdx, [rbp-24]
-    x86.mov [rbp-32], rdi
-    x86.test rdx, rdx
+    x86.mov rax, [rbp-16]
+    x86.mov [rbp-24], rdx
+    x86.test rax, rax
     x86.jz __nonnull_skip_0
-    x86.mov rcx, [rbp-24]
+    x86.mov rcx, [rbp-16]
     x86.call mm_decref
     x86.label __nonnull_skip_0
-    x86.mov rax, [rbp-32]
+    x86.mov rcx, [rbp-8]
+    x86.test rcx, rcx
+    x86.jz __nonnull_skip_1
+    x86.call mm_decref
+    x86.label __nonnull_skip_1
+    x86.mov rax, [rbp-24]
     x86.epilogue
     x86.ret
   }
   func @__destruct_SimplePoint(ptr: i64) {
   entry:
     x86.jmp __destruct_SimplePoint.done
+  done:
+    x86.ret
+  }
+  func @__destruct_Coord(ptr: i64) {
+  entry:
+    x86.jmp __destruct_Coord.done
   done:
     x86.ret
   }

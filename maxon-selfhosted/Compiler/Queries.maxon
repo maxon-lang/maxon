@@ -54,7 +54,7 @@ export function queryTokens(project Project, path FilePath) returns TokenArray t
 	popQuery(project)
 
 	// Store
-	let newMemo = TokenMemo{value: tokens, computedAt: project.db.currentRevision, verifiedAt: project.db.currentRevision}
+	let newMemo = TokenMemo.create(tokens, computedAt: project.db.currentRevision, verifiedAt: project.db.currentRevision)
 	project.db.tokenCache.insert(path, value: newMemo)
 
 	return tokens
@@ -98,7 +98,7 @@ export function queryParseOps(project Project, path FilePath) returns MlirModule
 	// Only cache if no new errors were added during this file's parse
 	let hadErrors = project.diagnostics.count() > errorCountBefore
 	if not hadErrors 'cacheOk'
-		let newMemo = ParseMemo{value: module, computedAt: project.db.currentRevision, verifiedAt: project.db.currentRevision, nextValueIdAfterParse: nextId}
+		let newMemo = ParseMemo.create(module, computedAt: project.db.currentRevision, verifiedAt: project.db.currentRevision, nextValueIdAfterParse: nextId)
 		project.db.parseCache.insert(path, value: newMemo)
 	end 'cacheOk'
 
@@ -157,7 +157,7 @@ export function queryAllModule(project Project) returns MlirModule throws Compil
 	popQuery(project)
 
 	// Store
-	project.db.allModuleCache = MlirModuleMemo{value: allModule, computedAt: project.db.currentRevision, verifiedAt: project.db.currentRevision}
+	project.db.allModuleCache = MlirModuleMemo.create(allModule, computedAt: project.db.currentRevision, verifiedAt: project.db.currentRevision)
 
 	return allModule
 end 'queryAllModule'
@@ -198,7 +198,7 @@ export function queryAllMid(project Project) returns MlirModule throws CompileEr
 	let valueIdRef = createValueIdRef(getNextValueId(project))
 	let firstPath = try project.db.sourcePaths.get(0) otherwise FilePath from ""
 	let sourceFileName = firstPath.filename()
-	var ctx = PipelineContext{module: module, project: project, globalData: project.globalData, nextValueIdRef: valueIdRef, target: project.target, sourceFileName: sourceFileName}
+	var ctx = PipelineContext.create(module, project: project, globalData: project.globalData, nextValueIdRef: valueIdRef, target: project.target, sourceFileName: sourceFileName)
 	let midPasses = buildMidPipeline()
 	try runPipeline(ctx, passes: midPasses)
 	setNextValueId(project, id: ctx.nextValueIdRef.nextId)
@@ -207,7 +207,7 @@ export function queryAllMid(project Project) returns MlirModule throws CompileEr
 	popQuery(project)
 
 	// Store
-	project.db.allMidCache = MlirModuleMemo{value: result, computedAt: project.db.currentRevision, verifiedAt: project.db.currentRevision}
+	project.db.allMidCache = MlirModuleMemo.create(result, computedAt: project.db.currentRevision, verifiedAt: project.db.currentRevision)
 
 	return result
 end 'queryAllMid'
@@ -244,7 +244,7 @@ export function queryCodeResult(project Project) returns CodeResult throws Compi
 	popQuery(project)
 
 	// Store
-	project.db.codeCache = CodeMemo{value: result, computedAt: project.db.currentRevision, verifiedAt: project.db.currentRevision}
+	project.db.codeCache = CodeMemo.create(result, computedAt: project.db.currentRevision, verifiedAt: project.db.currentRevision)
 
 	return result
 end 'queryCodeResult'

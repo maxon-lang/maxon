@@ -1,12 +1,16 @@
 // Test: managed-file.exists
 type TestFile
-	export var _file __ManagedFile
+	export var file __ManagedFile
+
+	export static function openWrite(path __ManagedMemory) returns TestFile
+		let handle = __ManagedFile.openWrite(path)
+		return TestFile{file: handle}
+	end 'openWrite'
 end 'TestFile'
 
 function createEmptyFile(path String)
-	let result = __ManagedFile.openWrite(path.managed)
-	var f = TestFile{_file: result}
-	f._file.close()
+	var f = TestFile.openWrite(path.managed)
+	f.file.close()
 end 'createEmptyFile'
 
 function main() returns ExitCode
@@ -33,16 +37,13 @@ end 'main'
 ExitCode: 42
 ---
 module {
-  func @managed-file.createEmptyFile(path: i64) {
+  func @TestFile.openWrite(path: i64) -> i64 {
   entry:
-    x86.prologue stack_size=48
+    x86.prologue stack_size=32
     x86.mov [rbp-8], rcx
     x86.mov rax, [rbp-8]
     x86.mov rdx, [rax+0]
-    x86.mov [rbp-16], rdx
-    x86.mov rax, [rbp-16]
-    x86.mov rdx, [rax+0]
-    x86.mov rax, [rbp-16]
+    x86.mov rax, [rbp-8]
     x86.mov rbx, [rax+8]
     x86.mov rcx, rdx
     x86.mov rdx, rbx
@@ -51,27 +52,43 @@ module {
     x86.call maxon_managed_file_open_write
     x86.lea_func rcx, [__destruct_TestFile]
     x86.mov rdx, rcx
-    x86.mov [rbp-40], rax
+    x86.mov [rbp-24], rax
     x86.mov rcx, 8
     x86.mov r8, 1
     x86.call mm_alloc
-    x86.mov [rbp-24], rax
-    x86.mov rbx, [rbp-24]
-    x86.mov rsi, [rbp-40]
+    x86.mov [rbp-16], rax
+    x86.mov rbx, [rbp-16]
+    x86.mov rsi, [rbp-24]
     x86.mov [rbx+0], rsi
-    x86.mov rcx, [rbp-40]
-    x86.call mm_incref
-    x86.mov rdi, [rbp-24]
     x86.mov rcx, [rbp-24]
     x86.call mm_incref
-    x86.mov r8, [rbp-24]
-    x86.mov r9, [r8+0]
-    x86.mov [rbp-32], r9
-    x86.mov rax, [rbp-32]
-    x86.mov rcx, [rax+0]
+    x86.mov rdi, [rbp-16]
+    x86.mov rcx, [rbp-16]
+    x86.call mm_incref
+    x86.mov rax, [rbp-16]
+    x86.epilogue
+    x86.ret
+  }
+  func @managed-file.createEmptyFile(path: i64) {
+  entry:
+    x86.prologue stack_size=32
+    x86.mov [rbp-8], rcx
+    x86.mov rax, [rbp-8]
+    x86.mov rdx, [rax+0]
+    x86.mov [rbp-16], rdx
+    x86.mov rax, [rbp-16]
+    x86.mov rcx, [rbp-16]
+    x86.call TestFile.openWrite
+    x86.mov [rbp-24], rax
+    x86.mov rcx, [rbp-24]
+    x86.mov rdx, [rcx+0]
+    x86.mov [rbp-32], rdx
+    x86.mov rbx, [rbp-32]
+    x86.mov rsi, [rbx+0]
+    x86.mov rcx, rsi
     x86.call maxon_file_close
-    x86.mov rax, [rbp-24]
-    x86.test rax, rax
+    x86.mov rdi, [rbp-24]
+    x86.test rdi, rdi
     x86.jz __nonnull_skip_0
     x86.mov rcx, [rbp-24]
     x86.call mm_decref
@@ -89,7 +106,7 @@ module {
     x86.mov rsi, rbx
     x86.mov [rbp-72], rcx
     x86.mov rdx, rsi
-    x86.mov rcx, 16
+    x86.mov rcx, 32
     x86.mov r8, 2
     x86.call mm_alloc
     x86.mov [rbp-8], rax
@@ -121,6 +138,12 @@ module {
     x86.xor rax, rax
     x86.mov rcx, [rbp-8]
     x86.mov [rcx+8], rax
+    x86.mov rax, -1
+    x86.mov rcx, [rbp-8]
+    x86.mov [rcx+16], rax
+    x86.mov rax, 1
+    x86.mov rcx, [rbp-8]
+    x86.mov [rcx+24], rax
     x86.mov rax, [rbp-8]
     x86.mov rcx, [rbp-8]
     x86.call mm_incref
@@ -155,7 +178,7 @@ module {
     x86.mov rsi, rbx
     x86.mov [rbp-72], rcx
     x86.mov rdx, rsi
-    x86.mov rcx, 16
+    x86.mov rcx, 32
     x86.mov r8, 2
     x86.call mm_alloc
     x86.mov [rbp-32], rax
@@ -187,6 +210,12 @@ module {
     x86.xor rax, rax
     x86.mov rcx, [rbp-32]
     x86.mov [rcx+8], rax
+    x86.mov rax, -1
+    x86.mov rcx, [rbp-32]
+    x86.mov [rcx+16], rax
+    x86.mov rax, 1
+    x86.mov rcx, [rbp-32]
+    x86.mov [rcx+24], rax
     x86.mov rax, [rbp-32]
     x86.mov rcx, [rbp-32]
     x86.call mm_incref

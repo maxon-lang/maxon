@@ -32,15 +32,19 @@ typealias Integer = int(i64.min to i64.max)
 type Item
 	export var name String
 	export var value Integer
+
+	static function create(name String, value Integer) returns Self
+		return Self{name: name, value: value}
+	end 'create'
 end 'Item'
 
 typealias ItemArray = Array with Item
 
 function main() returns ExitCode
-	var items = ItemArray{}
-	items.push(Item{name: "hello world that needs heap allocation", value: 1})
-	items.push(Item{name: "another long string for heap allocation", value: 2})
-	let first = try items.get(0) otherwise Item{name: "", value: 0}
+	var items = ItemArray.empty()
+	items.push(Item.create(name: "hello world that needs heap allocation", value: 1))
+	items.push(Item.create(name: "another long string for heap allocation", value: 2))
+	let first = try items.get(0) otherwise Item.create(name: "", value: 0)
 	print("{first.name}\n")
 	return first.value
 end 'main'
@@ -59,13 +63,17 @@ When an array is cleaned up, each element's managed fields must be decremented.
 type Pair
 	export var first String
 	export var second String
+
+	static function create(first String, second String) returns Self
+		return Self{first: first, second: second}
+	end 'create'
 end 'Pair'
 
 typealias PairArray = Array with Pair
 
 function main() returns ExitCode
-	var pairs = PairArray{}
-	pairs.push(Pair{first: "alpha string that is long for heap", second: "beta string that is long for heap"})
+	var pairs = PairArray.empty()
+	pairs.push(Pair.create(first: "alpha string that is long for heap", second: "beta string that is long for heap"))
 	return 0
 end 'main'
 ```
@@ -86,13 +94,17 @@ type MultiField
 	export var c String
 	export var d Integer
 	export var e String
+
+	static function create(a String, b Integer, c String, d Integer, e String) returns Self
+		return Self{a: a, b: b, c: c, d: d, e: e}
+	end 'create'
 end 'MultiField'
 
 typealias MultiArray = Array with MultiField
 
 function main() returns ExitCode
-	var items = MultiArray{}
-	items.push(MultiField{a: "string a that is long enough for heap", b: 1, c: "string c that is long enough for heap", d: 2, e: "string e that is long enough for heap"})
+	var items = MultiArray.empty()
+	items.push(MultiField.create(a: "string a that is long enough for heap", b: 1, c: "string c that is long enough for heap", d: 2, e: "string e that is long enough for heap"))
 	return 0
 end 'main'
 ```

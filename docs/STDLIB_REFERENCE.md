@@ -35,7 +35,7 @@ export function sha256(data ByteArray) returns ByteArray
 **Example:**
 
 ```maxon
-var data = ByteArray{}
+var data = ByteArray.empty()
 data.push(0x61)
 data.push(0x62)
 data.push(0x63)
@@ -467,7 +467,7 @@ Create a concrete List type with `typealias`, then initialize with `{}`:
 typealias Integer = int(i64.min to i64.max)
 typealias IntList = List with Integer
 
-var list = IntList{}             // Empty list
+var list = IntList.empty()             // Empty list
 ```
 
 **Adding Elements**

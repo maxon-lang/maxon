@@ -115,6 +115,10 @@ type Wrapper uses T
 	export var value T
 	export var tag Idx
 
+	export static function create(value T, tag Idx) returns Self
+		return Self{value: value, tag: tag}
+	end 'create'
+
 	export function getTag() returns Idx
 		return self.tag
 	end 'getTag'
@@ -128,15 +132,15 @@ typealias WrapperA = Wrapper with Integer
 typealias WrapperB = Wrapper with Integer
 
 function main() returns ExitCode
-	var a = WrapperA{value: 1, tag: 5}
-	var b = WrapperB{value: 2, tag: 0}
+	var a = WrapperA.create(value: 1, tag: 5)
+	var b = WrapperB.create(value: 2, tag: 0)
 	let aTag = a.getTag()
 	b.setTag(aTag)
 	return 0
 end 'main'
 ```
 ```maxoncstderr
-error E3005: specs/fragments/per-instance-typealias/wrong-instance-error.test:26:4: argument type mismatch for 't': expected 'WrapperB.Idx', got 'WrapperA.Idx'
+error E3005: specs/fragments/per-instance-typealias/wrong-instance-error.test:30:4: argument type mismatch for 't': expected 'WrapperB.Idx', got 'WrapperA.Idx'
 ```
 
 ### Literal in range is accepted
@@ -151,6 +155,10 @@ type Wrapper uses T
 	export var value T
 	export var tag Idx
 
+	export static function create(value T, tag Idx) returns Self
+		return Self{value: value, tag: tag}
+	end 'create'
+
 	export function getTag() returns Idx
 		return self.tag
 	end 'getTag'
@@ -159,7 +167,7 @@ end 'Wrapper'
 typealias IntWrapper = Wrapper with Integer
 
 function main() returns ExitCode
-	var w = IntWrapper{value: 42, tag: 5}
+	var w = IntWrapper.create(value: 42, tag: 5)
 	let t = w.getTag()
 	if t == 5 'check'
 		return 0
@@ -182,6 +190,10 @@ type Wrapper uses T
 
 	export var value T
 	export var tag Idx
+
+	export static function create(value T, tag Idx) returns Self
+		return Self{value: value, tag: tag}
+	end 'create'
 end 'Wrapper'
 
 typealias IntWrapper = Wrapper with Integer
@@ -192,7 +204,7 @@ function takeStrTag(t StrWrapper.Idx) returns StrWrapper.Idx
 end 'takeStrTag'
 
 function main() returns ExitCode
-	var iw = IntWrapper{value: 1, tag: 7}
+	var iw = IntWrapper.create(value: 1, tag: 7)
 	let intTag = iw.tag
 	let strTag = intTag as StrWrapper.Idx
 	let result = takeStrTag(strTag)
@@ -218,6 +230,10 @@ type Wrapper uses T
 	export var value T
 	export var tag Idx
 
+	export static function create(value T, tag Idx) returns Self
+		return Self{value: value, tag: tag}
+	end 'create'
+
 	export function getTag() returns Idx
 		return self.tag
 	end 'getTag'
@@ -227,7 +243,7 @@ typealias IntWrapper = Wrapper with Integer
 
 function main() returns ExitCode
 	let idx = IntWrapper.Idx{42}
-	var w = IntWrapper{value: 99, tag: idx}
+	var w = IntWrapper.create(value: 99, tag: idx)
 	let t = w.getTag()
 	if t == 42 'check'
 		return 0

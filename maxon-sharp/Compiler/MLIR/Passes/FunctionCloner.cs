@@ -729,9 +729,73 @@ internal class FunctionCloner {
       }
     }
 
+    // For fixed-capacity types (Vector): when the source had no ArrayLiteralTag
+    // (generic Self{} at parse time), but the resolved type has __capacity,
+    // set up the capacity info so the conversion pass allocates the buffer.
+    var arrayTag = structLit.ArrayLiteralTag;
+    var arrayCount = structLit.ArrayLiteralCount;
+    // Check if the managed field was zero-initialized (from Self{}) vs user-provided (from Self{managed: param}).
+    // Only inject capacity handling for zero-init: the managed value is a MaxonStruct from a struct literal,
+    // not from a function parameter.
+    bool managedIsZeroInit = false;
+    var (FieldName, Value) = structLit.FieldValues.FirstOrDefault(fv => fv.FieldName == "managed");
+    if (FieldName == "managed" && Value is MaxonStruct) {
+      // Check if this value was produced by a struct literal op in the same block
+      // (zero-init), not from a function parameter
+      managedIsZeroInit = !_sourceFunc.ParamNames.Contains("managed");
+    }
+    if (arrayTag == null && managedIsZeroInit
+        && _typeDefs.TryGetValue(resolvedTypeName, out var resolvedDef)
+        && resolvedDef is MlirStructType resolvedStruct
+        && resolvedStruct.ConstParams.TryGetValue("__capacity", out var capacity)
+        && resolvedStruct.GetField("managed") != null) {
+      // Determine element size from the concrete type
+      int elemSize = 8;
+      if (resolvedStruct.TypeParams.TryGetValue("Element", out var elemType))
+        elemSize = elemType.ElementSize;
+      var elemKind = elemType?.ToValueKind() ?? MaxonValueKind.Integer;
+
+      arrayTag = $"__arr_{MlirContext.Current.NextId()}";
+      arrayCount = (int)capacity;
+
+      // Create zero-valued element variables
+      for (int i = arrayCount - 1; i >= 0; i--) {
+        var zeroVal = new MaxonLiteralOp(0L);
+        extraOps.Add(zeroVal);
+        var elemVarName = $"{arrayTag}.{i}";
+        extraOps.Add(new MaxonAssignOp(elemVarName, zeroVal.Result, isDeclaration: true, isMutable: false, elemKind));
+      }
+
+      // Create __ManagedMemory struct with placeholder buffer
+      var bufLit = new MaxonLiteralOp(0L);
+      extraOps.Add(bufLit);
+      var lenLit = new MaxonLiteralOp(capacity);
+      extraOps.Add(lenLit);
+      var capLit = new MaxonLiteralOp(0L);
+      extraOps.Add(capLit);
+      var elemSizeLit = new MaxonLiteralOp((long)elemSize);
+      extraOps.Add(elemSizeLit);
+
+      var managedFields = new List<(string, MaxonValue)> {
+        ("buffer", bufLit.Result),
+        ("length", lenLit.Result),
+        ("capacity", capLit.Result),
+        ("element_size", elemSizeLit.Result)
+      };
+      var managedTypeName = resolvedStruct.GetField("managed")!.Type.Name;
+      var managedStruct = new MaxonStructLiteralOp(managedTypeName, managedFields);
+      extraOps.Add(managedStruct);
+      // Replace the existing zero-initialized managed field with the capacity-aware one
+      var existingIdx = newFieldValues.FindIndex(fv => fv.FieldName == "managed");
+      if (existingIdx >= 0)
+        newFieldValues[existingIdx] = ("managed", managedStruct.Result);
+      else
+        newFieldValues.Add(("managed", managedStruct.Result));
+    }
+
     var cloned = new MaxonStructLiteralOp(resolvedTypeName, newFieldValues) {
-      ArrayLiteralTag = structLit.ArrayLiteralTag,
-      ArrayLiteralCount = structLit.ArrayLiteralCount
+      ArrayLiteralTag = arrayTag,
+      ArrayLiteralCount = arrayCount
     };
     RegisterResult(structLit.Result, cloned.Result);
     return cloned;

@@ -8,6 +8,10 @@ export type SpecFrontmatter
 	export var feature String
 	export var status String
 	export var category String
+
+	export static function create(feature String, status String, category String) returns SpecFrontmatter
+		return Self{feature: feature, status: status, category: category}
+	end 'create'
 end 'SpecFrontmatter'
 
 export type TestExpectation
@@ -27,11 +31,19 @@ export type TestExpectation
 	export var hasRequiredData bool
 	export var mmTrace bool
 	export var asyncTrace bool
+
+	export static function empty() returns TestExpectation
+		return Self{exitCode: 0, hasExitCode: false, stdout: "", hasStdout: false, compilerStderr: "", hasCompilerStderr: false, runtimeStderr: "", hasRuntimeStderr: false, requiredLowering: "", hasRequiredLowering: false, requiredRdata: "", hasRequiredRdata: false, requiredData: "", hasRequiredData: false, mmTrace: false, asyncTrace: false}
+	end 'empty'
 end 'TestExpectation'
 
 export type SourceFilePair
 	export var fileName String
 	export var source String
+
+	export static function create(fileName String, source String) returns SourceFilePair
+		return Self{fileName: fileName, source: source}
+	end 'create'
 end 'SourceFilePair'
 
 export typealias SourceFileArray = Array with SourceFilePair
@@ -45,6 +57,10 @@ export type SpecTest
 	export var hasMultiFile bool
 	export var mmTrace bool
 	export var asyncTrace bool
+
+	export static function create(name String, source String, expectation TestExpectation, args String, sourceFiles SourceFileArray, hasMultiFile bool, mmTrace bool, asyncTrace bool) returns SpecTest
+		return Self{name: name, source: source, expectation: expectation, args: args, sourceFiles: sourceFiles, hasMultiFile: hasMultiFile, mmTrace: mmTrace, asyncTrace: asyncTrace}
+	end 'create'
 end 'SpecTest'
 
 export typealias SpecTestArray = Array with SpecTest
@@ -69,6 +85,10 @@ export type Fragment
 	export var hasMultiFile bool
 	export var mmTrace bool
 	export var asyncTrace bool
+
+	export static function create(filePath String, testName String, source String, expectation TestExpectation, generatedMLIR String, hasGeneratedMLIR bool, args String, sourceFiles SourceFileArray, hasMultiFile bool, mmTrace bool, asyncTrace bool) returns Fragment
+		return Self{filePath: filePath, testName: testName, source: source, expectation: expectation, generatedMLIR: generatedMLIR, hasGeneratedMLIR: hasGeneratedMLIR, args: args, sourceFiles: sourceFiles, hasMultiFile: hasMultiFile, mmTrace: mmTrace, asyncTrace: asyncTrace}
+	end 'create'
 end 'Fragment'
 
 export type TestResult
@@ -78,6 +98,10 @@ export type TestResult
 	export var filePath String
 	export var loweringLog String
 	export var compileIr String
+
+	export static function create(testName String, passed bool, errorMessage String, filePath String, loweringLog String, compileIr String) returns TestResult
+		return Self{testName: testName, passed: passed, errorMessage: errorMessage, filePath: filePath, loweringLog: loweringLog, compileIr: compileIr}
+	end 'create'
 end 'TestResult'
 
 export typealias TestResultArray = Array with TestResult
@@ -154,7 +178,7 @@ end 'skipCodeBlock'
 
 // Parse YAML frontmatter from a spec file.
 export function parseFrontmatter(content String) returns SpecFrontmatter
-	var fm = SpecFrontmatter{feature: "unknown", status: "unknown", category: "unknown"}
+	var fm = SpecFrontmatter.create("unknown", status: "unknown", category: "unknown")
 	let lines = content.split("\n")
 	let lineCount = lines.count()
 
@@ -199,13 +223,13 @@ end 'parseFrontmatter'
 // Split source containing "// --- file: name.maxon" markers into multiple files.
 // Returns empty array if no file markers found.
 export function splitMultiFileSource(source String) returns SourceFileArray
-	var files = SourceFileArray{}
+	var files = SourceFileArray.empty()
 	let lines = source.split("\n")
 	let lineCount = lines.count()
 
 	// First pass: find all marker positions
-	var markerLines = IntArray{}
-	var markerNames = TextLineArray{}
+	var markerLines = IntArray.empty()
+	var markerNames = TextLineArray.empty()
 
 	for i in 0 upto lineCount 'findMarkers'
 		let line = try lines.get(i) otherwise 'skip'
@@ -250,7 +274,7 @@ export function splitMultiFileSource(source String) returns SourceFileArray
 			end 'notFirst'
 		end 'buildSource'
 
-		var pair = SourceFilePair{fileName: fileName, source: trimWhitespace(fileSource)}
+		var pair = SourceFilePair.create(fileName, source: trimWhitespace(fileSource))
 		files.push(pair)
 	end 'extractFiles'
 
@@ -259,7 +283,7 @@ end 'splitMultiFileSource'
 
 // Parse a spec file and extract all tests.
 export function parseSpecFile(content String, targetKey String) returns SpecTestArray
-	var tests = SpecTestArray{}
+	var tests = SpecTestArray.empty()
 	let lines = content.split("\n")
 	var i = 0
 	let lineCount = lines.count()
@@ -354,7 +378,7 @@ export function parseSpecFile(content String, targetKey String) returns SpecTest
 
 			// Scan for directives and code blocks after this marker
 			var source = ""
-			var expectation = TestExpectation{}
+			var expectation = TestExpectation.empty()
 			var testArgs = ""
 			var testMmTrace = false
 			var testAsyncTrace = false
@@ -512,16 +536,7 @@ export function parseSpecFile(content String, targetKey String) returns SpecTest
 				let sourceFiles = splitMultiFileSource(source)
 				let hasMulti = sourceFiles.count() > 0
 
-				var test = SpecTest{
-					name: testName,
-					source: source,
-					expectation: expectation,
-					args: testArgs,
-					sourceFiles: sourceFiles,
-					hasMultiFile: hasMulti,
-					mmTrace: testMmTrace,
-					asyncTrace: testAsyncTrace
-				}
+				var test = SpecTest.create(testName, source: source, expectation: expectation, args: testArgs, sourceFiles: sourceFiles, hasMultiFile: hasMulti, mmTrace: testMmTrace, asyncTrace: testAsyncTrace)
 				tests.push(test)
 			end 'hasSource'
 			continue
@@ -541,7 +556,7 @@ end 'parseSpecFile'
 
 // Extract executable examples from the ## Documentation section.
 export function extractDocExamples(content String) returns SpecTestArray
-	var tests = SpecTestArray{}
+	var tests = SpecTestArray.empty()
 	let lines = content.split("\n")
 	let lineCount = lines.count()
 
@@ -585,7 +600,7 @@ export function extractDocExamples(content String) returns SpecTestArray
 				exampleIndex = exampleIndex + 1
 				let testName = "docs-example-{exampleIndex}"
 
-				var expectation = TestExpectation{}
+				var expectation = TestExpectation.empty()
 
 				// Check for maxoncstderr block immediately after
 				let nextLine = try lines.get(blockEndLine) otherwise ""
@@ -606,16 +621,7 @@ export function extractDocExamples(content String) returns SpecTestArray
 					expectation.hasExitCode = true
 				end 'defaultExitCode'
 
-				var test = SpecTest{
-					name: testName,
-					source: code,
-					expectation: expectation,
-					args: "",
-					sourceFiles: SourceFileArray{},
-					hasMultiFile: false,
-					mmTrace: false,
-					asyncTrace: false
-				}
+				var test = SpecTest.create(testName, source: code, expectation: expectation, args: "", sourceFiles: SourceFileArray.empty(), hasMultiFile: false, mmTrace: false, asyncTrace: false)
 				tests.push(test)
 			end 'hasMain'
 

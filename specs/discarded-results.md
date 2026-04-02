@@ -204,10 +204,14 @@ type Counter
 		value = value + 1
 		return self
 	end 'increment'
+
+	static function create(value Count) returns Self
+		return Self{value: value}
+	end 'create'
 end 'Counter'
 
 function main() returns ExitCode
-	var c = Counter{value: 0}
+	var c = Counter.create(value: 0)
 	c.increment()
 	return c.value
 end 'main'
@@ -267,7 +271,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3012: specs/fragments/discarded-results/underscore-not-prefix-suppression.test:4:6: unused variable: '_x'
+error E3012: specs/fragments/discarded-results/underscore-not-prefix-suppression.test:4:6: unused variable: 'x'
 ```
 
 <!-- test: underscore-exact-discard -->

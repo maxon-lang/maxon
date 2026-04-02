@@ -20,4 +20,24 @@ public class MlirFunction<TOp>(string name, List<string> paramNames, List<MlirTy
   public bool IsPure { get; set; } = true;
   // True when the function returns `self` (borrowed reference, not a new allocation)
   public bool ReturnsSelf { get; set; }
+
+  /// Create an independent deep copy of this function.
+  public MlirFunction<TOp> DeepClone() {
+    var clone = new MlirFunction<TOp>(Name, [.. ParamNames], [.. ParamTypes], ReturnType, ThrowsType) {
+      IsStdlib = IsStdlib,
+      IsExported = IsExported,
+      SourceFilePath = SourceFilePath,
+      SourceLine = SourceLine,
+      SourceColumn = SourceColumn,
+      ExtensionWhereConstraints = ExtensionWhereConstraints,
+      IsPure = IsPure,
+      ReturnsSelf = ReturnsSelf
+    };
+    foreach (var block in Body.Blocks) {
+      var clonedBlock = new MlirBlock<TOp>(block.Name);
+      clonedBlock.Operations.AddRange(block.Operations);
+      clone.Body.Blocks.Add(clonedBlock);
+    }
+    return clone;
+  }
 }

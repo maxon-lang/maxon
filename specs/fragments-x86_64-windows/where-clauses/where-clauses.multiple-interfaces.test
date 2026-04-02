@@ -11,26 +11,34 @@ interface HasAge
 end 'HasAge'
 
 type Person implements HasName, HasAge
-		var _age Integer
+		var age Integer
 
 		function name() returns Integer
 				return 1
 		end 'name'
 
 		function age() returns Integer
-				return self._age
+				return self.age
 		end 'age'
+
+		static function create(age Integer) returns Self
+			return Self{age: age}
+		end 'create'
 end 'Person'
 
 type Registry uses T where T is HasName and HasAge
 		export var item T
+
+		static function create(item T) returns Self
+			return Self{item: item}
+		end 'create'
 end 'Registry'
 
 typealias PersonRegistry = Registry with Person
 
 function main() returns ExitCode
-		var p = Person{_age: 30}
-		var r = PersonRegistry{item: p}
+		var p = Person.create(age: 30)
+		var r = PersonRegistry.create(item: p)
 		return r.item.age()
 end 'main'
 ---
@@ -47,47 +55,46 @@ module {
     x86.epilogue
     x86.ret
   }
-  func @main() -> u32 {
+  func @Person.create(age: i64) -> i64 {
   entry:
-    x86.prologue stack_size=32
-    x86.mov rax, 30
+    x86.prologue stack_size=16
+    x86.mov [rbp-16], rcx
     x86.mov rcx, 8
     x86.xor rdx, rdx
     x86.mov r8, 1
     x86.call mm_alloc
     x86.mov [rbp-8], rax
-    x86.mov rcx, [rbp-8]
-    x86.mov rdx, 30
-    x86.mov [rcx+0], rdx
-    x86.mov rbx, [rbp-8]
-    x86.mov rcx, [rbp-8]
-    x86.call mm_incref
-    x86.lea_func rsi, [__destruct_PersonRegistry]
-    x86.mov rdi, rsi
-    x86.mov rdx, rdi
-    x86.mov rcx, 8
-    x86.mov r8, 2
-    x86.call mm_alloc
-    x86.mov [rbp-16], rax
-    x86.mov r8, [rbp-8]
-    x86.mov r9, [rbp-16]
-    x86.mov [r9+0], r8
-    x86.mov rcx, [rbp-8]
-    x86.call mm_incref
-    x86.mov rax, [rbp-16]
+    x86.mov rax, [rbp-8]
     x86.mov rcx, [rbp-16]
+    x86.mov [rax+0], rcx
+    x86.mov rdx, [rbp-8]
+    x86.mov rcx, [rbp-8]
     x86.call mm_incref
-    x86.mov rax, [rbp-16]
-    x86.mov rcx, [rax+0]
-    x86.mov [rbp-24], rcx
-    x86.mov rax, [rbp-24]
+    x86.mov rax, [rbp-8]
+    x86.epilogue
+    x86.ret
+  }
+  func @main() -> u32 {
+  entry:
+    x86.prologue stack_size=32
+    x86.mov rcx, 30
+    x86.call Person.create
+    x86.mov [rbp-8], rax
+    x86.mov rax, [rbp-8]
+    x86.mov rcx, [rbp-8]
+    x86.call PersonRegistry.create
+    x86.mov [rbp-16], rax
+    x86.mov rcx, [rbp-16]
+    x86.mov rdx, [rcx+0]
+    x86.mov [rbp-24], rdx
+    x86.mov rbx, [rbp-24]
     x86.mov rcx, [rbp-24]
     x86.call Person.age
-    x86.xor rcx, rcx
-    x86.mov rdx, 4294967295
-    x86.cmp rax, rdx
+    x86.xor rsi, rsi
+    x86.mov rdi, 4294967295
+    x86.cmp rax, rdi
     x86.jg main.__range_panic_0
-    x86.cmp rax, rcx
+    x86.cmp rax, rsi
     x86.jl main.__range_panic_0
     x86.jmp main.__range_ok_0
   __range_panic_0:
@@ -95,11 +102,10 @@ module {
     x86.mov rcx, rax
     x86.call mrt_panic
   __range_ok_0:
-    x86.mov rbx, [rbp-16]
-    x86.mov [rbp-32], rax
-    x86.test rbx, rbx
-    x86.jz __nonnull_skip_0
     x86.mov rcx, [rbp-16]
+    x86.mov [rbp-32], rax
+    x86.test rcx, rcx
+    x86.jz __nonnull_skip_0
     x86.call mm_decref
     x86.label __nonnull_skip_0
     x86.mov rax, [rbp-8]
@@ -109,6 +115,27 @@ module {
     x86.call mm_decref
     x86.label __nonnull_skip_1
     x86.mov rax, [rbp-32]
+    x86.epilogue
+    x86.ret
+  }
+  func @PersonRegistry.create(item: i64) -> i64 {
+  entry:
+    x86.prologue stack_size=16
+    x86.mov [rbp-8], rcx
+    x86.lea_func rax, [__destruct_PersonRegistry]
+    x86.mov rdx, rax
+    x86.mov rcx, 8
+    x86.mov r8, 2
+    x86.call mm_alloc
+    x86.mov [rbp-16], rax
+    x86.mov rcx, [rbp-8]
+    x86.mov rdx, [rbp-16]
+    x86.mov [rdx+0], rcx
+    x86.call mm_incref
+    x86.mov rbx, [rbp-16]
+    x86.mov rcx, [rbp-16]
+    x86.call mm_incref
+    x86.mov rax, [rbp-16]
     x86.epilogue
     x86.ret
   }

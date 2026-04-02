@@ -712,7 +712,7 @@ Static fields initialized with complex expressions -- function calls, struct lit
 
 ```maxon
 type Config
-		static var instance = Config._create()
+		static var instance = Config.create()
 
 		static function _create() returns Config
 				return Config{value: 42}
@@ -721,7 +721,7 @@ type Config
 		export var value Count
 
 		export static function instance() returns Config
-				return Config._instance   // initializer runs on first call only
+				return Config.instance   // initializer runs on first call only
 		end 'instance'
 end 'Config'
 ```
@@ -741,7 +741,7 @@ type WSCache
 		static var ws = CharacterSet.whitespacesAndNewlines()
 
 		export static function isWhitespace(c Character) returns bool
-				return WSCache._ws.contains(c)
+				return WSCache.ws.contains(c)
 		end 'isWhitespace'
 end 'WSCache'
 ```
@@ -770,7 +770,7 @@ type Lookup
 		static var values = [10, 20, 30]
 
 		export static function get(index Integer) returns Integer
-				return try Lookup._values.get(index) otherwise -1
+				return try Lookup.values.get(index) otherwise -1
 		end 'get'
 end 'Lookup'
 ```
@@ -778,8 +778,8 @@ end 'Lookup'
 Multiple lazy statics in the same type are each initialized independently on first access:
 ```maxon
 type Cache
-		static var a = Cache._buildA()
-		static var b = Cache._buildB()
+		static var a = Cache.buildA()
+		static var b = Cache.buildB()
 		export var n Count
 
 		static function _buildA() returns Cache
@@ -2111,7 +2111,7 @@ Create an empty typed array using a type alias:
 typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
-var numbers = IntArray{}         // Empty array
+var numbers = IntArray.empty()         // Empty array
 numbers.push(42)                 // Add elements with push
 ```
 
@@ -2120,7 +2120,7 @@ To preallocate with a specific length (elements zero-initialized):
 typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
-var buffer = IntArray{}
+var buffer = IntArray.empty()
 buffer.resize(100)               // Length is now 100
 buffer.set(0, value: 42)         // Can set any index 0-99
 ```
@@ -2130,7 +2130,7 @@ To preallocate capacity without changing length (for performance):
 typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
-var buffer = IntArray{}
+var buffer = IntArray.empty()
 buffer.reserve(100)              // Capacity is 100, length is 0
 buffer.push(42)                  // Now length is 1
 ```
@@ -3538,7 +3538,7 @@ Create a concrete List type with `typealias`, then initialize with `{}`:
 typealias Integer = int(i64.min to i64.max)
 typealias IntList = List with Integer
 
-var list = IntList{}             // Empty list
+var list = IntList.empty()             // Empty list
 ```
 
 **Adding Elements**
@@ -3954,7 +3954,7 @@ end 'makePoint'
 typealias TokenList = List with Token
 
 function example() returns int
-	var list = TokenList{}
+	var list = TokenList.empty()
 	list.append(Token{id: 1})   // Token incref'd by the managed list node
 	list.append(Token{id: 2})   // Token incref'd by the managed list node
 	return 0                     // list freed: each Token decref'd (rc→0→freed),

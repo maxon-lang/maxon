@@ -33,6 +33,10 @@ export type Diagnostic
 	export let line ErrorLineNumber
 	export let column ErrorColumnNumber
 	export let filePath FilePath
+
+	export static function create(code ErrorCode, message String, line ErrorLineNumber, column ErrorColumnNumber, filePath FilePath) returns Diagnostic
+		return Self{code: code, message: message, line: line, column: column, filePath: filePath}
+	end 'create'
 end 'Diagnostic'
 
 export typealias DiagnosticArray = Array with Diagnostic
@@ -41,14 +45,14 @@ export typealias DiagnosticArray = Array with Diagnostic
 // diagnostics list and logs to stderr, but does NOT throw.
 export function reportCompileError(project Project, code ErrorCode, message String, line ErrorLineNumber, column ErrorColumnNumber, filePath FilePath)
 	logError(LogCategory.compiler, message: () gives "error E{code.rawValue:04}: {filePath}:{line}:{column}: {message}")
-	project.diagnostics.push(Diagnostic{code: code, message: message, line: line, column: column, filePath: filePath})
+	project.diagnostics.push(Diagnostic.create(code, message: message, line: line, column: column, filePath: filePath))
 end 'reportCompileError'
 
 // Reports a semantic error without source location. Appends to the project's
 // diagnostics list and logs to stderr, but does NOT throw.
 export function reportSemanticError(project Project, code ErrorCode, message String)
 	logError(LogCategory.compiler, message: () gives "error E{code.rawValue:04}: {message}")
-	project.diagnostics.push(Diagnostic{code: code, message: message, line: 0, column: 0, filePath: FilePath from ""})
+	project.diagnostics.push(Diagnostic.create(code, message: message, line: 0, column: 0, filePath: FilePath from ""))
 end 'reportSemanticError'
 
 export enum CompileError implements Error

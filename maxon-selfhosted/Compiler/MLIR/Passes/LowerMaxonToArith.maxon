@@ -59,18 +59,18 @@ end 'lowerOpToArith'
 
 function lowerMaxonOpToArith(hlOp MaxonOp, dstBlock MlirBlock)
 	match hlOp 'lower'
-		literal(resultId, value, isFloat) then dstBlock.ops.push(MlirOp.arith(ArithOp.const(ArithConst{opcode: literalToArithOpcode(isFloat), resultId: resultId, value: value})))
+		literal(resultId, value, isFloat) then dstBlock.ops.push(MlirOp.arith(ArithOp.const(ArithConst.create(literalToArithOpcode(isFloat), resultId: resultId, value: value))))
 		varDecl(slotId, valueId) then dstBlock.ops.push(MlirOp.memref(MemRefOp.storeSlot(slotId, valueId)))
 		varLoad(resultId, slotId) then dstBlock.ops.push(MlirOp.memref(MemRefOp.loadSlot(resultId, slotId)))
 		varStore(slotId, valueId) then dstBlock.ops.push(MlirOp.memref(MemRefOp.storeSlot(slotId, valueId)))
-		binop(resultId, leftId, rightId, opKind, isFloat) then dstBlock.ops.push(MlirOp.arith(ArithOp.binary(ArithBinaryOp{opcode: binOpKindToArithOpcode(opKind, isFloat: isFloat), resultId: resultId, leftId: leftId, rightId: rightId})))
-		unop(resultId, operandId, opKind) then dstBlock.ops.push(MlirOp.arith(ArithOp.unary(ArithUnaryOp{opcode: unaryOpKindToArithOpcode(opKind), resultId: resultId, operandId: operandId})))
-		truncFloat(resultId, operandId) then dstBlock.ops.push(MlirOp.arith(ArithOp.unary(ArithUnaryOp{opcode: ArithUnaryOpcode.fpToSiI64, resultId: resultId, operandId: operandId})))
-		intToFloat(resultId, operandId) then dstBlock.ops.push(MlirOp.arith(ArithOp.unary(ArithUnaryOp{opcode: ArithUnaryOpcode.siToFpF64, resultId: resultId, operandId: operandId})))
-		cmp(resultId, leftId, rightId, predicate, isFloat) then dstBlock.ops.push(MlirOp.arith(ArithOp.binary(ArithBinaryOp{opcode: cmpPredicateToArithOpcode(predicate, isFloat: isFloat), resultId: resultId, leftId: leftId, rightId: rightId})))
-		refEq(resultId, leftId, rightId, negate) then dstBlock.ops.push(MlirOp.arith(ArithOp.binary(ArithBinaryOp{opcode: refEqOpcode(negate), resultId: resultId, leftId: leftId, rightId: rightId})))
-		condBr(condId, thenTarget, elseTarget) then dstBlock.ops.push(MlirOp.cf(CfOp.condBr(condId, thenTarget, ValueIdArray{}, elseTarget, ValueIdArray{})))
-		br(target) then dstBlock.ops.push(MlirOp.cf(CfOp.br(target, ValueIdArray{})))
+		binop(resultId, leftId, rightId, opKind, isFloat) then dstBlock.ops.push(MlirOp.arith(ArithOp.binary(ArithBinaryOp.create(binOpKindToArithOpcode(opKind, isFloat: isFloat), resultId: resultId, leftId: leftId, rightId: rightId))))
+		unop(resultId, operandId, opKind) then dstBlock.ops.push(MlirOp.arith(ArithOp.unary(ArithUnaryOp.create(unaryOpKindToArithOpcode(opKind), resultId: resultId, operandId: operandId))))
+		truncFloat(resultId, operandId) then dstBlock.ops.push(MlirOp.arith(ArithOp.unary(ArithUnaryOp.create(ArithUnaryOpcode.fpToSiI64, resultId: resultId, operandId: operandId))))
+		intToFloat(resultId, operandId) then dstBlock.ops.push(MlirOp.arith(ArithOp.unary(ArithUnaryOp.create(ArithUnaryOpcode.siToFpF64, resultId: resultId, operandId: operandId))))
+		cmp(resultId, leftId, rightId, predicate, isFloat) then dstBlock.ops.push(MlirOp.arith(ArithOp.binary(ArithBinaryOp.create(cmpPredicateToArithOpcode(predicate, isFloat: isFloat), resultId: resultId, leftId: leftId, rightId: rightId))))
+		refEq(resultId, leftId, rightId, negate) then dstBlock.ops.push(MlirOp.arith(ArithOp.binary(ArithBinaryOp.create(refEqOpcode(negate), resultId: resultId, leftId: leftId, rightId: rightId))))
+		condBr(condId, thenTarget, elseTarget) then dstBlock.ops.push(MlirOp.cf(CfOp.condBr(condId, thenTarget, ValueIdArray.empty(), elseTarget, ValueIdArray.empty())))
+		br(target) then dstBlock.ops.push(MlirOp.cf(CfOp.br(target, ValueIdArray.empty())))
 		call(resultId, callee, argIds) then dstBlock.ops.push(MlirOp.func(FuncOp.call(resultId, callee, argIds)))
 		ret(retValId) then dstBlock.ops.push(MlirOp.func(FuncOp.ret(retValId)))
 		// Print and panic ops are NOT lowered here — they stay as maxon ops for Phase 5
@@ -89,8 +89,8 @@ end 'lowerTerminatorToArith'
 
 function lowerMaxonTerminatorToArith(hlOp MaxonOp) returns MlirOp
 	return match hlOp 'lower'
-		condBr(condId, thenTarget, elseTarget) gives MlirOp.cf(CfOp.condBr(condId, thenTarget, ValueIdArray{}, elseTarget, ValueIdArray{}))
-		br(target) gives MlirOp.cf(CfOp.br(target, ValueIdArray{}))
+		condBr(condId, thenTarget, elseTarget) gives MlirOp.cf(CfOp.condBr(condId, thenTarget, ValueIdArray.empty(), elseTarget, ValueIdArray.empty()))
+		br(target) gives MlirOp.cf(CfOp.br(target, ValueIdArray.empty()))
 		ret(retValId) gives MlirOp.func(FuncOp.ret(retValId))
 		literal to refEq gives MlirOp.maxon(hlOp)
 		call gives MlirOp.maxon(hlOp)

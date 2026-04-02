@@ -129,7 +129,8 @@ public class MlirModule<TOp> where TOp : IPrintableOp {
     var clone = new MlirModule<TOp> {
       EntryFunctionName = EntryFunctionName
     };
-    clone.Functions.AddRange(Functions);
+    foreach (var func in Functions)
+      clone.Functions.Add(func.DeepClone());
     clone.RdataEntries.AddRange(RdataEntries);
     clone.SymdataEntries.AddRange(SymdataEntries);
     clone.UcddataEntries.AddRange(UcddataEntries);
@@ -147,6 +148,10 @@ public class MlirModule<TOp> where TOp : IPrintableOp {
     foreach (var n in NonExportedGlobalVarNames) clone.NonExportedGlobalVarNames.Add(n);
     foreach (var (k, v) in TypeDefSourceFiles) clone.TypeDefSourceFiles[k] = v;
     foreach (var n in AmbiguousTypeNames) clone.AmbiguousTypeNames.Add(n);
+    clone.TagTable.AddRange(TagTable);
+    clone.TagNames.AddRange(TagNames);
+    foreach (var (k, v) in ExportedConstants) clone.ExportedConstants[k] = v;
+    foreach (var n in StackEligibleStructs) clone.StackEligibleStructs.Add(n);
     return clone;
   }
 

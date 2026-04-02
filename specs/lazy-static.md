@@ -34,10 +34,10 @@ Caching expensive computations:
 
 ```text
 type CharacterSet
-  static var cachedWhitespace = CharacterSet._buildWhitespace()
+  static var cachedWhitespace = CharacterSet.buildWhitespace()
 
   export static function whitespace() returns CharacterSet
-    return CharacterSet._cachedWhitespace
+    return CharacterSet.cachedWhitespace
   end 'whitespace'
 end 'CharacterSet'
 ```
@@ -49,15 +49,15 @@ end 'CharacterSet'
 
 ```maxon
 type Config
-	static var value = Config._makeValue()
+	static var value = Config.makeValue()
 	export var n Count
 
-	static function _makeValue() returns Config
+	static function makeValue() returns Config
 		return Config{n: 42}
-	end '_makeValue'
+	end 'makeValue'
 
 	export static function getValue() returns Config
-		return Config._value
+		return Config.value
 	end 'getValue'
 end 'Config'
 
@@ -75,29 +75,29 @@ end 'main'
 
 ```maxon
 type Counter
-	static var callCount = 0
-	static var instance = Counter._create()
+	static var initCount = 0
+	static var cached = Counter.createInstance()
 	export var id Count
 
-	static function _create() returns Counter
-		Counter._callCount = Counter._callCount + 1
-		return Counter{id: Counter._callCount}
-	end '_create'
+	static function createInstance() returns Counter
+		Counter.initCount = Counter.initCount + 1
+		return Counter{id: Counter.initCount}
+	end 'createInstance'
 
-	export static function instance() returns Counter
-		return Counter._instance
-	end 'instance'
+	export static function getInstance() returns Counter
+		return Counter.cached
+	end 'getInstance'
 
-	export static function callCount() returns Count
-		return Counter._callCount
-	end 'callCount'
+	export static function getInitCount() returns Count
+		return Counter.initCount
+	end 'getInitCount'
 end 'Counter'
 
 function main() returns ExitCode
-	var a = Counter.instance()
-	var b = Counter.instance()
-	var c = Counter.instance()
-	print("{a.id} {b.id} {c.id} {Counter.callCount()}")
+	var a = Counter.getInstance()
+	var b = Counter.getInstance()
+	var c = Counter.getInstance()
+	print("{a.id} {b.id} {c.id} {Counter.getInitCount()}")
 	return 0
 end 'main'
 ```
@@ -115,10 +115,14 @@ end 'main'
 type Point
 	export var x Count
 	export var y Count
+
+	static function create(x Count, y Count) returns Self
+		return Self{x: x, y: y}
+	end 'create'
 end 'Point'
 
 type Defaults
-	static var origin = Point{x: 0, y: 0}
+	static var origin = Point.create(x: 0, y: 0)
 
 	export static function getOrigin() returns Point
 		return Defaults.origin
@@ -143,26 +147,30 @@ end 'main'
 
 ```maxon
 type State
-	static var current = State._default()
+	static var current = State.makeDefault()
 	export var value Count
 
-	static function _default() returns State
+	static function makeDefault() returns State
 		return State{value: 0}
-	end '_default'
+	end 'makeDefault'
 
 	export static function get() returns State
-		return State._current
+		return State.current
 	end 'get'
 
 	export static function set(s State)
-		State._current = s
+		State.current = s
 	end 'set'
+
+	static function create(value Count) returns Self
+		return Self{value: value}
+	end 'create'
 end 'State'
 
 function main() returns ExitCode
 	var a = State.get()
 	print("{a.value} ")
-	State.set(State{value: 99})
+	State.set(State.create(value: 99))
 	var b = State.get()
 	print("{b.value}")
 	return 0
@@ -180,20 +188,20 @@ end 'main'
 
 ```maxon
 type Cache
-	static var a = Cache._buildA()
-	static var b = Cache._buildB()
+	static var a = Cache.buildA()
+	static var b = Cache.buildB()
 	export var n Count
 
-	static function _buildA() returns Cache
+	static function buildA() returns Cache
 		return Cache{n: 10}
-	end '_buildA'
+	end 'buildA'
 
-	static function _buildB() returns Cache
+	static function buildB() returns Cache
 		return Cache{n: 20}
-	end '_buildB'
+	end 'buildB'
 
 	export static function sum() returns Count
-		return Cache._a.n + Cache._b.n
+		return Cache.a.n + Cache.b.n
 	end 'sum'
 end 'Cache'
 
@@ -216,7 +224,7 @@ type Lookup
 	static var values = [10, 20, 30]
 
 	export static function get(index Integer) returns Integer
-		return try Lookup._values.get(index) otherwise -1
+		return try Lookup.values.get(index) otherwise -1
 	end 'get'
 end 'Lookup'
 
@@ -240,7 +248,7 @@ type WSCache
 	static var ws = CharacterSet.whitespacesAndNewlines()
 
 	export static function isWhitespace(c Character) returns bool
-		return WSCache._ws.contains(c)
+		return WSCache.ws.contains(c)
 	end 'isWhitespace'
 end 'WSCache'
 
@@ -271,10 +279,10 @@ space tab
 typealias CharSet = Set with Character
 
 type Vowels
-	static let _set = CharSet from ['a', 'e', 'i', 'o', 'u']
+	static let vowelSet = CharSet from ['a', 'e', 'i', 'o', 'u']
 
 	export static function contains(c Character) returns bool
-		return Vowels._set.contains(c)
+		return Vowels.vowelSet.contains(c)
 	end 'contains'
 end 'Vowels'
 
@@ -297,23 +305,27 @@ true false true
 type Pair
 	export var x Count
 	export var y Count
+
+	static function create(x Count, y Count) returns Self
+		return Self{x: x, y: y}
+	end 'create'
 end 'Pair'
 
 type Registry
-	static let _pair = _buildPair()
+	static let cachedPair = buildPair()
 
 	export static function getX() returns Count
-		return Registry._pair.x
+		return Registry.cachedPair.x
 	end 'getX'
 
 	export static function getY() returns Count
-		return Registry._pair.y
+		return Registry.cachedPair.y
 	end 'getY'
 end 'Registry'
 
-function _buildPair() returns Pair
-	return Pair{x: 11, y: 22}
-end '_buildPair'
+function buildPair() returns Pair
+	return Pair.create(x: 11, y: 22)
+end 'buildPair'
 
 function main() returns ExitCode
 	print("{Registry.getX()} {Registry.getY()}")

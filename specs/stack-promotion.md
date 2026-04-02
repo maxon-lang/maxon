@@ -22,10 +22,14 @@ typealias Integer = int(i64.min to i64.max)
 type Point
 	export var x Integer
 	export var y Integer
+
+	static function create(x Integer, y Integer) returns Self
+		return Self{x: x, y: y}
+	end 'create'
 end 'Point'
 
 function main() returns ExitCode
-	var p = Point{x: 10, y: 20}
+	var p = Point.create(x: 10, y: 20)
 	return p.x + p.y
 end 'main'
 ```
@@ -35,6 +39,13 @@ end 'main'
 ```stderr
 sl_init
   os_alloc size=67108864
+mm_alloc Point #1 size=16 [Point.create]
+  sl_alloc Point #1 size=48 class=4
+mm_incref Point #1 rc=1 [Point.create]
+mm_transfer Point #1 rc=1 [Point.create]
+mm_decref Point #1 rc=0 [main]
+  mm_free Point #1
+    sl_free Point #1 size=48 class=4
 mm_raw_alloc #R1 size=40
   sl_alloc size=40 class=4
 mm_raw_free #R1
@@ -50,10 +61,14 @@ typealias Integer = int(i64.min to i64.max)
 type Point
 	export var x Integer
 	export var y Integer
+
+	static function create(x Integer, y Integer) returns Self
+		return Self{x: x, y: y}
+	end 'create'
 end 'Point'
 
 function main() returns ExitCode
-	var p = Point{x: 1, y: 2}
+	var p = Point.create(x: 1, y: 2)
 	p.x = 100
 	return p.x
 end 'main'
@@ -64,6 +79,13 @@ end 'main'
 ```stderr
 sl_init
   os_alloc size=67108864
+mm_alloc Point #1 size=16 [Point.create]
+  sl_alloc Point #1 size=48 class=4
+mm_incref Point #1 rc=1 [Point.create]
+mm_transfer Point #1 rc=1 [Point.create]
+mm_decref Point #1 rc=0 [main]
+  mm_free Point #1
+    sl_free Point #1 size=48 class=4
 mm_raw_alloc #R1 size=40
   sl_alloc size=40 class=4
 mm_raw_free #R1
@@ -79,10 +101,14 @@ typealias Integer = int(i64.min to i64.max)
 type Point
 	export var x Integer
 	export var y Integer
+
+	static function create(x Integer, y Integer) returns Self
+		return Self{x: x, y: y}
+	end 'create'
 end 'Point'
 
 function main() returns ExitCode
-	var a = Point{x: 1, y: 2}
+	var a = Point.create(x: 1, y: 2)
 	var b = a
 	return b.x
 end 'main'
@@ -93,6 +119,15 @@ end 'main'
 ```stderr
 sl_init
   os_alloc size=67108864
+mm_alloc Point #1 size=16 [Point.create]
+  sl_alloc Point #1 size=48 class=4
+mm_incref Point #1 rc=1 [Point.create]
+mm_transfer Point #1 rc=1 [Point.create]
+mm_incref Point #1 rc=2 [main]
+mm_decref Point #1 rc=1 [main]
+mm_decref Point #1 rc=0 [main]
+  mm_free Point #1
+    sl_free Point #1 size=48 class=4
 mm_raw_alloc #R1 size=40
   sl_alloc size=40 class=4
 mm_raw_free #R1
@@ -108,6 +143,10 @@ typealias Integer = int(i64.min to i64.max)
 type Point
 	export var x Integer
 	export var y Integer
+
+	static function create(x Integer, y Integer) returns Self
+		return Self{x: x, y: y}
+	end 'create'
 end 'Point'
 
 function readX(p Point) returns Integer
@@ -115,7 +154,7 @@ function readX(p Point) returns Integer
 end 'readX'
 
 function main() returns ExitCode
-	var p = Point{x: 42, y: 0}
+	var p = Point.create(x: 42, y: 0)
 	return readX(p)
 end 'main'
 ```
@@ -125,6 +164,13 @@ end 'main'
 ```stderr
 sl_init
   os_alloc size=67108864
+mm_alloc Point #1 size=16 [Point.create]
+  sl_alloc Point #1 size=48 class=4
+mm_incref Point #1 rc=1 [Point.create]
+mm_transfer Point #1 rc=1 [Point.create]
+mm_decref Point #1 rc=0 [main]
+  mm_free Point #1
+    sl_free Point #1 size=48 class=4
 mm_raw_alloc #R1 size=40
   sl_alloc size=40 class=4
 mm_raw_free #R1
@@ -139,15 +185,19 @@ typealias Integer = int(i64.min to i64.max)
 
 type Item
 	export var value Integer
+
+	static function create(value Integer) returns Self
+		return Self{value: value}
+	end 'create'
 end 'Item'
 
 typealias ItemArray = Array with Item
 
 function main() returns ExitCode
-	var arr = ItemArray{}
-	var item = Item{value: 7}
+	var arr = ItemArray.empty()
+	var item = Item.create(value: 7)
 	arr.push(item)
-	var got = try arr.get(0) otherwise Item{value: 0}
+	var got = try arr.get(0) otherwise Item.create(value: 0)
 	return got.value
 end 'main'
 ```
@@ -157,15 +207,17 @@ end 'main'
 ```stderr
 sl_init
   os_alloc size=67108864
-mm_alloc __ManagedMemory_Item #1 size=32 [main]
+mm_alloc __ManagedMemory_Item #1 size=32 [ItemArray.empty]
   sl_alloc __ManagedMemory_Item #1 size=64 class=5
-mm_alloc ItemArray #2 size=16 [main]
+mm_alloc ItemArray #2 size=16 [ItemArray.empty]
   sl_alloc ItemArray #2 size=48 class=4
-mm_incref __ManagedMemory_Item #1 rc=1 [main]
-mm_incref ItemArray #2 rc=1 [main]
-mm_alloc Item #3 size=8 [main]
+mm_incref __ManagedMemory_Item #1 rc=1 [ItemArray.empty]
+mm_incref ItemArray #2 rc=1 [ItemArray.empty]
+mm_transfer ItemArray #2 rc=1 [ItemArray.empty]
+mm_alloc Item #3 size=8 [Item.create]
   sl_alloc Item #3 size=40 class=4
-mm_incref Item #3 rc=1 [main]
+mm_incref Item #3 rc=1 [Item.create]
+mm_transfer Item #3 rc=1 [Item.create]
 mm_realloc __ManagedMemory_Item #1 size=32
   mm_raw_alloc #R1 size=32 [realloc]
     sl_alloc size=32 class=3
@@ -201,10 +253,14 @@ typealias Integer = int(i64.min to i64.max)
 type Point
 	export var x Integer
 	export var y Integer
+
+	static function create(x Integer, y Integer) returns Self
+		return Self{x: x, y: y}
+	end 'create'
 end 'Point'
 
 function makePoint(x Integer, y Integer) returns Point
-	return Point{x: x, y: y}
+	return Point.create(x: x, y: y)
 end 'makePoint'
 
 function main() returns ExitCode
@@ -218,9 +274,10 @@ end 'main'
 ```stderr
 sl_init
   os_alloc size=67108864
-mm_alloc Point #1 size=16 [stack-promotion.makePoint]
+mm_alloc Point #1 size=16 [Point.create]
   sl_alloc Point #1 size=48 class=4
-mm_incref Point #1 rc=1 [stack-promotion.makePoint]
+mm_incref Point #1 rc=1 [Point.create]
+mm_transfer Point #1 rc=1 [Point.create]
 mm_transfer Point #1 rc=1 [stack-promotion.makePoint]
 mm_decref Point #1 rc=0 [main]
   mm_free Point #1

@@ -67,10 +67,14 @@ type Counter
 	function get() returns Integer
 		return self.count
 	end 'get'
+
+	static function create(count Integer) returns Self
+		return Self{count: count}
+	end 'create'
 end 'Counter'
 
 function main() returns ExitCode
-	var c = Counter{count: 0}
+	var c = Counter.create(count: 0)
 	c.increment()
 	c.increment()
 	return c.get()
@@ -95,10 +99,14 @@ type Counter
 	function get() returns Integer
 		return count
 	end 'get'
+
+	static function create(count Integer) returns Self
+		return Self{count: count}
+	end 'create'
 end 'Counter'
 
 function main() returns ExitCode
-	var c = Counter{count: 0}
+	var c = Counter.create(count: 0)
 	c.increment()
 	c.increment()
 	c.increment()
@@ -124,10 +132,14 @@ type Accumulator
 	function getTotal() returns Integer
 		return self.total
 	end 'getTotal'
+
+	static function create(total Integer) returns Self
+		return Self{total: total}
+	end 'create'
 end 'Accumulator'
 
 function main() returns ExitCode
-	var acc = Accumulator{total: 0}
+	var acc = Accumulator.create(total: 0)
 	acc.add(10)
 	acc.add(20)
 	acc.add(12)
@@ -154,10 +166,14 @@ type Point
 	function setX(newX Integer)
 		self.x = newX
 	end 'setX'
+
+	static function create(x Integer, y Integer) returns Self
+		return Self{x: x, y: y}
+	end 'create'
 end 'Point'
 
 function main() returns ExitCode
-	var p = Point{x: 10, y: 32}
+	var p = Point.create(x: 10, y: 32)
 	return p.sum()
 end 'main'
 ```
@@ -180,10 +196,14 @@ type Value
 	function get() returns Integer
 		return self.n
 	end 'get'
+
+	static function create(n Integer) returns Self
+		return Self{n: n}
+	end 'create'
 end 'Value'
 
 function main() returns ExitCode
-	var v = Value{n: 21}
+	var v = Value.create(n: 21)
 	v.double()
 	return v.get()
 end 'main'
@@ -204,10 +224,14 @@ type Rectangle
 	function area() returns Integer
 		return width * height
 	end 'area'
+
+	static function create(width Integer, height Integer) returns Self
+		return Self{width: width, height: height}
+	end 'create'
 end 'Rectangle'
 
 function main() returns ExitCode
-	var r = Rectangle{width: 6, height: 7}
+	var r = Rectangle.create(width: 6, height: 7)
 	return r.area()
 end 'main'
 ```

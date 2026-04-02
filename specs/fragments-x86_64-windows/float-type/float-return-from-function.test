@@ -14,32 +14,28 @@ end 'main'
 ExitCode: 3
 ---
 module {
-  func @float-return-from-function.computePi() -> f64 {
+  func @float-type.computePi() -> f64 {
   entry:
-    x86.prologue stack_size=16
-    x86.mov rax, 4614253070214989086
-    x86.mov [rbp+-8], rax
-    x86.movsd xmm0, [rbp+-8]
-    x86.epilogue
+    x86.movsd xmm0, [rip+__float_3.14]
     x86.ret
   }
   func @main() -> u32 {
   entry:
     x86.prologue stack_size=16
-    x86.call float-return-from-function.computePi
+    x86.call float-type.computePi
     x86.cvttsd2si rax, xmm0
-    x86.test rax, rax
-    x86.setl rcx
+    x86.xor rcx, rcx
     x86.mov rdx, 4294967295
     x86.cmp rax, rdx
-    x86.setg rbx
-    x86.or rcx, rbx
-    x86.je __range_ok_1
-  __range_panic_1:
-    x86.lea rax, [rip+__panic_msg_1]
+    x86.jg main.__range_panic_0
+    x86.cmp rax, rcx
+    x86.jl main.__range_panic_0
+    x86.jmp main.__range_ok_0
+  __range_panic_0:
+    x86.lea_symdata rax, [__panic_msg_0]
     x86.mov rcx, rax
     x86.call mrt_panic
-  __range_ok_1:
+  __range_ok_0:
     x86.epilogue
     x86.ret
   }

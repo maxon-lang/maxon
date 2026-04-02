@@ -160,6 +160,10 @@ typealias Integer = int(i64.min to i64.max)
 type Point
 	export var x Integer
 	export var y Integer
+
+	static function create(x Integer, y Integer) returns Self
+		return Self{x: x, y: y}
+	end 'create'
 end 'Point'
 
 function setX(p Point)
@@ -167,7 +171,7 @@ function setX(p Point)
 end 'setX'
 
 function main() returns ExitCode
-	var p = Point{x: 1, y: 2}
+	var p = Point.create(x: 1, y: 2)
 	setX(p: p)
 	print("{p.x}")
 	return 0
@@ -188,14 +192,18 @@ typealias Integer = int(i64.min to i64.max)
 type Point
 	export var x Integer
 	export var y Integer
+
+	static function create(x Integer, y Integer) returns Self
+		return Self{x: x, y: y}
+	end 'create'
 end 'Point'
 
 function replacePoint(p Point)
-	p = Point{x: 99, y: 99}
+	p = Point.create(x: 99, y: 99)
 end 'replacePoint'
 
 function main() returns ExitCode
-	var p = Point{x: 1, y: 2}
+	var p = Point.create(x: 1, y: 2)
 	replacePoint(p: p)
 	print("{p.x}\n")
 	print("{p.y}\n")

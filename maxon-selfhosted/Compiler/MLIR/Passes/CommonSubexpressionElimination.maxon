@@ -15,6 +15,10 @@ type ValueNumberEntry
 	export let leftId ValueId
 	export let rightId ValueId
 	export let resultId ValueId
+
+	static function create(opcodeOrd ValueId, leftId ValueId, rightId ValueId, resultId ValueId) returns ValueNumberEntry
+		return Self{opcodeOrd: opcodeOrd, leftId: leftId, rightId: rightId, resultId: resultId}
+	end 'create'
 end 'ValueNumberEntry'
 
 typealias ValueNumberTable = Array with ValueNumberEntry
@@ -31,7 +35,7 @@ function valueNumberLookup(table ValueNumberTable, opcodeOrd ValueId, leftId Val
 end 'valueNumberLookup'
 
 function valueNumberInsert(table ValueNumberTable, opcodeOrd ValueId, leftId ValueId, rightId ValueId, resultId ValueId)
-	table.push(ValueNumberEntry{opcodeOrd: opcodeOrd, leftId: leftId, rightId: rightId, resultId: resultId})
+	table.push(ValueNumberEntry.create(opcodeOrd, leftId: leftId, rightId: rightId, resultId: resultId))
 end 'valueNumberInsert'
 
 export function eliminateCommonSubexpressions(module MlirModule) returns MlirModule
@@ -47,8 +51,8 @@ export function eliminateCommonSubexpressions(module MlirModule) returns MlirMod
 			dstBlock.blockArgs = srcBlock.blockArgs
 
 			// Phase 1: Walk ops, build value numbering table and remap table
-			var vnTable = ValueNumberTable{}
-			var remap = ValueIdArray{}
+			var vnTable = ValueNumberTable.empty()
+			var remap = ValueIdArray.empty()
 
 			for op in srcBlock.ops 'buildVN'
 				cseAnalyzeOp(op, vnTable: vnTable, remap: remap)
@@ -154,7 +158,7 @@ function cseRemapValue(valueId ValueId, remap ValueIdArray) returns ValueId
 end 'cseRemapValue'
 
 function cseRemapValueIds(argIds ValueIdArray, remap ValueIdArray) returns ValueIdArray
-	var result = ValueIdArray{}
+	var result = ValueIdArray.empty()
 	for argId in argIds 'each'
 		result.push(cseRemapValue(argId, remap: remap))
 	end 'each'
@@ -181,8 +185,8 @@ end 'cseSubstituteOp'
 function cseSubstArith(op ArithOp, remap ValueIdArray) returns ArithOp
 	return match op 'subst'
 		const(c) gives ArithOp.const(c)
-		unary(u) gives ArithOp.unary(ArithUnaryOp{opcode: u.opcode, resultId: u.resultId, operandId: cseRemapValue(u.operandId, remap: remap)})
-		binary(b) gives ArithOp.binary(ArithBinaryOp{opcode: b.opcode, resultId: b.resultId, leftId: cseRemapValue(b.leftId, remap: remap), rightId: cseRemapValue(b.rightId, remap: remap)})
+		unary(u) gives ArithOp.unary(ArithUnaryOp.create(u.opcode, resultId: u.resultId, operandId: cseRemapValue(u.operandId, remap: remap)))
+		binary(b) gives ArithOp.binary(ArithBinaryOp.create(b.opcode, resultId: b.resultId, leftId: cseRemapValue(b.leftId, remap: remap), rightId: cseRemapValue(b.rightId, remap: remap)))
 	end 'subst'
 end 'cseSubstArith'
 

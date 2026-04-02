@@ -196,6 +196,14 @@ export type Token
 	export let value ByteArray
 	export let line LineNumber
 	export let column ColumnNumber
+
+	export static function create(kind TokenKind, value ByteArray, line LineNumber, column ColumnNumber) returns Token
+		return Self{kind: kind, value: value, line: line, column: column}
+	end 'create'
+
+	export static function eof() returns Token
+		return Self{kind: TokenKind.eof, value: ByteArray.empty(), line: 0, column: 0}
+	end 'eof'
 end 'Token'
 
 export typealias TokenArray = Array with Token
@@ -281,22 +289,22 @@ typealias DfaStateIndex = int(0 to 64)
 function emitFixedToken(stateIndex DfaStateIndex, tokens TokenArray, line LineNumber, column ColumnNumber)
 	// State indices correspond to DfaState enum raw values (int match can't use enum names).
 	match stateIndex 'dispatch'
-		9 then tokens.push(Token{kind: TokenKind.leftParen, value: b"(", line: line, column: column})
-		10 then tokens.push(Token{kind: TokenKind.rightParen, value: b")", line: line, column: column})
-		11 then tokens.push(Token{kind: TokenKind.leftBrace, value: b"\x7B", line: line, column: column})
-		12 then tokens.push(Token{kind: TokenKind.rightBrace, value: b"\x7D", line: line, column: column})
-		13 then tokens.push(Token{kind: TokenKind.plus, value: b"+", line: line, column: column})
-		14 then tokens.push(Token{kind: TokenKind.minus, value: b"-", line: line, column: column})
-		15 then tokens.push(Token{kind: TokenKind.star, value: b"*", line: line, column: column})
-		16 then tokens.push(Token{kind: TokenKind.colon, value: b":", line: line, column: column})
-		17 then tokens.push(Token{kind: TokenKind.equals, value: b"=", line: line, column: column})
-		18 then tokens.push(Token{kind: TokenKind.equalsEquals, value: b"==", line: line, column: column})
-		19 then tokens.push(Token{kind: TokenKind.bangEquals, value: b"!=", line: line, column: column})
-		20 then tokens.push(Token{kind: TokenKind.lessThan, value: b"<", line: line, column: column})
-		21 then tokens.push(Token{kind: TokenKind.lessEquals, value: b"<=", line: line, column: column})
-		22 then tokens.push(Token{kind: TokenKind.greaterThan, value: b">", line: line, column: column})
-		23 then tokens.push(Token{kind: TokenKind.greaterEquals, value: b">=", line: line, column: column})
-		31 then tokens.push(Token{kind: TokenKind.slash, value: b"/", line: line, column: column})
+		9 then tokens.push(Token.create(TokenKind.leftParen, value: b"(", line: line, column: column))
+		10 then tokens.push(Token.create(TokenKind.rightParen, value: b")", line: line, column: column))
+		11 then tokens.push(Token.create(TokenKind.leftBrace, value: b"\x7B", line: line, column: column))
+		12 then tokens.push(Token.create(TokenKind.rightBrace, value: b"\x7D", line: line, column: column))
+		13 then tokens.push(Token.create(TokenKind.plus, value: b"+", line: line, column: column))
+		14 then tokens.push(Token.create(TokenKind.minus, value: b"-", line: line, column: column))
+		15 then tokens.push(Token.create(TokenKind.star, value: b"*", line: line, column: column))
+		16 then tokens.push(Token.create(TokenKind.colon, value: b":", line: line, column: column))
+		17 then tokens.push(Token.create(TokenKind.equals, value: b"=", line: line, column: column))
+		18 then tokens.push(Token.create(TokenKind.equalsEquals, value: b"==", line: line, column: column))
+		19 then tokens.push(Token.create(TokenKind.bangEquals, value: b"!=", line: line, column: column))
+		20 then tokens.push(Token.create(TokenKind.lessThan, value: b"<", line: line, column: column))
+		21 then tokens.push(Token.create(TokenKind.lessEquals, value: b"<=", line: line, column: column))
+		22 then tokens.push(Token.create(TokenKind.greaterThan, value: b">", line: line, column: column))
+		23 then tokens.push(Token.create(TokenKind.greaterEquals, value: b">=", line: line, column: column))
+		31 then tokens.push(Token.create(TokenKind.slash, value: b"/", line: line, column: column))
 		default panic("emitFixedToken: unhandled state index {stateIndex}")
 	end 'dispatch'
 end 'emitFixedToken'
@@ -309,6 +317,10 @@ type Lexer
 	var pos CharOffset
 	var line LineNumber
 	var column ColumnNumber
+
+	static function create(source ByteArray) returns Lexer
+		return Self{source: source, tokens: TokenArray.empty(), pos: 0, line: 1, column: 1}
+	end 'create'
 
 	// --- Navigation helpers ---
 
@@ -328,7 +340,7 @@ type Lexer
 	end 'retreat'
 
 	function emit(kind TokenKind, value ByteArray, startLine LineNumber, startCol ColumnNumber)
-		tokens.push(Token{kind: kind, value: value, line: startLine, column: startCol})
+		tokens.push(Token.create(kind, value: value, line: startLine, column: startCol))
 	end 'emit'
 
 	function slice(startPos CharOffset) returns ByteArray
@@ -336,7 +348,7 @@ type Lexer
 	end 'slice'
 
 	function newline(startLine LineNumber, startCol ColumnNumber)
-		tokens.push(Token{kind: TokenKind.newline, value: b"", line: startLine, column: startCol})
+		tokens.push(Token.create(TokenKind.newline, value: b"", line: startLine, column: startCol))
 		line = line + 1
 		column = 1
 	end 'newline'
@@ -651,7 +663,7 @@ end 'Lexer'
 // --- Public API wrapper ---
 
 export function tokenize(source ByteArray) returns TokenArray
-	var lexer = Lexer{source: source, tokens: TokenArray{}, pos: 0, line: 1, column: 1}
+	var lexer = Lexer.create(source)
 	return lexer.run()
 end 'tokenize'
 
@@ -675,68 +687,72 @@ export type KeywordInfo
 	export var kind TokenKind
 	export var helpText String
 	export var canHaveBlockLabel bool
+
+	export static function create(kind TokenKind, helpText String, canHaveBlockLabel bool) returns KeywordInfo
+		return Self{kind: kind, helpText: helpText, canHaveBlockLabel: canHaveBlockLabel}
+	end 'create'
 end 'KeywordInfo'
 
 var keywordMap = [
-	b"if": KeywordInfo{kind: TokenKind.if, helpText: "Conditional statement. Executes code if the condition is true.", canHaveBlockLabel: true},
-	b"else": KeywordInfo{kind: TokenKind.else, helpText: "Alternative branch in an if statement. Executed when the condition is false.", canHaveBlockLabel: true},
-	b"while": KeywordInfo{kind: TokenKind.while, helpText: "Loop that continues while the condition is true.", canHaveBlockLabel: true},
-	b"for": KeywordInfo{kind: TokenKind.for, helpText: "Loop that iterates over a range or collection.", canHaveBlockLabel: true},
-	b"in": KeywordInfo{kind: TokenKind.in, helpText: "Used in for loops to specify the range or collection to iterate over.", canHaveBlockLabel: false},
-	b"break": KeywordInfo{kind: TokenKind.break, helpText: "Exits the current loop or match statement.", canHaveBlockLabel: false},
-	b"continue": KeywordInfo{kind: TokenKind.continue, helpText: "Skips the rest of the current loop iteration and continues with the next iteration.", canHaveBlockLabel: false},
-	b"return": KeywordInfo{kind: TokenKind.return, helpText: "Returns a value from a function and exits the function.", canHaveBlockLabel: false},
-	b"end": KeywordInfo{kind: TokenKind.end, helpText: "Ends a block (function, type, if, for, while, etc.). Must be followed by the block's label in quotes.", canHaveBlockLabel: true},
-	b"match": KeywordInfo{kind: TokenKind.match, helpText: "Pattern matching statement for enums and values.", canHaveBlockLabel: false},
-	b"then": KeywordInfo{kind: TokenKind.then, helpText: "Used in match expressions to separate pattern from result.", canHaveBlockLabel: true},
-	b"fallthrough": KeywordInfo{kind: TokenKind.fallthrough, helpText: "Falls through to the next case in a match statement.", canHaveBlockLabel: false},
-	b"default": KeywordInfo{kind: TokenKind.default, helpText: "Default case in a match statement.", canHaveBlockLabel: false},
-	b"upto": KeywordInfo{kind: TokenKind.upto, helpText: "Exclusive upper bound in range patterns.", canHaveBlockLabel: false},
-	b"gives": KeywordInfo{kind: TokenKind.gives, helpText: "Used in iterator expressions.", canHaveBlockLabel: false},
-	b"try": KeywordInfo{kind: TokenKind.try, helpText: "Attempts an operation that may throw an error.", canHaveBlockLabel: false},
-	b"otherwise": KeywordInfo{kind: TokenKind.otherwise, helpText: "Provides a fallback for try expressions when an error occurs.", canHaveBlockLabel: true},
-	b"throw": KeywordInfo{kind: TokenKind.throw, helpText: "Throws an error that can be caught by a try-catch block.", canHaveBlockLabel: false},
-	b"panic": KeywordInfo{kind: TokenKind.panic, helpText: "Terminates the program with an error message and stack trace.", canHaveBlockLabel: false},
-	b"ignore": KeywordInfo{kind: TokenKind.ignore, helpText: "Used with otherwise to silently ignore errors.", canHaveBlockLabel: false},
-	b"function": KeywordInfo{kind: TokenKind.function, helpText: "Declares a function. Functions contain executable code and can return values.", canHaveBlockLabel: false},
-	b"returns": KeywordInfo{kind: TokenKind.returns, helpText: "Specifies the return type of a function.", canHaveBlockLabel: false},
-	b"let": KeywordInfo{kind: TokenKind.let, helpText: "Declares an immutable variable. The value cannot be changed after initialization.", canHaveBlockLabel: false},
-	b"var": KeywordInfo{kind: TokenKind.var, helpText: "Declares a mutable variable. The value can be changed after initialization.", canHaveBlockLabel: false},
-	b"type": KeywordInfo{kind: TokenKind.type, helpText: "Declares a struct type with fields and methods.", canHaveBlockLabel: false},
-	b"enum": KeywordInfo{kind: TokenKind.enum, helpText: "Declares an enum type with a fixed set of named cases, optional associated values, and methods.", canHaveBlockLabel: false},
-	b"typealias": KeywordInfo{kind: TokenKind.typealias, helpText: "Declares a type alias for an existing type or associated type in an interface.", canHaveBlockLabel: false},
-	b"export": KeywordInfo{kind: TokenKind.export, helpText: "Makes a function or type visible to other modules.", canHaveBlockLabel: false},
-	b"static": KeywordInfo{kind: TokenKind.static, helpText: "Declares a static method that doesn't require an instance.", canHaveBlockLabel: false},
-	b"interface": KeywordInfo{kind: TokenKind.interface, helpText: "Declares an interface that types can conform to.", canHaveBlockLabel: false},
-	b"extension": KeywordInfo{kind: TokenKind.extension, helpText: "Defines extension methods for an interface.", canHaveBlockLabel: false},
-	b"extends": KeywordInfo{kind: TokenKind.extends, helpText: "Indicates interface inheritance.", canHaveBlockLabel: false},
-	b"uses": KeywordInfo{kind: TokenKind.uses, helpText: "Declares associated types in an interface.", canHaveBlockLabel: false},
-	b"with": KeywordInfo{kind: TokenKind.with, helpText: "Specifies interface conformance requirements.", canHaveBlockLabel: false},
-	b"where": KeywordInfo{kind: TokenKind.where, helpText: "Constrains type parameters to require interface conformance.", canHaveBlockLabel: false},
-	b"self": KeywordInfo{kind: TokenKind.self, helpText: "Refers to the current instance in a method.", canHaveBlockLabel: false},
-	b"Self": KeywordInfo{kind: TokenKind.selfType, helpText: "Refers to the current type in a method signature.", canHaveBlockLabel: false},
-	b"throws": KeywordInfo{kind: TokenKind.throws, helpText: "Indicates that a function may throw an error.", canHaveBlockLabel: false},
-	b"from": KeywordInfo{kind: TokenKind.from, helpText: "Used in range expressions (from X to Y).", canHaveBlockLabel: false},
-	b"to": KeywordInfo{kind: TokenKind.to, helpText: "Used in range expressions (from X to Y).", canHaveBlockLabel: false},
-	b"mod": KeywordInfo{kind: TokenKind.mod, helpText: "Modulo operator. Returns the remainder of integer division.", canHaveBlockLabel: false},
-	b"and": KeywordInfo{kind: TokenKind.and, helpText: "AND operator. Logical AND on bools, bitwise AND on integers.", canHaveBlockLabel: false},
-	b"or": KeywordInfo{kind: TokenKind.or, helpText: "OR operator. Logical OR on bools, bitwise OR on integers.", canHaveBlockLabel: true},
-	b"not": KeywordInfo{kind: TokenKind.not, helpText: "NOT operator. Logical NOT on bools, bitwise NOT on integers.", canHaveBlockLabel: false},
-	b"xor": KeywordInfo{kind: TokenKind.xor, helpText: "XOR operator. Logical XOR on bools, bitwise XOR on integers.", canHaveBlockLabel: false},
-	b"shl": KeywordInfo{kind: TokenKind.shl, helpText: "Shift left operator. Shifts integer bits to the left.", canHaveBlockLabel: false},
-	b"shr": KeywordInfo{kind: TokenKind.shr, helpText: "Shift right operator. Shifts integer bits to the right.", canHaveBlockLabel: false},
-	b"as": KeywordInfo{kind: TokenKind.as, helpText: "Type cast operator. Converts a value to a different type.", canHaveBlockLabel: false},
-	b"is": KeywordInfo{kind: TokenKind.is, helpText: "Reference identity operator. Returns true if two references point to the same object.", canHaveBlockLabel: false},
-	b"implements": KeywordInfo{kind: TokenKind.implements, helpText: "Specifies that a type conforms to an interface.", canHaveBlockLabel: false},
-	b"true": KeywordInfo{kind: TokenKind.true, helpText: "Boolean literal representing true.", canHaveBlockLabel: false},
-	b"false": KeywordInfo{kind: TokenKind.false, helpText: "Boolean literal representing false.", canHaveBlockLabel: false},
-	b"int": KeywordInfo{kind: TokenKind.int, helpText: "Primitive integer type (64-bit signed).", canHaveBlockLabel: false},
-	b"float": KeywordInfo{kind: TokenKind.float, helpText: "Primitive floating-point type (64-bit double precision).", canHaveBlockLabel: false},
-	b"bool": KeywordInfo{kind: TokenKind.bool, helpText: "Primitive boolean type (true or false).", canHaveBlockLabel: false},
-	b"byte": KeywordInfo{kind: TokenKind.byte, helpText: "Primitive byte type (8-bit unsigned integer).", canHaveBlockLabel: false},
-	b"array": KeywordInfo{kind: TokenKind.array, helpText: "Used in array type declarations (array of int).", canHaveBlockLabel: false},
-	b"of": KeywordInfo{kind: TokenKind.of, helpText: "Used in array type declarations (array of int).", canHaveBlockLabel: false},
-	b"print": KeywordInfo{kind: TokenKind.print, helpText: "Built-in function for printing to the console. Not a real keyword.", canHaveBlockLabel: false}
+	b"if": KeywordInfo.create(TokenKind.if, helpText: "Conditional statement. Executes code if the condition is true.", canHaveBlockLabel: true),
+	b"else": KeywordInfo.create(TokenKind.else, helpText: "Alternative branch in an if statement. Executed when the condition is false.", canHaveBlockLabel: true),
+	b"while": KeywordInfo.create(TokenKind.while, helpText: "Loop that continues while the condition is true.", canHaveBlockLabel: true),
+	b"for": KeywordInfo.create(TokenKind.for, helpText: "Loop that iterates over a range or collection.", canHaveBlockLabel: true),
+	b"in": KeywordInfo.create(TokenKind.in, helpText: "Used in for loops to specify the range or collection to iterate over.", canHaveBlockLabel: false),
+	b"break": KeywordInfo.create(TokenKind.break, helpText: "Exits the current loop or match statement.", canHaveBlockLabel: false),
+	b"continue": KeywordInfo.create(TokenKind.continue, helpText: "Skips the rest of the current loop iteration and continues with the next iteration.", canHaveBlockLabel: false),
+	b"return": KeywordInfo.create(TokenKind.return, helpText: "Returns a value from a function and exits the function.", canHaveBlockLabel: false),
+	b"end": KeywordInfo.create(TokenKind.end, helpText: "Ends a block (function, type, if, for, while, etc.). Must be followed by the block's label in quotes.", canHaveBlockLabel: true),
+	b"match": KeywordInfo.create(TokenKind.match, helpText: "Pattern matching statement for enums and values.", canHaveBlockLabel: false),
+	b"then": KeywordInfo.create(TokenKind.then, helpText: "Used in match expressions to separate pattern from result.", canHaveBlockLabel: true),
+	b"fallthrough": KeywordInfo.create(TokenKind.fallthrough, helpText: "Falls through to the next case in a match statement.", canHaveBlockLabel: false),
+	b"default": KeywordInfo.create(TokenKind.default, helpText: "Default case in a match statement.", canHaveBlockLabel: false),
+	b"upto": KeywordInfo.create(TokenKind.upto, helpText: "Exclusive upper bound in range patterns.", canHaveBlockLabel: false),
+	b"gives": KeywordInfo.create(TokenKind.gives, helpText: "Used in iterator expressions.", canHaveBlockLabel: false),
+	b"try": KeywordInfo.create(TokenKind.try, helpText: "Attempts an operation that may throw an error.", canHaveBlockLabel: false),
+	b"otherwise": KeywordInfo.create(TokenKind.otherwise, helpText: "Provides a fallback for try expressions when an error occurs.", canHaveBlockLabel: true),
+	b"throw": KeywordInfo.create(TokenKind.throw, helpText: "Throws an error that can be caught by a try-catch block.", canHaveBlockLabel: false),
+	b"panic": KeywordInfo.create(TokenKind.panic, helpText: "Terminates the program with an error message and stack trace.", canHaveBlockLabel: false),
+	b"ignore": KeywordInfo.create(TokenKind.ignore, helpText: "Used with otherwise to silently ignore errors.", canHaveBlockLabel: false),
+	b"function": KeywordInfo.create(TokenKind.function, helpText: "Declares a function. Functions contain executable code and can return values.", canHaveBlockLabel: false),
+	b"returns": KeywordInfo.create(TokenKind.returns, helpText: "Specifies the return type of a function.", canHaveBlockLabel: false),
+	b"let": KeywordInfo.create(TokenKind.let, helpText: "Declares an immutable variable. The value cannot be changed after initialization.", canHaveBlockLabel: false),
+	b"var": KeywordInfo.create(TokenKind.var, helpText: "Declares a mutable variable. The value can be changed after initialization.", canHaveBlockLabel: false),
+	b"type": KeywordInfo.create(TokenKind.type, helpText: "Declares a struct type with fields and methods.", canHaveBlockLabel: false),
+	b"enum": KeywordInfo.create(TokenKind.enum, helpText: "Declares an enum type with a fixed set of named cases, optional associated values, and methods.", canHaveBlockLabel: false),
+	b"typealias": KeywordInfo.create(TokenKind.typealias, helpText: "Declares a type alias for an existing type or associated type in an interface.", canHaveBlockLabel: false),
+	b"export": KeywordInfo.create(TokenKind.export, helpText: "Makes a function or type visible to other modules.", canHaveBlockLabel: false),
+	b"static": KeywordInfo.create(TokenKind.static, helpText: "Declares a static method that doesn't require an instance.", canHaveBlockLabel: false),
+	b"interface": KeywordInfo.create(TokenKind.interface, helpText: "Declares an interface that types can conform to.", canHaveBlockLabel: false),
+	b"extension": KeywordInfo.create(TokenKind.extension, helpText: "Defines extension methods for an interface.", canHaveBlockLabel: false),
+	b"extends": KeywordInfo.create(TokenKind.extends, helpText: "Indicates interface inheritance.", canHaveBlockLabel: false),
+	b"uses": KeywordInfo.create(TokenKind.uses, helpText: "Declares associated types in an interface.", canHaveBlockLabel: false),
+	b"with": KeywordInfo.create(TokenKind.with, helpText: "Specifies interface conformance requirements.", canHaveBlockLabel: false),
+	b"where": KeywordInfo.create(TokenKind.where, helpText: "Constrains type parameters to require interface conformance.", canHaveBlockLabel: false),
+	b"self": KeywordInfo.create(TokenKind.self, helpText: "Refers to the current instance in a method.", canHaveBlockLabel: false),
+	b"Self": KeywordInfo.create(TokenKind.selfType, helpText: "Refers to the current type in a method signature.", canHaveBlockLabel: false),
+	b"throws": KeywordInfo.create(TokenKind.throws, helpText: "Indicates that a function may throw an error.", canHaveBlockLabel: false),
+	b"from": KeywordInfo.create(TokenKind.from, helpText: "Used in range expressions (from X to Y).", canHaveBlockLabel: false),
+	b"to": KeywordInfo.create(TokenKind.to, helpText: "Used in range expressions (from X to Y).", canHaveBlockLabel: false),
+	b"mod": KeywordInfo.create(TokenKind.mod, helpText: "Modulo operator. Returns the remainder of integer division.", canHaveBlockLabel: false),
+	b"and": KeywordInfo.create(TokenKind.and, helpText: "AND operator. Logical AND on bools, bitwise AND on integers.", canHaveBlockLabel: false),
+	b"or": KeywordInfo.create(TokenKind.or, helpText: "OR operator. Logical OR on bools, bitwise OR on integers.", canHaveBlockLabel: true),
+	b"not": KeywordInfo.create(TokenKind.not, helpText: "NOT operator. Logical NOT on bools, bitwise NOT on integers.", canHaveBlockLabel: false),
+	b"xor": KeywordInfo.create(TokenKind.xor, helpText: "XOR operator. Logical XOR on bools, bitwise XOR on integers.", canHaveBlockLabel: false),
+	b"shl": KeywordInfo.create(TokenKind.shl, helpText: "Shift left operator. Shifts integer bits to the left.", canHaveBlockLabel: false),
+	b"shr": KeywordInfo.create(TokenKind.shr, helpText: "Shift right operator. Shifts integer bits to the right.", canHaveBlockLabel: false),
+	b"as": KeywordInfo.create(TokenKind.as, helpText: "Type cast operator. Converts a value to a different type.", canHaveBlockLabel: false),
+	b"is": KeywordInfo.create(TokenKind.is, helpText: "Reference identity operator. Returns true if two references point to the same object.", canHaveBlockLabel: false),
+	b"implements": KeywordInfo.create(TokenKind.implements, helpText: "Specifies that a type conforms to an interface.", canHaveBlockLabel: false),
+	b"true": KeywordInfo.create(TokenKind.true, helpText: "Boolean literal representing true.", canHaveBlockLabel: false),
+	b"false": KeywordInfo.create(TokenKind.false, helpText: "Boolean literal representing false.", canHaveBlockLabel: false),
+	b"int": KeywordInfo.create(TokenKind.int, helpText: "Primitive integer type (64-bit signed).", canHaveBlockLabel: false),
+	b"float": KeywordInfo.create(TokenKind.float, helpText: "Primitive floating-point type (64-bit double precision).", canHaveBlockLabel: false),
+	b"bool": KeywordInfo.create(TokenKind.bool, helpText: "Primitive boolean type (true or false).", canHaveBlockLabel: false),
+	b"byte": KeywordInfo.create(TokenKind.byte, helpText: "Primitive byte type (8-bit unsigned integer).", canHaveBlockLabel: false),
+	b"array": KeywordInfo.create(TokenKind.array, helpText: "Used in array type declarations (array of int).", canHaveBlockLabel: false),
+	b"of": KeywordInfo.create(TokenKind.of, helpText: "Used in array type declarations (array of int).", canHaveBlockLabel: false),
+	b"print": KeywordInfo.create(TokenKind.print, helpText: "Built-in function for printing to the console. Not a real keyword.", canHaveBlockLabel: false)
 ]
 
 function classifyIdentifier(name ByteArray) returns TokenKind

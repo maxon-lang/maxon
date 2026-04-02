@@ -3,6 +3,10 @@ typealias Integer = int(i64.min to i64.max)
 
 type Inner
   export var value Integer
+
+  static function create(value Integer) returns Self
+  	return Self{value: value}
+  end 'create'
 end 'Inner'
 
 type Container
@@ -12,11 +16,15 @@ type Container
   export function replaceChild(newChild Inner)
     child = newChild
   end 'replaceChild'
+
+  static function create(value Integer, child Inner) returns Self
+  	return Self{value: value, child: child}
+  end 'create'
 end 'Container'
 
 function main() returns ExitCode
-  var c = Container{value: 1, child: Inner{value: 10}}
-  c.replaceChild(Inner{value: 20})
+  var c = Container.create(value: 1, child: Inner.create(value: 10))
+  c.replaceChild(Inner.create(value: 20))
   if c.child.value == 20 'check'
     return 0
   end 'check'

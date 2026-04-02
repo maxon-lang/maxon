@@ -25,7 +25,7 @@ Or create an empty list with an explicit type:
 ```text
 typealias Integer = int(i64.min to i64.max)
 typealias IntList = List with Integer
-var empty = IntList{}
+var empty = IntList.empty()
 ```
 
 ### Methods
@@ -109,7 +109,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntList = List with Integer
 
 function main() returns ExitCode
-	var list = IntList{}
+	var list = IntList.empty()
 	if list.isEmpty() 'check'
 		return 0
 	end 'check'
@@ -145,7 +145,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntList = List with Integer
 
 function main() returns ExitCode
-	var list = IntList{}
+	var list = IntList.empty()
 	var f = try list.first() otherwise 99
 	return f
 end 'main'
@@ -160,7 +160,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntList = List with Integer
 
 function main() returns ExitCode
-	var list = IntList{}
+	var list = IntList.empty()
 	var l = try list.last() otherwise 99
 	return l
 end 'main'
@@ -175,7 +175,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntList = List with Integer
 
 function main() returns ExitCode
-	var list = IntList{}
+	var list = IntList.empty()
 	list.prepend(42)
 	var f = try list.first() otherwise 0
 	return f
@@ -191,7 +191,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntList = List with Integer
 
 function main() returns ExitCode
-	var list = IntList{}
+	var list = IntList.empty()
 	list.prepend(3)
 	list.prepend(2)
 	list.prepend(1)
@@ -218,7 +218,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntList = List with Integer
 
 function main() returns ExitCode
-	var list = IntList{}
+	var list = IntList.empty()
 	list.append(42)
 	var f = try list.first() otherwise 0
 	return f
@@ -234,7 +234,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntList = List with Integer
 
 function main() returns ExitCode
-	var list = IntList{}
+	var list = IntList.empty()
 	list.append(1)
 	list.append(2)
 	list.append(3)
@@ -461,7 +461,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntList = List with Integer
 
 function main() returns ExitCode
-	var list = IntList{}
+	var list = IntList.empty()
 	for i in 1 to 100 'build'
 		list.append(i)
 	end 'build'
@@ -504,7 +504,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntList = List with Integer
 
 function main() returns ExitCode
-	var list = IntList{}
+	var list = IntList.empty()
 	list.append(2)
 	list.append(3)
 	list.prepend(1)
@@ -537,7 +537,7 @@ end 'main'
 typealias StringList = List with String
 
 function main() returns ExitCode
-	var list = StringList{}
+	var list = StringList.empty()
 	list.append("hello")
 	list.append("world")
 	var f = try list.first() otherwise "none"
@@ -576,7 +576,7 @@ end 'main'
 typealias StringList = List with String
 
 function testRemove()
-	var list = StringList{}
+	var list = StringList.empty()
 	list.append("hello world!!!!!!!!!!!!!!")
 	list.append("goodbye world!!!!!!!!!!!!!")
 	var removed = try list.removeFirst() otherwise "none"
@@ -599,14 +599,15 @@ hello world!!!!!!!!!!!!!!
 ```stderr
 sl_init
   os_alloc size=67108864
-mm_alloc __ManagedList_String #1 size=32 [list.testRemove]
+mm_alloc __ManagedList_String #1 size=32 [StringList.empty]
   sl_alloc __ManagedList_String #1 size=64 class=5
-mm_alloc StringList #2 size=16 [list.testRemove]
+mm_alloc StringList #2 size=16 [StringList.empty]
   sl_alloc StringList #2 size=48 class=4
-mm_incref __ManagedList_String #1 rc=1 [list.testRemove]
-mm_incref StringList #2 rc=1 [list.testRemove]
-mm_alloc String #3 size=16 [list.testRemove]
-  sl_alloc String #3 size=48 class=4
+mm_incref __ManagedList_String #1 rc=1 [StringList.empty]
+mm_incref StringList #2 rc=1 [StringList.empty]
+mm_transfer StringList #2 rc=1 [StringList.empty]
+mm_alloc String #3 size=32 [list.testRemove]
+  sl_alloc String #3 size=64 class=5
 mm_alloc __ManagedMemory #4 size=32 [list.testRemove]
   sl_alloc __ManagedMemory #4 size=64 class=5
 mm_incref __ManagedMemory #4 rc=1 [list.testRemove]
@@ -615,8 +616,8 @@ mm_alloc __ManagedListNode #5 size=32 [StringList.append]
   sl_alloc __ManagedListNode #5 size=64 class=5
 mm_incref String #3 rc=2 [StringList.append]
 mm_incref __ManagedListNode #5 rc=1 [managed_list_insert]
-mm_alloc String #6 size=16 [list.testRemove]
-  sl_alloc String #6 size=48 class=4
+mm_alloc String #6 size=32 [list.testRemove]
+  sl_alloc String #6 size=64 class=5
 mm_alloc __ManagedMemory #7 size=32 [list.testRemove]
   sl_alloc __ManagedMemory #7 size=64 class=5
 mm_incref __ManagedMemory #7 rc=1 [list.testRemove]
@@ -636,8 +637,8 @@ mm_decref __ManagedListNode #5 rc=0 [StringList.removeFirst]
 mm_incref String #3 rc=2 [StringList.removeFirst]
 mm_transfer String #3 rc=2 [StringList.removeFirst]
 mm_incref String #3 rc=3 [list.testRemove]
-mm_alloc String #9 size=16 [list.testRemove]
-  sl_alloc String #9 size=48 class=4
+mm_alloc String #9 size=32 [list.testRemove]
+  sl_alloc String #9 size=64 class=5
 mm_alloc __ManagedMemory #10 size=32 [list.testRemove]
   sl_alloc __ManagedMemory #10 size=64 class=5
 mm_raw_alloc #R1 size=27 [interp.buf [list.testRemove]]
@@ -646,8 +647,8 @@ mm_incref __ManagedMemory #10 rc=1 [list.testRemove]
 mm_incref String #9 rc=1 [list.testRemove]
 mm_raw_alloc #R2 size=21 [toStr.buf [list.testRemove]]
   sl_alloc size=21 class=2
-mm_alloc String #11 size=16 [list.testRemove]
-  sl_alloc String #11 size=48 class=4
+mm_alloc String #11 size=32 [list.testRemove]
+  sl_alloc String #11 size=64 class=5
 mm_alloc __ManagedMemory #12 size=32 [list.testRemove]
   sl_alloc __ManagedMemory #12 size=64 class=5
 mm_raw_alloc #R3 size=3 [interp.buf [list.testRemove]]
@@ -663,7 +664,7 @@ mm_decref String #11 rc=0 [list.testRemove]
     mm_free __ManagedMemory #12
       sl_free __ManagedMemory #12 size=64 class=5
   mm_free String #11
-    sl_free String #11 size=48 class=4
+    sl_free String #11 size=64 class=5
 mm_decref String #9 rc=0 [list.testRemove]
   mm_decref __ManagedMemory #10 rc=0 [~String]
     mm_raw_free #R1
@@ -671,7 +672,7 @@ mm_decref String #9 rc=0 [list.testRemove]
     mm_free __ManagedMemory #10
       sl_free __ManagedMemory #10 size=64 class=5
   mm_free String #9
-    sl_free String #9 size=48 class=4
+    sl_free String #9 size=64 class=5
 mm_decref String #3 rc=2 [list.testRemove]
 mm_decref String #6 rc=1 [list.testRemove]
 mm_decref String #3 rc=1 [list.testRemove]
@@ -680,7 +681,7 @@ mm_decref String #3 rc=0 [list.testRemove]
     mm_free __ManagedMemory #4
       sl_free __ManagedMemory #4 size=64 class=5
   mm_free String #3
-    sl_free String #3 size=48 class=4
+    sl_free String #3 size=64 class=5
 mm_decref StringList #2 rc=0 [list.testRemove]
   mm_decref __ManagedList_String #1 rc=0 [~StringList]
     mm_decref String #6 rc=0 [managed_list_clear]
@@ -688,7 +689,7 @@ mm_decref StringList #2 rc=0 [list.testRemove]
         mm_free __ManagedMemory #7
           sl_free __ManagedMemory #7 size=64 class=5
       mm_free String #6
-        sl_free String #6 size=48 class=4
+        sl_free String #6 size=64 class=5
     mm_decref __ManagedListNode #8 rc=0 [managed_list_clear]
       mm_free __ManagedListNode #8
         sl_free __ManagedListNode #8 size=64 class=5
@@ -708,7 +709,7 @@ mm_raw_free #R4
 typealias StringList = List with String
 
 function testRemove() returns String
-	var list = StringList{}
+	var list = StringList.empty()
 	list.append("hello world!!!!!!!!!!!!!!")
 	list.append("goodbye world!!!!!!!!!!!!!")
 	return try list.removeFirst() otherwise "none"
@@ -729,14 +730,15 @@ hello world!!!!!!!!!!!!!!
 ```stderr
 sl_init
   os_alloc size=67108864
-mm_alloc __ManagedList_String #1 size=32 [list.testRemove]
+mm_alloc __ManagedList_String #1 size=32 [StringList.empty]
   sl_alloc __ManagedList_String #1 size=64 class=5
-mm_alloc StringList #2 size=16 [list.testRemove]
+mm_alloc StringList #2 size=16 [StringList.empty]
   sl_alloc StringList #2 size=48 class=4
-mm_incref __ManagedList_String #1 rc=1 [list.testRemove]
-mm_incref StringList #2 rc=1 [list.testRemove]
-mm_alloc String #3 size=16 [list.testRemove]
-  sl_alloc String #3 size=48 class=4
+mm_incref __ManagedList_String #1 rc=1 [StringList.empty]
+mm_incref StringList #2 rc=1 [StringList.empty]
+mm_transfer StringList #2 rc=1 [StringList.empty]
+mm_alloc String #3 size=32 [list.testRemove]
+  sl_alloc String #3 size=64 class=5
 mm_alloc __ManagedMemory #4 size=32 [list.testRemove]
   sl_alloc __ManagedMemory #4 size=64 class=5
 mm_incref __ManagedMemory #4 rc=1 [list.testRemove]
@@ -745,8 +747,8 @@ mm_alloc __ManagedListNode #5 size=32 [StringList.append]
   sl_alloc __ManagedListNode #5 size=64 class=5
 mm_incref String #3 rc=2 [StringList.append]
 mm_incref __ManagedListNode #5 rc=1 [managed_list_insert]
-mm_alloc String #6 size=16 [list.testRemove]
-  sl_alloc String #6 size=48 class=4
+mm_alloc String #6 size=32 [list.testRemove]
+  sl_alloc String #6 size=64 class=5
 mm_alloc __ManagedMemory #7 size=32 [list.testRemove]
   sl_alloc __ManagedMemory #7 size=64 class=5
 mm_incref __ManagedMemory #7 rc=1 [list.testRemove]
@@ -775,7 +777,7 @@ mm_decref StringList #2 rc=0 [list.testRemove]
         mm_free __ManagedMemory #7
           sl_free __ManagedMemory #7 size=64 class=5
       mm_free String #6
-        sl_free String #6 size=48 class=4
+        sl_free String #6 size=64 class=5
     mm_decref __ManagedListNode #8 rc=0 [managed_list_clear]
       mm_free __ManagedListNode #8
         sl_free __ManagedListNode #8 size=64 class=5
@@ -783,8 +785,8 @@ mm_decref StringList #2 rc=0 [list.testRemove]
       sl_free __ManagedList_String #1 size=64 class=5
   mm_free StringList #2
     sl_free StringList #2 size=48 class=4
-mm_alloc String #9 size=16 [main]
-  sl_alloc String #9 size=48 class=4
+mm_alloc String #9 size=32 [main]
+  sl_alloc String #9 size=64 class=5
 mm_alloc __ManagedMemory #10 size=32 [main]
   sl_alloc __ManagedMemory #10 size=64 class=5
 mm_raw_alloc #R1 size=27 [interp.buf [main]]
@@ -798,13 +800,13 @@ mm_decref String #9 rc=0 [main]
     mm_free __ManagedMemory #10
       sl_free __ManagedMemory #10 size=64 class=5
   mm_free String #9
-    sl_free String #9 size=48 class=4
+    sl_free String #9 size=64 class=5
 mm_decref String #3 rc=0 [main]
   mm_decref __ManagedMemory #4 rc=0 [~String]
     mm_free __ManagedMemory #4
       sl_free __ManagedMemory #4 size=64 class=5
   mm_free String #3
-    sl_free String #3 size=48 class=4
+    sl_free String #3 size=64 class=5
 mm_raw_alloc #R2 size=40
   sl_alloc size=40 class=4
 mm_raw_free #R2
@@ -817,7 +819,7 @@ mm_raw_free #R2
 typealias StringList = List with String
 
 function testClear()
-	var list = StringList{}
+	var list = StringList.empty()
 	list.append("alpha string!!!!!!!!!!!!!!!")
 	list.append("beta string!!!!!!!!!!!!!!!!")
 	list.append("gamma string!!!!!!!!!!!!!!!")
@@ -839,14 +841,15 @@ end 'main'
 ```stderr
 sl_init
   os_alloc size=67108864
-mm_alloc __ManagedList_String #1 size=32 [list.testClear]
+mm_alloc __ManagedList_String #1 size=32 [StringList.empty]
   sl_alloc __ManagedList_String #1 size=64 class=5
-mm_alloc StringList #2 size=16 [list.testClear]
+mm_alloc StringList #2 size=16 [StringList.empty]
   sl_alloc StringList #2 size=48 class=4
-mm_incref __ManagedList_String #1 rc=1 [list.testClear]
-mm_incref StringList #2 rc=1 [list.testClear]
-mm_alloc String #3 size=16 [list.testClear]
-  sl_alloc String #3 size=48 class=4
+mm_incref __ManagedList_String #1 rc=1 [StringList.empty]
+mm_incref StringList #2 rc=1 [StringList.empty]
+mm_transfer StringList #2 rc=1 [StringList.empty]
+mm_alloc String #3 size=32 [list.testClear]
+  sl_alloc String #3 size=64 class=5
 mm_alloc __ManagedMemory #4 size=32 [list.testClear]
   sl_alloc __ManagedMemory #4 size=64 class=5
 mm_incref __ManagedMemory #4 rc=1 [list.testClear]
@@ -855,8 +858,8 @@ mm_alloc __ManagedListNode #5 size=32 [StringList.append]
   sl_alloc __ManagedListNode #5 size=64 class=5
 mm_incref String #3 rc=2 [StringList.append]
 mm_incref __ManagedListNode #5 rc=1 [managed_list_insert]
-mm_alloc String #6 size=16 [list.testClear]
-  sl_alloc String #6 size=48 class=4
+mm_alloc String #6 size=32 [list.testClear]
+  sl_alloc String #6 size=64 class=5
 mm_alloc __ManagedMemory #7 size=32 [list.testClear]
   sl_alloc __ManagedMemory #7 size=64 class=5
 mm_incref __ManagedMemory #7 rc=1 [list.testClear]
@@ -865,8 +868,8 @@ mm_alloc __ManagedListNode #8 size=32 [StringList.append]
   sl_alloc __ManagedListNode #8 size=64 class=5
 mm_incref String #6 rc=2 [StringList.append]
 mm_incref __ManagedListNode #8 rc=1 [managed_list_insert]
-mm_alloc String #9 size=16 [list.testClear]
-  sl_alloc String #9 size=48 class=4
+mm_alloc String #9 size=32 [list.testClear]
+  sl_alloc String #9 size=64 class=5
 mm_alloc __ManagedMemory #10 size=32 [list.testClear]
   sl_alloc __ManagedMemory #10 size=64 class=5
 mm_incref __ManagedMemory #10 rc=1 [list.testClear]
@@ -889,8 +892,8 @@ mm_decref __ManagedListNode #11 rc=0 [managed_list_clear]
     sl_free __ManagedListNode #11 size=64 class=5
 mm_raw_alloc #R1 size=21 [toStr.buf [list.testClear]]
   sl_alloc size=21 class=2
-mm_alloc String #12 size=16 [list.testClear]
-  sl_alloc String #12 size=48 class=4
+mm_alloc String #12 size=32 [list.testClear]
+  sl_alloc String #12 size=64 class=5
 mm_alloc __ManagedMemory #13 size=32 [list.testClear]
   sl_alloc __ManagedMemory #13 size=64 class=5
 mm_raw_alloc #R2 size=3 [interp.buf [list.testClear]]
@@ -906,25 +909,25 @@ mm_decref String #12 rc=0 [list.testClear]
     mm_free __ManagedMemory #13
       sl_free __ManagedMemory #13 size=64 class=5
   mm_free String #12
-    sl_free String #12 size=48 class=4
+    sl_free String #12 size=64 class=5
 mm_decref String #9 rc=0 [list.testClear]
   mm_decref __ManagedMemory #10 rc=0 [~String]
     mm_free __ManagedMemory #10
       sl_free __ManagedMemory #10 size=64 class=5
   mm_free String #9
-    sl_free String #9 size=48 class=4
+    sl_free String #9 size=64 class=5
 mm_decref String #6 rc=0 [list.testClear]
   mm_decref __ManagedMemory #7 rc=0 [~String]
     mm_free __ManagedMemory #7
       sl_free __ManagedMemory #7 size=64 class=5
   mm_free String #6
-    sl_free String #6 size=48 class=4
+    sl_free String #6 size=64 class=5
 mm_decref String #3 rc=0 [list.testClear]
   mm_decref __ManagedMemory #4 rc=0 [~String]
     mm_free __ManagedMemory #4
       sl_free __ManagedMemory #4 size=64 class=5
   mm_free String #3
-    sl_free String #3 size=48 class=4
+    sl_free String #3 size=64 class=5
 mm_decref StringList #2 rc=0 [list.testClear]
   mm_decref __ManagedList_String #1 rc=0 [~StringList]
     mm_free __ManagedList_String #1
@@ -947,7 +950,7 @@ function clearList(list StringList)
 end 'clearList'
 
 function main() returns ExitCode
-	var list = StringList{}
+	var list = StringList.empty()
 	list.append("alpha string!!!!!!!!!!!!!!!")
 	list.append("beta string!!!!!!!!!!!!!!!!")
 	list.append("gamma string!!!!!!!!!!!!!!!")
@@ -965,14 +968,15 @@ end 'main'
 ```stderr
 sl_init
   os_alloc size=67108864
-mm_alloc __ManagedList_String #1 size=32 [main]
+mm_alloc __ManagedList_String #1 size=32 [StringList.empty]
   sl_alloc __ManagedList_String #1 size=64 class=5
-mm_alloc StringList #2 size=16 [main]
+mm_alloc StringList #2 size=16 [StringList.empty]
   sl_alloc StringList #2 size=48 class=4
-mm_incref __ManagedList_String #1 rc=1 [main]
-mm_incref StringList #2 rc=1 [main]
-mm_alloc String #3 size=16 [main]
-  sl_alloc String #3 size=48 class=4
+mm_incref __ManagedList_String #1 rc=1 [StringList.empty]
+mm_incref StringList #2 rc=1 [StringList.empty]
+mm_transfer StringList #2 rc=1 [StringList.empty]
+mm_alloc String #3 size=32 [main]
+  sl_alloc String #3 size=64 class=5
 mm_alloc __ManagedMemory #4 size=32 [main]
   sl_alloc __ManagedMemory #4 size=64 class=5
 mm_incref __ManagedMemory #4 rc=1 [main]
@@ -981,8 +985,8 @@ mm_alloc __ManagedListNode #5 size=32 [StringList.append]
   sl_alloc __ManagedListNode #5 size=64 class=5
 mm_incref String #3 rc=2 [StringList.append]
 mm_incref __ManagedListNode #5 rc=1 [managed_list_insert]
-mm_alloc String #6 size=16 [main]
-  sl_alloc String #6 size=48 class=4
+mm_alloc String #6 size=32 [main]
+  sl_alloc String #6 size=64 class=5
 mm_alloc __ManagedMemory #7 size=32 [main]
   sl_alloc __ManagedMemory #7 size=64 class=5
 mm_incref __ManagedMemory #7 rc=1 [main]
@@ -991,8 +995,8 @@ mm_alloc __ManagedListNode #8 size=32 [StringList.append]
   sl_alloc __ManagedListNode #8 size=64 class=5
 mm_incref String #6 rc=2 [StringList.append]
 mm_incref __ManagedListNode #8 rc=1 [managed_list_insert]
-mm_alloc String #9 size=16 [main]
-  sl_alloc String #9 size=48 class=4
+mm_alloc String #9 size=32 [main]
+  sl_alloc String #9 size=64 class=5
 mm_alloc __ManagedMemory #10 size=32 [main]
   sl_alloc __ManagedMemory #10 size=64 class=5
 mm_incref __ManagedMemory #10 rc=1 [main]
@@ -1015,8 +1019,8 @@ mm_decref __ManagedListNode #11 rc=0 [managed_list_clear]
     sl_free __ManagedListNode #11 size=64 class=5
 mm_raw_alloc #R1 size=21 [toStr.buf [main]]
   sl_alloc size=21 class=2
-mm_alloc String #12 size=16 [main]
-  sl_alloc String #12 size=48 class=4
+mm_alloc String #12 size=32 [main]
+  sl_alloc String #12 size=64 class=5
 mm_alloc __ManagedMemory #13 size=32 [main]
   sl_alloc __ManagedMemory #13 size=64 class=5
 mm_raw_alloc #R2 size=3 [interp.buf [main]]
@@ -1032,25 +1036,25 @@ mm_decref String #12 rc=0 [main]
     mm_free __ManagedMemory #13
       sl_free __ManagedMemory #13 size=64 class=5
   mm_free String #12
-    sl_free String #12 size=48 class=4
+    sl_free String #12 size=64 class=5
 mm_decref String #9 rc=0 [main]
   mm_decref __ManagedMemory #10 rc=0 [~String]
     mm_free __ManagedMemory #10
       sl_free __ManagedMemory #10 size=64 class=5
   mm_free String #9
-    sl_free String #9 size=48 class=4
+    sl_free String #9 size=64 class=5
 mm_decref String #6 rc=0 [main]
   mm_decref __ManagedMemory #7 rc=0 [~String]
     mm_free __ManagedMemory #7
       sl_free __ManagedMemory #7 size=64 class=5
   mm_free String #6
-    sl_free String #6 size=48 class=4
+    sl_free String #6 size=64 class=5
 mm_decref String #3 rc=0 [main]
   mm_decref __ManagedMemory #4 rc=0 [~String]
     mm_free __ManagedMemory #4
       sl_free __ManagedMemory #4 size=64 class=5
   mm_free String #3
-    sl_free String #3 size=48 class=4
+    sl_free String #3 size=64 class=5
 mm_decref StringList #2 rc=0 [main]
   mm_decref __ManagedList_String #1 rc=0 [~StringList]
     mm_free __ManagedList_String #1
@@ -1076,7 +1080,7 @@ function clearList(list StringList) returns String
 end 'clearList'
 
 function main() returns ExitCode
-	var list = StringList{}
+	var list = StringList.empty()
 	list.append("hello world!!!!!!!!!!!!!!")
 	var result = clearList(list)
 	print("{result}\n")
@@ -1098,7 +1102,7 @@ function clearList(list StringList)
 end 'clearList'
 
 function main() returns ExitCode
-	var list = StringList{}
+	var list = StringList.empty()
 	list.append("hello world!!!!!!!!!!!!!!")
 	var val = try list.first() otherwise "none"
 	clearList(list)
@@ -1117,7 +1121,7 @@ Getting a value from a list and then clearing it is a borrow conflict.
 typealias StringList = List with String
 
 function main() returns ExitCode
-	var list = StringList{}
+	var list = StringList.empty()
 	list.append("hello world!!!!!!!!!!!!!!")
 	var val = try list.first() otherwise "none"
 	list.clear()

@@ -18,10 +18,14 @@ type Amount implements Scalable
 	function base() returns Integer
 		return amount
 	end 'base'
+
+	static function create(amount Integer) returns Self
+		return Self{amount: amount}
+	end 'create'
 end 'Amount'
 
 function main() returns ExitCode
-	var a = Amount{amount: 7}
+	var a = Amount.create(amount: 7)
 	return a.scale(6)
 end 'main'
 ---
@@ -51,21 +55,40 @@ module {
     x86.epilogue
     x86.ret
   }
+  func @Amount.create(amount: i64) -> i64 {
+  entry:
+    x86.prologue stack_size=16
+    x86.mov [rbp-16], rcx
+    x86.mov rcx, 8
+    x86.xor rdx, rdx
+    x86.mov r8, 1
+    x86.call mm_alloc
+    x86.mov [rbp-8], rax
+    x86.mov rax, [rbp-8]
+    x86.mov rcx, [rbp-16]
+    x86.mov [rax+0], rcx
+    x86.mov rdx, [rbp-8]
+    x86.mov rcx, [rbp-8]
+    x86.call mm_incref
+    x86.mov rax, [rbp-8]
+    x86.epilogue
+    x86.ret
+  }
   func @main() -> u32 {
   entry:
     x86.prologue stack_size=16
-    x86.mov rax, 7
+    x86.mov rcx, 7
+    x86.call Amount.create
     x86.mov [rbp-8], rax
-    x86.lea rcx, [rbp-8]
-    x86.mov rdx, rcx
-    x86.mov rcx, rdx
+    x86.mov rax, [rbp-8]
+    x86.mov rcx, [rbp-8]
     x86.mov rdx, 6
     x86.call Amount.scale
-    x86.xor rbx, rbx
-    x86.mov rsi, 4294967295
-    x86.cmp rax, rsi
+    x86.xor rcx, rcx
+    x86.mov rdx, 4294967295
+    x86.cmp rax, rdx
     x86.jg main.__range_panic_0
-    x86.cmp rax, rbx
+    x86.cmp rax, rcx
     x86.jl main.__range_panic_0
     x86.jmp main.__range_ok_0
   __range_panic_0:
@@ -73,7 +96,21 @@ module {
     x86.mov rcx, rax
     x86.call mrt_panic
   __range_ok_0:
+    x86.mov rbx, [rbp-8]
+    x86.mov [rbp-16], rax
+    x86.test rbx, rbx
+    x86.jz __nonnull_skip_0
+    x86.mov rcx, [rbp-8]
+    x86.call mm_decref
+    x86.label __nonnull_skip_0
+    x86.mov rax, [rbp-16]
     x86.epilogue
+    x86.ret
+  }
+  func @__destruct_Amount(ptr: i64) {
+  entry:
+    x86.jmp __destruct_Amount.done
+  done:
     x86.ret
   }
 }

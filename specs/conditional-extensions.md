@@ -86,10 +86,14 @@ type IntList implements HasItems with Integer
 		idx = idx + 1
 		return v
 	end 'next'
+
+	static function create(data IntegerArray, idx Integer) returns Self
+		return Self{data: data, idx: idx}
+	end 'create'
 end 'IntList'
 
 function main() returns ExitCode
-	var list = IntList{data: [10, 20, 30], idx: 0}
+	var list = IntList.create(data: [10, 20, 30], idx: 0)
 	if list.has(20) 'yes'
 		return 1
 	end 'yes'
@@ -121,6 +125,10 @@ end 'Holder'
 
 type NotComparable
 	var x Integer
+
+	static function create(x Integer) returns Self
+		return Self{x: x}
+	end 'create'
 end 'NotComparable'
 
 type MyHolder implements Holder with NotComparable
@@ -129,17 +137,21 @@ type MyHolder implements Holder with NotComparable
 	function get() returns NotComparable
 		return item
 	end 'get'
+
+	static function create(item NotComparable) returns Self
+		return Self{item: item}
+	end 'create'
 end 'MyHolder'
 
 function main() returns ExitCode
-	var h = MyHolder{item: NotComparable{x: 5}}
+	var h = MyHolder.create(item: NotComparable.create(x: 5))
 	// isGreater should not exist on MyHolder since NotComparable doesn't implement Comparable
-	var r = h.isGreater(NotComparable{x: 3})
+	var r = h.isGreater(NotComparable.create(x: 3))
 	return 0
 end 'main'
 ```
 ```maxoncstderr
-error E4006: specs/fragments/conditional-extensions/conditional-extensions.constraint-not-met.test:30:12: Type 'MyHolder' has no field named 'isGreater' ('isGreater' is available as a conditional extension where Item is Comparable, but 'NotComparable' does not implement 'Comparable')
+error E4006: specs/fragments/conditional-extensions/conditional-extensions.constraint-not-met.test:38:12: Type 'MyHolder' has no field named 'isGreater' ('isGreater' is available as a conditional extension where Item is Comparable, but 'NotComparable' does not implement 'Comparable')
 ```
 
 ### Conditional extension on a type (not an interface)
@@ -150,6 +162,10 @@ Extensions can target types directly, not just interfaces. This is useful when t
 ```maxon
 type Box uses Item
 	export var item Item
+
+	static function create(item Item) returns Self
+		return Self{item: item}
+	end 'create'
 end 'Box'
 
 extension Box where Item is Equatable
@@ -162,7 +178,7 @@ typealias Int = int(i64.min to i64.max)
 typealias IntBox = Box with Int
 
 function main() returns ExitCode
-	var b = IntBox{item: 42}
+	var b = IntBox.create(item: 42)
 	if b.matches(42) 'yes'
 		return 1
 	end 'yes'
@@ -223,6 +239,10 @@ type HashItem implements Equatable, Hashable
 	function hash() returns HashValue
 		return v
 	end 'hash'
+
+	static function create(v Integer) returns Self
+		return Self{v: v}
+	end 'create'
 end 'HashItem'
 
 typealias HashItemArray = Array with HashItem
@@ -241,11 +261,15 @@ type HashBucket implements Bucket with HashItem
 		idx = idx + 1
 		return v
 	end 'next'
+
+	static function create(items HashItemArray, idx Integer) returns Self
+		return Self{items: items, idx: idx}
+	end 'create'
 end 'HashBucket'
 
 function main() returns ExitCode
-	var b = HashBucket{items: [HashItem{v: 1}, HashItem{v: 2}, HashItem{v: 3}], idx: 0}
-	if b.lookup(HashItem{v: 2}) 'found'
+	var b = HashBucket.create(items: [HashItem.create(v: 1), HashItem.create(v: 2), HashItem.create(v: 3)], idx: 0)
+	if b.lookup(HashItem.create(v: 2)) 'found'
 		return 1
 	end 'found'
 	return 0
@@ -289,6 +313,10 @@ end 'Seq'
 
 type NotEq
 	export var n Integer
+
+	static function create(n Integer) returns Self
+		return Self{n: n}
+	end 'create'
 end 'NotEq'
 
 typealias NotEqArray = Array with NotEq
@@ -307,10 +335,14 @@ type NotEqSeq implements Seq with NotEq
 		idx = idx + 1
 		return v
 	end 'next'
+
+	static function create(items NotEqArray, idx Integer) returns Self
+		return Self{items: items, idx: idx}
+	end 'create'
 end 'NotEqSeq'
 
 function main() returns ExitCode
-	var s = NotEqSeq{items: [NotEq{n: 1}, NotEq{n: 2}], idx: 0}
+	var s = NotEqSeq.create(items: [NotEq.create(n: 1), NotEq.create(n: 2)], idx: 0)
 	return s.countItems()
 end 'main'
 ```

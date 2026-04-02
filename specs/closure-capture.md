@@ -81,10 +81,14 @@ end 'apply'
 
 type Level
 	export var rawValue Integer
+
+	static function create(rawValue Integer) returns Self
+		return Self{rawValue: rawValue}
+	end 'create'
 end 'Level'
 
 function main() returns ExitCode
-	var level = Level{rawValue: 5}
+	var level = Level.create(rawValue: 5)
 	var result = apply(f: (_ Integer) gives level.rawValue, x: 0)
 	return result
 end 'main'
@@ -100,10 +104,14 @@ typealias Integer = int(i64.min to i64.max)
 
 type Level
 	export var rawValue Integer
+
+	static function create(rawValue Integer) returns Self
+		return Self{rawValue: rawValue}
+	end 'create'
 end 'Level'
 
 function main() returns ExitCode
-	var level = Level{rawValue: 5}
+	var level = Level.create(rawValue: 5)
 	var arr = [1, 2, 3]
 	var result = arr.map((_ Integer) gives level.rawValue)
 	return result.count()

@@ -49,11 +49,15 @@ type Foo
 	function callBarOn(other Foo) returns Integer
 		return other.bar()
 	end 'callBarOn'
+
+	static function create(x Integer) returns Self
+		return Self{x: x}
+	end 'create'
 end 'Foo'
 
 function main() returns ExitCode
-	var f1 = Foo{x: 10}
-	var f2 = Foo{x: 42}
+	var f1 = Foo.create(x: 10)
+	var f2 = Foo.create(x: 42)
 	return f1.callBarOn(f2)
 end 'main'
 ```
@@ -80,12 +84,16 @@ type Value
 	function multiply(other Value) returns Integer
 		return n * other.get()
 	end 'multiply'
+
+	static function create(n Integer) returns Self
+		return Self{n: n}
+	end 'create'
 end 'Value'
 
 function main() returns ExitCode
-	var a = Value{n: 5}
-	var b = Value{n: 3}
-	var c = Value{n: 2}
+	var a = Value.create(n: 5)
+	var b = Value.create(n: 3)
+	var c = Value.create(n: 2)
 	// a.add(b) = 5 + 3 = 8
 	// a.multiply(c) = 5 * 2 = 10
 	// total = 8 + 10 = 18
@@ -112,10 +120,14 @@ type Calculator
 		// Sibling call - calls self.double()
 		return double() * 2
 	end 'quadruple'
+
+	static function create(base Integer) returns Self
+		return Self{base: base}
+	end 'create'
 end 'Calculator'
 
 function main() returns ExitCode
-	var calc = Calculator{base: 5}
+	var calc = Calculator.create(base: 5)
 	return calc.quadruple()
 end 'main'
 ```
@@ -138,11 +150,15 @@ type Adder
 	function delegateAdd(other Adder, n Integer) returns Integer
 		return other.addTo(n)
 	end 'delegateAdd'
+
+	static function create(value Integer) returns Self
+		return Self{value: value}
+	end 'create'
 end 'Adder'
 
 function main() returns ExitCode
-	var a = Adder{value: 100}
-	var b = Adder{value: 50}
+	var a = Adder.create(value: 100)
+	var b = Adder.create(value: 50)
 	return a.delegateAdd(b, n: 7)
 end 'main'
 ```

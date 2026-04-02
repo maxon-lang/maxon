@@ -30,7 +30,7 @@ function checkMid(ops MlirOpArray) returns Integer
 end 'checkMid'
 
 function main() returns ExitCode
-		var ops = MlirOpArray{}
+		var ops = MlirOpArray.empty()
 		ops.push(MlirOp.arith(10))
 		ops.push(MlirOp.arith(20))
 		ops.push(MlirOp.cf(CfOp.br(99)))
@@ -396,58 +396,29 @@ module {
   func @main() -> u32 {
   entry:
     x86.prologue stack_size=64
-    x86.xor rax, rax
-    x86.xor rcx, rcx
-    x86.xor rdx, rdx
-    x86.xor rbx, rbx
-    x86.mov rsi, 8
-    x86.lea_func rdi, [__destruct___ManagedMemory_MlirOp]
-    x86.mov r8, rdi
-    x86.mov rdx, r8
-    x86.mov rcx, 32
-    x86.mov r8, 3
-    x86.call mm_alloc
+    x86.call MlirOpArray.empty
     x86.mov [rbp-8], rax
-    x86.mov r9, [rbp-8]
-    x86.xor rax, rax
-    x86.mov [r9+0], rax
-    x86.mov rax, [rbp-8]
-    x86.xor rcx, rcx
-    x86.mov [rax+8], rcx
-    x86.mov rax, [rbp-8]
-    x86.xor rcx, rcx
-    x86.mov [rax+16], rcx
-    x86.mov rax, [rbp-8]
-    x86.mov rcx, 8
-    x86.mov [rax+24], rcx
-    x86.mov rax, [rbp-8]
-    x86.mov rcx, [rax+24]
-    x86.lea_symdata rax, [__mm_panic_element_size_zero]
-    x86.mov rdx, rax
-    x86.mov r8, rdx
-    x86.mov rdx, rcx
-    x86.xor rcx, rcx
-    x86.call maxon_bounds_check
-    x86.lea_func rax, [__destruct_MlirOpArray]
-    x86.mov rcx, rax
-    x86.mov rdx, rcx
-    x86.mov rcx, 16
-    x86.mov r8, 4
-    x86.call mm_alloc
-    x86.mov [rbp-16], rax
-    x86.mov rax, [rbp-16]
-    x86.xor rcx, rcx
-    x86.mov [rax+0], rcx
-    x86.mov rax, [rbp-8]
-    x86.mov rcx, [rbp-16]
-    x86.mov [rcx+8], rax
-    x86.mov rcx, [rbp-8]
-    x86.call mm_incref
-    x86.mov rax, [rbp-16]
-    x86.mov rcx, [rbp-16]
-    x86.call mm_incref
     x86.mov rax, 10
     x86.lea_func rcx, [__destruct_MlirOp]
+    x86.mov rdx, rcx
+    x86.mov rcx, 16
+    x86.mov r8, 2
+    x86.call mm_alloc
+    x86.mov [rbp-16], rax
+    x86.mov rbx, 1
+    x86.mov [rax+0], rbx
+    x86.mov rsi, 10
+    x86.mov [rax+8], rsi
+    x86.mov rcx, [rbp-16]
+    x86.call mm_incref
+    x86.mov rdi, [rbp-8]
+    x86.mov r8, [rbp-16]
+    x86.mov rcx, [rbp-8]
+    x86.mov rdx, [rbp-16]
+    x86.call MlirOpArray.push
+    x86.mov r9, 20
+    x86.lea_func rax, [__destruct_MlirOp]
+    x86.mov rcx, rax
     x86.mov rdx, rcx
     x86.mov rcx, 16
     x86.mov r8, 2
@@ -455,44 +426,26 @@ module {
     x86.mov [rbp-24], rax
     x86.mov rcx, 1
     x86.mov [rax+0], rcx
-    x86.mov rcx, 10
-    x86.mov [rax+8], rcx
-    x86.mov rcx, [rbp-24]
-    x86.call mm_incref
-    x86.mov rax, [rbp-16]
-    x86.mov rcx, [rbp-24]
-    x86.mov rcx, [rbp-16]
-    x86.mov rdx, [rbp-24]
-    x86.call MlirOpArray.push
-    x86.mov rax, 20
-    x86.lea_func rcx, [__destruct_MlirOp]
-    x86.mov rdx, rcx
-    x86.mov rcx, 16
-    x86.mov r8, 2
-    x86.call mm_alloc
-    x86.mov [rbp-32], rax
-    x86.mov rcx, 1
-    x86.mov [rax+0], rcx
     x86.mov rcx, 20
     x86.mov [rax+8], rcx
-    x86.mov rcx, [rbp-32]
+    x86.mov rcx, [rbp-24]
     x86.call mm_incref
-    x86.mov rax, [rbp-16]
-    x86.mov rcx, [rbp-32]
-    x86.mov rcx, [rbp-16]
-    x86.mov rdx, [rbp-32]
+    x86.mov rax, [rbp-8]
+    x86.mov rcx, [rbp-24]
+    x86.mov rcx, [rbp-8]
+    x86.mov rdx, [rbp-24]
     x86.call MlirOpArray.push
     x86.mov rax, 99
     x86.mov rcx, 16
     x86.xor rdx, rdx
-    x86.mov r8, 5
+    x86.mov r8, 3
     x86.call mm_alloc
-    x86.mov [rbp-40], rax
+    x86.mov [rbp-32], rax
     x86.xor rcx, rcx
     x86.mov [rax+0], rcx
     x86.mov rcx, 99
     x86.mov [rax+8], rcx
-    x86.mov rcx, [rbp-40]
+    x86.mov rcx, [rbp-32]
     x86.call mm_incref
     x86.lea_func rax, [__destruct_MlirOp]
     x86.mov rcx, rax
@@ -500,20 +453,38 @@ module {
     x86.mov rcx, 16
     x86.mov r8, 2
     x86.call mm_alloc
-    x86.mov [rbp-48], rax
+    x86.mov [rbp-40], rax
     x86.xor rcx, rcx
     x86.mov [rax+0], rcx
-    x86.mov rcx, [rbp-40]
+    x86.mov rcx, [rbp-32]
     x86.mov [rax+8], rcx
     x86.call mm_incref
-    x86.mov rcx, [rbp-48]
+    x86.mov rcx, [rbp-40]
     x86.call mm_incref
-    x86.mov rax, [rbp-16]
-    x86.mov rcx, [rbp-48]
-    x86.mov rcx, [rbp-16]
-    x86.mov rdx, [rbp-48]
+    x86.mov rax, [rbp-8]
+    x86.mov rcx, [rbp-40]
+    x86.mov rcx, [rbp-8]
+    x86.mov rdx, [rbp-40]
     x86.call MlirOpArray.push
     x86.mov rax, 30
+    x86.lea_func rcx, [__destruct_MlirOp]
+    x86.mov rdx, rcx
+    x86.mov rcx, 16
+    x86.mov r8, 2
+    x86.call mm_alloc
+    x86.mov [rbp-48], rax
+    x86.mov rcx, 1
+    x86.mov [rax+0], rcx
+    x86.mov rcx, 30
+    x86.mov [rax+8], rcx
+    x86.mov rcx, [rbp-48]
+    x86.call mm_incref
+    x86.mov rax, [rbp-8]
+    x86.mov rcx, [rbp-48]
+    x86.mov rcx, [rbp-8]
+    x86.mov rdx, [rbp-48]
+    x86.call MlirOpArray.push
+    x86.mov rax, 40
     x86.lea_func rcx, [__destruct_MlirOp]
     x86.mov rdx, rcx
     x86.mov rcx, 16
@@ -522,228 +493,210 @@ module {
     x86.mov [rbp-56], rax
     x86.mov rcx, 1
     x86.mov [rax+0], rcx
-    x86.mov rcx, 30
-    x86.mov [rax+8], rcx
-    x86.mov rcx, [rbp-56]
-    x86.call mm_incref
-    x86.mov rax, [rbp-16]
-    x86.mov rcx, [rbp-56]
-    x86.mov rcx, [rbp-16]
-    x86.mov rdx, [rbp-56]
-    x86.call MlirOpArray.push
-    x86.mov rax, 40
-    x86.lea_func rcx, [__destruct_MlirOp]
-    x86.mov rdx, rcx
-    x86.mov rcx, 16
-    x86.mov r8, 2
-    x86.call mm_alloc
-    x86.mov [rbp-64], rax
-    x86.mov rcx, 1
-    x86.mov [rax+0], rcx
     x86.mov rcx, 40
     x86.mov [rax+8], rcx
-    x86.mov rcx, [rbp-64]
+    x86.mov rcx, [rbp-56]
     x86.call mm_incref
-    x86.mov rax, [rbp-16]
-    x86.mov rcx, [rbp-64]
-    x86.mov rcx, [rbp-16]
-    x86.mov rdx, [rbp-64]
+    x86.mov rax, [rbp-8]
+    x86.mov rcx, [rbp-56]
+    x86.mov rcx, [rbp-8]
+    x86.mov rdx, [rbp-56]
     x86.call MlirOpArray.push
-    x86.mov rax, [rbp-16]
-    x86.mov rcx, [rbp-16]
+    x86.mov rax, [rbp-8]
+    x86.mov rcx, [rbp-8]
     x86.call MlirOpArray.count
     x86.mov rcx, 5
     x86.cmp rax, rcx
     x86.je main.badCount_0.after
   badCount_0:
-    x86.mov rax, [rbp-16]
+    x86.mov rax, [rbp-8]
     x86.test rax, rax
     x86.jz __nonnull_skip_22
-    x86.mov rcx, [rbp-16]
+    x86.mov rcx, [rbp-8]
     x86.call mm_decref
     x86.label __nonnull_skip_22
-    x86.mov rcx, [rbp-24]
+    x86.mov rcx, [rbp-16]
     x86.test rcx, rcx
     x86.jz __nonnull_skip_23
     x86.call mm_decref
     x86.label __nonnull_skip_23
-    x86.mov rdx, [rbp-32]
+    x86.mov rdx, [rbp-24]
     x86.test rdx, rdx
     x86.jz __nonnull_skip_24
-    x86.mov rcx, [rbp-32]
+    x86.mov rcx, [rbp-24]
     x86.call mm_decref
     x86.label __nonnull_skip_24
-    x86.mov rbx, [rbp-40]
+    x86.mov rbx, [rbp-32]
     x86.test rbx, rbx
     x86.jz __nonnull_skip_25
-    x86.mov rcx, [rbp-40]
+    x86.mov rcx, [rbp-32]
     x86.call mm_decref
     x86.label __nonnull_skip_25
-    x86.mov rsi, [rbp-48]
+    x86.mov rsi, [rbp-40]
     x86.test rsi, rsi
     x86.jz __nonnull_skip_26
-    x86.mov rcx, [rbp-48]
+    x86.mov rcx, [rbp-40]
     x86.call mm_decref
     x86.label __nonnull_skip_26
-    x86.mov rdi, [rbp-56]
+    x86.mov rdi, [rbp-48]
     x86.test rdi, rdi
     x86.jz __nonnull_skip_27
-    x86.mov rcx, [rbp-56]
+    x86.mov rcx, [rbp-48]
     x86.call mm_decref
     x86.label __nonnull_skip_27
-    x86.mov r8, [rbp-64]
+    x86.mov r8, [rbp-56]
     x86.test r8, r8
     x86.jz __nonnull_skip_28
-    x86.mov rcx, [rbp-64]
+    x86.mov rcx, [rbp-56]
     x86.call mm_decref
     x86.label __nonnull_skip_28
     x86.mov rax, 1
     x86.epilogue
     x86.ret
   badCount_0.after:
-    x86.mov rax, [rbp-16]
-    x86.mov rcx, [rbp-16]
+    x86.mov rax, [rbp-8]
+    x86.mov rcx, [rbp-8]
     x86.call array-enum-element-size.checkFirst
     x86.mov rcx, 10
     x86.cmp rax, rcx
     x86.je main.wrong_1.after
   wrong_1:
-    x86.mov rax, [rbp-16]
+    x86.mov rax, [rbp-8]
     x86.test rax, rax
     x86.jz __nonnull_skip_29
-    x86.mov rcx, [rbp-16]
+    x86.mov rcx, [rbp-8]
     x86.call mm_decref
     x86.label __nonnull_skip_29
-    x86.mov rcx, [rbp-24]
+    x86.mov rcx, [rbp-16]
     x86.test rcx, rcx
     x86.jz __nonnull_skip_30
     x86.call mm_decref
     x86.label __nonnull_skip_30
-    x86.mov rdx, [rbp-32]
+    x86.mov rdx, [rbp-24]
     x86.test rdx, rdx
     x86.jz __nonnull_skip_31
-    x86.mov rcx, [rbp-32]
+    x86.mov rcx, [rbp-24]
     x86.call mm_decref
     x86.label __nonnull_skip_31
-    x86.mov rbx, [rbp-40]
+    x86.mov rbx, [rbp-32]
     x86.test rbx, rbx
     x86.jz __nonnull_skip_32
-    x86.mov rcx, [rbp-40]
+    x86.mov rcx, [rbp-32]
     x86.call mm_decref
     x86.label __nonnull_skip_32
-    x86.mov rsi, [rbp-48]
+    x86.mov rsi, [rbp-40]
     x86.test rsi, rsi
     x86.jz __nonnull_skip_33
-    x86.mov rcx, [rbp-48]
+    x86.mov rcx, [rbp-40]
     x86.call mm_decref
     x86.label __nonnull_skip_33
-    x86.mov rdi, [rbp-56]
+    x86.mov rdi, [rbp-48]
     x86.test rdi, rdi
     x86.jz __nonnull_skip_34
-    x86.mov rcx, [rbp-56]
+    x86.mov rcx, [rbp-48]
     x86.call mm_decref
     x86.label __nonnull_skip_34
-    x86.mov r8, [rbp-64]
+    x86.mov r8, [rbp-56]
     x86.test r8, r8
     x86.jz __nonnull_skip_35
-    x86.mov rcx, [rbp-64]
+    x86.mov rcx, [rbp-56]
     x86.call mm_decref
     x86.label __nonnull_skip_35
     x86.mov rax, 2
     x86.epilogue
     x86.ret
   wrong_1.after:
-    x86.mov rax, [rbp-16]
-    x86.mov rcx, [rbp-16]
+    x86.mov rax, [rbp-8]
+    x86.mov rcx, [rbp-8]
     x86.call array-enum-element-size.checkMid
     x86.mov rcx, 1
     x86.cmp rax, rcx
     x86.je main.wrongMid_2.after
   wrongMid_2:
-    x86.mov rax, [rbp-16]
+    x86.mov rax, [rbp-8]
     x86.test rax, rax
     x86.jz __nonnull_skip_36
-    x86.mov rcx, [rbp-16]
+    x86.mov rcx, [rbp-8]
     x86.call mm_decref
     x86.label __nonnull_skip_36
-    x86.mov rcx, [rbp-24]
+    x86.mov rcx, [rbp-16]
     x86.test rcx, rcx
     x86.jz __nonnull_skip_37
     x86.call mm_decref
     x86.label __nonnull_skip_37
-    x86.mov rdx, [rbp-32]
+    x86.mov rdx, [rbp-24]
     x86.test rdx, rdx
     x86.jz __nonnull_skip_38
-    x86.mov rcx, [rbp-32]
+    x86.mov rcx, [rbp-24]
     x86.call mm_decref
     x86.label __nonnull_skip_38
-    x86.mov rbx, [rbp-40]
+    x86.mov rbx, [rbp-32]
     x86.test rbx, rbx
     x86.jz __nonnull_skip_39
-    x86.mov rcx, [rbp-40]
+    x86.mov rcx, [rbp-32]
     x86.call mm_decref
     x86.label __nonnull_skip_39
-    x86.mov rsi, [rbp-48]
+    x86.mov rsi, [rbp-40]
     x86.test rsi, rsi
     x86.jz __nonnull_skip_40
-    x86.mov rcx, [rbp-48]
+    x86.mov rcx, [rbp-40]
     x86.call mm_decref
     x86.label __nonnull_skip_40
-    x86.mov rdi, [rbp-56]
+    x86.mov rdi, [rbp-48]
     x86.test rdi, rdi
     x86.jz __nonnull_skip_41
-    x86.mov rcx, [rbp-56]
+    x86.mov rcx, [rbp-48]
     x86.call mm_decref
     x86.label __nonnull_skip_41
-    x86.mov r8, [rbp-64]
+    x86.mov r8, [rbp-56]
     x86.test r8, r8
     x86.jz __nonnull_skip_42
-    x86.mov rcx, [rbp-64]
+    x86.mov rcx, [rbp-56]
     x86.call mm_decref
     x86.label __nonnull_skip_42
     x86.mov rax, 3
     x86.epilogue
     x86.ret
   wrongMid_2.after:
-    x86.mov rax, [rbp-16]
+    x86.mov rax, [rbp-8]
     x86.test rax, rax
     x86.jz __nonnull_skip_43
-    x86.mov rcx, [rbp-16]
+    x86.mov rcx, [rbp-8]
     x86.call mm_decref
     x86.label __nonnull_skip_43
-    x86.mov rcx, [rbp-24]
+    x86.mov rcx, [rbp-16]
     x86.test rcx, rcx
     x86.jz __nonnull_skip_44
     x86.call mm_decref
     x86.label __nonnull_skip_44
-    x86.mov rdx, [rbp-32]
+    x86.mov rdx, [rbp-24]
     x86.test rdx, rdx
     x86.jz __nonnull_skip_45
-    x86.mov rcx, [rbp-32]
+    x86.mov rcx, [rbp-24]
     x86.call mm_decref
     x86.label __nonnull_skip_45
-    x86.mov rbx, [rbp-40]
+    x86.mov rbx, [rbp-32]
     x86.test rbx, rbx
     x86.jz __nonnull_skip_46
-    x86.mov rcx, [rbp-40]
+    x86.mov rcx, [rbp-32]
     x86.call mm_decref
     x86.label __nonnull_skip_46
-    x86.mov rsi, [rbp-48]
+    x86.mov rsi, [rbp-40]
     x86.test rsi, rsi
     x86.jz __nonnull_skip_47
-    x86.mov rcx, [rbp-48]
+    x86.mov rcx, [rbp-40]
     x86.call mm_decref
     x86.label __nonnull_skip_47
-    x86.mov rdi, [rbp-56]
+    x86.mov rdi, [rbp-48]
     x86.test rdi, rdi
     x86.jz __nonnull_skip_48
-    x86.mov rcx, [rbp-56]
+    x86.mov rcx, [rbp-48]
     x86.call mm_decref
     x86.label __nonnull_skip_48
-    x86.mov r8, [rbp-64]
+    x86.mov r8, [rbp-56]
     x86.test r8, r8
     x86.jz __nonnull_skip_49
-    x86.mov rcx, [rbp-64]
+    x86.mov rcx, [rbp-56]
     x86.call mm_decref
     x86.label __nonnull_skip_49
     x86.xor rax, rax
@@ -772,6 +725,12 @@ module {
     x86.jmp __destruct_MlirOp.done
   done:
     x86.epilogue
+    x86.ret
+  }
+  func @__destruct_CfOp(ptr: i64) {
+  entry:
+    x86.jmp __destruct_CfOp.done
+  done:
     x86.ret
   }
   func @__destruct___ManagedMemory_MlirOp(ptr: i64) {
@@ -812,12 +771,6 @@ module {
     x86.jmp __destruct_MlirOpArray.done
   done:
     x86.epilogue
-    x86.ret
-  }
-  func @__destruct_CfOp(ptr: i64) {
-  entry:
-    x86.jmp __destruct_CfOp.done
-  done:
     x86.ret
   }
 }

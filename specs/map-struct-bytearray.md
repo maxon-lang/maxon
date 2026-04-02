@@ -22,19 +22,23 @@ typealias ByteArray = Array with Byte
 type Entry
 	export var data ByteArray
 	export var tag SmallInt
+
+	static function create(data ByteArray, tag SmallInt) returns Self
+		return Self{data: data, tag: tag}
+	end 'create'
 end 'Entry'
 
 typealias EntryMap = Map with (String, Entry)
 
 function main() returns ExitCode
-	var m = EntryMap{}
-	var arr = ByteArray{}
+	var m = EntryMap.empty()
+	var arr = ByteArray.empty()
 	arr.push(10)
 	arr.push(20)
 	arr.push(30)
-	let e = Entry{data: arr, tag: 42}
+	let e = Entry.create(data: arr, tag: 42)
 	m.insert("hello", value: e)
-	let got = try m.get("hello") otherwise Entry{data: ByteArray{}, tag: 0}
+	let got = try m.get("hello") otherwise Entry.create(data: ByteArray.empty(), tag: 0)
 	print("{got.data.count()}\n")
 	print("{got.tag}\n")
 	let b = try got.data.get(1) otherwise 0
@@ -70,9 +74,13 @@ typealias StringArray = Array with String
 type Database
 	export var sourceFiles EntryMap
 	export var sourcePaths StringArray
+
+	static function create(sourceFiles EntryMap, sourcePaths StringArray) returns Self
+		return Self{sourceFiles: sourceFiles, sourcePaths: sourcePaths}
+	end 'create'
 end 'Database'
 
-var db = Database{sourceFiles: EntryMap{}, sourcePaths: StringArray{}}
+var db = Database.create(sourceFiles: EntryMap.empty(), sourcePaths: StringArray.empty())
 
 function storeAndCheck(key String, data ByteArray)
 	if db.sourceFiles.contains(key) 'exists'
@@ -88,7 +96,7 @@ function storeAndCheck(key String, data ByteArray)
 end 'storeAndCheck'
 
 function main() returns ExitCode
-	var arr = ByteArray{}
+	var arr = ByteArray.empty()
 	arr.push(1)
 	arr.push(2)
 	arr.push(3)
@@ -123,9 +131,13 @@ export typealias StringArray = Array with String
 export type Database
 	export var sourceFiles EntryMap
 	export var sourcePaths StringArray
+
+	export static function create(sourceFiles EntryMap, sourcePaths StringArray) returns Self
+		return Self{sourceFiles: sourceFiles, sourcePaths: sourcePaths}
+	end 'create'
 end 'Database'
 
-export var db = Database{sourceFiles: EntryMap{}, sourcePaths: StringArray{}}
+export var db = Database.create(sourceFiles: EntryMap.empty(), sourcePaths: StringArray.empty())
 
 // --- file: 1-Logic.maxon
 export function storeAndCheck(key String, data ByteArray)
@@ -142,7 +154,7 @@ export function storeAndCheck(key String, data ByteArray)
 end 'storeAndCheck'
 
 function main() returns ExitCode
-	var arr = ByteArray{}
+	var arr = ByteArray.empty()
 	arr.push(1)
 	arr.push(2)
 	arr.push(3)

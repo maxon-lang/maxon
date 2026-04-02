@@ -18,10 +18,14 @@ type ImportSection
 	export var iatRva Rva
 	export var importDirRva Rva
 	export var importDirSize ByteCount
+
+	static function create(data ByteArray, iatRva Rva, importDirRva Rva, importDirSize ByteCount) returns ImportSection
+		return Self{data: data, iatRva: iatRva, importDirRva: importDirRva, importDirSize: importDirSize}
+	end 'create'
 end 'ImportSection'
 
 function buildImportSection(idataRva Rva) returns ImportSection
-	var data = ByteArray{}
+	var data = ByteArray.empty()
 	data.reserve(256)
 
 	let iatOffset = 0
@@ -60,12 +64,7 @@ function buildImportSection(idataRva Rva) returns ImportSection
 	data.append(b"\x00\x00WriteFile\x00")
 	data.append(b"kernel32.dll\x00")
 
-	return ImportSection{
-		data: data,
-		iatRva: idataRva + iatOffset,
-		importDirRva: idataRva + importDirOffset,
-		importDirSize: 20
-	}
+	return ImportSection.create(data, iatRva: idataRva + iatOffset, importDirRva: idataRva + importDirOffset, importDirSize: 20)
 end 'buildImportSection'
 
 // --- Section header writer ---
@@ -134,7 +133,7 @@ end 'patchRelocationsArm64'
 
 export function writePe(outputPath FilePath, codeResult CodeResult, target Target)
 	logInfo(LogCategory.binary, message: () gives "Writing PE file: {outputPath}")
-	var pe = ByteArray{}
+	var pe = ByteArray.empty()
 	pe.reserve(4096)
 
 	var code = codeResult.code

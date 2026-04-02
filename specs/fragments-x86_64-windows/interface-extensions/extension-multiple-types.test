@@ -17,6 +17,10 @@ type TypeA implements Valued
 	function val() returns Integer
 		return a
 	end 'val'
+
+	static function create(a Integer) returns Self
+		return Self{a: a}
+	end 'create'
 end 'TypeA'
 
 type TypeB implements Valued
@@ -24,11 +28,15 @@ type TypeB implements Valued
 	function val() returns Integer
 		return b * 2
 	end 'val'
+
+	static function create(b Integer) returns Self
+		return Self{b: b}
+	end 'create'
 end 'TypeB'
 
 function main() returns ExitCode
-	var ta = TypeA{a: 5}
-	var tb = TypeB{b: 10}
+	var ta = TypeA.create(a: 5)
+	var tb = TypeB.create(b: 10)
 	return ta.valPlusTen() + tb.valPlusTen()
 end 'main'
 ---
@@ -69,6 +77,25 @@ module {
     x86.epilogue
     x86.ret
   }
+  func @TypeA.create(a: i64) -> i64 {
+  entry:
+    x86.prologue stack_size=16
+    x86.mov [rbp-16], rcx
+    x86.mov rcx, 8
+    x86.xor rdx, rdx
+    x86.mov r8, 1
+    x86.call mm_alloc
+    x86.mov [rbp-8], rax
+    x86.mov rax, [rbp-8]
+    x86.mov rcx, [rbp-16]
+    x86.mov [rax+0], rcx
+    x86.mov rdx, [rbp-8]
+    x86.mov rcx, [rbp-8]
+    x86.call mm_incref
+    x86.mov rax, [rbp-8]
+    x86.epilogue
+    x86.ret
+  }
   func @TypeB.val(__self_ptr: i64) -> i64 {
   entry:
     x86.prologue stack_size=16
@@ -81,29 +108,47 @@ module {
     x86.epilogue
     x86.ret
   }
+  func @TypeB.create(b: i64) -> i64 {
+  entry:
+    x86.prologue stack_size=16
+    x86.mov [rbp-16], rcx
+    x86.mov rcx, 8
+    x86.xor rdx, rdx
+    x86.mov r8, 2
+    x86.call mm_alloc
+    x86.mov [rbp-8], rax
+    x86.mov rax, [rbp-8]
+    x86.mov rcx, [rbp-16]
+    x86.mov [rax+0], rcx
+    x86.mov rdx, [rbp-8]
+    x86.mov rcx, [rbp-8]
+    x86.call mm_incref
+    x86.mov rax, [rbp-8]
+    x86.epilogue
+    x86.ret
+  }
   func @main() -> u32 {
   entry:
     x86.prologue stack_size=32
-    x86.mov rax, 5
+    x86.mov rcx, 5
+    x86.call TypeA.create
     x86.mov [rbp-8], rax
     x86.mov rcx, 10
-    x86.mov [rbp-16], rcx
-    x86.lea rdx, [rbp-8]
-    x86.mov rbx, rdx
-    x86.mov rcx, rbx
+    x86.call TypeB.create
+    x86.mov [rbp-16], rax
+    x86.mov rax, [rbp-8]
+    x86.mov rcx, [rbp-8]
     x86.call TypeA.valPlusTen
-    x86.lea rsi, [rbp-16]
-    x86.mov rdi, rsi
+    x86.mov rcx, [rbp-16]
     x86.mov [rbp-24], rax
-    x86.mov rcx, rdi
     x86.call TypeB.valPlusTen
-    x86.mov r8, [rbp-24]
-    x86.add r8, rax
-    x86.xor r9, r9
-    x86.mov rax, 4294967295
-    x86.cmp r8, rax
+    x86.mov rdx, [rbp-24]
+    x86.add rdx, rax
+    x86.xor rbx, rbx
+    x86.mov rsi, 4294967295
+    x86.cmp rdx, rsi
     x86.jg main.__range_panic_0
-    x86.cmp r8, r9
+    x86.cmp rdx, rbx
     x86.jl main.__range_panic_0
     x86.jmp main.__range_ok_0
   __range_panic_0:
@@ -111,8 +156,32 @@ module {
     x86.mov rcx, rax
     x86.call mrt_panic
   __range_ok_0:
-    x86.mov rax, r8
+    x86.mov rax, [rbp-16]
+    x86.mov [rbp-32], rdx
+    x86.test rax, rax
+    x86.jz __nonnull_skip_0
+    x86.mov rcx, [rbp-16]
+    x86.call mm_decref
+    x86.label __nonnull_skip_0
+    x86.mov rcx, [rbp-8]
+    x86.test rcx, rcx
+    x86.jz __nonnull_skip_1
+    x86.call mm_decref
+    x86.label __nonnull_skip_1
+    x86.mov rax, [rbp-32]
     x86.epilogue
+    x86.ret
+  }
+  func @__destruct_TypeA(ptr: i64) {
+  entry:
+    x86.jmp __destruct_TypeA.done
+  done:
+    x86.ret
+  }
+  func @__destruct_TypeB(ptr: i64) {
+  entry:
+    x86.jmp __destruct_TypeB.done
+  done:
     x86.ret
   }
 }

@@ -581,7 +581,28 @@ public static partial class MaxonToStandardConversion {
             .Any(a => a.SourceTypeName == candidateTypeName
                  && a.TypeParams != null
                  && !a.TypeParams.Values.Any(t => t is MlirTypeParameterType));
-          if (hasConcreteAlias) return true;
+          if (hasConcreteAlias) {
+            // Only skip if the function's non-self parameters or return type reference
+            // associated types. Functions like Array.resize(self: Array, newLength: i64)
+            // don't use the Element type parameter, so they aren't monomorphized and
+            // the original generic version must be kept. The self parameter always
+            // uses the generic type name and is handled by call-site rewriting.
+            var assocNames = ownerType is MlirStructType st2 ? st2.AssociatedTypeNames
+              : ownerType is MlirEnumType ut2 ? ut2.AssociatedTypeNames : [];
+            bool nonSelfParamUsesAssocType = false;
+            for (int pi = 1; pi < func.ParamTypes.Count; pi++) {
+              var pt = func.ParamTypes[pi];
+              if (pt is MlirTypeParameterType) { nonSelfParamUsesAssocType = true; break; }
+              if (pt is MlirStructType pst && assocNames.Any(n => pst.Name == n || pst.Name.Contains(n))) { nonSelfParamUsesAssocType = true; break; }
+              if (pt is MlirEnumType pet && assocNames.Any(n => pet.Name == n || pet.Name.Contains(n))) { nonSelfParamUsesAssocType = true; break; }
+            }
+            if (!nonSelfParamUsesAssocType) {
+              if (func.ReturnType is MlirTypeParameterType) nonSelfParamUsesAssocType = true;
+              else if (func.ReturnType is MlirStructType rst && (rst.Name == "Self" || assocNames.Any(n => rst.Name == n || rst.Name.Contains(n)))) nonSelfParamUsesAssocType = true;
+              else if (func.ReturnType is MlirEnumType ret && assocNames.Any(n => ret.Name == n || ret.Name.Contains(n))) nonSelfParamUsesAssocType = true;
+            }
+            if (nonSelfParamUsesAssocType) return true;
+          }
         }
       }
     }

@@ -163,7 +163,7 @@ export function parseFragment(fragmentPath FilePath) returns Fragment throws Com
 	end 'noSep2'
 
 	// Parse expectation section (between first and second ---)
-	var expectation = TestExpectation{}
+	var expectation = TestExpectation.empty()
 	var fragArgs = ""
 	var fragMmTrace = false
 	var fragAsyncTrace = false
@@ -293,25 +293,17 @@ export function parseFragment(fragmentPath FilePath) returns Fragment throws Com
 	let sourceFiles = splitMultiFileSource(source)
 	let hasMulti = sourceFiles.count() > 0
 
-	return Fragment{
-		filePath: fragmentPath.toString(),
-		testName: testName,
-		source: source,
-		expectation: expectation,
-		generatedMLIR: generatedMLIR,
-		hasGeneratedMLIR: hasGeneratedMLIR,
-		args: fragArgs,
-		sourceFiles: sourceFiles,
-		hasMultiFile: hasMulti,
-		mmTrace: fragMmTrace,
-		asyncTrace: fragAsyncTrace
-	}
+	return Fragment.create(filePath: fragmentPath.toString(), testName: testName, source: source, expectation: expectation, generatedMLIR: generatedMLIR, hasGeneratedMLIR: hasGeneratedMLIR, args: fragArgs, sourceFiles: sourceFiles, hasMultiFile: hasMulti, mmTrace: fragMmTrace, asyncTrace: fragAsyncTrace)
 end 'parseFragment'
 
 // Helper: read a multi-line value from fragment lines until a closing ``` is found.
 export type MultiLineResult
 	export var value String
 	export var nextLine LineNumber
+
+	export static function create(value String, nextLine LineNumber) returns MultiLineResult
+		return Self{value: value, nextLine: nextLine}
+	end 'create'
 end 'MultiLineResult'
 
 function readFragmentMultilineValue(lines TextLineArray, startLine LineNumber, endLine LineNumber) returns MultiLineResult
@@ -325,7 +317,7 @@ function readFragmentMultilineValue(lines TextLineArray, startLine LineNumber, e
 		end 'done'
 		let trimmedLine = trimWhitespace(line)
 		if trimmedLine == "```" 'endBlock'
-			return MultiLineResult{value: result, nextLine: i + 1}
+			return MultiLineResult.create(result, nextLine: i + 1)
 		end 'endBlock'
 		if first 'isFirst'
 			result = line
@@ -336,5 +328,5 @@ function readFragmentMultilineValue(lines TextLineArray, startLine LineNumber, e
 		i = i + 1
 	end 'read'
 
-	return MultiLineResult{value: result, nextLine: i}
+	return MultiLineResult.create(result, nextLine: i)
 end 'readFragmentMultilineValue'

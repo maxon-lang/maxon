@@ -27,22 +27,26 @@ typealias Integer = int(i64.min to i64.max)
 export type Item
 		export var name String
 		export var value Integer
+
+		static function create(name String, value Integer) returns Self
+			return Self{name: name, value: value}
+		end 'create'
 end 'Item'
 
 typealias ItemArray = Array with Item
 
 function appendFromHelper(dest ItemArray)
-		var src = ItemArray{}
-		src.push(Item{name: "hello from source that is long enough", value: 10})
-		src.push(Item{name: "second item from source long enough", value: 20})
-		src.push(Item{name: "third item from source long enough", value: 30})
+		var src = ItemArray.empty()
+		src.push(Item.create(name: "hello from source that is long enough", value: 10))
+		src.push(Item.create(name: "second item from source long enough", value: 20))
+		src.push(Item.create(name: "third item from source long enough", value: 30))
 		dest.append(src)
 		// src is freed when this function returns
 end 'appendFromHelper'
 
 function main() returns ExitCode
-		var dest = ItemArray{}
-		dest.push(Item{name: "dest item that is long enough for heap", value: 1})
+		var dest = ItemArray.empty()
+		dest.push(Item.create(name: "dest item that is long enough for heap", value: 1))
 		appendFromHelper(dest)
 
 		// Source array is freed. dest should still have valid elements.
@@ -50,7 +54,7 @@ function main() returns ExitCode
 				return 99
 		end 'badCount'
 
-		let item = try dest.get(1) otherwise Item{name: "", value: 0}
+		let item = try dest.get(1) otherwise Item.create(name: "", value: 0)
 		return item.value
 end 'main'
 ```
@@ -72,7 +76,7 @@ end 'Op'
 typealias OpArray = Array with Op
 
 function appendOps(dest OpArray)
-		var src = OpArray{}
+		var src = OpArray.empty()
 		src.push(Op.add(10))
 		src.push(Op.sub(20))
 		src.push(Op.add(30))
@@ -80,7 +84,7 @@ function appendOps(dest OpArray)
 end 'appendOps'
 
 function main() returns ExitCode
-		var dest = OpArray{}
+		var dest = OpArray.empty()
 		dest.push(Op.nop)
 		appendOps(dest)
 
@@ -111,21 +115,29 @@ typealias IntArray = Array with Integer
 export type Func
 		export var name String
 		export var body IntArray
+
+		static function create(name String, body IntArray) returns Self
+			return Self{name: name, body: body}
+		end 'create'
 end 'Func'
 
 typealias FuncArray = Array with Func
 
 export type Module
 		export var functions FuncArray
+
+		static function create(functions FuncArray) returns Self
+			return Self{functions: functions}
+		end 'create'
 end 'Module'
 
 function createModule() returns Module
-		return Module{functions: FuncArray{}}
+		return Module.create(functions: FuncArray.empty())
 end 'createModule'
 
 function parseAndMerge(dest Module, name String)
 		let source = createModule()
-		source.functions.push(Func{name: name, body: IntArray{}})
+		source.functions.push(Func.create(name: name, body: IntArray.empty()))
 		dest.functions.append(source.functions)
 		// source is freed when this function returns
 end 'parseAndMerge'
@@ -139,7 +151,7 @@ function main() returns ExitCode
 				return 99
 		end 'badCount'
 
-		let first = try allModule.functions.get(0) otherwise Func{name: "", body: IntArray{}}
+		let first = try allModule.functions.get(0) otherwise Func.create(name: "", body: IntArray.empty())
 		if first.name == "func_a_with_long_name_for_heap" 'correct'
 				return 0
 		end 'correct'

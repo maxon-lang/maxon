@@ -171,7 +171,9 @@ function checkColor(c Color) returns ColorCode throws AppError
 end 'checkColor'
 
 function main() returns ExitCode
-	let result = try checkColor(Color.red) otherwise 99
+	let result = try checkColor(Color.red) otherwise 'err'
+		return 99
+	end 'err'
 	return result
 end 'main'
 ```

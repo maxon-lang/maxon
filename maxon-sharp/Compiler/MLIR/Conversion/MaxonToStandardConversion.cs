@@ -2240,7 +2240,6 @@ public static partial class MaxonToStandardConversion {
   /// wrapper types that contain this type as a field.
   /// </summary>
   private static bool HasManagedElementType(string typeName, MlirStructType resolved) {
-    var typeDefs = _resultModule!.TypeDefs;
     var typeAliasSources = _resultModule!.TypeAliasSources;
 
     // First try the type's own TypeParams (may be resolved directly)
@@ -2257,18 +2256,12 @@ public static partial class MaxonToStandardConversion {
       return true;
     }
 
-    // Fall back: find a wrapper type whose field matches this type and has a resolved Element
-    foreach (var (_, wrapperTypeDef) in typeDefs) {
-      if (wrapperTypeDef is not MlirStructType wrapperStruct) continue;
-      var wrapperResolved = ResolveStructType(wrapperStruct, typeDefs);
-      foreach (var field in wrapperResolved.Fields) {
-        if (field.Type is MlirStructType fieldStruct && fieldStruct.Name == typeName) {
-          if (wrapperResolved.TypeParams.TryGetValue("Element", out var wrapperElemType)
-              && wrapperElemType is not MlirTypeParameterType
-              && wrapperElemType.IsHeapAllocated) {
-            return true;
-          }
-        }
+    // Fall back: find the managed memory alias's element type from alias sources
+    // (e.g., ByteMemory -> __ManagedMemory with Byte -> Element = Byte)
+    if (typeAliasSources.TryGetValue(typeName, out var mmAlias) && mmAlias.TypeParams != null) {
+      foreach (var (_, paramType) in mmAlias.TypeParams) {
+        if (paramType is not MlirTypeParameterType && paramType.IsHeapAllocated)
+          return true;
       }
     }
     return false;

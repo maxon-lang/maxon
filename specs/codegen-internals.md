@@ -45,7 +45,7 @@ typealias BigVec = Vector with 2048 Integer
 typealias Depth = int(-1 to 50)
 
 function recurse(n Depth) returns Depth
-	var v = BigVec{skipZeroInit: true}
+	var v = BigVec.create()
 	v.set(2047, value: n)
 	if n <= 0 'base'
 		return Depth{0}
@@ -67,7 +67,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
 function main() returns ExitCode
-	var arr = IntArray{}
+	var arr = IntArray.empty()
 	arr.push(1)
 	arr.push(2)
 	return arr.count()
@@ -84,10 +84,10 @@ typealias IntArray = Array with Integer
 
 function main() returns ExitCode
 	if true 'outer'
-		var outer_arr = IntArray{}
+		var outer_arr = IntArray.empty()
 		outer_arr.push(100)
 		if true 'inner'
-			var inner_arr = IntArray{}
+			var inner_arr = IntArray.empty()
 			inner_arr.push(200)
 		end 'inner'
 	end 'outer'
@@ -104,7 +104,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
 function main() returns ExitCode
-	var arr = IntArray{}
+	var arr = IntArray.empty()
 	var i = 0
 	while i < 10 'loop'
 		arr.push(i)

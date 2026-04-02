@@ -342,7 +342,7 @@ end 'main'
 ```maxon
 function main() returns ExitCode
 	var c = 'A'
-	var val = try c.asciiValue() otherwise -1
+	var val = try c.asciiValue() otherwise 0
 	print("{val}\n")
 	return 0
 end 'main'
@@ -360,7 +360,7 @@ end 'main'
 ```maxon
 function main() returns ExitCode
 	var c = '0'
-	var val = try c.asciiValue() otherwise -1
+	var val = try c.asciiValue() otherwise 0
 	print("{val}\n")
 	return 0
 end 'main'
@@ -378,7 +378,7 @@ end 'main'
 ```maxon
 function main() returns ExitCode
 	var c = 'a'
-	var val = try c.asciiValue() otherwise -1
+	var val = try c.asciiValue() otherwise 0
 	print("{val}\n")
 	return 0
 end 'main'
@@ -396,7 +396,7 @@ end 'main'
 ```maxon
 function main() returns ExitCode
 	var c = ' '
-	var val = try c.asciiValue() otherwise -1
+	var val = try c.asciiValue() otherwise 0
 	print("{val}\n")
 	return 0
 end 'main'
@@ -414,7 +414,7 @@ end 'main'
 ```maxon
 function main() returns ExitCode
 	var c = '\n'
-	var val = try c.asciiValue() otherwise -1
+	var val = try c.asciiValue() otherwise 0
 	print("{val}\n")
 	return 0
 end 'main'
@@ -432,16 +432,14 @@ end 'main'
 ```maxon
 function main() returns ExitCode
 	var c = 'é'
-	var val = try c.asciiValue() otherwise -1
-	print("{val}")
+	if try c.asciiValue() 'hasAscii'
+		return 1
+	end 'hasAscii'
 	return 0
 end 'main'
 ```
 ```exitcode
 0
-```
-```stdout
--1
 ```
 
 <!-- test: ascii-value-emoji -->
@@ -450,16 +448,28 @@ end 'main'
 ```maxon
 function main() returns ExitCode
 	var c = '🎉'
-	var val = try c.asciiValue() otherwise -1
-	print("{val}")
+	if try c.asciiValue() 'hasAscii'
+		return 1
+	end 'hasAscii'
 	return 0
 end 'main'
 ```
 ```exitcode
 0
 ```
-```stdout
--1
+
+<!-- test: error.otherwise-out-of-range -->
+### Otherwise value must be within ranged type bounds
+
+```maxon
+function main() returns ExitCode
+	var c = 'x'
+	var val = try c.asciiValue() otherwise -1
+	return val
+end 'main'
+```
+```maxoncstderr
+error E3005: specs/fragments/character-type/error.otherwise-out-of-range.test:4:12: otherwise value -1 is outside the range of 'AsciiValue' (int(0 to 127))
 ```
 
 <!-- test: match-escape-character -->

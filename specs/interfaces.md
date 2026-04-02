@@ -90,7 +90,7 @@ end 'Point'
 Methods are called using the method call syntax - `instance.method()`:
 
 ```maxon
-var p = Point{x: 10, y: 20}
+var p = Point.create(x: 10, y: 20)
 var h = p.hash()
 ```
 
@@ -190,10 +190,14 @@ type Point implements Hashable
 	function hash() returns HashValue
 		return x + y * 31
 	end 'hash'
+
+	static function create(x Score, y Score) returns Self
+		return Self{x: x, y: y}
+	end 'create'
 end 'Point'
 
 function main() returns ExitCode
-	var p = Point{x: 10, y: 20}
+	var p = Point.create(x: 10, y: 20)
 	var h = p.hash()
 	print("{h}\n")
 	return 0
@@ -221,10 +225,14 @@ type Point implements Hashable
 	function hash() returns HashValue
 		return x + y * 31
 	end 'hash'
+
+	static function create(x Integer, y Integer) returns Self
+		return Self{x: x, y: y}
+	end 'create'
 end 'Point'
 
 function main() returns ExitCode
-	var p = Point{x: 10, y: 20}
+	var p = Point.create(x: 10, y: 20)
 	print("{p.hash()}\n")
 	return 0
 end 'main'
@@ -257,10 +265,14 @@ type Counter implements Describable
 	function value() returns Integer
 		return count
 	end 'value'
+
+	static function create(count Integer) returns Self
+		return Self{count: count}
+	end 'create'
 end 'Counter'
 
 function main() returns ExitCode
-	var c = Counter{count: 42}
+	var c = Counter.create(count: 42)
 	return c.describe() + c.value()
 end 'main'
 ```
@@ -284,10 +296,14 @@ type Accumulator implements Calculator
 	function add(n Integer) returns Integer
 		return total + n
 	end 'add'
+
+	static function create(total Integer) returns Self
+		return Self{total: total}
+	end 'create'
 end 'Accumulator'
 
 function main() returns ExitCode
-	var acc = Accumulator{total: 10}
+	var acc = Accumulator.create(total: 10)
 	return acc.add(5)
 end 'main'
 ```
@@ -315,11 +331,15 @@ type Point implements Hashable, Equatable
 		end 'c1'
 		return false
 	end 'equals'
+
+	static function create(x Integer, y Integer) returns Self
+		return Self{x: x, y: y}
+	end 'create'
 end 'Point'
 
 function main() returns ExitCode
-	var p1 = Point{x: 3, y: 4}
-	var p2 = Point{x: 3, y: 4}
+	var p1 = Point.create(x: 3, y: 4)
+	var p2 = Point.create(x: 3, y: 4)
 	print("{p1.hash()} {p1.equals(p2)}\n")
 	return 0
 end 'main'
@@ -347,10 +367,14 @@ type Point implements Movable
 	function move(dx Integer, dy Integer) returns Point
 		return Point{x: x + dx, y: y + dy}
 	end 'move'
+
+	static function create(x Integer, y Integer) returns Self
+		return Self{x: x, y: y}
+	end 'create'
 end 'Point'
 
 function main() returns ExitCode
-	var p = Point{x: 10, y: 20}
+	var p = Point.create(x: 10, y: 20)
 	var p2 = p.move(5, dy: 10)
 	return p2.x + p2.y
 end 'main'
@@ -375,10 +399,14 @@ type Value implements Incrementable
 	function inc() returns Integer
 		return n + 1
 	end 'inc'
+
+	static function create(n Integer) returns Self
+		return Self{n: n}
+	end 'create'
 end 'Value'
 
 function main() returns ExitCode
-	var v = Value{n: 41}
+	var v = Value.create(n: 41)
 	return v.inc()
 end 'main'
 ```
@@ -432,10 +460,14 @@ type Calculator
 	function triple() returns Integer
 		return value * 3
 	end 'triple'
+
+	static function create(value Integer) returns Self
+		return Self{value: value}
+	end 'create'
 end 'Calculator'
 
 function main() returns ExitCode
-	var c = Calculator{value: 7}
+	var c = Calculator.create(value: 7)
 	return c.double() + c.triple()
 end 'main'
 ```
@@ -500,10 +532,14 @@ type CompleteType implements DerivedInterface
 	function derivedMethod() returns Integer
 		return value * 2
 	end 'derivedMethod'
+
+	static function create(value Integer) returns Self
+		return Self{value: value}
+	end 'create'
 end 'CompleteType'
 
 function main() returns ExitCode
-	var t = CompleteType{value: 21}
+	var t = CompleteType.create(value: 21)
 	return t.baseMethod() + t.derivedMethod()
 end 'main'
 ```

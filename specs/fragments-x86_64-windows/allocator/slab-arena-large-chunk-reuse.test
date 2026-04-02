@@ -3,7 +3,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
 function alloc_medium() returns IntArray
-	var arr = IntArray{}
+	var arr = IntArray.empty()
 	arr.reserve(5000)
 	return arr
 end 'alloc_medium'
@@ -19,22 +19,24 @@ ExitCode: 0
 Stderr: ```
 sl_init
   os_alloc size=67108864
-mm_alloc __ManagedMemory_Integer #1 size=32 [allocator.alloc_medium]
+mm_alloc __ManagedMemory_Integer #1 size=32 [IntArray.empty]
   sl_alloc __ManagedMemory_Integer #1 size=64 class=5
-mm_alloc IntArray #2 size=16 [allocator.alloc_medium]
+mm_alloc IntArray #2 size=16 [IntArray.empty]
   sl_alloc IntArray #2 size=48 class=4
-mm_incref __ManagedMemory_Integer #1 rc=1 [allocator.alloc_medium]
-mm_incref IntArray #2 rc=1 [allocator.alloc_medium]
+mm_incref __ManagedMemory_Integer #1 rc=1 [IntArray.empty]
+mm_incref IntArray #2 rc=1 [IntArray.empty]
+mm_transfer IntArray #2 rc=1 [IntArray.empty]
 mm_realloc __ManagedMemory_Integer #1 size=40000
   mm_raw_alloc #R1 size=40000 [realloc]
     sl_alloc size=40000 class=-1
 mm_transfer IntArray #2 rc=1 [allocator.alloc_medium]
-mm_alloc __ManagedMemory_Integer #3 size=32 [allocator.alloc_medium]
+mm_alloc __ManagedMemory_Integer #3 size=32 [IntArray.empty]
   sl_alloc __ManagedMemory_Integer #3 size=64 class=5
-mm_alloc IntArray #4 size=16 [allocator.alloc_medium]
+mm_alloc IntArray #4 size=16 [IntArray.empty]
   sl_alloc IntArray #4 size=48 class=4
-mm_incref __ManagedMemory_Integer #3 rc=1 [allocator.alloc_medium]
-mm_incref IntArray #4 rc=1 [allocator.alloc_medium]
+mm_incref __ManagedMemory_Integer #3 rc=1 [IntArray.empty]
+mm_incref IntArray #4 rc=1 [IntArray.empty]
+mm_transfer IntArray #4 rc=1 [IntArray.empty]
 mm_realloc __ManagedMemory_Integer #3 size=40000
   mm_raw_alloc #R2 size=40000 [realloc]
     sl_alloc size=40000 class=-1
@@ -65,61 +67,13 @@ module {
   func @allocator.alloc_medium() -> i64 {
   entry:
     x86.prologue stack_size=16
-    x86.xor rax, rax
-    x86.xor rcx, rcx
-    x86.xor rdx, rdx
-    x86.xor rbx, rbx
-    x86.mov rsi, 8
-    x86.lea_func rdi, [__destruct___ManagedMemory_Integer]
-    x86.mov r8, rdi
-    x86.mov rdx, r8
-    x86.mov rcx, 32
-    x86.mov r8, 1
-    x86.call mm_alloc
+    x86.call IntArray.empty
     x86.mov [rbp-8], rax
-    x86.mov r9, [rbp-8]
-    x86.xor rax, rax
-    x86.mov [r9+0], rax
     x86.mov rax, [rbp-8]
-    x86.xor rcx, rcx
-    x86.mov [rax+8], rcx
-    x86.mov rax, [rbp-8]
-    x86.xor rcx, rcx
-    x86.mov [rax+16], rcx
-    x86.mov rax, [rbp-8]
-    x86.mov rcx, 8
-    x86.mov [rax+24], rcx
-    x86.mov rax, [rbp-8]
-    x86.mov rcx, [rax+24]
-    x86.lea_symdata rax, [__mm_panic_element_size_zero]
-    x86.mov rdx, rax
-    x86.mov r8, rdx
-    x86.mov rdx, rcx
-    x86.xor rcx, rcx
-    x86.call maxon_bounds_check
-    x86.lea_func rax, [__destruct_IntArray]
-    x86.mov rcx, rax
-    x86.mov rdx, rcx
-    x86.mov rcx, 16
-    x86.mov r8, 2
-    x86.call mm_alloc
-    x86.mov [rbp-16], rax
-    x86.mov rax, [rbp-16]
-    x86.xor rcx, rcx
-    x86.mov [rax+0], rcx
-    x86.mov rax, [rbp-8]
-    x86.mov rcx, [rbp-16]
-    x86.mov [rcx+8], rax
     x86.mov rcx, [rbp-8]
-    x86.call mm_incref
-    x86.mov rax, [rbp-16]
-    x86.mov rcx, [rbp-16]
-    x86.call mm_incref
-    x86.mov rax, [rbp-16]
-    x86.mov rcx, [rbp-16]
     x86.mov rdx, 5000
     x86.call IntArray.reserve
-    x86.mov rax, [rbp-16]
+    x86.mov rax, [rbp-8]
     x86.epilogue
     x86.ret
   }

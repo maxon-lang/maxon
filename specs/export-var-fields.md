@@ -27,7 +27,7 @@ end 'Value'
 Exported fields can be read and written (if mutable) from any code:
 
 ```maxon
-var v = Value{n: 42, private: 100}
+var v = Value.create(n: 42, private: 100)
 print(v.n)           // OK - n is exported
 v.n = 50             // OK - n is exported and mutable
 ```
@@ -50,10 +50,14 @@ type Counter
 	export function getCount() returns Score
 		return count           // OK - accessing within method
 	end 'getCount'
+
+	static function create(count Score, name Score) returns Self
+		return Self{count: count, name: name}
+	end 'create'
 end 'Counter'
 
 function main() returns ExitCode
-	var c = Counter{count: 0, name: 5}
+	var c = Counter.create(count: 0, name: 5)
 	c.increment()
 	return c.getCount()
 	// c.count would be an error - not exported
@@ -152,10 +156,14 @@ type Counter
 	function getCount() returns Integer
 		return count
 	end 'getCount'
+
+	static function create(count Integer) returns Self
+		return Self{count: count}
+	end 'create'
 end 'Counter'
 
 function main() returns ExitCode
-	var c = Counter{count: 40}
+	var c = Counter.create(count: 40)
 	c.increment()
 	c.increment()
 	return c.getCount()

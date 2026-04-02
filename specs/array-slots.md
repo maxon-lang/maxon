@@ -22,15 +22,19 @@ typealias Integer = int(i64.min to i64.max)
 
 type Slot
 	export var value Integer
+
+	static function create(value Integer) returns Self
+		return Self{value: value}
+	end 'create'
 end 'Slot'
 
 typealias SlotArray = Array with Slot
 
 function main() returns ExitCode
-	var arr = SlotArray{}
-	arr.push(Slot{value: 10})
+	var arr = SlotArray.empty()
+	arr.push(Slot.create(value: 10))
 	arr.resize(3)
-	let result = try arr.get(1) otherwise Slot{value: -1}
+	let result = try arr.get(1) otherwise Slot.create(value: -1)
 	return result.value + 1
 end 'main'
 ```
@@ -46,14 +50,18 @@ typealias Integer = int(i64.min to i64.max)
 
 type Slot
 	export var value Integer
+
+	static function create(value Integer) returns Self
+		return Self{value: value}
+	end 'create'
 end 'Slot'
 
 typealias SlotArray = Array with Slot
 
 function main() returns ExitCode
-	var arr = SlotArray{}
-	arr.push(Slot{value: 42})
-	let result = try arr.get(0) otherwise Slot{value: 0}
+	var arr = SlotArray.empty()
+	arr.push(Slot.create(value: 42))
+	let result = try arr.get(0) otherwise Slot.create(value: 0)
 	return result.value
 end 'main'
 ```
@@ -69,7 +77,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
 function main() returns ExitCode
-	var arr = IntArray{}
+	var arr = IntArray.empty()
 	arr.push(0)
 	arr.push(5)
 	arr.resize(4)
@@ -89,14 +97,18 @@ typealias Integer = int(i64.min to i64.max)
 
 type Slot
 	export var value Integer
+
+	static function create(value Integer) returns Self
+		return Self{value: value}
+	end 'create'
 end 'Slot'
 
 typealias SlotArray = Array with Slot
 
 function main() returns ExitCode
-	var arr = SlotArray{}
+	var arr = SlotArray.empty()
 	arr.resize(3)
-	let result = try arr.get(0) otherwise Slot{value: 99}
+	let result = try arr.get(0) otherwise Slot.create(value: 99)
 	return result.value
 end 'main'
 ```
@@ -112,16 +124,20 @@ typealias Integer = int(i64.min to i64.max)
 
 type Slot
 	export var value Integer
+
+	static function create(value Integer) returns Self
+		return Self{value: value}
+	end 'create'
 end 'Slot'
 
 typealias SlotArray = Array with Slot
 
 function main() returns ExitCode
-	var arr = SlotArray{}
-	arr.push(Slot{value: 1})
+	var arr = SlotArray.empty()
+	arr.push(Slot.create(value: 1))
 	arr.resize(3)
 	try arr.remove(0) otherwise ignore
-	let result = try arr.first() otherwise Slot{value: 77}
+	let result = try arr.first() otherwise Slot.create(value: 77)
 	return result.value
 end 'main'
 ```
@@ -137,15 +153,19 @@ typealias Integer = int(i64.min to i64.max)
 
 type Slot
 	export var value Integer
+
+	static function create(value Integer) returns Self
+		return Self{value: value}
+	end 'create'
 end 'Slot'
 
 typealias SlotArray = Array with Slot
 
 function main() returns ExitCode
-	var arr = SlotArray{}
-	arr.push(Slot{value: 1})
+	var arr = SlotArray.empty()
+	arr.push(Slot.create(value: 1))
 	arr.resize(3)
-	let result = try arr.last() otherwise Slot{value: 55}
+	let result = try arr.last() otherwise Slot.create(value: 55)
 	return result.value
 end 'main'
 ```
@@ -165,7 +185,7 @@ end 'Slot'
 typealias SlotArray = Array with Slot
 
 function main() returns ExitCode
-	var arr = SlotArray{}
+	var arr = SlotArray.empty()
 	arr.resize(2)
 	try arr.get(0) otherwise (e) 'handler'
 		match e 'check'

@@ -56,7 +56,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
   // Top-level declarations deferred for evaluation at a later phase
   private record EnumConstantValue(string EnumTypeName, string CaseName, int Ordinal);
   /// Shared info for both try-call and try-await operations, used by the otherwise-clause helpers.
-  private record TryResultInfo(MaxonInteger ErrorFlag, MaxonValue? Result, MaxonValueKind? ResultKind, string? ResultStructTypeName);
+  private record TryResultInfo(MaxonInteger ErrorFlag, MaxonValue? Result, MaxonValueKind? ResultKind, string? ResultStructTypeName, MlirType? CalleeReturnType = null);
   private record DeferredDecl(string Name, int TokenStart, int TokenEnd, int Line, int Column, bool IsExported = false);
   private readonly List<DeferredDecl> _deferredExprLets = [];
   private readonly List<DeferredDecl> _deferredGlobalVars = [];
@@ -90,6 +90,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
   private readonly HashSet<string> _exportedTypes = [];
   private readonly HashSet<string> _exportedTypeAliases = [];
   private readonly HashSet<string> _localTypeAliases = [];
+  private readonly Dictionary<string, string> _typeAliasOwners = [];  // typealias name -> owning type name
   private readonly HashSet<string> _seededTypeAliases = [];
   private readonly HashSet<string> _seededStdlibTypeAliases = [];
   private readonly HashSet<string> _usedTypeAliases = [];
@@ -960,6 +961,16 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
         return false;
       return true;
     }
+    // Type.method() calls (e.g., CategoryLevelMap.empty()) are complex runtime expressions.
+    // Exclude enum.case references (e.g., Color.green) which are constants.
+    if (_tokens[exprStart].Type == TokenType.Identifier
+        && exprStart + 2 < _tokens.Count
+        && _tokens[exprStart + 1].Type == TokenType.Dot
+        && _tokens[exprStart + 2].Type == TokenType.Identifier
+        && _typeRegistry.TryGetValue(_tokens[exprStart].Value, out var initType)
+        && initType is not MlirEnumType) {
+      return true;
+    }
     return false;
   }
 
@@ -1181,8 +1192,10 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
     foreach (var init in _currentModule!.DeferredGlobalInits) {
       if (localNames.Contains(init.Name)) continue;
 
-      // Deferred inits reference types from their original file, which may not be exported
+      // Deferred inits reference types and type aliases from their original file,
+      // which may not be exported — temporarily seed them for the duration of this init.
       var tempTypes = new List<string>();
+      var tempAliases = new List<string>();
       if (init.SourceFilePath != null && seedModule != null) {
         foreach (var (name, type) in seedModule.TypeDefs) {
           if (!_typeRegistry.ContainsKey(name)
@@ -1193,10 +1206,25 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
             tempTypes.Add(name);
           }
         }
+        foreach (var (aliasName, aliasInfo) in seedModule.TypeAliasSources) {
+          if (!_typeAliasSources.ContainsKey(aliasName)
+              && seedModule.NonExportedTypeNames.Contains(aliasName)
+              && aliasInfo.SourceFilePath == init.SourceFilePath) {
+            _typeAliasSources[aliasName] = aliasInfo.SourceTypeName;
+            tempAliases.Add(aliasName);
+          }
+        }
       }
 
-      EmitSingleDeferredGlobalInit(init.Name, init.Tokens, init.TokenStart, init.IsMutable);
+      try {
+        EmitSingleDeferredGlobalInit(init.Name, init.Tokens, init.TokenStart, init.IsMutable);
+      } catch (CompileError ex) {
+        ex.FilePath ??= init.SourceFilePath;
+        throw;
+      }
 
+      foreach (var name in tempAliases)
+        _typeAliasSources.Remove(name);
       foreach (var name in tempTypes)
         _typeRegistry.Remove(name);
     }
@@ -1267,8 +1295,22 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
         _currentBlock.AddOp(trueConst);
         _currentBlock.AddOp(new MaxonGlobalStoreOp(field.GuardName, trueConst.Result, MaxonValueKind.Bool));
 
+        // Set _currentTypeName for the duration of the init so that struct literal
+        // construction inside static let initializers is allowed (e.g., CharacterSet static lets).
+        var savedTypeName = _currentTypeName;
+        var dotIdx = field.QualifiedName.LastIndexOf('.');
+        if (dotIdx >= 0) {
+          var possibleTypeName = field.QualifiedName[..dotIdx];
+          // Strip namespace prefix (e.g., "stdlib.CharacterSet" → "CharacterSet")
+          var lastDot = possibleTypeName.LastIndexOf('.');
+          if (lastDot >= 0) possibleTypeName = possibleTypeName[(lastDot + 1)..];
+          if (_typeRegistry.ContainsKey(possibleTypeName))
+            _currentTypeName = possibleTypeName;
+        }
+
         // Evaluate the initializer expression and store result
         EmitSingleDeferredGlobalInit(field.QualifiedName, field.Tokens, field.TokenStart, field.IsMutable);
+        _currentTypeName = savedTypeName;
 
         _currentBlock.AddOp(new MaxonScopeEndOp(GetScopeEndVars()) { VarMetadata = _variables.GetScopeEndVarMetadata() });
         _currentBlock.AddOp(new MaxonReturnOp());
@@ -2244,10 +2286,25 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
           ValidateUniqueRawValue(rawVal, cases, caseToken.Line, caseToken.Column);
 
           cases.Add(new MlirEnumCase(caseName, ordinal, rawVal, assocValues));
-        } else if (Check(TokenType.Identifier) && PeekNext().Type == TokenType.LeftBrace) {
+        } else if (Check(TokenType.Identifier) && (PeekNext().Type == TokenType.LeftBrace || PeekNext().Type == TokenType.Dot)) {
 
-          var structTypeName = Advance().Value; // consume struct type name
-          Advance(); // consume '{'
+          // Parse struct-backed enum raw value: TypeName{...} or TypeName.factory(...)
+          string structTypeName;
+          var fields = new List<(string FieldName, long Value)>();
+
+          if (PeekNext().Type == TokenType.Dot) {
+            // Factory call syntax: TypeName.factory(arg1, label: arg2, ...)
+            structTypeName = Advance().Value; // consume type name
+            Advance(); // consume '.'
+            Expect(TokenType.Identifier); // consume factory method name (e.g., "create")
+            Expect(TokenType.LeftParen); // consume '('
+            ParseFactoryCallRawValue(fields, structTypeName, caseToken, prefix: "");
+          } else {
+            // Struct literal syntax: TypeName{field: value, ...}
+            structTypeName = Advance().Value; // consume struct type name
+            Advance(); // consume '{'
+            ParseStructRawValueFields(fields, structTypeName, caseToken, prefix: "");
+          }
 
           if (!_typeRegistry.TryGetValue(structTypeName, out var structTypeDef) || structTypeDef is not MlirStructType structType) {
             throw new CompileError(ErrorCode.SemanticUnknownType,
@@ -2261,9 +2318,6 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
               $"raw value type mismatch: all cases must use the same struct type '{(backingType is MlirStructBackingType existingSbt ? existingSbt.StructTypeName : "non-struct")}'",
               caseToken.Line, caseToken.Column);
           }
-
-          var fields = new List<(string FieldName, long Value)>();
-          ParseStructRawValueFields(fields, structTypeName, caseToken, prefix: "");
 
           var structRawValue = new StructRawValue(structTypeName, fields);
           cases.Add(new MlirEnumCase(caseName, ordinal, structRawValue, assocValues));
@@ -2397,6 +2451,73 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
         }
       }
     }
+  }
+
+  /// <summary>
+  /// Parse factory call arguments for enum raw values: TypeName.create(arg1, label: arg2, ...)
+  /// Arguments are matched to struct fields by label name (first argument uses the first field name).
+  /// Supports nested factory calls for struct-typed fields.
+  /// The opening '(' has already been consumed; this method consumes through the closing ')'.
+  /// </summary>
+  private void ParseFactoryCallRawValue(
+      List<(string FieldName, long Value)> fields,
+      string structTypeName, Token caseToken, string prefix) {
+    _typeRegistry.TryGetValue(structTypeName, out var structTypeDef);
+    var structType = structTypeDef as MlirStructType;
+    var structFields = structType?.Fields ?? [];
+    int fieldIndex = 0;
+
+    SkipNewlines();
+    while (!Check(TokenType.RightParen) && !IsAtEnd()) {
+      // Determine the field name: first arg is positional, rest use labels
+      string fieldName;
+      if (fieldIndex == 0 && !(Check(TokenType.Identifier) && PeekNext().Type == TokenType.Colon)) {
+        // First positional argument — map to first field
+        fieldName = structFields.Count > 0 ? structFields[0].Name : $"field{fieldIndex}";
+      } else {
+        // Labeled argument: "label: value"
+        var labelToken = Expect(TokenType.Identifier);
+        fieldName = labelToken.Value;
+        Expect(TokenType.Colon);
+      }
+
+      var qualifiedName = prefix.Length > 0 ? $"{prefix}.{fieldName}" : fieldName;
+
+      if (Check(TokenType.Identifier) && PeekNext().Type == TokenType.Dot) {
+        // Nested factory call: NestedType.create(...)
+        var nestedTypeName = Advance().Value;
+        Advance(); // consume '.'
+        Expect(TokenType.Identifier); // consume method name
+        Expect(TokenType.LeftParen); // consume '('
+        ParseFactoryCallRawValue(fields, nestedTypeName, caseToken, prefix: qualifiedName);
+      } else if (Check(TokenType.Identifier) && PeekNext().Type == TokenType.LeftBrace) {
+        // Nested struct literal: NestedType{...}
+        var nestedTypeName = Advance().Value;
+        Advance(); // consume '{'
+        ParseStructRawValueFields(fields, nestedTypeName, caseToken, prefix: qualifiedName);
+      } else if (TryParseSignedNumericLiteral(out var fieldNum, "expected numeric literal for factory call argument")) {
+        long fieldValue = fieldNum.IsFloat ? BitConverter.DoubleToInt64Bits(fieldNum.FloatValue) : fieldNum.IntValue;
+        fields.Add((qualifiedName, fieldValue));
+      } else if (Check(TokenType.True)) {
+        Advance();
+        fields.Add((qualifiedName, 1));
+      } else if (Check(TokenType.False)) {
+        Advance();
+        fields.Add((qualifiedName, 0));
+      } else {
+        throw new CompileError(ErrorCode.ParserExpectedExpression,
+          "expected literal value or factory call for enum raw value argument",
+          Current().Line, Current().Column);
+      }
+
+      fieldIndex++;
+      SkipNewlines();
+      if (Check(TokenType.Comma)) {
+        Advance();
+        SkipNewlines();
+      }
+    }
+    Expect(TokenType.RightParen);
   }
 
   /// <summary>
@@ -2884,6 +3005,8 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
 
     if (_currentTypeName == null)
       _typeAliasLocations[aliasName] = (aliasNameToken.Line, aliasNameToken.Column);
+    else
+      _typeAliasOwners[aliasName] = _currentTypeName;
 
     if (isExported) _exportedTypeAliases.Add(aliasName);
 
@@ -5891,7 +6014,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
       _currentBlock!.AddOp(tryCallOp);
       _lastExprCallOp = tryCallOp;
 
-      tryInfo = new TryResultInfo(tryCallOp.ErrorFlag, tryCallOp.Result, tryCallOp.ResultKind, tryCallOp.ResultStructTypeName);
+      tryInfo = new TryResultInfo(tryCallOp.ErrorFlag, tryCallOp.Result, tryCallOp.ResultKind, tryCallOp.ResultStructTypeName, callee?.ReturnType);
 
       // Void-returning functions can't be used as values in assignments
       if (!isStatementContext && tryCallOp.Result == null) {
@@ -6105,6 +6228,21 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
   private ExprResult.Direct EmitTryOtherwiseDefault(TryResultInfo tryInfo, Token tryToken) {
     var defaultExpr = ParseExpression();
     var defaultValue = ResolveExprValue(defaultExpr);
+
+    // Range-check the otherwise default value against the callee's return type.
+    // The default value must be within the ranged type's bounds.
+    if (defaultValue is MaxonInteger && tryInfo.CalleeReturnType is MlirRangedPrimitiveType rangedRetType) {
+      var litOp = _currentBlock!.Operations.OfType<MaxonLiteralOp>().LastOrDefault();
+      if (litOp != null) {
+        var val = litOp.IntValue;
+        var upper = rangedRetType.UpperInclusive ? rangedRetType.IntUpper : rangedRetType.IntUpper - 1;
+        if (val < rangedRetType.IntLower || val > upper) {
+          throw new CompileError(ErrorCode.SemanticTypeMismatch,
+            $"otherwise value {val} is outside the range of '{rangedRetType.Name}' ({rangedRetType.FormatRange()})",
+            tryToken.Line, tryToken.Column);
+        }
+      }
+    }
 
     var resultVarName = $"__try_result_{_blockCounter++}";
     var defaultKind = DetermineValueKind(defaultValue);
@@ -11979,6 +12117,22 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
       throw new CompileError(ErrorCode.SemanticBuiltinTypeConstruction,
         $"'{baseTypeName}' is a compiler builtin type and cannot be constructed directly",
         literalLine, Current().Column);
+    }
+
+    // Restrict struct literal construction to the type's own methods.
+    // Allow construction of types that are local typealiases of the current type.
+    var currentBase = _currentTypeName != null ? ResolveBaseTypeName(_currentTypeName) : null;
+    bool isInsideOwnType = _currentTypeName == typeName || _currentTypeName == baseTypeName
+        || currentBase == typeName || currentBase == baseTypeName;
+    if (!isInsideOwnType) {
+      // Check if the type being constructed is a typealias defined in the current type/extension
+      bool isLocalAlias = _currentTypeName != null
+        && (_localTypeAliases.Contains(typeName) || _typeAliasOwners.TryGetValue(typeName, out var owner) && owner == _currentTypeName);
+      if (!isLocalAlias) {
+        throw new CompileError(ErrorCode.SemanticConstructorRestriction,
+          $"type '{typeName}' can only be constructed from within its own methods; use a static factory method instead",
+          literalLine, Current().Column);
+      }
     }
 
     var structType = (MlirStructType)_typeRegistry[typeName];

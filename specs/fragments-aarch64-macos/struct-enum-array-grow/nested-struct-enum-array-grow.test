@@ -18,6 +18,10 @@ export type MlirBlock
     export var ops MlirOpArray
     export var terminator MlirOp
     export var hasTerminator bool
+
+    static function create(id Integer, ops MlirOpArray, terminator MlirOp, hasTerminator bool) returns Self
+    	return Self{id: id, ops: ops, terminator: terminator, hasTerminator: hasTerminator}
+    end 'create'
 end 'MlirBlock'
 
 typealias DepArray = Array with Integer
@@ -25,11 +29,15 @@ typealias DepArray = Array with Integer
 export type Database
     export var block MlirBlock
     export var deps DepArray
+
+    static function create(block MlirBlock, deps DepArray) returns Self
+    	return Self{block: block, deps: deps}
+    end 'create'
 end 'Database'
 
 function main() returns ExitCode
-    let block = MlirBlock{id: 0, ops: MlirOpArray{}, terminator: MlirOp.cf(CfOp.br(0)), hasTerminator: false}
-    let db = Database{block: block, deps: DepArray{}}
+    let block = MlirBlock.create(id: 0, ops: MlirOpArray.empty(), terminator: MlirOp.cf(CfOp.br(0)), hasTerminator: false)
+    let db = Database.create(block: block, deps: DepArray.empty())
     db.deps.push(1)
     db.deps.push(2)
     db.deps.push(3)

@@ -36,7 +36,7 @@ Create an array with preallocated capacity and length using `.resize()`:
 typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
-var buffer = IntArray{}
+var buffer = IntArray.empty()
 buffer.resize(10)   // Length is now 10, elements are zero-initialized
 buffer.set(0, value: 42)
 ```
@@ -47,7 +47,7 @@ Use `.reserve()` to allocate capacity without changing length (for performance w
 typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
-var buffer = IntArray{}
+var buffer = IntArray.empty()
 buffer.reserve(100)  // Capacity is 100, length is still 0
 buffer.push(42)      // Now length is 1
 ```
@@ -250,7 +250,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
 function main() returns ExitCode
-	var arr = IntArray{}
+	var arr = IntArray.empty()
 	arr.reserve(5)
 	arr.push(42)
 	return try arr.get(0) otherwise 0
@@ -266,7 +266,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
 function main() returns ExitCode
-		var arr = IntArray{}
+		var arr = IntArray.empty()
 		arr.resize(5)
 		arr.set(0, value: 99)
 		return try arr.get(0) otherwise 0
@@ -283,7 +283,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
 function main() returns ExitCode
-		var arr = IntArray{}
+		var arr = IntArray.empty()
 		var i = 0
 		while i < 100 'loop'
 				arr.push(i)
@@ -307,7 +307,7 @@ typealias Byte = byte(0 to u8.max)
 typealias ByteArray = Array with Byte
 
 function main() returns ExitCode
-	var arr = ByteArray{}
+	var arr = ByteArray.empty()
 	arr.push(10 as Byte)
 	arr.push(20 as Byte)
 	arr.push(30 as Byte)
@@ -334,7 +334,7 @@ typealias Byte = byte(0 to u8.max)
 typealias ByteArray = Array with Byte
 
 function main() returns ExitCode
-	var arr = ByteArray{}
+	var arr = ByteArray.empty()
 	arr.push(1 as Byte)
 	arr.push(2 as Byte)
 	arr.push(3 as Byte)
@@ -361,7 +361,7 @@ typealias Byte = byte(0 to u8.max)
 typealias ByteArray = Array with Byte
 
 function main() returns ExitCode
-	var arr = ByteArray{}
+	var arr = ByteArray.empty()
 	arr.push(10 as Byte)
 	arr.push(20 as Byte)
 	arr.push(30 as Byte)
@@ -387,7 +387,7 @@ typealias Byte = byte(0 to u8.max)
 typealias ByteArray = Array with Byte
 
 function main() returns ExitCode
-	var arr = ByteArray{}
+	var arr = ByteArray.empty()
 	arr.push(255 as Byte)
 	arr.push(0 as Byte)
 	arr.push(128 as Byte)
@@ -423,7 +423,7 @@ typealias Byte = byte(0 to u8.max)
 typealias ByteArray = Array with Byte
 
 function main() returns ExitCode
-	var arr = ByteArray{}
+	var arr = ByteArray.empty()
 	arr.push(1 as Byte)
 	arr.push(2 as Byte)
 	arr.push(3 as Byte)
@@ -644,7 +644,7 @@ typealias IntArray = Array with Integer
 
 function main() returns ExitCode
 	var a = [1, 2, 3]
-	var b = IntArray{}
+	var b = IntArray.empty()
 	a.append(b)
 	return a.count()
 end 'main'
@@ -659,7 +659,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
 function main() returns ExitCode
-	var a = IntArray{}
+	var a = IntArray.empty()
 	var b = [10, 20]
 	a.append(b)
 	var first = try a.get(0) otherwise 0
@@ -739,7 +739,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
 function makeNumbers() returns IntArray
-	var arr = IntArray{}
+	var arr = IntArray.empty()
 	arr.push(10)
 	arr.push(20)
 	arr.push(30)
@@ -764,7 +764,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
 function makeNumbers(a Integer, b Integer) returns IntArray
-	var arr = IntArray{}
+	var arr = IntArray.empty()
 	arr.push(a)
 	arr.push(b)
 	arr.push(a + b)
@@ -789,20 +789,24 @@ typealias Integer = int(i64.min to i64.max)
 type Point
 	export var x Integer
 	export var y Integer
+
+	static function create(x Integer, y Integer) returns Self
+		return Self{x: x, y: y}
+	end 'create'
 end 'Point'
 
 typealias PointArray = Array with Point
 
 function makePoints() returns PointArray
-	var p1 = Point{x: 1, y: 2}
-	var p2 = Point{x: 3, y: 4}
+	var p1 = Point.create(x: 1, y: 2)
+	var p2 = Point.create(x: 3, y: 4)
 	return [p1, p2]
 end 'makePoints'
 
 function main() returns ExitCode
 	var pts = makePoints()
-	var p0 = try pts.get(0) otherwise Point{x: 0, y: 0}
-	var p1 = try pts.get(1) otherwise Point{x: 0, y: 0}
+	var p0 = try pts.get(0) otherwise Point.create(x: 0, y: 0)
+	var p1 = try pts.get(1) otherwise Point.create(x: 0, y: 0)
 	return p0.x + p1.y
 end 'main'
 ```

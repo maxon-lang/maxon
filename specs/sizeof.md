@@ -153,6 +153,10 @@ typealias Integer = int(i64.min to i64.max)
 type Sizer uses T
 	export var dummy T
 
+	export static function create(dummy T) returns Self
+		return Self{dummy: dummy}
+	end 'create'
+
 	export function typeSize() returns Integer
 		return sizeof(T)
 	end 'typeSize'
@@ -161,7 +165,7 @@ end 'Sizer'
 typealias BoolSizer = Sizer with bool
 
 function main() returns ExitCode
-	var s = BoolSizer{dummy: false}
+	var s = BoolSizer.create(dummy: false)
 	return s.typeSize()
 end 'main'
 ```
@@ -176,10 +180,18 @@ typealias Integer = int(i64.min to i64.max)
 type Pair
 	export var a Integer
 	export var b Integer
+
+	static function create(a Integer, b Integer) returns Self
+		return Self{a: a, b: b}
+	end 'create'
 end 'Pair'
 
 type Sizer uses T
 	export var dummy T
+
+	export static function create(dummy T) returns Self
+		return Self{dummy: dummy}
+	end 'create'
 
 	export function typeSize() returns Integer
 		return sizeof(T)
@@ -189,7 +201,7 @@ end 'Sizer'
 typealias PairSizer = Sizer with Pair
 
 function main() returns ExitCode
-	var s = PairSizer{dummy: Pair{a: 0, b: 0}}
+	var s = PairSizer.create(dummy: Pair.create(a: 0, b: 0))
 	return s.typeSize()
 end 'main'
 ```

@@ -20,7 +20,7 @@ module {
     x86.mov rsi, rbx
     x86.mov [rbp-40], rcx
     x86.mov rdx, rsi
-    x86.mov rcx, 16
+    x86.mov rcx, 32
     x86.mov r8, 1
     x86.call mm_alloc
     x86.mov [rbp-8], rax
@@ -52,6 +52,12 @@ module {
     x86.xor rax, rax
     x86.mov rcx, [rbp-8]
     x86.mov [rcx+8], rax
+    x86.mov rax, -1
+    x86.mov rcx, [rbp-8]
+    x86.mov [rcx+16], rax
+    x86.mov rax, 1
+    x86.mov rcx, [rbp-8]
+    x86.mov [rcx+24], rax
     x86.mov rax, [rbp-8]
     x86.mov rcx, [rbp-8]
     x86.call mm_incref
@@ -159,42 +165,26 @@ module {
     x86.epilogue
     x86.ret
   }
-  func @__destruct_HttpResponse(ptr: i64) {
+  func @__destruct_GraphemeState(ptr: i64) {
   entry:
-    x86.prologue stack_size=32
+    x86.jmp __destruct_GraphemeState.done
+  done:
+    x86.ret
+  }
+  func @__destruct_CodepointView(ptr: i64) {
+  entry:
+    x86.prologue stack_size=16
     x86.mov [rbp-8], rcx
     x86.mov rax, [rbp-8]
-    x86.mov rcx, [rax+8]
+    x86.mov rcx, [rax+0]
     x86.mov [rbp-16], rcx
     x86.test rcx, rcx
     x86.jz __nonnull_skip_75
     x86.call mm_decref
     x86.label __nonnull_skip_75
-    x86.mov rdx, [rbp-8]
-    x86.mov rbx, [rdx+16]
-    x86.mov [rbp-24], rbx
-    x86.test rbx, rbx
-    x86.jz __nonnull_skip_76
-    x86.mov rcx, [rbp-24]
-    x86.call mm_decref
-    x86.label __nonnull_skip_76
-    x86.mov rsi, [rbp-8]
-    x86.mov rdi, [rsi+24]
-    x86.mov [rbp-32], rdi
-    x86.test rdi, rdi
-    x86.jz __nonnull_skip_77
-    x86.mov rcx, [rbp-32]
-    x86.call mm_decref
-    x86.label __nonnull_skip_77
-    x86.jmp __destruct_HttpResponse.done
+    x86.jmp __destruct_CodepointView.done
   done:
     x86.epilogue
-    x86.ret
-  }
-  func @__destruct_GraphemeState(ptr: i64) {
-  entry:
-    x86.jmp __destruct_GraphemeState.done
-  done:
     x86.ret
   }
   func @__destruct_Character(ptr: i64) {
@@ -205,9 +195,9 @@ module {
     x86.mov rcx, [rax+0]
     x86.mov [rbp-16], rcx
     x86.test rcx, rcx
-    x86.jz __nonnull_skip_78
+    x86.jz __nonnull_skip_76
     x86.call mm_decref
-    x86.label __nonnull_skip_78
+    x86.label __nonnull_skip_76
     x86.jmp __destruct_Character.done
   done:
     x86.epilogue
@@ -245,9 +235,9 @@ module {
     x86.mov rcx, [rax+8]
     x86.mov [rbp-16], rcx
     x86.test rcx, rcx
-    x86.jz __nonnull_skip_79
+    x86.jz __nonnull_skip_77
     x86.call mm_decref
-    x86.label __nonnull_skip_79
+    x86.label __nonnull_skip_77
     x86.jmp __destruct_Array.done
   done:
     x86.epilogue
@@ -261,10 +251,242 @@ module {
     x86.mov rcx, [rax+0]
     x86.mov [rbp-16], rcx
     x86.test rcx, rcx
+    x86.jz __nonnull_skip_78
+    x86.call mm_decref
+    x86.label __nonnull_skip_78
+    x86.jmp __destruct_CharacterSet.done
+  done:
+    x86.epilogue
+    x86.ret
+  }
+  func @__destruct_HttpHeaders(ptr: i64) {
+  entry:
+    x86.prologue stack_size=16
+    x86.mov [rbp-8], rcx
+    x86.mov rax, [rbp-8]
+    x86.mov rcx, [rax+0]
+    x86.mov [rbp-16], rcx
+    x86.test rcx, rcx
+    x86.jz __nonnull_skip_79
+    x86.call mm_decref
+    x86.label __nonnull_skip_79
+    x86.jmp __destruct_HttpHeaders.done
+  done:
+    x86.epilogue
+    x86.ret
+  }
+  func @__destruct_HttpRequest(ptr: i64) {
+  entry:
+    x86.prologue stack_size=32
+    x86.mov [rbp-8], rcx
+    x86.mov rax, [rbp-8]
+    x86.mov rcx, [rax+8]
+    x86.mov [rbp-16], rcx
+    x86.test rcx, rcx
     x86.jz __nonnull_skip_80
     x86.call mm_decref
     x86.label __nonnull_skip_80
-    x86.jmp __destruct_CharacterSet.done
+    x86.mov rdx, [rbp-8]
+    x86.mov rbx, [rdx+16]
+    x86.mov [rbp-24], rbx
+    x86.test rbx, rbx
+    x86.jz __nonnull_skip_81
+    x86.mov rcx, [rbp-24]
+    x86.call mm_decref
+    x86.label __nonnull_skip_81
+    x86.mov rsi, [rbp-8]
+    x86.mov rdi, [rsi+24]
+    x86.mov [rbp-32], rdi
+    x86.test rdi, rdi
+    x86.jz __nonnull_skip_82
+    x86.mov rcx, [rbp-32]
+    x86.call mm_decref
+    x86.label __nonnull_skip_82
+    x86.jmp __destruct_HttpRequest.done
+  done:
+    x86.epilogue
+    x86.ret
+  }
+  func @__destruct_HttpResponse(ptr: i64) {
+  entry:
+    x86.prologue stack_size=32
+    x86.mov [rbp-8], rcx
+    x86.mov rax, [rbp-8]
+    x86.mov rcx, [rax+8]
+    x86.mov [rbp-16], rcx
+    x86.test rcx, rcx
+    x86.jz __nonnull_skip_83
+    x86.call mm_decref
+    x86.label __nonnull_skip_83
+    x86.mov rdx, [rbp-8]
+    x86.mov rbx, [rdx+16]
+    x86.mov [rbp-24], rbx
+    x86.test rbx, rbx
+    x86.jz __nonnull_skip_84
+    x86.mov rcx, [rbp-24]
+    x86.call mm_decref
+    x86.label __nonnull_skip_84
+    x86.mov rsi, [rbp-8]
+    x86.mov rdi, [rsi+24]
+    x86.mov [rbp-32], rdi
+    x86.test rdi, rdi
+    x86.jz __nonnull_skip_85
+    x86.mov rcx, [rbp-32]
+    x86.call mm_decref
+    x86.label __nonnull_skip_85
+    x86.jmp __destruct_HttpResponse.done
+  done:
+    x86.epilogue
+    x86.ret
+  }
+  func @__destruct_StringIndex(ptr: i64) {
+  entry:
+    x86.jmp __destruct_StringIndex.done
+  done:
+    x86.ret
+  }
+  func @__destruct_TcpClient(ptr: i64) {
+  entry:
+    x86.prologue stack_size=16
+    x86.mov [rbp-8], rcx
+    x86.mov rax, [rbp-8]
+    x86.mov rcx, [rax+0]
+    x86.mov [rbp-16], rcx
+    x86.test rcx, rcx
+    x86.jz __nonnull_skip_86
+    x86.call mm_decref
+    x86.label __nonnull_skip_86
+    x86.jmp __destruct_TcpClient.done
+  done:
+    x86.epilogue
+    x86.ret
+  }
+  func @__destruct_URL(ptr: i64) {
+  entry:
+    x86.prologue stack_size=64
+    x86.mov [rbp-8], rcx
+    x86.mov rax, [rbp-8]
+    x86.mov rcx, [rax+0]
+    x86.mov [rbp-16], rcx
+    x86.test rcx, rcx
+    x86.jz __nonnull_skip_87
+    x86.call mm_decref
+    x86.label __nonnull_skip_87
+    x86.mov rdx, [rbp-8]
+    x86.mov rbx, [rdx+8]
+    x86.mov [rbp-24], rbx
+    x86.test rbx, rbx
+    x86.jz __nonnull_skip_88
+    x86.mov rcx, [rbp-24]
+    x86.call mm_decref
+    x86.label __nonnull_skip_88
+    x86.mov rsi, [rbp-8]
+    x86.mov rdi, [rsi+16]
+    x86.mov [rbp-32], rdi
+    x86.test rdi, rdi
+    x86.jz __nonnull_skip_89
+    x86.mov rcx, [rbp-32]
+    x86.call mm_decref
+    x86.label __nonnull_skip_89
+    x86.mov r8, [rbp-8]
+    x86.mov r9, [r8+24]
+    x86.mov [rbp-40], r9
+    x86.test r9, r9
+    x86.jz __nonnull_skip_90
+    x86.mov rcx, [rbp-40]
+    x86.call mm_decref
+    x86.label __nonnull_skip_90
+    x86.mov rax, [rbp-8]
+    x86.mov rcx, [rax+40]
+    x86.mov [rbp-48], rcx
+    x86.test rcx, rcx
+    x86.jz __nonnull_skip_91
+    x86.call mm_decref
+    x86.label __nonnull_skip_91
+    x86.mov rax, [rbp-8]
+    x86.mov rcx, [rax+48]
+    x86.mov [rbp-56], rcx
+    x86.test rcx, rcx
+    x86.jz __nonnull_skip_92
+    x86.call mm_decref
+    x86.label __nonnull_skip_92
+    x86.jmp __destruct_URL.done
+  done:
+    x86.epilogue
+    x86.ret
+  }
+  func @__destruct_Array_Character(ptr: i64) {
+  entry:
+    x86.prologue stack_size=16
+    x86.mov [rbp-8], rcx
+    x86.mov rax, [rbp-8]
+    x86.mov rcx, [rax+8]
+    x86.mov [rbp-16], rcx
+    x86.test rcx, rcx
+    x86.jz __nonnull_skip_93
+    x86.call mm_decref
+    x86.label __nonnull_skip_93
+    x86.jmp __destruct_Array_Character.done
+  done:
+    x86.epilogue
+    x86.ret
+  }
+  func @__destruct___ManagedMemory_SetSlotState(ptr: i64) {
+  entry:
+    x86.prologue stack_size=16
+    x86.mov [rbp-8], rcx
+    x86.mov rax, [rbp-8]
+    x86.mov rcx, [rax+16]
+    x86.xor rdx, rdx
+    x86.cmp rcx, rdx
+    x86.je __destruct___ManagedMemory_SetSlotState.skip_buf_0
+  free_buf_0:
+    x86.mov rax, [rbp-8]
+    x86.mov rcx, [rax+0]
+    x86.call mm_raw_free
+    x86.jmp __destruct___ManagedMemory_SetSlotState.skip_buf_0
+  skip_buf_0:
+    x86.jmp __destruct___ManagedMemory_SetSlotState.done
+  done:
+    x86.epilogue
+    x86.ret
+  }
+  func @__destruct_StateArray(ptr: i64) {
+  entry:
+    x86.prologue stack_size=16
+    x86.mov [rbp-8], rcx
+    x86.mov rax, [rbp-8]
+    x86.mov rcx, [rax+8]
+    x86.mov [rbp-16], rcx
+    x86.test rcx, rcx
+    x86.jz __nonnull_skip_94
+    x86.call mm_decref
+    x86.label __nonnull_skip_94
+    x86.jmp __destruct_StateArray.done
+  done:
+    x86.epilogue
+    x86.ret
+  }
+  func @__destruct_CharSet(ptr: i64) {
+  entry:
+    x86.prologue stack_size=32
+    x86.mov [rbp-8], rcx
+    x86.mov rax, [rbp-8]
+    x86.mov rcx, [rax+0]
+    x86.mov [rbp-16], rcx
+    x86.test rcx, rcx
+    x86.jz __nonnull_skip_95
+    x86.call mm_decref
+    x86.label __nonnull_skip_95
+    x86.mov rdx, [rbp-8]
+    x86.mov rbx, [rdx+8]
+    x86.mov [rbp-24], rbx
+    x86.test rbx, rbx
+    x86.jz __nonnull_skip_96
+    x86.mov rcx, [rbp-24]
+    x86.call mm_decref
+    x86.label __nonnull_skip_96
+    x86.jmp __destruct_CharSet.done
   done:
     x86.epilogue
     x86.ret
@@ -293,160 +515,6 @@ module {
     x86.epilogue
     x86.ret
   }
-  func @__destruct_Array_String(ptr: i64) {
-  entry:
-    x86.prologue stack_size=16
-    x86.mov [rbp-8], rcx
-    x86.mov rax, [rbp-8]
-    x86.mov rcx, [rax+8]
-    x86.mov [rbp-16], rcx
-    x86.test rcx, rcx
-    x86.jz __nonnull_skip_81
-    x86.call mm_decref
-    x86.label __nonnull_skip_81
-    x86.jmp __destruct_Array_String.done
-  done:
-    x86.epilogue
-    x86.ret
-  }
-  func @__destruct___ManagedMemory_SetSlotState(ptr: i64) {
-  entry:
-    x86.prologue stack_size=16
-    x86.mov [rbp-8], rcx
-    x86.mov rax, [rbp-8]
-    x86.mov rcx, [rax+16]
-    x86.xor rdx, rdx
-    x86.cmp rcx, rdx
-    x86.je __destruct___ManagedMemory_SetSlotState.skip_buf_0
-  free_buf_0:
-    x86.mov rax, [rbp-8]
-    x86.mov rcx, [rax+0]
-    x86.call mm_raw_free
-    x86.jmp __destruct___ManagedMemory_SetSlotState.skip_buf_0
-  skip_buf_0:
-    x86.jmp __destruct___ManagedMemory_SetSlotState.done
-  done:
-    x86.epilogue
-    x86.ret
-  }
-  func @__destruct_Array_SetSlotState(ptr: i64) {
-  entry:
-    x86.prologue stack_size=16
-    x86.mov [rbp-8], rcx
-    x86.mov rax, [rbp-8]
-    x86.mov rcx, [rax+8]
-    x86.mov [rbp-16], rcx
-    x86.test rcx, rcx
-    x86.jz __nonnull_skip_82
-    x86.call mm_decref
-    x86.label __nonnull_skip_82
-    x86.jmp __destruct_Array_SetSlotState.done
-  done:
-    x86.epilogue
-    x86.ret
-  }
-  func @__destruct_CaseInsensitiveHeaders(ptr: i64) {
-  entry:
-    x86.prologue stack_size=32
-    x86.mov [rbp-8], rcx
-    x86.mov rax, [rbp-8]
-    x86.mov rcx, [rax+0]
-    x86.mov [rbp-16], rcx
-    x86.test rcx, rcx
-    x86.jz __nonnull_skip_83
-    x86.call mm_decref
-    x86.label __nonnull_skip_83
-    x86.mov rdx, [rbp-8]
-    x86.mov rbx, [rdx+8]
-    x86.mov [rbp-24], rbx
-    x86.test rbx, rbx
-    x86.jz __nonnull_skip_84
-    x86.mov rcx, [rbp-24]
-    x86.call mm_decref
-    x86.label __nonnull_skip_84
-    x86.mov rsi, [rbp-8]
-    x86.mov rdi, [rsi+16]
-    x86.mov [rbp-32], rdi
-    x86.test rdi, rdi
-    x86.jz __nonnull_skip_85
-    x86.mov rcx, [rbp-32]
-    x86.call mm_decref
-    x86.label __nonnull_skip_85
-    x86.jmp __destruct_CaseInsensitiveHeaders.done
-  done:
-    x86.epilogue
-    x86.ret
-  }
-  func @__destruct_HttpHeaders(ptr: i64) {
-  entry:
-    x86.prologue stack_size=16
-    x86.mov [rbp-8], rcx
-    x86.mov rax, [rbp-8]
-    x86.mov rcx, [rax+0]
-    x86.mov [rbp-16], rcx
-    x86.test rcx, rcx
-    x86.jz __nonnull_skip_86
-    x86.call mm_decref
-    x86.label __nonnull_skip_86
-    x86.jmp __destruct_HttpHeaders.done
-  done:
-    x86.epilogue
-    x86.ret
-  }
-  func @__destruct_HttpRequest(ptr: i64) {
-  entry:
-    x86.prologue stack_size=32
-    x86.mov [rbp-8], rcx
-    x86.mov rax, [rbp-8]
-    x86.mov rcx, [rax+8]
-    x86.mov [rbp-16], rcx
-    x86.test rcx, rcx
-    x86.jz __nonnull_skip_87
-    x86.call mm_decref
-    x86.label __nonnull_skip_87
-    x86.mov rdx, [rbp-8]
-    x86.mov rbx, [rdx+16]
-    x86.mov [rbp-24], rbx
-    x86.test rbx, rbx
-    x86.jz __nonnull_skip_88
-    x86.mov rcx, [rbp-24]
-    x86.call mm_decref
-    x86.label __nonnull_skip_88
-    x86.mov rsi, [rbp-8]
-    x86.mov rdi, [rsi+24]
-    x86.mov [rbp-32], rdi
-    x86.test rdi, rdi
-    x86.jz __nonnull_skip_89
-    x86.mov rcx, [rbp-32]
-    x86.call mm_decref
-    x86.label __nonnull_skip_89
-    x86.jmp __destruct_HttpRequest.done
-  done:
-    x86.epilogue
-    x86.ret
-  }
-  func @__destruct_StringIndex(ptr: i64) {
-  entry:
-    x86.jmp __destruct_StringIndex.done
-  done:
-    x86.ret
-  }
-  func @__destruct_CodepointView(ptr: i64) {
-  entry:
-    x86.prologue stack_size=16
-    x86.mov [rbp-8], rcx
-    x86.mov rax, [rbp-8]
-    x86.mov rcx, [rax+0]
-    x86.mov [rbp-16], rcx
-    x86.test rcx, rcx
-    x86.jz __nonnull_skip_90
-    x86.call mm_decref
-    x86.label __nonnull_skip_90
-    x86.jmp __destruct_CodepointView.done
-  done:
-    x86.epilogue
-    x86.ret
-  }
   func @__destruct_StringArray(ptr: i64) {
   entry:
     x86.prologue stack_size=16
@@ -455,136 +523,10 @@ module {
     x86.mov rcx, [rax+8]
     x86.mov [rbp-16], rcx
     x86.test rcx, rcx
-    x86.jz __nonnull_skip_91
-    x86.call mm_decref
-    x86.label __nonnull_skip_91
-    x86.jmp __destruct_StringArray.done
-  done:
-    x86.epilogue
-    x86.ret
-  }
-  func @__destruct_TcpClient(ptr: i64) {
-  entry:
-    x86.prologue stack_size=16
-    x86.mov [rbp-8], rcx
-    x86.mov rax, [rbp-8]
-    x86.mov rcx, [rax+0]
-    x86.mov [rbp-16], rcx
-    x86.test rcx, rcx
-    x86.jz __nonnull_skip_92
-    x86.call mm_decref
-    x86.label __nonnull_skip_92
-    x86.jmp __destruct_TcpClient.done
-  done:
-    x86.epilogue
-    x86.ret
-  }
-  func @__destruct_URL(ptr: i64) {
-  entry:
-    x86.prologue stack_size=64
-    x86.mov [rbp-8], rcx
-    x86.mov rax, [rbp-8]
-    x86.mov rcx, [rax+0]
-    x86.mov [rbp-16], rcx
-    x86.test rcx, rcx
-    x86.jz __nonnull_skip_93
-    x86.call mm_decref
-    x86.label __nonnull_skip_93
-    x86.mov rdx, [rbp-8]
-    x86.mov rbx, [rdx+8]
-    x86.mov [rbp-24], rbx
-    x86.test rbx, rbx
-    x86.jz __nonnull_skip_94
-    x86.mov rcx, [rbp-24]
-    x86.call mm_decref
-    x86.label __nonnull_skip_94
-    x86.mov rsi, [rbp-8]
-    x86.mov rdi, [rsi+16]
-    x86.mov [rbp-32], rdi
-    x86.test rdi, rdi
-    x86.jz __nonnull_skip_95
-    x86.mov rcx, [rbp-32]
-    x86.call mm_decref
-    x86.label __nonnull_skip_95
-    x86.mov r8, [rbp-8]
-    x86.mov r9, [r8+24]
-    x86.mov [rbp-40], r9
-    x86.test r9, r9
-    x86.jz __nonnull_skip_96
-    x86.mov rcx, [rbp-40]
-    x86.call mm_decref
-    x86.label __nonnull_skip_96
-    x86.mov rax, [rbp-8]
-    x86.mov rcx, [rax+40]
-    x86.mov [rbp-48], rcx
-    x86.test rcx, rcx
     x86.jz __nonnull_skip_97
     x86.call mm_decref
     x86.label __nonnull_skip_97
-    x86.mov rax, [rbp-8]
-    x86.mov rcx, [rax+48]
-    x86.mov [rbp-56], rcx
-    x86.test rcx, rcx
-    x86.jz __nonnull_skip_98
-    x86.call mm_decref
-    x86.label __nonnull_skip_98
-    x86.jmp __destruct_URL.done
-  done:
-    x86.epilogue
-    x86.ret
-  }
-  func @__destruct_Array_Character(ptr: i64) {
-  entry:
-    x86.prologue stack_size=16
-    x86.mov [rbp-8], rcx
-    x86.mov rax, [rbp-8]
-    x86.mov rcx, [rax+8]
-    x86.mov [rbp-16], rcx
-    x86.test rcx, rcx
-    x86.jz __nonnull_skip_99
-    x86.call mm_decref
-    x86.label __nonnull_skip_99
-    x86.jmp __destruct_Array_Character.done
-  done:
-    x86.epilogue
-    x86.ret
-  }
-  func @__destruct_StateArray(ptr: i64) {
-  entry:
-    x86.prologue stack_size=16
-    x86.mov [rbp-8], rcx
-    x86.mov rax, [rbp-8]
-    x86.mov rcx, [rax+8]
-    x86.mov [rbp-16], rcx
-    x86.test rcx, rcx
-    x86.jz __nonnull_skip_100
-    x86.call mm_decref
-    x86.label __nonnull_skip_100
-    x86.jmp __destruct_StateArray.done
-  done:
-    x86.epilogue
-    x86.ret
-  }
-  func @__destruct_CharSet(ptr: i64) {
-  entry:
-    x86.prologue stack_size=32
-    x86.mov [rbp-8], rcx
-    x86.mov rax, [rbp-8]
-    x86.mov rcx, [rax+0]
-    x86.mov [rbp-16], rcx
-    x86.test rcx, rcx
-    x86.jz __nonnull_skip_101
-    x86.call mm_decref
-    x86.label __nonnull_skip_101
-    x86.mov rdx, [rbp-8]
-    x86.mov rbx, [rdx+8]
-    x86.mov [rbp-24], rbx
-    x86.test rbx, rbx
-    x86.jz __nonnull_skip_102
-    x86.mov rcx, [rbp-24]
-    x86.call mm_decref
-    x86.label __nonnull_skip_102
-    x86.jmp __destruct_CharSet.done
+    x86.jmp __destruct_StringArray.done
   done:
     x86.epilogue
     x86.ret
@@ -609,6 +551,54 @@ module {
     x86.epilogue
     x86.ret
   }
+  func @__destruct_Array_SetSlotState(ptr: i64) {
+  entry:
+    x86.prologue stack_size=16
+    x86.mov [rbp-8], rcx
+    x86.mov rax, [rbp-8]
+    x86.mov rcx, [rax+8]
+    x86.mov [rbp-16], rcx
+    x86.test rcx, rcx
+    x86.jz __nonnull_skip_98
+    x86.call mm_decref
+    x86.label __nonnull_skip_98
+    x86.jmp __destruct_Array_SetSlotState.done
+  done:
+    x86.epilogue
+    x86.ret
+  }
+  func @__destruct_CaseInsensitiveHeaders(ptr: i64) {
+  entry:
+    x86.prologue stack_size=32
+    x86.mov [rbp-8], rcx
+    x86.mov rax, [rbp-8]
+    x86.mov rcx, [rax+0]
+    x86.mov [rbp-16], rcx
+    x86.test rcx, rcx
+    x86.jz __nonnull_skip_99
+    x86.call mm_decref
+    x86.label __nonnull_skip_99
+    x86.mov rdx, [rbp-8]
+    x86.mov rbx, [rdx+8]
+    x86.mov [rbp-24], rbx
+    x86.test rbx, rbx
+    x86.jz __nonnull_skip_100
+    x86.mov rcx, [rbp-24]
+    x86.call mm_decref
+    x86.label __nonnull_skip_100
+    x86.mov rsi, [rbp-8]
+    x86.mov rdi, [rsi+16]
+    x86.mov [rbp-32], rdi
+    x86.test rdi, rdi
+    x86.jz __nonnull_skip_101
+    x86.mov rcx, [rbp-32]
+    x86.call mm_decref
+    x86.label __nonnull_skip_101
+    x86.jmp __destruct_CaseInsensitiveHeaders.done
+  done:
+    x86.epilogue
+    x86.ret
+  }
   func @__destruct_____Tuple_Key_Value_String_String(ptr: i64) {
   entry:
     x86.prologue stack_size=32
@@ -617,17 +607,17 @@ module {
     x86.mov rcx, [rax+0]
     x86.mov [rbp-16], rcx
     x86.test rcx, rcx
-    x86.jz __nonnull_skip_103
+    x86.jz __nonnull_skip_102
     x86.call mm_decref
-    x86.label __nonnull_skip_103
+    x86.label __nonnull_skip_102
     x86.mov rdx, [rbp-8]
     x86.mov rbx, [rdx+8]
     x86.mov [rbp-24], rbx
     x86.test rbx, rbx
-    x86.jz __nonnull_skip_104
+    x86.jz __nonnull_skip_103
     x86.mov rcx, [rbp-24]
     x86.call mm_decref
-    x86.label __nonnull_skip_104
+    x86.label __nonnull_skip_103
     x86.jmp __destruct_____Tuple_Key_Value_String_String.done
   done:
     x86.epilogue

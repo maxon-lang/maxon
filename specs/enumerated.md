@@ -76,7 +76,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
 function main() returns ExitCode
-	var arr = IntArray{}
+	var arr = IntArray.empty()
 	var count = 0
 	for (i, v) in arr.enumerated() 'loop'
 		print("{i}:{v}\n")
@@ -136,10 +136,14 @@ typealias Integer = int(i64.min to i64.max)
 type Point
 	export var x Integer
 	export var y Integer
+
+	static function create(x Integer, y Integer) returns Self
+		return Self{x: x, y: y}
+	end 'create'
 end 'Point'
 
 function main() returns ExitCode
-	var points = [Point{x: 1, y: 2}, Point{x: 3, y: 4}]
+	var points = [Point.create(x: 1, y: 2), Point.create(x: 3, y: 4)]
 	for (i, p) in points.enumerated() 'loop'
 		print("{i}:({p.x},{p.y})\n")
 	end 'loop'
@@ -193,7 +197,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
 function main() returns ExitCode
-	var arr = IntArray{}
+	var arr = IntArray.empty()
 	for (_, _) in arr.enumerated() 'loop'
 		print("x\n")
 	end 'loop'

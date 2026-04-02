@@ -18,6 +18,10 @@ export type ProcessResult
 	export var stdout String
 	export var stderr String
 
+	export static function create(exitCode ExitCode, stdout String, stderr String) returns ProcessResult
+		return ProcessResult{exitCode: exitCode, stdout: stdout, stderr: stderr}
+	end 'create'
+
 	/// Check if the process exited successfully (exit code 0)
 	export function succeeded() returns bool
 		return exitCode == 0
@@ -87,12 +91,12 @@ export type Process
 		let waitResult = __Builtins.processWait(hProcess, timeoutMs)
 		if waitResult != 0 'timedOut'
 			__Builtins.processCloseCapture(cap)
-			return ProcessResult{exitCode: 0 as ExitCode, stdout: "", stderr: "Process timed out"}
+			return ProcessResult.create(0 as ExitCode, stdout: "", stderr: "Process timed out")
 		end 'timedOut'
 		let ec = __Builtins.processGetExitCode(hProcess)
 		let out = captureStdout(cap)
 		let err = captureStderr(cap)
 		__Builtins.processCloseCapture(cap)
-		return ProcessResult{exitCode: ec as ExitCode, stdout: out, stderr: err}
+		return ProcessResult.create(ec as ExitCode, stdout: out, stderr: err)
 	end 'captureOutput'
 end 'Process'

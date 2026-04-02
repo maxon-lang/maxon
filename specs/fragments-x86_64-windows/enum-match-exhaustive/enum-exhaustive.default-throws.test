@@ -19,7 +19,9 @@ function checkColor(c Color) returns ColorCode throws AppError
 end 'checkColor'
 
 function main() returns ExitCode
-	let result = try checkColor(Color.red) otherwise 99
+	let result = try checkColor(Color.red) otherwise 'err'
+		return 99
+	end 'err'
 	return result
 end 'main'
 ---
@@ -56,18 +58,16 @@ module {
     x86.prologue stack_size=16
     x86.xor rcx, rcx
     x86.call enum-match-exhaustive.checkColor
-    x86.mov rcx, 99
-    x86.mov [rbp-8], rcx
-    x86.mov [rbp-16], rax
+    x86.mov [rbp-8], rax
     x86.xor rax, rax
     x86.cmp rdx, rax
-    x86.je main.otherwise_default_continue_3
-  otherwise_default_error_2:
+    x86.je main.otherwise_continue_1
+  otherwise_error_0:
+    x86.mov rax, 99
+    x86.epilogue
+    x86.ret
+  otherwise_continue_1:
     x86.mov rax, [rbp-8]
-    x86.mov [rbp-16], rax
-    x86.jmp main.otherwise_default_continue_3
-  otherwise_default_continue_3:
-    x86.mov rax, [rbp-16]
     x86.xor rcx, rcx
     x86.mov rdx, 4294967295
     x86.cmp rax, rdx

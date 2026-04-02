@@ -40,10 +40,14 @@ typealias Integer = int(i64.min to i64.max)
 type Point
 	export var x Integer
 	export var y Integer
+
+	static function create(x Integer, y Integer) returns Self
+		return Self{x: x, y: y}
+	end 'create'
 end 'Point'
 
 function testLocal()
-	@heap var p = Point{x: 1, y: 2}
+	@heap var p = Point.create(x: 1, y: 2)
 	print("{p.x}\n")
 end 'testLocal'
 
@@ -67,10 +71,14 @@ typealias Integer = int(i64.min to i64.max)
 type Point
 	export var x Integer
 	export var y Integer
+
+	static function create(x Integer, y Integer) returns Self
+		return Self{x: x, y: y}
+	end 'create'
 end 'Point'
 
 function testAlias()
-	var p = Point{x: 3, y: 4}
+	var p = Point.create(x: 3, y: 4)
 	let q = p
 	print("{q.x}\n")
 	print("{p.y}\n")
@@ -96,11 +104,15 @@ typealias Integer = int(i64.min to i64.max)
 
 type Box
 	export var value Integer
+
+	static function create(value Integer) returns Self
+		return Self{value: value}
+	end 'create'
 end 'Box'
 
 function testReassign()
-	var x = Box{value: 1}
-	x = Box{value: 2}
+	var x = Box.create(value: 1)
+	x = Box.create(value: 2)
 	print("{x.value}\n")
 end 'testReassign'
 
@@ -123,12 +135,16 @@ typealias Integer = int(i64.min to i64.max)
 
 type Widget
 	export var id Integer
+
+	static function create(id Integer) returns Self
+		return Self{id: id}
+	end 'create'
 end 'Widget'
 
 function testNestedBlock(cond bool)
 	var result = 0
 	if cond 'check'
-		@heap var w = Widget{id: 42}
+		@heap var w = Widget.create(id: 42)
 		result = w.id
 	end 'check'
 	print("{result}\n")
@@ -154,10 +170,14 @@ typealias Integer = int(i64.min to i64.max)
 type Point
 	export var x Integer
 	export var y Integer
+
+	static function create(x Integer, y Integer) returns Self
+		return Self{x: x, y: y}
+	end 'create'
 end 'Point'
 
 function makePoint(x Integer, y Integer) returns Point
-	var p = Point{x: x, y: y}
+	var p = Point.create(x: x, y: y)
 	return p
 end 'makePoint'
 
@@ -183,18 +203,22 @@ typealias Integer = int(i64.min to i64.max)
 
 type Item
 	export var value Integer
+
+	static function create(value Integer) returns Self
+		return Self{value: value}
+	end 'create'
 end 'Item'
 
 typealias ItemArray = Array with Item
 
 function getFirst(arr ItemArray) returns Item
-	var elem = try arr.get(0) otherwise Item{value: -1}
+	var elem = try arr.get(0) otherwise Item.create(value: -1)
 	return elem
 end 'getFirst'
 
 function main() returns ExitCode
-	var arr = ItemArray{}
-	arr.push(Item{value: 99})
+	var arr = ItemArray.empty()
+	arr.push(Item.create(value: 99))
 	var result = getFirst(arr)
 	print("{result.value}\n")
 	return 0
@@ -214,6 +238,10 @@ typealias Integer = int(i64.min to i64.max)
 
 type Item
 	export var value Integer
+
+	static function create(value Integer) returns Self
+		return Self{value: value}
+	end 'create'
 end 'Item'
 
 typealias ItemArray = Array with Item
@@ -223,9 +251,9 @@ function popFirst(arr ItemArray) returns Item throws ArrayError
 end 'popFirst'
 
 function main() returns ExitCode
-	var arr = ItemArray{}
-	arr.push(Item{value: 77})
-	arr.push(Item{value: 88})
+	var arr = ItemArray.empty()
+	arr.push(Item.create(value: 77))
+	arr.push(Item.create(value: 88))
 	var first = try popFirst(arr) otherwise 'err'
 		return 99
 	end 'err'
@@ -249,15 +277,23 @@ typealias Integer = int(i64.min to i64.max)
 
 type Inner
 	export var value Integer
+
+	static function create(value Integer) returns Self
+		return Self{value: value}
+	end 'create'
 end 'Inner'
 
 type Outer
 	export var inner Inner
+
+	static function create(inner Inner) returns Self
+		return Self{inner: inner}
+	end 'create'
 end 'Outer'
 
 function makeOuter(v Integer) returns Outer
-	var inner = Inner{value: v}
-	var outer = Outer{inner: inner}
+	var inner = Inner.create(value: v)
+	var outer = Outer.create(inner: inner)
 	return outer
 end 'makeOuter'
 
@@ -281,10 +317,18 @@ typealias Integer = int(i64.min to i64.max)
 
 type Data
 	export var value Integer
+
+	static function create(value Integer) returns Self
+		return Self{value: value}
+	end 'create'
 end 'Data'
 
 type Wrapper
 	export var data Data
+
+	static function create(data Data) returns Self
+		return Self{data: data}
+	end 'create'
 end 'Wrapper'
 
 function extractData(w Wrapper) returns Data
@@ -292,8 +336,8 @@ function extractData(w Wrapper) returns Data
 end 'extractData'
 
 function main() returns ExitCode
-	var d = Data{value: 42}
-	var w = Wrapper{data: d}
+	var d = Data.create(value: 42)
+	var w = Wrapper.create(data: d)
 	var result = extractData(w)
 	print("{result.value}\n")
 	return 0
@@ -313,20 +357,24 @@ typealias Integer = int(i64.min to i64.max)
 
 type Node
 	export var id Integer
+
+	static function create(id Integer) returns Self
+		return Self{id: id}
+	end 'create'
 end 'Node'
 
 typealias NodeArray = Array with Node
 
 function main() returns ExitCode
-	var arr = NodeArray{}
+	var arr = NodeArray.empty()
 	var count = 0
 	if true 'scope'
-		var n = Node{id: 10}
+		var n = Node.create(id: 10)
 		arr.push(n)
 		count = arr.count()
 	end 'scope'
 	print("{count}\n")
-	var elem = try arr.get(0) otherwise Node{id: -1}
+	var elem = try arr.get(0) otherwise Node.create(id: -1)
 	print("{elem.id}\n")
 	return 0
 end 'main'
@@ -346,15 +394,19 @@ typealias Integer = int(i64.min to i64.max)
 
 type Item
 	export var value Integer
+
+	static function create(value Integer) returns Self
+		return Self{value: value}
+	end 'create'
 end 'Item'
 
 typealias ItemArray = Array with Item
 
 function main() returns ExitCode
-	var arr = ItemArray{}
-	arr.push(Item{value: 1})
-	arr.push(Item{value: 2})
-	arr.push(Item{value: 3})
+	var arr = ItemArray.empty()
+	arr.push(Item.create(value: 1))
+	arr.push(Item.create(value: 2))
+	arr.push(Item.create(value: 3))
 	var removed = try arr.remove(1) otherwise 'err'
 		return 99
 	end 'err'
@@ -378,15 +430,19 @@ typealias Integer = int(i64.min to i64.max)
 
 type Item
 	export var value Integer
+
+	static function create(value Integer) returns Self
+		return Self{value: value}
+	end 'create'
 end 'Item'
 
 typealias ItemArray = Array with Item
 
 function main() returns ExitCode
-	var arr = ItemArray{}
+	var arr = ItemArray.empty()
 	var i = 0
 	while i < 10 'push'
-		arr.push(Item{value: i})
+		arr.push(Item.create(value: i))
 		i = i + 1
 	end 'push'
 	var total = 0
@@ -414,15 +470,19 @@ typealias Integer = int(i64.min to i64.max)
 
 type Item
 	export var value Integer
+
+	static function create(value Integer) returns Self
+		return Self{value: value}
+	end 'create'
 end 'Item'
 
 typealias ItemArray = Array with Item
 
 function main() returns ExitCode
-	var arr = ItemArray{}
-	arr.push(Item{value: 100})
-	arr.set(0, value: Item{value: 200})
-	var elem = try arr.get(0) otherwise Item{value: -1}
+	var arr = ItemArray.empty()
+	arr.push(Item.create(value: 100))
+	arr.set(0, value: Item.create(value: 200))
+	var elem = try arr.get(0) otherwise Item.create(value: -1)
 	print("{elem.value}\n")
 	return 0
 end 'main'
@@ -441,15 +501,19 @@ typealias Integer = int(i64.min to i64.max)
 
 type Item
 	export var value Integer
+
+	static function create(value Integer) returns Self
+		return Self{value: value}
+	end 'create'
 end 'Item'
 
 typealias ItemArray = Array with Item
 
 function fillArray() returns Integer
-	var arr = ItemArray{}
-	arr.push(Item{value: 1})
-	arr.push(Item{value: 2})
-	arr.push(Item{value: 3})
+	var arr = ItemArray.empty()
+	arr.push(Item.create(value: 1))
+	arr.push(Item.create(value: 2))
+	arr.push(Item.create(value: 3))
 	return arr.count()
 end 'fillArray'
 
@@ -473,15 +537,23 @@ typealias Integer = int(i64.min to i64.max)
 
 type Inner
 	export var value Integer
+
+	static function create(value Integer) returns Self
+		return Self{value: value}
+	end 'create'
 end 'Inner'
 
 type Outer
 	export var inner Inner
+
+	static function create(inner Inner) returns Self
+		return Self{inner: inner}
+	end 'create'
 end 'Outer'
 
 function main() returns ExitCode
-	var inner = Inner{value: 7}
-	var outer = Outer{inner: inner}
+	var inner = Inner.create(value: 7)
+	var outer = Outer.create(inner: inner)
 	print("{outer.inner.value}\n")
 	return 0
 end 'main'
@@ -500,6 +572,10 @@ typealias Integer = int(i64.min to i64.max)
 
 type Data
 	export var value Integer
+
+	static function create(value Integer) returns Self
+		return Self{value: value}
+	end 'create'
 end 'Data'
 
 type Container
@@ -508,12 +584,16 @@ type Container
 	export function setData(newData Data)
 		data = newData
 	end 'setData'
+
+	static function create(data Data) returns Self
+		return Self{data: data}
+	end 'create'
 end 'Container'
 
 function main() returns ExitCode
-	var old = Data{value: 10}
-	var c = Container{data: old}
-	c.setData(Data{value: 20})
+	var old = Data.create(value: 10)
+	var c = Container.create(data: old)
+	c.setData(Data.create(value: 20))
 	print("{c.data.value}\n")
 	return 0
 end 'main'
@@ -532,13 +612,17 @@ typealias Integer = int(i64.min to i64.max)
 
 type Item
 	export var value Integer
+
+	static function create(value Integer) returns Self
+		return Self{value: value}
+	end 'create'
 end 'Item'
 
 typealias ItemManagedList = __ManagedList with Item
 
 function main() returns ExitCode
 	var managedList = ItemManagedList.create()
-	var item = Item{value: 99}
+	var item = Item.create(value: 99)
 	var node = managedList.insertFirst(item)
 	print("{node.value().value}\n")
 	print("{managedList.count()}\n")
@@ -560,13 +644,17 @@ typealias Integer = int(i64.min to i64.max)
 
 type Item
 	export var value Integer
+
+	static function create(value Integer) returns Self
+		return Self{value: value}
+	end 'create'
 end 'Item'
 
 typealias ItemManagedList = __ManagedList with Item
 
 function main() returns ExitCode
 	var managedList = ItemManagedList.create()
-	var node = managedList.insertFirst(Item{value: 50})
+	var node = managedList.insertFirst(Item.create(value: 50))
 	managedList.remove(node)
 	print("{managedList.count()}\n")
 	return 0
@@ -586,15 +674,19 @@ typealias Integer = int(i64.min to i64.max)
 
 type Item
 	export var value Integer
+
+	static function create(value Integer) returns Self
+		return Self{value: value}
+	end 'create'
 end 'Item'
 
 typealias ItemManagedList = __ManagedList with Item
 
 function main() returns ExitCode
 	var managedList = ItemManagedList.create()
-	managedList.insertFirst(Item{value: 1})
-	managedList.insertLast(Item{value: 2})
-	managedList.insertLast(Item{value: 3})
+	managedList.insertFirst(Item.create(value: 1))
+	managedList.insertLast(Item.create(value: 2))
+	managedList.insertLast(Item.create(value: 3))
 	managedList.clear()
 	print("{managedList.count()}\n")
 	return 0
@@ -614,20 +706,24 @@ typealias Integer = int(i64.min to i64.max)
 
 type Item
 	export var value Integer
+
+	static function create(value Integer) returns Self
+		return Self{value: value}
+	end 'create'
 end 'Item'
 
 typealias ItemArray = Array with Item
 
-var globalArr = ItemArray{}
+var globalArr = ItemArray.empty()
 
 function pushLocal()
-	var item = Item{value: 123}
+	var item = Item.create(value: 123)
 	globalArr.push(item)
 end 'pushLocal'
 
 function main() returns ExitCode
 	pushLocal()
-	var elem = try globalArr.get(0) otherwise Item{value: -1}
+	var elem = try globalArr.get(0) otherwise Item.create(value: -1)
 	print("{elem.value}\n")
 	return 0
 end 'main'
@@ -646,15 +742,19 @@ typealias Integer = int(i64.min to i64.max)
 
 type Item
 	export var value Integer
+
+	static function create(value Integer) returns Self
+		return Self{value: value}
+	end 'create'
 end 'Item'
 
 typealias ItemArray = Array with Item
 
-var globalArr = ItemArray{}
+var globalArr = ItemArray.empty()
 
 function main() returns ExitCode
-	globalArr.push(Item{value: 10})
-	globalArr.push(Item{value: 20})
+	globalArr.push(Item.create(value: 10))
+	globalArr.push(Item.create(value: 20))
 	var removed = try globalArr.remove(0) otherwise 'err'
 		return 99
 	end 'err'
@@ -678,16 +778,20 @@ typealias Integer = int(i64.min to i64.max)
 
 type Item
 	export var value Integer
+
+	static function create(value Integer) returns Self
+		return Self{value: value}
+	end 'create'
 end 'Item'
 
 typealias ItemArray = Array with Item
 
-var globalArr = ItemArray{}
+var globalArr = ItemArray.empty()
 
 function main() returns ExitCode
 	var i = 0
 	while i < 20 'push'
-		globalArr.push(Item{value: i})
+		globalArr.push(Item.create(value: i))
 		i = i + 1
 	end 'push'
 	var total = 0
@@ -715,12 +819,16 @@ typealias Integer = int(i64.min to i64.max)
 
 type Widget
 	export var id Integer
+
+	static function create(id Integer) returns Self
+		return Self{id: id}
+	end 'create'
 end 'Widget'
 
 function main() returns ExitCode
 	var result = 0
 	if true 'check'
-		@heap var w = Widget{id: 5}
+		@heap var w = Widget.create(id: 5)
 		result = w.id
 	end 'check'
 	print("{result}\n")
@@ -741,15 +849,19 @@ typealias Integer = int(i64.min to i64.max)
 
 type Box
 	export var value Integer
+
+	static function create(value Integer) returns Self
+		return Self{value: value}
+	end 'create'
 end 'Box'
 
 function choose(flag bool) returns Integer
-	var result = Box{value: 0}
+	var result = Box.create(value: 0)
 	if flag 'branch'
-		result = Box{value: 1}
+		result = Box.create(value: 1)
 	end 'branch'
 	if flag == false 'branch2'
-		result = Box{value: 2}
+		result = Box.create(value: 2)
 	end 'branch2'
 	return result.value
 end 'choose'
@@ -775,13 +887,17 @@ typealias Integer = int(i64.min to i64.max)
 
 type Counter
 	export var val Integer
+
+	static function create(val Integer) returns Self
+		return Self{val: val}
+	end 'create'
 end 'Counter'
 
 function main() returns ExitCode
 	var total = 0
 	var i = 0
 	while i < 5 'loop'
-		@heap var c = Counter{val: i}
+		@heap var c = Counter.create(val: i)
 		total = total + c.val
 		i = i + 1
 	end 'loop'
@@ -803,15 +919,19 @@ typealias Integer = int(i64.min to i64.max)
 
 type Score
 	export var points Integer
+
+	static function create(points Integer) returns Self
+		return Self{points: points}
+	end 'create'
 end 'Score'
 
 typealias ScoreArray = Array with Score
 
 function main() returns ExitCode
-	var scores = ScoreArray{}
-	scores.push(Score{points: 10})
-	scores.push(Score{points: 20})
-	scores.push(Score{points: 30})
+	var scores = ScoreArray.empty()
+	scores.push(Score.create(points: 10))
+	scores.push(Score.create(points: 20))
+	scores.push(Score.create(points: 30))
 	var total = 0
 	for s in scores 'loop'
 		total = total + s.points
@@ -839,15 +959,19 @@ end 'Color'
 
 type Paint
 	export var id Integer
+
+	static function create(id Integer) returns Self
+		return Self{id: id}
+	end 'create'
 end 'Paint'
 
 function main() returns ExitCode
 	var c = Color.red
 	var result = 0
-	var p = Paint{id: 0}
+	var p = Paint.create(id: 0)
 	match c 'pick'
-		red then p = Paint{id: 7}
-		blue then p = Paint{id: 0}
+		red then p = Paint.create(id: 7)
+		blue then p = Paint.create(id: 0)
 	end 'pick'
 	result = p.id
 	print("{result}\n")
@@ -868,13 +992,17 @@ typealias Integer = int(i64.min to i64.max)
 
 type Counter
 	export var val Integer
+
+	static function create(val Integer) returns Self
+		return Self{val: val}
+	end 'create'
 end 'Counter'
 
 function main() returns ExitCode
 	var total = 0
 	var i = 0
 	while i < 5 'loop'
-		var c = Counter{val: i}
+		var c = Counter.create(val: i)
 		if i == 3 'brk'
 			total = total + c.val
 			break
@@ -900,13 +1028,17 @@ typealias Integer = int(i64.min to i64.max)
 
 type Item
 	export var value Integer
+
+	static function create(value Integer) returns Self
+		return Self{value: value}
+	end 'create'
 end 'Item'
 
 function main() returns ExitCode
 	var total = 0
 	var i = 0
 	while i < 5 'loop'
-		var item = Item{value: i}
+		var item = Item.create(value: i)
 		i = i + 1
 		if item.value == 2 'skip'
 			continue
@@ -955,6 +1087,10 @@ typealias Integer = int(i64.min to i64.max)
 
 type Config
 	export var level Integer
+
+	static function create(level Integer) returns Self
+		return Self{level: level}
+	end 'create'
 end 'Config'
 
 function apply(f (Integer) returns Integer, x Integer) returns Integer
@@ -962,7 +1098,7 @@ function apply(f (Integer) returns Integer, x Integer) returns Integer
 end 'apply'
 
 function main() returns ExitCode
-	var cfg = Config{level: 3}
+	var cfg = Config.create(level: 3)
 	var result = apply(f: (_ Integer) gives cfg.level, x: 0)
 	print("{result}\n")
 	return 0
@@ -982,14 +1118,22 @@ typealias Integer = int(i64.min to i64.max)
 
 type Inner
 	export var val Integer
+
+	static function create(val Integer) returns Self
+		return Self{val: val}
+	end 'create'
 end 'Inner'
 
 type Outer
 	export var child Inner
+
+	static function create(child Inner) returns Self
+		return Self{child: child}
+	end 'create'
 end 'Outer'
 
 function main() returns ExitCode
-	var o = Outer{child: Inner{val: 42}}
+	var o = Outer.create(child: Inner.create(val: 42))
 	print("{o.child.val}\n")
 	return 0
 end 'main'
@@ -1008,25 +1152,33 @@ typealias Integer = int(i64.min to i64.max)
 
 type Row
 	export var value Integer
+
+	static function create(value Integer) returns Self
+		return Self{value: value}
+	end 'create'
 end 'Row'
 
 typealias RowArray = Array with Row
 
 type Table
 	export var rows RowArray
+
+	static function create(rows RowArray) returns Self
+		return Self{rows: rows}
+	end 'create'
 end 'Table'
 
 typealias TableArray = Array with Table
 
 function main() returns ExitCode
-	var tables = TableArray{}
-	var rows1 = RowArray{}
-	rows1.push(Row{value: 1})
-	rows1.push(Row{value: 2})
-	tables.push(Table{rows: rows1})
-	var rows2 = RowArray{}
-	rows2.push(Row{value: 3})
-	tables.push(Table{rows: rows2})
+	var tables = TableArray.empty()
+	var rows1 = RowArray.empty()
+	rows1.push(Row.create(value: 1))
+	rows1.push(Row.create(value: 2))
+	tables.push(Table.create(rows: rows1))
+	var rows2 = RowArray.empty()
+	rows2.push(Row.create(value: 3))
+	tables.push(Table.create(rows: rows2))
 	print("{tables.count()}\n")
 	return 0
 end 'main'
@@ -1045,15 +1197,19 @@ typealias Integer = int(i64.min to i64.max)
 
 type Item
 	export var value Integer
+
+	static function create(value Integer) returns Self
+		return Self{value: value}
+	end 'create'
 end 'Item'
 
 typealias ItemManagedList = __ManagedList with Item
 
 function buildManagedList() returns ItemManagedList
 	var managedList = ItemManagedList.create()
-	managedList.insertLast(Item{value: 10})
-	managedList.insertLast(Item{value: 20})
-	managedList.insertLast(Item{value: 30})
+	managedList.insertLast(Item.create(value: 10))
+	managedList.insertLast(Item.create(value: 20))
+	managedList.insertLast(Item.create(value: 30))
 	return managedList
 end 'buildManagedList'
 

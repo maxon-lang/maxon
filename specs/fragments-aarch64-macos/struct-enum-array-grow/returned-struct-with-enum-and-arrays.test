@@ -16,6 +16,10 @@ export type Block
     export var ops OpArray
     export var terminator MlirOp
     export var hasTerminator bool
+
+    static function create(id Integer, ops OpArray, terminator MlirOp, hasTerminator bool) returns Self
+    	return Self{id: id, ops: ops, terminator: terminator, hasTerminator: hasTerminator}
+    end 'create'
 end 'Block'
 
 typealias DepArray = Array with Integer
@@ -24,17 +28,25 @@ export type QueryDatabase
     export var revision Integer
     export var deps DepArray
     export var extra DepArray
+
+    static function create(revision Integer, deps DepArray, extra DepArray) returns Self
+    	return Self{revision: revision, deps: deps, extra: extra}
+    end 'create'
 end 'QueryDatabase'
 
 export type Project
     export var db QueryDatabase
     export var block Block
+
+    static function create(db QueryDatabase, block Block) returns Self
+    	return Self{db: db, block: block}
+    end 'create'
 end 'Project'
 
 function createProject() returns Project
-    let block = Block{id: 0, ops: OpArray{}, terminator: MlirOp.cf(CfOp.br(0)), hasTerminator: false}
-    let db = QueryDatabase{revision: 0, deps: DepArray{}, extra: DepArray{}}
-    return Project{db: db, block: block}
+    let block = Block.create(id: 0, ops: OpArray.empty(), terminator: MlirOp.cf(CfOp.br(0)), hasTerminator: false)
+    let db = QueryDatabase.create(revision: 0, deps: DepArray.empty(), extra: DepArray.empty())
+    return Project.create(db: db, block: block)
 end 'createProject'
 
 function main() returns ExitCode

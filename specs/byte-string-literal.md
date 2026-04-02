@@ -140,13 +140,17 @@ typealias Integer = int(i64.min to i64.max)
 
 type Info
 		export var value Integer
+
+		static function create(value Integer) returns Self
+			return Self{value: value}
+		end 'create'
 end 'Info'
 
-var m = [b"hello": Info{value: 10}, b"world": Info{value: 20}]
+var m = [b"hello": Info.create(value: 10), b"world": Info.create(value: 20)]
 
 function main() returns ExitCode
-		let v1 = try m.get(key: b"hello") otherwise Info{value: 0}
-		let v2 = try m.get(key: b"world") otherwise Info{value: 0}
+		let v1 = try m.get(key: b"hello") otherwise Info.create(value: 0)
+		let v2 = try m.get(key: b"world") otherwise Info.create(value: 0)
 		print("{v1.value} {v2.value}")
 		return 0
 end 'main'

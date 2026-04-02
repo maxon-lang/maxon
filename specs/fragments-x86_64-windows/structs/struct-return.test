@@ -5,10 +5,14 @@ typealias Integer = int(i64.min to i64.max)
 type Pair
 	export var first Integer
 	export var second Integer
+
+	static function create(first Integer, second Integer) returns Self
+		return Self{first: first, second: second}
+	end 'create'
 end 'Pair'
 
 function makePair(a Integer, b Integer) returns Pair
-	return Pair{ first: a, second: b }
+	return Pair.create(first: a, second: b)
 end 'makePair'
 
 function main() returns ExitCode
@@ -19,7 +23,7 @@ end 'main'
 ExitCode: 12
 ---
 module {
-  func @structs.makePair(a: i64, b: i64) -> i64 {
+  func @Pair.create(first: i64, second: i64) -> i64 {
   entry:
     x86.prologue stack_size=32
     x86.mov [rbp-16], rcx
@@ -38,6 +42,15 @@ module {
     x86.mov rsi, [rbp-8]
     x86.mov rcx, [rbp-8]
     x86.call mm_incref
+    x86.mov rax, [rbp-8]
+    x86.epilogue
+    x86.ret
+  }
+  func @structs.makePair(a: i64, b: i64) -> i64 {
+  entry:
+    x86.prologue stack_size=16
+    x86.call Pair.create
+    x86.mov [rbp-8], rax
     x86.mov rax, [rbp-8]
     x86.epilogue
     x86.ret

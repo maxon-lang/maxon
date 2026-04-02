@@ -3,19 +3,23 @@ typealias Integer = int(i64.min to i64.max)
 
 type Wrapper
   export var value Integer
+
+  static function create(value Integer) returns Self
+  	return Self{value: value}
+  end 'create'
 end 'Wrapper'
 
 typealias WrapperArray = Array with Wrapper
 
 function firstOrDefault(arr WrapperArray) returns Wrapper
-  var fallback = Wrapper{value: 0}
+  var fallback = Wrapper.create(value: 0)
   var result = try arr.get(0) otherwise fallback
   return result
 end 'firstOrDefault'
 
 function main() returns ExitCode
-  var arr = WrapperArray{}
-  var w = Wrapper{value: 42}
+  var arr = WrapperArray.empty()
+  var w = Wrapper.create(value: 42)
   arr.push(w)
   var got = firstOrDefault(arr: arr)
   return got.value

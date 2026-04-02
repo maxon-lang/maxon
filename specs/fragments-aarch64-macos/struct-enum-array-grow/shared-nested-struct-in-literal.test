@@ -5,17 +5,25 @@ typealias IntArray = Array with Integer
 export type Inner
     export var data IntArray
     export var value Integer
+
+    static function create(data IntArray, value Integer) returns Self
+    	return Self{data: data, value: value}
+    end 'create'
 end 'Inner'
 
 export type Outer
     export var first Inner
     export var second Inner
     export var deps IntArray
+
+    static function create(first Inner, second Inner, deps IntArray) returns Self
+    	return Self{first: first, second: second, deps: deps}
+    end 'create'
 end 'Outer'
 
 function makeOuter() returns Outer
-    let shared = Inner{data: IntArray{}, value: 42}
-    return Outer{first: shared, second: shared, deps: IntArray{}}
+    let shared = Inner.create(data: IntArray.empty(), value: 42)
+    return Outer.create(first: shared, second: shared, deps: IntArray.empty())
 end 'makeOuter'
 
 function main() returns ExitCode

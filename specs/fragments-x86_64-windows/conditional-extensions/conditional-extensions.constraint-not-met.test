@@ -14,6 +14,10 @@ end 'Holder'
 
 type NotComparable
 	var x Integer
+
+	static function create(x Integer) returns Self
+		return Self{x: x}
+	end 'create'
 end 'NotComparable'
 
 type MyHolder implements Holder with NotComparable
@@ -22,17 +26,21 @@ type MyHolder implements Holder with NotComparable
 	function get() returns NotComparable
 		return item
 	end 'get'
+
+	static function create(item NotComparable) returns Self
+		return Self{item: item}
+	end 'create'
 end 'MyHolder'
 
 function main() returns ExitCode
-	var h = MyHolder{item: NotComparable{x: 5}}
+	var h = MyHolder.create(item: NotComparable.create(x: 5))
 	// isGreater should not exist on MyHolder since NotComparable doesn't implement Comparable
-	var r = h.isGreater(NotComparable{x: 3})
+	var r = h.isGreater(NotComparable.create(x: 3))
 	return 0
 end 'main'
 ---
 MaxoncStderr: ```
-error E4006: specs/fragments/conditional-extensions/conditional-extensions.constraint-not-met.test:30:12: Type 'MyHolder' has no field named 'isGreater' ('isGreater' is available as a conditional extension where Item is Comparable, but 'NotComparable' does not implement 'Comparable')
+error E4006: specs/fragments/conditional-extensions/conditional-extensions.constraint-not-met.test:38:12: Type 'MyHolder' has no field named 'isGreater' ('isGreater' is available as a conditional extension where Item is Comparable, but 'NotComparable' does not implement 'Comparable')
 ```
 ---
 ---

@@ -12,10 +12,14 @@ type Counter
 	export function getCount() returns Score
 		return count           // OK - accessing within method
 	end 'getCount'
+
+	static function create(count Score, name Score) returns Self
+		return Self{count: count, name: name}
+	end 'create'
 end 'Counter'
 
 function main() returns ExitCode
-	var c = Counter{count: 0, name: 5}
+	var c = Counter.create(count: 0, name: 5)
 	c.increment()
 	return c.getCount()
 	// c.count would be an error - not exported
@@ -48,26 +52,46 @@ module {
     x86.epilogue
     x86.ret
   }
+  func @Counter.create(count: i64, name: i64) -> i64 {
+  entry:
+    x86.prologue stack_size=32
+    x86.mov [rbp-16], rcx
+    x86.mov [rbp-24], rdx
+    x86.mov rcx, 16
+    x86.xor rdx, rdx
+    x86.mov r8, 1
+    x86.call mm_alloc
+    x86.mov [rbp-8], rax
+    x86.mov rax, [rbp-8]
+    x86.mov rcx, [rbp-16]
+    x86.mov [rax+0], rcx
+    x86.mov rdx, [rbp-8]
+    x86.mov rbx, [rbp-24]
+    x86.mov [rdx+8], rbx
+    x86.mov rsi, [rbp-8]
+    x86.mov rcx, [rbp-8]
+    x86.call mm_incref
+    x86.mov rax, [rbp-8]
+    x86.epilogue
+    x86.ret
+  }
   func @main() -> u32 {
   entry:
     x86.prologue stack_size=16
-    x86.xor rax, rax
-    x86.mov rcx, 5
-    x86.mov [rbp-16], rax
-    x86.mov [rbp-8], rcx
-    x86.lea rdx, [rbp-16]
-    x86.mov rbx, rdx
-    x86.mov rcx, rbx
+    x86.xor rcx, rcx
+    x86.mov rdx, 5
+    x86.call Counter.create
+    x86.mov [rbp-8], rax
+    x86.mov rax, [rbp-8]
+    x86.mov rcx, [rbp-8]
     x86.call Counter.increment
-    x86.lea rsi, [rbp-16]
-    x86.mov rdi, rsi
-    x86.mov rcx, rdi
+    x86.mov rcx, [rbp-8]
     x86.call Counter.getCount
-    x86.xor r8, r8
-    x86.mov r9, 4294967295
-    x86.cmp rax, r9
+    x86.xor rdx, rdx
+    x86.mov rbx, 4294967295
+    x86.cmp rax, rbx
     x86.jg main.__range_panic_0
-    x86.cmp rax, r8
+    x86.cmp rax, rdx
     x86.jl main.__range_panic_0
     x86.jmp main.__range_ok_0
   __range_panic_0:
@@ -75,7 +99,20 @@ module {
     x86.mov rcx, rax
     x86.call mrt_panic
   __range_ok_0:
+    x86.mov rcx, [rbp-8]
+    x86.mov [rbp-16], rax
+    x86.test rcx, rcx
+    x86.jz __nonnull_skip_0
+    x86.call mm_decref
+    x86.label __nonnull_skip_0
+    x86.mov rax, [rbp-16]
     x86.epilogue
+    x86.ret
+  }
+  func @__destruct_Counter(ptr: i64) {
+  entry:
+    x86.jmp __destruct_Counter.done
+  done:
     x86.ret
   }
 }

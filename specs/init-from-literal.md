@@ -20,11 +20,11 @@ type MyString implements InitableFromStringLiteral
 	var value String
 
 	static function init(value String) returns MyString
-		return MyString{_value: value}
+		return MyString{value: value}
 	end 'init'
 
 	export function len() returns Score
-		return _value.byteLength()
+		return value.byteLength()
 	end 'len'
 end 'MyString'
 
@@ -52,11 +52,11 @@ type MyChar implements InitableFromCharLiteral
 	var value Character
 
 	static function init(value Character) returns MyChar
-		return MyChar{_value: value}
+		return MyChar{value: value}
 	end 'init'
 
 	export function len() returns Score
-		return _value.byteLength()
+		return value.byteLength()
 	end 'len'
 end 'MyChar'
 
@@ -85,11 +85,11 @@ type Wrapper implements InitableFromStringLiteral
 	var value String
 
 	static function init(value String) returns Wrapper
-		return Wrapper{_value: value}
+		return Wrapper{value: value}
 	end 'init'
 
 	export function len() returns Integer
-		return _value.byteLength()
+		return value.byteLength()
 	end 'len'
 end 'Wrapper'
 
@@ -112,11 +112,11 @@ type Wrapper implements InitableFromStringLiteral
 	var value String
 
 	static function init(value String) returns Wrapper
-		return Wrapper{_value: value}
+		return Wrapper{value: value}
 	end 'init'
 
 	export function len() returns Integer
-		return _value.byteLength()
+		return value.byteLength()
 	end 'len'
 end 'Wrapper'
 
@@ -139,11 +139,11 @@ type CharWrapper implements InitableFromCharLiteral
 	var value Character
 
 	static function init(value Character) returns CharWrapper
-		return CharWrapper{_value: value}
+		return CharWrapper{value: value}
 	end 'init'
 
 	export function len() returns Integer
-		return _value.byteLength()
+		return value.byteLength()
 	end 'len'
 end 'CharWrapper'
 
