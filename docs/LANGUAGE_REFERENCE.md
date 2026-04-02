@@ -19,18 +19,19 @@ This reference provides complete syntax and semantics for the Maxon programming 
    - [Interface Extensions](#interface-extensions)
    - [Conditional Extensions](#conditional-extensions)
    - [Conditional Interface Conformance](#conditional-interface-conformance)
-5. [Enums (with Associated Values)](#enums-with-associated-values)
-6. [Variables](#variables)
-7. [Functions](#functions)
+5. [Tuples](#tuples)
+6. [Enums (with Associated Values)](#enums-with-associated-values)
+7. [Variables](#variables)
+8. [Functions](#functions)
    - [Parameter Passing](#parameter-passing)
    - [Closures](#closures)
    - [Function Purity and Discarded Results](#function-purity-and-discarded-results)
-8. [Expressions](#expressions)
-9. [Statements](#statements)
-10. [Error Handling](#error-handling)
-11. [Namespaces](#namespaces)
-12. [Async/Await (Concurrency)](#asyncawait-concurrency)
-13. [Standard Library](#standard-library)
+9. [Expressions](#expressions)
+10. [Statements](#statements)
+11. [Error Handling](#error-handling)
+12. [Namespaces](#namespaces)
+13. [Async/Await (Concurrency)](#asyncawait-concurrency)
+14. [Standard Library](#standard-library)
     - [FilePath](#filepath)
     - [URL](#url)
     - [CharacterSet](#characterset)
@@ -39,8 +40,8 @@ This reference provides complete syntax and semantics for the Maxon programming 
     - [List](#list)
     - [Networking (TcpClient)](#networking-tcpclient)
     - [Builtin Managed Types](#builtin-managed-types)
-14. [Build System](#build-system)
-15. [Memory Model](#memory-model)
+15. [Build System](#build-system)
+16. [Memory Model](#memory-model)
     - [Reference-by-Default Assignment](#reference-by-default-assignment)
     - [Explicit Cloning](#explicit-cloning)
     - [Cloneable Interface](#cloneable-interface)
@@ -1031,6 +1032,141 @@ end 'Array'
 When a concrete type alias is created (e.g., `typealias IntArr = Array with Integer`), the compiler checks whether the element type satisfies the `where` constraints. If `Integer` implements both `Hashable` and `Equatable`, then `IntArr` automatically conforms to `Hashable` and `Equatable`, enabling it to be used as a `Map` key or `Set` element.
 
 This applies both to explicit `typealias` declarations and to auto-generated type aliases created during monomorphization.
+
+---
+
+## Tuples
+
+Tuples are fixed-size, ordered collections of values with potentially different types. They use parenthesized syntax for both type annotations and literals.
+
+### Tuple Literals
+
+Create tuples using parenthesized, comma-separated expressions:
+
+```maxon
+var t = (10, 20)              // 2-element int tuple
+var mixed = (42, "hello")     // int and String
+var triple = (1, 2, 39)       // 3-element tuple
+```
+
+**Note:** A single parenthesized expression `(expr)` is NOT a tuple -- it is a parenthesized expression. Tuples require at least two elements.
+
+### Element Access
+
+Access tuple elements using positional dot syntax `.0`, `.1`, `.2`, etc.:
+
+```maxon
+var t = (10, 20)
+t.0   // 10
+t.1   // 20
+```
+
+### Field Assignment
+
+Tuple fields are mutable and can be assigned individually:
+
+```maxon
+var t = (0, 0)
+t.0 = 20
+t.1 = 22
+// t is now (20, 22)
+```
+
+### Tuple Types
+
+In function parameters and return types, tuple types use parenthesized type lists:
+
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+function sum(t (Integer, Integer)) returns Integer
+	return t.0 + t.1
+end 'sum'
+
+function makePair(a Integer, b Integer) returns (Integer, Integer)
+	return (a, b)
+end 'makePair'
+```
+
+### Destructuring Declarations
+
+Tuples can be destructured into new variables using `var` or `let`:
+
+```maxon
+var (x, y) = makePair(10, b: 32)   // x = 10, y = 32
+let (a, b) = (10, 20)              // immutable bindings
+```
+
+Use `_` to discard individual elements:
+
+```maxon
+var (result, _) = compute()    // discard second element
+var (_, status) = fetch()      // discard first element
+```
+
+If the function is pure, at least one element must be used:
+
+```maxon
+var (_, _) = pureFunc()        // Error E3064: all elements discarded for pure function
+```
+
+### Tuple Assignment
+
+Assign tuple values to **existing** mutable variables:
+
+```maxon
+var x = 0
+var y = 0
+(x, y) = makePair(10, b: 32)  // x = 10, y = 32
+```
+
+**Mixed declaration and assignment** -- combine existing variables with new declarations:
+
+```maxon
+var x = 0
+(x, var y) = makePair(10, b: 32)     // x existing, y newly declared
+(var a, var b) = makePair(10, b: 32)  // both newly declared
+(x, let z) = makePair(3, b: 4)       // x existing, z immutable
+```
+
+**Discard elements:**
+
+```maxon
+(x, _) = makePair(42, b: 99)    // discard second element
+```
+
+**Rules:**
+- All named variables (without `var`/`let`) must already be declared with `var`
+- Immutable (`let`) variables cannot be reassignment targets (error E2013)
+- The number of names must exactly match the tuple's element count (error E3005)
+- Use `_` to discard individual elements
+- If all elements are discarded and the function is pure, error E3064 is raised
+
+### Destructuring in For Loops
+
+Tuple destructuring works in `for` loops when the iterator yields tuples:
+
+```maxon
+var m = ["a": 1, "b": 2]
+for (key, value) in m 'loop'
+	print("{key}: {value}\n")
+end 'loop'
+```
+
+Use `_` to discard loop variables:
+
+```maxon
+for (_, value) in m 'loop'
+	sum = sum + value
+end 'loop'
+```
+
+### Memory Semantics
+
+- Tuples are heap-allocated structs with reference counting
+- Each field occupies 8 bytes (primitives and pointers)
+- Tuples containing managed types (strings, structs) have their reference counts managed automatically
+- Tuples are assigned by reference (like structs). Use `.clone()` for an independent copy
 
 ---
 

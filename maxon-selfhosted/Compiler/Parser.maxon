@@ -17,6 +17,7 @@ typealias TokenIndex = int(0 to u64.max)
 enum ParserError
 	unhandledToken
 	typeError
+	overflow
 end 'ParserError'
 
 // --- Standalone pure functions ---
@@ -53,11 +54,8 @@ end 'newDetachedBlock'
 // --- Pure number parsing ---
 
 // Convert a decimal float string (e.g. "3.14", "1.5e2", "2.0e-3") to IEEE 754 double raw bits.
-// Uses integer-only arithmetic: parses into integer/fraction parts,
-// then constructs the IEEE 754 representation manually.
-function parseFloatBits(s ByteArray) returns ParsedInt
-	// Parse integer and fractional parts as integers, skip underscores.
-	// Also parse optional exponent (e/E followed by optional +/- and digits).
+// Throws ParserError.overflow if the value exceeds float64 range.
+function parseFloatBits(s ByteArray) returns ParsedInt throws ParserError
 	var intPart = 0
 	var fracPart = 0
 	var fracDigits = 0
@@ -65,12 +63,13 @@ function parseFloatBits(s ByteArray) returns ParsedInt
 	var sciExp = 0
 	var sciExpNeg = false
 	var inExponent = false
+	var intDigits = 0
+	var hasNonZeroDigit = false
 
 	var pi = 0
 	while pi < s.count() 'parse'
 		let b = try s.get(pi) otherwise 0
 
-		// Skip underscores
 		if b == '_' 'skipUnderscore'
 			pi = pi + 1
 			continue
@@ -79,11 +78,13 @@ function parseFloatBits(s ByteArray) returns ParsedInt
 		if inExponent 'expPart'
 			if b >= '0' and b <= '9' 'expDigit'
 				sciExp = sciExp * 10 + (b - '0')
+				if sciExp > 100000 'capExp'
+					sciExp = 100000
+				end 'capExp'
 			end 'expDigit'
 		end 'expPart' else 'mantissaPart'
 			if b == 'e' or b == 'E' 'startExp'
 				inExponent = true
-				// Check for sign on next byte
 				if pi + 1 < s.count() 'peekSign'
 					let signByte = try s.get(pi + 1) otherwise 0
 					if signByte == '-' 'negSign'
@@ -98,11 +99,15 @@ function parseFloatBits(s ByteArray) returns ParsedInt
 					pastDot = true
 				end 'isDot' else 'notDot'
 					if b >= '0' and b <= '9' 'isDigit'
+						if b != '0' 'nonZero'
+							hasNonZeroDigit = true
+						end 'nonZero'
 						if pastDot 'frac'
 							fracPart = fracPart * 10 + (b - '0')
 							fracDigits = fracDigits + 1
 						end 'frac' else 'int'
 							intPart = intPart * 10 + (b - '0')
+							intDigits = intDigits + 1
 						end 'int'
 					end 'isDigit'
 				end 'notDot'
@@ -111,18 +116,23 @@ function parseFloatBits(s ByteArray) returns ParsedInt
 		pi = pi + 1
 	end 'parse'
 
+	// float64 max is ~1.8e308; effective magnitude ~ 10^(intDigits - 1 + sciExp).
+	if hasNonZeroDigit and not sciExpNeg 'checkOverflow'
+		let effectiveExp = intDigits - 1 + sciExp
+		if effectiveExp > 308 'overflow'
+			throw ParserError.overflow
+		end 'overflow'
+	end 'checkOverflow'
+
 	// Compute fracDivisor = 10^fracDigits
 	var fracDivisor = 1
 	for _ in 0 upto fracDigits 'powLoop'
 		fracDivisor = fracDivisor * 10
 	end 'powLoop'
 
-	// Build the mantissa by scaling: value = intPart + fracPart/fracDivisor
-	// Represent value as (intPart * fracDivisor + fracPart) / fracDivisor
 	var numerator = intPart * fracDivisor + fracPart
 	var denominator = fracDivisor
 
-	// Apply scientific notation exponent: multiply or divide by 10^sciExp
 	if sciExp > 0 'applySciExp'
 		if sciExpNeg 'divByTen'
 			for _ in 0 upto sciExp 'divLoop'
@@ -135,13 +145,10 @@ function parseFloatBits(s ByteArray) returns ParsedInt
 		end 'mulByTen'
 	end 'applySciExp'
 
-	// Handle zero
 	if numerator == 0 'isZero'
 		return 0
 	end 'isZero'
 
-	// Find exponent: normalize so that 1 <= numerator/denominator < 2
-	// i.e., denominator <= numerator < 2*denominator
 	var exponent = 0
 	while numerator >= 2 * denominator 'shiftDown'
 		denominator = denominator * 2
@@ -152,8 +159,6 @@ function parseFloatBits(s ByteArray) returns ParsedInt
 		exponent = exponent - 1
 	end 'shiftUp'
 
-	// Now 1.0 <= numerator/denominator < 2.0
-	// Extract 52 bits of mantissa (implicit leading 1 is not stored)
 	numerator = numerator - denominator
 	var mantissa = 0
 	var bit = 51
@@ -166,84 +171,158 @@ function parseFloatBits(s ByteArray) returns ParsedInt
 		bit = bit - 1
 	end 'mantissaBits'
 
-	// IEEE 754 double: sign(1) | exponent+1023(11) | mantissa(52)
+	// IEEE 754 double layout: sign(1) | exponent+1023(11) | mantissa(52)
 	let biasedExp = exponent + 1023
-	return(biasedExp shl 52) + mantissa
+	return (biasedExp shl 52) + mantissa
 end 'parseFloatBits'
 
-function parseInt(s ByteArray) returns ParsedInt
+// Parse an integer literal. Throws ParserError.overflow if the value exceeds i64 range.
+// Handles decimal, hex (0x), binary (0b), and octal (0o) prefixes.
+function parseInt(s ByteArray) returns ParsedInt throws ParserError
 	let sLen = s.count()
 
 	if sLen < 1 'empty'
 		return 0
 	end 'empty'
 
-	// Check for 0x, 0b, 0o prefixes (need at least 2 bytes)
 	if sLen >= 2 'checkPrefix'
 		let first = try s.get(0) otherwise 0
 		let second = try s.get(1) otherwise 0
 
-		// Hex: 0x or 0X
 		if first == '0' and(second == 'x' or second == 'X') 'isHex'
-			return parseHexInt(s, startIndex: 2)
+			return try parseHexInt(s, startIndex: 2)
 		end 'isHex' else if first == '0' and(second == 'b' or second == 'B') 'isBin'
-			return parseBinaryInt(s, startIndex: 2)
+			return try parseBinaryInt(s, startIndex: 2)
 		end 'isBin' else if first == '0' and(second == 'o' or second == 'O') 'isOct'
-			return parseOctalInt(s, startIndex: 2)
+			return try parseOctalInt(s, startIndex: 2)
 		end 'isOct'
 	end 'checkPrefix'
 
-	// Decimal with underscore support
 	var result = 0
+	var digitCount = 0
+	var leadingZeros = true
 	for pi in 0 upto sLen 'digits'
 		let b = try s.get(pi) otherwise 0
 		if b >= '0' and b <= '9' 'digit'
 			result = result * 10 + (b - '0')
+			if not leadingZeros or b != '0' 'significant'
+				leadingZeros = false
+				digitCount = digitCount + 1
+			end 'significant'
 		end 'digit'
-		// Underscores are silently skipped
 	end 'digits'
+
+	// >19 significant digits always overflows i64
+	if digitCount > 19 'tooMany'
+		throw ParserError.overflow
+	end 'tooMany'
+
+	// Exactly 19 digits: compare digit-by-digit against "9223372036854775807"
+	if digitCount == 19 'checkMax'
+		let maxStr = b"9223372036854775807"
+		var mi = 0
+		var pastLeading = false
+		for pi in 0 upto sLen 'cmp'
+			let b = try s.get(pi) otherwise 0
+			if b == '_' 'skipUs'
+				continue
+			end 'skipUs'
+			if not pastLeading and b == '0' 'skipLz'
+				continue
+			end 'skipLz'
+			if b >= '0' and b <= '9' 'cmpDigit'
+				pastLeading = true
+				let maxByte = try maxStr.get(mi) otherwise 0
+				if b > maxByte 'bigger'
+					throw ParserError.overflow
+				end 'bigger' else if b < maxByte 'smaller'
+					return result
+				end 'smaller'
+				mi = mi + 1
+			end 'cmpDigit'
+		end 'cmp'
+	end 'checkMax'
+
 	return result
 end 'parseInt'
 
-function parseHexInt(s ByteArray, startIndex CharOffset) returns ParsedInt
+// Parse a hex integer literal. Throws ParserError.overflow if more than 16 significant hex digits.
+function parseHexInt(s ByteArray, startIndex CharOffset) returns ParsedInt throws ParserError
 	var result = 0
+	var digitCount = 0
+	var leadingZeros = true
 	for pi in startIndex upto s.count() 'hexDigits'
 		let b = try s.get(pi) otherwise 0
 		if b >= '0' and b <= '9' 'decDigit'
 			result = result * 16 + (b - '0')
+			if not leadingZeros or b != '0' 'sigDec'
+				leadingZeros = false
+				digitCount = digitCount + 1
+			end 'sigDec'
 		end 'decDigit' else if b >= 'a' and b <= 'f' 'lowerHex'
 			result = result * 16 + (b - 'a' + 10)
+			leadingZeros = false
+			digitCount = digitCount + 1
 		end 'lowerHex' else if b >= 'A' and b <= 'F' 'upperHex'
 			result = result * 16 + (b - 'A' + 10)
+			leadingZeros = false
+			digitCount = digitCount + 1
 		end 'upperHex'
-		// Underscores are silently skipped
 	end 'hexDigits'
+	if digitCount > 16 'overflow'
+		throw ParserError.overflow
+	end 'overflow'
 	return result
 end 'parseHexInt'
 
-function parseBinaryInt(s ByteArray, startIndex CharOffset) returns ParsedInt
+// Throws ParserError.overflow if more than 64 significant binary digits.
+function parseBinaryInt(s ByteArray, startIndex CharOffset) returns ParsedInt throws ParserError
 	var result = 0
+	var digitCount = 0
+	var leadingZeros = true
 	for pi in startIndex upto s.count() 'binDigits'
 		let b = try s.get(pi) otherwise 0
 		if b == '0' 'zeroBit'
 			result = result * 2
+			if not leadingZeros 'sigZero'
+				digitCount = digitCount + 1
+			end 'sigZero'
 		end 'zeroBit' else if b == '1' 'oneBit'
 			result = result * 2 + 1
+			leadingZeros = false
+			digitCount = digitCount + 1
 		end 'oneBit'
-		// Underscores are silently skipped
 	end 'binDigits'
+	if digitCount > 64 'overflow'
+		throw ParserError.overflow
+	end 'overflow'
 	return result
 end 'parseBinaryInt'
 
-function parseOctalInt(s ByteArray, startIndex CharOffset) returns ParsedInt
+// Throws ParserError.overflow if more than 21 significant octal digits,
+// or exactly 21 with a leading digit > 1 (exceeds 64 bits).
+function parseOctalInt(s ByteArray, startIndex CharOffset) returns ParsedInt throws ParserError
 	var result = 0
+	var digitCount = 0
+	var leadingZeros = true
+	var firstSignificantDigit = 0
 	for pi in startIndex upto s.count() 'octDigits'
 		let b = try s.get(pi) otherwise 0
 		if b >= '0' and b <= '7' 'octDigit'
 			result = result * 8 + (b - '0')
+			if not leadingZeros or b != '0' 'significant'
+				if leadingZeros 'firstSig'
+					firstSignificantDigit = b - '0'
+				end 'firstSig'
+				leadingZeros = false
+				digitCount = digitCount + 1
+			end 'significant'
 		end 'octDigit'
-		// Underscores are silently skipped
 	end 'octDigits'
+	// 64 bits = 21 octal digits max, but first digit can be at most 1 (0o1777...7)
+	if digitCount > 21 or(digitCount == 21 and firstSignificantDigit > 1) 'overflow'
+		throw ParserError.overflow
+	end 'overflow'
 	return result
 end 'parseOctalInt'
 
@@ -932,7 +1011,12 @@ type Parser
 		// Negative literal: - NUMBER
 		if token.kind == TokenKind.minus 'isNeg'
 			let numToken = peekAt(1)
-			let value = parseInt(numToken.value)
+			let value = try parseInt(numToken.value) otherwise 'negOverflow'
+				reportCompileError(project, code: ErrorCode.parserLiteralOverflow, message: "Integer literal '{tokenValueToString(numToken.value)}' is outside the range of int", line: numToken.line, column: numToken.column, filePath: filePath)
+				expect(TokenKind.minus)
+				expect(TokenKind.intLiteral)
+				return 0
+			end 'negOverflow'
 			expect(TokenKind.minus)
 			expect(TokenKind.intLiteral)
 			return 0 - value
@@ -940,8 +1024,13 @@ type Parser
 
 		// Number literal
 		if token.kind == TokenKind.intLiteral 'isLit'
+			let value = try parseInt(token.value) otherwise 'litOverflow'
+				reportCompileError(project, code: ErrorCode.parserLiteralOverflow, message: "Integer literal '{tokenValueToString(token.value)}' is outside the range of int", line: token.line, column: token.column, filePath: filePath)
+				expect(TokenKind.intLiteral)
+				return 0
+			end 'litOverflow'
 			expect(TokenKind.intLiteral)
-			return parseInt(token.value)
+			return value
 		end 'isLit'
 
 		// T.min or T.max — lexed as two identifiers (T and min/max)
@@ -1588,14 +1677,22 @@ type Parser
 	end 'raiseUnexpectedToken'
 
 	function parseIntLiteral(block MlirBlock, token Token) returns ExprResult
-		let value = parseInt(token.value)
+		let value = try parseInt(token.value) otherwise 'overflow'
+			reportCompileError(project, code: ErrorCode.parserLiteralOverflow, message: "Integer literal '{tokenValueToString(token.value)}' is outside the range of int (-9223372036854775808 to 9223372036854775807)", line: token.line, column: token.column, filePath: filePath)
+			expect(TokenKind.intLiteral)
+			return ExprResult.create(0)
+		end 'overflow'
 		let id = emitLiteral(block, value: value, isFloat: false)
 		expect(TokenKind.intLiteral)
 		return ExprResult.create(id)
 	end 'parseIntLiteral'
 
 	function parseFloatLiteral(block MlirBlock, token Token) returns ExprResult
-		let rawBits = parseFloatBits(token.value)
+		let rawBits = try parseFloatBits(token.value) otherwise 'overflow'
+			reportCompileError(project, code: ErrorCode.parserLiteralOverflow, message: "Float literal '{tokenValueToString(token.value)}' is outside the range of float", line: token.line, column: token.column, filePath: filePath)
+			expect(TokenKind.floatLiteral)
+			return ExprResult.createFloat(0)
+		end 'overflow'
 		let id = emitLiteral(block, value: rawBits, isFloat: true)
 		expect(TokenKind.floatLiteral)
 		return ExprResult.createFloat(id)

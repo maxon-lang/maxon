@@ -1362,14 +1362,17 @@ end 'emitMovXmmRipRelOp'
 function emitMovqXmmToGprOp(code ByteArray, dest X64Register, src X64XmmRegister)
 	// movq r64, xmm: 66 REX.W 0F 7E ModRM(xmm -> r/m)
 	code.push(0x66)
-	emitRexWPrefix(code, regField: X64Register.rax, rmField: dest)
-	code.push(0x0F)
-	code.push(0x7E)
-	let srcBits = src.rawValue and 0x07
-	let destBits = regCode(dest)
-	let modrm = 0xC0 or(srcBits shl 3) or destBits
-	code.push(modrm)
+	emitXmmRexIfNeeded(code, regFieldCode: xmmRegCode(src), rmFieldCode: regCode(dest), rexBase: 0x48)
+	emitXmmOpModRM(code, opcode: 0x7E, regFieldCode: xmmRegCode(src), rmFieldCode: regCode(dest))
 end 'emitMovqXmmToGprOp'
+
+// --- movq GPR to XMM ---
+function emitMovqGprToXmmOp(code ByteArray, dest X64XmmRegister, src X64Register)
+	// movq xmm, r64: 66 REX.W 0F 6E ModRM(xmm <- r/m)
+	code.push(0x66)
+	emitXmmRexIfNeeded(code, regFieldCode: xmmRegCode(dest), rmFieldCode: regCode(src), rexBase: 0x48)
+	emitXmmOpModRM(code, opcode: 0x6E, regFieldCode: xmmRegCode(dest), rmFieldCode: regCode(src))
+end 'emitMovqGprToXmmOp'
 
 // Emit bytes for a single X64Op.
 function emitX64Op(op X64Op, code ByteArray, blockFixups BlockJumpFixupArray, callFixups CallFixupArray, relocations RelocationArray, globalData GlobalDataTable)
@@ -1445,6 +1448,7 @@ function emitX64Op(op X64Op, code ByteArray, blockFixups BlockJumpFixupArray, ca
 		cvtSd2Ss then panic("X86 cvtSd2Ss not yet implemented in binary emitter")
 		cvtSs2Sd then panic("X86 cvtSs2Sd not yet implemented in binary emitter")
 		movqXmmToGpr(dest, src) then emitMovqXmmToGprOp(code, dest: resolveGpr(dest), src: resolveFp(src))
+		movqGprToXmm(dest, src) then emitMovqGprToXmmOp(code, dest: resolveFp(dest), src: resolveGpr(src))
 		andMaskRipRel then panic("X86 andMaskRipRel not yet implemented in binary emitter")
 		storeIndirect(baseReg, offset, srcReg, size) then emitStoreIndirectOp(code, baseReg: resolveGpr(baseReg), offset: offset, srcReg: resolveGpr(srcReg), size: size)
 		loadIndirect(destReg, baseReg, offset, size) then emitLoadIndirectOp(code, destReg: resolveGpr(destReg), baseReg: resolveGpr(baseReg), offset: offset, size: size)

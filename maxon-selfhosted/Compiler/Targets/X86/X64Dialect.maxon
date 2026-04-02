@@ -207,6 +207,7 @@ export enum X64Op
 	cvtSd2Ss(dest X64FpVReg, src X64FpVReg) = X64OpMeta{latency: 3, isMemory: false, isStore: false, isCall: false, setsFlags: false}
 	cvtSs2Sd(dest X64FpVReg, src X64FpVReg) = X64OpMeta{latency: 3, isMemory: false, isStore: false, isCall: false, setsFlags: false}
 	movqXmmToGpr(dest X64VReg, src X64FpVReg) = X64OpMeta{latency: 3, isMemory: false, isStore: false, isCall: false, setsFlags: false}
+	movqGprToXmm(dest X64FpVReg, src X64VReg) = X64OpMeta{latency: 3, isMemory: false, isStore: false, isCall: false, setsFlags: false}
 	andMaskRipRel(dest X64FpVReg, rdataLabel ByteArray, precision FloatPrecision) = X64OpMeta{latency: 4, isMemory: true, isStore: false, isCall: false, setsFlags: false}
 	// Indirect memory ops
 	storeIndirect(baseReg X64VReg, offset MachineWord, srcReg X64VReg, size MachineWord) = X64OpMeta{latency: 3, isMemory: true, isStore: true, isCall: false, setsFlags: false}
@@ -335,6 +336,7 @@ export function x64OpToString(op X64Op, blocks MlirBlockArray) returns String
 		cvtSd2Ss(dest, src) gives "x86.cvtsd2ss {x64FpVRegToString(dest)}, {x64FpVRegToString(src)}"
 		cvtSs2Sd(dest, src) gives "x86.cvtss2sd {x64FpVRegToString(dest)}, {x64FpVRegToString(src)}"
 		movqXmmToGpr(dest, src) gives "x86.movq {x64VRegToString(dest)}, {x64FpVRegToString(src)}"
+		movqGprToXmm(dest, src) gives "x86.movq {x64FpVRegToString(dest)}, {x64VRegToString(src)}"
 		andMaskRipRel(dest, label, _) gives "x86.andpd {x64FpVRegToString(dest)}, [rip+{String.from(label)}]"
 		storeIndirect(baseReg, offset, srcReg, size) gives "x86.mov [{x64VRegToString(baseReg)}+{offset}], {x64VRegToString(srcReg)} ({size}b)"
 		loadIndirect(destReg, baseReg, offset, size) gives "x86.mov {x64VRegToString(destReg)}, [{x64VRegToString(baseReg)}+{offset}] ({size}b)"

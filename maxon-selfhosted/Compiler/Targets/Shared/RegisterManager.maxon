@@ -719,18 +719,14 @@ export function rmEnsureInFpRegister(state RegState, valueId RegInt, dstBlock Ml
 	end 'reloadFromGpr'
 
 	// Fallback: value is in a GPR (e.g., float param after mem2reg).
-	// Spill the GPR to stack, then load into XMM from that stack slot.
+	// Transfer directly from GPR to XMM via movq (no stack round-trip).
 	let gprOrd = info.gprOrdinal
 	if gprOrd != RM_NONE 'inGpr'
 		// Verify the GPR actually holds this value
 		let gprOccupant = rmGetOr(state.registerContents, index: gprOrd, fallback: RM_NONE)
 		if gprOccupant == valueId 'verified'
-			let spillSlot = rmAllocateSpillSlot(state)
-			targetEmitSpill(state, dstBlock: dstBlock, regOrdinal: gprOrd, stackOffset: spillSlot)
-			info.stackHome = spillSlot
 			let fp = rmAllocateFpRegister(state, valueId: valueId, dstBlock: dstBlock)
-			targetEmitReloadFp(state, dstBlock: dstBlock, fpOrdinal: fp, stackOffset: spillSlot)
-			info.fpStackHome = spillSlot
+			targetEmitGprToFp(state, dstBlock: dstBlock, fpOrdinal: fp, gprOrdinal: gprOrd)
 			return fp
 		end 'verified'
 	end 'inGpr'
@@ -741,15 +737,12 @@ export function rmEnsureInFpRegister(state RegState, valueId RegInt, dstBlock Ml
 		let gpr = rmAllocateRegister(state, valueId: valueId, dstBlock: dstBlock, protect1: RM_NONE, protect2: RM_NONE)
 		logTrace(LogCategory.mlir, message: () gives "regalloc: fp-remat v{valueId}={imm} via {targetRegName(state, ord: gpr)} (func={String.from(state.funcName)})")
 		targetEmitMovImm(state, dstBlock: dstBlock, regOrdinal: gpr, value: imm)
-		// Spill GPR to stack, then load into XMM from that slot
-		let spillSlot = rmAllocateSpillSlot(state)
-		targetEmitSpill(state, dstBlock: dstBlock, regOrdinal: gpr, stackOffset: spillSlot)
-		info.stackHome = spillSlot
-		// Free the GPR — we only needed it as a transfer intermediary
-		rmNoteValueDead(state, valueId: valueId)
 		let fp = rmAllocateFpRegister(state, valueId: valueId, dstBlock: dstBlock)
-		targetEmitReloadFp(state, dstBlock: dstBlock, fpOrdinal: fp, stackOffset: spillSlot)
-		info.fpStackHome = spillSlot
+		targetEmitGprToFp(state, dstBlock: dstBlock, fpOrdinal: fp, gprOrdinal: gpr)
+		// Free only the GPR — the value now lives in the FP register
+		info.gprOrdinal = RM_NONE
+		state.registerContents.set(gpr, value: RM_NONE)
+		state.lastUsed.set(gpr, value: 0)
 		return fp
 	end 'rematConst'
 

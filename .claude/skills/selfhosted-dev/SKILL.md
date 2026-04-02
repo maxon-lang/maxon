@@ -1,26 +1,25 @@
 ---
-name: incremental-dev
-description: Implement spec tests one at a time
+name: selfhosted-dev
+description: Implement the self hosted compiler
 ---
 
-We are implementing new features by enabling tests one by one until they pass.
-Run the spec tests and fix any failures by modifying the compiler code.
+We are developing the self hosted maxon compiler by implementing by enabling spec tests one by one and fixing any failures until all tests pass. This ensures that we are building the compiler incrementally and have a clear understanding of what features are implemented at each step.
+
+Run the spec tests and fix any failures by modifying the self hosted compiler code.
+
 By default spec tests will only show the name of failing tests, but you can use `--verbose` to show detailed failure messages for failing tests which can help with debugging. Use --filter when working on a specific failing test.
 
 ## Steps
 
 0. Run the `maxon-coder` skill to load Maxon syntax rules before writing any Maxon code.
-1. Run the spec tests: `bin/maxon.exe spec-test`
-2. Ensure the currently enabled tests pass. If not fix them.
-3. Find the next disabled test in this spec file (labeled with 'disabled-test') and enable it by removing 'disabled-'.
-4. Run the specified spec tests: `maxon.exe spec-test --filter=<spec name>`
-5. Analyze the output to identify which tests are failing and why.
-6. Fix the compiler code in `maxon-sharp/` to make the failing tests pass.
-7. Rebuild and re-run spec tests to verify the fixes.
-8. Repeat until all tests pass.
-9. Fix any problems reported by the IDE
-10. If any changes occured to the required MLIR of other tests in register-allocator.md then those changes need to be review to ensure they are ok.
-11. Review all code changes:
+1. Run the spec tests: `./maxon-selfhosted/bin/maxon-selfhosted.exe spec-test`
+2. Analyze the output to identify which tests are failing and why.
+3. Fix the compiler code in `maxon-selfhosted/` to make the failing tests pass.
+4. Rebuild and re-run spec tests to verify the fixes.
+5. Repeat until all tests pass.
+6. Fix any problems reported by the IDE
+7. If any changes occured to the required MLIR of other tests in register-allocator.md then those changes need to be reviewed to ensure they are ok.
+8. Review all code changes:
     - Eliminate duplicated code — refactor shared logic into helper methods.
     - Ensure no `switch` or 'match' statements use `default` cases — all cases must be handled explicitly.
     - Ensure no `else` clauses silently catch unhandled conditions — throw errors for unexpected inputs.
@@ -32,7 +31,7 @@ By default spec tests will only show the name of failing tests, but you can use 
     - typed ranges should be as specific as possible, e.g. `int(0 to 100)` instead of `int(0 to u64.max)`. Carefully consider the valid range for each type and use the narrowest possible range to catch errors. Max range is fine if there is no clear limit.
     - look for any comments that imply that something was skippped or not fully implemented or should be done later
     - Fix any compiler warnings
-12. Write a git commit message
+9. Write a git commit message
 
 ## Guidelines
 
@@ -41,3 +40,4 @@ By default spec tests will only show the name of failing tests, but you can use 
 - Use `--log=CATEGORY:LEVEL` to get more detail when debugging (e.g., `--log=mlir:debug`).
 - Fix root causes, not symptoms. No workarounds.
 - If any tests that use RequiredMLIR fail you can regenerate the required MLIR and MmTrace stderr by using `--update-required`
+- its possible that any bugs encountered could be in the c# bootrap compiler. If this is the case then you will need to fix the c# compiler in `maxon-sharp/`

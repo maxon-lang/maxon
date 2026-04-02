@@ -56,6 +56,10 @@ export function rmEmitMovFpX64(dstBlock MlirBlock, destOrd RegOrdinal, srcOrd Re
 	dstBlock.ops.push(MlirOp.x64(X64Op.movXmmXmm(physFpReg(ordinalToXmm(destOrd)), physFpReg(ordinalToXmm(srcOrd)), FloatPrecision.f64)))
 end 'rmEmitMovFpX64'
 
+export function rmEmitGprToFpX64(dstBlock MlirBlock, fpOrdinal RegOrdinal, gprOrdinal RegOrdinal)
+	dstBlock.ops.push(MlirOp.x64(X64Op.movqGprToXmm(physFpReg(ordinalToXmm(fpOrdinal)), physReg(ordinalToX64(gprOrdinal)))))
+end 'rmEmitGprToFpX64'
+
 // --- Call/stack emission ---
 
 export function rmEmitCallDirectX64(dstBlock MlirBlock, callee ByteArray)
@@ -237,6 +241,7 @@ export function x64OpHasVirtualRegs(op X64Op) returns bool
 		cvtSd2Ss(dest, src) gives isVirtualFpReg(dest) or isVirtualFpReg(src)
 		cvtSs2Sd(dest, src) gives isVirtualFpReg(dest) or isVirtualFpReg(src)
 		movqXmmToGpr(dest, src) gives isVirtualGpr(dest) or isVirtualFpReg(src)
+		movqGprToXmm(dest, src) gives isVirtualFpReg(dest) or isVirtualGpr(src)
 		andMaskRipRel(dest, _, _) gives isVirtualFpReg(dest)
 		storeIndirect(baseReg, _, srcReg, _) gives isVirtualGpr(baseReg) or isVirtualGpr(srcReg)
 		loadIndirect(destReg, baseReg, _, _) gives isVirtualGpr(destReg) or isVirtualGpr(baseReg)
@@ -336,6 +341,7 @@ export function countX64OpReads(counts RegIntArray, x64Op X64Op)
 		cvtSd2Ss(_, src) then incUse(counts, id: x64FpVRegId(src))
 		cvtSs2Sd(_, src) then incUse(counts, id: x64FpVRegId(src))
 		movqXmmToGpr(_, src) then incUse(counts, id: x64FpVRegId(src))
+		movqGprToXmm(_, src) then incUse(counts, id: x64VRegId(src))
 		andMaskRipRel(dest, _, _) then incUse(counts, id: x64FpVRegId(dest))
 		storeIndirect(baseReg, _, srcReg, _) then countX64TwoReads(counts, reg1: baseReg, reg2: srcReg)
 		loadIndirect(_, baseReg, _, _) then incUse(counts, id: x64VRegId(baseReg))
@@ -752,7 +758,7 @@ function ax64MovRegImm(state RegState, dest X64VReg, value MachineWord, dstBlock
 		return
 	end 'deferVirtual'
 	let d = x64ResolveGprDef(state, vreg: dest, dstBlock: dstBlock, protect1: RM_NONE, protect2: RM_NONE)
-	dstBlock.ops.push(MlirOp.x64(X64Op.movRegImm(x64PhysFromOrd(d), value)))
+	rmEmitMovImmX64(dstBlock, regOrdinal: d, value: value)
 end 'ax64MovRegImm'
 
 function ax64MovSlot(state RegState, slotIndex VarSlot, srcReg X64VReg, dstBlock MlirBlock)
@@ -934,7 +940,7 @@ function ax64MovRegReg(state RegState, destReg X64VReg, srcReg X64VReg, dstBlock
 						virtual gives RM_NONE
 					end 'getDest'
 					rmSpillRegisterIfOccupied(state, regOrdinal: destOrd, dstBlock: dstBlock)
-					dstBlock.ops.push(MlirOp.x64(X64Op.movRegImm(x64PhysFromOrd(destOrd), imm)))
+					rmEmitMovImmX64(dstBlock, regOrdinal: destOrd, value: imm)
 					rmAssign(state, regOrdinal: destOrd, valueId: srcId)
 					let remaining = srcInfo.remainingUses
 					if remaining > 0 'hasCount'
@@ -1220,6 +1226,12 @@ function ax64MovqXmmToGpr(state RegState, dest X64VReg, src X64FpVReg, dstBlock 
 	dstBlock.ops.push(MlirOp.x64(X64Op.movqXmmToGpr(x64PhysFromOrd(d), x64FpPhysFromOrd(s))))
 end 'ax64MovqXmmToGpr'
 
+function ax64MovqGprToXmm(state RegState, dest X64FpVReg, src X64VReg, dstBlock MlirBlock)
+	let s = x64ResolveGprUse(state, vreg: src, dstBlock: dstBlock, protect1: RM_NONE, protect2: RM_NONE)
+	let d = x64ResolveFpDef(state, vreg: dest, dstBlock: dstBlock)
+	dstBlock.ops.push(MlirOp.x64(X64Op.movqGprToXmm(x64FpPhysFromOrd(d), x64PhysFromOrd(s))))
+end 'ax64MovqGprToXmm'
+
 function ax64AndMaskRipRel(state RegState, dest X64FpVReg, rdataLabel ByteArray, precision FloatPrecision, dstBlock MlirBlock)
 	let d = x64ResolveFpUse(state, vreg: dest, dstBlock: dstBlock)
 	dstBlock.ops.push(MlirOp.x64(X64Op.andMaskRipRel(x64FpPhysFromOrd(d), rdataLabel, precision)))
@@ -1307,6 +1319,7 @@ export function allocX64Op(state RegState, x64Op X64Op, dstBlock MlirBlock)
 		cvtSd2Ss(dest, src) then ax64CvtSd2Ss(state, dest: dest, src: src, dstBlock: dstBlock)
 		cvtSs2Sd(dest, src) then ax64CvtSs2Sd(state, dest: dest, src: src, dstBlock: dstBlock)
 		movqXmmToGpr(dest, src) then ax64MovqXmmToGpr(state, dest: dest, src: src, dstBlock: dstBlock)
+		movqGprToXmm(dest, src) then ax64MovqGprToXmm(state, dest: dest, src: src, dstBlock: dstBlock)
 		andMaskRipRel(dest, rdataLabel, precision) then ax64AndMaskRipRel(state, dest: dest, rdataLabel: rdataLabel, precision: precision, dstBlock: dstBlock)
 		storeIndirect(baseReg, offset, srcReg, size) then ax64StoreIndirect(state, baseReg: baseReg, offset: offset, srcReg: srcReg, size: size, dstBlock: dstBlock)
 		loadIndirect(destReg, baseReg, offset, size) then ax64LoadIndirect(state, destReg: destReg, baseReg: baseReg, offset: offset, size: size, dstBlock: dstBlock)

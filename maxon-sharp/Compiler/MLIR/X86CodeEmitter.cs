@@ -1086,6 +1086,10 @@ public partial class X86CodeEmitter() {
   private void EmitMovRegImm(X86Register dest, long immediate) {
     if (!Is64BitReg(dest) && !Is32BitReg(dest))
       throw new ArgumentException($"EmitMovRegImm: unsupported register size: {dest}");
+    if (immediate == 0) {
+      EmitXorRegReg(dest, dest);
+      return;
+    }
     // For 32-bit register names, negative values require the 64-bit
     // sign-extending form, since mov r32, imm32 zero-extends to 64 bits.
     if (Is32BitReg(dest) && immediate < 0) {

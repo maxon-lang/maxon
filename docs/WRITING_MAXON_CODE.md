@@ -664,19 +664,69 @@ Closures capture by reference.
 
 ### Tuples
 
+Tuples are fixed-size, ordered collections of values with potentially different types.
+
 ```maxon
+// Creating tuples
 var t = (10, 20)
+var mixed = (42, "hello")
+var triple = (1, 2, 39)
+
+// Element access with positional dot syntax
 t.0   // 10
 t.1   // 20
 
-function minMax(a Offset, b Offset) returns (Offset, Offset)
-	if a < b 'less'
-		return (a, b)
-	end 'less'
-	return (b, a)
-end 'minMax'
+// Field assignment (tuples are mutable)
+t.0 = 30
+t.1 = 40
+```
 
-var (lo, hi) = minMax(3, 7)
+#### Tuples as function parameters and return types
+
+```maxon
+typealias Integer = int(i64.min to i64.max)
+
+function sum(t (Integer, Integer)) returns Integer
+	return t.0 + t.1
+end 'sum'
+
+function makePair(a Integer, b Integer) returns (Integer, Integer)
+	return (a, b)
+end 'makePair'
+```
+
+#### Destructuring declarations
+
+```maxon
+var (x, y) = makePair(10, b: 32)   // creates new variables
+let (a, b) = (10, 20)              // immutable bindings
+
+// Discard elements with _
+var (result, _) = compute()
+```
+
+#### Tuple assignment (to existing variables)
+
+```maxon
+var x = 0
+var y = 0
+(x, y) = makePair(10, b: 32)       // assigns to existing variables
+
+// Mixed: existing + new declarations
+(x, var z) = makePair(1, b: 2)     // x existing, z newly declared
+(x, let w) = makePair(3, b: 4)     // x existing, w immutable
+
+// Discard elements
+(x, _) = makePair(42, b: 99)
+```
+
+#### Destructuring in for loops
+
+```maxon
+var m = ["a": 1, "b": 2]
+for (key, value) in m 'loop'
+	print("{key}: {value}\n")
+end 'loop'
 ```
 
 ### Async/Await

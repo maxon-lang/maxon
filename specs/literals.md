@@ -320,6 +320,28 @@ end 'main'
 error E2011: specs/fragments/literals/error.hex-overflow.test:3:10: Integer literal '0x1ffffffffffffffff' is outside the range of int (-9223372036854775808 to 9223372036854775807)
 ```
 
+<!-- test: error.binary-overflow -->
+```maxon
+function main() returns ExitCode
+	var x = 0b10000000000000000000000000000000000000000000000000000000000000000
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2011: specs/fragments/literals/error.binary-overflow.test:3:10: Integer literal '0b10000000000000000000000000000000000000000000000000000000000000000' is outside the range of int (-9223372036854775808 to 9223372036854775807)
+```
+
+<!-- test: error.octal-overflow -->
+```maxon
+function main() returns ExitCode
+	var x = 0o2000000000000000000000
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E2011: specs/fragments/literals/error.octal-overflow.test:3:10: Integer literal '0o2000000000000000000000' is outside the range of int (-9223372036854775808 to 9223372036854775807)
+```
+
 <!-- test: error.float-overflow -->
 ```maxon
 function main() returns ExitCode
