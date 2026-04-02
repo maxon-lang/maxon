@@ -7,21 +7,25 @@ import {
 	LanguageClientOptions,
 	ServerOptions
 } from 'vscode-languageclient/node';
-import { log, initLogger, getOutputChannel } from './logger';
+import { log, initLogger } from './logger';
 import { CompilerExplorerPanel } from './compilerExplorerPanel';
 
-let client: LanguageClient;
-let context: vscode.ExtensionContext;
-let serverExecutable: string; // path to maxon-lsp (the copy we actually run)
-let sourceExecutable: string; // path to maxon (the original we watch for changes)
-let clientOptions: LanguageClientOptions;
+interface ExtensionState {
+	client: LanguageClient;
+	context: vscode.ExtensionContext;
+	serverExecutable: string; // path to maxon-lsp (the copy we actually run)
+	sourceExecutable: string; // path to maxon (the original we watch for changes)
+	clientOptions: LanguageClientOptions;
+}
+
+let state: ExtensionState | undefined;
 
 const isWindows = os.platform() === 'win32';
 const binaryName = isWindows ? 'maxon.exe' : 'maxon';
 const lspBinaryName = isWindows ? 'maxon-lsp.exe' : 'maxon-lsp';
 
 export function getClient(): LanguageClient | undefined {
-	return client;
+	return state?.client;
 }
 
 function sleep(ms: number): Promise<void> {
@@ -38,9 +42,9 @@ async function copyToLsp(maxonPath: string): Promise<string> {
 	const lspPath = path.join(dir, lspBinaryName);
 	for (let attempt = 0; attempt < 5; attempt++) {
 		try {
-			fs.copyFileSync(maxonPath, lspPath);
+			await fs.promises.copyFile(maxonPath, lspPath);
 			if (!isWindows) {
-				fs.chmodSync(lspPath, 0o755);
+				await fs.promises.chmod(lspPath, 0o755);
 			}
 			log(`Copied ${maxonPath} -> ${lspPath}`);
 			return lspPath;
@@ -60,42 +64,40 @@ async function copyToLsp(maxonPath: string): Promise<string> {
  * Restart the LSP client. Copies the latest binary to the LSP copy first.
  */
 export async function restartClient(): Promise<void> {
-	if (!context) {
+	if (!state) {
 		throw new Error('Extension not activated yet');
 	}
 
 	log('Restarting LSP client...');
 
 	// Stop existing client if running
-	if (client) {
-		try {
-			log('Stopping existing LSP client');
-			await client.stop();
-			log('LSP client stopped');
-		} catch (error) {
-			log(`Error stopping client: ${error}`);
-		}
+	try {
+		log('Stopping existing LSP client');
+		await state.client.stop();
+		log('LSP client stopped');
+	} catch (error) {
+		log(`Error stopping client: ${error}`);
 	}
 
 	// Copy fresh binary to LSP copy
-	serverExecutable = await copyToLsp(sourceExecutable);
+	state.serverExecutable = await copyToLsp(state.sourceExecutable);
 
 	// Create new client
 	const serverOptions: ServerOptions = {
-		command: serverExecutable,
+		command: state.serverExecutable,
 		args: ['lsp-server']
 	};
 
-	client = new LanguageClient(
+	state.client = new LanguageClient(
 		'maxonLanguageServer',
 		'Maxon Language Server',
 		serverOptions,
-		clientOptions
+		state.clientOptions
 	);
 
 	// Start the client
 	try {
-		await client.start();
+		await state.client.start();
 		log('LSP client restarted successfully');
 	} catch (error) {
 		log(`LSP client restart failed: ${error}`);
@@ -104,32 +106,36 @@ export async function restartClient(): Promise<void> {
 }
 
 export async function activate(ctx: vscode.ExtensionContext) {
-	context = ctx;
-
 	// Create output channel for debugging
 	const outputChannel = vscode.window.createOutputChannel('Maxon Language Server');
 	initLogger(outputChannel);
 	log('Maxon extension activating...');
 
 	// Find the maxon binary — this is the source we watch for changes
-	sourceExecutable = '';
+	let sourceExecutable = '';
 
 	// First, try the workspace bin directory
 	if (vscode.workspace.workspaceFolders?.length) {
 		const workspaceRoot = vscode.workspace.workspaceFolders[0].uri.fsPath;
 		const workspaceBin = path.join(workspaceRoot, 'bin', binaryName);
-		if (fs.existsSync(workspaceBin)) {
+		try {
+			await fs.promises.access(workspaceBin);
 			sourceExecutable = workspaceBin;
 			log(`Using Maxon compiler from workspace: ${sourceExecutable}`);
+		} catch {
+			// Not found in workspace bin, will try fallback
 		}
 	}
 
 	// Fall back to extension-relative path (development mode: ../bin relative to extension folder)
 	if (!sourceExecutable) {
 		const extensionRelative = path.join(ctx.extensionPath, '..', 'bin', binaryName);
-		if (fs.existsSync(extensionRelative)) {
+		try {
+			await fs.promises.access(extensionRelative);
 			sourceExecutable = extensionRelative;
 			log(`Using Maxon compiler relative to extension: ${sourceExecutable}`);
+		} catch {
+			// Not found relative to extension either
 		}
 	}
 
@@ -143,7 +149,7 @@ export async function activate(ctx: vscode.ExtensionContext) {
 	log(`Maxon compiler path: ${sourceExecutable}`);
 
 	// Copy maxon -> maxon-lsp so the LSP doesn't lock the main binary
-	serverExecutable = await copyToLsp(sourceExecutable);
+	const serverExecutable = await copyToLsp(sourceExecutable);
 
 	// Server options - use the copied LSP binary
 	const serverOptions: ServerOptions = {
@@ -151,7 +157,7 @@ export async function activate(ctx: vscode.ExtensionContext) {
 		args: ['lsp-server']
 	};
 
-	clientOptions = {
+	const clientOptions: LanguageClientOptions = {
 		documentSelector: [
 			{ scheme: 'file', language: 'maxon', pattern: '**/*.maxon' },
 			{ scheme: 'file', language: 'maxon', pattern: '**/*.test' }
@@ -189,12 +195,21 @@ export async function activate(ctx: vscode.ExtensionContext) {
 		}
 	};
 
-	client = new LanguageClient(
+	const client = new LanguageClient(
 		'maxonLanguageServer',
 		'Maxon Language Server',
 		serverOptions,
 		clientOptions
 	);
+
+	// Populate the extension state
+	state = {
+		client,
+		context: ctx,
+		serverExecutable,
+		sourceExecutable,
+		clientOptions
+	};
 
 	// Start the client and await completion
 	try {
@@ -220,45 +235,45 @@ export async function activate(ctx: vscode.ExtensionContext) {
 		}
 	);
 
-	context.subscriptions.push(restartCommand);
+	ctx.subscriptions.push(restartCommand);
 
 	// Register compiler explorer command
 	const compilerExplorerCommand = vscode.commands.registerCommand(
 		'maxon.openCompilerExplorer',
 		() => {
 			log('Opening Compiler Explorer');
-			if (!client) {
+			if (!state?.client) {
 				vscode.window.showErrorMessage('Language server not started. Please wait for activation.');
 				return;
 			}
-			CompilerExplorerPanel.createOrShow(ctx.extensionUri, client);
+			CompilerExplorerPanel.createOrShow(ctx.extensionUri, state.client);
 		}
 	);
 
-	context.subscriptions.push(compilerExplorerCommand);
+	ctx.subscriptions.push(compilerExplorerCommand);
 
 	// Register commands for testing - these allow tests to call LSP methods via VS Code commands
 	const generateIRCommand = vscode.commands.registerCommand(
 		'maxon.generateIR',
 		async (params: { source: string; filename: string; optimize: boolean; }) => {
-			if (!client) {
+			if (!state?.client) {
 				throw new Error('Language server not started');
 			}
-			return client.sendRequest('maxon/generateIR', params);
+			return state.client.sendRequest('maxon/generateIR', params);
 		}
 	);
-	context.subscriptions.push(generateIRCommand);
+	ctx.subscriptions.push(generateIRCommand);
 
 	const generateAsmCommand = vscode.commands.registerCommand(
 		'maxon.generateAsm',
 		async (params: { source: string; filename: string; optimize: boolean; }) => {
-			if (!client) {
+			if (!state?.client) {
 				throw new Error('Language server not started');
 			}
-			return client.sendRequest('maxon/generateAsm', params);
+			return state.client.sendRequest('maxon/generateAsm', params);
 		}
 	);
-	context.subscriptions.push(generateAsmCommand);
+	ctx.subscriptions.push(generateAsmCommand);
 
 	// Watch the maxon binary for changes — when it's rebuilt, restart the LSP with the new copy
 	const serverDir = path.dirname(sourceExecutable);
@@ -282,10 +297,10 @@ export async function activate(ctx: vscode.ExtensionContext) {
 	};
 	watcher.onDidChange(autoRestart);
 	watcher.onDidCreate(autoRestart);
-	context.subscriptions.push(watcher);
+	ctx.subscriptions.push(watcher);
 
 	// Add client to subscriptions for cleanup
-	context.subscriptions.push(client);
+	ctx.subscriptions.push(client);
 	log('Maxon extension activated successfully');
 
 	// Export the client for testing
@@ -294,8 +309,10 @@ export async function activate(ctx: vscode.ExtensionContext) {
 
 export function deactivate(): Thenable<void> | undefined {
 	log('Maxon extension deactivating...');
-	if (!client) {
+	if (!state) {
 		return undefined;
 	}
-	return client.stop();
+	const stopPromise = state.client.stop();
+	state = undefined;
+	return stopPromise;
 }

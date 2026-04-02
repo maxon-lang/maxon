@@ -60,7 +60,6 @@ export class CompilerExplorerPanel {
 			column || vscode.ViewColumn.One,
 			{
 				enableScripts: true,
-				retainContextWhenHidden: true,
 				localResourceRoots: [extensionUri]
 			}
 		);
@@ -80,6 +79,26 @@ export class CompilerExplorerPanel {
 		setTimeout(() => {
 			this._panel.webview.postMessage({ command: 'focus' });
 		}, 100);
+
+		// Re-request output when the panel becomes visible again after being hidden
+		this._panel.onDidChangeViewState(
+			(e) => {
+				if (e.webviewPanel.visible) {
+					// The webview may have been recreated; push the source and re-generate output
+					if (this._currentSource) {
+						this._panel.webview.postMessage({
+							command: 'restoreSource',
+							source: this._currentSource
+						});
+					}
+					if (this._currentSource.trim()) {
+						this._generateOutput();
+					}
+				}
+			},
+			null,
+			this._disposables
+		);
 
 		// Listen for when the panel is disposed
 		this._panel.onDidDispose(() => this.dispose(), null, this._disposables);
@@ -476,8 +495,31 @@ end 'main'"></textarea>
 		let isOptimized = false;
 		let outputMode = 'mir';
 
+		// Restore saved state if available (webview was hidden and recreated)
+		const previousState = vscode.getState();
+		if (previousState && previousState.source) {
+			sourceEditor.value = previousState.source;
+		}
+		if (previousState && previousState.outputMode) {
+			outputMode = previousState.outputMode;
+			if (outputMode === 'asm') {
+				asmBtn.classList.add('active');
+				mirBtn.classList.remove('active');
+				outputPanelHeader.textContent = 'Assembly Output';
+			}
+		}
+		if (previousState && previousState.isOptimized) {
+			isOptimized = previousState.isOptimized;
+			optimizeToggle.classList.toggle('active', isOptimized);
+		}
+
+		function saveState() {
+			vscode.setState({ source: sourceEditor.value, outputMode, isOptimized });
+		}
+
 		// Handle source code changes
 		sourceEditor.addEventListener('input', () => {
+			saveState();
 			vscode.postMessage({
 				command: 'sourceChanged',
 				source: sourceEditor.value
@@ -502,6 +544,7 @@ end 'main'"></textarea>
 		optimizeToggle.addEventListener('click', () => {
 			isOptimized = !isOptimized;
 			optimizeToggle.classList.toggle('active', isOptimized);
+			saveState();
 			vscode.postMessage({
 				command: 'toggleOptimize',
 				optimize: isOptimized
@@ -515,6 +558,7 @@ end 'main'"></textarea>
 				mirBtn.classList.add('active');
 				asmBtn.classList.remove('active');
 				outputPanelHeader.textContent = 'MIR Output';
+				saveState();
 				vscode.postMessage({
 					command: 'setOutputMode',
 					mode: 'mir'
@@ -528,6 +572,7 @@ end 'main'"></textarea>
 				asmBtn.classList.add('active');
 				mirBtn.classList.remove('active');
 				outputPanelHeader.textContent = 'Assembly Output';
+				saveState();
 				vscode.postMessage({
 					command: 'setOutputMode',
 					mode: 'asm'
@@ -575,6 +620,10 @@ end 'main'"></textarea>
 					break;
 				case 'focus':
 					sourceEditor.focus();
+					break;
+				case 'restoreSource':
+					sourceEditor.value = message.source;
+					saveState();
 					break;
 			}
 		});
