@@ -3,7 +3,7 @@
 // Register allocation, prologue/epilogue, and stack frame sizing are handled
 // by standalone passes that run after this one.
 
-export function lowerMidToArm64(module MlirModule, target Target) returns MlirModule
+export function lowerMidToArm64(module MlirModule, target Target, globalData GlobalDataTable) returns MlirModule
 	logDebug(LogCategory.mlir, message: () gives "Lowering Mid to Arm64 dialect")
 	var result = createMlirModule()
 
@@ -12,14 +12,14 @@ export function lowerMidToArm64(module MlirModule, target Target) returns MlirMo
 	for srcFunc in module.functions 'eachFunc'
 		let funcName = String.from(srcFunc.name)
 		logTrace(LogCategory.mlir, message: () gives "mid-to-arm64: === lowering function: {funcName} ===")
-		let dstFunc = lowerFunctionToArm64(srcFunc, osDesc: osDesc, allFunctions: module.functions)
+		let dstFunc = lowerFunctionToArm64(srcFunc, osDesc: osDesc, allFunctions: module.functions, globalData: globalData)
 		result.functions.push(dstFunc)
 	end 'eachFunc'
 
 	return result
 end 'lowerMidToArm64'
 
-function lowerFunctionToArm64(srcFunc MlirFunction, osDesc OsDescriptor, allFunctions MlirFunctionArray) returns MlirFunction
+function lowerFunctionToArm64(srcFunc MlirFunction, osDesc OsDescriptor, allFunctions MlirFunctionArray, globalData GlobalDataTable) returns MlirFunction
 	var dstFunc = cloneFunctionShell(srcFunc)
 
 	// Phase 1: Compute variable stack space from memref slots.
@@ -78,7 +78,7 @@ function lowerFunctionToArm64(srcFunc MlirFunction, osDesc OsDescriptor, allFunc
 
 		// Lower each op in the block
 		for op in srcBlock.ops 'eachOp'
-			nextTempSlot = lowerMlirOpArm64(op, dstBlock: dstBlock, osDesc: osDesc, allFunctions: allFunctions, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
+			nextTempSlot = lowerMlirOpArm64(op, dstBlock: dstBlock, osDesc: osDesc, allFunctions: allFunctions, valueSlots: valueSlots, nextTempSlot: nextTempSlot, globalData: globalData, funcParamTypes: srcFunc.paramTypes)
 		end 'eachOp'
 
 		// Lower terminator
@@ -191,10 +191,10 @@ end 'setLastOpAsTerminatorArm64'
 // Op dispatch
 // ============================================================
 
-function lowerMlirOpArm64(op MlirOp, dstBlock MlirBlock, osDesc OsDescriptor, allFunctions MlirFunctionArray, valueSlots ValueSlotMap, nextTempSlot SlotIndex) returns SlotIndex
+function lowerMlirOpArm64(op MlirOp, dstBlock MlirBlock, osDesc OsDescriptor, allFunctions MlirFunctionArray, valueSlots ValueSlotMap, nextTempSlot SlotIndex, globalData GlobalDataTable, funcParamTypes StdTypeArray) returns SlotIndex
 	var result = nextTempSlot
 	match op 'dispatch'
-		mir(mirOp) then result = lowerMirOpArm64(mirOp, dstBlock: dstBlock, osDesc: osDesc, allFunctions: allFunctions, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
+		mir(mirOp) then result = lowerMirOpArm64(mirOp, dstBlock: dstBlock, osDesc: osDesc, allFunctions: allFunctions, valueSlots: valueSlots, nextTempSlot: nextTempSlot, globalData: globalData, funcParamTypes: funcParamTypes)
 		memref(memOp) then lowerMemRefOpArm64(memOp, dstBlock: dstBlock)
 		runtime(rtOp) then lowerRuntimeOpArm64(rtOp, dstBlock: dstBlock)
 		arm64(arm64Op) then dstBlock.ops.push(MlirOp.arm64(arm64Op))
@@ -211,10 +211,10 @@ end 'lowerMlirOpArm64'
 // MIR op lowering — pure virtual register emission
 // ============================================================
 
-function lowerMirOpArm64(op MirOp, dstBlock MlirBlock, osDesc OsDescriptor, allFunctions MlirFunctionArray, valueSlots ValueSlotMap, nextTempSlot SlotIndex) returns SlotIndex
+function lowerMirOpArm64(op MirOp, dstBlock MlirBlock, osDesc OsDescriptor, allFunctions MlirFunctionArray, valueSlots ValueSlotMap, nextTempSlot SlotIndex, globalData GlobalDataTable, funcParamTypes StdTypeArray) returns SlotIndex
 	var result = nextTempSlot
 	match op 'dispatch'
-		movImm(resultId, value, isFloat) then lowerMovImmArm64(resultId, value: value, isFloat: isFloat, dstBlock: dstBlock)
+		movImm(resultId, value, isFloat) then lowerMovImmArm64(resultId, value: value, isFloat: isFloat, dstBlock: dstBlock, globalData: globalData)
 		movReg(resultId, srcId) then lowerMovRegArm64(resultId, srcId: srcId, dstBlock: dstBlock)
 		binOp(resultId, leftId, rightId, opcode) then lowerBinOpArm64(resultId, leftId: leftId, rightId: rightId, opcode: opcode, dstBlock: dstBlock)
 		unaryOp(resultId, operandId, opcode) then lowerUnaryOpArm64(resultId, operandId: operandId, opcode: opcode, dstBlock: dstBlock)
@@ -224,7 +224,7 @@ function lowerMirOpArm64(op MirOp, dstBlock MlirBlock, osDesc OsDescriptor, allF
 		call(resultId, callee, argIds) then lowerCallArm64(resultId, callee: callee, argIds: argIds, dstBlock: dstBlock, allFunctions: allFunctions)
 		indirectCall(resultId, calleeId, argIds) then lowerIndirectCallArm64(resultId, calleeId: calleeId, argIds: argIds, dstBlock: dstBlock)
 		ret then result = nextTempSlot  // handled as terminator
-		param(resultId, paramIndex, paramType) then lowerParamArm64(resultId, paramIndex: paramIndex, paramType: paramType, dstBlock: dstBlock)
+		param(resultId, paramIndex, paramType) then lowerParamArm64(resultId, paramIndex: paramIndex, paramType: paramType, dstBlock: dstBlock, funcParamTypes: funcParamTypes)
 		load(resultId, baseId, offset) then lowerLoadArm64(resultId, baseId: baseId, offset: offset, dstBlock: dstBlock)
 		store(valueId, baseId, offset) then lowerStoreArm64(valueId, baseId: baseId, offset: offset, dstBlock: dstBlock)
 		stackSlotAddr to loadByte then result = lowerMirSysOpArm64(op, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot, osDesc: osDesc)
@@ -236,18 +236,18 @@ end 'lowerMirOpArm64'
 // Constants & moves
 // ============================================================
 
-function lowerMovImmArm64(resultId ValueId, value ParsedInt, isFloat bool, dstBlock MlirBlock)
+function lowerMovImmArm64(resultId ValueId, value ParsedInt, isFloat bool, dstBlock MlirBlock, globalData GlobalDataTable)
 	if isFloat 'floatImm'
-		lowerFloatConstArm64(resultId, rawBits: value, dstBlock: dstBlock)
+		lowerFloatConstArm64(resultId, rawBits: value, dstBlock: dstBlock, globalData: globalData)
 	end 'floatImm' else 'intImm'
 		dstBlock.ops.push(MlirOp.arm64(Arm64Op.movImm(Arm64VReg.virtual(resultId), value)))
 	end 'intImm'
 end 'lowerMovImmArm64'
 
-// Float constant: load raw IEEE 754 bits into a GPR virtual register.
-// The register allocator will handle GPR-to-FP transfer when needed.
-function lowerFloatConstArm64(resultId ValueId, rawBits ParsedInt, dstBlock MlirBlock)
-	dstBlock.ops.push(MlirOp.arm64(Arm64Op.movImm(Arm64VReg.virtual(resultId), rawBits)))
+// Float constant: load directly into FP register via literal pool data island.
+function lowerFloatConstArm64(resultId ValueId, rawBits ParsedInt, dstBlock MlirBlock, globalData GlobalDataTable)
+	let label = registerFloatConstant(rawBits, globalData: globalData)
+	dstBlock.ops.push(MlirOp.arm64(Arm64Op.fpLoadRdata(Arm64FpVReg.virtual(resultId), label, FloatPrecision.f64)))
 end 'lowerFloatConstArm64'
 
 function lowerMovRegArm64(resultId ValueId, srcId ValueId, dstBlock MlirBlock)
@@ -410,7 +410,8 @@ end 'mirPredicateToArm64CondCode'
 // Call
 // ============================================================
 
-// AAPCS64 calling convention: x0-x7 for first 8 integer arguments
+// Internal calling convention: GPR args in x0-x7, FP args in d0-d7.
+// GPR and FP use separate index counters.
 function getArm64CallConvGpr(index VarSlot) returns Arm64Register
 	let regs = [Arm64Register.x0, Arm64Register.x1, Arm64Register.x2, Arm64Register.x3, Arm64Register.x4, Arm64Register.x5, Arm64Register.x6, Arm64Register.x7]
 	return try regs.get(index) otherwise 'outOfRange'
@@ -418,29 +419,49 @@ function getArm64CallConvGpr(index VarSlot) returns Arm64Register
 	end 'outOfRange'
 end 'getArm64CallConvGpr'
 
+function getArm64CallConvFp(index VarSlot) returns Arm64FloatRegister
+	let regs = [Arm64FloatRegister.d0, Arm64FloatRegister.d1, Arm64FloatRegister.d2, Arm64FloatRegister.d3, Arm64FloatRegister.d4, Arm64FloatRegister.d5, Arm64FloatRegister.d6, Arm64FloatRegister.d7]
+	return try regs.get(index) otherwise 'outOfRange'
+		panic("getArm64CallConvFp: FP param index {index} exceeds register count")
+	end 'outOfRange'
+end 'getArm64CallConvFp'
+
+
 function lowerCallArm64(resultId ValueId, callee ByteArray, argIds ValueIdArray, dstBlock MlirBlock, allFunctions MlirFunctionArray)
-	// Move args to calling convention registers (physical, ABI-fixed)
+	// Look up callee's param types to route float args to D registers
+	let paramTypes = lookupFuncParamTypes(callee, allFunctions: allFunctions)
+
+	// Move args to calling convention registers with separate GPR/FP counters
 	var argIdx = 0
-	while argIdx < argIds.count() and argIdx < 8 'moveArgs'
+	var gprIdx = 0
+	var fpIdx = 0
+	while argIdx < argIds.count() 'moveArgs'
 		let argId = try argIds.get(argIdx) otherwise 'skipArg'
 			argIdx = argIdx + 1
 			continue
 		end 'skipArg'
-		let ccReg = getArm64CallConvGpr(argIdx)
-		dstBlock.ops.push(MlirOp.arm64(Arm64Op.movRegReg(arm64PhysReg(ccReg), Arm64VReg.virtual(argId))))
-		argIdx = argIdx + 1
+		let paramType = try paramTypes.get(argIdx) otherwise StdType.i64
+		match paramType 'routeArg'
+			f64 then if fpIdx < 8 'fpRegArg'
+			let fpReg = getArm64CallConvFp(fpIdx)
+			dstBlock.ops.push(MlirOp.arm64(Arm64Op.fmovRegReg(arm64PhysFpReg(fpReg), Arm64FpVReg.virtual(argId), FloatPrecision.f64)))
+			fpIdx = fpIdx + 1
+		end 'fpRegArg'
+		i64 then if gprIdx < 8 'gprRegArg'
+			let ccReg = getArm64CallConvGpr(gprIdx)
+			dstBlock.ops.push(MlirOp.arm64(Arm64Op.movRegReg(arm64PhysReg(ccReg), Arm64VReg.virtual(argId))))
+			gprIdx = gprIdx + 1
+		end 'gprRegArg'
+	end 'routeArg'
+	argIdx = argIdx + 1
 	end 'moveArgs'
-	if argIds.count() > 8 'tooManyArgs'
-		panic("lowerCallArm64: more than 8 arguments not yet supported (got {argIds.count()})")
-	end 'tooManyArgs'
 
 	// Emit the call
 	dstBlock.ops.push(MlirOp.arm64(Arm64Op.branchLink(callee)))
 
-	// Move return value from X0 to virtual result
+	// Move return value from X0/D0 to virtual result
 	let calleeReturnType = lookupFuncReturnTypeArm64(callee, allFunctions: allFunctions)
 	if calleeReturnType == b"f64" 'floatResult'
-		// Float return is in D0
 		dstBlock.ops.push(MlirOp.arm64(Arm64Op.fmovRegReg(Arm64FpVReg.virtual(resultId), arm64PhysFpReg(Arm64FloatRegister.d0), FloatPrecision.f64)))
 	end 'floatResult' else 'intResult'
 		dstBlock.ops.push(MlirOp.arm64(Arm64Op.movRegReg(Arm64VReg.virtual(resultId), arm64PhysReg(Arm64Register.x0))))
@@ -484,18 +505,21 @@ end 'lookupFuncReturnTypeArm64'
 // ============================================================
 
 // Move from calling convention register to virtual register.
-function lowerParamArm64(resultId ValueId, paramIndex VarSlot, paramType StdType, dstBlock MlirBlock)
-	if paramIndex < 8 'regParam'
-		let ccReg = getArm64CallConvGpr(paramIndex)
-		match paramType 'typeDispatch'
-			f64 then dstBlock.ops.push(MlirOp.arm64(Arm64Op.movRegReg(Arm64VReg.virtual(resultId), arm64PhysReg(ccReg))))
-			i64 then dstBlock.ops.push(MlirOp.arm64(Arm64Op.movRegReg(Arm64VReg.virtual(resultId), arm64PhysReg(ccReg))))
-		end 'typeDispatch'
-	end 'regParam' else 'stackParam'
-		// Stack params not yet supported for ARM64
-		panic("ARM64 backend does not yet support more than 8 function parameters")
-	end 'stackParam'
+// Float params arrive in D registers, int params in X registers.
+function lowerParamArm64(resultId ValueId, paramIndex VarSlot, paramType StdType, dstBlock MlirBlock, funcParamTypes StdTypeArray)
+	let slotIdx = computeParamSlotIndex(paramIndex, paramTypes: funcParamTypes)
+	match paramType 'typeDispatch'
+		f64 then if slotIdx < 8 'fpRegParam'
+		let fpReg = getArm64CallConvFp(slotIdx)
+		dstBlock.ops.push(MlirOp.arm64(Arm64Op.fmovRegReg(Arm64FpVReg.virtual(resultId), arm64PhysFpReg(fpReg), FloatPrecision.f64)))
+	end 'fpRegParam'
+	i64 then if slotIdx < 8 'gprRegParam'
+		let ccReg = getArm64CallConvGpr(slotIdx)
+		dstBlock.ops.push(MlirOp.arm64(Arm64Op.movRegReg(Arm64VReg.virtual(resultId), arm64PhysReg(ccReg))))
+	end 'gprRegParam'
+end 'typeDispatch'
 end 'lowerParamArm64'
+
 
 // ============================================================
 // Memory (load/store indirect)

@@ -20,6 +20,7 @@ By default spec tests will only show the name of failing tests, but you can use 
 6. Fix any problems reported by the IDE
 7. If any changes occured to the required MLIR of other tests in register-allocator.md then those changes need to be reviewed to ensure they are ok.
 8. Review all code changes:
+    - Ensure we have maintained equivilant functionality in all the targets (x64, arm64, etc)
     - Eliminate duplicated code — refactor shared logic into helper methods.
     - Ensure no `switch` or 'match' statements use `default` cases — all cases must be handled explicitly.
     - Ensure no `else` clauses silently catch unhandled conditions — throw errors for unexpected inputs.
@@ -34,7 +35,6 @@ By default spec tests will only show the name of failing tests, but you can use 
 9. Write a git commit message
 
 ## Guidelines
-
 - Read the relevant spec file in `specs/` to understand what the expected behavior is.
 - For memory issues try compiling with "--mm-trace"
 - Use `--log=CATEGORY:LEVEL` to get more detail when debugging (e.g., `--log=mlir:debug`).

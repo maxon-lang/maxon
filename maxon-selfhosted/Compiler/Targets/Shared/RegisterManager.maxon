@@ -1725,6 +1725,35 @@ function isReturnTerminator(op MlirOp, state RegState) returns bool
 	return targetIsReturnTerminator(state, op: op)
 end 'isReturnTerminator'
 
+// Check if a terminator op branches to a diverging block (e.g. condJump targeting
+// a panic block). This lets us save register state before blocks that conditionally
+// branch to panic, avoiding unnecessary spills on the happy path.
+function terminatorBranchesToDivergingBlock(op MlirOp, divergingBlockIds RegIntArray) returns bool
+	return match op 'check'
+		x64(x64Op) gives x64TerminatorBranchesToDiverging(x64Op, divergingBlockIds: divergingBlockIds)
+		arm64(arm64Op) gives arm64TerminatorBranchesToDiverging(arm64Op, divergingBlockIds: divergingBlockIds)
+		maxon to mir gives false
+	end 'check'
+end 'terminatorBranchesToDivergingBlock'
+
+function x64TerminatorBranchesToDiverging(op X64Op, divergingBlockIds RegIntArray) returns bool
+	return match op 'check'
+		condJump(_, targetBlock) gives rmGetOr(divergingBlockIds, index: targetBlock, fallback: 0) == 1
+		jmp(targetBlock) gives rmGetOr(divergingBlockIds, index: targetBlock, fallback: 0) == 1
+		prologue to testRaxRax gives false
+		movF64Slot to repStosq gives false
+	end 'check'
+end 'x64TerminatorBranchesToDiverging'
+
+function arm64TerminatorBranchesToDiverging(op Arm64Op, divergingBlockIds RegIntArray) returns bool
+	return match op 'check'
+		condBranch(_, targetBlock) gives rmGetOr(divergingBlockIds, index: targetBlock, fallback: 0) == 1
+		branch(targetBlock) gives rmGetOr(divergingBlockIds, index: targetBlock, fallback: 0) == 1
+		prologue to cmpRegZero gives false
+		branchLink to nullSafeLoad gives false
+	end 'check'
+end 'arm64TerminatorBranchesToDiverging'
+
 function allocateRegistersForFunc(srcFunc MlirFunction, target Target) returns MlirFunction
 	var dstFunc = cloneFunctionShell(srcFunc)
 
@@ -1781,6 +1810,7 @@ function allocateRegistersForFunc(srcFunc MlirFunction, target Target) returns M
 	// save/restore register state around them and prevent their spills from
 	// inflating the frame for the continuation (happy path).
 	var divergingBlocks = RegIntArray.create()
+	var divergingBlockIds = RegIntArray.create()
 	var di = 0
 	while di < blockCount 'scanBlocks'
 		let blk = try srcFunc.blocks.get(di) otherwise 'skipDetect'
@@ -1789,6 +1819,7 @@ function allocateRegistersForFunc(srcFunc MlirFunction, target Target) returns M
 		end 'skipDetect'
 		if targetIsDivergingBlock(state, block: blk) 'isDiverging'
 			rmSet(divergingBlocks, index: di, value: 1, sentinel: 0)
+			rmSet(divergingBlockIds, index: blk.id, value: 1, sentinel: 0)
 		end 'isDiverging'
 		di = di + 1
 	end 'scanBlocks'
@@ -1841,6 +1872,13 @@ function allocateRegistersForFunc(srcFunc MlirFunction, target Target) returns M
 			opIdx = opIdx + 1
 		end 'eachOp'
 
+		// Check if this block's terminator conditionally branches to a diverging block.
+		// Used to skip spills and carry register state through to the fallthrough successor.
+		var branchTargetIsDiverging = false
+		if srcBlock.hasTerminator 'checkBranchTarget'
+			branchTargetIsDiverging = terminatorBranchesToDivergingBlock(srcBlock.terminator, divergingBlockIds: divergingBlockIds)
+		end 'checkBranchTarget'
+
 		// Handle terminator
 		if srcBlock.hasTerminator 'hasTerm'
 			// If the next block is diverging, save register state NOW (before spilling)
@@ -1855,7 +1893,11 @@ function allocateRegistersForFunc(srcFunc MlirFunction, target Target) returns M
 
 			// Spill all live registers before terminator (for cross-block liveness).
 			// Skip spilling if the terminator is a return — no successor will read them.
-			if not isReturnTerminator(srcBlock.terminator, state: state) and not hasSavedState and not isBlockDiverging 'notReturn'
+			// Also skip spilling when the terminator is a conditional branch whose
+			// jump target is a diverging block (e.g. jg __range_panic). The conditional
+			// jump doesn't clobber registers, so the fallthrough successor gets full
+			// register state — no spill/reload needed on the happy path.
+			if not isReturnTerminator(srcBlock.terminator, state: state) and not hasSavedState and not isBlockDiverging and not branchTargetIsDiverging 'notReturn'
 				rmSpillAllBeforeTerminator(state, dstBlock: dstBlock)
 			end 'notReturn'
 
@@ -1886,7 +1928,12 @@ function allocateRegistersForFunc(srcFunc MlirFunction, target Target) returns M
 				passedDivergingBlock = true
 			end 'diverging' else if hasSavedState 'skipSpillTransition'
 				rmReset(state)
-			end 'skipSpillTransition' else 'normalTransition'
+			end 'skipSpillTransition' else if branchTargetIsDiverging 'carryThrough'
+				// The terminator is a conditional branch to a diverging block (e.g. jg panic).
+				// Register state carries through to the fallthrough successor intact — no
+				// spill or reset needed.
+				logTrace(LogCategory.mlir, message: () gives "regalloc: carry register state through condBr-to-diverging (func={String.from(state.funcName)})")
+			end 'carryThrough' else 'normalTransition'
 				rmResetForBlockTransition(state, prevBlock: dstBlock)
 			end 'normalTransition'
 		end 'notLastBlock'

@@ -204,7 +204,7 @@ function isFlagsOnly(useCounts UseCountMap, resultId ValueId, condBrCondId Value
 	return ucGet(useCounts, valueId: resultId) <= 1 and condBrCondId == resultId
 end 'isFlagsOnly'
 
-export function lowerMidToX64(module MlirModule, target Target) returns MlirModule
+export function lowerMidToX64(module MlirModule, target Target, globalData GlobalDataTable) returns MlirModule
 	logDebug(LogCategory.mlir, message: () gives "Lowering Mid to X64 dialect")
 	var result = createMlirModule()
 
@@ -213,14 +213,14 @@ export function lowerMidToX64(module MlirModule, target Target) returns MlirModu
 	for srcFunc in module.functions 'eachFunc'
 		let funcName = String.from(srcFunc.name)
 		logTrace(LogCategory.mlir, message: () gives "mid-to-x64: === lowering function: {funcName} ===")
-		let dstFunc = lowerFunctionToX64(srcFunc, osDesc: osDesc, allFunctions: module.functions)
+		let dstFunc = lowerFunctionToX64(srcFunc, osDesc: osDesc, allFunctions: module.functions, globalData: globalData)
 		result.functions.push(dstFunc)
 	end 'eachFunc'
 
 	return result
 end 'lowerMidToX64'
 
-function lowerFunctionToX64(srcFunc MlirFunction, osDesc OsDescriptor, allFunctions MlirFunctionArray) returns MlirFunction
+function lowerFunctionToX64(srcFunc MlirFunction, osDesc OsDescriptor, allFunctions MlirFunctionArray, globalData GlobalDataTable) returns MlirFunction
 	var dstFunc = cloneFunctionShell(srcFunc)
 
 	// Phase 1: Compute variable stack space from memref slots.
@@ -291,7 +291,7 @@ function lowerFunctionToX64(srcFunc MlirFunction, osDesc OsDescriptor, allFuncti
 
 		// Lower each op in the block
 		for op in srcBlock.ops 'eachOp'
-			nextTempSlot = lowerMlirOp(op, dstBlock: dstBlock, osDesc: osDesc, allFunctions: allFunctions, valueSlots: valueSlots, nextTempSlot: nextTempSlot, constMap: constMap, useCounts: useCounts, condBrCondId: condBrCondId)
+			nextTempSlot = lowerMlirOp(op, dstBlock: dstBlock, osDesc: osDesc, allFunctions: allFunctions, valueSlots: valueSlots, nextTempSlot: nextTempSlot, constMap: constMap, useCounts: useCounts, condBrCondId: condBrCondId, globalData: globalData, funcParamTypes: srcFunc.paramTypes)
 		end 'eachOp'
 
 		// Lower terminator
@@ -408,10 +408,10 @@ end 'setLastOpAsTerminator'
 // Op dispatch
 // ============================================================
 
-function lowerMlirOp(op MlirOp, dstBlock MlirBlock, osDesc OsDescriptor, allFunctions MlirFunctionArray, valueSlots ValueSlotMap, nextTempSlot SlotIndex, constMap ConstMap, useCounts UseCountMap, condBrCondId ValueId) returns SlotIndex
+function lowerMlirOp(op MlirOp, dstBlock MlirBlock, osDesc OsDescriptor, allFunctions MlirFunctionArray, valueSlots ValueSlotMap, nextTempSlot SlotIndex, constMap ConstMap, useCounts UseCountMap, condBrCondId ValueId, globalData GlobalDataTable, funcParamTypes StdTypeArray) returns SlotIndex
 	var result = nextTempSlot
 	match op 'dispatch'
-		mir(mirOp) then result = lowerMirOp(mirOp, dstBlock: dstBlock, osDesc: osDesc, allFunctions: allFunctions, valueSlots: valueSlots, nextTempSlot: nextTempSlot, constMap: constMap, useCounts: useCounts, condBrCondId: condBrCondId)
+		mir(mirOp) then result = lowerMirOp(mirOp, dstBlock: dstBlock, osDesc: osDesc, allFunctions: allFunctions, valueSlots: valueSlots, nextTempSlot: nextTempSlot, constMap: constMap, useCounts: useCounts, condBrCondId: condBrCondId, globalData: globalData, funcParamTypes: funcParamTypes)
 		memref(memOp) then lowerMemRefOp(memOp, dstBlock: dstBlock)
 		runtime(rtOp) then lowerRuntimeOp(rtOp, dstBlock: dstBlock)
 		x64(x64Op) then dstBlock.ops.push(MlirOp.x64(x64Op))
@@ -428,10 +428,10 @@ end 'lowerMlirOp'
 // MIR op lowering — pure virtual register emission
 // ============================================================
 
-function lowerMirOp(op MirOp, dstBlock MlirBlock, osDesc OsDescriptor, allFunctions MlirFunctionArray, valueSlots ValueSlotMap, nextTempSlot SlotIndex, constMap ConstMap, useCounts UseCountMap, condBrCondId ValueId) returns SlotIndex
+function lowerMirOp(op MirOp, dstBlock MlirBlock, osDesc OsDescriptor, allFunctions MlirFunctionArray, valueSlots ValueSlotMap, nextTempSlot SlotIndex, constMap ConstMap, useCounts UseCountMap, condBrCondId ValueId, globalData GlobalDataTable, funcParamTypes StdTypeArray) returns SlotIndex
 	var result = nextTempSlot
 	match op 'dispatch'
-		movImm(resultId, value, isFloat) then lowerMovImm(resultId, value: value, isFloat: isFloat, dstBlock: dstBlock)
+		movImm(resultId, value, isFloat) then lowerMovImm(resultId, value: value, isFloat: isFloat, dstBlock: dstBlock, globalData: globalData)
 		movReg(resultId, srcId) then lowerMovReg(resultId, srcId: srcId, dstBlock: dstBlock)
 		binOp(resultId, leftId, rightId, opcode) then lowerBinOp(resultId, leftId: leftId, rightId: rightId, opcode: opcode, dstBlock: dstBlock, constMap: constMap)
 		unaryOp(resultId, operandId, opcode) then lowerUnaryOp(resultId, operandId: operandId, opcode: opcode, dstBlock: dstBlock)
@@ -441,7 +441,7 @@ function lowerMirOp(op MirOp, dstBlock MlirBlock, osDesc OsDescriptor, allFuncti
 		call(resultId, callee, argIds) then lowerCall(resultId, callee: callee, argIds: argIds, dstBlock: dstBlock, allFunctions: allFunctions)
 		indirectCall(resultId, calleeId, argIds) then lowerIndirectCall(resultId, calleeId: calleeId, argIds: argIds, dstBlock: dstBlock)
 		ret then result = nextTempSlot  // handled as terminator
-		param(resultId, paramIndex, paramType) then lowerParam(resultId, paramIndex: paramIndex, paramType: paramType, dstBlock: dstBlock)
+		param(resultId, paramIndex, paramType) then lowerParam(resultId, paramIndex: paramIndex, paramType: paramType, dstBlock: dstBlock, funcParamTypes: funcParamTypes)
 		load(resultId, baseId, offset) then lowerLoad(resultId, baseId: baseId, offset: offset, dstBlock: dstBlock)
 		store(valueId, baseId, offset) then lowerStore(valueId, baseId: baseId, offset: offset, dstBlock: dstBlock)
 		stackSlotAddr to loadByte then result = lowerMirSysOp(op, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot, osDesc: osDesc)
@@ -453,21 +453,18 @@ end 'lowerMirOp'
 // Constants & moves
 // ============================================================
 
-function lowerMovImm(resultId ValueId, value ParsedInt, isFloat bool, dstBlock MlirBlock)
+function lowerMovImm(resultId ValueId, value ParsedInt, isFloat bool, dstBlock MlirBlock, globalData GlobalDataTable)
 	if isFloat 'floatImm'
-		lowerFloatConst(resultId, rawBits: value, dstBlock: dstBlock)
+		lowerFloatConst(resultId, rawBits: value, dstBlock: dstBlock, globalData: globalData)
 	end 'floatImm' else 'intImm'
 		dstBlock.ops.push(MlirOp.x64(X64Op.movRegImm(X64VReg.virtual(resultId), value)))
 	end 'intImm'
 end 'lowerMovImm'
 
-// Float constant: load raw IEEE 754 bits into a GPR virtual, then transfer
-// to an FP virtual via movq. The register allocator will assign concrete regs.
-function lowerFloatConst(resultId ValueId, rawBits ParsedInt, dstBlock MlirBlock)
-	// Load raw bits into GPR virtual register
-	dstBlock.ops.push(MlirOp.x64(X64Op.movRegImm(X64VReg.virtual(resultId), rawBits)))
-	// The value is integer bits representing a float. The register allocator
-	// will handle GPR-to-XMM transfer when needed by downstream float ops.
+// Float constant: load directly into XMM via movsd [rip+data island].
+function lowerFloatConst(resultId ValueId, rawBits ParsedInt, dstBlock MlirBlock, globalData GlobalDataTable)
+	let label = registerFloatConstant(rawBits, globalData: globalData)
+	dstBlock.ops.push(MlirOp.x64(X64Op.movXmmRipRel(X64FpVReg.virtual(resultId), label, FloatPrecision.f64)))
 end 'lowerFloatConst'
 
 function lowerMovReg(resultId ValueId, srcId ValueId, dstBlock MlirBlock)
@@ -684,7 +681,8 @@ end 'predicateToSetcc'
 // Call
 // ============================================================
 
-// Internal calling convention order: rcx, rdx, r8, r9, rsi, rdi, rax, rbx
+// Internal calling convention: GPR args in rcx, rdx, r8, r9, rsi, rdi, rax, rbx
+// FP args in xmm0-xmm7. GPR and FP use separate index counters.
 function getCallConvGpr(index VarSlot) returns X64Register
 	let regs = [X64Register.rcx, X64Register.rdx, X64Register.r8, X64Register.r9, X64Register.rsi, X64Register.rdi, X64Register.rax, X64Register.rbx]
 	return try regs.get(index) otherwise 'outOfRange'
@@ -692,29 +690,49 @@ function getCallConvGpr(index VarSlot) returns X64Register
 	end 'outOfRange'
 end 'getCallConvGpr'
 
+function getCallConvXmm(index VarSlot) returns X64XmmRegister
+	let regs = [X64XmmRegister.xmm0, X64XmmRegister.xmm1, X64XmmRegister.xmm2, X64XmmRegister.xmm3, X64XmmRegister.xmm4, X64XmmRegister.xmm5, X64XmmRegister.xmm6, X64XmmRegister.xmm7]
+	return try regs.get(index) otherwise 'outOfRange'
+		panic("getCallConvXmm: FP param index {index} exceeds register count")
+	end 'outOfRange'
+end 'getCallConvXmm'
+
+
 function lowerCall(resultId ValueId, callee ByteArray, argIds ValueIdArray, dstBlock MlirBlock, allFunctions MlirFunctionArray)
-	// Move args to calling convention registers (physical, ABI-fixed)
+	// Look up callee's param types to route float args to XMM registers
+	let paramTypes = lookupFuncParamTypes(callee, allFunctions: allFunctions)
+
+	// Move args to calling convention registers with separate GPR/FP counters
 	var argIdx = 0
-	while argIdx < argIds.count() and argIdx < 8 'moveArgs'
+	var gprIdx = 0
+	var fpIdx = 0
+	while argIdx < argIds.count() 'moveArgs'
 		let argId = try argIds.get(argIdx) otherwise 'skipArg'
 			argIdx = argIdx + 1
 			continue
 		end 'skipArg'
-		let ccReg = getCallConvGpr(argIdx)
-		dstBlock.ops.push(MlirOp.x64(X64Op.movRegReg(physReg(ccReg), X64VReg.virtual(argId))))
-		argIdx = argIdx + 1
+		let paramType = try paramTypes.get(argIdx) otherwise StdType.i64
+		match paramType 'routeArg'
+			f64 then if fpIdx < 8 'fpRegArg'
+			let xmmReg = getCallConvXmm(fpIdx)
+			dstBlock.ops.push(MlirOp.x64(X64Op.movXmmXmm(physFpReg(xmmReg), X64FpVReg.virtual(argId), FloatPrecision.f64)))
+			fpIdx = fpIdx + 1
+		end 'fpRegArg'
+		i64 then if gprIdx < 8 'gprRegArg'
+			let ccReg = getCallConvGpr(gprIdx)
+			dstBlock.ops.push(MlirOp.x64(X64Op.movRegReg(physReg(ccReg), X64VReg.virtual(argId))))
+			gprIdx = gprIdx + 1
+		end 'gprRegArg'
+	end 'routeArg'
+	argIdx = argIdx + 1
 	end 'moveArgs'
-	if argIds.count() > 8 'tooManyArgs'
-		panic("lowerCall: more than 8 arguments not yet supported (got {argIds.count()})")
-	end 'tooManyArgs'
 
 	// Emit the call
 	dstBlock.ops.push(MlirOp.x64(X64Op.callDirect(callee)))
 
-	// Move return value from RAX to virtual result
+	// Move return value from RAX/XMM0 to virtual result
 	let calleeReturnType = lookupFuncReturnType(callee, allFunctions: allFunctions)
 	if calleeReturnType == b"f64" 'floatResult'
-		// Float return is in XMM0
 		dstBlock.ops.push(MlirOp.x64(X64Op.movXmmXmm(X64FpVReg.virtual(resultId), physFpReg(X64XmmRegister.xmm0), FloatPrecision.f64)))
 	end 'floatResult' else 'intResult'
 		dstBlock.ops.push(MlirOp.x64(X64Op.movRegReg(X64VReg.virtual(resultId), physReg(X64Register.rax))))
@@ -758,18 +776,19 @@ end 'lookupFuncReturnType'
 // ============================================================
 
 // Move from calling convention register to virtual register.
-function lowerParam(resultId ValueId, paramIndex VarSlot, paramType StdType, dstBlock MlirBlock)
-	if paramIndex < 8 'regParam'
-		let ccReg = getCallConvGpr(paramIndex)
-		match paramType 'typeDispatch'
-			f64 then dstBlock.ops.push(MlirOp.x64(X64Op.movRegReg(X64VReg.virtual(resultId), physReg(ccReg))))
-			i64 then dstBlock.ops.push(MlirOp.x64(X64Op.movRegReg(X64VReg.virtual(resultId), physReg(ccReg))))
-		end 'typeDispatch'
-	end 'regParam' else 'stackParam'
-		// Stack params: [RBP+16], [RBP+24], etc.
-		let rbpOffset = 16 + (paramIndex - 8) * 8
-		dstBlock.ops.push(MlirOp.x64(X64Op.loadRegRbpOffset(X64VReg.virtual(resultId), rbpOffset)))
-	end 'stackParam'
+// Float params arrive in XMM registers, int params in GPR registers.
+function lowerParam(resultId ValueId, paramIndex VarSlot, paramType StdType, dstBlock MlirBlock, funcParamTypes StdTypeArray)
+	let slotIdx = computeParamSlotIndex(paramIndex, paramTypes: funcParamTypes)
+	match paramType 'typeDispatch'
+		f64 then if slotIdx < 8 'fpRegParam'
+		let xmmReg = getCallConvXmm(slotIdx)
+		dstBlock.ops.push(MlirOp.x64(X64Op.movXmmXmm(X64FpVReg.virtual(resultId), physFpReg(xmmReg), FloatPrecision.f64)))
+	end 'fpRegParam'
+	i64 then if slotIdx < 8 'gprRegParam'
+		let ccReg = getCallConvGpr(slotIdx)
+		dstBlock.ops.push(MlirOp.x64(X64Op.movRegReg(X64VReg.virtual(resultId), physReg(ccReg))))
+	end 'gprRegParam'
+end 'typeDispatch'
 end 'lowerParam'
 
 // ============================================================

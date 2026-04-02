@@ -181,7 +181,14 @@ function arm64EmitMovkLsl48(code ByteArray, rd MachineWord, imm16 MachineWord)
 end 'arm64EmitMovkLsl48'
 
 // Load a full 64-bit immediate into register Xd using MOVZ + MOVK sequence.
+// Zero is special-cased to MOV Xd, XZR (ORR Xd, XZR, XZR) for smaller encoding.
 function arm64EmitMovImm(code ByteArray, rd MachineWord, value MachineWord)
+	if value == 0 'useXzr'
+		// MOV Xd, XZR => ORR Xd, XZR, XZR: 0xAA1F03E0 | Rd
+		arm64EmitInsn(code, insn: 0xAA1F03E0 or rd)
+		return
+	end 'useXzr'
+
 	let chunk0 = value and 0xFFFF
 	let chunk1 = (value shr 16) and 0xFFFF
 	let chunk2 = (value shr 32) and 0xFFFF
@@ -366,6 +373,35 @@ function arm64EmitFpReloadFromStack(code ByteArray, rt MachineWord, byteOffset M
 	let insn = 0xFD400000 or(scaledOffset shl 10) or(29 shl 5) or rt
 	arm64EmitInsn(code, insn: insn)
 end 'arm64EmitFpReloadFromStack'
+
+// LDR Dt, [PC+offset] via data island: branch over inline data, then PC-relative load.
+function arm64EmitFpLoadRdata(code ByteArray, dest Arm64FloatRegister, rdataLabel ByteArray, precision FloatPrecision, globalData GlobalDataTable)
+	let data = lookupGlobalData(globalData, name: rdataLabel)
+	let dataLen = data.count()
+	if dataLen == 0 'noData'
+		return
+	end 'noData'
+	// Branch over data island: B imm26
+	// imm26 is the number of 4-byte words to skip (data + this branch instruction)
+	let branchWords = (dataLen + 4 + 3) / 4
+	arm64EmitInsn(code, insn: 0x14000000 or branchWords)
+	// Data island
+	let dataOffset = code.count()
+	code.append(data)
+	// LDR Dt/St, [PC+offset] — PC-relative literal load
+	// f64: 0x5C000000 | (imm19 << 5) | Rt
+	// f32: 0x1C000000 | (imm19 << 5) | Rt
+	let instrOffset = code.count()
+	let byteDisp = dataOffset - instrOffset
+	let wordDisp = byteDisp / 4
+	let imm19 = wordDisp and 0x7FFFF
+	let rt = dest.rawValue and 0x1F
+	let opcode = match precision 'selectOpc'
+		f64 gives 0x5C000000
+		f32 gives 0x1C000000
+	end 'selectOpc'
+	arm64EmitInsn(code, insn: opcode or(imm19 shl 5) or rt)
+end 'arm64EmitFpLoadRdata'
 
 // CMP Xn, Xm => SUBS XZR, Xn, Xm
 function arm64EmitCmp(code ByteArray, rn MachineWord, rm MachineWord)
@@ -1110,7 +1146,9 @@ function emitArm64Instruction(op Arm64Op, code ByteArray, jumpFixups BlockIdFixu
 		fmovRegReg(dest, src, _) then arm64EmitFmovDD(code, rd: resolveArm64Fp(dest).rawValue, rn: resolveArm64Fp(src).rawValue)
 		spillFpToStack(offset, src, _) then arm64EmitFpSpillToStack(code, rt: resolveArm64Fp(src).rawValue, byteOffset: offset)
 		reloadFpFromStack(dest, offset, _) then arm64EmitFpReloadFromStack(code, rt: resolveArm64Fp(dest).rawValue, byteOffset: offset)
-		fmovToFloat to frintn then panic("ARM64 FP op not yet implemented in binary emitter")
+		fpLoadRdata(dest, rdataLabel, precision) then arm64EmitFpLoadRdata(code, dest: resolveArm64Fp(dest), rdataLabel: rdataLabel, precision: precision, globalData: globalData)
+		fmovToFloat to fmovToGpr then panic("ARM64 FP op not yet implemented in binary emitter")
+		fadd to frintn then panic("ARM64 FP op not yet implemented in binary emitter")
 		loadIndirect(destReg, baseReg, offset, size) then arm64EmitLoadIndirectOp(code, destReg: destReg, baseReg: baseReg, offset: offset, size: size)
 		leaFuncAddr(dest, funcName) then arm64EmitLeaFuncAddrOp(code, dest: dest, funcName: funcName, adrFixups: adrFixups)
 		fpStoreIndirect to fpLoadIndirect then panic("ARM64 FP indirect op not yet implemented in binary emitter")

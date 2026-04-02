@@ -503,7 +503,9 @@ function scanForwardHintConfirm(hints RegIntArray, nextX64 X64Op, srcId RegInt, 
 		cqo then confirmDivHint(hints, srcId: srcId, destOrd: destOrd, raxOrd: raxOrd)
 		shlRegCl then confirmShiftHint(hints, srcId: srcId, destOrd: destOrd, rcxOrd: rcxOrd)
 		sarRegCl then confirmShiftHint(hints, srcId: srcId, destOrd: destOrd, rcxOrd: rcxOrd)
-		prologue to xorRegReg then break 'confirm'
+		epilogue then confirmDivHint(hints, srcId: srcId, destOrd: destOrd, raxOrd: raxOrd)
+		prologue then break 'confirm'
+		ret to xorRegReg then break 'confirm'
 		cmpRaxRcx to memcpyOp then break 'confirm'
 		movRegReg to testRegReg then break 'confirm'
 		idivReg to repStosq then break 'confirm'
@@ -563,8 +565,10 @@ end 'preSeedX64ParamRegisters'
 function preSeedIfNotDivResult(state RegState, x64Op X64Op, ops MlirOpArray, opIdx RegInt)
 	match x64Op 'checkMov'
 		movRegReg(destReg, srcReg) then preSeedMovIfNotDivResult(state, destReg: destReg, srcReg: srcReg, ops: ops, opIdx: opIdx)
+		movXmmXmm(dest, src, _) then preSeedFpParam(state, dest: dest, src: src)
 		prologue to memcpyOp then break 'checkMov'
-		cmpRegReg to repStosq then break 'checkMov'
+		cmpRegReg to xchgRegReg then break 'checkMov'
+		spillXmmToStack to repStosq then break 'checkMov'
 	end 'checkMov'
 end 'preSeedIfNotDivResult'
 
@@ -620,6 +624,27 @@ function rmPreAssignParam(state RegState, valueId RegInt, regOrdinal RegOrdinal)
 	state.registerContents.set(regOrdinal, value: valueId)
 	state.lastUsed.set(regOrdinal, value: state.currentOpIndex)
 end 'rmPreAssignParam'
+
+// Pre-seed FP param: movXmmXmm(fpVirtual(dest), physical(src), f64) in the entry block
+function preSeedFpParam(state RegState, dest X64FpVReg, src X64FpVReg)
+	let destId = match dest 'getDest'
+		virtual(id) gives id
+		physical gives -1
+	end 'getDest'
+	if destId < 0 'notVirtual'
+		return
+	end 'notVirtual'
+	let srcOrd = match src 'getSrc'
+		physical(reg) gives reg.rawValue
+		virtual gives -1
+	end 'getSrc'
+	if srcOrd < 0 'notPhysical'
+		return
+	end 'notPhysical'
+	var vi = rmGetValueInfo(state, valueId: destId)
+	vi.fpOrdinal = srcOrd
+	state.fpContents.set(srcOrd, value: destId)
+end 'preSeedFpParam'
 
 // ============================================================
 // X64 block arg slot homes

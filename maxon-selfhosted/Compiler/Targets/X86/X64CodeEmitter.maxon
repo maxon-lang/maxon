@@ -1343,8 +1343,25 @@ function emitGlobalStoreOp(code ByteArray, src X64Register, name ByteArray, size
 	panic("emitGlobalStoreOp: global data offset resolution not yet implemented (nameLen={name.count()}, src={src}, size={size}, codeLen={code.count()})")
 end 'emitGlobalStoreOp'
 
-// --- movXmmRipRel: load float from RIP-relative data ---
-function emitMovXmmRipRelOp(code ByteArray, dest X64XmmRegister, precision FloatPrecision)
+// --- movXmmRipRel: load float from RIP-relative data island ---
+// Embeds the float data inline in .text (jump-over pattern) and emits a
+// RIP-relative movsd/movss to load it directly into an XMM register.
+function emitMovXmmRipRelOp(code ByteArray, dest X64XmmRegister, rdataLabel ByteArray, precision FloatPrecision, globalData GlobalDataTable)
+	let data = lookupGlobalData(globalData, name: rdataLabel)
+	let dataLen = data.count()
+	if dataLen == 0 'noData'
+		return
+	end 'noData'
+	// Jump over data island
+	code.push(0xEB)
+	let jmpFixup = code.count()
+	code.push(0)
+	// Data island (8 bytes for f64, 4 bytes for f32)
+	let dataOffset = code.count()
+	code.append(data)
+	// Patch short jump
+	let afterData = code.count()
+	code.set(jmpFixup, value: afterData - (jmpFixup + 1))
 	// movsd/movss xmm, [rip+disp32]
 	match precision 'prec'
 		f64 then code.push(0xF2)
@@ -1355,7 +1372,10 @@ function emitMovXmmRipRelOp(code ByteArray, dest X64XmmRegister, precision Float
 	let destBits = dest.rawValue and 0x07
 	let modrm = 0x05 or(destBits shl 3)
 	code.push(modrm)
-	writeDword(code, value: 0)
+	// RIP-relative displacement: points back to the data island
+	let instrEnd = code.count() + 4
+	let ripRel = dataOffset - instrEnd
+	writeDword(code, value: ripRel)
 end 'emitMovXmmRipRelOp'
 
 // --- movq XMM to GPR ---
@@ -1435,7 +1455,7 @@ function emitX64Op(op X64Op, code ByteArray, blockFixups BlockJumpFixupArray, ca
 		movXmmXmm(dest, src, precision) then emitMovXmmXmmOp(code, dest: resolveFp(dest), src: resolveFp(src), precision: precision)
 		spillXmmToStack(offset, src, precision) then emitSpillXmmToStackOp(code, offset: offset, src: resolveFp(src), precision: precision)
 		reloadXmmFromStack(dest, offset, precision) then emitReloadXmmFromStackOp(code, dest: resolveFp(dest), offset: offset, precision: precision)
-		movXmmRipRel(dest, rdataLabel, precision) then emitMovXmmRipRelOp(code, dest: resolveFp(dest), precision: precision)
+		movXmmRipRel(dest, rdataLabel, precision) then emitMovXmmRipRelOp(code, dest: resolveFp(dest), rdataLabel: rdataLabel, precision: precision, globalData: globalData)
 		addXmm(dest, src, precision) then emitXmmBinaryOp(code, dest: resolveFp(dest), src: resolveFp(src), precision: precision, opcode: 0x58)
 		subXmm(dest, src, precision) then emitXmmBinaryOp(code, dest: resolveFp(dest), src: resolveFp(src), precision: precision, opcode: 0x5C)
 		mulXmm(dest, src, precision) then emitXmmBinaryOp(code, dest: resolveFp(dest), src: resolveFp(src), precision: precision, opcode: 0x59)

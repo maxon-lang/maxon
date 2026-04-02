@@ -67,29 +67,58 @@ export function insertRangeChecks(module MlirModule, funcReturnTypes FuncReturnT
 						let checkId = rangeCheckCounter
 						rangeCheckCounter = rangeCheckCounter + 1
 
-						// Build panic and continue blocks
-						var panicLabel = buildLabel(b"__range_panic_", id: checkId)
-						var okLabel = buildLabel(b"__range_ok_", id: checkId)
-						var panicBlock = addBlock(dstFunc, label: panicLabel)
-						var continueBlock = addBlock(dstFunc, label: okLabel)
-
 						let typeInfo = resolveRangeCheckType(srcFunc.returnType)
+						let needsLowerCheck = range.lower > i64.min
+						let needsUpperCheck = range.upper < i64.max
 
-						// Emit range check ops into current block.
-						// The condBr passes no block args — the panic block is diverging
-						// (never returns), so the register allocator's save/restore carries
-						// the return value in its register across to the continue block.
-						emitRangeCheckOps(dstBlock, valueId: retValId, lower: range.lower, upper: range.upper, typeInfo: typeInfo, panicBlockId: panicBlock.id, okBlockId: continueBlock.id, nextValueIdRef: nextValueIdRef)
+						// Build blocks in layout order so fallthrough elimination works.
+						// For bothChecks: entry -> loCheck -> ok -> panic
+						// For single: entry -> ok -> panic
+						let panicLabel = buildLabel(b"__range_panic_", id: checkId)
+						let okLabel = buildLabel(b"__range_ok_", id: checkId)
 
-						// Panic block: emit maxon.panic
-						let panicMsg = buildPanicMessage(aliasName, sourceFileName: sourceFileName, sourceLine: srcFunc.returnLine)
-						panicBlock.ops.push(MlirOp.maxon(MaxonOp.panic(panicMsg, checkId)))
+						if needsUpperCheck and needsLowerCheck 'dualCheck'
+							// Dual-bound: two separate blocks with direct conditional jumps.
+							// Block order: loCheck, panic, ok — panic between loCheck and ok
+							// so that (1) the upper bound jg-to-panic falls through to loCheck,
+							// (2) the lower bound jge-to-ok falls through to panic, and
+							// (3) panic's code stays within the function's address range
+							// for correct stack trace symbol lookup.
+							let loLabel = buildLabel(b"__range_check_lo_", id: checkId)
+							var loCheckBlock = addBlock(dstFunc, label: loLabel)
+							var panicBlock = addBlock(dstFunc, label: panicLabel)
+							var continueBlock = addBlock(dstFunc, label: okLabel)
 
-						// Continue block: return the original value directly.
-						// No block arg needed — diverging block state save/restore
-						// preserves the register assignment across the panic block.
-						continueBlock.terminator = MlirOp.func(FuncOp.ret(retValId))
-						continueBlock.hasTerminator = true
+							// Entry block: upper bound check (cmp le -> loCheck, else -> panic)
+							emitUpperCheck(dstBlock, valueId: retValId, upper: range.upper, typeInfo: typeInfo, passBlockId: loCheckBlock.id, panicBlockId: panicBlock.id, nextValueIdRef: nextValueIdRef)
+
+							// loCheck block: lower bound check (cmp ge -> ok, else -> panic)
+							emitLowerCheck(loCheckBlock, valueId: retValId, lower: range.lower, typeInfo: typeInfo, passBlockId: continueBlock.id, panicBlockId: panicBlock.id, nextValueIdRef: nextValueIdRef)
+
+							// Panic block: emit maxon.panic
+							let panicMsg = buildPanicMessage(aliasName, sourceFileName: sourceFileName, sourceLine: srcFunc.returnLine)
+							panicBlock.ops.push(MlirOp.maxon(MaxonOp.panic(panicMsg, checkId)))
+
+							// Continue block: return the original value
+							continueBlock.terminator = MlirOp.func(FuncOp.ret(retValId))
+							continueBlock.hasTerminator = true
+						end 'dualCheck' else 'singleCheck'
+							// Single-bound: one check block. Block order: panic, ok —
+							// panic must stay before ok so its code falls within the
+							// function's address range for correct stack trace resolution.
+							var panicBlock = addBlock(dstFunc, label: panicLabel)
+							var continueBlock = addBlock(dstFunc, label: okLabel)
+
+							emitSingleRangeCheck(dstBlock, valueId: retValId, lower: range.lower, upper: range.upper, typeInfo: typeInfo, panicBlockId: panicBlock.id, okBlockId: continueBlock.id, nextValueIdRef: nextValueIdRef)
+
+							// Panic block: emit maxon.panic
+							let panicMsg = buildPanicMessage(aliasName, sourceFileName: sourceFileName, sourceLine: srcFunc.returnLine)
+							panicBlock.ops.push(MlirOp.maxon(MaxonOp.panic(panicMsg, checkId)))
+
+							// Continue block: return the original value
+							continueBlock.terminator = MlirOp.func(FuncOp.ret(retValId))
+							continueBlock.hasTerminator = true
+						end 'singleCheck'
 					end 'notConst'
 				end 'isReturn' else 'notReturn'
 					dstBlock.terminator = srcBlock.terminator
@@ -177,59 +206,51 @@ function extractConstValue(op MlirOp) returns ParsedInt
 	end 'extract'
 end 'extractConstValue'
 
-// Emit range check ops: compare value against lower and upper bounds,
-// OR the results, and branch to panic or continue.
-// Upper bound is emitted first so that after x86 register allocation
-// the lower bound check appears first in the output (matching the C# compiler).
-//
-// Skips upper check when upper == i64.max. Skips lower check when lower == i64.min.
-function emitRangeCheckOps(block MlirBlock, valueId ValueId, lower RangeBound, upper RangeBound, typeInfo RangeCheckTypeInfo, panicBlockId BlockId, okBlockId BlockId, nextValueIdRef ValueIdRef)
-	let needsLowerCheck = lower > i64.min
-	// Upper check not needed only when upper == i64.max (no signed i64 can exceed it)
-	let needsUpperCheck = upper < i64.max
+// Emit upper bound check: cmp le %value, %upper → passBlock, else → panic.
+// Uses inverted predicate (le instead of gt) so the condBr "then" target is the
+// fallthrough block, allowing eliminateFallthroughJumps to remove the jmp.
+function emitUpperCheck(block MlirBlock, valueId ValueId, upper RangeBound, typeInfo RangeCheckTypeInfo, passBlockId BlockId, panicBlockId BlockId, nextValueIdRef ValueIdRef)
+	let upperLitId = allocValueId(nextValueIdRef)
+	block.ops.push(MlirOp.arith(ArithOp.const(ArithConst.create(typeInfo.constOpcode, resultId: upperLitId, value: upper))))
+	let cmpId = allocValueId(nextValueIdRef)
+	block.ops.push(MlirOp.arith(ArithOp.binary(ArithBinaryOp.create(typeInfo.cmpLeOpcode, resultId: cmpId, leftId: valueId, rightId: upperLitId))))
+	block.terminator = MlirOp.cf(CfOp.condBr(cmpId, passBlockId, ValueIdArray.create(), panicBlockId, ValueIdArray.create()))
+	block.hasTerminator = true
+end 'emitUpperCheck'
 
-	if needsUpperCheck and needsLowerCheck 'bothChecks'
-		// %upper = arith.const upper
+// Emit lower bound check: cmp lt %value, %lower → panic, else → passBlock.
+// Uses non-inverted predicate (lt) with panic as "then" target so the x64
+// lowering emits jge(passBlock) + jmp(panic), and since panic is the next
+// block in layout, eliminateFallthroughJumps removes the jmp — leaving
+// just a single jge instruction with panic as the fallthrough.
+function emitLowerCheck(block MlirBlock, valueId ValueId, lower RangeBound, typeInfo RangeCheckTypeInfo, passBlockId BlockId, panicBlockId BlockId, nextValueIdRef ValueIdRef)
+	let lowerLitId = allocValueId(nextValueIdRef)
+	block.ops.push(MlirOp.arith(ArithOp.const(ArithConst.create(typeInfo.constOpcode, resultId: lowerLitId, value: lower))))
+	let cmpId = allocValueId(nextValueIdRef)
+	block.ops.push(MlirOp.arith(ArithOp.binary(ArithBinaryOp.create(typeInfo.cmpLtOpcode, resultId: cmpId, leftId: valueId, rightId: lowerLitId))))
+	block.terminator = MlirOp.cf(CfOp.condBr(cmpId, panicBlockId, ValueIdArray.create(), passBlockId, ValueIdArray.create()))
+	block.hasTerminator = true
+end 'emitLowerCheck'
+
+// Emit a single-bound range check (only upper or only lower).
+function emitSingleRangeCheck(block MlirBlock, valueId ValueId, lower RangeBound, upper RangeBound, typeInfo RangeCheckTypeInfo, panicBlockId BlockId, okBlockId BlockId, nextValueIdRef ValueIdRef)
+	let needsUpperCheck = upper < i64.max
+	if needsUpperCheck 'upperOnly'
 		let upperLitId = allocValueId(nextValueIdRef)
 		block.ops.push(MlirOp.arith(ArithOp.const(ArithConst.create(typeInfo.constOpcode, resultId: upperLitId, value: upper))))
-
-		// %cmpHi = arith.cmp gt %valueId, %upper
 		let cmpUpperId = allocValueId(nextValueIdRef)
 		block.ops.push(MlirOp.arith(ArithOp.binary(ArithBinaryOp.create(typeInfo.cmpGtOpcode, resultId: cmpUpperId, leftId: valueId, rightId: upperLitId))))
-
-		// %lower = arith.const lower
+		block.terminator = MlirOp.cf(CfOp.condBr(cmpUpperId, panicBlockId, ValueIdArray.create(), okBlockId, ValueIdArray.create()))
+		block.hasTerminator = true
+	end 'upperOnly' else 'lowerOnly'
 		let lowerLitId = allocValueId(nextValueIdRef)
 		block.ops.push(MlirOp.arith(ArithOp.const(ArithConst.create(typeInfo.constOpcode, resultId: lowerLitId, value: lower))))
-
-		// %cmpLo = arith.cmp lt %valueId, %lower
 		let cmpLowerId = allocValueId(nextValueIdRef)
 		block.ops.push(MlirOp.arith(ArithOp.binary(ArithBinaryOp.create(typeInfo.cmpLtOpcode, resultId: cmpLowerId, leftId: valueId, rightId: lowerLitId))))
-
-		// %outOfRange = arith.ori1 %cmpLo, %cmpHi
-		let outOfRangeId = allocValueId(nextValueIdRef)
-		block.ops.push(MlirOp.arith(ArithOp.binary(ArithBinaryOp.create(ArithBinaryOpcode.orI1, resultId: outOfRangeId, leftId: cmpLowerId, rightId: cmpUpperId))))
-
-		// cond_br %outOfRange → panic, else → ok
-		block.terminator = MlirOp.cf(CfOp.condBr(outOfRangeId, panicBlockId, ValueIdArray.create(), okBlockId, ValueIdArray.create()))
+		block.terminator = MlirOp.cf(CfOp.condBr(cmpLowerId, panicBlockId, ValueIdArray.create(), okBlockId, ValueIdArray.create()))
 		block.hasTerminator = true
-	end 'bothChecks' else 'singleCheck'
-		if needsUpperCheck 'upperOnly'
-			let upperLitId = allocValueId(nextValueIdRef)
-			block.ops.push(MlirOp.arith(ArithOp.const(ArithConst.create(typeInfo.constOpcode, resultId: upperLitId, value: upper))))
-			let cmpUpperId = allocValueId(nextValueIdRef)
-			block.ops.push(MlirOp.arith(ArithOp.binary(ArithBinaryOp.create(typeInfo.cmpGtOpcode, resultId: cmpUpperId, leftId: valueId, rightId: upperLitId))))
-			block.terminator = MlirOp.cf(CfOp.condBr(cmpUpperId, panicBlockId, ValueIdArray.create(), okBlockId, ValueIdArray.create()))
-			block.hasTerminator = true
-		end 'upperOnly' else 'lowerOnly'
-			let lowerLitId = allocValueId(nextValueIdRef)
-			block.ops.push(MlirOp.arith(ArithOp.const(ArithConst.create(typeInfo.constOpcode, resultId: lowerLitId, value: lower))))
-			let cmpLowerId = allocValueId(nextValueIdRef)
-			block.ops.push(MlirOp.arith(ArithOp.binary(ArithBinaryOp.create(typeInfo.cmpLtOpcode, resultId: cmpLowerId, leftId: valueId, rightId: lowerLitId))))
-			block.terminator = MlirOp.cf(CfOp.condBr(cmpLowerId, panicBlockId, ValueIdArray.create(), okBlockId, ValueIdArray.create()))
-			block.hasTerminator = true
-		end 'lowerOnly'
-	end 'singleCheck'
-end 'emitRangeCheckOps'
+	end 'lowerOnly'
+end 'emitSingleRangeCheck'
 
 // Build a block label like "__range_panic_0".
 function buildLabel(prefix ByteArray, id ValueId) returns ByteArray
@@ -257,9 +278,11 @@ type RangeCheckTypeInfo
 	export var constOpcode ArithConstOpcode
 	export var cmpLtOpcode ArithBinaryOpcode
 	export var cmpGtOpcode ArithBinaryOpcode
+	export var cmpLeOpcode ArithBinaryOpcode
+	export var cmpGeOpcode ArithBinaryOpcode
 
-	static function create(stdType StdType, constOpcode ArithConstOpcode, cmpLtOpcode ArithBinaryOpcode, cmpGtOpcode ArithBinaryOpcode) returns RangeCheckTypeInfo
-		return Self{stdType: stdType, constOpcode: constOpcode, cmpLtOpcode: cmpLtOpcode, cmpGtOpcode: cmpGtOpcode}
+	static function create(stdType StdType, constOpcode ArithConstOpcode, cmpLtOpcode ArithBinaryOpcode, cmpGtOpcode ArithBinaryOpcode, cmpLeOpcode ArithBinaryOpcode, cmpGeOpcode ArithBinaryOpcode) returns RangeCheckTypeInfo
+		return Self{stdType: stdType, constOpcode: constOpcode, cmpLtOpcode: cmpLtOpcode, cmpGtOpcode: cmpGtOpcode, cmpLeOpcode: cmpLeOpcode, cmpGeOpcode: cmpGeOpcode}
 	end 'create'
 end 'RangeCheckTypeInfo'
 
@@ -267,10 +290,10 @@ end 'RangeCheckTypeInfo'
 // Panics on unrecognised types to catch missing cases early.
 function resolveRangeCheckType(returnType ByteArray) returns RangeCheckTypeInfo
 	if returnType == b"f64" or returnType == b"f32" 'isFloat'
-		return RangeCheckTypeInfo.create(StdType.f64, constOpcode: ArithConstOpcode.constF64, cmpLtOpcode: ArithBinaryOpcode.cmpF64Lt, cmpGtOpcode: ArithBinaryOpcode.cmpF64Gt)
+		return RangeCheckTypeInfo.create(StdType.f64, constOpcode: ArithConstOpcode.constF64, cmpLtOpcode: ArithBinaryOpcode.cmpF64Lt, cmpGtOpcode: ArithBinaryOpcode.cmpF64Gt, cmpLeOpcode: ArithBinaryOpcode.cmpF64Le, cmpGeOpcode: ArithBinaryOpcode.cmpF64Ge)
 	end 'isFloat'
 	if returnType == b"i64" or returnType == b"i32" or returnType == b"i16" or returnType == b"i8" or returnType == b"u64" or returnType == b"u32" or returnType == b"u16" or returnType == b"u8" 'isInt'
-		return RangeCheckTypeInfo.create(StdType.i64, constOpcode: ArithConstOpcode.constI64, cmpLtOpcode: ArithBinaryOpcode.cmpI64Lt, cmpGtOpcode: ArithBinaryOpcode.cmpI64Gt)
+		return RangeCheckTypeInfo.create(StdType.i64, constOpcode: ArithConstOpcode.constI64, cmpLtOpcode: ArithBinaryOpcode.cmpI64Lt, cmpGtOpcode: ArithBinaryOpcode.cmpI64Gt, cmpLeOpcode: ArithBinaryOpcode.cmpI64Le, cmpGeOpcode: ArithBinaryOpcode.cmpI64Ge)
 	end 'isInt'
 	panic("resolveRangeCheckType: unrecognised return type '{String.from(returnType)}'")
 end 'resolveRangeCheckType'
