@@ -27,6 +27,12 @@ export function lookupGlobalData(table GlobalDataTable, name ByteArray) returns 
 end 'lookupGlobalData'
 
 export function addGlobalData(table GlobalDataTable, data ByteArray) returns ByteArray
+	// Deduplicate: if identical bytes already exist, return the existing name
+	for(i, existing) in table.values.enumerated() 'dedup'
+		if existing == data 'match'
+			return try table.names.get(i) otherwise ByteArray.create()
+		end 'match'
+	end 'dedup'
 	let id = table.nextStringId
 	table.nextStringId = table.nextStringId + 1
 	// Build name like "__str_0", "__str_1", etc.
@@ -70,11 +76,12 @@ export function intToBytes(value MachineWord) returns ByteArray
 	return result
 end 'intToBytes'
 
-// Emit a binary symbol table into the code stream as a pseudo-function labeled "__symtable".
-// Referenced by mrt_panic via funcAddr __symtable (resolved through call fixups).
+// Build a binary symbol table as a standalone ByteArray for the .symtab section.
+// Referenced by mrt_panic via funcAddr __symtable (resolved through rdata relocations).
 // Format: count(i32) | entries[count]{codeOffset(i32), nameOffset(i32)} | null-terminated name strings
 // Entries sorted by codeOffset ascending.
-export function emitSymbolTable(code ByteArray, labelNames ByteArrayArray, funcLabelOffsets CodeOffsetArray)
+export function buildSymbolTable(labelNames ByteArrayArray, funcLabelOffsets CodeOffsetArray) returns ByteArray
+	var symdata = ByteArray.create()
 	let count = labelNames.count()
 
 	// Build sorted indices by offset (insertion sort)
@@ -112,17 +119,69 @@ export function emitSymbolTable(code ByteArray, labelNames ByteArrayArray, funcL
 	// Header size: 4 (count) + 8 * count (entries)
 	let headerSize = 4 + 8 * count
 
-	// Emit directly into the code stream
-	writeDword(code, value: count)
+	writeDword(symdata, value: count)
 	for i in 0 upto count 'writeEntries'
 		let idx = try sortedIndices.get(i) otherwise 0
 		let codeOffset = try funcLabelOffsets.get(idx) otherwise 0
-		writeDword(code, value: codeOffset)
+		writeDword(symdata, value: codeOffset)
 		let nameOffset = headerSize + (try nameOffsets.get(i) otherwise 0)
-		writeDword(code, value: nameOffset)
+		writeDword(symdata, value: nameOffset)
 	end 'writeEntries'
-	code.append(nameStrings)
-end 'emitSymbolTable'
+	symdata.append(nameStrings)
+	return symdata
+end 'buildSymbolTable'
+
+// Serialized rdata offset map: parallel arrays mapping label names to byte offsets.
+export type RdataOffsetMap
+	export var names ByteArrayArray
+	export var offsets CodeOffsetArray
+
+	export static function create() returns RdataOffsetMap
+		return Self{names: ByteArrayArray.create(), offsets: CodeOffsetArray.create()}
+	end 'create'
+end 'RdataOffsetMap'
+
+// Look up an rdata offset by label name. Returns 0 if not found.
+export function lookupRdataOffset(map RdataOffsetMap, name ByteArray) returns CodeOffset
+	for(i, mapName) in map.names.enumerated() 'find'
+		if mapName == name 'found'
+			return try map.offsets.get(i) otherwise 0
+		end 'found'
+	end 'find'
+	return 0
+end 'lookupRdataOffset'
+
+// Serialize the global data table into a flat ByteArray for the .rdata section.
+// Each entry is 8-byte aligned. Populates the offset map for label-to-offset resolution.
+export function buildRdataSection(table GlobalDataTable, map RdataOffsetMap) returns ByteArray
+	var rdata = ByteArray.create()
+	let count = table.names.count()
+	for i in 0 upto count 'build'
+		let name = try table.names.get(i) otherwise ByteArray.create()
+		let data = try table.values.get(i) otherwise ByteArray.create()
+		map.names.push(name)
+		map.offsets.push(rdata.count())
+		rdata.append(data)
+		// Pad to 8-byte alignment
+		while rdata.count() mod 8 != 0 'align'
+			rdata.push(0)
+		end 'align'
+	end 'build'
+	return rdata
+end 'buildRdataSection'
+
+// Resolve rdata relocations: fill in rdataOffset from the offset map.
+// Returns a new array with resolved offsets.
+export function resolveRdataRelocations(relocs RdataRelocationArray, map RdataOffsetMap) returns RdataRelocationArray
+	var resolved = RdataRelocationArray.create()
+	for reloc in relocs 'resolve'
+		let offset = lookupRdataOffset(map, name: reloc.rdataLabel)
+		var copy = RdataRelocation.create(reloc.codeOffset, rdataLabel: reloc.rdataLabel, kind: reloc.kind)
+		copy.rdataOffset = offset
+		resolved.push(copy)
+	end 'resolve'
+	return resolved
+end 'resolveRdataRelocations'
 
 // Register panic message string constants in globalData.
 export function registerPanicStrings(globalData GlobalDataTable)

@@ -374,33 +374,19 @@ function arm64EmitFpReloadFromStack(code ByteArray, rt MachineWord, byteOffset M
 	arm64EmitInsn(code, insn: insn)
 end 'arm64EmitFpReloadFromStack'
 
-// LDR Dt, [PC+offset] via data island: branch over inline data, then PC-relative load.
-function arm64EmitFpLoadRdata(code ByteArray, dest Arm64FloatRegister, rdataLabel ByteArray, precision FloatPrecision, globalData GlobalDataTable)
-	let data = lookupGlobalData(globalData, name: rdataLabel)
-	let dataLen = data.count()
-	if dataLen == 0 'noData'
-		return
-	end 'noData'
-	// Branch over data island: B imm26
-	// imm26 is the number of 4-byte words to skip (data + this branch instruction)
-	let branchWords = (dataLen + 4 + 3) / 4
-	arm64EmitInsn(code, insn: 0x14000000 or branchWords)
-	// Data island
-	let dataOffset = code.count()
-	code.append(data)
-	// LDR Dt/St, [PC+offset] — PC-relative literal load
-	// f64: 0x5C000000 | (imm19 << 5) | Rt
-	// f32: 0x1C000000 | (imm19 << 5) | Rt
-	let instrOffset = code.count()
-	let byteDisp = dataOffset - instrOffset
-	let wordDisp = byteDisp / 4
-	let imm19 = wordDisp and 0x7FFFF
+// LDR Dt/St, [PC+offset] — PC-relative literal load from rdata section.
+// Emits a placeholder LDR literal instruction; the imm19 field is patched
+// by the binary writer after rdata section layout.
+function arm64EmitFpLoadRdata(code ByteArray, dest Arm64FloatRegister, rdataLabel ByteArray, precision FloatPrecision, rdataRelocs RdataRelocationArray)
 	let rt = dest.rawValue and 0x1F
 	let opcode = match precision 'selectOpc'
 		f64 gives 0x5C000000
 		f32 gives 0x1C000000
 	end 'selectOpc'
-	arm64EmitInsn(code, insn: opcode or(imm19 shl 5) or rt)
+	// Record relocation at this instruction offset
+	rdataRelocs.push(RdataRelocation.create(code.count(), rdataLabel: rdataLabel, kind: RdataRelocKind.arm64LdrLiteral))
+	// Emit placeholder instruction with imm19=0
+	arm64EmitInsn(code, insn: opcode or rt)
 end 'arm64EmitFpLoadRdata'
 
 // CMP Xn, Xm => SUBS XZR, Xn, Xm
@@ -1030,6 +1016,7 @@ export function emitArm64(module MlirModule, target Target, globalData GlobalDat
 	var code = ByteArray.create()
 	code.reserve(1024)
 	var relocations = RelocationArray.create()
+	var rdataRelocs = RdataRelocationArray.create()
 	var labelNames = ByteArrayArray.create()
 	var labelOffsets = Arm64OffsetArray.create()
 	var callFixups = Arm64CallFixupArray.create()
@@ -1060,23 +1047,20 @@ export function emitArm64(module MlirModule, target Target, globalData GlobalDat
 
 			// Emit ops
 			for op in block.ops 'eachOp'
-				emitArm64Op(op, code: code, jumpFixups: jumpFixups, callFixups: callFixups, adrFixups: adrFixups, stackTracker: stackTracker, relocations: relocations, globalData: globalData)
+				emitArm64Op(op, code: code, jumpFixups: jumpFixups, callFixups: callFixups, adrFixups: adrFixups, stackTracker: stackTracker, relocations: relocations, rdataRelocs: rdataRelocs)
 			end 'eachOp'
 
 			// Emit terminator
 			if block.hasTerminator 'hasTerm'
-				emitArm64Op(block.terminator, code: code, jumpFixups: jumpFixups, callFixups: callFixups, adrFixups: adrFixups, stackTracker: stackTracker, relocations: relocations, globalData: globalData)
+				emitArm64Op(block.terminator, code: code, jumpFixups: jumpFixups, callFixups: callFixups, adrFixups: adrFixups, stackTracker: stackTracker, relocations: relocations, rdataRelocs: rdataRelocs)
 			end 'hasTerm'
 		end 'eachBlock'
 	end 'eachFunc'
 
-	// Emit symbol table into code stream as a labeled data block.
-	// Record the label AFTER building the table so __symtable itself isn't included as a function entry.
-	let symtableOffset = code.count()
-	emitSymbolTable(code, labelNames: labelNames, funcLabelOffsets: labelOffsets)
-	arm64RecordLabel(labelNames, labelOffsets: labelOffsets, name: b"__symtable", offset: symtableOffset)
+	// Build symbol table as a separate section
+	let symdata = buildSymbolTable(labelNames, funcLabelOffsets: labelOffsets)
 
-	// Resolve all fixups
+	// Resolve all fixups (__symtable is handled via rdata relocs, not adr fixups)
 	arm64ResolveCallFixups(code, labelNames: labelNames, labelOffsets: labelOffsets, callFixups: callFixups)
 	arm64ResolveAdrFixups(code, labelNames: labelNames, labelOffsets: labelOffsets, adrFixups: adrFixups)
 	arm64ResolveBlockJumpFixups(code, blockOffsets: blockOffsets, jumpFixups: jumpFixups)
@@ -1084,20 +1068,25 @@ export function emitArm64(module MlirModule, target Target, globalData GlobalDat
 	// mrt_start must be the entry point -- look up its offset
 	let startOffset = arm64LookupLabel(labelNames, labelOffsets: labelOffsets, name: b"mrt_start")
 
-	return CodeResult.create(code, mainCallFixupOffset: startOffset, relocations: relocations, globalData: globalData, targetModule: createMlirModule())
+	// Serialize global data into rdata section and resolve relocations
+	var rdataOffsetMap = RdataOffsetMap.create()
+	let rdata = buildRdataSection(globalData, map: rdataOffsetMap)
+	let resolvedRdataRelocs = resolveRdataRelocations(rdataRelocs, map: rdataOffsetMap)
+
+	return CodeResult.create(code, mainCallFixupOffset: startOffset, relocations: relocations, globalData: globalData, targetModule: createMlirModule(), rdata: rdata, rdataRelocations: resolvedRdataRelocs, symdata: symdata)
 end 'emitArm64'
 
 // Emit a single MlirOp (expected to be arm64 dialect).
-function emitArm64Op(op MlirOp, code ByteArray, jumpFixups BlockIdFixupArray, callFixups Arm64CallFixupArray, adrFixups Arm64AdrFixupArray, stackTracker Arm64StackTracker, relocations RelocationArray, globalData GlobalDataTable)
+function emitArm64Op(op MlirOp, code ByteArray, jumpFixups BlockIdFixupArray, callFixups Arm64CallFixupArray, adrFixups Arm64AdrFixupArray, stackTracker Arm64StackTracker, relocations RelocationArray, rdataRelocs RdataRelocationArray)
 	match op 'dispatch'
 		maxon to mir then break 'dispatch'
 		x64 then break 'dispatch'
-		arm64(a64Op) then emitArm64Instruction(a64Op, code: code, jumpFixups: jumpFixups, callFixups: callFixups, adrFixups: adrFixups, stackTracker: stackTracker, relocations: relocations, globalData: globalData)
+		arm64(a64Op) then emitArm64Instruction(a64Op, code: code, jumpFixups: jumpFixups, callFixups: callFixups, adrFixups: adrFixups, stackTracker: stackTracker, relocations: relocations, rdataRelocs: rdataRelocs)
 	end 'dispatch'
 end 'emitArm64Op'
 
 // Emit machine code for a single Arm64Op.
-function emitArm64Instruction(op Arm64Op, code ByteArray, jumpFixups BlockIdFixupArray, callFixups Arm64CallFixupArray, adrFixups Arm64AdrFixupArray, stackTracker Arm64StackTracker, relocations RelocationArray, globalData GlobalDataTable)
+function emitArm64Instruction(op Arm64Op, code ByteArray, jumpFixups BlockIdFixupArray, callFixups Arm64CallFixupArray, adrFixups Arm64AdrFixupArray, stackTracker Arm64StackTracker, relocations RelocationArray, rdataRelocs RdataRelocationArray)
 	match op 'emit'
 		prologue(stackSize) then emitArm64PrologueOp(code, stackSize: stackSize, tracker: stackTracker)
 		epilogue then arm64EmitEpilogue(code, stackSize: stackTracker.currentStackSize, tracker: stackTracker)
@@ -1129,7 +1118,7 @@ function emitArm64Instruction(op Arm64Op, code ByteArray, jumpFixups BlockIdFixu
 		ret then arm64EmitRet(code)
 		syscall(resultSlot, number, argSlots) then arm64EmitSyscallOp(code, resultSlot: resultSlot, number: number, argSlots: argSlots)
 		iatCall(resultSlot, slotIndex, argSlots) then arm64EmitIatCallOp(code, relocations: relocations, resultSlot: resultSlot, slotIndex: slotIndex, argSlots: argSlots)
-		globalAddr(resultSlot, name) then arm64EmitGlobalAddrOp(code, globalData: globalData, resultSlot: resultSlot, name: name)
+		globalAddr(resultSlot, name) then arm64EmitGlobalAddrOp(code, rdataRelocs: rdataRelocs, resultSlot: resultSlot, name: name)
 		stackAddrOp(resultSlot, targetSlot) then arm64EmitStackAddrOp(code, resultSlot: resultSlot, targetSlot: targetSlot)
 		storeByteOp(baseSlot, offsetSlot, byteSlot) then arm64EmitStoreByteOp(code, baseSlot: baseSlot, offsetSlot: offsetSlot, byteSlot: byteSlot)
 		loadByteOp(resultSlot, baseSlot, offsetSlot) then arm64EmitLoadByteOp(code, resultSlot: resultSlot, baseSlot: baseSlot, offsetSlot: offsetSlot)
@@ -1146,11 +1135,11 @@ function emitArm64Instruction(op Arm64Op, code ByteArray, jumpFixups BlockIdFixu
 		fmovRegReg(dest, src, _) then arm64EmitFmovDD(code, rd: resolveArm64Fp(dest).rawValue, rn: resolveArm64Fp(src).rawValue)
 		spillFpToStack(offset, src, _) then arm64EmitFpSpillToStack(code, rt: resolveArm64Fp(src).rawValue, byteOffset: offset)
 		reloadFpFromStack(dest, offset, _) then arm64EmitFpReloadFromStack(code, rt: resolveArm64Fp(dest).rawValue, byteOffset: offset)
-		fpLoadRdata(dest, rdataLabel, precision) then arm64EmitFpLoadRdata(code, dest: resolveArm64Fp(dest), rdataLabel: rdataLabel, precision: precision, globalData: globalData)
+		fpLoadRdata(dest, rdataLabel, precision) then arm64EmitFpLoadRdata(code, dest: resolveArm64Fp(dest), rdataLabel: rdataLabel, precision: precision, rdataRelocs: rdataRelocs)
 		fmovToFloat to fmovToGpr then panic("ARM64 FP op not yet implemented in binary emitter")
 		fadd to frintn then panic("ARM64 FP op not yet implemented in binary emitter")
 		loadIndirect(destReg, baseReg, offset, size) then arm64EmitLoadIndirectOp(code, destReg: destReg, baseReg: baseReg, offset: offset, size: size)
-		leaFuncAddr(dest, funcName) then arm64EmitLeaFuncAddrOp(code, dest: dest, funcName: funcName, adrFixups: adrFixups)
+		leaFuncAddr(dest, funcName) then arm64EmitLeaFuncAddrOp(code, dest: dest, funcName: funcName, adrFixups: adrFixups, rdataRelocs: rdataRelocs)
 		fpStoreIndirect to fpLoadIndirect then panic("ARM64 FP indirect op not yet implemented in binary emitter")
 		storeIndirect then panic("ARM64 storeIndirect not yet implemented in binary emitter")
 		globalLoad to globalStoreFloat then panic("ARM64 global var op not yet implemented in binary emitter")
@@ -1290,37 +1279,12 @@ function arm64EmitIatCallOp(code ByteArray, relocations RelocationArray, resultS
 	arm64EmitStrSlot(code, rt: 0, slotIndex: resultSlot)
 end 'arm64EmitIatCallOp'
 
-// sys.globalAddr: data island + ADR for named global data
-function arm64EmitGlobalAddrOp(code ByteArray, globalData GlobalDataTable, resultSlot VarSlot, name ByteArray)
-	let data = lookupGlobalData(globalData, name: name)
-	let dataLen = data.count()
-	if dataLen == 0 'noData'
-		arm64EmitMovz(code, rd: 0, imm16: 0)
-		arm64EmitStrSlot(code, rt: 0, slotIndex: resultSlot)
-		return
-	end 'noData'
-
-	// B over data island
-	let branchOverOffset = code.count()
-	arm64EmitBranch(code)
-
-	// Data island
-	let dataOffset = code.count()
-	code.append(data)
-
-	// Pad to 4-byte alignment
-	while code.count() mod 4 != 0 'align'
-		code.push(0)
-	end 'align'
-
-	// Patch branch
-	let afterDataOffset = code.count()
-	arm64PatchBranch(code, instrOffset: branchOverOffset, targetOffset: afterDataOffset)
-
-	// ADR X0, data
-	let adrOffset = code.count()
-	let adrRel = dataOffset - adrOffset
-	arm64EmitAdr(code, rd: 0, offset: adrRel)
+// sys.globalAddr: ADR X0, rdata label — patched by binary writer after layout.
+function arm64EmitGlobalAddrOp(code ByteArray, rdataRelocs RdataRelocationArray, resultSlot VarSlot, name ByteArray)
+	// Record relocation at this instruction offset
+	rdataRelocs.push(RdataRelocation.create(code.count(), rdataLabel: name, kind: RdataRelocKind.arm64Adr))
+	// Emit placeholder ADR X0, #0
+	arm64EmitAdr(code, rd: 0, offset: 0)
 
 	// Store to resultSlot
 	arm64EmitStrSlot(code, rt: 0, slotIndex: resultSlot)
@@ -1340,11 +1304,15 @@ function arm64EmitLoadIndirectOp(code ByteArray, destReg Arm64VReg, baseReg Arm6
 	end 'unsupported'
 end 'arm64EmitLoadIndirectOp'
 
-// leaFuncAddr: ADR dest, funcName (resolved via ADR fixup)
-function arm64EmitLeaFuncAddrOp(code ByteArray, dest Arm64VReg, funcName ByteArray, adrFixups Arm64AdrFixupArray)
+// leaFuncAddr: ADR dest, funcName — patched after layout via fixup or rdata relocation
+function arm64EmitLeaFuncAddrOp(code ByteArray, dest Arm64VReg, funcName ByteArray, adrFixups Arm64AdrFixupArray, rdataRelocs RdataRelocationArray)
 	let rd = resolveArm64Gpr(dest).rawValue
-	// Emit placeholder ADR instruction, will be patched during fixup resolution
-	adrFixups.push(Arm64AdrFixup.create(code.count(), destReg: rd, targetName: funcName))
+	// __symtable lives in a separate .symtab section
+	if funcName == b"__symtable" 'isSymtable'
+		rdataRelocs.push(RdataRelocation.create(code.count(), rdataLabel: b"__symtable", kind: RdataRelocKind.symdataArm64Adr))
+	end 'isSymtable' else 'isFunc'
+		adrFixups.push(Arm64AdrFixup.create(code.count(), destReg: rd, targetName: funcName))
+	end 'isFunc'
 	arm64EmitAdr(code, rd: rd, offset: 0)
 end 'arm64EmitLeaFuncAddrOp'
 

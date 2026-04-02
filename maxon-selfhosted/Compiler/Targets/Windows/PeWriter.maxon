@@ -102,6 +102,29 @@ function patchRelocationsX86(code ByteArray, relocations RelocationArray, textRv
 	end 'patch'
 end 'patchRelocationsX86'
 
+function patchRdataRelocationsX86(code ByteArray, rdataRelocs RdataRelocationArray, textRva Rva, rdataRva Rva, symdataRva Rva)
+	for reloc in rdataRelocs 'patch'
+		let ripAtReloc = textRva + reloc.codeOffset + 4
+		match reloc.kind 'kind'
+			ripRelDisp32 then patchDword(code, offset: reloc.codeOffset, value: rdataRva + reloc.rdataOffset - ripAtReloc)
+			symdataRipRelDisp32 then patchDword(code, offset: reloc.codeOffset, value: symdataRva - ripAtReloc)
+			arm64Adr to symdataArm64Adr then break 'kind'
+		end 'kind'
+	end 'patch'
+end 'patchRdataRelocationsX86'
+
+function patchRdataRelocationsArm64(code ByteArray, rdataRelocs RdataRelocationArray, textRva Rva, rdataRva Rva, symdataRva Rva)
+	for reloc in rdataRelocs 'patch'
+		let instrRva = textRva + reloc.codeOffset
+		match reloc.kind 'patchKind'
+			ripRelDisp32 to symdataRipRelDisp32 then break 'patchKind'
+			arm64Adr then patchArm64Adr(code, codeOffset: reloc.codeOffset, instrAddr: instrRva, targetAddr: rdataRva + reloc.rdataOffset)
+			arm64LdrLiteral then patchArm64LdrLiteral(code, codeOffset: reloc.codeOffset, instrAddr: instrRva, targetAddr: rdataRva + reloc.rdataOffset)
+			symdataArm64Adr then patchArm64Adr(code, codeOffset: reloc.codeOffset, instrAddr: instrRva, targetAddr: symdataRva)
+		end 'patchKind'
+	end 'patch'
+end 'patchRdataRelocationsArm64'
+
 // Patch ARM64 ADRP+LDR relocations: codeOffset points to ADRP, LDR is at codeOffset+4
 function patchRelocationsArm64(code ByteArray, relocations RelocationArray, textRva Rva, idataRva Rva)
 	for reloc in relocations 'patch'
@@ -138,7 +161,19 @@ export function writePe(outputPath FilePath, codeResult CodeResult, target Targe
 
 	var code = codeResult.code
 	let codeSize = code.count()
-	let numSections = 2
+	let rdataSize = codeResult.rdata.count()
+	let symdataSize = codeResult.symdata.count()
+	let hasRdata = rdataSize > 0
+	let hasSymdata = symdataSize > 0
+
+	// Count sections: .text + .idata + optional .rdata + optional .symtab
+	var numSections = 2
+	if hasRdata 'countRdata'
+		numSections = numSections + 1
+	end 'countRdata'
+	if hasSymdata 'countSymdata'
+		numSections = numSections + 1
+	end 'countSymdata'
 
 	// Header sizes
 	let headersSize = 64 + 4 + 20 + 240 + (40 * numSections)
@@ -149,8 +184,24 @@ export function writePe(outputPath FilePath, codeResult CodeResult, target Targe
 	let codeSizeVirtual = alignUp(codeSize, alignment: SECTION_ALIGNMENT)
 	let textRva = SECTION_ALIGNMENT
 
+	// .rdata section
+	let rdataRva = textRva + codeSizeVirtual
+	let rdataSizeAligned = alignUp(rdataSize, alignment: FILE_ALIGNMENT)
+	var rdataSizeVirtual = 0
+	if hasRdata 'setRdataVirtual'
+		rdataSizeVirtual = alignUp(rdataSize, alignment: SECTION_ALIGNMENT)
+	end 'setRdataVirtual'
+
+	// .symtab section
+	let symdataRva = rdataRva + rdataSizeVirtual
+	let symdataSizeAligned = alignUp(symdataSize, alignment: FILE_ALIGNMENT)
+	var symdataSizeVirtual = 0
+	if hasSymdata 'setSymdataVirtual'
+		symdataSizeVirtual = alignUp(symdataSize, alignment: SECTION_ALIGNMENT)
+	end 'setSymdataVirtual'
+
 	// .idata section
-	let idataRva = textRva + codeSizeVirtual
+	let idataRva = symdataRva + symdataSizeVirtual
 	let idata = buildImportSection(idataRva)
 	let idataSize = idata.data.count()
 	let idataSizeAligned = alignUp(idataSize, alignment: FILE_ALIGNMENT)
@@ -159,6 +210,8 @@ export function writePe(outputPath FilePath, codeResult CodeResult, target Targe
 	let imageSize = idataRva + idataSizeVirtual
 
 	logDebug(LogCategory.binary, message: () gives "Code section: {codeSize} bytes")
+	logDebug(LogCategory.binary, message: () gives "Rdata section: {rdataSize} bytes")
+	logDebug(LogCategory.binary, message: () gives "Symdata section: {symdataSize} bytes")
 	logDebug(LogCategory.binary, message: () gives "Import section: {idataSize} bytes")
 
 	// Patch IAT references in code (different encoding per CPU architecture)
@@ -166,6 +219,12 @@ export function writePe(outputPath FilePath, codeResult CodeResult, target Targe
 		x86_64 then patchRelocationsX86(code, relocations: codeResult.relocations, textRva: textRva, idataRva: idataRva)
 		aarch64 then patchRelocationsArm64(code, relocations: codeResult.relocations, textRva: textRva, idataRva: idataRva)
 	end 'patchCpu'
+
+	// Patch rdata and symdata references in code
+	match target.cpu 'patchRdata'
+		x86_64 then patchRdataRelocationsX86(code, rdataRelocs: codeResult.rdataRelocations, textRva: textRva, rdataRva: rdataRva, symdataRva: symdataRva)
+		aarch64 then patchRdataRelocationsArm64(code, rdataRelocs: codeResult.rdataRelocations, textRva: textRva, rdataRva: rdataRva, symdataRva: symdataRva)
+	end 'patchRdata'
 
 	// IAT directory size: 3 entries + null terminator = 32 bytes
 	let iatDirSize = 32
@@ -187,7 +246,7 @@ export function writePe(outputPath FilePath, codeResult CodeResult, target Targe
 	// === Optional Header PE32+ (240 bytes) ===
 	pe.append(b"\x0b\x02\x0e\x00")
 	writeDword(pe, value: codeSizeAligned)
-	writeDword(pe, value: idataSizeAligned)
+	writeDword(pe, value: rdataSizeAligned + symdataSizeAligned + idataSizeAligned)
 	pe.append(b"\x00\x00\x00\x00")  // BaseOfCode(0) — placeholder before textRva writes
 	writeDword(pe, value: textRva)
 	writeDword(pe, value: textRva)
@@ -217,8 +276,17 @@ export function writePe(outputPath FilePath, codeResult CodeResult, target Targe
 	writeZeros(pe, n: 24)
 
 	// === Section Headers ===
+	var nextFilePointer = headersAligned + codeSizeAligned
 	writeSectionHeader(pe, name: ".text", virtualSize: codeSize, virtualAddress: textRva, rawDataSize: codeSizeAligned, rawDataPointer: headersAligned, characteristics: 0x60000020)
-	writeSectionHeader(pe, name: ".idata", virtualSize: idataSize, virtualAddress: idataRva, rawDataSize: idataSizeAligned, rawDataPointer: headersAligned + codeSizeAligned, characteristics: 0xC0000040)
+	if hasRdata 'writeRdataHeader'
+		writeSectionHeader(pe, name: ".rdata", virtualSize: rdataSize, virtualAddress: rdataRva, rawDataSize: rdataSizeAligned, rawDataPointer: nextFilePointer, characteristics: 0x40000040)
+		nextFilePointer = nextFilePointer + rdataSizeAligned
+	end 'writeRdataHeader'
+	if hasSymdata 'writeSymdataHeader'
+		writeSectionHeader(pe, name: ".symtab", virtualSize: symdataSize, virtualAddress: symdataRva, rawDataSize: symdataSizeAligned, rawDataPointer: nextFilePointer, characteristics: 0xC0000040)
+		nextFilePointer = nextFilePointer + symdataSizeAligned
+	end 'writeSymdataHeader'
+	writeSectionHeader(pe, name: ".idata", virtualSize: idataSize, virtualAddress: idataRva, rawDataSize: idataSizeAligned, rawDataPointer: nextFilePointer, characteristics: 0xC0000040)
 
 	// Pad headers to alignment
 	padTo(pe, size: headersAligned)
@@ -227,9 +295,21 @@ export function writePe(outputPath FilePath, codeResult CodeResult, target Targe
 	pe.append(code)
 	padTo(pe, size: headersAligned + codeSizeAligned)
 
+	// === .rdata section ===
+	if hasRdata 'writeRdata'
+		pe.append(codeResult.rdata)
+		padTo(pe, size: headersAligned + codeSizeAligned + rdataSizeAligned)
+	end 'writeRdata'
+
+	// === .symtab section ===
+	if hasSymdata 'writeSymdata'
+		pe.append(codeResult.symdata)
+		padTo(pe, size: headersAligned + codeSizeAligned + rdataSizeAligned + symdataSizeAligned)
+	end 'writeSymdata'
+
 	// === .idata section ===
 	pe.append(idata.data)
-	padTo(pe, size: headersAligned + codeSizeAligned + idataSizeAligned)
+	padTo(pe, size: headersAligned + codeSizeAligned + rdataSizeAligned + symdataSizeAligned + idataSizeAligned)
 
 	// Write to file
 	try File.writeBinary(outputPath, content: pe) otherwise 'writeErr'

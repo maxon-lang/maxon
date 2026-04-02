@@ -7,14 +7,56 @@ let ELF_HEADER_SIZE = 64
 let ELF_PHDR_SIZE = 56
 let ELF_PAGE_SIZE = 0x1000
 
+// Patch x86_64 RIP-relative rdata relocations for ELF
+function patchElfRdataRelocationsX86(code ByteArray, rdataRelocs RdataRelocationArray, textVAddr MachineWord, rdataVAddr MachineWord, symdataVAddr MachineWord)
+	for reloc in rdataRelocs 'patch'
+		let ripAtReloc = textVAddr + reloc.codeOffset + 4
+		match reloc.kind 'kind'
+			ripRelDisp32 then patchDword(code, offset: reloc.codeOffset, value: rdataVAddr + reloc.rdataOffset - ripAtReloc)
+			symdataRipRelDisp32 then patchDword(code, offset: reloc.codeOffset, value: symdataVAddr - ripAtReloc)
+			arm64Adr to symdataArm64Adr then break 'kind'
+		end 'kind'
+	end 'patch'
+end 'patchElfRdataRelocationsX86'
+
+function patchElfRdataRelocationsArm64(code ByteArray, rdataRelocs RdataRelocationArray, textVAddr MachineWord, rdataVAddr MachineWord, symdataVAddr MachineWord)
+	for reloc in rdataRelocs 'patch'
+		let instrVAddr = textVAddr + reloc.codeOffset
+		match reloc.kind 'patchKind'
+			ripRelDisp32 to symdataRipRelDisp32 then break 'patchKind'
+			arm64Adr then patchArm64Adr(code, codeOffset: reloc.codeOffset, instrAddr: instrVAddr, targetAddr: rdataVAddr + reloc.rdataOffset)
+			arm64LdrLiteral then patchArm64LdrLiteral(code, codeOffset: reloc.codeOffset, instrAddr: instrVAddr, targetAddr: rdataVAddr + reloc.rdataOffset)
+			symdataArm64Adr then patchArm64Adr(code, codeOffset: reloc.codeOffset, instrAddr: instrVAddr, targetAddr: symdataVAddr)
+		end 'patchKind'
+	end 'patch'
+end 'patchElfRdataRelocationsArm64'
+
 export function writeElf(outputPath FilePath, codeResult CodeResult, target Target)
 	let headerSize = ELF_HEADER_SIZE + ELF_PHDR_SIZE
-	let codeSize = codeResult.code.count()
-	let totalSize = headerSize + codeSize
+	var code = codeResult.code
+	let codeSize = code.count()
+	let rdataSize = codeResult.rdata.count()
+	let symdataSize = codeResult.symdata.count()
+
+	// Layout: code (8-byte aligned) → rdata (8-byte aligned) → symdata
+	let codePadded = alignUp(codeSize, alignment: 8)
+	let rdataFileOffset = headerSize + codePadded
+	let rdataPadded = alignUp(rdataSize, alignment: 8)
+	let symdataFileOffset = rdataFileOffset + rdataPadded
+	let totalSize = symdataFileOffset + symdataSize
 	let entryPoint = ELF_LOAD_ADDR + headerSize
+	let textVAddr = entryPoint
+	let rdataVAddr = ELF_LOAD_ADDR + rdataFileOffset
+	let symdataVAddr = ELF_LOAD_ADDR + symdataFileOffset
 
 	logInfo(LogCategory.binary, message: () gives "Writing ELF file: {outputPath}")
-	logInfo(LogCategory.binary, message: () gives "Code size: {codeSize} bytes, entry point: {entryPoint}")
+	logInfo(LogCategory.binary, message: () gives "Code size: {codeSize} bytes, rdata size: {rdataSize} bytes, symdata size: {symdataSize} bytes, entry point: {entryPoint}")
+
+	// Patch rdata and symdata relocations in code before writing
+	match target.cpu 'patchRdata'
+		x86_64 then patchElfRdataRelocationsX86(code, rdataRelocs: codeResult.rdataRelocations, textVAddr: textVAddr, rdataVAddr: rdataVAddr, symdataVAddr: symdataVAddr)
+		aarch64 then patchElfRdataRelocationsArm64(code, rdataRelocs: codeResult.rdataRelocations, textVAddr: textVAddr, rdataVAddr: rdataVAddr, symdataVAddr: symdataVAddr)
+	end 'patchRdata'
 
 	var elf = ByteArray.create()
 	elf.reserve(totalSize)
@@ -53,7 +95,23 @@ export function writeElf(outputPath FilePath, codeResult CodeResult, target Targ
 	elf.append(b"\x00\x10\x00\x00\x00\x00\x00\x00")
 
 	// === Code ===
-	elf.append(codeResult.code)
+	elf.append(code)
+
+	// === Pad to rdata offset ===
+	while elf.count() < rdataFileOffset 'padToRdata'
+		elf.push(0)
+	end 'padToRdata'
+
+	// === Rdata ===
+	elf.append(codeResult.rdata)
+
+	// === Pad to symdata offset ===
+	while elf.count() < symdataFileOffset 'padToSymdata'
+		elf.push(0)
+	end 'padToSymdata'
+
+	// === Symdata ===
+	elf.append(codeResult.symdata)
 
 	// Write to file
 	try File.writeBinary(outputPath, content: elf, mode: FilePermission.executable) otherwise 'writeErr'

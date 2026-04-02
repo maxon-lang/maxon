@@ -1009,9 +1009,9 @@ export function emitX86(module MlirModule, target Target, globalData GlobalDataT
 	code.reserve(1024)
 	var relocations = RelocationArray.create()
 	var callFixups = CallFixupArray.create()
+	var rdataRelocs = RdataRelocationArray.create()
 
 	// Register panic string constants before emitting functions
-	// (globalAddr ops look up data during emission via data islands)
 	registerPanicStrings(globalData)
 
 	// Function label tables for inter-function call resolution
@@ -1040,13 +1040,13 @@ export function emitX86(module MlirModule, target Target, globalData GlobalDataT
 
 			// Emit all ops in the block
 			for op in block.ops 'emitOps'
-				emitX64MlirOp(op, code: code, blockFixups: blockFixups, callFixups: callFixups, relocations: relocations, globalData: globalData)
+				emitX64MlirOp(op, code: code, blockFixups: blockFixups, callFixups: callFixups, relocations: relocations, rdataRelocs: rdataRelocs)
 			end 'emitOps'
 
 			// Emit terminator if present (should already be lowered to x64 ops
 			// pushed into block.ops by MidToX64, but handle hasTerminator for safety)
 			if block.hasTerminator 'hasTerm'
-				emitX64MlirOp(block.terminator, code: code, blockFixups: blockFixups, callFixups: callFixups, relocations: relocations, globalData: globalData)
+				emitX64MlirOp(block.terminator, code: code, blockFixups: blockFixups, callFixups: callFixups, relocations: relocations, rdataRelocs: rdataRelocs)
 			end 'hasTerm'
 		end 'eachBlock'
 
@@ -1054,26 +1054,28 @@ export function emitX86(module MlirModule, target Target, globalData GlobalDataT
 		resolveBlockFixups(code, blockOffsets: blockOffsets, blockFixups: blockFixups)
 	end 'eachFunc'
 
-	// Emit symbol table into code stream as a labeled data block.
-	// Record the label AFTER building the table so __symtable itself isn't included as a function entry.
-	let symtableOffset = code.count()
-	emitSymbolTable(code, labelNames: funcLabelNames, funcLabelOffsets: funcLabelOffsets)
-	recordLabel(funcLabelNames, labelOffsets: funcLabelOffsets, name: b"__symtable", offset: symtableOffset)
+	// Build symbol table as a separate section
+	let symdata = buildSymbolTable(funcLabelNames, funcLabelOffsets: funcLabelOffsets)
 
-	// Resolve inter-function call fixups
+	// Resolve inter-function call fixups (__symtable is handled via rdata relocs, not call fixups)
 	resolveCallFixups(code, labelNames: funcLabelNames, labelOffsets: funcLabelOffsets, callFixups: callFixups)
 
 	// mrt_start must be at offset 0 -- look up its offset for the main call fixup
 	let startOffset = lookupLabel(funcLabelNames, labelOffsets: funcLabelOffsets, name: b"mrt_start")
 
-	return CodeResult.create(code, mainCallFixupOffset: startOffset, relocations: relocations, globalData: globalData, targetModule: createMlirModule())
+	// Serialize global data into rdata section and resolve relocations
+	var rdataOffsetMap = RdataOffsetMap.create()
+	let rdata = buildRdataSection(globalData, map: rdataOffsetMap)
+	let resolvedRdataRelocs = resolveRdataRelocations(rdataRelocs, map: rdataOffsetMap)
+
+	return CodeResult.create(code, mainCallFixupOffset: startOffset, relocations: relocations, globalData: globalData, targetModule: createMlirModule(), rdata: rdata, rdataRelocations: resolvedRdataRelocs, symdata: symdata)
 end 'emitX86'
 
 // Emit bytes for a single MlirOp (should be x64 at this stage).
-function emitX64MlirOp(op MlirOp, code ByteArray, blockFixups BlockJumpFixupArray, callFixups CallFixupArray, relocations RelocationArray, globalData GlobalDataTable)
+function emitX64MlirOp(op MlirOp, code ByteArray, blockFixups BlockJumpFixupArray, callFixups CallFixupArray, relocations RelocationArray, rdataRelocs RdataRelocationArray)
 	match op 'dispatch'
 		maxon to mir then break 'dispatch'
-		x64(x64Op) then emitX64Op(x64Op, code: code, blockFixups: blockFixups, callFixups: callFixups, relocations: relocations, globalData: globalData)
+		x64(x64Op) then emitX64Op(x64Op, code: code, blockFixups: blockFixups, callFixups: callFixups, relocations: relocations, rdataRelocs: rdataRelocs)
 		arm64 then break 'dispatch'
 	end 'dispatch'
 end 'emitX64MlirOp'
@@ -1245,48 +1247,35 @@ function emitLeaFromStackOp(code ByteArray, dest X64Register, offset MachineWord
 end 'emitLeaFromStackOp'
 
 // --- LEA RIP-relative: lea dest, [rip+label] ---
-// Resolves named symdata/global data labels by embedding a data island in the
-// code section and emitting a RIP-relative LEA to any destination register.
-function emitLeaRipRelOp(code ByteArray, dest X64Register, rdataLabel ByteArray, globalData GlobalDataTable)
-	let data = lookupGlobalData(globalData, name: rdataLabel)
-	let dataLen = data.count()
-	if dataLen == 0 'noData'
-		// Label not found or empty — load 0
-		emitMovRegImmGeneric(code, dest: dest, value: 0)
-		return
-	end 'noData'
-	// Jump over data island
-	code.push(0xE9)
-	let jmpFixup = code.count()
-	writeDword(code, value: 0)
-	// Data island
-	let dataOffset = code.count()
-	code.append(data)
-	// Patch jump
-	let afterData = code.count()
-	patchDword(code, offset: jmpFixup, value: afterData - (jmpFixup + 4))
-	// lea dest, [rip + offset_to_data]
-	emitRexWPrefix(code, regField: dest, rmField: X64Register.rbp)
-	code.push(0x8D)
-	let destBits = regCode(dest)
-	let modrm2 = 0x05 or(destBits shl 3)
-	code.push(modrm2)
-	let leaEnd = code.count() + 4
-	let leaRel = dataOffset - leaEnd
-	writeDword(code, value: leaRel)
-end 'emitLeaRipRelOp'
-
-// --- LEA func addr: lea dest, [rip+funcName] ---
-function emitLeaFuncAddrOp(code ByteArray, dest X64Register, callFixups CallFixupArray, funcName ByteArray)
+// Emits a RIP-relative LEA to any destination register, with a placeholder
+// disp32 that is patched by the binary writer after rdata section layout.
+function emitLeaRipRelOp(code ByteArray, dest X64Register, rdataLabel ByteArray, rdataRelocs RdataRelocationArray)
+	// lea dest, [rip + disp32]
 	emitRexWPrefix(code, regField: dest, rmField: X64Register.rbp)
 	code.push(0x8D)
 	let destBits = regCode(dest)
 	let modrm = 0x05 or(destBits shl 3)
 	code.push(modrm)
-	// Add a call fixup for the function address
+	// Record relocation at the disp32 position
+	rdataRelocs.push(RdataRelocation.create(code.count(), rdataLabel: rdataLabel, kind: RdataRelocKind.ripRelDisp32))
+	writeDword(code, value: 0)
+end 'emitLeaRipRelOp'
+
+// --- LEA func addr: lea dest, [rip+funcName] ---
+function emitLeaFuncAddrOp(code ByteArray, dest X64Register, callFixups CallFixupArray, rdataRelocs RdataRelocationArray, funcName ByteArray)
+	emitRexWPrefix(code, regField: dest, rmField: X64Register.rbp)
+	code.push(0x8D)
+	let destBits = regCode(dest)
+	let modrm = 0x05 or(destBits shl 3)
+	code.push(modrm)
 	let fixupOffset = code.count()
 	writeDword(code, value: 0)
-	callFixups.push(CallFixup.create(fixupOffset, targetName: funcName))
+	// __symtable lives in a separate .symtab section — use an rdata relocation
+	if funcName == b"__symtable" 'isSymtable'
+		rdataRelocs.push(RdataRelocation.create(fixupOffset, rdataLabel: b"__symtable", kind: RdataRelocKind.symdataRipRelDisp32))
+	end 'isSymtable' else 'isFunc'
+		callFixups.push(CallFixup.create(fixupOffset, targetName: funcName))
+	end 'isFunc'
 end 'emitLeaFuncAddrOp'
 
 // --- MOVSXD: sign-extend 32-bit to 64-bit ---
@@ -1343,25 +1332,10 @@ function emitGlobalStoreOp(code ByteArray, src X64Register, name ByteArray, size
 	panic("emitGlobalStoreOp: global data offset resolution not yet implemented (nameLen={name.count()}, src={src}, size={size}, codeLen={code.count()})")
 end 'emitGlobalStoreOp'
 
-// --- movXmmRipRel: load float from RIP-relative data island ---
-// Embeds the float data inline in .text (jump-over pattern) and emits a
-// RIP-relative movsd/movss to load it directly into an XMM register.
-function emitMovXmmRipRelOp(code ByteArray, dest X64XmmRegister, rdataLabel ByteArray, precision FloatPrecision, globalData GlobalDataTable)
-	let data = lookupGlobalData(globalData, name: rdataLabel)
-	let dataLen = data.count()
-	if dataLen == 0 'noData'
-		return
-	end 'noData'
-	// Jump over data island
-	code.push(0xEB)
-	let jmpFixup = code.count()
-	code.push(0)
-	// Data island (8 bytes for f64, 4 bytes for f32)
-	let dataOffset = code.count()
-	code.append(data)
-	// Patch short jump
-	let afterData = code.count()
-	code.set(jmpFixup, value: afterData - (jmpFixup + 1))
+// --- movXmmRipRel: load float from RIP-relative rdata ---
+// Emits a movsd/movss xmm, [rip+disp32] with a placeholder disp32
+// that is patched by the binary writer after rdata section layout.
+function emitMovXmmRipRelOp(code ByteArray, dest X64XmmRegister, rdataLabel ByteArray, precision FloatPrecision, rdataRelocs RdataRelocationArray)
 	// movsd/movss xmm, [rip+disp32]
 	match precision 'prec'
 		f64 then code.push(0xF2)
@@ -1372,10 +1346,9 @@ function emitMovXmmRipRelOp(code ByteArray, dest X64XmmRegister, rdataLabel Byte
 	let destBits = dest.rawValue and 0x07
 	let modrm = 0x05 or(destBits shl 3)
 	code.push(modrm)
-	// RIP-relative displacement: points back to the data island
-	let instrEnd = code.count() + 4
-	let ripRel = dataOffset - instrEnd
-	writeDword(code, value: ripRel)
+	// Record relocation at the disp32 position
+	rdataRelocs.push(RdataRelocation.create(code.count(), rdataLabel: rdataLabel, kind: RdataRelocKind.ripRelDisp32))
+	writeDword(code, value: 0)
 end 'emitMovXmmRipRelOp'
 
 // --- movq XMM to GPR ---
@@ -1395,7 +1368,7 @@ function emitMovqGprToXmmOp(code ByteArray, dest X64XmmRegister, src X64Register
 end 'emitMovqGprToXmmOp'
 
 // Emit bytes for a single X64Op.
-function emitX64Op(op X64Op, code ByteArray, blockFixups BlockJumpFixupArray, callFixups CallFixupArray, relocations RelocationArray, globalData GlobalDataTable)
+function emitX64Op(op X64Op, code ByteArray, blockFixups BlockJumpFixupArray, callFixups CallFixupArray, relocations RelocationArray, rdataRelocs RdataRelocationArray)
 	match op 'emit'
 		prologue(stackSize) then emitPrologue(code, stackSize: stackSize)
 		epilogue then emitEpilogue(code)
@@ -1434,7 +1407,7 @@ function emitX64Op(op X64Op, code ByteArray, blockFixups BlockJumpFixupArray, ca
 		callDirect(target) then emitCallFixup(code, callFixups: callFixups, target: target)
 		syscall(resultSlot, number, argSlots) then emitX86SyscallOp(code, resultSlot: resultSlot, number: number, argSlots: argSlots)
 		iatCall(resultSlot, slotIndex, argSlots) then emitX86IatCallOp(code, relocations: relocations, resultSlot: resultSlot, slotIndex: slotIndex, argSlots: argSlots)
-		globalAddr(resultSlot, name) then emitX86GlobalAddrOp(code, globalData: globalData, resultSlot: resultSlot, name: name)
+		globalAddr(resultSlot, name) then emitX86GlobalAddrOp(code, rdataRelocs: rdataRelocs, resultSlot: resultSlot, name: name)
 		stackAddrOp(resultSlot, targetSlot) then emitX86StackAddrOp(code, resultSlot: resultSlot, targetSlot: targetSlot)
 		storeByteOp(baseSlot, offsetSlot, byteSlot) then emitX86StoreByteOp(code, baseSlot: baseSlot, offsetSlot: offsetSlot, byteSlot: byteSlot)
 		loadByteOp(resultSlot, baseSlot, offsetSlot) then emitX86LoadByteOp(code, resultSlot: resultSlot, baseSlot: baseSlot, offsetSlot: offsetSlot)
@@ -1455,7 +1428,7 @@ function emitX64Op(op X64Op, code ByteArray, blockFixups BlockJumpFixupArray, ca
 		movXmmXmm(dest, src, precision) then emitMovXmmXmmOp(code, dest: resolveFp(dest), src: resolveFp(src), precision: precision)
 		spillXmmToStack(offset, src, precision) then emitSpillXmmToStackOp(code, offset: offset, src: resolveFp(src), precision: precision)
 		reloadXmmFromStack(dest, offset, precision) then emitReloadXmmFromStackOp(code, dest: resolveFp(dest), offset: offset, precision: precision)
-		movXmmRipRel(dest, rdataLabel, precision) then emitMovXmmRipRelOp(code, dest: resolveFp(dest), rdataLabel: rdataLabel, precision: precision, globalData: globalData)
+		movXmmRipRel(dest, rdataLabel, precision) then emitMovXmmRipRelOp(code, dest: resolveFp(dest), rdataLabel: rdataLabel, precision: precision, rdataRelocs: rdataRelocs)
 		addXmm(dest, src, precision) then emitXmmBinaryOp(code, dest: resolveFp(dest), src: resolveFp(src), precision: precision, opcode: 0x58)
 		subXmm(dest, src, precision) then emitXmmBinaryOp(code, dest: resolveFp(dest), src: resolveFp(src), precision: precision, opcode: 0x5C)
 		mulXmm(dest, src, precision) then emitXmmBinaryOp(code, dest: resolveFp(dest), src: resolveFp(src), precision: precision, opcode: 0x59)
@@ -1479,8 +1452,8 @@ function emitX64Op(op X64Op, code ByteArray, blockFixups BlockJumpFixupArray, ca
 		globalLoadXmm then panic("X86 globalLoadXmm not yet implemented in binary emitter")
 		globalStoreXmm then panic("X86 globalStoreXmm not yet implemented in binary emitter")
 		leaFromStack(dest, stackOffset) then emitLeaFromStackOp(code, dest: resolveGpr(dest), offset: stackOffset)
-		leaRipRelative(dest, rdataLabel) then emitLeaRipRelOp(code, dest: resolveGpr(dest), rdataLabel: rdataLabel, globalData: globalData)
-		leaFuncAddr(dest, funcName) then emitLeaFuncAddrOp(code, dest: resolveGpr(dest), callFixups: callFixups, funcName: funcName)
+		leaRipRelative(dest, rdataLabel) then emitLeaRipRelOp(code, dest: resolveGpr(dest), rdataLabel: rdataLabel, rdataRelocs: rdataRelocs)
+		leaFuncAddr(dest, funcName) then emitLeaFuncAddrOp(code, dest: resolveGpr(dest), callFixups: callFixups, rdataRelocs: rdataRelocs, funcName: funcName)
 		setcc(dest, condition) then emitSetccOp(code, dest: resolveGpr(dest), condition: condition)
 		cmov(dest, src, condition) then emitCmovOp(code, dest: resolveGpr(dest), src: resolveGpr(src), condition: condition)
 		movsxd(dest, src) then emitMovsxdOp(code, dest: resolveGpr(dest), src: resolveGpr(src))
@@ -1642,35 +1615,13 @@ function emitX86IatCallOp(code ByteArray, relocations RelocationArray, resultSlo
 	emitMovSlot(code, slotIndex: resultSlot, srcReg: X64Register.rax)
 end 'emitX86IatCallOp'
 
-// sys.globalAddr: emit data island and LEA to get pointer to named global data
-function emitX86GlobalAddrOp(code ByteArray, globalData GlobalDataTable, resultSlot VarSlot, name ByteArray)
-	let data = lookupGlobalData(globalData, name: name)
-	let dataLen = data.count()
-	if dataLen == 0 'noData'
-		// Global not found or empty -- store 0
-		emitMovRegImm(code, value: 0)
-		emitMovSlot(code, slotIndex: resultSlot, srcReg: X64Register.rax)
-		return
-	end 'noData'
-
-	// Jump over data island
-	code.push(0xE9)
-	let jmpFixup = code.count()
-	writeDword(code, value: 0)
-
-	// Data island
-	let dataOffset = code.count()
-	code.append(data)
-
-	// Patch jump
-	let afterData = code.count()
-	patchDword(code, offset: jmpFixup, value: afterData - (jmpFixup + 4))
-
-	// lea rax, [rip + offset_to_data]
+// sys.globalAddr: LEA rax, [rip+disp32] to get pointer to named rdata entry
+function emitX86GlobalAddrOp(code ByteArray, rdataRelocs RdataRelocationArray, resultSlot VarSlot, name ByteArray)
+	// lea rax, [rip + disp32]
 	code.append(b"\x48\x8d\x05")
-	let leaEnd = code.count() + 4
-	let leaRel = dataOffset - leaEnd
-	writeDword(code, value: leaRel)
+	// Record relocation at the disp32 position
+	rdataRelocs.push(RdataRelocation.create(code.count(), rdataLabel: name, kind: RdataRelocKind.ripRelDisp32))
+	writeDword(code, value: 0)
 
 	// Store to result slot
 	emitMovSlot(code, slotIndex: resultSlot, srcReg: X64Register.rax)

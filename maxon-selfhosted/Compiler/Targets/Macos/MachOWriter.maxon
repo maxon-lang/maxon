@@ -315,6 +315,20 @@ function buildCodeSignature(fileData ByteArray, codeLimit MachineWord, identifie
 	return sig
 end 'buildCodeSignature'
 
+// --- Rdata relocation patching for Mach-O ---
+
+function patchMachORdataRelocations(code ByteArray, rdataRelocs RdataRelocationArray, textSectionVMAddr MachineWord, constSectionVMAddr MachineWord, symdataSectionVMAddr MachineWord)
+	for reloc in rdataRelocs 'patch'
+		let instrVA = textSectionVMAddr + reloc.codeOffset
+		match reloc.kind 'patchKind'
+			ripRelDisp32 to symdataRipRelDisp32 then break 'patchKind'
+			arm64Adr then patchArm64Adr(code, codeOffset: reloc.codeOffset, instrAddr: instrVA, targetAddr: constSectionVMAddr + reloc.rdataOffset)
+			arm64LdrLiteral then patchArm64LdrLiteral(code, codeOffset: reloc.codeOffset, instrAddr: instrVA, targetAddr: constSectionVMAddr + reloc.rdataOffset)
+			symdataArm64Adr then patchArm64Adr(code, codeOffset: reloc.codeOffset, instrAddr: instrVA, targetAddr: symdataSectionVMAddr)
+		end 'patchKind'
+	end 'patch'
+end 'patchMachORdataRelocations'
+
 // --- Main Mach-O writer ---
 
 export function writeMachO(outputPath FilePath, codeResult CodeResult, target Target)
@@ -322,13 +336,24 @@ export function writeMachO(outputPath FilePath, codeResult CodeResult, target Ta
 
 	var code = codeResult.code
 	let codeSize = code.count()
+	let rdataSize = codeResult.rdata.count()
+	let symdataSize = codeResult.symdata.count()
+	let hasRdata = rdataSize > 0
+	let hasSymdata = symdataSize > 0
+	var textSectionCount = 1
+	if hasRdata 'setSecCount'
+		textSectionCount = textSectionCount + 1
+	end 'setSecCount'
+	if hasSymdata 'setSecCount2'
+		textSectionCount = textSectionCount + 1
+	end 'setSecCount2'
 
 	// --- Compute layout ---
 
 	// Load command sizes
 	let segCmdBase = 72
 	let sectionSize = 80
-	let textCmdSize = segCmdBase + sectionSize  // 1 section: __text
+	let textCmdSize = segCmdBase + (sectionSize * textSectionCount)  // __text + optionally __const + __symtab
 	let dataCmdSize = segCmdBase + sectionSize  // 1 section: __got
 	let symtabCmdSize = 24
 	let dysymtabCmdSize = 80
@@ -348,7 +373,23 @@ export function writeMachO(outputPath FilePath, codeResult CodeResult, target Ta
 	let headerSize = 32
 
 	let textSectionOffset = alignUp(headerSize + loadCommandsSize, alignment: 4)
-	let textSegmentFileSize = alignUp(textSectionOffset + codeSize, alignment: MACHO_PAGE_SIZE)
+	// __const section placed after __text, aligned to 8 bytes
+	let constSectionOffset = alignUp(textSectionOffset + codeSize, alignment: 8)
+	let constSectionVMAddr = MACHO_TEXT_VM_ADDR + constSectionOffset
+	// __symtab section placed after __const, aligned to 8 bytes
+	var symdataSectionOffset = alignUp(constSectionOffset + rdataSize, alignment: 8)
+	if not hasRdata 'noRdata'
+		symdataSectionOffset = alignUp(textSectionOffset + codeSize, alignment: 8)
+	end 'noRdata'
+	let symdataSectionVMAddr = MACHO_TEXT_VM_ADDR + symdataSectionOffset
+	var textSegmentContentEnd = textSectionOffset + codeSize
+	if hasRdata 'setContentEnd'
+		textSegmentContentEnd = constSectionOffset + rdataSize
+	end 'setContentEnd'
+	if hasSymdata 'setContentEnd2'
+		textSegmentContentEnd = symdataSectionOffset + symdataSize
+	end 'setContentEnd2'
+	let textSegmentFileSize = alignUp(textSegmentContentEnd, alignment: MACHO_PAGE_SIZE)
 
 	// GOT
 	let got = buildGot()
@@ -398,6 +439,9 @@ export function writeMachO(outputPath FilePath, codeResult CodeResult, target Ta
 	let textSectionVMAddr = MACHO_TEXT_VM_ADDR + textSectionOffset
 	patchRelocationsMachO(code, relocations: codeResult.relocations, textSectionVMAddr: textSectionVMAddr, gotSectionVMAddr: gotSectionVMAddr)
 
+	// Patch rdata relocations in code (ADR/LDR-literal -> __const section)
+	patchMachORdataRelocations(code, rdataRelocs: codeResult.rdataRelocations, textSectionVMAddr: textSectionVMAddr, constSectionVMAddr: constSectionVMAddr, symdataSectionVMAddr: symdataSectionVMAddr)
+
 	let entryOff = textSectionOffset + codeResult.mainCallFixupOffset
 	let flags = MH_DYLDLINK or MH_TWOLEVEL or MH_PIE
 
@@ -419,8 +463,14 @@ export function writeMachO(outputPath FilePath, codeResult CodeResult, target Ta
 	writeSegmentCommand(macho, segname: "__PAGEZERO", vmaddr: 0, vmsize: MACHO_PAGEZERO_SIZE, fileoff: 0, filesize: 0, maxprot: 0, initprot: 0, nsects: 0)
 
 	// === __TEXT ===
-	writeSegmentCommand(macho, segname: "__TEXT", vmaddr: MACHO_TEXT_VM_ADDR, vmsize: textSegmentFileSize, fileoff: 0, filesize: textSegmentFileSize, maxprot: VM_PROT_READ or VM_PROT_EXECUTE, initprot: VM_PROT_READ or VM_PROT_EXECUTE, nsects: 1)
+	writeSegmentCommand(macho, segname: "__TEXT", vmaddr: MACHO_TEXT_VM_ADDR, vmsize: textSegmentFileSize, fileoff: 0, filesize: textSegmentFileSize, maxprot: VM_PROT_READ or VM_PROT_EXECUTE, initprot: VM_PROT_READ or VM_PROT_EXECUTE, nsects: textSectionCount)
 	writeMachOSectionHeader(macho, sectname: "__text", segname: "__TEXT", addr: textSectionVMAddr, size: codeSize, offset: textSectionOffset, alignVal: 2, flags: S_ATTR_PURE_INSTRUCTIONS or S_ATTR_SOME_INSTRUCTIONS or S_REGULAR)
+	if hasRdata 'writeConstHeader'
+		writeMachOSectionHeader(macho, sectname: "__const", segname: "__TEXT", addr: constSectionVMAddr, size: rdataSize, offset: constSectionOffset, alignVal: 3, flags: S_REGULAR)
+	end 'writeConstHeader'
+	if hasSymdata 'writeSymtabHeader'
+		writeMachOSectionHeader(macho, sectname: "__symtab", segname: "__TEXT", addr: symdataSectionVMAddr, size: symdataSize, offset: symdataSectionOffset, alignVal: 2, flags: S_REGULAR)
+	end 'writeSymtabHeader'
 
 	// === __DATA ===
 	writeSegmentCommand(macho, segname: "__DATA", vmaddr: dataSegmentVMAddr, vmsize: dataSegmentFileSize, fileoff: dataSegmentFileOff, filesize: dataSegmentFileSize, maxprot: VM_PROT_READ or VM_PROT_WRITE, initprot: VM_PROT_READ or VM_PROT_WRITE, nsects: 1)
@@ -500,6 +550,18 @@ export function writeMachO(outputPath FilePath, codeResult CodeResult, target Ta
 
 	// === __text section ===
 	macho.append(code)
+
+	// === __const section (rdata) ===
+	if hasRdata 'writeConst'
+		padTo(macho, size: constSectionOffset)
+		macho.append(codeResult.rdata)
+	end 'writeConst'
+
+	// === __symtab section (symbol table) ===
+	if hasSymdata 'writeSymtab'
+		padTo(macho, size: symdataSectionOffset)
+		macho.append(codeResult.symdata)
+	end 'writeSymtab'
 
 	// === Pad __TEXT segment to page boundary ===
 	padTo(macho, size: textSegmentFileSize)
