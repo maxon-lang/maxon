@@ -28,12 +28,12 @@ end 'tokenAt'
 // --- Block-based emission helpers ---
 
 function emitOp(block MlirBlock, op MlirOp)
-	logTrace(LogCategory.parser, message: () gives "emit: {opToString(op, blocks: MlirBlockArray.empty())}")
+	logTrace(LogCategory.parser, message: () gives "emit: {opToString(op, blocks: MlirBlockArray.create())}")
 	block.ops.push(op)
 end 'emitOp'
 
 function finalizeBlock(block MlirBlock, terminator MlirOp)
-	logTrace(LogCategory.parser, message: () gives "term: {opToString(terminator, blocks: MlirBlockArray.empty())}")
+	logTrace(LogCategory.parser, message: () gives "term: {opToString(terminator, blocks: MlirBlockArray.create())}")
 	block.terminator = terminator
 	block.hasTerminator = true
 end 'finalizeBlock'
@@ -254,7 +254,7 @@ function appendIntBytes(dst ByteArray, n ParsedInt)
 	end 'zero'
 
 	// Compute digits in reverse, then append in order
-	var digits = ByteArray.empty()
+	var digits = ByteArray.create()
 	var remaining = n
 	while remaining > 0 'digitLoop'
 		digits.push(48 + (remaining mod 10))
@@ -289,7 +289,7 @@ function deriveNamespace(filePath FilePath) returns ByteArray
 		for i in 0 upto stem.count() 'findDot'
 			let b = try stem.get(i) otherwise 0
 			if b == dotByte 'isDot'
-				var ns = ByteArray.empty()
+				var ns = ByteArray.create()
 				for j in 0 upto i 'copy'
 					let c = try stem.get(j) otherwise 0
 					ns.push(c)
@@ -307,7 +307,7 @@ function qualifyName(ns ByteArray, name ByteArray) returns ByteArray
 	if ns.isEmpty() 'noNs'
 		return name
 	end 'noNs'
-	var qualified = ByteArray.empty()
+	var qualified = ByteArray.create()
 	qualified.append(ns)
 	qualified.push(46)  // '.'
 	qualified.append(name)
@@ -352,7 +352,7 @@ let typeBoundsTable = [
 ]
 
 function resolveTypeBound(typeName ByteArray, field ByteArray) returns BoundValue
-	var key = ByteArray.empty()
+	var key = ByteArray.create()
 	key.append(typeName)
 	key.push(46)
 	key.append(field)
@@ -392,11 +392,11 @@ type ExprResult
 	export var stringConstValue ByteArray
 
 	static function create(valueId ValueId) returns ExprResult
-		return Self{valueId: valueId, isFloat: false, isRefType: false, isStringConst: false, stringConstValue: ByteArray.empty()}
+		return Self{valueId: valueId, isFloat: false, isRefType: false, isStringConst: false, stringConstValue: ByteArray.create()}
 	end 'create'
 
 	static function createFloat(valueId ValueId) returns ExprResult
-		return Self{valueId: valueId, isFloat: true, isRefType: false, isStringConst: false, stringConstValue: ByteArray.empty()}
+		return Self{valueId: valueId, isFloat: true, isRefType: false, isStringConst: false, stringConstValue: ByteArray.create()}
 	end 'createFloat'
 
 	static function createFull(valueId ValueId, isFloat bool, isRefType bool, isStringConst bool, stringConstValue ByteArray) returns ExprResult
@@ -522,7 +522,7 @@ type Parser
 		if thenExit.hasTerminator and elseExit.hasTerminator 'bothTerminated'
 			return newDetachedBlock(func)
 		end 'bothTerminated'
-		var mergeLabel = ByteArray.empty()
+		var mergeLabel = ByteArray.create()
 		mergeLabel.append(baseLabel)
 		mergeLabel.append(b".merge")
 		var mergeBlock = newBlock(func, label: mergeLabel)
@@ -540,11 +540,11 @@ type Parser
 	// --- Symbol table helpers ---
 
 	function resetSymbolTable()
-		project.parserVarNames = ByteArrayArray.empty()
-		project.parserVarSlots = VarSlotArray.empty()
-		project.parserVarIsFloat = BoolArray.empty()
-		project.parserVarIsRefType = BoolArray.empty()
-		project.parserScopeStack = ScopeDepthArray.empty()
+		project.parserVarNames = ByteArrayArray.create()
+		project.parserVarSlots = VarSlotArray.create()
+		project.parserVarIsFloat = BoolArray.create()
+		project.parserVarIsRefType = BoolArray.create()
+		project.parserScopeStack = ScopeDepthArray.create()
 		project.parserNextSlot = 0
 	end 'resetSymbolTable'
 
@@ -557,7 +557,7 @@ type Parser
 
 		// Remove variables added since the scope was pushed
 		while project.parserVarNames.count() > savedSize 'trim'
-			try project.parserVarNames.pop() otherwise ByteArray.empty()
+			try project.parserVarNames.pop() otherwise ByteArray.create()
 			try project.parserVarSlots.pop() otherwise 0
 			try project.parserVarIsFloat.pop() otherwise false
 			try project.parserVarIsRefType.pop() otherwise false
@@ -577,7 +577,7 @@ type Parser
 	function findVariableIndex(name ByteArray) returns ParsedInt
 		var i = project.parserVarNames.count() - 1
 		while i >= 0 'lookup'
-			let vn = try project.parserVarNames.get(i) otherwise ByteArray.empty()
+			let vn = try project.parserVarNames.get(i) otherwise ByteArray.create()
 			if vn == name 'found'
 				return i
 			end 'found'
@@ -598,10 +598,10 @@ type Parser
 	function lookupStringConst(name ByteArray) returns ByteArray
 		for(i, cn) in project.stringConstNames.enumerated() 'lookup'
 			if cn == name 'found'
-				return try project.stringConstValues.get(i) otherwise ByteArray.empty()
+				return try project.stringConstValues.get(i) otherwise ByteArray.create()
 			end 'found'
 		end 'lookup'
-		var empty = ByteArray.empty()
+		var empty = ByteArray.create()
 		return empty
 	end 'lookupStringConst'
 
@@ -679,7 +679,7 @@ type Parser
 		resetSymbolTable()
 
 		var paramCount = 0
-		var paramTypes = StdTypeArray.empty()
+		var paramTypes = StdTypeArray.create()
 		if not at(TokenKind.rightParen) 'hasParams'
 			// Parse parameters: name Type, name Type, ...
 			while pos < tokens.count() 'paramLoop'
@@ -703,7 +703,7 @@ type Parser
 		expect(TokenKind.rightParen)
 
 		// Parse 'returns' type
-		var returnTypeName = ByteArray.empty()
+		var returnTypeName = ByteArray.create()
 		if at(TokenKind.returns) 'hasReturns'
 			expect(TokenKind.returns)
 			let typeToken = consume()
@@ -1018,7 +1018,7 @@ type Parser
 		// Create then block — its ID provides a unique suffix for all derived labels
 		var thenBlock = newBlock(func, label: userLabel)
 		let thenBlockId = thenBlock.id
-		var baseLabel = ByteArray.empty()
+		var baseLabel = ByteArray.create()
 		baseLabel.append(userLabel)
 		baseLabel.push(0x5F)  // '_'
 		baseLabel.append(intToBytes(thenBlockId))
@@ -1036,7 +1036,7 @@ type Parser
 			expect(TokenKind.else)
 
 			// Derive else label from the base label
-			var elseLabel = ByteArray.empty()
+			var elseLabel = ByteArray.create()
 			elseLabel.append(baseLabel)
 			elseLabel.append(b".else")
 
@@ -1049,7 +1049,7 @@ type Parser
 			end 'isElseIf' else 'plainElse'
 				// Capture the else block label if present, otherwise use derived name
 				if at(TokenKind.stringLiteral) 'hasElseLabel'
-					elseLabel = ByteArray.empty()
+					elseLabel = ByteArray.create()
 					elseLabel.append(peek().value)
 					elseLabel.push(0x5F)  // '_'
 					elseLabel.append(intToBytes(func.nextBlockId))
@@ -1068,7 +1068,7 @@ type Parser
 		end 'hasElse'
 
 		// No else clause: false branch goes directly to after block
-		var afterLabel = ByteArray.empty()
+		var afterLabel = ByteArray.create()
 		afterLabel.append(baseLabel)
 		afterLabel.append(b".after")
 		var afterBlock = newBlock(func, label: afterLabel)
@@ -1105,19 +1105,19 @@ type Parser
 		end 'noWhileLabel'
 
 		// Derive base label: userLabel_<blockId>
-		var baseLabel = ByteArray.empty()
+		var baseLabel = ByteArray.create()
 		baseLabel.append(userLabel)
 		baseLabel.push(0x5F)  // '_'
 		baseLabel.append(intToBytes(condBlockId))
 
 		// Rename condBlock to baseLabel.header
-		var headerLabel = ByteArray.empty()
+		var headerLabel = ByteArray.create()
 		headerLabel.append(baseLabel)
 		headerLabel.append(b".header")
 		condBlock.label = headerLabel
 
 		// Create body and exit blocks with derived labels
-		var exitLabel = ByteArray.empty()
+		var exitLabel = ByteArray.create()
 		exitLabel.append(baseLabel)
 		exitLabel.append(b".exit")
 		var bodyBlock = newBlock(func, label: baseLabel)
@@ -1203,7 +1203,7 @@ type Parser
 	// --- String Interpolation ---
 
 	function parseStringInterpolation(block MlirBlock, str ByteArray)
-		var buf = ByteArray.empty()
+		var buf = ByteArray.create()
 		var i = 0
 		let len = str.count()
 
@@ -1245,7 +1245,7 @@ type Parser
 				// Flush literal buffer
 				if not buf.isEmpty() 'flushBuf'
 					emitOp(block, op: MlirOp.maxon(MaxonOp.printLiteral(buf)))
-					buf = ByteArray.empty()
+					buf = ByteArray.create()
 				end 'flushBuf'
 
 				// Extract expression between braces
@@ -1330,7 +1330,7 @@ type Parser
 					leftIsFloat = false
 					leftIsRefType = false
 					leftIsStringConst = false
-					leftStringConstValue = ByteArray.empty()
+					leftStringConstValue = ByteArray.create()
 					continue
 				end 'leftIsStr'
 			end 'checkStrFold'
@@ -1352,7 +1352,7 @@ type Parser
 				leftIsFloat = false
 				leftIsRefType = false
 				leftIsStringConst = false
-				leftStringConstValue = ByteArray.empty()
+				leftStringConstValue = ByteArray.create()
 				continue
 			end 'isRefEq'
 
@@ -1362,7 +1362,7 @@ type Parser
 			// Dispatch == and != to .equals() call for reference types (content comparison)
 			if(opToken.kind == TokenKind.equalsEquals or opToken.kind == TokenKind.bangEquals) and leftIsRefType and right.isRefType 'refEquals'
 				let equalsResultId = nextValueId(project)
-				var equalsArgIds = ValueIdArray.empty()
+				var equalsArgIds = ValueIdArray.create()
 				equalsArgIds.push(leftId)
 				equalsArgIds.push(right.valueId)
 				// TODO: use actual type name once type tracking is available (e.g., "ByteArray.equals")
@@ -1378,7 +1378,7 @@ type Parser
 				leftIsFloat = false
 				leftIsRefType = false
 				leftIsStringConst = false
-				leftStringConstValue = ByteArray.empty()
+				leftStringConstValue = ByteArray.create()
 				continue
 			end 'refEquals'
 
@@ -1394,7 +1394,7 @@ type Parser
 			end 'notCmp'
 			leftIsRefType = false
 			leftIsStringConst = false
-			leftStringConstValue = ByteArray.empty()
+			leftStringConstValue = ByteArray.create()
 		end 'prattLoop'
 
 		return ExprResult.createFull(leftId, isFloat: leftIsFloat, isRefType: leftIsRefType, isStringConst: leftIsStringConst, stringConstValue: leftStringConstValue)
@@ -1450,13 +1450,13 @@ type Parser
 			let operand = parseUnary(block)
 			let resultId = nextValueId(project)
 			emitOp(block, op: MlirOp.maxon(MaxonOp.unop(resultId, operand.valueId, UnaryOpKind.neg)))
-			return ExprResult.createFull(resultId, isFloat: operand.isFloat, isRefType: false, isStringConst: false, stringConstValue: ByteArray.empty())
+			return ExprResult.createFull(resultId, isFloat: operand.isFloat, isRefType: false, isStringConst: false, stringConstValue: ByteArray.create())
 		end 'isNeg' else if token.kind == TokenKind.not 'isNot'
 			expect(TokenKind.not)
 			let operand = parseUnary(block)
 			let resultId = nextValueId(project)
 			emitOp(block, op: MlirOp.maxon(MaxonOp.unop(resultId, operand.valueId, UnaryOpKind.bitNot)))
-			return ExprResult.createFull(resultId, isFloat: false, isRefType: false, isStringConst: false, stringConstValue: ByteArray.empty())
+			return ExprResult.createFull(resultId, isFloat: false, isRefType: false, isStringConst: false, stringConstValue: ByteArray.create())
 		end 'isNot'
 
 		return parsePrimary(block)
@@ -1469,7 +1469,7 @@ type Parser
 		if peekToken.kind == TokenKind.leftParen 'isCall'
 			expect(TokenKind.identifier)
 			expect(TokenKind.leftParen)
-			var argIds = ValueIdArray.empty()
+			var argIds = ValueIdArray.create()
 			var lastArgIsFloat = false
 
 			// Parse arguments until ')'
@@ -1557,7 +1557,7 @@ type Parser
 		let varIsFloat = isVariableFloat(token.value)
 		let varIsRef = isVariableRefType(token.value)
 		expect(TokenKind.identifier)
-		return ExprResult.createFull(id, isFloat: varIsFloat, isRefType: varIsRef, isStringConst: false, stringConstValue: ByteArray.empty())
+		return ExprResult.createFull(id, isFloat: varIsFloat, isRefType: varIsRef, isStringConst: false, stringConstValue: ByteArray.create())
 	end 'parseIdentifierExpr'
 
 	function parsePrimaryMatch(block MlirBlock, token Token) returns ExprResult throws ParserError

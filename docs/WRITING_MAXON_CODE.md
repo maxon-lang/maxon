@@ -519,7 +519,7 @@ panic("invariant violated: {details}")
 typealias IntArray = Array with Offset
 
 var arr = [1, 2, 3]
-var empty = IntArray.empty()
+var empty = IntArray.create()
 
 arr.push(42)                              // append
 arr.count()                               // length

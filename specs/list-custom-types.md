@@ -30,7 +30,7 @@ end 'Point'
 typealias PointList = List with Point
 
 function main() returns ExitCode
-	var list = PointList.empty()
+	var list = PointList.create()
 	list.append(Point.create(x: 10, y: 20))
 	list.append(Point.create(x: 30, y: 40))
 	var first = try list.first() otherwise Point.create(x: 0, y: 0)
@@ -69,7 +69,7 @@ end 'Entry'
 typealias EntryList = List with Entry
 
 function main() returns ExitCode
-	var list = EntryList.empty()
+	var list = EntryList.create()
 	list.append(Entry.create(id: 1, value: 100))
 	list.append(Entry.create(id: 2, value: 200))
 	list.append(Entry.create(id: 3, value: 300))
@@ -105,7 +105,7 @@ end 'Person'
 typealias PersonList = List with Person
 
 function main() returns ExitCode
-	var list = PersonList.empty()
+	var list = PersonList.create()
 	list.append(Person.create(name: "Alice has a long name for heap", age: 30))
 	list.append(Person.create(name: "Bob also has a long name for heap", age: 25))
 	var first = try list.first() otherwise Person.create(name: "", age: 0)
@@ -139,7 +139,7 @@ end 'Pair'
 typealias PairList = List with Pair
 
 function main() returns ExitCode
-	var list = PairList.empty()
+	var list = PairList.create()
 	list.prepend(Pair.create(a: 3, b: 30))
 	list.prepend(Pair.create(a: 2, b: 20))
 	list.prepend(Pair.create(a: 1, b: 10))

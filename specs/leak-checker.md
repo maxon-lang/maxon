@@ -68,7 +68,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
 function use_array()
-	var arr = IntArray.empty()
+	var arr = IntArray.create()
 	arr.push(10)
 	arr.push(20)
 	arr.push(30)

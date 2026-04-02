@@ -2111,7 +2111,7 @@ Create an empty typed array using a type alias:
 typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
-var numbers = IntArray.empty()         // Empty array
+var numbers = IntArray.create()         // Empty array
 numbers.push(42)                 // Add elements with push
 ```
 
@@ -2120,7 +2120,7 @@ To preallocate with a specific length (elements zero-initialized):
 typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
-var buffer = IntArray.empty()
+var buffer = IntArray.create()
 buffer.resize(100)               // Length is now 100
 buffer.set(0, value: 42)         // Can set any index 0-99
 ```
@@ -2130,7 +2130,7 @@ To preallocate capacity without changing length (for performance):
 typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
-var buffer = IntArray.empty()
+var buffer = IntArray.create()
 buffer.reserve(100)              // Capacity is 100, length is 0
 buffer.push(42)                  // Now length is 1
 ```
@@ -3538,7 +3538,7 @@ Create a concrete List type with `typealias`, then initialize with `{}`:
 typealias Integer = int(i64.min to i64.max)
 typealias IntList = List with Integer
 
-var list = IntList.empty()             // Empty list
+var list = IntList.create()             // Empty list
 ```
 
 **Adding Elements**
@@ -3954,7 +3954,7 @@ end 'makePoint'
 typealias TokenList = List with Token
 
 function example() returns int
-	var list = TokenList.empty()
+	var list = TokenList.create()
 	list.append(Token{id: 1})   // Token incref'd by the managed list node
 	list.append(Token{id: 2})   // Token incref'd by the managed list node
 	return 0                     // list freed: each Token decref'd (rc→0→freed),

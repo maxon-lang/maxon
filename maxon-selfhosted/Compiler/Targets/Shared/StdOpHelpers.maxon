@@ -347,7 +347,7 @@ end 'paramSentinel'
 
 // Scan function for func.param ops and return a BoolArray of promoted param indices.
 export function scanPromotedParams(func MlirFunction) returns BoolArray
-	var promoted = BoolArray.empty()
+	var promoted = BoolArray.create()
 	for block in func.blocks 'scanBlocks'
 		for op in block.ops 'scanOps'
 			match op 'checkParam'
@@ -389,25 +389,25 @@ export function isMirDivergingBlock(block MlirBlock) returns bool
 		match op 'check'
 			func(funcOp) then match funcOp 'checkFunc'
 				call(_, callee, _) then if callee == b"mrt_panic" 'isPanic'
-					return true
-				end 'isPanic'
-				ret then break 'checkFunc'
-				tryCall to param then break 'checkFunc'
-			end 'checkFunc'
-			mir(mirOp) then match mirOp 'checkMir'
-				call(_, callee, _) then if callee == b"mrt_panic" 'isPanic2'
-					return true
-				end 'isPanic2'
-				movImm to branch then break 'checkMir'
-				indirectCall to loadByte then break 'checkMir'
-			end 'checkMir'
-			maxon then break 'check'
-			arith to cf then break 'check'
-			memref to sys then break 'check'
-			x64 to arm64 then break 'check'
-		end 'check'
-	end 'checkOps'
-	return false
+				return true
+			end 'isPanic'
+			ret then break 'checkFunc'
+			tryCall to param then break 'checkFunc'
+		end 'checkFunc'
+		mir(mirOp) then match mirOp 'checkMir'
+			call(_, callee, _) then if callee == b"mrt_panic" 'isPanic2'
+			return true
+		end 'isPanic2'
+		movImm to branch then break 'checkMir'
+		indirectCall to loadByte then break 'checkMir'
+	end 'checkMir'
+	maxon then break 'check'
+	arith to cf then break 'check'
+	memref to sys then break 'check'
+	x64 to arm64 then break 'check'
+end 'check'
+end 'checkOps'
+return false
 end 'isMirDivergingBlock'
 
 // Eliminate unconditional jumps/branches whose target is the immediately next block.

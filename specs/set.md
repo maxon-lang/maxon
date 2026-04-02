@@ -263,7 +263,7 @@ typealias Int = int(i64.min to i64.max)
 typealias IntSet = Set with Int
 
 function main() returns ExitCode
-	var s = IntSet.empty()
+	var s = IntSet.create()
 	if s.count() != 0 'check'
 		return 1
 	end 'check'

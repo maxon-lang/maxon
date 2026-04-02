@@ -181,7 +181,7 @@ let maxRetries = 3               ' constant, never changes
 let userName = getUserName()     ' assigned once from a function
 
 var retryCount = 0               ' needs to be incremented
-var buffer = ByteArray.empty()         ' needs push/set operations
+var buffer = ByteArray.create()         ' needs push/set operations
 ```
 
 ### Keep Variable Scope Narrow
@@ -469,7 +469,7 @@ end 'handle'
 When you know how many elements you will add, reserve capacity upfront to avoid repeated reallocations.
 
 ```maxon
-var results = ResultArray.empty()
+var results = ResultArray.create()
 results.reserve(inputCount)
 for item in inputs 'process'
 	results.push(transform(item))
@@ -495,16 +495,16 @@ let first = try list.first() otherwise emptyItem
 
 ```maxon
 ' Array: ordered data with index access
-var scores = ScoreArray.empty()
+var scores = ScoreArray.create()
 
 ' Map: fast lookup by key
-var userCache = UserMap.empty()
+var userCache = UserMap.create()
 
 ' Set: track unique items
-var visited = CitySet.empty()
+var visited = CitySet.create()
 
 ' List: queue with O(1) push/pop at both ends
-var taskQueue = TaskList.empty()
+var taskQueue = TaskList.create()
 ```
 
 ### Iterate Collections Directly

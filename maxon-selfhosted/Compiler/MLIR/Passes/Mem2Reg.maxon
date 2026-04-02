@@ -114,12 +114,12 @@ type CfgInfo
 end 'CfgInfo'
 
 function createCfgInfo(numBlocks BlockId) returns CfgInfo
-	var preds = BlockIdArrayArray.empty()
-	var succs = BlockIdArrayArray.empty()
+	var preds = BlockIdArrayArray.create()
+	var succs = BlockIdArrayArray.create()
 	var i = 0
 	while i < numBlocks 'initCfg'
-		preds.push(BlockIdArray.empty())
-		succs.push(BlockIdArray.empty())
+		preds.push(BlockIdArray.create())
+		succs.push(BlockIdArray.create())
 		i = i + 1
 	end 'initCfg'
 	return CfgInfo.create(preds, successors: succs, numBlocks: numBlocks)
@@ -209,15 +209,15 @@ end 'DomInfo'
 
 function computeReversePostorder(entryBlockId BlockId, numBlocks BlockId, cfg CfgInfo) returns RpoInfo
 	// DFS from entry to produce postorder, then reverse
-	var visited = BoolArray.empty()
+	var visited = BoolArray.create()
 	growBoolArray(visited, size: numBlocks)
-	var postorder = BlockIdArray.empty()
+	var postorder = BlockIdArray.create()
 
 	dfsPostorder(entryBlockId, cfg: cfg, visited: visited, postorder: postorder)
 
 	// Reverse the postorder to get reverse postorder
-	var rpoOrder = BlockIdArray.empty()
-	var rpoIndex = ValueIdArray.empty()
+	var rpoOrder = BlockIdArray.create()
+	var rpoIndex = ValueIdArray.create()
 	growValueIdArray(rpoIndex, size: numBlocks)
 	// Initialize all indices to a sentinel
 	var initIdx = 0
@@ -263,7 +263,7 @@ end 'dfsPostorder'
 
 function computeDominators(entryBlockId BlockId, numBlocks BlockId, cfg CfgInfo, rpo RpoInfo) returns DomInfo
 	// Initialize idom array with BLOCK_NONE (undefined)
-	var idom = ValueIdArray.empty()
+	var idom = ValueIdArray.create()
 	var i = 0
 	while i < numBlocks 'initIdom'
 		idom.push(BLOCK_NONE)
@@ -363,10 +363,10 @@ type DfInfo
 end 'DfInfo'
 
 function computeDominanceFrontiers(numBlocks BlockId, cfg CfgInfo, domInfo DomInfo) returns DfInfo
-	var frontiers = BlockIdArrayArray.empty()
+	var frontiers = BlockIdArrayArray.create()
 	var i = 0
 	while i < numBlocks 'initDf'
-		frontiers.push(BlockIdArray.empty())
+		frontiers.push(BlockIdArray.create())
 		i = i + 1
 	end 'initDf'
 
@@ -419,13 +419,13 @@ type SlotInfo
 
 	static function create() returns SlotInfo
 		return Self{
-			storeBlocks: BlockIdArrayArray.empty(),
-			slotIsFloat: BoolArray.empty(),
-			loadResultToSlot: ValueIdArray.empty(),
+			storeBlocks: BlockIdArrayArray.create(),
+			slotIsFloat: BoolArray.create(),
+			loadResultToSlot: ValueIdArray.create(),
 			maxSlot: 0,
 			hasAnySlot: false,
-			slotHasStore: BoolArray.empty(),
-			slotHasLoad: BoolArray.empty()
+			slotHasStore: BoolArray.create(),
+			slotHasLoad: BoolArray.create()
 		}
 	end 'create'
 end 'SlotInfo'
@@ -437,7 +437,7 @@ end 'createSlotInfo'
 function growSlotInfo(slotId VarSlot, info SlotInfo)
 	let needed = slotId + 1
 	while info.storeBlocks.count() < needed 'growSB'
-		info.storeBlocks.push(BlockIdArray.empty())
+		info.storeBlocks.push(BlockIdArray.create())
 	end 'growSB'
 	while info.slotIsFloat.count() < needed 'growIF'
 		info.slotIsFloat.push(false)
@@ -609,7 +609,7 @@ type PromotableInfo
 end 'PromotableInfo'
 
 function classifyPromotable(slotInfo SlotInfo, paramCount ParamCount) returns PromotableInfo
-	var promotable = BoolArray.empty()
+	var promotable = BoolArray.create()
 	var anyPromoted = false
 	var slotIdx = 0
 	while slotIdx <= slotInfo.maxSlot 'classifySlots'
@@ -649,10 +649,10 @@ typealias PhiMap = Array with ValueIdArray
 function placePhiNodes(slotInfo SlotInfo, promotable PromotableInfo, df DfInfo, numBlocks BlockId, funcIdRef ValueIdRef) returns PhiMap
 	let numSlots = slotInfo.maxSlot + 1
 	// Initialize phiMap: for each block, an array of REMAP_NONE
-	var phiMap = PhiMap.empty()
+	var phiMap = PhiMap.create()
 	var bi = 0
 	while bi < numBlocks 'initPhiMap'
-		var blockSlots = ValueIdArray.empty()
+		var blockSlots = ValueIdArray.create()
 		var si = 0
 		while si < numSlots 'initSlots'
 			blockSlots.push(REMAP_NONE)
@@ -671,14 +671,14 @@ function placePhiNodes(slotInfo SlotInfo, promotable PromotableInfo, df DfInfo, 
 		end 'skipSlot'
 
 		// hasPlacedPhi[blockId] = whether we've placed a phi for this slot here
-		var hasPlacedPhi = BoolArray.empty()
+		var hasPlacedPhi = BoolArray.create()
 		growBoolArray(hasPlacedPhi, size: numBlocks)
 		// inWorklist[blockId] = whether blockId is in the worklist
-		var inWorklist = BoolArray.empty()
+		var inWorklist = BoolArray.create()
 		growBoolArray(inWorklist, size: numBlocks)
 
 		// Initialize worklist with blocks that have stores for this slot
-		var worklist = BlockIdArray.empty()
+		var worklist = BlockIdArray.create()
 		let storeBlocksForSlot = try slotInfo.storeBlocks.get(slotIdx) otherwise 'noStoreBlocks'
 			slotIdx = slotIdx + 1
 			continue
@@ -764,7 +764,7 @@ type RenameState
 	static function create(currentDef DefStackArray, numSlots VarSlot, paramValueIds ValueIdArray, paramSlotIsPromoted BoolArray) returns RenameState
 		return Self{
 			currentDef: currentDef,
-			remap: ValueIdArray.empty(),
+			remap: ValueIdArray.create(),
 			numSlots: numSlots,
 			paramValueIds: paramValueIds,
 			paramSlotIsPromoted: paramSlotIsPromoted
@@ -774,17 +774,17 @@ end 'RenameState'
 
 function createRenameState(slotInfo SlotInfo, paramCount ParamCount, funcIdRef ValueIdRef, promotable PromotableInfo) returns RenameState
 	let numSlots = slotInfo.maxSlot + 1
-	var defStacks = DefStackArray.empty()
+	var defStacks = DefStackArray.create()
 	var si = 0
 	while si < numSlots 'initStacks'
-		defStacks.push(ValueIdArray.empty())
+		defStacks.push(ValueIdArray.create())
 		si = si + 1
 	end 'initStacks'
 
 	// Initialize param slot definitions: allocate a valueId for each promoted param
 	// and push it as the initial definition
-	var paramValueIds = ValueIdArray.empty()
-	var paramSlotIsPromoted = BoolArray.empty()
+	var paramValueIds = ValueIdArray.create()
+	var paramSlotIsPromoted = BoolArray.create()
 	growValueIdArray(paramValueIds, size: paramCount)
 	growBoolArray(paramSlotIsPromoted, size: paramCount)
 
@@ -854,7 +854,7 @@ end 'addRemap'
 // Rename variables in a single block and recurse into dominated children
 function renameBlock(blockId BlockId, func MlirFunction, renameState RenameState, domInfo DomInfo, numBlocks BlockId, phiMap PhiMap, promotable PromotableInfo, cfg CfgInfo)
 	// Track how many definitions we push, so we can pop them when backtracking
-	var pushCounts = ValueIdArray.empty()
+	var pushCounts = ValueIdArray.create()
 	var pci = 0
 	while pci < renameState.numSlots 'initPushCounts'
 		pushCounts.push(0)
@@ -1000,21 +1000,21 @@ function rebuildFunction(func MlirFunction, renameState RenameState, promotable 
 	// Strategy: Build an edge phi arg table during a second rename walk.
 	let numBlocks = func.nextBlockId
 	let numSlots = renameState.numSlots
-	var edgePhiArgs = EdgePhiArgTable.empty()
+	var edgePhiArgs = EdgePhiArgTable.create()
 	// Initialize edge phi arg table
 	let tableSize = numBlocks * numBlocks
 	var ei = 0
 	while ei < tableSize 'initEdgeTable'
-		edgePhiArgs.push(ValueIdArray.empty())
+		edgePhiArgs.push(ValueIdArray.create())
 		ei = ei + 1
 	end 'initEdgeTable'
 
 	// Do a second rename walk to fill edge phi args
 	let entryBlockId = getEntryBlockId(func)
-	var defStacks2 = DefStackArray.empty()
+	var defStacks2 = DefStackArray.create()
 	var si = 0
 	while si < numSlots 'initStacks2'
-		defStacks2.push(ValueIdArray.empty())
+		defStacks2.push(ValueIdArray.create())
 		si = si + 1
 	end 'initStacks2'
 
@@ -1077,7 +1077,7 @@ function fillEdgePhiArgsWalk(blockId BlockId, func MlirFunction, defStacks DefSt
 	let block = findBlockById(func, blockId: blockId)
 
 	// Track push counts for backtracking
-	var pushCounts = ValueIdArray.empty()
+	var pushCounts = ValueIdArray.create()
 	var pci = 0
 	while pci < numSlots 'initPC'
 		pushCounts.push(0)
@@ -1180,7 +1180,7 @@ function storeEdgePhiArgs(fromBlock BlockId, toBlock BlockId, defStacks DefStack
 	end 'noTargetSlots'
 
 	// Build the list of values to pass as phi args for this edge
-	var args = ValueIdArray.empty()
+	var args = ValueIdArray.create()
 	var si = 0
 	while si < numSlots 'eachSlot'
 		let phiValueId = try targetSlots.get(si) otherwise REMAP_NONE
@@ -1604,7 +1604,7 @@ function remapValue(valueId ValueId, remap ValueIdArray) returns ValueId
 end 'remapValue'
 
 function remapValueIds(argIds ValueIdArray, remap ValueIdArray) returns ValueIdArray
-	var result = ValueIdArray.empty()
+	var result = ValueIdArray.create()
 	for argId in argIds 'each'
 		result.push(remapValue(argId, remap: remap))
 	end 'each'

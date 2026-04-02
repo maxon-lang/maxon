@@ -29,11 +29,11 @@ function addEntry(store Store, entry Entry)
 end 'addEntry'
 
 function replaceAll(store Store)
-		store.entries = EntryArray.empty()
+		store.entries = EntryArray.create()
 end 'replaceAll'
 
 function main() returns ExitCode
-		let store = Store.create(entries: EntryArray.empty())
+		let store = Store.create(entries: EntryArray.create())
 		// Push enough to trigger multiple reallocations (initial cap is usually 4)
 		addEntry(store, entry: Entry.create(tag: Tag.label("entry zero long enough for heap allocation")))
 		addEntry(store, entry: Entry.create(tag: Tag.label("entry one long enough for heap allocation")))
@@ -113,7 +113,7 @@ module {
   entry:
     x86.prologue stack_size=32
     x86.mov [rbp-8], rcx
-    x86.call EntryArray.empty
+    x86.call EntryArray.create
     x86.mov [rbp-16], rax
     x86.mov rax, [rbp-16]
     x86.mov rcx, [rbp-8]
@@ -141,7 +141,7 @@ module {
   func @main() -> u32 {
   entry:
     x86.prologue stack_size=400
-    x86.call EntryArray.empty
+    x86.call EntryArray.create
     x86.mov [rbp-8], rax
     x86.mov rax, [rbp-8]
     x86.mov rcx, [rbp-8]

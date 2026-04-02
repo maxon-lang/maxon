@@ -627,7 +627,7 @@ p.cancel()
 
 ```maxon
 var arr = [1, 2, 3]                    // array literal
-var empty = IntArray.empty()                 // typed empty array
+var empty = IntArray.create()                 // typed empty array
 
 arr.count()                            // length
 try arr.get(0) otherwise 0             // access (throws ArrayError)

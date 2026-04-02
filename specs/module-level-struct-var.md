@@ -50,7 +50,7 @@ type State
 		end 'create'
 end 'State'
 
-var state = State.create(items: ByteArray.empty())
+var state = State.create(items: ByteArray.create())
 
 function main() returns ExitCode
 		state.items.push(10)

@@ -76,7 +76,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
 function main() returns ExitCode
-	var arr = IntArray.empty()
+	var arr = IntArray.create()
 	var count = 0
 	for (i, v) in arr.enumerated() 'loop'
 		print("{i}:{v}\n")
@@ -197,7 +197,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
 function main() returns ExitCode
-	var arr = IntArray.empty()
+	var arr = IntArray.create()
 	for (_, _) in arr.enumerated() 'loop'
 		print("x\n")
 	end 'loop'

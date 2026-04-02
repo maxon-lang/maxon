@@ -42,7 +42,7 @@ typealias Int = int(i64.min to i64.max)
 typealias IntArray = Array with Int
 
 function main() returns ExitCode
-	var arr = IntArray.empty()
+	var arr = IntArray.create()
 	arr.push(10)
 	arr.push(20)
 	arr.push(30)
@@ -61,7 +61,7 @@ typealias Int = int(i64.min to i64.max)
 typealias IntArray = Array with Int
 
 function main() returns ExitCode
-	var arr = IntArray.empty()
+	var arr = IntArray.create()
 	arr.push(10)
 	arr.push(20)
 	arr.push(30)
@@ -82,7 +82,7 @@ typealias Int = int(i64.min to i64.max)
 typealias IntArray = Array with Int
 
 function main() returns ExitCode
-	var arr = IntArray.empty()
+	var arr = IntArray.create()
 	arr.push(10)
 	arr.push(20)
 	arr.push(30)
@@ -102,7 +102,7 @@ typealias Int = int(i64.min to i64.max)
 typealias IntArray = Array with Int
 
 function main() returns ExitCode
-	var arr = IntArray.empty()
+	var arr = IntArray.create()
 	arr.push(10)
 	arr.push(30)
 	arr.insert(1, value: 20)
@@ -160,7 +160,7 @@ typealias Int = int(i64.min to i64.max)
 typealias IntArray = Array with Int
 
 function main() returns ExitCode
-	var arr = IntArray.empty()
+	var arr = IntArray.create()
 	var i = 0
 	while i < 100 'fill'
 		arr.push(i)
@@ -181,7 +181,7 @@ typealias Int = int(i64.min to i64.max)
 typealias IntArray = Array with Int
 
 function main() returns ExitCode
-	var arr = IntArray.empty()
+	var arr = IntArray.create()
 	arr.push(1)
 	arr.push(2)
 	arr.push(3)
@@ -206,7 +206,7 @@ typealias Int = int(i64.min to i64.max)
 typealias IntArray = Array with Int
 
 function main() returns ExitCode
-	var arr = IntArray.empty()
+	var arr = IntArray.create()
 	arr.push(1)
 	arr.push(2)
 	arr.push(3)
@@ -231,7 +231,7 @@ typealias Int = int(i64.min to i64.max)
 typealias IntArray = Array with Int
 
 function main() returns ExitCode
-	var arr = IntArray.empty()
+	var arr = IntArray.create()
 	arr.push(1)
 	arr.managed.setLength(100)
 	return 0
@@ -253,7 +253,7 @@ typealias Int = int(i64.min to i64.max)
 typealias IntArray = Array with Int
 
 function main() returns ExitCode
-	var arr = IntArray.empty()
+	var arr = IntArray.create()
 	arr.push(1)
 	arr.push(2)
 	var b = arr.managed.byteAt(100)
@@ -276,7 +276,7 @@ typealias Int = int(i64.min to i64.max)
 typealias IntArray = Array with Int
 
 function main() returns ExitCode
-	var arr = IntArray.empty()
+	var arr = IntArray.create()
 	arr.push(1)
 	arr.push(2)
 	arr.push(3)
@@ -301,7 +301,7 @@ typealias Int = int(i64.min to i64.max)
 typealias IntArray = Array with Int
 
 function main() returns ExitCode
-	var arr = IntArray.empty()
+	var arr = IntArray.create()
 	arr.managed.grow(8)
 	arr.managed.setLength(4)
 	arr.managed.set(0, 10)
@@ -322,7 +322,7 @@ typealias Int = int(i64.min to i64.max)
 typealias IntArray = Array with Int
 
 function main() returns ExitCode
-	var arr = IntArray.empty()
+	var arr = IntArray.create()
 	arr.push(1)
 	arr.push(2)
 	arr.push(3)

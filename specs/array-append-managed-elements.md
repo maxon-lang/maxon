@@ -36,7 +36,7 @@ end 'Item'
 typealias ItemArray = Array with Item
 
 function appendFromHelper(dest ItemArray)
-		var src = ItemArray.empty()
+		var src = ItemArray.create()
 		src.push(Item.create(name: "hello from source that is long enough", value: 10))
 		src.push(Item.create(name: "second item from source long enough", value: 20))
 		src.push(Item.create(name: "third item from source long enough", value: 30))
@@ -45,7 +45,7 @@ function appendFromHelper(dest ItemArray)
 end 'appendFromHelper'
 
 function main() returns ExitCode
-		var dest = ItemArray.empty()
+		var dest = ItemArray.create()
 		dest.push(Item.create(name: "dest item that is long enough for heap", value: 1))
 		appendFromHelper(dest)
 
@@ -76,7 +76,7 @@ end 'Op'
 typealias OpArray = Array with Op
 
 function appendOps(dest OpArray)
-		var src = OpArray.empty()
+		var src = OpArray.create()
 		src.push(Op.add(10))
 		src.push(Op.sub(20))
 		src.push(Op.add(30))
@@ -84,7 +84,7 @@ function appendOps(dest OpArray)
 end 'appendOps'
 
 function main() returns ExitCode
-		var dest = OpArray.empty()
+		var dest = OpArray.create()
 		dest.push(Op.nop)
 		appendOps(dest)
 
@@ -132,12 +132,12 @@ export type Module
 end 'Module'
 
 function createModule() returns Module
-		return Module.create(functions: FuncArray.empty())
+		return Module.create(functions: FuncArray.create())
 end 'createModule'
 
 function parseAndMerge(dest Module, name String)
 		let source = createModule()
-		source.functions.push(Func.create(name: name, body: IntArray.empty()))
+		source.functions.push(Func.create(name: name, body: IntArray.create()))
 		dest.functions.append(source.functions)
 		// source is freed when this function returns
 end 'parseAndMerge'
@@ -151,7 +151,7 @@ function main() returns ExitCode
 				return 99
 		end 'badCount'
 
-		let first = try allModule.functions.get(0) otherwise Func.create(name: "", body: IntArray.empty())
+		let first = try allModule.functions.get(0) otherwise Func.create(name: "", body: IntArray.create())
 		if first.name == "func_a_with_long_name_for_heap" 'correct'
 				return 0
 		end 'correct'

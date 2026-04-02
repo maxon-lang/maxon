@@ -565,25 +565,11 @@ class Program {
       StartInfo = new ProcessStartInfo {
         FileName = Path.GetFullPath(executablePath),
         UseShellExecute = false,
-        RedirectStandardOutput = true,
-        RedirectStandardError = true,
-        CreateNoWindow = true
       }
     };
 
     process.Start();
-
-    var stdout = process.StandardOutput.ReadToEnd();
-    var stderr = process.StandardError.ReadToEnd();
-
     process.WaitForExit();
-
-    if (!string.IsNullOrEmpty(stdout)) {
-      Console.Write(stdout);
-    }
-    if (!string.IsNullOrEmpty(stderr)) {
-      Console.Error.Write(stderr);
-    }
 
     return process.ExitCode;
   }

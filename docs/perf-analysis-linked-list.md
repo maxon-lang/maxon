@@ -15,7 +15,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntList = List with Integer
 
 function main() returns ExitCode
-	var list = IntList.empty()
+	var list = IntList.create()
 
 	list.append(10)
 	list.append(20)

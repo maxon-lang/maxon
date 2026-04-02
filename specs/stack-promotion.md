@@ -194,7 +194,7 @@ end 'Item'
 typealias ItemArray = Array with Item
 
 function main() returns ExitCode
-	var arr = ItemArray.empty()
+	var arr = ItemArray.create()
 	var item = Item.create(value: 7)
 	arr.push(item)
 	var got = try arr.get(0) otherwise Item.create(value: 0)
@@ -207,13 +207,13 @@ end 'main'
 ```stderr
 sl_init
   os_alloc size=67108864
-mm_alloc __ManagedMemory_Item #1 size=32 [ItemArray.empty]
+mm_alloc __ManagedMemory_Item #1 size=32 [ItemArray.create]
   sl_alloc __ManagedMemory_Item #1 size=64 class=5
-mm_alloc ItemArray #2 size=16 [ItemArray.empty]
+mm_alloc ItemArray #2 size=16 [ItemArray.create]
   sl_alloc ItemArray #2 size=48 class=4
-mm_incref __ManagedMemory_Item #1 rc=1 [ItemArray.empty]
-mm_incref ItemArray #2 rc=1 [ItemArray.empty]
-mm_transfer ItemArray #2 rc=1 [ItemArray.empty]
+mm_incref __ManagedMemory_Item #1 rc=1 [ItemArray.create]
+mm_incref ItemArray #2 rc=1 [ItemArray.create]
+mm_transfer ItemArray #2 rc=1 [ItemArray.create]
 mm_alloc Item #3 size=8 [Item.create]
   sl_alloc Item #3 size=40 class=4
 mm_incref Item #3 rc=1 [Item.create]

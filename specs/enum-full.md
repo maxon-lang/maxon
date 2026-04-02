@@ -429,7 +429,7 @@ end 'Item'
 typealias ItemArray = Array with Item
 
 function main() returns ExitCode
-		var items = ItemArray.empty()
+		var items = ItemArray.create()
 		items.push(Item.value(10))
 		items.push(Item.value(20))
 		items.push(Item.empty)
@@ -457,7 +457,7 @@ end 'Item'
 typealias ItemArray = Array with Item
 
 function main() returns ExitCode
-		var items = ItemArray.empty()
+		var items = ItemArray.create()
 		items.push(Item.value(10))
 		items.push(Item.value(20))
 		items.push(Item.value(12))
@@ -488,7 +488,7 @@ end 'Slot'
 typealias SlotArray = Array with Slot
 
 function main() returns ExitCode
-		var slots = SlotArray.empty()
+		var slots = SlotArray.create()
 		slots.push(Slot.val(5))
 		slots.push(Slot.none)
 		slots.push(Slot.val(3))
@@ -519,7 +519,7 @@ end 'Box'
 typealias BoxArray = Array with Box
 
 function main() returns ExitCode
-		var boxes = BoxArray.empty()
+		var boxes = BoxArray.create()
 		boxes.push(Box.full(42))
 		var result = 0
 		for b in boxes 'loop'

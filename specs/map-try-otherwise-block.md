@@ -29,7 +29,7 @@ function getValue(m StringMap, key String) returns String throws TestError
 end 'getValue'
 
 function main() returns ExitCode
-		var m = StringMap.empty()
+		var m = StringMap.create()
 		m.insert("key", value: "hello")
 		let got = try getValue(m, key: "key") otherwise "none"
 		if got == "hello" 'ok'
@@ -70,7 +70,7 @@ function getEntry(m EntryMap, key String) returns Entry throws TestError
 end 'getEntry'
 
 function main() returns ExitCode
-		var m = EntryMap.empty()
+		var m = EntryMap.create()
 		m.insert("key", value: Entry.create(name: "hello", count: 7))
 		let got = try getEntry(m, key: "key") otherwise Entry.create(name: "none", count: 0)
 		return got.count

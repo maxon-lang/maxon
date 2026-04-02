@@ -30,7 +30,7 @@ end 'Color'
 
 typealias Int = int(i64.min to i64.max)
 typealias ColorMap = Map with (Color, Int)
-var scores = ColorMap.empty()
+var scores = ColorMap.create()
 scores.insert(Color.red, value: 100)
 ```
 
@@ -48,7 +48,7 @@ typealias Int = int(i64.min to i64.max)
 typealias ColorMap = Map with (Color, Int)
 
 function main() returns ExitCode
-	var m = ColorMap.empty()
+	var m = ColorMap.create()
 	m.insert(Color.red, value: 10)
 	m.insert(Color.green, value: 20)
 	m.insert(Color.blue, value: 30)
@@ -71,7 +71,7 @@ end 'HttpStatus'
 typealias StatusMap = Map with (HttpStatus, String)
 
 function main() returns ExitCode
-	var m = StatusMap.empty()
+	var m = StatusMap.create()
 	m.insert(HttpStatus.ok, value: "OK")
 	m.insert(HttpStatus.notFound, value: "Not Found")
 	if m.contains(HttpStatus.notFound) 'check'
@@ -96,7 +96,7 @@ typealias Int = int(i64.min to i64.max)
 typealias PlanetMap = Map with (Planet, Int)
 
 function main() returns ExitCode
-	var m = PlanetMap.empty()
+	var m = PlanetMap.create()
 	m.insert(Planet.earth, value: 1)
 	m.insert(Planet.mars, value: 2)
 	m.insert(Planet.venus, value: 3)
@@ -165,7 +165,7 @@ end 'Container'
 typealias ContainerMap = Map with (Container, Integer)
 
 function main() returns ExitCode
-	var m = ContainerMap.empty()
+	var m = ContainerMap.create()
 	return 0
 end 'main'
 ```
@@ -185,7 +185,7 @@ typealias Int = int(i64.min to i64.max)
 typealias GradeMap = Map with (Grade, Int)
 
 function main() returns ExitCode
-	var m = GradeMap.empty()
+	var m = GradeMap.create()
 	m.insert(Grade.excellent, value: 100)
 	m.insert(Grade.good, value: 85)
 	var result = try m.get(Grade.excellent) otherwise 0
@@ -208,7 +208,7 @@ typealias Int = int(i64.min to i64.max)
 typealias ColorMap = Map with (Color, Int)
 
 function main() returns ExitCode
-	var m = ColorMap.empty()
+	var m = ColorMap.create()
 	m.insert(Color.red, value: 10)
 	m.insert(Color.green, value: 20)
 	let _ = m.remove(Color.red)
@@ -238,7 +238,7 @@ end 'LogCategory'
 
 typealias CategoryLevelMap = Map with (LogCategory, LogLevel)
 
-var categoryLevels = CategoryLevelMap.empty()
+var categoryLevels = CategoryLevelMap.create()
 
 function setCategoryLevel(category LogCategory, level LogLevel)
 	categoryLevels.insert(category, value: level)

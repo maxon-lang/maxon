@@ -100,7 +100,7 @@ export type RegState
 		return Self{
 			registerContents: registerContents,
 			lastUsed: lastUsed,
-			values: ValueInfoArray.empty(),
+			values: ValueInfoArray.create(),
 			spillBaseOffset: spillBase,
 			nextSpillOffset: spillBase,
 			minSpillOffset: spillBase,
@@ -152,7 +152,7 @@ export type RegSnapshot
 end 'RegSnapshot'
 
 function rmCopyArray(src RegIntArray) returns RegIntArray
-	var dst = RegIntArray.empty()
+	var dst = RegIntArray.create()
 	for val in src 'copy'
 		dst.push(val)
 	end 'copy'
@@ -160,7 +160,7 @@ function rmCopyArray(src RegIntArray) returns RegIntArray
 end 'rmCopyArray'
 
 function rmCopyValueInfoArray(src ValueInfoArray) returns ValueInfoArray
-	var dst = ValueInfoArray.empty()
+	var dst = ValueInfoArray.create()
 	for val in src 'copy'
 		dst.push(val)
 	end 'copy'
@@ -216,8 +216,8 @@ export function createRegState(spillBase RegInt, gprPool RegIntArray, callerSave
 		mi = mi + 1
 	end 'findMax'
 	let regArraySize = maxOrd + 1
-	var regContents = RegIntArray.empty()
-	var regLastUsed = RegIntArray.empty()
+	var regContents = RegIntArray.create()
+	var regLastUsed = RegIntArray.create()
 	var initIdx = 0
 	while initIdx < regArraySize 'initRegs'
 		regContents.push(RM_NONE)
@@ -237,8 +237,8 @@ export function createRegState(spillBase RegInt, gprPool RegIntArray, callerSave
 		fmi = fmi + 1
 	end 'findFpMax'
 	let fpArraySize = fpMaxOrd + 1
-	var fpCont = RegIntArray.empty()
-	var fpLU = RegIntArray.empty()
+	var fpCont = RegIntArray.create()
+	var fpLU = RegIntArray.create()
 	var fpInit = 0
 	while fpInit < fpArraySize 'initFpRegs'
 		fpCont.push(RM_NONE)
@@ -346,7 +346,7 @@ export function rmTotalStackSize(state RegState) returns RegInt
 	rmUpdateSpillWatermark(state)
 	let raw = trunc(abs(state.spillBaseOffset - state.minSpillOffset))
 	if raw > 0 'hasSpills'
-		return (raw + 15) and -16
+		return(raw + 15) and -16
 	end 'hasSpills'
 	return 0
 end 'rmTotalStackSize'
@@ -1349,11 +1349,11 @@ function rmEmitCallShared(state RegState, dstBlock MlirBlock, argIds RegIntArray
 	//    - argStackHomes[i]: stack offset to reload from (or RM_NO_STACK_HOME)
 	//    - argConstants[i]: immediate value (or RM_NO_STACK_HOME if not a constant)
 	let maxRegArgs = regArgLimit
-	var argSources = RegIntArray.empty()
-	var argStackHomes = RegIntArray.empty()
-	var argConstants = RegIntArray.empty()
-	var argPlaced = RegIntArray.empty()
-	var argTargets = RegIntArray.empty()
+	var argSources = RegIntArray.create()
+	var argStackHomes = RegIntArray.create()
+	var argConstants = RegIntArray.create()
+	var argPlaced = RegIntArray.create()
+	var argTargets = RegIntArray.create()
 	var ai = 0
 	while ai < maxRegArgs 'initArrays'
 		argSources.push(RM_NONE)
@@ -1685,7 +1685,7 @@ end 'FpTwoAddrOp'
 
 // Pre-scan all ops in a function to count how many times each virtual value is read.
 function computeUseCounts(srcFunc MlirFunction, state RegState) returns RegIntArray
-	var counts = RegIntArray.empty()
+	var counts = RegIntArray.create()
 	for srcBlock in srcFunc.blocks 'eachBlock'
 		for op in srcBlock.ops 'eachOp'
 			targetCountOpReads(state, counts: counts, op: op)
@@ -1700,8 +1700,8 @@ end 'computeUseCounts'
 // Pre-scan to identify values only consumed by sink ops (call arg setup / return).
 // These values can be deferred — not eagerly materialized, rematerialized on demand.
 function computeDeferredValues(srcFunc MlirFunction, state RegState) returns RegIntArray
-	var sinkOnly = RegIntArray.empty()
-	var usedByNonSink = RegIntArray.empty()
+	var sinkOnly = RegIntArray.create()
+	var usedByNonSink = RegIntArray.create()
 	for srcBlock in srcFunc.blocks 'eachBlock'
 		for op in srcBlock.ops 'eachOp'
 			targetClassifyOpReads(state, sinkOnly: sinkOnly, usedByNonSink: usedByNonSink, op: op)
@@ -1712,7 +1712,7 @@ function computeDeferredValues(srcFunc MlirFunction, state RegState) returns Reg
 		end 'hasTerm'
 	end 'eachBlock'
 	// A value is deferrable if it appears in sinkOnly but not in usedByNonSink
-	var result = RegIntArray.empty()
+	var result = RegIntArray.create()
 	var i = 0
 	while i < sinkOnly.count() 'filter'
 		let val = rmGetOr(sinkOnly, index: i, fallback: 0)
@@ -1787,7 +1787,7 @@ function allocateRegistersForFunc(srcFunc MlirFunction, target Target) returns M
 	// Diverging block detection — pre-scan to identify panic blocks so we can
 	// save/restore register state around them and prevent their spills from
 	// inflating the frame for the continuation (happy path).
-	var divergingBlocks = RegIntArray.empty()
+	var divergingBlocks = RegIntArray.create()
 	var di = 0
 	while di < blockCount 'scanBlocks'
 		let blk = try srcFunc.blocks.get(di) otherwise 'skipDetect'

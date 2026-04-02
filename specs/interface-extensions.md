@@ -72,7 +72,7 @@ extension Iterable
 	typealias ElementArray = Array with Element
 
 	function map(transform (Element) returns Element) returns ElementArray
-		var result = ElementArray.empty()
+		var result = ElementArray.create()
 		for item in self 'loop'
 			result.push(transform(item))
 		end 'loop'

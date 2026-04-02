@@ -13,158 +13,18 @@ Stdout: ```
 module {
   func @main() -> u32 {
   entry:
-    x86.prologue stack_size=112
-    x86.mov rcx, 21
-    x86.call mm_raw_alloc
-    x86.mov [rbp-8], rax
-    x86.mov rdx, [rbp-8]
+    x86.prologue stack_size=48
+    x86.lea rax, [rip+__str_0]
     x86.mov rcx, 42
-    x86.call maxon_i64_to_string
-    x86.mov rcx, [rbp-8]
-    x86.lea_rdata rdx, [__interp_lit_0]
-    x86.mov rbx, rdx
-    x86.mov rdx, 1
-    x86.lea rsi, [rax + rdx]
-    x86.lea_func rdi, [__destruct_String]
-    x86.mov r8, rdi
-    x86.mov [rbp-88], rax
-    x86.mov [rbp-96], rbx
-    x86.mov [rbp-104], rsi
-    x86.mov rdx, r8
-    x86.mov rcx, 32
-    x86.mov r8, 1
-    x86.call mm_alloc
-    x86.mov [rbp-16], rax
-    x86.lea_func rax, [__destruct___ManagedMemory]
-    x86.mov rcx, rax
-    x86.mov rdx, rcx
-    x86.mov rcx, 32
-    x86.mov r8, 2
-    x86.call mm_alloc
-    x86.mov [rbp-24], rax
-    x86.mov rdx, 1
-    x86.mov rbx, [rbp-104]
-    x86.lea rsi, [rbx + rdx]
-    x86.mov rcx, rsi
-    x86.call mm_raw_alloc
-    x86.xor rdi, rdi
-    x86.mov [rbp-32], rdi
-    x86.mov [rbp-40], rax
-    x86.mov r8, [rbp-104]
-    x86.mov [rbp-48], r8
-    x86.mov r9, [rbp-8]
-    x86.mov [rbp-56], r9
-    x86.mov rax, [rbp-88]
-    x86.mov [rbp-64], rax
-    x86.mov rax, [rbp-96]
-    x86.mov [rbp-72], rax
-    x86.mov rax, 1
-    x86.mov [rbp-80], rax
-    x86.mov rax, [rbp-40]
-    x86.mov rcx, [rbp-32]
-    x86.add rax, rcx
-    x86.mov rcx, [rbp-56]
-    x86.mov rdx, [rbp-64]
-    x86.mov rsi, rcx
-    x86.mov rdi, rax
+    x86.mov [rbp+-16], rax
+    x86.call mrt_printInt
+    x86.mov rdx, [rbp+-16]
     x86.mov rcx, rdx
-    x86.rep_movsb
-    x86.mov rax, [rbp-32]
-    x86.mov rcx, [rbp-64]
-    x86.add rax, rcx
-    x86.mov [rbp-32], rax
-    x86.mov rax, [rbp-40]
-    x86.mov rcx, [rbp-32]
-    x86.add rax, rcx
-    x86.mov rcx, [rbp-72]
-    x86.mov rdx, [rbp-80]
-    x86.mov rsi, rcx
-    x86.mov rdi, rax
-    x86.mov rcx, rdx
-    x86.rep_movsb
-    x86.mov rax, [rbp-40]
-    x86.mov rcx, [rbp-48]
-    x86.add rax, rcx
-    x86.xor rcx, rcx
-    x86.mov byte ptr [rax+0], rcxb
-    x86.mov rax, [rbp-8]
-    x86.mov rcx, [rbp-8]
-    x86.call mm_raw_free
-    x86.mov rax, [rbp-40]
-    x86.mov rcx, [rbp-24]
-    x86.mov [rcx+0], rax
-    x86.mov rax, [rbp-48]
-    x86.mov rcx, [rbp-24]
-    x86.mov [rcx+8], rax
-    x86.mov rcx, [rbp-24]
-    x86.mov [rcx+16], rax
-    x86.mov rax, 1
-    x86.mov rcx, [rbp-24]
-    x86.mov [rcx+24], rax
-    x86.mov rax, [rbp-24]
-    x86.mov rcx, [rbp-16]
-    x86.mov [rcx+0], rax
-    x86.mov rax, [rbp-24]
-    x86.mov rcx, [rbp-24]
-    x86.call mm_incref
-    x86.xor rax, rax
-    x86.mov rcx, [rbp-16]
-    x86.mov [rcx+8], rax
-    x86.mov rax, -1
-    x86.mov rcx, [rbp-16]
-    x86.mov [rcx+16], rax
-    x86.xor rax, rax
-    x86.mov rcx, [rbp-16]
-    x86.mov [rcx+24], rax
-    x86.mov rax, [rbp-16]
-    x86.mov rcx, [rbp-16]
-    x86.call mm_incref
-    x86.mov rax, [rbp-16]
-    x86.mov rcx, [rbp-16]
-    x86.call stdlib.Print.print
-    x86.mov rax, [rbp-16]
-    x86.test rax, rax
-    x86.jz __nonnull_skip_0
-    x86.mov rcx, [rbp-16]
-    x86.call mm_decref
-    x86.label __nonnull_skip_0
-    x86.xor rax, rax
-    x86.epilogue
-    x86.ret
-  }
-  func @__destruct_String(ptr: i64) {
-  entry:
-    x86.prologue stack_size=16
-    x86.mov [rbp-8], rcx
-    x86.mov rax, [rbp-8]
-    x86.mov rcx, [rax+0]
-    x86.mov [rbp-16], rcx
-    x86.test rcx, rcx
-    x86.jz __nonnull_skip_1
-    x86.call mm_decref
-    x86.label __nonnull_skip_1
-    x86.jmp __destruct_String.done
-  done:
-    x86.epilogue
-    x86.ret
-  }
-  func @__destruct___ManagedMemory(ptr: i64) {
-  entry:
-    x86.prologue stack_size=16
-    x86.mov [rbp-8], rcx
-    x86.mov rax, [rbp-8]
-    x86.mov rcx, [rax+16]
-    x86.xor rdx, rdx
-    x86.cmp rcx, rdx
-    x86.je __destruct___ManagedMemory.skip_buf_0
-  free_buf_0:
-    x86.mov rax, [rbp-8]
-    x86.mov rcx, [rax+0]
-    x86.call mm_raw_free
-    x86.jmp __destruct___ManagedMemory.skip_buf_0
-  skip_buf_0:
-    x86.jmp __destruct___ManagedMemory.done
-  done:
+    x86.mov rdx, 1
+    x86.mov [rbp+-24], rax
+    x86.call mrt_write_stdout
+    x86.mov [rbp+-32], rax
+    x86.mov rax, 0
     x86.epilogue
     x86.ret
   }

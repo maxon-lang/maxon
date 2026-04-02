@@ -429,7 +429,7 @@ end 'isX64RetTerminator'
 
 // Pre-scan to identify division and shift setup patterns and set forward register hints.
 export function computeForwardHints(srcFunc MlirFunction) returns RegIntArray
-	var hints = RegIntArray.empty()
+	var hints = RegIntArray.create()
 	let raxOrd = x64RegToOrdinal(X64Register.rax)
 	let rcxOrd = x64RegToOrdinal(X64Register.rcx)
 	for srcBlock in srcFunc.blocks 'eachBlock'
@@ -1335,14 +1335,14 @@ export function isX64DivergingBlock(block MlirBlock) returns bool
 		match op 'checkCall'
 			x64(x64Op) then match x64Op 'checkX64Call'
 				callDirect(target) then if target == b"mrt_panic" 'isPanic'
-					return true
-				end 'isPanic'
-				prologue to loadRegRbpOffset then break 'checkX64Call'
-				syscall to repStosq then break 'checkX64Call'
-			end 'checkX64Call'
-			maxon to mir then break 'checkCall'
-			arm64 then break 'checkCall'
-		end 'checkCall'
-	end 'checkOps'
-	return false
+				return true
+			end 'isPanic'
+			prologue to loadRegRbpOffset then break 'checkX64Call'
+			syscall to repStosq then break 'checkX64Call'
+		end 'checkX64Call'
+		maxon to mir then break 'checkCall'
+		arm64 then break 'checkCall'
+	end 'checkCall'
+end 'checkOps'
+return false
 end 'isX64DivergingBlock'

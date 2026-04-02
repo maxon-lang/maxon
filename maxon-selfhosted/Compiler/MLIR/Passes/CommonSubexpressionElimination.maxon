@@ -51,8 +51,8 @@ export function eliminateCommonSubexpressions(module MlirModule) returns MlirMod
 			dstBlock.blockArgs = srcBlock.blockArgs
 
 			// Phase 1: Walk ops, build value numbering table and remap table
-			var vnTable = ValueNumberTable.empty()
-			var remap = ValueIdArray.empty()
+			var vnTable = ValueNumberTable.create()
+			var remap = ValueIdArray.create()
 
 			for op in srcBlock.ops 'buildVN'
 				cseAnalyzeOp(op, vnTable: vnTable, remap: remap)
@@ -158,7 +158,7 @@ function cseRemapValue(valueId ValueId, remap ValueIdArray) returns ValueId
 end 'cseRemapValue'
 
 function cseRemapValueIds(argIds ValueIdArray, remap ValueIdArray) returns ValueIdArray
-	var result = ValueIdArray.empty()
+	var result = ValueIdArray.create()
 	for argId in argIds 'each'
 		result.push(cseRemapValue(argId, remap: remap))
 	end 'each'

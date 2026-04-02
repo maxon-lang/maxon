@@ -96,7 +96,7 @@ end 'MyKey'
 typealias MyKeyMap = Map with (MyKey, Integer)
 
 function main() returns ExitCode
-		var m = MyKeyMap.empty()
+		var m = MyKeyMap.create()
 		m.insert(key: MyKey.create(value: 1), value: 42)
 		return m.count()
 end 'main'

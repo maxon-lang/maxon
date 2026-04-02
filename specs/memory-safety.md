@@ -772,7 +772,7 @@ end 'Item'
 typealias ItemArray = Array with Item
 
 function main() returns ExitCode
-	var arr = ItemArray.empty()
+	var arr = ItemArray.create()
 	var item = Item.create(value: 7)
 	arr.push(item)
 	var got = try arr.get(0) otherwise Item.create(value: 0)
@@ -803,7 +803,7 @@ module {
   }
   func @main() -> i64 {
   entry:
-    %11 = maxon.call @ItemArray.empty
+    %11 = maxon.call @ItemArray.create
     maxon.assign %11 {var = __call_tmp_11} {decl = 1 : i1}
     maxon.assign %11 {var = arr} {decl = 1 : i1} {mut = 1 : i1}
     %12 = maxon.literal {value = 7 : i64}
@@ -886,7 +886,7 @@ module {
     memref.store %65, __call_tmp_21
     %66 = arith.constant {value = 0 : i64}
     memref.store %66, __try_result_0
-    %19 = func.call @ItemArray.empty
+    %19 = func.call @ItemArray.create
     memref.store %19, arr
     %22 = arith.constant {value = 7 : i64}
     %23 = func.call @Item.create %22
@@ -1035,7 +1035,7 @@ module {
     x86.mov [rbp-8], rax
     x86.xor rcx, rcx
     x86.mov [rbp-16], rcx
-    x86.call ItemArray.empty
+    x86.call ItemArray.create
     x86.mov [rbp-24], rax
     x86.mov rcx, 7
     x86.call Item.create
@@ -2670,7 +2670,7 @@ function firstOrDefault(arr WrapperArray) returns Wrapper
 end 'firstOrDefault'
 
 function main() returns ExitCode
-	var arr = WrapperArray.empty()
+	var arr = WrapperArray.create()
 	var w = Wrapper.create(value: 42)
 	arr.push(w)
 	var got = firstOrDefault(arr: arr)

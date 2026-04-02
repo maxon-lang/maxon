@@ -31,14 +31,14 @@ end 'Entry'
 typealias EntryMap = Map with (String, Entry)
 
 function main() returns ExitCode
-	var m = EntryMap.empty()
-	var arr = ByteArray.empty()
+	var m = EntryMap.create()
+	var arr = ByteArray.create()
 	arr.push(10)
 	arr.push(20)
 	arr.push(30)
 	let e = Entry.create(data: arr, tag: 42)
 	m.insert("hello", value: e)
-	let got = try m.get("hello") otherwise Entry.create(data: ByteArray.empty(), tag: 0)
+	let got = try m.get("hello") otherwise Entry.create(data: ByteArray.create(), tag: 0)
 	print("{got.data.count()}\n")
 	print("{got.tag}\n")
 	let b = try got.data.get(1) otherwise 0
@@ -80,7 +80,7 @@ type Database
 	end 'create'
 end 'Database'
 
-var db = Database.create(sourceFiles: EntryMap.empty(), sourcePaths: StringArray.empty())
+var db = Database.create(sourceFiles: EntryMap.create(), sourcePaths: StringArray.create())
 
 function storeAndCheck(key String, data ByteArray)
 	if db.sourceFiles.contains(key) 'exists'
@@ -96,7 +96,7 @@ function storeAndCheck(key String, data ByteArray)
 end 'storeAndCheck'
 
 function main() returns ExitCode
-	var arr = ByteArray.empty()
+	var arr = ByteArray.create()
 	arr.push(1)
 	arr.push(2)
 	arr.push(3)
@@ -137,7 +137,7 @@ export type Database
 	end 'create'
 end 'Database'
 
-export var db = Database.create(sourceFiles: EntryMap.empty(), sourcePaths: StringArray.empty())
+export var db = Database.create(sourceFiles: EntryMap.create(), sourcePaths: StringArray.create())
 
 // --- file: 1-Logic.maxon
 export function storeAndCheck(key String, data ByteArray)
@@ -154,7 +154,7 @@ export function storeAndCheck(key String, data ByteArray)
 end 'storeAndCheck'
 
 function main() returns ExitCode
-	var arr = ByteArray.empty()
+	var arr = ByteArray.create()
 	arr.push(1)
 	arr.push(2)
 	arr.push(3)

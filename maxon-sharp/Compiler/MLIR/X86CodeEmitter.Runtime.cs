@@ -2010,6 +2010,7 @@ public partial class X86CodeEmitter {
   /// <summary>
   /// maxon_process_create(cstring_cmd, cstring_cwd) -> hProcess handle, or 0 on failure.
   /// Uses CreateProcessA. If cwd is empty string, passes NULL for lpCurrentDirectory.
+  /// Passes parent's std handles to child so its output is visible.
   /// </summary>
   private void EmitMaxonProcessCreate() {
     EmitRuntimeFunctionStart("maxon_process_create", 2, 0x100);
@@ -2026,8 +2027,26 @@ public partial class X86CodeEmitter {
     // Required by CreateProcessA: cb must equal sizeof(STARTUPINFOA)
     EmitMovMemDwordImm(SiBase, 104);
 
+    // Pass parent's std handles so child process output is visible
+    EmitMovMemDwordImm(SiBase + 0x3C, 0x100);            // dwFlags = STARTF_USESTDHANDLES
+
+    // GetStdHandle(STD_INPUT_HANDLE = -10) -> hStdInput
+    EmitMovRegImm(X86Register.Rcx, unchecked((long)-10));
+    EmitCallImportOnSystemStack("kernel32.dll", "GetStdHandle");
+    EmitMovMemReg(SiBase + 0x50, X86Register.Rax, 8);    // hStdInput
+
+    // GetStdHandle(STD_OUTPUT_HANDLE = -11) -> hStdOutput
+    EmitMovRegImm(X86Register.Rcx, unchecked((long)-11));
+    EmitCallImportOnSystemStack("kernel32.dll", "GetStdHandle");
+    EmitMovMemReg(SiBase + 0x58, X86Register.Rax, 8);    // hStdOutput
+
+    // GetStdHandle(STD_ERROR_HANDLE = -12) -> hStdError
+    EmitMovRegImm(X86Register.Rcx, unchecked((long)-12));
+    EmitCallImportOnSystemStack("kernel32.dll", "GetStdHandle");
+    EmitMovMemReg(SiBase + 0x60, X86Register.Rax, 8);    // hStdError
+
     EmitNullIfEmptyCwd(-0x10, "rt_pc_cwd_ok");
-    EmitCallCreateProcessA(-0x10, inheritHandles: false, SiBase, PiBase);
+    EmitCallCreateProcessA(-0x10, inheritHandles: true, SiBase, PiBase);
 
     // Check result (non-zero = success)
     EmitTestRegReg(X86Register.Rax, X86Register.Rax);

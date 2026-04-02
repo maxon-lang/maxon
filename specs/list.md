@@ -25,7 +25,7 @@ Or create an empty list with an explicit type:
 ```text
 typealias Integer = int(i64.min to i64.max)
 typealias IntList = List with Integer
-var empty = IntList.empty()
+var empty = IntList.create()
 ```
 
 ### Methods
@@ -109,7 +109,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntList = List with Integer
 
 function main() returns ExitCode
-	var list = IntList.empty()
+	var list = IntList.create()
 	if list.isEmpty() 'check'
 		return 0
 	end 'check'
@@ -145,7 +145,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntList = List with Integer
 
 function main() returns ExitCode
-	var list = IntList.empty()
+	var list = IntList.create()
 	var f = try list.first() otherwise 99
 	return f
 end 'main'
@@ -160,7 +160,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntList = List with Integer
 
 function main() returns ExitCode
-	var list = IntList.empty()
+	var list = IntList.create()
 	var l = try list.last() otherwise 99
 	return l
 end 'main'
@@ -175,7 +175,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntList = List with Integer
 
 function main() returns ExitCode
-	var list = IntList.empty()
+	var list = IntList.create()
 	list.prepend(42)
 	var f = try list.first() otherwise 0
 	return f
@@ -191,7 +191,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntList = List with Integer
 
 function main() returns ExitCode
-	var list = IntList.empty()
+	var list = IntList.create()
 	list.prepend(3)
 	list.prepend(2)
 	list.prepend(1)
@@ -218,7 +218,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntList = List with Integer
 
 function main() returns ExitCode
-	var list = IntList.empty()
+	var list = IntList.create()
 	list.append(42)
 	var f = try list.first() otherwise 0
 	return f
@@ -234,7 +234,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntList = List with Integer
 
 function main() returns ExitCode
-	var list = IntList.empty()
+	var list = IntList.create()
 	list.append(1)
 	list.append(2)
 	list.append(3)
@@ -461,7 +461,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntList = List with Integer
 
 function main() returns ExitCode
-	var list = IntList.empty()
+	var list = IntList.create()
 	for i in 1 to 100 'build'
 		list.append(i)
 	end 'build'
@@ -504,7 +504,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntList = List with Integer
 
 function main() returns ExitCode
-	var list = IntList.empty()
+	var list = IntList.create()
 	list.append(2)
 	list.append(3)
 	list.prepend(1)
@@ -537,7 +537,7 @@ end 'main'
 typealias StringList = List with String
 
 function main() returns ExitCode
-	var list = StringList.empty()
+	var list = StringList.create()
 	list.append("hello")
 	list.append("world")
 	var f = try list.first() otherwise "none"
@@ -576,7 +576,7 @@ end 'main'
 typealias StringList = List with String
 
 function testRemove()
-	var list = StringList.empty()
+	var list = StringList.create()
 	list.append("hello world!!!!!!!!!!!!!!")
 	list.append("goodbye world!!!!!!!!!!!!!")
 	var removed = try list.removeFirst() otherwise "none"
@@ -599,13 +599,13 @@ hello world!!!!!!!!!!!!!!
 ```stderr
 sl_init
   os_alloc size=67108864
-mm_alloc __ManagedList_String #1 size=32 [StringList.empty]
+mm_alloc __ManagedList_String #1 size=32 [StringList.create]
   sl_alloc __ManagedList_String #1 size=64 class=5
-mm_alloc StringList #2 size=16 [StringList.empty]
+mm_alloc StringList #2 size=16 [StringList.create]
   sl_alloc StringList #2 size=48 class=4
-mm_incref __ManagedList_String #1 rc=1 [StringList.empty]
-mm_incref StringList #2 rc=1 [StringList.empty]
-mm_transfer StringList #2 rc=1 [StringList.empty]
+mm_incref __ManagedList_String #1 rc=1 [StringList.create]
+mm_incref StringList #2 rc=1 [StringList.create]
+mm_transfer StringList #2 rc=1 [StringList.create]
 mm_alloc String #3 size=32 [list.testRemove]
   sl_alloc String #3 size=64 class=5
 mm_alloc __ManagedMemory #4 size=32 [list.testRemove]
@@ -709,7 +709,7 @@ mm_raw_free #R4
 typealias StringList = List with String
 
 function testRemove() returns String
-	var list = StringList.empty()
+	var list = StringList.create()
 	list.append("hello world!!!!!!!!!!!!!!")
 	list.append("goodbye world!!!!!!!!!!!!!")
 	return try list.removeFirst() otherwise "none"
@@ -730,13 +730,13 @@ hello world!!!!!!!!!!!!!!
 ```stderr
 sl_init
   os_alloc size=67108864
-mm_alloc __ManagedList_String #1 size=32 [StringList.empty]
+mm_alloc __ManagedList_String #1 size=32 [StringList.create]
   sl_alloc __ManagedList_String #1 size=64 class=5
-mm_alloc StringList #2 size=16 [StringList.empty]
+mm_alloc StringList #2 size=16 [StringList.create]
   sl_alloc StringList #2 size=48 class=4
-mm_incref __ManagedList_String #1 rc=1 [StringList.empty]
-mm_incref StringList #2 rc=1 [StringList.empty]
-mm_transfer StringList #2 rc=1 [StringList.empty]
+mm_incref __ManagedList_String #1 rc=1 [StringList.create]
+mm_incref StringList #2 rc=1 [StringList.create]
+mm_transfer StringList #2 rc=1 [StringList.create]
 mm_alloc String #3 size=32 [list.testRemove]
   sl_alloc String #3 size=64 class=5
 mm_alloc __ManagedMemory #4 size=32 [list.testRemove]
@@ -819,7 +819,7 @@ mm_raw_free #R2
 typealias StringList = List with String
 
 function testClear()
-	var list = StringList.empty()
+	var list = StringList.create()
 	list.append("alpha string!!!!!!!!!!!!!!!")
 	list.append("beta string!!!!!!!!!!!!!!!!")
 	list.append("gamma string!!!!!!!!!!!!!!!")
@@ -841,13 +841,13 @@ end 'main'
 ```stderr
 sl_init
   os_alloc size=67108864
-mm_alloc __ManagedList_String #1 size=32 [StringList.empty]
+mm_alloc __ManagedList_String #1 size=32 [StringList.create]
   sl_alloc __ManagedList_String #1 size=64 class=5
-mm_alloc StringList #2 size=16 [StringList.empty]
+mm_alloc StringList #2 size=16 [StringList.create]
   sl_alloc StringList #2 size=48 class=4
-mm_incref __ManagedList_String #1 rc=1 [StringList.empty]
-mm_incref StringList #2 rc=1 [StringList.empty]
-mm_transfer StringList #2 rc=1 [StringList.empty]
+mm_incref __ManagedList_String #1 rc=1 [StringList.create]
+mm_incref StringList #2 rc=1 [StringList.create]
+mm_transfer StringList #2 rc=1 [StringList.create]
 mm_alloc String #3 size=32 [list.testClear]
   sl_alloc String #3 size=64 class=5
 mm_alloc __ManagedMemory #4 size=32 [list.testClear]
@@ -950,7 +950,7 @@ function clearList(list StringList)
 end 'clearList'
 
 function main() returns ExitCode
-	var list = StringList.empty()
+	var list = StringList.create()
 	list.append("alpha string!!!!!!!!!!!!!!!")
 	list.append("beta string!!!!!!!!!!!!!!!!")
 	list.append("gamma string!!!!!!!!!!!!!!!")
@@ -968,13 +968,13 @@ end 'main'
 ```stderr
 sl_init
   os_alloc size=67108864
-mm_alloc __ManagedList_String #1 size=32 [StringList.empty]
+mm_alloc __ManagedList_String #1 size=32 [StringList.create]
   sl_alloc __ManagedList_String #1 size=64 class=5
-mm_alloc StringList #2 size=16 [StringList.empty]
+mm_alloc StringList #2 size=16 [StringList.create]
   sl_alloc StringList #2 size=48 class=4
-mm_incref __ManagedList_String #1 rc=1 [StringList.empty]
-mm_incref StringList #2 rc=1 [StringList.empty]
-mm_transfer StringList #2 rc=1 [StringList.empty]
+mm_incref __ManagedList_String #1 rc=1 [StringList.create]
+mm_incref StringList #2 rc=1 [StringList.create]
+mm_transfer StringList #2 rc=1 [StringList.create]
 mm_alloc String #3 size=32 [main]
   sl_alloc String #3 size=64 class=5
 mm_alloc __ManagedMemory #4 size=32 [main]
@@ -1080,7 +1080,7 @@ function clearList(list StringList) returns String
 end 'clearList'
 
 function main() returns ExitCode
-	var list = StringList.empty()
+	var list = StringList.create()
 	list.append("hello world!!!!!!!!!!!!!!")
 	var result = clearList(list)
 	print("{result}\n")
@@ -1102,7 +1102,7 @@ function clearList(list StringList)
 end 'clearList'
 
 function main() returns ExitCode
-	var list = StringList.empty()
+	var list = StringList.create()
 	list.append("hello world!!!!!!!!!!!!!!")
 	var val = try list.first() otherwise "none"
 	clearList(list)
@@ -1121,7 +1121,7 @@ Getting a value from a list and then clearing it is a borrow conflict.
 typealias StringList = List with String
 
 function main() returns ExitCode
-	var list = StringList.empty()
+	var list = StringList.create()
 	list.append("hello world!!!!!!!!!!!!!!")
 	var val = try list.first() otherwise "none"
 	list.clear()

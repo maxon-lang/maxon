@@ -791,7 +791,7 @@ end 'Node'
 typealias NodeArray = Array with Node
 
 function main() returns ExitCode
-	var arr = NodeArray.empty()
+	var arr = NodeArray.create()
 	if true 'scope'
 		var n = Node.create(id: 10)
 		arr.push(n)
@@ -806,13 +806,13 @@ end 'main'
 ```stderr
 sl_init
   os_alloc size=67108864
-mm_alloc __ManagedMemory_Node #1 size=32 [NodeArray.empty]
+mm_alloc __ManagedMemory_Node #1 size=32 [NodeArray.create]
   sl_alloc __ManagedMemory_Node #1 size=64 class=5
-mm_alloc NodeArray #2 size=16 [NodeArray.empty]
+mm_alloc NodeArray #2 size=16 [NodeArray.create]
   sl_alloc NodeArray #2 size=48 class=4
-mm_incref __ManagedMemory_Node #1 rc=1 [NodeArray.empty]
-mm_incref NodeArray #2 rc=1 [NodeArray.empty]
-mm_transfer NodeArray #2 rc=1 [NodeArray.empty]
+mm_incref __ManagedMemory_Node #1 rc=1 [NodeArray.create]
+mm_incref NodeArray #2 rc=1 [NodeArray.create]
+mm_transfer NodeArray #2 rc=1 [NodeArray.create]
 mm_alloc Node #3 size=8 [Node.create]
   sl_alloc Node #3 size=40 class=4
 mm_incref Node #3 rc=1 [Node.create]
@@ -860,7 +860,7 @@ end 'Node'
 typealias NodeArray = Array with Node
 
 function main() returns ExitCode
-	var arr = NodeArray.empty()
+	var arr = NodeArray.create()
 	arr.push(Node.create(id: 1))
 	arr.push(Node.create(id: 2))
 	var popped = try arr.remove(arr.count() - 1) otherwise 'err'
@@ -875,13 +875,13 @@ end 'main'
 ```stderr
 sl_init
   os_alloc size=67108864
-mm_alloc __ManagedMemory_Node #1 size=32 [NodeArray.empty]
+mm_alloc __ManagedMemory_Node #1 size=32 [NodeArray.create]
   sl_alloc __ManagedMemory_Node #1 size=64 class=5
-mm_alloc NodeArray #2 size=16 [NodeArray.empty]
+mm_alloc NodeArray #2 size=16 [NodeArray.create]
   sl_alloc NodeArray #2 size=48 class=4
-mm_incref __ManagedMemory_Node #1 rc=1 [NodeArray.empty]
-mm_incref NodeArray #2 rc=1 [NodeArray.empty]
-mm_transfer NodeArray #2 rc=1 [NodeArray.empty]
+mm_incref __ManagedMemory_Node #1 rc=1 [NodeArray.create]
+mm_incref NodeArray #2 rc=1 [NodeArray.create]
+mm_transfer NodeArray #2 rc=1 [NodeArray.create]
 mm_alloc Node #3 size=8 [Node.create]
   sl_alloc Node #3 size=40 class=4
 mm_incref Node #3 rc=1 [Node.create]
@@ -936,7 +936,7 @@ end 'Item'
 typealias ItemArray = Array with Item
 
 function main() returns ExitCode
-	var arr = ItemArray.empty()
+	var arr = ItemArray.create()
 	arr.push(Item.create(value: 100))
 	arr.set(0, value: Item.create(value: 200))
 	var got = try arr.get(0) otherwise Item.create(value: -1)
@@ -949,13 +949,13 @@ end 'main'
 ```stderr
 sl_init
   os_alloc size=67108864
-mm_alloc __ManagedMemory_Item #1 size=32 [ItemArray.empty]
+mm_alloc __ManagedMemory_Item #1 size=32 [ItemArray.create]
   sl_alloc __ManagedMemory_Item #1 size=64 class=5
-mm_alloc ItemArray #2 size=16 [ItemArray.empty]
+mm_alloc ItemArray #2 size=16 [ItemArray.create]
   sl_alloc ItemArray #2 size=48 class=4
-mm_incref __ManagedMemory_Item #1 rc=1 [ItemArray.empty]
-mm_incref ItemArray #2 rc=1 [ItemArray.empty]
-mm_transfer ItemArray #2 rc=1 [ItemArray.empty]
+mm_incref __ManagedMemory_Item #1 rc=1 [ItemArray.create]
+mm_incref ItemArray #2 rc=1 [ItemArray.create]
+mm_transfer ItemArray #2 rc=1 [ItemArray.create]
 mm_alloc Item #3 size=8 [Item.create]
   sl_alloc Item #3 size=40 class=4
 mm_incref Item #3 rc=1 [Item.create]
@@ -1012,7 +1012,7 @@ end 'Item'
 typealias ItemArray = Array with Item
 
 function main() returns ExitCode
-	var arr = ItemArray.empty()
+	var arr = ItemArray.create()
 	arr.push(Item.create(value: 1))
 	arr.push(Item.create(value: 2))
 	arr.push(Item.create(value: 3))
@@ -1026,13 +1026,13 @@ end 'main'
 ```stderr
 sl_init
   os_alloc size=67108864
-mm_alloc __ManagedMemory_Item #1 size=32 [ItemArray.empty]
+mm_alloc __ManagedMemory_Item #1 size=32 [ItemArray.create]
   sl_alloc __ManagedMemory_Item #1 size=64 class=5
-mm_alloc ItemArray #2 size=16 [ItemArray.empty]
+mm_alloc ItemArray #2 size=16 [ItemArray.create]
   sl_alloc ItemArray #2 size=48 class=4
-mm_incref __ManagedMemory_Item #1 rc=1 [ItemArray.empty]
-mm_incref ItemArray #2 rc=1 [ItemArray.empty]
-mm_transfer ItemArray #2 rc=1 [ItemArray.empty]
+mm_incref __ManagedMemory_Item #1 rc=1 [ItemArray.create]
+mm_incref ItemArray #2 rc=1 [ItemArray.create]
+mm_transfer ItemArray #2 rc=1 [ItemArray.create]
 mm_alloc Item #3 size=8 [Item.create]
   sl_alloc Item #3 size=40 class=4
 mm_incref Item #3 rc=1 [Item.create]
@@ -1094,7 +1094,7 @@ end 'Item'
 typealias ItemArray = Array with Item
 
 function fill() returns Integer
-	var arr = ItemArray.empty()
+	var arr = ItemArray.create()
 	arr.push(Item.create(value: 10))
 	arr.push(Item.create(value: 20))
 	arr.push(Item.create(value: 30))
@@ -1112,13 +1112,13 @@ end 'main'
 ```stderr
 sl_init
   os_alloc size=67108864
-mm_alloc __ManagedMemory_Item #1 size=32 [ItemArray.empty]
+mm_alloc __ManagedMemory_Item #1 size=32 [ItemArray.create]
   sl_alloc __ManagedMemory_Item #1 size=64 class=5
-mm_alloc ItemArray #2 size=16 [ItemArray.empty]
+mm_alloc ItemArray #2 size=16 [ItemArray.create]
   sl_alloc ItemArray #2 size=48 class=4
-mm_incref __ManagedMemory_Item #1 rc=1 [ItemArray.empty]
-mm_incref ItemArray #2 rc=1 [ItemArray.empty]
-mm_transfer ItemArray #2 rc=1 [ItemArray.empty]
+mm_incref __ManagedMemory_Item #1 rc=1 [ItemArray.create]
+mm_incref ItemArray #2 rc=1 [ItemArray.create]
+mm_transfer ItemArray #2 rc=1 [ItemArray.create]
 mm_alloc Item #3 size=8 [Item.create]
   sl_alloc Item #3 size=40 class=4
 mm_incref Item #3 rc=1 [Item.create]
@@ -1180,7 +1180,7 @@ end 'Entry'
 typealias EntryArray = Array with Entry
 
 function main() returns ExitCode
-	var arr = EntryArray.empty()
+	var arr = EntryArray.create()
 	var i = 0
 	while i < 5 'push'
 		arr.push(Entry.create(key: i))
@@ -1202,13 +1202,13 @@ end 'main'
 ```stderr
 sl_init
   os_alloc size=67108864
-mm_alloc __ManagedMemory_Entry #1 size=32 [EntryArray.empty]
+mm_alloc __ManagedMemory_Entry #1 size=32 [EntryArray.create]
   sl_alloc __ManagedMemory_Entry #1 size=64 class=5
-mm_alloc EntryArray #2 size=16 [EntryArray.empty]
+mm_alloc EntryArray #2 size=16 [EntryArray.create]
   sl_alloc EntryArray #2 size=48 class=4
-mm_incref __ManagedMemory_Entry #1 rc=1 [EntryArray.empty]
-mm_incref EntryArray #2 rc=1 [EntryArray.empty]
-mm_transfer EntryArray #2 rc=1 [EntryArray.empty]
+mm_incref __ManagedMemory_Entry #1 rc=1 [EntryArray.create]
+mm_incref EntryArray #2 rc=1 [EntryArray.create]
+mm_transfer EntryArray #2 rc=1 [EntryArray.create]
 mm_alloc Entry #3 size=8 [Entry.create]
   sl_alloc Entry #3 size=40 class=4
 mm_incref Entry #3 rc=1 [Entry.create]
@@ -1293,7 +1293,7 @@ end 'Val'
 typealias ValArray = Array with Val
 
 function main() returns ExitCode
-	var arr = ValArray.empty()
+	var arr = ValArray.create()
 	arr.push(Val.create(n: 10))
 	arr.push(Val.create(n: 30))
 	arr.insert(1, value: Val.create(n: 20))
@@ -1309,13 +1309,13 @@ end 'main'
 ```stderr
 sl_init
   os_alloc size=67108864
-mm_alloc __ManagedMemory_Val #1 size=32 [ValArray.empty]
+mm_alloc __ManagedMemory_Val #1 size=32 [ValArray.create]
   sl_alloc __ManagedMemory_Val #1 size=64 class=5
-mm_alloc ValArray #2 size=16 [ValArray.empty]
+mm_alloc ValArray #2 size=16 [ValArray.create]
   sl_alloc ValArray #2 size=48 class=4
-mm_incref __ManagedMemory_Val #1 rc=1 [ValArray.empty]
-mm_incref ValArray #2 rc=1 [ValArray.empty]
-mm_transfer ValArray #2 rc=1 [ValArray.empty]
+mm_incref __ManagedMemory_Val #1 rc=1 [ValArray.create]
+mm_incref ValArray #2 rc=1 [ValArray.create]
+mm_transfer ValArray #2 rc=1 [ValArray.create]
 mm_alloc Val #3 size=8 [Val.create]
   sl_alloc Val #3 size=40 class=4
 mm_incref Val #3 rc=1 [Val.create]
@@ -1389,7 +1389,7 @@ end 'Val'
 typealias ValArray = Array with Val
 
 function main() returns ExitCode
-	var arr = ValArray.empty()
+	var arr = ValArray.create()
 	arr.push(Val.create(n: 1))
 	arr.push(Val.create(n: 2))
 	arr.push(Val.create(n: 3))
@@ -1405,13 +1405,13 @@ end 'main'
 ```stderr
 sl_init
   os_alloc size=67108864
-mm_alloc __ManagedMemory_Val #1 size=32 [ValArray.empty]
+mm_alloc __ManagedMemory_Val #1 size=32 [ValArray.create]
   sl_alloc __ManagedMemory_Val #1 size=64 class=5
-mm_alloc ValArray #2 size=16 [ValArray.empty]
+mm_alloc ValArray #2 size=16 [ValArray.create]
   sl_alloc ValArray #2 size=48 class=4
-mm_incref __ManagedMemory_Val #1 rc=1 [ValArray.empty]
-mm_incref ValArray #2 rc=1 [ValArray.empty]
-mm_transfer ValArray #2 rc=1 [ValArray.empty]
+mm_incref __ManagedMemory_Val #1 rc=1 [ValArray.create]
+mm_incref ValArray #2 rc=1 [ValArray.create]
+mm_transfer ValArray #2 rc=1 [ValArray.create]
 mm_alloc Val #3 size=8 [Val.create]
   sl_alloc Val #3 size=40 class=4
 mm_incref Val #3 rc=1 [Val.create]
@@ -1483,7 +1483,7 @@ end 'Wrapper'
 typealias WrapperArray = Array with Wrapper
 
 function main() returns ExitCode
-	var arr = WrapperArray.empty()
+	var arr = WrapperArray.create()
 	arr.push(Wrapper.create(inner: Inner.create(v: 1)))
 	arr.push(Wrapper.create(inner: Inner.create(v: 2)))
 	return arr.count()
@@ -1495,13 +1495,13 @@ end 'main'
 ```stderr
 sl_init
   os_alloc size=67108864
-mm_alloc __ManagedMemory_Wrapper #1 size=32 [WrapperArray.empty]
+mm_alloc __ManagedMemory_Wrapper #1 size=32 [WrapperArray.create]
   sl_alloc __ManagedMemory_Wrapper #1 size=64 class=5
-mm_alloc WrapperArray #2 size=16 [WrapperArray.empty]
+mm_alloc WrapperArray #2 size=16 [WrapperArray.create]
   sl_alloc WrapperArray #2 size=48 class=4
-mm_incref __ManagedMemory_Wrapper #1 rc=1 [WrapperArray.empty]
-mm_incref WrapperArray #2 rc=1 [WrapperArray.empty]
-mm_transfer WrapperArray #2 rc=1 [WrapperArray.empty]
+mm_incref __ManagedMemory_Wrapper #1 rc=1 [WrapperArray.create]
+mm_incref WrapperArray #2 rc=1 [WrapperArray.create]
+mm_transfer WrapperArray #2 rc=1 [WrapperArray.create]
 mm_alloc Inner #3 size=8 [Inner.create]
   sl_alloc Inner #3 size=40 class=4
 mm_incref Inner #3 rc=1 [Inner.create]
@@ -1630,7 +1630,7 @@ function getFirst(arr ItemArray) returns Item
 end 'getFirst'
 
 function main() returns ExitCode
-	var arr = ItemArray.empty()
+	var arr = ItemArray.create()
 	arr.push(Item.create(value: 77))
 	var result = getFirst(arr)
 	return result.value
@@ -1642,13 +1642,13 @@ end 'main'
 ```stderr
 sl_init
   os_alloc size=67108864
-mm_alloc __ManagedMemory_Item #1 size=32 [ItemArray.empty]
+mm_alloc __ManagedMemory_Item #1 size=32 [ItemArray.create]
   sl_alloc __ManagedMemory_Item #1 size=64 class=5
-mm_alloc ItemArray #2 size=16 [ItemArray.empty]
+mm_alloc ItemArray #2 size=16 [ItemArray.create]
   sl_alloc ItemArray #2 size=48 class=4
-mm_incref __ManagedMemory_Item #1 rc=1 [ItemArray.empty]
-mm_incref ItemArray #2 rc=1 [ItemArray.empty]
-mm_transfer ItemArray #2 rc=1 [ItemArray.empty]
+mm_incref __ManagedMemory_Item #1 rc=1 [ItemArray.create]
+mm_incref ItemArray #2 rc=1 [ItemArray.create]
+mm_transfer ItemArray #2 rc=1 [ItemArray.create]
 mm_alloc Item #3 size=8 [Item.create]
   sl_alloc Item #3 size=40 class=4
 mm_incref Item #3 rc=1 [Item.create]
@@ -2014,7 +2014,7 @@ end 'Item'
 typealias ItemArray = Array with Item
 
 function main() returns ExitCode
-	var arr = ItemArray.empty()
+	var arr = ItemArray.create()
 	var got = try arr.get(0) otherwise Item.create(value: 99)
 	return got.value
 end 'main'
@@ -2025,13 +2025,13 @@ end 'main'
 ```stderr
 sl_init
   os_alloc size=67108864
-mm_alloc __ManagedMemory_Item #1 size=32 [ItemArray.empty]
+mm_alloc __ManagedMemory_Item #1 size=32 [ItemArray.create]
   sl_alloc __ManagedMemory_Item #1 size=64 class=5
-mm_alloc ItemArray #2 size=16 [ItemArray.empty]
+mm_alloc ItemArray #2 size=16 [ItemArray.create]
   sl_alloc ItemArray #2 size=48 class=4
-mm_incref __ManagedMemory_Item #1 rc=1 [ItemArray.empty]
-mm_incref ItemArray #2 rc=1 [ItemArray.empty]
-mm_transfer ItemArray #2 rc=1 [ItemArray.empty]
+mm_incref __ManagedMemory_Item #1 rc=1 [ItemArray.create]
+mm_incref ItemArray #2 rc=1 [ItemArray.create]
+mm_transfer ItemArray #2 rc=1 [ItemArray.create]
 mm_alloc Item #3 size=8 [Item.create]
   sl_alloc Item #3 size=40 class=4
 mm_incref Item #3 rc=1 [Item.create]
@@ -2345,7 +2345,7 @@ end 'Score'
 typealias ScoreArray = Array with Score
 
 function main() returns ExitCode
-	var scores = ScoreArray.empty()
+	var scores = ScoreArray.create()
 	scores.push(Score.create(pts: 10))
 	scores.push(Score.create(pts: 20))
 	scores.push(Score.create(pts: 30))
@@ -2362,13 +2362,13 @@ end 'main'
 ```stderr
 sl_init
   os_alloc size=67108864
-mm_alloc __ManagedMemory_Score #1 size=32 [ScoreArray.empty]
+mm_alloc __ManagedMemory_Score #1 size=32 [ScoreArray.create]
   sl_alloc __ManagedMemory_Score #1 size=64 class=5
-mm_alloc ScoreArray #2 size=16 [ScoreArray.empty]
+mm_alloc ScoreArray #2 size=16 [ScoreArray.create]
   sl_alloc ScoreArray #2 size=48 class=4
-mm_incref __ManagedMemory_Score #1 rc=1 [ScoreArray.empty]
-mm_incref ScoreArray #2 rc=1 [ScoreArray.empty]
-mm_transfer ScoreArray #2 rc=1 [ScoreArray.empty]
+mm_incref __ManagedMemory_Score #1 rc=1 [ScoreArray.create]
+mm_incref ScoreArray #2 rc=1 [ScoreArray.create]
+mm_transfer ScoreArray #2 rc=1 [ScoreArray.create]
 mm_alloc Score #3 size=8 [Score.create]
   sl_alloc Score #3 size=40 class=4
 mm_incref Score #3 rc=1 [Score.create]
@@ -2493,11 +2493,11 @@ typealias CellArray = Array with Cell
 typealias Grid = Array with CellArray
 
 function main() returns ExitCode
-	var grid = Grid.empty()
-	var row1 = CellArray.empty()
+	var grid = Grid.create()
+	var row1 = CellArray.create()
 	row1.push(Cell.create(val: 1))
 	row1.push(Cell.create(val: 2))
-	var row2 = CellArray.empty()
+	var row2 = CellArray.create()
 	row2.push(Cell.create(val: 3))
 	grid.push(row1)
 	grid.push(row2)
@@ -2510,20 +2510,20 @@ end 'main'
 ```stderr
 sl_init
   os_alloc size=67108864
-mm_alloc __ManagedMemory_CellArray #1 size=32 [Grid.empty]
+mm_alloc __ManagedMemory_CellArray #1 size=32 [Grid.create]
   sl_alloc __ManagedMemory_CellArray #1 size=64 class=5
-mm_alloc Grid #2 size=16 [Grid.empty]
+mm_alloc Grid #2 size=16 [Grid.create]
   sl_alloc Grid #2 size=48 class=4
-mm_incref __ManagedMemory_CellArray #1 rc=1 [Grid.empty]
-mm_incref Grid #2 rc=1 [Grid.empty]
-mm_transfer Grid #2 rc=1 [Grid.empty]
-mm_alloc __ManagedMemory_Cell #3 size=32 [CellArray.empty]
+mm_incref __ManagedMemory_CellArray #1 rc=1 [Grid.create]
+mm_incref Grid #2 rc=1 [Grid.create]
+mm_transfer Grid #2 rc=1 [Grid.create]
+mm_alloc __ManagedMemory_Cell #3 size=32 [CellArray.create]
   sl_alloc __ManagedMemory_Cell #3 size=64 class=5
-mm_alloc CellArray #4 size=16 [CellArray.empty]
+mm_alloc CellArray #4 size=16 [CellArray.create]
   sl_alloc CellArray #4 size=48 class=4
-mm_incref __ManagedMemory_Cell #3 rc=1 [CellArray.empty]
-mm_incref CellArray #4 rc=1 [CellArray.empty]
-mm_transfer CellArray #4 rc=1 [CellArray.empty]
+mm_incref __ManagedMemory_Cell #3 rc=1 [CellArray.create]
+mm_incref CellArray #4 rc=1 [CellArray.create]
+mm_transfer CellArray #4 rc=1 [CellArray.create]
 mm_alloc Cell #5 size=8 [Cell.create]
   sl_alloc Cell #5 size=40 class=4
 mm_incref Cell #5 rc=1 [Cell.create]
@@ -2537,13 +2537,13 @@ mm_alloc Cell #6 size=8 [Cell.create]
 mm_incref Cell #6 rc=1 [Cell.create]
 mm_transfer Cell #6 rc=1 [Cell.create]
 mm_incref Cell #6 rc=2 [CellArray.push]
-mm_alloc __ManagedMemory_Cell #7 size=32 [CellArray.empty]
+mm_alloc __ManagedMemory_Cell #7 size=32 [CellArray.create]
   sl_alloc __ManagedMemory_Cell #7 size=64 class=5
-mm_alloc CellArray #8 size=16 [CellArray.empty]
+mm_alloc CellArray #8 size=16 [CellArray.create]
   sl_alloc CellArray #8 size=48 class=4
-mm_incref __ManagedMemory_Cell #7 rc=1 [CellArray.empty]
-mm_incref CellArray #8 rc=1 [CellArray.empty]
-mm_transfer CellArray #8 rc=1 [CellArray.empty]
+mm_incref __ManagedMemory_Cell #7 rc=1 [CellArray.create]
+mm_incref CellArray #8 rc=1 [CellArray.create]
+mm_transfer CellArray #8 rc=1 [CellArray.create]
 mm_alloc Cell #9 size=8 [Cell.create]
   sl_alloc Cell #9 size=40 class=4
 mm_incref Cell #9 rc=1 [Cell.create]
@@ -2626,7 +2626,7 @@ type Bucket
 end 'Bucket'
 
 function fill() returns Integer
-	var b = Bucket.create(items: EntryArray.empty())
+	var b = Bucket.create(items: EntryArray.create())
 	b.items.push(Entry.create(val: 10))
 	b.items.push(Entry.create(val: 20))
 	return b.items.count()
@@ -2642,13 +2642,13 @@ end 'main'
 ```stderr
 sl_init
   os_alloc size=67108864
-mm_alloc __ManagedMemory_Entry #1 size=32 [EntryArray.empty]
+mm_alloc __ManagedMemory_Entry #1 size=32 [EntryArray.create]
   sl_alloc __ManagedMemory_Entry #1 size=64 class=5
-mm_alloc EntryArray #2 size=16 [EntryArray.empty]
+mm_alloc EntryArray #2 size=16 [EntryArray.create]
   sl_alloc EntryArray #2 size=48 class=4
-mm_incref __ManagedMemory_Entry #1 rc=1 [EntryArray.empty]
-mm_incref EntryArray #2 rc=1 [EntryArray.empty]
-mm_transfer EntryArray #2 rc=1 [EntryArray.empty]
+mm_incref __ManagedMemory_Entry #1 rc=1 [EntryArray.create]
+mm_incref EntryArray #2 rc=1 [EntryArray.create]
+mm_transfer EntryArray #2 rc=1 [EntryArray.create]
 mm_alloc Bucket #3 size=8 [Bucket.create]
   sl_alloc Bucket #3 size=40 class=4
 mm_incref EntryArray #2 rc=2 [Bucket.create]
@@ -2809,7 +2809,7 @@ List (struct owning a managed list field) must walk and decref managed list node
 typealias StringList = List with String
 
 function main() returns ExitCode
-	var list = StringList.empty()
+	var list = StringList.create()
 	list.append("hello")
 	return 0
 end 'main'
@@ -2820,13 +2820,13 @@ end 'main'
 ```stderr
 sl_init
   os_alloc size=67108864
-mm_alloc __ManagedList_String #1 size=32 [StringList.empty]
+mm_alloc __ManagedList_String #1 size=32 [StringList.create]
   sl_alloc __ManagedList_String #1 size=64 class=5
-mm_alloc StringList #2 size=16 [StringList.empty]
+mm_alloc StringList #2 size=16 [StringList.create]
   sl_alloc StringList #2 size=48 class=4
-mm_incref __ManagedList_String #1 rc=1 [StringList.empty]
-mm_incref StringList #2 rc=1 [StringList.empty]
-mm_transfer StringList #2 rc=1 [StringList.empty]
+mm_incref __ManagedList_String #1 rc=1 [StringList.create]
+mm_incref StringList #2 rc=1 [StringList.create]
+mm_transfer StringList #2 rc=1 [StringList.create]
 mm_alloc String #3 size=32 [main]
   sl_alloc String #3 size=64 class=5
 mm_alloc __ManagedMemory #4 size=32 [main]
@@ -3850,7 +3850,7 @@ end 'Item'
 
 typealias ItemArray = Array with Item
 
-var globalArr = ItemArray.empty()
+var globalArr = ItemArray.create()
 
 function pushLocal()
 	var item = Item.create(value: 123)
@@ -3882,7 +3882,7 @@ end 'Item'
 
 typealias ItemArray = Array with Item
 
-var globalArr = ItemArray.empty()
+var globalArr = ItemArray.create()
 
 function main() returns ExitCode
 	var i = 0
@@ -3931,13 +3931,13 @@ end 'Outer'
 
 function initOuter(o Outer)
 		if not o.initialized 'init'
-				o.inner = Inner.create(items: IntArray.empty(), value: 42)
+				o.inner = Inner.create(items: IntArray.create(), value: 42)
 				o.initialized = true
 		end 'init'
 end 'initOuter'
 
 function main() returns ExitCode
-		let o = Outer.create(inner: Inner.create(items: IntArray.empty(), value: 0), initialized: false)
+		let o = Outer.create(inner: Inner.create(items: IntArray.create(), value: 0), initialized: false)
 		initOuter(o)
 		o.inner.items.push(1)
 		o.inner.items.push(2)
@@ -4115,7 +4115,7 @@ end 'Dependency'
 typealias DependencyArray = Array with Dependency
 
 function main() returns ExitCode
-		var deps = DependencyArray.empty()
+		var deps = DependencyArray.create()
 		deps.push(Dependency.create(key: QueryKey.sourceFile("test.maxon")))
 		deps.push(Dependency.create(key: QueryKey.allModule))
 		deps.push(Dependency.create(key: QueryKey.sourceFile("other.maxon")))
@@ -4150,7 +4150,7 @@ end 'MyKey'
 typealias MyKeyMap = Map with (MyKey, Integer)
 
 function main() returns ExitCode
-		var m = MyKeyMap.empty()
+		var m = MyKeyMap.create()
 		m.insert(key: MyKey.create(value: 1), value: 42)
 		return m.count()
 end 'main'

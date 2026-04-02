@@ -1,3 +1,5 @@
+import * as fs from 'fs';
+import * as os from 'os';
 import * as path from 'path';
 import * as vscode from 'vscode';
 import {
@@ -10,15 +12,52 @@ import { CompilerExplorerPanel } from './compilerExplorerPanel';
 
 let client: LanguageClient;
 let context: vscode.ExtensionContext;
-let serverExecutable: string;
+let serverExecutable: string; // path to maxon-lsp (the copy we actually run)
+let sourceExecutable: string; // path to maxon (the original we watch for changes)
 let clientOptions: LanguageClientOptions;
+
+const isWindows = os.platform() === 'win32';
+const binaryName = isWindows ? 'maxon.exe' : 'maxon';
+const lspBinaryName = isWindows ? 'maxon-lsp.exe' : 'maxon-lsp';
 
 export function getClient(): LanguageClient | undefined {
 	return client;
 }
 
+function sleep(ms: number): Promise<void> {
+	return new Promise(resolve => setTimeout(resolve, ms));
+}
+
 /**
- * Restart the LSP client. Useful for testing when the client stops unexpectedly.
+ * Copy the maxon binary to a separate maxon-lsp binary so the LSP
+ * doesn't lock the main compiler executable during builds.
+ * Retries a few times since the old LSP process may not have fully exited yet.
+ */
+async function copyToLsp(maxonPath: string): Promise<string> {
+	const dir = path.dirname(maxonPath);
+	const lspPath = path.join(dir, lspBinaryName);
+	for (let attempt = 0; attempt < 5; attempt++) {
+		try {
+			fs.copyFileSync(maxonPath, lspPath);
+			if (!isWindows) {
+				fs.chmodSync(lspPath, 0o755);
+			}
+			log(`Copied ${maxonPath} -> ${lspPath}`);
+			return lspPath;
+		} catch (error) {
+			if (attempt < 4) {
+				log(`Copy attempt ${attempt + 1} failed, retrying in 500ms...`);
+				await sleep(500);
+			} else {
+				log(`Failed to copy to LSP binary after 5 attempts: ${error}`);
+			}
+		}
+	}
+	return lspPath;
+}
+
+/**
+ * Restart the LSP client. Copies the latest binary to the LSP copy first.
  */
 export async function restartClient(): Promise<void> {
 	if (!context) {
@@ -37,6 +76,9 @@ export async function restartClient(): Promise<void> {
 			log(`Error stopping client: ${error}`);
 		}
 	}
+
+	// Copy fresh binary to LSP copy
+	serverExecutable = await copyToLsp(sourceExecutable);
 
 	// Create new client
 	const serverOptions: ServerOptions = {
@@ -69,40 +111,41 @@ export async function activate(ctx: vscode.ExtensionContext) {
 	initLogger(outputChannel);
 	log('Maxon extension activating...');
 
-	// Path to the Maxon compiler with embedded LSP server
-	// Priority: workspace bin directory first, then fall back to extension-relative path
-	const fs = require('fs');
-	serverExecutable = '';
+	// Find the maxon binary — this is the source we watch for changes
+	sourceExecutable = '';
 
 	// First, try the workspace bin directory
 	if (vscode.workspace.workspaceFolders?.length) {
 		const workspaceRoot = vscode.workspace.workspaceFolders[0].uri.fsPath;
-		const workspaceBin = path.join(workspaceRoot, 'bin', 'maxon.exe');
+		const workspaceBin = path.join(workspaceRoot, 'bin', binaryName);
 		if (fs.existsSync(workspaceBin)) {
-			serverExecutable = workspaceBin;
-			log(`Using Maxon compiler from workspace: ${serverExecutable}`);
+			sourceExecutable = workspaceBin;
+			log(`Using Maxon compiler from workspace: ${sourceExecutable}`);
 		}
 	}
 
 	// Fall back to extension-relative path (development mode: ../bin relative to extension folder)
-	if (!serverExecutable) {
-		const extensionRelative = path.join(ctx.extensionPath, '..', 'bin', 'maxon.exe');
+	if (!sourceExecutable) {
+		const extensionRelative = path.join(ctx.extensionPath, '..', 'bin', binaryName);
 		if (fs.existsSync(extensionRelative)) {
-			serverExecutable = extensionRelative;
-			log(`Using Maxon compiler relative to extension: ${serverExecutable}`);
+			sourceExecutable = extensionRelative;
+			log(`Using Maxon compiler relative to extension: ${sourceExecutable}`);
 		}
 	}
 
-	if (!serverExecutable) {
-		const msg = 'Could not find maxon.exe in workspace bin/ or extension directory';
+	if (!sourceExecutable) {
+		const msg = `Could not find ${binaryName} in workspace bin/ or extension directory`;
 		log(msg);
 		vscode.window.showErrorMessage(msg);
 		return;
 	}
 
-	log(`Maxon compiler path: ${serverExecutable}`);
+	log(`Maxon compiler path: ${sourceExecutable}`);
 
-	// Server options - use the embedded LSP server via 'maxon lsp-server' command
+	// Copy maxon -> maxon-lsp so the LSP doesn't lock the main binary
+	serverExecutable = await copyToLsp(sourceExecutable);
+
+	// Server options - use the copied LSP binary
 	const serverOptions: ServerOptions = {
 		command: serverExecutable,
 		args: ['lsp-server']
@@ -216,6 +259,30 @@ export async function activate(ctx: vscode.ExtensionContext) {
 		}
 	);
 	context.subscriptions.push(generateAsmCommand);
+
+	// Watch the maxon binary for changes — when it's rebuilt, restart the LSP with the new copy
+	const serverDir = path.dirname(sourceExecutable);
+	const serverFile = path.basename(sourceExecutable);
+	const watcher = vscode.workspace.createFileSystemWatcher(
+		new vscode.RelativePattern(serverDir, serverFile)
+	);
+	let restartDebounce: ReturnType<typeof setTimeout> | undefined;
+	const autoRestart = (uri: vscode.Uri) => {
+		// Debounce: the build may produce multiple file events (rename old, copy new)
+		if (restartDebounce) clearTimeout(restartDebounce);
+		restartDebounce = setTimeout(async () => {
+			log(`${binaryName} changed (${uri.fsPath}), restarting LSP with new binary...`);
+			try {
+				await restartClient();
+				log('LSP auto-restarted after binary change');
+			} catch (error) {
+				log(`LSP auto-restart failed: ${error}`);
+			}
+		}, 1000);
+	};
+	watcher.onDidChange(autoRestart);
+	watcher.onDidCreate(autoRestart);
+	context.subscriptions.push(watcher);
 
 	// Add client to subscriptions for cleanup
 	context.subscriptions.push(client);

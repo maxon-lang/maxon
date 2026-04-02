@@ -1005,18 +1005,18 @@ end 'recordLabel'
 // Emit x86-64 machine code from a block-based MlirModule containing X64Ops.
 export function emitX86(module MlirModule, target Target, globalData GlobalDataTable) returns CodeResult
 	logInfo(LogCategory.codegen, message: () gives "Emitting block-based machine code ({targetToString(target)})")
-	var code = ByteArray.empty()
+	var code = ByteArray.create()
 	code.reserve(1024)
-	var relocations = RelocationArray.empty()
-	var callFixups = CallFixupArray.empty()
+	var relocations = RelocationArray.create()
+	var callFixups = CallFixupArray.create()
 
 	// Register panic string constants before emitting functions
 	// (globalAddr ops look up data during emission via data islands)
 	registerPanicStrings(globalData)
 
 	// Function label tables for inter-function call resolution
-	var funcLabelNames = ByteArrayArray.empty()
-	var funcLabelOffsets = CodeOffsetArray.empty()
+	var funcLabelNames = ByteArrayArray.create()
+	var funcLabelOffsets = CodeOffsetArray.create()
 
 	// Emit all functions (runtime functions like mrt_start, mrt_write_stdout, mrt_i64_to_string
 	// are now included in the module as regular functions)
@@ -1025,13 +1025,13 @@ export function emitX86(module MlirModule, target Target, globalData GlobalDataT
 		recordLabel(funcLabelNames, labelOffsets: funcLabelOffsets, name: func.name, offset: code.count())
 
 		// Block offset table for this function (indexed by BlockId)
-		var blockOffsets = CodeOffsetArray.empty()
+		var blockOffsets = CodeOffsetArray.create()
 		for _ in 0 upto func.nextBlockId 'alloc'
 			blockOffsets.push(0)
 		end 'alloc'
 
 		// Block jump fixups collected during emission, resolved per function
-		var blockFixups = BlockJumpFixupArray.empty()
+		var blockFixups = BlockJumpFixupArray.create()
 
 		// Emit all blocks in order
 		for block in func.blocks 'eachBlock'
@@ -1212,7 +1212,7 @@ function emitMemDisp(code ByteArray, regField X64Register, baseReg X64Register, 
 	let baseBits = regCode(baseReg)
 	if offset == 0 and baseBits != 5 'noDisp'
 		// mod=00, no displacement (but rbp/r13 always needs disp8)
-		let modrm = 0x00 or (regBits shl 3) or baseBits
+		let modrm = 0x00 or(regBits shl 3) or baseBits
 		code.push(modrm)
 		// RSP/R12 base needs SIB byte
 		if baseBits == 4 'needSib'
@@ -1220,14 +1220,14 @@ function emitMemDisp(code ByteArray, regField X64Register, baseReg X64Register, 
 		end 'needSib'
 	end 'noDisp' else 'hasDisp'
 		if offset >= i8.min and offset <= i8.max 'disp8'
-			let modrm = 0x40 or (regBits shl 3) or baseBits
+			let modrm = 0x40 or(regBits shl 3) or baseBits
 			code.push(modrm)
 			if baseBits == 4 'needSib'
 				code.push(0x24)
 			end 'needSib'
 			code.push(offset and 0xFF)
 		end 'disp8' else 'disp32'
-			let modrm = 0x80 or (regBits shl 3) or baseBits
+			let modrm = 0x80 or(regBits shl 3) or baseBits
 			code.push(modrm)
 			if baseBits == 4 'needSib'
 				code.push(0x24)
@@ -1269,7 +1269,7 @@ function emitLeaRipRelOp(code ByteArray, dest X64Register, rdataLabel ByteArray,
 	emitRexWPrefix(code, regField: dest, rmField: X64Register.rbp)
 	code.push(0x8D)
 	let destBits = regCode(dest)
-	let modrm2 = 0x05 or (destBits shl 3)
+	let modrm2 = 0x05 or(destBits shl 3)
 	code.push(modrm2)
 	let leaEnd = code.count() + 4
 	let leaRel = dataOffset - leaEnd
@@ -1281,7 +1281,7 @@ function emitLeaFuncAddrOp(code ByteArray, dest X64Register, callFixups CallFixu
 	emitRexWPrefix(code, regField: dest, rmField: X64Register.rbp)
 	code.push(0x8D)
 	let destBits = regCode(dest)
-	let modrm = 0x05 or (destBits shl 3)
+	let modrm = 0x05 or(destBits shl 3)
 	code.push(modrm)
 	// Add a call fixup for the function address
 	let fixupOffset = code.count()
@@ -1353,7 +1353,7 @@ function emitMovXmmRipRelOp(code ByteArray, dest X64XmmRegister, precision Float
 	code.push(0x0F)
 	code.push(0x10)
 	let destBits = dest.rawValue and 0x07
-	let modrm = 0x05 or (destBits shl 3)
+	let modrm = 0x05 or(destBits shl 3)
 	code.push(modrm)
 	writeDword(code, value: 0)
 end 'emitMovXmmRipRelOp'
@@ -1367,7 +1367,7 @@ function emitMovqXmmToGprOp(code ByteArray, dest X64Register, src X64XmmRegister
 	code.push(0x7E)
 	let srcBits = src.rawValue and 0x07
 	let destBits = regCode(dest)
-	let modrm = 0xC0 or (srcBits shl 3) or destBits
+	let modrm = 0xC0 or(srcBits shl 3) or destBits
 	code.push(modrm)
 end 'emitMovqXmmToGprOp'
 

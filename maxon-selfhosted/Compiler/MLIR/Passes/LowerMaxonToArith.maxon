@@ -69,8 +69,8 @@ function lowerMaxonOpToArith(hlOp MaxonOp, dstBlock MlirBlock)
 		intToFloat(resultId, operandId) then dstBlock.ops.push(MlirOp.arith(ArithOp.unary(ArithUnaryOp.create(ArithUnaryOpcode.siToFpF64, resultId: resultId, operandId: operandId))))
 		cmp(resultId, leftId, rightId, predicate, isFloat) then dstBlock.ops.push(MlirOp.arith(ArithOp.binary(ArithBinaryOp.create(cmpPredicateToArithOpcode(predicate, isFloat: isFloat), resultId: resultId, leftId: leftId, rightId: rightId))))
 		refEq(resultId, leftId, rightId, negate) then dstBlock.ops.push(MlirOp.arith(ArithOp.binary(ArithBinaryOp.create(refEqOpcode(negate), resultId: resultId, leftId: leftId, rightId: rightId))))
-		condBr(condId, thenTarget, elseTarget) then dstBlock.ops.push(MlirOp.cf(CfOp.condBr(condId, thenTarget, ValueIdArray.empty(), elseTarget, ValueIdArray.empty())))
-		br(target) then dstBlock.ops.push(MlirOp.cf(CfOp.br(target, ValueIdArray.empty())))
+		condBr(condId, thenTarget, elseTarget) then dstBlock.ops.push(MlirOp.cf(CfOp.condBr(condId, thenTarget, ValueIdArray.create(), elseTarget, ValueIdArray.create())))
+		br(target) then dstBlock.ops.push(MlirOp.cf(CfOp.br(target, ValueIdArray.create())))
 		call(resultId, callee, argIds) then dstBlock.ops.push(MlirOp.func(FuncOp.call(resultId, callee, argIds)))
 		ret(retValId) then dstBlock.ops.push(MlirOp.func(FuncOp.ret(retValId)))
 		// Print and panic ops are NOT lowered here — they stay as maxon ops for Phase 5
@@ -89,8 +89,8 @@ end 'lowerTerminatorToArith'
 
 function lowerMaxonTerminatorToArith(hlOp MaxonOp) returns MlirOp
 	return match hlOp 'lower'
-		condBr(condId, thenTarget, elseTarget) gives MlirOp.cf(CfOp.condBr(condId, thenTarget, ValueIdArray.empty(), elseTarget, ValueIdArray.empty()))
-		br(target) gives MlirOp.cf(CfOp.br(target, ValueIdArray.empty()))
+		condBr(condId, thenTarget, elseTarget) gives MlirOp.cf(CfOp.condBr(condId, thenTarget, ValueIdArray.create(), elseTarget, ValueIdArray.create()))
+		br(target) gives MlirOp.cf(CfOp.br(target, ValueIdArray.create()))
 		ret(retValId) gives MlirOp.func(FuncOp.ret(retValId))
 		literal to refEq gives MlirOp.maxon(hlOp)
 		call gives MlirOp.maxon(hlOp)

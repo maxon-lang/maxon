@@ -84,14 +84,14 @@ end 'skipFunction'
 // Format a lowering result: "sourceOp -> newOp1, newOp2, ..."
 // Used by conversion passes to log how each op was lowered.
 export function formatLoweringResult(sourceOp MlirOp, dstBlock MlirBlock, opsBefore Count) returns String
-	let sourceStr = opToString(sourceOp, blocks: MlirBlockArray.empty())
+	let sourceStr = opToString(sourceOp, blocks: MlirBlockArray.create())
 	let opsAfter = dstBlock.ops.count()
 	var targetStr = ""
 	for k in opsBefore upto opsAfter 'eachNew'
 		let newOp = try dstBlock.ops.get(k) otherwise 'skipOp'
 			continue
 		end 'skipOp'
-		let newOpStr = opToString(newOp, blocks: MlirBlockArray.empty())
+		let newOpStr = opToString(newOp, blocks: MlirBlockArray.create())
 		if targetStr.isEmpty() 'first'
 			targetStr = newOpStr
 		end 'first' else 'append'
@@ -104,14 +104,14 @@ end 'formatLoweringResult'
 // Format a terminator lowering result: "sourceOp -> newOp1, ..., terminator"
 // Includes both new ops added to dstBlock and the dstBlock terminator itself.
 export function formatTerminatorResult(sourceOp MlirOp, dstBlock MlirBlock, opsBefore Count) returns String
-	let sourceStr = opToString(sourceOp, blocks: MlirBlockArray.empty())
+	let sourceStr = opToString(sourceOp, blocks: MlirBlockArray.create())
 	let opsAfter = dstBlock.ops.count()
 	var targetStr = ""
 	for k in opsBefore upto opsAfter 'eachNew'
 		let newOp = try dstBlock.ops.get(k) otherwise 'skipOp'
 			continue
 		end 'skipOp'
-		let newOpStr = opToString(newOp, blocks: MlirBlockArray.empty())
+		let newOpStr = opToString(newOp, blocks: MlirBlockArray.create())
 		if targetStr.isEmpty() 'first'
 			targetStr = newOpStr
 		end 'first' else 'append'
@@ -119,7 +119,7 @@ export function formatTerminatorResult(sourceOp MlirOp, dstBlock MlirBlock, opsB
 		end 'append'
 	end 'eachNew'
 	if dstBlock.hasTerminator 'hasDstTerm'
-		let termStr = opToString(dstBlock.terminator, blocks: MlirBlockArray.empty())
+		let termStr = opToString(dstBlock.terminator, blocks: MlirBlockArray.create())
 		if targetStr.isEmpty() 'firstTerm'
 			targetStr = termStr
 		end 'firstTerm' else 'appendTerm'
@@ -139,7 +139,7 @@ export function formatTerminatorResultWithBlocks(sourceOp MlirOp, dstBlock MlirB
 		let newOp = try dstBlock.ops.get(k) otherwise 'skipTermOp'
 			continue
 		end 'skipTermOp'
-		let newOpStr = opToString(newOp, blocks: MlirBlockArray.empty())
+		let newOpStr = opToString(newOp, blocks: MlirBlockArray.create())
 		if extraOpsStr.isEmpty() 'first'
 			extraOpsStr = newOpStr
 		end 'first' else 'append'

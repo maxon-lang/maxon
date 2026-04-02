@@ -13,23 +13,28 @@ module {
   func @main() -> u32 {
   entry:
     x86.prologue stack_size=16
-    x86.movsd xmm0, [rip+__float_3.14]
-    x86.movsd xmm1, [rip+__float_2]
-    x86.movsd xmm2, xmm0
-    x86.addsd xmm2, xmm1
-    x86.cvttsd2si rax, xmm2
-    x86.xor rcx, rcx
-    x86.mov rdx, 4294967295
-    x86.cmp rax, rdx
-    x86.jg main.__range_panic_0
-    x86.cmp rax, rcx
-    x86.jl main.__range_panic_0
-    x86.jmp main.__range_ok_0
-  __range_panic_0:
-    x86.lea_symdata rax, [__panic_msg_0]
+    x86.mov rax, 4614253070214989086
+    x86.mov [rbp+-8], rax
+    x86.movsd xmm0, [rbp+-8]
+    x86.movsd xmm1, xmm0
+    x86.mov rcx, 4611686018427387904
+    x86.mov [rbp+-16], rcx
+    x86.movsd xmm2, [rbp+-16]
+    x86.addsd xmm1, xmm2
+    x86.cvttsd2si rdx, xmm1
+    x86.test rdx, rdx
+    x86.setl rbx
+    x86.mov rsi, 4294967295
+    x86.cmp rdx, rsi
+    x86.setg rdi
+    x86.or rbx, rdi
+    x86.je __range_ok_1
+  __range_panic_1:
+    x86.lea rax, [rip+__panic_msg_1]
     x86.mov rcx, rax
     x86.call mrt_panic
-  __range_ok_0:
+  __range_ok_1:
+    x86.mov rax, rdx
     x86.epilogue
     x86.ret
   }

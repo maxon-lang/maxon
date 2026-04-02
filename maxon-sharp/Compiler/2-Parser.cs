@@ -961,7 +961,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
         return false;
       return true;
     }
-    // Type.method() calls (e.g., CategoryLevelMap.empty()) are complex runtime expressions.
+    // Type.method() calls (e.g., CategoryLevelMap.create()) are complex runtime expressions.
     // Exclude enum.case references (e.g., Color.green) which are constants.
     if (_tokens[exprStart].Type == TokenType.Identifier
         && exprStart + 2 < _tokens.Count

@@ -55,7 +55,7 @@ type SlotBorrowState
 	export var borrows BorrowRecordArray
 
 	static function create() returns SlotBorrowState
-		return Self{borrows: BorrowRecordArray.empty()}
+		return Self{borrows: BorrowRecordArray.create()}
 	end 'create'
 end 'SlotBorrowState'
 
@@ -74,10 +74,10 @@ type BorrowAnalysisState
 
 	static function create() returns BorrowAnalysisState
 		return Self{
-			lifetimes: LifetimeInfoArray.empty(),
+			lifetimes: LifetimeInfoArray.create(),
 			maxValueId: 0,
 			hasAnyValue: false,
-			slotBorrows: SlotBorrowStateArray.empty(),
+			slotBorrows: SlotBorrowStateArray.create(),
 			maxSlot: 0,
 			hasAnySlot: false
 		}
@@ -339,7 +339,7 @@ function resetSlotBorrows(state BorrowAnalysisState)
 			i = i + 1
 			continue
 		end 'skip'
-		slotState.borrows = BorrowRecordArray.empty()
+		slotState.borrows = BorrowRecordArray.create()
 		i = i + 1
 	end 'clearSlots'
 end 'resetSlotBorrows'
@@ -364,7 +364,7 @@ function expireDeadBorrows(state BorrowAnalysisState, currentBlock BlockId, curr
 			continue
 		end 'skip'
 
-		var liveBorrows = BorrowRecordArray.empty()
+		var liveBorrows = BorrowRecordArray.create()
 		for borrow in slotState.borrows 'filterBorrows'
 			if isBorrowAlive(borrow, state: state, currentBlock: currentBlock, currentOpIndex: currentOpIndex) 'alive'
 				liveBorrows.push(borrow)

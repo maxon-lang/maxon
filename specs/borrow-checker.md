@@ -46,7 +46,7 @@ typealias Integer = int(i64.min to i64.max)
 typealias IntArray = Array with Integer
 
 function main() returns ExitCode
-	var arr = IntArray.empty()
+	var arr = IntArray.create()
 	arr.push(42)
 	var v = try arr.get(0) otherwise 0
 	print("{v}\n")
@@ -70,7 +70,7 @@ typealias StringArray = Array with String
 
 function main() returns ExitCode
 	var arr1 = ["hello"]
-	var arr2 = StringArray.empty()
+	var arr2 = StringArray.create()
 	var s = try arr1.get(0) otherwise ""
 	arr2.push("world")
 	print("{s}\n")

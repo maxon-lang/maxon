@@ -210,7 +210,7 @@ function emitRangeCheckOps(block MlirBlock, valueId ValueId, lower RangeBound, u
 		block.ops.push(MlirOp.arith(ArithOp.binary(ArithBinaryOp.create(ArithBinaryOpcode.orI1, resultId: outOfRangeId, leftId: cmpLowerId, rightId: cmpUpperId))))
 
 		// cond_br %outOfRange → panic, else → ok
-		block.terminator = MlirOp.cf(CfOp.condBr(outOfRangeId, panicBlockId, ValueIdArray.empty(), okBlockId, ValueIdArray.empty()))
+		block.terminator = MlirOp.cf(CfOp.condBr(outOfRangeId, panicBlockId, ValueIdArray.create(), okBlockId, ValueIdArray.create()))
 		block.hasTerminator = true
 	end 'bothChecks' else 'singleCheck'
 		if needsUpperCheck 'upperOnly'
@@ -218,14 +218,14 @@ function emitRangeCheckOps(block MlirBlock, valueId ValueId, lower RangeBound, u
 			block.ops.push(MlirOp.arith(ArithOp.const(ArithConst.create(typeInfo.constOpcode, resultId: upperLitId, value: upper))))
 			let cmpUpperId = allocValueId(nextValueIdRef)
 			block.ops.push(MlirOp.arith(ArithOp.binary(ArithBinaryOp.create(typeInfo.cmpGtOpcode, resultId: cmpUpperId, leftId: valueId, rightId: upperLitId))))
-			block.terminator = MlirOp.cf(CfOp.condBr(cmpUpperId, panicBlockId, ValueIdArray.empty(), okBlockId, ValueIdArray.empty()))
+			block.terminator = MlirOp.cf(CfOp.condBr(cmpUpperId, panicBlockId, ValueIdArray.create(), okBlockId, ValueIdArray.create()))
 			block.hasTerminator = true
 		end 'upperOnly' else 'lowerOnly'
 			let lowerLitId = allocValueId(nextValueIdRef)
 			block.ops.push(MlirOp.arith(ArithOp.const(ArithConst.create(typeInfo.constOpcode, resultId: lowerLitId, value: lower))))
 			let cmpLowerId = allocValueId(nextValueIdRef)
 			block.ops.push(MlirOp.arith(ArithOp.binary(ArithBinaryOp.create(typeInfo.cmpLtOpcode, resultId: cmpLowerId, leftId: valueId, rightId: lowerLitId))))
-			block.terminator = MlirOp.cf(CfOp.condBr(cmpLowerId, panicBlockId, ValueIdArray.empty(), okBlockId, ValueIdArray.empty()))
+			block.terminator = MlirOp.cf(CfOp.condBr(cmpLowerId, panicBlockId, ValueIdArray.create(), okBlockId, ValueIdArray.create()))
 			block.hasTerminator = true
 		end 'lowerOnly'
 	end 'singleCheck'
@@ -233,7 +233,7 @@ end 'emitRangeCheckOps'
 
 // Build a block label like "__range_panic_0".
 function buildLabel(prefix ByteArray, id ValueId) returns ByteArray
-	var label = ByteArray.empty()
+	var label = ByteArray.create()
 	label.append(prefix)
 	label.append(intToBytes(id))
 	return label
