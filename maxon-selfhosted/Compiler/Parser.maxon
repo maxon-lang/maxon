@@ -1399,7 +1399,7 @@ type Parser
 				if opToken.kind == TokenKind.bangEquals 'neq'
 					// != is !equals(): invert with bitNot
 					let notResultId = nextValueId(project)
-					emitOp(block, op: MlirOp.maxon(MaxonOp.unop(notResultId, equalsResultId, UnaryOpKind.bitNot)))
+					emitOp(block, op: MlirOp.maxon(MaxonOp.unop(notResultId, equalsResultId, UnaryOpKind.bitNot, false)))
 					leftId = notResultId
 				end 'neq' else 'eq'
 					leftId = equalsResultId
@@ -1470,21 +1470,29 @@ type Parser
 
 	// --- Unary parsing ---
 
-	// Unary: -expr | not expr | primary
+	// Unary: -primary | not primary | primary
 	function parseUnary(block MlirBlock) returns ExprResult
 		let token = peek()
 
 		if token.kind == TokenKind.minus 'isNeg'
 			expect(TokenKind.minus)
-			let operand = parseUnary(block)
+			let operand = parsePrimary(block)
+			if operand.isFloat 'floatNeg'
+				// Float negation: emit 0.0 - operand
+				let zeroId = nextValueId(project)
+				emitOp(block, op: MlirOp.maxon(MaxonOp.literal(zeroId, 0, true)))
+				let resultId = nextValueId(project)
+				emitOp(block, op: MlirOp.maxon(MaxonOp.binop(resultId, zeroId, operand.valueId, BinOpKind.sub, true)))
+				return ExprResult.createFull(resultId, isFloat: true, isRefType: false, isStringConst: false, stringConstValue: "")
+			end 'floatNeg'
 			let resultId = nextValueId(project)
-			emitOp(block, op: MlirOp.maxon(MaxonOp.unop(resultId, operand.valueId, UnaryOpKind.neg)))
-			return ExprResult.createFull(resultId, isFloat: operand.isFloat, isRefType: false, isStringConst: false, stringConstValue: "")
+			emitOp(block, op: MlirOp.maxon(MaxonOp.unop(resultId, operand.valueId, UnaryOpKind.neg, false)))
+			return ExprResult.createFull(resultId, isFloat: false, isRefType: false, isStringConst: false, stringConstValue: "")
 		end 'isNeg' else if token.kind == TokenKind.not 'isNot'
 			expect(TokenKind.not)
-			let operand = parseUnary(block)
+			let operand = parsePrimary(block)
 			let resultId = nextValueId(project)
-			emitOp(block, op: MlirOp.maxon(MaxonOp.unop(resultId, operand.valueId, UnaryOpKind.bitNot)))
+			emitOp(block, op: MlirOp.maxon(MaxonOp.unop(resultId, operand.valueId, UnaryOpKind.bitNot, false)))
 			return ExprResult.createFull(resultId, isFloat: false, isRefType: false, isStringConst: false, stringConstValue: "")
 		end 'isNot'
 
@@ -1612,7 +1620,10 @@ type Parser
 
 	function raiseUnexpectedToken(token Token) returns ExprResult
 		reportCompileError(project, code: ErrorCode.parserExpectedExpression, message: "Expected expression but got '{tokenValueToString(token.value)}'", line: token.line, column: token.column, filePath: filePath)
-		advance()
+		// Skip to end of line to prevent cascading errors
+		while not at(TokenKind.newline) and not at(TokenKind.eof) 'skip'
+			advance()
+		end 'skip'
 		return ExprResult.create(0)
 	end 'raiseUnexpectedToken'
 

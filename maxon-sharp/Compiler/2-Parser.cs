@@ -10429,6 +10429,9 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
 
     if (Check(TokenType.Minus)) {
       Advance(); // consume '-'
+      if (Check(TokenType.Minus) || Check(TokenType.Not))
+        throw new CompileError(ErrorCode.ParserExpectedExpression,
+          $"Expected expression but got '{Current().Value}'", Current().Line, Current().Column);
       if (Check(TokenType.IntegerLiteral))
         return EmitConstantLiteral(-ParseIntegerLiteral(Advance()));
       if (Check(TokenType.FloatLiteral))
@@ -10551,6 +10554,9 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
 
     if (Check(TokenType.Not)) {
       var token = Advance(); // consume 'not'
+      if (Check(TokenType.Minus) || Check(TokenType.Not))
+        throw new CompileError(ErrorCode.ParserExpectedExpression,
+          $"Expected expression but got '{Current().Value}'", Current().Line, Current().Column);
       var inner = ParsePrimary();
       var innerVal = ResolveExprValue(inner);
       var kind = DetermineValueKind(innerVal);

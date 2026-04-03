@@ -2219,6 +2219,13 @@ Shift operators work on integers only.
 | `-` | Negation | `-x` |
 | `not` | Logical NOT / Bitwise NOT | `not condition` / `not mask` |
 
+Unary operators cannot be chained. Use parentheses for nested unary operations:
+```maxon
+var y = -(-x)      // OK: parenthesized
+var z = -(x + 1)   // OK: subexpression
+// var w = --x      // Error: consecutive unary operators
+```
+
 ### Parentheses
 Override precedence:
 ```maxon

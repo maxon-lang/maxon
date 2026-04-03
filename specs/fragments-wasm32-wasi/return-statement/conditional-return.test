@@ -12,15 +12,16 @@ ExitCode: 1
 module {
   func @main() -> u8 {
   entry:
-    x64.mov rax, 5
-    x64.cmp rax, 3
-    x64.jle check_1.after
+    %0 = mir.mov_imm 5 : i64
+    %2 = mir.mov_imm 3 : i64
+    %3 = mir.cmp gt, %0, %2
+    mir.cond_br %3 [then: check_1(), else: check_1.after()]
   check_1:
-    x64.mov rax, 1
-    x64.ret
+    %4 = mir.mov_imm 1 : i64
+    mir.ret %4
   check_1.after:
-    x64.xor rax, rax
-    x64.ret
+    %5 = mir.mov_imm 0 : i64
+    mir.ret %5
   }
 }
 ---

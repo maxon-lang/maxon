@@ -1,0 +1,26 @@
+// Test: unary-negate-literal
+function main() returns ExitCode
+	var x = -5
+	return 47 + x
+end 'main'
+---
+ExitCode: 42
+---
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 5 : i64
+    %1 = mir.neg.i64 %0
+    %2 = mir.mov_imm 47 : i64
+    %4 = mir.add.i64 %2, %1
+    %5 = mir.mov_imm 125 : i64
+    %6 = mir.cmp ugt, %4, %5
+    mir.cond_br %6 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %7 = mir.global_addr @__panic_msg_0
+    %8 = mir.call @mrt_panic(%7)
+  __range_ok_0:
+    mir.ret %4
+  }
+}
+---

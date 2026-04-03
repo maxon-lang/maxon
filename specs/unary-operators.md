@@ -73,6 +73,6 @@ function main() returns ExitCode
 	return y
 end 'main'
 ```
-```exitcode
-10
+```maxoncstderr
+error E2004: specs/fragments/unary-operators/double-negation.test:4:12: Expected expression but got '-'
 ```

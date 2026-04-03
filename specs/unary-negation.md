@@ -60,8 +60,8 @@ function main() returns ExitCode
 	return y
 end 'main'
 ```
-```exitcode
-42
+```maxoncstderr
+error E2004: specs/fragments/unary-negation/unary-double-negate.test:4:11: Expected expression but got '-'
 ```
 
 <!-- test: unary-negate-expression -->
@@ -97,6 +97,6 @@ function main() returns ExitCode
 	return trunc(g)
 end 'main'
 ```
-```exitcode
-42
+```maxoncstderr
+error E2004: specs/fragments/unary-negation/unary-double-negate-float.test:4:11: Expected expression but got '-'
 ```

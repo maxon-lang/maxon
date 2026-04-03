@@ -1,0 +1,29 @@
+// Test: unary-negate-float
+function main() returns ExitCode
+	var f = 3.5
+	var g = -f
+	return trunc(g + 45.5)
+end 'main'
+---
+ExitCode: 42
+---
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 4615063718147915776 : f64
+    %2 = mir.mov_imm 0 : f64
+    %3 = mir.sub.f64 %2, %0
+    %5 = mir.mov_imm 4631600373029666816 : f64
+    %6 = mir.add.f64 %3, %5
+    %7 = mir.fptosi.i64 %6
+    %8 = mir.mov_imm 125 : i64
+    %9 = mir.cmp ugt, %7, %8
+    mir.cond_br %9 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %10 = mir.global_addr @__panic_msg_0
+    %11 = mir.call @mrt_panic(%10)
+  __range_ok_0:
+    mir.ret %7
+  }
+}
+---
