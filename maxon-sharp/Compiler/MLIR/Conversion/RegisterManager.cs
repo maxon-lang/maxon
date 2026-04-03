@@ -61,6 +61,9 @@ public class RegisterManager : RegisterManagerBase<X86Register, X86XmmRegister, 
   protected override void EmitImmediateToRegister(X86Register gpr, long immediate, MlirBlock<X86Op> block) {
     if (immediate == 0) {
       block.AddOp(new X86XorRegRegOp(gpr, gpr));
+    } else if (immediate > int.MaxValue && immediate <= uint.MaxValue) {
+      // 5-byte mov r32 vs 10-byte mov r64 — 32-bit write zero-extends to 64 bits
+      block.AddOp(new X86MovRegImmOp(To32Bit(gpr), immediate));
     } else {
       block.AddOp(new X86MovRegImmOp(gpr, immediate));
     }

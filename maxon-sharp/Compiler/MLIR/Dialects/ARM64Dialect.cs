@@ -74,6 +74,17 @@ public class ARM64MovRegImmOp(ARM64Register dest, long immediate) : ARM64Op {
   public override string Mnemonic => $"arm64.mov {Dest.ToString().ToLower()}, #{Immediate}";
 }
 
+public class ARM64MovRegImm32Op(ARM64Register dest, long immediate) : ARM64Op {
+  public ARM64Register Dest { get; } = dest;
+  public long Immediate { get; } = immediate;
+  private static string WReg(ARM64Register r) => r switch {
+    >= ARM64Register.X0 and <= ARM64Register.X28 => $"w{r - ARM64Register.X0}",
+    ARM64Register.X29 => "w29", ARM64Register.X30 => "w30",
+    _ => r.ToString().ToLower()
+  };
+  public override string Mnemonic => $"arm64.mov {WReg(Dest)}, #{Immediate}";
+}
+
 // --- Stack load/store (frame-relative) ---
 
 // STR Xt, [X29, #offset] — store 64-bit register to stack

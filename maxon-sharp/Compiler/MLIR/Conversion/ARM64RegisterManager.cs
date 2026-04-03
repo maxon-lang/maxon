@@ -67,7 +67,12 @@ public class ARM64RegisterManager : RegisterManagerBase<ARM64Register, ARM64Floa
   }
 
   protected override void EmitImmediateToRegister(ARM64Register reg, long immediate, MlirBlock<ARM64Op> block) {
-    block.AddOp(new ARM64MovRegImmOp(reg, immediate));
+    if (immediate > int.MaxValue && immediate <= uint.MaxValue) {
+      // 32-bit Wd encoding can use MOVN to save instructions vs 64-bit MOVZ+MOVK
+      block.AddOp(new ARM64MovRegImm32Op(reg, immediate));
+    } else {
+      block.AddOp(new ARM64MovRegImmOp(reg, immediate));
+    }
   }
 
   protected override void EmitMovGpr(ARM64Register dest, ARM64Register src, MlirBlock<ARM64Op> block) {

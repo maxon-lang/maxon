@@ -477,7 +477,7 @@ module {
   otherwise_default_continue_4:
     x64.mov rax, [rbp-32]
     x64.xor rcx, rcx
-    x64.mov rdx, 4294967295
+    x64.mov edx, 4294967295
     x64.cmp rax, rdx
     x64.jg main.__range_panic_5
     x64.cmp rax, rcx
@@ -1109,7 +1109,7 @@ module {
     x64.mov rcx, 3
     x64.add rax, rcx
     x64.xor rdx, rdx
-    x64.mov rbx, 4294967295
+    x64.mov ebx, 4294967295
     x64.cmp rax, rbx
     x64.jg main.__range_panic_0
     x64.cmp rax, rdx
@@ -1271,7 +1271,7 @@ module {
     x64.cqo
     x64.idiv rcx
     x64.xor rdx, rdx
-    x64.mov rbx, 4294967295
+    x64.mov ebx, 4294967295
     x64.cmp rax, rbx
     x64.jg main.__range_panic_0
     x64.cmp rax, rdx
@@ -1741,7 +1741,7 @@ module {
     x64.cqo
     x64.idiv rcx
     x64.xor rax, rax
-    x64.mov rcx, 4294967295
+    x64.mov ecx, 4294967295
     x64.cmp rdx, rcx
     x64.jg main.__range_panic_0
     x64.cmp rdx, rax
@@ -1903,7 +1903,7 @@ module {
     x64.cqo
     x64.idiv rcx
     x64.xor rdx, rdx
-    x64.mov rbx, 4294967295
+    x64.mov ebx, 4294967295
     x64.cmp rax, rbx
     x64.jg main.__range_panic_0
     x64.cmp rax, rdx
@@ -2240,7 +2240,7 @@ module {
     x64.addsd xmm2, xmm1
     x64.cvttsd2si rax, xmm2
     x64.xor rcx, rcx
-    x64.mov rdx, 4294967295
+    x64.mov edx, 4294967295
     x64.cmp rax, rdx
     x64.jg main.__range_panic_0
     x64.cmp rax, rcx
@@ -2523,7 +2523,7 @@ module {
     x64.movsd xmm0, [rip+__float_42.9]
     x64.cvttsd2si rax, xmm0
     x64.xor rcx, rcx
-    x64.mov rdx, 4294967295
+    x64.mov edx, 4294967295
     x64.cmp rax, rdx
     x64.jg main.__range_panic_0
     x64.cmp rax, rcx

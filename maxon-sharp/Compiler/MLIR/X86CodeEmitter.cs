@@ -1105,6 +1105,12 @@ public partial class X86CodeEmitter() {
         EmitByte(0xC7);
         EmitByte((byte)(0xC0 | RegCode(dest)));
         EmitDword((int)immediate);
+      } else if (immediate > int.MaxValue && immediate <= uint.MaxValue) {
+        // MOV r32, imm32: zero-extends to r64, shorter than mov r64, imm64.
+        // Handles extended registers (R8-R15) that lack 32-bit enum names.
+        Rex.NoW().Rm(dest).EmitIf(this);
+        EmitByte((byte)(0xB8 + RegCode(dest)));
+        EmitDword((int)immediate);
       } else {
         // MOV r64, imm64: REX.W + B8+rd io
         Rex.W().Rm(dest).Emit(this);

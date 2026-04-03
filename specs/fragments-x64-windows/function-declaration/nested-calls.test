@@ -17,55 +17,38 @@ end 'main'
 ExitCode: 12
 ---
 module {
-  func @nested-calls.double(ptr: i64) -> i64 {
+  func @function-declaration.double(x: i64) -> i64 {
   entry:
-    x64.prologue stack_size=16
     x64.mov rax, 2
     x64.imul rcx, rax
-    x64.mov rax, -9223372036854775807
-    x64.cmp rcx, rax
-    x64.jge __range_ok_0
-  __range_panic_0:
-    x64.lea rax, [rip+__panic_msg_0]
-    x64.mov rcx, rax
-    x64.call mrt_panic
-  __range_ok_0:
     x64.mov rax, rcx
-    x64.epilogue
     x64.ret
   }
-  func @nested-calls.quadruple(ptr: i64) -> i64 {
+  func @function-declaration.quadruple(x: i64) -> i64 {
   entry:
     x64.prologue stack_size=16
-    x64.mov [rbp+-8], rcx
-    x64.call nested-calls.double
+    x64.call function-declaration.double
     x64.mov rcx, rax
-    x64.mov [rbp+-16], rcx
-    x64.call nested-calls.double
-    x64.mov rcx, -9223372036854775807
-    x64.cmp rax, rcx
-    x64.jge __range_ok_1
-  __range_panic_1:
-    x64.lea rax, [rip+__panic_msg_1]
-    x64.mov rcx, rax
-    x64.call mrt_panic
-  __range_ok_1:
     x64.epilogue
-    x64.ret
+    x64.jmp function-declaration.double
   }
   func @main() -> u32 {
   entry:
     x64.prologue stack_size=16
     x64.mov rcx, 3
-    x64.call nested-calls.quadruple
-    x64.mov rcx, 4294967295
+    x64.call function-declaration.quadruple
+    x64.xor rcx, rcx
+    x64.mov edx, 4294967295
+    x64.cmp rax, rdx
+    x64.jg main.__range_panic_0
     x64.cmp rax, rcx
-    x64.jbe __range_ok_2
-  __range_panic_2:
-    x64.lea rax, [rip+__panic_msg_2]
+    x64.jl main.__range_panic_0
+    x64.jmp main.__range_ok_0
+  __range_panic_0:
+    x64.lea_symdata rax, [__panic_msg_0]
     x64.mov rcx, rax
     x64.call mrt_panic
-  __range_ok_2:
+  __range_ok_0:
     x64.epilogue
     x64.ret
   }

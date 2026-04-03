@@ -97,6 +97,26 @@ export function x64VRegToString(vreg X64VReg) returns String
 	end 'fmt'
 end 'x64VRegToString'
 
+export function x64VRegToString32(vreg X64VReg) returns String
+	return match vreg 'fmt'
+		physical(reg) gives match reg 'r32'
+			rax gives "eax"
+			rcx gives "ecx"
+			rdx gives "edx"
+			rbx gives "ebx"
+			rsp gives "esp"
+			rbp gives "ebp"
+			rsi gives "esi"
+			rdi gives "edi"
+			r8 gives "r8d"
+			r9 gives "r9d"
+			r10 gives "r10d"
+			r11 gives "r11d"
+		end 'r32'
+		virtual(id) gives "v{id}"
+	end 'fmt'
+end 'x64VRegToString32'
+
 export function x64FpVRegToString(vreg X64FpVReg) returns String
 	return match vreg 'fmt'
 		physical(reg) gives reg.name
@@ -128,6 +148,7 @@ export enum X64Op
 	ret = X64OpMeta{latency: 1, isMemory: false, isStore: false, isCall: false, setsFlags: false}
 	// Simple ALU ops
 	movRegImm(dest X64VReg, value MachineWord) = X64OpMeta{latency: 1, isMemory: false, isStore: false, isCall: false, setsFlags: false}
+	movRegImm32(dest X64VReg, value MachineWord) = X64OpMeta{latency: 1, isMemory: false, isStore: false, isCall: false, setsFlags: false}
 	movSlot(slotIndex VarSlot, srcReg X64VReg) = X64OpMeta{latency: 3, isMemory: true, isStore: true, isCall: false, setsFlags: false}
 	loadSlot(destReg X64VReg, slotIndex VarSlot) = X64OpMeta{latency: 4, isMemory: true, isStore: false, isCall: false, setsFlags: false}
 	addRegReg(destReg X64VReg, srcReg X64VReg) = X64OpMeta{latency: 1, isMemory: false, isStore: false, isCall: false, setsFlags: true}
@@ -271,6 +292,7 @@ export function x64OpToString(op X64Op, blocks MlirBlockArray) returns String
 		epilogue gives "x64.epilogue"
 		ret gives "x64.ret"
 		movRegImm(dest, value) gives "x64.mov {x64VRegToString(dest)}, {value}"
+		movRegImm32(dest, value) gives "x64.mov {x64VRegToString32(dest)}, {value}"
 		movSlot(slotIndex, srcReg) gives "x64.mov [rbp-{slotOffset(slotIndex)}], {x64VRegToString(srcReg)}"
 		loadSlot(destReg, slotIndex) gives "x64.mov {x64VRegToString(destReg)}, [rbp-{slotOffset(slotIndex)}]"
 		addRegReg(destReg, srcReg) gives "x64.add {x64VRegToString(destReg)}, {x64VRegToString(srcReg)}"

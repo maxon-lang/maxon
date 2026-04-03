@@ -164,7 +164,7 @@ module {
     x64.mov rdx, 4
     x64.call advent.add
     x64.xor rcx, rcx
-    x64.mov rdx, 4294967295
+    x64.mov edx, 4294967295
     x64.cmp rax, rdx
     x64.jg main.__range_panic_0
     x64.cmp rax, rcx
@@ -694,7 +694,7 @@ module {
     x64.mov rcx, 3
     x64.call advent.multiply
     x64.xor rcx, rcx
-    x64.mov rdx, 4294967295
+    x64.mov edx, 4294967295
     x64.cmp rax, rdx
     x64.jg main.__range_panic_9
     x64.cmp rax, rcx
@@ -1777,7 +1777,7 @@ module {
     x64.mov rcx, 3
     x64.call advent.multiply
     x64.xor rcx, rcx
-    x64.mov rdx, 4294967295
+    x64.mov edx, 4294967295
     x64.cmp rax, rdx
     x64.jg main.__range_panic_9
     x64.cmp rax, rcx

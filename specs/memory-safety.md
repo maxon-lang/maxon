@@ -582,7 +582,7 @@ module {
   block_0.merge:
     x64.mov rax, [rbp-8]
     x64.xor rcx, rcx
-    x64.mov rdx, 4294967295
+    x64.mov edx, 4294967295
     x64.cmp rax, rdx
     x64.jg main.__range_panic_1
     x64.cmp rax, rcx
@@ -1080,7 +1080,7 @@ module {
     x64.mov rdx, [rbp-48]
     x64.mov rbx, [rdx+0]
     x64.xor rsi, rsi
-    x64.mov rdi, 4294967295
+    x64.mov edi, 4294967295
     x64.cmp rbx, rdi
     x64.jg main.__range_panic_4
     x64.cmp rbx, rsi
@@ -1862,7 +1862,7 @@ module {
   loop_0.exit:
     x64.mov rax, [rbp-8]
     x64.xor rcx, rcx
-    x64.mov rdx, 4294967295
+    x64.mov edx, 4294967295
     x64.cmp rax, rdx
     x64.jg main.__range_panic_2
     x64.cmp rax, rcx
@@ -2246,7 +2246,7 @@ module {
     x64.mov rcx, 5
     x64.call memory-safety.compute
     x64.xor rcx, rcx
-    x64.mov rdx, 4294967295
+    x64.mov edx, 4294967295
     x64.cmp rax, rdx
     x64.jg main.__range_panic_0
     x64.cmp rax, rcx

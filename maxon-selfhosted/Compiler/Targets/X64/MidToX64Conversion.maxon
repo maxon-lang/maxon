@@ -456,7 +456,10 @@ end 'lowerMirOp'
 function lowerMovImm(resultId ValueId, value ParsedInt, isFloat bool, dstBlock MlirBlock, globalData GlobalDataTable)
 	if isFloat 'floatImm'
 		lowerFloatConst(resultId, rawBits: value, dstBlock: dstBlock, globalData: globalData)
-	end 'floatImm' else 'intImm'
+	end 'floatImm' else if value > i32.max and value <= u32.max 'u32Imm'
+		// 5-byte mov r32 vs 10-byte mov r64 — 32-bit write zero-extends to 64 bits
+		dstBlock.ops.push(MlirOp.x64(X64Op.movRegImm32(X64VReg.virtual(resultId), value)))
+	end 'u32Imm' else 'intImm'
 		dstBlock.ops.push(MlirOp.x64(X64Op.movRegImm(X64VReg.virtual(resultId), value)))
 	end 'intImm'
 end 'lowerMovImm'

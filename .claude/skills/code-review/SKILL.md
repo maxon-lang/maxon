@@ -10,6 +10,8 @@ are outside the current changes fix them as well. The goal is to ensure that the
 
 0. Run the `maxon-coder` skill to load Maxon syntax rules for reviewing Maxon code.
 1. Review all code changes:
+    - Any changes to target specific code (e.g., x64) should be have an equivilant change in all
+      target specific code (e.g., arm64) if applicable.
     - Eliminate duplicated code — refactor shared logic into helper methods.
     - Ensure no `switch` or `match` statements use `default` cases — all cases must be handled explicitly.
     - Ensure no `else` clauses silently catch unhandled conditions — throw errors for unexpected inputs.

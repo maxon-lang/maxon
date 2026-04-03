@@ -33,7 +33,9 @@ export function rmEmitMovImmX64(dstBlock MlirBlock, regOrdinal RegOrdinal, value
 	let reg = ordinalToX64(regOrdinal)
 	if value == 0 'useXor'
 		dstBlock.ops.push(MlirOp.x64(X64Op.xorRegRegSelf(physReg(reg))))
-	end 'useXor' else 'useMov'
+	end 'useXor' else if value > i32.max and value <= u32.max 'useU32'
+		dstBlock.ops.push(MlirOp.x64(X64Op.movRegImm32(physReg(reg), value)))
+	end 'useU32' else 'useMov'
 		dstBlock.ops.push(MlirOp.x64(X64Op.movRegImm(physReg(reg), value)))
 	end 'useMov'
 end 'rmEmitMovImmX64'
@@ -172,10 +174,9 @@ end 'isVirtualFpReg'
 // Check whether a single X64Op contains any virtual registers.
 export function x64OpHasVirtualRegs(op X64Op) returns bool
 	return match op 'check'
-		prologue gives false
-		epilogue gives false
-		ret gives false
+		prologue to ret gives false
 		movRegImm(dest, _) gives isVirtualGpr(dest)
+		movRegImm32(dest, _) gives isVirtualGpr(dest)
 		movSlot(_, srcReg) gives isVirtualGpr(srcReg)
 		loadSlot(destReg, _) gives isVirtualGpr(destReg)
 		addRegReg(destReg, srcReg) gives isVirtualGpr(destReg) or isVirtualGpr(srcReg)
@@ -183,8 +184,7 @@ export function x64OpHasVirtualRegs(op X64Op) returns bool
 		addRegImm(destReg, _) gives isVirtualGpr(destReg)
 		subRegImm(destReg, _) gives isVirtualGpr(destReg)
 		imulRegReg(destReg, srcReg) gives isVirtualGpr(destReg) or isVirtualGpr(srcReg)
-		idivRcx gives false
-		iremRcx gives false
+		idivRcx to iremRcx gives false
 		negReg(reg) gives isVirtualGpr(reg)
 		bitNotReg(reg) gives isVirtualGpr(reg)
 		andRegReg(destReg, srcReg) gives isVirtualGpr(destReg) or isVirtualGpr(srcReg)
@@ -192,28 +192,10 @@ export function x64OpHasVirtualRegs(op X64Op) returns bool
 		xorRegReg(destReg, srcReg) gives isVirtualGpr(destReg) or isVirtualGpr(srcReg)
 		shlRegCl(reg) gives isVirtualGpr(reg)
 		sarRegCl(reg) gives isVirtualGpr(reg)
-		cmpRaxRcx gives false
-		testRaxRax gives false
-		condJump gives false
-		jmp gives false
-		movF64Slot gives false
-		loadF64Slot gives false
-		movF64Rdata gives false
-		ucomisd gives false
-		printLiteral gives false
-		printInt gives false
-		subRspImm gives false
-		addRspImm gives false
+		cmpRaxRcx to addRspImm gives false
 		movRspOffsetReg(_, srcReg) gives isVirtualGpr(srcReg)
 		loadRegRbpOffset(destReg, _) gives isVirtualGpr(destReg)
-		callDirect gives false
-		syscall gives false
-		iatCall gives false
-		globalAddr gives false
-		stackAddrOp gives false
-		storeByteOp gives false
-		loadByteOp gives false
-		memcpyOp gives false
+		callDirect to memcpyOp gives false
 		movRegReg(destReg, srcReg) gives isVirtualGpr(destReg) or isVirtualGpr(srcReg)
 		cmpRegReg(lhsReg, rhsReg) gives isVirtualGpr(lhsReg) or isVirtualGpr(rhsReg)
 		cmpRegImm(lhsReg, _) gives isVirtualGpr(lhsReg)
@@ -259,8 +241,7 @@ export function x64OpHasVirtualRegs(op X64Op) returns bool
 		movsxd(dest, src) gives isVirtualGpr(dest) or isVirtualGpr(src)
 		movzx32(dest, src) gives isVirtualGpr(dest) or isVirtualGpr(src)
 		nullSafeLoad(dest, baseReg, _) gives isVirtualGpr(dest) or isVirtualGpr(baseReg)
-		repMovsb gives false
-		repStosq gives false
+		repMovsb to repStosq gives false
 	end 'check'
 end 'x64OpHasVirtualRegs'
 
@@ -288,7 +269,7 @@ end 'x64FpVRegId'
 export function countX64OpReads(counts RegIntArray, x64Op X64Op)
 	match x64Op 'scan'
 		prologue to ret then break 'scan'
-		movRegImm then break 'scan'
+		movRegImm to movRegImm32 then break 'scan'
 		movSlot(_, srcReg) then incUse(counts, id: x64VRegId(srcReg))
 		loadSlot then break 'scan'
 		addRegReg(destReg, srcReg) then countX64TwoReads(counts, reg1: destReg, reg2: srcReg)
@@ -304,16 +285,10 @@ export function countX64OpReads(counts RegIntArray, x64Op X64Op)
 		xorRegReg(destReg, srcReg) then countX64TwoReads(counts, reg1: destReg, reg2: srcReg)
 		shlRegCl(reg) then incUse(counts, id: x64VRegId(reg))
 		sarRegCl(reg) then incUse(counts, id: x64VRegId(reg))
-		cmpRaxRcx to testRaxRax then break 'scan'
-		condJump to jmp then break 'scan'
-		movF64Slot to ucomisd then break 'scan'
-		printLiteral to printInt then break 'scan'
-		subRspImm to addRspImm then break 'scan'
+		cmpRaxRcx to addRspImm then break 'scan'
 		movRspOffsetReg(_, srcReg) then incUse(counts, id: x64VRegId(srcReg))
 		loadRegRbpOffset then break 'scan'
-		callDirect then break 'scan'
-		syscall to loadByteOp then break 'scan'
-		memcpyOp then break 'scan'
+		callDirect to memcpyOp then break 'scan'
 		movRegReg(_, srcReg) then incUse(counts, id: x64VRegId(srcReg))
 		cmpRegReg(lhsReg, rhsReg) then countX64TwoReads(counts, reg1: lhsReg, reg2: rhsReg)
 		cmpRegImm(lhsReg, _) then incUse(counts, id: x64VRegId(lhsReg))
@@ -321,14 +296,12 @@ export function countX64OpReads(counts RegIntArray, x64Op X64Op)
 		cqo then break 'scan'
 		idivReg(divisorReg) then incUse(counts, id: x64VRegId(divisorReg))
 		spillToStack(_, srcReg) then incUse(counts, id: x64VRegId(srcReg))
-		reloadFromStack then break 'scan'
-		xorRegRegSelf then break 'scan'
+		reloadFromStack to xorRegRegSelf then break 'scan'
 		callIndirect(reg) then incUse(counts, id: x64VRegId(reg))
 		xchgRegReg(reg1, reg2) then countX64TwoReads(counts, reg1: reg1, reg2: reg2)
 		movXmmXmm(_, src, _) then incUse(counts, id: x64FpVRegId(src))
 		spillXmmToStack(_, src, _) then incUse(counts, id: x64FpVRegId(src))
-		reloadXmmFromStack then break 'scan'
-		movXmmRipRel then break 'scan'
+		reloadXmmFromStack to movXmmRipRel then break 'scan'
 		addXmm(dest, src, _) then countX64FpTwoReads(counts, fp1: dest, fp2: src)
 		subXmm(dest, src, _) then countX64FpTwoReads(counts, fp1: dest, fp2: src)
 		mulXmm(dest, src, _) then countX64FpTwoReads(counts, fp1: dest, fp2: src)
@@ -351,10 +324,7 @@ export function countX64OpReads(counts RegIntArray, x64Op X64Op)
 		globalStore(_, src, _) then incUse(counts, id: x64VRegId(src))
 		globalLoadXmm then break 'scan'
 		globalStoreXmm(_, src, _) then incUse(counts, id: x64FpVRegId(src))
-		leaFromStack then break 'scan'
-		leaRipRelative then break 'scan'
-		leaFuncAddr then break 'scan'
-		setcc then break 'scan'
+		leaFromStack to setcc then break 'scan'
 		cmov(_, src, _) then incUse(counts, id: x64VRegId(src))
 		movsxd(_, src) then incUse(counts, id: x64VRegId(src))
 		movzx32(_, src) then incUse(counts, id: x64VRegId(src))
@@ -1292,6 +1262,7 @@ export function allocX64Op(state RegState, x64Op X64Op, dstBlock MlirBlock)
 	match x64Op 'dispatch'
 		prologue to ret then dstBlock.ops.push(MlirOp.x64(x64Op))
 		movRegImm(dest, value) then ax64MovRegImm(state, dest: dest, value: value, dstBlock: dstBlock)
+		movRegImm32(dest, value) then ax64MovRegImm(state, dest: dest, value: value, dstBlock: dstBlock)
 		movSlot(slotIndex, srcReg) then ax64MovSlot(state, slotIndex: slotIndex, srcReg: srcReg, dstBlock: dstBlock)
 		loadSlot(destReg, slotIndex) then ax64LoadSlot(state, destReg: destReg, slotIndex: slotIndex, dstBlock: dstBlock)
 		addRegReg(destReg, srcReg) then ax64TwoAddr(state, destReg: destReg, srcReg: srcReg, dstBlock: dstBlock, op: TwoAddrOp.add)

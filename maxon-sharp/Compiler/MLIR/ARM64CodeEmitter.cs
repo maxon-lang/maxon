@@ -206,6 +206,9 @@ public partial class ARM64CodeEmitter() {
       case ARM64MovRegImmOp mov:
         EmitMovRegImm(mov.Dest, mov.Immediate);
         break;
+      case ARM64MovRegImm32Op mov:
+        EmitMovRegImm32(mov.Dest, mov.Immediate);
+        break;
       case ARM64StoreToStackOp store:
         EmitStoreToStack(store.Displacement, store.Src, store.SizeInBytes);
         break;
@@ -618,6 +621,47 @@ case ARM64MemcpyOp:
         EmitWord(0xD2800000 | (3u << 21) | (hw3 << 5) | Reg(dest));
       } else {
         EmitWord(0xF2E00000 | (hw3 << 5) | Reg(dest)); // MOVK Xd, #hw3, LSL#48
+      }
+    }
+  }
+
+  // 32-bit immediate move: uses Wd encoding (sf=0), zero-extends to Xd.
+  // Saves instructions for values like 0xFFFFFFFF that need MOVZ+MOVK in 64-bit form.
+  private void EmitMovRegImm32(ARM64Register dest, long value) {
+    var u32val = (uint)(ulong)value;
+
+    // 32-bit MOVZ Wd: single 16-bit halfword at shift 0 or 1
+    for (int shift = 0; shift < 2; shift++) {
+      var shifted = u32val >> (shift * 16);
+      if (shifted <= 0xFFFF && (shifted << (shift * 16)) == u32val) {
+        EmitWord(0x52800000 | ((uint)shift << 21) | ((uint)(shifted & 0xFFFF) << 5) | Reg(dest));
+        return;
+      }
+    }
+
+    // 32-bit MOVN Wd: inverted 16-bit halfword
+    var notU32 = ~u32val;
+    for (int shift = 0; shift < 2; shift++) {
+      var shifted = notU32 >> (shift * 16);
+      if (shifted <= 0xFFFF && (shifted << (shift * 16)) == notU32) {
+        EmitWord(0x12800000 | ((uint)shift << 21) | ((uint)(shifted & 0xFFFF) << 5) | Reg(dest));
+        return;
+      }
+    }
+
+    // General case: MOVZ Wd + MOVK Wd
+    var hw0 = (uint)(u32val & 0xFFFF);
+    var hw1 = (uint)((u32val >> 16) & 0xFFFF);
+    bool first = true;
+    if (hw0 != 0 || hw1 == 0) {
+      EmitWord(0x52800000 | (hw0 << 5) | Reg(dest)); // MOVZ Wd, #hw0
+      first = false;
+    }
+    if (hw1 != 0) {
+      if (first) {
+        EmitWord(0x52800000 | (1u << 21) | (hw1 << 5) | Reg(dest)); // MOVZ Wd, #hw1, LSL#16
+      } else {
+        EmitWord(0x72A00000 | (hw1 << 5) | Reg(dest)); // MOVK Wd, #hw1, LSL#16
       }
     }
   }

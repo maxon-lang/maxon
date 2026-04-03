@@ -367,6 +367,17 @@ function emitMovRegImmGeneric(code ByteArray, dest X64Register, value MachineWor
 	end 'large'
 end 'emitMovRegImmGeneric'
 
+// mov r32, imm32: writing to a 32-bit register zero-extends to 64 bits.
+// 5 bytes for base regs, 6 bytes for extended regs (vs 10 for mov r64, imm64).
+function emitMovRegImm32(code ByteArray, dest X64Register, value MachineWord)
+	let destCode = regCode(dest)
+	if isExtended(dest) 'extBit'
+		code.push(0x41)
+	end 'extBit'
+	code.push(0xB8 + destCode)
+	writeDword(code, value: value)
+end 'emitMovRegImm32'
+
 // --- Upgraded emitters for register-parameterized existing ops ---
 
 function emitAddRegRegParam(code ByteArray, dest X64Register, src X64Register)
@@ -1374,6 +1385,7 @@ function emitX64Op(op X64Op, code ByteArray, blockFixups BlockJumpFixupArray, ca
 		epilogue then emitEpilogue(code)
 		ret then emitRet(code)
 		movRegImm(dest, value) then emitMovRegImmGeneric(code, dest: resolveGpr(dest), value: value)
+		movRegImm32(dest, value) then emitMovRegImm32(code, dest: resolveGpr(dest), value: value)
 		movSlot(slotIndex, srcReg) then emitMovSlot(code, slotIndex: slotIndex, srcReg: resolveGpr(srcReg))
 		loadSlot(destReg, slotIndex) then emitLoadSlotToReg(code, slotIndex: slotIndex, dest: resolveGpr(destReg))
 		addRegReg(destReg, srcReg) then emitAddRegRegParam(code, dest: resolveGpr(destReg), src: resolveGpr(srcReg))
