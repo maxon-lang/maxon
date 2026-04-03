@@ -50,7 +50,7 @@ Contype cases with associated values:
 
 ```maxon
 var r1 = Result.success(42)
-var r2 = Result.failure(404, "Not found")
+var r2 = Result.failure(404, message: "Not found")
 var r3 = Result.pending
 ```
 
@@ -408,12 +408,102 @@ function sum(p TwoParts) returns Integer
 end 'sum'
 
 function main() returns ExitCode
-		var p = TwoParts.values(10, 20)
+		var p = TwoParts.values(10, b: 20)
 		return sum(p)
 end 'main'
 ```
 ```exitcode
 30
+```
+
+<!-- test: associated-value-named-second-arg -->
+```maxon
+
+typealias Integer = int(i64.min to i64.max)
+
+enum TwoParts
+	none
+	values(a Integer, b Integer)
+end 'TwoParts'
+
+function sum(p TwoParts) returns Integer
+	match p 'handle'
+		none then return 0
+		values(a, b) then return a + b
+	end 'handle'
+end 'sum'
+
+function main() returns ExitCode
+	var p = TwoParts.values(10, b: 20)
+	return sum(p)
+end 'main'
+```
+```exitcode
+30
+```
+
+<!-- test: associated-value-all-named-reordered -->
+```maxon
+
+typealias Integer = int(i64.min to i64.max)
+
+enum TwoParts
+	none
+	values(a Integer, b Integer)
+end 'TwoParts'
+
+function sum(p TwoParts) returns Integer
+	match p 'handle'
+		none then return 0
+		values(a, b) then return a + b
+	end 'handle'
+end 'sum'
+
+function main() returns ExitCode
+	var p = TwoParts.values(b: 20, a: 10)
+	return sum(p)
+end 'main'
+```
+```exitcode
+30
+```
+
+<!-- test: error.associated-value-positional-second-arg -->
+```maxon
+
+typealias Integer = int(i64.min to i64.max)
+
+enum TwoParts
+	none
+	values(a Integer, b Integer)
+end 'TwoParts'
+
+function main() returns ExitCode
+	var _p = TwoParts.values(10, 20)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3005: specs/fragments/enum-full/error.associated-value-positional-second-arg.test:11:11: Second and subsequent arguments must be named. Use 'name: value' syntax
+```
+
+<!-- test: error.associated-value-unknown-param -->
+```maxon
+
+typealias Integer = int(i64.min to i64.max)
+
+enum TwoParts
+	none
+	values(a Integer, b Integer)
+end 'TwoParts'
+
+function main() returns ExitCode
+	var _p = TwoParts.values(10, z: 20)
+	return 0
+end 'main'
+```
+```maxoncstderr
+error E3003: specs/fragments/enum-full/error.associated-value-unknown-param.test:11:31: unknown parameter name: 'z'
 ```
 
 <!-- test: associated-value-array-push -->
@@ -638,7 +728,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```maxoncstderr
-error E3036: specs/fragments/enum-full/error.associated-value-wrong-count.test:11:11: wrong argument count: 'expected 1, got 2'
+error E3005: specs/fragments/enum-full/error.associated-value-wrong-count.test:11:11: Second and subsequent arguments must be named. Use 'name: value' syntax
 ```
 
 <!-- test: error.associated-value-type-mismatch -->

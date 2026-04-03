@@ -73,7 +73,7 @@ function lowerPrintLiteral(data String, dstBlock MlirBlock, globalData GlobalDat
 
 	// globalAddr -> addrId
 	let addrId = allocValueId(nextValueIdRef)
-	dstBlock.ops.push(MlirOp.sys(SysOp.globalAddr(addrId, name)))
+	dstBlock.ops.push(MlirOp.sys(SysOp.globalAddr(addrId, name: name)))
 
 	// constI64 -> lenId
 	let lenId = allocValueId(nextValueIdRef)
@@ -84,7 +84,7 @@ function lowerPrintLiteral(data String, dstBlock MlirBlock, globalData GlobalDat
 	var argIds = ValueIdArray.create()
 	argIds.push(addrId)
 	argIds.push(lenId)
-	dstBlock.ops.push(MlirOp.func(FuncOp.call(callResultId, "mrt_write_stdout", argIds)))
+	dstBlock.ops.push(MlirOp.func(FuncOp.call(callResultId, callee: "mrt_write_stdout", argIds: argIds)))
 end 'lowerPrintLiteral'
 
 // Lower printInt(valueId) to:
@@ -93,7 +93,7 @@ function lowerPrintIntToCall(valueId ValueId, dstBlock MlirBlock, nextValueIdRef
 	let callResultId = allocValueId(nextValueIdRef)
 	var argIds = ValueIdArray.create()
 	argIds.push(valueId)
-	dstBlock.ops.push(MlirOp.func(FuncOp.call(callResultId, "mrt_printInt", argIds)))
+	dstBlock.ops.push(MlirOp.func(FuncOp.call(callResultId, callee: "mrt_printInt", argIds: argIds)))
 end 'lowerPrintIntToCall'
 
 // Lower maxon.panic(message, panicId) to:
@@ -112,11 +112,11 @@ function lowerPanicToSys(message String, panicId ValueId, dstBlock MlirBlock, gl
 
 	// globalAddr -> addrId
 	let addrId = allocValueId(nextValueIdRef)
-	dstBlock.ops.push(MlirOp.sys(SysOp.globalAddr(addrId, nameStr)))
+	dstBlock.ops.push(MlirOp.sys(SysOp.globalAddr(addrId, name: nameStr)))
 
 	// call mrt_panic(addrId)
 	let callResultId = allocValueId(nextValueIdRef)
 	var argIds = ValueIdArray.create()
 	argIds.push(addrId)
-	dstBlock.ops.push(MlirOp.func(FuncOp.call(callResultId, "mrt_panic", argIds)))
+	dstBlock.ops.push(MlirOp.func(FuncOp.call(callResultId, callee: "mrt_panic", argIds: argIds)))
 end 'lowerPanicToSys'

@@ -98,7 +98,7 @@ typealias SysTokenAdvance = int(0 to 4)
 
 function midMakeSysStackAddr(tokens TokenArray, pos MidTokenIndex, resultId ValueId) returns(MlirOp, SysTokenAdvance)
 	let slotId = midParseUnsignedInt(midTokenAt(tokens, pos: pos).value)
-	return(MlirOp.sys(SysOp.stackAddr(resultId, slotId)), 1)
+	return(MlirOp.sys(SysOp.stackAddr(resultId, slotId: slotId)), 1)
 end 'midMakeSysStackAddr'
 
 function midMakeSysOsExit(tokens TokenArray, pos MidTokenIndex, state MidFuncState) returns(MlirOp, SysTokenAdvance)
@@ -109,33 +109,33 @@ end 'midMakeSysOsExit'
 function midMakeSysOsWrite(tokens TokenArray, pos MidTokenIndex, state MidFuncState) returns(MlirOp, SysTokenAdvance)
 	let ptrId = lookupValueId(state, name: midTokenAt(tokens, pos: pos).value)
 	let lenId = lookupValueId(state, name: midTokenAt(tokens, pos: pos + 1).value)
-	return(MlirOp.sys(SysOp.osWrite(ptrId, lenId)), 2)
+	return(MlirOp.sys(SysOp.osWrite(ptrId, lenId: lenId)), 2)
 end 'midMakeSysOsWrite'
 
 function midMakeSysLoadByte(tokens TokenArray, pos MidTokenIndex, state MidFuncState, resultId ValueId) returns(MlirOp, SysTokenAdvance)
 	let baseId = lookupValueId(state, name: midTokenAt(tokens, pos: pos).value)
 	let offsetId = lookupValueId(state, name: midTokenAt(tokens, pos: pos + 1).value)
-	return(MlirOp.sys(SysOp.loadByte(resultId, baseId, offsetId)), 2)
+	return(MlirOp.sys(SysOp.loadByte(resultId, baseId: baseId, offsetId: offsetId)), 2)
 end 'midMakeSysLoadByte'
 
 function midMakeSysStoreByte(tokens TokenArray, pos MidTokenIndex, state MidFuncState) returns(MlirOp, SysTokenAdvance)
 	let baseId = lookupValueId(state, name: midTokenAt(tokens, pos: pos).value)
 	let offsetId = lookupValueId(state, name: midTokenAt(tokens, pos: pos + 1).value)
 	let byteId = lookupValueId(state, name: midTokenAt(tokens, pos: pos + 2).value)
-	return(MlirOp.sys(SysOp.storeByte(baseId, offsetId, byteId)), 3)
+	return(MlirOp.sys(SysOp.storeByte(baseId, offsetId: offsetId, byteId: byteId)), 3)
 end 'midMakeSysStoreByte'
 
 function midMakeSysMemcpy(tokens TokenArray, pos MidTokenIndex, state MidFuncState) returns(MlirOp, SysTokenAdvance)
 	let dstId = lookupValueId(state, name: midTokenAt(tokens, pos: pos).value)
 	let srcId = lookupValueId(state, name: midTokenAt(tokens, pos: pos + 1).value)
 	let lenId = lookupValueId(state, name: midTokenAt(tokens, pos: pos + 2).value)
-	return(MlirOp.sys(SysOp.memcpy(dstId, srcId, lenId)), 3)
+	return(MlirOp.sys(SysOp.memcpy(dstId, srcId: srcId, lenId: lenId)), 3)
 end 'midMakeSysMemcpy'
 
 function midMakeSysOsWriteErr(tokens TokenArray, pos MidTokenIndex, state MidFuncState) returns(MlirOp, SysTokenAdvance)
 	let ptrId = lookupValueId(state, name: midTokenAt(tokens, pos: pos).value)
 	let lenId = lookupValueId(state, name: midTokenAt(tokens, pos: pos + 1).value)
-	return(MlirOp.sys(SysOp.osWriteErr(ptrId, lenId)), 2)
+	return(MlirOp.sys(SysOp.osWriteErr(ptrId, lenId: lenId)), 2)
 end 'midMakeSysOsWriteErr'
 
 function midMakeSysLoadFramePtr(resultId ValueId) returns(MlirOp, SysTokenAdvance)
@@ -145,17 +145,17 @@ end 'midMakeSysLoadFramePtr'
 function midMakeSysLoadIndirect(tokens TokenArray, pos MidTokenIndex, state MidFuncState, resultId ValueId) returns(MlirOp, SysTokenAdvance)
 	let addrId = lookupValueId(state, name: midTokenAt(tokens, pos: pos).value)
 	let offset = midParseUnsignedInt(midTokenAt(tokens, pos: pos + 1).value)
-	return(MlirOp.sys(SysOp.loadIndirect(resultId, addrId, offset)), 2)
+	return(MlirOp.sys(SysOp.loadIndirect(resultId, addrId: addrId, offset: offset)), 2)
 end 'midMakeSysLoadIndirect'
 
 function midMakeSysFuncAddr(tokens TokenArray, pos MidTokenIndex, resultId ValueId) returns(MlirOp, SysTokenAdvance)
 	let name = midTokenAt(tokens, pos: pos).value
-	return(MlirOp.sys(SysOp.funcAddr(resultId, name)), 1)
+	return(MlirOp.sys(SysOp.funcAddr(resultId, name: name)), 1)
 end 'midMakeSysFuncAddr'
 
 function midMakeSysGlobalAddr(tokens TokenArray, pos MidTokenIndex, resultId ValueId) returns(MlirOp, SysTokenAdvance)
 	let name = midTokenAt(tokens, pos: pos).value
-	return(MlirOp.sys(SysOp.globalAddr(resultId, name)), 1)
+	return(MlirOp.sys(SysOp.globalAddr(resultId, name: name)), 1)
 end 'midMakeSysGlobalAddr'
 
 // --- Token helpers ---
@@ -519,7 +519,7 @@ function midParseMemRefOp(tokens TokenArray, startPos MidTokenIndex, block MlirB
 	// loadSlot: memref loadSlot <slotId>
 	if opName == "loadSlot" 'isLoad'
 		let slotId = midParseUnsignedInt(midTokenAt(tokens, pos: pos).value)
-		block.ops.push(MlirOp.memref(MemRefOp.loadSlot(resultId, slotId)))
+		block.ops.push(MlirOp.memref(MemRefOp.loadSlot(resultId, slotId: slotId)))
 		return pos + 1
 	end 'isLoad'
 
@@ -527,7 +527,7 @@ function midParseMemRefOp(tokens TokenArray, startPos MidTokenIndex, block MlirB
 	if opName == "storeSlot" 'isStore'
 		let slotId = midParseUnsignedInt(midTokenAt(tokens, pos: pos).value)
 		let valueRefId = lookupValueId(state, name: midTokenAt(tokens, pos: pos + 1).value)
-		block.ops.push(MlirOp.memref(MemRefOp.storeSlot(slotId, valueRefId)))
+		block.ops.push(MlirOp.memref(MemRefOp.storeSlot(slotId, valueId: valueRefId)))
 		return pos + 2
 	end 'isStore'
 
@@ -542,7 +542,7 @@ function midParseCfOp(tokens TokenArray, startPos MidTokenIndex, block MlirBlock
 	// br: cf br <blockRef>
 	if opName == "br" 'isBr'
 		let targetId = lookupBlockId(state, label: midTokenAt(tokens, pos: pos).value)
-		block.terminator = MlirOp.cf(CfOp.br(targetId, ValueIdArray.create()))
+		block.terminator = MlirOp.cf(CfOp.br(targetId, argIds: ValueIdArray.create()))
 		block.hasTerminator = true
 		return pos + 1
 	end 'isBr'
@@ -552,7 +552,7 @@ function midParseCfOp(tokens TokenArray, startPos MidTokenIndex, block MlirBlock
 		let condId = lookupValueId(state, name: midTokenAt(tokens, pos: pos).value)
 		let thenId = lookupBlockId(state, label: midTokenAt(tokens, pos: pos + 1).value)
 		let elseId = lookupBlockId(state, label: midTokenAt(tokens, pos: pos + 2).value)
-		block.terminator = MlirOp.cf(CfOp.condBr(condId, thenId, ValueIdArray.create(), elseId, ValueIdArray.create()))
+		block.terminator = MlirOp.cf(CfOp.condBr(condId, thenTarget: thenId, thenArgIds: ValueIdArray.create(), elseTarget: elseId, elseArgIds: ValueIdArray.create()))
 		block.hasTerminator = true
 		return pos + 3
 	end 'isCondBr'
@@ -613,7 +613,7 @@ function midParseFuncOp(tokens TokenArray, startPos MidTokenIndex, block MlirBlo
 			argIds.push(lookupValueId(state, name: argToken.value))
 			pos = pos + 1
 		end 'argLoop'
-		block.ops.push(MlirOp.func(FuncOp.call(resultId, calleeToken.value, argIds)))
+		block.ops.push(MlirOp.func(FuncOp.call(resultId, callee: calleeToken.value, argIds: argIds)))
 		return pos
 	end 'isCall'
 
@@ -624,7 +624,7 @@ function midParseFuncOp(tokens TokenArray, startPos MidTokenIndex, block MlirBlo
 		pos = pos + 1
 		let paramTypeToken = midTokenAt(tokens, pos: pos)
 		let paramType = midParseStdType(paramTypeToken.value)
-		block.ops.push(MlirOp.func(FuncOp.param(resultId, paramIndex, paramType)))
+		block.ops.push(MlirOp.func(FuncOp.param(resultId, paramIndex: paramIndex, paramType: paramType)))
 		return pos + 1
 	end 'isParam'
 

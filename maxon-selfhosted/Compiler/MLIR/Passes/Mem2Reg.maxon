@@ -1268,14 +1268,14 @@ function rewriteBrWithPhiArgs(target BlockId, argIds ValueIdArray, blockId Block
 	let edgeKey = getEdgeKey(blockId, toBlock: target, numBlocks: numBlocks)
 	if edgeKey < edgePhiArgs.count() 'hasEdge'
 		let phiArgs = try edgePhiArgs.get(edgeKey) otherwise 'noArgs'
-			return CfOp.br(target, newArgIds)
+			return CfOp.br(target, argIds: newArgIds)
 		end 'noArgs'
 		for arg in phiArgs 'appendArgs'
 			newArgIds.push(remapValue(arg, remap: remap))
 		end 'appendArgs'
 	end 'hasEdge'
 
-	return CfOp.br(target, newArgIds)
+	return CfOp.br(target, argIds: newArgIds)
 end 'rewriteBrWithPhiArgs'
 
 function rewriteCondBrWithPhiArgs(condId ValueId, thenTarget BlockId, thenArgIds ValueIdArray, elseTarget BlockId, elseArgIds ValueIdArray, blockId BlockId, remap ValueIdArray, numBlocks BlockId, edgePhiArgs EdgePhiArgTable) returns CfOp
@@ -1295,7 +1295,7 @@ function rewriteCondBrWithPhiArgs(condId ValueId, thenTarget BlockId, thenArgIds
 		appendEdgePhiArgs(newElseArgIds, edgePhiArgs: edgePhiArgs, edgeKey: elseEdgeKey, remap: remap)
 	end 'hasElseEdge'
 
-	return CfOp.condBr(remappedCond, thenTarget, newThenArgIds, elseTarget, newElseArgIds)
+	return CfOp.condBr(remappedCond, thenTarget: thenTarget, thenArgIds: newThenArgIds, elseTarget: elseTarget, elseArgIds: newElseArgIds)
 end 'rewriteCondBrWithPhiArgs'
 
 // Helper: append phi arg values for a given edge key to an argIds array.
@@ -1322,7 +1322,7 @@ function emitParamOps(dstBlock MlirBlock, renameState RenameState, paramCount Pa
 				continue
 			end 'skipParam'
 			let pt = try paramTypes.get(pI) otherwise StdType.i64
-			dstBlock.ops.push(MlirOp.func(FuncOp.param(paramId, pI, pt)))
+			dstBlock.ops.push(MlirOp.func(FuncOp.param(paramId, paramIndex: pI, paramType: pt)))
 		end 'emitParam'
 		pI = pI + 1
 	end 'insertParams'
@@ -1509,27 +1509,27 @@ end 'substituteArithOp'
 
 function substituteCfOp(op CfOp, remap ValueIdArray) returns CfOp
 	return match op 'subst'
-		br(target, argIds) gives CfOp.br(target, remapValueIds(argIds, remap: remap))
-		condBr(condId, thenTarget, thenArgIds, elseTarget, elseArgIds) gives CfOp.condBr(remapValue(condId, remap: remap), thenTarget, remapValueIds(thenArgIds, remap: remap), elseTarget, remapValueIds(elseArgIds, remap: remap))
+		br(target, argIds) gives CfOp.br(target, argIds: remapValueIds(argIds, remap: remap))
+		condBr(condId, thenTarget, thenArgIds, elseTarget, elseArgIds) gives CfOp.condBr(remapValue(condId, remap: remap), thenTarget: thenTarget, thenArgIds: remapValueIds(thenArgIds, remap: remap), elseTarget: elseTarget, elseArgIds: remapValueIds(elseArgIds, remap: remap))
 	end 'subst'
 end 'substituteCfOp'
 
 function substituteFuncOp(op FuncOp, remap ValueIdArray) returns FuncOp
 	return match op 'subst'
 		ret(retValId) gives FuncOp.ret(remapValue(retValId, remap: remap))
-		call(resultId, callee, argIds) gives FuncOp.call(resultId, callee, remapValueIds(argIds, remap: remap))
-		tryCall(resultId, callee, argIds, errorFlagId) gives FuncOp.tryCall(resultId, callee, remapValueIds(argIds, remap: remap), errorFlagId)
-		indirectCall(resultId, calleeId, argIds) gives FuncOp.indirectCall(resultId, remapValue(calleeId, remap: remap), remapValueIds(argIds, remap: remap))
-		funcRef(resultId, funcName) gives FuncOp.funcRef(resultId, funcName)
-		tailCall(callee, argIds) gives FuncOp.tailCall(callee, remapValueIds(argIds, remap: remap))
-		param(resultId, paramIndex, paramType) gives FuncOp.param(resultId, paramIndex, paramType)
+		call(resultId, callee, argIds) gives FuncOp.call(resultId, callee: callee, argIds: remapValueIds(argIds, remap: remap))
+		tryCall(resultId, callee, argIds, errorFlagId) gives FuncOp.tryCall(resultId, callee: callee, argIds: remapValueIds(argIds, remap: remap), errorFlagId: errorFlagId)
+		indirectCall(resultId, calleeId, argIds) gives FuncOp.indirectCall(resultId, calleeId: remapValue(calleeId, remap: remap), argIds: remapValueIds(argIds, remap: remap))
+		funcRef(resultId, funcName) gives FuncOp.funcRef(resultId, funcName: funcName)
+		tailCall(callee, argIds) gives FuncOp.tailCall(callee, argIds: remapValueIds(argIds, remap: remap))
+		param(resultId, paramIndex, paramType) gives FuncOp.param(resultId, paramIndex: paramIndex, paramType: paramType)
 	end 'subst'
 end 'substituteFuncOp'
 
 function substituteMemRefOp(op MemRefOp, remap ValueIdArray) returns MemRefOp
 	return match op 'subst'
-		storeSlot(slotId, valueId) gives MemRefOp.storeSlot(slotId, remapValue(valueId, remap: remap))
-		loadSlot(resultId, slotId) gives MemRefOp.loadSlot(resultId, slotId)
+		storeSlot(slotId, valueId) gives MemRefOp.storeSlot(slotId, valueId: remapValue(valueId, remap: remap))
+		loadSlot(resultId, slotId) gives MemRefOp.loadSlot(resultId, slotId: slotId)
 	end 'subst'
 end 'substituteMemRefOp'
 
@@ -1543,42 +1543,42 @@ end 'substituteRuntimeOp'
 
 function substituteMaxonOp(op MaxonOp, remap ValueIdArray) returns MaxonOp
 	return match op 'subst'
-		literal(resultId, value, isFloat) gives MaxonOp.literal(resultId, value, isFloat)
-		varDecl(slotId, valueId) gives MaxonOp.varDecl(slotId, remapValue(valueId, remap: remap))
-		varLoad(resultId, slotId) gives MaxonOp.varLoad(resultId, slotId)
-		varStore(slotId, valueId) gives MaxonOp.varStore(slotId, remapValue(valueId, remap: remap))
-		binop(resultId, leftId, rightId, opKind, isFloat) gives MaxonOp.binop(resultId, remapValue(leftId, remap: remap), remapValue(rightId, remap: remap), opKind, isFloat)
-		unop(resultId, operandId, opKind, isFloat) gives MaxonOp.unop(resultId, remapValue(operandId, remap: remap), opKind, isFloat)
-		truncFloat(resultId, operandId) gives MaxonOp.truncFloat(resultId, remapValue(operandId, remap: remap))
-		intToFloat(resultId, operandId) gives MaxonOp.intToFloat(resultId, remapValue(operandId, remap: remap))
-		cmp(resultId, leftId, rightId, predicate, isFloat) gives MaxonOp.cmp(resultId, remapValue(leftId, remap: remap), remapValue(rightId, remap: remap), predicate, isFloat)
-		refEq(resultId, leftId, rightId, negate) gives MaxonOp.refEq(resultId, remapValue(leftId, remap: remap), remapValue(rightId, remap: remap), negate)
-		condBr(condId, thenTarget, elseTarget) gives MaxonOp.condBr(remapValue(condId, remap: remap), thenTarget, elseTarget)
+		literal(resultId, value, isFloat) gives MaxonOp.literal(resultId, value: value, isFloat: isFloat)
+		varDecl(slotId, valueId) gives MaxonOp.varDecl(slotId, valueId: remapValue(valueId, remap: remap))
+		varLoad(resultId, slotId) gives MaxonOp.varLoad(resultId, slotId: slotId)
+		varStore(slotId, valueId) gives MaxonOp.varStore(slotId, valueId: remapValue(valueId, remap: remap))
+		binop(resultId, leftId, rightId, opKind, isFloat) gives MaxonOp.binop(resultId, leftId: remapValue(leftId, remap: remap), rightId: remapValue(rightId, remap: remap), opKind: opKind, isFloat: isFloat)
+		unop(resultId, operandId, opKind, isFloat) gives MaxonOp.unop(resultId, operandId: remapValue(operandId, remap: remap), opKind: opKind, isFloat: isFloat)
+		truncFloat(resultId, operandId) gives MaxonOp.truncFloat(resultId, operandId: remapValue(operandId, remap: remap))
+		intToFloat(resultId, operandId) gives MaxonOp.intToFloat(resultId, operandId: remapValue(operandId, remap: remap))
+		cmp(resultId, leftId, rightId, predicate, isFloat) gives MaxonOp.cmp(resultId, leftId: remapValue(leftId, remap: remap), rightId: remapValue(rightId, remap: remap), predicate: predicate, isFloat: isFloat)
+		refEq(resultId, leftId, rightId, negate) gives MaxonOp.refEq(resultId, leftId: remapValue(leftId, remap: remap), rightId: remapValue(rightId, remap: remap), negate: negate)
+		condBr(condId, thenTarget, elseTarget) gives MaxonOp.condBr(remapValue(condId, remap: remap), thenTarget: thenTarget, elseTarget: elseTarget)
 		br(target) gives MaxonOp.br(target)
-		call(resultId, callee, argIds) gives MaxonOp.call(resultId, callee, remapValueIds(argIds, remap: remap))
+		call(resultId, callee, argIds) gives MaxonOp.call(resultId, callee: callee, argIds: remapValueIds(argIds, remap: remap))
 		ret(retValId) gives MaxonOp.ret(remapValue(retValId, remap: remap))
 		printLiteral(data) gives MaxonOp.printLiteral(data)
 		printInt(valueId) gives MaxonOp.printInt(remapValue(valueId, remap: remap))
-		panic(message, panicId) gives MaxonOp.panic(message, panicId)
+		panic(message, panicId) gives MaxonOp.panic(message, panicId: panicId)
 	end 'subst'
 end 'substituteMaxonOp'
 
 function substituteSysOp(op SysOp, remap ValueIdArray) returns SysOp
 	return match op 'subst'
-		syscall(resultId, number, argIds) gives SysOp.syscall(resultId, number, remapValueIds(argIds, remap: remap))
-		iatCall(resultId, slotIndex, argIds) gives SysOp.iatCall(resultId, slotIndex, remapValueIds(argIds, remap: remap))
-		globalAddr(resultId, name) gives SysOp.globalAddr(resultId, name)
-		memcpy(dstId, srcId, lenId) gives SysOp.memcpy(remapValue(dstId, remap: remap), remapValue(srcId, remap: remap), remapValue(lenId, remap: remap))
-		stackAddr(resultId, slotId) gives SysOp.stackAddr(resultId, slotId)
-		storeByte(baseId, offsetId, byteId) gives SysOp.storeByte(remapValue(baseId, remap: remap), remapValue(offsetId, remap: remap), remapValue(byteId, remap: remap))
-		loadByte(resultId, baseId, offsetId) gives SysOp.loadByte(resultId, remapValue(baseId, remap: remap), remapValue(offsetId, remap: remap))
+		syscall(resultId, number, argIds) gives SysOp.syscall(resultId, number: number, argIds: remapValueIds(argIds, remap: remap))
+		iatCall(resultId, slotIndex, argIds) gives SysOp.iatCall(resultId, slotIndex: slotIndex, argIds: remapValueIds(argIds, remap: remap))
+		globalAddr(resultId, name) gives SysOp.globalAddr(resultId, name: name)
+		memcpy(dstId, srcId, lenId) gives SysOp.memcpy(remapValue(dstId, remap: remap), srcId: remapValue(srcId, remap: remap), lenId: remapValue(lenId, remap: remap))
+		stackAddr(resultId, slotId) gives SysOp.stackAddr(resultId, slotId: slotId)
+		storeByte(baseId, offsetId, byteId) gives SysOp.storeByte(remapValue(baseId, remap: remap), offsetId: remapValue(offsetId, remap: remap), byteId: remapValue(byteId, remap: remap))
+		loadByte(resultId, baseId, offsetId) gives SysOp.loadByte(resultId, baseId: remapValue(baseId, remap: remap), offsetId: remapValue(offsetId, remap: remap))
 		osExit(codeId) gives SysOp.osExit(remapValue(codeId, remap: remap))
-		osWrite(ptrId, lenId) gives SysOp.osWrite(remapValue(ptrId, remap: remap), remapValue(lenId, remap: remap))
+		osWrite(ptrId, lenId) gives SysOp.osWrite(remapValue(ptrId, remap: remap), lenId: remapValue(lenId, remap: remap))
 		free(ptrId) gives SysOp.free(remapValue(ptrId, remap: remap))
-		osWriteErr(ptrId, lenId) gives SysOp.osWriteErr(remapValue(ptrId, remap: remap), remapValue(lenId, remap: remap))
+		osWriteErr(ptrId, lenId) gives SysOp.osWriteErr(remapValue(ptrId, remap: remap), lenId: remapValue(lenId, remap: remap))
 		loadFramePtr(resultId) gives SysOp.loadFramePtr(resultId)
-		loadIndirect(resultId, addrId, offset) gives SysOp.loadIndirect(resultId, remapValue(addrId, remap: remap), offset)
-		funcAddr(resultId, name) gives SysOp.funcAddr(resultId, name)
+		loadIndirect(resultId, addrId, offset) gives SysOp.loadIndirect(resultId, addrId: remapValue(addrId, remap: remap), offset: offset)
+		funcAddr(resultId, name) gives SysOp.funcAddr(resultId, name: name)
 	end 'subst'
 end 'substituteSysOp'
 

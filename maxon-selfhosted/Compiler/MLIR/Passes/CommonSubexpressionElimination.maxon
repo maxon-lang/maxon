@@ -192,27 +192,27 @@ end 'cseSubstArith'
 
 function cseSubstCf(op CfOp, remap ValueIdArray) returns CfOp
 	return match op 'subst'
-		br(target, argIds) gives CfOp.br(target, cseRemapValueIds(argIds, remap: remap))
-		condBr(condId, thenTarget, thenArgIds, elseTarget, elseArgIds) gives CfOp.condBr(cseRemapValue(condId, remap: remap), thenTarget, cseRemapValueIds(thenArgIds, remap: remap), elseTarget, cseRemapValueIds(elseArgIds, remap: remap))
+		br(target, argIds) gives CfOp.br(target, argIds: cseRemapValueIds(argIds, remap: remap))
+		condBr(condId, thenTarget, thenArgIds, elseTarget, elseArgIds) gives CfOp.condBr(cseRemapValue(condId, remap: remap), thenTarget: thenTarget, thenArgIds: cseRemapValueIds(thenArgIds, remap: remap), elseTarget: elseTarget, elseArgIds: cseRemapValueIds(elseArgIds, remap: remap))
 	end 'subst'
 end 'cseSubstCf'
 
 function cseSubstFunc(op FuncOp, remap ValueIdArray) returns FuncOp
 	return match op 'subst'
 		ret(retValId) gives FuncOp.ret(cseRemapValue(retValId, remap: remap))
-		call(resultId, callee, argIds) gives FuncOp.call(resultId, callee, cseRemapValueIds(argIds, remap: remap))
-		tryCall(resultId, callee, argIds, errorFlagId) gives FuncOp.tryCall(resultId, callee, cseRemapValueIds(argIds, remap: remap), errorFlagId)
-		indirectCall(resultId, calleeId, argIds) gives FuncOp.indirectCall(resultId, cseRemapValue(calleeId, remap: remap), cseRemapValueIds(argIds, remap: remap))
-		funcRef(resultId, funcName) gives FuncOp.funcRef(resultId, funcName)
-		tailCall(callee, argIds) gives FuncOp.tailCall(callee, cseRemapValueIds(argIds, remap: remap))
-		param(resultId, paramIndex, paramType) gives FuncOp.param(resultId, paramIndex, paramType)
+		call(resultId, callee, argIds) gives FuncOp.call(resultId, callee: callee, argIds: cseRemapValueIds(argIds, remap: remap))
+		tryCall(resultId, callee, argIds, errorFlagId) gives FuncOp.tryCall(resultId, callee: callee, argIds: cseRemapValueIds(argIds, remap: remap), errorFlagId: errorFlagId)
+		indirectCall(resultId, calleeId, argIds) gives FuncOp.indirectCall(resultId, calleeId: cseRemapValue(calleeId, remap: remap), argIds: cseRemapValueIds(argIds, remap: remap))
+		funcRef(resultId, funcName) gives FuncOp.funcRef(resultId, funcName: funcName)
+		tailCall(callee, argIds) gives FuncOp.tailCall(callee, argIds: cseRemapValueIds(argIds, remap: remap))
+		param(resultId, paramIndex, paramType) gives FuncOp.param(resultId, paramIndex: paramIndex, paramType: paramType)
 	end 'subst'
 end 'cseSubstFunc'
 
 function cseSubstMemRef(op MemRefOp, remap ValueIdArray) returns MemRefOp
 	return match op 'subst'
-		storeSlot(slotId, valueId) gives MemRefOp.storeSlot(slotId, cseRemapValue(valueId, remap: remap))
-		loadSlot(resultId, slotId) gives MemRefOp.loadSlot(resultId, slotId)
+		storeSlot(slotId, valueId) gives MemRefOp.storeSlot(slotId, valueId: cseRemapValue(valueId, remap: remap))
+		loadSlot(resultId, slotId) gives MemRefOp.loadSlot(resultId, slotId: slotId)
 	end 'subst'
 end 'cseSubstMemRef'
 
@@ -226,19 +226,19 @@ end 'cseSubstRuntime'
 
 function cseSubstSys(op SysOp, remap ValueIdArray) returns SysOp
 	return match op 'subst'
-		syscall(resultId, number, argIds) gives SysOp.syscall(resultId, number, cseRemapValueIds(argIds, remap: remap))
-		iatCall(resultId, slotIndex, argIds) gives SysOp.iatCall(resultId, slotIndex, cseRemapValueIds(argIds, remap: remap))
-		globalAddr(resultId, name) gives SysOp.globalAddr(resultId, name)
-		memcpy(dstId, srcId, lenId) gives SysOp.memcpy(cseRemapValue(dstId, remap: remap), cseRemapValue(srcId, remap: remap), cseRemapValue(lenId, remap: remap))
-		stackAddr(resultId, slotId) gives SysOp.stackAddr(resultId, slotId)
-		storeByte(baseId, offsetId, byteId) gives SysOp.storeByte(cseRemapValue(baseId, remap: remap), cseRemapValue(offsetId, remap: remap), cseRemapValue(byteId, remap: remap))
-		loadByte(resultId, baseId, offsetId) gives SysOp.loadByte(resultId, cseRemapValue(baseId, remap: remap), cseRemapValue(offsetId, remap: remap))
+		syscall(resultId, number, argIds) gives SysOp.syscall(resultId, number: number, argIds: cseRemapValueIds(argIds, remap: remap))
+		iatCall(resultId, slotIndex, argIds) gives SysOp.iatCall(resultId, slotIndex: slotIndex, argIds: cseRemapValueIds(argIds, remap: remap))
+		globalAddr(resultId, name) gives SysOp.globalAddr(resultId, name: name)
+		memcpy(dstId, srcId, lenId) gives SysOp.memcpy(cseRemapValue(dstId, remap: remap), srcId: cseRemapValue(srcId, remap: remap), lenId: cseRemapValue(lenId, remap: remap))
+		stackAddr(resultId, slotId) gives SysOp.stackAddr(resultId, slotId: slotId)
+		storeByte(baseId, offsetId, byteId) gives SysOp.storeByte(cseRemapValue(baseId, remap: remap), offsetId: cseRemapValue(offsetId, remap: remap), byteId: cseRemapValue(byteId, remap: remap))
+		loadByte(resultId, baseId, offsetId) gives SysOp.loadByte(resultId, baseId: cseRemapValue(baseId, remap: remap), offsetId: cseRemapValue(offsetId, remap: remap))
 		osExit(codeId) gives SysOp.osExit(cseRemapValue(codeId, remap: remap))
-		osWrite(ptrId, lenId) gives SysOp.osWrite(cseRemapValue(ptrId, remap: remap), cseRemapValue(lenId, remap: remap))
+		osWrite(ptrId, lenId) gives SysOp.osWrite(cseRemapValue(ptrId, remap: remap), lenId: cseRemapValue(lenId, remap: remap))
 		free(ptrId) gives SysOp.free(cseRemapValue(ptrId, remap: remap))
-		osWriteErr(ptrId, lenId) gives SysOp.osWriteErr(cseRemapValue(ptrId, remap: remap), cseRemapValue(lenId, remap: remap))
+		osWriteErr(ptrId, lenId) gives SysOp.osWriteErr(cseRemapValue(ptrId, remap: remap), lenId: cseRemapValue(lenId, remap: remap))
 		loadFramePtr(resultId) gives SysOp.loadFramePtr(resultId)
-		loadIndirect(resultId, addrId, offset) gives SysOp.loadIndirect(resultId, cseRemapValue(addrId, remap: remap), offset)
-		funcAddr(resultId, name) gives SysOp.funcAddr(resultId, name)
+		loadIndirect(resultId, addrId, offset) gives SysOp.loadIndirect(resultId, addrId: cseRemapValue(addrId, remap: remap), offset: offset)
+		funcAddr(resultId, name) gives SysOp.funcAddr(resultId, name: name)
 	end 'subst'
 end 'cseSubstSys'

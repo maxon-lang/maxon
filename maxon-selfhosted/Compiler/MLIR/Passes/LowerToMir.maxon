@@ -87,24 +87,24 @@ end 'convertArithOpToMir'
 
 function convertArithConstToMir(c ArithConst, dstBlock MlirBlock)
 	let isFloat = c.opcode == ArithConstOpcode.constF64
-	let mirOp = MirOp.movImm(c.resultId, c.value, isFloat)
+	let mirOp = MirOp.movImm(c.resultId, value: c.value, isFloat: isFloat)
 	dstBlock.ops.push(MlirOp.mir(mirOp))
 end 'convertArithConstToMir'
 
 function convertArithUnaryToMir(u ArithUnaryOp, dstBlock MlirBlock)
 	let mirOpcode = arithUnaryOpcodeToMir(u.opcode)
-	let mirOp = MirOp.unaryOp(u.resultId, u.operandId, mirOpcode)
+	let mirOp = MirOp.unaryOp(u.resultId, operandId: u.operandId, opcode: mirOpcode)
 	dstBlock.ops.push(MlirOp.mir(mirOp))
 end 'convertArithUnaryToMir'
 
 function convertArithBinaryToMir(b ArithBinaryOp, dstBlock MlirBlock)
 	if isComparisonOpcode(b.opcode) 'isCmp'
 		let predicate = arithBinaryOpcodeToCmpPredicate(b.opcode)
-		let mirOp = MirOp.cmp(b.resultId, b.leftId, b.rightId, predicate)
+		let mirOp = MirOp.cmp(b.resultId, leftId: b.leftId, rightId: b.rightId, predicate: predicate)
 		dstBlock.ops.push(MlirOp.mir(mirOp))
 	end 'isCmp' else 'isArith'
 		let mirOpcode = arithBinaryOpcodeToMir(b.opcode)
-		let mirOp = MirOp.binOp(b.resultId, b.leftId, b.rightId, mirOpcode)
+		let mirOp = MirOp.binOp(b.resultId, leftId: b.leftId, rightId: b.rightId, opcode: mirOpcode)
 		dstBlock.ops.push(MlirOp.mir(mirOp))
 	end 'isArith'
 end 'convertArithBinaryToMir'
@@ -126,8 +126,8 @@ end 'convertCfTerminatorToMir'
 
 function convertCfToMirOp(cfOp CfOp) returns MirOp
 	return match cfOp 'dispatch'
-		br(target, argIds) gives MirOp.branch(target, argIds)
-		condBr(condId, thenTarget, thenArgIds, elseTarget, elseArgIds) gives MirOp.condBranch(condId, thenTarget, thenArgIds, elseTarget, elseArgIds)
+		br(target, argIds) gives MirOp.branch(target, args: argIds)
+		condBr(condId, thenTarget, thenArgIds, elseTarget, elseArgIds) gives MirOp.condBranch(condId, thenBlock: thenTarget, thenArgs: thenArgIds, elseBlock: elseTarget, elseArgs: elseArgIds)
 	end 'dispatch'
 end 'convertCfToMirOp'
 
@@ -137,25 +137,25 @@ end 'convertCfToMirOp'
 
 function convertFuncOpToMir(funcOp FuncOp, dstBlock MlirBlock)
 	match funcOp 'dispatch'
-		call(resultId, callee, argIds) then dstBlock.ops.push(MlirOp.mir(MirOp.call(resultId, callee, argIds)))
+		call(resultId, callee, argIds) then dstBlock.ops.push(MlirOp.mir(MirOp.call(resultId, callee: callee, argIds: argIds)))
 		ret(retValId) then dstBlock.ops.push(MlirOp.mir(MirOp.ret(retValId)))
-		param(resultId, paramIndex, paramType) then dstBlock.ops.push(MlirOp.mir(MirOp.param(resultId, paramIndex, paramType)))
-		indirectCall(resultId, calleeId, argIds) then dstBlock.ops.push(MlirOp.mir(MirOp.indirectCall(resultId, calleeId, argIds)))
-		funcRef(resultId, funcName) then dstBlock.ops.push(MlirOp.mir(MirOp.globalAddr(resultId, funcName)))
-		tailCall(callee, argIds) then dstBlock.ops.push(MlirOp.mir(MirOp.call(0, callee, argIds)))
-		tryCall(resultId, callee, argIds, _) then dstBlock.ops.push(MlirOp.mir(MirOp.call(resultId, callee, argIds)))
+		param(resultId, paramIndex, paramType) then dstBlock.ops.push(MlirOp.mir(MirOp.param(resultId, paramIndex: paramIndex, paramType: paramType)))
+		indirectCall(resultId, calleeId, argIds) then dstBlock.ops.push(MlirOp.mir(MirOp.indirectCall(resultId, calleeId: calleeId, argIds: argIds)))
+		funcRef(resultId, funcName) then dstBlock.ops.push(MlirOp.mir(MirOp.globalAddr(resultId, name: funcName)))
+		tailCall(callee, argIds) then dstBlock.ops.push(MlirOp.mir(MirOp.call(0, callee: callee, argIds: argIds)))
+		tryCall(resultId, callee, argIds, _) then dstBlock.ops.push(MlirOp.mir(MirOp.call(resultId, callee: callee, argIds: argIds)))
 	end 'dispatch'
 end 'convertFuncOpToMir'
 
 function convertFuncTerminatorToMir(funcOp FuncOp, dstBlock MlirBlock)
 	match funcOp 'dispatch'
 		ret(retValId) then setTerminator(dstBlock, op: MlirOp.mir(MirOp.ret(retValId)))
-		call(resultId, callee, argIds) then setTerminator(dstBlock, op: MlirOp.mir(MirOp.call(resultId, callee, argIds)))
-		tailCall(callee, argIds) then setTerminator(dstBlock, op: MlirOp.mir(MirOp.call(0, callee, argIds)))
-		tryCall(resultId, callee, argIds, _) then setTerminator(dstBlock, op: MlirOp.mir(MirOp.call(resultId, callee, argIds)))
-		param(resultId, paramIndex, paramType) then dstBlock.ops.push(MlirOp.mir(MirOp.param(resultId, paramIndex, paramType)))
-		indirectCall(resultId, calleeId, argIds) then setTerminator(dstBlock, op: MlirOp.mir(MirOp.indirectCall(resultId, calleeId, argIds)))
-		funcRef(resultId, funcName) then dstBlock.ops.push(MlirOp.mir(MirOp.globalAddr(resultId, funcName)))
+		call(resultId, callee, argIds) then setTerminator(dstBlock, op: MlirOp.mir(MirOp.call(resultId, callee: callee, argIds: argIds)))
+		tailCall(callee, argIds) then setTerminator(dstBlock, op: MlirOp.mir(MirOp.call(0, callee: callee, argIds: argIds)))
+		tryCall(resultId, callee, argIds, _) then setTerminator(dstBlock, op: MlirOp.mir(MirOp.call(resultId, callee: callee, argIds: argIds)))
+		param(resultId, paramIndex, paramType) then dstBlock.ops.push(MlirOp.mir(MirOp.param(resultId, paramIndex: paramIndex, paramType: paramType)))
+		indirectCall(resultId, calleeId, argIds) then setTerminator(dstBlock, op: MlirOp.mir(MirOp.indirectCall(resultId, calleeId: calleeId, argIds: argIds)))
+		funcRef(resultId, funcName) then dstBlock.ops.push(MlirOp.mir(MirOp.globalAddr(resultId, name: funcName)))
 	end 'dispatch'
 end 'convertFuncTerminatorToMir'
 
@@ -177,15 +177,15 @@ end 'convertMemRefOpToMir'
 
 function convertSysOpToMir(sysOp SysOp, dstBlock MlirBlock)
 	match sysOp 'dispatch'
-		syscall(resultId, number, argIds) then dstBlock.ops.push(MlirOp.mir(MirOp.syscall(resultId, number, argIds)))
-		iatCall(resultId, slotIndex, argIds) then dstBlock.ops.push(MlirOp.mir(MirOp.iatCall(resultId, slotIndex, argIds)))
-		globalAddr(resultId, name) then dstBlock.ops.push(MlirOp.mir(MirOp.globalAddr(resultId, name)))
-		memcpy(dstId, srcId, lenId) then dstBlock.ops.push(MlirOp.mir(MirOp.memcpy(dstId, srcId, lenId)))
-		stackAddr(resultId, slotId) then dstBlock.ops.push(MlirOp.mir(MirOp.stackSlotAddr(resultId, slotId)))
-		storeByte(baseId, offsetId, byteId) then dstBlock.ops.push(MlirOp.mir(MirOp.storeByte(baseId, offsetId, byteId)))
-		loadByte(resultId, baseId, offsetId) then dstBlock.ops.push(MlirOp.mir(MirOp.loadByte(resultId, baseId, offsetId)))
+		syscall(resultId, number, argIds) then dstBlock.ops.push(MlirOp.mir(MirOp.syscall(resultId, number: number, argIds: argIds)))
+		iatCall(resultId, slotIndex, argIds) then dstBlock.ops.push(MlirOp.mir(MirOp.iatCall(resultId, slotIndex: slotIndex, argIds: argIds)))
+		globalAddr(resultId, name) then dstBlock.ops.push(MlirOp.mir(MirOp.globalAddr(resultId, name: name)))
+		memcpy(dstId, srcId, lenId) then dstBlock.ops.push(MlirOp.mir(MirOp.memcpy(dstId, srcId: srcId, lenId: lenId)))
+		stackAddr(resultId, slotId) then dstBlock.ops.push(MlirOp.mir(MirOp.stackSlotAddr(resultId, slotId: slotId)))
+		storeByte(baseId, offsetId, byteId) then dstBlock.ops.push(MlirOp.mir(MirOp.storeByte(baseId, offsetId: offsetId, byteId: byteId)))
+		loadByte(resultId, baseId, offsetId) then dstBlock.ops.push(MlirOp.mir(MirOp.loadByte(resultId, baseId: baseId, offsetId: offsetId)))
 		osExit(codeId) then dstBlock.ops.push(MlirOp.mir(MirOp.osExit(codeId)))
-		osWrite(ptrId, lenId) then dstBlock.ops.push(MlirOp.mir(MirOp.osWrite(ptrId, lenId)))
+		osWrite(ptrId, lenId) then dstBlock.ops.push(MlirOp.mir(MirOp.osWrite(ptrId, lenId: lenId)))
 		free(ptrId) then convertSysFreeToMir(ptrId, dstBlock: dstBlock)
 		osWriteErr then dstBlock.ops.push(MlirOp.sys(sysOp))
 		loadFramePtr then dstBlock.ops.push(MlirOp.sys(sysOp))
@@ -197,7 +197,7 @@ end 'convertSysOpToMir'
 function convertSysFreeToMir(ptrId ValueId, dstBlock MlirBlock)
 	var argIds = ValueIdArray.create()
 	argIds.push(ptrId)
-	dstBlock.ops.push(MlirOp.mir(MirOp.call(0, b"mrt_free", argIds)))
+	dstBlock.ops.push(MlirOp.mir(MirOp.call(0, callee: b"mrt_free", argIds: argIds)))
 end 'convertSysFreeToMir'
 
 // ============================================================

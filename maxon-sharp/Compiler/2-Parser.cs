@@ -10656,17 +10656,10 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
           Advance(); // consume '.'
           Advance(); // consume keyword case name
           if (kwEnumType.HasAssociatedValues) {
-            var args = new List<MaxonValue>();
-            if (kwEnumCase.AssociatedValues is { Count: > 0 }) {
-              Expect(TokenType.LeftParen);
-              for (int ai = 0; ai < kwEnumCase.AssociatedValues.Count; ai++) {
-                if (ai > 0) Expect(TokenType.Comma);
-                var argExpr = ParseExpression();
-                args.Add(ResolveExprValue(argExpr));
-              }
-              Expect(TokenType.RightParen);
-            }
-            var constructOp = new MaxonEnumConstructOp(token.Value, kwMemberName, GetCaseTagValue(kwEnumCase), args);
+            List<MaxonValue> kwArgsList = kwEnumCase.AssociatedValues is { Count: > 0 }
+              ? ParseEnumAssociatedValueArgs(kwEnumCase, token)
+              : [];
+            var constructOp = new MaxonEnumConstructOp(token.Value, kwMemberName, GetCaseTagValue(kwEnumCase), kwArgsList);
             if (_sourceFilePath != null)
               constructOp.SourceLocation = $"{Path.GetFileName(_sourceFilePath)}:{token.Line}";
             _currentBlock!.AddOp(constructOp);
@@ -10775,53 +10768,19 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
 
             // Associated value enum: use MaxonEnumConstructOp
             if (enumType.HasAssociatedValues) {
-              var args = new List<MaxonValue>();
+              List<MaxonValue> argsList;
               if (enumCase.AssociatedValues is { Count: > 0 }) {
-                // Case with associated values: parse arguments
-                Expect(TokenType.LeftParen);
-                for (int ai = 0; ai < enumCase.AssociatedValues.Count; ai++) {
-                  if (ai > 0) Expect(TokenType.Comma);
-                  var argExpr = ParseExpression();
-                  var argVal = ResolveExprValue(argExpr);
-                  // Type-check the argument (skip for type parameters — checked after monomorphization)
-                  var expectedType = enumCase.AssociatedValues[ai].Type;
-                  if (expectedType is not MlirTypeParameterType) {
-                    var actualKind = DetermineValueKind(argVal);
-                    var expectedKind = expectedType.ToValueKind();
-                    if (actualKind != expectedKind) {
-                      var actualTypeName = argVal is MaxonStruct ms
-                        ? ms.TypeName
-                        : MlirType.FormatAsSourceName(actualKind.ToMlirType());
-                      throw new CompileError(ErrorCode.SemanticTypeMismatch,
-                        $"type mismatch: 'expected {MlirType.FormatAsSourceName(expectedType)}, got {actualTypeName}'",
-                        Current().Line, Current().Column);
-                    }
-                  }
-                  args.Add(argVal);
-                }
-                // Check for too many arguments
-                if (Check(TokenType.Comma)) {
-                  Advance();
-                  // Count remaining extra args after the comma
-                  int extraArgs = 0;
-                  while (!Check(TokenType.RightParen) && !IsAtEnd()) {
-                    ParseExpression();
-                    extraArgs++;
-                    if (Check(TokenType.Comma)) Advance();
-                  }
-                  throw new CompileError(ErrorCode.SemanticWrongArgCount,
-                    $"wrong argument count: 'expected {enumCase.AssociatedValues.Count}, got {enumCase.AssociatedValues.Count + extraArgs}'",
-                    token.Line, token.Column);
-                }
-                Expect(TokenType.RightParen);
+                argsList = ParseEnumAssociatedValueArgs(enumCase, token);
               } else if (Check(TokenType.LeftParen)) {
                 // Case without associated values but caller used parens - error
                 throw new CompileError(ErrorCode.SemanticWrongArgCount,
                   $"wrong argument count: 'expected 0, got ...'",
                   token.Line, token.Column);
+              } else {
+                // Cases with no associated values and no parens: just tag, no payload
+                argsList = [];
               }
-              // Cases with no associated values and no parens: just tag, no payload
-              var constructOp = new MaxonEnumConstructOp(token.Value, memberName, GetCaseTagValue(enumCase), args);
+              var constructOp = new MaxonEnumConstructOp(token.Value, memberName, GetCaseTagValue(enumCase), argsList);
               if (_sourceFilePath != null)
                 constructOp.SourceLocation = $"{Path.GetFileName(_sourceFilePath)}:{token.Line}";
               _currentBlock!.AddOp(constructOp);
@@ -13641,6 +13600,93 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
     args[idx] = ParseCallArgValue(callee.ParamTypes[idx], typeParams);
     if (argMutabilities != null) argMutabilities[idx] = _lastExprWasMutableVar;
     if (argVarNames != null) argVarNames[idx] = _lastExprVarName;
+  }
+
+  /// <summary>
+  /// Parses the associated value arguments for an enum case construction.
+  /// First argument is positional, subsequent arguments must be named.
+  /// Returns the parsed arguments as a list in declaration order.
+  /// </summary>
+  private List<MaxonValue> ParseEnumAssociatedValueArgs(MlirEnumCase enumCase, Token callToken) {
+    var args = new MaxonValue?[enumCase.AssociatedValues!.Count];
+    Expect(TokenType.LeftParen);
+
+    // First argument — positional or named
+    if (CheckIdentifierLike() && PeekNext().Type == TokenType.Colon) {
+      ParseEnumNamedArg(enumCase, args);
+    } else {
+      var argExpr = ParseExpression();
+      var argVal = ResolveExprValue(argExpr);
+      TypeCheckEnumArg(enumCase, 0, argVal);
+      args[0] = argVal;
+    }
+
+    // Remaining arguments — must be named
+    while (Check(TokenType.Comma) && Advance() != null) {
+      if (CheckIdentifierLike() && PeekNext().Type == TokenType.Colon) {
+        ParseEnumNamedArg(enumCase, args);
+      } else {
+        throw new CompileError(ErrorCode.SemanticTypeMismatch,
+          $"Second and subsequent arguments must be named. Use 'name: value' syntax",
+          callToken.Line, callToken.Column);
+      }
+    }
+
+    // Verify all slots are filled
+    for (int i = 0; i < args.Length; i++) {
+      if (args[i] == null) {
+        throw new CompileError(ErrorCode.SemanticWrongArgCount,
+          $"missing argument for parameter '{enumCase.AssociatedValues[i].Name}'",
+          callToken.Line, callToken.Column);
+      }
+    }
+
+    Expect(TokenType.RightParen);
+    return [.. args.Select(a => a!)];
+  }
+
+  /// <summary>
+  /// Parses a named argument for an enum associated value constructor.
+  /// Consumes "name: expr" and fills the corresponding slot in args.
+  /// </summary>
+  private void ParseEnumNamedArg(MlirEnumCase enumCase, MaxonValue?[] args) {
+    var nameToken = Advance();
+    Advance(); // consume ':'
+    int idx = -1;
+    for (int i = 0; i < enumCase.AssociatedValues!.Count; i++) {
+      if (enumCase.AssociatedValues[i].Name == nameToken.Value) {
+        idx = i;
+        break;
+      }
+    }
+    if (idx < 0)
+      throw new CompileError(ErrorCode.SemanticUndefinedVariable, $"unknown parameter name: '{nameToken.Value}'", nameToken.Line, nameToken.Column);
+    if (args[idx] != null)
+      throw new CompileError(ErrorCode.SemanticTypeMismatch, $"duplicate argument for parameter '{nameToken.Value}'", nameToken.Line, nameToken.Column);
+    var argExpr = ParseExpression();
+    var argVal = ResolveExprValue(argExpr);
+    TypeCheckEnumArg(enumCase, idx, argVal);
+    args[idx] = argVal;
+  }
+
+  /// <summary>
+  /// Type-checks an enum associated value argument against the expected type.
+  /// Skips the check for type parameters (checked after monomorphization).
+  /// </summary>
+  private void TypeCheckEnumArg(MlirEnumCase enumCase, int index, MaxonValue argVal) {
+    var expectedType = enumCase.AssociatedValues![index].Type;
+    if (expectedType is not MlirTypeParameterType) {
+      var actualKind = DetermineValueKind(argVal);
+      var expectedKind = expectedType.ToValueKind();
+      if (actualKind != expectedKind) {
+        var actualTypeName = argVal is MaxonStruct ms
+          ? ms.TypeName
+          : MlirType.FormatAsSourceName(actualKind.ToMlirType());
+        throw new CompileError(ErrorCode.SemanticTypeMismatch,
+          $"type mismatch: 'expected {MlirType.FormatAsSourceName(expectedType)}, got {actualTypeName}'",
+          Current().Line, Current().Column);
+      }
+    }
   }
 
   /// <summary>

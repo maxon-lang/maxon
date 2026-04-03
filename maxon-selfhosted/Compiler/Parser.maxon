@@ -553,7 +553,7 @@ type Parser
 
 	function emitLiteral(block MlirBlock, value ParsedInt, isFloat bool) returns ValueId
 		let id = nextValueId(project)
-		emitOp(block, op: MlirOp.maxon(MaxonOp.literal(id, value, isFloat)))
+		emitOp(block, op: MlirOp.maxon(MaxonOp.literal(id, value: value, isFloat: isFloat)))
 		return id
 	end 'emitLiteral'
 
@@ -566,7 +566,7 @@ type Parser
 	// detached block (both branches terminated) or a new merge block.
 	// Uses captured block IDs to avoid stale references from nested parsing.
 	function finalizeIfElseById(func MlirFunction, condBlock MlirBlock, condValueId ValueId, thenBlockId BlockId, thenExit MlirBlock, elseBlockId BlockId, elseExit MlirBlock, baseLabel String) returns MlirBlock
-		finalizeBlock(condBlock, terminator: MlirOp.maxon(MaxonOp.condBr(condValueId, thenBlockId, elseBlockId)))
+		finalizeBlock(condBlock, terminator: MlirOp.maxon(MaxonOp.condBr(condValueId, thenTarget: thenBlockId, elseTarget: elseBlockId)))
 		if thenExit.hasTerminator and elseExit.hasTerminator 'bothTerminated'
 			return newDetachedBlock(func)
 		end 'bothTerminated'
@@ -1099,7 +1099,7 @@ type Parser
 		var fullMsg = "panic at {fileName}:{panicToken.line}: {msgToken.value}"
 
 		let panicId = nextValueId(project)
-		block.ops.push(MlirOp.maxon(MaxonOp.panic(fullMsg, panicId)))
+		block.ops.push(MlirOp.maxon(MaxonOp.panic(fullMsg, panicId: panicId)))
 	end 'parsePanicStatement'
 
 	// --- If statement ---
@@ -1169,7 +1169,7 @@ type Parser
 		// No else clause: false branch goes directly to after block
 		var afterBlock = newBlock(func, label: "{baseLabel}.after")
 		branchIfNeeded(thenExit, target: afterBlock.id)
-		finalizeBlock(block, terminator: MlirOp.maxon(MaxonOp.condBr(condResult.valueId, thenBlockId, afterBlock.id)))
+		finalizeBlock(block, terminator: MlirOp.maxon(MaxonOp.condBr(condResult.valueId, thenTarget: thenBlockId, elseTarget: afterBlock.id)))
 		return afterBlock
 	end 'parseIfStatement'
 
@@ -1213,7 +1213,7 @@ type Parser
 		let exitBlockId = exitBlock.id
 
 		// condBlock terminator: if true -> bodyBlock, if false -> exitBlock
-		finalizeBlock(condBlock, terminator: MlirOp.maxon(MaxonOp.condBr(condResult.valueId, bodyBlockId, exitBlockId)))
+		finalizeBlock(condBlock, terminator: MlirOp.maxon(MaxonOp.condBr(condResult.valueId, thenTarget: bodyBlockId, elseTarget: exitBlockId)))
 
 		// Parse body in bodyBlock
 		let bodyExit = parseScopedStatements(func, block: bodyBlock)
@@ -1237,7 +1237,7 @@ type Parser
 		let exprResult = parseExpression(block)
 
 		let slot = lookupVariable(nameToken.value, token: nameToken)
-		emitOp(block, op: MlirOp.maxon(MaxonOp.varStore(slot, exprResult.valueId)))
+		emitOp(block, op: MlirOp.maxon(MaxonOp.varStore(slot, valueId: exprResult.valueId)))
 	end 'parseVarAssignment'
 
 	// --- Variable declaration ---
@@ -1273,7 +1273,7 @@ type Parser
 		end 'registerStringConst'
 
 		let slot = defineVariable(nameToken.value, isFloat: exprResult.isFloat, isRefType: exprResult.isRefType)
-		emitOp(block, op: MlirOp.maxon(MaxonOp.varDecl(slot, exprResult.valueId)))
+		emitOp(block, op: MlirOp.maxon(MaxonOp.varDecl(slot, valueId: exprResult.valueId)))
 	end 'parseVarDecl'
 
 	// --- Print statement ---
@@ -1414,7 +1414,7 @@ type Parser
 					let leftLitId = emitLiteral(block, value: foldedLeft, isFloat: false)
 					let rightLitId = emitLiteral(block, value: 1, isFloat: false)
 					let resultId = nextValueId(project)
-					emitOp(block, op: MlirOp.maxon(MaxonOp.cmp(resultId, leftLitId, rightLitId, CmpPredicate.eq, false)))
+					emitOp(block, op: MlirOp.maxon(MaxonOp.cmp(resultId, leftId: leftLitId, rightId: rightLitId, predicate: CmpPredicate.eq, isFloat: false)))
 					leftId = resultId
 					leftIsFloat = false
 					leftIsRefType = false
@@ -1436,7 +1436,7 @@ type Parser
 					reportCompileError(project, code: ErrorCode.semanticIsRequiresRefType, message: "'is' requires reference types (structs), not primitive values", line: opToken.line, column: opToken.column, filePath: filePath)
 				end 'notRef'
 				let resultId = nextValueId(project)
-				emitOp(block, op: MlirOp.maxon(MaxonOp.refEq(resultId, leftId, right.valueId, negate)))
+				emitOp(block, op: MlirOp.maxon(MaxonOp.refEq(resultId, leftId: leftId, rightId: right.valueId, negate: negate)))
 				leftId = resultId
 				leftIsFloat = false
 				leftIsRefType = false
@@ -1455,11 +1455,11 @@ type Parser
 				equalsArgIds.push(leftId)
 				equalsArgIds.push(right.valueId)
 				// TODO: use actual type name once type tracking is available (e.g., "String.equals")
-				emitOp(block, op: MlirOp.maxon(MaxonOp.call(equalsResultId, "equals", equalsArgIds)))
+				emitOp(block, op: MlirOp.maxon(MaxonOp.call(equalsResultId, callee: "equals", argIds: equalsArgIds)))
 				if opToken.kind == TokenKind.bangEquals 'neq'
 					// != is !equals(): invert with bitNot
 					let notResultId = nextValueId(project)
-					emitOp(block, op: MlirOp.maxon(MaxonOp.unop(notResultId, equalsResultId, UnaryOpKind.bitNot, false)))
+					emitOp(block, op: MlirOp.maxon(MaxonOp.unop(notResultId, operandId: equalsResultId, opKind: UnaryOpKind.bitNot, isFloat: false)))
 					leftId = notResultId
 				end 'neq' else 'eq'
 					leftId = equalsResultId
@@ -1498,31 +1498,31 @@ type Parser
 		var actualRightId = rightId
 		if isFloat and not leftIsFloat 'promoteLeft'
 			let promId = nextValueId(project)
-			emitOp(block, op: MlirOp.maxon(MaxonOp.intToFloat(promId, leftId)))
+			emitOp(block, op: MlirOp.maxon(MaxonOp.intToFloat(promId, operandId: leftId)))
 			actualLeftId = promId
 		end 'promoteLeft'
 		if isFloat and not rightIsFloat 'promoteRight'
 			let promId = nextValueId(project)
-			emitOp(block, op: MlirOp.maxon(MaxonOp.intToFloat(promId, rightId)))
+			emitOp(block, op: MlirOp.maxon(MaxonOp.intToFloat(promId, operandId: rightId)))
 			actualRightId = promId
 		end 'promoteRight'
 		let hlOp = match kind 'emit'
-			or gives MaxonOp.binop(resultId, actualLeftId, actualRightId, BinOpKind.bitOr, false)
-			xor gives MaxonOp.binop(resultId, actualLeftId, actualRightId, BinOpKind.bitXor, false)
-			and gives MaxonOp.binop(resultId, actualLeftId, actualRightId, BinOpKind.bitAnd, false)
-			shl gives MaxonOp.binop(resultId, actualLeftId, actualRightId, BinOpKind.shl, false)
-			shr gives MaxonOp.binop(resultId, actualLeftId, actualRightId, BinOpKind.shr, false)
-			equalsEquals gives MaxonOp.cmp(resultId, actualLeftId, actualRightId, CmpPredicate.eq, isFloat)
-			bangEquals gives MaxonOp.cmp(resultId, actualLeftId, actualRightId, CmpPredicate.ne, isFloat)
-			lessThan gives MaxonOp.cmp(resultId, actualLeftId, actualRightId, CmpPredicate.lt, isFloat)
-			lessEquals gives MaxonOp.cmp(resultId, actualLeftId, actualRightId, CmpPredicate.le, isFloat)
-			greaterThan gives MaxonOp.cmp(resultId, actualLeftId, actualRightId, CmpPredicate.gt, isFloat)
-			greaterEquals gives MaxonOp.cmp(resultId, actualLeftId, actualRightId, CmpPredicate.ge, isFloat)
-			plus gives MaxonOp.binop(resultId, actualLeftId, actualRightId, BinOpKind.add, isFloat)
-			minus gives MaxonOp.binop(resultId, actualLeftId, actualRightId, BinOpKind.sub, isFloat)
-			star gives MaxonOp.binop(resultId, actualLeftId, actualRightId, BinOpKind.mul, isFloat)
-			slash gives MaxonOp.binop(resultId, actualLeftId, actualRightId, BinOpKind.div, isFloat)
-			mod gives MaxonOp.binop(resultId, actualLeftId, actualRightId, BinOpKind.mod, false)
+			or gives MaxonOp.binop(resultId, leftId: actualLeftId, rightId: actualRightId, opKind: BinOpKind.bitOr, isFloat: false)
+			xor gives MaxonOp.binop(resultId, leftId: actualLeftId, rightId: actualRightId, opKind: BinOpKind.bitXor, isFloat: false)
+			and gives MaxonOp.binop(resultId, leftId: actualLeftId, rightId: actualRightId, opKind: BinOpKind.bitAnd, isFloat: false)
+			shl gives MaxonOp.binop(resultId, leftId: actualLeftId, rightId: actualRightId, opKind: BinOpKind.shl, isFloat: false)
+			shr gives MaxonOp.binop(resultId, leftId: actualLeftId, rightId: actualRightId, opKind: BinOpKind.shr, isFloat: false)
+			equalsEquals gives MaxonOp.cmp(resultId, leftId: actualLeftId, rightId: actualRightId, predicate: CmpPredicate.eq, isFloat: isFloat)
+			bangEquals gives MaxonOp.cmp(resultId, leftId: actualLeftId, rightId: actualRightId, predicate: CmpPredicate.ne, isFloat: isFloat)
+			lessThan gives MaxonOp.cmp(resultId, leftId: actualLeftId, rightId: actualRightId, predicate: CmpPredicate.lt, isFloat: isFloat)
+			lessEquals gives MaxonOp.cmp(resultId, leftId: actualLeftId, rightId: actualRightId, predicate: CmpPredicate.le, isFloat: isFloat)
+			greaterThan gives MaxonOp.cmp(resultId, leftId: actualLeftId, rightId: actualRightId, predicate: CmpPredicate.gt, isFloat: isFloat)
+			greaterEquals gives MaxonOp.cmp(resultId, leftId: actualLeftId, rightId: actualRightId, predicate: CmpPredicate.ge, isFloat: isFloat)
+			plus gives MaxonOp.binop(resultId, leftId: actualLeftId, rightId: actualRightId, opKind: BinOpKind.add, isFloat: isFloat)
+			minus gives MaxonOp.binop(resultId, leftId: actualLeftId, rightId: actualRightId, opKind: BinOpKind.sub, isFloat: isFloat)
+			star gives MaxonOp.binop(resultId, leftId: actualLeftId, rightId: actualRightId, opKind: BinOpKind.mul, isFloat: isFloat)
+			slash gives MaxonOp.binop(resultId, leftId: actualLeftId, rightId: actualRightId, opKind: BinOpKind.div, isFloat: isFloat)
+			mod gives MaxonOp.binop(resultId, leftId: actualLeftId, rightId: actualRightId, opKind: BinOpKind.mod, isFloat: false)
 			default throws ParserError.unhandledToken
 		end 'emit'
 		emitOp(block, op: MlirOp.maxon(hlOp))
@@ -1540,19 +1540,19 @@ type Parser
 			if operand.isFloat 'floatNeg'
 				// Float negation: emit 0.0 - operand
 				let zeroId = nextValueId(project)
-				emitOp(block, op: MlirOp.maxon(MaxonOp.literal(zeroId, 0, true)))
+				emitOp(block, op: MlirOp.maxon(MaxonOp.literal(zeroId, value: 0, isFloat: true)))
 				let resultId = nextValueId(project)
-				emitOp(block, op: MlirOp.maxon(MaxonOp.binop(resultId, zeroId, operand.valueId, BinOpKind.sub, true)))
+				emitOp(block, op: MlirOp.maxon(MaxonOp.binop(resultId, leftId: zeroId, rightId: operand.valueId, opKind: BinOpKind.sub, isFloat: true)))
 				return ExprResult.createFull(resultId, isFloat: true, isRefType: false, isStringConst: false, stringConstValue: "")
 			end 'floatNeg'
 			let resultId = nextValueId(project)
-			emitOp(block, op: MlirOp.maxon(MaxonOp.unop(resultId, operand.valueId, UnaryOpKind.neg, false)))
+			emitOp(block, op: MlirOp.maxon(MaxonOp.unop(resultId, operandId: operand.valueId, opKind: UnaryOpKind.neg, isFloat: false)))
 			return ExprResult.createFull(resultId, isFloat: false, isRefType: false, isStringConst: false, stringConstValue: "")
 		end 'isNeg' else if token.kind == TokenKind.not 'isNot'
 			expect(TokenKind.not)
 			let operand = parseUnary(block)
 			let resultId = nextValueId(project)
-			emitOp(block, op: MlirOp.maxon(MaxonOp.unop(resultId, operand.valueId, UnaryOpKind.bitNot, false)))
+			emitOp(block, op: MlirOp.maxon(MaxonOp.unop(resultId, operandId: operand.valueId, opKind: UnaryOpKind.bitNot, isFloat: false)))
 			return ExprResult.createFull(resultId, isFloat: false, isRefType: false, isStringConst: false, stringConstValue: "")
 		end 'isNot'
 
@@ -1596,7 +1596,7 @@ type Parser
 				let truncArgId = try argIds.get(0) otherwise 0
 				if lastArgIsFloat 'isFloat'
 					let truncResultId = nextValueId(project)
-					emitOp(block, op: MlirOp.maxon(MaxonOp.truncFloat(truncResultId, truncArgId)))
+					emitOp(block, op: MlirOp.maxon(MaxonOp.truncFloat(truncResultId, operandId: truncArgId)))
 					return ExprResult.create(truncResultId)
 				end 'isFloat'
 				// Integer argument — trunc is a no-op
@@ -1610,7 +1610,7 @@ type Parser
 				calleeName = qualifyName(callNs, name: calleeName)
 			end 'qualifyCall'
 			let callId = nextValueId(project)
-			emitOp(block, op: MlirOp.maxon(MaxonOp.call(callId, calleeName, argIds)))
+			emitOp(block, op: MlirOp.maxon(MaxonOp.call(callId, callee: calleeName, argIds: argIds)))
 			// Check if the callee returns a float type
 			let calleeReturnType = try project.funcReturnTypes.get(calleeName) otherwise ""
 			let resolvedReturnType = resolveTypeName(project, name: calleeReturnType)
@@ -1647,7 +1647,7 @@ type Parser
 
 		let slot = lookupVariable(token.value, token: token)
 		let id = nextValueId(project)
-		emitOp(block, op: MlirOp.maxon(MaxonOp.varLoad(id, slot)))
+		emitOp(block, op: MlirOp.maxon(MaxonOp.varLoad(id, slotId: slot)))
 		let varIsFloat = isVariableFloat(token.value)
 		let varIsRef = isVariableRefType(token.value)
 		expect(TokenKind.identifier)

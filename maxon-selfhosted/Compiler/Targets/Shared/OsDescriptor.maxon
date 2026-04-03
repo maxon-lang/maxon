@@ -26,7 +26,7 @@ export type OsDescriptor
 end 'OsDescriptor'
 
 export function makeOsDescriptor(target Target) returns OsDescriptor
-	var result = OsDescriptor.create(exit: ExitStrategy.syscall(0), write: WriteStrategy.syscall(0, 0), writeErr: WriteStrategy.syscall(0, 0), startShadowSpace: 0)
+	var result = OsDescriptor.create(exit: ExitStrategy.syscall(0), write: WriteStrategy.syscall(0, fd: 0), writeErr: WriteStrategy.syscall(0, fd: 0), startShadowSpace: 0)
 
 	match target.os 'pickOs'
 		windows then result = makeWindowsDescriptor()
@@ -39,11 +39,11 @@ export function makeOsDescriptor(target Target) returns OsDescriptor
 end 'makeOsDescriptor'
 
 function makeWindowsDescriptor() returns OsDescriptor
-	return OsDescriptor.create(exit: ExitStrategy.iatCall(0), write: WriteStrategy.winApi(1, 0xFFFFFFF5, 2), writeErr: WriteStrategy.winApi(1, 0xFFFFFFF4, 2), startShadowSpace: 0x28)
+	return OsDescriptor.create(exit: ExitStrategy.iatCall(0), write: WriteStrategy.winApi(1, handleConstant: 0xFFFFFFF5, writeFileSlot: 2), writeErr: WriteStrategy.winApi(1, handleConstant: 0xFFFFFFF4, writeFileSlot: 2), startShadowSpace: 0x28)
 end 'makeWindowsDescriptor'
 
 function makeMacOsDescriptor() returns OsDescriptor
-	return OsDescriptor.create(exit: ExitStrategy.iatCall(0), write: WriteStrategy.libcall(1, 1), writeErr: WriteStrategy.libcall(1, 2), startShadowSpace: 0)
+	return OsDescriptor.create(exit: ExitStrategy.iatCall(0), write: WriteStrategy.libcall(1, fd: 1), writeErr: WriteStrategy.libcall(1, fd: 2), startShadowSpace: 0)
 end 'makeMacOsDescriptor'
 
 function makeLinuxDescriptor(target Target) returns OsDescriptor
@@ -58,5 +58,5 @@ function makeLinuxDescriptor(target Target) returns OsDescriptor
 		default panic("Linux descriptor not used for WASM targets")
 	end 'cpuWrite'
 
-	return OsDescriptor.create(exit: ExitStrategy.syscall(exitNum), write: WriteStrategy.syscall(writeNum, 1), writeErr: WriteStrategy.syscall(writeNum, 2), startShadowSpace: 0)
+	return OsDescriptor.create(exit: ExitStrategy.syscall(exitNum), write: WriteStrategy.syscall(writeNum, fd: 1), writeErr: WriteStrategy.syscall(writeNum, fd: 2), startShadowSpace: 0)
 end 'makeLinuxDescriptor'

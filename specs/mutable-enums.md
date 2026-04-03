@@ -104,7 +104,7 @@ enum Pair
 end 'Pair'
 
 function main() returns ExitCode
-	var p = Pair.values(1, 2)
+	var p = Pair.values(1, b: 2)
 	match p 'update-a'
 		values(a, _) then a = 10
 		empty then return 0
@@ -134,7 +134,7 @@ enum Record
 end 'Record'
 
 function main() returns ExitCode
-	var e = Record.data(1, 0)
+	var e = Record.data(1, count: 0)
 	match e 'inc'
 		data(id, count) then count = count + id
 		blank then return 0

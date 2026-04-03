@@ -95,7 +95,7 @@ export function insertRangeChecks(module MlirModule, funcReturnTypes FuncReturnT
 						end 'singleCheck'
 
 						let panicMsg = buildPanicMessage(aliasName, sourceFileName: sourceFileName, sourceLine: srcFunc.returnLine)
-						panicBlock.ops.push(MlirOp.maxon(MaxonOp.panic(panicMsg, checkId)))
+						panicBlock.ops.push(MlirOp.maxon(MaxonOp.panic(panicMsg, panicId: checkId)))
 						continueBlock.terminator = MlirOp.func(FuncOp.ret(retValId))
 						continueBlock.hasTerminator = true
 					end 'notConst'
@@ -191,7 +191,7 @@ function emitBoundCheck(block MlirBlock, valueId ValueId, bound RangeBound, cons
 	block.ops.push(MlirOp.arith(ArithOp.const(ArithConst.create(constOpcode, resultId: boundLitId, value: bound))))
 	let cmpId = allocValueId(nextValueIdRef)
 	block.ops.push(MlirOp.arith(ArithOp.binary(ArithBinaryOp.create(cmpOpcode, resultId: cmpId, leftId: valueId, rightId: boundLitId))))
-	block.terminator = MlirOp.cf(CfOp.condBr(cmpId, thenBlockId, ValueIdArray.create(), elseBlockId, ValueIdArray.create()))
+	block.terminator = MlirOp.cf(CfOp.condBr(cmpId, thenTarget: thenBlockId, thenArgIds: ValueIdArray.create(), elseTarget: elseBlockId, elseArgIds: ValueIdArray.create()))
 	block.hasTerminator = true
 end 'emitBoundCheck'
 
