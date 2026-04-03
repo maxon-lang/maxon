@@ -1,0 +1,120 @@
+// Test: struct-param
+
+typealias Integer = int(i64.min to i64.max)
+
+type Vec2
+	export var x Integer
+	export var y Integer
+
+	static function create(x Integer, y Integer) returns Self
+		return Self{x: x, y: y}
+	end 'create'
+end 'Vec2'
+
+function dot(a Vec2, b Vec2) returns Integer
+	return a.x * b.x + a.y * b.y
+end 'dot'
+
+function main() returns ExitCode
+	var v1 = Vec2.create(3, y: 4)
+	var v2 = Vec2.create(2, y: 1)
+	return dot(v1, b: v2)
+end 'main'
+---
+ExitCode: 10
+---
+module {
+  func @Vec2.create(x: i64, y: i64) -> i64 {
+  entry:
+    x64.prologue stack_size=32
+    x64.mov [rbp-16], rcx
+    x64.mov [rbp-24], rdx
+    x64.mov rcx, 16
+    x64.xor rdx, rdx
+    x64.mov r8, 1
+    x64.call mm_alloc
+    x64.mov [rbp-8], rax
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rbp-16]
+    x64.mov [rax+0], rcx
+    x64.mov rdx, [rbp-8]
+    x64.mov rbx, [rbp-24]
+    x64.mov [rdx+8], rbx
+    x64.mov rsi, [rbp-8]
+    x64.mov rcx, [rbp-8]
+    x64.call mm_incref
+    x64.mov rax, [rbp-8]
+    x64.epilogue
+    x64.ret
+  }
+  func @structs.dot(a: i64, b: i64) -> i64 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-8], rcx
+    x64.mov [rbp-16], rdx
+    x64.mov rax, [rbp-8]
+    x64.mov rbx, [rax+0]
+    x64.mov rax, [rbp-16]
+    x64.mov rsi, [rax+0]
+    x64.imul rbx, rsi
+    x64.mov rax, [rbp-8]
+    x64.mov rsi, [rax+8]
+    x64.mov rax, [rbp-16]
+    x64.mov rdi, [rax+8]
+    x64.imul rsi, rdi
+    x64.lea rax, [rbx + rsi]
+    x64.epilogue
+    x64.ret
+  }
+  func @main() -> u32 {
+  entry:
+    x64.prologue stack_size=32
+    x64.mov rcx, 3
+    x64.mov rdx, 4
+    x64.call Vec2.create
+    x64.mov [rbp-8], rax
+    x64.mov rcx, 2
+    x64.mov rdx, 1
+    x64.call Vec2.create
+    x64.mov [rbp-16], rax
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rbp-16]
+    x64.mov rcx, [rbp-8]
+    x64.mov rdx, [rbp-16]
+    x64.call structs.dot
+    x64.xor rdx, rdx
+    x64.mov rbx, 4294967295
+    x64.cmp rax, rbx
+    x64.jg main.__range_panic_0
+    x64.cmp rax, rdx
+    x64.jl main.__range_panic_0
+    x64.jmp main.__range_ok_0
+  __range_panic_0:
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.mov rcx, [rbp-16]
+    x64.mov [rbp-24], rax
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_0
+    x64.call mm_decref
+    x64.label __nonnull_skip_0
+    x64.mov rax, [rbp-8]
+    x64.test rax, rax
+    x64.jz __nonnull_skip_1
+    x64.mov rcx, [rbp-8]
+    x64.call mm_decref
+    x64.label __nonnull_skip_1
+    x64.mov rax, [rbp-24]
+    x64.epilogue
+    x64.ret
+  }
+  func @__destruct_Vec2(ptr: i64) {
+  entry:
+    x64.jmp __destruct_Vec2.done
+  done:
+    x64.ret
+  }
+}
+---

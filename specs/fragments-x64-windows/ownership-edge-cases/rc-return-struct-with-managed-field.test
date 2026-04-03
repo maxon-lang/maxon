@@ -1,0 +1,177 @@
+// Test: rc-return-struct-with-managed-field
+typealias Integer = int(i64.min to i64.max)
+
+type Inner
+	export var value Integer
+
+	static function create(value Integer) returns Self
+		return Self{value: value}
+	end 'create'
+end 'Inner'
+
+type Wrapper
+	export var inner Inner
+
+	static function create(inner Inner) returns Self
+		return Self{inner: inner}
+	end 'create'
+end 'Wrapper'
+
+function wrap(i Inner) returns Wrapper
+	return Wrapper.create(inner: i)
+end 'wrap'
+
+function main() returns ExitCode
+	var i = Inner.create(value: 5)
+	var w = wrap(i: i)
+	return w.inner.value
+end 'main'
+---
+MmTrace: true
+ExitCode: 5
+Stderr: ```
+sl_init
+  os_alloc size=67108864
+mm_alloc Inner #1 size=8 [Inner.create]
+  sl_alloc Inner #1 size=40 class=4
+mm_incref Inner #1 rc=1 [Inner.create]
+mm_transfer Inner #1 rc=1 [Inner.create]
+mm_alloc Wrapper #2 size=8 [Wrapper.create]
+  sl_alloc Wrapper #2 size=40 class=4
+mm_incref Inner #1 rc=2 [Wrapper.create]
+mm_incref Wrapper #2 rc=1 [Wrapper.create]
+mm_transfer Wrapper #2 rc=1 [Wrapper.create]
+mm_transfer Wrapper #2 rc=1 [ownership-edge-cases.wrap]
+mm_decref Wrapper #2 rc=0 [main]
+  mm_decref Inner #1 rc=1 [~Wrapper]
+  mm_free Wrapper #2
+    sl_free Wrapper #2 size=48 class=4
+mm_decref Inner #1 rc=0 [main]
+  mm_free Inner #1
+    sl_free Inner #1 size=48 class=4
+mm_raw_alloc #R1 size=40
+  sl_alloc size=40 class=4
+mm_raw_free #R1
+  sl_free size=48 class=4
+```
+---
+module {
+  func @Inner.create(value: i64) -> i64 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-16], rcx
+    x64.mov rcx, 8
+    x64.xor rdx, rdx
+    x64.mov r8, 1
+    x64.call mm_alloc
+    x64.mov [rbp-8], rax
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rbp-16]
+    x64.mov [rax+0], rcx
+    x64.mov rdx, [rbp-8]
+    x64.mov rcx, [rbp-8]
+    x64.call mm_incref
+    x64.mov rax, [rbp-8]
+    x64.epilogue
+    x64.ret
+  }
+  func @Wrapper.create(inner: i64) -> i64 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-8], rcx
+    x64.lea_func rax, [__destruct_Wrapper]
+    x64.mov rdx, rax
+    x64.mov rcx, 8
+    x64.mov r8, 2
+    x64.call mm_alloc
+    x64.mov [rbp-16], rax
+    x64.mov rcx, [rbp-8]
+    x64.mov rdx, [rbp-16]
+    x64.mov [rdx+0], rcx
+    x64.call mm_incref
+    x64.mov rbx, [rbp-16]
+    x64.mov rcx, [rbp-16]
+    x64.call mm_incref
+    x64.mov rax, [rbp-16]
+    x64.epilogue
+    x64.ret
+  }
+  func @ownership-edge-cases.wrap(i: i64) -> i64 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-8], rcx
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rbp-8]
+    x64.call Wrapper.create
+    x64.mov [rbp-16], rax
+    x64.mov rax, [rbp-16]
+    x64.epilogue
+    x64.ret
+  }
+  func @main() -> u32 {
+  entry:
+    x64.prologue stack_size=32
+    x64.mov rcx, 5
+    x64.call Inner.create
+    x64.mov [rbp-8], rax
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rbp-8]
+    x64.call ownership-edge-cases.wrap
+    x64.mov [rbp-16], rax
+    x64.mov rcx, [rbp-16]
+    x64.mov rdx, [rcx+0]
+    x64.mov [rbp-24], rdx
+    x64.mov rbx, [rbp-24]
+    x64.mov rsi, [rbx+0]
+    x64.xor rdi, rdi
+    x64.mov r8, 4294967295
+    x64.cmp rsi, r8
+    x64.jg main.__range_panic_0
+    x64.cmp rsi, rdi
+    x64.jl main.__range_panic_0
+    x64.jmp main.__range_ok_0
+  __range_panic_0:
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.mov rax, [rbp-16]
+    x64.mov [rbp-32], rsi
+    x64.test rax, rax
+    x64.jz __nonnull_skip_0
+    x64.mov rcx, [rbp-16]
+    x64.call mm_decref
+    x64.label __nonnull_skip_0
+    x64.mov rcx, [rbp-8]
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_1
+    x64.call mm_decref
+    x64.label __nonnull_skip_1
+    x64.mov rax, [rbp-32]
+    x64.epilogue
+    x64.ret
+  }
+  func @__destruct_Inner(ptr: i64) {
+  entry:
+    x64.jmp __destruct_Inner.done
+  done:
+    x64.ret
+  }
+  func @__destruct_Wrapper(ptr: i64) {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-8], rcx
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+0]
+    x64.mov [rbp-16], rcx
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_2
+    x64.call mm_decref
+    x64.label __nonnull_skip_2
+    x64.jmp __destruct_Wrapper.done
+  done:
+    x64.epilogue
+    x64.ret
+  }
+}
+---

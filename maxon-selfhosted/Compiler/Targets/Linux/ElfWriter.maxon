@@ -1,13 +1,13 @@
-// ELF64 file writer for Linux x86_64 executables.
+// ELF64 file writer for Linux x64 executables.
 // Produces a minimal static ELF with a single PT_LOAD segment containing the code.
-// Linux x86_64 targets use raw syscalls, so no dynamic linking is needed.
+// Linux x64 targets use raw syscalls, so no dynamic linking is needed.
 
 let ELF_LOAD_ADDR = 0x400000
 let ELF_HEADER_SIZE = 64
 let ELF_PHDR_SIZE = 56
 let ELF_PAGE_SIZE = 0x1000
 
-// Patch x86_64 RIP-relative rdata relocations for ELF
+// Patch x64 RIP-relative rdata relocations for ELF
 function patchElfRdataRelocationsX86(code ByteArray, rdataRelocs RdataRelocationArray, textVAddr MachineWord, rdataVAddr MachineWord, symdataVAddr MachineWord)
 	for reloc in rdataRelocs 'patch'
 		let ripAtReloc = textVAddr + reloc.codeOffset + 4
@@ -54,8 +54,8 @@ export function writeElf(outputPath FilePath, codeResult CodeResult, target Targ
 
 	// Patch rdata and symdata relocations in code before writing
 	match target.cpu 'patchRdata'
-		x86_64 then patchElfRdataRelocationsX86(code, rdataRelocs: codeResult.rdataRelocations, textVAddr: textVAddr, rdataVAddr: rdataVAddr, symdataVAddr: symdataVAddr)
-		aarch64 then patchElfRdataRelocationsArm64(code, rdataRelocs: codeResult.rdataRelocations, textVAddr: textVAddr, rdataVAddr: rdataVAddr, symdataVAddr: symdataVAddr)
+		x64 then patchElfRdataRelocationsX86(code, rdataRelocs: codeResult.rdataRelocations, textVAddr: textVAddr, rdataVAddr: rdataVAddr, symdataVAddr: symdataVAddr)
+		arm64 then patchElfRdataRelocationsArm64(code, rdataRelocs: codeResult.rdataRelocations, textVAddr: textVAddr, rdataVAddr: rdataVAddr, symdataVAddr: symdataVAddr)
 	end 'patchRdata'
 
 	var elf = ByteArray.create()
@@ -70,8 +70,8 @@ export function writeElf(outputPath FilePath, codeResult CodeResult, target Targ
 	writeWord(elf, value: 2)
 	// e_machine: EM_X86_64=0x3E, EM_AARCH64=0xB7
 	let eMachine = match target.cpu 'cpuMachine'
-		x86_64 gives 0x3E
-		aarch64 gives 0xB7
+		x64 gives 0x3E
+		arm64 gives 0xB7
 	end 'cpuMachine'
 	writeWord(elf, value: eMachine)
 	// e_version(1)

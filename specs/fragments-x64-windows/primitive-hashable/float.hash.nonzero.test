@@ -1,0 +1,32 @@
+// Test: float.hash.nonzero
+function main() returns ExitCode
+	var f = 3.14
+	var h = f.hash()
+	if h != 0 'check'
+		return 1
+	end 'check'
+	return 0
+end 'main'
+---
+ExitCode: 1
+---
+module {
+  func @main() -> u32 {
+  entry:
+    x64.prologue stack_size=16
+    x64.movsd xmm0, [rip+__float_3.14]
+    x64.call stdlib.float.hash
+    x64.xor rcx, rcx
+    x64.cmp rax, rcx
+    x64.je main.check_0.after
+  check_0:
+    x64.mov rax, 1
+    x64.epilogue
+    x64.ret
+  check_0.after:
+    x64.xor rax, rax
+    x64.epilogue
+    x64.ret
+  }
+}
+---

@@ -1,0 +1,493 @@
+// Test: field-assign-with-func-call-in-struct
+typealias Integer = int(i64.min to i64.max)
+typealias IntArray = Array with Integer
+
+export type Module
+		export var items IntArray
+
+		static function create(items IntArray) returns Self
+			return Self{items: items}
+		end 'create'
+end 'Module'
+
+export type Memo
+		export var value Module
+		export var rev Integer
+
+		static function create(value Module, rev Integer) returns Self
+			return Self{value: value, rev: rev}
+		end 'create'
+end 'Memo'
+
+export type Database
+		export var memo Memo
+		export var deps IntArray
+
+		static function create(memo Memo, deps IntArray) returns Self
+			return Self{memo: memo, deps: deps}
+		end 'create'
+end 'Database'
+
+export type Project
+		export var db Database
+		export var ready bool
+
+		static function create(db Database, ready bool) returns Self
+			return Self{db: db, ready: ready}
+		end 'create'
+end 'Project'
+
+function createModule() returns Module
+		return Module.create(items: IntArray.create())
+end 'createModule'
+
+function initProject(p Project)
+		if not p.ready 'init'
+				p.db = Database.create(memo: Memo.create(value: createModule(), rev: 0), deps: IntArray.create())
+				p.ready = true
+		end 'init'
+end 'initProject'
+
+function useProject(p Project) returns Integer
+		p.db.deps.push(1)
+		p.db.deps.push(2)
+		p.db.deps.push(3)
+		return p.db.deps.count()
+end 'useProject'
+
+function main() returns ExitCode
+		let p = Project.create(db: Database.create(memo: Memo.create(value: Module.create(items: IntArray.create()), rev: 0), deps: IntArray.create()), ready: false)
+		initProject(p)
+		return useProject(p)
+end 'main'
+---
+ExitCode: 3
+---
+module {
+  func @Module.create(items: i64) -> i64 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-8], rcx
+    x64.lea_func rax, [__destruct_Module]
+    x64.mov rdx, rax
+    x64.mov rcx, 8
+    x64.mov r8, 1
+    x64.call mm_alloc
+    x64.mov [rbp-16], rax
+    x64.mov rcx, [rbp-8]
+    x64.mov rdx, [rbp-16]
+    x64.mov [rdx+0], rcx
+    x64.call mm_incref
+    x64.mov rbx, [rbp-16]
+    x64.mov rcx, [rbp-16]
+    x64.call mm_incref
+    x64.mov rax, [rbp-16]
+    x64.epilogue
+    x64.ret
+  }
+  func @Memo.create(value: i64, rev: i64) -> i64 {
+  entry:
+    x64.prologue stack_size=32
+    x64.mov [rbp-8], rcx
+    x64.lea_func rax, [__destruct_Memo]
+    x64.mov rbx, rax
+    x64.mov [rbp-24], rdx
+    x64.mov rdx, rbx
+    x64.mov rcx, 16
+    x64.mov r8, 2
+    x64.call mm_alloc
+    x64.mov [rbp-16], rax
+    x64.mov rcx, [rbp-8]
+    x64.mov rdx, [rbp-16]
+    x64.mov [rdx+0], rcx
+    x64.call mm_incref
+    x64.mov rbx, [rbp-16]
+    x64.mov rsi, [rbp-24]
+    x64.mov [rbx+8], rsi
+    x64.mov rdi, [rbp-16]
+    x64.mov rcx, [rbp-16]
+    x64.call mm_incref
+    x64.mov rax, [rbp-16]
+    x64.epilogue
+    x64.ret
+  }
+  func @Database.create(memo: i64, deps: i64) -> i64 {
+  entry:
+    x64.prologue stack_size=32
+    x64.mov [rbp-8], rcx
+    x64.mov [rbp-16], rdx
+    x64.lea_func rax, [__destruct_Database]
+    x64.mov rbx, rax
+    x64.mov rdx, rbx
+    x64.mov rcx, 16
+    x64.mov r8, 3
+    x64.call mm_alloc
+    x64.mov [rbp-24], rax
+    x64.mov rcx, [rbp-8]
+    x64.mov rdx, [rbp-24]
+    x64.mov [rdx+0], rcx
+    x64.call mm_incref
+    x64.mov rbx, [rbp-16]
+    x64.mov rsi, [rbp-24]
+    x64.mov [rsi+8], rbx
+    x64.mov rcx, [rbp-16]
+    x64.call mm_incref
+    x64.mov rdi, [rbp-24]
+    x64.mov rcx, [rbp-24]
+    x64.call mm_incref
+    x64.mov rax, [rbp-24]
+    x64.epilogue
+    x64.ret
+  }
+  func @Project.create(db: i64, ready: i1) -> i64 {
+  entry:
+    x64.prologue stack_size=32
+    x64.mov [rbp-8], rcx
+    x64.lea_func rax, [__destruct_Project]
+    x64.mov rbx, rax
+    x64.mov [rbp-24], rdx
+    x64.mov rdx, rbx
+    x64.mov rcx, 16
+    x64.mov r8, 4
+    x64.call mm_alloc
+    x64.mov [rbp-16], rax
+    x64.mov rcx, [rbp-8]
+    x64.mov rdx, [rbp-16]
+    x64.mov [rdx+0], rcx
+    x64.call mm_incref
+    x64.mov rbx, [rbp-16]
+    x64.mov rsi, [rbp-24]
+    x64.mov byte ptr [rbx+8], rsib
+    x64.mov rdi, [rbp-16]
+    x64.mov rcx, [rbp-16]
+    x64.call mm_incref
+    x64.mov rax, [rbp-16]
+    x64.epilogue
+    x64.ret
+  }
+  func @struct-enum-array-grow.createModule() -> i64 {
+  entry:
+    x64.prologue stack_size=16
+    x64.call IntArray.create
+    x64.mov [rbp-8], rax
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rbp-8]
+    x64.call Module.create
+    x64.mov [rbp-16], rax
+    x64.mov rcx, [rbp-8]
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_0
+    x64.call mm_decref
+    x64.label __nonnull_skip_0
+    x64.mov rax, [rbp-16]
+    x64.epilogue
+    x64.ret
+  }
+  func @struct-enum-array-grow.initProject(p: i64) {
+  entry:
+    x64.prologue stack_size=48
+    x64.mov [rbp-8], rcx
+    x64.mov rax, [rbp-8]
+    x64.movzx rdx, byte ptr [rax+8]
+    x64.mov rax, 1
+    x64.xor rdx, rax
+    x64.test rdx, rdx
+    x64.je struct-enum-array-grow.initProject.init_0.merge
+  init_0:
+    x64.call struct-enum-array-grow.createModule
+    x64.mov [rbp-16], rax
+    x64.mov rax, [rbp-16]
+    x64.mov rcx, [rbp-16]
+    x64.xor rdx, rdx
+    x64.call Memo.create
+    x64.mov [rbp-24], rax
+    x64.call IntArray.create
+    x64.mov [rbp-32], rax
+    x64.mov rcx, [rbp-24]
+    x64.mov rdx, [rbp-32]
+    x64.call Database.create
+    x64.mov [rbp-40], rax
+    x64.mov rbx, [rbp-40]
+    x64.mov rsi, [rbp-8]
+    x64.mov rdi, [rsi+0]
+    x64.mov [rbp-48], rdi
+    x64.test rdi, rdi
+    x64.jz __nonnull_skip_1
+    x64.mov rcx, [rbp-48]
+    x64.call mm_decref
+    x64.label __nonnull_skip_1
+    x64.mov r8, [rbp-8]
+    x64.mov r9, [rbp-40]
+    x64.mov [r8+0], r9
+    x64.mov rcx, [rbp-40]
+    x64.call mm_incref
+    x64.mov rax, 1
+    x64.mov rcx, [rbp-8]
+    x64.mov byte ptr [rcx+8], raxb
+    x64.mov rax, [rbp-40]
+    x64.test rax, rax
+    x64.jz __nonnull_skip_2
+    x64.mov rcx, [rbp-40]
+    x64.call mm_decref
+    x64.label __nonnull_skip_2
+    x64.mov rax, [rbp-32]
+    x64.test rax, rax
+    x64.jz __nonnull_skip_3
+    x64.mov rcx, [rbp-32]
+    x64.call mm_decref
+    x64.label __nonnull_skip_3
+    x64.mov rax, [rbp-24]
+    x64.test rax, rax
+    x64.jz __nonnull_skip_4
+    x64.mov rcx, [rbp-24]
+    x64.call mm_decref
+    x64.label __nonnull_skip_4
+    x64.mov rax, [rbp-16]
+    x64.test rax, rax
+    x64.jz __nonnull_skip_5
+    x64.mov rcx, [rbp-16]
+    x64.call mm_decref
+    x64.label __nonnull_skip_5
+    x64.jmp struct-enum-array-grow.initProject.init_0.merge
+  init_0.merge:
+    x64.epilogue
+    x64.ret
+  }
+  func @struct-enum-array-grow.useProject(p: i64) -> i64 {
+  entry:
+    x64.prologue stack_size=80
+    x64.mov [rbp-8], rcx
+    x64.mov rax, [rbp-8]
+    x64.mov rdx, [rax+0]
+    x64.mov [rbp-16], rdx
+    x64.mov rax, [rbp-16]
+    x64.mov rdx, [rax+8]
+    x64.mov [rbp-24], rdx
+    x64.mov rax, [rbp-24]
+    x64.mov rcx, [rbp-24]
+    x64.mov rdx, 1
+    x64.call IntArray.push
+    x64.mov rcx, [rbp-8]
+    x64.mov rdx, [rcx+0]
+    x64.mov [rbp-32], rdx
+    x64.mov rbx, [rbp-32]
+    x64.mov rsi, [rbx+8]
+    x64.mov [rbp-40], rsi
+    x64.mov rdi, [rbp-40]
+    x64.mov rcx, [rbp-40]
+    x64.mov rdx, 2
+    x64.call IntArray.push
+    x64.mov r8, [rbp-8]
+    x64.mov r9, [r8+0]
+    x64.mov [rbp-48], r9
+    x64.mov rax, [rbp-48]
+    x64.mov rcx, [rax+8]
+    x64.mov [rbp-56], rcx
+    x64.mov rax, [rbp-56]
+    x64.mov rcx, [rbp-56]
+    x64.mov rdx, 3
+    x64.call IntArray.push
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+0]
+    x64.mov [rbp-64], rcx
+    x64.mov rax, [rbp-64]
+    x64.mov rcx, [rax+8]
+    x64.mov [rbp-72], rcx
+    x64.mov rcx, [rbp-72]
+    x64.epilogue
+    x64.jmp IntArray.count
+  }
+  func @main() -> u32 {
+  entry:
+    x64.prologue stack_size=64
+    x64.call IntArray.create
+    x64.mov [rbp-8], rax
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rbp-8]
+    x64.call Module.create
+    x64.mov [rbp-16], rax
+    x64.mov rcx, [rbp-16]
+    x64.xor rdx, rdx
+    x64.call Memo.create
+    x64.mov [rbp-24], rax
+    x64.call IntArray.create
+    x64.mov [rbp-32], rax
+    x64.mov rdx, [rbp-24]
+    x64.mov rbx, [rbp-32]
+    x64.mov rcx, [rbp-24]
+    x64.mov rdx, [rbp-32]
+    x64.call Database.create
+    x64.mov [rbp-40], rax
+    x64.mov rsi, [rbp-40]
+    x64.mov rcx, [rbp-40]
+    x64.xor rdx, rdx
+    x64.call Project.create
+    x64.mov [rbp-48], rax
+    x64.mov rdi, [rbp-48]
+    x64.mov rcx, [rbp-48]
+    x64.call struct-enum-array-grow.initProject
+    x64.mov r8, [rbp-48]
+    x64.mov rcx, [rbp-48]
+    x64.call struct-enum-array-grow.useProject
+    x64.xor r9, r9
+    x64.mov rcx, 4294967295
+    x64.cmp rax, rcx
+    x64.jg main.__range_panic_0
+    x64.cmp rax, r9
+    x64.jl main.__range_panic_0
+    x64.jmp main.__range_ok_0
+  __range_panic_0:
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.mov rdx, [rbp-40]
+    x64.mov [rbp-56], rax
+    x64.test rdx, rdx
+    x64.jz __nonnull_skip_6
+    x64.mov rcx, [rbp-40]
+    x64.call mm_decref
+    x64.label __nonnull_skip_6
+    x64.mov rax, [rbp-32]
+    x64.test rax, rax
+    x64.jz __nonnull_skip_7
+    x64.mov rcx, [rbp-32]
+    x64.call mm_decref
+    x64.label __nonnull_skip_7
+    x64.mov rcx, [rbp-24]
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_8
+    x64.call mm_decref
+    x64.label __nonnull_skip_8
+    x64.mov rdx, [rbp-16]
+    x64.test rdx, rdx
+    x64.jz __nonnull_skip_9
+    x64.mov rcx, [rbp-16]
+    x64.call mm_decref
+    x64.label __nonnull_skip_9
+    x64.mov rbx, [rbp-8]
+    x64.test rbx, rbx
+    x64.jz __nonnull_skip_10
+    x64.mov rcx, [rbp-8]
+    x64.call mm_decref
+    x64.label __nonnull_skip_10
+    x64.mov rsi, [rbp-48]
+    x64.test rsi, rsi
+    x64.jz __nonnull_skip_11
+    x64.mov rcx, [rbp-48]
+    x64.call mm_decref
+    x64.label __nonnull_skip_11
+    x64.mov rax, [rbp-56]
+    x64.epilogue
+    x64.ret
+  }
+  func @__destruct_Module(ptr: i64) {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-8], rcx
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+0]
+    x64.mov [rbp-16], rcx
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_12
+    x64.call mm_decref
+    x64.label __nonnull_skip_12
+    x64.jmp __destruct_Module.done
+  done:
+    x64.epilogue
+    x64.ret
+  }
+  func @__destruct_Memo(ptr: i64) {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-8], rcx
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+0]
+    x64.mov [rbp-16], rcx
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_13
+    x64.call mm_decref
+    x64.label __nonnull_skip_13
+    x64.jmp __destruct_Memo.done
+  done:
+    x64.epilogue
+    x64.ret
+  }
+  func @__destruct_Database(ptr: i64) {
+  entry:
+    x64.prologue stack_size=32
+    x64.mov [rbp-8], rcx
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+0]
+    x64.mov [rbp-16], rcx
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_14
+    x64.call mm_decref
+    x64.label __nonnull_skip_14
+    x64.mov rdx, [rbp-8]
+    x64.mov rbx, [rdx+8]
+    x64.mov [rbp-24], rbx
+    x64.test rbx, rbx
+    x64.jz __nonnull_skip_15
+    x64.mov rcx, [rbp-24]
+    x64.call mm_decref
+    x64.label __nonnull_skip_15
+    x64.jmp __destruct_Database.done
+  done:
+    x64.epilogue
+    x64.ret
+  }
+  func @__destruct_Project(ptr: i64) {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-8], rcx
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+0]
+    x64.mov [rbp-16], rcx
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_16
+    x64.call mm_decref
+    x64.label __nonnull_skip_16
+    x64.jmp __destruct_Project.done
+  done:
+    x64.epilogue
+    x64.ret
+  }
+  func @__destruct___ManagedMemory_Integer(ptr: i64) {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-8], rcx
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+16]
+    x64.xor rdx, rdx
+    x64.cmp rcx, rdx
+    x64.je __destruct___ManagedMemory_Integer.skip_buf_0
+  free_buf_0:
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+0]
+    x64.call mm_raw_free
+    x64.jmp __destruct___ManagedMemory_Integer.skip_buf_0
+  skip_buf_0:
+    x64.jmp __destruct___ManagedMemory_Integer.done
+  done:
+    x64.epilogue
+    x64.ret
+  }
+  func @__destruct_IntArray(ptr: i64) {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-8], rcx
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+8]
+    x64.mov [rbp-16], rcx
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_17
+    x64.call mm_decref
+    x64.label __nonnull_skip_17
+    x64.jmp __destruct_IntArray.done
+  done:
+    x64.epilogue
+    x64.ret
+  }
+}
+---

@@ -1,0 +1,53 @@
+// Test: f32-arithmetic
+typealias F = float(f32.min to f32.max)
+
+function main() returns ExitCode
+	var a = F{10.0}
+	var b = F{3.0}
+	var sum = a + b
+	var diff = a - b
+	var prod = a * b
+	var quot = a / b
+	return trunc(sum + diff + prod + quot)
+end 'main'
+---
+ExitCode: 53
+---
+module {
+  func @main() -> u32 {
+  entry:
+    x64.prologue stack_size=16
+    x64.movsd xmm0, [rip+__float_10]
+    x64.movsd xmm1, [rip+__float_3]
+    x64.movsd xmm2, xmm0
+    x64.addsd xmm2, xmm1
+    x64.movsd xmm3, xmm0
+    x64.subsd xmm3, xmm1
+    x64.movsd xmm4, xmm0
+    x64.mulsd xmm4, xmm1
+    x64.movsd xmm5, xmm0
+    x64.divsd xmm5, xmm1
+    x64.movsd xmm6, xmm2
+    x64.addsd xmm6, xmm3
+    x64.movsd xmm7, xmm6
+    x64.addsd xmm7, xmm4
+    x64.movsd xmm8, xmm7
+    x64.addsd xmm8, xmm5
+    x64.cvttsd2si rax, xmm8
+    x64.xor rcx, rcx
+    x64.mov rdx, 4294967295
+    x64.cmp rax, rdx
+    x64.jg main.__range_panic_0
+    x64.cmp rax, rcx
+    x64.jl main.__range_panic_0
+    x64.jmp main.__range_ok_0
+  __range_panic_0:
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.epilogue
+    x64.ret
+  }
+}
+---

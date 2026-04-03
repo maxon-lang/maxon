@@ -89,7 +89,7 @@ public class MlirPipeline {
       }
     }
 
-    if (target.Arch == "aarch64") {
+    if (target.Arch == "arm64") {
       // Standard dialects -> ARM64 dialect
       var arm64Module = StandardToARM64Conversion.Run(stdModule);
       Logger.Debug(LogCategory.Mlir, "Lowered Standard to ARM64");
@@ -108,7 +108,7 @@ public class MlirPipeline {
       }
 
       return new MlirPipelineResult { ARM64Module = arm64Module, AllStagesIr = irBuilder?.ToString().TrimEnd() };
-    } else if (target.Arch == "x86_64") {
+    } else if (target.Arch == "x64") {
       // Standard dialects -> X86 dialect
       var x86Module = StandardToX86Conversion.Run(stdModule);
       Logger.Debug(LogCategory.Mlir, "Lowered Standard to X86");
@@ -125,7 +125,7 @@ public class MlirPipeline {
           irBuilder.AppendLine();
         }
         if (dumpStagesBasePath != null) {
-          File.WriteAllText($"{dumpStagesBasePath}.3-x86.mlir", MlirPrinter.Print(x86Module));
+          File.WriteAllText($"{dumpStagesBasePath}.3-x64.mlir", MlirPrinter.Print(x86Module));
         }
       }
 

@@ -1,0 +1,111 @@
+// Test: byte-array-hash
+typealias ByteVal = byte(0 to u8.max)
+typealias ByteArr = Array with ByteVal
+
+function main() returns ExitCode
+	var arr = ByteArr.create()
+	arr.push(65)
+	arr.push(66)
+	arr.push(67)
+	var h = arr.hash()
+	if h != 0 'nonzero'
+		return 1
+	end 'nonzero'
+	return 0
+end 'main'
+---
+ExitCode: 1
+---
+module {
+  func @main() -> u32 {
+  entry:
+    x64.prologue stack_size=16
+    x64.call ByteArr.create
+    x64.mov [rbp-8], rax
+    x64.mov rax, 65
+    x64.mov rcx, 255
+    x64.and rax, rcx
+    x64.mov rdx, [rbp-8]
+    x64.mov rcx, [rbp-8]
+    x64.mov rdx, rax
+    x64.call ByteArr.push
+    x64.mov rbx, 66
+    x64.mov rsi, 255
+    x64.and rbx, rsi
+    x64.mov rdi, [rbp-8]
+    x64.mov rcx, [rbp-8]
+    x64.mov rdx, rbx
+    x64.call ByteArr.push
+    x64.mov r8, 67
+    x64.mov r9, 255
+    x64.and r8, r9
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rbp-8]
+    x64.mov rdx, r8
+    x64.call ByteArr.push
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rbp-8]
+    x64.call ByteArr.hash
+    x64.mov ecx, rax
+    x64.xor rax, rax
+    x64.cmp rcx, rax
+    x64.je main.nonzero_0.after
+  nonzero_0:
+    x64.mov rax, [rbp-8]
+    x64.test rax, rax
+    x64.jz __nonnull_skip_0
+    x64.mov rcx, [rbp-8]
+    x64.call mm_decref
+    x64.label __nonnull_skip_0
+    x64.mov rax, 1
+    x64.epilogue
+    x64.ret
+  nonzero_0.after:
+    x64.mov rax, [rbp-8]
+    x64.test rax, rax
+    x64.jz __nonnull_skip_1
+    x64.mov rcx, [rbp-8]
+    x64.call mm_decref
+    x64.label __nonnull_skip_1
+    x64.xor rax, rax
+    x64.epilogue
+    x64.ret
+  }
+  func @__destruct___ManagedMemory_ByteVal(ptr: i64) {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-8], rcx
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+16]
+    x64.xor rdx, rdx
+    x64.cmp rcx, rdx
+    x64.je __destruct___ManagedMemory_ByteVal.skip_buf_0
+  free_buf_0:
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+0]
+    x64.call mm_raw_free
+    x64.jmp __destruct___ManagedMemory_ByteVal.skip_buf_0
+  skip_buf_0:
+    x64.jmp __destruct___ManagedMemory_ByteVal.done
+  done:
+    x64.epilogue
+    x64.ret
+  }
+  func @__destruct_ByteArr(ptr: i64) {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-8], rcx
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+8]
+    x64.mov [rbp-16], rcx
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_2
+    x64.call mm_decref
+    x64.label __nonnull_skip_2
+    x64.jmp __destruct_ByteArr.done
+  done:
+    x64.epilogue
+    x64.ret
+  }
+}
+---

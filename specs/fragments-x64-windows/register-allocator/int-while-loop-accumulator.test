@@ -1,0 +1,149 @@
+// Test: int-while-loop-accumulator
+function main() returns ExitCode
+	var sum = 0
+	var i = 0
+	while i < 10 'loop'
+		sum = sum + i
+		i = i + 1
+	end 'loop'
+	return sum mod 256
+end 'main'
+---
+ExitCode: 45
+RequiredMLIR: ```
+=== maxon
+module {
+  func @main() -> i64 {
+  entry:
+    %0 = maxon.literal {value = 0 : i64}
+    maxon.assign %0 {var = sum} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %1 = maxon.literal {value = 0 : i64}
+    maxon.assign %1 {var = i} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.br loop_0.header
+  loop_0.header:
+    %2 = maxon.literal {value = 10 : i64}
+    %3 = maxon.var_ref {var = i} {type = i64}
+    %4 = maxon.binop %3, %2 {op = lt}
+    maxon.cond_br %4 [then: loop_0, else: loop_0.exit]
+  loop_0:
+    %5 = maxon.var_ref {var = sum} {type = i64}
+    %6 = maxon.var_ref {var = i} {type = i64}
+    %7 = maxon.binop %5, %6 {op = add}
+    maxon.assign %7 {var = sum} {kind = i64} {mut = 1 : i1}
+    %8 = maxon.literal {value = 1 : i64}
+    %9 = maxon.var_ref {var = i} {type = i64}
+    %10 = maxon.binop %9, %8 {op = add}
+    maxon.assign %10 {var = i} {kind = i64} {mut = 1 : i1}
+    maxon.scope_end []
+    maxon.br loop_0.header
+  loop_0.exit:
+    %11 = maxon.literal {value = 256 : i64}
+    %12 = maxon.var_ref {var = sum} {type = i64}
+    %13 = maxon.binop %12, %11 {op = mod}
+    %14 = maxon.literal {value = 0 : i64}
+    %15 = maxon.binop %13, %14 {op = lt}
+    %16 = maxon.literal {value = 4294967295 : i64}
+    %17 = maxon.binop %13, %16 {op = gt}
+    %18 = maxon.binop %15, %17 {op = or}
+    maxon.cond_br %18 [then: __range_panic_1, else: __range_ok_1]
+  __range_panic_1:
+    maxon.panic "panic at int-while-loop-accumulator.test:9: Range check failed: value outside typealias 'ExitCode'"
+  __range_ok_1:
+    maxon.scope_end [sum, i]
+    maxon.return %13
+  }
+}
+=== standard
+module {
+  func @main() -> u32 {
+  entry:
+    %0 = arith.constant {value = 0 : i64}
+    memref.store %0, sum
+    %1 = arith.constant {value = 0 : i64}
+    memref.store %1, i
+    cf.br loop_0.header
+  loop_0.header:
+    %2 = arith.constant {value = 10 : i64}
+    %3 = memref.load i : i64
+    %4 = arith.cmpi lt %3, %2
+    cf.cond_br %4 [then: loop_0, else: loop_0.exit]
+  loop_0:
+    %5 = memref.load sum : i64
+    %6 = memref.load i : i64
+    %7 = arith.addi %5, %6
+    memref.store %7, sum
+    %8 = arith.constant {value = 1 : i64}
+    %9 = memref.load i : i64
+    %10 = arith.addi %9, %8
+    memref.store %10, i
+    cf.br loop_0.header
+  loop_0.exit:
+    %11 = arith.constant {value = 256 : i64}
+    %12 = memref.load sum : i64
+    %13 = arith.remsi %12, %11
+    %14 = arith.constant {value = 0 : i64}
+    %15 = arith.cmpi lt %13, %14
+    %16 = arith.constant {value = 4294967295 : i64}
+    %17 = arith.cmpi gt %13, %16
+    %18 = arith.ori1 %15, %17
+    cf.cond_br %18 [then: __range_panic_1, else: __range_ok_1]
+  __range_panic_1:
+    %19 = memref.lea_symdata __panic_msg_0
+    %20 = std.ptr_to_i64 %19
+    std.call_runtime @mrt_panic %20
+  __range_ok_1:
+    func.return %13
+  }
+}
+=== x86
+module {
+  func @main() -> u32 {
+  entry:
+    x64.prologue stack_size=16
+    x64.xor rax, rax
+    x64.mov [rbp-8], rax
+    x64.xor rcx, rcx
+    x64.mov [rbp-16], rcx
+    x64.jmp main.loop_0.header
+  loop_0.header:
+    x64.mov rax, 10
+    x64.mov rcx, [rbp-16]
+    x64.cmp rcx, rax
+    x64.jge main.loop_0.exit
+  loop_0:
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rbp-16]
+    x64.add rax, rcx
+    x64.mov [rbp-8], rax
+    x64.mov rdx, 1
+    x64.mov rbx, [rbp-16]
+    x64.add rbx, rdx
+    x64.mov [rbp-16], rbx
+    x64.jmp main.loop_0.header
+  loop_0.exit:
+    x64.mov rax, 256
+    x64.mov rcx, [rbp-8]
+    x64.mov rbx, rax
+    x64.mov rax, rcx
+    x64.cqo
+    x64.idiv rbx
+    x64.xor rax, rax
+    x64.mov rcx, 4294967295
+    x64.cmp rdx, rcx
+    x64.jg main.__range_panic_1
+    x64.cmp rdx, rax
+    x64.jl main.__range_panic_1
+    x64.jmp main.__range_ok_1
+  __range_panic_1:
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_1:
+    x64.mov rax, rdx
+    x64.epilogue
+    x64.ret
+  }
+}
+```
+---
+---

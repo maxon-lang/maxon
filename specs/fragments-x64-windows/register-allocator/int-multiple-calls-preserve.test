@@ -1,0 +1,143 @@
+// Test: int-multiple-calls-preserve
+
+typealias Integer = int(i64.min to i64.max)
+
+function getTen() returns Integer
+	return 10
+end 'getTen'
+
+function getTwo() returns Integer
+	return 2
+end 'getTwo'
+
+function main() returns ExitCode
+	var a = 5
+	var b = getTen()
+	var c = 7
+	var d = getTwo()
+	return a + b + c + d
+end 'main'
+---
+ExitCode: 24
+RequiredMLIR: ```
+=== maxon
+module {
+  func @register-allocator.getTen() -> i64 {
+  entry:
+    %0 = maxon.literal {value = 10 : i64}
+    maxon.scope_end []
+    maxon.return %0
+  }
+  func @register-allocator.getTwo() -> i64 {
+  entry:
+    %1 = maxon.literal {value = 2 : i64}
+    maxon.scope_end []
+    maxon.return %1
+  }
+  func @main() -> i64 {
+  entry:
+    %2 = maxon.literal {value = 5 : i64}
+    maxon.assign %2 {var = a} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %3 = maxon.call @register-allocator.getTen
+    maxon.assign %3 {var = b} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %4 = maxon.literal {value = 7 : i64}
+    maxon.assign %4 {var = c} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %5 = maxon.call @register-allocator.getTwo
+    maxon.assign %5 {var = d} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %6 = maxon.binop %2, %3 {op = add} {optimalType = i64}
+    %7 = maxon.binop %6, %4 {op = add}
+    %8 = maxon.binop %7, %5 {op = add} {optimalType = i64}
+    %9 = maxon.literal {value = 0 : i64}
+    %10 = maxon.binop %8, %9 {op = lt}
+    %11 = maxon.literal {value = 4294967295 : i64}
+    %12 = maxon.binop %8, %11 {op = gt}
+    %13 = maxon.binop %10, %12 {op = or}
+    maxon.cond_br %13 [then: __range_panic_0, else: __range_ok_0]
+  __range_panic_0:
+    maxon.panic "panic at int-multiple-calls-preserve.test:18: Range check failed: value outside typealias 'ExitCode'"
+  __range_ok_0:
+    maxon.scope_end [a, b, c, d]
+    maxon.return %8
+  }
+}
+=== standard
+module {
+  func @register-allocator.getTen() -> i64 {
+  entry:
+    %0 = arith.constant {value = 10 : i64}
+    func.return %0
+  }
+  func @register-allocator.getTwo() -> i64 {
+  entry:
+    %1 = arith.constant {value = 2 : i64}
+    func.return %1
+  }
+  func @main() -> u32 {
+  entry:
+    %2 = arith.constant {value = 5 : i64}
+    %3 = func.call @register-allocator.getTen
+    %4 = arith.constant {value = 7 : i64}
+    %5 = func.call @register-allocator.getTwo
+    %6 = arith.addi %2, %3
+    %7 = arith.addi %6, %4
+    %8 = arith.addi %7, %5
+    %9 = arith.constant {value = 0 : i64}
+    %10 = arith.cmpi lt %8, %9
+    %11 = arith.constant {value = 4294967295 : i64}
+    %12 = arith.cmpi gt %8, %11
+    %13 = arith.ori1 %10, %12
+    cf.cond_br %13 [then: __range_panic_0, else: __range_ok_0]
+  __range_panic_0:
+    %14 = memref.lea_symdata __panic_msg_0
+    %15 = std.ptr_to_i64 %14
+    std.call_runtime @mrt_panic %15
+  __range_ok_0:
+    func.return %8
+  }
+}
+=== x86
+module {
+  func @register-allocator.getTen() -> i64 {
+  entry:
+    x64.mov rax, 10
+    x64.ret
+  }
+  func @register-allocator.getTwo() -> i64 {
+  entry:
+    x64.mov rax, 2
+    x64.ret
+  }
+  func @main() -> u32 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov rax, 5
+    x64.call register-allocator.getTen
+    x64.mov rcx, 7
+    x64.mov [rbp-8], rax
+    x64.call register-allocator.getTwo
+    x64.mov rdx, [rbp-8]
+    x64.mov rbx, 5
+    x64.add rbx, rdx
+    x64.mov rsi, 7
+    x64.add rbx, rsi
+    x64.add rbx, rax
+    x64.xor rdi, rdi
+    x64.mov r8, 4294967295
+    x64.cmp rbx, r8
+    x64.jg main.__range_panic_0
+    x64.cmp rbx, rdi
+    x64.jl main.__range_panic_0
+    x64.jmp main.__range_ok_0
+  __range_panic_0:
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.mov rax, rbx
+    x64.epilogue
+    x64.ret
+  }
+}
+```
+---
+---

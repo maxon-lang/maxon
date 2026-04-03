@@ -45,7 +45,7 @@ Do NOT use `dotnet run` — it recompiles the project every time. Use the pre-bu
 - `--verbose` — show detailed failure messages (use this when debugging failures)
 - `--log=CATEGORY:LEVEL` — get more detail for a specific subsystem (e.g., `--log=mlir:debug`)
 - `--update-required` — regenerate and update RequiredLowering blocks in spec fragments
-- `--target=ARCH-OS` — target a specific architecture (e.g., `x86_64-windows`, `aarch64-macos`)
+- `--target=ARCH-OS` — target a specific architecture (e.g., `x64-windows`, `arm64-macos`)
 
 ## Reading test output
 

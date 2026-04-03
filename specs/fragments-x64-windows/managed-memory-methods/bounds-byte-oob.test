@@ -1,0 +1,114 @@
+// Test: bounds-byte-oob
+typealias Int = int(i64.min to i64.max)
+typealias IntArray = Array with Int
+
+function main() returns ExitCode
+	var arr = IntArray.create()
+	arr.push(1)
+	arr.push(2)
+	var b = arr.managed.byteAt(100)
+	return b
+end 'main'
+---
+ExitCode: 1
+Stderr: ```
+__ManagedMemory: byte index out of bounds
+Stack trace:
+  in main
+  in mrt_start
+```
+---
+module {
+  func @main() -> u32 {
+  entry:
+    x64.prologue stack_size=32
+    x64.call IntArray.create
+    x64.mov [rbp-8], rax
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rbp-8]
+    x64.mov rdx, 1
+    x64.call IntArray.push
+    x64.mov rcx, [rbp-8]
+    x64.mov rdx, 2
+    x64.call IntArray.push
+    x64.mov rdx, [rbp-8]
+    x64.mov rbx, [rdx+8]
+    x64.mov [rbp-16], rbx
+    x64.mov rsi, 100
+    x64.mov rdi, [rbp-16]
+    x64.mov r8, [rdi+8]
+    x64.mov r9, [rbp-16]
+    x64.mov rax, [r9+24]
+    x64.imul r8, rax
+    x64.lea_symdata rax, [__mm_panic_byte_oob]
+    x64.mov rcx, rax
+    x64.mov rdx, r8
+    x64.mov r8, rcx
+    x64.mov rcx, rsi
+    x64.call maxon_bounds_check
+    x64.mov rax, [rbp-16]
+    x64.mov rcx, [rax+0]
+    x64.mov rax, 100
+    x64.add rcx, rax
+    x64.movzx rax, byte ptr [rcx+0]
+    x64.xor rcx, rcx
+    x64.mov rdx, 4294967295
+    x64.cmp rax, rdx
+    x64.jg main.__range_panic_0
+    x64.cmp rax, rcx
+    x64.jl main.__range_panic_0
+    x64.jmp main.__range_ok_0
+  __range_panic_0:
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.mov rbx, [rbp-8]
+    x64.mov [rbp-24], rax
+    x64.test rbx, rbx
+    x64.jz __nonnull_skip_0
+    x64.mov rcx, [rbp-8]
+    x64.call mm_decref
+    x64.label __nonnull_skip_0
+    x64.mov rax, [rbp-24]
+    x64.epilogue
+    x64.ret
+  }
+  func @__destruct___ManagedMemory_Int(ptr: i64) {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-8], rcx
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+16]
+    x64.xor rdx, rdx
+    x64.cmp rcx, rdx
+    x64.je __destruct___ManagedMemory_Int.skip_buf_0
+  free_buf_0:
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+0]
+    x64.call mm_raw_free
+    x64.jmp __destruct___ManagedMemory_Int.skip_buf_0
+  skip_buf_0:
+    x64.jmp __destruct___ManagedMemory_Int.done
+  done:
+    x64.epilogue
+    x64.ret
+  }
+  func @__destruct_IntArray(ptr: i64) {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-8], rcx
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+8]
+    x64.mov [rbp-16], rcx
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_1
+    x64.call mm_decref
+    x64.label __nonnull_skip_1
+    x64.jmp __destruct_IntArray.done
+  done:
+    x64.epilogue
+    x64.ret
+  }
+}
+---

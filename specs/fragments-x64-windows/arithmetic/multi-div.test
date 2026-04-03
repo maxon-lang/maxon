@@ -1,0 +1,62 @@
+// Test: multi-div
+
+typealias Integer = int(i64.min to i64.max)
+
+function multiDiv(a Integer, b Integer, c Integer, d Integer) returns Integer
+	var r1 = a / b
+	var r2 = c / d
+	return trunc(r1 + r2)
+end 'multiDiv'
+
+function main() returns ExitCode
+	return multiDiv(10, b: 2, c: 20, d: 4)
+end 'main'
+---
+ExitCode: 10
+---
+module {
+  func @multi-div.multiDiv(ptr: i64, ptr: i64, ptr: i64, ptr: i64) -> i64 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov rax, r8
+    x64.mov rbx, rdx
+    x64.cqo
+    x64.idiv r9
+    x64.mov [rbp+-8], rax
+    x64.mov rax, rcx
+    x64.cqo
+    x64.idiv rbx
+    x64.mov rcx, [rbp+-8]
+    x64.add rax, rcx
+    x64.mov rcx, -9223372036854775807
+    x64.cmp rax, rcx
+    x64.jge __range_ok_0
+  __range_panic_0:
+    x64.lea rax, [rip+__panic_msg_0]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.epilogue
+    x64.ret
+  }
+  func @main() -> u32 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov rcx, 10
+    x64.mov rdx, 2
+    x64.mov r8, 20
+    x64.mov r9, 4
+    x64.call multi-div.multiDiv
+    x64.mov rcx, 4294967295
+    x64.cmp rax, rcx
+    x64.jbe __range_ok_1
+  __range_panic_1:
+    x64.lea rax, [rip+__panic_msg_1]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_1:
+    x64.epilogue
+    x64.ret
+  }
+}
+---

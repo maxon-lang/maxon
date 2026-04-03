@@ -1,0 +1,176 @@
+// Test: rc-managed-list-remove-single-no-leak
+typealias Integer = int(i64.min to i64.max)
+
+type Item
+	export var value Integer
+
+	static function create(value Integer) returns Self
+		return Self{value: value}
+	end 'create'
+end 'Item'
+
+typealias ItemManagedList = __ManagedList with Item
+
+function main() returns ExitCode
+	var managedList = ItemManagedList.create()
+	var node = managedList.insertFirst(Item.create(value: 50))
+	managedList.remove(node)
+	return managedList.count()
+end 'main'
+---
+ExitCode: 0
+---
+module {
+  func @Item.create(value: i64) -> i64 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-16], rcx
+    x64.mov rcx, 8
+    x64.xor rdx, rdx
+    x64.mov r8, 1
+    x64.call mm_alloc
+    x64.mov [rbp-8], rax
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rbp-16]
+    x64.mov [rax+0], rcx
+    x64.mov rdx, [rbp-8]
+    x64.mov rcx, [rbp-8]
+    x64.call mm_incref
+    x64.mov rax, [rbp-8]
+    x64.epilogue
+    x64.ret
+  }
+  func @main() -> u32 {
+  entry:
+    x64.prologue stack_size=64
+    x64.lea_func rax, [__destruct_ItemManagedList]
+    x64.mov rcx, rax
+    x64.mov rdx, rcx
+    x64.mov rcx, 32
+    x64.mov r8, 2
+    x64.call mm_alloc
+    x64.xor rdx, rdx
+    x64.mov [rax+0], rdx
+    x64.mov [rax+8], rdx
+    x64.mov [rax+16], rdx
+    x64.mov [rax+24], rdx
+    x64.mov [rbp-8], rax
+    x64.mov rbx, [rbp-8]
+    x64.mov rcx, [rbp-8]
+    x64.call mm_incref
+    x64.mov rcx, 50
+    x64.call Item.create
+    x64.mov [rbp-16], rax
+    x64.mov rcx, 32
+    x64.xor rdx, rdx
+    x64.mov r8, 3
+    x64.call mm_alloc
+    x64.xor rsi, rsi
+    x64.mov [rax+0], rsi
+    x64.mov [rax+8], rsi
+    x64.mov [rax+16], rsi
+    x64.mov rdi, [rbp-16]
+    x64.mov [rax+24], rdi
+    x64.mov [rbp-40], rax
+    x64.mov rcx, [rbp-16]
+    x64.call mm_incref
+    x64.mov r8, [rbp-40]
+    x64.mov [rbp-24], r8
+    x64.mov r9, [rbp-8]
+    x64.mov rax, [rbp-24]
+    x64.mov rcx, [rbp-8]
+    x64.mov rdx, [rbp-24]
+    x64.call maxon_managed_list_insert_first
+    x64.mov rax, [rbp-24]
+    x64.mov [rbp-32], rax
+    x64.mov rax, [rbp-32]
+    x64.mov rcx, [rbp-32]
+    x64.call mm_incref
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rbp-32]
+    x64.mov rcx, [rbp-8]
+    x64.mov rdx, [rbp-32]
+    x64.call maxon_managed_list_unlink
+    x64.mov rax, [rbp-32]
+    x64.test rax, rax
+    x64.jz __nonnull_skip_0
+    x64.mov rcx, [rbp-32]
+    x64.call mm_decref
+    x64.label __nonnull_skip_0
+    x64.mov rax, [rbp-32]
+    x64.mov rcx, [rax+24]
+    x64.mov [rbp-48], rcx
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_1
+    x64.call mm_decref
+    x64.label __nonnull_skip_1
+    x64.mov rax, [rbp-32]
+    x64.test rax, rax
+    x64.jz __nonnull_skip_2
+    x64.mov rcx, [rbp-32]
+    x64.call mm_decref
+    x64.label __nonnull_skip_2
+    x64.xor rax, rax
+    x64.mov [rbp-32], rax
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+16]
+    x64.xor rax, rax
+    x64.mov rdx, 4294967295
+    x64.cmp rcx, rdx
+    x64.jg main.__range_panic_0
+    x64.cmp rcx, rax
+    x64.jl main.__range_panic_0
+    x64.jmp main.__range_ok_0
+  __range_panic_0:
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.mov rbx, [rbp-16]
+    x64.mov [rbp-56], rcx
+    x64.test rbx, rbx
+    x64.jz __nonnull_skip_3
+    x64.mov rcx, [rbp-16]
+    x64.call mm_decref
+    x64.label __nonnull_skip_3
+    x64.mov rax, [rbp-32]
+    x64.test rax, rax
+    x64.jz __nonnull_skip_4
+    x64.mov rcx, [rbp-32]
+    x64.call mm_decref
+    x64.label __nonnull_skip_4
+    x64.mov rcx, [rbp-8]
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_5
+    x64.call mm_decref
+    x64.label __nonnull_skip_5
+    x64.mov rax, [rbp-56]
+    x64.epilogue
+    x64.ret
+  }
+  func @__destruct_Item(ptr: i64) {
+  entry:
+    x64.jmp __destruct_Item.done
+  done:
+    x64.ret
+  }
+  func @__destruct_ItemManagedList(ptr: i64) {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-8], rcx
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rbp-8]
+    x64.call maxon_managed_list_clear_managed
+    x64.jmp __destruct_ItemManagedList.done
+  done:
+    x64.epilogue
+    x64.ret
+  }
+  func @__destruct___ManagedListNode(ptr: i64) {
+  entry:
+    x64.jmp __destruct___ManagedListNode.done
+  done:
+    x64.ret
+  }
+}
+---

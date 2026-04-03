@@ -92,7 +92,7 @@ end 'writeSectionHeader'
 
 // --- Main PE writer ---
 
-// Patch x86_64 RIP-relative relocations: each relocation is a disp32 at codeOffset
+// Patch x64 RIP-relative relocations: each relocation is a disp32 at codeOffset
 function patchRelocationsX86(code ByteArray, relocations RelocationArray, textRva Rva, idataRva Rva)
 	for reloc in relocations 'patch'
 		let ripAtReloc = textRva + reloc.codeOffset + 4
@@ -216,14 +216,14 @@ export function writePe(outputPath FilePath, codeResult CodeResult, target Targe
 
 	// Patch IAT references in code (different encoding per CPU architecture)
 	match target.cpu 'patchCpu'
-		x86_64 then patchRelocationsX86(code, relocations: codeResult.relocations, textRva: textRva, idataRva: idataRva)
-		aarch64 then patchRelocationsArm64(code, relocations: codeResult.relocations, textRva: textRva, idataRva: idataRva)
+		x64 then patchRelocationsX86(code, relocations: codeResult.relocations, textRva: textRva, idataRva: idataRva)
+		arm64 then patchRelocationsArm64(code, relocations: codeResult.relocations, textRva: textRva, idataRva: idataRva)
 	end 'patchCpu'
 
 	// Patch rdata and symdata references in code
 	match target.cpu 'patchRdata'
-		x86_64 then patchRdataRelocationsX86(code, rdataRelocs: codeResult.rdataRelocations, textRva: textRva, rdataRva: rdataRva, symdataRva: symdataRva)
-		aarch64 then patchRdataRelocationsArm64(code, rdataRelocs: codeResult.rdataRelocations, textRva: textRva, rdataRva: rdataRva, symdataRva: symdataRva)
+		x64 then patchRdataRelocationsX86(code, rdataRelocs: codeResult.rdataRelocations, textRva: textRva, rdataRva: rdataRva, symdataRva: symdataRva)
+		arm64 then patchRdataRelocationsArm64(code, rdataRelocs: codeResult.rdataRelocations, textRva: textRva, rdataRva: rdataRva, symdataRva: symdataRva)
 	end 'patchRdata'
 
 	// IAT directory size: 3 entries + null terminator = 32 bytes
@@ -235,8 +235,8 @@ export function writePe(outputPath FilePath, codeResult CodeResult, target Targe
 
 	// === COFF Header (20 bytes) ===
 	let coffMachine = match target.cpu 'coffCpu'
-		x86_64 gives 0x8664
-		aarch64 gives 0xAA64
+		x64 gives 0x8664
+		arm64 gives 0xAA64
 	end 'coffCpu'
 	writeWord(pe, value: coffMachine)
 	writeWord(pe, value: numSections)

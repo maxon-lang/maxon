@@ -1,0 +1,54 @@
+// Test: range-check-panic.upper-bound
+typealias Percent = int(0 to 100)
+
+function clamp(x Percent) returns Percent
+  return x
+end 'clamp'
+
+function main() returns ExitCode
+  let result = clamp(101)
+  return result
+end 'main'
+---
+ExitCode: 1
+Stderr: ```
+panic at range-check-panic.upper-bound.test:5: Range check failed: value outside typealias 'Percent'
+Stack trace:
+  in range-check-panic.clamp
+  in main
+  in mrt_start
+```
+---
+module {
+  func @range-check-panic.clamp(ptr: i64) -> u8 {
+  entry:
+    x64.prologue stack_size=16
+    x64.cmp rcx, 100
+    x64.jbe __range_ok_0
+  __range_panic_0:
+    x64.lea rax, [rip+__panic_msg_0]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.mov rax, rcx
+    x64.epilogue
+    x64.ret
+  }
+  func @main() -> u32 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov rcx, 101
+    x64.call range-check-panic.clamp
+    x64.mov rcx, 4294967295
+    x64.cmp rax, rcx
+    x64.jbe __range_ok_1
+  __range_panic_1:
+    x64.lea rax, [rip+__panic_msg_1]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_1:
+    x64.epilogue
+    x64.ret
+  }
+}
+---

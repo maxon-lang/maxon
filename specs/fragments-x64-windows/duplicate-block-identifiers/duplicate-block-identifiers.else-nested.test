@@ -1,0 +1,57 @@
+// Test: duplicate-block-identifiers.else-nested
+function main() returns ExitCode
+	var x = 0
+	if false 'check'
+		x = 1
+	end 'check' else 'else_check'
+		if true 'nested'
+			x = 2
+		end 'nested'
+	end 'else_check'
+	return x
+end 'main'
+---
+ExitCode: 2
+---
+module {
+  func @main() -> u32 {
+  entry:
+    x64.prologue stack_size=16
+    x64.xor rax, rax
+    x64.mov [rbp-8], rax
+    x64.xor rcx, rcx
+    x64.test rcx, rcx
+    x64.je main.else_check_1
+  check_0:
+    x64.mov rax, 1
+    x64.mov [rbp-8], rax
+    x64.jmp main.check_0.merge
+  else_check_1:
+    x64.mov rax, 1
+    x64.test rax, rax
+    x64.je main.nested_2.merge
+  nested_2:
+    x64.mov rax, 2
+    x64.mov [rbp-8], rax
+    x64.jmp main.nested_2.merge
+  nested_2.merge:
+    x64.jmp main.check_0.merge
+  check_0.merge:
+    x64.mov rax, [rbp-8]
+    x64.xor rcx, rcx
+    x64.mov rdx, 4294967295
+    x64.cmp rax, rdx
+    x64.jg main.__range_panic_3
+    x64.cmp rax, rcx
+    x64.jl main.__range_panic_3
+    x64.jmp main.__range_ok_3
+  __range_panic_3:
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_3:
+    x64.epilogue
+    x64.ret
+  }
+}
+---

@@ -1,0 +1,474 @@
+// Test: conditional-extensions.partial-availability
+
+typealias Integer = int(i64.min to i64.max)
+
+interface Seq uses Element
+	function next() returns Element throws IterationError
+end 'Seq'
+
+extension Seq
+	function countItems() returns Integer
+		var n = 0
+		for _ in self 'loop'
+			n = n + 1
+		end 'loop'
+		return n
+	end 'countItems'
+end 'Seq'
+
+extension Seq where Element is Equatable
+	function includes(target Element) returns bool
+		for item in self 'loop'
+			if item == target 'yes'
+				return true
+			end 'yes'
+		end 'loop'
+		return false
+	end 'includes'
+end 'Seq'
+
+type NotEq
+	export var n Integer
+
+	static function create(n Integer) returns Self
+		return Self{n: n}
+	end 'create'
+end 'NotEq'
+
+typealias NotEqArray = Array with NotEq
+
+type NotEqSeq implements Seq with NotEq
+	var items NotEqArray
+	var idx Integer
+
+	function next() returns NotEq throws IterationError
+		if idx >= items.count() 'done'
+			throw IterationError.exhausted
+		end 'done'
+		var v = try items.get(idx) otherwise 'bail'
+			throw IterationError.exhausted
+		end 'bail'
+		idx = idx + 1
+		return v
+	end 'next'
+
+	static function create(items NotEqArray, idx Integer) returns Self
+		return Self{items: items, idx: idx}
+	end 'create'
+end 'NotEqSeq'
+
+function main() returns ExitCode
+	var s = NotEqSeq.create(items: [NotEq.create(n: 1), NotEq.create(n: 2)], idx: 0)
+	return s.countItems()
+end 'main'
+---
+ExitCode: 2
+---
+module {
+  func @NotEqSeq.countItems(__self_ptr: i64) -> i64 {
+  entry:
+    x64.prologue stack_size=32
+    x64.xor rax, rax
+    x64.mov [rbp-8], rax
+    x64.mov [rbp-16], rcx
+    x64.mov rcx, [rbp-16]
+    x64.call mm_incref
+    x64.jmp NotEqSeq.countItems.loop_0.header
+  loop_0.header:
+    x64.mov rax, [rbp-16]
+    x64.mov rcx, [rbp-16]
+    x64.call NotEqSeq.next
+    x64.mov [rbp-24], rax
+    x64.xor rcx, rcx
+    x64.cmp rdx, rcx
+    x64.jne NotEqSeq.countItems.loop_0.exit
+  loop_0:
+    x64.mov rax, 1
+    x64.mov rcx, [rbp-8]
+    x64.add rcx, rax
+    x64.mov [rbp-8], rcx
+    x64.mov rdx, [rbp-24]
+    x64.test rdx, rdx
+    x64.jz __nonnull_skip_0
+    x64.mov rcx, [rbp-24]
+    x64.call mm_decref
+    x64.label __nonnull_skip_0
+    x64.jmp NotEqSeq.countItems.loop_0.header
+  loop_0.exit:
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rbp-24]
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_1
+    x64.call mm_decref
+    x64.label __nonnull_skip_1
+    x64.mov rax, [rbp-16]
+    x64.test rax, rax
+    x64.jz __nonnull_skip_2
+    x64.mov rcx, [rbp-16]
+    x64.call mm_decref
+    x64.label __nonnull_skip_2
+    x64.mov rax, [rbp-8]
+    x64.epilogue
+    x64.ret
+  }
+  func @NotEq.create(n: i64) -> i64 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-16], rcx
+    x64.mov rcx, 8
+    x64.xor rdx, rdx
+    x64.mov r8, 1
+    x64.call mm_alloc
+    x64.mov [rbp-8], rax
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rbp-16]
+    x64.mov [rax+0], rcx
+    x64.mov rdx, [rbp-8]
+    x64.mov rcx, [rbp-8]
+    x64.call mm_incref
+    x64.mov rax, [rbp-8]
+    x64.epilogue
+    x64.ret
+  }
+  func @NotEq.clone(__self_ptr: i64) -> i64 {
+  entry:
+    x64.prologue stack_size=32
+    x64.mov [rbp-8], rcx
+    x64.mov rax, [rbp-8]
+    x64.mov rdx, [rax+0]
+    x64.mov [rbp-24], rdx
+    x64.mov rcx, 8
+    x64.xor rdx, rdx
+    x64.mov r8, 1
+    x64.call mm_alloc
+    x64.mov [rbp-16], rax
+    x64.mov rcx, [rbp-16]
+    x64.mov rdx, [rbp-24]
+    x64.mov [rcx+0], rdx
+    x64.mov rbx, [rbp-16]
+    x64.mov rcx, [rbp-16]
+    x64.call mm_incref
+    x64.mov rax, [rbp-16]
+    x64.epilogue
+    x64.ret
+  }
+  func @NotEqSeq.next(__self_ptr: i64) -> i64 {
+  entry:
+    x64.prologue stack_size=48
+    x64.mov [rbp-8], rcx
+    x64.mov rax, [rbp-8]
+    x64.mov rdx, [rax+8]
+    x64.mov rax, [rbp-8]
+    x64.mov rbx, [rax+0]
+    x64.mov [rbp-16], rbx
+    x64.mov rax, [rbp-16]
+    x64.mov [rbp-48], rdx
+    x64.mov rcx, [rbp-16]
+    x64.call NotEqArray.count
+    x64.mov rcx, [rbp-48]
+    x64.cmp rcx, rax
+    x64.jl NotEqSeq.next.done_0.after
+  done_0:
+    x64.xor rax, rax
+    x64.mov rcx, 1
+    x64.add rax, rcx
+    x64.mov rdx, rax
+    x64.xor rax, rax
+    x64.epilogue
+    x64.ret
+  done_0.after:
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+0]
+    x64.mov [rbp-24], rcx
+    x64.mov rdx, [rbp-8]
+    x64.mov rbx, [rdx+8]
+    x64.mov rsi, [rbp-24]
+    x64.mov rcx, [rbp-24]
+    x64.mov rdx, rbx
+    x64.call NotEqArray.get
+    x64.mov [rbp-32], rax
+    x64.xor rdi, rdi
+    x64.cmp rdx, rdi
+    x64.je NotEqSeq.next.otherwise_continue_2
+  otherwise_error_1:
+    x64.xor rax, rax
+    x64.mov rcx, [rbp-32]
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_3
+    x64.call mm_decref
+    x64.label __nonnull_skip_3
+    x64.mov rdx, 1
+    x64.xor rbx, rbx
+    x64.lea rdx, [rbx + rdx]
+    x64.xor rax, rax
+    x64.epilogue
+    x64.ret
+  otherwise_continue_2:
+    x64.mov rax, [rbp-32]
+    x64.mov [rbp-40], rax
+    x64.mov rcx, [rbp-40]
+    x64.call mm_incref
+    x64.mov rdx, 1
+    x64.mov rbx, [rbp-8]
+    x64.mov rsi, [rbx+8]
+    x64.add rsi, rdx
+    x64.mov rdi, [rbp-8]
+    x64.mov [rdi+8], rsi
+    x64.mov r8, [rbp-32]
+    x64.test r8, r8
+    x64.jz __nonnull_skip_4
+    x64.mov rcx, [rbp-32]
+    x64.call mm_decref
+    x64.label __nonnull_skip_4
+    x64.mov rax, [rbp-40]
+    x64.xor rdx, rdx
+    x64.epilogue
+    x64.ret
+  }
+  func @NotEqSeq.create(items: i64, idx: i64) -> i64 {
+  entry:
+    x64.prologue stack_size=32
+    x64.mov [rbp-8], rcx
+    x64.lea_func rax, [__destruct_NotEqSeq]
+    x64.mov rbx, rax
+    x64.mov [rbp-24], rdx
+    x64.mov rdx, rbx
+    x64.mov rcx, 16
+    x64.mov r8, 2
+    x64.call mm_alloc
+    x64.mov [rbp-16], rax
+    x64.mov rcx, [rbp-8]
+    x64.mov rdx, [rbp-16]
+    x64.mov [rdx+0], rcx
+    x64.call mm_incref
+    x64.mov rbx, [rbp-16]
+    x64.mov rsi, [rbp-24]
+    x64.mov [rbx+8], rsi
+    x64.mov rdi, [rbp-16]
+    x64.mov rcx, [rbp-16]
+    x64.call mm_incref
+    x64.mov rax, [rbp-16]
+    x64.epilogue
+    x64.ret
+  }
+  func @main() -> u32 {
+  entry:
+    x64.prologue stack_size=96
+    x64.mov rcx, 1
+    x64.call NotEq.create
+    x64.mov [rbp-8], rax
+    x64.mov rcx, 2
+    x64.call NotEq.create
+    x64.mov [rbp-16], rax
+    x64.mov [rbp-24], rax
+    x64.mov rax, [rbp-24]
+    x64.mov rcx, [rbp-24]
+    x64.call mm_incref
+    x64.mov rcx, [rbp-8]
+    x64.mov [rbp-32], rcx
+    x64.mov rdx, [rbp-32]
+    x64.mov rcx, [rbp-32]
+    x64.call mm_incref
+    x64.xor rbx, rbx
+    x64.mov rsi, 2
+    x64.xor rdi, rdi
+    x64.mov r8, 8
+    x64.lea_func r9, [__destruct___ManagedMemory_NotEq]
+    x64.mov rax, r9
+    x64.mov rdx, rax
+    x64.mov rcx, 32
+    x64.mov r8, 3
+    x64.call mm_alloc
+    x64.mov [rbp-40], rax
+    x64.mov rax, [rbp-40]
+    x64.xor rcx, rcx
+    x64.mov [rax+0], rcx
+    x64.mov rax, [rbp-40]
+    x64.mov rcx, 2
+    x64.mov [rax+8], rcx
+    x64.mov rax, [rbp-40]
+    x64.xor rcx, rcx
+    x64.mov [rax+16], rcx
+    x64.mov rax, [rbp-40]
+    x64.mov rcx, 8
+    x64.mov [rax+24], rcx
+    x64.mov rax, [rbp-40]
+    x64.mov rcx, [rax+24]
+    x64.lea_symdata rax, [__mm_panic_element_size_zero]
+    x64.mov rdx, rax
+    x64.mov r8, rdx
+    x64.mov rdx, rcx
+    x64.xor rcx, rcx
+    x64.call maxon_bounds_check
+    x64.xor rax, rax
+    x64.lea_func rcx, [__destruct_NotEqArray]
+    x64.mov rdx, rcx
+    x64.mov rcx, 16
+    x64.mov r8, 4
+    x64.call mm_alloc
+    x64.mov [rbp-48], rax
+    x64.mov rcx, [rbp-48]
+    x64.xor rdx, rdx
+    x64.mov [rcx+0], rdx
+    x64.mov rcx, [rbp-40]
+    x64.mov rdx, [rbp-48]
+    x64.mov [rdx+8], rcx
+    x64.call mm_incref
+    x64.lea rax, [rbp-32]
+    x64.mov rcx, rax
+    x64.mov rax, [rbp-48]
+    x64.mov rdx, [rax+8]
+    x64.mov rax, [rdx+24]
+    x64.mov rdx, 2
+    x64.imul rdx, rax
+    x64.mov [rbp-64], rcx
+    x64.mov [rbp-72], rdx
+    x64.mov rcx, [rbp-72]
+    x64.call mm_raw_alloc
+    x64.mov [rbp-80], rax
+    x64.mov rcx, [rbp-80]
+    x64.mov rdx, [rbp-64]
+    x64.mov r8, [rbp-72]
+    x64.call maxon_memcpy
+    x64.mov rcx, [rbp-32]
+    x64.mov [rbp-88], rax
+    x64.call mm_incref
+    x64.mov rax, [rbp-24]
+    x64.mov rcx, [rbp-24]
+    x64.call mm_incref
+    x64.mov rax, [rbp-48]
+    x64.mov rcx, [rax+8]
+    x64.mov rax, [rbp-80]
+    x64.mov [rcx+0], rax
+    x64.mov rax, 2
+    x64.mov [rcx+16], rax
+    x64.mov rcx, [rbp-48]
+    x64.call mm_incref
+    x64.mov rax, [rbp-48]
+    x64.mov rcx, [rbp-48]
+    x64.xor rdx, rdx
+    x64.call NotEqSeq.create
+    x64.mov [rbp-56], rax
+    x64.mov rax, [rbp-56]
+    x64.mov rcx, [rbp-56]
+    x64.call NotEqSeq.countItems
+    x64.xor rcx, rcx
+    x64.mov rdx, 4294967295
+    x64.cmp rax, rdx
+    x64.jg main.__range_panic_1
+    x64.cmp rax, rcx
+    x64.jl main.__range_panic_1
+    x64.jmp main.__range_ok_1
+  __range_panic_1:
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_1:
+    x64.mov rbx, [rbp-32]
+    x64.mov [rbp-96], rax
+    x64.test rbx, rbx
+    x64.jz __nonnull_skip_5
+    x64.mov rcx, [rbp-32]
+    x64.call mm_decref
+    x64.label __nonnull_skip_5
+    x64.xor rax, rax
+    x64.mov [rbp-32], rax
+    x64.mov rcx, [rbp-24]
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_6
+    x64.call mm_decref
+    x64.label __nonnull_skip_6
+    x64.xor rdx, rdx
+    x64.mov [rbp-24], rdx
+    x64.mov rbx, [rbp-16]
+    x64.test rbx, rbx
+    x64.jz __nonnull_skip_7
+    x64.mov rcx, [rbp-16]
+    x64.call mm_decref
+    x64.label __nonnull_skip_7
+    x64.mov rsi, [rbp-8]
+    x64.test rsi, rsi
+    x64.jz __nonnull_skip_8
+    x64.mov rcx, [rbp-8]
+    x64.call mm_decref
+    x64.label __nonnull_skip_8
+    x64.mov rdi, [rbp-56]
+    x64.test rdi, rdi
+    x64.jz __nonnull_skip_9
+    x64.mov rcx, [rbp-56]
+    x64.call mm_decref
+    x64.label __nonnull_skip_9
+    x64.mov r8, [rbp-48]
+    x64.test r8, r8
+    x64.jz __nonnull_skip_10
+    x64.mov rcx, [rbp-48]
+    x64.call mm_decref
+    x64.label __nonnull_skip_10
+    x64.mov rax, [rbp-96]
+    x64.epilogue
+    x64.ret
+  }
+  func @__destruct_NotEq(ptr: i64) {
+  entry:
+    x64.jmp __destruct_NotEq.done
+  done:
+    x64.ret
+  }
+  func @__destruct_NotEqSeq(ptr: i64) {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-8], rcx
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+0]
+    x64.mov [rbp-16], rcx
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_11
+    x64.call mm_decref
+    x64.label __nonnull_skip_11
+    x64.jmp __destruct_NotEqSeq.done
+  done:
+    x64.epilogue
+    x64.ret
+  }
+  func @__destruct___ManagedMemory_NotEq(ptr: i64) {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-8], rcx
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+16]
+    x64.xor rdx, rdx
+    x64.cmp rcx, rdx
+    x64.je __destruct___ManagedMemory_NotEq.skip_buf_0
+  free_buf_0:
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rbp-8]
+    x64.call mm_decref_managed_elements
+    x64.mov rcx, [rbp-8]
+    x64.mov rdx, [rcx+0]
+    x64.mov rcx, rdx
+    x64.call mm_raw_free
+    x64.jmp __destruct___ManagedMemory_NotEq.skip_buf_0
+  skip_buf_0:
+    x64.jmp __destruct___ManagedMemory_NotEq.done
+  done:
+    x64.epilogue
+    x64.ret
+  }
+  func @__destruct_NotEqArray(ptr: i64) {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-8], rcx
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+8]
+    x64.mov [rbp-16], rcx
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_12
+    x64.call mm_decref
+    x64.label __nonnull_skip_12
+    x64.jmp __destruct_NotEqArray.done
+  done:
+    x64.epilogue
+    x64.ret
+  }
+}
+---

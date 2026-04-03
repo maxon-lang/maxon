@@ -1,0 +1,142 @@
+// Test: error-otherwise-block
+
+typealias Integer = int(i64.min to i64.max)
+
+enum MyError implements Error
+	failed
+end 'MyError'
+
+function mayFail() returns Integer throws MyError
+	throw MyError.failed
+end 'mayFail'
+
+function main() returns ExitCode
+	var result = 0
+	try mayFail() otherwise 'err'
+		result = 42
+	end 'err'
+	return result
+end 'main'
+---
+ExitCode: 42
+RequiredMLIR: ```
+=== maxon
+module {
+  func @register-allocator.mayFail() -> i64 {
+  entry:
+    %8 = maxon.enum_literal @MyError.failed
+    maxon.scope_end []
+    maxon.throw @MyError %8
+  }
+  func @main() -> i64 {
+  entry:
+    %9 = maxon.literal {value = 0 : i64}
+    maxon.assign %9 {var = result} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %12, %11 = maxon.try_call @register-allocator.mayFail
+    maxon.assign %11 {var = __try_error_2} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %12 {var = __try_result_3} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %13 = maxon.literal {value = 0 : i64}
+    %14 = maxon.binop %11, %13 {op = ne}
+    maxon.cond_br %14 [then: otherwise_error_0, else: otherwise_continue_1]
+  otherwise_error_0:
+    %15 = maxon.literal {value = 42 : i64}
+    maxon.assign %15 {var = result} {kind = i64} {mut = 1 : i1}
+    maxon.br otherwise_continue_1
+  otherwise_continue_1:
+    %16 = maxon.var_ref {var = __try_result_3} {type = i64}
+    %17 = maxon.var_ref {var = result} {type = i64}
+    %18 = maxon.literal {value = 0 : i64}
+    %19 = maxon.binop %17, %18 {op = lt}
+    %20 = maxon.literal {value = 4294967295 : i64}
+    %21 = maxon.binop %17, %20 {op = gt}
+    %22 = maxon.binop %19, %21 {op = or}
+    maxon.cond_br %22 [then: __range_panic_4, else: __range_ok_4]
+  __range_panic_4:
+    maxon.panic "panic at error-otherwise-block.test:18: Range check failed: value outside typealias 'ExitCode'"
+  __range_ok_4:
+    maxon.scope_end [result, __try_error_2, __try_result_3]
+    maxon.return %17
+  }
+}
+=== standard
+module {
+  func @register-allocator.mayFail() -> i64 {
+  entry:
+    %0 = arith.constant {value = 0 : i64}
+    %1 = arith.constant {value = 1 : i64}
+    %2 = arith.addi %0, %1
+    func.error_return %2
+  }
+  func @main() -> u32 {
+  entry:
+    %3 = arith.constant {value = 0 : i64}
+    memref.store %3, result
+    %4, %5 = func.try_call @register-allocator.mayFail
+    %6 = arith.constant {value = 0 : i64}
+    %7 = arith.cmpi ne %5, %6
+    cf.cond_br %7 [then: otherwise_error_0, else: otherwise_continue_1]
+  otherwise_error_0:
+    %8 = arith.constant {value = 42 : i64}
+    memref.store %8, result
+    cf.br otherwise_continue_1
+  otherwise_continue_1:
+    %10 = memref.load result : i64
+    %11 = arith.constant {value = 0 : i64}
+    %12 = arith.cmpi lt %10, %11
+    %13 = arith.constant {value = 4294967295 : i64}
+    %14 = arith.cmpi gt %10, %13
+    %15 = arith.ori1 %12, %14
+    cf.cond_br %15 [then: __range_panic_4, else: __range_ok_4]
+  __range_panic_4:
+    %16 = memref.lea_symdata __panic_msg_0
+    %17 = std.ptr_to_i64 %16
+    std.call_runtime @mrt_panic %17
+  __range_ok_4:
+    func.return %10
+  }
+}
+=== x86
+module {
+  func @register-allocator.mayFail() -> i64 {
+  entry:
+    x64.xor rax, rax
+    x64.mov rcx, 1
+    x64.add rax, rcx
+    x64.mov rdx, rax
+    x64.xor rax, rax
+    x64.ret
+  }
+  func @main() -> u32 {
+  entry:
+    x64.prologue stack_size=16
+    x64.xor rax, rax
+    x64.mov [rbp-8], rax
+    x64.call register-allocator.mayFail
+    x64.xor rcx, rcx
+    x64.cmp rdx, rcx
+    x64.je main.otherwise_continue_1
+  otherwise_error_0:
+    x64.mov rax, 42
+    x64.mov [rbp-8], rax
+    x64.jmp main.otherwise_continue_1
+  otherwise_continue_1:
+    x64.mov rax, [rbp-8]
+    x64.xor rcx, rcx
+    x64.mov rdx, 4294967295
+    x64.cmp rax, rdx
+    x64.jg main.__range_panic_4
+    x64.cmp rax, rcx
+    x64.jl main.__range_panic_4
+    x64.jmp main.__range_ok_4
+  __range_panic_4:
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_4:
+    x64.epilogue
+    x64.ret
+  }
+}
+```
+---
+---

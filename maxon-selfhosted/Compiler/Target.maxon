@@ -1,8 +1,8 @@
 // Compilation target: CPU architecture and operating system.
 
 export enum CpuArch
-	x86_64
-	aarch64
+	x64
+	arm64
 end 'CpuArch'
 
 export enum Os
@@ -31,24 +31,24 @@ export function detectHostTarget() returns Target
 		#endif
 	#endif
 
-	#if arch(x86_64)
-		let hostCpu = CpuArch.x86_64
+	#if arch(x64)
+		let hostCpu = CpuArch.x64
 	#else
-		let hostCpu = CpuArch.aarch64
+		let hostCpu = CpuArch.arm64
 	#endif
 
 	return Target.create(hostCpu, os: hostOs)
 end 'detectHostTarget'
 
 export function parseTarget(s String) returns Target
-	var cpu = CpuArch.x86_64
+	var cpu = CpuArch.x64
 	var os = Os.windows
 
 	// Parse "cpu-os" format
-	if s.startsWith("x86_64") 'isX86'
-		cpu = CpuArch.x86_64
-	end 'isX86' else if s.startsWith("aarch64") 'isArm'
-		cpu = CpuArch.aarch64
+	if s.startsWith("x64") 'isX86'
+		cpu = CpuArch.x64
+	end 'isX86' else if s.startsWith("arm64") 'isArm'
+		cpu = CpuArch.arm64
 	end 'isArm' else 'unknownCpu'
 		panic("Unknown CPU architecture in target string: {s}")
 	end 'unknownCpu'
@@ -68,8 +68,8 @@ end 'parseTarget'
 
 export function targetToString(t Target) returns String
 	let cpuStr = match t.cpu 'cpu'
-		x86_64 gives "x86_64"
-		aarch64 gives "aarch64"
+		x64 gives "x64"
+		arm64 gives "arm64"
 	end 'cpu'
 
 	let osStr = match t.os 'os'

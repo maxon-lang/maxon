@@ -1,0 +1,58 @@
+// Test: nested-calls-in-namespace
+
+typealias Integer = int(i64.min to i64.max)
+
+function add(a Integer, b Integer) returns Integer
+	return a + b
+end 'add'
+
+function sum_three(a Integer, b Integer, c Integer) returns Integer
+	return add(add(a, b: b), b: c)
+end 'sum_three'
+
+function main() returns ExitCode
+	return sum_three(1, b: 2, c: 3)
+end 'main'
+---
+ExitCode: 6
+---
+module {
+  func @namespaces.add(a: i64, b: i64) -> i64 {
+  entry:
+    x64.lea rax, [rcx + rdx]
+    x64.ret
+  }
+  func @namespaces.sum_three(a: i64, b: i64, c: i64) -> i64 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-8], r8
+    x64.call namespaces.add
+    x64.mov rdx, [rbp-8]
+    x64.mov rcx, rax
+    x64.epilogue
+    x64.jmp namespaces.add
+  }
+  func @main() -> u32 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov rcx, 1
+    x64.mov rdx, 2
+    x64.mov r8, 3
+    x64.call namespaces.sum_three
+    x64.xor rcx, rcx
+    x64.mov rdx, 4294967295
+    x64.cmp rax, rdx
+    x64.jg main.__range_panic_0
+    x64.cmp rax, rcx
+    x64.jl main.__range_panic_0
+    x64.jmp main.__range_ok_0
+  __range_panic_0:
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.epilogue
+    x64.ret
+  }
+}
+---

@@ -1,0 +1,73 @@
+// Test: negative-int
+enum Temperature
+	freezing = 0
+	cold = -10
+	warm = 25
+end 'Temperature'
+
+function main() returns ExitCode
+	var result = match Temperature.warm 'check'
+		freezing gives 0
+		cold gives -10
+		warm gives 25
+	end 'check'
+	return result
+end 'main'
+---
+ExitCode: 25
+---
+module {
+  func @main() -> u32 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov rax, 25
+    x64.xor rcx, rcx
+    x64.mov [rbp-8], rcx
+    x64.mov [rbp-16], rax
+    x64.jmp main.check_0.cmp0
+  check_0.cmp0:
+    x64.mov rax, [rbp-16]
+    x64.xor rcx, rcx
+    x64.cmp rax, rcx
+    x64.jne main.check_0.cmp1
+  check_0.case0:
+    x64.xor rax, rax
+    x64.mov [rbp-8], rax
+    x64.jmp main.check_0.merge
+  check_0.cmp1:
+    x64.mov rax, [rbp-16]
+    x64.mov rcx, -10
+    x64.cmp rax, rcx
+    x64.jne main.check_0.cmp2
+  check_0.case1:
+    x64.mov rax, -10
+    x64.mov [rbp-8], rax
+    x64.jmp main.check_0.merge
+  check_0.cmp2:
+    x64.mov rax, [rbp-16]
+    x64.mov rcx, 25
+    x64.cmp rax, rcx
+    x64.jne main.check_0.merge
+  check_0.case2:
+    x64.mov rax, 25
+    x64.mov [rbp-8], rax
+    x64.jmp main.check_0.merge
+  check_0.merge:
+    x64.mov rax, [rbp-8]
+    x64.xor rcx, rcx
+    x64.mov rdx, 4294967295
+    x64.cmp rax, rdx
+    x64.jg main.__range_panic_1
+    x64.cmp rax, rcx
+    x64.jl main.__range_panic_1
+    x64.jmp main.__range_ok_1
+  __range_panic_1:
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_1:
+    x64.epilogue
+    x64.ret
+  }
+}
+---

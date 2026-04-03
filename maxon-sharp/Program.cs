@@ -41,8 +41,8 @@ class Program {
     Console.WriteLine("  lsp-server               Start language server (LSP)");
     Console.WriteLine();
     Console.WriteLine("Build options (build, run):");
-    Console.WriteLine("  --target=ARCH-OS         Set compilation target (default: x86_64-windows)");
-    Console.WriteLine("                           Examples: x86_64-windows, aarch64-macos, x86_64-linux");
+    Console.WriteLine("  --target=ARCH-OS         Set compilation target (default: x64-windows)");
+    Console.WriteLine("                           Examples: x64-windows, arm64-macos, x64-linux");
     Console.WriteLine("  --emit-ir                Write .mlir file");
     Console.WriteLine("  --dump-stages            Write IR at each pipeline stage (.1-maxon.mlir, etc.)");
     Console.WriteLine("  --mm-trace               Enable runtime memory manager trace output (stderr)");

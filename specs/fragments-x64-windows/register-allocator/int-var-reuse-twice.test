@@ -1,0 +1,74 @@
+// Test: int-var-reuse-twice
+function main() returns ExitCode
+	var x = 21
+	return x + x
+end 'main'
+---
+ExitCode: 42
+RequiredMLIR: ```
+=== maxon
+module {
+  func @main() -> i64 {
+  entry:
+    %0 = maxon.literal {value = 21 : i64}
+    maxon.assign %0 {var = x} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %1 = maxon.binop %0, %0 {op = add}
+    %2 = maxon.literal {value = 0 : i64}
+    %3 = maxon.binop %1, %2 {op = lt}
+    %4 = maxon.literal {value = 4294967295 : i64}
+    %5 = maxon.binop %1, %4 {op = gt}
+    %6 = maxon.binop %3, %5 {op = or}
+    maxon.cond_br %6 [then: __range_panic_0, else: __range_ok_0]
+  __range_panic_0:
+    maxon.panic "panic at int-var-reuse-twice.test:4: Range check failed: value outside typealias 'ExitCode'"
+  __range_ok_0:
+    maxon.scope_end [x]
+    maxon.return %1
+  }
+}
+=== standard
+module {
+  func @main() -> u32 {
+  entry:
+    %0 = arith.constant {value = 21 : i64}
+    %1 = arith.addi %0, %0
+    %2 = arith.constant {value = 0 : i64}
+    %3 = arith.cmpi lt %1, %2
+    %4 = arith.constant {value = 4294967295 : i64}
+    %5 = arith.cmpi gt %1, %4
+    %6 = arith.ori1 %3, %5
+    cf.cond_br %6 [then: __range_panic_0, else: __range_ok_0]
+  __range_panic_0:
+    %7 = memref.lea_symdata __panic_msg_0
+    %8 = std.ptr_to_i64 %7
+    std.call_runtime @mrt_panic %8
+  __range_ok_0:
+    func.return %1
+  }
+}
+=== x86
+module {
+  func @main() -> u32 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov rax, 21
+    x64.add rax, rax
+    x64.xor rcx, rcx
+    x64.mov rdx, 4294967295
+    x64.cmp rax, rdx
+    x64.jg main.__range_panic_0
+    x64.cmp rax, rcx
+    x64.jl main.__range_panic_0
+    x64.jmp main.__range_ok_0
+  __range_panic_0:
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.epilogue
+    x64.ret
+  }
+}
+```
+---
+---

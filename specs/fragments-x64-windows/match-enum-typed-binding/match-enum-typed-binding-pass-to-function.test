@@ -1,0 +1,154 @@
+// Test: match-enum-typed-binding-pass-to-function
+enum Direction
+		north
+		south
+		east
+		west
+end 'Direction'
+
+enum Move
+		walk(dir Direction)
+		stay
+end 'Move'
+
+function directionValue(d Direction) returns ExitCode
+		match d 'check'
+				north then return 1
+				south then return 2
+				east then return 3
+				west then return 4
+		end 'check'
+end 'directionValue'
+
+function main() returns ExitCode
+		let m = Move.walk(Direction.east)
+		match m 'act'
+				walk(dir) then return directionValue(dir)
+				stay then return 0
+		end 'act'
+end 'main'
+---
+ExitCode: 3
+---
+module {
+  func @match-enum-typed-binding.directionValue(d: i64) -> u32 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-8], rcx
+    x64.mov rax, [rbp-8]
+    x64.jump_table rax, 4 cases, default=match-enum-typed-binding.directionValue.check_0.merge
+  check_0.case0:
+    x64.mov rax, 1
+    x64.epilogue
+    x64.ret
+  check_0.case1:
+    x64.mov rax, 2
+    x64.epilogue
+    x64.ret
+  check_0.case2:
+    x64.mov rax, 3
+    x64.epilogue
+    x64.ret
+  check_0.case3:
+    x64.mov rax, 4
+    x64.epilogue
+    x64.ret
+  check_0.merge:
+  }
+  func @main() -> u32 {
+  entry:
+    x64.prologue stack_size=48
+    x64.mov rax, 2
+    x64.mov rcx, 16
+    x64.xor rdx, rdx
+    x64.mov r8, 1
+    x64.call mm_alloc
+    x64.mov [rbp-8], rax
+    x64.xor rcx, rcx
+    x64.mov [rax+0], rcx
+    x64.mov rdx, 2
+    x64.mov [rax+8], rdx
+    x64.mov rbx, [rbp-8]
+    x64.mov rcx, [rbp-8]
+    x64.call mm_incref
+    x64.mov rsi, [rbp-8]
+    x64.mov rdi, [rsi+0]
+    x64.mov r8, [rbp-8]
+    x64.mov [rbp-16], r8
+    x64.mov r9, [rbp-16]
+    x64.mov [rbp-40], rdi
+    x64.mov rcx, [rbp-16]
+    x64.call mm_incref
+    x64.mov rax, [rbp-40]
+    x64.mov [rbp-24], rax
+    x64.jmp main.act_0.cmp0
+  act_0.cmp0:
+    x64.mov rax, [rbp-24]
+    x64.xor rcx, rcx
+    x64.cmp rax, rcx
+    x64.jne main.act_0.cmp1
+  act_0.case0:
+    x64.mov rax, [rbp-16]
+    x64.mov rcx, [rax+8]
+    x64.mov [rbp-32], rcx
+    x64.mov rdx, [rbp-32]
+    x64.mov rcx, [rbp-32]
+    x64.call match-enum-typed-binding.directionValue
+    x64.mov ebx, rax
+    x64.xor rsi, rsi
+    x64.mov rdi, 4294967295
+    x64.cmp rbx, rdi
+    x64.jg main.__range_panic_1
+    x64.cmp rbx, rsi
+    x64.jl main.__range_panic_1
+    x64.jmp main.__range_ok_1
+  __range_panic_1:
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_1:
+    x64.mov rax, [rbp-16]
+    x64.mov [rbp-40], rbx
+    x64.test rax, rax
+    x64.jz __nonnull_skip_0
+    x64.mov rcx, [rbp-16]
+    x64.call mm_decref
+    x64.label __nonnull_skip_0
+    x64.mov rcx, [rbp-8]
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_1
+    x64.call mm_decref
+    x64.label __nonnull_skip_1
+    x64.mov rax, [rbp-40]
+    x64.epilogue
+    x64.ret
+  act_0.cmp1:
+    x64.mov rax, [rbp-24]
+    x64.mov rcx, 1
+    x64.cmp rax, rcx
+    x64.jne main.act_0.merge
+  act_0.case1:
+    x64.mov rax, [rbp-16]
+    x64.test rax, rax
+    x64.jz __nonnull_skip_2
+    x64.mov rcx, [rbp-16]
+    x64.call mm_decref
+    x64.label __nonnull_skip_2
+    x64.mov rcx, [rbp-8]
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_3
+    x64.call mm_decref
+    x64.label __nonnull_skip_3
+    x64.xor rax, rax
+    x64.epilogue
+    x64.ret
+  act_0.merge:
+  }
+  func @__destruct_Move(ptr: i64) {
+  entry:
+    x64.jmp __destruct_Move.done
+  done:
+    x64.ret
+  }
+}
+---

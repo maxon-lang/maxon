@@ -1,0 +1,221 @@
+// Test: rc-enum-struct-payload-freed
+typealias Integer = int(i64.min to i64.max)
+
+type Body
+	export var mass Integer
+
+	static function create(mass Integer) returns Self
+		return Self{mass: mass}
+	end 'create'
+end 'Body'
+
+enum Shape
+	empty
+	solid(body Body)
+end 'Shape'
+
+function massOf(s Shape) returns Integer
+	match s 'check'
+		empty then return 0
+		solid(b) then return b.mass
+	end 'check'
+end 'massOf'
+
+function main() returns ExitCode
+	var s = Shape.solid(Body.create(mass: 5))
+	return massOf(s)
+end 'main'
+---
+MmTrace: true
+ExitCode: 5
+Stderr: ```
+sl_init
+  os_alloc size=67108864
+mm_alloc Body #1 size=8 [Body.create]
+  sl_alloc Body #1 size=40 class=4
+mm_incref Body #1 rc=1 [Body.create]
+mm_transfer Body #1 rc=1 [Body.create]
+mm_alloc Shape #2 size=16 [main]
+  sl_alloc Shape #2 size=48 class=4
+mm_incref Body #1 rc=2 [main]
+mm_incref Shape #2 rc=1 [main]
+mm_incref Shape #2 rc=2 [ownership-edge-cases.massOf]
+mm_incref Body #1 rc=3 [ownership-edge-cases.massOf]
+mm_decref Shape #2 rc=1 [ownership-edge-cases.massOf]
+mm_decref Body #1 rc=2 [ownership-edge-cases.massOf]
+mm_decref Body #1 rc=1 [main]
+mm_decref Shape #2 rc=0 [main]
+  mm_decref Body #1 rc=0 [~Shape]
+    mm_free Body #1
+      sl_free Body #1 size=48 class=4
+  mm_free Shape #2
+    sl_free Shape #2 size=48 class=4
+mm_raw_alloc #R1 size=40
+  sl_alloc size=40 class=4
+mm_raw_free #R1
+  sl_free size=48 class=4
+```
+---
+module {
+  func @Body.create(mass: i64) -> i64 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-16], rcx
+    x64.mov rcx, 8
+    x64.xor rdx, rdx
+    x64.mov r8, 1
+    x64.call mm_alloc
+    x64.mov [rbp-8], rax
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rbp-16]
+    x64.mov [rax+0], rcx
+    x64.mov rdx, [rbp-8]
+    x64.mov rcx, [rbp-8]
+    x64.call mm_incref
+    x64.mov rax, [rbp-8]
+    x64.epilogue
+    x64.ret
+  }
+  func @ownership-edge-cases.massOf(s: i64) -> i64 {
+  entry:
+    x64.prologue stack_size=48
+    x64.mov [rbp-8], rcx
+    x64.mov rax, [rbp-8]
+    x64.mov rdx, [rax+0]
+    x64.mov [rbp-16], rcx
+    x64.mov rcx, [rbp-16]
+    x64.mov [rbp-40], rdx
+    x64.call mm_incref
+    x64.mov rdx, [rbp-40]
+    x64.mov [rbp-24], rdx
+    x64.jmp ownership-edge-cases.massOf.check_0.cmp0
+  check_0.cmp0:
+    x64.mov rax, [rbp-24]
+    x64.xor rcx, rcx
+    x64.cmp rax, rcx
+    x64.jne ownership-edge-cases.massOf.check_0.cmp1
+  check_0.case0:
+    x64.mov rax, [rbp-16]
+    x64.test rax, rax
+    x64.jz __nonnull_skip_0
+    x64.mov rcx, [rbp-16]
+    x64.call mm_decref
+    x64.label __nonnull_skip_0
+    x64.xor rax, rax
+    x64.epilogue
+    x64.ret
+  check_0.cmp1:
+    x64.mov rax, [rbp-24]
+    x64.mov rcx, 1
+    x64.cmp rax, rcx
+    x64.jne ownership-edge-cases.massOf.check_0.merge
+  check_0.case1:
+    x64.mov rax, [rbp-16]
+    x64.mov rcx, [rax+8]
+    x64.mov [rbp-32], rcx
+    x64.mov rdx, [rbp-32]
+    x64.mov rcx, [rbp-32]
+    x64.call mm_incref
+    x64.mov rbx, [rbp-32]
+    x64.mov rax, [rbx+0]
+    x64.mov rsi, [rbp-16]
+    x64.mov [rbp-40], rax
+    x64.test rsi, rsi
+    x64.jz __nonnull_skip_1
+    x64.mov rcx, [rbp-16]
+    x64.call mm_decref
+    x64.label __nonnull_skip_1
+    x64.mov rdi, [rbp-32]
+    x64.test rdi, rdi
+    x64.jz __nonnull_skip_2
+    x64.mov rcx, [rbp-32]
+    x64.call mm_decref
+    x64.label __nonnull_skip_2
+    x64.mov rax, [rbp-40]
+    x64.epilogue
+    x64.ret
+  check_0.merge:
+  }
+  func @main() -> u32 {
+  entry:
+    x64.prologue stack_size=32
+    x64.mov rcx, 5
+    x64.call Body.create
+    x64.mov [rbp-8], rax
+    x64.lea_func rax, [__destruct_Shape]
+    x64.mov rcx, rax
+    x64.mov rdx, rcx
+    x64.mov rcx, 16
+    x64.mov r8, 2
+    x64.call mm_alloc
+    x64.mov [rbp-16], rax
+    x64.mov rdx, 1
+    x64.mov [rax+0], rdx
+    x64.mov rbx, [rbp-8]
+    x64.mov [rax+8], rbx
+    x64.mov rcx, [rbp-8]
+    x64.call mm_incref
+    x64.mov rsi, [rbp-16]
+    x64.mov rcx, [rbp-16]
+    x64.call mm_incref
+    x64.mov rdi, [rbp-16]
+    x64.mov rcx, [rbp-16]
+    x64.call ownership-edge-cases.massOf
+    x64.xor r8, r8
+    x64.mov r9, 4294967295
+    x64.cmp rax, r9
+    x64.jg main.__range_panic_0
+    x64.cmp rax, r8
+    x64.jl main.__range_panic_0
+    x64.jmp main.__range_ok_0
+  __range_panic_0:
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.mov rcx, [rbp-8]
+    x64.mov [rbp-24], rax
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_3
+    x64.call mm_decref
+    x64.label __nonnull_skip_3
+    x64.mov rax, [rbp-16]
+    x64.test rax, rax
+    x64.jz __nonnull_skip_4
+    x64.mov rcx, [rbp-16]
+    x64.call mm_decref
+    x64.label __nonnull_skip_4
+    x64.mov rax, [rbp-24]
+    x64.epilogue
+    x64.ret
+  }
+  func @__destruct_Body(ptr: i64) {
+  entry:
+    x64.jmp __destruct_Body.done
+  done:
+    x64.ret
+  }
+  func @__destruct_Shape(ptr: i64) {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-8], rcx
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+0]
+    x64.mov rdx, 1
+    x64.cmp rcx, rdx
+    x64.jne __destruct_Shape.done
+  case_1:
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+8]
+    x64.mov [rbp-16], rcx
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_5
+    x64.call mm_decref
+    x64.label __nonnull_skip_5
+    x64.jmp __destruct_Shape.done
+  done:
+    x64.epilogue
+    x64.ret
+  }
+}
+---

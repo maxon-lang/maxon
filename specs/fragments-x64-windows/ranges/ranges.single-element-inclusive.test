@@ -1,0 +1,58 @@
+// Test: ranges.single-element-inclusive
+function main() returns ExitCode
+		var count = 0
+		for _ in 5 to 5 'loop'
+				count = count + 1
+		end 'loop'
+		return count
+end 'main'
+---
+ExitCode: 1
+---
+module {
+  func @main() -> u32 {
+  entry:
+    x64.prologue stack_size=32
+    x64.xor rax, rax
+    x64.mov [rbp-8], rax
+    x64.mov rcx, 5
+    x64.mov rdx, 5
+    x64.mov [rbp-16], rdx
+    x64.mov [rbp-24], rcx
+    x64.jmp main.loop_0.header
+  loop_0.header:
+    x64.mov rax, [rbp-24]
+    x64.mov rcx, [rbp-16]
+    x64.cmp rax, rcx
+    x64.jg main.loop_0.exit
+  loop_0:
+    x64.mov rax, 1
+    x64.mov rcx, [rbp-8]
+    x64.add rcx, rax
+    x64.mov [rbp-8], rcx
+    x64.jmp main.loop_0.incr
+  loop_0.incr:
+    x64.mov rax, 1
+    x64.mov rcx, [rbp-24]
+    x64.add rcx, rax
+    x64.mov [rbp-24], rcx
+    x64.jmp main.loop_0.header
+  loop_0.exit:
+    x64.mov rax, [rbp-8]
+    x64.xor rcx, rcx
+    x64.mov rdx, 4294967295
+    x64.cmp rax, rdx
+    x64.jg main.__range_panic_1
+    x64.cmp rax, rcx
+    x64.jl main.__range_panic_1
+    x64.jmp main.__range_ok_1
+  __range_panic_1:
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_1:
+    x64.epilogue
+    x64.ret
+  }
+}
+---

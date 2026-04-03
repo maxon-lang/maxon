@@ -1,0 +1,168 @@
+// Test: int-nine-params-function
+
+typealias Integer = int(i64.min to i64.max)
+
+function sum9(a Integer, b Integer, c Integer, d Integer, e Integer, f Integer, g Integer, h Integer, i Integer) returns Integer
+	return a + b + c + d + e + f + g + h + i
+end 'sum9'
+
+function main() returns ExitCode
+	return sum9(1, b: 2, c: 3, d: 4, e: 5, f: 6, g: 7, h: 8, i: 9)
+end 'main'
+---
+ExitCode: 45
+RequiredMLIR: ```
+=== maxon
+module {
+  func @register-allocator.sum9(a: i64, b: i64, c: i64, d: i64, e: i64, f: i64, g: i64, h: i64, i: i64) -> i64 {
+  entry:
+    %0 = maxon.param {index = 0 : i32} {name = a} {type = i64}
+    %1 = maxon.param {index = 1 : i32} {name = b} {type = i64}
+    %2 = maxon.param {index = 2 : i32} {name = c} {type = i64}
+    %3 = maxon.param {index = 3 : i32} {name = d} {type = i64}
+    %4 = maxon.param {index = 4 : i32} {name = e} {type = i64}
+    %5 = maxon.param {index = 5 : i32} {name = f} {type = i64}
+    %6 = maxon.param {index = 6 : i32} {name = g} {type = i64}
+    %7 = maxon.param {index = 7 : i32} {name = h} {type = i64}
+    %8 = maxon.param {index = 8 : i32} {name = i} {type = i64}
+    %9 = maxon.binop %0, %1 {op = add} {optimalType = i64}
+    %10 = maxon.binop %9, %2 {op = add} {optimalType = i64}
+    %11 = maxon.binop %10, %3 {op = add} {optimalType = i64}
+    %12 = maxon.binop %11, %4 {op = add} {optimalType = i64}
+    %13 = maxon.binop %12, %5 {op = add} {optimalType = i64}
+    %14 = maxon.binop %13, %6 {op = add} {optimalType = i64}
+    %15 = maxon.binop %14, %7 {op = add} {optimalType = i64}
+    %16 = maxon.binop %15, %8 {op = add} {optimalType = i64}
+    maxon.scope_end [a, b, c, d, e, f, g, h, i]
+    maxon.return %16
+  }
+  func @main() -> i64 {
+  entry:
+    %17 = maxon.literal {value = 1 : i64}
+    %18 = maxon.literal {value = 2 : i64}
+    %19 = maxon.literal {value = 3 : i64}
+    %20 = maxon.literal {value = 4 : i64}
+    %21 = maxon.literal {value = 5 : i64}
+    %22 = maxon.literal {value = 6 : i64}
+    %23 = maxon.literal {value = 7 : i64}
+    %24 = maxon.literal {value = 8 : i64}
+    %25 = maxon.literal {value = 9 : i64}
+    %26 = maxon.call @register-allocator.sum9 %17, %18, %19, %20, %21, %22, %23, %24, %25
+    %27 = maxon.literal {value = 0 : i64}
+    %28 = maxon.binop %26, %27 {op = lt}
+    %29 = maxon.literal {value = 4294967295 : i64}
+    %30 = maxon.binop %26, %29 {op = gt}
+    %31 = maxon.binop %28, %30 {op = or}
+    maxon.cond_br %31 [then: __range_panic_0, else: __range_ok_0]
+  __range_panic_0:
+    maxon.panic "panic at int-nine-params-function.test:10: Range check failed: value outside typealias 'ExitCode'"
+  __range_ok_0:
+    maxon.scope_end []
+    maxon.return %26
+  }
+}
+=== standard
+module {
+  func @register-allocator.sum9(a: i64, b: i64, c: i64, d: i64, e: i64, f: i64, g: i64, h: i64, i: i64) -> i64 {
+  entry:
+    %0 = func.param a : StdI64
+    %1 = func.param b : StdI64
+    %2 = func.param c : StdI64
+    %3 = func.param d : StdI64
+    %4 = func.param e : StdI64
+    %5 = func.param f : StdI64
+    %6 = func.param g : StdI64
+    %7 = func.param h : StdI64
+    %8 = func.param i : StdI64
+    %9 = arith.addi %0, %1
+    %10 = arith.addi %9, %2
+    %11 = arith.addi %10, %3
+    %12 = arith.addi %11, %4
+    %13 = arith.addi %12, %5
+    %14 = arith.addi %13, %6
+    %15 = arith.addi %14, %7
+    %16 = arith.addi %15, %8
+    func.return %16
+  }
+  func @main() -> u32 {
+  entry:
+    %17 = arith.constant {value = 1 : i64}
+    %18 = arith.constant {value = 2 : i64}
+    %19 = arith.constant {value = 3 : i64}
+    %20 = arith.constant {value = 4 : i64}
+    %21 = arith.constant {value = 5 : i64}
+    %22 = arith.constant {value = 6 : i64}
+    %23 = arith.constant {value = 7 : i64}
+    %24 = arith.constant {value = 8 : i64}
+    %25 = arith.constant {value = 9 : i64}
+    %26 = func.call @register-allocator.sum9 %17, %18, %19, %20, %21, %22, %23, %24, %25
+    %27 = arith.constant {value = 0 : i64}
+    %28 = arith.cmpi lt %26, %27
+    %29 = arith.constant {value = 4294967295 : i64}
+    %30 = arith.cmpi gt %26, %29
+    %31 = arith.ori1 %28, %30
+    cf.cond_br %31 [then: __range_panic_0, else: __range_ok_0]
+  __range_panic_0:
+    %32 = memref.lea_symdata __panic_msg_0
+    %33 = std.ptr_to_i64 %32
+    std.call_runtime @mrt_panic %33
+  __range_ok_0:
+    func.return %26
+  }
+}
+=== x86
+module {
+  func @register-allocator.sum9(a: i64, b: i64, c: i64, d: i64, e: i64, f: i64, g: i64, h: i64, i: i64) -> i64 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-8], rcx
+    x64.mov rcx, [rbp+16]
+    x64.mov [rbp-16], rcx
+    x64.mov rcx, [rbp-8]
+    x64.add rcx, rdx
+    x64.add rcx, r8
+    x64.add rcx, r9
+    x64.add rcx, rsi
+    x64.add rcx, rdi
+    x64.add rcx, rax
+    x64.add rcx, rbx
+    x64.mov rax, [rbp-16]
+    x64.lea rax, [rcx + rax]
+    x64.epilogue
+    x64.ret
+  }
+  func @main() -> u32 {
+  entry:
+    x64.prologue stack_size=16
+    x64.sub rsp, 16
+    x64.mov rax, 9
+    x64.mov [rsp+0], rax
+    x64.mov rcx, 1
+    x64.mov rdx, 2
+    x64.mov r8, 3
+    x64.mov r9, 4
+    x64.mov rsi, 5
+    x64.mov rdi, 6
+    x64.mov rax, 7
+    x64.mov rbx, 8
+    x64.call register-allocator.sum9
+    x64.add rsp, 16
+    x64.xor rcx, rcx
+    x64.mov rdx, 4294967295
+    x64.cmp rax, rdx
+    x64.jg main.__range_panic_0
+    x64.cmp rax, rcx
+    x64.jl main.__range_panic_0
+    x64.jmp main.__range_ok_0
+  __range_panic_0:
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.epilogue
+    x64.ret
+  }
+}
+```
+---
+---

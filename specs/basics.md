@@ -59,7 +59,7 @@ end 'main'
 ```exitcode
 42
 ```
-```RequiredLowering:x86_64-windows
+```RequiredLowering:x64-windows
 === After semantic-check ===
 Functions: 2, Blocks: 2, Ops: 10
   maxon: 10, arith: 0, cf: 0, func: 0, memref: 0, runtime: 0, sys: 0, mir: 0, x64: 0, arm64: 0
@@ -263,7 +263,7 @@ end 'main'
 ```exitcode
 42
 ```
-```RequiredMLIR:x86_64-windows
+```RequiredMLIR:x64-windows
 === maxon
 module {
   func @basics.getValue() -> i64 {
@@ -316,31 +316,31 @@ module {
 module {
   func @basics.getValue() -> i64 {
   entry:
-    x86.mov rax, 42
-    x86.ret
+    x64.mov rax, 42
+    x64.ret
   }
   func @main() -> u32 {
   entry:
-    x86.prologue stack_size=16
-    x86.call basics.getValue
-    x86.xor rcx, rcx
-    x86.mov rdx, 4294967295
-    x86.cmp rax, rdx
-    x86.jg main.__range_panic_0
-    x86.cmp rax, rcx
-    x86.jl main.__range_panic_0
-    x86.jmp main.__range_ok_0
+    x64.prologue stack_size=16
+    x64.call basics.getValue
+    x64.xor rcx, rcx
+    x64.mov rdx, 4294967295
+    x64.cmp rax, rdx
+    x64.jg main.__range_panic_0
+    x64.cmp rax, rcx
+    x64.jl main.__range_panic_0
+    x64.jmp main.__range_ok_0
   __range_panic_0:
-    x86.lea_symdata rax, [__panic_msg_0]
-    x86.mov rcx, rax
-    x86.call mrt_panic
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
+    x64.call mrt_panic
   __range_ok_0:
-    x86.epilogue
-    x86.ret
+    x64.epilogue
+    x64.ret
   }
 }
 ```
-```RequiredMLIR:aarch64-macos
+```RequiredMLIR:arm64-macos
 === maxon
 module {
   func @basics.getValue() -> i64 {
@@ -439,7 +439,7 @@ end 'main'
 ```RequiredRdata
 f64 3.14
 ```
-```RequiredMLIR:x86_64-windows
+```RequiredMLIR:x64-windows
 === maxon
 module {
   func @main() -> i64 {
@@ -479,21 +479,21 @@ module {
 module {
   func @main() -> u32 {
   entry:
-    x86.movsd xmm0, [rip+__float_3.14]
-    x86.movsd xmm1, [rip+__float_3.14]
-    x86.ucomisd xmm0, xmm1
-    x86.jne main.other_1
-    x86.jp main.other_1
+    x64.movsd xmm0, [rip+__float_3.14]
+    x64.movsd xmm1, [rip+__float_3.14]
+    x64.ucomisd xmm0, xmm1
+    x64.jne main.other_1
+    x64.jp main.other_1
   check_0:
-    x86.mov rax, 1
-    x86.ret
+    x64.mov rax, 1
+    x64.ret
   other_1:
-    x86.xor rax, rax
-    x86.ret
+    x64.xor rax, rax
+    x64.ret
   }
 }
 ```
-```RequiredMLIR:aarch64-macos
+```RequiredMLIR:arm64-macos
 === maxon
 module {
   func @main() -> i64 {

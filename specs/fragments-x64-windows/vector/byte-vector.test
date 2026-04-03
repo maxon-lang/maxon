@@ -1,0 +1,171 @@
+// Test: byte-vector
+
+typealias Integer = int(i64.min to i64.max)
+
+typealias Byte = byte(0 to u8.max)
+typealias ByteVec4 = Vector with 4 Byte
+
+function main() returns ExitCode
+	var v = ByteVec4.create()
+	v.set(0, value: 10)
+	v.set(1, value: 20)
+	v.set(2, value: 30)
+	v.set(3, value: 40)
+	var a = try v.get(0) otherwise 0
+	var b = try v.get(3) otherwise 0
+	return (a as Integer) + (b as Integer)
+end 'main'
+---
+ExitCode: 50
+---
+module {
+  func @main() -> u32 {
+  entry:
+    x64.prologue stack_size=64
+    x64.call ByteVec4.create
+    x64.mov [rbp-8], rax
+    x64.mov rax, 10
+    x64.mov rcx, 255
+    x64.and rax, rcx
+    x64.mov rdx, [rbp-8]
+    x64.mov rcx, [rbp-8]
+    x64.mov r8, rax
+    x64.xor rdx, rdx
+    x64.call ByteVec4.set
+    x64.mov rbx, 20
+    x64.mov rsi, 255
+    x64.and rbx, rsi
+    x64.mov rdi, [rbp-8]
+    x64.mov rcx, [rbp-8]
+    x64.mov r8, rbx
+    x64.mov rdx, 1
+    x64.call ByteVec4.set
+    x64.mov r8, 30
+    x64.mov r9, 255
+    x64.and r8, r9
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rbp-8]
+    x64.mov rdx, 2
+    x64.call ByteVec4.set
+    x64.mov rax, 40
+    x64.mov rcx, 255
+    x64.and rax, rcx
+    x64.mov rcx, [rbp-8]
+    x64.mov r8, rax
+    x64.mov rdx, 3
+    x64.call ByteVec4.set
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rbp-8]
+    x64.xor rdx, rdx
+    x64.call ByteVec4.get
+    x64.xor rcx, rcx
+    x64.mov [rbp-16], rcx
+    x64.mov [rbp-24], rax
+    x64.xor rax, rax
+    x64.cmp rdx, rax
+    x64.je main.otherwise_default_continue_3
+  otherwise_default_error_2:
+    x64.mov rax, [rbp-16]
+    x64.mov [rbp-24], rax
+    x64.jmp main.otherwise_default_continue_3
+  otherwise_default_continue_3:
+    x64.mov rax, [rbp-24]
+    x64.mov [rbp-32], rax
+    x64.mov rcx, [rbp-8]
+    x64.mov rdx, 3
+    x64.call ByteVec4.get
+    x64.xor rcx, rcx
+    x64.mov [rbp-40], rcx
+    x64.mov [rbp-48], rax
+    x64.xor rax, rax
+    x64.cmp rdx, rax
+    x64.je main.otherwise_default_continue_7
+  otherwise_default_error_6:
+    x64.mov rax, [rbp-40]
+    x64.mov [rbp-48], rax
+    x64.jmp main.otherwise_default_continue_7
+  otherwise_default_continue_7:
+    x64.mov rax, [rbp-48]
+    x64.mov rcx, [rbp-32]
+    x64.add rcx, rax
+    x64.xor rdx, rdx
+    x64.mov rbx, 4294967295
+    x64.cmp rcx, rbx
+    x64.jg main.__range_panic_8
+    x64.cmp rcx, rdx
+    x64.jl main.__range_panic_8
+    x64.jmp main.__range_ok_8
+  __range_panic_8:
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_8:
+    x64.mov rax, [rbp-8]
+    x64.mov [rbp-56], rcx
+    x64.test rax, rax
+    x64.jz __nonnull_skip_0
+    x64.mov rcx, [rbp-8]
+    x64.call mm_decref
+    x64.label __nonnull_skip_0
+    x64.mov rax, [rbp-56]
+    x64.epilogue
+    x64.ret
+  }
+  func @__destruct_ByteMemory(ptr: i64) {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-8], rcx
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+16]
+    x64.xor rdx, rdx
+    x64.cmp rcx, rdx
+    x64.je __destruct_ByteMemory.skip_buf_0
+  free_buf_0:
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+0]
+    x64.call mm_raw_free
+    x64.jmp __destruct_ByteMemory.skip_buf_0
+  skip_buf_0:
+    x64.jmp __destruct_ByteMemory.done
+  done:
+    x64.epilogue
+    x64.ret
+  }
+  func @__destruct___ManagedMemory_Byte(ptr: i64) {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-8], rcx
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+16]
+    x64.xor rdx, rdx
+    x64.cmp rcx, rdx
+    x64.je __destruct___ManagedMemory_Byte.skip_buf_0
+  free_buf_0:
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+0]
+    x64.call mm_raw_free
+    x64.jmp __destruct___ManagedMemory_Byte.skip_buf_0
+  skip_buf_0:
+    x64.jmp __destruct___ManagedMemory_Byte.done
+  done:
+    x64.epilogue
+    x64.ret
+  }
+  func @__destruct_ByteVec4(ptr: i64) {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-8], rcx
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+8]
+    x64.mov [rbp-16], rcx
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_2
+    x64.call mm_decref
+    x64.label __nonnull_skip_2
+    x64.jmp __destruct_ByteVec4.done
+  done:
+    x64.epilogue
+    x64.ret
+  }
+}
+---

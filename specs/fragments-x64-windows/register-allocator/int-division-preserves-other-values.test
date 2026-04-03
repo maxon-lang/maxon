@@ -1,0 +1,41 @@
+// Test: int-division-preserves-other-values
+function main() returns ExitCode
+	var x = 10
+	var a = 84
+	var b = 2
+	var quotient = a / b
+	return quotient - x
+end 'main'
+---
+ExitCode: 32
+---
+module {
+  func @main() -> u32 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov rax, 10
+    x64.mov rcx, 84
+    x64.mov rdx, 2
+    x64.mov rbx, rdx
+    x64.mov rax, rcx
+    x64.cqo
+    x64.idiv rbx
+    x64.mov rbx, 10
+    x64.sub rax, rbx
+    x64.xor rsi, rsi
+    x64.mov rdi, 4294967295
+    x64.cmp rax, rdi
+    x64.jg main.__range_panic_0
+    x64.cmp rax, rsi
+    x64.jl main.__range_panic_0
+    x64.jmp main.__range_ok_0
+  __range_panic_0:
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.epilogue
+    x64.ret
+  }
+}
+---

@@ -1,0 +1,27 @@
+// Test: panic-interpolation.plain-string-unchanged
+function main() returns ExitCode
+		panic("simple message")
+		return 0
+end 'main'
+---
+ExitCode: 1
+Stderr: ```
+panic at panic-interpolation.plain-string-unchanged.test:3: simple message
+Stack trace:
+  in main
+  in mrt_start
+```
+---
+module {
+  func @main() -> u32 {
+  entry:
+    x64.prologue stack_size=16
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+    x64.xor rax, rax
+    x64.epilogue
+    x64.ret
+  }
+}
+---

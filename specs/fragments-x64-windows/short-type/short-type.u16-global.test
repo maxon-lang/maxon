@@ -1,0 +1,36 @@
+// Test: short-type.u16-global
+typealias U16 = int(0 to 65535)
+
+var counter = U16{42}
+
+function main() returns ExitCode
+	return counter
+end 'main'
+---
+ExitCode: 42
+RequiredData: ```
+u16 42
+```
+---
+module {
+  func @main() -> u32 {
+  entry:
+    x64.prologue stack_size=16
+    x64.movzx rax, word [rip+counter]
+    x64.xor rcx, rcx
+    x64.mov rdx, 4294967295
+    x64.cmp rax, rdx
+    x64.jg main.__range_panic_0
+    x64.cmp rax, rcx
+    x64.jl main.__range_panic_0
+    x64.jmp main.__range_ok_0
+  __range_panic_0:
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.epilogue
+    x64.ret
+  }
+}
+---

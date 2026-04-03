@@ -1,0 +1,37 @@
+// Test: float-arithmetic
+enum Weight
+	light = 0.5
+	heavy = 2.0
+end 'Weight'
+
+function main() returns ExitCode
+	let scale = 4.0
+	let result = Weight.light * scale
+	if result == 2.0 'check'
+		return 1
+	end 'check'
+	return 0
+end 'main'
+---
+ExitCode: 1
+---
+module {
+  func @main() -> u32 {
+  entry:
+    x64.movsd xmm0, [rip+__float_4]
+    x64.movsd xmm1, [rip+__float_0.5]
+    x64.movsd xmm2, xmm1
+    x64.mulsd xmm2, xmm0
+    x64.movsd xmm3, [rip+__float_2]
+    x64.ucomisd xmm2, xmm3
+    x64.jne main.check_0.after
+    x64.jp main.check_0.after
+  check_0:
+    x64.mov rax, 1
+    x64.ret
+  check_0.after:
+    x64.xor rax, rax
+    x64.ret
+  }
+}
+---

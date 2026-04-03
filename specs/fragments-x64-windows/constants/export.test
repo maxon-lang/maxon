@@ -1,0 +1,40 @@
+// Test: export
+// --- file: defs.maxon
+export enum Permission
+	none = 0
+	read = 1
+	write = 2
+end 'Permission'
+
+// --- file: main.maxon
+function main() returns ExitCode
+	var p = Permission.read
+	if p == Permission.read 'check'
+		return 1
+	end 'check'
+	return 0
+end 'main'
+---
+ExitCode: 1
+---
+module {
+  func @main() -> u32 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov rax, 1
+    x64.mov [rbp-8], rax
+    x64.mov rcx, 1
+    x64.mov rdx, [rbp-8]
+    x64.cmp rdx, rcx
+    x64.jne main.check_0.after
+  check_0:
+    x64.mov rax, 1
+    x64.epilogue
+    x64.ret
+  check_0.after:
+    x64.xor rax, rax
+    x64.epilogue
+    x64.ret
+  }
+}
+---

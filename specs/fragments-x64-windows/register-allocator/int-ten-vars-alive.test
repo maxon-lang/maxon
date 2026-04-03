@@ -1,0 +1,148 @@
+// Test: int-ten-vars-alive
+function main() returns ExitCode
+	var a = 1
+	var b = 2
+	var c = 3
+	var d = 4
+	var e = 5
+	var f = 6
+	var g = 7
+	var h = 8
+	var i = 9
+	var j = 10
+	return a + b + c + d + e + f + g + h + i + j
+end 'main'
+---
+ExitCode: 55
+RequiredMLIR: ```
+=== maxon
+module {
+  func @main() -> i64 {
+  entry:
+    %0 = maxon.literal {value = 1 : i64}
+    maxon.assign %0 {var = a} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %1 = maxon.literal {value = 2 : i64}
+    maxon.assign %1 {var = b} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %2 = maxon.literal {value = 3 : i64}
+    maxon.assign %2 {var = c} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %3 = maxon.literal {value = 4 : i64}
+    maxon.assign %3 {var = d} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %4 = maxon.literal {value = 5 : i64}
+    maxon.assign %4 {var = e} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %5 = maxon.literal {value = 6 : i64}
+    maxon.assign %5 {var = f} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %6 = maxon.literal {value = 7 : i64}
+    maxon.assign %6 {var = g} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %7 = maxon.literal {value = 8 : i64}
+    maxon.assign %7 {var = h} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %8 = maxon.literal {value = 9 : i64}
+    maxon.assign %8 {var = i} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %9 = maxon.literal {value = 10 : i64}
+    maxon.assign %9 {var = j} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %10 = maxon.binop %0, %1 {op = add}
+    %11 = maxon.binop %10, %2 {op = add}
+    %12 = maxon.binop %11, %3 {op = add}
+    %13 = maxon.binop %12, %4 {op = add}
+    %14 = maxon.binop %13, %5 {op = add}
+    %15 = maxon.binop %14, %6 {op = add}
+    %16 = maxon.binop %15, %7 {op = add}
+    %17 = maxon.binop %16, %8 {op = add}
+    %18 = maxon.binop %17, %9 {op = add}
+    %19 = maxon.literal {value = 0 : i64}
+    %20 = maxon.binop %18, %19 {op = lt}
+    %21 = maxon.literal {value = 4294967295 : i64}
+    %22 = maxon.binop %18, %21 {op = gt}
+    %23 = maxon.binop %20, %22 {op = or}
+    maxon.cond_br %23 [then: __range_panic_0, else: __range_ok_0]
+  __range_panic_0:
+    maxon.panic "panic at int-ten-vars-alive.test:13: Range check failed: value outside typealias 'ExitCode'"
+  __range_ok_0:
+    maxon.scope_end [a, b, c, d, e, f, g, h, i, j]
+    maxon.return %18
+  }
+}
+=== standard
+module {
+  func @main() -> u32 {
+  entry:
+    %0 = arith.constant {value = 1 : i64}
+    %1 = arith.constant {value = 2 : i64}
+    %2 = arith.constant {value = 3 : i64}
+    %3 = arith.constant {value = 4 : i64}
+    %4 = arith.constant {value = 5 : i64}
+    %5 = arith.constant {value = 6 : i64}
+    %6 = arith.constant {value = 7 : i64}
+    %7 = arith.constant {value = 8 : i64}
+    %8 = arith.constant {value = 9 : i64}
+    %9 = arith.constant {value = 10 : i64}
+    %10 = arith.addi %0, %1
+    %11 = arith.addi %10, %2
+    %12 = arith.addi %11, %3
+    %13 = arith.addi %12, %4
+    %14 = arith.addi %13, %5
+    %15 = arith.addi %14, %6
+    %16 = arith.addi %15, %7
+    %17 = arith.addi %16, %8
+    %18 = arith.addi %17, %9
+    %19 = arith.constant {value = 0 : i64}
+    %20 = arith.cmpi lt %18, %19
+    %21 = arith.constant {value = 4294967295 : i64}
+    %22 = arith.cmpi gt %18, %21
+    %23 = arith.ori1 %20, %22
+    cf.cond_br %23 [then: __range_panic_0, else: __range_ok_0]
+  __range_panic_0:
+    %24 = memref.lea_symdata __panic_msg_0
+    %25 = std.ptr_to_i64 %24
+    std.call_runtime @mrt_panic %25
+  __range_ok_0:
+    func.return %18
+  }
+}
+=== x86
+module {
+  func @main() -> u32 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov rax, 1
+    x64.mov rcx, 2
+    x64.mov rdx, 3
+    x64.mov rbx, 4
+    x64.mov rsi, 5
+    x64.mov rdi, 6
+    x64.mov r8, 7
+    x64.mov r9, 8
+    x64.mov rax, 9
+    x64.mov rcx, 10
+    x64.mov rdx, 2
+    x64.mov rbx, 1
+    x64.add rbx, rdx
+    x64.mov rdx, 3
+    x64.add rbx, rdx
+    x64.mov rdx, 4
+    x64.add rbx, rdx
+    x64.add rbx, rsi
+    x64.add rbx, rdi
+    x64.add rbx, r8
+    x64.add rbx, r9
+    x64.add rbx, rax
+    x64.add rbx, rcx
+    x64.xor rax, rax
+    x64.mov rcx, 4294967295
+    x64.cmp rbx, rcx
+    x64.jg main.__range_panic_0
+    x64.cmp rbx, rax
+    x64.jl main.__range_panic_0
+    x64.jmp main.__range_ok_0
+  __range_panic_0:
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.mov rax, rbx
+    x64.epilogue
+    x64.ret
+  }
+}
+```
+---
+---

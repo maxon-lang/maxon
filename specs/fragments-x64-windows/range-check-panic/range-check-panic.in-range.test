@@ -1,0 +1,46 @@
+// Test: range-check-panic.in-range
+typealias SmallInt = int(0 to 10)
+
+function check(x SmallInt) returns SmallInt
+  return x
+end 'check'
+
+function main() returns ExitCode
+  return check(5)
+end 'main'
+---
+ExitCode: 5
+---
+module {
+  func @range-check-panic.check(ptr: i64) -> u8 {
+  entry:
+    x64.prologue stack_size=16
+    x64.cmp rcx, 10
+    x64.jbe __range_ok_0
+  __range_panic_0:
+    x64.lea rax, [rip+__panic_msg_0]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.mov rax, rcx
+    x64.epilogue
+    x64.ret
+  }
+  func @main() -> u32 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov rcx, 5
+    x64.call range-check-panic.check
+    x64.mov rcx, 4294967295
+    x64.cmp rax, rcx
+    x64.jbe __range_ok_1
+  __range_panic_1:
+    x64.lea rax, [rip+__panic_msg_1]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_1:
+    x64.epilogue
+    x64.ret
+  }
+}
+---

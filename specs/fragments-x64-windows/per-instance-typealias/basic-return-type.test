@@ -1,0 +1,149 @@
+// Test: basic-return-type
+typealias Integer = int(i64.min to i64.max)
+
+type Wrapper uses T
+	export typealias Idx = int(0 to u64.max)
+
+	export var value T
+	export var tag Idx
+
+	export static function create(value T) returns Self
+		return Self{value: value, tag: 0}
+	end 'create'
+
+	export function getTag() returns Idx
+		return self.tag
+	end 'getTag'
+
+	export function withTag(t Idx) returns Self
+		return Self{value: self.value, tag: t}
+	end 'withTag'
+end 'Wrapper'
+
+typealias IntWrapper = Wrapper with Integer
+
+function main() returns ExitCode
+	var w = IntWrapper.create(42)
+	w = w.withTag(7)
+	let t = w.getTag()
+	if t == 7 'check'
+		return 0
+	end 'check'
+	return 1
+end 'main'
+---
+ExitCode: 0
+---
+module {
+  func @main() -> u32 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov rcx, 42
+    x64.call IntWrapper.create
+    x64.mov [rbp-8], rax
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rbp-8]
+    x64.mov rdx, 7
+    x64.call IntWrapper.withTag
+    x64.mov rcx, [rbp-8]
+    x64.mov [rbp-16], rax
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_0
+    x64.call mm_decref
+    x64.label __nonnull_skip_0
+    x64.mov rdx, [rbp-16]
+    x64.mov [rbp-8], rdx
+    x64.mov rbx, [rbp-8]
+    x64.mov rcx, [rbp-8]
+    x64.call IntWrapper.getTag
+    x64.mov rsi, 7
+    x64.cmp rax, rsi
+    x64.jne main.check_0.after
+  check_0:
+    x64.mov rax, [rbp-8]
+    x64.test rax, rax
+    x64.jz __nonnull_skip_1
+    x64.mov rcx, [rbp-8]
+    x64.call mm_decref
+    x64.label __nonnull_skip_1
+    x64.xor rax, rax
+    x64.epilogue
+    x64.ret
+  check_0.after:
+    x64.mov rax, [rbp-8]
+    x64.test rax, rax
+    x64.jz __nonnull_skip_2
+    x64.mov rcx, [rbp-8]
+    x64.call mm_decref
+    x64.label __nonnull_skip_2
+    x64.mov rax, 1
+    x64.epilogue
+    x64.ret
+  }
+  func @IntWrapper.create(value: i64) -> i64 {
+  entry:
+    x64.prologue stack_size=16
+    x64.xor rax, rax
+    x64.mov [rbp-16], rcx
+    x64.mov rcx, 16
+    x64.xor rdx, rdx
+    x64.mov r8, 1
+    x64.call mm_alloc
+    x64.mov [rbp-8], rax
+    x64.mov rcx, [rbp-8]
+    x64.mov rdx, [rbp-16]
+    x64.mov [rcx+0], rdx
+    x64.mov rbx, [rbp-8]
+    x64.xor rsi, rsi
+    x64.mov [rbx+8], rsi
+    x64.mov rdi, [rbp-8]
+    x64.mov rcx, [rbp-8]
+    x64.call mm_incref
+    x64.mov rax, [rbp-8]
+    x64.epilogue
+    x64.ret
+  }
+  func @IntWrapper.getTag(__self_ptr: i64) -> u64 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-8], rcx
+    x64.mov rax, [rbp-8]
+    x64.mov rdx, [rax+8]
+    x64.mov rax, rdx
+    x64.epilogue
+    x64.ret
+  }
+  func @IntWrapper.withTag(__self_ptr: i64, t: i64) -> i64 {
+  entry:
+    x64.prologue stack_size=32
+    x64.mov [rbp-8], rcx
+    x64.mov rax, [rbp-8]
+    x64.mov rbx, [rax+0]
+    x64.mov [rbp-24], rdx
+    x64.mov [rbp-32], rbx
+    x64.mov rcx, 16
+    x64.xor rdx, rdx
+    x64.mov r8, 1
+    x64.call mm_alloc
+    x64.mov [rbp-16], rax
+    x64.mov rcx, [rbp-16]
+    x64.mov rdx, [rbp-32]
+    x64.mov [rcx+0], rdx
+    x64.mov rbx, [rbp-16]
+    x64.mov rsi, [rbp-24]
+    x64.mov [rbx+8], rsi
+    x64.mov rdi, [rbp-16]
+    x64.mov rcx, [rbp-16]
+    x64.call mm_incref
+    x64.mov rax, [rbp-16]
+    x64.epilogue
+    x64.ret
+  }
+  func @__destruct_IntWrapper(ptr: i64) {
+  entry:
+    x64.jmp __destruct_IntWrapper.done
+  done:
+    x64.ret
+  }
+}
+---

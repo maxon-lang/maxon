@@ -1,0 +1,36 @@
+// Test: power-of-two
+function main() returns ExitCode
+	// Calculate 2^n using shift
+	var n = 5
+	return 1 shl n        // 32
+end 'main'
+---
+ExitCode: 32
+---
+module {
+  func @main() -> u32 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov rax, 5
+    x64.mov rcx, 1
+    x64.mov rdx, rcx
+    x64.mov rcx, rax
+    x64.shl rdx, cl
+    x64.xor rbx, rbx
+    x64.mov rsi, 4294967295
+    x64.cmp rdx, rsi
+    x64.jg main.__range_panic_0
+    x64.cmp rdx, rbx
+    x64.jl main.__range_panic_0
+    x64.jmp main.__range_ok_0
+  __range_panic_0:
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.mov rax, rdx
+    x64.epilogue
+    x64.ret
+  }
+}
+---

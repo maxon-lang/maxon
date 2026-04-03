@@ -29,7 +29,7 @@ end 'main'
 ```exitcode
 42
 ```
-```RequiredMLIR:x86_64-windows
+```RequiredMLIR:x64-windows
 === maxon
 module {
   func @main() -> i64 {
@@ -51,12 +51,12 @@ module {
 module {
   func @main() -> u32 {
   entry:
-    x86.mov rax, 42
-    x86.ret
+    x64.mov rax, 42
+    x64.ret
   }
 }
 ```
-```RequiredMLIR:aarch64-macos
+```RequiredMLIR:arm64-macos
 === maxon
 module {
   func @main() -> i64 {
@@ -94,7 +94,7 @@ end 'main'
 ```exitcode
 99
 ```
-```RequiredMLIR:x86_64-windows
+```RequiredMLIR:x64-windows
 === maxon
 module {
   func @main() -> i64 {
@@ -117,12 +117,12 @@ module {
 module {
   func @main() -> u32 {
   entry:
-    x86.mov rax, 99
-    x86.ret
+    x64.mov rax, 99
+    x64.ret
   }
 }
 ```
-```RequiredMLIR:aarch64-macos
+```RequiredMLIR:arm64-macos
 === maxon
 module {
   func @main() -> i64 {
@@ -198,7 +198,7 @@ end 'main'
 ```exitcode
 42
 ```
-```RequiredMLIR:x86_64-windows
+```RequiredMLIR:x64-windows
 === maxon
 module {
   func @main() -> i64 {
@@ -244,28 +244,28 @@ module {
 module {
   func @main() -> u32 {
   entry:
-    x86.prologue stack_size=16
-    x86.mov rax, 30
-    x86.mov rcx, 12
-    x86.add rax, rcx
-    x86.xor rdx, rdx
-    x86.mov rbx, 4294967295
-    x86.cmp rax, rbx
-    x86.jg main.__range_panic_0
-    x86.cmp rax, rdx
-    x86.jl main.__range_panic_0
-    x86.jmp main.__range_ok_0
+    x64.prologue stack_size=16
+    x64.mov rax, 30
+    x64.mov rcx, 12
+    x64.add rax, rcx
+    x64.xor rdx, rdx
+    x64.mov rbx, 4294967295
+    x64.cmp rax, rbx
+    x64.jg main.__range_panic_0
+    x64.cmp rax, rdx
+    x64.jl main.__range_panic_0
+    x64.jmp main.__range_ok_0
   __range_panic_0:
-    x86.lea_symdata rax, [__panic_msg_0]
-    x86.mov rcx, rax
-    x86.call mrt_panic
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
+    x64.call mrt_panic
   __range_ok_0:
-    x86.epilogue
-    x86.ret
+    x64.epilogue
+    x64.ret
   }
 }
 ```
-```RequiredMLIR:aarch64-macos
+```RequiredMLIR:arm64-macos
 === maxon
 module {
   func @main() -> i64 {
@@ -351,7 +351,7 @@ end 'main'
 ```exitcode
 42
 ```
-```RequiredMLIR:x86_64-windows
+```RequiredMLIR:x64-windows
 === maxon
 module {
   func @main() -> i64 {
@@ -399,28 +399,28 @@ module {
 module {
   func @main() -> u32 {
   entry:
-    x86.prologue stack_size=16
-    x86.mov rax, 30
-    x86.mov rcx, 12
-    x86.add rax, rcx
-    x86.xor rdx, rdx
-    x86.mov rbx, 4294967295
-    x86.cmp rax, rbx
-    x86.jg main.__range_panic_0
-    x86.cmp rax, rdx
-    x86.jl main.__range_panic_0
-    x86.jmp main.__range_ok_0
+    x64.prologue stack_size=16
+    x64.mov rax, 30
+    x64.mov rcx, 12
+    x64.add rax, rcx
+    x64.xor rdx, rdx
+    x64.mov rbx, 4294967295
+    x64.cmp rax, rbx
+    x64.jg main.__range_panic_0
+    x64.cmp rax, rdx
+    x64.jl main.__range_panic_0
+    x64.jmp main.__range_ok_0
   __range_panic_0:
-    x86.lea_symdata rax, [__panic_msg_0]
-    x86.mov rcx, rax
-    x86.call mrt_panic
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
+    x64.call mrt_panic
   __range_ok_0:
-    x86.epilogue
-    x86.ret
+    x64.epilogue
+    x64.ret
   }
 }
 ```
-```RequiredMLIR:aarch64-macos
+```RequiredMLIR:arm64-macos
 === maxon
 module {
   func @main() -> i64 {
@@ -505,7 +505,7 @@ end 'main'
 ```exitcode
 42
 ```
-```RequiredMLIR:x86_64-windows
+```RequiredMLIR:x64-windows
 === maxon
 module {
   func @main() -> i64 {
@@ -550,27 +550,27 @@ module {
 module {
   func @main() -> u32 {
   entry:
-    x86.prologue stack_size=16
-    x86.mov rax, 21
-    x86.add rax, rax
-    x86.xor rcx, rcx
-    x86.mov rdx, 4294967295
-    x86.cmp rax, rdx
-    x86.jg main.__range_panic_0
-    x86.cmp rax, rcx
-    x86.jl main.__range_panic_0
-    x86.jmp main.__range_ok_0
+    x64.prologue stack_size=16
+    x64.mov rax, 21
+    x64.add rax, rax
+    x64.xor rcx, rcx
+    x64.mov rdx, 4294967295
+    x64.cmp rax, rdx
+    x64.jg main.__range_panic_0
+    x64.cmp rax, rcx
+    x64.jl main.__range_panic_0
+    x64.jmp main.__range_ok_0
   __range_panic_0:
-    x86.lea_symdata rax, [__panic_msg_0]
-    x86.mov rcx, rax
-    x86.call mrt_panic
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
+    x64.call mrt_panic
   __range_ok_0:
-    x86.epilogue
-    x86.ret
+    x64.epilogue
+    x64.ret
   }
 }
 ```
-```RequiredMLIR:aarch64-macos
+```RequiredMLIR:arm64-macos
 === maxon
 module {
   func @main() -> i64 {
@@ -654,7 +654,7 @@ end 'main'
 ```exitcode
 42
 ```
-```RequiredMLIR:x86_64-windows
+```RequiredMLIR:x64-windows
 === maxon
 module {
   func @main() -> i64 {
@@ -712,32 +712,32 @@ module {
 module {
   func @main() -> u32 {
   entry:
-    x86.prologue stack_size=16
-    x86.mov rax, 10
-    x86.mov rcx, 5
-    x86.add rax, rcx
-    x86.mov rdx, 7
-    x86.add rax, rdx
-    x86.mov rbx, 20
-    x86.add rax, rbx
-    x86.xor rsi, rsi
-    x86.mov rdi, 4294967295
-    x86.cmp rax, rdi
-    x86.jg main.__range_panic_0
-    x86.cmp rax, rsi
-    x86.jl main.__range_panic_0
-    x86.jmp main.__range_ok_0
+    x64.prologue stack_size=16
+    x64.mov rax, 10
+    x64.mov rcx, 5
+    x64.add rax, rcx
+    x64.mov rdx, 7
+    x64.add rax, rdx
+    x64.mov rbx, 20
+    x64.add rax, rbx
+    x64.xor rsi, rsi
+    x64.mov rdi, 4294967295
+    x64.cmp rax, rdi
+    x64.jg main.__range_panic_0
+    x64.cmp rax, rsi
+    x64.jl main.__range_panic_0
+    x64.jmp main.__range_ok_0
   __range_panic_0:
-    x86.lea_symdata rax, [__panic_msg_0]
-    x86.mov rcx, rax
-    x86.call mrt_panic
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
+    x64.call mrt_panic
   __range_ok_0:
-    x86.epilogue
-    x86.ret
+    x64.epilogue
+    x64.ret
   }
 }
 ```
-```RequiredMLIR:aarch64-macos
+```RequiredMLIR:arm64-macos
 === maxon
 module {
   func @main() -> i64 {
@@ -838,7 +838,7 @@ end 'main'
 ```exitcode
 42
 ```
-```RequiredMLIR:x86_64-windows
+```RequiredMLIR:x64-windows
 === maxon
 module {
   func @main() -> i64 {
@@ -891,31 +891,31 @@ module {
 module {
   func @main() -> u32 {
   entry:
-    x86.prologue stack_size=16
-    x86.mov rax, 100
-    x86.mov rcx, 80
-    x86.sub rax, rcx
-    x86.mov rdx, 22
-    x86.add rdx, rax
-    x86.xor rbx, rbx
-    x86.mov rsi, 4294967295
-    x86.cmp rdx, rsi
-    x86.jg main.__range_panic_0
-    x86.cmp rdx, rbx
-    x86.jl main.__range_panic_0
-    x86.jmp main.__range_ok_0
+    x64.prologue stack_size=16
+    x64.mov rax, 100
+    x64.mov rcx, 80
+    x64.sub rax, rcx
+    x64.mov rdx, 22
+    x64.add rdx, rax
+    x64.xor rbx, rbx
+    x64.mov rsi, 4294967295
+    x64.cmp rdx, rsi
+    x64.jg main.__range_panic_0
+    x64.cmp rdx, rbx
+    x64.jl main.__range_panic_0
+    x64.jmp main.__range_ok_0
   __range_panic_0:
-    x86.lea_symdata rax, [__panic_msg_0]
-    x86.mov rcx, rax
-    x86.call mrt_panic
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
+    x64.call mrt_panic
   __range_ok_0:
-    x86.mov rax, rdx
-    x86.epilogue
-    x86.ret
+    x64.mov rax, rdx
+    x64.epilogue
+    x64.ret
   }
 }
 ```
-```RequiredMLIR:aarch64-macos
+```RequiredMLIR:arm64-macos
 === maxon
 module {
   func @main() -> i64 {
@@ -1014,7 +1014,7 @@ end 'main'
 ```exitcode
 21
 ```
-```RequiredMLIR:x86_64-windows
+```RequiredMLIR:x64-windows
 === maxon
 module {
   func @main() -> i64 {
@@ -1082,36 +1082,36 @@ module {
 module {
   func @main() -> u32 {
   entry:
-    x86.prologue stack_size=16
-    x86.mov rax, 1
-    x86.mov rcx, 2
-    x86.mov rdx, 3
-    x86.mov rbx, 4
-    x86.mov rsi, 5
-    x86.mov rdi, 6
-    x86.add rax, rcx
-    x86.add rax, rdx
-    x86.add rax, rbx
-    x86.add rax, rsi
-    x86.add rax, rdi
-    x86.xor r8, r8
-    x86.mov r9, 4294967295
-    x86.cmp rax, r9
-    x86.jg main.__range_panic_0
-    x86.cmp rax, r8
-    x86.jl main.__range_panic_0
-    x86.jmp main.__range_ok_0
+    x64.prologue stack_size=16
+    x64.mov rax, 1
+    x64.mov rcx, 2
+    x64.mov rdx, 3
+    x64.mov rbx, 4
+    x64.mov rsi, 5
+    x64.mov rdi, 6
+    x64.add rax, rcx
+    x64.add rax, rdx
+    x64.add rax, rbx
+    x64.add rax, rsi
+    x64.add rax, rdi
+    x64.xor r8, r8
+    x64.mov r9, 4294967295
+    x64.cmp rax, r9
+    x64.jg main.__range_panic_0
+    x64.cmp rax, r8
+    x64.jl main.__range_panic_0
+    x64.jmp main.__range_ok_0
   __range_panic_0:
-    x86.lea_symdata rax, [__panic_msg_0]
-    x86.mov rcx, rax
-    x86.call mrt_panic
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
+    x64.call mrt_panic
   __range_ok_0:
-    x86.epilogue
-    x86.ret
+    x64.epilogue
+    x64.ret
   }
 }
 ```
-```RequiredMLIR:aarch64-macos
+```RequiredMLIR:arm64-macos
 === maxon
 module {
   func @main() -> i64 {
@@ -1233,7 +1233,7 @@ end 'main'
 ```exitcode
 55
 ```
-```RequiredMLIR:x86_64-windows
+```RequiredMLIR:x64-windows
 === maxon
 module {
   func @main() -> i64 {
@@ -1321,49 +1321,49 @@ module {
 module {
   func @main() -> u32 {
   entry:
-    x86.prologue stack_size=16
-    x86.mov rax, 1
-    x86.mov rcx, 2
-    x86.mov rdx, 3
-    x86.mov rbx, 4
-    x86.mov rsi, 5
-    x86.mov rdi, 6
-    x86.mov r8, 7
-    x86.mov r9, 8
-    x86.mov rax, 9
-    x86.mov rcx, 10
-    x86.mov rdx, 2
-    x86.mov rbx, 1
-    x86.add rbx, rdx
-    x86.mov rdx, 3
-    x86.add rbx, rdx
-    x86.mov rdx, 4
-    x86.add rbx, rdx
-    x86.add rbx, rsi
-    x86.add rbx, rdi
-    x86.add rbx, r8
-    x86.add rbx, r9
-    x86.add rbx, rax
-    x86.add rbx, rcx
-    x86.xor rax, rax
-    x86.mov rcx, 4294967295
-    x86.cmp rbx, rcx
-    x86.jg main.__range_panic_0
-    x86.cmp rbx, rax
-    x86.jl main.__range_panic_0
-    x86.jmp main.__range_ok_0
+    x64.prologue stack_size=16
+    x64.mov rax, 1
+    x64.mov rcx, 2
+    x64.mov rdx, 3
+    x64.mov rbx, 4
+    x64.mov rsi, 5
+    x64.mov rdi, 6
+    x64.mov r8, 7
+    x64.mov r9, 8
+    x64.mov rax, 9
+    x64.mov rcx, 10
+    x64.mov rdx, 2
+    x64.mov rbx, 1
+    x64.add rbx, rdx
+    x64.mov rdx, 3
+    x64.add rbx, rdx
+    x64.mov rdx, 4
+    x64.add rbx, rdx
+    x64.add rbx, rsi
+    x64.add rbx, rdi
+    x64.add rbx, r8
+    x64.add rbx, r9
+    x64.add rbx, rax
+    x64.add rbx, rcx
+    x64.xor rax, rax
+    x64.mov rcx, 4294967295
+    x64.cmp rbx, rcx
+    x64.jg main.__range_panic_0
+    x64.cmp rbx, rax
+    x64.jl main.__range_panic_0
+    x64.jmp main.__range_ok_0
   __range_panic_0:
-    x86.lea_symdata rax, [__panic_msg_0]
-    x86.mov rcx, rax
-    x86.call mrt_panic
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
+    x64.call mrt_panic
   __range_ok_0:
-    x86.mov rax, rbx
-    x86.epilogue
-    x86.ret
+    x64.mov rax, rbx
+    x64.epilogue
+    x64.ret
   }
 }
 ```
-```RequiredMLIR:aarch64-macos
+```RequiredMLIR:arm64-macos
 === maxon
 module {
   func @main() -> i64 {
@@ -1518,7 +1518,7 @@ end 'main'
 ```exitcode
 136
 ```
-```RequiredMLIR:x86_64-windows
+```RequiredMLIR:x64-windows
 === maxon
 module {
   func @main() -> i64 {
@@ -1640,72 +1640,72 @@ module {
 module {
   func @main() -> u32 {
   entry:
-    x86.prologue stack_size=16
-    x86.mov rax, 1
-    x86.mov rcx, 2
-    x86.mov rdx, 3
-    x86.mov rbx, 4
-    x86.mov rsi, 5
-    x86.mov rdi, 6
-    x86.mov r8, 7
-    x86.mov r9, 8
-    x86.mov rax, 9
-    x86.mov rcx, 10
-    x86.mov rdx, 11
-    x86.mov rbx, 12
-    x86.mov rsi, 13
-    x86.mov rdi, 14
-    x86.mov r8, 15
-    x86.mov r9, 16
-    x86.mov rax, 2
-    x86.mov rcx, 1
-    x86.add rcx, rax
-    x86.mov rax, 3
-    x86.add rcx, rax
-    x86.mov rax, 4
-    x86.add rcx, rax
-    x86.mov rax, 5
-    x86.add rcx, rax
-    x86.mov rax, 6
-    x86.add rcx, rax
-    x86.mov rax, 7
-    x86.add rcx, rax
-    x86.mov rax, 8
-    x86.add rcx, rax
-    x86.mov rax, 9
-    x86.add rcx, rax
-    x86.mov rax, 10
-    x86.add rcx, rax
-    x86.add rcx, rdx
-    x86.add rcx, rbx
-    x86.add rcx, rsi
-    x86.add rcx, rdi
-    x86.add rcx, r8
-    x86.add rcx, r9
-    x86.mov rax, 256
-    x86.mov rbx, rax
-    x86.mov rax, rcx
-    x86.cqo
-    x86.idiv rbx
-    x86.xor rax, rax
-    x86.mov rcx, 4294967295
-    x86.cmp rdx, rcx
-    x86.jg main.__range_panic_0
-    x86.cmp rdx, rax
-    x86.jl main.__range_panic_0
-    x86.jmp main.__range_ok_0
+    x64.prologue stack_size=16
+    x64.mov rax, 1
+    x64.mov rcx, 2
+    x64.mov rdx, 3
+    x64.mov rbx, 4
+    x64.mov rsi, 5
+    x64.mov rdi, 6
+    x64.mov r8, 7
+    x64.mov r9, 8
+    x64.mov rax, 9
+    x64.mov rcx, 10
+    x64.mov rdx, 11
+    x64.mov rbx, 12
+    x64.mov rsi, 13
+    x64.mov rdi, 14
+    x64.mov r8, 15
+    x64.mov r9, 16
+    x64.mov rax, 2
+    x64.mov rcx, 1
+    x64.add rcx, rax
+    x64.mov rax, 3
+    x64.add rcx, rax
+    x64.mov rax, 4
+    x64.add rcx, rax
+    x64.mov rax, 5
+    x64.add rcx, rax
+    x64.mov rax, 6
+    x64.add rcx, rax
+    x64.mov rax, 7
+    x64.add rcx, rax
+    x64.mov rax, 8
+    x64.add rcx, rax
+    x64.mov rax, 9
+    x64.add rcx, rax
+    x64.mov rax, 10
+    x64.add rcx, rax
+    x64.add rcx, rdx
+    x64.add rcx, rbx
+    x64.add rcx, rsi
+    x64.add rcx, rdi
+    x64.add rcx, r8
+    x64.add rcx, r9
+    x64.mov rax, 256
+    x64.mov rbx, rax
+    x64.mov rax, rcx
+    x64.cqo
+    x64.idiv rbx
+    x64.xor rax, rax
+    x64.mov rcx, 4294967295
+    x64.cmp rdx, rcx
+    x64.jg main.__range_panic_0
+    x64.cmp rdx, rax
+    x64.jl main.__range_panic_0
+    x64.jmp main.__range_ok_0
   __range_panic_0:
-    x86.lea_symdata rax, [__panic_msg_0]
-    x86.mov rcx, rax
-    x86.call mrt_panic
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
+    x64.call mrt_panic
   __range_ok_0:
-    x86.mov rax, rdx
-    x86.epilogue
-    x86.ret
+    x64.mov rax, rdx
+    x64.epilogue
+    x64.ret
   }
 }
 ```
-```RequiredMLIR:aarch64-macos
+```RequiredMLIR:arm64-macos
 === maxon
 module {
   func @main() -> i64 {
@@ -1915,7 +1915,7 @@ end 'main'
 ```exitcode
 210
 ```
-```RequiredMLIR:x86_64-windows
+```RequiredMLIR:x64-windows
 === maxon
 module {
   func @main() -> i64 {
@@ -2057,84 +2057,84 @@ module {
 module {
   func @main() -> u32 {
   entry:
-    x86.prologue stack_size=16
-    x86.mov rax, 1
-    x86.mov rcx, 2
-    x86.mov rdx, 3
-    x86.mov rbx, 4
-    x86.mov rsi, 5
-    x86.mov rdi, 6
-    x86.mov r8, 7
-    x86.mov r9, 8
-    x86.mov rax, 9
-    x86.mov rcx, 10
-    x86.mov rdx, 11
-    x86.mov rbx, 12
-    x86.mov rsi, 13
-    x86.mov rdi, 14
-    x86.mov r8, 15
-    x86.mov r9, 16
-    x86.mov rax, 17
-    x86.mov rcx, 18
-    x86.mov rdx, 19
-    x86.mov rbx, 20
-    x86.mov rsi, 2
-    x86.mov rdi, 1
-    x86.add rdi, rsi
-    x86.mov rsi, 3
-    x86.add rdi, rsi
-    x86.mov rsi, 4
-    x86.add rdi, rsi
-    x86.mov rsi, 5
-    x86.add rdi, rsi
-    x86.mov rsi, 6
-    x86.add rdi, rsi
-    x86.mov rsi, 7
-    x86.add rdi, rsi
-    x86.mov rsi, 8
-    x86.add rdi, rsi
-    x86.mov rsi, 9
-    x86.add rdi, rsi
-    x86.mov rsi, 10
-    x86.add rdi, rsi
-    x86.mov rsi, 11
-    x86.add rdi, rsi
-    x86.mov rsi, 12
-    x86.add rdi, rsi
-    x86.mov rsi, 13
-    x86.add rdi, rsi
-    x86.mov rsi, 14
-    x86.add rdi, rsi
-    x86.add rdi, r8
-    x86.add rdi, r9
-    x86.add rdi, rax
-    x86.add rdi, rcx
-    x86.add rdi, rdx
-    x86.add rdi, rbx
-    x86.mov rax, 256
-    x86.mov rcx, rax
-    x86.mov rax, rdi
-    x86.cqo
-    x86.idiv rcx
-    x86.xor rax, rax
-    x86.mov rcx, 4294967295
-    x86.cmp rdx, rcx
-    x86.jg main.__range_panic_0
-    x86.cmp rdx, rax
-    x86.jl main.__range_panic_0
-    x86.jmp main.__range_ok_0
+    x64.prologue stack_size=16
+    x64.mov rax, 1
+    x64.mov rcx, 2
+    x64.mov rdx, 3
+    x64.mov rbx, 4
+    x64.mov rsi, 5
+    x64.mov rdi, 6
+    x64.mov r8, 7
+    x64.mov r9, 8
+    x64.mov rax, 9
+    x64.mov rcx, 10
+    x64.mov rdx, 11
+    x64.mov rbx, 12
+    x64.mov rsi, 13
+    x64.mov rdi, 14
+    x64.mov r8, 15
+    x64.mov r9, 16
+    x64.mov rax, 17
+    x64.mov rcx, 18
+    x64.mov rdx, 19
+    x64.mov rbx, 20
+    x64.mov rsi, 2
+    x64.mov rdi, 1
+    x64.add rdi, rsi
+    x64.mov rsi, 3
+    x64.add rdi, rsi
+    x64.mov rsi, 4
+    x64.add rdi, rsi
+    x64.mov rsi, 5
+    x64.add rdi, rsi
+    x64.mov rsi, 6
+    x64.add rdi, rsi
+    x64.mov rsi, 7
+    x64.add rdi, rsi
+    x64.mov rsi, 8
+    x64.add rdi, rsi
+    x64.mov rsi, 9
+    x64.add rdi, rsi
+    x64.mov rsi, 10
+    x64.add rdi, rsi
+    x64.mov rsi, 11
+    x64.add rdi, rsi
+    x64.mov rsi, 12
+    x64.add rdi, rsi
+    x64.mov rsi, 13
+    x64.add rdi, rsi
+    x64.mov rsi, 14
+    x64.add rdi, rsi
+    x64.add rdi, r8
+    x64.add rdi, r9
+    x64.add rdi, rax
+    x64.add rdi, rcx
+    x64.add rdi, rdx
+    x64.add rdi, rbx
+    x64.mov rax, 256
+    x64.mov rcx, rax
+    x64.mov rax, rdi
+    x64.cqo
+    x64.idiv rcx
+    x64.xor rax, rax
+    x64.mov rcx, 4294967295
+    x64.cmp rdx, rcx
+    x64.jg main.__range_panic_0
+    x64.cmp rdx, rax
+    x64.jl main.__range_panic_0
+    x64.jmp main.__range_ok_0
   __range_panic_0:
-    x86.lea_symdata rax, [__panic_msg_0]
-    x86.mov rcx, rax
-    x86.call mrt_panic
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
+    x64.call mrt_panic
   __range_ok_0:
-    x86.mov rax, rdx
-    x86.epilogue
-    x86.ret
+    x64.mov rax, rdx
+    x64.epilogue
+    x64.ret
   }
 }
 ```
-```RequiredMLIR:aarch64-macos
+```RequiredMLIR:arm64-macos
 === maxon
 module {
   func @main() -> i64 {
@@ -2368,7 +2368,7 @@ end 'main'
 ```exitcode
 210
 ```
-```RequiredMLIR:x86_64-windows
+```RequiredMLIR:x64-windows
 === maxon
 module {
   func @main() -> i64 {
@@ -2444,41 +2444,41 @@ module {
 module {
   func @main() -> u32 {
   entry:
-    x86.prologue stack_size=16
-    x86.mov rax, 10
-    x86.mov rcx, 20
-    x86.add rax, rcx
-    x86.mov rdx, 30
-    x86.mov rbx, 40
-    x86.add rdx, rbx
-    x86.mov rsi, 50
-    x86.mov rdi, 60
-    x86.add rsi, rdi
-    x86.add rax, rdx
-    x86.add rax, rsi
-    x86.mov r8, 256
-    x86.mov [rbp-8], rax
-    x86.cqo
-    x86.idiv r8
-    x86.xor r9, r9
-    x86.mov rax, 4294967295
-    x86.cmp rdx, rax
-    x86.jg main.__range_panic_0
-    x86.cmp rdx, r9
-    x86.jl main.__range_panic_0
-    x86.jmp main.__range_ok_0
+    x64.prologue stack_size=16
+    x64.mov rax, 10
+    x64.mov rcx, 20
+    x64.add rax, rcx
+    x64.mov rdx, 30
+    x64.mov rbx, 40
+    x64.add rdx, rbx
+    x64.mov rsi, 50
+    x64.mov rdi, 60
+    x64.add rsi, rdi
+    x64.add rax, rdx
+    x64.add rax, rsi
+    x64.mov r8, 256
+    x64.mov [rbp-8], rax
+    x64.cqo
+    x64.idiv r8
+    x64.xor r9, r9
+    x64.mov rax, 4294967295
+    x64.cmp rdx, rax
+    x64.jg main.__range_panic_0
+    x64.cmp rdx, r9
+    x64.jl main.__range_panic_0
+    x64.jmp main.__range_ok_0
   __range_panic_0:
-    x86.lea_symdata rax, [__panic_msg_0]
-    x86.mov rcx, rax
-    x86.call mrt_panic
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
+    x64.call mrt_panic
   __range_ok_0:
-    x86.mov rax, rdx
-    x86.epilogue
-    x86.ret
+    x64.mov rax, rdx
+    x64.epilogue
+    x64.ret
   }
 }
 ```
-```RequiredMLIR:aarch64-macos
+```RequiredMLIR:arm64-macos
 === maxon
 module {
   func @main() -> i64 {
@@ -2610,7 +2610,7 @@ end 'main'
 ```exitcode
 90
 ```
-```RequiredMLIR:x86_64-windows
+```RequiredMLIR:x64-windows
 === maxon
 module {
   func @main() -> i64 {
@@ -2687,36 +2687,36 @@ module {
 module {
   func @main() -> u32 {
   entry:
-    x86.prologue stack_size=16
-    x86.mov rax, 10
-    x86.mov rcx, 20
-    x86.mov rdx, 30
-    x86.mov rbx, 5
-    x86.add rax, rbx
-    x86.mov rsi, 10
-    x86.add rcx, rsi
-    x86.mov rdi, 15
-    x86.add rdx, rdi
-    x86.add rax, rcx
-    x86.add rax, rdx
-    x86.xor r8, r8
-    x86.mov r9, 4294967295
-    x86.cmp rax, r9
-    x86.jg main.__range_panic_0
-    x86.cmp rax, r8
-    x86.jl main.__range_panic_0
-    x86.jmp main.__range_ok_0
+    x64.prologue stack_size=16
+    x64.mov rax, 10
+    x64.mov rcx, 20
+    x64.mov rdx, 30
+    x64.mov rbx, 5
+    x64.add rax, rbx
+    x64.mov rsi, 10
+    x64.add rcx, rsi
+    x64.mov rdi, 15
+    x64.add rdx, rdi
+    x64.add rax, rcx
+    x64.add rax, rdx
+    x64.xor r8, r8
+    x64.mov r9, 4294967295
+    x64.cmp rax, r9
+    x64.jg main.__range_panic_0
+    x64.cmp rax, r8
+    x64.jl main.__range_panic_0
+    x64.jmp main.__range_ok_0
   __range_panic_0:
-    x86.lea_symdata rax, [__panic_msg_0]
-    x86.mov rcx, rax
-    x86.call mrt_panic
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
+    x64.call mrt_panic
   __range_ok_0:
-    x86.epilogue
-    x86.ret
+    x64.epilogue
+    x64.ret
   }
 }
 ```
-```RequiredMLIR:aarch64-macos
+```RequiredMLIR:arm64-macos
 === maxon
 module {
   func @main() -> i64 {
@@ -2848,7 +2848,7 @@ end 'main'
 ```exitcode
 42
 ```
-```RequiredMLIR:x86_64-windows
+```RequiredMLIR:x64-windows
 === maxon
 module {
   func @register-allocator.getForty() -> i64 {
@@ -2907,35 +2907,35 @@ module {
 module {
   func @register-allocator.getForty() -> i64 {
   entry:
-    x86.mov rax, 40
-    x86.ret
+    x64.mov rax, 40
+    x64.ret
   }
   func @main() -> u32 {
   entry:
-    x86.prologue stack_size=16
-    x86.mov rax, 2
-    x86.call register-allocator.getForty
-    x86.mov rcx, 2
-    x86.add rcx, rax
-    x86.xor rdx, rdx
-    x86.mov rbx, 4294967295
-    x86.cmp rcx, rbx
-    x86.jg main.__range_panic_0
-    x86.cmp rcx, rdx
-    x86.jl main.__range_panic_0
-    x86.jmp main.__range_ok_0
+    x64.prologue stack_size=16
+    x64.mov rax, 2
+    x64.call register-allocator.getForty
+    x64.mov rcx, 2
+    x64.add rcx, rax
+    x64.xor rdx, rdx
+    x64.mov rbx, 4294967295
+    x64.cmp rcx, rbx
+    x64.jg main.__range_panic_0
+    x64.cmp rcx, rdx
+    x64.jl main.__range_panic_0
+    x64.jmp main.__range_ok_0
   __range_panic_0:
-    x86.lea_symdata rax, [__panic_msg_0]
-    x86.mov rcx, rax
-    x86.call mrt_panic
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
+    x64.call mrt_panic
   __range_ok_0:
-    x86.mov rax, rcx
-    x86.epilogue
-    x86.ret
+    x64.mov rax, rcx
+    x64.epilogue
+    x64.ret
   }
 }
 ```
-```RequiredMLIR:aarch64-macos
+```RequiredMLIR:arm64-macos
 === maxon
 module {
   func @register-allocator.getForty() -> i64 {
@@ -3051,7 +3051,7 @@ end 'main'
 ```exitcode
 24
 ```
-```RequiredMLIR:x86_64-windows
+```RequiredMLIR:x64-windows
 === maxon
 module {
   func @register-allocator.getTen() -> i64 {
@@ -3131,47 +3131,47 @@ module {
 module {
   func @register-allocator.getTen() -> i64 {
   entry:
-    x86.mov rax, 10
-    x86.ret
+    x64.mov rax, 10
+    x64.ret
   }
   func @register-allocator.getTwo() -> i64 {
   entry:
-    x86.mov rax, 2
-    x86.ret
+    x64.mov rax, 2
+    x64.ret
   }
   func @main() -> u32 {
   entry:
-    x86.prologue stack_size=16
-    x86.mov rax, 5
-    x86.call register-allocator.getTen
-    x86.mov rcx, 7
-    x86.mov [rbp-8], rax
-    x86.call register-allocator.getTwo
-    x86.mov rdx, [rbp-8]
-    x86.mov rbx, 5
-    x86.add rbx, rdx
-    x86.mov rsi, 7
-    x86.add rbx, rsi
-    x86.add rbx, rax
-    x86.xor rdi, rdi
-    x86.mov r8, 4294967295
-    x86.cmp rbx, r8
-    x86.jg main.__range_panic_0
-    x86.cmp rbx, rdi
-    x86.jl main.__range_panic_0
-    x86.jmp main.__range_ok_0
+    x64.prologue stack_size=16
+    x64.mov rax, 5
+    x64.call register-allocator.getTen
+    x64.mov rcx, 7
+    x64.mov [rbp-8], rax
+    x64.call register-allocator.getTwo
+    x64.mov rdx, [rbp-8]
+    x64.mov rbx, 5
+    x64.add rbx, rdx
+    x64.mov rsi, 7
+    x64.add rbx, rsi
+    x64.add rbx, rax
+    x64.xor rdi, rdi
+    x64.mov r8, 4294967295
+    x64.cmp rbx, r8
+    x64.jg main.__range_panic_0
+    x64.cmp rbx, rdi
+    x64.jl main.__range_panic_0
+    x64.jmp main.__range_ok_0
   __range_panic_0:
-    x86.lea_symdata rax, [__panic_msg_0]
-    x86.mov rcx, rax
-    x86.call mrt_panic
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
+    x64.call mrt_panic
   __range_ok_0:
-    x86.mov rax, rbx
-    x86.epilogue
-    x86.ret
+    x64.mov rax, rbx
+    x64.epilogue
+    x64.ret
   }
 }
 ```
-```RequiredMLIR:aarch64-macos
+```RequiredMLIR:arm64-macos
 === maxon
 module {
   func @register-allocator.getTen() -> i64 {
@@ -3314,7 +3314,7 @@ end 'main'
 ```exitcode
 200
 ```
-```RequiredMLIR:x86_64-windows
+```RequiredMLIR:x64-windows
 === maxon
 module {
   func @register-allocator.compute() -> i64 {
@@ -3377,41 +3377,41 @@ module {
 module {
   func @register-allocator.compute() -> i64 {
   entry:
-    x86.mov rax, 100
-    x86.ret
+    x64.mov rax, 100
+    x64.ret
   }
   func @main() -> u32 {
   entry:
-    x86.prologue stack_size=16
-    x86.call register-allocator.compute
-    x86.mov [rbp-8], rax
-    x86.call register-allocator.compute
-    x86.mov rcx, [rbp-8]
-    x86.add rcx, rax
-    x86.mov rax, 256
-    x86.mov rbx, rax
-    x86.mov rax, rcx
-    x86.cqo
-    x86.idiv rbx
-    x86.xor rcx, rcx
-    x86.mov rax, 4294967295
-    x86.cmp rdx, rax
-    x86.jg main.__range_panic_0
-    x86.cmp rdx, rcx
-    x86.jl main.__range_panic_0
-    x86.jmp main.__range_ok_0
+    x64.prologue stack_size=16
+    x64.call register-allocator.compute
+    x64.mov [rbp-8], rax
+    x64.call register-allocator.compute
+    x64.mov rcx, [rbp-8]
+    x64.add rcx, rax
+    x64.mov rax, 256
+    x64.mov rbx, rax
+    x64.mov rax, rcx
+    x64.cqo
+    x64.idiv rbx
+    x64.xor rcx, rcx
+    x64.mov rax, 4294967295
+    x64.cmp rdx, rax
+    x64.jg main.__range_panic_0
+    x64.cmp rdx, rcx
+    x64.jl main.__range_panic_0
+    x64.jmp main.__range_ok_0
   __range_panic_0:
-    x86.lea_symdata rax, [__panic_msg_0]
-    x86.mov rcx, rax
-    x86.call mrt_panic
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
+    x64.call mrt_panic
   __range_ok_0:
-    x86.mov rax, rdx
-    x86.epilogue
-    x86.ret
+    x64.mov rax, rdx
+    x64.epilogue
+    x64.ret
   }
 }
 ```
-```RequiredMLIR:aarch64-macos
+```RequiredMLIR:arm64-macos
 === maxon
 module {
   func @register-allocator.compute() -> i64 {
@@ -3553,7 +3553,7 @@ end 'main'
 ```exitcode
 42
 ```
-```RequiredMLIR:x86_64-windows
+```RequiredMLIR:x64-windows
 === maxon
 module {
   func @register-allocator.add(a: i64, b: i64) -> i64 {
@@ -3614,33 +3614,33 @@ module {
 module {
   func @register-allocator.add(a: i64, b: i64) -> i64 {
   entry:
-    x86.lea rax, [rcx + rdx]
-    x86.ret
+    x64.lea rax, [rcx + rdx]
+    x64.ret
   }
   func @main() -> u32 {
   entry:
-    x86.prologue stack_size=16
-    x86.mov rcx, 30
-    x86.mov rdx, 12
-    x86.call register-allocator.add
-    x86.xor rcx, rcx
-    x86.mov rdx, 4294967295
-    x86.cmp rax, rdx
-    x86.jg main.__range_panic_0
-    x86.cmp rax, rcx
-    x86.jl main.__range_panic_0
-    x86.jmp main.__range_ok_0
+    x64.prologue stack_size=16
+    x64.mov rcx, 30
+    x64.mov rdx, 12
+    x64.call register-allocator.add
+    x64.xor rcx, rcx
+    x64.mov rdx, 4294967295
+    x64.cmp rax, rdx
+    x64.jg main.__range_panic_0
+    x64.cmp rax, rcx
+    x64.jl main.__range_panic_0
+    x64.jmp main.__range_ok_0
   __range_panic_0:
-    x86.lea_symdata rax, [__panic_msg_0]
-    x86.mov rcx, rax
-    x86.call mrt_panic
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
+    x64.call mrt_panic
   __range_ok_0:
-    x86.epilogue
-    x86.ret
+    x64.epilogue
+    x64.ret
   }
 }
 ```
-```RequiredMLIR:aarch64-macos
+```RequiredMLIR:arm64-macos
 === maxon
 module {
   func @register-allocator.add(a: i64, b: i64) -> i64 {
@@ -3751,7 +3751,7 @@ end 'main'
 ```exitcode
 42
 ```
-```RequiredMLIR:x86_64-windows
+```RequiredMLIR:x64-windows
 === maxon
 module {
   func @register-allocator.add(a: i64, b: i64) -> i64 {
@@ -3814,33 +3814,33 @@ module {
 module {
   func @register-allocator.add(a: i64, b: i64) -> i64 {
   entry:
-    x86.lea rax, [rcx + rdx]
-    x86.ret
+    x64.lea rax, [rcx + rdx]
+    x64.ret
   }
   func @main() -> u32 {
   entry:
-    x86.prologue stack_size=16
-    x86.mov rcx, 22
-    x86.mov rdx, 20
-    x86.call register-allocator.add
-    x86.xor rcx, rcx
-    x86.mov rdx, 4294967295
-    x86.cmp rax, rdx
-    x86.jg main.__range_panic_0
-    x86.cmp rax, rcx
-    x86.jl main.__range_panic_0
-    x86.jmp main.__range_ok_0
+    x64.prologue stack_size=16
+    x64.mov rcx, 22
+    x64.mov rdx, 20
+    x64.call register-allocator.add
+    x64.xor rcx, rcx
+    x64.mov rdx, 4294967295
+    x64.cmp rax, rdx
+    x64.jg main.__range_panic_0
+    x64.cmp rax, rcx
+    x64.jl main.__range_panic_0
+    x64.jmp main.__range_ok_0
   __range_panic_0:
-    x86.lea_symdata rax, [__panic_msg_0]
-    x86.mov rcx, rax
-    x86.call mrt_panic
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
+    x64.call mrt_panic
   __range_ok_0:
-    x86.epilogue
-    x86.ret
+    x64.epilogue
+    x64.ret
   }
 }
 ```
-```RequiredMLIR:aarch64-macos
+```RequiredMLIR:arm64-macos
 === maxon
 module {
   func @register-allocator.add(a: i64, b: i64) -> i64 {
@@ -3951,7 +3951,7 @@ end 'main'
 ```exitcode
 42
 ```
-```RequiredMLIR:x86_64-windows
+```RequiredMLIR:x64-windows
 === maxon
 module {
   func @main() -> i64 {
@@ -3991,20 +3991,20 @@ module {
 module {
   func @main() -> u32 {
   entry:
-    x86.mov rax, 10
-    x86.mov rcx, 10
-    x86.cmp rax, rcx
-    x86.jne main.other_1
+    x64.mov rax, 10
+    x64.mov rcx, 10
+    x64.cmp rax, rcx
+    x64.jne main.other_1
   check_0:
-    x86.mov rax, 42
-    x86.ret
+    x64.mov rax, 42
+    x64.ret
   other_1:
-    x86.xor rax, rax
-    x86.ret
+    x64.xor rax, rax
+    x64.ret
   }
 }
 ```
-```RequiredMLIR:aarch64-macos
+```RequiredMLIR:arm64-macos
 === maxon
 module {
   func @main() -> i64 {
@@ -4078,7 +4078,7 @@ end 'main'
 ```exitcode
 42
 ```
-```RequiredMLIR:x86_64-windows
+```RequiredMLIR:x64-windows
 === maxon
 module {
   func @main() -> i64 {
@@ -4159,43 +4159,43 @@ module {
 module {
   func @main() -> u32 {
   entry:
-    x86.prologue stack_size=16
-    x86.mov rax, 40
-    x86.mov [rbp-8], rax
-    x86.mov rcx, 1
-    x86.mov rdx, 1
-    x86.cmp rcx, rdx
-    x86.jne main.other_1
+    x64.prologue stack_size=16
+    x64.mov rax, 40
+    x64.mov [rbp-8], rax
+    x64.mov rcx, 1
+    x64.mov rdx, 1
+    x64.cmp rcx, rdx
+    x64.jne main.other_1
   check_0:
-    x86.mov rax, 2
-    x86.mov [rbp-16], rax
-    x86.jmp main.check_0.merge
+    x64.mov rax, 2
+    x64.mov [rbp-16], rax
+    x64.jmp main.check_0.merge
   other_1:
-    x86.mov rax, 100
-    x86.mov [rbp-16], rax
-    x86.jmp main.check_0.merge
+    x64.mov rax, 100
+    x64.mov [rbp-16], rax
+    x64.jmp main.check_0.merge
   check_0.merge:
-    x86.mov rax, [rbp-8]
-    x86.mov rcx, [rbp-16]
-    x86.add rax, rcx
-    x86.xor rdx, rdx
-    x86.mov rbx, 4294967295
-    x86.cmp rax, rbx
-    x86.jg main.__range_panic_2
-    x86.cmp rax, rdx
-    x86.jl main.__range_panic_2
-    x86.jmp main.__range_ok_2
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rbp-16]
+    x64.add rax, rcx
+    x64.xor rdx, rdx
+    x64.mov rbx, 4294967295
+    x64.cmp rax, rbx
+    x64.jg main.__range_panic_2
+    x64.cmp rax, rdx
+    x64.jl main.__range_panic_2
+    x64.jmp main.__range_ok_2
   __range_panic_2:
-    x86.lea_symdata rax, [__panic_msg_0]
-    x86.mov rcx, rax
-    x86.call mrt_panic
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
+    x64.call mrt_panic
   __range_ok_2:
-    x86.epilogue
-    x86.ret
+    x64.epilogue
+    x64.ret
   }
 }
 ```
-```RequiredMLIR:aarch64-macos
+```RequiredMLIR:arm64-macos
 === maxon
 module {
   func @main() -> i64 {
@@ -4334,7 +4334,7 @@ end 'main'
 ```exitcode
 42
 ```
-```RequiredMLIR:x86_64-windows
+```RequiredMLIR:x64-windows
 === maxon
 module {
   func @main() -> i64 {
@@ -4407,41 +4407,41 @@ module {
 module {
   func @main() -> u32 {
   entry:
-    x86.prologue stack_size=16
-    x86.xor rax, rax
-    x86.mov [rbp-8], rax
-    x86.jmp main.loop_0.header
+    x64.prologue stack_size=16
+    x64.xor rax, rax
+    x64.mov [rbp-8], rax
+    x64.jmp main.loop_0.header
   loop_0.header:
-    x86.mov rax, 42
-    x86.mov rcx, [rbp-8]
-    x86.cmp rcx, rax
-    x86.jge main.loop_0.exit
+    x64.mov rax, 42
+    x64.mov rcx, [rbp-8]
+    x64.cmp rcx, rax
+    x64.jge main.loop_0.exit
   loop_0:
-    x86.mov rax, 1
-    x86.mov rcx, [rbp-8]
-    x86.add rcx, rax
-    x86.mov [rbp-8], rcx
-    x86.jmp main.loop_0.header
+    x64.mov rax, 1
+    x64.mov rcx, [rbp-8]
+    x64.add rcx, rax
+    x64.mov [rbp-8], rcx
+    x64.jmp main.loop_0.header
   loop_0.exit:
-    x86.mov rax, [rbp-8]
-    x86.xor rcx, rcx
-    x86.mov rdx, 4294967295
-    x86.cmp rax, rdx
-    x86.jg main.__range_panic_1
-    x86.cmp rax, rcx
-    x86.jl main.__range_panic_1
-    x86.jmp main.__range_ok_1
+    x64.mov rax, [rbp-8]
+    x64.xor rcx, rcx
+    x64.mov rdx, 4294967295
+    x64.cmp rax, rdx
+    x64.jg main.__range_panic_1
+    x64.cmp rax, rcx
+    x64.jl main.__range_panic_1
+    x64.jmp main.__range_ok_1
   __range_panic_1:
-    x86.lea_symdata rax, [__panic_msg_0]
-    x86.mov rcx, rax
-    x86.call mrt_panic
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
+    x64.call mrt_panic
   __range_ok_1:
-    x86.epilogue
-    x86.ret
+    x64.epilogue
+    x64.ret
   }
 }
 ```
-```RequiredMLIR:aarch64-macos
+```RequiredMLIR:arm64-macos
 === maxon
 module {
   func @main() -> i64 {
@@ -4571,7 +4571,7 @@ end 'main'
 ```exitcode
 45
 ```
-```RequiredMLIR:x86_64-windows
+```RequiredMLIR:x64-windows
 === maxon
 module {
   func @main() -> i64 {
@@ -4660,53 +4660,53 @@ module {
 module {
   func @main() -> u32 {
   entry:
-    x86.prologue stack_size=16
-    x86.xor rax, rax
-    x86.mov [rbp-8], rax
-    x86.xor rcx, rcx
-    x86.mov [rbp-16], rcx
-    x86.jmp main.loop_0.header
+    x64.prologue stack_size=16
+    x64.xor rax, rax
+    x64.mov [rbp-8], rax
+    x64.xor rcx, rcx
+    x64.mov [rbp-16], rcx
+    x64.jmp main.loop_0.header
   loop_0.header:
-    x86.mov rax, 10
-    x86.mov rcx, [rbp-16]
-    x86.cmp rcx, rax
-    x86.jge main.loop_0.exit
+    x64.mov rax, 10
+    x64.mov rcx, [rbp-16]
+    x64.cmp rcx, rax
+    x64.jge main.loop_0.exit
   loop_0:
-    x86.mov rax, [rbp-8]
-    x86.mov rcx, [rbp-16]
-    x86.add rax, rcx
-    x86.mov [rbp-8], rax
-    x86.mov rdx, 1
-    x86.mov rbx, [rbp-16]
-    x86.add rbx, rdx
-    x86.mov [rbp-16], rbx
-    x86.jmp main.loop_0.header
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rbp-16]
+    x64.add rax, rcx
+    x64.mov [rbp-8], rax
+    x64.mov rdx, 1
+    x64.mov rbx, [rbp-16]
+    x64.add rbx, rdx
+    x64.mov [rbp-16], rbx
+    x64.jmp main.loop_0.header
   loop_0.exit:
-    x86.mov rax, 256
-    x86.mov rcx, [rbp-8]
-    x86.mov rbx, rax
-    x86.mov rax, rcx
-    x86.cqo
-    x86.idiv rbx
-    x86.xor rax, rax
-    x86.mov rcx, 4294967295
-    x86.cmp rdx, rcx
-    x86.jg main.__range_panic_1
-    x86.cmp rdx, rax
-    x86.jl main.__range_panic_1
-    x86.jmp main.__range_ok_1
+    x64.mov rax, 256
+    x64.mov rcx, [rbp-8]
+    x64.mov rbx, rax
+    x64.mov rax, rcx
+    x64.cqo
+    x64.idiv rbx
+    x64.xor rax, rax
+    x64.mov rcx, 4294967295
+    x64.cmp rdx, rcx
+    x64.jg main.__range_panic_1
+    x64.cmp rdx, rax
+    x64.jl main.__range_panic_1
+    x64.jmp main.__range_ok_1
   __range_panic_1:
-    x86.lea_symdata rax, [__panic_msg_0]
-    x86.mov rcx, rax
-    x86.call mrt_panic
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
+    x64.call mrt_panic
   __range_ok_1:
-    x86.mov rax, rdx
-    x86.epilogue
-    x86.ret
+    x64.mov rax, rdx
+    x64.epilogue
+    x64.ret
   }
 }
 ```
-```RequiredMLIR:aarch64-macos
+```RequiredMLIR:arm64-macos
 === maxon
 module {
   func @main() -> i64 {
@@ -4869,7 +4869,7 @@ end 'main'
 ```exitcode
 200
 ```
-```RequiredMLIR:x86_64-windows
+```RequiredMLIR:x64-windows
 === maxon
 module {
   func @main() -> i64 {
@@ -5014,82 +5014,82 @@ module {
 module {
   func @main() -> u32 {
   entry:
-    x86.prologue stack_size=48
-    x86.xor rax, rax
-    x86.mov [rbp-8], rax
-    x86.xor rcx, rcx
-    x86.mov [rbp-16], rcx
-    x86.xor rdx, rdx
-    x86.mov [rbp-24], rdx
-    x86.xor rbx, rbx
-    x86.mov [rbp-32], rbx
-    x86.jmp main.loop_0.header
+    x64.prologue stack_size=48
+    x64.xor rax, rax
+    x64.mov [rbp-8], rax
+    x64.xor rcx, rcx
+    x64.mov [rbp-16], rcx
+    x64.xor rdx, rdx
+    x64.mov [rbp-24], rdx
+    x64.xor rbx, rbx
+    x64.mov [rbp-32], rbx
+    x64.jmp main.loop_0.header
   loop_0.header:
-    x86.mov rax, 20
-    x86.mov rcx, [rbp-32]
-    x86.cmp rcx, rax
-    x86.jge main.loop_0.exit
+    x64.mov rax, 20
+    x64.mov rcx, [rbp-32]
+    x64.cmp rcx, rax
+    x64.jge main.loop_0.exit
   loop_0:
-    x86.mov rax, 2
-    x86.mov rcx, [rbp-32]
-    x86.mov rbx, rax
-    x86.mov rax, rcx
-    x86.cqo
-    x86.idiv rbx
-    x86.xor rax, rax
-    x86.cmp rdx, rax
-    x86.jne main.odd_2
+    x64.mov rax, 2
+    x64.mov rcx, [rbp-32]
+    x64.mov rbx, rax
+    x64.mov rax, rcx
+    x64.cqo
+    x64.idiv rbx
+    x64.xor rax, rax
+    x64.cmp rdx, rax
+    x64.jne main.odd_2
   even_1:
-    x86.mov rax, [rbp-8]
-    x86.mov rcx, [rbp-32]
-    x86.add rax, rcx
-    x86.mov [rbp-8], rax
-    x86.mov rdx, 1
-    x86.mov rbx, [rbp-24]
-    x86.add rbx, rdx
-    x86.mov [rbp-24], rbx
-    x86.jmp main.even_1.merge
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rbp-32]
+    x64.add rax, rcx
+    x64.mov [rbp-8], rax
+    x64.mov rdx, 1
+    x64.mov rbx, [rbp-24]
+    x64.add rbx, rdx
+    x64.mov [rbp-24], rbx
+    x64.jmp main.even_1.merge
   odd_2:
-    x86.mov rax, [rbp-16]
-    x86.mov rcx, [rbp-32]
-    x86.add rax, rcx
-    x86.mov [rbp-16], rax
-    x86.jmp main.even_1.merge
+    x64.mov rax, [rbp-16]
+    x64.mov rcx, [rbp-32]
+    x64.add rax, rcx
+    x64.mov [rbp-16], rax
+    x64.jmp main.even_1.merge
   even_1.merge:
-    x86.mov rax, 1
-    x86.mov rcx, [rbp-32]
-    x86.add rcx, rax
-    x86.mov [rbp-32], rcx
-    x86.jmp main.loop_0.header
+    x64.mov rax, 1
+    x64.mov rcx, [rbp-32]
+    x64.add rcx, rax
+    x64.mov [rbp-32], rcx
+    x64.jmp main.loop_0.header
   loop_0.exit:
-    x86.mov rax, [rbp-8]
-    x86.mov rcx, [rbp-16]
-    x86.add rax, rcx
-    x86.mov rdx, [rbp-24]
-    x86.add rax, rdx
-    x86.mov rbx, 256
-    x86.mov [rbp-40], rax
-    x86.cqo
-    x86.idiv rbx
-    x86.xor rsi, rsi
-    x86.mov rdi, 4294967295
-    x86.cmp rdx, rdi
-    x86.jg main.__range_panic_3
-    x86.cmp rdx, rsi
-    x86.jl main.__range_panic_3
-    x86.jmp main.__range_ok_3
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rbp-16]
+    x64.add rax, rcx
+    x64.mov rdx, [rbp-24]
+    x64.add rax, rdx
+    x64.mov rbx, 256
+    x64.mov [rbp-40], rax
+    x64.cqo
+    x64.idiv rbx
+    x64.xor rsi, rsi
+    x64.mov rdi, 4294967295
+    x64.cmp rdx, rdi
+    x64.jg main.__range_panic_3
+    x64.cmp rdx, rsi
+    x64.jl main.__range_panic_3
+    x64.jmp main.__range_ok_3
   __range_panic_3:
-    x86.lea_symdata rax, [__panic_msg_0]
-    x86.mov rcx, rax
-    x86.call mrt_panic
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
+    x64.call mrt_panic
   __range_ok_3:
-    x86.mov rax, rdx
-    x86.epilogue
-    x86.ret
+    x64.mov rax, rdx
+    x64.epilogue
+    x64.ret
   }
 }
 ```
-```RequiredMLIR:aarch64-macos
+```RequiredMLIR:arm64-macos
 === maxon
 module {
   func @main() -> i64 {
@@ -5336,7 +5336,7 @@ end 'main'
 ```exitcode
 95
 ```
-```RequiredMLIR:x86_64-windows
+```RequiredMLIR:x64-windows
 === maxon
 module {
   func @main() -> i64 {
@@ -5457,68 +5457,68 @@ module {
 module {
   func @main() -> u32 {
   entry:
-    x86.prologue stack_size=16
-    x86.xor rax, rax
-    x86.mov [rbp-8], rax
-    x86.mov rcx, 1
-    x86.mov [rbp-16], rcx
-    x86.jmp main.loop_0.header
+    x64.prologue stack_size=16
+    x64.xor rax, rax
+    x64.mov [rbp-8], rax
+    x64.mov rcx, 1
+    x64.mov [rbp-16], rcx
+    x64.jmp main.loop_0.header
   loop_0.header:
-    x86.mov rax, 10
-    x86.mov rcx, [rbp-16]
-    x86.cmp rcx, rax
-    x86.jg main.loop_0.exit
+    x64.mov rax, 10
+    x64.mov rcx, [rbp-16]
+    x64.cmp rcx, rax
+    x64.jg main.loop_0.exit
   loop_0:
-    x86.mov rax, 5
-    x86.mov rcx, [rbp-16]
-    x86.cmp rcx, rax
-    x86.jg main.second_2
+    x64.mov rax, 5
+    x64.mov rcx, [rbp-16]
+    x64.cmp rcx, rax
+    x64.jg main.second_2
   first_1:
-    x86.mov rax, [rbp-8]
-    x86.mov rcx, [rbp-16]
-    x86.add rax, rcx
-    x86.mov [rbp-8], rax
-    x86.jmp main.first_1.merge
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rbp-16]
+    x64.add rax, rcx
+    x64.mov [rbp-8], rax
+    x64.jmp main.first_1.merge
   second_2:
-    x86.mov rax, 2
-    x86.mov rcx, [rbp-16]
-    x86.imul rcx, rax
-    x86.mov rdx, [rbp-8]
-    x86.add rdx, rcx
-    x86.mov [rbp-8], rdx
-    x86.jmp main.first_1.merge
+    x64.mov rax, 2
+    x64.mov rcx, [rbp-16]
+    x64.imul rcx, rax
+    x64.mov rdx, [rbp-8]
+    x64.add rdx, rcx
+    x64.mov [rbp-8], rdx
+    x64.jmp main.first_1.merge
   first_1.merge:
-    x86.mov rax, 1
-    x86.mov rcx, [rbp-16]
-    x86.add rcx, rax
-    x86.mov [rbp-16], rcx
-    x86.jmp main.loop_0.header
+    x64.mov rax, 1
+    x64.mov rcx, [rbp-16]
+    x64.add rcx, rax
+    x64.mov [rbp-16], rcx
+    x64.jmp main.loop_0.header
   loop_0.exit:
-    x86.mov rax, 256
-    x86.mov rcx, [rbp-8]
-    x86.mov rbx, rax
-    x86.mov rax, rcx
-    x86.cqo
-    x86.idiv rbx
-    x86.xor rax, rax
-    x86.mov rcx, 4294967295
-    x86.cmp rdx, rcx
-    x86.jg main.__range_panic_3
-    x86.cmp rdx, rax
-    x86.jl main.__range_panic_3
-    x86.jmp main.__range_ok_3
+    x64.mov rax, 256
+    x64.mov rcx, [rbp-8]
+    x64.mov rbx, rax
+    x64.mov rax, rcx
+    x64.cqo
+    x64.idiv rbx
+    x64.xor rax, rax
+    x64.mov rcx, 4294967295
+    x64.cmp rdx, rcx
+    x64.jg main.__range_panic_3
+    x64.cmp rdx, rax
+    x64.jl main.__range_panic_3
+    x64.jmp main.__range_ok_3
   __range_panic_3:
-    x86.lea_symdata rax, [__panic_msg_0]
-    x86.mov rcx, rax
-    x86.call mrt_panic
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
+    x64.call mrt_panic
   __range_ok_3:
-    x86.mov rax, rdx
-    x86.epilogue
-    x86.ret
+    x64.mov rax, rdx
+    x64.epilogue
+    x64.ret
   }
 }
 ```
-```RequiredMLIR:aarch64-macos
+```RequiredMLIR:arm64-macos
 === maxon
 module {
   func @main() -> i64 {
@@ -5728,7 +5728,7 @@ end 'main'
 ```exitcode
 20
 ```
-```RequiredMLIR:x86_64-windows
+```RequiredMLIR:x64-windows
 === maxon
 module {
   func @main() -> i64 {
@@ -5844,62 +5844,62 @@ module {
 module {
   func @main() -> u32 {
   entry:
-    x86.prologue stack_size=32
-    x86.xor rax, rax
-    x86.mov [rbp-8], rax
-    x86.xor rcx, rcx
-    x86.mov [rbp-16], rcx
-    x86.jmp main.outer_0.header
+    x64.prologue stack_size=32
+    x64.xor rax, rax
+    x64.mov [rbp-8], rax
+    x64.xor rcx, rcx
+    x64.mov [rbp-16], rcx
+    x64.jmp main.outer_0.header
   outer_0.header:
-    x86.mov rax, 5
-    x86.mov rcx, [rbp-16]
-    x86.cmp rcx, rax
-    x86.jge main.outer_0.exit
+    x64.mov rax, 5
+    x64.mov rcx, [rbp-16]
+    x64.cmp rcx, rax
+    x64.jge main.outer_0.exit
   outer_0:
-    x86.xor rax, rax
-    x86.mov [rbp-24], rax
-    x86.jmp main.inner_1.header
+    x64.xor rax, rax
+    x64.mov [rbp-24], rax
+    x64.jmp main.inner_1.header
   inner_1.header:
-    x86.mov rax, 4
-    x86.mov rcx, [rbp-24]
-    x86.cmp rcx, rax
-    x86.jge main.inner_1.exit
+    x64.mov rax, 4
+    x64.mov rcx, [rbp-24]
+    x64.cmp rcx, rax
+    x64.jge main.inner_1.exit
   inner_1:
-    x86.mov rax, 1
-    x86.mov rcx, [rbp-8]
-    x86.add rcx, rax
-    x86.mov [rbp-8], rcx
-    x86.mov rdx, 1
-    x86.mov rbx, [rbp-24]
-    x86.add rbx, rdx
-    x86.mov [rbp-24], rbx
-    x86.jmp main.inner_1.header
+    x64.mov rax, 1
+    x64.mov rcx, [rbp-8]
+    x64.add rcx, rax
+    x64.mov [rbp-8], rcx
+    x64.mov rdx, 1
+    x64.mov rbx, [rbp-24]
+    x64.add rbx, rdx
+    x64.mov [rbp-24], rbx
+    x64.jmp main.inner_1.header
   inner_1.exit:
-    x86.mov rax, 1
-    x86.mov rcx, [rbp-16]
-    x86.add rcx, rax
-    x86.mov [rbp-16], rcx
-    x86.jmp main.outer_0.header
+    x64.mov rax, 1
+    x64.mov rcx, [rbp-16]
+    x64.add rcx, rax
+    x64.mov [rbp-16], rcx
+    x64.jmp main.outer_0.header
   outer_0.exit:
-    x86.mov rax, [rbp-8]
-    x86.xor rcx, rcx
-    x86.mov rdx, 4294967295
-    x86.cmp rax, rdx
-    x86.jg main.__range_panic_2
-    x86.cmp rax, rcx
-    x86.jl main.__range_panic_2
-    x86.jmp main.__range_ok_2
+    x64.mov rax, [rbp-8]
+    x64.xor rcx, rcx
+    x64.mov rdx, 4294967295
+    x64.cmp rax, rdx
+    x64.jg main.__range_panic_2
+    x64.cmp rax, rcx
+    x64.jl main.__range_panic_2
+    x64.jmp main.__range_ok_2
   __range_panic_2:
-    x86.lea_symdata rax, [__panic_msg_0]
-    x86.mov rcx, rax
-    x86.call mrt_panic
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
+    x64.call mrt_panic
   __range_ok_2:
-    x86.epilogue
-    x86.ret
+    x64.epilogue
+    x64.ret
   }
 }
 ```
-```RequiredMLIR:aarch64-macos
+```RequiredMLIR:arm64-macos
 === maxon
 module {
   func @main() -> i64 {
@@ -6100,7 +6100,7 @@ end 'main'
 ```exitcode
 15
 ```
-```RequiredMLIR:x86_64-windows
+```RequiredMLIR:x64-windows
 === maxon
 module {
   func @main() -> i64 {
@@ -6216,62 +6216,62 @@ module {
 module {
   func @main() -> u32 {
   entry:
-    x86.prologue stack_size=32
-    x86.xor rax, rax
-    x86.mov [rbp-8], rax
-    x86.mov rcx, 1
-    x86.mov [rbp-16], rcx
-    x86.jmp main.outer_0.header
+    x64.prologue stack_size=32
+    x64.xor rax, rax
+    x64.mov [rbp-8], rax
+    x64.mov rcx, 1
+    x64.mov [rbp-16], rcx
+    x64.jmp main.outer_0.header
   outer_0.header:
-    x86.mov rax, 5
-    x86.mov rcx, [rbp-16]
-    x86.cmp rcx, rax
-    x86.jg main.outer_0.exit
+    x64.mov rax, 5
+    x64.mov rcx, [rbp-16]
+    x64.cmp rcx, rax
+    x64.jg main.outer_0.exit
   outer_0:
-    x86.mov rax, 1
-    x86.mov [rbp-24], rax
-    x86.jmp main.inner_1.header
+    x64.mov rax, 1
+    x64.mov [rbp-24], rax
+    x64.jmp main.inner_1.header
   inner_1.header:
-    x86.mov rax, [rbp-24]
-    x86.mov rcx, [rbp-16]
-    x86.cmp rax, rcx
-    x86.jg main.inner_1.exit
+    x64.mov rax, [rbp-24]
+    x64.mov rcx, [rbp-16]
+    x64.cmp rax, rcx
+    x64.jg main.inner_1.exit
   inner_1:
-    x86.mov rax, 1
-    x86.mov rcx, [rbp-8]
-    x86.add rcx, rax
-    x86.mov [rbp-8], rcx
-    x86.mov rdx, 1
-    x86.mov rbx, [rbp-24]
-    x86.add rbx, rdx
-    x86.mov [rbp-24], rbx
-    x86.jmp main.inner_1.header
+    x64.mov rax, 1
+    x64.mov rcx, [rbp-8]
+    x64.add rcx, rax
+    x64.mov [rbp-8], rcx
+    x64.mov rdx, 1
+    x64.mov rbx, [rbp-24]
+    x64.add rbx, rdx
+    x64.mov [rbp-24], rbx
+    x64.jmp main.inner_1.header
   inner_1.exit:
-    x86.mov rax, 1
-    x86.mov rcx, [rbp-16]
-    x86.add rcx, rax
-    x86.mov [rbp-16], rcx
-    x86.jmp main.outer_0.header
+    x64.mov rax, 1
+    x64.mov rcx, [rbp-16]
+    x64.add rcx, rax
+    x64.mov [rbp-16], rcx
+    x64.jmp main.outer_0.header
   outer_0.exit:
-    x86.mov rax, [rbp-8]
-    x86.xor rcx, rcx
-    x86.mov rdx, 4294967295
-    x86.cmp rax, rdx
-    x86.jg main.__range_panic_2
-    x86.cmp rax, rcx
-    x86.jl main.__range_panic_2
-    x86.jmp main.__range_ok_2
+    x64.mov rax, [rbp-8]
+    x64.xor rcx, rcx
+    x64.mov rdx, 4294967295
+    x64.cmp rax, rdx
+    x64.jg main.__range_panic_2
+    x64.cmp rax, rcx
+    x64.jl main.__range_panic_2
+    x64.jmp main.__range_ok_2
   __range_panic_2:
-    x86.lea_symdata rax, [__panic_msg_0]
-    x86.mov rcx, rax
-    x86.call mrt_panic
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
+    x64.call mrt_panic
   __range_ok_2:
-    x86.epilogue
-    x86.ret
+    x64.epilogue
+    x64.ret
   }
 }
 ```
-```RequiredMLIR:aarch64-macos
+```RequiredMLIR:arm64-macos
 === maxon
 module {
   func @main() -> i64 {
@@ -6475,7 +6475,7 @@ end 'main'
 ```exitcode
 20
 ```
-```RequiredMLIR:x86_64-windows
+```RequiredMLIR:x64-windows
 === maxon
 module {
   func @register-allocator.double(x: i64) -> i64 {
@@ -6577,56 +6577,56 @@ module {
 module {
   func @register-allocator.double(x: i64) -> i64 {
   entry:
-    x86.mov rax, 2
-    x86.imul rcx, rax
-    x86.mov rax, rcx
-    x86.ret
+    x64.mov rax, 2
+    x64.imul rcx, rax
+    x64.mov rax, rcx
+    x64.ret
   }
   func @main() -> u32 {
   entry:
-    x86.prologue stack_size=16
-    x86.xor rax, rax
-    x86.mov [rbp-8], rax
-    x86.xor rcx, rcx
-    x86.mov [rbp-16], rcx
-    x86.jmp main.loop_0.header
+    x64.prologue stack_size=16
+    x64.xor rax, rax
+    x64.mov [rbp-8], rax
+    x64.xor rcx, rcx
+    x64.mov [rbp-16], rcx
+    x64.jmp main.loop_0.header
   loop_0.header:
-    x86.mov rax, 5
-    x86.mov rcx, [rbp-16]
-    x86.cmp rcx, rax
-    x86.jge main.loop_0.exit
+    x64.mov rax, 5
+    x64.mov rcx, [rbp-16]
+    x64.cmp rcx, rax
+    x64.jge main.loop_0.exit
   loop_0:
-    x86.mov rax, [rbp-16]
-    x86.mov rcx, [rbp-16]
-    x86.call register-allocator.double
-    x86.mov rcx, [rbp-8]
-    x86.add rcx, rax
-    x86.mov [rbp-8], rcx
-    x86.mov rdx, 1
-    x86.mov rbx, [rbp-16]
-    x86.add rbx, rdx
-    x86.mov [rbp-16], rbx
-    x86.jmp main.loop_0.header
+    x64.mov rax, [rbp-16]
+    x64.mov rcx, [rbp-16]
+    x64.call register-allocator.double
+    x64.mov rcx, [rbp-8]
+    x64.add rcx, rax
+    x64.mov [rbp-8], rcx
+    x64.mov rdx, 1
+    x64.mov rbx, [rbp-16]
+    x64.add rbx, rdx
+    x64.mov [rbp-16], rbx
+    x64.jmp main.loop_0.header
   loop_0.exit:
-    x86.mov rax, [rbp-8]
-    x86.xor rcx, rcx
-    x86.mov rdx, 4294967295
-    x86.cmp rax, rdx
-    x86.jg main.__range_panic_1
-    x86.cmp rax, rcx
-    x86.jl main.__range_panic_1
-    x86.jmp main.__range_ok_1
+    x64.mov rax, [rbp-8]
+    x64.xor rcx, rcx
+    x64.mov rdx, 4294967295
+    x64.cmp rax, rdx
+    x64.jg main.__range_panic_1
+    x64.cmp rax, rcx
+    x64.jl main.__range_panic_1
+    x64.jmp main.__range_ok_1
   __range_panic_1:
-    x86.lea_symdata rax, [__panic_msg_0]
-    x86.mov rcx, rax
-    x86.call mrt_panic
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
+    x64.call mrt_panic
   __range_ok_1:
-    x86.epilogue
-    x86.ret
+    x64.epilogue
+    x64.ret
   }
 }
 ```
-```RequiredMLIR:aarch64-macos
+```RequiredMLIR:arm64-macos
 === maxon
 module {
   func @register-allocator.double(x: i64) -> i64 {
@@ -6795,7 +6795,7 @@ end 'main'
 ```exitcode
 32
 ```
-```RequiredMLIR:x86_64-windows
+```RequiredMLIR:x64-windows
 === maxon
 module {
   func @main() -> i64 {
@@ -6857,36 +6857,36 @@ module {
 module {
   func @main() -> u32 {
   entry:
-    x86.prologue stack_size=16
-    x86.mov rax, 1
-    x86.mov rcx, 2
-    x86.add rax, rcx
-    x86.mov rdx, 3
-    x86.imul rax, rdx
-    x86.mov rbx, 4
-    x86.add rax, rbx
-    x86.mov rsi, 2
-    x86.imul rax, rsi
-    x86.mov rdi, 6
-    x86.add rax, rdi
-    x86.xor r8, r8
-    x86.mov r9, 4294967295
-    x86.cmp rax, r9
-    x86.jg main.__range_panic_0
-    x86.cmp rax, r8
-    x86.jl main.__range_panic_0
-    x86.jmp main.__range_ok_0
+    x64.prologue stack_size=16
+    x64.mov rax, 1
+    x64.mov rcx, 2
+    x64.add rax, rcx
+    x64.mov rdx, 3
+    x64.imul rax, rdx
+    x64.mov rbx, 4
+    x64.add rax, rbx
+    x64.mov rsi, 2
+    x64.imul rax, rsi
+    x64.mov rdi, 6
+    x64.add rax, rdi
+    x64.xor r8, r8
+    x64.mov r9, 4294967295
+    x64.cmp rax, r9
+    x64.jg main.__range_panic_0
+    x64.cmp rax, r8
+    x64.jl main.__range_panic_0
+    x64.jmp main.__range_ok_0
   __range_panic_0:
-    x86.lea_symdata rax, [__panic_msg_0]
-    x86.mov rcx, rax
-    x86.call mrt_panic
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
+    x64.call mrt_panic
   __range_ok_0:
-    x86.epilogue
-    x86.ret
+    x64.epilogue
+    x64.ret
   }
 }
 ```
-```RequiredMLIR:aarch64-macos
+```RequiredMLIR:arm64-macos
 === maxon
 module {
   func @main() -> i64 {
@@ -6996,7 +6996,7 @@ end 'main'
 ```exitcode
 40
 ```
-```RequiredMLIR:x86_64-windows
+```RequiredMLIR:x64-windows
 === maxon
 module {
   func @main() -> i64 {
@@ -7054,32 +7054,32 @@ module {
 module {
   func @main() -> u32 {
   entry:
-    x86.prologue stack_size=16
-    x86.mov rax, 3
-    x86.mov rcx, 5
-    x86.mov rdx, 7
-    x86.mov rbx, 2
-    x86.add rax, rcx
-    x86.sub rdx, rbx
-    x86.imul rax, rdx
-    x86.xor rsi, rsi
-    x86.mov rdi, 4294967295
-    x86.cmp rax, rdi
-    x86.jg main.__range_panic_0
-    x86.cmp rax, rsi
-    x86.jl main.__range_panic_0
-    x86.jmp main.__range_ok_0
+    x64.prologue stack_size=16
+    x64.mov rax, 3
+    x64.mov rcx, 5
+    x64.mov rdx, 7
+    x64.mov rbx, 2
+    x64.add rax, rcx
+    x64.sub rdx, rbx
+    x64.imul rax, rdx
+    x64.xor rsi, rsi
+    x64.mov rdi, 4294967295
+    x64.cmp rax, rdi
+    x64.jg main.__range_panic_0
+    x64.cmp rax, rsi
+    x64.jl main.__range_panic_0
+    x64.jmp main.__range_ok_0
   __range_panic_0:
-    x86.lea_symdata rax, [__panic_msg_0]
-    x86.mov rcx, rax
-    x86.call mrt_panic
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
+    x64.call mrt_panic
   __range_ok_0:
-    x86.epilogue
-    x86.ret
+    x64.epilogue
+    x64.ret
   }
 }
 ```
-```RequiredMLIR:aarch64-macos
+```RequiredMLIR:arm64-macos
 === maxon
 module {
   func @main() -> i64 {
@@ -7184,7 +7184,7 @@ end 'main'
 ```exitcode
 42
 ```
-```RequiredMLIR:x86_64-windows
+```RequiredMLIR:x64-windows
 === maxon
 module {
   func @register-allocator.sum5(a: i64, b: i64, c: i64, d: i64, e: i64) -> i64 {
@@ -7263,39 +7263,39 @@ module {
 module {
   func @register-allocator.sum5(a: i64, b: i64, c: i64, d: i64, e: i64) -> i64 {
   entry:
-    x86.add rcx, rdx
-    x86.add rcx, r8
-    x86.add rcx, r9
-    x86.lea rax, [rcx + rsi]
-    x86.ret
+    x64.add rcx, rdx
+    x64.add rcx, r8
+    x64.add rcx, r9
+    x64.lea rax, [rcx + rsi]
+    x64.ret
   }
   func @main() -> u32 {
   entry:
-    x86.prologue stack_size=16
-    x86.mov rcx, 5
-    x86.mov rdx, 10
-    x86.mov r8, 8
-    x86.mov r9, 12
-    x86.mov rsi, 7
-    x86.call register-allocator.sum5
-    x86.xor rcx, rcx
-    x86.mov rdx, 4294967295
-    x86.cmp rax, rdx
-    x86.jg main.__range_panic_0
-    x86.cmp rax, rcx
-    x86.jl main.__range_panic_0
-    x86.jmp main.__range_ok_0
+    x64.prologue stack_size=16
+    x64.mov rcx, 5
+    x64.mov rdx, 10
+    x64.mov r8, 8
+    x64.mov r9, 12
+    x64.mov rsi, 7
+    x64.call register-allocator.sum5
+    x64.xor rcx, rcx
+    x64.mov rdx, 4294967295
+    x64.cmp rax, rdx
+    x64.jg main.__range_panic_0
+    x64.cmp rax, rcx
+    x64.jl main.__range_panic_0
+    x64.jmp main.__range_ok_0
   __range_panic_0:
-    x86.lea_symdata rax, [__panic_msg_0]
-    x86.mov rcx, rax
-    x86.call mrt_panic
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
+    x64.call mrt_panic
   __range_ok_0:
-    x86.epilogue
-    x86.ret
+    x64.epilogue
+    x64.ret
   }
 }
 ```
-```RequiredMLIR:aarch64-macos
+```RequiredMLIR:arm64-macos
 === maxon
 module {
   func @register-allocator.sum5(a: i64, b: i64, c: i64, d: i64, e: i64) -> i64 {
@@ -7428,7 +7428,7 @@ end 'main'
 ```exitcode
 45
 ```
-```RequiredMLIR:x86_64-windows
+```RequiredMLIR:x64-windows
 === maxon
 module {
   func @register-allocator.sum9(a: i64, b: i64, c: i64, d: i64, e: i64, f: i64, g: i64, h: i64, i: i64) -> i64 {
@@ -7531,57 +7531,57 @@ module {
 module {
   func @register-allocator.sum9(a: i64, b: i64, c: i64, d: i64, e: i64, f: i64, g: i64, h: i64, i: i64) -> i64 {
   entry:
-    x86.prologue stack_size=16
-    x86.mov [rbp-8], rcx
-    x86.mov rcx, [rbp+16]
-    x86.mov [rbp-16], rcx
-    x86.mov rcx, [rbp-8]
-    x86.add rcx, rdx
-    x86.add rcx, r8
-    x86.add rcx, r9
-    x86.add rcx, rsi
-    x86.add rcx, rdi
-    x86.add rcx, rax
-    x86.add rcx, rbx
-    x86.mov rax, [rbp-16]
-    x86.lea rax, [rcx + rax]
-    x86.epilogue
-    x86.ret
+    x64.prologue stack_size=16
+    x64.mov [rbp-8], rcx
+    x64.mov rcx, [rbp+16]
+    x64.mov [rbp-16], rcx
+    x64.mov rcx, [rbp-8]
+    x64.add rcx, rdx
+    x64.add rcx, r8
+    x64.add rcx, r9
+    x64.add rcx, rsi
+    x64.add rcx, rdi
+    x64.add rcx, rax
+    x64.add rcx, rbx
+    x64.mov rax, [rbp-16]
+    x64.lea rax, [rcx + rax]
+    x64.epilogue
+    x64.ret
   }
   func @main() -> u32 {
   entry:
-    x86.prologue stack_size=16
-    x86.sub rsp, 16
-    x86.mov rax, 9
-    x86.mov [rsp+0], rax
-    x86.mov rcx, 1
-    x86.mov rdx, 2
-    x86.mov r8, 3
-    x86.mov r9, 4
-    x86.mov rsi, 5
-    x86.mov rdi, 6
-    x86.mov rax, 7
-    x86.mov rbx, 8
-    x86.call register-allocator.sum9
-    x86.add rsp, 16
-    x86.xor rcx, rcx
-    x86.mov rdx, 4294967295
-    x86.cmp rax, rdx
-    x86.jg main.__range_panic_0
-    x86.cmp rax, rcx
-    x86.jl main.__range_panic_0
-    x86.jmp main.__range_ok_0
+    x64.prologue stack_size=16
+    x64.sub rsp, 16
+    x64.mov rax, 9
+    x64.mov [rsp+0], rax
+    x64.mov rcx, 1
+    x64.mov rdx, 2
+    x64.mov r8, 3
+    x64.mov r9, 4
+    x64.mov rsi, 5
+    x64.mov rdi, 6
+    x64.mov rax, 7
+    x64.mov rbx, 8
+    x64.call register-allocator.sum9
+    x64.add rsp, 16
+    x64.xor rcx, rcx
+    x64.mov rdx, 4294967295
+    x64.cmp rax, rdx
+    x64.jg main.__range_panic_0
+    x64.cmp rax, rcx
+    x64.jl main.__range_panic_0
+    x64.jmp main.__range_ok_0
   __range_panic_0:
-    x86.lea_symdata rax, [__panic_msg_0]
-    x86.mov rcx, rax
-    x86.call mrt_panic
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
+    x64.call mrt_panic
   __range_ok_0:
-    x86.epilogue
-    x86.ret
+    x64.epilogue
+    x64.ret
   }
 }
 ```
-```RequiredMLIR:aarch64-macos
+```RequiredMLIR:arm64-macos
 === maxon
 module {
   func @register-allocator.sum9(a: i64, b: i64, c: i64, d: i64, e: i64, f: i64, g: i64, h: i64, i: i64) -> i64 {
@@ -7755,7 +7755,7 @@ end 'main'
 ```exitcode
 120
 ```
-```RequiredMLIR:x86_64-windows
+```RequiredMLIR:x64-windows
 === maxon
 module {
   func @register-allocator.factorial(n: i64) -> i64 {
@@ -7842,54 +7842,54 @@ module {
 module {
   func @register-allocator.factorial(n: i64) -> i64 {
   entry:
-    x86.prologue stack_size=16
-    x86.mov [rbp-8], rcx
-    x86.mov rax, 1
-    x86.cmp rcx, rax
-    x86.jg register-allocator.factorial.base_0.after
+    x64.prologue stack_size=16
+    x64.mov [rbp-8], rcx
+    x64.mov rax, 1
+    x64.cmp rcx, rax
+    x64.jg register-allocator.factorial.base_0.after
   base_0:
-    x86.mov rax, 1
-    x86.epilogue
-    x86.ret
+    x64.mov rax, 1
+    x64.epilogue
+    x64.ret
   base_0.after:
-    x86.mov rax, 1
-    x86.mov rcx, [rbp-8]
-    x86.sub rcx, rax
-    x86.call register-allocator.factorial
-    x86.mov rdx, [rbp-8]
-    x86.imul rdx, rax
-    x86.mov rax, rdx
-    x86.epilogue
-    x86.ret
+    x64.mov rax, 1
+    x64.mov rcx, [rbp-8]
+    x64.sub rcx, rax
+    x64.call register-allocator.factorial
+    x64.mov rdx, [rbp-8]
+    x64.imul rdx, rax
+    x64.mov rax, rdx
+    x64.epilogue
+    x64.ret
   }
   func @main() -> u32 {
   entry:
-    x86.prologue stack_size=16
-    x86.mov rcx, 5
-    x86.call register-allocator.factorial
-    x86.mov rcx, 256
-    x86.mov [rbp-8], rax
-    x86.cqo
-    x86.idiv rcx
-    x86.xor rax, rax
-    x86.mov rcx, 4294967295
-    x86.cmp rdx, rcx
-    x86.jg main.__range_panic_0
-    x86.cmp rdx, rax
-    x86.jl main.__range_panic_0
-    x86.jmp main.__range_ok_0
+    x64.prologue stack_size=16
+    x64.mov rcx, 5
+    x64.call register-allocator.factorial
+    x64.mov rcx, 256
+    x64.mov [rbp-8], rax
+    x64.cqo
+    x64.idiv rcx
+    x64.xor rax, rax
+    x64.mov rcx, 4294967295
+    x64.cmp rdx, rcx
+    x64.jg main.__range_panic_0
+    x64.cmp rdx, rax
+    x64.jl main.__range_panic_0
+    x64.jmp main.__range_ok_0
   __range_panic_0:
-    x86.lea_symdata rax, [__panic_msg_0]
-    x86.mov rcx, rax
-    x86.call mrt_panic
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
+    x64.call mrt_panic
   __range_ok_0:
-    x86.mov rax, rdx
-    x86.epilogue
-    x86.ret
+    x64.mov rax, rdx
+    x64.epilogue
+    x64.ret
   }
 }
 ```
-```RequiredMLIR:aarch64-macos
+```RequiredMLIR:arm64-macos
 === maxon
 module {
   func @register-allocator.factorial(n: i64) -> i64 {
@@ -8060,7 +8060,7 @@ end 'main'
 ```exitcode
 55
 ```
-```RequiredMLIR:x86_64-windows
+```RequiredMLIR:x64-windows
 === maxon
 module {
   func @register-allocator.identity(x: i64) -> i64 {
@@ -8218,89 +8218,89 @@ module {
 module {
   func @register-allocator.identity(x: i64) -> i64 {
   entry:
-    x86.mov rax, rcx
-    x86.ret
+    x64.mov rax, rcx
+    x64.ret
   }
   func @main() -> u32 {
   entry:
-    x86.prologue stack_size=64
-    x86.mov rax, 1
-    x86.mov [rbp-8], rax
-    x86.mov rcx, 2
-    x86.mov [rbp-16], rcx
-    x86.mov rdx, 3
-    x86.mov [rbp-24], rdx
-    x86.mov rbx, 4
-    x86.mov [rbp-32], rbx
-    x86.mov rsi, 5
-    x86.mov [rbp-40], rsi
-    x86.mov rdi, 6
-    x86.mov [rbp-48], rdi
-    x86.xor r8, r8
-    x86.mov [rbp-56], r8
-    x86.jmp main.loop_0.header
+    x64.prologue stack_size=64
+    x64.mov rax, 1
+    x64.mov [rbp-8], rax
+    x64.mov rcx, 2
+    x64.mov [rbp-16], rcx
+    x64.mov rdx, 3
+    x64.mov [rbp-24], rdx
+    x64.mov rbx, 4
+    x64.mov [rbp-32], rbx
+    x64.mov rsi, 5
+    x64.mov [rbp-40], rsi
+    x64.mov rdi, 6
+    x64.mov [rbp-48], rdi
+    x64.xor r8, r8
+    x64.mov [rbp-56], r8
+    x64.jmp main.loop_0.header
   loop_0.header:
-    x86.mov rax, 3
-    x86.mov rcx, [rbp-56]
-    x86.cmp rcx, rax
-    x86.jge main.loop_0.exit
+    x64.mov rax, 3
+    x64.mov rcx, [rbp-56]
+    x64.cmp rcx, rax
+    x64.jge main.loop_0.exit
   loop_0:
-    x86.mov rax, [rbp-16]
-    x86.mov rcx, [rbp-16]
-    x86.call register-allocator.identity
-    x86.mov rcx, [rbp-8]
-    x86.add rcx, rax
-    x86.mov [rbp-8], rcx
-    x86.mov rdx, [rbp-32]
-    x86.mov rcx, [rbp-32]
-    x86.call register-allocator.identity
-    x86.mov rbx, [rbp-24]
-    x86.add rbx, rax
-    x86.mov [rbp-24], rbx
-    x86.mov rsi, [rbp-48]
-    x86.mov rcx, [rbp-48]
-    x86.call register-allocator.identity
-    x86.mov rdi, [rbp-40]
-    x86.add rdi, rax
-    x86.mov [rbp-40], rdi
-    x86.mov r8, 1
-    x86.mov r9, [rbp-56]
-    x86.add r9, r8
-    x86.mov [rbp-56], r9
-    x86.jmp main.loop_0.header
+    x64.mov rax, [rbp-16]
+    x64.mov rcx, [rbp-16]
+    x64.call register-allocator.identity
+    x64.mov rcx, [rbp-8]
+    x64.add rcx, rax
+    x64.mov [rbp-8], rcx
+    x64.mov rdx, [rbp-32]
+    x64.mov rcx, [rbp-32]
+    x64.call register-allocator.identity
+    x64.mov rbx, [rbp-24]
+    x64.add rbx, rax
+    x64.mov [rbp-24], rbx
+    x64.mov rsi, [rbp-48]
+    x64.mov rcx, [rbp-48]
+    x64.call register-allocator.identity
+    x64.mov rdi, [rbp-40]
+    x64.add rdi, rax
+    x64.mov [rbp-40], rdi
+    x64.mov r8, 1
+    x64.mov r9, [rbp-56]
+    x64.add r9, r8
+    x64.mov [rbp-56], r9
+    x64.jmp main.loop_0.header
   loop_0.exit:
-    x86.mov rax, [rbp-8]
-    x86.mov rcx, [rbp-24]
-    x86.add rax, rcx
-    x86.mov rdx, [rbp-32]
-    x86.add rax, rdx
-    x86.mov rbx, [rbp-40]
-    x86.add rax, rbx
-    x86.mov rsi, [rbp-48]
-    x86.add rax, rsi
-    x86.mov rdi, 256
-    x86.mov [rbp-64], rax
-    x86.cqo
-    x86.idiv rdi
-    x86.xor r8, r8
-    x86.mov r9, 4294967295
-    x86.cmp rdx, r9
-    x86.jg main.__range_panic_1
-    x86.cmp rdx, r8
-    x86.jl main.__range_panic_1
-    x86.jmp main.__range_ok_1
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rbp-24]
+    x64.add rax, rcx
+    x64.mov rdx, [rbp-32]
+    x64.add rax, rdx
+    x64.mov rbx, [rbp-40]
+    x64.add rax, rbx
+    x64.mov rsi, [rbp-48]
+    x64.add rax, rsi
+    x64.mov rdi, 256
+    x64.mov [rbp-64], rax
+    x64.cqo
+    x64.idiv rdi
+    x64.xor r8, r8
+    x64.mov r9, 4294967295
+    x64.cmp rdx, r9
+    x64.jg main.__range_panic_1
+    x64.cmp rdx, r8
+    x64.jl main.__range_panic_1
+    x64.jmp main.__range_ok_1
   __range_panic_1:
-    x86.lea_symdata rax, [__panic_msg_0]
-    x86.mov rcx, rax
-    x86.call mrt_panic
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
+    x64.call mrt_panic
   __range_ok_1:
-    x86.mov rax, rdx
-    x86.epilogue
-    x86.ret
+    x64.mov rax, rdx
+    x64.epilogue
+    x64.ret
   }
 }
 ```
-```RequiredMLIR:aarch64-macos
+```RequiredMLIR:arm64-macos
 === maxon
 module {
   func @register-allocator.identity(x: i64) -> i64 {
@@ -8560,7 +8560,7 @@ end 'main'
 ```exitcode
 36
 ```
-```RequiredMLIR:x86_64-windows
+```RequiredMLIR:x64-windows
 === maxon
 module {
   func @main() -> i64 {
@@ -8622,35 +8622,35 @@ module {
 module {
   func @main() -> u32 {
   entry:
-    x86.prologue stack_size=16
-    x86.movsd xmm0, [rip+__float_3.14]
-    x86.movsd xmm1, [rip+__float_2.86]
-    x86.movsd xmm2, xmm0
-    x86.addsd xmm2, xmm1
-    x86.mov rax, 10
-    x86.mov rcx, 20
-    x86.add rax, rcx
-    x86.cvttsd2si rdx, xmm2
-    x86.add rdx, rax
-    x86.xor rbx, rbx
-    x86.mov rsi, 4294967295
-    x86.cmp rdx, rsi
-    x86.jg main.__range_panic_0
-    x86.cmp rdx, rbx
-    x86.jl main.__range_panic_0
-    x86.jmp main.__range_ok_0
+    x64.prologue stack_size=16
+    x64.movsd xmm0, [rip+__float_3.14]
+    x64.movsd xmm1, [rip+__float_2.86]
+    x64.movsd xmm2, xmm0
+    x64.addsd xmm2, xmm1
+    x64.mov rax, 10
+    x64.mov rcx, 20
+    x64.add rax, rcx
+    x64.cvttsd2si rdx, xmm2
+    x64.add rdx, rax
+    x64.xor rbx, rbx
+    x64.mov rsi, 4294967295
+    x64.cmp rdx, rsi
+    x64.jg main.__range_panic_0
+    x64.cmp rdx, rbx
+    x64.jl main.__range_panic_0
+    x64.jmp main.__range_ok_0
   __range_panic_0:
-    x86.lea_symdata rax, [__panic_msg_0]
-    x86.mov rcx, rax
-    x86.call mrt_panic
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
+    x64.call mrt_panic
   __range_ok_0:
-    x86.mov rax, rdx
-    x86.epilogue
-    x86.ret
+    x64.mov rax, rdx
+    x64.epilogue
+    x64.ret
   }
 }
 ```
-```RequiredMLIR:aarch64-macos
+```RequiredMLIR:arm64-macos
 === maxon
 module {
   func @main() -> i64 {
@@ -8766,7 +8766,7 @@ end 'main'
 ```exitcode
 103
 ```
-```RequiredMLIR:x86_64-windows
+```RequiredMLIR:x64-windows
 === maxon
 module {
   func @main() -> i64 {
@@ -8905,73 +8905,73 @@ module {
 module {
   func @main() -> u32 {
   entry:
-    x86.prologue stack_size=32
-    x86.mov rax, 100
-    x86.mov [rbp-8], rax
-    x86.xor rcx, rcx
-    x86.mov [rbp-16], rcx
-    x86.xor rdx, rdx
-    x86.mov [rbp-24], rdx
-    x86.jmp main.outer_0.header
+    x64.prologue stack_size=32
+    x64.mov rax, 100
+    x64.mov [rbp-8], rax
+    x64.xor rcx, rcx
+    x64.mov [rbp-16], rcx
+    x64.xor rdx, rdx
+    x64.mov [rbp-24], rdx
+    x64.jmp main.outer_0.header
   outer_0.header:
-    x86.mov rax, 3
-    x86.mov rcx, [rbp-24]
-    x86.cmp rcx, rax
-    x86.jge main.outer_0.exit
+    x64.mov rax, 3
+    x64.mov rcx, [rbp-24]
+    x64.cmp rcx, rax
+    x64.jge main.outer_0.exit
   outer_0:
-    x86.xor rax, rax
-    x86.mov [rbp-32], rax
-    x86.jmp main.inner_1.header
+    x64.xor rax, rax
+    x64.mov [rbp-32], rax
+    x64.jmp main.inner_1.header
   inner_1.header:
-    x86.mov rax, 3
-    x86.mov rcx, [rbp-32]
-    x86.cmp rcx, rax
-    x86.jge main.inner_1.exit
+    x64.mov rax, 3
+    x64.mov rcx, [rbp-32]
+    x64.cmp rcx, rax
+    x64.jge main.inner_1.exit
   inner_1:
-    x86.mov rax, [rbp-24]
-    x86.mov rcx, [rbp-32]
-    x86.cmp rax, rcx
-    x86.jne main.diag_2.merge
+    x64.mov rax, [rbp-24]
+    x64.mov rcx, [rbp-32]
+    x64.cmp rax, rcx
+    x64.jne main.diag_2.merge
   diag_2:
-    x86.mov rax, 1
-    x86.mov rcx, [rbp-16]
-    x86.add rcx, rax
-    x86.mov [rbp-16], rcx
-    x86.jmp main.diag_2.merge
+    x64.mov rax, 1
+    x64.mov rcx, [rbp-16]
+    x64.add rcx, rax
+    x64.mov [rbp-16], rcx
+    x64.jmp main.diag_2.merge
   diag_2.merge:
-    x86.mov rax, 1
-    x86.mov rcx, [rbp-32]
-    x86.add rcx, rax
-    x86.mov [rbp-32], rcx
-    x86.jmp main.inner_1.header
+    x64.mov rax, 1
+    x64.mov rcx, [rbp-32]
+    x64.add rcx, rax
+    x64.mov [rbp-32], rcx
+    x64.jmp main.inner_1.header
   inner_1.exit:
-    x86.mov rax, 1
-    x86.mov rcx, [rbp-24]
-    x86.add rcx, rax
-    x86.mov [rbp-24], rcx
-    x86.jmp main.outer_0.header
+    x64.mov rax, 1
+    x64.mov rcx, [rbp-24]
+    x64.add rcx, rax
+    x64.mov [rbp-24], rcx
+    x64.jmp main.outer_0.header
   outer_0.exit:
-    x86.mov rax, [rbp-8]
-    x86.mov rcx, [rbp-16]
-    x86.add rax, rcx
-    x86.xor rdx, rdx
-    x86.mov rbx, 4294967295
-    x86.cmp rax, rbx
-    x86.jg main.__range_panic_3
-    x86.cmp rax, rdx
-    x86.jl main.__range_panic_3
-    x86.jmp main.__range_ok_3
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rbp-16]
+    x64.add rax, rcx
+    x64.xor rdx, rdx
+    x64.mov rbx, 4294967295
+    x64.cmp rax, rbx
+    x64.jg main.__range_panic_3
+    x64.cmp rax, rdx
+    x64.jl main.__range_panic_3
+    x64.jmp main.__range_ok_3
   __range_panic_3:
-    x86.lea_symdata rax, [__panic_msg_0]
-    x86.mov rcx, rax
-    x86.call mrt_panic
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
+    x64.call mrt_panic
   __range_ok_3:
-    x86.epilogue
-    x86.ret
+    x64.epilogue
+    x64.ret
   }
 }
 ```
-```RequiredMLIR:aarch64-macos
+```RequiredMLIR:arm64-macos
 === maxon
 module {
   func @main() -> i64 {
@@ -9209,7 +9209,7 @@ end 'main'
 ```exitcode
 233
 ```
-```RequiredMLIR:x86_64-windows
+```RequiredMLIR:x64-windows
 === maxon
 module {
   func @main() -> i64 {
@@ -9303,51 +9303,51 @@ module {
 module {
   func @main() -> u32 {
   entry:
-    x86.prologue stack_size=32
-    x86.xor rax, rax
-    x86.mov [rbp-8], rax
-    x86.mov rcx, 1
-    x86.mov [rbp-16], rcx
-    x86.xor rdx, rdx
-    x86.mov [rbp-24], rdx
-    x86.jmp main.loop_0.header
+    x64.prologue stack_size=32
+    x64.xor rax, rax
+    x64.mov [rbp-8], rax
+    x64.mov rcx, 1
+    x64.mov [rbp-16], rcx
+    x64.xor rdx, rdx
+    x64.mov [rbp-24], rdx
+    x64.jmp main.loop_0.header
   loop_0.header:
-    x86.mov rax, 13
-    x86.mov rcx, [rbp-24]
-    x86.cmp rcx, rax
-    x86.jge main.loop_0.exit
+    x64.mov rax, 13
+    x64.mov rcx, [rbp-24]
+    x64.cmp rcx, rax
+    x64.jge main.loop_0.exit
   loop_0:
-    x86.mov rax, [rbp-8]
-    x86.mov rcx, [rbp-16]
-    x86.add rax, rcx
-    x86.mov rdx, [rbp-16]
-    x86.mov [rbp-8], rdx
-    x86.mov [rbp-16], rax
-    x86.mov rbx, 1
-    x86.mov rsi, [rbp-24]
-    x86.add rsi, rbx
-    x86.mov [rbp-24], rsi
-    x86.jmp main.loop_0.header
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rbp-16]
+    x64.add rax, rcx
+    x64.mov rdx, [rbp-16]
+    x64.mov [rbp-8], rdx
+    x64.mov [rbp-16], rax
+    x64.mov rbx, 1
+    x64.mov rsi, [rbp-24]
+    x64.add rsi, rbx
+    x64.mov [rbp-24], rsi
+    x64.jmp main.loop_0.header
   loop_0.exit:
-    x86.mov rax, [rbp-8]
-    x86.xor rcx, rcx
-    x86.mov rdx, 4294967295
-    x86.cmp rax, rdx
-    x86.jg main.__range_panic_1
-    x86.cmp rax, rcx
-    x86.jl main.__range_panic_1
-    x86.jmp main.__range_ok_1
+    x64.mov rax, [rbp-8]
+    x64.xor rcx, rcx
+    x64.mov rdx, 4294967295
+    x64.cmp rax, rdx
+    x64.jg main.__range_panic_1
+    x64.cmp rax, rcx
+    x64.jl main.__range_panic_1
+    x64.jmp main.__range_ok_1
   __range_panic_1:
-    x86.lea_symdata rax, [__panic_msg_0]
-    x86.mov rcx, rax
-    x86.call mrt_panic
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
+    x64.call mrt_panic
   __range_ok_1:
-    x86.epilogue
-    x86.ret
+    x64.epilogue
+    x64.ret
   }
 }
 ```
-```RequiredMLIR:aarch64-macos
+```RequiredMLIR:arm64-macos
 === maxon
 module {
   func @main() -> i64 {
@@ -9532,7 +9532,7 @@ end 'main'
 ```exitcode
 52
 ```
-```RequiredMLIR:x86_64-windows
+```RequiredMLIR:x64-windows
 === maxon
 module {
   func @register-allocator.useRegs(a: i64, b: i64, c: i64, d: i64) -> i64 {
@@ -9614,41 +9614,41 @@ module {
 module {
   func @register-allocator.useRegs(a: i64, b: i64, c: i64, d: i64) -> i64 {
   entry:
-    x86.add rcx, rdx
-    x86.add r8, r9
-    x86.lea rax, [rcx + r8]
-    x86.ret
+    x64.add rcx, rdx
+    x64.add r8, r9
+    x64.lea rax, [rcx + r8]
+    x64.ret
   }
   func @main() -> u32 {
   entry:
-    x86.prologue stack_size=16
-    x86.mov rax, 42
-    x86.mov rcx, 1
-    x86.mov rdx, 2
-    x86.mov r8, 3
-    x86.mov r9, 4
-    x86.call register-allocator.useRegs
-    x86.mov rcx, 42
-    x86.add rcx, rax
-    x86.xor rdx, rdx
-    x86.mov rbx, 4294967295
-    x86.cmp rcx, rbx
-    x86.jg main.__range_panic_0
-    x86.cmp rcx, rdx
-    x86.jl main.__range_panic_0
-    x86.jmp main.__range_ok_0
+    x64.prologue stack_size=16
+    x64.mov rax, 42
+    x64.mov rcx, 1
+    x64.mov rdx, 2
+    x64.mov r8, 3
+    x64.mov r9, 4
+    x64.call register-allocator.useRegs
+    x64.mov rcx, 42
+    x64.add rcx, rax
+    x64.xor rdx, rdx
+    x64.mov rbx, 4294967295
+    x64.cmp rcx, rbx
+    x64.jg main.__range_panic_0
+    x64.cmp rcx, rdx
+    x64.jl main.__range_panic_0
+    x64.jmp main.__range_ok_0
   __range_panic_0:
-    x86.lea_symdata rax, [__panic_msg_0]
-    x86.mov rcx, rax
-    x86.call mrt_panic
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
+    x64.call mrt_panic
   __range_ok_0:
-    x86.mov rax, rcx
-    x86.epilogue
-    x86.ret
+    x64.mov rax, rcx
+    x64.epilogue
+    x64.ret
   }
 }
 ```
-```RequiredMLIR:aarch64-macos
+```RequiredMLIR:arm64-macos
 === maxon
 module {
   func @register-allocator.useRegs(a: i64, b: i64, c: i64, d: i64) -> i64 {
@@ -9788,7 +9788,7 @@ end 'main'
 ```exitcode
 43
 ```
-```RequiredMLIR:x86_64-windows
+```RequiredMLIR:x64-windows
 === maxon
 module {
   func @register-allocator.getInt() -> i64 {
@@ -9849,37 +9849,37 @@ module {
 module {
   func @register-allocator.getInt() -> i64 {
   entry:
-    x86.mov rax, 40
-    x86.ret
+    x64.mov rax, 40
+    x64.ret
   }
   func @main() -> u32 {
   entry:
-    x86.prologue stack_size=16
-    x86.movsd xmm0, [rip+__float_3.14]
-    x86.movsd [rbp-8], xmm0
-    x86.call register-allocator.getInt
-    x86.movsd xmm0, [rbp-8]
-    x86.cvttsd2si rcx, xmm0
-    x86.add rcx, rax
-    x86.xor rax, rax
-    x86.mov rdx, 4294967295
-    x86.cmp rcx, rdx
-    x86.jg main.__range_panic_0
-    x86.cmp rcx, rax
-    x86.jl main.__range_panic_0
-    x86.jmp main.__range_ok_0
+    x64.prologue stack_size=16
+    x64.movsd xmm0, [rip+__float_3.14]
+    x64.movsd [rbp-8], xmm0
+    x64.call register-allocator.getInt
+    x64.movsd xmm0, [rbp-8]
+    x64.cvttsd2si rcx, xmm0
+    x64.add rcx, rax
+    x64.xor rax, rax
+    x64.mov rdx, 4294967295
+    x64.cmp rcx, rdx
+    x64.jg main.__range_panic_0
+    x64.cmp rcx, rax
+    x64.jl main.__range_panic_0
+    x64.jmp main.__range_ok_0
   __range_panic_0:
-    x86.lea_symdata rax, [__panic_msg_0]
-    x86.mov rcx, rax
-    x86.call mrt_panic
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
+    x64.call mrt_panic
   __range_ok_0:
-    x86.mov rax, rcx
-    x86.epilogue
-    x86.ret
+    x64.mov rax, rcx
+    x64.epilogue
+    x64.ret
   }
 }
 ```
-```RequiredMLIR:aarch64-macos
+```RequiredMLIR:arm64-macos
 === maxon
 module {
   func @register-allocator.getInt() -> i64 {
@@ -10002,7 +10002,7 @@ end 'main'
 ```exitcode
 20
 ```
-```RequiredMLIR:x86_64-windows
+```RequiredMLIR:x64-windows
 === maxon
 module {
   func @main() -> i64 {
@@ -10056,33 +10056,33 @@ module {
 module {
   func @main() -> u32 {
   entry:
-    x86.prologue stack_size=16
-    x86.mov rax, 100
-    x86.mov rcx, 7
-    x86.mov rdx, 10
-    x86.cqo
-    x86.idiv rcx
-    x86.mov rbx, 10
-    x86.imul rdx, rbx
-    x86.xor rsi, rsi
-    x86.mov rdi, 4294967295
-    x86.cmp rdx, rdi
-    x86.jg main.__range_panic_0
-    x86.cmp rdx, rsi
-    x86.jl main.__range_panic_0
-    x86.jmp main.__range_ok_0
+    x64.prologue stack_size=16
+    x64.mov rax, 100
+    x64.mov rcx, 7
+    x64.mov rdx, 10
+    x64.cqo
+    x64.idiv rcx
+    x64.mov rbx, 10
+    x64.imul rdx, rbx
+    x64.xor rsi, rsi
+    x64.mov rdi, 4294967295
+    x64.cmp rdx, rdi
+    x64.jg main.__range_panic_0
+    x64.cmp rdx, rsi
+    x64.jl main.__range_panic_0
+    x64.jmp main.__range_ok_0
   __range_panic_0:
-    x86.lea_symdata rax, [__panic_msg_0]
-    x86.mov rcx, rax
-    x86.call mrt_panic
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
+    x64.call mrt_panic
   __range_ok_0:
-    x86.mov rax, rdx
-    x86.epilogue
-    x86.ret
+    x64.mov rax, rdx
+    x64.epilogue
+    x64.ret
   }
 }
 ```
-```RequiredMLIR:aarch64-macos
+```RequiredMLIR:arm64-macos
 === maxon
 module {
   func @main() -> i64 {
@@ -10185,7 +10185,7 @@ end 'main'
 ```exitcode
 38
 ```
-```RequiredMLIR:x86_64-windows
+```RequiredMLIR:x64-windows
 === maxon
 module {
   func @register-allocator.sub(a: i64, b: i64) -> i64 {
@@ -10253,36 +10253,36 @@ module {
 module {
   func @register-allocator.sub(a: i64, b: i64) -> i64 {
   entry:
-    x86.sub rcx, rdx
-    x86.mov rax, rcx
-    x86.ret
+    x64.sub rcx, rdx
+    x64.mov rax, rcx
+    x64.ret
   }
   func @main() -> u32 {
   entry:
-    x86.prologue stack_size=16
-    x86.mov rcx, 3
-    x86.mov rdx, 10
-    x86.call register-allocator.sub
-    x86.mov rcx, 45
-    x86.add rax, rcx
-    x86.xor rcx, rcx
-    x86.mov rdx, 4294967295
-    x86.cmp rax, rdx
-    x86.jg main.__range_panic_0
-    x86.cmp rax, rcx
-    x86.jl main.__range_panic_0
-    x86.jmp main.__range_ok_0
+    x64.prologue stack_size=16
+    x64.mov rcx, 3
+    x64.mov rdx, 10
+    x64.call register-allocator.sub
+    x64.mov rcx, 45
+    x64.add rax, rcx
+    x64.xor rcx, rcx
+    x64.mov rdx, 4294967295
+    x64.cmp rax, rdx
+    x64.jg main.__range_panic_0
+    x64.cmp rax, rcx
+    x64.jl main.__range_panic_0
+    x64.jmp main.__range_ok_0
   __range_panic_0:
-    x86.lea_symdata rax, [__panic_msg_0]
-    x86.mov rcx, rax
-    x86.call mrt_panic
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
+    x64.call mrt_panic
   __range_ok_0:
-    x86.epilogue
-    x86.ret
+    x64.epilogue
+    x64.ret
   }
 }
 ```
-```RequiredMLIR:aarch64-macos
+```RequiredMLIR:arm64-macos
 === maxon
 module {
   func @register-allocator.sub(a: i64, b: i64) -> i64 {
@@ -10402,7 +10402,7 @@ end 'main'
 ```exitcode
 72
 ```
-```RequiredMLIR:x86_64-windows
+```RequiredMLIR:x64-windows
 === maxon
 module {
   func @main() -> i64 {
@@ -10480,40 +10480,40 @@ module {
 module {
   func @main() -> u32 {
   entry:
-    x86.prologue stack_size=16
-    x86.mov rax, 100
-    x86.mov rcx, 1
-    x86.mov rdx, 2
-    x86.mov rbx, 3
-    x86.mov rsi, 4
-    x86.mov rdi, 5
-    x86.mov r8, 6
-    x86.mov r9, 7
-    x86.sub rax, rcx
-    x86.sub rax, rdx
-    x86.sub rax, rbx
-    x86.sub rax, rsi
-    x86.sub rax, rdi
-    x86.sub rax, r8
-    x86.sub rax, r9
-    x86.xor rcx, rcx
-    x86.mov rdx, 4294967295
-    x86.cmp rax, rdx
-    x86.jg main.__range_panic_0
-    x86.cmp rax, rcx
-    x86.jl main.__range_panic_0
-    x86.jmp main.__range_ok_0
+    x64.prologue stack_size=16
+    x64.mov rax, 100
+    x64.mov rcx, 1
+    x64.mov rdx, 2
+    x64.mov rbx, 3
+    x64.mov rsi, 4
+    x64.mov rdi, 5
+    x64.mov r8, 6
+    x64.mov r9, 7
+    x64.sub rax, rcx
+    x64.sub rax, rdx
+    x64.sub rax, rbx
+    x64.sub rax, rsi
+    x64.sub rax, rdi
+    x64.sub rax, r8
+    x64.sub rax, r9
+    x64.xor rcx, rcx
+    x64.mov rdx, 4294967295
+    x64.cmp rax, rdx
+    x64.jg main.__range_panic_0
+    x64.cmp rax, rcx
+    x64.jl main.__range_panic_0
+    x64.jmp main.__range_ok_0
   __range_panic_0:
-    x86.lea_symdata rax, [__panic_msg_0]
-    x86.mov rcx, rax
-    x86.call mrt_panic
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
+    x64.call mrt_panic
   __range_ok_0:
-    x86.epilogue
-    x86.ret
+    x64.epilogue
+    x64.ret
   }
 }
 ```
-```RequiredMLIR:aarch64-macos
+```RequiredMLIR:arm64-macos
 === maxon
 module {
   func @main() -> i64 {
@@ -10651,7 +10651,7 @@ end 'main'
 ```exitcode
 42
 ```
-```RequiredMLIR:x86_64-windows
+```RequiredMLIR:x64-windows
 === maxon
 module {
   func @main() -> i64 {
@@ -10751,51 +10751,51 @@ module {
 module {
   func @main() -> u32 {
   entry:
-    x86.prologue stack_size=32
-    x86.mov rax, 1
-    x86.mov rcx, 2
-    x86.cmp rax, rcx
-    x86.jge main.other_1
+    x64.prologue stack_size=32
+    x64.mov rax, 1
+    x64.mov rcx, 2
+    x64.cmp rax, rcx
+    x64.jge main.other_1
   branch_0:
-    x86.mov rax, 10
-    x86.mov [rbp-8], rax
-    x86.mov rcx, 20
-    x86.mov [rbp-16], rcx
-    x86.mov rdx, 12
-    x86.mov [rbp-24], rdx
-    x86.jmp main.branch_0.merge
+    x64.mov rax, 10
+    x64.mov [rbp-8], rax
+    x64.mov rcx, 20
+    x64.mov [rbp-16], rcx
+    x64.mov rdx, 12
+    x64.mov [rbp-24], rdx
+    x64.jmp main.branch_0.merge
   other_1:
-    x86.mov rax, 1
-    x86.mov [rbp-8], rax
-    x86.mov rcx, 2
-    x86.mov [rbp-16], rcx
-    x86.mov rdx, 3
-    x86.mov [rbp-24], rdx
-    x86.jmp main.branch_0.merge
+    x64.mov rax, 1
+    x64.mov [rbp-8], rax
+    x64.mov rcx, 2
+    x64.mov [rbp-16], rcx
+    x64.mov rdx, 3
+    x64.mov [rbp-24], rdx
+    x64.jmp main.branch_0.merge
   branch_0.merge:
-    x86.mov rax, [rbp-8]
-    x86.mov rcx, [rbp-16]
-    x86.add rax, rcx
-    x86.mov rdx, [rbp-24]
-    x86.add rax, rdx
-    x86.xor rbx, rbx
-    x86.mov rsi, 4294967295
-    x86.cmp rax, rsi
-    x86.jg main.__range_panic_2
-    x86.cmp rax, rbx
-    x86.jl main.__range_panic_2
-    x86.jmp main.__range_ok_2
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rbp-16]
+    x64.add rax, rcx
+    x64.mov rdx, [rbp-24]
+    x64.add rax, rdx
+    x64.xor rbx, rbx
+    x64.mov rsi, 4294967295
+    x64.cmp rax, rsi
+    x64.jg main.__range_panic_2
+    x64.cmp rax, rbx
+    x64.jl main.__range_panic_2
+    x64.jmp main.__range_ok_2
   __range_panic_2:
-    x86.lea_symdata rax, [__panic_msg_0]
-    x86.mov rcx, rax
-    x86.call mrt_panic
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
+    x64.call mrt_panic
   __range_ok_2:
-    x86.epilogue
-    x86.ret
+    x64.epilogue
+    x64.ret
   }
 }
 ```
-```RequiredMLIR:aarch64-macos
+```RequiredMLIR:arm64-macos
 === maxon
 module {
   func @main() -> i64 {
@@ -10964,7 +10964,7 @@ end 'main'
 ```exitcode
 20
 ```
-```RequiredMLIR:x86_64-windows
+```RequiredMLIR:x64-windows
 === maxon
 module {
   func @main() -> i64 {
@@ -11031,37 +11031,37 @@ module {
 module {
   func @main() -> u32 {
   entry:
-    x86.prologue stack_size=16
-    x86.mov rax, 2
-    x86.mov [rbp-8], rax
-    x86.jmp main.check_0.cmp0
+    x64.prologue stack_size=16
+    x64.mov rax, 2
+    x64.mov [rbp-8], rax
+    x64.jmp main.check_0.cmp0
   check_0.cmp0:
-    x86.mov rax, [rbp-8]
-    x86.mov rcx, 1
-    x86.cmp rax, rcx
-    x86.jne main.check_0.cmp1
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, 1
+    x64.cmp rax, rcx
+    x64.jne main.check_0.cmp1
   check_0.case0:
-    x86.mov rax, 10
-    x86.epilogue
-    x86.ret
+    x64.mov rax, 10
+    x64.epilogue
+    x64.ret
   check_0.cmp1:
-    x86.mov rax, [rbp-8]
-    x86.mov rcx, 2
-    x86.cmp rax, rcx
-    x86.jne main.check_0.case2
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, 2
+    x64.cmp rax, rcx
+    x64.jne main.check_0.case2
   check_0.case1:
-    x86.mov rax, 20
-    x86.epilogue
-    x86.ret
+    x64.mov rax, 20
+    x64.epilogue
+    x64.ret
   check_0.case2:
-    x86.xor rax, rax
-    x86.epilogue
-    x86.ret
+    x64.xor rax, rax
+    x64.epilogue
+    x64.ret
   check_0.merge:
   }
 }
 ```
-```RequiredMLIR:aarch64-macos
+```RequiredMLIR:arm64-macos
 === maxon
 module {
   func @main() -> i64 {
@@ -11181,7 +11181,7 @@ end 'main'
 ```exitcode
 200
 ```
-```RequiredMLIR:x86_64-windows
+```RequiredMLIR:x64-windows
 === maxon
 module {
   func @main() -> i64 {
@@ -11281,52 +11281,52 @@ module {
 module {
   func @main() -> u32 {
   entry:
-    x86.prologue stack_size=16
-    x86.mov rax, 2
-    x86.mov [rbp-8], rax
-    x86.jmp main.process_0.cmp0
+    x64.prologue stack_size=16
+    x64.mov rax, 2
+    x64.mov [rbp-8], rax
+    x64.jmp main.process_0.cmp0
   process_0.cmp0:
-    x86.mov rax, [rbp-8]
-    x86.mov rcx, 1
-    x86.cmp rax, rcx
-    x86.jne main.process_0.cmp1
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, 1
+    x64.cmp rax, rcx
+    x64.jne main.process_0.cmp1
   process_0.case0:
-    x86.mov rax, 100
-    x86.mov [rbp-16], rax
-    x86.jmp main.process_0.merge
+    x64.mov rax, 100
+    x64.mov [rbp-16], rax
+    x64.jmp main.process_0.merge
   process_0.cmp1:
-    x86.mov rax, [rbp-8]
-    x86.mov rcx, 2
-    x86.cmp rax, rcx
-    x86.jne main.process_0.case2
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, 2
+    x64.cmp rax, rcx
+    x64.jne main.process_0.case2
   process_0.case1:
-    x86.mov rax, 200
-    x86.mov [rbp-16], rax
-    x86.jmp main.process_0.merge
+    x64.mov rax, 200
+    x64.mov [rbp-16], rax
+    x64.jmp main.process_0.merge
   process_0.case2:
-    x86.xor rax, rax
-    x86.mov [rbp-16], rax
-    x86.jmp main.process_0.merge
+    x64.xor rax, rax
+    x64.mov [rbp-16], rax
+    x64.jmp main.process_0.merge
   process_0.merge:
-    x86.mov rax, [rbp-16]
-    x86.xor rcx, rcx
-    x86.mov rdx, 4294967295
-    x86.cmp rax, rdx
-    x86.jg main.__range_panic_1
-    x86.cmp rax, rcx
-    x86.jl main.__range_panic_1
-    x86.jmp main.__range_ok_1
+    x64.mov rax, [rbp-16]
+    x64.xor rcx, rcx
+    x64.mov rdx, 4294967295
+    x64.cmp rax, rdx
+    x64.jg main.__range_panic_1
+    x64.cmp rax, rcx
+    x64.jl main.__range_panic_1
+    x64.jmp main.__range_ok_1
   __range_panic_1:
-    x86.lea_symdata rax, [__panic_msg_0]
-    x86.mov rcx, rax
-    x86.call mrt_panic
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
+    x64.call mrt_panic
   __range_ok_1:
-    x86.epilogue
-    x86.ret
+    x64.epilogue
+    x64.ret
   }
 }
 ```
-```RequiredMLIR:aarch64-macos
+```RequiredMLIR:arm64-macos
 === maxon
 module {
   func @main() -> i64 {
@@ -11496,7 +11496,7 @@ end 'main'
 ```exitcode
 20
 ```
-```RequiredMLIR:x86_64-windows
+```RequiredMLIR:x64-windows
 === maxon
 module {
   func @main() -> i64 {
@@ -11579,47 +11579,47 @@ module {
 module {
   func @main() -> u32 {
   entry:
-    x86.prologue stack_size=16
-    x86.mov rax, 3
-    x86.mov [rbp-8], rax
-    x86.jmp main.check_0.cmp0
+    x64.prologue stack_size=16
+    x64.mov rax, 3
+    x64.mov [rbp-8], rax
+    x64.jmp main.check_0.cmp0
   check_0.cmp0:
-    x86.mov rax, [rbp-8]
-    x86.mov rcx, 1
-    x86.mov rdx, [rbp-8]
-    x86.mov rbx, 2
-    x86.cmp rdx, rbx
-    x86.je main.check_0.case0
-    x86.cmp rax, rcx
-    x86.je main.check_0.case0
-    x86.jmp main.check_0.cmp1
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, 1
+    x64.mov rdx, [rbp-8]
+    x64.mov rbx, 2
+    x64.cmp rdx, rbx
+    x64.je main.check_0.case0
+    x64.cmp rax, rcx
+    x64.je main.check_0.case0
+    x64.jmp main.check_0.cmp1
   check_0.case0:
-    x86.mov rax, 10
-    x86.epilogue
-    x86.ret
+    x64.mov rax, 10
+    x64.epilogue
+    x64.ret
   check_0.cmp1:
-    x86.mov rax, [rbp-8]
-    x86.mov rcx, 3
-    x86.mov rdx, [rbp-8]
-    x86.mov rbx, 4
-    x86.cmp rdx, rbx
-    x86.je main.check_0.case1
-    x86.cmp rax, rcx
-    x86.je main.check_0.case1
-    x86.jmp main.check_0.case2
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, 3
+    x64.mov rdx, [rbp-8]
+    x64.mov rbx, 4
+    x64.cmp rdx, rbx
+    x64.je main.check_0.case1
+    x64.cmp rax, rcx
+    x64.je main.check_0.case1
+    x64.jmp main.check_0.case2
   check_0.case1:
-    x86.mov rax, 20
-    x86.epilogue
-    x86.ret
+    x64.mov rax, 20
+    x64.epilogue
+    x64.ret
   check_0.case2:
-    x86.xor rax, rax
-    x86.epilogue
-    x86.ret
+    x64.xor rax, rax
+    x64.epilogue
+    x64.ret
   check_0.merge:
   }
 }
 ```
-```RequiredMLIR:aarch64-macos
+```RequiredMLIR:arm64-macos
 === maxon
 module {
   func @main() -> i64 {
@@ -11766,7 +11766,7 @@ end 'main'
 ```exitcode
 60
 ```
-```RequiredMLIR:x86_64-windows
+```RequiredMLIR:x64-windows
 === maxon
 module {
   func @main() -> i64 {
@@ -11899,69 +11899,69 @@ module {
 module {
   func @main() -> u32 {
   entry:
-    x86.prologue stack_size=16
-    x86.mov rax, 1
-    x86.xor rcx, rcx
-    x86.mov [rbp-8], rcx
-    x86.mov [rbp-16], rax
-    x86.jmp main.cascade_0.cmp0
+    x64.prologue stack_size=16
+    x64.mov rax, 1
+    x64.xor rcx, rcx
+    x64.mov [rbp-8], rcx
+    x64.mov [rbp-16], rax
+    x64.jmp main.cascade_0.cmp0
   cascade_0.cmp0:
-    x86.mov rax, [rbp-16]
-    x86.mov rcx, 1
-    x86.cmp rax, rcx
-    x86.jne main.cascade_0.cmp1
+    x64.mov rax, [rbp-16]
+    x64.mov rcx, 1
+    x64.cmp rax, rcx
+    x64.jne main.cascade_0.cmp1
   cascade_0.case0:
-    x86.mov rax, 10
-    x86.mov rcx, [rbp-8]
-    x86.add rcx, rax
-    x86.mov [rbp-8], rcx
-    x86.jmp main.cascade_0.case1
+    x64.mov rax, 10
+    x64.mov rcx, [rbp-8]
+    x64.add rcx, rax
+    x64.mov [rbp-8], rcx
+    x64.jmp main.cascade_0.case1
   cascade_0.cmp1:
-    x86.mov rax, [rbp-16]
-    x86.mov rcx, 2
-    x86.cmp rax, rcx
-    x86.jne main.cascade_0.cmp2
+    x64.mov rax, [rbp-16]
+    x64.mov rcx, 2
+    x64.cmp rax, rcx
+    x64.jne main.cascade_0.cmp2
   cascade_0.case1:
-    x86.mov rax, 20
-    x86.mov rcx, [rbp-8]
-    x86.add rcx, rax
-    x86.mov [rbp-8], rcx
-    x86.jmp main.cascade_0.case2
+    x64.mov rax, 20
+    x64.mov rcx, [rbp-8]
+    x64.add rcx, rax
+    x64.mov [rbp-8], rcx
+    x64.jmp main.cascade_0.case2
   cascade_0.cmp2:
-    x86.mov rax, [rbp-16]
-    x86.mov rcx, 3
-    x86.cmp rax, rcx
-    x86.jne main.cascade_0.case3
+    x64.mov rax, [rbp-16]
+    x64.mov rcx, 3
+    x64.cmp rax, rcx
+    x64.jne main.cascade_0.case3
   cascade_0.case2:
-    x86.mov rax, 30
-    x86.mov rcx, [rbp-8]
-    x86.add rcx, rax
-    x86.mov [rbp-8], rcx
-    x86.jmp main.cascade_0.merge
+    x64.mov rax, 30
+    x64.mov rcx, [rbp-8]
+    x64.add rcx, rax
+    x64.mov [rbp-8], rcx
+    x64.jmp main.cascade_0.merge
   cascade_0.case3:
-    x86.mov rax, 100
-    x86.mov [rbp-8], rax
-    x86.jmp main.cascade_0.merge
+    x64.mov rax, 100
+    x64.mov [rbp-8], rax
+    x64.jmp main.cascade_0.merge
   cascade_0.merge:
-    x86.mov rax, [rbp-8]
-    x86.xor rcx, rcx
-    x86.mov rdx, 4294967295
-    x86.cmp rax, rdx
-    x86.jg main.__range_panic_1
-    x86.cmp rax, rcx
-    x86.jl main.__range_panic_1
-    x86.jmp main.__range_ok_1
+    x64.mov rax, [rbp-8]
+    x64.xor rcx, rcx
+    x64.mov rdx, 4294967295
+    x64.cmp rax, rdx
+    x64.jg main.__range_panic_1
+    x64.cmp rax, rcx
+    x64.jl main.__range_panic_1
+    x64.jmp main.__range_ok_1
   __range_panic_1:
-    x86.lea_symdata rax, [__panic_msg_0]
-    x86.mov rcx, rax
-    x86.call mrt_panic
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
+    x64.call mrt_panic
   __range_ok_1:
-    x86.epilogue
-    x86.ret
+    x64.epilogue
+    x64.ret
   }
 }
 ```
-```RequiredMLIR:aarch64-macos
+```RequiredMLIR:arm64-macos
 === maxon
 module {
   func @main() -> i64 {
@@ -12185,7 +12185,7 @@ end 'main'
 ```exitcode
 20
 ```
-```RequiredMLIR:x86_64-windows
+```RequiredMLIR:x64-windows
 === maxon
 module {
   func @main() -> i64 {
@@ -12283,52 +12283,52 @@ module {
 module {
   func @main() -> u32 {
   entry:
-    x86.prologue stack_size=16
-    x86.mov rax, 2
-    x86.mov [rbp-8], rax
-    x86.jmp main.eval_0.cmp0
+    x64.prologue stack_size=16
+    x64.mov rax, 2
+    x64.mov [rbp-8], rax
+    x64.jmp main.eval_0.cmp0
   eval_0.cmp0:
-    x86.mov rax, [rbp-8]
-    x86.mov rcx, 1
-    x86.cmp rax, rcx
-    x86.jne main.eval_0.cmp1
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, 1
+    x64.cmp rax, rcx
+    x64.jne main.eval_0.cmp1
   eval_0.case0:
-    x86.mov rax, 10
-    x86.mov [rbp-16], rax
-    x86.jmp main.eval_0.merge
+    x64.mov rax, 10
+    x64.mov [rbp-16], rax
+    x64.jmp main.eval_0.merge
   eval_0.cmp1:
-    x86.mov rax, [rbp-8]
-    x86.mov rcx, 2
-    x86.cmp rax, rcx
-    x86.jne main.eval_0.case2
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, 2
+    x64.cmp rax, rcx
+    x64.jne main.eval_0.case2
   eval_0.case1:
-    x86.mov rax, 20
-    x86.mov [rbp-16], rax
-    x86.jmp main.eval_0.merge
+    x64.mov rax, 20
+    x64.mov [rbp-16], rax
+    x64.jmp main.eval_0.merge
   eval_0.case2:
-    x86.xor rax, rax
-    x86.mov [rbp-16], rax
-    x86.jmp main.eval_0.merge
+    x64.xor rax, rax
+    x64.mov [rbp-16], rax
+    x64.jmp main.eval_0.merge
   eval_0.merge:
-    x86.mov rax, [rbp-16]
-    x86.xor rcx, rcx
-    x86.mov rdx, 4294967295
-    x86.cmp rax, rdx
-    x86.jg main.__range_panic_1
-    x86.cmp rax, rcx
-    x86.jl main.__range_panic_1
-    x86.jmp main.__range_ok_1
+    x64.mov rax, [rbp-16]
+    x64.xor rcx, rcx
+    x64.mov rdx, 4294967295
+    x64.cmp rax, rdx
+    x64.jg main.__range_panic_1
+    x64.cmp rax, rcx
+    x64.jl main.__range_panic_1
+    x64.jmp main.__range_ok_1
   __range_panic_1:
-    x86.lea_symdata rax, [__panic_msg_0]
-    x86.mov rcx, rax
-    x86.call mrt_panic
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
+    x64.call mrt_panic
   __range_ok_1:
-    x86.epilogue
-    x86.ret
+    x64.epilogue
+    x64.ret
   }
 }
 ```
-```RequiredMLIR:aarch64-macos
+```RequiredMLIR:arm64-macos
 === maxon
 module {
   func @main() -> i64 {
@@ -12497,7 +12497,7 @@ end 'main'
 ```exitcode
 20
 ```
-```RequiredMLIR:x86_64-windows
+```RequiredMLIR:x64-windows
 === maxon
 module {
   func @main() -> i64 {
@@ -12611,62 +12611,62 @@ module {
 module {
   func @main() -> u32 {
   entry:
-    x86.prologue stack_size=16
-    x86.mov rax, 4
-    x86.mov [rbp-8], rax
-    x86.jmp main.eval_0.cmp0
+    x64.prologue stack_size=16
+    x64.mov rax, 4
+    x64.mov [rbp-8], rax
+    x64.jmp main.eval_0.cmp0
   eval_0.cmp0:
-    x86.mov rax, [rbp-8]
-    x86.mov rcx, 1
-    x86.mov rdx, [rbp-8]
-    x86.mov rbx, 2
-    x86.cmp rdx, rbx
-    x86.je main.eval_0.case0
-    x86.cmp rax, rcx
-    x86.je main.eval_0.case0
-    x86.jmp main.eval_0.cmp1
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, 1
+    x64.mov rdx, [rbp-8]
+    x64.mov rbx, 2
+    x64.cmp rdx, rbx
+    x64.je main.eval_0.case0
+    x64.cmp rax, rcx
+    x64.je main.eval_0.case0
+    x64.jmp main.eval_0.cmp1
   eval_0.case0:
-    x86.mov rax, 10
-    x86.mov [rbp-16], rax
-    x86.jmp main.eval_0.merge
+    x64.mov rax, 10
+    x64.mov [rbp-16], rax
+    x64.jmp main.eval_0.merge
   eval_0.cmp1:
-    x86.mov rax, [rbp-8]
-    x86.mov rcx, 3
-    x86.mov rdx, [rbp-8]
-    x86.mov rbx, 4
-    x86.cmp rdx, rbx
-    x86.je main.eval_0.case1
-    x86.cmp rax, rcx
-    x86.je main.eval_0.case1
-    x86.jmp main.eval_0.case2
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, 3
+    x64.mov rdx, [rbp-8]
+    x64.mov rbx, 4
+    x64.cmp rdx, rbx
+    x64.je main.eval_0.case1
+    x64.cmp rax, rcx
+    x64.je main.eval_0.case1
+    x64.jmp main.eval_0.case2
   eval_0.case1:
-    x86.mov rax, 20
-    x86.mov [rbp-16], rax
-    x86.jmp main.eval_0.merge
+    x64.mov rax, 20
+    x64.mov [rbp-16], rax
+    x64.jmp main.eval_0.merge
   eval_0.case2:
-    x86.xor rax, rax
-    x86.mov [rbp-16], rax
-    x86.jmp main.eval_0.merge
+    x64.xor rax, rax
+    x64.mov [rbp-16], rax
+    x64.jmp main.eval_0.merge
   eval_0.merge:
-    x86.mov rax, [rbp-16]
-    x86.xor rcx, rcx
-    x86.mov rdx, 4294967295
-    x86.cmp rax, rdx
-    x86.jg main.__range_panic_1
-    x86.cmp rax, rcx
-    x86.jl main.__range_panic_1
-    x86.jmp main.__range_ok_1
+    x64.mov rax, [rbp-16]
+    x64.xor rcx, rcx
+    x64.mov rdx, 4294967295
+    x64.cmp rax, rdx
+    x64.jg main.__range_panic_1
+    x64.cmp rax, rcx
+    x64.jl main.__range_panic_1
+    x64.jmp main.__range_ok_1
   __range_panic_1:
-    x86.lea_symdata rax, [__panic_msg_0]
-    x86.mov rcx, rax
-    x86.call mrt_panic
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
+    x64.call mrt_panic
   __range_ok_1:
-    x86.epilogue
-    x86.ret
+    x64.epilogue
+    x64.ret
   }
 }
 ```
-```RequiredMLIR:aarch64-macos
+```RequiredMLIR:arm64-macos
 === maxon
 module {
   func @main() -> i64 {
@@ -12861,7 +12861,7 @@ end 'main'
 ```exitcode
 40
 ```
-```RequiredMLIR:x86_64-windows
+```RequiredMLIR:x64-windows
 === maxon
 module {
   func @main() -> i64 {
@@ -12963,54 +12963,54 @@ module {
 module {
   func @main() -> u32 {
   entry:
-    x86.prologue stack_size=16
-    x86.mov rax, 2
-    x86.mov [rbp-8], rax
-    x86.jmp main.eval_0.cmp0
+    x64.prologue stack_size=16
+    x64.mov rax, 2
+    x64.mov [rbp-8], rax
+    x64.jmp main.eval_0.cmp0
   eval_0.cmp0:
-    x86.mov rax, [rbp-8]
-    x86.mov rcx, 1
-    x86.cmp rax, rcx
-    x86.jne main.eval_0.cmp1
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, 1
+    x64.cmp rax, rcx
+    x64.jne main.eval_0.cmp1
   eval_0.case0:
-    x86.mov rax, 10
-    x86.mov [rbp-16], rax
-    x86.jmp main.eval_0.merge
+    x64.mov rax, 10
+    x64.mov [rbp-16], rax
+    x64.jmp main.eval_0.merge
   eval_0.cmp1:
-    x86.mov rax, [rbp-8]
-    x86.mov rcx, 2
-    x86.cmp rax, rcx
-    x86.jne main.eval_0.case2
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, 2
+    x64.cmp rax, rcx
+    x64.jne main.eval_0.case2
   eval_0.case1:
-    x86.mov rax, 20
-    x86.mov [rbp-16], rax
-    x86.jmp main.eval_0.merge
+    x64.mov rax, 20
+    x64.mov [rbp-16], rax
+    x64.jmp main.eval_0.merge
   eval_0.case2:
-    x86.xor rax, rax
-    x86.mov [rbp-16], rax
-    x86.jmp main.eval_0.merge
+    x64.xor rax, rax
+    x64.mov [rbp-16], rax
+    x64.jmp main.eval_0.merge
   eval_0.merge:
-    x86.mov rax, [rbp-16]
-    x86.mov rcx, 2
-    x86.imul rax, rcx
-    x86.xor rdx, rdx
-    x86.mov rbx, 4294967295
-    x86.cmp rax, rbx
-    x86.jg main.__range_panic_1
-    x86.cmp rax, rdx
-    x86.jl main.__range_panic_1
-    x86.jmp main.__range_ok_1
+    x64.mov rax, [rbp-16]
+    x64.mov rcx, 2
+    x64.imul rax, rcx
+    x64.xor rdx, rdx
+    x64.mov rbx, 4294967295
+    x64.cmp rax, rbx
+    x64.jg main.__range_panic_1
+    x64.cmp rax, rdx
+    x64.jl main.__range_panic_1
+    x64.jmp main.__range_ok_1
   __range_panic_1:
-    x86.lea_symdata rax, [__panic_msg_0]
-    x86.mov rcx, rax
-    x86.call mrt_panic
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
+    x64.call mrt_panic
   __range_ok_1:
-    x86.epilogue
-    x86.ret
+    x64.epilogue
+    x64.ret
   }
 }
 ```
-```RequiredMLIR:aarch64-macos
+```RequiredMLIR:arm64-macos
 === maxon
 module {
   func @main() -> i64 {
@@ -13194,7 +13194,7 @@ end 'main'
 ```exitcode
 40
 ```
-```RequiredMLIR:x86_64-windows
+```RequiredMLIR:x64-windows
 === maxon
 module {
   func @register-allocator.double(n: i64) -> i64 {
@@ -13313,61 +13313,61 @@ module {
 module {
   func @register-allocator.double(n: i64) -> i64 {
   entry:
-    x86.mov rax, 2
-    x86.imul rcx, rax
-    x86.mov rax, rcx
-    x86.ret
+    x64.mov rax, 2
+    x64.imul rcx, rax
+    x64.mov rax, rcx
+    x64.ret
   }
   func @main() -> u32 {
   entry:
-    x86.prologue stack_size=16
-    x86.mov rax, 2
-    x86.mov [rbp-8], rax
-    x86.jmp main.process_0.cmp0
+    x64.prologue stack_size=16
+    x64.mov rax, 2
+    x64.mov [rbp-8], rax
+    x64.jmp main.process_0.cmp0
   process_0.cmp0:
-    x86.mov rax, [rbp-8]
-    x86.mov rcx, 1
-    x86.cmp rax, rcx
-    x86.jne main.process_0.cmp1
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, 1
+    x64.cmp rax, rcx
+    x64.jne main.process_0.cmp1
   process_0.case0:
-    x86.mov rcx, 10
-    x86.call register-allocator.double
-    x86.mov [rbp-16], rax
-    x86.jmp main.process_0.merge
+    x64.mov rcx, 10
+    x64.call register-allocator.double
+    x64.mov [rbp-16], rax
+    x64.jmp main.process_0.merge
   process_0.cmp1:
-    x86.mov rax, [rbp-8]
-    x86.mov rcx, 2
-    x86.cmp rax, rcx
-    x86.jne main.process_0.case2
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, 2
+    x64.cmp rax, rcx
+    x64.jne main.process_0.case2
   process_0.case1:
-    x86.mov rcx, 20
-    x86.call register-allocator.double
-    x86.mov [rbp-16], rax
-    x86.jmp main.process_0.merge
+    x64.mov rcx, 20
+    x64.call register-allocator.double
+    x64.mov [rbp-16], rax
+    x64.jmp main.process_0.merge
   process_0.case2:
-    x86.xor rax, rax
-    x86.mov [rbp-16], rax
-    x86.jmp main.process_0.merge
+    x64.xor rax, rax
+    x64.mov [rbp-16], rax
+    x64.jmp main.process_0.merge
   process_0.merge:
-    x86.mov rax, [rbp-16]
-    x86.xor rcx, rcx
-    x86.mov rdx, 4294967295
-    x86.cmp rax, rdx
-    x86.jg main.__range_panic_1
-    x86.cmp rax, rcx
-    x86.jl main.__range_panic_1
-    x86.jmp main.__range_ok_1
+    x64.mov rax, [rbp-16]
+    x64.xor rcx, rcx
+    x64.mov rdx, 4294967295
+    x64.cmp rax, rdx
+    x64.jg main.__range_panic_1
+    x64.cmp rax, rcx
+    x64.jl main.__range_panic_1
+    x64.jmp main.__range_ok_1
   __range_panic_1:
-    x86.lea_symdata rax, [__panic_msg_0]
-    x86.mov rcx, rax
-    x86.call mrt_panic
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
+    x64.call mrt_panic
   __range_ok_1:
-    x86.epilogue
-    x86.ret
+    x64.epilogue
+    x64.ret
   }
 }
 ```
-```RequiredMLIR:aarch64-macos
+```RequiredMLIR:arm64-macos
 === maxon
 module {
   func @register-allocator.double(n: i64) -> i64 {
@@ -13574,7 +13574,7 @@ end 'main'
 ```exitcode
 42
 ```
-```RequiredMLIR:x86_64-windows
+```RequiredMLIR:x64-windows
 === maxon
 module {
   func @register-allocator.mayFail() -> i64 {
@@ -13611,25 +13611,25 @@ module {
 module {
   func @register-allocator.mayFail() -> i64 {
   entry:
-    x86.xor rax, rax
-    x86.mov rcx, 1
-    x86.add rax, rcx
-    x86.mov rdx, rax
-    x86.xor rax, rax
-    x86.ret
+    x64.xor rax, rax
+    x64.mov rcx, 1
+    x64.add rax, rcx
+    x64.mov rdx, rax
+    x64.xor rax, rax
+    x64.ret
   }
   func @main() -> u32 {
   entry:
-    x86.prologue stack_size=16
-    x86.call register-allocator.mayFail
-    x86.mov rcx, 42
-    x86.mov rax, rcx
-    x86.epilogue
-    x86.ret
+    x64.prologue stack_size=16
+    x64.call register-allocator.mayFail
+    x64.mov rcx, 42
+    x64.mov rax, rcx
+    x64.epilogue
+    x64.ret
   }
 }
 ```
-```RequiredMLIR:aarch64-macos
+```RequiredMLIR:arm64-macos
 === maxon
 module {
   func @register-allocator.mayFail() -> i64 {
@@ -13710,7 +13710,7 @@ end 'main'
 ```exitcode
 42
 ```
-```RequiredMLIR:x86_64-windows
+```RequiredMLIR:x64-windows
 === maxon
 module {
   func @register-allocator.mayFail() -> i64 {
@@ -13790,46 +13790,46 @@ module {
 module {
   func @register-allocator.mayFail() -> i64 {
   entry:
-    x86.xor rax, rax
-    x86.mov rcx, 1
-    x86.add rax, rcx
-    x86.mov rdx, rax
-    x86.xor rax, rax
-    x86.ret
+    x64.xor rax, rax
+    x64.mov rcx, 1
+    x64.add rax, rcx
+    x64.mov rdx, rax
+    x64.xor rax, rax
+    x64.ret
   }
   func @main() -> u32 {
   entry:
-    x86.prologue stack_size=16
-    x86.xor rax, rax
-    x86.mov [rbp-8], rax
-    x86.call register-allocator.mayFail
-    x86.xor rcx, rcx
-    x86.cmp rdx, rcx
-    x86.je main.otherwise_continue_1
+    x64.prologue stack_size=16
+    x64.xor rax, rax
+    x64.mov [rbp-8], rax
+    x64.call register-allocator.mayFail
+    x64.xor rcx, rcx
+    x64.cmp rdx, rcx
+    x64.je main.otherwise_continue_1
   otherwise_error_0:
-    x86.mov rax, 42
-    x86.mov [rbp-8], rax
-    x86.jmp main.otherwise_continue_1
+    x64.mov rax, 42
+    x64.mov [rbp-8], rax
+    x64.jmp main.otherwise_continue_1
   otherwise_continue_1:
-    x86.mov rax, [rbp-8]
-    x86.xor rcx, rcx
-    x86.mov rdx, 4294967295
-    x86.cmp rax, rdx
-    x86.jg main.__range_panic_4
-    x86.cmp rax, rcx
-    x86.jl main.__range_panic_4
-    x86.jmp main.__range_ok_4
+    x64.mov rax, [rbp-8]
+    x64.xor rcx, rcx
+    x64.mov rdx, 4294967295
+    x64.cmp rax, rdx
+    x64.jg main.__range_panic_4
+    x64.cmp rax, rcx
+    x64.jl main.__range_panic_4
+    x64.jmp main.__range_ok_4
   __range_panic_4:
-    x86.lea_symdata rax, [__panic_msg_0]
-    x86.mov rcx, rax
-    x86.call mrt_panic
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
+    x64.call mrt_panic
   __range_ok_4:
-    x86.epilogue
-    x86.ret
+    x64.epilogue
+    x64.ret
   }
 }
 ```
-```RequiredMLIR:aarch64-macos
+```RequiredMLIR:arm64-macos
 === maxon
 module {
   func @register-allocator.mayFail() -> i64 {
@@ -13982,7 +13982,7 @@ end 'main'
 ```exitcode
 99
 ```
-```RequiredMLIR:x86_64-windows
+```RequiredMLIR:x64-windows
 === maxon
 module {
   func @register-allocator.inner() -> i64 {
@@ -14095,67 +14095,67 @@ module {
 module {
   func @register-allocator.inner() -> i64 {
   entry:
-    x86.xor rax, rax
-    x86.mov rcx, 1
-    x86.add rax, rcx
-    x86.mov rdx, rax
-    x86.xor rax, rax
-    x86.ret
+    x64.xor rax, rax
+    x64.mov rcx, 1
+    x64.add rax, rcx
+    x64.mov rdx, rax
+    x64.xor rax, rax
+    x64.ret
   }
   func @register-allocator.middle() -> i64 {
   entry:
-    x86.prologue stack_size=16
-    x86.call register-allocator.inner
-    x86.mov [rbp-8], rdx
-    x86.mov [rbp-16], rax
-    x86.xor rax, rax
-    x86.cmp rdx, rax
-    x86.je register-allocator.middle.try_continue_1
+    x64.prologue stack_size=16
+    x64.call register-allocator.inner
+    x64.mov [rbp-8], rdx
+    x64.mov [rbp-16], rax
+    x64.xor rax, rax
+    x64.cmp rdx, rax
+    x64.je register-allocator.middle.try_continue_1
   propagate_error_0:
-    x86.mov rdx, [rbp-8]
-    x86.xor rax, rax
-    x86.epilogue
-    x86.ret
+    x64.mov rdx, [rbp-8]
+    x64.xor rax, rax
+    x64.epilogue
+    x64.ret
   try_continue_1:
-    x86.mov rax, [rbp-16]
-    x86.xor rdx, rdx
-    x86.epilogue
-    x86.ret
+    x64.mov rax, [rbp-16]
+    x64.xor rdx, rdx
+    x64.epilogue
+    x64.ret
   }
   func @main() -> u32 {
   entry:
-    x86.prologue stack_size=16
-    x86.call register-allocator.middle
-    x86.mov rcx, 99
-    x86.mov [rbp-8], rcx
-    x86.mov [rbp-16], rax
-    x86.xor rax, rax
-    x86.cmp rdx, rax
-    x86.je main.otherwise_default_continue_3
+    x64.prologue stack_size=16
+    x64.call register-allocator.middle
+    x64.mov rcx, 99
+    x64.mov [rbp-8], rcx
+    x64.mov [rbp-16], rax
+    x64.xor rax, rax
+    x64.cmp rdx, rax
+    x64.je main.otherwise_default_continue_3
   otherwise_default_error_2:
-    x86.mov rax, [rbp-8]
-    x86.mov [rbp-16], rax
-    x86.jmp main.otherwise_default_continue_3
+    x64.mov rax, [rbp-8]
+    x64.mov [rbp-16], rax
+    x64.jmp main.otherwise_default_continue_3
   otherwise_default_continue_3:
-    x86.mov rax, [rbp-16]
-    x86.xor rcx, rcx
-    x86.mov rdx, 4294967295
-    x86.cmp rax, rdx
-    x86.jg main.__range_panic_4
-    x86.cmp rax, rcx
-    x86.jl main.__range_panic_4
-    x86.jmp main.__range_ok_4
+    x64.mov rax, [rbp-16]
+    x64.xor rcx, rcx
+    x64.mov rdx, 4294967295
+    x64.cmp rax, rdx
+    x64.jg main.__range_panic_4
+    x64.cmp rax, rcx
+    x64.jl main.__range_panic_4
+    x64.jmp main.__range_ok_4
   __range_panic_4:
-    x86.lea_symdata rax, [__panic_msg_0]
-    x86.mov rcx, rax
-    x86.call mrt_panic
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
+    x64.call mrt_panic
   __range_ok_4:
-    x86.epilogue
-    x86.ret
+    x64.epilogue
+    x64.ret
   }
 }
 ```
-```RequiredMLIR:aarch64-macos
+```RequiredMLIR:arm64-macos
 === maxon
 module {
   func @register-allocator.inner() -> i64 {
@@ -14371,7 +14371,7 @@ end 'main'
 ```exitcode
 42
 ```
-```RequiredMLIR:x86_64-windows
+```RequiredMLIR:x64-windows
 === maxon
 module {
   func @register-allocator.getA() -> i64 {
@@ -14537,92 +14537,92 @@ module {
 module {
   func @register-allocator.getA() -> i64 {
   entry:
-    x86.mov rax, 10
-    x86.xor rdx, rdx
-    x86.ret
+    x64.mov rax, 10
+    x64.xor rdx, rdx
+    x64.ret
   }
   func @register-allocator.getB() -> i64 {
   entry:
-    x86.mov rax, 20
-    x86.xor rdx, rdx
-    x86.ret
+    x64.mov rax, 20
+    x64.xor rdx, rdx
+    x64.ret
   }
   func @register-allocator.getC() -> i64 {
   entry:
-    x86.xor rax, rax
-    x86.mov rcx, 1
-    x86.add rax, rcx
-    x86.mov rdx, rax
-    x86.xor rax, rax
-    x86.ret
+    x64.xor rax, rax
+    x64.mov rcx, 1
+    x64.add rax, rcx
+    x64.mov rdx, rax
+    x64.xor rax, rax
+    x64.ret
   }
   func @main() -> u32 {
   entry:
-    x86.prologue stack_size=64
-    x86.call register-allocator.getA
-    x86.xor rcx, rcx
-    x86.mov [rbp-8], rcx
-    x86.mov [rbp-16], rax
-    x86.xor rax, rax
-    x86.cmp rdx, rax
-    x86.je main.otherwise_default_continue_3
+    x64.prologue stack_size=64
+    x64.call register-allocator.getA
+    x64.xor rcx, rcx
+    x64.mov [rbp-8], rcx
+    x64.mov [rbp-16], rax
+    x64.xor rax, rax
+    x64.cmp rdx, rax
+    x64.je main.otherwise_default_continue_3
   otherwise_default_error_2:
-    x86.mov rax, [rbp-8]
-    x86.mov [rbp-16], rax
-    x86.jmp main.otherwise_default_continue_3
+    x64.mov rax, [rbp-8]
+    x64.mov [rbp-16], rax
+    x64.jmp main.otherwise_default_continue_3
   otherwise_default_continue_3:
-    x86.mov rax, [rbp-16]
-    x86.mov [rbp-24], rax
-    x86.call register-allocator.getB
-    x86.xor rcx, rcx
-    x86.mov [rbp-32], rcx
-    x86.mov [rbp-40], rax
-    x86.xor rax, rax
-    x86.cmp rdx, rax
-    x86.je main.otherwise_default_continue_7
+    x64.mov rax, [rbp-16]
+    x64.mov [rbp-24], rax
+    x64.call register-allocator.getB
+    x64.xor rcx, rcx
+    x64.mov [rbp-32], rcx
+    x64.mov [rbp-40], rax
+    x64.xor rax, rax
+    x64.cmp rdx, rax
+    x64.je main.otherwise_default_continue_7
   otherwise_default_error_6:
-    x86.mov rax, [rbp-32]
-    x86.mov [rbp-40], rax
-    x86.jmp main.otherwise_default_continue_7
+    x64.mov rax, [rbp-32]
+    x64.mov [rbp-40], rax
+    x64.jmp main.otherwise_default_continue_7
   otherwise_default_continue_7:
-    x86.mov rax, [rbp-40]
-    x86.mov [rbp-48], rax
-    x86.call register-allocator.getC
-    x86.mov rcx, 12
-    x86.mov [rbp-56], rcx
-    x86.mov [rbp-64], rax
-    x86.xor rax, rax
-    x86.cmp rdx, rax
-    x86.je main.otherwise_default_continue_11
+    x64.mov rax, [rbp-40]
+    x64.mov [rbp-48], rax
+    x64.call register-allocator.getC
+    x64.mov rcx, 12
+    x64.mov [rbp-56], rcx
+    x64.mov [rbp-64], rax
+    x64.xor rax, rax
+    x64.cmp rdx, rax
+    x64.je main.otherwise_default_continue_11
   otherwise_default_error_10:
-    x86.mov rax, [rbp-56]
-    x86.mov [rbp-64], rax
-    x86.jmp main.otherwise_default_continue_11
+    x64.mov rax, [rbp-56]
+    x64.mov [rbp-64], rax
+    x64.jmp main.otherwise_default_continue_11
   otherwise_default_continue_11:
-    x86.mov rax, [rbp-64]
-    x86.mov rcx, [rbp-24]
-    x86.mov rdx, [rbp-48]
-    x86.add rcx, rdx
-    x86.add rcx, rax
-    x86.xor rbx, rbx
-    x86.mov rsi, 4294967295
-    x86.cmp rcx, rsi
-    x86.jg main.__range_panic_12
-    x86.cmp rcx, rbx
-    x86.jl main.__range_panic_12
-    x86.jmp main.__range_ok_12
+    x64.mov rax, [rbp-64]
+    x64.mov rcx, [rbp-24]
+    x64.mov rdx, [rbp-48]
+    x64.add rcx, rdx
+    x64.add rcx, rax
+    x64.xor rbx, rbx
+    x64.mov rsi, 4294967295
+    x64.cmp rcx, rsi
+    x64.jg main.__range_panic_12
+    x64.cmp rcx, rbx
+    x64.jl main.__range_panic_12
+    x64.jmp main.__range_ok_12
   __range_panic_12:
-    x86.lea_symdata rax, [__panic_msg_0]
-    x86.mov rcx, rax
-    x86.call mrt_panic
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
+    x64.call mrt_panic
   __range_ok_12:
-    x86.mov rax, rcx
-    x86.epilogue
-    x86.ret
+    x64.mov rax, rcx
+    x64.epilogue
+    x64.ret
   }
 }
 ```
-```RequiredMLIR:aarch64-macos
+```RequiredMLIR:arm64-macos
 === maxon
 module {
   func @register-allocator.getA() -> i64 {
@@ -14914,7 +14914,7 @@ end 'main'
 ```exitcode
 242
 ```
-```RequiredMLIR:x86_64-windows
+```RequiredMLIR:x64-windows
 === maxon
 module {
   func @register-allocator.lookup(key: i64) -> i64 {
@@ -15078,94 +15078,94 @@ module {
 module {
   func @register-allocator.lookup(key: i64) -> i64 {
   entry:
-    x86.prologue stack_size=16
-    x86.mov [rbp-8], rcx
-    x86.jmp register-allocator.lookup.dispatch_0.cmp0
+    x64.prologue stack_size=16
+    x64.mov [rbp-8], rcx
+    x64.jmp register-allocator.lookup.dispatch_0.cmp0
   dispatch_0.cmp0:
-    x86.mov rax, [rbp-8]
-    x86.mov rcx, 1
-    x86.cmp rax, rcx
-    x86.jne register-allocator.lookup.dispatch_0.cmp1
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, 1
+    x64.cmp rax, rcx
+    x64.jne register-allocator.lookup.dispatch_0.cmp1
   dispatch_0.case0:
-    x86.mov rax, 100
-    x86.xor rdx, rdx
-    x86.epilogue
-    x86.ret
+    x64.mov rax, 100
+    x64.xor rdx, rdx
+    x64.epilogue
+    x64.ret
   dispatch_0.cmp1:
-    x86.mov rax, [rbp-8]
-    x86.mov rcx, 2
-    x86.cmp rax, rcx
-    x86.jne register-allocator.lookup.dispatch_0.case2
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, 2
+    x64.cmp rax, rcx
+    x64.jne register-allocator.lookup.dispatch_0.case2
   dispatch_0.case1:
-    x86.mov rax, 200
-    x86.xor rdx, rdx
-    x86.epilogue
-    x86.ret
+    x64.mov rax, 200
+    x64.xor rdx, rdx
+    x64.epilogue
+    x64.ret
   dispatch_0.case2:
-    x86.mov rax, 1
-    x86.mov rcx, 1
-    x86.add rax, rcx
-    x86.mov rdx, rax
-    x86.xor rax, rax
-    x86.epilogue
-    x86.ret
+    x64.mov rax, 1
+    x64.mov rcx, 1
+    x64.add rax, rcx
+    x64.mov rdx, rax
+    x64.xor rax, rax
+    x64.epilogue
+    x64.ret
   dispatch_0.merge:
   }
   func @main() -> u32 {
   entry:
-    x86.prologue stack_size=48
-    x86.mov rcx, 2
-    x86.call register-allocator.lookup
-    x86.xor rcx, rcx
-    x86.mov [rbp-8], rcx
-    x86.mov [rbp-16], rax
-    x86.xor rax, rax
-    x86.cmp rdx, rax
-    x86.je main.otherwise_default_continue_3
+    x64.prologue stack_size=48
+    x64.mov rcx, 2
+    x64.call register-allocator.lookup
+    x64.xor rcx, rcx
+    x64.mov [rbp-8], rcx
+    x64.mov [rbp-16], rax
+    x64.xor rax, rax
+    x64.cmp rdx, rax
+    x64.je main.otherwise_default_continue_3
   otherwise_default_error_2:
-    x86.mov rax, [rbp-8]
-    x86.mov [rbp-16], rax
-    x86.jmp main.otherwise_default_continue_3
+    x64.mov rax, [rbp-8]
+    x64.mov [rbp-16], rax
+    x64.jmp main.otherwise_default_continue_3
   otherwise_default_continue_3:
-    x86.mov rax, [rbp-16]
-    x86.mov [rbp-24], rax
-    x86.mov rcx, 99
-    x86.call register-allocator.lookup
-    x86.mov rcx, 42
-    x86.mov [rbp-32], rcx
-    x86.mov [rbp-40], rax
-    x86.xor rax, rax
-    x86.cmp rdx, rax
-    x86.je main.otherwise_default_continue_7
+    x64.mov rax, [rbp-16]
+    x64.mov [rbp-24], rax
+    x64.mov rcx, 99
+    x64.call register-allocator.lookup
+    x64.mov rcx, 42
+    x64.mov [rbp-32], rcx
+    x64.mov [rbp-40], rax
+    x64.xor rax, rax
+    x64.cmp rdx, rax
+    x64.je main.otherwise_default_continue_7
   otherwise_default_error_6:
-    x86.mov rax, [rbp-32]
-    x86.mov [rbp-40], rax
-    x86.jmp main.otherwise_default_continue_7
+    x64.mov rax, [rbp-32]
+    x64.mov [rbp-40], rax
+    x64.jmp main.otherwise_default_continue_7
   otherwise_default_continue_7:
-    x86.mov rax, [rbp-40]
-    x86.mov rcx, 256
-    x86.cqo
-    x86.idiv rcx
-    x86.mov rax, [rbp-24]
-    x86.add rax, rdx
-    x86.xor rdx, rdx
-    x86.mov rbx, 4294967295
-    x86.cmp rax, rbx
-    x86.jg main.__range_panic_8
-    x86.cmp rax, rdx
-    x86.jl main.__range_panic_8
-    x86.jmp main.__range_ok_8
+    x64.mov rax, [rbp-40]
+    x64.mov rcx, 256
+    x64.cqo
+    x64.idiv rcx
+    x64.mov rax, [rbp-24]
+    x64.add rax, rdx
+    x64.xor rdx, rdx
+    x64.mov rbx, 4294967295
+    x64.cmp rax, rbx
+    x64.jg main.__range_panic_8
+    x64.cmp rax, rdx
+    x64.jl main.__range_panic_8
+    x64.jmp main.__range_ok_8
   __range_panic_8:
-    x86.lea_symdata rax, [__panic_msg_0]
-    x86.mov rcx, rax
-    x86.call mrt_panic
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
+    x64.call mrt_panic
   __range_ok_8:
-    x86.epilogue
-    x86.ret
+    x64.epilogue
+    x64.ret
   }
 }
 ```
-```RequiredMLIR:aarch64-macos
+```RequiredMLIR:arm64-macos
 === maxon
 module {
   func @register-allocator.lookup(key: i64) -> i64 {

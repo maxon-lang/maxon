@@ -1,0 +1,374 @@
+// Test: memory.qualified-field-overwrite-frees-old
+typealias Integer = int(i64.min to i64.max)
+
+type Right
+	export var left Integer
+
+	static function create(left Integer) returns Self
+		return Self{left: left}
+	end 'create'
+end 'Right'
+
+type Pair
+	export var left Integer
+	export var right Right
+
+	static function create(left Integer, right Right) returns Self
+		return Self{left: left, right: right}
+	end 'create'
+end 'Pair'
+
+function testAssign()
+	var p = Pair.create(left: 5, right: Right.create(left: 10))
+	p.right = Right.create(left: 20)
+	print("{p.right.left}\n")
+end 'testAssign'
+
+function main() returns ExitCode
+	testAssign()
+	return 0
+end 'main'
+---
+MmTrace: true
+ExitCode: 0
+Stdout: ```
+20
+```
+Stderr: ```
+sl_init
+  os_alloc size=67108864
+mm_alloc Right #1 size=8 [Right.create]
+  sl_alloc Right #1 size=40 class=4
+mm_incref Right #1 rc=1 [Right.create]
+mm_transfer Right #1 rc=1 [Right.create]
+mm_alloc Pair #2 size=16 [Pair.create]
+  sl_alloc Pair #2 size=48 class=4
+mm_incref Right #1 rc=2 [Pair.create]
+mm_incref Pair #2 rc=1 [Pair.create]
+mm_transfer Pair #2 rc=1 [Pair.create]
+mm_alloc Right #3 size=8 [Right.create]
+  sl_alloc Right #3 size=40 class=4
+mm_incref Right #3 rc=1 [Right.create]
+mm_transfer Right #3 rc=1 [Right.create]
+mm_decref Right #1 rc=1 [heap-field-assignment.testAssign]
+mm_incref Right #3 rc=2 [heap-field-assignment.testAssign]
+mm_raw_alloc #R1 size=21 [toStr.buf [heap-field-assignment.testAssign]]
+  sl_alloc size=21 class=2
+mm_alloc String #4 size=32 [heap-field-assignment.testAssign]
+  sl_alloc String #4 size=64 class=5
+mm_alloc __ManagedMemory #5 size=32 [heap-field-assignment.testAssign]
+  sl_alloc __ManagedMemory #5 size=64 class=5
+mm_raw_alloc #R2 size=4 [interp.buf [heap-field-assignment.testAssign]]
+  sl_alloc size=4 class=0
+mm_raw_free #R1
+  sl_free size=24 class=2
+mm_incref __ManagedMemory #5 rc=1 [heap-field-assignment.testAssign]
+mm_incref String #4 rc=1 [heap-field-assignment.testAssign]
+mm_decref String #4 rc=0 [heap-field-assignment.testAssign]
+  mm_decref __ManagedMemory #5 rc=0 [~String]
+    mm_raw_free #R2
+      sl_free size=8 class=0
+    mm_free __ManagedMemory #5
+      sl_free __ManagedMemory #5 size=64 class=5
+  mm_free String #4
+    sl_free String #4 size=64 class=5
+mm_decref Right #3 rc=1 [heap-field-assignment.testAssign]
+mm_decref Right #1 rc=0 [heap-field-assignment.testAssign]
+  mm_free Right #1
+    sl_free Right #1 size=48 class=4
+mm_decref Pair #2 rc=0 [heap-field-assignment.testAssign]
+  mm_decref Right #3 rc=0 [~Pair]
+    mm_free Right #3
+      sl_free Right #3 size=48 class=4
+  mm_free Pair #2
+    sl_free Pair #2 size=48 class=4
+mm_raw_alloc #R3 size=40
+  sl_alloc size=40 class=4
+mm_raw_free #R3
+  sl_free size=48 class=4
+```
+---
+module {
+  func @Right.create(left: i64) -> i64 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-16], rcx
+    x64.mov rcx, 8
+    x64.xor rdx, rdx
+    x64.mov r8, 1
+    x64.call mm_alloc
+    x64.mov [rbp-8], rax
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rbp-16]
+    x64.mov [rax+0], rcx
+    x64.mov rdx, [rbp-8]
+    x64.mov rcx, [rbp-8]
+    x64.call mm_incref
+    x64.mov rax, [rbp-8]
+    x64.epilogue
+    x64.ret
+  }
+  func @Pair.create(left: i64, right: i64) -> i64 {
+  entry:
+    x64.prologue stack_size=32
+    x64.mov [rbp-8], rdx
+    x64.lea_func rax, [__destruct_Pair]
+    x64.mov rbx, rax
+    x64.mov [rbp-24], rcx
+    x64.mov rdx, rbx
+    x64.mov rcx, 16
+    x64.mov r8, 2
+    x64.call mm_alloc
+    x64.mov [rbp-16], rax
+    x64.mov rcx, [rbp-16]
+    x64.mov rdx, [rbp-24]
+    x64.mov [rcx+0], rdx
+    x64.mov rbx, [rbp-8]
+    x64.mov rsi, [rbp-16]
+    x64.mov [rsi+8], rbx
+    x64.mov rcx, [rbp-8]
+    x64.call mm_incref
+    x64.mov rdi, [rbp-16]
+    x64.mov rcx, [rbp-16]
+    x64.call mm_incref
+    x64.mov rax, [rbp-16]
+    x64.epilogue
+    x64.ret
+  }
+  func @heap-field-assignment.testAssign() {
+  entry:
+    x64.prologue stack_size=160
+    x64.mov rcx, 10
+    x64.call Right.create
+    x64.mov [rbp-8], rax
+    x64.mov rax, [rbp-8]
+    x64.mov rdx, [rbp-8]
+    x64.mov rcx, 5
+    x64.call Pair.create
+    x64.mov [rbp-16], rax
+    x64.mov rcx, 20
+    x64.call Right.create
+    x64.mov [rbp-24], rax
+    x64.mov rcx, [rbp-24]
+    x64.mov rdx, [rbp-16]
+    x64.mov rbx, [rdx+8]
+    x64.mov [rbp-120], rbx
+    x64.test rbx, rbx
+    x64.jz __nonnull_skip_0
+    x64.mov rcx, [rbp-120]
+    x64.call mm_decref
+    x64.label __nonnull_skip_0
+    x64.mov rsi, [rbp-16]
+    x64.mov rdi, [rbp-24]
+    x64.mov [rsi+8], rdi
+    x64.mov rcx, [rbp-24]
+    x64.call mm_incref
+    x64.mov r8, [rbp-16]
+    x64.mov r9, [r8+8]
+    x64.mov [rbp-32], r9
+    x64.mov rax, [rbp-32]
+    x64.mov rcx, [rax+0]
+    x64.mov [rbp-128], rcx
+    x64.mov rcx, 21
+    x64.call mm_raw_alloc
+    x64.mov [rbp-40], rax
+    x64.mov rcx, [rbp-128]
+    x64.mov rdx, [rbp-40]
+    x64.call maxon_i64_to_string
+    x64.mov rcx, [rbp-40]
+    x64.lea_rdata rdx, [__interp_lit_0]
+    x64.mov rbx, rdx
+    x64.mov rdx, 1
+    x64.lea rsi, [rax + rdx]
+    x64.lea_func rdi, [__destruct_String]
+    x64.mov r8, rdi
+    x64.mov [rbp-136], rax
+    x64.mov [rbp-144], rbx
+    x64.mov [rbp-152], rsi
+    x64.mov rdx, r8
+    x64.mov rcx, 32
+    x64.mov r8, 3
+    x64.call mm_alloc
+    x64.mov [rbp-48], rax
+    x64.lea_func rax, [__destruct___ManagedMemory]
+    x64.mov rcx, rax
+    x64.mov rdx, rcx
+    x64.mov rcx, 32
+    x64.mov r8, 4
+    x64.call mm_alloc
+    x64.mov [rbp-56], rax
+    x64.mov rax, 1
+    x64.mov rcx, [rbp-152]
+    x64.lea rdx, [rcx + rax]
+    x64.mov rcx, rdx
+    x64.call mm_raw_alloc
+    x64.xor rcx, rcx
+    x64.mov [rbp-64], rcx
+    x64.mov [rbp-72], rax
+    x64.mov rax, [rbp-152]
+    x64.mov [rbp-80], rax
+    x64.mov rax, [rbp-40]
+    x64.mov [rbp-88], rax
+    x64.mov rax, [rbp-136]
+    x64.mov [rbp-96], rax
+    x64.mov rax, [rbp-144]
+    x64.mov [rbp-104], rax
+    x64.mov rax, 1
+    x64.mov [rbp-112], rax
+    x64.mov rax, [rbp-72]
+    x64.mov rcx, [rbp-64]
+    x64.add rax, rcx
+    x64.mov rcx, [rbp-88]
+    x64.mov rdx, [rbp-96]
+    x64.mov rsi, rcx
+    x64.mov rdi, rax
+    x64.mov rcx, rdx
+    x64.rep_movsb
+    x64.mov rax, [rbp-64]
+    x64.mov rcx, [rbp-96]
+    x64.add rax, rcx
+    x64.mov [rbp-64], rax
+    x64.mov rax, [rbp-72]
+    x64.mov rcx, [rbp-64]
+    x64.add rax, rcx
+    x64.mov rcx, [rbp-104]
+    x64.mov rdx, [rbp-112]
+    x64.mov rsi, rcx
+    x64.mov rdi, rax
+    x64.mov rcx, rdx
+    x64.rep_movsb
+    x64.mov rax, [rbp-72]
+    x64.mov rcx, [rbp-80]
+    x64.add rax, rcx
+    x64.xor rcx, rcx
+    x64.mov byte ptr [rax+0], rcxb
+    x64.mov rax, [rbp-40]
+    x64.mov rcx, [rbp-40]
+    x64.call mm_raw_free
+    x64.mov rax, [rbp-72]
+    x64.mov rcx, [rbp-56]
+    x64.mov [rcx+0], rax
+    x64.mov rax, [rbp-80]
+    x64.mov rcx, [rbp-56]
+    x64.mov [rcx+8], rax
+    x64.mov rcx, [rbp-56]
+    x64.mov [rcx+16], rax
+    x64.mov rax, 1
+    x64.mov rcx, [rbp-56]
+    x64.mov [rcx+24], rax
+    x64.mov rax, [rbp-56]
+    x64.mov rcx, [rbp-48]
+    x64.mov [rcx+0], rax
+    x64.mov rax, [rbp-56]
+    x64.mov rcx, [rbp-56]
+    x64.call mm_incref
+    x64.xor rax, rax
+    x64.mov rcx, [rbp-48]
+    x64.mov [rcx+8], rax
+    x64.mov rax, -1
+    x64.mov rcx, [rbp-48]
+    x64.mov [rcx+16], rax
+    x64.xor rax, rax
+    x64.mov rcx, [rbp-48]
+    x64.mov [rcx+24], rax
+    x64.mov rax, [rbp-48]
+    x64.mov rcx, [rbp-48]
+    x64.call mm_incref
+    x64.mov rax, [rbp-48]
+    x64.mov rcx, [rbp-48]
+    x64.call stdlib.Print.print
+    x64.mov rax, [rbp-48]
+    x64.test rax, rax
+    x64.jz __nonnull_skip_1
+    x64.mov rcx, [rbp-48]
+    x64.call mm_decref
+    x64.label __nonnull_skip_1
+    x64.mov rax, [rbp-24]
+    x64.test rax, rax
+    x64.jz __nonnull_skip_2
+    x64.mov rcx, [rbp-24]
+    x64.call mm_decref
+    x64.label __nonnull_skip_2
+    x64.mov rax, [rbp-8]
+    x64.test rax, rax
+    x64.jz __nonnull_skip_3
+    x64.mov rcx, [rbp-8]
+    x64.call mm_decref
+    x64.label __nonnull_skip_3
+    x64.mov rax, [rbp-16]
+    x64.test rax, rax
+    x64.jz __nonnull_skip_4
+    x64.mov rcx, [rbp-16]
+    x64.call mm_decref
+    x64.label __nonnull_skip_4
+    x64.epilogue
+    x64.ret
+  }
+  func @main() -> u32 {
+  entry:
+    x64.prologue stack_size=16
+    x64.call heap-field-assignment.testAssign
+    x64.xor rax, rax
+    x64.epilogue
+    x64.ret
+  }
+  func @__destruct_Right(ptr: i64) {
+  entry:
+    x64.jmp __destruct_Right.done
+  done:
+    x64.ret
+  }
+  func @__destruct_Pair(ptr: i64) {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-8], rcx
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+8]
+    x64.mov [rbp-16], rcx
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_5
+    x64.call mm_decref
+    x64.label __nonnull_skip_5
+    x64.jmp __destruct_Pair.done
+  done:
+    x64.epilogue
+    x64.ret
+  }
+  func @__destruct_String(ptr: i64) {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-8], rcx
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+0]
+    x64.mov [rbp-16], rcx
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_6
+    x64.call mm_decref
+    x64.label __nonnull_skip_6
+    x64.jmp __destruct_String.done
+  done:
+    x64.epilogue
+    x64.ret
+  }
+  func @__destruct___ManagedMemory(ptr: i64) {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-8], rcx
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+16]
+    x64.xor rdx, rdx
+    x64.cmp rcx, rdx
+    x64.je __destruct___ManagedMemory.skip_buf_0
+  free_buf_0:
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+0]
+    x64.call mm_raw_free
+    x64.jmp __destruct___ManagedMemory.skip_buf_0
+  skip_buf_0:
+    x64.jmp __destruct___ManagedMemory.done
+  done:
+    x64.epilogue
+    x64.ret
+  }
+}
+---

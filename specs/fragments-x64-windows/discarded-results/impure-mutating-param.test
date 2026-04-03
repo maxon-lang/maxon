@@ -1,0 +1,50 @@
+// Test: impure-mutating-param
+
+typealias Integer = int(i64.min to i64.max)
+
+function doubleInPlace(x Integer) returns Integer
+	x = x * 2
+	return x
+end 'doubleInPlace'
+
+function main() returns ExitCode
+	var n = 5 as Integer
+	let _ = doubleInPlace(n)
+	return 0
+end 'main'
+---
+ExitCode: 0
+---
+module {
+  func @discarded-results.doubleInPlace(x: i64) -> i64 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-8], rcx
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+0]
+    x64.mov rdx, 2
+    x64.imul rcx, rdx
+    x64.mov [rbp-16], rcx
+    x64.mov rbx, [rbp-8]
+    x64.mov rsi, [rbp-16]
+    x64.mov [rbx+0], rsi
+    x64.mov rax, rcx
+    x64.epilogue
+    x64.ret
+  }
+  func @main() -> u32 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov rax, 5
+    x64.mov [rbp-8], rax
+    x64.lea rcx, [rbp-8]
+    x64.mov rdx, rcx
+    x64.mov rcx, rdx
+    x64.call discarded-results.doubleInPlace
+    x64.xor rbx, rbx
+    x64.mov rax, rbx
+    x64.epilogue
+    x64.ret
+  }
+}
+---

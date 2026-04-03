@@ -1,0 +1,95 @@
+// Test: int-expression-both-sides-complex
+function main() returns ExitCode
+	var a = 3
+	var b = 5
+	var c = 7
+	var d = 2
+	return (a + b) * (c - d)
+end 'main'
+---
+ExitCode: 40
+RequiredMLIR: ```
+=== maxon
+module {
+  func @main() -> i64 {
+  entry:
+    %0 = maxon.literal {value = 3 : i64}
+    maxon.assign %0 {var = a} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %1 = maxon.literal {value = 5 : i64}
+    maxon.assign %1 {var = b} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %2 = maxon.literal {value = 7 : i64}
+    maxon.assign %2 {var = c} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %3 = maxon.literal {value = 2 : i64}
+    maxon.assign %3 {var = d} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %4 = maxon.binop %0, %1 {op = add}
+    %5 = maxon.binop %2, %3 {op = sub}
+    %6 = maxon.binop %4, %5 {op = mul}
+    %7 = maxon.literal {value = 0 : i64}
+    %8 = maxon.binop %6, %7 {op = lt}
+    %9 = maxon.literal {value = 4294967295 : i64}
+    %10 = maxon.binop %6, %9 {op = gt}
+    %11 = maxon.binop %8, %10 {op = or}
+    maxon.cond_br %11 [then: __range_panic_0, else: __range_ok_0]
+  __range_panic_0:
+    maxon.panic "panic at int-expression-both-sides-complex.test:7: Range check failed: value outside typealias 'ExitCode'"
+  __range_ok_0:
+    maxon.scope_end [a, b, c, d]
+    maxon.return %6
+  }
+}
+=== standard
+module {
+  func @main() -> u32 {
+  entry:
+    %0 = arith.constant {value = 3 : i64}
+    %1 = arith.constant {value = 5 : i64}
+    %2 = arith.constant {value = 7 : i64}
+    %3 = arith.constant {value = 2 : i64}
+    %4 = arith.addi %0, %1
+    %5 = arith.subi %2, %3
+    %6 = arith.muli %4, %5
+    %7 = arith.constant {value = 0 : i64}
+    %8 = arith.cmpi lt %6, %7
+    %9 = arith.constant {value = 4294967295 : i64}
+    %10 = arith.cmpi gt %6, %9
+    %11 = arith.ori1 %8, %10
+    cf.cond_br %11 [then: __range_panic_0, else: __range_ok_0]
+  __range_panic_0:
+    %12 = memref.lea_symdata __panic_msg_0
+    %13 = std.ptr_to_i64 %12
+    std.call_runtime @mrt_panic %13
+  __range_ok_0:
+    func.return %6
+  }
+}
+=== x86
+module {
+  func @main() -> u32 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov rax, 3
+    x64.mov rcx, 5
+    x64.mov rdx, 7
+    x64.mov rbx, 2
+    x64.add rax, rcx
+    x64.sub rdx, rbx
+    x64.imul rax, rdx
+    x64.xor rsi, rsi
+    x64.mov rdi, 4294967295
+    x64.cmp rax, rdi
+    x64.jg main.__range_panic_0
+    x64.cmp rax, rsi
+    x64.jl main.__range_panic_0
+    x64.jmp main.__range_ok_0
+  __range_panic_0:
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.epilogue
+    x64.ret
+  }
+}
+```
+---
+---

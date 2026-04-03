@@ -1,0 +1,200 @@
+// Test: block-scope-struct-release
+typealias Integer = int(i64.min to i64.max)
+
+type Point
+	export var x Integer
+	export var y Integer
+
+	static function create(x Integer, y Integer) returns Self
+		return Self{x: x, y: y}
+	end 'create'
+end 'Point'
+
+function main() returns ExitCode
+	var result = 0
+	if true 'block'
+		@heap var p = Point.create(x: 10, y: 20)
+		result = p.x
+	end 'block'
+	return result
+end 'main'
+---
+ExitCode: 10
+RequiredMLIR: ```
+=== maxon
+module {
+  func @Point.create(x: i64, y: i64) -> Point {
+  entry:
+    %0 = maxon.param {index = 0 : i32} {name = x} {type = i64}
+    %1 = maxon.param {index = 1 : i32} {name = y} {type = i64}
+    %2 = maxon.struct_literal @Point
+    maxon.scope_end [x, y]
+    maxon.return %2
+  }
+  func @main() -> i64 {
+  entry:
+    %17 = maxon.literal {value = 0 : i64}
+    maxon.assign %17 {var = result} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %18 = maxon.literal {value = 1 : i1}
+    maxon.cond_br %18 [then: block_0, else: block_0.merge]
+  block_0:
+    %19 = maxon.literal {value = 10 : i64}
+    %20 = maxon.literal {value = 20 : i64}
+    %21 = maxon.call @Point.create %19, %20
+    maxon.assign %21 {var = __call_tmp_21} {decl = 1 : i1}
+    maxon.assign %21 {var = p} {decl = 1 : i1} {mut = 1 : i1}
+    %22 = maxon.struct_var_ref p
+    %23 = maxon.field_access .x %22
+    maxon.assign %23 {var = result} {kind = i64} {mut = 1 : i1}
+    maxon.scope_end [p]
+    maxon.br block_0.merge
+  block_0.merge:
+    %24 = maxon.var_ref {var = result} {type = i64}
+    %25 = maxon.literal {value = 0 : i64}
+    %26 = maxon.binop %24, %25 {op = lt}
+    %27 = maxon.literal {value = 4294967295 : i64}
+    %28 = maxon.binop %24, %27 {op = gt}
+    %29 = maxon.binop %26, %28 {op = or}
+    maxon.cond_br %29 [then: __range_panic_1, else: __range_ok_1]
+  __range_panic_1:
+    maxon.panic "panic at block-scope-struct-release.test:19: Range check failed: value outside typealias 'ExitCode'"
+  __range_ok_1:
+    maxon.scope_end [result]
+    maxon.return %24
+  }
+}
+=== standard
+module {
+  func @Point.create(x: i64, y: i64) -> i64 {
+  entry:
+    %0 = func.param x : StdI64
+    %1 = func.param y : StdI64
+    %2 = arith.constant {value = 16 : i64}
+    %3 = arith.constant {value = 0 : i64}
+    %4 = arith.constant {value = 1 : i64}
+    %5 = std.call_runtime @mm_alloc %2, %3, %4
+    memref.store %5, __struct_2
+    %6 = memref.load __struct_2 : i64
+    memref.store_indirect %0, %6+0
+    %7 = memref.load __struct_2 : i64
+    memref.store_indirect %1, %7+8
+    %8 = memref.load __struct_2 : i64
+    std.call_runtime @mm_incref %8
+    %9 = memref.load __struct_2 : i64
+    func.return %9
+  }
+  func @main() -> u32 {
+  entry:
+    %10 = arith.constant {value = 0 : i64}
+    memref.store %10, result
+    %11 = arith.constant {value = 1 : i1}
+    cf.cond_br %11 [then: block_0, else: block_0.merge]
+  block_0:
+    %12 = arith.constant {value = 10 : i64}
+    %13 = arith.constant {value = 20 : i64}
+    %14 = func.call @Point.create %12, %13
+    memref.store %14, p
+    %17 = memref.load p : i64
+    %18 = memref.load_indirect %17+0
+    memref.store %18, result
+    %19 = memref.load p : i64
+    std.call_runtime_if_nonnull @mm_decref %19
+    cf.br block_0.merge
+  block_0.merge:
+    %21 = memref.load result : i64
+    %22 = arith.constant {value = 0 : i64}
+    %23 = arith.cmpi lt %21, %22
+    %24 = arith.constant {value = 4294967295 : i64}
+    %25 = arith.cmpi gt %21, %24
+    %26 = arith.ori1 %23, %25
+    cf.cond_br %26 [then: __range_panic_1, else: __range_ok_1]
+  __range_panic_1:
+    %27 = memref.lea_symdata __panic_msg_0
+    %28 = std.ptr_to_i64 %27
+    std.call_runtime @mrt_panic %28
+  __range_ok_1:
+    func.return %21
+  }
+  func @__destruct_Point(ptr: i64) {
+  entry:
+    %30 = func.param ptr : StdI64
+    cf.br done
+  done:
+    func.return
+  }
+}
+=== x86
+module {
+  func @Point.create(x: i64, y: i64) -> i64 {
+  entry:
+    x64.prologue stack_size=32
+    x64.mov [rbp-16], rcx
+    x64.mov [rbp-24], rdx
+    x64.mov rcx, 16
+    x64.xor rdx, rdx
+    x64.mov r8, 1
+    x64.call mm_alloc
+    x64.mov [rbp-8], rax
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rbp-16]
+    x64.mov [rax+0], rcx
+    x64.mov rdx, [rbp-8]
+    x64.mov rbx, [rbp-24]
+    x64.mov [rdx+8], rbx
+    x64.mov rsi, [rbp-8]
+    x64.mov rcx, [rbp-8]
+    x64.call mm_incref
+    x64.mov rax, [rbp-8]
+    x64.epilogue
+    x64.ret
+  }
+  func @main() -> u32 {
+  entry:
+    x64.prologue stack_size=16
+    x64.xor rax, rax
+    x64.mov [rbp-8], rax
+    x64.mov rcx, 1
+    x64.test rcx, rcx
+    x64.je main.block_0.merge
+  block_0:
+    x64.mov rcx, 10
+    x64.mov rdx, 20
+    x64.call Point.create
+    x64.mov [rbp-16], rax
+    x64.mov rax, [rbp-16]
+    x64.mov rcx, [rax+0]
+    x64.mov [rbp-8], rcx
+    x64.mov rdx, [rbp-16]
+    x64.test rdx, rdx
+    x64.jz __nonnull_skip_0
+    x64.mov rcx, [rbp-16]
+    x64.call mm_decref
+    x64.label __nonnull_skip_0
+    x64.jmp main.block_0.merge
+  block_0.merge:
+    x64.mov rax, [rbp-8]
+    x64.xor rcx, rcx
+    x64.mov rdx, 4294967295
+    x64.cmp rax, rdx
+    x64.jg main.__range_panic_1
+    x64.cmp rax, rcx
+    x64.jl main.__range_panic_1
+    x64.jmp main.__range_ok_1
+  __range_panic_1:
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_1:
+    x64.epilogue
+    x64.ret
+  }
+  func @__destruct_Point(ptr: i64) {
+  entry:
+    x64.jmp __destruct_Point.done
+  done:
+    x64.ret
+  }
+}
+```
+---
+---

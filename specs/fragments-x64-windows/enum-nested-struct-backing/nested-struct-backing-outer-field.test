@@ -1,0 +1,153 @@
+// Test: nested-struct-backing-outer-field
+typealias Latency = int(0 to 50)
+
+type OpMeta
+	export let latency Latency
+
+	static function create(latency Latency) returns Self
+		return Self{latency: latency}
+	end 'create'
+end 'OpMeta'
+
+type TargetMeta
+	export let meta OpMeta
+	export let setsFlags bool
+
+	static function create(meta OpMeta, setsFlags bool) returns Self
+		return Self{meta: meta, setsFlags: setsFlags}
+	end 'create'
+end 'TargetMeta'
+
+enum Op
+	add = TargetMeta.create(OpMeta.create(1), setsFlags: true)
+	mov = TargetMeta.create(OpMeta.create(2), setsFlags: false)
+end 'Op'
+
+function main() returns ExitCode
+	let op = Op.add
+	if op.rawValue.setsFlags 'check'
+		return 1
+	end 'check'
+	return 0
+end 'main'
+---
+ExitCode: 1
+---
+module {
+  func @main() -> u32 {
+  entry:
+    x64.prologue stack_size=32
+    x64.xor rax, rax
+    x64.mov [rbp-8], rax
+    x64.mov rcx, [rbp-8]
+    x64.lea_func rdx, [__destruct_TargetMeta]
+    x64.mov rbx, rdx
+    x64.mov rdx, rbx
+    x64.mov rcx, 16
+    x64.mov r8, 1
+    x64.call mm_alloc
+    x64.mov [rbp-16], rax
+    x64.mov rcx, 8
+    x64.xor rdx, rdx
+    x64.mov r8, 2
+    x64.call mm_alloc
+    x64.mov [rbp-24], rax
+    x64.xor rsi, rsi
+    x64.xor rdi, rdi
+    x64.mov r8, [rbp-8]
+    x64.cmp r8, rdi
+    x64.sete r9
+    x64.movzx r9, r9b
+    x64.mov rax, 1
+    x64.test r9, r9
+    x64.mov rcx, rsi
+    x64.cmovne rcx, rax
+    x64.mov rax, 1
+    x64.cmp r8, rax
+    x64.sete rax
+    x64.movzx rax, raxb
+    x64.mov rdx, 2
+    x64.test rax, rax
+    x64.mov rbx, rcx
+    x64.cmovne rbx, rdx
+    x64.mov rax, [rbp-24]
+    x64.mov [rax+0], rbx
+    x64.mov rax, [rbp-24]
+    x64.mov rcx, [rbp-16]
+    x64.mov [rcx+0], rax
+    x64.mov rcx, [rbp-24]
+    x64.call mm_incref
+    x64.xor rax, rax
+    x64.xor rcx, rcx
+    x64.mov rdx, [rbp-8]
+    x64.cmp rdx, rcx
+    x64.sete rcx
+    x64.movzx rcx, rcxb
+    x64.mov rbx, 1
+    x64.test rcx, rcx
+    x64.mov rsi, rax
+    x64.cmovne rsi, rbx
+    x64.mov rax, 1
+    x64.cmp rdx, rax
+    x64.sete rax
+    x64.movzx rax, raxb
+    x64.xor rcx, rcx
+    x64.test rax, rax
+    x64.mov rdx, rsi
+    x64.cmovne rdx, rcx
+    x64.mov rax, [rbp-16]
+    x64.mov byte ptr [rax+8], rdxb
+    x64.mov rax, [rbp-16]
+    x64.mov [rbp-32], rax
+    x64.mov rax, [rbp-32]
+    x64.mov rcx, [rbp-32]
+    x64.call mm_incref
+    x64.mov rax, [rbp-32]
+    x64.movzx rcx, byte ptr [rax+8]
+    x64.test rcx, rcx
+    x64.je main.check_0.after
+  check_0:
+    x64.mov rax, [rbp-32]
+    x64.test rax, rax
+    x64.jz __nonnull_skip_0
+    x64.mov rcx, [rbp-32]
+    x64.call mm_decref
+    x64.label __nonnull_skip_0
+    x64.mov rax, 1
+    x64.epilogue
+    x64.ret
+  check_0.after:
+    x64.mov rax, [rbp-32]
+    x64.test rax, rax
+    x64.jz __nonnull_skip_1
+    x64.mov rcx, [rbp-32]
+    x64.call mm_decref
+    x64.label __nonnull_skip_1
+    x64.xor rax, rax
+    x64.epilogue
+    x64.ret
+  }
+  func @__destruct_TargetMeta(ptr: i64) {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-8], rcx
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+0]
+    x64.mov [rbp-16], rcx
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_2
+    x64.call mm_decref
+    x64.label __nonnull_skip_2
+    x64.jmp __destruct_TargetMeta.done
+  done:
+    x64.epilogue
+    x64.ret
+  }
+  func @__destruct_OpMeta(ptr: i64) {
+  entry:
+    x64.jmp __destruct_OpMeta.done
+  done:
+    x64.ret
+  }
+}
+---

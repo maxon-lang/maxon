@@ -1,0 +1,117 @@
+// Test: default-throws-expression
+enum Color
+	red
+	green
+	blue
+end 'Color'
+
+enum MatchError
+	unmatched
+end 'MatchError'
+
+function colorValue(c Color) returns ExitCode throws MatchError
+	let result = match c 'check'
+		red gives 10
+		green gives 20
+		default throws MatchError.unmatched
+	end 'check'
+	return result
+end 'colorValue'
+
+function main() returns ExitCode
+	var c = Color.green
+	var result = try colorValue(c) otherwise 0
+	return result
+end 'main'
+---
+ExitCode: 20
+---
+module {
+  func @enum-match-only.colorValue(c: i64) -> u32 {
+  entry:
+    x64.prologue stack_size=32
+    x64.mov [rbp-8], rcx
+    x64.mov rax, [rbp-8]
+    x64.mov [rbp-16], rax
+    x64.jmp enum-match-only.colorValue.check_0.cmp0
+  check_0.cmp0:
+    x64.mov rax, [rbp-16]
+    x64.xor rcx, rcx
+    x64.cmp rax, rcx
+    x64.jne enum-match-only.colorValue.check_0.cmp1
+  check_0.case0:
+    x64.mov rax, 10
+    x64.mov [rbp-24], rax
+    x64.jmp enum-match-only.colorValue.check_0.merge
+  check_0.cmp1:
+    x64.mov rax, [rbp-16]
+    x64.mov rcx, 1
+    x64.cmp rax, rcx
+    x64.jne enum-match-only.colorValue.check_0.case2
+  check_0.case1:
+    x64.mov rax, 20
+    x64.mov [rbp-24], rax
+    x64.jmp enum-match-only.colorValue.check_0.merge
+  check_0.case2:
+    x64.xor rax, rax
+    x64.mov rcx, 1
+    x64.add rax, rcx
+    x64.mov rdx, rax
+    x64.xor rax, rax
+    x64.epilogue
+    x64.ret
+  check_0.merge:
+    x64.mov rax, [rbp-24]
+    x64.xor rcx, rcx
+    x64.mov rdx, 4294967295
+    x64.cmp rax, rdx
+    x64.jg enum-match-only.colorValue.__range_panic_1
+    x64.cmp rax, rcx
+    x64.jl enum-match-only.colorValue.__range_panic_1
+    x64.jmp enum-match-only.colorValue.__range_ok_1
+  __range_panic_1:
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_1:
+    x64.xor rdx, rdx
+    x64.epilogue
+    x64.ret
+  }
+  func @main() -> u32 {
+  entry:
+    x64.prologue stack_size=32
+    x64.mov rax, 1
+    x64.mov [rbp-8], rax
+    x64.mov rcx, [rbp-8]
+    x64.call enum-match-only.colorValue
+    x64.mov ecx, rax
+    x64.xor rax, rax
+    x64.mov [rbp-16], rax
+    x64.mov [rbp-24], rcx
+    x64.xor rax, rax
+    x64.cmp rdx, rax
+    x64.je main.otherwise_default_continue_3
+  otherwise_default_error_2:
+    x64.mov rax, [rbp-16]
+    x64.mov [rbp-24], rax
+    x64.jmp main.otherwise_default_continue_3
+  otherwise_default_continue_3:
+    x64.mov rax, [rbp-24]
+    x64.xor rcx, rcx
+    x64.mov rdx, 4294967295
+    x64.cmp rax, rdx
+    x64.jg main.__range_panic_4
+    x64.cmp rax, rcx
+    x64.jl main.__range_panic_4
+    x64.jmp main.__range_ok_4
+  __range_panic_4:
+    x64.lea_symdata rax, [__panic_msg_1]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_4:
+    x64.epilogue
+    x64.ret
+  }
+}
+---

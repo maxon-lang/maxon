@@ -1,0 +1,64 @@
+// Test: let-destructuring
+function main() returns ExitCode
+	let (x, y) = (10, 32)
+	return x + y
+end 'main'
+---
+ExitCode: 42
+---
+module {
+  func @main() -> u32 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov rax, 10
+    x64.mov rcx, 32
+    x64.mov rcx, 16
+    x64.xor rdx, rdx
+    x64.mov r8, 1
+    x64.call mm_alloc
+    x64.mov [rbp-8], rax
+    x64.mov rdx, [rbp-8]
+    x64.mov rbx, 10
+    x64.mov [rdx+0], rbx
+    x64.mov rsi, [rbp-8]
+    x64.mov rdi, 32
+    x64.mov [rsi+8], rdi
+    x64.mov r8, [rbp-8]
+    x64.mov rcx, [rbp-8]
+    x64.call mm_incref
+    x64.mov r9, [rbp-8]
+    x64.mov rax, [r9+0]
+    x64.mov rcx, [rbp-8]
+    x64.mov rdx, [rcx+8]
+    x64.add rax, rdx
+    x64.xor rcx, rcx
+    x64.mov rdx, 4294967295
+    x64.cmp rax, rdx
+    x64.jg main.__range_panic_1
+    x64.cmp rax, rcx
+    x64.jl main.__range_panic_1
+    x64.jmp main.__range_ok_1
+  __range_panic_1:
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_1:
+    x64.mov rbx, [rbp-8]
+    x64.mov [rbp-16], rax
+    x64.test rbx, rbx
+    x64.jz __nonnull_skip_0
+    x64.mov rcx, [rbp-8]
+    x64.call mm_decref
+    x64.label __nonnull_skip_0
+    x64.mov rax, [rbp-16]
+    x64.epilogue
+    x64.ret
+  }
+  func @__destruct___Tuple_i64_i64(ptr: i64) {
+  entry:
+    x64.jmp __destruct___Tuple_i64_i64.done
+  done:
+    x64.ret
+  }
+}
+---

@@ -83,7 +83,7 @@ Maxon supports `#if`, `#else`, and `#endif` directives for platform-conditional 
 
 **Target Architecture:**
 ```maxon
-#if arch(x86_64)
+#if arch(x64)
 	let pointerSize = 8
 #else
 	let pointerSize = 8
@@ -92,7 +92,7 @@ Maxon supports `#if`, `#else`, and `#endif` directives for platform-conditional 
 
 Supported conditions:
 - `os(Windows)`, `os(Linux)`, `os(Macos)` — match the target operating system
-- `arch(x86_64)`, `arch(aarch64)` — match the target CPU architecture
+- `arch(x64)`, `arch(arm64)` — match the target CPU architecture
 - `testing(true)`, `testing(false)` — match whether the code is compiled in test mode
 
 **Boolean operators** (precedence: `or` < `and` < `not`):
@@ -105,7 +105,7 @@ Supported conditions:
 		// runs on Linux and macOS
 #endif
 
-#if os(Linux) and arch(aarch64)
+#if os(Linux) and arch(arm64)
 		// runs on ARM Linux only
 #endif
 ```

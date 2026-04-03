@@ -1,0 +1,40 @@
+// Test: float-return-from-function
+typealias Float = float(f64.min to f64.max)
+
+function computePi() returns Float
+	return 3.14
+end 'computePi'
+
+function main() returns ExitCode
+	var x = computePi()
+	var result = trunc(x)
+	return result
+end 'main'
+---
+ExitCode: 3
+---
+module {
+  func @float-return-from-function.computePi() -> f64 {
+  entry:
+    x64.movsd xmm0, [rip+__float_4614253070214989086]
+    x64.ret
+  }
+  func @main() -> u32 {
+  entry:
+    x64.prologue stack_size=16
+    x64.movsd [rbp+-8], xmm0
+    x64.call float-return-from-function.computePi
+    x64.cvttsd2si rax, xmm0
+    x64.mov rcx, 4294967295
+    x64.cmp rax, rcx
+    x64.jbe __range_ok_0
+  __range_panic_0:
+    x64.lea rax, [rip+__panic_msg_0]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.epilogue
+    x64.ret
+  }
+}
+---

@@ -1,0 +1,61 @@
+// Test: pass-by-reference.enum-ref
+
+enum Color
+	red
+	blue
+	green
+end 'Color'
+
+function switchColor(c Color)
+	c = Color.green
+end 'switchColor'
+
+function main() returns ExitCode
+	var c = Color.red
+	switchColor(c: c)
+	return c.rawValue
+end 'main'
+---
+ExitCode: 2
+---
+module {
+  func @pass-by-reference.switchColor(c: i64) {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-8], rcx
+    x64.mov rax, 2
+    x64.mov [rbp-16], rax
+    x64.mov rcx, [rbp-8]
+    x64.mov rdx, [rbp-16]
+    x64.mov [rcx+0], rdx
+    x64.epilogue
+    x64.ret
+  }
+  func @main() -> u32 {
+  entry:
+    x64.prologue stack_size=16
+    x64.xor rax, rax
+    x64.mov [rbp-8], rax
+    x64.lea rcx, [rbp-8]
+    x64.mov rdx, rcx
+    x64.mov rcx, rdx
+    x64.call pass-by-reference.switchColor
+    x64.mov rbx, [rbp-8]
+    x64.xor rsi, rsi
+    x64.mov rdi, 4294967295
+    x64.cmp rbx, rdi
+    x64.jg main.__range_panic_0
+    x64.cmp rbx, rsi
+    x64.jl main.__range_panic_0
+    x64.jmp main.__range_ok_0
+  __range_panic_0:
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.mov rax, rbx
+    x64.epilogue
+    x64.ret
+  }
+}
+---

@@ -1,0 +1,85 @@
+// Test: enum-match-range.range-covers-all-associated
+typealias Integer = int(i64.min to i64.max)
+
+enum Mixed
+	a(x Integer)
+	b(y Integer)
+	c(z Integer)
+end 'Mixed'
+
+function main() returns ExitCode
+	var m = Mixed.b(42)
+	match m 'check'
+		a to c then return 1
+	end 'check'
+end 'main'
+---
+ExitCode: 1
+---
+module {
+  func @main() -> u32 {
+  entry:
+    x64.prologue stack_size=32
+    x64.mov rax, 42
+    x64.mov rcx, 16
+    x64.xor rdx, rdx
+    x64.mov r8, 1
+    x64.call mm_alloc
+    x64.mov [rbp-8], rax
+    x64.mov rcx, 1
+    x64.mov [rax+0], rcx
+    x64.mov rdx, 42
+    x64.mov [rax+8], rdx
+    x64.mov rbx, [rbp-8]
+    x64.mov rcx, [rbp-8]
+    x64.call mm_incref
+    x64.mov rsi, [rbp-8]
+    x64.mov rdi, [rsi+0]
+    x64.mov r8, [rbp-8]
+    x64.mov [rbp-16], r8
+    x64.mov r9, [rbp-16]
+    x64.mov [rbp-32], rdi
+    x64.mov rcx, [rbp-16]
+    x64.call mm_incref
+    x64.mov rax, [rbp-32]
+    x64.mov [rbp-24], rax
+    x64.jmp main.check_0.cmp0
+  check_0.cmp0:
+    x64.mov rax, [rbp-24]
+    x64.xor rcx, rcx
+    x64.cmp rax, rcx
+    x64.setge rdx
+    x64.movzx rdx, rdxb
+    x64.mov rbx, [rbp-24]
+    x64.mov rsi, 2
+    x64.cmp rbx, rsi
+    x64.setle rdi
+    x64.movzx rdi, rdib
+    x64.and rdx, rdi
+    x64.test rdx, rdx
+    x64.je main.check_0.merge
+  check_0.case0:
+    x64.mov rax, [rbp-16]
+    x64.test rax, rax
+    x64.jz __nonnull_skip_0
+    x64.mov rcx, [rbp-16]
+    x64.call mm_decref
+    x64.label __nonnull_skip_0
+    x64.mov rcx, [rbp-8]
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_1
+    x64.call mm_decref
+    x64.label __nonnull_skip_1
+    x64.mov rax, 1
+    x64.epilogue
+    x64.ret
+  check_0.merge:
+  }
+  func @__destruct_Mixed(ptr: i64) {
+  entry:
+    x64.jmp __destruct_Mixed.done
+  done:
+    x64.ret
+  }
+}
+---

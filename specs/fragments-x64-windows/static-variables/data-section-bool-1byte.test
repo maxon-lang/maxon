@@ -1,0 +1,30 @@
+// Test: data-section-bool-1byte
+var flag = true
+
+function main() returns ExitCode
+	if flag 'read'
+		return 0
+	end 'read'
+	return 1
+end 'main'
+---
+ExitCode: 0
+RequiredData: ```
+i8 1
+```
+---
+module {
+  func @main() -> u32 {
+  entry:
+    x64.movzx rax, byte [rip+flag]
+    x64.test rax, rax
+    x64.je main.read_0.after
+  read_0:
+    x64.xor rax, rax
+    x64.ret
+  read_0.after:
+    x64.mov rax, 1
+    x64.ret
+  }
+}
+---

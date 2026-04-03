@@ -1,0 +1,215 @@
+// Test: rc-managed-list-node-set-value-decrefs-old
+typealias Integer = int(i64.min to i64.max)
+
+type Token
+	export var id Integer
+
+	static function create(id Integer) returns Self
+		return Self{id: id}
+	end 'create'
+end 'Token'
+
+typealias TokenManagedList = __ManagedList with Token
+
+function main() returns ExitCode
+	var managedList = TokenManagedList.create()
+	var node = managedList.insertFirst(Token.create(id: 1))
+	node.setValue(Token.create(id: 99))
+	return node.value().id
+end 'main'
+---
+MmTrace: true
+ExitCode: 99
+Stderr: ```
+sl_init
+  os_alloc size=67108864
+mm_alloc TokenManagedList #1 size=32 [main]
+  sl_alloc TokenManagedList #1 size=64 class=5
+mm_incref TokenManagedList #1 rc=1 [main]
+mm_alloc Token #2 size=8 [Token.create]
+  sl_alloc Token #2 size=40 class=4
+mm_incref Token #2 rc=1 [Token.create]
+mm_transfer Token #2 rc=1 [Token.create]
+mm_alloc __ManagedListNode #3 size=32 [main]
+  sl_alloc __ManagedListNode #3 size=64 class=5
+mm_incref Token #2 rc=2 [main]
+mm_incref __ManagedListNode #3 rc=1 [managed_list_insert]
+mm_incref __ManagedListNode #3 rc=2 [main]
+mm_alloc Token #4 size=8 [Token.create]
+  sl_alloc Token #4 size=40 class=4
+mm_incref Token #4 rc=1 [Token.create]
+mm_transfer Token #4 rc=1 [Token.create]
+mm_decref Token #2 rc=1 [main]
+mm_incref Token #4 rc=2 [main]
+mm_decref Token #4 rc=1 [main]
+mm_decref Token #2 rc=0 [main]
+  mm_free Token #2
+    sl_free Token #2 size=48 class=4
+mm_decref __ManagedListNode #3 rc=1 [main]
+mm_decref TokenManagedList #1 rc=0 [main]
+  mm_decref Token #4 rc=0 [managed_list_clear]
+    mm_free Token #4
+      sl_free Token #4 size=48 class=4
+  mm_decref __ManagedListNode #3 rc=0 [managed_list_clear]
+    mm_free __ManagedListNode #3
+      sl_free __ManagedListNode #3 size=64 class=5
+  mm_free TokenManagedList #1
+    sl_free TokenManagedList #1 size=64 class=5
+mm_raw_alloc #R1 size=40
+  sl_alloc size=40 class=4
+mm_raw_free #R1
+  sl_free size=48 class=4
+```
+---
+module {
+  func @Token.create(id: i64) -> i64 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-16], rcx
+    x64.mov rcx, 8
+    x64.xor rdx, rdx
+    x64.mov r8, 1
+    x64.call mm_alloc
+    x64.mov [rbp-8], rax
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rbp-16]
+    x64.mov [rax+0], rcx
+    x64.mov rdx, [rbp-8]
+    x64.mov rcx, [rbp-8]
+    x64.call mm_incref
+    x64.mov rax, [rbp-8]
+    x64.epilogue
+    x64.ret
+  }
+  func @main() -> u32 {
+  entry:
+    x64.prologue stack_size=80
+    x64.lea_func rax, [__destruct_TokenManagedList]
+    x64.mov rcx, rax
+    x64.mov rdx, rcx
+    x64.mov rcx, 32
+    x64.mov r8, 2
+    x64.call mm_alloc
+    x64.xor rdx, rdx
+    x64.mov [rax+0], rdx
+    x64.mov [rax+8], rdx
+    x64.mov [rax+16], rdx
+    x64.mov [rax+24], rdx
+    x64.mov [rbp-8], rax
+    x64.mov rbx, [rbp-8]
+    x64.mov rcx, [rbp-8]
+    x64.call mm_incref
+    x64.mov rcx, 1
+    x64.call Token.create
+    x64.mov [rbp-16], rax
+    x64.mov rcx, 32
+    x64.xor rdx, rdx
+    x64.mov r8, 3
+    x64.call mm_alloc
+    x64.xor rsi, rsi
+    x64.mov [rax+0], rsi
+    x64.mov [rax+8], rsi
+    x64.mov [rax+16], rsi
+    x64.mov rdi, [rbp-16]
+    x64.mov [rax+24], rdi
+    x64.mov [rbp-56], rax
+    x64.mov rcx, [rbp-16]
+    x64.call mm_incref
+    x64.mov r8, [rbp-56]
+    x64.mov [rbp-24], r8
+    x64.mov r9, [rbp-8]
+    x64.mov rax, [rbp-24]
+    x64.mov rcx, [rbp-8]
+    x64.mov rdx, [rbp-24]
+    x64.call maxon_managed_list_insert_first
+    x64.mov rax, [rbp-24]
+    x64.mov [rbp-32], rax
+    x64.mov rax, [rbp-32]
+    x64.mov rcx, [rbp-32]
+    x64.call mm_incref
+    x64.mov rcx, 99
+    x64.call Token.create
+    x64.mov [rbp-40], rax
+    x64.mov rax, [rbp-32]
+    x64.mov rcx, [rax+24]
+    x64.mov [rbp-64], rcx
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_0
+    x64.call mm_decref
+    x64.label __nonnull_skip_0
+    x64.mov rax, [rbp-40]
+    x64.mov rcx, [rbp-32]
+    x64.mov [rcx+24], rax
+    x64.mov rcx, [rbp-40]
+    x64.call mm_incref
+    x64.mov rax, [rbp-32]
+    x64.mov rcx, [rax+24]
+    x64.mov [rbp-48], rcx
+    x64.mov rax, [rbp-48]
+    x64.mov rcx, [rax+0]
+    x64.xor rax, rax
+    x64.mov rdx, 4294967295
+    x64.cmp rcx, rdx
+    x64.jg main.__range_panic_0
+    x64.cmp rcx, rax
+    x64.jl main.__range_panic_0
+    x64.jmp main.__range_ok_0
+  __range_panic_0:
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.mov rbx, [rbp-40]
+    x64.mov [rbp-72], rcx
+    x64.test rbx, rbx
+    x64.jz __nonnull_skip_1
+    x64.mov rcx, [rbp-40]
+    x64.call mm_decref
+    x64.label __nonnull_skip_1
+    x64.mov rax, [rbp-16]
+    x64.test rax, rax
+    x64.jz __nonnull_skip_2
+    x64.mov rcx, [rbp-16]
+    x64.call mm_decref
+    x64.label __nonnull_skip_2
+    x64.mov rcx, [rbp-32]
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_3
+    x64.call mm_decref
+    x64.label __nonnull_skip_3
+    x64.mov rdx, [rbp-8]
+    x64.test rdx, rdx
+    x64.jz __nonnull_skip_4
+    x64.mov rcx, [rbp-8]
+    x64.call mm_decref
+    x64.label __nonnull_skip_4
+    x64.mov rax, [rbp-72]
+    x64.epilogue
+    x64.ret
+  }
+  func @__destruct_Token(ptr: i64) {
+  entry:
+    x64.jmp __destruct_Token.done
+  done:
+    x64.ret
+  }
+  func @__destruct_TokenManagedList(ptr: i64) {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-8], rcx
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rbp-8]
+    x64.call maxon_managed_list_clear_managed
+    x64.jmp __destruct_TokenManagedList.done
+  done:
+    x64.epilogue
+    x64.ret
+  }
+  func @__destruct___ManagedListNode(ptr: i64) {
+  entry:
+    x64.jmp __destruct___ManagedListNode.done
+  done:
+    x64.ret
+  }
+}
+---

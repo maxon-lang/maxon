@@ -1,0 +1,97 @@
+// Test: associated-value-construction
+
+typealias Integer = int(i64.min to i64.max)
+
+enum Container
+	empty
+	value(n Integer)
+end 'Container'
+
+function main() returns ExitCode
+	var c = Container.value(42)
+	match c 'check'
+		value(_) then return 1
+		empty then return 0
+	end 'check'
+end 'main'
+---
+ExitCode: 1
+---
+module {
+  func @main() -> u32 {
+  entry:
+    x64.prologue stack_size=32
+    x64.mov rax, 42
+    x64.mov rcx, 16
+    x64.xor rdx, rdx
+    x64.mov r8, 1
+    x64.call mm_alloc
+    x64.mov [rbp-8], rax
+    x64.mov rcx, 1
+    x64.mov [rax+0], rcx
+    x64.mov rdx, 42
+    x64.mov [rax+8], rdx
+    x64.mov rbx, [rbp-8]
+    x64.mov rcx, [rbp-8]
+    x64.call mm_incref
+    x64.mov rsi, [rbp-8]
+    x64.mov rdi, [rsi+0]
+    x64.mov r8, [rbp-8]
+    x64.mov [rbp-16], r8
+    x64.mov r9, [rbp-16]
+    x64.mov [rbp-32], rdi
+    x64.mov rcx, [rbp-16]
+    x64.call mm_incref
+    x64.mov rax, [rbp-32]
+    x64.mov [rbp-24], rax
+    x64.jmp main.check_0.cmp0
+  check_0.cmp0:
+    x64.mov rax, [rbp-24]
+    x64.mov rcx, 1
+    x64.cmp rax, rcx
+    x64.jne main.check_0.cmp1
+  check_0.case0:
+    x64.mov rax, [rbp-16]
+    x64.test rax, rax
+    x64.jz __nonnull_skip_0
+    x64.mov rcx, [rbp-16]
+    x64.call mm_decref
+    x64.label __nonnull_skip_0
+    x64.mov rcx, [rbp-8]
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_1
+    x64.call mm_decref
+    x64.label __nonnull_skip_1
+    x64.mov rax, 1
+    x64.epilogue
+    x64.ret
+  check_0.cmp1:
+    x64.mov rax, [rbp-24]
+    x64.xor rcx, rcx
+    x64.cmp rax, rcx
+    x64.jne main.check_0.merge
+  check_0.case1:
+    x64.mov rax, [rbp-16]
+    x64.test rax, rax
+    x64.jz __nonnull_skip_2
+    x64.mov rcx, [rbp-16]
+    x64.call mm_decref
+    x64.label __nonnull_skip_2
+    x64.mov rcx, [rbp-8]
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_3
+    x64.call mm_decref
+    x64.label __nonnull_skip_3
+    x64.xor rax, rax
+    x64.epilogue
+    x64.ret
+  check_0.merge:
+  }
+  func @__destruct_Container(ptr: i64) {
+  entry:
+    x64.jmp __destruct_Container.done
+  done:
+    x64.ret
+  }
+}
+---

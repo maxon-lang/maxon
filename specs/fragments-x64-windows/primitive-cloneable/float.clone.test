@@ -1,0 +1,33 @@
+// Test: float.clone
+function main() returns ExitCode
+	var x = 3.14
+	var y = x.clone()
+	if y == 3.14 'ok'
+		return 1
+	end 'ok'
+	return 0
+end 'main'
+---
+ExitCode: 1
+---
+module {
+  func @main() -> u32 {
+  entry:
+    x64.prologue stack_size=16
+    x64.movsd xmm0, [rip+__float_3.14]
+    x64.call stdlib.float.clone
+    x64.movsd xmm1, [rip+__float_3.14]
+    x64.ucomisd xmm0, xmm1
+    x64.jne main.ok_0.after
+    x64.jp main.ok_0.after
+  ok_0:
+    x64.mov rax, 1
+    x64.epilogue
+    x64.ret
+  ok_0.after:
+    x64.xor rax, rax
+    x64.epilogue
+    x64.ret
+  }
+}
+---

@@ -1,0 +1,33 @@
+// Test: expression-return
+function main() returns ExitCode
+	return 2 + 3 * 4
+end 'main'
+---
+ExitCode: 14
+---
+module {
+  func @main() -> u32 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov rax, 2
+    x64.mov rcx, 3
+    x64.mov rdx, 4
+    x64.imul rcx, rdx
+    x64.add rax, rcx
+    x64.xor rbx, rbx
+    x64.mov rsi, 4294967295
+    x64.cmp rax, rsi
+    x64.jg main.__range_panic_0
+    x64.cmp rax, rbx
+    x64.jl main.__range_panic_0
+    x64.jmp main.__range_ok_0
+  __range_panic_0:
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.epilogue
+    x64.ret
+  }
+}
+---

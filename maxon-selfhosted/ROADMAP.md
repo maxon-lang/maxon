@@ -2,7 +2,7 @@
 
 The self-hosted Maxon compiler (`maxon-selfhosted/`) currently passes **3 of ~131 spec tests** (`basics`, `print-function`, `variables`). It has a working end-to-end pipeline (lexer → parser → Maxon dialect → Standard dialect → X86 dialect → code emitter → PE/ELF writer) but only supports a tiny subset of the language. This roadmap brings it to full parity with the C# compiler (`maxon-sharp/`).
 
-Each phase includes X86 + ARM64 backends and PE + ELF output formats. All targets (`x86_64-windows`, `aarch64-windows`, `x86_64-linux`, `aarch64-linux`) are brought to parity within each phase.
+Each phase includes X86 + ARM64 backends and PE + ELF output formats. All targets (`x64-windows`, `arm64-windows`, `x64-linux`, `arm64-linux`) are brought to parity within each phase.
 
 ## Progress
 
@@ -260,7 +260,7 @@ Phase 16: Optimization Passes    [ ] (depends on Phase 15)
 - Add kernel32.dll imports for HeapAlloc, HeapReAlloc, HeapFree, GetProcessHeap
 
 **ELF Writer** (`ElfWriter.maxon`):
-- Ensure syscall stubs work for memory allocation on both x86_64 and aarch64
+- Ensure syscall stubs work for memory allocation on both x64 and arm64
 
 **Memory model**: Structs passed as heap pointers (matching C# compiler). Struct literals allocate on heap via runtime alloc call.
 
@@ -298,7 +298,7 @@ Phase 16: Optimization Passes    [ ] (depends on Phase 15)
 **X86 & ARM64 backends**: Both need `callRuntime` lowering — X86 uses IAT calls on Windows and syscalls on Linux, ARM64 uses syscalls on Linux. The runtime call dispatch is handled in `BackendDispatch.maxon` via `OsDescriptor`.
 
 **PE Writer**: Ensure heap API imports are present (from Phase 5)
-**ELF Writer**: Ensure syscall-based allocation works for both x86_64 and aarch64
+**ELF Writer**: Ensure syscall-based allocation works for both x64 and arm64
 
 ### Files to modify
 - All pipeline files (both backends)
@@ -501,7 +501,7 @@ Phase 16: Optimization Passes    [ ] (depends on Phase 15)
 - Initialize global variables at program startup
 
 **ELF Writer**:
-- Add `.data` section for global variables (both x86_64 and aarch64)
+- Add `.data` section for global variables (both x64 and arm64)
 
 ### Files to modify
 - All pipeline files (both backends) + PE writer + ELF writer
@@ -606,8 +606,8 @@ After each phase:
 1. Update the spec whitelist in `Testing/SpecTestRunner.maxon`
 2. Build the self-hosted compiler: `maxon build maxon-selfhosted`
 3. Run spec tests for all three targets:
-   - `./maxon-selfhosted/bin/maxon-selfhosted.exe spec-test` (x86_64-windows, runs natively)
-   - `./maxon-selfhosted/bin/maxon-selfhosted.exe spec-test --target=x86_64-linux` (runs via Docker)
-   - `./maxon-selfhosted/bin/maxon-selfhosted.exe spec-test --target=aarch64-linux` (runs via Docker)
+   - `./maxon-selfhosted/bin/maxon-selfhosted.exe spec-test` (x64-windows, runs natively)
+   - `./maxon-selfhosted/bin/maxon-selfhosted.exe spec-test --target=x64-linux` (runs via Docker)
+   - `./maxon-selfhosted/bin/maxon-selfhosted.exe spec-test --target=arm64-linux` (runs via Docker)
 4. Verify all whitelisted tests pass on all targets
 5. Cross-check against C# compiler: `./maxon-sharp/bin/Debug/net8.0/win-x64/maxon.exe spec-test` to ensure behavioral parity

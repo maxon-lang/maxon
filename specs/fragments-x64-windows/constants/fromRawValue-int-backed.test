@@ -1,0 +1,88 @@
+// Test: fromRawValue-int-backed
+enum HttpStatus
+	ok = 200
+	notFound = 404
+	serverError = 500
+end 'HttpStatus'
+
+function main() returns ExitCode
+	var status = try HttpStatus.fromRawValue(404) otherwise HttpStatus.ok
+	if status == HttpStatus.notFound 'check'
+		return 1
+	end 'check'
+	return 0
+end 'main'
+---
+ExitCode: 1
+---
+module {
+  func @main() -> u32 {
+  entry:
+    x64.prologue stack_size=32
+    x64.mov rax, 404
+    x64.mov rcx, 1
+    x64.xor rdx, rdx
+    x64.mov rbx, 200
+    x64.cmp rax, rbx
+    x64.sete rsi
+    x64.movzx rsi, rsib
+    x64.xor rdi, rdi
+    x64.test rsi, rsi
+    x64.mov r8, rcx
+    x64.cmovne r8, rdi
+    x64.mov r9, 200
+    x64.test rsi, rsi
+    x64.mov rcx, rdx
+    x64.cmovne rcx, r9
+    x64.mov rdx, 404
+    x64.cmp rax, rdx
+    x64.sete rdx
+    x64.movzx rdx, rdxb
+    x64.xor rbx, rbx
+    x64.test rdx, rdx
+    x64.mov rsi, r8
+    x64.cmovne rsi, rbx
+    x64.mov rbx, 404
+    x64.test rdx, rdx
+    x64.mov rdi, rcx
+    x64.cmovne rdi, rbx
+    x64.mov rcx, 500
+    x64.cmp rax, rcx
+    x64.sete rax
+    x64.movzx rax, raxb
+    x64.xor rcx, rcx
+    x64.test rax, rax
+    x64.mov rdx, rsi
+    x64.cmovne rdx, rcx
+    x64.mov rcx, 500
+    x64.test rax, rax
+    x64.mov rbx, rdi
+    x64.cmovne rbx, rcx
+    x64.mov rax, 200
+    x64.mov [rbp-8], rax
+    x64.mov [rbp-16], rbx
+    x64.xor rax, rax
+    x64.cmp rdx, rax
+    x64.je main.otherwise_default_continue_3
+  otherwise_default_error_2:
+    x64.mov rax, [rbp-8]
+    x64.mov [rbp-16], rax
+    x64.jmp main.otherwise_default_continue_3
+  otherwise_default_continue_3:
+    x64.mov rax, [rbp-16]
+    x64.mov [rbp-24], rax
+    x64.mov rcx, 404
+    x64.mov rdx, [rbp-24]
+    x64.cmp rdx, rcx
+    x64.jne main.check_4.after
+  check_4:
+    x64.mov rax, 1
+    x64.epilogue
+    x64.ret
+  check_4.after:
+    x64.xor rax, rax
+    x64.epilogue
+    x64.ret
+  }
+}
+---

@@ -1,0 +1,56 @@
+// Test: while-loops.break
+function main() returns ExitCode
+	var x = 5
+	while true 'loop'
+		x = x + 2
+		if x == 11 'check'
+			break
+		end 'check'
+	end 'loop'
+	return x
+end 'main'
+---
+ExitCode: 11
+---
+module {
+  func @main() -> u32 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov rax, 5
+    x64.mov [rbp-8], rax
+    x64.jmp main.loop_0.header
+  loop_0.header:
+    x64.mov rax, 1
+    x64.test rax, rax
+    x64.je main.loop_0.exit
+  loop_0:
+    x64.mov rax, 2
+    x64.mov rcx, [rbp-8]
+    x64.add rcx, rax
+    x64.mov [rbp-8], rcx
+    x64.mov rdx, 11
+    x64.cmp rcx, rdx
+    x64.jne main.check_1.after
+  check_1:
+    x64.jmp main.loop_0.exit
+  check_1.after:
+    x64.jmp main.loop_0.header
+  loop_0.exit:
+    x64.mov rax, [rbp-8]
+    x64.xor rcx, rcx
+    x64.mov rdx, 4294967295
+    x64.cmp rax, rdx
+    x64.jg main.__range_panic_2
+    x64.cmp rax, rcx
+    x64.jl main.__range_panic_2
+    x64.jmp main.__range_ok_2
+  __range_panic_2:
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_2:
+    x64.epilogue
+    x64.ret
+  }
+}
+---

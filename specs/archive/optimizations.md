@@ -32,10 +32,10 @@ end 'main'
 ```requiredmlir
 func.func @main() -> i64 {
   ^entry:
-  x86.prologue stack_size=32
-  x86.mov rax, 30
-  x86.epilogue
-  x86.ret
+  x64.prologue stack_size=32
+  x64.mov rax, 30
+  x64.epilogue
+  x64.ret
 }
 ```
 
@@ -51,10 +51,10 @@ end 'main'
 ```requiredmlir
 func.func @main() -> i64 {
   ^entry:
-  x86.prologue stack_size=32
-  x86.mov rax, 16
-  x86.epilogue
-  x86.ret
+  x64.prologue stack_size=32
+  x64.mov rax, 16
+  x64.epilogue
+  x64.ret
 }
 ```
 
@@ -70,10 +70,10 @@ end 'main'
 ```requiredmlir
 func.func @main() -> i64 {
   ^entry:
-  x86.prologue stack_size=32
-  x86.mov rax, 75
-  x86.epilogue
-  x86.ret
+  x64.prologue stack_size=32
+  x64.mov rax, 75
+  x64.epilogue
+  x64.ret
 }
 ```
 
@@ -89,10 +89,10 @@ end 'main'
 ```requiredmlir
 func.func @main() -> i64 {
   ^entry:
-  x86.prologue stack_size=32
-  x86.mov rax, 42
-  x86.epilogue
-  x86.ret
+  x64.prologue stack_size=32
+  x64.mov rax, 42
+  x64.epilogue
+  x64.ret
 }
 ```
 
@@ -108,10 +108,10 @@ end 'main'
 ```requiredmlir
 func.func @main() -> i64 {
   ^entry:
-  x86.prologue stack_size=32
-  x86.mov rax, 25
-  x86.epilogue
-  x86.ret
+  x64.prologue stack_size=32
+  x64.mov rax, 25
+  x64.epilogue
+  x64.ret
 }
 ```
 
@@ -127,10 +127,10 @@ end 'main'
 ```requiredmlir
 func.func @main() -> i64 {
   ^entry:
-  x86.prologue stack_size=32
-  x86.mov rax, 2
-  x86.epilogue
-  x86.ret
+  x64.prologue stack_size=32
+  x64.mov rax, 2
+  x64.epilogue
+  x64.ret
 }
 ```
 
@@ -147,10 +147,10 @@ end 'main'
 ```requiredmlir
 func.func @main() -> i64 {
   ^entry:
-  x86.prologue stack_size=32
-  x86.mov rax, 0
-  x86.epilogue
-  x86.ret
+  x64.prologue stack_size=32
+  x64.mov rax, 0
+  x64.epilogue
+  x64.ret
 }
 ```
 
@@ -170,10 +170,10 @@ end 'main'
 ```requiredmlir
 func.func @main() -> i64 {
   ^entry:
-  x86.prologue stack_size=32
-  x86.mov rax, 42
-  x86.epilogue
-  x86.ret
+  x64.prologue stack_size=32
+  x64.mov rax, 42
+  x64.epilogue
+  x64.ret
 }
 ```
 
@@ -190,10 +190,10 @@ end 'main'
 ```requiredmlir
 func.func @main() -> i64 {
   ^entry:
-  x86.prologue stack_size=32
-  x86.mov rax, 20
-  x86.epilogue
-  x86.ret
+  x64.prologue stack_size=32
+  x64.mov rax, 20
+  x64.epilogue
+  x64.ret
 }
 ```
 
@@ -210,10 +210,10 @@ end 'main'
 ```requiredmlir
 func.func @main() -> i64 {
   ^entry:
-  x86.prologue stack_size=32
-  x86.mov rax, 28
-  x86.epilogue
-  x86.ret
+  x64.prologue stack_size=32
+  x64.mov rax, 28
+  x64.epilogue
+  x64.ret
 }
 ```
 
@@ -230,10 +230,10 @@ end 'main'
 ```requiredmlir
 func.func @main() -> i64 {
   ^entry:
-  x86.prologue stack_size=32
-  x86.mov rax, 40
-  x86.epilogue
-  x86.ret
+  x64.prologue stack_size=32
+  x64.mov rax, 40
+  x64.epilogue
+  x64.ret
 }
 ```
 
@@ -249,10 +249,10 @@ end 'main'
 ```requiredmlir
 func.func @main() -> i64 {
   ^entry:
-  x86.prologue stack_size=32
-  x86.mov rax, 15
-  x86.epilogue
-  x86.ret
+  x64.prologue stack_size=32
+  x64.mov rax, 15
+  x64.epilogue
+  x64.ret
 }
 ```
 
@@ -270,10 +270,10 @@ end 'main'
 ```requiredmlir
 func.func @main() -> i64 {
   ^entry:
-  x86.prologue stack_size=32
-  x86.mov rax, 20
-  x86.epilogue
-  x86.ret
+  x64.prologue stack_size=32
+  x64.mov rax, 20
+  x64.epilogue
+  x64.ret
 }
 ```
 
@@ -294,10 +294,10 @@ end 'main'
 ```requiredmlir
 func.func @main() -> i64 {
   ^entry:
-  x86.prologue stack_size=32
-  x86.mov rax, 20
-  x86.epilogue
-  x86.ret
+  x64.prologue stack_size=32
+  x64.mov rax, 20
+  x64.epilogue
+  x64.ret
 }
 ```
 
@@ -315,10 +315,10 @@ end 'main'
 ```requiredmlir
 func.func @main() -> i64 {
   ^entry:
-  x86.prologue stack_size=32
-  x86.mov rax, 5
-  x86.epilogue
-  x86.ret
+  x64.prologue stack_size=32
+  x64.mov rax, 5
+  x64.epilogue
+  x64.ret
 }
 ```
 
@@ -334,10 +334,10 @@ end 'main'
 ```requiredmlir
 func.func @main() -> i64 {
   ^entry:
-  x86.prologue stack_size=32
-  x86.mov rax, 4
-  x86.epilogue
-  x86.ret
+  x64.prologue stack_size=32
+  x64.mov rax, 4
+  x64.epilogue
+  x64.ret
 }
 ```
 
@@ -353,10 +353,10 @@ end 'main'
 ```requiredmlir
 func.func @main() -> i64 {
   ^entry:
-  x86.prologue stack_size=32
-  x86.mov rax, 6
-  x86.epilogue
-  x86.ret
+  x64.prologue stack_size=32
+  x64.mov rax, 6
+  x64.epilogue
+  x64.ret
 }
 ```
 
@@ -372,10 +372,10 @@ end 'main'
 ```requiredmlir
 func.func @main() -> i64 {
   ^entry:
-  x86.prologue stack_size=32
-  x86.mov rax, 6
-  x86.epilogue
-  x86.ret
+  x64.prologue stack_size=32
+  x64.mov rax, 6
+  x64.epilogue
+  x64.ret
 }
 ```
 
@@ -391,10 +391,10 @@ end 'main'
 ```requiredmlir
 func.func @main() -> i64 {
   ^entry:
-  x86.prologue stack_size=32
-  x86.mov rax, 10
-  x86.epilogue
-  x86.ret
+  x64.prologue stack_size=32
+  x64.mov rax, 10
+  x64.epilogue
+  x64.ret
 }
 ```
 
@@ -410,10 +410,10 @@ end 'main'
 ```requiredmlir
 func.func @main() -> i64 {
   ^entry:
-  x86.prologue stack_size=32
-  x86.mov rax, 9
-  x86.epilogue
-  x86.ret
+  x64.prologue stack_size=32
+  x64.mov rax, 9
+  x64.epilogue
+  x64.ret
 }
 ```
 
@@ -448,31 +448,31 @@ end 'main'
 ```requiredmlir
 func.func @main() -> i64 {
   ^entry:
-  x86.prologue stack_size=32
-  x86.mov rcx, 1
-  x86.mov r8, 5
-  x86.mov r9, 0
-  x86.mov r10, rcx
-  x86.jmp while.cond
+  x64.prologue stack_size=32
+  x64.mov rcx, 1
+  x64.mov r8, 5
+  x64.mov r9, 0
+  x64.mov r10, rcx
+  x64.jmp while.cond
   ^while.cond(%14: i64, %16: i64):
-  x86.cmp r10, r8
-  x86.setle rdx
-  x86.movzx rdx, rdx
-  x86.test rdx, rdx
-  x86.jne while.body
-  x86.jmp while.exit
+  x64.cmp r10, r8
+  x64.setle rdx
+  x64.movzx rdx, rdx
+  x64.test rdx, rdx
+  x64.jne while.body
+  x64.jmp while.exit
   ^while.body:
-  x86.mov rdx, r9
-  x86.add rdx, r10
-  x86.mov rax, r10
-  x86.add rax, rcx
-  x86.mov r9, rdx
-  x86.mov r10, rax
-  x86.jmp while.cond
+  x64.mov rdx, r9
+  x64.add rdx, r10
+  x64.mov rax, r10
+  x64.add rax, rcx
+  x64.mov r9, rdx
+  x64.mov r10, rax
+  x64.jmp while.cond
   ^while.exit:
-  x86.mov rax, r9
-  x86.epilogue
-  x86.ret
+  x64.mov rax, r9
+  x64.epilogue
+  x64.ret
 }
 ```
 
@@ -500,32 +500,32 @@ end 'main'
 ```requiredmlir
 func.func @test(%cond: i64) -> i64 {
   ^entry(%cond: i64):
-  x86.prologue stack_size=32
-  x86.mov rax, rcx
-  x86.mov rcx, 0
-  x86.cmp rax, rcx
-  x86.setg rcx
-  x86.movzx rcx, rcx
-  x86.test rcx, rcx
-  x86.jne then
-  x86.jmp else
+  x64.prologue stack_size=32
+  x64.mov rax, rcx
+  x64.mov rcx, 0
+  x64.cmp rax, rcx
+  x64.setg rcx
+  x64.movzx rcx, rcx
+  x64.test rcx, rcx
+  x64.jne then
+  x64.jmp else
   ^then:
-  x86.mov rax, 10
-  x86.jmp merge
+  x64.mov rax, 10
+  x64.jmp merge
   ^else:
-  x86.mov rax, 20
-  x86.jmp merge
+  x64.mov rax, 20
+  x64.jmp merge
   ^merge(%13: i64):
-  x86.epilogue
-  x86.ret
+  x64.epilogue
+  x64.ret
 }
 func.func @main() -> i64 {
   ^entry:
-  x86.prologue stack_size=32
-  x86.mov rcx, 1
-  x86.call test
-  x86.epilogue
-  x86.ret
+  x64.prologue stack_size=32
+  x64.mov rcx, 1
+  x64.call test
+  x64.epilogue
+  x64.ret
 }
 ```
 
@@ -552,32 +552,32 @@ end 'main'
 ```requiredmlir
 func.func @test(%cond: i64) -> i64 {
   ^entry(%cond: i64):
-  x86.prologue stack_size=32
-  x86.mov rax, rcx
-  x86.mov rcx, 0
-  x86.cmp rax, rcx
-  x86.setg rcx
-  x86.movzx rcx, rcx
-  x86.test rcx, rcx
-  x86.jne then
-  x86.jmp else
+  x64.prologue stack_size=32
+  x64.mov rax, rcx
+  x64.mov rcx, 0
+  x64.cmp rax, rcx
+  x64.setg rcx
+  x64.movzx rcx, rcx
+  x64.test rcx, rcx
+  x64.jne then
+  x64.jmp else
   ^then:
-  x86.mov rax, 10
-  x86.jmp merge
+  x64.mov rax, 10
+  x64.jmp merge
   ^else:
-  x86.mov rax, 20
-  x86.jmp merge
+  x64.mov rax, 20
+  x64.jmp merge
   ^merge(%13: i64):
-  x86.epilogue
-  x86.ret
+  x64.epilogue
+  x64.ret
 }
 func.func @main() -> i64 {
   ^entry:
-  x86.prologue stack_size=32
-  x86.mov rcx, 0
-  x86.call test
-  x86.epilogue
-  x86.ret
+  x64.prologue stack_size=32
+  x64.mov rcx, 0
+  x64.call test
+  x64.epilogue
+  x64.ret
 }
 ```
 
@@ -603,32 +603,32 @@ end 'main'
 ```requiredmlir
 func.func @test(%cond: i64) -> i64 {
   ^entry(%cond: i64):
-  x86.prologue stack_size=32
-  x86.mov rax, rcx
-  x86.mov rcx, 0
-  x86.cmp rax, rcx
-  x86.setg rax
-  x86.movzx rax, rax
-  x86.test rax, rax
-  x86.jne then
-  x86.jmp merge.args.from.entry
+  x64.prologue stack_size=32
+  x64.mov rax, rcx
+  x64.mov rcx, 0
+  x64.cmp rax, rcx
+  x64.setg rax
+  x64.movzx rax, rax
+  x64.test rax, rax
+  x64.jne then
+  x64.jmp merge.args.from.entry
   merge.args.from.entry:
-  x86.mov rax, rcx
-  x86.jmp merge
+  x64.mov rax, rcx
+  x64.jmp merge
   ^then:
-  x86.mov rax, 42
-  x86.jmp merge
+  x64.mov rax, 42
+  x64.jmp merge
   ^merge(%12: i64):
-  x86.epilogue
-  x86.ret
+  x64.epilogue
+  x64.ret
 }
 func.func @main() -> i64 {
   ^entry:
-  x86.prologue stack_size=32
-  x86.mov rcx, 1
-  x86.call test
-  x86.epilogue
-  x86.ret
+  x64.prologue stack_size=32
+  x64.mov rcx, 1
+  x64.call test
+  x64.epilogue
+  x64.ret
 }
 ```
 
@@ -657,52 +657,52 @@ end 'main'
 ```requiredmlir
 func.func @main() -> i64 {
   ^entry:
-  x86.prologue stack_size=56 saved_gprs=[RBX]
-  x86.mov rax, 0
-  x86.lea rcx, qword ptr [rbp-40]
-  x86.mov qword ptr [rcx], rax
-  x86.mov r8, 1
-  x86.mov r9, 3
-  x86.mov r10, r8
-  x86.jmp while.cond
+  x64.prologue stack_size=56 saved_gprs=[RBX]
+  x64.mov rax, 0
+  x64.lea rcx, qword ptr [rbp-40]
+  x64.mov qword ptr [rcx], rax
+  x64.mov r8, 1
+  x64.mov r9, 3
+  x64.mov r10, r8
+  x64.jmp while.cond
   ^while.cond(%24: i64):
-  x86.cmp r10, r9
-  x86.setle rax
-  x86.movzx rax, rax
-  x86.test rax, rax
-  x86.jne while.body
-  x86.jmp while.exit
+  x64.cmp r10, r9
+  x64.setle rax
+  x64.movzx rax, rax
+  x64.test rax, rax
+  x64.jne while.body
+  x64.jmp while.exit
   ^while.body:
-  x86.mov r11, 1
-  x86.jmp while.cond_1
+  x64.mov r11, 1
+  x64.jmp while.cond_1
   ^while.exit:
-  x86.mov rdx, qword ptr [rcx]
-  x86.mov rax, rdx
-  x86.epilogue saved_gprs=[RBX]
-  x86.ret
+  x64.mov rdx, qword ptr [rcx]
+  x64.mov rax, rdx
+  x64.epilogue saved_gprs=[RBX]
+  x64.ret
   ^while.cond_1(%25: i64):
-  x86.cmp r11, r9
-  x86.setle rdx
-  x86.movzx rdx, rdx
-  x86.test rdx, rdx
-  x86.jne while.body_1
-  x86.jmp while.exit_1
+  x64.cmp r11, r9
+  x64.setle rdx
+  x64.movzx rdx, rdx
+  x64.test rdx, rdx
+  x64.jne while.body_1
+  x64.jmp while.exit_1
   ^while.body_1:
-  x86.mov rdx, qword ptr [rcx]
-  x86.imul rax, r10, r11
-  x86.mov rbx, rdx
-  x86.add rbx, rax
-  x86.mov qword ptr [rcx], rbx
-  x86.mov rax, 1
-  x86.mov rdx, r11
-  x86.add rdx, rax
-  x86.mov r11, rdx
-  x86.jmp while.cond_1
+  x64.mov rdx, qword ptr [rcx]
+  x64.imul rax, r10, r11
+  x64.mov rbx, rdx
+  x64.add rbx, rax
+  x64.mov qword ptr [rcx], rbx
+  x64.mov rax, 1
+  x64.mov rdx, r11
+  x64.add rdx, rax
+  x64.mov r11, rdx
+  x64.jmp while.cond_1
   ^while.exit_1:
-  x86.mov rdx, r10
-  x86.add rdx, r8
-  x86.mov r10, rdx
-  x86.jmp while.cond
+  x64.mov rdx, r10
+  x64.add rdx, r8
+  x64.mov r10, rdx
+  x64.jmp while.cond
 }
 ```
 
@@ -728,10 +728,10 @@ end 'main'
 ```requiredmlir
 func.func @main() -> i64 {
   ^entry:
-  x86.prologue stack_size=32
-  x86.mov rax, 42
-  x86.epilogue
-  x86.ret
+  x64.prologue stack_size=32
+  x64.mov rax, 42
+  x64.epilogue
+  x64.ret
 }
 ```
 
@@ -752,10 +752,10 @@ end 'main'
 ```requiredmlir
 func.func @main() -> i64 {
   ^entry:
-  x86.prologue stack_size=32
-  x86.mov rax, 99
-  x86.epilogue
-  x86.ret
+  x64.prologue stack_size=32
+  x64.mov rax, 99
+  x64.epilogue
+  x64.ret
 }
 ```
 
@@ -776,10 +776,10 @@ end 'main'
 ```requiredmlir
 func.func @main() -> i64 {
   ^entry:
-  x86.prologue stack_size=32
-  x86.mov rax, 1
-  x86.epilogue
-  x86.ret
+  x64.prologue stack_size=32
+  x64.mov rax, 1
+  x64.epilogue
+  x64.ret
 }
 ```
 
@@ -800,10 +800,10 @@ end 'main'
 ```requiredmlir
 func.func @main() -> i64 {
   ^entry:
-  x86.prologue stack_size=32
-  x86.mov rax, 0
-  x86.epilogue
-  x86.ret
+  x64.prologue stack_size=32
+  x64.mov rax, 0
+  x64.epilogue
+  x64.ret
 }
 ```
 
@@ -832,46 +832,46 @@ end 'main'
 ```requiredmlir
 func.func @main() -> i64 {
   ^entry:
-  x86.prologue stack_size=32 saved_gprs=[RBX,R12]
-  x86.mov r8, 10
-  x86.mov r9, 1
-  x86.mov r10, 1
-  x86.mov r11, 5
-  x86.mov rbx, 0
-  x86.mov r12, 0
-  x86.jmp while.cond
+  x64.prologue stack_size=32 saved_gprs=[RBX,R12]
+  x64.mov r8, 10
+  x64.mov r9, 1
+  x64.mov r10, 1
+  x64.mov r11, 5
+  x64.mov rbx, 0
+  x64.mov r12, 0
+  x64.jmp while.cond
   ^while.cond(%17: i64, %18: i1):
-  x86.cmp rbx, r8
-  x86.setl rdx
-  x86.movzx rdx, rdx
-  x86.test rdx, rdx
-  x86.jne while.body
-  x86.jmp while.exit
+  x64.cmp rbx, r8
+  x64.setl rdx
+  x64.movzx rdx, rdx
+  x64.test rdx, rdx
+  x64.jne while.body
+  x64.jmp while.exit
   ^while.body:
-  x86.cmp rbx, r11
-  x86.sete rdx
-  x86.movzx rdx, rdx
-  x86.test rdx, rdx
-  x86.jne merge
-  x86.jmp merge
+  x64.cmp rbx, r11
+  x64.sete rdx
+  x64.movzx rdx, rdx
+  x64.test rdx, rdx
+  x64.jne merge
+  x64.jmp merge
   ^while.exit:
-  x86.test r12, r12
-  x86.jne then_1
-  x86.jmp merge_1
+  x64.test r12, r12
+  x64.jne then_1
+  x64.jmp merge_1
   ^merge:
-  x86.mov rdx, rbx
-  x86.add rdx, r9
-  x86.mov rbx, rdx
-  x86.mov r12, r10
-  x86.jmp while.cond
+  x64.mov rdx, rbx
+  x64.add rdx, r9
+  x64.mov rbx, rdx
+  x64.mov r12, r10
+  x64.jmp while.cond
   ^then_1:
-  x86.mov rax, 1
-  x86.epilogue saved_gprs=[RBX,R12]
-  x86.ret
+  x64.mov rax, 1
+  x64.epilogue saved_gprs=[RBX,R12]
+  x64.ret
   ^merge_1:
-  x86.mov rax, 0
-  x86.epilogue saved_gprs=[RBX,R12]
-  x86.ret
+  x64.mov rax, 0
+  x64.epilogue saved_gprs=[RBX,R12]
+  x64.ret
 }
 ```
 
@@ -899,33 +899,33 @@ end 'main'
 ```requiredmlir
 func.func @main() -> i64 {
   ^entry:
-  x86.prologue stack_size=32
-  x86.mov rax, 0
-  x86.mov rcx, 5
-  x86.mov r8, 10
-  x86.mov r9, 1
-  x86.mov r10, rax
-  x86.mov r11, rax
-  x86.jmp while.cond
+  x64.prologue stack_size=32
+  x64.mov rax, 0
+  x64.mov rcx, 5
+  x64.mov r8, 10
+  x64.mov r9, 1
+  x64.mov r10, rax
+  x64.mov r11, rax
+  x64.jmp while.cond
   ^while.cond(%14: i64, %16: i64):
-  x86.cmp r11, rcx
-  x86.setl rdx
-  x86.movzx rdx, rdx
-  x86.test rdx, rdx
-  x86.jne while.body
-  x86.jmp while.exit
+  x64.cmp r11, rcx
+  x64.setl rdx
+  x64.movzx rdx, rdx
+  x64.test rdx, rdx
+  x64.jne while.body
+  x64.jmp while.exit
   ^while.body:
-  x86.mov rdx, r10
-  x86.add rdx, r8
-  x86.mov rax, r11
-  x86.add rax, r9
-  x86.mov r10, rdx
-  x86.mov r11, rax
-  x86.jmp while.cond
+  x64.mov rdx, r10
+  x64.add rdx, r8
+  x64.mov rax, r11
+  x64.add rax, r9
+  x64.mov r10, rdx
+  x64.mov r11, rax
+  x64.jmp while.cond
   ^while.exit:
-  x86.mov rax, r10
-  x86.epilogue
-  x86.ret
+  x64.mov rax, r10
+  x64.epilogue
+  x64.ret
 }
 ```
 
@@ -949,32 +949,32 @@ end 'main'
 ```requiredmlir
 func.func @main() -> i64 {
   ^entry:
-  x86.prologue stack_size=32
-  x86.mov rax, 0
-  x86.mov rcx, 3
-  x86.mov r8, 1
-  x86.mov r9, rax
-  x86.mov r10, rax
-  x86.jmp while.cond
+  x64.prologue stack_size=32
+  x64.mov rax, 0
+  x64.mov rcx, 3
+  x64.mov r8, 1
+  x64.mov r9, rax
+  x64.mov r10, rax
+  x64.jmp while.cond
   ^while.cond(%14: i64, %16: i64):
-  x86.cmp r10, rcx
-  x86.setl rdx
-  x86.movzx rdx, rdx
-  x86.test rdx, rdx
-  x86.jne while.body
-  x86.jmp while.exit
+  x64.cmp r10, rcx
+  x64.setl rdx
+  x64.movzx rdx, rdx
+  x64.test rdx, rdx
+  x64.jne while.body
+  x64.jmp while.exit
   ^while.body:
-  x86.mov rdx, r9
-  x86.add rdx, r8
-  x86.mov rax, r10
-  x86.add rax, r8
-  x86.mov r9, rdx
-  x86.mov r10, rax
-  x86.jmp while.cond
+  x64.mov rdx, r9
+  x64.add rdx, r8
+  x64.mov rax, r10
+  x64.add rax, r8
+  x64.mov r9, rdx
+  x64.mov r10, rax
+  x64.jmp while.cond
   ^while.exit:
-  x86.mov rax, r9
-  x86.epilogue
-  x86.ret
+  x64.mov rax, r9
+  x64.epilogue
+  x64.ret
 }
 ```
 
@@ -1002,51 +1002,51 @@ end 'main'
 ```requiredmlir
 func.func @main() -> i64 {
   ^entry:
-  x86.prologue stack_size=56 saved_gprs=[RBX]
-  x86.mov rax, 0
-  x86.lea rcx, qword ptr [rbp-40]
-  x86.mov qword ptr [rcx], rax
-  x86.mov r8, 1
-  x86.mov r9, 3
-  x86.mov r10, 2
-  x86.mov r11, r8
-  x86.jmp while.cond
+  x64.prologue stack_size=56 saved_gprs=[RBX]
+  x64.mov rax, 0
+  x64.lea rcx, qword ptr [rbp-40]
+  x64.mov qword ptr [rcx], rax
+  x64.mov r8, 1
+  x64.mov r9, 3
+  x64.mov r10, 2
+  x64.mov r11, r8
+  x64.jmp while.cond
   ^while.cond(%22: i64):
-  x86.cmp r11, r9
-  x86.setle rax
-  x86.movzx rax, rax
-  x86.test rax, rax
-  x86.jne while.body
-  x86.jmp while.exit
+  x64.cmp r11, r9
+  x64.setle rax
+  x64.movzx rax, rax
+  x64.test rax, rax
+  x64.jne while.body
+  x64.jmp while.exit
   ^while.body:
-  x86.mov rbx, 1
-  x86.jmp while.cond_1
+  x64.mov rbx, 1
+  x64.jmp while.cond_1
   ^while.exit:
-  x86.mov rax, qword ptr [rcx]
-  x86.epilogue saved_gprs=[RBX]
-  x86.ret
+  x64.mov rax, qword ptr [rcx]
+  x64.epilogue saved_gprs=[RBX]
+  x64.ret
   ^while.cond_1(%23: i64):
-  x86.cmp rbx, r10
-  x86.setle rax
-  x86.movzx rax, rax
-  x86.test rax, rax
-  x86.jne while.body_1
-  x86.jmp while.exit_1
+  x64.cmp rbx, r10
+  x64.setle rax
+  x64.movzx rax, rax
+  x64.test rax, rax
+  x64.jne while.body_1
+  x64.jmp while.exit_1
   ^while.body_1:
-  x86.mov rax, qword ptr [rcx]
-  x86.mov rdx, rax
-  x86.add rdx, r11
-  x86.mov qword ptr [rcx], rdx
-  x86.mov rdx, 1
-  x86.mov rax, rbx
-  x86.add rax, rdx
-  x86.mov rbx, rax
-  x86.jmp while.cond_1
+  x64.mov rax, qword ptr [rcx]
+  x64.mov rdx, rax
+  x64.add rdx, r11
+  x64.mov qword ptr [rcx], rdx
+  x64.mov rdx, 1
+  x64.mov rax, rbx
+  x64.add rax, rdx
+  x64.mov rbx, rax
+  x64.jmp while.cond_1
   ^while.exit_1:
-  x86.mov rax, r11
-  x86.add rax, r8
-  x86.mov r11, rax
-  x86.jmp while.cond
+  x64.mov rax, r11
+  x64.add rax, r8
+  x64.mov r11, rax
+  x64.jmp while.cond
 }
 ```
 
@@ -1078,72 +1078,72 @@ end 'main'
 ```requiredmlir
 func.func @main() -> i64 {
   ^entry:
-  x86.prologue stack_size=48 saved_gprs=[RBX,R12]
-  x86.mov rax, 0
-  x86.lea rcx, qword ptr [rbp-40]
-  x86.mov qword ptr [rcx], rax
-  x86.mov r8, 2
-  x86.mov r9, 1
-  x86.mov r10, rax
-  x86.jmp while.cond
+  x64.prologue stack_size=48 saved_gprs=[RBX,R12]
+  x64.mov rax, 0
+  x64.lea rcx, qword ptr [rbp-40]
+  x64.mov qword ptr [rcx], rax
+  x64.mov r8, 2
+  x64.mov r9, 1
+  x64.mov r10, rax
+  x64.jmp while.cond
   ^while.cond(%30: i64):
-  x86.cmp r10, r8
-  x86.setl rdx
-  x86.movzx rdx, rdx
-  x86.test rdx, rdx
-  x86.jne while.body
-  x86.jmp while.exit
+  x64.cmp r10, r8
+  x64.setl rdx
+  x64.movzx rdx, rdx
+  x64.test rdx, rdx
+  x64.jne while.body
+  x64.jmp while.exit
   ^while.body:
-  x86.mov r11, 0
-  x86.jmp while.cond_1
+  x64.mov r11, 0
+  x64.jmp while.cond_1
   ^while.exit:
-  x86.mov rax, qword ptr [rcx]
-  x86.epilogue saved_gprs=[RBX,R12]
-  x86.ret
+  x64.mov rax, qword ptr [rcx]
+  x64.epilogue saved_gprs=[RBX,R12]
+  x64.ret
   ^while.cond_1(%31: i64):
-  x86.cmp r11, r8
-  x86.setl rax
-  x86.movzx rax, rax
-  x86.test rax, rax
-  x86.jne while.body_1
-  x86.jmp while.exit_1
+  x64.cmp r11, r8
+  x64.setl rax
+  x64.movzx rax, rax
+  x64.test rax, rax
+  x64.jne while.body_1
+  x64.jmp while.exit_1
   ^while.body_1:
-  x86.mov rax, 0
-  x86.lea rbx, qword ptr [rbp-48]
-  x86.mov qword ptr [rbx], rax
-  x86.jmp while.cond_2
+  x64.mov rax, 0
+  x64.lea rbx, qword ptr [rbp-48]
+  x64.mov qword ptr [rbx], rax
+  x64.jmp while.cond_2
   ^while.exit_1:
-  x86.mov rax, r10
-  x86.add rax, r9
-  x86.mov r10, rax
-  x86.jmp while.cond
+  x64.mov rax, r10
+  x64.add rax, r9
+  x64.mov r10, rax
+  x64.jmp while.cond
   ^while.cond_2:
-  x86.mov rax, qword ptr [rbx]
-  x86.mov rdx, 2
-  x86.cmp rax, rdx
-  x86.setl rdx
-  x86.movzx rdx, rdx
-  x86.test rdx, rdx
-  x86.jne while.body_2
-  x86.jmp while.exit_2
+  x64.mov rax, qword ptr [rbx]
+  x64.mov rdx, 2
+  x64.cmp rax, rdx
+  x64.setl rdx
+  x64.movzx rdx, rdx
+  x64.test rdx, rdx
+  x64.jne while.body_2
+  x64.jmp while.exit_2
   ^while.body_2:
-  x86.mov rdx, qword ptr [rcx]
-  x86.mov rax, 1
-  x86.mov r12, rdx
-  x86.add r12, rax
-  x86.mov qword ptr [rcx], r12
-  x86.mov rax, qword ptr [rbx]
-  x86.mov rdx, 1
-  x86.mov r12, rax
-  x86.add r12, rdx
-  x86.mov qword ptr [rbx], r12
-  x86.jmp while.cond_2
+  x64.mov rdx, qword ptr [rcx]
+  x64.mov rax, 1
+  x64.mov r12, rdx
+  x64.add r12, rax
+  x64.mov qword ptr [rcx], r12
+  x64.mov rax, qword ptr [rbx]
+  x64.mov rdx, 1
+  x64.mov r12, rax
+  x64.add r12, rdx
+  x64.mov qword ptr [rbx], r12
+  x64.jmp while.cond_2
   ^while.exit_2:
-  x86.mov rdx, 1
-  x86.mov rax, r11
-  x86.add rax, rdx
-  x86.mov r11, rax
-  x86.jmp while.cond_1
+  x64.mov rdx, 1
+  x64.mov rax, r11
+  x64.add rax, rdx
+  x64.mov r11, rax
+  x64.jmp while.cond_1
 }
 ```
 
@@ -1172,32 +1172,32 @@ end 'main'
 ```requiredmlir
 func.func @main() -> i64 {
   ^entry:
-  x86.prologue stack_size=32
-  x86.mov rax, 0
-  x86.mov rcx, 5
-  x86.mov r8, 1
-  x86.mov r9, rax
-  x86.mov r10, rax
-  x86.jmp while.cond
+  x64.prologue stack_size=32
+  x64.mov rax, 0
+  x64.mov rcx, 5
+  x64.mov r8, 1
+  x64.mov r9, rax
+  x64.mov r10, rax
+  x64.jmp while.cond
   ^while.cond(%14: i64, %16: i64):
-  x86.cmp r10, rcx
-  x86.setl rdx
-  x86.movzx rdx, rdx
-  x86.test rdx, rdx
-  x86.jne while.body
-  x86.jmp while.exit
+  x64.cmp r10, rcx
+  x64.setl rdx
+  x64.movzx rdx, rdx
+  x64.test rdx, rdx
+  x64.jne while.body
+  x64.jmp while.exit
   ^while.body:
-  x86.mov rdx, r9
-  x86.add rdx, r10
-  x86.mov rax, r10
-  x86.add rax, r8
-  x86.mov r9, rdx
-  x86.mov r10, rax
-  x86.jmp while.cond
+  x64.mov rdx, r9
+  x64.add rdx, r10
+  x64.mov rax, r10
+  x64.add rax, r8
+  x64.mov r9, rdx
+  x64.mov r10, rax
+  x64.jmp while.cond
   ^while.exit:
-  x86.mov rax, r9
-  x86.epilogue
-  x86.ret
+  x64.mov rax, r9
+  x64.epilogue
+  x64.ret
 }
 ```
 
@@ -1221,40 +1221,40 @@ end 'main'
 ```requiredmlir
 func.func @test(%x: i64) -> i64 {
   ^entry(%x: i64):
-  x86.prologue stack_size=32
-  x86.mov rax, rcx
-  x86.mov rcx, 0
-  x86.cmp rax, rcx
-  x86.setg rcx
-  x86.movzx rcx, rcx
-  x86.test rcx, rcx
-  x86.jne then
-  x86.jmp merge
+  x64.prologue stack_size=32
+  x64.mov rax, rcx
+  x64.mov rcx, 0
+  x64.cmp rax, rcx
+  x64.setg rcx
+  x64.movzx rcx, rcx
+  x64.test rcx, rcx
+  x64.jne then
+  x64.jmp merge
   ^then:
-  x86.mov rax, 1
-  x86.epilogue
-  x86.ret
+  x64.mov rax, 1
+  x64.epilogue
+  x64.ret
   ^merge:
-  x86.mov rax, 0
-  x86.epilogue
-  x86.ret
+  x64.mov rax, 0
+  x64.epilogue
+  x64.ret
 }
 
 func.func @main() -> i64 {
   ^entry:
-  x86.prologue stack_size=40 saved_gprs=[RBX]
-  x86.mov rax, 5
-  x86.mov rcx, rax
-  x86.call test
-  x86.mov rbx, rax
-  x86.mov rax, 0
-  x86.mov rcx, rax
-  x86.call test
-  x86.mov rcx, rbx
-  x86.add rcx, rax
-  x86.mov rax, rcx
-  x86.epilogue saved_gprs=[RBX]
-  x86.ret
+  x64.prologue stack_size=40 saved_gprs=[RBX]
+  x64.mov rax, 5
+  x64.mov rcx, rax
+  x64.call test
+  x64.mov rbx, rax
+  x64.mov rax, 0
+  x64.mov rcx, rax
+  x64.call test
+  x64.mov rcx, rbx
+  x64.add rcx, rax
+  x64.mov rax, rcx
+  x64.epilogue saved_gprs=[RBX]
+  x64.ret
 }
 ```
 
@@ -1280,10 +1280,10 @@ end 'main'
 ```requiredmlir
 func.func @main() -> i64 {
   ^entry:
-  x86.prologue stack_size=32
-  x86.mov rax, 7
-  x86.epilogue
-  x86.ret
+  x64.prologue stack_size=32
+  x64.mov rax, 7
+  x64.epilogue
+  x64.ret
 }
 ```
 
@@ -1304,10 +1304,10 @@ end 'main'
 ```requiredmlir
 func.func @main() -> i64 {
   ^entry:
-  x86.prologue stack_size=32
-  x86.mov rax, 25
-  x86.epilogue
-  x86.ret
+  x64.prologue stack_size=32
+  x64.mov rax, 25
+  x64.epilogue
+  x64.ret
 }
 ```
 
@@ -1332,10 +1332,10 @@ end 'main'
 ```requiredmlir
 func.func @main() -> i64 {
   ^entry:
-  x86.prologue stack_size=32
-  x86.mov rax, 20
-  x86.epilogue
-  x86.ret
+  x64.prologue stack_size=32
+  x64.mov rax, 20
+  x64.epilogue
+  x64.ret
 }
 ```
 
@@ -1361,10 +1361,10 @@ end 'main'
 ```requiredmlir
 func.func @main() -> i64 {
   ^entry:
-  x86.prologue stack_size=32
-  x86.mov rax, 16
-  x86.epilogue
-  x86.ret
+  x64.prologue stack_size=32
+  x64.mov rax, 16
+  x64.epilogue
+  x64.ret
 }
 ```
 
@@ -1383,10 +1383,10 @@ end 'main'
 ```requiredmlir
 func.func @main() -> i64 {
   ^entry:
-  x86.prologue stack_size=32
-  x86.mov rax, 18
-  x86.epilogue
-  x86.ret
+  x64.prologue stack_size=32
+  x64.mov rax, 18
+  x64.epilogue
+  x64.ret
 }
 ```
 
@@ -1415,35 +1415,35 @@ end 'main'
 ```requiredmlir
 func.func @countdown(%n: i64) -> i64 {
   ^entry(%n: i64):
-  x86.prologue stack_size=32
-  x86.mov rax, 0
-  x86.cmp rcx, rax
-  x86.setle rax
-  x86.movzx rax, rax
-  x86.test rax, rax
-  x86.jne then
-  x86.jmp merge
+  x64.prologue stack_size=32
+  x64.mov rax, 0
+  x64.cmp rcx, rax
+  x64.setle rax
+  x64.movzx rax, rax
+  x64.test rax, rax
+  x64.jne then
+  x64.jmp merge
   ^then:
-  x86.mov rax, 0
-  x86.epilogue
-  x86.ret
+  x64.mov rax, 0
+  x64.epilogue
+  x64.ret
   ^merge:
-  x86.mov rax, 1
-  x86.mov rdx, rcx
-  x86.sub rdx, rax
-  x86.mov rcx, rdx
-  x86.call countdown
-  x86.epilogue
-  x86.ret
+  x64.mov rax, 1
+  x64.mov rdx, rcx
+  x64.sub rdx, rax
+  x64.mov rcx, rdx
+  x64.call countdown
+  x64.epilogue
+  x64.ret
 }
 
 func.func @main() -> i64 {
   ^entry:
-  x86.prologue stack_size=32
-  x86.mov rcx, 10
-  x86.call countdown
-  x86.epilogue
-  x86.ret
+  x64.prologue stack_size=32
+  x64.mov rcx, 10
+  x64.call countdown
+  x64.epilogue
+  x64.ret
 }
 ```
 
@@ -1471,49 +1471,49 @@ end 'main'
 ```requiredmlir
 func.func @sum_to_helper(%n: i64, %acc: i64) -> i64 {
   ^entry(%n: i64, %acc: i64):
-  x86.prologue stack_size=32
-  x86.mov rax, 0
-  x86.cmp rcx, rax
-  x86.setle rax
-  x86.movzx rax, rax
-  x86.test rax, rax
-  x86.jne then
-  x86.jmp merge
+  x64.prologue stack_size=32
+  x64.mov rax, 0
+  x64.cmp rcx, rax
+  x64.setle rax
+  x64.movzx rax, rax
+  x64.test rax, rax
+  x64.jne then
+  x64.jmp merge
   ^then:
-  x86.mov rax, rdx
-  x86.epilogue
-  x86.ret
+  x64.mov rax, rdx
+  x64.epilogue
+  x64.ret
   ^merge:
-  x86.mov rax, 1
-  x86.mov r8, rcx
-  x86.sub r8, rax
-  x86.mov rax, rdx
-  x86.add rax, rcx
-  x86.mov r10, r8
-  x86.mov r11, rax
-  x86.mov rdx, r11
-  x86.mov rcx, r10
-  x86.call sum_to_helper
-  x86.mov rcx, rax
-  x86.mov rax, rcx
-  x86.epilogue
-  x86.ret
+  x64.mov rax, 1
+  x64.mov r8, rcx
+  x64.sub r8, rax
+  x64.mov rax, rdx
+  x64.add rax, rcx
+  x64.mov r10, r8
+  x64.mov r11, rax
+  x64.mov rdx, r11
+  x64.mov rcx, r10
+  x64.call sum_to_helper
+  x64.mov rcx, rax
+  x64.mov rax, rcx
+  x64.epilogue
+  x64.ret
 }
 
 func.func @main() -> i64 {
   ^entry:
-  x86.prologue stack_size=32
-  x86.mov rax, 5
-  x86.mov rcx, 0
-  x86.mov r10, rax
-  x86.mov r11, rcx
-  x86.mov rdx, r11
-  x86.mov rcx, r10
-  x86.call sum_to_helper
-  x86.mov rcx, rax
-  x86.mov rax, rcx
-  x86.epilogue
-  x86.ret
+  x64.prologue stack_size=32
+  x64.mov rax, 5
+  x64.mov rcx, 0
+  x64.mov r10, rax
+  x64.mov r11, rcx
+  x64.mov rdx, r11
+  x64.mov rcx, r10
+  x64.call sum_to_helper
+  x64.mov rcx, rax
+  x64.mov rax, rcx
+  x64.epilogue
+  x64.ret
 }
 ```
 
@@ -1545,57 +1545,57 @@ end 'main'
 ```requiredmlir
 func.func @main() -> i64 {
   ^entry:
-  x86.prologue stack_size=48 saved_gprs=[RBX,R12]
-  x86.mov rax, 0
-  x86.lea rcx, qword ptr [rbp-40]
-  x86.mov qword ptr [rcx], rax
-  x86.mov r8, 3
-  x86.mov r9, 1
-  x86.mov r10, rax
-  x86.jmp while.cond
+  x64.prologue stack_size=48 saved_gprs=[RBX,R12]
+  x64.mov rax, 0
+  x64.lea rcx, qword ptr [rbp-40]
+  x64.mov qword ptr [rcx], rax
+  x64.mov r8, 3
+  x64.mov r9, 1
+  x64.mov r10, rax
+  x64.jmp while.cond
   ^while.cond(%26: i64):
-  x86.cmp r10, r8
-  x86.setl rdx
-  x86.movzx rdx, rdx
-  x86.test rdx, rdx
-  x86.jne while.body
-  x86.jmp while.exit
+  x64.cmp r10, r8
+  x64.setl rdx
+  x64.movzx rdx, rdx
+  x64.test rdx, rdx
+  x64.jne while.body
+  x64.jmp while.exit
   ^while.body:
-  x86.mov r11, 0
-  x86.jmp while.cond_1
+  x64.mov r11, 0
+  x64.jmp while.cond_1
   ^while.exit:
-  x86.mov rax, qword ptr [rcx]
-  x86.epilogue saved_gprs=[RBX,R12]
-  x86.ret
+  x64.mov rax, qword ptr [rcx]
+  x64.epilogue saved_gprs=[RBX,R12]
+  x64.ret
   ^while.cond_1(%27: i64):
-  x86.cmp r11, r8
-  x86.setl rax
-  x86.movzx rax, rax
-  x86.test rax, rax
-  x86.jne while.body_1
-  x86.jmp while.exit_1
+  x64.cmp r11, r8
+  x64.setl rax
+  x64.movzx rax, rax
+  x64.test rax, rax
+  x64.jne while.body_1
+  x64.jmp while.exit_1
   ^while.body_1:
-  x86.mov rbx, qword ptr [rcx]
-  x86.mov rax, r10
-  x86.add rax, r11
-  x86.mov rdx, 2
-  x86.mov r12, rdx
-  x86.cdq
-  x86.idiv r12
-  x86.mov rax, rdx
-  x86.mov rdx, rbx
-  x86.add rdx, rax
-  x86.mov qword ptr [rcx], rdx
-  x86.mov rdx, 1
-  x86.mov rax, r11
-  x86.add rax, rdx
-  x86.mov r11, rax
-  x86.jmp while.cond_1
+  x64.mov rbx, qword ptr [rcx]
+  x64.mov rax, r10
+  x64.add rax, r11
+  x64.mov rdx, 2
+  x64.mov r12, rdx
+  x64.cdq
+  x64.idiv r12
+  x64.mov rax, rdx
+  x64.mov rdx, rbx
+  x64.add rdx, rax
+  x64.mov qword ptr [rcx], rdx
+  x64.mov rdx, 1
+  x64.mov rax, r11
+  x64.add rax, rdx
+  x64.mov r11, rax
+  x64.jmp while.cond_1
   ^while.exit_1:
-  x86.mov rax, r10
-  x86.add rax, r9
-  x86.mov r10, rax
-  x86.jmp while.cond
+  x64.mov rax, r10
+  x64.add rax, r9
+  x64.mov r10, rax
+  x64.jmp while.cond
 }
 ```
 
@@ -1618,44 +1618,44 @@ end 'main'
 ```requiredmlir
 func.func @main() -> i64 {
   ^entry:
-  x86.prologue stack_size=40 saved_gprs=[RBX,R12,R13]
-  x86.mov rcx, 1
-  x86.mov r8, 10
-  x86.mov r9, 2
-  x86.mov r10, 3
-  x86.mov r11, 0
-  x86.mov rbx, rcx
-  x86.jmp while.cond
+  x64.prologue stack_size=40 saved_gprs=[RBX,R12,R13]
+  x64.mov rcx, 1
+  x64.mov r8, 10
+  x64.mov r9, 2
+  x64.mov r10, 3
+  x64.mov r11, 0
+  x64.mov rbx, rcx
+  x64.jmp while.cond
   ^while.cond(%20: i64, %22: i64):
-  x86.cmp rbx, r8
-  x86.setle rdx
-  x86.movzx rdx, rdx
-  x86.test rdx, rdx
-  x86.jne while.body
-  x86.jmp while.exit
+  x64.cmp rbx, r8
+  x64.setle rdx
+  x64.movzx rdx, rdx
+  x64.test rdx, rdx
+  x64.jne while.body
+  x64.jmp while.exit
   ^while.body:
-  x86.mov r12, r9
-  x86.mov rax, rbx
-  x86.cdq
-  x86.idiv r12
-  x86.mov rdx, rax
-  x86.mov r12, r11
-  x86.add r12, rdx
-  x86.mov r13, r10
-  x86.mov rax, rbx
-  x86.cdq
-  x86.idiv r13
-  x86.mov rax, r12
-  x86.add rax, rdx
-  x86.mov rdx, rbx
-  x86.add rdx, rcx
-  x86.mov r11, rax
-  x86.mov rbx, rdx
-  x86.jmp while.cond
+  x64.mov r12, r9
+  x64.mov rax, rbx
+  x64.cdq
+  x64.idiv r12
+  x64.mov rdx, rax
+  x64.mov r12, r11
+  x64.add r12, rdx
+  x64.mov r13, r10
+  x64.mov rax, rbx
+  x64.cdq
+  x64.idiv r13
+  x64.mov rax, r12
+  x64.add rax, rdx
+  x64.mov rdx, rbx
+  x64.add rdx, rcx
+  x64.mov r11, rax
+  x64.mov rbx, rdx
+  x64.jmp while.cond
   ^while.exit:
-  x86.mov rax, r11
-  x86.epilogue saved_gprs=[RBX,R12,R13]
-  x86.ret
+  x64.mov rax, r11
+  x64.epilogue saved_gprs=[RBX,R12,R13]
+  x64.ret
 }
 ```
 
@@ -1677,10 +1677,10 @@ end 'main'
 ```requiredmlir
 func.func @main() -> i64 {
   ^entry:
-  x86.prologue stack_size=32
-  x86.mov rax, 42
-  x86.epilogue
-  x86.ret
+  x64.prologue stack_size=32
+  x64.mov rax, 42
+  x64.epilogue
+  x64.ret
 }
 ```
 
@@ -1698,10 +1698,10 @@ end 'main'
 ```requiredmlir
 func.func @main() -> i64 {
   ^entry:
-  x86.prologue stack_size=32
-  x86.mov rax, 42
-  x86.epilogue
-  x86.ret
+  x64.prologue stack_size=32
+  x64.mov rax, 42
+  x64.epilogue
+  x64.ret
 }
 ```
 
@@ -1719,10 +1719,10 @@ end 'main'
 ```requiredmlir
 func.func @main() -> i64 {
   ^entry:
-  x86.prologue stack_size=32
-  x86.mov rax, 42
-  x86.epilogue
-  x86.ret
+  x64.prologue stack_size=32
+  x64.mov rax, 42
+  x64.epilogue
+  x64.ret
 }
 ```
 
@@ -1740,10 +1740,10 @@ end 'main'
 ```requiredmlir
 func.func @main() -> i64 {
   ^entry:
-  x86.prologue stack_size=32
-  x86.mov rax, 42
-  x86.epilogue
-  x86.ret
+  x64.prologue stack_size=32
+  x64.mov rax, 42
+  x64.epilogue
+  x64.ret
 }
 ```
 
@@ -1761,10 +1761,10 @@ end 'main'
 ```requiredmlir
 func.func @main() -> i64 {
   ^entry:
-  x86.prologue stack_size=32
-  x86.mov rax, 42
-  x86.epilogue
-  x86.ret
+  x64.prologue stack_size=32
+  x64.mov rax, 42
+  x64.epilogue
+  x64.ret
 }
 ```
 
@@ -1782,10 +1782,10 @@ end 'main'
 ```requiredmlir
 func.func @main() -> i64 {
   ^entry:
-  x86.prologue stack_size=32
-  x86.mov rax, 42
-  x86.epilogue
-  x86.ret
+  x64.prologue stack_size=32
+  x64.mov rax, 42
+  x64.epilogue
+  x64.ret
 }
 ```
 
@@ -1803,10 +1803,10 @@ end 'main'
 ```requiredmlir
 func.func @main() -> i64 {
   ^entry:
-  x86.prologue stack_size=32
-  x86.mov rax, 0
-  x86.epilogue
-  x86.ret
+  x64.prologue stack_size=32
+  x64.mov rax, 0
+  x64.epilogue
+  x64.ret
 }
 ```
 
@@ -1824,10 +1824,10 @@ end 'main'
 ```requiredmlir
 func.func @main() -> i64 {
   ^entry:
-  x86.prologue stack_size=32
-  x86.mov rax, 42
-  x86.epilogue
-  x86.ret
+  x64.prologue stack_size=32
+  x64.mov rax, 42
+  x64.epilogue
+  x64.ret
 }
 ```
 
@@ -1845,10 +1845,10 @@ end 'main'
 ```requiredmlir
 func.func @main() -> i64 {
   ^entry:
-  x86.prologue stack_size=32
-  x86.mov rax, 42
-  x86.epilogue
-  x86.ret
+  x64.prologue stack_size=32
+  x64.mov rax, 42
+  x64.epilogue
+  x64.ret
 }
 ```
 
@@ -1866,10 +1866,10 @@ end 'main'
 ```requiredmlir
 func.func @main() -> i64 {
   ^entry:
-  x86.prologue stack_size=32
-  x86.mov rax, 42
-  x86.epilogue
-  x86.ret
+  x64.prologue stack_size=32
+  x64.mov rax, 42
+  x64.epilogue
+  x64.ret
 }
 ```
 
@@ -1887,10 +1887,10 @@ end 'main'
 ```requiredmlir
 func.func @main() -> i64 {
   ^entry:
-  x86.prologue stack_size=32
-  x86.mov rax, 42
-  x86.epilogue
-  x86.ret
+  x64.prologue stack_size=32
+  x64.mov rax, 42
+  x64.epilogue
+  x64.ret
 }
 ```
 
@@ -1908,10 +1908,10 @@ end 'main'
 ```requiredmlir
 func.func @main() -> i64 {
   ^entry:
-  x86.prologue stack_size=32
-  x86.mov rax, 0
-  x86.epilogue
-  x86.ret
+  x64.prologue stack_size=32
+  x64.mov rax, 0
+  x64.epilogue
+  x64.ret
 }
 ```
 
@@ -1929,10 +1929,10 @@ end 'main'
 ```requiredmlir
 func.func @main() -> i64 {
   ^entry:
-  x86.prologue stack_size=32
-  x86.mov rax, 0
-  x86.epilogue
-  x86.ret
+  x64.prologue stack_size=32
+  x64.mov rax, 0
+  x64.epilogue
+  x64.ret
 }
 ```
 
@@ -1950,10 +1950,10 @@ end 'main'
 ```requiredmlir
 func.func @main() -> i64 {
   ^entry:
-  x86.prologue stack_size=32
-  x86.mov rax, 5
-  x86.epilogue
-  x86.ret
+  x64.prologue stack_size=32
+  x64.mov rax, 5
+  x64.epilogue
+  x64.ret
 }
 ```
 
@@ -1971,9 +1971,9 @@ end 'main'
 ```requiredmlir
 func.func @main() -> i64 {
   ^entry:
-  x86.prologue stack_size=32
-  x86.mov rax, 5
-  x86.epilogue
-  x86.ret
+  x64.prologue stack_size=32
+  x64.mov rax, 5
+  x64.epilogue
+  x64.ret
 }
 ```

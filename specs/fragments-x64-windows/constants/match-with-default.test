@@ -1,0 +1,76 @@
+// Test: match-with-default
+enum HttpStatus
+	ok = 200
+	notFound = 404
+	serverError = 500
+end 'HttpStatus'
+
+function main() returns ExitCode
+	var s = HttpStatus.notFound
+	var result = match s 'check'
+		ok gives 1
+		notFound gives 2
+		serverError gives 3
+	end 'check'
+	return result
+end 'main'
+---
+ExitCode: 2
+---
+module {
+  func @main() -> u32 {
+  entry:
+    x64.prologue stack_size=32
+    x64.mov rax, 404
+    x64.mov [rbp-8], rax
+    x64.mov rcx, [rbp-8]
+    x64.xor rdx, rdx
+    x64.mov [rbp-16], rdx
+    x64.mov [rbp-24], rcx
+    x64.jmp main.check_0.cmp0
+  check_0.cmp0:
+    x64.mov rax, [rbp-24]
+    x64.mov rcx, 200
+    x64.cmp rax, rcx
+    x64.jne main.check_0.cmp1
+  check_0.case0:
+    x64.mov rax, 1
+    x64.mov [rbp-16], rax
+    x64.jmp main.check_0.merge
+  check_0.cmp1:
+    x64.mov rax, [rbp-24]
+    x64.mov rcx, 404
+    x64.cmp rax, rcx
+    x64.jne main.check_0.cmp2
+  check_0.case1:
+    x64.mov rax, 2
+    x64.mov [rbp-16], rax
+    x64.jmp main.check_0.merge
+  check_0.cmp2:
+    x64.mov rax, [rbp-24]
+    x64.mov rcx, 500
+    x64.cmp rax, rcx
+    x64.jne main.check_0.merge
+  check_0.case2:
+    x64.mov rax, 3
+    x64.mov [rbp-16], rax
+    x64.jmp main.check_0.merge
+  check_0.merge:
+    x64.mov rax, [rbp-16]
+    x64.xor rcx, rcx
+    x64.mov rdx, 4294967295
+    x64.cmp rax, rdx
+    x64.jg main.__range_panic_1
+    x64.cmp rax, rcx
+    x64.jl main.__range_panic_1
+    x64.jmp main.__range_ok_1
+  __range_panic_1:
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_1:
+    x64.epilogue
+    x64.ret
+  }
+}
+---

@@ -1,0 +1,211 @@
+// Test: match-statement-fallthrough
+function main() returns ExitCode
+	var x = 1
+	var result = 0
+	match x 'cascade'
+		1 then result = result + 10 and fallthrough
+		2 then result = result + 20 and fallthrough
+		3 then result = result + 30
+		default then result = 100
+	end 'cascade'
+	return result
+end 'main'
+---
+ExitCode: 60
+RequiredMLIR: ```
+=== maxon
+module {
+  func @main() -> i64 {
+  entry:
+    %0 = maxon.literal {value = 1 : i64}
+    maxon.assign %0 {var = x} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %1 = maxon.literal {value = 0 : i64}
+    maxon.assign %1 {var = result} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %0 {var = __match_cascade_0} {kind = i64} {decl = 1 : i1}
+    maxon.br cascade_0.cmp0
+  cascade_0.cmp0:
+    %2 = maxon.var_ref {var = __match_cascade_0} {type = i64}
+    %3 = maxon.literal {value = 1 : i64}
+    %4 = maxon.binop %2, %3 {op = eq}
+    maxon.cond_br %4 [then: cascade_0.case0, else: cascade_0.cmp1]
+  cascade_0.case0:
+    %5 = maxon.literal {value = 10 : i64}
+    %6 = maxon.var_ref {var = result} {type = i64}
+    %7 = maxon.binop %6, %5 {op = add}
+    maxon.assign %7 {var = result} {kind = i64} {mut = 1 : i1}
+    maxon.scope_end []
+    maxon.br cascade_0.case1
+  cascade_0.cmp1:
+    %8 = maxon.var_ref {var = __match_cascade_0} {type = i64}
+    %9 = maxon.literal {value = 2 : i64}
+    %10 = maxon.binop %8, %9 {op = eq}
+    maxon.cond_br %10 [then: cascade_0.case1, else: cascade_0.cmp2]
+  cascade_0.case1:
+    %11 = maxon.literal {value = 20 : i64}
+    %12 = maxon.var_ref {var = result} {type = i64}
+    %13 = maxon.binop %12, %11 {op = add}
+    maxon.assign %13 {var = result} {kind = i64} {mut = 1 : i1}
+    maxon.scope_end []
+    maxon.br cascade_0.case2
+  cascade_0.cmp2:
+    %14 = maxon.var_ref {var = __match_cascade_0} {type = i64}
+    %15 = maxon.literal {value = 3 : i64}
+    %16 = maxon.binop %14, %15 {op = eq}
+    maxon.cond_br %16 [then: cascade_0.case2, else: cascade_0.case3]
+  cascade_0.case2:
+    %17 = maxon.literal {value = 30 : i64}
+    %18 = maxon.var_ref {var = result} {type = i64}
+    %19 = maxon.binop %18, %17 {op = add}
+    maxon.assign %19 {var = result} {kind = i64} {mut = 1 : i1}
+    maxon.scope_end []
+    maxon.br cascade_0.merge
+  cascade_0.case3:
+    %20 = maxon.literal {value = 100 : i64}
+    maxon.assign %20 {var = result} {kind = i64} {mut = 1 : i1}
+    maxon.scope_end []
+    maxon.br cascade_0.merge
+  cascade_0.merge:
+    %21 = maxon.var_ref {var = result} {type = i64}
+    %22 = maxon.literal {value = 0 : i64}
+    %23 = maxon.binop %21, %22 {op = lt}
+    %24 = maxon.literal {value = 4294967295 : i64}
+    %25 = maxon.binop %21, %24 {op = gt}
+    %26 = maxon.binop %23, %25 {op = or}
+    maxon.cond_br %26 [then: __range_panic_1, else: __range_ok_1]
+  __range_panic_1:
+    maxon.panic "panic at match-statement-fallthrough.test:11: Range check failed: value outside typealias 'ExitCode'"
+  __range_ok_1:
+    maxon.scope_end [x, result, __match_cascade_0]
+    maxon.return %21
+  }
+}
+=== standard
+module {
+  func @main() -> u32 {
+  entry:
+    %0 = arith.constant {value = 1 : i64}
+    %1 = arith.constant {value = 0 : i64}
+    memref.store %1, result
+    memref.store %0, __match_cascade_0
+    cf.br cascade_0.cmp0
+  cascade_0.cmp0:
+    %2 = memref.load __match_cascade_0 : i64
+    %3 = arith.constant {value = 1 : i64}
+    %4 = arith.cmpi eq %2, %3
+    cf.cond_br %4 [then: cascade_0.case0, else: cascade_0.cmp1]
+  cascade_0.case0:
+    %5 = arith.constant {value = 10 : i64}
+    %6 = memref.load result : i64
+    %7 = arith.addi %6, %5
+    memref.store %7, result
+    cf.br cascade_0.case1
+  cascade_0.cmp1:
+    %8 = memref.load __match_cascade_0 : i64
+    %9 = arith.constant {value = 2 : i64}
+    %10 = arith.cmpi eq %8, %9
+    cf.cond_br %10 [then: cascade_0.case1, else: cascade_0.cmp2]
+  cascade_0.case1:
+    %11 = arith.constant {value = 20 : i64}
+    %12 = memref.load result : i64
+    %13 = arith.addi %12, %11
+    memref.store %13, result
+    cf.br cascade_0.case2
+  cascade_0.cmp2:
+    %14 = memref.load __match_cascade_0 : i64
+    %15 = arith.constant {value = 3 : i64}
+    %16 = arith.cmpi eq %14, %15
+    cf.cond_br %16 [then: cascade_0.case2, else: cascade_0.case3]
+  cascade_0.case2:
+    %17 = arith.constant {value = 30 : i64}
+    %18 = memref.load result : i64
+    %19 = arith.addi %18, %17
+    memref.store %19, result
+    cf.br cascade_0.merge
+  cascade_0.case3:
+    %20 = arith.constant {value = 100 : i64}
+    memref.store %20, result
+    cf.br cascade_0.merge
+  cascade_0.merge:
+    %21 = memref.load result : i64
+    %22 = arith.constant {value = 0 : i64}
+    %23 = arith.cmpi lt %21, %22
+    %24 = arith.constant {value = 4294967295 : i64}
+    %25 = arith.cmpi gt %21, %24
+    %26 = arith.ori1 %23, %25
+    cf.cond_br %26 [then: __range_panic_1, else: __range_ok_1]
+  __range_panic_1:
+    %27 = memref.lea_symdata __panic_msg_0
+    %28 = std.ptr_to_i64 %27
+    std.call_runtime @mrt_panic %28
+  __range_ok_1:
+    func.return %21
+  }
+}
+=== x86
+module {
+  func @main() -> u32 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov rax, 1
+    x64.xor rcx, rcx
+    x64.mov [rbp-8], rcx
+    x64.mov [rbp-16], rax
+    x64.jmp main.cascade_0.cmp0
+  cascade_0.cmp0:
+    x64.mov rax, [rbp-16]
+    x64.mov rcx, 1
+    x64.cmp rax, rcx
+    x64.jne main.cascade_0.cmp1
+  cascade_0.case0:
+    x64.mov rax, 10
+    x64.mov rcx, [rbp-8]
+    x64.add rcx, rax
+    x64.mov [rbp-8], rcx
+    x64.jmp main.cascade_0.case1
+  cascade_0.cmp1:
+    x64.mov rax, [rbp-16]
+    x64.mov rcx, 2
+    x64.cmp rax, rcx
+    x64.jne main.cascade_0.cmp2
+  cascade_0.case1:
+    x64.mov rax, 20
+    x64.mov rcx, [rbp-8]
+    x64.add rcx, rax
+    x64.mov [rbp-8], rcx
+    x64.jmp main.cascade_0.case2
+  cascade_0.cmp2:
+    x64.mov rax, [rbp-16]
+    x64.mov rcx, 3
+    x64.cmp rax, rcx
+    x64.jne main.cascade_0.case3
+  cascade_0.case2:
+    x64.mov rax, 30
+    x64.mov rcx, [rbp-8]
+    x64.add rcx, rax
+    x64.mov [rbp-8], rcx
+    x64.jmp main.cascade_0.merge
+  cascade_0.case3:
+    x64.mov rax, 100
+    x64.mov [rbp-8], rax
+    x64.jmp main.cascade_0.merge
+  cascade_0.merge:
+    x64.mov rax, [rbp-8]
+    x64.xor rcx, rcx
+    x64.mov rdx, 4294967295
+    x64.cmp rax, rdx
+    x64.jg main.__range_panic_1
+    x64.cmp rax, rcx
+    x64.jl main.__range_panic_1
+    x64.jmp main.__range_ok_1
+  __range_panic_1:
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_1:
+    x64.epilogue
+    x64.ret
+  }
+}
+```
+---
+---

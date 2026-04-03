@@ -1,0 +1,55 @@
+// Test: docs-example-2
+function main() returns ExitCode
+	var x = 0
+	if true 'check'
+		x = 1
+		if true 'check'
+			x = 2
+		end 'check'
+	end 'check'
+	return x
+end 'main'
+
+---
+ExitCode: 2
+---
+module {
+  func @main() -> u32 {
+  entry:
+    x64.prologue stack_size=16
+    x64.xor rax, rax
+    x64.mov [rbp-8], rax
+    x64.mov rcx, 1
+    x64.test rcx, rcx
+    x64.je main.check_0.merge
+  check_0:
+    x64.mov rax, 1
+    x64.mov [rbp-8], rax
+    x64.mov rcx, 1
+    x64.test rcx, rcx
+    x64.je main.check_1.merge
+  check_1:
+    x64.mov rax, 2
+    x64.mov [rbp-8], rax
+    x64.jmp main.check_1.merge
+  check_1.merge:
+    x64.jmp main.check_0.merge
+  check_0.merge:
+    x64.mov rax, [rbp-8]
+    x64.xor rcx, rcx
+    x64.mov rdx, 4294967295
+    x64.cmp rax, rdx
+    x64.jg main.__range_panic_2
+    x64.cmp rax, rcx
+    x64.jl main.__range_panic_2
+    x64.jmp main.__range_ok_2
+  __range_panic_2:
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_2:
+    x64.epilogue
+    x64.ret
+  }
+}
+---

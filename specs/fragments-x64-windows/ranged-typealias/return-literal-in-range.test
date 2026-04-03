@@ -1,0 +1,40 @@
+// Test: return-literal-in-range
+typealias Score = int(0 to 100)
+
+function getScore() returns Score
+	return 42
+end 'getScore'
+
+function main() returns ExitCode
+	return getScore()
+end 'main'
+---
+ExitCode: 42
+---
+module {
+  func @ranged-typealias.getScore() -> u8 {
+  entry:
+    x64.mov rax, 42
+    x64.ret
+  }
+  func @main() -> u32 {
+  entry:
+    x64.prologue stack_size=16
+    x64.call ranged-typealias.getScore
+    x64.xor rcx, rcx
+    x64.mov rdx, 4294967295
+    x64.cmp rax, rdx
+    x64.jg main.__range_panic_0
+    x64.cmp rax, rcx
+    x64.jl main.__range_panic_0
+    x64.jmp main.__range_ok_0
+  __range_panic_0:
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.epilogue
+    x64.ret
+  }
+}
+---

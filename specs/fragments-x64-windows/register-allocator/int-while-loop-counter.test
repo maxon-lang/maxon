@@ -1,0 +1,119 @@
+// Test: int-while-loop-counter
+function main() returns ExitCode
+	var i = 0
+	while i < 42 'loop'
+		i = i + 1
+	end 'loop'
+	return i
+end 'main'
+---
+ExitCode: 42
+RequiredMLIR: ```
+=== maxon
+module {
+  func @main() -> i64 {
+  entry:
+    %0 = maxon.literal {value = 0 : i64}
+    maxon.assign %0 {var = i} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.br loop_0.header
+  loop_0.header:
+    %1 = maxon.literal {value = 42 : i64}
+    %2 = maxon.var_ref {var = i} {type = i64}
+    %3 = maxon.binop %2, %1 {op = lt}
+    maxon.cond_br %3 [then: loop_0, else: loop_0.exit]
+  loop_0:
+    %4 = maxon.literal {value = 1 : i64}
+    %5 = maxon.var_ref {var = i} {type = i64}
+    %6 = maxon.binop %5, %4 {op = add}
+    maxon.assign %6 {var = i} {kind = i64} {mut = 1 : i1}
+    maxon.scope_end []
+    maxon.br loop_0.header
+  loop_0.exit:
+    %7 = maxon.var_ref {var = i} {type = i64}
+    %8 = maxon.literal {value = 0 : i64}
+    %9 = maxon.binop %7, %8 {op = lt}
+    %10 = maxon.literal {value = 4294967295 : i64}
+    %11 = maxon.binop %7, %10 {op = gt}
+    %12 = maxon.binop %9, %11 {op = or}
+    maxon.cond_br %12 [then: __range_panic_1, else: __range_ok_1]
+  __range_panic_1:
+    maxon.panic "panic at int-while-loop-counter.test:7: Range check failed: value outside typealias 'ExitCode'"
+  __range_ok_1:
+    maxon.scope_end [i]
+    maxon.return %7
+  }
+}
+=== standard
+module {
+  func @main() -> u32 {
+  entry:
+    %0 = arith.constant {value = 0 : i64}
+    memref.store %0, i
+    cf.br loop_0.header
+  loop_0.header:
+    %1 = arith.constant {value = 42 : i64}
+    %2 = memref.load i : i64
+    %3 = arith.cmpi lt %2, %1
+    cf.cond_br %3 [then: loop_0, else: loop_0.exit]
+  loop_0:
+    %4 = arith.constant {value = 1 : i64}
+    %5 = memref.load i : i64
+    %6 = arith.addi %5, %4
+    memref.store %6, i
+    cf.br loop_0.header
+  loop_0.exit:
+    %7 = memref.load i : i64
+    %8 = arith.constant {value = 0 : i64}
+    %9 = arith.cmpi lt %7, %8
+    %10 = arith.constant {value = 4294967295 : i64}
+    %11 = arith.cmpi gt %7, %10
+    %12 = arith.ori1 %9, %11
+    cf.cond_br %12 [then: __range_panic_1, else: __range_ok_1]
+  __range_panic_1:
+    %13 = memref.lea_symdata __panic_msg_0
+    %14 = std.ptr_to_i64 %13
+    std.call_runtime @mrt_panic %14
+  __range_ok_1:
+    func.return %7
+  }
+}
+=== x86
+module {
+  func @main() -> u32 {
+  entry:
+    x64.prologue stack_size=16
+    x64.xor rax, rax
+    x64.mov [rbp-8], rax
+    x64.jmp main.loop_0.header
+  loop_0.header:
+    x64.mov rax, 42
+    x64.mov rcx, [rbp-8]
+    x64.cmp rcx, rax
+    x64.jge main.loop_0.exit
+  loop_0:
+    x64.mov rax, 1
+    x64.mov rcx, [rbp-8]
+    x64.add rcx, rax
+    x64.mov [rbp-8], rcx
+    x64.jmp main.loop_0.header
+  loop_0.exit:
+    x64.mov rax, [rbp-8]
+    x64.xor rcx, rcx
+    x64.mov rdx, 4294967295
+    x64.cmp rax, rdx
+    x64.jg main.__range_panic_1
+    x64.cmp rax, rcx
+    x64.jl main.__range_panic_1
+    x64.jmp main.__range_ok_1
+  __range_panic_1:
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_1:
+    x64.epilogue
+    x64.ret
+  }
+}
+```
+---
+---

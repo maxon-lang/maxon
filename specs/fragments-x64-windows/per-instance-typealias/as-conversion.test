@@ -1,0 +1,105 @@
+// Test: as-conversion
+typealias Integer = int(i64.min to i64.max)
+
+type Wrapper uses T
+	export typealias Idx = int(0 to u64.max)
+
+	export var value T
+	export var tag Idx
+
+	export static function create(value T, tag Idx) returns Self
+		return Self{value: value, tag: tag}
+	end 'create'
+end 'Wrapper'
+
+typealias IntWrapper = Wrapper with Integer
+typealias StrWrapper = Wrapper with String
+
+function takeStrTag(t StrWrapper.Idx) returns StrWrapper.Idx
+	return t
+end 'takeStrTag'
+
+function main() returns ExitCode
+	var iw = IntWrapper.create(value: 1, tag: 7)
+	let intTag = iw.tag
+	let strTag = intTag as StrWrapper.Idx
+	let result = takeStrTag(strTag)
+	if result == 7 'check'
+		return 0
+	end 'check'
+	return 1
+end 'main'
+---
+ExitCode: 0
+---
+module {
+  func @per-instance-typealias.takeStrTag(t: i64) -> u64 {
+  entry:
+    x64.mov rax, rcx
+    x64.ret
+  }
+  func @main() -> u32 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov rcx, 1
+    x64.mov rdx, 7
+    x64.call IntWrapper.create
+    x64.mov [rbp-8], rax
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+8]
+    x64.call per-instance-typealias.takeStrTag
+    x64.mov rdx, 7
+    x64.cmp rax, rdx
+    x64.jne main.check_0.after
+  check_0:
+    x64.mov rax, [rbp-8]
+    x64.test rax, rax
+    x64.jz __nonnull_skip_0
+    x64.mov rcx, [rbp-8]
+    x64.call mm_decref
+    x64.label __nonnull_skip_0
+    x64.xor rax, rax
+    x64.epilogue
+    x64.ret
+  check_0.after:
+    x64.mov rax, [rbp-8]
+    x64.test rax, rax
+    x64.jz __nonnull_skip_1
+    x64.mov rcx, [rbp-8]
+    x64.call mm_decref
+    x64.label __nonnull_skip_1
+    x64.mov rax, 1
+    x64.epilogue
+    x64.ret
+  }
+  func @IntWrapper.create(value: i64, tag: i64) -> i64 {
+  entry:
+    x64.prologue stack_size=32
+    x64.mov [rbp-16], rcx
+    x64.mov [rbp-24], rdx
+    x64.mov rcx, 16
+    x64.xor rdx, rdx
+    x64.mov r8, 1
+    x64.call mm_alloc
+    x64.mov [rbp-8], rax
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rbp-16]
+    x64.mov [rax+0], rcx
+    x64.mov rdx, [rbp-8]
+    x64.mov rbx, [rbp-24]
+    x64.mov [rdx+8], rbx
+    x64.mov rsi, [rbp-8]
+    x64.mov rcx, [rbp-8]
+    x64.call mm_incref
+    x64.mov rax, [rbp-8]
+    x64.epilogue
+    x64.ret
+  }
+  func @__destruct_IntWrapper(ptr: i64) {
+  entry:
+    x64.jmp __destruct_IntWrapper.done
+  done:
+    x64.ret
+  }
+}
+---

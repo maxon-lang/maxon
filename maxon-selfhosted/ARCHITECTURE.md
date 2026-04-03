@@ -1,6 +1,6 @@
 # Self-Hosted Maxon Compiler Architecture
 
-The self-hosted Maxon compiler is written in Maxon itself (~25,400 lines across 72 files). It compiles Maxon source code to native executables for 6 target combinations (x86_64/aarch64 x windows/linux/macos) using an MLIR-inspired multi-dialect pipeline with incremental compilation support.
+The self-hosted Maxon compiler is written in Maxon itself (~25,400 lines across 72 files). It compiles Maxon source code to native executables for 6 target combinations (x64/arm64 x windows/linux/macos) using an MLIR-inspired multi-dialect pipeline with incremental compilation support.
 
 ## Project Structure
 
@@ -318,7 +318,7 @@ Incremental compilation state: current revision, source file entries, per-file c
 
 ### Target (Target.maxon)
 
-`cpu: CpuArch` (x86_64 | aarch64) x `os: Os` (windows | linux | macos).
+`cpu: CpuArch` (x64 | arm64) x `os: Os` (windows | linux | macos).
 
 ### OpMeta (InstructionScheduler.maxon)
 

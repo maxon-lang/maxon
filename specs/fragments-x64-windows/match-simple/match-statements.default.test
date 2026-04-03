@@ -1,0 +1,45 @@
+// Test: match-statements.default
+function main() returns ExitCode
+	var x = 99
+	match x 'check'
+		1 then return 10
+		2 then return 20
+		default then return 0
+	end 'check'
+end 'main'
+---
+ExitCode: 0
+---
+module {
+  func @main() -> u32 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov rax, 99
+    x64.mov [rbp-8], rax
+    x64.jmp main.check_0.cmp0
+  check_0.cmp0:
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, 1
+    x64.cmp rax, rcx
+    x64.jne main.check_0.cmp1
+  check_0.case0:
+    x64.mov rax, 10
+    x64.epilogue
+    x64.ret
+  check_0.cmp1:
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, 2
+    x64.cmp rax, rcx
+    x64.jne main.check_0.case2
+  check_0.case1:
+    x64.mov rax, 20
+    x64.epilogue
+    x64.ret
+  check_0.case2:
+    x64.xor rax, rax
+    x64.epilogue
+    x64.ret
+  check_0.merge:
+  }
+}
+---

@@ -8,7 +8,7 @@ namespace MaxonSharp.Testing;
 public static partial class SpecParser {
   /// <summary>
   /// Parse a spec file and extract all tests.
-  /// When targetKey is provided (e.g. "x86_64-windows"), extracts RequiredMLIR:{targetKey} blocks.
+  /// When targetKey is provided (e.g. "x64-windows"), extracts RequiredMLIR:{targetKey} blocks.
   /// </summary>
   public static SpecFile Parse(string filePath, string? targetKey = null) {
     var content = File.ReadAllText(filePath);
@@ -27,7 +27,7 @@ public static partial class SpecParser {
   /// <summary>
   /// Parse all spec files in a directory.
   /// Skips specs with status: draft.
-  /// When targetKey is provided (e.g. "x86_64-windows"), extracts RequiredMLIR:{targetKey} blocks.
+  /// When targetKey is provided (e.g. "x64-windows"), extracts RequiredMLIR:{targetKey} blocks.
   /// </summary>
   public static List<SpecFile> ParseDirectory(string specDir, string? targetKey = null) {
     var specs = new List<SpecFile>();
@@ -235,7 +235,7 @@ public static partial class SpecParser {
     foreach (Match match in CodeBlockLanguageRegex().Matches(testSection)) {
       var language = match.Groups[1].Value;
       if (KnownCodeBlockLanguages.Contains(language)) continue;
-      // Allow target-qualified blocks like RequiredMLIR:x86_64-windows
+      // Allow target-qualified blocks like RequiredMLIR:x64-windows
       var colonIdx = language.IndexOf(':');
       if (colonIdx > 0 && KnownCodeBlockPrefixes.Contains(language[..colonIdx])) continue;
       throw new Exception(

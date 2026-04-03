@@ -657,7 +657,7 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
     var requiredSections = ParseIrSections(required);
     var actualSections = ParseIrSections(actual);
 
-    var otherBackend = target.Arch == "aarch64" ? "x86" : "arm64";
+    var otherBackend = target.Arch == "arm64" ? "x86" : "arm64";
 
     // Compare only sections that are relevant: skip the other backend's section
     foreach (var (name, requiredContent) in requiredSections) {
@@ -726,7 +726,7 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
     var normalized = stderr.Replace("\r\n", "\n");
     normalized = normalized.Replace('\\', '/');
     // Normalize target-specific fragment directory to generic path for comparison
-    // e.g., "specs/fragments-aarch64-macos/" -> "specs/fragments/"
+    // e.g., "specs/fragments-arm64-macos/" -> "specs/fragments/"
     normalized = FragmentDirRegex().Replace(normalized, "specs/fragments/");
     return normalized.Trim();
   }
@@ -1057,19 +1057,19 @@ public partial class TestRunner(string specDir, string fragmentDir, string tempD
                 var unqualifiedMatch = Regex.Match(specContent[searchStart..searchEnd], unqualifiedPattern, RegexOptions.Singleline, TimeSpan.FromSeconds(5));
 
                 if (unqualifiedMatch.Success) {
-                  // Migrate: rename unqualified block to x86_64-windows (since all existing blocks contain x86 IR)
+                  // Migrate: rename unqualified block to x64-windows (since all existing blocks contain x86 IR)
                   // and insert a new block for the current target if different
                   var absoluteStart = searchStart + unqualifiedMatch.Index;
                   var absoluteEnd = absoluteStart + unqualifiedMatch.Length;
                   var existingContent = unqualifiedMatch.Groups[1].Value.TrimEnd();
 
-                  if (targetKey == "x86_64-windows") {
+                  if (targetKey == "x64-windows") {
                     // Current target is x86 — just rename the block and update content
-                    var replacement = $"```RequiredMLIR:x86_64-windows\n{newRequiredMLIR}\n```";
+                    var replacement = $"```RequiredMLIR:x64-windows\n{newRequiredMLIR}\n```";
                     specContent = string.Concat(specContent.AsSpan(0, absoluteStart), replacement, specContent.AsSpan(absoluteEnd));
                   } else {
-                    // Current target is different — rename existing to x86_64-windows and append new target block
-                    var replacement = $"```RequiredMLIR:x86_64-windows\n{existingContent}\n```\n```RequiredMLIR:{targetKey}\n{newRequiredMLIR}\n```";
+                    // Current target is different — rename existing to x64-windows and append new target block
+                    var replacement = $"```RequiredMLIR:x64-windows\n{existingContent}\n```\n```RequiredMLIR:{targetKey}\n{newRequiredMLIR}\n```";
                     specContent = string.Concat(specContent.AsSpan(0, absoluteStart), replacement, specContent.AsSpan(absoluteEnd));
                   }
                   updated = true;

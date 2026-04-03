@@ -10,8 +10,8 @@ public record CompileTarget(string Arch, string Os) {
   public static CompileTarget Native {
     get {
       var arch = System.Runtime.InteropServices.RuntimeInformation.OSArchitecture switch {
-        System.Runtime.InteropServices.Architecture.Arm64 => "aarch64",
-        System.Runtime.InteropServices.Architecture.X64 => "x86_64",
+        System.Runtime.InteropServices.Architecture.Arm64 => "arm64",
+        System.Runtime.InteropServices.Architecture.X64 => "x64",
         var unsupported => throw new PlatformNotSupportedException($"Unsupported architecture: {unsupported}")
       };
       var os = System.Runtime.InteropServices.RuntimeInformation.IsOSPlatform(
@@ -33,12 +33,12 @@ public record CompileTarget(string Arch, string Os) {
   };
 
   /// <summary>
-  /// Parses a target triple string like "aarch64-macos" into a CompileTarget.
+  /// Parses a target triple string like "arm64-macos" into a CompileTarget.
   /// </summary>
   public static CompileTarget Parse(string triple) {
     var parts = triple.Split('-', 2);
     if (parts.Length != 2)
-      throw new ArgumentException($"Invalid target format '{triple}'. Expected 'arch-os' (e.g., 'aarch64-macos').");
+      throw new ArgumentException($"Invalid target format '{triple}'. Expected 'arch-os' (e.g., 'arm64-macos').");
     return new CompileTarget(parts[0], parts[1]);
   }
 }
@@ -120,7 +120,7 @@ public class Compiler {
           MlirPipeline.WriteMlirOutput(mlirResult.ARM64Module, mlirOutputPath);
       }
 
-      if (target.Arch == "aarch64") {
+      if (target.Arch == "arm64") {
         // Stage 5: Code emission (ARM64 dialect -> machine code)
         var codeResult = ARM64CodeEmitterStage.Emit(mlirResult.ARM64Module!);
         var emitMs = stageSw.ElapsedMilliseconds; stageSw.Restart();
@@ -130,7 +130,7 @@ public class Compiler {
         var writeMs = stageSw.ElapsedMilliseconds;
         Logger.Trace(LogCategory.Compiler, $"Stages: parse={parseMs}ms pipeline={pipelineMs}ms emit={emitMs}ms write={writeMs}ms");
         Logger.Info(LogCategory.Compiler, $"Wrote {codeResult.Code.Length} bytes code, {codeResult.Rdata.Length} bytes rdata, {codeResult.Data.Length} bytes data, {codeResult.Ucddata.Length} bytes ucddata, {codeResult.Symdata.Length} bytes symdata to {outputPath}");
-      } else if (target.Arch == "x86_64") {
+      } else if (target.Arch == "x64") {
         // Stage 5: Code emission (X86 dialect -> machine code)
         var codeResult = X86CodeEmitter.Emit(mlirResult.X86Module!);
 

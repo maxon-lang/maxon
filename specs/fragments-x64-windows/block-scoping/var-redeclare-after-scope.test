@@ -1,0 +1,25 @@
+// Test: var-redeclare-after-scope
+function main() returns ExitCode
+	if true 'check'
+		var x = 10
+	end 'check'
+	var x = 42
+	return x
+end 'main'
+---
+ExitCode: 42
+---
+module {
+  func @main() -> u32 {
+  entry:
+    x64.mov rax, 1
+    x64.test rax, rax
+    x64.je main.check_0.merge
+  check_0:
+    x64.jmp main.check_0.merge
+  check_0.merge:
+    x64.mov rax, 42
+    x64.ret
+  }
+}
+---

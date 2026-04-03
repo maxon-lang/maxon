@@ -1,0 +1,76 @@
+// Test: enum-exhaustive.bare-case-expression
+enum Status
+		pending
+		approved
+		rejected
+end 'Status'
+
+function main() returns ExitCode
+	var s = Status.approved
+	let code = match s 'eval'
+		pending gives 0
+		approved gives 1
+		rejected gives 2
+	end 'eval'
+	return code
+end 'main'
+---
+ExitCode: 1
+---
+module {
+  func @main() -> u32 {
+  entry:
+    x64.prologue stack_size=32
+    x64.mov rax, 1
+    x64.mov [rbp-8], rax
+    x64.mov rcx, [rbp-8]
+    x64.xor rdx, rdx
+    x64.mov [rbp-16], rdx
+    x64.mov [rbp-24], rcx
+    x64.jmp main.eval_0.cmp0
+  eval_0.cmp0:
+    x64.mov rax, [rbp-24]
+    x64.xor rcx, rcx
+    x64.cmp rax, rcx
+    x64.jne main.eval_0.cmp1
+  eval_0.case0:
+    x64.xor rax, rax
+    x64.mov [rbp-16], rax
+    x64.jmp main.eval_0.merge
+  eval_0.cmp1:
+    x64.mov rax, [rbp-24]
+    x64.mov rcx, 1
+    x64.cmp rax, rcx
+    x64.jne main.eval_0.cmp2
+  eval_0.case1:
+    x64.mov rax, 1
+    x64.mov [rbp-16], rax
+    x64.jmp main.eval_0.merge
+  eval_0.cmp2:
+    x64.mov rax, [rbp-24]
+    x64.mov rcx, 2
+    x64.cmp rax, rcx
+    x64.jne main.eval_0.merge
+  eval_0.case2:
+    x64.mov rax, 2
+    x64.mov [rbp-16], rax
+    x64.jmp main.eval_0.merge
+  eval_0.merge:
+    x64.mov rax, [rbp-16]
+    x64.xor rcx, rcx
+    x64.mov rdx, 4294967295
+    x64.cmp rax, rdx
+    x64.jg main.__range_panic_1
+    x64.cmp rax, rcx
+    x64.jl main.__range_panic_1
+    x64.jmp main.__range_ok_1
+  __range_panic_1:
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_1:
+    x64.epilogue
+    x64.ret
+  }
+}
+---

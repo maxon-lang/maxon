@@ -1,0 +1,38 @@
+// Test: mixed-type-tuple
+function main() returns ExitCode
+	var t = (40, 2.5)
+	return t.0 + trunc(t.1)
+end 'main'
+---
+ExitCode: 42
+---
+module {
+  func @main() -> u32 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov rax, 40
+    x64.movsd xmm0, [rip+__float_2.5]
+    x64.mov [rbp-16], rax
+    x64.movsd [rbp-8], xmm0
+    x64.mov rcx, [rbp-16]
+    x64.movsd xmm1, [rbp-8]
+    x64.cvttsd2si rdx, xmm1
+    x64.add rcx, rdx
+    x64.xor rbx, rbx
+    x64.mov rsi, 4294967295
+    x64.cmp rcx, rsi
+    x64.jg main.__range_panic_0
+    x64.cmp rcx, rbx
+    x64.jl main.__range_panic_0
+    x64.jmp main.__range_ok_0
+  __range_panic_0:
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.mov rax, rcx
+    x64.epilogue
+    x64.ret
+  }
+}
+---

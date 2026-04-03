@@ -1,0 +1,54 @@
+// Test: mixed-export-and-non-export
+
+typealias Integer = int(i64.min to i64.max)
+
+export function publicFunc() returns Integer
+	return privateFunc() + 20
+end 'publicFunc'
+
+function privateFunc() returns Integer
+	return 22
+end 'privateFunc'
+
+function main() returns ExitCode
+	return publicFunc()
+end 'main'
+---
+ExitCode: 42
+---
+module {
+  func @export-keyword.publicFunc() -> i64 {
+  entry:
+    x64.prologue stack_size=16
+    x64.call export-keyword.privateFunc
+    x64.mov rcx, 20
+    x64.add rax, rcx
+    x64.epilogue
+    x64.ret
+  }
+  func @export-keyword.privateFunc() -> i64 {
+  entry:
+    x64.mov rax, 22
+    x64.ret
+  }
+  func @main() -> u32 {
+  entry:
+    x64.prologue stack_size=16
+    x64.call export-keyword.publicFunc
+    x64.xor rcx, rcx
+    x64.mov rdx, 4294967295
+    x64.cmp rax, rdx
+    x64.jg main.__range_panic_0
+    x64.cmp rax, rcx
+    x64.jl main.__range_panic_0
+    x64.jmp main.__range_ok_0
+  __range_panic_0:
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.epilogue
+    x64.ret
+  }
+}
+---

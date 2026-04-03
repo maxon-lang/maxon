@@ -1,0 +1,110 @@
+// Test: match-statement-simple
+function main() returns ExitCode
+	var x = 2
+	match x 'check'
+		1 then return 10
+		2 then return 20
+		default then return 0
+	end 'check'
+end 'main'
+---
+ExitCode: 20
+RequiredMLIR: ```
+=== maxon
+module {
+  func @main() -> i64 {
+  entry:
+    %0 = maxon.literal {value = 2 : i64}
+    maxon.assign %0 {var = x} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %0 {var = __match_check_0} {kind = i64} {decl = 1 : i1}
+    maxon.br check_0.cmp0
+  check_0.cmp0:
+    %1 = maxon.var_ref {var = __match_check_0} {type = i64}
+    %2 = maxon.literal {value = 1 : i64}
+    %3 = maxon.binop %1, %2 {op = eq}
+    maxon.cond_br %3 [then: check_0.case0, else: check_0.cmp1]
+  check_0.case0:
+    %4 = maxon.literal {value = 10 : i64}
+    maxon.scope_end [x, __match_check_0]
+    maxon.return %4
+  check_0.cmp1:
+    %5 = maxon.var_ref {var = __match_check_0} {type = i64}
+    %6 = maxon.literal {value = 2 : i64}
+    %7 = maxon.binop %5, %6 {op = eq}
+    maxon.cond_br %7 [then: check_0.case1, else: check_0.case2]
+  check_0.case1:
+    %8 = maxon.literal {value = 20 : i64}
+    maxon.scope_end [x, __match_check_0]
+    maxon.return %8
+  check_0.case2:
+    %9 = maxon.literal {value = 0 : i64}
+    maxon.scope_end [x, __match_check_0]
+    maxon.return %9
+  check_0.merge:
+  }
+}
+=== standard
+module {
+  func @main() -> u32 {
+  entry:
+    %0 = arith.constant {value = 2 : i64}
+    memref.store %0, __match_check_0
+    cf.br check_0.cmp0
+  check_0.cmp0:
+    %1 = memref.load __match_check_0 : i64
+    %2 = arith.constant {value = 1 : i64}
+    %3 = arith.cmpi eq %1, %2
+    cf.cond_br %3 [then: check_0.case0, else: check_0.cmp1]
+  check_0.case0:
+    %4 = arith.constant {value = 10 : i64}
+    func.return %4
+  check_0.cmp1:
+    %5 = memref.load __match_check_0 : i64
+    %6 = arith.constant {value = 2 : i64}
+    %7 = arith.cmpi eq %5, %6
+    cf.cond_br %7 [then: check_0.case1, else: check_0.case2]
+  check_0.case1:
+    %8 = arith.constant {value = 20 : i64}
+    func.return %8
+  check_0.case2:
+    %9 = arith.constant {value = 0 : i64}
+    func.return %9
+  check_0.merge:
+  }
+}
+=== x86
+module {
+  func @main() -> u32 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov rax, 2
+    x64.mov [rbp-8], rax
+    x64.jmp main.check_0.cmp0
+  check_0.cmp0:
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, 1
+    x64.cmp rax, rcx
+    x64.jne main.check_0.cmp1
+  check_0.case0:
+    x64.mov rax, 10
+    x64.epilogue
+    x64.ret
+  check_0.cmp1:
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, 2
+    x64.cmp rax, rcx
+    x64.jne main.check_0.case2
+  check_0.case1:
+    x64.mov rax, 20
+    x64.epilogue
+    x64.ret
+  check_0.case2:
+    x64.xor rax, rax
+    x64.epilogue
+    x64.ret
+  check_0.merge:
+  }
+}
+```
+---
+---

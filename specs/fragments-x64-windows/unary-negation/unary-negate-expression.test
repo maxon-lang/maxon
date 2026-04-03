@@ -1,0 +1,39 @@
+// Test: unary-negate-expression
+function main() returns ExitCode
+	var x = 10
+	var y = 5
+	var z = -(x + y)
+	return 57 + z
+end 'main'
+---
+ExitCode: 42
+---
+module {
+  func @main() -> u32 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov rax, 10
+    x64.mov rcx, 5
+    x64.add rax, rcx
+    x64.xor rdx, rdx
+    x64.sub rdx, rax
+    x64.mov rbx, 57
+    x64.add rbx, rdx
+    x64.xor rsi, rsi
+    x64.mov rdi, 4294967295
+    x64.cmp rbx, rdi
+    x64.jg main.__range_panic_0
+    x64.cmp rbx, rsi
+    x64.jl main.__range_panic_0
+    x64.jmp main.__range_ok_0
+  __range_panic_0:
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.mov rax, rbx
+    x64.epilogue
+    x64.ret
+  }
+}
+---

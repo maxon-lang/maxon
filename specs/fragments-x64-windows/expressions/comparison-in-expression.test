@@ -1,0 +1,26 @@
+// Test: comparison-in-expression
+function main() returns ExitCode
+	var isGreater = 10 > 5
+	if isGreater 'check'
+		return 1
+	end 'check'
+	return 0
+end 'main'
+---
+ExitCode: 1
+---
+module {
+  func @main() -> u32 {
+  entry:
+    x64.mov rax, 10
+    x64.cmp rax, 5
+    x64.jle check_1.after
+  check_1:
+    x64.mov rax, 1
+    x64.ret
+  check_1.after:
+    x64.xor rax, rax
+    x64.ret
+  }
+}
+---

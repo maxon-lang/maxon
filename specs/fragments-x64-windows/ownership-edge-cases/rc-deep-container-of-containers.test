@@ -1,0 +1,328 @@
+// Test: rc-deep-container-of-containers
+typealias Integer = int(i64.min to i64.max)
+
+type Cell
+	export var val Integer
+
+	static function create(val Integer) returns Self
+		return Self{val: val}
+	end 'create'
+end 'Cell'
+
+typealias CellArray = Array with Cell
+typealias Grid = Array with CellArray
+
+function main() returns ExitCode
+	var grid = Grid.create()
+	var row1 = CellArray.create()
+	row1.push(Cell.create(val: 1))
+	row1.push(Cell.create(val: 2))
+	var row2 = CellArray.create()
+	row2.push(Cell.create(val: 3))
+	grid.push(row1)
+	grid.push(row2)
+	return grid.count()
+end 'main'
+---
+MmTrace: true
+ExitCode: 2
+Stderr: ```
+sl_init
+  os_alloc size=67108864
+mm_alloc __ManagedMemory_CellArray #1 size=32 [Grid.create]
+  sl_alloc __ManagedMemory_CellArray #1 size=64 class=5
+mm_alloc Grid #2 size=16 [Grid.create]
+  sl_alloc Grid #2 size=48 class=4
+mm_incref __ManagedMemory_CellArray #1 rc=1 [Grid.create]
+mm_incref Grid #2 rc=1 [Grid.create]
+mm_transfer Grid #2 rc=1 [Grid.create]
+mm_alloc __ManagedMemory_Cell #3 size=32 [CellArray.create]
+  sl_alloc __ManagedMemory_Cell #3 size=64 class=5
+mm_alloc CellArray #4 size=16 [CellArray.create]
+  sl_alloc CellArray #4 size=48 class=4
+mm_incref __ManagedMemory_Cell #3 rc=1 [CellArray.create]
+mm_incref CellArray #4 rc=1 [CellArray.create]
+mm_transfer CellArray #4 rc=1 [CellArray.create]
+mm_alloc Cell #5 size=8 [Cell.create]
+  sl_alloc Cell #5 size=40 class=4
+mm_incref Cell #5 rc=1 [Cell.create]
+mm_transfer Cell #5 rc=1 [Cell.create]
+mm_realloc __ManagedMemory_Cell #3 size=32
+  mm_raw_alloc #R1 size=32 [realloc]
+    sl_alloc size=32 class=3
+mm_incref Cell #5 rc=2 [CellArray.push]
+mm_alloc Cell #6 size=8 [Cell.create]
+  sl_alloc Cell #6 size=40 class=4
+mm_incref Cell #6 rc=1 [Cell.create]
+mm_transfer Cell #6 rc=1 [Cell.create]
+mm_incref Cell #6 rc=2 [CellArray.push]
+mm_alloc __ManagedMemory_Cell #7 size=32 [CellArray.create]
+  sl_alloc __ManagedMemory_Cell #7 size=64 class=5
+mm_alloc CellArray #8 size=16 [CellArray.create]
+  sl_alloc CellArray #8 size=48 class=4
+mm_incref __ManagedMemory_Cell #7 rc=1 [CellArray.create]
+mm_incref CellArray #8 rc=1 [CellArray.create]
+mm_transfer CellArray #8 rc=1 [CellArray.create]
+mm_alloc Cell #9 size=8 [Cell.create]
+  sl_alloc Cell #9 size=40 class=4
+mm_incref Cell #9 rc=1 [Cell.create]
+mm_transfer Cell #9 rc=1 [Cell.create]
+mm_realloc __ManagedMemory_Cell #7 size=32
+  mm_raw_alloc #R2 size=32 [realloc]
+    sl_alloc size=32 class=3
+mm_incref Cell #9 rc=2 [CellArray.push]
+mm_realloc __ManagedMemory_CellArray #1 size=32
+  mm_raw_alloc #R3 size=32 [realloc]
+    sl_alloc size=32 class=3
+mm_incref CellArray #4 rc=2 [Grid.push]
+mm_incref CellArray #8 rc=2 [Grid.push]
+mm_decref Cell #9 rc=1 [main]
+mm_decref Cell #6 rc=1 [main]
+mm_decref Cell #5 rc=1 [main]
+mm_decref CellArray #8 rc=1 [main]
+mm_decref CellArray #4 rc=1 [main]
+mm_decref Grid #2 rc=0 [main]
+  mm_decref __ManagedMemory_CellArray #1 rc=0 [~Grid]
+    mm_decref CellArray #4 rc=0 [~ManagedElements]
+      mm_decref __ManagedMemory_Cell #3 rc=0 [~CellArray]
+        mm_decref Cell #5 rc=0 [~ManagedElements]
+          mm_free Cell #5
+            sl_free Cell #5 size=48 class=4
+        mm_decref Cell #6 rc=0 [~ManagedElements]
+          mm_free Cell #6
+            sl_free Cell #6 size=48 class=4
+        mm_raw_free #R1
+          sl_free size=32 class=3
+        mm_free __ManagedMemory_Cell #3
+          sl_free __ManagedMemory_Cell #3 size=64 class=5
+      mm_free CellArray #4
+        sl_free CellArray #4 size=48 class=4
+    mm_decref CellArray #8 rc=0 [~ManagedElements]
+      mm_decref __ManagedMemory_Cell #7 rc=0 [~CellArray]
+        mm_decref Cell #9 rc=0 [~ManagedElements]
+          mm_free Cell #9
+            sl_free Cell #9 size=48 class=4
+        mm_raw_free #R2
+          sl_free size=32 class=3
+        mm_free __ManagedMemory_Cell #7
+          sl_free __ManagedMemory_Cell #7 size=64 class=5
+      mm_free CellArray #8
+        sl_free CellArray #8 size=48 class=4
+    mm_raw_free #R3
+      sl_free size=32 class=3
+    mm_free __ManagedMemory_CellArray #1
+      sl_free __ManagedMemory_CellArray #1 size=64 class=5
+  mm_free Grid #2
+    sl_free Grid #2 size=48 class=4
+mm_raw_alloc #R4 size=40
+  sl_alloc size=40 class=4
+mm_raw_free #R4
+  sl_free size=48 class=4
+```
+---
+module {
+  func @Cell.create(val: i64) -> i64 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-16], rcx
+    x64.mov rcx, 8
+    x64.xor rdx, rdx
+    x64.mov r8, 1
+    x64.call mm_alloc
+    x64.mov [rbp-8], rax
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rbp-16]
+    x64.mov [rax+0], rcx
+    x64.mov rdx, [rbp-8]
+    x64.mov rcx, [rbp-8]
+    x64.call mm_incref
+    x64.mov rax, [rbp-8]
+    x64.epilogue
+    x64.ret
+  }
+  func @main() -> u32 {
+  entry:
+    x64.prologue stack_size=64
+    x64.call Grid.create
+    x64.mov [rbp-8], rax
+    x64.call CellArray.create
+    x64.mov [rbp-16], rax
+    x64.mov rcx, 1
+    x64.call Cell.create
+    x64.mov [rbp-24], rax
+    x64.mov rax, [rbp-16]
+    x64.mov rcx, [rbp-24]
+    x64.mov rcx, [rbp-16]
+    x64.mov rdx, [rbp-24]
+    x64.call CellArray.push
+    x64.mov rcx, 2
+    x64.call Cell.create
+    x64.mov [rbp-32], rax
+    x64.mov rdx, [rbp-16]
+    x64.mov rbx, [rbp-32]
+    x64.mov rcx, [rbp-16]
+    x64.mov rdx, [rbp-32]
+    x64.call CellArray.push
+    x64.call CellArray.create
+    x64.mov [rbp-40], rax
+    x64.mov rcx, 3
+    x64.call Cell.create
+    x64.mov [rbp-48], rax
+    x64.mov rsi, [rbp-40]
+    x64.mov rdi, [rbp-48]
+    x64.mov rcx, [rbp-40]
+    x64.mov rdx, [rbp-48]
+    x64.call CellArray.push
+    x64.mov r8, [rbp-8]
+    x64.mov r9, [rbp-16]
+    x64.mov rcx, [rbp-8]
+    x64.mov rdx, [rbp-16]
+    x64.call Grid.push
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rbp-40]
+    x64.mov rcx, [rbp-8]
+    x64.mov rdx, [rbp-40]
+    x64.call Grid.push
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rbp-8]
+    x64.call Grid.count
+    x64.xor rcx, rcx
+    x64.mov rdx, 4294967295
+    x64.cmp rax, rdx
+    x64.jg main.__range_panic_0
+    x64.cmp rax, rcx
+    x64.jl main.__range_panic_0
+    x64.jmp main.__range_ok_0
+  __range_panic_0:
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.mov rbx, [rbp-48]
+    x64.mov [rbp-56], rax
+    x64.test rbx, rbx
+    x64.jz __nonnull_skip_0
+    x64.mov rcx, [rbp-48]
+    x64.call mm_decref
+    x64.label __nonnull_skip_0
+    x64.mov rax, [rbp-32]
+    x64.test rax, rax
+    x64.jz __nonnull_skip_1
+    x64.mov rcx, [rbp-32]
+    x64.call mm_decref
+    x64.label __nonnull_skip_1
+    x64.mov rcx, [rbp-24]
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_2
+    x64.call mm_decref
+    x64.label __nonnull_skip_2
+    x64.mov rdx, [rbp-40]
+    x64.test rdx, rdx
+    x64.jz __nonnull_skip_3
+    x64.mov rcx, [rbp-40]
+    x64.call mm_decref
+    x64.label __nonnull_skip_3
+    x64.mov rbx, [rbp-16]
+    x64.test rbx, rbx
+    x64.jz __nonnull_skip_4
+    x64.mov rcx, [rbp-16]
+    x64.call mm_decref
+    x64.label __nonnull_skip_4
+    x64.mov rsi, [rbp-8]
+    x64.test rsi, rsi
+    x64.jz __nonnull_skip_5
+    x64.mov rcx, [rbp-8]
+    x64.call mm_decref
+    x64.label __nonnull_skip_5
+    x64.mov rax, [rbp-56]
+    x64.epilogue
+    x64.ret
+  }
+  func @__destruct_Cell(ptr: i64) {
+  entry:
+    x64.jmp __destruct_Cell.done
+  done:
+    x64.ret
+  }
+  func @__destruct___ManagedMemory_Cell(ptr: i64) {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-8], rcx
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+16]
+    x64.xor rdx, rdx
+    x64.cmp rcx, rdx
+    x64.je __destruct___ManagedMemory_Cell.skip_buf_0
+  free_buf_0:
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rbp-8]
+    x64.call mm_decref_managed_elements
+    x64.mov rcx, [rbp-8]
+    x64.mov rdx, [rcx+0]
+    x64.mov rcx, rdx
+    x64.call mm_raw_free
+    x64.jmp __destruct___ManagedMemory_Cell.skip_buf_0
+  skip_buf_0:
+    x64.jmp __destruct___ManagedMemory_Cell.done
+  done:
+    x64.epilogue
+    x64.ret
+  }
+  func @__destruct_CellArray(ptr: i64) {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-8], rcx
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+8]
+    x64.mov [rbp-16], rcx
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_8
+    x64.call mm_decref
+    x64.label __nonnull_skip_8
+    x64.jmp __destruct_CellArray.done
+  done:
+    x64.epilogue
+    x64.ret
+  }
+  func @__destruct___ManagedMemory_CellArray(ptr: i64) {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-8], rcx
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+16]
+    x64.xor rdx, rdx
+    x64.cmp rcx, rdx
+    x64.je __destruct___ManagedMemory_CellArray.skip_buf_0
+  free_buf_0:
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rbp-8]
+    x64.call mm_decref_managed_elements
+    x64.mov rcx, [rbp-8]
+    x64.mov rdx, [rcx+0]
+    x64.mov rcx, rdx
+    x64.call mm_raw_free
+    x64.jmp __destruct___ManagedMemory_CellArray.skip_buf_0
+  skip_buf_0:
+    x64.jmp __destruct___ManagedMemory_CellArray.done
+  done:
+    x64.epilogue
+    x64.ret
+  }
+  func @__destruct_Grid(ptr: i64) {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-8], rcx
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+8]
+    x64.mov [rbp-16], rcx
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_9
+    x64.call mm_decref
+    x64.label __nonnull_skip_9
+    x64.jmp __destruct_Grid.done
+  done:
+    x64.epilogue
+    x64.ret
+  }
+}
+---

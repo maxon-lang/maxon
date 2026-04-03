@@ -93,7 +93,7 @@ Region(loop,
 
 Instead of monolithic backends, use **composable lowering specifications**:
 ```
-target x86_64 {
+target x64 {
     // Instruction tiles with costs
     tile Add(reg, reg) → { emit: "add {0}, {1}", cost: 1 }
     tile Add(reg, Const(c)) → { emit: "add {0}, {c}", cost: 1 }

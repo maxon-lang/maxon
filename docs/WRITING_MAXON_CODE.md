@@ -760,7 +760,7 @@ export var sharedState = 0
 #endif
 ```
 
-Conditions: `os(Windows)`, `os(Linux)`, `os(Macos)`, `arch(x86_64)`, `arch(aarch64)`, `testing(true)`, `testing(false)`.
+Conditions: `os(Windows)`, `os(Linux)`, `os(Macos)`, `arch(x64)`, `arch(arm64)`, `testing(true)`, `testing(false)`.
 Operators: `and`, `or`, `not`.
 
 ### Memory Model
@@ -801,7 +801,7 @@ maxon.exe spec-test                            # all tests
 maxon.exe spec-test --filter=arithmetic        # filter
 maxon.exe spec-test --filter=arrays --verbose  # verbose failures
 maxon.exe spec-test --update-required          # regenerate RequiredMLIR
-maxon.exe spec-test --target=x86_64-linux      # cross-compile
+maxon.exe spec-test --target=x64-linux      # cross-compile
 ```
 
 ### Spec tests (self-hosted compiler)
@@ -811,7 +811,7 @@ cd maxon-selfhosted
 ./maxon-selfhosted.exe spec-test                           # all tests
 ./maxon-selfhosted.exe spec-test --filter=arithmetic       # filter
 ./maxon-selfhosted.exe spec-test --verbose                 # verbose failures
-./maxon-selfhosted.exe spec-test --target=x86_64-linux     # cross-compile
+./maxon-selfhosted.exe spec-test --target=x64-linux     # cross-compile
 ```
 
 ### Debugging

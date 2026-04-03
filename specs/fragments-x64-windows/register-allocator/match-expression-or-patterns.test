@@ -1,0 +1,183 @@
+// Test: match-expression-or-patterns
+function main() returns ExitCode
+	var x = 4
+	let result = match x 'eval'
+		1 or 2 gives 10
+		3 or 4 gives 20
+		default gives 0
+	end 'eval'
+	return result
+end 'main'
+---
+ExitCode: 20
+RequiredMLIR: ```
+=== maxon
+module {
+  func @main() -> i64 {
+  entry:
+    %0 = maxon.literal {value = 4 : i64}
+    maxon.assign %0 {var = x} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    %1 = maxon.literal {value = 0 : i64}
+    maxon.assign %1 {var = __matchexpr_eval_0} {kind = i64} {decl = 1 : i1} {mut = 1 : i1}
+    maxon.assign %0 {var = __match_eval_0} {kind = i64} {decl = 1 : i1}
+    maxon.br eval_0.cmp0
+  eval_0.cmp0:
+    %2 = maxon.var_ref {var = __match_eval_0} {type = i64}
+    %3 = maxon.literal {value = 1 : i64}
+    %4 = maxon.binop %2, %3 {op = eq}
+    %5 = maxon.var_ref {var = __match_eval_0} {type = i64}
+    %6 = maxon.literal {value = 2 : i64}
+    %7 = maxon.binop %5, %6 {op = eq}
+    %8 = maxon.binop %4, %7 {op = or}
+    maxon.cond_br %8 [then: eval_0.case0, else: eval_0.cmp1]
+  eval_0.case0:
+    %9 = maxon.literal {value = 10 : i64}
+    maxon.assign %9 {var = __matchexpr_eval_0} {kind = i64} {mut = 1 : i1}
+    maxon.br eval_0.merge
+  eval_0.cmp1:
+    %10 = maxon.var_ref {var = __match_eval_0} {type = i64}
+    %11 = maxon.literal {value = 3 : i64}
+    %12 = maxon.binop %10, %11 {op = eq}
+    %13 = maxon.var_ref {var = __match_eval_0} {type = i64}
+    %14 = maxon.literal {value = 4 : i64}
+    %15 = maxon.binop %13, %14 {op = eq}
+    %16 = maxon.binop %12, %15 {op = or}
+    maxon.cond_br %16 [then: eval_0.case1, else: eval_0.case2]
+  eval_0.case1:
+    %17 = maxon.literal {value = 20 : i64}
+    maxon.assign %17 {var = __matchexpr_eval_0} {kind = i64} {mut = 1 : i1}
+    maxon.br eval_0.merge
+  eval_0.case2:
+    %18 = maxon.literal {value = 0 : i64}
+    maxon.assign %18 {var = __matchexpr_eval_0} {kind = i64} {mut = 1 : i1}
+    maxon.br eval_0.merge
+  eval_0.merge:
+    %19 = maxon.var_ref {var = __matchexpr_eval_0} {type = i64}
+    maxon.assign %19 {var = result} {kind = i64} {decl = 1 : i1}
+    %20 = maxon.literal {value = 0 : i64}
+    %21 = maxon.binop %19, %20 {op = lt}
+    %22 = maxon.literal {value = 4294967295 : i64}
+    %23 = maxon.binop %19, %22 {op = gt}
+    %24 = maxon.binop %21, %23 {op = or}
+    maxon.cond_br %24 [then: __range_panic_1, else: __range_ok_1]
+  __range_panic_1:
+    maxon.panic "panic at match-expression-or-patterns.test:9: Range check failed: value outside typealias 'ExitCode'"
+  __range_ok_1:
+    maxon.scope_end [x, __matchexpr_eval_0, result, __match_eval_0]
+    maxon.return %19
+  }
+}
+=== standard
+module {
+  func @main() -> u32 {
+  entry:
+    %0 = arith.constant {value = 4 : i64}
+    memref.store %0, __match_eval_0
+    cf.br eval_0.cmp0
+  eval_0.cmp0:
+    %2 = memref.load __match_eval_0 : i64
+    %3 = arith.constant {value = 1 : i64}
+    %4 = arith.cmpi eq %2, %3
+    %5 = memref.load __match_eval_0 : i64
+    %6 = arith.constant {value = 2 : i64}
+    %7 = arith.cmpi eq %5, %6
+    %8 = arith.ori1 %4, %7
+    cf.cond_br %8 [then: eval_0.case0, else: eval_0.cmp1]
+  eval_0.case0:
+    %9 = arith.constant {value = 10 : i64}
+    memref.store %9, __matchexpr_eval_0
+    cf.br eval_0.merge
+  eval_0.cmp1:
+    %10 = memref.load __match_eval_0 : i64
+    %11 = arith.constant {value = 3 : i64}
+    %12 = arith.cmpi eq %10, %11
+    %13 = memref.load __match_eval_0 : i64
+    %14 = arith.constant {value = 4 : i64}
+    %15 = arith.cmpi eq %13, %14
+    %16 = arith.ori1 %12, %15
+    cf.cond_br %16 [then: eval_0.case1, else: eval_0.case2]
+  eval_0.case1:
+    %17 = arith.constant {value = 20 : i64}
+    memref.store %17, __matchexpr_eval_0
+    cf.br eval_0.merge
+  eval_0.case2:
+    %18 = arith.constant {value = 0 : i64}
+    memref.store %18, __matchexpr_eval_0
+    cf.br eval_0.merge
+  eval_0.merge:
+    %19 = memref.load __matchexpr_eval_0 : i64
+    %20 = arith.constant {value = 0 : i64}
+    %21 = arith.cmpi lt %19, %20
+    %22 = arith.constant {value = 4294967295 : i64}
+    %23 = arith.cmpi gt %19, %22
+    %24 = arith.ori1 %21, %23
+    cf.cond_br %24 [then: __range_panic_1, else: __range_ok_1]
+  __range_panic_1:
+    %25 = memref.lea_symdata __panic_msg_0
+    %26 = std.ptr_to_i64 %25
+    std.call_runtime @mrt_panic %26
+  __range_ok_1:
+    func.return %19
+  }
+}
+=== x86
+module {
+  func @main() -> u32 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov rax, 4
+    x64.mov [rbp-8], rax
+    x64.jmp main.eval_0.cmp0
+  eval_0.cmp0:
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, 1
+    x64.mov rdx, [rbp-8]
+    x64.mov rbx, 2
+    x64.cmp rdx, rbx
+    x64.je main.eval_0.case0
+    x64.cmp rax, rcx
+    x64.je main.eval_0.case0
+    x64.jmp main.eval_0.cmp1
+  eval_0.case0:
+    x64.mov rax, 10
+    x64.mov [rbp-16], rax
+    x64.jmp main.eval_0.merge
+  eval_0.cmp1:
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, 3
+    x64.mov rdx, [rbp-8]
+    x64.mov rbx, 4
+    x64.cmp rdx, rbx
+    x64.je main.eval_0.case1
+    x64.cmp rax, rcx
+    x64.je main.eval_0.case1
+    x64.jmp main.eval_0.case2
+  eval_0.case1:
+    x64.mov rax, 20
+    x64.mov [rbp-16], rax
+    x64.jmp main.eval_0.merge
+  eval_0.case2:
+    x64.xor rax, rax
+    x64.mov [rbp-16], rax
+    x64.jmp main.eval_0.merge
+  eval_0.merge:
+    x64.mov rax, [rbp-16]
+    x64.xor rcx, rcx
+    x64.mov rdx, 4294967295
+    x64.cmp rax, rdx
+    x64.jg main.__range_panic_1
+    x64.cmp rax, rcx
+    x64.jl main.__range_panic_1
+    x64.jmp main.__range_ok_1
+  __range_panic_1:
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_1:
+    x64.epilogue
+    x64.ret
+  }
+}
+```
+---
+---

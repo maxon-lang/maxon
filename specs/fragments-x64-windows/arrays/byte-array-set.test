@@ -1,0 +1,133 @@
+// Test: byte-array-set
+
+typealias Integer = int(i64.min to i64.max)
+typealias Byte = byte(0 to u8.max)
+
+typealias ByteArray = Array with Byte
+
+function main() returns ExitCode
+	var arr = ByteArray.create()
+	arr.push(10 as Byte)
+	arr.push(20 as Byte)
+	arr.push(30 as Byte)
+
+	arr.set(1, value: 99 as Byte)
+
+	var val = try arr.get(1) otherwise 0 as Byte
+	return val as Integer
+end 'main'
+---
+ExitCode: 99
+---
+module {
+  func @main() -> u32 {
+  entry:
+    x64.prologue stack_size=32
+    x64.call ByteArray.create
+    x64.mov [rbp-8], rax
+    x64.mov rax, 10
+    x64.mov rcx, 255
+    x64.and rax, rcx
+    x64.mov rdx, [rbp-8]
+    x64.mov rcx, [rbp-8]
+    x64.mov rdx, rax
+    x64.call ByteArray.push
+    x64.mov rbx, 20
+    x64.mov rsi, 255
+    x64.and rbx, rsi
+    x64.mov rdi, [rbp-8]
+    x64.mov rcx, [rbp-8]
+    x64.mov rdx, rbx
+    x64.call ByteArray.push
+    x64.mov r8, 30
+    x64.mov r9, 255
+    x64.and r8, r9
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rbp-8]
+    x64.mov rdx, r8
+    x64.call ByteArray.push
+    x64.mov rax, 99
+    x64.mov rcx, 255
+    x64.and rax, rcx
+    x64.mov rcx, [rbp-8]
+    x64.mov r8, rax
+    x64.mov rdx, 1
+    x64.call ByteArray.set
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rbp-8]
+    x64.mov rdx, 1
+    x64.call ByteArray.get
+    x64.xor rcx, rcx
+    x64.mov rbx, 255
+    x64.and rcx, rbx
+    x64.mov [rbp-16], rcx
+    x64.mov [rbp-24], rax
+    x64.xor rax, rax
+    x64.cmp rdx, rax
+    x64.je main.otherwise_default_continue_3
+  otherwise_default_error_2:
+    x64.mov rax, [rbp-16]
+    x64.mov [rbp-24], rax
+    x64.jmp main.otherwise_default_continue_3
+  otherwise_default_continue_3:
+    x64.mov rax, [rbp-24]
+    x64.xor rcx, rcx
+    x64.mov rdx, 4294967295
+    x64.cmp rax, rdx
+    x64.jg main.__range_panic_4
+    x64.cmp rax, rcx
+    x64.jl main.__range_panic_4
+    x64.jmp main.__range_ok_4
+  __range_panic_4:
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_4:
+    x64.mov rbx, [rbp-8]
+    x64.test rbx, rbx
+    x64.jz __nonnull_skip_0
+    x64.mov rcx, [rbp-8]
+    x64.call mm_decref
+    x64.label __nonnull_skip_0
+    x64.mov rax, [rbp-24]
+    x64.epilogue
+    x64.ret
+  }
+  func @__destruct_ByteMemory(ptr: i64) {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-8], rcx
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+16]
+    x64.xor rdx, rdx
+    x64.cmp rcx, rdx
+    x64.je __destruct_ByteMemory.skip_buf_0
+  free_buf_0:
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+0]
+    x64.call mm_raw_free
+    x64.jmp __destruct_ByteMemory.skip_buf_0
+  skip_buf_0:
+    x64.jmp __destruct_ByteMemory.done
+  done:
+    x64.epilogue
+    x64.ret
+  }
+  func @__destruct_ByteArray(ptr: i64) {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-8], rcx
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+8]
+    x64.mov [rbp-16], rcx
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_1
+    x64.call mm_decref
+    x64.label __nonnull_skip_1
+    x64.jmp __destruct_ByteArray.done
+  done:
+    x64.epilogue
+    x64.ret
+  }
+}
+---

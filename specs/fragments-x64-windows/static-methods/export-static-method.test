@@ -1,0 +1,103 @@
+// Test: export-static-method
+
+typealias Integer = int(i64.min to i64.max)
+
+type Factory
+	export var id Integer
+
+	export static function create(val Integer) returns Factory
+		return Factory{id: val}
+	end 'create'
+
+	export static function zero() returns Factory
+		return Factory.create(0)
+	end 'zero'
+end 'Factory'
+
+function main() returns ExitCode
+	var f1 = Factory.create(100)
+	var f2 = Factory.zero()
+	return f1.id + f2.id
+end 'main'
+---
+ExitCode: 100
+---
+module {
+  func @Factory.create(val: i64) -> i64 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-16], rcx
+    x64.mov rcx, 8
+    x64.xor rdx, rdx
+    x64.mov r8, 1
+    x64.call mm_alloc
+    x64.mov [rbp-8], rax
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rbp-16]
+    x64.mov [rax+0], rcx
+    x64.mov rdx, [rbp-8]
+    x64.mov rcx, [rbp-8]
+    x64.call mm_incref
+    x64.mov rax, [rbp-8]
+    x64.epilogue
+    x64.ret
+  }
+  func @Factory.zero() -> i64 {
+  entry:
+    x64.prologue stack_size=16
+    x64.xor rcx, rcx
+    x64.call Factory.create
+    x64.mov [rbp-8], rax
+    x64.mov rax, [rbp-8]
+    x64.epilogue
+    x64.ret
+  }
+  func @main() -> u32 {
+  entry:
+    x64.prologue stack_size=32
+    x64.mov rcx, 100
+    x64.call Factory.create
+    x64.mov [rbp-8], rax
+    x64.call Factory.zero
+    x64.mov [rbp-16], rax
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+0]
+    x64.mov rdx, [rbp-16]
+    x64.mov rbx, [rdx+0]
+    x64.add rcx, rbx
+    x64.xor rsi, rsi
+    x64.mov rdi, 4294967295
+    x64.cmp rcx, rdi
+    x64.jg main.__range_panic_0
+    x64.cmp rcx, rsi
+    x64.jl main.__range_panic_0
+    x64.jmp main.__range_ok_0
+  __range_panic_0:
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.mov rax, [rbp-16]
+    x64.mov [rbp-24], rcx
+    x64.test rax, rax
+    x64.jz __nonnull_skip_0
+    x64.mov rcx, [rbp-16]
+    x64.call mm_decref
+    x64.label __nonnull_skip_0
+    x64.mov rcx, [rbp-8]
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_1
+    x64.call mm_decref
+    x64.label __nonnull_skip_1
+    x64.mov rax, [rbp-24]
+    x64.epilogue
+    x64.ret
+  }
+  func @__destruct_Factory(ptr: i64) {
+  entry:
+    x64.jmp __destruct_Factory.done
+  done:
+    x64.ret
+  }
+}
+---

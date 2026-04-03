@@ -1,0 +1,66 @@
+// Test: enum-equals-direct
+enum Color
+	red
+	green
+	blue
+end 'Color'
+
+function main() returns ExitCode
+	var a = Color.green
+	var b = Color.green
+	var c = Color.red
+	if a.equals(b) 'eq'
+		if a.equals(c) 'neq'
+			return 0
+		end 'neq'
+		return 1
+	end 'eq'
+	return 0
+end 'main'
+---
+ExitCode: 1
+---
+module {
+  func @Color.equals(self: i64, other: i64) -> i1 {
+  entry:
+    x64.jmp stdlib.int.equals
+  }
+  func @main() -> u32 {
+  entry:
+    x64.prologue stack_size=32
+    x64.mov rax, 1
+    x64.mov [rbp-8], rax
+    x64.mov rcx, 1
+    x64.mov [rbp-16], rcx
+    x64.xor rdx, rdx
+    x64.mov [rbp-24], rdx
+    x64.mov rbx, [rbp-8]
+    x64.mov rsi, [rbp-16]
+    x64.mov rcx, [rbp-8]
+    x64.mov rdx, [rbp-16]
+    x64.call Color.equals
+    x64.test rax, rax
+    x64.je main.eq_0.after
+  eq_0:
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rbp-24]
+    x64.mov rcx, [rbp-8]
+    x64.mov rdx, [rbp-24]
+    x64.call Color.equals
+    x64.test rax, rax
+    x64.je main.neq_1.after
+  neq_1:
+    x64.xor rax, rax
+    x64.epilogue
+    x64.ret
+  neq_1.after:
+    x64.mov rax, 1
+    x64.epilogue
+    x64.ret
+  eq_0.after:
+    x64.xor rax, rax
+    x64.epilogue
+    x64.ret
+  }
+}
+---

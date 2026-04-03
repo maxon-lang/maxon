@@ -20,7 +20,7 @@ export type FrameInfo
 end 'FrameInfo'
 
 // Round a size up to the next 16-byte boundary.
-// Both x86-64 and AArch64 require 16-byte stack alignment.
+// Both x64 and Arm64 require 16-byte stack alignment.
 export function alignTo16(size StackSize) returns StackSize
 	if size mod 16 != 0 'needsAlign'
 		return size + (16 - (size mod 16))
@@ -97,8 +97,8 @@ end 'computeFrameInfo'
 // Scan a single op for frame-relevant information.
 function scanOpForFrameInfo(op MlirOp, target Target, state FrameScanState)
 	match target.cpu 'cpuDispatch'
-		x86_64 then scanX64OpForFrameInfo(op, state: state)
-		aarch64 then scanArm64OpForFrameInfo(op, state: state)
+		x64 then scanX64OpForFrameInfo(op, state: state)
+		arm64 then scanArm64OpForFrameInfo(op, state: state)
 	end 'cpuDispatch'
 end 'scanOpForFrameInfo'
 
@@ -257,8 +257,8 @@ function insertPrologueEpilogueForFunc(srcFunc MlirFunction, target Target) retu
 	// Second pass: copy blocks, stripping existing prologue/epilogue ops
 	// and inserting new ones at the correct positions.
 	match target.cpu 'dispatchCpu'
-		x86_64 then insertX64PrologueEpilogue(srcFunc, dstFunc: dstFunc, stackSize: stackSize)
-		aarch64 then insertArm64PrologueEpilogue(srcFunc, dstFunc: dstFunc, stackSize: stackSize)
+		x64 then insertX64PrologueEpilogue(srcFunc, dstFunc: dstFunc, stackSize: stackSize)
+		arm64 then insertArm64PrologueEpilogue(srcFunc, dstFunc: dstFunc, stackSize: stackSize)
 	end 'dispatchCpu'
 
 	// Preserve region metadata

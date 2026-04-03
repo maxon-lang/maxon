@@ -1,0 +1,35 @@
+// Test: match-range.open-lower-inclusive
+function main() returns ExitCode
+	var x = 5
+	match x 'check'
+		min to 5 then return 1
+		default then return 0
+	end 'check'
+end 'main'
+---
+ExitCode: 1
+---
+module {
+  func @main() -> u32 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov rax, 5
+    x64.mov [rbp-8], rax
+    x64.jmp main.check_0.cmp0
+  check_0.cmp0:
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, 5
+    x64.cmp rax, rcx
+    x64.jg main.check_0.case1
+  check_0.case0:
+    x64.mov rax, 1
+    x64.epilogue
+    x64.ret
+  check_0.case1:
+    x64.xor rax, rax
+    x64.epilogue
+    x64.ret
+  check_0.merge:
+  }
+}
+---

@@ -1,0 +1,385 @@
+// Test: nested-struct-backing-multi
+typealias Latency = int(0 to 50)
+
+type OpMeta
+	export let latency Latency
+	export let isMemory bool
+	export let isCall bool
+
+	static function create(latency Latency, isMemory bool, isCall bool) returns Self
+		return Self{latency: latency, isMemory: isMemory, isCall: isCall}
+	end 'create'
+end 'OpMeta'
+
+type X64OpMeta
+	export let meta OpMeta
+	export let setsFlags bool
+
+	static function create(meta OpMeta, setsFlags bool) returns Self
+		return Self{meta: meta, setsFlags: setsFlags}
+	end 'create'
+end 'X64OpMeta'
+
+enum X64Op
+	load = X64OpMeta.create(meta: OpMeta.create(latency: 4, isMemory: true, isCall: false), setsFlags: false)
+	add = X64OpMeta.create(meta: OpMeta.create(latency: 1, isMemory: false, isCall: false), setsFlags: true)
+	call = X64OpMeta.create(meta: OpMeta.create(latency: 5, isMemory: true, isCall: true), setsFlags: false)
+end 'X64Op'
+
+function main() returns ExitCode
+	let op = X64Op.load
+	if op.rawValue.meta.isMemory 'check'
+		return op.rawValue.meta.latency
+	end 'check'
+	return 0
+end 'main'
+---
+ExitCode: 4
+---
+module {
+  func @main() -> u32 {
+  entry:
+    x64.prologue stack_size=80
+    x64.xor rax, rax
+    x64.mov [rbp-8], rax
+    x64.mov rcx, [rbp-8]
+    x64.lea_func rdx, [__destruct_X64OpMeta]
+    x64.mov rbx, rdx
+    x64.mov rdx, rbx
+    x64.mov rcx, 16
+    x64.mov r8, 1
+    x64.call mm_alloc
+    x64.mov [rbp-16], rax
+    x64.mov rcx, 24
+    x64.xor rdx, rdx
+    x64.mov r8, 2
+    x64.call mm_alloc
+    x64.mov [rbp-24], rax
+    x64.xor rsi, rsi
+    x64.xor rdi, rdi
+    x64.mov r8, [rbp-8]
+    x64.cmp r8, rdi
+    x64.sete r9
+    x64.movzx r9, r9b
+    x64.mov rax, 4
+    x64.test r9, r9
+    x64.mov rcx, rsi
+    x64.cmovne rcx, rax
+    x64.mov rax, 1
+    x64.cmp r8, rax
+    x64.sete rax
+    x64.movzx rax, raxb
+    x64.mov rdx, 1
+    x64.test rax, rax
+    x64.mov rbx, rcx
+    x64.cmovne rbx, rdx
+    x64.mov rax, 2
+    x64.cmp r8, rax
+    x64.sete rax
+    x64.movzx rax, raxb
+    x64.mov rcx, 5
+    x64.test rax, rax
+    x64.mov rdx, rbx
+    x64.cmovne rdx, rcx
+    x64.mov rax, [rbp-24]
+    x64.mov [rax+0], rdx
+    x64.xor rax, rax
+    x64.xor rcx, rcx
+    x64.cmp r8, rcx
+    x64.sete rcx
+    x64.movzx rcx, rcxb
+    x64.mov rdx, 1
+    x64.test rcx, rcx
+    x64.mov rbx, rax
+    x64.cmovne rbx, rdx
+    x64.mov rax, 1
+    x64.cmp r8, rax
+    x64.sete rax
+    x64.movzx rax, raxb
+    x64.xor rcx, rcx
+    x64.test rax, rax
+    x64.mov rdx, rbx
+    x64.cmovne rdx, rcx
+    x64.mov rax, 2
+    x64.cmp r8, rax
+    x64.sete rax
+    x64.movzx rax, raxb
+    x64.mov rcx, 1
+    x64.test rax, rax
+    x64.mov rbx, rdx
+    x64.cmovne rbx, rcx
+    x64.mov rax, [rbp-24]
+    x64.mov byte ptr [rax+8], rbxb
+    x64.xor rax, rax
+    x64.xor rcx, rcx
+    x64.cmp r8, rcx
+    x64.sete rcx
+    x64.movzx rcx, rcxb
+    x64.xor rdx, rdx
+    x64.test rcx, rcx
+    x64.mov rbx, rax
+    x64.cmovne rbx, rdx
+    x64.mov rax, 1
+    x64.cmp r8, rax
+    x64.sete rax
+    x64.movzx rax, raxb
+    x64.xor rcx, rcx
+    x64.test rax, rax
+    x64.mov rdx, rbx
+    x64.cmovne rdx, rcx
+    x64.mov rax, 2
+    x64.cmp r8, rax
+    x64.sete rax
+    x64.movzx rax, raxb
+    x64.mov rcx, 1
+    x64.test rax, rax
+    x64.mov rbx, rdx
+    x64.cmovne rbx, rcx
+    x64.mov rax, [rbp-24]
+    x64.mov byte ptr [rax+16], rbxb
+    x64.mov rax, [rbp-24]
+    x64.mov rcx, [rbp-16]
+    x64.mov [rcx+0], rax
+    x64.mov rcx, [rbp-24]
+    x64.call mm_incref
+    x64.xor rax, rax
+    x64.xor rcx, rcx
+    x64.mov rdx, [rbp-8]
+    x64.cmp rdx, rcx
+    x64.sete rcx
+    x64.movzx rcx, rcxb
+    x64.xor rbx, rbx
+    x64.test rcx, rcx
+    x64.mov rsi, rax
+    x64.cmovne rsi, rbx
+    x64.mov rax, 1
+    x64.cmp rdx, rax
+    x64.sete rax
+    x64.movzx rax, raxb
+    x64.mov rcx, 1
+    x64.test rax, rax
+    x64.mov rbx, rsi
+    x64.cmovne rbx, rcx
+    x64.mov rax, 2
+    x64.cmp rdx, rax
+    x64.sete rax
+    x64.movzx rax, raxb
+    x64.xor rcx, rcx
+    x64.test rax, rax
+    x64.mov rdx, rbx
+    x64.cmovne rdx, rcx
+    x64.mov rax, [rbp-16]
+    x64.mov byte ptr [rax+8], rdxb
+    x64.mov rax, [rbp-16]
+    x64.mov [rbp-32], rax
+    x64.mov rax, [rbp-32]
+    x64.mov rcx, [rbp-32]
+    x64.call mm_incref
+    x64.mov rax, [rbp-32]
+    x64.mov rcx, [rax+0]
+    x64.mov [rbp-40], rcx
+    x64.mov rax, [rbp-40]
+    x64.movzx rcx, byte ptr [rax+8]
+    x64.test rcx, rcx
+    x64.je main.check_0.after
+  check_0:
+    x64.mov rax, [rbp-8]
+    x64.lea_func rcx, [__destruct_X64OpMeta]
+    x64.mov rdx, rcx
+    x64.mov rcx, 16
+    x64.mov r8, 1
+    x64.call mm_alloc
+    x64.mov [rbp-48], rax
+    x64.mov rcx, 24
+    x64.xor rdx, rdx
+    x64.mov r8, 2
+    x64.call mm_alloc
+    x64.mov [rbp-56], rax
+    x64.xor rbx, rbx
+    x64.xor rsi, rsi
+    x64.mov rdi, [rbp-8]
+    x64.cmp rdi, rsi
+    x64.sete r8
+    x64.movzx r8, r8b
+    x64.mov r9, 4
+    x64.test r8, r8
+    x64.mov rax, rbx
+    x64.cmovne rax, r9
+    x64.mov rcx, 1
+    x64.cmp rdi, rcx
+    x64.sete rcx
+    x64.movzx rcx, rcxb
+    x64.mov rdx, 1
+    x64.test rcx, rcx
+    x64.mov rbx, rax
+    x64.cmovne rbx, rdx
+    x64.mov rax, 2
+    x64.cmp rdi, rax
+    x64.sete rax
+    x64.movzx rax, raxb
+    x64.mov rcx, 5
+    x64.test rax, rax
+    x64.mov rdx, rbx
+    x64.cmovne rdx, rcx
+    x64.mov rax, [rbp-56]
+    x64.mov [rax+0], rdx
+    x64.xor rax, rax
+    x64.xor rcx, rcx
+    x64.cmp rdi, rcx
+    x64.sete rcx
+    x64.movzx rcx, rcxb
+    x64.mov rdx, 1
+    x64.test rcx, rcx
+    x64.mov rbx, rax
+    x64.cmovne rbx, rdx
+    x64.mov rax, 1
+    x64.cmp rdi, rax
+    x64.sete rax
+    x64.movzx rax, raxb
+    x64.xor rcx, rcx
+    x64.test rax, rax
+    x64.mov rdx, rbx
+    x64.cmovne rdx, rcx
+    x64.mov rax, 2
+    x64.cmp rdi, rax
+    x64.sete rax
+    x64.movzx rax, raxb
+    x64.mov rcx, 1
+    x64.test rax, rax
+    x64.mov rbx, rdx
+    x64.cmovne rbx, rcx
+    x64.mov rax, [rbp-56]
+    x64.mov byte ptr [rax+8], rbxb
+    x64.xor rax, rax
+    x64.xor rcx, rcx
+    x64.cmp rdi, rcx
+    x64.sete rcx
+    x64.movzx rcx, rcxb
+    x64.xor rdx, rdx
+    x64.test rcx, rcx
+    x64.mov rbx, rax
+    x64.cmovne rbx, rdx
+    x64.mov rax, 1
+    x64.cmp rdi, rax
+    x64.sete rax
+    x64.movzx rax, raxb
+    x64.xor rcx, rcx
+    x64.test rax, rax
+    x64.mov rdx, rbx
+    x64.cmovne rdx, rcx
+    x64.mov rax, 2
+    x64.cmp rdi, rax
+    x64.sete rax
+    x64.movzx rax, raxb
+    x64.mov rcx, 1
+    x64.test rax, rax
+    x64.mov rbx, rdx
+    x64.cmovne rbx, rcx
+    x64.mov rax, [rbp-56]
+    x64.mov byte ptr [rax+16], rbxb
+    x64.mov rax, [rbp-56]
+    x64.mov rcx, [rbp-48]
+    x64.mov [rcx+0], rax
+    x64.mov rcx, [rbp-56]
+    x64.call mm_incref
+    x64.xor rax, rax
+    x64.xor rcx, rcx
+    x64.mov rdx, [rbp-8]
+    x64.cmp rdx, rcx
+    x64.sete rcx
+    x64.movzx rcx, rcxb
+    x64.xor rbx, rbx
+    x64.test rcx, rcx
+    x64.mov rsi, rax
+    x64.cmovne rsi, rbx
+    x64.mov rax, 1
+    x64.cmp rdx, rax
+    x64.sete rax
+    x64.movzx rax, raxb
+    x64.mov rcx, 1
+    x64.test rax, rax
+    x64.mov rbx, rsi
+    x64.cmovne rbx, rcx
+    x64.mov rax, 2
+    x64.cmp rdx, rax
+    x64.sete rax
+    x64.movzx rax, raxb
+    x64.xor rcx, rcx
+    x64.test rax, rax
+    x64.mov rdx, rbx
+    x64.cmovne rdx, rcx
+    x64.mov rax, [rbp-48]
+    x64.mov byte ptr [rax+8], rdxb
+    x64.mov rax, [rbp-48]
+    x64.mov [rbp-64], rax
+    x64.mov rax, [rbp-64]
+    x64.mov rcx, [rbp-64]
+    x64.call mm_incref
+    x64.mov rax, [rbp-64]
+    x64.mov rcx, [rax+0]
+    x64.mov [rbp-72], rcx
+    x64.mov rax, [rbp-72]
+    x64.mov rcx, [rax+0]
+    x64.xor rax, rax
+    x64.mov rdx, 4294967295
+    x64.cmp rcx, rdx
+    x64.jg main.__range_panic_1
+    x64.cmp rcx, rax
+    x64.jl main.__range_panic_1
+    x64.jmp main.__range_ok_1
+  __range_panic_1:
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_1:
+    x64.mov rbx, [rbp-64]
+    x64.mov [rbp-80], rcx
+    x64.test rbx, rbx
+    x64.jz __nonnull_skip_0
+    x64.mov rcx, [rbp-64]
+    x64.call mm_decref
+    x64.label __nonnull_skip_0
+    x64.mov rax, [rbp-32]
+    x64.test rax, rax
+    x64.jz __nonnull_skip_1
+    x64.mov rcx, [rbp-32]
+    x64.call mm_decref
+    x64.label __nonnull_skip_1
+    x64.mov rax, [rbp-80]
+    x64.epilogue
+    x64.ret
+  check_0.after:
+    x64.mov rax, [rbp-32]
+    x64.test rax, rax
+    x64.jz __nonnull_skip_2
+    x64.mov rcx, [rbp-32]
+    x64.call mm_decref
+    x64.label __nonnull_skip_2
+    x64.xor rax, rax
+    x64.epilogue
+    x64.ret
+  }
+  func @__destruct_X64OpMeta(ptr: i64) {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov [rbp-8], rcx
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+0]
+    x64.mov [rbp-16], rcx
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_3
+    x64.call mm_decref
+    x64.label __nonnull_skip_3
+    x64.jmp __destruct_X64OpMeta.done
+  done:
+    x64.epilogue
+    x64.ret
+  }
+  func @__destruct_OpMeta(ptr: i64) {
+  entry:
+    x64.jmp __destruct_OpMeta.done
+  done:
+    x64.ret
+  }
+}
+---

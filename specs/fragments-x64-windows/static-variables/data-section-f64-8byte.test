@@ -1,0 +1,31 @@
+// Test: data-section-f64-8byte
+var pi = 3.14
+
+function main() returns ExitCode
+	if pi > 3.0 'read'
+		return 0
+	end 'read'
+	return 1
+end 'main'
+---
+ExitCode: 0
+RequiredData: ```
+f64 3.14
+```
+---
+module {
+  func @main() -> u32 {
+  entry:
+    x64.movsd xmm0, [rip+pi]
+    x64.movsd xmm1, [rip+__float_3]
+    x64.ucomisd xmm0, xmm1
+    x64.jbe main.read_0.after
+  read_0:
+    x64.xor rax, rax
+    x64.ret
+  read_0.after:
+    x64.mov rax, 1
+    x64.ret
+  }
+}
+---

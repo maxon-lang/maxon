@@ -1,0 +1,28 @@
+// Test: panic.basic
+function main() returns ExitCode
+		panic("something went wrong")
+		return 0
+end 'main'
+---
+ExitCode: 1
+Stderr: ```
+panic at panic.basic.test:3: something went wrong
+Stack trace:
+  in main
+  in mrt_start
+```
+---
+module {
+  func @main() -> u32 {
+  entry:
+    x64.prologue stack_size=16
+    x64.lea rax, [rip+__panic_msg_0]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+    x64.mov [rbp+-8], rax
+    x64.xor rax, rax
+    x64.epilogue
+    x64.ret
+  }
+}
+---

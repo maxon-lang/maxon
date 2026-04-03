@@ -129,7 +129,7 @@ end 'main'
 ```exitcode
 0
 ```
-```RequiredMLIR:x86_64-windows
+```RequiredMLIR:x64-windows
 === maxon
 module {
   func @main() -> i64 {
@@ -236,86 +236,86 @@ module {
 module {
   func @main() -> u32 {
   entry:
-    x86.prologue stack_size=32
-    x86.call Vec3.create
-    x86.mov [rbp-8], rax
-    x86.mov rax, [rbp-8]
-    x86.mov rcx, [rbp-8]
-    x86.xor rdx, rdx
-    x86.call Vec3.get
-    x86.mov rcx, -1
-    x86.mov [rbp-16], rcx
-    x86.mov [rbp-24], rax
-    x86.xor rax, rax
-    x86.cmp rdx, rax
-    x86.je main.otherwise_default_continue_3
+    x64.prologue stack_size=32
+    x64.call Vec3.create
+    x64.mov [rbp-8], rax
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rbp-8]
+    x64.xor rdx, rdx
+    x64.call Vec3.get
+    x64.mov rcx, -1
+    x64.mov [rbp-16], rcx
+    x64.mov [rbp-24], rax
+    x64.xor rax, rax
+    x64.cmp rdx, rax
+    x64.je main.otherwise_default_continue_3
   otherwise_default_error_2:
-    x86.mov rax, [rbp-16]
-    x86.mov [rbp-24], rax
-    x86.jmp main.otherwise_default_continue_3
+    x64.mov rax, [rbp-16]
+    x64.mov [rbp-24], rax
+    x64.jmp main.otherwise_default_continue_3
   otherwise_default_continue_3:
-    x86.mov rax, [rbp-24]
-    x86.xor rcx, rcx
-    x86.mov rdx, 4294967295
-    x86.cmp rax, rdx
-    x86.jg main.__range_panic_4
-    x86.cmp rax, rcx
-    x86.jl main.__range_panic_4
-    x86.jmp main.__range_ok_4
+    x64.mov rax, [rbp-24]
+    x64.xor rcx, rcx
+    x64.mov rdx, 4294967295
+    x64.cmp rax, rdx
+    x64.jg main.__range_panic_4
+    x64.cmp rax, rcx
+    x64.jl main.__range_panic_4
+    x64.jmp main.__range_ok_4
   __range_panic_4:
-    x86.lea_symdata rax, [__panic_msg_0]
-    x86.mov rcx, rax
-    x86.call mrt_panic
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
+    x64.call mrt_panic
   __range_ok_4:
-    x86.mov rbx, [rbp-8]
-    x86.test rbx, rbx
-    x86.jz __nonnull_skip_0
-    x86.mov rcx, [rbp-8]
-    x86.call mm_decref
-    x86.label __nonnull_skip_0
-    x86.mov rax, [rbp-24]
-    x86.epilogue
-    x86.ret
+    x64.mov rbx, [rbp-8]
+    x64.test rbx, rbx
+    x64.jz __nonnull_skip_0
+    x64.mov rcx, [rbp-8]
+    x64.call mm_decref
+    x64.label __nonnull_skip_0
+    x64.mov rax, [rbp-24]
+    x64.epilogue
+    x64.ret
   }
   func @__destruct___ManagedMemory_Int(ptr: i64) {
   entry:
-    x86.prologue stack_size=16
-    x86.mov [rbp-8], rcx
-    x86.mov rax, [rbp-8]
-    x86.mov rcx, [rax+16]
-    x86.xor rdx, rdx
-    x86.cmp rcx, rdx
-    x86.je __destruct___ManagedMemory_Int.skip_buf_0
+    x64.prologue stack_size=16
+    x64.mov [rbp-8], rcx
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+16]
+    x64.xor rdx, rdx
+    x64.cmp rcx, rdx
+    x64.je __destruct___ManagedMemory_Int.skip_buf_0
   free_buf_0:
-    x86.mov rax, [rbp-8]
-    x86.mov rcx, [rax+0]
-    x86.call mm_raw_free
-    x86.jmp __destruct___ManagedMemory_Int.skip_buf_0
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+0]
+    x64.call mm_raw_free
+    x64.jmp __destruct___ManagedMemory_Int.skip_buf_0
   skip_buf_0:
-    x86.jmp __destruct___ManagedMemory_Int.done
+    x64.jmp __destruct___ManagedMemory_Int.done
   done:
-    x86.epilogue
-    x86.ret
+    x64.epilogue
+    x64.ret
   }
   func @__destruct_Vec3(ptr: i64) {
   entry:
-    x86.prologue stack_size=16
-    x86.mov [rbp-8], rcx
-    x86.mov rax, [rbp-8]
-    x86.mov rcx, [rax+8]
-    x86.mov [rbp-16], rcx
-    x86.test rcx, rcx
-    x86.jz __nonnull_skip_2
-    x86.call mm_decref
-    x86.label __nonnull_skip_2
-    x86.jmp __destruct_Vec3.done
+    x64.prologue stack_size=16
+    x64.mov [rbp-8], rcx
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+8]
+    x64.mov [rbp-16], rcx
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_2
+    x64.call mm_decref
+    x64.label __nonnull_skip_2
+    x64.jmp __destruct_Vec3.done
   done:
-    x86.epilogue
-    x86.ret
+    x64.epilogue
+    x64.ret
   }
 }
 ```
-```RequiredMLIR:aarch64-macos
+```RequiredMLIR:arm64-macos
 === maxon
 module {
   func @main() -> i64 {
@@ -681,7 +681,7 @@ end 'main'
 ```exitcode
 42
 ```
-```RequiredMLIR:x86_64-windows
+```RequiredMLIR:x64-windows
 === maxon
 module {
   func @main() -> i64 {
@@ -795,90 +795,90 @@ module {
 module {
   func @main() -> u32 {
   entry:
-    x86.prologue stack_size=32
-    x86.call Vec3.create
-    x86.mov [rbp-8], rax
-    x86.mov rax, [rbp-8]
-    x86.mov rcx, [rbp-8]
-    x86.xor rdx, rdx
-    x86.mov r8, 42
-    x86.call Vec3.set
-    x86.mov rcx, [rbp-8]
-    x86.xor rdx, rdx
-    x86.call Vec3.get
-    x86.xor rcx, rcx
-    x86.mov [rbp-16], rcx
-    x86.mov [rbp-24], rax
-    x86.xor rax, rax
-    x86.cmp rdx, rax
-    x86.je main.otherwise_default_continue_3
+    x64.prologue stack_size=32
+    x64.call Vec3.create
+    x64.mov [rbp-8], rax
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rbp-8]
+    x64.xor rdx, rdx
+    x64.mov r8, 42
+    x64.call Vec3.set
+    x64.mov rcx, [rbp-8]
+    x64.xor rdx, rdx
+    x64.call Vec3.get
+    x64.xor rcx, rcx
+    x64.mov [rbp-16], rcx
+    x64.mov [rbp-24], rax
+    x64.xor rax, rax
+    x64.cmp rdx, rax
+    x64.je main.otherwise_default_continue_3
   otherwise_default_error_2:
-    x86.mov rax, [rbp-16]
-    x86.mov [rbp-24], rax
-    x86.jmp main.otherwise_default_continue_3
+    x64.mov rax, [rbp-16]
+    x64.mov [rbp-24], rax
+    x64.jmp main.otherwise_default_continue_3
   otherwise_default_continue_3:
-    x86.mov rax, [rbp-24]
-    x86.xor rcx, rcx
-    x86.mov rdx, 4294967295
-    x86.cmp rax, rdx
-    x86.jg main.__range_panic_4
-    x86.cmp rax, rcx
-    x86.jl main.__range_panic_4
-    x86.jmp main.__range_ok_4
+    x64.mov rax, [rbp-24]
+    x64.xor rcx, rcx
+    x64.mov rdx, 4294967295
+    x64.cmp rax, rdx
+    x64.jg main.__range_panic_4
+    x64.cmp rax, rcx
+    x64.jl main.__range_panic_4
+    x64.jmp main.__range_ok_4
   __range_panic_4:
-    x86.lea_symdata rax, [__panic_msg_0]
-    x86.mov rcx, rax
-    x86.call mrt_panic
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
+    x64.call mrt_panic
   __range_ok_4:
-    x86.mov rbx, [rbp-8]
-    x86.test rbx, rbx
-    x86.jz __nonnull_skip_0
-    x86.mov rcx, [rbp-8]
-    x86.call mm_decref
-    x86.label __nonnull_skip_0
-    x86.mov rax, [rbp-24]
-    x86.epilogue
-    x86.ret
+    x64.mov rbx, [rbp-8]
+    x64.test rbx, rbx
+    x64.jz __nonnull_skip_0
+    x64.mov rcx, [rbp-8]
+    x64.call mm_decref
+    x64.label __nonnull_skip_0
+    x64.mov rax, [rbp-24]
+    x64.epilogue
+    x64.ret
   }
   func @__destruct___ManagedMemory_Int(ptr: i64) {
   entry:
-    x86.prologue stack_size=16
-    x86.mov [rbp-8], rcx
-    x86.mov rax, [rbp-8]
-    x86.mov rcx, [rax+16]
-    x86.xor rdx, rdx
-    x86.cmp rcx, rdx
-    x86.je __destruct___ManagedMemory_Int.skip_buf_0
+    x64.prologue stack_size=16
+    x64.mov [rbp-8], rcx
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+16]
+    x64.xor rdx, rdx
+    x64.cmp rcx, rdx
+    x64.je __destruct___ManagedMemory_Int.skip_buf_0
   free_buf_0:
-    x86.mov rax, [rbp-8]
-    x86.mov rcx, [rax+0]
-    x86.call mm_raw_free
-    x86.jmp __destruct___ManagedMemory_Int.skip_buf_0
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+0]
+    x64.call mm_raw_free
+    x64.jmp __destruct___ManagedMemory_Int.skip_buf_0
   skip_buf_0:
-    x86.jmp __destruct___ManagedMemory_Int.done
+    x64.jmp __destruct___ManagedMemory_Int.done
   done:
-    x86.epilogue
-    x86.ret
+    x64.epilogue
+    x64.ret
   }
   func @__destruct_Vec3(ptr: i64) {
   entry:
-    x86.prologue stack_size=16
-    x86.mov [rbp-8], rcx
-    x86.mov rax, [rbp-8]
-    x86.mov rcx, [rax+8]
-    x86.mov [rbp-16], rcx
-    x86.test rcx, rcx
-    x86.jz __nonnull_skip_2
-    x86.call mm_decref
-    x86.label __nonnull_skip_2
-    x86.jmp __destruct_Vec3.done
+    x64.prologue stack_size=16
+    x64.mov [rbp-8], rcx
+    x64.mov rax, [rbp-8]
+    x64.mov rcx, [rax+8]
+    x64.mov [rbp-16], rcx
+    x64.test rcx, rcx
+    x64.jz __nonnull_skip_2
+    x64.call mm_decref
+    x64.label __nonnull_skip_2
+    x64.jmp __destruct_Vec3.done
   done:
-    x86.epilogue
-    x86.ret
+    x64.epilogue
+    x64.ret
   }
 }
 ```
-```RequiredMLIR:aarch64-macos
+```RequiredMLIR:arm64-macos
 === maxon
 module {
   func @main() -> i64 {

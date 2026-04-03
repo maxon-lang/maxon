@@ -1,0 +1,40 @@
+// Test: float.hash.zero-normalization
+function main() returns ExitCode
+	var pos = 0.0
+	var neg = -0.0
+	var h1 = pos.hash()
+	var h2 = neg.hash()
+	if h1 == h2 'eq'
+		return 1
+	end 'eq'
+	return 0
+end 'main'
+---
+ExitCode: 1
+---
+module {
+  func @main() -> u32 {
+  entry:
+    x64.prologue stack_size=16
+    x64.movsd xmm0, [rip+__float_0]
+    x64.movsd xmm1, [rip+__float_0]
+    x64.movsd [rbp-8], xmm1
+    x64.call stdlib.float.hash
+    x64.mov [rbp-16], rax
+    x64.movsd xmm1, [rbp-8]
+    x64.movsd xmm0, xmm1
+    x64.call stdlib.float.hash
+    x64.mov rcx, [rbp-16]
+    x64.cmp rcx, rax
+    x64.jne main.eq_0.after
+  eq_0:
+    x64.mov rax, 1
+    x64.epilogue
+    x64.ret
+  eq_0.after:
+    x64.xor rax, rax
+    x64.epilogue
+    x64.ret
+  }
+}
+---

@@ -218,11 +218,11 @@ export var sharedCounter = 0                    // visible to other files
 	let sep = "/"
 #endif
 
-#if arch(x86_64)
+#if arch(x64)
 	// x86-specific code
 #endif
 ```
-Conditions: `os(Windows)`, `os(Linux)`, `os(Macos)`, `arch(x86_64)`, `arch(aarch64)`, `testing(true)`, `testing(false)`. Boolean operators: `not`, `and`, `or` (precedence: `or` < `and` < `not`). Can appear at top-level, inside functions, and inside type bodies. Nested `#if` blocks are supported.
+Conditions: `os(Windows)`, `os(Linux)`, `os(Macos)`, `arch(x64)`, `arch(arm64)`, `testing(true)`, `testing(false)`. Boolean operators: `not`, `and`, `or` (precedence: `or` < `and` < `not`). Can appear at top-level, inside functions, and inside type bodies. Nested `#if` blocks are supported.
 
 ## Control Flow
 

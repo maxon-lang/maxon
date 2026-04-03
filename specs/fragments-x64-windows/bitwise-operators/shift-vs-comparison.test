@@ -1,0 +1,31 @@
+// Test: shift-vs-comparison
+function main() returns ExitCode
+	// Shift has higher precedence than comparison
+	// 1 shl 3 = 8, then 8 > 5 = true
+	if 1 shl 3 > 5 'check'
+		return 1
+	end 'check'
+	return 0
+end 'main'
+---
+ExitCode: 1
+---
+module {
+  func @main() -> u32 {
+  entry:
+    x64.mov rax, 1
+    x64.mov rcx, 3
+    x64.mov rdx, rax
+    x64.shl rdx, cl
+    x64.mov rbx, 5
+    x64.cmp rdx, rbx
+    x64.jle main.check_0.after
+  check_0:
+    x64.mov rax, 1
+    x64.ret
+  check_0.after:
+    x64.xor rax, rax
+    x64.ret
+  }
+}
+---

@@ -1,0 +1,32 @@
+// Test: stdlib-call-exp
+function main() returns ExitCode
+	var result = Math.exp(0.0)
+	if result == 1.0 'check'
+		return 42
+	end 'check'
+	return 0
+end 'main'
+---
+ExitCode: 42
+---
+module {
+  func @main() -> u32 {
+  entry:
+    x64.prologue stack_size=16
+    x64.movsd xmm0, [rip+__float_0]
+    x64.call stdlib.Math.exp
+    x64.movsd xmm1, [rip+__float_1]
+    x64.ucomisd xmm0, xmm1
+    x64.jne main.check_0.after
+    x64.jp main.check_0.after
+  check_0:
+    x64.mov rax, 42
+    x64.epilogue
+    x64.ret
+  check_0.after:
+    x64.xor rax, rax
+    x64.epilogue
+    x64.ret
+  }
+}
+---

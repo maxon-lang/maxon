@@ -1,0 +1,103 @@
+// Test: if-statements.else-if-in-helper
+
+typealias Integer = int(i64.min to i64.max)
+
+function classify(x Integer) returns Integer
+	if x == 0 'zero'
+		return 0
+	end 'zero' else if x < 10 'small'
+		return 1
+	end 'small' else if x < 100 'medium'
+		return 2
+	end 'medium' else 'large'
+		return 3
+	end 'large'
+end 'classify'
+
+function main() returns ExitCode
+	var a = classify(0)
+	var b = classify(5)
+	var c = classify(50)
+	var d = classify(200)
+	return a + b * 10 + c * 100 + d * 1000
+end 'main'
+---
+ExitCode: 3210
+---
+module {
+  func @if-statements.classify(ptr: i64) -> i64 {
+  entry:
+    x64.prologue stack_size=16
+    x64.test rcx, rcx
+    x64.mov [rbp+-8], rcx
+    x64.jne zero_1.else
+  zero_1:
+    x64.xor rax, rax
+    x64.epilogue
+    x64.ret
+  zero_1.else:
+    x64.mov rax, [rbp+-8]
+    x64.cmp rax, 10
+    x64.jge small_3.else
+  small_3:
+    x64.mov rax, 1
+    x64.epilogue
+    x64.ret
+  small_3.else:
+    x64.mov rax, [rbp+-8]
+    x64.cmp rax, 100
+    x64.jge large_6
+  medium_5:
+    x64.mov rax, 2
+    x64.epilogue
+    x64.ret
+  large_6:
+    x64.mov rax, 3
+    x64.epilogue
+    x64.ret
+  small_3.merge:
+  zero_1.merge:
+    x64.xor rax, rax
+    x64.epilogue
+    x64.ret
+  }
+  func @main() -> u32 {
+  entry:
+    x64.prologue stack_size=32
+    x64.xor rcx, rcx
+    x64.call if-statements.classify
+    x64.mov rcx, 5
+    x64.mov [rbp+-8], rax
+    x64.call if-statements.classify
+    x64.mov rcx, 10
+    x64.imul rax, rcx
+    x64.mov rcx, [rbp+-8]
+    x64.add rcx, rax
+    x64.mov [rbp+-16], rcx
+    x64.mov rcx, 50
+    x64.call if-statements.classify
+    x64.mov rcx, 100
+    x64.imul rax, rcx
+    x64.mov rcx, [rbp+-16]
+    x64.add rcx, rax
+    x64.mov [rbp+-24], rcx
+    x64.mov rcx, 200
+    x64.call if-statements.classify
+    x64.mov rcx, 1000
+    x64.imul rax, rcx
+    x64.mov rcx, [rbp+-24]
+    x64.add rcx, rax
+    x64.mov rax, 4294967295
+    x64.cmp rcx, rax
+    x64.jbe __range_ok_0
+  __range_panic_0:
+    x64.lea rax, [rip+__panic_msg_0]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.mov rax, rcx
+    x64.epilogue
+    x64.ret
+  }
+}
+---

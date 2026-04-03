@@ -1,0 +1,33 @@
+// Test: docs-example-3
+typealias Decimal = float(f64.min to f64.max)
+
+function main() returns ExitCode
+	var x = 5
+	var y = 5.0
+	if (x as Decimal) == y 'check'
+		return 1
+	end 'check'
+	return 0
+end 'main'
+
+---
+ExitCode: 1
+---
+module {
+  func @main() -> u32 {
+  entry:
+    x64.mov rax, 5
+    x64.movsd xmm0, [rip+__float_5]
+    x64.cvtsi2sd xmm1, rax
+    x64.ucomisd xmm1, xmm0
+    x64.jne main.check_0.after
+    x64.jp main.check_0.after
+  check_0:
+    x64.mov rax, 1
+    x64.ret
+  check_0.after:
+    x64.xor rax, rax
+    x64.ret
+  }
+}
+---

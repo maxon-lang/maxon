@@ -1,0 +1,69 @@
+// Test: return-runtime-check-fail
+typealias Score = int(0 to 100)
+
+function doubleScore(s Score) returns Score
+	return s * 2
+end 'doubleScore'
+
+function main() returns ExitCode
+	var s = Score{60}
+	return doubleScore(s)
+end 'main'
+---
+ExitCode: 1
+Stderr: ```
+panic at return-runtime-check-fail.test:5: Range check failed: value outside typealias 'Score'
+Stack trace:
+  in ranged-typealias.doubleScore
+  in main
+  in mrt_start
+```
+---
+module {
+  func @ranged-typealias.doubleScore(s: i64) -> u8 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov rax, 2
+    x64.mov edx, ecx
+    x64.mov ecx, eax
+    x64.imul rdx, rcx
+    x64.xor rax, rax
+    x64.mov ecx, rdx
+    x64.mov rbx, 100
+    x64.mov esi, rdx
+    x64.cmp rsi, rbx
+    x64.jg ranged-typealias.doubleScore.__range_panic_0
+    x64.cmp rcx, rax
+    x64.jl ranged-typealias.doubleScore.__range_panic_0
+    x64.jmp ranged-typealias.doubleScore.__range_ok_0
+  __range_panic_0:
+    x64.lea_symdata rax, [__panic_msg_0]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.mov rax, rdx
+    x64.epilogue
+    x64.ret
+  }
+  func @main() -> u32 {
+  entry:
+    x64.prologue stack_size=16
+    x64.mov rcx, 60
+    x64.call ranged-typealias.doubleScore
+    x64.xor rcx, rcx
+    x64.mov rdx, 4294967295
+    x64.cmp rax, rdx
+    x64.jg main.__range_panic_0
+    x64.cmp rax, rcx
+    x64.jl main.__range_panic_0
+    x64.jmp main.__range_ok_0
+  __range_panic_0:
+    x64.lea_symdata rax, [__panic_msg_1]
+    x64.mov rcx, rax
+    x64.call mrt_panic
+  __range_ok_0:
+    x64.epilogue
+    x64.ret
+  }
+}
+---

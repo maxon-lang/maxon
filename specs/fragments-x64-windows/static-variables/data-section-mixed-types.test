@@ -1,0 +1,46 @@
+// Test: data-section-mixed-types
+var flag = true
+var count = 10
+var ratio = 2.5
+
+function main() returns ExitCode
+	if flag and (count == 10) and (ratio > 2.0) 'read'
+		return 0
+	end 'read'
+	return 1
+end 'main'
+---
+ExitCode: 0
+RequiredData: ```
+i64 10
+f64 2.5
+i8 1
+```
+---
+module {
+  func @main() -> u32 {
+  entry:
+    x64.movzx rax, byte [rip+flag]
+    x64.mov rcx, qword [rip+count]
+    x64.mov rdx, 10
+    x64.cmp rcx, rdx
+    x64.sete rbx
+    x64.movzx rbx, rbxb
+    x64.and rax, rbx
+    x64.movsd xmm0, [rip+ratio]
+    x64.movsd xmm1, [rip+__float_2]
+    x64.ucomisd xmm0, xmm1
+    x64.seta rsi
+    x64.movzx rsi, rsib
+    x64.and rax, rsi
+    x64.test rax, rax
+    x64.je main.read_0.after
+  read_0:
+    x64.xor rax, rax
+    x64.ret
+  read_0.after:
+    x64.mov rax, 1
+    x64.ret
+  }
+}
+---

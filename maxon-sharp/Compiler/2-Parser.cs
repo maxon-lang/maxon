@@ -4,7 +4,7 @@ using MaxonSharp.Compiler.Mlir.Dialects;
 
 namespace MaxonSharp.Compiler;
 
-public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, bool isStdlib = false, string? sourceFilePath = null, string targetOs = "Windows", string targetArch = "x86_64", bool testing = false) {
+public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule = null, bool isStdlib = false, string? sourceFilePath = null, string targetOs = "Windows", string targetArch = "x64", bool testing = false) {
   private List<Token> _tokens = tokens;
   private readonly bool _isStdlib = isStdlib;
   private readonly string? _sourceFilePath = sourceFilePath;
@@ -14727,7 +14727,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
     Advance(); // consume #if
     SkipNewlines(); // skip any newlines between #if and condition
 
-    // Parse condition: os(Windows), os(Linux), arch(x86_64), arch(aarch64)
+    // Parse condition: os(Windows), os(Linux), arch(x64), arch(arm64)
     var conditionActive = EvaluateConditionalCondition();
     SkipToEndOfLine();
     SkipNewlines();

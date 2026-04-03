@@ -1,0 +1,31 @@
+// Test: f32-comparison
+typealias F = float(f32.min to f32.max)
+
+function main() returns ExitCode
+	var a = F{3.0}
+	var b = F{5.0}
+	if a < b 'less'
+		return 1
+	end 'less'
+	return 0
+end 'main'
+---
+ExitCode: 1
+---
+module {
+  func @main() -> u32 {
+  entry:
+    x64.movsd xmm0, [rip+__float_3]
+    x64.movsd xmm1, [rip+__float_5]
+    x64.ucomisd xmm0, xmm1
+    x64.jp main.less_0.after
+    x64.jae main.less_0.after
+  less_0:
+    x64.mov rax, 1
+    x64.ret
+  less_0.after:
+    x64.xor rax, rax
+    x64.ret
+  }
+}
+---
