@@ -190,8 +190,9 @@ export function x64OpHasVirtualRegs(op X64Op) returns bool
 		andRegReg(destReg, srcReg) gives isVirtualGpr(destReg) or isVirtualGpr(srcReg)
 		orRegReg(destReg, srcReg) gives isVirtualGpr(destReg) or isVirtualGpr(srcReg)
 		xorRegReg(destReg, srcReg) gives isVirtualGpr(destReg) or isVirtualGpr(srcReg)
-		shlRegCl(reg) gives isVirtualGpr(reg)
-		sarRegCl(reg) gives isVirtualGpr(reg)
+		shlRegCl(dest, operand, shiftCount) gives isVirtualGpr(dest) or isVirtualGpr(operand) or isVirtualGpr(shiftCount)
+		sarRegCl(dest, operand, shiftCount) gives isVirtualGpr(dest) or isVirtualGpr(operand) or isVirtualGpr(shiftCount)
+		shrRegCl(dest, operand, shiftCount) gives isVirtualGpr(dest) or isVirtualGpr(operand) or isVirtualGpr(shiftCount)
 		cmpRaxRcx to addRspImm gives false
 		movRspOffsetReg(_, srcReg) gives isVirtualGpr(srcReg)
 		loadRegRbpOffset(destReg, _) gives isVirtualGpr(destReg)
@@ -283,8 +284,9 @@ export function countX64OpReads(counts RegIntArray, x64Op X64Op)
 		andRegReg(destReg, srcReg) then countX64TwoReads(counts, reg1: destReg, reg2: srcReg)
 		orRegReg(destReg, srcReg) then countX64TwoReads(counts, reg1: destReg, reg2: srcReg)
 		xorRegReg(destReg, srcReg) then countX64TwoReads(counts, reg1: destReg, reg2: srcReg)
-		shlRegCl(reg) then incUse(counts, id: x64VRegId(reg))
-		sarRegCl(reg) then incUse(counts, id: x64VRegId(reg))
+		shlRegCl(_, operand, shiftCount) then countX64TwoReads(counts, reg1: operand, reg2: shiftCount)
+		sarRegCl(_, operand, shiftCount) then countX64TwoReads(counts, reg1: operand, reg2: shiftCount)
+		shrRegCl(_, operand, shiftCount) then countX64TwoReads(counts, reg1: operand, reg2: shiftCount)
 		cmpRaxRcx to addRspImm then break 'scan'
 		movRspOffsetReg(_, srcReg) then incUse(counts, id: x64VRegId(srcReg))
 		loadRegRbpOffset then break 'scan'
@@ -403,11 +405,10 @@ end 'isX64RetTerminator'
 // X64 forward hints
 // ============================================================
 
-// Pre-scan to identify division and shift setup patterns and set forward register hints.
+// Pre-scan to identify division setup patterns and set forward register hints.
 export function computeForwardHints(srcFunc MlirFunction) returns RegIntArray
 	var hints = RegIntArray.create()
 	let raxOrd = x64RegToOrdinal(X64Register.rax)
-	let rcxOrd = x64RegToOrdinal(X64Register.rcx)
 	for srcBlock in srcFunc.blocks 'eachBlock'
 		let opCount = srcBlock.ops.count()
 		var opIdx = 0
@@ -417,7 +418,7 @@ export function computeForwardHints(srcFunc MlirFunction) returns RegIntArray
 				continue
 			end 'skipOp'
 			match op 'checkOp'
-				x64(x64Op) then scanForwardHintX64(hints, x64Op: x64Op, ops: srcBlock.ops, opIdx: opIdx, opCount: opCount, raxOrd: raxOrd, rcxOrd: rcxOrd)
+				x64(x64Op) then scanForwardHintX64(hints, x64Op: x64Op, ops: srcBlock.ops, opIdx: opIdx, opCount: opCount, raxOrd: raxOrd)
 				maxon to mir then break 'checkOp'
 				arm64 then break 'checkOp'
 			end 'checkOp'
@@ -427,15 +428,15 @@ export function computeForwardHints(srcFunc MlirFunction) returns RegIntArray
 	return hints
 end 'computeForwardHints'
 
-function scanForwardHintX64(hints RegIntArray, x64Op X64Op, ops MlirOpArray, opIdx RegInt, opCount RegInt, raxOrd RegOrdinal, rcxOrd RegOrdinal)
+function scanForwardHintX64(hints RegIntArray, x64Op X64Op, ops MlirOpArray, opIdx RegInt, opCount RegInt, raxOrd RegOrdinal)
 	match x64Op 'checkMov'
-		movRegReg(destReg, srcReg) then scanForwardHintMovRegReg(hints, destReg: destReg, srcReg: srcReg, ops: ops, opIdx: opIdx, opCount: opCount, raxOrd: raxOrd, rcxOrd: rcxOrd)
+		movRegReg(destReg, srcReg) then scanForwardHintMovRegReg(hints, destReg: destReg, srcReg: srcReg, ops: ops, opIdx: opIdx, opCount: opCount, raxOrd: raxOrd)
 		prologue to memcpyOp then break 'checkMov'
 		cmpRegReg to repStosq then break 'checkMov'
 	end 'checkMov'
 end 'scanForwardHintX64'
 
-function scanForwardHintMovRegReg(hints RegIntArray, destReg X64VReg, srcReg X64VReg, ops MlirOpArray, opIdx RegInt, opCount RegInt, raxOrd RegOrdinal, rcxOrd RegOrdinal)
+function scanForwardHintMovRegReg(hints RegIntArray, destReg X64VReg, srcReg X64VReg, ops MlirOpArray, opIdx RegInt, opCount RegInt, raxOrd RegOrdinal)
 	// Only interested in movRegReg(physical, virtual)
 	if isVirtualGpr(destReg) 'destIsVirt'
 		return
@@ -451,7 +452,7 @@ function scanForwardHintMovRegReg(hints RegIntArray, destReg X64VReg, srcReg X64
 	if destOrd == RM_NONE 'noOrd'
 		return
 	end 'noOrd'
-	// Look ahead 1-3 ops for a confirming instruction (cqo for div, shlRegCl/sarRegCl for shift)
+	// Look ahead 1-3 ops for a confirming instruction (cqo for div)
 	var lookIdx = opIdx + 1
 	let lookEnd = opIdx + 4
 	while lookIdx < opCount and lookIdx < lookEnd 'lookAhead'
@@ -460,7 +461,7 @@ function scanForwardHintMovRegReg(hints RegIntArray, destReg X64VReg, srcReg X64
 			continue
 		end 'skipLook'
 		match nextOp 'checkNext'
-			x64(nextX64) then scanForwardHintConfirm(hints, nextX64: nextX64, srcId: srcId, destOrd: destOrd, raxOrd: raxOrd, rcxOrd: rcxOrd)
+			x64(nextX64) then scanForwardHintConfirm(hints, nextX64: nextX64, srcId: srcId, destOrd: destOrd, raxOrd: raxOrd)
 			maxon to mir then break 'checkNext'
 			arm64 then break 'checkNext'
 		end 'checkNext'
@@ -468,11 +469,10 @@ function scanForwardHintMovRegReg(hints RegIntArray, destReg X64VReg, srcReg X64
 	end 'lookAhead'
 end 'scanForwardHintMovRegReg'
 
-function scanForwardHintConfirm(hints RegIntArray, nextX64 X64Op, srcId RegInt, destOrd RegOrdinal, raxOrd RegOrdinal, rcxOrd RegOrdinal)
+function scanForwardHintConfirm(hints RegIntArray, nextX64 X64Op, srcId RegInt, destOrd RegOrdinal, raxOrd RegOrdinal)
 	match nextX64 'confirm'
 		cqo then confirmDivHint(hints, srcId: srcId, destOrd: destOrd, raxOrd: raxOrd)
-		shlRegCl then confirmShiftHint(hints, srcId: srcId, destOrd: destOrd, rcxOrd: rcxOrd)
-		sarRegCl then confirmShiftHint(hints, srcId: srcId, destOrd: destOrd, rcxOrd: rcxOrd)
+		shlRegCl to shrRegCl then break 'confirm'
 		epilogue then confirmDivHint(hints, srcId: srcId, destOrd: destOrd, raxOrd: raxOrd)
 		prologue then break 'confirm'
 		ret to xorRegReg then break 'confirm'
@@ -488,14 +488,8 @@ function confirmDivHint(hints RegIntArray, srcId RegInt, destOrd RegOrdinal, rax
 	end 'isRax'
 end 'confirmDivHint'
 
-function confirmShiftHint(hints RegIntArray, srcId RegInt, destOrd RegOrdinal, rcxOrd RegOrdinal)
-	if destOrd == rcxOrd 'isRcx'
-		rmSet(hints, index: srcId, value: rcxOrd, sentinel: RM_NONE)
-	end 'isRcx'
-end 'confirmShiftHint'
-
 // Apply forward hints to registerHints so the allocator prefers
-// the hinted register when allocating the dividend/shift-count value.
+// the hinted register when allocating the dividend value.
 export function applyForwardHints(hints RegIntArray, state RegState)
 	var i = 0
 	let hintCount = hints.count()
@@ -801,8 +795,6 @@ end 'TwoAddrOp'
 enum UnaryInPlaceOp
 	neg
 	bitNot
-	shl
-	sar
 end 'UnaryInPlaceOp'
 
 // Two-address: dest is use+def, src is use
@@ -847,14 +839,51 @@ function ax64UnaryInPlace(state RegState, reg X64VReg, dstBlock MlirBlock, op Un
 	match op 'emit'
 		neg then dstBlock.ops.push(MlirOp.x64(X64Op.negReg(rp)))
 		bitNot then dstBlock.ops.push(MlirOp.x64(X64Op.bitNotReg(rp)))
-		shl then dstBlock.ops.push(MlirOp.x64(X64Op.shlRegCl(rp)))
-		sar then dstBlock.ops.push(MlirOp.x64(X64Op.sarRegCl(rp)))
 	end 'emit'
 	match reg 'invalidateSpill'
 		virtual(id) then rmInvalidateStackHome(state, valueId: id)
 		physical then break 'invalidateSpill'
 	end 'invalidateSpill'
 end 'ax64UnaryInPlace'
+
+enum ShiftKind
+	shl
+	sar
+	shr
+end 'ShiftKind'
+
+// Shift: dest = operand shifted by shiftCount. Shift count must be in CL.
+// Allocates operand and shift count registers, moves count to RCX,
+// copies operand to result register (not RCX), and emits the shift.
+function ax64Shift(state RegState, dest X64VReg, operand X64VReg, shiftCount X64VReg, dstBlock MlirBlock, kind ShiftKind)
+	let rcxOrd = x64RegToOrdinal(X64Register.rcx)
+	// Resolve operand first, protecting RCX for the shift count
+	let opOrd = x64ResolveGprUse(state, vreg: operand, dstBlock: dstBlock, protect1: rcxOrd, protect2: RM_NONE)
+	// Resolve shift count, protecting the operand register
+	let countOrd = x64ResolveGprUse(state, vreg: shiftCount, dstBlock: dstBlock, protect1: opOrd, protect2: RM_NONE)
+	// Move shift count to physical RCX if not already there
+	if countOrd != rcxOrd 'needMovCount'
+		rmSpillRegisterIfOccupied(state, regOrdinal: rcxOrd, dstBlock: dstBlock)
+		dstBlock.ops.push(MlirOp.x64(X64Op.movRegReg(x64PhysFromOrd(rcxOrd), x64PhysFromOrd(countOrd))))
+	end 'needMovCount'
+	// Allocate result register, protecting RCX and operand
+	let dOrd = x64ResolveGprDef(state, vreg: dest, dstBlock: dstBlock, protect1: rcxOrd, protect2: opOrd)
+	let dp = x64PhysFromOrd(dOrd)
+	// Copy operand to result if not already the same register
+	if dOrd != opOrd 'needMovOp'
+		dstBlock.ops.push(MlirOp.x64(X64Op.movRegReg(dp, x64PhysFromOrd(opOrd))))
+	end 'needMovOp'
+	// Emit shift
+	match kind 'emit'
+		shl then dstBlock.ops.push(MlirOp.x64(X64Op.shlRegCl(dp, x64PhysFromOrd(opOrd), x64PhysFromOrd(rcxOrd))))
+		sar then dstBlock.ops.push(MlirOp.x64(X64Op.sarRegCl(dp, x64PhysFromOrd(opOrd), x64PhysFromOrd(rcxOrd))))
+		shr then dstBlock.ops.push(MlirOp.x64(X64Op.shrRegCl(dp, x64PhysFromOrd(opOrd), x64PhysFromOrd(rcxOrd))))
+	end 'emit'
+	match dest 'invalidateSpill'
+		virtual(id) then rmInvalidateStackHome(state, valueId: id)
+		physical then break 'invalidateSpill'
+	end 'invalidateSpill'
+end 'ax64Shift'
 
 function ax64CmpRegReg(state RegState, lhsReg X64VReg, rhsReg X64VReg, dstBlock MlirBlock)
 	let l = x64ResolveGprUse(state, vreg: lhsReg, dstBlock: dstBlock, protect1: RM_NONE, protect2: RM_NONE)
@@ -1276,8 +1305,9 @@ export function allocX64Op(state RegState, x64Op X64Op, dstBlock MlirBlock)
 		andRegReg(destReg, srcReg) then ax64TwoAddr(state, destReg: destReg, srcReg: srcReg, dstBlock: dstBlock, op: TwoAddrOp.bitwiseAnd)
 		orRegReg(destReg, srcReg) then ax64TwoAddr(state, destReg: destReg, srcReg: srcReg, dstBlock: dstBlock, op: TwoAddrOp.bitwiseOr)
 		xorRegReg(destReg, srcReg) then ax64TwoAddr(state, destReg: destReg, srcReg: srcReg, dstBlock: dstBlock, op: TwoAddrOp.bitwiseXor)
-		shlRegCl(reg) then ax64UnaryInPlace(state, reg: reg, dstBlock: dstBlock, op: UnaryInPlaceOp.shl)
-		sarRegCl(reg) then ax64UnaryInPlace(state, reg: reg, dstBlock: dstBlock, op: UnaryInPlaceOp.sar)
+		shlRegCl(dest, operand, shiftCount) then ax64Shift(state, dest: dest, operand: operand, shiftCount: shiftCount, dstBlock: dstBlock, kind: ShiftKind.shl)
+		sarRegCl(dest, operand, shiftCount) then ax64Shift(state, dest: dest, operand: operand, shiftCount: shiftCount, dstBlock: dstBlock, kind: ShiftKind.sar)
+		shrRegCl(dest, operand, shiftCount) then ax64Shift(state, dest: dest, operand: operand, shiftCount: shiftCount, dstBlock: dstBlock, kind: ShiftKind.shr)
 		cmpRaxRcx to testRaxRax then dstBlock.ops.push(MlirOp.x64(x64Op))
 		condJump to jmp then dstBlock.ops.push(MlirOp.x64(x64Op))
 		movF64Slot to ucomisd then dstBlock.ops.push(MlirOp.x64(x64Op))

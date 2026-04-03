@@ -478,6 +478,13 @@ function emitSarRegClParam(code ByteArray, reg X64Register)
 	emitModRMExt(code, ext: 7, rmField: reg)
 end 'emitSarRegClParam'
 
+function emitShrRegClParam(code ByteArray, reg X64Register)
+	// shr reg, cl  =>  REX.W D3 ModRM(/5, reg)
+	emitRexWSingle(code, rmField: reg)
+	code.push(0xD3)
+	emitModRMExt(code, ext: 5, rmField: reg)
+end 'emitShrRegClParam'
+
 // --- Byte emission helpers (identical to X86CodeEmitter) ---
 
 function emitPrologue(code ByteArray, stackSize StackSize)
@@ -1400,8 +1407,9 @@ function emitX64Op(op X64Op, code ByteArray, blockFixups BlockJumpFixupArray, ca
 		andRegReg(destReg, srcReg) then emitAndRegRegParam(code, dest: resolveGpr(destReg), src: resolveGpr(srcReg))
 		orRegReg(destReg, srcReg) then emitOrRegRegParam(code, dest: resolveGpr(destReg), src: resolveGpr(srcReg))
 		xorRegReg(destReg, srcReg) then emitXorRegRegParam(code, dest: resolveGpr(destReg), src: resolveGpr(srcReg))
-		shlRegCl(reg) then emitShlRegClParam(code, reg: resolveGpr(reg))
-		sarRegCl(reg) then emitSarRegClParam(code, reg: resolveGpr(reg))
+		shlRegCl(dest, _, _) then emitShlRegClParam(code, reg: resolveGpr(dest))
+		sarRegCl(dest, _, _) then emitSarRegClParam(code, reg: resolveGpr(dest))
+		shrRegCl(dest, _, _) then emitShrRegClParam(code, reg: resolveGpr(dest))
 		cmpRaxRcx then emitCmpRaxRcx(code)
 		testRaxRax then emitTestRaxRax(code)
 		condJump(condition, targetBlock) then emitCondJumpBlock(code, blockFixups: blockFixups, opcode: condition.rawValue, targetBlock: targetBlock)

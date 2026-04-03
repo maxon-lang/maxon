@@ -27,9 +27,8 @@ export type Project
 	// Function return type registry: maps qualified function names to their return type names
 	export var funcReturnTypes FuncReturnTypeMap
 
-	// Top-level string constants (compile-time known, used for constant folding)
-	export var stringConstNames StringArray
-	export var stringConstValues StringArray
+	// Top-level constants (compile-time evaluated string and integer values)
+	export var topLevelConstants ConstantMap
 
 	// Project metadata
 	export var rootPath FilePath
@@ -56,8 +55,7 @@ export type Project
 			typealiases: TypealiasMap.create(),
 			typealiasRanges: TypealiasRangeMap.create(),
 			funcReturnTypes: FuncReturnTypeMap.create(),
-			stringConstNames: StringArray.create(),
-			stringConstValues: StringArray.create(),
+			topLevelConstants: ConstantMap.create(),
 			rootPath: rootPath,
 			target: target,
 			diagnostics: DiagnosticArray.create(),
@@ -71,7 +69,15 @@ export typealias TypealiasMap = Map with(String, String)
 export typealias FuncReturnTypeMap = Map with(String, String)
 export typealias ProjectArray = Array with Project
 export typealias RangeBound = int(i64.min to i64.max)
+export typealias IntConstant = int(i64.min to i64.max)
 export typealias TypealiasRangeMap = Map with(String, TypealiasRange)
+
+export enum ConstantValue
+	stringValue(value String)
+	intValue(value IntConstant)
+end 'ConstantValue'
+
+export typealias ConstantMap = Map with(String, ConstantValue)
 
 export type TypealiasRange
 	export var lower RangeBound

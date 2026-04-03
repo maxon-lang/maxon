@@ -244,12 +244,12 @@ end 'main'
 ```maxon
 function main() returns ExitCode
 	// Multiply by 8 using shift
-	var value = 25
-	return value shl 3    // 200
+	var value = 13
+	return value shl 3    // 104
 end 'main'
 ```
 ```exitcode
-200
+104
 ```
 
 <!-- test: bitwise-not-basic -->
@@ -295,13 +295,13 @@ end 'main'
 <!-- test: bitwise-not-masking -->
 ```maxon
 function main() returns ExitCode
-	var value = 255    // 0xFF
-	// Clear lower 4 bits: 255 and not 15 = 240
+	var value = 125    // 0x7D
+	// Clear lower 4 bits: 125 and not 15 = 112
 	return value and not 15
 end 'main'
 ```
 ```exitcode
-240
+112
 ```
 
 <!-- test: bitwise-not-const -->

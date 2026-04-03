@@ -41,3 +41,4 @@ By default spec tests will only show the name of failing tests, but you can use 
 - Fix root causes, not symptoms. No workarounds.
 - If any tests that use RequiredMLIR fail you can regenerate the required MLIR and MmTrace stderr by using `--update-required`
 - its possible that any bugs encountered could be in the c# bootrap compiler. If this is the case then you will need to fix the c# compiler in `maxon-sharp/`
+- The valid ExitCode range was recently changed to int(0 to 125) (due to the wasm target) so if you encounter any tests that return values outside of this range then you will need to fix the test to return a valid ExitCode.

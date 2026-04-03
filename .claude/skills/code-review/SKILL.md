@@ -24,6 +24,7 @@ are outside the current changes fix them as well. The goal is to ensure that the
     - look for any comments that imply that something was skippped or not fully implemented or should be done later
     - Fix any compiler warnings
     - If a `match` has multiple cases with `break` try to consoldidate them into a single case with a range
+    - Add blank lines to improve code readability, especially around control flow statements and between logical sections of code.
 2. Update documentation, including `LANGUAGE_REFERENCE.md` and `STDLIB_REFERENCE.md` and `QUICK_REFERENCE.md` and `BNF_SYNTAX.md` if necessary.
 3. Rebuild and run spec tests if you made any changes to the codebase, and ensure all tests pass.
 4. Write a git commit message that summaries the changes in this commit, not what happened in the code review.

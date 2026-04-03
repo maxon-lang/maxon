@@ -175,6 +175,7 @@ export function arm64OpHasVirtualRegs(op Arm64Op) returns bool
 		eorRegs(dest, src1, src2) gives isVirtualArm64Gpr(dest) or isVirtualArm64Gpr(src1) or isVirtualArm64Gpr(src2)
 		lslRegs(dest, src1, src2) gives isVirtualArm64Gpr(dest) or isVirtualArm64Gpr(src1) or isVirtualArm64Gpr(src2)
 		asrRegs(dest, src1, src2) gives isVirtualArm64Gpr(dest) or isVirtualArm64Gpr(src1) or isVirtualArm64Gpr(src2)
+		lsrRegs(dest, src1, src2) gives isVirtualArm64Gpr(dest) or isVirtualArm64Gpr(src1) or isVirtualArm64Gpr(src2)
 		cmpRegs(src1, src2) gives isVirtualArm64Gpr(src1) or isVirtualArm64Gpr(src2)
 		cmpRegZero(src) gives isVirtualArm64Gpr(src)
 		condBranch gives false
@@ -278,6 +279,7 @@ export function countArm64OpReads(counts RegIntArray, a64Op Arm64Op)
 		eorRegs(_, src1, src2) then countArm64TwoReads(counts, reg1: src1, reg2: src2)
 		lslRegs(_, src1, src2) then countArm64TwoReads(counts, reg1: src1, reg2: src2)
 		asrRegs(_, src1, src2) then countArm64TwoReads(counts, reg1: src1, reg2: src2)
+		lsrRegs(_, src1, src2) then countArm64TwoReads(counts, reg1: src1, reg2: src2)
 		cmpRegs(src1, src2) then countArm64TwoReads(counts, reg1: src1, reg2: src2)
 		cmpRegZero(src) then incUse(counts, id: arm64VRegId(src))
 		condBranch to branchLink then break 'scan'
@@ -523,6 +525,7 @@ enum Arm64ThreeAddrOp
 	eor
 	lsl
 	asr
+	lsr
 end 'Arm64ThreeAddrOp'
 
 function aa64ThreeAddr(state RegState, dest Arm64VReg, src1 Arm64VReg, src2 Arm64VReg, dstBlock MlirBlock, op Arm64ThreeAddrOp)
@@ -546,6 +549,7 @@ function aa64ThreeAddr(state RegState, dest Arm64VReg, src1 Arm64VReg, src2 Arm6
 		eor then dstBlock.ops.push(MlirOp.arm64(Arm64Op.eorRegs(dp, s1p, s2p)))
 		lsl then dstBlock.ops.push(MlirOp.arm64(Arm64Op.lslRegs(dp, s1p, s2p)))
 		asr then dstBlock.ops.push(MlirOp.arm64(Arm64Op.asrRegs(dp, s1p, s2p)))
+		lsr then dstBlock.ops.push(MlirOp.arm64(Arm64Op.lsrRegs(dp, s1p, s2p)))
 	end 'emit'
 end 'aa64ThreeAddr'
 
@@ -828,6 +832,7 @@ export function allocArm64Op(state RegState, a64Op Arm64Op, dstBlock MlirBlock)
 		eorRegs(dest, src1, src2) then aa64ThreeAddr(state, dest: dest, src1: src1, src2: src2, dstBlock: dstBlock, op: Arm64ThreeAddrOp.eor)
 		lslRegs(dest, src1, src2) then aa64ThreeAddr(state, dest: dest, src1: src1, src2: src2, dstBlock: dstBlock, op: Arm64ThreeAddrOp.lsl)
 		asrRegs(dest, src1, src2) then aa64ThreeAddr(state, dest: dest, src1: src1, src2: src2, dstBlock: dstBlock, op: Arm64ThreeAddrOp.asr)
+		lsrRegs(dest, src1, src2) then aa64ThreeAddr(state, dest: dest, src1: src1, src2: src2, dstBlock: dstBlock, op: Arm64ThreeAddrOp.lsr)
 		cmpRegs(src1, src2) then aa64CmpRegs(state, src1: src1, src2: src2, dstBlock: dstBlock)
 		cmpRegZero(src) then aa64CmpRegZero(state, src: src, dstBlock: dstBlock)
 		condBranch to branch then dstBlock.ops.push(MlirOp.arm64(a64Op))

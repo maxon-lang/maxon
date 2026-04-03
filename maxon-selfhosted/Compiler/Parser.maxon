@@ -174,7 +174,7 @@ function parseFloatBits(s String) returns ParsedInt throws ParserError
 
 	// IEEE 754 double layout: sign(1) | exponent+1023(11) | mantissa(52)
 	let biasedExp = exponent + 1023
-	return (biasedExp shl 52) + mantissa
+	return(biasedExp shl 52) + mantissa
 end 'parseFloatBits'
 
 // Parse an integer literal. Throws ParserError.overflow if the value exceeds i64 range.
@@ -640,14 +640,34 @@ type Parser
 		return 0
 	end 'lookupVariable'
 
-	function lookupStringConst(name String) returns String
-		for(i, cn) in project.stringConstNames.enumerated() 'lookup'
-			if cn == name 'found'
-				return try project.stringConstValues.get(i) otherwise ""
-			end 'found'
-		end 'lookup'
-		return ""
-	end 'lookupStringConst'
+	function resolveConstant(block MlirBlock, name String) returns ExprResult
+		let constVal = try project.topLevelConstants.get(name) otherwise 'notFound'
+			return ExprResult.create(0)
+		end 'notFound'
+
+		expect(TokenKind.identifier)
+
+		let isString = match constVal 'checkKind'
+			stringValue gives true
+			intValue gives false
+		end 'checkKind'
+
+		if isString 'str'
+			let strVal = match constVal 'getStr'
+				stringValue(v) gives v
+				intValue gives ""
+			end 'getStr'
+			let id = nextValueId(project)
+			return ExprResult.createFull(id, isFloat: false, isRefType: false, isStringConst: true, stringConstValue: strVal)
+		end 'str'
+
+		let intVal = match constVal 'getInt'
+			intValue(v) gives v
+			stringValue gives 0
+		end 'getInt'
+		let constId = emitLiteral(block, value: intVal, isFloat: false)
+		return ExprResult.create(constId)
+	end 'resolveConstant'
 
 	function isVariableFloat(name String) returns bool
 		let idx = findVariableIndex(name)
@@ -858,7 +878,8 @@ type Parser
 
 	// --- Top-level let ---
 
-	// Parse top-level `let NAME = "value"` — stores as compile-time string constant.
+	// Parse top-level `let NAME = <expr>` — stores as compile-time constant.
+	// Supports string literals and constant integer expressions.
 	function parseTopLevelLet()
 		expect(TokenKind.let)
 
@@ -873,18 +894,47 @@ type Parser
 
 		expect(TokenKind.equals)
 		let valueToken = peek()
-		if valueToken.kind != TokenKind.doubleStringLiteral 'notString'
-			reportCompileError(project, code: ErrorCode.parserExpectedToken, message: "Top-level let only supports string literals", line: valueToken.line, column: valueToken.column, filePath: filePath)
+		if valueToken.kind == TokenKind.doubleStringLiteral 'isString'
+			expect(TokenKind.doubleStringLiteral)
+			project.topLevelConstants.insert(nameToken.value, value: ConstantValue.stringValue(valueToken.value))
+			logTrace(LogCategory.parser, message: () gives "Registered top-level string constant '{nameToken.value}'")
+			return
+		end 'isString'
+
+		// Try to evaluate a compile-time integer constant expression
+		let constValue = try evalConstExpr() otherwise 'notConst'
+			reportCompileError(project, code: ErrorCode.parserExpectedToken, message: "Top-level let only supports string literals and constant integer expressions", line: valueToken.line, column: valueToken.column, filePath: filePath)
 			synchronize()
 			return
-		end 'notString'
+		end 'notConst'
 
-		expect(TokenKind.doubleStringLiteral)
-
-		project.stringConstNames.push(nameToken.value)
-		project.stringConstValues.push(valueToken.value)
-		logTrace(LogCategory.parser, message: () gives "Registered top-level string constant '{nameToken.value}'")
+		project.topLevelConstants.insert(nameToken.value, value: ConstantValue.intValue(constValue))
+		logTrace(LogCategory.parser, message: () gives "Registered top-level integer constant '{nameToken.value}' = {constValue}")
 	end 'parseTopLevelLet'
+
+	// Evaluate a compile-time integer constant expression.
+	// Supports: integer literals, hex literals, `not <expr>`, `-<expr>`.
+	function evalConstExpr() returns ParsedInt throws ParserError
+		let token = peek()
+
+		if token.kind == TokenKind.not 'isNot'
+			expect(TokenKind.not)
+			return not try evalConstExpr()
+		end 'isNot'
+
+		if token.kind == TokenKind.minus 'isNeg'
+			expect(TokenKind.minus)
+			return 0 - try evalConstExpr()
+		end 'isNeg'
+
+		if token.kind == TokenKind.intLiteral 'isInt'
+			let intVal = try parseInt(token.value)
+			expect(TokenKind.intLiteral)
+			return intVal
+		end 'isInt'
+
+		throw ParserError.unhandledToken
+	end 'evalConstExpr'
 
 	// --- Export dispatch ---
 
@@ -1206,8 +1256,7 @@ type Parser
 		// so later comparisons like `inner == "hello"` can be folded.
 		// Skip runtime storage since the value is resolved at compile time.
 		if isLet and exprResult.isStringConst 'registerStringConst'
-			project.stringConstNames.push(nameToken.value)
-			project.stringConstValues.push(exprResult.stringConstValue)
+			project.topLevelConstants.insert(nameToken.value, value: ConstantValue.stringValue(exprResult.stringConstValue))
 			let _ = defineVariable(nameToken.value, isFloat: exprResult.isFloat, isRefType: exprResult.isRefType)
 			return
 		end 'registerStringConst'
@@ -1490,7 +1539,7 @@ type Parser
 			return ExprResult.createFull(resultId, isFloat: false, isRefType: false, isStringConst: false, stringConstValue: "")
 		end 'isNeg' else if token.kind == TokenKind.not 'isNot'
 			expect(TokenKind.not)
-			let operand = parsePrimary(block)
+			let operand = parseUnary(block)
 			let resultId = nextValueId(project)
 			emitOp(block, op: MlirOp.maxon(MaxonOp.unop(resultId, operand.valueId, UnaryOpKind.bitNot, false)))
 			return ExprResult.createFull(resultId, isFloat: false, isRefType: false, isStringConst: false, stringConstValue: "")
@@ -1580,13 +1629,10 @@ type Parser
 			return innerResult
 		end 'isTypedConstruct'
 
-		// Check for compile-time string constant before variable lookup
-		let strConst = lookupStringConst(token.value)
-		if not strConst.isEmpty() 'isStrConst'
-			let id = nextValueId(project)
-			expect(TokenKind.identifier)
-			return ExprResult.createFull(id, isFloat: false, isRefType: false, isStringConst: true, stringConstValue: strConst)
-		end 'isStrConst'
+		// Check for compile-time constant before variable lookup
+		if project.topLevelConstants.contains(token.value) 'isConst'
+			return resolveConstant(block, name: token.value)
+		end 'isConst'
 
 		let slot = lookupVariable(token.value, token: token)
 		let id = nextValueId(project)

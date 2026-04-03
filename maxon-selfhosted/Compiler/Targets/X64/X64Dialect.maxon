@@ -163,8 +163,9 @@ export enum X64Op
 	andRegReg(destReg X64VReg, srcReg X64VReg) = X64OpMeta{latency: 1, isMemory: false, isStore: false, isCall: false, setsFlags: true}
 	orRegReg(destReg X64VReg, srcReg X64VReg) = X64OpMeta{latency: 1, isMemory: false, isStore: false, isCall: false, setsFlags: true}
 	xorRegReg(destReg X64VReg, srcReg X64VReg) = X64OpMeta{latency: 1, isMemory: false, isStore: false, isCall: false, setsFlags: true}
-	shlRegCl(reg X64VReg) = X64OpMeta{latency: 1, isMemory: false, isStore: false, isCall: false, setsFlags: false}
-	sarRegCl(reg X64VReg) = X64OpMeta{latency: 1, isMemory: false, isStore: false, isCall: false, setsFlags: false}
+	shlRegCl(dest X64VReg, operand X64VReg, shiftCount X64VReg) = X64OpMeta{latency: 1, isMemory: false, isStore: false, isCall: false, setsFlags: false}
+	sarRegCl(dest X64VReg, operand X64VReg, shiftCount X64VReg) = X64OpMeta{latency: 1, isMemory: false, isStore: false, isCall: false, setsFlags: false}
+	shrRegCl(dest X64VReg, operand X64VReg, shiftCount X64VReg) = X64OpMeta{latency: 1, isMemory: false, isStore: false, isCall: false, setsFlags: false}
 	cmpRaxRcx = X64OpMeta{latency: 1, isMemory: false, isStore: false, isCall: false, setsFlags: false}
 	testRaxRax = X64OpMeta{latency: 1, isMemory: false, isStore: false, isCall: false, setsFlags: false}
 	condJump(condition X64JumpCondition, targetBlock BlockId) = X64OpMeta{latency: 1, isMemory: false, isStore: false, isCall: false, setsFlags: false}
@@ -307,8 +308,9 @@ export function x64OpToString(op X64Op, blocks MlirBlockArray) returns String
 		andRegReg(destReg, srcReg) gives "x64.and {x64VRegToString(destReg)}, {x64VRegToString(srcReg)}"
 		orRegReg(destReg, srcReg) gives "x64.or {x64VRegToString(destReg)}, {x64VRegToString(srcReg)}"
 		xorRegReg(destReg, srcReg) gives "x64.xor {x64VRegToString(destReg)}, {x64VRegToString(srcReg)}"
-		shlRegCl(reg) gives "x64.shl {x64VRegToString(reg)}, cl"
-		sarRegCl(reg) gives "x64.sar {x64VRegToString(reg)}, cl"
+		shlRegCl(dest, operand, shiftCount) gives "x64.shl {x64VRegToString(dest)}, {x64VRegToString(operand)}, {x64VRegToString(shiftCount)}"
+		sarRegCl(dest, operand, shiftCount) gives "x64.sar {x64VRegToString(dest)}, {x64VRegToString(operand)}, {x64VRegToString(shiftCount)}"
+		shrRegCl(dest, operand, shiftCount) gives "x64.shr {x64VRegToString(dest)}, {x64VRegToString(operand)}, {x64VRegToString(shiftCount)}"
 		cmpRaxRcx gives "x64.cmp rax, rcx"
 		testRaxRax gives "x64.test rax, rax"
 		condJump(condition, targetBlock) gives "x64.j{condition.name} {resolveBlockLabel(targetBlock, blocks: blocks)}"

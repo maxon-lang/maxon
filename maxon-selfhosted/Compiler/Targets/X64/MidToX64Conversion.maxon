@@ -576,20 +576,14 @@ function lowerDivRem(resultId ValueId, leftId ValueId, rightId ValueId, isRem bo
 	end 'quotient'
 end 'lowerDivRem'
 
-// Shift: shift count must be in CL (lower byte of RCX).
-// Move shift count to RCX, copy left to result, emit shift.
+// Shift: the register allocator handles moving the shift count to
+// RCX and allocating a non-RCX register for the result.
 function lowerShift(resultId ValueId, leftId ValueId, rightId ValueId, isLeft bool, dstBlock MlirBlock)
-	let dest = X64VReg.virtual(resultId)
-	// Move shift count to physical RCX (ABI constraint: shift uses CL)
-	dstBlock.ops.push(MlirOp.x64(X64Op.movRegReg(physReg(X64Register.rcx), X64VReg.virtual(rightId))))
-	// Copy left operand to result
-	dstBlock.ops.push(MlirOp.x64(X64Op.movRegReg(dest, X64VReg.virtual(leftId))))
-	// Emit shift instruction
 	if isLeft 'shl'
-		dstBlock.ops.push(MlirOp.x64(X64Op.shlRegCl(dest)))
-	end 'shl' else 'sar'
-		dstBlock.ops.push(MlirOp.x64(X64Op.sarRegCl(dest)))
-	end 'sar'
+		dstBlock.ops.push(MlirOp.x64(X64Op.shlRegCl(X64VReg.virtual(resultId), X64VReg.virtual(leftId), X64VReg.virtual(rightId))))
+	end 'shl' else 'shr'
+		dstBlock.ops.push(MlirOp.x64(X64Op.shrRegCl(X64VReg.virtual(resultId), X64VReg.virtual(leftId), X64VReg.virtual(rightId))))
+	end 'shr'
 end 'lowerShift'
 
 // ============================================================

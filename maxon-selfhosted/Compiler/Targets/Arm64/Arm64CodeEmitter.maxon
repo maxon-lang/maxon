@@ -300,6 +300,11 @@ function arm64EmitAsrv(code ByteArray, rd MachineWord, rn MachineWord, rm Machin
 	arm64EmitRRR(code, opcode: 0x9AC02800, rd: rd, rn: rn, rm: rm)
 end 'arm64EmitAsrv'
 
+// LSRV Xd, Xn, Xm (variable logical shift right)
+function arm64EmitLsrv(code ByteArray, rd MachineWord, rn MachineWord, rm MachineWord)
+	arm64EmitRRR(code, opcode: 0x9AC02400, rd: rd, rn: rn, rm: rm)
+end 'arm64EmitLsrv'
+
 // MSUB Xd, Xn, Xm, Xa => Xd = Xa - Xn * Xm
 function arm64EmitMsub(code ByteArray, rd MachineWord, rn MachineWord, rm MachineWord, ra MachineWord)
 	let insn = 0x9B008000 or(rm shl 16) or(ra shl 10) or(rn shl 5) or rd
@@ -1109,6 +1114,7 @@ function emitArm64Instruction(op Arm64Op, code ByteArray, jumpFixups BlockIdFixu
 		eorRegs(dest, src1, src2) then arm64EmitEor(code, rd: resolveArm64Gpr(dest).rawValue, rn: resolveArm64Gpr(src1).rawValue, rm: resolveArm64Gpr(src2).rawValue)
 		lslRegs(dest, src1, src2) then arm64EmitLslv(code, rd: resolveArm64Gpr(dest).rawValue, rn: resolveArm64Gpr(src1).rawValue, rm: resolveArm64Gpr(src2).rawValue)
 		asrRegs(dest, src1, src2) then arm64EmitAsrv(code, rd: resolveArm64Gpr(dest).rawValue, rn: resolveArm64Gpr(src1).rawValue, rm: resolveArm64Gpr(src2).rawValue)
+		lsrRegs(dest, src1, src2) then arm64EmitLsrv(code, rd: resolveArm64Gpr(dest).rawValue, rn: resolveArm64Gpr(src1).rawValue, rm: resolveArm64Gpr(src2).rawValue)
 		cmpRegs(src1, src2) then arm64EmitCmp(code, rn: resolveArm64Gpr(src1).rawValue, rm: resolveArm64Gpr(src2).rawValue)
 		cmpRegZero(src) then arm64EmitCmpRegZero(code, rn: resolveArm64Gpr(src).rawValue)
 		condBranch(condition, targetBlock) then arm64HandleCondBranch(code, jumpFixups: jumpFixups, condition: condition, targetBlock: targetBlock)
