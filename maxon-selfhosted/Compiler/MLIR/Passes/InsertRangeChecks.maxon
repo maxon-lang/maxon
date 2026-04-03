@@ -74,8 +74,8 @@ export function insertRangeChecks(module MlirModule, funcReturnTypes FuncReturnT
 						// Build blocks in layout order so fallthrough elimination works.
 						// For bothChecks: entry -> loCheck -> ok -> panic
 						// For single: entry -> ok -> panic
-						let panicLabel = buildLabel(b"__range_panic_", id: checkId)
-						let okLabel = buildLabel(b"__range_ok_", id: checkId)
+						let panicLabel = buildLabel("__range_panic_", id: checkId)
+						let okLabel = buildLabel("__range_ok_", id: checkId)
 
 						// All paths need panic + continue blocks; dualCheck also needs loCheck
 						var panicBlock = addBlock(dstFunc, label: panicLabel)
@@ -86,7 +86,7 @@ export function insertRangeChecks(module MlirModule, funcReturnTypes FuncReturnT
 							emitUnsignedUpperCheck(dstBlock, valueId: retValId, upper: range.upper, typeInfo: typeInfo, panicBlockId: panicBlock.id, okBlockId: continueBlock.id, nextValueIdRef: nextValueIdRef)
 						end 'unsignedCheck' else if needsUpperCheck and needsLowerCheck 'dualCheck'
 							// Dual-bound with non-zero lower: two separate signed comparisons
-							let loLabel = buildLabel(b"__range_check_lo_", id: checkId)
+							let loLabel = buildLabel("__range_check_lo_", id: checkId)
 							var loCheckBlock = addBlock(dstFunc, label: loLabel)
 							emitUpperCheck(dstBlock, valueId: retValId, upper: range.upper, typeInfo: typeInfo, passBlockId: loCheckBlock.id, panicBlockId: panicBlock.id, nextValueIdRef: nextValueIdRef)
 							emitLowerCheck(loCheckBlock, valueId: retValId, lower: range.lower, typeInfo: typeInfo, passBlockId: continueBlock.id, panicBlockId: panicBlock.id, nextValueIdRef: nextValueIdRef)
@@ -220,16 +220,12 @@ function emitSingleRangeCheck(block MlirBlock, valueId ValueId, lower RangeBound
 end 'emitSingleRangeCheck'
 
 // Build a block label like "__range_panic_0".
-function buildLabel(prefix ByteArray, id ValueId) returns ByteArray
-	var label = ByteArray.create()
-	label.append(prefix)
-	label.append(intToBytes(id))
-	return label
+function buildLabel(prefix String, id ValueId) returns String
+	return "{prefix}{id}"
 end 'buildLabel'
 
-function buildPanicMessage(aliasName ByteArray, sourceFileName String, sourceLine LineNumber) returns ByteArray
-	let msg = "panic at {sourceFileName}:{sourceLine}: Range check failed: value outside typealias '{String.from(aliasName)}'"
-	return msg.toByteArray()
+function buildPanicMessage(aliasName String, sourceFileName String, sourceLine LineNumber) returns String
+	return "panic at {sourceFileName}:{sourceLine}: Range check failed: value outside typealias '{aliasName}'"
 end 'buildPanicMessage'
 
 // Check if a range covers the full i64 range (no value can be out of bounds).
@@ -255,12 +251,12 @@ end 'RangeCheckTypeInfo'
 
 // Resolve the correct opcodes for a given MLIR return type.
 // Panics on unrecognised types to catch missing cases early.
-function resolveRangeCheckType(returnType ByteArray) returns RangeCheckTypeInfo
-	if returnType == b"f64" or returnType == b"f32" 'isFloat'
+function resolveRangeCheckType(returnType String) returns RangeCheckTypeInfo
+	if returnType == "f64" or returnType == "f32" 'isFloat'
 		return RangeCheckTypeInfo.create(StdType.f64, constOpcode: ArithConstOpcode.constF64, cmpLtOpcode: ArithBinaryOpcode.cmpF64Lt, cmpGtOpcode: ArithBinaryOpcode.cmpF64Gt, cmpLeOpcode: ArithBinaryOpcode.cmpF64Le, cmpGeOpcode: ArithBinaryOpcode.cmpF64Ge)
 	end 'isFloat'
-	if returnType == b"i64" or returnType == b"i32" or returnType == b"i16" or returnType == b"i8" or returnType == b"u64" or returnType == b"u32" or returnType == b"u16" or returnType == b"u8" 'isInt'
+	if returnType == "i64" or returnType == "i32" or returnType == "i16" or returnType == "i8" or returnType == "u64" or returnType == "u32" or returnType == "u16" or returnType == "u8" 'isInt'
 		return RangeCheckTypeInfo.create(StdType.i64, constOpcode: ArithConstOpcode.constI64, cmpLtOpcode: ArithBinaryOpcode.cmpI64Lt, cmpGtOpcode: ArithBinaryOpcode.cmpI64Gt, cmpLeOpcode: ArithBinaryOpcode.cmpI64Le, cmpGeOpcode: ArithBinaryOpcode.cmpI64Ge)
 	end 'isInt'
-	panic("resolveRangeCheckType: unrecognised return type '{String.from(returnType)}'")
+	panic("resolveRangeCheckType: unrecognised return type '{returnType}'")
 end 'resolveRangeCheckType'

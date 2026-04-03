@@ -23,11 +23,11 @@ end 'ABIConvention'
 
 // Recorded info about a call site.
 export type ABICallInfo
-	export let callee ByteArray
+	export let callee String
 	export let argCount VarSlot
 	export let hasReturn bool
 
-	export static function create(callee ByteArray, argCount VarSlot, hasReturn bool) returns ABICallInfo
+	export static function create(callee String, argCount VarSlot, hasReturn bool) returns ABICallInfo
 		return Self{callee: callee, argCount: argCount, hasReturn: hasReturn}
 	end 'create'
 end 'ABICallInfo'
@@ -129,9 +129,9 @@ end 'processFuncOp'
 // Records the call site info and classifies each argument.
 // Future: rewrite to split args into register-bound and stack-bound.
 // Current: pass through unchanged.
-function processCall(resultId ValueId, callee ByteArray, argIds ValueIdArray, dstBlock MlirBlock, convention ABIConvention)
+function processCall(resultId ValueId, callee String, argIds ValueIdArray, dstBlock MlirBlock, convention ABIConvention)
 	let callInfo = ABICallInfo.create(callee, argCount: argIds.count(), hasReturn: true)
-	logTrace(LogCategory.mlir, message: () gives "abi: call @{String.from(callInfo.callee)} args={callInfo.argCount} hasReturn={callInfo.hasReturn}")
+	logTrace(LogCategory.mlir, message: () gives "abi: call @{callInfo.callee} args={callInfo.argCount} hasReturn={callInfo.hasReturn}")
 
 	// Classify each argument (infrastructure for future rewriting)
 	var i = 0

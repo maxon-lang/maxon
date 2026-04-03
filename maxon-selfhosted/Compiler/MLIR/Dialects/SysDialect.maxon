@@ -8,7 +8,7 @@ export enum SysOp
 	// Windows IAT indirect call through an import slot.
 	iatCall(resultId ValueId, slotIndex MachineWord, argIds ValueIdArray)
 	// Load the address of a named data global (string literal in .rdata/.rodata).
-	globalAddr(resultId ValueId, name ByteArray)
+	globalAddr(resultId ValueId, name String)
 	// Copy len bytes from src to dst (rep movsb on x86, ldrb/strb loop on arm64).
 	memcpy(dstId ValueId, srcId ValueId, lenId ValueId)
 	// Get the address of a stack slot as a pointer. Used for local byte buffers.
@@ -30,14 +30,14 @@ export enum SysOp
 	// Load 8 bytes from [addrId + offset] into resultId. Used for stack frame walking.
 	loadIndirect(resultId ValueId, addrId ValueId, offset MachineWord)
 	// Load the absolute address of a named function into resultId.
-	funcAddr(resultId ValueId, name ByteArray)
+	funcAddr(resultId ValueId, name String)
 end 'SysOp'
 
 export function sysOpToString(op SysOp) returns String
 	return match op 'print'
 		syscall(resultId, number, argIds) gives "%{resultId} = sys.syscall {number}({formatArgIds(argIds)})"
 		iatCall(resultId, slotIndex, argIds) gives "%{resultId} = sys.iat_call [{slotIndex}]({formatArgIds(argIds)})"
-		globalAddr(resultId, name) gives "%{resultId} = sys.global_addr @{String.from(name)}"
+		globalAddr(resultId, name) gives "%{resultId} = sys.global_addr @{name}"
 		memcpy(dstId, srcId, lenId) gives "sys.memcpy %{dstId}, %{srcId}, %{lenId}"
 		stackAddr(resultId, slotId) gives "%{resultId} = sys.stack_addr slot_{slotId}"
 		storeByte(baseId, offsetId, byteId) gives "sys.store_byte %{baseId}, %{offsetId}, %{byteId}"
@@ -48,6 +48,6 @@ export function sysOpToString(op SysOp) returns String
 		osWriteErr(ptrId, lenId) gives "sys.os_write_err %{ptrId}, %{lenId}"
 		loadFramePtr(resultId) gives "%{resultId} = sys.load_frame_ptr"
 		loadIndirect(resultId, addrId, offset) gives "%{resultId} = sys.load_indirect %{addrId}, {offset}"
-		funcAddr(resultId, name) gives "%{resultId} = sys.func_addr @{String.from(name)}"
+		funcAddr(resultId, name) gives "%{resultId} = sys.func_addr @{name}"
 	end 'print'
 end 'sysOpToString'

@@ -309,7 +309,7 @@ end 'recordDefAndArrayUses'
 //   1. Expire any borrows whose borrowing value's last use has passed
 //   2. If the op is a memref.loadSlot, record a new immutable borrow
 //   3. If the op is a memref.storeSlot, check for active borrow violations
-function checkBlockBorrows(project Project, block MlirBlock, state BorrowAnalysisState, funcName ByteArray)
+function checkBlockBorrows(project Project, block MlirBlock, state BorrowAnalysisState, funcName String)
 	// Reset per-slot borrow tracking for this block
 	resetSlotBorrows(state)
 
@@ -405,7 +405,7 @@ end 'isBorrowAlive'
 // Op-level borrow checking dispatch
 // ============================================================
 
-function checkOpBorrows(project Project, op MlirOp, blockId BlockId, opIndex OpIndex, state BorrowAnalysisState, funcName ByteArray)
+function checkOpBorrows(project Project, op MlirOp, blockId BlockId, opIndex OpIndex, state BorrowAnalysisState, funcName String)
 	match op 'dispatch'
 		memref(memOp) then checkMemRefBorrows(project, op: memOp, blockId: blockId, opIndex: opIndex, state: state, funcName: funcName)
 		maxon to func then break 'dispatch'
@@ -414,7 +414,7 @@ function checkOpBorrows(project Project, op MlirOp, blockId BlockId, opIndex OpI
 	end 'dispatch'
 end 'checkOpBorrows'
 
-function checkMemRefBorrows(project Project, op MemRefOp, blockId BlockId, opIndex OpIndex, state BorrowAnalysisState, funcName ByteArray)
+function checkMemRefBorrows(project Project, op MemRefOp, blockId BlockId, opIndex OpIndex, state BorrowAnalysisState, funcName String)
 	match op 'check'
 		loadSlot(resultId, slotId) then registerBorrow(resultId, slotId: slotId, blockId: blockId, opIndex: opIndex, state: state)
 		storeSlot(slotId, _) then checkStoreViolations(project, slotId: slotId, opIndex: opIndex, state: state, funcName: funcName)
@@ -435,7 +435,7 @@ end 'registerBorrow'
 // A memref.storeSlot is a mutation of the slot. Check for violations:
 // - If there are active immutable borrows, that is an error
 // - If there are active mutable borrows, that is a double-mutable error
-function checkStoreViolations(project Project, slotId VarSlot, opIndex OpIndex, state BorrowAnalysisState, funcName ByteArray)
+function checkStoreViolations(project Project, slotId VarSlot, opIndex OpIndex, state BorrowAnalysisState, funcName String)
 	ensureSlotBorrowCapacity(slotId, state: state)
 	let slotState = try state.slotBorrows.get(slotId) otherwise 'miss'
 		return
@@ -444,11 +444,11 @@ function checkStoreViolations(project Project, slotId VarSlot, opIndex OpIndex, 
 	for borrow in slotState.borrows 'checkBorrows'
 		if not borrow.isMutable 'immutableBorrow'
 			// Mutating a slot while an immutable borrow is active
-			reportSemanticError(project, code: ErrorCode.borrowMutateWhileBorrowed, message: "cannot assign to slot_{slotId} in '{String.from(funcName)}': value %{borrow.borrowValueId} still borrows it (borrowed at op {borrow.borrowOpIndex}, store at op {opIndex})")
+			reportSemanticError(project, code: ErrorCode.borrowMutateWhileBorrowed, message: "cannot assign to slot_{slotId} in '{funcName}': value %{borrow.borrowValueId} still borrows it (borrowed at op {borrow.borrowOpIndex}, store at op {opIndex})")
 			logTrace(LogCategory.mlir, message: () gives "borrow-check: VIOLATION mutate slot_{slotId} while %{borrow.borrowValueId} borrows it")
 		end 'immutableBorrow' else 'mutableBorrow'
 			// Multiple simultaneous mutable borrows
-			reportSemanticError(project, code: ErrorCode.borrowMultipleMutable, message: "cannot mutably borrow slot_{slotId} in '{String.from(funcName)}': already mutably borrowed by %{borrow.borrowValueId} (at op {borrow.borrowOpIndex})")
+			reportSemanticError(project, code: ErrorCode.borrowMultipleMutable, message: "cannot mutably borrow slot_{slotId} in '{funcName}': already mutably borrowed by %{borrow.borrowValueId} (at op {borrow.borrowOpIndex})")
 			logTrace(LogCategory.mlir, message: () gives "borrow-check: VIOLATION double mutable borrow slot_{slotId}")
 		end 'mutableBorrow'
 	end 'checkBorrows'

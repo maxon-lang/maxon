@@ -377,7 +377,7 @@ end 'arm64EmitFpReloadFromStack'
 // LDR Dt/St, [PC+offset] — PC-relative literal load from rdata section.
 // Emits a placeholder LDR literal instruction; the imm19 field is patched
 // by the binary writer after rdata section layout.
-function arm64EmitFpLoadRdata(code ByteArray, dest Arm64FloatRegister, rdataLabel ByteArray, precision FloatPrecision, rdataRelocs RdataRelocationArray)
+function arm64EmitFpLoadRdata(code ByteArray, dest Arm64FloatRegister, rdataLabel String, precision FloatPrecision, rdataRelocs RdataRelocationArray)
 	let rt = dest.rawValue and 0x1F
 	let opcode = match precision 'selectOpc'
 		f64 gives 0x5C000000
@@ -519,19 +519,19 @@ end 'arm64PatchCondBranch'
 
 // --- Label management for function names (call fixups) ---
 
-function arm64RecordLabel(labelNames ByteArrayArray, labelOffsets Arm64OffsetArray, name ByteArray, offset Arm64Offset)
-	logTrace(LogCategory.codegen, message: () gives "ARM64 Label '{String.from(name)}' at code offset {offset}")
+function arm64RecordLabel(labelNames StringArray, labelOffsets Arm64OffsetArray, name String, offset Arm64Offset)
+	logTrace(LogCategory.codegen, message: () gives "ARM64 Label '{name}' at code offset {offset}")
 	labelNames.push(name)
 	labelOffsets.push(offset)
 end 'arm64RecordLabel'
 
-function arm64LookupLabel(labelNames ByteArrayArray, labelOffsets Arm64OffsetArray, name ByteArray) returns Arm64Offset
+function arm64LookupLabel(labelNames StringArray, labelOffsets Arm64OffsetArray, name String) returns Arm64Offset
 	for(i, labelName) in labelNames.enumerated() 'search'
 		if labelName == name 'found'
 			return try labelOffsets.get(i) otherwise 0
 		end 'found'
 	end 'search'
-	logError(LogCategory.codegen, message: () gives "ARM64 unresolved label '{String.from(name)}'")
+	logError(LogCategory.codegen, message: () gives "ARM64 unresolved label '{name}'")
 	return 0
 end 'arm64LookupLabel'
 
@@ -539,9 +539,9 @@ end 'arm64LookupLabel'
 
 type Arm64CallFixup
 	export var instrOffset Arm64Offset
-	export var targetName ByteArray
+	export var targetName String
 
-	static function create(instrOffset Arm64Offset, targetName ByteArray) returns Arm64CallFixup
+	static function create(instrOffset Arm64Offset, targetName String) returns Arm64CallFixup
 		return Self{instrOffset: instrOffset, targetName: targetName}
 	end 'create'
 end 'Arm64CallFixup'
@@ -551,9 +551,9 @@ typealias Arm64CallFixupArray = Array with Arm64CallFixup
 type Arm64AdrFixup
 	export var instrOffset Arm64Offset
 	export var destReg MachineWord
-	export var targetName ByteArray
+	export var targetName String
 
-	static function create(instrOffset Arm64Offset, destReg MachineWord, targetName ByteArray) returns Arm64AdrFixup
+	static function create(instrOffset Arm64Offset, destReg MachineWord, targetName String) returns Arm64AdrFixup
 		return Self{instrOffset: instrOffset, destReg: destReg, targetName: targetName}
 	end 'create'
 end 'Arm64AdrFixup'
@@ -583,7 +583,7 @@ function arm64PatchAdr(code ByteArray, instrOffset Arm64Offset, rd MachineWord, 
 end 'arm64PatchAdr'
 
 // Resolve ADR fixups using function name -> offset labels.
-function arm64ResolveAdrFixups(code ByteArray, labelNames ByteArrayArray, labelOffsets Arm64OffsetArray, adrFixups Arm64AdrFixupArray)
+function arm64ResolveAdrFixups(code ByteArray, labelNames StringArray, labelOffsets Arm64OffsetArray, adrFixups Arm64AdrFixupArray)
 	for fixup in adrFixups 'resolve'
 		let targetOffset = arm64LookupLabel(labelNames, labelOffsets: labelOffsets, name: fixup.targetName)
 		arm64PatchAdr(code, instrOffset: fixup.instrOffset, rd: fixup.destReg, targetOffset: targetOffset)
@@ -591,7 +591,7 @@ function arm64ResolveAdrFixups(code ByteArray, labelNames ByteArrayArray, labelO
 end 'arm64ResolveAdrFixups'
 
 // Resolve call fixups using function name -> offset labels.
-function arm64ResolveCallFixups(code ByteArray, labelNames ByteArrayArray, labelOffsets Arm64OffsetArray, callFixups Arm64CallFixupArray)
+function arm64ResolveCallFixups(code ByteArray, labelNames StringArray, labelOffsets Arm64OffsetArray, callFixups Arm64CallFixupArray)
 	logTrace(LogCategory.codegen, message: () gives "ARM64 resolving {callFixups.count()} call fixups")
 	for fixup in callFixups 'resolve'
 		let targetOffset = arm64LookupLabel(labelNames, labelOffsets: labelOffsets, name: fixup.targetName)
@@ -604,7 +604,7 @@ end 'arm64ResolveCallFixups'
 // Emit mrt_start: BL main (patched later), then exit via OsDescriptor strategy
 function arm64EmitStart(code ByteArray, osDesc OsDescriptor, callFixups Arm64CallFixupArray, relocations RelocationArray) returns Arm64Offset
 	let mainCallFixupOffset = code.count()
-	var mainName = b"main"
+	let mainName = "main"
 	callFixups.push(Arm64CallFixup.create(mainCallFixupOffset, targetName: mainName))
 	arm64EmitBranchLink(code)
 
@@ -799,8 +799,9 @@ end 'arm64EmitI64ToString'
 // --- Print operations ---
 
 // printLiteral: jump over data island, then ADR to data, call mrt_write_stdout
-function arm64EmitPrintLiteral(code ByteArray, data ByteArray, writeStdoutOffset Arm64Offset)
-	let dataLen = data.count()
+function arm64EmitPrintLiteral(code ByteArray, data String, writeStdoutOffset Arm64Offset)
+	let dataBytes = data.toByteArray()
+	let dataLen = dataBytes.count()
 	if dataLen == 0 'empty'
 		return
 	end 'empty'
@@ -811,7 +812,7 @@ function arm64EmitPrintLiteral(code ByteArray, data ByteArray, writeStdoutOffset
 
 	// Data island
 	let dataOffset = code.count()
-	code.append(data)
+	code.append(dataBytes)
 
 	// Pad to 4-byte alignment
 	while code.count() mod 4 != 0 'align'
@@ -1004,7 +1005,7 @@ function arm64HandleBranch(code ByteArray, jumpFixups BlockIdFixupArray, targetB
 	arm64EmitBranch(code)
 end 'arm64HandleBranch'
 
-function arm64HandleBranchLink(code ByteArray, callFixups Arm64CallFixupArray, linkTarget ByteArray)
+function arm64HandleBranchLink(code ByteArray, callFixups Arm64CallFixupArray, linkTarget String)
 	callFixups.push(Arm64CallFixup.create(code.count(), targetName: linkTarget))
 	arm64EmitBranchLink(code)
 end 'arm64HandleBranchLink'
@@ -1017,7 +1018,7 @@ export function emitArm64(module MlirModule, target Target, globalData GlobalDat
 	code.reserve(1024)
 	var relocations = RelocationArray.create()
 	var rdataRelocs = RdataRelocationArray.create()
-	var labelNames = ByteArrayArray.create()
+	var labelNames = StringArray.create()
 	var labelOffsets = Arm64OffsetArray.create()
 	var callFixups = Arm64CallFixupArray.create()
 	var adrFixups = Arm64AdrFixupArray.create()
@@ -1066,7 +1067,7 @@ export function emitArm64(module MlirModule, target Target, globalData GlobalDat
 	arm64ResolveBlockJumpFixups(code, blockOffsets: blockOffsets, jumpFixups: jumpFixups)
 
 	// mrt_start must be the entry point -- look up its offset
-	let startOffset = arm64LookupLabel(labelNames, labelOffsets: labelOffsets, name: b"mrt_start")
+	let startOffset = arm64LookupLabel(labelNames, labelOffsets: labelOffsets, name: "mrt_start")
 
 	// Serialize global data into rdata section and resolve relocations
 	var rdataOffsetMap = RdataOffsetMap.create()
@@ -1156,8 +1157,9 @@ end 'emitArm64PrologueOp'
 // --- Inline print operations (legacy path, uses callFixups) ---
 
 // printLiteral: B over data island, then ADR + BL mrt_write_stdout
-function arm64EmitPrintLiteralInline(code ByteArray, data ByteArray, callFixups Arm64CallFixupArray)
-	let dataLen = data.count()
+function arm64EmitPrintLiteralInline(code ByteArray, data String, callFixups Arm64CallFixupArray)
+	let dataBytes = data.toByteArray()
+	let dataLen = dataBytes.count()
 	if dataLen == 0 'empty'
 		return
 	end 'empty'
@@ -1168,7 +1170,7 @@ function arm64EmitPrintLiteralInline(code ByteArray, data ByteArray, callFixups 
 
 	// Data island
 	let dataOffset = code.count()
-	code.append(data)
+	code.append(dataBytes)
 
 	// Pad to 4-byte alignment
 	while code.count() mod 4 != 0 'align'
@@ -1188,16 +1190,16 @@ function arm64EmitPrintLiteralInline(code ByteArray, data ByteArray, callFixups 
 	arm64EmitMovz(code, rd: 1, imm16: dataLen)
 
 	// BL mrt_write_stdout (via callFixup)
-	arm64HandleBranchLink(code, callFixups: callFixups, linkTarget: b"mrt_write_stdout")
+	arm64HandleBranchLink(code, callFixups: callFixups, linkTarget: "mrt_write_stdout")
 end 'arm64EmitPrintLiteralInline'
 
 // printInt: value in X0, convert to string then print via callFixups
 function arm64EmitPrintIntInline(code ByteArray, callFixups Arm64CallFixupArray)
 	// BL mrt_i64_to_string (returns X0=ptr, X1=len)
-	arm64HandleBranchLink(code, callFixups: callFixups, linkTarget: b"mrt_i64_to_string")
+	arm64HandleBranchLink(code, callFixups: callFixups, linkTarget: "mrt_i64_to_string")
 
 	// BL mrt_write_stdout (X0=ptr, X1=len already set)
-	arm64HandleBranchLink(code, callFixups: callFixups, linkTarget: b"mrt_write_stdout")
+	arm64HandleBranchLink(code, callFixups: callFixups, linkTarget: "mrt_write_stdout")
 end 'arm64EmitPrintIntInline'
 
 // --- SysOp emission (ARM64) ---
@@ -1280,7 +1282,7 @@ function arm64EmitIatCallOp(code ByteArray, relocations RelocationArray, resultS
 end 'arm64EmitIatCallOp'
 
 // sys.globalAddr: ADR X0, rdata label — patched by binary writer after layout.
-function arm64EmitGlobalAddrOp(code ByteArray, rdataRelocs RdataRelocationArray, resultSlot VarSlot, name ByteArray)
+function arm64EmitGlobalAddrOp(code ByteArray, rdataRelocs RdataRelocationArray, resultSlot VarSlot, name String)
 	// Record relocation at this instruction offset
 	rdataRelocs.push(RdataRelocation.create(code.count(), rdataLabel: name, kind: RdataRelocKind.arm64Adr))
 	// Emit placeholder ADR X0, #0
@@ -1305,11 +1307,11 @@ function arm64EmitLoadIndirectOp(code ByteArray, destReg Arm64VReg, baseReg Arm6
 end 'arm64EmitLoadIndirectOp'
 
 // leaFuncAddr: ADR dest, funcName — patched after layout via fixup or rdata relocation
-function arm64EmitLeaFuncAddrOp(code ByteArray, dest Arm64VReg, funcName ByteArray, adrFixups Arm64AdrFixupArray, rdataRelocs RdataRelocationArray)
+function arm64EmitLeaFuncAddrOp(code ByteArray, dest Arm64VReg, funcName String, adrFixups Arm64AdrFixupArray, rdataRelocs RdataRelocationArray)
 	let rd = resolveArm64Gpr(dest).rawValue
 	// __symtable lives in a separate .symtab section
-	if funcName == b"__symtable" 'isSymtable'
-		rdataRelocs.push(RdataRelocation.create(code.count(), rdataLabel: b"__symtable", kind: RdataRelocKind.symdataArm64Adr))
+	if funcName == "__symtable" 'isSymtable'
+		rdataRelocs.push(RdataRelocation.create(code.count(), rdataLabel: "__symtable", kind: RdataRelocKind.symdataArm64Adr))
 	end 'isSymtable' else 'isFunc'
 		adrFixups.push(Arm64AdrFixup.create(code.count(), destReg: rd, targetName: funcName))
 	end 'isFunc'

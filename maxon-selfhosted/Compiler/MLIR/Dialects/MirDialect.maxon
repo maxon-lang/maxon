@@ -55,7 +55,7 @@ export enum MirOp
 	condBranch(condId ValueId, thenBlock BlockId, thenArgs ValueIdArray, elseBlock BlockId, elseArgs ValueIdArray)
 	branch(targetBlock BlockId, args ValueIdArray)
 	// Functions
-	call(resultId ValueId, callee ByteArray, argIds ValueIdArray)
+	call(resultId ValueId, callee String, argIds ValueIdArray)
 	indirectCall(resultId ValueId, calleeId ValueId, argIds ValueIdArray)
 	ret(retValId ValueId)
 	param(resultId ValueId, paramIndex VarSlot, paramType StdType)
@@ -63,7 +63,7 @@ export enum MirOp
 	load(resultId ValueId, baseId ValueId, offset MachineWord)
 	store(valueId ValueId, baseId ValueId, offset MachineWord)
 	stackSlotAddr(resultId ValueId, slotId VarSlot)
-	globalAddr(resultId ValueId, name ByteArray)
+	globalAddr(resultId ValueId, name String)
 	// System
 	syscall(resultId ValueId, number MachineWord, argIds ValueIdArray)
 	iatCall(resultId ValueId, slotIndex MachineWord, argIds ValueIdArray)
@@ -95,7 +95,7 @@ end 'formatMirArgs'
 function resolveMirBlockLabel(blockId BlockId, blocks MlirBlockArray) returns String
 	for block in blocks 'search'
 		if block.id == blockId 'found'
-			return String.from(block.label)
+			return block.label
 		end 'found'
 	end 'search'
 	return "block_{blockId}"
@@ -114,7 +114,7 @@ export function mirOpToString(op MirOp, blocks MlirBlockArray) returns String
 		condBranch(condId, thenBlock, thenArgs, elseBlock, elseArgs) gives mirCondBranchToString(condId, thenBlock: thenBlock, thenArgs: thenArgs, elseBlock: elseBlock, elseArgs: elseArgs, blocks: blocks)
 		branch(targetBlock, args) gives mirBranchToString(targetBlock, args: args, blocks: blocks)
 		// Functions
-		call(resultId, callee, argIds) gives "%{resultId} = mir.call @{String.from(callee)}({formatMirArgs(argIds)})"
+		call(resultId, callee, argIds) gives "%{resultId} = mir.call @{callee}({formatMirArgs(argIds)})"
 		indirectCall(resultId, calleeId, argIds) gives "%{resultId} = mir.indirect_call %{calleeId}({formatMirArgs(argIds)})"
 		ret(retValId) gives "mir.ret %{retValId}"
 		param(resultId, paramIndex, paramType) gives "%{resultId} = mir.param {paramIndex} : {stdTypeToString(paramType)}"
@@ -122,7 +122,7 @@ export function mirOpToString(op MirOp, blocks MlirBlockArray) returns String
 		load(resultId, baseId, offset) gives "%{resultId} = mir.load %{baseId}, {offset}"
 		store(valueId, baseId, offset) gives "mir.store %{valueId}, %{baseId}, {offset}"
 		stackSlotAddr(resultId, slotId) gives "%{resultId} = mir.stack_slot_addr slot_{slotId}"
-		globalAddr(resultId, name) gives "%{resultId} = mir.global_addr @{String.from(name)}"
+		globalAddr(resultId, name) gives "%{resultId} = mir.global_addr @{name}"
 		// System
 		syscall(resultId, number, argIds) gives "%{resultId} = mir.syscall {number}({formatMirArgs(argIds)})"
 		iatCall(resultId, slotIndex, argIds) gives "%{resultId} = mir.iat_call [{slotIndex}]({formatMirArgs(argIds)})"

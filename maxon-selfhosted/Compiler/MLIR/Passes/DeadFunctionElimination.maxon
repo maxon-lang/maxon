@@ -2,7 +2,7 @@
 // Removes functions not reachable from main.
 
 export function eliminateDeadFunctions(module MlirModule) returns MlirModule
-	var reachable = [b"main"]
+	var reachable = ["main"]
 
 	// Worklist: walk reachable functions, collecting callees.
 	// New names are pushed during iteration, so for...in cannot be used.
@@ -23,7 +23,7 @@ export function eliminateDeadFunctions(module MlirModule) returns MlirModule
 	return result
 end 'eliminateDeadFunctions'
 
-function collectCallees(module MlirModule, funcName ByteArray, reachable ByteArrayArray)
+function collectCallees(module MlirModule, funcName String, reachable StringArray)
 	for func in module.functions 'findFunc'
 		if func.name != funcName 'notMatch'
 			continue
@@ -40,7 +40,7 @@ function collectCallees(module MlirModule, funcName ByteArray, reachable ByteArr
 	end 'findFunc'
 end 'collectCallees'
 
-function addCalleeFromOp(op MlirOp, reachable ByteArrayArray)
+function addCalleeFromOp(op MlirOp, reachable StringArray)
 	let callee = extractCallee(op)
 	if callee.isEmpty() 'noCall'
 		return
@@ -50,19 +50,19 @@ function addCalleeFromOp(op MlirOp, reachable ByteArrayArray)
 	end 'new'
 end 'addCalleeFromOp'
 
-function extractCallee(op MlirOp) returns ByteArray
+function extractCallee(op MlirOp) returns String
 	return match op 'dispatch'
 		maxon(hlOp) gives extractMaxonCallee(hlOp)
-		arith to arm64 gives ByteArray.create()
+		arith to arm64 gives ""
 	end 'dispatch'
 end 'extractCallee'
 
-function extractMaxonCallee(hlOp MaxonOp) returns ByteArray
+function extractMaxonCallee(hlOp MaxonOp) returns String
 	return match hlOp 'extract'
 		call(_, callee, _) gives callee
-		literal to refEq gives ByteArray.create()
-		condBr to br gives ByteArray.create()
-		ret gives ByteArray.create()
-		printLiteral to panic gives ByteArray.create()
+		literal to refEq gives ""
+		condBr to br gives ""
+		ret gives ""
+		printLiteral to panic gives ""
 	end 'extract'
 end 'extractMaxonCallee'

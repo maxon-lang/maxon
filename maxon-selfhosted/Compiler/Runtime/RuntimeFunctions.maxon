@@ -2,12 +2,12 @@
 // Used by Maxon->Mid lowering to register string literals for the PE/ELF data section.
 
 export type GlobalDataTable
-	export var names ByteArrayArray
+	export var names StringArray
 	export var values ByteArrayArray
 	export var nextStringId MachineWord
 
 	export static function create() returns GlobalDataTable
-		return Self{names: ByteArrayArray.create(), values: ByteArrayArray.create(), nextStringId: 0}
+		return Self{names: StringArray.create(), values: ByteArrayArray.create(), nextStringId: 0}
 	end 'create'
 end 'GlobalDataTable'
 
@@ -17,7 +17,7 @@ end 'createGlobalDataTable'
 
 // Look up a named entry in the global data table.
 // Returns empty ByteArray if the name is not found.
-export function lookupGlobalData(table GlobalDataTable, name ByteArray) returns ByteArray
+export function lookupGlobalData(table GlobalDataTable, name String) returns ByteArray
 	for(i, tableName) in table.names.enumerated() 'findData'
 		if tableName == name 'found'
 			return try table.values.get(i) otherwise ByteArray.create()
@@ -26,61 +26,33 @@ export function lookupGlobalData(table GlobalDataTable, name ByteArray) returns 
 	return ByteArray.create()
 end 'lookupGlobalData'
 
-export function addGlobalData(table GlobalDataTable, data ByteArray) returns ByteArray
+export function addGlobalData(table GlobalDataTable, data ByteArray) returns String
 	// Deduplicate: if identical bytes already exist, return the existing name
 	for(i, existing) in table.values.enumerated() 'dedup'
 		if existing == data 'match'
-			return try table.names.get(i) otherwise ByteArray.create()
+			return try table.names.get(i) otherwise ""
 		end 'match'
 	end 'dedup'
 	let id = table.nextStringId
 	table.nextStringId = table.nextStringId + 1
 	// Build name like "__str_0", "__str_1", etc.
-	var name = b"__str_"
-	let idStr = intToBytes(id)
-	name.append(idStr)
+	let name = "__str_{id}"
 	table.names.push(name)
 	table.values.push(data)
 	return name
 end 'addGlobalData'
 
 // Register global data with an explicit name (no auto-generated __str_N prefix).
-export function addNamedGlobalData(table GlobalDataTable, name ByteArray, data ByteArray)
+export function addNamedGlobalData(table GlobalDataTable, name String, data ByteArray)
 	table.names.push(name)
 	table.values.push(data)
 end 'addNamedGlobalData'
-
-// Convert an unsigned integer to its decimal byte representation.
-export function intToBytes(value MachineWord) returns ByteArray
-	if value == 0 'zero'
-		return b"0"
-	end 'zero'
-	var result = ByteArray.create()
-	var remaining = value
-	while remaining > 0 'digits'
-		let digit = remaining mod 10
-		result.push(digit + 0x30)
-		remaining = remaining / 10
-	end 'digits'
-	// Reverse in place
-	var lo = 0
-	var hi = result.count() - 1
-	while lo < hi 'reverse'
-		let tmp = try result.get(lo) otherwise 0
-		let hiVal = try result.get(hi) otherwise 0
-		result.set(lo, value: hiVal)
-		result.set(hi, value: tmp)
-		lo = lo + 1
-		hi = hi - 1
-	end 'reverse'
-	return result
-end 'intToBytes'
 
 // Build a binary symbol table as a standalone ByteArray for the .symtab section.
 // Referenced by mrt_panic via funcAddr __symtable (resolved through rdata relocations).
 // Format: count(i32) | entries[count]{codeOffset(i32), nameOffset(i32)} | null-terminated name strings
 // Entries sorted by codeOffset ascending.
-export function buildSymbolTable(labelNames ByteArrayArray, funcLabelOffsets CodeOffsetArray) returns ByteArray
+export function buildSymbolTable(labelNames StringArray, funcLabelOffsets CodeOffsetArray) returns ByteArray
 	var symdata = ByteArray.create()
 	let count = labelNames.count()
 
@@ -111,8 +83,8 @@ export function buildSymbolTable(labelNames ByteArrayArray, funcLabelOffsets Cod
 	for i in 0 upto count 'buildNames'
 		let idx = try sortedIndices.get(i) otherwise 0
 		nameOffsets.push(nameStrings.count())
-		let name = try labelNames.get(idx) otherwise ByteArray.create()
-		nameStrings.append(name)
+		let name = try labelNames.get(idx) otherwise ""
+		nameStrings.append(name.toByteArray())
 		nameStrings.push(0)
 	end 'buildNames'
 
@@ -133,16 +105,16 @@ end 'buildSymbolTable'
 
 // Serialized rdata offset map: parallel arrays mapping label names to byte offsets.
 export type RdataOffsetMap
-	export var names ByteArrayArray
+	export var names StringArray
 	export var offsets CodeOffsetArray
 
 	export static function create() returns RdataOffsetMap
-		return Self{names: ByteArrayArray.create(), offsets: CodeOffsetArray.create()}
+		return Self{names: StringArray.create(), offsets: CodeOffsetArray.create()}
 	end 'create'
 end 'RdataOffsetMap'
 
 // Look up an rdata offset by label name. Returns 0 if not found.
-export function lookupRdataOffset(map RdataOffsetMap, name ByteArray) returns CodeOffset
+export function lookupRdataOffset(map RdataOffsetMap, name String) returns CodeOffset
 	for(i, mapName) in map.names.enumerated() 'find'
 		if mapName == name 'found'
 			return try map.offsets.get(i) otherwise 0
@@ -157,7 +129,7 @@ export function buildRdataSection(table GlobalDataTable, map RdataOffsetMap) ret
 	var rdata = ByteArray.create()
 	let count = table.names.count()
 	for i in 0 upto count 'build'
-		let name = try table.names.get(i) otherwise ByteArray.create()
+		let name = try table.names.get(i) otherwise ""
 		let data = try table.values.get(i) otherwise ByteArray.create()
 		map.names.push(name)
 		map.offsets.push(rdata.count())
@@ -185,8 +157,8 @@ end 'resolveRdataRelocations'
 
 // Register panic message string constants in globalData.
 export function registerPanicStrings(globalData GlobalDataTable)
-	addNamedGlobalData(globalData, name: b"__panic_stacktrace", data: b"Stack trace:\n\0")
-	addNamedGlobalData(globalData, name: b"__panic_in", data: b"  in \0")
-	addNamedGlobalData(globalData, name: b"__panic_newline", data: b"\n\0")
-	addNamedGlobalData(globalData, name: b"__panic_unknown", data: b"<unknown>\0")
+	addNamedGlobalData(globalData, name: "__panic_stacktrace", data: b"Stack trace:\n\0")
+	addNamedGlobalData(globalData, name: "__panic_in", data: b"  in \0")
+	addNamedGlobalData(globalData, name: "__panic_newline", data: b"\n\0")
+	addNamedGlobalData(globalData, name: "__panic_unknown", data: b"<unknown>\0")
 end 'registerPanicStrings'

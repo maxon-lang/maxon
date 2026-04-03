@@ -48,12 +48,12 @@ export function getStdlibModule(project Project) returns MlirModule
 	var allModule = createMlirModule()
 	for fp in stdlibFiles 'eachFile'
 		if fp.fileExists() 'exists'
-			let bytes = try File.readBinary(fp) otherwise 'readErr'
+			let content = try File.readText(fp) otherwise 'readErr'
 				logDebug(LogCategory.compiler, message: () gives "  Failed to read {fp}")
 				continue
 			end 'readErr'
 			logDebug(LogCategory.compiler, message: () gives "  Parsing {fp}")
-			let tokens = tokenize(bytes)
+			let tokens = tokenize(content)
 			let parsed = parse(project, tokens: tokens, filePath: fp)
 			mergeModules(allModule, source: parsed)
 		end 'exists'

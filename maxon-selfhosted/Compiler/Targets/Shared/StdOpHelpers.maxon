@@ -391,14 +391,14 @@ export function isMirDivergingBlock(block MlirBlock) returns bool
 	for op in block.ops 'checkOps'
 		match op 'check'
 			func(funcOp) then match funcOp 'checkFunc'
-				call(_, callee, _) then if callee == b"mrt_panic" 'isPanic'
+				call(_, callee, _) then if callee == "mrt_panic" 'isPanic'
 				return true
 			end 'isPanic'
 			ret then break 'checkFunc'
 			tryCall to param then break 'checkFunc'
 		end 'checkFunc'
 		mir(mirOp) then match mirOp 'checkMir'
-			call(_, callee, _) then if callee == b"mrt_panic" 'isPanic2'
+			call(_, callee, _) then if callee == "mrt_panic" 'isPanic2'
 			return true
 		end 'isPanic2'
 		movImm to branch then break 'checkMir'
@@ -463,7 +463,7 @@ export function computeParamSlotIndex(paramIndex VarSlot, paramTypes StdTypeArra
 end 'computeParamSlotIndex'
 
 // Look up a callee's parameter types from the function list.
-export function lookupFuncParamTypes(callee ByteArray, allFunctions MlirFunctionArray) returns StdTypeArray
+export function lookupFuncParamTypes(callee String, allFunctions MlirFunctionArray) returns StdTypeArray
 	for func in allFunctions 'search'
 		if func.name == callee 'found'
 			return func.paramTypes
@@ -474,9 +474,8 @@ end 'lookupFuncParamTypes'
 
 // Register float constant data in globalData and return the label.
 // Deduplicates: returns the existing label if already registered.
-export function registerFloatConstant(rawBits ParsedInt, globalData GlobalDataTable) returns ByteArray
-	var label = b"__float_"
-	label.append(intToBytes(rawBits))
+export function registerFloatConstant(rawBits ParsedInt, globalData GlobalDataTable) returns String
+	let label = "__float_{rawBits}"
 	let existing = lookupGlobalData(globalData, name: label)
 	if existing.count() == 0 'register'
 		var data = ByteArray.create()

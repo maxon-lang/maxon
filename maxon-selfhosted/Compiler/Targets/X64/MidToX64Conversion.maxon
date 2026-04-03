@@ -211,7 +211,7 @@ export function lowerMidToX64(module MlirModule, target Target, globalData Globa
 	let osDesc = makeOsDescriptor(target)
 
 	for srcFunc in module.functions 'eachFunc'
-		let funcName = String.from(srcFunc.name)
+		let funcName = srcFunc.name
 		logTrace(LogCategory.mlir, message: () gives "mid-to-x64: === lowering function: {funcName} ===")
 		let dstFunc = lowerFunctionToX64(srcFunc, osDesc: osDesc, allFunctions: module.functions, globalData: globalData)
 		result.functions.push(dstFunc)
@@ -702,7 +702,7 @@ function getCallConvXmm(index VarSlot) returns X64XmmRegister
 end 'getCallConvXmm'
 
 
-function lowerCall(resultId ValueId, callee ByteArray, argIds ValueIdArray, dstBlock MlirBlock, allFunctions MlirFunctionArray)
+function lowerCall(resultId ValueId, callee String, argIds ValueIdArray, dstBlock MlirBlock, allFunctions MlirFunctionArray)
 	// Look up callee's param types to route float args to XMM registers
 	let paramTypes = lookupFuncParamTypes(callee, allFunctions: allFunctions)
 
@@ -736,7 +736,7 @@ function lowerCall(resultId ValueId, callee ByteArray, argIds ValueIdArray, dstB
 
 	// Move return value from RAX/XMM0 to virtual result
 	let calleeReturnType = lookupFuncReturnType(callee, allFunctions: allFunctions)
-	if calleeReturnType == b"f64" 'floatResult'
+	if calleeReturnType == "f64" 'floatResult'
 		dstBlock.ops.push(MlirOp.x64(X64Op.movXmmXmm(X64FpVReg.virtual(resultId), physFpReg(X64XmmRegister.xmm0), FloatPrecision.f64)))
 	end 'floatResult' else 'intResult'
 		dstBlock.ops.push(MlirOp.x64(X64Op.movRegReg(X64VReg.virtual(resultId), physReg(X64Register.rax))))
@@ -766,7 +766,7 @@ function lowerIndirectCall(resultId ValueId, calleeId ValueId, argIds ValueIdArr
 	dstBlock.ops.push(MlirOp.x64(X64Op.movRegReg(X64VReg.virtual(resultId), physReg(X64Register.rax))))
 end 'lowerIndirectCall'
 
-function lookupFuncReturnType(callee ByteArray, allFunctions MlirFunctionArray) returns ByteArray
+function lookupFuncReturnType(callee String, allFunctions MlirFunctionArray) returns String
 	for func in allFunctions 'search'
 		if func.name == callee 'found'
 			return func.returnType
@@ -840,7 +840,7 @@ end 'lowerPrintInt'
 // Terminators
 // ============================================================
 
-function lowerTerminator(srcBlock MlirBlock, dstBlock MlirBlock, returnType ByteArray, srcBlocks MlirBlockArray, blockArgSlots ValueSlotMap)
+function lowerTerminator(srcBlock MlirBlock, dstBlock MlirBlock, returnType String, srcBlocks MlirBlockArray, blockArgSlots ValueSlotMap)
 	match srcBlock.terminator 'dispatch'
 		maxon to arith then break 'dispatch'
 		cf(cfOp) then lowerCfTerminator(cfOp, srcBlock: srcBlock, dstBlock: dstBlock, srcBlocks: srcBlocks, blockArgSlots: blockArgSlots)
@@ -859,14 +859,14 @@ function lowerCfTerminator(op CfOp, srcBlock MlirBlock, dstBlock MlirBlock, srcB
 	end 'lower'
 end 'lowerCfTerminator'
 
-function lowerFuncTerminator(op FuncOp, dstBlock MlirBlock, returnType ByteArray)
+function lowerFuncTerminator(op FuncOp, dstBlock MlirBlock, returnType String)
 	match op 'lower'
 		ret(retValId) then lowerReturn(retValId, dstBlock: dstBlock, returnType: returnType)
 		call to param then break 'lower'
 	end 'lower'
 end 'lowerFuncTerminator'
 
-function lowerMirTerminator(op MirOp, srcBlock MlirBlock, dstBlock MlirBlock, returnType ByteArray, srcBlocks MlirBlockArray, blockArgSlots ValueSlotMap)
+function lowerMirTerminator(op MirOp, srcBlock MlirBlock, dstBlock MlirBlock, returnType String, srcBlocks MlirBlockArray, blockArgSlots ValueSlotMap)
 	match op 'lower'
 		condBranch(condId, thenTarget, thenArgs, elseTarget, elseArgs) then lowerCondBr(condId, thenTarget: thenTarget, thenArgIds: thenArgs, elseTarget: elseTarget, elseArgIds: elseArgs, srcBlock: srcBlock, dstBlock: dstBlock, srcBlocks: srcBlocks, blockArgSlots: blockArgSlots)
 		branch(target, args) then lowerBrWithArgs(target, argIds: args, dstBlock: dstBlock, srcBlocks: srcBlocks, blockArgSlots: blockArgSlots)
@@ -878,8 +878,8 @@ function lowerMirTerminator(op MirOp, srcBlock MlirBlock, dstBlock MlirBlock, re
 end 'lowerMirTerminator'
 
 // Return: move value to RAX (or XMM0 for float), emit epilogue+ret.
-function lowerReturn(retValId ValueId, dstBlock MlirBlock, returnType ByteArray)
-	if returnType == b"f64" 'floatReturn'
+function lowerReturn(retValId ValueId, dstBlock MlirBlock, returnType String)
+	if returnType == "f64" 'floatReturn'
 		dstBlock.ops.push(MlirOp.x64(X64Op.movXmmXmm(physFpReg(X64XmmRegister.xmm0), X64FpVReg.virtual(retValId), FloatPrecision.f64)))
 	end 'floatReturn' else 'intReturn'
 		dstBlock.ops.push(MlirOp.x64(X64Op.movRegReg(physReg(X64Register.rax), X64VReg.virtual(retValId))))
@@ -1109,7 +1109,7 @@ function lowerMirIatCall(resultId ValueId, slotIndex MachineWord, argIds ValueId
 	return lowerIatCall(resultId, slotIndex: slotIndex, argIds: argIds, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
 end 'lowerMirIatCall'
 
-function lowerGlobalAddr(resultId ValueId, name ByteArray, dstBlock MlirBlock, valueSlots ValueSlotMap, nextTempSlot SlotIndex) returns SlotIndex
+function lowerGlobalAddr(resultId ValueId, name String, dstBlock MlirBlock, valueSlots ValueSlotMap, nextTempSlot SlotIndex) returns SlotIndex
 	// Emit LEA directly into a virtual register — no slot indirection needed.
 	// The code emitter resolves the label via a data island + RIP-relative LEA.
 	dstBlock.ops.push(MlirOp.x64(X64Op.leaRipRelative(X64VReg.virtual(resultId), name)))
@@ -1338,7 +1338,7 @@ function lowerLoadIndirect(resultId ValueId, addrId ValueId, offset MachineWord,
 	return tempSlot + 1
 end 'lowerLoadIndirect'
 
-function lowerFuncAddr(resultId ValueId, name ByteArray, dstBlock MlirBlock, valueSlots ValueSlotMap, nextTempSlot SlotIndex) returns SlotIndex
+function lowerFuncAddr(resultId ValueId, name String, dstBlock MlirBlock, valueSlots ValueSlotMap, nextTempSlot SlotIndex) returns SlotIndex
 	dstBlock.ops.push(MlirOp.x64(X64Op.leaFuncAddr(X64VReg.virtual(resultId), name)))
 	valueSlotMapSet(valueSlots, valueId: resultId, slot: nextTempSlot)
 	return nextTempSlot

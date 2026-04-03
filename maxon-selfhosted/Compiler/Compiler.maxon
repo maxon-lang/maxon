@@ -7,8 +7,7 @@ end 'compile'
 // Compiles source code directly from memory (no temp file) and returns IR.
 export function compileSourceWithIr(source String, virtualPath FilePath, target Target, outputPath FilePath) returns CompileWithIrResult throws CompileError
 	let project = createProject(outputPath, target: target)
-	let bytes = source.toByteArray()
-	fileChanged(project, path: virtualPath, content: bytes)
+	fileChanged(project, path: virtualPath, content: source)
 
 	logInfo(LogCategory.compiler, message: () gives "Starting in-memory compilation")
 	let codeResult = try queryCodeResult(project)
@@ -94,11 +93,11 @@ function loadSourceFiles(project Project, path FilePath) throws CompileError
 			return
 		end 'ignored'
 
-		let bytes = try File.readBinary(path) otherwise 'readErr'
+		let content = try File.readText(path) otherwise 'readErr'
 			throw CompileError.readError
 		end 'readErr'
 
-		fileChanged(project, path: path, content: bytes)
+		fileChanged(project, path: path, content: content)
 	end 'isFile' else if path.directoryExists() 'isDir'
 		logTrace(LogCategory.compiler, message: () gives "Loading directory: {path}")
 
@@ -118,11 +117,11 @@ function loadSourceFiles(project Project, path FilePath) throws CompileError
 				let filePath = path.join(name)
 				logTrace(LogCategory.compiler, message: () gives "Loading file: {filePath}")
 
-				let bytes = try File.readBinary(filePath) otherwise 'skip'
+				let content = try File.readText(filePath) otherwise 'skip'
 					continue
 				end 'skip'
 
-				fileChanged(project, path: filePath, content: bytes)
+				fileChanged(project, path: filePath, content: content)
 			end 'isMaxon'
 		end 'loop'
 

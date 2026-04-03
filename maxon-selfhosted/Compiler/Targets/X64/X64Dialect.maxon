@@ -175,7 +175,7 @@ export enum X64Op
 	movF64Rdata(rdataOffset CodeOffset) = X64OpMeta{latency: 3, isMemory: true, isStore: false, isCall: false, setsFlags: false}
 	ucomisd = X64OpMeta{latency: 3, isMemory: false, isStore: false, isCall: false, setsFlags: false}
 	// Print ops (I/O = memory + call)
-	printLiteral(data ByteArray) = X64OpMeta{latency: 5, isMemory: true, isStore: false, isCall: true, setsFlags: false}
+	printLiteral(data String) = X64OpMeta{latency: 5, isMemory: true, isStore: false, isCall: true, setsFlags: false}
 	printInt = X64OpMeta{latency: 5, isMemory: true, isStore: false, isCall: true, setsFlags: false}
 	// Stack adjustment
 	subRspImm(value StackSize) = X64OpMeta{latency: 1, isMemory: false, isStore: false, isCall: false, setsFlags: false}
@@ -183,13 +183,13 @@ export enum X64Op
 	movRspOffsetReg(offset StackSize, srcReg X64VReg) = X64OpMeta{latency: 3, isMemory: true, isStore: true, isCall: false, setsFlags: false}
 	loadRegRbpOffset(destReg X64VReg, offset StackSize) = X64OpMeta{latency: 4, isMemory: true, isStore: false, isCall: false, setsFlags: false}
 	// Calls
-	callDirect(target ByteArray) = X64OpMeta{latency: 5, isMemory: true, isStore: false, isCall: true, setsFlags: false}
+	callDirect(target String) = X64OpMeta{latency: 5, isMemory: true, isStore: false, isCall: true, setsFlags: false}
 	// SysOp lowering: x86-64 syscall instruction
 	syscall(resultSlot VarSlot, number MachineWord, argSlots VarSlotArray) = X64OpMeta{latency: 5, isMemory: true, isStore: false, isCall: true, setsFlags: false}
 	// SysOp lowering: indirect call through IAT slot
 	iatCall(resultSlot VarSlot, slotIndex MachineWord, argSlots VarSlotArray) = X64OpMeta{latency: 5, isMemory: true, isStore: false, isCall: true, setsFlags: false}
 	// SysOp lowering: data island + LEA for named global data
-	globalAddr(resultSlot VarSlot, name ByteArray) = X64OpMeta{latency: 1, isMemory: false, isStore: false, isCall: false, setsFlags: false}
+	globalAddr(resultSlot VarSlot, name String) = X64OpMeta{latency: 1, isMemory: false, isStore: false, isCall: false, setsFlags: false}
 	// SysOp lowering: LEA rax, [rbp - offset] for stack slot address
 	stackAddrOp(resultSlot VarSlot, targetSlot VarSlot) = X64OpMeta{latency: 1, isMemory: false, isStore: false, isCall: false, setsFlags: false}
 	// SysOp lowering: mov byte [base + offset], value
@@ -215,7 +215,7 @@ export enum X64Op
 	movXmmXmm(dest X64FpVReg, src X64FpVReg, precision FloatPrecision) = X64OpMeta{latency: 1, isMemory: false, isStore: false, isCall: false, setsFlags: false}
 	spillXmmToStack(offset MachineWord, src X64FpVReg, precision FloatPrecision) = X64OpMeta{latency: 3, isMemory: true, isStore: true, isCall: false, setsFlags: false}
 	reloadXmmFromStack(dest X64FpVReg, offset MachineWord, precision FloatPrecision) = X64OpMeta{latency: 4, isMemory: true, isStore: false, isCall: false, setsFlags: false}
-	movXmmRipRel(dest X64FpVReg, rdataLabel ByteArray, precision FloatPrecision) = X64OpMeta{latency: 4, isMemory: true, isStore: false, isCall: false, setsFlags: false}
+	movXmmRipRel(dest X64FpVReg, rdataLabel String, precision FloatPrecision) = X64OpMeta{latency: 4, isMemory: true, isStore: false, isCall: false, setsFlags: false}
 	addXmm(dest X64FpVReg, src X64FpVReg, precision FloatPrecision) = X64OpMeta{latency: 4, isMemory: false, isStore: false, isCall: false, setsFlags: false}
 	subXmm(dest X64FpVReg, src X64FpVReg, precision FloatPrecision) = X64OpMeta{latency: 4, isMemory: false, isStore: false, isCall: false, setsFlags: false}
 	mulXmm(dest X64FpVReg, src X64FpVReg, precision FloatPrecision) = X64OpMeta{latency: 4, isMemory: false, isStore: false, isCall: false, setsFlags: false}
@@ -229,21 +229,21 @@ export enum X64Op
 	cvtSs2Sd(dest X64FpVReg, src X64FpVReg) = X64OpMeta{latency: 3, isMemory: false, isStore: false, isCall: false, setsFlags: false}
 	movqXmmToGpr(dest X64VReg, src X64FpVReg) = X64OpMeta{latency: 3, isMemory: false, isStore: false, isCall: false, setsFlags: false}
 	movqGprToXmm(dest X64FpVReg, src X64VReg) = X64OpMeta{latency: 3, isMemory: false, isStore: false, isCall: false, setsFlags: false}
-	andMaskRipRel(dest X64FpVReg, rdataLabel ByteArray, precision FloatPrecision) = X64OpMeta{latency: 4, isMemory: true, isStore: false, isCall: false, setsFlags: false}
+	andMaskRipRel(dest X64FpVReg, rdataLabel String, precision FloatPrecision) = X64OpMeta{latency: 4, isMemory: true, isStore: false, isCall: false, setsFlags: false}
 	// Indirect memory ops
 	storeIndirect(baseReg X64VReg, offset MachineWord, srcReg X64VReg, size MachineWord) = X64OpMeta{latency: 3, isMemory: true, isStore: true, isCall: false, setsFlags: false}
 	loadIndirect(destReg X64VReg, baseReg X64VReg, offset MachineWord, size MachineWord) = X64OpMeta{latency: 4, isMemory: true, isStore: false, isCall: false, setsFlags: false}
 	storeIndirectXmm(baseReg X64VReg, offset MachineWord, src X64FpVReg, precision FloatPrecision) = X64OpMeta{latency: 3, isMemory: true, isStore: true, isCall: false, setsFlags: false}
 	loadIndirectXmm(dest X64FpVReg, baseReg X64VReg, offset MachineWord, precision FloatPrecision) = X64OpMeta{latency: 4, isMemory: true, isStore: false, isCall: false, setsFlags: false}
 	// Global variable ops
-	globalLoad(dest X64VReg, name ByteArray, size MachineWord) = X64OpMeta{latency: 4, isMemory: true, isStore: false, isCall: false, setsFlags: false}
-	globalStore(name ByteArray, src X64VReg, size MachineWord) = X64OpMeta{latency: 3, isMemory: true, isStore: true, isCall: false, setsFlags: false}
-	globalLoadXmm(dest X64FpVReg, name ByteArray, precision FloatPrecision) = X64OpMeta{latency: 4, isMemory: true, isStore: false, isCall: false, setsFlags: false}
-	globalStoreXmm(name ByteArray, src X64FpVReg, precision FloatPrecision) = X64OpMeta{latency: 3, isMemory: true, isStore: true, isCall: false, setsFlags: false}
+	globalLoad(dest X64VReg, name String, size MachineWord) = X64OpMeta{latency: 4, isMemory: true, isStore: false, isCall: false, setsFlags: false}
+	globalStore(name String, src X64VReg, size MachineWord) = X64OpMeta{latency: 3, isMemory: true, isStore: true, isCall: false, setsFlags: false}
+	globalLoadXmm(dest X64FpVReg, name String, precision FloatPrecision) = X64OpMeta{latency: 4, isMemory: true, isStore: false, isCall: false, setsFlags: false}
+	globalStoreXmm(name String, src X64FpVReg, precision FloatPrecision) = X64OpMeta{latency: 3, isMemory: true, isStore: true, isCall: false, setsFlags: false}
 	// LEA ops
 	leaFromStack(dest X64VReg, stackOffset MachineWord) = X64OpMeta{latency: 1, isMemory: false, isStore: false, isCall: false, setsFlags: false}
-	leaRipRelative(dest X64VReg, rdataLabel ByteArray) = X64OpMeta{latency: 1, isMemory: false, isStore: false, isCall: false, setsFlags: false}
-	leaFuncAddr(dest X64VReg, funcName ByteArray) = X64OpMeta{latency: 1, isMemory: false, isStore: false, isCall: false, setsFlags: false}
+	leaRipRelative(dest X64VReg, rdataLabel String) = X64OpMeta{latency: 1, isMemory: false, isStore: false, isCall: false, setsFlags: false}
+	leaFuncAddr(dest X64VReg, funcName String) = X64OpMeta{latency: 1, isMemory: false, isStore: false, isCall: false, setsFlags: false}
 	// Conditional ops
 	setcc(dest X64VReg, condition X64SetccCondition) = X64OpMeta{latency: 1, isMemory: false, isStore: false, isCall: false, setsFlags: false}
 	cmov(dest X64VReg, src X64VReg, condition X64CmovCondition) = X64OpMeta{latency: 1, isMemory: false, isStore: false, isCall: false, setsFlags: false}
@@ -317,16 +317,16 @@ export function x64OpToString(op X64Op, blocks MlirBlockArray) returns String
 		loadF64Slot(slotIndex) gives "x64.movsd xmm0, [rbp-{slotOffset(slotIndex)}]"
 		movF64Rdata(rdataOffset) gives "x64.movsd xmm0, [rip+__float_{rdataOffset}]"
 		ucomisd gives "x64.ucomisd xmm0, xmm1"
-		printLiteral(data) gives "x64.print_literal \"{String.from(data)}\""
+		printLiteral(data) gives "x64.print_literal \"{data}\""
 		printInt gives "x64.print_int"
 		subRspImm(value) gives "x64.sub rsp, {value}"
 		addRspImm(value) gives "x64.add rsp, {value}"
 		movRspOffsetReg(offset, srcReg) gives "x64.mov [rsp+{offset}], {x64VRegToString(srcReg)}"
 		loadRegRbpOffset(destReg, offset) gives "x64.mov {x64VRegToString(destReg)}, [rbp-{offset}]"
-		callDirect(target) gives "x64.call {String.from(target)}"
+		callDirect(target) gives "x64.call {target}"
 		syscall(_, number, argSlots) gives "x64.syscall {number}({formatVarSlotArgs(argSlots)})"
 		iatCall(_, slotIndex, _) gives "x64.call_import slot_{slotIndex}"
-		globalAddr(_, name) gives "x64.lea_rdata {X64Register.rax.name}, [{String.from(name)}]"
+		globalAddr(_, name) gives "x64.lea_rdata {X64Register.rax.name}, [{name}]"
 		stackAddrOp(_, targetSlot) gives "x64.lea rax, [rbp-{slotOffset(targetSlot)}]"
 		storeByteOp(_, _, _) gives "x64.mov byte ptr [rax+0], cl"
 		loadByteOp(_, _, _) gives "x64.movzx rax, byte ptr [rax+0]"
@@ -345,7 +345,7 @@ export function x64OpToString(op X64Op, blocks MlirBlockArray) returns String
 		movXmmXmm(dest, src, _) gives "x64.movsd {x64FpVRegToString(dest)}, {x64FpVRegToString(src)}"
 		spillXmmToStack(offset, src, _) gives "x64.movsd [rbp{formatSignedOffset(offset)}], {x64FpVRegToString(src)}"
 		reloadXmmFromStack(dest, offset, _) gives "x64.movsd {x64FpVRegToString(dest)}, [rbp{formatSignedOffset(offset)}]"
-		movXmmRipRel(dest, label, _) gives "x64.movsd {x64FpVRegToString(dest)}, [rip+{String.from(label)}]"
+		movXmmRipRel(dest, label, _) gives "x64.movsd {x64FpVRegToString(dest)}, [rip+{label}]"
 		addXmm(dest, src, _) gives "x64.addsd {x64FpVRegToString(dest)}, {x64FpVRegToString(src)}"
 		subXmm(dest, src, _) gives "x64.subsd {x64FpVRegToString(dest)}, {x64FpVRegToString(src)}"
 		mulXmm(dest, src, _) gives "x64.mulsd {x64FpVRegToString(dest)}, {x64FpVRegToString(src)}"
@@ -359,18 +359,18 @@ export function x64OpToString(op X64Op, blocks MlirBlockArray) returns String
 		cvtSs2Sd(dest, src) gives "x64.cvtss2sd {x64FpVRegToString(dest)}, {x64FpVRegToString(src)}"
 		movqXmmToGpr(dest, src) gives "x64.movq {x64VRegToString(dest)}, {x64FpVRegToString(src)}"
 		movqGprToXmm(dest, src) gives "x64.movq {x64FpVRegToString(dest)}, {x64VRegToString(src)}"
-		andMaskRipRel(dest, label, _) gives "x64.andpd {x64FpVRegToString(dest)}, [rip+{String.from(label)}]"
+		andMaskRipRel(dest, label, _) gives "x64.andpd {x64FpVRegToString(dest)}, [rip+{label}]"
 		storeIndirect(baseReg, offset, srcReg, size) gives "x64.mov [{x64VRegToString(baseReg)}+{offset}], {x64VRegToString(srcReg)} ({size}b)"
 		loadIndirect(destReg, baseReg, offset, size) gives "x64.mov {x64VRegToString(destReg)}, [{x64VRegToString(baseReg)}+{offset}] ({size}b)"
 		storeIndirectXmm(baseReg, offset, src, _) gives "x64.movsd [{x64VRegToString(baseReg)}+{offset}], {x64FpVRegToString(src)}"
 		loadIndirectXmm(dest, baseReg, offset, _) gives "x64.movsd {x64FpVRegToString(dest)}, [{x64VRegToString(baseReg)}+{offset}]"
-		globalLoad(dest, name, _) gives "x64.mov {x64VRegToString(dest)}, [rip+{String.from(name)}]"
-		globalStore(name, src, _) gives "x64.mov [rip+{String.from(name)}], {x64VRegToString(src)}"
-		globalLoadXmm(dest, name, _) gives "x64.movsd {x64FpVRegToString(dest)}, [rip+{String.from(name)}]"
-		globalStoreXmm(name, src, _) gives "x64.movsd [rip+{String.from(name)}], {x64FpVRegToString(src)}"
+		globalLoad(dest, name, _) gives "x64.mov {x64VRegToString(dest)}, [rip+{name}]"
+		globalStore(name, src, _) gives "x64.mov [rip+{name}], {x64VRegToString(src)}"
+		globalLoadXmm(dest, name, _) gives "x64.movsd {x64FpVRegToString(dest)}, [rip+{name}]"
+		globalStoreXmm(name, src, _) gives "x64.movsd [rip+{name}], {x64FpVRegToString(src)}"
 		leaFromStack(dest, offset) gives "x64.lea {x64VRegToString(dest)}, [rbp{formatSignedOffset(offset)}]"
-		leaRipRelative(dest, label) gives "x64.lea {x64VRegToString(dest)}, [rip+{String.from(label)}]"
-		leaFuncAddr(dest, funcName) gives "x64.lea {x64VRegToString(dest)}, [rip+{String.from(funcName)}]"
+		leaRipRelative(dest, label) gives "x64.lea {x64VRegToString(dest)}, [rip+{label}]"
+		leaFuncAddr(dest, funcName) gives "x64.lea {x64VRegToString(dest)}, [rip+{funcName}]"
 		setcc(dest, condition) gives "x64.set{condition.name} {x64VRegToString(dest)}"
 		cmov(dest, src, condition) gives "x64.cmov{condition.name} {x64VRegToString(dest)}, {x64VRegToString(src)}"
 		movsxd(dest, src) gives "x64.movsxd {x64VRegToString(dest)}, {x64VRegToString(src)}"

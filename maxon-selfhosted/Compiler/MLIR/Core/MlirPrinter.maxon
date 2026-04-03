@@ -6,9 +6,8 @@ export function moduleToString(module MlirModule, skipStdlib bool) returns Strin
 	var sb = "module "
 	sb = "{sb}{lb}\n"
 	for func in module.functions 'eachFunc'
-		let funcName = String.from(func.name)
 		if skipStdlib 'filter'
-			if skipFunction(funcName) 'isRuntime'
+			if skipFunction(func.name) 'isRuntime'
 				continue
 			end 'isRuntime'
 		end 'filter'
@@ -21,9 +20,7 @@ end 'moduleToString'
 function functionToString(func MlirFunction) returns String
 	let lb = "\{"
 	let rb = "\}"
-	let funcName = String.from(func.name)
-	let retType = String.from(func.returnType)
-	var sb = "  func @{funcName}("
+	var sb = "  func @{func.name}("
 
 	for i in 0 upto func.paramCount 'eachParam'
 		if i > 0 'comma'
@@ -33,17 +30,16 @@ function functionToString(func MlirFunction) returns String
 	end 'eachParam'
 
 	sb = "{sb})"
-	if not retType.isEmpty() 'hasReturn'
-		if retType != "void" 'notVoid'
-			sb = "{sb} -> {retType}"
+	if not func.returnType.isEmpty() 'hasReturn'
+		if func.returnType != "void" 'notVoid'
+			sb = "{sb} -> {func.returnType}"
 		end 'notVoid'
 	end 'hasReturn'
 	sb = "{sb} {lb}\n"
 
 	let blocks = func.blocks
 	for block in blocks 'eachBlock'
-		let blockLabel = String.from(block.label)
-		sb = "{sb}  {blockLabel}:\n"
+		sb = "{sb}  {block.label}:\n"
 		for op in block.ops 'eachOp'
 			let opText = opToString(op, blocks: blocks)
 			sb = "{sb}    {opText}\n"

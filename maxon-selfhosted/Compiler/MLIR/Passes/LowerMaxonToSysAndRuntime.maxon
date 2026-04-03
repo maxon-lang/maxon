@@ -61,14 +61,15 @@ end 'lowerMaxonOpToSys'
 //   globalAddr(addrId, "__str_N")
 //   constI64(lenId, len)
 //   call(_, "mrt_write_stdout", [addrId, lenId])
-function lowerPrintLiteral(data ByteArray, dstBlock MlirBlock, globalData GlobalDataTable, nextValueIdRef ValueIdRef)
-	let dataLen = data.count()
+function lowerPrintLiteral(data String, dstBlock MlirBlock, globalData GlobalDataTable, nextValueIdRef ValueIdRef)
+	let dataBytes = data.toByteArray()
+	let dataLen = dataBytes.count()
 	if dataLen == 0 'empty'
 		return
 	end 'empty'
 
 	// Register data in global table
-	let name = addGlobalData(globalData, data: data)
+	let name = addGlobalData(globalData, data: dataBytes)
 
 	// globalAddr -> addrId
 	let addrId = allocValueId(nextValueIdRef)
@@ -83,7 +84,7 @@ function lowerPrintLiteral(data ByteArray, dstBlock MlirBlock, globalData Global
 	var argIds = ValueIdArray.create()
 	argIds.push(addrId)
 	argIds.push(lenId)
-	dstBlock.ops.push(MlirOp.func(FuncOp.call(callResultId, b"mrt_write_stdout", argIds)))
+	dstBlock.ops.push(MlirOp.func(FuncOp.call(callResultId, "mrt_write_stdout", argIds)))
 end 'lowerPrintLiteral'
 
 // Lower printInt(valueId) to:
@@ -92,32 +93,30 @@ function lowerPrintIntToCall(valueId ValueId, dstBlock MlirBlock, nextValueIdRef
 	let callResultId = allocValueId(nextValueIdRef)
 	var argIds = ValueIdArray.create()
 	argIds.push(valueId)
-	dstBlock.ops.push(MlirOp.func(FuncOp.call(callResultId, b"mrt_printInt", argIds)))
+	dstBlock.ops.push(MlirOp.func(FuncOp.call(callResultId, "mrt_printInt", argIds)))
 end 'lowerPrintIntToCall'
 
 // Lower maxon.panic(message, panicId) to:
 //   sys.globalAddr(addrId, "__panic_msg_N")  // load address of null-terminated panic message
 //   func.call mrt_panic(addrId)              // call runtime panic handler (never returns)
 // Registers the panic message as global data with a null-terminated C-string.
-function lowerPanicToSys(message ByteArray, panicId ValueId, dstBlock MlirBlock, globalData GlobalDataTable, nextValueIdRef ValueIdRef)
+function lowerPanicToSys(message String, panicId ValueId, dstBlock MlirBlock, globalData GlobalDataTable, nextValueIdRef ValueIdRef)
 	// Build null-terminated message for global data
-	var nullTermMsg = ByteArray.create()
-	nullTermMsg.append(message)
+	var nullTermMsg = message.toByteArray()
 	nullTermMsg.push(0x0A)  // newline
 	nullTermMsg.push(0)  // null terminator
 
 	// Register in global data as __panic_msg_N
-	var name = b"__panic_msg_"
-	name.append(intToBytes(panicId))
-	addNamedGlobalData(globalData, name: name, data: nullTermMsg)
+	var nameStr = "__panic_msg_{panicId}"
+	addNamedGlobalData(globalData, name: nameStr, data: nullTermMsg)
 
 	// globalAddr -> addrId
 	let addrId = allocValueId(nextValueIdRef)
-	dstBlock.ops.push(MlirOp.sys(SysOp.globalAddr(addrId, name)))
+	dstBlock.ops.push(MlirOp.sys(SysOp.globalAddr(addrId, nameStr)))
 
 	// call mrt_panic(addrId)
 	let callResultId = allocValueId(nextValueIdRef)
 	var argIds = ValueIdArray.create()
 	argIds.push(addrId)
-	dstBlock.ops.push(MlirOp.func(FuncOp.call(callResultId, b"mrt_panic", argIds)))
+	dstBlock.ops.push(MlirOp.func(FuncOp.call(callResultId, "mrt_panic", argIds)))
 end 'lowerPanicToSys'

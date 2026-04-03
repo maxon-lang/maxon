@@ -1,7 +1,6 @@
 // Table-driven DFA lexer for Maxon source code.
-// Operates on a byte array (UTF-8 source) for efficient byte-level scanning.
-// The DFA handles single-char and two-char operator tokens via transition tables,
-// while sub-scanners handle variable-length tokens (strings, numbers, identifiers, comments).
+// Accepts a String source, converts to ByteArray internally for efficient byte-level scanning,
+// and produces tokens with String values sliced from the original source.
 
 export typealias LineNumber = int(0 to u64.max)
 export typealias ColumnNumber = int(0 to u64.max)
@@ -193,23 +192,23 @@ end 'TokenKind'
 
 export type Token
 	export let kind TokenKind
-	export let value ByteArray
+	export let value String
 	export let line LineNumber
 	export let column ColumnNumber
 
-	export static function create(kind TokenKind, value ByteArray, line LineNumber, column ColumnNumber) returns Token
+	export static function create(kind TokenKind, value String, line LineNumber, column ColumnNumber) returns Token
 		return Self{kind: kind, value: value, line: line, column: column}
 	end 'create'
 
 	export static function eof() returns Token
-		return Self{kind: TokenKind.eof, value: ByteArray.create(), line: 0, column: 0}
+		return Self{kind: TokenKind.eof, value: "", line: 0, column: 0}
 	end 'eof'
 end 'Token'
 
 export typealias TokenArray = Array with Token
 
 // --- Table variables ---
-// Static lookup: byte value → character class (256 entries, O(1) index)
+// Static lookup: byte value -> character class (256 entries, O(1) index)
 let charClassTable = [
 	// 0-15:                                                                       \t                \n                      \r
 	CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.other, CharClass.tab, CharClass.lf, CharClass.other, CharClass.other, CharClass.cr, CharClass.other, CharClass.other,
@@ -272,7 +271,7 @@ let transitionTable = [
 	DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther, DfaState.skipOther
 ]
 
-// actionTable: 33 entries indexed by state → action to perform
+// actionTable: 33 entries indexed by state -> action to perform
 //              start           sawEq          sawBang        sawLt          sawGt          sawSlash       skipWs         skipCr
 let actionTable = [Action.skip, Action.skip, Action.skip, Action.skip, Action.skip, Action.skip, Action.skip, Action.skipCr,
 	//              newline         lParen         rParen         lBrace         rBrace         plus           minus          star           colon
@@ -289,22 +288,22 @@ typealias DfaStateIndex = int(0 to 64)
 function emitFixedToken(stateIndex DfaStateIndex, tokens TokenArray, line LineNumber, column ColumnNumber)
 	// State indices correspond to DfaState enum raw values (int match can't use enum names).
 	match stateIndex 'dispatch'
-		9 then tokens.push(Token.create(TokenKind.leftParen, value: b"(", line: line, column: column))
-		10 then tokens.push(Token.create(TokenKind.rightParen, value: b")", line: line, column: column))
-		11 then tokens.push(Token.create(TokenKind.leftBrace, value: b"\x7B", line: line, column: column))
-		12 then tokens.push(Token.create(TokenKind.rightBrace, value: b"\x7D", line: line, column: column))
-		13 then tokens.push(Token.create(TokenKind.plus, value: b"+", line: line, column: column))
-		14 then tokens.push(Token.create(TokenKind.minus, value: b"-", line: line, column: column))
-		15 then tokens.push(Token.create(TokenKind.star, value: b"*", line: line, column: column))
-		16 then tokens.push(Token.create(TokenKind.colon, value: b":", line: line, column: column))
-		17 then tokens.push(Token.create(TokenKind.equals, value: b"=", line: line, column: column))
-		18 then tokens.push(Token.create(TokenKind.equalsEquals, value: b"==", line: line, column: column))
-		19 then tokens.push(Token.create(TokenKind.bangEquals, value: b"!=", line: line, column: column))
-		20 then tokens.push(Token.create(TokenKind.lessThan, value: b"<", line: line, column: column))
-		21 then tokens.push(Token.create(TokenKind.lessEquals, value: b"<=", line: line, column: column))
-		22 then tokens.push(Token.create(TokenKind.greaterThan, value: b">", line: line, column: column))
-		23 then tokens.push(Token.create(TokenKind.greaterEquals, value: b">=", line: line, column: column))
-		31 then tokens.push(Token.create(TokenKind.slash, value: b"/", line: line, column: column))
+		9 then tokens.push(Token.create(TokenKind.leftParen, value: "(", line: line, column: column))
+		10 then tokens.push(Token.create(TokenKind.rightParen, value: ")", line: line, column: column))
+		11 then tokens.push(Token.create(TokenKind.leftBrace, value: "\{", line: line, column: column))
+		12 then tokens.push(Token.create(TokenKind.rightBrace, value: "\}", line: line, column: column))
+		13 then tokens.push(Token.create(TokenKind.plus, value: "+", line: line, column: column))
+		14 then tokens.push(Token.create(TokenKind.minus, value: "-", line: line, column: column))
+		15 then tokens.push(Token.create(TokenKind.star, value: "*", line: line, column: column))
+		16 then tokens.push(Token.create(TokenKind.colon, value: ":", line: line, column: column))
+		17 then tokens.push(Token.create(TokenKind.equals, value: "=", line: line, column: column))
+		18 then tokens.push(Token.create(TokenKind.equalsEquals, value: "==", line: line, column: column))
+		19 then tokens.push(Token.create(TokenKind.bangEquals, value: "!=", line: line, column: column))
+		20 then tokens.push(Token.create(TokenKind.lessThan, value: "<", line: line, column: column))
+		21 then tokens.push(Token.create(TokenKind.lessEquals, value: "<=", line: line, column: column))
+		22 then tokens.push(Token.create(TokenKind.greaterThan, value: ">", line: line, column: column))
+		23 then tokens.push(Token.create(TokenKind.greaterEquals, value: ">=", line: line, column: column))
+		31 then tokens.push(Token.create(TokenKind.slash, value: "/", line: line, column: column))
 		default panic("emitFixedToken: unhandled state index {stateIndex}")
 	end 'dispatch'
 end 'emitFixedToken'
@@ -312,14 +311,16 @@ end 'emitFixedToken'
 // --- Lexer type ---
 
 type Lexer
-	var source ByteArray
+	var source String
+	var bytes ByteArray
 	var tokens TokenArray
 	var pos CharOffset
 	var line LineNumber
 	var column ColumnNumber
 
-	static function create(source ByteArray) returns Lexer
-		return Self{source: source, tokens: TokenArray.create(), pos: 0, line: 1, column: 1}
+	static function create(source String) returns Lexer
+		let bytes = source.toByteArray()
+		return Self{source: source, bytes: bytes, tokens: TokenArray.create(), pos: 0, line: 1, column: 1}
 	end 'create'
 
 	// --- Navigation helpers ---
@@ -339,16 +340,17 @@ type Lexer
 		column = column - 1
 	end 'retreat'
 
-	function emit(kind TokenKind, value ByteArray, startLine LineNumber, startCol ColumnNumber)
+	function emit(kind TokenKind, value String, startLine LineNumber, startCol ColumnNumber)
 		tokens.push(Token.create(kind, value: value, line: startLine, column: startCol))
 	end 'emit'
 
-	function slice(startPos CharOffset) returns ByteArray
-		return source.slice(startPos, endIndex: pos)
+	// Slice the original source. Since Maxon source is ASCII, byte offsets work directly.
+	function slice(startPos CharOffset) returns String
+		return String.from(bytes.slice(startPos, endIndex: pos))
 	end 'slice'
 
 	function newline(startLine LineNumber, startCol ColumnNumber)
-		tokens.push(Token.create(TokenKind.newline, value: b"", line: startLine, column: startCol))
+		tokens.push(Token.create(TokenKind.newline, value: "", line: startLine, column: startCol))
 		line = line + 1
 		column = 1
 	end 'newline'
@@ -384,10 +386,10 @@ type Lexer
 
 	// Opening quote already consumed by main loop.
 	function scanSingleQuoteString(startLine LineNumber, startCol ColumnNumber)
-		let len = source.count()
+		let len = bytes.count()
 		let strStart = pos
 		while pos < len 'strBody'
-			let sc = try source.get(pos) otherwise 0
+			let sc = try bytes.get(pos) otherwise 0
 			if sc == Ascii.quote 'endStr'
 				break
 			end 'endStr'
@@ -409,10 +411,10 @@ type Lexer
 
 	// Opening double-quote already consumed by main loop.
 	function scanDoubleQuoteString(startLine LineNumber, startCol ColumnNumber)
-		let len = source.count()
+		let len = bytes.count()
 		let dstrStart = pos
 		while pos < len 'dstrBody'
-			let dc = try source.get(pos) otherwise 0
+			let dc = try bytes.get(pos) otherwise 0
 			if dc == Ascii.dquote 'endDstr'
 				break
 			end 'endDstr'
@@ -437,19 +439,19 @@ type Lexer
 
 	// pos points to the first digit (not yet consumed by this scanner).
 	function scanNumber(startLine LineNumber, startCol ColumnNumber)
-		let len = source.count()
+		let len = bytes.count()
 		let numStart = pos
-		let firstByte = try source.get(pos) otherwise 0
+		let firstByte = try bytes.get(pos) otherwise 0
 
 		// Check for 0x, 0b, 0o prefixes
 		if firstByte == Ascii.zero and pos + 1 < len 'checkPrefix'
-			let prefixByte = try source.get(pos + 1) otherwise 0
+			let prefixByte = try bytes.get(pos + 1) otherwise 0
 
 			// Hex literal: 0x or 0X
 			if prefixByte == Ascii.lowerX or prefixByte == Ascii.upperX 'isHex'
 				advanceBy(2)
 				while pos < len 'hexDigits'
-					let hc = try source.get(pos) otherwise 0
+					let hc = try bytes.get(pos) otherwise 0
 					if not isHexDigit(hc) and hc != Ascii.underscore 'endHex'
 						break
 					end 'endHex'
@@ -462,7 +464,7 @@ type Lexer
 				// Binary literal: 0b or 0B
 				advanceBy(2)
 				while pos < len 'binDigits'
-					let bc = try source.get(pos) otherwise 0
+					let bc = try bytes.get(pos) otherwise 0
 					if not isBinaryDigit(bc) and bc != Ascii.underscore 'endBin'
 						break
 					end 'endBin'
@@ -474,7 +476,7 @@ type Lexer
 			end 'isBin' else if prefixByte == Ascii.lowerO or prefixByte == Ascii.upperO 'isOct'
 				advanceBy(2)
 				while pos < len 'octDigits'
-					let oc = try source.get(pos) otherwise 0
+					let oc = try bytes.get(pos) otherwise 0
 					if not isOctalDigit(oc) and oc != Ascii.underscore 'endOct'
 						break
 					end 'endOct'
@@ -488,7 +490,7 @@ type Lexer
 
 		// Decimal digits (with underscore separators)
 		while pos < len 'digits'
-			let dc = try source.get(pos) otherwise 0
+			let dc = try bytes.get(pos) otherwise 0
 			if not isDigit(dc) and dc != Ascii.underscore 'endNum'
 				break
 			end 'endNum'
@@ -498,12 +500,12 @@ type Lexer
 		// Check for decimal point (float literal)
 		var isFloat = false
 		if pos < len 'checkDot'
-			let dotCh = try source.get(pos) otherwise 0
+			let dotCh = try bytes.get(pos) otherwise 0
 			if dotCh == Ascii.dot 'hasDot'
 				isFloat = true
 				advance()
 				while pos < len 'fracDigits'
-					let fc = try source.get(pos) otherwise 0
+					let fc = try bytes.get(pos) otherwise 0
 					if not isDigit(fc) and fc != Ascii.underscore 'endFrac'
 						break
 					end 'endFrac'
@@ -514,20 +516,20 @@ type Lexer
 
 		// Check for scientific notation exponent (e/E)
 		if pos < len 'checkExp'
-			let expCh = try source.get(pos) otherwise 0
+			let expCh = try bytes.get(pos) otherwise 0
 			if expCh == Ascii.lowerE or expCh == Ascii.upperE 'hasExp'
 				isFloat = true
 				advance()
 				// Optional sign
 				if pos < len 'checkSign'
-					let signCh = try source.get(pos) otherwise 0
+					let signCh = try bytes.get(pos) otherwise 0
 					if signCh == Ascii.plus or signCh == Ascii.minus 'hasSign'
 						advance()
 					end 'hasSign'
 				end 'checkSign'
 				// Exponent digits
 				while pos < len 'expDigits'
-					let ec = try source.get(pos) otherwise 0
+					let ec = try bytes.get(pos) otherwise 0
 					if not isDigit(ec) 'endExp'
 						break
 					end 'endExp'
@@ -546,10 +548,10 @@ type Lexer
 
 	// pos points to the first alpha/underscore (not yet consumed by this scanner).
 	function scanIdentifier(startLine LineNumber, startCol ColumnNumber)
-		let len = source.count()
+		let len = bytes.count()
 		let startPos = pos
 		while pos < len 'identBody'
-			let ic = try source.get(pos) otherwise 0
+			let ic = try bytes.get(pos) otherwise 0
 			if not isAlphaNum(ic) 'endIdent'
 				break
 			end 'endIdent'
@@ -563,9 +565,9 @@ type Lexer
 	// Both '/' characters already consumed. Advances to (but not past) the newline.
 	// Only increments pos, not column — column will be reset by the newline handler.
 	function scanComment()
-		let len = source.count()
+		let len = bytes.count()
 		while pos < len 'skipComment'
-			let cc = try source.get(pos) otherwise 0
+			let cc = try bytes.get(pos) otherwise 0
 			if cc == Ascii.lf 'endComment'
 				break
 			end 'endComment'
@@ -576,12 +578,12 @@ type Lexer
 	// Both '/' and '*' already consumed. Scans until '*/' is found.
 	// Tracks line/column across newlines within the comment.
 	function scanBlockComment(startLine LineNumber, startCol ColumnNumber)
-		let len = source.count()
+		let len = bytes.count()
 		while pos < len 'skipBlockComment'
-			let cc = try source.get(pos) otherwise 0
+			let cc = try bytes.get(pos) otherwise 0
 			if cc == Ascii.star 'checkEnd'
 				if pos + 1 < len 'hasNext'
-					let next = try source.get(pos + 1) otherwise 0
+					let next = try bytes.get(pos + 1) otherwise 0
 					if next == Ascii.slash 'foundEnd'
 						pos = pos + 2
 						column = column + 2
@@ -605,10 +607,10 @@ type Lexer
 	function run() returns TokenArray
 		logDebug(LogCategory.lexer, message: () gives "Starting lexer")
 
-		let len = source.count()
+		let len = bytes.count()
 
 		while pos < len 'scan'
-			let ch = try source.get(pos) otherwise 'readCh'
+			let ch = try bytes.get(pos) otherwise 'readCh'
 				panic("Lexer: source read at pos {pos} failed (len={len})")
 			end 'readCh'
 			let startLine = line
@@ -629,7 +631,7 @@ type Lexer
 			if state >= DfaState.sawEq and state <= DfaState.sawSlash 'live'
 				var nextClass = CharClass.eof
 				if pos < len 'hasNext'
-					let nextCh = try source.get(pos) otherwise panic("Lexer: source read at pos {pos} failed (len={len})")
+					let nextCh = try bytes.get(pos) otherwise panic("Lexer: source read at pos {pos} failed (len={len})")
 					nextClass = try charClassTable.get(nextCh) otherwise panic("Lexer: charClassTable lookup failed for byte {nextCh}")
 				end 'hasNext'
 				state = try transitionTable.get(state * CharClass.COUNT + nextClass) otherwise panic("Lexer: transitionTable lookup failed from state {state} for charClass {nextClass}")
@@ -655,14 +657,14 @@ type Lexer
 			continue
 		end 'scan'
 
-		emit(TokenKind.eof, value: b"", startLine: line, startCol: column)
+		emit(TokenKind.eof, value: "", startLine: line, startCol: column)
 		return tokens
 	end 'run'
 end 'Lexer'
 
 // --- Public API wrapper ---
 
-export function tokenize(source ByteArray) returns TokenArray
+export function tokenize(source String) returns TokenArray
 	var lexer = Lexer.create(source)
 	return lexer.run()
 end 'tokenize'
@@ -694,68 +696,68 @@ export type KeywordInfo
 end 'KeywordInfo'
 
 var keywordMap = [
-	b"if": KeywordInfo.create(TokenKind.if, helpText: "Conditional statement. Executes code if the condition is true.", canHaveBlockLabel: true),
-	b"else": KeywordInfo.create(TokenKind.else, helpText: "Alternative branch in an if statement. Executed when the condition is false.", canHaveBlockLabel: true),
-	b"while": KeywordInfo.create(TokenKind.while, helpText: "Loop that continues while the condition is true.", canHaveBlockLabel: true),
-	b"for": KeywordInfo.create(TokenKind.for, helpText: "Loop that iterates over a range or collection.", canHaveBlockLabel: true),
-	b"in": KeywordInfo.create(TokenKind.in, helpText: "Used in for loops to specify the range or collection to iterate over.", canHaveBlockLabel: false),
-	b"break": KeywordInfo.create(TokenKind.break, helpText: "Exits the current loop or match statement.", canHaveBlockLabel: false),
-	b"continue": KeywordInfo.create(TokenKind.continue, helpText: "Skips the rest of the current loop iteration and continues with the next iteration.", canHaveBlockLabel: false),
-	b"return": KeywordInfo.create(TokenKind.return, helpText: "Returns a value from a function and exits the function.", canHaveBlockLabel: false),
-	b"end": KeywordInfo.create(TokenKind.end, helpText: "Ends a block (function, type, if, for, while, etc.). Must be followed by the block's label in quotes.", canHaveBlockLabel: true),
-	b"match": KeywordInfo.create(TokenKind.match, helpText: "Pattern matching statement for enums and values.", canHaveBlockLabel: false),
-	b"then": KeywordInfo.create(TokenKind.then, helpText: "Used in match expressions to separate pattern from result.", canHaveBlockLabel: true),
-	b"fallthrough": KeywordInfo.create(TokenKind.fallthrough, helpText: "Falls through to the next case in a match statement.", canHaveBlockLabel: false),
-	b"default": KeywordInfo.create(TokenKind.default, helpText: "Default case in a match statement.", canHaveBlockLabel: false),
-	b"upto": KeywordInfo.create(TokenKind.upto, helpText: "Exclusive upper bound in range patterns.", canHaveBlockLabel: false),
-	b"gives": KeywordInfo.create(TokenKind.gives, helpText: "Used in iterator expressions.", canHaveBlockLabel: false),
-	b"try": KeywordInfo.create(TokenKind.try, helpText: "Attempts an operation that may throw an error.", canHaveBlockLabel: false),
-	b"otherwise": KeywordInfo.create(TokenKind.otherwise, helpText: "Provides a fallback for try expressions when an error occurs.", canHaveBlockLabel: true),
-	b"throw": KeywordInfo.create(TokenKind.throw, helpText: "Throws an error that can be caught by a try-catch block.", canHaveBlockLabel: false),
-	b"panic": KeywordInfo.create(TokenKind.panic, helpText: "Terminates the program with an error message and stack trace.", canHaveBlockLabel: false),
-	b"ignore": KeywordInfo.create(TokenKind.ignore, helpText: "Used with otherwise to silently ignore errors.", canHaveBlockLabel: false),
-	b"function": KeywordInfo.create(TokenKind.function, helpText: "Declares a function. Functions contain executable code and can return values.", canHaveBlockLabel: false),
-	b"returns": KeywordInfo.create(TokenKind.returns, helpText: "Specifies the return type of a function.", canHaveBlockLabel: false),
-	b"let": KeywordInfo.create(TokenKind.let, helpText: "Declares an immutable variable. The value cannot be changed after initialization.", canHaveBlockLabel: false),
-	b"var": KeywordInfo.create(TokenKind.var, helpText: "Declares a mutable variable. The value can be changed after initialization.", canHaveBlockLabel: false),
-	b"type": KeywordInfo.create(TokenKind.type, helpText: "Declares a struct type with fields and methods.", canHaveBlockLabel: false),
-	b"enum": KeywordInfo.create(TokenKind.enum, helpText: "Declares an enum type with a fixed set of named cases, optional associated values, and methods.", canHaveBlockLabel: false),
-	b"typealias": KeywordInfo.create(TokenKind.typealias, helpText: "Declares a type alias for an existing type or associated type in an interface.", canHaveBlockLabel: false),
-	b"export": KeywordInfo.create(TokenKind.export, helpText: "Makes a function or type visible to other modules.", canHaveBlockLabel: false),
-	b"static": KeywordInfo.create(TokenKind.static, helpText: "Declares a static method that doesn't require an instance.", canHaveBlockLabel: false),
-	b"interface": KeywordInfo.create(TokenKind.interface, helpText: "Declares an interface that types can conform to.", canHaveBlockLabel: false),
-	b"extension": KeywordInfo.create(TokenKind.extension, helpText: "Defines extension methods for an interface.", canHaveBlockLabel: false),
-	b"extends": KeywordInfo.create(TokenKind.extends, helpText: "Indicates interface inheritance.", canHaveBlockLabel: false),
-	b"uses": KeywordInfo.create(TokenKind.uses, helpText: "Declares associated types in an interface.", canHaveBlockLabel: false),
-	b"with": KeywordInfo.create(TokenKind.with, helpText: "Specifies interface conformance requirements.", canHaveBlockLabel: false),
-	b"where": KeywordInfo.create(TokenKind.where, helpText: "Constrains type parameters to require interface conformance.", canHaveBlockLabel: false),
-	b"self": KeywordInfo.create(TokenKind.self, helpText: "Refers to the current instance in a method.", canHaveBlockLabel: false),
-	b"Self": KeywordInfo.create(TokenKind.selfType, helpText: "Refers to the current type in a method signature.", canHaveBlockLabel: false),
-	b"throws": KeywordInfo.create(TokenKind.throws, helpText: "Indicates that a function may throw an error.", canHaveBlockLabel: false),
-	b"from": KeywordInfo.create(TokenKind.from, helpText: "Used in range expressions (from X to Y).", canHaveBlockLabel: false),
-	b"to": KeywordInfo.create(TokenKind.to, helpText: "Used in range expressions (from X to Y).", canHaveBlockLabel: false),
-	b"mod": KeywordInfo.create(TokenKind.mod, helpText: "Modulo operator. Returns the remainder of integer division.", canHaveBlockLabel: false),
-	b"and": KeywordInfo.create(TokenKind.and, helpText: "AND operator. Logical AND on bools, bitwise AND on integers.", canHaveBlockLabel: false),
-	b"or": KeywordInfo.create(TokenKind.or, helpText: "OR operator. Logical OR on bools, bitwise OR on integers.", canHaveBlockLabel: true),
-	b"not": KeywordInfo.create(TokenKind.not, helpText: "NOT operator. Logical NOT on bools, bitwise NOT on integers.", canHaveBlockLabel: false),
-	b"xor": KeywordInfo.create(TokenKind.xor, helpText: "XOR operator. Logical XOR on bools, bitwise XOR on integers.", canHaveBlockLabel: false),
-	b"shl": KeywordInfo.create(TokenKind.shl, helpText: "Shift left operator. Shifts integer bits to the left.", canHaveBlockLabel: false),
-	b"shr": KeywordInfo.create(TokenKind.shr, helpText: "Shift right operator. Shifts integer bits to the right.", canHaveBlockLabel: false),
-	b"as": KeywordInfo.create(TokenKind.as, helpText: "Type cast operator. Converts a value to a different type.", canHaveBlockLabel: false),
-	b"is": KeywordInfo.create(TokenKind.is, helpText: "Reference identity operator. Returns true if two references point to the same object.", canHaveBlockLabel: false),
-	b"implements": KeywordInfo.create(TokenKind.implements, helpText: "Specifies that a type conforms to an interface.", canHaveBlockLabel: false),
-	b"true": KeywordInfo.create(TokenKind.true, helpText: "Boolean literal representing true.", canHaveBlockLabel: false),
-	b"false": KeywordInfo.create(TokenKind.false, helpText: "Boolean literal representing false.", canHaveBlockLabel: false),
-	b"int": KeywordInfo.create(TokenKind.int, helpText: "Primitive integer type (64-bit signed).", canHaveBlockLabel: false),
-	b"float": KeywordInfo.create(TokenKind.float, helpText: "Primitive floating-point type (64-bit double precision).", canHaveBlockLabel: false),
-	b"bool": KeywordInfo.create(TokenKind.bool, helpText: "Primitive boolean type (true or false).", canHaveBlockLabel: false),
-	b"byte": KeywordInfo.create(TokenKind.byte, helpText: "Primitive byte type (8-bit unsigned integer).", canHaveBlockLabel: false),
-	b"array": KeywordInfo.create(TokenKind.array, helpText: "Used in array type declarations (array of int).", canHaveBlockLabel: false),
-	b"of": KeywordInfo.create(TokenKind.of, helpText: "Used in array type declarations (array of int).", canHaveBlockLabel: false),
-	b"print": KeywordInfo.create(TokenKind.print, helpText: "Built-in function for printing to the console. Not a real keyword.", canHaveBlockLabel: false)
+	"if": KeywordInfo.create(TokenKind.if, helpText: "Conditional statement. Executes code if the condition is true.", canHaveBlockLabel: true),
+	"else": KeywordInfo.create(TokenKind.else, helpText: "Alternative branch in an if statement. Executed when the condition is false.", canHaveBlockLabel: true),
+	"while": KeywordInfo.create(TokenKind.while, helpText: "Loop that continues while the condition is true.", canHaveBlockLabel: true),
+	"for": KeywordInfo.create(TokenKind.for, helpText: "Loop that iterates over a range or collection.", canHaveBlockLabel: true),
+	"in": KeywordInfo.create(TokenKind.in, helpText: "Used in for loops to specify the range or collection to iterate over.", canHaveBlockLabel: false),
+	"break": KeywordInfo.create(TokenKind.break, helpText: "Exits the current loop or match statement.", canHaveBlockLabel: false),
+	"continue": KeywordInfo.create(TokenKind.continue, helpText: "Skips the rest of the current loop iteration and continues with the next iteration.", canHaveBlockLabel: false),
+	"return": KeywordInfo.create(TokenKind.return, helpText: "Returns a value from a function and exits the function.", canHaveBlockLabel: false),
+	"end": KeywordInfo.create(TokenKind.end, helpText: "Ends a block (function, type, if, for, while, etc.). Must be followed by the block's label in quotes.", canHaveBlockLabel: true),
+	"match": KeywordInfo.create(TokenKind.match, helpText: "Pattern matching statement for enums and values.", canHaveBlockLabel: false),
+	"then": KeywordInfo.create(TokenKind.then, helpText: "Used in match expressions to separate pattern from result.", canHaveBlockLabel: true),
+	"fallthrough": KeywordInfo.create(TokenKind.fallthrough, helpText: "Falls through to the next case in a match statement.", canHaveBlockLabel: false),
+	"default": KeywordInfo.create(TokenKind.default, helpText: "Default case in a match statement.", canHaveBlockLabel: false),
+	"upto": KeywordInfo.create(TokenKind.upto, helpText: "Exclusive upper bound in range patterns.", canHaveBlockLabel: false),
+	"gives": KeywordInfo.create(TokenKind.gives, helpText: "Used in iterator expressions.", canHaveBlockLabel: false),
+	"try": KeywordInfo.create(TokenKind.try, helpText: "Attempts an operation that may throw an error.", canHaveBlockLabel: false),
+	"otherwise": KeywordInfo.create(TokenKind.otherwise, helpText: "Provides a fallback for try expressions when an error occurs.", canHaveBlockLabel: true),
+	"throw": KeywordInfo.create(TokenKind.throw, helpText: "Throws an error that can be caught by a try-catch block.", canHaveBlockLabel: false),
+	"panic": KeywordInfo.create(TokenKind.panic, helpText: "Terminates the program with an error message and stack trace.", canHaveBlockLabel: false),
+	"ignore": KeywordInfo.create(TokenKind.ignore, helpText: "Used with otherwise to silently ignore errors.", canHaveBlockLabel: false),
+	"function": KeywordInfo.create(TokenKind.function, helpText: "Declares a function. Functions contain executable code and can return values.", canHaveBlockLabel: false),
+	"returns": KeywordInfo.create(TokenKind.returns, helpText: "Specifies the return type of a function.", canHaveBlockLabel: false),
+	"let": KeywordInfo.create(TokenKind.let, helpText: "Declares an immutable variable. The value cannot be changed after initialization.", canHaveBlockLabel: false),
+	"var": KeywordInfo.create(TokenKind.var, helpText: "Declares a mutable variable. The value can be changed after initialization.", canHaveBlockLabel: false),
+	"type": KeywordInfo.create(TokenKind.type, helpText: "Declares a struct type with fields and methods.", canHaveBlockLabel: false),
+	"enum": KeywordInfo.create(TokenKind.enum, helpText: "Declares an enum type with a fixed set of named cases, optional associated values, and methods.", canHaveBlockLabel: false),
+	"typealias": KeywordInfo.create(TokenKind.typealias, helpText: "Declares a type alias for an existing type or associated type in an interface.", canHaveBlockLabel: false),
+	"export": KeywordInfo.create(TokenKind.export, helpText: "Makes a function or type visible to other modules.", canHaveBlockLabel: false),
+	"static": KeywordInfo.create(TokenKind.static, helpText: "Declares a static method that doesn't require an instance.", canHaveBlockLabel: false),
+	"interface": KeywordInfo.create(TokenKind.interface, helpText: "Declares an interface that types can conform to.", canHaveBlockLabel: false),
+	"extension": KeywordInfo.create(TokenKind.extension, helpText: "Defines extension methods for an interface.", canHaveBlockLabel: false),
+	"extends": KeywordInfo.create(TokenKind.extends, helpText: "Indicates interface inheritance.", canHaveBlockLabel: false),
+	"uses": KeywordInfo.create(TokenKind.uses, helpText: "Declares associated types in an interface.", canHaveBlockLabel: false),
+	"with": KeywordInfo.create(TokenKind.with, helpText: "Specifies interface conformance requirements.", canHaveBlockLabel: false),
+	"where": KeywordInfo.create(TokenKind.where, helpText: "Constrains type parameters to require interface conformance.", canHaveBlockLabel: false),
+	"self": KeywordInfo.create(TokenKind.self, helpText: "Refers to the current instance in a method.", canHaveBlockLabel: false),
+	"Self": KeywordInfo.create(TokenKind.selfType, helpText: "Refers to the current type in a method signature.", canHaveBlockLabel: false),
+	"throws": KeywordInfo.create(TokenKind.throws, helpText: "Indicates that a function may throw an error.", canHaveBlockLabel: false),
+	"from": KeywordInfo.create(TokenKind.from, helpText: "Used in range expressions (from X to Y).", canHaveBlockLabel: false),
+	"to": KeywordInfo.create(TokenKind.to, helpText: "Used in range expressions (from X to Y).", canHaveBlockLabel: false),
+	"mod": KeywordInfo.create(TokenKind.mod, helpText: "Modulo operator. Returns the remainder of integer division.", canHaveBlockLabel: false),
+	"and": KeywordInfo.create(TokenKind.and, helpText: "AND operator. Logical AND on bools, bitwise AND on integers.", canHaveBlockLabel: false),
+	"or": KeywordInfo.create(TokenKind.or, helpText: "OR operator. Logical OR on bools, bitwise OR on integers.", canHaveBlockLabel: true),
+	"not": KeywordInfo.create(TokenKind.not, helpText: "NOT operator. Logical NOT on bools, bitwise NOT on integers.", canHaveBlockLabel: false),
+	"xor": KeywordInfo.create(TokenKind.xor, helpText: "XOR operator. Logical XOR on bools, bitwise XOR on integers.", canHaveBlockLabel: false),
+	"shl": KeywordInfo.create(TokenKind.shl, helpText: "Shift left operator. Shifts integer bits to the left.", canHaveBlockLabel: false),
+	"shr": KeywordInfo.create(TokenKind.shr, helpText: "Shift right operator. Shifts integer bits to the right.", canHaveBlockLabel: false),
+	"as": KeywordInfo.create(TokenKind.as, helpText: "Type cast operator. Converts a value to a different type.", canHaveBlockLabel: false),
+	"is": KeywordInfo.create(TokenKind.is, helpText: "Reference identity operator. Returns true if two references point to the same object.", canHaveBlockLabel: false),
+	"implements": KeywordInfo.create(TokenKind.implements, helpText: "Specifies that a type conforms to an interface.", canHaveBlockLabel: false),
+	"true": KeywordInfo.create(TokenKind.true, helpText: "Boolean literal representing true.", canHaveBlockLabel: false),
+	"false": KeywordInfo.create(TokenKind.false, helpText: "Boolean literal representing false.", canHaveBlockLabel: false),
+	"int": KeywordInfo.create(TokenKind.int, helpText: "Primitive integer type (64-bit signed).", canHaveBlockLabel: false),
+	"float": KeywordInfo.create(TokenKind.float, helpText: "Primitive floating-point type (64-bit double precision).", canHaveBlockLabel: false),
+	"bool": KeywordInfo.create(TokenKind.bool, helpText: "Primitive boolean type (true or false).", canHaveBlockLabel: false),
+	"byte": KeywordInfo.create(TokenKind.byte, helpText: "Primitive byte type (8-bit unsigned integer).", canHaveBlockLabel: false),
+	"array": KeywordInfo.create(TokenKind.array, helpText: "Used in array type declarations (array of int).", canHaveBlockLabel: false),
+	"of": KeywordInfo.create(TokenKind.of, helpText: "Used in array type declarations (array of int).", canHaveBlockLabel: false),
+	"print": KeywordInfo.create(TokenKind.print, helpText: "Built-in function for printing to the console. Not a real keyword.", canHaveBlockLabel: false)
 ]
 
-function classifyIdentifier(name ByteArray) returns TokenKind
+function classifyIdentifier(name String) returns TokenKind
 	let info = try keywordMap.get(key: name) otherwise 'notFound'
 		return TokenKind.identifier
 	end 'notFound'

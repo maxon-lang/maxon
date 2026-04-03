@@ -59,7 +59,7 @@ end 'rmEmitGprToFpArm64'
 
 // --- Call/stack emission ---
 
-export function rmEmitCallDirectArm64(dstBlock MlirBlock, callee ByteArray)
+export function rmEmitCallDirectArm64(dstBlock MlirBlock, callee String)
 	dstBlock.ops.push(MlirOp.arm64(Arm64Op.branchLink(callee)))
 end 'rmEmitCallDirectArm64'
 
@@ -397,7 +397,7 @@ export function isArm64DivergingBlock(block MlirBlock) returns bool
 	for op in block.ops 'checkOps'
 		match op 'checkCall'
 			arm64(a64Op) then match a64Op 'checkArm64Call'
-				branchLink(target) then if target == b"mrt_panic" 'isPanic'
+				branchLink(target) then if target == "mrt_panic" 'isPanic'
 				return true
 			end 'isPanic'
 			prologue to branch then break 'checkArm64Call'
@@ -657,12 +657,12 @@ function aa64NullSafeLoad(state RegState, dest Arm64VReg, baseReg Arm64VReg, off
 	dstBlock.ops.push(MlirOp.arm64(Arm64Op.nullSafeLoad(arm64PhysFromOrd(d), arm64PhysFromOrd(b), offset)))
 end 'aa64NullSafeLoad'
 
-function aa64GlobalLoad(state RegState, dest Arm64VReg, name ByteArray, size MachineWord, dstBlock MlirBlock)
+function aa64GlobalLoad(state RegState, dest Arm64VReg, name String, size MachineWord, dstBlock MlirBlock)
 	let d = arm64ResolveGprDef(state, vreg: dest, dstBlock: dstBlock, protect1: RM_NONE, protect2: RM_NONE)
 	dstBlock.ops.push(MlirOp.arm64(Arm64Op.globalLoad(arm64PhysFromOrd(d), name, size)))
 end 'aa64GlobalLoad'
 
-function aa64GlobalStore(state RegState, name ByteArray, src Arm64VReg, size MachineWord, dstBlock MlirBlock)
+function aa64GlobalStore(state RegState, name String, src Arm64VReg, size MachineWord, dstBlock MlirBlock)
 	let s = arm64ResolveGprUse(state, vreg: src, dstBlock: dstBlock, protect1: RM_NONE, protect2: RM_NONE)
 	dstBlock.ops.push(MlirOp.arm64(Arm64Op.globalStore(name, arm64PhysFromOrd(s), size)))
 end 'aa64GlobalStore'
@@ -672,12 +672,12 @@ function aa64LeaFromStack(state RegState, dest Arm64VReg, stackOffset MachineWor
 	dstBlock.ops.push(MlirOp.arm64(Arm64Op.leaFromStack(arm64PhysFromOrd(d), stackOffset)))
 end 'aa64LeaFromStack'
 
-function aa64LeaRdata(state RegState, dest Arm64VReg, rdataLabel ByteArray, dstBlock MlirBlock)
+function aa64LeaRdata(state RegState, dest Arm64VReg, rdataLabel String, dstBlock MlirBlock)
 	let d = arm64ResolveGprDef(state, vreg: dest, dstBlock: dstBlock, protect1: RM_NONE, protect2: RM_NONE)
 	dstBlock.ops.push(MlirOp.arm64(Arm64Op.leaRdata(arm64PhysFromOrd(d), rdataLabel)))
 end 'aa64LeaRdata'
 
-function aa64LeaFuncAddr(state RegState, dest Arm64VReg, funcName ByteArray, dstBlock MlirBlock)
+function aa64LeaFuncAddr(state RegState, dest Arm64VReg, funcName String, dstBlock MlirBlock)
 	let d = arm64ResolveGprDef(state, vreg: dest, dstBlock: dstBlock, protect1: RM_NONE, protect2: RM_NONE)
 	dstBlock.ops.push(MlirOp.arm64(Arm64Op.leaFuncAddr(arm64PhysFromOrd(d), funcName)))
 end 'aa64LeaFuncAddr'
@@ -701,7 +701,7 @@ function aa64ReloadFpFromStack(state RegState, dest Arm64FpVReg, offset MachineW
 	dstBlock.ops.push(MlirOp.arm64(Arm64Op.reloadFpFromStack(arm64FpPhysFromOrd(d), offset, precision)))
 end 'aa64ReloadFpFromStack'
 
-function aa64FpLoadRdata(state RegState, dest Arm64FpVReg, rdataLabel ByteArray, precision FloatPrecision, dstBlock MlirBlock)
+function aa64FpLoadRdata(state RegState, dest Arm64FpVReg, rdataLabel String, precision FloatPrecision, dstBlock MlirBlock)
 	let d = arm64ResolveFpDef(state, vreg: dest, dstBlock: dstBlock)
 	dstBlock.ops.push(MlirOp.arm64(Arm64Op.fpLoadRdata(arm64FpPhysFromOrd(d), rdataLabel, precision)))
 end 'aa64FpLoadRdata'
@@ -793,12 +793,12 @@ function aa64FpLoadIndirect(state RegState, dest Arm64FpVReg, baseReg Arm64VReg,
 	dstBlock.ops.push(MlirOp.arm64(Arm64Op.fpLoadIndirect(arm64FpPhysFromOrd(d), arm64PhysFromOrd(b), offset, precision)))
 end 'aa64FpLoadIndirect'
 
-function aa64GlobalLoadFloat(state RegState, dest Arm64FpVReg, name ByteArray, precision FloatPrecision, dstBlock MlirBlock)
+function aa64GlobalLoadFloat(state RegState, dest Arm64FpVReg, name String, precision FloatPrecision, dstBlock MlirBlock)
 	let d = arm64ResolveFpDef(state, vreg: dest, dstBlock: dstBlock)
 	dstBlock.ops.push(MlirOp.arm64(Arm64Op.globalLoadFloat(arm64FpPhysFromOrd(d), name, precision)))
 end 'aa64GlobalLoadFloat'
 
-function aa64GlobalStoreFloat(state RegState, name ByteArray, src Arm64FpVReg, precision FloatPrecision, dstBlock MlirBlock)
+function aa64GlobalStoreFloat(state RegState, name String, src Arm64FpVReg, precision FloatPrecision, dstBlock MlirBlock)
 	let s = arm64ResolveFpUse(state, vreg: src, dstBlock: dstBlock)
 	dstBlock.ops.push(MlirOp.arm64(Arm64Op.globalStoreFloat(name, arm64FpPhysFromOrd(s), precision)))
 end 'aa64GlobalStoreFloat'

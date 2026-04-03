@@ -830,7 +830,7 @@ function emitX64Start(code ByteArray, osDesc OsDescriptor, relocations Relocatio
 	// call main (relative call, patched by label resolution)
 	code.push(0xE8)
 	let mainCallFixupOffset = code.count()
-	var mainName = b"main"
+	let mainName = "main"
 	callFixups.push(CallFixup.create(mainCallFixupOffset, targetName: mainName))
 	code.append(b"\x00\x00\x00\x00")
 
@@ -977,15 +977,15 @@ end 'emitLoadRegRbpOffset'
 // --- Call fixup resolution (inter-function) ---
 
 // Emit call rel32 placeholder -- resolved after all functions are emitted.
-function emitCallFixup(code ByteArray, callFixups CallFixupArray, target ByteArray)
-	logTrace(LogCategory.codegen, message: () gives "Call fixup to '{String.from(target)}' at offset {code.count()}")
+function emitCallFixup(code ByteArray, callFixups CallFixupArray, target String)
+	logTrace(LogCategory.codegen, message: () gives "Call fixup to '{target}' at offset {code.count()}")
 	code.push(0xE8)
 	let fixupOffset = code.count()
 	callFixups.push(CallFixup.create(fixupOffset, targetName: target))
 	code.append(b"\x00\x00\x00\x00")
 end 'emitCallFixup'
 
-function resolveCallFixups(code ByteArray, labelNames ByteArrayArray, labelOffsets CodeOffsetArray, callFixups CallFixupArray)
+function resolveCallFixups(code ByteArray, labelNames StringArray, labelOffsets CodeOffsetArray, callFixups CallFixupArray)
 	logTrace(LogCategory.codegen, message: () gives "Resolving {callFixups.count()} call fixups")
 	for fixup in callFixups 'resolve'
 		let targetOffset = lookupLabel(labelNames, labelOffsets: labelOffsets, name: fixup.targetName)
@@ -995,18 +995,18 @@ function resolveCallFixups(code ByteArray, labelNames ByteArrayArray, labelOffse
 	end 'resolve'
 end 'resolveCallFixups'
 
-function lookupLabel(labelNames ByteArrayArray, labelOffsets CodeOffsetArray, name ByteArray) returns CodeOffset
+function lookupLabel(labelNames StringArray, labelOffsets CodeOffsetArray, name String) returns CodeOffset
 	for(i, labelName) in labelNames.enumerated() 'search'
 		if labelName == name 'found'
 			return try labelOffsets.get(i) otherwise 0
 		end 'found'
 	end 'search'
-	logError(LogCategory.codegen, message: () gives "Unresolved label '{String.from(name)}' -- call will jump to offset 0")
+	logError(LogCategory.codegen, message: () gives "Unresolved label '{name}' -- call will jump to offset 0")
 	return 0
 end 'lookupLabel'
 
-function recordLabel(labelNames ByteArrayArray, labelOffsets CodeOffsetArray, name ByteArray, offset CodeOffset)
-	logTrace(LogCategory.codegen, message: () gives "Label '{String.from(name)}' at code offset {offset}")
+function recordLabel(labelNames StringArray, labelOffsets CodeOffsetArray, name String, offset CodeOffset)
+	logTrace(LogCategory.codegen, message: () gives "Label '{name}' at code offset {offset}")
 	labelNames.push(name)
 	labelOffsets.push(offset)
 end 'recordLabel'
@@ -1026,7 +1026,7 @@ export function emitX64(module MlirModule, target Target, globalData GlobalDataT
 	registerPanicStrings(globalData)
 
 	// Function label tables for inter-function call resolution
-	var funcLabelNames = ByteArrayArray.create()
+	var funcLabelNames = StringArray.create()
 	var funcLabelOffsets = CodeOffsetArray.create()
 
 	// Emit all functions (runtime functions like mrt_start, mrt_write_stdout, mrt_i64_to_string
@@ -1072,7 +1072,7 @@ export function emitX64(module MlirModule, target Target, globalData GlobalDataT
 	resolveCallFixups(code, labelNames: funcLabelNames, labelOffsets: funcLabelOffsets, callFixups: callFixups)
 
 	// mrt_start must be at offset 0 -- look up its offset for the main call fixup
-	let startOffset = lookupLabel(funcLabelNames, labelOffsets: funcLabelOffsets, name: b"mrt_start")
+	let startOffset = lookupLabel(funcLabelNames, labelOffsets: funcLabelOffsets, name: "mrt_start")
 
 	// Serialize global data into rdata section and resolve relocations
 	var rdataOffsetMap = RdataOffsetMap.create()
@@ -1260,7 +1260,7 @@ end 'emitLeaFromStackOp'
 // --- LEA RIP-relative: lea dest, [rip+label] ---
 // Emits a RIP-relative LEA to any destination register, with a placeholder
 // disp32 that is patched by the binary writer after rdata section layout.
-function emitLeaRipRelOp(code ByteArray, dest X64Register, rdataLabel ByteArray, rdataRelocs RdataRelocationArray)
+function emitLeaRipRelOp(code ByteArray, dest X64Register, rdataLabel String, rdataRelocs RdataRelocationArray)
 	// lea dest, [rip + disp32]
 	emitRexWPrefix(code, regField: dest, rmField: X64Register.rbp)
 	code.push(0x8D)
@@ -1273,7 +1273,7 @@ function emitLeaRipRelOp(code ByteArray, dest X64Register, rdataLabel ByteArray,
 end 'emitLeaRipRelOp'
 
 // --- LEA func addr: lea dest, [rip+funcName] ---
-function emitLeaFuncAddrOp(code ByteArray, dest X64Register, callFixups CallFixupArray, rdataRelocs RdataRelocationArray, funcName ByteArray)
+function emitLeaFuncAddrOp(code ByteArray, dest X64Register, callFixups CallFixupArray, rdataRelocs RdataRelocationArray, funcName String)
 	emitRexWPrefix(code, regField: dest, rmField: X64Register.rbp)
 	code.push(0x8D)
 	let destBits = regCode(dest)
@@ -1282,8 +1282,8 @@ function emitLeaFuncAddrOp(code ByteArray, dest X64Register, callFixups CallFixu
 	let fixupOffset = code.count()
 	writeDword(code, value: 0)
 	// __symtable lives in a separate .symtab section — use an rdata relocation
-	if funcName == b"__symtable" 'isSymtable'
-		rdataRelocs.push(RdataRelocation.create(fixupOffset, rdataLabel: b"__symtable", kind: RdataRelocKind.symdataRipRelDisp32))
+	if funcName == "__symtable" 'isSymtable'
+		rdataRelocs.push(RdataRelocation.create(fixupOffset, rdataLabel: "__symtable", kind: RdataRelocKind.symdataRipRelDisp32))
 	end 'isSymtable' else 'isFunc'
 		callFixups.push(CallFixup.create(fixupOffset, targetName: funcName))
 	end 'isFunc'
@@ -1335,18 +1335,18 @@ function emitRepStosqOp(code ByteArray)
 end 'emitRepStosqOp'
 
 // --- Global load/store ---
-function emitGlobalLoadOp(code ByteArray, dest X64Register, name ByteArray, size MachineWord)
-	panic("emitGlobalLoadOp: global data offset resolution not yet implemented (nameLen={name.count()}, dest={dest}, size={size}, codeLen={code.count()})")
+function emitGlobalLoadOp(code ByteArray, dest X64Register, name String, size MachineWord)
+	panic("emitGlobalLoadOp: global data offset resolution not yet implemented (name={name}, dest={dest}, size={size}, codeLen={code.count()})")
 end 'emitGlobalLoadOp'
 
-function emitGlobalStoreOp(code ByteArray, src X64Register, name ByteArray, size MachineWord)
-	panic("emitGlobalStoreOp: global data offset resolution not yet implemented (nameLen={name.count()}, src={src}, size={size}, codeLen={code.count()})")
+function emitGlobalStoreOp(code ByteArray, src X64Register, name String, size MachineWord)
+	panic("emitGlobalStoreOp: global data offset resolution not yet implemented (name={name}, src={src}, size={size}, codeLen={code.count()})")
 end 'emitGlobalStoreOp'
 
 // --- movXmmRipRel: load float from RIP-relative rdata ---
 // Emits a movsd/movss xmm, [rip+disp32] with a placeholder disp32
 // that is patched by the binary writer after rdata section layout.
-function emitMovXmmRipRelOp(code ByteArray, dest X64XmmRegister, rdataLabel ByteArray, precision FloatPrecision, rdataRelocs RdataRelocationArray)
+function emitMovXmmRipRelOp(code ByteArray, dest X64XmmRegister, rdataLabel String, precision FloatPrecision, rdataRelocs RdataRelocationArray)
 	// movsd/movss xmm, [rip+disp32]
 	match precision 'prec'
 		f64 then code.push(0xF2)
@@ -1479,8 +1479,9 @@ end 'emitX64Op'
 // --- Inline print operations (legacy path, uses callFixups) ---
 
 // printLiteral: jump over data island, then call mrt_write_stdout via callFixup
-function emitPrintLiteralInline(code ByteArray, data ByteArray, callFixups CallFixupArray)
-	let dataLen = data.count()
+function emitPrintLiteralInline(code ByteArray, data String, callFixups CallFixupArray)
+	let dataBytes = data.toByteArray()
+	let dataLen = dataBytes.count()
 	if dataLen == 0 'empty'
 		return
 	end 'empty'
@@ -1492,7 +1493,7 @@ function emitPrintLiteralInline(code ByteArray, data ByteArray, callFixups CallF
 
 	// Data island
 	let dataOffset = code.count()
-	code.append(data)
+	code.append(dataBytes)
 
 	// Patch jump
 	let afterData = code.count()
@@ -1509,7 +1510,7 @@ function emitPrintLiteralInline(code ByteArray, data ByteArray, callFixups CallF
 	writeDword(code, value: dataLen)
 
 	// call mrt_write_stdout (via callFixup)
-	emitCallFixup(code, callFixups: callFixups, target: b"mrt_write_stdout")
+	emitCallFixup(code, callFixups: callFixups, target: "mrt_write_stdout")
 end 'emitPrintLiteralInline'
 
 // printInt: value in RAX, convert to string then print
@@ -1518,13 +1519,13 @@ function emitPrintIntInline(code ByteArray, callFixups CallFixupArray)
 	code.append(b"\x48\x89\xc1\x48\x8d\x14\x24")
 
 	// call mrt_i64_to_string (via callFixup)
-	emitCallFixup(code, callFixups: callFixups, target: b"mrt_i64_to_string")
+	emitCallFixup(code, callFixups: callFixups, target: "mrt_i64_to_string")
 
 	// mov rdx, rax (length); lea rcx, [rsp] (buffer ptr)
 	code.append(b"\x48\x89\xc2\x48\x8d\x0c\x24")
 
 	// call mrt_write_stdout (via callFixup)
-	emitCallFixup(code, callFixups: callFixups, target: b"mrt_write_stdout")
+	emitCallFixup(code, callFixups: callFixups, target: "mrt_write_stdout")
 end 'emitPrintIntInline'
 
 // --- SysOp emission (x86-64) ---
@@ -1628,7 +1629,7 @@ function emitX64IatCallOp(code ByteArray, relocations RelocationArray, resultSlo
 end 'emitX64IatCallOp'
 
 // sys.globalAddr: LEA rax, [rip+disp32] to get pointer to named rdata entry
-function emitX64GlobalAddrOp(code ByteArray, rdataRelocs RdataRelocationArray, resultSlot VarSlot, name ByteArray)
+function emitX64GlobalAddrOp(code ByteArray, rdataRelocs RdataRelocationArray, resultSlot VarSlot, name String)
 	// lea rax, [rip + disp32]
 	code.append(b"\x48\x8d\x05")
 	// Record relocation at the disp32 position

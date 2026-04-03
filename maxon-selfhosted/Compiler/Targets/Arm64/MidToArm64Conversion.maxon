@@ -10,7 +10,7 @@ export function lowerMidToArm64(module MlirModule, target Target, globalData Glo
 	let osDesc = makeOsDescriptor(target)
 
 	for srcFunc in module.functions 'eachFunc'
-		let funcName = String.from(srcFunc.name)
+		let funcName = srcFunc.name
 		logTrace(LogCategory.mlir, message: () gives "mid-to-arm64: === lowering function: {funcName} ===")
 		let dstFunc = lowerFunctionToArm64(srcFunc, osDesc: osDesc, allFunctions: module.functions, globalData: globalData)
 		result.functions.push(dstFunc)
@@ -428,7 +428,7 @@ function getArm64CallConvFp(index VarSlot) returns Arm64FloatRegister
 end 'getArm64CallConvFp'
 
 
-function lowerCallArm64(resultId ValueId, callee ByteArray, argIds ValueIdArray, dstBlock MlirBlock, allFunctions MlirFunctionArray)
+function lowerCallArm64(resultId ValueId, callee String, argIds ValueIdArray, dstBlock MlirBlock, allFunctions MlirFunctionArray)
 	// Look up callee's param types to route float args to D registers
 	let paramTypes = lookupFuncParamTypes(callee, allFunctions: allFunctions)
 
@@ -462,7 +462,7 @@ function lowerCallArm64(resultId ValueId, callee ByteArray, argIds ValueIdArray,
 
 	// Move return value from X0/D0 to virtual result
 	let calleeReturnType = lookupFuncReturnTypeArm64(callee, allFunctions: allFunctions)
-	if calleeReturnType == b"f64" 'floatResult'
+	if calleeReturnType == "f64" 'floatResult'
 		dstBlock.ops.push(MlirOp.arm64(Arm64Op.fmovRegReg(Arm64FpVReg.virtual(resultId), arm64PhysFpReg(Arm64FloatRegister.d0), FloatPrecision.f64)))
 	end 'floatResult' else 'intResult'
 		dstBlock.ops.push(MlirOp.arm64(Arm64Op.movRegReg(Arm64VReg.virtual(resultId), arm64PhysReg(Arm64Register.x0))))
@@ -492,7 +492,7 @@ function lowerIndirectCallArm64(resultId ValueId, calleeId ValueId, argIds Value
 	dstBlock.ops.push(MlirOp.arm64(Arm64Op.movRegReg(Arm64VReg.virtual(resultId), arm64PhysReg(Arm64Register.x0))))
 end 'lowerIndirectCallArm64'
 
-function lookupFuncReturnTypeArm64(callee ByteArray, allFunctions MlirFunctionArray) returns ByteArray
+function lookupFuncReturnTypeArm64(callee String, allFunctions MlirFunctionArray) returns String
 	for func in allFunctions 'search'
 		if func.name == callee 'found'
 			return func.returnType
@@ -567,7 +567,7 @@ end 'lowerPrintIntArm64'
 // Terminators
 // ============================================================
 
-function lowerTerminatorArm64(srcBlock MlirBlock, dstBlock MlirBlock, returnType ByteArray, srcBlocks MlirBlockArray, blockArgSlots ValueSlotMap)
+function lowerTerminatorArm64(srcBlock MlirBlock, dstBlock MlirBlock, returnType String, srcBlocks MlirBlockArray, blockArgSlots ValueSlotMap)
 	match srcBlock.terminator 'dispatch'
 		maxon to arith then break 'dispatch'
 		cf(cfOp) then lowerCfTerminatorArm64(cfOp, srcBlock: srcBlock, dstBlock: dstBlock, srcBlocks: srcBlocks, blockArgSlots: blockArgSlots)
@@ -586,14 +586,14 @@ function lowerCfTerminatorArm64(op CfOp, srcBlock MlirBlock, dstBlock MlirBlock,
 	end 'lower'
 end 'lowerCfTerminatorArm64'
 
-function lowerFuncTerminatorArm64(op FuncOp, dstBlock MlirBlock, returnType ByteArray)
+function lowerFuncTerminatorArm64(op FuncOp, dstBlock MlirBlock, returnType String)
 	match op 'lower'
 		ret(retValId) then lowerReturnArm64(retValId, dstBlock: dstBlock, returnType: returnType)
 		call to param then break 'lower'
 	end 'lower'
 end 'lowerFuncTerminatorArm64'
 
-function lowerMirTerminatorArm64(op MirOp, srcBlock MlirBlock, dstBlock MlirBlock, returnType ByteArray, srcBlocks MlirBlockArray, blockArgSlots ValueSlotMap)
+function lowerMirTerminatorArm64(op MirOp, srcBlock MlirBlock, dstBlock MlirBlock, returnType String, srcBlocks MlirBlockArray, blockArgSlots ValueSlotMap)
 	match op 'lower'
 		condBranch(condId, thenTarget, thenArgs, elseTarget, elseArgs) then lowerCondBrArm64(condId, thenTarget: thenTarget, thenArgIds: thenArgs, elseTarget: elseTarget, elseArgIds: elseArgs, srcBlock: srcBlock, dstBlock: dstBlock, srcBlocks: srcBlocks, blockArgSlots: blockArgSlots)
 		branch(target, args) then lowerBrWithArgsArm64(target, argIds: args, dstBlock: dstBlock, srcBlocks: srcBlocks, blockArgSlots: blockArgSlots)
@@ -605,8 +605,8 @@ function lowerMirTerminatorArm64(op MirOp, srcBlock MlirBlock, dstBlock MlirBloc
 end 'lowerMirTerminatorArm64'
 
 // Return: move value to X0 (or D0 for float), emit epilogue+ret.
-function lowerReturnArm64(retValId ValueId, dstBlock MlirBlock, returnType ByteArray)
-	if returnType == b"f64" 'floatReturn'
+function lowerReturnArm64(retValId ValueId, dstBlock MlirBlock, returnType String)
+	if returnType == "f64" 'floatReturn'
 		dstBlock.ops.push(MlirOp.arm64(Arm64Op.fmovRegReg(arm64PhysFpReg(Arm64FloatRegister.d0), Arm64FpVReg.virtual(retValId), FloatPrecision.f64)))
 	end 'floatReturn' else 'intReturn'
 		dstBlock.ops.push(MlirOp.arm64(Arm64Op.movRegReg(arm64PhysReg(Arm64Register.x0), Arm64VReg.virtual(retValId))))
@@ -836,7 +836,7 @@ function lowerMirIatCallArm64(resultId ValueId, slotIndex MachineWord, argIds Va
 	return lowerIatCallArm64(resultId, slotIndex: slotIndex, argIds: argIds, dstBlock: dstBlock, valueSlots: valueSlots, nextTempSlot: nextTempSlot)
 end 'lowerMirIatCallArm64'
 
-function lowerGlobalAddrArm64(resultId ValueId, name ByteArray, dstBlock MlirBlock, valueSlots ValueSlotMap, nextTempSlot SlotIndex) returns SlotIndex
+function lowerGlobalAddrArm64(resultId ValueId, name String, dstBlock MlirBlock, valueSlots ValueSlotMap, nextTempSlot SlotIndex) returns SlotIndex
 	let tempSlot = nextTempSlot
 	dstBlock.ops.push(MlirOp.arm64(Arm64Op.globalAddr(tempSlot, name)))
 	valueSlotMapSet(valueSlots, valueId: resultId, slot: tempSlot)
@@ -1079,7 +1079,7 @@ function lowerLoadIndirectArm64(resultId ValueId, addrId ValueId, offset Machine
 	return tempSlot + 1
 end 'lowerLoadIndirectArm64'
 
-function lowerFuncAddrArm64(resultId ValueId, name ByteArray, dstBlock MlirBlock, valueSlots ValueSlotMap, nextTempSlot SlotIndex) returns SlotIndex
+function lowerFuncAddrArm64(resultId ValueId, name String, dstBlock MlirBlock, valueSlots ValueSlotMap, nextTempSlot SlotIndex) returns SlotIndex
 	dstBlock.ops.push(MlirOp.arm64(Arm64Op.leaFuncAddr(Arm64VReg.virtual(resultId), name)))
 	valueSlotMapSet(valueSlots, valueId: resultId, slot: nextTempSlot)
 	return nextTempSlot

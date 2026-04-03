@@ -64,7 +64,7 @@ end 'rmEmitGprToFpX64'
 
 // --- Call/stack emission ---
 
-export function rmEmitCallDirectX64(dstBlock MlirBlock, callee ByteArray)
+export function rmEmitCallDirectX64(dstBlock MlirBlock, callee String)
 	dstBlock.ops.push(MlirOp.x64(X64Op.callDirect(callee)))
 end 'rmEmitCallDirectX64'
 
@@ -1095,12 +1095,12 @@ function ax64NullSafeLoad(state RegState, dest X64VReg, baseReg X64VReg, offset 
 	dstBlock.ops.push(MlirOp.x64(X64Op.nullSafeLoad(x64PhysFromOrd(d), x64PhysFromOrd(b), offset)))
 end 'ax64NullSafeLoad'
 
-function ax64GlobalLoad(state RegState, dest X64VReg, name ByteArray, size MachineWord, dstBlock MlirBlock)
+function ax64GlobalLoad(state RegState, dest X64VReg, name String, size MachineWord, dstBlock MlirBlock)
 	let d = x64ResolveGprDef(state, vreg: dest, dstBlock: dstBlock, protect1: RM_NONE, protect2: RM_NONE)
 	dstBlock.ops.push(MlirOp.x64(X64Op.globalLoad(x64PhysFromOrd(d), name, size)))
 end 'ax64GlobalLoad'
 
-function ax64GlobalStore(state RegState, name ByteArray, src X64VReg, size MachineWord, dstBlock MlirBlock)
+function ax64GlobalStore(state RegState, name String, src X64VReg, size MachineWord, dstBlock MlirBlock)
 	let s = x64ResolveGprUse(state, vreg: src, dstBlock: dstBlock, protect1: RM_NONE, protect2: RM_NONE)
 	dstBlock.ops.push(MlirOp.x64(X64Op.globalStore(name, x64PhysFromOrd(s), size)))
 end 'ax64GlobalStore'
@@ -1110,12 +1110,12 @@ function ax64LeaFromStack(state RegState, dest X64VReg, stackOffset MachineWord,
 	dstBlock.ops.push(MlirOp.x64(X64Op.leaFromStack(x64PhysFromOrd(d), stackOffset)))
 end 'ax64LeaFromStack'
 
-function ax64LeaRipRelative(state RegState, dest X64VReg, rdataLabel ByteArray, dstBlock MlirBlock)
+function ax64LeaRipRelative(state RegState, dest X64VReg, rdataLabel String, dstBlock MlirBlock)
 	let d = x64ResolveGprDef(state, vreg: dest, dstBlock: dstBlock, protect1: RM_NONE, protect2: RM_NONE)
 	dstBlock.ops.push(MlirOp.x64(X64Op.leaRipRelative(x64PhysFromOrd(d), rdataLabel)))
 end 'ax64LeaRipRelative'
 
-function ax64LeaFuncAddr(state RegState, dest X64VReg, funcName ByteArray, dstBlock MlirBlock)
+function ax64LeaFuncAddr(state RegState, dest X64VReg, funcName String, dstBlock MlirBlock)
 	let d = x64ResolveGprDef(state, vreg: dest, dstBlock: dstBlock, protect1: RM_NONE, protect2: RM_NONE)
 	dstBlock.ops.push(MlirOp.x64(X64Op.leaFuncAddr(x64PhysFromOrd(d), funcName)))
 end 'ax64LeaFuncAddr'
@@ -1155,7 +1155,7 @@ function ax64ReloadXmmFromStack(state RegState, dest X64FpVReg, offset MachineWo
 	dstBlock.ops.push(MlirOp.x64(X64Op.reloadXmmFromStack(x64FpPhysFromOrd(d), offset, precision)))
 end 'ax64ReloadXmmFromStack'
 
-function ax64MovXmmRipRel(state RegState, dest X64FpVReg, rdataLabel ByteArray, precision FloatPrecision, dstBlock MlirBlock)
+function ax64MovXmmRipRel(state RegState, dest X64FpVReg, rdataLabel String, precision FloatPrecision, dstBlock MlirBlock)
 	let d = x64ResolveFpDef(state, vreg: dest, dstBlock: dstBlock)
 	dstBlock.ops.push(MlirOp.x64(X64Op.movXmmRipRel(x64FpPhysFromOrd(d), rdataLabel, precision)))
 end 'ax64MovXmmRipRel'
@@ -1227,7 +1227,7 @@ function ax64MovqGprToXmm(state RegState, dest X64FpVReg, src X64VReg, dstBlock 
 	dstBlock.ops.push(MlirOp.x64(X64Op.movqGprToXmm(x64FpPhysFromOrd(d), x64PhysFromOrd(s))))
 end 'ax64MovqGprToXmm'
 
-function ax64AndMaskRipRel(state RegState, dest X64FpVReg, rdataLabel ByteArray, precision FloatPrecision, dstBlock MlirBlock)
+function ax64AndMaskRipRel(state RegState, dest X64FpVReg, rdataLabel String, precision FloatPrecision, dstBlock MlirBlock)
 	let d = x64ResolveFpUse(state, vreg: dest, dstBlock: dstBlock)
 	dstBlock.ops.push(MlirOp.x64(X64Op.andMaskRipRel(x64FpPhysFromOrd(d), rdataLabel, precision)))
 end 'ax64AndMaskRipRel'
@@ -1244,12 +1244,12 @@ function ax64LoadIndirectXmm(state RegState, dest X64FpVReg, baseReg X64VReg, of
 	dstBlock.ops.push(MlirOp.x64(X64Op.loadIndirectXmm(x64FpPhysFromOrd(d), x64PhysFromOrd(b), offset, precision)))
 end 'ax64LoadIndirectXmm'
 
-function ax64GlobalLoadXmm(state RegState, dest X64FpVReg, name ByteArray, precision FloatPrecision, dstBlock MlirBlock)
+function ax64GlobalLoadXmm(state RegState, dest X64FpVReg, name String, precision FloatPrecision, dstBlock MlirBlock)
 	let d = x64ResolveFpDef(state, vreg: dest, dstBlock: dstBlock)
 	dstBlock.ops.push(MlirOp.x64(X64Op.globalLoadXmm(x64FpPhysFromOrd(d), name, precision)))
 end 'ax64GlobalLoadXmm'
 
-function ax64GlobalStoreXmm(state RegState, name ByteArray, src X64FpVReg, precision FloatPrecision, dstBlock MlirBlock)
+function ax64GlobalStoreXmm(state RegState, name String, src X64FpVReg, precision FloatPrecision, dstBlock MlirBlock)
 	let s = x64ResolveFpUse(state, vreg: src, dstBlock: dstBlock)
 	dstBlock.ops.push(MlirOp.x64(X64Op.globalStoreXmm(name, x64FpPhysFromOrd(s), precision)))
 end 'ax64GlobalStoreXmm'
@@ -1343,7 +1343,7 @@ export function isX64DivergingBlock(block MlirBlock) returns bool
 	for op in block.ops 'checkOps'
 		match op 'checkCall'
 			x64(x64Op) then match x64Op 'checkX64Call'
-				callDirect(target) then if target == b"mrt_panic" 'isPanic'
+				callDirect(target) then if target == "mrt_panic" 'isPanic'
 				return true
 			end 'isPanic'
 			prologue to loadRegRbpOffset then break 'checkX64Call'

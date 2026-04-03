@@ -10,14 +10,14 @@ export type Project
 	export var nextValueId_ ValueId
 
 	// Parser symbol table (reset per function parse)
-	export var parserVarNames ByteArrayArray
+	export var parserVarNames StringArray
 	export var parserVarSlots VarSlotArray
 	export var parserNextSlot VarSlot
 	export var parserVarIsFloat BoolArray
 	export var parserVarIsRefType BoolArray
 	export var parserScopeStack ScopeDepthArray
 
-	// Typealias registry: maps alias names to their MLIR base type (b"i64", b"f64", etc.)
+	// Typealias registry: maps alias names to their MLIR base type ("i64", "f64", etc.)
 	export var typealiases TypealiasMap
 
 	// Typealias range bounds: maps alias names to their (lower, upper) bounds.
@@ -28,8 +28,8 @@ export type Project
 	export var funcReturnTypes FuncReturnTypeMap
 
 	// Top-level string constants (compile-time known, used for constant folding)
-	export var stringConstNames ByteArrayArray
-	export var stringConstValues ByteArrayArray
+	export var stringConstNames StringArray
+	export var stringConstValues StringArray
 
 	// Project metadata
 	export var rootPath FilePath
@@ -47,7 +47,7 @@ export type Project
 		return Self{
 			db: db,
 			nextValueId_: 0,
-			parserVarNames: ByteArrayArray.create(),
+			parserVarNames: StringArray.create(),
 			parserVarSlots: VarSlotArray.create(),
 			parserVarIsFloat: BoolArray.create(),
 			parserVarIsRefType: BoolArray.create(),
@@ -56,8 +56,8 @@ export type Project
 			typealiases: TypealiasMap.create(),
 			typealiasRanges: TypealiasRangeMap.create(),
 			funcReturnTypes: FuncReturnTypeMap.create(),
-			stringConstNames: ByteArrayArray.create(),
-			stringConstValues: ByteArrayArray.create(),
+			stringConstNames: StringArray.create(),
+			stringConstValues: StringArray.create(),
 			rootPath: rootPath,
 			target: target,
 			diagnostics: DiagnosticArray.create(),
@@ -66,11 +66,12 @@ export type Project
 	end 'create'
 end 'Project'
 
-export typealias TypealiasMap = Map with(ByteArray, ByteArray)
-export typealias FuncReturnTypeMap = Map with(ByteArray, ByteArray)
+export typealias StringArray = Array with String
+export typealias TypealiasMap = Map with(String, String)
+export typealias FuncReturnTypeMap = Map with(String, String)
 export typealias ProjectArray = Array with Project
 export typealias RangeBound = int(i64.min to i64.max)
-export typealias TypealiasRangeMap = Map with(ByteArray, TypealiasRange)
+export typealias TypealiasRangeMap = Map with(String, TypealiasRange)
 
 export type TypealiasRange
 	export var lower RangeBound
@@ -94,6 +95,6 @@ end 'hasErrors'
 
 // Resolve a source-level type name to its MLIR base type.
 // Returns the original name if not a registered typealias.
-export function resolveTypeName(project Project, name ByteArray) returns ByteArray
+export function resolveTypeName(project Project, name String) returns String
 	return try project.typealiases.get(name) otherwise name
 end 'resolveTypeName'

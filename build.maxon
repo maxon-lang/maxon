@@ -63,3 +63,19 @@ export function spec_test_selfhosted() returns ExitCode
 	print("All self-hosted spec tests passed\n")
 	return 0
 end 'spec_test_selfhosted'
+
+// Compile the self-hosted compiler and run its Wasm spec tests
+export function spec_test_wasm() returns ExitCode
+	let compileResult = build_selfhosted()
+	if compileResult != 0 'failed'
+		return compileResult
+	end 'failed'
+
+	let testResult = run("Running self-hosted Wasm spec tests", command: "maxon-selfhosted/bin/maxon-selfhosted.exe spec-test --target=wasm32-wasi", timeoutMs: 600000)
+	if testResult != 0 'failed2'
+		return testResult
+	end 'failed2'
+
+	print("All self-hosted Wasm spec tests passed\n")
+	return 0
+end 'spec_test_wasm'

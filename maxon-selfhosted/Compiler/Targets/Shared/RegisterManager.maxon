@@ -84,7 +84,7 @@ export type RegState
 	export var fpCycleBreakOrd RegOrdinal
 
 	// Debug: function name for error messages
-	export var funcName ByteArray
+	export var funcName String
 
 	// True when processing a diverging block (e.g. panic path).
 	// Spills are suppressed since the block never returns.
@@ -127,7 +127,7 @@ export type RegState
 			callConvFpCount: callConvFps.count(),
 			returnFpOrd: returnFpOrd,
 			fpCycleBreakOrd: fpCycleBreakOrd,
-			funcName: b"",
+			funcName: "",
 			isInDivergingBlock: false,
 			spillsGrowDown: spillsGrowDown,
 			hasPreSeed: hasPreSeed,
@@ -363,12 +363,12 @@ export function rmSpillRegisterIfOccupied(state RegState, regOrdinal RegOrdinal,
 	var existingInfo = rmGetValueInfo(state, valueId: existing)
 	if existingInfo.stackHome == RM_NO_STACK_HOME and not existingInfo.isConstant 'needsSpill'
 		let spillSlot = rmAllocateSpillSlot(state)
-		logTrace(LogCategory.mlir, message: () gives "regalloc: spill v{existing} from {targetRegName(state, ord: regOrdinal)} to [rbp{spillSlot}] (func={String.from(state.funcName)})")
+		logTrace(LogCategory.mlir, message: () gives "regalloc: spill v{existing} from {targetRegName(state, ord: regOrdinal)} to [rbp{spillSlot}] (func={state.funcName})")
 		targetEmitSpill(state, dstBlock: dstBlock, regOrdinal: regOrdinal, stackOffset: spillSlot)
 		existingInfo.stackHome = spillSlot
 	end 'needsSpill' else 'noSpill'
 		if existingInfo.isConstant 'evictConst'
-			logTrace(LogCategory.mlir, message: () gives "regalloc: evict constant v{existing} from {targetRegName(state, ord: regOrdinal)} (func={String.from(state.funcName)})")
+			logTrace(LogCategory.mlir, message: () gives "regalloc: evict constant v{existing} from {targetRegName(state, ord: regOrdinal)} (func={state.funcName})")
 		end 'evictConst'
 	end 'noSpill'
 	// Clear register mappings
@@ -400,7 +400,7 @@ export function rmRelocateRegister(state RegState, regOrdinal RegOrdinal, dstBlo
 		let occupant = rmGetOr(state.registerContents, index: candidate, fallback: RM_NONE)
 		if occupant == RM_NONE 'found'
 			// Move the value to the free register
-			logTrace(LogCategory.mlir, message: () gives "regalloc: relocate v{existing} from {targetRegName(state, ord: regOrdinal)} to {targetRegName(state, ord: candidate)} (func={String.from(state.funcName)})")
+			logTrace(LogCategory.mlir, message: () gives "regalloc: relocate v{existing} from {targetRegName(state, ord: regOrdinal)} to {targetRegName(state, ord: candidate)} (func={state.funcName})")
 			targetEmitMovReg(state, dstBlock: dstBlock, destOrd: candidate, srcOrd: regOrdinal)
 			// Update mappings: value now in candidate, not regOrdinal
 			state.registerContents.set(candidate, value: existing)
@@ -537,7 +537,7 @@ export function rmAllocateRegister(state RegState, valueId RegInt, dstBlock Mlir
 	end 'scanFree'
 
 	// 3. All occupied — evict LRU
-	logTrace(LogCategory.mlir, message: () gives "regalloc: evicting for v{valueId} (protect={targetRegName(state, ord: protect1)},{targetRegName(state, ord: protect2)}) func={String.from(state.funcName)}")
+	logTrace(LogCategory.mlir, message: () gives "regalloc: evicting for v{valueId} (protect={targetRegName(state, ord: protect1)},{targetRegName(state, ord: protect2)}) func={state.funcName}")
 	rmEvict(state, dstBlock: dstBlock, protect1: protect1, protect2: protect2)
 
 	// Find the freed register (must also skip protected registers)
@@ -580,7 +580,7 @@ export function rmEnsureInRegister(state RegState, valueId RegInt, dstBlock Mlir
 	if info.isConstant 'remat'
 		let imm = info.constantValue
 		let reg = rmAllocateRegister(state, valueId: valueId, dstBlock: dstBlock, protect1: protect1, protect2: protect2)
-		logTrace(LogCategory.mlir, message: () gives "regalloc: remat v{valueId}={imm} into {targetRegName(state, ord: reg)} (func={String.from(state.funcName)})")
+		logTrace(LogCategory.mlir, message: () gives "regalloc: remat v{valueId}={imm} into {targetRegName(state, ord: reg)} (func={state.funcName})")
 		targetEmitMovImm(state, dstBlock: dstBlock, regOrdinal: reg, value: imm)
 		return reg
 	end 'remat'
@@ -589,12 +589,12 @@ export function rmEnsureInRegister(state RegState, valueId RegInt, dstBlock Mlir
 	let stackHome = info.stackHome
 	if stackHome != RM_NO_STACK_HOME 'reload'
 		let reg = rmAllocateRegister(state, valueId: valueId, dstBlock: dstBlock, protect1: protect1, protect2: protect2)
-		logTrace(LogCategory.mlir, message: () gives "regalloc: reload v{valueId} from [rbp{stackHome}] into {targetRegName(state, ord: reg)} (func={String.from(state.funcName)})")
+		logTrace(LogCategory.mlir, message: () gives "regalloc: reload v{valueId} from [rbp{stackHome}] into {targetRegName(state, ord: reg)} (func={state.funcName})")
 		targetEmitReload(state, dstBlock: dstBlock, regOrdinal: reg, stackOffset: stackHome)
 		return reg
 	end 'reload'
 
-	panic("rmEnsureInRegister: v{valueId} not found (opIdx={state.currentOpIndex}, blk={String.from(dstBlock.label)}, func={String.from(state.funcName)})")
+	panic("rmEnsureInRegister: v{valueId} not found (opIdx={state.currentOpIndex}, blk={dstBlock.label}, func={state.funcName})")
 end 'rmEnsureInRegister'
 
 // --- FP register allocation ---
@@ -735,7 +735,7 @@ export function rmEnsureInFpRegister(state RegState, valueId RegInt, dstBlock Ml
 	if info.isConstant 'rematConst'
 		let imm = info.constantValue
 		let gpr = rmAllocateRegister(state, valueId: valueId, dstBlock: dstBlock, protect1: RM_NONE, protect2: RM_NONE)
-		logTrace(LogCategory.mlir, message: () gives "regalloc: fp-remat v{valueId}={imm} via {targetRegName(state, ord: gpr)} (func={String.from(state.funcName)})")
+		logTrace(LogCategory.mlir, message: () gives "regalloc: fp-remat v{valueId}={imm} via {targetRegName(state, ord: gpr)} (func={state.funcName})")
 		targetEmitMovImm(state, dstBlock: dstBlock, regOrdinal: gpr, value: imm)
 		let fp = rmAllocateFpRegister(state, valueId: valueId, dstBlock: dstBlock)
 		targetEmitGprToFp(state, dstBlock: dstBlock, fpOrdinal: fp, gprOrdinal: gpr)
@@ -923,7 +923,7 @@ end 'rmInvalidateCallerSaved'
 // Spills values in caller-saved registers to the stack, then clears those register mappings.
 // In diverging blocks (panic paths), skips spills since the block never returns.
 export function rmClobberCallerSaved(state RegState, dstBlock MlirBlock)
-	logTrace(LogCategory.mlir, message: () gives "regalloc: clobber caller-saved (func={String.from(state.funcName)})")
+	logTrace(LogCategory.mlir, message: () gives "regalloc: clobber caller-saved (func={state.funcName})")
 	if state.isInDivergingBlock 'diverging'
 		rmClearCallerSavedMappings(state)
 		return
@@ -985,7 +985,7 @@ function rmClearCallerSavedMappings(state RegState)
 end 'rmClearCallerSavedMappings'
 
 export function rmSpillAllBeforeTerminator(state RegState, dstBlock MlirBlock)
-	logTrace(LogCategory.mlir, message: () gives "regalloc: spill-all-before-terminator (func={String.from(state.funcName)})")
+	logTrace(LogCategory.mlir, message: () gives "regalloc: spill-all-before-terminator (func={state.funcName})")
 	var i = 0
 	while i < state.gprPoolSize 'spillGpr'
 		let regOrd = try state.gprPool.get(i) otherwise 'skip'
@@ -1306,12 +1306,12 @@ end 'rmEmitMovValueToValue'
 
 // Shared call argument placement and emission with cycle-detection.
 // Matches C# RegisterManagerBase.EmitCallShared.
-export function rmEmitCall(state RegState, dstBlock MlirBlock, callee ByteArray, argIds RegIntArray, resultId RegInt)
+export function rmEmitCall(state RegState, dstBlock MlirBlock, callee String, argIds RegIntArray, resultId RegInt)
 	rmEmitCallShared(state, dstBlock: dstBlock, argIds: argIds, resultId: resultId, emitDirect: true, callee: callee, indirectRegOrd: RM_NONE)
 end 'rmEmitCall'
 
 // Shared call implementation used by direct, try, and indirect calls.
-function rmEmitCallShared(state RegState, dstBlock MlirBlock, argIds RegIntArray, resultId RegInt, emitDirect bool, callee ByteArray, indirectRegOrd RegOrdinal)
+function rmEmitCallShared(state RegState, dstBlock MlirBlock, argIds RegIntArray, resultId RegInt, emitDirect bool, callee String, indirectRegOrd RegOrdinal)
 	let argCount = argIds.count()
 	let regArgLimit = state.callConvGprCount
 
@@ -1524,7 +1524,7 @@ function rmEmitCallShared(state RegState, dstBlock MlirBlock, argIds RegIntArray
 end 'rmEmitCallShared'
 
 // Shared try_call: call + capture error flag register.
-export function rmEmitTryCall(state RegState, dstBlock MlirBlock, callee ByteArray, argIds RegIntArray, resultId RegInt, errorFlagId RegInt)
+export function rmEmitTryCall(state RegState, dstBlock MlirBlock, callee String, argIds RegIntArray, resultId RegInt, errorFlagId RegInt)
 	rmEmitCall(state, dstBlock: dstBlock, callee: callee, argIds: argIds, resultId: resultId)
 	rmAssign(state, regOrdinal: state.errorFlagOrd, valueId: errorFlagId)
 end 'rmEmitTryCall'
@@ -1557,7 +1557,7 @@ export function rmEmitIndirectCallOp(state RegState, dstBlock MlirBlock, calleeI
 	end 'moveToScratch'
 
 	// Use shared call implementation with indirect call register
-	rmEmitCallShared(state, dstBlock: dstBlock, argIds: argIds, resultId: resultId, emitDirect: false, callee: b"", indirectRegOrd: actualCalleeOrd)
+	rmEmitCallShared(state, dstBlock: dstBlock, argIds: argIds, resultId: resultId, emitDirect: false, callee: "", indirectRegOrd: actualCalleeOrd)
 end 'rmEmitIndirectCallOp'
 
 // Shared return: move value to return register.
@@ -1840,15 +1840,15 @@ function allocateRegistersForFunc(srcFunc MlirFunction, target Target) returns M
 		// Restore saved state when entering the first non-diverging block after
 		// a diverging one. This carries register assignments across the panic block.
 		if not isBlockDiverging and passedDivergingBlock and hasSavedState 'restoreBeforeBlock'
-			logTrace(LogCategory.mlir, message: () gives "regalloc: restore state after diverging block (func={String.from(state.funcName)})")
+			logTrace(LogCategory.mlir, message: () gives "regalloc: restore state after diverging block (func={state.funcName})")
 			rmRestoreState(state, snapshot: savedSnapshot)
 			hasSavedState = false
 			passedDivergingBlock = false
 		end 'restoreBeforeBlock'
 
 		// Create destination block
-		let blockLabel = String.from(srcBlock.label)
-		logTrace(LogCategory.mlir, message: () gives "regalloc: --- block '{blockLabel}' ({srcBlock.ops.count()} ops) func={String.from(state.funcName)} ---")
+		let blockLabel = srcBlock.label
+		logTrace(LogCategory.mlir, message: () gives "regalloc: --- block '{blockLabel}' ({srcBlock.ops.count()} ops) func={state.funcName} ---")
 		var dstBlock = createMlirBlock(srcBlock.id, label: srcBlock.label)
 		dstBlock.blockArgs = srcBlock.blockArgs
 
@@ -1885,7 +1885,7 @@ function allocateRegistersForFunc(srcFunc MlirFunction, target Target) returns M
 			if not isBlockDiverging and not hasSavedState 'checkSaveBeforeSpill'
 				let nextIsDiverging = blockIdx + 1 < blockCount and rmGetOr(divergingBlocks, index: blockIdx + 1, fallback: 0) == 1
 				if nextIsDiverging 'saveNow'
-					logTrace(LogCategory.mlir, message: () gives "regalloc: save state before diverging block (func={String.from(state.funcName)})")
+					logTrace(LogCategory.mlir, message: () gives "regalloc: save state before diverging block (func={state.funcName})")
 					savedSnapshot = rmSaveState(state)
 					hasSavedState = true
 				end 'saveNow'
@@ -1932,7 +1932,7 @@ function allocateRegistersForFunc(srcFunc MlirFunction, target Target) returns M
 				// The terminator is a conditional branch to a diverging block (e.g. jg panic).
 				// Register state carries through to the fallthrough successor intact — no
 				// spill or reset needed.
-				logTrace(LogCategory.mlir, message: () gives "regalloc: carry register state through condBr-to-diverging (func={String.from(state.funcName)})")
+				logTrace(LogCategory.mlir, message: () gives "regalloc: carry register state through condBr-to-diverging (func={state.funcName})")
 			end 'carryThrough' else 'normalTransition'
 				rmResetForBlockTransition(state, prevBlock: dstBlock)
 			end 'normalTransition'

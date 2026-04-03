@@ -18,7 +18,7 @@ let iovecBase = 0
 let nwrittenBase = 8
 let scratchEnd = 1024
 
-typealias GlobalDataOffsetMap = Map with(ByteArray, MachineWord)
+typealias GlobalDataOffsetMap = Map with(String, MachineWord)
 
 // ============================================================
 // Public entry point
@@ -42,7 +42,7 @@ function emitWasmModule(module MlirModule, globalData GlobalDataTable) returns B
 
 	// Build function table: map function names to indices.
 	// Imported functions come first, then module functions.
-	var funcNames = ByteArrayArray.create()
+	var funcNames = StringArray.create()
 	var funcCount = 0 as MachineWord
 
 	// Collect all function names (imports occupy indices 0..wasiImportCount-1)
@@ -52,7 +52,7 @@ function emitWasmModule(module MlirModule, globalData GlobalDataTable) returns B
 	end 'collectNames'
 
 	// Collect return types for each module function (parallel to funcNames)
-	var funcReturnTypes = ByteArrayArray.create()
+	var funcReturnTypes = StringArray.create()
 	for func in module.functions 'collectReturnTypes'
 		funcReturnTypes.push(func.returnType)
 	end 'collectReturnTypes'
@@ -84,9 +84,9 @@ function emitWasmModule(module MlirModule, globalData GlobalDataTable) returns B
 			params.push(wasmType)
 		end 'eachParam'
 		var results = ByteArray.create()
-		if func.returnType == b"f64" 'returnsF64'
+		if func.returnType == "f64" 'returnsF64'
 			results.push(wasmTypeF64)
-		end 'returnsF64' else if func.returnType != b"void" 'returnsI64'
+		end 'returnsF64' else if func.returnType != "void" 'returnsI64'
 			results.push(wasmTypeI64)
 		end 'returnsI64'
 		writeFuncType(funcType, paramTypes: params, resultTypes: results)
@@ -129,7 +129,7 @@ function emitWasmModule(module MlirModule, globalData GlobalDataTable) returns B
 	var exportCount = 0 as MachineWord
 
 	// Export _start (the WASI entry point = mrt_start)
-	let startFuncIdx = findFunctionIndex(funcNames, name: b"mrt_start", importCount: wasiImportCount)
+	let startFuncIdx = findFunctionIndex(funcNames, name: "mrt_start", importCount: wasiImportCount)
 	exportCount = addFuncExport(exports, name: b"_start", funcIndex: startFuncIdx, countRef: exportCount)
 
 	// Export memory
@@ -195,9 +195,9 @@ function emitWasmModule(module MlirModule, globalData GlobalDataTable) returns B
 	writeWasmName(funcNameMap, name: b"fd_write")
 	// Module function names
 	for i in 0 upto funcCount 'nameFuncs'
-		let name = try funcNames.get(i) otherwise b"unknown"
+		let name = try funcNames.get(i) otherwise "unknown"
 		writeUleb128(funcNameMap, value: wasiImportCount + i)
-		writeWasmName(funcNameMap, name: name)
+		writeWasmName(funcNameMap, name: name.toByteArray())
 	end 'nameFuncs'
 	// Write subsection: id=1, then length-prefixed content
 	namePayload.push(1)
@@ -216,14 +216,14 @@ end 'emitWasmModule'
 // Function body emission
 // ============================================================
 
-function emitFunctionBody(func MlirFunction, funcNames ByteArrayArray, funcReturnTypes ByteArrayArray, globalDataOffsets GlobalDataOffsetMap, stackBase MachineWord) returns ByteArray
+function emitFunctionBody(func MlirFunction, funcNames StringArray, funcReturnTypes StringArray, globalDataOffsets GlobalDataOffsetMap, stackBase MachineWord) returns ByteArray
 	// Replace mrt_panic with a simplified WASM version that writes the
 	// message cstring to stderr then traps (wasmtime provides the backtrace).
-	if func.name == b"mrt_panic" 'isPanic'
+	if func.name == "mrt_panic" 'isPanic'
 		return emitWasmPanic()
 	end 'isPanic'
 	// Replace mrt_panic_print_frame with a no-op (no stack traces in WASM).
-	if func.name == b"mrt_panic_print_frame" 'isPrintFrame'
+	if func.name == "mrt_panic_print_frame" 'isPrintFrame'
 		return emitWasmNopVoidFunc()
 	end 'isPrintFrame'
 
@@ -275,7 +275,7 @@ function emitFunctionBody(func MlirFunction, funcNames ByteArrayArray, funcRetur
 	writeUleb128(body, value: groupCount)
 	body.append(localGroups)
 
-	let isVoidReturn = func.returnType == b"void"
+	let isVoidReturn = func.returnType == "void"
 
 	// Emit instructions for each block.
 	if func.blocks.count() == 1 'singleBlock'
@@ -292,7 +292,7 @@ function emitFunctionBody(func MlirFunction, funcNames ByteArrayArray, funcRetur
 	// For non-void functions, push a dummy return value before `end`.
 	// All real paths should `return` before reaching here, but WASM validation
 	// requires the stack to match the return type at the `end` instruction.
-	if func.returnType == b"f64" 'dummyReturnF64'
+	if func.returnType == "f64" 'dummyReturnF64'
 		body.push(opF64Const)
 		writeQword(body, value: 0)
 	end 'dummyReturnF64' else if not isVoidReturn 'dummyReturnI64'
@@ -423,7 +423,7 @@ end 'emitWasmNopVoidFunc'
 // Single-block emission (straight-line code)
 // ============================================================
 
-function emitBlockOps(body ByteArray, block MlirBlock, funcNames ByteArrayArray, funcReturnTypes ByteArrayArray, isVoidReturn bool, globalDataOffsets GlobalDataOffsetMap, stackBase MachineWord)
+function emitBlockOps(body ByteArray, block MlirBlock, funcNames StringArray, funcReturnTypes StringArray, isVoidReturn bool, globalDataOffsets GlobalDataOffsetMap, stackBase MachineWord)
 	for op in block.ops 'eachOp'
 		emitMlirOp(body, op: op, funcNames: funcNames, funcReturnTypes: funcReturnTypes, isVoidReturn: isVoidReturn, globalDataOffsets: globalDataOffsets, stackBase: stackBase)
 	end 'eachOp'
@@ -439,7 +439,7 @@ end 'emitBlockOps'
 // For MVP: use a loop+br_table dispatch pattern.
 // Each block gets an index. A loop wraps the switch, and br_table
 // dispatches to the current block. This handles any CFG shape.
-function emitStructuredCfg(body ByteArray, func MlirFunction, funcNames ByteArrayArray, funcReturnTypes ByteArrayArray, isVoidReturn bool, globalDataOffsets GlobalDataOffsetMap, stackBase MachineWord)
+function emitStructuredCfg(body ByteArray, func MlirFunction, funcNames StringArray, funcReturnTypes StringArray, isVoidReturn bool, globalDataOffsets GlobalDataOffsetMap, stackBase MachineWord)
 	let blockCount = func.blocks.count()
 	if blockCount == 0 'empty'
 		return
@@ -509,7 +509,7 @@ end 'emitStructuredCfg'
 // Terminator emission for structured CFG
 // ============================================================
 
-function emitTerminator(body ByteArray, op MlirOp, func MlirFunction, funcNames ByteArrayArray, funcReturnTypes ByteArrayArray, dispatchLocal MachineWord, loopDepth MachineWord, isVoidReturn bool, globalDataOffsets GlobalDataOffsetMap, stackBase MachineWord)
+function emitTerminator(body ByteArray, op MlirOp, func MlirFunction, funcNames StringArray, funcReturnTypes StringArray, dispatchLocal MachineWord, loopDepth MachineWord, isVoidReturn bool, globalDataOffsets GlobalDataOffsetMap, stackBase MachineWord)
 	match op 'dispatch'
 		mir(mirOp) then emitMirTerminator(body, op: mirOp, func: func, funcNames: funcNames, funcReturnTypes: funcReturnTypes, dispatchLocal: dispatchLocal, loopDepth: loopDepth, isVoidReturn: isVoidReturn, globalDataOffsets: globalDataOffsets, stackBase: stackBase)
 		sys(sysOp) then emitSysOp(body, op: sysOp)
@@ -518,7 +518,7 @@ function emitTerminator(body ByteArray, op MlirOp, func MlirFunction, funcNames 
 	end 'dispatch'
 end 'emitTerminator'
 
-function emitMirTerminator(body ByteArray, op MirOp, func MlirFunction, funcNames ByteArrayArray, funcReturnTypes ByteArrayArray, dispatchLocal MachineWord, loopDepth MachineWord, isVoidReturn bool, globalDataOffsets GlobalDataOffsetMap, stackBase MachineWord)
+function emitMirTerminator(body ByteArray, op MirOp, func MlirFunction, funcNames StringArray, funcReturnTypes StringArray, dispatchLocal MachineWord, loopDepth MachineWord, isVoidReturn bool, globalDataOffsets GlobalDataOffsetMap, stackBase MachineWord)
 	match op 'dispatch'
 		condBranch(condId, thenBlock, thenArgs, elseBlock, elseArgs) then emitWasmCondBranch(body, condId: condId, thenBlock: thenBlock, thenArgs: thenArgs, elseBlock: elseBlock, elseArgs: elseArgs, func: func, dispatchLocal: dispatchLocal, loopDepth: loopDepth)
 		branch(targetBlock, args) then emitWasmBranch(body, targetBlock: targetBlock, args: args, func: func, dispatchLocal: dispatchLocal, loopDepth: loopDepth)
@@ -620,7 +620,7 @@ end 'emitBlockArgStores'
 // MlirOp dispatch
 // ============================================================
 
-function emitMlirOp(body ByteArray, op MlirOp, funcNames ByteArrayArray, funcReturnTypes ByteArrayArray, isVoidReturn bool, globalDataOffsets GlobalDataOffsetMap, stackBase MachineWord)
+function emitMlirOp(body ByteArray, op MlirOp, funcNames StringArray, funcReturnTypes StringArray, isVoidReturn bool, globalDataOffsets GlobalDataOffsetMap, stackBase MachineWord)
 	match op 'dispatch'
 		mir(mirOp) then emitMirOp(body, op: mirOp, funcNames: funcNames, funcReturnTypes: funcReturnTypes, isVoidReturn: isVoidReturn, globalDataOffsets: globalDataOffsets, stackBase: stackBase)
 		sys(sysOp) then emitSysOp(body, op: sysOp)
@@ -671,7 +671,7 @@ end 'emitMemRefLoadSlot'
 // MIR op emission
 // ============================================================
 
-function emitMirOp(body ByteArray, op MirOp, funcNames ByteArrayArray, funcReturnTypes ByteArrayArray, isVoidReturn bool, globalDataOffsets GlobalDataOffsetMap, stackBase MachineWord)
+function emitMirOp(body ByteArray, op MirOp, funcNames StringArray, funcReturnTypes StringArray, isVoidReturn bool, globalDataOffsets GlobalDataOffsetMap, stackBase MachineWord)
 	match op 'dispatch'
 		movImm(resultId, value, isFloat) then emitMovImm(body, resultId: resultId, value: value, isFloat: isFloat)
 		movReg(resultId, srcId) then emitMovReg(body, resultId: resultId, srcId: srcId)
@@ -823,7 +823,7 @@ function emitCmp(body ByteArray, resultId ValueId, leftId ValueId, rightId Value
 	writeUleb128(body, value: resultId as MachineWord)
 end 'emitCmp'
 
-function emitCall(body ByteArray, resultId ValueId, callee ByteArray, argIds ValueIdArray, funcNames ByteArrayArray, funcReturnTypes ByteArrayArray)
+function emitCall(body ByteArray, resultId ValueId, callee String, argIds ValueIdArray, funcNames StringArray, funcReturnTypes StringArray)
 	// Push arguments
 	for argId in argIds 'pushArgs'
 		body.push(opLocalGet)
@@ -837,22 +837,22 @@ function emitCall(body ByteArray, resultId ValueId, callee ByteArray, argIds Val
 
 	// Store result only if the callee returns a value
 	let calleeRetType = lookupReturnType(funcReturnTypes, funcNames: funcNames, callee: callee)
-	if calleeRetType != b"void" 'hasReturnValue'
+	if calleeRetType != "void" 'hasReturnValue'
 		body.push(opLocalSet)
 		writeUleb128(body, value: resultId as MachineWord)
 	end 'hasReturnValue'
 end 'emitCall'
 
-function lookupReturnType(funcReturnTypes ByteArrayArray, funcNames ByteArrayArray, callee ByteArray) returns ByteArray
+function lookupReturnType(funcReturnTypes StringArray, funcNames StringArray, callee String) returns String
 	for i in 0 upto funcNames.count() 'search'
 		let name = try funcNames.get(i) otherwise 'skip'
 			continue
 		end 'skip'
 		if name == callee 'found'
-			return try funcReturnTypes.get(i) otherwise b"void"
+			return try funcReturnTypes.get(i) otherwise "void"
 		end 'found'
 	end 'search'
-	return b"void"
+	return "void"
 end 'lookupReturnType'
 
 function emitRet(body ByteArray, retValId ValueId, isVoidReturn bool)
@@ -907,7 +907,7 @@ function emitStackSlotAddr(body ByteArray, resultId ValueId, slotId VarSlot, sta
 	writeUleb128(body, value: resultId as MachineWord)
 end 'emitStackSlotAddr'
 
-function emitGlobalAddr(body ByteArray, resultId ValueId, name ByteArray, globalDataOffsets GlobalDataOffsetMap)
+function emitGlobalAddr(body ByteArray, resultId ValueId, name String, globalDataOffsets GlobalDataOffsetMap)
 	let offset = try globalDataOffsets.get(name) otherwise scratchEnd as MachineWord
 	body.push(opI64Const)
 	writeSleb128(body, value: offset as ParsedInt)
@@ -1060,7 +1060,7 @@ end 'emitFuncAddr'
 // Utility functions
 // ============================================================
 
-function findFunctionIndex(funcNames ByteArrayArray, name ByteArray, importCount MachineWord) returns MachineWord
+function findFunctionIndex(funcNames StringArray, name String, importCount MachineWord) returns MachineWord
 	for i in 0 upto funcNames.count() 'search'
 		let funcName = try funcNames.get(i) otherwise 'skip'
 			continue
@@ -1069,7 +1069,7 @@ function findFunctionIndex(funcNames ByteArrayArray, name ByteArray, importCount
 			return importCount + (i as MachineWord)
 		end 'found'
 	end 'search'
-	panic("wasm: function not found: {String.from(name)}")
+	panic("wasm: function not found: {name}")
 end 'findFunctionIndex'
 
 function findBlockIndex(func MlirFunction, blockId BlockId) returns MachineWord
@@ -1214,7 +1214,7 @@ end 'makeByteArray4Same'
 
 // Scan a function to find which ValueIds hold float (f64) values.
 // Returns a BoolArray where index i is true if ValueId i is float.
-function findFloatValueIds(func MlirFunction, funcNames ByteArrayArray, funcReturnTypes ByteArrayArray) returns BoolArray
+function findFloatValueIds(func MlirFunction, funcNames StringArray, funcReturnTypes StringArray) returns BoolArray
 	let maxId = findMaxValueId(func)
 	var result = BoolArray.create()
 	for _ in 0 upto maxId + 1 'init'
@@ -1231,7 +1231,7 @@ function findFloatValueIds(func MlirFunction, funcNames ByteArrayArray, funcRetu
 	return result
 end 'findFloatValueIds'
 
-function markFloatOp(op MlirOp, floatSet BoolArray, funcNames ByteArrayArray, funcReturnTypes ByteArrayArray)
+function markFloatOp(op MlirOp, floatSet BoolArray, funcNames StringArray, funcReturnTypes StringArray)
 	match op 'dispatch'
 		mir(mirOp) then markFloatMirOp(mirOp, floatSet: floatSet, funcNames: funcNames, funcReturnTypes: funcReturnTypes)
 		maxon to sys then break 'dispatch'
@@ -1239,7 +1239,7 @@ function markFloatOp(op MlirOp, floatSet BoolArray, funcNames ByteArrayArray, fu
 	end 'dispatch'
 end 'markFloatOp'
 
-function markFloatMirOp(op MirOp, floatSet BoolArray, funcNames ByteArrayArray, funcReturnTypes ByteArrayArray)
+function markFloatMirOp(op MirOp, floatSet BoolArray, funcNames StringArray, funcReturnTypes StringArray)
 	match op 'dispatch'
 		movImm(resultId, _, isFloat) then markIf(floatSet, id: resultId as MachineWord, condition: isFloat)
 		binOp(resultId, _, _, opcode) then markIfFloatBinOp(floatSet, id: resultId as MachineWord, opcode: opcode)
@@ -1254,9 +1254,9 @@ function markFloatMirOp(op MirOp, floatSet BoolArray, funcNames ByteArrayArray, 
 	end 'dispatch'
 end 'markFloatMirOp'
 
-function markIfFloatCall(floatSet BoolArray, id MachineWord, callee ByteArray, funcNames ByteArrayArray, funcReturnTypes ByteArrayArray)
+function markIfFloatCall(floatSet BoolArray, id MachineWord, callee String, funcNames StringArray, funcReturnTypes StringArray)
 	let retType = lookupReturnType(funcReturnTypes, funcNames: funcNames, callee: callee)
-	if retType == b"f64" 'isFloat'
+	if retType == "f64" 'isFloat'
 		floatSet.set(id, value: true)
 	end 'isFloat'
 end 'markIfFloatCall'
