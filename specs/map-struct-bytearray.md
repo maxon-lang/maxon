@@ -37,7 +37,7 @@ function main() returns ExitCode
 	arr.push(20)
 	arr.push(30)
 	let e = Entry.create(data: arr, tag: 42)
-	m.insert("hello", value: e)
+	try m.insert("hello", value: e) otherwise ignore
 	let got = try m.get("hello") otherwise Entry.create(data: ByteArray.create(), tag: 0)
 	print("{got.data.count()}\n")
 	print("{got.tag}\n")

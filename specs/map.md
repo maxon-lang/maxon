@@ -31,14 +31,24 @@ var m = IntIntMap.create()
 
 ## Methods
 
-### insert(key, value)
+### insert(key, value) throws MapError
 
-Add a key-value pair to the map. If the key already exists, updates the value.
+Add a key-value pair to the map. Throws `MapError.keyAlreadyExists` if the key is already present.
 
 ```text
 var m = [1: 100, 2: 200]
-m.insert(3, value: 300)    // Map now has {1: 100, 2: 200, 3: 300}
-m.insert(1, value: 150)    // Updates key 1 to 150
+try m.insert(3, value: 300) otherwise ignore    // Map now has {1: 100, 2: 200, 3: 300}
+try m.insert(1, value: 150) otherwise ignore    // Throws MapError.keyAlreadyExists
+```
+
+### upsert(key, value)
+
+Insert or update a key-value pair. If the key already exists, updates the value.
+
+```text
+var m = [1: 100, 2: 200]
+m.upsert(3, value: 300)    // Map now has {1: 100, 2: 200, 3: 300}
+m.upsert(1, value: 150)    // Updates key 1 to 150
 ```
 
 ### get(key) returns Value throws MapError
@@ -174,7 +184,7 @@ end 'main'
 ```maxon
 function main() returns ExitCode
 	var m = [1: 10, 2: 20]
-	m.insert(3, value: 30)
+	try m.insert(3, value: 30) otherwise ignore
 	return m.count()
 end 'main'
 ```
@@ -182,11 +192,11 @@ end 'main'
 3
 ```
 
-<!-- test: insert.update -->
+<!-- test: upsert.update -->
 ```maxon
 function main() returns ExitCode
 	var m = [1: 10, 2: 20]
-	m.insert(1, value: 100)
+	m.upsert(1, value: 100)
 	var result = try m.get(1) otherwise 0
 	return result
 end 'main'
@@ -199,7 +209,7 @@ end 'main'
 ```maxon
 function main() returns ExitCode
 	var m = [10: 1]
-	m.insert(20, value: 2)
+	try m.insert(20, value: 2) otherwise ignore
 	if m.contains(20) 'check'
 		return 1
 	end 'check'
@@ -260,7 +270,7 @@ end 'main'
 function main() returns ExitCode
 	var m = [0: 0]
 	let _ = m.remove(0)
-	m.insert(1, value: 100)
+	try m.insert(1, value: 100) otherwise ignore
 	var result = try m.get(1) otherwise 0
 	return result
 end 'main'
@@ -298,7 +308,7 @@ end 'main'
 function main() returns ExitCode
 	var m = [1: 10, 2: 20, 3: 30]
 	let _ = m.remove(2)
-	m.insert(2, value: 200)
+	try m.insert(2, value: 200) otherwise ignore
 	var result = try m.get(2) otherwise 0
 	return result
 end 'main'
@@ -321,7 +331,7 @@ end 'Container'
 
 function main() returns ExitCode
 	var m = StrMap.create()
-	m.insert("key", value: "val")
+	try m.insert("key", value: "val") otherwise ignore
 	var c = Container.create(data: m)
 	var result = try c.data.get("key") otherwise ""
 	if result == "val" 'check'
@@ -372,11 +382,11 @@ end 'main'
 1
 ```
 
-<!-- test: string-keys-insert-update -->
+<!-- test: string-keys-upsert-update -->
 ```maxon
 function main() returns ExitCode
 	var m = ["x": 10]
-	m.insert("x", value: 99)
+	m.upsert("x", value: 99)
 	var result = try m.get("x") otherwise 0
 	return result
 end 'main'
@@ -445,4 +455,100 @@ end 'main'
 ```
 ```exitcode
 1
+```
+
+<!-- test: insert.duplicate-throws -->
+```maxon
+function main() returns ExitCode
+	var m = [1: 10, 2: 20]
+	try m.insert(1, value: 99) otherwise 'err'
+		return 42
+	end 'err'
+	return 0
+end 'main'
+```
+```exitcode
+42
+```
+
+<!-- test: insert.duplicate-error-binding -->
+```maxon
+function main() returns ExitCode
+	var m = [1: 10]
+	try m.insert(1, value: 99) otherwise (e) 'err'
+		match e 'check'
+			keyAlreadyExists then return 1
+			keyNotFound then return 2
+		end 'check'
+	end 'err'
+	return 0
+end 'main'
+```
+```exitcode
+1
+```
+
+<!-- test: insert.duplicate-does-not-update -->
+```maxon
+function main() returns ExitCode
+	var m = [1: 10]
+	try m.insert(1, value: 99) otherwise ignore
+	var result = try m.get(1) otherwise 0
+	return result
+end 'main'
+```
+```exitcode
+10
+```
+
+<!-- test: upsert.new-key -->
+```maxon
+function main() returns ExitCode
+	var m = [1: 10]
+	m.upsert(2, value: 20)
+	return m.count()
+end 'main'
+```
+```exitcode
+2
+```
+
+<!-- test: upsert.existing-key -->
+```maxon
+function main() returns ExitCode
+	var m = [1: 10, 2: 20]
+	m.upsert(1, value: 100)
+	var result = try m.get(1) otherwise 0
+	return result
+end 'main'
+```
+```exitcode
+100
+```
+
+<!-- test: upsert.then-contains -->
+```maxon
+function main() returns ExitCode
+	var m = [10: 1]
+	m.upsert(20, value: 2)
+	if m.contains(20) 'check'
+		return 1
+	end 'check'
+	return 0
+end 'main'
+```
+```exitcode
+1
+```
+
+<!-- test: upsert.preserves-count -->
+```maxon
+function main() returns ExitCode
+	var m = [1: 10, 2: 20]
+	m.upsert(1, value: 100)
+	return m.count()
+end 'main'
+```
+```exitcode
+2
 ```

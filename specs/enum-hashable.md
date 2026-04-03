@@ -31,7 +31,7 @@ end 'Color'
 typealias Int = int(i64.min to i64.max)
 typealias ColorMap = Map with (Color, Int)
 var scores = ColorMap.create()
-scores.insert(Color.red, value: 100)
+try scores.insert(Color.red, value: 100) otherwise ignore
 ```
 
 ## Tests
@@ -49,9 +49,9 @@ typealias ColorMap = Map with (Color, Int)
 
 function main() returns ExitCode
 	var m = ColorMap.create()
-	m.insert(Color.red, value: 10)
-	m.insert(Color.green, value: 20)
-	m.insert(Color.blue, value: 30)
+	try m.insert(Color.red, value: 10) otherwise ignore
+	try m.insert(Color.green, value: 20) otherwise ignore
+	try m.insert(Color.blue, value: 30) otherwise ignore
 	var result = try m.get(Color.green) otherwise 0
 	return result
 end 'main'
@@ -72,8 +72,8 @@ typealias StatusMap = Map with (HttpStatus, String)
 
 function main() returns ExitCode
 	var m = StatusMap.create()
-	m.insert(HttpStatus.ok, value: "OK")
-	m.insert(HttpStatus.notFound, value: "Not Found")
+	try m.insert(HttpStatus.ok, value: "OK") otherwise ignore
+	try m.insert(HttpStatus.notFound, value: "Not Found") otherwise ignore
 	if m.contains(HttpStatus.notFound) 'check'
 		return 1
 	end 'check'
@@ -97,9 +97,9 @@ typealias PlanetMap = Map with (Planet, Int)
 
 function main() returns ExitCode
 	var m = PlanetMap.create()
-	m.insert(Planet.earth, value: 1)
-	m.insert(Planet.mars, value: 2)
-	m.insert(Planet.venus, value: 3)
+	try m.insert(Planet.earth, value: 1) otherwise ignore
+	try m.insert(Planet.mars, value: 2) otherwise ignore
+	try m.insert(Planet.venus, value: 3) otherwise ignore
 	var result = try m.get(Planet.mars) otherwise 0
 	return result
 end 'main'
@@ -186,8 +186,8 @@ typealias GradeMap = Map with (Grade, Int)
 
 function main() returns ExitCode
 	var m = GradeMap.create()
-	m.insert(Grade.excellent, value: 100)
-	m.insert(Grade.good, value: 85)
+	try m.insert(Grade.excellent, value: 100) otherwise ignore
+	try m.insert(Grade.good, value: 85) otherwise ignore
 	var result = try m.get(Grade.excellent) otherwise 0
 	return result
 end 'main'
@@ -209,8 +209,8 @@ typealias ColorMap = Map with (Color, Int)
 
 function main() returns ExitCode
 	var m = ColorMap.create()
-	m.insert(Color.red, value: 10)
-	m.insert(Color.green, value: 20)
+	try m.insert(Color.red, value: 10) otherwise ignore
+	try m.insert(Color.green, value: 20) otherwise ignore
 	let _ = m.remove(Color.red)
 	if m.contains(Color.red) 'check'
 		return 1
@@ -241,7 +241,7 @@ typealias CategoryLevelMap = Map with (LogCategory, LogLevel)
 var categoryLevels = CategoryLevelMap.create()
 
 function setCategoryLevel(category LogCategory, level LogLevel)
-	categoryLevels.insert(category, value: level)
+	try categoryLevels.insert(category, value: level) otherwise ignore
 end 'setCategoryLevel'
 
 function getCategoryLevel(category LogCategory) returns LogLevel
@@ -284,7 +284,7 @@ end 'Color'
 function main() returns ExitCode
 	var m = [Color.red: 10, Color.green: 20, Color.blue: 30]
 	for (color, score) in m 'loop'
-		m.insert(color, value: score + 1)
+		m.upsert(color, value: score + 1)
 	end 'loop'
 	var result = try m.get(Color.red) otherwise 0
 	return result

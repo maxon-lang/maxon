@@ -24,10 +24,10 @@ export function getStdlibModule(project Project) returns MlirModule
 	if stdlibLoaded 'cached'
 		// Restore cached typealiases into the new project
 		for(name, baseType) in stdlibTypealiases 'restoreAliases'
-			project.typealiases.insert(name, value: baseType)
+			try project.typealiases.insert(name, value: baseType) otherwise ignore
 		end 'restoreAliases'
 		for(name, range) in stdlibTypealiasRanges 'restoreRanges'
-			project.typealiasRanges.insert(name, value: range)
+			try project.typealiasRanges.insert(name, value: range) otherwise ignore
 		end 'restoreRanges'
 		return cachedStdlibModule
 	end 'cached'
@@ -61,8 +61,15 @@ export function getStdlibModule(project Project) returns MlirModule
 
 	cachedStdlibModule = allModule
 	stdlibNextValueId = getNextValueId(project)
-	stdlibTypealiases = project.typealiases
-	stdlibTypealiasRanges = project.typealiasRanges
+
+	// Snapshot stdlib typealiases into separate maps so user-defined
+	// typealiases added later don't leak into the cached stdlib state.
+	for (name, baseType) in project.typealiases 'cacheAliases'
+		stdlibTypealiases.upsert(name, value: baseType)
+	end 'cacheAliases'
+	for (name, range) in project.typealiasRanges 'cacheRanges'
+		stdlibTypealiasRanges.upsert(name, value: range)
+	end 'cacheRanges'
 	stdlibLoaded = true
 
 	return cachedStdlibModule

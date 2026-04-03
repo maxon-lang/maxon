@@ -55,7 +55,7 @@ export function queryTokens(project Project, path FilePath) returns TokenArray t
 
 	// Store
 	let newMemo = TokenMemo.create(tokens, computedAt: project.db.currentRevision, verifiedAt: project.db.currentRevision)
-	project.db.tokenCache.insert(path, value: newMemo)
+	project.db.tokenCache.upsert(path, value: newMemo)
 
 	return tokens
 end 'queryTokens'
@@ -99,7 +99,7 @@ export function queryParseOps(project Project, path FilePath) returns MlirModule
 	let hadErrors = project.diagnostics.count() > errorCountBefore
 	if not hadErrors 'cacheOk'
 		let newMemo = ParseMemo.create(module, computedAt: project.db.currentRevision, verifiedAt: project.db.currentRevision, nextValueIdAfterParse: nextId)
-		project.db.parseCache.insert(path, value: newMemo)
+		project.db.parseCache.upsert(path, value: newMemo)
 	end 'cacheOk'
 
 	return module

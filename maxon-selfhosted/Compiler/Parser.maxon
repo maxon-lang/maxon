@@ -790,7 +790,9 @@ type Parser
 		end 'qualifyNonMain'
 		var func = createMlirFunction(funcName, returnType: returnTypeName, paramCount: paramCount, paramTypes: paramTypes, returnLine: 0)
 		// Register return type so callers can determine if result is float
-		project.funcReturnTypes.insert(funcName, value: returnTypeName)
+		try project.funcReturnTypes.insert(funcName, value: returnTypeName) otherwise 'dupFunc'
+			reportCompileError(project, code: ErrorCode.parserUnexpectedToken, message: "Duplicate function '{nameToken.value}'", line: nameToken.line, column: nameToken.column, filePath: filePath)
+		end 'dupFunc'
 		var block = newBlock(func, label: "entry")
 
 		// Parse function body
@@ -896,7 +898,9 @@ type Parser
 		let valueToken = peek()
 		if valueToken.kind == TokenKind.doubleStringLiteral 'isString'
 			expect(TokenKind.doubleStringLiteral)
-			project.topLevelConstants.insert(nameToken.value, value: ConstantValue.stringValue(valueToken.value))
+			try project.topLevelConstants.insert(nameToken.value, value: ConstantValue.stringValue(valueToken.value)) otherwise 'dupConst1'
+				reportCompileError(project, code: ErrorCode.parserUnexpectedToken, message: "Duplicate constant '{nameToken.value}'", line: nameToken.line, column: nameToken.column, filePath: filePath)
+			end 'dupConst1'
 			logTrace(LogCategory.parser, message: () gives "Registered top-level string constant '{nameToken.value}'")
 			return
 		end 'isString'
@@ -908,7 +912,9 @@ type Parser
 			return
 		end 'notConst'
 
-		project.topLevelConstants.insert(nameToken.value, value: ConstantValue.intValue(constValue))
+		try project.topLevelConstants.insert(nameToken.value, value: ConstantValue.intValue(constValue)) otherwise 'dupConst2'
+			reportCompileError(project, code: ErrorCode.parserUnexpectedToken, message: "Duplicate constant '{nameToken.value}'", line: nameToken.line, column: nameToken.column, filePath: filePath)
+		end 'dupConst2'
 		logTrace(LogCategory.parser, message: () gives "Registered top-level integer constant '{nameToken.value}' = {constValue}")
 	end 'parseTopLevelLet'
 
@@ -970,49 +976,52 @@ type Parser
 
 		let baseToken = peek()
 
+		var mlirType = ""
+
 		if baseToken.kind == TokenKind.bool 'isBool'
-			project.typealiases.insert(nameToken.value, value: "i1")
-			skipToNextLine()
-			return
+			mlirType = "i1"
 		end 'isBool'
 
-		// int and float both require range bounds: base(LOWER to UPPER)
-		if baseToken.kind != TokenKind.int and baseToken.kind != TokenKind.float 'notNumeric'
+		if baseToken.kind == TokenKind.int or baseToken.kind == TokenKind.float 'isNumeric'
+			let isFloat = baseToken.kind == TokenKind.float
+			advance()  // skip 'int' or 'float'
+
+			let parenToken = peek()
+			if parenToken.kind != TokenKind.leftParen 'noParen'
+				var example = "int(0 to 100)"
+				if isFloat 'floatEx'
+					example = "float(f64.min to f64.max)"
+				end 'floatEx'
+				reportCompileError(project, code: ErrorCode.parserExpectedToken, message: "typealias '{nameToken.value}' requires range bounds, e.g. {example}", line: baseToken.line, column: baseToken.column, filePath: FilePath from "")
+				skipToNextLine()
+				return
+			end 'noParen'
+			expect(TokenKind.leftParen)
+
+			let lowerBound = parseTypeBound()
+
+			if at(TokenKind.to) 'hasTo'
+				expect(TokenKind.to)
+			end 'hasTo'
+
+			let upperBound = parseTypeBound()
+
+			if isFloat 'computeFloat'
+				mlirType = "f64"
+			end 'computeFloat' else 'computeInt'
+				mlirType = computeOptimalIntType(lower: lowerBound, upper: upperBound)
+				try project.typealiasRanges.insert(nameToken.value, value: TypealiasRange.create(lowerBound, upper: upperBound)) otherwise ignore
+			end 'computeInt'
+		end 'isNumeric'
+
+		if mlirType == "" 'unsupported'
 			skipToNextLine()
 			return
-		end 'notNumeric'
+		end 'unsupported'
 
-		let isFloat = baseToken.kind == TokenKind.float
-		advance()  // skip 'int' or 'float'
-
-		let parenToken = peek()
-		if parenToken.kind != TokenKind.leftParen 'noParen'
-			var example = "int(0 to 100)"
-			if isFloat 'floatEx'
-				example = "float(f64.min to f64.max)"
-			end 'floatEx'
-			reportCompileError(project, code: ErrorCode.parserExpectedToken, message: "typealias '{nameToken.value}' requires range bounds, e.g. {example}", line: baseToken.line, column: baseToken.column, filePath: FilePath from "")
-			skipToNextLine()
-			return
-		end 'noParen'
-		expect(TokenKind.leftParen)
-
-		let lowerBound = parseTypeBound()
-
-		if at(TokenKind.to) 'hasTo'
-			expect(TokenKind.to)
-		end 'hasTo'
-
-		let upperBound = parseTypeBound()
-
-		if isFloat 'registerFloat'
-			project.typealiases.insert(nameToken.value, value: "f64")
-		end 'registerFloat' else 'registerInt'
-			let mlirType = computeOptimalIntType(lower: lowerBound, upper: upperBound)
-			project.typealiases.insert(nameToken.value, value: mlirType)
-			project.typealiasRanges.insert(nameToken.value, value: TypealiasRange.create(lowerBound, upper: upperBound))
-		end 'registerInt'
-
+		try project.typealiases.insert(nameToken.value, value: mlirType) otherwise 'dupAlias'
+			reportCompileError(project, code: ErrorCode.parserUnexpectedToken, message: "Duplicate typealias '{nameToken.value}'", line: nameToken.line, column: nameToken.column, filePath: filePath)
+		end 'dupAlias'
 		skipToNextLine()
 	end 'parseTopLevelTypealias'
 
@@ -1256,7 +1265,9 @@ type Parser
 		// so later comparisons like `inner == "hello"` can be folded.
 		// Skip runtime storage since the value is resolved at compile time.
 		if isLet and exprResult.isStringConst 'registerStringConst'
-			project.topLevelConstants.insert(nameToken.value, value: ConstantValue.stringValue(exprResult.stringConstValue))
+			try project.topLevelConstants.insert(nameToken.value, value: ConstantValue.stringValue(exprResult.stringConstValue)) otherwise 'dupConst3'
+				reportCompileError(project, code: ErrorCode.parserUnexpectedToken, message: "Duplicate constant '{nameToken.value}'", line: nameToken.line, column: nameToken.column, filePath: filePath)
+			end 'dupConst3'
 			let _ = defineVariable(nameToken.value, isFloat: exprResult.isFloat, isRefType: exprResult.isRefType)
 			return
 		end 'registerStringConst'

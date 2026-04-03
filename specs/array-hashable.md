@@ -103,7 +103,7 @@ function main() returns ExitCode
 	key.push(1)
 	key.push(2)
 	key.push(3)
-	m.insert(key: key, value: 42)
+	try m.insert(key: key, value: 42) otherwise ignore
 	var lookup = IntArr.create()
 	lookup.push(1)
 	lookup.push(2)

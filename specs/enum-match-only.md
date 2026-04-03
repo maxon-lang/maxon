@@ -305,8 +305,8 @@ typealias ColorMap = Map with (Color, Int)
 
 function main() returns ExitCode
 	var m = ColorMap.create()
-	m.insert(Color.red, value: 10)
-	m.insert(Color.green, value: 20)
+	try m.insert(Color.red, value: 10) otherwise ignore
+	try m.insert(Color.green, value: 20) otherwise ignore
 	var result = try m.get(Color.green) otherwise 0
 	return result
 end 'main'
