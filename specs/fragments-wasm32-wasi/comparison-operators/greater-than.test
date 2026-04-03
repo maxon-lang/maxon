@@ -1,0 +1,26 @@
+// Test: greater-than
+function main() returns ExitCode
+	if 5 > 3 'check'
+		return 42
+	end 'check'
+	return 0
+end 'main'
+---
+ExitCode: 42
+---
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 5 : i64
+    %1 = mir.mov_imm 3 : i64
+    %2 = mir.cmp gt, %0, %1
+    mir.cond_br %2 [then: check_1(), else: check_1.after()]
+  check_1:
+    %3 = mir.mov_imm 42 : i64
+    mir.ret %3
+  check_1.after:
+    %4 = mir.mov_imm 0 : i64
+    mir.ret %4
+  }
+}
+---

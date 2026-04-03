@@ -1,0 +1,27 @@
+// Test: not-equal
+function main() returns ExitCode
+	var x = 10
+	if x != 20 'check'
+		return 1
+	end 'check'
+	return 0
+end 'main'
+---
+ExitCode: 1
+---
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 10 : i64
+    %2 = mir.mov_imm 20 : i64
+    %3 = mir.cmp ne, %0, %2
+    mir.cond_br %3 [then: check_1(), else: check_1.after()]
+  check_1:
+    %4 = mir.mov_imm 1 : i64
+    mir.ret %4
+  check_1.after:
+    %5 = mir.mov_imm 0 : i64
+    mir.ret %5
+  }
+}
+---

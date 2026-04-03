@@ -96,21 +96,21 @@ end 'main'
 <!-- test: hex-integer -->
 ```maxon
 function main() returns ExitCode
-	return 0xff
+	return 0x7d
 end 'main'
 ```
 ```exitcode
-255
+125
 ```
 
 <!-- test: hex-integer-uppercase -->
 ```maxon
 function main() returns ExitCode
-	return 0xaB
+	return 0x5A
 end 'main'
 ```
 ```exitcode
-171
+90
 ```
 
 <!-- test: binary-integer -->
@@ -157,11 +157,11 @@ end 'main'
 <!-- test: binary-underscore -->
 ```maxon
 function main() returns ExitCode
-	return 0b1111_0000
+	return 0b0101_1010
 end 'main'
 ```
 ```exitcode
-240
+90
 ```
 
 <!-- test: large-hex-literal -->

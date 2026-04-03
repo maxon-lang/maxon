@@ -218,12 +218,14 @@ export function writePe(outputPath FilePath, codeResult CodeResult, target Targe
 	match target.cpu 'patchCpu'
 		x64 then patchRelocationsX86(code, relocations: codeResult.relocations, textRva: textRva, idataRva: idataRva)
 		arm64 then patchRelocationsArm64(code, relocations: codeResult.relocations, textRva: textRva, idataRva: idataRva)
+		wasm32 then panic("PE writer not used for WASM targets")
 	end 'patchCpu'
 
 	// Patch rdata and symdata references in code
 	match target.cpu 'patchRdata'
 		x64 then patchRdataRelocationsX86(code, rdataRelocs: codeResult.rdataRelocations, textRva: textRva, rdataRva: rdataRva, symdataRva: symdataRva)
 		arm64 then patchRdataRelocationsArm64(code, rdataRelocs: codeResult.rdataRelocations, textRva: textRva, rdataRva: rdataRva, symdataRva: symdataRva)
+		wasm32 then panic("PE writer not used for WASM targets")
 	end 'patchRdata'
 
 	// IAT directory size: 3 entries + null terminator = 32 bytes
@@ -237,6 +239,7 @@ export function writePe(outputPath FilePath, codeResult CodeResult, target Targe
 	let coffMachine = match target.cpu 'coffCpu'
 		x64 gives 0x8664
 		arm64 gives 0xAA64
+		default panic("PE writer not used for WASM targets")
 	end 'coffCpu'
 	writeWord(pe, value: coffMachine)
 	writeWord(pe, value: numSections)

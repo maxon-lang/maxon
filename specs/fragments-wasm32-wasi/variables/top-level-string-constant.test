@@ -1,0 +1,28 @@
+// Test: top-level-string-constant
+let GREETING = "hello"
+
+function main() returns ExitCode
+	if GREETING == "hello" 'check'
+		return 1
+	end 'check'
+	return 0
+end 'main'
+---
+ExitCode: 1
+---
+module {
+  func @main() -> u8 {
+  entry:
+    %2 = mir.mov_imm 1 : i64
+    %3 = mir.mov_imm 1 : i64
+    %4 = mir.cmp eq, %2, %3
+    mir.cond_br %4 [then: check_1(), else: check_1.after()]
+  check_1:
+    %5 = mir.mov_imm 1 : i64
+    mir.ret %5
+  check_1.after:
+    %6 = mir.mov_imm 0 : i64
+    mir.ret %6
+  }
+}
+---

@@ -1,0 +1,31 @@
+// Test: float-var-if-else
+function main() returns ExitCode
+	var x = 3.14
+	if x == 3.14 'check'
+		return 1
+	end 'check' else 'other'
+		return 0
+	end 'other'
+end 'main'
+---
+ExitCode: 1
+RequiredRdata: ```
+f64 3.14
+```
+---
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 4614253070214989086 : f64
+    %2 = mir.mov_imm 4614253070214989086 : f64
+    %3 = mir.cmp feq, %0, %2
+    mir.cond_br %3 [then: check_1(), else: other_2()]
+  check_1:
+    %4 = mir.mov_imm 1 : i64
+    mir.ret %4
+  other_2:
+    %5 = mir.mov_imm 0 : i64
+    mir.ret %5
+  }
+}
+---

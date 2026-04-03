@@ -1,0 +1,29 @@
+// Test: float-promotion
+function main() returns ExitCode
+	var x = 5
+	var y = 2.0
+	var result = x + y
+	return trunc(result)
+end 'main'
+---
+ExitCode: 7
+---
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 5 : i64
+    %1 = mir.mov_imm 4611686018427387904 : f64
+    %5 = mir.sitofp.f64 %0
+    %4 = mir.add.f64 %5, %1
+    %7 = mir.fptosi.i64 %4
+    %8 = mir.mov_imm 125 : i64
+    %9 = mir.cmp ugt, %7, %8
+    mir.cond_br %9 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %10 = mir.global_addr @__panic_msg_0
+    %11 = mir.call @mrt_panic(%10)
+  __range_ok_0:
+    mir.ret %7
+  }
+}
+---

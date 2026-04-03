@@ -125,7 +125,7 @@ function divLoop(n Integer) returns Integer
 	var sum = 0
 	var i = 1
 	while i <= n 'loop'
-		sum = sum + trunc(100 / i)
+		sum = sum + trunc(50 / i)
 		i = i + 1
 	end 'loop'
 	return sum
@@ -136,7 +136,7 @@ function main() returns ExitCode
 end 'main'
 ```
 ```exitcode
-228
+113
 ```
 
 <!-- test: div-with-call -->

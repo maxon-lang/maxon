@@ -1,0 +1,40 @@
+// Test: if-statements.else-if-chain
+function main() returns ExitCode
+	var x = 2
+	if x == 1 'case1'
+		return 1
+	end 'case1' else if x == 2 'case2'
+		return 2
+	end 'case2' else 'default'
+		return 0
+	end 'default'
+end 'main'
+---
+ExitCode: 2
+---
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 2 : i64
+    %2 = mir.mov_imm 1 : i64
+    %3 = mir.cmp eq, %0, %2
+    mir.cond_br %3 [then: case1_1(), else: case1_1.else()]
+  case1_1:
+    %4 = mir.mov_imm 1 : i64
+    mir.ret %4
+  case1_1.else:
+    %6 = mir.mov_imm 2 : i64
+    %7 = mir.cmp eq, %0, %6
+    mir.cond_br %7 [then: case2_3(), else: default_4()]
+  case2_3:
+    %8 = mir.mov_imm 2 : i64
+    mir.ret %8
+  default_4:
+    %9 = mir.mov_imm 0 : i64
+    mir.ret %9
+  case1_1.merge:
+    %10 = mir.mov_imm 0 : i64
+    mir.ret %10
+  }
+}
+---

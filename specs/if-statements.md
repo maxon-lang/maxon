@@ -188,11 +188,11 @@ function main() returns ExitCode
 	var b = classify(5)
 	var c = classify(50)
 	var d = classify(200)
-	return a + b * 10 + c * 100 + d * 1000
+	return a + b * 3 + c * 9 + d * 27
 end 'main'
 ```
 ```exitcode
-3210
+102
 ```
 
 <!-- test: if-statements.nested -->

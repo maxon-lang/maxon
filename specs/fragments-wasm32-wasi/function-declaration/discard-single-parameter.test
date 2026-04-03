@@ -1,0 +1,43 @@
+// Test: discard-single-parameter
+
+typealias Integer = int(i64.min to i64.max)
+
+function useSecond(_ Integer, b Integer) returns Integer
+	return b
+end 'useSecond'
+
+function main() returns ExitCode
+	return useSecond(10, b: 42)
+end 'main'
+---
+ExitCode: 42
+---
+module {
+  func @discard-single-parameter.useSecond(ptr: i64, ptr: i64) -> i64 {
+  entry:
+    %1 = mir.param 1 : StdI64
+    %3 = mir.mov_imm -9223372036854775807 : i64
+    %4 = mir.cmp lt, %1, %3
+    mir.cond_br %4 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %7 = mir.global_addr @__panic_msg_0
+    %8 = mir.call @mrt_panic(%7)
+  __range_ok_0:
+    mir.ret %1
+  }
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 10 : i64
+    %1 = mir.mov_imm 42 : i64
+    %2 = mir.call @discard-single-parameter.useSecond(%0, %1)
+    %5 = mir.mov_imm 125 : i64
+    %6 = mir.cmp ugt, %2, %5
+    mir.cond_br %6 [then: __range_panic_1(), else: __range_ok_1()]
+  __range_panic_1:
+    %9 = mir.global_addr @__panic_msg_1
+    %10 = mir.call @mrt_panic(%9)
+  __range_ok_1:
+    mir.ret %2
+  }
+}
+---

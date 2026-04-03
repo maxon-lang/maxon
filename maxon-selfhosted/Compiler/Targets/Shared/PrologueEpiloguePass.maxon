@@ -99,6 +99,7 @@ function scanOpForFrameInfo(op MlirOp, target Target, state FrameScanState)
 	match target.cpu 'cpuDispatch'
 		x64 then scanX64OpForFrameInfo(op, state: state)
 		arm64 then scanArm64OpForFrameInfo(op, state: state)
+		wasm32 then panic("prologue/epilogue not used for WASM targets")
 	end 'cpuDispatch'
 end 'scanOpForFrameInfo'
 
@@ -259,6 +260,7 @@ function insertPrologueEpilogueForFunc(srcFunc MlirFunction, target Target) retu
 	match target.cpu 'dispatchCpu'
 		x64 then insertX64PrologueEpilogue(srcFunc, dstFunc: dstFunc, stackSize: stackSize)
 		arm64 then insertArm64PrologueEpilogue(srcFunc, dstFunc: dstFunc, stackSize: stackSize)
+		wasm32 then panic("prologue/epilogue not used for WASM targets")
 	end 'dispatchCpu'
 
 	// Preserve region metadata

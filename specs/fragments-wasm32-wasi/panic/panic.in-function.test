@@ -1,0 +1,35 @@
+// Test: panic.in-function
+function fail()
+		panic("failure in helper")
+end 'fail'
+
+function main() returns ExitCode
+		fail()
+		return 0
+end 'main'
+---
+ExitCode: 1
+Stderr: ```
+panic at panic.in-function.test:3: failure in helper
+Stack trace:
+  in panic.fail
+  in main
+  in mrt_start
+```
+---
+module {
+  func @panic.fail() {
+  entry:
+    %2 = mir.global_addr @__panic_msg_0
+    %3 = mir.call @mrt_panic(%2)
+    %1 = mir.mov_imm 0 : i64
+    mir.ret %1
+  }
+  func @main() -> u8 {
+  entry:
+    %0 = mir.call @panic.fail()
+    %1 = mir.mov_imm 0 : i64
+    mir.ret %1
+  }
+}
+---

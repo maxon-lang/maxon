@@ -1,0 +1,40 @@
+// Test: docs-example-1
+
+typealias Radius = float(f64.min to f64.max)
+
+function circleArea(radius Radius) returns Radius
+	return 3.14159 * radius * radius
+end 'circleArea'
+
+function main() returns ExitCode
+	var area = circleArea(5.0)
+	return trunc(area)  // Returns 78
+end 'main'
+---
+ExitCode: 78
+---
+module {
+  func @docs-example-1.circleArea(ptr: i64) -> f64 {
+  entry:
+    %5 = mir.param 0 : StdF64
+    %0 = mir.mov_imm 4614256650576692846 : f64
+    %2 = mir.mul.f64 %0, %5
+    %4 = mir.mul.f64 %2, %5
+    mir.ret %4
+  }
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 4617315517961601024 : f64
+    %1 = mir.call @docs-example-1.circleArea(%0)
+    %3 = mir.fptosi.i64 %1
+    %6 = mir.mov_imm 125 : i64
+    %7 = mir.cmp ugt, %3, %6
+    mir.cond_br %7 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %8 = mir.global_addr @__panic_msg_0
+    %9 = mir.call @mrt_panic(%8)
+  __range_ok_0:
+    mir.ret %3
+  }
+}
+---

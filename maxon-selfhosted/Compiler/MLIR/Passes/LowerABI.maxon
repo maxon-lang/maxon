@@ -18,6 +18,7 @@ export enum ABIConvention
 	windowsX64
 	sysVAmd64
 	aapcs64
+	wasmABI
 end 'ABIConvention'
 
 // Recorded info about a call site.
@@ -40,6 +41,7 @@ export function getABIConvention(target Target) returns ABIConvention
 	return match target.cpu 'cpuMatch'
 		x64 gives getX86Convention(target)
 		arm64 gives ABIConvention.aapcs64
+		wasm32 gives ABIConvention.wasmABI
 	end 'cpuMatch'
 end 'getABIConvention'
 
@@ -48,6 +50,7 @@ function getX86Convention(target Target) returns ABIConvention
 		windows gives ABIConvention.windowsX64
 		linux gives ABIConvention.sysVAmd64
 		macos gives ABIConvention.sysVAmd64
+		wasi gives ABIConvention.sysVAmd64
 	end 'osMatch'
 end 'getX86Convention'
 
@@ -60,6 +63,7 @@ export function classifyParam(paramIndex VarSlot, convention ABIConvention) retu
 		windowsX64 gives 4
 		sysVAmd64 gives 6
 		aapcs64 gives 8
+		wasmABI gives 1000 // all params pass as locals, no stack spilling
 	end 'limit'
 
 	if paramIndex < regLimit 'fitsInReg'

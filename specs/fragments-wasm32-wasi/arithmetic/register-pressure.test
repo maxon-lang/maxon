@@ -1,0 +1,87 @@
+// Test: register-pressure
+
+typealias Integer = int(i64.min to i64.max)
+
+function manyVars(a Integer, b Integer, c Integer, d Integer, e Integer, f Integer) returns Integer
+	var v1 = a + 1
+	var v2 = b + 2
+	var v3 = c + 3
+	var v4 = d + 4
+	var v5 = e + 5
+	var v6 = f + 6
+	var v7 = v1 + v2
+	var v8 = v3 + v4
+	var v9 = v5 + v6
+	var v10 = v7 + v8
+	var v11 = v9 + v10
+	var v12 = v11 + v1 + v2 + v3 + v4 + v5 + v6
+	return v12
+end 'manyVars'
+
+function main() returns ExitCode
+	return manyVars(1, b: 2, c: 3, d: 4, e: 5, f: 6)
+end 'main'
+---
+ExitCode: 84
+---
+module {
+  func @register-pressure.manyVars(ptr: i64, ptr: i64, ptr: i64, ptr: i64, ptr: i64, ptr: i64) -> i64 {
+  entry:
+    %47 = mir.param 0 : StdI64
+    %48 = mir.param 1 : StdI64
+    %49 = mir.param 2 : StdI64
+    %50 = mir.param 3 : StdI64
+    %51 = mir.param 4 : StdI64
+    %52 = mir.param 5 : StdI64
+    %1 = mir.mov_imm 1 : i64
+    %2 = mir.add.i64 %47, %1
+    %4 = mir.mov_imm 2 : i64
+    %5 = mir.add.i64 %48, %4
+    %7 = mir.mov_imm 3 : i64
+    %8 = mir.add.i64 %49, %7
+    %10 = mir.mov_imm 4 : i64
+    %11 = mir.add.i64 %50, %10
+    %13 = mir.mov_imm 5 : i64
+    %14 = mir.add.i64 %51, %13
+    %16 = mir.mov_imm 6 : i64
+    %17 = mir.add.i64 %52, %16
+    %20 = mir.add.i64 %2, %5
+    %23 = mir.add.i64 %8, %11
+    %26 = mir.add.i64 %14, %17
+    %29 = mir.add.i64 %20, %23
+    %32 = mir.add.i64 %26, %29
+    %35 = mir.add.i64 %32, %2
+    %37 = mir.add.i64 %35, %5
+    %39 = mir.add.i64 %37, %8
+    %41 = mir.add.i64 %39, %11
+    %43 = mir.add.i64 %41, %14
+    %45 = mir.add.i64 %43, %17
+    %53 = mir.mov_imm -9223372036854775807 : i64
+    %54 = mir.cmp lt, %45, %53
+    mir.cond_br %54 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %57 = mir.global_addr @__panic_msg_0
+    %58 = mir.call @mrt_panic(%57)
+  __range_ok_0:
+    mir.ret %45
+  }
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 1 : i64
+    %1 = mir.mov_imm 2 : i64
+    %2 = mir.mov_imm 3 : i64
+    %3 = mir.mov_imm 4 : i64
+    %4 = mir.mov_imm 5 : i64
+    %5 = mir.mov_imm 6 : i64
+    %6 = mir.call @register-pressure.manyVars(%0, %1, %2, %3, %4, %5)
+    %55 = mir.mov_imm 125 : i64
+    %56 = mir.cmp ugt, %6, %55
+    mir.cond_br %56 [then: __range_panic_1(), else: __range_ok_1()]
+  __range_panic_1:
+    %59 = mir.global_addr @__panic_msg_1
+    %60 = mir.call @mrt_panic(%59)
+  __range_ok_1:
+    mir.ret %6
+  }
+}
+---

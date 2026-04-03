@@ -1,0 +1,60 @@
+// Test: panic.after-condition
+typealias Integer = int(i64.min to i64.max)
+
+function check(n Integer) returns Integer
+		if n < 0 'negative'
+				panic("negative value")
+		end 'negative'
+		return n
+end 'check'
+
+function main() returns ExitCode
+		return check(Integer{-1})
+end 'main'
+---
+ExitCode: 1
+Stderr: ```
+panic at panic.after-condition.test:6: negative value
+Stack trace:
+  in panic.check
+  in main
+  in mrt_start
+```
+---
+module {
+  func @panic.check(ptr: i64) -> i64 {
+  entry:
+    %5 = mir.param 0 : StdI64
+    %1 = mir.mov_imm 0 : i64
+    %2 = mir.cmp lt, %5, %1
+    mir.cond_br %2 [then: negative_1(), else: negative_1.after()]
+  negative_1:
+    %10 = mir.global_addr @__panic_msg_3
+    %11 = mir.call @mrt_panic(%10)
+    mir.br negative_1.after()
+  negative_1.after:
+    %6 = mir.mov_imm -9223372036854775807 : i64
+    %7 = mir.cmp lt, %5, %6
+    mir.cond_br %7 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %12 = mir.global_addr @__panic_msg_0
+    %13 = mir.call @mrt_panic(%12)
+  __range_ok_0:
+    mir.ret %5
+  }
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 1 : i64
+    %1 = mir.neg.i64 %0
+    %2 = mir.call @panic.check(%1)
+    %8 = mir.mov_imm 125 : i64
+    %9 = mir.cmp ugt, %2, %8
+    mir.cond_br %9 [then: __range_panic_1(), else: __range_ok_1()]
+  __range_panic_1:
+    %14 = mir.global_addr @__panic_msg_1
+    %15 = mir.call @mrt_panic(%14)
+  __range_ok_1:
+    mir.ret %2
+  }
+}
+---

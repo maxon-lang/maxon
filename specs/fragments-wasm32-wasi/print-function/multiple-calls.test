@@ -1,0 +1,39 @@
+// Test: multiple-calls
+function main() returns ExitCode
+	var x = 42
+	print("{x}\n")
+	print("{10 + 5}\n")
+	print("{100}\n")
+	return 0
+end 'main'
+---
+ExitCode: 0
+Stdout: ```
+42
+15
+100
+```
+---
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 42 : i64
+    %7 = mir.call @mrt_printInt(%0)
+    %8 = mir.global_addr @__str_0
+    %9 = mir.mov_imm 1 : i64
+    %10 = mir.call @mrt_write_stdout(%8, %9)
+    %4 = mir.mov_imm 15 : i64
+    %11 = mir.call @mrt_printInt(%4)
+    %12 = mir.global_addr @__str_0
+    %13 = mir.mov_imm 1 : i64
+    %14 = mir.call @mrt_write_stdout(%12, %13)
+    %5 = mir.mov_imm 100 : i64
+    %15 = mir.call @mrt_printInt(%5)
+    %16 = mir.global_addr @__str_0
+    %17 = mir.mov_imm 1 : i64
+    %18 = mir.call @mrt_write_stdout(%16, %17)
+    %6 = mir.mov_imm 0 : i64
+    mir.ret %6
+  }
+}
+---

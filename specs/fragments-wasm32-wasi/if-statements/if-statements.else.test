@@ -1,0 +1,28 @@
+// Test: if-statements.else
+function main() returns ExitCode
+	var x = 5
+	if x == 5 'is5'
+		return 1
+	end 'is5' else 'not5'
+		return 0
+	end 'not5'
+end 'main'
+---
+ExitCode: 1
+---
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 5 : i64
+    %2 = mir.mov_imm 5 : i64
+    %3 = mir.cmp eq, %0, %2
+    mir.cond_br %3 [then: is5_1(), else: not5_2()]
+  is5_1:
+    %4 = mir.mov_imm 1 : i64
+    mir.ret %4
+  not5_2:
+    %5 = mir.mov_imm 0 : i64
+    mir.ret %5
+  }
+}
+---

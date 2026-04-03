@@ -1,0 +1,1310 @@
+// WASM backend: converts MIR module directly to a .wasm binary file.
+// Branches from MIR, bypassing the register-based pipeline stages
+// (target lowering, register allocation, scheduling, prologue/epilogue).
+// WASM is a stack machine with structured control flow and infinite locals.
+
+// --- WASI import indices (must match import section order) ---
+
+let wasiProcExit = 0
+let wasiFdWrite = 1
+let wasiImportCount = 2
+
+// --- Scratch memory layout for fd_write iovec ---
+// We reserve the first 1024 bytes of linear memory for scratch space.
+// iovec struct at offset 0: { buf_ptr: i32 (offset 0), buf_len: i32 (offset 4) }
+// nwritten at offset 8
+
+let iovecBase = 0
+let nwrittenBase = 8
+let scratchEnd = 1024
+
+typealias GlobalDataOffsetMap = Map with(ByteArray, MachineWord)
+
+// ============================================================
+// Public entry point
+// ============================================================
+
+// Compile a MIR module to a .wasm binary and write it to outputPath.
+export function compileWasm(module MlirModule, globalData GlobalDataTable, outputPath FilePath)
+	let wasmBytes = emitWasmModule(module, globalData: globalData)
+	try File.writeBinary(outputPath, content: wasmBytes) otherwise 'writeErr'
+		panic("Failed to write WASM file: {outputPath}")
+	end 'writeErr'
+end 'compileWasm'
+
+// ============================================================
+// Module assembly
+// ============================================================
+
+function emitWasmModule(module MlirModule, globalData GlobalDataTable) returns ByteArray
+	var wasm = ByteArray.create()
+	writeModuleHeader(wasm)
+
+	// Build function table: map function names to indices.
+	// Imported functions come first, then module functions.
+	var funcNames = ByteArrayArray.create()
+	var funcCount = 0 as MachineWord
+
+	// Collect all function names (imports occupy indices 0..wasiImportCount-1)
+	for func in module.functions 'collectNames'
+		funcNames.push(func.name)
+		funcCount = funcCount + 1
+	end 'collectNames'
+
+	// Collect return types for each module function (parallel to funcNames)
+	var funcReturnTypes = ByteArrayArray.create()
+	for func in module.functions 'collectReturnTypes'
+		funcReturnTypes.push(func.returnType)
+	end 'collectReturnTypes'
+
+	// --- Type section ---
+	// We need function types for:
+	// 1. WASI proc_exit: (i32) -> ()
+	// 2. WASI fd_write: (i32, i32, i32, i32) -> (i32)
+	// 3. Each module function
+	var types = ByteArrayArray.create()
+
+	// Type 0: (i32) -> () — proc_exit
+	var procExitType = ByteArray.create()
+	writeFuncType(procExitType, paramTypes: makeByteArray1(wasmTypeI32), resultTypes: ByteArray.create())
+	types.push(procExitType)
+
+	// Type 1: (i32, i32, i32, i32) -> (i32) — fd_write
+	var fdWriteType = ByteArray.create()
+	writeFuncType(fdWriteType, paramTypes: makeByteArray4Same(wasmTypeI32), resultTypes: makeByteArray1(wasmTypeI32))
+	types.push(fdWriteType)
+
+	// Types for module functions (type index = wasiImportCount + i for each)
+	for func in module.functions 'buildTypes'
+		var funcType = ByteArray.create()
+		var params = ByteArray.create()
+		for i in 0 upto func.paramCount 'eachParam'
+			let paramType = try func.paramTypes.get(i) otherwise StdType.i64
+			let wasmType = stdTypeToWasmType(paramType)
+			params.push(wasmType)
+		end 'eachParam'
+		var results = ByteArray.create()
+		if func.returnType == b"f64" 'returnsF64'
+			results.push(wasmTypeF64)
+		end 'returnsF64' else if func.returnType != b"void" 'returnsI64'
+			results.push(wasmTypeI64)
+		end 'returnsI64'
+		writeFuncType(funcType, paramTypes: params, resultTypes: results)
+		types.push(funcType)
+	end 'buildTypes'
+
+	writeTypeSection(wasm, types: types)
+
+	// --- Import section ---
+	var imports = ByteArray.create()
+	var importCount = 0 as MachineWord
+	let wasiModule = b"wasi_snapshot_preview1"
+
+	// Import 0: proc_exit
+	importCount = addFuncImport(imports, moduleName: wasiModule, fieldName: b"proc_exit", typeIndex: 0, countRef: importCount)
+
+	// Import 1: fd_write
+	importCount = addFuncImport(imports, moduleName: wasiModule, fieldName: b"fd_write", typeIndex: 1, countRef: importCount)
+
+	var importSection = ByteArray.create()
+	writeUleb128(importSection, value: importCount)
+	importSection.append(imports)
+	writeImportSection(wasm, imports: importSection)
+
+	// --- Function section ---
+	// Map each module function to its type index
+	var typeIndices = ByteArray.create()
+	for i in 0 upto funcCount 'eachFunc'
+		let typeIdx = wasiImportCount + i
+		typeIndices.push(typeIdx as MachineWord)
+	end 'eachFunc'
+	writeFunctionSection(wasm, typeIndices: typeIndices)
+
+	// --- Memory section ---
+	// 1 page = 64KB. We need at least 1 page for scratch + data.
+	writeMemorySection(wasm, initialPages: 1)
+
+	// --- Export section ---
+	var exports = ByteArray.create()
+	var exportCount = 0 as MachineWord
+
+	// Export _start (the WASI entry point = mrt_start)
+	let startFuncIdx = findFunctionIndex(funcNames, name: b"mrt_start", importCount: wasiImportCount)
+	exportCount = addFuncExport(exports, name: b"_start", funcIndex: startFuncIdx, countRef: exportCount)
+
+	// Export memory
+	exportCount = addMemoryExport(exports, name: b"memory", memIndex: 0, countRef: exportCount)
+
+	var exportSection = ByteArray.create()
+	writeUleb128(exportSection, value: exportCount)
+	exportSection.append(exports)
+	writeExportSection(wasm, exports: exportSection)
+
+	// --- Compute memory layout for global data and stack ---
+	// Global data starts at scratchEnd, stack slots start after global data.
+	var globalDataOffsets = GlobalDataOffsetMap.create()
+	var dataOffset = scratchEnd as MachineWord
+	for i in 0 upto globalData.values.count() 'computeOffsets'
+		let name = try globalData.names.get(i) otherwise 'skip'
+			continue
+		end 'skip'
+		let data = try globalData.values.get(i) otherwise 'skip2'
+			continue
+		end 'skip2'
+		globalDataOffsets.insert(name, value: dataOffset)
+		dataOffset = dataOffset + (data.count() as MachineWord)
+	end 'computeOffsets'
+	let stackBase = alignUp(dataOffset, alignment: 16)
+
+	// --- Code section ---
+	var bodies = ByteArrayArray.create()
+	for func in module.functions 'emitBodies'
+		let body = emitFunctionBody(func, funcNames: funcNames, funcReturnTypes: funcReturnTypes, globalDataOffsets: globalDataOffsets, stackBase: stackBase)
+		bodies.push(body)
+	end 'emitBodies'
+	writeCodeSection(wasm, bodies: bodies)
+
+	// --- Data section ---
+	// Place global data (string literals etc.) starting at scratchEnd
+	if globalData.names.count() > 0 'hasData'
+		var segments = ByteArray.create()
+		var segmentCount = 0 as MachineWord
+		var dataOffset = scratchEnd as MachineWord
+		for i in 0 upto globalData.values.count() 'eachData'
+			let data = try globalData.values.get(i) otherwise 'skip'
+				continue
+			end 'skip'
+			writeActiveDataSegment(segments, offset: dataOffset, data: data)
+			segmentCount = segmentCount + 1
+			dataOffset = dataOffset + (data.count() as MachineWord)
+		end 'eachData'
+		writeDataSection(wasm, segments: segments, segmentCount: segmentCount)
+	end 'hasData'
+
+	// --- Name section (custom section for debug info) ---
+	// Encodes function names so wasmtime can show them in stack traces.
+	var namePayload = ByteArray.create()
+	// Function name subsection (id=1)
+	var funcNameMap = ByteArray.create()
+	let totalFuncCount = wasiImportCount + funcCount
+	writeUleb128(funcNameMap, value: totalFuncCount)
+	// Import names
+	writeUleb128(funcNameMap, value: 0)
+	writeWasmName(funcNameMap, name: b"proc_exit")
+	writeUleb128(funcNameMap, value: 1)
+	writeWasmName(funcNameMap, name: b"fd_write")
+	// Module function names
+	for i in 0 upto funcCount 'nameFuncs'
+		let name = try funcNames.get(i) otherwise b"unknown"
+		writeUleb128(funcNameMap, value: wasiImportCount + i)
+		writeWasmName(funcNameMap, name: name)
+	end 'nameFuncs'
+	// Write subsection: id=1, then length-prefixed content
+	namePayload.push(1)
+	writeUleb128(namePayload, value: funcNameMap.count() as MachineWord)
+	namePayload.append(funcNameMap)
+	// Write custom section: id=0, name="name", then payload
+	var nameSection = ByteArray.create()
+	writeWasmName(nameSection, name: b"name")
+	nameSection.append(namePayload)
+	writeSection(wasm, sectionId: 0, contents: nameSection)
+
+	return wasm
+end 'emitWasmModule'
+
+// ============================================================
+// Function body emission
+// ============================================================
+
+function emitFunctionBody(func MlirFunction, funcNames ByteArrayArray, funcReturnTypes ByteArrayArray, globalDataOffsets GlobalDataOffsetMap, stackBase MachineWord) returns ByteArray
+	// Replace mrt_panic with a simplified WASM version that writes the
+	// message cstring to stderr then traps (wasmtime provides the backtrace).
+	if func.name == b"mrt_panic" 'isPanic'
+		return emitWasmPanic()
+	end 'isPanic'
+	// Replace mrt_panic_print_frame with a no-op (no stack traces in WASM).
+	if func.name == b"mrt_panic_print_frame" 'isPrintFrame'
+		return emitWasmNopVoidFunc()
+	end 'isPrintFrame'
+
+	var body = ByteArray.create()
+
+	// Count the maximum ValueId used, to allocate locals.
+	// Parameters are already locals 0..paramCount-1.
+	// Additional locals start at paramCount.
+	let maxValueId = findMaxValueId(func)
+	let localCount = maxValueId + 1
+
+	// Scan for float value IDs to declare them as f64 instead of i64.
+	let floatSet = findFloatValueIds(func, funcNames: funcNames, funcReturnTypes: funcReturnTypes)
+
+	// Build locals declaration: groups of (count, type).
+	// Each local is declared individually to preserve ValueId-to-local-index mapping.
+	// Locals: paramCount..maxValueId are i64 or f64 based on floatSet.
+	// For multi-block functions, one additional i32 dispatch local at the end.
+	let isMultiBlock = func.blocks.count() > 1
+	var localGroups = ByteArray.create()
+	var groupCount = 0 as MachineWord
+	var currentType = 0 as MachineWord
+	var currentCount = 0 as MachineWord
+	for localIdx in func.paramCount upto localCount 'declareLocals'
+		let typeCode = getLocalType(floatSet, localIdx: localIdx as MachineWord)
+		if currentCount == 0 'first'
+			currentType = typeCode
+			currentCount = 1
+		end 'first' else if typeCode == currentType 'same'
+			currentCount = currentCount + 1
+		end 'same' else 'different'
+			writeUleb128(localGroups, value: currentCount)
+			localGroups.push(currentType)
+			groupCount = groupCount + 1
+			currentType = typeCode
+			currentCount = 1
+		end 'different'
+	end 'declareLocals'
+	if currentCount > 0 'flushLast'
+		writeUleb128(localGroups, value: currentCount)
+		localGroups.push(currentType)
+		groupCount = groupCount + 1
+	end 'flushLast'
+	if isMultiBlock 'addDispatch'
+		writeUleb128(localGroups, value: 1)
+		localGroups.push(wasmTypeI32)
+		groupCount = groupCount + 1
+	end 'addDispatch'
+	writeUleb128(body, value: groupCount)
+	body.append(localGroups)
+
+	let isVoidReturn = func.returnType == b"void"
+
+	// Emit instructions for each block.
+	if func.blocks.count() == 1 'singleBlock'
+		let block = try func.blocks.get(0) otherwise 'noBlock'
+			body.push(opUnreachable)
+			body.push(opEnd)
+			return body
+		end 'noBlock'
+		emitBlockOps(body, block: block, funcNames: funcNames, funcReturnTypes: funcReturnTypes, isVoidReturn: isVoidReturn, globalDataOffsets: globalDataOffsets, stackBase: stackBase)
+	end 'singleBlock' else 'multiBlock'
+		emitStructuredCfg(body, func: func, funcNames: funcNames, funcReturnTypes: funcReturnTypes, isVoidReturn: isVoidReturn, globalDataOffsets: globalDataOffsets, stackBase: stackBase)
+	end 'multiBlock'
+
+	// For non-void functions, push a dummy return value before `end`.
+	// All real paths should `return` before reaching here, but WASM validation
+	// requires the stack to match the return type at the `end` instruction.
+	if func.returnType == b"f64" 'dummyReturnF64'
+		body.push(opF64Const)
+		writeQword(body, value: 0)
+	end 'dummyReturnF64' else if not isVoidReturn 'dummyReturnI64'
+		body.push(opI64Const)
+		writeSleb128(body, value: 0)
+	end 'dummyReturnI64'
+
+	body.push(opEnd)
+	return body
+end 'emitFunctionBody'
+
+// ============================================================
+// Simplified WASM panic: write cstring to stderr, then trap.
+// Replaces the native mrt_panic which does stack walking (wasmtime provides backtraces instead).
+// ============================================================
+
+// mrt_panic(msg_ptr: i64) -> void
+// Scans for null terminator to get length, writes to stderr via fd_write, then traps.
+function emitWasmPanic() returns ByteArray
+	var body = ByteArray.create()
+	// Locals: param 0 = msg_ptr (i64)
+	// Extra locals: 1 i64 (loop counter/length), 1 i32 (temp)
+	writeUleb128(body, value: 2)
+	writeUleb128(body, value: 1)
+	body.push(wasmTypeI64)
+	writeUleb128(body, value: 1)
+	body.push(wasmTypeI32)
+
+	// local 0 = msg_ptr (param), local 1 = len (i64), local 2 = temp (i32)
+
+	// Compute string length: scan for null byte
+	// len = 0
+	body.push(opI64Const)
+	writeSleb128(body, value: 0)
+	body.push(opLocalSet)
+	writeUleb128(body, value: 1)
+
+	// loop: while msg_ptr[len] != 0
+	body.push(opBlock)
+	body.push(wasmTypeVoid)
+	body.push(opLoop)
+	body.push(wasmTypeVoid)
+
+	// load byte at msg_ptr + len
+	body.push(opLocalGet)
+	writeUleb128(body, value: 0)
+	body.push(opLocalGet)
+	writeUleb128(body, value: 1)
+	body.push(opI64Add)
+	body.push(opI32WrapI64)
+	body.push(opI32Load8U)
+	body.push(0x00)
+	writeUleb128(body, value: 0)
+	body.push(opLocalSet)
+	writeUleb128(body, value: 2)
+
+	// if byte == 0, break
+	body.push(opLocalGet)
+	writeUleb128(body, value: 2)
+	body.push(opI32Eqz)
+	body.push(opBrIf)
+	writeUleb128(body, value: 1)
+
+	// len = len + 1
+	body.push(opLocalGet)
+	writeUleb128(body, value: 1)
+	body.push(opI64Const)
+	writeSleb128(body, value: 1)
+	body.push(opI64Add)
+	body.push(opLocalSet)
+	writeUleb128(body, value: 1)
+
+	// continue loop
+	body.push(opBr)
+	writeUleb128(body, value: 0)
+
+	body.push(opEnd)
+	body.push(opEnd)
+
+	// Now write msg_ptr (len bytes) to stderr (fd=2) via fd_write
+	// iovec at scratch: {buf_ptr: i32, buf_len: i32}
+	body.push(opI32Const)
+	writeSleb128(body, value: 0)
+	body.push(opLocalGet)
+	writeUleb128(body, value: 0)
+	body.push(opI32WrapI64)
+	body.push(opI32Store)
+	body.push(0x02)
+	writeUleb128(body, value: 0)
+
+	body.push(opI32Const)
+	writeSleb128(body, value: 4)
+	body.push(opLocalGet)
+	writeUleb128(body, value: 1)
+	body.push(opI32WrapI64)
+	body.push(opI32Store)
+	body.push(0x02)
+	writeUleb128(body, value: 0)
+
+	// fd_write(fd=2, iovs=0, iovs_len=1, nwritten=8)
+	body.push(opI32Const)
+	writeSleb128(body, value: 2)
+	body.push(opI32Const)
+	writeSleb128(body, value: 0)
+	body.push(opI32Const)
+	writeSleb128(body, value: 1)
+	body.push(opI32Const)
+	writeSleb128(body, value: 8)
+	body.push(opCall)
+	writeUleb128(body, value: wasiFdWrite as MachineWord)
+	body.push(opDrop)
+
+	// Trap — panic is not a clean exit. Wasmtime will show a backtrace with function names.
+	body.push(opUnreachable)
+	body.push(opEnd)
+	return body
+end 'emitWasmPanic'
+
+// No-op void function body (0 locals, just end).
+function emitWasmNopVoidFunc() returns ByteArray
+	var body = ByteArray.create()
+	writeUleb128(body, value: 0)
+	body.push(opEnd)
+	return body
+end 'emitWasmNopVoidFunc'
+
+// ============================================================
+// Single-block emission (straight-line code)
+// ============================================================
+
+function emitBlockOps(body ByteArray, block MlirBlock, funcNames ByteArrayArray, funcReturnTypes ByteArrayArray, isVoidReturn bool, globalDataOffsets GlobalDataOffsetMap, stackBase MachineWord)
+	for op in block.ops 'eachOp'
+		emitMlirOp(body, op: op, funcNames: funcNames, funcReturnTypes: funcReturnTypes, isVoidReturn: isVoidReturn, globalDataOffsets: globalDataOffsets, stackBase: stackBase)
+	end 'eachOp'
+	if block.hasTerminator 'hasTerm'
+		emitMlirOp(body, op: block.terminator, funcNames: funcNames, funcReturnTypes: funcReturnTypes, isVoidReturn: isVoidReturn, globalDataOffsets: globalDataOffsets, stackBase: stackBase)
+	end 'hasTerm'
+end 'emitBlockOps'
+
+// ============================================================
+// Structured CFG emission (multi-block functions)
+// ============================================================
+
+// For MVP: use a loop+br_table dispatch pattern.
+// Each block gets an index. A loop wraps the switch, and br_table
+// dispatches to the current block. This handles any CFG shape.
+function emitStructuredCfg(body ByteArray, func MlirFunction, funcNames ByteArrayArray, funcReturnTypes ByteArrayArray, isVoidReturn bool, globalDataOffsets GlobalDataOffsetMap, stackBase MachineWord)
+	let blockCount = func.blocks.count()
+	if blockCount == 0 'empty'
+		return
+	end 'empty'
+
+	// We need a local to hold the "current block index".
+	// Use the local right after all value locals.
+	let maxValueId = findMaxValueId(func)
+	let dispatchLocal = maxValueId + 1
+
+	// Outer loop: re-enters after each block to dispatch to next
+	body.push(opLoop)
+	body.push(wasmTypeVoid)
+
+	// Nested blocks for br_table targets (one per block + default)
+	// br_table pops the dispatch local and branches to the Nth enclosing block.
+	// We wrap blockCount blocks around the dispatch, so br_table index i
+	// jumps to block i.
+	for _ in 0 upto blockCount 'nestBlocks'
+		body.push(opBlock)
+		body.push(wasmTypeVoid)
+	end 'nestBlocks'
+
+	// br_table dispatch: local.get $dispatch, br_table [0, 1, 2, ...], default=0
+	body.push(opLocalGet)
+	writeUleb128(body, value: dispatchLocal as MachineWord)
+	body.push(opBrTable)
+	writeUleb128(body, value: blockCount as MachineWord)
+	for i in 0 upto blockCount 'tableEntries'
+		writeUleb128(body, value: i as MachineWord)
+	end 'tableEntries'
+	writeUleb128(body, value: 0)
+
+	// Emit each block after its corresponding `end` (of the nested block).
+	// Block 0 is the innermost, so its code comes first after the br_table.
+	for i in 0 upto blockCount 'emitBlocks'
+		body.push(opEnd)
+
+		let block = try func.blocks.get(i) otherwise 'skip'
+			continue
+		end 'skip'
+
+		// Emit block arguments (phi nodes): they're already set by predecessor branches.
+		// The predecessor stores values into the block arg locals before setting dispatch.
+
+		// Emit ops
+		for op in block.ops 'eachOp'
+			emitMlirOp(body, op: op, funcNames: funcNames, funcReturnTypes: funcReturnTypes, isVoidReturn: isVoidReturn, globalDataOffsets: globalDataOffsets, stackBase: stackBase)
+		end 'eachOp'
+
+		// Emit terminator
+		if block.hasTerminator 'hasTerm'
+			let loopDepth = blockCount - 1 - i
+			emitTerminator(body, op: block.terminator, func: func, funcNames: funcNames, funcReturnTypes: funcReturnTypes, dispatchLocal: dispatchLocal, loopDepth: loopDepth as MachineWord, isVoidReturn: isVoidReturn, globalDataOffsets: globalDataOffsets, stackBase: stackBase)
+		end 'hasTerm'
+
+		// After the terminator sets the dispatch local and branches,
+		// we need to br back to the outer loop.
+		// (The terminator itself emits the br to the loop.)
+	end 'emitBlocks'
+
+	// End the outer loop
+	body.push(opEnd)
+end 'emitStructuredCfg'
+
+// ============================================================
+// Terminator emission for structured CFG
+// ============================================================
+
+function emitTerminator(body ByteArray, op MlirOp, func MlirFunction, funcNames ByteArrayArray, funcReturnTypes ByteArrayArray, dispatchLocal MachineWord, loopDepth MachineWord, isVoidReturn bool, globalDataOffsets GlobalDataOffsetMap, stackBase MachineWord)
+	match op 'dispatch'
+		mir(mirOp) then emitMirTerminator(body, op: mirOp, func: func, funcNames: funcNames, funcReturnTypes: funcReturnTypes, dispatchLocal: dispatchLocal, loopDepth: loopDepth, isVoidReturn: isVoidReturn, globalDataOffsets: globalDataOffsets, stackBase: stackBase)
+		sys(sysOp) then emitSysOp(body, op: sysOp)
+		maxon to runtime then panic("wasm: unexpected terminator dialect")
+		x64 to arm64 then panic("wasm: unexpected terminator dialect")
+	end 'dispatch'
+end 'emitTerminator'
+
+function emitMirTerminator(body ByteArray, op MirOp, func MlirFunction, funcNames ByteArrayArray, funcReturnTypes ByteArrayArray, dispatchLocal MachineWord, loopDepth MachineWord, isVoidReturn bool, globalDataOffsets GlobalDataOffsetMap, stackBase MachineWord)
+	match op 'dispatch'
+		condBranch(condId, thenBlock, thenArgs, elseBlock, elseArgs) then emitWasmCondBranch(body, condId: condId, thenBlock: thenBlock, thenArgs: thenArgs, elseBlock: elseBlock, elseArgs: elseArgs, func: func, dispatchLocal: dispatchLocal, loopDepth: loopDepth)
+		branch(targetBlock, args) then emitWasmBranch(body, targetBlock: targetBlock, args: args, func: func, dispatchLocal: dispatchLocal, loopDepth: loopDepth)
+		ret(retValId) then emitWasmRet(body, retValId: retValId, isVoidReturn: isVoidReturn)
+		movImm to cmp then emitMirOp(body, op: op, funcNames: funcNames, funcReturnTypes: funcReturnTypes, isVoidReturn: isVoidReturn, globalDataOffsets: globalDataOffsets, stackBase: stackBase)
+		call to indirectCall then emitMirOp(body, op: op, funcNames: funcNames, funcReturnTypes: funcReturnTypes, isVoidReturn: isVoidReturn, globalDataOffsets: globalDataOffsets, stackBase: stackBase)
+		param to loadByte then emitMirOp(body, op: op, funcNames: funcNames, funcReturnTypes: funcReturnTypes, isVoidReturn: isVoidReturn, globalDataOffsets: globalDataOffsets, stackBase: stackBase)
+	end 'dispatch'
+end 'emitMirTerminator'
+
+function emitWasmCondBranch(body ByteArray, condId ValueId, thenBlock BlockId, thenArgs ValueIdArray, elseBlock BlockId, elseArgs ValueIdArray, func MlirFunction, dispatchLocal MachineWord, loopDepth MachineWord)
+	let thenIdx = findBlockIndex(func, blockId: thenBlock)
+	let elseIdx = findBlockIndex(func, blockId: elseBlock)
+
+	// Store else block args
+	emitBlockArgStores(body, args: elseArgs, targetBlock: elseBlock, func: func)
+
+	// Store then block args
+	emitBlockArgStores(body, args: thenArgs, targetBlock: thenBlock, func: func)
+
+	// if condId: dispatch = thenIdx else dispatch = elseIdx
+	body.push(opLocalGet)
+	writeUleb128(body, value: condId as MachineWord)
+	body.push(opI32WrapI64)
+
+	body.push(opIf)
+	body.push(wasmTypeVoid)
+
+	// then: set dispatch to thenIdx
+	body.push(opI32Const)
+	writeSleb128(body, value: thenIdx as ParsedInt)
+	body.push(opLocalSet)
+	writeUleb128(body, value: dispatchLocal)
+
+	body.push(opElse)
+
+	// else: set dispatch to elseIdx
+	body.push(opI32Const)
+	writeSleb128(body, value: elseIdx as ParsedInt)
+	body.push(opLocalSet)
+	writeUleb128(body, value: dispatchLocal)
+
+	body.push(opEnd)
+
+	// br back to the loop. The if/else adds 1 to nesting when active, but
+	// after the if/end we're back at the same depth as block code.
+	// loopDepth is the distance from block code to the loop.
+	body.push(opBr)
+	writeUleb128(body, value: loopDepth)
+end 'emitWasmCondBranch'
+
+function emitWasmBranch(body ByteArray, targetBlock BlockId, args ValueIdArray, func MlirFunction, dispatchLocal MachineWord, loopDepth MachineWord)
+	let targetIdx = findBlockIndex(func, blockId: targetBlock)
+
+	// Store block args
+	emitBlockArgStores(body, args: args, targetBlock: targetBlock, func: func)
+
+	// Set dispatch local to target block index
+	body.push(opI32Const)
+	writeSleb128(body, value: targetIdx as ParsedInt)
+	body.push(opLocalSet)
+	writeUleb128(body, value: dispatchLocal)
+
+	// br back to the loop
+	body.push(opBr)
+	writeUleb128(body, value: loopDepth)
+end 'emitWasmBranch'
+
+function emitWasmRet(body ByteArray, retValId ValueId, isVoidReturn bool)
+	if not isVoidReturn 'hasReturn'
+		body.push(opLocalGet)
+		writeUleb128(body, value: retValId as MachineWord)
+	end 'hasReturn'
+	body.push(opReturn)
+end 'emitWasmRet'
+
+function emitBlockArgStores(body ByteArray, args ValueIdArray, targetBlock BlockId, func MlirFunction)
+	// Find the target block and its blockArgs. Store each arg value into the blockArg's valueId local.
+	for block in func.blocks 'findBlock'
+		if block.id == targetBlock 'found'
+			for i in 0 upto args.count() 'eachArg'
+				let srcId = try args.get(i) otherwise 'skip'
+					continue
+				end 'skip'
+				let blockArg = try block.blockArgs.get(i) otherwise 'skipArg'
+					continue
+				end 'skipArg'
+				body.push(opLocalGet)
+				writeUleb128(body, value: srcId as MachineWord)
+				body.push(opLocalSet)
+				writeUleb128(body, value: blockArg.valueId as MachineWord)
+			end 'eachArg'
+			return
+		end 'found'
+	end 'findBlock'
+end 'emitBlockArgStores'
+
+// ============================================================
+// MlirOp dispatch
+// ============================================================
+
+function emitMlirOp(body ByteArray, op MlirOp, funcNames ByteArrayArray, funcReturnTypes ByteArrayArray, isVoidReturn bool, globalDataOffsets GlobalDataOffsetMap, stackBase MachineWord)
+	match op 'dispatch'
+		mir(mirOp) then emitMirOp(body, op: mirOp, funcNames: funcNames, funcReturnTypes: funcReturnTypes, isVoidReturn: isVoidReturn, globalDataOffsets: globalDataOffsets, stackBase: stackBase)
+		sys(sysOp) then emitSysOp(body, op: sysOp)
+		memref(memrefOp) then emitMemRefOp(body, op: memrefOp, stackBase: stackBase)
+		cf then panic("wasm: unexpected cf op in MIR module")
+		maxon then panic("wasm: unexpected maxon op in MIR module")
+		arith then panic("wasm: unexpected arith op in MIR module")
+		func then panic("wasm: unexpected func op in MIR module")
+		runtime then panic("wasm: unexpected runtime op in MIR module")
+		x64 then panic("wasm: unexpected x64 op in MIR module")
+		arm64 then panic("wasm: unexpected arm64 op in MIR module")
+	end 'dispatch'
+end 'emitMlirOp'
+
+// MemRef ops: storeSlot/loadSlot map to WASM linear memory at stack slot addresses.
+function emitMemRefOp(body ByteArray, op MemRefOp, stackBase MachineWord)
+	match op 'dispatch'
+		storeSlot(slotId, valueId) then emitMemRefStoreSlot(body, slotId: slotId, valueId: valueId, stackBase: stackBase)
+		loadSlot(resultId, slotId) then emitMemRefLoadSlot(body, resultId: resultId, slotId: slotId, stackBase: stackBase)
+	end 'dispatch'
+end 'emitMemRefOp'
+
+function emitMemRefStoreSlot(body ByteArray, slotId VarSlot, valueId ValueId, stackBase MachineWord)
+	// Store to linear memory at stackBase + slotId * 8
+	let slotOffset = stackBase + (slotId * 8)
+	body.push(opI32Const)
+	writeSleb128(body, value: slotOffset as ParsedInt)
+	body.push(opLocalGet)
+	writeUleb128(body, value: valueId as MachineWord)
+	body.push(opI64Store)
+	body.push(0x03)
+	writeUleb128(body, value: 0)
+end 'emitMemRefStoreSlot'
+
+function emitMemRefLoadSlot(body ByteArray, resultId ValueId, slotId VarSlot, stackBase MachineWord)
+	// Load from linear memory at stackBase + slotId * 8
+	let slotOffset = stackBase + (slotId * 8)
+	body.push(opI32Const)
+	writeSleb128(body, value: slotOffset as ParsedInt)
+	body.push(opI64Load)
+	body.push(0x03)
+	writeUleb128(body, value: 0)
+	body.push(opLocalSet)
+	writeUleb128(body, value: resultId as MachineWord)
+end 'emitMemRefLoadSlot'
+
+// ============================================================
+// MIR op emission
+// ============================================================
+
+function emitMirOp(body ByteArray, op MirOp, funcNames ByteArrayArray, funcReturnTypes ByteArrayArray, isVoidReturn bool, globalDataOffsets GlobalDataOffsetMap, stackBase MachineWord)
+	match op 'dispatch'
+		movImm(resultId, value, isFloat) then emitMovImm(body, resultId: resultId, value: value, isFloat: isFloat)
+		movReg(resultId, srcId) then emitMovReg(body, resultId: resultId, srcId: srcId)
+		binOp(resultId, leftId, rightId, opcode) then emitBinOp(body, resultId: resultId, leftId: leftId, rightId: rightId, opcode: opcode)
+		unaryOp(resultId, operandId, opcode) then emitUnaryOp(body, resultId: resultId, operandId: operandId, opcode: opcode)
+		cmp(resultId, leftId, rightId, predicate) then emitCmp(body, resultId: resultId, leftId: leftId, rightId: rightId, predicate: predicate)
+		condBranch then panic("wasm: condBranch in single-block function")
+		branch then nop()
+		call(resultId, callee, argIds) then emitCall(body, resultId: resultId, callee: callee, argIds: argIds, funcNames: funcNames, funcReturnTypes: funcReturnTypes)
+		indirectCall then panic("wasm: indirect calls not yet supported")
+		ret(retValId) then emitRet(body, retValId: retValId, isVoidReturn: isVoidReturn)
+		param(resultId, paramIndex, _) then emitParam(body, resultId: resultId, paramIndex: paramIndex)
+		load(resultId, baseId, offset) then emitLoad(body, resultId: resultId, baseId: baseId, offset: offset)
+		store(valueId, baseId, offset) then emitStore(body, valueId: valueId, baseId: baseId, offset: offset)
+		stackSlotAddr(resultId, slotId) then emitStackSlotAddr(body, resultId: resultId, slotId: slotId, stackBase: stackBase)
+		globalAddr(resultId, name) then emitGlobalAddr(body, resultId: resultId, name: name, globalDataOffsets: globalDataOffsets)
+		syscall then panic("wasm: raw syscall not supported")
+		iatCall then panic("wasm: IAT call not supported")
+		osExit(codeId) then emitOsExit(body, codeId: codeId)
+		osWrite(ptrId, lenId) then emitOsWrite(body, ptrId: ptrId, lenId: lenId, fd: 1)
+		memcpy(dstId, srcId, lenId) then emitMemcpy(body, dstId: dstId, srcId: srcId, lenId: lenId)
+		storeByte(baseId, offsetId, byteId) then emitStoreByte(body, baseId: baseId, offsetId: offsetId, byteId: byteId)
+		loadByte(resultId, baseId, offsetId) then emitLoadByte(body, resultId: resultId, baseId: baseId, offsetId: offsetId)
+	end 'dispatch'
+end 'emitMirOp'
+
+// ============================================================
+// SysOp emission (residual sys ops after MIR lowering)
+// ============================================================
+
+function emitSysOp(body ByteArray, op SysOp)
+	match op 'dispatch'
+		osWriteErr(ptrId, lenId) then emitOsWrite(body, ptrId: ptrId, lenId: lenId, fd: 2)
+		loadFramePtr(resultId) then emitLoadFramePtr(body, resultId: resultId)
+		loadIndirect(resultId, addrId, offset) then emitLoadIndirect(body, resultId: resultId, addrId: addrId, offset: offset)
+		funcAddr(resultId, _) then emitFuncAddr(body, resultId: resultId)
+		default panic("wasm: unexpected sys op")
+	end 'dispatch'
+end 'emitSysOp'
+
+// ============================================================
+// Individual instruction emitters
+// ============================================================
+
+function emitMovImm(body ByteArray, resultId ValueId, value ParsedInt, isFloat bool)
+	if isFloat 'float'
+		// Encode f64 as i64 reinterpret
+		body.push(opF64Const)
+		// Write 8 bytes of the f64 encoding (value is the raw bits)
+		writeQword(body, value: value as MachineWord)
+	end 'float' else 'int'
+		body.push(opI64Const)
+		writeSleb128(body, value: value)
+	end 'int'
+	body.push(opLocalSet)
+	writeUleb128(body, value: resultId as MachineWord)
+end 'emitMovImm'
+
+function emitMovReg(body ByteArray, resultId ValueId, srcId ValueId)
+	body.push(opLocalGet)
+	writeUleb128(body, value: srcId as MachineWord)
+	body.push(opLocalSet)
+	writeUleb128(body, value: resultId as MachineWord)
+end 'emitMovReg'
+
+function emitBinOp(body ByteArray, resultId ValueId, leftId ValueId, rightId ValueId, opcode MirBinOpcode)
+	body.push(opLocalGet)
+	writeUleb128(body, value: leftId as MachineWord)
+	body.push(opLocalGet)
+	writeUleb128(body, value: rightId as MachineWord)
+
+	let wasmOp = match opcode 'pickOp'
+		addI64 gives opI64Add
+		subI64 gives opI64Sub
+		mulI64 gives opI64Mul
+		divI64 gives opI64DivS
+		remI64 gives opI64RemS
+		andI64 gives opI64And
+		orI64 gives opI64Or
+		xorI64 gives opI64Xor
+		shlI64 gives opI64Shl
+		shrI64 gives opI64ShrS
+		addF64 gives opF64Add
+		subF64 gives opF64Sub
+		mulF64 gives opF64Mul
+		divF64 gives opF64Div
+	end 'pickOp'
+
+	body.push(wasmOp)
+	body.push(opLocalSet)
+	writeUleb128(body, value: resultId as MachineWord)
+end 'emitBinOp'
+
+function emitUnaryOp(body ByteArray, resultId ValueId, operandId ValueId, opcode MirUnaryOpcode)
+	body.push(opLocalGet)
+	writeUleb128(body, value: operandId as MachineWord)
+
+	match opcode 'pickOp'
+		negI64 then emitI64Negate(body)
+		bitNotI64 then emitI64BitNot(body)
+		fpToSiI64 then body.push(opI64TruncF64S)
+		siToFpF64 then body.push(opF64ConvertI64S)
+	end 'pickOp'
+
+	body.push(opLocalSet)
+	writeUleb128(body, value: resultId as MachineWord)
+end 'emitUnaryOp'
+
+// i64 negate: multiply by -1 (WASM has no swap, so 0-x would need a temp local)
+function emitI64Negate(body ByteArray)
+	body.push(opI64Const)
+	writeSleb128(body, value: -1)
+	body.push(opI64Mul)
+end 'emitI64Negate'
+
+// i64 bitwise not: xor with -1
+function emitI64BitNot(body ByteArray)
+	body.push(opI64Const)
+	writeSleb128(body, value: -1)
+	body.push(opI64Xor)
+end 'emitI64BitNot'
+
+function emitCmp(body ByteArray, resultId ValueId, leftId ValueId, rightId ValueId, predicate MirCmpPredicate)
+	body.push(opLocalGet)
+	writeUleb128(body, value: leftId as MachineWord)
+	body.push(opLocalGet)
+	writeUleb128(body, value: rightId as MachineWord)
+
+	let wasmOp = match predicate 'pickOp'
+		eq gives opI64Eq
+		ne gives opI64Ne
+		lt gives opI64LtS
+		le gives opI64LeS
+		gt gives opI64GtS
+		ge gives opI64GeS
+		ugt gives opI64GtU
+		feq gives opF64Eq
+		fne gives opF64Ne
+		flt gives opF64Lt
+		fle gives opF64Le
+		fgt gives opF64Gt
+		fge gives opF64Ge
+	end 'pickOp'
+
+	body.push(wasmOp)
+	// cmp produces i32 (0 or 1), extend to i64
+	body.push(opI64ExtendI32U)
+	body.push(opLocalSet)
+	writeUleb128(body, value: resultId as MachineWord)
+end 'emitCmp'
+
+function emitCall(body ByteArray, resultId ValueId, callee ByteArray, argIds ValueIdArray, funcNames ByteArrayArray, funcReturnTypes ByteArrayArray)
+	// Push arguments
+	for argId in argIds 'pushArgs'
+		body.push(opLocalGet)
+		writeUleb128(body, value: argId as MachineWord)
+	end 'pushArgs'
+
+	// Resolve function index
+	let funcIdx = findFunctionIndex(funcNames, name: callee, importCount: wasiImportCount)
+	body.push(opCall)
+	writeUleb128(body, value: funcIdx)
+
+	// Store result only if the callee returns a value
+	let calleeRetType = lookupReturnType(funcReturnTypes, funcNames: funcNames, callee: callee)
+	if calleeRetType != b"void" 'hasReturnValue'
+		body.push(opLocalSet)
+		writeUleb128(body, value: resultId as MachineWord)
+	end 'hasReturnValue'
+end 'emitCall'
+
+function lookupReturnType(funcReturnTypes ByteArrayArray, funcNames ByteArrayArray, callee ByteArray) returns ByteArray
+	for i in 0 upto funcNames.count() 'search'
+		let name = try funcNames.get(i) otherwise 'skip'
+			continue
+		end 'skip'
+		if name == callee 'found'
+			return try funcReturnTypes.get(i) otherwise b"void"
+		end 'found'
+	end 'search'
+	return b"void"
+end 'lookupReturnType'
+
+function emitRet(body ByteArray, retValId ValueId, isVoidReturn bool)
+	if not isVoidReturn 'hasReturn'
+		body.push(opLocalGet)
+		writeUleb128(body, value: retValId as MachineWord)
+	end 'hasReturn'
+	body.push(opReturn)
+end 'emitRet'
+
+function emitParam(body ByteArray, resultId ValueId, paramIndex VarSlot)
+	// Parameters are locals 0..paramCount-1.
+	// If resultId != paramIndex, copy param to result local.
+	if resultId != paramIndex 'needsCopy'
+		body.push(opLocalGet)
+		writeUleb128(body, value: paramIndex as MachineWord)
+		body.push(opLocalSet)
+		writeUleb128(body, value: resultId as MachineWord)
+	end 'needsCopy'
+	// If resultId == paramIndex, the param is already in the right local.
+end 'emitParam'
+
+function emitLoad(body ByteArray, resultId ValueId, baseId ValueId, offset MachineWord)
+	body.push(opLocalGet)
+	writeUleb128(body, value: baseId as MachineWord)
+	body.push(opI32WrapI64)
+	body.push(opI64Load)
+	body.push(0x03)
+	writeUleb128(body, value: offset)
+	body.push(opLocalSet)
+	writeUleb128(body, value: resultId as MachineWord)
+end 'emitLoad'
+
+function emitStore(body ByteArray, valueId ValueId, baseId ValueId, offset MachineWord)
+	body.push(opLocalGet)
+	writeUleb128(body, value: baseId as MachineWord)
+	body.push(opI32WrapI64)
+	body.push(opLocalGet)
+	writeUleb128(body, value: valueId as MachineWord)
+	body.push(opI64Store)
+	body.push(0x03)
+	writeUleb128(body, value: offset)
+end 'emitStore'
+
+function emitStackSlotAddr(body ByteArray, resultId ValueId, slotId VarSlot, stackBase MachineWord)
+	// Stack slots map to linear memory. Each slot is 8 bytes.
+	// Stack area starts after global data.
+	let slotOffset = stackBase + (slotId * 8)
+	body.push(opI64Const)
+	writeSleb128(body, value: slotOffset as ParsedInt)
+	body.push(opLocalSet)
+	writeUleb128(body, value: resultId as MachineWord)
+end 'emitStackSlotAddr'
+
+function emitGlobalAddr(body ByteArray, resultId ValueId, name ByteArray, globalDataOffsets GlobalDataOffsetMap)
+	let offset = try globalDataOffsets.get(name) otherwise scratchEnd as MachineWord
+	body.push(opI64Const)
+	writeSleb128(body, value: offset as ParsedInt)
+	body.push(opLocalSet)
+	writeUleb128(body, value: resultId as MachineWord)
+end 'emitGlobalAddr'
+
+function emitOsExit(body ByteArray, codeId ValueId)
+	body.push(opLocalGet)
+	writeUleb128(body, value: codeId as MachineWord)
+	// Truncate i64 to i32 for WASI proc_exit
+	body.push(opI32WrapI64)
+	body.push(opCall)
+	writeUleb128(body, value: wasiProcExit as MachineWord)
+end 'emitOsExit'
+
+function emitOsWrite(body ByteArray, ptrId ValueId, lenId ValueId, fd MachineWord)
+	// WASI fd_write(fd: i32, iovs: i32, iovs_len: i32, nwritten: i32) -> i32
+	// Build iovec at scratch memory:
+	// iovec[0].buf = ptr (i32 at iovecBase)
+	// iovec[0].len = len (i32 at iovecBase+4)
+
+	// Store buf_ptr at iovecBase
+	body.push(opI32Const)
+	writeSleb128(body, value: iovecBase as ParsedInt)
+	body.push(opLocalGet)
+	writeUleb128(body, value: ptrId as MachineWord)
+	body.push(opI32WrapI64)
+	body.push(opI32Store)
+	body.push(0x02)
+	writeUleb128(body, value: 0)
+
+	// Store buf_len at iovecBase + 4
+	body.push(opI32Const)
+	writeSleb128(body, value: (iovecBase + 4) as ParsedInt)
+	body.push(opLocalGet)
+	writeUleb128(body, value: lenId as MachineWord)
+	body.push(opI32WrapI64)
+	body.push(opI32Store)
+	body.push(0x02)
+	writeUleb128(body, value: 0)
+
+	// Call fd_write(fd, iovs=iovecBase, iovs_len=1, nwritten=nwrittenBase)
+	body.push(opI32Const)
+	writeSleb128(body, value: fd as ParsedInt)
+
+	body.push(opI32Const)
+	writeSleb128(body, value: iovecBase as ParsedInt)
+
+	body.push(opI32Const)
+	writeSleb128(body, value: 1)
+
+	body.push(opI32Const)
+	writeSleb128(body, value: nwrittenBase as ParsedInt)
+
+	body.push(opCall)
+	writeUleb128(body, value: wasiFdWrite as MachineWord)
+
+	// Drop the i32 return value
+	body.push(opDrop)
+end 'emitOsWrite'
+
+function emitMemcpy(body ByteArray, dstId ValueId, srcId ValueId, lenId ValueId)
+	// Use WASM memory.copy (bulk memory proposal, supported by wasmtime).
+	// memory.copy dst src len — all i32 addresses.
+	body.push(opLocalGet)
+	writeUleb128(body, value: dstId as MachineWord)
+	body.push(opI32WrapI64)
+	body.push(opLocalGet)
+	writeUleb128(body, value: srcId as MachineWord)
+	body.push(opI32WrapI64)
+	body.push(opLocalGet)
+	writeUleb128(body, value: lenId as MachineWord)
+	body.push(opI32WrapI64)
+	// memory.copy opcode: 0xFC 0x0A 0x00 0x00
+	body.push(0xFC)
+	writeUleb128(body, value: 10)
+	body.push(0x00)
+	body.push(0x00)
+end 'emitMemcpy'
+
+function emitStoreByte(body ByteArray, baseId ValueId, offsetId ValueId, byteId ValueId)
+	// addr = base + offset (both i64, wrap to i32)
+	body.push(opLocalGet)
+	writeUleb128(body, value: baseId as MachineWord)
+	body.push(opLocalGet)
+	writeUleb128(body, value: offsetId as MachineWord)
+	body.push(opI64Add)
+	body.push(opI32WrapI64)
+
+	// value
+	body.push(opLocalGet)
+	writeUleb128(body, value: byteId as MachineWord)
+	body.push(opI32WrapI64)
+
+	body.push(opI32Store8)
+	body.push(0x00)
+	writeUleb128(body, value: 0)
+end 'emitStoreByte'
+
+function emitLoadByte(body ByteArray, resultId ValueId, baseId ValueId, offsetId ValueId)
+	// addr = base + offset (both i64, wrap to i32)
+	body.push(opLocalGet)
+	writeUleb128(body, value: baseId as MachineWord)
+	body.push(opLocalGet)
+	writeUleb128(body, value: offsetId as MachineWord)
+	body.push(opI64Add)
+	body.push(opI32WrapI64)
+
+	body.push(opI32Load8U)
+	body.push(0x00)
+	writeUleb128(body, value: 0)
+
+	// Extend i32 to i64
+	body.push(opI64ExtendI32U)
+	body.push(opLocalSet)
+	writeUleb128(body, value: resultId as MachineWord)
+end 'emitLoadByte'
+
+function emitLoadFramePtr(body ByteArray, resultId ValueId)
+	// WASM has no frame pointer. Return 0 to terminate stack walks.
+	body.push(opI64Const)
+	writeSleb128(body, value: 0)
+	body.push(opLocalSet)
+	writeUleb128(body, value: resultId as MachineWord)
+end 'emitLoadFramePtr'
+
+function emitLoadIndirect(body ByteArray, resultId ValueId, addrId ValueId, offset MachineWord)
+	// Load i64 from linear memory at addr + offset
+	body.push(opLocalGet)
+	writeUleb128(body, value: addrId as MachineWord)
+	body.push(opI32WrapI64)
+	body.push(opI64Load)
+	body.push(0x03)
+	writeUleb128(body, value: offset)
+	body.push(opLocalSet)
+	writeUleb128(body, value: resultId as MachineWord)
+end 'emitLoadIndirect'
+
+function emitFuncAddr(body ByteArray, resultId ValueId)
+	// WASM doesn't support raw function pointers in the same way.
+	// Return 0 — funcAddr is only used by mrt_panic for stack traces.
+	body.push(opI64Const)
+	writeSleb128(body, value: 0)
+	body.push(opLocalSet)
+	writeUleb128(body, value: resultId as MachineWord)
+end 'emitFuncAddr'
+
+// ============================================================
+// Utility functions
+// ============================================================
+
+function findFunctionIndex(funcNames ByteArrayArray, name ByteArray, importCount MachineWord) returns MachineWord
+	for i in 0 upto funcNames.count() 'search'
+		let funcName = try funcNames.get(i) otherwise 'skip'
+			continue
+		end 'skip'
+		if funcName == name 'found'
+			return importCount + (i as MachineWord)
+		end 'found'
+	end 'search'
+	panic("wasm: function not found: {String.from(name)}")
+end 'findFunctionIndex'
+
+function findBlockIndex(func MlirFunction, blockId BlockId) returns MachineWord
+	for i in 0 upto func.blocks.count() 'search'
+		let block = try func.blocks.get(i) otherwise 'skip'
+			continue
+		end 'skip'
+		if block.id == blockId 'found'
+			return i as MachineWord
+		end 'found'
+	end 'search'
+	return 0
+end 'findBlockIndex'
+
+function findMaxValueId(func MlirFunction) returns MachineWord
+	var maxId = 0 as MachineWord
+	for block in func.blocks 'eachBlock'
+		for blockArg in block.blockArgs 'eachBlockArg'
+			if blockArg.valueId > maxId 'update'
+				maxId = blockArg.valueId as MachineWord
+			end 'update'
+		end 'eachBlockArg'
+		for op in block.ops 'eachOp'
+			let opMax = getOpMaxValueId(op)
+			if opMax > maxId 'updateOp'
+				maxId = opMax
+			end 'updateOp'
+		end 'eachOp'
+		if block.hasTerminator 'hasTerm'
+			let termMax = getOpMaxValueId(block.terminator)
+			if termMax > maxId 'updateTerm'
+				maxId = termMax
+			end 'updateTerm'
+		end 'hasTerm'
+	end 'eachBlock'
+	return maxId
+end 'findMaxValueId'
+
+function getOpMaxValueId(op MlirOp) returns MachineWord
+	return match op 'dispatch'
+		mir(mirOp) gives getMirOpMaxValueId(mirOp)
+		sys(sysOp) gives getSysOpMaxValueId(sysOp)
+		memref(memrefOp) gives getMemRefOpMaxValueId(memrefOp)
+		maxon to func gives 0
+		runtime gives 0
+		x64 to arm64 gives 0
+	end 'dispatch'
+end 'getOpMaxValueId'
+
+function getMemRefOpMaxValueId(op MemRefOp) returns MachineWord
+	return match op 'dispatch'
+		storeSlot(_, valueId) gives valueId as MachineWord
+		loadSlot(resultId, _) gives resultId as MachineWord
+	end 'dispatch'
+end 'getMemRefOpMaxValueId'
+
+function getMirOpMaxValueId(op MirOp) returns MachineWord
+	return match op 'dispatch'
+		movImm(resultId, _, _) gives resultId as MachineWord
+		movReg(resultId, srcId) gives maxOfTwo(resultId as MachineWord, b: srcId as MachineWord)
+		binOp(resultId, leftId, rightId, _) gives maxOfThree(resultId as MachineWord, b: leftId as MachineWord, c: rightId as MachineWord)
+		unaryOp(resultId, operandId, _) gives maxOfTwo(resultId as MachineWord, b: operandId as MachineWord)
+		cmp(resultId, leftId, rightId, _) gives maxOfThree(resultId as MachineWord, b: leftId as MachineWord, c: rightId as MachineWord)
+		condBranch(condId, _, _, _, _) gives condId as MachineWord
+		branch gives 0
+		call(resultId, _, _) gives resultId as MachineWord
+		indirectCall(resultId, calleeId, _) gives maxOfTwo(resultId as MachineWord, b: calleeId as MachineWord)
+		ret(retValId) gives retValId as MachineWord
+		param(resultId, _, _) gives resultId as MachineWord
+		load(resultId, baseId, _) gives maxOfTwo(resultId as MachineWord, b: baseId as MachineWord)
+		store(valueId, baseId, _) gives maxOfTwo(valueId as MachineWord, b: baseId as MachineWord)
+		stackSlotAddr(resultId, _) gives resultId as MachineWord
+		globalAddr(resultId, _) gives resultId as MachineWord
+		syscall(resultId, _, _) gives resultId as MachineWord
+		iatCall(resultId, _, _) gives resultId as MachineWord
+		osExit(codeId) gives codeId as MachineWord
+		osWrite(ptrId, lenId) gives maxOfTwo(ptrId as MachineWord, b: lenId as MachineWord)
+		memcpy(dstId, srcId, lenId) gives maxOfThree(dstId as MachineWord, b: srcId as MachineWord, c: lenId as MachineWord)
+		storeByte(baseId, offsetId, byteId) gives maxOfThree(baseId as MachineWord, b: offsetId as MachineWord, c: byteId as MachineWord)
+		loadByte(resultId, baseId, offsetId) gives maxOfThree(resultId as MachineWord, b: baseId as MachineWord, c: offsetId as MachineWord)
+	end 'dispatch'
+end 'getMirOpMaxValueId'
+
+function getSysOpMaxValueId(op SysOp) returns MachineWord
+	return match op 'dispatch'
+		loadFramePtr(resultId) gives resultId as MachineWord
+		loadIndirect(resultId, addrId, _) gives maxOfTwo(resultId as MachineWord, b: addrId as MachineWord)
+		funcAddr(resultId, _) gives resultId as MachineWord
+		osWriteErr(ptrId, lenId) gives maxOfTwo(ptrId as MachineWord, b: lenId as MachineWord)
+		syscall(resultId, _, _) gives resultId as MachineWord
+		iatCall(resultId, _, _) gives resultId as MachineWord
+		globalAddr(resultId, _) gives resultId as MachineWord
+		stackAddr(resultId, _) gives resultId as MachineWord
+		loadByte(resultId, _, _) gives resultId as MachineWord
+		memcpy gives 0
+		storeByte gives 0
+		osExit gives 0
+		osWrite gives 0
+		free gives 0
+	end 'dispatch'
+end 'getSysOpMaxValueId'
+
+function maxOfTwo(a MachineWord, b MachineWord) returns MachineWord
+	if a > b 'aWins'
+		return a
+	end 'aWins'
+	return b
+end 'maxOfTwo'
+
+function maxOfThree(a MachineWord, b MachineWord, c MachineWord) returns MachineWord
+	return maxOfTwo(maxOfTwo(a, b: b), b: c)
+end 'maxOfThree'
+
+function nop()
+end 'nop'
+
+// Helper to create a ByteArray with 1 element.
+function makeByteArray1(v MachineWord) returns ByteArray
+	var arr = ByteArray.create()
+	arr.push(v)
+	return arr
+end 'makeByteArray1'
+
+// Helper to create a ByteArray with 4 elements.
+function makeByteArray4(a MachineWord, b MachineWord, c MachineWord, d MachineWord) returns ByteArray
+	var arr = ByteArray.create()
+	arr.push(a)
+	arr.push(b)
+	arr.push(c)
+	arr.push(d)
+	return arr
+end 'makeByteArray4'
+
+// Helper to create a ByteArray with 4 identical elements.
+function makeByteArray4Same(v MachineWord) returns ByteArray
+	return makeByteArray4(v, b: v, c: v, d: v)
+end 'makeByteArray4Same'
+
+// ============================================================
+// Float value tracking
+// ============================================================
+
+// Scan a function to find which ValueIds hold float (f64) values.
+// Returns a BoolArray where index i is true if ValueId i is float.
+function findFloatValueIds(func MlirFunction, funcNames ByteArrayArray, funcReturnTypes ByteArrayArray) returns BoolArray
+	let maxId = findMaxValueId(func)
+	var result = BoolArray.create()
+	for _ in 0 upto maxId + 1 'init'
+		result.push(false)
+	end 'init'
+	for block in func.blocks 'eachBlock'
+		for op in block.ops 'eachOp'
+			markFloatOp(op, floatSet: result, funcNames: funcNames, funcReturnTypes: funcReturnTypes)
+		end 'eachOp'
+		if block.hasTerminator 'hasTerm'
+			markFloatOp(block.terminator, floatSet: result, funcNames: funcNames, funcReturnTypes: funcReturnTypes)
+		end 'hasTerm'
+	end 'eachBlock'
+	return result
+end 'findFloatValueIds'
+
+function markFloatOp(op MlirOp, floatSet BoolArray, funcNames ByteArrayArray, funcReturnTypes ByteArrayArray)
+	match op 'dispatch'
+		mir(mirOp) then markFloatMirOp(mirOp, floatSet: floatSet, funcNames: funcNames, funcReturnTypes: funcReturnTypes)
+		maxon to sys then break 'dispatch'
+		x64 to arm64 then break 'dispatch'
+	end 'dispatch'
+end 'markFloatOp'
+
+function markFloatMirOp(op MirOp, floatSet BoolArray, funcNames ByteArrayArray, funcReturnTypes ByteArrayArray)
+	match op 'dispatch'
+		movImm(resultId, _, isFloat) then markIf(floatSet, id: resultId as MachineWord, condition: isFloat)
+		binOp(resultId, _, _, opcode) then markIfFloatBinOp(floatSet, id: resultId as MachineWord, opcode: opcode)
+		unaryOp(resultId, _, opcode) then markIfFloatUnaryOp(floatSet, id: resultId as MachineWord, opcode: opcode)
+		call(resultId, callee, _) then markIfFloatCall(floatSet, id: resultId as MachineWord, callee: callee, funcNames: funcNames, funcReturnTypes: funcReturnTypes)
+		param(resultId, _, paramType) then markIf(floatSet, id: resultId as MachineWord, condition: paramType == StdType.f64)
+		movReg(resultId, srcId) then markIfSource(floatSet, id: resultId as MachineWord, srcId: srcId as MachineWord)
+		cmp to branch then break 'dispatch'
+		indirectCall then break 'dispatch'
+		ret then break 'dispatch'
+		load to loadByte then break 'dispatch'
+	end 'dispatch'
+end 'markFloatMirOp'
+
+function markIfFloatCall(floatSet BoolArray, id MachineWord, callee ByteArray, funcNames ByteArrayArray, funcReturnTypes ByteArrayArray)
+	let retType = lookupReturnType(funcReturnTypes, funcNames: funcNames, callee: callee)
+	if retType == b"f64" 'isFloat'
+		floatSet.set(id, value: true)
+	end 'isFloat'
+end 'markIfFloatCall'
+
+function markIfSource(floatSet BoolArray, id MachineWord, srcId MachineWord)
+	let srcIsFloat = try floatSet.get(srcId) otherwise false
+	if srcIsFloat 'mark'
+		floatSet.set(id, value: true)
+	end 'mark'
+end 'markIfSource'
+
+function markIf(floatSet BoolArray, id MachineWord, condition bool)
+	if condition 'mark'
+		floatSet.set(id, value: true)
+	end 'mark'
+end 'markIf'
+
+function markIfFloatBinOp(floatSet BoolArray, id MachineWord, opcode MirBinOpcode)
+	match opcode 'check'
+		addF64 to divF64 then floatSet.set(id, value: true)
+		addI64 to shrI64 then break 'check'
+	end 'check'
+end 'markIfFloatBinOp'
+
+function markIfFloatUnaryOp(floatSet BoolArray, id MachineWord, opcode MirUnaryOpcode)
+	match opcode 'check'
+		siToFpF64 then floatSet.set(id, value: true)
+		negI64 to fpToSiI64 then break 'check'
+	end 'check'
+end 'markIfFloatUnaryOp'
+
+function getLocalType(floatSet BoolArray, localIdx MachineWord) returns MachineWord
+	if isFloatLocal(floatSet, localIdx: localIdx) 'isFloat'
+		return wasmTypeF64
+	end 'isFloat'
+	return wasmTypeI64
+end 'getLocalType'
+
+function stdTypeToWasmType(t StdType) returns MachineWord
+	return match t 'convert'
+		i64 gives wasmTypeI64
+		f64 gives wasmTypeF64
+	end 'convert'
+end 'stdTypeToWasmType'
+
+function isFloatLocal(floatSet BoolArray, localIdx MachineWord) returns bool
+	if localIdx >= floatSet.count() 'outOfBounds'
+		return false
+	end 'outOfBounds'
+	return try floatSet.get(localIdx) otherwise false
+end 'isFloatLocal'

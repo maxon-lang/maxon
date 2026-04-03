@@ -1,0 +1,29 @@
+// Test: large-hex-literal
+// Test hex literal above 32-bit range (0x140000000 = 5368709120)
+function main() returns ExitCode
+	var x = 0x0000000140000000
+	// Verify the value wasn't truncated to 32-bit (which would give 0x40000000 = 1073741824)
+	if x == 5368709120 'check'
+		return 0
+	end 'check'
+	return 1
+end 'main'
+---
+ExitCode: 0
+---
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 5368709120 : i64
+    %2 = mir.mov_imm 5368709120 : i64
+    %3 = mir.cmp eq, %0, %2
+    mir.cond_br %3 [then: check_1(), else: check_1.after()]
+  check_1:
+    %4 = mir.mov_imm 0 : i64
+    mir.ret %4
+  check_1.after:
+    %5 = mir.mov_imm 1 : i64
+    mir.ret %5
+  }
+}
+---

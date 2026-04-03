@@ -1,0 +1,34 @@
+// Test: simple-function
+
+typealias Integer = int(i64.min to i64.max)
+
+function add() returns Integer
+	return 3 + 4
+end 'add'
+
+function main() returns ExitCode
+	return add()
+end 'main'
+---
+ExitCode: 7
+---
+module {
+  func @simple-function.add() -> i64 {
+  entry:
+    %2 = mir.mov_imm 7 : i64
+    mir.ret %2
+  }
+  func @main() -> u8 {
+  entry:
+    %0 = mir.call @simple-function.add()
+    %1 = mir.mov_imm 125 : i64
+    %2 = mir.cmp ugt, %0, %1
+    mir.cond_br %2 [then: __range_panic_0(), else: __range_ok_0()]
+  __range_panic_0:
+    %3 = mir.global_addr @__panic_msg_0
+    %4 = mir.call @mrt_panic(%3)
+  __range_ok_0:
+    mir.ret %0
+  }
+}
+---

@@ -1,0 +1,304 @@
+// WASM binary format encoding helpers.
+// Provides LEB128 encoding, WASM opcodes, and section writing utilities.
+
+// --- LEB128 encoding ---
+
+// Encode an unsigned integer as LEB128 into buf.
+export function writeUleb128(buf ByteArray, value MachineWord)
+	var v = value
+	for _ in 0 upto 10 'encode'
+		let b = v and 0x7F
+		v = v shr 7
+		if v == 0 'done'
+			buf.push(b)
+			return
+		end 'done'
+		buf.push(b or 0x80)
+	end 'encode'
+end 'writeUleb128'
+
+// Encode a signed integer as LEB128 into buf.
+// Converts to unsigned bits and simulates arithmetic shift right.
+export function writeSleb128(buf ByteArray, value ParsedInt)
+	var v = value as MachineWord
+	let isNegative = value < 0
+	var more = true
+	for _ in 0 upto 10 'encode'
+		if not more 'done'
+			return
+		end 'done'
+		let b = v and 0x7F
+		v = v shr 7
+		// Simulate arithmetic right shift: for negative values, set the top 7 bits after logical shift
+		if isNegative 'signExtend'
+			v = v or 0xFE00000000000000
+		end 'signExtend'
+		let signBit = b and 0x40
+		if v == 0 and signBit == 0 'positiveDone'
+			buf.push(b)
+			more = false
+		end 'positiveDone' else if v == 0xFFFFFFFFFFFFFFFF and signBit != 0 'negativeDone'
+			buf.push(b)
+			more = false
+		end 'negativeDone' else 'continue'
+			buf.push(b or 0x80)
+		end 'continue'
+	end 'encode'
+end 'writeSleb128'
+
+// --- WASM Section IDs ---
+
+let wasmSectionType = 1
+let wasmSectionImport = 2
+let wasmSectionFunction = 3
+let wasmSectionMemory = 5
+let wasmSectionExport = 7
+let wasmSectionCode = 10
+let wasmSectionData = 11
+
+// --- WASM Value Types ---
+
+export let wasmTypeI32 = 0x7F
+export let wasmTypeI64 = 0x7E
+export let wasmTypeF64 = 0x7C
+export let wasmTypeVoid = 0x40
+
+// --- WASM Export Kinds ---
+
+let wasmExportFunc = 0x00
+let wasmExportMemory = 0x02
+
+let wasmImportFunc = 0x00
+
+// --- WASM Opcodes ---
+
+export let opUnreachable = 0x00
+export let opNop = 0x01
+export let opBlock = 0x02
+export let opLoop = 0x03
+export let opIf = 0x04
+export let opElse = 0x05
+export let opEnd = 0x0B
+export let opBr = 0x0C
+export let opBrIf = 0x0D
+export let opBrTable = 0x0E
+export let opReturn = 0x0F
+export let opCall = 0x10
+export let opDrop = 0x1A
+export let opSelect = 0x1B
+
+export let opLocalGet = 0x20
+export let opLocalSet = 0x21
+export let opLocalTee = 0x22
+
+export let opI32Load = 0x28
+export let opI64Load = 0x29
+export let opF64Load = 0x2B
+export let opI32Store = 0x36
+export let opI64Store = 0x37
+export let opF64Store = 0x39
+export let opI32Load8U = 0x2D
+export let opI32Store8 = 0x3A
+export let opI64Load8U = 0x31
+export let opI64Store8 = 0x3C
+
+export let opMemorySize = 0x3F
+export let opMemoryGrow = 0x40
+
+export let opI32Const = 0x41
+export let opI64Const = 0x42
+export let opF64Const = 0x44
+
+export let opI32Eqz = 0x45
+export let opI32Eq = 0x46
+export let opI32Ne = 0x47
+export let opI32LtS = 0x48
+export let opI32LtU = 0x49
+export let opI32GtS = 0x4A
+export let opI32GtU = 0x4B
+export let opI32LeS = 0x4C
+export let opI32GeS = 0x4E
+
+export let opI64Eqz = 0x50
+export let opI64Eq = 0x51
+export let opI64Ne = 0x52
+export let opI64LtS = 0x53
+export let opI64LtU = 0x54
+export let opI64GtS = 0x55
+export let opI64GtU = 0x56
+export let opI64LeS = 0x57
+export let opI64GeS = 0x59
+
+export let opI32Add = 0x6A
+export let opI32Sub = 0x6B
+export let opI32Mul = 0x6C
+
+export let opI64Add = 0x7C
+export let opI64Sub = 0x7D
+export let opI64Mul = 0x7E
+export let opI64DivS = 0x7F
+export let opI64DivU = 0x80
+export let opI64RemS = 0x81
+export let opI64RemU = 0x82
+export let opI64And = 0x83
+export let opI64Or = 0x84
+export let opI64Xor = 0x85
+export let opI64Shl = 0x86
+export let opI64ShrS = 0x87
+export let opI64ShrU = 0x88
+
+export let opF64Abs = 0x99
+export let opF64Neg = 0x9A
+export let opF64Add = 0xA0
+export let opF64Sub = 0xA1
+export let opF64Mul = 0xA2
+export let opF64Div = 0xA3
+
+export let opF64Eq = 0x61
+export let opF64Ne = 0x62
+export let opF64Lt = 0x63
+export let opF64Gt = 0x64
+export let opF64Le = 0x65
+export let opF64Ge = 0x66
+
+export let opI32WrapI64 = 0xA7
+export let opI64ExtendI32S = 0xAC
+export let opI64ExtendI32U = 0xAD
+export let opI64TruncF64S = 0xB0
+export let opF64ConvertI64S = 0xB9
+export let opI64ReinterpretF64 = 0xBD
+export let opF64ReinterpretI64 = 0xBF
+
+// --- Section writing helpers ---
+
+// Write a WASM section: section id, then LEB128 length, then contents.
+export function writeSection(module ByteArray, sectionId MachineWord, contents ByteArray)
+	module.push(sectionId)
+	writeUleb128(module, value: contents.count() as MachineWord)
+	module.append(contents)
+end 'writeSection'
+
+// Write a WASM name (UTF-8 string with LEB128 length prefix).
+export function writeWasmName(buf ByteArray, name ByteArray)
+	writeUleb128(buf, value: name.count() as MachineWord)
+	buf.append(name)
+end 'writeWasmName'
+
+// --- Type section helpers ---
+
+// Write a function type: (params) -> (results).
+export function writeFuncType(buf ByteArray, paramTypes ByteArray, resultTypes ByteArray)
+	buf.push(0x60)
+	writeUleb128(buf, value: paramTypes.count() as MachineWord)
+	buf.append(paramTypes)
+	writeUleb128(buf, value: resultTypes.count() as MachineWord)
+	buf.append(resultTypes)
+end 'writeFuncType'
+
+// --- Module header ---
+
+// Write the WASM magic number and version.
+export function writeModuleHeader(buf ByteArray)
+	// Magic: \0asm
+	buf.push(0x00)
+	buf.push(0x61)
+	buf.push(0x73)
+	buf.push(0x6D)
+	// Version: 1
+	writeDword(buf, value: 1)
+end 'writeModuleHeader'
+
+// --- High-level section builders ---
+
+// Build the type section from a list of function types.
+// Each type is a ByteArray encoding a functype (0x60 prefix + params + results).
+export function writeTypeSection(module ByteArray, types ByteArrayArray)
+	var contents = ByteArray.create()
+	writeUleb128(contents, value: types.count() as MachineWord)
+	for t in types 'each'
+		contents.append(t)
+	end 'each'
+	writeSection(module, sectionId: wasmSectionType, contents: contents)
+end 'writeTypeSection'
+
+// Build the import section.
+export function writeImportSection(module ByteArray, imports ByteArray)
+	writeSection(module, sectionId: wasmSectionImport, contents: imports)
+end 'writeImportSection'
+
+// Build the function section (maps function index to type index).
+export function writeFunctionSection(module ByteArray, typeIndices ByteArray)
+	var contents = ByteArray.create()
+	writeUleb128(contents, value: typeIndices.count() as MachineWord)
+	contents.append(typeIndices)
+	writeSection(module, sectionId: wasmSectionFunction, contents: contents)
+end 'writeFunctionSection'
+
+// Build the memory section: one memory with initial pages.
+export function writeMemorySection(module ByteArray, initialPages MachineWord)
+	var contents = ByteArray.create()
+	writeUleb128(contents, value: 1)
+	contents.push(0x00)
+	writeUleb128(contents, value: initialPages)
+	writeSection(module, sectionId: wasmSectionMemory, contents: contents)
+end 'writeMemorySection'
+
+// Build the export section.
+export function writeExportSection(module ByteArray, exports ByteArray)
+	writeSection(module, sectionId: wasmSectionExport, contents: exports)
+end 'writeExportSection'
+
+// Add a function export entry to the exports buffer.
+export function addFuncExport(exports ByteArray, name ByteArray, funcIndex MachineWord, countRef MachineWord) returns MachineWord
+	writeWasmName(exports, name: name)
+	exports.push(wasmExportFunc)
+	writeUleb128(exports, value: funcIndex)
+	return countRef + 1
+end 'addFuncExport'
+
+// Add a memory export entry to the exports buffer.
+export function addMemoryExport(exports ByteArray, name ByteArray, memIndex MachineWord, countRef MachineWord) returns MachineWord
+	writeWasmName(exports, name: name)
+	exports.push(wasmExportMemory)
+	writeUleb128(exports, value: memIndex)
+	return countRef + 1
+end 'addMemoryExport'
+
+// Build the code section from a list of function bodies.
+// Each body is a ByteArray encoding the function body (locals + instructions).
+export function writeCodeSection(module ByteArray, bodies ByteArrayArray)
+	var contents = ByteArray.create()
+	writeUleb128(contents, value: bodies.count() as MachineWord)
+	for body in bodies 'each'
+		writeUleb128(contents, value: body.count() as MachineWord)
+		contents.append(body)
+	end 'each'
+	writeSection(module, sectionId: wasmSectionCode, contents: contents)
+end 'writeCodeSection'
+
+// Build the data section from a list of data segments.
+export function writeDataSection(module ByteArray, segments ByteArray, segmentCount MachineWord)
+	var contents = ByteArray.create()
+	writeUleb128(contents, value: segmentCount)
+	contents.append(segments)
+	writeSection(module, sectionId: wasmSectionData, contents: contents)
+end 'writeDataSection'
+
+// Write an active data segment: memory 0, offset = i32.const(offset), data bytes.
+export function writeActiveDataSegment(buf ByteArray, offset MachineWord, data ByteArray)
+	buf.push(0x00)
+	buf.push(opI32Const)
+	writeUleb128(buf, value: offset)
+	buf.push(opEnd)
+	writeUleb128(buf, value: data.count() as MachineWord)
+	buf.append(data)
+end 'writeActiveDataSegment'
+
+// Add a function import entry to the imports buffer.
+export function addFuncImport(imports ByteArray, moduleName ByteArray, fieldName ByteArray, typeIndex MachineWord, countRef MachineWord) returns MachineWord
+	writeWasmName(imports, name: moduleName)
+	writeWasmName(imports, name: fieldName)
+	imports.push(wasmImportFunc)
+	writeUleb128(imports, value: typeIndex)
+	return countRef + 1
+end 'addFuncImport'

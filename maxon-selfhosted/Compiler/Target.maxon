@@ -3,12 +3,14 @@
 export enum CpuArch
 	x64
 	arm64
+	wasm32
 end 'CpuArch'
 
 export enum Os
 	windows
 	linux
 	macos
+	wasi
 end 'Os'
 
 export type Target
@@ -49,7 +51,9 @@ export function parseTarget(s String) returns Target
 		cpu = CpuArch.x64
 	end 'isX86' else if s.startsWith("arm64") 'isArm'
 		cpu = CpuArch.arm64
-	end 'isArm' else 'unknownCpu'
+	end 'isArm' else if s.startsWith("wasm32") 'isWasm'
+		cpu = CpuArch.wasm32
+	end 'isWasm' else 'unknownCpu'
 		panic("Unknown CPU architecture in target string: {s}")
 	end 'unknownCpu'
 
@@ -59,7 +63,9 @@ export function parseTarget(s String) returns Target
 		os = Os.windows
 	end 'isWindows' else if s.contains("macos") 'isMacos'
 		os = Os.macos
-	end 'isMacos' else 'unknownOs'
+	end 'isMacos' else if s.contains("wasi") 'isWasi'
+		os = Os.wasi
+	end 'isWasi' else 'unknownOs'
 		panic("Unknown OS in target string: {s}")
 	end 'unknownOs'
 
@@ -70,12 +76,14 @@ export function targetToString(t Target) returns String
 	let cpuStr = match t.cpu 'cpu'
 		x64 gives "x64"
 		arm64 gives "arm64"
+		wasm32 gives "wasm32"
 	end 'cpu'
 
 	let osStr = match t.os 'os'
 		windows gives "windows"
 		linux gives "linux"
 		macos gives "macos"
+		wasi gives "wasi"
 	end 'os'
 
 	return "{cpuStr}-{osStr}"
@@ -86,5 +94,6 @@ export function executableExtension(t Target) returns String
 		windows gives ".exe"
 		linux gives ""
 		macos gives ""
+		wasi gives ".wasm"
 	end 'os'
 end 'executableExtension'

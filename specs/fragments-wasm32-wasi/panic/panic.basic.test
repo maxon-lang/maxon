@@ -1,0 +1,24 @@
+// Test: panic.basic
+function main() returns ExitCode
+		panic("something went wrong")
+		return 0
+end 'main'
+---
+ExitCode: 1
+Stderr: ```
+panic at panic.basic.test:3: something went wrong
+Stack trace:
+  in main
+  in mrt_start
+```
+---
+module {
+  func @main() -> u8 {
+  entry:
+    %2 = mir.global_addr @__panic_msg_0
+    %3 = mir.call @mrt_panic(%2)
+    %1 = mir.mov_imm 0 : i64
+    mir.ret %1
+  }
+}
+---

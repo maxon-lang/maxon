@@ -134,11 +134,44 @@ function canExecuteTarget(target Target) returns bool
 		linux gives true
 		windows gives false
 		macos gives false
+		wasi gives canExecuteWasmTarget()
 	end 'checkOs'
 end 'canExecuteTarget'
 
+// Check if wasmtime is available for running WASM binaries.
+function canExecuteWasmTarget() returns bool
+	let wasmtimePath = findWasmtimePath()
+	return not wasmtimePath.isEmpty()
+end 'canExecuteWasmTarget'
+
+// Find the vendored wasmtime binary relative to the project root.
+function findWasmtimePath() returns String
+	var dir = Directory.currentPath()
+	for _ in 0 upto 10 'search'
+		let candidate = dir.join("vendor").join("wasmtime").join("wasmtime.exe")
+		if candidate.fileExists() 'found'
+			return candidate.toString()
+		end 'found'
+		// Also check for non-Windows binary name
+		let candidate2 = dir.join("vendor").join("wasmtime").join("wasmtime")
+		if candidate2.fileExists() 'found2'
+			return candidate2.toString()
+		end 'found2'
+		let parentDir = dir.parent()
+		if parentDir.isEmpty() 'noParent'
+			return ""
+		end 'noParent'
+		dir = parentDir
+	end 'search'
+	return ""
+end 'findWasmtimePath'
+
 // Build the command to run a compiled binary.
 function buildRunCommand(outputPath FilePath, target Target, projectRoot FilePath, testArgs String) returns String
+	if target.os == Os.wasi 'isWasm'
+		return buildWasmRunCommand(outputPath, testArgs: testArgs)
+	end 'isWasm'
+
 	if isHostTarget(target) 'isHost'
 		if not testArgs.isEmpty() 'hasArgs'
 			return "{outputPath} {testArgs}"
@@ -149,6 +182,7 @@ function buildRunCommand(outputPath FilePath, target Target, projectRoot FilePat
 	let dockerArch = match target.cpu 'pickArch'
 		x64 gives "amd64"
 		arm64 gives "arm64"
+		wasm32 gives "amd64"
 	end 'pickArch'
 
 	let tempDir = projectRoot.join("temp")
@@ -158,6 +192,18 @@ function buildRunCommand(outputPath FilePath, target Target, projectRoot FilePat
 	end 'hasDockerArgs'
 	return dockerCmd
 end 'buildRunCommand'
+
+// Build the command to run a WASM binary via vendored wasmtime.
+function buildWasmRunCommand(outputPath FilePath, testArgs String) returns String
+	let wasmtimePath = findWasmtimePath()
+	if wasmtimePath.isEmpty() 'noWasmtime'
+		panic("wasmtime not found in vendor/wasmtime/")
+	end 'noWasmtime'
+	if not testArgs.isEmpty() 'hasArgs'
+		return "{wasmtimePath} run {outputPath} -- {testArgs}"
+	end 'hasArgs'
+	return "{wasmtimePath} run {outputPath}"
+end 'buildWasmRunCommand'
 
 // Returns the compiler executable's modification time, or max timestamp if it can't be determined.
 function getCompilerModifiedTime() returns Timestamp
@@ -443,8 +489,8 @@ function runTestFromFragment(fragment Fragment, projectRoot FilePath, target Tar
 	var passed = true
 	var errorMsg = ""
 
-	// Check exit code
-	if fragment.expectation.hasExitCode 'checkEc'
+	// Check exit code (skip for tests that expect stderr — panic exit codes are platform-dependent)
+	if fragment.expectation.hasExitCode and not fragment.expectation.hasRuntimeStderr 'checkEc'
 		if runEc != fragment.expectation.exitCode 'ecMismatch'
 			passed = false
 			errorMsg = "Expected exit code {fragment.expectation.exitCode}, got {runEc}"
@@ -468,7 +514,11 @@ function runTestFromFragment(fragment Fragment, projectRoot FilePath, target Tar
 	// Check runtime stderr
 	if fragment.expectation.hasRuntimeStderr 'checkStderr'
 		let expectedErr = trimWhitespace(fragment.expectation.runtimeStderr)
-		let actualErr = trimWhitespace(runStderr)
+		var actualErr = trimWhitespace(runStderr)
+		// Convert wasmtime trap output into Maxon-style stack trace
+		if target.os == Os.wasi 'convertWasmtimeOutput'
+			actualErr = convertWasmtimeStderr(actualErr)
+		end 'convertWasmtimeOutput'
 		if actualErr != expectedErr 'stderrMismatch'
 			passed = false
 			if errorMsg.isEmpty() 'firstStderr'
@@ -513,6 +563,41 @@ end 'runTestFromFragment'
 
 // Normalize stderr for comparison: trim, CRLF→LF, backslash→forward slash,
 // and strip file paths from error messages so temp paths match fragment paths.
+// Convert wasmtime's trap stderr into a Maxon-style stack trace.
+// Input:  "panic at ...\nError: failed to run...\n...wasm backtrace:\n  0: 0x445 - <unknown>!mrt_panic\n  1: 0x485 - <unknown>!main\n..."
+// Output: "panic at ...\nStack trace:\n  in main\n  in mrt_start"
+// Strips mrt_panic from the trace (it's an implementation detail) and the wasmtime boilerplate.
+function convertWasmtimeStderr(s String) returns String
+	let marker = "\nError: failed to run"
+	let markerIdx = try s.findFirst(marker) otherwise 'noMarker'
+		return s
+	end 'noMarker'
+	// Extract the program's stderr (before wasmtime's error)
+	let programStderr = s.slice(s.startIndex(), endIndex: markerIdx)
+
+	// Extract function names from wasmtime backtrace lines
+	// Each line looks like: "           0:  0x445 - <unknown>!funcname"
+	var trace = "\nStack trace:"
+	let lines = s.split("\n")
+	for line in lines 'eachLine'
+		let bangIdx = try line.findFirst("!") otherwise 'noFunc'
+			continue
+		end 'noFunc'
+		let afterBangIdx = try line.indexAfter(bangIdx) otherwise 'badIdx'
+			continue
+		end 'badIdx'
+		let afterBang = line.slice(afterBangIdx, endIndex: line.endIndex())
+		let funcName = trimWhitespace(afterBang)
+		// Skip mrt_panic (implementation detail) and mrt_start (always last)
+		if funcName == "mrt_panic" 'skipPanic'
+			continue
+		end 'skipPanic'
+		trace = "{trace}\n  in {funcName}"
+	end 'eachLine'
+
+	return "{programStderr}{trace}"
+end 'convertWasmtimeStderr'
+
 function normalizeStderr(s String) returns String
 	var result = trimWhitespace(s)
 	result = result.replace("\r\n", with: "\n")

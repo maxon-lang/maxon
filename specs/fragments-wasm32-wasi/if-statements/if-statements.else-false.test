@@ -1,0 +1,28 @@
+// Test: if-statements.else-false
+function main() returns ExitCode
+	var x = 3
+	if x > 5 'gt5'
+		return 1
+	end 'gt5' else 'not_gt5'
+		return 0
+	end 'not_gt5'
+end 'main'
+---
+ExitCode: 0
+---
+module {
+  func @main() -> u8 {
+  entry:
+    %0 = mir.mov_imm 3 : i64
+    %2 = mir.mov_imm 5 : i64
+    %3 = mir.cmp gt, %0, %2
+    mir.cond_br %3 [then: gt5_1(), else: not_gt5_2()]
+  gt5_1:
+    %4 = mir.mov_imm 1 : i64
+    mir.ret %4
+  not_gt5_2:
+    %5 = mir.mov_imm 0 : i64
+    mir.ret %5
+  }
+}
+---
