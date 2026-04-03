@@ -2219,11 +2219,16 @@ Shift operators work on integers only.
 | `-` | Negation | `-x` |
 | `not` | Logical NOT / Bitwise NOT | `not condition` / `not mask` |
 
-Unary operators cannot be chained. Use parentheses for nested unary operations:
+The `-` operator cannot be chained directly. Use parentheses for nested negation:
 ```maxon
 var y = -(-x)      // OK: parenthesized
 var z = -(x + 1)   // OK: subexpression
-// var w = --x      // Error: consecutive unary operators
+// var w = --x      // Error: consecutive negation operators
+```
+
+The `not` operator can be applied repeatedly:
+```maxon
+var a = not not x  // OK: double bitwise NOT (identity for integers)
 ```
 
 ### Parentheses
@@ -3078,9 +3083,10 @@ enum ArrayError implements Error
 		emptySlot         // slot pointer is null (e.g. after resize() without push())
 end 'ArrayError'
 
-// Map key lookup
+// Map operations
 enum MapError implements Error
 		keyNotFound
+		keyAlreadyExists
 end 'MapError'
 
 // Iterator exhaustion

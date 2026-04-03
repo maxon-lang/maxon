@@ -10,9 +10,9 @@ typealias PlanetMap = Map with (Planet, Int)
 
 function main() returns ExitCode
 	var m = PlanetMap.create()
-	m.insert(Planet.earth, value: 1)
-	m.insert(Planet.mars, value: 2)
-	m.insert(Planet.venus, value: 3)
+	try m.insert(Planet.earth, value: 1) otherwise ignore
+	try m.insert(Planet.mars, value: 2) otherwise ignore
+	try m.insert(Planet.venus, value: 3) otherwise ignore
 	var result = try m.get(Planet.mars) otherwise 0
 	return result
 end 'main'
@@ -130,7 +130,7 @@ module {
   }
   func @main() -> u32 {
   entry:
-    x64.prologue stack_size=32
+    x64.prologue stack_size=48
     x64.call PlanetMap.create
     x64.mov [rbp-8], rax
     x64.mov rax, [rbp-8]
@@ -139,23 +139,26 @@ module {
     x64.mov r8, 1
     x64.call PlanetMap.insert
     x64.mov rcx, [rbp-8]
+    x64.mov [rbp-32], rdx
     x64.mov rdx, 1
     x64.mov r8, 2
     x64.call PlanetMap.insert
-    x64.mov rdx, [rbp-8]
+    x64.mov rax, [rbp-8]
+    x64.mov [rbp-40], rdx
     x64.mov rcx, [rbp-8]
     x64.mov rdx, 2
     x64.mov r8, 3
     x64.call PlanetMap.insert
-    x64.mov rbx, [rbp-8]
+    x64.mov rax, [rbp-8]
+    x64.mov [rbp-48], rdx
     x64.mov rcx, [rbp-8]
     x64.mov rdx, 1
     x64.call PlanetMap.get
-    x64.xor rsi, rsi
-    x64.mov [rbp-16], rsi
+    x64.xor rcx, rcx
+    x64.mov [rbp-16], rcx
     x64.mov [rbp-24], rax
-    x64.xor rdi, rdi
-    x64.cmp rdx, rdi
+    x64.xor rax, rax
+    x64.cmp rdx, rax
     x64.je main.otherwise_default_continue_3
   otherwise_default_error_2:
     x64.mov rax, [rbp-16]
@@ -193,9 +196,9 @@ module {
     x64.mov rcx, [rax+0]
     x64.mov [rbp-16], rcx
     x64.test rcx, rcx
-    x64.jz __nonnull_skip_17
+    x64.jz __nonnull_skip_23
     x64.call mm_decref
-    x64.label __nonnull_skip_17
+    x64.label __nonnull_skip_23
     x64.jmp __destruct_String.done
   done:
     x64.epilogue
@@ -249,9 +252,9 @@ module {
     x64.mov rcx, [rax+8]
     x64.mov [rbp-16], rcx
     x64.test rcx, rcx
-    x64.jz __nonnull_skip_18
+    x64.jz __nonnull_skip_24
     x64.call mm_decref
-    x64.label __nonnull_skip_18
+    x64.label __nonnull_skip_24
     x64.jmp __destruct_Array_Planet.done
   done:
     x64.epilogue
@@ -285,9 +288,9 @@ module {
     x64.mov rcx, [rax+8]
     x64.mov [rbp-16], rcx
     x64.test rcx, rcx
-    x64.jz __nonnull_skip_19
+    x64.jz __nonnull_skip_25
     x64.call mm_decref
-    x64.label __nonnull_skip_19
+    x64.label __nonnull_skip_25
     x64.jmp __destruct_Array_Int.done
   done:
     x64.epilogue
@@ -321,9 +324,9 @@ module {
     x64.mov rcx, [rax+8]
     x64.mov [rbp-16], rcx
     x64.test rcx, rcx
-    x64.jz __nonnull_skip_20
+    x64.jz __nonnull_skip_26
     x64.call mm_decref
-    x64.label __nonnull_skip_20
+    x64.label __nonnull_skip_26
     x64.jmp __destruct_Array_SetSlotState.done
   done:
     x64.epilogue
@@ -337,25 +340,25 @@ module {
     x64.mov rcx, [rax+0]
     x64.mov [rbp-16], rcx
     x64.test rcx, rcx
-    x64.jz __nonnull_skip_21
+    x64.jz __nonnull_skip_27
     x64.call mm_decref
-    x64.label __nonnull_skip_21
+    x64.label __nonnull_skip_27
     x64.mov rdx, [rbp-8]
     x64.mov rbx, [rdx+8]
     x64.mov [rbp-24], rbx
     x64.test rbx, rbx
-    x64.jz __nonnull_skip_22
+    x64.jz __nonnull_skip_28
     x64.mov rcx, [rbp-24]
     x64.call mm_decref
-    x64.label __nonnull_skip_22
+    x64.label __nonnull_skip_28
     x64.mov rsi, [rbp-8]
     x64.mov rdi, [rsi+16]
     x64.mov [rbp-32], rdi
     x64.test rdi, rdi
-    x64.jz __nonnull_skip_23
+    x64.jz __nonnull_skip_29
     x64.mov rcx, [rbp-32]
     x64.call mm_decref
-    x64.label __nonnull_skip_23
+    x64.label __nonnull_skip_29
     x64.jmp __destruct_PlanetMap.done
   done:
     x64.epilogue
@@ -369,9 +372,9 @@ module {
     x64.mov rcx, [rax+8]
     x64.mov [rbp-16], rcx
     x64.test rcx, rcx
-    x64.jz __nonnull_skip_24
+    x64.jz __nonnull_skip_30
     x64.call mm_decref
-    x64.label __nonnull_skip_24
+    x64.label __nonnull_skip_30
     x64.jmp __destruct_StateArray.done
   done:
     x64.epilogue

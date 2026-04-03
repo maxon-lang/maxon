@@ -10554,7 +10554,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
 
     if (Check(TokenType.Not)) {
       var token = Advance(); // consume 'not'
-      if (Check(TokenType.Minus) || Check(TokenType.Not))
+      if (Check(TokenType.Minus))
         throw new CompileError(ErrorCode.ParserExpectedExpression,
           $"Expected expression but got '{Current().Value}'", Current().Line, Current().Column);
       var inner = ParsePrimary();

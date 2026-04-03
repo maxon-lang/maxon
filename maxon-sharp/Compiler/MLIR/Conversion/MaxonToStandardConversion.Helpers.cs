@@ -619,12 +619,18 @@ public static partial class MaxonToStandardConversion {
 
   /// Reload struct-typed self-field local variables from the self pointer.
   /// Called after method calls that may mutate self-fields (e.g. grow() reallocating arrays).
-  private static void ReloadSelfFieldLocals(MlirStructType selfStructType, MlirBlock<StandardOp> block, Dictionary<string, string> varTypes) {
+  private static void ReloadSelfFieldLocals(MlirStructType selfStructType, MlirBlock<StandardOp> block, Dictionary<string, string> varTypes, Dictionary<string, string>? selfFieldTempVars = null) {
     foreach (var field in selfStructType.Fields) {
       if (field.Type is not MlirStructType) continue;
       if (!varTypes.ContainsKey(field.Name)) continue;
       var reloaded = EmitStructFieldLoad(block, "self", field.Offset, MlirType.I64, varTypes);
       EmitStore(block, reloaded, field.Name, varTypes);
+      // Also update the entry-block temp var (e.g. __field_1234) that aliases this self-field,
+      // so subsequent code using the SSA-derived temp sees the fresh value.
+      if (selfFieldTempVars != null && selfFieldTempVars.TryGetValue(field.Name, out var tempName)
+          && varTypes.ContainsKey(tempName)) {
+        EmitStore(block, reloaded, tempName, varTypes);
+      }
     }
   }
 

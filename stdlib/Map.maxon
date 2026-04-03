@@ -55,78 +55,61 @@ export type Map uses Key, Value implements BuiltinDictionaryLiteral, Iterable wi
 		return result
 	end 'init'
 
-	/// Insert a key-value pair into the map
-	/// Throws if the key already exists
-	/// Automatically resizes the map when load factor exceeds 75%
-	export function insert(key Key, value Value) throws MapError
-		// Initialize if empty struct was created with zero capacity
+	// Internal: initialize storage when capacity is zero, then grow if load factor exceeds 75%
+	function ensureCapacity()
 		if capacity == 0 'init_empty'
-			var newKeys = KeyArray{}
-			newKeys.resize(16)
-			var newValues = ValueArray{}
-			newValues.resize(16)
-			var newStates = StateArray{}
-			newStates.resize(16)
-			keys = newKeys
-			values = newValues
-			states = newStates
+			keys = KeyArray{}
+			keys.resize(16)
+			values = ValueArray{}
+			values.resize(16)
+			states = StateArray{}
+			states.resize(16)
 			capacity = 16
 		end 'init_empty'
 
-		// Check load factor and grow if needed (75% threshold)
 		var loadLimit = trunc((capacity * 3) / 4)
 		if count >= loadLimit 'do_grow'
 			grow()
 		end 'do_grow'
+	end 'ensureCapacity'
+
+	// Internal: write a key-value pair into the given slot
+	function insertAtSlot(slotIndex Index, key Key, value Value)
+		keys.set(slotIndex, value: key)
+		values.set(slotIndex, value: value)
+		states.set(slotIndex, value: SlotState.Occupied)
+		count = count + 1
+	end 'insertAtSlot'
+
+	/// Insert a key-value pair into the map
+	/// Throws if the key already exists
+	/// Automatically resizes the map when load factor exceeds 75%
+	export function insert(key Key, value Value) throws MapError
+		ensureCapacity()
 
 		var slotIndex = findSlot(key: key)
 		if slotIndex >= 0 'found'
 			throw MapError.keyAlreadyExists
 		end 'found'
-		// Not found: decode insertion index from negative value
+
 		var insertIndex = -(slotIndex + 1)
-		keys.set(insertIndex, value: key)
-		values.set(insertIndex, value: value)
-		states.set(insertIndex, value: SlotState.Occupied)
-		count = count + 1
+		insertAtSlot(insertIndex, key: key, value: value)
 	end 'insert'
 
 	/// Insert or update a key-value pair in the map
 	/// If the key already exists, updates the value
 	/// Automatically resizes the map when load factor exceeds 75%
 	export function upsert(key Key, value Value)
-		// Initialize if empty struct was created with zero capacity
-		if capacity == 0 'init_empty'
-			var newKeys = KeyArray{}
-			newKeys.resize(16)
-			var newValues = ValueArray{}
-			newValues.resize(16)
-			var newStates = StateArray{}
-			newStates.resize(16)
-			keys = newKeys
-			values = newValues
-			states = newStates
-			capacity = 16
-		end 'init_empty'
-
-		// Check load factor and grow if needed (75% threshold)
-		var loadLimit = trunc((capacity * 3) / 4)
-		if count >= loadLimit 'do_grow'
-			grow()
-		end 'do_grow'
+		ensureCapacity()
 
 		var slotIndex = findSlot(key: key)
 		if slotIndex >= 0 'found'
-			// Key exists - update value
 			values.set(slotIndex, value: value)
 			return
 		end 'found'
-		// Not found: decode insertion index from negative value
+
 		var insertIndex = -(slotIndex + 1)
-		keys.set(insertIndex, value: key)
-		values.set(insertIndex, value: value)
-		states.set(insertIndex, value: SlotState.Occupied)
-		count = count + 1
+		insertAtSlot(insertIndex, key: key, value: value)
 	end 'upsert'
 
 	/// Get the value for a key, throws if not found

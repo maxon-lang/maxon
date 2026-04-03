@@ -267,6 +267,9 @@ public static partial class MaxonToStandardConversion {
       // Reset per-block since a cached var stored in one branch may not be defined in another.
       var selfFieldCache = new Dictionary<string, string>();
 
+      // Tracks temp vars created for self-field accesses (e.g. __field_1234 for keys).
+      // When a sibling method call may mutate self-fields, these temps must also be reloaded.
+      var selfFieldTempVars = new Dictionary<string, string>();
 
       foreach (var block in func.Body.Blocks) {
         selfFieldCache.Clear();
@@ -1313,6 +1316,8 @@ public static partial class MaxonToStandardConversion {
                   // to have the same field name (e.g., other.managed vs self.managed in append).
                   if (structName == "self" && IsSelfField(isStructInstanceMethod, selfStructType, fieldAccess.FieldName)) {
                     EmitStore(newBlock, nestedPtr, fieldAccess.FieldName, varTypes);
+                    // Track this temp so ReloadSelfFieldLocals can update it after calls
+                    selfFieldTempVars[fieldAccess.FieldName] = tempVarName;
                   }
                 } else {
                   // Fallback: try loading as a named variable (legacy path)
@@ -1885,8 +1890,10 @@ public static partial class MaxonToStandardConversion {
             }
             case MaxonTryCallOp tryCallOp:
               LowerTryCall(tryCallOp, funcLookup, newBlock, valueMap, varTypes, module.TypeDefs, temps);
-              if (isStructInstanceMethod)
+              if (isStructInstanceMethod) {
                 selfFieldCache.Clear();
+                ReloadSelfFieldLocals(selfStructType!, newBlock, varTypes, selfFieldTempVars);
+              }
               break;
             case MaxonAsyncCallOp asyncCallOp:
               LowerAsyncCall(asyncCallOp, newBlock, valueMap, varTypes);
@@ -1908,7 +1915,7 @@ public static partial class MaxonToStandardConversion {
               // field locals must be reloaded from the self pointer
               if (isStructInstanceMethod) {
                 selfFieldCache.Clear();
-                ReloadSelfFieldLocals(selfStructType!, newBlock, varTypes);
+                ReloadSelfFieldLocals(selfStructType!, newBlock, varTypes, selfFieldTempVars);
               }
               // After a call that passes variables by reference, reload those variables
               // so subsequent uses see the mutated values instead of stale SSA values
@@ -1953,8 +1960,10 @@ public static partial class MaxonToStandardConversion {
               break;
             case MaxonIndirectCallOp indirectCallOp:
               LowerIndirectCall(indirectCallOp, newBlock, valueMap, varTypes, module.TypeDefs, fnEnvVarNames, fnEnvDirectValues, temps);
-              if (isStructInstanceMethod)
+              if (isStructInstanceMethod) {
                 selfFieldCache.Clear();
+                ReloadSelfFieldLocals(selfStructType!, newBlock, varTypes, selfFieldTempVars);
+              }
               break;
             case MaxonReturnOp retOp: {
               LowerReturn(retOp, retStructType, newBlock, valueMap, varTypes, module.TypeDefs, func.Name, temps);

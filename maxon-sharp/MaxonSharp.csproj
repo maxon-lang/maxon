@@ -36,7 +36,15 @@
   </PropertyGroup>
 
   <Target Name="CopyToBin" AfterTargets="Publish">
-    <Copy SourceFiles="$(PublishDir)$(AssemblyName)$(_ExeExt)" DestinationFolder="$(ProjectDir)../bin" SkipUnchangedFiles="true" />
+    <!-- Clean up any leftover .old file from a previous locked build -->
+    <Delete Files="$(ProjectDir)../bin/$(AssemblyName)$(_ExeExt).old" Condition="Exists('$(ProjectDir)../bin/$(AssemblyName)$(_ExeExt).old')" ContinueOnError="true" />
+    <!-- Try a direct copy first (fast path when not locked) -->
+    <Copy SourceFiles="$(PublishDir)$(AssemblyName)$(_ExeExt)" DestinationFolder="$(ProjectDir)../bin" SkipUnchangedFiles="true" ContinueOnError="true" Retries="0">
+      <Output TaskParameter="CopiedFiles" ItemName="_CopiedFiles" />
+    </Copy>
+    <!-- If direct copy failed (exe locked), rename the locked file out of the way and copy again -->
+    <Move SourceFiles="$(ProjectDir)../bin/$(AssemblyName)$(_ExeExt)" DestinationFiles="$(ProjectDir)../bin/$(AssemblyName)$(_ExeExt).old" Condition="'@(_CopiedFiles)' == ''" ContinueOnError="true" />
+    <Copy SourceFiles="$(PublishDir)$(AssemblyName)$(_ExeExt)" DestinationFolder="$(ProjectDir)../bin" SkipUnchangedFiles="false" Condition="'@(_CopiedFiles)' == ''" />
   </Target>
 
 </Project>

@@ -623,7 +623,7 @@ multiplicative
 cast_expr     = unary_expr { 'as' type_ref }
 
 unary_expr    = '-' postfix_expr
-              | 'not' postfix_expr
+              | 'not' unary_expr
               | postfix_expr
 
 postfix_expr  = primary { postfix_op }
