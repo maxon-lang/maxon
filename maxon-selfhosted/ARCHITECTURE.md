@@ -71,7 +71,7 @@ maxon-selfhosted/
         InstructionScheduler.maxon     Register-pressure-aware bottom-up list scheduler
         OsDescriptor.maxon             OS abstraction (exit/write strategies)
         PrologueEpiloguePass.maxon     Shared prologue/epilogue types, frame computation, pass entry
-        RegisterManager.maxon          Cross-platform greedy linear-scan register allocator
+        RegisterAllocator.maxon          Cross-platform greedy linear-scan register allocator
         StdOpHelpers.maxon             Shared helpers for mid->target conversion
         TargetRegAllocDispatch.maxon   Target-specific register allocation dispatch
       X64/
@@ -365,7 +365,7 @@ The scheduler reads instruction metadata directly from the `OpMeta` backing stru
 
 ### Register Allocation
 
-The codegen uses a **greedy linear-scan register allocator** (`RegisterManager.maxon`) that works across both x86-64 and ARM64 targets:
+The codegen uses a **greedy linear-scan register allocator** (`RegisterAllocator.maxon`) that works across both x86-64 and ARM64 targets:
 
 1. The register allocator maintains a `RegState` tracking which SSA values are in which physical registers, with LRU eviction when registers are exhausted
 2. Values are assigned to physical registers on first use and kept live as long as possible
@@ -439,7 +439,7 @@ Add a case handling the new `ArithOp` opcode, mapping it to the corresponding `M
 
 **6. Target Conversion (MidToX64Conversion.maxon / MidToArm64Conversion.maxon)**
 
-Add a case handling the new `MirOp`, emitting the appropriate target ops with register allocation through `RegisterManager`.
+Add a case handling the new `MirOp`, emitting the appropriate target ops with register allocation through `RegisterAllocator`.
 
 **7. X86/Arm64 Code Emitter**
 

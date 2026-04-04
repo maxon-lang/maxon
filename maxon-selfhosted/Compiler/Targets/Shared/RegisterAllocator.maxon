@@ -54,7 +54,7 @@ end 'OpPattern'
 // Prepare implicit def registers before an op: relocate or spill any occupied registers
 // that will be implicitly clobbered. Protects registers in implicitReads.
 // Prefers relocating to a free register over spilling to the stack.
-export function rmPrepImplicitDefs(state RegState, implicitDefs RegMask, implicitReads RegMask, dstBlock MlirBlock)
+export function prepImplicitDefs(state RegState, implicitDefs RegMask, implicitReads RegMask, dstBlock MlirBlock)
 	if implicitDefs == 0 'noDefs'
 		return
 	end 'noDefs'
@@ -72,19 +72,19 @@ export function rmPrepImplicitDefs(state RegState, implicitDefs RegMask, implici
 			let isProtected = (implicitReads and(1 shl bit)) != 0
 			if not isProtected 'notProtected'
 				// Try relocating to a free register first to avoid a stack spill.
-				let relocated = rmRelocateRegisterProtectMask(state, regOrdinal: bit, dstBlock: dstBlock, protectMask: protectMask)
+				let relocated = relocateRegisterProtectMask(state, regOrdinal: bit, dstBlock: dstBlock, protectMask: protectMask)
 				if relocated == RM_NONE 'noFreeReg'
-					rmSpillRegisterIfOccupied(state, regOrdinal: bit, dstBlock: dstBlock)
+					spillRegisterIfOccupied(state, regOrdinal: bit, dstBlock: dstBlock)
 				end 'noFreeReg'
 			end 'notProtected'
 		end 'hasBit'
 		mask = mask shr 1
 		bit = bit + 1
 	end 'eachBit'
-end 'rmPrepImplicitDefs'
+end 'prepImplicitDefs'
 
 // Clear register contents for all implicitly defined registers after an op.
-export function rmClearImplicitDefs(state RegState, implicitDefs RegMask)
+export function clearImplicitDefs(state RegState, implicitDefs RegMask)
 	if implicitDefs == 0 'noDefs'
 		return
 	end 'noDefs'
@@ -92,12 +92,12 @@ export function rmClearImplicitDefs(state RegState, implicitDefs RegMask)
 	var mask = implicitDefs
 	while mask != 0 'eachBit'
 		if(mask and 1) != 0 'hasBit'
-			rmClearRegisterContents(state, regOrdinal: bit)
+			clearRegisterContents(state, regOrdinal: bit)
 		end 'hasBit'
 		mask = mask shr 1
 		bit = bit + 1
 	end 'eachBit'
-end 'rmClearImplicitDefs'
+end 'clearImplicitDefs'
 
 // Per-value state: consolidates all value-indexed register allocator fields.
 export type ValueInfo
@@ -247,46 +247,46 @@ end 'RegSnapshot'
 
 export typealias SnapshotMap = Map with(RegInt, RegSnapshot)
 
-function rmCopyArray(src RegIntArray) returns RegIntArray
+function copyArray(src RegIntArray) returns RegIntArray
 	let dst = RegIntArray.create()
 	for val in src 'copy'
 		dst.push(val)
 	end 'copy'
 	return dst
-end 'rmCopyArray'
+end 'copyArray'
 
-function rmCopyValueInfoArray(src ValueInfoArray) returns ValueInfoArray
+function copyValueInfoArray(src ValueInfoArray) returns ValueInfoArray
 	let dst = ValueInfoArray.create()
 	for val in src 'copy'
 		dst.push(val.clone())
 	end 'copy'
 	return dst
-end 'rmCopyValueInfoArray'
+end 'copyValueInfoArray'
 
 // Ensure the values array can hold the given valueId.
-function rmEnsureValueCapacity(state RegState, valueId RegInt)
+function ensureValueCapacity(state RegState, valueId RegInt)
 	while state.values.count() <= valueId 'grow'
 		state.values.push(defaultValueInfo())
 	end 'grow'
-end 'rmEnsureValueCapacity'
+end 'ensureValueCapacity'
 
 // Get the ValueInfo for a valueId, growing the array if needed.
-export function rmGetValueInfo(state RegState, valueId RegInt) returns ValueInfo
-	rmEnsureValueCapacity(state, valueId: valueId)
+export function getValueInfo(state RegState, valueId RegInt) returns ValueInfo
+	ensureValueCapacity(state, valueId: valueId)
 	return try state.values.get(valueId) otherwise defaultValueInfo()
-end 'rmGetValueInfo'
+end 'getValueInfo'
 
 // Save current register allocator state for later restoration.
-export function rmSaveState(state RegState) returns RegSnapshot
-	return RegSnapshot.create(rmCopyArray(state.registerContents), values: rmCopyValueInfoArray(state.values), fpContents: rmCopyArray(state.fpContents), nextSpillOffset: state.nextSpillOffset, minSpillOffset: state.minSpillOffset)
-end 'rmSaveState'
+export function saveState(state RegState) returns RegSnapshot
+	return RegSnapshot.create(copyArray(state.registerContents), values: copyValueInfoArray(state.values), fpContents: copyArray(state.fpContents), nextSpillOffset: state.nextSpillOffset, minSpillOffset: state.minSpillOffset)
+end 'saveState'
 
 // Restore register allocator state from a snapshot.
 // Preserves spill offset watermarks if the saved offsets are more allocated.
-export function rmRestoreState(state RegState, snapshot RegSnapshot)
-	state.registerContents = rmCopyArray(snapshot.registerContents)
-	state.values = rmCopyValueInfoArray(snapshot.values)
-	state.fpContents = rmCopyArray(snapshot.fpContents)
+export function restoreState(state RegState, snapshot RegSnapshot)
+	state.registerContents = copyArray(snapshot.registerContents)
+	state.values = copyValueInfoArray(snapshot.values)
+	state.fpContents = copyArray(snapshot.fpContents)
 	// Unconditionally restore spill offsets from before the diverging block.
 	// Diverging blocks (panic paths) never return, so their spill slots are
 	// unreachable from the continuation and must not inflate the frame.
@@ -295,14 +295,14 @@ export function rmRestoreState(state RegState, snapshot RegSnapshot)
 	state.nextFreshIndex = 0
 	state.nextFreshFpIndex = 0
 	state.currentOpIndex = 0
-end 'rmRestoreState'
+end 'restoreState'
 
 // Restore register state but preserve spill watermarks from both paths.
 // Used for condBr targets where both paths are live (unlike diverging blocks).
-export function rmRestoreStatePreserveSpills(state RegState, snapshot RegSnapshot)
-	state.registerContents = rmCopyArray(snapshot.registerContents)
-	state.values = rmCopyValueInfoArray(snapshot.values)
-	state.fpContents = rmCopyArray(snapshot.fpContents)
+export function restoreStatePreserveSpills(state RegState, snapshot RegSnapshot)
+	state.registerContents = copyArray(snapshot.registerContents)
+	state.values = copyValueInfoArray(snapshot.values)
+	state.fpContents = copyArray(snapshot.fpContents)
 	// Keep the current spill offsets if they've grown beyond the snapshot's,
 	// since the fallthrough path may have allocated spill slots that are still live.
 	if state.spillsGrowDown 'growDown'
@@ -323,7 +323,7 @@ export function rmRestoreStatePreserveSpills(state RegState, snapshot RegSnapsho
 	state.nextFreshIndex = 0
 	state.nextFreshFpIndex = 0
 	state.currentOpIndex = 0
-end 'rmRestoreStatePreserveSpills'
+end 'restoreStatePreserveSpills'
 
 // --- Initialization ---
 
@@ -375,35 +375,35 @@ end 'createRegState'
 
 // --- Array helpers ---
 
-function rmGrowSigned(arr RegIntArray, index RegInt, sentinel RegInt)
+function growSigned(arr RegIntArray, index RegInt, sentinel RegInt)
 	while arr.count() <= index 'grow'
 		arr.push(sentinel)
 	end 'grow'
-end 'rmGrowSigned'
+end 'growSigned'
 
-export function rmGetOr(arr RegIntArray, index RegInt, fallback RegInt) returns RegInt
+export function getOr(arr RegIntArray, index RegInt, fallback RegInt) returns RegInt
 	if index < 0 or index >= arr.count() 'outOfBounds'
 		return fallback
 	end 'outOfBounds'
 	return try arr.get(index) otherwise fallback
-end 'rmGetOr'
+end 'getOr'
 
-export function rmSet(arr RegIntArray, index RegInt, value RegInt, sentinel RegInt)
-	rmGrowSigned(arr, index: index, sentinel: sentinel)
+export function set(arr RegIntArray, index RegInt, value RegInt, sentinel RegInt)
+	growSigned(arr, index: index, sentinel: sentinel)
 	arr.set(index, value: value)
-end 'rmSet'
+end 'set'
 
 // --- Core state operations ---
 
-export function rmAssign(state RegState, regOrdinal RegOrdinal, valueId RegInt)
+export function assign(state RegState, regOrdinal RegOrdinal, valueId RegInt)
 	// If this value was previously in a different register, clear that old mapping
 	// to prevent stale registerContents entries (e.g. after pre-seeded param moves).
-	var info = rmGetValueInfo(state, valueId: valueId)
+	var info = getValueInfo(state, valueId: valueId)
 	let oldReg = info.gprOrdinal
 	if oldReg != RM_NONE and oldReg != regOrdinal 'clearOld'
 		// Only clear if the old register still thinks it holds this value.
 		// Another value may have been assigned to oldReg in the meantime.
-		let oldOccupant = rmGetOr(state.registerContents, index: oldReg, fallback: RM_NONE)
+		let oldOccupant = getOr(state.registerContents, index: oldReg, fallback: RM_NONE)
 		if oldOccupant == valueId 'stillOurs'
 			state.registerContents.set(oldReg, value: RM_NONE)
 			state.lastUsed.set(oldReg, value: 0)
@@ -412,27 +412,27 @@ export function rmAssign(state RegState, regOrdinal RegOrdinal, valueId RegInt)
 	state.registerContents.set(regOrdinal, value: valueId)
 	info.gprOrdinal = regOrdinal
 	state.lastUsed.set(regOrdinal, value: state.currentOpIndex)
-end 'rmAssign'
+end 'assign'
 
-export function rmRecordConstant(state RegState, valueId RegInt, value RegInt)
-	var info = rmGetValueInfo(state, valueId: valueId)
+export function recordConstant(state RegState, valueId RegInt, value RegInt)
+	var info = getValueInfo(state, valueId: valueId)
 	info.constantValue = value
 	info.isConstant = true
-end 'rmRecordConstant'
+end 'recordConstant'
 
-export function rmSetRegisterHint(state RegState, valueId RegInt, regOrdinal RegOrdinal)
-	var vi = rmGetValueInfo(state, valueId: valueId)
+export function setRegisterHint(state RegState, valueId RegInt, regOrdinal RegOrdinal)
+	var vi = getValueInfo(state, valueId: valueId)
 	vi.hint = regOrdinal
-end 'rmSetRegisterHint'
+end 'setRegisterHint'
 
-export function rmAdvanceOp(state RegState)
+export function advanceOp(state RegState)
 	state.currentOpIndex = state.currentOpIndex + 1
-end 'rmAdvanceOp'
+end 'advanceOp'
 
 // Allocate a new spill slot offset. Direction depends on target:
 // - x86: grow downward (nextSpillOffset -= 8, return new offset)
 // - ARM64: grow upward (return current offset, nextSpillOffset += 8)
-function rmAllocateSpillSlot(state RegState) returns RegInt
+function allocateSpillSlot(state RegState) returns RegInt
 	if state.spillsGrowDown 'growDown'
 		state.nextSpillOffset = state.nextSpillOffset - 8
 		return state.nextSpillOffset
@@ -441,12 +441,12 @@ function rmAllocateSpillSlot(state RegState) returns RegInt
 		state.nextSpillOffset = state.nextSpillOffset + 8
 		return slot
 	end 'growUp'
-end 'rmAllocateSpillSlot'
+end 'allocateSpillSlot'
 
 // Track the high-water mark of spill usage, then reset for the next block/function.
 // x86 spills grow downward so we track the minimum offset;
 // ARM64 spills grow upward so we track the maximum offset.
-function rmUpdateSpillWatermark(state RegState)
+function updateSpillWatermark(state RegState)
 	if state.spillsGrowDown 'x86Wm'
 		if state.nextSpillOffset < state.minSpillOffset 'updateMin'
 			state.minSpillOffset = state.nextSpillOffset
@@ -457,36 +457,36 @@ function rmUpdateSpillWatermark(state RegState)
 		end 'updateMax'
 	end 'arm64Wm'
 	// Do NOT reset nextSpillOffset here. Spill slots must persist across blocks
-	// because values spilled before terminators (via rmSpillAllBeforeTerminator)
+	// because values spilled before terminators (via spillAllBeforeTerminator)
 	// may be referenced in successor blocks. Resetting would allow subsequent
 	// blocks to allocate overlapping spill slots, corrupting those values.
-end 'rmUpdateSpillWatermark'
+end 'updateSpillWatermark'
 
 // Compute the total spill area size, 16-byte aligned.
 // spillBaseOffset is where spills start; minSpillOffset tracks the watermark
 // (lowest offset for downward growth, highest for upward). The absolute
 // distance between them is the spill extent, rounded up to 16-byte alignment.
-export function rmTotalStackSize(state RegState) returns RegInt
-	rmUpdateSpillWatermark(state)
+export function totalStackSize(state RegState) returns RegInt
+	updateSpillWatermark(state)
 	let raw = trunc(abs(state.spillBaseOffset - state.minSpillOffset))
 	if raw > 0 'hasSpills'
 		return(raw + 15) and -16
 	end 'hasSpills'
 	return 0
-end 'rmTotalStackSize'
+end 'totalStackSize'
 
 // --- Spill logic ---
 
-export function rmSpillRegisterIfOccupied(state RegState, regOrdinal RegOrdinal, dstBlock MlirBlock)
-	let existing = rmGetOr(state.registerContents, index: regOrdinal, fallback: RM_NONE)
+export function spillRegisterIfOccupied(state RegState, regOrdinal RegOrdinal, dstBlock MlirBlock)
+	let existing = getOr(state.registerContents, index: regOrdinal, fallback: RM_NONE)
 	if existing == RM_NONE 'empty'
 		return
 	end 'empty'
 
 	// If no stack home and not a constant, spill to stack
-	var existingInfo = rmGetValueInfo(state, valueId: existing)
+	var existingInfo = getValueInfo(state, valueId: existing)
 	if existingInfo.stackHome == RM_NO_STACK_HOME and not existingInfo.isConstant 'needsSpill'
-		let spillSlot = rmAllocateSpillSlot(state)
+		let spillSlot = allocateSpillSlot(state)
 		logTrace(LogCategory.mlir, message: () gives "regalloc: spill v{existing} from {targetRegName(state, ord: regOrdinal)} to [rbp{spillSlot}] (func={state.funcName})")
 		targetEmitSpill(state, dstBlock: dstBlock, regOrdinal: regOrdinal, stackOffset: spillSlot)
 		existingInfo.stackHome = spillSlot
@@ -499,14 +499,14 @@ export function rmSpillRegisterIfOccupied(state RegState, regOrdinal RegOrdinal,
 	existingInfo.gprOrdinal = RM_NONE
 	state.registerContents.set(regOrdinal, value: RM_NONE)
 	state.lastUsed.set(regOrdinal, value: 0)
-end 'rmSpillRegisterIfOccupied'
+end 'spillRegisterIfOccupied'
 
 // Relocate a value from one register to a free register, avoiding a stack spill.
 // protect1/protect2 are registers that must not be used as the destination.
 // Returns the new register ordinal, or RM_NONE if no free register was found
-// (caller should fall back to rmSpillRegisterIfOccupied).
-export function rmRelocateRegister(state RegState, regOrdinal RegOrdinal, dstBlock MlirBlock, protect1 RegOrdinal, protect2 RegOrdinal) returns RegOrdinal
-	let existing = rmGetOr(state.registerContents, index: regOrdinal, fallback: RM_NONE)
+// (caller should fall back to spillRegisterIfOccupied).
+export function relocateRegister(state RegState, regOrdinal RegOrdinal, dstBlock MlirBlock, protect1 RegOrdinal, protect2 RegOrdinal) returns RegOrdinal
+	let existing = getOr(state.registerContents, index: regOrdinal, fallback: RM_NONE)
 	if existing == RM_NONE 'empty'
 		return RM_NONE
 	end 'empty'
@@ -521,14 +521,14 @@ export function rmRelocateRegister(state RegState, regOrdinal RegOrdinal, dstBlo
 			i = i + 1
 			continue
 		end 'skipProtected'
-		let occupant = rmGetOr(state.registerContents, index: candidate, fallback: RM_NONE)
+		let occupant = getOr(state.registerContents, index: candidate, fallback: RM_NONE)
 		if occupant == RM_NONE 'found'
 			// Move the value to the free register
 			logTrace(LogCategory.mlir, message: () gives "regalloc: relocate v{existing} from {targetRegName(state, ord: regOrdinal)} to {targetRegName(state, ord: candidate)} (func={state.funcName})")
 			targetEmitMovReg(state, dstBlock: dstBlock, destOrd: candidate, srcOrd: regOrdinal)
 			// Update mappings: value now in candidate, not regOrdinal
 			state.registerContents.set(candidate, value: existing)
-			var existInfo = rmGetValueInfo(state, valueId: existing)
+			var existInfo = getValueInfo(state, valueId: existing)
 			existInfo.gprOrdinal = candidate
 			state.lastUsed.set(candidate, value: state.currentOpIndex)
 			// Clear old register
@@ -539,13 +539,13 @@ export function rmRelocateRegister(state RegState, regOrdinal RegOrdinal, dstBlo
 		i = i + 1
 	end 'scanFree'
 	return RM_NONE
-end 'rmRelocateRegister'
+end 'relocateRegister'
 
 // Relocate a value from one register to a free register, protecting all registers
 // whose bit is set in protectMask. Returns the new register ordinal, or RM_NONE
-// if no free register was found (caller should fall back to rmSpillRegisterIfOccupied).
-function rmRelocateRegisterProtectMask(state RegState, regOrdinal RegOrdinal, dstBlock MlirBlock, protectMask RegMask) returns RegOrdinal
-	let existing = rmGetOr(state.registerContents, index: regOrdinal, fallback: RM_NONE)
+// if no free register was found (caller should fall back to spillRegisterIfOccupied).
+function relocateRegisterProtectMask(state RegState, regOrdinal RegOrdinal, dstBlock MlirBlock, protectMask RegMask) returns RegOrdinal
+	let existing = getOr(state.registerContents, index: regOrdinal, fallback: RM_NONE)
 	if existing == RM_NONE 'empty'
 		return RM_NONE
 	end 'empty'
@@ -559,12 +559,12 @@ function rmRelocateRegisterProtectMask(state RegState, regOrdinal RegOrdinal, ds
 			i = i + 1
 			continue
 		end 'skipProtected'
-		let occupant = rmGetOr(state.registerContents, index: candidate, fallback: RM_NONE)
+		let occupant = getOr(state.registerContents, index: candidate, fallback: RM_NONE)
 		if occupant == RM_NONE 'found'
 			logTrace(LogCategory.mlir, message: () gives "regalloc: relocate v{existing} from {targetRegName(state, ord: regOrdinal)} to {targetRegName(state, ord: candidate)} (func={state.funcName})")
 			targetEmitMovReg(state, dstBlock: dstBlock, destOrd: candidate, srcOrd: regOrdinal)
 			state.registerContents.set(candidate, value: existing)
-			var existInfo = rmGetValueInfo(state, valueId: existing)
+			var existInfo = getValueInfo(state, valueId: existing)
 			existInfo.gprOrdinal = candidate
 			state.lastUsed.set(candidate, value: state.currentOpIndex)
 			state.registerContents.set(regOrdinal, value: RM_NONE)
@@ -574,11 +574,11 @@ function rmRelocateRegisterProtectMask(state RegState, regOrdinal RegOrdinal, ds
 		i = i + 1
 	end 'scanFree'
 	return RM_NONE
-end 'rmRelocateRegisterProtectMask'
+end 'relocateRegisterProtectMask'
 
 // --- LRU eviction ---
 
-function rmFindLruRegister(state RegState, protect1 RegOrdinal, protect2 RegOrdinal, requireConstant bool, requireStackHome bool) returns RegOrdinal
+function findLruRegister(state RegState, protect1 RegOrdinal, protect2 RegOrdinal, requireConstant bool, requireStackHome bool) returns RegOrdinal
 	var bestReg = RM_NONE
 	var bestLastUsePos = -1
 	var bestLastUsed = i64.max
@@ -593,12 +593,12 @@ function rmFindLruRegister(state RegState, protect1 RegOrdinal, protect2 RegOrdi
 			i = i + 1
 			continue
 		end 'protected'
-		let occupant = rmGetOr(state.registerContents, index: regOrd, fallback: RM_NONE)
+		let occupant = getOr(state.registerContents, index: regOrd, fallback: RM_NONE)
 		if occupant == RM_NONE 'free'
 			i = i + 1
 			continue
 		end 'free'
-		let occInfo = rmGetValueInfo(state, valueId: occupant)
+		let occInfo = getValueInfo(state, valueId: occupant)
 		if requireConstant 'checkConst'
 			if not occInfo.isConstant 'notConst'
 				i = i + 1
@@ -613,8 +613,8 @@ function rmFindLruRegister(state RegState, protect1 RegOrdinal, protect2 RegOrdi
 		end 'checkStack'
 		// Evict the value whose last use is furthest away — it can be spilled
 		// longest before being needed again. Fall back to LRU for tiebreaking.
-		let lup = rmGetOr(state.lastUsePosition, index: occupant, fallback: 0)
-		let lu = rmGetOr(state.lastUsed, index: regOrd, fallback: 0)
+		let lup = getOr(state.lastUsePosition, index: occupant, fallback: 0)
+		let lu = getOr(state.lastUsed, index: regOrd, fallback: 0)
 		if lup > bestLastUsePos or (lup == bestLastUsePos and lu < bestLastUsed) 'better'
 			bestLastUsePos = lup
 			bestLastUsed = lu
@@ -624,49 +624,49 @@ function rmFindLruRegister(state RegState, protect1 RegOrdinal, protect2 RegOrdi
 	end 'scan'
 
 	return bestReg
-end 'rmFindLruRegister'
+end 'findLruRegister'
 
-function rmEvict(state RegState, dstBlock MlirBlock, protect1 RegOrdinal, protect2 RegOrdinal)
+function evict(state RegState, dstBlock MlirBlock, protect1 RegOrdinal, protect2 RegOrdinal)
 	// Tier 1: evict a constant (no spill needed, can rematerialize)
-	var victim = rmFindLruRegister(state, protect1: protect1, protect2: protect2, requireConstant: true, requireStackHome: false)
+	var victim = findLruRegister(state, protect1: protect1, protect2: protect2, requireConstant: true, requireStackHome: false)
 	if victim != RM_NONE 'evictConst'
-		rmSpillRegisterIfOccupied(state, regOrdinal: victim, dstBlock: dstBlock)
+		spillRegisterIfOccupied(state, regOrdinal: victim, dstBlock: dstBlock)
 		return
 	end 'evictConst'
 	// Tier 2: evict a value that already has a stack home (no spill needed)
-	victim = rmFindLruRegister(state, protect1: protect1, protect2: protect2, requireConstant: false, requireStackHome: true)
+	victim = findLruRegister(state, protect1: protect1, protect2: protect2, requireConstant: false, requireStackHome: true)
 	if victim != RM_NONE 'evictSpilled'
-		rmSpillRegisterIfOccupied(state, regOrdinal: victim, dstBlock: dstBlock)
+		spillRegisterIfOccupied(state, regOrdinal: victim, dstBlock: dstBlock)
 		return
 	end 'evictSpilled'
 	// Tier 3: evict any value (will spill to stack)
-	victim = rmFindLruRegister(state, protect1: protect1, protect2: protect2, requireConstant: false, requireStackHome: false)
+	victim = findLruRegister(state, protect1: protect1, protect2: protect2, requireConstant: false, requireStackHome: false)
 	if victim != RM_NONE 'evictAny'
-		rmSpillRegisterIfOccupied(state, regOrdinal: victim, dstBlock: dstBlock)
+		spillRegisterIfOccupied(state, regOrdinal: victim, dstBlock: dstBlock)
 		return
 	end 'evictAny'
-	panic("rmEvict: no registers available to evict")
-end 'rmEvict'
+	panic("evict: no registers available to evict")
+end 'evict'
 
 // --- Allocation ---
 
-export function rmAllocateRegister(state RegState, valueId RegInt, dstBlock MlirBlock, protect1 RegOrdinal, protect2 RegOrdinal) returns RegOrdinal
+export function allocateRegister(state RegState, valueId RegInt, dstBlock MlirBlock, protect1 RegOrdinal, protect2 RegOrdinal) returns RegOrdinal
 	// 0. Try hinted register
-	let hint = rmGetValueInfo(state, valueId: valueId).hint
+	let hint = getValueInfo(state, valueId: valueId).hint
 	if hint != RM_NONE and hint != protect1 and hint != protect2 'tryHint'
-		let hintOccupant = rmGetOr(state.registerContents, index: hint, fallback: RM_NONE)
+		let hintOccupant = getOr(state.registerContents, index: hint, fallback: RM_NONE)
 		if hintOccupant == RM_NONE 'hintFree'
-			rmAssign(state, regOrdinal: hint, valueId: valueId)
+			assign(state, regOrdinal: hint, valueId: valueId)
 			return hint
 		end 'hintFree'
 		// If hint holds a rematerializable constant, evict it
 		if hintOccupant != RM_NONE 'hintOccupied'
-			var hintOccInfo = rmGetValueInfo(state, valueId: hintOccupant)
+			var hintOccInfo = getValueInfo(state, valueId: hintOccupant)
 			if hintOccInfo.isConstant 'evictConst'
 				hintOccInfo.gprOrdinal = RM_NONE
 				state.registerContents.set(hint, value: RM_NONE)
 				state.lastUsed.set(hint, value: 0)
-				rmAssign(state, regOrdinal: hint, valueId: valueId)
+				assign(state, regOrdinal: hint, valueId: valueId)
 				return hint
 			end 'evictConst'
 		end 'hintOccupied'
@@ -674,12 +674,12 @@ export function rmAllocateRegister(state RegState, valueId RegInt, dstBlock Mlir
 
 	// 1. Try the next sequential slot
 	if state.nextFreshIndex < state.gprPoolSize 'tryFresh'
-		let candidate = rmGetOr(state.gprPool, index: state.nextFreshIndex, fallback: RM_NONE)
+		let candidate = getOr(state.gprPool, index: state.nextFreshIndex, fallback: RM_NONE)
 		if candidate != RM_NONE 'validCandidate'
-			let candidateOccupant = rmGetOr(state.registerContents, index: candidate, fallback: RM_NONE)
+			let candidateOccupant = getOr(state.registerContents, index: candidate, fallback: RM_NONE)
 			if candidateOccupant == RM_NONE and candidate != protect1 and candidate != protect2 'freshFree'
 				state.nextFreshIndex = state.nextFreshIndex + 1
-				rmAssign(state, regOrdinal: candidate, valueId: valueId)
+				assign(state, regOrdinal: candidate, valueId: valueId)
 				return candidate
 			end 'freshFree'
 		end 'validCandidate'
@@ -692,9 +692,9 @@ export function rmAllocateRegister(state RegState, valueId RegInt, dstBlock Mlir
 			i = i + 1
 			continue
 		end 'skipFree'
-		let occupant = rmGetOr(state.registerContents, index: regOrd, fallback: RM_NONE)
+		let occupant = getOr(state.registerContents, index: regOrd, fallback: RM_NONE)
 		if occupant == RM_NONE and regOrd != protect1 and regOrd != protect2 'foundFree'
-			rmAssign(state, regOrdinal: regOrd, valueId: valueId)
+			assign(state, regOrdinal: regOrd, valueId: valueId)
 			return regOrd
 		end 'foundFree'
 		i = i + 1
@@ -702,7 +702,7 @@ export function rmAllocateRegister(state RegState, valueId RegInt, dstBlock Mlir
 
 	// 3. All occupied — evict LRU
 	logTrace(LogCategory.mlir, message: () gives "regalloc: evicting for v{valueId} (protect={targetRegName(state, ord: protect1)},{targetRegName(state, ord: protect2)}) func={state.funcName}")
-	rmEvict(state, dstBlock: dstBlock, protect1: protect1, protect2: protect2)
+	evict(state, dstBlock: dstBlock, protect1: protect1, protect2: protect2)
 
 	// Find the freed register (must also skip protected registers)
 	i = 0
@@ -711,27 +711,27 @@ export function rmAllocateRegister(state RegState, valueId RegInt, dstBlock Mlir
 			i = i + 1
 			continue
 		end 'skipEvict'
-		let occupant = rmGetOr(state.registerContents, index: regOrd, fallback: RM_NONE)
+		let occupant = getOr(state.registerContents, index: regOrd, fallback: RM_NONE)
 		if occupant == RM_NONE and regOrd != protect1 and regOrd != protect2 'freed'
-			rmAssign(state, regOrdinal: regOrd, valueId: valueId)
+			assign(state, regOrdinal: regOrd, valueId: valueId)
 			return regOrd
 		end 'freed'
 		i = i + 1
 	end 'scanAfterEvict'
 
-	panic("rmAllocateRegister: failed to allocate after eviction")
-end 'rmAllocateRegister'
+	panic("allocateRegister: failed to allocate after eviction")
+end 'allocateRegister'
 
 // --- Ensure in register ---
 
-export function rmEnsureInRegister(state RegState, valueId RegInt, dstBlock MlirBlock, protect1 RegOrdinal, protect2 RegOrdinal) returns RegOrdinal
+export function ensureInRegister(state RegState, valueId RegInt, dstBlock MlirBlock, protect1 RegOrdinal, protect2 RegOrdinal) returns RegOrdinal
 	// Already in a register?
-	var info = rmGetValueInfo(state, valueId: valueId)
+	var info = getValueInfo(state, valueId: valueId)
 	let existing = info.gprOrdinal
 	if existing != RM_NONE 'inReg'
 		// Verify the register actually holds this value. After a block transition,
 		// registerContents may be cleared while gprOrdinal retains stale mappings.
-		let occupant = rmGetOr(state.registerContents, index: existing, fallback: RM_NONE)
+		let occupant = getOr(state.registerContents, index: existing, fallback: RM_NONE)
 		if occupant == valueId 'verified'
 			state.lastUsed.set(existing, value: state.currentOpIndex)
 			return existing
@@ -743,7 +743,7 @@ export function rmEnsureInRegister(state RegState, valueId RegInt, dstBlock Mlir
 	// Constant rematerialization?
 	if info.isConstant 'remat'
 		let imm = info.constantValue
-		let reg = rmAllocateRegister(state, valueId: valueId, dstBlock: dstBlock, protect1: protect1, protect2: protect2)
+		let reg = allocateRegister(state, valueId: valueId, dstBlock: dstBlock, protect1: protect1, protect2: protect2)
 		logTrace(LogCategory.mlir, message: () gives "regalloc: remat v{valueId}={imm} into {targetRegName(state, ord: reg)} (func={state.funcName})")
 		targetEmitMovImm(state, dstBlock: dstBlock, regOrdinal: reg, value: imm)
 		return reg
@@ -752,61 +752,61 @@ export function rmEnsureInRegister(state RegState, valueId RegInt, dstBlock Mlir
 	// Reload from stack?
 	let stackHome = info.stackHome
 	if stackHome != RM_NO_STACK_HOME 'reload'
-		let reg = rmAllocateRegister(state, valueId: valueId, dstBlock: dstBlock, protect1: protect1, protect2: protect2)
+		let reg = allocateRegister(state, valueId: valueId, dstBlock: dstBlock, protect1: protect1, protect2: protect2)
 		logTrace(LogCategory.mlir, message: () gives "regalloc: reload v{valueId} from [rbp{stackHome}] into {targetRegName(state, ord: reg)} (func={state.funcName})")
 		targetEmitReload(state, dstBlock: dstBlock, regOrdinal: reg, stackOffset: stackHome)
 		return reg
 	end 'reload'
 
-	panic("rmEnsureInRegister: v{valueId} not found (opIdx={state.currentOpIndex}, blk={dstBlock.label}, func={state.funcName})")
-end 'rmEnsureInRegister'
+	panic("ensureInRegister: v{valueId} not found (opIdx={state.currentOpIndex}, blk={dstBlock.label}, func={state.funcName})")
+end 'ensureInRegister'
 
 // --- FP register allocation ---
 
-export function rmAssignFp(state RegState, fpOrdinal RegOrdinal, valueId RegInt)
+export function assignFp(state RegState, fpOrdinal RegOrdinal, valueId RegInt)
 	state.fpContents.set(fpOrdinal, value: valueId)
-	var vi = rmGetValueInfo(state, valueId: valueId)
+	var vi = getValueInfo(state, valueId: valueId)
 	vi.fpOrdinal = fpOrdinal
 	state.fpLastUsed.set(fpOrdinal, value: state.currentOpIndex)
-end 'rmAssignFp'
+end 'assignFp'
 
-export function rmSpillFpIfOccupied(state RegState, fpOrdinal RegOrdinal, dstBlock MlirBlock)
-	let existing = rmGetOr(state.fpContents, index: fpOrdinal, fallback: RM_NONE)
+export function spillFpIfOccupied(state RegState, fpOrdinal RegOrdinal, dstBlock MlirBlock)
+	let existing = getOr(state.fpContents, index: fpOrdinal, fallback: RM_NONE)
 	if existing == RM_NONE 'empty'
 		return
 	end 'empty'
-	var existingInfo = rmGetValueInfo(state, valueId: existing)
+	var existingInfo = getValueInfo(state, valueId: existing)
 	if existingInfo.fpStackHome == RM_NO_STACK_HOME 'needsSpill'
-		let spillSlot = rmAllocateSpillSlot(state)
+		let spillSlot = allocateSpillSlot(state)
 		targetEmitSpillFp(state, dstBlock: dstBlock, fpOrdinal: fpOrdinal, stackOffset: spillSlot)
 		existingInfo.fpStackHome = spillSlot
 	end 'needsSpill'
 	existingInfo.fpOrdinal = RM_NONE
 	state.fpContents.set(fpOrdinal, value: RM_NONE)
 	state.fpLastUsed.set(fpOrdinal, value: 0)
-end 'rmSpillFpIfOccupied'
+end 'spillFpIfOccupied'
 
-export function rmAllocateFpRegister(state RegState, valueId RegInt, dstBlock MlirBlock) returns RegOrdinal
+export function allocateFpRegister(state RegState, valueId RegInt, dstBlock MlirBlock) returns RegOrdinal
 	// Try to reuse previous register for this value if it's free
-	var valInfo = rmGetValueInfo(state, valueId: valueId)
+	var valInfo = getValueInfo(state, valueId: valueId)
 	let prevFp = valInfo.previousFp
 	if prevFp != RM_NONE 'tryPrev'
-		let prevOccupant = rmGetOr(state.fpContents, index: prevFp, fallback: RM_NONE)
+		let prevOccupant = getOr(state.fpContents, index: prevFp, fallback: RM_NONE)
 		if prevOccupant == RM_NONE 'prevFree'
 			valInfo.previousFp = RM_NONE
-			rmAssignFp(state, fpOrdinal: prevFp, valueId: valueId)
+			assignFp(state, fpOrdinal: prevFp, valueId: valueId)
 			return prevFp
 		end 'prevFree'
 	end 'tryPrev'
 
 	// Try sequential allocation from FP pool
 	if state.nextFreshFpIndex < state.fpPoolSize 'tryFresh'
-		let candidate = rmGetOr(state.fpPool, index: state.nextFreshFpIndex, fallback: RM_NONE)
+		let candidate = getOr(state.fpPool, index: state.nextFreshFpIndex, fallback: RM_NONE)
 		if candidate != RM_NONE 'validCandidate'
-			let occupant = rmGetOr(state.fpContents, index: candidate, fallback: RM_NONE)
+			let occupant = getOr(state.fpContents, index: candidate, fallback: RM_NONE)
 			if occupant == RM_NONE 'freshFree'
 				state.nextFreshFpIndex = state.nextFreshFpIndex + 1
-				rmAssignFp(state, fpOrdinal: candidate, valueId: valueId)
+				assignFp(state, fpOrdinal: candidate, valueId: valueId)
 				return candidate
 			end 'freshFree'
 		end 'validCandidate'
@@ -819,9 +819,9 @@ export function rmAllocateFpRegister(state RegState, valueId RegInt, dstBlock Ml
 			i = i + 1
 			continue
 		end 'skip'
-		let occupant = rmGetOr(state.fpContents, index: fpOrd, fallback: RM_NONE)
+		let occupant = getOr(state.fpContents, index: fpOrd, fallback: RM_NONE)
 		if occupant == RM_NONE 'foundFree'
-			rmAssignFp(state, fpOrdinal: fpOrd, valueId: valueId)
+			assignFp(state, fpOrdinal: fpOrd, valueId: valueId)
 			return fpOrd
 		end 'foundFree'
 		i = i + 1
@@ -837,13 +837,13 @@ export function rmAllocateFpRegister(state RegState, valueId RegInt, dstBlock Ml
 			i = i + 1
 			continue
 		end 'skip2'
-		let occupant = rmGetOr(state.fpContents, index: fpOrd, fallback: RM_NONE)
+		let occupant = getOr(state.fpContents, index: fpOrd, fallback: RM_NONE)
 		if occupant == RM_NONE 'skipFree'
 			i = i + 1
 			continue
 		end 'skipFree'
-		let lup = rmGetOr(state.lastUsePosition, index: occupant, fallback: 0)
-		let lu = rmGetOr(state.fpLastUsed, index: fpOrd, fallback: 0)
+		let lup = getOr(state.lastUsePosition, index: occupant, fallback: 0)
+		let lu = getOr(state.fpLastUsed, index: fpOrd, fallback: 0)
 		if lup > bestLUP or (lup == bestLUP and lu < bestLU) 'better'
 			bestLUP = lup
 			bestLU = lu
@@ -853,20 +853,20 @@ export function rmAllocateFpRegister(state RegState, valueId RegInt, dstBlock Ml
 	end 'findLru'
 
 	if bestFp != RM_NONE 'evict'
-		rmSpillFpIfOccupied(state, fpOrdinal: bestFp, dstBlock: dstBlock)
-		rmAssignFp(state, fpOrdinal: bestFp, valueId: valueId)
+		spillFpIfOccupied(state, fpOrdinal: bestFp, dstBlock: dstBlock)
+		assignFp(state, fpOrdinal: bestFp, valueId: valueId)
 		return bestFp
 	end 'evict'
 
-	panic("rmAllocateFpRegister: no FP registers available")
-end 'rmAllocateFpRegister'
+	panic("allocateFpRegister: no FP registers available")
+end 'allocateFpRegister'
 
-export function rmEnsureInFpRegister(state RegState, valueId RegInt, dstBlock MlirBlock) returns RegOrdinal
+export function ensureInFpRegister(state RegState, valueId RegInt, dstBlock MlirBlock) returns RegOrdinal
 	// Already in an FP register? Verify it actually holds this value.
-	var info = rmGetValueInfo(state, valueId: valueId)
+	var info = getValueInfo(state, valueId: valueId)
 	let existing = info.fpOrdinal
 	if existing != RM_NONE 'inFp'
-		let fpOccupant = rmGetOr(state.fpContents, index: existing, fallback: RM_NONE)
+		let fpOccupant = getOr(state.fpContents, index: existing, fallback: RM_NONE)
 		if fpOccupant == valueId 'verified'
 			state.fpLastUsed.set(existing, value: state.currentOpIndex)
 			return existing
@@ -877,14 +877,14 @@ export function rmEnsureInFpRegister(state RegState, valueId RegInt, dstBlock Ml
 
 	// Reload from FP stack home?
 	if info.fpStackHome != RM_NO_STACK_HOME 'reload'
-		let fp = rmAllocateFpRegister(state, valueId: valueId, dstBlock: dstBlock)
+		let fp = allocateFpRegister(state, valueId: valueId, dstBlock: dstBlock)
 		targetEmitReloadFp(state, dstBlock: dstBlock, fpOrdinal: fp, stackOffset: info.fpStackHome)
 		return fp
 	end 'reload'
 
 	// Fallback: try GPR stack home (float values may be spilled via GPR path)
 	if info.stackHome != RM_NO_STACK_HOME 'reloadFromGpr'
-		let fp = rmAllocateFpRegister(state, valueId: valueId, dstBlock: dstBlock)
+		let fp = allocateFpRegister(state, valueId: valueId, dstBlock: dstBlock)
 		targetEmitReloadFp(state, dstBlock: dstBlock, fpOrdinal: fp, stackOffset: info.stackHome)
 		info.fpStackHome = info.stackHome
 		return fp
@@ -895,9 +895,9 @@ export function rmEnsureInFpRegister(state RegState, valueId RegInt, dstBlock Ml
 	let gprOrd = info.gprOrdinal
 	if gprOrd != RM_NONE 'inGpr'
 		// Verify the GPR actually holds this value
-		let gprOccupant = rmGetOr(state.registerContents, index: gprOrd, fallback: RM_NONE)
+		let gprOccupant = getOr(state.registerContents, index: gprOrd, fallback: RM_NONE)
 		if gprOccupant == valueId 'verified'
-			let fp = rmAllocateFpRegister(state, valueId: valueId, dstBlock: dstBlock)
+			let fp = allocateFpRegister(state, valueId: valueId, dstBlock: dstBlock)
 			targetEmitGprToFp(state, dstBlock: dstBlock, fpOrdinal: fp, gprOrdinal: gprOrd)
 			return fp
 		end 'verified'
@@ -906,10 +906,10 @@ export function rmEnsureInFpRegister(state RegState, valueId RegInt, dstBlock Ml
 	// Constant rematerialization: load raw bits into a scratch GPR, then movq to XMM.
 	if info.isConstant 'rematConst'
 		let imm = info.constantValue
-		let gpr = rmAllocateRegister(state, valueId: valueId, dstBlock: dstBlock, protect1: RM_NONE, protect2: RM_NONE)
+		let gpr = allocateRegister(state, valueId: valueId, dstBlock: dstBlock, protect1: RM_NONE, protect2: RM_NONE)
 		logTrace(LogCategory.mlir, message: () gives "regalloc: fp-remat v{valueId}={imm} via {targetRegName(state, ord: gpr)} (func={state.funcName})")
 		targetEmitMovImm(state, dstBlock: dstBlock, regOrdinal: gpr, value: imm)
-		let fp = rmAllocateFpRegister(state, valueId: valueId, dstBlock: dstBlock)
+		let fp = allocateFpRegister(state, valueId: valueId, dstBlock: dstBlock)
 		targetEmitGprToFp(state, dstBlock: dstBlock, fpOrdinal: fp, gprOrdinal: gpr)
 		// Free only the GPR — the value now lives in the FP register
 		info.gprOrdinal = RM_NONE
@@ -918,92 +918,92 @@ export function rmEnsureInFpRegister(state RegState, valueId RegInt, dstBlock Ml
 		return fp
 	end 'rematConst'
 
-	panic("rmEnsureInFpRegister: value {valueId} has no FP register and no FP stack home")
-end 'rmEnsureInFpRegister'
+	panic("ensureInFpRegister: value {valueId} has no FP register and no FP stack home")
+end 'ensureInFpRegister'
 
-export function rmNoteFpStoreToStack(state RegState, valueId RegInt, stackOffset RegInt)
-	var vi = rmGetValueInfo(state, valueId: valueId)
+export function noteFpStoreToStack(state RegState, valueId RegInt, stackOffset RegInt)
+	var vi = getValueInfo(state, valueId: valueId)
 	vi.fpStackHome = stackOffset
-end 'rmNoteFpStoreToStack'
+end 'noteFpStoreToStack'
 
 // --- Load immediate ---
 
-export function rmEmitLoadImmediate(state RegState, valueId RegInt, value RegInt, dstBlock MlirBlock)
-	rmRecordConstant(state, valueId: valueId, value: value)
+export function emitLoadImmediate(state RegState, valueId RegInt, value RegInt, dstBlock MlirBlock)
+	recordConstant(state, valueId: valueId, value: value)
 	// If value is deferred (only consumed by sink ops like return/call),
 	// skip eager register allocation — it will be rematerialized on demand.
-	if rmGetValueInfo(state, valueId: valueId).deferred 'skip'
+	if getValueInfo(state, valueId: valueId).deferred 'skip'
 		return
 	end 'skip'
-	let reg = rmAllocateRegister(state, valueId: valueId, dstBlock: dstBlock, protect1: RM_NONE, protect2: RM_NONE)
+	let reg = allocateRegister(state, valueId: valueId, dstBlock: dstBlock, protect1: RM_NONE, protect2: RM_NONE)
 	targetEmitMovImm(state, dstBlock: dstBlock, regOrdinal: reg, value: value)
-end 'rmEmitLoadImmediate'
+end 'emitLoadImmediate'
 
 // Mark a value as deferred (only consumed by sink ops).
-export function rmSetDeferred(state RegState, valueId RegInt)
-	var vi = rmGetValueInfo(state, valueId: valueId)
+export function setDeferred(state RegState, valueId RegInt)
+	var vi = getValueInfo(state, valueId: valueId)
 	vi.deferred = true
-end 'rmSetDeferred'
+end 'setDeferred'
 
 // --- Transfer value (reuse register for new value) ---
 
-export function rmTransferValue(state RegState, oldValueId RegInt, regOrdinal RegOrdinal, newValueId RegInt)
-	var oldInfo = rmGetValueInfo(state, valueId: oldValueId)
+export function transferValue(state RegState, oldValueId RegInt, regOrdinal RegOrdinal, newValueId RegInt)
+	var oldInfo = getValueInfo(state, valueId: oldValueId)
 	if oldInfo.gprOrdinal == regOrdinal 'match'
 		oldInfo.gprOrdinal = RM_NONE
 	end 'match'
 	state.registerContents.set(regOrdinal, value: newValueId)
-	var newInfo = rmGetValueInfo(state, valueId: newValueId)
+	var newInfo = getValueInfo(state, valueId: newValueId)
 	newInfo.gprOrdinal = regOrdinal
 	state.lastUsed.set(regOrdinal, value: state.currentOpIndex)
-end 'rmTransferValue'
+end 'transferValue'
 
 // Transfer value with spill-on-evict: ensures the old value has a stack home
 // before losing its register, so it can be reloaded later if still live.
 // Use this variant when the old value may be referenced by later ops (e.g.,
 // after mem2reg promotes variables to SSA values with multiple uses).
-export function rmTransferValueSafe(state RegState, oldValueId RegInt, regOrdinal RegOrdinal, newValueId RegInt, dstBlock MlirBlock)
+export function transferValueSafe(state RegState, oldValueId RegInt, regOrdinal RegOrdinal, newValueId RegInt, dstBlock MlirBlock)
 	// Ensure the old value has a recoverable location before transfer
-	var oldInfo = rmGetValueInfo(state, valueId: oldValueId)
+	var oldInfo = getValueInfo(state, valueId: oldValueId)
 	if oldInfo.stackHome == RM_NO_STACK_HOME and not oldInfo.isConstant 'needsSpill'
 		if oldInfo.gprOrdinal != RM_NONE 'hasReg'
-			let spillSlot = rmAllocateSpillSlot(state)
+			let spillSlot = allocateSpillSlot(state)
 			targetEmitSpill(state, dstBlock: dstBlock, regOrdinal: oldInfo.gprOrdinal, stackOffset: spillSlot)
 			oldInfo.stackHome = spillSlot
 		end 'hasReg'
 	end 'needsSpill'
-	rmTransferValue(state, oldValueId: oldValueId, regOrdinal: regOrdinal, newValueId: newValueId)
-end 'rmTransferValueSafe'
+	transferValue(state, oldValueId: oldValueId, regOrdinal: regOrdinal, newValueId: newValueId)
+end 'transferValueSafe'
 
 // Transfer FP value (reuse XMM register for new value)
-export function rmTransferFpValue(state RegState, oldValueId RegInt, fpOrdinal RegOrdinal, newValueId RegInt)
-	var oldInfo = rmGetValueInfo(state, valueId: oldValueId)
+export function transferFpValue(state RegState, oldValueId RegInt, fpOrdinal RegOrdinal, newValueId RegInt)
+	var oldInfo = getValueInfo(state, valueId: oldValueId)
 	if oldInfo.fpOrdinal == fpOrdinal 'match'
 		oldInfo.fpOrdinal = RM_NONE
 	end 'match'
 	state.fpContents.set(fpOrdinal, value: newValueId)
-	var newFpInfo = rmGetValueInfo(state, valueId: newValueId)
+	var newFpInfo = getValueInfo(state, valueId: newValueId)
 	newFpInfo.fpOrdinal = fpOrdinal
 	state.fpLastUsed.set(fpOrdinal, value: state.currentOpIndex)
-end 'rmTransferFpValue'
+end 'transferFpValue'
 
 // Transfer FP value with spill-on-evict: ensures the old FP value has a stack
 // home before losing its XMM register.
-export function rmTransferFpValueSafe(state RegState, oldValueId RegInt, fpOrdinal RegOrdinal, newValueId RegInt, dstBlock MlirBlock)
-	var oldInfo = rmGetValueInfo(state, valueId: oldValueId)
+export function transferFpValueSafe(state RegState, oldValueId RegInt, fpOrdinal RegOrdinal, newValueId RegInt, dstBlock MlirBlock)
+	var oldInfo = getValueInfo(state, valueId: oldValueId)
 	if oldInfo.fpStackHome == RM_NO_STACK_HOME 'needsSpill'
 		if oldInfo.fpOrdinal != RM_NONE 'hasReg'
-			let spillSlot = rmAllocateSpillSlot(state)
+			let spillSlot = allocateSpillSlot(state)
 			targetEmitSpillFp(state, dstBlock: dstBlock, fpOrdinal: oldInfo.fpOrdinal, stackOffset: spillSlot)
 			oldInfo.fpStackHome = spillSlot
 		end 'hasReg'
 	end 'needsSpill'
-	rmTransferFpValue(state, oldValueId: oldValueId, fpOrdinal: fpOrdinal, newValueId: newValueId)
-end 'rmTransferFpValueSafe'
+	transferFpValue(state, oldValueId: oldValueId, fpOrdinal: fpOrdinal, newValueId: newValueId)
+end 'transferFpValueSafe'
 
 // --- Caller-saved register management ---
 
-export function rmSpillAllCallerSaved(state RegState, dstBlock MlirBlock)
+export function spillAllCallerSaved(state RegState, dstBlock MlirBlock)
 	// In diverging blocks (panic paths), the call never returns so no registers
 	// need to be preserved across it.
 	if state.isInDivergingBlock 'diverging'
@@ -1017,11 +1017,11 @@ export function rmSpillAllCallerSaved(state RegState, dstBlock MlirBlock)
 			i = i + 1
 			continue
 		end 'skip'
-		let occupant = rmGetOr(state.registerContents, index: regOrd, fallback: RM_NONE)
+		let occupant = getOr(state.registerContents, index: regOrd, fallback: RM_NONE)
 		if occupant != RM_NONE 'occupied'
-			var occInfo = rmGetValueInfo(state, valueId: occupant)
+			var occInfo = getValueInfo(state, valueId: occupant)
 			if occInfo.stackHome == RM_NO_STACK_HOME and not occInfo.isConstant 'needsSpill'
-				let spillSlot = rmAllocateSpillSlot(state)
+				let spillSlot = allocateSpillSlot(state)
 				targetEmitSpill(state, dstBlock: dstBlock, regOrdinal: regOrd, stackOffset: spillSlot)
 				occInfo.stackHome = spillSlot
 			end 'needsSpill'
@@ -1036,20 +1036,20 @@ export function rmSpillAllCallerSaved(state RegState, dstBlock MlirBlock)
 			fi = fi + 1
 			continue
 		end 'skipFp'
-		let fpOccupant = rmGetOr(state.fpContents, index: fpOrd, fallback: RM_NONE)
+		let fpOccupant = getOr(state.fpContents, index: fpOrd, fallback: RM_NONE)
 		if fpOccupant != RM_NONE 'fpOccupied'
-			var fpOccInfo = rmGetValueInfo(state, valueId: fpOccupant)
+			var fpOccInfo = getValueInfo(state, valueId: fpOccupant)
 			if fpOccInfo.fpStackHome == RM_NO_STACK_HOME 'fpNeedsSpill'
-				let fpSpillSlot = rmAllocateSpillSlot(state)
+				let fpSpillSlot = allocateSpillSlot(state)
 				targetEmitSpillFp(state, dstBlock: dstBlock, fpOrdinal: fpOrd, stackOffset: fpSpillSlot)
 				fpOccInfo.fpStackHome = fpSpillSlot
 			end 'fpNeedsSpill'
 		end 'fpOccupied'
 		fi = fi + 1
 	end 'spillFp'
-end 'rmSpillAllCallerSaved'
+end 'spillAllCallerSaved'
 
-export function rmInvalidateCallerSaved(state RegState)
+export function invalidateCallerSaved(state RegState)
 	// Invalidate GPRs
 	var i = 0
 	let count = state.callerSavedGprs.count()
@@ -1058,9 +1058,9 @@ export function rmInvalidateCallerSaved(state RegState)
 			i = i + 1
 			continue
 		end 'skip'
-		let occupant = rmGetOr(state.registerContents, index: regOrd, fallback: RM_NONE)
+		let occupant = getOr(state.registerContents, index: regOrd, fallback: RM_NONE)
 		if occupant != RM_NONE 'occupied'
-			var occVI = rmGetValueInfo(state, valueId: occupant)
+			var occVI = getValueInfo(state, valueId: occupant)
 			occVI.gprOrdinal = RM_NONE
 			state.registerContents.set(regOrd, value: RM_NONE)
 			state.lastUsed.set(regOrd, value: 0)
@@ -1075,9 +1075,9 @@ export function rmInvalidateCallerSaved(state RegState)
 			fi = fi + 1
 			continue
 		end 'skipFp'
-		let fpOccupant = rmGetOr(state.fpContents, index: fpOrd, fallback: RM_NONE)
+		let fpOccupant = getOr(state.fpContents, index: fpOrd, fallback: RM_NONE)
 		if fpOccupant != RM_NONE 'fpOccupied'
-			var fpOccInfo = rmGetValueInfo(state, valueId: fpOccupant)
+			var fpOccInfo = getValueInfo(state, valueId: fpOccupant)
 			fpOccInfo.previousFp = fpOrd
 			fpOccInfo.fpOrdinal = RM_NONE
 			state.fpContents.set(fpOrd, value: RM_NONE)
@@ -1085,7 +1085,7 @@ export function rmInvalidateCallerSaved(state RegState)
 		end 'fpOccupied'
 		fi = fi + 1
 	end 'invalidateFp'
-end 'rmInvalidateCallerSaved'
+end 'invalidateCallerSaved'
 
 // --- Block transition ---
 
@@ -1099,10 +1099,10 @@ end 'rmInvalidateCallerSaved'
 // Clobber all caller-saved registers before a call instruction.
 // Spills values in caller-saved registers to the stack, then clears those register mappings.
 // In diverging blocks (panic paths), skips spills since the block never returns.
-export function rmClobberCallerSaved(state RegState, dstBlock MlirBlock)
+export function clobberCallerSaved(state RegState, dstBlock MlirBlock)
 	logTrace(LogCategory.mlir, message: () gives "regalloc: clobber caller-saved (func={state.funcName})")
 	if state.isInDivergingBlock 'diverging'
-		rmClearCallerSavedMappings(state)
+		clearCallerSavedMappings(state)
 		return
 	end 'diverging'
 	var i = 0
@@ -1111,7 +1111,7 @@ export function rmClobberCallerSaved(state RegState, dstBlock MlirBlock)
 			i = i + 1
 			continue
 		end 'skip'
-		rmSpillRegisterIfOccupied(state, regOrdinal: regOrd, dstBlock: dstBlock)
+		spillRegisterIfOccupied(state, regOrdinal: regOrd, dstBlock: dstBlock)
 		i = i + 1
 	end 'clobberGpr'
 	// Also clobber caller-saved FP registers
@@ -1121,13 +1121,13 @@ export function rmClobberCallerSaved(state RegState, dstBlock MlirBlock)
 			fi = fi + 1
 			continue
 		end 'skipFp'
-		rmSpillFpIfOccupied(state, fpOrdinal: fpOrd, dstBlock: dstBlock)
+		spillFpIfOccupied(state, fpOrdinal: fpOrd, dstBlock: dstBlock)
 		fi = fi + 1
 	end 'clobberFp'
-end 'rmClobberCallerSaved'
+end 'clobberCallerSaved'
 
-// Clobber only caller-saved FP registers (GPR clobbering handled separately by rmPrepImplicitDefs).
-export function rmClobberCallerSavedFp(state RegState, dstBlock MlirBlock)
+// Clobber only caller-saved FP registers (GPR clobbering handled separately by prepImplicitDefs).
+export function clobberCallerSavedFp(state RegState, dstBlock MlirBlock)
 	if state.isInDivergingBlock 'diverging'
 		return
 	end 'diverging'
@@ -1137,23 +1137,23 @@ export function rmClobberCallerSavedFp(state RegState, dstBlock MlirBlock)
 			fi = fi + 1
 			continue
 		end 'skipFp'
-		rmSpillFpIfOccupied(state, fpOrdinal: fpOrd, dstBlock: dstBlock)
+		spillFpIfOccupied(state, fpOrdinal: fpOrd, dstBlock: dstBlock)
 		fi = fi + 1
 	end 'clobberFp'
-end 'rmClobberCallerSavedFp'
+end 'clobberCallerSavedFp'
 
 // Clear caller-saved register mappings without emitting spill instructions.
 // Used in diverging blocks where spills are dead code.
-function rmClearCallerSavedMappings(state RegState)
+function clearCallerSavedMappings(state RegState)
 	var i = 0
 	while i < state.callerSavedGprs.count() 'clearGpr'
 		let regOrd = try state.callerSavedGprs.get(i) otherwise 'skipGpr'
 			i = i + 1
 			continue
 		end 'skipGpr'
-		let existing = rmGetOr(state.registerContents, index: regOrd, fallback: RM_NONE)
+		let existing = getOr(state.registerContents, index: regOrd, fallback: RM_NONE)
 		if existing != RM_NONE 'occupied'
-			var existVI = rmGetValueInfo(state, valueId: existing)
+			var existVI = getValueInfo(state, valueId: existing)
 			existVI.gprOrdinal = RM_NONE
 			state.registerContents.set(regOrd, value: RM_NONE)
 			state.lastUsed.set(regOrd, value: 0)
@@ -1166,18 +1166,18 @@ function rmClearCallerSavedMappings(state RegState)
 			fi = fi + 1
 			continue
 		end 'skipFp'
-		let existing = rmGetOr(state.fpContents, index: fpOrd, fallback: RM_NONE)
+		let existing = getOr(state.fpContents, index: fpOrd, fallback: RM_NONE)
 		if existing != RM_NONE 'occupiedFp'
-			var existFpVI = rmGetValueInfo(state, valueId: existing)
+			var existFpVI = getValueInfo(state, valueId: existing)
 			existFpVI.fpOrdinal = RM_NONE
 			state.fpContents.set(fpOrd, value: RM_NONE)
 			state.fpLastUsed.set(fpOrd, value: 0)
 		end 'occupiedFp'
 		fi = fi + 1
 	end 'clearFp'
-end 'rmClearCallerSavedMappings'
+end 'clearCallerSavedMappings'
 
-export function rmSpillAllBeforeTerminator(state RegState, dstBlock MlirBlock)
+export function spillAllBeforeTerminator(state RegState, dstBlock MlirBlock)
 	logTrace(LogCategory.mlir, message: () gives "regalloc: spill-all-before-terminator (func={state.funcName})")
 	var i = 0
 	while i < state.gprPoolSize 'spillGpr'
@@ -1185,12 +1185,12 @@ export function rmSpillAllBeforeTerminator(state RegState, dstBlock MlirBlock)
 			i = i + 1
 			continue
 		end 'skip'
-		let occupant = rmGetOr(state.registerContents, index: regOrd, fallback: RM_NONE)
+		let occupant = getOr(state.registerContents, index: regOrd, fallback: RM_NONE)
 		if occupant != RM_NONE 'occupied'
-			var occInfo = rmGetValueInfo(state, valueId: occupant)
+			var occInfo = getValueInfo(state, valueId: occupant)
 			// Skip dead values (remainingUses == 0) — no successor will read them.
 			if occInfo.stackHome == RM_NO_STACK_HOME and not occInfo.isConstant and occInfo.remainingUses > 0 'needsSpill'
-				let spillSlot = rmAllocateSpillSlot(state)
+				let spillSlot = allocateSpillSlot(state)
 				targetEmitSpill(state, dstBlock: dstBlock, regOrdinal: regOrd, stackOffset: spillSlot)
 				occInfo.stackHome = spillSlot
 			end 'needsSpill'
@@ -1203,21 +1203,21 @@ export function rmSpillAllBeforeTerminator(state RegState, dstBlock MlirBlock)
 			fi = fi + 1
 			continue
 		end 'skipFp'
-		let fpOccupant = rmGetOr(state.fpContents, index: fpOrd, fallback: RM_NONE)
+		let fpOccupant = getOr(state.fpContents, index: fpOrd, fallback: RM_NONE)
 		if fpOccupant != RM_NONE 'fpOccupied'
-			var fpOccInfo = rmGetValueInfo(state, valueId: fpOccupant)
+			var fpOccInfo = getValueInfo(state, valueId: fpOccupant)
 			// Skip dead FP values too.
 			if fpOccInfo.fpStackHome == RM_NO_STACK_HOME and fpOccInfo.remainingUses > 0 'fpNeedsSpill'
-				let fpSpillSlot = rmAllocateSpillSlot(state)
+				let fpSpillSlot = allocateSpillSlot(state)
 				targetEmitSpillFp(state, dstBlock: dstBlock, fpOrdinal: fpOrd, stackOffset: fpSpillSlot)
 				fpOccInfo.fpStackHome = fpSpillSlot
 			end 'fpNeedsSpill'
 		end 'fpOccupied'
 		fi = fi + 1
 	end 'spillFp'
-end 'rmSpillAllBeforeTerminator'
+end 'spillAllBeforeTerminator'
 
-export function rmResetForBlockTransition(state RegState, prevBlock MlirBlock)
+export function resetForBlockTransition(state RegState, prevBlock MlirBlock)
 	// Spill all live registers into the previous block
 	var i = 0
 	while i < state.gprPoolSize 'spillAll'
@@ -1225,12 +1225,12 @@ export function rmResetForBlockTransition(state RegState, prevBlock MlirBlock)
 			i = i + 1
 			continue
 		end 'skip'
-		let occupant = rmGetOr(state.registerContents, index: regOrd, fallback: RM_NONE)
+		let occupant = getOr(state.registerContents, index: regOrd, fallback: RM_NONE)
 		if occupant != RM_NONE 'occupied'
-			var occInfo = rmGetValueInfo(state, valueId: occupant)
+			var occInfo = getValueInfo(state, valueId: occupant)
 			// Skip dead values (remainingUses == 0) — no successor will read them.
 			if occInfo.stackHome == RM_NO_STACK_HOME and not occInfo.isConstant and occInfo.remainingUses > 0 'needsSpill'
-				let spillSlot = rmAllocateSpillSlot(state)
+				let spillSlot = allocateSpillSlot(state)
 				targetEmitSpill(state, dstBlock: prevBlock, regOrdinal: regOrd, stackOffset: spillSlot)
 				occInfo.stackHome = spillSlot
 			end 'needsSpill'
@@ -1245,12 +1245,12 @@ export function rmResetForBlockTransition(state RegState, prevBlock MlirBlock)
 			fi = fi + 1
 			continue
 		end 'skipFp'
-		let fpOccupant = rmGetOr(state.fpContents, index: fpOrd, fallback: RM_NONE)
+		let fpOccupant = getOr(state.fpContents, index: fpOrd, fallback: RM_NONE)
 		if fpOccupant != RM_NONE 'fpOccupied'
-			var fpOccInfo = rmGetValueInfo(state, valueId: fpOccupant)
+			var fpOccInfo = getValueInfo(state, valueId: fpOccupant)
 			// Skip dead FP values too.
 			if fpOccInfo.fpStackHome == RM_NO_STACK_HOME and fpOccInfo.remainingUses > 0 'fpNeedsSpill'
-				let fpSpillSlot = rmAllocateSpillSlot(state)
+				let fpSpillSlot = allocateSpillSlot(state)
 				targetEmitSpillFp(state, dstBlock: prevBlock, fpOrdinal: fpOrd, stackOffset: fpSpillSlot)
 				fpOccInfo.fpStackHome = fpSpillSlot
 			end 'fpNeedsSpill'
@@ -1261,7 +1261,7 @@ export function rmResetForBlockTransition(state RegState, prevBlock MlirBlock)
 	// Clear GPR register state
 	i = 0
 	while i < state.gprPoolSize 'clearRegs'
-		let clearOrd = rmGetOr(state.gprPool, index: i, fallback: RM_NONE)
+		let clearOrd = getOr(state.gprPool, index: i, fallback: RM_NONE)
 		if clearOrd >= 0 'validOrd'
 			state.registerContents.set(clearOrd, value: RM_NONE)
 			state.lastUsed.set(clearOrd, value: 0)
@@ -1272,7 +1272,7 @@ export function rmResetForBlockTransition(state RegState, prevBlock MlirBlock)
 	// Clear FP register state
 	fi = 0
 	while fi < state.fpPoolSize 'clearFpRegs'
-		let clearFpOrd = rmGetOr(state.fpPool, index: fi, fallback: RM_NONE)
+		let clearFpOrd = getOr(state.fpPool, index: fi, fallback: RM_NONE)
 		if clearFpOrd >= 0 'validFpOrd'
 			state.fpContents.set(clearFpOrd, value: RM_NONE)
 			state.fpLastUsed.set(clearFpOrd, value: 0)
@@ -1284,13 +1284,13 @@ export function rmResetForBlockTransition(state RegState, prevBlock MlirBlock)
 	state.nextFreshIndex = 0
 	state.nextFreshFpIndex = 0
 	state.currentOpIndex = 0
-	rmUpdateSpillWatermark(state)
-end 'rmResetForBlockTransition'
+	updateSpillWatermark(state)
+end 'resetForBlockTransition'
 
 // --- Value lifetime ---
 
-export function rmNoteValueDead(state RegState, valueId RegInt)
-	var info = rmGetValueInfo(state, valueId: valueId)
+export function noteValueDead(state RegState, valueId RegInt)
+	var info = getValueInfo(state, valueId: valueId)
 	let regOrd = info.gprOrdinal
 	if regOrd != RM_NONE 'inReg'
 		info.gprOrdinal = RM_NONE
@@ -1304,42 +1304,42 @@ export function rmNoteValueDead(state RegState, valueId RegInt)
 		state.fpContents.set(fpOrd, value: RM_NONE)
 		state.fpLastUsed.set(fpOrd, value: 0)
 	end 'inFp'
-end 'rmNoteValueDead'
+end 'noteValueDead'
 
-export function rmNoteStoreToStack(state RegState, valueId RegInt, stackOffset RegInt)
-	var vi = rmGetValueInfo(state, valueId: valueId)
+export function noteStoreToStack(state RegState, valueId RegInt, stackOffset RegInt)
+	var vi = getValueInfo(state, valueId: valueId)
 	vi.stackHome = stackOffset
-end 'rmNoteStoreToStack'
+end 'noteStoreToStack'
 
 // Clear the virtual register mapping for a physical register.
 // Used after instructions that clobber a register with a new value
 // (e.g., IDIV writing quotient to RAX and remainder to RDX).
-export function rmClearRegisterContents(state RegState, regOrdinal RegOrdinal)
-	let occupant = rmGetOr(state.registerContents, index: regOrdinal, fallback: RM_NONE)
+export function clearRegisterContents(state RegState, regOrdinal RegOrdinal)
+	let occupant = getOr(state.registerContents, index: regOrdinal, fallback: RM_NONE)
 	if occupant != RM_NONE 'hasOccupant'
-		var occVI = rmGetValueInfo(state, valueId: occupant)
+		var occVI = getValueInfo(state, valueId: occupant)
 		occVI.gprOrdinal = RM_NONE
 		state.registerContents.set(regOrdinal, value: RM_NONE)
 		state.lastUsed.set(regOrdinal, value: 0)
 	end 'hasOccupant'
-end 'rmClearRegisterContents'
+end 'clearRegisterContents'
 
-export function rmClearRegisterMapping(state RegState, valueId RegInt)
-	var info = rmGetValueInfo(state, valueId: valueId)
+export function clearRegisterMapping(state RegState, valueId RegInt)
+	var info = getValueInfo(state, valueId: valueId)
 	if info.gprOrdinal != RM_NONE 'hasMapping'
 		info.gprOrdinal = RM_NONE
 	end 'hasMapping'
 	if info.fpOrdinal != RM_NONE 'hasFpMapping'
 		info.fpOrdinal = RM_NONE
 	end 'hasFpMapping'
-end 'rmClearRegisterMapping'
+end 'clearRegisterMapping'
 
 // --- Back-edge register reconciliation ---
 // Builds a slot→register mapping from recently emitted movSlot/strToSlot ops
 // in the dstBlock, then matches against the expected snapshot's register→slot
 // mapping to emit register-to-register moves.
 
-export function rmReconcileForBackEdge(state RegState, expected RegSnapshot, dstBlock MlirBlock)
+export function reconcileForBackEdge(state RegState, expected RegSnapshot, dstBlock MlirBlock)
 	// Build slot→physReg mapping from recently emitted store ops in dstBlock.
 	// slotToReg[slotIndex] = physical register ordinal that stored to this slot.
 	let slotToReg = RegIntArray.create()
@@ -1365,7 +1365,7 @@ export function rmReconcileForBackEdge(state RegState, expected RegSnapshot, dst
 			continue
 		end 'skip'
 
-		let expectedValue = rmGetOr(expected.registerContents, index: regOrd, fallback: RM_NONE)
+		let expectedValue = getOr(expected.registerContents, index: regOrd, fallback: RM_NONE)
 		if expectedValue == RM_NONE 'noExpected'
 			i = i + 1
 			continue
@@ -1378,8 +1378,8 @@ export function rmReconcileForBackEdge(state RegState, expected RegSnapshot, dst
 
 		// Constant rematerialization
 		if expVI.isConstant 'constRemat'
-			rmGrowSigned(needsMove, index: regOrd, sentinel: 0)
-			rmGrowSigned(moveConstVal, index: regOrd, sentinel: 0)
+			growSigned(needsMove, index: regOrd, sentinel: 0)
+			growSigned(moveConstVal, index: regOrd, sentinel: 0)
 			needsMove.set(regOrd, value: 2)
 			moveConstVal.set(regOrd, value: expVI.constantValue)
 			i = i + 1
@@ -1394,11 +1394,11 @@ export function rmReconcileForBackEdge(state RegState, expected RegSnapshot, dst
 
 		// Convert stackHome to slot index: slot = (-stackHome / 8) - 1
 		let slotIndex = (0 - expStackHome) / 8 - 1
-		let srcOrd = rmGetOr(slotToReg, index: slotIndex, fallback: RM_NONE)
+		let srcOrd = getOr(slotToReg, index: slotIndex, fallback: RM_NONE)
 
 		// Mark this slot as reconciled — its movSlot op can be removed
 		if srcOrd != RM_NONE 'hasSlotSource'
-			rmGrowSigned(reconciledSlots, index: slotIndex, sentinel: 0)
+			growSigned(reconciledSlots, index: slotIndex, sentinel: 0)
 			reconciledSlots.set(slotIndex, value: 1)
 		end 'hasSlotSource'
 
@@ -1407,9 +1407,9 @@ export function rmReconcileForBackEdge(state RegState, expected RegSnapshot, dst
 			continue
 		end 'alreadyCorrect'
 
-		rmGrowSigned(moveFrom, index: regOrd, sentinel: RM_NONE)
-		rmGrowSigned(needsMove, index: regOrd, sentinel: 0)
-		rmGrowSigned(moveStackHome, index: regOrd, sentinel: RM_NO_STACK_HOME)
+		growSigned(moveFrom, index: regOrd, sentinel: RM_NONE)
+		growSigned(needsMove, index: regOrd, sentinel: 0)
+		growSigned(moveStackHome, index: regOrd, sentinel: RM_NO_STACK_HOME)
 		moveFrom.set(regOrd, value: srcOrd)
 		needsMove.set(regOrd, value: 1)
 		moveStackHome.set(regOrd, value: expStackHome)
@@ -1424,8 +1424,8 @@ export function rmReconcileForBackEdge(state RegState, expected RegSnapshot, dst
 			ri = ri + 1
 			continue
 		end 'skipRemat'
-		if rmGetOr(needsMove, index: rOrd, fallback: 0) == 2 'isRemat'
-			targetEmitMovImm(state, dstBlock: dstBlock, regOrdinal: rOrd, value: rmGetOr(moveConstVal, index: rOrd, fallback: 0))
+		if getOr(needsMove, index: rOrd, fallback: 0) == 2 'isRemat'
+			targetEmitMovImm(state, dstBlock: dstBlock, regOrdinal: rOrd, value: getOr(moveConstVal, index: rOrd, fallback: 0))
 			needsMove.set(rOrd, value: 0)
 		end 'isRemat'
 		ri = ri + 1
@@ -1441,12 +1441,12 @@ export function rmReconcileForBackEdge(state RegState, expected RegSnapshot, dst
 				mi = mi + 1
 				continue
 			end 'skipMove'
-			if rmGetOr(needsMove, index: dstOrd, fallback: 0) != 1 'noMove'
+			if getOr(needsMove, index: dstOrd, fallback: 0) != 1 'noMove'
 				mi = mi + 1
 				continue
 			end 'noMove'
 
-			let srcOrd = rmGetOr(moveFrom, index: dstOrd, fallback: RM_NONE)
+			let srcOrd = getOr(moveFrom, index: dstOrd, fallback: RM_NONE)
 
 			// Check if dstOrd is a source for any other pending move (reg or reload)
 			var blocked = false
@@ -1456,7 +1456,7 @@ export function rmReconcileForBackEdge(state RegState, expected RegSnapshot, dst
 					bi = bi + 1
 					continue
 				end 'skipCheck'
-				if bOrd != dstOrd and rmGetOr(needsMove, index: bOrd, fallback: 0) == 1 and rmGetOr(moveFrom, index: bOrd, fallback: RM_NONE) == dstOrd 'isBlocked'
+				if bOrd != dstOrd and getOr(needsMove, index: bOrd, fallback: 0) == 1 and getOr(moveFrom, index: bOrd, fallback: RM_NONE) == dstOrd 'isBlocked'
 					blocked = true
 					break
 				end 'isBlocked'
@@ -1466,7 +1466,7 @@ export function rmReconcileForBackEdge(state RegState, expected RegSnapshot, dst
 			if srcOrd == RM_NONE 'needsReload'
 				// Defer reloads until after all reg-to-reg moves that read from this register
 				if not blocked 'safeReload'
-					let sh = rmGetOr(moveStackHome, index: dstOrd, fallback: RM_NO_STACK_HOME)
+					let sh = getOr(moveStackHome, index: dstOrd, fallback: RM_NO_STACK_HOME)
 					if sh != RM_NO_STACK_HOME 'hasHome'
 						targetEmitReload(state, dstBlock: dstBlock, regOrdinal: dstOrd, stackOffset: sh)
 					end 'hasHome'
@@ -1494,18 +1494,18 @@ export function rmReconcileForBackEdge(state RegState, expected RegSnapshot, dst
 			ci = ci + 1
 			continue
 		end 'skipCycle'
-		if rmGetOr(needsMove, index: cOrd, fallback: 0) != 1 'noCycle'
+		if getOr(needsMove, index: cOrd, fallback: 0) != 1 'noCycle'
 			ci = ci + 1
 			continue
 		end 'noCycle'
-		let cSrc = rmGetOr(moveFrom, index: cOrd, fallback: RM_NONE)
+		let cSrc = getOr(moveFrom, index: cOrd, fallback: RM_NONE)
 		if cSrc == RM_NONE 'noSrc'
 			ci = ci + 1
 			continue
 		end 'noSrc'
 
-		let otherSrc = rmGetOr(moveFrom, index: cSrc, fallback: RM_NONE)
-		if rmGetOr(needsMove, index: cSrc, fallback: 0) == 1 and otherSrc == cOrd 'twoWaySwap'
+		let otherSrc = getOr(moveFrom, index: cSrc, fallback: RM_NONE)
+		if getOr(needsMove, index: cSrc, fallback: 0) == 1 and otherSrc == cOrd 'twoWaySwap'
 			targetEmitXchgOrSwap(state, dstBlock: dstBlock, ord1: cOrd, ord2: cSrc)
 			needsMove.set(cOrd, value: 0)
 			needsMove.set(cSrc, value: 0)
@@ -1518,7 +1518,7 @@ export function rmReconcileForBackEdge(state RegState, expected RegSnapshot, dst
 				targetEmitMovReg(state, dstBlock: dstBlock, destOrd: cur, srcOrd: curSrc)
 				needsMove.set(cur, value: 0)
 				cur = curSrc
-				curSrc = rmGetOr(moveFrom, index: cur, fallback: RM_NONE)
+				curSrc = getOr(moveFrom, index: cur, fallback: RM_NONE)
 				if curSrc == RM_NONE 'broken'
 					break
 				end 'broken'
@@ -1533,7 +1533,7 @@ export function rmReconcileForBackEdge(state RegState, expected RegSnapshot, dst
 	// Note: movSlot ops are kept in the emitted block even though the back-edge
 	// skips the preheader's loadSlot ops. The stores are needed for correctness
 	// because other paths (e.g. loop exit blocks) may read from those slots.
-end 'rmReconcileForBackEdge'
+end 'reconcileForBackEdge'
 
 // Remove dead movSlot/strToSlot ops for reconciled slots from the emitted block.
 function targetRemoveDeadSlotStores(state RegState, dstBlock MlirBlock, reconciledSlots RegIntArray)
@@ -1564,7 +1564,7 @@ end 'x64RemoveDeadSlotStores'
 
 function x64IsDeadMovSlot(op X64Op, reconciledSlots RegIntArray) returns bool
 	return match op 'check'
-		movSlot(slotIndex, _) gives rmGetOr(reconciledSlots, index: slotIndex, fallback: 0) == 1
+		movSlot(slotIndex, _) gives getOr(reconciledSlots, index: slotIndex, fallback: 0) == 1
 		prologue to movRegImm32 gives false
 		loadSlot to repStosq gives false
 	end 'check'
@@ -1588,7 +1588,7 @@ end 'arm64RemoveDeadSlotStores'
 
 function arm64IsDeadStrToSlot(op Arm64Op, reconciledSlots RegIntArray) returns bool
 	return match op 'check'
-		strToSlot(slotIndex, _) gives rmGetOr(reconciledSlots, index: slotIndex, fallback: 0) == 1
+		strToSlot(slotIndex, _) gives getOr(reconciledSlots, index: slotIndex, fallback: 0) == 1
 		prologue to movImm gives false
 		ldrFromSlot to nullSafeLoad gives false
 	end 'check'
@@ -1660,7 +1660,7 @@ function x64RecordSlotReg(slotIndex VarSlot, srcReg X64VReg, slotToReg RegIntArr
 		virtual gives -1
 	end 'getOrd'
 	if ord >= 0 'valid'
-		rmGrowSigned(slotToReg, index: slotIndex, sentinel: RM_NONE)
+		growSigned(slotToReg, index: slotIndex, sentinel: RM_NONE)
 		slotToReg.set(slotIndex, value: ord)
 	end 'valid'
 end 'x64RecordSlotReg'
@@ -1719,17 +1719,17 @@ function arm64RecordSlotReg(slotIndex VarSlot, src Arm64VReg, slotToReg RegIntAr
 		virtual gives -1
 	end 'getOrd'
 	if ord >= 0 'valid'
-		rmGrowSigned(slotToReg, index: slotIndex, sentinel: RM_NONE)
+		growSigned(slotToReg, index: slotIndex, sentinel: RM_NONE)
 		slotToReg.set(slotIndex, value: ord)
 	end 'valid'
 end 'arm64RecordSlotReg'
 
 // --- Reset for new function ---
 
-export function rmReset(state RegState)
+export function reset(state RegState)
 	var i = 0
 	while i < state.gprPoolSize 'clearRegs'
-		let clearOrd = rmGetOr(state.gprPool, index: i, fallback: RM_NONE)
+		let clearOrd = getOr(state.gprPool, index: i, fallback: RM_NONE)
 		if clearOrd >= 0 'validOrd'
 			state.registerContents.set(clearOrd, value: RM_NONE)
 			state.lastUsed.set(clearOrd, value: 0)
@@ -1738,7 +1738,7 @@ export function rmReset(state RegState)
 	end 'clearRegs'
 	var fi = 0
 	while fi < state.fpPoolSize 'clearFpRegs'
-		let clearFpOrd = rmGetOr(state.fpPool, index: fi, fallback: RM_NONE)
+		let clearFpOrd = getOr(state.fpPool, index: fi, fallback: RM_NONE)
 		if clearFpOrd >= 0 'validFpOrd'
 			state.fpContents.set(clearFpOrd, value: RM_NONE)
 			state.fpLastUsed.set(clearFpOrd, value: 0)
@@ -1748,74 +1748,74 @@ export function rmReset(state RegState)
 	state.nextFreshIndex = 0
 	state.nextFreshFpIndex = 0
 	state.currentOpIndex = 0
-	rmUpdateSpillWatermark(state)
-end 'rmReset'
+	updateSpillWatermark(state)
+end 'reset'
 
 // --- Utility: get ordinal for register holding a value ---
 
-export function rmGetRegisterForValue(state RegState, valueId RegInt) returns RegOrdinal
-	return rmGetValueInfo(state, valueId: valueId).gprOrdinal
-end 'rmGetRegisterForValue'
+export function getRegisterForValue(state RegState, valueId RegInt) returns RegOrdinal
+	return getValueInfo(state, valueId: valueId).gprOrdinal
+end 'getRegisterForValue'
 
-export function rmGetFpRegisterForValue(state RegState, valueId RegInt) returns RegOrdinal
-	return rmGetValueInfo(state, valueId: valueId).fpOrdinal
-end 'rmGetFpRegisterForValue'
+export function getFpRegisterForValue(state RegState, valueId RegInt) returns RegOrdinal
+	return getValueInfo(state, valueId: valueId).fpOrdinal
+end 'getFpRegisterForValue'
 
 // Force a value into a specific GPR. Spills the occupant if needed.
-export function rmEnsureInSpecificRegister(state RegState, valueId RegInt, targetOrd RegOrdinal, dstBlock MlirBlock)
-	let currentOrd = rmGetValueInfo(state, valueId: valueId).gprOrdinal
+export function ensureInSpecificRegister(state RegState, valueId RegInt, targetOrd RegOrdinal, dstBlock MlirBlock)
+	let currentOrd = getValueInfo(state, valueId: valueId).gprOrdinal
 	if currentOrd == targetOrd 'alreadyThere'
 		state.lastUsed.set(targetOrd, value: state.currentOpIndex)
 		return
 	end 'alreadyThere'
 	// Spill whatever is in the target register
-	rmSpillRegisterIfOccupied(state, regOrdinal: targetOrd, dstBlock: dstBlock)
+	spillRegisterIfOccupied(state, regOrdinal: targetOrd, dstBlock: dstBlock)
 	// Get the value into any register first
-	let srcOrd = rmEnsureInRegister(state, valueId: valueId, dstBlock: dstBlock, protect1: targetOrd, protect2: RM_NONE)
+	let srcOrd = ensureInRegister(state, valueId: valueId, dstBlock: dstBlock, protect1: targetOrd, protect2: RM_NONE)
 	if srcOrd != targetOrd 'needMov'
 		targetEmitMovReg(state, dstBlock: dstBlock, destOrd: targetOrd, srcOrd: srcOrd)
 		// Update tracking: value is now in targetOrd, not srcOrd
-		var movInfo = rmGetValueInfo(state, valueId: valueId)
+		var movInfo = getValueInfo(state, valueId: valueId)
 		movInfo.gprOrdinal = RM_NONE
 		state.registerContents.set(srcOrd, value: RM_NONE)
 		state.lastUsed.set(srcOrd, value: 0)
-		rmAssign(state, regOrdinal: targetOrd, valueId: valueId)
+		assign(state, regOrdinal: targetOrd, valueId: valueId)
 	end 'needMov'
-end 'rmEnsureInSpecificRegister'
+end 'ensureInSpecificRegister'
 
 // Force a value into a specific FP register. Spills the occupant if needed.
-export function rmEnsureInSpecificFpRegister(state RegState, valueId RegInt, targetOrd RegOrdinal, dstBlock MlirBlock)
-	let currentOrd = rmGetValueInfo(state, valueId: valueId).fpOrdinal
+export function ensureInSpecificFpRegister(state RegState, valueId RegInt, targetOrd RegOrdinal, dstBlock MlirBlock)
+	let currentOrd = getValueInfo(state, valueId: valueId).fpOrdinal
 	if currentOrd == targetOrd 'alreadyThere'
 		state.fpLastUsed.set(targetOrd, value: state.currentOpIndex)
 		return
 	end 'alreadyThere'
-	rmSpillFpIfOccupied(state, fpOrdinal: targetOrd, dstBlock: dstBlock)
-	let srcOrd = rmEnsureInFpRegister(state, valueId: valueId, dstBlock: dstBlock)
+	spillFpIfOccupied(state, fpOrdinal: targetOrd, dstBlock: dstBlock)
+	let srcOrd = ensureInFpRegister(state, valueId: valueId, dstBlock: dstBlock)
 	if srcOrd != targetOrd 'needMov'
 		targetEmitMovFp(state, dstBlock: dstBlock, destOrd: targetOrd, srcOrd: srcOrd)
-		var movFpInfo = rmGetValueInfo(state, valueId: valueId)
+		var movFpInfo = getValueInfo(state, valueId: valueId)
 		movFpInfo.fpOrdinal = RM_NONE
 		state.fpContents.set(srcOrd, value: RM_NONE)
 		state.fpLastUsed.set(srcOrd, value: 0)
-		rmAssignFp(state, fpOrdinal: targetOrd, valueId: valueId)
+		assignFp(state, fpOrdinal: targetOrd, valueId: valueId)
 	end 'needMov'
-end 'rmEnsureInSpecificFpRegister'
+end 'ensureInSpecificFpRegister'
 
 // Spill ALL live registers (GPR and FP) to stack. Used before panic/guard calls
 // that may not return, so all values must have stack homes.
-export function rmSpillAllLiveRegisters(state RegState, dstBlock MlirBlock)
+export function spillAllLiveRegisters(state RegState, dstBlock MlirBlock)
 	var i = 0
 	while i < state.gprPoolSize 'spillGpr'
 		let regOrd = try state.gprPool.get(i) otherwise 'skip'
 			i = i + 1
 			continue
 		end 'skip'
-		let occupant = rmGetOr(state.registerContents, index: regOrd, fallback: RM_NONE)
+		let occupant = getOr(state.registerContents, index: regOrd, fallback: RM_NONE)
 		if occupant != RM_NONE 'occupied'
-			var occInfo = rmGetValueInfo(state, valueId: occupant)
+			var occInfo = getValueInfo(state, valueId: occupant)
 			if occInfo.stackHome == RM_NO_STACK_HOME and not occInfo.isConstant 'needsSpill'
-				let spillSlot = rmAllocateSpillSlot(state)
+				let spillSlot = allocateSpillSlot(state)
 				targetEmitSpill(state, dstBlock: dstBlock, regOrdinal: regOrd, stackOffset: spillSlot)
 				occInfo.stackHome = spillSlot
 			end 'needsSpill'
@@ -1828,60 +1828,60 @@ export function rmSpillAllLiveRegisters(state RegState, dstBlock MlirBlock)
 			fi = fi + 1
 			continue
 		end 'skipFp'
-		let fpOcc = rmGetOr(state.fpContents, index: fpOrd, fallback: RM_NONE)
+		let fpOcc = getOr(state.fpContents, index: fpOrd, fallback: RM_NONE)
 		if fpOcc != RM_NONE 'fpOcc'
-			var fpOccInfo = rmGetValueInfo(state, valueId: fpOcc)
+			var fpOccInfo = getValueInfo(state, valueId: fpOcc)
 			if fpOccInfo.fpStackHome == RM_NO_STACK_HOME 'fpNeedsSpill'
-				let fpSlot = rmAllocateSpillSlot(state)
+				let fpSlot = allocateSpillSlot(state)
 				targetEmitSpillFp(state, dstBlock: dstBlock, fpOrdinal: fpOrd, stackOffset: fpSlot)
 				fpOccInfo.fpStackHome = fpSlot
 			end 'fpNeedsSpill'
 		end 'fpOcc'
 		fi = fi + 1
 	end 'spillFp'
-end 'rmSpillAllLiveRegisters'
+end 'spillAllLiveRegisters'
 
 // Force-spill a value to stack immediately (ensure it has a stack home).
-export function rmEnsureSpilled(state RegState, valueId RegInt, dstBlock MlirBlock)
-	var info = rmGetValueInfo(state, valueId: valueId)
+export function ensureSpilled(state RegState, valueId RegInt, dstBlock MlirBlock)
+	var info = getValueInfo(state, valueId: valueId)
 	if info.stackHome != RM_NO_STACK_HOME 'alreadySpilled'
 		return
 	end 'alreadySpilled'
 	if info.gprOrdinal != RM_NONE 'inReg'
-		let spillSlot = rmAllocateSpillSlot(state)
+		let spillSlot = allocateSpillSlot(state)
 		targetEmitSpill(state, dstBlock: dstBlock, regOrdinal: info.gprOrdinal, stackOffset: spillSlot)
 		info.stackHome = spillSlot
 		return
 	end 'inReg'
 	if info.fpOrdinal != RM_NONE 'inFp'
-		let fpSpillSlot = rmAllocateSpillSlot(state)
+		let fpSpillSlot = allocateSpillSlot(state)
 		targetEmitSpillFp(state, dstBlock: dstBlock, fpOrdinal: info.fpOrdinal, stackOffset: fpSpillSlot)
 		info.fpStackHome = fpSpillSlot
 	end 'inFp'
-end 'rmEnsureSpilled'
+end 'ensureSpilled'
 
 // --- Shared store/load to stack ---
 
-export function rmEmitStoreToStack(state RegState, valueId RegInt, stackOffset RegInt, dstBlock MlirBlock)
-	let regOrd = rmEnsureInRegister(state, valueId: valueId, dstBlock: dstBlock, protect1: RM_NONE, protect2: RM_NONE)
+export function emitStoreToStack(state RegState, valueId RegInt, stackOffset RegInt, dstBlock MlirBlock)
+	let regOrd = ensureInRegister(state, valueId: valueId, dstBlock: dstBlock, protect1: RM_NONE, protect2: RM_NONE)
 	targetEmitSpill(state, dstBlock: dstBlock, regOrdinal: regOrd, stackOffset: stackOffset)
-	rmNoteStoreToStack(state, valueId: valueId, stackOffset: stackOffset)
-end 'rmEmitStoreToStack'
+	noteStoreToStack(state, valueId: valueId, stackOffset: stackOffset)
+end 'emitStoreToStack'
 
-export function rmEmitLoadFromStack(state RegState, resultId RegInt, stackOffset RegInt, dstBlock MlirBlock)
-	let reg = rmAllocateRegister(state, valueId: resultId, dstBlock: dstBlock, protect1: RM_NONE, protect2: RM_NONE)
+export function emitLoadFromStack(state RegState, resultId RegInt, stackOffset RegInt, dstBlock MlirBlock)
+	let reg = allocateRegister(state, valueId: resultId, dstBlock: dstBlock, protect1: RM_NONE, protect2: RM_NONE)
 	targetEmitReload(state, dstBlock: dstBlock, regOrdinal: reg, stackOffset: stackOffset)
-end 'rmEmitLoadFromStack'
+end 'emitLoadFromStack'
 
 // --- Shared mov value to value ---
 
-export function rmEmitMovValueToValue(state RegState, inputId RegInt, resultId RegInt, dstBlock MlirBlock)
-	let srcOrd = rmEnsureInRegister(state, valueId: inputId, dstBlock: dstBlock, protect1: RM_NONE, protect2: RM_NONE)
-	let dstOrd = rmAllocateRegister(state, valueId: resultId, dstBlock: dstBlock, protect1: srcOrd, protect2: RM_NONE)
+export function emitMovValueToValue(state RegState, inputId RegInt, resultId RegInt, dstBlock MlirBlock)
+	let srcOrd = ensureInRegister(state, valueId: inputId, dstBlock: dstBlock, protect1: RM_NONE, protect2: RM_NONE)
+	let dstOrd = allocateRegister(state, valueId: resultId, dstBlock: dstBlock, protect1: srcOrd, protect2: RM_NONE)
 	if srcOrd != dstOrd 'needMov'
 		targetEmitMovReg(state, dstBlock: dstBlock, destOrd: dstOrd, srcOrd: srcOrd)
 	end 'needMov'
-end 'rmEmitMovValueToValue'
+end 'emitMovValueToValue'
 
 // ============================================================
 // Shared call lowering
@@ -1889,19 +1889,19 @@ end 'rmEmitMovValueToValue'
 
 // Shared call argument placement and emission with cycle-detection.
 // Matches C# RegisterManagerBase.EmitCallShared.
-export function rmEmitCall(state RegState, dstBlock MlirBlock, callee String, argIds RegIntArray, resultId RegInt)
-	rmEmitCallShared(state, dstBlock: dstBlock, argIds: argIds, resultId: resultId, emitDirect: true, callee: callee, indirectRegOrd: RM_NONE)
-end 'rmEmitCall'
+export function emitCall(state RegState, dstBlock MlirBlock, callee String, argIds RegIntArray, resultId RegInt)
+	emitCallShared(state, dstBlock: dstBlock, argIds: argIds, resultId: resultId, emitDirect: true, callee: callee, indirectRegOrd: RM_NONE)
+end 'emitCall'
 
 // Shared call implementation used by direct, try, and indirect calls.
-function rmEmitCallShared(state RegState, dstBlock MlirBlock, argIds RegIntArray, resultId RegInt, emitDirect bool, callee String, indirectRegOrd RegOrdinal)
+function emitCallShared(state RegState, dstBlock MlirBlock, argIds RegIntArray, resultId RegInt, emitDirect bool, callee String, indirectRegOrd RegOrdinal)
 	let argCount = argIds.count()
 	let regArgLimit = state.callConvGprCount
 
 	// 1. Spill caller-saved registers (but don't invalidate yet — values may
 	//    still be in registers after spilling if they already had stack homes
 	//    or are rematerializable constants).
-	rmSpillAllCallerSaved(state, dstBlock: dstBlock)
+	spillAllCallerSaved(state, dstBlock: dstBlock)
 
 	// 2. Handle stack args (beyond register limit)
 	let stackArgCount = argCount - regArgLimit
@@ -1912,7 +1912,7 @@ function rmEmitCallShared(state RegState, dstBlock MlirBlock, argIds RegIntArray
 		var stackIdx = regArgLimit
 		while stackIdx < argCount 'pushStackArgs'
 			let argId = try argIds.get(stackIdx) otherwise 0
-			let argOrd = rmEnsureInRegister(state, valueId: argId, dstBlock: dstBlock, protect1: RM_NONE, protect2: RM_NONE)
+			let argOrd = ensureInRegister(state, valueId: argId, dstBlock: dstBlock, protect1: RM_NONE, protect2: RM_NONE)
 			let spOffset = (stackIdx - regArgLimit) * 8
 			targetEmitStoreToSpOffset(state, dstBlock: dstBlock, regOrd: argOrd, offset: spOffset)
 			stackIdx = stackIdx + 1
@@ -1947,7 +1947,7 @@ function rmEmitCallShared(state RegState, dstBlock MlirBlock, argIds RegIntArray
 			continue
 		end 'skipGather'
 		let targetOrd = try argTargets.get(gi) otherwise 0
-		let argInfo = rmGetValueInfo(state, valueId: argId)
+		let argInfo = getValueInfo(state, valueId: argId)
 		let regOrd = argInfo.gprOrdinal
 		if regOrd != RM_NONE 'inReg'
 			// Value is in a register. If it's not in the target and has a stack home,
@@ -2102,22 +2102,22 @@ function rmEmitCallShared(state RegState, dstBlock MlirBlock, argIds RegIntArray
 	end 'deallocStack'
 
 	// 10. Invalidate all caller-saved and assign result to return register
-	rmInvalidateCallerSaved(state)
-	rmAssign(state, regOrdinal: state.returnGprOrd, valueId: resultId)
-end 'rmEmitCallShared'
+	invalidateCallerSaved(state)
+	assign(state, regOrdinal: state.returnGprOrd, valueId: resultId)
+end 'emitCallShared'
 
 // Shared try_call: call + capture error flag register.
-export function rmEmitTryCall(state RegState, dstBlock MlirBlock, callee String, argIds RegIntArray, resultId RegInt, errorFlagId RegInt)
-	rmEmitCall(state, dstBlock: dstBlock, callee: callee, argIds: argIds, resultId: resultId)
-	rmAssign(state, regOrdinal: state.errorFlagOrd, valueId: errorFlagId)
-end 'rmEmitTryCall'
+export function emitTryCall(state RegState, dstBlock MlirBlock, callee String, argIds RegIntArray, resultId RegInt, errorFlagId RegInt)
+	emitCall(state, dstBlock: dstBlock, callee: callee, argIds: argIds, resultId: resultId)
+	assign(state, regOrdinal: state.errorFlagOrd, valueId: errorFlagId)
+end 'emitTryCall'
 
 // Shared indirect call: ensure callee in scratch register, then call.
-export function rmEmitIndirectCallOp(state RegState, dstBlock MlirBlock, calleeId RegInt, argIds RegIntArray, resultId RegInt)
+export function emitIndirectCallOp(state RegState, dstBlock MlirBlock, calleeId RegInt, argIds RegIntArray, resultId RegInt)
 	let regArgLimit = state.callConvGprCount
 
 	// Ensure callee is in a register before spilling
-	let calleeOrd = rmEnsureInRegister(state, valueId: calleeId, dstBlock: dstBlock, protect1: RM_NONE, protect2: RM_NONE)
+	let calleeOrd = ensureInRegister(state, valueId: calleeId, dstBlock: dstBlock, protect1: RM_NONE, protect2: RM_NONE)
 	var actualCalleeOrd = calleeOrd
 	// If callee is in a CC register, move to indirect call scratch
 	var calleeInCC = false
@@ -2134,59 +2134,59 @@ export function rmEmitIndirectCallOp(state RegState, dstBlock MlirBlock, calleeI
 	end 'checkCC'
 	if calleeInCC 'moveToScratch'
 		let scratchOrd = state.indirectCallScratchOrd
-		rmSpillRegisterIfOccupied(state, regOrdinal: scratchOrd, dstBlock: dstBlock)
+		spillRegisterIfOccupied(state, regOrdinal: scratchOrd, dstBlock: dstBlock)
 		targetEmitMovReg(state, dstBlock: dstBlock, destOrd: scratchOrd, srcOrd: calleeOrd)
 		actualCalleeOrd = scratchOrd
 	end 'moveToScratch'
 
 	// Use shared call implementation with indirect call register
-	rmEmitCallShared(state, dstBlock: dstBlock, argIds: argIds, resultId: resultId, emitDirect: false, callee: "", indirectRegOrd: actualCalleeOrd)
-end 'rmEmitIndirectCallOp'
+	emitCallShared(state, dstBlock: dstBlock, argIds: argIds, resultId: resultId, emitDirect: false, callee: "", indirectRegOrd: actualCalleeOrd)
+end 'emitIndirectCallOp'
 
 // Shared return: move value to return register.
 // Does NOT emit the epilogue — that's target-specific (X86 pushes to ops,
 // ARM64 sets as block terminator). Caller should emit epilogue after this.
-export function rmEnsureReturnValue(state RegState, dstBlock MlirBlock, retValId RegInt)
+export function ensureReturnValue(state RegState, dstBlock MlirBlock, retValId RegInt)
 	let retOrd = state.returnGprOrd
-	let valOrd = rmEnsureInRegister(state, valueId: retValId, dstBlock: dstBlock, protect1: RM_NONE, protect2: RM_NONE)
+	let valOrd = ensureInRegister(state, valueId: retValId, dstBlock: dstBlock, protect1: RM_NONE, protect2: RM_NONE)
 	if valOrd != retOrd 'moveToRet'
 		targetEmitMovReg(state, dstBlock: dstBlock, destOrd: retOrd, srcOrd: valOrd)
 	end 'moveToRet'
-end 'rmEnsureReturnValue'
+end 'ensureReturnValue'
 
 // Shared FP return: move float value to FP return register.
-export function rmEnsureFpReturnValue(state RegState, dstBlock MlirBlock, retValId RegInt)
+export function ensureFpReturnValue(state RegState, dstBlock MlirBlock, retValId RegInt)
 	let retOrd = state.returnFpOrd
-	let valOrd = rmEnsureInFpRegister(state, valueId: retValId, dstBlock: dstBlock)
+	let valOrd = ensureInFpRegister(state, valueId: retValId, dstBlock: dstBlock)
 	if valOrd != retOrd 'moveToRet'
 		targetEmitMovFp(state, dstBlock: dstBlock, destOrd: retOrd, srcOrd: valOrd)
 	end 'moveToRet'
-end 'rmEnsureFpReturnValue'
+end 'ensureFpReturnValue'
 
 // Shared parameter noting: register a parameter value with the allocator.
 // On X86, paramIndex maps to both GPR and XMM CC slots (shared index).
 // On ARM64, typeSpecificIndex provides independent GPR/FP indexing.
-export function rmNoteParam(state RegState, valueId RegInt, paramIndex RegInt, typeSpecificIndex RegInt, isFloat bool, dstBlock MlirBlock)
+export function noteParam(state RegState, valueId RegInt, paramIndex RegInt, typeSpecificIndex RegInt, isFloat bool, dstBlock MlirBlock)
 	if isFloat 'fpParam'
 		if typeSpecificIndex < state.callConvFpCount 'regFp'
 			let fpOrd = try state.callConvFps.get(typeSpecificIndex) otherwise 0
-			rmAssignFp(state, fpOrdinal: fpOrd, valueId: valueId)
+			assignFp(state, fpOrdinal: fpOrd, valueId: valueId)
 		end 'regFp' else 'stackFp'
 			let stackOffset = 16 + (paramIndex - state.callConvGprCount) * 8
-			let fp = rmAllocateFpRegister(state, valueId: valueId, dstBlock: dstBlock)
+			let fp = allocateFpRegister(state, valueId: valueId, dstBlock: dstBlock)
 			targetEmitReloadFp(state, dstBlock: dstBlock, fpOrdinal: fp, stackOffset: stackOffset)
 		end 'stackFp'
 	end 'fpParam' else 'gprParam'
 		if typeSpecificIndex < state.callConvGprCount 'regGpr'
 			let gprOrd = try state.callConvGprs.get(typeSpecificIndex) otherwise 0
-			rmAssign(state, regOrdinal: gprOrd, valueId: valueId)
+			assign(state, regOrdinal: gprOrd, valueId: valueId)
 		end 'regGpr' else 'stackGpr'
 			let stackOffset = 16 + (paramIndex - state.callConvGprCount) * 8
-			let gpr = rmAllocateRegister(state, valueId: valueId, dstBlock: dstBlock, protect1: RM_NONE, protect2: RM_NONE)
+			let gpr = allocateRegister(state, valueId: valueId, dstBlock: dstBlock, protect1: RM_NONE, protect2: RM_NONE)
 			targetEmitReload(state, dstBlock: dstBlock, regOrdinal: gpr, stackOffset: stackOffset)
 		end 'stackGpr'
 	end 'gprParam'
-end 'rmNoteParam'
+end 'noteParam'
 
 // ============================================================
 // Standalone register allocation pass
@@ -2247,8 +2247,8 @@ export function incUse(counts RegIntArray, id RegInt)
 	if id < 0 'invalid'
 		return
 	end 'invalid'
-	let current = rmGetOr(counts, index: id, fallback: 0)
-	rmSet(counts, index: id, value: current + 1, sentinel: 0)
+	let current = getOr(counts, index: id, fallback: 0)
+	set(counts, index: id, value: current + 1, sentinel: 0)
 end 'incUse'
 
 // Record the last use position for a value. Called during pre-scan for each read operand.
@@ -2257,7 +2257,7 @@ export function recordLastUse(positions RegIntArray, id RegInt, opIdx RegInt)
 	if id < 0 'invalid'
 		return
 	end 'invalid'
-	rmSet(positions, index: id, value: opIdx, sentinel: -1)
+	set(positions, index: id, value: opIdx, sentinel: -1)
 end 'recordLastUse'
 
 // Pre-scan all ops in a function to record the last op index where each virtual value is read.
@@ -2310,11 +2310,11 @@ function computeDeferredValues(srcFunc MlirFunction, state RegState) returns Reg
 	let result = RegIntArray.create()
 	var i = 0
 	while i < sinkOnly.count() 'filter'
-		let val = rmGetOr(sinkOnly, index: i, fallback: 0)
+		let val = getOr(sinkOnly, index: i, fallback: 0)
 		if val > 0 'isSink'
-			let nonSink = rmGetOr(usedByNonSink, index: i, fallback: 0)
+			let nonSink = getOr(usedByNonSink, index: i, fallback: 0)
 			if nonSink == 0 'notUsedElsewhere'
-				rmSet(result, index: i, value: 1, sentinel: 0)
+				set(result, index: i, value: 1, sentinel: 0)
 			end 'notUsedElsewhere'
 		end 'isSink'
 		i = i + 1
@@ -2378,14 +2378,14 @@ function collectCrossBlockReads(state RegState, op MlirOp, useBlock RegInt, defB
 	let newCount = scratch.count()
 	var i = 0
 	while i < newCount 'checkReads'
-		let cnt = rmGetOr(scratch, index: i, fallback: 0)
+		let cnt = getOr(scratch, index: i, fallback: 0)
 		if cnt > 0 'hasRead'
-			let defBlock = rmGetOr(defBlocks, index: i, fallback: -1)
+			let defBlock = getOr(defBlocks, index: i, fallback: -1)
 			if defBlock >= 0 and defBlock != useBlock 'crossBlock'
 				// Mark all blocks from def to use-1 as needing spill
 				var k = defBlock
 				while k < useBlock 'markBlocks'
-					rmSet(needsSpill, index: k, value: 1, sentinel: 0)
+					set(needsSpill, index: k, value: 1, sentinel: 0)
 					k = k + 1
 				end 'markBlocks'
 			end 'crossBlock'
@@ -2562,8 +2562,8 @@ end 'terminatorBranchesToDivergingBlock'
 
 function x64TerminatorBranchesToDiverging(op X64Op, divergingBlockIds RegIntArray) returns bool
 	return match op 'check'
-		condJump(_, targetBlock) gives rmGetOr(divergingBlockIds, index: targetBlock, fallback: 0) == 1
-		jmp(targetBlock) gives rmGetOr(divergingBlockIds, index: targetBlock, fallback: 0) == 1
+		condJump(_, targetBlock) gives getOr(divergingBlockIds, index: targetBlock, fallback: 0) == 1
+		jmp(targetBlock) gives getOr(divergingBlockIds, index: targetBlock, fallback: 0) == 1
 		prologue to testRaxRax gives false
 		movF64Slot to repStosq gives false
 	end 'check'
@@ -2571,8 +2571,8 @@ end 'x64TerminatorBranchesToDiverging'
 
 function arm64TerminatorBranchesToDiverging(op Arm64Op, divergingBlockIds RegIntArray) returns bool
 	return match op 'check'
-		condBranch(_, targetBlock) gives rmGetOr(divergingBlockIds, index: targetBlock, fallback: 0) == 1
-		branch(targetBlock) gives rmGetOr(divergingBlockIds, index: targetBlock, fallback: 0) == 1
+		condBranch(_, targetBlock) gives getOr(divergingBlockIds, index: targetBlock, fallback: 0) == 1
+		branch(targetBlock) gives getOr(divergingBlockIds, index: targetBlock, fallback: 0) == 1
 		prologue to cmpRegZero gives false
 		branchLink to nullSafeLoad gives false
 	end 'check'
@@ -2608,9 +2608,9 @@ function allocateRegistersForFunc(srcFunc MlirFunction, target Target) returns M
 	let useCounts = computeUseCounts(srcFunc, state: state)
 	var uci = 0
 	while uci < useCounts.count() 'mergeUses'
-		let ucCount = rmGetOr(useCounts, index: uci, fallback: 0)
+		let ucCount = getOr(useCounts, index: uci, fallback: 0)
 		if ucCount > 0 'hasUses'
-			var ucVI = rmGetValueInfo(state, valueId: uci)
+			var ucVI = getValueInfo(state, valueId: uci)
 			ucVI.remainingUses = ucCount
 		end 'hasUses'
 		uci = uci + 1
@@ -2621,9 +2621,9 @@ function allocateRegistersForFunc(srcFunc MlirFunction, target Target) returns M
 	let deferredMap = computeDeferredValues(srcFunc, state: state)
 	var dfi = 0
 	while dfi < deferredMap.count() 'mergeDeferred'
-		let dfVal = rmGetOr(deferredMap, index: dfi, fallback: 0)
+		let dfVal = getOr(deferredMap, index: dfi, fallback: 0)
 		if dfVal > 0 'isDeferred'
-			var dfVI = rmGetValueInfo(state, valueId: dfi)
+			var dfVI = getValueInfo(state, valueId: dfi)
 			dfVI.deferred = true
 		end 'isDeferred'
 		dfi = dfi + 1
@@ -2651,8 +2651,8 @@ function allocateRegistersForFunc(srcFunc MlirFunction, target Target) returns M
 			continue
 		end 'skipDetect'
 		if targetIsDivergingBlock(state, block: blk) 'isDiverging'
-			rmSet(divergingBlocks, index: di, value: 1, sentinel: 0)
-			rmSet(divergingBlockIds, index: blk.id, value: 1, sentinel: 0)
+			set(divergingBlocks, index: di, value: 1, sentinel: 0)
+			set(divergingBlockIds, index: blk.id, value: 1, sentinel: 0)
 		end 'isDiverging'
 		di = di + 1
 	end 'scanBlocks'
@@ -2669,7 +2669,7 @@ function allocateRegistersForFunc(srcFunc MlirFunction, target Target) returns M
 			bei = bei + 1
 			continue
 		end 'skipBE'
-		rmGrowSigned(blockIdToIndex, index: beBlk.id, sentinel: -1)
+		growSigned(blockIdToIndex, index: beBlk.id, sentinel: -1)
 		blockIdToIndex.set(beBlk.id, value: bei)
 		bei = bei + 1
 	end 'buildBlockIdMap'
@@ -2683,9 +2683,9 @@ function allocateRegistersForFunc(srcFunc MlirFunction, target Target) returns M
 			if terminatorIsUnconditionalJmp(beBlk.terminator) 'isJmp'
 				let targetId = getUnconditionalJmpTargetBlockId(beBlk.terminator)
 				if targetId >= 0 'validTarget'
-					let targetIdx = rmGetOr(blockIdToIndex, index: targetId, fallback: -1)
+					let targetIdx = getOr(blockIdToIndex, index: targetId, fallback: -1)
 					if targetIdx >= 0 and targetIdx <= bei 'isBackEdge'
-						rmSet(backEdgeTargetIds, index: targetId, value: 1, sentinel: 0)
+						set(backEdgeTargetIds, index: targetId, value: 1, sentinel: 0)
 					end 'isBackEdge'
 				end 'validTarget'
 			end 'isJmp'
@@ -2699,7 +2699,7 @@ function allocateRegistersForFunc(srcFunc MlirFunction, target Target) returns M
 
 	var hasSavedState = false
 	var passedDivergingBlock = false
-	var savedSnapshot = rmSaveState(state)
+	var savedSnapshot = saveState(state)
 
 	// Snapshot map for condBr carry-through: when a condBr's jump target is reached,
 	// restore register state from the snapshot saved at the condBr point.
@@ -2713,14 +2713,14 @@ function allocateRegistersForFunc(srcFunc MlirFunction, target Target) returns M
 			continue
 		end 'skipBlock'
 
-		let isBlockDiverging = rmGetOr(divergingBlocks, index: blockIdx, fallback: 0) == 1
+		let isBlockDiverging = getOr(divergingBlocks, index: blockIdx, fallback: 0) == 1
 		state.isInDivergingBlock = isBlockDiverging
 
 		// Restore saved state when entering the first non-diverging block after
 		// a diverging one. This carries register assignments across the panic block.
 		if not isBlockDiverging and passedDivergingBlock and hasSavedState 'restoreBeforeBlock'
 			logTrace(LogCategory.mlir, message: () gives "regalloc: restore state after diverging block (func={state.funcName})")
-			rmRestoreState(state, snapshot: savedSnapshot)
+			restoreState(state, snapshot: savedSnapshot)
 			hasSavedState = false
 			passedDivergingBlock = false
 		end 'restoreBeforeBlock'
@@ -2729,7 +2729,7 @@ function allocateRegistersForFunc(srcFunc MlirFunction, target Target) returns M
 		if not isBlockDiverging and not hasSavedState and condBrSnapshots.contains(srcBlock.id) 'checkCondBrRestore'
 			logTrace(LogCategory.mlir, message: () gives "regalloc: restore state at condBr target block '{srcBlock.label}' (func={state.funcName})")
 			let snap = try condBrSnapshots.get(srcBlock.id) otherwise RegSnapshot.create(RegIntArray.create(), values: ValueInfoArray.create(), fpContents: RegIntArray.create(), nextSpillOffset: 0, minSpillOffset: 0)
-			rmRestoreStatePreserveSpills(state, snapshot: snap)
+			restoreStatePreserveSpills(state, snapshot: snap)
 		end 'checkCondBrRestore'
 
 		// Create destination block
@@ -2744,7 +2744,7 @@ function allocateRegistersForFunc(srcFunc MlirFunction, target Target) returns M
 		end 'preRecordSlotHomes'
 
 		// Check if this block is a back-edge target (loop header) that should be split.
-		let isBackEdgeTarget = rmGetOr(backEdgeTargetIds, index: srcBlock.id, fallback: 0) == 1
+		let isBackEdgeTarget = getOr(backEdgeTargetIds, index: srcBlock.id, fallback: 0) == 1
 
 		// Process each op in the block
 		let opCount = srcBlock.ops.count()
@@ -2763,7 +2763,7 @@ function allocateRegistersForFunc(srcFunc MlirFunction, target Target) returns M
 					break
 				end 'notLoadSlot'
 				targetAllocOp(state, op: lsOp, dstBlock: dstBlock)
-				rmAdvanceOp(state)
+				advanceOp(state)
 				opIdx = opIdx + 1
 			end 'loadSlotOps'
 
@@ -2772,12 +2772,12 @@ function allocateRegistersForFunc(srcFunc MlirFunction, target Target) returns M
 
 			// Save a snapshot of register state after the reloads — this is the
 			// expected state for back-edge reconciliation.
-			backEdgeSnapshots.upsert(srcBlock.id, value: rmSaveState(state))
+			backEdgeSnapshots.upsert(srcBlock.id, value: saveState(state))
 
 			// Allocate a new block ID for the slim header
 			let slimHeaderId = dstFunc.nextBlockId
 			dstFunc.nextBlockId = dstFunc.nextBlockId + 1
-			rmGrowSigned(backEdgeHeaderBlockIds, index: srcBlock.id, sentinel: -1)
+			growSigned(backEdgeHeaderBlockIds, index: srcBlock.id, sentinel: -1)
 			backEdgeHeaderBlockIds.set(srcBlock.id, value: slimHeaderId)
 			logTrace(LogCategory.mlir, message: () gives "regalloc: header split: origId={srcBlock.id} slimId={slimHeaderId} (func={state.funcName})")
 
@@ -2793,7 +2793,7 @@ function allocateRegistersForFunc(srcFunc MlirFunction, target Target) returns M
 
 			targetAllocOp(state, op: op, dstBlock: dstBlock)
 
-			rmAdvanceOp(state)
+			advanceOp(state)
 			opIdx = opIdx + 1
 		end 'eachOp'
 
@@ -2826,7 +2826,7 @@ function allocateRegistersForFunc(srcFunc MlirFunction, target Target) returns M
 		if srcBlock.hasTerminator and not isBlockDiverging 'checkBackEdgeJmp'
 			if terminatorIsUnconditionalJmp(srcBlock.terminator) 'isJmp'
 				let jmpTargetId = getUnconditionalJmpTargetBlockId(srcBlock.terminator)
-				if jmpTargetId >= 0 and rmGetOr(backEdgeTargetIds, index: jmpTargetId, fallback: 0) == 1 'isBackEdge'
+				if jmpTargetId >= 0 and getOr(backEdgeTargetIds, index: jmpTargetId, fallback: 0) == 1 'isBackEdge'
 					isBackEdgeJmp = true
 					backEdgeOrigTargetId = jmpTargetId
 				end 'isBackEdge'
@@ -2837,10 +2837,10 @@ function allocateRegistersForFunc(srcFunc MlirFunction, target Target) returns M
 		if srcBlock.hasTerminator 'hasTerm'
 			// If the next block is diverging, save register state NOW (before spilling)
 			if not isBlockDiverging and not hasSavedState and not isCondBrCarryThrough and not isBackEdgeJmp 'checkSaveBeforeSpill'
-				let nextIsDiverging = blockIdx + 1 < blockCount and rmGetOr(divergingBlocks, index: blockIdx + 1, fallback: 0) == 1
+				let nextIsDiverging = blockIdx + 1 < blockCount and getOr(divergingBlocks, index: blockIdx + 1, fallback: 0) == 1
 				if nextIsDiverging 'saveNow'
 					logTrace(LogCategory.mlir, message: () gives "regalloc: save state before diverging block (func={state.funcName})")
-					savedSnapshot = rmSaveState(state)
+					savedSnapshot = saveState(state)
 					hasSavedState = true
 				end 'saveNow'
 			end 'checkSaveBeforeSpill'
@@ -2854,7 +2854,7 @@ function allocateRegistersForFunc(srcFunc MlirFunction, target Target) returns M
 			// Also skip for condBr carry-through — spill happens but we keep register state.
 			// Also skip for back-edge jumps — reconciliation replaces spilling.
 			if not isReturnTerminator(srcBlock.terminator, state: state) and not hasSavedState and not isBlockDiverging and not branchTargetIsDiverging and not isCondBrCarryThrough and not isBackEdgeJmp 'notReturn'
-				rmSpillAllBeforeTerminator(state, dstBlock: dstBlock)
+				spillAllBeforeTerminator(state, dstBlock: dstBlock)
 			end 'notReturn'
 
 			// For condBr carry-through: spill live values (so the jump target can
@@ -2862,13 +2862,13 @@ function allocateRegistersForFunc(srcFunc MlirFunction, target Target) returns M
 			// Skip spilling if the fallthrough successor is diverging (e.g. panic) —
 			// the diverging block never returns, so values don't need stack homes.
 			if isCondBrCarryThrough 'condBrSpill'
-				let fallthroughIsDiverging = blockIdx + 1 < blockCount and rmGetOr(divergingBlocks, index: blockIdx + 1, fallback: 0) == 1
+				let fallthroughIsDiverging = blockIdx + 1 < blockCount and getOr(divergingBlocks, index: blockIdx + 1, fallback: 0) == 1
 				if not fallthroughIsDiverging 'needsSpill'
-					rmSpillAllBeforeTerminator(state, dstBlock: dstBlock)
+					spillAllBeforeTerminator(state, dstBlock: dstBlock)
 				end 'needsSpill'
 				// Save snapshot AFTER spilling so the jump target gets stack homes.
 				// Register mappings are still live (not cleared) for the fallthrough.
-				condBrSnapshots.upsert(condBrTargetBlockId, value: rmSaveState(state))
+				condBrSnapshots.upsert(condBrTargetBlockId, value: saveState(state))
 			end 'condBrSpill'
 
 			// For back-edge jumps: reconcile registers to match the loop header's
@@ -2876,12 +2876,12 @@ function allocateRegistersForFunc(srcFunc MlirFunction, target Target) returns M
 			if isBackEdgeJmp 'backEdgeReconcile'
 				logTrace(LogCategory.mlir, message: () gives "regalloc: back-edge reconcile at '{srcBlock.label}' (func={state.funcName})")
 				let beSnap = try backEdgeSnapshots.get(backEdgeOrigTargetId) otherwise 'noSnap'
-					panic("rmAllocRegs: back-edge snapshot missing for block id {backEdgeOrigTargetId}")
+					panic("allocRegs: back-edge snapshot missing for block id {backEdgeOrigTargetId}")
 				end 'noSnap'
-				rmReconcileForBackEdge(state, expected: beSnap, dstBlock: dstBlock)
+				reconcileForBackEdge(state, expected: beSnap, dstBlock: dstBlock)
 
 				// Rewrite the jmp to target the slim header instead of the original header
-				let slimId = rmGetOr(backEdgeHeaderBlockIds, index: backEdgeOrigTargetId, fallback: -1)
+				let slimId = getOr(backEdgeHeaderBlockIds, index: backEdgeOrigTargetId, fallback: -1)
 				if slimId >= 0 'rewrite'
 					let rewrittenTerm = rewriteJmpTarget(srcBlock.terminator, newTarget: slimId)
 					targetAllocOp(state, op: rewrittenTerm, dstBlock: dstBlock)
@@ -2916,12 +2916,12 @@ function allocateRegistersForFunc(srcFunc MlirFunction, target Target) returns M
 				// Back-edge jmp: register state was reconciled to match the loop header.
 				// The next block (e.g. loop exit) gets its state from condBr snapshot.
 				// Just reset since the next block will restore from its snapshot.
-				rmReset(state)
+				reset(state)
 			end 'backEdgeCarry' else if isBlockDiverging 'diverging'
-				rmReset(state)
+				reset(state)
 				passedDivergingBlock = true
 			end 'diverging' else if hasSavedState 'skipSpillTransition'
-				rmReset(state)
+				reset(state)
 			end 'skipSpillTransition' else if branchTargetIsDiverging 'carryThrough'
 				// The terminator is a conditional branch to a diverging block (e.g. jg panic).
 				// Register state carries through to the fallthrough successor intact — no
@@ -2932,12 +2932,12 @@ function allocateRegistersForFunc(srcFunc MlirFunction, target Target) returns M
 				// fallthrough successor. Values were already spilled for the jump target.
 				// Don't reset — the next block inherits all register assignments.
 				logTrace(LogCategory.mlir, message: () gives "regalloc: carry register state through condBr (func={state.funcName})")
-			end 'condBrCarry' else if rmGetOr(crossBlockSpill, index: blockIdx, fallback: 0) == 1 'needsSpill'
+			end 'condBrCarry' else if getOr(crossBlockSpill, index: blockIdx, fallback: 0) == 1 'needsSpill'
 				// Values defined in this block are used in a later block — spill live registers.
-				rmResetForBlockTransition(state, prevBlock: dstBlock)
+				resetForBlockTransition(state, prevBlock: dstBlock)
 			end 'needsSpill' else 'noSpillNeeded'
 				// No values cross this block boundary — just clear register state.
-				rmReset(state)
+				reset(state)
 			end 'noSpillNeeded'
 		end 'notLastBlock'
 
@@ -2945,7 +2945,7 @@ function allocateRegistersForFunc(srcFunc MlirFunction, target Target) returns M
 	end 'eachBlock'
 
 	// Store the spill size on the function for the prologue/epilogue pass.
-	dstFunc.spillSize = rmTotalStackSize(state)
+	dstFunc.spillSize = totalStackSize(state)
 
 	// nextBlockId was initialized from srcFunc and may have been incremented
 	// during header splitting — keep the updated value.
