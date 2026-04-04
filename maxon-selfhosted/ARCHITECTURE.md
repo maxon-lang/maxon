@@ -70,20 +70,22 @@ maxon-selfhosted/
         CodeResult.maxon               CodeResult, Relocation types
         InstructionScheduler.maxon     Register-pressure-aware bottom-up list scheduler
         OsDescriptor.maxon             OS abstraction (exit/write strategies)
-        PrologueEpiloguePass.maxon     Insert function prologue/epilogue
+        PrologueEpiloguePass.maxon     Shared prologue/epilogue types, frame computation, pass entry
         RegisterManager.maxon          Cross-platform greedy linear-scan register allocator
         StdOpHelpers.maxon             Shared helpers for mid->target conversion
         TargetRegAllocDispatch.maxon   Target-specific register allocation dispatch
-      X86/
+      X64/
         X64Dialect.maxon               X64Op enum (96 variants, OpMeta-backed), X64Register enum
         X64Latency.maxon               X64 latency table creation
         X64RegisterAlloc.maxon         X64-specific register allocation
+        X64PrologueEpilogue.maxon      X64 prologue/epilogue insertion, callee-saved detection
         MidToX64Conversion.maxon       Mid-level -> X64Op lowering
         X64CodeEmitter.maxon           X64Op -> machine code bytes
       Arm64/
         Arm64Dialect.maxon             Arm64Op enum (77 variants, OpMeta-backed), Arm64Register enum
         Arm64Latency.maxon             ARM64 latency table creation
         Arm64RegisterAlloc.maxon       ARM64-specific register allocation
+        Arm64PrologueEpilogue.maxon    ARM64 prologue/epilogue insertion, callee-saved detection
         MidToArm64Conversion.maxon     Mid-level -> Arm64Op lowering
         Arm64CodeEmitter.maxon         Arm64Op -> machine code bytes
       Windows/

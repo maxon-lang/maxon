@@ -1,0 +1,354 @@
+// X64-specific prologue/epilogue insertion and callee-saved register detection.
+// Called from the shared PrologueEpiloguePass via BackendDispatch.
+
+// ============================================================
+// X64 frame scanning
+// ============================================================
+
+export function scanX64InstrForFrame(op X64Op, state FrameScanState)
+	match op 'scan'
+		prologue(stackSize) then markPrologueFound(state, stackSize: stackSize)
+		epilogue to movRegImm32 then break 'scan'
+		movSlot(slotIndex, _) then updateSpillAreaFromSlot(state, slotIndex: slotIndex)
+		loadSlot(_, slotIndex) then updateSpillAreaFromSlot(state, slotIndex: slotIndex)
+		addRegReg to loadRegRbpOffset then break 'scan'
+		callDirect then state.hasCalls = true
+		syscall(resultSlot, _, argSlots) then updateSpillAreaFromSysOp(state, resultSlot: resultSlot, argSlots: argSlots)
+		iatCall(resultSlot, _, argSlots) then updateSpillAreaFromSysOp(state, resultSlot: resultSlot, argSlots: argSlots)
+		globalAddr(resultSlot, _) then updateSpillAreaFromSlot(state, slotIndex: resultSlot)
+		stackAddrOp(resultSlot, targetSlot) then updateSpillAreaFromTwoSlots(state, slot1: resultSlot, slot2: targetSlot)
+		storeByteOp(s1, s2, s3) then updateSpillAreaFromThreeSlots(state, s1: s1, s2: s2, s3: s3)
+		loadByteOp(s1, s2, s3) then updateSpillAreaFromThreeSlots(state, s1: s1, s2: s2, s3: s3)
+		memcpyOp(s1, s2, s3) then updateSpillAreaFromThreeSlots(state, s1: s1, s2: s2, s3: s3)
+		movRegReg to idivReg then break 'scan'
+		spillToStack(offset, _) then updateSpillArea(state, offset: offset)
+		reloadFromStack(_, offset) then updateSpillArea(state, offset: offset)
+		xorRegRegSelf then break 'scan'
+		callIndirect then state.hasCalls = true
+		xchgRegReg to repStosq then break 'scan'
+	end 'scan'
+end 'scanX64InstrForFrame'
+
+function updateSpillAreaFromSlot(state FrameScanState, slotIndex VarSlot)
+	let offset = (slotIndex + 1) * 8
+	updateSpillArea(state, offset: 0 - offset)
+end 'updateSpillAreaFromSlot'
+
+function updateSpillAreaFromSysOp(state FrameScanState, resultSlot VarSlot, argSlots VarSlotArray)
+	updateSpillAreaFromSlot(state, slotIndex: resultSlot)
+	for s in argSlots 'eachArg'
+		updateSpillAreaFromSlot(state, slotIndex: s)
+	end 'eachArg'
+end 'updateSpillAreaFromSysOp'
+
+function updateSpillAreaFromTwoSlots(state FrameScanState, slot1 VarSlot, slot2 VarSlot)
+	updateSpillAreaFromSlot(state, slotIndex: slot1)
+	updateSpillAreaFromSlot(state, slotIndex: slot2)
+end 'updateSpillAreaFromTwoSlots'
+
+function updateSpillAreaFromThreeSlots(state FrameScanState, s1 VarSlot, s2 VarSlot, s3 VarSlot)
+	updateSpillAreaFromSlot(state, slotIndex: s1)
+	updateSpillAreaFromSlot(state, slotIndex: s2)
+	updateSpillAreaFromSlot(state, slotIndex: s3)
+end 'updateSpillAreaFromThreeSlots'
+
+// ============================================================
+// X64 op classification (X64Op level)
+// ============================================================
+
+function isX64PeOnly(op X64Op) returns bool
+	return match op 'check'
+		prologue gives true
+		epilogue gives true
+		ret to repStosq gives false
+	end 'check'
+end 'isX64PeOnly'
+
+function isX64Ret(op X64Op) returns bool
+	return match op 'check'
+		prologue to epilogue gives false
+		ret gives true
+		movRegImm to repStosq gives false
+	end 'check'
+end 'isX64Ret'
+
+function isX64Epilogue(op X64Op) returns bool
+	return match op 'check'
+		prologue gives false
+		epilogue gives true
+		ret to repStosq gives false
+	end 'check'
+end 'isX64Epilogue'
+
+// MlirOp-level helpers that unwrap the x64 variant.
+// block.ops are MlirOp, so unwrapping is unavoidable at iteration boundaries.
+function isX64PrologueOrEpilogue(op MlirOp) returns bool
+	var result = false
+	match op 'check'
+		maxon to mir then break 'check'
+		x64(x64Op) then result = isX64PeOnly(x64Op)
+		arm64 then break 'check'
+	end 'check'
+	return result
+end 'isX64PrologueOrEpilogue'
+
+function isX64RetOp(op MlirOp) returns bool
+	var result = false
+	match op 'check'
+		maxon to mir then break 'check'
+		x64(x64Op) then result = isX64Ret(x64Op)
+		arm64 then break 'check'
+	end 'check'
+	return result
+end 'isX64RetOp'
+
+function isX64EpilogueOp(op MlirOp) returns bool
+	var result = false
+	match op 'check'
+		maxon to mir then break 'check'
+		x64(x64Op) then result = isX64Epilogue(x64Op)
+		arm64 then break 'check'
+	end 'check'
+	return result
+end 'isX64EpilogueOp'
+
+// ============================================================
+// X86-64 prologue/epilogue insertion
+// ============================================================
+
+export function insertX64PrologueEpilogue(srcFunc MlirFunction, dstFunc MlirFunction, stackSize StackSize)
+	// Detect callee-saved registers used in this function.
+	x64DetectCalleeSavedRegs(srcFunc, dstFunc: dstFunc)
+
+	// Include callee-saved register space in the frame.
+	// Callee-saved regs are saved/restored via mov (not push/pop) to preserve
+	// the frame pointer chain for stack unwinding. Their space is at the
+	// bottom of the frame, included in sub rsp.
+	let calleeSavedCount = dstFunc.calleeSavedGprs.count()
+	let calleeSaveArea = calleeSavedCount * 8
+	var adjustedStackSize = alignTo16(stackSize + calleeSaveArea)
+
+	var isFirstBlock = true
+
+	for srcBlock in srcFunc.blocks 'eachBlock'
+		var dstBlock = addBlock(dstFunc, label: srcBlock.label)
+		dstBlock.id = srcBlock.id
+		dstBlock.blockArgs = srcBlock.blockArgs
+
+		if isFirstBlock 'isEntry'
+			// Insert prologue at the start of the entry block (only if we need a frame).
+			let needsFrame = adjustedStackSize > 0 or calleeSavedCount > 0
+			if needsFrame 'hasFrame'
+				dstBlock.ops.push(MlirOp.x64(X64Op.prologue(adjustedStackSize)))
+			end 'hasFrame'
+			isFirstBlock = false
+		end 'isEntry'
+
+		// Copy ops, stripping only prologue and epilogue (keep ret).
+		// After copying, we reinsert epilogue before each ret.
+		for op in srcBlock.ops 'eachOp'
+			if isX64PrologueOrEpilogue(op) 'skipPeOp'
+				continue
+			end 'skipPeOp'
+			dstBlock.ops.push(op)
+		end 'eachOp'
+
+		// Copy terminator through. When the VReg-based isel is active,
+		// epilogue+ret are set as the block terminator (via setLastOpAsTerminator),
+		// so we must also handle ret ops in the terminator position.
+		if srcBlock.hasTerminator 'hasTerm'
+			if not isX64PrologueOrEpilogue(srcBlock.terminator) 'notPE'
+				// If the terminator is a ret, insert epilogue before it
+				if isX64RetOp(srcBlock.terminator) and (adjustedStackSize > 0 or calleeSavedCount > 0) 'termRetNeedsEpi'
+					let prevIsEpi = checkPrevIsX64Epilogue(dstBlock.ops)
+					if not prevIsEpi 'insertEpi'
+						dstBlock.ops.push(MlirOp.x64(X64Op.epilogue))
+					end 'insertEpi'
+				end 'termRetNeedsEpi'
+				dstBlock.hasTerminator = srcBlock.hasTerminator
+				dstBlock.terminator = srcBlock.terminator
+			end 'notPE'
+		end 'hasTerm'
+
+		// Insert epilogue before each ret op in the block's ops.
+		// The x64 lowering emits epilogue+ret as regular ops (not terminators),
+		// so we find each ret and ensure it has an epilogue preceding it.
+		reinsertX64EpilogueBeforeRets(dstBlock, stackSize: adjustedStackSize)
+	end 'eachBlock'
+end 'insertX64PrologueEpilogue'
+
+// After copying ops (with existing prologue/epilogue/ret stripped),
+// scan for ret ops and insert epilogue before each one.
+function reinsertX64EpilogueBeforeRets(block MlirBlock, stackSize StackSize)
+	let newOps = MlirOpArray.create()
+	var needsRewrite = false
+
+	// First check if any rewriting is needed
+	for op in block.ops 'scan'
+		if isX64RetOp(op) 'foundRet'
+			needsRewrite = true
+		end 'foundRet'
+	end 'scan'
+
+	if not needsRewrite 'noRewrite'
+		return
+	end 'noRewrite'
+
+	// Rebuild ops, inserting epilogue before each ret
+	for op in block.ops 'rebuild'
+		if isX64RetOp(op) 'isRet'
+			// Check if the preceding op is already an epilogue
+			let prevIsEpilogue = checkPrevIsX64Epilogue(newOps)
+			if not prevIsEpilogue 'insertEpilogue'
+				if stackSize > 0 'hasFrame'
+					newOps.push(MlirOp.x64(X64Op.epilogue))
+				end 'hasFrame'
+			end 'insertEpilogue'
+			newOps.push(op)
+		end 'isRet' else 'notRet'
+			newOps.push(op)
+		end 'notRet'
+	end 'rebuild'
+
+	block.ops = newOps
+end 'reinsertX64EpilogueBeforeRets'
+
+function checkPrevIsX64Epilogue(ops MlirOpArray) returns bool
+	let count = ops.count()
+	if count == 0 'empty'
+		return false
+	end 'empty'
+	let prev = try ops.get(count - 1) otherwise 'noPrev'
+		return false
+	end 'noPrev'
+	return isX64EpilogueOp(prev)
+end 'checkPrevIsX64Epilogue'
+
+// ============================================================
+// X64 callee-saved register detection
+// ============================================================
+
+function x64GetGprOrdinal(vreg X64VReg) returns RegInt
+	return match vreg 'check'
+		physical(reg) gives reg.rawValue
+		virtual gives 0 - 1
+	end 'check'
+end 'x64GetGprOrdinal'
+
+function x64MarkGprIfCalleeSaved(seen RegIntArray, vreg X64VReg)
+	let ord = x64GetGprOrdinal(vreg)
+	// r12=12, r13=13, r14=14, r15=15 are callee-saved
+	if ord >= 12 and ord <= 15 'calleeSaved'
+		x64MarkRegOrdinal(seen, ordinal: ord)
+	end 'calleeSaved'
+end 'x64MarkGprIfCalleeSaved'
+
+function x64MarkRegOrdinal(seen RegIntArray, ordinal RegInt)
+	for existing in seen 'check'
+		if existing == ordinal 'dup'
+			return
+		end 'dup'
+	end 'check'
+	seen.push(ordinal)
+end 'x64MarkRegOrdinal'
+
+function x64ScanTwoGprs(seen RegIntArray, a X64VReg, b X64VReg)
+	x64MarkGprIfCalleeSaved(seen, vreg: a)
+	x64MarkGprIfCalleeSaved(seen, vreg: b)
+end 'x64ScanTwoGprs'
+
+function x64ScanThreeGprs(seen RegIntArray, a X64VReg, b X64VReg, c X64VReg)
+	x64MarkGprIfCalleeSaved(seen, vreg: a)
+	x64MarkGprIfCalleeSaved(seen, vreg: b)
+	x64MarkGprIfCalleeSaved(seen, vreg: c)
+end 'x64ScanThreeGprs'
+
+// Scan all ops in a function to find callee-saved registers that need saving.
+// Skips diverging blocks (panic paths) since they never return.
+function x64DetectCalleeSavedRegs(srcFunc MlirFunction, dstFunc MlirFunction)
+	let gprSeen = RegIntArray.create()
+
+	for block in srcFunc.blocks 'eachBlock'
+		if isX64DivergingBlock(block) 'skipDiverging'
+			continue
+		end 'skipDiverging'
+		for op in block.ops 'eachOp'
+			match op 'dispatch'
+				maxon to mir then break 'dispatch'
+				x64(x64Op) then x64ScanOpForCalleeSaved(x64Op, gprSeen: gprSeen)
+				arm64 then break 'dispatch'
+			end 'dispatch'
+		end 'eachOp'
+		if block.hasTerminator 'hasTerm'
+			match block.terminator 'dispatchTerm'
+				maxon to mir then break 'dispatchTerm'
+				x64(x64Op) then x64ScanOpForCalleeSaved(x64Op, gprSeen: gprSeen)
+				arm64 then break 'dispatchTerm'
+			end 'dispatchTerm'
+		end 'hasTerm'
+	end 'eachBlock'
+
+	// Sort for deterministic prologue/epilogue ordering
+	sortRegOrdinals(gprSeen)
+
+	dstFunc.calleeSavedGprs = gprSeen
+end 'x64DetectCalleeSavedRegs'
+
+function x64ScanOpForCalleeSaved(op X64Op, gprSeen RegIntArray)
+	match op 'scan'
+		prologue to ret then break 'scan'
+		movRegImm(dest, _) then x64MarkGprIfCalleeSaved(gprSeen, vreg: dest)
+		movRegImm32(dest, _) then x64MarkGprIfCalleeSaved(gprSeen, vreg: dest)
+		movSlot(_, src) then x64MarkGprIfCalleeSaved(gprSeen, vreg: src)
+		loadSlot(dest, _) then x64MarkGprIfCalleeSaved(gprSeen, vreg: dest)
+		addRegReg(dest, src) then x64ScanTwoGprs(gprSeen, a: dest, b: src)
+		subRegReg(dest, src) then x64ScanTwoGprs(gprSeen, a: dest, b: src)
+		addRegImm(dest, _) then x64MarkGprIfCalleeSaved(gprSeen, vreg: dest)
+		subRegImm(dest, _) then x64MarkGprIfCalleeSaved(gprSeen, vreg: dest)
+		imulRegReg(dest, src) then x64ScanTwoGprs(gprSeen, a: dest, b: src)
+		idivRcx to iremRcx then break 'scan'
+		negReg(reg) then x64MarkGprIfCalleeSaved(gprSeen, vreg: reg)
+		bitNotReg(reg) then x64MarkGprIfCalleeSaved(gprSeen, vreg: reg)
+		andRegReg(dest, src) then x64ScanTwoGprs(gprSeen, a: dest, b: src)
+		orRegReg(dest, src) then x64ScanTwoGprs(gprSeen, a: dest, b: src)
+		xorRegReg(dest, src) then x64ScanTwoGprs(gprSeen, a: dest, b: src)
+		shlRegCl(dest, operand, shift) then x64ScanThreeGprs(gprSeen, a: dest, b: operand, c: shift)
+		sarRegCl(dest, operand, shift) then x64ScanThreeGprs(gprSeen, a: dest, b: operand, c: shift)
+		shrRegCl(dest, operand, shift) then x64ScanThreeGprs(gprSeen, a: dest, b: operand, c: shift)
+		cmpRaxRcx to jmp then break 'scan'
+		movF64Slot to ucomisd then break 'scan'
+		printLiteral to printInt then break 'scan'
+		subRspImm to addRspImm then break 'scan'
+		movRspOffsetReg(_, src) then x64MarkGprIfCalleeSaved(gprSeen, vreg: src)
+		loadRegRbpOffset(dest, _) then x64MarkGprIfCalleeSaved(gprSeen, vreg: dest)
+		callDirect to memcpyOp then break 'scan'
+		movRegReg(dest, src) then x64ScanTwoGprs(gprSeen, a: dest, b: src)
+		cmpRegReg(lhs, rhs) then x64ScanTwoGprs(gprSeen, a: lhs, b: rhs)
+		cmpRegImm(lhs, _) then x64MarkGprIfCalleeSaved(gprSeen, vreg: lhs)
+		testRegReg(r1, r2) then x64ScanTwoGprs(gprSeen, a: r1, b: r2)
+		cqo then break 'scan'
+		idivReg(divisor) then x64MarkGprIfCalleeSaved(gprSeen, vreg: divisor)
+		spillToStack(_, src) then x64MarkGprIfCalleeSaved(gprSeen, vreg: src)
+		reloadFromStack(dest, _) then x64MarkGprIfCalleeSaved(gprSeen, vreg: dest)
+		xorRegRegSelf(reg) then x64MarkGprIfCalleeSaved(gprSeen, vreg: reg)
+		callIndirect(reg) then x64MarkGprIfCalleeSaved(gprSeen, vreg: reg)
+		xchgRegReg(r1, r2) then x64ScanTwoGprs(gprSeen, a: r1, b: r2)
+		movXmmXmm to andMaskRipRel then break 'scan'
+		storeIndirect(base, _, src, _) then x64ScanTwoGprs(gprSeen, a: base, b: src)
+		loadIndirect(dest, base, _, _) then x64ScanTwoGprs(gprSeen, a: dest, b: base)
+		storeIndirectXmm(base, _, _, _) then x64MarkGprIfCalleeSaved(gprSeen, vreg: base)
+		loadIndirectXmm(_, base, _, _) then x64MarkGprIfCalleeSaved(gprSeen, vreg: base)
+		globalLoad(dest, _, _) then x64MarkGprIfCalleeSaved(gprSeen, vreg: dest)
+		globalStore(_, src, _) then x64MarkGprIfCalleeSaved(gprSeen, vreg: src)
+		globalLoadXmm to globalStoreXmm then break 'scan'
+		leaFromStack(dest, _) then x64MarkGprIfCalleeSaved(gprSeen, vreg: dest)
+		leaRipRelative(dest, _) then x64MarkGprIfCalleeSaved(gprSeen, vreg: dest)
+		leaFuncAddr(dest, _) then x64MarkGprIfCalleeSaved(gprSeen, vreg: dest)
+		setcc(dest, _) then x64MarkGprIfCalleeSaved(gprSeen, vreg: dest)
+		cmov(dest, src, _) then x64ScanTwoGprs(gprSeen, a: dest, b: src)
+		movsxd(dest, src) then x64ScanTwoGprs(gprSeen, a: dest, b: src)
+		movzx32(dest, src) then x64ScanTwoGprs(gprSeen, a: dest, b: src)
+		nullSafeLoad(dest, base, _) then x64ScanTwoGprs(gprSeen, a: dest, b: base)
+		repMovsb to repStosq then break 'scan'
+	end 'scan'
+end 'x64ScanOpForCalleeSaved'

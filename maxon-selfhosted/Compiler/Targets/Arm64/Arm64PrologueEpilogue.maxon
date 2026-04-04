@@ -1,0 +1,283 @@
+// ARM64-specific prologue/epilogue insertion and callee-saved register detection.
+// Called from the shared PrologueEpiloguePass via BackendDispatch.
+
+// ============================================================
+// ARM64 frame scanning
+// ============================================================
+
+export function scanArm64InstrForFrame(op Arm64Op, state FrameScanState)
+	match op 'scan'
+		prologue(stackSize) then markPrologueFound(state, stackSize: stackSize)
+		epilogue to branch then break 'scan'
+		branchLink then state.hasCalls = true
+		printLiteral to movRegReg then break 'scan'
+		spillToStack(offset, _) then updateSpillArea(state, offset: offset)
+		reloadFromStack(_, offset) then updateSpillArea(state, offset: offset)
+		branchLinkReg then state.hasCalls = true
+		subSpImm to nullSafeLoad then break 'scan'
+	end 'scan'
+end 'scanArm64InstrForFrame'
+
+// ============================================================
+// ARM64 op classification (Arm64Op level)
+// ============================================================
+
+function isArm64PeOp(op Arm64Op) returns bool
+	return match op 'check'
+		prologue gives true
+		epilogue gives true
+		movImm to nullSafeLoad gives false
+	end 'check'
+end 'isArm64PeOp'
+
+function isArm64EpilogueVariant(op Arm64Op) returns bool
+	return match op 'check'
+		prologue gives false
+		epilogue gives true
+		movImm to nullSafeLoad gives false
+	end 'check'
+end 'isArm64EpilogueVariant'
+
+// MlirOp-level helpers that unwrap the arm64 variant.
+// block.ops are MlirOp, so unwrapping is unavoidable at iteration boundaries.
+function isArm64PrologueOrEpilogue(op MlirOp) returns bool
+	var result = false
+	match op 'check'
+		maxon to x64 then break 'check'
+		arm64(a64Op) then result = isArm64PeOp(a64Op)
+	end 'check'
+	return result
+end 'isArm64PrologueOrEpilogue'
+
+function isArm64EpilogueTerminator(op MlirOp) returns bool
+	var result = false
+	match op 'check'
+		maxon to x64 then break 'check'
+		arm64(a64Op) then result = isArm64EpilogueVariant(a64Op)
+	end 'check'
+	return result
+end 'isArm64EpilogueTerminator'
+
+// ============================================================
+// ARM64 callee-saved register detection
+// ============================================================
+
+function arm64GetGprOrdinal(vreg Arm64VReg) returns RegInt
+	return match vreg 'check'
+		physical(reg) gives reg.rawValue
+		virtual gives 0 - 1
+	end 'check'
+end 'arm64GetGprOrdinal'
+
+function arm64GetFpOrdinal(vreg Arm64FpVReg) returns RegInt
+	return match vreg 'check'
+		physical(reg) gives reg.rawValue
+		virtual gives 0 - 1
+	end 'check'
+end 'arm64GetFpOrdinal'
+
+function arm64MarkGprIfCalleeSaved(seen RegIntArray, vreg Arm64VReg)
+	let ord = arm64GetGprOrdinal(vreg)
+	if ord >= 19 and ord <= 28 'calleeSaved'
+		arm64MarkRegOrdinal(seen, ordinal: ord)
+	end 'calleeSaved'
+end 'arm64MarkGprIfCalleeSaved'
+
+function arm64MarkFpIfCalleeSaved(seen RegIntArray, vreg Arm64FpVReg)
+	let ord = arm64GetFpOrdinal(vreg)
+	if ord >= 8 and ord <= 15 'calleeSaved'
+		arm64MarkRegOrdinal(seen, ordinal: ord)
+	end 'calleeSaved'
+end 'arm64MarkFpIfCalleeSaved'
+
+function arm64MarkRegOrdinal(seen RegIntArray, ordinal RegInt)
+	for existing in seen 'check'
+		if existing == ordinal 'dup'
+			return
+		end 'dup'
+	end 'check'
+	seen.push(ordinal)
+end 'arm64MarkRegOrdinal'
+
+// Scan a single Arm64Op for callee-saved register usage.
+function arm64ScanOpForCalleeSaved(op Arm64Op, gprSeen RegIntArray, fpSeen RegIntArray)
+	match op 'scan'
+		prologue to epilogue then break 'scan'
+		movImm(dest, _) then arm64MarkGprIfCalleeSaved(gprSeen, vreg: dest)
+		strToSlot(_, src) then arm64MarkGprIfCalleeSaved(gprSeen, vreg: src)
+		ldrFromSlot(dest, _) then arm64MarkGprIfCalleeSaved(gprSeen, vreg: dest)
+		addRegs(dest, src1, src2) then arm64ScanThreeGprs(gprSeen, a: dest, b: src1, c: src2)
+		addsRegs(dest, src1, src2) then arm64ScanThreeGprs(gprSeen, a: dest, b: src1, c: src2)
+		subRegs(dest, src1, src2) then arm64ScanThreeGprs(gprSeen, a: dest, b: src1, c: src2)
+		subsRegs(dest, src1, src2) then arm64ScanThreeGprs(gprSeen, a: dest, b: src1, c: src2)
+		mulRegs(dest, src1, src2) then arm64ScanThreeGprs(gprSeen, a: dest, b: src1, c: src2)
+		sdivRegs(dest, src1, src2) then arm64ScanThreeGprs(gprSeen, a: dest, b: src1, c: src2)
+		remRegs(dest, src1, src2) then arm64ScanThreeGprs(gprSeen, a: dest, b: src1, c: src2)
+		negReg(dest, src) then arm64ScanTwoGprs(gprSeen, a: dest, b: src)
+		mvnReg(dest, src) then arm64ScanTwoGprs(gprSeen, a: dest, b: src)
+		andRegs(dest, src1, src2) then arm64ScanThreeGprs(gprSeen, a: dest, b: src1, c: src2)
+		andsRegs(dest, src1, src2) then arm64ScanThreeGprs(gprSeen, a: dest, b: src1, c: src2)
+		orrRegs(dest, src1, src2) then arm64ScanThreeGprs(gprSeen, a: dest, b: src1, c: src2)
+		eorRegs(dest, src1, src2) then arm64ScanThreeGprs(gprSeen, a: dest, b: src1, c: src2)
+		lslRegs(dest, src1, src2) then arm64ScanThreeGprs(gprSeen, a: dest, b: src1, c: src2)
+		asrRegs(dest, src1, src2) then arm64ScanThreeGprs(gprSeen, a: dest, b: src1, c: src2)
+		lsrRegs(dest, src1, src2) then arm64ScanThreeGprs(gprSeen, a: dest, b: src1, c: src2)
+		cmpRegs(src1, src2) then arm64ScanTwoGprs(gprSeen, a: src1, b: src2)
+		cmpRegZero(src) then arm64MarkGprIfCalleeSaved(gprSeen, vreg: src)
+		condBranch to memcpyOp then break 'scan'
+		movRegReg(dest, src) then arm64ScanTwoGprs(gprSeen, a: dest, b: src)
+		spillToStack(_, src) then arm64MarkGprIfCalleeSaved(gprSeen, vreg: src)
+		reloadFromStack(dest, _) then arm64MarkGprIfCalleeSaved(gprSeen, vreg: dest)
+		branchLinkReg(reg) then arm64MarkGprIfCalleeSaved(gprSeen, vreg: reg)
+		subSpImm to addSpImm then break 'scan'
+		strToSpOffset(_, src) then arm64MarkGprIfCalleeSaved(gprSeen, vreg: src)
+		fmovRegReg(dest, src, _) then arm64ScanTwoFps(fpSeen, a: dest, b: src)
+		spillFpToStack(_, src, _) then arm64MarkFpIfCalleeSaved(fpSeen, vreg: src)
+		reloadFpFromStack(dest, _, _) then arm64MarkFpIfCalleeSaved(fpSeen, vreg: dest)
+		fmovToFloat(dest, src, _) then arm64ScanGprAndFp(gprSeen, fpSeen: fpSeen, gpr: src, fp: dest)
+		fmovToGpr(dest, src, _) then arm64ScanGprAndFp(gprSeen, fpSeen: fpSeen, gpr: dest, fp: src)
+		fpLoadRdata(dest, _, _) then arm64MarkFpIfCalleeSaved(fpSeen, vreg: dest)
+		fadd(dest, src1, src2, _) then arm64ScanThreeFps(fpSeen, a: dest, b: src1, c: src2)
+		fsub(dest, src1, src2, _) then arm64ScanThreeFps(fpSeen, a: dest, b: src1, c: src2)
+		fmul(dest, src1, src2, _) then arm64ScanThreeFps(fpSeen, a: dest, b: src1, c: src2)
+		fdiv(dest, src1, src2, _) then arm64ScanThreeFps(fpSeen, a: dest, b: src1, c: src2)
+		fsqrt(dest, src, _) then arm64ScanTwoFps(fpSeen, a: dest, b: src)
+		fabs(dest, src, _) then arm64ScanTwoFps(fpSeen, a: dest, b: src)
+		fneg(dest, src, _) then arm64ScanTwoFps(fpSeen, a: dest, b: src)
+		fcmp(src1, src2, _) then arm64ScanTwoFps(fpSeen, a: src1, b: src2)
+		scvtf(dest, src, _) then arm64ScanGprAndFp(gprSeen, fpSeen: fpSeen, gpr: src, fp: dest)
+		fcvtzs(dest, src, _) then arm64ScanGprAndFp(gprSeen, fpSeen: fpSeen, gpr: dest, fp: src)
+		fcvt(dest, src, _) then arm64ScanTwoFps(fpSeen, a: dest, b: src)
+		frintm(dest, src, _) then arm64ScanTwoFps(fpSeen, a: dest, b: src)
+		frintp(dest, src, _) then arm64ScanTwoFps(fpSeen, a: dest, b: src)
+		frintz(dest, src, _) then arm64ScanTwoFps(fpSeen, a: dest, b: src)
+		frintn(dest, src, _) then arm64ScanTwoFps(fpSeen, a: dest, b: src)
+		fpStoreIndirect(baseReg, _, src, _) then arm64ScanGprAndFp(gprSeen, fpSeen: fpSeen, gpr: baseReg, fp: src)
+		fpLoadIndirect(dest, baseReg, _, _) then arm64ScanGprAndFp(gprSeen, fpSeen: fpSeen, gpr: baseReg, fp: dest)
+		storeIndirect(baseReg, _, srcReg, _) then arm64ScanTwoGprs(gprSeen, a: baseReg, b: srcReg)
+		loadIndirect(destReg, baseReg, _, _) then arm64ScanTwoGprs(gprSeen, a: destReg, b: baseReg)
+		globalLoad(dest, _, _) then arm64MarkGprIfCalleeSaved(gprSeen, vreg: dest)
+		globalStore(_, src, _) then arm64MarkGprIfCalleeSaved(gprSeen, vreg: src)
+		globalLoadFloat(dest, _, _) then arm64MarkFpIfCalleeSaved(fpSeen, vreg: dest)
+		globalStoreFloat(_, src, _) then arm64MarkFpIfCalleeSaved(fpSeen, vreg: src)
+		leaFromStack(dest, _) then arm64MarkGprIfCalleeSaved(gprSeen, vreg: dest)
+		leaRdata(dest, _) then arm64MarkGprIfCalleeSaved(gprSeen, vreg: dest)
+		leaFuncAddr(dest, _) then arm64MarkGprIfCalleeSaved(gprSeen, vreg: dest)
+		cset(dest, _) then arm64MarkGprIfCalleeSaved(gprSeen, vreg: dest)
+		csel(dest, src1, src2, _) then arm64ScanThreeGprs(gprSeen, a: dest, b: src1, c: src2)
+		sxtw(dest, src) then arm64ScanTwoGprs(gprSeen, a: dest, b: src)
+		nullSafeLoad(dest, baseReg, _) then arm64ScanTwoGprs(gprSeen, a: dest, b: baseReg)
+	end 'scan'
+end 'arm64ScanOpForCalleeSaved'
+
+function arm64ScanTwoGprs(seen RegIntArray, a Arm64VReg, b Arm64VReg)
+	arm64MarkGprIfCalleeSaved(seen, vreg: a)
+	arm64MarkGprIfCalleeSaved(seen, vreg: b)
+end 'arm64ScanTwoGprs'
+
+function arm64ScanThreeGprs(seen RegIntArray, a Arm64VReg, b Arm64VReg, c Arm64VReg)
+	arm64MarkGprIfCalleeSaved(seen, vreg: a)
+	arm64MarkGprIfCalleeSaved(seen, vreg: b)
+	arm64MarkGprIfCalleeSaved(seen, vreg: c)
+end 'arm64ScanThreeGprs'
+
+function arm64ScanTwoFps(seen RegIntArray, a Arm64FpVReg, b Arm64FpVReg)
+	arm64MarkFpIfCalleeSaved(seen, vreg: a)
+	arm64MarkFpIfCalleeSaved(seen, vreg: b)
+end 'arm64ScanTwoFps'
+
+function arm64ScanThreeFps(seen RegIntArray, a Arm64FpVReg, b Arm64FpVReg, c Arm64FpVReg)
+	arm64MarkFpIfCalleeSaved(seen, vreg: a)
+	arm64MarkFpIfCalleeSaved(seen, vreg: b)
+	arm64MarkFpIfCalleeSaved(seen, vreg: c)
+end 'arm64ScanThreeFps'
+
+function arm64ScanGprAndFp(gprSeen RegIntArray, fpSeen RegIntArray, gpr Arm64VReg, fp Arm64FpVReg)
+	arm64MarkGprIfCalleeSaved(gprSeen, vreg: gpr)
+	arm64MarkFpIfCalleeSaved(fpSeen, vreg: fp)
+end 'arm64ScanGprAndFp'
+
+// Scan all ops in a function to find callee-saved registers that need saving.
+function arm64DetectCalleeSavedRegs(srcFunc MlirFunction, dstFunc MlirFunction)
+	let gprSeen = RegIntArray.create()
+	let fpSeen = RegIntArray.create()
+
+	for block in srcFunc.blocks 'eachBlock'
+		if isArm64DivergingBlock(block) 'skipDiverging'
+			continue
+		end 'skipDiverging'
+		for op in block.ops 'eachOp'
+			match op 'dispatch'
+				maxon to x64 then break 'dispatch'
+				arm64(a64Op) then arm64ScanOpForCalleeSaved(a64Op, gprSeen: gprSeen, fpSeen: fpSeen)
+			end 'dispatch'
+		end 'eachOp'
+		if block.hasTerminator 'hasTerm'
+			match block.terminator 'dispatchTerm'
+				maxon to x64 then break 'dispatchTerm'
+				arm64(a64Op) then arm64ScanOpForCalleeSaved(a64Op, gprSeen: gprSeen, fpSeen: fpSeen)
+			end 'dispatchTerm'
+		end 'hasTerm'
+	end 'eachBlock'
+
+	// Sort for deterministic prologue/epilogue ordering
+	sortRegOrdinals(gprSeen)
+	sortRegOrdinals(fpSeen)
+
+	dstFunc.calleeSavedGprs = gprSeen
+	dstFunc.calleeSavedFps = fpSeen
+end 'arm64DetectCalleeSavedRegs'
+
+// ============================================================
+// ARM64 prologue/epilogue insertion
+// ============================================================
+
+export function insertArm64PrologueEpilogue(srcFunc MlirFunction, dstFunc MlirFunction, stackSize StackSize)
+	// Detect callee-saved registers used in this function.
+	arm64DetectCalleeSavedRegs(srcFunc, dstFunc: dstFunc)
+
+	// Compute additional frame space for callee-saved registers.
+	// Each register is 8 bytes; we store them in pairs (STP), so round up to even count.
+	let gprCount = dstFunc.calleeSavedGprs.count()
+	let fpCount = dstFunc.calleeSavedFps.count()
+	let gprPairs = (gprCount + 1) / 2
+	let fpPairs = (fpCount + 1) / 2
+	let calleeSaveArea = (gprPairs + fpPairs) * 16
+	let adjustedStackSize = alignTo16(stackSize + calleeSaveArea)
+
+	var isFirstBlock = true
+
+	for srcBlock in srcFunc.blocks 'eachBlock'
+		var dstBlock = addBlock(dstFunc, label: srcBlock.label)
+		dstBlock.id = srcBlock.id
+		dstBlock.blockArgs = srcBlock.blockArgs
+
+		if isFirstBlock 'isEntry'
+			// ARM64 always emits prologue (even for stackSize=0) because the
+			// prologue includes STP x29,x30 which is needed for unwinding.
+			dstBlock.ops.push(MlirOp.arm64(Arm64Op.prologue(adjustedStackSize)))
+			isFirstBlock = false
+		end 'isEntry'
+
+		// Copy ops, stripping any existing prologue/epilogue ops.
+		for op in srcBlock.ops 'eachOp'
+			if isArm64PrologueOrEpilogue(op) 'skipPeOp'
+				continue
+			end 'skipPeOp'
+			dstBlock.ops.push(op)
+		end 'eachOp'
+
+		// Handle the terminator: ARM64 uses epilogue as the block terminator
+		// for return blocks. The epilogue op includes the ret instruction.
+		if srcBlock.hasTerminator 'hasTerm'
+			if isArm64EpilogueTerminator(srcBlock.terminator) 'termIsEpilogue'
+				// Re-emit the epilogue as the terminator with our computed stack size.
+				dstBlock.hasTerminator = true
+				dstBlock.terminator = MlirOp.arm64(Arm64Op.epilogue)
+			end 'termIsEpilogue' else 'otherTerm'
+				dstBlock.hasTerminator = srcBlock.hasTerminator
+				dstBlock.terminator = srcBlock.terminator
+			end 'otherTerm'
+		end 'hasTerm'
+	end 'eachBlock'
+end 'insertArm64PrologueEpilogue'

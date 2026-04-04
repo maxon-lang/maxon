@@ -155,6 +155,45 @@ function getMirBinOpLatency(opcode MirBinOpcode, table TargetLatencyTable) retur
 	end 'dispatch'
 end 'getMirBinOpLatency'
 
+// Dispatch prologue/epilogue insertion for a single function to the target backend.
+export function insertPrologueEpilogueForFunc(srcFunc MlirFunction, target Target) returns MlirFunction
+	var dstFunc = cloneFunctionShell(srcFunc)
+
+	// First pass: compute the frame layout from the source function.
+	let frameInfo = computeFrameInfo(srcFunc)
+	let stackSize = frameInfo.alignedSize
+
+	logTrace(LogCategory.mlir, message: () gives "  frame: var={frameInfo.varAreaSize} spill={frameInfo.spillAreaSize} total={frameInfo.totalStackSize} aligned={stackSize}")
+
+	// Second pass: copy blocks, stripping existing prologue/epilogue ops
+	// and inserting new ones at the correct positions.
+	match target.cpu 'dispatchCpu'
+		x64 then insertX64PrologueEpilogue(srcFunc, dstFunc: dstFunc, stackSize: stackSize)
+		arm64 then insertArm64PrologueEpilogue(srcFunc, dstFunc: dstFunc, stackSize: stackSize)
+		wasm32 then panic("prologue/epilogue not used for WASM targets")
+	end 'dispatchCpu'
+
+	// Preserve region metadata
+	dstFunc.nextBlockId = srcFunc.nextBlockId
+	return dstFunc
+end 'insertPrologueEpilogueForFunc'
+
+// Scan a single op for frame-relevant information (target dispatch).
+export function scanOpForFrameInfo(op MlirOp, state FrameScanState)
+	match op 'outer'
+		maxon to sys then break 'outer'
+		mir then break 'outer'
+		x64(x64Op) then scanX64InstrForFrame(x64Op, state: state)
+		arm64(a64Op) then scanArm64InstrForFrame(a64Op, state: state)
+	end 'outer'
+	// Runtime ops indicate print operations that need buffer space
+	match op 'checkPrint'
+		maxon to memref then break 'checkPrint'
+		runtime then state.hasPrint = true
+		sys to arm64 then break 'checkPrint'
+	end 'checkPrint'
+end 'scanOpForFrameInfo'
+
 export function lowerToTarget(module MlirModule, target Target, globalData GlobalDataTable) returns MlirModule
 	return match target.cpu 'cpu'
 		x64 gives lowerMidToX64(module, target: target, globalData: globalData)
