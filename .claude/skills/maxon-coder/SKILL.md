@@ -1,7 +1,6 @@
 ---
 name: maxon-coder
 description: Write or modify Maxon (.maxon) code. Use this skill whenever you need to create, edit, or review Maxon source files. Ensures correct syntax and avoids common mistakes.
-model: claude-sonnet-4-6
 ---
 
 Read `docs/WRITING_MAXON_CODE.md` before writing any Maxon code. It contains mandatory syntax rules, common mistakes, and the correct patterns. Refer to `docs/LANGUAGE_REFERENCE.md` for full specification and `docs/QUICK_REFERENCE.md` for API reference.

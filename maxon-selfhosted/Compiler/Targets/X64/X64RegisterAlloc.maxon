@@ -95,12 +95,14 @@ end 'rmEmitEpilogueX64'
 // --- Register pool configuration ---
 
 export function createX64GprPool() returns RegIntArray
-	// rax=0, rcx=1, rdx=2, rbx=3, rsi=6, rdi=7, r8=8, r9=9
-	return [0, 1, 2, 3, 6, 7, 8, 9]
+	// Ordered to defer rax/rdx (clobbered by cqo/idiv) and rcx (shift count).
+	// General-purpose first, then special-use last.
+	// rbx=3, rsi=6, rdi=7, r8=8, r9=9, r12-r15 (callee-saved), rcx=1, rdx=2, rax=0
+	return [3, 6, 7, 8, 9, 12, 13, 14, 15, 1, 2, 0]
 end 'createX64GprPool'
 
 export function createX64CallerSavedGprs() returns RegIntArray
-	// All allocatable registers are caller-saved in Maxon's calling convention
+	// Only caller-saved registers; r12-r15 are callee-saved and preserved across calls
 	// rax=0, rcx=1, rdx=2, rbx=3, rsi=6, rdi=7, r8=8, r9=9
 	return [0, 1, 2, 3, 6, 7, 8, 9]
 end 'createX64CallerSavedGprs'
@@ -143,6 +145,12 @@ export function rmRegNameX64(ord RegOrdinal) returns String
 		7 gives "rdi"
 		8 gives "r8"
 		9 gives "r9"
+		10 gives "r10"
+		11 gives "r11"
+		12 gives "r12"
+		13 gives "r13"
+		14 gives "r14"
+		15 gives "r15"
 		default panic("rmRegNameX64: unknown register ordinal {ord}")
 	end 'x64name'
 end 'rmRegNameX64'
@@ -335,6 +343,113 @@ export function countX64OpReads(counts RegIntArray, x64Op X64Op)
 	end 'scan'
 end 'countX64OpReads'
 
+// Record the block index where each value is defined.
+// defBlocks[valueId] = blockIdx (using rmSet).
+export function noteX64OpDefs(defBlocks RegIntArray, blockIdx RegInt, x64Op X64Op)
+	let pat = x64Op.rawValue.pattern
+	match pat 'patDef'
+		passThrough then break 'patDef'
+		singleDef then noteX64SingleDef(defBlocks, blockIdx: blockIdx, op: x64Op)
+		singleUse then break 'patDef'
+		defUse then noteX64DefUse(defBlocks, blockIdx: blockIdx, op: x64Op)
+		twoAddr then noteX64TwoAddr(defBlocks, blockIdx: blockIdx, op: x64Op)
+		useDefImm then noteX64UseDefImm(defBlocks, blockIdx: blockIdx, op: x64Op)
+		unaryInPlace then noteX64UnaryInPlace(defBlocks, blockIdx: blockIdx, op: x64Op)
+		threeAddr to baseUseSrcUse then break 'patDef'
+		baseUseDest then noteX64BaseUseDest(defBlocks, blockIdx: blockIdx, op: x64Op)
+		fpSingleDef to fpMov then break 'patDef'
+		gprToFp to baseUseFpDef then break 'patDef'
+		movRegReg then break 'patDef'
+		constImm then noteX64ConstImm(defBlocks, blockIdx: blockIdx, op: x64Op)
+		shift then noteX64Shift(defBlocks, blockIdx: blockIdx, op: x64Op)
+		divReg to csel then break 'patDef'
+	end 'patDef'
+end 'noteX64OpDefs'
+
+function noteX64DefId(defBlocks RegIntArray, blockIdx RegInt, vreg X64VReg)
+	let id = x64VRegId(vreg)
+	if id >= 0 'valid'
+		rmSet(defBlocks, index: id, value: blockIdx, sentinel: -1)
+	end 'valid'
+end 'noteX64DefId'
+
+function noteX64SingleDef(defBlocks RegIntArray, blockIdx RegInt, op X64Op)
+	match op 'extract'
+		loadSlot(dest, _) then noteX64DefId(defBlocks, blockIdx: blockIdx, vreg: dest)
+		loadRegRbpOffset(dest, _) then noteX64DefId(defBlocks, blockIdx: blockIdx, vreg: dest)
+		reloadFromStack(dest, _) then noteX64DefId(defBlocks, blockIdx: blockIdx, vreg: dest)
+		xorRegRegSelf(reg) then noteX64DefId(defBlocks, blockIdx: blockIdx, vreg: reg)
+		globalLoad(dest, _, _) then noteX64DefId(defBlocks, blockIdx: blockIdx, vreg: dest)
+		leaFromStack(dest, _) then noteX64DefId(defBlocks, blockIdx: blockIdx, vreg: dest)
+		leaRipRelative(dest, _) then noteX64DefId(defBlocks, blockIdx: blockIdx, vreg: dest)
+		leaFuncAddr(dest, _) then noteX64DefId(defBlocks, blockIdx: blockIdx, vreg: dest)
+		setcc(dest, _) then noteX64DefId(defBlocks, blockIdx: blockIdx, vreg: dest)
+		default panic("noteX64: unexpected op for pattern")
+	end 'extract'
+end 'noteX64SingleDef'
+
+function noteX64DefUse(defBlocks RegIntArray, blockIdx RegInt, op X64Op)
+	match op 'extract'
+		movsxd(dest, _) then noteX64DefId(defBlocks, blockIdx: blockIdx, vreg: dest)
+		movzx32(dest, _) then noteX64DefId(defBlocks, blockIdx: blockIdx, vreg: dest)
+		default panic("noteX64: unexpected op for pattern")
+	end 'extract'
+end 'noteX64DefUse'
+
+function noteX64TwoAddr(defBlocks RegIntArray, blockIdx RegInt, op X64Op)
+	match op 'extract'
+		addRegReg(dest, _) then noteX64DefId(defBlocks, blockIdx: blockIdx, vreg: dest)
+		subRegReg(dest, _) then noteX64DefId(defBlocks, blockIdx: blockIdx, vreg: dest)
+		imulRegReg(dest, _) then noteX64DefId(defBlocks, blockIdx: blockIdx, vreg: dest)
+		andRegReg(dest, _) then noteX64DefId(defBlocks, blockIdx: blockIdx, vreg: dest)
+		orRegReg(dest, _) then noteX64DefId(defBlocks, blockIdx: blockIdx, vreg: dest)
+		xorRegReg(dest, _) then noteX64DefId(defBlocks, blockIdx: blockIdx, vreg: dest)
+		cmov(dest, _, _) then noteX64DefId(defBlocks, blockIdx: blockIdx, vreg: dest)
+		default panic("noteX64: unexpected op for pattern")
+	end 'extract'
+end 'noteX64TwoAddr'
+
+function noteX64UseDefImm(defBlocks RegIntArray, blockIdx RegInt, op X64Op)
+	match op 'extract'
+		addRegImm(dest, _) then noteX64DefId(defBlocks, blockIdx: blockIdx, vreg: dest)
+		subRegImm(dest, _) then noteX64DefId(defBlocks, blockIdx: blockIdx, vreg: dest)
+		default panic("noteX64: unexpected op for pattern")
+	end 'extract'
+end 'noteX64UseDefImm'
+
+function noteX64UnaryInPlace(defBlocks RegIntArray, blockIdx RegInt, op X64Op)
+	match op 'extract'
+		negReg(reg) then noteX64DefId(defBlocks, blockIdx: blockIdx, vreg: reg)
+		bitNotReg(reg) then noteX64DefId(defBlocks, blockIdx: blockIdx, vreg: reg)
+		default panic("noteX64: unexpected op for pattern")
+	end 'extract'
+end 'noteX64UnaryInPlace'
+
+function noteX64BaseUseDest(defBlocks RegIntArray, blockIdx RegInt, op X64Op)
+	match op 'extract'
+		loadIndirect(dest, _, _, _) then noteX64DefId(defBlocks, blockIdx: blockIdx, vreg: dest)
+		nullSafeLoad(dest, _, _) then noteX64DefId(defBlocks, blockIdx: blockIdx, vreg: dest)
+		default panic("noteX64: unexpected op for pattern")
+	end 'extract'
+end 'noteX64BaseUseDest'
+
+function noteX64ConstImm(defBlocks RegIntArray, blockIdx RegInt, op X64Op)
+	match op 'extract'
+		movRegImm(dest, _) then noteX64DefId(defBlocks, blockIdx: blockIdx, vreg: dest)
+		movRegImm32(dest, _) then noteX64DefId(defBlocks, blockIdx: blockIdx, vreg: dest)
+		default panic("noteX64: unexpected op for pattern")
+	end 'extract'
+end 'noteX64ConstImm'
+
+function noteX64Shift(defBlocks RegIntArray, blockIdx RegInt, op X64Op)
+	match op 'extract'
+		shlRegCl(dest, _, _) then noteX64DefId(defBlocks, blockIdx: blockIdx, vreg: dest)
+		sarRegCl(dest, _, _) then noteX64DefId(defBlocks, blockIdx: blockIdx, vreg: dest)
+		shrRegCl(dest, _, _) then noteX64DefId(defBlocks, blockIdx: blockIdx, vreg: dest)
+		default panic("noteX64: unexpected op for pattern")
+	end 'extract'
+end 'noteX64Shift'
+
 function countX64TwoReads(counts RegIntArray, reg1 X64VReg, reg2 X64VReg)
 	incUse(counts, id: x64VRegId(reg1))
 	incUse(counts, id: x64VRegId(reg2))
@@ -395,40 +510,37 @@ end 'isX64RetTerminator'
 // X64 forward hints
 // ============================================================
 
-// Pre-scan to identify division setup patterns and set forward register hints.
+// Pre-scan to set forward register hints for movRegReg(physical, virtual) patterns.
+// This covers call arg setup, return value setup, and div dividend setup.
 export function computeForwardHints(srcFunc MlirFunction) returns RegIntArray
 	let hints = RegIntArray.create()
-	let raxOrd = x64RegToOrdinal(X64Register.rax)
 	for srcBlock in srcFunc.blocks 'eachBlock'
-		let opCount = srcBlock.ops.count()
-		var opIdx = 0
-		while opIdx < opCount 'eachOp'
-			let op = try srcBlock.ops.get(opIdx) otherwise 'skipOp'
-				opIdx = opIdx + 1
-				continue
-			end 'skipOp'
+		for op in srcBlock.ops 'eachOp'
 			match op 'checkOp'
-				x64(x64Op) then scanForwardHintX64(hints, x64Op: x64Op, ops: srcBlock.ops, opIdx: opIdx, opCount: opCount, raxOrd: raxOrd)
+				x64(x64Op) then scanForwardHintX64(hints, x64Op: x64Op)
 				maxon to mir then break 'checkOp'
 				arm64 then break 'checkOp'
 			end 'checkOp'
-			opIdx = opIdx + 1
 		end 'eachOp'
 	end 'eachBlock'
 	return hints
 end 'computeForwardHints'
 
-function scanForwardHintX64(hints RegIntArray, x64Op X64Op, ops MlirOpArray, opIdx RegInt, opCount RegInt, raxOrd RegOrdinal)
+function scanForwardHintX64(hints RegIntArray, x64Op X64Op)
+	// Any movRegReg(physical_dest, virtual_src) hints src to dest.
+	// This covers call arg setup (hint to rcx/rdx/r8/r9), return value setup
+	// (hint to rax), and div setup (hint dividend to rax). If the value ends
+	// up in the hinted register, the movRegReg becomes a no-op.
 	if x64Op.rawValue.pattern == OpPattern.movRegReg 'isMov'
 		match x64Op 'extractMov'
-			movRegReg(destReg, srcReg) then scanForwardHintMovRegReg(hints, destReg: destReg, srcReg: srcReg, ops: ops, opIdx: opIdx, opCount: opCount, raxOrd: raxOrd)
+			movRegReg(destReg, srcReg) then scanForwardHintMovRegReg(hints, destReg: destReg, srcReg: srcReg)
 			prologue to memcpyOp then break 'extractMov'
 			cmpRegReg to repStosq then break 'extractMov'
 		end 'extractMov'
 	end 'isMov'
 end 'scanForwardHintX64'
 
-function scanForwardHintMovRegReg(hints RegIntArray, destReg X64VReg, srcReg X64VReg, ops MlirOpArray, opIdx RegInt, opCount RegInt, raxOrd RegOrdinal)
+function scanForwardHintMovRegReg(hints RegIntArray, destReg X64VReg, srcReg X64VReg)
 	// Only interested in movRegReg(physical, virtual)
 	if isVirtualGpr(destReg) 'destIsVirt'
 		return
@@ -444,34 +556,33 @@ function scanForwardHintMovRegReg(hints RegIntArray, destReg X64VReg, srcReg X64
 	if destOrd == RM_NONE 'noOrd'
 		return
 	end 'noOrd'
-	// Look ahead 1-3 ops for a confirming instruction (cqo for div)
-	var lookIdx = opIdx + 1
-	let lookEnd = opIdx + 4
-	while lookIdx < opCount and lookIdx < lookEnd 'lookAhead'
-		let nextOp = try ops.get(lookIdx) otherwise 'skipLook'
-			lookIdx = lookIdx + 1
-			continue
-		end 'skipLook'
-		match nextOp 'checkNext'
-			x64(nextX64) then scanForwardHintConfirm(hints, nextX64: nextX64, srcId: srcId, destOrd: destOrd, raxOrd: raxOrd)
-			maxon to mir then break 'checkNext'
-			arm64 then break 'checkNext'
-		end 'checkNext'
-		lookIdx = lookIdx + 1
-	end 'lookAhead'
+	// Only set hint if none exists yet. Last-write would cause conflicts
+	// when the same value is moved to different physical registers in
+	// different blocks (e.g. rax for return, rcx for call arg).
+	let existing = rmGetOr(hints, index: srcId, fallback: RM_NONE)
+	if existing == RM_NONE 'noExistingHint'
+		rmSet(hints, index: srcId, value: destOrd, sentinel: RM_NONE)
+	end 'noExistingHint'
 end 'scanForwardHintMovRegReg'
 
-function scanForwardHintConfirm(hints RegIntArray, nextX64 X64Op, srcId RegInt, destOrd RegOrdinal, raxOrd RegOrdinal)
-	if (nextX64.rawValue.implicitGprReads and REG_RAX) != 0 'confirm'
-		confirmDivHint(hints, srcId: srcId, destOrd: destOrd, raxOrd: raxOrd)
-	end 'confirm'
-end 'scanForwardHintConfirm'
-
-function confirmDivHint(hints RegIntArray, srcId RegInt, destOrd RegOrdinal, raxOrd RegOrdinal)
-	if destOrd == raxOrd 'isRax'
-		rmSet(hints, index: srcId, value: raxOrd, sentinel: RM_NONE)
-	end 'isRax'
-end 'confirmDivHint'
+// Filter out hints that would pin a multi-use value to a register clobbered
+// by idiv (rax/rdx). These values are likely loop-carried and will be evicted
+// when the division needs rax, causing a spill.
+export function filterConflictingHints(hints RegIntArray, useCounts RegIntArray)
+	let raxOrd = x64RegToOrdinal(X64Register.rax)
+	let rdxOrd = x64RegToOrdinal(X64Register.rdx)
+	var i = 0
+	while i < hints.count() 'filter'
+		let hintOrd = rmGetOr(hints, index: i, fallback: RM_NONE)
+		if hintOrd == raxOrd or hintOrd == rdxOrd 'isClobbered'
+			let useCount = rmGetOr(useCounts, index: i, fallback: 0)
+			if useCount > 1 'multiUse'
+				rmSet(hints, index: i, value: RM_NONE, sentinel: RM_NONE)
+			end 'multiUse'
+		end 'isClobbered'
+		i = i + 1
+	end 'filter'
+end 'filterConflictingHints'
 
 // Apply forward hints to registerHints so the allocator prefers
 // the hinted register when allocating the dividend value.
@@ -633,10 +744,40 @@ end 'rmCheckBlockArgLoadSlot'
 
 function rmRecordSlotHomeFromVReg(state RegState, vreg X64VReg, slotIndex VarSlot)
 	match vreg 'recordHome'
-		virtual(id) then rmRecordSlotHomeForId(state, id: id, slotIndex: slotIndex)
+		virtual(id) then rmRecordSlotHomeAndAlias(state, id: id, slotIndex: slotIndex)
 		physical then break 'recordHome'
 	end 'recordHome'
 end 'rmRecordSlotHomeFromVReg'
+
+// Record the stack home for a loadSlot value, and if a register already holds
+// a value at the same stack location, alias the new value to that register.
+// This eliminates redundant reloads after condBr snapshot restores.
+function rmRecordSlotHomeAndAlias(state RegState, id RegInt, slotIndex VarSlot)
+	rmRecordSlotHomeForId(state, id: id, slotIndex: slotIndex)
+	let slotOffset = 0 - (slotIndex + 1) * 8
+	// Scan registers for an existing value with the same stack home.
+	var i = 0
+	while i < state.gprPoolSize 'scanRegs'
+		let regOrd = try state.gprPool.get(i) otherwise 'skipReg'
+			i = i + 1
+			continue
+		end 'skipReg'
+		let occupant = rmGetOr(state.registerContents, index: regOrd, fallback: RM_NONE)
+		if occupant != RM_NONE and occupant != id 'occupied'
+			let occInfo = rmGetValueInfo(state, valueId: occupant)
+			if occInfo.stackHome == slotOffset 'sameSlot'
+				// This register holds a value from the same stack slot.
+				// Alias the new value ID to this register, replacing the old occupant.
+				var newInfo = rmGetValueInfo(state, valueId: id)
+				newInfo.gprOrdinal = regOrd
+				state.registerContents.set(regOrd, value: id)
+				state.lastUsed.set(regOrd, value: state.currentOpIndex)
+				return
+			end 'sameSlot'
+		end 'occupied'
+		i = i + 1
+	end 'scanRegs'
+end 'rmRecordSlotHomeAndAlias'
 
 // ============================================================
 // X64 register allocation helpers
@@ -1352,12 +1493,26 @@ function allocPassThrough(state RegState, x64Op X64Op, dstBlock MlirBlock, isCal
 end 'allocPassThrough'
 
 function allocSingleDef(state RegState, x64Op X64Op, dstBlock MlirBlock, implicitDefs RegMask, implicitReads RegMask)
-	rmPrepImplicitDefs(state, implicitDefs: implicitDefs, implicitReads: implicitReads, dstBlock: dstBlock)
+	// If the dest value is already in a register (e.g. from condBr snapshot alias),
+	// skip the op entirely — the value doesn't need to be reloaded.
 	let dest = x64GetSingleDef(x64Op)
+	let existingOrd = x64VRegExistingGpr(state, vreg: dest)
+	if existingOrd != RM_NONE 'alreadyAllocated'
+		return
+	end 'alreadyAllocated'
+	rmPrepImplicitDefs(state, implicitDefs: implicitDefs, implicitReads: implicitReads, dstBlock: dstBlock)
 	let d = x64ResolveGprDef(state, vreg: dest, dstBlock: dstBlock, protect1: RM_NONE, protect2: RM_NONE)
 	dstBlock.ops.push(MlirOp.x64(x64WithSingleDef(x64Op, d: d)))
 	rmClearImplicitDefs(state, implicitDefs: implicitDefs)
 end 'allocSingleDef'
+
+// Check if a virtual register is already allocated to a GPR.
+function x64VRegExistingGpr(state RegState, vreg X64VReg) returns RegOrdinal
+	return match vreg 'check'
+		virtual(id) gives rmGetValueInfo(state, valueId: id).gprOrdinal
+		physical gives RM_NONE
+	end 'check'
+end 'x64VRegExistingGpr'
 
 function allocSingleUse(state RegState, x64Op X64Op, dstBlock MlirBlock, implicitDefs RegMask, implicitReads RegMask)
 	rmPrepImplicitDefs(state, implicitDefs: implicitDefs, implicitReads: implicitReads, dstBlock: dstBlock)

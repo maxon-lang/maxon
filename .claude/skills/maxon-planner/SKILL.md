@@ -1,7 +1,6 @@
 ---
 name: maxon-planner
 description: Plan and coordinate implementation of new features or roadmap phases in the Maxon self-hosted compiler. Use this skill when the user asks to plan a feature, design an implementation approach, figure out what needs to change for a compiler feature, or coordinate a multi-step compiler change. Triggers on phrases like "plan", "design", "figure out how to implement", "what would it take to add", "implementation plan", "plan the next phase".
-model: claude-opus-4-6
 ---
 
 Create a detailed implementation plan for a feature or roadmap phase in the self-hosted Maxon compiler, then coordinate implementation using the maxon-coder skill.

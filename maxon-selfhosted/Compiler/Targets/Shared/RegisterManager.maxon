@@ -51,12 +51,19 @@ export enum OpPattern
 	csel
 end 'OpPattern'
 
-// Prepare implicit def registers before an op: spill/relocate any occupied registers
+// Prepare implicit def registers before an op: relocate or spill any occupied registers
 // that will be implicitly clobbered. Protects registers in implicitReads.
+// Prefers relocating to a free register over spilling to the stack.
 export function rmPrepImplicitDefs(state RegState, implicitDefs RegMask, implicitReads RegMask, dstBlock MlirBlock)
 	if implicitDefs == 0 'noDefs'
 		return
 	end 'noDefs'
+	// In diverging blocks, the call never returns so no values need preserving.
+	if state.isInDivergingBlock 'diverging'
+		return
+	end 'diverging'
+	// Protect mask: don't relocate into any implicitly defined or read register.
+	let protectMask = implicitDefs or implicitReads
 	var bit = 0
 	var mask = implicitDefs
 	while mask != 0 'eachBit'
@@ -64,7 +71,11 @@ export function rmPrepImplicitDefs(state RegState, implicitDefs RegMask, implici
 			// Check if this register is in the protect (implicitReads) set
 			let isProtected = (implicitReads and(1 shl bit)) != 0
 			if not isProtected 'notProtected'
-				rmSpillRegisterIfOccupied(state, regOrdinal: bit, dstBlock: dstBlock)
+				// Try relocating to a free register first to avoid a stack spill.
+				let relocated = rmRelocateRegisterProtectMask(state, regOrdinal: bit, dstBlock: dstBlock, protectMask: protectMask)
+				if relocated == RM_NONE 'noFreeReg'
+					rmSpillRegisterIfOccupied(state, regOrdinal: bit, dstBlock: dstBlock)
+				end 'noFreeReg'
 			end 'notProtected'
 		end 'hasBit'
 		mask = mask shr 1
@@ -229,6 +240,8 @@ export type RegSnapshot
 	end 'create'
 end 'RegSnapshot'
 
+export typealias SnapshotMap = Map with(RegInt, RegSnapshot)
+
 function rmCopyArray(src RegIntArray) returns RegIntArray
 	let dst = RegIntArray.create()
 	for val in src 'copy'
@@ -240,7 +253,7 @@ end 'rmCopyArray'
 function rmCopyValueInfoArray(src ValueInfoArray) returns ValueInfoArray
 	let dst = ValueInfoArray.create()
 	for val in src 'copy'
-		dst.push(val)
+		dst.push(val.clone())
 	end 'copy'
 	return dst
 end 'rmCopyValueInfoArray'
@@ -278,6 +291,34 @@ export function rmRestoreState(state RegState, snapshot RegSnapshot)
 	state.nextFreshFpIndex = 0
 	state.currentOpIndex = 0
 end 'rmRestoreState'
+
+// Restore register state but preserve spill watermarks from both paths.
+// Used for condBr targets where both paths are live (unlike diverging blocks).
+export function rmRestoreStatePreserveSpills(state RegState, snapshot RegSnapshot)
+	state.registerContents = rmCopyArray(snapshot.registerContents)
+	state.values = rmCopyValueInfoArray(snapshot.values)
+	state.fpContents = rmCopyArray(snapshot.fpContents)
+	// Keep the current spill offsets if they've grown beyond the snapshot's,
+	// since the fallthrough path may have allocated spill slots that are still live.
+	if state.spillsGrowDown 'growDown'
+		if snapshot.nextSpillOffset < state.nextSpillOffset 'snapshotDeeper'
+			state.nextSpillOffset = snapshot.nextSpillOffset
+		end 'snapshotDeeper'
+		if snapshot.minSpillOffset < state.minSpillOffset 'snapshotMinDeeper'
+			state.minSpillOffset = snapshot.minSpillOffset
+		end 'snapshotMinDeeper'
+	end 'growDown' else 'growUp'
+		if snapshot.nextSpillOffset > state.nextSpillOffset 'snapshotHigher'
+			state.nextSpillOffset = snapshot.nextSpillOffset
+		end 'snapshotHigher'
+		if snapshot.minSpillOffset > state.minSpillOffset 'snapshotMinHigher'
+			state.minSpillOffset = snapshot.minSpillOffset
+		end 'snapshotMinHigher'
+	end 'growUp'
+	state.nextFreshIndex = 0
+	state.nextFreshFpIndex = 0
+	state.currentOpIndex = 0
+end 'rmRestoreStatePreserveSpills'
 
 // --- Initialization ---
 
@@ -494,6 +535,41 @@ export function rmRelocateRegister(state RegState, regOrdinal RegOrdinal, dstBlo
 	end 'scanFree'
 	return RM_NONE
 end 'rmRelocateRegister'
+
+// Relocate a value from one register to a free register, protecting all registers
+// whose bit is set in protectMask. Returns the new register ordinal, or RM_NONE
+// if no free register was found (caller should fall back to rmSpillRegisterIfOccupied).
+function rmRelocateRegisterProtectMask(state RegState, regOrdinal RegOrdinal, dstBlock MlirBlock, protectMask RegMask) returns RegOrdinal
+	let existing = rmGetOr(state.registerContents, index: regOrdinal, fallback: RM_NONE)
+	if existing == RM_NONE 'empty'
+		return RM_NONE
+	end 'empty'
+	var i = 0
+	while i < state.gprPoolSize 'scanFree'
+		let candidate = try state.gprPool.get(i) otherwise 'skip'
+			i = i + 1
+			continue
+		end 'skip'
+		if candidate == regOrdinal or (protectMask and (1 shl candidate)) != 0 'skipProtected'
+			i = i + 1
+			continue
+		end 'skipProtected'
+		let occupant = rmGetOr(state.registerContents, index: candidate, fallback: RM_NONE)
+		if occupant == RM_NONE 'found'
+			logTrace(LogCategory.mlir, message: () gives "regalloc: relocate v{existing} from {targetRegName(state, ord: regOrdinal)} to {targetRegName(state, ord: candidate)} (func={state.funcName})")
+			targetEmitMovReg(state, dstBlock: dstBlock, destOrd: candidate, srcOrd: regOrdinal)
+			state.registerContents.set(candidate, value: existing)
+			var existInfo = rmGetValueInfo(state, valueId: existing)
+			existInfo.gprOrdinal = candidate
+			state.lastUsed.set(candidate, value: state.currentOpIndex)
+			state.registerContents.set(regOrdinal, value: RM_NONE)
+			state.lastUsed.set(regOrdinal, value: 0)
+			return candidate
+		end 'found'
+		i = i + 1
+	end 'scanFree'
+	return RM_NONE
+end 'rmRelocateRegisterProtectMask'
 
 // --- LRU eviction ---
 
@@ -910,6 +986,11 @@ end 'rmTransferFpValueSafe'
 // --- Caller-saved register management ---
 
 export function rmSpillAllCallerSaved(state RegState, dstBlock MlirBlock)
+	// In diverging blocks (panic paths), the call never returns so no registers
+	// need to be preserved across it.
+	if state.isInDivergingBlock 'diverging'
+		return
+	end 'diverging'
 	// Spill GPR caller-saved registers
 	var i = 0
 	let count = state.callerSavedGprs.count()
@@ -1806,14 +1887,134 @@ function computeDeferredValues(srcFunc MlirFunction, state RegState) returns Reg
 	return result
 end 'computeDeferredValues'
 
+// Pre-scan to identify which blocks need cross-block spilling.
+// A block needs spilling if a value defined in that block is used in a later block.
+// Returns a RegIntArray where needsSpill[blockIdx] = 1 if spilling is needed.
+function computeCrossBlockSpillSet(srcFunc MlirFunction, state RegState) returns RegIntArray
+	let defBlocks = RegIntArray.create()
+	let readBlocks = RegIntArray.create()
+	let needsSpill = RegIntArray.create()
+
+	// Pass 1: record which block defines each value
+	let blockCount = srcFunc.blocks.count()
+	var bi = 0
+	while bi < blockCount 'recordDefs'
+		let blk = try srcFunc.blocks.get(bi) otherwise 'skipDef'
+			bi = bi + 1
+			continue
+		end 'skipDef'
+		for op in blk.ops 'eachOp'
+			targetNoteOpDefs(state, defBlocks: defBlocks, blockIdx: bi, op: op)
+		end 'eachOp'
+		if blk.hasTerminator 'hasTerm'
+			targetNoteOpDefs(state, defBlocks: defBlocks, blockIdx: bi, op: blk.terminator)
+		end 'hasTerm'
+		bi = bi + 1
+	end 'recordDefs'
+
+	// Pass 2: for each read, check if the def was in a different block.
+	// If so, mark all blocks between def and use as needing cross-block spill.
+	bi = 0
+	while bi < blockCount 'recordReads'
+		let blk = try srcFunc.blocks.get(bi) otherwise 'skipRead'
+			bi = bi + 1
+			continue
+		end 'skipRead'
+		// Use readBlocks as a scratch array to collect read IDs per op
+		for op in blk.ops 'eachOp'
+			collectCrossBlockReads(state, op: op, useBlock: bi, defBlocks: defBlocks, needsSpill: needsSpill, scratch: readBlocks)
+		end 'eachOp'
+		if blk.hasTerminator 'hasTerm'
+			collectCrossBlockReads(state, op: blk.terminator, useBlock: bi, defBlocks: defBlocks, needsSpill: needsSpill, scratch: readBlocks)
+		end 'hasTerm'
+		bi = bi + 1
+	end 'recordReads'
+
+	return needsSpill
+end 'computeCrossBlockSpillSet'
+
+// For a single op, check all its reads against the defBlocks map.
+// Mark blocks between def and use as needing spill.
+function collectCrossBlockReads(state RegState, op MlirOp, useBlock RegInt, defBlocks RegIntArray, needsSpill RegIntArray, scratch RegIntArray)
+	// Reuse targetCountOpReads to increment scratch counters for read values.
+	// We only care about which IDs are read, not the counts.
+	targetCountOpReads(state, counts: scratch, op: op)
+	// Check any value IDs that have been read
+	let newCount = scratch.count()
+	var i = 0
+	while i < newCount 'checkReads'
+		let cnt = rmGetOr(scratch, index: i, fallback: 0)
+		if cnt > 0 'hasRead'
+			let defBlock = rmGetOr(defBlocks, index: i, fallback: -1)
+			if defBlock >= 0 and defBlock != useBlock 'crossBlock'
+				// Mark all blocks from def to use-1 as needing spill
+				var k = defBlock
+				while k < useBlock 'markBlocks'
+					rmSet(needsSpill, index: k, value: 1, sentinel: 0)
+					k = k + 1
+				end 'markBlocks'
+			end 'crossBlock'
+		end 'hasRead'
+		i = i + 1
+	end 'checkReads'
+end 'collectCrossBlockReads'
+
 // Check whether a terminator op is a return instruction (no successors).
 function isReturnTerminator(op MlirOp, state RegState) returns bool
 	return targetIsReturnTerminator(state, op: op)
 end 'isReturnTerminator'
 
-// Check if a terminator op branches to a diverging block (e.g. condJump targeting
-// a panic block). This lets us save register state before blocks that conditionally
-// branch to panic, avoiding unnecessary spills on the happy path.
+// Check if a terminator is a conditional branch (condJump/condBranch).
+function terminatorIsConditionalBranch(op MlirOp) returns bool
+	return match op 'check'
+		x64(x64Op) gives x64IsCondBranch(x64Op)
+		arm64(arm64Op) gives arm64IsCondBranch(arm64Op)
+		maxon to mir gives false
+	end 'check'
+end 'terminatorIsConditionalBranch'
+
+function x64IsCondBranch(op X64Op) returns bool
+	return match op 'check'
+		condJump gives true
+		prologue to testRaxRax gives false
+		jmp to repStosq gives false
+	end 'check'
+end 'x64IsCondBranch'
+
+function arm64IsCondBranch(op Arm64Op) returns bool
+	return match op 'check'
+		condBranch gives true
+		prologue to cmpRegZero gives false
+		branch to nullSafeLoad gives false
+	end 'check'
+end 'arm64IsCondBranch'
+
+// Get the jump target block ID from a conditional branch terminator.
+// Returns -1 if not a conditional branch.
+function getCondBrTargetBlockId(op MlirOp) returns RegInt
+	return match op 'check'
+		x64(x64Op) gives x64GetCondBrTarget(x64Op)
+		arm64(arm64Op) gives arm64GetCondBrTarget(arm64Op)
+		maxon to mir gives -1
+	end 'check'
+end 'getCondBrTargetBlockId'
+
+function x64GetCondBrTarget(op X64Op) returns RegInt
+	return match op 'check'
+		condJump(_, targetBlock) gives targetBlock
+		prologue to testRaxRax gives -1
+		jmp to repStosq gives -1
+	end 'check'
+end 'x64GetCondBrTarget'
+
+function arm64GetCondBrTarget(op Arm64Op) returns RegInt
+	return match op 'check'
+		condBranch(_, targetBlock) gives targetBlock
+		prologue to cmpRegZero gives -1
+		branch to nullSafeLoad gives -1
+	end 'check'
+end 'arm64GetCondBrTarget'
+
 function terminatorBranchesToDivergingBlock(op MlirOp, divergingBlockIds RegIntArray) returns bool
 	return match op 'check'
 		x64(x64Op) gives x64TerminatorBranchesToDiverging(x64Op, divergingBlockIds: divergingBlockIds)
@@ -1887,10 +2088,14 @@ function allocateRegistersForFunc(srcFunc MlirFunction, target Target) returns M
 		dfi = dfi + 1
 	end 'mergeDeferred'
 
-	// Forward register hints for division/shift.
+	// Forward register hints for movRegReg patterns (call args, return, div).
 	if state.hasForwardHints 'forwardHints'
-		targetComputeAndApplyForwardHints(state, srcFunc: srcFunc)
+		targetComputeAndApplyForwardHints(state, srcFunc: srcFunc, useCounts: useCounts)
 	end 'forwardHints'
+
+	// Cross-block liveness: identify which block boundaries need spilling.
+	// Blocks where no value crosses the boundary can just reset without spilling.
+	let crossBlockSpill = computeCrossBlockSpillSet(srcFunc, state: state)
 
 	// Diverging block detection — pre-scan to identify panic blocks so we can
 	// save/restore register state around them and prevent their spills from
@@ -1913,6 +2118,12 @@ function allocateRegistersForFunc(srcFunc MlirFunction, target Target) returns M
 	var hasSavedState = false
 	var passedDivergingBlock = false
 	var savedSnapshot = rmSaveState(state)
+
+	// Snapshot map for condBr carry-through: when a condBr's jump target is reached,
+	// restore register state from the snapshot saved at the condBr point.
+	// Keyed by block ID.
+	var condBrSnapshots = SnapshotMap.create()
+
 	var blockIdx = 0
 	while blockIdx < blockCount 'eachBlock'
 		let srcBlock = try srcFunc.blocks.get(blockIdx) otherwise 'skipBlock'
@@ -1931,6 +2142,13 @@ function allocateRegistersForFunc(srcFunc MlirFunction, target Target) returns M
 			hasSavedState = false
 			passedDivergingBlock = false
 		end 'restoreBeforeBlock'
+
+		// Check if this block is a condBr jump target with a saved snapshot to restore.
+		if not isBlockDiverging and not hasSavedState and condBrSnapshots.contains(srcBlock.id) 'checkCondBrRestore'
+			logTrace(LogCategory.mlir, message: () gives "regalloc: restore state at condBr target block '{srcBlock.label}' (func={state.funcName})")
+			let snap = try condBrSnapshots.get(srcBlock.id) otherwise RegSnapshot.create(RegIntArray.create(), values: ValueInfoArray.create(), fpContents: RegIntArray.create(), nextSpillOffset: 0, minSpillOffset: 0)
+			rmRestoreStatePreserveSpills(state, snapshot: snap)
+		end 'checkCondBrRestore'
 
 		// Create destination block
 		let blockLabel = srcBlock.label
@@ -1965,10 +2183,25 @@ function allocateRegistersForFunc(srcFunc MlirFunction, target Target) returns M
 			branchTargetIsDiverging = terminatorBranchesToDivergingBlock(srcBlock.terminator, divergingBlockIds: divergingBlockIds)
 		end 'checkBranchTarget'
 
+		// Check if this block's terminator is a condBr to a non-diverging target.
+		// We carry register state through to the fallthrough and save a snapshot
+		// for the jump target to restore later.
+		var isCondBrCarryThrough = false
+		var condBrTargetBlockId = -1
+		if srcBlock.hasTerminator and not isBlockDiverging and not branchTargetIsDiverging and not hasSavedState 'checkCondBr'
+			if terminatorIsConditionalBranch(srcBlock.terminator) 'isCondBr'
+				condBrTargetBlockId = getCondBrTargetBlockId(srcBlock.terminator)
+				if condBrTargetBlockId >= 0 'validTarget'
+					logTrace(LogCategory.mlir, message: () gives "regalloc: condBr carry-through at '{srcBlock.label}' (func={state.funcName})")
+					isCondBrCarryThrough = true
+				end 'validTarget'
+			end 'isCondBr'
+		end 'checkCondBr'
+
 		// Handle terminator
 		if srcBlock.hasTerminator 'hasTerm'
 			// If the next block is diverging, save register state NOW (before spilling)
-			if not isBlockDiverging and not hasSavedState 'checkSaveBeforeSpill'
+			if not isBlockDiverging and not hasSavedState and not isCondBrCarryThrough 'checkSaveBeforeSpill'
 				let nextIsDiverging = blockIdx + 1 < blockCount and rmGetOr(divergingBlocks, index: blockIdx + 1, fallback: 0) == 1
 				if nextIsDiverging 'saveNow'
 					logTrace(LogCategory.mlir, message: () gives "regalloc: save state before diverging block (func={state.funcName})")
@@ -1983,9 +2216,24 @@ function allocateRegistersForFunc(srcFunc MlirFunction, target Target) returns M
 			// jump target is a diverging block (e.g. jg __range_panic). The conditional
 			// jump doesn't clobber registers, so the fallthrough successor gets full
 			// register state — no spill/reload needed on the happy path.
-			if not isReturnTerminator(srcBlock.terminator, state: state) and not hasSavedState and not isBlockDiverging and not branchTargetIsDiverging 'notReturn'
+			// Also skip for condBr carry-through — spill happens but we keep register state.
+			if not isReturnTerminator(srcBlock.terminator, state: state) and not hasSavedState and not isBlockDiverging and not branchTargetIsDiverging and not isCondBrCarryThrough 'notReturn'
 				rmSpillAllBeforeTerminator(state, dstBlock: dstBlock)
 			end 'notReturn'
+
+			// For condBr carry-through: spill live values (so the jump target can
+			// reload from stack) but keep register mappings alive for the fallthrough.
+			// Skip spilling if the fallthrough successor is diverging (e.g. panic) —
+			// the diverging block never returns, so values don't need stack homes.
+			if isCondBrCarryThrough 'condBrSpill'
+				let fallthroughIsDiverging = blockIdx + 1 < blockCount and rmGetOr(divergingBlocks, index: blockIdx + 1, fallback: 0) == 1
+				if not fallthroughIsDiverging 'needsSpill'
+					rmSpillAllBeforeTerminator(state, dstBlock: dstBlock)
+				end 'needsSpill'
+				// Save snapshot AFTER spilling so the jump target gets stack homes.
+				// Register mappings are still live (not cleared) for the fallthrough.
+				condBrSnapshots.upsert(condBrTargetBlockId, value: rmSaveState(state))
+			end 'condBrSpill'
 
 			// Process terminator op
 			targetAllocOp(state, op: srcBlock.terminator, dstBlock: dstBlock)
@@ -2019,9 +2267,18 @@ function allocateRegistersForFunc(srcFunc MlirFunction, target Target) returns M
 				// Register state carries through to the fallthrough successor intact — no
 				// spill or reset needed.
 				logTrace(LogCategory.mlir, message: () gives "regalloc: carry register state through condBr-to-diverging (func={state.funcName})")
-			end 'carryThrough' else 'normalTransition'
+			end 'carryThrough' else if isCondBrCarryThrough 'condBrCarry'
+				// The terminator is a condBr — register state carries through to the
+				// fallthrough successor. Values were already spilled for the jump target.
+				// Don't reset — the next block inherits all register assignments.
+				logTrace(LogCategory.mlir, message: () gives "regalloc: carry register state through condBr (func={state.funcName})")
+			end 'condBrCarry' else if rmGetOr(crossBlockSpill, index: blockIdx, fallback: 0) == 1 'needsSpill'
+				// Values defined in this block are used in a later block — spill live registers.
 				rmResetForBlockTransition(state, prevBlock: dstBlock)
-			end 'normalTransition'
+			end 'needsSpill' else 'noSpillNeeded'
+				// No values cross this block boundary — just clear register state.
+				rmReset(state)
+			end 'noSpillNeeded'
 		end 'notLastBlock'
 
 		blockIdx = blockIdx + 1

@@ -21,54 +21,42 @@ end 'main'
 ExitCode: 42
 ---
 module {
-  func @if-statements.test(c: i64, next: i64) -> i64 {
+  func @if-statements.test(ptr: i64, ptr: i64) -> i64 {
   entry:
     x64.prologue stack_size=16
-    x64.mov [rbp-8], rdx
-    x64.xor rax, rax
-    x64.cmp rcx, rax
-    x64.jne if-statements.test.maybePrefix_0.merge
-  maybePrefix_0:
-    x64.mov rax, 1
-    x64.mov rcx, [rbp-8]
-    x64.cmp rcx, rax
-    x64.jne if-statements.test.isHex_1.after
-  isHex_1:
+    x64.test rcx, rcx
+    x64.mov [rbp+-8], rdx
+    x64.jne maybePrefix_1.after
+  maybePrefix_1:
+    x64.cmp rdx, 1
+    x64.jne isHex_2.after
+  isHex_2:
     x64.mov rax, 1
     x64.epilogue
     x64.ret
-  isHex_1.after:
-    x64.mov rax, 2
-    x64.mov rcx, [rbp-8]
-    x64.cmp rcx, rax
-    x64.jne if-statements.test.isBinary_2.after
-  isBinary_2:
+  isHex_2.after:
+    x64.cmp rdx, 2
+    x64.jne isBinary_4.after
+  isBinary_4:
     x64.mov rax, 2
     x64.epilogue
     x64.ret
-  isBinary_2.after:
-    x64.jmp if-statements.test.maybePrefix_0.merge
-  maybePrefix_0.merge:
+  isBinary_4.after:
+  maybePrefix_1.after:
     x64.mov rax, 42
     x64.epilogue
     x64.ret
   }
-  func @main() -> u32 {
+  func @main() -> u8 {
   entry:
     x64.prologue stack_size=16
     x64.mov rcx, 5
     x64.xor rdx, rdx
     x64.call if-statements.test
-    x64.xor rcx, rcx
-    x64.mov edx, 4294967295
-    x64.cmp rax, rdx
-    x64.jg main.__range_panic_0
-    x64.cmp rax, rcx
-    x64.jl main.__range_panic_0
-    x64.jmp main.__range_ok_0
+    x64.cmp rax, 125
+    x64.jbe __range_ok_0
   __range_panic_0:
-    x64.lea_symdata rax, [__panic_msg_0]
-    x64.mov rcx, rax
+    x64.lea rcx, [rip+__panic_msg_0]
     x64.call mrt_panic
   __range_ok_0:
     x64.epilogue

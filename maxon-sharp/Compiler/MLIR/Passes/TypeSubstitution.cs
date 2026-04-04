@@ -503,7 +503,10 @@ internal class TypeSubstitution {
       var typePart = callee[..dotIdx];
       var methodPart = callee[(dotIdx + 1)..];
       if (_map.TryGetValue(typePart, out var newType)) {
-        return $"{newType.Name}.{methodPart}";
+        var resolvedName = newType is MlirRangedPrimitiveType rpt
+          ? MlirType.FormatAsSourceName(rpt.BaseType)
+          : newType.Name;
+        return $"{resolvedName}.{methodPart}";
       }
     }
     return callee;

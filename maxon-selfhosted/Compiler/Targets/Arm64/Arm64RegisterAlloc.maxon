@@ -304,6 +304,109 @@ export function countArm64OpReads(counts RegIntArray, a64Op Arm64Op)
 	end 'scan'
 end 'countArm64OpReads'
 
+// Record the block index where each value is defined.
+export function noteArm64OpDefs(defBlocks RegIntArray, blockIdx RegInt, a64Op Arm64Op)
+	let pat = a64Op.rawValue.pattern
+	match pat 'patDef'
+		passThrough then break 'patDef'
+		singleDef then noteArm64SingleDef(defBlocks, blockIdx: blockIdx, op: a64Op)
+		singleUse then break 'patDef'
+		defUse then noteArm64DefUse(defBlocks, blockIdx: blockIdx, op: a64Op)
+		twoAddr to unaryInPlace then break 'patDef'
+		threeAddr then noteArm64ThreeAddr(defBlocks, blockIdx: blockIdx, op: a64Op)
+		twoUse to baseUseSrcUse then break 'patDef'
+		baseUseDest then noteArm64BaseUseDest(defBlocks, blockIdx: blockIdx, op: a64Op)
+		fpSingleDef to fpMov then break 'patDef'
+		gprToFp then break 'patDef'
+		fpToGpr then noteArm64FpToGpr(defBlocks, blockIdx: blockIdx, op: a64Op)
+		baseUseFpUse to baseUseFpDef then break 'patDef'
+		movRegReg then break 'patDef'
+		constImm then noteArm64ConstImm(defBlocks, blockIdx: blockIdx, op: a64Op)
+		shift to exchange then break 'patDef'
+		csel then noteArm64Csel(defBlocks, blockIdx: blockIdx, op: a64Op)
+	end 'patDef'
+end 'noteArm64OpDefs'
+
+function noteArm64DefId(defBlocks RegIntArray, blockIdx RegInt, vreg Arm64VReg)
+	let id = arm64VRegId(vreg)
+	if id >= 0 'valid'
+		rmSet(defBlocks, index: id, value: blockIdx, sentinel: -1)
+	end 'valid'
+end 'noteArm64DefId'
+
+function noteArm64ConstImm(defBlocks RegIntArray, blockIdx RegInt, op Arm64Op)
+	match op 'extract'
+		movImm(dest, _) then noteArm64DefId(defBlocks, blockIdx: blockIdx, vreg: dest)
+		prologue to epilogue then break 'extract'
+		strToSlot to nullSafeLoad then break 'extract'
+	end 'extract'
+end 'noteArm64ConstImm'
+
+function noteArm64SingleDef(defBlocks RegIntArray, blockIdx RegInt, op Arm64Op)
+	match op 'extract'
+		ldrFromSlot(dest, _) then noteArm64DefId(defBlocks, blockIdx: blockIdx, vreg: dest)
+		reloadFromStack(dest, _) then noteArm64DefId(defBlocks, blockIdx: blockIdx, vreg: dest)
+		globalLoad(dest, _, _) then noteArm64DefId(defBlocks, blockIdx: blockIdx, vreg: dest)
+		leaFromStack(dest, _) then noteArm64DefId(defBlocks, blockIdx: blockIdx, vreg: dest)
+		leaRdata(dest, _) then noteArm64DefId(defBlocks, blockIdx: blockIdx, vreg: dest)
+		leaFuncAddr(dest, _) then noteArm64DefId(defBlocks, blockIdx: blockIdx, vreg: dest)
+		cset(dest, _) then noteArm64DefId(defBlocks, blockIdx: blockIdx, vreg: dest)
+		default panic("noteArm64: unexpected op for pattern")
+	end 'extract'
+end 'noteArm64SingleDef'
+
+function noteArm64ThreeAddr(defBlocks RegIntArray, blockIdx RegInt, op Arm64Op)
+	match op 'extract'
+		addRegs(dest, _, _) then noteArm64DefId(defBlocks, blockIdx: blockIdx, vreg: dest)
+		addsRegs(dest, _, _) then noteArm64DefId(defBlocks, blockIdx: blockIdx, vreg: dest)
+		subRegs(dest, _, _) then noteArm64DefId(defBlocks, blockIdx: blockIdx, vreg: dest)
+		subsRegs(dest, _, _) then noteArm64DefId(defBlocks, blockIdx: blockIdx, vreg: dest)
+		mulRegs(dest, _, _) then noteArm64DefId(defBlocks, blockIdx: blockIdx, vreg: dest)
+		sdivRegs(dest, _, _) then noteArm64DefId(defBlocks, blockIdx: blockIdx, vreg: dest)
+		remRegs(dest, _, _) then noteArm64DefId(defBlocks, blockIdx: blockIdx, vreg: dest)
+		andRegs(dest, _, _) then noteArm64DefId(defBlocks, blockIdx: blockIdx, vreg: dest)
+		andsRegs(dest, _, _) then noteArm64DefId(defBlocks, blockIdx: blockIdx, vreg: dest)
+		orrRegs(dest, _, _) then noteArm64DefId(defBlocks, blockIdx: blockIdx, vreg: dest)
+		eorRegs(dest, _, _) then noteArm64DefId(defBlocks, blockIdx: blockIdx, vreg: dest)
+		lslRegs(dest, _, _) then noteArm64DefId(defBlocks, blockIdx: blockIdx, vreg: dest)
+		asrRegs(dest, _, _) then noteArm64DefId(defBlocks, blockIdx: blockIdx, vreg: dest)
+		lsrRegs(dest, _, _) then noteArm64DefId(defBlocks, blockIdx: blockIdx, vreg: dest)
+		default panic("noteArm64: unexpected op for pattern")
+	end 'extract'
+end 'noteArm64ThreeAddr'
+
+function noteArm64DefUse(defBlocks RegIntArray, blockIdx RegInt, op Arm64Op)
+	match op 'extract'
+		negReg(dest, _) then noteArm64DefId(defBlocks, blockIdx: blockIdx, vreg: dest)
+		mvnReg(dest, _) then noteArm64DefId(defBlocks, blockIdx: blockIdx, vreg: dest)
+		sxtw(dest, _) then noteArm64DefId(defBlocks, blockIdx: blockIdx, vreg: dest)
+		default panic("noteArm64: unexpected op for pattern")
+	end 'extract'
+end 'noteArm64DefUse'
+
+function noteArm64BaseUseDest(defBlocks RegIntArray, blockIdx RegInt, op Arm64Op)
+	match op 'extract'
+		loadIndirect(dest, _, _, _) then noteArm64DefId(defBlocks, blockIdx: blockIdx, vreg: dest)
+		nullSafeLoad(dest, _, _) then noteArm64DefId(defBlocks, blockIdx: blockIdx, vreg: dest)
+		default panic("noteArm64: unexpected op for pattern")
+	end 'extract'
+end 'noteArm64BaseUseDest'
+
+function noteArm64FpToGpr(defBlocks RegIntArray, blockIdx RegInt, op Arm64Op)
+	match op 'extract'
+		fmovToGpr(dest, _, _) then noteArm64DefId(defBlocks, blockIdx: blockIdx, vreg: dest)
+		fcvtzs(dest, _, _) then noteArm64DefId(defBlocks, blockIdx: blockIdx, vreg: dest)
+		default panic("noteArm64: unexpected op for pattern")
+	end 'extract'
+end 'noteArm64FpToGpr'
+
+function noteArm64Csel(defBlocks RegIntArray, blockIdx RegInt, op Arm64Op)
+	match op 'extract'
+		csel(dest, _, _, _) then noteArm64DefId(defBlocks, blockIdx: blockIdx, vreg: dest)
+		default panic("noteArm64: unexpected op for pattern")
+	end 'extract'
+end 'noteArm64Csel'
+
 function countArm64TwoReads(counts RegIntArray, reg1 Arm64VReg, reg2 Arm64VReg)
 	incUse(counts, id: arm64VRegId(reg1))
 	incUse(counts, id: arm64VRegId(reg2))

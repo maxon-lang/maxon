@@ -15,30 +15,25 @@ end 'main'
 ExitCode: 3
 ---
 module {
-  func @main() -> u32 {
+  func @main() -> u8 {
   entry:
-    x64.prologue stack_size=16
-    x64.mov rax, 3
-    x64.mov [rbp-8], rax
-    x64.mov rcx, 1
-    x64.cmp rax, rcx
-    x64.jne main.else_outer_1
-  outer_0:
+    x64.mov rbx, 3
+    x64.cmp rbx, 1
+    x64.jne else_outer_2
+  outer_1:
     x64.mov rax, 1
-    x64.epilogue
     x64.ret
-  else_outer_1:
+  else_outer_2:
+    x64.cmp rbx, 2
+    x64.jne else_inner_4
+  inner_3:
     x64.mov rax, 2
-    x64.mov rcx, [rbp-8]
-    x64.cmp rcx, rax
-    x64.jne main.else_inner_3
-  inner_2:
-    x64.mov rax, 2
-    x64.epilogue
     x64.ret
-  else_inner_3:
+  else_inner_4:
     x64.mov rax, 3
-    x64.epilogue
+    x64.ret
+  outer_1.merge:
+    x64.xor rax, rax
     x64.ret
   }
 }

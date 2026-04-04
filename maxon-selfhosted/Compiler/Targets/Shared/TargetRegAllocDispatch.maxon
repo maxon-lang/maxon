@@ -182,6 +182,22 @@ export function targetCountOpReads(state RegState, counts RegIntArray, op MlirOp
 	end 'dispatch'
 end 'targetCountOpReads'
 
+// --- Def block recording dispatch ---
+
+export function targetNoteOpDefs(state RegState, defBlocks RegIntArray, blockIdx RegInt, op MlirOp)
+	match state.target 'dispatch'
+		x64 then match op 'x64dispatch'
+			x64(x64Op) then noteX64OpDefs(defBlocks, blockIdx: blockIdx, x64Op: x64Op)
+			maxon to mir then break 'x64dispatch'
+			arm64 then break 'x64dispatch'
+		end 'x64dispatch'
+		arm64 then match op 'arm64dispatch'
+			arm64(a64Op) then noteArm64OpDefs(defBlocks, blockIdx: blockIdx, a64Op: a64Op)
+			maxon to x64 then break 'arm64dispatch'
+		end 'arm64dispatch'
+	end 'dispatch'
+end 'targetNoteOpDefs'
+
 // --- Read classification dispatch ---
 
 export function targetClassifyOpReads(state RegState, sinkOnly RegIntArray, usedByNonSink RegIntArray, op MlirOp)
@@ -243,12 +259,18 @@ end 'targetPreSeedParams'
 
 // --- Forward hints dispatch ---
 
-export function targetComputeAndApplyForwardHints(state RegState, srcFunc MlirFunction)
+export function targetComputeAndApplyForwardHints(state RegState, srcFunc MlirFunction, useCounts RegIntArray)
 	match state.target 'dispatch'
-		x64 then applyForwardHints(computeForwardHints(srcFunc), state: state)
+		x64 then applyX64ForwardHints(srcFunc, state: state, useCounts: useCounts)
 		arm64 then break 'dispatch'
 	end 'dispatch'
 end 'targetComputeAndApplyForwardHints'
+
+function applyX64ForwardHints(srcFunc MlirFunction, state RegState, useCounts RegIntArray)
+	let hints = computeForwardHints(srcFunc)
+	filterConflictingHints(hints, useCounts: useCounts)
+	applyForwardHints(hints, state: state)
+end 'applyX64ForwardHints'
 
 // --- Block arg slot homes dispatch ---
 

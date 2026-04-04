@@ -4995,7 +4995,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
     if (Check(TokenType.Minus)) {
       Advance(); // consume '-'
       if (Check(TokenType.IntegerLiteral)) {
-        var val = -ParseIntegerLiteral(Advance());
+        var val = ParseNegatedIntegerLiteral(Advance());
         return (MlirType.I64, new IntegerAttr(val, MlirType.I64));
       }
       if (Check(TokenType.FloatLiteral)) {
@@ -10518,7 +10518,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
         throw new CompileError(ErrorCode.ParserExpectedExpression,
           $"Expected expression but got '{Current().Value}'", Current().Line, Current().Column);
       if (Check(TokenType.IntegerLiteral))
-        return EmitConstantLiteral(-ParseIntegerLiteral(Advance()));
+        return EmitConstantLiteral(ParseNegatedIntegerLiteral(Advance()));
       if (Check(TokenType.FloatLiteral))
         return EmitConstantLiteral(-ParseFloatLiteral(Advance()));
 
@@ -14498,6 +14498,20 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
     _tokens = savedTokens;
     _pos = savedPos;
     return result;
+  }
+
+  private static long ParseNegatedIntegerLiteral(Token token) {
+    var text = token.Value.Replace("_", "");
+    try {
+      return -long.Parse(text);
+    } catch (OverflowException) {
+      // 9223372036854775808 overflows long but -9223372036854775808 is exactly long.MinValue
+      if (ulong.TryParse(text, out var uval) && uval == (ulong)long.MaxValue + 1)
+        return long.MinValue;
+      throw new CompileError(ErrorCode.ParserLiteralOverflow,
+        $"Integer literal '-{token.Value}' is outside the range of int ({long.MinValue} to {long.MaxValue})",
+        token.Line, token.Column);
+    }
   }
 
   private static long ParseIntegerLiteral(Token token) {

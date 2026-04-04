@@ -13,27 +13,19 @@ end 'main'
 ExitCode: 7
 ---
 module {
-  func @function-declaration.add() -> i64 {
+  func @simple-function.add() -> i64 {
   entry:
-    x64.mov rax, 3
-    x64.mov rcx, 4
-    x64.add rax, rcx
+    x64.mov rax, 7
     x64.ret
   }
-  func @main() -> u32 {
+  func @main() -> u8 {
   entry:
     x64.prologue stack_size=16
-    x64.call function-declaration.add
-    x64.xor rcx, rcx
-    x64.mov edx, 4294967295
-    x64.cmp rax, rdx
-    x64.jg main.__range_panic_0
-    x64.cmp rax, rcx
-    x64.jl main.__range_panic_0
-    x64.jmp main.__range_ok_0
+    x64.call simple-function.add
+    x64.cmp rax, 125
+    x64.jbe __range_ok_0
   __range_panic_0:
-    x64.lea_symdata rax, [__panic_msg_0]
-    x64.mov rcx, rax
+    x64.lea rcx, [rip+__panic_msg_0]
     x64.call mrt_panic
   __range_ok_0:
     x64.epilogue

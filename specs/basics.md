@@ -121,55 +121,63 @@ regalloc: --- block 'entry' (7 ops) func=mrt_start ---
 regalloc: --- block 'entry' (16 ops) func=mrt_write_stdout ---
 regalloc: --- block 'entry' (16 ops) func=mrt_write_stderr ---
 regalloc: --- block 'entry' (6 ops) func=mrt_i64_to_string ---
+regalloc: condBr carry-through at 'entry' (func=mrt_i64_to_string)
 regalloc: spill-all-before-terminator (func=mrt_i64_to_string)
+regalloc: carry register state through condBr (func=mrt_i64_to_string)
 regalloc: --- block 'zero_case' (10 ops) func=mrt_i64_to_string ---
-regalloc: remat v13=0 into rcx (func=mrt_i64_to_string)
-regalloc: remat v14=48 into rdx (func=mrt_i64_to_string)
+regalloc: remat v13=0 into rsi (func=mrt_i64_to_string)
+regalloc: remat v14=48 into rdi (func=mrt_i64_to_string)
+regalloc: restore state at condBr target block 'check_neg' (func=mrt_i64_to_string)
 regalloc: --- block 'check_neg' (6 ops) func=mrt_i64_to_string ---
-regalloc: remat v16=0 into rax (func=mrt_i64_to_string)
+regalloc: remat v16=0 into rbx (func=mrt_i64_to_string)
+regalloc: condBr carry-through at 'check_neg' (func=mrt_i64_to_string)
 regalloc: spill-all-before-terminator (func=mrt_i64_to_string)
+regalloc: carry register state through condBr (func=mrt_i64_to_string)
 regalloc: --- block 'negate' (5 ops) func=mrt_i64_to_string ---
 regalloc: spill-all-before-terminator (func=mrt_i64_to_string)
-regalloc: remat v22=1 into rcx (func=mrt_i64_to_string)
+regalloc: remat v22=1 into r8 (func=mrt_i64_to_string)
+regalloc: restore state at condBr target block 'setup' (func=mrt_i64_to_string)
 regalloc: --- block 'setup' (11 ops) func=mrt_i64_to_string ---
-regalloc: remat v27=0 into rcx (func=mrt_i64_to_string)
-regalloc: remat v26=0 into rdx (func=mrt_i64_to_string)
+regalloc: remat v27=0 into rsi (func=mrt_i64_to_string)
+regalloc: remat v26=0 into rdi (func=mrt_i64_to_string)
 regalloc: spill-all-before-terminator (func=mrt_i64_to_string)
 regalloc: --- block 'digit_loop' (28 ops) func=mrt_i64_to_string ---
-regalloc: remat v32=10 into rcx (func=mrt_i64_to_string)
-regalloc: reload v31 from [rbp-56] into rbx (func=mrt_i64_to_string)
-regalloc: spill v36 from rdx to [rbp-208] (func=mrt_i64_to_string)
-regalloc: reload v30 from [rbp-64] into rax (func=mrt_i64_to_string)
-regalloc: remat v37=0 into rdx (func=mrt_i64_to_string)
-regalloc: reload v36 from [rbp-208] into rdx (func=mrt_i64_to_string)
+regalloc: remat v32=10 into rdi (func=mrt_i64_to_string)
+regalloc: reload v31 from [rbp-56] into r8 (func=mrt_i64_to_string)
+regalloc: relocate v36 from rdx to rsi (func=mrt_i64_to_string)
+regalloc: remat v37=0 into r9 (func=mrt_i64_to_string)
 regalloc: spill-all-before-terminator (func=mrt_i64_to_string)
 regalloc: --- block 'check_sign' (3 ops) func=mrt_i64_to_string ---
+regalloc: condBr carry-through at 'check_sign' (func=mrt_i64_to_string)
 regalloc: spill-all-before-terminator (func=mrt_i64_to_string)
+regalloc: carry register state through condBr (func=mrt_i64_to_string)
 regalloc: --- block 'prepend_minus' (10 ops) func=mrt_i64_to_string ---
-regalloc: remat v48=0 into rcx (func=mrt_i64_to_string)
-regalloc: remat v47=45 into rdx (func=mrt_i64_to_string)
+regalloc: remat v48=0 into rdi (func=mrt_i64_to_string)
+regalloc: remat v47=45 into r8 (func=mrt_i64_to_string)
 regalloc: spill-all-before-terminator (func=mrt_i64_to_string)
+regalloc: restore state at condBr target block 'copy_phase' (func=mrt_i64_to_string)
 regalloc: --- block 'copy_phase' (15 ops) func=mrt_i64_to_string ---
-regalloc: reload v54 from [rbp-16] into rbx (func=mrt_i64_to_string)
+regalloc: reload v53 from [rbp-200] into rdi (func=mrt_i64_to_string)
 regalloc: --- block 'entry' (3 ops) func=mrt_write_cstr_stderr ---
 regalloc: spill-all-before-terminator (func=mrt_write_cstr_stderr)
-regalloc: remat v56=0 into rax (func=mrt_write_cstr_stderr)
+regalloc: remat v56=0 into rbx (func=mrt_write_cstr_stderr)
 regalloc: --- block 'scan' (9 ops) func=mrt_write_cstr_stderr ---
 regalloc: spill-all-before-terminator (func=mrt_write_cstr_stderr)
 regalloc: --- block 'scan_next' (5 ops) func=mrt_write_cstr_stderr ---
 regalloc: spill-all-before-terminator (func=mrt_write_cstr_stderr)
 regalloc: --- block 'write' (9 ops) func=mrt_write_cstr_stderr ---
+regalloc: relocate v65 from rcx to r12 (func=mrt_write_cstr_stderr)
+regalloc: relocate v66 from rdx to r13 (func=mrt_write_cstr_stderr)
 regalloc: spill v67 from rax to [rbp-48] (func=mrt_write_cstr_stderr)
 regalloc: --- block 'entry' (16 ops) func=mrt_panic ---
-regalloc: spill v74 from rax to [rbp-136] (func=mrt_panic)
-regalloc: spill v73 from rdx to [rbp-144] (func=mrt_panic)
-regalloc: spill v71 from rbx to [rbp-152] (func=mrt_panic)
-regalloc: reload v71 from [rbp-152] into rdx (func=mrt_panic)
-regalloc: spill v70 from rax to [rbp-160] (func=mrt_panic)
-regalloc: reload v73 from [rbp-144] into rcx (func=mrt_panic)
-regalloc: reload v74 from [rbp-136] into rdx (func=mrt_panic)
+regalloc: relocate v69 from rcx to r12 (func=mrt_panic)
+regalloc: relocate v74 from rbx to r13 (func=mrt_panic)
+regalloc: relocate v73 from rsi to r14 (func=mrt_panic)
+regalloc: relocate v71 from rdi to r15 (func=mrt_panic)
+regalloc: relocate v70 from rax to r15 (func=mrt_panic)
+regalloc: spill v71 from rcx to [rbp-136] (func=mrt_panic)
 regalloc: spill-all-before-terminator (func=mrt_panic)
-regalloc: remat v76=32 into rbx (func=mrt_panic)
+regalloc: remat v76=32 into r8 (func=mrt_panic)
 regalloc: --- block 'walk_loop' (4 ops) func=mrt_panic ---
 regalloc: spill-all-before-terminator (func=mrt_panic)
 regalloc: --- block 'check_frame_ptr' (9 ops) func=mrt_panic ---
@@ -179,62 +187,72 @@ regalloc: spill-all-before-terminator (func=mrt_panic)
 regalloc: --- block 'compute_offset' (8 ops) func=mrt_panic ---
 regalloc: spill-all-before-terminator (func=mrt_panic)
 regalloc: --- block 'check_upper_bound' (6 ops) func=mrt_panic ---
+regalloc: condBr carry-through at 'check_upper_bound' (func=mrt_panic)
 regalloc: spill-all-before-terminator (func=mrt_panic)
+regalloc: carry register state through condBr (func=mrt_panic)
 regalloc: --- block 'print_frame' (12 ops) func=mrt_panic ---
+regalloc: relocate v100 from rcx to r12 (func=mrt_panic)
+regalloc: relocate v101 from rdx to r13 (func=mrt_panic)
 regalloc: spill-all-before-terminator (func=mrt_panic)
+regalloc: restore state at condBr target block 'walk_done' (func=mrt_panic)
 regalloc: --- block 'walk_done' (6 ops) func=mrt_panic ---
-regalloc: remat v105=1 into rax (func=mrt_panic)
+regalloc: remat v105=1 into rbx (func=mrt_panic)
 regalloc: --- block 'entry' (19 ops) func=mrt_panic_print_frame ---
-regalloc: spill v109 from rcx to [rbp-128] (func=mrt_panic_print_frame)
-regalloc: reload v108 from [rbp-16] into rcx (func=mrt_panic_print_frame)
+regalloc: relocate v109 from rcx to r12 (func=mrt_panic_print_frame)
+regalloc: relocate v108 from rdx to r13 (func=mrt_panic_print_frame)
 regalloc: remat v112=4294967295 into rsi (func=mrt_panic_print_frame)
 regalloc: remat v114=0 into rdi (func=mrt_panic_print_frame)
 regalloc: spill-all-before-terminator (func=mrt_panic_print_frame)
 regalloc: remat v115=-1 into r8 (func=mrt_panic_print_frame)
 regalloc: --- block 'lookup_loop' (3 ops) func=mrt_panic_print_frame ---
+regalloc: condBr carry-through at 'lookup_loop' (func=mrt_panic_print_frame)
 regalloc: spill-all-before-terminator (func=mrt_panic_print_frame)
+regalloc: carry register state through condBr (func=mrt_panic_print_frame)
 regalloc: --- block 'lookup_body' (21 ops) func=mrt_panic_print_frame ---
-regalloc: remat v123=8 into rdx (func=mrt_panic_print_frame)
-regalloc: remat v127=4294967295 into r8 (func=mrt_panic_print_frame)
+regalloc: remat v123=8 into r9 (func=mrt_panic_print_frame)
+regalloc: remat v127=4294967295 into r14 (func=mrt_panic_print_frame)
 regalloc: spill-all-before-terminator (func=mrt_panic_print_frame)
 regalloc: --- block 'lookup_update' (11 ops) func=mrt_panic_print_frame ---
-regalloc: remat v135=4294967295 into rbx (func=mrt_panic_print_frame)
+regalloc: remat v135=4294967295 into rdi (func=mrt_panic_print_frame)
 regalloc: spill-all-before-terminator (func=mrt_panic_print_frame)
 regalloc: --- block 'lookup_next' (5 ops) func=mrt_panic_print_frame ---
 regalloc: spill-all-before-terminator (func=mrt_panic_print_frame)
+regalloc: restore state at condBr target block 'lookup_done' (func=mrt_panic_print_frame)
 regalloc: --- block 'lookup_done' (4 ops) func=mrt_panic_print_frame ---
-regalloc: remat v141=-1 into rcx (func=mrt_panic_print_frame)
+regalloc: remat v141=-1 into rsi (func=mrt_panic_print_frame)
 regalloc: spill-all-before-terminator (func=mrt_panic_print_frame)
 regalloc: --- block 'print_name' (7 ops) func=mrt_panic_print_frame ---
-regalloc: spill v145 from rcx to [rbp-144] (func=mrt_panic_print_frame)
+regalloc: relocate v145 from rcx to r12 (func=mrt_panic_print_frame)
 regalloc: spill-all-before-terminator (func=mrt_panic_print_frame)
 regalloc: --- block 'print_unknown' (3 ops) func=mrt_panic_print_frame ---
-regalloc: spill v147 from rcx to [rbp-152] (func=mrt_panic_print_frame)
+regalloc: relocate v147 from rcx to r12 (func=mrt_panic_print_frame)
 regalloc: spill-all-before-terminator (func=mrt_panic_print_frame)
 regalloc: --- block 'print_newline' (7 ops) func=mrt_panic_print_frame ---
-regalloc: spill v149 from rcx to [rbp-160] (func=mrt_panic_print_frame)
-regalloc: spill v150 from rax to [rbp-168] (func=mrt_panic_print_frame)
+regalloc: relocate v149 from rcx to r12 (func=mrt_panic_print_frame)
+regalloc: spill v150 from rax to [rbp-136] (func=mrt_panic_print_frame)
 regalloc: --- block 'entry' (16 ops) func=mrt_printInt ---
-regalloc: spill v152 from rcx to [rbp-40] (func=mrt_printInt)
-regalloc: reload v155 from [rbp-24] into rdx (func=mrt_printInt)
-regalloc: spill v154 from rdx to [rbp-48] (func=mrt_printInt)
-regalloc: spill v156 from rax to [rbp-56] (func=mrt_printInt)
+regalloc: relocate v152 from rcx to r12 (func=mrt_printInt)
+regalloc: relocate v153 from rdx to r13 (func=mrt_printInt)
+regalloc: relocate v155 from rbx to r14 (func=mrt_printInt)
+regalloc: relocate v155 from rcx to r14 (func=mrt_printInt)
+regalloc: relocate v154 from rdx to r15 (func=mrt_printInt)
+regalloc: spill v156 from rax to [rbp-40] (func=mrt_printInt)
 regalloc: --- block 'entry' (3 ops) func=main ---
 === After allocate-registers ===
-Functions: 9, Blocks: 35, Ops: 309
-  maxon: 0, arith: 0, cf: 0, func: 0, memref: 0, runtime: 0, sys: 0, mir: 0, x64: 309, arm64: 0
+Functions: 9, Blocks: 35, Ops: 302
+  maxon: 0, arith: 0, cf: 0, func: 0, memref: 0, runtime: 0, sys: 0, mir: 0, x64: 302, arm64: 0
   frame: var=16 spill=0 total=16 aligned=16
   frame: var=64 spill=0 total=64 aligned=64
   frame: var=64 spill=0 total=64 aligned=64
-  frame: var=200 spill=16 total=216 aligned=224
+  frame: var=200 spill=0 total=200 aligned=208
   frame: var=40 spill=16 total=56 aligned=64
-  frame: var=128 spill=32 total=160 aligned=160
-  frame: var=120 spill=48 total=168 aligned=176
-  frame: var=32 spill=32 total=64 aligned=64
+  frame: var=128 spill=16 total=144 aligned=144
+  frame: var=120 spill=16 total=136 aligned=144
+  frame: var=32 spill=16 total=48 aligned=48
   frame: var=0 spill=0 total=0 aligned=0
 === After insert-prologue-epilogue ===
-Functions: 9, Blocks: 35, Ops: 316
-  maxon: 0, arith: 0, cf: 0, func: 0, memref: 0, runtime: 0, sys: 0, mir: 0, x64: 316, arm64: 0
+Functions: 9, Blocks: 35, Ops: 309
+  maxon: 0, arith: 0, cf: 0, func: 0, memref: 0, runtime: 0, sys: 0, mir: 0, x64: 309, arm64: 0
 ```
 
 <!-- test: return-function-call -->
