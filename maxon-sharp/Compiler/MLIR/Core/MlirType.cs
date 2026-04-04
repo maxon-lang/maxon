@@ -247,7 +247,14 @@ public class MlirStringBackingType() : MlirType("string_enum", 8);
 public class MlirCharBackingType() : MlirType("char_enum", 8);
 
 /// Stores compile-time constant field values for a struct-backed enum case.
-public record StructRawValue(string StructTypeName, List<(string FieldName, long Value)> Fields);
+public record StructRawValue(string StructTypeName, List<(string FieldName, long Value)> Fields) {
+  /// Enum member references that couldn't be resolved during pre-scan (cross-file forward refs).
+  /// Resolved after all files are pre-scanned via ResolveStructRawValueEnumRefs().
+  public List<(string FieldName, string EnumTypeName, string CaseName, int Line, int Column)> UnresolvedEnumRefs { get; } = [];
+  /// Constant references that couldn't be resolved during pre-scan (constants evaluated after enums).
+  /// Resolved after all files are pre-scanned via ResolveStructRawValueEnumRefs().
+  public List<(string FieldName, string ConstName, int Line, int Column)> UnresolvedConstRefs { get; } = [];
+}
 
 /// Marker type for struct-backed enum backing types. At runtime, struct-backed enums
 /// are stored as ordinals (i64). Each case has an associated struct value accessible via .rawValue.

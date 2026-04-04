@@ -540,7 +540,7 @@ let lat = Instruction.load.rawValue.latency   // 4
 let mem = Instruction.load.rawValue.isMemory  // true
 ```
 
-All cases must use the same struct type. Field values must be compile-time constants (integers, floats, booleans) or nested struct literals. Cases with associated values can also have struct backing.
+All cases must use the same struct type. Field values must be compile-time constants (integers, floats, booleans), enum member references (e.g., `Priority.high`), top-level constants, or nested struct literals. Cases with associated values can also have struct backing.
 
 ## Error Handling
 

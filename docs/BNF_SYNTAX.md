@@ -257,7 +257,10 @@ struct_raw_literal
               = IDENTIFIER '{' raw_field_init { ',' raw_field_init } '}'
 
 raw_field_init
-              = IDENTIFIER ':' ( [ '-' ] INTEGER | [ '-' ] FLOAT | 'true' | 'false' | struct_raw_literal )
+              = IDENTIFIER ':' ( [ '-' ] INTEGER | [ '-' ] FLOAT | 'true' | 'false'
+              | IDENTIFIER '.' IDENTIFIER                              (* enum member reference *)
+              | IDENTIFIER                                             (* constant reference *)
+              | struct_raw_literal )
 
 assoc_fields  = assoc_field { ',' assoc_field }
 assoc_field   = IDENTIFIER type_ref

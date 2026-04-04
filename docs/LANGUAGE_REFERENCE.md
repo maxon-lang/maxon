@@ -1427,7 +1427,7 @@ end 'X64Op'
 **Notes:**
 - All cases must use the same struct type
 - Every case must provide a backing value (no bare cases)
-- Struct field values must be compile-time constants (integers, floats, or booleans)
+- Struct field values must be compile-time constants (integers, floats, booleans, enum member references like `Priority.high`, or top-level constants)
 - At runtime, the enum is stored as an ordinal; `.rawValue` constructs the backing struct
 
 ### Enum Interface Conformance

@@ -2291,6 +2291,8 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
           // Parse struct-backed enum raw value: TypeName{...} or TypeName.factory(...)
           string structTypeName;
           var fields = new List<(string FieldName, long Value)>();
+          var unresolvedEnumRefs = new List<(string FieldName, string EnumTypeName, string CaseName, int Line, int Column)>();
+          var unresolvedConstRefs = new List<(string FieldName, string ConstName, int Line, int Column)>();
 
           if (PeekNext().Type == TokenType.Dot) {
             // Factory call syntax: TypeName.factory(arg1, label: arg2, ...)
@@ -2298,12 +2300,12 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
             Advance(); // consume '.'
             Expect(TokenType.Identifier); // consume factory method name (e.g., "create")
             Expect(TokenType.LeftParen); // consume '('
-            ParseFactoryCallRawValue(fields, structTypeName, caseToken, prefix: "");
+            ParseFactoryCallRawValue(fields, structTypeName, caseToken, prefix: "", unresolvedEnumRefs, unresolvedConstRefs);
           } else {
             // Struct literal syntax: TypeName{field: value, ...}
             structTypeName = Advance().Value; // consume struct type name
             Advance(); // consume '{'
-            ParseStructRawValueFields(fields, structTypeName, caseToken, prefix: "");
+            ParseStructRawValueFields(fields, structTypeName, caseToken, prefix: "", unresolvedEnumRefs, unresolvedConstRefs);
           }
 
           if (!_typeRegistry.TryGetValue(structTypeName, out var structTypeDef) || structTypeDef is not MlirStructType structType) {
@@ -2320,6 +2322,10 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
           }
 
           var structRawValue = new StructRawValue(structTypeName, fields);
+          foreach (var uref in unresolvedEnumRefs)
+            structRawValue.UnresolvedEnumRefs.Add(uref);
+          foreach (var uref in unresolvedConstRefs)
+            structRawValue.UnresolvedConstRefs.Add(uref);
           cases.Add(new MlirEnumCase(caseName, ordinal, structRawValue, assocValues));
         } else {
           throw new CompileError(ErrorCode.ParserExpectedExpression,
@@ -2390,7 +2396,9 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
   /// </summary>
   private void ParseStructRawValueFields(
       List<(string FieldName, long Value)> fields,
-      string structTypeName, Token caseToken, string prefix) {
+      string structTypeName, Token caseToken, string prefix,
+      List<(string FieldName, string EnumTypeName, string CaseName, int Line, int Column)> unresolvedEnumRefs,
+      List<(string FieldName, string ConstName, int Line, int Column)> unresolvedConstRefs) {
     var providedFieldNames = new HashSet<string>();
     _typeRegistry.TryGetValue(structTypeName, out var structTypeDef);
     var structType = structTypeDef as MlirStructType;
@@ -2418,7 +2426,7 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
         // Nested struct literal: recurse
         var nestedTypeName = Advance().Value;
         Advance(); // consume '{'
-        ParseStructRawValueFields(fields, nestedTypeName, caseToken, prefix: qualifiedName);
+        ParseStructRawValueFields(fields, nestedTypeName, caseToken, prefix: qualifiedName, unresolvedEnumRefs, unresolvedConstRefs);
       } else if (TryParseSignedNumericLiteral(out var fieldNum, "expected numeric literal for struct raw value field")) {
         long fieldValue = fieldNum.IsFloat ? BitConverter.DoubleToInt64Bits(fieldNum.FloatValue) : fieldNum.IntValue;
         fields.Add((qualifiedName, fieldValue));
@@ -2428,9 +2436,34 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
       } else if (Check(TokenType.False)) {
         Advance();
         fields.Add((qualifiedName, 0));
+      } else if (Check(TokenType.Identifier) && PeekNext().Type == TokenType.Dot) {
+        // Enum member reference: EnumName.caseName
+        var enumToken = Advance(); // consume enum type name
+        Advance(); // consume '.'
+        var memberToken = Expect(TokenType.Identifier);
+        if (_typeRegistry.TryGetValue(enumToken.Value, out var refType) && refType is MlirEnumType refEnum
+            && refEnum.Cases.Count > 0) {
+          var refCase = refEnum.GetCase(memberToken.Value)
+            ?? throw new CompileError(ErrorCode.SemanticEnumUnknownCase,
+              $"unknown enum case: '{memberToken.Value}' in '{enumToken.Value}'",
+              memberToken.Line, memberToken.Column);
+          fields.Add((qualifiedName, refCase.Ordinal));
+        } else {
+          // Enum not yet pre-scanned (cross-file forward reference) — defer resolution
+          unresolvedEnumRefs.Add((qualifiedName, enumToken.Value, memberToken.Value, memberToken.Line, memberToken.Column));
+        }
+      } else if (Check(TokenType.Identifier)) {
+        // Constant reference: e.g., REG_RAX
+        var constToken = Advance();
+        if (_topLevelConstants.TryGetValue(constToken.Value, out var constVal) && constVal is long longVal) {
+          fields.Add((qualifiedName, longVal));
+        } else {
+          // Constant not yet evaluated — defer resolution
+          unresolvedConstRefs.Add((qualifiedName, constToken.Value, constToken.Line, constToken.Column));
+        }
       } else {
         throw new CompileError(ErrorCode.ParserExpectedExpression,
-          "expected integer, float, boolean literal, or struct literal for struct raw value field",
+          "expected integer, float, boolean literal, enum member, constant, or struct literal for struct raw value field",
           Current().Line, Current().Column);
       }
 
@@ -2461,7 +2494,9 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
   /// </summary>
   private void ParseFactoryCallRawValue(
       List<(string FieldName, long Value)> fields,
-      string structTypeName, Token caseToken, string prefix) {
+      string structTypeName, Token caseToken, string prefix,
+      List<(string FieldName, string EnumTypeName, string CaseName, int Line, int Column)> unresolvedEnumRefs,
+      List<(string FieldName, string ConstName, int Line, int Column)> unresolvedConstRefs) {
     _typeRegistry.TryGetValue(structTypeName, out var structTypeDef);
     var structType = structTypeDef as MlirStructType;
     var structFields = structType?.Fields ?? [];
@@ -2483,18 +2518,36 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
 
       var qualifiedName = prefix.Length > 0 ? $"{prefix}.{fieldName}" : fieldName;
 
-      if (Check(TokenType.Identifier) && PeekNext().Type == TokenType.Dot) {
+      if (Check(TokenType.Identifier) && PeekNext().Type == TokenType.Dot
+          && _pos + 2 < _tokens.Count && _tokens[_pos + 2].Type == TokenType.Identifier
+          && _pos + 3 < _tokens.Count && _tokens[_pos + 3].Type == TokenType.LeftParen) {
         // Nested factory call: NestedType.create(...)
         var nestedTypeName = Advance().Value;
         Advance(); // consume '.'
         Expect(TokenType.Identifier); // consume method name
         Expect(TokenType.LeftParen); // consume '('
-        ParseFactoryCallRawValue(fields, nestedTypeName, caseToken, prefix: qualifiedName);
+        ParseFactoryCallRawValue(fields, nestedTypeName, caseToken, prefix: qualifiedName, unresolvedEnumRefs, unresolvedConstRefs);
+      } else if (Check(TokenType.Identifier) && PeekNext().Type == TokenType.Dot) {
+        // Enum member reference: EnumName.caseName
+        var enumToken = Advance(); // consume enum type name
+        Advance(); // consume '.'
+        var memberToken = Expect(TokenType.Identifier);
+        if (_typeRegistry.TryGetValue(enumToken.Value, out var refType) && refType is MlirEnumType refEnum
+            && refEnum.Cases.Count > 0) {
+          var refCase = refEnum.GetCase(memberToken.Value)
+            ?? throw new CompileError(ErrorCode.SemanticEnumUnknownCase,
+              $"unknown enum case: '{memberToken.Value}' in '{enumToken.Value}'",
+              memberToken.Line, memberToken.Column);
+          fields.Add((qualifiedName, refCase.Ordinal));
+        } else {
+          // Enum not yet pre-scanned (cross-file forward reference) — defer resolution
+          unresolvedEnumRefs.Add((qualifiedName, enumToken.Value, memberToken.Value, memberToken.Line, memberToken.Column));
+        }
       } else if (Check(TokenType.Identifier) && PeekNext().Type == TokenType.LeftBrace) {
         // Nested struct literal: NestedType{...}
         var nestedTypeName = Advance().Value;
         Advance(); // consume '{'
-        ParseStructRawValueFields(fields, nestedTypeName, caseToken, prefix: qualifiedName);
+        ParseStructRawValueFields(fields, nestedTypeName, caseToken, prefix: qualifiedName, unresolvedEnumRefs, unresolvedConstRefs);
       } else if (TryParseSignedNumericLiteral(out var fieldNum, "expected numeric literal for factory call argument")) {
         long fieldValue = fieldNum.IsFloat ? BitConverter.DoubleToInt64Bits(fieldNum.FloatValue) : fieldNum.IntValue;
         fields.Add((qualifiedName, fieldValue));
@@ -2504,9 +2557,18 @@ public partial class Parser(List<Token> tokens, MlirModule<MaxonOp>? seedModule 
       } else if (Check(TokenType.False)) {
         Advance();
         fields.Add((qualifiedName, 0));
+      } else if (Check(TokenType.Identifier)) {
+        // Constant reference: e.g., REG_RAX
+        var constToken = Advance();
+        if (_topLevelConstants.TryGetValue(constToken.Value, out var constVal) && constVal is long longVal) {
+          fields.Add((qualifiedName, longVal));
+        } else {
+          // Constant not yet evaluated — defer resolution
+          unresolvedConstRefs.Add((qualifiedName, constToken.Value, constToken.Line, constToken.Column));
+        }
       } else {
         throw new CompileError(ErrorCode.ParserExpectedExpression,
-          "expected literal value or factory call for enum raw value argument",
+          "expected literal value, enum member, constant, or factory call for enum raw value argument",
           Current().Line, Current().Column);
       }
 

@@ -228,6 +228,7 @@ public class Compiler {
     // `FooArray = Array with FooEnum` prescanned before FooEnum gets its cases).
     // Now that all types are fully defined, update the references.
     RefreshTypeAliasTypeParams(module);
+    ResolveStructRawValueEnumRefs(module);
 
     // Full parse with all signatures known
     foreach (var source in sources) {
@@ -254,6 +255,48 @@ public class Compiler {
           continue;
         if (module.TypeDefs.TryGetValue(paramType.Name, out var currentType) && currentType != paramType)
           structType.TypeParams[key] = currentType;
+      }
+    }
+  }
+
+  /// <summary>
+  /// Resolves deferred enum member references in struct-backed enum raw values.
+  /// Called after all files are pre-scanned so cross-file enum types are available.
+  /// </summary>
+  private static void ResolveStructRawValueEnumRefs(MlirModule<MaxonOp> module) {
+    foreach (var (_, type) in module.TypeDefs) {
+      if (type is not MlirEnumType enumType) continue;
+      foreach (var enumCase in enumType.Cases) {
+        if (enumCase.RawValue is not StructRawValue srv) continue;
+        if (srv.UnresolvedEnumRefs.Count == 0 && srv.UnresolvedConstRefs.Count == 0) continue;
+
+        foreach (var (fieldName, enumTypeName, caseName, line, column) in srv.UnresolvedEnumRefs) {
+          if (!module.TypeDefs.TryGetValue(enumTypeName, out var refType) || refType is not MlirEnumType refEnum) {
+            throw new CompileError(ErrorCode.SemanticUnknownType,
+              $"unknown enum type: '{enumTypeName}'", line, column);
+          }
+          var refCase = refEnum.GetCase(caseName)
+            ?? throw new CompileError(ErrorCode.SemanticEnumUnknownCase,
+              $"unknown enum case: '{caseName}' in '{enumTypeName}'", line, column);
+          srv.Fields.Add((fieldName, refCase.Ordinal));
+        }
+        srv.UnresolvedEnumRefs.Clear();
+
+        foreach (var (fieldName, constName, line, column) in srv.UnresolvedConstRefs) {
+          if (!module.ExportedConstants.TryGetValue(constName, out var constVal)) {
+            throw new CompileError(ErrorCode.SemanticUnknownField,
+              $"unknown constant: '{constName}'", line, column);
+          }
+          long value = constVal switch {
+            long l => l,
+            double d => BitConverter.DoubleToInt64Bits(d),
+            bool b => b ? 1 : 0,
+            _ => throw new CompileError(ErrorCode.SemanticUnknownField,
+              $"constant '{constName}' is not a numeric or boolean value", line, column)
+          };
+          srv.Fields.Add((fieldName, value));
+        }
+        srv.UnresolvedConstRefs.Clear();
       }
     }
   }

@@ -10,6 +10,84 @@ export typealias RegOrdinal = int(i64.min to i64.max)
 export let RM_NONE = -1
 export let RM_NO_STACK_HOME = -i64.max
 
+export typealias RegMask = int(0 to u32.max)
+
+export enum OpPattern
+	// No register operands — just push the op through
+	passThrough
+	// GPR patterns
+	singleDef
+	singleUse
+	defUse
+	twoAddr
+	useDefImm
+	unaryInPlace
+	threeAddr
+	twoUse
+	singleUseNodef
+	// Memory GPR patterns
+	baseUseSrcUse
+	baseUseDest
+	// FP patterns
+	fpSingleDef
+	fpSingleUse
+	fpDefUse
+	fpTwoAddr
+	fpThreeAddr
+	fpTwoUse
+	fpMov
+	// Cross-domain
+	gprToFp
+	fpToGpr
+	baseUseFpUse
+	baseUseFpDef
+	// Special (keep dedicated handler)
+	movRegReg
+	constImm
+	shift
+	divReg
+	callIndirect
+	exchange
+	csel
+end 'OpPattern'
+
+// Prepare implicit def registers before an op: spill/relocate any occupied registers
+// that will be implicitly clobbered. Protects registers in implicitReads.
+export function rmPrepImplicitDefs(state RegState, implicitDefs RegMask, implicitReads RegMask, dstBlock MlirBlock)
+	if implicitDefs == 0 'noDefs'
+		return
+	end 'noDefs'
+	var bit = 0
+	var mask = implicitDefs
+	while mask != 0 'eachBit'
+		if(mask and 1) != 0 'hasBit'
+			// Check if this register is in the protect (implicitReads) set
+			let isProtected = (implicitReads and(1 shl bit)) != 0
+			if not isProtected 'notProtected'
+				rmSpillRegisterIfOccupied(state, regOrdinal: bit, dstBlock: dstBlock)
+			end 'notProtected'
+		end 'hasBit'
+		mask = mask shr 1
+		bit = bit + 1
+	end 'eachBit'
+end 'rmPrepImplicitDefs'
+
+// Clear register contents for all implicitly defined registers after an op.
+export function rmClearImplicitDefs(state RegState, implicitDefs RegMask)
+	if implicitDefs == 0 'noDefs'
+		return
+	end 'noDefs'
+	var bit = 0
+	var mask = implicitDefs
+	while mask != 0 'eachBit'
+		if(mask and 1) != 0 'hasBit'
+			rmClearRegisterContents(state, regOrdinal: bit)
+		end 'hasBit'
+		mask = mask shr 1
+		bit = bit + 1
+	end 'eachBit'
+end 'rmClearImplicitDefs'
+
 // Per-value state: consolidates all value-indexed register allocator fields.
 export type ValueInfo
 	export var gprOrdinal RegOrdinal
@@ -949,6 +1027,22 @@ export function rmClobberCallerSaved(state RegState, dstBlock MlirBlock)
 	end 'clobberFp'
 end 'rmClobberCallerSaved'
 
+// Clobber only caller-saved FP registers (GPR clobbering handled separately by rmPrepImplicitDefs).
+export function rmClobberCallerSavedFp(state RegState, dstBlock MlirBlock)
+	if state.isInDivergingBlock 'diverging'
+		return
+	end 'diverging'
+	var fi = 0
+	while fi < state.callerSavedFps.count() 'clobberFp'
+		let fpOrd = try state.callerSavedFps.get(fi) otherwise 'skipFp'
+			fi = fi + 1
+			continue
+		end 'skipFp'
+		rmSpillFpIfOccupied(state, fpOrdinal: fpOrd, dstBlock: dstBlock)
+		fi = fi + 1
+	end 'clobberFp'
+end 'rmClobberCallerSavedFp'
+
 // Clear caller-saved register mappings without emitting spill instructions.
 // Used in diverging blocks where spills are dead code.
 function rmClearCallerSavedMappings(state RegState)
@@ -1667,14 +1761,6 @@ export function incUse(counts RegIntArray, id RegInt)
 	let current = rmGetOr(counts, index: id, fallback: 0)
 	rmSet(counts, index: id, value: current + 1, sentinel: 0)
 end 'incUse'
-
-// FP two-address op enum — used by both X64 and ARM64 per-op helpers.
-export enum FpTwoAddrOp
-	add
-	sub
-	mul
-	div
-end 'FpTwoAddrOp'
 
 // Pre-scan all ops in a function to count how many times each virtual value is read.
 function computeUseCounts(srcFunc MlirFunction, state RegState) returns RegIntArray

@@ -1,5 +1,4 @@
 // ARM64 register allocation target implementation.
-// Provides ordinal conversion, emission, pool config, and per-op dispatch for Arm64.
 
 // --- Ordinal conversion ---
 
@@ -132,7 +131,6 @@ end 'rmRegNameArm64'
 // ARM64 virtual register helpers
 // ============================================================
 
-// Check whether an Arm64VReg is virtual (unresolved).
 function isVirtualArm64Gpr(vreg Arm64VReg) returns bool
 	var result = false
 	match vreg 'check'
@@ -142,7 +140,6 @@ function isVirtualArm64Gpr(vreg Arm64VReg) returns bool
 	return result
 end 'isVirtualArm64Gpr'
 
-// Check whether an Arm64FpVReg is virtual (unresolved).
 function isVirtualArm64FpReg(vreg Arm64FpVReg) returns bool
 	var result = false
 	match vreg 'check'
@@ -152,11 +149,9 @@ function isVirtualArm64FpReg(vreg Arm64FpVReg) returns bool
 	return result
 end 'isVirtualArm64FpReg'
 
-// Check whether a single Arm64Op contains any virtual registers.
 export function arm64OpHasVirtualRegs(op Arm64Op) returns bool
 	return match op 'check'
-		prologue gives false
-		epilogue gives false
+		prologue to epilogue gives false
 		movImm(dest, _) gives isVirtualArm64Gpr(dest)
 		strToSlot(_, src) gives isVirtualArm64Gpr(src)
 		ldrFromSlot(dest, _) gives isVirtualArm64Gpr(dest)
@@ -178,25 +173,12 @@ export function arm64OpHasVirtualRegs(op Arm64Op) returns bool
 		lsrRegs(dest, src1, src2) gives isVirtualArm64Gpr(dest) or isVirtualArm64Gpr(src1) or isVirtualArm64Gpr(src2)
 		cmpRegs(src1, src2) gives isVirtualArm64Gpr(src1) or isVirtualArm64Gpr(src2)
 		cmpRegZero(src) gives isVirtualArm64Gpr(src)
-		condBranch gives false
-		branch gives false
-		branchLink gives false
-		printLiteral gives false
-		printInt gives false
-		ret gives false
-		syscall gives false
-		iatCall gives false
-		globalAddr gives false
-		stackAddrOp gives false
-		storeByteOp gives false
-		loadByteOp gives false
-		memcpyOp gives false
+		condBranch to memcpyOp gives false
 		movRegReg(dest, src) gives isVirtualArm64Gpr(dest) or isVirtualArm64Gpr(src)
 		spillToStack(_, src) gives isVirtualArm64Gpr(src)
 		reloadFromStack(dest, _) gives isVirtualArm64Gpr(dest)
 		branchLinkReg(reg) gives isVirtualArm64Gpr(reg)
-		subSpImm gives false
-		addSpImm gives false
+		subSpImm to addSpImm gives false
 		strToSpOffset(_, src) gives isVirtualArm64Gpr(src)
 		fmovRegReg(dest, src, _) gives isVirtualArm64FpReg(dest) or isVirtualArm64FpReg(src)
 		spillFpToStack(_, src, _) gives isVirtualArm64FpReg(src)
@@ -237,7 +219,6 @@ export function arm64OpHasVirtualRegs(op Arm64Op) returns bool
 	end 'check'
 end 'arm64OpHasVirtualRegs'
 
-// Extract virtual value ID from an Arm64VReg, or -1 if physical.
 function arm64VRegId(vreg Arm64VReg) returns RegInt
 	return match vreg 'getId'
 		virtual(id) gives id
@@ -245,7 +226,6 @@ function arm64VRegId(vreg Arm64VReg) returns RegInt
 	end 'getId'
 end 'arm64VRegId'
 
-// Extract virtual value ID from an Arm64FpVReg, or -1 if physical.
 function arm64FpVRegId(vreg Arm64FpVReg) returns RegInt
 	return match vreg 'getId'
 		virtual(id) gives id
@@ -257,11 +237,9 @@ end 'arm64FpVRegId'
 // ARM64 use count and classification
 // ============================================================
 
-// Collect read VReg IDs from an ARM64 op and record their last use at opIdx.
 export function countArm64OpReads(counts RegIntArray, a64Op Arm64Op)
 	match a64Op 'scan'
-		prologue to epilogue then break 'scan'
-		movImm then break 'scan'
+		prologue to movImm then break 'scan'
 		strToSlot(_, src) then incUse(counts, id: arm64VRegId(src))
 		ldrFromSlot then break 'scan'
 		addRegs(_, src1, src2) then countArm64TwoReads(counts, reg1: src1, reg2: src2)
@@ -282,10 +260,7 @@ export function countArm64OpReads(counts RegIntArray, a64Op Arm64Op)
 		lsrRegs(_, src1, src2) then countArm64TwoReads(counts, reg1: src1, reg2: src2)
 		cmpRegs(src1, src2) then countArm64TwoReads(counts, reg1: src1, reg2: src2)
 		cmpRegZero(src) then incUse(counts, id: arm64VRegId(src))
-		condBranch to branchLink then break 'scan'
-		printLiteral to printInt then break 'scan'
-		ret then break 'scan'
-		syscall to memcpyOp then break 'scan'
+		condBranch to memcpyOp then break 'scan'
 		movRegReg(_, src) then incUse(counts, id: arm64VRegId(src))
 		spillToStack(_, src) then incUse(counts, id: arm64VRegId(src))
 		reloadFromStack then break 'scan'
@@ -344,9 +319,9 @@ function countArm64MixedReads(counts RegIntArray, gpr Arm64VReg, fp Arm64FpVReg)
 	incUse(counts, id: arm64FpVRegId(fp))
 end 'countArm64MixedReads'
 
-// ARM64 classification (simplified — mark movRegReg with physical dest as sink)
+// movRegReg to a physical dest is a "sink" — the value dies into a fixed register.
 export function classifyArm64OpReads(sinkOnly RegIntArray, usedByNonSink RegIntArray, a64Op Arm64Op)
-	if isArm64MovRegReg(a64Op) 'isMov'
+	if a64Op.rawValue.pattern == OpPattern.movRegReg 'isMov'
 		match a64Op 'extractMov'
 			movRegReg(dest, src) then classifyArm64MovRegReg(sinkOnly, usedByNonSink: usedByNonSink, dest: dest, src: src)
 			prologue to memcpyOp then break 'extractMov'
@@ -356,16 +331,6 @@ export function classifyArm64OpReads(sinkOnly RegIntArray, usedByNonSink RegIntA
 		countArm64OpReads(usedByNonSink, a64Op: a64Op)
 	end 'other'
 end 'classifyArm64OpReads'
-
-function isArm64MovRegReg(a64Op Arm64Op) returns bool
-	var result = false
-	match a64Op 'check'
-		movRegReg then result = true
-		prologue to memcpyOp then break 'check'
-		spillToStack to nullSafeLoad then break 'check'
-	end 'check'
-	return result
-end 'isArm64MovRegReg'
 
 function classifyArm64MovRegReg(sinkOnly RegIntArray, usedByNonSink RegIntArray, dest Arm64VReg, src Arm64VReg)
 	let srcId = arm64VRegId(src)
@@ -492,7 +457,211 @@ function arm64FpPhysFromOrd(ord RegOrdinal) returns Arm64FpVReg
 end 'arm64FpPhysFromOrd'
 
 // ============================================================
-// ARM64 per-op register allocation — helper functions
+// ARM64 operand accessor functions
+// ============================================================
+
+function arm64OpGprDest(op Arm64Op) returns Arm64VReg
+	return match op 'getDest'
+		ldrFromSlot(dest, _) gives dest
+		reloadFromStack(dest, _) gives dest
+		globalLoad(dest, _, _) gives dest
+		leaFromStack(dest, _) gives dest
+		leaRdata(dest, _) gives dest
+		leaFuncAddr(dest, _) gives dest
+		cset(dest, _) gives dest
+		default panic("arm64OpGprDest: not a singleDef op")
+	end 'getDest'
+end 'arm64OpGprDest'
+
+function arm64OpWithPhysDest(op Arm64Op, d RegOrdinal) returns Arm64Op
+	let dp = arm64PhysFromOrd(d)
+	return match op 'rebuild'
+		ldrFromSlot(_, slotIndex) gives Arm64Op.ldrFromSlot(dp, slotIndex: slotIndex)
+		reloadFromStack(_, offset) gives Arm64Op.reloadFromStack(dp, offset: offset)
+		globalLoad(_, name, size) gives Arm64Op.globalLoad(dp, name: name, size: size)
+		leaFromStack(_, stackOffset) gives Arm64Op.leaFromStack(dp, stackOffset: stackOffset)
+		leaRdata(_, rdataLabel) gives Arm64Op.leaRdata(dp, rdataLabel: rdataLabel)
+		leaFuncAddr(_, funcName) gives Arm64Op.leaFuncAddr(dp, funcName: funcName)
+		cset(_, condition) gives Arm64Op.cset(dp, condition: condition)
+		default panic("arm64OpWithPhysDest: not a singleDef op")
+	end 'rebuild'
+end 'arm64OpWithPhysDest'
+
+function arm64OpGprSrc(op Arm64Op) returns Arm64VReg
+	return match op 'getSrc'
+		strToSlot(_, src) gives src
+		spillToStack(_, src) gives src
+		strToSpOffset(_, src) gives src
+		globalStore(_, src, _) gives src
+		default panic("arm64OpGprSrc: not a singleUse op")
+	end 'getSrc'
+end 'arm64OpGprSrc'
+
+function arm64OpWithPhysSrc(op Arm64Op, s RegOrdinal) returns Arm64Op
+	let sp = arm64PhysFromOrd(s)
+	return match op 'rebuild'
+		strToSlot(slotIndex, _) gives Arm64Op.strToSlot(slotIndex, src: sp)
+		spillToStack(offset, _) gives Arm64Op.spillToStack(offset, src: sp)
+		strToSpOffset(offset, _) gives Arm64Op.strToSpOffset(offset, src: sp)
+		globalStore(name, _, size) gives Arm64Op.globalStore(name, src: sp, size: size)
+		default panic("arm64OpWithPhysSrc: not a singleUse op")
+	end 'rebuild'
+end 'arm64OpWithPhysSrc'
+
+function arm64OpThreeAddrOperands(op Arm64Op) returns (Arm64VReg, Arm64VReg, Arm64VReg)
+	return match op 'get'
+		addRegs(dest, src1, src2) gives (dest, src1, src2)
+		addsRegs(dest, src1, src2) gives (dest, src1, src2)
+		subRegs(dest, src1, src2) gives (dest, src1, src2)
+		subsRegs(dest, src1, src2) gives (dest, src1, src2)
+		mulRegs(dest, src1, src2) gives (dest, src1, src2)
+		sdivRegs(dest, src1, src2) gives (dest, src1, src2)
+		remRegs(dest, src1, src2) gives (dest, src1, src2)
+		andRegs(dest, src1, src2) gives (dest, src1, src2)
+		andsRegs(dest, src1, src2) gives (dest, src1, src2)
+		orrRegs(dest, src1, src2) gives (dest, src1, src2)
+		eorRegs(dest, src1, src2) gives (dest, src1, src2)
+		lslRegs(dest, src1, src2) gives (dest, src1, src2)
+		asrRegs(dest, src1, src2) gives (dest, src1, src2)
+		lsrRegs(dest, src1, src2) gives (dest, src1, src2)
+		default panic("arm64OpThreeAddrOperands: unexpected op")
+	end 'get'
+end 'arm64OpThreeAddrOperands'
+
+function arm64OpWithPhysThreeAddr(op Arm64Op, d RegOrdinal, s1 RegOrdinal, s2 RegOrdinal) returns Arm64Op
+	let dp = arm64PhysFromOrd(d)
+	let s1p = arm64PhysFromOrd(s1)
+	let s2p = arm64PhysFromOrd(s2)
+	return match op 'rebuild'
+		addRegs gives Arm64Op.addRegs(dp, src1: s1p, src2: s2p)
+		addsRegs gives Arm64Op.addsRegs(dp, src1: s1p, src2: s2p)
+		subRegs gives Arm64Op.subRegs(dp, src1: s1p, src2: s2p)
+		subsRegs gives Arm64Op.subsRegs(dp, src1: s1p, src2: s2p)
+		mulRegs gives Arm64Op.mulRegs(dp, src1: s1p, src2: s2p)
+		sdivRegs gives Arm64Op.sdivRegs(dp, src1: s1p, src2: s2p)
+		remRegs gives Arm64Op.remRegs(dp, src1: s1p, src2: s2p)
+		andRegs gives Arm64Op.andRegs(dp, src1: s1p, src2: s2p)
+		andsRegs gives Arm64Op.andsRegs(dp, src1: s1p, src2: s2p)
+		orrRegs gives Arm64Op.orrRegs(dp, src1: s1p, src2: s2p)
+		eorRegs gives Arm64Op.eorRegs(dp, src1: s1p, src2: s2p)
+		lslRegs gives Arm64Op.lslRegs(dp, src1: s1p, src2: s2p)
+		asrRegs gives Arm64Op.asrRegs(dp, src1: s1p, src2: s2p)
+		lsrRegs gives Arm64Op.lsrRegs(dp, src1: s1p, src2: s2p)
+		default panic("arm64OpWithPhysThreeAddr: not a threeAddr op")
+	end 'rebuild'
+end 'arm64OpWithPhysThreeAddr'
+
+function arm64OpDefUseOperands(op Arm64Op) returns (Arm64VReg, Arm64VReg)
+	return match op 'get'
+		negReg(dest, src) gives (dest, src)
+		mvnReg(dest, src) gives (dest, src)
+		sxtw(dest, src) gives (dest, src)
+		default panic("arm64OpDefUseOperands: unexpected op")
+	end 'get'
+end 'arm64OpDefUseOperands'
+
+function arm64OpWithPhysDefUse(op Arm64Op, d RegOrdinal, s RegOrdinal) returns Arm64Op
+	let dp = arm64PhysFromOrd(d)
+	let sp = arm64PhysFromOrd(s)
+	return match op 'rebuild'
+		negReg gives Arm64Op.negReg(dp, src: sp)
+		mvnReg gives Arm64Op.mvnReg(dp, src: sp)
+		sxtw gives Arm64Op.sxtw(dp, src: sp)
+		default panic("arm64OpWithPhysDefUse: not a defUse op")
+	end 'rebuild'
+end 'arm64OpWithPhysDefUse'
+
+function arm64OpFpDest(op Arm64Op) returns Arm64FpVReg
+	return match op 'getDest'
+		reloadFpFromStack(dest, _, _) gives dest
+		fpLoadRdata(dest, _, _) gives dest
+		globalLoadFloat(dest, _, _) gives dest
+		default panic("arm64OpFpDest: not an fpSingleDef op")
+	end 'getDest'
+end 'arm64OpFpDest'
+
+function arm64OpWithPhysFpDest(op Arm64Op, d RegOrdinal) returns Arm64Op
+	let dp = arm64FpPhysFromOrd(d)
+	return match op 'rebuild'
+		reloadFpFromStack(_, offset, precision) gives Arm64Op.reloadFpFromStack(dp, offset: offset, precision: precision)
+		fpLoadRdata(_, rdataLabel, precision) gives Arm64Op.fpLoadRdata(dp, rdataLabel: rdataLabel, precision: precision)
+		globalLoadFloat(_, name, precision) gives Arm64Op.globalLoadFloat(dp, name: name, precision: precision)
+		default panic("arm64OpWithPhysFpDest: not an fpSingleDef op")
+	end 'rebuild'
+end 'arm64OpWithPhysFpDest'
+
+function arm64OpFpSrc(op Arm64Op) returns Arm64FpVReg
+	return match op 'getSrc'
+		spillFpToStack(_, src, _) gives src
+		globalStoreFloat(_, src, _) gives src
+		default panic("arm64OpFpSrc: not an fpSingleUse op")
+	end 'getSrc'
+end 'arm64OpFpSrc'
+
+function arm64OpWithPhysFpSrc(op Arm64Op, s RegOrdinal) returns Arm64Op
+	let sp = arm64FpPhysFromOrd(s)
+	return match op 'rebuild'
+		spillFpToStack(offset, _, precision) gives Arm64Op.spillFpToStack(offset, src: sp, precision: precision)
+		globalStoreFloat(name, _, precision) gives Arm64Op.globalStoreFloat(name, src: sp, precision: precision)
+		default panic("arm64OpWithPhysFpSrc: not an fpSingleUse op")
+	end 'rebuild'
+end 'arm64OpWithPhysFpSrc'
+
+function arm64OpFpThreeAddrOperands(op Arm64Op) returns (Arm64FpVReg, Arm64FpVReg, Arm64FpVReg)
+	return match op 'get'
+		fadd(dest, src1, src2, _) gives (dest, src1, src2)
+		fsub(dest, src1, src2, _) gives (dest, src1, src2)
+		fmul(dest, src1, src2, _) gives (dest, src1, src2)
+		fdiv(dest, src1, src2, _) gives (dest, src1, src2)
+		default panic("arm64OpFpThreeAddrOperands: unexpected op")
+	end 'get'
+end 'arm64OpFpThreeAddrOperands'
+
+function arm64OpWithPhysFpThreeAddr(op Arm64Op, d RegOrdinal, s1 RegOrdinal, s2 RegOrdinal) returns Arm64Op
+	let dp = arm64FpPhysFromOrd(d)
+	let s1p = arm64FpPhysFromOrd(s1)
+	let s2p = arm64FpPhysFromOrd(s2)
+	return match op 'rebuild'
+		fadd(_, _, _, precision) gives Arm64Op.fadd(dp, src1: s1p, src2: s2p, precision: precision)
+		fsub(_, _, _, precision) gives Arm64Op.fsub(dp, src1: s1p, src2: s2p, precision: precision)
+		fmul(_, _, _, precision) gives Arm64Op.fmul(dp, src1: s1p, src2: s2p, precision: precision)
+		fdiv(_, _, _, precision) gives Arm64Op.fdiv(dp, src1: s1p, src2: s2p, precision: precision)
+		default panic("arm64OpWithPhysFpThreeAddr: not an fpThreeAddr op")
+	end 'rebuild'
+end 'arm64OpWithPhysFpThreeAddr'
+
+function arm64OpFpDefUseOperands(op Arm64Op) returns (Arm64FpVReg, Arm64FpVReg)
+	return match op 'get'
+		fsqrt(dest, src, _) gives (dest, src)
+		fabs(dest, src, _) gives (dest, src)
+		fneg(dest, src, _) gives (dest, src)
+		fcvt(dest, src, _) gives (dest, src)
+		frintm(dest, src, _) gives (dest, src)
+		frintp(dest, src, _) gives (dest, src)
+		frintz(dest, src, _) gives (dest, src)
+		frintn(dest, src, _) gives (dest, src)
+		default panic("arm64OpFpDefUseOperands: unexpected op")
+	end 'get'
+end 'arm64OpFpDefUseOperands'
+
+function arm64OpWithPhysFpDefUse(op Arm64Op, d RegOrdinal, s RegOrdinal) returns Arm64Op
+	let dp = arm64FpPhysFromOrd(d)
+	let sp = arm64FpPhysFromOrd(s)
+	return match op 'rebuild'
+		fsqrt(_, _, precision) gives Arm64Op.fsqrt(dp, src: sp, precision: precision)
+		fabs(_, _, precision) gives Arm64Op.fabs(dp, src: sp, precision: precision)
+		fneg(_, _, precision) gives Arm64Op.fneg(dp, src: sp, precision: precision)
+		fcvt(_, _, destPrecision) gives Arm64Op.fcvt(dp, src: sp, destPrecision: destPrecision)
+		frintm(_, _, precision) gives Arm64Op.frintm(dp, src: sp, precision: precision)
+		frintp(_, _, precision) gives Arm64Op.frintp(dp, src: sp, precision: precision)
+		frintz(_, _, precision) gives Arm64Op.frintz(dp, src: sp, precision: precision)
+		frintn(_, _, precision) gives Arm64Op.frintn(dp, src: sp, precision: precision)
+		default panic("arm64OpWithPhysFpDefUse: not an fpDefUse op")
+	end 'rebuild'
+end 'arm64OpWithPhysFpDefUse'
+
+// ============================================================
+// ARM64 per-op register allocation — special handlers
 // ============================================================
 
 function aa64MovImm(state RegState, dest Arm64VReg, value MachineWord, dstBlock MlirBlock)
@@ -500,80 +669,7 @@ function aa64MovImm(state RegState, dest Arm64VReg, value MachineWord, dstBlock 
 	dstBlock.ops.push(MlirOp.arm64(Arm64Op.movImm(arm64PhysFromOrd(d), value: value)))
 end 'aa64MovImm'
 
-function aa64StrToSlot(state RegState, slotIndex VarSlot, src Arm64VReg, dstBlock MlirBlock)
-	let s = arm64ResolveGprUse(state, vreg: src, dstBlock: dstBlock, protect1: RM_NONE, protect2: RM_NONE)
-	dstBlock.ops.push(MlirOp.arm64(Arm64Op.strToSlot(slotIndex, src: arm64PhysFromOrd(s))))
-end 'aa64StrToSlot'
-
-function aa64LdrFromSlot(state RegState, dest Arm64VReg, slotIndex VarSlot, dstBlock MlirBlock)
-	let d = arm64ResolveGprDef(state, vreg: dest, dstBlock: dstBlock, protect1: RM_NONE, protect2: RM_NONE)
-	dstBlock.ops.push(MlirOp.arm64(Arm64Op.ldrFromSlot(arm64PhysFromOrd(d), slotIndex: slotIndex)))
-end 'aa64LdrFromSlot'
-
-// Three-address: dest=def, src1=use, src2=use
-enum Arm64ThreeAddrOp
-	add
-	adds
-	sub
-	subs
-	mul
-	sdiv
-	rem
-	bitwiseAnd
-	ands
-	orr
-	eor
-	lsl
-	asr
-	lsr
-end 'Arm64ThreeAddrOp'
-
-function aa64ThreeAddr(state RegState, dest Arm64VReg, src1 Arm64VReg, src2 Arm64VReg, dstBlock MlirBlock, op Arm64ThreeAddrOp)
-	let s1 = arm64ResolveGprUse(state, vreg: src1, dstBlock: dstBlock, protect1: RM_NONE, protect2: RM_NONE)
-	let s2 = arm64ResolveGprUse(state, vreg: src2, dstBlock: dstBlock, protect1: s1, protect2: RM_NONE)
-	let d = arm64ResolveGprDef(state, vreg: dest, dstBlock: dstBlock, protect1: s1, protect2: s2)
-	let dp = arm64PhysFromOrd(d)
-	let s1p = arm64PhysFromOrd(s1)
-	let s2p = arm64PhysFromOrd(s2)
-	match op 'emit'
-		add then dstBlock.ops.push(MlirOp.arm64(Arm64Op.addRegs(dp, src1: s1p, src2: s2p)))
-		adds then dstBlock.ops.push(MlirOp.arm64(Arm64Op.addsRegs(dp, src1: s1p, src2: s2p)))
-		sub then dstBlock.ops.push(MlirOp.arm64(Arm64Op.subRegs(dp, src1: s1p, src2: s2p)))
-		subs then dstBlock.ops.push(MlirOp.arm64(Arm64Op.subsRegs(dp, src1: s1p, src2: s2p)))
-		mul then dstBlock.ops.push(MlirOp.arm64(Arm64Op.mulRegs(dp, src1: s1p, src2: s2p)))
-		sdiv then dstBlock.ops.push(MlirOp.arm64(Arm64Op.sdivRegs(dp, src1: s1p, src2: s2p)))
-		rem then dstBlock.ops.push(MlirOp.arm64(Arm64Op.remRegs(dp, src1: s1p, src2: s2p)))
-		bitwiseAnd then dstBlock.ops.push(MlirOp.arm64(Arm64Op.andRegs(dp, src1: s1p, src2: s2p)))
-		ands then dstBlock.ops.push(MlirOp.arm64(Arm64Op.andsRegs(dp, src1: s1p, src2: s2p)))
-		orr then dstBlock.ops.push(MlirOp.arm64(Arm64Op.orrRegs(dp, src1: s1p, src2: s2p)))
-		eor then dstBlock.ops.push(MlirOp.arm64(Arm64Op.eorRegs(dp, src1: s1p, src2: s2p)))
-		lsl then dstBlock.ops.push(MlirOp.arm64(Arm64Op.lslRegs(dp, src1: s1p, src2: s2p)))
-		asr then dstBlock.ops.push(MlirOp.arm64(Arm64Op.asrRegs(dp, src1: s1p, src2: s2p)))
-		lsr then dstBlock.ops.push(MlirOp.arm64(Arm64Op.lsrRegs(dp, src1: s1p, src2: s2p)))
-	end 'emit'
-end 'aa64ThreeAddr'
-
-function aa64UnaryDestSrc(state RegState, dest Arm64VReg, src Arm64VReg, dstBlock MlirBlock, isNeg bool)
-	let s = arm64ResolveGprUse(state, vreg: src, dstBlock: dstBlock, protect1: RM_NONE, protect2: RM_NONE)
-	let d = arm64ResolveGprDef(state, vreg: dest, dstBlock: dstBlock, protect1: s, protect2: RM_NONE)
-	if isNeg 'neg'
-		dstBlock.ops.push(MlirOp.arm64(Arm64Op.negReg(arm64PhysFromOrd(d), src: arm64PhysFromOrd(s))))
-	end 'neg' else 'mvn'
-		dstBlock.ops.push(MlirOp.arm64(Arm64Op.mvnReg(arm64PhysFromOrd(d), src: arm64PhysFromOrd(s))))
-	end 'mvn'
-end 'aa64UnaryDestSrc'
-
-function aa64CmpRegs(state RegState, src1 Arm64VReg, src2 Arm64VReg, dstBlock MlirBlock)
-	let s1 = arm64ResolveGprUse(state, vreg: src1, dstBlock: dstBlock, protect1: RM_NONE, protect2: RM_NONE)
-	let s2 = arm64ResolveGprUse(state, vreg: src2, dstBlock: dstBlock, protect1: s1, protect2: RM_NONE)
-	dstBlock.ops.push(MlirOp.arm64(Arm64Op.cmpRegs(arm64PhysFromOrd(s1), src2: arm64PhysFromOrd(s2))))
-end 'aa64CmpRegs'
-
-function aa64CmpRegZero(state RegState, src Arm64VReg, dstBlock MlirBlock)
-	let s = arm64ResolveGprUse(state, vreg: src, dstBlock: dstBlock, protect1: RM_NONE, protect2: RM_NONE)
-	dstBlock.ops.push(MlirOp.arm64(Arm64Op.cmpRegZero(arm64PhysFromOrd(s))))
-end 'aa64CmpRegZero'
-
+// Adopts the source physical register directly when possible, avoiding a redundant mov.
 function aa64MovRegReg(state RegState, dest Arm64VReg, src Arm64VReg, dstBlock MlirBlock)
 	let srcPhysOrd = match src 'checkPhysSrc'
 		physical(reg) gives arm64RegToOrdinal(reg)
@@ -605,88 +701,6 @@ function aa64MovRegReg(state RegState, dest Arm64VReg, src Arm64VReg, dstBlock M
 	end 'needMov'
 end 'aa64MovRegReg'
 
-function aa64SpillToStack(state RegState, offset MachineWord, src Arm64VReg, dstBlock MlirBlock)
-	let s = arm64ResolveGprUse(state, vreg: src, dstBlock: dstBlock, protect1: RM_NONE, protect2: RM_NONE)
-	dstBlock.ops.push(MlirOp.arm64(Arm64Op.spillToStack(offset, src: arm64PhysFromOrd(s))))
-end 'aa64SpillToStack'
-
-function aa64ReloadFromStack(state RegState, dest Arm64VReg, offset MachineWord, dstBlock MlirBlock)
-	let d = arm64ResolveGprDef(state, vreg: dest, dstBlock: dstBlock, protect1: RM_NONE, protect2: RM_NONE)
-	dstBlock.ops.push(MlirOp.arm64(Arm64Op.reloadFromStack(arm64PhysFromOrd(d), offset: offset)))
-end 'aa64ReloadFromStack'
-
-function aa64BranchLinkReg(state RegState, reg Arm64VReg, dstBlock MlirBlock)
-	let r = arm64ResolveGprUse(state, vreg: reg, dstBlock: dstBlock, protect1: RM_NONE, protect2: RM_NONE)
-	dstBlock.ops.push(MlirOp.arm64(Arm64Op.branchLinkReg(arm64PhysFromOrd(r))))
-end 'aa64BranchLinkReg'
-
-function aa64StrToSpOffset(state RegState, offset StackSize, src Arm64VReg, dstBlock MlirBlock)
-	let s = arm64ResolveGprUse(state, vreg: src, dstBlock: dstBlock, protect1: RM_NONE, protect2: RM_NONE)
-	dstBlock.ops.push(MlirOp.arm64(Arm64Op.strToSpOffset(offset, src: arm64PhysFromOrd(s))))
-end 'aa64StrToSpOffset'
-
-function aa64Cset(state RegState, dest Arm64VReg, condition Arm64CondCode, dstBlock MlirBlock)
-	let d = arm64ResolveGprDef(state, vreg: dest, dstBlock: dstBlock, protect1: RM_NONE, protect2: RM_NONE)
-	dstBlock.ops.push(MlirOp.arm64(Arm64Op.cset(arm64PhysFromOrd(d), condition: condition)))
-end 'aa64Cset'
-
-function aa64Csel(state RegState, dest Arm64VReg, src1 Arm64VReg, src2 Arm64VReg, condition Arm64CondCode, dstBlock MlirBlock)
-	let s1 = arm64ResolveGprUse(state, vreg: src1, dstBlock: dstBlock, protect1: RM_NONE, protect2: RM_NONE)
-	let s2 = arm64ResolveGprUse(state, vreg: src2, dstBlock: dstBlock, protect1: s1, protect2: RM_NONE)
-	let d = arm64ResolveGprDef(state, vreg: dest, dstBlock: dstBlock, protect1: s1, protect2: s2)
-	dstBlock.ops.push(MlirOp.arm64(Arm64Op.csel(arm64PhysFromOrd(d), src1: arm64PhysFromOrd(s1), src2: arm64PhysFromOrd(s2), condition: condition)))
-end 'aa64Csel'
-
-function aa64Sxtw(state RegState, dest Arm64VReg, src Arm64VReg, dstBlock MlirBlock)
-	let s = arm64ResolveGprUse(state, vreg: src, dstBlock: dstBlock, protect1: RM_NONE, protect2: RM_NONE)
-	let d = arm64ResolveGprDef(state, vreg: dest, dstBlock: dstBlock, protect1: s, protect2: RM_NONE)
-	dstBlock.ops.push(MlirOp.arm64(Arm64Op.sxtw(arm64PhysFromOrd(d), src: arm64PhysFromOrd(s))))
-end 'aa64Sxtw'
-
-function aa64StoreIndirect(state RegState, baseReg Arm64VReg, offset MachineWord, srcReg Arm64VReg, size MachineWord, dstBlock MlirBlock)
-	let b = arm64ResolveGprUse(state, vreg: baseReg, dstBlock: dstBlock, protect1: RM_NONE, protect2: RM_NONE)
-	let s = arm64ResolveGprUse(state, vreg: srcReg, dstBlock: dstBlock, protect1: b, protect2: RM_NONE)
-	dstBlock.ops.push(MlirOp.arm64(Arm64Op.storeIndirect(arm64PhysFromOrd(b), offset: offset, srcReg: arm64PhysFromOrd(s), size: size)))
-end 'aa64StoreIndirect'
-
-function aa64LoadIndirect(state RegState, destReg Arm64VReg, baseReg Arm64VReg, offset MachineWord, size MachineWord, dstBlock MlirBlock)
-	let b = arm64ResolveGprUse(state, vreg: baseReg, dstBlock: dstBlock, protect1: RM_NONE, protect2: RM_NONE)
-	let d = arm64ResolveGprDef(state, vreg: destReg, dstBlock: dstBlock, protect1: b, protect2: RM_NONE)
-	dstBlock.ops.push(MlirOp.arm64(Arm64Op.loadIndirect(arm64PhysFromOrd(d), baseReg: arm64PhysFromOrd(b), offset: offset, size: size)))
-end 'aa64LoadIndirect'
-
-function aa64NullSafeLoad(state RegState, dest Arm64VReg, baseReg Arm64VReg, offset MachineWord, dstBlock MlirBlock)
-	let b = arm64ResolveGprUse(state, vreg: baseReg, dstBlock: dstBlock, protect1: RM_NONE, protect2: RM_NONE)
-	let d = arm64ResolveGprDef(state, vreg: dest, dstBlock: dstBlock, protect1: b, protect2: RM_NONE)
-	dstBlock.ops.push(MlirOp.arm64(Arm64Op.nullSafeLoad(arm64PhysFromOrd(d), baseReg: arm64PhysFromOrd(b), offset: offset)))
-end 'aa64NullSafeLoad'
-
-function aa64GlobalLoad(state RegState, dest Arm64VReg, name String, size MachineWord, dstBlock MlirBlock)
-	let d = arm64ResolveGprDef(state, vreg: dest, dstBlock: dstBlock, protect1: RM_NONE, protect2: RM_NONE)
-	dstBlock.ops.push(MlirOp.arm64(Arm64Op.globalLoad(arm64PhysFromOrd(d), name: name, size: size)))
-end 'aa64GlobalLoad'
-
-function aa64GlobalStore(state RegState, name String, src Arm64VReg, size MachineWord, dstBlock MlirBlock)
-	let s = arm64ResolveGprUse(state, vreg: src, dstBlock: dstBlock, protect1: RM_NONE, protect2: RM_NONE)
-	dstBlock.ops.push(MlirOp.arm64(Arm64Op.globalStore(name, src: arm64PhysFromOrd(s), size: size)))
-end 'aa64GlobalStore'
-
-function aa64LeaFromStack(state RegState, dest Arm64VReg, stackOffset MachineWord, dstBlock MlirBlock)
-	let d = arm64ResolveGprDef(state, vreg: dest, dstBlock: dstBlock, protect1: RM_NONE, protect2: RM_NONE)
-	dstBlock.ops.push(MlirOp.arm64(Arm64Op.leaFromStack(arm64PhysFromOrd(d), stackOffset: stackOffset)))
-end 'aa64LeaFromStack'
-
-function aa64LeaRdata(state RegState, dest Arm64VReg, rdataLabel String, dstBlock MlirBlock)
-	let d = arm64ResolveGprDef(state, vreg: dest, dstBlock: dstBlock, protect1: RM_NONE, protect2: RM_NONE)
-	dstBlock.ops.push(MlirOp.arm64(Arm64Op.leaRdata(arm64PhysFromOrd(d), rdataLabel: rdataLabel)))
-end 'aa64LeaRdata'
-
-function aa64LeaFuncAddr(state RegState, dest Arm64VReg, funcName String, dstBlock MlirBlock)
-	let d = arm64ResolveGprDef(state, vreg: dest, dstBlock: dstBlock, protect1: RM_NONE, protect2: RM_NONE)
-	dstBlock.ops.push(MlirOp.arm64(Arm64Op.leaFuncAddr(arm64PhysFromOrd(d), funcName: funcName)))
-end 'aa64LeaFuncAddr'
-
-// ARM64 FP helpers
 function aa64FmovRegReg(state RegState, dest Arm64FpVReg, src Arm64FpVReg, precision FloatPrecision, dstBlock MlirBlock)
 	let s = arm64ResolveFpUse(state, vreg: src, dstBlock: dstBlock)
 	let d = arm64ResolveFpDef(state, vreg: dest, dstBlock: dstBlock)
@@ -695,192 +709,323 @@ function aa64FmovRegReg(state RegState, dest Arm64FpVReg, src Arm64FpVReg, preci
 	end 'needFpMov'
 end 'aa64FmovRegReg'
 
-function aa64SpillFpToStack(state RegState, offset MachineWord, src Arm64FpVReg, precision FloatPrecision, dstBlock MlirBlock)
-	let s = arm64ResolveFpUse(state, vreg: src, dstBlock: dstBlock)
-	dstBlock.ops.push(MlirOp.arm64(Arm64Op.spillFpToStack(offset, src: arm64FpPhysFromOrd(s), precision: precision)))
-end 'aa64SpillFpToStack'
+// ============================================================
+// ARM64 per-op dispatch — pattern handler functions
+// ============================================================
 
-function aa64ReloadFpFromStack(state RegState, dest Arm64FpVReg, offset MachineWord, precision FloatPrecision, dstBlock MlirBlock)
-	let d = arm64ResolveFpDef(state, vreg: dest, dstBlock: dstBlock)
-	dstBlock.ops.push(MlirOp.arm64(Arm64Op.reloadFpFromStack(arm64FpPhysFromOrd(d), offset: offset, precision: precision)))
-end 'aa64ReloadFpFromStack'
+function aa64PassThrough(state RegState, a64Op Arm64Op, dstBlock MlirBlock, isCall bool, implicitDefs RegMask, implicitReads RegMask)
+	rmPrepImplicitDefs(state, implicitDefs: implicitDefs, implicitReads: implicitReads, dstBlock: dstBlock)
+	if isCall 'clobberFp'
+		rmClobberCallerSavedFp(state, dstBlock: dstBlock)
+	end 'clobberFp'
+	dstBlock.ops.push(MlirOp.arm64(a64Op))
+	rmClearImplicitDefs(state, implicitDefs: implicitDefs)
+end 'aa64PassThrough'
 
-function aa64FpLoadRdata(state RegState, dest Arm64FpVReg, rdataLabel String, precision FloatPrecision, dstBlock MlirBlock)
-	let d = arm64ResolveFpDef(state, vreg: dest, dstBlock: dstBlock)
-	dstBlock.ops.push(MlirOp.arm64(Arm64Op.fpLoadRdata(arm64FpPhysFromOrd(d), rdataLabel: rdataLabel, precision: precision)))
-end 'aa64FpLoadRdata'
-
-function aa64FmovToFloat(state RegState, dest Arm64FpVReg, src Arm64VReg, precision FloatPrecision, dstBlock MlirBlock)
-	let s = arm64ResolveGprUse(state, vreg: src, dstBlock: dstBlock, protect1: RM_NONE, protect2: RM_NONE)
-	let d = arm64ResolveFpDef(state, vreg: dest, dstBlock: dstBlock)
-	dstBlock.ops.push(MlirOp.arm64(Arm64Op.fmovToFloat(arm64FpPhysFromOrd(d), src: arm64PhysFromOrd(s), precision: precision)))
-end 'aa64FmovToFloat'
-
-function aa64FmovToGpr(state RegState, dest Arm64VReg, src Arm64FpVReg, precision FloatPrecision, dstBlock MlirBlock)
-	let s = arm64ResolveFpUse(state, vreg: src, dstBlock: dstBlock)
+function aa64SingleDef(state RegState, a64Op Arm64Op, dstBlock MlirBlock, implicitDefs RegMask, implicitReads RegMask)
+	rmPrepImplicitDefs(state, implicitDefs: implicitDefs, implicitReads: implicitReads, dstBlock: dstBlock)
+	let dest = arm64OpGprDest(a64Op)
 	let d = arm64ResolveGprDef(state, vreg: dest, dstBlock: dstBlock, protect1: RM_NONE, protect2: RM_NONE)
-	dstBlock.ops.push(MlirOp.arm64(Arm64Op.fmovToGpr(arm64PhysFromOrd(d), src: arm64FpPhysFromOrd(s), precision: precision)))
-end 'aa64FmovToGpr'
+	dstBlock.ops.push(MlirOp.arm64(arm64OpWithPhysDest(a64Op, d: d)))
+	rmClearImplicitDefs(state, implicitDefs: implicitDefs)
+end 'aa64SingleDef'
 
-function aa64Scvtf(state RegState, dest Arm64FpVReg, src Arm64VReg, precision FloatPrecision, dstBlock MlirBlock)
+function aa64SingleUse(state RegState, a64Op Arm64Op, dstBlock MlirBlock, implicitDefs RegMask, implicitReads RegMask)
+	rmPrepImplicitDefs(state, implicitDefs: implicitDefs, implicitReads: implicitReads, dstBlock: dstBlock)
+	let src = arm64OpGprSrc(a64Op)
 	let s = arm64ResolveGprUse(state, vreg: src, dstBlock: dstBlock, protect1: RM_NONE, protect2: RM_NONE)
+	dstBlock.ops.push(MlirOp.arm64(arm64OpWithPhysSrc(a64Op, s: s)))
+
+	// Record stack home so the allocator can avoid redundant reloads
+	match a64Op 'checkStrToSlot'
+		prologue to movImm then break 'checkStrToSlot'
+		strToSlot(slotIndex, slotSrc) then aa64NoteStrToSlotHome(state, slotIndex: slotIndex, src: slotSrc)
+		ldrFromSlot to nullSafeLoad then break 'checkStrToSlot'
+	end 'checkStrToSlot'
+
+	rmClearImplicitDefs(state, implicitDefs: implicitDefs)
+end 'aa64SingleUse'
+
+function aa64NoteStrToSlotHome(state RegState, slotIndex VarSlot, src Arm64VReg)
+	let srcId = arm64VRegId(src)
+	if srcId >= 0 'recordHome'
+		let slotOffset = 16 + slotIndex * 8
+		rmNoteStoreToStack(state, valueId: srcId, stackOffset: slotOffset)
+	end 'recordHome'
+end 'aa64NoteStrToSlotHome'
+
+function aa64ThreeAddr(state RegState, a64Op Arm64Op, dstBlock MlirBlock, implicitDefs RegMask, implicitReads RegMask)
+	rmPrepImplicitDefs(state, implicitDefs: implicitDefs, implicitReads: implicitReads, dstBlock: dstBlock)
+	var (dest, src1, src2) = arm64OpThreeAddrOperands(a64Op)
+	let s1 = arm64ResolveGprUse(state, vreg: src1, dstBlock: dstBlock, protect1: RM_NONE, protect2: RM_NONE)
+	let s2 = arm64ResolveGprUse(state, vreg: src2, dstBlock: dstBlock, protect1: s1, protect2: RM_NONE)
+	let d = arm64ResolveGprDef(state, vreg: dest, dstBlock: dstBlock, protect1: s1, protect2: s2)
+	dstBlock.ops.push(MlirOp.arm64(arm64OpWithPhysThreeAddr(a64Op, d: d, s1: s1, s2: s2)))
+	rmClearImplicitDefs(state, implicitDefs: implicitDefs)
+end 'aa64ThreeAddr'
+
+function aa64DefUse(state RegState, a64Op Arm64Op, dstBlock MlirBlock, implicitDefs RegMask, implicitReads RegMask)
+	rmPrepImplicitDefs(state, implicitDefs: implicitDefs, implicitReads: implicitReads, dstBlock: dstBlock)
+	var (dest, src) = arm64OpDefUseOperands(a64Op)
+	let s = arm64ResolveGprUse(state, vreg: src, dstBlock: dstBlock, protect1: RM_NONE, protect2: RM_NONE)
+	let d = arm64ResolveGprDef(state, vreg: dest, dstBlock: dstBlock, protect1: s, protect2: RM_NONE)
+	dstBlock.ops.push(MlirOp.arm64(arm64OpWithPhysDefUse(a64Op, d: d, s: s)))
+	rmClearImplicitDefs(state, implicitDefs: implicitDefs)
+end 'aa64DefUse'
+
+function aa64CmpRegs(state RegState, src1 Arm64VReg, src2 Arm64VReg, dstBlock MlirBlock, implicitDefs RegMask, implicitReads RegMask)
+	rmPrepImplicitDefs(state, implicitDefs: implicitDefs, implicitReads: implicitReads, dstBlock: dstBlock)
+	let s1 = arm64ResolveGprUse(state, vreg: src1, dstBlock: dstBlock, protect1: RM_NONE, protect2: RM_NONE)
+	let s2 = arm64ResolveGprUse(state, vreg: src2, dstBlock: dstBlock, protect1: s1, protect2: RM_NONE)
+	dstBlock.ops.push(MlirOp.arm64(Arm64Op.cmpRegs(arm64PhysFromOrd(s1), src2: arm64PhysFromOrd(s2))))
+	rmClearImplicitDefs(state, implicitDefs: implicitDefs)
+end 'aa64CmpRegs'
+
+function aa64CmpRegZero(state RegState, src Arm64VReg, dstBlock MlirBlock, implicitDefs RegMask, implicitReads RegMask)
+	rmPrepImplicitDefs(state, implicitDefs: implicitDefs, implicitReads: implicitReads, dstBlock: dstBlock)
+	let s = arm64ResolveGprUse(state, vreg: src, dstBlock: dstBlock, protect1: RM_NONE, protect2: RM_NONE)
+	dstBlock.ops.push(MlirOp.arm64(Arm64Op.cmpRegZero(arm64PhysFromOrd(s))))
+	rmClearImplicitDefs(state, implicitDefs: implicitDefs)
+end 'aa64CmpRegZero'
+
+function aa64Csel(state RegState, dest Arm64VReg, src1 Arm64VReg, src2 Arm64VReg, condition Arm64CondCode, dstBlock MlirBlock, implicitDefs RegMask, implicitReads RegMask)
+	rmPrepImplicitDefs(state, implicitDefs: implicitDefs, implicitReads: implicitReads, dstBlock: dstBlock)
+	let s1 = arm64ResolveGprUse(state, vreg: src1, dstBlock: dstBlock, protect1: RM_NONE, protect2: RM_NONE)
+	let s2 = arm64ResolveGprUse(state, vreg: src2, dstBlock: dstBlock, protect1: s1, protect2: RM_NONE)
+	let d = arm64ResolveGprDef(state, vreg: dest, dstBlock: dstBlock, protect1: s1, protect2: s2)
+	dstBlock.ops.push(MlirOp.arm64(Arm64Op.csel(arm64PhysFromOrd(d), src1: arm64PhysFromOrd(s1), src2: arm64PhysFromOrd(s2), condition: condition)))
+	rmClearImplicitDefs(state, implicitDefs: implicitDefs)
+end 'aa64Csel'
+
+function aa64BranchLinkReg(state RegState, reg Arm64VReg, dstBlock MlirBlock)
+	let r = arm64ResolveGprUse(state, vreg: reg, dstBlock: dstBlock, protect1: RM_NONE, protect2: RM_NONE)
+	rmClobberCallerSaved(state, dstBlock: dstBlock)
+	dstBlock.ops.push(MlirOp.arm64(Arm64Op.branchLinkReg(arm64PhysFromOrd(r))))
+end 'aa64BranchLinkReg'
+
+function aa64StoreIndirect(state RegState, baseReg Arm64VReg, offset MachineWord, srcReg Arm64VReg, size MachineWord, dstBlock MlirBlock, implicitDefs RegMask, implicitReads RegMask)
+	rmPrepImplicitDefs(state, implicitDefs: implicitDefs, implicitReads: implicitReads, dstBlock: dstBlock)
+	let b = arm64ResolveGprUse(state, vreg: baseReg, dstBlock: dstBlock, protect1: RM_NONE, protect2: RM_NONE)
+	let s = arm64ResolveGprUse(state, vreg: srcReg, dstBlock: dstBlock, protect1: b, protect2: RM_NONE)
+	dstBlock.ops.push(MlirOp.arm64(Arm64Op.storeIndirect(arm64PhysFromOrd(b), offset: offset, srcReg: arm64PhysFromOrd(s), size: size)))
+	rmClearImplicitDefs(state, implicitDefs: implicitDefs)
+end 'aa64StoreIndirect'
+
+function aa64LoadIndirect(state RegState, destReg Arm64VReg, baseReg Arm64VReg, offset MachineWord, size MachineWord, dstBlock MlirBlock, implicitDefs RegMask, implicitReads RegMask)
+	rmPrepImplicitDefs(state, implicitDefs: implicitDefs, implicitReads: implicitReads, dstBlock: dstBlock)
+	let b = arm64ResolveGprUse(state, vreg: baseReg, dstBlock: dstBlock, protect1: RM_NONE, protect2: RM_NONE)
+	let d = arm64ResolveGprDef(state, vreg: destReg, dstBlock: dstBlock, protect1: b, protect2: RM_NONE)
+	dstBlock.ops.push(MlirOp.arm64(Arm64Op.loadIndirect(arm64PhysFromOrd(d), baseReg: arm64PhysFromOrd(b), offset: offset, size: size)))
+	rmClearImplicitDefs(state, implicitDefs: implicitDefs)
+end 'aa64LoadIndirect'
+
+function aa64NullSafeLoad(state RegState, dest Arm64VReg, baseReg Arm64VReg, offset MachineWord, dstBlock MlirBlock, implicitDefs RegMask, implicitReads RegMask)
+	rmPrepImplicitDefs(state, implicitDefs: implicitDefs, implicitReads: implicitReads, dstBlock: dstBlock)
+	let b = arm64ResolveGprUse(state, vreg: baseReg, dstBlock: dstBlock, protect1: RM_NONE, protect2: RM_NONE)
+	let d = arm64ResolveGprDef(state, vreg: dest, dstBlock: dstBlock, protect1: b, protect2: RM_NONE)
+	dstBlock.ops.push(MlirOp.arm64(Arm64Op.nullSafeLoad(arm64PhysFromOrd(d), baseReg: arm64PhysFromOrd(b), offset: offset)))
+	rmClearImplicitDefs(state, implicitDefs: implicitDefs)
+end 'aa64NullSafeLoad'
+
+function aa64FpSingleDef(state RegState, a64Op Arm64Op, dstBlock MlirBlock, implicitDefs RegMask, implicitReads RegMask)
+	rmPrepImplicitDefs(state, implicitDefs: implicitDefs, implicitReads: implicitReads, dstBlock: dstBlock)
+	let dest = arm64OpFpDest(a64Op)
 	let d = arm64ResolveFpDef(state, vreg: dest, dstBlock: dstBlock)
-	dstBlock.ops.push(MlirOp.arm64(Arm64Op.scvtf(arm64FpPhysFromOrd(d), src: arm64PhysFromOrd(s), precision: precision)))
-end 'aa64Scvtf'
+	dstBlock.ops.push(MlirOp.arm64(arm64OpWithPhysFpDest(a64Op, d: d)))
+	rmClearImplicitDefs(state, implicitDefs: implicitDefs)
+end 'aa64FpSingleDef'
 
-function aa64Fcvtzs(state RegState, dest Arm64VReg, src Arm64FpVReg, precision FloatPrecision, dstBlock MlirBlock)
+function aa64FpSingleUse(state RegState, a64Op Arm64Op, dstBlock MlirBlock, implicitDefs RegMask, implicitReads RegMask)
+	rmPrepImplicitDefs(state, implicitDefs: implicitDefs, implicitReads: implicitReads, dstBlock: dstBlock)
+	let src = arm64OpFpSrc(a64Op)
 	let s = arm64ResolveFpUse(state, vreg: src, dstBlock: dstBlock)
-	let d = arm64ResolveGprDef(state, vreg: dest, dstBlock: dstBlock, protect1: RM_NONE, protect2: RM_NONE)
-	dstBlock.ops.push(MlirOp.arm64(Arm64Op.fcvtzs(arm64PhysFromOrd(d), src: arm64FpPhysFromOrd(s), precision: precision)))
-end 'aa64Fcvtzs'
+	dstBlock.ops.push(MlirOp.arm64(arm64OpWithPhysFpSrc(a64Op, s: s)))
+	rmClearImplicitDefs(state, implicitDefs: implicitDefs)
+end 'aa64FpSingleUse'
 
-// FP three-address: dest=def, src1=use, src2=use
-function aa64FpThreeAddr(state RegState, dest Arm64FpVReg, src1 Arm64FpVReg, src2 Arm64FpVReg, precision FloatPrecision, dstBlock MlirBlock, op FpTwoAddrOp)
+function aa64FpThreeAddr(state RegState, a64Op Arm64Op, dstBlock MlirBlock, implicitDefs RegMask, implicitReads RegMask)
+	rmPrepImplicitDefs(state, implicitDefs: implicitDefs, implicitReads: implicitReads, dstBlock: dstBlock)
+	var (dest, src1, src2) = arm64OpFpThreeAddrOperands(a64Op)
 	let s1 = arm64ResolveFpUse(state, vreg: src1, dstBlock: dstBlock)
 	let s2 = arm64ResolveFpUse(state, vreg: src2, dstBlock: dstBlock)
 	let d = arm64ResolveFpDef(state, vreg: dest, dstBlock: dstBlock)
-	let dp = arm64FpPhysFromOrd(d)
-	let s1p = arm64FpPhysFromOrd(s1)
-	let s2p = arm64FpPhysFromOrd(s2)
-	match op 'emit'
-		add then dstBlock.ops.push(MlirOp.arm64(Arm64Op.fadd(dp, src1: s1p, src2: s2p, precision: precision)))
-		sub then dstBlock.ops.push(MlirOp.arm64(Arm64Op.fsub(dp, src1: s1p, src2: s2p, precision: precision)))
-		mul then dstBlock.ops.push(MlirOp.arm64(Arm64Op.fmul(dp, src1: s1p, src2: s2p, precision: precision)))
-		div then dstBlock.ops.push(MlirOp.arm64(Arm64Op.fdiv(dp, src1: s1p, src2: s2p, precision: precision)))
-	end 'emit'
+	dstBlock.ops.push(MlirOp.arm64(arm64OpWithPhysFpThreeAddr(a64Op, d: d, s1: s1, s2: s2)))
+	rmClearImplicitDefs(state, implicitDefs: implicitDefs)
 end 'aa64FpThreeAddr'
 
-enum Arm64FpUnaryOp
-	sqrt
-	abs
-	neg
-	fcvt
-	frintm
-	frintp
-	frintz
-	frintn
-end 'Arm64FpUnaryOp'
-
-// FP unary: dest=def, src=use
-function aa64FpUnary(state RegState, dest Arm64FpVReg, src Arm64FpVReg, precision FloatPrecision, dstBlock MlirBlock, op Arm64FpUnaryOp)
+function aa64FpDefUse(state RegState, a64Op Arm64Op, dstBlock MlirBlock, implicitDefs RegMask, implicitReads RegMask)
+	rmPrepImplicitDefs(state, implicitDefs: implicitDefs, implicitReads: implicitReads, dstBlock: dstBlock)
+	var (dest, src) = arm64OpFpDefUseOperands(a64Op)
 	let s = arm64ResolveFpUse(state, vreg: src, dstBlock: dstBlock)
 	let d = arm64ResolveFpDef(state, vreg: dest, dstBlock: dstBlock)
-	let dp = arm64FpPhysFromOrd(d)
-	let sp = arm64FpPhysFromOrd(s)
-	match op 'emit'
-		sqrt then dstBlock.ops.push(MlirOp.arm64(Arm64Op.fsqrt(dp, src: sp, precision: precision)))
-		abs then dstBlock.ops.push(MlirOp.arm64(Arm64Op.fabs(dp, src: sp, precision: precision)))
-		neg then dstBlock.ops.push(MlirOp.arm64(Arm64Op.fneg(dp, src: sp, precision: precision)))
-		fcvt then dstBlock.ops.push(MlirOp.arm64(Arm64Op.fcvt(dp, src: sp, destPrecision: precision)))
-		frintm then dstBlock.ops.push(MlirOp.arm64(Arm64Op.frintm(dp, src: sp, precision: precision)))
-		frintp then dstBlock.ops.push(MlirOp.arm64(Arm64Op.frintp(dp, src: sp, precision: precision)))
-		frintz then dstBlock.ops.push(MlirOp.arm64(Arm64Op.frintz(dp, src: sp, precision: precision)))
-		frintn then dstBlock.ops.push(MlirOp.arm64(Arm64Op.frintn(dp, src: sp, precision: precision)))
-	end 'emit'
-end 'aa64FpUnary'
+	dstBlock.ops.push(MlirOp.arm64(arm64OpWithPhysFpDefUse(a64Op, d: d, s: s)))
+	rmClearImplicitDefs(state, implicitDefs: implicitDefs)
+end 'aa64FpDefUse'
 
-function aa64Fcmp(state RegState, src1 Arm64FpVReg, src2 Arm64FpVReg, precision FloatPrecision, dstBlock MlirBlock)
+function aa64Fcmp(state RegState, src1 Arm64FpVReg, src2 Arm64FpVReg, precision FloatPrecision, dstBlock MlirBlock, implicitDefs RegMask, implicitReads RegMask)
+	rmPrepImplicitDefs(state, implicitDefs: implicitDefs, implicitReads: implicitReads, dstBlock: dstBlock)
 	let s1 = arm64ResolveFpUse(state, vreg: src1, dstBlock: dstBlock)
 	let s2 = arm64ResolveFpUse(state, vreg: src2, dstBlock: dstBlock)
 	dstBlock.ops.push(MlirOp.arm64(Arm64Op.fcmp(arm64FpPhysFromOrd(s1), src2: arm64FpPhysFromOrd(s2), precision: precision)))
+	rmClearImplicitDefs(state, implicitDefs: implicitDefs)
 end 'aa64Fcmp'
 
-function aa64FpStoreIndirect(state RegState, baseReg Arm64VReg, offset MachineWord, src Arm64FpVReg, precision FloatPrecision, dstBlock MlirBlock)
+function aa64FmovToFloat(state RegState, dest Arm64FpVReg, src Arm64VReg, precision FloatPrecision, dstBlock MlirBlock, implicitDefs RegMask, implicitReads RegMask)
+	rmPrepImplicitDefs(state, implicitDefs: implicitDefs, implicitReads: implicitReads, dstBlock: dstBlock)
+	let s = arm64ResolveGprUse(state, vreg: src, dstBlock: dstBlock, protect1: RM_NONE, protect2: RM_NONE)
+	let d = arm64ResolveFpDef(state, vreg: dest, dstBlock: dstBlock)
+	dstBlock.ops.push(MlirOp.arm64(Arm64Op.fmovToFloat(arm64FpPhysFromOrd(d), src: arm64PhysFromOrd(s), precision: precision)))
+	rmClearImplicitDefs(state, implicitDefs: implicitDefs)
+end 'aa64FmovToFloat'
+
+function aa64Scvtf(state RegState, dest Arm64FpVReg, src Arm64VReg, precision FloatPrecision, dstBlock MlirBlock, implicitDefs RegMask, implicitReads RegMask)
+	rmPrepImplicitDefs(state, implicitDefs: implicitDefs, implicitReads: implicitReads, dstBlock: dstBlock)
+	let s = arm64ResolveGprUse(state, vreg: src, dstBlock: dstBlock, protect1: RM_NONE, protect2: RM_NONE)
+	let d = arm64ResolveFpDef(state, vreg: dest, dstBlock: dstBlock)
+	dstBlock.ops.push(MlirOp.arm64(Arm64Op.scvtf(arm64FpPhysFromOrd(d), src: arm64PhysFromOrd(s), precision: precision)))
+	rmClearImplicitDefs(state, implicitDefs: implicitDefs)
+end 'aa64Scvtf'
+
+function aa64FmovToGpr(state RegState, dest Arm64VReg, src Arm64FpVReg, precision FloatPrecision, dstBlock MlirBlock, implicitDefs RegMask, implicitReads RegMask)
+	rmPrepImplicitDefs(state, implicitDefs: implicitDefs, implicitReads: implicitReads, dstBlock: dstBlock)
+	let s = arm64ResolveFpUse(state, vreg: src, dstBlock: dstBlock)
+	let d = arm64ResolveGprDef(state, vreg: dest, dstBlock: dstBlock, protect1: RM_NONE, protect2: RM_NONE)
+	dstBlock.ops.push(MlirOp.arm64(Arm64Op.fmovToGpr(arm64PhysFromOrd(d), src: arm64FpPhysFromOrd(s), precision: precision)))
+	rmClearImplicitDefs(state, implicitDefs: implicitDefs)
+end 'aa64FmovToGpr'
+
+function aa64Fcvtzs(state RegState, dest Arm64VReg, src Arm64FpVReg, precision FloatPrecision, dstBlock MlirBlock, implicitDefs RegMask, implicitReads RegMask)
+	rmPrepImplicitDefs(state, implicitDefs: implicitDefs, implicitReads: implicitReads, dstBlock: dstBlock)
+	let s = arm64ResolveFpUse(state, vreg: src, dstBlock: dstBlock)
+	let d = arm64ResolveGprDef(state, vreg: dest, dstBlock: dstBlock, protect1: RM_NONE, protect2: RM_NONE)
+	dstBlock.ops.push(MlirOp.arm64(Arm64Op.fcvtzs(arm64PhysFromOrd(d), src: arm64FpPhysFromOrd(s), precision: precision)))
+	rmClearImplicitDefs(state, implicitDefs: implicitDefs)
+end 'aa64Fcvtzs'
+
+function aa64FpStoreIndirect(state RegState, baseReg Arm64VReg, offset MachineWord, src Arm64FpVReg, precision FloatPrecision, dstBlock MlirBlock, implicitDefs RegMask, implicitReads RegMask)
+	rmPrepImplicitDefs(state, implicitDefs: implicitDefs, implicitReads: implicitReads, dstBlock: dstBlock)
 	let b = arm64ResolveGprUse(state, vreg: baseReg, dstBlock: dstBlock, protect1: RM_NONE, protect2: RM_NONE)
 	let s = arm64ResolveFpUse(state, vreg: src, dstBlock: dstBlock)
 	dstBlock.ops.push(MlirOp.arm64(Arm64Op.fpStoreIndirect(arm64PhysFromOrd(b), offset: offset, src: arm64FpPhysFromOrd(s), precision: precision)))
+	rmClearImplicitDefs(state, implicitDefs: implicitDefs)
 end 'aa64FpStoreIndirect'
 
-function aa64FpLoadIndirect(state RegState, dest Arm64FpVReg, baseReg Arm64VReg, offset MachineWord, precision FloatPrecision, dstBlock MlirBlock)
+function aa64FpLoadIndirect(state RegState, dest Arm64FpVReg, baseReg Arm64VReg, offset MachineWord, precision FloatPrecision, dstBlock MlirBlock, implicitDefs RegMask, implicitReads RegMask)
+	rmPrepImplicitDefs(state, implicitDefs: implicitDefs, implicitReads: implicitReads, dstBlock: dstBlock)
 	let b = arm64ResolveGprUse(state, vreg: baseReg, dstBlock: dstBlock, protect1: RM_NONE, protect2: RM_NONE)
 	let d = arm64ResolveFpDef(state, vreg: dest, dstBlock: dstBlock)
 	dstBlock.ops.push(MlirOp.arm64(Arm64Op.fpLoadIndirect(arm64FpPhysFromOrd(d), baseReg: arm64PhysFromOrd(b), offset: offset, precision: precision)))
+	rmClearImplicitDefs(state, implicitDefs: implicitDefs)
 end 'aa64FpLoadIndirect'
 
-function aa64GlobalLoadFloat(state RegState, dest Arm64FpVReg, name String, precision FloatPrecision, dstBlock MlirBlock)
-	let d = arm64ResolveFpDef(state, vreg: dest, dstBlock: dstBlock)
-	dstBlock.ops.push(MlirOp.arm64(Arm64Op.globalLoadFloat(arm64FpPhysFromOrd(d), name: name, precision: precision)))
-end 'aa64GlobalLoadFloat'
-
-function aa64GlobalStoreFloat(state RegState, name String, src Arm64FpVReg, precision FloatPrecision, dstBlock MlirBlock)
-	let s = arm64ResolveFpUse(state, vreg: src, dstBlock: dstBlock)
-	dstBlock.ops.push(MlirOp.arm64(Arm64Op.globalStoreFloat(name, src: arm64FpPhysFromOrd(s), precision: precision)))
-end 'aa64GlobalStoreFloat'
-
 // ============================================================
-// ARM64 per-op dispatch
+// ARM64 per-op dispatch — pattern-based
 // ============================================================
 
 export function allocArm64Op(state RegState, a64Op Arm64Op, dstBlock MlirBlock)
-	match a64Op 'dispatch'
-		prologue to epilogue then dstBlock.ops.push(MlirOp.arm64(a64Op))
-		movImm(dest, value) then aa64MovImm(state, dest: dest, value: value, dstBlock: dstBlock)
-		strToSlot(slotIndex, src) then aa64StrToSlot(state, slotIndex: slotIndex, src: src, dstBlock: dstBlock)
-		ldrFromSlot(dest, slotIndex) then aa64LdrFromSlot(state, dest: dest, slotIndex: slotIndex, dstBlock: dstBlock)
-		addRegs(dest, src1, src2) then aa64ThreeAddr(state, dest: dest, src1: src1, src2: src2, dstBlock: dstBlock, op: Arm64ThreeAddrOp.add)
-		addsRegs(dest, src1, src2) then aa64ThreeAddr(state, dest: dest, src1: src1, src2: src2, dstBlock: dstBlock, op: Arm64ThreeAddrOp.adds)
-		subRegs(dest, src1, src2) then aa64ThreeAddr(state, dest: dest, src1: src1, src2: src2, dstBlock: dstBlock, op: Arm64ThreeAddrOp.sub)
-		subsRegs(dest, src1, src2) then aa64ThreeAddr(state, dest: dest, src1: src1, src2: src2, dstBlock: dstBlock, op: Arm64ThreeAddrOp.subs)
-		mulRegs(dest, src1, src2) then aa64ThreeAddr(state, dest: dest, src1: src1, src2: src2, dstBlock: dstBlock, op: Arm64ThreeAddrOp.mul)
-		sdivRegs(dest, src1, src2) then aa64ThreeAddr(state, dest: dest, src1: src1, src2: src2, dstBlock: dstBlock, op: Arm64ThreeAddrOp.sdiv)
-		remRegs(dest, src1, src2) then aa64ThreeAddr(state, dest: dest, src1: src1, src2: src2, dstBlock: dstBlock, op: Arm64ThreeAddrOp.rem)
-		negReg(dest, src) then aa64UnaryDestSrc(state, dest: dest, src: src, dstBlock: dstBlock, isNeg: true)
-		mvnReg(dest, src) then aa64UnaryDestSrc(state, dest: dest, src: src, dstBlock: dstBlock, isNeg: false)
-		andRegs(dest, src1, src2) then aa64ThreeAddr(state, dest: dest, src1: src1, src2: src2, dstBlock: dstBlock, op: Arm64ThreeAddrOp.bitwiseAnd)
-		andsRegs(dest, src1, src2) then aa64ThreeAddr(state, dest: dest, src1: src1, src2: src2, dstBlock: dstBlock, op: Arm64ThreeAddrOp.ands)
-		orrRegs(dest, src1, src2) then aa64ThreeAddr(state, dest: dest, src1: src1, src2: src2, dstBlock: dstBlock, op: Arm64ThreeAddrOp.orr)
-		eorRegs(dest, src1, src2) then aa64ThreeAddr(state, dest: dest, src1: src1, src2: src2, dstBlock: dstBlock, op: Arm64ThreeAddrOp.eor)
-		lslRegs(dest, src1, src2) then aa64ThreeAddr(state, dest: dest, src1: src1, src2: src2, dstBlock: dstBlock, op: Arm64ThreeAddrOp.lsl)
-		asrRegs(dest, src1, src2) then aa64ThreeAddr(state, dest: dest, src1: src1, src2: src2, dstBlock: dstBlock, op: Arm64ThreeAddrOp.asr)
-		lsrRegs(dest, src1, src2) then aa64ThreeAddr(state, dest: dest, src1: src1, src2: src2, dstBlock: dstBlock, op: Arm64ThreeAddrOp.lsr)
-		cmpRegs(src1, src2) then aa64CmpRegs(state, src1: src1, src2: src2, dstBlock: dstBlock)
-		cmpRegZero(src) then aa64CmpRegZero(state, src: src, dstBlock: dstBlock)
-		condBranch to branch then dstBlock.ops.push(MlirOp.arm64(a64Op))
-		branchLink then dstBlock.ops.push(MlirOp.arm64(a64Op))
-		printLiteral to printInt then dstBlock.ops.push(MlirOp.arm64(a64Op))
-		ret then dstBlock.ops.push(MlirOp.arm64(a64Op))
-		syscall to memcpyOp then dstBlock.ops.push(MlirOp.arm64(a64Op))
-		movRegReg(dest, src) then aa64MovRegReg(state, dest: dest, src: src, dstBlock: dstBlock)
-		spillToStack(offset, src) then aa64SpillToStack(state, offset: offset, src: src, dstBlock: dstBlock)
-		reloadFromStack(dest, offset) then aa64ReloadFromStack(state, dest: dest, offset: offset, dstBlock: dstBlock)
-		branchLinkReg(reg) then aa64BranchLinkReg(state, reg: reg, dstBlock: dstBlock)
-		subSpImm to addSpImm then dstBlock.ops.push(MlirOp.arm64(a64Op))
-		strToSpOffset(offset, src) then aa64StrToSpOffset(state, offset: offset, src: src, dstBlock: dstBlock)
-		fmovRegReg(dest, src, precision) then aa64FmovRegReg(state, dest: dest, src: src, precision: precision, dstBlock: dstBlock)
-		spillFpToStack(offset, src, precision) then aa64SpillFpToStack(state, offset: offset, src: src, precision: precision, dstBlock: dstBlock)
-		reloadFpFromStack(dest, offset, precision) then aa64ReloadFpFromStack(state, dest: dest, offset: offset, precision: precision, dstBlock: dstBlock)
-		fmovToFloat(dest, src, precision) then aa64FmovToFloat(state, dest: dest, src: src, precision: precision, dstBlock: dstBlock)
-		fmovToGpr(dest, src, precision) then aa64FmovToGpr(state, dest: dest, src: src, precision: precision, dstBlock: dstBlock)
-		fpLoadRdata(dest, rdataLabel, precision) then aa64FpLoadRdata(state, dest: dest, rdataLabel: rdataLabel, precision: precision, dstBlock: dstBlock)
-		fadd(dest, src1, src2, precision) then aa64FpThreeAddr(state, dest: dest, src1: src1, src2: src2, precision: precision, dstBlock: dstBlock, op: FpTwoAddrOp.add)
-		fsub(dest, src1, src2, precision) then aa64FpThreeAddr(state, dest: dest, src1: src1, src2: src2, precision: precision, dstBlock: dstBlock, op: FpTwoAddrOp.sub)
-		fmul(dest, src1, src2, precision) then aa64FpThreeAddr(state, dest: dest, src1: src1, src2: src2, precision: precision, dstBlock: dstBlock, op: FpTwoAddrOp.mul)
-		fdiv(dest, src1, src2, precision) then aa64FpThreeAddr(state, dest: dest, src1: src1, src2: src2, precision: precision, dstBlock: dstBlock, op: FpTwoAddrOp.div)
-		fsqrt(dest, src, precision) then aa64FpUnary(state, dest: dest, src: src, precision: precision, dstBlock: dstBlock, op: Arm64FpUnaryOp.sqrt)
-		fabs(dest, src, precision) then aa64FpUnary(state, dest: dest, src: src, precision: precision, dstBlock: dstBlock, op: Arm64FpUnaryOp.abs)
-		fneg(dest, src, precision) then aa64FpUnary(state, dest: dest, src: src, precision: precision, dstBlock: dstBlock, op: Arm64FpUnaryOp.neg)
-		fcmp(src1, src2, precision) then aa64Fcmp(state, src1: src1, src2: src2, precision: precision, dstBlock: dstBlock)
-		scvtf(dest, src, precision) then aa64Scvtf(state, dest: dest, src: src, precision: precision, dstBlock: dstBlock)
-		fcvtzs(dest, src, precision) then aa64Fcvtzs(state, dest: dest, src: src, precision: precision, dstBlock: dstBlock)
-		fcvt(dest, src, destPrecision) then aa64FpUnary(state, dest: dest, src: src, precision: destPrecision, dstBlock: dstBlock, op: Arm64FpUnaryOp.fcvt)
-		frintm(dest, src, precision) then aa64FpUnary(state, dest: dest, src: src, precision: precision, dstBlock: dstBlock, op: Arm64FpUnaryOp.frintm)
-		frintp(dest, src, precision) then aa64FpUnary(state, dest: dest, src: src, precision: precision, dstBlock: dstBlock, op: Arm64FpUnaryOp.frintp)
-		frintz(dest, src, precision) then aa64FpUnary(state, dest: dest, src: src, precision: precision, dstBlock: dstBlock, op: Arm64FpUnaryOp.frintz)
-		frintn(dest, src, precision) then aa64FpUnary(state, dest: dest, src: src, precision: precision, dstBlock: dstBlock, op: Arm64FpUnaryOp.frintn)
-		fpStoreIndirect(baseReg, offset, src, precision) then aa64FpStoreIndirect(state, baseReg: baseReg, offset: offset, src: src, precision: precision, dstBlock: dstBlock)
-		fpLoadIndirect(dest, baseReg, offset, precision) then aa64FpLoadIndirect(state, dest: dest, baseReg: baseReg, offset: offset, precision: precision, dstBlock: dstBlock)
-		storeIndirect(baseReg, offset, srcReg, size) then aa64StoreIndirect(state, baseReg: baseReg, offset: offset, srcReg: srcReg, size: size, dstBlock: dstBlock)
-		loadIndirect(destReg, baseReg, offset, size) then aa64LoadIndirect(state, destReg: destReg, baseReg: baseReg, offset: offset, size: size, dstBlock: dstBlock)
-		globalLoad(dest, name, size) then aa64GlobalLoad(state, dest: dest, name: name, size: size, dstBlock: dstBlock)
-		globalStore(name, src, size) then aa64GlobalStore(state, name: name, src: src, size: size, dstBlock: dstBlock)
-		globalLoadFloat(dest, name, precision) then aa64GlobalLoadFloat(state, dest: dest, name: name, precision: precision, dstBlock: dstBlock)
-		globalStoreFloat(name, src, precision) then aa64GlobalStoreFloat(state, name: name, src: src, precision: precision, dstBlock: dstBlock)
-		leaFromStack(dest, stackOffset) then aa64LeaFromStack(state, dest: dest, stackOffset: stackOffset, dstBlock: dstBlock)
-		leaRdata(dest, rdataLabel) then aa64LeaRdata(state, dest: dest, rdataLabel: rdataLabel, dstBlock: dstBlock)
-		leaFuncAddr(dest, funcName) then aa64LeaFuncAddr(state, dest: dest, funcName: funcName, dstBlock: dstBlock)
-		cset(dest, condition) then aa64Cset(state, dest: dest, condition: condition, dstBlock: dstBlock)
-		csel(dest, src1, src2, condition) then aa64Csel(state, dest: dest, src1: src1, src2: src2, condition: condition, dstBlock: dstBlock)
-		sxtw(dest, src) then aa64Sxtw(state, dest: dest, src: src, dstBlock: dstBlock)
-		nullSafeLoad(dest, baseReg, offset) then aa64NullSafeLoad(state, dest: dest, baseReg: baseReg, offset: offset, dstBlock: dstBlock)
+	let meta = a64Op.rawValue
+	let implicitDefs = meta.implicitGprDefs
+	let implicitReads = meta.implicitGprReads
+
+	match meta.pattern 'dispatch'
+		passThrough then aa64PassThrough(state, a64Op: a64Op, dstBlock: dstBlock, isCall: meta.isCall, implicitDefs: implicitDefs, implicitReads: implicitReads)
+
+		constImm then match a64Op 'constImm'
+			movImm(dest, value) then aa64MovImm(state, dest: dest, value: value, dstBlock: dstBlock)
+			default panic("allocArm64Op: unexpected constImm variant")
+		end 'constImm'
+
+		singleDef then aa64SingleDef(state, a64Op: a64Op, dstBlock: dstBlock, implicitDefs: implicitDefs, implicitReads: implicitReads)
+
+		singleUse then aa64SingleUse(state, a64Op: a64Op, dstBlock: dstBlock, implicitDefs: implicitDefs, implicitReads: implicitReads)
+
+		threeAddr then aa64ThreeAddr(state, a64Op: a64Op, dstBlock: dstBlock, implicitDefs: implicitDefs, implicitReads: implicitReads)
+
+		defUse then aa64DefUse(state, a64Op: a64Op, dstBlock: dstBlock, implicitDefs: implicitDefs, implicitReads: implicitReads)
+
+		twoUse then match a64Op 'twoUse'
+			cmpRegs(src1, src2) then aa64CmpRegs(state, src1: src1, src2: src2, dstBlock: dstBlock, implicitDefs: implicitDefs, implicitReads: implicitReads)
+			default panic("allocArm64Op: unexpected twoUse variant")
+		end 'twoUse'
+
+		singleUseNodef then match a64Op 'singleUseNodef'
+			cmpRegZero(src) then aa64CmpRegZero(state, src: src, dstBlock: dstBlock, implicitDefs: implicitDefs, implicitReads: implicitReads)
+			default panic("allocArm64Op: unexpected singleUseNodef variant")
+		end 'singleUseNodef'
+
+		csel then match a64Op 'csel'
+			csel(dest, src1, src2, condition) then aa64Csel(state, dest: dest, src1: src1, src2: src2, condition: condition, dstBlock: dstBlock, implicitDefs: implicitDefs, implicitReads: implicitReads)
+			default panic("allocArm64Op: unexpected csel variant")
+		end 'csel'
+
+		callIndirect then match a64Op 'callIndirect'
+			branchLinkReg(reg) then aa64BranchLinkReg(state, reg: reg, dstBlock: dstBlock)
+			default panic("allocArm64Op: unexpected callIndirect variant")
+		end 'callIndirect'
+
+		movRegReg then match a64Op 'movRegReg'
+			movRegReg(dest, src) then aa64MovRegReg(state, dest: dest, src: src, dstBlock: dstBlock)
+			default panic("allocArm64Op: unexpected movRegReg variant")
+		end 'movRegReg'
+
+		baseUseSrcUse then match a64Op 'baseUseSrcUse'
+			storeIndirect(baseReg, offset, srcReg, size) then aa64StoreIndirect(state, baseReg: baseReg, offset: offset, srcReg: srcReg, size: size, dstBlock: dstBlock, implicitDefs: implicitDefs, implicitReads: implicitReads)
+			default panic("allocArm64Op: unexpected baseUseSrcUse variant")
+		end 'baseUseSrcUse'
+
+		baseUseDest then match a64Op 'baseUseDest'
+			loadIndirect(destReg, baseReg, offset, size) then aa64LoadIndirect(state, destReg: destReg, baseReg: baseReg, offset: offset, size: size, dstBlock: dstBlock, implicitDefs: implicitDefs, implicitReads: implicitReads)
+			nullSafeLoad(dest, baseReg, offset) then aa64NullSafeLoad(state, dest: dest, baseReg: baseReg, offset: offset, dstBlock: dstBlock, implicitDefs: implicitDefs, implicitReads: implicitReads)
+			default panic("allocArm64Op: unexpected baseUseDest variant")
+		end 'baseUseDest'
+
+		fpMov then match a64Op 'fpMov'
+			fmovRegReg(dest, src, precision) then aa64FmovRegReg(state, dest: dest, src: src, precision: precision, dstBlock: dstBlock)
+			default panic("allocArm64Op: unexpected fpMov variant")
+		end 'fpMov'
+
+		fpSingleDef then aa64FpSingleDef(state, a64Op: a64Op, dstBlock: dstBlock, implicitDefs: implicitDefs, implicitReads: implicitReads)
+
+		fpSingleUse then aa64FpSingleUse(state, a64Op: a64Op, dstBlock: dstBlock, implicitDefs: implicitDefs, implicitReads: implicitReads)
+
+		fpThreeAddr then aa64FpThreeAddr(state, a64Op: a64Op, dstBlock: dstBlock, implicitDefs: implicitDefs, implicitReads: implicitReads)
+
+		fpDefUse then aa64FpDefUse(state, a64Op: a64Op, dstBlock: dstBlock, implicitDefs: implicitDefs, implicitReads: implicitReads)
+
+		fpTwoUse then match a64Op 'fpTwoUse'
+			fcmp(src1, src2, precision) then aa64Fcmp(state, src1: src1, src2: src2, precision: precision, dstBlock: dstBlock, implicitDefs: implicitDefs, implicitReads: implicitReads)
+			default panic("allocArm64Op: unexpected fpTwoUse variant")
+		end 'fpTwoUse'
+
+		gprToFp then match a64Op 'gprToFp'
+			fmovToFloat(dest, src, precision) then aa64FmovToFloat(state, dest: dest, src: src, precision: precision, dstBlock: dstBlock, implicitDefs: implicitDefs, implicitReads: implicitReads)
+			scvtf(dest, src, precision) then aa64Scvtf(state, dest: dest, src: src, precision: precision, dstBlock: dstBlock, implicitDefs: implicitDefs, implicitReads: implicitReads)
+			default panic("allocArm64Op: unexpected gprToFp variant")
+		end 'gprToFp'
+
+		fpToGpr then match a64Op 'fpToGpr'
+			fmovToGpr(dest, src, precision) then aa64FmovToGpr(state, dest: dest, src: src, precision: precision, dstBlock: dstBlock, implicitDefs: implicitDefs, implicitReads: implicitReads)
+			fcvtzs(dest, src, precision) then aa64Fcvtzs(state, dest: dest, src: src, precision: precision, dstBlock: dstBlock, implicitDefs: implicitDefs, implicitReads: implicitReads)
+			default panic("allocArm64Op: unexpected fpToGpr variant")
+		end 'fpToGpr'
+
+		baseUseFpUse then match a64Op 'baseUseFpUse'
+			fpStoreIndirect(baseReg, offset, src, precision) then aa64FpStoreIndirect(state, baseReg: baseReg, offset: offset, src: src, precision: precision, dstBlock: dstBlock, implicitDefs: implicitDefs, implicitReads: implicitReads)
+			default panic("allocArm64Op: unexpected baseUseFpUse variant")
+		end 'baseUseFpUse'
+
+		baseUseFpDef then match a64Op 'baseUseFpDef'
+			fpLoadIndirect(dest, baseReg, offset, precision) then aa64FpLoadIndirect(state, dest: dest, baseReg: baseReg, offset: offset, precision: precision, dstBlock: dstBlock, implicitDefs: implicitDefs, implicitReads: implicitReads)
+			default panic("allocArm64Op: unexpected baseUseFpDef variant")
+		end 'baseUseFpDef'
+
+		// Patterns not used by ARM64
+		twoAddr then panic("allocArm64Op: unsupported pattern twoAddr")
+		useDefImm then panic("allocArm64Op: unsupported pattern useDefImm")
+		unaryInPlace then panic("allocArm64Op: unsupported pattern unaryInPlace")
+		fpTwoAddr then panic("allocArm64Op: unsupported pattern fpTwoAddr")
+		shift then panic("allocArm64Op: unsupported pattern shift")
+		divReg then panic("allocArm64Op: unsupported pattern divReg")
+		exchange then panic("allocArm64Op: unsupported pattern exchange")
 	end 'dispatch'
 end 'allocArm64Op'

@@ -211,6 +211,72 @@ end 'main'
 2
 ```
 
+### Enum member reference as struct field value
+
+<!-- test: struct-backing-enum-field -->
+```maxon
+typealias Cost = int(0 to 100)
+
+enum Priority
+	low
+	medium
+	high
+end 'Priority'
+
+type TaskInfo
+	export let priority Priority
+	export let cost Cost
+end 'TaskInfo'
+
+enum Task
+	quick = TaskInfo{priority: Priority.low, cost: 1}
+	normal = TaskInfo{priority: Priority.medium, cost: 5}
+	heavy = TaskInfo{priority: Priority.high, cost: 10}
+end 'Task'
+
+function main() returns ExitCode
+	let t = Task.heavy
+	return t.rawValue.priority.ordinal
+end 'main'
+```
+```exitcode
+2
+```
+
+### Enum member reference in factory call
+
+<!-- test: struct-backing-enum-factory -->
+```maxon
+typealias Level = int(0 to 100)
+
+enum Mode
+	fast
+	slow
+end 'Mode'
+
+type Config
+	export let mode Mode
+	export let level Level
+
+	static function create(mode Mode, level Level) returns Self
+		return Self{mode: mode, level: level}
+	end 'create'
+end 'Config'
+
+enum Setting
+	turbo = Config.create(mode: Mode.fast, level: 10)
+	eco = Config.create(mode: Mode.slow, level: 3)
+end 'Setting'
+
+function main() returns ExitCode
+	let s = Setting.turbo
+	return s.rawValue.mode.ordinal
+end 'main'
+```
+```exitcode
+0
+```
+
 ### Error: mixed backing types
 
 <!-- test: error.struct-backing-mixed -->
