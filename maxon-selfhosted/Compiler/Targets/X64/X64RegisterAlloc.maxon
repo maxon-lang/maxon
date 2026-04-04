@@ -130,7 +130,7 @@ end 'createX64CallConvFps'
 // --- State creation ---
 
 export function createX64RegState() returns RegState
-	return createRegState(0, gprPool: createX64GprPool(), callerSavedGprs: createX64CallerSavedGprs(), target: RegTarget.x64, callConvGprs: createX64CallConvGprs(), returnGprOrd: x64RegToOrdinal(X64Register.rax), errorFlagOrd: x64RegToOrdinal(X64Register.rdx), indirectCallScratchOrd: x64RegToOrdinal(X64Register.r10), gprCycleBreakOrd: x64RegToOrdinal(X64Register.r11), hasXchg: true, fpPool: createX64FpPool(), callerSavedFps: createX64CallerSavedFps(), callConvFps: createX64CallConvFps(), returnFpOrd: 0, fpCycleBreakOrd: 15, spillsGrowDown: true, hasPreSeed: true, hasForwardHints: true, hasBlockArgSlotHomes: true)
+	return createRegState(0, gprPool: createX64GprPool(), callerSavedGprs: createX64CallerSavedGprs(), target: RegTarget.x64, callConvGprs: createX64CallConvGprs(), returnGprOrd: x64RegToOrdinal(X64Register.rax), errorFlagOrd: x64RegToOrdinal(X64Register.rdx), indirectCallScratchOrd: x64RegToOrdinal(X64Register.r10), gprCycleBreakOrd: x64RegToOrdinal(X64Register.r11), hasXchg: true, fpPool: createX64FpPool(), callerSavedFps: createX64CallerSavedFps(), callConvFps: createX64CallConvFps(), returnFpOrd: 0, fpCycleBreakOrd: 15, spillsGrowDown: true, hasPreSeed: true, hasRegisterHints: true, hasBlockArgSlotHomes: true)
 end 'createX64RegState'
 
 // --- Register name ---
@@ -465,6 +465,91 @@ function countX64MixedReads(counts RegIntArray, gpr X64VReg, fp X64FpVReg)
 	incUse(counts, id: x64FpVRegId(fp))
 end 'countX64MixedReads'
 
+// Record the last use position for each read operand of an X64 op.
+// Mirrors countX64OpReads but calls recordLastUse instead of incUse.
+export function recordX64OpLastUses(positions RegIntArray, x64Op X64Op, opIdx RegInt)
+	match x64Op 'scan'
+		prologue to ret then break 'scan'
+		movRegImm to movRegImm32 then break 'scan'
+		movSlot(_, srcReg) then recordLastUse(positions, id: x64VRegId(srcReg), opIdx: opIdx)
+		loadSlot then break 'scan'
+		addRegReg(destReg, srcReg) then recordX64TwoLastUses(positions, reg1: destReg, reg2: srcReg, opIdx: opIdx)
+		subRegReg(destReg, srcReg) then recordX64TwoLastUses(positions, reg1: destReg, reg2: srcReg, opIdx: opIdx)
+		addRegImm(destReg, _) then recordLastUse(positions, id: x64VRegId(destReg), opIdx: opIdx)
+		subRegImm(destReg, _) then recordLastUse(positions, id: x64VRegId(destReg), opIdx: opIdx)
+		imulRegReg(destReg, srcReg) then recordX64TwoLastUses(positions, reg1: destReg, reg2: srcReg, opIdx: opIdx)
+		idivRcx to iremRcx then break 'scan'
+		negReg(reg) then recordLastUse(positions, id: x64VRegId(reg), opIdx: opIdx)
+		bitNotReg(reg) then recordLastUse(positions, id: x64VRegId(reg), opIdx: opIdx)
+		andRegReg(destReg, srcReg) then recordX64TwoLastUses(positions, reg1: destReg, reg2: srcReg, opIdx: opIdx)
+		orRegReg(destReg, srcReg) then recordX64TwoLastUses(positions, reg1: destReg, reg2: srcReg, opIdx: opIdx)
+		xorRegReg(destReg, srcReg) then recordX64TwoLastUses(positions, reg1: destReg, reg2: srcReg, opIdx: opIdx)
+		shlRegCl(_, operand, shiftCount) then recordX64TwoLastUses(positions, reg1: operand, reg2: shiftCount, opIdx: opIdx)
+		sarRegCl(_, operand, shiftCount) then recordX64TwoLastUses(positions, reg1: operand, reg2: shiftCount, opIdx: opIdx)
+		shrRegCl(_, operand, shiftCount) then recordX64TwoLastUses(positions, reg1: operand, reg2: shiftCount, opIdx: opIdx)
+		cmpRaxRcx to addRspImm then break 'scan'
+		movRspOffsetReg(_, srcReg) then recordLastUse(positions, id: x64VRegId(srcReg), opIdx: opIdx)
+		loadRegRbpOffset then break 'scan'
+		callDirect to memcpyOp then break 'scan'
+		movRegReg(_, srcReg) then recordLastUse(positions, id: x64VRegId(srcReg), opIdx: opIdx)
+		cmpRegReg(lhsReg, rhsReg) then recordX64TwoLastUses(positions, reg1: lhsReg, reg2: rhsReg, opIdx: opIdx)
+		cmpRegImm(lhsReg, _) then recordLastUse(positions, id: x64VRegId(lhsReg), opIdx: opIdx)
+		testRegReg(reg1, reg2) then recordX64TwoLastUses(positions, reg1: reg1, reg2: reg2, opIdx: opIdx)
+		cqo then break 'scan'
+		idivReg(divisorReg) then recordLastUse(positions, id: x64VRegId(divisorReg), opIdx: opIdx)
+		spillToStack(_, srcReg) then recordLastUse(positions, id: x64VRegId(srcReg), opIdx: opIdx)
+		reloadFromStack to xorRegRegSelf then break 'scan'
+		callIndirect(reg) then recordLastUse(positions, id: x64VRegId(reg), opIdx: opIdx)
+		xchgRegReg(reg1, reg2) then recordX64TwoLastUses(positions, reg1: reg1, reg2: reg2, opIdx: opIdx)
+		movXmmXmm(_, src, _) then recordLastUse(positions, id: x64FpVRegId(src), opIdx: opIdx)
+		spillXmmToStack(_, src, _) then recordLastUse(positions, id: x64FpVRegId(src), opIdx: opIdx)
+		reloadXmmFromStack to movXmmRipRel then break 'scan'
+		addXmm(dest, src, _) then recordX64FpTwoLastUses(positions, fp1: dest, fp2: src, opIdx: opIdx)
+		subXmm(dest, src, _) then recordX64FpTwoLastUses(positions, fp1: dest, fp2: src, opIdx: opIdx)
+		mulXmm(dest, src, _) then recordX64FpTwoLastUses(positions, fp1: dest, fp2: src, opIdx: opIdx)
+		divXmm(dest, src, _) then recordX64FpTwoLastUses(positions, fp1: dest, fp2: src, opIdx: opIdx)
+		sqrtXmm(_, src, _) then recordLastUse(positions, id: x64FpVRegId(src), opIdx: opIdx)
+		roundXmm(_, src, _, _) then recordLastUse(positions, id: x64FpVRegId(src), opIdx: opIdx)
+		ucomisXmm(src1, src2, _) then recordX64FpTwoLastUses(positions, fp1: src1, fp2: src2, opIdx: opIdx)
+		cvtSi2Float(_, src, _) then recordLastUse(positions, id: x64VRegId(src), opIdx: opIdx)
+		cvttFloat2Si(_, src, _) then recordLastUse(positions, id: x64FpVRegId(src), opIdx: opIdx)
+		cvtSd2Ss(_, src) then recordLastUse(positions, id: x64FpVRegId(src), opIdx: opIdx)
+		cvtSs2Sd(_, src) then recordLastUse(positions, id: x64FpVRegId(src), opIdx: opIdx)
+		movqXmmToGpr(_, src) then recordLastUse(positions, id: x64FpVRegId(src), opIdx: opIdx)
+		movqGprToXmm(_, src) then recordLastUse(positions, id: x64VRegId(src), opIdx: opIdx)
+		andMaskRipRel(dest, _, _) then recordLastUse(positions, id: x64FpVRegId(dest), opIdx: opIdx)
+		storeIndirect(baseReg, _, srcReg, _) then recordX64TwoLastUses(positions, reg1: baseReg, reg2: srcReg, opIdx: opIdx)
+		loadIndirect(_, baseReg, _, _) then recordLastUse(positions, id: x64VRegId(baseReg), opIdx: opIdx)
+		storeIndirectXmm(baseReg, _, src, _) then recordX64MixedLastUses(positions, gpr: baseReg, fp: src, opIdx: opIdx)
+		loadIndirectXmm(_, baseReg, _, _) then recordLastUse(positions, id: x64VRegId(baseReg), opIdx: opIdx)
+		globalLoad then break 'scan'
+		globalStore(_, src, _) then recordLastUse(positions, id: x64VRegId(src), opIdx: opIdx)
+		globalLoadXmm then break 'scan'
+		globalStoreXmm(_, src, _) then recordLastUse(positions, id: x64FpVRegId(src), opIdx: opIdx)
+		leaFromStack to setcc then break 'scan'
+		cmov(_, src, _) then recordLastUse(positions, id: x64VRegId(src), opIdx: opIdx)
+		movsxd(_, src) then recordLastUse(positions, id: x64VRegId(src), opIdx: opIdx)
+		movzx32(_, src) then recordLastUse(positions, id: x64VRegId(src), opIdx: opIdx)
+		nullSafeLoad(_, baseReg, _) then recordLastUse(positions, id: x64VRegId(baseReg), opIdx: opIdx)
+		repMovsb to repStosq then break 'scan'
+	end 'scan'
+end 'recordX64OpLastUses'
+
+function recordX64TwoLastUses(positions RegIntArray, reg1 X64VReg, reg2 X64VReg, opIdx RegInt)
+	recordLastUse(positions, id: x64VRegId(reg1), opIdx: opIdx)
+	recordLastUse(positions, id: x64VRegId(reg2), opIdx: opIdx)
+end 'recordX64TwoLastUses'
+
+function recordX64FpTwoLastUses(positions RegIntArray, fp1 X64FpVReg, fp2 X64FpVReg, opIdx RegInt)
+	recordLastUse(positions, id: x64FpVRegId(fp1), opIdx: opIdx)
+	recordLastUse(positions, id: x64FpVRegId(fp2), opIdx: opIdx)
+end 'recordX64FpTwoLastUses'
+
+function recordX64MixedLastUses(positions RegIntArray, gpr X64VReg, fp X64FpVReg, opIdx RegInt)
+	recordLastUse(positions, id: x64VRegId(gpr), opIdx: opIdx)
+	recordLastUse(positions, id: x64FpVRegId(fp), opIdx: opIdx)
+end 'recordX64MixedLastUses'
+
 // Classify an X64 op's reads as sink or non-sink.
 // Sink: movRegReg where dest is physical (call arg / return value setup).
 // Non-sink: everything else that reads a virtual register.
@@ -507,86 +592,125 @@ export function isX64RetTerminator(op MlirOp) returns bool
 end 'isX64RetTerminator'
 
 // ============================================================
-// X64 forward hints
+// X64 backward register hints
 // ============================================================
 
-// Pre-scan to set forward register hints for movRegReg(physical, virtual) patterns.
-// This covers call arg setup, return value setup, and div dividend setup.
-export function computeForwardHints(srcFunc MlirFunction) returns RegIntArray
+// Walk ops in reverse within each block to propagate register preferences
+// backward through def-use chains. This replaces the forward hints system.
+//
+// When we see movRegReg(physical, virtual), we hint the virtual to the physical.
+// When we see movRegReg(virtual_dest, virtual_src) where dest has a hint,
+// we propagate the hint to src.
+//
+// This naturally handles chains like:
+//   v5 = addRegReg(v1, v2)
+//   movRegReg(rax, v5)
+// → v5 gets hinted to rax, so the add's result lands in rax directly.
+export function computeBackwardHints(srcFunc MlirFunction, useCounts RegIntArray) returns RegIntArray
 	let hints = RegIntArray.create()
+	let raxOrd = x64RegToOrdinal(X64Register.rax)
+	let rdxOrd = x64RegToOrdinal(X64Register.rdx)
+
 	for srcBlock in srcFunc.blocks 'eachBlock'
-		for op in srcBlock.ops 'eachOp'
+		// Process terminator first (it comes after all ops in forward order,
+		// so in reverse it comes first).
+		if srcBlock.hasTerminator 'termHint'
+			match srcBlock.terminator 'checkTerm'
+				x64(x64Op) then scanBackwardHintX64(hints, x64Op: x64Op, useCounts: useCounts, raxOrd: raxOrd, rdxOrd: rdxOrd)
+				maxon to mir then break 'checkTerm'
+				arm64 then break 'checkTerm'
+			end 'checkTerm'
+		end 'termHint'
+
+		// Walk ops in reverse
+		var j = srcBlock.ops.count() - 1
+		while j >= 0 'scanBack'
+			let op = try srcBlock.ops.get(j) otherwise 'skipBack'
+				j = j - 1
+				continue
+			end 'skipBack'
 			match op 'checkOp'
-				x64(x64Op) then scanForwardHintX64(hints, x64Op: x64Op)
+				x64(x64Op) then scanBackwardHintX64(hints, x64Op: x64Op, useCounts: useCounts, raxOrd: raxOrd, rdxOrd: rdxOrd)
 				maxon to mir then break 'checkOp'
 				arm64 then break 'checkOp'
 			end 'checkOp'
-		end 'eachOp'
+			j = j - 1
+		end 'scanBack'
 	end 'eachBlock'
+
 	return hints
-end 'computeForwardHints'
+end 'computeBackwardHints'
 
-function scanForwardHintX64(hints RegIntArray, x64Op X64Op)
-	// Any movRegReg(physical_dest, virtual_src) hints src to dest.
-	// This covers call arg setup (hint to rcx/rdx/r8/r9), return value setup
-	// (hint to rax), and div setup (hint dividend to rax). If the value ends
-	// up in the hinted register, the movRegReg becomes a no-op.
-	if x64Op.rawValue.pattern == OpPattern.movRegReg 'isMov'
-		match x64Op 'extractMov'
-			movRegReg(destReg, srcReg) then scanForwardHintMovRegReg(hints, destReg: destReg, srcReg: srcReg)
-			prologue to memcpyOp then break 'extractMov'
-			cmpRegReg to repStosq then break 'extractMov'
-		end 'extractMov'
-	end 'isMov'
-end 'scanForwardHintX64'
-
-function scanForwardHintMovRegReg(hints RegIntArray, destReg X64VReg, srcReg X64VReg)
-	// Only interested in movRegReg(physical, virtual)
-	if isVirtualGpr(destReg) 'destIsVirt'
+function scanBackwardHintX64(hints RegIntArray, x64Op X64Op, useCounts RegIntArray, raxOrd RegOrdinal, rdxOrd RegOrdinal)
+	if x64Op.rawValue.pattern != OpPattern.movRegReg 'notMov'
 		return
-	end 'destIsVirt'
+	end 'notMov'
+	match x64Op 'extractMov'
+		movRegReg(destReg, srcReg) then scanBackwardHintMovRegReg(hints, destReg: destReg, srcReg: srcReg, useCounts: useCounts, raxOrd: raxOrd, rdxOrd: rdxOrd)
+		prologue to memcpyOp then break 'extractMov'
+		cmpRegReg to repStosq then break 'extractMov'
+	end 'extractMov'
+end 'scanBackwardHintX64'
+
+function scanBackwardHintMovRegReg(hints RegIntArray, destReg X64VReg, srcReg X64VReg, useCounts RegIntArray, raxOrd RegOrdinal, rdxOrd RegOrdinal)
 	let srcId = x64VRegId(srcReg)
 	if srcId < 0 'srcIsPhys'
 		return
 	end 'srcIsPhys'
-	let destOrd = match destReg 'getDestOrd'
-		physical(reg) gives x64RegToOrdinal(reg)
-		virtual gives RM_NONE
-	end 'getDestOrd'
-	if destOrd == RM_NONE 'noOrd'
-		return
-	end 'noOrd'
-	// Only set hint if none exists yet. Last-write would cause conflicts
-	// when the same value is moved to different physical registers in
-	// different blocks (e.g. rax for return, rcx for call arg).
-	let existing = rmGetOr(hints, index: srcId, fallback: RM_NONE)
-	if existing == RM_NONE 'noExistingHint'
-		rmSet(hints, index: srcId, value: destOrd, sentinel: RM_NONE)
-	end 'noExistingHint'
-end 'scanForwardHintMovRegReg'
 
-// Filter out hints that would pin a multi-use value to a register clobbered
-// by idiv (rax/rdx). These values are likely loop-carried and will be evicted
-// when the division needs rax, causing a spill.
-export function filterConflictingHints(hints RegIntArray, useCounts RegIntArray)
-	let raxOrd = x64RegToOrdinal(X64Register.rax)
-	let rdxOrd = x64RegToOrdinal(X64Register.rdx)
-	var i = 0
-	while i < hints.count() 'filter'
-		let hintOrd = rmGetOr(hints, index: i, fallback: RM_NONE)
-		if hintOrd == raxOrd or hintOrd == rdxOrd 'isClobbered'
-			let useCount = rmGetOr(useCounts, index: i, fallback: 0)
+	// Case 1: movRegReg(physical, virtual) — hint virtual to physical
+	if not isVirtualGpr(destReg) 'physDest'
+		let destOrd = match destReg 'getDestOrd'
+			physical(reg) gives x64RegToOrdinal(reg)
+			virtual gives RM_NONE
+		end 'getDestOrd'
+		if destOrd == RM_NONE 'noOrd'
+			return
+		end 'noOrd'
+
+		// Skip hinting multi-use values to rax/rdx (idiv conflict avoidance)
+		if destOrd == raxOrd or destOrd == rdxOrd 'clobberable'
+			let useCount = rmGetOr(useCounts, index: srcId, fallback: 0)
 			if useCount > 1 'multiUse'
-				rmSet(hints, index: i, value: RM_NONE, sentinel: RM_NONE)
+				return
 			end 'multiUse'
-		end 'isClobbered'
-		i = i + 1
-	end 'filter'
-end 'filterConflictingHints'
+		end 'clobberable'
 
-// Apply forward hints to registerHints so the allocator prefers
-// the hinted register when allocating the dividend value.
-export function applyForwardHints(hints RegIntArray, state RegState)
+		// Don't overwrite — first hint in reverse = closest consumer = most important
+		let existing = rmGetOr(hints, index: srcId, fallback: RM_NONE)
+		if existing == RM_NONE 'noExistingHint'
+			rmSet(hints, index: srcId, value: destOrd, sentinel: RM_NONE)
+		end 'noExistingHint'
+		return
+	end 'physDest'
+
+	// Case 2: movRegReg(virtual, virtual) — propagate hint from dest to src
+	let destId = x64VRegId(destReg)
+	if destId < 0 'destNotVirt'
+		return
+	end 'destNotVirt'
+	let destHint = rmGetOr(hints, index: destId, fallback: RM_NONE)
+	if destHint == RM_NONE 'noDestHint'
+		return
+	end 'noDestHint'
+
+	// Skip hinting multi-use values to rax/rdx (idiv conflict avoidance)
+	if destHint == raxOrd or destHint == rdxOrd 'clobberable2'
+		let useCount = rmGetOr(useCounts, index: srcId, fallback: 0)
+		if useCount > 1 'multiUse2'
+			return
+		end 'multiUse2'
+	end 'clobberable2'
+
+	// Propagate hint to src (don't overwrite existing)
+	let srcExisting = rmGetOr(hints, index: srcId, fallback: RM_NONE)
+	if srcExisting == RM_NONE 'noSrcHint'
+		rmSet(hints, index: srcId, value: destHint, sentinel: RM_NONE)
+	end 'noSrcHint'
+end 'scanBackwardHintMovRegReg'
+
+// Apply backward hints to the register allocator state.
+export function applyBackwardHints(hints RegIntArray, state RegState)
 	var i = 0
 	let hintCount = hints.count()
 	while i < hintCount 'eachHint'
@@ -596,7 +720,7 @@ export function applyForwardHints(hints RegIntArray, state RegState)
 		end 'hasHint'
 		i = i + 1
 	end 'eachHint'
-end 'applyForwardHints'
+end 'applyBackwardHints'
 
 // ============================================================
 // X64 param pre-seeding

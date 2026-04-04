@@ -118,7 +118,7 @@ end 'createArm64CallConvFps'
 // --- State creation ---
 
 export function createArm64RegState() returns RegState
-	return createRegState(16, gprPool: createArm64GprPool(), callerSavedGprs: createArm64CallerSavedGprs(), target: RegTarget.arm64, callConvGprs: createArm64CallConvGprs(), returnGprOrd: arm64RegToOrdinal(Arm64Register.x0), errorFlagOrd: arm64RegToOrdinal(Arm64Register.x1), indirectCallScratchOrd: arm64RegToOrdinal(Arm64Register.x16), gprCycleBreakOrd: arm64RegToOrdinal(Arm64Register.x16), hasXchg: false, fpPool: createArm64FpPool(), callerSavedFps: createArm64CallerSavedFps(), callConvFps: createArm64CallConvFps(), returnFpOrd: 0, fpCycleBreakOrd: 31, spillsGrowDown: false, hasPreSeed: false, hasForwardHints: false, hasBlockArgSlotHomes: false)
+	return createRegState(16, gprPool: createArm64GprPool(), callerSavedGprs: createArm64CallerSavedGprs(), target: RegTarget.arm64, callConvGprs: createArm64CallConvGprs(), returnGprOrd: arm64RegToOrdinal(Arm64Register.x0), errorFlagOrd: arm64RegToOrdinal(Arm64Register.x1), indirectCallScratchOrd: arm64RegToOrdinal(Arm64Register.x16), gprCycleBreakOrd: arm64RegToOrdinal(Arm64Register.x16), hasXchg: false, fpPool: createArm64FpPool(), callerSavedFps: createArm64CallerSavedFps(), callConvFps: createArm64CallConvFps(), returnFpOrd: 0, fpCycleBreakOrd: 31, spillsGrowDown: false, hasPreSeed: false, hasRegisterHints: false, hasBlockArgSlotHomes: false)
 end 'createArm64RegState'
 
 // --- Register name ---
@@ -421,6 +421,90 @@ function countArm64MixedReads(counts RegIntArray, gpr Arm64VReg, fp Arm64FpVReg)
 	incUse(counts, id: arm64VRegId(gpr))
 	incUse(counts, id: arm64FpVRegId(fp))
 end 'countArm64MixedReads'
+
+// Record the last use position for each read operand of an ARM64 op.
+// Mirrors countArm64OpReads but calls recordLastUse instead of incUse.
+export function recordArm64OpLastUses(positions RegIntArray, a64Op Arm64Op, opIdx RegInt)
+	match a64Op 'scan'
+		prologue to movImm then break 'scan'
+		strToSlot(_, src) then recordLastUse(positions, id: arm64VRegId(src), opIdx: opIdx)
+		ldrFromSlot then break 'scan'
+		addRegs(_, src1, src2) then recordArm64TwoLastUses(positions, reg1: src1, reg2: src2, opIdx: opIdx)
+		addsRegs(_, src1, src2) then recordArm64TwoLastUses(positions, reg1: src1, reg2: src2, opIdx: opIdx)
+		subRegs(_, src1, src2) then recordArm64TwoLastUses(positions, reg1: src1, reg2: src2, opIdx: opIdx)
+		subsRegs(_, src1, src2) then recordArm64TwoLastUses(positions, reg1: src1, reg2: src2, opIdx: opIdx)
+		mulRegs(_, src1, src2) then recordArm64TwoLastUses(positions, reg1: src1, reg2: src2, opIdx: opIdx)
+		sdivRegs(_, src1, src2) then recordArm64TwoLastUses(positions, reg1: src1, reg2: src2, opIdx: opIdx)
+		remRegs(_, src1, src2) then recordArm64TwoLastUses(positions, reg1: src1, reg2: src2, opIdx: opIdx)
+		negReg(_, src) then recordLastUse(positions, id: arm64VRegId(src), opIdx: opIdx)
+		mvnReg(_, src) then recordLastUse(positions, id: arm64VRegId(src), opIdx: opIdx)
+		andRegs(_, src1, src2) then recordArm64TwoLastUses(positions, reg1: src1, reg2: src2, opIdx: opIdx)
+		andsRegs(_, src1, src2) then recordArm64TwoLastUses(positions, reg1: src1, reg2: src2, opIdx: opIdx)
+		orrRegs(_, src1, src2) then recordArm64TwoLastUses(positions, reg1: src1, reg2: src2, opIdx: opIdx)
+		eorRegs(_, src1, src2) then recordArm64TwoLastUses(positions, reg1: src1, reg2: src2, opIdx: opIdx)
+		lslRegs(_, src1, src2) then recordArm64TwoLastUses(positions, reg1: src1, reg2: src2, opIdx: opIdx)
+		asrRegs(_, src1, src2) then recordArm64TwoLastUses(positions, reg1: src1, reg2: src2, opIdx: opIdx)
+		lsrRegs(_, src1, src2) then recordArm64TwoLastUses(positions, reg1: src1, reg2: src2, opIdx: opIdx)
+		cmpRegs(src1, src2) then recordArm64TwoLastUses(positions, reg1: src1, reg2: src2, opIdx: opIdx)
+		cmpRegZero(src) then recordLastUse(positions, id: arm64VRegId(src), opIdx: opIdx)
+		condBranch to memcpyOp then break 'scan'
+		movRegReg(_, src) then recordLastUse(positions, id: arm64VRegId(src), opIdx: opIdx)
+		spillToStack(_, src) then recordLastUse(positions, id: arm64VRegId(src), opIdx: opIdx)
+		reloadFromStack then break 'scan'
+		branchLinkReg(reg) then recordLastUse(positions, id: arm64VRegId(reg), opIdx: opIdx)
+		subSpImm to addSpImm then break 'scan'
+		strToSpOffset(_, src) then recordLastUse(positions, id: arm64VRegId(src), opIdx: opIdx)
+		fmovRegReg(_, src, _) then recordLastUse(positions, id: arm64FpVRegId(src), opIdx: opIdx)
+		spillFpToStack(_, src, _) then recordLastUse(positions, id: arm64FpVRegId(src), opIdx: opIdx)
+		reloadFpFromStack then break 'scan'
+		fmovToFloat(_, src, _) then recordLastUse(positions, id: arm64VRegId(src), opIdx: opIdx)
+		fmovToGpr(_, src, _) then recordLastUse(positions, id: arm64FpVRegId(src), opIdx: opIdx)
+		fpLoadRdata then break 'scan'
+		fadd(_, src1, src2, _) then recordArm64FpTwoLastUses(positions, fp1: src1, fp2: src2, opIdx: opIdx)
+		fsub(_, src1, src2, _) then recordArm64FpTwoLastUses(positions, fp1: src1, fp2: src2, opIdx: opIdx)
+		fmul(_, src1, src2, _) then recordArm64FpTwoLastUses(positions, fp1: src1, fp2: src2, opIdx: opIdx)
+		fdiv(_, src1, src2, _) then recordArm64FpTwoLastUses(positions, fp1: src1, fp2: src2, opIdx: opIdx)
+		fsqrt(_, src, _) then recordLastUse(positions, id: arm64FpVRegId(src), opIdx: opIdx)
+		fabs(_, src, _) then recordLastUse(positions, id: arm64FpVRegId(src), opIdx: opIdx)
+		fneg(_, src, _) then recordLastUse(positions, id: arm64FpVRegId(src), opIdx: opIdx)
+		fcmp(src1, src2, _) then recordArm64FpTwoLastUses(positions, fp1: src1, fp2: src2, opIdx: opIdx)
+		scvtf(_, src, _) then recordLastUse(positions, id: arm64VRegId(src), opIdx: opIdx)
+		fcvtzs(_, src, _) then recordLastUse(positions, id: arm64FpVRegId(src), opIdx: opIdx)
+		fcvt(_, src, _) then recordLastUse(positions, id: arm64FpVRegId(src), opIdx: opIdx)
+		frintm(_, src, _) then recordLastUse(positions, id: arm64FpVRegId(src), opIdx: opIdx)
+		frintp(_, src, _) then recordLastUse(positions, id: arm64FpVRegId(src), opIdx: opIdx)
+		frintz(_, src, _) then recordLastUse(positions, id: arm64FpVRegId(src), opIdx: opIdx)
+		frintn(_, src, _) then recordLastUse(positions, id: arm64FpVRegId(src), opIdx: opIdx)
+		fpStoreIndirect(baseReg, _, src, _) then recordArm64MixedLastUses(positions, gpr: baseReg, fp: src, opIdx: opIdx)
+		fpLoadIndirect(_, baseReg, _, _) then recordLastUse(positions, id: arm64VRegId(baseReg), opIdx: opIdx)
+		storeIndirect(baseReg, _, srcReg, _) then recordArm64TwoLastUses(positions, reg1: baseReg, reg2: srcReg, opIdx: opIdx)
+		loadIndirect(_, baseReg, _, _) then recordLastUse(positions, id: arm64VRegId(baseReg), opIdx: opIdx)
+		globalLoad then break 'scan'
+		globalStore(_, src, _) then recordLastUse(positions, id: arm64VRegId(src), opIdx: opIdx)
+		globalLoadFloat then break 'scan'
+		globalStoreFloat(_, src, _) then recordLastUse(positions, id: arm64FpVRegId(src), opIdx: opIdx)
+		leaFromStack to leaFuncAddr then break 'scan'
+		cset then break 'scan'
+		csel(_, src1, src2, _) then recordArm64TwoLastUses(positions, reg1: src1, reg2: src2, opIdx: opIdx)
+		sxtw(_, src) then recordLastUse(positions, id: arm64VRegId(src), opIdx: opIdx)
+		nullSafeLoad(_, baseReg, _) then recordLastUse(positions, id: arm64VRegId(baseReg), opIdx: opIdx)
+	end 'scan'
+end 'recordArm64OpLastUses'
+
+function recordArm64TwoLastUses(positions RegIntArray, reg1 Arm64VReg, reg2 Arm64VReg, opIdx RegInt)
+	recordLastUse(positions, id: arm64VRegId(reg1), opIdx: opIdx)
+	recordLastUse(positions, id: arm64VRegId(reg2), opIdx: opIdx)
+end 'recordArm64TwoLastUses'
+
+function recordArm64FpTwoLastUses(positions RegIntArray, fp1 Arm64FpVReg, fp2 Arm64FpVReg, opIdx RegInt)
+	recordLastUse(positions, id: arm64FpVRegId(fp1), opIdx: opIdx)
+	recordLastUse(positions, id: arm64FpVRegId(fp2), opIdx: opIdx)
+end 'recordArm64FpTwoLastUses'
+
+function recordArm64MixedLastUses(positions RegIntArray, gpr Arm64VReg, fp Arm64FpVReg, opIdx RegInt)
+	recordLastUse(positions, id: arm64VRegId(gpr), opIdx: opIdx)
+	recordLastUse(positions, id: arm64FpVRegId(fp), opIdx: opIdx)
+end 'recordArm64MixedLastUses'
 
 // movRegReg to a physical dest is a "sink" — the value dies into a fixed register.
 export function classifyArm64OpReads(sinkOnly RegIntArray, usedByNonSink RegIntArray, a64Op Arm64Op)

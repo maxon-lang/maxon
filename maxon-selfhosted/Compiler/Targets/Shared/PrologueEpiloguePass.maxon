@@ -60,7 +60,7 @@ end 'createFrameScanState'
 // 2. If no prologue exists (future pipeline where isel skips prologue insertion),
 //    we independently compute var area from slot-based ops and spill area from
 //    spill/reload ops, then combine and align.
-export function computeFrameInfo(func MlirFunction, target Target) returns FrameInfo
+export function computeFrameInfo(func MlirFunction) returns FrameInfo
 	// The register allocator stores the spill size on the function.
 	// The var area is varSlotCount * 8 (slot-addressed variables from ISel).
 	// Total frame = var area + spill area, aligned to 16.
@@ -72,10 +72,10 @@ export function computeFrameInfo(func MlirFunction, target Target) returns Frame
 	let state = createFrameScanState()
 	for block in func.blocks 'eachBlock'
 		for op in block.ops 'eachOp'
-			scanOpForFrameInfo(op, target: target, state: state)
+			scanOpForFrameInfo(op, state: state)
 		end 'eachOp'
 		if block.hasTerminator 'hasTerm'
-			scanOpForFrameInfo(block.terminator, target: target, state: state)
+			scanOpForFrameInfo(block.terminator, state: state)
 		end 'hasTerm'
 	end 'eachBlock'
 
@@ -95,20 +95,12 @@ export function computeFrameInfo(func MlirFunction, target Target) returns Frame
 end 'computeFrameInfo'
 
 // Scan a single op for frame-relevant information.
-function scanOpForFrameInfo(op MlirOp, target Target, state FrameScanState)
-	match target.cpu 'cpuDispatch'
-		x64 then scanX64OpForFrameInfo(op, state: state)
-		arm64 then scanArm64OpForFrameInfo(op, state: state)
-		wasm32 then panic("prologue/epilogue not used for WASM targets")
-	end 'cpuDispatch'
-end 'scanOpForFrameInfo'
-
-function scanX64OpForFrameInfo(op MlirOp, state FrameScanState)
+function scanOpForFrameInfo(op MlirOp, state FrameScanState)
 	match op 'outer'
 		maxon to sys then break 'outer'
 		mir then break 'outer'
 		x64(x64Op) then scanX64InstrForFrame(x64Op, state: state)
-		arm64 then break 'outer'
+		arm64(a64Op) then scanArm64InstrForFrame(a64Op, state: state)
 	end 'outer'
 	// Runtime ops indicate print operations that need buffer space
 	match op 'checkPrint'
@@ -116,7 +108,7 @@ function scanX64OpForFrameInfo(op MlirOp, state FrameScanState)
 		runtime then state.hasPrint = true
 		sys to arm64 then break 'checkPrint'
 	end 'checkPrint'
-end 'scanX64OpForFrameInfo'
+end 'scanOpForFrameInfo'
 
 function scanX64InstrForFrame(op X64Op, state FrameScanState)
 	match op 'scan'
@@ -165,20 +157,6 @@ function updateSpillAreaFromThreeSlots(state FrameScanState, s1 VarSlot, s2 VarS
 	updateSpillAreaFromSlot(state, slotIndex: s3)
 end 'updateSpillAreaFromThreeSlots'
 
-function scanArm64OpForFrameInfo(op MlirOp, state FrameScanState)
-	match op 'outer'
-		maxon to sys then break 'outer'
-		mir then break 'outer'
-		x64 then break 'outer'
-		arm64(a64Op) then scanArm64InstrForFrame(a64Op, state: state)
-	end 'outer'
-	// Runtime ops indicate print operations that need buffer space
-	match op 'checkPrint'
-		maxon to memref then break 'checkPrint'
-		runtime then state.hasPrint = true
-		sys to arm64 then break 'checkPrint'
-	end 'checkPrint'
-end 'scanArm64OpForFrameInfo'
 
 function scanArm64InstrForFrame(op Arm64Op, state FrameScanState)
 	match op 'scan'
@@ -250,7 +228,7 @@ function insertPrologueEpilogueForFunc(srcFunc MlirFunction, target Target) retu
 	var dstFunc = cloneFunctionShell(srcFunc)
 
 	// First pass: compute the frame layout from the source function.
-	let frameInfo = computeFrameInfo(srcFunc, target: target)
+	let frameInfo = computeFrameInfo(srcFunc)
 	let stackSize = frameInfo.alignedSize
 
 	logTrace(LogCategory.mlir, message: () gives "  frame: var={frameInfo.varAreaSize} spill={frameInfo.spillAreaSize} total={frameInfo.totalStackSize} aligned={stackSize}")

@@ -182,10 +182,14 @@ export type RegState
 	// Target capability flags — set by target state creation, checked generically.
 	export var spillsGrowDown bool
 	export var hasPreSeed bool
-	export var hasForwardHints bool
+	export var hasRegisterHints bool
 	export var hasBlockArgSlotHomes bool
 
-	export static function create(registerContents RegIntArray, lastUsed RegIntArray, spillBase RegInt, gprPool RegIntArray, callerSavedGprs RegIntArray, target RegTarget, callConvGprs RegIntArray, returnGprOrd RegOrdinal, errorFlagOrd RegOrdinal, indirectCallScratchOrd RegOrdinal, gprCycleBreakOrd RegOrdinal, hasXchg bool, fpPool RegIntArray, callerSavedFps RegIntArray, fpContents RegIntArray, fpLastUsed RegIntArray, callConvFps RegIntArray, returnFpOrd RegOrdinal, fpCycleBreakOrd RegOrdinal, spillsGrowDown bool, hasPreSeed bool, hasForwardHints bool, hasBlockArgSlotHomes bool) returns RegState
+	// Pre-computed last use positions: lastUsePosition[valueId] = last op index where value is read.
+	// Used by eviction to prefer evicting values whose final use is furthest away.
+	export var lastUsePosition RegIntArray
+
+	export static function create(registerContents RegIntArray, lastUsed RegIntArray, spillBase RegInt, gprPool RegIntArray, callerSavedGprs RegIntArray, target RegTarget, callConvGprs RegIntArray, returnGprOrd RegOrdinal, errorFlagOrd RegOrdinal, indirectCallScratchOrd RegOrdinal, gprCycleBreakOrd RegOrdinal, hasXchg bool, fpPool RegIntArray, callerSavedFps RegIntArray, fpContents RegIntArray, fpLastUsed RegIntArray, callConvFps RegIntArray, returnFpOrd RegOrdinal, fpCycleBreakOrd RegOrdinal, spillsGrowDown bool, hasPreSeed bool, hasRegisterHints bool, hasBlockArgSlotHomes bool) returns RegState
 		return Self{
 			registerContents: registerContents,
 			lastUsed: lastUsed,
@@ -220,8 +224,9 @@ export type RegState
 			isInDivergingBlock: false,
 			spillsGrowDown: spillsGrowDown,
 			hasPreSeed: hasPreSeed,
-			hasForwardHints: hasForwardHints,
-			hasBlockArgSlotHomes: hasBlockArgSlotHomes
+			hasRegisterHints: hasRegisterHints,
+			hasBlockArgSlotHomes: hasBlockArgSlotHomes,
+			lastUsePosition: RegIntArray.create()
 		}
 	end 'create'
 end 'RegState'
@@ -322,7 +327,7 @@ end 'rmRestoreStatePreserveSpills'
 
 // --- Initialization ---
 
-export function createRegState(spillBase RegInt, gprPool RegIntArray, callerSavedGprs RegIntArray, target RegTarget, callConvGprs RegIntArray, returnGprOrd RegOrdinal, errorFlagOrd RegOrdinal, indirectCallScratchOrd RegOrdinal, gprCycleBreakOrd RegOrdinal, hasXchg bool, fpPool RegIntArray, callerSavedFps RegIntArray, callConvFps RegIntArray, returnFpOrd RegOrdinal, fpCycleBreakOrd RegOrdinal, spillsGrowDown bool, hasPreSeed bool, hasForwardHints bool, hasBlockArgSlotHomes bool) returns RegState
+export function createRegState(spillBase RegInt, gprPool RegIntArray, callerSavedGprs RegIntArray, target RegTarget, callConvGprs RegIntArray, returnGprOrd RegOrdinal, errorFlagOrd RegOrdinal, indirectCallScratchOrd RegOrdinal, gprCycleBreakOrd RegOrdinal, hasXchg bool, fpPool RegIntArray, callerSavedFps RegIntArray, callConvFps RegIntArray, returnFpOrd RegOrdinal, fpCycleBreakOrd RegOrdinal, spillsGrowDown bool, hasPreSeed bool, hasRegisterHints bool, hasBlockArgSlotHomes bool) returns RegState
 	let poolSize = gprPool.count()
 	// Find max ordinal to size registerContents and lastUsed arrays
 	var maxOrd = 0
@@ -365,7 +370,7 @@ export function createRegState(spillBase RegInt, gprPool RegIntArray, callerSave
 		fpInit = fpInit + 1
 	end 'initFpRegs'
 
-	return RegState.create(regContents, lastUsed: regLastUsed, spillBase: spillBase, gprPool: gprPool, callerSavedGprs: callerSavedGprs, target: target, callConvGprs: callConvGprs, returnGprOrd: returnGprOrd, errorFlagOrd: errorFlagOrd, indirectCallScratchOrd: indirectCallScratchOrd, gprCycleBreakOrd: gprCycleBreakOrd, hasXchg: hasXchg, fpPool: fpPool, callerSavedFps: callerSavedFps, fpContents: fpCont, fpLastUsed: fpLU, callConvFps: callConvFps, returnFpOrd: returnFpOrd, fpCycleBreakOrd: fpCycleBreakOrd, spillsGrowDown: spillsGrowDown, hasPreSeed: hasPreSeed, hasForwardHints: hasForwardHints, hasBlockArgSlotHomes: hasBlockArgSlotHomes)
+	return RegState.create(regContents, lastUsed: regLastUsed, spillBase: spillBase, gprPool: gprPool, callerSavedGprs: callerSavedGprs, target: target, callConvGprs: callConvGprs, returnGprOrd: returnGprOrd, errorFlagOrd: errorFlagOrd, indirectCallScratchOrd: indirectCallScratchOrd, gprCycleBreakOrd: gprCycleBreakOrd, hasXchg: hasXchg, fpPool: fpPool, callerSavedFps: callerSavedFps, fpContents: fpCont, fpLastUsed: fpLU, callConvFps: callConvFps, returnFpOrd: returnFpOrd, fpCycleBreakOrd: fpCycleBreakOrd, spillsGrowDown: spillsGrowDown, hasPreSeed: hasPreSeed, hasRegisterHints: hasRegisterHints, hasBlockArgSlotHomes: hasBlockArgSlotHomes)
 end 'createRegState'
 
 // --- Array helpers ---
@@ -575,6 +580,7 @@ end 'rmRelocateRegisterProtectMask'
 
 function rmFindLruRegister(state RegState, protect1 RegOrdinal, protect2 RegOrdinal, requireConstant bool, requireStackHome bool) returns RegOrdinal
 	var bestReg = RM_NONE
+	var bestLastUsePos = -1
 	var bestLastUsed = i64.max
 
 	var i = 0
@@ -605,8 +611,12 @@ function rmFindLruRegister(state RegState, protect1 RegOrdinal, protect2 RegOrdi
 				continue
 			end 'noHome'
 		end 'checkStack'
+		// Evict the value whose last use is furthest away — it can be spilled
+		// longest before being needed again. Fall back to LRU for tiebreaking.
+		let lup = rmGetOr(state.lastUsePosition, index: occupant, fallback: 0)
 		let lu = rmGetOr(state.lastUsed, index: regOrd, fallback: 0)
-		if lu < bestLastUsed 'better'
+		if lup > bestLastUsePos or (lup == bestLastUsePos and lu < bestLastUsed) 'better'
+			bestLastUsePos = lup
 			bestLastUsed = lu
 			bestReg = regOrd
 		end 'better'
@@ -817,8 +827,9 @@ export function rmAllocateFpRegister(state RegState, valueId RegInt, dstBlock Ml
 		i = i + 1
 	end 'scanFree'
 
-	// All FP registers occupied — spill LRU
+	// All FP registers occupied — evict the value whose last use is furthest away.
 	var bestFp = RM_NONE
+	var bestLUP = -1
 	var bestLU = i64.max
 	i = 0
 	while i < state.fpPoolSize 'findLru'
@@ -826,8 +837,15 @@ export function rmAllocateFpRegister(state RegState, valueId RegInt, dstBlock Ml
 			i = i + 1
 			continue
 		end 'skip2'
+		let occupant = rmGetOr(state.fpContents, index: fpOrd, fallback: RM_NONE)
+		if occupant == RM_NONE 'skipFree'
+			i = i + 1
+			continue
+		end 'skipFree'
+		let lup = rmGetOr(state.lastUsePosition, index: occupant, fallback: 0)
 		let lu = rmGetOr(state.fpLastUsed, index: fpOrd, fallback: 0)
-		if lu < bestLU 'better'
+		if lup > bestLUP or (lup == bestLUP and lu < bestLU) 'better'
+			bestLUP = lup
 			bestLU = lu
 			bestFp = fpOrd
 		end 'better'
@@ -1843,6 +1861,33 @@ export function incUse(counts RegIntArray, id RegInt)
 	rmSet(counts, index: id, value: current + 1, sentinel: 0)
 end 'incUse'
 
+// Record the last use position for a value. Called during pre-scan for each read operand.
+// Forward scan: each call overwrites the previous, so at the end we have the last use position.
+export function recordLastUse(positions RegIntArray, id RegInt, opIdx RegInt)
+	if id < 0 'invalid'
+		return
+	end 'invalid'
+	rmSet(positions, index: id, value: opIdx, sentinel: -1)
+end 'recordLastUse'
+
+// Pre-scan all ops in a function to record the last op index where each virtual value is read.
+// Walk forward: each overwrite gives us the max (last) use position per value.
+function computeLastUsePositions(srcFunc MlirFunction, state RegState) returns RegIntArray
+	let positions = RegIntArray.create()
+	var opIdx = 0
+	for srcBlock in srcFunc.blocks 'eachBlock'
+		for op in srcBlock.ops 'eachOp'
+			targetRecordOpLastUses(state, positions: positions, op: op, opIdx: opIdx)
+			opIdx = opIdx + 1
+		end 'eachOp'
+		if srcBlock.hasTerminator 'hasTerm'
+			targetRecordOpLastUses(state, positions: positions, op: srcBlock.terminator, opIdx: opIdx)
+			opIdx = opIdx + 1
+		end 'hasTerm'
+	end 'eachBlock'
+	return positions
+end 'computeLastUsePositions'
+
 // Pre-scan all ops in a function to count how many times each virtual value is read.
 function computeUseCounts(srcFunc MlirFunction, state RegState) returns RegIntArray
 	let counts = RegIntArray.create()
@@ -2063,6 +2108,10 @@ function allocateRegistersForFunc(srcFunc MlirFunction, target Target) returns M
 
 	let blockCount = srcFunc.blocks.count()
 
+	// Pre-compute last use positions for eviction heuristic (evict value whose
+	// final use is furthest away rather than least-recently-used).
+	state.lastUsePosition = computeLastUsePositions(srcFunc, state: state)
+
 	// Compute use counts for dead-value freeing during register resolution.
 	let useCounts = computeUseCounts(srcFunc, state: state)
 	var uci = 0
@@ -2088,10 +2137,11 @@ function allocateRegistersForFunc(srcFunc MlirFunction, target Target) returns M
 		dfi = dfi + 1
 	end 'mergeDeferred'
 
-	// Forward register hints for movRegReg patterns (call args, return, div).
-	if state.hasForwardHints 'forwardHints'
-		targetComputeAndApplyForwardHints(state, srcFunc: srcFunc, useCounts: useCounts)
-	end 'forwardHints'
+	// Backward register hints: propagate physical register preferences (call args,
+	// return value, div) backward through def-use chains.
+	if state.hasRegisterHints 'applyHints'
+		targetComputeAndApplyHints(state, srcFunc: srcFunc, useCounts: useCounts)
+	end 'applyHints'
 
 	// Cross-block liveness: identify which block boundaries need spilling.
 	// Blocks where no value crosses the boundary can just reset without spilling.
